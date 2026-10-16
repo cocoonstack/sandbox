@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -50,6 +51,66 @@ func TestLiveVolumeConvergesMountAndDetach(t *testing.T) {
 	args, err := os.ReadFile(os.Getenv("COCOON_TEST_ATTACH_ARGS"))
 	if err != nil || !strings.Contains(string(args), "--readonly --directio off") {
 		t.Fatalf("attach args=%s error=%v", args, err)
+	}
+}
+
+func TestLiveMountUnderSymlinkedParentConvergesAndDetaches(t *testing.T) {
+	sock := sockPath(t)
+	fake := serveFakeSilkd(t, sock)
+	configureVolumeDevices(fake)
+	spec := liveDiskCLI(t, "")
+	fake.mu.Lock()
+	fake.serial["/sys/block/vdc/dev"] = []byte("8:32\n")
+	fake.serial["/proc/self/mountinfo"] = []byte(rootMountInfo)
+	fake.realpath = map[string]string{"/workspace/data": "/home/u/ws/data"}
+	fake.execHook = func(argv []string) {
+		switch argv[0] {
+		case "mount":
+			fake.serial["/proc/self/mountinfo"] = []byte(rootMountInfo + "2 1 8:32 / /home/u/ws/data ro - ext4 /dev/vdc ro\n")
+		case "umount":
+			fake.serial["/proc/self/mountinfo"] = []byte(rootMountInfo)
+		}
+	}
+	fake.mu.Unlock()
+	e := New("cocoon", nil, nil, false, false, "")
+	if err := e.DiskAttach(t.Context(), "sbx-1", spec); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if err := e.MountLiveVolume(t.Context(), sock, spec.Name, "/workspace/data", false); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := e.DetachVolume(t.Context(), "sbx-1", sock, spec.Name, "/workspace/data"); err != nil {
+		t.Fatal(err)
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	unmounted := slices.ContainsFunc(fake.execCalls, func(argv []string) bool { return argv[0] == "umount" })
+	if !unmounted || len(slices.DeleteFunc(slices.Clone(fake.execCalls), func(argv []string) bool { return argv[0] != "mount" })) != 1 {
+		t.Fatalf("want one mount and an unmount, got %v", fake.execCalls)
+	}
+}
+
+func TestLiveMountReadsMountinfoBeyondTheSysfsCap(t *testing.T) {
+	sock := sockPath(t)
+	fake := serveFakeSilkd(t, sock)
+	configureVolumeDevices(fake)
+	spec := liveDiskCLI(t, "")
+	overlays := strings.Repeat("9 1 0:99 / /var/lib/docker/overlay2/layer/merged rw - overlay overlay rw,lowerdir=/var/lib/docker/overlay2/l/ABCDEFGHIJKLMNOPQRSTUVWXYZ\n", 2000)
+	fake.mu.Lock()
+	fake.serial["/sys/block/vdc/dev"] = []byte("8:32\n")
+	fake.serial["/proc/self/mountinfo"] = []byte(rootMountInfo + overlays)
+	fake.mu.Unlock()
+	if len(rootMountInfo+overlays) <= silkdReadMax {
+		t.Fatalf("fixture of %d bytes does not exceed the sysfs cap", len(rootMountInfo+overlays))
+	}
+	e := New("cocoon", nil, nil, false, false, "")
+	if err := e.DiskAttach(t.Context(), "sbx-1", spec); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.MountLiveVolume(t.Context(), sock, spec.Name, "/data", false); err != nil {
+		t.Fatal(err)
 	}
 }
 

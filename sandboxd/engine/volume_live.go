@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -26,14 +27,11 @@ type LiveVolumeUnsupported struct {
 }
 
 func (e *LiveVolumeUnsupported) Error() string {
-	if e.Version != "" {
-		return fmt.Sprintf("live volume changes require Cocoon >= %s; installed version is %s", LiveVolumeCocoon, e.Version)
-	}
-	return "live volume changes require Cocoon >= " + LiveVolumeCocoon + "; runtime version unavailable"
+	return fmt.Sprintf("live volume changes require Cocoon >= %s; installed version is %s", LiveVolumeCocoon, cmp.Or(e.Version, "unavailable"))
 }
 
 type volumeMount struct {
-	device, root, path, options string
+	devNum, root, path, options string
 }
 
 // CheckLiveVolumeSupport rejects runtimes without idempotent live disk attach and detach.
@@ -50,30 +48,30 @@ func (e *Engine) CheckLiveVolumeSupport(ctx context.Context) error {
 }
 
 // MountLiveVolume mounts an attached disk unless the same mount already exists.
-func (e *Engine) MountLiveVolume(ctx context.Context, sock, name, mount string, rw bool) error {
+func (e *Engine) MountLiveVolume(ctx context.Context, vsockSocket, name, mount string, rw bool) error {
 	ctx, cancel := context.WithTimeout(ctx, volumeSetupTimeout)
 	defer cancel()
-	device, err := e.waitForVolumeDevice(ctx, sock, name)
+	device, err := e.waitForVolumeDevice(ctx, vsockSocket, name)
 	if err != nil {
 		return fmt.Errorf("wait for volume device %s: %w", name, err)
 	}
-	mounted, err := e.volumeMounted(ctx, sock, device, mount, rw)
+	mounted, err := e.volumeMounted(ctx, vsockSocket, device, mount, rw)
 	if err != nil || mounted {
 		return err
 	}
-	return e.mountDevice(ctx, sock, device, name, mount, rw)
+	return e.mountDevice(ctx, vsockSocket, device, name, mount, rw)
 }
 
 // DetachVolume unmounts a guest volume before confirming host removal.
-func (e *Engine) DetachVolume(ctx context.Context, vmName, sock, name, mount string) error {
+func (e *Engine) DetachVolume(ctx context.Context, vmName, vsockSocket, name, mount string) error {
 	ctx, cancel := context.WithTimeout(ctx, VolumeMutationTimeout)
 	defer cancel()
-	device, found, err := e.findVolumeDevice(ctx, sock, name)
+	device, found, err := e.findVolumeDevice(ctx, vsockSocket, name)
 	if err != nil {
 		return err
 	}
 	if found {
-		if err = e.unmountLiveVolume(ctx, sock, device, mount); err != nil {
+		if err = e.unmountLiveVolume(ctx, vsockSocket, device, mount); err != nil {
 			return err
 		}
 	}
@@ -81,29 +79,28 @@ func (e *Engine) DetachVolume(ctx context.Context, vmName, sock, name, mount str
 	return err
 }
 
-func (e *Engine) unmountLiveVolume(ctx context.Context, sock, device, mount string) error {
-	mounted, err := e.volumeMounted(ctx, sock, device, mount, false)
+func (e *Engine) unmountLiveVolume(ctx context.Context, vsockSocket, device, mount string) error {
+	mounted, err := e.volumeMounted(ctx, vsockSocket, device, mount, false)
 	if err != nil {
 		return err
 	}
 	if mounted {
-		if err = e.UnmountVolume(ctx, sock, mount); err != nil {
+		if err = e.UnmountVolume(ctx, vsockSocket, mount); err != nil {
 			if _, ok := errors.AsType[*guestExitError](err); ok {
 				return &VolumeMountConflict{Message: fmt.Sprintf("cannot unmount %q; close guest references and retry", mount)}
 			}
 			return err
 		}
 	}
-	// Refuse a second/bind mount of the same device before hot-unplug.
-	return e.volumeUnmounted(ctx, sock, device)
+	return e.refuseOtherMounts(ctx, vsockSocket, device)
 }
 
-func (e *Engine) volumeMounts(ctx context.Context, sock, device string) (string, []volumeMount, error) {
-	dev, err := e.silkdReadFile(ctx, sock, "/sys/block/"+filepath.Base(device)+"/dev")
+func (e *Engine) volumeMounts(ctx context.Context, vsockSocket, device string) (string, []volumeMount, error) {
+	devNum, err := e.silkdReadFile(ctx, vsockSocket, "/sys/block/"+filepath.Base(device)+"/dev", silkdReadMax)
 	if err != nil {
 		return "", nil, err
 	}
-	raw, err := e.silkdReadFile(ctx, sock, "/proc/self/mountinfo")
+	raw, err := e.silkdReadFile(ctx, vsockSocket, "/proc/self/mountinfo", mountInfoMax)
 	if err != nil {
 		return "", nil, err
 	}
@@ -115,27 +112,31 @@ func (e *Engine) volumeMounts(ctx context.Context, sock, device string) (string,
 		}
 		mounts = append(mounts, volumeMount{fields[2], mountUnescaper.Replace(fields[3]), mountUnescaper.Replace(fields[4]), fields[5]})
 	}
-	return strings.TrimSpace(string(dev)), mounts, nil
+	return strings.TrimSpace(string(devNum)), mounts, nil
 }
 
-func (e *Engine) volumeMounted(ctx context.Context, sock, device, mount string, rw bool) (bool, error) {
-	dev, mounts, err := e.volumeMounts(ctx, sock, device)
+func (e *Engine) volumeMounted(ctx context.Context, vsockSocket, device, mount string, rw bool) (bool, error) {
+	devNum, mounts, err := e.volumeMounts(ctx, vsockSocket, device)
 	if err != nil {
 		return false, err
 	}
-	mode := "ro"
-	if rw {
-		mode = "rw"
+	target := mount
+	if slices.ContainsFunc(mounts, func(m volumeMount) bool { return m.devNum == devNum && m.path != mount }) {
+		resolved, err := e.silkdOutput(ctx, vsockSocket, "realpath", "-m", "--", mount)
+		if err != nil {
+			return false, fmt.Errorf("resolve volume mount %s: %w", mount, err)
+		}
+		target = strings.TrimSpace(string(resolved))
 	}
 	matched := false
 	for _, entry := range mounts {
-		if entry.path != mount {
-			if entry.device == dev {
+		if entry.path != target {
+			if entry.devNum == devNum {
 				return false, bindConflict(entry.path)
 			}
 			continue
 		}
-		if matched || entry.device != dev || entry.root != "/" || !slices.Contains(strings.Split(entry.options, ","), mode) {
+		if mode, _, _ := strings.Cut(entry.options, ","); matched || entry.devNum != devNum || entry.root != "/" || mode != mountMode(rw) {
 			return false, &VolumeMountConflict{Message: fmt.Sprintf("volume mount %q has a different device, root, or mode; restore the expected mount before retrying", mount)}
 		}
 		matched = true
@@ -143,13 +144,13 @@ func (e *Engine) volumeMounted(ctx context.Context, sock, device, mount string, 
 	return matched, nil
 }
 
-func (e *Engine) volumeUnmounted(ctx context.Context, sock, device string) error {
-	dev, mounts, err := e.volumeMounts(ctx, sock, device)
+func (e *Engine) refuseOtherMounts(ctx context.Context, vsockSocket, device string) error {
+	devNum, mounts, err := e.volumeMounts(ctx, vsockSocket, device)
 	if err != nil {
 		return err
 	}
 	for _, mount := range mounts {
-		if mount.device == dev {
+		if mount.devNum == devNum {
 			return bindConflict(mount.path)
 		}
 	}

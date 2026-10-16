@@ -265,7 +265,7 @@ func TestSilkdListAndReadAreBounded(t *testing.T) {
 	if _, err := e.silkdList(t.Context(), path, "/sys/block"); err == nil || !strings.Contains(err.Error(), "exceeds") {
 		t.Errorf("list of %d entries: %v, want a bound error", silkdListMax+1, err)
 	}
-	if _, err := e.silkdReadFile(t.Context(), path, "/sys/block/vda/serial"); err == nil || !strings.Contains(err.Error(), "exceeds") {
+	if _, err := e.silkdReadFile(t.Context(), path, "/sys/block/vda/serial", silkdReadMax); err == nil || !strings.Contains(err.Error(), "exceeds") {
 		t.Errorf("read of %d bytes: %v, want a bound error", silkdReadMax+1, err)
 	}
 }

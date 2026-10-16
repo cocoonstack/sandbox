@@ -107,7 +107,7 @@ func (e *Engine) findVolumeDevice(ctx context.Context, vsockSocket, name string)
 		return "", false, err
 	}
 	for _, entry := range entries {
-		serial, err := e.silkdReadFile(ctx, vsockSocket, "/sys/block/"+entry.Name+"/serial")
+		serial, err := e.silkdReadFile(ctx, vsockSocket, "/sys/block/"+entry.Name+"/serial", silkdReadMax)
 		if isNotFound(err) {
 			continue
 		}
@@ -134,11 +134,7 @@ func (e *Engine) mountDevice(ctx context.Context, vsockSocket, device, name, mou
 	if err := e.silkdExec(ctx, vsockSocket, "mkdir", "-p", "--", mount); err != nil {
 		return fmt.Errorf("create volume mount point %s: %w", mount, err)
 	}
-	mode := types.VolumeModeRO
-	if rw {
-		mode = types.VolumeModeRW
-	}
-	if err := e.silkdExec(ctx, vsockSocket, "mount", "-o", mode, "--", device, mount); err != nil {
+	if err := e.silkdExec(ctx, vsockSocket, "mount", "-o", mountMode(rw), "--", device, mount); err != nil {
 		return fmt.Errorf("mount volume %s: %w", name, err)
 	}
 	return nil
@@ -163,4 +159,11 @@ func (e *Engine) diskAttachArgs(vmName string, spec VolumeSpec) ([]string, error
 func isNotFound(err error) bool {
 	respErr, ok := errors.AsType[*wire.ErrorResp](err)
 	return ok && respErr.Kind == wire.KindNotFound
+}
+
+func mountMode(rw bool) string {
+	if rw {
+		return types.VolumeModeRW
+	}
+	return types.VolumeModeRO
 }

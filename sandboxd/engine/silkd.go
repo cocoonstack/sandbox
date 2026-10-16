@@ -13,6 +13,7 @@ import (
 const (
 	silkdListMax = 4096
 	silkdReadMax = 64 << 10
+	mountInfoMax = 1 << 20
 )
 
 // silkdSession is a dialed silkd conn bound to a ctx, with wire-typed request/reply helpers.
@@ -107,7 +108,7 @@ func (e *Engine) silkdList(ctx context.Context, vsockSocket, path string) ([]wir
 	return entries, nil
 }
 
-func (e *Engine) silkdReadFile(ctx context.Context, vsockSocket, path string) ([]byte, error) {
+func (e *Engine) silkdReadFile(ctx context.Context, vsockSocket, path string, limit int) ([]byte, error) {
 	var data []byte
 	err := e.silkdStream(ctx, vsockSocket, wire.FsRead{Path: path}, func(frame wire.Response) error {
 		resp, ok := frame.(*wire.DataResp)
@@ -115,8 +116,8 @@ func (e *Engine) silkdReadFile(ctx context.Context, vsockSocket, path string) ([
 			return fmt.Errorf("unexpected silkd frame %q", frame.RespType())
 		}
 		data = append(data, resp.Data...)
-		if len(data) > silkdReadMax {
-			return fmt.Errorf("silkd read of %s exceeds %d bytes", path, silkdReadMax)
+		if len(data) > limit {
+			return fmt.Errorf("silkd read of %s exceeds %d bytes", path, limit)
 		}
 		return nil
 	})
