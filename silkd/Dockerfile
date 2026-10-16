@@ -7,7 +7,7 @@
 # /silkd-static is musl-static for guests without glibc, such as the android
 # flavor's non-systemd userspace. Built per-platform (amd64/arm64) on native
 # runners; TARGETARCH picks the musl target triple.
-FROM rust:1.98.1-slim@sha256:f47a8de237dcbb0b0ce1099901e60a89728e3d51f24e664b40e947171538ade7 AS build
+FROM rust:1.99.0-slim@sha256:2752b332db73fdbb7dc576f06c82ed1f312005784ef913d7e04a28f5f55dc581 AS build
 ARG TARGETARCH
 WORKDIR /silkd
 # Before any rustup/cargo call: the pin, not the base image's default, is the
