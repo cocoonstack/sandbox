@@ -2602,8 +2602,9 @@ type checkpointClaimFunc func(string) (*types.Sandbox, error)
 type idActionFunc func(string) error
 
 type fakeManager struct {
-	attachVolumes        func(string, pool.Cred, []types.Volume) ([]types.Volume, error)
-	detachVolumes        func(string, pool.Cred, []string) ([]types.Volume, error)
+	getVolumes           func(string, pool.Cred) (types.SandboxVolumesResponse, error)
+	setVolumes           func(string, pool.Cred, []types.Volume) (types.SandboxVolumesResponse, error)
+	patchVolumes         func(string, pool.Cred, types.VolumePatch) (types.SandboxVolumesResponse, error)
 	tenants              []config.TenantSpec
 	setTenants           func(specs []config.TenantSpec) error
 	putTenant            func(spec config.TenantSpec) error
@@ -2676,12 +2677,16 @@ type fakeManager struct {
 	draining           bool
 }
 
-func (f *fakeManager) AttachVolumes(_ context.Context, id string, cred pool.Cred, volumes []types.Volume) ([]types.Volume, error) {
-	return f.attachVolumes(id, cred, volumes)
+func (f *fakeManager) GetVolumes(id string, cred pool.Cred) (types.SandboxVolumesResponse, error) {
+	return f.getVolumes(id, cred)
 }
 
-func (f *fakeManager) DetachVolumes(_ context.Context, id string, cred pool.Cred, names []string) ([]types.Volume, error) {
-	return f.detachVolumes(id, cred, names)
+func (f *fakeManager) SetVolumes(_ context.Context, id string, cred pool.Cred, v []types.Volume) (types.SandboxVolumesResponse, error) {
+	return f.setVolumes(id, cred, v)
+}
+
+func (f *fakeManager) PatchVolumes(_ context.Context, id string, cred pool.Cred, p types.VolumePatch) (types.SandboxVolumesResponse, error) {
+	return f.patchVolumes(id, cred, p)
 }
 
 func (f *fakeManager) ClaimWarm(ctx context.Context, key types.PoolKey, o pool.ClaimOptions) (*types.Sandbox, error) {

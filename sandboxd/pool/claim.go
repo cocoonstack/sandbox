@@ -160,18 +160,17 @@ func (m *Manager) Renew(ctx context.Context, id string, cred Cred, ttl time.Dura
 	if !ok {
 		return time.Time{}, ErrUnknownSandbox
 	}
-	sb.VolumeMu.Lock()
-	defer sb.VolumeMu.Unlock()
 	if !cred.Operator {
 		if err := m.tenantRemoved(ctx, sb.Tenant); err != nil {
 			return time.Time{}, err
 		}
 	}
-	if err := archivable(sb.Key, hasAppliedVolumes(sb), onExpire); err != nil {
-		return time.Time{}, err
-	}
 	lease := clampTTL(ttl)
 	m.mu.Lock()
+	if err := archivable(sb.Key, m.hasVolumeHolds(sb), onExpire); err != nil {
+		m.mu.Unlock()
+		return time.Time{}, err
+	}
 	if m.claimed[id] != sb {
 		m.mu.Unlock()
 		return time.Time{}, ErrUnknownSandbox
@@ -271,8 +270,6 @@ func (m *Manager) dialPassive(ctx context.Context, id string, port uint16) (net.
 
 // releaseResolved re-checks under m.mu that sb is still the live claim: no double teardown.
 func (m *Manager) releaseResolved(ctx context.Context, id string, sb *types.Sandbox) error {
-	sb.VolumeMu.Lock()
-	defer sb.VolumeMu.Unlock()
 	var marked string
 	m.mu.Lock()
 	for {
@@ -291,6 +288,7 @@ func (m *Manager) releaseResolved(ctx context.Context, id string, sb *types.Sand
 		marked = ck
 		m.mu.Lock()
 	}
+	volumeHolds := m.cancelVolumeRun(sb)
 	snap, ck, vmName := sb.HibernateSnap, sb.ArchiveCk, sb.VMName
 	if ck != "" {
 		m.pendingCks[ck] = struct{}{}
@@ -302,6 +300,7 @@ func (m *Manager) releaseResolved(ctx context.Context, id string, sb *types.Sand
 	if saveErr := m.store.commit(js); saveErr != nil {
 		m.mu.Lock()
 		m.claimed[id] = sb // roll back so memory matches the still-durable claim
+		m.restoreVolumeHolds(sb, volumeHolds)
 		m.tenantDelta(sb.Tenant, 1)
 		delete(m.pendingCks, ck)
 		rb := m.store.set(sb)
@@ -323,6 +322,7 @@ func (m *Manager) releaseResolved(ctx context.Context, id string, sb *types.Sand
 		m.untrack(m.pendingCks, ck)
 	}
 	td := m.quiesceVolumes(ctx, sb)
+	td.holds = volumeHolds
 	var err error
 	removed := vmName == ""
 	switch {
@@ -498,27 +498,17 @@ func (m *Manager) abortVolumeClaim(ctx context.Context, vmName string, reserved 
 }
 
 func (m *Manager) reapOnce(ctx context.Context) {
-	// Take volume locks outside m.mu. Busy claims are retried on the next tick;
-	// a volume intent must not be deleted while its device call is in flight.
-	locked := m.lockReapClaims()
-	defer func() {
-		for sb := range locked {
-			sb.VolumeMu.Unlock()
-		}
-	}()
 	now := time.Now()
 	type victim struct {
 		action                       reapAction
 		id, vmName, snap, ck, tenant string
 		sb                           *types.Sandbox
+		holds                        []types.Volume
 	}
 	m.mu.Lock()
 	var expired []victim
 	var dropped, purges []string
 	for id, sb := range m.claimed {
-		if !locked[sb] {
-			continue
-		}
 		// a zero deadline means no expiry (an archived claim kept forever).
 		if sb.Deadline.IsZero() || !now.After(sb.Deadline) {
 			continue
@@ -539,7 +529,7 @@ func (m *Manager) reapOnce(ctx context.Context) {
 			}
 			expired = append(expired, victim{action: action, id: id, sb: sb})
 		default:
-			expired = append(expired, victim{action: reapDestroy, id: id, vmName: sb.VMName, snap: sb.HibernateSnap, tenant: sb.Tenant, sb: sb})
+			expired = append(expired, victim{action: reapDestroy, id: id, vmName: sb.VMName, snap: sb.HibernateSnap, tenant: sb.Tenant, sb: sb, holds: m.cancelVolumeRun(sb)})
 			delete(m.claimed, id)
 			m.tenantDelta(sb.Tenant, -1)
 			dropped = append(dropped, id)
@@ -596,6 +586,7 @@ func (m *Manager) reapOnce(ctx context.Context) {
 				delete(m.archiving, v.id) // never removed from m.claimed
 			} else {
 				m.claimed[v.id] = v.sb // roll back so memory matches the still-durable claim
+				m.restoreVolumeHolds(v.sb, v.holds)
 				m.tenantDelta(v.tenant, 1)
 				delete(m.pendingCks, v.ck)
 				restored = append(restored, v.sb)
@@ -629,6 +620,7 @@ func (m *Manager) reapOnce(ctx context.Context) {
 			logSweepResult(ctx, logger, m.pauseExpired(ctx, v.sb), "archived expired sandbox "+v.id, "archive expired sandbox "+v.id)
 		default:
 			td := m.quiesceVolumes(ctx, v.sb)
+			td.holds = v.holds
 			m.out.Disarm(v.id, m.removeOrRetry(ctx, v.vmName, v.id, "", td))
 			m.dropSnap(ctx, v.snap)
 			m.counters.reaps.Add(1)
@@ -636,24 +628,6 @@ func (m *Manager) reapOnce(ctx context.Context) {
 			logger.Infof(ctx, "reaped expired sandbox %s (%s)", v.id, v.vmName)
 		}
 	})
-}
-
-func (m *Manager) lockReapClaims() map[*types.Sandbox]bool {
-	m.mu.Lock()
-	var candidates []*types.Sandbox
-	for _, sb := range m.claimed {
-		if !sb.Deadline.IsZero() && time.Now().After(sb.Deadline) {
-			candidates = append(candidates, sb)
-		}
-	}
-	m.mu.Unlock()
-	locked := make(map[*types.Sandbox]bool, len(candidates))
-	for _, sb := range candidates {
-		if sb.VolumeMu.TryLock() {
-			locked[sb] = true
-		}
-	}
-	return locked
 }
 
 func (m *Manager) archivesAtDeadline(sb *types.Sandbox) bool {

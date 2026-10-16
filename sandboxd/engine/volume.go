@@ -55,15 +55,26 @@ func (e *Engine) MountVolume(ctx context.Context, vsockSocket, name, mount strin
 	if err != nil {
 		return fmt.Errorf("wait for volume device %s: %w", name, err)
 	}
-	if err := e.silkdExec(ctx, vsockSocket, "mkdir", "-p", "--", mount); err != nil {
+	mounted, err := e.volumeMounted(ctx, vsockSocket, device, mount, rw)
+	if err != nil || mounted {
+		return err
+	}
+	if err = e.silkdExec(ctx, vsockSocket, "mkdir", "-p", "--", mount); err != nil {
 		return fmt.Errorf("create volume mount point %s: %w", mount, err)
 	}
 	mode := types.VolumeModeRO
 	if rw {
 		mode = types.VolumeModeRW
 	}
-	if err := e.silkdExec(ctx, vsockSocket, "mount", "-o", mode, "--", device, mount); err != nil {
+	if err = e.silkdExec(ctx, vsockSocket, "mount", "-o", mode, "--", device, mount); err != nil {
 		return fmt.Errorf("mount volume %s: %w", name, err)
+	}
+	mounted, err = e.volumeMounted(ctx, vsockSocket, device, mount, rw)
+	if err != nil {
+		return err
+	}
+	if !mounted {
+		return fmt.Errorf("volume %q did not appear at its mount point", name)
 	}
 	return nil
 }

@@ -7,7 +7,7 @@ import socket
 import threading
 import time
 from collections import deque
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, cast
 
 from .checkpoint import Checkpoint
@@ -15,6 +15,7 @@ from .conn import Conn, ConnPool, _Closeable, remaining_timeout
 from .errors import APIError, ExitError, ProtocolError, SandboxError, SandboxTimeout, SilkdError, require_field
 from .frames import BULK_CHUNK, FS_CHUNK, KEEP_ALIVE_PROTO
 from .template import Template
+from .volumes import SandboxVolumesResponse, Volume, VolumeError, volume_body, volume_response
 
 if TYPE_CHECKING:
     from .client import Client
@@ -45,11 +46,71 @@ class Sandbox:
         self.from_checkpoint = from_checkpoint
         self.template_digest = template_digest
         self.volumes = [dict(volume) for volume in volumes or []]
+        self.volumes_want = [dict(volume) for volume in self.volumes]
         self._pool = ConnPool(client.keep_alive)
         self._proto = 0
 
     def __enter__(self) -> Sandbox:
         return self
+
+    def get_volumes(self, *, timeout: float | None = None) -> SandboxVolumesResponse:
+        """Read desired and applied volumes from the owning node."""
+        return self._volumes_request("GET", None, "get volumes", timeout)
+
+    def set_volumes(
+        self, volumes: Sequence[str | Mapping[str, str] | Volume], *, timeout: float | None = None
+    ) -> SandboxVolumesResponse:
+        """Replace the desired set and converge. An explicit empty list clears mutable mounts."""
+        if volumes is None:
+            raise TypeError("set volumes requires an explicit list; use [] to clear volumes")
+        return self._volumes_request(
+            "PUT", {"volumes": [volume_body(volume, True) for volume in volumes]}, "set volumes", timeout
+        )
+
+    def patch_volumes(
+        self,
+        *,
+        add: Sequence[str | Mapping[str, str] | Volume] | None = None,
+        remove: Sequence[str] | None = None,
+        timeout: float | None = None,
+    ) -> SandboxVolumesResponse:
+        """Add or remove mounted read-only entries by name. Omitted arguments leave the set unchanged."""
+        body: dict[str, Any] = {}
+        if add is not None:
+            body["add"] = [volume_body(volume, True) for volume in add]
+        if remove is not None:
+            body["remove"] = list(remove)
+        return self._volumes_request("PATCH", body, "patch volumes", timeout)
+
+    def _volumes_request(
+        self, method: str, body: dict[str, Any] | None, verb: str, timeout: float | None
+    ) -> SandboxVolumesResponse:
+        try:
+            reply = self._client._request(
+                self.owner,
+                method,
+                f"/v1/sandboxes/{self.id}/volumes",
+                body,
+                verb,
+                bearer=self.token,
+                timeout=timeout or 0.0,
+            )
+        except APIError as exc:
+            if exc.status == 0:
+                raise
+            view = volume_response(exc.reply)
+            if view is not None:
+                self._record_volumes(view)
+            raise VolumeError(exc, view) from exc
+        view = volume_response(reply)
+        if view is None:
+            raise APIError(verb, 0, "reply without complete volume view")
+        self._record_volumes(view)
+        return view
+
+    def _record_volumes(self, view: SandboxVolumesResponse) -> None:
+        self.volumes_want = [cast(dict[str, str], volume.copy()) for volume in view["volumes_want"]]
+        self.volumes = [cast(dict[str, str], volume.copy()) for volume in view["volumes"]]
 
     def __exit__(self, *exc: object) -> None:
         try:

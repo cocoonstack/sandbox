@@ -181,6 +181,7 @@ func (m *Manager) applyVolumes(ctx context.Context, sb *types.Sandbox, volumes [
 		return err
 	}
 	sb.Volumes = applied
+	sb.VolumesWant = slices.Clone(applied)
 	return nil
 }
 
@@ -199,6 +200,9 @@ func (m *Manager) applyVolume(ctx context.Context, sb *types.Sandbox, volume res
 	}
 	if attachOnly {
 		return nil
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	if err := m.eng.MountVolume(ctx, sb.VsockSocket, volume.applied.Name, volume.applied.Mount, volume.disk.RW); err != nil {
 		return fmt.Errorf("setup volume %q: %w", volume.applied.Name, err)

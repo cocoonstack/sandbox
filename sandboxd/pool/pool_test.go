@@ -1656,7 +1656,15 @@ func (f *fakeEngine) TrimCow(_ context.Context, sock string) error {
 	return f.trimErr
 }
 
-func (f *fakeEngine) DiskAttach(_ context.Context, _ string, spec engine.VolumeSpec) error {
+func (f *fakeEngine) DiskAttach(ctx context.Context, _ string, spec engine.VolumeSpec) error {
+	if f.liveVolumeHook != nil {
+		if err := f.liveVolumeHook("attach"); err != nil {
+			return err
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	f.mu.Lock()
 	f.volumeSpecs = append(f.volumeSpecs, spec)
 	f.volumeOps = append(f.volumeOps, "attach:"+spec.Name)
@@ -1686,21 +1694,6 @@ func (f *fakeEngine) MountVolume(_ context.Context, _, name, mount string, rw bo
 	f.volumeMounts = append(f.volumeMounts, types.Volume{Name: name, Mount: mount, Mode: mode})
 	f.volumeOps = append(f.volumeOps, "mount:"+name+":"+mount)
 	return f.mountVolumeErr
-}
-
-func (f *fakeEngine) AttachVolume(ctx context.Context, vmName, sock string, spec engine.VolumeSpec, mount string) error {
-	if f.liveVolumeHook != nil {
-		if err := f.liveVolumeHook("attach"); err != nil {
-			return err
-		}
-	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	if err := f.DiskAttach(ctx, vmName, spec); err != nil {
-		return err
-	}
-	return f.MountVolume(ctx, sock, spec.Name, mount, spec.RW)
 }
 
 func (f *fakeEngine) DetachVolume(ctx context.Context, _, sock, name, mount string) error {

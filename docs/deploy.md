@@ -156,14 +156,24 @@ fragment the warm pools):
 
 ### Dataset volumes
 
-Running claims can add and remove read-only catalog volumes through the
-[live volume API](sandboxd-api.md#post-v1sandboxesidvolumesattach) and Go SDK.
-The image must already exist on the owner node. Interrupted operations keep
-a `pending_volume` journal entry and admission hold until retried, detached
-or released; drain these entries before downgrading sandboxd. The existing
-`e2e/cmd/volumesmoke` command also exercises live attach/detach and retries
-on a new claim without initial volumes. Run it on the target VMM/guest;
-unit tests do not validate guest hotplug support.
+Running claims can change mounted read-only catalog entries through the
+[GET, PUT, and PATCH volume API](sandboxd-api.md#get-v1sandboxesidvolumes)
+and both SDKs. The image must already exist on the owner node. Live changes
+require cocoon commit `6d76309` or a build containing it for idempotent disk
+attach and detach. That change was on cocoon master without a release tag
+when this feature was prepared. The general v0.6.9 floor above is insufficient
+for live convergence.
+
+The claim journal stores desired `VolumesWant` and confirmed applied `Volumes`.
+Admission holds cover their union across restart and teardown. Retry an
+interrupted operation with the same PUT target. Release cancels convergence
+and transfers holds to teardown. Capture is refused while either set is
+nonempty. Drain all volume claims before downgrading sandboxd.
+
+`e2e/cmd/volumesmoke` exercises GET, repeated full-set PUT, PATCH add and remove,
+and clearing a new claim. Real Cloud Hypervisor hotplug, busy guest unmount,
+and restart during convergence remain unverified here. The maintainer will
+run these checks on the target VMM and guest testbed.
 
 Each catalog path must name a disk image containing a mountable whole-device
 filesystem. A read-only entry's image must stay immutable: do not replace,

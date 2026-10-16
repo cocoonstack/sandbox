@@ -62,7 +62,7 @@ type SandboxSummary struct {
 	Archived       bool              `json:"archived,omitzero"`
 	FromCheckpoint string            `json:"from_checkpoint,omitempty"`
 	Volumes        []Volume          `json:"volumes,omitempty"`
-	PendingVolume  *VolumeMutation   `json:"pending_volume,omitempty"`
+	VolumesWant    []Volume          `json:"volumes_want,omitempty"`
 	ClaimRef       string            `json:"claim_ref,omitempty"`
 	Metadata       map[string]string `json:"metadata,omitempty"`
 	CPUCount       int               `json:"cpu_count,omitzero"`

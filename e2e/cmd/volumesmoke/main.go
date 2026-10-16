@@ -137,9 +137,17 @@ func runLive(ctx context.Context, client *sandbox.Client, template, volume, prob
 	}
 	defer func() { _ = sb.Close() }()
 	for range 2 {
-		if _, err = sb.AttachVolumes(ctx, sandbox.Volume{Name: volume, Mount: mount}); err != nil {
-			return fmt.Errorf("live attach: %w", err)
+		if _, err = sb.SetVolumes(ctx, []sandbox.Volume{{Name: volume, Mount: mount}}); err != nil {
+			return fmt.Errorf("live set volumes: %w", err)
 		}
+	}
+	view, err := sb.GetVolumes(ctx)
+	if err != nil {
+		return fmt.Errorf("live get volumes: %w", err)
+	}
+	wantVolumes := []sandbox.Volume{{Name: volume, Mount: mount}}
+	if !slices.Equal(view.VolumesWant, wantVolumes) || !slices.Equal(view.Volumes, wantVolumes) || len(view.States) != 1 || view.States[0].State != "attached" {
+		return fmt.Errorf("live volume view not converged: %+v", view)
 	}
 	got, err := sb.Exec(ctx, "cat", path.Join(mount, probe))
 	if err != nil {
@@ -155,14 +163,37 @@ func runLive(ctx context.Context, client *sandbox.Client, template, volume, prob
 		return fmt.Errorf("live write probe failed without EROFS: %w", err)
 	}
 	for range 2 {
-		if _, err = sb.DetachVolumes(ctx, volume); err != nil {
-			return fmt.Errorf("live detach: %w", err)
+		if _, err = sb.PatchVolumes(ctx, sandbox.VolumePatch{Remove: []string{volume}}); err != nil {
+			return fmt.Errorf("live patch remove: %w", err)
 		}
 	}
 	if _, err = sb.Exec(ctx, "test", "!", "-e", path.Join(mount, probe)); err != nil {
 		return fmt.Errorf("detached volume probe should be absent: %w", err)
 	}
-	fmt.Printf("LIVE VOLUME PASS read_bytes=%d repeated_attach=true repeated_detach=true\n", len(got))
+	for range 2 {
+		if _, err = sb.PatchVolumes(ctx, sandbox.VolumePatch{Add: wantVolumes}); err != nil {
+			return fmt.Errorf("live patch add: %w", err)
+		}
+	}
+	if got, err = sb.Exec(ctx, "cat", path.Join(mount, probe)); err != nil || got != want {
+		return fmt.Errorf("live patch add read: bytes=%d want=%d error=%v", len(got), len(want), err)
+	}
+	for range 2 {
+		if _, err = sb.SetVolumes(ctx, []sandbox.Volume{}); err != nil {
+			return fmt.Errorf("live set empty volumes: %w", err)
+		}
+	}
+	view, err = sb.GetVolumes(ctx)
+	if err != nil {
+		return fmt.Errorf("live get empty volumes: %w", err)
+	}
+	if len(view.VolumesWant) != 0 || len(view.Volumes) != 0 || len(view.States) != 0 {
+		return fmt.Errorf("live clear did not converge: %+v", view)
+	}
+	if _, err = sb.Exec(ctx, "test", "!", "-e", path.Join(mount, probe)); err != nil {
+		return fmt.Errorf("cleared volume probe should be absent: %w", err)
+	}
+	fmt.Printf("LIVE VOLUME PASS read_bytes=%d repeated_put=true repeated_patch=true cleared=true\n", len(got))
 	return nil
 }
 

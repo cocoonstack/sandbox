@@ -102,7 +102,6 @@ var (
 	ErrNoEgressFork      = errors.New("egress-lane sandboxes cannot fork, checkpoint, or promote: a resumed guest egresses before its fresh tap can be locked")
 	ErrVolumeCapture     = errors.New("sandboxes with volumes cannot hibernate, fork, checkpoint, or promote")
 	ErrVolumeBusy        = errors.New("volume is held by another claim")
-	ErrVolumePending     = errors.New("volume operation pending; retry it, detach its name, or release the sandbox")
 	// Replaying a journal takes a writable mount, so readers stay out.
 	ErrVolumeNeedsRecovery = errors.New("volume needs recovery by a writable claim")
 	ErrArchived            = errors.New("sandbox is archived; an exec or file call wakes it first")
@@ -141,7 +140,6 @@ type Engine interface {
 	Warmup(ctx context.Context, vsockSocket string, argv []string) error
 	TrimCow(ctx context.Context, vsockSocket string) error
 	DiskAttach(ctx context.Context, vmName string, spec engine.VolumeSpec) error
-	AttachVolume(ctx context.Context, vmName, sock string, spec engine.VolumeSpec, mount string) error
 	DetachVolume(ctx context.Context, vmName, sock, name, mount string) error
 	MountVolume(ctx context.Context, vsockSocket, name, mount string, rw bool) error
 	UnmountVolume(ctx context.Context, vsockSocket, mount string) error
@@ -158,21 +156,21 @@ type SandboxSummary struct {
 	// Token is the sandbox's own bearer token; only the root by-id read carries it.
 	Token string `json:"token,omitempty"`
 	// ClaimRef echoes the caller reference; empty for checkpoint branches and unprefixed forks.
-	ClaimRef       string                `json:"claim_ref,omitempty"`
-	Metadata       types.Metadata        `json:"metadata,omitempty"`
-	OnExpire       types.ExpireAction    `json:"on_expire,omitempty"`
-	CPUCount       int                   `json:"cpu_count,omitzero"`
-	MemTotalBytes  int64                 `json:"mem_total_bytes,omitzero"`
-	Volumes        []types.Volume        `json:"volumes,omitempty"`
-	PendingVolume  *types.VolumeMutation `json:"pending_volume,omitempty"`
-	Hibernated     bool                  `json:"hibernated"`
-	Archived       bool                  `json:"archived,omitzero"`
-	FromCheckpoint string                `json:"from_checkpoint,omitempty"`
-	Restarts       int                   `json:"restarts,omitzero"`
-	RestartedAt    time.Time             `json:"restarted_at,omitzero"`
-	Failed         string                `json:"failed,omitempty"`
-	ClaimedAt      time.Time             `json:"claimed_at,omitzero"`
-	Deadline       time.Time             `json:"deadline"`
+	ClaimRef       string             `json:"claim_ref,omitempty"`
+	Metadata       types.Metadata     `json:"metadata,omitempty"`
+	OnExpire       types.ExpireAction `json:"on_expire,omitempty"`
+	CPUCount       int                `json:"cpu_count,omitzero"`
+	MemTotalBytes  int64              `json:"mem_total_bytes,omitzero"`
+	Volumes        []types.Volume     `json:"volumes,omitempty"`
+	VolumesWant    []types.Volume     `json:"volumes_want"`
+	Hibernated     bool               `json:"hibernated"`
+	Archived       bool               `json:"archived,omitzero"`
+	FromCheckpoint string             `json:"from_checkpoint,omitempty"`
+	Restarts       int                `json:"restarts,omitzero"`
+	RestartedAt    time.Time          `json:"restarted_at,omitzero"`
+	Failed         string             `json:"failed,omitempty"`
+	ClaimedAt      time.Time          `json:"claimed_at,omitzero"`
+	Deadline       time.Time          `json:"deadline"`
 }
 
 // PoolInfo is the ops view of one pool.
@@ -298,6 +296,7 @@ type Manager struct {
 	volumes map[string]catalogVolume
 	// volumeAdmission counts the live holders of each volume name; guarded by m.mu.
 	volumeAdmission map[string]volumeHolders
+	volumeRuns      map[*types.Sandbox]*volumeRun
 
 	poolStore *poolStore
 	// poolShared is the cell's pool set with a meta store; poolVersion, under m.mu, is its newest version applied.
@@ -692,7 +691,7 @@ func summarize(sb *types.Sandbox) SandboxSummary {
 		FromCheckpoint: sb.FromCheckpoint, ClaimRef: sb.ClaimRef, Metadata: sb.Metadata, OnExpire: sb.OnExpire,
 		Restarts: sb.Restarts, RestartedAt: sb.RestartedAt, Failed: sb.Failed,
 		CPUCount: spec.CPU, MemTotalBytes: spec.MemoryBytes,
-		Volumes: slices.Clone(sb.Volumes), PendingVolume: cloneVolumeMutation(sb.PendingVolume),
+		Volumes: slices.Clone(sb.Volumes), VolumesWant: slices.Clone(sb.VolumesWant),
 	}
 }
 
@@ -714,8 +713,8 @@ func tenantOwns(tenant, owner string) bool {
 	return tenant == "" || tenant == owner
 }
 
-func hasAppliedVolumes(sb *types.Sandbox) bool {
-	return len(sb.Volumes) > 0 || sb.PendingVolume != nil
+func hasVolumes(sb *types.Sandbox) bool {
+	return len(sb.Volumes) > 0 || len(sb.VolumesWant) > 0
 }
 
 // logSweepResult reports one background-sweep outcome; benign races stay silent.

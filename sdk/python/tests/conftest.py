@@ -27,6 +27,12 @@ class FakeNode(BaseHTTPRequestHandler):
     def do_DELETE(self):
         self._dispatch("DELETE")
 
+    def do_PUT(self):
+        self._dispatch("PUT")
+
+    def do_PATCH(self):
+        self._dispatch("PATCH")
+
     def log_message(self, *args):
         pass
 

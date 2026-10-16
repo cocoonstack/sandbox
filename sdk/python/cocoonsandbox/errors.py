@@ -1,5 +1,7 @@
 """Error types raised by the SDK."""
 
+from __future__ import annotations
+
 from typing import Any
 
 
@@ -14,11 +16,12 @@ class SandboxTimeout(SandboxError, TimeoutError):
 class APIError(SandboxError):
     """A sandboxd control-plane call failed."""
 
-    def __init__(self, verb: str, status: int, message: str) -> None:
+    def __init__(self, verb: str, status: int, message: str, *, reply: dict[str, Any] | None = None) -> None:
         super().__init__(f"{verb}: {message} (HTTP {status})")
         self.verb = verb
         self.status = status
         self.message = message
+        self.reply = reply
 
 
 class SilkdError(SandboxError):

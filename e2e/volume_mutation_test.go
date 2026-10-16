@@ -17,8 +17,8 @@ func TestLiveVolumesEndToEnd(t *testing.T) {
 	}
 	defer sb.Close()
 	for range 2 {
-		got, err := sb.AttachVolumes(t.Context(), sandbox.Volume{Name: "dataset"})
-		if err != nil || !slices.Equal(got, []sandbox.Volume{{Name: "dataset", Mount: "/volumes/dataset"}}) {
+		got, err := sb.SetVolumes(t.Context(), []sandbox.Volume{{Name: "dataset"}})
+		if err != nil || !slices.Equal(got.Volumes, []sandbox.Volume{{Name: "dataset", Mount: "/volumes/dataset"}}) {
 			t.Fatalf("attach: %v %v", got, err)
 		}
 	}
@@ -26,12 +26,12 @@ func TestLiveVolumesEndToEnd(t *testing.T) {
 		t.Fatal("captured an attached volume")
 	}
 	for range 2 {
-		got, err := sb.DetachVolumes(t.Context(), "dataset")
-		if err != nil || len(got) != 0 {
+		got, err := sb.SetVolumes(t.Context(), []sandbox.Volume{})
+		if err != nil || len(got.Volumes) != 0 {
 			t.Fatalf("detach: %v %v", got, err)
 		}
 	}
-	want := []string{"attach:dataset:ro", "mount:dataset:/volumes/dataset:ro", "umount:/volumes/dataset", "detach:dataset"}
+	want := []string{"attach:dataset:ro", "mount:dataset:/volumes/dataset:ro", "attach:dataset:ro", "mount:dataset:/volumes/dataset:ro", "umount:/volumes/dataset", "detach:dataset"}
 	if ops := stack.eng.volumeOpsLog(); !slices.Equal(ops, want) {
 		t.Fatalf("device operations=%v want=%v", ops, want)
 	}

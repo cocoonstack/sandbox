@@ -60,7 +60,6 @@ var poolErrHTTP = []struct {
 	{pool.ErrNoEgressFork, http.StatusConflict, ""},
 	{pool.ErrVolumeCapture, http.StatusConflict, ""},
 	{pool.ErrVolumeBusy, http.StatusConflict, ""},
-	{pool.ErrVolumePending, http.StatusConflict, ""},
 	{pool.ErrVolumeNeedsRecovery, http.StatusConflict, ""},
 	{pool.ErrArchived, http.StatusConflict, ""},
 	{pool.ErrPaused, http.StatusConflict, ""},
@@ -95,8 +94,9 @@ type Manager interface {
 	TenantClaims() map[string]int
 	VolumePlacement(key types.PoolKey, tenant string, names []string) (bool, error)
 	Volumes(tenant string, holders map[string]int) []types.VolumeInfo
-	AttachVolumes(ctx context.Context, id string, cred pool.Cred, volumes []types.Volume) ([]types.Volume, error)
-	DetachVolumes(ctx context.Context, id string, cred pool.Cred, names []string) ([]types.Volume, error)
+	GetVolumes(id string, cred pool.Cred) (types.SandboxVolumesResponse, error)
+	SetVolumes(ctx context.Context, id string, cred pool.Cred, volumes []types.Volume) (types.SandboxVolumesResponse, error)
+	PatchVolumes(ctx context.Context, id string, cred pool.Cred, patch types.VolumePatch) (types.SandboxVolumesResponse, error)
 	Sandboxes(tenant, claimRef string, metadata types.Metadata) []pool.SandboxSummary
 	Sandbox(id string) (pool.SandboxSummary, bool)
 	Stats(ctx context.Context, id string) (pool.SandboxStats, bool)
@@ -265,8 +265,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/sandboxes/{id}/release", s.handleSandboxVerb("release", s.mgr.Release))
 	mux.HandleFunc("POST /v1/sandboxes/{id}/hibernate", s.handleSandboxVerb("hibernate", s.mgr.Hibernate))
 	mux.HandleFunc("POST /v1/sandboxes/{id}/wake", s.handleSandboxVerb("wake", s.mgr.Wake))
-	mux.HandleFunc("POST /v1/sandboxes/{id}/volumes/attach", s.handleAttachVolumes)
-	mux.HandleFunc("POST /v1/sandboxes/{id}/volumes/detach", s.handleDetachVolumes)
+	mux.HandleFunc("GET /v1/sandboxes/{id}/volumes", s.handleSandboxVolumes)
+	mux.HandleFunc("PUT /v1/sandboxes/{id}/volumes", s.handleSandboxVolumes)
+	mux.HandleFunc("PATCH /v1/sandboxes/{id}/volumes", s.handleSandboxVolumes)
 	mux.HandleFunc("POST /v1/sandboxes/{id}/renew", s.handleRenew)
 	mux.HandleFunc("GET /v1/sandboxes/{id}", s.requireRoot(s.handleSandbox))
 	mux.HandleFunc("GET /v1/sandboxes/{id}/stats", s.requireRoot(s.handleSandboxStats))

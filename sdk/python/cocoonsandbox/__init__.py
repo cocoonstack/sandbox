@@ -14,6 +14,7 @@ from .client import Client
 from .errors import APIError, ExitError, ProtocolError, SandboxError, SandboxTimeout, SilkdError
 from .sandbox import Lsp, PortConn, Pty, Sandbox, Session, Watcher
 from .template import Template
+from .volumes import SandboxVolumesResponse, Volume, VolumeError, VolumeState
 
 __all__ = [
     "APIError",
@@ -25,10 +26,14 @@ __all__ = [
     "ProtocolError",
     "Pty",
     "Sandbox",
+    "SandboxVolumesResponse",
     "SandboxError",
     "SandboxTimeout",
     "Session",
     "SilkdError",
     "Template",
     "Watcher",
+    "Volume",
+    "VolumeError",
+    "VolumeState",
 ]

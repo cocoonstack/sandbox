@@ -1,7 +1,6 @@
 package engine
 
 import (
-	"encoding/json/v2"
 	"os"
 	"path/filepath"
 	"strings"
@@ -33,7 +32,10 @@ func TestLiveVolumeConvergesMountAndDetach(t *testing.T) {
 	fake.mu.Unlock()
 	e := New("cocoon", nil, nil, false, false, "")
 	for range 2 {
-		if err := e.AttachVolume(t.Context(), "sbx-1", sock, spec, "/data"); err != nil {
+		if err := e.DiskAttach(t.Context(), "sbx-1", spec); err != nil {
+			t.Fatal(err)
+		}
+		if err := e.MountVolume(t.Context(), sock, spec.Name, "/data", false); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -67,7 +69,7 @@ func TestLiveAttachRejectsForeignMounts(t *testing.T) {
 			fake.serial["/sys/block/vdc/dev"] = []byte("8:32\n")
 			fake.serial["/proc/self/mountinfo"] = []byte(rootMountInfo + row)
 			fake.mu.Unlock()
-			if err := New("cocoon", nil, nil, false, false, "").AttachVolume(t.Context(), "sbx-1", sock, spec, "/data"); err == nil {
+			if err := New("cocoon", nil, nil, false, false, "").MountVolume(t.Context(), sock, spec.Name, "/data", false); err == nil {
 				t.Fatal("accepted a foreign mount")
 			}
 			fake.mu.Lock()
@@ -117,20 +119,11 @@ func TestLiveDetachMissingGuestStillChecksHost(t *testing.T) {
 			serveFakeSilkd(t, sock)
 			spec := liveDiskCLI(t, hostErr)
 			err := New("cocoon", nil, nil, false, false, "").DetachVolume(t.Context(), "sbx-1", sock, spec.Name, "/data")
-			wantErr := hostErr != "" && !strings.Contains(hostErr, "not attached")
+			wantErr := hostErr != ""
 			if (err != nil) != wantErr {
 				t.Fatalf("got %v, want error=%v", err, wantErr)
 			}
 		})
-	}
-}
-
-func TestLiveAttachChecksHostImageAndMode(t *testing.T) {
-	spec := liveDiskCLI(t, "")
-	e := New("cocoon", nil, nil, false, false, "")
-	spec.Path = t.TempDir()
-	if _, err := e.attachedVolume(t.Context(), "sbx-1", spec); err == nil {
-		t.Fatal("accepted mismatched host image")
 	}
 }
 
@@ -141,19 +134,6 @@ func liveDiskCLI(t *testing.T, detachErr string) VolumeSpec {
 	if err := os.WriteFile(image, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	path, err := filepath.EvalSymlinks(image)
-	if err != nil {
-		t.Fatal(err)
-	}
-	data, err := json.Marshal(map[string]any{"attached_devices": map[string]any{"disks": []any{map[string]any{"name": "imagenet", "path": path, "readonly": true}}}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	inspect := filepath.Join(dir, "inspect.json")
-	if err := os.WriteFile(inspect, data, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("COCOON_TEST_INSPECT", inspect)
 	t.Setenv("COCOON_TEST_DETACH_ERROR", detachErr)
 	attached := filepath.Join(dir, "attached")
 	if err := os.WriteFile(attached, nil, 0o600); err != nil {
@@ -162,10 +142,6 @@ func liveDiskCLI(t *testing.T, detachErr string) VolumeSpec {
 	t.Setenv("COCOON_TEST_ATTACHED", attached)
 	t.Setenv("COCOON_TEST_ATTACH_ARGS", filepath.Join(dir, "args"))
 	fakeCocoon(t, `#!/bin/sh
-if [ "$1 $2" = "vm inspect" ]; then
-  if [ -f "$COCOON_TEST_ATTACHED" ]; then cat "$COCOON_TEST_INSPECT"; else echo '{}'; fi
-  exit 0
-fi
 if [ "$1 $2 $3" = "vm disk attach" ]; then
   printf '%s\n' "$*" >> "$COCOON_TEST_ATTACH_ARGS"
   touch "$COCOON_TEST_ATTACHED"

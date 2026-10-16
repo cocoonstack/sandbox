@@ -255,76 +255,98 @@ list; the field is emitted (as `true`) only for a writable entry this node
 declares and omitted otherwise (peer-only rows never carry it), so a read-only
 entry's response is byte-identical to v1.
 
-## POST /v1/sandboxes/{id}/volumes/attach
+## GET /v1/sandboxes/{id}/volumes
 
-Adds read-only catalog volumes to an already running sandbox without creating
-a new claim. Auth: the sandbox's own bearer token, or the root token by id.
-The owning tenant's catalog access list still applies, including for root;
-an attach is refused if that tenant has been removed. Images must be present
-on the owner node; this operation does not redirect or move the sandbox.
+Returns the persisted desired set (`volumes_want`), confirmed applied set
+(`volumes`), and per-volume `states`. Auth is the sandbox bearer token or the
+root token by id. The owning node handles the request without redirecting.
+
+```json
+{
+  "volumes_want": [{"name": "imagenet", "mount": "/datasets/training"}],
+  "volumes": [{"name": "imagenet", "mount": "/datasets/training"}],
+  "states": [{"name": "imagenet", "state": "attached"}]
+}
+```
+
+All three arrays are present, including when empty. A state is `attached`
+when the volume is in both sets, `pending` when desired but not yet confirmed,
+or `detaching` when applied but no longer desired. An interrupted device call
+can leave the actual guest state different from the confirmed set. A failed
+convergence also includes a top-level `error` and may include an `error` on
+the affected state. The sandbox index exposes both sets for operator inspection.
+
+## PUT /v1/sandboxes/{id}/volumes
+
+Replaces the full desired set and converges synchronously. Auth matches GET.
+The owner tenant's catalog access list applies, including for root. The image
+must exist on the owning node. The request must include a non-null `volumes`
+array. An explicit empty array removes all mutable entries.
 
 ```json
 {"volumes": [{"name": "imagenet", "mount": "/datasets/training"}]}
 ```
 
-The claim-time name, mount and eight-volume limits apply to the resulting
-set. An omitted mount defaults to `/volumes/<name>`. Only mounted read-only
-entries are accepted (`mode` omitted or `ro`); existing writable and
-attach-only entries are preserved. An identical attached name/mount/mode is
-a no-op; changing an existing name's mount or mode is a 400 error.
-Claims with `on_expire: archive` must change that policy before attaching.
+Only mounted read-only catalog entries can change live (`mode` omitted or
+`ro`). A PUT must retain every existing writable or attach-only entry unchanged.
+The claim-time name, mount, and eight-volume limits apply to the desired set.
+An omitted mount defaults to `/volumes/<name>`. To change an existing name's
+mount or mode, first remove that name and wait for successful convergence.
+An identical target can be retried. Claims with `on_expire: archive` must change
+that policy before adding a volume.
 
-200 returns the **full committed set**:
+The sandbox must be running. Paused, archived, and failed sandboxes return 409
+without waking. Missing bearer returns 401. Unknown id or wrong token returns
+404. Invalid, inaccessible, or non-local entries return 400. Removed tenants
+cannot add volumes and return 403. A conflicting writer or dirty image returns
+409. Removal remains available after the tenant is removed.
 
-```json
-{"volumes": [{"name": "imagenet", "mount": "/datasets/training"}]}
-```
+## PATCH /v1/sandboxes/{id}/volumes
 
-The sandbox must be running. Paused, archived and failed sandboxes return
-409 without waking. Missing bearer returns 401; unknown id or wrong token
-returns 404; an invalid, inaccessible or non-local volume returns 400;
-a removed tenant returns 403; a writer holding the image or a dirty image
-needing recovery returns 409.
-
-## POST /v1/sandboxes/{id}/volumes/detach
-
-Auth and successful response match attach. Unmounts the named read-only
-volumes and waits for cocoon to confirm hot-unplug; backing files are kept.
+Changes the desired set by name, then converges synchronously. Auth, validation,
+and responses match PUT. Omitted `add` or `remove` arrays leave that part
+unchanged. An empty patch retries the current desired set.
 
 ```json
-{"names": ["imagenet"]}
+{"add": [{"name": "imagenet", "mount": "/datasets/training"}], "remove": ["old-data"]}
 ```
 
-An absent valid name is a no-op. Duplicate or invalid names, and requests
-to detach a writable volume, return 400 before changing any devices.
-An attach-only read-only disk can be detached after its workload has
-unmounted it. A busy or foreign mount is refused; no lazy or forced unmount
-is used. Detach remains available after the owning tenant is removed.
+Adding an identical entry or removing an absent valid name is harmless.
+Duplicate names, a name in both arrays, or changes to writable or attach-only
+entries return 400. Removal refuses busy or foreign mounts and uses neither
+lazy nor forced unmount.
 
 ### Partial failure and recovery
 
-Both operations validate their batch first, then commit one volume at a
-time. They are **not batch transactions**: an error may leave earlier
-entries completed and the current entry pending. Retry the same request
-to converge, or detach the pending name to cancel an interrupted attach.
-An unrelated mutation while an operation is pending returns 409.
-Release is also available and waits for an in-flight volume call to finish.
+PUT and PATCH return the GET response shape on success. A convergence error
+returns a non-2xx status with the same view, so callers can inspect desired,
+applied, and per-volume state. Validation and authentication errors may carry
+only `error`. A failed request may already have persisted its target and
+completed some device changes. Retry the same PUT to converge, or send a new
+target to abandon unfinished additions. Concurrent requests serialize per
+sandbox without blocking renewals or new exec, file, and port connections.
 
-Before each device change, sandboxd writes `pending_volume` to the claim
-journal. The sandbox index exposes it as
-`{"volume":{"name":"imagenet","mount":"/datasets/training"},"detach":true}`
-(`detach` omitted means attach). Pending devices retain their admission
-holds and block hibernate, fork, checkpoint and promote. Startup adopts
-these holds; the caller retries or detaches to finish recovery. There is no
-automatic attach replay during startup. `volumes` contains committed
-entries; during a pending operation the actual device state may differ.
+Before applying a target, sandboxd journals `VolumesWant` beside `Volumes`. A
+superseding request may first clean up an older desired-only attachment while
+the old target stays recorded. If that cleanup fails, the response retains the
+old view; retry the same PUT to finish accepting the new target. Admission
+holds cover the deduplicated union of both sets, including during restart and
+teardown. Failed or uncertain operations retain their holds until successful
+cleanup. Startup reserves those holds without replaying attachments. Release
+cancels convergence and transfers the held union to teardown without waiting
+for a blocked device call. Capture operations (hibernate, fork, checkpoint, and
+promote) are refused while either set is nonempty or a convergence request
+still owns admitted volume holds.
 
-Each engine operation has a 30-second ceiling and honors cancellation.
-An engine or journal failure returns 500 with a recovery hint and logs the
-underlying error server-side. Journal writes are atomic; host-crash
-durability follows the existing `sync_claims` setting. Complete or cancel
-pending operations before downgrading to a version without this journal
-field. Once every volume is detached, normal capture operations are allowed.
+Device calls honor cancellation and have a 30-second ceiling. Journal writes
+are atomic. Host-crash durability follows `sync_claims`. Drain volume claims
+before downgrading to a daemon that does not preserve both journal sets.
+
+Live convergence requires cocoon commit `6d76309` or a build containing it,
+which makes matching attach and absent detach idempotent. The change was not
+in a tagged release when this API was prepared. Testbed validation of real
+Cloud Hypervisor hotplug, busy unmount, and restart during convergence remains
+pending with the maintainer.
 
 ## POST /v1/sandboxes/{id}/release
 
@@ -740,7 +762,7 @@ an SDK caller should set.
 Auth: node API token. Root sees every live claim; a tenant sees only its own.
 The index is `{"sandboxes": [{id, key, tenant?, deadline, claimed_at?, hibernated,
 archived?, from_checkpoint?, claim_ref?, metadata?, on_expire?, cpu_count, mem_total_bytes,
-volumes?: [{name, mount, mode?}], pending_volume?: {volume, detach?}, restarts?, restarted_at?, failed?}]}` — `cpu_count` and `mem_total_bytes` are the
+volumes?: [{name, mount, mode?}], volumes_want?: [{name, mount, mode?}], restarts?, restarted_at?, failed?}]}` — `cpu_count` and `mem_total_bytes` are the
 size tier's allocation; `restarts` counts the cold boots that replaced an
 exited VMM and `restarted_at` stamps the last one (each loses guest memory and
 the instance-metadata document, so a caller re-establishes guest state when

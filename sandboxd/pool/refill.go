@@ -377,14 +377,13 @@ func (m *Manager) sourceSnap(ctx context.Context, sb *types.Sandbox) (string, fu
 	return snap, func() { m.dropSnap(ctx, snap) }, nil
 }
 
-// captureAllowed must run under Transition, after any live volume change.
 func (m *Manager) captureAllowed(sb *types.Sandbox) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.claimed[sb.ID] != sb {
 		return ErrUnknownSandbox
 	}
-	if hasAppliedVolumes(sb) {
+	if m.hasVolumeHolds(sb) {
 		return ErrVolumeCapture
 	}
 	return nil

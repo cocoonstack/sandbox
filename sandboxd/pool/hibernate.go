@@ -48,7 +48,10 @@ func (m *Manager) hibernateLocked(ctx context.Context, sb *types.Sandbox) error 
 	if sb.Failed != "" {
 		return ErrFailed
 	}
-	if hasAppliedVolumes(sb) {
+	m.mu.Lock()
+	volumeBlocked := m.hasVolumeHolds(sb)
+	m.mu.Unlock()
+	if volumeBlocked {
 		return ErrVolumeCapture
 	}
 	if sb.Key.Net == types.NetEgress {
@@ -331,6 +334,6 @@ func (m *Manager) recordHibernate(ctx context.Context, sb *types.Sandbox) {
 }
 
 func skipIdle(sb *types.Sandbox) bool {
-	return sb.Key.Net == types.NetEgress || hasAppliedVolumes(sb) ||
+	return sb.Key.Net == types.NetEgress || hasVolumes(sb) ||
 		sb.HibernateSnap != "" || sb.ArchiveCk != "" || sb.Failed != "" || sb.Busy()
 }

@@ -234,24 +234,49 @@ checkpoint branches support neither volumes nor a claim reference in this versio
 `Checkpoint.New`: the labels follow the [claim bounds](sandboxd-api.md#post-v1claim),
 and a branch never inherits its source's labels or expiry action.
 
-For datasets chosen after the sandbox starts, add or remove read-only mounts
+For datasets chosen after the sandbox starts, set the desired read-only mounts
 on the same claim:
 
 ```go
-volumes, err := sb.AttachVolumes(ctx,
-    sandbox.Volume{Name: "imagenet", Mount: "/datasets/training"})
-// Use the dataset in the running guest, then detach it.
-volumes, err = sb.DetachVolumes(ctx, "imagenet")
+view, err := sb.SetVolumes(ctx, []sandbox.Volume{
+    {Name: "imagenet", Mount: "/datasets/training"},
+})
+view, err = sb.GetVolumes(ctx)
+view, err = sb.PatchVolumes(ctx, sandbox.VolumePatch{Remove: []string{"imagenet"}})
+// An explicit empty slice clears mutable mounts. A nil slice is rejected.
+view, err = sb.SetVolumes(ctx, []sandbox.Volume{})
 ```
 
-Both methods use the sandbox token on its owner node, return the full set,
-and update `sb.Volumes` on success. Serialize updates to the handle's public
-fields, as with `Renew`. On error `sb.Volumes` remains the last successful
-response and may be stale: a batch can partially complete. Retry the same
-request, or detach the pending name to recover. `Client.Sandboxes` exposes
-`PendingVolume` for inspection with an API token. A paused sandbox is not
-woken, writable mutations are refused, and images must exist in the owner
-node's catalog. See the [API recovery contract](sandboxd-api.md#partial-failure-and-recovery).
+Python exposes the same operations and response fields:
+
+```python
+view = sb.set_volumes([{"name": "imagenet", "mount": "/datasets/training"}])
+view = sb.get_volumes()
+view = sb.patch_volumes(remove=["imagenet"])
+view = sb.set_volumes([])  # None is rejected.
+```
+
+Each response contains `volumes_want`, `volumes`, and `states`. Go exposes them
+as `SandboxVolumesResponse.VolumesWant`, `.Volumes`, and `.States`. A state is
+`attached`, `pending`, or `detaching`, with an optional `error`. Methods use the
+sandbox token on its owner node and update both public sets from each complete
+response, including a partial failure. Serialize changes to one handle as with
+`Renew`. Returned views do not share the handle's slices or dictionaries.
+
+Go returns `*sandbox.VolumeError` with a `Response` alongside the returned view.
+It wraps `*sandbox.APIError`, so `errors.As` can inspect the status. Python raises
+`VolumeError`, a subclass of `APIError`, with `.response`. A response is absent
+if the server returned only an authentication or validation error. In that case
+the handle retains its last known sets. Retry an interrupted operation with the
+same full PUT target, or set a new target to recover. `Client.Sandboxes` exposes
+`VolumesWant` and `Volumes` for inspection with an API token.
+
+A PUT must retain existing writable and attach-only entries unchanged. PATCH
+cannot remove or change them. Paused sandboxes are not woken, and images must
+exist on the owner node. Admission holds cover the union of desired and applied
+sets. Capture is refused while either is nonempty. Release cancels convergence
+and hands held volumes to teardown. See the
+[API recovery contract](sandboxd-api.md#partial-failure-and-recovery).
 
 `WithVolumesAttachOnly()` claims the same volumes without mounting them: the
 entries in `Sandbox.Volumes` carry an empty `Mount`, and the workload finds

@@ -217,6 +217,12 @@ func TestAStaleCellVersionIsNotApplied(t *testing.T) {
 	if floor != 3 {
 		t.Errorf("warm floor %d after an older and a repeated version, want 3 from version 5", floor)
 	}
+	waitFor(t, func() bool {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		p := m.pools[apiKey]
+		return p != nil && !p.building && p.refilling == 0
+	})
 }
 
 func TestAPutTheCellCannotStoreChangesNothing(t *testing.T) {

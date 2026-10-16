@@ -359,6 +359,12 @@ func TestSetPoolsPreservesEgressPolicy(t *testing.T) {
 	if !policyLive() {
 		t.Fatal("drain + re-add wiped the pool egress policy")
 	}
+	waitFor(t, func() bool {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		p := m.pools[egKey]
+		return p != nil && !p.building && p.refilling == 0
+	})
 }
 
 func TestEgressLaneCannotForkOrCheckpoint(t *testing.T) {

@@ -3,47 +3,110 @@ package sandbox
 import (
 	"bytes"
 	"context"
+	"encoding/json/v2"
+	"errors"
+	"fmt"
+	"io"
 	"net/http"
 	"slices"
 )
 
-// VolumeMutation describes an interrupted operation in a SandboxSummary.
-// Retry the attach, detach this name, or release the sandbox to recover.
-type VolumeMutation struct {
-	Volume Volume `json:"volume"`
-	Detach bool   `json:"detach,omitzero"`
+// VolumeState reports the progress of one desired or applied volume.
+type VolumeState struct {
+	Name  string `json:"name"`
+	State string `json:"state"` // attached, pending, or detaching
+	Error string `json:"error,omitempty"`
 }
 
-// AttachVolumes adds read-only catalog mounts to this running sandbox.
-// Retry the same request after a partial failure, or detach the pending name.
-// On success it replaces Volumes and returns a detached copy of the full set.
-// Like Renew, callers must serialize updates to this handle's public fields.
-func (s *Sandbox) AttachVolumes(ctx context.Context, volumes ...Volume) ([]Volume, error) {
-	return s.mutateVolumes(ctx, "attach", struct {
-		Volumes []Volume `json:"volumes"`
-	}{Volumes: volumes})
+// SandboxVolumesResponse separates persisted intent from confirmed applied mounts.
+type SandboxVolumesResponse struct {
+	VolumesWant []Volume      `json:"volumes_want"`
+	Volumes     []Volume      `json:"volumes"`
+	States      []VolumeState `json:"states"`
+	Error       string        `json:"error,omitempty"`
 }
 
-// DetachVolumes removes read-only volumes, including a pending attach.
-// Already absent names are harmless. Batches may partially complete on error;
-// retry the request to finish it. It replaces Volumes only on success.
-func (s *Sandbox) DetachVolumes(ctx context.Context, names ...string) ([]Volume, error) {
-	return s.mutateVolumes(ctx, "detach", struct {
-		Names []string `json:"names"`
-	}{Names: names})
+// VolumePatch changes the desired set by name. Omitted slices are unchanged.
+type VolumePatch struct {
+	Add    []Volume `json:"add,omitzero"`
+	Remove []string `json:"remove,omitzero"`
 }
 
-func (s *Sandbox) mutateVolumes(ctx context.Context, verb string, request any) ([]Volume, error) {
-	body, err := encodeBody(verb+" volumes", request)
-	if err != nil {
-		return nil, err
+// VolumeError retains the server's view after a failed volume request.
+// Response is nil if the server did not return a complete volume view.
+type VolumeError struct {
+	*APIError
+	Response *SandboxVolumesResponse
+}
+
+func (e *VolumeError) Unwrap() error { return e.APIError }
+
+// GetVolumes reads desired and applied volumes from the owning node.
+// Like Renew, volume methods update public fields and must be serialized by callers.
+func (s *Sandbox) GetVolumes(ctx context.Context) (SandboxVolumesResponse, error) {
+	return s.requestVolumes(ctx, http.MethodGet, nil, "get volumes")
+}
+
+// SetVolumes replaces the full desired set and waits for convergence.
+// An empty non-nil slice clears mutable mounts. A nil slice is rejected.
+// Retry the same set after a partial failure, or set a new target to recover.
+func (s *Sandbox) SetVolumes(ctx context.Context, volumes []Volume) (SandboxVolumesResponse, error) {
+	if volumes == nil {
+		return SandboxVolumesResponse{}, errors.New("set volumes: use an explicit empty slice to clear volumes")
 	}
-	response, err := s.c.doJSON[struct {
+	return s.requestVolumes(ctx, http.MethodPut, struct {
 		Volumes []Volume `json:"volumes"`
-	}](ctx, http.MethodPost, s.owner, "/v1/sandboxes/"+s.ID+"/volumes/"+verb, bytes.NewReader(body), s.token, verb+" volumes")
-	if err != nil {
-		return nil, err
+	}{Volumes: volumes}, "set volumes")
+}
+
+// PatchVolumes adds or removes read-only mounted catalog entries by name.
+// Existing writable and attach-only entries cannot be changed live.
+func (s *Sandbox) PatchVolumes(ctx context.Context, patch VolumePatch) (SandboxVolumesResponse, error) {
+	return s.requestVolumes(ctx, http.MethodPatch, patch, "patch volumes")
+}
+
+func (s *Sandbox) requestVolumes(ctx context.Context, method string, request any, verb string) (SandboxVolumesResponse, error) {
+	var out SandboxVolumesResponse
+	var body io.Reader
+	if request != nil {
+		encoded, err := encodeBody(verb, request)
+		if err != nil {
+			return out, err
+		}
+		body = bytes.NewReader(encoded)
 	}
-	s.Volumes = slices.Clone(response.Volumes)
-	return slices.Clone(s.Volumes), nil
+	resp, err := s.c.roundTrip(ctx, method, s.owner, "/v1/sandboxes/"+s.ID+"/volumes", body, s.token)
+	if err != nil {
+		return out, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	var wire struct {
+		VolumesWant *[]Volume      `json:"volumes_want"`
+		Volumes     *[]Volume      `json:"volumes"`
+		States      *[]VolumeState `json:"states"`
+		Error       string         `json:"error"`
+	}
+	decodeErr := json.UnmarshalRead(resp.Body, &wire)
+	complete := decodeErr == nil && wire.VolumesWant != nil && wire.Volumes != nil && wire.States != nil
+	if complete {
+		out = SandboxVolumesResponse{VolumesWant: *wire.VolumesWant, Volumes: *wire.Volumes, States: *wire.States, Error: wire.Error}
+		s.VolumesWant = slices.Clone(out.VolumesWant)
+		s.Volumes = slices.Clone(out.Volumes)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		failure := &VolumeError{APIError: &APIError{Verb: verb, Status: resp.StatusCode, Message: wire.Error}}
+		if complete {
+			view := out
+			view.VolumesWant, view.Volumes, view.States = slices.Clone(out.VolumesWant), slices.Clone(out.Volumes), slices.Clone(out.States)
+			failure.Response = &view
+		}
+		return out, failure
+	}
+	if decodeErr != nil {
+		return out, fmt.Errorf("decode %s response: %w", verb, decodeErr)
+	}
+	if !complete {
+		return out, fmt.Errorf("decode %s response: missing volume view", verb)
+	}
+	return out, nil
 }

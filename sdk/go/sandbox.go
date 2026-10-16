@@ -56,9 +56,10 @@ func (e *ExitError) Error() string {
 type Sandbox struct {
 	ID       string
 	Deadline time.Time
-	// Volumes lists the volumes finalized on this claim; only a writable entry
-	// echoes a mode.
+	// Volumes lists confirmed applied mounts; only a writable entry echoes a mode.
 	Volumes []Volume
+	// VolumesWant is the persisted desired set, which may differ after a failed convergence.
+	VolumesWant []Volume
 	// TemplateDigest is the content identity of the promoted-template export
 	// this sandbox was cloned from; empty for any other source.
 	TemplateDigest string
