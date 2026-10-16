@@ -418,6 +418,8 @@ class Sandbox:
     def _volumes_request(
         self, method: str, body: dict[str, Any] | None, verb: str, timeout: float | None
     ) -> SandboxVolumesResponse:
+        if timeout is not None and timeout <= 0:
+            raise ValueError("timeout must be positive")
         try:
             reply = self._client._request(
                 self.owner,

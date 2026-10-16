@@ -131,6 +131,13 @@ def test_volume_timeout_uses_client_deadline(black_hole):
     assert caught.value.status == 0
 
 
+@pytest.mark.parametrize("timeout", [0, -1])
+def test_volume_methods_reject_non_positive_timeout(black_hole, timeout):
+    sb = sandbox_at(black_hole)
+    with pytest.raises(ValueError):
+        sb.get_volumes(timeout=timeout)
+
+
 @pytest.mark.parametrize("status", [200, 409])
 def test_incomplete_volume_view_preserves_handle(spawn_node, status):
     incomplete = {"volumes_want": [], "volumes": [], "states": []}

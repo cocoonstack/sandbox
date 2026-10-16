@@ -212,7 +212,7 @@ class Client:
             if deadline is not None and time.monotonic() >= deadline:
                 raise SandboxTimeout(f"{verb} timed out") from None
             raise APIError(verb, 0, str(exc)) from None
-        if status < 200 or status >= 300:
+        if status >= 400:
             try:
                 reply = json.loads(raw)
             except (ValueError, TypeError):
