@@ -88,6 +88,7 @@ func TestLiveVolumeRoutesErrors(t *testing.T) {
 		{"bind mount", "root", `{"volumes":[]}`, &engine.VolumeMountConflict{Message: `volume device has another mount at "/other"; remove guest mount references before retrying`}, http.StatusConflict},
 		{"unmount refused", "root", `{"volumes":[]}`, &engine.VolumeMountConflict{Message: `cannot unmount "/data"; close guest references and retry`}, http.StatusConflict},
 		{"unsupported runtime", "root", `{"volumes":[]}`, &engine.LiveVolumeUnsupported{Version: "v0.7.1"}, http.StatusServiceUnavailable},
+		{"tenant store down", "root", `{"volumes":[]}`, fmt.Errorf("%w: connect host /private/pg", pool.ErrTenantStoreDown), http.StatusServiceUnavailable},
 		{"unknown runtime", "root", `{"volumes":[]}`, &engine.LiveVolumeUnsupported{}, http.StatusServiceUnavailable},
 		{"timeout", "root", `{"volumes":[]}`, context.DeadlineExceeded, http.StatusGatewayTimeout},
 		{"cancel", "root", `{"volumes":[]}`, context.Canceled, http.StatusRequestTimeout},
