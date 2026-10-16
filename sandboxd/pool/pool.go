@@ -402,6 +402,8 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 		store:           newClaimStore(cfg.DataDir, cfg.SyncClaims),
 		volumes:         make(map[string]catalogVolume, len(cfg.Volumes)),
 		volumeAdmission: map[string]volumeHolders{},
+		volumeRuns:      map[*types.Sandbox]*volumeRun{},
+		volumeErrors:    map[*types.Sandbox]map[string]string{},
 		poolStore:       newPoolStore(cfg.DataDir),
 		pools:           make(map[types.PoolKey]*pool, len(cfg.Pools)),
 		claimed:         map[string]*types.Sandbox{},

@@ -176,14 +176,14 @@ func TestLiveVolumePersistenceFailureRetainsRecoverableState(t *testing.T) {
 			}
 			eng.liveVolumeHook = nil
 			waitFor(t, func() bool { return !m.recommitting.Load() })
-			if stage == "intent" {
-				if !slices.Equal(sb.VolumesWant, sb.Volumes) || len(eng.volumeSpecs) != 0 || volumeHoldersOf(m, "data") != (volumeHolders{}) {
-					t.Fatal("failed intent must not reach the engine or retain a hold")
-				}
-				return
+			assertLiveJournal(t, m, sb)
+			wantApplied := map[string]int{"intent": 0, "attach result": 1, "detach result": 0}[stage]
+			wantHolders := map[string]int{"intent": 1, "attach result": 1, "detach result": 0}[stage]
+			if len(sb.Volumes) != wantApplied || volumeHoldersOf(m, "data").readers != wantHolders {
+				t.Fatalf("failed write lost the physical result or its hold: volumes=%v holders=%+v", sb.Volumes, volumeHoldersOf(m, "data"))
 			}
-			if slices.Equal(sb.VolumesWant, sb.Volumes) || volumeHoldersOf(m, "data").readers != 1 {
-				t.Fatal("uncommitted physical result lost its intent or hold")
+			if stage == "intent" && len(eng.volumeSpecs) != 0 {
+				t.Fatal("failed intent reached the engine")
 			}
 			if stage == "detach result" {
 				_, err = m.PatchVolumes(t.Context(), sb.ID, sb.Tenant, types.VolumePatch{Remove: []string{"data"}})

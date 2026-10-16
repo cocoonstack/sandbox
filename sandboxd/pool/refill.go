@@ -357,9 +357,6 @@ func (m *Manager) exportGolden(ctx context.Context, snap, final string) error {
 
 // sourceSnap picks the snapshot to export a claimed sandbox from, with its cleanup; the caller holds sb.Transition.
 func (m *Manager) sourceSnap(ctx context.Context, sb *types.Sandbox) (string, func(), error) {
-	if err := m.captureAllowed(sb); err != nil {
-		return "", nil, err
-	}
 	// archive() clears VMName under the same lock, so this is the check that cannot race it
 	if sb.ArchiveCk != "" {
 		return "", nil, ErrArchived
