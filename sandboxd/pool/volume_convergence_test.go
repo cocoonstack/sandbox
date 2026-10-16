@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cocoonstack/sandbox/sandboxd/config"
 	"github.com/cocoonstack/sandbox/sandboxd/engine"
@@ -199,6 +200,29 @@ func TestReleaseDropsVolumeDiagnostics(t *testing.T) {
 	defer m.mu.Unlock()
 	if len(m.volumeErrors) != 0 {
 		t.Fatalf("released claim kept diagnostics: %v", m.volumeErrors)
+	}
+}
+
+func TestLiveVolumeRunStampsActivityBeforeDeviceCalls(t *testing.T) {
+	base := newFakeEngine()
+	m := newVolumeManager(t, base, liveCatalog(t))
+	sb := mustClaim(t, m, testKey)
+	sb.TouchAt(time.Now().Add(-time.Hour))
+	eng := newGatedVolumeEngine(base)
+	m.eng = eng
+	done := make(chan error, 1)
+	go func() {
+		_, err := m.SetVolumes(t.Context(), sb.ID, sb.Tenant, []types.Volume{{Name: "data"}})
+		done <- err
+	}()
+	<-eng.entered
+	idle := time.Since(sb.LastSeen())
+	close(eng.resume)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if idle > time.Minute {
+		t.Fatalf("a running volume change left the sandbox idle for %v", idle)
 	}
 }
 

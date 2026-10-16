@@ -63,6 +63,7 @@ func (m *Manager) changeVolumes(ctx context.Context, id, tenant string, change v
 	if !ok || !tenantOwns(tenant, sb.Tenant) {
 		return view, ErrUnknownSandbox
 	}
+	sb.Touch()
 	var run *volumeRun
 	if err = m.eng.CheckLiveVolumeSupport(ctx); err == nil {
 		ctx, run, err = m.beginVolumeRun(ctx, sb)
@@ -160,7 +161,6 @@ func (m *Manager) changeVolumes(ctx context.Context, id, tenant string, change v
 		}
 		m.clearVolumeError(sb, run, v.Name)
 	}
-	sb.Touch()
 	return view, nil
 }
 
