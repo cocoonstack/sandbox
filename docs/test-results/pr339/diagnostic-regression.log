@@ -1,0 +1,114 @@
+
+review-fix/sandboxd-red.log
+ok  	github.com/cocoonstack/sandbox/sandboxd	1.071s [no tests to run]
+ok  	github.com/cocoonstack/sandbox/sandboxd/config	1.037s [no tests to run]
+ok  	github.com/cocoonstack/sandbox/sandboxd/egress	1.036s [no tests to run]
+ok  	github.com/cocoonstack/sandbox/sandboxd/engine	1.030s [no tests to run]
+ok  	github.com/cocoonstack/sandbox/sandboxd/mesh	1.041s [no tests to run]
+?   	github.com/cocoonstack/sandbox/sandboxd/metastore	[no test files]
+?   	github.com/cocoonstack/sandbox/sandboxd/metastore/metastoretest	[no test files]
+?   	github.com/cocoonstack/sandbox/sandboxd/netfilter	[no test files]
+ok  	github.com/cocoonstack/sandbox/sandboxd/outbound	1.041s [no tests to run]
+?   	github.com/cocoonstack/sandbox/sandboxd/outbound/outboundtest	[no test files]
+--- FAIL: TestRejectedVolumeTargetPreservesConvergenceDiagnostics (0.01s)
+    --- FAIL: TestRejectedVolumeTargetPreservesConvergenceDiagnostics/settled (0.01s)
+        volume_convergence_test.go:211: rejected request changed convergence view: before={VolumesWant:[{Name:data Mount:/volumes/data Mode: AttachOnly:false}] Volumes:[{Name:data Mount:/volumes/data Mode: AttachOnly:false}] States:[{Name:data State:attached Error:}] Converging:false Error:} after={VolumesWant:[{Name:data Mount:/volumes/data Mode: AttachOnly:false}] Volumes:[{Name:data Mount:/volumes/data Mode: AttachOnly:false}] States:[{Name:data State:attached Error:}] Converging:false Error:volume change failed; retry the desired target} err=<nil>
+    --- FAIL: TestRejectedVolumeTargetPreservesConvergenceDiagnostics/conflict (0.00s)
+        volume_convergence_test.go:211: rejected request changed convergence view: before={VolumesWant:[] Volumes:[{Name:data Mount:/volumes/data Mode: AttachOnly:false}] States:[{Name:data State:detaching Error:cannot unmount "/volumes/data"; close guest references and retry}] Converging:false Error:cannot unmount "/volumes/data"; close guest references and retry} after={VolumesWant:[] Volumes:[{Name:data Mount:/volumes/data Mode: AttachOnly:false}] States:[{Name:data State:detaching Error:cannot unmount "/volumes/data"; close guest references and retry}] Converging:false Error:volume change failed; retry the desired target} err=<nil>
+FAIL
+FAIL	github.com/cocoonstack/sandbox/sandboxd/pool	0.094s
+?   	github.com/cocoonstack/sandbox/sandboxd/poolset	[no test files]
+ok  	github.com/cocoonstack/sandbox/sandboxd/poolset/pg	1.047s [no tests to run]
+ok  	github.com/cocoonstack/sandbox/sandboxd/server	1.052s [no tests to run]
+ok  	github.com/cocoonstack/sandbox/sandboxd/store	1.036s [no tests to run]
+ok  	github.com/cocoonstack/sandbox/sandboxd/store/dir	1.031s [no tests to run]
+ok  	github.com/cocoonstack/sandbox/sandboxd/store/peer	1.038s [no tests to run]
+ok  	github.com/cocoonstack/sandbox/sandboxd/store/s3	1.039s [no tests to run]
+?   	github.com/cocoonstack/sandbox/sandboxd/store/storetest	[no test files]
+?   	github.com/cocoonstack/sandbox/sandboxd/tenants	[no test files]
+ok  	github.com/cocoonstack/sandbox/sandboxd/tenants/file	1.039s [no tests to run]
+ok  	github.com/cocoonstack/sandbox/sandboxd/tenants/pg	1.042s [no tests to run]
+?   	github.com/cocoonstack/sandbox/sandboxd/tenants/tenantstest	[no test files]
+ok  	github.com/cocoonstack/sandbox/sandboxd/types	1.038s [no tests to run]
+ok  	github.com/cocoonstack/sandbox/sandboxd/utils	1.031s [no tests to run]
+FAIL
+
+review-fix/e2e-red.log
+--- FAIL: TestRejectedVolumeTargetExplainsRefusalWithoutChangingState (0.03s)
+    volume_mutation_test.go:57: invalid target explanation: set volumes: volume change failed; retry the desired target (http 400)
+    volume_mutation_test.go:61: rejected request changed settled state: {VolumesWant:[{Name:dataset Mount:/volumes/dataset Mode:}] Volumes:[{Name:dataset Mount:/volumes/dataset Mode:}] States:[{Name:dataset State:attached Error:}] Converging:false Error:volume change failed; retry the desired target} err=<nil>
+FAIL
+FAIL	github.com/cocoonstack/sandbox/e2e	0.088s
+?   	github.com/cocoonstack/sandbox/e2e/cmd/androidsmoke	[no test files]
+?   	github.com/cocoonstack/sandbox/e2e/cmd/browsersmoke	[no test files]
+?   	github.com/cocoonstack/sandbox/e2e/cmd/coldproof	[no test files]
+?   	github.com/cocoonstack/sandbox/e2e/cmd/credsmoke	[no test files]
+?   	github.com/cocoonstack/sandbox/e2e/cmd/crossnode	[no test files]
+?   	github.com/cocoonstack/sandbox/e2e/cmd/demo	[no test files]
+?   	github.com/cocoonstack/sandbox/e2e/cmd/egresssmoke	[no test files]
+?   	github.com/cocoonstack/sandbox/e2e/cmd/guestserver	[no test files]
+?   	github.com/cocoonstack/sandbox/e2e/cmd/interceptsmoke	[no test files]
+?   	github.com/cocoonstack/sandbox/e2e/cmd/lifecycle	[no test files]
+?   	github.com/cocoonstack/sandbox/e2e/cmd/meshsmoke	[no test files]
+?   	github.com/cocoonstack/sandbox/e2e/cmd/portsmoke	[no test files]
+?   	github.com/cocoonstack/sandbox/e2e/cmd/pullbench	[no test files]
+?   	github.com/cocoonstack/sandbox/e2e/cmd/pushbench	[no test files]
+?   	github.com/cocoonstack/sandbox/e2e/cmd/qaab	[no test files]
+?   	github.com/cocoonstack/sandbox/e2e/cmd/ringsmoke	[no test files]
+?   	github.com/cocoonstack/sandbox/e2e/cmd/rpcbench	[no test files]
+?   	github.com/cocoonstack/sandbox/e2e/cmd/smoke	[no test files]
+?   	github.com/cocoonstack/sandbox/e2e/cmd/sockssmoke	[no test files]
+?   	github.com/cocoonstack/sandbox/e2e/cmd/volumesmoke	[no test files]
+ok  	github.com/cocoonstack/sandbox/e2e/internal/harness	1.031s [no tests to run]
+FAIL
+
+review-fix/sandboxd-green.log
+ok  	github.com/cocoonstack/sandbox/sandboxd	1.093s [no tests to run]
+ok  	github.com/cocoonstack/sandbox/sandboxd/config	1.039s [no tests to run]
+ok  	github.com/cocoonstack/sandbox/sandboxd/egress	1.066s [no tests to run]
+ok  	github.com/cocoonstack/sandbox/sandboxd/engine	1.070s [no tests to run]
+ok  	github.com/cocoonstack/sandbox/sandboxd/mesh	1.044s [no tests to run]
+?   	github.com/cocoonstack/sandbox/sandboxd/metastore	[no test files]
+?   	github.com/cocoonstack/sandbox/sandboxd/metastore/metastoretest	[no test files]
+?   	github.com/cocoonstack/sandbox/sandboxd/netfilter	[no test files]
+ok  	github.com/cocoonstack/sandbox/sandboxd/outbound	1.079s [no tests to run]
+?   	github.com/cocoonstack/sandbox/sandboxd/outbound/outboundtest	[no test files]
+ok  	github.com/cocoonstack/sandbox/sandboxd/pool	1.204s
+?   	github.com/cocoonstack/sandbox/sandboxd/poolset	[no test files]
+ok  	github.com/cocoonstack/sandbox/sandboxd/poolset/pg	1.042s [no tests to run]
+ok  	github.com/cocoonstack/sandbox/sandboxd/server	1.106s [no tests to run]
+ok  	github.com/cocoonstack/sandbox/sandboxd/store	1.035s [no tests to run]
+ok  	github.com/cocoonstack/sandbox/sandboxd/store/dir	1.042s [no tests to run]
+ok  	github.com/cocoonstack/sandbox/sandboxd/store/peer	1.061s [no tests to run]
+ok  	github.com/cocoonstack/sandbox/sandboxd/store/s3	1.049s [no tests to run]
+?   	github.com/cocoonstack/sandbox/sandboxd/store/storetest	[no test files]
+?   	github.com/cocoonstack/sandbox/sandboxd/tenants	[no test files]
+ok  	github.com/cocoonstack/sandbox/sandboxd/tenants/file	1.041s [no tests to run]
+ok  	github.com/cocoonstack/sandbox/sandboxd/tenants/pg	1.041s [no tests to run]
+?   	github.com/cocoonstack/sandbox/sandboxd/tenants/tenantstest	[no test files]
+ok  	github.com/cocoonstack/sandbox/sandboxd/types	1.041s [no tests to run]
+ok  	github.com/cocoonstack/sandbox/sandboxd/utils	1.035s [no tests to run]
+
+review-fix/e2e-green.log
+ok  	github.com/cocoonstack/sandbox/e2e	1.129s
+?   	github.com/cocoonstack/sandbox/e2e/cmd/androidsmoke	[no test files]
+?   	github.com/cocoonstack/sandbox/e2e/cmd/browsersmoke	[no test files]
+?   	github.com/cocoonstack/sandbox/e2e/cmd/coldproof	[no test files]
+?   	github.com/cocoonstack/sandbox/e2e/cmd/credsmoke	[no test files]
+?   	github.com/cocoonstack/sandbox/e2e/cmd/crossnode	[no test files]
+?   	github.com/cocoonstack/sandbox/e2e/cmd/demo	[no test files]
+?   	github.com/cocoonstack/sandbox/e2e/cmd/egresssmoke	[no test files]
+?   	github.com/cocoonstack/sandbox/e2e/cmd/guestserver	[no test files]
+?   	github.com/cocoonstack/sandbox/e2e/cmd/interceptsmoke	[no test files]
+?   	github.com/cocoonstack/sandbox/e2e/cmd/lifecycle	[no test files]
+?   	github.com/cocoonstack/sandbox/e2e/cmd/meshsmoke	[no test files]
+?   	github.com/cocoonstack/sandbox/e2e/cmd/portsmoke	[no test files]
+?   	github.com/cocoonstack/sandbox/e2e/cmd/pullbench	[no test files]
+?   	github.com/cocoonstack/sandbox/e2e/cmd/pushbench	[no test files]
+?   	github.com/cocoonstack/sandbox/e2e/cmd/qaab	[no test files]
+?   	github.com/cocoonstack/sandbox/e2e/cmd/ringsmoke	[no test files]
+?   	github.com/cocoonstack/sandbox/e2e/cmd/rpcbench	[no test files]
+?   	github.com/cocoonstack/sandbox/e2e/cmd/smoke	[no test files]
+?   	github.com/cocoonstack/sandbox/e2e/cmd/sockssmoke	[no test files]
+?   	github.com/cocoonstack/sandbox/e2e/cmd/volumesmoke	[no test files]
+ok  	github.com/cocoonstack/sandbox/e2e/internal/harness	1.033s [no tests to run]

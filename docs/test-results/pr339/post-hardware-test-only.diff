@@ -1,0 +1,18 @@
+diff --git a/e2e/volume_mutation_test.go b/e2e/volume_mutation_test.go
+index 9e2e7f6..776b9fd 100644
+--- a/e2e/volume_mutation_test.go
++++ b/e2e/volume_mutation_test.go
+@@ -51,2 +51,2 @@ func TestRejectedVolumeTargetExplainsRefusalWithoutChangingState(t *testing.T) {
+-	if _, err := sb.SetVolumes(t.Context(), []sandbox.Volume{{Name: "dataset"}}); err != nil {
+-		t.Fatal(err)
++	if _, checkErr := sb.SetVolumes(t.Context(), []sandbox.Volume{{Name: "dataset"}}); checkErr != nil {
++		t.Fatal(checkErr)
+diff --git a/sandboxd/pool/volume_convergence_test.go b/sandboxd/pool/volume_convergence_test.go
+index 7659fa7..5f1a893 100644
+--- a/sandboxd/pool/volume_convergence_test.go
++++ b/sandboxd/pool/volume_convergence_test.go
+@@ -206,2 +206,2 @@ func TestRejectedVolumeTargetPreservesConvergenceDiagnostics(t *testing.T) {
+-			if _, err := m.SetVolumes(t.Context(), sb.ID, sb.Tenant, []types.Volume{{Name: "data"}, {Name: "data"}}); !errors.Is(err, ErrBadVolume) {
+-				t.Fatalf("invalid target: %v", err)
++			if _, checkErr := m.SetVolumes(t.Context(), sb.ID, sb.Tenant, []types.Volume{{Name: "data"}, {Name: "data"}}); !errors.Is(checkErr, ErrBadVolume) {
++				t.Fatalf("invalid target: %v", checkErr)

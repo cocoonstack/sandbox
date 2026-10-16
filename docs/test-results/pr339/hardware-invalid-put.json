@@ -1,0 +1,75 @@
+{
+  "sandbox": "sb_d578a0cb4762e49f",
+  "status": 400,
+  "failure": {
+    "volumes_want": [
+      {
+        "name": "dataset-v1",
+        "mount": "/datasets/invalid"
+      }
+    ],
+    "volumes": [
+      {
+        "name": "dataset-v1",
+        "mount": "/datasets/invalid"
+      }
+    ],
+    "states": [
+      {
+        "name": "dataset-v1",
+        "state": "attached"
+      }
+    ],
+    "converging": false,
+    "error": "invalid volume request: duplicate volume \"dataset-v1\""
+  },
+  "before": {
+    "volumes_want": [
+      {
+        "name": "dataset-v1",
+        "mount": "/datasets/invalid"
+      }
+    ],
+    "volumes": [
+      {
+        "name": "dataset-v1",
+        "mount": "/datasets/invalid"
+      }
+    ],
+    "states": [
+      {
+        "name": "dataset-v1",
+        "state": "attached"
+      }
+    ],
+    "converging": false
+  },
+  "after": {
+    "volumes_want": [
+      {
+        "name": "dataset-v1",
+        "mount": "/datasets/invalid"
+      }
+    ],
+    "volumes": [
+      {
+        "name": "dataset-v1",
+        "mount": "/datasets/invalid"
+      }
+    ],
+    "states": [
+      {
+        "name": "dataset-v1",
+        "state": "attached"
+      }
+    ],
+    "converging": false
+  },
+  "marker_before": "v1\n",
+  "marker_after": "v1\n",
+  "vm_pid": 1087371,
+  "vm_pid_exists": true,
+  "invalid_put_disk_calls": [],
+  "PASS": true,
+  "release_status": 204
+}

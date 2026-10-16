@@ -183,9 +183,10 @@ new volume admission and all disk attachment, including pending repair, until
 the orphan is gone. GET, detach, and release remain available.
 
 `e2e/cmd/volumesmoke` exercises GET, repeated full-set PUT, PATCH add and remove,
-and clearing a new claim. Real Cloud Hypervisor hotplug, busy guest unmount,
-and restart during convergence remain unverified here. The maintainer will
-run these checks on the target VMM and guest testbed.
+and clearing a new claim. The [local validation report](live-volumes-validation.md)
+records real Cloud Hypervisor hotplug, busy guest unmount, daemon restart,
+cancellation, and retirement recovery. It lists the hardware fault cases that
+remain untested.
 
 Each catalog path must name a disk image containing a mountable whole-device
 filesystem. Keep catalog names bound to the same image while any live or

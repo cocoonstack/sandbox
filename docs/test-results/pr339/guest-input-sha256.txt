@@ -1,0 +1,3 @@
+1e6452dcc4be48895222b1c62534f2f8135780f9c680764bedc5a3a9876004d7  /var/lib/composable-local-bfc70d3/guest-rootfs.tar
+7afa73b01f77f4decb723be647399a7ade15bc8ff143262662048251e6603a92  /tmp/pr339-live/boot/vmlinuz
+930e5e753ae51f0104b2d4ced96f107e5f55544cd91b1b968266de91a76e3c95  /tmp/pr339-live/boot/initrd.img

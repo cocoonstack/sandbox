@@ -92,6 +92,7 @@ If the VMM exits, a sandbox holding volumes is release-only. Release it and
 create a new sandbox; neither PUT with an empty target nor daemon restart
 restores the original processes.
 
-The example's Python syntax and SDK signatures are checked locally. Preserving
-these identities during real Cloud Hypervisor hotplug and daemon restart
-requires the maintainer's hardware testbed.
+The example's Python syntax and SDK signatures are checked locally. The
+[local validation report](live-volumes-validation.md) records the equivalent
+Go SDK sequence on real Cloud Hypervisor, including identity continuity and
+daemon restart. It also lists hardware fault cases that remain untested.

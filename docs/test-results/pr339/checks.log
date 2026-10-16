@@ -1,0 +1,543 @@
+
+verification-1/race-protocol-wire.log
+head=ceda20dd4ad944e354e6f300b72b610b3d2422d6
+cwd=/root/eric/composable-computer/.audit/pr339-implementation/repo/protocol/wire
+command=['setpriv', '--bounding-set=-dac_override,-dac_read_search', 'go', 'test', '-race', '-count=1', './...']
+ok  	github.com/cocoonstack/sandbox/protocol/wire	1.131s
+
+verification-1/race-sandboxd.log
+head=ceda20dd4ad944e354e6f300b72b610b3d2422d6
+cwd=/root/eric/composable-computer/.audit/pr339-implementation/repo/sandboxd
+command=['setpriv', '--bounding-set=-dac_override,-dac_read_search', 'go', 'test', '-race', '-count=1', './...']
+ok  	github.com/cocoonstack/sandbox/sandboxd	1.075s
+ok  	github.com/cocoonstack/sandbox/sandboxd/config	1.103s
+ok  	github.com/cocoonstack/sandbox/sandboxd/egress	5.634s
+ok  	github.com/cocoonstack/sandbox/sandboxd/engine	4.869s
+ok  	github.com/cocoonstack/sandbox/sandboxd/mesh	2.713s
+?   	github.com/cocoonstack/sandbox/sandboxd/metastore	[no test files]
+?   	github.com/cocoonstack/sandbox/sandboxd/metastore/metastoretest	[no test files]
+?   	github.com/cocoonstack/sandbox/sandboxd/netfilter	[no test files]
+ok  	github.com/cocoonstack/sandbox/sandboxd/outbound	1.717s
+?   	github.com/cocoonstack/sandbox/sandboxd/outbound/outboundtest	[no test files]
+ok  	github.com/cocoonstack/sandbox/sandboxd/pool	3.372s
+?   	github.com/cocoonstack/sandbox/sandboxd/poolset	[no test files]
+ok  	github.com/cocoonstack/sandbox/sandboxd/poolset/pg	1.038s
+ok  	github.com/cocoonstack/sandbox/sandboxd/server	3.370s
+ok  	github.com/cocoonstack/sandbox/sandboxd/store	1.111s
+ok  	github.com/cocoonstack/sandbox/sandboxd/store/dir	1.668s
+ok  	github.com/cocoonstack/sandbox/sandboxd/store/peer	2.045s
+ok  	github.com/cocoonstack/sandbox/sandboxd/store/s3	5.777s
+?   	github.com/cocoonstack/sandbox/sandboxd/store/storetest	[no test files]
+?   	github.com/cocoonstack/sandbox/sandboxd/tenants	[no test files]
+ok  	github.com/cocoonstack/sandbox/sandboxd/tenants/file	1.054s
+ok  	github.com/cocoonstack/sandbox/sandboxd/tenants/pg	1.046s
+?   	github.com/cocoonstack/sandbox/sandboxd/tenants/tenantstest	[no test files]
+ok  	github.com/cocoonstack/sandbox/sandboxd/types	1.050s
+ok  	github.com/cocoonstack/sandbox/sandboxd/utils	1.031s
+
+verification-1/race-sdk-go.log
+head=ceda20dd4ad944e354e6f300b72b610b3d2422d6
+cwd=/root/eric/composable-computer/.audit/pr339-implementation/repo/sdk/go
+command=['setpriv', '--bounding-set=-dac_override,-dac_read_search', 'go', 'test', '-race', '-count=1', './...']
+ok  	github.com/cocoonstack/sandbox/sdk/go	2.570s
+ok  	github.com/cocoonstack/sandbox/sdk/go/silkd	1.229s
+?   	github.com/cocoonstack/sandbox/sdk/go/silkd/silkdtest	[no test files]
+
+verification-1/race-e2e.log
+head=ceda20dd4ad944e354e6f300b72b610b3d2422d6
+cwd=/root/eric/composable-computer/.audit/pr339-implementation/repo/e2e
+command=['setpriv', '--bounding-set=-dac_override,-dac_read_search', 'go', 'test', '-race', '-count=1', './...']
+ok  	github.com/cocoonstack/sandbox/e2e	3.509s
+?   	github.com/cocoonstack/sandbox/e2e/cmd/androidsmoke	[no test files]
+?   	github.com/cocoonstack/sandbox/e2e/cmd/browsersmoke	[no test files]
+?   	github.com/cocoonstack/sandbox/e2e/cmd/coldproof	[no test files]
+?   	github.com/cocoonstack/sandbox/e2e/cmd/credsmoke	[no test files]
+?   	github.com/cocoonstack/sandbox/e2e/cmd/crossnode	[no test files]
+?   	github.com/cocoonstack/sandbox/e2e/cmd/demo	[no test files]
+?   	github.com/cocoonstack/sandbox/e2e/cmd/egresssmoke	[no test files]
+?   	github.com/cocoonstack/sandbox/e2e/cmd/guestserver	[no test files]
+?   	github.com/cocoonstack/sandbox/e2e/cmd/interceptsmoke	[no test files]
+?   	github.com/cocoonstack/sandbox/e2e/cmd/lifecycle	[no test files]
+?   	github.com/cocoonstack/sandbox/e2e/cmd/meshsmoke	[no test files]
+?   	github.com/cocoonstack/sandbox/e2e/cmd/portsmoke	[no test files]
+?   	github.com/cocoonstack/sandbox/e2e/cmd/pullbench	[no test files]
+?   	github.com/cocoonstack/sandbox/e2e/cmd/pushbench	[no test files]
+?   	github.com/cocoonstack/sandbox/e2e/cmd/qaab	[no test files]
+?   	github.com/cocoonstack/sandbox/e2e/cmd/ringsmoke	[no test files]
+?   	github.com/cocoonstack/sandbox/e2e/cmd/rpcbench	[no test files]
+?   	github.com/cocoonstack/sandbox/e2e/cmd/smoke	[no test files]
+?   	github.com/cocoonstack/sandbox/e2e/cmd/sockssmoke	[no test files]
+?   	github.com/cocoonstack/sandbox/e2e/cmd/volumesmoke	[no test files]
+ok  	github.com/cocoonstack/sandbox/e2e/internal/harness	1.033s
+
+verification-1/race-mcp.log
+head=ceda20dd4ad944e354e6f300b72b610b3d2422d6
+cwd=/root/eric/composable-computer/.audit/pr339-implementation/repo/mcp
+command=['setpriv', '--bounding-set=-dac_override,-dac_read_search', 'go', 'test', '-race', '-count=1', './...']
+ok  	github.com/cocoonstack/sandbox/mcp	1.771s
+
+verification-1/lint-protocol-wire-linux.log
+head=ceda20dd4ad944e354e6f300b72b610b3d2422d6
+cwd=/root/eric/composable-computer/.audit/pr339-implementation/repo/protocol/wire
+command=['/root/eric/composable-computer/.audit/pr339-implementation/repo/bin/golangci-lint-v2.13.2/golangci-lint', 'run', './...']
+0 issues.
+
+verification-1/lint-protocol-wire-darwin.log
+head=ceda20dd4ad944e354e6f300b72b610b3d2422d6
+cwd=/root/eric/composable-computer/.audit/pr339-implementation/repo/protocol/wire
+command=['/root/eric/composable-computer/.audit/pr339-implementation/repo/bin/golangci-lint-v2.13.2/golangci-lint', 'run', './...']
+0 issues.
+
+verification-1/format-protocol-wire.log
+head=ceda20dd4ad944e354e6f300b72b610b3d2422d6
+cwd=/root/eric/composable-computer/.audit/pr339-implementation/repo/protocol/wire
+command=['/root/eric/composable-computer/.audit/pr339-implementation/repo/bin/golangci-lint-v2.13.2/golangci-lint', 'fmt', '--diff', './...']
+
+verification-1/lint-sandboxd-linux.log
+head=ceda20dd4ad944e354e6f300b72b610b3d2422d6
+cwd=/root/eric/composable-computer/.audit/pr339-implementation/repo/sandboxd
+command=['/root/eric/composable-computer/.audit/pr339-implementation/repo/bin/golangci-lint-v2.13.2/golangci-lint', 'run', './...']
+sandboxd/pool/volume.go:145:3: shadow: declaration of "resolvedVolume" shadows declaration at line 33 (govet)
+		resolvedVolume, resolveErr := m.resolveCatalogVolume(ctx, volume)
+		^
+1 issues:
+* govet: 1
+
+verification-1/lint-sandboxd-darwin.log
+head=ceda20dd4ad944e354e6f300b72b610b3d2422d6
+cwd=/root/eric/composable-computer/.audit/pr339-implementation/repo/sandboxd
+command=['/root/eric/composable-computer/.audit/pr339-implementation/repo/bin/golangci-lint-v2.13.2/golangci-lint', 'run', './...']
+sandboxd/pool/volume.go:145:3: shadow: declaration of "resolvedVolume" shadows declaration at line 33 (govet)
+		resolvedVolume, resolveErr := m.resolveCatalogVolume(ctx, volume)
+		^
+1 issues:
+* govet: 1
+
+verification-1/format-sandboxd.log
+head=ceda20dd4ad944e354e6f300b72b610b3d2422d6
+cwd=/root/eric/composable-computer/.audit/pr339-implementation/repo/sandboxd
+command=['/root/eric/composable-computer/.audit/pr339-implementation/repo/bin/golangci-lint-v2.13.2/golangci-lint', 'fmt', '--diff', './...']
+
+verification-1/lint-sdk-go-linux.log
+head=ceda20dd4ad944e354e6f300b72b610b3d2422d6
+cwd=/root/eric/composable-computer/.audit/pr339-implementation/repo/sdk/go
+command=['/root/eric/composable-computer/.audit/pr339-implementation/repo/bin/golangci-lint-v2.13.2/golangci-lint', 'run', './...']
+0 issues.
+
+verification-1/lint-sdk-go-darwin.log
+head=ceda20dd4ad944e354e6f300b72b610b3d2422d6
+cwd=/root/eric/composable-computer/.audit/pr339-implementation/repo/sdk/go
+command=['/root/eric/composable-computer/.audit/pr339-implementation/repo/bin/golangci-lint-v2.13.2/golangci-lint', 'run', './...']
+0 issues.
+
+verification-1/format-sdk-go.log
+head=ceda20dd4ad944e354e6f300b72b610b3d2422d6
+cwd=/root/eric/composable-computer/.audit/pr339-implementation/repo/sdk/go
+command=['/root/eric/composable-computer/.audit/pr339-implementation/repo/bin/golangci-lint-v2.13.2/golangci-lint', 'fmt', '--diff', './...']
+
+verification-1/lint-e2e-linux.log
+head=ceda20dd4ad944e354e6f300b72b610b3d2422d6
+cwd=/root/eric/composable-computer/.audit/pr339-implementation/repo/e2e
+command=['/root/eric/composable-computer/.audit/pr339-implementation/repo/bin/golangci-lint-v2.13.2/golangci-lint', 'run', './...']
+0 issues.
+
+verification-1/lint-e2e-darwin.log
+head=ceda20dd4ad944e354e6f300b72b610b3d2422d6
+cwd=/root/eric/composable-computer/.audit/pr339-implementation/repo/e2e
+command=['/root/eric/composable-computer/.audit/pr339-implementation/repo/bin/golangci-lint-v2.13.2/golangci-lint', 'run', './...']
+0 issues.
+
+verification-1/format-e2e.log
+head=ceda20dd4ad944e354e6f300b72b610b3d2422d6
+cwd=/root/eric/composable-computer/.audit/pr339-implementation/repo/e2e
+command=['/root/eric/composable-computer/.audit/pr339-implementation/repo/bin/golangci-lint-v2.13.2/golangci-lint', 'fmt', '--diff', './...']
+
+verification-1/lint-mcp-linux.log
+head=ceda20dd4ad944e354e6f300b72b610b3d2422d6
+cwd=/root/eric/composable-computer/.audit/pr339-implementation/repo/mcp
+command=['/root/eric/composable-computer/.audit/pr339-implementation/repo/bin/golangci-lint-v2.13.2/golangci-lint', 'run', './...']
+0 issues.
+
+verification-1/lint-mcp-darwin.log
+head=ceda20dd4ad944e354e6f300b72b610b3d2422d6
+cwd=/root/eric/composable-computer/.audit/pr339-implementation/repo/mcp
+command=['/root/eric/composable-computer/.audit/pr339-implementation/repo/bin/golangci-lint-v2.13.2/golangci-lint', 'run', './...']
+0 issues.
+
+verification-1/format-mcp.log
+head=ceda20dd4ad944e354e6f300b72b610b3d2422d6
+cwd=/root/eric/composable-computer/.audit/pr339-implementation/repo/mcp
+command=['/root/eric/composable-computer/.audit/pr339-implementation/repo/bin/golangci-lint-v2.13.2/golangci-lint', 'fmt', '--diff', './...']
+
+verification-1/python-format.log
+head=ceda20dd4ad944e354e6f300b72b610b3d2422d6
+cwd=/root/eric/composable-computer/.audit/pr339-implementation/repo
+command=['/tmp/pr339-design/python-env/bin/ruff', 'format', '--check', '.']
+38 files already formatted
+
+verification-1/python-lint.log
+head=ceda20dd4ad944e354e6f300b72b610b3d2422d6
+cwd=/root/eric/composable-computer/.audit/pr339-implementation/repo
+command=['/tmp/pr339-design/python-env/bin/ruff', 'check', '.']
+All checks passed!
+
+verification-1/python-types.log
+head=ceda20dd4ad944e354e6f300b72b610b3d2422d6
+cwd=/root/eric/composable-computer/.audit/pr339-implementation/repo/sdk/python
+command=['/tmp/pr339-design/python-env/bin/python', '-m', 'mypy']
+Success: no issues found in 10 source files
+
+verification-1/python-test-python.log
+head=ceda20dd4ad944e354e6f300b72b610b3d2422d6
+cwd=/root/eric/composable-computer/.audit/pr339-implementation/repo/sdk/python
+command=['/tmp/pr339-design/python-env/bin/python', '-m', 'pytest', '-q']
+........................................................................ [ 29%]
+........................................................................ [ 58%]
+........................................................................ [ 87%]
+...............................                                          [100%]
+247 passed in 35.10s
+
+verification-1/python-test-openai.log
+head=ceda20dd4ad944e354e6f300b72b610b3d2422d6
+cwd=/root/eric/composable-computer/.audit/pr339-implementation/repo/sdk/openai
+command=['/tmp/pr339-design/python-env/bin/python', '-m', 'pytest', '-q']
+..........                                                               [100%]
+10 passed in 6.26s
+
+verification-1/python-test-langchain.log
+head=ceda20dd4ad944e354e6f300b72b610b3d2422d6
+cwd=/root/eric/composable-computer/.audit/pr339-implementation/repo/sdk/langchain
+command=['/tmp/pr339-design/python-env/bin/python', '-m', 'pytest', '-q']
+...............                                                          [100%]
+15 passed in 0.35s
+
+verification-1/pg-stores.log
+head=ceda20dd4ad944e354e6f300b72b610b3d2422d6
+cwd=/root/eric/composable-computer/.audit/pr339-implementation/repo/sandboxd
+command=['go', 'test', '-race', '-count=1', '-v', './tenants/...', './poolset/...']
+?   	github.com/cocoonstack/sandbox/sandboxd/tenants	[no test files]
+=== RUN   TestContract
+=== RUN   TestContract/put_resolve_peek
+=== RUN   TestContract/keep_and_rotate_tokens
+=== RUN   TestContract/list_pages_by_name
+=== RUN   TestContract/delete_and_replace
+=== RUN   TestContract/replace_swaps_tokens
+=== RUN   TestContract/lookup
+--- PASS: TestContract (0.01s)
+    --- PASS: TestContract/put_resolve_peek (0.00s)
+    --- PASS: TestContract/keep_and_rotate_tokens (0.00s)
+    --- PASS: TestContract/list_pages_by_name (0.00s)
+    --- PASS: TestContract/delete_and_replace (0.00s)
+    --- PASS: TestContract/replace_swaps_tokens (0.00s)
+    --- PASS: TestContract/lookup (0.00s)
+=== RUN   TestTheSetSurvivesAReopen
+--- PASS: TestTheSetSurvivesAReopen (0.00s)
+=== RUN   TestATenantsFileNeedsTheRootToken
+--- PASS: TestATenantsFileNeedsTheRootToken (0.00s)
+PASS
+ok  	github.com/cocoonstack/sandbox/sandboxd/tenants/file	1.043s
+=== RUN   TestContract
+=== RUN   TestContract/put_resolve_peek
+=== RUN   TestContract/keep_and_rotate_tokens
+=== RUN   TestContract/list_pages_by_name
+=== RUN   TestContract/delete_and_replace
+=== RUN   TestContract/replace_swaps_tokens
+=== RUN   TestContract/lookup
+--- PASS: TestContract (1.09s)
+    --- PASS: TestContract/put_resolve_peek (0.26s)
+    --- PASS: TestContract/keep_and_rotate_tokens (0.16s)
+    --- PASS: TestContract/list_pages_by_name (0.15s)
+    --- PASS: TestContract/delete_and_replace (0.25s)
+    --- PASS: TestContract/replace_swaps_tokens (0.15s)
+    --- PASS: TestContract/lookup (0.14s)
+=== RUN   TestAWriteOnOneNodeReachesTheOtherNodesCache
+--- PASS: TestAWriteOnOneNodeReachesTheOtherNodesCache (0.40s)
+=== RUN   TestACachedTenantOutlivesTheDatabase
+--- PASS: TestACachedTenantOutlivesTheDatabase (0.13s)
+=== RUN   TestARoleWithoutCreateServesAPreCreatedTable
+--- PASS: TestARoleWithoutCreateServesAPreCreatedTable (0.23s)
+=== RUN   TestAnUnrelatedEvictionKeepsALookupCacheable
+--- PASS: TestAnUnrelatedEvictionKeepsALookupCacheable (0.00s)
+PASS
+ok  	github.com/cocoonstack/sandbox/sandboxd/tenants/pg	2.901s
+?   	github.com/cocoonstack/sandbox/sandboxd/tenants/tenantstest	[no test files]
+?   	github.com/cocoonstack/sandbox/sandboxd/poolset	[no test files]
+=== RUN   TestStoreVersionsTheCellsSet
+--- PASS: TestStoreVersionsTheCellsSet (0.19s)
+=== RUN   TestWatchFiresOnConnectAndOnItsCellsWrites
+--- PASS: TestWatchFiresOnConnectAndOnItsCellsWrites (0.42s)
+=== RUN   TestADownDatabaseIsUnavailable
+--- PASS: TestADownDatabaseIsUnavailable (0.12s)
+PASS
+ok  	github.com/cocoonstack/sandbox/sandboxd/poolset/pg	1.766s
+
+verification-1/pg-pool.log
+head=ceda20dd4ad944e354e6f300b72b610b3d2422d6
+cwd=/root/eric/composable-computer/.audit/pr339-implementation/repo/sandboxd
+command=['go', 'test', '-race', '-count=1', '-v', '-run', 'TestTwoNodesOnOneMetaStore|TestNodesOfACell|TestAMetaStoreNodeWithoutACell', './pool/']
+=== RUN   TestNodesOfACellShareThePoolSet
+--- PASS: TestNodesOfACellShareThePoolSet (0.50s)
+=== RUN   TestAMetaStoreNodeWithoutACellKeepsItsOwnPools
+--- PASS: TestAMetaStoreNodeWithoutACellKeepsItsOwnPools (0.19s)
+=== RUN   TestTwoNodesOnOneMetaStoreShareTheTenantSet
+--- PASS: TestTwoNodesOnOneMetaStoreShareTheTenantSet (0.25s)
+PASS
+ok  	github.com/cocoonstack/sandbox/sandboxd/pool	2.120s
+
+verification-1/tls-caddy.log
+head=ceda20dd4ad944e354e6f300b72b610b3d2422d6
+cwd=/root/eric/composable-computer/.audit/pr339-implementation/repo/e2e
+command=['go', 'test', '-race', '-count=1', '-run', 'TestCaddyTLSCluster', '-timeout', '60s', '-v', '.']
+=== RUN   TestCaddyTLSCluster
+=== RUN   TestCaddyTLSCluster/Go
+=== RUN   TestCaddyTLSCluster/Python
+--- PASS: TestCaddyTLSCluster (0.42s)
+    --- PASS: TestCaddyTLSCluster/Go (0.10s)
+    --- PASS: TestCaddyTLSCluster/Python (0.19s)
+PASS
+ok  	github.com/cocoonstack/sandbox/e2e	1.477s
+
+verification-2/race-sandboxd.log
+head=b249bd2813602eab44e498ecd6e106652e81940a
+cwd=/root/eric/composable-computer/.audit/pr339-implementation/repo/sandboxd
+command=['setpriv', '--bounding-set=-dac_override,-dac_read_search', 'go', 'test', '-race', '-count=1', './...']
+ok  	github.com/cocoonstack/sandbox/sandboxd	1.080s
+ok  	github.com/cocoonstack/sandbox/sandboxd/config	1.083s
+ok  	github.com/cocoonstack/sandbox/sandboxd/egress	5.628s
+ok  	github.com/cocoonstack/sandbox/sandboxd/engine	4.841s
+ok  	github.com/cocoonstack/sandbox/sandboxd/mesh	2.633s
+?   	github.com/cocoonstack/sandbox/sandboxd/metastore	[no test files]
+?   	github.com/cocoonstack/sandbox/sandboxd/metastore/metastoretest	[no test files]
+?   	github.com/cocoonstack/sandbox/sandboxd/netfilter	[no test files]
+ok  	github.com/cocoonstack/sandbox/sandboxd/outbound	1.704s
+?   	github.com/cocoonstack/sandbox/sandboxd/outbound/outboundtest	[no test files]
+ok  	github.com/cocoonstack/sandbox/sandboxd/pool	3.430s
+?   	github.com/cocoonstack/sandbox/sandboxd/poolset	[no test files]
+ok  	github.com/cocoonstack/sandbox/sandboxd/poolset/pg	1.039s
+ok  	github.com/cocoonstack/sandbox/sandboxd/server	3.385s
+ok  	github.com/cocoonstack/sandbox/sandboxd/store	1.112s
+ok  	github.com/cocoonstack/sandbox/sandboxd/store/dir	1.657s
+ok  	github.com/cocoonstack/sandbox/sandboxd/store/peer	2.040s
+ok  	github.com/cocoonstack/sandbox/sandboxd/store/s3	9.072s
+?   	github.com/cocoonstack/sandbox/sandboxd/store/storetest	[no test files]
+?   	github.com/cocoonstack/sandbox/sandboxd/tenants	[no test files]
+ok  	github.com/cocoonstack/sandbox/sandboxd/tenants/file	1.059s
+ok  	github.com/cocoonstack/sandbox/sandboxd/tenants/pg	1.043s
+?   	github.com/cocoonstack/sandbox/sandboxd/tenants/tenantstest	[no test files]
+ok  	github.com/cocoonstack/sandbox/sandboxd/types	1.079s
+ok  	github.com/cocoonstack/sandbox/sandboxd/utils	1.032s
+
+verification-2/lint-sandboxd-linux.log
+head=b249bd2813602eab44e498ecd6e106652e81940a
+cwd=/root/eric/composable-computer/.audit/pr339-implementation/repo/sandboxd
+command=['/root/eric/composable-computer/.audit/pr339-implementation/repo/bin/golangci-lint-v2.13.2/golangci-lint', 'run', './...']
+0 issues.
+
+verification-2/lint-sandboxd-darwin.log
+head=b249bd2813602eab44e498ecd6e106652e81940a
+cwd=/root/eric/composable-computer/.audit/pr339-implementation/repo/sandboxd
+command=['/root/eric/composable-computer/.audit/pr339-implementation/repo/bin/golangci-lint-v2.13.2/golangci-lint', 'run', './...']
+0 issues.
+
+verification-2/format-sandboxd.log
+head=b249bd2813602eab44e498ecd6e106652e81940a
+cwd=/root/eric/composable-computer/.audit/pr339-implementation/repo/sandboxd
+command=['/root/eric/composable-computer/.audit/pr339-implementation/repo/bin/golangci-lint-v2.13.2/golangci-lint', 'fmt', '--diff', './...']
+
+verification-3/race-sandboxd.log
+head=cc444095b3ba000de9ac11d7ef0674e386153804
+cwd=/root/eric/composable-computer/.audit/pr339-implementation/repo/sandboxd
+command=['setpriv', '--bounding-set=-dac_override,-dac_read_search', 'go', 'test', '-race', '-count=1', './...']
+ok  	github.com/cocoonstack/sandbox/sandboxd	1.069s
+ok  	github.com/cocoonstack/sandbox/sandboxd/config	1.118s
+ok  	github.com/cocoonstack/sandbox/sandboxd/egress	5.686s
+ok  	github.com/cocoonstack/sandbox/sandboxd/engine	4.838s
+ok  	github.com/cocoonstack/sandbox/sandboxd/mesh	2.705s
+?   	github.com/cocoonstack/sandbox/sandboxd/metastore	[no test files]
+?   	github.com/cocoonstack/sandbox/sandboxd/metastore/metastoretest	[no test files]
+?   	github.com/cocoonstack/sandbox/sandboxd/netfilter	[no test files]
+ok  	github.com/cocoonstack/sandbox/sandboxd/outbound	1.711s
+?   	github.com/cocoonstack/sandbox/sandboxd/outbound/outboundtest	[no test files]
+ok  	github.com/cocoonstack/sandbox/sandboxd/pool	3.520s
+?   	github.com/cocoonstack/sandbox/sandboxd/poolset	[no test files]
+ok  	github.com/cocoonstack/sandbox/sandboxd/poolset/pg	1.036s
+ok  	github.com/cocoonstack/sandbox/sandboxd/server	3.435s
+ok  	github.com/cocoonstack/sandbox/sandboxd/store	1.098s
+ok  	github.com/cocoonstack/sandbox/sandboxd/store/dir	1.608s
+ok  	github.com/cocoonstack/sandbox/sandboxd/store/peer	2.035s
+ok  	github.com/cocoonstack/sandbox/sandboxd/store/s3	4.268s
+?   	github.com/cocoonstack/sandbox/sandboxd/store/storetest	[no test files]
+?   	github.com/cocoonstack/sandbox/sandboxd/tenants	[no test files]
+ok  	github.com/cocoonstack/sandbox/sandboxd/tenants/file	1.068s
+ok  	github.com/cocoonstack/sandbox/sandboxd/tenants/pg	1.053s
+?   	github.com/cocoonstack/sandbox/sandboxd/tenants/tenantstest	[no test files]
+ok  	github.com/cocoonstack/sandbox/sandboxd/types	1.071s
+ok  	github.com/cocoonstack/sandbox/sandboxd/utils	1.045s
+
+verification-3/race-e2e.log
+head=cc444095b3ba000de9ac11d7ef0674e386153804
+cwd=/root/eric/composable-computer/.audit/pr339-implementation/repo/e2e
+command=['setpriv', '--bounding-set=-dac_override,-dac_read_search', 'go', 'test', '-race', '-count=1', './...']
+ok  	github.com/cocoonstack/sandbox/e2e	3.528s
+?   	github.com/cocoonstack/sandbox/e2e/cmd/androidsmoke	[no test files]
+?   	github.com/cocoonstack/sandbox/e2e/cmd/browsersmoke	[no test files]
+?   	github.com/cocoonstack/sandbox/e2e/cmd/coldproof	[no test files]
+?   	github.com/cocoonstack/sandbox/e2e/cmd/credsmoke	[no test files]
+?   	github.com/cocoonstack/sandbox/e2e/cmd/crossnode	[no test files]
+?   	github.com/cocoonstack/sandbox/e2e/cmd/demo	[no test files]
+?   	github.com/cocoonstack/sandbox/e2e/cmd/egresssmoke	[no test files]
+?   	github.com/cocoonstack/sandbox/e2e/cmd/guestserver	[no test files]
+?   	github.com/cocoonstack/sandbox/e2e/cmd/interceptsmoke	[no test files]
+?   	github.com/cocoonstack/sandbox/e2e/cmd/lifecycle	[no test files]
+?   	github.com/cocoonstack/sandbox/e2e/cmd/meshsmoke	[no test files]
+?   	github.com/cocoonstack/sandbox/e2e/cmd/portsmoke	[no test files]
+?   	github.com/cocoonstack/sandbox/e2e/cmd/pullbench	[no test files]
+?   	github.com/cocoonstack/sandbox/e2e/cmd/pushbench	[no test files]
+?   	github.com/cocoonstack/sandbox/e2e/cmd/qaab	[no test files]
+?   	github.com/cocoonstack/sandbox/e2e/cmd/ringsmoke	[no test files]
+?   	github.com/cocoonstack/sandbox/e2e/cmd/rpcbench	[no test files]
+?   	github.com/cocoonstack/sandbox/e2e/cmd/smoke	[no test files]
+?   	github.com/cocoonstack/sandbox/e2e/cmd/sockssmoke	[no test files]
+?   	github.com/cocoonstack/sandbox/e2e/cmd/volumesmoke	[no test files]
+ok  	github.com/cocoonstack/sandbox/e2e/internal/harness	1.032s
+
+verification-3/lint-sandboxd-linux.log
+head=cc444095b3ba000de9ac11d7ef0674e386153804
+cwd=/root/eric/composable-computer/.audit/pr339-implementation/repo/sandboxd
+command=['/root/eric/composable-computer/.audit/pr339-implementation/repo/bin/golangci-lint-v2.13.2/golangci-lint', 'run', './...']
+sandboxd/pool/volume_convergence_test.go:206:10: shadow: declaration of "err" shadows declaration at line 202 (govet)
+			if _, err := m.SetVolumes(t.Context(), sb.ID, sb.Tenant, []types.Volume{{Name: "data"}, {Name: "data"}}); !errors.Is(err, ErrBadVolume) {
+			      ^
+1 issues:
+* govet: 1
+
+verification-3/lint-sandboxd-darwin.log
+head=cc444095b3ba000de9ac11d7ef0674e386153804
+cwd=/root/eric/composable-computer/.audit/pr339-implementation/repo/sandboxd
+command=['/root/eric/composable-computer/.audit/pr339-implementation/repo/bin/golangci-lint-v2.13.2/golangci-lint', 'run', './...']
+sandboxd/pool/volume_convergence_test.go:206:10: shadow: declaration of "err" shadows declaration at line 202 (govet)
+			if _, err := m.SetVolumes(t.Context(), sb.ID, sb.Tenant, []types.Volume{{Name: "data"}, {Name: "data"}}); !errors.Is(err, ErrBadVolume) {
+			      ^
+1 issues:
+* govet: 1
+
+verification-3/format-sandboxd.log
+head=cc444095b3ba000de9ac11d7ef0674e386153804
+cwd=/root/eric/composable-computer/.audit/pr339-implementation/repo/sandboxd
+command=['/root/eric/composable-computer/.audit/pr339-implementation/repo/bin/golangci-lint-v2.13.2/golangci-lint', 'fmt', '--diff', './...']
+
+verification-3/lint-e2e-linux.log
+head=cc444095b3ba000de9ac11d7ef0674e386153804
+cwd=/root/eric/composable-computer/.audit/pr339-implementation/repo/e2e
+command=['/root/eric/composable-computer/.audit/pr339-implementation/repo/bin/golangci-lint-v2.13.2/golangci-lint', 'run', './...']
+e2e/volume_mutation_test.go:51:8: shadow: declaration of "err" shadows declaration at line 46 (govet)
+	if _, err := sb.SetVolumes(t.Context(), []sandbox.Volume{{Name: "dataset"}}); err != nil {
+	      ^
+1 issues:
+* govet: 1
+
+verification-3/lint-e2e-darwin.log
+head=cc444095b3ba000de9ac11d7ef0674e386153804
+cwd=/root/eric/composable-computer/.audit/pr339-implementation/repo/e2e
+command=['/root/eric/composable-computer/.audit/pr339-implementation/repo/bin/golangci-lint-v2.13.2/golangci-lint', 'run', './...']
+e2e/volume_mutation_test.go:51:8: shadow: declaration of "err" shadows declaration at line 46 (govet)
+	if _, err := sb.SetVolumes(t.Context(), []sandbox.Volume{{Name: "dataset"}}); err != nil {
+	      ^
+1 issues:
+* govet: 1
+
+verification-3/format-e2e.log
+head=cc444095b3ba000de9ac11d7ef0674e386153804
+cwd=/root/eric/composable-computer/.audit/pr339-implementation/repo/e2e
+command=['/root/eric/composable-computer/.audit/pr339-implementation/repo/bin/golangci-lint-v2.13.2/golangci-lint', 'fmt', '--diff', './...']
+
+verification-4/race-sandboxd.log
+head=da56205bb31b489c15af3ea670e1cbe87905bf01
+cwd=/root/eric/composable-computer/.audit/pr339-implementation/repo/sandboxd
+command=['setpriv', '--bounding-set=-dac_override,-dac_read_search', 'go', 'test', '-race', '-count=1', './...']
+ok  	github.com/cocoonstack/sandbox/sandboxd	1.061s
+ok  	github.com/cocoonstack/sandbox/sandboxd/config	1.104s
+ok  	github.com/cocoonstack/sandbox/sandboxd/egress	5.614s
+ok  	github.com/cocoonstack/sandbox/sandboxd/engine	4.864s
+ok  	github.com/cocoonstack/sandbox/sandboxd/mesh	2.717s
+?   	github.com/cocoonstack/sandbox/sandboxd/metastore	[no test files]
+?   	github.com/cocoonstack/sandbox/sandboxd/metastore/metastoretest	[no test files]
+?   	github.com/cocoonstack/sandbox/sandboxd/netfilter	[no test files]
+ok  	github.com/cocoonstack/sandbox/sandboxd/outbound	1.707s
+?   	github.com/cocoonstack/sandbox/sandboxd/outbound/outboundtest	[no test files]
+ok  	github.com/cocoonstack/sandbox/sandboxd/pool	3.521s
+?   	github.com/cocoonstack/sandbox/sandboxd/poolset	[no test files]
+ok  	github.com/cocoonstack/sandbox/sandboxd/poolset/pg	1.047s
+ok  	github.com/cocoonstack/sandbox/sandboxd/server	3.392s
+ok  	github.com/cocoonstack/sandbox/sandboxd/store	1.102s
+ok  	github.com/cocoonstack/sandbox/sandboxd/store/dir	1.668s
+ok  	github.com/cocoonstack/sandbox/sandboxd/store/peer	2.046s
+ok  	github.com/cocoonstack/sandbox/sandboxd/store/s3	5.678s
+?   	github.com/cocoonstack/sandbox/sandboxd/store/storetest	[no test files]
+?   	github.com/cocoonstack/sandbox/sandboxd/tenants	[no test files]
+ok  	github.com/cocoonstack/sandbox/sandboxd/tenants/file	1.043s
+ok  	github.com/cocoonstack/sandbox/sandboxd/tenants/pg	1.039s
+?   	github.com/cocoonstack/sandbox/sandboxd/tenants/tenantstest	[no test files]
+ok  	github.com/cocoonstack/sandbox/sandboxd/types	1.085s
+ok  	github.com/cocoonstack/sandbox/sandboxd/utils	1.031s
+
+verification-4/race-e2e.log
+head=da56205bb31b489c15af3ea670e1cbe87905bf01
+cwd=/root/eric/composable-computer/.audit/pr339-implementation/repo/e2e
+command=['setpriv', '--bounding-set=-dac_override,-dac_read_search', 'go', 'test', '-race', '-count=1', './...']
+ok  	github.com/cocoonstack/sandbox/e2e	3.519s
+?   	github.com/cocoonstack/sandbox/e2e/cmd/androidsmoke	[no test files]
+?   	github.com/cocoonstack/sandbox/e2e/cmd/browsersmoke	[no test files]
+?   	github.com/cocoonstack/sandbox/e2e/cmd/coldproof	[no test files]
+?   	github.com/cocoonstack/sandbox/e2e/cmd/credsmoke	[no test files]
+?   	github.com/cocoonstack/sandbox/e2e/cmd/crossnode	[no test files]
+?   	github.com/cocoonstack/sandbox/e2e/cmd/demo	[no test files]
+?   	github.com/cocoonstack/sandbox/e2e/cmd/egresssmoke	[no test files]
+?   	github.com/cocoonstack/sandbox/e2e/cmd/guestserver	[no test files]
+?   	github.com/cocoonstack/sandbox/e2e/cmd/interceptsmoke	[no test files]
+?   	github.com/cocoonstack/sandbox/e2e/cmd/lifecycle	[no test files]
+?   	github.com/cocoonstack/sandbox/e2e/cmd/meshsmoke	[no test files]
+?   	github.com/cocoonstack/sandbox/e2e/cmd/portsmoke	[no test files]
+?   	github.com/cocoonstack/sandbox/e2e/cmd/pullbench	[no test files]
+?   	github.com/cocoonstack/sandbox/e2e/cmd/pushbench	[no test files]
+?   	github.com/cocoonstack/sandbox/e2e/cmd/qaab	[no test files]
+?   	github.com/cocoonstack/sandbox/e2e/cmd/ringsmoke	[no test files]
+?   	github.com/cocoonstack/sandbox/e2e/cmd/rpcbench	[no test files]
+?   	github.com/cocoonstack/sandbox/e2e/cmd/smoke	[no test files]
+?   	github.com/cocoonstack/sandbox/e2e/cmd/sockssmoke	[no test files]
+?   	github.com/cocoonstack/sandbox/e2e/cmd/volumesmoke	[no test files]
+ok  	github.com/cocoonstack/sandbox/e2e/internal/harness	1.033s
+
+verification-4/lint-sandboxd-linux.log
+head=da56205bb31b489c15af3ea670e1cbe87905bf01
+cwd=/root/eric/composable-computer/.audit/pr339-implementation/repo/sandboxd
+command=['/root/eric/composable-computer/.audit/pr339-implementation/repo/bin/golangci-lint-v2.13.2/golangci-lint', 'run', './...']
+0 issues.
+
+verification-4/lint-sandboxd-darwin.log
+head=da56205bb31b489c15af3ea670e1cbe87905bf01
+cwd=/root/eric/composable-computer/.audit/pr339-implementation/repo/sandboxd
+command=['/root/eric/composable-computer/.audit/pr339-implementation/repo/bin/golangci-lint-v2.13.2/golangci-lint', 'run', './...']
+0 issues.
+
+verification-4/format-sandboxd.log
+head=da56205bb31b489c15af3ea670e1cbe87905bf01
+cwd=/root/eric/composable-computer/.audit/pr339-implementation/repo/sandboxd
+command=['/root/eric/composable-computer/.audit/pr339-implementation/repo/bin/golangci-lint-v2.13.2/golangci-lint', 'fmt', '--diff', './...']
+
+verification-4/lint-e2e-linux.log
+head=da56205bb31b489c15af3ea670e1cbe87905bf01
+cwd=/root/eric/composable-computer/.audit/pr339-implementation/repo/e2e
+command=['/root/eric/composable-computer/.audit/pr339-implementation/repo/bin/golangci-lint-v2.13.2/golangci-lint', 'run', './...']
+0 issues.
+
+verification-4/lint-e2e-darwin.log
+head=da56205bb31b489c15af3ea670e1cbe87905bf01
+cwd=/root/eric/composable-computer/.audit/pr339-implementation/repo/e2e
+command=['/root/eric/composable-computer/.audit/pr339-implementation/repo/bin/golangci-lint-v2.13.2/golangci-lint', 'run', './...']
+0 issues.
+
+verification-4/format-e2e.log
+head=da56205bb31b489c15af3ea670e1cbe87905bf01
+cwd=/root/eric/composable-computer/.audit/pr339-implementation/repo/e2e
+command=['/root/eric/composable-computer/.audit/pr339-implementation/repo/bin/golangci-lint-v2.13.2/golangci-lint', 'fmt', '--diff', './...']

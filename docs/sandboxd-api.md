@@ -378,9 +378,9 @@ Diagnosis, detach, and release remain available until cleanup succeeds.
 A replacement first unmounts the old disk, then mounts the new disk. Pause reads
 and close files, mmap, cwd, and bind mount references during this gap. Existing
 independent guest processes and sessions continue. See the
-[same-sandbox replacement tutorial](live-volumes.md). Real Cloud Hypervisor
-hotplug, busy unmount, and restart during convergence still require maintainer
-testbed validation.
+[same-sandbox replacement tutorial](live-volumes.md) and the
+[local Cloud Hypervisor results](live-volumes-validation.md) for the tested
+interruption boundaries and remaining coverage limits.
 
 ## POST /v1/sandboxes/{id}/release
 

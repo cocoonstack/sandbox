@@ -1,0 +1,17 @@
+{
+  "candidate": "cc444095b3ba000de9ac11d7ef0674e386153804",
+  "claims": 0,
+  "volume_retirements": 0,
+  "vms": [],
+  "runtime_sockets": [],
+  "owned_taps": [],
+  "vm_pids_gone": {
+    "1082008": true,
+    "1084550": true,
+    "1087371": true
+  },
+  "isolated_daemon_stopped": true,
+  "existing_services_stopped": [],
+  "retained_device_calls": 0,
+  "fault_markers_remaining": []
+}

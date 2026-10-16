@@ -1,0 +1,88 @@
+{"time": 1792161516.2106261, "pid": 1081257, "args": ["version"]}
+{"time": 1792161516.290213, "pid": 1081298, "args": ["vm", "list", "--format", "json"]}
+{"time": 1792161516.3823283, "pid": 1081340, "args": ["snapshot", "list", "--format", "json"]}
+{"time": 1792161516.4694333, "pid": 1081381, "args": ["image", "list", "--format", "json"]}
+{"time": 1792161531.5944746, "pid": 1081562, "args": ["vm", "clone", "--from-dir", "/tmp/pr339-live/state/goldens/8afde47472091862474d5edf567e6f55", "--name", "sbx-8afde47472091862474d5edf567e6f55-ab5e7c310318", "--pull", "--output", "json", "--no-direct-io=true"]}
+{"time": 1792161531.7895525, "pid": 1081662, "args": ["vm", "disk", "attach", "sbx-8afde47472091862474d5edf567e6f55-ab5e7c310318", "--path", "/tmp/pr339-live/v1.raw", "--name", "dataset-v1", "--readonly", "--directio", "off"]}
+{"time": 1792161531.9890335, "pid": 1081705, "args": ["vm", "clone", "--from-dir", "/tmp/pr339-live/state/goldens/8afde47472091862474d5edf567e6f55", "--name", "sbx-8afde47472091862474d5edf567e6f55-743eac818016", "--pull", "--output", "json", "--no-direct-io=true"]}
+{"time": 1792161532.1801274, "pid": 1081804, "args": ["vm", "disk", "attach", "sbx-8afde47472091862474d5edf567e6f55-743eac818016", "--path", "/tmp/pr339-live/v1.raw", "--name", "dataset-v1", "--readonly", "--directio", "off"]}
+{"time": 1792161532.4134898, "pid": 1081847, "args": ["vm", "rm", "--force", "sbx-8afde47472091862474d5edf567e6f55-ab5e7c310318"]}
+{"time": 1792161532.5762568, "pid": 1081909, "args": ["vm", "rm", "--force", "sbx-8afde47472091862474d5edf567e6f55-743eac818016"]}
+{"time": 1792161532.7404315, "pid": 1081966, "args": ["vm", "clone", "--from-dir", "/tmp/pr339-live/state/goldens/8afde47472091862474d5edf567e6f55", "--name", "sbx-8afde47472091862474d5edf567e6f55-dd724c346a53", "--pull", "--output", "json", "--no-direct-io=true"]}
+{"time": 1792161532.9253728, "pid": 1082064, "args": ["version"]}
+{"time": 1792161532.9955375, "pid": 1082074, "args": ["vm", "disk", "attach", "sbx-8afde47472091862474d5edf567e6f55-dd724c346a53", "--path", "/tmp/pr339-live/v1.raw", "--name", "dataset-v1", "--readonly", "--directio", "off"]}
+{"time": 1792161533.243327, "pid": 1082118, "args": ["version"]}
+{"time": 1792161533.3524957, "pid": 1082164, "args": ["version"]}
+{"time": 1792161533.4615133, "pid": 1082205, "args": ["vm", "disk", "detach", "sbx-8afde47472091862474d5edf567e6f55-dd724c346a53", "--name", "dataset-v1"]}
+{"time": 1792161533.6639063, "pid": 1082246, "args": ["version"]}
+{"time": 1792161533.7398326, "pid": 1082256, "args": ["version"]}
+{"time": 1792161533.8222344, "pid": 1082297, "args": ["vm", "disk", "attach", "sbx-8afde47472091862474d5edf567e6f55-dd724c346a53", "--path", "/tmp/pr339-live/v1.raw", "--name", "dataset-v1", "--readonly", "--directio", "off"]}
+{"time": 1792161533.9386697, "pid": 1082340, "args": ["version"]}
+{"time": 1792161534.0145915, "pid": 1082350, "args": ["version"]}
+{"time": 1792161534.0949044, "pid": 1082360, "args": ["vm", "disk", "detach", "sbx-8afde47472091862474d5edf567e6f55-dd724c346a53", "--name", "dataset-v1"]}
+{"time": 1792161534.2889814, "pid": 1082401, "args": ["version"]}
+{"time": 1792161534.450274, "pid": 1082475, "args": ["version"]}
+{"time": 1792161534.5280719, "pid": 1082517, "args": ["vm", "disk", "attach", "sbx-8afde47472091862474d5edf567e6f55-dd724c346a53", "--path", "/tmp/pr339-live/v1.raw", "--name", "dataset-v1", "--readonly", "--directio", "off"]}
+{"time": 1792161534.6437583, "pid": 1082560, "args": ["version"]}
+{"time": 1792161534.733479, "pid": 1082602, "args": ["version"]}
+{"time": 1792161534.8219416, "pid": 1082643, "args": ["vm", "disk", "detach", "sbx-8afde47472091862474d5edf567e6f55-dd724c346a53", "--name", "dataset-v1"]}
+{"time": 1792161535.0211015, "pid": 1082684, "args": ["vm", "disk", "attach", "sbx-8afde47472091862474d5edf567e6f55-dd724c346a53", "--path", "/tmp/pr339-live/v2.raw", "--name", "dataset-v2", "--readonly", "--directio", "off"]}
+{"time": 1792161535.1456678, "pid": 1082727, "args": ["version"]}
+{"time": 1792161535.238117, "pid": 1082768, "args": ["vm", "disk", "detach", "sbx-8afde47472091862474d5edf567e6f55-dd724c346a53", "--name", "dataset-v2"]}
+{"time": 1792161535.4366887, "pid": 1082811, "args": ["vm", "disk", "attach", "sbx-8afde47472091862474d5edf567e6f55-dd724c346a53", "--path", "/tmp/pr339-live/v1.raw", "--name", "dataset-v1", "--readonly", "--directio", "off"]}
+{"time": 1792161535.5785534, "pid": 1082854, "args": ["version"]}
+{"time": 1792161535.6483173, "pid": 1082865, "args": ["version"]}
+{"time": 1792161535.7378325, "pid": 1082906, "args": ["version"]}
+{"time": 1792161535.8273516, "pid": 1082947, "args": ["vm", "disk", "detach", "sbx-8afde47472091862474d5edf567e6f55-dd724c346a53", "--name", "dataset-v1"]}
+{"time": 1792161536.0251427, "pid": 1082988, "args": ["vm", "disk", "attach", "sbx-8afde47472091862474d5edf567e6f55-dd724c346a53", "--path", "/tmp/pr339-live/v2.raw", "--name", "dataset-v2", "--readonly", "--directio", "off"]}
+{"time": 1792161536.1503155, "pid": 1083031, "args": ["version"]}
+{"time": 1792161536.2372422, "pid": 1083073, "args": ["version"]}
+{"time": 1792161536.315691, "pid": 1083083, "args": ["vm", "disk", "detach", "sbx-8afde47472091862474d5edf567e6f55-dd724c346a53", "--name", "dataset-v2"]}
+{"time": 1792161536.5120556, "pid": 1083125, "args": ["vm", "disk", "attach", "sbx-8afde47472091862474d5edf567e6f55-dd724c346a53", "--path", "/tmp/pr339-live/v1.raw", "--name", "dataset-v1", "--readonly", "--directio", "off"]}
+{"time": 1792161536.560109, "pid": 1083131, "args": ["vm", "list", "--format", "json"]}
+{"time": 1792161536.6265824, "pid": 1083210, "args": ["version"]}
+{"time": 1792161536.716744, "pid": 1083251, "args": ["vm", "disk", "detach", "sbx-8afde47472091862474d5edf567e6f55-dd724c346a53", "--name", "dataset-v1"]}
+{"time": 1792161536.9173326, "pid": 1083292, "args": ["vm", "disk", "attach", "sbx-8afde47472091862474d5edf567e6f55-dd724c346a53", "--path", "/tmp/pr339-live/v2.raw", "--name", "dataset-v2", "--readonly", "--directio", "off"]}
+{"time": 1792161537.150615, "pid": 1083338, "args": ["version"]}
+{"time": 1792161537.2409613, "pid": 1083379, "args": ["vm", "disk", "detach", "sbx-8afde47472091862474d5edf567e6f55-dd724c346a53", "--name", "dataset-v2"]}
+{"time": 1792161537.4404385, "pid": 1083422, "args": ["vm", "disk", "attach", "sbx-8afde47472091862474d5edf567e6f55-dd724c346a53", "--path", "/tmp/pr339-live/v1.raw", "--name", "dataset-v1", "--readonly", "--directio", "off"]}
+{"time": 1792161537.712072, "pid": 1083544, "args": ["version"]}
+{"time": 1792161537.7933095, "pid": 1083585, "args": ["vm", "list", "--format", "json"]}
+{"time": 1792161537.881657, "pid": 1083626, "args": ["snapshot", "list", "--format", "json"]}
+{"time": 1792161537.9697576, "pid": 1083667, "args": ["image", "list", "--format", "json"]}
+{"time": 1792161538.0572329, "pid": 1083708, "args": ["vm", "list", "--format", "json"]}
+{"time": 1792161538.1257093, "pid": 1083749, "args": ["version"]}
+{"time": 1792161538.2046566, "pid": 1083791, "args": ["vm", "disk", "attach", "sbx-8afde47472091862474d5edf567e6f55-dd724c346a53", "--path", "/tmp/pr339-live/v1.raw", "--name", "dataset-v1", "--readonly", "--directio", "off"]}
+{"time": 1792161538.34557, "pid": 1083832, "args": ["version"]}
+{"time": 1792161538.4290745, "pid": 1083843, "args": ["vm", "disk", "detach", "sbx-8afde47472091862474d5edf567e6f55-dd724c346a53", "--name", "dataset-v1"]}
+{"time": 1792161538.6181557, "pid": 1083884, "args": ["vm", "disk", "attach", "sbx-8afde47472091862474d5edf567e6f55-dd724c346a53", "--path", "/tmp/pr339-live/v2.raw", "--name", "dataset-v2", "--readonly", "--directio", "off"]}
+{"time": 1792161538.8523986, "pid": 1083930, "args": ["version"]}
+{"time": 1792161538.9431992, "pid": 1083970, "args": ["vm", "disk", "detach", "sbx-8afde47472091862474d5edf567e6f55-dd724c346a53", "--name", "dataset-v2"]}
+{"time": 1792161539.141075, "pid": 1084011, "args": ["vm", "disk", "attach", "sbx-8afde47472091862474d5edf567e6f55-dd724c346a53", "--path", "/tmp/pr339-live/v1.raw", "--name", "dataset-v1", "--readonly", "--directio", "off"]}
+{"time": 1792161539.8965445, "pid": 1084097, "args": ["version"]}
+{"time": 1792161539.977518, "pid": 1084138, "args": ["vm", "disk", "attach", "sbx-8afde47472091862474d5edf567e6f55-dd724c346a53", "--path", "/tmp/pr339-live/v1.raw", "--name", "dataset-v1", "--readonly", "--directio", "off"]}
+{"time": 1792161540.1214855, "pid": 1084179, "args": ["version"]}
+{"time": 1792161540.211696, "pid": 1084235, "args": ["vm", "disk", "detach", "sbx-8afde47472091862474d5edf567e6f55-dd724c346a53", "--name", "dataset-v1"]}
+{"time": 1792161540.4132092, "pid": 1084292, "args": ["vm", "disk", "attach", "sbx-8afde47472091862474d5edf567e6f55-dd724c346a53", "--path", "/tmp/pr339-live/v2.raw", "--name", "dataset-v2", "--readonly", "--directio", "off"]}
+{"time": 1792161540.5535214, "pid": 1084355, "args": ["version"]}
+{"time": 1792161540.6428962, "pid": 1084409, "args": ["vm", "disk", "detach", "sbx-8afde47472091862474d5edf567e6f55-dd724c346a53", "--name", "dataset-v2"]}
+{"time": 1792161540.8559349, "pid": 1084451, "args": ["vm", "rm", "--force", "sbx-8afde47472091862474d5edf567e6f55-dd724c346a53"]}
+{"time": 1792161541.029107, "pid": 1084508, "args": ["vm", "clone", "--from-dir", "/tmp/pr339-live/state/goldens/8afde47472091862474d5edf567e6f55", "--name", "sbx-8afde47472091862474d5edf567e6f55-89e580237e51", "--pull", "--output", "json", "--no-direct-io=true"]}
+{"time": 1792161541.2160385, "pid": 1084606, "args": ["vm", "disk", "attach", "sbx-8afde47472091862474d5edf567e6f55-89e580237e51", "--path", "/tmp/pr339-live/v1.raw", "--name", "dataset-v1", "--readonly", "--directio", "off"]}
+{"time": 1792161541.4820101, "pid": 1084709, "args": ["vm", "rm", "--force", "sbx-8afde47472091862474d5edf567e6f55-89e580237e51"]}
+{"time": 1792161541.529443, "pid": 1084785, "args": ["vm", "inspect", "sbx-8afde47472091862474d5edf567e6f55-89e580237e51"]}
+{"time": 1792161541.765802, "pid": 1084909, "args": ["version"]}
+{"time": 1792161541.8461316, "pid": 1084950, "args": ["vm", "list", "--format", "json"]}
+{"time": 1792161541.9320328, "pid": 1084991, "args": ["snapshot", "list", "--format", "json"]}
+{"time": 1792161542.0202837, "pid": 1085032, "args": ["image", "list", "--format", "json"]}
+{"time": 1792161542.1088488, "pid": 1085073, "args": ["vm", "rm", "--force", "sbx-8afde47472091862474d5edf567e6f55-89e580237e51"]}
+{"time": 1792161542.1567278, "pid": 1085074, "args": ["vm", "inspect", "sbx-8afde47472091862474d5edf567e6f55-89e580237e51"]}
+{"time": 1792161547.2556753, "pid": 1085179, "args": ["vm", "rm", "--force", "sbx-8afde47472091862474d5edf567e6f55-89e580237e51"]}
+{"time": 1792161547.4440455, "pid": 1085234, "args": ["vm", "clone", "--from-dir", "/tmp/pr339-live/state/goldens/8afde47472091862474d5edf567e6f55", "--name", "sbx-8afde47472091862474d5edf567e6f55-07e68275055f", "--pull", "--output", "json", "--no-direct-io=true"]}
+{"time": 1792161547.6333888, "pid": 1085332, "args": ["vm", "disk", "attach", "sbx-8afde47472091862474d5edf567e6f55-07e68275055f", "--path", "/tmp/pr339-live/v1.raw", "--name", "dataset-v1", "--directio", "off"]}
+{"time": 1792161547.8819134, "pid": 1085375, "args": ["vm", "rm", "--force", "sbx-8afde47472091862474d5edf567e6f55-07e68275055f"]}
+{"time": 1792161576.371202, "pid": 1087329, "args": ["vm", "clone", "--from-dir", "/tmp/pr339-live/state/goldens/8afde47472091862474d5edf567e6f55", "--name", "sbx-8afde47472091862474d5edf567e6f55-667b56746f08", "--pull", "--output", "json", "--no-direct-io=true"]}
+{"time": 1792161576.5613878, "pid": 1087428, "args": ["vm", "disk", "attach", "sbx-8afde47472091862474d5edf567e6f55-667b56746f08", "--path", "/tmp/pr339-live/v1.raw", "--name", "dataset-v1", "--readonly", "--directio", "off"]}
+{"time": 1792161576.8436613, "pid": 1087555, "args": ["version"]}
+{"time": 1792161576.9886754, "pid": 1087636, "args": ["vm", "rm", "--force", "sbx-8afde47472091862474d5edf567e6f55-667b56746f08"]}
+{"time": 1792161602.268468, "pid": 1098326, "args": ["image", "list", "--format", "json"]}
