@@ -150,13 +150,12 @@ func (m *Manager) changeVolumes(ctx context.Context, id, tenant string, change v
 		if err = m.checkVolumeRun(ctx, sb, run); err != nil {
 			return view, err
 		}
-		// Held entries retain access even after their tenant or ACL changes.
-		repair, resolveErr := m.resolveVolumes(ctx, "", []types.Volume{v})
+		repair, resolveErr := m.resolveCatalogVolume(ctx, v)
 		if resolveErr != nil {
 			return view, resolveErr
 		}
 		applyCtx, cancel := context.WithTimeout(ctx, engine.VolumeMutationTimeout)
-		err = m.applyVolume(applyCtx, sb, repair[0])
+		err = m.applyVolume(applyCtx, sb, repair)
 		cancel()
 		if err != nil {
 			return view, err
@@ -298,8 +297,6 @@ func (m *Manager) prepareVolumeTarget(ctx context.Context, sb *types.Sandbox, ru
 	m.mu.Unlock()
 	err := m.store.commit(js)
 	if err != nil && m.store.sync {
-		// Fsync can fail after rename. Keep new admissions reserved; discarded
-		// pending volumes were confirmed detached before this write.
 		return fmt.Errorf("persist volume target: %w", err)
 	}
 	if err != nil {
@@ -453,7 +450,7 @@ func normalizeLiveVolumes(volumes, held []types.Volume) ([]types.Volume, error) 
 		}
 		normalized, err := types.ValidateVolumes([]types.Volume{v}, attachOnly)
 		if err != nil {
-			return nil, fmt.Errorf("%w: %v", ErrBadVolume, err)
+			return nil, fmt.Errorf("%w: %w", ErrBadVolume, err)
 		}
 		if volumeIndex(out, v.Name) >= 0 {
 			return nil, fmt.Errorf("%w: duplicate volume %q", ErrBadVolume, v.Name)
@@ -465,7 +462,7 @@ func normalizeLiveVolumes(volumes, held []types.Volume) ([]types.Volume, error) 
 	}
 	mounted := slices.DeleteFunc(slices.Clone(out), func(v types.Volume) bool { return v.Mount == "" })
 	if _, err := types.ValidateVolumes(mounted, false); err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrBadVolume, err)
+		return nil, fmt.Errorf("%w: %w", ErrBadVolume, err)
 	}
 	return out, nil
 }

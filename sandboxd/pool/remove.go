@@ -137,9 +137,9 @@ func (m *Manager) quiesceRetiringVolumes(ctx context.Context, sb *types.Sandbox,
 	if !ok {
 		return td
 	}
-	if len(td.clears) > 0 {
+	if len(td.cleanImagePaths) > 0 {
 		next := retirement
-		next.Clears = slices.Clone(td.clears)
+		next.Clears = slices.Clone(td.cleanImagePaths)
 		if err := m.store.commit(m.store.setRetirement(next)); err != nil {
 			log.WithFunc("pool.quiesceRetiringVolumes").Warnf(ctx, "persist clean volumes for %s: %v", sb.ID, err)
 			m.recommit(ctx, m.store.setRetirement(retirement))

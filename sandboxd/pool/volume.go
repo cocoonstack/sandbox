@@ -35,11 +35,10 @@ type resolvedVolume struct {
 	applied types.Volume
 }
 
-// volumeTeardown records marker paths only after a confirmed unmount.
 type volumeTeardown struct {
-	holds      []types.Volume
-	clears     []string
-	retirement string
+	holds           []types.Volume
+	cleanImagePaths []string
+	retirement      string
 }
 
 type catalogVolume struct {
@@ -135,7 +134,7 @@ func (m *Manager) resolveVolumes(ctx context.Context, tenant string, requested [
 	// an attach-only claim has no mounts to default; re-defaulting here would mount them
 	applied, err := types.ValidateVolumes(requested, types.VolumesAttachOnly(requested))
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrBadVolume, err)
+		return nil, fmt.Errorf("%w: %w", ErrBadVolume, err)
 	}
 	resolved := make([]resolvedVolume, 0, len(applied))
 	for _, volume := range applied {
@@ -143,20 +142,31 @@ func (m *Manager) resolveVolumes(ctx context.Context, tenant string, requested [
 		if !ok || !entry.allowed(tenant) {
 			return nil, ErrVolumeUnavailable
 		}
-		if volume.RW() && !entry.writable {
-			return nil, fmt.Errorf("%w: volume %q is not writable", ErrBadVolume, volume.Name)
+		resolvedVolume, resolveErr := m.resolveCatalogVolume(ctx, volume)
+		if resolveErr != nil {
+			return nil, resolveErr
 		}
-		if _, statErr := os.Stat(entry.disk.Path); statErr != nil {
-			// the operator's path stays server-side; the refusal matches the unknown one
-			log.WithFunc("pool.resolveVolumes").Warnf(ctx, "stat volume %q image %s: %v", volume.Name, entry.disk.Path, statErr)
-			return nil, ErrVolumeUnavailable
-		}
-		disk := entry.disk
-		disk.RW = volume.RW()
-		volume.AttachOnly = false // past validation the empty mount carries it
-		resolved = append(resolved, resolvedVolume{disk: disk, applied: volume})
+		resolved = append(resolved, resolvedVolume)
 	}
 	return resolved, nil
+}
+
+func (m *Manager) resolveCatalogVolume(ctx context.Context, volume types.Volume) (resolvedVolume, error) {
+	entry, ok := m.volumes[volume.Name]
+	if !ok {
+		return resolvedVolume{}, ErrVolumeUnavailable
+	}
+	if volume.RW() && !entry.writable {
+		return resolvedVolume{}, fmt.Errorf("%w: volume %q is not writable", ErrBadVolume, volume.Name)
+	}
+	if _, statErr := os.Stat(entry.disk.Path); statErr != nil {
+		log.WithFunc("pool.resolveCatalogVolume").Warnf(ctx, "stat volume %q image %s: %v", volume.Name, entry.disk.Path, statErr)
+		return resolvedVolume{}, ErrVolumeUnavailable
+	}
+	disk := entry.disk
+	disk.RW = volume.RW()
+	volume.AttachOnly = false
+	return resolvedVolume{disk: disk, applied: volume}, nil
 }
 
 // confirmVolumesClean refuses a read-only claim of a dirty image; run after holds are taken.
@@ -239,7 +249,7 @@ func (m *Manager) quiesceVolumes(ctx context.Context, sb *types.Sandbox) volumeT
 			continue
 		}
 		if entry, ok := m.volumes[volume.Name]; ok {
-			td.clears = append(td.clears, entry.disk.Path)
+			td.cleanImagePaths = append(td.cleanImagePaths, entry.disk.Path)
 		}
 	}
 	if stuck {
@@ -259,7 +269,7 @@ func (m *Manager) finishVolumeTeardown(ctx context.Context, td volumeTeardown) {
 		return
 	}
 	logger := log.WithFunc("pool.finishVolumeTeardown")
-	for _, path := range td.clears {
+	for _, path := range td.cleanImagePaths {
 		if err := clearVolumeDirty(path); err != nil {
 			logger.Errorf(ctx, err, "clear dirty marker %s", path)
 		}

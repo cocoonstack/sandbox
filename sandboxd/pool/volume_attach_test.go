@@ -390,8 +390,8 @@ func TestQuiesceVolumesSkipsAttachOnlyEntries(t *testing.T) {
 	if want := []string{"umount:/volumes/mounted"}; !slices.Equal(eng.volumeOpsLog(), want) {
 		t.Errorf("quiesce ops=%v, want %v", eng.volumeOpsLog(), want)
 	}
-	if !slices.Equal(td.clears, []string{mounted}) {
-		t.Errorf("marker clears=%v, want only %s", td.clears, mounted)
+	if !slices.Equal(td.cleanImagePaths, []string{mounted}) {
+		t.Errorf("marker clears=%v, want only %s", td.cleanImagePaths, mounted)
 	}
 	if !slices.Equal(td.holds, sb.Volumes) {
 		t.Errorf("holds=%v, want every entry %v", td.holds, sb.Volumes)

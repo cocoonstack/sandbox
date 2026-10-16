@@ -1,14 +1,12 @@
 #!/usr/bin/env python3
-"""Gate real attach completion, cancel a caller, or restart an isolated daemon."""
-
 import json
 import os
-from pathlib import Path
 import signal
 import subprocess
 import sys
 import time
 import urllib.request
+from pathlib import Path
 
 root = Path(os.environ["VOLUME_SMOKE_DIR"])
 mode = sys.argv[1]
@@ -61,9 +59,7 @@ def wait_for(marker):
 
 
 def runtime_view():
-    data = subprocess.check_output(
-        [os.environ["COCOON_REAL_BIN"], "vm", "list", "--format", "json"]
-    )
+    data = subprocess.check_output([os.environ["COCOON_REAL_BIN"], "vm", "list", "--format", "json"])
     running = []
     for vm in json.loads(data):
         if not vm["config"]["name"].startswith("sbx-"):
