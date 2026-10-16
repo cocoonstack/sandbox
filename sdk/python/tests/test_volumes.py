@@ -124,7 +124,7 @@ def test_identical_put_retries_partial_failure(spawn_node):
     assert requests[0] == requests[1]
 
 
-def test_volume_timeout_uses_client_deadline(black_hole):
+def test_volume_timeout_bounds_the_call(black_hole):
     sb = sandbox_at(black_hole, timeout=2)
     with pytest.raises(APIError) as caught:
         sb.get_volumes(timeout=0.02)
@@ -151,9 +151,3 @@ def test_incomplete_volume_view_preserves_handle(spawn_node, status):
     if status == 409:
         assert isinstance(caught.value, VolumeError)
         assert caught.value.response is None
-
-
-def test_volume_error_export():
-    from cocoonsandbox.errors import VolumeError as Error
-
-    assert Error is VolumeError

@@ -28,7 +28,7 @@ class APIError(SandboxError):
 
 
 class VolumeError(APIError):
-    """Failed convergence with the server's complete view, when returned."""
+    """A volume request failed; response holds the server's complete view when one came back."""
 
     def __init__(self, error: APIError, response: SandboxVolumesResponse | None) -> None:
         super().__init__(error.verb, error.status, error.message, reply=error.reply)

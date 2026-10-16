@@ -7,7 +7,7 @@ import socket
 import threading
 import time
 from collections import deque
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping
 from typing import TYPE_CHECKING, Any, cast
 
 from .checkpoint import Checkpoint
@@ -70,11 +70,11 @@ class Sandbox:
                 raise
 
     def get_volumes(self, *, timeout: float | None = None) -> SandboxVolumesResponse:
-        """Reads the desired and applied volumes from the owning node."""
+        """Reads the desired and applied volumes from the owning node and records them on this handle."""
         return self._volumes_request("GET", None, "get volumes", timeout)
 
     def set_volumes(
-        self, volumes: Sequence[str | Mapping[str, str] | Volume], *, timeout: float | None = None
+        self, volumes: list[str | Mapping[str, str] | Volume], *, timeout: float | None = None
     ) -> SandboxVolumesResponse:
         """Replaces the desired set and converges; an explicit empty list clears mutable mounts."""
         if volumes is None:
@@ -86,8 +86,8 @@ class Sandbox:
     def patch_volumes(
         self,
         *,
-        add: Sequence[str | Mapping[str, str] | Volume] | None = None,
-        remove: Sequence[str] | None = None,
+        add: list[str | Mapping[str, str] | Volume] | None = None,
+        remove: list[str] | None = None,
         timeout: float | None = None,
     ) -> SandboxVolumesResponse:
         """Adds or removes mounted read-only entries by name; omitted arguments leave the set unchanged."""
@@ -427,7 +427,6 @@ class Sandbox:
                 f"/v1/sandboxes/{self.id}/volumes",
                 body,
                 verb,
-                bearer=self._client.api_token,
                 timeout=timeout or 0.0,
             )
         except APIError as exc:
