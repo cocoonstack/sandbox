@@ -151,3 +151,16 @@ def test_incomplete_volume_view_preserves_handle(spawn_node, status):
     if status == 409:
         assert isinstance(caught.value, VolumeError)
         assert caught.value.response is None
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        lambda sb: sb.set_volumes("data"),
+        lambda sb: sb.patch_volumes(add="data"),
+        lambda sb: sb.patch_volumes(remove="old"),
+    ],
+)
+def test_volume_methods_reject_a_bare_string(black_hole, call):
+    with pytest.raises(TypeError):
+        call(sandbox_at(black_hole))
