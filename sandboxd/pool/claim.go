@@ -295,8 +295,7 @@ func (m *Manager) releaseResolved(ctx context.Context, id string, sb *types.Sand
 	}
 	delete(m.claimed, id)
 	m.tenantDelta(sb.Tenant, -1)
-	js := m.store.retire(sb, volumeHolds)
-	delete(m.volumeErrors, sb)
+	js := m.store.del(id)
 	m.mu.Unlock()
 	if saveErr := m.store.commit(js); saveErr != nil {
 		m.mu.Lock()
@@ -304,7 +303,7 @@ func (m *Manager) releaseResolved(ctx context.Context, id string, sb *types.Sand
 		m.restoreVolumeHolds(sb, volumeHolds)
 		m.tenantDelta(sb.Tenant, 1)
 		delete(m.pendingCks, ck)
-		rb := m.store.restore(sb)
+		rb := m.store.set(sb)
 		m.mu.Unlock()
 		logger := log.WithFunc("pool.releaseResolved")
 		if ck != "" {
@@ -322,12 +321,13 @@ func (m *Manager) releaseResolved(ctx context.Context, id string, sb *types.Sand
 		m.purgeArchiveCk(ctx, id, ck, sb.Tenant) // archived: no local VM
 		m.untrack(m.pendingCks, ck)
 	}
-	td := m.quiesceRetiringVolumes(ctx, sb, volumeHolds)
+	td := m.quiesceVolumes(ctx, sb)
+	td.holds = volumeHolds
 	var err error
 	removed := vmName == ""
 	switch {
 	case removed:
-		removed = m.completeVolumeTeardown(ctx, td)
+		m.finishVolumeTeardown(ctx, td)
 	case m.releaseDelay > 0:
 		m.queueRemoval(vmName, id, "", td, time.Now().Add(m.releaseDelay))
 	default:
@@ -507,7 +507,7 @@ func (m *Manager) reapOnce(ctx context.Context) {
 	}
 	m.mu.Lock()
 	var expired []victim
-	var purges []string
+	var dropped, purges []string
 	for id, sb := range m.claimed {
 		// a zero deadline means no expiry (an archived claim kept forever).
 		if sb.Deadline.IsZero() || !now.After(sb.Deadline) {
@@ -529,13 +529,14 @@ func (m *Manager) reapOnce(ctx context.Context) {
 			}
 			expired = append(expired, victim{action: action, id: id, sb: sb})
 		default:
-			holds := m.cancelVolumeRun(sb)
-			expired = append(expired, victim{action: reapDestroy, id: id, vmName: sb.VMName, snap: sb.HibernateSnap, tenant: sb.Tenant, sb: sb, holds: holds})
-			m.store.retire(sb, holds)
-			delete(m.volumeErrors, sb)
+			expired = append(expired, victim{action: reapDestroy, id: id, vmName: sb.VMName, snap: sb.HibernateSnap, tenant: sb.Tenant, sb: sb, holds: m.cancelVolumeRun(sb)})
 			delete(m.claimed, id)
 			m.tenantDelta(sb.Tenant, -1)
+			dropped = append(dropped, id)
 		}
+	}
+	if len(dropped) > 0 {
+		m.store.del(dropped...)
 	}
 	m.mu.Unlock()
 	if len(expired) == 0 {
@@ -579,6 +580,7 @@ func (m *Manager) reapOnce(ctx context.Context) {
 	m.mu.Unlock()
 	if saveErr := m.store.commit(js); saveErr != nil {
 		m.mu.Lock()
+		var restored []*types.Sandbox
 		for _, v := range expired {
 			if v.action == reapArchive || v.action == reapPause {
 				delete(m.archiving, v.id) // never removed from m.claimed
@@ -587,10 +589,10 @@ func (m *Manager) reapOnce(ctx context.Context) {
 				m.restoreVolumeHolds(v.sb, v.holds)
 				m.tenantDelta(v.tenant, 1)
 				delete(m.pendingCks, v.ck)
-				m.store.restore(v.sb)
+				restored = append(restored, v.sb)
 			}
 		}
-		rb := m.store.mark()
+		rb := m.store.set(restored...)
 		m.mu.Unlock()
 		for _, ck := range purgeCks {
 			if clearErr := m.clearArchiveCk(ck); clearErr != nil {
@@ -617,7 +619,8 @@ func (m *Manager) reapOnce(ctx context.Context) {
 		case reapPause:
 			logSweepResult(ctx, logger, m.pauseExpired(ctx, v.sb), "archived expired sandbox "+v.id, "archive expired sandbox "+v.id)
 		default:
-			td := m.quiesceRetiringVolumes(ctx, v.sb, v.holds)
+			td := m.quiesceVolumes(ctx, v.sb)
+			td.holds = v.holds
 			m.out.Disarm(v.id, m.removeOrRetry(ctx, v.vmName, v.id, "", td))
 			m.dropSnap(ctx, v.snap)
 			m.counters.reaps.Add(1)

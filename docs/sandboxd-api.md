@@ -348,20 +348,16 @@ superseding request may first clean up an older desired-only attachment while
 the old target stays recorded. If that cleanup fails, the response retains the
 old view; retry the same PUT to finish accepting the new target. Admission
 holds cover the deduplicated union of both sets, including during restart and
-teardown. A durable retirement record keeps teardown holds until the VM is
-confirmed gone and the retirement deletion commits. Failed or uncertain
-operations retain their holds until successful cleanup. Startup reserves those
-holds without replaying attachments. Release
-cancels convergence and transfers the held union to teardown without waiting
+teardown; a teardown keeps them until the VM is confirmed gone. Failed or
+uncertain operations retain their holds until successful cleanup. Startup
+reserves those holds without replaying attachments. Release cancels convergence and transfers the held union to teardown without waiting
 for a blocked device call. Capture operations (hibernate, fork, checkpoint, and
 promote) are refused while either set is nonempty or a convergence request
 still owns admitted volume holds.
 
 Device calls honor cancellation and have a 30-second ceiling. Journal writes
-are atomic. Host-crash durability follows `sync_claims`. Drain volume claims
-before downgrading. The version 2 claim journal also stores volume retirements;
-older daemons reject it. Back up the journal before upgrading and do not
-manually convert it to the legacy format while retirement records remain.
+are atomic. Host-crash durability follows `sync_claims`. An older daemon
+ignores `VolumesWant`; finish pending volume changes before downgrading.
 
 Live convergence requires Cocoon v0.7.2 or newer for idempotent matching
 attach and absent detach. PUT and PATCH reject older, unknown, development,
@@ -369,11 +365,9 @@ or unqueryable runtime versions with 503 before changing intent, holds, or
 devices. GET and release remain available.
 
 Catalog names must keep the same backing image while held, including pending
-and retiring holds. Publish changes under versioned names such as `dataset-v1`
-and `dataset-v2`. The journal cannot detect a catalog name repointed to a new
-image. On startup, an unknown owned orphan that cannot be confirmed gone blocks
-new volume admission and all disk attachment, including pending repair.
-Diagnosis, detach, and release remain available until cleanup succeeds.
+holds. Publish changes under versioned names such as `dataset-v1` and
+`dataset-v2`. The journal cannot detect a catalog name repointed to a new
+image.
 
 A replacement first unmounts the old disk, then mounts the new disk. Pause reads
 and close files, mmap, cwd, and bind mount references during this gap. Existing

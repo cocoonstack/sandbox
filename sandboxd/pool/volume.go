@@ -35,10 +35,10 @@ type resolvedVolume struct {
 	applied types.Volume
 }
 
+// volumeTeardown captures marker paths at quiesce time; a later config can re-point the entry.
 type volumeTeardown struct {
-	holds           []types.Volume
-	cleanImagePaths []string
-	retirement      string
+	holds  []types.Volume
+	clears []string
 }
 
 type catalogVolume struct {
@@ -198,12 +198,6 @@ func (m *Manager) applyVolumes(ctx context.Context, sb *types.Sandbox, volumes [
 
 // applyVolume keeps one volume's steps strictly ordered; siblings overlap freely.
 func (m *Manager) applyVolume(ctx context.Context, sb *types.Sandbox, volume resolvedVolume) error {
-	m.mu.Lock()
-	fenced := len(m.unknownVolumeVMs) > 0
-	m.mu.Unlock()
-	if fenced {
-		return ErrVolumeUnavailable
-	}
 	// attach-only mounts nothing, so there is no umount to verify and no marker.
 	attachOnly := volume.applied.Mount == ""
 	// write-ahead: the marker must be durable before any guest write can be.
@@ -249,7 +243,7 @@ func (m *Manager) quiesceVolumes(ctx context.Context, sb *types.Sandbox) volumeT
 			continue
 		}
 		if entry, ok := m.volumes[volume.Name]; ok {
-			td.cleanImagePaths = append(td.cleanImagePaths, entry.disk.Path)
+			td.clears = append(td.clears, entry.disk.Path)
 		}
 	}
 	if stuck {
@@ -269,7 +263,7 @@ func (m *Manager) finishVolumeTeardown(ctx context.Context, td volumeTeardown) {
 		return
 	}
 	logger := log.WithFunc("pool.finishVolumeTeardown")
-	for _, path := range td.cleanImagePaths {
+	for _, path := range td.clears {
 		if err := clearVolumeDirty(path); err != nil {
 			logger.Errorf(ctx, err, "clear dirty marker %s", path)
 		}
@@ -279,9 +273,6 @@ func (m *Manager) finishVolumeTeardown(ctx context.Context, td volumeTeardown) {
 
 // reserveVolumes admits one claim's volumes atomically; callers hold m.mu.
 func (m *Manager) reserveVolumes(volumes []types.Volume) error {
-	if len(volumes) > 0 && len(m.unknownVolumeVMs) > 0 {
-		return ErrVolumeUnavailable
-	}
 	for _, volume := range volumes {
 		holders := m.volumeAdmission[volume.Name]
 		if holders.writers > 0 || (volume.RW() && holders.readers > 0) {

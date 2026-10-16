@@ -164,32 +164,24 @@ PATCH reject older, unknown, development, or unqueryable versions with 503
 before any intent, hold, or device change. GET and release remain available.
 
 The claim journal stores desired `VolumesWant` and confirmed applied `Volumes`.
-Admission holds cover their union across daemon restart and teardown. Version 2
-journals preserve a separate retirement record until VM deletion is confirmed
-and the record deletion commits. Retry an
-interrupted operation with the same PUT target. Release cancels convergence
+Admission holds cover their union across daemon restart and teardown. Retry
+an interrupted operation with the same PUT target. Release cancels convergence
 and transfers holds to teardown. Capture is refused while either set is
-nonempty. Back up the journal before upgrading. Older daemons reject the new
-format. Drain all volume claims and finish retirements before downgrading;
-do not manually convert a journal that still has retirement records.
+nonempty.
 
 A sandbox whose VMM exits while holding volumes is release-only. Release it and
 create a new sandbox. Daemon restart recovery assumes the original VMM remains
 alive and does not recreate guest processes. Unfinished changes report an
 interrupted diagnostic after restart and require a caller retry.
 
-If startup cannot confirm removal of an unknown owned orphan, the node blocks
-new volume admission and all disk attachment, including pending repair, until
-the orphan is gone. GET, detach, and release remain available.
-
 `e2e/cmd/volumesmoke` exercises GET, repeated full-set PUT, PATCH add and remove,
 and clearing a new claim. Its [hardware validation instructions](../e2e/cmd/volumesmoke/README.md)
-cover same-path replacement, guest mount conflicts, daemon restart, cancellation,
-and retirement recovery on an isolated node.
+cover same-path replacement, guest mount conflicts, daemon restart and
+cancellation on an isolated node.
 
 Each catalog path must name a disk image containing a mountable whole-device
-filesystem. Keep catalog names bound to the same image while any live or
-retiring claim holds them. Use versioned names such as `dataset-v1` and
+filesystem. Keep catalog names bound to the same image while any claim holds
+them. Use versioned names such as `dataset-v1` and
 `dataset-v2`; sandboxd cannot detect a repointed catalog entry. A read-only
 entry's image must stay immutable: do not replace,
 truncate, or delete it while attached; publish a new catalog name or path

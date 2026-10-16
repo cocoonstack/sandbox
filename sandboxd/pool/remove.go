@@ -11,7 +11,6 @@ import (
 	"github.com/projecteru2/core/log"
 
 	"github.com/cocoonstack/sandbox/sandboxd/engine"
-	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
 func (m *Manager) removeVM(ctx context.Context, name string) bool {
@@ -45,10 +44,8 @@ func (m *Manager) confirmGone(ctx context.Context, name string) bool {
 
 // removeOrRetry reports whether the VM is confirmed gone; a survivor is queued for the reap tick.
 func (m *Manager) removeOrRetry(ctx context.Context, name, sandboxID, tap string, td volumeTeardown) bool {
-	if m.removeVM(ctx, name) && m.completeVolumeTeardown(ctx, td) {
-		m.mu.Lock()
-		delete(m.unknownVolumeVMs, name)
-		m.mu.Unlock()
+	if m.removeVM(ctx, name) {
+		m.finishVolumeTeardown(ctx, td)
 		return true
 	}
 	m.queueRemoval(name, sandboxID, tap, td, time.Time{})
@@ -96,7 +93,7 @@ func (m *Manager) retryRemoval(ctx context.Context, name string, pending pending
 			m.queueStaleCreate(name, pending.tap)
 			return
 		case outcome == engine.StaleCreateCollected, outcome == engine.StaleCreateNotFound:
-			m.finishRemoval(ctx, name, pending)
+			m.finishRemoval(ctx, pending)
 			return
 		}
 	}
@@ -104,17 +101,11 @@ func (m *Manager) retryRemoval(ctx context.Context, name string, pending pending
 		m.queueRemoval(name, pending.sandboxID, pending.tap, pending.volumes, time.Time{})
 		return
 	}
-	m.finishRemoval(ctx, name, pending)
+	m.finishRemoval(ctx, pending)
 }
 
-func (m *Manager) finishRemoval(ctx context.Context, name string, pending pendingRemoval) {
-	if !m.completeVolumeTeardown(ctx, pending.volumes) {
-		m.queueRemoval(name, pending.sandboxID, pending.tap, pending.volumes, time.Time{})
-		return
-	}
-	m.mu.Lock()
-	delete(m.unknownVolumeVMs, name)
-	m.mu.Unlock()
+func (m *Manager) finishRemoval(ctx context.Context, pending pendingRemoval) {
+	m.finishVolumeTeardown(ctx, pending.volumes)
 	if pending.sandboxID != "" {
 		m.out.Disarm(pending.sandboxID, true)
 	} else if pending.tap != "" {
@@ -124,50 +115,4 @@ func (m *Manager) finishRemoval(ctx context.Context, name string, pending pendin
 
 func (m *Manager) destroy(ctx context.Context, name string) {
 	m.removeOrRetry(ctx, name, "", "", volumeTeardown{})
-}
-
-func (m *Manager) quiesceRetiringVolumes(ctx context.Context, sb *types.Sandbox, holds []types.Volume) volumeTeardown {
-	td := m.quiesceVolumes(ctx, sb)
-	td.holds = holds
-	if len(holds) == 0 {
-		return td
-	}
-	td.retirement = sb.VMName
-	retirement, ok := m.store.retirement(sb.VMName)
-	if !ok {
-		return td
-	}
-	if len(td.cleanImagePaths) > 0 {
-		next := retirement
-		next.Clears = slices.Clone(td.cleanImagePaths)
-		if err := m.store.commit(m.store.setRetirement(next)); err != nil {
-			log.WithFunc("pool.quiesceRetiringVolumes").Warnf(ctx, "persist clean volumes for %s: %v", sb.ID, err)
-			m.recommit(ctx, m.store.setRetirement(retirement))
-		}
-	}
-	return td
-}
-
-func (m *Manager) completeVolumeTeardown(ctx context.Context, td volumeTeardown) bool {
-	if td.retirement == "" {
-		m.finishVolumeTeardown(ctx, td)
-		return true
-	}
-	retirement, ok := m.store.retirement(td.retirement)
-	if !ok {
-		return true
-	}
-	for _, path := range retirement.Clears {
-		if err := clearVolumeDirty(path); err != nil {
-			log.WithFunc("pool.completeVolumeTeardown").Warnf(ctx, "clear volume marker %s: %v", path, err)
-			return false
-		}
-	}
-	if err := m.store.commit(m.store.finishRetirement(td.retirement)); err != nil {
-		log.WithFunc("pool.completeVolumeTeardown").Warnf(ctx, "finish volume retirement %s: %v", td.retirement, err)
-		m.recommit(ctx, m.store.setRetirement(retirement))
-		return false
-	}
-	m.unreserveVolumes(retirement.Holds)
-	return true
 }

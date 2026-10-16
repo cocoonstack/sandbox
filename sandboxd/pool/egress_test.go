@@ -313,9 +313,7 @@ func TestQuarantineFailedRemoveStaysUnswept(t *testing.T) {
 
 	var gotKeep map[string]bool
 	withOutbound(t, m, func(o *outbound.Options) { o.Sweep = func(keep map[string]bool) error { gotKeep = keep; return nil } })
-	if err := m.resyncEgress(t.Context(), live, removed); err != nil {
-		t.Fatal(err)
-	}
+	m.resyncEgress(t.Context(), live, removed)
 
 	if removed["sbx-q1"] {
 		t.Error("failed remove marked the VM gone; the sweep would drop its lock table")

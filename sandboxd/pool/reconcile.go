@@ -3,7 +3,6 @@ package pool
 import (
 	"context"
 	"encoding/json/v2"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -20,7 +19,7 @@ import (
 
 // Reconcile aligns claims and VMs after a restart; it runs before the server because it swaps in fresh records that would bypass in-flight Transition locks.
 func (m *Manager) Reconcile(ctx context.Context) error {
-	claims, retirements, err := m.store.loadJournal()
+	claims, err := m.store.load()
 	if err != nil {
 		return err
 	}
@@ -39,13 +38,6 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 	referenced := map[string]bool{}
 	var adopted []*types.Sandbox
 	m.mu.Lock()
-	for name, retirement := range retirements {
-		m.adoptVolumes(retirement.Holds)
-		if retirement.TAP != "" {
-			m.out.KeepLock(retirement.SandboxID, retirement.TAP)
-		}
-		owned[name] = true
-	}
 	for id, sb := range claims {
 		sb.SetEnv(sb.Env)
 		rec, ok := live[sb.VMName]
@@ -128,17 +120,10 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 			logger.Infof(ctx, "removed orphan snapshot %s", orphans[i])
 		}).Wait()
 	}
-	for name, retirement := range retirements {
-		td := volumeTeardown{holds: retirement.Holds, retirement: name}
-		if m.removeOrRetry(ctx, name, retirement.SandboxID, retirement.TAP, td) {
-			removed[name] = true
-			m.out.Disarm(retirement.SandboxID, true)
-		}
-	}
-	egressErr := m.resyncEgress(ctx, live, removed)
+	m.resyncEgress(ctx, live, removed)
 	m.warnDeniedClaims(ctx)
 	logger.Infof(ctx, "adopted %d claims, %d VMs live", len(m.claimed), len(live))
-	return errors.Join(saveErr, egressErr)
+	return saveErr
 }
 
 // sweepStaleVMs removes sbx-prefixed VMs no claim owns and returns the ones confirmed gone.
@@ -149,21 +134,10 @@ func (m *Manager) sweepStaleVMs(ctx context.Context, live map[string]types.VMRec
 			stale = append(stale, name)
 		}
 	}
-	m.mu.Lock()
-	if m.unknownVolumeVMs == nil {
-		m.unknownVolumeVMs = make(map[string]bool)
-	}
-	for _, name := range stale {
-		m.unknownVolumeVMs[name] = true
-	}
-	m.mu.Unlock()
 	gone := make([]bool, len(stale)) // distinct indices: no lock under the Wait barrier
 	m.runBounded(ctx, len(stale), func(ctx context.Context, i int) {
 		if m.removeStaleVM(ctx, stale[i], live[stale[i]]) {
 			gone[i] = true
-			m.mu.Lock()
-			delete(m.unknownVolumeVMs, stale[i])
-			m.mu.Unlock()
 			log.WithFunc("pool.sweepStaleVMs").Infof(ctx, "removed stale VM %s", stale[i])
 		}
 	}).Wait()
@@ -198,7 +172,7 @@ func (m *Manager) removeStaleVM(ctx context.Context, name string, rec types.VMRe
 }
 
 // resyncEgress re-locks adopted egress claims, quarantining any it cannot lock.
-func (m *Manager) resyncEgress(ctx context.Context, live map[string]types.VMRecord, removed map[string]bool) error {
+func (m *Manager) resyncEgress(ctx context.Context, live map[string]types.VMRecord, removed map[string]bool) {
 	logger := log.WithFunc("pool.resyncEgress")
 	now := time.Now()
 	locked, lockedErr := m.out.LockedTaps()
@@ -237,11 +211,7 @@ func (m *Manager) resyncEgress(ctx context.Context, live map[string]types.VMReco
 	// quarantine before the sweep so a failed remove's still-running tap is kept.
 	keep := make(map[string]bool, len(live))
 	for _, sb := range quarantine {
-		gone, err := m.quarantineClaim(ctx, sb)
-		if err != nil {
-			return err
-		}
-		if gone {
+		if m.quarantineClaim(ctx, sb) {
 			removed[sb.VMName] = true
 		} else if sb.TAP != "" {
 			keep[sb.TAP] = true
@@ -253,42 +223,24 @@ func (m *Manager) resyncEgress(ctx context.Context, live map[string]types.VMReco
 			keep[tap] = true
 		}
 	}
-	m.mu.Lock()
-	for _, pending := range m.pendingRemovals {
-		if pending.tap != "" {
-			keep[pending.tap] = true
-		}
-	}
-	m.mu.Unlock()
 	if sweepErr := m.out.Sweep(keep); sweepErr != nil {
 		logger.Warnf(ctx, "sweep orphan egress tables: %v", sweepErr)
 	}
-	return nil
 }
 
 // quarantineClaim parks a claim whose teardown failed: out of service and queued until a remove succeeds.
-func (m *Manager) quarantineClaim(ctx context.Context, sb *types.Sandbox) (bool, error) {
+func (m *Manager) quarantineClaim(ctx context.Context, sb *types.Sandbox) bool {
+	td := m.quiesceVolumes(ctx, sb)
+	gone := m.removeOrRetry(ctx, sb.VMName, sb.ID, "", td)
 	m.mu.Lock()
-	holds := m.cancelVolumeRun(sb)
 	delete(m.claimed, sb.ID)
-	delete(m.volumeErrors, sb)
 	m.tenantDelta(sb.Tenant, -1)
-	js := m.store.retire(sb, holds)
+	js := m.store.del(sb.ID)
 	m.mu.Unlock()
 	if err := m.store.commit(js); err != nil {
-		m.mu.Lock()
-		m.claimed[sb.ID] = sb
-		m.restoreVolumeHolds(sb, holds)
-		m.tenantDelta(sb.Tenant, 1)
-		rb := m.store.restore(sb)
-		m.mu.Unlock()
-		m.recommit(ctx, rb)
-		return false, fmt.Errorf("persist quarantine of %s: %w", sb.ID, err)
+		m.recommit(ctx, js)
 	}
-	td := m.quiesceRetiringVolumes(ctx, sb, holds)
-	gone := m.removeOrRetry(ctx, sb.VMName, sb.ID, sb.TAP, td)
-	m.out.Disarm(sb.ID, gone)
-	return gone, nil
+	return gone
 }
 
 // readoptEgressTap records and returns a live egress claim's tap, "" when there is none.
