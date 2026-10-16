@@ -105,6 +105,9 @@ func TestLiveVolumeRoutesErrors(t *testing.T) {
 			if resp.StatusCode != tt.code || strings.Contains(string(body), "/private") {
 				t.Fatalf("status=%d body=%s", resp.StatusCode, body)
 			}
+			if errors.Is(tt.err, pool.ErrTenantStoreDown) && resp.Header.Get("Retry-After") == "" {
+				t.Fatal("store outage without Retry-After")
+			}
 			if tt.err != nil && tt.code != http.StatusNotFound {
 				var got types.SandboxVolumesResponse
 				if err := json.Unmarshal(body, &got); err != nil || len(got.VolumesWant) != 1 || len(got.States) != 1 || got.Error == "" || got.States[0].Error != "volume operation failed; retry after resolving the runtime error" {

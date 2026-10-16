@@ -1,7 +1,6 @@
 package server
 
 import (
-	"cmp"
 	"context"
 	"errors"
 	"net/http"
@@ -15,8 +14,10 @@ import (
 
 func (s *Server) handleSandboxVolumes(w http.ResponseWriter, r *http.Request) {
 	id, tenant := r.PathValue("id"), tenantFrom(r.Context())
-	var view types.SandboxVolumesResponse
-	var err error
+	var (
+		view types.SandboxVolumesResponse
+		err  error
+	)
 	switch r.Method {
 	case http.MethodGet:
 		view, err = s.mgr.GetVolumes(id, tenant)
@@ -56,11 +57,8 @@ func (s *Server) handleSandboxVolumes(w http.ResponseWriter, r *http.Request) {
 		case errors.Is(err, context.Canceled):
 			code, view.Error = http.StatusRequestTimeout, "volume change canceled; inspect the volume states before retrying"
 		default:
-			for _, rule := range poolErrHTTP {
-				if errors.Is(err, rule.err) {
-					code, view.Error = rule.code, cmp.Or(rule.msg, err.Error())
-					break
-				}
+			if mapped, msg, ok := mapPoolErr(w, err); ok {
+				code, view.Error = mapped, msg
 			}
 		}
 		if code >= http.StatusInternalServerError {
