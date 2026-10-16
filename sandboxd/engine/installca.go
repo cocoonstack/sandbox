@@ -18,6 +18,15 @@ const (
 	guestExecPATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 )
 
+type guestExitError struct {
+	Code   int32
+	Output string
+}
+
+func (e *guestExitError) Error() string {
+	return fmt.Sprintf("exit code %d: %s", e.Code, e.Output)
+}
+
 // InstallCACert makes the guest trust the cluster root without update-ca-certificates.
 func (e *Engine) InstallCACert(ctx context.Context, vsockSocket string, certPEM []byte) error {
 	ctx, cancel := context.WithTimeout(ctx, cmdTimeout)
@@ -88,7 +97,7 @@ func (e *Engine) silkdExec(ctx context.Context, vsockSocket string, argv ...stri
 			out = appendCapped(out, resp.Data)
 		case *wire.Exit:
 			if resp.Code != 0 {
-				return fmt.Errorf("exit code %d: %s", resp.Code, bytes.TrimSpace(out))
+				return &guestExitError{Code: resp.Code, Output: string(bytes.TrimSpace(out))}
 			}
 			return nil
 		case *wire.ErrorResp:

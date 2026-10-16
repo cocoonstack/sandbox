@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"slices"
@@ -11,8 +12,64 @@ import (
 
 const VolumeMutationTimeout = 30 * time.Second
 
-// DetachVolume refuses busy or foreign mounts and confirms host removal even
-// when the guest serial has disappeared. It never uses lazy or forced umount.
+// VolumeMountConflictKind identifies the guest condition that prevents a volume change.
+type VolumeMountConflictKind string
+
+const (
+	VolumeMountForeign        VolumeMountConflictKind = "foreign"
+	VolumeMountBind           VolumeMountConflictKind = "bind"
+	VolumeMountUnmountRefused VolumeMountConflictKind = "unmount-refused"
+)
+
+// VolumeMountConflict reports a guest mount that must be resolved before retrying.
+type VolumeMountConflict struct {
+	Kind  VolumeMountConflictKind
+	Mount string
+}
+
+func (e *VolumeMountConflict) Error() string {
+	switch e.Kind {
+	case VolumeMountForeign:
+		return fmt.Sprintf("volume mount %q has a different device, root, or mode; restore the expected mount before retrying", e.Mount)
+	case VolumeMountBind:
+		return fmt.Sprintf("volume device has another mount at %q; remove guest mount references before retrying", e.Mount)
+	default:
+		return fmt.Sprintf("cannot unmount %q; close guest references and retry", e.Mount)
+	}
+}
+
+// LiveVolumeUnsupported reports a runtime that cannot safely change live volumes.
+type LiveVolumeUnsupported struct {
+	Version string
+	Err     error
+}
+
+func (e *LiveVolumeUnsupported) Error() string {
+	if e.Version != "" {
+		return fmt.Sprintf("live volume changes require Cocoon >= %s; installed version is %s", RequiredCocoon, e.Version)
+	}
+	return "live volume changes require a verified Cocoon release >= " + RequiredCocoon + "; runtime version unavailable or unknown"
+}
+
+func (e *LiveVolumeUnsupported) Unwrap() error { return e.Err }
+
+// CheckLiveVolumeSupport rejects runtimes without confirmed live disk semantics.
+func (e *Engine) CheckLiveVolumeSupport(ctx context.Context) error {
+	version, err := e.Version(ctx)
+	if err != nil {
+		return &LiveVolumeUnsupported{Err: err}
+	}
+	below, known := belowFloor(version)
+	if !known {
+		return &LiveVolumeUnsupported{}
+	}
+	if below {
+		return &LiveVolumeUnsupported{Version: version}
+	}
+	return nil
+}
+
+// DetachVolume unmounts a guest volume before confirming host removal.
 func (e *Engine) DetachVolume(ctx context.Context, vmName, sock, name, mount string) error {
 	ctx, cancel := context.WithTimeout(ctx, VolumeMutationTimeout)
 	defer cancel()
@@ -36,6 +93,9 @@ func (e *Engine) unmountLiveVolume(ctx context.Context, sock, device, mount stri
 	}
 	if mounted {
 		if err = e.UnmountVolume(ctx, sock, mount); err != nil {
+			if _, ok := errors.AsType[*guestExitError](err); ok {
+				return &VolumeMountConflict{Kind: VolumeMountUnmountRefused, Mount: mount}
+			}
 			return err
 		}
 	}
@@ -60,7 +120,7 @@ func (e *Engine) volumeMounts(ctx context.Context, sock, device string) (string,
 	for line := range strings.SplitSeq(strings.TrimSpace(string(raw)), "\n") {
 		fields := strings.Fields(line)
 		if len(fields) < 10 || !slices.Contains(fields[6:], "-") {
-			return "", nil, fmt.Errorf("invalid guest mountinfo")
+			return "", nil, errors.New("invalid guest mountinfo")
 		}
 		mounts = append(mounts, volumeMount{fields[2], unescapeMount(fields[3]), unescapeMount(fields[4]), fields[5]})
 	}
@@ -80,12 +140,12 @@ func (e *Engine) volumeMounted(ctx context.Context, sock, device, mount string, 
 	for _, entry := range mounts {
 		if entry.path != mount {
 			if entry.device == dev {
-				return false, fmt.Errorf("volume device is already mounted at %q", entry.path)
+				return false, &VolumeMountConflict{Kind: VolumeMountBind, Mount: entry.path}
 			}
 			continue
 		}
 		if matched || entry.device != dev || entry.root != "/" || !slices.Contains(strings.Split(entry.options, ","), mode) {
-			return false, fmt.Errorf("volume mount %q has a different device or mode", mount)
+			return false, &VolumeMountConflict{Kind: VolumeMountForeign, Mount: mount}
 		}
 		matched = true
 	}
@@ -99,7 +159,7 @@ func (e *Engine) volumeUnmounted(ctx context.Context, sock, device string) error
 	}
 	for _, mount := range mounts {
 		if mount.device == dev {
-			return fmt.Errorf("volume device is still mounted at %q", mount.path)
+			return &VolumeMountConflict{Kind: VolumeMountBind, Mount: mount.path}
 		}
 	}
 	return nil

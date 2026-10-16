@@ -82,6 +82,7 @@ type fakeSilkd struct {
 	writeErr   string
 	writeKind  string
 	execErr    string
+	execDrop   bool
 	block      []wire.DirEntry
 	serial     map[string][]byte
 	readMisses map[string]int
@@ -194,7 +195,7 @@ func (f *fakeSilkd) handleExec(conn net.Conn, argv []string, env map[string]stri
 	f.execArgv = argv
 	f.execCalls = append(f.execCalls, argv)
 	f.execEnv = env
-	code, reply := f.execCode, f.execErr
+	code, reply, disconnect := f.execCode, f.execErr, f.execDrop
 	if f.execFailAt > 0 && len(f.execCalls) != f.execFailAt {
 		code, reply = 0, ""
 	}
@@ -202,6 +203,9 @@ func (f *fakeSilkd) handleExec(conn net.Conn, argv []string, env map[string]stri
 		f.execHook(argv)
 	}
 	f.mu.Unlock()
+	if disconnect {
+		return
+	}
 	if reply != "" {
 		_, _ = io.WriteString(conn, `{"type":"error","kind":"internal","message":"`+reply+`"}`+"\n")
 		return

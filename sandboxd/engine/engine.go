@@ -26,8 +26,8 @@ import (
 )
 
 const (
-	// RequiredCocoon carries the snapshot/store baseline and the JSON form of an empty snapshot list.
-	RequiredCocoon = "v0.6.9"
+	// RequiredCocoon includes idempotent live disk attach and detach.
+	RequiredCocoon = "v0.7.2"
 
 	StaleCreateCollected   StaleCreateOutcome = "collected"
 	StaleCreateBusy        StaleCreateOutcome = "busy"

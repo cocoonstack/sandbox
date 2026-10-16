@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,7 +15,6 @@ func TestLiveVolumeConvergesMountAndDetach(t *testing.T) {
 	fake := serveFakeSilkd(t, sock)
 	configureVolumeDevices(fake)
 	spec := liveDiskCLI(t, "")
-	// Start without a host attachment, then prove the second call reuses it.
 	if err := os.Remove(os.Getenv("COCOON_TEST_ATTACHED")); err != nil {
 		t.Fatal(err)
 	}
@@ -69,8 +69,16 @@ func TestLiveAttachRejectsForeignMounts(t *testing.T) {
 			fake.serial["/sys/block/vdc/dev"] = []byte("8:32\n")
 			fake.serial["/proc/self/mountinfo"] = []byte(rootMountInfo + row)
 			fake.mu.Unlock()
-			if err := New("cocoon", nil, nil, false, false, "").MountVolume(t.Context(), sock, spec.Name, "/data", false); err == nil {
+			err := New("cocoon", nil, nil, false, false, "").MountVolume(t.Context(), sock, spec.Name, "/data", false)
+			if err == nil {
 				t.Fatal("accepted a foreign mount")
+			}
+			var conflict *VolumeMountConflict
+			if errors.As(err, &conflict) != (row != "malformed\n") {
+				t.Fatalf("conflict type: %v", err)
+			}
+			if conflict != nil && (conflict.Kind != VolumeMountForeign || conflict.Mount != "/data") {
+				t.Fatalf("conflict: %+v", conflict)
 			}
 			fake.mu.Lock()
 			defer fake.mu.Unlock()
@@ -82,7 +90,7 @@ func TestLiveAttachRejectsForeignMounts(t *testing.T) {
 }
 
 func TestLiveDetachKeepsBusyAndUnobservableDevices(t *testing.T) {
-	for _, mode := range []string{"busy", "second mount", "probe error", "host error"} {
+	for _, mode := range []string{"busy", "second mount", "probe error", "guest error", "transport disconnect", "host error"} {
 		t.Run(mode, func(t *testing.T) {
 			sock := sockPath(t)
 			fake := serveFakeSilkd(t, sock)
@@ -101,12 +109,30 @@ func TestLiveDetachKeepsBusyAndUnobservableDevices(t *testing.T) {
 				fake.execCode = 32
 			case "second mount":
 				fake.serial["/proc/self/mountinfo"] = []byte(rootMountInfo + "2 1 8:32 / /other ro - ext4 /dev/vdc ro\n")
+			case "transport disconnect":
+				fake.serial["/proc/self/mountinfo"] = []byte(rootMountInfo + "2 1 8:32 / /data ro - ext4 /dev/vdc ro\n")
+				fake.execDrop = true
+			case "guest error":
+				fake.serial["/proc/self/mountinfo"] = []byte(rootMountInfo + "2 1 8:32 / /data ro - ext4 /dev/vdc ro\n")
+				fake.execErr = "guest connection failed /private/runtime"
 			case "probe error":
 				fake.readErr["/proc/self/mountinfo"] = "read failed"
 			}
 			fake.mu.Unlock()
-			if err := New("cocoon", nil, nil, false, false, "").DetachVolume(t.Context(), "sbx-1", sock, spec.Name, "/data"); err == nil {
+			err := New("cocoon", nil, nil, false, false, "").DetachVolume(t.Context(), "sbx-1", sock, spec.Name, "/data")
+			if err == nil {
 				t.Fatal("detach must fail closed")
+			}
+			var conflict *VolumeMountConflict
+			conflictExpected := mode == "busy" || mode == "second mount"
+			if errors.As(err, &conflict) != conflictExpected {
+				t.Fatalf("conflict=%v error=%v", conflictExpected, err)
+			}
+			if conflictExpected && (!strings.Contains(conflict.Error(), "/data") && !strings.Contains(conflict.Error(), "/other") || strings.Contains(conflict.Error(), "/private")) {
+				t.Fatalf("unsafe or missing guest path: %v", conflict)
+			}
+			if mode == "busy" && conflict.Kind != VolumeMountUnmountRefused {
+				t.Fatalf("kind=%s", conflict.Kind)
 			}
 		})
 	}
