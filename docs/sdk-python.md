@@ -161,6 +161,23 @@ peer advertising both the template and every volume; when that intersection is
 empty, one volume holder may self-verify access to a shared template store
 before provisioning.
 
+## Changing read-only datasets
+
+Use `sb.get_volumes()`, `sb.set_volumes([...])`, and
+`sb.patch_volumes(add=[...], remove=[...])` on the same running sandbox. These
+methods use the client's API token on the owning node; a sandbox token cannot
+manage datasets. `set_volumes([])` clears mutable entries; `None` is rejected.
+PUT must retain writable and attach-only entries. PATCH retains omitted names.
+
+Responses include `volumes_want`, `volumes`, `states`, and `converging`.
+`VolumePhase` and `VOLUME_ATTACHED`, `VOLUME_PENDING`, and `VOLUME_DETACHING`
+name the three states. A pending state with `converging=False` needs an explicit
+retry. `VolumeError`, exported from `cocoonsandbox` and `cocoonsandbox.errors`,
+retains a complete failure view in `.response`. Complete replies update both
+public sets; incomplete errors preserve the last view. Serialize calls on one
+handle. See the [replacement tutorial](live-volumes.md) and
+[API recovery contract](sandboxd-api.md#partial-failure-and-recovery).
+
 ## Renewing
 
 ```python

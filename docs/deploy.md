@@ -6,14 +6,14 @@ the cocoon CLI and needs a template image with silkd baked in.
 ## Prerequisites
 
 - Linux with KVM (`/dev/kvm`)
-- [cocoon](https://github.com/cocoonstack/cocoon) **v0.6.9 or newer** installed
+- [cocoon](https://github.com/cocoonstack/cocoon) **v0.7.2 or newer** installed
   and working (`cocoon vm run` boots a Cloud Hypervisor VM). v0.5.2 brought
   the disk hot-attach used by read-only volumes and the parallel-clone and
   snapshot/store performance work the
   [performance](performance.md) numbers assume; v0.6.9 prints `[]` for an
   empty `snapshot list --format json`, which sandboxd's snapshot reconcile
   reads. sandboxd logs a warning at startup when the detected cocoon is below
-  v0.6.9 (a dev/`master-<sha>` build is assumed current)
+  v0.7.2. Live volume mutation also rejects unknown and development builds
 - The sandbox boot artifact installed where cocoon finds it
   (`/boot/vmlinuz-sandbox`, `/boot/initrd.img-sandbox` — from
   `ghcr.io/cocoonstack/sandbox/boot:<kernel-ver>`)
@@ -159,16 +159,28 @@ fragment the warm pools):
 Running claims can change mounted read-only catalog entries through the
 [GET, PUT, and PATCH volume API](sandboxd-api.md#get-v1sandboxesidvolumes)
 and both SDKs. The image must already exist on the owner node. Live changes
-require cocoon commit `6d76309` or a build containing it for idempotent disk
-attach and detach. That change was on cocoon master without a release tag
-when this feature was prepared. The general v0.6.9 floor above is insufficient
-for live convergence.
+require Cocoon v0.7.2 or newer for idempotent disk attach and detach. PUT and
+PATCH reject older, unknown, development, or unqueryable versions with 503
+before any intent, hold, or device change. GET and release remain available.
 
 The claim journal stores desired `VolumesWant` and confirmed applied `Volumes`.
-Admission holds cover their union across restart and teardown. Retry an
+Admission holds cover their union across daemon restart and teardown. Version 2
+journals preserve a separate retirement record until VM deletion is confirmed
+and the record deletion commits. Retry an
 interrupted operation with the same PUT target. Release cancels convergence
 and transfers holds to teardown. Capture is refused while either set is
-nonempty. Drain all volume claims before downgrading sandboxd.
+nonempty. Back up the journal before upgrading. Older daemons reject the new
+format. Drain all volume claims and finish retirements before downgrading;
+do not manually convert a journal that still has retirement records.
+
+A sandbox whose VMM exits while holding volumes is release-only. Release it and
+create a new sandbox. Daemon restart recovery assumes the original VMM remains
+alive and does not recreate guest processes. Unfinished changes report an
+interrupted diagnostic after restart and require a caller retry.
+
+If startup cannot confirm removal of an unknown owned orphan, the node blocks
+new volume admission and all disk attachment, including pending repair, until
+the orphan is gone. GET, detach, and release remain available.
 
 `e2e/cmd/volumesmoke` exercises GET, repeated full-set PUT, PATCH add and remove,
 and clearing a new claim. Real Cloud Hypervisor hotplug, busy guest unmount,
@@ -176,7 +188,10 @@ and restart during convergence remain unverified here. The maintainer will
 run these checks on the target VMM and guest testbed.
 
 Each catalog path must name a disk image containing a mountable whole-device
-filesystem. A read-only entry's image must stay immutable: do not replace,
+filesystem. Keep catalog names bound to the same image while any live or
+retiring claim holds them. Use versioned names such as `dataset-v1` and
+`dataset-v2`; sandboxd cannot detect a repointed catalog entry. A read-only
+entry's image must stay immutable: do not replace,
 truncate, or delete it while attached; publish a new catalog name or path
 instead. A missing path produces a startup warning and fails only claims that
 request it, allowing images to be distributed after sandboxd starts.

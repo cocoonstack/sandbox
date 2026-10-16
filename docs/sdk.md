@@ -256,11 +256,13 @@ view = sb.patch_volumes(remove=["imagenet"])
 view = sb.set_volumes([])  # None is rejected.
 ```
 
-Each response contains `volumes_want`, `volumes`, and `states`. Go exposes them
-as `SandboxVolumesResponse.VolumesWant`, `.Volumes`, and `.States`. A state is
-`attached`, `pending`, or `detaching`, with an optional `error`. Methods use the
-sandbox token on its owner node and update both public sets from each complete
-response, including a partial failure. Serialize changes to one handle as with
+Each response contains `volumes_want`, `volumes`, `states`, and `converging`.
+Go exposes them as `SandboxVolumesResponse.VolumesWant`, `.Volumes`, `.States`,
+and `.Converging`. `VolumePhase` has `VolumeAttached`, `VolumePending`, and
+`VolumeDetaching` constants. Python exposes `VolumePhase` and the corresponding
+`VOLUME_ATTACHED`, `VOLUME_PENDING`, and `VOLUME_DETACHING` constants. Each state
+can include an `error`. Methods use the client API token on the owning node
+and update both public sets from each complete response, including a partial failure. Serialize changes to one handle as with
 `Renew`. Returned views do not share the handle's slices or dictionaries.
 
 Go returns `*sandbox.VolumeError` with a `Response` alongside the returned view.
@@ -274,9 +276,14 @@ same full PUT target, or set a new target to recover. `Client.Sandboxes` exposes
 A PUT must retain existing writable and attach-only entries unchanged. PATCH
 cannot remove or change them. Paused sandboxes are not woken, and images must
 exist on the owner node. Admission holds cover the union of desired and applied
-sets. Capture is refused while either is nonempty. Release cancels convergence
-and hands held volumes to teardown. See the
-[API recovery contract](sandboxd-api.md#partial-failure-and-recovery).
+sets. A settled retained entry receives no new attach or mount calls. `converging`
+is true only during an active request. Pending or detaching entries with false
+require an explicit retry. Daemon restart replaces unfinished diagnostics with
+an interrupted message. Capture is refused while either set is nonempty.
+Release cancels convergence and hands held volumes to teardown. See the
+[API recovery contract](sandboxd-api.md#partial-failure-and-recovery) and
+[same-sandbox replacement tutorial](live-volumes.md). A failed sandbox with
+volume holds is release-only after VMM exit; an empty target cannot recover it.
 
 `WithVolumesAttachOnly()` claims the same volumes without mounting them: the
 entries in `Sandbox.Volumes` carry an empty `Mount`, and the workload finds

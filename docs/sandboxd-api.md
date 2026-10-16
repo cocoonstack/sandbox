@@ -258,14 +258,17 @@ entry's response is byte-identical to v1.
 ## GET /v1/sandboxes/{id}/volumes
 
 Returns the persisted desired set (`volumes_want`), confirmed applied set
-(`volumes`), and per-volume `states`. Auth is the sandbox bearer token or the
-root token by id. The owning node handles the request without redirecting.
+(`volumes`), per-volume `states`, and `converging`. Auth requires a client API
+token. Root can access every sandbox; a tenant can access only its own.
+Sandbox tokens are rejected when authentication is enabled. The owning node
+handles the request without redirecting.
 
 ```json
 {
   "volumes_want": [{"name": "imagenet", "mount": "/datasets/training"}],
   "volumes": [{"name": "imagenet", "mount": "/datasets/training"}],
-  "states": [{"name": "imagenet", "state": "attached"}]
+  "states": [{"name": "imagenet", "state": "attached"}],
+  "converging": false
 }
 ```
 
@@ -274,13 +277,19 @@ when the volume is in both sets, `pending` when desired but not yet confirmed,
 or `detaching` when applied but no longer desired. An interrupted device call
 can leave the actual guest state different from the confirmed set. A failed
 convergence also includes a top-level `error` and may include an `error` on
-the affected state. The sandbox index exposes both sets for operator inspection.
+the affected state. `converging` is true only while a request worker is running.
+`pending` with `converging: false` requires an explicit retry; there is no
+background convergence. GET retains the last safe per-volume error for the
+current daemon lifetime. After daemon restart, unfinished states report an
+interrupted operation that needs retry. Successful retries clear resolved errors.
+The sandbox index exposes both sets for operator inspection.
 
 ## PUT /v1/sandboxes/{id}/volumes
 
 Replaces the full desired set and converges synchronously. Auth matches GET.
-The owner tenant's catalog access list applies, including for root. The image
-must exist on the owning node. The request must include a non-null `volumes`
+The owner tenant's catalog access list applies to newly admitted names, including
+for root. Retaining, repairing, or removing held names does not reauthorize
+them. A new image must exist on the owning node. The request must include a non-null `volumes`
 array. An explicit empty array removes all mutable entries.
 
 ```json
@@ -296,10 +305,13 @@ An identical target can be retried. Claims with `on_expire: archive` must change
 that policy before adding a volume.
 
 The sandbox must be running. Paused, archived, and failed sandboxes return 409
-without waking. Missing bearer returns 401. Unknown id or wrong token returns
-404. Invalid, inaccessible, or non-local entries return 400. Removed tenants
-cannot add volumes and return 403. A conflicting writer or dirty image returns
-409. Removal remains available after the tenant is removed.
+without waking. A failed sandbox holding volumes is release-only after its VMM
+exits; PUT with an empty target cannot restore its processes. Missing, invalid,
+or sandbox bearer tokens return 401. Another tenant's sandbox and an unknown id
+return 404. Invalid, inaccessible, or non-local entries return 400. Removed
+tenant tokens are rejected at authentication. Root can still repair or remove
+held entries, but cannot admit new names for a removed tenant. A conflicting
+writer or dirty image returns 409.
 
 ## PATCH /v1/sandboxes/{id}/volumes
 
@@ -314,7 +326,10 @@ unchanged. An empty patch retries the current desired set.
 Adding an identical entry or removing an absent valid name is harmless.
 Duplicate names, a name in both arrays, or changes to writable or attach-only
 entries return 400. Removal refuses busy or foreign mounts and uses neither
-lazy nor forced unmount.
+lazy nor forced unmount. A foreign mount, another bind mount, or a completed
+ordinary unmount with nonzero exit returns 409 with the guest mount path and
+a safe per-volume reason. Guest transport failures remain server errors;
+timeouts return 504 and cancellation returns 408.
 
 ### Partial failure and recovery
 
@@ -322,7 +337,9 @@ PUT and PATCH return the GET response shape on success. A convergence error
 returns a non-2xx status with the same view, so callers can inspect desired,
 applied, and per-volume state. Validation and authentication errors may carry
 only `error`. A failed request may already have persisted its target and
-completed some device changes. Retry the same PUT to converge, or send a new
+completed some device changes. GET reads the last confirmed set, rather than
+probing the devices. Resolve guest mount references or runtime failures before
+retrying. Retry the same PUT to converge, or send a new
 target to abandon unfinished additions. Concurrent requests serialize per
 sandbox without blocking renewals or new exec, file, and port connections.
 
@@ -331,8 +348,10 @@ superseding request may first clean up an older desired-only attachment while
 the old target stays recorded. If that cleanup fails, the response retains the
 old view; retry the same PUT to finish accepting the new target. Admission
 holds cover the deduplicated union of both sets, including during restart and
-teardown. Failed or uncertain operations retain their holds until successful
-cleanup. Startup reserves those holds without replaying attachments. Release
+teardown. A durable retirement record keeps teardown holds until the VM is
+confirmed gone and the retirement deletion commits. Failed or uncertain
+operations retain their holds until successful cleanup. Startup reserves those
+holds without replaying attachments. Release
 cancels convergence and transfers the held union to teardown without waiting
 for a blocked device call. Capture operations (hibernate, fork, checkpoint, and
 promote) are refused while either set is nonempty or a convergence request
@@ -340,13 +359,28 @@ still owns admitted volume holds.
 
 Device calls honor cancellation and have a 30-second ceiling. Journal writes
 are atomic. Host-crash durability follows `sync_claims`. Drain volume claims
-before downgrading to a daemon that does not preserve both journal sets.
+before downgrading. The version 2 claim journal also stores volume retirements;
+older daemons reject it. Back up the journal before upgrading and do not
+manually convert it to the legacy format while retirement records remain.
 
-Live convergence requires cocoon commit `6d76309` or a build containing it,
-which makes matching attach and absent detach idempotent. The change was not
-in a tagged release when this API was prepared. Testbed validation of real
-Cloud Hypervisor hotplug, busy unmount, and restart during convergence remains
-pending with the maintainer.
+Live convergence requires Cocoon v0.7.2 or newer for idempotent matching
+attach and absent detach. PUT and PATCH reject older, unknown, development,
+or unqueryable runtime versions with 503 before changing intent, holds, or
+devices. GET and release remain available.
+
+Catalog names must keep the same backing image while held, including pending
+and retiring holds. Publish changes under versioned names such as `dataset-v1`
+and `dataset-v2`. The journal cannot detect a catalog name repointed to a new
+image. On startup, an unknown owned orphan that cannot be confirmed gone blocks
+new volume admission and all disk attachment, including pending repair.
+Diagnosis, detach, and release remain available until cleanup succeeds.
+
+A replacement first unmounts the old disk, then mounts the new disk. Pause reads
+and close files, mmap, cwd, and bind mount references during this gap. Existing
+independent guest processes and sessions continue. See the
+[same-sandbox replacement tutorial](live-volumes.md). Real Cloud Hypervisor
+hotplug, busy unmount, and restart during convergence still require maintainer
+testbed validation.
 
 ## POST /v1/sandboxes/{id}/release
 
