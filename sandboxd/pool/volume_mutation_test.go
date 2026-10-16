@@ -391,32 +391,6 @@ func TestLiveVolumesRespectOwningTenantAndRemoval(t *testing.T) {
 	}
 }
 
-func liveCatalog(t *testing.T) []config.VolumeSpec {
-	t.Helper()
-	return []config.VolumeSpec{
-		{Name: "data", Path: writeVolumeImage(t, "data.img", "data"), Writable: true},
-		{Name: "other", Path: writeVolumeImage(t, "other.img", "other"), Writable: true},
-	}
-}
-
-func assertLiveJournal(t *testing.T, m *Manager, sb *types.Sandbox) {
-	t.Helper()
-	claims, err := newClaimStore(m.dataDir, false).load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	got := claims[sb.ID]
-	if got == nil || !slices.Equal(got.Volumes, sb.Volumes) {
-		t.Fatalf("journal volumes: %+v", got)
-	}
-	if !slices.Equal(got.VolumesWant, sb.VolumesWant) {
-		t.Fatalf("journal target: %+v, want %+v", got.VolumesWant, sb.VolumesWant)
-	}
-	if _, err := os.Stat(m.store.path); err != nil {
-		t.Fatal(err)
-	}
-}
-
 func TestDesiredVolumesJournalMigration(t *testing.T) {
 	for _, tt := range []struct {
 		name, field string
@@ -519,22 +493,6 @@ func TestSupersedingTargetPrecleansUncertainAddBeforeJournaling(t *testing.T) {
 	if volumeHoldersOf(m, "data") != (volumeHolders{}) || volumeHoldersOf(m, "other").readers != 1 {
 		t.Fatal("superseding target leaked or lost holds")
 	}
-}
-
-type gatedVolumeEngine struct {
-	*fakeEngine
-	entered chan struct{}
-	resume  chan struct{}
-	calls   atomic.Int32
-}
-
-func (e *gatedVolumeEngine) DiskAttach(ctx context.Context, vmName string, spec engine.VolumeSpec) error {
-	if e.calls.Add(1) == 1 {
-		close(e.entered)
-		<-e.resume
-		ctx = context.WithoutCancel(ctx)
-	}
-	return e.fakeEngine.DiskAttach(ctx, vmName, spec)
 }
 
 func TestCanceledVolumeWriterOwnsHardwareUntilReturn(t *testing.T) {
@@ -677,16 +635,8 @@ func TestFailedReleaseRestoresVolumeHoldOwnership(t *testing.T) {
 				eng := newFakeEngine()
 				m := newVolumeManager(t, eng, liveCatalog(t))
 				sb := mustClaim(t, m, testKey)
-				_, run, err := m.beginVolumeRun(t.Context(), sb)
-				if err != nil {
-					t.Fatal(err)
-				}
-				transient := []types.Volume{{Name: "data", Mount: "/volumes/data"}}
+				run := beginAdmittedVolumeRun(t, m, sb)
 				m.mu.Lock()
-				if reserveErr := m.reserveVolumes(transient); reserveErr != nil {
-					t.Fatal(reserveErr)
-				}
-				run.holds = append(run.holds, transient...)
 				if action == "reap" {
 					sb.Deadline = time.Now().Add(-time.Second)
 				}
@@ -709,7 +659,7 @@ func TestFailedReleaseRestoresVolumeHoldOwnership(t *testing.T) {
 					m.finishVolumeRun(sb, run)
 				}
 				m.store.writeMu.Unlock()
-				err = <-done
+				err := <-done
 				if action == "release" && err == nil {
 					t.Fatal("release ignored commit failure")
 				}
@@ -747,17 +697,7 @@ func TestArchiveRenewRejectsAdmittedUnpublishedVolumes(t *testing.T) {
 	eng := newFakeEngine()
 	m := newVolumeManager(t, eng, liveCatalog(t))
 	sb := mustClaim(t, m, testKey)
-	_, run, err := m.beginVolumeRun(t.Context(), sb)
-	if err != nil {
-		t.Fatal(err)
-	}
-	m.mu.Lock()
-	transient := []types.Volume{{Name: "data", Mount: "/volumes/data"}}
-	if err := m.reserveVolumes(transient); err != nil {
-		t.Fatal(err)
-	}
-	run.holds = append(run.holds, transient...)
-	m.mu.Unlock()
+	run := beginAdmittedVolumeRun(t, m, sb)
 	if _, err := m.Renew(t.Context(), sb.ID, Cred{Token: sb.Token}, time.Minute, types.ExpireArchive); !errors.Is(err, ErrVolumeCapture) {
 		t.Fatalf("archive admitted during volume intent: %v", err)
 	}
@@ -765,17 +705,6 @@ func TestArchiveRenewRejectsAdmittedUnpublishedVolumes(t *testing.T) {
 	if _, err := m.Renew(t.Context(), sb.ID, Cred{Token: sb.Token}, time.Minute, types.ExpireArchive); err != nil {
 		t.Fatalf("archive still blocked after abandoned intent: %v", err)
 	}
-}
-
-type deadlineVolumeEngine struct {
-	*fakeEngine
-	deadlines chan time.Time
-}
-
-func (e *deadlineVolumeEngine) DiskAttach(ctx context.Context, vmName string, spec engine.VolumeSpec) error {
-	deadline, _ := ctx.Deadline()
-	e.deadlines <- deadline
-	return e.fakeEngine.DiskAttach(ctx, vmName, spec)
 }
 
 func TestLiveAttachBoundsWholeDeviceOperation(t *testing.T) {
@@ -798,17 +727,7 @@ func TestLivenessRefusesAdmittedVolumeRun(t *testing.T) {
 	eng := newFakeEngine()
 	m := newVolumeManager(t, eng, liveCatalog(t))
 	sb := mustClaim(t, m, testKey)
-	_, run, err := m.beginVolumeRun(t.Context(), sb)
-	if err != nil {
-		t.Fatal(err)
-	}
-	m.mu.Lock()
-	transient := []types.Volume{{Name: "data", Mount: "/volumes/data"}}
-	if err := m.reserveVolumes(transient); err != nil {
-		t.Fatal(err)
-	}
-	run.holds = append(run.holds, transient...)
-	m.mu.Unlock()
+	run := beginAdmittedVolumeRun(t, m, sb)
 	killVMM(eng, sb.VMName)
 	m.recoverVMM(t.Context(), sb)
 	if len(eng.starts) != 0 || !strings.Contains(sb.Failed, "volume mounts") {
@@ -841,4 +760,73 @@ func TestRemovedTenantCanRemoveReadOnlyVolumeBesideImmutableVolume(t *testing.T)
 	if volumeHoldersOf(m, "data") != (volumeHolders{}) || volumeHoldersOf(m, "other").writers != 1 {
 		t.Fatal("cleanup altered immutable hold")
 	}
+}
+
+func liveCatalog(t *testing.T) []config.VolumeSpec {
+	t.Helper()
+	return []config.VolumeSpec{
+		{Name: "data", Path: writeVolumeImage(t, "data.img", "data"), Writable: true},
+		{Name: "other", Path: writeVolumeImage(t, "other.img", "other"), Writable: true},
+	}
+}
+
+func assertLiveJournal(t *testing.T, m *Manager, sb *types.Sandbox) {
+	t.Helper()
+	claims, err := newClaimStore(m.dataDir, false).load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := claims[sb.ID]
+	if got == nil || !slices.Equal(got.Volumes, sb.Volumes) {
+		t.Fatalf("journal volumes: %+v", got)
+	}
+	if !slices.Equal(got.VolumesWant, sb.VolumesWant) {
+		t.Fatalf("journal target: %+v, want %+v", got.VolumesWant, sb.VolumesWant)
+	}
+	if _, err := os.Stat(m.store.path); err != nil {
+		t.Fatal(err)
+	}
+}
+
+type gatedVolumeEngine struct {
+	*fakeEngine
+	entered chan struct{}
+	resume  chan struct{}
+	calls   atomic.Int32
+}
+
+func (e *gatedVolumeEngine) DiskAttach(ctx context.Context, vmName string, spec engine.VolumeSpec) error {
+	if e.calls.Add(1) == 1 {
+		close(e.entered)
+		<-e.resume
+		ctx = context.WithoutCancel(ctx)
+	}
+	return e.fakeEngine.DiskAttach(ctx, vmName, spec)
+}
+
+type deadlineVolumeEngine struct {
+	*fakeEngine
+	deadlines chan time.Time
+}
+
+func (e *deadlineVolumeEngine) DiskAttach(ctx context.Context, vmName string, spec engine.VolumeSpec) error {
+	deadline, _ := ctx.Deadline()
+	e.deadlines <- deadline
+	return e.fakeEngine.DiskAttach(ctx, vmName, spec)
+}
+
+func beginAdmittedVolumeRun(t *testing.T, m *Manager, sb *types.Sandbox) *volumeRun {
+	t.Helper()
+	_, run, err := m.beginVolumeRun(t.Context(), sb)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	transient := []types.Volume{{Name: "data", Mount: "/volumes/data"}}
+	if err = m.reserveVolumes(transient); err != nil {
+		t.Fatal(err)
+	}
+	run.holds = append(run.holds, transient...)
+	return run
 }
