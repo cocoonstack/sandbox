@@ -24,6 +24,7 @@ type volumeRun struct {
 	holds  []types.Volume
 }
 
+// GetVolumes reads a claim's desired and applied volumes; a tenant reaches only its own claims.
 func (m *Manager) GetVolumes(id, tenant string) (types.SandboxVolumesResponse, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -34,10 +35,12 @@ func (m *Manager) GetVolumes(id, tenant string) (types.SandboxVolumesResponse, e
 	return m.volumeView(sb), nil
 }
 
+// SetVolumes converges a running claim onto the full desired volume set.
 func (m *Manager) SetVolumes(ctx context.Context, id, tenant string, want []types.Volume) (types.SandboxVolumesResponse, error) {
 	return m.changeVolumes(ctx, id, tenant, func([]types.Volume) ([]types.Volume, error) { return slices.Clone(want), nil })
 }
 
+// PatchVolumes adds and removes a running claim's read-only mounted volumes by name.
 func (m *Manager) PatchVolumes(ctx context.Context, id, tenant string, patch types.VolumePatch) (types.SandboxVolumesResponse, error) {
 	return m.changeVolumes(ctx, id, tenant, func(current []types.Volume) ([]types.Volume, error) {
 		if err := validateDetachNames(patch.Remove); err != nil {
