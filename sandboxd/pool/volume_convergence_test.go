@@ -31,11 +31,12 @@ func TestSettledVolumesDoNotCallDevicesOrResolveCatalog(t *testing.T) {
 		t.Fatalf("retained volume reapplied: %v", eng.volumeSpecs)
 	}
 	before = len(eng.volumeSpecs)
+	journaled := m.store.mark()
 	if _, err := m.SetVolumes(t.Context(), sb.ID, sb.Tenant, []types.Volume{{Name: "data"}, {Name: "other"}}); err != nil {
 		t.Fatal(err)
 	}
-	if len(eng.volumeSpecs) != before {
-		t.Fatal("identical target reached devices")
+	if len(eng.volumeSpecs) != before || m.store.mark() != journaled {
+		t.Fatal("identical target reached devices or the claims journal")
 	}
 }
 

@@ -11,6 +11,11 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
+const (
+	volumeChangeFailed      = "volume change failed; retry the desired target"
+	volumeChangeInterrupted = "volume change interrupted; retry the desired target"
+)
+
 type volumeEdit func([]types.Volume) ([]types.Volume, error)
 
 type volumeRun struct {
@@ -113,6 +118,7 @@ func (m *Manager) changeVolumes(ctx context.Context, id, tenant string, change v
 			return view, err
 		}
 	}
+	failedName = ""
 	if err = m.prepareVolumeTarget(ctx, sb, run, target, additions, resolved); err != nil {
 		return view, err
 	}
@@ -124,10 +130,7 @@ func (m *Manager) changeVolumes(ctx context.Context, id, tenant string, change v
 		if err = m.detachVolumeRun(ctx, sb, run, v); err != nil {
 			return view, err
 		}
-		m.mu.Lock()
-		next := slices.DeleteFunc(slices.Clone(sb.Volumes), func(a types.Volume) bool { return a.Name == v.Name })
-		m.mu.Unlock()
-		if err = m.commitVolumeApplied(ctx, sb, run, next); err != nil {
+		if err = m.commitVolumeApplied(ctx, sb, run, v, false); err != nil {
 			return view, err
 		}
 		m.clearVolumeError(sb, run, v.Name)
@@ -153,10 +156,7 @@ func (m *Manager) changeVolumes(ctx context.Context, id, tenant string, change v
 		if err = m.checkVolumeRun(ctx, sb, run); err != nil {
 			return view, err
 		}
-		m.mu.Lock()
-		next := append(slices.Clone(sb.Volumes), v)
-		m.mu.Unlock()
-		if err = m.commitVolumeApplied(ctx, sb, run, next); err != nil {
+		if err = m.commitVolumeApplied(ctx, sb, run, v, true); err != nil {
 			return view, err
 		}
 		m.clearVolumeError(sb, run, v.Name)
@@ -245,43 +245,51 @@ func (m *Manager) cancelVolumeRun(sb *types.Sandbox) []types.Volume {
 }
 
 func (m *Manager) prepareVolumeTarget(ctx context.Context, sb *types.Sandbox, run *volumeRun, target, additions []types.Volume, resolved []resolvedVolume) error {
+	js, changed, err := m.stageVolumeTarget(ctx, sb, run, target, additions, resolved)
+	if err != nil || !changed {
+		return err
+	}
+	return m.commitVolumeRun(ctx, sb, run, js)
+}
+
+func (m *Manager) stageVolumeTarget(ctx context.Context, sb *types.Sandbox, run *volumeRun, target, additions []types.Volume, resolved []resolvedVolume) (claimSnapshot, bool, error) {
 	sb.Transition.Lock()
 	defer sb.Transition.Unlock()
 	m.mu.Lock()
 	if err := m.checkVolumeRunLocked(ctx, sb, run); err != nil {
 		m.mu.Unlock()
-		return err
+		return claimSnapshot{}, false, err
 	}
 	if sb.OnExpire == types.ExpireArchive && len(target) > 0 {
 		m.mu.Unlock()
-		return ErrVolumeCapture
+		return claimSnapshot{}, false, ErrVolumeCapture
 	}
 	if err := m.reserveVolumes(additions); err != nil {
 		m.mu.Unlock()
-		return err
+		return claimSnapshot{}, false, err
 	}
 	run.holds = append(run.holds, additions...)
 	m.mu.Unlock()
 	cleanErr := m.confirmVolumesClean(resolved)
 	m.mu.Lock()
+	defer m.mu.Unlock()
 	if err := m.checkVolumeRunLocked(ctx, sb, run); err != nil {
-		m.mu.Unlock()
-		return err
+		return claimSnapshot{}, false, err
 	}
 	if cleanErr != nil {
 		m.releaseVolumes(additions)
 		run.holds = volumeDifference(run.holds, additions)
-		m.mu.Unlock()
-		return cleanErr
+		return claimSnapshot{}, false, cleanErr
 	}
-	invalid := volumeDifference(sb.Volumes, sb.VolumesWant)
-	sb.Volumes = slices.DeleteFunc(slices.Clone(sb.Volumes), func(v types.Volume) bool {
-		return volumeIndex(invalid, v.Name) >= 0 && volumeIndex(target, v.Name) >= 0
-	})
+	replaced := func(v types.Volume) bool {
+		return volumeIndex(sb.VolumesWant, v.Name) < 0 && volumeIndex(target, v.Name) >= 0
+	}
+	if len(additions) == 0 && slices.Equal(target, sb.VolumesWant) && !slices.ContainsFunc(sb.Volumes, replaced) {
+		return claimSnapshot{}, false, nil
+	}
+	sb.Volumes = slices.DeleteFunc(slices.Clone(sb.Volumes), replaced)
 	sb.VolumesWant = slices.Clone(target)
-	js := m.store.set(sb)
-	m.mu.Unlock()
-	return m.commitVolumeRun(ctx, sb, run, js)
+	return m.store.set(sb), true, nil
 }
 
 func (m *Manager) detachVolumeRun(ctx context.Context, sb *types.Sandbox, run *volumeRun, v types.Volume) error {
@@ -294,13 +302,16 @@ func (m *Manager) detachVolumeRun(ctx context.Context, sb *types.Sandbox, run *v
 	return m.checkVolumeRun(ctx, sb, run)
 }
 
-func (m *Manager) commitVolumeApplied(ctx context.Context, sb *types.Sandbox, run *volumeRun, next []types.Volume) error {
+func (m *Manager) commitVolumeApplied(ctx context.Context, sb *types.Sandbox, run *volumeRun, v types.Volume, attached bool) error {
 	m.mu.Lock()
-	if !m.ownsRunLocked(sb, run) || ctx.Err() != nil {
+	if err := m.checkVolumeRunLocked(ctx, sb, run); err != nil {
 		m.mu.Unlock()
-		return context.Canceled
+		return err
 	}
-	sb.Volumes = next
+	sb.Volumes = slices.DeleteFunc(slices.Clone(sb.Volumes), func(a types.Volume) bool { return a.Name == v.Name })
+	if attached {
+		sb.Volumes = append(sb.Volumes, v)
+	}
 	js := m.store.set(sb)
 	m.mu.Unlock()
 	return m.commitVolumeRun(ctx, sb, run, js)
@@ -313,8 +324,11 @@ func (m *Manager) commitVolumeRun(ctx context.Context, sb *types.Sandbox, run *v
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if !m.ownsRunLocked(sb, run) || ctx.Err() != nil {
-		return context.Canceled
+	if !m.ownsRunLocked(sb, run) {
+		return ErrUnknownSandbox
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	dropped := volumeDifference(run.holds, heldVolumes(sb))
 	m.releaseVolumes(dropped)
@@ -332,7 +346,12 @@ func (m *Manager) hasVolumeHolds(sb *types.Sandbox) bool {
 }
 
 func (m *Manager) volumeView(sb *types.Sandbox) types.SandboxVolumesResponse {
-	view := types.SandboxVolumesResponse{Volumes: slices.Clone(sb.Volumes), VolumesWant: slices.Clone(sb.VolumesWant), States: []types.VolumeState{}, Converging: m.volumeRuns[sb] != nil}
+	view := types.SandboxVolumesResponse{
+		Volumes:     slices.Clone(sb.Volumes),
+		VolumesWant: slices.Clone(sb.VolumesWant),
+		States:      []types.VolumeState{},
+		Converging:  m.volumeRuns[sb] != nil,
+	}
 	for _, v := range heldVolumes(sb) {
 		state := types.VolumeAttached
 		if volumeIndex(sb.VolumesWant, v.Name) < 0 {
@@ -342,7 +361,7 @@ func (m *Manager) volumeView(sb *types.Sandbox) types.SandboxVolumesResponse {
 		}
 		message := m.volumeErrors[sb][v.Name]
 		if message == "" && state != types.VolumeAttached && !view.Converging {
-			message = "volume change interrupted; retry the desired target"
+			message = volumeChangeInterrupted
 		}
 		view.States = append(view.States, types.VolumeState{Name: v.Name, State: state, Error: message})
 	}
@@ -357,9 +376,9 @@ func (m *Manager) recordVolumeError(sb *types.Sandbox, run *volumeRun, name stri
 	}
 	errs := m.volumeErrors[sb]
 	if err != nil && name != "" {
-		message := "volume change failed; retry the desired target"
+		message := volumeChangeFailed
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			message = "volume change interrupted; retry the desired target"
+			message = volumeChangeInterrupted
 		}
 		if conflict, ok := errors.AsType[*engine.VolumeMountConflict](err); ok {
 			message = conflict.Error()

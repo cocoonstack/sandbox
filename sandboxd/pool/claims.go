@@ -39,7 +39,7 @@ type claimDTO struct {
 	Metadata       types.Metadata     `json:"metadata,omitempty"`
 	OnExpire       types.ExpireAction `json:"on_expire,omitempty"`
 	Volumes        []types.Volume     `json:"volumes,omitempty"`
-	VolumesWant    *[]types.Volume    `json:"volumes_want,omitzero"`
+	VolumesWant    []types.Volume     `json:"volumes_want,omitzero"`
 	Env            types.Env          `json:"env,omitempty"`
 	VsockSocket    string             `json:"vsock_socket,omitempty"`
 	TAP            string             `json:"tap,omitempty"`
@@ -234,10 +234,9 @@ func dtoOf(sb *types.Sandbox) claimDTO {
 }
 
 // volumesWantDTO persists the desired set only when it differs; absent reads back as equal to Volumes.
-func volumesWantDTO(sb *types.Sandbox) *[]types.Volume {
+func volumesWantDTO(sb *types.Sandbox) []types.Volume {
 	if slices.Equal(sb.VolumesWant, sb.Volumes) {
 		return nil
 	}
-	want := slices.Clone(sb.VolumesWant)
-	return &want
+	return append([]types.Volume{}, sb.VolumesWant...)
 }
