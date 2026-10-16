@@ -40,6 +40,8 @@ func newFakeEngine(dir string) *fakeEngine {
 	}
 }
 
+func (f *fakeEngine) CheckLiveVolumeSupport(context.Context) error { return nil }
+
 func (f *fakeEngine) Clone(_ context.Context, _, name string, _ types.PoolKey) (types.VMRecord, error) {
 	return f.createRecord(name)
 }
