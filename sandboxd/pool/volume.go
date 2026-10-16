@@ -142,11 +142,11 @@ func (m *Manager) resolveVolumes(ctx context.Context, tenant string, requested [
 		if !ok || !entry.allowed(tenant) {
 			return nil, ErrVolumeUnavailable
 		}
-		resolvedVolume, resolveErr := m.resolveCatalogVolume(ctx, volume)
+		resolvedEntry, resolveErr := m.resolveCatalogVolume(ctx, volume)
 		if resolveErr != nil {
 			return nil, resolveErr
 		}
-		resolved = append(resolved, resolvedVolume)
+		resolved = append(resolved, resolvedEntry)
 	}
 	return resolved, nil
 }
