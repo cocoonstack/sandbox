@@ -53,7 +53,7 @@ const (
 	outputTail     = 400
 	portForwardMax = 4096           // port_forward handshake reply line cap
 	vmNotFound     = "vm not found" // cocoon's hypervisor.ErrNotFound text
-	// at 16 concurrent memory dumps cocoon's sqlite writers already time out on its 5 s lock wait; 8 measured clean
+	// At 16 concurrent memory dumps cocoon's sqlite writers already time out on its 5 s lock wait; 8 measured clean
 	memoryDumps = 8
 )
 
@@ -144,6 +144,7 @@ func (e *Engine) Start(ctx context.Context, name string) error {
 	return err
 }
 
+// Stop force-stops a VM and keeps its disk for a later Start.
 func (e *Engine) Stop(ctx context.Context, name string) error {
 	_, err := e.run(ctx, "vm", "stop", "--force", name)
 	return err

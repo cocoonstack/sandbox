@@ -105,13 +105,8 @@ func run(addr, token, template, volume, rwVolume, probe string, live bool) error
 		return fmt.Errorf("concurrent reads differ: first_bytes=%d second_bytes=%d", len(outputs[0]), len(outputs[1]))
 	}
 
-	_, err = sbA.Exec(ctx, "touch", path.Join(mountA, ".sandboxd-write-probe"))
-	if err == nil {
-		return errors.New("write to read-only volume succeeded")
-	}
-	exitErr, ok := errors.AsType[*sandbox.ExitError](err)
-	if !ok || !strings.Contains(strings.ToLower(exitErr.Stderr), "read-only file system") {
-		return fmt.Errorf("write failed without EROFS: %w", err)
+	if err := requireReadOnly(ctx, sbA, mountA); err != nil {
+		return err
 	}
 
 	if err := errors.Join(sbA.Close(), sbB.Close()); err != nil {
@@ -157,11 +152,8 @@ func runLive(ctx context.Context, client *sandbox.Client, template, volume, prob
 	if got != want {
 		return fmt.Errorf("live volume read: bytes=%d want=%d", len(got), len(want))
 	}
-	if _, err = sb.Exec(ctx, "touch", path.Join(mount, ".sandboxd-write-probe")); err == nil {
-		return errors.New("live read-only mount accepted a write")
-	}
-	if exitErr, ok := errors.AsType[*sandbox.ExitError](err); !ok || !strings.Contains(strings.ToLower(exitErr.Stderr), "read-only file system") {
-		return fmt.Errorf("live write probe failed without EROFS: %w", err)
+	if err = requireReadOnly(ctx, sb, mount); err != nil {
+		return fmt.Errorf("live volume: %w", err)
 	}
 	for range 2 {
 		if _, err = sb.PatchVolumes(ctx, sandbox.VolumePatch{Remove: []string{volume}}); err != nil {
@@ -259,5 +251,16 @@ func runWritable(ctx context.Context, client *sandbox.Client, template, volume s
 	live = nil
 	fmt.Printf("VOLUME RW PASS volume=%s claim=%.1fms durable=true busy_refused=true\n",
 		volume, float64(claimRW.Microseconds())/1000)
+	return nil
+}
+
+func requireReadOnly(ctx context.Context, sb *sandbox.Sandbox, mount string) error {
+	_, err := sb.Exec(ctx, "touch", path.Join(mount, ".sandboxd-write-probe"))
+	if err == nil {
+		return errors.New("write to read-only volume succeeded")
+	}
+	if exitErr, ok := errors.AsType[*sandbox.ExitError](err); !ok || !strings.Contains(strings.ToLower(exitErr.Stderr), "read-only file system") {
+		return fmt.Errorf("write failed without EROFS: %w", err)
+	}
 	return nil
 }

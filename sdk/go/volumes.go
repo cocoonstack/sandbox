@@ -11,14 +11,14 @@ import (
 	"slices"
 )
 
-// VolumePhase is the progress of a desired or applied volume.
-type VolumePhase string
-
 const (
 	VolumeAttached  VolumePhase = "attached"
 	VolumePending   VolumePhase = "pending"
 	VolumeDetaching VolumePhase = "detaching"
 )
+
+// VolumePhase is the progress of a desired or applied volume.
+type VolumePhase string
 
 // VolumeState reports the progress of one desired or applied volume.
 type VolumeState struct {
@@ -36,13 +36,13 @@ type SandboxVolumesResponse struct {
 	Error       string        `json:"error,omitempty"`
 }
 
-// VolumePatch changes the desired set by name. Omitted slices are unchanged.
+// VolumePatch adds and removes volumes by name; a nil slice changes nothing.
 type VolumePatch struct {
 	Add    []Volume `json:"add,omitzero"`
 	Remove []string `json:"remove,omitzero"`
 }
 
-// VolumeError retains a complete server view after a failed volume request.
+// VolumeError reports a failed volume request; Response is nil unless the reply carried the full view.
 type VolumeError struct {
 	*APIError
 	Response *SandboxVolumesResponse
