@@ -11,31 +11,14 @@ import (
 	"github.com/projecteru2/core/log"
 )
 
-// VolumeMountConflictKind identifies the guest condition that prevents a volume change.
-type VolumeMountConflictKind string
-
-const (
-	VolumeMountForeign        VolumeMountConflictKind = "foreign"
-	VolumeMountBind           VolumeMountConflictKind = "bind"
-	VolumeMountUnmountRefused VolumeMountConflictKind = "unmount-refused"
-)
+var mountUnescaper = strings.NewReplacer(`\040`, " ", `\011`, "\t", `\012`, "\n", `\134`, `\`)
 
 // VolumeMountConflict reports a guest mount that must be resolved before retrying.
 type VolumeMountConflict struct {
-	Kind  VolumeMountConflictKind
-	Mount string
+	Message string
 }
 
-func (e *VolumeMountConflict) Error() string {
-	switch e.Kind {
-	case VolumeMountForeign:
-		return fmt.Sprintf("volume mount %q has a different device, root, or mode; restore the expected mount before retrying", e.Mount)
-	case VolumeMountBind:
-		return fmt.Sprintf("volume device has another mount at %q; remove guest mount references before retrying", e.Mount)
-	default:
-		return fmt.Sprintf("cannot unmount %q; close guest references and retry", e.Mount)
-	}
-}
+func (e *VolumeMountConflict) Error() string { return e.Message }
 
 // LiveVolumeUnsupported reports a runtime that cannot safely change live volumes.
 type LiveVolumeUnsupported struct {
@@ -47,6 +30,10 @@ func (e *LiveVolumeUnsupported) Error() string {
 		return fmt.Sprintf("live volume changes require Cocoon >= %s; installed version is %s", LiveVolumeCocoon, e.Version)
 	}
 	return "live volume changes require Cocoon >= " + LiveVolumeCocoon + "; runtime version unavailable"
+}
+
+type volumeMount struct {
+	device, root, path, options string
 }
 
 // CheckLiveVolumeSupport rejects runtimes without idempotent live disk attach and detach.
@@ -102,17 +89,13 @@ func (e *Engine) unmountLiveVolume(ctx context.Context, sock, device, mount stri
 	if mounted {
 		if err = e.UnmountVolume(ctx, sock, mount); err != nil {
 			if _, ok := errors.AsType[*guestExitError](err); ok {
-				return &VolumeMountConflict{Kind: VolumeMountUnmountRefused, Mount: mount}
+				return &VolumeMountConflict{Message: fmt.Sprintf("cannot unmount %q; close guest references and retry", mount)}
 			}
 			return err
 		}
 	}
 	// Refuse a second/bind mount of the same device before hot-unplug.
 	return e.volumeUnmounted(ctx, sock, device)
-}
-
-type volumeMount struct {
-	device, root, path, options string
 }
 
 func (e *Engine) volumeMounts(ctx context.Context, sock, device string) (string, []volumeMount, error) {
@@ -130,7 +113,7 @@ func (e *Engine) volumeMounts(ctx context.Context, sock, device string) (string,
 		if len(fields) < 10 || !slices.Contains(fields[6:], "-") {
 			return "", nil, errors.New("invalid guest mountinfo")
 		}
-		mounts = append(mounts, volumeMount{fields[2], unescapeMount(fields[3]), unescapeMount(fields[4]), fields[5]})
+		mounts = append(mounts, volumeMount{fields[2], mountUnescaper.Replace(fields[3]), mountUnescaper.Replace(fields[4]), fields[5]})
 	}
 	return strings.TrimSpace(string(dev)), mounts, nil
 }
@@ -148,12 +131,12 @@ func (e *Engine) volumeMounted(ctx context.Context, sock, device, mount string, 
 	for _, entry := range mounts {
 		if entry.path != mount {
 			if entry.device == dev {
-				return false, &VolumeMountConflict{Kind: VolumeMountBind, Mount: entry.path}
+				return false, bindConflict(entry.path)
 			}
 			continue
 		}
 		if matched || entry.device != dev || entry.root != "/" || !slices.Contains(strings.Split(entry.options, ","), mode) {
-			return false, &VolumeMountConflict{Kind: VolumeMountForeign, Mount: mount}
+			return false, &VolumeMountConflict{Message: fmt.Sprintf("volume mount %q has a different device, root, or mode; restore the expected mount before retrying", mount)}
 		}
 		matched = true
 	}
@@ -167,12 +150,12 @@ func (e *Engine) volumeUnmounted(ctx context.Context, sock, device string) error
 	}
 	for _, mount := range mounts {
 		if mount.device == dev {
-			return &VolumeMountConflict{Kind: VolumeMountBind, Mount: mount.path}
+			return bindConflict(mount.path)
 		}
 	}
 	return nil
 }
 
-func unescapeMount(s string) string {
-	return strings.NewReplacer(`\040`, " ", `\011`, "\t", `\012`, "\n", `\134`, `\`).Replace(s)
+func bindConflict(path string) *VolumeMountConflict {
+	return &VolumeMountConflict{Message: fmt.Sprintf("volume device has another mount at %q; remove guest mount references before retrying", path)}
 }

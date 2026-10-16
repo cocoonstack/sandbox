@@ -164,4 +164,3 @@ func isNotFound(err error) bool {
 	respErr, ok := errors.AsType[*wire.ErrorResp](err)
 	return ok && respErr.Kind == wire.KindNotFound
 }
-

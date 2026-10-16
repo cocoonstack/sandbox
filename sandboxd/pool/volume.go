@@ -160,12 +160,13 @@ func (m *Manager) resolveCatalogVolume(ctx context.Context, volume types.Volume)
 		return resolvedVolume{}, fmt.Errorf("%w: volume %q is not writable", ErrBadVolume, volume.Name)
 	}
 	if _, statErr := os.Stat(entry.disk.Path); statErr != nil {
+		// the operator's path stays server-side; the refusal matches the unknown one
 		log.WithFunc("pool.resolveCatalogVolume").Warnf(ctx, "stat volume %q image %s: %v", volume.Name, entry.disk.Path, statErr)
 		return resolvedVolume{}, ErrVolumeUnavailable
 	}
 	disk := entry.disk
 	disk.RW = volume.RW()
-	volume.AttachOnly = false
+	volume.AttachOnly = false // past validation the empty mount carries it
 	return resolvedVolume{disk: disk, applied: volume}, nil
 }
 

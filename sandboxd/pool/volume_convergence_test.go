@@ -168,7 +168,7 @@ func TestVolumeDiagnosticsTrackActualWorkerAndRetry(t *testing.T) {
 	if err != nil || view.States[0].Error != "" || view.Converging {
 		t.Fatalf("successful retry retained errors: %+v %v", view, err)
 	}
-	conflict := &engine.VolumeMountConflict{Kind: engine.VolumeMountUnmountRefused, Mount: "/volumes/data"}
+	conflict := &engine.VolumeMountConflict{Message: `cannot unmount "/volumes/data"; close guest references and retry`}
 	base.detachVolumeErr = conflict
 	view, err = m.SetVolumes(t.Context(), sb.ID, sb.Tenant, []types.Volume{})
 	if !errors.Is(err, conflict) || view.States[0].Error != conflict.Error() {
@@ -187,7 +187,7 @@ func TestReleaseDropsVolumeDiagnostics(t *testing.T) {
 	if _, err := m.SetVolumes(t.Context(), sb.ID, sb.Tenant, []types.Volume{{Name: "data"}}); err != nil {
 		t.Fatal(err)
 	}
-	eng.detachVolumeErr = &engine.VolumeMountConflict{Kind: engine.VolumeMountUnmountRefused, Mount: "/volumes/data"}
+	eng.detachVolumeErr = &engine.VolumeMountConflict{Message: `cannot unmount "/volumes/data"; close guest references and retry`}
 	if _, err := m.SetVolumes(t.Context(), sb.ID, sb.Tenant, []types.Volume{}); err == nil {
 		t.Fatal("expected mount conflict")
 	}
@@ -216,7 +216,7 @@ func TestRejectedVolumeTargetPreservesConvergenceDiagnostics(t *testing.T) {
 				t.Fatal(err)
 			}
 			if priorConflict {
-				eng.detachVolumeErr = &engine.VolumeMountConflict{Kind: engine.VolumeMountUnmountRefused, Mount: "/volumes/data"}
+				eng.detachVolumeErr = &engine.VolumeMountConflict{Message: `cannot unmount "/volumes/data"; close guest references and retry`}
 				if _, err := m.SetVolumes(t.Context(), sb.ID, sb.Tenant, []types.Volume{}); err == nil {
 					t.Fatal("expected mount conflict")
 				}

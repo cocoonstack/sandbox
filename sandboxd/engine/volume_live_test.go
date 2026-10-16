@@ -73,12 +73,12 @@ func TestLiveAttachRejectsForeignMounts(t *testing.T) {
 			if err == nil {
 				t.Fatal("accepted a foreign mount")
 			}
-			var conflict *VolumeMountConflict
-			if errors.As(err, &conflict) != (row != "malformed\n") {
+			conflict, isConflict := errors.AsType[*VolumeMountConflict](err)
+			if isConflict != (row != "malformed\n") {
 				t.Fatalf("conflict type: %v", err)
 			}
-			if conflict != nil && (conflict.Kind != VolumeMountForeign || conflict.Mount != "/data") {
-				t.Fatalf("conflict: %+v", conflict)
+			if isConflict && !strings.Contains(conflict.Error(), `"/data" has a different device`) {
+				t.Fatalf("conflict: %v", conflict)
 			}
 			fake.mu.Lock()
 			defer fake.mu.Unlock()
@@ -123,16 +123,16 @@ func TestLiveDetachKeepsBusyAndUnobservableDevices(t *testing.T) {
 			if err == nil {
 				t.Fatal("detach must fail closed")
 			}
-			var conflict *VolumeMountConflict
+			conflict, isConflict := errors.AsType[*VolumeMountConflict](err)
 			conflictExpected := mode == "busy" || mode == "second mount"
-			if errors.As(err, &conflict) != conflictExpected {
+			if isConflict != conflictExpected {
 				t.Fatalf("conflict=%v error=%v", conflictExpected, err)
 			}
 			if conflictExpected && (!strings.Contains(conflict.Error(), "/data") && !strings.Contains(conflict.Error(), "/other") || strings.Contains(conflict.Error(), "/private")) {
 				t.Fatalf("unsafe or missing guest path: %v", conflict)
 			}
-			if mode == "busy" && conflict.Kind != VolumeMountUnmountRefused {
-				t.Fatalf("kind=%s", conflict.Kind)
+			if mode == "busy" && !strings.HasPrefix(conflict.Error(), "cannot unmount") {
+				t.Fatalf("busy conflict: %v", conflict)
 			}
 		})
 	}
