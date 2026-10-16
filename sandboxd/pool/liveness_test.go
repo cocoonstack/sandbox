@@ -423,7 +423,9 @@ func TestResyncRecordsADownEgressLaneTap(t *testing.T) {
 		o.Sweep = func(map[string]bool) error { return nil }
 	})
 
-	m.resyncEgress(t.Context(), live, map[string]bool{})
+	if err := m.resyncEgress(t.Context(), live, map[string]bool{}); err != nil {
+		t.Fatal(err)
+	}
 
 	m.mu.Lock()
 	kept := m.claimed[sb.ID] == sb

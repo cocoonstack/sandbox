@@ -53,6 +53,20 @@ type claimDTO struct {
 	Failed         string             `json:"failed,omitempty"`
 }
 
+type volumeRetirementDTO struct {
+	SandboxID string         `json:"sandbox_id"`
+	VMName    string         `json:"vm_name"`
+	TAP       string         `json:"tap,omitempty"`
+	Holds     []types.Volume `json:"holds"`
+	Clears    []string       `json:"clears,omitempty"`
+}
+
+type claimJournal struct {
+	FormatVersion     uint8                          `json:"format_version"`
+	Claims            map[string]*types.Sandbox      `json:"claims"`
+	VolumeRetirements map[string]volumeRetirementDTO `json:"volume_retirements"`
+}
+
 // claimRow keeps its encoded member until set replaces the row; set never edits one.
 type claimRow struct {
 	dto claimDTO
@@ -68,41 +82,123 @@ type claimStore struct {
 	writeMu sync.Mutex
 	buf     []byte
 
-	mu      sync.Mutex
-	rows    map[string]*claimRow
-	seq     uint64
-	written uint64
+	mu          sync.Mutex
+	rows        map[string]*claimRow
+	retirements map[string]volumeRetirementDTO
+	seq         uint64
+	written     uint64
 }
 
 func newClaimStore(dataDir string, sync bool) *claimStore {
-	return &claimStore{path: filepath.Join(dataDir, "claims.json"), sync: sync, rows: map[string]*claimRow{}}
+	return &claimStore{path: filepath.Join(dataDir, "claims.json"), sync: sync, rows: map[string]*claimRow{}, retirements: map[string]volumeRetirementDTO{}}
 }
 
 func (s *claimStore) load() (map[string]*types.Sandbox, error) {
+	claims, _, err := s.loadJournal()
+	return claims, err
+}
+
+func (s *claimStore) loadJournal() (map[string]*types.Sandbox, map[string]volumeRetirementDTO, error) {
 	raw, err := os.ReadFile(s.path)
 	if errors.Is(err, fs.ErrNotExist) {
-		return map[string]*types.Sandbox{}, nil
+		return map[string]*types.Sandbox{}, map[string]volumeRetirementDTO{}, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("read claims: %w", err)
+		return nil, nil, fmt.Errorf("read claims: %w", err)
+	}
+	var envelope map[string]jsontext.Value
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		return nil, nil, fmt.Errorf("parse claims: %w", err)
+	}
+	retirements := map[string]volumeRetirementDTO{}
+	if _, versioned := envelope["format_version"]; versioned {
+		var journal claimJournal
+		if err := json.Unmarshal(raw, &journal); err != nil {
+			return nil, nil, fmt.Errorf("parse claims journal: %w", err)
+		}
+		if journal.FormatVersion != 2 {
+			return nil, nil, fmt.Errorf("unsupported claims journal format %d", journal.FormatVersion)
+		}
+		if journal.Claims == nil || journal.VolumeRetirements == nil {
+			return nil, nil, errors.New("claims journal requires claims and volume_retirements")
+		}
+		retirements = journal.VolumeRetirements
+		raw = envelope["claims"]
 	}
 	claims := map[string]*types.Sandbox{}
 	if err := json.Unmarshal(raw, &claims); err != nil {
-		return nil, fmt.Errorf("parse claims: %w", err)
+		return nil, nil, fmt.Errorf("parse claims: %w", err)
 	}
 	var fields map[string]map[string]jsontext.Value
 	if err := json.Unmarshal(raw, &fields); err != nil {
-		return nil, err
+		return nil, nil, fmt.Errorf("parse claim fields: %w", err)
 	}
 	for id, sb := range claims {
+		if sb == nil {
+			return nil, nil, fmt.Errorf("null claim %q", id)
+		}
 		if _, present := fields[id]["volumes_want"]; !present {
 			sb.VolumesWant = slices.Clone(sb.Volumes)
 		}
 		if len(sb.VolumesWant) == 0 {
 			sb.VolumesWant = nil
 		}
+		if _, retiring := retirements[sb.VMName]; retiring {
+			return nil, nil, fmt.Errorf("VM %q is both claimed and retiring", sb.VMName)
+		}
 	}
-	return claims, nil
+	for name, retirement := range retirements {
+		if name == "" || retirement.VMName != name || retirement.SandboxID == "" || len(retirement.Holds) == 0 || claims[retirement.SandboxID] != nil {
+			return nil, nil, fmt.Errorf("invalid volume retirement %q", name)
+		}
+	}
+	s.mu.Lock()
+	s.retirements = maps.Clone(retirements)
+	s.mu.Unlock()
+	return claims, retirements, nil
+}
+
+func (s *claimStore) retire(sb *types.Sandbox, holds []types.Volume) claimSnapshot {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.rows, sb.ID)
+	if len(holds) > 0 {
+		s.retirements[sb.VMName] = volumeRetirementDTO{SandboxID: sb.ID, VMName: sb.VMName, TAP: sb.TAP, Holds: slices.Clone(holds)}
+	}
+	s.seq++
+	return claimSnapshot{seq: s.seq}
+}
+
+func (s *claimStore) restore(sb *types.Sandbox) claimSnapshot {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.retirements, sb.VMName)
+	s.rows[sb.ID] = &claimRow{dto: dtoOf(sb)}
+	s.seq++
+	return claimSnapshot{seq: s.seq}
+}
+
+func (s *claimStore) finishRetirement(name string) claimSnapshot {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.retirements, name)
+	s.seq++
+	return claimSnapshot{seq: s.seq}
+}
+
+func (s *claimStore) setRetirement(retirement volumeRetirementDTO) claimSnapshot {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.retirements[retirement.VMName] = retirement
+	s.seq++
+	return claimSnapshot{seq: s.seq}
+}
+
+func (s *claimStore) retirement(name string) (volumeRetirementDTO, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	retirement, ok := s.retirements[name]
+	return retirement, ok
 }
 
 // set records each sandbox's projection and sequences the write; callers may hold m.mu.
@@ -162,8 +258,9 @@ func (s *claimStore) commit(snap claimSnapshot) error {
 		return nil
 	}
 	rows, seq := slices.AppendSeq(make([]*claimRow, 0, len(s.rows)), maps.Values(s.rows)), s.seq
+	retirements := maps.Clone(s.retirements)
 	s.mu.Unlock()
-	s.buf = append(s.buf[:0], '{')
+	s.buf = append(s.buf[:0], `{"format_version":2,"claims":{`...)
 	for i, row := range rows {
 		if row.raw == nil {
 			raw, err := encodeRow(&row.dto)
@@ -177,6 +274,12 @@ func (s *claimStore) commit(snap claimSnapshot) error {
 		}
 		s.buf = append(s.buf, row.raw...)
 	}
+	s.buf = append(s.buf, `},"volume_retirements":`...)
+	rawRetirements, err := json.Marshal(retirements)
+	if err != nil {
+		return fmt.Errorf("encode volume retirements: %w", err)
+	}
+	s.buf = append(s.buf, rawRetirements...)
 	s.buf = append(s.buf, '}')
 	if err := s.replace(s.buf); err != nil {
 		return err

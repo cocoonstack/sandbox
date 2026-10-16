@@ -296,9 +296,10 @@ type Manager struct {
 	store   *claimStore
 	volumes map[string]catalogVolume
 	// volumeAdmission counts the live holders of each volume name; guarded by m.mu.
-	volumeAdmission map[string]volumeHolders
-	volumeRuns      map[*types.Sandbox]*volumeRun
-	volumeErrors    map[*types.Sandbox]volumeDiagnostics
+	volumeAdmission  map[string]volumeHolders
+	volumeRuns       map[*types.Sandbox]*volumeRun
+	volumeErrors     map[*types.Sandbox]volumeDiagnostics
+	unknownVolumeVMs map[string]bool
 
 	poolStore *poolStore
 	// poolShared is the cell's pool set with a meta store; poolVersion, under m.mu, is its newest version applied.

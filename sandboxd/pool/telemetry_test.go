@@ -124,13 +124,9 @@ func TestTenantStampedInJournals(t *testing.T) {
 		t.Fatalf("claim: %v", err)
 	}
 
-	raw, err := os.ReadFile(filepath.Join(m.dataDir, "claims.json"))
+	claims, err := m.store.load()
 	if err != nil {
-		t.Fatalf("read claims journal: %v", err)
-	}
-	claims := map[string]*types.Sandbox{}
-	if err = json.Unmarshal(raw, &claims); err != nil {
-		t.Fatalf("parse claims journal: %v", err)
+		t.Fatalf("load claims journal: %v", err)
 	}
 	if claims[sb.ID] == nil || claims[sb.ID].Tenant != "acme" {
 		t.Errorf("persisted claim %+v, want tenant acme", claims[sb.ID])
