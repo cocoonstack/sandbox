@@ -52,7 +52,7 @@ const (
 	vsockPollInterval = 100 * time.Millisecond
 	defaultTTL        = 5 * time.Minute
 	maxTTL            = 24 * time.Hour
-	// One missed renewal never fences: the next one lands before the fence at ttl-margin.
+	// A renewal missed once fences only if the next, 2*every after the last success, takes over ttl-margin-2*every to answer.
 	leaseTTL    = 15 * time.Second
 	leaseRenew  = 5 * time.Second
 	leaseMargin = 3 * time.Second

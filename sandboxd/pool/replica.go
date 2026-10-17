@@ -77,7 +77,7 @@ func (m *Manager) replicateOnce(ctx context.Context) {
 	}()
 }
 
-// replicable reports whether sb is a running claim; callers hold m.mu.
+// replicable excludes a claim that is paused, archived or archiving, failed, or whose tenant was removed; callers hold m.mu.
 func (m *Manager) replicable(sb *types.Sandbox) bool {
 	_, archiving := m.archiving[sb.ID]
 	return !archiving && sb.HibernateSnap == "" && sb.PendingSnap == "" && sb.ArchiveCk == "" && sb.ArchivePending == "" && sb.Failed == "" && !m.tenantGone(sb.Tenant)

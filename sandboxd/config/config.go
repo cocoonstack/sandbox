@@ -51,7 +51,7 @@ type PoolSpec struct {
 	CaptureTrim bool `json:"capture_trim,omitzero"`
 	// Storage sizes the golden's copy-on-write disk in cocoon's --storage spelling; every clone inherits it, and empty keeps cocoon's default.
 	Storage string `json:"storage,omitempty"`
-	// ReplicateSeconds snapshots each running claim of the pool to the archive registry at this interval; zero turns replication off.
+	// ReplicateSeconds snapshots each running claim of the pool to the checkpoint store at this interval; zero turns replication off.
 	ReplicateSeconds int `json:"replicate_seconds,omitzero"`
 
 	IdleHibernateSeconds      int `json:"idle_hibernate_seconds,omitzero"`
@@ -242,7 +242,7 @@ type Config struct {
 	IdleHibernateSeconds      int `json:"idle_hibernate_seconds,omitzero"`
 	ArchiveAfterSeconds       int `json:"archive_after_seconds,omitzero"`
 	ArchiveDeleteAfterSeconds int `json:"archive_delete_after_seconds,omitzero"`
-	// ArchiveFailover lets another node adopt this node's archived claims once it leaves the mesh.
+	// ArchiveFailover lets another node adopt this node's archived and replicated claims once its node lease expires.
 	ArchiveFailover bool `json:"archive_failover,omitzero"`
 
 	PreviewListen    string `json:"preview_listen,omitempty"`

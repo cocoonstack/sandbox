@@ -241,8 +241,9 @@ was waking or releasing when it died.
 
 With `archive_failover` every node renews one row of `sandboxd_nodes (cell,
 node, lease_until)` every 5 seconds, with a single upsert on the database clock
-that covers the whole node: `lease_until = now() + 15 s`. The lease outlives a
-missed renewal. The table is created at start when it is missing, and a node
+that covers the whole node: `lease_until = now() + 15 s`. A renewal that fails
+once does not lose the lease or trip the fence, as long as the next one
+answers within 2 seconds of its start. The table is created at start when it is missing, and a node
 with no row counts as expired. Adoption and the departed-owner sweep consult the
 lease, never mesh membership, so a node the mesh lost but the database still
 hears keeps its claims, and a node the mesh still lists but the database no
@@ -263,22 +264,34 @@ checkpoint store and keeps each claim's registry row on the latest snapshot:
   the claim's row is put with this node as owner and the replica as checkpoint,
   and the previous replica is deleted. A round that fails logs a warning and
   retries at the next interval; the old replica and row stay as they were, and
-  the claim keeps running. A claim gets its first replica one interval after
+  the claim keeps running. The round journals the checkpoint it is about to
+  register before it writes the row, and deletes it only when the write is
+  refused. A write whose outcome is unknown leaves the checkpoint in place, and
+  the next round, a release, an archive, a wake, the hourly sweep and a restart
+  settle it by reading the row: a row on that checkpoint promotes it, another
+  owner's row drops the claim, and an absent row means the adopter finished
+  when the checkpoint is gone and a write that never landed when it is still
+  there. A claim with such an intent counts as replicated for the fence. A claim gets its first replica one interval after
   it is claimed (or after a restart). A hibernated, archived or failed claim,
   one whose tenant was removed, and one with volumes (capture refuses them;
-  logged once per claim) is skipped. Rounds share the maintenance budget with
+  logged once per claim) is skipped; a replicated claim that gains volumes
+  drops its row and replica. The claim's policy pool, not its own template key,
+  picks the interval, so a claim cloned from a template promoted out of a
+  replicating pool follows that pool. Rounds share the maintenance budget with
   refill and never take the share refill keeps. A node whose lease is overdue
   starts none, and a round whose registry is down fails before it captures.
 - **Restore.** A lost node's replica is adopted like an archive: the first
   `Lookup` that reaches another node after the lease expires takes the row,
-  records the claim as archived on the replica, and the next call wakes it
+  records the claim as archived on the replica with the adopter pool's
+  retention window, and the next call wakes it
   through the archive wake, which restores the guest with its memory and
   processes. The claim resumes from its last snapshot: everything after it, and
   the connections open at the time, are lost, so the data loss is at most the
   interval.
 - **Lifecycle.** A release consumes the row, then deletes the replica and the
   tombstone. A hibernate leaves the row on the last replica. An archive puts its
-  own checkpoint over the row and deletes the replica. A lease expiry
+  own checkpoint over the row, with its retention deadline, and deletes the
+  replica. A lease expiry
   with `on_expire` release drops the row and the replica first, and the next reap
   destroys the claim; with `on_expire` archive, the archive puts its checkpoint
   over the row. Turning `replicate_seconds`
@@ -286,18 +299,34 @@ checkpoint store and keeps each claim's registry row on the latest snapshot:
   the next pass. A restart keeps the node's own live row for a running claim
   and takes the checkpoint a crashed round left on it; a claim whose row another
   node holds, or whose row a finished adopter consumed, is dropped with its VM.
-  The hourly sweep is unchanged apart from the lease rule.
+  A replica row has no retention deadline: the hourly sweep never purges it,
+  because no round refreshes it while the claim is hibernated, and retention
+  starts when the claim is archived or adopted. The rows of a node that never
+  returns therefore stay until a client adopts them, a bounded residue of one
+  row and one checkpoint per claim. Apart from that and the lease rule the
+  sweep is unchanged.
 - **Self-fencing.** A node whose renewal is overdue by 12 seconds (the lease
-  length minus a 3 second margin; one missed renewal never gets there) stops
-  serving every replicated claim it holds: relay, exec, ports and preview answer `503 lease lost; retry`. The
-  guest has no NIC on the `none` lane, so it is unreachable except through the
-  node, and the node destroys nothing. Claims that are not replicated stay
-  served. When a renewal succeeds again, the node reads the rows of its
-  replicated claims: those it still owns are served again, and those another
-  node took, or took and finished, are dropped with their VMs. A node that
-  starts fenced and lifts the fence with its first renewal. The margin makes
-  the fence close 3 seconds before another node may adopt, so no moment has two
-  serving copies, partitions included. When the fence closes, every open
+  length minus a 3 second margin, counted from the start of the last renewal
+  that answered) stops serving every replicated claim it holds: relay, exec,
+  ports, preview and `/owner` answer `503 lease lost; retry` (`/owner` answers
+  404, so a `Lookup` moves on to the other nodes). The guest has no NIC on the
+  `none` lane, so it is unreachable except through the node, and the node
+  destroys nothing. Claims that are not replicated stay served. A node starts
+  fenced and lifts the fence after its first renewal that is followed by a
+  confirmation. The confirmation runs beside the renew loop, which keeps
+  renewing: for each replicated claim the node takes the row back for itself in
+  one compare-and-set, which the row lock serializes against adopters, and
+  retries once on a stale epoch. A claim whose row another node took, or took
+  and finished, is forgotten at once and its VM removed in the background. The
+  fence lifts only if the whole confirmation finished within 12 seconds of the
+  start of the renewal that began it; a slower one leaves the node fenced for
+  the next renewal to repeat. The margin makes the fence close 3 seconds before
+  another node may adopt, so no moment has two serving copies, partitions
+  included. This holds while the node's clock and the database's run at the same
+  rate to within that margin over 12 seconds, and ignores skew between them,
+  because both sides count from a renewal's own start. The guest of a claim the
+  fence closed keeps running without a NIC until the node returns and removes
+  it, and its state is discarded. When the fence closes, every open
   stream of a replicated claim on the node is closed too: the agent relay
   (including parked keep-alive relays, whose later RPCs never pass the
   resolution gate), the exec call, port relays and preview requests. A client

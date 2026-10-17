@@ -1027,7 +1027,9 @@ this node owns the sandbox, 404 otherwise. With
 [`archive_failover`](cluster.md#archived-claims-across-node-loss), a node that
 does not hold the sandbox adopts it when its row names an owner whose node
 lease expired, and answers 200; 503 with `Retry-After` when the meta store is
-down. A row whose owner's lease is live is never adopted: 404. With `client_advertise` configured,
+down. A row whose owner's lease is live is never adopted: 404. A node whose
+lease is overdue answers 404 for the replicated claims it holds, so the
+`Lookup` scatter moves on. With `client_advertise` configured,
 `owner_addr` is that node's full HTTP(S) origin instead; the same contract applies
 to claim and fork responses. Used by the SDK's `Lookup` scatter.
 
