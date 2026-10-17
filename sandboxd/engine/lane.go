@@ -1,19 +1,15 @@
 package engine
 
-import "context"
+import (
+	"context"
 
-const (
-	LaneRelay  Lane = "relay"
-	LaneDirect Lane = "direct"
-
-	laneFile = "/etc/silkd-lane"
+	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
-// Lane is the host's verdict on how a guest's traffic leaves: through the relay when its NIC is nft-locked, directly when the NIC routes.
-type Lane string
+const laneFile = "/etc/silkd-lane"
 
 // MarkLane writes the verdict into the guest, where silkd and the image's units read it; the nft lock is invisible from inside.
-func (e *Engine) MarkLane(ctx context.Context, vsockSocket string, lane Lane) error {
+func (e *Engine) MarkLane(ctx context.Context, vsockSocket string, lane types.NetRoute) error {
 	ctx, cancel := context.WithTimeout(ctx, cmdTimeout)
 	defer cancel()
 	return e.silkdWriteFile(ctx, vsockSocket, laneFile, 0o644, []byte(lane+"\n"))

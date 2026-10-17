@@ -297,7 +297,7 @@ func (f *fakeEngine) InstallCACert(context.Context, string, []byte) error {
 	return nil
 }
 
-func (f *fakeEngine) MarkLane(context.Context, string, engine.Lane) error {
+func (f *fakeEngine) MarkLane(context.Context, string, types.NetRoute) error {
 	return nil
 }
 

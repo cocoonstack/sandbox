@@ -1556,7 +1556,7 @@ func (f *fakeEngine) InstallCACert(_ context.Context, vsockSocket string, _ []by
 	return f.installCAErr
 }
 
-func (f *fakeEngine) MarkLane(_ context.Context, _ string, lane engine.Lane) error {
+func (f *fakeEngine) MarkLane(_ context.Context, _ string, lane types.NetRoute) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.laneMarks = append(f.laneMarks, string(lane))

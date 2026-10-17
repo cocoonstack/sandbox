@@ -17,7 +17,6 @@ import (
 
 	"github.com/cocoonstack/sandbox/sandboxd/config"
 	"github.com/cocoonstack/sandbox/sandboxd/egress"
-	"github.com/cocoonstack/sandbox/sandboxd/engine"
 	"github.com/cocoonstack/sandbox/sandboxd/netfilter"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
@@ -25,7 +24,7 @@ import (
 // Engine is the VM engine surface the host needs: a VM's tap, and a guest's lane verdict and egress root.
 type Engine interface {
 	Inspect(ctx context.Context, name string) (types.VMRecord, bool, error)
-	MarkLane(ctx context.Context, vsockSocket string, lane engine.Lane) error
+	MarkLane(ctx context.Context, vsockSocket string, lane types.NetRoute) error
 	InstallCACert(ctx context.Context, vsockSocket string, certPEM []byte) error
 }
 
@@ -238,7 +237,7 @@ func (h *Host) UnlockTap(tap string) error {
 
 // Route is how sb's guest reaches the network now: its own NIC, the proxy behind a bound door, or nothing.
 func (h *Host) Route(sb *types.Sandbox) types.NetRoute {
-	if h.Lane(sb.Key) == engine.LaneDirect {
+	if h.Lane(sb.Key) == types.NetRouteDirect {
 		return types.NetRouteDirect
 	}
 	h.mu.Lock()
@@ -250,14 +249,14 @@ func (h *Host) Route(sb *types.Sandbox) types.NetRoute {
 }
 
 // Lane is the verdict a guest receives; the none lane has no NIC to route through and gets none.
-func (h *Host) Lane(key types.PoolKey) engine.Lane {
+func (h *Host) Lane(key types.PoolKey) types.NetRoute {
 	switch {
 	case key.Net != types.NetEgress:
 		return ""
 	case h.LocksNIC(key):
-		return engine.LaneRelay
+		return types.NetRouteRelay
 	default:
-		return engine.LaneDirect
+		return types.NetRouteDirect
 	}
 }
 
