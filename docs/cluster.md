@@ -187,8 +187,15 @@ replication rounds write it, so the claim path is unchanged.
   itself, and a node that tries to take its row is refused with a 404.
   A draining node never adopts. Adoption checks no tenant `max_claims` or node
   `max_claims`: the claim already exists, and a refusal could strand it.
-- **Fencing.** Every write is a compare-and-set on the row's epoch, and every
-  epoch comes from one database sequence, so none is ever reused. A wake takes
+- **Fencing.** Take, consume and delete are compare-and-sets on the row's
+  epoch, and so is the write of a replica round and of the archive of a claim
+  that holds a replica (`Replace`, which also requires this node as owner and a
+  live row): an absent row at a held epoch refuses it, so a round that outlived
+  an adoption cannot recreate the row. The writes that remain owner-guarded
+  upserts are the first write of a row, when this node holds no epoch (the first
+  replica, the archive of a claim with no row), and the re-arm of this node's
+  own tombstone. Every epoch comes from one database sequence, so none is ever
+  reused. A wake takes
   the row before it restores and consumes it before it commits: the row turns
   into a tombstone, deleted only once the checkpoint is gone. A release or a
   retention purge consumes the row before the checkpoint goes; with failover
@@ -271,8 +278,10 @@ checkpoint store and keeps each claim's registry row on the latest snapshot:
   settle it by reading the row: a row on that checkpoint promotes it, another
   owner's row drops the claim, and an absent row means the adopter finished
   when the checkpoint is gone and a write that never landed when it is still
-  there. A claim with such an intent counts as replicated for the fence. A claim gets its first replica one interval after
-  it is claimed (or after a restart). A hibernated, archived or failed claim,
+  there. A refused write reads the row: one this node still owns only had a
+  stale epoch and is refreshed, and an absent or foreign row drops the claim and
+  its VM. A claim gets its first replica one interval after it is claimed (or
+  after a restart). A hibernated, archived or failed claim,
   one whose tenant was removed, and one with volumes (capture refuses them;
   logged once per claim) is skipped; a replicated claim that gains volumes
   drops its row and replica. The claim's policy pool, not its own template key,
@@ -287,7 +296,8 @@ checkpoint store and keeps each claim's registry row on the latest snapshot:
   through the archive wake, which restores the guest with its memory and
   processes. The claim resumes from its last snapshot: everything after it, and
   the connections open at the time, are lost, so the data loss is at most the
-  interval.
+  time since the last successful round: one interval while rounds succeed, more
+  while they fail and the older replica stands.
 - **Lifecycle.** A release consumes the row, then deletes the replica and the
   tombstone. A hibernate leaves the row on the last replica. An archive puts its
   own checkpoint over the row, with its retention deadline, and deletes the
@@ -308,26 +318,32 @@ checkpoint store and keeps each claim's registry row on the latest snapshot:
 - **Self-fencing.** A node whose renewal is overdue by 12 seconds (the lease
   length minus a 3 second margin, counted from the start of the last renewal
   that answered) stops serving every replicated claim it holds: relay, exec,
-  ports, preview and `/owner` answer `503 lease lost; retry` (`/owner` answers
-  404, so a `Lookup` moves on to the other nodes). The guest has no NIC on the
-  `none` lane, so it is unreachable except through the node, and the node
-  destroys nothing. Claims that are not replicated stay served. A node starts
-  fenced and lifts the fence after its first renewal that is followed by a
-  confirmation. The confirmation runs beside the renew loop, which keeps
+  ports and preview answer `503 lease lost; retry`, and `/owner` answers 404 so
+  a `Lookup` moves on to the other nodes. A claim is replicated when its policy
+  pool has `replicate_seconds`, from the moment it is claimed, adopted or
+  loaded, whether or not a round has run, so the fence covers it before its
+  first replica; the setting is restart-only so that decision cannot go stale.
+  The guest has no NIC on the `none` lane, so it is unreachable except through
+  the node, and the node destroys nothing. Claims of pools that do not
+  replicate stay served. A node starts fenced and lifts the fence after its
+  first renewal that is followed by a confirmation. The confirmation runs beside the renew loop, which keeps
   renewing: for each replicated claim the node takes the row back for itself in
   one compare-and-set, which the row lock serializes against adopters, and
   retries once on a stale epoch. A claim whose row another node took, or took
-  and finished, is forgotten at once and its VM removed in the background. The
-  fence lifts only if the whole confirmation finished within 12 seconds of the
-  start of the renewal that began it; a slower one leaves the node fenced for
-  the next renewal to repeat. The margin makes the fence close 3 seconds before
+  and finished, is forgotten at once and its VM removed in the background; a
+  claim whose row is still this node's but keeps refusing the write leaves the
+  node fenced and is retried at the next renewal. The lift replaces the fenced
+  state this renewal saw, only if it is still current, and trips again at once
+  if more than 12 seconds passed since the start of that renewal; a slower
+  confirmation therefore leaves the node fenced for the next renewal to repeat. The margin makes the fence close 3 seconds before
   another node may adopt, so no moment has two serving copies, partitions
   included. This holds while the node's clock and the database's run at the same
   rate to within that margin over 12 seconds, and ignores skew between them,
   because both sides count from a renewal's own start. The guest of a claim the
   fence closed keeps running without a NIC until the node returns and removes
   it, and its state is discarded. When the fence closes, every open
-  stream of a replicated claim on the node is closed too: the agent relay
+  stream of a replicated claim on the node is closed too, one opened before the
+  claim's first replica included: the agent relay
   (including parked keep-alive relays, whose later RPCs never pass the
   resolution gate), the exec call, port relays and preview requests. A client
   retries and meets the 503 until the lease is back or the claim moved.
@@ -335,14 +351,16 @@ checkpoint store and keeps each claim's registry row on the latest snapshot:
 - **Availability.** The design chooses consistency over availability for
   replicated claims. A registry outage longer than the fence threshold (12
   seconds) stops service of replicated claims on every node until PostgreSQL
-  returns, because no node can prove it still owns them. Claims that are not
-  replicated, and archived claims, are unaffected.
+  returns, because no node can prove it still owns them. Claims of pools that
+  do not replicate are unaffected. An archived claim of a replicating pool is
+  gated like a running one while the node is fenced, so its wake waits too.
 
 A replica costs, per claim per interval, one capture pause, one upload, one
 registry read, one write and one delete; the node's own cost is one scan of its
-claims every 5 seconds. Resolving a claim for a stream gains one atomic load (two for a
-replicated claim); a replicated stream also holds one watcher goroutine.
-Nothing runs per frame.
+claims every 5 seconds. Resolving a claim for a stream of a pool that does not
+replicate reads one plain field and no atomic; a replicated claim adds one
+atomic load of the fence state and its stream one watcher goroutine. Adding a
+claim to a failover node gains one map lookup. Nothing runs per frame.
 
 ## Templates on a cluster
 

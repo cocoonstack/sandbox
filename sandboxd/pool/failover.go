@@ -371,7 +371,7 @@ func (m *Manager) dropAdopted(ctx context.Context, sb *types.Sandbox) {
 
 // forgetAdopted forgets the claim at once and returns the removal of its VM; nil when the claim was already gone.
 func (m *Manager) forgetAdopted(ctx context.Context, sb *types.Sandbox) func() {
-	logger := log.WithFunc("pool.dropAdopted")
+	logger := log.WithFunc("pool.forgetAdopted")
 	m.mu.Lock()
 	ck, vm, snap := sb.ArchiveCk, sb.VMName, sb.HibernateSnap
 	m.mu.Unlock()
@@ -511,7 +511,8 @@ func (m *Manager) fenceArchived(ctx context.Context, claims map[string]*types.Sa
 		case ok && rec.Owner != m.nodeID:
 			drop = true
 		case sb.HasReplica() && sb.ArchivePending == "":
-			moved, err := false, error(nil)
+			var moved bool
+			var err error
 			if !ok {
 				moved, err = m.replicaGone(ctx, sb)
 			}

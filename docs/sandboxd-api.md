@@ -961,7 +961,8 @@ them). 426 without the upgrade header, 404 unknown sandbox, 409 a failed
 sandbox, 502 guest unreachable, 503 `lease lost; retry` for a replicated claim
 while its node's lease is overdue (see
 [running claims](cluster.md#running-claims-across-node-loss)). A relay of a
-replicated claim already open when the lease turns overdue is closed.
+claim of a replicating pool that is already open when the lease turns overdue
+is closed, whether or not it has a replica yet.
 
 ## GET /v1/sandboxes/{id}/ports/{port}
 
