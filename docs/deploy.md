@@ -467,9 +467,10 @@ attached until cocoon confirms it gone, so a conflicting claim gets 409
 instead of an attach failure. A record still in cocoon's `creating` state is
 reclaimed through `vm reconcile-stale-create` (cocoon ≥ v0.5.8), which
 refuses while a clone is in flight instead of deleting the VM out from under
-it; older cocoons fall back to forced removal. Any golden no pool uses is deleted. Then the refill loop
-builds one golden snapshot per pool (a one-time cold boot + snapshot export,
-tens of seconds) and keeps each pool topped up with claim-ready clones.
+it; older cocoons fall back to forced removal. Any golden no pool uses is
+deleted. Then the refill loop builds one golden snapshot per pool (a one-time
+cold boot + snapshot export, tens of seconds) and keeps each pool topped up
+with claim-ready clones.
 `GET /v1/info` shows `"golden": true` and `warm` at target when the node is
 ready to serve warm claims.
 
