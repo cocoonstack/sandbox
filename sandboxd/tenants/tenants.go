@@ -122,6 +122,24 @@ func Diff(cur, next map[string]TenantRecord) Change {
 	return c
 }
 
+func KeepTokens(cur map[string]TenantRecord, records []TenantRecord) (map[string]TenantRecord, error) {
+	next := make(map[string]TenantRecord, len(records))
+	for _, r := range records {
+		if _, dup := next[r.Name]; dup {
+			return nil, fmt.Errorf("%w: duplicate tenant name %q", ErrInvalid, r.Name)
+		}
+		if r.TokenSHA256 == "" {
+			kept, ok := cur[r.Name]
+			if !ok {
+				return nil, fmt.Errorf("%w: tenant %q needs a token", ErrInvalid, r.Name)
+			}
+			r.TokenSHA256 = kept.TokenSHA256
+		}
+		next[r.Name] = r
+	}
+	return next, nil
+}
+
 // TokenSHA256 is the hex SHA-256 a tenant token is kept as outside config.json.
 func TokenSHA256(token string) string {
 	sum := sha256.Sum256([]byte(token))

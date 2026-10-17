@@ -104,12 +104,12 @@ func (s *Source) List(_ context.Context, after string, limit int) ([]tenants.Ten
 
 func (s *Source) Put(_ context.Context, r tenants.TenantRecord) (tenants.Change, error) {
 	return s.apply(func(cur *set) ([]tenants.TenantRecord, error) {
-		kept, err := cur.keepToken(r)
+		kept, err := tenants.KeepTokens(cur.byName, []tenants.TenantRecord{r})
 		if err != nil {
 			return nil, err
 		}
 		next := maps.Clone(cur.byName)
-		next[kept.Name] = kept
+		maps.Copy(next, kept)
 		return slices.Collect(maps.Values(next)), nil
 	})
 }
@@ -127,13 +127,13 @@ func (s *Source) Delete(_ context.Context, name string) (tenants.Change, error) 
 
 func (s *Source) Replace(_ context.Context, records []tenants.TenantRecord) (tenants.Change, error) {
 	return s.apply(func(cur *set) ([]tenants.TenantRecord, error) {
+		next, err := tenants.KeepTokens(cur.byName, records)
+		if err != nil {
+			return nil, err
+		}
 		out := make([]tenants.TenantRecord, len(records))
 		for i, r := range records {
-			kept, err := cur.keepToken(r)
-			if err != nil {
-				return nil, err
-			}
-			out[i] = kept
+			out[i] = next[r.Name]
 		}
 		return out, nil
 	})
@@ -225,16 +225,4 @@ func (s *set) records() []tenants.TenantRecord {
 		out[i] = s.byName[name]
 	}
 	return out
-}
-
-func (s *set) keepToken(r tenants.TenantRecord) (tenants.TenantRecord, error) {
-	if r.TokenSHA256 != "" {
-		return r, nil
-	}
-	kept, ok := s.byName[r.Name]
-	if !ok {
-		return tenants.TenantRecord{}, fmt.Errorf("%w: tenant %q needs a token", tenants.ErrInvalid, r.Name)
-	}
-	r.TokenSHA256 = kept.TokenSHA256
-	return r, nil
 }

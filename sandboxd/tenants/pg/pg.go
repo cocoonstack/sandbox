@@ -229,7 +229,7 @@ func (s *Source) Replace(ctx context.Context, records []tenants.TenantRecord) (t
 			return err
 		}
 		byName := indexByName(cur)
-		next, err := keepTokens(byName, records)
+		next, err := tenants.KeepTokens(byName, records)
 		if err != nil {
 			return err
 		}
@@ -402,24 +402,6 @@ func keepTokenUpdate(ctx context.Context, tx pgx.Tx, r tenants.TenantRecord, c *
 		c.Changed = []string{r.Name}
 	}
 	return err
-}
-
-func keepTokens(cur map[string]tenants.TenantRecord, records []tenants.TenantRecord) (map[string]tenants.TenantRecord, error) {
-	next := make(map[string]tenants.TenantRecord, len(records))
-	for _, r := range records {
-		if _, dup := next[r.Name]; dup {
-			return nil, fmt.Errorf("%w: duplicate tenant name %q", tenants.ErrInvalid, r.Name)
-		}
-		if r.TokenSHA256 == "" {
-			kept, ok := cur[r.Name]
-			if !ok {
-				return nil, fmt.Errorf("%w: tenant %q needs a token", tenants.ErrInvalid, r.Name)
-			}
-			r.TokenSHA256 = kept.TokenSHA256
-		}
-		next[r.Name] = r
-	}
-	return next, nil
 }
 
 func indexByName(records []tenants.TenantRecord) map[string]tenants.TenantRecord {
