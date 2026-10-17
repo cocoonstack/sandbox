@@ -214,6 +214,64 @@ func TestReplicaRowOfAHibernatedClaimHasNoRetentionDeadline(t *testing.T) {
 	})
 }
 
+func TestReplicaRetireAfterAnArchiveLeavesTheArchiveRowAlone(t *testing.T) {
+	c := newReplicaCluster(t)
+	a := c.node(t, "a", t.TempDir(), keepAnHour)
+	sb := mustClaim(t, a, testKey)
+	replicateNow(t, a, sb)
+	mustArchive(t, a, sb)
+	row, _, _ := c.reg.Get(t.Context(), sb.ID)
+	ck := sb.ArchiveCk
+
+	a.retireReplica(t.Context(), sb)
+	rec, ok, _ := c.reg.Get(t.Context(), sb.ID)
+	if !ok || rec.Consumed || rec.Epoch != row.Epoch || rec.Checkpoint != ck || !ckExists(t, a, ck) {
+		t.Errorf("row %+v present %v, archive ck kept %v, want the archive's row and checkpoint untouched by a stale retire", rec, ok, ckExists(t, a, ck))
+	}
+}
+
+func TestReplicaClaimThatGainsVolumesStopsBeingReplicated(t *testing.T) {
+	c := newReplicaCluster(t)
+	a := c.node(t, "a", t.TempDir(), keepAnHour)
+	a.fenced.Store(false)
+	sb := mustClaim(t, a, testKey)
+	replicateNow(t, a, sb)
+	ck := a.replicaOf(sb)
+	a.mu.Lock()
+	sb.Volumes = []types.Volume{{Name: "data"}}
+	a.mu.Unlock()
+
+	a.replicateOnce(t.Context())
+	waitFor(t, func() bool { return !a.replicating.Load() })
+	if _, ok, _ := c.reg.Get(t.Context(), sb.ID); ok || a.replicaOf(sb) != "" || ckExists(t, a, ck) || sb.Replicated() {
+		t.Errorf("row present %v, replica %q, ck kept %v, replicated %v, want the stale row and replica retired", ok, a.replicaOf(sb), ckExists(t, a, ck), sb.Replicated())
+	}
+	if _, held := a.byID(sb.ID); !held {
+		t.Error("retiring the replica dropped the claim")
+	}
+}
+
+func TestReplicaFollowsThePolicyPoolOfAPromotedTemplate(t *testing.T) {
+	c := newReplicaCluster(t)
+	a := c.node(t, "a", t.TempDir(), keepAnHour)
+	a.fenced.Store(false)
+	sb := mustClaim(t, a, testKey)
+	a.mu.Lock()
+	sb.Key, sb.PolicySource = types.PoolKey{Template: "promoted:v1", Net: types.NetNone, Size: testKey.Size}, testKey
+	a.mu.Unlock()
+
+	a.replicateOnce(t.Context())
+	waitFor(t, func() bool { return !a.replicating.Load() })
+	a.mu.Lock()
+	a.replicas[sb.ID] = replicaState{tried: time.Now().Add(-time.Hour)}
+	a.mu.Unlock()
+	a.replicateOnce(t.Context())
+	waitFor(t, func() bool { return !a.replicating.Load() })
+	if a.replicaOf(sb) == "" {
+		t.Error("a claim of a template promoted out of a replicating pool was not replicated")
+	}
+}
+
 func TestReplicaFailedCaptureKeepsTheOldReplicaAndRow(t *testing.T) {
 	c := newReplicaCluster(t)
 	a := c.node(t, "a", t.TempDir(), keepAnHour)

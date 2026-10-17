@@ -28,7 +28,7 @@ func (m *Manager) replicateOnce(ctx context.Context) {
 	next := make(map[string]replicaState, len(m.replicas))
 	m.mu.Lock()
 	for id, sb := range m.claimed {
-		every, st := v.poolReplicate[sb.Key], m.replicas[id]
+		every, st := v.poolReplicate[sb.PolicyKey()], m.replicas[id]
 		switch {
 		case every <= 0:
 			if sb.Replicated() {
@@ -36,6 +36,9 @@ func (m *Manager) replicateOnce(ctx context.Context) {
 			}
 		case !m.replicable(sb):
 		case m.hasVolumeHolds(sb):
+			if sb.Replicated() {
+				retire = append(retire, sb)
+			}
 			if !st.skipLogged {
 				withVolumes = append(withVolumes, id)
 			}
