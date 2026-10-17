@@ -68,6 +68,9 @@ func (m *Manager) hibernateLocked(ctx context.Context, sb *types.Sandbox) error 
 		}
 		return nil
 	}
+	if err := m.diskErr(); err != nil {
+		return fmt.Errorf("hibernate %s: %w", sb.ID, err)
+	}
 	// a started transition must finish, or the record disagrees with the VM
 	ctx = context.WithoutCancel(ctx)
 	// cocoon rejects sb.ID's underscore, so the snapshot name is VMName-based

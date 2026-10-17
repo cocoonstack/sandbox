@@ -39,10 +39,10 @@ func (m *Manager) checkDisk(ctx context.Context) {
 	}
 	switch was := m.diskLow.Swap(low); {
 	case low && !was:
-		logger.Warnf(ctx, "%s has %s free, reserve %s: refusing claims, wakes and refills",
+		logger.Warnf(ctx, "%s has %s free, reserve %s: refusing claims, wakes, snapshots and refills",
 			lowDir, units.BytesSize(float64(lowFree)), units.BytesSize(float64(v.diskReserve)))
 	case was && !low:
-		logger.Info(ctx, "disk back above reserve: admitting claims, wakes and refills")
+		logger.Info(ctx, "disk back above reserve: admitting claims, wakes, snapshots and refills")
 	}
 }
 

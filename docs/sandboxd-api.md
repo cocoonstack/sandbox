@@ -399,7 +399,8 @@ snapshot) at its deadline, unless it claimed `on_expire: archive` or its pool
 archives. When to hibernate is the caller's policy — the
 node only provides the transition. 204 on success, 404 unknown id or wrong
 token, 409 on the egress lane or when volumes are attached (neither kind of
-sandbox hibernates; see [egress](egress.md)).
+sandbox hibernates; see [egress](egress.md)), 429 while the disk is under
+[`disk_reserve`](deploy.md).
 
 ## POST /v1/sandboxes/{id}/wake
 
@@ -515,7 +516,7 @@ the export they were set on, which the new one replaces.
 configured pool, the template is owned by another tenant, or the sandbox is
 on the egress lane, has volumes attached (see [egress](egress.md)), or is
 archived (an exec or file call wakes it first), 404 unknown id or wrong
-sandbox token.
+sandbox token, 429 while the disk is under [`disk_reserve`](deploy.md).
 
 ## DELETE /v1/templates?template=…&net=…&size=…
 
@@ -705,7 +706,7 @@ created_at}}` — `tenant` records the calling tenant, absent for root.
 400 bad body or name, 401 bad api token, 404 unknown id or wrong sandbox
 token, 409 egress-lane sandbox, one with volumes attached (see
 [egress](egress.md)), or an archived one (an exec or file call wakes it
-first).
+first), 429 while the disk is under [`disk_reserve`](deploy.md).
 
 ## POST /v1/checkpoints/{id}/claim
 

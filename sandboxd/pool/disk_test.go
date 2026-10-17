@@ -59,6 +59,36 @@ func TestDiskUnderReserveAdvertisesNoWarm(t *testing.T) {
 	}
 }
 
+func TestDiskUnderReserveHoldsHibernatesAndCaptures(t *testing.T) {
+	dir := t.TempDir()
+	m, err := NewManager(t.Context(), &config.Config{DataDir: dir, DiskReserve: &config.DiskReserve{Free: "1000P"}, Pools: []config.PoolSpec{{PoolKey: testKey}}}, newFakeEngine(), testSecrets(t))
+	if err != nil {
+		t.Fatalf("setup manager: %v", err)
+	}
+	sb := mustClaim(t, m, testKey)
+	cred := Cred{Token: sb.Token}
+	m.checkDisk(t.Context())
+
+	if err := m.Hibernate(t.Context(), sb.ID, cred); !errors.Is(err, ErrQuota) || !benignSweepErr(err) {
+		t.Errorf("hibernate under the reserve: %v, want ErrQuota, which a sweep does not log as a failure", err)
+	}
+	if got, _ := m.Sandbox(sb.ID); got.Hibernated {
+		t.Errorf("sandbox %s hibernated under the reserve", sb.ID)
+	}
+	if _, err := m.Checkpoint(t.Context(), sb.ID, cred, "", ""); !errors.Is(err, ErrQuota) {
+		t.Errorf("checkpoint under the reserve: %v, want ErrQuota", err)
+	}
+	if _, _, err := m.Promote(t.Context(), sb.ID, cred, "kept", ""); !errors.Is(err, ErrQuota) {
+		t.Errorf("promote under the reserve: %v, want ErrQuota", err)
+	}
+
+	m.view.Store(newConfigView(&config.Config{DataDir: dir, DiskReserve: &config.DiskReserve{Free: "1K"}, Pools: []config.PoolSpec{{PoolKey: testKey}}}, testSecrets(t)))
+	m.checkDisk(t.Context())
+	if err := m.Hibernate(t.Context(), sb.ID, cred); err != nil {
+		t.Errorf("hibernate above the reserve: %v", err)
+	}
+}
+
 func TestAFailedStatfsKeepsTheDiskLowState(t *testing.T) {
 	dir := t.TempDir()
 	m, err := NewManager(t.Context(), &config.Config{DataDir: dir, DiskReserve: &config.DiskReserve{Free: "1000P"}, Pools: []config.PoolSpec{{PoolKey: testKey}}}, newFakeEngine(), testSecrets(t))
