@@ -750,7 +750,9 @@ concurrent-heal cap is already full — retryable, and the response carries a
 The peer-transfer route behind the probe and heal above — internal, not
 part of the public API; an SDK caller has no reason to call it directly.
 
-- `GET` streams the whole record — guest memory, disk, and meta — as a tar.
+- `GET` streams the whole record — guest memory, disk, and meta — as a tar
+  in which a sparse file travels as its size plus its non-zero 16 MiB chunks,
+  each with its SHA-256, so holes cost nothing on the wire.
   Operator-token only: the stream carries no tenant scoping, and its only
   real caller is a peer's heal pull, which presents the fleet `api_token`.
   401 missing or unrecognized token, 403 a valid tenant token (authenticated
