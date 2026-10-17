@@ -62,7 +62,7 @@ var wirePairs = []struct {
 	{"PoolSpec", true, config.PoolSpec{}, []string{"egress", "warmup", "egress_upstream_env", "capture_trim", "storage", "net", "size"}},
 	{"tenantsUpdate", true, server.TenantsRequest{}, nil},
 	{"tenantUpdate", true, server.TenantRequest{}, nil},
-	{"TenantSpec", true, config.TenantSpec{}, []string{"token"}},
+	{"TenantSpec", true, reflect.Zero(reflect.TypeOf(server.TenantsRequest{}.Tenants).Elem()).Interface(), []string{"token"}},
 	{"TenantInfo", false, pool.TenantInfo{}, nil},
 	{"TenantList", false, pool.TenantPage{}, nil},
 }
