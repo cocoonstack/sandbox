@@ -16,6 +16,9 @@ import (
 	"testing/iotest"
 	"time"
 
+	"github.com/projecteru2/core/log"
+	"github.com/rs/zerolog"
+
 	"github.com/cocoonstack/sandbox/protocol/wire"
 	"github.com/cocoonstack/sandbox/sandboxd/pool"
 )
@@ -166,6 +169,43 @@ func TestRelayEndsWhenItsClaimIsFenced(t *testing.T) {
 	_ = plainConn.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
 	if _, err := plainR.ReadByte(); !errors.Is(err, os.ErrDeadlineExceeded) {
 		t.Errorf("unreplicated relay read: %v, want it still open", err)
+	}
+}
+
+func TestWakeGuestLogsAClientCancelBelowError(t *testing.T) {
+	logs := &bytes.Buffer{}
+	global := log.GetGlobalLogger()
+	saved := *global
+	*global = zerolog.New(logs).Level(zerolog.InfoLevel)
+	t.Cleanup(func() { *global = saved })
+	dialer := &fakeDialer{dial: func(ctx context.Context, _ string) (net.Conn, error) { return nil, ctx.Err() }}
+	srv := New("", "node:7777", &fakeManager{}, dialer, nil, nil, nil, nil)
+
+	canceled, cancel := context.WithCancel(t.Context())
+	cancel()
+	w := httptest.NewRecorder()
+	if _, _, ok := srv.wakeGuest(canceled, w, "sb_1", "tok"); ok || w.Code != http.StatusBadGateway {
+		t.Fatalf("canceled dial: ok %v status %d, want a refused 502", ok, w.Code)
+	}
+	if logs.Len() != 0 {
+		t.Errorf("a client cancel logged %q, want nothing at info level", logs.String())
+	}
+
+	dialer.dial = func(context.Context, string) (net.Conn, error) { return nil, errors.New("connection refused") }
+	if _, _, ok := srv.wakeGuest(t.Context(), httptest.NewRecorder(), "sb_1", "tok"); ok {
+		t.Fatal("a failing dial succeeded")
+	}
+	if !strings.Contains(logs.String(), `"level":"error"`) {
+		t.Errorf("a real dial failure logged %q, want an error record", logs.String())
+	}
+
+	logs.Reset()
+	dialer.dial = func(context.Context, string) (net.Conn, error) { return nil, context.Canceled }
+	if _, _, ok := srv.wakeGuest(t.Context(), httptest.NewRecorder(), "sb_1", "tok"); ok {
+		t.Fatal("a failing dial succeeded")
+	}
+	if !strings.Contains(logs.String(), `"level":"error"`) {
+		t.Errorf("a cancel that did not come from the client logged %q, want an error record", logs.String())
 	}
 }
 

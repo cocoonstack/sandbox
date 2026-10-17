@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -82,7 +83,11 @@ func (s *Server) wakeGuest(ctx context.Context, w http.ResponseWriter, id, token
 	guest, err = s.dialer.DialSilkd(ctx, sock)
 	if err != nil {
 		done()
-		log.WithFunc("server.wakeGuest").Errorf(ctx, err, "dial silkd for %s", id)
+		if errors.Is(err, context.Canceled) && errors.Is(ctx.Err(), context.Canceled) {
+			log.WithFunc("server.wakeGuest").Debugf(ctx, "client canceled the dial of silkd for %s: %v", id, err)
+		} else {
+			log.WithFunc("server.wakeGuest").Errorf(ctx, err, "dial silkd for %s", id)
+		}
 		writeErr(w, http.StatusBadGateway, "guest agent unreachable")
 		return nil, nil, false
 	}
