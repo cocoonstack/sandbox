@@ -40,7 +40,7 @@ whole export files). Records written by an earlier release are not readable and
 there is no fallback reader: before starting the new binary, wake or release
 every archived claim and delete the checkpoints, then re-promote templates, or
 point `prefix` at an empty location. Objects of the old layout under a reused
-prefix are only removed by deleting their record or by a bucket lifecycle rule.
+prefix stay in the bucket until you delete them.
 
 The scalar egress-attachment keys are retired: rename `"bridge": "br0"` to
 `"bridges": ["br0"]` and `"network": "cni"` to `"networks": ["cni"]` before
