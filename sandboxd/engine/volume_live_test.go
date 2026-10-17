@@ -13,83 +13,64 @@ import (
 const rootMountInfo = "1 0 8:0 / / rw - ext4 /dev/vda rw\n"
 
 func TestLiveVolumeConvergesMountAndDetach(t *testing.T) {
-	sock := sockPath(t)
-	fake := serveFakeSilkd(t, sock)
-	configureVolumeDevices(fake)
-	spec := liveDiskCLI(t, "")
-	if err := os.Remove(os.Getenv("COCOON_TEST_ATTACHED")); err != nil {
-		t.Fatal(err)
-	}
-	fake.mu.Lock()
-	fake.serial["/sys/block/vdc/dev"] = []byte("8:32\n")
-	fake.serial["/proc/self/mountinfo"] = []byte(rootMountInfo)
-	fake.execHook = func(argv []string) {
-		switch argv[0] {
-		case "mount":
-			fake.serial["/proc/self/mountinfo"] = []byte(rootMountInfo + "2 1 8:32 / /data ro - ext4 /dev/vdc ro\n")
-		case "umount":
+	for _, tt := range []struct {
+		name, mount, kernelPath string
+		realpath                map[string]string
+		noRealpath              bool
+		lookups                 int
+	}{
+		{name: "canonical path", mount: "/data", kernelPath: "/data", lookups: 1},
+		{name: "symlinked parent", mount: "/workspace/data", kernelPath: "/home/u/ws/data", realpath: map[string]string{"/workspace/data": "/home/u/ws/data"}, lookups: 3},
+		{name: "trailing space behind a symlink", mount: "/ws/data ", kernelPath: `/home/u/ws/data\040`, realpath: map[string]string{"/ws/data ": "/home/u/ws/data "}, lookups: 3},
+		{name: "guest without realpath", mount: "/data", kernelPath: "/data", noRealpath: true, lookups: 1},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			sock := sockPath(t)
+			fake := serveFakeSilkd(t, sock)
+			configureVolumeDevices(fake)
+			spec := liveDiskCLI(t, "")
+			if err := os.Remove(os.Getenv("COCOON_TEST_ATTACHED")); err != nil {
+				t.Fatal(err)
+			}
+			fake.mu.Lock()
+			fake.realpath, fake.noRealpath = tt.realpath, tt.noRealpath
+			fake.serial["/sys/block/vdc/dev"] = []byte("8:32\n")
 			fake.serial["/proc/self/mountinfo"] = []byte(rootMountInfo)
-		}
-	}
-	fake.mu.Unlock()
-	e := New("cocoon", nil, nil, false, false, "")
-	for range 2 {
-		if err := e.DiskAttach(t.Context(), "sbx-1", spec); err != nil {
-			t.Fatal(err)
-		}
-		if err := e.MountLiveVolume(t.Context(), sock, spec.Name, "/data", false); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := e.DetachVolume(t.Context(), "sbx-1", sock, spec.Name, "/data"); err != nil {
-		t.Fatal(err)
-	}
-	fake.mu.Lock()
-	defer fake.mu.Unlock()
-	if changes := guestChanges(fake.execCalls); len(changes) != 3 || changes[2][0] != "umount" {
-		t.Fatalf("expected one mkdir/mount/umount, got %v", fake.execCalls)
-	}
-	args, err := os.ReadFile(os.Getenv("COCOON_TEST_ATTACH_ARGS"))
-	if err != nil || !strings.Contains(string(args), "--readonly --directio off") {
-		t.Fatalf("attach args=%s error=%v", args, err)
-	}
-}
-
-func TestLiveMountUnderSymlinkedParentConvergesAndDetaches(t *testing.T) {
-	sock := sockPath(t)
-	fake := serveFakeSilkd(t, sock)
-	configureVolumeDevices(fake)
-	spec := liveDiskCLI(t, "")
-	fake.mu.Lock()
-	fake.serial["/sys/block/vdc/dev"] = []byte("8:32\n")
-	fake.serial["/proc/self/mountinfo"] = []byte(rootMountInfo)
-	fake.realpath = map[string]string{"/workspace/data": "/home/u/ws/data"}
-	fake.execHook = func(argv []string) {
-		switch argv[0] {
-		case "mount":
-			fake.serial["/proc/self/mountinfo"] = []byte(rootMountInfo + "2 1 8:32 / /home/u/ws/data ro - ext4 /dev/vdc ro\n")
-		case "umount":
-			fake.serial["/proc/self/mountinfo"] = []byte(rootMountInfo)
-		}
-	}
-	fake.mu.Unlock()
-	e := New("cocoon", nil, nil, false, false, "")
-	if err := e.DiskAttach(t.Context(), "sbx-1", spec); err != nil {
-		t.Fatal(err)
-	}
-	for range 2 {
-		if err := e.MountLiveVolume(t.Context(), sock, spec.Name, "/workspace/data", false); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := e.DetachVolume(t.Context(), "sbx-1", sock, spec.Name, "/workspace/data"); err != nil {
-		t.Fatal(err)
-	}
-	fake.mu.Lock()
-	defer fake.mu.Unlock()
-	unmounted := slices.ContainsFunc(fake.execCalls, func(argv []string) bool { return argv[0] == "umount" })
-	if !unmounted || len(slices.DeleteFunc(slices.Clone(fake.execCalls), func(argv []string) bool { return argv[0] != "mount" })) != 1 {
-		t.Fatalf("want one mount and an unmount, got %v", fake.execCalls)
+			fake.execHook = func(argv []string) {
+				switch argv[0] {
+				case "mount":
+					fake.serial["/proc/self/mountinfo"] = []byte(rootMountInfo + "2 1 8:32 / " + tt.kernelPath + " ro - ext4 /dev/vdc ro\n")
+				case "umount":
+					fake.serial["/proc/self/mountinfo"] = []byte(rootMountInfo)
+				}
+			}
+			fake.mu.Unlock()
+			e := New("cocoon", nil, nil, false, false, "")
+			for range 2 {
+				if err := e.DiskAttach(t.Context(), "sbx-1", spec); err != nil {
+					t.Fatal(err)
+				}
+				if err := e.MountLiveVolume(t.Context(), sock, spec.Name, tt.mount, false); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := e.DetachVolume(t.Context(), "sbx-1", sock, spec.Name, tt.mount); err != nil {
+				t.Fatal(err)
+			}
+			fake.mu.Lock()
+			defer fake.mu.Unlock()
+			changes := guestChanges(fake.execCalls)
+			if len(changes) != 3 || changes[2][0] != "umount" {
+				t.Fatalf("expected one mkdir/mount/umount, got %v", fake.execCalls)
+			}
+			if lookups := len(fake.execCalls) - len(changes); lookups != tt.lookups {
+				t.Fatalf("realpath lookups = %d, want %d: %v", lookups, tt.lookups, fake.execCalls)
+			}
+			args, err := os.ReadFile(os.Getenv("COCOON_TEST_ATTACH_ARGS"))
+			if err != nil || !strings.Contains(string(args), "--readonly --directio off") {
+				t.Fatalf("attach args=%s error=%v", args, err)
+			}
+		})
 	}
 }
 
@@ -115,72 +96,6 @@ func TestLiveMountRefusesAnOccupiedPathBehindASymlink(t *testing.T) {
 	defer fake.mu.Unlock()
 	if slices.ContainsFunc(fake.execCalls, func(argv []string) bool { return argv[0] == "mount" }) {
 		t.Fatalf("mount ran over an occupied path: %v", fake.execCalls)
-	}
-}
-
-func TestLiveMountKeepsATrailingSpaceInItsPath(t *testing.T) {
-	sock := sockPath(t)
-	fake := serveFakeSilkd(t, sock)
-	configureVolumeDevices(fake)
-	spec := liveDiskCLI(t, "")
-	fake.mu.Lock()
-	fake.serial["/sys/block/vdc/dev"] = []byte("8:32\n")
-	fake.serial["/proc/self/mountinfo"] = []byte(rootMountInfo)
-	fake.execHook = func(argv []string) {
-		switch argv[0] {
-		case "mount":
-			fake.serial["/proc/self/mountinfo"] = []byte(rootMountInfo + "2 1 8:32 / /data\\040 ro - ext4 /dev/vdc ro\n")
-		case "umount":
-			fake.serial["/proc/self/mountinfo"] = []byte(rootMountInfo)
-		}
-	}
-	fake.mu.Unlock()
-	e := New("cocoon", nil, nil, false, false, "")
-	if err := e.DiskAttach(t.Context(), "sbx-1", spec); err != nil {
-		t.Fatal(err)
-	}
-	for range 2 {
-		if err := e.MountLiveVolume(t.Context(), sock, spec.Name, "/data ", false); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := e.DetachVolume(t.Context(), "sbx-1", sock, spec.Name, "/data "); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestLiveMountWorksWithoutAGuestRealpath(t *testing.T) {
-	sock := sockPath(t)
-	fake := serveFakeSilkd(t, sock)
-	configureVolumeDevices(fake)
-	spec := liveDiskCLI(t, "")
-	fake.mu.Lock()
-	fake.noRealpath = true
-	fake.serial["/sys/block/vdc/dev"] = []byte("8:32\n")
-	fake.serial["/proc/self/mountinfo"] = []byte(rootMountInfo)
-	fake.execHook = func(argv []string) {
-		switch argv[0] {
-		case "mount":
-			fake.serial["/proc/self/mountinfo"] = []byte(rootMountInfo + "2 1 8:32 / /data ro - ext4 /dev/vdc ro\n")
-		case "umount":
-			fake.serial["/proc/self/mountinfo"] = []byte(rootMountInfo)
-		}
-	}
-	fake.mu.Unlock()
-	e := New("cocoon", nil, nil, false, false, "")
-	if err := e.DiskAttach(t.Context(), "sbx-1", spec); err != nil {
-		t.Fatal(err)
-	}
-	if err := e.MountLiveVolume(t.Context(), sock, spec.Name, "/data", false); err != nil {
-		t.Fatal(err)
-	}
-	if err := e.DetachVolume(t.Context(), "sbx-1", sock, spec.Name, "/data"); err != nil {
-		t.Fatal(err)
-	}
-	fake.mu.Lock()
-	defer fake.mu.Unlock()
-	if changes := guestChanges(fake.execCalls); len(changes) != 3 || changes[2][0] != "umount" {
-		t.Fatalf("expected one mkdir/mount/umount, got %v", fake.execCalls)
 	}
 }
 
