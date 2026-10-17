@@ -1640,26 +1640,6 @@ func (f *fakeEngine) DiskAttach(ctx context.Context, _ string, spec engine.Volum
 	return err
 }
 
-func (f *fakeEngine) refuseManagedPath(path string) error {
-	f.mu.Lock()
-	dirs := slices.Clone(f.managedDirs)
-	f.mu.Unlock()
-	resolved, err := filepath.EvalSymlinks(path)
-	if err != nil {
-		resolved = path
-	}
-	for _, dir := range dirs {
-		root, evalErr := filepath.EvalSymlinks(dir)
-		if evalErr != nil {
-			root = dir
-		}
-		if rel, relErr := filepath.Rel(root, resolved); relErr == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-			return fmt.Errorf("external volume path %s is inside a cocoon-managed directory", path)
-		}
-	}
-	return nil
-}
-
 func (f *fakeEngine) MountVolume(_ context.Context, _, name, mount string, rw bool) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -1730,6 +1710,26 @@ func (f *fakeEngine) DialReader(_ context.Context, vsockSocket string) (net.Conn
 	conn, peer := net.Pipe()
 	_ = peer.Close()
 	return conn, nil
+}
+
+func (f *fakeEngine) refuseManagedPath(path string) error {
+	f.mu.Lock()
+	dirs := slices.Clone(f.managedDirs)
+	f.mu.Unlock()
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		resolved = path
+	}
+	for _, dir := range dirs {
+		root, evalErr := filepath.EvalSymlinks(dir)
+		if evalErr != nil {
+			root = dir
+		}
+		if rel, relErr := filepath.Rel(root, resolved); relErr == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return fmt.Errorf("external volume path %s is inside a cocoon-managed directory", path)
+		}
+	}
+	return nil
 }
 
 func (f *fakeEngine) list(_ context.Context) ([]types.VMRecord, error) {

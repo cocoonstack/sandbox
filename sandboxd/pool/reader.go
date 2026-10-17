@@ -33,23 +33,6 @@ const (
 
 var linkFile = os.Link
 
-type readerSet struct {
-	key     types.PoolKey
-	mu      sync.Mutex
-	live    map[string]*reader
-	flights singleflight.Group
-}
-
-type reader struct {
-	claim  string
-	source string
-	vm     string
-	sock   string
-	dir    string
-	conns  int
-	idle   *time.Timer
-}
-
 // DialReader opens a silkd connection to a sleeping claim's reader VM without waking the claim.
 func (m *Manager) DialReader(ctx context.Context, id, token string) (conn net.Conn, source string, err error) {
 	sb, ok := m.claim(id, token)
@@ -277,6 +260,23 @@ func (m *Manager) destroyReader(ctx context.Context, r *reader) {
 	if err := os.RemoveAll(r.dir); err != nil {
 		log.WithFunc("pool.destroyReader").Warnf(ctx, "remove reader dir %s: %v", r.dir, err)
 	}
+}
+
+type readerSet struct {
+	key     types.PoolKey
+	mu      sync.Mutex
+	live    map[string]*reader
+	flights singleflight.Group
+}
+
+type reader struct {
+	claim  string
+	source string
+	vm     string
+	sock   string
+	dir    string
+	conns  int
+	idle   *time.Timer
 }
 
 // sleepSource names a settled sleep's snapshot or record; callers hold m.mu.
