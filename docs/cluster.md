@@ -305,22 +305,22 @@ checkpoint store and keeps each claim's registry row on the latest snapshot:
   tombstone. A hibernate leaves the row on the last replica. An archive puts its
   own checkpoint over the row, with its retention deadline, and deletes the
   replica. A lease expiry with `on_expire` release drops the row and the replica
-  first, and the next reap
-  destroys the claim; with `on_expire` archive, the archive puts its checkpoint
-  over the row. Turning `replicate_seconds` off takes a restart, since a reload
-  that changes it is refused; the restarted node drops the rows and replicas of
-  the pool's claims on its first pass. A claim that holds a replica when the
-  node restarts with replication off is still treated as replicated by the fence
-  until the next restart, so during a registry outage it answers 503 like a
-  replicated claim; that costs availability only, never a second copy or data.
-  A restart keeps the node's own live row for a running claim and takes the checkpoint a crashed round left on it; a claim whose row another
-  node holds, or whose row a finished adopter consumed, is dropped with its VM.
-  A replica row has no retention deadline: the hourly sweep never purges it,
-  because no round refreshes it while the claim is hibernated, and retention
-  starts when the claim is archived or adopted. The rows of a node that never
-  returns therefore stay until a client adopts them, a bounded residue of one
-  row and one checkpoint per claim. Apart from that and the lease rule the
-  sweep is unchanged.
+  first, and the next reap destroys the claim; with `on_expire` archive, the
+  archive puts its checkpoint over the row. Turning `replicate_seconds` off
+  takes a restart, since a reload that changes it is refused; the restarted node
+  drops the rows and replicas of the pool's claims on its first pass. A claim
+  that holds a replica when the node restarts with replication off is still
+  treated as replicated by the fence until the next restart, so during a
+  registry outage it answers 503 like a replicated claim; that costs
+  availability only, never a second copy or data. A restart keeps the node's own
+  live row for a running claim and takes the checkpoint a crashed round left on
+  it; a claim whose row another node holds, or whose row a finished adopter
+  consumed, is dropped with its VM. A replica row has no retention deadline: the
+  hourly sweep never purges it, because no round refreshes it while the claim is
+  hibernated, and retention starts when the claim is archived or adopted. The
+  rows of a node that never returns therefore stay until a client adopts them, a
+  bounded residue of one row and one checkpoint per claim. Apart from that and
+  the lease rule the sweep is unchanged.
 - **Self-fencing.** A node whose renewal is overdue by 12 seconds (the lease
   length minus a 3 second margin, counted from the start of the last renewal
   that answered) stops serving every replicated claim it holds: relay, exec,
