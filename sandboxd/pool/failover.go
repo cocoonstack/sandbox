@@ -98,6 +98,18 @@ func (m *Manager) putArchive(ctx context.Context, sb *types.Sandbox, ck string) 
 	return m.putRow(ctx, sb, ck, false, false)
 }
 
+// writeArchiveRow upserts the archive row, or replaces the replica row the claim holds; the caller holds sb.Transition.
+func (m *Manager) writeArchiveRow(ctx context.Context, sb *types.Sandbox, ck string) (int64, error) {
+	if m.replicaOf(sb) == "" {
+		return m.putArchive(ctx, sb, ck)
+	}
+	epoch, err := m.replaceArchive(ctx, sb, ck)
+	if errors.Is(err, archives.ErrLost) {
+		_ = m.refusedReplace(ctx, sb)
+	}
+	return epoch, err
+}
+
 // replaceArchive writes an archive row over the replica row this node holds, so a row that left meanwhile is not recreated.
 func (m *Manager) replaceArchive(ctx context.Context, sb *types.Sandbox, ck string) (int64, error) {
 	return m.putRow(ctx, sb, ck, false, true)
