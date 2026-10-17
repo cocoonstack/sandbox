@@ -113,9 +113,7 @@ func (m *Manager) DeleteCheckpoint(ctx context.Context, ckptID, tenant string, s
 	if !store.CheckpointIDRe.MatchString(ckptID) {
 		return ErrUnknownCheckpoint
 	}
-	l := m.recLock(ckptID)
-	l.Lock()
-	defer func() { l.Unlock(); m.recDone(ckptID) }()
+	defer m.lockRec(ckptID)()
 	ckpt, err := m.loadCheckpoint(ctx, ckptID)
 	if err != nil {
 		m.vetoIfHealPending(ckptID)
@@ -149,19 +147,17 @@ func (m *Manager) FetchCheckpoint(ctx context.Context, ckptID string) (string, [
 	if _, err := m.loadCheckpoint(ctx, ckptID); err != nil {
 		return "", nil, nil, err
 	}
-	l := m.recLock(ckptID)
-	l.RLock()
+	unlock := m.rlockRec(ckptID)
 	dir, meta, _, err := m.ckpts.Fetch(ctx, ckptID)
 	if err != nil {
-		l.RUnlock()
-		m.recDone(ckptID)
+		unlock()
 		if errors.Is(err, store.ErrNotFound) {
 			return "", nil, nil, ErrUnknownCheckpoint
 		}
 		return "", nil, nil, fmt.Errorf("fetch checkpoint: %w", err)
 	}
 	// the read lock spans the transfer so a delete cannot pull the export from under it
-	return dir, meta, func() { l.RUnlock(); m.recDone(ckptID) }, nil
+	return dir, meta, unlock, nil
 }
 
 func (m *Manager) publishCheckpoint(ctx context.Context, sb *types.Sandbox, ckID, name, tenant string, archive bool) (types.Checkpoint, string, error) {
@@ -204,9 +200,7 @@ func (m *Manager) claimLoaded(ctx context.Context, ckpt types.Checkpoint, o Clai
 	if err := m.checkEnv(o.Env); err != nil {
 		return nil, err
 	}
-	l := m.recLock(ckpt.ID)
-	l.RLock()
-	defer func() { l.RUnlock(); m.recDone(ckpt.ID) }()
+	defer m.rlockRec(ckpt.ID)()
 	if ckpt.Archive {
 		return nil, ErrUnknownCheckpoint // a wake image, not a branchable checkpoint
 	}
@@ -277,9 +271,7 @@ func (m *Manager) runHeal(ctx context.Context, ckptID string) (types.Checkpoint,
 		return types.Checkpoint{}, fmt.Errorf("heal checkpoint: %w", err)
 	}
 
-	l := m.recLock(ckptID)
-	l.Lock()
-	defer func() { l.Unlock(); m.recDone(ckptID) }()
+	defer m.lockRec(ckptID)()
 	if aborted := m.clearHealPending(ckptID); aborted {
 		return types.Checkpoint{}, ErrUnknownCheckpoint // a concurrent delete vetoed this heal
 	}
@@ -357,11 +349,9 @@ func (m *Manager) sweepExpiredCheckpoints(ctx context.Context) {
 
 // deleteCkLocked removes a checkpoint under its record lock, releasing it before eviction.
 func (m *Manager) deleteCkLocked(ctx context.Context, ckID string) error {
-	l := m.recLock(ckID)
-	l.Lock()
+	unlock := m.lockRec(ckID)
 	err := m.ckpts.Delete(ctx, ckID)
-	l.Unlock()
-	m.recDone(ckID)
+	unlock()
 	return err
 }
 
