@@ -700,7 +700,7 @@ type VMDisk struct {
 	ReadOnly bool   `json:"readonly,omitzero"`
 }
 
-// VMDevices is the attached-device subset of `cocoon vm inspect`; `vm list` leaves it empty.
+// VMDevices is the attached-device subset that `cocoon vm inspect` fills only for a running VM.
 type VMDevices struct {
 	Disks []VMDisk `json:"disks,omitempty"`
 }
