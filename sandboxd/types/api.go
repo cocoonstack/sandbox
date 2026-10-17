@@ -24,8 +24,8 @@ type VolumeInfo struct {
 
 // VolumePatch is the wire body of PATCH /v1/sandboxes/{id}/volumes.
 type VolumePatch struct {
-	Add    []Volume `json:"add,omitempty"`
-	Remove []string `json:"remove,omitempty"`
+	Add    []Volume `json:"add,omitzero"`
+	Remove []string `json:"remove,omitzero"`
 }
 
 // VolumePhase is how far one held volume has converged.

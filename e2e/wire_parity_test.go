@@ -46,7 +46,7 @@ var wirePairs = []struct {
 	{"VolumeInfo", false, types.VolumeInfo{}, nil},
 	{"VolumeState", false, types.VolumeState{}, nil},
 	{"SandboxVolumesResponse", false, types.SandboxVolumesResponse{}, nil},
-	{"VolumePatch", true, types.VolumePatch{}, []string{"add", "remove"}},
+	{"VolumePatch", true, types.VolumePatch{}, nil},
 	{"Volume", true, types.Volume{}, nil},
 	{"EnvVar", true, types.EnvVar{}, nil},
 	{"EnvInject", true, types.EnvInject{}, nil},
