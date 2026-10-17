@@ -611,7 +611,7 @@ func TestFailoverRestartAfterAConsumeWithoutCommitKeepsTheClaim(t *testing.T) {
 	if err != nil {
 		t.Fatalf("take: %v", err)
 	}
-	a.setArchiveEpoch(t.Context(), sb, epoch)
+	_, _ = a.commitIfLive(t.Context(), sb, func() { sb.ArchiveEpoch = epoch })
 	if _, err = c.reg.Consume(t.Context(), sb.ID, epoch); err != nil {
 		t.Fatalf("consume: %v", err)
 	}
@@ -1257,7 +1257,7 @@ func TestFailoverRestartAfterAConsumeWhileAPeerSweptKeepsTheClaim(t *testing.T) 
 	if err != nil {
 		t.Fatalf("take: %v", err)
 	}
-	a.setArchiveEpoch(t.Context(), sb, epoch)
+	_, _ = a.commitIfLive(t.Context(), sb, func() { sb.ArchiveEpoch = epoch })
 	if _, err = c.reg.Consume(t.Context(), sb.ID, epoch); err != nil {
 		t.Fatalf("consume: %v", err)
 	}

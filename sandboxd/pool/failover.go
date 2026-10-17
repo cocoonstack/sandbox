@@ -89,7 +89,7 @@ func (m *Manager) adoptHeld(ctx context.Context, cur *types.Sandbox, epoch int64
 	held := m.claimed[cur.ID] == cur
 	m.mu.Unlock()
 	if held {
-		m.setArchiveEpoch(ctx, cur, epoch)
+		_, _ = m.commitIfLive(ctx, cur, func() { cur.ArchiveEpoch = epoch })
 		return true
 	}
 	if rec, ok, err := m.archives.Get(ctx, cur.ID); err == nil && ok && rec.Owner == m.nodeID && !rec.Consumed {
@@ -174,7 +174,7 @@ func (m *Manager) takeArchive(ctx context.Context, sb *types.Sandbox) (int64, er
 	if err != nil {
 		return 0, fmt.Errorf("wake %s: %w", sb.ID, err)
 	}
-	m.setArchiveEpoch(ctx, sb, epoch)
+	_, _ = m.commitIfLive(ctx, sb, func() { sb.ArchiveEpoch = epoch })
 	return epoch, nil
 }
 
@@ -191,7 +191,7 @@ func (m *Manager) settleArchive(ctx context.Context, sb *types.Sandbox) (int64, 
 		m.dropAdopted(ctx, sb)
 		return 0, ErrUnknownSandbox
 	}
-	m.setArchiveEpoch(ctx, sb, epoch)
+	_, _ = m.commitIfLive(ctx, sb, func() { sb.ArchiveEpoch = epoch })
 	return epoch, nil
 }
 
@@ -209,20 +209,7 @@ func (m *Manager) keepOwnRow(ctx context.Context, sb *types.Sandbox, rec archive
 	return epoch, err == nil, err
 }
 
-func (m *Manager) setArchiveEpoch(ctx context.Context, sb *types.Sandbox, epoch int64) {
-	m.mu.Lock()
-	var js claimSnapshot
-	if m.claimed[sb.ID] == sb {
-		sb.ArchiveEpoch = epoch
-		js = m.store.set(sb)
-	}
-	m.mu.Unlock()
-	if err := m.store.commit(js); err != nil {
-		m.recommit(ctx, js)
-	}
-}
-
-func (m *Manager) fenceWake(ctx context.Context, sb *types.Sandbox, epoch int64) (int64, error) {
+func (m *Manager) consumeRow(ctx context.Context, sb *types.Sandbox, epoch int64, op string) (int64, error) {
 	if epoch == 0 {
 		return 0, nil
 	}
@@ -234,7 +221,7 @@ func (m *Manager) fenceWake(ctx context.Context, sb *types.Sandbox, epoch int64)
 	case errors.Is(err, ErrUnknownSandbox):
 		return 0, err
 	case err != nil:
-		return 0, fmt.Errorf("wake %s: %w", sb.ID, err)
+		return 0, fmt.Errorf("%s %s: %w", op, sb.ID, err)
 	}
 	return consumed, nil
 }
@@ -257,7 +244,21 @@ func (m *Manager) reputArchive(ctx context.Context, sb *types.Sandbox, epoch int
 		log.WithFunc("pool.reputArchive").Warnf(ctx, "re-put archive row %s: %v", sb.ID, err)
 		return
 	}
-	m.setArchiveEpoch(ctx, sb, epoch)
+	_, _ = m.commitIfLive(ctx, sb, func() { sb.ArchiveEpoch = epoch })
+}
+
+func (m *Manager) releaseRowed(ctx context.Context, id string, sb *types.Sandbox) error {
+	sb.Transition.Lock()
+	defer sb.Transition.Unlock()
+	consumed, err := m.consumeArchive(ctx, sb)
+	if err != nil {
+		return err
+	}
+	if err = m.releaseResolved(ctx, id, sb); err != nil {
+		return err
+	}
+	m.dropTombstone(context.WithoutCancel(ctx), id, consumed)
+	return nil
 }
 
 func (m *Manager) consumeArchive(ctx context.Context, sb *types.Sandbox) (int64, error) {
@@ -265,17 +266,11 @@ func (m *Manager) consumeArchive(ctx context.Context, sb *types.Sandbox) (int64,
 		return 0, nil
 	}
 	ctx = context.WithoutCancel(ctx)
-	consumed, err := m.archives.Consume(ctx, sb.ID, sb.ArchiveEpoch)
-	if errors.Is(err, archives.ErrLost) {
-		consumed, err = m.settleConsume(ctx, sb)
-	}
-	switch {
-	case errors.Is(err, ErrUnknownSandbox):
+	consumed, err := m.consumeRow(ctx, sb, sb.ArchiveEpoch, "consume archive row")
+	if err != nil {
 		return 0, err
-	case err != nil:
-		return 0, fmt.Errorf("consume archive row %s: %w", sb.ID, err)
 	}
-	m.setArchiveEpoch(ctx, sb, 0)
+	_, _ = m.commitIfLive(ctx, sb, func() { sb.ArchiveEpoch = 0 })
 	return consumed, nil
 }
 
@@ -384,14 +379,8 @@ func (m *Manager) reconcileOwnRow(ctx context.Context, rec archives.Record, now 
 }
 
 func (m *Manager) dropStaleRow(ctx context.Context, sb *types.Sandbox, rec archives.Record) {
-	if err := m.archives.Delete(ctx, rec.ID, rec.Epoch); err != nil {
-		if !errors.Is(err, archives.ErrLost) {
-			log.WithFunc("pool.dropStaleRow").Warnf(ctx, "drop stale archive row %s: %v", rec.ID, err)
-		}
-		return
-	}
-	if !m.archiveCkPinned(rec.Checkpoint) && m.clearArchiveIntent(ctx, sb, rec.Checkpoint) {
-		m.deleteOrphanArchiveCk(ctx, rec.Checkpoint)
+	if !m.archiveCkPinned(rec.Checkpoint) {
+		m.abandonArchive(ctx, sb, rec.Epoch, rec.Checkpoint)
 	}
 }
 

@@ -204,7 +204,7 @@ func (m *Manager) wakeArchived(ctx context.Context, sb *types.Sandbox) (string, 
 	if err != nil {
 		return "", fmt.Errorf("wake %s: %w", sb.ID, err)
 	}
-	consumed, fenceErr := m.fenceWake(ctx, sb, epoch)
+	consumed, fenceErr := m.consumeRow(ctx, sb, epoch, "wake")
 	if fenceErr != nil {
 		m.destroy(ctx, built.VMName)
 		return "", fenceErr
