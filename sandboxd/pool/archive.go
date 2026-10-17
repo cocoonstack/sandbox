@@ -258,8 +258,8 @@ func (m *Manager) commitWake(ctx context.Context, sb *types.Sandbox, vmName, soc
 		m.mu.Unlock()
 		return false, false
 	}
-	ck, deadline := sb.ArchiveCk, sb.Deadline
-	sb.VMName, sb.VsockSocket, sb.ArchiveCk = vmName, sock, ""
+	ck, deadline, epoch := sb.ArchiveCk, sb.Deadline, sb.ArchiveEpoch
+	sb.VMName, sb.VsockSocket, sb.ArchiveCk, sb.ArchiveEpoch = vmName, sock, "", 0
 	sb.Deadline = time.Now().Add(clampTTL(types.Seconds(sb.LeaseSeconds))) // a woken sandbox is a fresh lease
 	js := m.store.set(sb)
 	m.mu.Unlock()
@@ -267,7 +267,7 @@ func (m *Manager) commitWake(ctx context.Context, sb *types.Sandbox, vmName, soc
 		m.mu.Lock()
 		var rb claimSnapshot
 		if m.claimed[sb.ID] == sb {
-			sb.VMName, sb.VsockSocket, sb.ArchiveCk, sb.Deadline = "", "", ck, deadline
+			sb.VMName, sb.VsockSocket, sb.ArchiveCk, sb.ArchiveEpoch, sb.Deadline = "", "", ck, epoch, deadline
 			rb = m.store.set(sb)
 		}
 		m.mu.Unlock()

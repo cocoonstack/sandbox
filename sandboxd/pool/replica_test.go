@@ -394,6 +394,52 @@ func TestReplicaLeftoverJournalWithFailoverOffStillServesStreams(t *testing.T) {
 	_ = conn.Close()
 }
 
+func TestReplicaRoundAfterAWakeKeepsTheClaimAndWritesAFreshRow(t *testing.T) {
+	for _, tt := range []struct {
+		name           string
+		adopt          bool
+		leaveTombstone bool
+	}{
+		{"owner wakes its archive", false, false},
+		{"adopter wakes the adopted archive", true, false},
+		{"owner wakes and its tombstone delete fails", false, true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			c := newReplicaCluster(t)
+			a, b := c.node(t, "a", t.TempDir(), keepAnHour), c.node(t, "b", t.TempDir(), keepAnHour)
+			sb := mustClaim(t, a, testKey)
+			mustArchive(t, a, sb)
+			waker, holder := a, sb
+			if tt.adopt {
+				c.expire("a")
+				if adopted, err := b.AdoptArchived(t.Context(), sb.ID, sb.Token); err != nil || !adopted {
+					t.Fatalf("adopt: %v %v", adopted, err)
+				}
+				waker = b
+				holder, _ = b.byID(sb.ID)
+			}
+			if tt.leaveTombstone {
+				waker.ckpts = &failingDeleteStore{Store: waker.ckpts, attempts: make(chan string, 8)}
+			}
+			if _, _, _, err := waker.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
+				t.Fatalf("wake: %v", err)
+			}
+			if epoch := waker.epochOf(holder); epoch != 0 {
+				t.Errorf("woken claim holds epoch %d of the consumed row, want 0", epoch)
+			}
+
+			replicateNow(t, waker, holder)
+			if _, held := waker.byID(sb.ID); !held {
+				t.Fatal("the round after the wake dropped the running claim")
+			}
+			rec, ok, _ := c.reg.Get(t.Context(), sb.ID)
+			if !ok || rec.Consumed || rec.Owner != waker.nodeID || rec.Checkpoint != waker.replicaOf(holder) {
+				t.Errorf("row %+v present %v, want a live row of %s on the new replica %q", rec, ok, waker.nodeID, waker.replicaOf(holder))
+			}
+		})
+	}
+}
+
 func TestReplicaFailedCaptureKeepsTheOldReplicaAndRow(t *testing.T) {
 	c := newReplicaCluster(t)
 	a := c.node(t, "a", t.TempDir(), keepAnHour)

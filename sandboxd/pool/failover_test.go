@@ -494,6 +494,9 @@ func TestFailoverWakeRollbackRecoversOnTheNextWake(t *testing.T) {
 	if rec, ok, _ := c.reg.Get(t.Context(), sb.ID); !ok || rec.Owner != "a" || rec.Checkpoint != ck || ck == "" {
 		t.Fatalf("row %+v present %v, want this node's row for the rolled-back archive", rec, ok)
 	}
+	if a.epochOf(sb) == 0 {
+		t.Error("the rolled-back wake dropped the claim's archive epoch")
+	}
 	healStore(t, a)
 	if _, _, _, err := a.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
 		t.Fatalf("wake after the store heals: %v", err)
