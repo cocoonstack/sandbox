@@ -1,7 +1,6 @@
 package pool
 
 import (
-	"cmp"
 	"context"
 	"crypto/subtle"
 	"encoding/json/v2"
@@ -58,6 +57,9 @@ func (m *Manager) adoptArchived(ctx context.Context, id, token string) (bool, er
 	sb.Token, sb.ArchiveCk, sb.ArchiveEpoch, sb.Deadline = token, rec.Checkpoint, epoch, rec.Deadline
 	sb.SetEnv(sb.Env)
 	m.mu.Lock()
+	if sb.Deadline.IsZero() {
+		sb.Deadline = m.retentionDeadline(sb.Key)
+	}
 	if cur, dup := m.claimed[id]; dup {
 		m.mu.Unlock()
 		return m.adoptHeld(ctx, cur, epoch), nil
@@ -93,12 +95,24 @@ func (m *Manager) adoptHeld(ctx context.Context, cur *types.Sandbox, epoch int64
 }
 
 func (m *Manager) putArchive(ctx context.Context, sb *types.Sandbox, ck string) (int64, error) {
+	return m.putRow(ctx, sb, ck, false)
+}
+
+// putReplica writes a live claim's row with no deadline: retention starts when the claim is archived or adopted.
+func (m *Manager) putReplica(ctx context.Context, sb *types.Sandbox, ck string) (int64, error) {
+	return m.putRow(ctx, sb, ck, true)
+}
+
+func (m *Manager) putRow(ctx context.Context, sb *types.Sandbox, ck string, replica bool) (int64, error) {
 	if m.archives == nil {
 		return 0, nil
 	}
 	m.mu.Lock()
 	dto, deadline := dtoOf(sb), sb.Deadline
-	if sb.ArchiveCk == "" {
+	switch {
+	case replica:
+		deadline = time.Time{}
+	case sb.ArchiveCk == "":
 		deadline = m.retentionDeadline(sb.Key)
 	}
 	m.mu.Unlock()
@@ -232,11 +246,17 @@ func (m *Manager) dropTombstone(ctx context.Context, id string, epoch int64) {
 	}
 }
 
-func (m *Manager) reputArchive(ctx context.Context, sb *types.Sandbox, epoch int64) {
-	if epoch == 0 {
+func (m *Manager) reputArchive(ctx context.Context, sb *types.Sandbox, held int64) {
+	if held == 0 {
 		return
 	}
-	epoch, err := m.putArchive(ctx, sb, cmp.Or(sb.ArchiveCk, sb.ReplicaCk))
+	var epoch int64
+	var err error
+	if sb.ArchiveCk != "" {
+		epoch, err = m.putArchive(ctx, sb, sb.ArchiveCk)
+	} else {
+		epoch, err = m.putReplica(ctx, sb, sb.ReplicaCk)
+	}
 	if err != nil {
 		log.WithFunc("pool.reputArchive").Warnf(ctx, "re-put archive row %s: %v", sb.ID, err)
 		return

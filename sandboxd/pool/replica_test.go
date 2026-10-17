@@ -27,8 +27,8 @@ func TestReplicaRoundPublishesMovesTheRowAndDropsThePrevious(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("row: %v %v, want one", ok, err)
 	}
-	if first == "" || rec.Owner != "a" || rec.Checkpoint != first || rec.Consumed || rec.TokenSHA256 != tenants.TokenSHA256(sb.Token) || rec.Deadline.IsZero() {
-		t.Fatalf("row %+v with replica %q, want a live row of a on the replica with the token hash and a deadline", rec, first)
+	if first == "" || rec.Owner != "a" || rec.Checkpoint != first || rec.Consumed || rec.TokenSHA256 != tenants.TokenSHA256(sb.Token) || !rec.Deadline.IsZero() {
+		t.Fatalf("row %+v with replica %q, want a live row of a on the replica with the token hash and no deadline", rec, first)
 	}
 	if stored, loadErr := a.store.load(); loadErr != nil || stored[sb.ID].ReplicaCk != first || stored[sb.ID].ArchiveEpoch != rec.Epoch {
 		t.Errorf("claims.json replica %q epoch %d (%v), want %q at %d", stored[sb.ID].ReplicaCk, stored[sb.ID].ArchiveEpoch, loadErr, first, rec.Epoch)
@@ -184,6 +184,34 @@ func TestReplicaRestartSettlesALostPutReply(t *testing.T) {
 	if held.ReplicaPending != "" {
 		t.Errorf("intent %q left after the restart settled it", held.ReplicaPending)
 	}
+}
+
+func TestReplicaRowOfAHibernatedClaimHasNoRetentionDeadline(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		c := newReplicaCluster(t)
+		a, b := c.node(t, "a", t.TempDir(), 1), c.node(t, "b", t.TempDir(), 1)
+		sb := mustClaim(t, a, testKey)
+		replicateNow(t, a, sb)
+		ck := a.replicaOf(sb)
+		if err := a.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
+			t.Fatalf("hibernate: %v", err)
+		}
+		time.Sleep(2 * time.Second)
+		c.expire("a")
+
+		b.sweepOrphanArchives(t.Context())
+		rec, ok, _ := c.reg.Get(t.Context(), sb.ID)
+		if !ok || !rec.Deadline.IsZero() || !ckExists(t, b, ck) {
+			t.Fatalf("row %+v present %v, replica kept %v after a sweep past the retention window, want the row kept with no deadline", rec, ok, ckExists(t, b, ck))
+		}
+		if adopted, err := b.AdoptArchived(t.Context(), sb.ID, sb.Token); err != nil || !adopted {
+			t.Fatalf("adopt: %v %v, want adopted", adopted, err)
+		}
+		moved, _ := b.byID(sb.ID)
+		if moved.Deadline.IsZero() {
+			t.Error("the adopted claim has no retention deadline, want the pool's window from the adoption")
+		}
+	})
 }
 
 func TestReplicaFailedCaptureKeepsTheOldReplicaAndRow(t *testing.T) {
@@ -569,8 +597,8 @@ func TestReplicaSweepRearmsATombstoneItsClaimStillNames(t *testing.T) {
 
 	a.sweepOrphanArchives(t.Context())
 	rec, ok, _ := c.reg.Get(t.Context(), sb.ID)
-	if !ok || rec.Consumed || rec.Checkpoint != ck || rec.Owner != "a" || !ckExists(t, a, ck) {
-		t.Errorf("row %+v present %v, replica kept %v, want a live row of a re-armed on %s", rec, ok, ckExists(t, a, ck), ck)
+	if !ok || rec.Consumed || rec.Checkpoint != ck || rec.Owner != "a" || !rec.Deadline.IsZero() || !ckExists(t, a, ck) {
+		t.Errorf("row %+v present %v, replica kept %v, want a live row of a with no deadline re-armed on %s", rec, ok, ckExists(t, a, ck), ck)
 	}
 }
 
@@ -639,7 +667,7 @@ func interruptReplica(t *testing.T, m *Manager, sb *types.Sandbox) string {
 	if err != nil {
 		t.Fatalf("publish: %v", err)
 	}
-	if _, err = m.putArchive(t.Context(), sb, ck.ID); err != nil {
+	if _, err = m.putReplica(t.Context(), sb, ck.ID); err != nil {
 		t.Fatalf("put: %v", err)
 	}
 	return ck.ID

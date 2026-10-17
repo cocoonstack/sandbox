@@ -126,7 +126,7 @@ func (m *Manager) replicate(ctx context.Context, sb *types.Sandbox) error {
 		m.deleteOrphanArchiveCk(ctx, ckID)
 		return fmt.Errorf("replicate %s: persist intent: %w", sb.ID, err)
 	}
-	epoch, err := m.putArchive(ctx, sb, ckID)
+	epoch, err := m.putReplica(ctx, sb, ckID)
 	switch {
 	case errors.Is(err, archives.ErrLost):
 		m.clearReplicaIntent(ctx, sb, ckID)
