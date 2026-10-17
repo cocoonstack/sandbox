@@ -84,7 +84,7 @@ func TestInfoRoundTripRejectsErrorFrame(t *testing.T) {
 	path := sockPath(t)
 	listenMuxer(t, path, "OK 2048\n", errFrame)
 
-	err := New("cocoon", nil, nil, false, false, "").infoRoundTrip(t.Context(), path)
+	err := New("cocoon", nil, nil, false, false, "").infoRoundTrip(t.Context(), path, silkdPort)
 	if err == nil || !strings.Contains(err.Error(), `info reply type "error"`) {
 		t.Errorf("got %v, want error-frame rejection", err)
 	}

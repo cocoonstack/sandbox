@@ -96,6 +96,8 @@ type fakeSilkd struct {
 	statMisses map[string]int
 	statErr    map[string]string
 	statCalls  []string
+	connects   []string
+	execDetach []bool
 }
 
 func serveFakeSilkd(t *testing.T, path string) *fakeSilkd {
@@ -128,10 +130,14 @@ func serveFakeSilkd(t *testing.T, path string) *fakeSilkd {
 func (f *fakeSilkd) serve(conn net.Conn) {
 	defer func() { _ = conn.Close() }()
 	r := bufio.NewReader(conn)
-	if _, err := r.ReadString('\n'); err != nil {
+	connect, err := r.ReadString('\n')
+	if err != nil {
 		return
 	}
-	if _, err := io.WriteString(conn, "OK 2048\n"); err != nil {
+	f.mu.Lock()
+	f.connects = append(f.connects, strings.TrimSpace(connect))
+	f.mu.Unlock()
+	if _, err = io.WriteString(conn, "OK 2048\n"); err != nil {
 		return
 	}
 	line, err := r.ReadString('\n')
@@ -139,16 +145,24 @@ func (f *fakeSilkd) serve(conn net.Conn) {
 		return
 	}
 	var req struct {
-		Op   string            `json:"op"`
-		Path string            `json:"path"`
-		Mode uint32            `json:"mode"`
-		Argv []string          `json:"argv"`
-		Env  map[string]string `json:"env"`
+		Op     string            `json:"op"`
+		Path   string            `json:"path"`
+		Mode   uint32            `json:"mode"`
+		Argv   []string          `json:"argv"`
+		Env    map[string]string `json:"env"`
+		Detach bool              `json:"detach"`
 	}
 	if json.Unmarshal([]byte(line), &req) != nil {
 		return
 	}
+	if req.Op == "exec" {
+		f.mu.Lock()
+		f.execDetach = append(f.execDetach, req.Detach)
+		f.mu.Unlock()
+	}
 	switch req.Op {
+	case "info":
+		writeFakeSilkdResponse(conn, &wire.InfoResp{Version: "test", Proto: wire.KeepAliveProto})
 	case "fs_write":
 		f.handleWrite(conn, r, req.Path, req.Mode)
 	case "fs_list":
