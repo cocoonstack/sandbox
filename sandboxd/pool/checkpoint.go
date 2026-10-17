@@ -286,15 +286,15 @@ func (m *Manager) runHeal(ctx context.Context, ckptID string) (types.Checkpoint,
 
 // markHealPending records ckptID as staging or pulling, so a delete can veto it.
 func (m *Manager) markHealPending(ckptID string) {
-	m.recLocksMu.Lock()
-	defer m.recLocksMu.Unlock()
+	m.healMu.Lock()
+	defer m.healMu.Unlock()
 	m.healPending[ckptID] = struct{}{}
 }
 
 // clearHealPending un-marks ckptID and reports a veto.
 func (m *Manager) clearHealPending(ckptID string) (aborted bool) {
-	m.recLocksMu.Lock()
-	defer m.recLocksMu.Unlock()
+	m.healMu.Lock()
+	defer m.healMu.Unlock()
 	delete(m.healPending, ckptID)
 	if _, aborted = m.healAbort[ckptID]; aborted {
 		delete(m.healAbort, ckptID)
@@ -304,8 +304,8 @@ func (m *Manager) clearHealPending(ckptID string) (aborted bool) {
 
 // vetoIfHealPending aborts a pending heal so its publish cannot resurrect a deleted checkpoint.
 func (m *Manager) vetoIfHealPending(ckptID string) {
-	m.recLocksMu.Lock()
-	defer m.recLocksMu.Unlock()
+	m.healMu.Lock()
+	defer m.healMu.Unlock()
 	if _, pending := m.healPending[ckptID]; pending {
 		m.healAbort[ckptID] = struct{}{}
 	}

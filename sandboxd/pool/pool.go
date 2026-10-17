@@ -354,9 +354,10 @@ type Manager struct {
 	// A cluster-wide backend makes heal and the delete broadcast no-ops
 	ckptsShared bool
 	healer      *peer.Healer
-	// healPending/healAbort, guarded by recLocksMu, let a delete veto a heal still staging.
-	healSem      chan struct{}
-	healFlights  singleflight.Group
+	healSem     chan struct{}
+	healFlights singleflight.Group
+	// healPending/healAbort, guarded by healMu, let a delete veto a heal still staging.
+	healMu       sync.Mutex
 	healPending  map[string]struct{}
 	healAbort    map[string]struct{}
 	peerDelete   PeerDeleteFunc
