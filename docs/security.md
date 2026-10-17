@@ -31,9 +31,10 @@ exposing any part of a deployment beyond a single trusted host.
   guest-initiated packet except IPv4 broadcast DHCP is dropped by an nftables lock in the host
   root netns ([egress](egress.md)); the lock is fail-closed and applied
   before the claim is handed out. On both lanes the proxy refuses
-  loopback, private, link-local (cloud metadata), CGN, and the
-  IPv4-embedding IPv6 ranges, so an allow-listed name that resolves or
-  rebinds to an internal address cannot reach the host or a sibling.
+  loopback, private, link-local (cloud metadata), CGN, the
+  IPv4-embedding IPv6 ranges and the node's own interface addresses, so an
+  allow-listed name that resolves or rebinds to an internal address cannot
+  reach the host or a sibling.
 - **What never enters the guest.** Egress credentials: the proxy injects
   the secret host-side, so prompt injection can exfiltrate at most the
   proxy's answers, and every credentialed call is journaled. Git auth

@@ -536,6 +536,7 @@ func (m *Manager) Run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-refill.C:
+			m.out.RefreshSelf()
 			m.refillOnce(ctx)
 		case <-m.refillKick:
 			m.refillOnce(ctx)
