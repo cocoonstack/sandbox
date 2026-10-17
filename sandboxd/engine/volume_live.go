@@ -130,7 +130,7 @@ func (e *Engine) volumeMounted(ctx context.Context, vsockSocket, device, mount s
 			continue
 		}
 		if mode, _, _ := strings.Cut(entry.options, ","); matched || entry.devNum != devNum || entry.root != "/" || mode != mountMode(rw) {
-			return false, &VolumeMountConflict{Message: fmt.Sprintf("volume mount %q has a different device, root, or mode; restore the expected mount before retrying", mount)}
+			return false, &VolumeMountConflict{Message: fmt.Sprintf("volume mount %q has a different device, root, or mode; restore the expected mount before retrying", target)}
 		}
 		matched = true
 	}

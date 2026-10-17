@@ -89,8 +89,8 @@ func TestLiveMountRefusesAnOccupiedPathBehindASymlink(t *testing.T) {
 		t.Fatal(err)
 	}
 	err := e.MountLiveVolume(t.Context(), sock, spec.Name, "/workspace/data", false)
-	if _, ok := errors.AsType[*VolumeMountConflict](err); !ok {
-		t.Fatalf("mounted over another device behind a symlink: %v", err)
+	if _, ok := errors.AsType[*VolumeMountConflict](err); !ok || !strings.Contains(err.Error(), `"/home/u/ws/data" has a different device`) {
+		t.Fatalf("mounted over another device behind a symlink or hid its real path: %v", err)
 	}
 	fake.mu.Lock()
 	defer fake.mu.Unlock()
