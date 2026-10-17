@@ -60,10 +60,7 @@ func (m *Manager) ClaimWarm(ctx context.Context, key types.PoolKey, o ClaimOptio
 	var sb *types.Sandbox
 	if p := m.pools[key]; p != nil {
 		p.noteArrival(start)
-		if n := len(p.warm); n > 0 {
-			sb = p.warm[n-1]
-			p.warm = p.warm[:n-1]
-		}
+		sb = p.popWarm()
 	}
 	m.mu.Unlock()
 	m.kickRefill()

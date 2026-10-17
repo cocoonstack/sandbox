@@ -43,9 +43,6 @@ func (m *Manager) agentSocket(ctx context.Context, id, token string, readerOK bo
 	if err != nil {
 		return "", nil, nil, err
 	}
-	if !readerOK {
-		sb.Touch()
-	}
 	sb.Hold()
 	sock, err := m.wakeOrRead(ctx, sb, readerOK)
 	switch {
@@ -56,9 +53,7 @@ func (m *Manager) agentSocket(ctx context.Context, id, token string, readerOK bo
 		sb.Unhold()
 		return "", nil, nil, err
 	}
-	if readerOK {
-		sb.Touch()
-	}
+	sb.Touch()
 	return sock, fenced, sb.Unhold, nil
 }
 
@@ -106,7 +101,9 @@ func (m *Manager) hibernateLocked(ctx context.Context, sb *types.Sandbox) error 
 		return fmt.Errorf("hibernate %s: persist intent: %w", sb.ID, err)
 	}
 	if m.readers != nil {
-		m.syncForReader(ctx, sb)
+		if err := m.eng.SyncGuest(ctx, sb.VsockSocket); err != nil {
+			log.WithFunc("pool.hibernateLocked").Warnf(ctx, "sync %s before hibernate: %v", sb.ID, err)
+		}
 	}
 	if hibErr := m.eng.Hibernate(ctx, sb.VMName, snap); hibErr != nil {
 		// the engine can report failure after the snapshot landed

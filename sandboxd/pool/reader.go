@@ -48,7 +48,7 @@ type reader struct {
 	idle   *time.Timer
 }
 
-// DialReader opens a silkd connection that serves a sleeping claim's files read-only from a reader VM, never waking the claim; source names the sleep it serves.
+// DialReader opens a silkd connection to a sleeping claim's reader VM without waking the claim.
 func (m *Manager) DialReader(ctx context.Context, id, token string) (conn net.Conn, source string, err error) {
 	sb, ok := m.claim(id, token)
 	if !ok {
@@ -64,7 +64,7 @@ func (m *Manager) DialReader(ctx context.Context, id, token string) (conn net.Co
 	conn, err = m.eng.DialReader(ctx, r.sock)
 	if err != nil {
 		m.releaseReader(r)
-		m.retireReader(r)
+		m.dropReader(ctx, r, true)
 		return nil, "", fmt.Errorf("%w: %w", ErrNoReader, err)
 	}
 	return &heldConn{Conn: conn, release: sync.OnceFunc(func() { m.releaseReader(r) })}, r.source, nil
@@ -103,7 +103,7 @@ func (m *Manager) acquireReader(ctx context.Context, sb *types.Sandbox) (*reader
 		}
 		rs.mu.Unlock()
 		if r != nil {
-			m.retireReader(r)
+			m.dropReader(ctx, r, true)
 		}
 		_, err, _ := rs.flights.Do(sb.ID, func() (any, error) {
 			setupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), readerSetupTimeout)
@@ -122,31 +122,20 @@ func (m *Manager) releaseReader(r *reader) {
 	defer rs.mu.Unlock()
 	r.conns--
 	if r.conns == 0 && rs.live[r.claim] == r {
-		r.idle = time.AfterFunc(readerIdle, func() { m.reapReader(r) })
+		r.idle = time.AfterFunc(readerIdle, func() { m.dropReader(context.Background(), r, false) })
 	}
 }
 
-func (m *Manager) reapReader(r *reader) {
-	if m.unregisterReader(r, false) {
-		m.destroyReader(context.Background(), r)
-	}
-}
-
-func (m *Manager) retireReader(r *reader) {
-	if m.unregisterReader(r, true) {
-		m.destroyReader(context.Background(), r)
-	}
-}
-
-func (m *Manager) unregisterReader(r *reader, force bool) bool {
+func (m *Manager) dropReader(ctx context.Context, r *reader, force bool) {
 	rs := m.readers
 	rs.mu.Lock()
-	defer rs.mu.Unlock()
 	if rs.live[r.claim] != r || (!force && r.conns > 0) {
-		return false
+		rs.mu.Unlock()
+		return
 	}
 	delete(rs.live, r.claim)
-	return true
+	rs.mu.Unlock()
+	m.destroyReader(context.WithoutCancel(ctx), r)
 }
 
 func (m *Manager) ensureReader(ctx context.Context, sb *types.Sandbox) error {
@@ -185,7 +174,7 @@ func (m *Manager) openReader(ctx context.Context, sb *types.Sandbox) error {
 	rs.mu.Lock()
 	old := rs.live[sb.ID]
 	rs.live[sb.ID] = r
-	r.idle = time.AfterFunc(readerIdle, func() { m.reapReader(r) })
+	r.idle = time.AfterFunc(readerIdle, func() { m.dropReader(context.Background(), r, false) })
 	rs.mu.Unlock()
 	if old != nil {
 		m.destroyReader(context.WithoutCancel(ctx), old)
@@ -256,10 +245,7 @@ func (m *Manager) takeReaderVM() (*types.Sandbox, error) {
 	m.mu.Lock()
 	var sb *types.Sandbox
 	if p, ok := m.activePool(m.readers.key); ok {
-		if n := len(p.warm); n > 0 {
-			sb = p.warm[n-1]
-			p.warm = p.warm[:n-1]
-		}
+		sb = p.popWarm()
 	}
 	m.mu.Unlock()
 	m.kickRefill()
@@ -288,12 +274,6 @@ func (m *Manager) destroyReader(ctx context.Context, r *reader) {
 	m.destroy(ctx, r.vm)
 	if err := os.RemoveAll(r.dir); err != nil {
 		log.WithFunc("pool.destroyReader").Warnf(ctx, "remove reader dir %s: %v", r.dir, err)
-	}
-}
-
-func (m *Manager) syncForReader(ctx context.Context, sb *types.Sandbox) {
-	if err := m.eng.SyncGuest(ctx, sb.VsockSocket); err != nil {
-		log.WithFunc("pool.syncForReader").Warnf(ctx, "sync %s before hibernate: %v", sb.ID, err)
 	}
 }
 

@@ -38,46 +38,6 @@ var (
 	errUnreachable = errors.New("guest agent unreachable")
 )
 
-// serveSleeping answers the 101 before reading any frame, since a client's first frame can wait on it.
-func (s *Server) serveSleeping(ctx context.Context, w http.ResponseWriter, id, token string) {
-	client, clientBuf, ok := hijack(ctx, w)
-	if !ok {
-		return
-	}
-	release, ok := s.trackRelay(client, noCloser{})
-	if !ok {
-		return
-	}
-	defer release()
-	_ = client.SetDeadline(time.Time{})
-	keepAlive(client)
-	if _, err := client.Write(switchingProtocols); err != nil {
-		return
-	}
-	rt := &router{s: s, ctx: ctx, id: id, token: token, client: client, br: bufio.NewReaderSize(clientReader(client, clientBuf), routeBuf)}
-	guest, done, ok := rt.run()
-	if !ok {
-		return
-	}
-	defer done()
-	defer func() { _ = guest.Close() }()
-	s.retargetRelay(client, guest)
-	copyBoth(client, s.audited(ctx, id, io.MultiReader(bytes.NewReader(rt.replay), rt.br)), guest, silkdEnds)
-}
-
-func (s *Server) openGuest(ctx context.Context, id, token string) (net.Conn, func(), error) {
-	sock, _, done, err := s.mgr.WakeAgentSocket(ctx, id, token)
-	if err != nil {
-		return nil, nil, err
-	}
-	guest, err := s.dialer.DialSilkd(ctx, sock)
-	if err != nil {
-		done()
-		return nil, nil, fmt.Errorf("%w: %w", errUnreachable, err)
-	}
-	return guest, done, nil
-}
-
 type router struct {
 	s     *Server
 	ctx   context.Context
@@ -93,8 +53,7 @@ type router struct {
 	superseded atomic.Bool
 
 	pending []byte
-	// replay is what the guest has not seen when the router hands over.
-	replay []byte
+	replay  []byte
 }
 
 func (r *router) run() (net.Conn, func(), bool) {
@@ -286,6 +245,42 @@ func (r *router) audit(head []byte, partial bool) {
 	r.s.mgr.Audit(r.ctx, r.id, bytes.TrimSuffix(head, newline))
 }
 
-type noCloser struct{}
+// serveSleeping answers the 101 before reading any frame, since a client's first frame can wait on it.
+func (s *Server) serveSleeping(ctx context.Context, w http.ResponseWriter, id, token string) {
+	client, clientBuf, ok := hijack(ctx, w)
+	if !ok {
+		return
+	}
+	release, ok := s.trackRelay(client, io.NopCloser(nil))
+	if !ok {
+		return
+	}
+	defer release()
+	_ = client.SetDeadline(time.Time{})
+	keepAlive(client)
+	if _, err := client.Write(switchingProtocols); err != nil {
+		return
+	}
+	rt := &router{s: s, ctx: ctx, id: id, token: token, client: client, br: bufio.NewReaderSize(clientReader(client, clientBuf), routeBuf)}
+	guest, done, ok := rt.run()
+	if !ok {
+		return
+	}
+	defer done()
+	defer func() { _ = guest.Close() }()
+	s.retargetRelay(client, guest)
+	copyBoth(client, s.audited(ctx, id, io.MultiReader(bytes.NewReader(rt.replay), rt.br)), guest, silkdEnds)
+}
 
-func (noCloser) Close() error { return nil }
+func (s *Server) openGuest(ctx context.Context, id, token string) (net.Conn, func(), error) {
+	sock, _, done, err := s.mgr.WakeAgentSocket(ctx, id, token)
+	if err != nil {
+		return nil, nil, err
+	}
+	guest, err := s.dialer.DialSilkd(ctx, sock)
+	if err != nil {
+		done()
+		return nil, nil, fmt.Errorf("%w: %w", errUnreachable, err)
+	}
+	return guest, done, nil
+}

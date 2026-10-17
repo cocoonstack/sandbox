@@ -284,6 +284,16 @@ func (p *pool) applySpec(spec config.PoolSpec) {
 	p.archiveDelete = time.Duration(spec.ArchiveDeleteAfterSeconds) * time.Second
 }
 
+func (p *pool) popWarm() *types.Sandbox {
+	n := len(p.warm)
+	if n == 0 {
+		return nil
+	}
+	sb := p.warm[n-1]
+	p.warm = p.warm[:n-1]
+	return sb
+}
+
 // trimWarm shrinks p.warm to at most target and returns the trimmed VM names; callers hold m.mu.
 func (p *pool) trimWarm(target int) []string {
 	var trim []string
