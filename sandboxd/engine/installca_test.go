@@ -80,6 +80,7 @@ type fakeSilkd struct {
 	execFailAt int
 	execHook   func([]string)
 	realpath   map[string]string
+	noRealpath bool
 	writeErr   string
 	writeKind  string
 	execErr    string
@@ -199,6 +200,9 @@ func (f *fakeSilkd) handleExec(conn net.Conn, argv []string, env map[string]stri
 	code, reply, disconnect := f.execCode, f.execErr, f.execDrop
 	if argv[0] == "realpath" {
 		code, reply, disconnect = 0, "", false
+		if f.noRealpath {
+			code = 1
+		}
 	}
 	if f.execFailAt > 0 && len(f.execCalls) != f.execFailAt {
 		code, reply = 0, ""
@@ -216,7 +220,7 @@ func (f *fakeSilkd) handleExec(conn net.Conn, argv []string, env map[string]stri
 		return
 	}
 	_, _ = io.WriteString(conn, `{"type":"started","pid":1}`+"\n")
-	if argv[0] == "realpath" {
+	if argv[0] == "realpath" && code == 0 {
 		writeFakeSilkdResponse(conn, &wire.Stdout{Data: []byte(cmp.Or(resolved, argv[len(argv)-1]) + "\n")})
 	}
 	_, _ = fmt.Fprintf(conn, `{"type":"exit","code":%d}`+"\n", code)

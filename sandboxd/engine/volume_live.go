@@ -120,11 +120,7 @@ func (e *Engine) volumeMounted(ctx context.Context, vsockSocket, device, mount s
 	if err != nil {
 		return false, err
 	}
-	resolved, err := e.silkdOutput(ctx, vsockSocket, "realpath", "-m", "--", mount)
-	if err != nil {
-		return false, fmt.Errorf("resolve volume mount %s: %w", mount, err)
-	}
-	target := strings.TrimSpace(string(resolved))
+	target := e.resolveMount(ctx, vsockSocket, mount, mounts)
 	matched := false
 	for _, entry := range mounts {
 		if entry.path != target {
@@ -139,6 +135,18 @@ func (e *Engine) volumeMounted(ctx context.Context, vsockSocket, device, mount s
 		matched = true
 	}
 	return matched, nil
+}
+
+func (e *Engine) resolveMount(ctx context.Context, vsockSocket, mount string, mounts []volumeMount) string {
+	if slices.ContainsFunc(mounts, func(m volumeMount) bool { return m.path == mount }) {
+		return mount
+	}
+	resolved, err := e.silkdOutput(ctx, vsockSocket, "realpath", "-m", "--", mount)
+	if err != nil {
+		log.WithFunc("engine.resolveMount").Warnf(ctx, "resolve volume mount %s, checking it as given: %v", mount, err)
+		return mount
+	}
+	return strings.TrimSuffix(string(resolved), "\n")
 }
 
 func (e *Engine) refuseOtherMounts(ctx context.Context, vsockSocket, device string) error {

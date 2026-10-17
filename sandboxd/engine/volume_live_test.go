@@ -118,6 +118,72 @@ func TestLiveMountRefusesAnOccupiedPathBehindASymlink(t *testing.T) {
 	}
 }
 
+func TestLiveMountKeepsATrailingSpaceInItsPath(t *testing.T) {
+	sock := sockPath(t)
+	fake := serveFakeSilkd(t, sock)
+	configureVolumeDevices(fake)
+	spec := liveDiskCLI(t, "")
+	fake.mu.Lock()
+	fake.serial["/sys/block/vdc/dev"] = []byte("8:32\n")
+	fake.serial["/proc/self/mountinfo"] = []byte(rootMountInfo)
+	fake.execHook = func(argv []string) {
+		switch argv[0] {
+		case "mount":
+			fake.serial["/proc/self/mountinfo"] = []byte(rootMountInfo + "2 1 8:32 / /data\\040 ro - ext4 /dev/vdc ro\n")
+		case "umount":
+			fake.serial["/proc/self/mountinfo"] = []byte(rootMountInfo)
+		}
+	}
+	fake.mu.Unlock()
+	e := New("cocoon", nil, nil, false, false, "")
+	if err := e.DiskAttach(t.Context(), "sbx-1", spec); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if err := e.MountLiveVolume(t.Context(), sock, spec.Name, "/data ", false); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := e.DetachVolume(t.Context(), "sbx-1", sock, spec.Name, "/data "); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestLiveMountWorksWithoutAGuestRealpath(t *testing.T) {
+	sock := sockPath(t)
+	fake := serveFakeSilkd(t, sock)
+	configureVolumeDevices(fake)
+	spec := liveDiskCLI(t, "")
+	fake.mu.Lock()
+	fake.noRealpath = true
+	fake.serial["/sys/block/vdc/dev"] = []byte("8:32\n")
+	fake.serial["/proc/self/mountinfo"] = []byte(rootMountInfo)
+	fake.execHook = func(argv []string) {
+		switch argv[0] {
+		case "mount":
+			fake.serial["/proc/self/mountinfo"] = []byte(rootMountInfo + "2 1 8:32 / /data ro - ext4 /dev/vdc ro\n")
+		case "umount":
+			fake.serial["/proc/self/mountinfo"] = []byte(rootMountInfo)
+		}
+	}
+	fake.mu.Unlock()
+	e := New("cocoon", nil, nil, false, false, "")
+	if err := e.DiskAttach(t.Context(), "sbx-1", spec); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.MountLiveVolume(t.Context(), sock, spec.Name, "/data", false); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.DetachVolume(t.Context(), "sbx-1", sock, spec.Name, "/data"); err != nil {
+		t.Fatal(err)
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if changes := guestChanges(fake.execCalls); len(changes) != 3 || changes[2][0] != "umount" {
+		t.Fatalf("expected one mkdir/mount/umount, got %v", fake.execCalls)
+	}
+}
+
 func TestLiveMountReadsMountinfoBeyondTheSysfsCap(t *testing.T) {
 	sock := sockPath(t)
 	fake := serveFakeSilkd(t, sock)
