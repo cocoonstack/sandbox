@@ -22,7 +22,7 @@ func TestLiveVolumeConvergesMountAndDetach(t *testing.T) {
 		{name: "canonical path", mount: "/data", kernelPath: "/data", lookups: 1},
 		{name: "symlinked parent", mount: "/workspace/data", kernelPath: "/home/u/ws/data", realpath: map[string]string{"/workspace/data": "/home/u/ws/data"}, lookups: 3},
 		{name: "trailing space behind a symlink", mount: "/ws/data ", kernelPath: `/home/u/ws/data\040`, realpath: map[string]string{"/ws/data ": "/home/u/ws/data "}, lookups: 3},
-		{name: "guest without realpath", mount: "/data", kernelPath: "/data", noRealpath: true, lookups: 1},
+		{name: "unresolvable path", mount: "/data", kernelPath: "/data", noRealpath: true, lookups: 1},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			sock := sockPath(t)
