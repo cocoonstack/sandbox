@@ -296,15 +296,13 @@ func (m *Manager) releaseResolved(ctx context.Context, id string, sb *types.Sand
 	if ck != "" {
 		m.pendingCks[ck] = struct{}{}
 	}
-	delete(m.claimed, id)
-	m.tenantDelta(sb.Tenant, -1)
+	m.dropClaimLocked(sb)
 	js := m.store.del(id)
 	m.mu.Unlock()
 	if saveErr := m.store.commit(js); saveErr != nil {
 		m.mu.Lock()
-		m.claimed[id] = sb // roll back so memory matches the still-durable claim
+		m.addClaimLocked(sb) // roll back so memory matches the still-durable claim
 		m.restoreVolumeHolds(sb, volumeHolds)
-		m.tenantDelta(sb.Tenant, 1)
 		delete(m.pendingCks, ck)
 		rb := m.store.set(sb)
 		m.mu.Unlock()
@@ -412,6 +410,16 @@ func (m *Manager) tenantDelta(tenant string, delta int) {
 	}
 }
 
+func (m *Manager) addClaimLocked(sb *types.Sandbox) {
+	m.claimed[sb.ID] = sb
+	m.tenantDelta(sb.Tenant, 1)
+}
+
+func (m *Manager) dropClaimLocked(sb *types.Sandbox) {
+	delete(m.claimed, sb.ID)
+	m.tenantDelta(sb.Tenant, -1)
+}
+
 // finalize stamps identity and persists the claim; a failed write destroys the VM.
 func (m *Manager) finalize(ctx context.Context, sb *types.Sandbox, ttl time.Duration, inherited bool) (*types.Sandbox, error) {
 	if err := m.finalizeBatch(ctx, []*types.Sandbox{sb}, ttl, "", inherited); err != nil {
@@ -452,8 +460,7 @@ func (m *Manager) finalizeBatch(ctx context.Context, sbs []*types.Sandbox, ttl t
 		if _, pooled := m.activePool(sb.PolicyKey()); pooled {
 			sb.Layer = types.LayerPooled
 		}
-		m.claimed[sb.ID] = sb
-		m.tenantDelta(sb.Tenant, 1)
+		m.addClaimLocked(sb)
 	}
 	js := m.store.set(sbs...)
 	m.mu.Unlock()
@@ -486,8 +493,7 @@ func (m *Manager) rollbackClaim(ctx context.Context, sbs []*types.Sandbox) {
 	holds := make([][]types.Volume, len(sbs))
 	for i, sb := range sbs {
 		holds[i] = m.cancelVolumeRun(sb)
-		delete(m.claimed, sb.ID)
-		m.tenantDelta(sb.Tenant, -1)
+		m.dropClaimLocked(sb)
 		ids[i] = sb.ID
 	}
 	rb := m.store.del(ids...)
@@ -545,8 +551,7 @@ func (m *Manager) reapOnce(ctx context.Context) {
 			expired = append(expired, victim{action: action, id: id, sb: sb})
 		default:
 			expired = append(expired, victim{action: reapDestroy, id: id, vmName: sb.VMName, snap: sb.HibernateSnap, tenant: sb.Tenant, sb: sb, holds: m.cancelVolumeRun(sb)})
-			delete(m.claimed, id)
-			m.tenantDelta(sb.Tenant, -1)
+			m.dropClaimLocked(sb)
 			dropped = append(dropped, id)
 		}
 	}
@@ -582,8 +587,7 @@ func (m *Manager) reapOnce(ctx context.Context) {
 				continue
 			}
 			m.pendingCks[v.ck] = struct{}{}
-			delete(m.claimed, v.id)
-			m.tenantDelta(v.tenant, -1)
+			m.dropClaimLocked(v.sb)
 			purgeCks = append(purgeCks, v.ck)
 			purged = append(purged, v.id)
 		}
@@ -603,9 +607,8 @@ func (m *Manager) reapOnce(ctx context.Context) {
 			if v.action == reapArchive || v.action == reapPause {
 				delete(m.archiving, v.id) // never removed from m.claimed
 			} else {
-				m.claimed[v.id] = v.sb // roll back so memory matches the still-durable claim
+				m.addClaimLocked(v.sb) // roll back so memory matches the still-durable claim
 				m.restoreVolumeHolds(v.sb, v.holds)
-				m.tenantDelta(v.tenant, 1)
 				delete(m.pendingCks, v.ck)
 				restored = append(restored, v.sb)
 			}
