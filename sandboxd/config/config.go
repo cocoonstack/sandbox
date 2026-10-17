@@ -3,7 +3,6 @@ package config
 
 import (
 	"cmp"
-	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -294,52 +293,6 @@ type Config struct {
 // HasEgress reports whether the node can attach egress-lane VMs.
 func (c *Config) HasEgress() bool {
 	return len(c.Bridges) > 0 || len(c.Networks) > 0
-}
-
-// ClusterDigest fingerprints the must-match config, its egress layer and the live tenant records; without cluster_key it omits token hashes.
-func (c *Config) ClusterDigest(caFingerprint string, tenants []TenantRecord) string {
-	tenants = slices.Clone(tenants)
-	slices.SortFunc(tenants, func(a, b TenantRecord) int { return strings.Compare(a.Name, b.Name) })
-	eg := c.egressFingerprint()
-	if c.Mesh != nil {
-		if key, _ := c.Mesh.DecodedKey(); key != nil {
-			raw, _ := utils.DigestJSON([]any{c.APIToken, c.PreviewSecret, caFingerprint, tenants, c.CheckpointTTLHours, eg})
-			mac := hmac.New(sha256.New, key)
-			mac.Write(raw)
-			return hex.EncodeToString(mac.Sum(nil))
-		}
-	}
-	for i := range tenants {
-		tenants[i].TokenSHA256 = ""
-	}
-	return utils.DigestHex([]any{caFingerprint, tenants, c.CheckpointTTLHours, eg})
-}
-
-type egressFingerprint struct {
-	Classes  []EgressClass         `json:"classes,omitempty"`
-	Secrets  []egress.SecretSpec   `json:"secrets,omitempty"`
-	Internal []string              `json:"internal,omitempty"`
-	Upstream *EgressUpstreamConfig `json:"upstream,omitempty"`
-	Pools    map[string]PoolSpec   `json:"pools,omitempty"`
-}
-
-// egressFingerprint is the egress config every node must share, in an order-free form; secret values stay out.
-func (c *Config) egressFingerprint() egressFingerprint {
-	fp := egressFingerprint{
-		Classes:  slices.SortedFunc(slices.Values(c.EgressClasses), func(a, b EgressClass) int { return strings.Compare(a.Name, b.Name) }),
-		Internal: slices.Sorted(slices.Values(c.EgressInternalAllow)),
-		Secrets:  slices.SortedFunc(slices.Values(c.Secrets), func(a, b egress.SecretSpec) int { return strings.Compare(a.Name, b.Name) }),
-		Pools:    map[string]PoolSpec{},
-	}
-	if u := c.EgressUpstream; u != nil {
-		fp.Upstream = &EgressUpstreamConfig{ClaimEnv: u.ClaimEnv, Allow: slices.Sorted(slices.Values(u.Allow))}
-	}
-	for _, p := range c.Pools {
-		if p.Egress != nil || p.EgressUpstreamEnv != "" {
-			fp.Pools[poolLabel(p.PoolKey)] = PoolSpec{Egress: p.Egress, EgressUpstreamEnv: p.EgressUpstreamEnv}
-		}
-	}
-	return fp
 }
 
 func (c *Config) guardsEgressLane() bool {
