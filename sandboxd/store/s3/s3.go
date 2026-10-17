@@ -208,18 +208,21 @@ func (s *Store) SetLabels(ctx context.Context, id string, labels []byte) error {
 
 func (s *Store) Delete(ctx context.Context, id string) error {
 	_ = os.RemoveAll(filepath.Join(s.staging, "cache", id))
-	metaKey := s.key(id, store.MetaFile)
 	objs, err := s.list(ctx, s.key(id, "")+"/")
 	if err != nil {
 		return err
 	}
-	keys := objectKeys(objs)
-	// keep the commit marker so a failed export cleanup remains discoverable on retry.
-	keys = slices.DeleteFunc(keys, func(key string) bool { return key == metaKey })
-	if err := s.deleteKeys(ctx, keys); err != nil {
+	for _, key := range objectKeys(objs) {
+		if strings.HasSuffix(key, "/"+manifestName) {
+			if err = s.refreshObject(ctx, key); err != nil {
+				return err
+			}
+		}
+	}
+	if err = s.deleteKeys(ctx, []string{s.key(id, store.LabelsFile)}); err != nil {
 		return err
 	}
-	return s.deleteKeys(ctx, []string{metaKey})
+	return s.deleteKeys(ctx, []string{s.key(id, store.MetaFile)})
 }
 
 // SweepStaging clears local staging residue at startup.
@@ -584,6 +587,17 @@ func (s *Store) sweepRecord(ctx context.Context, rec *recordObjects, now time.Ti
 		refs.add(man)
 	}
 	return doomed, nil
+}
+
+func (s *Store) refreshObject(ctx context.Context, key string) error {
+	body, _, err := s.getObject(ctx, key)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	return s.putObject(ctx, key, body, nil)
 }
 
 func (s *Store) putObject(ctx context.Context, key string, body []byte, metadata map[string]string) error {

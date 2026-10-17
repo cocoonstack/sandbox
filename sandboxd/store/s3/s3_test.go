@@ -36,8 +36,8 @@ func TestS3BackendContract(t *testing.T) {
 func TestDeleteRetryConverges(t *testing.T) {
 	const id = "ck_00000000000000bb"
 	fake := &fakeS3{objects: map[string][]byte{
-		"ck/" + id + "/" + store.MetaFile:                []byte(`{"id":"` + id + `"}`),
-		"ck/" + id + "/" + store.ExportDir + "/disk.img": []byte("bytes"),
+		"ck/" + id + "/" + store.MetaFile:                             []byte(`{"id":"` + id + `"}`),
+		"ck/" + id + "/" + store.ExportDir + "-first/" + manifestName: []byte(`{"files":[]}`),
 	}}
 	st := newTestStore(t, fake)
 	if err := st.Delete(t.Context(), id); err != nil {
@@ -46,17 +46,17 @@ func TestDeleteRetryConverges(t *testing.T) {
 	if err := st.Delete(t.Context(), id); err != nil {
 		t.Fatalf("delete retry after keys already gone: %v", err)
 	}
-	if len(fake.objects) != 0 {
-		t.Errorf("objects left behind: %v", fake.objects)
+	if keys := fake.keys(); len(keys) != 1 || !strings.HasSuffix(keys[0], manifestName) {
+		t.Errorf("objects after Delete = %v, want only the manifest", keys)
 	}
 }
 
-func TestDeleteRetainsMetaUntilExportsAreGone(t *testing.T) {
+func TestDeleteRetainsMetaUntilManifestsAreRefreshed(t *testing.T) {
 	const id = "ck_00000000000000bb"
 	metaKey := "ck/" + id + "/" + store.MetaFile
-	exportKeys := []string{
-		"ck/" + id + "/export-first/disk.img",
-		"ck/" + id + "/export-second/disk.img",
+	manifestKeys := []string{
+		"ck/" + id + "/export-first/" + manifestName,
+		"ck/" + id + "/export-second/" + manifestName,
 	}
 	for _, tc := range []struct {
 		name       string
@@ -69,9 +69,9 @@ func TestDeleteRetainsMetaUntilExportsAreGone(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			fake := &fakeS3{
 				objects: map[string][]byte{
-					metaKey:       []byte(`{"id":"` + id + `"}`),
-					exportKeys[0]: []byte("first"),
-					exportKeys[1]: []byte("second"),
+					metaKey:         []byte(`{"id":"` + id + `"}`),
+					manifestKeys[0]: []byte(`{"files":[]}`),
+					manifestKeys[1]: []byte(`{"files":[]}`),
 				},
 				failList:   tc.failList,
 				failDelete: tc.failDelete,
@@ -84,12 +84,12 @@ func TestDeleteRetainsMetaUntilExportsAreGone(t *testing.T) {
 			fake.mu.Lock()
 			if _, ok := fake.objects[metaKey]; !ok {
 				fake.mu.Unlock()
-				t.Fatal("first Delete removed meta before export cleanup succeeded")
+				t.Fatal("first Delete removed meta before the cleanup succeeded")
 			}
 			for _, batch := range fake.deleteBatches {
 				if slices.Contains(batch, metaKey) {
 					fake.mu.Unlock()
-					t.Fatalf("first Delete included meta in export batch %v", batch)
+					t.Fatalf("first Delete included meta in batch %v", batch)
 				}
 			}
 			fake.failList = false
@@ -102,11 +102,16 @@ func TestDeleteRetainsMetaUntilExportsAreGone(t *testing.T) {
 			}
 			fake.mu.Lock()
 			defer fake.mu.Unlock()
-			if len(fake.objects) != 0 {
-				t.Errorf("objects left after retry: %v", fake.objects)
+			if len(fake.objects) != len(manifestKeys) {
+				t.Errorf("objects after retry = %d, want only the manifests", len(fake.objects))
+			}
+			for _, key := range manifestKeys {
+				if time.Since(fake.modified[key]) > time.Minute {
+					t.Errorf("manifest %s was not refreshed by Delete", key)
+				}
 			}
 			if len(fake.deleteBatches) < 2 {
-				t.Fatalf("delete batches = %v, want exports then meta", fake.deleteBatches)
+				t.Fatalf("delete batches = %v, want labels then meta", fake.deleteBatches)
 			}
 			last := len(fake.deleteBatches) - 1
 			for i, batch := range fake.deleteBatches {
@@ -312,19 +317,19 @@ func TestRepublishRetainsGenerationSelectedByAnotherStore(t *testing.T) {
 	}
 	publishRecord(t, writer, id, []byte(`{"id":"`+id+`","gen":2}`), "second")
 
+	if err = writer.Delete(t.Context(), id); err != nil {
+		t.Fatalf("delete the record: %v", err)
+	}
+	if _, ok := fake.get("ck/" + id + "/" + store.MetaFile); ok {
+		t.Error("meta survived Delete")
+	}
 	gen := filepath.Join(reader.staging, "selected-first")
 	if err = reader.populate(t.Context(), id, selected, gen); err != nil {
-		t.Fatalf("fetch selected first generation after re-publish: %v", err)
+		t.Fatalf("fetch of the selected generation after the record was deleted: %v", err)
 	}
 	got, err := os.ReadFile(filepath.Join(gen, store.ExportDir, "disk.img"))
 	if err != nil || string(got) != "first" {
 		t.Fatalf("selected generation bytes: %q, %v, want first", got, err)
-	}
-	if err = writer.Delete(t.Context(), id); err != nil {
-		t.Fatalf("delete all generations: %v", err)
-	}
-	if keys := fake.keys(); len(keys) != 2 || slices.ContainsFunc(keys, func(k string) bool { return !strings.HasPrefix(k, "ck/chunks/") }) {
-		t.Errorf("objects after Delete = %v, want only the two chunks", keys)
 	}
 	fake.age("", 2*store.GenerationGrace)
 	if err = writer.SweepGenerations(t.Context()); err != nil {
@@ -332,6 +337,30 @@ func TestRepublishRetainsGenerationSelectedByAnotherStore(t *testing.T) {
 	}
 	if keys := fake.keys(); len(keys) != 0 {
 		t.Errorf("objects left after the sweep: %v", keys)
+	}
+}
+
+func TestSweepKeepsChunksOfARecentlyDeletedRecord(t *testing.T) {
+	const id = "ck_00000000000000a8"
+	fake := &fakeS3{objects: map[string][]byte{}}
+	st := newTestStore(t, fake)
+	publishRecord(t, st, id, []byte(`{"id":"`+id+`"}`), "payload")
+	fake.age("", 2*store.GenerationGrace)
+	if err := st.Delete(t.Context(), id); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if err := st.SweepGenerations(t.Context()); err != nil {
+		t.Fatalf("SweepGenerations: %v", err)
+	}
+	if keys := fake.keys(); len(keys) != 2 {
+		t.Errorf("objects after a sweep right after Delete = %v, want the manifest and its chunk", keys)
+	}
+	fake.age("", 2*store.GenerationGrace)
+	if err := st.SweepGenerations(t.Context()); err != nil {
+		t.Fatalf("SweepGenerations: %v", err)
+	}
+	if keys := fake.keys(); len(keys) != 0 {
+		t.Errorf("objects left after the grace: %v", keys)
 	}
 }
 
