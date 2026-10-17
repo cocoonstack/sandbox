@@ -43,12 +43,12 @@ func (m *Manager) confirmGone(ctx context.Context, name string) bool {
 }
 
 // removeOrRetry reports whether the VM is confirmed gone; a survivor is queued for the reap tick.
-func (m *Manager) removeOrRetry(ctx context.Context, name, sandboxID, tap string, td volumeTeardown) bool {
+func (m *Manager) removeOrRetry(ctx context.Context, name, sandboxID string, td volumeTeardown) bool {
 	if m.removeVM(ctx, name) {
 		m.finishVolumeTeardown(ctx, td)
 		return true
 	}
-	m.queueRemoval(name, sandboxID, tap, td, time.Time{})
+	m.queueRemoval(name, sandboxID, "", td, time.Time{})
 	return false
 }
 
@@ -114,5 +114,5 @@ func (m *Manager) finishRemoval(ctx context.Context, pending pendingRemoval) {
 }
 
 func (m *Manager) destroy(ctx context.Context, name string) {
-	m.removeOrRetry(ctx, name, "", "", volumeTeardown{})
+	m.removeOrRetry(ctx, name, "", volumeTeardown{})
 }

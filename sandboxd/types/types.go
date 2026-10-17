@@ -107,7 +107,7 @@ type NetShape string
 // PolicyLayer pins, at claim time, whether the key had a pool layer in its egress policy.
 type PolicyLayer string
 
-// NetRoute is how a claimed guest reaches the network: relay through the host proxy, a direct NIC, or none.
+// NetRoute is how a claimed guest reaches the network.
 type NetRoute string
 
 // RestoreMode selects cocoon's clone memory-restore strategy; empty is cocoon's default.
@@ -504,7 +504,7 @@ func (k PoolKey) Hash() string {
 // Validate checks that every axis holds a known value.
 func (k PoolKey) Validate() error {
 	if k.Template == "" {
-		return fmt.Errorf("template must not be empty")
+		return errors.New("template must not be empty")
 	}
 	switch k.Net {
 	case NetNone, NetEgress:
@@ -694,13 +694,25 @@ type VMConfig struct {
 	Name string `json:"name"`
 }
 
+// VMDisk is one hot-attached disk that `cocoon vm inspect` reports.
+type VMDisk struct {
+	Name     string `json:"name"`
+	ReadOnly bool   `json:"readonly,omitzero"`
+}
+
+// VMDevices is the attached-device subset that `cocoon vm inspect` fills only for a running VM.
+type VMDevices struct {
+	Disks []VMDisk `json:"disks,omitempty"`
+}
+
 // VMRecord is the subset of cocoon's VM records the control plane reads.
 type VMRecord struct {
-	State          string        `json:"state"`
-	PID            int           `json:"pid"`
-	VsockSocket    string        `json:"vsock_socket"`
-	NetworkConfigs []VMNetConfig `json:"network_configs,omitempty"`
-	Config         VMConfig      `json:"config"`
+	State           string        `json:"state"`
+	PID             int           `json:"pid"`
+	VsockSocket     string        `json:"vsock_socket"`
+	NetworkConfigs  []VMNetConfig `json:"network_configs,omitempty"`
+	Config          VMConfig      `json:"config"`
+	AttachedDevices VMDevices     `json:"attached_devices,omitzero"`
 }
 
 // TapDevice returns the first NIC's host tap; empty when the record carries none.
@@ -830,13 +842,8 @@ func validateVolumeMount(mount string) error {
 	if filepath.Clean(mount) != mount {
 		return errors.New("must be clean")
 	}
-	if mount == "/" {
+	if mount == "/" || slices.ContainsFunc(guestOSMountRoots, func(root string) bool { return mount == root || pathWithin(root, mount) }) {
 		return errors.New("must be outside the guest OS tree")
-	}
-	for _, root := range guestOSMountRoots {
-		if mount == root || pathWithin(root, mount) {
-			return errors.New("must be outside the guest OS tree")
-		}
 	}
 	return nil
 }
