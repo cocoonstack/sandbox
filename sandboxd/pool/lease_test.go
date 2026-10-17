@@ -19,13 +19,13 @@ func TestLeaseRenewLoopKeepsTheNodeLeasedUntilItStops(t *testing.T) {
 		a := c.node(t, "a", t.TempDir(), keepAnHour)
 		sb := mustClaim(t, a, testKey)
 		replicateNow(t, a, sb)
-		row, _, _ := c.reg.Get(t.Context(), sb.ID)
 		c.expire("a")
 		ctx, cancel := context.WithCancel(t.Context())
 		defer cancel()
 
 		go a.keepLease(ctx)
 		time.Sleep(10 * leaseTTL)
+		row, _, _ := c.reg.Get(ctx, sb.ID)
 		if _, err := c.reg.Take(ctx, sb.ID, row.Epoch, "b"); !errors.Is(err, archives.ErrLost) {
 			t.Fatalf("take while the loop renews: %v, want ErrLost", err)
 		}
@@ -171,6 +171,103 @@ func TestLeaseFenceClosesOpenStreamsOfReplicatedClaimsOnly(t *testing.T) {
 	})
 }
 
+func TestLeaseSlowUnfenceStaysFencedAndKeepsRenewing(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		c := newReplicaCluster(t)
+		a := c.node(t, "a", t.TempDir(), keepAnHour)
+		cut := &cutRegistry{Registry: c.reg}
+		a.archives = cut
+		sb := mustClaim(t, a, testKey)
+		replicateNow(t, a, sb)
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		go a.keepLease(ctx)
+		synctest.Wait()
+
+		cut.cut.Store(true)
+		time.Sleep(leaseTTL)
+		synctest.Wait()
+		cut.cut.Store(false)
+		cut.rowsDelay.Store(int64(leaseTTL))
+		time.Sleep(leaseRenew)
+		time.Sleep(leaseTTL + time.Second)
+		synctest.Wait()
+		if _, _, _, err := a.WakeAgentSocket(ctx, sb.ID, sb.Token); !errors.Is(err, ErrLeaseLost) {
+			t.Fatalf("serving after a confirmation that outlasted the lease window: %v, want ErrLeaseLost", err)
+		}
+		row, _, _ := c.reg.Get(ctx, sb.ID)
+		if _, err := c.reg.Take(ctx, sb.ID, row.Epoch, "b"); !errors.Is(err, archives.ErrLost) {
+			t.Errorf("take while the slow unfence is renewing: %v, want ErrLost: renewals must go on", err)
+		}
+
+		cut.rowsDelay.Store(0)
+		time.Sleep(2 * leaseRenew)
+		synctest.Wait()
+		assertServed(t, a, sb.ID, sb.Token)
+	})
+}
+
+func TestLeaseAdoptionDuringUnfenceDropsTheClaimWithoutServingIt(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		c := newReplicaCluster(t)
+		a, b := c.node(t, "a", t.TempDir(), keepAnHour), c.node(t, "b", t.TempDir(), keepAnHour)
+		cut := &cutRegistry{Registry: c.reg}
+		a.archives = cut
+		sb := mustClaim(t, a, testKey)
+		vm := lockedVMName(sb)
+		replicateNow(t, a, sb)
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		go a.keepLease(ctx)
+		synctest.Wait()
+
+		cut.cut.Store(true)
+		time.Sleep(leaseTTL)
+		synctest.Wait()
+		fencedAtTake := false
+		cut.beforeTake = func() {
+			fencedAtTake = a.fenced.Load()
+			c.expire("a")
+			if adopted, err := b.AdoptArchived(ctx, sb.ID, sb.Token); err != nil || !adopted {
+				t.Errorf("adopt during the owner's unfence: %v %v", adopted, err)
+			}
+		}
+		cut.cut.Store(false)
+		time.Sleep(leaseRenew)
+		synctest.Wait()
+
+		if !fencedAtTake {
+			t.Error("the owner served again before it confirmed the row")
+		}
+		if _, _, _, err := a.WakeAgentSocket(ctx, sb.ID, sb.Token); !errors.Is(err, ErrUnknownSandbox) {
+			t.Errorf("the owner after losing the row: %v, want ErrUnknownSandbox", err)
+		}
+		if !a.eng.(*fakeEngine).removed(vm) {
+			t.Error("the owner kept its VM of the adopted claim")
+		}
+		if _, _, _, err := b.WakeAgentSocket(ctx, sb.ID, sb.Token); err != nil {
+			t.Errorf("the adopter's wake: %v", err)
+		}
+	})
+}
+
+func TestLeaseConfirmRetriesOnceOnAStaleEpoch(t *testing.T) {
+	c := newReplicaCluster(t)
+	a := c.node(t, "a", t.TempDir(), keepAnHour)
+	sb := mustClaim(t, a, testKey)
+	replicateNow(t, a, sb)
+	stale, _, _ := c.reg.Get(t.Context(), sb.ID)
+	replicateNow(t, a, sb)
+
+	if keep, err := a.confirmOwnership(t.Context(), sb, stale); err != nil || !keep {
+		t.Fatalf("confirm on a row read before a newer round: %v %v, want kept", keep, err)
+	}
+	current, _, _ := c.reg.Get(t.Context(), sb.ID)
+	if a.epochOf(sb) != current.Epoch {
+		t.Errorf("claim epoch %d, want the row's %d", a.epochOf(sb), current.Epoch)
+	}
+}
+
 func TestLeaseAdoptionWaitsOutTheFenceAndTheOldOwnerDropsItsCopy(t *testing.T) {
 	for _, tt := range []struct {
 		name       string
@@ -232,7 +329,17 @@ func TestLeaseAdoptionWaitsOutTheFenceAndTheOldOwnerDropsItsCopy(t *testing.T) {
 
 type cutRegistry struct {
 	archives.Registry
-	cut atomic.Bool
+	cut        atomic.Bool
+	rowsDelay  atomic.Int64
+	beforeTake func()
+}
+
+func (r *cutRegistry) Take(ctx context.Context, id string, expect int64, owner string) (int64, error) {
+	if hook := r.beforeTake; hook != nil {
+		r.beforeTake = nil
+		hook()
+	}
+	return r.Registry.Take(ctx, id, expect, owner)
 }
 
 func (r *cutRegistry) Renew(ctx context.Context, node string, ttl time.Duration) error {
@@ -246,6 +353,7 @@ func (r *cutRegistry) Rows(ctx context.Context, ids []string) (map[string]archiv
 	if r.cut.Load() {
 		return nil, archives.ErrUnavailable
 	}
+	time.Sleep(time.Duration(r.rowsDelay.Load()))
 	return r.Registry.Rows(ctx, ids)
 }
 

@@ -2,6 +2,7 @@ package pool
 
 import (
 	"context"
+	"errors"
 	"io"
 	"maps"
 	"slices"
@@ -41,8 +42,11 @@ func (m *Manager) renewLease(ctx context.Context, fence *time.Timer) {
 		return
 	}
 	fence.Reset(m.lease.ttl - m.lease.margin - time.Since(start))
-	if m.fenced.Load() {
-		m.unfence(ctx)
+	if m.fenced.Load() && m.unfencing.CompareAndSwap(false, true) {
+		go func() {
+			defer m.unfencing.Store(false)
+			m.unfence(ctx, start)
+		}()
 	}
 }
 
@@ -53,7 +57,8 @@ func (m *Manager) fence(ctx context.Context) {
 	}
 }
 
-func (m *Manager) unfence(ctx context.Context) {
+// unfence confirms each replicated claim against its row, then lifts the fence if that finished inside the window the renewal at start still covers.
+func (m *Manager) unfence(ctx context.Context, start time.Time) {
 	logger := log.WithFunc("pool.unfence")
 	m.mu.Lock()
 	held := map[string]*types.Sandbox{}
@@ -71,17 +76,65 @@ func (m *Manager) unfence(ctx context.Context) {
 			return
 		}
 	}
+	var teardowns []func()
 	for id, sb := range held {
-		rec, ok := rows[id]
-		if ok && rec.Owner != m.nodeID || !ok && m.replicaConfirmed(sb) {
-			sb.Transition.Lock()
-			m.dropAdopted(ctx, sb)
-			sb.Transition.Unlock()
+		keep, err := m.confirmOwnership(ctx, sb, rows[id])
+		if err != nil {
+			logger.Warnf(ctx, "replicated claims stay fenced: %v", err)
+			return
 		}
+		if keep {
+			continue
+		}
+		if td := m.forgetAdopted(ctx, sb); td != nil {
+			teardowns = append(teardowns, func() {
+				sb.Transition.Lock()
+				defer sb.Transition.Unlock()
+				td()
+			})
+		}
+	}
+	for _, td := range teardowns {
+		go td()
+	}
+	if time.Since(start) > m.lease.ttl-m.lease.margin {
+		logger.Warn(ctx, "replicated claims stay fenced: confirming ownership outlasted the lease window")
+		return
 	}
 	m.fenceCh.Store(new(make(chan struct{})))
 	m.fenced.Store(false)
 	logger.Info(ctx, "node lease renewed; replicated claims are served again")
+}
+
+// confirmOwnership takes sb's row for this node in one compare-and-set; false means another node holds the claim.
+func (m *Manager) confirmOwnership(ctx context.Context, sb *types.Sandbox, rec archives.Record) (bool, error) {
+	for range 2 {
+		switch {
+		case rec.ID == "":
+			gone, err := m.replicaGone(ctx, sb)
+			return !gone, err
+		case rec.Owner != m.nodeID:
+			return false, nil
+		case rec.Consumed:
+			return true, nil
+		}
+		epoch, err := m.archives.Take(ctx, sb.ID, rec.Epoch, m.nodeID)
+		if err == nil {
+			_, _ = m.commitIfLive(ctx, sb, func() { sb.ArchiveEpoch = max(sb.ArchiveEpoch, epoch) })
+			return true, nil
+		}
+		if !errors.Is(err, archives.ErrLost) {
+			return false, err
+		}
+		var found bool
+		if rec, found, err = m.archives.Get(ctx, sb.ID); err != nil {
+			return false, err
+		}
+		if !found {
+			rec = archives.Record{}
+		}
+	}
+	return false, nil
 }
 
 // fenceWatch gates sb at resolution and returns the channel that closes when its streams must end; nil for an unreplicated claim.

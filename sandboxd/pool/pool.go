@@ -348,6 +348,7 @@ type Manager struct {
 	// fenced gates replicated claims while the lease is overdue; replicas belongs to the pass holding replicating.
 	lease       leaseTiming
 	fenced      atomic.Bool
+	unfencing   atomic.Bool
 	fenceCh     atomic.Pointer[chan struct{}]
 	replicating atomic.Bool
 	replicas    map[string]replicaState

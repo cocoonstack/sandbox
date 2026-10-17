@@ -269,7 +269,11 @@ func (m *Manager) replicaOf(sb *types.Sandbox) string {
 }
 
 func (m *Manager) replicaConfirmed(sb *types.Sandbox) bool {
+	return m.epochOf(sb) != 0
+}
+
+func (m *Manager) epochOf(sb *types.Sandbox) int64 {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return sb.ArchiveEpoch != 0
+	return sb.ArchiveEpoch
 }

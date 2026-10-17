@@ -336,6 +336,13 @@ func (m *Manager) unrowExpired(ctx context.Context, sb *types.Sandbox) {
 
 // dropAdopted forgets a claim another node owns now and removes its local VM; an archive checkpoint is the new owner's.
 func (m *Manager) dropAdopted(ctx context.Context, sb *types.Sandbox) {
+	if teardown := m.forgetAdopted(ctx, sb); teardown != nil {
+		teardown()
+	}
+}
+
+// forgetAdopted forgets the claim at once and returns the removal of its VM; nil when the claim was already gone.
+func (m *Manager) forgetAdopted(ctx context.Context, sb *types.Sandbox) func() {
 	logger := log.WithFunc("pool.dropAdopted")
 	m.mu.Lock()
 	ck, vm, snap := sb.ArchiveCk, sb.VMName, sb.HibernateSnap
@@ -345,7 +352,10 @@ func (m *Manager) dropAdopted(ctx context.Context, sb *types.Sandbox) {
 			logger.Warnf(ctx, "clear archive ck %s: %v", ck, err)
 		}
 	}
-	if m.forgetClaim(ctx, sb) {
+	if !m.forgetClaim(ctx, sb) {
+		return nil
+	}
+	return func() {
 		if vm != "" {
 			m.destroy(ctx, vm)
 		}
