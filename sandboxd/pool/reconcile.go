@@ -100,6 +100,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 	}
 	// a crash mid-export leaves a fork-* staging dir nothing in this life reuses
 	_ = utils.RemoveDirEntries(m.dataDir, func(name string) bool { return strings.HasPrefix(name, "fork-") })
+	_ = utils.RemoveDirEntries(filepath.Join(m.dataDir, readerDir), nil)
 
 	if fenced {
 		m.reclaimOrphanArchiveCks(ctx, claims)

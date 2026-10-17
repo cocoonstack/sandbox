@@ -26,6 +26,15 @@ func (m *Manager) Hibernate(ctx context.Context, id string, cred Cred) error {
 
 // WakeAgentSocket resolves a data-plane connection's guest socket; the returned func ends the hold it takes, and the channel closes when the stream must end.
 func (m *Manager) WakeAgentSocket(ctx context.Context, id, token string) (string, <-chan struct{}, func(), error) {
+	return m.agentSocket(ctx, id, token, false)
+}
+
+// WakeAgentSocketOrRead is WakeAgentSocket, except that with a reader a sleeping claim answers ErrSleeping instead of waking.
+func (m *Manager) WakeAgentSocketOrRead(ctx context.Context, id, token string) (string, <-chan struct{}, func(), error) {
+	return m.agentSocket(ctx, id, token, m.readers != nil)
+}
+
+func (m *Manager) agentSocket(ctx context.Context, id, token string, readerOK bool) (string, <-chan struct{}, func(), error) {
 	sb, ok := m.claim(id, token)
 	if !ok {
 		return "", nil, nil, ErrUnknownSandbox
@@ -34,12 +43,21 @@ func (m *Manager) WakeAgentSocket(ctx context.Context, id, token string) (string
 	if err != nil {
 		return "", nil, nil, err
 	}
-	sb.Touch()
+	if !readerOK {
+		sb.Touch()
+	}
 	sb.Hold()
-	sock, err := m.wakeResolved(ctx, sb)
-	if err != nil {
+	sock, err := m.wakeOrRead(ctx, sb, readerOK)
+	switch {
+	case errors.Is(err, ErrSleeping):
+		sb.UnholdIdle()
+		return "", nil, nil, err
+	case err != nil:
 		sb.Unhold()
 		return "", nil, nil, err
+	}
+	if readerOK {
+		sb.Touch()
 	}
 	return sock, fenced, sb.Unhold, nil
 }
@@ -87,6 +105,9 @@ func (m *Manager) hibernateLocked(ctx context.Context, sb *types.Sandbox) error 
 		m.mu.Unlock()
 		return fmt.Errorf("hibernate %s: persist intent: %w", sb.ID, err)
 	}
+	if m.readers != nil {
+		m.syncForReader(ctx, sb)
+	}
 	if hibErr := m.eng.Hibernate(ctx, sb.VMName, snap); hibErr != nil {
 		// the engine can report failure after the snapshot landed
 		adopted, resolveErr := m.settlePendingSnap(ctx, sb)
@@ -120,9 +141,16 @@ func (m *Manager) hibernateLocked(ctx context.Context, sb *types.Sandbox) error 
 
 // wakeResolved is the wake body shared by the token and id-only entry points.
 func (m *Manager) wakeResolved(ctx context.Context, sb *types.Sandbox) (string, error) {
+	return m.wakeOrRead(ctx, sb, false)
+}
+
+func (m *Manager) wakeOrRead(ctx context.Context, sb *types.Sandbox, readerOK bool) (string, error) {
 	sb.Transition.Lock()
 	defer sb.Transition.Unlock()
 	if sb.ArchiveCk != "" {
+		if readerOK {
+			return "", ErrSleeping
+		}
 		return m.wakeArchived(ctx, sb)
 	}
 	if sb.Failed != "" {
@@ -142,6 +170,9 @@ func (m *Manager) wakeResolved(ctx context.Context, sb *types.Sandbox) (string, 
 	// the egress lane never hibernates, so a hibernated one is corrupt state
 	if sb.Key.Net == types.NetEgress {
 		return "", fmt.Errorf("wake %s: egress lane cannot resume from hibernation", sb.ID)
+	}
+	if readerOK {
+		return "", ErrSleeping
 	}
 	if err := m.diskErr(); err != nil {
 		return "", fmt.Errorf("wake %s: %w", sb.ID, err)
@@ -174,7 +205,7 @@ func (m *Manager) wakeResolved(ctx context.Context, sb *types.Sandbox) (string, 
 	m.counters.wakeNanos.Add(uint64(time.Since(wakeStart))) //nolint:gosec // durations are positive
 	m.recordUsage(ctx, usageEvent{Event: "wake", ID: sb.ID, VMName: sb.VMName})
 	if proxyErr := m.out.ArmProxy(ctx, sb); proxyErr != nil {
-		log.WithFunc("pool.wakeResolved").Errorf(ctx, proxyErr, "arm egress proxy %s", sb.ID)
+		log.WithFunc("pool.wakeOrRead").Errorf(ctx, proxyErr, "arm egress proxy %s", sb.ID)
 	}
 	if m.disarmIfReleased(sb) {
 		if err == nil {

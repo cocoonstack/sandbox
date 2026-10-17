@@ -1220,6 +1220,11 @@ type fakeEngine struct {
 	hibernates, restores, snapRemoves []string
 	snapSaves, exports, snapshots     []string
 	exportContent                     []byte
+	exportFiles                       map[string]string
+	startedReaders                    []engine.ReaderDisks
+	readerDials                       []string
+	startReaderErr                    error
+	readerDialErr                     error
 	caInstalls                        []string
 	warmups                           [][]string
 	warmupSocks                       []string
@@ -1392,6 +1397,14 @@ func (f *fakeEngine) SnapshotExport(_ context.Context, snapName, toDir string) e
 	}
 	if err := os.MkdirAll(toDir, 0o750); err != nil {
 		return err
+	}
+	f.mu.Lock()
+	files := maps.Clone(f.exportFiles)
+	f.mu.Unlock()
+	for name, body := range files {
+		if err := os.WriteFile(filepath.Join(toDir, name), []byte(body), 0o600); err != nil {
+			return err
+		}
 	}
 	if content == nil {
 		return nil
@@ -1671,6 +1684,27 @@ func (f *fakeEngine) SyncGuest(_ context.Context, vsockSocket string) error {
 	f.syncs = append(f.syncs, vsockSocket)
 	f.volumeOps = append(f.volumeOps, "sync")
 	return nil
+}
+
+func (f *fakeEngine) StartReader(_ context.Context, vsockSocket string, d engine.ReaderDisks) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.startedReaders = append(f.startedReaders, d)
+	f.volumeOps = append(f.volumeOps, "reader-start:"+vsockSocket)
+	return f.startReaderErr
+}
+
+func (f *fakeEngine) DialReader(_ context.Context, vsockSocket string) (net.Conn, error) {
+	f.mu.Lock()
+	f.readerDials = append(f.readerDials, vsockSocket)
+	err := f.readerDialErr
+	f.mu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+	conn, peer := net.Pipe()
+	_ = peer.Close()
+	return conn, nil
 }
 
 func (f *fakeEngine) list(_ context.Context) ([]types.VMRecord, error) {

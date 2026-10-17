@@ -110,7 +110,10 @@ var (
 	ErrFailed              = errors.New("sandbox failed: its VMM is down; release it, or wake it to cold-boot its disk")
 	ErrNoInstanceMetadata  = engine.ErrNoInstanceMetadata
 	ErrQuota               = errors.New("node claim quota reached")
+	ErrSleeping            = errors.New("sandbox is hibernated or archived and a reader may serve it")
+	ErrNoReader            = errors.New("no reader for the sandbox")
 
+	errNotSleeping   = errors.New("sandbox is no longer hibernated or archived")
 	errWokeMeanwhile = errors.New("woke between sweep and hibernate")
 	errNoEgressTap   = errors.New("egress-lane claim has no lockable tap")
 )
@@ -147,6 +150,8 @@ type Engine interface {
 	MountLiveVolume(ctx context.Context, vsockSocket, name, mount string, rw bool) error
 	UnmountVolume(ctx context.Context, vsockSocket, mount string) error
 	SyncGuest(ctx context.Context, vsockSocket string) error
+	StartReader(ctx context.Context, vsockSocket string, d engine.ReaderDisks) error
+	DialReader(ctx context.Context, vsockSocket string) (net.Conn, error)
 	WriteInstanceMetadata(ctx context.Context, vsockSocket string, doc []byte) error
 	WriteGuestEnv(ctx context.Context, vsockSocket string, doc []byte) error
 }
@@ -399,6 +404,8 @@ type Manager struct {
 
 	out *outbound.Host
 
+	readers *readerSet
+
 	mu              sync.Mutex
 	pools           map[types.PoolKey]*pool
 	claimed         map[string]*types.Sandbox
@@ -456,6 +463,9 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 		probeSem:        make(chan struct{}, refill),
 		refillKick:      make(chan struct{}, 1),
 		healSem:         make(chan struct{}, maxConcurrentHeals),
+	}
+	if cfg.Reader != nil {
+		m.readers = &readerSet{key: cfg.Reader.Key(), live: map[string]*reader{}}
 	}
 	for _, volume := range cfg.Volumes {
 		m.volumes[volume.Name] = catalogVolume{

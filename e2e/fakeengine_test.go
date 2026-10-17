@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"sync"
 	"time"
 
@@ -28,6 +29,9 @@ type fakeEngine struct {
 	volumeVMs map[string]bool
 	guestEnvs map[string]string
 	seq       int
+
+	readerRoot   string
+	readerStarts []string
 }
 
 func newFakeEngine(dir string) *fakeEngine {
@@ -85,7 +89,38 @@ func (f *fakeEngine) ReconcileStaleCreate(context.Context, string) (engine.Stale
 func (f *fakeEngine) SnapshotSave(_ context.Context, _, _ string) error { return nil }
 
 func (f *fakeEngine) SnapshotExport(_ context.Context, _, toDir string) error {
-	return os.MkdirAll(toDir, 0o750)
+	if err := os.MkdirAll(toDir, 0o750); err != nil {
+		return err
+	}
+	layer := filepath.Join(f.dir, "layer.erofs")
+	sidecar := `{"storage_configs":[{"path":` + strconv.Quote(layer) + `,"role":"layer"}]}`
+	files := map[string]string{
+		layer:                               "erofs",
+		filepath.Join(toDir, "cow.raw"):     "disk",
+		filepath.Join(toDir, "cocoon.json"): sidecar,
+	}
+	for path, body := range files {
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (f *fakeEngine) StartReader(_ context.Context, vsockSocket string, _ engine.ReaderDisks) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.readerStarts = append(f.readerStarts, vsockSocket)
+	return nil
+}
+
+func (f *fakeEngine) DialReader(_ context.Context, _ string) (net.Conn, error) {
+	f.mu.Lock()
+	root := f.readerRoot
+	f.mu.Unlock()
+	client, server := net.Pipe()
+	go silkdtest.NewFake(root).ServeConn(server)
+	return client, nil
 }
 
 func (f *fakeEngine) SnapshotRemove(_ context.Context, _ string) error { return nil }
