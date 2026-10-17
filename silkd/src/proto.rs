@@ -542,17 +542,13 @@ where
         {
             return Err(FeedError::Bad("stream ended before data_end"));
         }
-        if let Some(n) = decode_data_frame(&frame, &mut decoded) {
-            sink.write_all(&decoded[..n])
-                .await
-                .map_err(|e| FeedError::Io(e, "write"))?;
-            continue;
-        }
-        match serde_json::from_slice::<Request>(&frame) {
-            Ok(Request::Data { data }) => sink
-                .write_all(&data)
-                .await
-                .map_err(|e| FeedError::Io(e, "write"))?,
+        match parse_request(&frame, &mut decoded) {
+            Ok(Request::Data { data }) => {
+                sink.write_all(&data)
+                    .await
+                    .map_err(|e| FeedError::Io(e, "write"))?;
+                decoded = data;
+            }
             Ok(Request::DataEnd) => return Ok(()),
             _ => return Err(FeedError::Bad("expected data or data_end")),
         }
@@ -567,7 +563,18 @@ pub async fn write_feed_error<W: AsyncWrite + Unpin>(w: &mut W, err: FeedError) 
     }
 }
 
-pub(crate) fn decode_data_frame(frame: &[u8], out: &mut Vec<u8>) -> Option<usize> {
+#[inline]
+pub(crate) fn parse_request(frame: &[u8], buf: &mut Vec<u8>) -> serde_json::Result<Request> {
+    if let Some(n) = decode_data_frame(frame, buf) {
+        buf.truncate(n);
+        return Ok(Request::Data {
+            data: std::mem::take(buf),
+        });
+    }
+    serde_json::from_slice(frame)
+}
+
+fn decode_data_frame(frame: &[u8], out: &mut Vec<u8>) -> Option<usize> {
     let b64 = frame.strip_prefix(DATA_FRAME_HEAD)?.strip_suffix(b"\"}")?;
     out.resize(base64::decoded_len_estimate(b64.len()), 0);
     STANDARD.decode_slice(b64, out).ok()
