@@ -374,7 +374,7 @@ func (m *Manager) reconcileOwnRow(ctx context.Context, rec archives.Record, now 
 	sb.Transition.Lock()
 	defer sb.Transition.Unlock()
 	m.mu.Lock()
-	held, refs, epoch := m.claimed[rec.ID] == sb, sb.ArchiveCk == rec.Checkpoint || sb.ArchivePending == rec.Checkpoint, sb.ArchiveEpoch
+	held, refs, epoch := m.claimed[rec.ID] == sb, sb.ArchiveCk == rec.Checkpoint, sb.ArchiveEpoch
 	m.mu.Unlock()
 	switch {
 	case !held:
