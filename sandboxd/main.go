@@ -126,7 +126,8 @@ func main() {
 		broadcaster := &peer.Broadcaster{Peers: msh.PeerAddrs, Token: cfg.APIToken}
 		mgr.WithPeerDelete(broadcaster.Delete)
 		go gossipNodeState(ctx, msh, mgr)
-		logger.Infof(ctx, "mesh %s joined (%d seeds)", cmp.Or(cfg.Mesh.NodeID, cfg.Mesh.Bind), len(cfg.Mesh.Join))
+		mgr.WithArchiveOwners(msh.Alive)
+		logger.Infof(ctx, "mesh %s joined (%d seeds)", cfg.Mesh.ID(), len(cfg.Mesh.Join))
 	}
 
 	var preview *server.PreviewServer
@@ -203,7 +204,7 @@ func startMesh(ctx context.Context, cfg *config.Config, mgr *pool.Manager) (*mes
 	if err != nil {
 		return nil, err
 	}
-	self := mesh.NodeState{NodeID: cmp.Or(mc.NodeID, mc.Bind), Addr: cfg.AdvertiseAddr, ClientAddr: cfg.ClientAdvertise, Digest: mgr.ClusterDigest()}
+	self := mesh.NodeState{NodeID: mc.ID(), Addr: cfg.AdvertiseAddr, ClientAddr: cfg.ClientAdvertise, Digest: mgr.ClusterDigest()}
 	msh, err := mesh.New(ctx, mlCfg, self, key, cfg.DataDir)
 	if err != nil {
 		return nil, err

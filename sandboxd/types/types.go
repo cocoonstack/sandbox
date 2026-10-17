@@ -573,6 +573,9 @@ type Sandbox struct {
 	PendingSnap string `json:"pending_snap,omitempty"`
 	// ArchiveCk names the store checkpoint holding an archived sandbox; empty means local.
 	ArchiveCk string `json:"archive_ck,omitempty"`
+	// ArchiveEpoch is the archive registry epoch this node last held for the claim; zero means no row.
+	ArchiveEpoch   int64  `json:"archive_epoch,omitzero"`
+	ArchivePending string `json:"archive_pending,omitempty"`
 
 	// FromCheckpoint names the checkpoint this sandbox branched from; empty otherwise.
 	FromCheckpoint string `json:"from_checkpoint,omitempty"`

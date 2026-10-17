@@ -55,6 +55,7 @@ var poolErrHTTP = []struct {
 	{pool.ErrTenantRemoved, http.StatusForbidden, ""},
 	{pool.ErrTenantStoreDown, http.StatusServiceUnavailable, "tenant store down; retry"},
 	{pool.ErrPoolStoreDown, http.StatusServiceUnavailable, "pool set store down; retry"},
+	{pool.ErrArchiveStoreDown, http.StatusServiceUnavailable, "archive registry down; retry"},
 	{pool.ErrNoEgress, http.StatusConflict, ""},
 	{pool.ErrNoEgressHibernate, http.StatusConflict, ""},
 	{pool.ErrNoEgressFork, http.StatusConflict, ""},
@@ -117,6 +118,7 @@ type Manager interface {
 	HasPoolGolden(key types.PoolKey) bool
 	HasPromotedTemplate(ctx context.Context, key types.PoolKey, tenant string) bool
 	AgentSocket(id, token string) (string, error)
+	AdoptArchived(ctx context.Context, id, token string) (bool, error)
 	DialPort(ctx context.Context, id string, cred pool.Cred, port uint16) (net.Conn, error)
 	WakeAgentSocket(ctx context.Context, id, token string) (string, func(), error)
 	SetPools(ctx context.Context, pools []config.PoolSpec) error
@@ -696,9 +698,17 @@ func (s *Server) handleOwner(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if _, err := s.mgr.AgentSocket(r.PathValue("id"), token); err != nil {
-		writeErr(w, http.StatusNotFound, "not owned here")
-		return
+	id := r.PathValue("id")
+	if _, err := s.mgr.AgentSocket(id, token); err != nil {
+		adopted, adoptErr := s.mgr.AdoptArchived(r.Context(), id, token)
+		switch {
+		case adoptErr != nil:
+			writeResult(w, r, "adopt", id, "adopt archived sandbox failed", adoptErr, nil)
+			return
+		case !adopted:
+			writeErr(w, http.StatusNotFound, "not owned here")
+			return
+		}
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"owner_addr": s.advertise})
 }

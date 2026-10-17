@@ -23,6 +23,8 @@ import (
 	"github.com/projecteru2/core/log"
 	"golang.org/x/sync/singleflight"
 
+	"github.com/cocoonstack/sandbox/sandboxd/archives"
+	archivespg "github.com/cocoonstack/sandbox/sandboxd/archives/pg"
 	"github.com/cocoonstack/sandbox/sandboxd/config"
 	"github.com/cocoonstack/sandbox/sandboxd/egress"
 	"github.com/cocoonstack/sandbox/sandboxd/engine"
@@ -89,6 +91,7 @@ var (
 	ErrReloadRefused     = errors.New("config reload refused")
 	ErrTenantStoreDown   = tenants.ErrUnavailable
 	ErrPoolStoreDown     = poolset.ErrUnavailable
+	ErrArchiveStoreDown  = archives.ErrUnavailable
 	ErrTenantRemoved     = errors.New("the claim's tenant was removed: it runs to its deadline but cannot renew, fork, or wake from the archive")
 	ErrVolumeUnavailable = fmt.Errorf("%w: unknown or unavailable volume", ErrBadVolume)
 	ErrNoWarm            = errors.New("no warm sandbox for key")
@@ -323,9 +326,15 @@ type Manager struct {
 	archiveDeleteDefault time.Duration
 	archiveSweep         atomic.Bool
 	archiveDeleteSweep   atomic.Bool
-	// archiving holds ids with an export in flight; pendingCks pins ids mid-commit; both under m.mu.
+	// archiving holds ids with an export or a registry drop in flight; pendingCks pins ids mid-commit; both under m.mu.
 	archiving  map[string]struct{}
 	pendingCks map[string]struct{}
+	// archives is the cluster archive registry, nil unless archive_failover is set.
+	archives     archives.Registry
+	nodeID       string
+	ownerAlive   atomic.Pointer[OwnerAlive]
+	orphanSweep  atomic.Bool
+	adoptFlights singleflight.Group
 
 	view atomic.Pointer[configView]
 	// cfg is the config the view was built from; reloadMu orders reloads, the only writers of cfg and view.
@@ -496,6 +505,13 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 		}
 		m.poolShared = shared
 	}
+	if cfg.ArchiveFailover {
+		reg, err := archivespg.Open(ctx, os.Getenv(cfg.MetaStore.DSNEnv), cfg.MetaStore.Cell)
+		if err != nil {
+			return nil, err
+		}
+		m.archives, m.nodeID = reg, cfg.Mesh.ID()
+	}
 	if err := m.adoptPools(ctx); err != nil {
 		return nil, err
 	}
@@ -561,6 +577,9 @@ func (m *Manager) Run(ctx context.Context) {
 		case <-storeSweep.C:
 			go m.sweepStoreGenerations(ctx)
 			go m.sweepExpiredCheckpoints(ctx)
+			if m.archives != nil {
+				go m.sweepOrphanArchives(ctx)
+			}
 		}
 	}
 }

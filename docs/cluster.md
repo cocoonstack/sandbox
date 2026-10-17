@@ -153,7 +153,9 @@ If a client kept a sandbox's `id` and `token` but lost the owner address
 entry node, then queries every peer concurrently
 (`GET /v1/sandboxes/{id}/owner` — the token is both authorization and
 ownership proof) and returns a handle bound to whichever node confirms
-ownership first.
+ownership first. With `archive_failover`, a node may adopt an archived claim
+whose owner left the mesh and answer for it (see
+[archived claims across node loss](#archived-claims-across-node-loss)).
 
 ```go
 // Persist sb.ID and sb.Token() before the process exits; dial any node to
@@ -161,6 +163,75 @@ ownership first.
 client, _ := sandbox.Connect("10.0.0.6:7777", sandbox.WithAPIToken(token))
 sb, err := client.Lookup(ctx, savedID, savedToken)
 ```
+
+## Archived claims across node loss
+
+A claim lives on one node, so a lost node takes its running and hibernated
+claims with it. An archived claim keeps only a pointer on the node; with
+[`archive_failover`](deploy.md#configuration) on every node (it needs
+`meta_store` with a `cell`, an `s3` `checkpoint_store` and a `mesh`), the
+archive also writes one row to the shared PostgreSQL, scoped by the cell: id,
+tenant, token SHA-256, owner node, epoch, a consumed flag, checkpoint id,
+retention deadline and the claim record without its token. Only archives write
+it, so the claim path is unchanged.
+
+- **Adoption.** `Lookup` asks the entry node, then every peer. A node that does
+  not hold the claim reads the row; when the token hash matches and the owner
+  has left the mesh (or is this node, with its record gone), it takes the row
+  with a compare-and-set on the epoch, records the claim as archived, and
+  answers as the owner. Two nodes adopting at once leave one owner; the other
+  answers 404. A tombstone is never adopted. The next exec or file call wakes the claim from the store as
+  usual. An owner still in the mesh answers for itself, so no other node adopts.
+  A draining node never adopts. Adoption checks no tenant `max_claims` or node
+  `max_claims`: the claim already exists, and a refusal could strand it.
+- **Fencing.** Every write is a compare-and-set on the row's epoch, and every
+  epoch comes from one database sequence, so none is ever reused. A wake takes
+  the row before it restores and consumes it before it commits: the row turns
+  into a tombstone, deleted only once the checkpoint is gone. A release or a
+  retention purge consumes the row before the checkpoint goes; with failover
+  on, a release holds the claim's transition lock, so an archive cannot commit
+  a row under it. An old owner that comes back finds the row moved on (another
+  owner, a tombstone of another owner, or no row at all): its wake and release
+  answer unknown sandbox (the client looks it up again), its restart drops the
+  record, and none of them deletes the checkpoint, which belongs to the new
+  owner; the drop clears the old owner's delete marker first. Only a tombstone
+  of its own means this node's commit never happened: the wake or the restart
+  re-arms it and keeps the claim. Orphan reclaim at restart never deletes a
+  checkpoint a row references. A restart also settles an archive a crash
+  interrupted: a live row it left for a claim it still holds is deleted with
+  its checkpoint, and a claim whose row another node holds is dropped, its VM
+  and snapshot swept as stale. An archive journals its intent (the checkpoint
+  it is about to register) before it writes the row. A restart that finds the
+  intent and no row keeps the claim while that checkpoint is still in the
+  store, since the row never committed, and drops it once the checkpoint is
+  gone, since only a node that consumed the row deletes it.
+  A put whose outcome is unknown leaves the intent in place, and a release,
+  the next archive and the hourly sweep settle it by the same rule before
+  they act on the claim.
+- **Departed owners and tombstones.** Every hour, on the store retention sweep,
+  each node reads the rows past their retention deadline, the consumed rows,
+  and its own rows. An expired row whose owner has left the mesh is purged
+  checkpoint first, then the row. No node touches another node's tombstone:
+  the owner settles it when it returns, through its sweep or its restart.
+  The epoch compare-and-set lets exactly one node win each,
+  and `archive_delete` is recorded only for a row that was still archived.
+  Each node also settles its own rows against its claims, which converges a
+  registry write whose reply was lost: a tombstone its archived claim still
+  names is re-armed, a live row next to a claim that names another checkpoint
+  is an archive that never committed and goes with its export, and a
+  tombstone no claim holds is purged checkpoint first. Retention is a lower
+  bound: a purge can run up to an hour late. An archive kept forever (no
+  `archive_delete_after_seconds`) stays until a client adopts and releases it.
+- **Usage journal.** The journal stays per node: an adopted claim's `archive`
+  is in the old owner's `usage.jsonl`, and its `unarchive`, `release` or
+  `archive_delete` is in the adopter's or the purging node's. Fold the journals
+  of all nodes by sandbox id.
+
+Mesh liveness decides adoption, so a partitioned owner can lose an archived
+claim it still lists; the epoch fences it out. A claim that has entered its
+wake counts as running: running and hibernated claims are lost with their
+node, and an owner that never returns leaves behind only the tombstones and
+checkpoints of the claims it was waking or releasing when it died.
 
 ## Templates on a cluster
 

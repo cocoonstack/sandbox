@@ -33,6 +33,14 @@ func (m *Manager) archiveDeleteFor(key types.PoolKey) time.Duration {
 	return m.archiveDeleteDefault
 }
 
+// retentionDeadline is zero for an archive kept forever; callers hold m.mu.
+func (m *Manager) retentionDeadline(key types.PoolKey) time.Time {
+	if d := m.archiveDeleteFor(key); d > 0 {
+		return time.Now().Add(d)
+	}
+	return time.Time{}
+}
+
 func (m *Manager) archiveOnce(ctx context.Context) {
 	if !m.archiveSweep.CompareAndSwap(false, true) {
 		return // the previous sweep's archives are still draining
@@ -79,6 +87,15 @@ func (m *Manager) archive(ctx context.Context, sb *types.Sandbox) error {
 	if !ok {
 		return errWokeMeanwhile
 	}
+	sb.Transition.Lock()
+	err := m.resolveIntent(ctx, sb)
+	sb.Transition.Unlock()
+	if err != nil {
+		return fmt.Errorf("archive %s: settle intent: %w", sb.ID, err)
+	}
+	if err = m.checkArchiveRow(ctx, sb.ID); err != nil {
+		return fmt.Errorf("archive %s: registry: %w", sb.ID, err)
+	}
 	// pin the ck before Publish makes it listable, or a delete would strand the claim
 	ckID := store.CheckpointID(randHex(8))
 	m.mu.Lock()
@@ -99,14 +116,38 @@ func (m *Manager) archive(ctx context.Context, sb *types.Sandbox) error {
 		m.deleteOrphanArchiveCk(ctx, ck.ID)
 		return errWokeMeanwhile
 	}
-	snap, vmName, sock, prevDeadline := sb.HibernateSnap, sb.VMName, sb.VsockSocket, sb.Deadline
-	sb.ArchiveCk = ck.ID
-	sb.HibernateSnap, sb.VsockSocket, sb.VMName = "", "", ""
-	if d := m.archiveDeleteFor(sb.Key); d > 0 {
-		sb.Deadline = time.Now().Add(d) // retention window, not the claim lease
-	} else {
-		sb.Deadline = time.Time{} // keep forever: no retention (reap skips a zero deadline)
+	var epoch int64
+	if m.archives != nil {
+		sb.ArchivePending = ck.ID
+		intent := m.store.set(sb)
+		m.mu.Unlock()
+		if err = m.store.commit(intent); err != nil {
+			m.mu.Lock()
+			sb.ArchivePending = ""
+			rb := m.store.set(sb)
+			m.mu.Unlock()
+			sb.Transition.Unlock()
+			m.recommit(ctx, rb)
+			m.deleteOrphanArchiveCk(ctx, ck.ID)
+			return fmt.Errorf("archive %s: persist intent: %w", sb.ID, err)
+		}
+		if epoch, err = m.putArchive(ctx, sb, ck.ID); err != nil {
+			sb.Transition.Unlock()
+			m.abandonRefusedPut(ctx, sb, ck.ID, err)
+			return fmt.Errorf("archive %s: registry: %w", sb.ID, err)
+		}
+		m.mu.Lock()
+		if m.claimed[sb.ID] != sb {
+			m.mu.Unlock()
+			sb.Transition.Unlock()
+			m.abandonArchive(ctx, sb, epoch, ck.ID)
+			return errWokeMeanwhile
+		}
 	}
+	snap, vmName, sock, prevDeadline, prevEpoch, prevPending := sb.HibernateSnap, sb.VMName, sb.VsockSocket, sb.Deadline, sb.ArchiveEpoch, sb.ArchivePending
+	sb.ArchiveCk, sb.ArchiveEpoch, sb.ArchivePending = ck.ID, epoch, ""
+	sb.HibernateSnap, sb.VsockSocket, sb.VMName = "", "", ""
+	sb.Deadline = m.retentionDeadline(sb.Key)
 	js := m.store.set(sb)
 	m.mu.Unlock()
 	if saveErr := m.store.commit(js); saveErr != nil {
@@ -115,7 +156,7 @@ func (m *Manager) archive(ctx context.Context, sb *types.Sandbox) error {
 		var rb claimSnapshot
 		// a Release that landed meanwhile already deleted the claim; re-setting it would resurrect it
 		if m.claimed[sb.ID] == sb {
-			sb.ArchiveCk = ""
+			sb.ArchiveCk, sb.ArchiveEpoch, sb.ArchivePending = "", prevEpoch, prevPending
 			sb.HibernateSnap, sb.VsockSocket, sb.VMName = snap, sock, vmName
 			sb.Deadline = prevDeadline
 			rb = m.store.set(sb)
@@ -123,7 +164,7 @@ func (m *Manager) archive(ctx context.Context, sb *types.Sandbox) error {
 		m.mu.Unlock()
 		sb.Transition.Unlock()
 		m.recommit(ctx, rb)
-		m.deleteOrphanArchiveCk(ctx, ck.ID)
+		m.abandonArchive(ctx, sb, epoch, ck.ID)
 		return fmt.Errorf("archive %s: persist claims: %w", sb.ID, saveErr)
 	}
 	// disarm under Transition so a wake right after the release is not clobbered by a late disarm
@@ -150,6 +191,10 @@ func (m *Manager) wakeArchived(ctx context.Context, sb *types.Sandbox) (string, 
 		return "", fmt.Errorf("wake %s: %w", sb.ID, err)
 	}
 	ctx = context.WithoutCancel(ctx)
+	epoch, err := m.takeArchive(ctx, sb)
+	if err != nil {
+		return "", err
+	}
 	ck := sb.ArchiveCk
 	l := m.recLock(ck)
 	l.Lock()
@@ -164,6 +209,11 @@ func (m *Manager) wakeArchived(ctx context.Context, sb *types.Sandbox) (string, 
 	built, err := m.provision(ctx, sb.Key, dir)
 	if err != nil {
 		return "", fmt.Errorf("wake %s: %w", sb.ID, err)
+	}
+	consumed, fenceErr := m.consumeRow(ctx, sb, epoch, "wake")
+	if fenceErr != nil {
+		m.destroy(ctx, built.VMName)
+		return "", fenceErr
 	}
 	if markErr := m.markArchiveCk(ck); markErr != nil {
 		m.destroy(ctx, built.VMName)
@@ -181,8 +231,11 @@ func (m *Manager) wakeArchived(ctx context.Context, sb *types.Sandbox) (string, 
 	// the pre-commit marker keeps a failed delete retryable after the journal update.
 	if delErr := m.ckpts.Delete(ctx, ck); delErr != nil {
 		logger.Warnf(ctx, "delete consumed archive ck %s: %v", ck, delErr)
-	} else if clearErr := m.clearArchiveCk(ck); clearErr != nil {
-		logger.Warnf(ctx, "clear archive ck %s: %v", ck, clearErr)
+	} else {
+		if clearErr := m.clearArchiveCk(ck); clearErr != nil {
+			logger.Warnf(ctx, "clear archive ck %s: %v", ck, clearErr)
+		}
+		m.dropTombstone(ctx, sb.ID, consumed)
 	}
 	// only the none lane reaches here, so there is no NIC to re-lock
 	if proxyErr := m.out.ArmProxy(ctx, sb); proxyErr != nil {
@@ -333,7 +386,7 @@ func (m *Manager) retryArchiveDeletes(ctx context.Context) {
 func (m *Manager) retryArchiveDelete(ctx context.Context, ckID string) {
 	l := m.recLock(ckID)
 	l.Lock()
-	if m.archiveCkPinned(ckID) {
+	if m.archiveCkPinned(ckID) || !m.deleteMarked(ckID) {
 		l.Unlock()
 		m.recDone(ckID)
 		return
@@ -348,6 +401,11 @@ func (m *Manager) retryArchiveDelete(ctx context.Context, ckID string) {
 	if err := m.clearArchiveCk(ckID); err != nil {
 		log.WithFunc("pool.retryArchiveDelete").Warnf(ctx, "clear %s: %v", ckID, err)
 	}
+}
+
+func (m *Manager) deleteMarked(ckID string) bool {
+	_, err := os.Stat(filepath.Join(m.dataDir, archiveDeleteDir, ckID))
+	return err == nil
 }
 
 func (m *Manager) archiveCkPinned(ckID string) bool {

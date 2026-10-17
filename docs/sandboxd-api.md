@@ -1015,7 +1015,11 @@ silkd error; 409 a failed sandbox; 504 when the command outlives `timeout_second
 ## GET /v1/sandboxes/{id}/owner
 
 Auth: the sandbox's own token. Answers `{"owner_addr": "host:port"}` when
-this node owns the sandbox, 404 otherwise. With `client_advertise` configured,
+this node owns the sandbox, 404 otherwise. With
+[`archive_failover`](cluster.md#archived-claims-across-node-loss), a node that
+does not hold the sandbox adopts it when its archive row names an owner that
+left the mesh, and answers 200; 503 with `Retry-After` when the meta store is
+down. With `client_advertise` configured,
 `owner_addr` is that node's full HTTP(S) origin instead; the same contract applies
 to claim and fork responses. Used by the SDK's `Lookup` scatter.
 

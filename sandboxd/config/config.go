@@ -195,6 +195,11 @@ type MeshConfig struct {
 	ClusterKey string   `json:"cluster_key,omitempty"` // base64 gossip-encryption key
 }
 
+// ID is the node's mesh name: NodeID, else Bind.
+func (mc *MeshConfig) ID() string {
+	return cmp.Or(mc.NodeID, mc.Bind)
+}
+
 // ParsedBind splits Bind into host and port, rejecting a wildcard host.
 func (mc *MeshConfig) ParsedBind() (string, int, error) {
 	host, portStr, err := net.SplitHostPort(mc.Bind)
@@ -254,6 +259,8 @@ type Config struct {
 	IdleHibernateSeconds      int `json:"idle_hibernate_seconds,omitzero"`
 	ArchiveAfterSeconds       int `json:"archive_after_seconds,omitzero"`
 	ArchiveDeleteAfterSeconds int `json:"archive_delete_after_seconds,omitzero"`
+	// ArchiveFailover lets another node adopt this node's archived claims once it leaves the mesh.
+	ArchiveFailover bool `json:"archive_failover,omitzero"`
 
 	PreviewListen    string `json:"preview_listen,omitempty"`
 	PreviewSecret    string `json:"preview_secret,omitempty"`
@@ -658,6 +665,8 @@ func (c *Config) validateDiskReserve() error {
 func (c *Config) validateMetaStore() error {
 	ms := c.MetaStore
 	switch {
+	case c.ArchiveFailover && (ms == nil || ms.Cell == "" || c.CheckpointStore == nil || c.CheckpointStore.Kind != "s3" || c.Mesh == nil):
+		return fmt.Errorf("archive_failover requires meta_store with a cell, an s3 checkpoint_store and a mesh")
 	case ms == nil:
 		return nil
 	case ms.Kind != "pg":
