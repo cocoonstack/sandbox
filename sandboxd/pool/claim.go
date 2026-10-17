@@ -216,7 +216,7 @@ func (m *Manager) AgentSocket(id, token string) (string, error) {
 	if !ok {
 		return "", ErrUnknownSandbox
 	}
-	if m.fenced.Load() && sb.Replicated() {
+	if sb.Replicated() && m.fence.Load().fenced {
 		return "", ErrLeaseLost
 	}
 	// no activity stamp: a control-plane poll must not keep an idle sandbox awake
@@ -246,8 +246,12 @@ func (m *Manager) dialPort(ctx context.Context, id string, cred Cred, port uint1
 		sb.Unhold()
 		return nil, err
 	}
-	stop := CloseOnFence(fenced, conn)
-	return &heldConn{Conn: conn, release: sync.OnceFunc(func() { stop(); sb.Unhold() })}, nil
+	release := sb.Unhold
+	if fenced != nil {
+		stop := CloseOnFence(fenced, conn)
+		release = func() { stop(); sb.Unhold() }
+	}
+	return &heldConn{Conn: conn, release: sync.OnceFunc(release)}, nil
 }
 
 func (m *Manager) dialPassive(ctx context.Context, id string, port uint16) (net.Conn, error) {
@@ -280,8 +284,12 @@ func (m *Manager) dialPassive(ctx context.Context, id string, port uint16) (net.
 		sb.UnholdIdle()
 		return nil, err
 	}
-	stop := CloseOnFence(fenced, conn)
-	return &heldConn{Conn: conn, release: sync.OnceFunc(func() { stop(); sb.UnholdIdle() })}, nil
+	release := sb.UnholdIdle
+	if fenced != nil {
+		stop := CloseOnFence(fenced, conn)
+		release = func() { stop(); sb.UnholdIdle() }
+	}
+	return &heldConn{Conn: conn, release: sync.OnceFunc(release)}, nil
 }
 
 // releaseResolved re-checks under m.mu that sb is still the live claim: no double teardown.
@@ -424,6 +432,10 @@ func (m *Manager) tenantDelta(tenant string, delta int) {
 }
 
 func (m *Manager) addClaimLocked(sb *types.Sandbox) {
+	if m.archives != nil {
+		_, replicating := m.replicaPools[sb.PolicyKey()]
+		sb.SetReplicated(replicating || sb.HasReplica())
+	}
 	m.claimed[sb.ID] = sb
 	m.tenantDelta(sb.Tenant, 1)
 }

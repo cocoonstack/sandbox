@@ -100,9 +100,9 @@ func TestReplicaLostPutReplyKeepsTheCheckpointTheRowNames(t *testing.T) {
 	a.mu.Lock()
 	pending := sb.ReplicaPending
 	a.mu.Unlock()
-	if !ok || pending == "" || row.Checkpoint != pending || !ckExists(t, a, pending) || !sb.Replicated() {
+	if !ok || pending == "" || row.Checkpoint != pending || !ckExists(t, a, pending) || !sb.HasReplica() {
 		t.Fatalf("row %+v present %v, pending %q kept %v replicated %v, want the row's checkpoint kept and the claim fenced",
-			row, ok, pending, ckExists(t, a, pending), sb.Replicated())
+			row, ok, pending, ckExists(t, a, pending), sb.HasReplica())
 	}
 
 	c.expire("a")
@@ -233,7 +233,7 @@ func TestReplicaRetireAfterAnArchiveLeavesTheArchiveRowAlone(t *testing.T) {
 func TestReplicaClaimThatGainsVolumesStopsBeingReplicated(t *testing.T) {
 	c := newReplicaCluster(t)
 	a := c.node(t, "a", t.TempDir(), keepAnHour)
-	a.fenced.Store(false)
+	a.liftFence()
 	sb := mustClaim(t, a, testKey)
 	replicateNow(t, a, sb)
 	ck := a.replicaOf(sb)
@@ -243,8 +243,8 @@ func TestReplicaClaimThatGainsVolumesStopsBeingReplicated(t *testing.T) {
 
 	a.replicateOnce(t.Context())
 	waitFor(t, func() bool { return !a.replicating.Load() })
-	if _, ok, _ := c.reg.Get(t.Context(), sb.ID); ok || a.replicaOf(sb) != "" || ckExists(t, a, ck) || sb.Replicated() {
-		t.Errorf("row present %v, replica %q, ck kept %v, replicated %v, want the stale row and replica retired", ok, a.replicaOf(sb), ckExists(t, a, ck), sb.Replicated())
+	if _, ok, _ := c.reg.Get(t.Context(), sb.ID); ok || a.replicaOf(sb) != "" || ckExists(t, a, ck) || sb.HasReplica() {
+		t.Errorf("row present %v, replica %q, ck kept %v, has replica %v, want the stale row and replica retired", ok, a.replicaOf(sb), ckExists(t, a, ck), sb.HasReplica())
 	}
 	if _, held := a.byID(sb.ID); !held {
 		t.Error("retiring the replica dropped the claim")
@@ -254,11 +254,16 @@ func TestReplicaClaimThatGainsVolumesStopsBeingReplicated(t *testing.T) {
 func TestReplicaFollowsThePolicyPoolOfAPromotedTemplate(t *testing.T) {
 	c := newReplicaCluster(t)
 	a := c.node(t, "a", t.TempDir(), keepAnHour)
-	a.fenced.Store(false)
+	a.liftFence()
 	sb := mustClaim(t, a, testKey)
 	a.mu.Lock()
+	a.dropClaimLocked(sb)
 	sb.Key, sb.PolicySource = types.PoolKey{Template: "promoted:v1", Net: types.NetNone, Size: testKey.Size}, testKey
+	a.addClaimLocked(sb)
 	a.mu.Unlock()
+	if !sb.Replicated() {
+		t.Error("a claim of a template promoted out of a replicating pool is not marked replicated")
+	}
 
 	a.replicateOnce(t.Context())
 	waitFor(t, func() bool { return !a.replicating.Load() })
@@ -396,7 +401,7 @@ func TestReplicaPassSnapshotsOnlyDueRunningClaims(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		c := newReplicaCluster(t)
 		a := c.node(t, "a", t.TempDir(), keepAnHour)
-		a.fenced.Store(false)
+		a.liftFence()
 		running := mustClaim(t, a, testKey)
 		paused := mustClaim(t, a, testKey)
 		withVolume := mustClaim(t, a, testKey)
@@ -440,6 +445,7 @@ func TestReplicaPassSkipsWhileFenced(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		c := newReplicaCluster(t)
 		a := c.node(t, "a", t.TempDir(), keepAnHour)
+		a.tripFence()
 		sb := mustClaim(t, a, testKey)
 		a.replicateOnce(t.Context())
 		time.Sleep(replicateEvery * time.Second)
@@ -454,7 +460,7 @@ func TestReplicaPassSkipsWhileFenced(t *testing.T) {
 func TestReplicaPassRetiresAReplicaWhenThePoolTurnsItOff(t *testing.T) {
 	c := newReplicaCluster(t)
 	a := c.node(t, "a", t.TempDir(), keepAnHour)
-	a.fenced.Store(false)
+	a.liftFence()
 	sb := mustClaim(t, a, testKey)
 	replicateNow(t, a, sb)
 	ck := a.replicaOf(sb)

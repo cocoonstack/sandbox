@@ -19,9 +19,31 @@ type leaseTiming struct {
 	ttl, every, margin time.Duration
 }
 
+// fenceState is the whole fence: while fenced no replicated claim is served, and ch closes when it trips.
+type fenceState struct {
+	ch     chan struct{}
+	fenced bool
+}
+
+// CloseOnFence closes c when fenced closes; stop ends the watch.
+func CloseOnFence(fenced <-chan struct{}, c io.Closer) (stop func()) {
+	if fenced == nil {
+		return func() {}
+	}
+	stopped := make(chan struct{})
+	go func() {
+		select {
+		case <-fenced:
+			_ = c.Close()
+		case <-stopped:
+		}
+	}()
+	return sync.OnceFunc(func() { close(stopped) })
+}
+
 // keepLease renews this node's lease until ctx ends and fences its replicated claims when a renewal is overdue.
 func (m *Manager) keepLease(ctx context.Context) {
-	fence := time.AfterFunc(m.lease.ttl-m.lease.margin, func() { m.fence(ctx) })
+	fence := time.AfterFunc(m.lease.ttl-m.lease.margin, func() { m.trip(ctx) })
 	defer fence.Stop()
 	tick := time.NewTicker(m.lease.every)
 	defer tick.Stop()
@@ -42,7 +64,7 @@ func (m *Manager) renewLease(ctx context.Context, fence *time.Timer) {
 		return
 	}
 	fence.Reset(m.lease.ttl - m.lease.margin - time.Since(start))
-	if m.fenced.Load() && m.unfencing.CompareAndSwap(false, true) {
+	if m.isFenced() && m.unfencing.CompareAndSwap(false, true) {
 		go func() {
 			defer m.unfencing.Store(false)
 			m.unfence(ctx, start)
@@ -50,10 +72,22 @@ func (m *Manager) renewLease(ctx context.Context, fence *time.Timer) {
 	}
 }
 
-func (m *Manager) fence(ctx context.Context) {
-	if !m.fenced.Swap(true) {
-		close(*m.fenceCh.Load())
+func (m *Manager) isFenced() bool {
+	return m.fence.Load().fenced
+}
+
+func (m *Manager) trip(ctx context.Context) {
+	for {
+		old := m.fence.Load()
+		if old.fenced {
+			return
+		}
+		if !m.fence.CompareAndSwap(old, &fenceState{ch: old.ch, fenced: true}) {
+			continue
+		}
+		close(old.ch)
 		log.WithFunc("pool.fence").Warnf(ctx, "node lease not renewed for %s; replicated claims answer 503 until it is", m.lease.ttl-m.lease.margin)
+		return
 	}
 }
 
@@ -63,7 +97,7 @@ func (m *Manager) unfence(ctx context.Context, start time.Time) {
 	m.mu.Lock()
 	held := map[string]*types.Sandbox{}
 	for id, sb := range m.claimed {
-		if sb.Replicated() {
+		if sb.HasReplica() {
 			held[id] = sb
 		}
 	}
@@ -101,8 +135,7 @@ func (m *Manager) unfence(ctx context.Context, start time.Time) {
 		logger.Warn(ctx, "replicated claims stay fenced: confirming ownership outlasted the lease window")
 		return
 	}
-	m.fenceCh.Store(new(make(chan struct{})))
-	m.fenced.Store(false)
+	m.fence.Store(&fenceState{ch: make(chan struct{})})
 	logger.Info(ctx, "node lease renewed; replicated claims are served again")
 }
 
@@ -142,24 +175,9 @@ func (m *Manager) fenceWatch(sb *types.Sandbox) (<-chan struct{}, error) {
 	if !sb.Replicated() {
 		return nil, nil
 	}
-	if m.fenced.Load() {
+	st := m.fence.Load()
+	if st.fenced {
 		return nil, ErrLeaseLost
 	}
-	return *m.fenceCh.Load(), nil
-}
-
-// CloseOnFence closes c when fenced closes; stop ends the watch.
-func CloseOnFence(fenced <-chan struct{}, c io.Closer) (stop func()) {
-	if fenced == nil {
-		return func() {}
-	}
-	stopped := make(chan struct{})
-	go func() {
-		select {
-		case <-fenced:
-			_ = c.Close()
-		case <-stopped:
-		}
-	}()
-	return sync.OnceFunc(func() { close(stopped) })
+	return st.ch, nil
 }

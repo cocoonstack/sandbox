@@ -19,7 +19,7 @@ type replicaState struct {
 }
 
 func (m *Manager) replicateOnce(ctx context.Context) {
-	if m.archives == nil || m.fenced.Load() || !m.replicating.CompareAndSwap(false, true) {
+	if m.archives == nil || m.isFenced() || !m.replicating.CompareAndSwap(false, true) {
 		return
 	}
 	now, v := time.Now(), m.view.Load()
@@ -31,12 +31,12 @@ func (m *Manager) replicateOnce(ctx context.Context) {
 		every, st := v.poolReplicate[sb.PolicyKey()], m.replicas[id]
 		switch {
 		case every <= 0:
-			if sb.Replicated() {
+			if sb.HasReplica() {
 				retire = append(retire, sb)
 			}
 		case !m.replicable(sb):
 		case m.hasVolumeHolds(sb):
-			if sb.Replicated() {
+			if sb.HasReplica() {
 				retire = append(retire, sb)
 			}
 			if !st.skipLogged {
@@ -116,7 +116,6 @@ func (m *Manager) replicate(ctx context.Context, sb *types.Sandbox) error {
 	var intent claimSnapshot
 	if ok {
 		sb.ReplicaPending = ckID
-		sb.SyncReplicated()
 		intent = m.store.set(sb)
 	}
 	m.mu.Unlock()
@@ -144,7 +143,6 @@ func (m *Manager) replicate(ctx context.Context, sb *types.Sandbox) error {
 	var prev string
 	live, _ := m.commitIfLive(ctx, sb, func() {
 		prev, sb.ReplicaCk, sb.ReplicaPending, sb.ArchiveEpoch = sb.ReplicaCk, ckID, "", epoch
-		sb.SyncReplicated()
 	})
 	if !live {
 		m.abandonArchive(ctx, sb, epoch, ckID)
@@ -188,7 +186,6 @@ func (m *Manager) settleReplicaIntent(ctx context.Context, sb *types.Sandbox) er
 		var prev string
 		live, _ := m.commitIfLive(ctx, sb, func() {
 			prev, sb.ReplicaCk, sb.ReplicaPending, sb.ArchiveEpoch = sb.ReplicaCk, pending, "", rec.Epoch
-			sb.SyncReplicated()
 		})
 		if !live {
 			return ErrUnknownSandbox
@@ -225,7 +222,6 @@ func (m *Manager) clearReplicaIntent(ctx context.Context, sb *types.Sandbox, ck 
 	_, _ = m.commitIfLive(ctx, sb, func() {
 		if sb.ReplicaPending == ck {
 			sb.ReplicaPending = ""
-			sb.SyncReplicated()
 		}
 	})
 }
@@ -253,7 +249,6 @@ func (m *Manager) dropReplica(ctx context.Context, sb *types.Sandbox) error {
 	var ck string
 	live, _ := m.commitIfLive(ctx, sb, func() {
 		ck, sb.ReplicaCk = sb.ReplicaCk, ""
-		sb.SyncReplicated()
 	})
 	if !live {
 		return ErrUnknownSandbox
@@ -265,6 +260,12 @@ func (m *Manager) dropReplica(ctx context.Context, sb *types.Sandbox) error {
 
 func (m *Manager) replicaRowed(sb *types.Sandbox) bool {
 	return m.archives != nil && sb.ReplicaCk != "" && sb.ArchiveEpoch != 0
+}
+
+func (m *Manager) replicaHeld(sb *types.Sandbox) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return sb.HasReplica()
 }
 
 func (m *Manager) replicaOf(sb *types.Sandbox) string {

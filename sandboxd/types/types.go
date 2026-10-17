@@ -601,8 +601,8 @@ type Sandbox struct {
 
 	// lastActivity is unix-nanos of the last data-plane connection, stamped lock-free.
 	lastActivity atomic.Int64
-	// replicated mirrors ReplicaCk or ReplicaPending being set, so the data plane reads it without the manager mutex.
-	replicated atomic.Bool
+	// replicated marks a claim of a replicating pool; it is set before the claim is published and read without a lock.
+	replicated bool
 	// open counts the data-plane connections held right now.
 	open atomic.Int32
 	// live is the env as of the last SetEnv, read by the egress proxy without the manager mutex.
@@ -621,11 +621,18 @@ func (s *Sandbox) TouchAt(t time.Time) { s.lastActivity.Store(t.UnixNano()) }
 // LastSeen returns the last data-plane activity time.
 func (s *Sandbox) LastSeen() time.Time { return time.Unix(0, s.lastActivity.Load()) }
 
-// SyncReplicated republishes the replica state to Replicated; callers hold the manager mutex.
-func (s *Sandbox) SyncReplicated() { s.replicated.Store(s.ReplicaCk != "" || s.ReplicaPending != "") }
+// SetReplicated marks the claim as one of a replicating pool; it writes only a change, so a re-add of the same claim never races a reader.
+func (s *Sandbox) SetReplicated(v bool) {
+	if s.replicated != v {
+		s.replicated = v
+	}
+}
 
-// Replicated reports whether the claim's registry row may name a replica.
-func (s *Sandbox) Replicated() bool { return s.replicated.Load() }
+// Replicated reports whether the claim's pool replicates it.
+func (s *Sandbox) Replicated() bool { return s.replicated }
+
+// HasReplica reports whether the claim's registry row may name a replica.
+func (s *Sandbox) HasReplica() bool { return s.ReplicaCk != "" || s.ReplicaPending != "" }
 
 // Hold registers an open data-plane connection; the idle sweep leaves a held sandbox alone.
 func (s *Sandbox) Hold() { s.open.Add(1) }

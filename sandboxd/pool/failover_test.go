@@ -1845,7 +1845,9 @@ func (c *failoverCluster) renew(t *testing.T, node string) {
 
 func (c *failoverCluster) node(t *testing.T, name, dataDir string, deleteAfter int) *Manager {
 	t.Helper()
-	return c.nodeOn(t, newFakeEngine(), name, dataDir, deleteAfter)
+	m := c.nodeOn(t, newFakeEngine(), name, dataDir, deleteAfter)
+	m.liftFence()
+	return m
 }
 
 func (c *failoverCluster) restart(t *testing.T, old *Manager) *Manager {
@@ -1858,7 +1860,7 @@ func (c *failoverCluster) nodeOn(t *testing.T, eng *fakeEngine, name, dataDir st
 	spec := archivePool(deleteAfter)
 	spec.ReplicateSeconds = c.replicate
 	cfg := &config.Config{
-		APIToken: "root", DataDir: dataDir, CheckpointDir: c.ckDir, Pools: []config.PoolSpec{spec},
+		APIToken: "root", DataDir: dataDir, CheckpointDir: c.ckDir, Pools: []config.PoolSpec{spec, {PoolKey: plainKey, Warm: 1}},
 		Mesh: &config.MeshConfig{NodeID: name},
 	}
 	b := testBackends(t, cfg)

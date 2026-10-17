@@ -86,6 +86,9 @@ func (s *Server) wakeGuest(ctx context.Context, w http.ResponseWriter, id, token
 		writeErr(w, http.StatusBadGateway, "guest agent unreachable")
 		return nil, nil, false
 	}
+	if fenced == nil {
+		return guest, done, true
+	}
 	stop := pool.CloseOnFence(fenced, guest)
 	return guest, func() { stop(); done() }, true
 }

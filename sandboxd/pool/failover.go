@@ -352,7 +352,7 @@ func (m *Manager) unrowExpired(ctx context.Context, sb *types.Sandbox) {
 	sb.Transition.Lock()
 	defer sb.Transition.Unlock()
 	var err error
-	if sb.Replicated() {
+	if m.replicaHeld(sb) {
 		err = m.dropReplica(ctx, sb)
 	} else {
 		_, err = m.consumeArchive(ctx, sb)
@@ -510,7 +510,7 @@ func (m *Manager) fenceArchived(ctx context.Context, claims map[string]*types.Sa
 			}
 		case ok && rec.Owner != m.nodeID:
 			drop = true
-		case (sb.ReplicaCk != "" || sb.ReplicaPending != "") && sb.ArchivePending == "":
+		case sb.HasReplica() && sb.ArchivePending == "":
 			moved, err := false, error(nil)
 			if !ok {
 				moved, err = m.replicaGone(ctx, sb)
@@ -525,7 +525,6 @@ func (m *Manager) fenceArchived(ctx context.Context, claims map[string]*types.Sa
 					sb.ReplicaCk, sb.ArchiveEpoch = rec.Checkpoint, rec.Epoch
 				}
 				sb.ReplicaPending = ""
-				sb.SyncReplicated()
 			}
 		case sb.ArchivePending != "" || ok && !rec.Consumed:
 			moved, err := m.settleIntent(ctx, id, sb.ArchivePending, rec, ok)
@@ -635,5 +634,5 @@ func (m *Manager) archiveRowed(sb *types.Sandbox) bool {
 }
 
 func (m *Manager) expiryDropsRow(sb *types.Sandbox) bool {
-	return m.archiveRowed(sb) || sb.Replicated() && !m.archivesAtDeadline(sb)
+	return m.archiveRowed(sb) || sb.HasReplica() && !m.archivesAtDeadline(sb)
 }
