@@ -227,6 +227,29 @@ func TestLoadArchiveFailover(t *testing.T) {
 	}
 }
 
+func TestLoadReplicateSeconds(t *testing.T) {
+	t.Setenv("SANDBOX_TEST_DSN", "postgres://sandboxd@db/sandboxd")
+	failover := `"archive_failover":true,"meta_store":{"kind":"pg","dsn_env":"SANDBOX_TEST_DSN","cell":"c1"},"checkpoint_store":{"kind":"s3","s3":{"bucket":"b"}},"mesh":{"bind":"node1:7946"},`
+	body := func(on, pool string) string {
+		return `{"api_token":"r","advertise_addr":"node1:7777",` + on + `"pools":[` + pool + `]}`
+	}
+	cfg, err := Load(writeConfig(t, body(failover, `{"template":"rt:24.04","replicate_seconds":60}`)))
+	if err != nil || cfg.Pools[0].ReplicateSeconds != 60 {
+		t.Fatalf("Load: %+v %v, want replicate_seconds 60", cfg, err)
+	}
+	for name, tt := range map[string]struct{ on, pool, want string }{
+		"no failover":  {"", `{"template":"rt:24.04","replicate_seconds":60}`, "requires archive_failover"},
+		"negative":     {failover, `{"template":"rt:24.04","replicate_seconds":-1}`, "must not be negative"},
+		"egress lane":  {failover + `"bridges":["br0"],`, `{"template":"rt:24.04","net":"egress","replicate_seconds":60}`, "needs net"},
+		"off is valid": {"", `{"template":"rt:24.04","replicate_seconds":0}`, ""},
+	} {
+		_, err := Load(writeConfig(t, body(tt.on, tt.pool)))
+		if tt.want == "" && err != nil || tt.want != "" && (err == nil || !strings.Contains(err.Error(), tt.want)) {
+			t.Errorf("%s: %v, want %q", name, err, tt.want)
+		}
+	}
+}
+
 func TestLoadEgressUpstream(t *testing.T) {
 	t.Setenv("SANDBOX_TEST_RES", "http://user:pw@res.example:3128")
 	t.Setenv("SANDBOX_TEST_DC", "socks5://10.1.0.5:1080")

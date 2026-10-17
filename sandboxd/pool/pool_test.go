@@ -622,6 +622,7 @@ func TestSetPoolsRejectsConfigOwnedFields(t *testing.T) {
 		{"warmup", config.PoolSpec{PoolKey: testKey, Warm: 1, Warmup: []string{"true"}}},
 		{"capture_trim", config.PoolSpec{PoolKey: testKey, Warm: 1, CaptureTrim: true}},
 		{"storage", config.PoolSpec{PoolKey: testKey, Warm: 1, Storage: "40G"}},
+		{"replicate_seconds", config.PoolSpec{PoolKey: testKey, Warm: 1, ReplicateSeconds: 60}},
 	} {
 		err := m.SetPools(t.Context(), []config.PoolSpec{tt.spec})
 		if !errors.Is(err, ErrBadKey) || !strings.Contains(err.Error(), tt.field+" is set in the config file") {
