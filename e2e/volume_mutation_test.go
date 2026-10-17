@@ -60,3 +60,20 @@ func TestRejectedVolumeTargetExplainsRefusalWithoutChangingState(t *testing.T) {
 		t.Fatalf("rejected request changed settled state: %+v err=%v", view, err)
 	}
 }
+
+func TestEmptyVolumePatchChangesNothing(t *testing.T) {
+	image := writeVolumeImage(t, "dataset.img", "dataset-bytes")
+	stack := startTenantStack(t, "node-token", nil, []config.VolumeSpec{{Name: "dataset", Path: image}})
+	sb, err := stack.client.New(t.Context(), "rt:24.04")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sb.Close()
+	if _, err = sb.SetVolumes(t.Context(), []sandbox.Volume{{Name: "dataset"}}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := sb.PatchVolumes(t.Context(), sandbox.VolumePatch{Add: []sandbox.Volume{}, Remove: []string{}})
+	if err != nil || len(got.Volumes) != 1 || got.Volumes[0].Name != "dataset" || got.Converging {
+		t.Fatalf("empty patch: %+v err=%v", got, err)
+	}
+}

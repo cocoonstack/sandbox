@@ -3,7 +3,6 @@ package engine
 import (
 	"bufio"
 	"bytes"
-	"encoding/base64"
 	"encoding/json/v2"
 	"errors"
 	"fmt"
@@ -15,8 +14,6 @@ import (
 
 // portReadBuf fits silkd's data frames in one buffered read.
 const portReadBuf = wire.BulkChunk*4/3 + 64
-
-var portDataHead = []byte(`{"type":"data","data":"`)
 
 // guestPortConn adapts silkd's port_forward data frames to a plain net.Conn.
 type guestPortConn struct {
@@ -37,7 +34,7 @@ func (g *guestPortConn) Read(p []byte) (int, error) {
 		if err != nil {
 			return 0, err
 		}
-		if data, ok := g.fastPortData(line); ok {
+		if data, ok := wire.DecodeData(bytes.TrimSuffix(line, []byte("\n")), &g.rbuf); ok {
 			g.pending = data
 			continue
 		}
@@ -101,26 +98,4 @@ func (g *guestPortConn) readFrame() ([]byte, error) {
 		}
 	}
 	return long, err
-}
-
-// fastPortData slices the canonical data frame's base64 out without a JSON parse.
-func (g *guestPortConn) fastPortData(line []byte) ([]byte, bool) {
-	after, ok := bytes.CutPrefix(line, portDataHead)
-	if !ok {
-		return nil, false
-	}
-	b64, rest, ok := bytes.Cut(after, []byte(`"`))
-	if !ok || !bytes.Equal(rest, []byte("}\n")) {
-		return nil, false
-	}
-	if size := base64.StdEncoding.DecodedLen(len(b64)); cap(g.rbuf) < size {
-		g.rbuf = make([]byte, size)
-	} else {
-		g.rbuf = g.rbuf[:size]
-	}
-	n, err := base64.StdEncoding.Decode(g.rbuf, b64)
-	if err != nil || base64.StdEncoding.EncodedLen(n) != len(b64) {
-		return nil, false
-	}
-	return g.rbuf[:n], true
 }
