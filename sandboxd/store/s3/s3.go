@@ -1,12 +1,15 @@
 // Package s3 is the object-store record backend for nodes without a
-// shared POSIX namespace: <prefix><id>/{export-<gen>/...,meta.json}
-// objects, meta.json uploaded last as the commit marker (S3 has no atomic
-// multi-object rename). The aws dependency is scoped to this package.
+// shared POSIX namespace: <prefix><id>/{export-<gen>/manifest.json,meta.json}
+// plus the content-addressed chunks the manifests name, meta.json uploaded
+// last as the commit marker (S3 has no atomic multi-object rename). Export
+// files are stored as 16 MiB chunks keyed by SHA-256; holes and all-zero
+// chunks are absent. The aws dependency is scoped to this package.
 package s3
 
 import (
 	"bytes"
 	"context"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
@@ -16,11 +19,11 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
-	"github.com/aws/aws-sdk-go-v2/feature/s3/transfermanager"
 	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/smithy-go"
@@ -33,24 +36,38 @@ import (
 
 const (
 	digestMetadataKey   = "content-digest"
-	uploadPartSizeBytes = 16 << 20
-	uploadConcurrency   = 8 // multipart parts in flight per transfer
+	manifestName        = "manifest.json"
+	uploadConcurrency   = 8 // chunk PUTs in flight per publish
 	metaReadConcurrency = 8
-	publishConcurrency  = 4 // files in parallel; each already multiparts internally
-	fetchConcurrency    = 4
+	publishConcurrency  = 4 // files scanned in parallel
+	fetchConcurrency    = 8 // chunk GETs in flight per fetch
 	fetchBudget         = 30 * time.Minute
 	deleteBatch         = 1000 // DeleteObjects caps one request at 1000 keys
 )
 
+var chunkBufs = sync.Pool{New: func() any {
+	buf := make([]byte, store.DigestChunkSize)
+	return &buf
+}}
+
 type publishFile struct {
-	path       string
-	key        string
-	digestPath string
+	path string
+	rel  string
 }
 
-type transferManager interface {
-	UploadObject(context.Context, *transfermanager.UploadObjectInput, ...func(*transfermanager.Options)) (*transfermanager.UploadObjectOutput, error)
-	DownloadObject(context.Context, *transfermanager.DownloadObjectInput, ...func(*transfermanager.Options)) (*transfermanager.DownloadObjectOutput, error)
+type manifest struct {
+	Files []manifestFile `json:"files"`
+}
+
+type manifestFile struct {
+	Path   string          `json:"path"`
+	Size   int64           `json:"size"`
+	Chunks []manifestChunk `json:"chunks"`
+}
+
+type manifestChunk struct {
+	Index  int64  `json:"index"`
+	SHA256 string `json:"sha256"`
 }
 
 var _ store.Store = (*Store)(nil)
@@ -58,7 +75,6 @@ var _ store.Store = (*Store)(nil)
 // Store stages locally and publishes to the bucket; idRe names the instance's id namespace.
 type Store struct {
 	client  *awss3.Client
-	tm      transferManager
 	bucket  string
 	prefix  string
 	staging string
@@ -88,12 +104,7 @@ func New(ctx context.Context, cfg store.S3Config, stagingRoot string, idRe *rege
 		}
 		o.UsePathStyle = cfg.ForcePathStyle
 	})
-	// snapshot exports are hundreds of MB: multipart concurrency keeps transfers bandwidth-bound.
-	tm := transfermanager.New(client, func(o *transfermanager.Options) {
-		o.PartSizeBytes = uploadPartSizeBytes
-		o.Concurrency = uploadConcurrency
-	})
-	return &Store{client: client, tm: tm, bucket: cfg.Bucket, prefix: cfg.Prefix, staging: stagingRoot, idRe: idRe}, nil
+	return &Store{client: client, bucket: cfg.Bucket, prefix: cfg.Prefix, staging: stagingRoot, idRe: idRe}, nil
 }
 
 func (s *Store) Stage(id string) (string, error) {
@@ -191,7 +202,7 @@ func (s *Store) SetLabels(ctx context.Context, id string, labels []byte) error {
 	if labels == nil {
 		return s.deleteKeys(ctx, []string{key})
 	}
-	return s.uploadReader(ctx, key, bytes.NewReader(labels), int64(len(labels)), nil)
+	return s.putObject(ctx, key, labels, nil)
 }
 
 func (s *Store) Delete(ctx context.Context, id string) error {
@@ -224,14 +235,22 @@ func (s *Store) readMeta(ctx context.Context, id string) ([]byte, string, error)
 	return meta, metadata[digestMetadataKey], nil
 }
 
-func (s *Store) getObject(ctx context.Context, key string) ([]byte, map[string]string, error) {
-	out, err := s.client.GetObject(ctx, &awss3.GetObjectInput{Bucket: &s.bucket, Key: &key})
+func (s *Store) readManifest(ctx context.Context, id, gen string) (manifest, error) {
+	raw, _, err := s.getObject(ctx, s.key(id, gen+"/"+manifestName))
 	if err != nil {
-		apiErr, ok := errors.AsType[smithy.APIError](err)
-		if ok && (apiErr.ErrorCode() == "NoSuchKey" || apiErr.ErrorCode() == "NotFound") {
-			return nil, nil, store.ErrNotFound
-		}
-		return nil, nil, fmt.Errorf("object %s: %w", key, err)
+		return manifest{}, err
+	}
+	var man manifest
+	if err := json.Unmarshal(raw, &man); err != nil {
+		return manifest{}, fmt.Errorf("decode manifest of %s/%s: %w", id, gen, err)
+	}
+	return man, nil
+}
+
+func (s *Store) getObject(ctx context.Context, key string) ([]byte, map[string]string, error) {
+	out, err := s.get(ctx, key)
+	if err != nil {
+		return nil, nil, err
 	}
 	defer func() { _ = out.Body.Close() }()
 	body, err := io.ReadAll(out.Body)
@@ -241,31 +260,56 @@ func (s *Store) getObject(ctx context.Context, key string) ([]byte, map[string]s
 	return body, out.Metadata, nil
 }
 
+func (s *Store) get(ctx context.Context, key string) (*awss3.GetObjectOutput, error) {
+	out, err := s.client.GetObject(ctx, &awss3.GetObjectInput{Bucket: &s.bucket, Key: &key})
+	if err != nil {
+		apiErr, ok := errors.AsType[smithy.APIError](err)
+		if ok && (apiErr.ErrorCode() == "NoSuchKey" || apiErr.ErrorCode() == "NotFound") {
+			return nil, store.ErrNotFound
+		}
+		return nil, fmt.Errorf("object %s: %w", key, err)
+	}
+	return out, nil
+}
+
 func (s *Store) publish(ctx context.Context, staging, id string, digested bool) (string, error) {
 	metaRaw, err := os.ReadFile(filepath.Join(staging, store.MetaFile)) //nolint:gosec // our own staging dir
 	if err != nil {
 		return "", fmt.Errorf("staging has no %s: %w", store.MetaFile, err)
 	}
-	files, err := s.publishFiles(staging, id, store.ExportGen(metaRaw))
+	gen := store.ExportGen(metaRaw)
+	files, err := publishFiles(staging)
 	if err != nil {
 		return "", err
 	}
+	man := manifest{Files: make([]manifestFile, len(files))}
 	digestFiles := make([]store.DigestFile, len(files))
-	g, gctx := errgroup.WithContext(ctx)
-	g.SetLimit(publishConcurrency)
+	chunkGroup, chunkCtx := errgroup.WithContext(ctx)
+	chunkGroup.SetLimit(uploadConcurrency)
+	up := &chunkUploader{
+		store: s, group: chunkGroup, ctx: chunkCtx, have: map[string]struct{}{},
+		key: func(sha string) string { return s.chunkKey(id, gen, sha) },
+	}
+	fileGroup, fileCtx := errgroup.WithContext(chunkCtx)
+	fileGroup.SetLimit(publishConcurrency)
 	for i, file := range files {
-		g.Go(func() error {
-			if !digested {
-				return s.upload(gctx, file.key, file.path)
-			}
-			fileDigest, digestErr := s.uploadDigested(gctx, file.key, file.path, file.digestPath)
-			if digestErr == nil {
-				digestFiles[i] = fileDigest
-			}
-			return digestErr
+		fileGroup.Go(func() (err error) {
+			digestFiles[i], man.Files[i], err = up.scan(fileCtx, file)
+			return err
 		})
 	}
-	if err = g.Wait(); err != nil {
+	fileErr := fileGroup.Wait()
+	if err = chunkGroup.Wait(); err == nil {
+		err = fileErr
+	}
+	if err != nil {
+		return "", err
+	}
+	manifestRaw, err := json.Marshal(man)
+	if err != nil {
+		return "", fmt.Errorf("encode manifest: %w", err)
+	}
+	if err = s.putObject(ctx, s.key(id, gen+"/"+manifestName), manifestRaw, nil); err != nil {
 		return "", err
 	}
 	digest := ""
@@ -277,7 +321,7 @@ func (s *Store) publish(ctx context.Context, staging, id string, digested bool) 
 		}
 		metadata = map[string]string{digestMetadataKey: digest}
 	}
-	if err = s.uploadReader(ctx, s.key(id, store.MetaFile), bytes.NewReader(metaRaw), int64(len(metaRaw)), metadata); err != nil {
+	if err = s.putObject(ctx, s.key(id, store.MetaFile), metaRaw, metadata); err != nil {
 		return "", err
 	}
 	// keep old generations: another node may have selected the previous meta; Delete reclaims them.
@@ -285,20 +329,6 @@ func (s *Store) publish(ctx context.Context, staging, id string, digested bool) 
 		return "", err
 	}
 	return digest, nil
-}
-
-func (s *Store) publishFiles(staging, id, gen string) ([]publishFile, error) {
-	root := filepath.Join(staging, store.ExportDir)
-	var files []publishFile
-	err := store.WalkExport(root, func(rel, path string, _ fs.FileInfo) error {
-		files = append(files, publishFile{
-			path:       path,
-			key:        s.key(id, gen+"/"+rel),
-			digestPath: rel,
-		})
-		return nil
-	})
-	return files, err
 }
 
 // populate downloads one cache generation and installs it atomically.
@@ -311,22 +341,13 @@ func (s *Store) populate(ctx context.Context, id string, meta []byte, gen string
 		return err
 	}
 	defer func() { _ = os.RemoveAll(local) }()
-	exportPrefix := s.key(id, store.ExportGen(meta)) + "/"
-	keys, err := s.list(ctx, exportPrefix)
+	exportGen := store.ExportGen(meta)
+	man, err := s.readManifest(ctx, id, exportGen)
 	if err != nil {
 		return err
 	}
-	if len(keys) == 0 {
-		return store.ErrNotFound
-	}
-	g, gctx := errgroup.WithContext(ctx)
-	g.SetLimit(fetchConcurrency)
-	for _, key := range keys {
-		g.Go(func() error {
-			return s.download(gctx, key, filepath.Join(local, store.ExportDir, strings.TrimPrefix(key, exportPrefix)))
-		})
-	}
-	if err := g.Wait(); err != nil {
+	chunkKey := func(sha string) string { return s.chunkKey(id, exportGen, sha) }
+	if err := s.materialize(ctx, man, filepath.Join(local, store.ExportDir), chunkKey); err != nil {
 		return err
 	}
 	if err := os.WriteFile(filepath.Join(local, store.MetaFile), meta, 0o600); err != nil {
@@ -342,6 +363,53 @@ func (s *Store) populate(ctx context.Context, id string, meta []byte, gen string
 	return nil
 }
 
+// materialize sizes each file to its logical length and writes only its present chunks, so holes stay holes.
+func (s *Store) materialize(ctx context.Context, man manifest, root string, chunkKey func(sha string) string) (err error) {
+	handles := make([]*os.File, len(man.Files))
+	defer func() {
+		for _, f := range handles {
+			if f != nil {
+				err = errors.Join(err, f.Close())
+			}
+		}
+	}()
+	for i, file := range man.Files {
+		path := filepath.Join(root, filepath.FromSlash(file.Path))
+		if err = os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+			return err
+		}
+		if handles[i], err = os.Create(path); err != nil { //nolint:gosec // path derives from our own temp dir
+			return err
+		}
+		if err = handles[i].Truncate(file.Size); err != nil {
+			return err
+		}
+	}
+	g, gctx := errgroup.WithContext(ctx)
+	g.SetLimit(fetchConcurrency)
+	for i, file := range man.Files {
+		for _, chunk := range file.Chunks {
+			g.Go(func() error { return s.fetchChunk(gctx, chunkKey(chunk.SHA256), handles[i], file.Size, chunk) })
+		}
+	}
+	return g.Wait()
+}
+
+func (s *Store) fetchChunk(ctx context.Context, key string, f *os.File, size int64, chunk manifestChunk) error {
+	out, err := s.get(ctx, key)
+	if errors.Is(err, store.ErrNotFound) {
+		return fmt.Errorf("chunk %s is missing", key) // not ErrNotFound: the record exists but is damaged
+	}
+	if err != nil {
+		return err
+	}
+	defer func() { _ = out.Body.Close() }()
+	if err := store.WriteChunk(f, size, chunk.Index, chunk.SHA256, out.Body); err != nil {
+		return fmt.Errorf("chunk %s: %w", key, err)
+	}
+	return nil
+}
+
 func (s *Store) key(id, rest string) string {
 	if rest == "" {
 		return s.prefix + id
@@ -349,65 +417,20 @@ func (s *Store) key(id, rest string) string {
 	return s.prefix + id + "/" + filepath.ToSlash(rest)
 }
 
-func (s *Store) upload(ctx context.Context, key, path string) error {
-	f, err := os.Open(path) //nolint:gosec // path walked from our own staging dir
-	if err != nil {
-		return err
-	}
-	defer func() { _ = f.Close() }()
-	info, err := f.Stat()
-	if err != nil {
-		return err
-	}
-	return s.uploadReader(ctx, key, f, info.Size(), nil)
+func (s *Store) chunkKey(id, gen, sha string) string {
+	return s.key(id, gen+"/"+sha)
 }
 
-func (s *Store) uploadDigested(ctx context.Context, key, path, digestPath string) (store.DigestFile, error) {
-	f, err := os.Open(path) //nolint:gosec // path walked from our own staging dir
-	if err != nil {
-		return store.DigestFile{}, err
-	}
-	defer func() { _ = f.Close() }()
-	info, err := f.Stat()
-	if err != nil {
-		return store.DigestFile{}, err
-	}
-	if err := store.RequireRegular(digestPath, info.Mode()); err != nil {
-		return store.DigestFile{}, err
-	}
-	reader := newDigestReader(f, digestPath, info.Size())
-	if err := s.uploadReader(ctx, key, reader, info.Size(), nil); err != nil {
-		return store.DigestFile{}, err
-	}
-	return reader.Digest()
-}
-
-func (s *Store) uploadReader(ctx context.Context, key string, body io.Reader, size int64, metadata map[string]string) error {
-	input := &transfermanager.UploadObjectInput{
+func (s *Store) putObject(ctx context.Context, key string, body []byte, metadata map[string]string) error {
+	_, err := s.client.PutObject(ctx, &awss3.PutObjectInput{
 		Bucket:        &s.bucket,
 		Key:           &key,
-		Body:          body,
-		ContentLength: new(size),
+		Body:          bytes.NewReader(body),
+		ContentLength: new(int64(len(body))),
 		Metadata:      metadata,
-	}
-	if _, err := s.tm.UploadObject(ctx, input); err != nil {
-		return fmt.Errorf("upload %s: %w", key, err)
-	}
-	return nil
-}
-
-func (s *Store) download(ctx context.Context, key, path string) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
-		return err
-	}
-	f, err := os.Create(path) //nolint:gosec // path derives from our own temp dir
+	})
 	if err != nil {
-		return err
-	}
-	defer func() { _ = f.Close() }()
-	// DownloadObject, not GetObject: the WriterAt form downloads parts in parallel.
-	if _, err := s.tm.DownloadObject(ctx, &transfermanager.DownloadObjectInput{Bucket: &s.bucket, Key: &key, WriterAt: f}); err != nil {
-		return fmt.Errorf("download %s: %w", key, err)
+		return fmt.Errorf("upload %s: %w", key, err)
 	}
 	return nil
 }
@@ -451,6 +474,15 @@ func (s *Store) list(ctx context.Context, prefix string) ([]string, error) {
 	return keys, nil
 }
 
+func publishFiles(staging string) ([]publishFile, error) {
+	var files []publishFile
+	err := store.WalkExport(filepath.Join(staging, store.ExportDir), func(rel, path string, _ fs.FileInfo) error {
+		files = append(files, publishFile{path: path, rel: rel})
+		return nil
+	})
+	return files, err
+}
+
 // pruneIdleGenerations drops cached generations of one record that no Fetch used within the grace; a hit refreshes the mtime.
 func pruneIdleGenerations(dir, keep string) {
 	entries, err := os.ReadDir(dir)
@@ -463,4 +495,67 @@ func pruneIdleGenerations(dir, keep string) {
 			_ = os.RemoveAll(path)
 		}
 	}
+}
+
+type chunkUploader struct {
+	store *Store
+	group *errgroup.Group
+	ctx   context.Context // the group's, so a finished scan cannot cancel uploads in flight
+	key   func(sha string) string
+
+	mu   sync.Mutex
+	have map[string]struct{}
+}
+
+func (u *chunkUploader) scan(ctx context.Context, file publishFile) (store.DigestFile, manifestFile, error) {
+	f, err := os.Open(file.path)
+	if err != nil {
+		return store.DigestFile{}, manifestFile{}, err
+	}
+	defer func() { _ = f.Close() }()
+	info, err := f.Stat()
+	if err != nil {
+		return store.DigestFile{}, manifestFile{}, err
+	}
+	if err = store.RequireRegular(file.rel, info.Mode()); err != nil {
+		return store.DigestFile{}, manifestFile{}, err
+	}
+	entry := manifestFile{Path: file.rel, Size: info.Size(), Chunks: []manifestChunk{}}
+	digest, err := store.ScanFile(f, file.rel, info.Size(), getChunkBuf, func(c store.Chunk) error {
+		entry.Chunks = append(entry.Chunks, manifestChunk{Index: c.Index, SHA256: c.SHA256})
+		return u.upload(ctx, c)
+	})
+	return digest, entry, err
+}
+
+func (u *chunkUploader) upload(ctx context.Context, c store.Chunk) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if !u.claim(c.SHA256) {
+		putChunkBuf(c.Data)
+		return nil
+	}
+	u.group.Go(func() error {
+		defer putChunkBuf(c.Data)
+		return u.store.putObject(u.ctx, u.key(c.SHA256), c.Data, nil)
+	})
+	return nil
+}
+
+func (u *chunkUploader) claim(sha string) bool {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	if _, ok := u.have[sha]; ok {
+		return false
+	}
+	u.have[sha] = struct{}{}
+	return true
+}
+
+func getChunkBuf() []byte { return *chunkBufs.Get().(*[]byte) }
+
+func putChunkBuf(buf []byte) {
+	buf = buf[:cap(buf)]
+	chunkBufs.Put(&buf)
 }

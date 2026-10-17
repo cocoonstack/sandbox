@@ -5,6 +5,7 @@ import (
 	"cmp"
 	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/xml"
 	"errors"
 	"fmt"
@@ -18,10 +19,9 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
-
-	"github.com/aws/aws-sdk-go-v2/feature/s3/transfermanager"
 
 	"github.com/cocoonstack/sandbox/sandboxd/store"
 	"github.com/cocoonstack/sandbox/sandboxd/store/storetest"
@@ -173,67 +173,14 @@ func TestFetchOutlivesTheCallerThatStartedIt(t *testing.T) {
 	}
 }
 
-func TestDigestReaderIgnoresReadBoundaries(t *testing.T) {
-	data := bytes.Repeat([]byte{'x'}, int(store.DigestChunkSize))
-	data = append(data, 'y')
-	source := &patternReader{data: data, limits: []int{1, 31, 64 << 10, 7, 79 << 10}}
-	reader := newDigestReader(source, "boundary.bin", int64(len(data)))
-	if _, ok := any(reader).(io.Seeker); ok {
-		t.Fatal("digest reader exposes io.Seeker")
-	}
-	if _, err := io.CopyBuffer(io.Discard, reader, make([]byte, 113<<10)); err != nil {
-		t.Fatalf("read digest stream: %v", err)
-	}
-	file, err := reader.Digest()
-	if err != nil {
-		t.Fatalf("finish digest stream: %v", err)
-	}
-	digest, err := store.AssembleDigest([]store.DigestFile{file})
-	if err != nil {
-		t.Fatalf("assemble digest: %v", err)
-	}
-	const want = "sha256:da8dd289e7d66408bd7d202642f180f2c22bc508cf0fe1d6e9f0e0b7967f6a5e"
-	if digest != want {
-		t.Errorf("digest = %q, want %q", digest, want)
-	}
-}
-
-func TestUploadDigestedSetsContentLength(t *testing.T) {
-	data := bytes.Repeat([]byte{'x'}, int(store.DigestChunkSize))
-	data = append(data, 'y')
-	path := filepath.Join(t.TempDir(), "boundary.bin")
-	if err := os.WriteFile(path, data, 0o600); err != nil {
-		t.Fatalf("write export: %v", err)
-	}
-	tm := &recordingTransferManager{}
-	st := &Store{tm: tm}
-	file, err := st.uploadDigested(t.Context(), "key", path, "boundary.bin")
-	if err != nil {
-		t.Fatalf("upload digested: %v", err)
-	}
-	if tm.contentLength == nil || *tm.contentLength != int64(len(data)) {
-		t.Fatalf("ContentLength = %v, want %d", tm.contentLength, len(data))
-	}
-	if tm.read != int64(len(data)) {
-		t.Fatalf("uploaded bytes = %d, want %d", tm.read, len(data))
-	}
-	digest, err := store.AssembleDigest([]store.DigestFile{file})
-	if err != nil {
-		t.Fatalf("assemble digest: %v", err)
-	}
-	const want = "sha256:da8dd289e7d66408bd7d202642f180f2c22bc508cf0fe1d6e9f0e0b7967f6a5e"
-	if digest != want {
-		t.Errorf("digest = %q, want %q", digest, want)
-	}
-}
-
 func TestPublishDigestedRetryAndMetaRequestAccounting(t *testing.T) {
 	const id = "ck_00000000000000dd"
 	fake := &fakeS3{objects: map[string][]byte{}}
 	st := newTestStore(t, fake)
 	meta := []byte(`{"id":"` + id + `","gen":1}`)
 	content := "retry-body"
-	exportKey := "ck/" + id + "/" + store.ExportGen(meta) + "/disk.img"
+	chunk := sha256.Sum256([]byte(content))
+	exportKey := "ck/" + id + "/" + store.ExportGen(meta) + "/" + hex.EncodeToString(chunk[:])
 	metaKey := "ck/" + id + "/" + store.MetaFile
 	fake.setPutFailures(exportKey, 1)
 
@@ -242,7 +189,6 @@ func TestPublishDigestedRetryAndMetaRequestAccounting(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PublishDigested: %v", err)
 	}
-	chunk := sha256.Sum256([]byte(content))
 	want, err := store.AssembleDigest([]store.DigestFile{{
 		Path: "disk.img", Size: int64(len(content)), Chunks: [][sha256.Size]byte{chunk},
 	}})
@@ -308,7 +254,8 @@ func TestPublishDigestedFailurePreservesCommittedGeneration(t *testing.T) {
 
 	newMeta := []byte(`{"id":"` + id + `","gen":2}`)
 	newStaging := stageRecord(t, st, id, newMeta, "replacement")
-	newExportKey := "ck/" + id + "/" + store.ExportGen(newMeta) + "/disk.img"
+	replacement := sha256.Sum256([]byte("replacement"))
+	newExportKey := "ck/" + id + "/" + store.ExportGen(newMeta) + "/" + hex.EncodeToString(replacement[:])
 	metaKey := "ck/" + id + "/" + store.MetaFile
 	markerPuts := fake.requestCount(http.MethodPut, metaKey)
 	fake.setPutFailures(newExportKey, 100)
@@ -452,6 +399,137 @@ func TestS3BackendContractRealEndpoint(t *testing.T) {
 	storetest.RunContract(t, st)
 }
 
+func TestSparseExportStaysSparseThroughS3(t *testing.T) {
+	const id = "ck_00000000000000a1"
+	fake := &fakeS3{objects: map[string][]byte{}}
+	st := newTestStore(t, fake)
+	size := 12*store.DigestChunkSize + 4096
+	meta := []byte(`{"id":"` + id + `"}`)
+	staging, src := stageSparseRecord(t, st, id, meta, size, map[int64]string{0: "head", 3*store.DigestChunkSize + 100: "mid", size - 4: "tail"})
+	srcSum := fileSum(t, src)
+	if err := st.Publish(t.Context(), staging, id); err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+	count, uploaded := fake.chunkPuts("ck/" + id + "/" + store.ExportGen(meta) + "/")
+	if want := 2*store.DigestChunkSize + 4096; count != 3 || uploaded != want {
+		t.Fatalf("chunk PUTs = %d carrying %d bytes, want 3 carrying %d", count, uploaded, want)
+	}
+
+	dir, _, _, err := st.Fetch(t.Context(), id)
+	if err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	got := filepath.Join(dir, "disk.img")
+	info, err := os.Stat(got)
+	if err != nil || info.Size() != size {
+		t.Fatalf("fetched size = %v, %v, want %d", info, err, size)
+	}
+	if fileSum(t, got) != srcSum {
+		t.Errorf("fetched content differs from the source")
+	}
+	if blocks := allocatedBytes(t, got); blocks > uploaded+(1<<20) {
+		t.Errorf("fetched file allocates %d bytes, want at most the %d uploaded", blocks, uploaded)
+	}
+}
+
+func TestAllZeroDataChunkIsNotUploaded(t *testing.T) {
+	const id = "ck_00000000000000a2"
+	fake := &fakeS3{objects: map[string][]byte{}}
+	st := newTestStore(t, fake)
+	meta := []byte(`{"id":"` + id + `"}`)
+	staging := stageRecord(t, st, id, meta, "")
+	src := filepath.Join(staging, store.ExportDir, "disk.img")
+	dense := make([]byte, 2*store.DigestChunkSize+10)
+	for i := range int(store.DigestChunkSize) {
+		dense[int(store.DigestChunkSize)+i] = 'x'
+	}
+	if err := os.WriteFile(src, dense, 0o600); err != nil {
+		t.Fatalf("write dense export: %v", err)
+	}
+	if err := st.Publish(t.Context(), staging, id); err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+	if count, _ := fake.chunkPuts("ck/" + id + "/" + store.ExportGen(meta) + "/"); count != 1 {
+		t.Errorf("chunk PUTs = %d, want only the non-zero chunk", count)
+	}
+	dir, _, _, err := st.Fetch(t.Context(), id)
+	if err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	if got, err := os.ReadFile(filepath.Join(dir, "disk.img")); err != nil || !bytes.Equal(got, dense) {
+		t.Errorf("fetched content differs from the source: %v", err)
+	}
+}
+
+func TestFetchFailsOnDamagedChunks(t *testing.T) {
+	const id = "ck_00000000000000a3"
+	meta := []byte(`{"id":"` + id + `"}`)
+	sum := sha256.Sum256([]byte("payload"))
+	chunkKey := "ck/" + id + "/" + store.ExportGen(meta) + "/" + hex.EncodeToString(sum[:])
+	for _, tc := range []struct {
+		name   string
+		damage func(*fakeS3)
+		want   string
+	}{
+		{"flipped byte", func(f *fakeS3) { f.objects[chunkKey][0] ^= 0xff }, "checksum"},
+		{"missing chunk", func(f *fakeS3) { delete(f.objects, chunkKey) }, "is missing"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := &fakeS3{objects: map[string][]byte{}}
+			st := newTestStore(t, fake)
+			publishRecord(t, st, id, meta, "payload")
+			tc.damage(fake)
+			_, _, _, err := st.Fetch(t.Context(), id)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("Fetch = %v, want an error containing %q", err, tc.want)
+			}
+			if errors.Is(err, store.ErrNotFound) {
+				t.Errorf("a damaged record must not read as absent: %v", err)
+			}
+		})
+	}
+}
+
+func TestPublishDigestedHashesHolesLikeZeros(t *testing.T) {
+	const id = "ck_00000000000000a4"
+	st := newTestStore(t, &fakeS3{objects: map[string][]byte{}})
+	size := 3*store.DigestChunkSize + 7
+	staging, src := stageSparseRecord(t, st, id, []byte(`{"id":"`+id+`"}`), size, map[int64]string{store.DigestChunkSize + 5: "data", size - 1: "z"})
+	sums := denseChunkSums(t, src)
+	digest, err := st.PublishDigested(t.Context(), staging, id)
+	if err != nil {
+		t.Fatalf("PublishDigested: %v", err)
+	}
+	want, err := store.AssembleDigest([]store.DigestFile{{Path: "disk.img", Size: size, Chunks: sums}})
+	if err != nil {
+		t.Fatalf("assemble reference digest: %v", err)
+	}
+	if digest != want {
+		t.Errorf("digest = %q, want the dense-read digest %q", digest, want)
+	}
+}
+
+func TestPublishDigestedSplitsChunksAtTheFixedBoundary(t *testing.T) {
+	const id = "ck_00000000000000a5"
+	st := newTestStore(t, &fakeS3{objects: map[string][]byte{}})
+	content := string(bytes.Repeat([]byte{'x'}, int(store.DigestChunkSize))) + "y"
+	staging := stageRecord(t, st, id, []byte(`{"id":"`+id+`"}`), content)
+	digest, err := st.PublishDigested(t.Context(), staging, id)
+	if err != nil {
+		t.Fatalf("PublishDigested: %v", err)
+	}
+	want, err := store.AssembleDigest([]store.DigestFile{{
+		Path: "disk.img", Size: store.DigestChunkSize + 1,
+		Chunks: [][sha256.Size]byte{sha256.Sum256([]byte(content[:store.DigestChunkSize])), sha256.Sum256([]byte("y"))},
+	}})
+	if err != nil {
+		t.Fatalf("assemble reference digest: %v", err)
+	}
+	if digest != want {
+		t.Errorf("digest = %q, want %q", digest, want)
+	}
+}
+
 func publishRecord(t *testing.T, st *Store, id string, meta []byte, content string) {
 	t.Helper()
 	staging := stageRecord(t, st, id, meta, content)
@@ -477,6 +555,69 @@ func stageRecord(t *testing.T, st *Store, id string, meta []byte, content string
 		t.Fatalf("write meta: %v", err)
 	}
 	return staging
+}
+
+func stageSparseRecord(t *testing.T, st *Store, id string, meta []byte, size int64, writes map[int64]string) (staging, path string) {
+	t.Helper()
+	staging = stageRecord(t, st, id, meta, "")
+	path = filepath.Join(staging, store.ExportDir, "disk.img")
+	f, err := os.OpenFile(path, os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatalf("open export: %v", err)
+	}
+	defer func() { _ = f.Close() }()
+	if err = f.Truncate(size); err != nil {
+		t.Fatalf("truncate export: %v", err)
+	}
+	for off, data := range writes {
+		if _, err = f.WriteAt([]byte(data), off); err != nil {
+			t.Fatalf("write export at %d: %v", off, err)
+		}
+	}
+	return staging, path
+}
+
+func fileSum(t *testing.T, path string) [sha256.Size]byte {
+	t.Helper()
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatalf("open %s: %v", path, err)
+	}
+	defer func() { _ = f.Close() }()
+	h := sha256.New()
+	if _, err = io.Copy(h, f); err != nil {
+		t.Fatalf("hash %s: %v", path, err)
+	}
+	return [sha256.Size]byte(h.Sum(nil))
+}
+
+func allocatedBytes(t *testing.T, path string) int64 {
+	t.Helper()
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat %s: %v", path, err)
+	}
+	return info.Sys().(*syscall.Stat_t).Blocks * 512
+}
+
+func denseChunkSums(t *testing.T, path string) [][sha256.Size]byte {
+	t.Helper()
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatalf("open %s: %v", path, err)
+	}
+	defer func() { _ = f.Close() }()
+	var sums [][sha256.Size]byte
+	buf := make([]byte, store.DigestChunkSize)
+	for {
+		n, err := io.ReadFull(f, buf)
+		if n > 0 {
+			sums = append(sums, sha256.Sum256(buf[:n]))
+		}
+		if err != nil {
+			return sums
+		}
+	}
 }
 
 func newTestStore(t *testing.T, fake *fakeS3) *Store {
@@ -506,51 +647,6 @@ func assertSingleMetaGet(t *testing.T, fake *fakeS3, metaKey string) {
 	if got := fake.requestCount(http.MethodHead, metaKey); got != 0 {
 		t.Errorf("meta HEAD requests = %d, want 0", got)
 	}
-}
-
-type patternReader struct {
-	data   []byte
-	limits []int
-	offset int
-	read   int
-}
-
-func (r *patternReader) Read(p []byte) (int, error) {
-	if r.offset == len(r.data) {
-		return 0, io.EOF
-	}
-	limit := r.limits[r.read%len(r.limits)]
-	r.read++
-	n := min(len(p), limit, len(r.data)-r.offset)
-	copy(p, r.data[r.offset:r.offset+n])
-	r.offset += n
-	return n, nil
-}
-
-type recordingTransferManager struct {
-	contentLength *int64
-	read          int64
-}
-
-func (m *recordingTransferManager) UploadObject(
-	_ context.Context,
-	input *transfermanager.UploadObjectInput,
-	_ ...func(*transfermanager.Options),
-) (*transfermanager.UploadObjectOutput, error) {
-	if input.ContentLength != nil {
-		m.contentLength = new(*input.ContentLength)
-	}
-	read, err := io.CopyBuffer(io.Discard, input.Body, make([]byte, 113<<10))
-	m.read = read
-	return &transfermanager.UploadObjectOutput{}, err
-}
-
-func (*recordingTransferManager) DownloadObject(
-	context.Context,
-	*transfermanager.DownloadObjectInput,
-	...func(*transfermanager.Options),
-) (*transfermanager.DownloadObjectOutput, error) {
-	return nil, fmt.Errorf("unexpected download")
 }
 
 type fakeRequest struct {
@@ -631,6 +727,20 @@ func (f *fakeS3) objectMetadata(key string) map[string]string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return maps.Clone(f.metadata[key])
+}
+
+func (f *fakeS3) chunkPuts(prefix string) (count int, bytes int64) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for key, lengths := range f.putLengths {
+		if strings.HasPrefix(key, prefix) && !strings.HasSuffix(key, "/"+manifestName) {
+			count += len(lengths)
+			for _, n := range lengths {
+				bytes += n
+			}
+		}
+	}
+	return count, bytes
 }
 
 func (f *fakeS3) resetRequests() {
