@@ -222,6 +222,25 @@ func TestLiveDetachMissingGuestStillChecksHost(t *testing.T) {
 	}
 }
 
+func TestLiveDetachIgnoresAnotherDeviceAtThePath(t *testing.T) {
+	sock := sockPath(t)
+	fake := serveFakeSilkd(t, sock)
+	configureVolumeDevices(fake)
+	spec := liveDiskCLI(t, "")
+	fake.mu.Lock()
+	fake.serial["/sys/block/vdc/dev"] = []byte("8:32\n")
+	fake.serial["/proc/self/mountinfo"] = []byte(rootMountInfo + "2 1 8:48 / /data ro - ext4 /dev/vdd ro\n")
+	fake.mu.Unlock()
+	if err := New("cocoon", nil, nil, false, false, "").DetachVolume(t.Context(), "sbx-1", sock, spec.Name, "/data"); err != nil {
+		t.Fatalf("detach of an unmounted device blocked by another device's mount: %v", err)
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if changes := guestChanges(fake.execCalls); len(changes) != 0 {
+		t.Fatalf("touched another device's mount: %v", changes)
+	}
+}
+
 func liveDiskCLI(t *testing.T, detachErr string) VolumeSpec {
 	t.Helper()
 	dir := t.TempDir()
