@@ -175,13 +175,17 @@ func TestLiveVolumePersistenceFailureRetainsRecoverableState(t *testing.T) {
 			if stage == "intent" && len(eng.volumeSpecs) != 0 {
 				t.Fatal("failed intent reached the engine")
 			}
+			var view types.SandboxVolumesResponse
 			if stage == "detach result" {
-				_, err = m.PatchVolumes(t.Context(), sb.ID, sb.Tenant, types.VolumePatch{Remove: []string{"data"}})
+				view, err = m.PatchVolumes(t.Context(), sb.ID, sb.Tenant, types.VolumePatch{Remove: []string{"data"}})
 			} else {
-				_, err = m.SetVolumes(t.Context(), sb.ID, sb.Tenant, request)
+				view, err = m.SetVolumes(t.Context(), sb.ID, sb.Tenant, request)
 			}
 			if err != nil {
 				t.Fatal(err)
+			}
+			if slices.ContainsFunc(view.States, func(s types.VolumeState) bool { return s.Error != "" }) {
+				t.Fatalf("converged view kept a stale error: %+v", view.States)
 			}
 			assertLiveJournal(t, m, sb)
 		})

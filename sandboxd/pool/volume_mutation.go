@@ -377,8 +377,12 @@ func (m *Manager) recordVolumeError(sb *types.Sandbox, run *volumeRun, name stri
 	if !m.ownsRunLocked(sb, run) {
 		return
 	}
+	if err == nil {
+		delete(m.volumeErrors, sb)
+		return
+	}
 	errs := m.volumeErrors[sb]
-	if err != nil && name != "" {
+	if name != "" {
 		message := volumeChangeFailed
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			message = volumeChangeInterrupted
