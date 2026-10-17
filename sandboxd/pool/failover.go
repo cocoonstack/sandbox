@@ -488,10 +488,7 @@ func (m *Manager) fenceArchived(ctx context.Context, claims map[string]*types.Sa
 		case ok && rec.Owner != m.nodeID:
 			drop = true
 		case ok && !rec.Consumed:
-			drop = m.settleInterruptedArchive(ctx, rows, rec)
-			if _, kept := rows[id]; !kept {
-				sb.ArchivePending = ""
-			}
+			drop = m.settleInterruptedArchive(ctx, rows, sb, rec)
 		case !ok && sb.ArchivePending != "":
 			drop = m.settleArchiveIntent(ctx, sb)
 		}
@@ -521,12 +518,13 @@ func (m *Manager) settleArchiveIntent(ctx context.Context, sb *types.Sandbox) bo
 	return false
 }
 
-func (m *Manager) settleInterruptedArchive(ctx context.Context, rows map[string]archives.Record, rec archives.Record) bool {
+func (m *Manager) settleInterruptedArchive(ctx context.Context, rows map[string]archives.Record, sb *types.Sandbox, rec archives.Record) bool {
 	logger := log.WithFunc("pool.settleInterruptedArchive")
 	for range 2 {
 		err := m.archives.Delete(ctx, rec.ID, rec.Epoch)
 		if err == nil {
 			delete(rows, rec.ID)
+			sb.ArchivePending = ""
 			return false
 		}
 		if !errors.Is(err, archives.ErrLost) {
@@ -540,7 +538,7 @@ func (m *Manager) settleInterruptedArchive(ctx context.Context, rows map[string]
 			return false
 		case !ok:
 			delete(rows, rec.ID)
-			return false
+			return sb.ArchivePending != "" && m.settleArchiveIntent(ctx, sb)
 		case cur.Owner != m.nodeID:
 			return true
 		case cur.Consumed:

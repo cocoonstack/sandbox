@@ -1711,6 +1711,61 @@ func TestFailoverARevivedRowWhoseCheckpointIsGoneIsRetired(t *testing.T) {
 	}
 }
 
+func TestFailoverRestartDropsAClaimConsumedWhileItSettlesItsInterruptedArchive(t *testing.T) {
+	c := newFailoverCluster(t)
+	a, b := c.node(t, "a", t.TempDir(), keepAnHour), c.node(t, "b", t.TempDir(), keepAnHour)
+	sb := mustClaim(t, a, testKey)
+	if err := a.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
+		t.Fatalf("hibernate: %v", err)
+	}
+	ck := interruptArchive(t, a, sb, true)
+
+	restarted := c.restart(t, a)
+	restarted.archives = &hookRegistry{Registry: c.reg, beforeDelete: func() {
+		c.down["a"] = true
+		if adopted, err := b.AdoptArchived(t.Context(), sb.ID, sb.Token); err != nil || !adopted {
+			t.Errorf("adopt during the restart: %v %v, want adopted", adopted, err)
+		}
+		if _, _, err := b.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
+			t.Errorf("adopter's wake during the restart: %v", err)
+		}
+	}}
+	if err := restarted.Reconcile(t.Context()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if _, ok, _ := c.reg.Get(t.Context(), sb.ID); ok || ckExists(t, b, ck) {
+		t.Fatal("setup: the adopter's wake left the row or the checkpoint")
+	}
+	if _, held := restarted.byID(sb.ID); held {
+		t.Error("the restarted node kept a claim another node adopted and consumed while it settled")
+	}
+	if held, ok := b.byID(sb.ID); !ok || held.ArchiveCk != "" {
+		t.Error("the adopter lost the claim it woke")
+	}
+}
+
+func TestFailoverRestartUndoesItsOwnInterruptedArchiveAndItsIntent(t *testing.T) {
+	c := newFailoverCluster(t)
+	a := c.node(t, "a", t.TempDir(), keepAnHour)
+	sb := mustClaim(t, a, testKey)
+	if err := a.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
+		t.Fatalf("hibernate: %v", err)
+	}
+	ck := interruptArchive(t, a, sb, true)
+
+	restarted := c.restart(t, a)
+	if err := restarted.Reconcile(t.Context()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	held, ok := restarted.byID(sb.ID)
+	if !ok || held.ArchivePending != "" {
+		t.Fatalf("claim held %v, want it kept with its intent cleared", ok)
+	}
+	if _, rowed, _ := c.reg.Get(t.Context(), sb.ID); rowed || ckExists(t, restarted, ck) {
+		t.Error("the restart kept the row or the export of its own interrupted archive")
+	}
+}
+
 type failoverCluster struct {
 	reg   *archivestest.Mem
 	ckDir string
