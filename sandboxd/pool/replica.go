@@ -88,10 +88,10 @@ func (m *Manager) replicate(ctx context.Context, sb *types.Sandbox) error {
 		return fmt.Errorf("replicate %s: %w", sb.ID, err)
 	}
 	sb.Transition.Lock()
-	err := m.settleReplicaIntent(ctx, sb)
+	settleErr := m.settleReplicaIntent(ctx, sb)
 	sb.Transition.Unlock()
-	if err != nil {
-		return fmt.Errorf("replicate %s: settle intent: %w", sb.ID, err)
+	if settleErr != nil {
+		return fmt.Errorf("replicate %s: settle intent: %w", sb.ID, settleErr)
 	}
 	if err := m.checkArchiveRow(ctx, sb.ID); err != nil {
 		if errors.Is(err, archives.ErrLost) {
@@ -124,7 +124,7 @@ func (m *Manager) replicate(ctx context.Context, sb *types.Sandbox) error {
 		m.deleteOrphanArchiveCk(ctx, ckID)
 		return errWokeMeanwhile
 	}
-	if err = m.store.commit(intent); err != nil {
+	if err := m.store.commit(intent); err != nil {
 		m.clearReplicaIntent(ctx, sb, ckID)
 		m.deleteOrphanArchiveCk(ctx, ckID)
 		return fmt.Errorf("replicate %s: persist intent: %w", sb.ID, err)
@@ -269,14 +269,4 @@ func (m *Manager) replicaOf(sb *types.Sandbox) string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return sb.ReplicaCk
-}
-
-func (m *Manager) replicaConfirmed(sb *types.Sandbox) bool {
-	return m.epochOf(sb) != 0
-}
-
-func (m *Manager) epochOf(sb *types.Sandbox) int64 {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return sb.ArchiveEpoch
 }

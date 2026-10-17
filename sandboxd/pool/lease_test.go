@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/cocoonstack/sandbox/sandboxd/archives"
+	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
 func TestLeaseRenewLoopKeepsTheNodeLeasedUntilItStops(t *testing.T) {
@@ -373,6 +374,12 @@ func (r *cutRegistry) Rows(ctx context.Context, ids []string) (map[string]archiv
 	}
 	time.Sleep(time.Duration(r.rowsDelay.Load()))
 	return r.Registry.Rows(ctx, ids)
+}
+
+func (m *Manager) epochOf(sb *types.Sandbox) int64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return sb.ArchiveEpoch
 }
 
 func assertServed(t *testing.T, m *Manager, id, token string) {
