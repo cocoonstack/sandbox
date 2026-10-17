@@ -13,8 +13,8 @@ import (
 	"github.com/projecteru2/core/log"
 
 	"github.com/cocoonstack/sandbox/sandboxd/archives"
-	"github.com/cocoonstack/sandbox/sandboxd/config"
 	"github.com/cocoonstack/sandbox/sandboxd/store"
+	"github.com/cocoonstack/sandbox/sandboxd/tenants"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
@@ -47,7 +47,7 @@ func (m *Manager) adoptArchived(ctx context.Context, id, token string) (bool, er
 	if err != nil || !ok {
 		return false, err
 	}
-	sum := config.TokenSHA256(token)
+	sum := tenants.TokenSHA256(token)
 	if rec.Consumed || subtle.ConstantTimeCompare([]byte(sum), []byte(rec.TokenSHA256)) != 1 || (!rec.Deadline.IsZero() && time.Now().After(rec.Deadline)) ||
 		(rec.Owner != m.nodeID && !m.ownerGone(rec.Owner)) {
 		return false, nil
@@ -117,7 +117,7 @@ func (m *Manager) putArchive(ctx context.Context, sb *types.Sandbox, ck string) 
 		return 0, fmt.Errorf("encode claim: %w", err)
 	}
 	return m.archives.Put(ctx, archives.Record{
-		ID: sb.ID, Tenant: sb.Tenant, TokenSHA256: config.TokenSHA256(sb.Token), Owner: m.nodeID,
+		ID: sb.ID, Tenant: sb.Tenant, TokenSHA256: tenants.TokenSHA256(sb.Token), Owner: m.nodeID,
 		Checkpoint: ck, Deadline: deadline, Claim: claim,
 	})
 }

@@ -24,6 +24,7 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/config"
 	"github.com/cocoonstack/sandbox/sandboxd/pool"
 	"github.com/cocoonstack/sandbox/sandboxd/store/peer"
+	"github.com/cocoonstack/sandbox/sandboxd/tenants"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
@@ -122,10 +123,10 @@ type Manager interface {
 	DialPort(ctx context.Context, id string, cred pool.Cred, port uint16) (net.Conn, error)
 	WakeAgentSocket(ctx context.Context, id, token string) (string, func(), error)
 	SetPools(ctx context.Context, pools []config.PoolSpec) error
-	TenantByToken(ctx context.Context, token string) (*config.TenantRecord, error)
+	TenantByToken(ctx context.Context, token string) (*tenants.TenantRecord, error)
 	Tenants(ctx context.Context, after string, limit int) (pool.TenantPage, error)
-	SetTenants(ctx context.Context, specs []config.TenantSpec) error
-	PutTenant(ctx context.Context, spec config.TenantSpec) error
+	SetTenants(ctx context.Context, specs []tenants.TenantSpec) error
+	PutTenant(ctx context.Context, spec tenants.TenantSpec) error
 	DeleteTenant(ctx context.Context, name string) error
 	Drain(ctx context.Context)
 	Uncordon(ctx context.Context)
@@ -197,7 +198,7 @@ type SandboxEnvPatch struct {
 
 // TenantsRequest is the wire body of PUT /v1/tenants: the whole tenant set, an entry without a token keeping that tenant's.
 type TenantsRequest struct {
-	Tenants []config.TenantSpec `json:"tenants"`
+	Tenants []tenants.TenantSpec `json:"tenants"`
 }
 
 // TenantRequest is the wire body of PUT /v1/tenants/{name}; an empty token keeps an existing tenant's.
@@ -757,7 +758,7 @@ func (s *Server) handlePutTenant(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	name := r.PathValue("name")
-	err := s.mgr.PutTenant(r.Context(), config.TenantSpec{Name: name, Token: req.Token, MaxClaims: req.MaxClaims, EgressClass: req.EgressClass})
+	err := s.mgr.PutTenant(r.Context(), tenants.TenantSpec{Name: name, Token: req.Token, MaxClaims: req.MaxClaims, EgressClass: req.EgressClass})
 	writeResult(w, r, "tenant", name, "put tenant failed", err, noContent(w))
 }
 
@@ -848,7 +849,7 @@ func (s *Server) bodyCred(r *http.Request, bodyToken string) pool.Cred {
 	return pool.Cred{Token: bodyToken, Operator: bodyToken == "" && s.rootRequest(r)}
 }
 
-func (s *Server) resolveScope(r *http.Request) (*config.TenantRecord, error) {
+func (s *Server) resolveScope(r *http.Request) (*tenants.TenantRecord, error) {
 	if s.apiToken == "" {
 		return nil, nil
 	}
@@ -870,7 +871,7 @@ func (s *Server) claimResponse(sb *types.Sandbox) ClaimResponse {
 	}
 }
 
-func claimOptions(req ClaimRequest, tenant *config.TenantRecord) pool.ClaimOptions {
+func claimOptions(req ClaimRequest, tenant *tenants.TenantRecord) pool.ClaimOptions {
 	o := pool.ClaimOptions{
 		TTL: req.TTL(), OnExpire: req.OnExpire, ClaimRef: req.ClaimRef, Metadata: req.Metadata, Volumes: req.Volumes,
 		NoEgress: req.Egress != nil && !*req.Egress, RequirePromoted: req.RequirePromoted, Env: req.Env,

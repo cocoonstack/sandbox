@@ -483,7 +483,7 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 	}
 	m.maxClaims = cfg.MaxClaims
 	if cfg.APIToken != "" {
-		m.rootSum = config.TokenSHA256(cfg.APIToken)
+		m.rootSum = tenants.TokenSHA256(cfg.APIToken)
 	}
 	m.cfg = cfg
 	m.view.Store(newConfigView(cfg, secrets))

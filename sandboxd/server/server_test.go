@@ -22,6 +22,7 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/config"
 	"github.com/cocoonstack/sandbox/sandboxd/pool"
 	"github.com/cocoonstack/sandbox/sandboxd/store/peer"
+	"github.com/cocoonstack/sandbox/sandboxd/tenants"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
@@ -270,7 +271,7 @@ func TestInfoListsThePromotedTemplatesOnTheWire(t *testing.T) {
 
 func TestSetTemplateLabelsReplacesTheMapForRootOrTheTenant(t *testing.T) {
 	mgr := &fakeManager{}
-	ts := newTenantTestServer(t, "root", []config.TenantSpec{{Name: "acme", Token: "acme-tok"}}, mgr, nil)
+	ts := newTenantTestServer(t, "root", []tenants.TenantSpec{{Name: "acme", Token: "acme-tok"}}, mgr, nil)
 	put := func(t *testing.T, query, token, body string) int {
 		t.Helper()
 		resp := doReq(t, http.MethodPut, ts.URL+"/v1/templates/labels?"+query, token, body)
@@ -307,7 +308,7 @@ func TestSetTemplateLabelsReplacesTheMapForRootOrTheTenant(t *testing.T) {
 
 func TestEnvVerbsForRootOrTheTenant(t *testing.T) {
 	mgr := &fakeManager{env: types.Env{"G": {Value: "g"}, "H": {Guest: new(false)}}}
-	ts := newTenantTestServer(t, "root", []config.TenantSpec{{Name: "acme", Token: "acme-tok"}}, mgr, nil)
+	ts := newTenantTestServer(t, "root", []tenants.TenantSpec{{Name: "acme", Token: "acme-tok"}}, mgr, nil)
 	call := func(t *testing.T, method, token, body string) (int, string) {
 		t.Helper()
 		resp := doReq(t, method, ts.URL+"/v1/sandboxes/sb_1/env", token, body)
@@ -354,7 +355,7 @@ func TestEnvVerbsForRootOrTheTenant(t *testing.T) {
 
 func TestEnvPatchVerb(t *testing.T) {
 	mgr := &fakeManager{}
-	ts := newTenantTestServer(t, "root", []config.TenantSpec{{Name: "acme", Token: "acme-tok"}}, mgr, nil)
+	ts := newTenantTestServer(t, "root", []tenants.TenantSpec{{Name: "acme", Token: "acme-tok"}}, mgr, nil)
 	call := func(t *testing.T, token, body string) int {
 		t.Helper()
 		resp := doReq(t, http.MethodPatch, ts.URL+"/v1/sandboxes/sb_1/env", token, body)
@@ -477,7 +478,7 @@ func TestVolumeCatalogReturnsScopedFleetProjection(t *testing.T) {
 		}}
 	}}
 	placer := &fakePlacer{volumeHolders: map[string]int{"imagenet": 3}}
-	mgr.tenants = []config.TenantSpec{{Name: "acme", Token: "acme-tok"}}
+	mgr.tenants = []tenants.TenantSpec{{Name: "acme", Token: "acme-tok"}}
 	ts := newMeshTestServer(t, "root", mgr, placer, nil)
 	resp := doReq(t, http.MethodGet, ts.URL+"/v1/volumes", "acme-tok", "")
 	defer resp.Body.Close()
@@ -502,7 +503,7 @@ func TestSandboxIndexReturnsScopedAppliedVolumes(t *testing.T) {
 			ID: "sb_1", Volumes: []types.Volume{{Name: "imagenet", Mount: "/datasets/imagenet"}},
 		}}
 	}}
-	ts := newTenantTestServer(t, "root", []config.TenantSpec{{Name: "acme", Token: "acme-tok"}}, mgr, nil)
+	ts := newTenantTestServer(t, "root", []tenants.TenantSpec{{Name: "acme", Token: "acme-tok"}}, mgr, nil)
 	resp := doReq(t, http.MethodGet, ts.URL+"/v1/sandboxes", "acme-tok", "")
 	defer resp.Body.Close()
 	var got SandboxListResponse
@@ -591,7 +592,7 @@ func TestSandboxesNarrowToAClaimRef(t *testing.T) {
 
 func TestTenantAuthMatrix(t *testing.T) {
 	mgr := &fakeManager{tenantClaims: map[string]int{"acme": 2}}
-	tenants := []config.TenantSpec{{Name: "acme", Token: "acme-tok"}, {Name: "beta", Token: "beta-tok"}}
+	tenants := []tenants.TenantSpec{{Name: "acme", Token: "acme-tok"}, {Name: "beta", Token: "beta-tok"}}
 	ts := newTenantTestServer(t, "sekret", tenants, mgr, nil)
 
 	do := func(t *testing.T, method, path, auth string) *http.Response {
@@ -692,7 +693,7 @@ func TestInstanceMetadataVerb(t *testing.T) {
 		got = doc
 		return fail
 	}}
-	ts := newTenantTestServer(t, "sekret", []config.TenantSpec{{Name: "acme", Token: "acme-tok"}}, mgr, nil)
+	ts := newTenantTestServer(t, "sekret", []tenants.TenantSpec{{Name: "acme", Token: "acme-tok"}}, mgr, nil)
 	put := func(token, id, body string) int {
 		t.Helper()
 		resp := doReq(t, http.MethodPut, ts.URL+"/v1/sandboxes/"+id+"/instance-metadata", token, body)
@@ -839,7 +840,7 @@ func TestSandboxVerbFlows(t *testing.T) {
 
 func TestReleaseOperatorToken(t *testing.T) {
 	const rootTok, sbTok = "sekret", "sb-secret"
-	tenants := []config.TenantSpec{{Name: "acme", Token: "acme-tok"}}
+	tenants := []tenants.TenantSpec{{Name: "acme", Token: "acme-tok"}}
 	tests := []struct {
 		name        string
 		auth        string
@@ -1634,7 +1635,7 @@ func TestVolumeClaimKeepsPoolContentAgainstPeerTemplates(t *testing.T) {
 
 func TestForeignTemplateGossipNeverEscalates(t *testing.T) {
 	hash := ClaimRequest{Template: "tpl"}.Key().Hash()
-	tenants := []config.TenantSpec{{Name: "acme", Token: "acme-tok"}, {Name: "beta", Token: "beta-tok"}}
+	tenants := []tenants.TenantSpec{{Name: "acme", Token: "acme-tok"}, {Name: "beta", Token: "beta-tok"}}
 	for _, tt := range []struct {
 		name, token   string
 		volumes       []types.Volume
@@ -2377,7 +2378,7 @@ func newTestServer(t *testing.T, apiToken string, mgr Manager, dialer Dialer) *h
 	return newTenantTestServer(t, apiToken, nil, mgr, dialer)
 }
 
-func newTenantTestServer(t *testing.T, apiToken string, tenants []config.TenantSpec, mgr Manager, dialer Dialer) *httptest.Server {
+func newTenantTestServer(t *testing.T, apiToken string, tenants []tenants.TenantSpec, mgr Manager, dialer Dialer) *httptest.Server {
 	t.Helper()
 	if dialer == nil {
 		dialer = &fakeDialer{}
@@ -2466,9 +2467,9 @@ type fakeManager struct {
 	getVolumes           func(string, string) (types.SandboxVolumesResponse, error)
 	setVolumes           func(string, string, []types.Volume) (types.SandboxVolumesResponse, error)
 	patchVolumes         func(string, string, types.VolumePatch) (types.SandboxVolumesResponse, error)
-	tenants              []config.TenantSpec
-	setTenants           func(specs []config.TenantSpec) error
-	putTenant            func(spec config.TenantSpec) error
+	tenants              []tenants.TenantSpec
+	setTenants           func(specs []tenants.TenantSpec) error
+	putTenant            func(spec tenants.TenantSpec) error
 	deleteTenant         func(name string) error
 	tenantList           []pool.TenantInfo
 	tenantErr            error
@@ -2679,13 +2680,13 @@ func (f *fakeManager) Counters() pool.Counters { return pool.Counters{} }
 
 func (f *fakeManager) TenantClaims() map[string]int { return f.tenantClaims }
 
-func (f *fakeManager) TenantByToken(_ context.Context, token string) (*config.TenantRecord, error) {
+func (f *fakeManager) TenantByToken(_ context.Context, token string) (*tenants.TenantRecord, error) {
 	if f.tenantErr != nil {
 		return nil, f.tenantErr
 	}
 	for _, t := range f.tenants {
 		if t.Token == token {
-			return &config.TenantRecord{Name: t.Name, MaxClaims: t.MaxClaims, EgressClass: t.EgressClass}, nil
+			return &tenants.TenantRecord{Name: t.Name, MaxClaims: t.MaxClaims, EgressClass: t.EgressClass}, nil
 		}
 	}
 	return nil, pool.ErrUnknownTenant
@@ -2696,14 +2697,14 @@ func (f *fakeManager) Tenants(_ context.Context, after string, limit int) (pool.
 	return pool.TenantPage{Tenants: f.tenantList, Digest: "set-digest"}, nil
 }
 
-func (f *fakeManager) SetTenants(_ context.Context, specs []config.TenantSpec) error {
+func (f *fakeManager) SetTenants(_ context.Context, specs []tenants.TenantSpec) error {
 	if f.setTenants != nil {
 		return f.setTenants(specs)
 	}
 	return nil
 }
 
-func (f *fakeManager) PutTenant(_ context.Context, spec config.TenantSpec) error {
+func (f *fakeManager) PutTenant(_ context.Context, spec tenants.TenantSpec) error {
 	if f.putTenant != nil {
 		return f.putTenant(spec)
 	}

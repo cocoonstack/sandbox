@@ -3,9 +3,7 @@ package config
 
 import (
 	"cmp"
-	"crypto/sha256"
 	"encoding/base64"
-	"encoding/hex"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"fmt"
@@ -153,22 +151,6 @@ type MetaStoreConfig struct {
 	DSNEnv string `json:"dsn_env"`
 	// Cell opts the node into one pool set for every node of the cell; empty keeps the pool set per node.
 	Cell string `json:"cell,omitempty"`
-}
-
-// TenantSpec is one tenant as the tenant API takes it: its bearer token, its live-claim quota and its egress class.
-type TenantSpec struct {
-	Name        string `json:"name"`
-	Token       string `json:"token"`
-	MaxClaims   int    `json:"max_claims,omitzero"`
-	EgressClass string `json:"egress_class,omitempty"`
-}
-
-// TenantRecord stores a tenant's identity, quota and egress class without its plaintext token.
-type TenantRecord struct {
-	Name        string `json:"name"`
-	TokenSHA256 string `json:"token_sha256"`
-	MaxClaims   int    `json:"max_claims,omitzero"`
-	EgressClass string `json:"egress_class,omitempty"`
 }
 
 // VolumeSpec declares one operator-managed dataset disk, held by exactly one node.
@@ -658,12 +640,6 @@ func StorageBytes(s string) (int64, error) {
 		s += "B"
 	}
 	return units.RAMInBytes(s)
-}
-
-// TokenSHA256 is the hex SHA-256 a tenant token is kept as outside config.json.
-func TokenSHA256(token string) string {
-	sum := sha256.Sum256([]byte(token))
-	return hex.EncodeToString(sum[:])
 }
 
 func validatePolicy(p *egress.Policy, secrets map[string]struct{}) error {

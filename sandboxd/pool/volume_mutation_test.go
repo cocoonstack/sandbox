@@ -14,6 +14,7 @@ import (
 
 	"github.com/cocoonstack/sandbox/sandboxd/config"
 	"github.com/cocoonstack/sandbox/sandboxd/engine"
+	"github.com/cocoonstack/sandbox/sandboxd/tenants"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
@@ -817,7 +818,7 @@ func newTenantVolumeManager(t *testing.T, eng *fakeEngine, catalog []config.Volu
 	if err != nil {
 		t.Fatal(err)
 	}
-	putTenants(t, m, config.TenantSpec{Name: "acme", Token: "acme-token"})
+	putTenants(t, m, tenants.TenantSpec{Name: "acme", Token: "acme-token"})
 	sb, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Tenant: "acme", Volumes: volumes})
 	if err != nil {
 		t.Fatal(err)

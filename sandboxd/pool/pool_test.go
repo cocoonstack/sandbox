@@ -24,6 +24,7 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/engine"
 	"github.com/cocoonstack/sandbox/sandboxd/store"
 	"github.com/cocoonstack/sandbox/sandboxd/store/dir"
+	"github.com/cocoonstack/sandbox/sandboxd/tenants"
 	"github.com/cocoonstack/sandbox/sandboxd/tenants/file"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
@@ -1876,7 +1877,7 @@ func testBackends(t testing.TB, cfg *config.Config) Backends {
 	}
 	var rootSum string
 	if cfg.APIToken != "" {
-		rootSum = config.TokenSHA256(cfg.APIToken)
+		rootSum = tenants.TokenSHA256(cfg.APIToken)
 	}
 	src, err := file.Open(t.Context(), cfg.DataDir, rootSum)
 	if err != nil {

@@ -10,26 +10,27 @@ import (
 
 	"github.com/cocoonstack/sandbox/sandboxd/config"
 	"github.com/cocoonstack/sandbox/sandboxd/egress"
+	"github.com/cocoonstack/sandbox/sandboxd/tenants"
 	"github.com/cocoonstack/sandbox/sandboxd/utils"
 )
 
 // clusterDigest fingerprints the must-match config, its egress layer and the live tenant records; without cluster_key it omits token hashes.
-func clusterDigest(c *config.Config, caFingerprint string, tenants []config.TenantRecord) string {
-	tenants = slices.Clone(tenants)
-	slices.SortFunc(tenants, func(a, b config.TenantRecord) int { return strings.Compare(a.Name, b.Name) })
+func clusterDigest(c *config.Config, caFingerprint string, records []tenants.TenantRecord) string {
+	records = slices.Clone(records)
+	slices.SortFunc(records, func(a, b tenants.TenantRecord) int { return strings.Compare(a.Name, b.Name) })
 	eg := egressFingerprintOf(c)
 	if c.Mesh != nil {
 		if key, _ := c.Mesh.DecodedKey(); key != nil {
-			raw, _ := utils.DigestJSON([]any{c.APIToken, c.PreviewSecret, caFingerprint, tenants, c.CheckpointTTLHours, eg})
+			raw, _ := utils.DigestJSON([]any{c.APIToken, c.PreviewSecret, caFingerprint, records, c.CheckpointTTLHours, eg})
 			mac := hmac.New(sha256.New, key)
 			mac.Write(raw)
 			return hex.EncodeToString(mac.Sum(nil))
 		}
 	}
-	for i := range tenants {
-		tenants[i].TokenSHA256 = ""
+	for i := range records {
+		records[i].TokenSHA256 = ""
 	}
-	return utils.DigestHex([]any{caFingerprint, tenants, c.CheckpointTTLHours, eg})
+	return utils.DigestHex([]any{caFingerprint, records, c.CheckpointTTLHours, eg})
 }
 
 type egressFingerprint struct {

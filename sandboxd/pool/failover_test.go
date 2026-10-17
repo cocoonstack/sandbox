@@ -17,6 +17,7 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/archives/archivestest"
 	"github.com/cocoonstack/sandbox/sandboxd/config"
 	"github.com/cocoonstack/sandbox/sandboxd/store"
+	"github.com/cocoonstack/sandbox/sandboxd/tenants"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
@@ -32,7 +33,7 @@ func TestFailoverArchiveWritesTheRow(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("row: %v %v, want one", ok, err)
 	}
-	if rec.Owner != "a" || rec.Epoch != 1 || rec.Checkpoint != sb.ArchiveCk || rec.TokenSHA256 != config.TokenSHA256(sb.Token) || rec.Deadline.IsZero() {
+	if rec.Owner != "a" || rec.Epoch != 1 || rec.Checkpoint != sb.ArchiveCk || rec.TokenSHA256 != tenants.TokenSHA256(sb.Token) || rec.Deadline.IsZero() {
 		t.Errorf("row %+v, want a@1 on %s with the token hash and a deadline", rec, sb.ArchiveCk)
 	}
 	claim := &types.Sandbox{}
@@ -720,7 +721,7 @@ func TestFailoverARepeatedAdoptionOnOneNodeKeepsOneClaim(t *testing.T) {
 	c := newFailoverCluster(t)
 	a, b := c.node(t, "a", t.TempDir(), keepAnHour), c.node(t, "b", t.TempDir(), keepAnHour)
 	for _, m := range []*Manager{a, b} {
-		if err := m.PutTenant(t.Context(), config.TenantSpec{Name: "acme", Token: "tok-acme"}); err != nil {
+		if err := m.PutTenant(t.Context(), tenants.TenantSpec{Name: "acme", Token: "tok-acme"}); err != nil {
 			t.Fatalf("put tenant: %v", err)
 		}
 	}
@@ -1367,7 +1368,7 @@ func TestFailoverConcurrentAdoptionsOnOneNodeAllAnswerForIt(t *testing.T) {
 	c := newFailoverCluster(t)
 	a, b := c.node(t, "a", t.TempDir(), keepAnHour), c.node(t, "b", t.TempDir(), keepAnHour)
 	for _, m := range []*Manager{a, b} {
-		if err := m.PutTenant(t.Context(), config.TenantSpec{Name: "acme", Token: "tok-acme"}); err != nil {
+		if err := m.PutTenant(t.Context(), tenants.TenantSpec{Name: "acme", Token: "tok-acme"}); err != nil {
 			t.Fatalf("put tenant: %v", err)
 		}
 	}

@@ -10,7 +10,6 @@ import (
 	"maps"
 	"slices"
 
-	"github.com/cocoonstack/sandbox/sandboxd/config"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
@@ -30,6 +29,22 @@ var (
 	ErrInvalid = errors.New("invalid tenant")
 )
 
+// TenantSpec is one tenant as the tenant API takes it: its bearer token, its live-claim quota and its egress class.
+type TenantSpec struct {
+	Name        string `json:"name"`
+	Token       string `json:"token"`
+	MaxClaims   int    `json:"max_claims,omitzero"`
+	EgressClass string `json:"egress_class,omitempty"`
+}
+
+// TenantRecord stores a tenant's identity, quota and egress class without its plaintext token.
+type TenantRecord struct {
+	Name        string `json:"name"`
+	TokenSHA256 string `json:"token_sha256"`
+	MaxClaims   int    `json:"max_claims,omitzero"`
+	EgressClass string `json:"egress_class,omitempty"`
+}
+
 // Presence is what a memory-only lookup knows about a name.
 type Presence int
 
@@ -48,30 +63,30 @@ func (c Change) Empty() bool {
 // Source is one tenant set backend.
 type Source interface {
 	// Resolve maps a bearer token's SHA-256 to its tenant's shared, read-only record; a cached source may query its backend on a miss.
-	Resolve(ctx context.Context, sum [sha256.Size]byte) (*config.TenantRecord, error)
+	Resolve(ctx context.Context, sum [sha256.Size]byte) (*TenantRecord, error)
 	// Peek answers from memory only, so a caller holding a lock never waits on the backend.
-	Peek(name string) (config.TenantRecord, Presence)
+	Peek(name string) (TenantRecord, Presence)
 	// Lookup answers whether name is in the set, asking the backend when a cache has not seen it.
-	Lookup(ctx context.Context, name string) (config.TenantRecord, bool, error)
+	Lookup(ctx context.Context, name string) (TenantRecord, bool, error)
 	// List returns up to limit tenants named after the cursor, in name order, without token hashes.
-	List(ctx context.Context, after string, limit int) ([]config.TenantRecord, error)
+	List(ctx context.Context, after string, limit int) ([]TenantRecord, error)
 	// Put adds or changes one tenant; an empty TokenSHA256 keeps the stored token.
-	Put(ctx context.Context, r config.TenantRecord) (Change, error)
+	Put(ctx context.Context, r TenantRecord) (Change, error)
 	// Delete removes one tenant; ErrUnknown when it is not in the set.
 	Delete(ctx context.Context, name string) (Change, error)
 	// Replace makes the set exactly records; an entry without TokenSHA256 keeps the stored token.
-	Replace(ctx context.Context, records []config.TenantRecord) (Change, error)
+	Replace(ctx context.Context, records []TenantRecord) (Change, error)
 	// Classes counts the tenants that name each egress class.
 	Classes(ctx context.Context) (map[string]int, error)
 	// Records returns the whole set for the cluster digest; a shared source returns nil, as every node reads the same rows.
-	Records() []config.TenantRecord
+	Records() []TenantRecord
 	// Digest fingerprints a node-local set so two nodes can compare theirs; a shared source returns "".
 	Digest() string
 	Close() error
 }
 
 // Validate checks one record's fields; an empty TokenSHA256 passes, since writes may keep the stored token.
-func Validate(r config.TenantRecord, rootSum string) error {
+func Validate(r TenantRecord, rootSum string) error {
 	switch {
 	case !types.NameRe.MatchString(r.Name):
 		return fmt.Errorf("%w: tenant name %q must match %s", ErrInvalid, r.Name, types.NameRe)
@@ -89,7 +104,7 @@ func Validate(r config.TenantRecord, rootSum string) error {
 }
 
 // Diff names the tenants next adds, changes and removes against cur, each list in name order.
-func Diff(cur, next map[string]config.TenantRecord) Change {
+func Diff(cur, next map[string]TenantRecord) Change {
 	var c Change
 	for _, name := range slices.Sorted(maps.Keys(next)) {
 		switch old, ok := cur[name]; {
@@ -105,4 +120,10 @@ func Diff(cur, next map[string]config.TenantRecord) Change {
 		}
 	}
 	return c
+}
+
+// TokenSHA256 is the hex SHA-256 a tenant token is kept as outside config.json.
+func TokenSHA256(token string) string {
+	sum := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(sum[:])
 }

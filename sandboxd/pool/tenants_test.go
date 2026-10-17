@@ -22,6 +22,7 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/metastore/metastoretest"
 	"github.com/cocoonstack/sandbox/sandboxd/outbound"
 	"github.com/cocoonstack/sandbox/sandboxd/outbound/outboundtest"
+	"github.com/cocoonstack/sandbox/sandboxd/tenants"
 	"github.com/cocoonstack/sandbox/sandboxd/tenants/file"
 	tenantspg "github.com/cocoonstack/sandbox/sandboxd/tenants/pg"
 	"github.com/cocoonstack/sandbox/sandboxd/tenants/tenantstest"
@@ -30,7 +31,7 @@ import (
 
 func TestRuntimeTenantAuthenticatesAndIsCapped(t *testing.T) {
 	m := tenantManager(t, t.TempDir())
-	if err := m.PutTenant(t.Context(), config.TenantSpec{Name: "acme", Token: "acme-tok", MaxClaims: 1}); err != nil {
+	if err := m.PutTenant(t.Context(), tenants.TenantSpec{Name: "acme", Token: "acme-tok", MaxClaims: 1}); err != nil {
 		t.Fatalf("PutTenant: %v", err)
 	}
 	if name, ok := tenantOf(t, m, "acme-tok"); !ok || name != "acme" {
@@ -46,7 +47,7 @@ func TestRuntimeTenantAuthenticatesAndIsCapped(t *testing.T) {
 	if err := claim(); !errors.Is(err, ErrQuota) {
 		t.Fatalf("claim past the cap: %v, want ErrQuota", err)
 	}
-	if err := m.PutTenant(t.Context(), config.TenantSpec{Name: "acme", MaxClaims: 2}); err != nil {
+	if err := m.PutTenant(t.Context(), tenants.TenantSpec{Name: "acme", MaxClaims: 2}); err != nil {
 		t.Fatalf("raise the cap: %v", err)
 	}
 	if _, ok := tenantOf(t, m, "acme-tok"); !ok {
@@ -55,7 +56,7 @@ func TestRuntimeTenantAuthenticatesAndIsCapped(t *testing.T) {
 	if err := claim(); err != nil {
 		t.Fatalf("claim under the raised cap: %v", err)
 	}
-	if err := m.PutTenant(t.Context(), config.TenantSpec{Name: "acme", MaxClaims: 1}); err != nil {
+	if err := m.PutTenant(t.Context(), tenants.TenantSpec{Name: "acme", MaxClaims: 1}); err != nil {
 		t.Fatalf("lower the cap: %v", err)
 	}
 	if err := claim(); !errors.Is(err, ErrQuota) {
@@ -67,8 +68,8 @@ func TestRuntimeTenantAuthenticatesAndIsCapped(t *testing.T) {
 }
 
 func TestRotatedTenantTokenStopsTheOldOne(t *testing.T) {
-	m := tenantManager(t, t.TempDir(), config.TenantSpec{Name: "acme", Token: "old"})
-	if err := m.PutTenant(t.Context(), config.TenantSpec{Name: "acme", Token: "new"}); err != nil {
+	m := tenantManager(t, t.TempDir(), tenants.TenantSpec{Name: "acme", Token: "old"})
+	if err := m.PutTenant(t.Context(), tenants.TenantSpec{Name: "acme", Token: "new"}); err != nil {
 		t.Fatalf("rotate: %v", err)
 	}
 	if _, ok := tenantOf(t, m, "old"); ok {
@@ -80,7 +81,7 @@ func TestRotatedTenantTokenStopsTheOldOne(t *testing.T) {
 }
 
 func TestRemovedTenantRunsToItsDeadlineButCannotExtend(t *testing.T) {
-	m := tenantManager(t, t.TempDir(), config.TenantSpec{Name: "acme", Token: "acme-tok"})
+	m := tenantManager(t, t.TempDir(), tenants.TenantSpec{Name: "acme", Token: "acme-tok"})
 	sb, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{TTL: time.Hour, Tenant: "acme", OnExpire: types.ExpireArchive})
 	if err != nil {
 		t.Fatalf("claim: %v", err)
@@ -122,7 +123,7 @@ func TestRemovedTenantsClaimIsNeitherArchivedNorWokenNorForked(t *testing.T) {
 	if err != nil {
 		t.Fatalf("setup manager: %v", err)
 	}
-	putTenants(t, m, config.TenantSpec{Name: "acme", Token: "acme-tok"})
+	putTenants(t, m, tenants.TenantSpec{Name: "acme", Token: "acme-tok"})
 	claim := func() *types.Sandbox {
 		t.Helper()
 		sb, claimErr := m.ClaimProvision(t.Context(), testKey, ClaimOptions{TTL: time.Hour, Tenant: "acme"})
@@ -159,8 +160,8 @@ func TestRemovedTenantsClaimIsNeitherArchivedNorWokenNorForked(t *testing.T) {
 
 func TestTenantSetSurvivesARestart(t *testing.T) {
 	dir := t.TempDir()
-	m := tenantManager(t, dir, config.TenantSpec{Name: "acme", Token: "acme-tok"})
-	if err := m.PutTenant(t.Context(), config.TenantSpec{Name: "beta", Token: "beta-tok", MaxClaims: 3}); err != nil {
+	m := tenantManager(t, dir, tenants.TenantSpec{Name: "acme", Token: "acme-tok"})
+	if err := m.PutTenant(t.Context(), tenants.TenantSpec{Name: "beta", Token: "beta-tok", MaxClaims: 3}); err != nil {
 		t.Fatalf("PutTenant: %v", err)
 	}
 	raw, err := os.ReadFile(filepath.Join(dir, "tenants.json"))
@@ -183,7 +184,7 @@ func TestConcurrentTenantPutsKeepEveryTenant(t *testing.T) {
 	var wg sync.WaitGroup
 	for i := range 32 {
 		wg.Go(func() {
-			if err := m.PutTenant(t.Context(), config.TenantSpec{Name: fmt.Sprintf("u-%d", i), Token: fmt.Sprintf("tok-%d", i)}); err != nil {
+			if err := m.PutTenant(t.Context(), tenants.TenantSpec{Name: fmt.Sprintf("u-%d", i), Token: fmt.Sprintf("tok-%d", i)}); err != nil {
 				t.Errorf("PutTenant %d: %v", i, err)
 			}
 		})
@@ -201,8 +202,8 @@ func TestTenantChangesAreValidatedAndAudited(t *testing.T) {
 	if err != nil {
 		t.Fatalf("setup manager: %v", err)
 	}
-	putTenants(t, m, config.TenantSpec{Name: "acme", Token: "acme-tok"})
-	for name, spec := range map[string]config.TenantSpec{
+	putTenants(t, m, tenants.TenantSpec{Name: "acme", Token: "acme-tok"})
+	for name, spec := range map[string]tenants.TenantSpec{
 		"bad name":      {Name: "-bad", Token: "x"},
 		"root scope":    {Name: types.TemplateRootScope, Token: "x"},
 		"no token":      {Name: "new"},
@@ -218,7 +219,7 @@ func TestTenantChangesAreValidatedAndAudited(t *testing.T) {
 	if err = m.DeleteTenant(t.Context(), "nobody"); !errors.Is(err, ErrUnknownTenant) {
 		t.Errorf("delete an unknown tenant: %v, want ErrUnknownTenant", err)
 	}
-	if err = m.SetTenants(t.Context(), []config.TenantSpec{{Name: "acme", MaxClaims: 2}, {Name: "beta", Token: "beta-tok"}}); err != nil {
+	if err = m.SetTenants(t.Context(), []tenants.TenantSpec{{Name: "acme", MaxClaims: 2}, {Name: "beta", Token: "beta-tok"}}); err != nil {
 		t.Fatalf("SetTenants: %v", err)
 	}
 	if err = m.DeleteTenant(t.Context(), "beta"); err != nil {
@@ -243,7 +244,7 @@ func TestTenantChangesAreValidatedAndAudited(t *testing.T) {
 	if err != nil {
 		t.Fatalf("setup open manager: %v", err)
 	}
-	if err := open.PutTenant(t.Context(), config.TenantSpec{Name: "acme", Token: "t"}); !errors.Is(err, ErrBadTenant) {
+	if err := open.PutTenant(t.Context(), tenants.TenantSpec{Name: "acme", Token: "t"}); !errors.Is(err, ErrBadTenant) {
 		t.Errorf("tenant on a node without api_token: %v, want ErrBadTenant", err)
 	}
 }
@@ -266,7 +267,7 @@ func TestARuntimeTenantTakesItsEgressClassWithoutARestart(t *testing.T) {
 			return (&net.Dialer{}).DialContext(ctx, network, origin.Listener.Addr().String())
 		}
 	})
-	for _, spec := range []config.TenantSpec{{Name: "u-1", Token: "u1-tok", EgressClass: "desk"}, {Name: "u-2", Token: "u2-tok"}} {
+	for _, spec := range []tenants.TenantSpec{{Name: "u-1", Token: "u1-tok", EgressClass: "desk"}, {Name: "u-2", Token: "u2-tok"}} {
 		if err = m.PutTenant(t.Context(), spec); err != nil {
 			t.Fatalf("PutTenant %s: %v", spec.Name, err)
 		}
@@ -334,7 +335,7 @@ func TestARuntimeTenantTakesItsEgressClassWithoutARestart(t *testing.T) {
 		t.Errorf("after a restart u-1 has class %q, want desk from tenants.json", r.EgressClass)
 	}
 
-	if err = m.PutTenant(t.Context(), config.TenantSpec{Name: "u-1"}); err != nil {
+	if err = m.PutTenant(t.Context(), tenants.TenantSpec{Name: "u-1"}); err != nil {
 		t.Fatalf("drop u-1's class: %v", err)
 	}
 	later, err := claimAs("u1-tok")
@@ -351,7 +352,7 @@ func TestARuntimeTenantTakesItsEgressClassWithoutARestart(t *testing.T) {
 }
 
 func TestAFullLastPageNamesNoNext(t *testing.T) {
-	m := tenantManager(t, t.TempDir(), config.TenantSpec{Name: "a", Token: "ta"}, config.TenantSpec{Name: "b", Token: "tb"})
+	m := tenantManager(t, t.TempDir(), tenants.TenantSpec{Name: "a", Token: "ta"}, tenants.TenantSpec{Name: "b", Token: "tb"})
 	page, err := m.Tenants(t.Context(), "", 2)
 	if err != nil || len(page.Tenants) != 2 || page.Next != "" {
 		t.Errorf("page %+v %v, want both tenants and no next", page, err)
@@ -379,7 +380,7 @@ func TestTwoNodesOnOneMetaStoreShareTheTenantSet(t *testing.T) {
 		return m
 	}
 	a, b := node(), node()
-	if err := a.PutTenant(t.Context(), config.TenantSpec{Name: "u-1", Token: "u1-tok", MaxClaims: 1}); err != nil {
+	if err := a.PutTenant(t.Context(), tenants.TenantSpec{Name: "u-1", Token: "u1-tok", MaxClaims: 1}); err != nil {
 		t.Fatalf("put on a: %v", err)
 	}
 	if name, ok := tenantOf(t, b, "u1-tok"); !ok || name != "u-1" {
@@ -425,7 +426,7 @@ func listTenants(t *testing.T, m *Manager) ([]TenantInfo, string) {
 	return page.Tenants, page.Digest
 }
 
-func tenantManager(t *testing.T, dir string, tenants ...config.TenantSpec) *Manager {
+func tenantManager(t *testing.T, dir string, tenants ...tenants.TenantSpec) *Manager {
 	t.Helper()
 	cfg := &config.Config{DataDir: dir, APIToken: "root"}
 	m, err := NewManager(t.Context(), cfg, newFakeEngine(), testSecrets(t), testBackends(t, cfg))
@@ -436,7 +437,7 @@ func tenantManager(t *testing.T, dir string, tenants ...config.TenantSpec) *Mana
 	return m
 }
 
-func putTenants(t *testing.T, m *Manager, tenants ...config.TenantSpec) {
+func putTenants(t *testing.T, m *Manager, tenants ...tenants.TenantSpec) {
 	t.Helper()
 	if len(tenants) == 0 {
 		return
@@ -448,9 +449,9 @@ func putTenants(t *testing.T, m *Manager, tenants ...config.TenantSpec) {
 
 func setTenantCaps(t *testing.T, m *Manager, caps map[string]int) {
 	t.Helper()
-	records := make([]config.TenantRecord, 0, len(caps))
+	records := make([]tenants.TenantRecord, 0, len(caps))
 	for name, limit := range caps {
-		records = append(records, config.TenantRecord{Name: name, TokenSHA256: config.TokenSHA256("tok-" + name), MaxClaims: limit})
+		records = append(records, tenants.TenantRecord{Name: name, TokenSHA256: tenants.TokenSHA256("tok-" + name), MaxClaims: limit})
 	}
 	src, err := file.Open(t.Context(), t.TempDir(), "")
 	if err != nil {

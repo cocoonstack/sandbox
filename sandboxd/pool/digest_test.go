@@ -6,21 +6,22 @@ import (
 
 	"github.com/cocoonstack/sandbox/sandboxd/config"
 	"github.com/cocoonstack/sandbox/sandboxd/egress"
+	"github.com/cocoonstack/sandbox/sandboxd/tenants"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
 func TestClusterDigest(t *testing.T) {
-	acme := []config.TenantSpec{{Name: "acme", Token: "t1"}}
-	rotated := []config.TenantSpec{{Name: "acme", Token: "rotated"}}
+	acme := []tenants.TenantSpec{{Name: "acme", Token: "t1"}}
+	rotated := []tenants.TenantSpec{{Name: "acme", Token: "rotated"}}
 	base := &config.Config{APIToken: "tok", PreviewSecret: "ps"}
-	digest := func(c *config.Config, fp string, tenants []config.TenantSpec) string {
-		return clusterDigest(c, fp, tenantRecords(tenants))
+	digest := func(c *config.Config, fp string, specs []tenants.TenantSpec) string {
+		return clusterDigest(c, fp, tenantRecords(specs))
 	}
 	d := digest(base, "ca-fp", acme)
 	if digest(base, "ca-fp", acme) != d {
 		t.Fatal("digest is not stable for identical config")
 	}
-	if digest(base, "ca-fp", []config.TenantSpec{{Name: "beta", Token: "t1"}}) == d {
+	if digest(base, "ca-fp", []tenants.TenantSpec{{Name: "beta", Token: "t1"}}) == d {
 		t.Error("a tenant-name change is not reflected")
 	}
 	if digest(base, "other-fp", acme) == d {
@@ -54,7 +55,7 @@ func TestClusterDigest(t *testing.T) {
 		if clusterDigest(cfg, "ca-fp", records) == before {
 			t.Error("a quota-only change must change the cluster digest")
 		}
-		if records[0].TokenSHA256 != config.TokenSHA256("t1") {
+		if records[0].TokenSHA256 != tenants.TokenSHA256("t1") {
 			t.Error("digest changed the caller's token hash")
 		}
 	}
@@ -62,20 +63,20 @@ func TestClusterDigest(t *testing.T) {
 
 func TestClusterDigestBytesArePinned(t *testing.T) {
 	key := base64.StdEncoding.EncodeToString(make([]byte, 32))
-	tenants := []config.TenantSpec{{Name: "acme", Token: "t<1>&\u2028"}, {Name: "beta", Token: "t2"}}
+	specs := []tenants.TenantSpec{{Name: "acme", Token: "t<1>&\u2028"}, {Name: "beta", Token: "t2"}}
 	for _, tt := range []struct {
-		name    string
-		cfg     *config.Config
-		tenants []config.TenantSpec
-		fp      string
-		want    string
+		name  string
+		cfg   *config.Config
+		specs []tenants.TenantSpec
+		fp    string
+		want  string
 	}{
-		{"keyless", &config.Config{APIToken: "t<o>k", PreviewSecret: "p&s", CheckpointTTLHours: 24}, tenants, "ca<&>\u2028fp", "ad397b4d6752991094c96a38e2e3a18bc220a5e68b315a625236f5147d9d0924"},
-		{"keyed", &config.Config{APIToken: "t<o>k&\u2029", PreviewSecret: "p&s<", CheckpointTTLHours: 24, Mesh: &config.MeshConfig{ClusterKey: key}}, tenants, "ca<&>fp", "848ffb9bbcaa14b59074f0753cc2aff33f72494722059f27587d6fe61eb74ad2"},
+		{"keyless", &config.Config{APIToken: "t<o>k", PreviewSecret: "p&s", CheckpointTTLHours: 24}, specs, "ca<&>\u2028fp", "ad397b4d6752991094c96a38e2e3a18bc220a5e68b315a625236f5147d9d0924"},
+		{"keyed", &config.Config{APIToken: "t<o>k&\u2029", PreviewSecret: "p&s<", CheckpointTTLHours: 24, Mesh: &config.MeshConfig{ClusterKey: key}}, specs, "ca<&>fp", "848ffb9bbcaa14b59074f0753cc2aff33f72494722059f27587d6fe61eb74ad2"},
 		{"no tenants", &config.Config{}, nil, "fp", "4bf6489cb7c229d99dad45b7c8eb8a070a4fd7040cf43c1b49f103ae3107b10b"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := clusterDigest(tt.cfg, tt.fp, tenantRecords(tt.tenants)); got != tt.want {
+			if got := clusterDigest(tt.cfg, tt.fp, tenantRecords(tt.specs)); got != tt.want {
 				t.Errorf("digest %s, want the pinned digest %s: a change splits a rolling cluster", got, tt.want)
 			}
 		})
@@ -121,10 +122,10 @@ func TestClusterDigestCoversTheEgressLayerInAnyOrder(t *testing.T) {
 	}
 }
 
-func tenantRecords(tenants []config.TenantSpec) []config.TenantRecord {
-	out := make([]config.TenantRecord, len(tenants))
-	for i, t := range tenants {
-		out[i] = config.TenantRecord{Name: t.Name, TokenSHA256: config.TokenSHA256(t.Token), MaxClaims: t.MaxClaims}
+func tenantRecords(specs []tenants.TenantSpec) []tenants.TenantRecord {
+	out := make([]tenants.TenantRecord, len(specs))
+	for i, t := range specs {
+		out[i] = tenants.TenantRecord{Name: t.Name, TokenSHA256: tenants.TokenSHA256(t.Token), MaxClaims: t.MaxClaims}
 	}
 	return out
 }
