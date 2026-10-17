@@ -107,7 +107,7 @@ type NetShape string
 // PolicyLayer pins, at claim time, whether the key had a pool layer in its egress policy.
 type PolicyLayer string
 
-// NetRoute is how a claimed guest reaches the network: relay through the host proxy, a direct NIC, or none.
+// NetRoute is how a claimed guest reaches the network.
 type NetRoute string
 
 // RestoreMode selects cocoon's clone memory-restore strategy; empty is cocoon's default.
@@ -504,7 +504,7 @@ func (k PoolKey) Hash() string {
 // Validate checks that every axis holds a known value.
 func (k PoolKey) Validate() error {
 	if k.Template == "" {
-		return fmt.Errorf("template must not be empty")
+		return errors.New("template must not be empty")
 	}
 	switch k.Net {
 	case NetNone, NetEgress:
