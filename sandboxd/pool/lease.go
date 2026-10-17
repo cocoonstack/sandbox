@@ -3,6 +3,7 @@ package pool
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"maps"
 	"slices"
@@ -150,7 +151,7 @@ func (m *Manager) lift(ctx context.Context, fenced *fenceState, start time.Time)
 
 // confirmOwnership takes sb's row for this node in one compare-and-set; false means another node holds the claim.
 func (m *Manager) confirmOwnership(ctx context.Context, sb *types.Sandbox, rec archives.Record) (bool, error) {
-	for range 2 {
+	for attempt := range 3 {
 		switch {
 		case rec.ID == "":
 			gone, err := m.replicaGone(ctx, sb)
@@ -159,6 +160,9 @@ func (m *Manager) confirmOwnership(ctx context.Context, sb *types.Sandbox, rec a
 			return false, nil
 		case rec.Consumed:
 			return true, nil
+		}
+		if attempt == 2 {
+			break
 		}
 		epoch, err := m.archives.Take(ctx, sb.ID, rec.Epoch, m.nodeID)
 		if err == nil {
@@ -176,7 +180,7 @@ func (m *Manager) confirmOwnership(ctx context.Context, sb *types.Sandbox, rec a
 			rec = archives.Record{}
 		}
 	}
-	return false, nil
+	return false, fmt.Errorf("confirm %s: its row kept moving under this node", sb.ID)
 }
 
 // fenceWatch gates sb at resolution and returns the channel that closes when its streams must end; nil for an unreplicated claim.

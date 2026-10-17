@@ -305,6 +305,28 @@ func TestLeaseLiftOfAReplacedStateChangesNothing(t *testing.T) {
 	}
 }
 
+func TestLeaseConfirmThatKeepsLosingOnItsOwnRowStaysFencedAndKeepsTheClaim(t *testing.T) {
+	c := newReplicaCluster(t)
+	a := c.node(t, "a", t.TempDir(), keepAnHour)
+	sb := mustClaim(t, a, testKey)
+	vm := lockedVMName(sb)
+	replicateNow(t, a, sb)
+	a.archives = &lostTakeRegistry{Registry: c.reg}
+	row, _, _ := c.reg.Get(t.Context(), sb.ID)
+
+	if keep, err := a.confirmOwnership(t.Context(), sb, row); err == nil || keep {
+		t.Fatalf("confirm on a row that keeps refusing: %v %v, want an error", keep, err)
+	}
+	a.tripFence()
+	a.unfence(t.Context(), time.Now())
+	if !a.isFenced() {
+		t.Error("the node lifted its fence without confirming a claim it owns")
+	}
+	if _, held := a.byID(sb.ID); !held || a.eng.(*fakeEngine).removed(vm) {
+		t.Errorf("claim held %v, VM removed %v, want the claim and VM kept: its row is still this node's", held, a.eng.(*fakeEngine).removed(vm))
+	}
+}
+
 func TestLeaseConfirmRetriesOnceOnAStaleEpoch(t *testing.T) {
 	c := newReplicaCluster(t)
 	a := c.node(t, "a", t.TempDir(), keepAnHour)
@@ -379,6 +401,14 @@ func TestLeaseAdoptionWaitsOutTheFenceAndTheOldOwnerDropsItsCopy(t *testing.T) {
 			})
 		})
 	}
+}
+
+type lostTakeRegistry struct {
+	archives.Registry
+}
+
+func (r *lostTakeRegistry) Take(context.Context, string, int64, string) (int64, error) {
+	return 0, archives.ErrLost
 }
 
 type cutRegistry struct {
