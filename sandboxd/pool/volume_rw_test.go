@@ -569,7 +569,8 @@ func TestWritableDiscoveryAndUsageEvent(t *testing.T) {
 
 func newVolumeManagerAt(t *testing.T, eng *fakeEngine, dataDir string, volumes []config.VolumeSpec) *Manager {
 	t.Helper()
-	m, err := NewManager(t.Context(), &config.Config{DataDir: dataDir, Volumes: volumes}, eng, testSecrets(t))
+	cfg := &config.Config{DataDir: dataDir, Volumes: volumes}
+	m, err := NewManager(t.Context(), cfg, eng, testSecrets(t), testBackends(t, cfg))
 	if err != nil {
 		t.Fatalf("setup manager: %v", err)
 	}

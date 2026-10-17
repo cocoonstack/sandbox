@@ -16,6 +16,8 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/egress"
 	"github.com/cocoonstack/sandbox/sandboxd/metastore/metastoretest"
 	"github.com/cocoonstack/sandbox/sandboxd/poolset"
+	poolpg "github.com/cocoonstack/sandbox/sandboxd/poolset/pg"
+	tenantspg "github.com/cocoonstack/sandbox/sandboxd/tenants/pg"
 	"github.com/cocoonstack/sandbox/sandboxd/tenants/tenantstest"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
@@ -133,7 +135,8 @@ func TestRestoredEgressPoolNeedsAttachment(t *testing.T) {
 		t.Fatalf("write pools.json: %v", err)
 	}
 
-	if _, err := NewManager(t.Context(), &config.Config{DataDir: dir}, newFakeEngine(), testSecrets(t)); err == nil {
+	cfg := &config.Config{DataDir: dir}
+	if _, err := NewManager(t.Context(), cfg, newFakeEngine(), testSecrets(t), testBackends(t, cfg)); err == nil {
 		t.Error("NewManager accepted a restored egress-lane pool without an attachment")
 	}
 }
@@ -310,7 +313,18 @@ func metaStoreNode(t *testing.T, cell string) *Manager {
 		Pools:     []config.PoolSpec{{PoolKey: seedKey, Warm: 1}},
 		MetaStore: &config.MetaStoreConfig{Kind: "pg", DSNEnv: "SANDBOX_TEST_DSN", Cell: cell},
 	}
-	m, err := NewManager(t.Context(), cfg, newFakeEngine(), testSecrets(t))
+	b := testBackends(t, cfg)
+	src, err := tenantspg.Open(t.Context(), os.Getenv("SANDBOX_TEST_DSN"))
+	if err != nil {
+		t.Fatalf("tenant set: %v", err)
+	}
+	b.Tenants = src
+	if cell != "" {
+		if b.CellPools, err = poolpg.Open(t.Context(), os.Getenv("SANDBOX_TEST_DSN"), cell); err != nil {
+			t.Fatalf("cell pool set: %v", err)
+		}
+	}
+	m, err := NewManager(t.Context(), cfg, newFakeEngine(), testSecrets(t), b)
 	if err != nil {
 		t.Fatalf("setup manager: %v", err)
 	}

@@ -333,11 +333,12 @@ func TestPooledKeyOutranksPromotedTemplate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Promote: %v", err)
 	}
-	m, err := NewManager(t.Context(), &config.Config{
+	cfg := &config.Config{
 		DataDir: dataDir,
 		Pools:   []config.PoolSpec{{PoolKey: key, Warm: 1}},
 		Volumes: catalog,
-	}, eng, testSecrets(t))
+	}
+	m, err := NewManager(t.Context(), cfg, eng, testSecrets(t), testBackends(t, cfg))
 	if err != nil {
 		t.Fatalf("restart with the key pooled: %v", err)
 	}
@@ -594,11 +595,12 @@ func rendezvousAttaches(eng *fakeEngine, n int) *sync.WaitGroup {
 
 func newVolumePoolManager(t *testing.T, eng *fakeEngine, dataDir string, volumes []config.VolumeSpec) *Manager {
 	t.Helper()
-	m, err := NewManager(t.Context(), &config.Config{
+	cfg := &config.Config{
 		DataDir: dataDir,
 		Pools:   []config.PoolSpec{{PoolKey: testKey, Warm: 1}},
 		Volumes: volumes,
-	}, eng, testSecrets(t))
+	}
+	m, err := NewManager(t.Context(), cfg, eng, testSecrets(t), testBackends(t, cfg))
 	if err != nil {
 		t.Fatalf("setup manager: %v", err)
 	}

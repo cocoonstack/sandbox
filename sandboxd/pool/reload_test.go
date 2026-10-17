@@ -271,7 +271,8 @@ func TestAReloadDropsTheLiveProxiesPooledConnections(t *testing.T) {
 
 func TestReloadIsAudited(t *testing.T) {
 	dir := t.TempDir()
-	m, err := NewManager(t.Context(), &config.Config{DataDir: dir, AuditLog: true}, newFakeEngine(), testSecrets(t))
+	cfg := &config.Config{DataDir: dir, AuditLog: true}
+	m, err := NewManager(t.Context(), cfg, newFakeEngine(), testSecrets(t), testBackends(t, cfg))
 	if err != nil {
 		t.Fatalf("setup manager: %v", err)
 	}

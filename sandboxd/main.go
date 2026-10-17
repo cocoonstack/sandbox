@@ -82,7 +82,11 @@ func main() {
 	if err != nil {
 		logger.Fatalf(ctx, err, "init egress secrets")
 	}
-	mgr, err := pool.NewManager(ctx, cfg, eng, secrets)
+	backends, err := openBackends(ctx, cfg)
+	if err != nil {
+		logger.Fatalf(ctx, err, "open backends")
+	}
+	mgr, err := pool.NewManager(ctx, cfg, eng, secrets, backends)
 	if err != nil {
 		logger.Fatalf(ctx, err, "init pool manager")
 	}

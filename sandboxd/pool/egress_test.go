@@ -659,7 +659,7 @@ func egressManagerAt(t testing.TB, eng *fakeEngine, dataDir string, pools ...con
 	t.Setenv("GH_TOKEN", "s3cr3t")
 	secrets := testSecrets(t, egress.SecretSpec{Name: "gh", Header: "Authorization", ValueEnv: "GH_TOKEN"})
 	cfg := &config.Config{DataDir: dataDir, Bridges: []string{"sbxbr0"}, EgressCA: writeTestEgressCA(t), Pools: pools}
-	m, err := NewManager(t.Context(), cfg, eng, secrets)
+	m, err := NewManager(t.Context(), cfg, eng, secrets, testBackends(t, cfg))
 	if err != nil {
 		t.Fatalf("manager: %v", err)
 	}

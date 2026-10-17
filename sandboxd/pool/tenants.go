@@ -5,15 +5,12 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"maps"
-	"os"
 	"slices"
 
 	"github.com/projecteru2/core/log"
 
 	"github.com/cocoonstack/sandbox/sandboxd/config"
 	"github.com/cocoonstack/sandbox/sandboxd/tenants"
-	"github.com/cocoonstack/sandbox/sandboxd/tenants/file"
-	"github.com/cocoonstack/sandbox/sandboxd/tenants/pg"
 )
 
 // TenantInfo is one tenant's view on this node, never its token; Removed marks a tenant gone from the set that still owns live claims.
@@ -131,19 +128,6 @@ func (m *Manager) applyTenants(ctx context.Context, write func() (tenants.Change
 		m.onTenants()
 	}
 	return nil
-}
-
-func (m *Manager) openTenants(ctx context.Context, cfg *config.Config) error {
-	if cfg.APIToken != "" {
-		m.rootSum = config.TokenSHA256(cfg.APIToken)
-	}
-	var err error
-	if ms := cfg.MetaStore; ms != nil {
-		m.tenants, err = pg.Open(ctx, os.Getenv(ms.DSNEnv))
-		return err
-	}
-	m.tenants, err = file.Open(ctx, cfg.DataDir, m.rootSum)
-	return err
 }
 
 // warnMissingClasses names each egress class tenants reference but the view lacks; those tenants reach nothing until it returns.

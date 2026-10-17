@@ -226,7 +226,8 @@ func TestGuestPortDialsWriteAuditEvents(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			dir := t.TempDir()
-			m, err := NewManager(t.Context(), &config.Config{DataDir: dir, AuditLog: true, Pools: []config.PoolSpec{}}, newFakeEngine(), testSecrets(t))
+			cfg := &config.Config{DataDir: dir, AuditLog: true, Pools: []config.PoolSpec{}}
+			m, err := NewManager(t.Context(), cfg, newFakeEngine(), testSecrets(t), testBackends(t, cfg))
 			if err != nil {
 				t.Fatalf("setup manager: %v", err)
 			}
@@ -346,7 +347,8 @@ func TestEgressUsageEventNamesTheInjectedCredentials(t *testing.T) {
 
 func TestEgressAuditNamesTenantAndEndsARelayedFrameCannot(t *testing.T) {
 	dir := t.TempDir()
-	m, err := NewManager(t.Context(), &config.Config{DataDir: dir, AuditLog: true, Pools: []config.PoolSpec{}}, newFakeEngine(), testSecrets(t))
+	cfg := &config.Config{DataDir: dir, AuditLog: true, Pools: []config.PoolSpec{}}
+	m, err := NewManager(t.Context(), cfg, newFakeEngine(), testSecrets(t), testBackends(t, cfg))
 	if err != nil {
 		t.Fatalf("setup manager: %v", err)
 	}
@@ -379,7 +381,8 @@ func TestEgressAuditNamesTenantAndEndsARelayedFrameCannot(t *testing.T) {
 
 func TestARelayedFrameCannotForgeOrDropItsAuditLine(t *testing.T) {
 	dir := t.TempDir()
-	m, err := NewManager(t.Context(), &config.Config{DataDir: dir, AuditLog: true, Pools: []config.PoolSpec{}}, newFakeEngine(), testSecrets(t))
+	cfg := &config.Config{DataDir: dir, AuditLog: true, Pools: []config.PoolSpec{}}
+	m, err := NewManager(t.Context(), cfg, newFakeEngine(), testSecrets(t), testBackends(t, cfg))
 	if err != nil {
 		t.Fatalf("setup manager: %v", err)
 	}

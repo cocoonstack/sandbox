@@ -209,7 +209,7 @@ func TestWakeOfAFailedClaimRearmsEgressAfterARestart(t *testing.T) {
 		DataDir: t.TempDir(), Bridges: []string{"sbxbr0"}, EgressCA: writeTestEgressCA(t), VMMRestart: types.VMMRestartNone,
 		Pools: []config.PoolSpec{{PoolKey: testKey, Egress: &egress.Policy{Allow: []egress.Rule{{Host: "example.com"}}}}},
 	}
-	first, err := NewManager(t.Context(), cfg, eng, testSecrets(t))
+	first, err := NewManager(t.Context(), cfg, eng, testSecrets(t), testBackends(t, cfg))
 	if err != nil {
 		t.Fatalf("manager: %v", err)
 	}
@@ -219,7 +219,7 @@ func TestWakeOfAFailedClaimRearmsEgressAfterARestart(t *testing.T) {
 	first.recoverVMM(t.Context(), sb)
 	first.out.Disarm(sb.ID, false)
 
-	second, err := NewManager(t.Context(), cfg, eng, testSecrets(t))
+	second, err := NewManager(t.Context(), cfg, eng, testSecrets(t), testBackends(t, cfg))
 	if err != nil {
 		t.Fatalf("restarted manager: %v", err)
 	}
@@ -489,7 +489,8 @@ func TestReconcileKeepsRunningClaimsTheHostLost(t *testing.T) {
 			if err := newClaimStore(dataDir, false).save(claims); err != nil {
 				t.Fatalf("setup: %v", err)
 			}
-			m, err := NewManager(t.Context(), &config.Config{DataDir: dataDir, VMMRestart: tt.policy}, eng, testSecrets(t))
+			cfg := &config.Config{DataDir: dataDir, VMMRestart: tt.policy}
+			m, err := NewManager(t.Context(), cfg, eng, testSecrets(t), testBackends(t, cfg))
 			if err != nil {
 				t.Fatalf("setup manager: %v", err)
 			}
