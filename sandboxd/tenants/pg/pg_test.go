@@ -5,9 +5,11 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/cocoonstack/sandbox/sandboxd/metastore"
 	"github.com/cocoonstack/sandbox/sandboxd/metastore/metastoretest"
 	"github.com/cocoonstack/sandbox/sandboxd/tenants"
 	"github.com/cocoonstack/sandbox/sandboxd/tenants/tenantstest"
@@ -74,6 +76,44 @@ func TestACachedTenantOutlivesTheDatabase(t *testing.T) {
 	}
 	if _, err := s.Put(ctx, tenantstest.Record("u-2", "t2", 0, "")); !errors.Is(err, tenants.ErrUnavailable) {
 		t.Errorf("a write with the database gone: %v, want ErrUnavailable", err)
+	}
+}
+
+func TestListAndClassesFailFastOnAStalledDatabase(t *testing.T) {
+	dsn := metastoretest.PGSchema(t)
+	s := openIn(t, dsn)
+	locker, err := pgx.Connect(t.Context(), dsn)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	tx, err := locker.Begin(t.Context())
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = tx.Rollback(context.Background())
+		_ = locker.Close(context.Background())
+	})
+	if _, err = tx.Exec(t.Context(), "LOCK TABLE sandboxd_tenants IN ACCESS EXCLUSIVE MODE"); err != nil {
+		t.Fatalf("lock: %v", err)
+	}
+	for name, call := range map[string]func(context.Context) error{
+		"list":    func(ctx context.Context) error { _, err := s.List(ctx, "", 10); return err },
+		"classes": func(ctx context.Context) error { _, err := s.Classes(ctx); return err },
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			ctx, cancel := context.WithTimeout(t.Context(), metastore.QueryTimeout+3*time.Second)
+			defer cancel()
+			start := time.Now()
+			err := call(ctx)
+			if elapsed := time.Since(start); elapsed > metastore.QueryTimeout+time.Second {
+				t.Errorf("took %v, want under %v", elapsed, metastore.QueryTimeout+time.Second)
+			}
+			if !errors.Is(err, tenants.ErrUnavailable) {
+				t.Errorf("err = %v, want ErrUnavailable", err)
+			}
+		})
 	}
 }
 

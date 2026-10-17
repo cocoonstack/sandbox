@@ -162,7 +162,9 @@ func (s *Source) Lookup(ctx context.Context, name string) (config.TenantRecord, 
 }
 
 func (s *Source) List(ctx context.Context, after string, limit int) ([]config.TenantRecord, error) {
-	rows, err := s.pool.Query(ctx, `SELECT name, max_claims, egress_class FROM sandboxd_tenants WHERE name > $1 ORDER BY name LIMIT $2`, after, limit)
+	qctx, cancel := context.WithTimeout(ctx, metastore.QueryTimeout)
+	defer cancel()
+	rows, err := s.pool.Query(qctx, `SELECT name, max_claims, egress_class FROM sandboxd_tenants WHERE name > $1 ORDER BY name LIMIT $2`, after, limit)
 	if err != nil {
 		return nil, unavailable(err)
 	}
@@ -253,7 +255,9 @@ func (s *Source) Replace(ctx context.Context, records []config.TenantRecord) (te
 }
 
 func (s *Source) Classes(ctx context.Context) (map[string]int, error) {
-	rows, err := s.pool.Query(ctx, `SELECT egress_class, count(*) FROM sandboxd_tenants WHERE egress_class <> '' GROUP BY egress_class`)
+	qctx, cancel := context.WithTimeout(ctx, metastore.QueryTimeout)
+	defer cancel()
+	rows, err := s.pool.Query(qctx, `SELECT egress_class, count(*) FROM sandboxd_tenants WHERE egress_class <> '' GROUP BY egress_class`)
 	if err != nil {
 		return nil, unavailable(err)
 	}
