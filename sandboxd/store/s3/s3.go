@@ -260,7 +260,7 @@ func (s *Store) SweepGenerations(ctx context.Context) error {
 	var stale []string
 	for lineage, chunks := range inv.chunks {
 		for _, obj := range chunks {
-			if !refs.has(lineage, path.Base(*obj.Key)) && idle(obj, now) {
+			if !refs.has(lineage, path.Base(*obj.Key)) && idle(obj.LastModified, now) {
 				stale = append(stale, *obj.Key)
 			}
 		}
@@ -269,11 +269,11 @@ func (s *Store) SweepGenerations(ctx context.Context) error {
 }
 
 func (s *Store) readMeta(ctx context.Context, id string) ([]byte, string, error) {
-	meta, metadata, err := s.getObject(ctx, s.key(id, store.MetaFile))
+	meta, out, err := s.getObject(ctx, s.key(id, store.MetaFile))
 	if err != nil {
 		return nil, "", err
 	}
-	return meta, metadata[digestMetadataKey], nil
+	return meta, out.Metadata[digestMetadataKey], nil
 }
 
 func (s *Store) currentManifest(ctx context.Context, id string) (manifest, error) {
@@ -296,7 +296,7 @@ func (s *Store) readManifest(ctx context.Context, id, gen string) (manifest, err
 	return man, nil
 }
 
-func (s *Store) getObject(ctx context.Context, key string) ([]byte, map[string]string, error) {
+func (s *Store) getObject(ctx context.Context, key string) ([]byte, *awss3.GetObjectOutput, error) {
 	out, err := s.get(ctx, key)
 	if err != nil {
 		return nil, nil, err
@@ -306,7 +306,7 @@ func (s *Store) getObject(ctx context.Context, key string) ([]byte, map[string]s
 	if err != nil {
 		return nil, nil, err
 	}
-	return body, out.Metadata, nil
+	return body, out, nil
 }
 
 func (s *Store) get(ctx context.Context, key string) (*awss3.GetObjectOutput, error) {
@@ -557,19 +557,20 @@ func (s *Store) classify(objs []s3types.Object) inventory {
 
 func (s *Store) sweepRecord(ctx context.Context, rec *recordObjects, now time.Time, refs *chunkRefs) ([]string, error) {
 	current := ""
+	var metaModified *time.Time
 	if rec.meta != nil {
-		meta, _, err := s.getObject(ctx, *rec.meta.Key)
+		meta, out, err := s.getObject(ctx, *rec.meta.Key)
 		if errors.Is(err, store.ErrNotFound) {
 			return nil, nil // deleted mid-sweep
 		}
 		if err != nil {
 			return nil, err
 		}
-		current = store.ExportGen(meta)
+		current, metaModified = store.ExportGen(meta), out.LastModified
 	}
 	var doomed []string
 	for gen, obj := range rec.manifests {
-		if gen != current && idle(obj, now) && (rec.meta == nil || idle(*rec.meta, now)) {
+		if gen != current && idle(obj.LastModified, now) && (rec.meta == nil || idle(metaModified, now)) {
 			doomed = append(doomed, *obj.Key)
 			continue
 		}
@@ -668,8 +669,8 @@ func objectKeys(objs []s3types.Object) []string {
 	return keys
 }
 
-func idle(obj s3types.Object, now time.Time) bool {
-	return now.Sub(aws.ToTime(obj.LastModified)) >= store.GenerationGrace
+func idle(modified *time.Time, now time.Time) bool {
+	return now.Sub(aws.ToTime(modified)) >= store.GenerationGrace
 }
 
 // pruneIdleGenerations drops cached generations of one record that no Fetch used within the grace; a hit refreshes the mtime.

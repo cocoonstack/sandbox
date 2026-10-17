@@ -701,6 +701,38 @@ func TestSweepRemovesSupersededGenerationsPastTheGrace(t *testing.T) {
 	}
 }
 
+func TestSweepReadsTheMetaAgeAtTheGet(t *testing.T) {
+	const id = "ck_00000000000000a9"
+	fake := &fakeS3{objects: map[string][]byte{}}
+	st := newTestStore(t, fake)
+	publish := func(gen int, only string) {
+		t.Helper()
+		staging := stageRecord(t, st, id, fmt.Appendf(nil, `{"id":"%s","gen":%d}`, id, gen), "shared")
+		if err := os.WriteFile(filepath.Join(staging, store.ExportDir, "extra.bin"), []byte(only), 0o600); err != nil {
+			t.Fatalf("write extra: %v", err)
+		}
+		if err := st.Publish(t.Context(), staging, id); err != nil {
+			t.Fatalf("Publish gen %d: %v", gen, err)
+		}
+	}
+	publish(1, "first")
+	fake.age("", 2*store.GenerationGrace)
+	fake.mu.Lock()
+	fake.beforeMetaGet = func() { publish(2, "second") }
+	fake.mu.Unlock()
+
+	if err := st.SweepGenerations(t.Context()); err != nil {
+		t.Fatalf("SweepGenerations: %v", err)
+	}
+	if _, _, _, err := st.Fetch(t.Context(), id); err != nil {
+		t.Errorf("Fetch of the generation published during the sweep: %v", err)
+	}
+	shared := sha256.Sum256([]byte("shared"))
+	if _, ok := fake.get("ck/chunks/" + id + "/" + hex.EncodeToString(shared[:])); !ok {
+		t.Error("the sweep deleted a chunk the generation published during it dedups")
+	}
+}
+
 func TestSweepSparesAnInFlightGeneration(t *testing.T) {
 	const id = "ck_00000000000000a7"
 	fake := &fakeS3{objects: map[string][]byte{}}
@@ -889,6 +921,7 @@ type fakeS3 struct {
 	failDelete    bool
 	exportGate    chan struct{}
 	exportEntered chan struct{}
+	beforeMetaGet func()
 }
 
 func (f *fakeS3) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -899,6 +932,15 @@ func (f *fakeS3) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		default:
 		}
 		<-f.exportGate
+	}
+	if r.Method == http.MethodGet && strings.HasSuffix(key, "/"+store.MetaFile) {
+		f.mu.Lock()
+		hook := f.beforeMetaGet
+		f.beforeMetaGet = nil
+		f.mu.Unlock()
+		if hook != nil {
+			hook()
+		}
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -1104,6 +1146,9 @@ func (f *fakeS3) handleGetObject(w http.ResponseWriter, r *http.Request, key str
 		return
 	}
 	writeMetadata(w.Header(), f.metadata[key])
+	if mod := f.modified[key]; !mod.IsZero() {
+		w.Header().Set("Last-Modified", mod.UTC().Format(http.TimeFormat))
+	}
 	if rng := r.Header.Get("Range"); rng != "" {
 		var start, end int
 		if _, err := fmt.Sscanf(rng, "bytes=%d-%d", &start, &end); err == nil && start < len(body) {
