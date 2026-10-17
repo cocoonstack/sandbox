@@ -113,23 +113,42 @@ func TestSleepingLaterWriteMovesTheConnectionToTheGuest(t *testing.T) {
 	}
 }
 
-func TestSleepingReaderStopsServingOnceTheClaimWokeOrSleptAgain(t *testing.T) {
-	for name, next := range map[string]string{"woke": "", "slept again": "snap-2"} {
-		t.Run(name, func(t *testing.T) {
-			env := newSleepingEnv(t)
-			conn, r := env.upgrade(t)
-			send(t, conn, statFrame)
-			expectLine(t, r, "reader")
+func TestSleepingReaderStopsServingOnceTheClaimWoke(t *testing.T) {
+	env := newSleepingEnv(t)
+	conn, r := env.upgrade(t)
+	send(t, conn, statFrame)
+	expectLine(t, r, "reader")
 
-			env.reader.setSource(next)
-			send(t, conn, statFrame)
-			expectLine(t, r, "guest")
-			select {
-			case <-env.readerClosed:
-			case <-time.After(3 * time.Second):
-				t.Fatal("the stale reader connection stayed open")
-			}
-		})
+	env.reader.setSource("")
+	send(t, conn, statFrame)
+	expectLine(t, r, "guest")
+	select {
+	case <-env.readerClosed:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the stale reader connection stayed open")
+	}
+}
+
+func TestSleepingConnectionMovesToAFreshReaderWhenTheClaimSleepsAgain(t *testing.T) {
+	env := newSleepingEnv(t)
+	conn, r := env.upgrade(t)
+	send(t, conn, statFrame)
+	expectLine(t, r, "reader")
+
+	env.reader.setSource("snap-2")
+	send(t, conn, readFrame)
+	expectLine(t, r, "reader")
+	select {
+	case <-env.readerClosed:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the stale reader connection stayed open")
+	}
+	if wakes, dials := env.reader.counts(); wakes != 0 || dials != 2 {
+		t.Errorf("wakes=%d reader dials=%d, want a fresh reader for the new sleep and no wake", wakes, dials)
+	}
+	want := []string{"reader:" + statFrame, "reader:" + readFrame}
+	if got := env.frames.all(); !slices.Equal(got, want) {
+		t.Errorf("frames %q, want %q", got, want)
 	}
 }
 
@@ -394,6 +413,9 @@ func (f *fakeReader) dial() (net.Conn, string, error) {
 	defer f.mu.Unlock()
 	if f.dialErr != nil {
 		return nil, "", f.dialErr
+	}
+	if f.src == "" {
+		return nil, "", pool.ErrNoReader
 	}
 	f.dials++
 	relayEnd, readerEnd := net.Pipe()

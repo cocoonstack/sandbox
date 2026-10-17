@@ -35,7 +35,6 @@ var (
 	infoOp = wire.Info{}.Op()
 
 	errReaderGone  = errors.New("reader connection lost")
-	errSleepEnded  = errors.New("sandbox is no longer in the sleep the reader serves")
 	errUnreachable = errors.New("guest agent unreachable")
 )
 
@@ -143,12 +142,13 @@ func (r *router) run() (net.Conn, func(), bool) {
 }
 
 func (r *router) toReader(head []byte, partial bool) error {
+	if r.reader != nil && r.s.mgr.SleepingSource(r.id, r.token) != r.source {
+		r.closeReader()
+	}
 	if r.reader == nil {
 		if err := r.dialReader(); err != nil {
 			return err
 		}
-	} else if r.s.mgr.SleepingSource(r.id, r.token) != r.source {
-		return errSleepEnded
 	}
 	if r.s.mgr.AuditEnabled() {
 		r.audit(head, partial)

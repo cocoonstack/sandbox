@@ -976,8 +976,10 @@ call (the SDKs' first frames) rides along to the reader; one alone, with no call
 behind it for 100 ms, wakes the sandbox. The first frame on the connection that
 is anything else, or any later one, wakes the sandbox and hands the same
 connection to its silkd with the unread bytes replayed, so a client sees one
-silkd and no close. A connection also moves to the woken sandbox when the sandbox
-wakes or sleeps again meanwhile, so reads never come from a stale sleep. Files
+silkd and no close. When the sandbox sleeps again meanwhile (a new hibernate or
+an archive), the connection's next read moves to a fresh reader of the new sleep;
+when it wakes, the connection moves to the woken sandbox, so reads never come
+from a stale sleep. Files
 and symlinks resolve inside the sandbox's own filesystem as of its last
 hibernate. When no reader can be built the call wakes the sandbox as if the
 feature were off. Because the `101` has gone out by then, a failure on this path
