@@ -17,6 +17,7 @@ var reloadableFields = map[string]bool{
 	"egress_upstream":       true,
 	"egress_usage_bytes":    true,
 	"egress_conn_rate":      true,
+	"disk_reserve":          true,
 }
 
 type poolTargets struct {

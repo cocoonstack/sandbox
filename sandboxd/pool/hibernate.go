@@ -136,6 +136,9 @@ func (m *Manager) wakeResolved(ctx context.Context, sb *types.Sandbox) (string, 
 	if sb.Key.Net == types.NetEgress {
 		return "", fmt.Errorf("wake %s: egress lane cannot resume from hibernation", sb.ID)
 	}
+	if err := m.diskErr(); err != nil {
+		return "", fmt.Errorf("wake %s: %w", sb.ID, err)
+	}
 	// See Hibernate: a half-restored VM is worse than a wasted wake.
 	ctx = context.WithoutCancel(ctx)
 	wakeStart := time.Now()

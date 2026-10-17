@@ -36,7 +36,7 @@ func (m *Manager) refillOnce(ctx context.Context) {
 	}
 	now := time.Now()
 	// spawning VMs into a full node still takes the global rtnl lock even when doomed to fail
-	parked := now.Before(m.atCapacityUntil)
+	parked := m.capacityReasonLocked(now) != ""
 	inFlight := 0
 	for _, p := range m.pools {
 		inFlight += p.refilling
@@ -130,7 +130,7 @@ func (m *Manager) refillOne(ctx context.Context, p *pool, golden string, gen uin
 		fails, wait = p.refillFails, time.Until(p.nextRefill)
 	}
 	entered := capReason != "" && m.noteCapacityLocked(now, capReason)
-	parked := now.Before(m.atCapacityUntil)
+	parked := m.capacityReasonLocked(now) != ""
 	m.mu.Unlock()
 	if err != nil {
 		logger := log.WithFunc("pool.refillOne")
@@ -164,6 +164,16 @@ func (m *Manager) noteCapacityLocked(now time.Time, reason string) bool {
 	m.atCapacityUntil = now.Add(capacityBackoff)
 	m.atCapacityReason = reason
 	return first
+}
+
+func (m *Manager) capacityReasonLocked(now time.Time) string {
+	switch {
+	case m.diskLow.Load():
+		return diskLowReason
+	case now.Before(m.atCapacityUntil):
+		return m.atCapacityReason
+	}
+	return ""
 }
 
 func (m *Manager) buildGolden(ctx context.Context, p *pool) {

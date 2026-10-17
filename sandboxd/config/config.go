@@ -181,6 +181,12 @@ type VolumeSpec struct {
 	Tenants  []string `json:"tenants,omitempty"`
 }
 
+// DiskReserve refuses claims, wakes and refills while a listed directory's filesystem has less than Free left.
+type DiskReserve struct {
+	Free string   `json:"free"`
+	Dirs []string `json:"dirs,omitempty"`
+}
+
 // MeshConfig configures cluster membership; every node shares one APIToken and tenant set.
 type MeshConfig struct {
 	NodeID     string   `json:"node_id"`               // unique name; defaults to Bind
@@ -270,6 +276,8 @@ type Config struct {
 	RefillConcurrency   int  `json:"refill_concurrency,omitzero"`
 	ReleaseDelaySeconds int  `json:"release_delay_seconds,omitzero"`
 	AuditLog            bool `json:"audit_log,omitzero"`
+
+	DiskReserve *DiskReserve `json:"disk_reserve,omitempty"`
 
 	Volumes []VolumeSpec `json:"volumes,omitempty"`
 	Mesh    *MeshConfig  `json:"mesh,omitempty"`
@@ -414,7 +422,7 @@ func (c *Config) validate() error {
 	if c.CheckpointPeerHeal && c.APIToken == "" {
 		return fmt.Errorf("checkpoint_peer_heal requires api_token: without it resolveScope leaves the raw checkpoint blob GET reachable with no credential")
 	}
-	for _, check := range []func() error{c.validateNodeEgress, c.validateMetaStore, c.validateVolumes, c.validateMesh} {
+	for _, check := range []func() error{c.validateNodeEgress, c.validateDiskReserve, c.validateMetaStore, c.validateVolumes, c.validateMesh} {
 		if err := check(); err != nil {
 			return err
 		}
@@ -626,6 +634,22 @@ func (c *Config) validateNodeEgress() error {
 		}
 		if !allow.Allows(parsed) {
 			return fmt.Errorf("egress_upstream_env %s: upstream %s is not in egress_upstream.allow", name, parsed.Host)
+		}
+	}
+	return nil
+}
+
+func (c *Config) validateDiskReserve() error {
+	r := c.DiskReserve
+	if r == nil {
+		return nil
+	}
+	if n, err := StorageBytes(r.Free); err != nil || n <= 0 {
+		return fmt.Errorf("disk_reserve.free %q must be a positive size like 100G", r.Free)
+	}
+	for _, d := range r.Dirs {
+		if !filepath.IsAbs(d) {
+			return fmt.Errorf("disk_reserve.dirs %q must be an absolute path", d)
 		}
 	}
 	return nil
