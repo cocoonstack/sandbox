@@ -220,16 +220,33 @@ func TestLiveVolumeRunStampsActivityBeforeDeviceCalls(t *testing.T) {
 }
 
 func TestRejectedVolumeRequestLeavesActivityUntouched(t *testing.T) {
-	eng := newFakeEngine()
-	m := newVolumeManager(t, eng, liveCatalog(t))
-	sb := mustClaim(t, m, testKey)
-	idleSince := time.Now().Add(-time.Hour)
-	sb.TouchAt(idleSince)
-	if _, err := m.SetVolumes(t.Context(), sb.ID, sb.Tenant, []types.Volume{{Name: "data"}, {Name: "data"}}); !errors.Is(err, ErrBadVolume) {
-		t.Fatalf("duplicate target: %v", err)
-	}
-	if !sb.LastSeen().Equal(idleSince) {
-		t.Fatalf("a rejected request stamped activity: %v", sb.LastSeen())
+	for _, tt := range []struct {
+		name    string
+		request []types.Volume
+		paused  bool
+		want    error
+	}{
+		{"invalid target", []types.Volume{{Name: "data"}, {Name: "data"}}, false, ErrBadVolume},
+		{"hibernated claim", []types.Volume{{Name: "data"}}, true, ErrPaused},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			eng := newFakeEngine()
+			m := newVolumeManager(t, eng, liveCatalog(t))
+			sb := mustClaim(t, m, testKey)
+			if tt.paused {
+				m.mu.Lock()
+				sb.HibernateSnap = "snap"
+				m.mu.Unlock()
+			}
+			idleSince := time.Now().Add(-time.Hour)
+			sb.TouchAt(idleSince)
+			if _, err := m.SetVolumes(t.Context(), sb.ID, sb.Tenant, tt.request); !errors.Is(err, tt.want) {
+				t.Fatalf("got %v, want %v", err, tt.want)
+			}
+			if !sb.LastSeen().Equal(idleSince) {
+				t.Fatalf("a refused request stamped activity: %v", sb.LastSeen())
+			}
+		})
 	}
 }
 
