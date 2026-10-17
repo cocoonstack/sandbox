@@ -733,6 +733,73 @@ func TestSweepReadsTheMetaAgeAtTheGet(t *testing.T) {
 	}
 }
 
+func TestPublishReadsOnlyItsLineage(t *testing.T) {
+	const lineage = "sbx_00000000000000a4"
+	fake := &fakeS3{objects: map[string][]byte{}}
+	st := newTestStore(t, fake)
+	for _, id := range []string{"ck_00000000000000d1", "ck_00000000000000d2"} {
+		publishRecord(t, st, id, []byte(`{"id":"`+id+`"}`), "unrelated")
+	}
+	publishIn := func(id string) {
+		t.Helper()
+		staging := stageRecord(t, st, id, []byte(`{"id":"`+id+`"}`), "claim")
+		if err := st.Publish(t.Context(), staging, id, store.WithLineage(lineage)); err != nil {
+			t.Fatalf("Publish %s: %v", id, err)
+		}
+	}
+	publishIn("ck_00000000000000e1")
+	publishIn("ck_00000000000000e2")
+	fake.resetRequests()
+	publishIn("ck_00000000000000e3")
+
+	meta := func(id string) int { return fake.requestCount(http.MethodGet, "ck/"+id+"/"+store.MetaFile) }
+	if got := meta("ck_00000000000000d1") + meta("ck_00000000000000d2"); got != 0 {
+		t.Errorf("a publish read %d metas of records outside its lineage", got)
+	}
+	if got := meta("ck_00000000000000e1") + meta("ck_00000000000000e2"); got != 2 {
+		t.Errorf("a publish read %d metas of its lineage's records, want 2", got)
+	}
+}
+
+func TestSweepRemovesLineageMarkersOfDeadRecords(t *testing.T) {
+	const lineage = "sbx_00000000000000a5"
+	fake := &fakeS3{objects: map[string][]byte{}}
+	st := newTestStore(t, fake)
+	publish := func(id string) {
+		t.Helper()
+		staging := stageRecord(t, st, id, []byte(`{"id":"`+id+`"}`), "claim")
+		if err := st.Publish(t.Context(), staging, id, store.WithLineage(lineage)); err != nil {
+			t.Fatalf("Publish %s: %v", id, err)
+		}
+	}
+	marker := func(id string) string { return "ck/lineages/" + lineage + "/" + id }
+	publish("ck_00000000000000f1")
+	publish("ck_00000000000000f2")
+	fresh := marker("ck_00000000000000f3")
+	fake.put(fresh, nil)
+	if err := st.Delete(t.Context(), "ck_00000000000000f1"); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	fake.age("", 2*store.GenerationGrace)
+	fake.put(fresh, nil)
+
+	if err := st.SweepGenerations(t.Context()); err != nil {
+		t.Fatalf("SweepGenerations: %v", err)
+	}
+	for _, tc := range []struct {
+		id   string
+		want bool
+	}{
+		{"ck_00000000000000f1", false},
+		{"ck_00000000000000f2", true},
+		{"ck_00000000000000f3", true},
+	} {
+		if _, ok := fake.get(marker(tc.id)); ok != tc.want {
+			t.Errorf("marker of %s present = %v, want %v", tc.id, ok, tc.want)
+		}
+	}
+}
+
 func TestSweepSparesAnInFlightGeneration(t *testing.T) {
 	const id = "ck_00000000000000a7"
 	fake := &fakeS3{objects: map[string][]byte{}}

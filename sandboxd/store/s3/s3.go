@@ -40,6 +40,7 @@ const (
 	digestMetadataKey   = "content-digest"
 	manifestName        = "manifest.json"
 	chunksDir           = "chunks"
+	lineagesDir         = "lineages"
 	uploadConcurrency   = 8 // chunk PUTs in flight per publish
 	metaReadConcurrency = 8
 	publishConcurrency  = 4 // files scanned in parallel
@@ -82,6 +83,7 @@ type recordObjects struct {
 type inventory struct {
 	records map[string]*recordObjects
 	chunks  map[string][]s3types.Object // by lineage
+	markers []s3types.Object
 }
 
 var _ store.Store = (*Store)(nil)
@@ -257,7 +259,16 @@ func (s *Store) SweepGenerations(ctx context.Context) error {
 	if err = s.deleteKeys(ctx, doomed); err != nil {
 		return err
 	}
+	dead := make(map[string]struct{}, len(doomed))
+	for _, key := range doomed {
+		dead[key] = struct{}{}
+	}
 	var stale []string
+	for _, marker := range inv.markers {
+		if idle(marker.LastModified, now) && !inv.alive(path.Base(*marker.Key), dead) {
+			stale = append(stale, *marker.Key)
+		}
+	}
 	for lineage, chunks := range inv.chunks {
 		for _, obj := range chunks {
 			if !refs.has(lineage, path.Base(*obj.Key)) && idle(obj.LastModified, now) {
@@ -362,6 +373,11 @@ func (s *Store) publish(ctx context.Context, staging, id, lineage string, digest
 	}
 	if err = s.putObject(ctx, s.key(id, gen+"/"+manifestName), manifestRaw, nil); err != nil {
 		return "", err
+	}
+	if lineage != id {
+		if err = s.putObject(ctx, s.lineageKey(lineage, id), nil, nil); err != nil {
+			return "", err
+		}
 	}
 	digest := ""
 	var metadata map[string]string
@@ -469,6 +485,10 @@ func (s *Store) key(id, rest string) string {
 	return s.prefix + id + "/" + filepath.ToSlash(rest)
 }
 
+func (s *Store) lineageKey(lineage, id string) string {
+	return s.prefix + lineagesDir + "/" + lineage + "/" + id
+}
+
 func (s *Store) chunkKey(lineage, sha string) string {
 	return s.prefix + chunksDir + "/" + lineage + "/" + sha
 }
@@ -497,9 +517,13 @@ func (s *Store) recordIDs(ctx context.Context) ([]string, error) {
 func (s *Store) referencedChunks(ctx context.Context, id, lineage string) (map[string]struct{}, error) {
 	ids := []string{id}
 	if lineage != id {
-		var err error
-		if ids, err = s.recordIDs(ctx); err != nil {
+		markers, err := s.list(ctx, s.lineageKey(lineage, ""))
+		if err != nil {
 			return nil, err
+		}
+		ids = ids[:0]
+		for _, marker := range markers {
+			ids = append(ids, path.Base(*marker.Key))
 		}
 	}
 	refs := &chunkRefs{live: map[string]map[string]struct{}{}}
@@ -528,10 +552,30 @@ func (s *Store) referencedChunks(ctx context.Context, id, lineage string) (map[s
 	return have, nil
 }
 
+func (inv inventory) alive(id string, dead map[string]struct{}) bool {
+	rec := inv.records[id]
+	if rec == nil {
+		return false
+	}
+	if rec.meta != nil {
+		return true
+	}
+	for _, obj := range rec.manifests {
+		if _, gone := dead[*obj.Key]; !gone {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *Store) classify(objs []s3types.Object) inventory {
 	inv := inventory{records: map[string]*recordObjects{}, chunks: map[string][]s3types.Object{}}
 	for _, obj := range objs {
 		first, rest, _ := strings.Cut(strings.TrimPrefix(*obj.Key, s.prefix), "/")
+		if first == lineagesDir {
+			inv.markers = append(inv.markers, obj)
+			continue
+		}
 		if first == chunksDir {
 			if lineage, _, ok := strings.Cut(rest, "/"); ok {
 				inv.chunks[lineage] = append(inv.chunks[lineage], obj)
