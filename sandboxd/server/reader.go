@@ -92,6 +92,7 @@ func (r *router) run() (net.Conn, func(), bool) {
 				r.fail(err)
 				return nil, nil, false
 			default:
+				log.WithFunc("server.router.run").Warnf(r.ctx, "no reader for %s, waking it: %v", r.id, err)
 				return r.handover(head)
 			}
 		default:

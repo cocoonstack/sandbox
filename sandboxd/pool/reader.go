@@ -31,6 +31,8 @@ const (
 	layerRole          = "layer"
 )
 
+var linkFile = os.Link
+
 type readerSet struct {
 	key     types.PoolKey
 	mu      sync.Mutex
@@ -253,7 +255,13 @@ func (m *Manager) startReader(ctx context.Context, r *reader, layers []string) e
 	disks := engine.ReaderDisks{Cow: readerCowDisk}
 	for i, blob := range layers {
 		name := fmt.Sprintf("rl%d", i)
-		if err := m.eng.DiskAttach(ctx, r.vm, engine.VolumeSpec{Name: name, Path: blob}); err != nil {
+		linked := filepath.Join(r.dir, name+".erofs")
+		if err := linkFile(blob, linked); err != nil {
+			if err = utils.CloneFile(blob, linked); err != nil {
+				return fmt.Errorf("link layer %d into the reader dir: %w", i, err)
+			}
+		}
+		if err := m.eng.DiskAttach(ctx, r.vm, engine.VolumeSpec{Name: name, Path: linked}); err != nil {
 			return fmt.Errorf("attach layer %d: %w", i, err)
 		}
 		disks.Layers = append(disks.Layers, name)

@@ -1226,6 +1226,7 @@ type fakeEngine struct {
 	startReaderErr                    error
 	readerDialErr                     error
 	syncErr                           error
+	managedDirs                       []string
 	caInstalls                        []string
 	warmups                           [][]string
 	warmupSocks                       []string
@@ -1617,6 +1618,9 @@ func (f *fakeEngine) DiskAttach(ctx context.Context, _ string, spec engine.Volum
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	if err := f.refuseManagedPath(spec.Path); err != nil {
+		return err
+	}
 	f.mu.Lock()
 	f.volumeSpecs = append(f.volumeSpecs, spec)
 	f.volumeOps = append(f.volumeOps, "attach:"+spec.Name)
@@ -1634,6 +1638,26 @@ func (f *fakeEngine) DiskAttach(ctx context.Context, _ string, spec engine.Volum
 		rendezvous.Wait()
 	}
 	return err
+}
+
+func (f *fakeEngine) refuseManagedPath(path string) error {
+	f.mu.Lock()
+	dirs := slices.Clone(f.managedDirs)
+	f.mu.Unlock()
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		resolved = path
+	}
+	for _, dir := range dirs {
+		root, evalErr := filepath.EvalSymlinks(dir)
+		if evalErr != nil {
+			root = dir
+		}
+		if rel, relErr := filepath.Rel(root, resolved); relErr == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return fmt.Errorf("external volume path %s is inside a cocoon-managed directory", path)
+		}
+	}
+	return nil
 }
 
 func (f *fakeEngine) MountVolume(_ context.Context, _, name, mount string, rw bool) error {

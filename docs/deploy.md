@@ -195,8 +195,10 @@ never shared: it serves one claim, and only the claim's own token reaches it.
 The guest's own kernel does the parsing, as it does for the claim. A reader
 is built per claim from the claim's hibernate snapshot (or archive record):
 
-- the claim's layer blobs, read from the snapshot's sidecar, are attached to
-  the reader read-only, and its copy-on-write disk as a private copy that the
+- the claim's layer blobs, read from the snapshot's sidecar, are hard-linked
+  into the reader's directory under `data_dir` (a copy where the link fails,
+  such as across filesystems; cocoon refuses to attach a path inside its own
+  directories) and attached read-only, and its copy-on-write disk as a private copy that the
   reader mounts writable, so the guest replays the ext4 journal onto the copy
   and never onto the original;
 - the reader mounts the layers and the copy, assembles a read-only overlay at

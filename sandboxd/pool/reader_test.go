@@ -52,9 +52,17 @@ func TestReaderServesAHibernatedClaimWithoutWaking(t *testing.T) {
 		t.Errorf("reader setup ran %v, want %v", got, want)
 	}
 	cow := eng.volumeSpecs[len(eng.volumeSpecs)-1]
-	wantSpecs := []engine.VolumeSpec{{Name: "rl0", Path: layers[0]}, {Name: "rl1", Path: layers[1]}, {Name: "rcow", Path: cow.Path, RW: true}}
+	dir := filepath.Dir(cow.Path)
+	wantSpecs := []engine.VolumeSpec{{Name: "rl0", Path: filepath.Join(dir, "rl0.erofs")}, {Name: "rl1", Path: filepath.Join(dir, "rl1.erofs")}, {Name: "rcow", Path: cow.Path, RW: true}}
 	if !slices.Equal(eng.volumeSpecs, wantSpecs) {
-		t.Errorf("attached %+v, want read-only layers then the writable copy %+v", eng.volumeSpecs, wantSpecs)
+		t.Errorf("attached %+v, want read-only layers linked into the reader dir, then the writable copy %+v", eng.volumeSpecs, wantSpecs)
+	}
+	for i, blob := range layers {
+		linked, statErr := os.Stat(wantSpecs[i].Path)
+		orig, origErr := os.Stat(blob)
+		if statErr != nil || origErr != nil || !os.SameFile(linked, orig) {
+			t.Errorf("layer %d attached as %s, want a hard link of %s: %v %v", i, wantSpecs[i].Path, blob, statErr, origErr)
+		}
 	}
 	if want := (engine.ReaderDisks{Layers: []string{"rl0", "rl1"}, Cow: "rcow"}); len(eng.startedReaders) != 1 || !slices.Equal(eng.startedReaders[0].Layers, want.Layers) || eng.startedReaders[0].Cow != want.Cow {
 		t.Errorf("view started with %+v, want %+v", eng.startedReaders, want)
@@ -62,11 +70,71 @@ func TestReaderServesAHibernatedClaimWithoutWaking(t *testing.T) {
 	if got, readErr := os.ReadFile(cow.Path); readErr != nil || string(got) != "disk-bytes" {
 		t.Errorf("reader disk %q, %v, want the snapshot's copy-on-write bytes", got, readErr)
 	}
-	if entries, _ := os.ReadDir(filepath.Dir(cow.Path)); len(entries) != 2 {
-		t.Errorf("reader dir holds %d entries, want only the disk and its sidecar", len(entries))
+	entries, _ := os.ReadDir(dir)
+	names := make([]string, len(entries))
+	for i, entry := range entries {
+		names[i] = entry.Name()
+	}
+	if want := []string{"cocoon.json", "cow.raw", "rl0.erofs", "rl1.erofs"}; !slices.Equal(names, want) {
+		t.Errorf("reader dir holds %v, want only %v", names, want)
 	}
 	if n := len(m.pools[readerKey].warm); n != 0 {
 		t.Errorf("reader pool holds %d warm VMs, want the one reader taken", n)
+	}
+}
+
+func TestReaderLayersFallBackToACopyWhenTheLinkFails(t *testing.T) {
+	linkFile = func(string, string) error { return errors.New("cross-device link") }
+	defer func() { linkFile = os.Link }()
+	eng := newFakeEngine()
+	layers := readerExport(t, eng)
+	m := newReaderManager(t, eng)
+	seedReaderVMs(m, "sbx-reader-1")
+	sb := mustClaim(t, m, testKey)
+	hibernateClaim(t, m, sb)
+
+	conn, _, err := m.DialReader(t.Context(), sb.ID, sb.Token)
+	if err != nil {
+		t.Fatalf("DialReader: %v", err)
+	}
+	_ = conn.Close()
+	for i, blob := range layers {
+		attached := eng.volumeSpecs[i].Path
+		copied, copyErr := os.Stat(attached)
+		orig, origErr := os.Stat(blob)
+		if copyErr != nil || origErr != nil || os.SameFile(copied, orig) {
+			t.Errorf("layer %d attached as %s, want a copy distinct from %s: %v %v", i, attached, blob, copyErr, origErr)
+		}
+		if got, _ := os.ReadFile(attached); string(got) != "erofs" {
+			t.Errorf("layer %d copy holds %q, want the blob's bytes", i, got)
+		}
+	}
+}
+
+func TestReaderReleaseRemovesItsLayerLinksAndKeepsTheBlobs(t *testing.T) {
+	eng := newFakeEngine()
+	layers := readerExport(t, eng)
+	m := newReaderManager(t, eng)
+	seedReaderVMs(m, "sbx-reader-1")
+	sb := mustClaim(t, m, testKey)
+	hibernateClaim(t, m, sb)
+	conn, _, err := m.DialReader(t.Context(), sb.ID, sb.Token)
+	if err != nil {
+		t.Fatalf("DialReader: %v", err)
+	}
+	_ = conn.Close()
+
+	m.readers.mu.Lock()
+	live := m.readers.live[sb.ID]
+	m.readers.mu.Unlock()
+	m.dropReader(t.Context(), live, true)
+	for _, blob := range layers {
+		if got, readErr := os.ReadFile(blob); readErr != nil || string(got) != "erofs" {
+			t.Errorf("release damaged the shared blob %s: %q, %v", blob, got, readErr)
+		}
+	}
+	if entries, _ := os.ReadDir(filepath.Join(m.dataDir, readerDir)); len(entries) != 0 {
+		t.Errorf("release left %d entries under %s", len(entries), readerDir)
 	}
 }
 
@@ -691,6 +759,7 @@ func readerExport(t *testing.T, eng *fakeEngine) []string {
 	}
 	sidecar := fmt.Sprintf(`{"storage_configs":[{"path":%q,"role":"layer"},{"path":%q,"role":"layer"},{"path":"/run/cow.raw","role":"cow"},{"path":"/run/cidata.img","role":"cidata"}]}`, layers[0], layers[1])
 	eng.exportFiles = map[string]string{"cow.raw": "disk-bytes", "cocoon.json": sidecar, "memory-ranges": "guest-memory"}
+	eng.managedDirs = []string{dir}
 	return layers
 }
 

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http/httptest"
@@ -13,6 +14,9 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/projecteru2/core/log"
+	"github.com/rs/zerolog"
 
 	"github.com/cocoonstack/sandbox/protocol/wire"
 	"github.com/cocoonstack/sandbox/sandboxd/pool"
@@ -153,14 +157,24 @@ func TestSleepingConnectionMovesToAFreshReaderWhenTheClaimSleepsAgain(t *testing
 }
 
 func TestSleepingUnavailableReaderWakes(t *testing.T) {
+	logs := captureLogs(t)
 	env := newSleepingEnv(t)
-	env.reader.setDialErr(pool.ErrNoReader)
+	env.reader.setDialErr(fmt.Errorf("%w: attach layer 0: boom", pool.ErrNoReader))
 	conn, r := env.upgrade(t)
 
 	send(t, conn, statFrame)
 	expectLine(t, r, "guest")
 	if wakes, _ := env.reader.counts(); wakes != 1 {
 		t.Errorf("wakes=%d, want the read to fall back to a wake", wakes)
+	}
+	got := logs.String()
+	for _, want := range []string{`"level":"warn"`, "sb_1", "attach layer 0: boom"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("log %q lacks %q: the fallback to a wake must be visible", got, want)
+		}
+	}
+	if n := strings.Count(got, "waking it"); n != 1 {
+		t.Errorf("%d warnings for one failed setup, want 1", n)
 	}
 }
 
@@ -271,6 +285,33 @@ func TestSleepingCloseRelaysEndsReaderConnections(t *testing.T) {
 	if _, err := r.ReadString('\n'); !errors.Is(err, io.EOF) {
 		t.Errorf("client after CloseRelays: %v, want EOF", err)
 	}
+}
+
+func captureLogs(t *testing.T) *logSink {
+	t.Helper()
+	sink := &logSink{}
+	logger := log.GetGlobalLogger()
+	prev := *logger
+	*logger = zerolog.New(sink)
+	t.Cleanup(func() { *logger = prev })
+	return sink
+}
+
+type logSink struct {
+	mu  sync.Mutex
+	buf strings.Builder
+}
+
+func (l *logSink) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.buf.Write(p)
+}
+
+func (l *logSink) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.buf.String()
 }
 
 type sleepingEnv struct {

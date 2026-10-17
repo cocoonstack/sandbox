@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -92,7 +93,10 @@ func (f *fakeEngine) SnapshotExport(_ context.Context, _, toDir string) error {
 	if err := os.MkdirAll(toDir, 0o750); err != nil {
 		return err
 	}
-	layer := filepath.Join(f.dir, "layer.erofs")
+	if err := os.MkdirAll(f.cocoonRoot(), 0o750); err != nil {
+		return err
+	}
+	layer := filepath.Join(f.cocoonRoot(), "layer.erofs")
 	sidecar := `{"storage_configs":[{"path":` + strconv.Quote(layer) + `,"role":"layer"}]}`
 	files := map[string]string{
 		layer:                               "erofs",
@@ -187,6 +191,12 @@ func (f *fakeEngine) Warmup(context.Context, string, []string) error { return ni
 func (f *fakeEngine) TrimCow(context.Context, string) error { return nil }
 
 func (f *fakeEngine) DiskAttach(_ context.Context, vmName string, spec engine.VolumeSpec) error {
+	if resolved, err := filepath.EvalSymlinks(spec.Path); err == nil {
+		root, _ := filepath.EvalSymlinks(f.cocoonRoot())
+		if rel, relErr := filepath.Rel(root, resolved); relErr == nil && !strings.HasPrefix(rel, "..") {
+			return fmt.Errorf("external volume path %s is inside a cocoon-managed directory", spec.Path)
+		}
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.volumeVMs[vmName] = true
@@ -227,6 +237,10 @@ func (f *fakeEngine) DetachVolume(ctx context.Context, _, sock, name, mount stri
 	defer f.mu.Unlock()
 	f.volumeOps = append(f.volumeOps, "detach:"+name)
 	return nil
+}
+
+func (f *fakeEngine) cocoonRoot() string {
+	return filepath.Join(f.dir, "cocoon-root")
 }
 
 func (f *fakeEngine) volumeOpsLog() []string {
