@@ -148,6 +148,7 @@ gets the intersection of the two.
 | `max_claims` | 0 (unlimited) | node-wide cap on live claims; claim/fork/branch requests beyond it answer 429 with the pool state unharmed (on a cluster a non-volume claim tries a warm-peer redirect first; a volume claim answers the 429 with no redirect) |
 | `audit_log` | false | append every relayed frame that opens an RPC — its op + addressing fields, never payloads — to `<data_dir>/audit.jsonl`; continuation `data`, `data_end`, `stdin`, and `stdin_close` frames pass through unrecorded. The file is size-rotated with one `.1` backup. Records are `{t, id, op}` plus whichever addressing fields the op carries (`argv`, `path`, `dest`, `from`, `to`, `url`, `session`, `port`), plus `method` (`GET`, `CONNECT`, `SOCKS5`, …), `decision` (`allow`, `deny`, `rate_limited`), `secret` (the ref name, never its value), `upstream` (the [upstream proxy](egress.md#upstream-proxies)'s `host:port`, when one carried it), `tenant`, and on an allowed connection `src_addr` and `dst_addr` (the node-side and destination `ip:port` of the upstream TCP connection, the tunnel target through an upstream proxy) on `egress` records, which a relayed frame cannot set; preview accesses record as op `preview`, one per request; a tenant change records as op `tenants` with the `added`, `changed` and `removed` names, never a token. An opening frame whose first line exceeds 4 KiB records as op `oversized` with no addressing fields |
 | `disk_reserve` | unset | `{"free": "100G", "dirs": ["/srv/sbx/run"]}`: while the filesystem of any listed directory (default `data_dir`) has less than `free` available, checked every 2 s, the node refuses new claims, forks, checkpoint claims, wakes of hibernated or archived sandboxes, hibernates, checkpoint captures and promotes with 429, and parks refill; the idle sweep and a lease-end archive leave their sandboxes running and retry on the next tick; `/v1/info` reports it as at capacity and the mesh sees no warm VMs on it. Running sandboxes keep running. On an XFS project quota the free space is the project's. List cocoon's `run_dir` when it sits on another filesystem, since the copy-on-write disks grow there. Size `free` to at least two sandboxes' worst-case growth (copy-on-write disk plus memory file each) and keep the refusal above your disk alert's warning level, so the warning comes first: on a 640G project with 40G disks and 8G memory files, `100G` refuses at 84% used |
+| `reader` | unset (off) | `{"template": "reader:24.04", "size": "small"}`: serve read-only file calls on a hibernated or archived claim from a disposable reader VM instead of waking it; the named none-lane pool must also be a `pools[]` entry with `warm` of at least 1. See [Reading sleeping claims](#reading-sleeping-claims-without-waking-them). Restart only |
 | `idle_hibernate_seconds` | 0 (off) | node-wide idle policy for unpooled claims (template/checkpoint claims): a none-lane claim is hibernated once it has had no open data-plane connection (relay, buffered exec, preview) and no egress request in flight for this long; the clock restarts when the last connection closes, so a long command is never cut short. The next call that reaches the guest wakes it transparently. Per-pool `idle_hibernate_seconds` does the same for that pool's claims; pooled keys ignore the node-wide value, and egress pools reject it because they cannot resume safely. Opt in deliberately: a wake costs latency and the snapshot, so callers with their own idle logic must not pay twice |
 | `archive_after_seconds` | 0 (off) | tier below hibernation: a hibernated claim idle this long is checkpointed to the store and its local VM dropped, freeing the node entirely; the next call that reaches the guest restores it transparently (a checkpoint restore's latency) with a fresh lease of the length the claim was granted (the server default of 5m when it asked for none); a lease moves only when a client calls [`/renew`](sandboxd-api.md#post-v1sandboxesidrenew). Keep `idle_hibernate_seconds` under the leases your claims use, or a woken sandbox that idles again is destroyed by the reap before it can hibernate, its archive already consumed by the wake; one still in use when its lease ends is destroyed the same way, unless it claimed `on_expire: archive`, which archives at the lease end whatever this setting. Requires `idle_hibernate_seconds > 0` and must exceed it. Node-wide for unpooled keys; per-pool overrides for that pool |
 | `archive_delete_after_seconds` | 0 (keep) | purge an archived claim's store checkpoint this long after it was archived; the claim is then gone for good. On S3, chunks and manifests remain until [offline reclamation](#reclaiming-s3-storage). On archive this retention window replaces the live claim deadline; 0 clears the deadline so the archive is kept forever. Same node-wide/per-pool split |
@@ -165,6 +166,67 @@ fragment the warm pools):
 | `large` | 4 | 4G |
 | `xlarge` | 4 | 8G |
 | `2xlarge` | 8 | 16G |
+
+### Reading sleeping claims without waking them
+
+A client that only lists or reads files (a UI showing an idle agent's
+workspace, a tool collecting results) would otherwise wake the claim and
+hold its memory until the next idle hibernate, and for an archived claim
+fetch the whole checkpoint first. With `reader` set, `fs_stat`, `fs_list`,
+`fs_read` and `fs_pull` on a hibernated or archived claim are served from a
+reader instead; anything else on the connection wakes the claim as before
+([API](sandboxd-api.md#get-v1sandboxesidagent)).
+
+```json
+{
+  "reader": {"template": "reader:24.04", "size": "small"},
+  "pools": [
+    {"template": "reader:24.04", "size": "small", "warm": 2},
+    {"template": "rt:24.04", "idle_hibernate_seconds": 600}
+  ]
+}
+```
+
+The reader pool is an ordinary `pools[]` entry on the none lane, so it is
+warmed, refilled and tuned (`PUT /v1/pools`) like any other. Taking a reader
+for a claim removes one VM from it until the refill replaces it. A reader is
+never shared: it serves one claim, and only the claim's own token reaches it.
+
+The guest's own kernel does the parsing, as it does for the claim. A reader
+is built per claim from the claim's hibernate snapshot (or archive record):
+
+- the claim's layer blobs, read from the snapshot's sidecar, are attached to
+  the reader read-only, and its copy-on-write disk as a private copy that the
+  reader mounts writable, so the guest replays the ext4 journal onto the copy
+  and never onto the original;
+- the reader mounts the layers and the copy, assembles a read-only overlay at
+  `/view`, and starts the claim's own `silkd` (`/usr/local/bin/silkd`) chrooted
+  into it on guest vsock port 2051. Paths and symlinks resolve inside the
+  claim's filesystem, and a write fails at the read-only overlay;
+- a hibernated claim's copy is a reflink export of the snapshot, so keep
+  `data_dir` and cocoon's data directory on a filesystem that supports
+  reflinks, as for checkpoints; without it the export copies the guest memory
+  image too. An archived claim fetches only the record's `cow.raw` and
+  `cocoon.json`: the dir backend copies the file out of the record, the s3
+  backend downloads those two objects into the staging cache, which stays until
+  the claim wakes or is released.
+
+The reader template must offer `mount`, `chroot`, `env`, `mkdir` and `sync`
+and boot a kernel that mounts erofs, ext4 and overlayfs, which the shipped
+images do. The claim's image must ship `silkd` at `/usr/local/bin/silkd`, as
+the shipped Linux images do; the android image does not, so its claims always
+wake. A reader is kept for 30 s after its last connection, then its VM is
+destroyed and its copy deleted. A wake never waits for a reader, and a reader
+serves only the sleep it was built from: a later hibernate or archive gets a
+fresh one. The claim's own code runs in its reader with root, as it did in the
+claim; the reader has no NIC, serves one claim, and is destroyed afterwards, so
+the claim's bytes never reach a shared VM or the host kernel.
+
+Whenever a reader cannot be built (no warm reader VM, the disk reserve is low,
+a layer blob missing on this node, an image without `silkd` at that path), the
+call wakes the claim as it does without the feature. Hibernating a claim then
+runs a guest `sync` first, so the snapshot's disk holds what the page cache
+still held. Reads show the claim as of that hibernate.
 
 ### Dataset volumes
 

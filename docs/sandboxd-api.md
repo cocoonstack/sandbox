@@ -393,7 +393,8 @@ Auth: the sandbox's own token, or the root token by id (operator, like
 release). Atomically snapshots the VM and stops it,
 freeing its memory; the next agent access restores it transparently
 (sessions, processes, and memory state intact — cocoon's hibernate keeps the
-snapshot point and the stop coincident). Idempotent on an already-hibernated
+snapshot point and the stop coincident), except a read-only file call that a
+configured [reader](#get-v1sandboxesidagent) serves without waking it. Idempotent on an already-hibernated
 sandbox. The TTL keeps running: a hibernated sandbox is still reaped (VM and
 snapshot) at its deadline, unless it claimed `on_expire: archive` or its pool
 archives. When to hibernate is the caller's policy — the
@@ -963,6 +964,26 @@ while its node's lease is overdue (see
 [running claims](cluster.md#running-claims-across-node-loss)). A relay of a
 claim of a replicating pool that is already open when the lease turns overdue
 is closed, whether or not it has a replica yet.
+
+A hibernated or archived sandbox wakes on the first frame that opens an RPC,
+unless the node configures a [`reader`](deploy.md#reading-sleeping-claims-without-waking-them).
+With one, the node answers the `101` before it touches the sandbox, reads the
+first frame, and serves `fs_stat`, `fs_list`, `fs_read` and `fs_pull` from a
+disposable reader VM that mounts the sandbox's disk read-only: the sandbox stays
+hibernated or archived, no `wake` usage event is recorded, and the read stamps
+neither the idle nor the archive clock. An `info` frame pipelined ahead of the
+call (the SDKs' first frames) rides along to the reader; one alone, with no call
+behind it for 100 ms, wakes the sandbox. The first frame on the connection that
+is anything else, or any later one, wakes the sandbox and hands the same
+connection to its silkd with the unread bytes replayed, so a client sees one
+silkd and no close. A connection also moves to the woken sandbox when the sandbox
+wakes or sleeps again meanwhile, so reads never come from a stale sleep. Files
+and symlinks resolve inside the sandbox's own filesystem as of its last
+hibernate. When no reader can be built the call wakes the sandbox as if the
+feature were off. Because the `101` has gone out by then, a failure on this path
+(unknown sandbox, a refused wake, an unreachable guest) arrives as a silkd
+`error` frame (`not_found` for an unknown sandbox, else `internal`) rather than
+an HTTP status, and the connection ends.
 
 ## GET /v1/sandboxes/{id}/ports/{port}
 
