@@ -113,6 +113,11 @@ would. `directio=on` is the per-volume mitigation; v1 has no per-tenant cache
 quota or accounting. Operators must keep a read-only entry's attached image
 immutable and publish a new name/path for new content.
 
+Changing a running claim's volumes needs the root token or the owning tenant's
+API token. A sandbox token cannot, so a guest holding its own sandbox token
+cannot attach another dataset, and every addition passes the same access list
+as a claim.
+
 A writable entry (`writable: true`) adds a channel the read-only model does
 not have: whichever tenant is permitted to claim it `rw` changes what every
 other permitted tenant reads next, and any of them can be the writer in
