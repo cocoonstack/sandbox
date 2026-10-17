@@ -260,13 +260,7 @@ func (m *Manager) resyncEgress(ctx context.Context, live map[string]types.VMReco
 func (m *Manager) quarantineClaim(ctx context.Context, sb *types.Sandbox) bool {
 	td := m.quiesceVolumes(ctx, sb)
 	gone := m.removeOrRetry(ctx, sb.VMName, sb.ID, td)
-	m.mu.Lock()
-	m.dropClaimLocked(sb)
-	js := m.store.del(sb.ID)
-	m.mu.Unlock()
-	if err := m.store.commit(js); err != nil {
-		m.store.recommit(ctx, js)
-	}
+	m.forgetClaim(ctx, sb)
 	return gone
 }
 
