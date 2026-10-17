@@ -17,6 +17,7 @@ from .conn import Conn, dial_agent, is_quiet, remaining_timeout
 from .endpoint import _endpoint_url
 from .errors import APIError, SandboxTimeout, require_field
 from .sandbox import Sandbox
+from .volumes import _volume_body
 
 T = TypeVar("T")
 
@@ -212,7 +213,11 @@ class Client:
                 raise SandboxTimeout(f"{verb} timed out") from None
             raise APIError(verb, 0, str(exc)) from None
         if status >= 400:
-            raise APIError(verb, status, _error_message(raw))
+            try:
+                reply = json.loads(raw)
+            except (ValueError, TypeError):
+                reply = None
+            raise APIError(verb, status, _error_message(raw), reply=reply if isinstance(reply, dict) else None)
         if not raw:
             return {}
         try:
@@ -297,29 +302,6 @@ def _claim_body(
     if claim_ref:
         claim["claim_ref"] = claim_ref
     return claim
-
-
-def _volume_body(volume: str | Mapping[str, str], mount: bool) -> dict[str, str]:
-    if isinstance(volume, str):
-        return {"name": volume}
-    if not isinstance(volume, Mapping):
-        raise TypeError("volume must be a name string or mapping")
-    unknown = sorted(set(volume) - {"name", "mount", "mode"})
-    if unknown:
-        raise TypeError(
-            f"volume mapping accepts only name, mount, and mode, got unexpected key(s): {', '.join(unknown)}"
-        )
-    if not mount and "mount" in volume:
-        raise TypeError("volume mount is meaningless with mount=False, which leaves mounting to the caller")
-    body = dict(volume)
-    mode = body.get("mode")
-    if mode in (None, "", "ro"):
-        body.pop("mode", None)
-    elif mode != "rw":
-        name = volume.get("name")
-        prefix = f"volume {name!r}: " if name is not None else ""
-        raise TypeError(f"{prefix}mode must be 'rw' or 'ro', got {mode!r}")
-    return body
 
 
 def _template_query(template: str, net: str, size: str) -> dict[str, str]:

@@ -234,6 +234,58 @@ checkpoint branches support neither volumes nor a claim reference in this versio
 `Checkpoint.New`: the labels follow the [claim bounds](sandboxd-api.md#post-v1claim),
 and a branch never inherits its source's labels or expiry action.
 
+For datasets chosen after the sandbox starts, set the desired read-only mounts
+on the same claim:
+
+```go
+view, err := sb.SetVolumes(ctx, []sandbox.Volume{
+    {Name: "imagenet", Mount: "/datasets/training"},
+})
+view, err = sb.GetVolumes(ctx)
+view, err = sb.PatchVolumes(ctx, sandbox.VolumePatch{Remove: []string{"imagenet"}})
+// An explicit empty slice clears mutable mounts. A nil slice is rejected.
+view, err = sb.SetVolumes(ctx, []sandbox.Volume{})
+```
+
+Python exposes the same operations and response fields:
+
+```python
+view = sb.set_volumes([{"name": "imagenet", "mount": "/datasets/training"}])
+view = sb.get_volumes()
+view = sb.patch_volumes(remove=["imagenet"])
+view = sb.set_volumes([])  # None is rejected.
+```
+
+Each response contains `volumes_want`, `volumes`, `states`, and `converging`.
+Go exposes them as `SandboxVolumesResponse.VolumesWant`, `.Volumes`, `.States`,
+and `.Converging`. `VolumePhase` has `VolumeAttached`, `VolumePending`, and
+`VolumeDetaching` constants. Python exposes `VolumePhase` and the corresponding
+`VOLUME_ATTACHED`, `VOLUME_PENDING`, and `VOLUME_DETACHING` constants. Each state
+can include an `error`. Methods use the client API token on the owning node
+and update both public sets from each complete response, including a partial failure. Serialize changes to one handle as with
+`Renew`. Returned views do not share the handle's slices or dictionaries.
+
+Go returns `*sandbox.VolumeError` with a `Response` alongside the returned view.
+It wraps `*sandbox.APIError`, so `errors.As` can inspect the status. Python raises
+`VolumeError`, a subclass of `APIError`, with `.response`. A response is absent
+when the reply carries no complete view (a malformed request, authentication,
+an unknown sandbox, or a non-JSON proxy reply). In that case
+the handle retains its last known sets. Retry an interrupted operation with the
+same full PUT target, or set a new target to recover. `Client.Sandboxes` exposes
+`VolumesWant` and `Volumes` for inspection with an API token.
+
+A PUT must retain existing writable and attach-only entries unchanged. PATCH
+cannot remove or change them. Paused sandboxes are not woken, and images must
+exist on the owner node. Admission holds cover the union of desired and applied
+sets. A settled retained entry receives no new attach or mount calls. `converging`
+is true only during an active request. Pending or detaching entries with false
+require an explicit retry. Daemon restart replaces unfinished diagnostics with
+an interrupted message. Capture is refused while either set is nonempty.
+Release cancels convergence and hands held volumes to teardown. See the
+[API recovery contract](sandboxd-api.md#partial-failure-and-recovery) and
+[same-sandbox replacement tutorial](live-volumes.md). A failed sandbox with
+volume holds is release-only after VMM exit; an empty target cannot recover it.
+
 `WithVolumesAttachOnly()` claims the same volumes without mounting them: the
 entries in `Sandbox.Volumes` carry an empty `Mount`, and the workload finds
 each device by polling `/sys/block/*/serial` for the catalog name — not

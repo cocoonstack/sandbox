@@ -139,8 +139,11 @@ type Engine interface {
 	MarkLane(ctx context.Context, vsockSocket string, lane engine.Lane) error
 	Warmup(ctx context.Context, vsockSocket string, argv []string) error
 	TrimCow(ctx context.Context, vsockSocket string) error
+	CheckLiveVolumeSupport(ctx context.Context) error
 	DiskAttach(ctx context.Context, vmName string, spec engine.VolumeSpec) error
+	DetachVolume(ctx context.Context, vmName, sock, name, mount string) error
 	MountVolume(ctx context.Context, vsockSocket, name, mount string, rw bool) error
+	MountLiveVolume(ctx context.Context, vsockSocket, name, mount string, rw bool) error
 	UnmountVolume(ctx context.Context, vsockSocket, mount string) error
 	SyncGuest(ctx context.Context, vsockSocket string) error
 	WriteInstanceMetadata(ctx context.Context, vsockSocket string, doc []byte) error
@@ -161,6 +164,7 @@ type SandboxSummary struct {
 	CPUCount       int                `json:"cpu_count,omitzero"`
 	MemTotalBytes  int64              `json:"mem_total_bytes,omitzero"`
 	Volumes        []types.Volume     `json:"volumes,omitempty"`
+	VolumesWant    []types.Volume     `json:"volumes_want,omitempty"`
 	Hibernated     bool               `json:"hibernated"`
 	Archived       bool               `json:"archived,omitzero"`
 	FromCheckpoint string             `json:"from_checkpoint,omitempty"`
@@ -294,6 +298,8 @@ type Manager struct {
 	volumes map[string]catalogVolume
 	// volumeAdmission counts the live holders of each volume name; guarded by m.mu.
 	volumeAdmission map[string]volumeHolders
+	volumeRuns      map[*types.Sandbox]*volumeRun
+	volumeErrors    map[*types.Sandbox]map[string]string
 
 	poolStore *poolStore
 	// poolShared is the cell's pool set with a meta store; poolVersion, under m.mu, is its newest version applied.
@@ -396,6 +402,8 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 		store:           newClaimStore(cfg.DataDir, cfg.SyncClaims),
 		volumes:         make(map[string]catalogVolume, len(cfg.Volumes)),
 		volumeAdmission: map[string]volumeHolders{},
+		volumeRuns:      map[*types.Sandbox]*volumeRun{},
+		volumeErrors:    map[*types.Sandbox]map[string]string{},
 		poolStore:       newPoolStore(cfg.DataDir),
 		pools:           make(map[types.PoolKey]*pool, len(cfg.Pools)),
 		claimed:         map[string]*types.Sandbox{},
@@ -688,7 +696,7 @@ func summarize(sb *types.Sandbox) SandboxSummary {
 		FromCheckpoint: sb.FromCheckpoint, ClaimRef: sb.ClaimRef, Metadata: sb.Metadata, OnExpire: sb.OnExpire,
 		Restarts: sb.Restarts, RestartedAt: sb.RestartedAt, Failed: sb.Failed,
 		CPUCount: spec.CPU, MemTotalBytes: spec.MemoryBytes,
-		Volumes: slices.Clone(sb.Volumes),
+		Volumes: slices.Clone(sb.Volumes), VolumesWant: slices.Clone(sb.VolumesWant),
 	}
 }
 
@@ -710,8 +718,8 @@ func tenantOwns(tenant, owner string) bool {
 	return tenant == "" || tenant == owner
 }
 
-func hasAppliedVolumes(sb *types.Sandbox) bool {
-	return len(sb.Volumes) > 0
+func hasVolumes(sb *types.Sandbox) bool {
+	return len(sb.Volumes) > 0 || len(sb.VolumesWant) > 0
 }
 
 // logSweepResult reports one background-sweep outcome; benign races stay silent.

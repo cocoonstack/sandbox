@@ -5,6 +5,12 @@ import (
 	"time"
 )
 
+const (
+	VolumeAttached  VolumePhase = "attached"
+	VolumePending   VolumePhase = "pending"
+	VolumeDetaching VolumePhase = "detaching"
+)
+
 // TTLField is the shared requested-lease field; zero means the server default.
 type TTLField struct {
 	TTLSeconds int `json:"ttl_seconds,omitzero"`
@@ -75,6 +81,36 @@ type VolumeInfo struct {
 // VolumeListResponse is the wire reply of GET /v1/volumes.
 type VolumeListResponse struct {
 	Volumes []VolumeInfo `json:"volumes"`
+}
+
+// SetVolumesRequest is the wire body of PUT /v1/sandboxes/{id}/volumes.
+type SetVolumesRequest struct {
+	Volumes []Volume `json:"volumes"`
+}
+
+// VolumePatch is the wire body of PATCH /v1/sandboxes/{id}/volumes.
+type VolumePatch struct {
+	Add    []Volume `json:"add,omitempty"`
+	Remove []string `json:"remove,omitempty"`
+}
+
+// VolumePhase is how far one held volume has converged.
+type VolumePhase string
+
+// VolumeState reports one held volume and its last failure.
+type VolumeState struct {
+	Name  string      `json:"name"`
+	State VolumePhase `json:"state"`
+	Error string      `json:"error,omitempty"`
+}
+
+// SandboxVolumesResponse is the wire reply of the sandbox volume routes, failures included.
+type SandboxVolumesResponse struct {
+	VolumesWant []Volume      `json:"volumes_want"`
+	Volumes     []Volume      `json:"volumes"`
+	States      []VolumeState `json:"states"`
+	Converging  bool          `json:"converging"`
+	Error       string        `json:"error,omitempty"`
 }
 
 // ForkRequest is the wire body of POST /v1/sandboxes/{id}/fork.

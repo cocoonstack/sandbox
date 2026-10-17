@@ -1,5 +1,5 @@
 // volumesmoke validates shared read-only dataset mounts, and optionally one
-// writable dataset mount, on a live Cloud Hypervisor node.
+// writable dataset mount and live volume changes, on a live Cloud Hypervisor node.
 package main
 
 import (
@@ -24,16 +24,17 @@ func main() {
 	template := flag.String("template", "rt:24.04", "template ref")
 	volume := flag.String("volume", "", "catalog volume name")
 	rwVolume := flag.String("rw-volume", "", "writable catalog volume name (adds the writable leg)")
+	live := flag.Bool("live", false, "add the live volume leg (needs cocoon v0.7.2)")
 	probe := flag.String("probe", "volume-e2e.txt", "non-empty file inside the volume")
 	flag.Parse()
 
-	if err := run(*addr, *token, *template, *volume, *rwVolume, *probe); err != nil {
+	if err := run(*addr, *token, *template, *volume, *rwVolume, *probe, *live); err != nil {
 		fmt.Fprintln(os.Stderr, "volumesmoke:", err)
 		os.Exit(1)
 	}
 }
 
-func run(addr, token, template, volume, rwVolume, probe string) error {
+func run(addr, token, template, volume, rwVolume, probe string, live bool) error {
 	if volume == "" {
 		return errors.New("volume is required")
 	}
@@ -104,13 +105,8 @@ func run(addr, token, template, volume, rwVolume, probe string) error {
 		return fmt.Errorf("concurrent reads differ: first_bytes=%d second_bytes=%d", len(outputs[0]), len(outputs[1]))
 	}
 
-	_, err = sbA.Exec(ctx, "touch", path.Join(mountA, ".sandboxd-write-probe"))
-	if err == nil {
-		return errors.New("write to read-only volume succeeded")
-	}
-	exitErr, ok := errors.AsType[*sandbox.ExitError](err)
-	if !ok || !strings.Contains(strings.ToLower(exitErr.Stderr), "read-only file system") {
-		return fmt.Errorf("write failed without EROFS: %w", err)
+	if err := requireReadOnly(ctx, sbA, mountA); err != nil {
+		return err
 	}
 
 	if err := errors.Join(sbA.Close(), sbB.Close()); err != nil {
@@ -118,10 +114,80 @@ func run(addr, token, template, volume, rwVolume, probe string) error {
 	}
 	released = true
 	fmt.Printf("VOLUME PASS concurrent_read_bytes=%d read_only=true released=true\n", len(outputs[0]))
+	if live {
+		if err := runLive(ctx, client, template, volume, probe, outputs[0]); err != nil {
+			return err
+		}
+	}
 	if rwVolume == "" {
 		return nil
 	}
 	return runWritable(ctx, client, template, rwVolume)
+}
+
+func runLive(ctx context.Context, client *sandbox.Client, template, volume, probe, want string) error {
+	const mount = "/datasets/live"
+	sb, err := client.New(ctx, template, sandbox.WithNetwork(sandbox.NetNone))
+	if err != nil {
+		return err
+	}
+	defer func() { _ = sb.Close() }()
+	for range 2 {
+		if _, err = sb.SetVolumes(ctx, []sandbox.Volume{{Name: volume, Mount: mount}}); err != nil {
+			return fmt.Errorf("live set volumes: %w", err)
+		}
+	}
+	view, err := sb.GetVolumes(ctx)
+	if err != nil {
+		return fmt.Errorf("live get volumes: %w", err)
+	}
+	wantVolumes := []sandbox.Volume{{Name: volume, Mount: mount}}
+	if !slices.Equal(view.VolumesWant, wantVolumes) || !slices.Equal(view.Volumes, wantVolumes) || len(view.States) != 1 || view.States[0].State != sandbox.VolumeAttached {
+		return fmt.Errorf("live volume view not converged: %+v", view)
+	}
+	got, err := sb.Exec(ctx, "cat", path.Join(mount, probe))
+	if err != nil {
+		return fmt.Errorf("live volume read: %w", err)
+	}
+	if got != want {
+		return fmt.Errorf("live volume read: bytes=%d want=%d", len(got), len(want))
+	}
+	if err = requireReadOnly(ctx, sb, mount); err != nil {
+		return fmt.Errorf("live volume: %w", err)
+	}
+	for range 2 {
+		if _, err = sb.PatchVolumes(ctx, sandbox.VolumePatch{Remove: []string{volume}}); err != nil {
+			return fmt.Errorf("live patch remove: %w", err)
+		}
+	}
+	if _, err = sb.Exec(ctx, "test", "!", "-e", path.Join(mount, probe)); err != nil {
+		return fmt.Errorf("detached volume probe should be absent: %w", err)
+	}
+	for range 2 {
+		if _, err = sb.PatchVolumes(ctx, sandbox.VolumePatch{Add: wantVolumes}); err != nil {
+			return fmt.Errorf("live patch add: %w", err)
+		}
+	}
+	if got, err = sb.Exec(ctx, "cat", path.Join(mount, probe)); err != nil || got != want {
+		return fmt.Errorf("live patch add read: bytes=%d want=%d error=%v", len(got), len(want), err)
+	}
+	for range 2 {
+		if _, err = sb.SetVolumes(ctx, []sandbox.Volume{}); err != nil {
+			return fmt.Errorf("live set empty volumes: %w", err)
+		}
+	}
+	view, err = sb.GetVolumes(ctx)
+	if err != nil {
+		return fmt.Errorf("live get empty volumes: %w", err)
+	}
+	if len(view.VolumesWant) != 0 || len(view.Volumes) != 0 || len(view.States) != 0 {
+		return fmt.Errorf("live clear did not converge: %+v", view)
+	}
+	if _, err = sb.Exec(ctx, "test", "!", "-e", path.Join(mount, probe)); err != nil {
+		return fmt.Errorf("cleared volume probe should be absent: %w", err)
+	}
+	fmt.Printf("LIVE VOLUME PASS read_bytes=%d repeated_put=true repeated_patch=true cleared=true\n", len(got))
+	return nil
 }
 
 // runWritable proves the publish workflow: a writer's bytes survive its own
@@ -185,5 +251,16 @@ func runWritable(ctx context.Context, client *sandbox.Client, template, volume s
 	live = nil
 	fmt.Printf("VOLUME RW PASS volume=%s claim=%.1fms durable=true busy_refused=true\n",
 		volume, float64(claimRW.Microseconds())/1000)
+	return nil
+}
+
+func requireReadOnly(ctx context.Context, sb *sandbox.Sandbox, mount string) error {
+	_, err := sb.Exec(ctx, "touch", path.Join(mount, ".sandboxd-write-probe"))
+	if err == nil {
+		return errors.New("write to read-only volume succeeded")
+	}
+	if exitErr, ok := errors.AsType[*sandbox.ExitError](err); !ok || !strings.Contains(strings.ToLower(exitErr.Stderr), "read-only file system") {
+		return fmt.Errorf("write failed without EROFS: %w", err)
+	}
 	return nil
 }

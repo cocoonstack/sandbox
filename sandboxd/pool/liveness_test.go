@@ -129,21 +129,7 @@ func TestLivenessRestartFailureRetriesThenFails(t *testing.T) {
 	killVMM(eng, sb.VMName)
 	eng.startErr = errors.New("boot failed")
 
-	for range vmmRestartBudget - 1 {
-		m.recoverVMM(t.Context(), sb)
-		if got, _ := m.Sandbox(sb.ID); got.Failed != "" {
-			t.Fatalf("failed %q after a retryable attempt", got.Failed)
-		}
-	}
-	m.recoverVMM(t.Context(), sb)
-
-	got, _ := m.Sandbox(sb.ID)
-	if got.Failed != reasonColdBootFailed || got.Restarts != 0 {
-		t.Errorf("summary %+v, want the fixed reason %q after %d attempts", got, reasonColdBootFailed, vmmRestartBudget)
-	}
-	if len(eng.stops) != vmmRestartBudget {
-		t.Errorf("stops %v, want every failed start stopped", eng.stops)
-	}
+	assertRestartFailsUntilBudget(t, m, eng, sb)
 	if got, want := usageEventsOf(t, m, sb.ID), "claim,vmm_exit,vmm_failed"; got != want {
 		t.Errorf("events %s, want one exit across the attempts: %s", got, want)
 	}
@@ -453,7 +439,7 @@ func TestColdBootBlocker(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := coldBootBlocker(tt.sb, tt.found)
+			got := coldBootBlocker(tt.sb, tt.found, hasVolumes(tt.sb))
 			if (tt.want == "") != (got == "") || !strings.Contains(got, tt.want) {
 				t.Errorf("got %q, want %q", got, tt.want)
 			}
@@ -524,6 +510,11 @@ func TestReconcileKeepsRunningClaimsTheHostLost(t *testing.T) {
 	}
 }
 
+type fakeVMEvent struct {
+	sync   []engine.VMStatus
+	change engine.VMChange
+}
+
 func assertRestartFailsUntilBudget(t *testing.T, m *Manager, eng *fakeEngine, sb *types.Sandbox) {
 	t.Helper()
 	for attempt := range vmmRestartBudget {
@@ -551,11 +542,6 @@ func runLiveness(t *testing.T, m *Manager) {
 	t.Helper()
 	m.livenessOnce(t.Context())
 	waitFor(t, func() bool { return !m.livenessSweep.Load() })
-}
-
-type fakeVMEvent struct {
-	sync   []engine.VMStatus
-	change engine.VMChange
 }
 
 func killVMM(eng *fakeEngine, name string) {

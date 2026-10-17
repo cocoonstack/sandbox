@@ -77,24 +77,25 @@ func TestRecommitDrainsAChangeItWasTooBusyToSee(t *testing.T) {
 }
 
 func TestStoreRoundTrip(t *testing.T) {
+	dataset := []types.Volume{{Name: "dataset-a", Mount: "/datasets/a"}}
 	claims := map[string]*types.Sandbox{
-		"sb_a": {ID: "sb_a", VMName: "sbx-1", Key: testKey, Token: "t1", Deadline: time.Now().Add(time.Minute).UTC(), ClaimedAt: time.Now().Add(-time.Minute).UTC(), ClaimRef: "ns/workload", Metadata: types.Metadata{"team": "a"}, OnExpire: types.ExpireArchive, Volumes: []types.Volume{{Name: "dataset-a", Mount: "/datasets/a"}}, VsockSocket: "/v/1"},
+		"sb_a": {ID: "sb_a", VMName: "sbx-1", Key: testKey, Token: "t1", Deadline: time.Now().Add(time.Minute).UTC(), ClaimedAt: time.Now().Add(-time.Minute).UTC(), ClaimRef: "ns/workload", Metadata: types.Metadata{"team": "a"}, OnExpire: types.ExpireArchive, Volumes: dataset, VolumesWant: dataset, VsockSocket: "/v/1"},
 		"sb_b": {ID: "sb_b", VMName: "sbx-2", Key: testKey, Token: "t2"},
 	}
-	for _, sync := range []bool{false, true} {
-		s := newClaimStore(t.TempDir(), sync)
+	for _, fsync := range []bool{false, true} {
+		s := newClaimStore(t.TempDir(), fsync)
 		if err := s.save(claims); err != nil {
-			t.Fatalf("save (sync=%v): %v", sync, err)
+			t.Fatalf("save (sync=%v): %v", fsync, err)
 		}
 		got, err := s.load()
 		if err != nil {
-			t.Fatalf("load (sync=%v): %v", sync, err)
+			t.Fatalf("load (sync=%v): %v", fsync, err)
 		}
 		if !reflect.DeepEqual(got, claims) {
-			t.Errorf("sync=%v: got %+v, want %+v", sync, got, claims)
+			t.Errorf("sync=%v: got %+v, want %+v", fsync, got, claims)
 		}
 		if _, err := os.Stat(s.path + ".tmp"); !errors.Is(err, fs.ErrNotExist) {
-			t.Errorf("sync=%v: temp file left behind: %v", sync, err)
+			t.Errorf("sync=%v: temp file left behind: %v", fsync, err)
 		}
 	}
 }

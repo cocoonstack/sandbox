@@ -163,16 +163,23 @@ func metadataFilter(pairs []string) (types.Metadata, error) {
 }
 
 func writePoolErr(w http.ResponseWriter, err error) bool {
+	code, msg, ok := mapPoolErr(w, err)
+	if ok {
+		writeErr(w, code, msg)
+	}
+	return ok
+}
+
+func mapPoolErr(w http.ResponseWriter, err error) (code int, msg string, ok bool) {
 	for _, m := range poolErrHTTP {
 		if errors.Is(err, m.err) {
 			if m.code == http.StatusServiceUnavailable {
 				w.Header().Set("Retry-After", retryAfterSeconds)
 			}
-			writeErr(w, m.code, cmp.Or(m.msg, err.Error()))
-			return true
+			return m.code, cmp.Or(m.msg, err.Error()), true
 		}
 	}
-	return false
+	return 0, "", false
 }
 
 func writeResult(w http.ResponseWriter, r *http.Request, op, id, failMsg string, err error, ok func()) {

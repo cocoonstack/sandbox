@@ -134,7 +134,7 @@ func (m *Manager) resolveVolumes(ctx context.Context, tenant string, requested [
 	// an attach-only claim has no mounts to default; re-defaulting here would mount them
 	applied, err := types.ValidateVolumes(requested, types.VolumesAttachOnly(requested))
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrBadVolume, err)
+		return nil, fmt.Errorf("%w: %w", ErrBadVolume, err)
 	}
 	resolved := make([]resolvedVolume, 0, len(applied))
 	for _, volume := range applied {
@@ -142,20 +142,32 @@ func (m *Manager) resolveVolumes(ctx context.Context, tenant string, requested [
 		if !ok || !entry.allowed(tenant) {
 			return nil, ErrVolumeUnavailable
 		}
-		if volume.RW() && !entry.writable {
-			return nil, fmt.Errorf("%w: volume %q is not writable", ErrBadVolume, volume.Name)
+		resolvedEntry, resolveErr := m.resolveCatalogVolume(ctx, volume)
+		if resolveErr != nil {
+			return nil, resolveErr
 		}
-		if _, statErr := os.Stat(entry.disk.Path); statErr != nil {
-			// the operator's path stays server-side; the refusal matches the unknown one
-			log.WithFunc("pool.resolveVolumes").Warnf(ctx, "stat volume %q image %s: %v", volume.Name, entry.disk.Path, statErr)
-			return nil, ErrVolumeUnavailable
-		}
-		disk := entry.disk
-		disk.RW = volume.RW()
-		volume.AttachOnly = false // past validation the empty mount carries it
-		resolved = append(resolved, resolvedVolume{disk: disk, applied: volume})
+		resolved = append(resolved, resolvedEntry)
 	}
 	return resolved, nil
+}
+
+func (m *Manager) resolveCatalogVolume(ctx context.Context, volume types.Volume) (resolvedVolume, error) {
+	entry, ok := m.volumes[volume.Name]
+	if !ok {
+		return resolvedVolume{}, ErrVolumeUnavailable
+	}
+	if volume.RW() && !entry.writable {
+		return resolvedVolume{}, fmt.Errorf("%w: volume %q is not writable", ErrBadVolume, volume.Name)
+	}
+	if _, statErr := os.Stat(entry.disk.Path); statErr != nil {
+		// the operator's path stays server-side; the refusal matches the unknown one
+		log.WithFunc("pool.resolveCatalogVolume").Warnf(ctx, "stat volume %q image %s: %v", volume.Name, entry.disk.Path, statErr)
+		return resolvedVolume{}, ErrVolumeUnavailable
+	}
+	disk := entry.disk
+	disk.RW = volume.RW()
+	volume.AttachOnly = false // past validation the empty mount carries it
+	return resolvedVolume{disk: disk, applied: volume}, nil
 }
 
 // confirmVolumesClean refuses a read-only claim of a dirty image; run after holds are taken.
@@ -175,17 +187,17 @@ func (m *Manager) applyVolumes(ctx context.Context, sb *types.Sandbox, volumes [
 	}
 	group, groupCtx := errgroup.WithContext(ctx)
 	for _, volume := range volumes {
-		group.Go(func() error { return m.applyVolume(groupCtx, sb, volume) })
+		group.Go(func() error { return m.applyVolume(groupCtx, sb, volume, false) })
 	}
 	if err := group.Wait(); err != nil {
 		return err
 	}
-	sb.Volumes = applied
+	sb.Volumes, sb.VolumesWant = applied, applied
 	return nil
 }
 
 // applyVolume keeps one volume's steps strictly ordered; siblings overlap freely.
-func (m *Manager) applyVolume(ctx context.Context, sb *types.Sandbox, volume resolvedVolume) error {
+func (m *Manager) applyVolume(ctx context.Context, sb *types.Sandbox, volume resolvedVolume, live bool) error {
 	// attach-only mounts nothing, so there is no umount to verify and no marker.
 	attachOnly := volume.applied.Mount == ""
 	// write-ahead: the marker must be durable before any guest write can be.
@@ -200,7 +212,14 @@ func (m *Manager) applyVolume(ctx context.Context, sb *types.Sandbox, volume res
 	if attachOnly {
 		return nil
 	}
-	if err := m.eng.MountVolume(ctx, sb.VsockSocket, volume.applied.Name, volume.applied.Mount, volume.disk.RW); err != nil {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	mount := m.eng.MountVolume
+	if live {
+		mount = m.eng.MountLiveVolume
+	}
+	if err := mount(ctx, sb.VsockSocket, volume.applied.Name, volume.applied.Mount, volume.disk.RW); err != nil {
 		return fmt.Errorf("setup volume %q: %w", volume.applied.Name, err)
 	}
 	return nil
@@ -208,7 +227,7 @@ func (m *Manager) applyVolume(ctx context.Context, sb *types.Sandbox, volume res
 
 // quiesceVolumes unmounts a claim's writable mounts in reverse; a failed unmount keeps the marker.
 func (m *Manager) quiesceVolumes(ctx context.Context, sb *types.Sandbox) volumeTeardown {
-	td := volumeTeardown{holds: sb.Volumes}
+	td := volumeTeardown{holds: heldVolumes(sb)}
 	mounts := writableMounts(sb.Volumes)
 	if mounts == 0 {
 		return td

@@ -53,8 +53,8 @@ var poolErrHTTP = []struct {
 	{pool.ErrBadConfig, http.StatusBadRequest, ""},
 	{pool.ErrReloadRefused, http.StatusConflict, ""},
 	{pool.ErrTenantRemoved, http.StatusForbidden, ""},
-	{pool.ErrTenantStoreDown, http.StatusServiceUnavailable, ""},
-	{pool.ErrPoolStoreDown, http.StatusServiceUnavailable, ""},
+	{pool.ErrTenantStoreDown, http.StatusServiceUnavailable, "tenant store down; retry"},
+	{pool.ErrPoolStoreDown, http.StatusServiceUnavailable, "pool set store down; retry"},
 	{pool.ErrNoEgress, http.StatusConflict, ""},
 	{pool.ErrNoEgressHibernate, http.StatusConflict, ""},
 	{pool.ErrNoEgressFork, http.StatusConflict, ""},
@@ -94,6 +94,9 @@ type Manager interface {
 	TenantClaims() map[string]int
 	VolumePlacement(key types.PoolKey, tenant string, names []string) (bool, error)
 	Volumes(tenant string, holders map[string]int) []types.VolumeInfo
+	GetVolumes(id, tenant string) (types.SandboxVolumesResponse, error)
+	SetVolumes(ctx context.Context, id, tenant string, volumes []types.Volume) (types.SandboxVolumesResponse, error)
+	PatchVolumes(ctx context.Context, id, tenant string, patch types.VolumePatch) (types.SandboxVolumesResponse, error)
 	Sandboxes(tenant, claimRef string, metadata types.Metadata) []pool.SandboxSummary
 	Sandbox(id string) (pool.SandboxSummary, bool)
 	Stats(ctx context.Context, id string) (pool.SandboxStats, bool)
@@ -262,6 +265,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/sandboxes/{id}/release", s.handleSandboxVerb("release", s.mgr.Release))
 	mux.HandleFunc("POST /v1/sandboxes/{id}/hibernate", s.handleSandboxVerb("hibernate", s.mgr.Hibernate))
 	mux.HandleFunc("POST /v1/sandboxes/{id}/wake", s.handleSandboxVerb("wake", s.mgr.Wake))
+	mux.HandleFunc("GET /v1/sandboxes/{id}/volumes", s.requireToken(s.handleSandboxVolumes))
+	mux.HandleFunc("PUT /v1/sandboxes/{id}/volumes", s.requireToken(s.handleSandboxVolumes))
+	mux.HandleFunc("PATCH /v1/sandboxes/{id}/volumes", s.requireToken(s.handleSandboxVolumes))
 	mux.HandleFunc("POST /v1/sandboxes/{id}/renew", s.handleRenew)
 	mux.HandleFunc("GET /v1/sandboxes/{id}", s.requireRoot(s.handleSandbox))
 	mux.HandleFunc("GET /v1/sandboxes/{id}/stats", s.requireRoot(s.handleSandboxStats))

@@ -18,6 +18,15 @@ const (
 	guestExecPATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 )
 
+type guestExitError struct {
+	code   int32
+	output string
+}
+
+func (e *guestExitError) Error() string {
+	return fmt.Sprintf("exit code %d: %s", e.code, e.output)
+}
+
 // InstallCACert makes the guest trust the cluster root without update-ca-certificates.
 func (e *Engine) InstallCACert(ctx context.Context, vsockSocket string, certPEM []byte) error {
 	ctx, cancel := context.WithTimeout(ctx, cmdTimeout)
@@ -64,9 +73,14 @@ func (e *Engine) silkdWriteFile(ctx context.Context, vsockSocket, path string, m
 }
 
 func (e *Engine) silkdExec(ctx context.Context, vsockSocket string, argv ...string) error {
+	_, err := e.silkdOutput(ctx, vsockSocket, argv...)
+	return err
+}
+
+func (e *Engine) silkdOutput(ctx context.Context, vsockSocket string, argv ...string) ([]byte, error) {
 	s, err := e.dialSilkdSession(ctx, vsockSocket)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer s.close()
 	sendErr := s.send(wire.Exec{Argv: argv, Env: map[string]string{"PATH": guestExecPATH}})
@@ -74,27 +88,27 @@ func (e *Engine) silkdExec(ctx context.Context, vsockSocket string, argv ...stri
 		// a child exiting without reading stdin races this close; prefer the buffered exit frame.
 		sendErr = s.send(wire.StdinClose{})
 	}
-	var out []byte
+	var out, stdout []byte
 	for {
 		frame, err := s.recv()
 		if err != nil {
-			return errors.Join(sendErr, err)
+			return nil, errors.Join(sendErr, err)
 		}
 		switch resp := frame.(type) {
 		case *wire.Started:
 		case *wire.Stdout:
-			out = appendCapped(out, resp.Data)
+			out, stdout = appendCapped(out, resp.Data), appendCapped(stdout, resp.Data)
 		case *wire.Stderr:
 			out = appendCapped(out, resp.Data)
 		case *wire.Exit:
 			if resp.Code != 0 {
-				return fmt.Errorf("exit code %d: %s", resp.Code, bytes.TrimSpace(out))
+				return nil, &guestExitError{code: resp.Code, output: string(bytes.TrimSpace(out))}
 			}
-			return nil
+			return stdout, nil
 		case *wire.ErrorResp:
-			return fmt.Errorf("silkd %w", resp)
+			return nil, fmt.Errorf("silkd %w", resp)
 		default:
-			return fmt.Errorf("unexpected silkd frame %q", resp.RespType())
+			return nil, fmt.Errorf("unexpected silkd frame %q", resp.RespType())
 		}
 	}
 }

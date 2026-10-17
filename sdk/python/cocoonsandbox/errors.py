@@ -1,6 +1,11 @@
 """Error types raised by the SDK."""
 
-from typing import Any
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from .volumes import SandboxVolumesResponse
 
 
 class SandboxError(Exception):
@@ -14,11 +19,20 @@ class SandboxTimeout(SandboxError, TimeoutError):
 class APIError(SandboxError):
     """A sandboxd control-plane call failed."""
 
-    def __init__(self, verb: str, status: int, message: str) -> None:
+    def __init__(self, verb: str, status: int, message: str, *, reply: dict[str, Any] | None = None) -> None:
         super().__init__(f"{verb}: {message} (HTTP {status})")
         self.verb = verb
         self.status = status
         self.message = message
+        self.reply = reply
+
+
+class VolumeError(APIError):
+    """A volume request failed; response holds the server's complete view when one came back."""
+
+    def __init__(self, error: APIError, response: SandboxVolumesResponse | None) -> None:
+        super().__init__(error.verb, error.status, error.message, reply=error.reply)
+        self.response = response
 
 
 class SilkdError(SandboxError):

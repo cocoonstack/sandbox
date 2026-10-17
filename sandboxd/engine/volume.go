@@ -15,6 +15,8 @@ import (
 const (
 	// VolumeCallTimeout bounds one guest teardown exec.
 	VolumeCallTimeout = 2 * time.Second
+	// VolumeMutationTimeout bounds one live attach or detach, guest steps included.
+	VolumeMutationTimeout = 30 * time.Second
 
 	volumePollInterval = 10 * time.Millisecond
 	volumeProbeTimeout = 2 * time.Second
@@ -55,17 +57,7 @@ func (e *Engine) MountVolume(ctx context.Context, vsockSocket, name, mount strin
 	if err != nil {
 		return fmt.Errorf("wait for volume device %s: %w", name, err)
 	}
-	if err := e.silkdExec(ctx, vsockSocket, "mkdir", "-p", "--", mount); err != nil {
-		return fmt.Errorf("create volume mount point %s: %w", mount, err)
-	}
-	mode := types.VolumeModeRO
-	if rw {
-		mode = types.VolumeModeRW
-	}
-	if err := e.silkdExec(ctx, vsockSocket, "mount", "-o", mode, "--", device, mount); err != nil {
-		return fmt.Errorf("mount volume %s: %w", name, err)
-	}
-	return nil
+	return e.mountDevice(ctx, vsockSocket, device, name, mount, rw)
 }
 
 // UnmountVolume flushes and detaches a guest mount before the VM is removed.
@@ -115,7 +107,7 @@ func (e *Engine) findVolumeDevice(ctx context.Context, vsockSocket, name string)
 		return "", false, err
 	}
 	for _, entry := range entries {
-		serial, err := e.silkdReadFile(ctx, vsockSocket, "/sys/block/"+entry.Name+"/serial")
+		serial, err := e.silkdReadFile(ctx, vsockSocket, "/sys/block/"+entry.Name+"/serial", silkdReadMax)
 		if isNotFound(err) {
 			continue
 		}
@@ -138,6 +130,16 @@ func (e *Engine) findVolumeDevice(ctx context.Context, vsockSocket, name string)
 	return "", false, nil
 }
 
+func (e *Engine) mountDevice(ctx context.Context, vsockSocket, device, name, mount string, rw bool) error {
+	if err := e.silkdExec(ctx, vsockSocket, "mkdir", "-p", "--", mount); err != nil {
+		return fmt.Errorf("create volume mount point %s: %w", mount, err)
+	}
+	if err := e.silkdExec(ctx, vsockSocket, "mount", "-o", mountMode(rw), "--", device, mount); err != nil {
+		return fmt.Errorf("mount volume %s: %w", name, err)
+	}
+	return nil
+}
+
 func (e *Engine) diskAttachArgs(vmName string, spec VolumeSpec) ([]string, error) {
 	directIO, err := spec.directIO()
 	if err != nil {
@@ -157,4 +159,11 @@ func (e *Engine) diskAttachArgs(vmName string, spec VolumeSpec) ([]string, error
 func isNotFound(err error) bool {
 	respErr, ok := errors.AsType[*wire.ErrorResp](err)
 	return ok && respErr.Kind == wire.KindNotFound
+}
+
+func mountMode(rw bool) string {
+	if rw {
+		return types.VolumeModeRW
+	}
+	return types.VolumeModeRO
 }

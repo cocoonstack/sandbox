@@ -13,7 +13,8 @@ the cocoon CLI and needs a template image with silkd baked in.
   [performance](performance.md) numbers assume; v0.6.9 prints `[]` for an
   empty `snapshot list --format json`, which sandboxd's snapshot reconcile
   reads. sandboxd logs a warning at startup when the detected cocoon is below
-  v0.6.9 (a dev/`master-<sha>` build is assumed current)
+  v0.6.9 (a dev/`master-<sha>` build is assumed current); changing volumes on
+  a running claim needs v0.7.2
 - The sandbox boot artifact installed where cocoon finds it
   (`/boot/vmlinuz-sandbox`, `/boot/initrd.img-sandbox` — from
   `ghcr.io/cocoonstack/sandbox/boot:<kernel-ver>`)
@@ -156,8 +157,36 @@ fragment the warm pools):
 
 ### Dataset volumes
 
+Running claims can change mounted read-only catalog entries through the
+[GET, PUT, and PATCH volume API](sandboxd-api.md#get-v1sandboxesidvolumes)
+and both SDKs. The image must already exist on the owner node. Live changes
+require Cocoon v0.7.2 or newer for idempotent disk attach and detach. PUT and
+PATCH reject an older release, or a runtime whose version cannot be queried,
+with 503 before any intent, hold, or device change; a dev build is assumed
+current. sandboxd reads the version once, so restart it after upgrading cocoon.
+GET and release remain available.
+
+The claim journal stores confirmed applied `Volumes`, plus desired
+`VolumesWant` while it differs.
+Admission holds cover their union across daemon restart and teardown. Retry
+an interrupted operation with the same PUT target. Release cancels convergence
+and transfers holds to teardown. Capture is refused while either set is
+nonempty.
+
+A sandbox whose VMM exits while holding volumes is release-only. Release it and
+create a new sandbox. Daemon restart recovery assumes the original VMM remains
+alive and does not recreate guest processes. Unfinished changes report an
+interrupted diagnostic after restart and require a caller retry.
+
+`e2e/cmd/volumesmoke -live` (`VOLUME_LIVE=1` for `scripts/sandboxd-e2e.sh`)
+exercises GET, repeated full-set PUT, PATCH add and remove, and clearing a new
+claim.
+
 Each catalog path must name a disk image containing a mountable whole-device
-filesystem. A read-only entry's image must stay immutable: do not replace,
+filesystem. Keep catalog names bound to the same image while any claim holds
+them. Use versioned names such as `dataset-v1` and
+`dataset-v2`; sandboxd cannot detect a repointed catalog entry. A read-only
+entry's image must stay immutable: do not replace,
 truncate, or delete it while attached; publish a new catalog name or path
 instead. A missing path produces a startup warning and fails only claims that
 request it, allowing images to be distributed after sandboxd starts.
@@ -681,7 +710,8 @@ using prebuilt binaries, also set `VOLUME_SMOKE_BIN` beside `SANDBOXD_BIN`,
 
 Add `VOLUME_RW_IMAGE=/srv/datasets/scratch.img` (a second, writable image) to
 also run the writable leg: a durable write across release, second-writer
-exclusion, and a clean read-only claim afterward.
+exclusion, and a clean read-only claim afterward. `VOLUME_LIVE=1` adds the live
+volume leg on cocoon v0.7.2 or newer.
 
 ## TLS for SDK clients
 

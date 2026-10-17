@@ -2,6 +2,7 @@ package e2e
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -39,6 +40,8 @@ func newFakeEngine(dir string) *fakeEngine {
 		guestEnvs: map[string]string{},
 	}
 }
+
+func (f *fakeEngine) CheckLiveVolumeSupport(context.Context) error { return nil }
 
 func (f *fakeEngine) Clone(_ context.Context, _, name string, _ types.PoolKey) (types.VMRecord, error) {
 	return f.createRecord(name)
@@ -137,7 +140,7 @@ func (f *fakeEngine) Probe(ctx context.Context, vsockSocket string, timeout time
 }
 
 func (f *fakeEngine) DialGuestPort(context.Context, string, uint16) (net.Conn, error) {
-	return nil, fmt.Errorf("fakeEngine has no guest port")
+	return nil, errors.New("fakeEngine has no guest port")
 }
 
 func (f *fakeEngine) InstallCACert(context.Context, string, []byte) error { return nil }
@@ -163,6 +166,10 @@ func (f *fakeEngine) MountVolume(_ context.Context, _, name, mount string, rw bo
 	return nil
 }
 
+func (f *fakeEngine) MountLiveVolume(ctx context.Context, sock, name, mount string, rw bool) error {
+	return f.MountVolume(ctx, sock, name, mount, rw)
+}
+
 func (f *fakeEngine) UnmountVolume(_ context.Context, _, mount string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -174,6 +181,16 @@ func (f *fakeEngine) SyncGuest(_ context.Context, _ string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.volumeOps = append(f.volumeOps, "sync")
+	return nil
+}
+
+func (f *fakeEngine) DetachVolume(ctx context.Context, _, sock, name, mount string) error {
+	if err := f.UnmountVolume(ctx, sock, mount); err != nil {
+		return err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.volumeOps = append(f.volumeOps, "detach:"+name)
 	return nil
 }
 

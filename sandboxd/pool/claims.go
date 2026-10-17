@@ -39,6 +39,7 @@ type claimDTO struct {
 	Metadata       types.Metadata     `json:"metadata,omitempty"`
 	OnExpire       types.ExpireAction `json:"on_expire,omitempty"`
 	Volumes        []types.Volume     `json:"volumes,omitempty"`
+	VolumesWant    []types.Volume     `json:"volumes_want,omitzero"`
 	Env            types.Env          `json:"env,omitempty"`
 	VsockSocket    string             `json:"vsock_socket,omitempty"`
 	TAP            string             `json:"tap,omitempty"`
@@ -87,6 +88,11 @@ func (s *claimStore) load() (map[string]*types.Sandbox, error) {
 	claims := map[string]*types.Sandbox{}
 	if err := json.Unmarshal(raw, &claims); err != nil {
 		return nil, fmt.Errorf("parse claims: %w", err)
+	}
+	for _, sb := range claims {
+		if sb.VolumesWant == nil {
+			sb.VolumesWant = sb.Volumes
+		}
 	}
 	return claims, nil
 }
@@ -220,9 +226,17 @@ func dtoOf(sb *types.Sandbox) claimDTO {
 		Deadline: sb.Deadline, ClaimedAt: sb.ClaimedAt, LeaseSeconds: sb.LeaseSeconds, Layer: sb.Layer,
 		PolicySource: sb.PolicySource, NoEgress: sb.NoEgress,
 		Tenant: sb.Tenant, EgressClass: sb.EgressClass, ClaimRef: sb.ClaimRef, Metadata: sb.Metadata, OnExpire: sb.OnExpire,
-		Volumes: slices.Clone(sb.Volumes), Env: sb.Env, VsockSocket: sb.VsockSocket,
+		Volumes: slices.Clone(sb.Volumes), VolumesWant: volumesWantDTO(sb), Env: sb.Env, VsockSocket: sb.VsockSocket,
 		TAP: sb.TAP, HibernateSnap: sb.HibernateSnap, PendingSnap: sb.PendingSnap,
 		ArchiveCk: sb.ArchiveCk, FromCheckpoint: sb.FromCheckpoint,
 		Restarts: sb.Restarts, RestartedAt: sb.RestartedAt, Failed: sb.Failed,
 	}
+}
+
+// volumesWantDTO persists the desired set only when it differs; absent reads back as equal to Volumes.
+func volumesWantDTO(sb *types.Sandbox) []types.Volume {
+	if slices.Equal(sb.VolumesWant, sb.Volumes) {
+		return nil
+	}
+	return append([]types.Volume{}, sb.VolumesWant...)
 }

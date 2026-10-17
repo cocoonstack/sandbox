@@ -355,6 +355,16 @@ func refilledTo(t *testing.T, m *Manager, key types.PoolKey, n int) bool {
 	return warmLen(m, key) == n
 }
 
+func waitPoolSettled(t *testing.T, m *Manager, key types.PoolKey) {
+	t.Helper()
+	waitFor(t, func() bool {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		p := m.pools[key]
+		return p != nil && !p.building && p.refilling == 0
+	})
+}
+
 func warmLen(m *Manager, key types.PoolKey) int {
 	m.mu.Lock()
 	defer m.mu.Unlock()

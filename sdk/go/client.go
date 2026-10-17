@@ -12,6 +12,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -250,7 +251,7 @@ func (c *Client) ownerAt(ctx context.Context, addr, id, token string) (string, e
 
 func (c *Client) handleFrom(dialed string, cr claimResponse) *Sandbox {
 	return &Sandbox{
-		ID: cr.ID, Deadline: cr.Deadline, Volumes: cr.Volumes,
+		ID: cr.ID, Deadline: cr.Deadline, Volumes: cr.Volumes, VolumesWant: slices.Clone(cr.Volumes),
 		FromCheckpoint: cr.FromCheckpoint, TemplateDigest: cr.TemplateDigest, NetRoute: cr.NetRoute,
 		c: c, token: cr.Token, owner: cmp.Or(cr.OwnerAddr, dialed),
 	}

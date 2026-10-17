@@ -374,9 +374,25 @@ func (m *Manager) sourceSnap(ctx context.Context, sb *types.Sandbox) (string, fu
 	return snap, func() { m.dropSnap(ctx, snap) }, nil
 }
 
+func (m *Manager) captureAllowed(sb *types.Sandbox) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.claimed[sb.ID] != sb {
+		return ErrUnknownSandbox
+	}
+	if m.hasVolumeHolds(sb) {
+		return ErrVolumeCapture
+	}
+	return nil
+}
+
 // exportSource captures a claimed sandbox into exportDir and returns its snapshot, VM name and guest-env presence.
 func (m *Manager) exportSource(ctx context.Context, sb *types.Sandbox, exportDir string) (snap, vmName string, guestEnv bool, err error) {
 	sb.Transition.Lock()
+	if captureErr := m.captureAllowed(sb); captureErr != nil {
+		sb.Transition.Unlock()
+		return "", "", false, captureErr
+	}
 	m.trimForCapture(ctx, sb)
 	snap, cleanup, err := m.sourceSnap(ctx, sb)
 	if err != nil {

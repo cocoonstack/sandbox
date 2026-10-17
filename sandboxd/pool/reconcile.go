@@ -66,7 +66,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 		}
 		m.claimed[id] = sb
 		m.tenantDelta(sb.Tenant, 1)
-		m.adoptVolumes(sb.Volumes)
+		m.adoptVolumes(heldVolumes(sb))
 		owned[sb.VMName] = true
 		referenced[sb.HibernateSnap] = true
 	}

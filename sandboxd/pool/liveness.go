@@ -132,6 +132,7 @@ func (m *Manager) recoverVMM(ctx context.Context, sb *types.Sandbox) {
 	now := time.Now()
 	m.mu.Lock()
 	live := m.claimed[sb.ID] == sb && runningShaped(sb) && !m.leaseLapsed(sb, now)
+	volumes := m.hasVolumeHolds(sb)
 	m.mu.Unlock()
 	if !live {
 		return
@@ -150,7 +151,7 @@ func (m *Manager) recoverVMM(ctx context.Context, sb *types.Sandbox) {
 		sb.ExitRecorded = true
 		m.recordUsage(ctx, usageEvent{Event: "vmm_exit", ID: sb.ID, VMName: sb.VMName, Tenant: sb.Tenant})
 	}
-	reason := coldBootBlocker(sb, found)
+	reason := coldBootBlocker(sb, found, volumes)
 	if reason == "" && m.vmmRestart == types.VMMRestartNone {
 		reason = "vmm exited"
 	}
@@ -179,7 +180,7 @@ func (m *Manager) restartFailed(ctx context.Context, sb *types.Sandbox) error {
 	sb.Transition.Lock()
 	defer sb.Transition.Unlock()
 	m.mu.Lock()
-	live, failed := m.claimed[sb.ID] == sb, sb.Failed != ""
+	live, failed, volumes := m.claimed[sb.ID] == sb, sb.Failed != "", m.hasVolumeHolds(sb)
 	m.mu.Unlock()
 	switch {
 	case !live:
@@ -191,7 +192,7 @@ func (m *Manager) restartFailed(ctx context.Context, sb *types.Sandbox) error {
 	if err != nil {
 		return fmt.Errorf("wake %s: %w", sb.ID, err)
 	}
-	if reason := coldBootBlocker(sb, found); reason != "" {
+	if reason := coldBootBlocker(sb, found, volumes); reason != "" {
 		return fmt.Errorf("%w: %s", ErrFailed, reason)
 	}
 	sb.RestartLog = nil
@@ -267,14 +268,14 @@ func runningShaped(sb *types.Sandbox) bool {
 }
 
 // coldBootBlocker names why sb's VM cannot be cold-booted, "" when it can.
-func coldBootBlocker(sb *types.Sandbox, found bool) string {
+func coldBootBlocker(sb *types.Sandbox, found, volumes bool) string {
 	switch {
 	case !found:
 		return "vm record gone"
 	case sb.Key.Net == types.NetEgress:
 		// the netdev nft chain dies with the tap, so the guest would boot with an unlocked NIC
 		return "vmm exited; an egress-lane sandbox cannot cold-boot"
-	case hasAppliedVolumes(sb):
+	case volumes:
 		return "vmm exited; volume mounts do not survive a cold boot"
 	default:
 		return ""

@@ -559,6 +559,8 @@ type Sandbox struct {
 	OnExpire ExpireAction `json:"on_expire,omitempty"`
 	// Volumes records the volumes successfully applied to this claim.
 	Volumes []Volume `json:"volumes,omitempty"`
+	// VolumesWant is the durable target, including additions not yet confirmed.
+	VolumesWant []Volume `json:"volumes_want"`
 	// Env is replaced whole through SetEnv under the manager mutex; host-only values are never served back.
 	Env Env `json:"env,omitempty"`
 
@@ -597,7 +599,7 @@ type Sandbox struct {
 	// live is the env as of the last SetEnv, read by the egress proxy without the manager mutex.
 	live atomic.Pointer[envView]
 
-	// Transition serializes hibernate/wake; lock it before (never under) the manager mutex.
+	// Transition serializes captures and live volume changes; lock it before (never under) the manager mutex.
 	Transition sync.Mutex `json:"-"`
 }
 

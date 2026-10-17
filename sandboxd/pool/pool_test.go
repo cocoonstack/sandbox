@@ -153,9 +153,8 @@ func TestClaimCanceledRequestStillDestroys(t *testing.T) {
 
 func TestClaimEgressNeedsAttachment(t *testing.T) {
 	m := newTestManager(t, newFakeEngine())
-	key := types.PoolKey{Template: "rt:24.04", Net: types.NetEgress, Size: types.SizeSmall}
 
-	if _, err := claimAny(t.Context(), m, key, 0); !errors.Is(err, ErrNoEgress) {
+	if _, err := claimAny(t.Context(), m, egKey, 0); !errors.Is(err, ErrNoEgress) {
 		t.Errorf("got %v, want ErrNoEgress", err)
 	}
 }
@@ -1190,83 +1189,6 @@ func (c *closeWriteConn) CloseWrite() error {
 	return nil
 }
 
-func newTestManager(t testing.TB, eng *fakeEngine, pools ...config.PoolSpec) *Manager {
-	t.Helper()
-	return newTestManagerAt(t, eng, t.TempDir(), pools...)
-}
-
-func claimAny(ctx context.Context, m *Manager, key types.PoolKey, ttl time.Duration) (*types.Sandbox, error) {
-	sb, err := m.ClaimWarm(ctx, key, ClaimOptions{TTL: ttl})
-	if errors.Is(err, ErrNoWarm) {
-		return m.ClaimProvision(ctx, key, ClaimOptions{TTL: ttl})
-	}
-	return sb, err
-}
-
-func mustClaim(t *testing.T, m *Manager, key types.PoolKey) *types.Sandbox {
-	t.Helper()
-	sb, err := claimAny(t.Context(), m, key, 0)
-	if err != nil {
-		t.Fatalf("Claim: %v", err)
-	}
-	return sb
-}
-
-func newTestManagerAt(t testing.TB, eng *fakeEngine, dataDir string, pools ...config.PoolSpec) *Manager {
-	t.Helper()
-	m, err := NewManager(t.Context(), &config.Config{DataDir: dataDir, Pools: pools}, eng, testSecrets(t))
-	if err != nil {
-		t.Fatalf("setup manager: %v", err)
-	}
-	return m
-}
-
-func testSecrets(t testing.TB, specs ...egress.SecretSpec) *egress.SecretStore {
-	t.Helper()
-	s, err := egress.NewSecretStore(specs)
-	if err != nil {
-		t.Fatalf("secrets: %v", err)
-	}
-	return s
-}
-
-func lockCount(m *Manager) int {
-	m.recLocksMu.Lock()
-	defer m.recLocksMu.Unlock()
-	return len(m.recLocks)
-}
-
-func hasRecLock(m *Manager, id string) bool {
-	m.recLocksMu.Lock()
-	defer m.recLocksMu.Unlock()
-	_, ok := m.recLocks[id]
-	return ok
-}
-
-func waitFor(t *testing.T, cond func() bool) {
-	t.Helper()
-	deadline := time.Now().Add(3 * time.Second)
-	for time.Now().Before(deadline) {
-		if cond() {
-			return
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-	t.Fatal("condition not met within 3s")
-}
-
-func seedGolden(t *testing.T, m *Manager, imageID string) string {
-	t.Helper()
-	g := filepath.Join(m.goldensDir(), testKey.Hash())
-	if err := os.MkdirAll(g, 0o750); err != nil {
-		t.Fatalf("seed golden: %v", err)
-	}
-	if err := os.WriteFile(g+goldenStampSuffix, []byte(m.goldenStamp(m.view.Load(), testKey, imageID)), 0o644); err != nil {
-		t.Fatalf("seed golden stamp: %v", err)
-	}
-	return g
-}
-
 type fakeEngine struct {
 	mu              sync.Mutex
 	vms             map[string]string
@@ -1307,6 +1229,8 @@ type fakeEngine struct {
 	diskAttachCancel                  context.CancelFunc
 	mountVolumeErr                    error
 	unmountVolumeErr                  error
+	detachVolumeErr                   error
+	liveVolumeHook                    func(string) error
 	stopped                           map[string]bool
 	creating                          map[string]bool
 	staleOutcome                      engine.StaleCreateOutcome
@@ -1315,14 +1239,14 @@ type fakeEngine struct {
 	vsockLateN                        int
 	sockRoot                          string
 
-	cloneErr, runColdErr, probeErr, hibernateErr, restoreErr, snapSaveErr, snapListErr, startErr error
-	removeErrFor                                                                                 string
-	cloneFailNth                                                                                 int
-	hibernateErrCompletes                                                                        bool
-	tap                                                                                          string
-	listCount                                                                                    int
-	inspects                                                                                     int
-	vmEvents                                                                                     chan fakeVMEvent
+	cloneErr, runColdErr, probeErr, hibernateErr, restoreErr, snapListErr, startErr error
+	removeErrFor                                                                    string
+	cloneFailNth                                                                    int
+	hibernateErrCompletes                                                           bool
+	tap                                                                             string
+	listCount                                                                       int
+	inspects                                                                        int
+	vmEvents                                                                        chan fakeVMEvent
 
 	attachRendezvous *sync.WaitGroup
 
@@ -1443,7 +1367,7 @@ func (f *fakeEngine) SnapshotSave(_ context.Context, _, snapName string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.snapSaves = append(f.snapSaves, snapName)
-	return f.snapSaveErr
+	return nil
 }
 
 func (f *fakeEngine) SnapshotExport(_ context.Context, snapName, toDir string) error {
@@ -1618,7 +1542,7 @@ func (f *fakeEngine) DialGuestPort(context.Context, string, uint16) (net.Conn, e
 	if f.guestDial != nil {
 		return f.guestDial()
 	}
-	return nil, fmt.Errorf("fakeEngine has no guest port")
+	return nil, errors.New("fakeEngine has no guest port")
 }
 
 func (f *fakeEngine) InstallCACert(_ context.Context, vsockSocket string, _ []byte) error {
@@ -1654,7 +1578,17 @@ func (f *fakeEngine) TrimCow(_ context.Context, sock string) error {
 	return f.trimErr
 }
 
-func (f *fakeEngine) DiskAttach(_ context.Context, _ string, spec engine.VolumeSpec) error {
+func (f *fakeEngine) CheckLiveVolumeSupport(context.Context) error { return nil }
+
+func (f *fakeEngine) DiskAttach(ctx context.Context, _ string, spec engine.VolumeSpec) error {
+	if f.liveVolumeHook != nil {
+		if err := f.liveVolumeHook("attach"); err != nil {
+			return err
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	f.mu.Lock()
 	f.volumeSpecs = append(f.volumeSpecs, spec)
 	f.volumeOps = append(f.volumeOps, "attach:"+spec.Name)
@@ -1684,6 +1618,30 @@ func (f *fakeEngine) MountVolume(_ context.Context, _, name, mount string, rw bo
 	f.volumeMounts = append(f.volumeMounts, types.Volume{Name: name, Mount: mount, Mode: mode})
 	f.volumeOps = append(f.volumeOps, "mount:"+name+":"+mount)
 	return f.mountVolumeErr
+}
+
+func (f *fakeEngine) MountLiveVolume(ctx context.Context, sock, name, mount string, rw bool) error {
+	return f.MountVolume(ctx, sock, name, mount, rw)
+}
+
+func (f *fakeEngine) DetachVolume(ctx context.Context, _, sock, name, mount string) error {
+	if f.liveVolumeHook != nil {
+		if err := f.liveVolumeHook("detach"); err != nil {
+			return err
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if mount != "" {
+		if err := f.UnmountVolume(ctx, sock, mount); err != nil {
+			return err
+		}
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.volumeOps = append(f.volumeOps, "detach:"+name)
+	return f.detachVolumeErr
 }
 
 func (f *fakeEngine) UnmountVolume(_ context.Context, _, mount string) error {
@@ -1862,4 +1820,81 @@ func (f *fakeEngine) snapRemoved(name string) bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return slices.Contains(f.snapRemoves, name)
+}
+
+func newTestManager(t testing.TB, eng *fakeEngine, pools ...config.PoolSpec) *Manager {
+	t.Helper()
+	return newTestManagerAt(t, eng, t.TempDir(), pools...)
+}
+
+func claimAny(ctx context.Context, m *Manager, key types.PoolKey, ttl time.Duration) (*types.Sandbox, error) {
+	sb, err := m.ClaimWarm(ctx, key, ClaimOptions{TTL: ttl})
+	if errors.Is(err, ErrNoWarm) {
+		return m.ClaimProvision(ctx, key, ClaimOptions{TTL: ttl})
+	}
+	return sb, err
+}
+
+func mustClaim(t *testing.T, m *Manager, key types.PoolKey) *types.Sandbox {
+	t.Helper()
+	sb, err := claimAny(t.Context(), m, key, 0)
+	if err != nil {
+		t.Fatalf("Claim: %v", err)
+	}
+	return sb
+}
+
+func newTestManagerAt(t testing.TB, eng *fakeEngine, dataDir string, pools ...config.PoolSpec) *Manager {
+	t.Helper()
+	m, err := NewManager(t.Context(), &config.Config{DataDir: dataDir, Pools: pools}, eng, testSecrets(t))
+	if err != nil {
+		t.Fatalf("setup manager: %v", err)
+	}
+	return m
+}
+
+func testSecrets(t testing.TB, specs ...egress.SecretSpec) *egress.SecretStore {
+	t.Helper()
+	s, err := egress.NewSecretStore(specs)
+	if err != nil {
+		t.Fatalf("secrets: %v", err)
+	}
+	return s
+}
+
+func lockCount(m *Manager) int {
+	m.recLocksMu.Lock()
+	defer m.recLocksMu.Unlock()
+	return len(m.recLocks)
+}
+
+func hasRecLock(m *Manager, id string) bool {
+	m.recLocksMu.Lock()
+	defer m.recLocksMu.Unlock()
+	_, ok := m.recLocks[id]
+	return ok
+}
+
+func waitFor(t *testing.T, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("condition not met within 3s")
+}
+
+func seedGolden(t *testing.T, m *Manager, imageID string) string {
+	t.Helper()
+	g := filepath.Join(m.goldensDir(), testKey.Hash())
+	if err := os.MkdirAll(g, 0o750); err != nil {
+		t.Fatalf("seed golden: %v", err)
+	}
+	if err := os.WriteFile(g+goldenStampSuffix, []byte(m.goldenStamp(m.view.Load(), testKey, imageID)), 0o644); err != nil {
+		t.Fatalf("seed golden stamp: %v", err)
+	}
+	return g
 }

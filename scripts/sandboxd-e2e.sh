@@ -16,6 +16,8 @@ VOLUME_DIRECTIO=${VOLUME_DIRECTIO:-off}
 # VOLUME_RW_IMAGE adds the writable leg; its own image is mutated by design, so it must not be VOLUME_IMAGE.
 VOLUME_RW_IMAGE=${VOLUME_RW_IMAGE:-}
 VOLUME_RW_NAME=${VOLUME_RW_NAME:-e2e-scratch}
+# VOLUME_LIVE=1 adds the live volume leg, which needs cocoon v0.7.2.
+VOLUME_LIVE=${VOLUME_LIVE:-}
 
 VOLUME_CHECKSUM=""
 if [[ -n $VOLUME_IMAGE ]]; then
@@ -192,7 +194,7 @@ if [[ -n $VOLUME_IMAGE ]]; then
   done
   warm_before=$(warm_claims)
   "$DATA/volumesmoke" -addr "$ADDR" -token "$TOKEN" -template "$TEMPLATE" \
-    -volume "$VOLUME_NAME" -probe "$VOLUME_PROBE" ${VOLUME_RW_IMAGE:+-rw-volume "$VOLUME_RW_NAME"}
+    -volume "$VOLUME_NAME" -probe "$VOLUME_PROBE" ${VOLUME_RW_IMAGE:+-rw-volume "$VOLUME_RW_NAME"} ${VOLUME_LIVE:+-live}
   warm_after=$(warm_claims)
   [[ $warm_after -ge $((warm_before + 2)) ]] || {
     echo "volume claims did not consume the two ready warm VMs: before=$warm_before after=$warm_after"
