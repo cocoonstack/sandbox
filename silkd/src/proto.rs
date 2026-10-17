@@ -18,8 +18,9 @@ use tokio::io::{
 
 /// Mirrors cocoon-agent's frame cap so a malformed peer can't OOM us.
 pub const MAX_FRAME: usize = 8 * 1024 * 1024;
+pub const PROTO_VERSION: u32 = 1;
 /// 2 serves RPCs back to back on one connection; 1 closed after one.
-pub const PROTO_VERSION: u32 = 2;
+pub const KEEP_ALIVE_PROTO: u32 = 2;
 
 /// Chunk size for streaming a file back over `fs.read`.
 pub const READ_CHUNK: usize = 32 * 1024;
@@ -856,6 +857,12 @@ mod tests {
             seen, 61,
             "fixture corpus: adding a verb means adding its fixture"
         );
+    }
+
+    #[test]
+    fn data_frame_head_carries_the_proto_version() {
+        let head = format!("{{\"v\":{PROTO_VERSION},");
+        assert!(DATA_FRAME_HEAD.starts_with(head.as_bytes()));
     }
 
     #[tokio::test]
