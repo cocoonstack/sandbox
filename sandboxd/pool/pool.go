@@ -540,7 +540,9 @@ func (m *Manager) Run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-refill.C:
-			m.out.RefreshSelf()
+			if m.view.Load().out.Guarded() {
+				m.out.RefreshSelf()
+			}
 			m.checkDisk(ctx)
 			m.refillOnce(ctx)
 		case <-m.refillKick:
