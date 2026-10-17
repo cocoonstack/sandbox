@@ -132,7 +132,20 @@ func (m *Manager) Release(ctx context.Context, id string, cred Cred) error {
 	if !ok {
 		return ErrUnknownSandbox
 	}
-	return m.releaseResolved(ctx, id, sb)
+	if m.archives == nil {
+		return m.releaseResolved(ctx, id, sb)
+	}
+	sb.Transition.Lock()
+	defer sb.Transition.Unlock()
+	consumed, err := m.consumeArchive(ctx, sb)
+	if err != nil {
+		return err
+	}
+	if err = m.releaseResolved(ctx, id, sb); err != nil {
+		return err
+	}
+	m.dropTombstone(context.WithoutCancel(ctx), id, consumed)
+	return nil
 }
 
 // ClaimDeadline authorizes a sandbox by token and returns its lease deadline.
@@ -514,12 +527,18 @@ func (m *Manager) reapOnce(ctx context.Context) {
 	m.mu.Lock()
 	var expired []victim
 	var dropped, purges []string
+	var unrows []*types.Sandbox
 	for id, sb := range m.claimed {
 		// a zero deadline means no expiry (an archived claim kept forever).
 		if sb.Deadline.IsZero() || !now.After(sb.Deadline) {
 			continue
 		}
 		switch {
+		case m.archiveRowed(sb):
+			if _, busy := m.archiving[id]; !busy {
+				m.archiving[id] = struct{}{}
+				unrows = append(unrows, sb)
+			}
 		case sb.ArchiveCk != "":
 			expired = append(expired, victim{action: reapPurge, id: id, ck: sb.ArchiveCk, tenant: sb.Tenant, sb: sb})
 			purges = append(purges, sb.ArchiveCk)
@@ -545,6 +564,9 @@ func (m *Manager) reapOnce(ctx context.Context) {
 		m.store.del(dropped...)
 	}
 	m.mu.Unlock()
+	if len(unrows) > 0 {
+		m.runBounded(ctx, len(unrows), func(ctx context.Context, i int) { m.unrowExpired(ctx, unrows[i]) })
+	}
 	if len(expired) == 0 {
 		return
 	}

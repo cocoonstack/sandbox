@@ -1864,6 +1864,40 @@ func TestOwnerEndpoint(t *testing.T) {
 	}
 }
 
+func TestOwnerEndpointAdoptsAnArchivedClaimItDoesNotHold(t *testing.T) {
+	var adoptErr error
+	mgr := &fakeManager{
+		socket: func(string, string) (string, error) { return "", pool.ErrUnknownSandbox },
+		adopt: func(id, token string) (bool, error) {
+			return id == "sb_1" && token == "good", adoptErr
+		},
+	}
+	ts := newMeshTestServer(t, "", mgr, nil, nil)
+
+	resp := doReq(t, http.MethodGet, ts.URL+"/v1/sandboxes/sb_1/owner", "good", "")
+	defer resp.Body.Close()
+	var body struct {
+		OwnerAddr string `json:"owner_addr"`
+	}
+	_ = json.UnmarshalRead(resp.Body, &body)
+	if resp.StatusCode != http.StatusOK || body.OwnerAddr != "node-a:7777" {
+		t.Errorf("adopted: status %d owner %q, want 200 node-a:7777", resp.StatusCode, body.OwnerAddr)
+	}
+
+	resp2 := doReq(t, http.MethodGet, ts.URL+"/v1/sandboxes/sb_1/owner", "wrong", "")
+	defer resp2.Body.Close()
+	if resp2.StatusCode != http.StatusNotFound {
+		t.Errorf("not adopted: status %d, want 404", resp2.StatusCode)
+	}
+
+	adoptErr = fmt.Errorf("adopt sb_1: %w", pool.ErrArchiveStoreDown)
+	resp3 := doReq(t, http.MethodGet, ts.URL+"/v1/sandboxes/sb_2/owner", "good", "")
+	defer resp3.Body.Close()
+	if resp3.StatusCode != http.StatusServiceUnavailable {
+		t.Errorf("registry down: status %d, want 503", resp3.StatusCode)
+	}
+}
+
 func TestPreviewHandlerZeroDeadlineMintsLiveToken(t *testing.T) {
 	mgr := &fakeManager{claimDeadline: func(string, string) (time.Time, error) {
 		return time.Time{}, nil
@@ -2447,6 +2481,7 @@ type fakeManager struct {
 	release              sandboxVerbFunc
 	releaseOp            idActionFunc
 	socket               func(id, token string) (string, error)
+	adopt                func(id, token string) (bool, error)
 	dialPort             func(id, token string, port uint16) (net.Conn, error)
 	hibernate            sandboxVerbFunc
 	wake                 sandboxVerbFunc
@@ -2552,6 +2587,13 @@ func (f *fakeManager) AgentSocket(id, token string) (string, error) {
 		return "/v/sock", nil
 	}
 	return f.socket(id, token)
+}
+
+func (f *fakeManager) AdoptArchived(_ context.Context, id, token string) (bool, error) {
+	if f.adopt == nil {
+		return false, nil
+	}
+	return f.adopt(id, token)
 }
 
 func (f *fakeManager) WakeAgentSocket(_ context.Context, id, token string) (string, func(), error) {

@@ -12,6 +12,7 @@ import (
 
 	"github.com/projecteru2/core/log"
 
+	"github.com/cocoonstack/sandbox/sandboxd/archives"
 	"github.com/cocoonstack/sandbox/sandboxd/engine"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 	"github.com/cocoonstack/sandbox/sandboxd/utils"
@@ -23,6 +24,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	rows, fenced := m.fenceArchived(ctx, claims)
 	vms, err := m.eng.List(ctx)
 	if err != nil {
 		return fmt.Errorf("list vms: %w", err)
@@ -101,7 +103,9 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 	// a crash mid-export leaves a fork-* staging dir nothing in this life reuses
 	_ = utils.RemoveDirEntries(m.dataDir, func(name string) bool { return strings.HasPrefix(name, "fork-") })
 
-	m.reclaimOrphanArchiveCks(ctx, claims)
+	if fenced {
+		m.reclaimOrphanArchiveCks(ctx, claims, rows)
+	}
 	m.retryArchiveDeletes(ctx)
 	removed := m.sweepStaleVMs(ctx, live, owned)
 
@@ -285,7 +289,7 @@ func (m *Manager) readoptEgressTap(sb *types.Sandbox, live map[string]types.VMRe
 }
 
 // reclaimOrphanArchiveCks reaps archives that crashed between publish and journal commit.
-func (m *Manager) reclaimOrphanArchiveCks(ctx context.Context, claims map[string]*types.Sandbox) {
+func (m *Manager) reclaimOrphanArchiveCks(ctx context.Context, claims map[string]*types.Sandbox, rows map[string]archives.Record) {
 	logger := log.WithFunc("pool.reclaimOrphanArchiveCks")
 	metas, err := m.ckpts.Metas(ctx)
 	if err != nil {
@@ -298,7 +302,7 @@ func (m *Manager) reclaimOrphanArchiveCks(ctx context.Context, claims map[string
 			continue
 		}
 		orig, mine := claims[ckpt.SandboxID]
-		if !mine || orig.ArchiveCk == ckpt.ID {
+		if !mine || orig.ArchiveCk == ckpt.ID || rows[ckpt.SandboxID].Checkpoint == ckpt.ID {
 			continue
 		}
 		if err := m.deleteArchiveCk(ctx, ckpt.ID); err != nil {

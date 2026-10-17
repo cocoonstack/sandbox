@@ -307,6 +307,39 @@ func TestLoadMetaStore(t *testing.T) {
 	}
 }
 
+func TestLoadArchiveFailover(t *testing.T) {
+	t.Setenv("SANDBOX_TEST_DSN", "postgres://sandboxd@db/sandboxd")
+	parts := map[string]string{
+		"meta_store":       `"meta_store":{"kind":"pg","dsn_env":"SANDBOX_TEST_DSN","cell":"c1"}`,
+		"checkpoint_store": `"checkpoint_store":{"kind":"s3","s3":{"bucket":"b"}}`,
+		"mesh":             `"mesh":{"bind":"node1:7946"}`,
+	}
+	body := func(skip string) string {
+		b := `{"api_token":"r","advertise_addr":"node1:7777","archive_failover":true,"pools":[]`
+		for name, part := range parts {
+			if name != skip {
+				b += "," + part
+			}
+		}
+		return b + "}"
+	}
+	cfg, err := Load(writeConfig(t, body("")))
+	if err != nil || !cfg.ArchiveFailover || cfg.Mesh.ID() != "node1:7946" {
+		t.Fatalf("Load: %+v %v, want failover on with the bind as node id", cfg, err)
+	}
+	for name := range parts {
+		if _, err := Load(writeConfig(t, body(name))); err == nil || !strings.Contains(err.Error(), "archive_failover requires") {
+			t.Errorf("archive_failover without %s: %v, want a refusal", name, err)
+		}
+	}
+	if _, err := Load(writeConfig(t, strings.Replace(body(""), `"kind":"s3","s3":{"bucket":"b"}`, `"kind":"dir"`, 1))); err == nil || !strings.Contains(err.Error(), "archive_failover requires") {
+		t.Errorf("archive_failover on a dir checkpoint_store: %v, want a refusal", err)
+	}
+	if _, err := Load(writeConfig(t, strings.Replace(body(""), `,"cell":"c1"`, "", 1))); err == nil || !strings.Contains(err.Error(), "archive_failover requires") {
+		t.Errorf("archive_failover without meta_store.cell: %v, want a refusal", err)
+	}
+}
+
 func TestLoadEgressUpstream(t *testing.T) {
 	t.Setenv("SANDBOX_TEST_RES", "http://user:pw@res.example:3128")
 	t.Setenv("SANDBOX_TEST_DC", "socks5://10.1.0.5:1080")

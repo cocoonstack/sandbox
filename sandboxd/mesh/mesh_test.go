@@ -119,6 +119,21 @@ func TestForgottenNodeStaysGoneUntilItRejoins(t *testing.T) {
 	}
 }
 
+func TestAliveFollowsMembership(t *testing.T) {
+	m := newTestMesh(t, "a")
+	if m.Alive("b") {
+		t.Fatal("a node never admitted is alive")
+	}
+	m.admit("b")
+	if !m.Alive("b") {
+		t.Error("an admitted node is not alive")
+	}
+	m.forget("b")
+	if m.Alive("b") {
+		t.Error("a forgotten node is still alive")
+	}
+}
+
 func TestCandidatesPowerOfTwo(t *testing.T) {
 	m := newTestMesh(t, "a")
 	mergeStates(t, m, []NodeState{
