@@ -12,7 +12,8 @@ import (
 func TestDiskUnderReserveRefusesClaimsAndWakesUntilItRecovers(t *testing.T) {
 	eng := newFakeEngine()
 	dir := t.TempDir()
-	m, err := NewManager(t.Context(), &config.Config{DataDir: dir, DiskReserve: &config.DiskReserve{Free: "1000P"}, Pools: []config.PoolSpec{{PoolKey: testKey}}}, eng, testSecrets(t))
+	cfg := &config.Config{DataDir: dir, DiskReserve: &config.DiskReserve{Free: "1000P"}, Pools: []config.PoolSpec{{PoolKey: testKey}}}
+	m, err := NewManager(t.Context(), cfg, eng, testSecrets(t), testBackends(t, cfg))
 	if err != nil {
 		t.Fatalf("setup manager: %v", err)
 	}
@@ -44,7 +45,8 @@ func TestDiskUnderReserveRefusesClaimsAndWakesUntilItRecovers(t *testing.T) {
 }
 
 func TestDiskUnderReserveAdvertisesNoWarm(t *testing.T) {
-	m, err := NewManager(t.Context(), &config.Config{DataDir: t.TempDir(), DiskReserve: &config.DiskReserve{Free: "1000P"}, Pools: []config.PoolSpec{{PoolKey: testKey}}}, newFakeEngine(), testSecrets(t))
+	cfg := &config.Config{DataDir: t.TempDir(), DiskReserve: &config.DiskReserve{Free: "1000P"}, Pools: []config.PoolSpec{{PoolKey: testKey}}}
+	m, err := NewManager(t.Context(), cfg, newFakeEngine(), testSecrets(t), testBackends(t, cfg))
 	if err != nil {
 		t.Fatalf("setup manager: %v", err)
 	}
@@ -61,7 +63,8 @@ func TestDiskUnderReserveAdvertisesNoWarm(t *testing.T) {
 
 func TestDiskUnderReserveHoldsHibernatesAndCaptures(t *testing.T) {
 	dir := t.TempDir()
-	m, err := NewManager(t.Context(), &config.Config{DataDir: dir, DiskReserve: &config.DiskReserve{Free: "1000P"}, Pools: []config.PoolSpec{{PoolKey: testKey}}}, newFakeEngine(), testSecrets(t))
+	cfg := &config.Config{DataDir: dir, DiskReserve: &config.DiskReserve{Free: "1000P"}, Pools: []config.PoolSpec{{PoolKey: testKey}}}
+	m, err := NewManager(t.Context(), cfg, newFakeEngine(), testSecrets(t), testBackends(t, cfg))
 	if err != nil {
 		t.Fatalf("setup manager: %v", err)
 	}
@@ -91,7 +94,8 @@ func TestDiskUnderReserveHoldsHibernatesAndCaptures(t *testing.T) {
 
 func TestAFailedStatfsKeepsTheDiskLowState(t *testing.T) {
 	dir := t.TempDir()
-	m, err := NewManager(t.Context(), &config.Config{DataDir: dir, DiskReserve: &config.DiskReserve{Free: "1000P"}, Pools: []config.PoolSpec{{PoolKey: testKey}}}, newFakeEngine(), testSecrets(t))
+	cfg := &config.Config{DataDir: dir, DiskReserve: &config.DiskReserve{Free: "1000P"}, Pools: []config.PoolSpec{{PoolKey: testKey}}}
+	m, err := NewManager(t.Context(), cfg, newFakeEngine(), testSecrets(t), testBackends(t, cfg))
 	if err != nil {
 		t.Fatalf("setup manager: %v", err)
 	}

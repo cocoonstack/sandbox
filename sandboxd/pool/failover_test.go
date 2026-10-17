@@ -502,7 +502,8 @@ func TestFailoverWakeRollbackRecoversOnTheNextWake(t *testing.T) {
 func TestFailoverSweepRunsOnTheHourlyStoreTicker(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		c := newFailoverCluster(t)
-		m, err := NewManager(t.Context(), &config.Config{DataDir: t.TempDir(), CheckpointDir: c.ckDir}, newFakeEngine(), testSecrets(t))
+		cfg := &config.Config{DataDir: t.TempDir(), CheckpointDir: c.ckDir}
+		m, err := NewManager(t.Context(), cfg, newFakeEngine(), testSecrets(t), testBackends(t, cfg))
 		if err != nil {
 			t.Fatalf("manager: %v", err)
 		}
@@ -1842,13 +1843,16 @@ func (c *failoverCluster) restart(t *testing.T, old *Manager) *Manager {
 
 func (c *failoverCluster) nodeOn(t *testing.T, eng *fakeEngine, name, dataDir string, deleteAfter int) *Manager {
 	t.Helper()
-	m, err := NewManager(t.Context(), &config.Config{
+	cfg := &config.Config{
 		APIToken: "root", DataDir: dataDir, CheckpointDir: c.ckDir, Pools: []config.PoolSpec{archivePool(deleteAfter)},
-	}, eng, testSecrets(t))
+		Mesh: &config.MeshConfig{NodeID: name},
+	}
+	b := testBackends(t, cfg)
+	b.Archives = c.reg
+	m, err := NewManager(t.Context(), cfg, eng, testSecrets(t), b)
 	if err != nil {
 		t.Fatalf("manager %s: %v", name, err)
 	}
-	m.archives, m.nodeID = c.reg, name
 	m.WithArchiveOwners(func(node string) bool { return !c.down[node] })
 	return m
 }

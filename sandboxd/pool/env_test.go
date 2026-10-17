@@ -650,7 +650,7 @@ func envManager(t *testing.T, eng *fakeEngine, dataDir string, pools ...config.P
 		egress.SecretSpec{Name: "gw", Header: "Authorization"},
 	)
 	cfg := &config.Config{DataDir: dataDir, APIToken: "root", Pools: pools}
-	m, err := NewManager(t.Context(), cfg, eng, secrets)
+	m, err := NewManager(t.Context(), cfg, eng, secrets, testBackends(t, cfg))
 	if err != nil {
 		t.Fatalf("manager: %v", err)
 	}

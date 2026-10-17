@@ -1,6 +1,7 @@
 package pool
 
 import (
+	"cmp"
 	"context"
 	"encoding/hex"
 	"errors"
@@ -21,6 +22,9 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/config"
 	"github.com/cocoonstack/sandbox/sandboxd/egress"
 	"github.com/cocoonstack/sandbox/sandboxd/engine"
+	"github.com/cocoonstack/sandbox/sandboxd/store"
+	"github.com/cocoonstack/sandbox/sandboxd/store/dir"
+	"github.com/cocoonstack/sandbox/sandboxd/tenants/file"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
@@ -736,7 +740,8 @@ func TestDirectClaimSkipsProbeGate(t *testing.T) {
 }
 
 func TestRefillBudgetFollowsConfig(t *testing.T) {
-	m, err := NewManager(t.Context(), &config.Config{DataDir: t.TempDir(), RefillConcurrency: 2}, newFakeEngine(), testSecrets(t))
+	cfg := &config.Config{DataDir: t.TempDir(), RefillConcurrency: 2}
+	m, err := NewManager(t.Context(), cfg, newFakeEngine(), testSecrets(t), testBackends(t, cfg))
 	if err != nil {
 		t.Fatalf("NewManager: %v", err)
 	}
@@ -1850,11 +1855,34 @@ func mustClaim(t *testing.T, m *Manager, key types.PoolKey) *types.Sandbox {
 
 func newTestManagerAt(t testing.TB, eng *fakeEngine, dataDir string, pools ...config.PoolSpec) *Manager {
 	t.Helper()
-	m, err := NewManager(t.Context(), &config.Config{DataDir: dataDir, Pools: pools}, eng, testSecrets(t))
+	cfg := &config.Config{DataDir: dataDir, Pools: pools}
+	m, err := NewManager(t.Context(), cfg, eng, testSecrets(t), testBackends(t, cfg))
 	if err != nil {
 		t.Fatalf("setup manager: %v", err)
 	}
 	return m
+}
+
+func testBackends(t testing.TB, cfg *config.Config) Backends {
+	t.Helper()
+	root := cmp.Or(cfg.CheckpointDir, filepath.Join(cfg.DataDir, "checkpoints"))
+	ckpts, err := dir.New(root, store.CheckpointIDRe)
+	if err != nil {
+		t.Fatalf("checkpoint store: %v", err)
+	}
+	tpls, err := dir.New(root, store.TemplateIDRe)
+	if err != nil {
+		t.Fatalf("template store: %v", err)
+	}
+	var rootSum string
+	if cfg.APIToken != "" {
+		rootSum = config.TokenSHA256(cfg.APIToken)
+	}
+	src, err := file.Open(t.Context(), cfg.DataDir, rootSum)
+	if err != nil {
+		t.Fatalf("tenant set: %v", err)
+	}
+	return Backends{Checkpoints: ckpts, Templates: tpls, Tenants: src}
 }
 
 func testSecrets(t testing.TB, specs ...egress.SecretSpec) *egress.SecretStore {

@@ -13,7 +13,6 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -24,17 +23,13 @@ import (
 	"golang.org/x/sync/singleflight"
 
 	"github.com/cocoonstack/sandbox/sandboxd/archives"
-	archivespg "github.com/cocoonstack/sandbox/sandboxd/archives/pg"
 	"github.com/cocoonstack/sandbox/sandboxd/config"
 	"github.com/cocoonstack/sandbox/sandboxd/egress"
 	"github.com/cocoonstack/sandbox/sandboxd/engine"
 	"github.com/cocoonstack/sandbox/sandboxd/outbound"
 	"github.com/cocoonstack/sandbox/sandboxd/poolset"
-	poolpg "github.com/cocoonstack/sandbox/sandboxd/poolset/pg"
 	"github.com/cocoonstack/sandbox/sandboxd/store"
-	"github.com/cocoonstack/sandbox/sandboxd/store/dir"
 	"github.com/cocoonstack/sandbox/sandboxd/store/peer"
-	"github.com/cocoonstack/sandbox/sandboxd/store/s3"
 	"github.com/cocoonstack/sandbox/sandboxd/tenants"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
@@ -290,6 +285,15 @@ func (p *pool) trimWarm(target int) []string {
 	return trim
 }
 
+type Backends struct {
+	Checkpoints       store.Store
+	Templates         store.Store
+	SharedCheckpoints bool
+	Tenants           tenants.Source
+	CellPools         poolset.Shared
+	Archives          archives.Registry
+}
+
 // PeerDeleteFunc broadcasts a checkpoint delete to every peer.
 type PeerDeleteFunc func(ctx context.Context, id string)
 
@@ -402,8 +406,8 @@ type Manager struct {
 	refillKick chan struct{}
 }
 
-// NewManager builds a manager from the node config; ctx bounds backend construction.
-func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *egress.SecretStore) (*Manager, error) {
+// NewManager builds a manager from the node config over backends the caller selected from it.
+func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *egress.SecretStore, b Backends) (*Manager, error) {
 	refill := cmp.Or(cfg.RefillConcurrency, defaultRefill)
 	m := &Manager{
 		eng:             eng,
@@ -419,6 +423,12 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 		volumeRuns:      map[*types.Sandbox]*volumeRun{},
 		volumeErrors:    map[*types.Sandbox]map[string]string{},
 		poolStore:       newPoolStore(cfg.DataDir),
+		poolShared:      b.CellPools,
+		archives:        b.Archives,
+		tenants:         b.Tenants,
+		ckpts:           b.Checkpoints,
+		ckptsShared:     b.SharedCheckpoints,
+		tpls:            b.Templates,
 		pools:           make(map[types.PoolKey]*pool, len(cfg.Pools)),
 		claimed:         map[string]*types.Sandbox{},
 		pendingRemovals: map[string]pendingRemoval{},
@@ -444,15 +454,6 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 	}
 	if err := os.MkdirAll(m.goldensDir(), 0o750); err != nil {
 		return nil, fmt.Errorf("create goldens dir: %w", err)
-	}
-	// Checkpoints and templates are two id-namespaced views (ck_*, tp_*) over one store root
-	var err error
-	if m.ckpts, err = newStoreView(ctx, cfg, "checkpoint-staging", store.CheckpointIDRe); err != nil {
-		return nil, err
-	}
-	m.ckptsShared = cfg.CheckpointStore != nil && cfg.CheckpointStore.Kind == "s3"
-	if m.tpls, err = newStoreView(ctx, cfg, "template-staging", store.TemplateIDRe); err != nil {
-		return nil, err
 	}
 	m.ckptTTL = time.Duration(cfg.CheckpointTTLHours) * time.Hour
 	m.tplSet = map[string]TemplateInfo{}
@@ -481,8 +482,8 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 		m.audit = audit
 	}
 	m.maxClaims = cfg.MaxClaims
-	if err := m.openTenants(ctx, cfg); err != nil {
-		return nil, err
+	if cfg.APIToken != "" {
+		m.rootSum = config.TokenSHA256(cfg.APIToken)
 	}
 	m.cfg = cfg
 	m.view.Store(newConfigView(cfg, secrets))
@@ -500,19 +501,8 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 	}
 	m.out = outbound.New(m.outboundOptions(ca))
 	m.configSeedHash = poolSeedHash(cfg.Pools)
-	if ms := cfg.MetaStore; ms != nil && ms.Cell != "" {
-		shared, err := poolpg.Open(ctx, os.Getenv(ms.DSNEnv), ms.Cell)
-		if err != nil {
-			return nil, err
-		}
-		m.poolShared = shared
-	}
-	if cfg.ArchiveFailover {
-		reg, err := archivespg.Open(ctx, os.Getenv(cfg.MetaStore.DSNEnv), cfg.MetaStore.Cell)
-		if err != nil {
-			return nil, err
-		}
-		m.archives, m.nodeID = reg, cfg.Mesh.ID()
+	if m.archives != nil {
+		m.nodeID = cfg.Mesh.ID()
 	}
 	if err := m.adoptPools(ctx); err != nil {
 		return nil, err
@@ -668,11 +658,11 @@ func (m *Manager) WarmCounts() map[string]int {
 }
 
 // WithPeerHeal installs the healer ClaimCheckpointHeal pulls through.
-func (m *Manager) WithPeerHeal(enabled bool, owners peer.Owners, token string) {
+func (m *Manager) WithPeerHeal(enabled bool, owners peer.Owners, puller peer.Puller) {
 	if !enabled || owners == nil || m.ckptsShared {
 		return
 	}
-	m.healer = peer.NewHealer(owners, &peer.HTTPPuller{Token: token})
+	m.healer = peer.NewHealer(owners, puller)
 }
 
 // WithPeerDelete wires the broadcast DeleteCheckpoint makes after a local delete.
@@ -730,14 +720,6 @@ func summarize(sb *types.Sandbox) SandboxSummary {
 		CPUCount: spec.CPU, MemTotalBytes: spec.MemoryBytes,
 		Volumes: slices.Clone(sb.Volumes), VolumesWant: slices.Clone(sb.VolumesWant),
 	}
-}
-
-// The dir default lives here, not config.applyDefaults: tests build Config directly
-func newStoreView(ctx context.Context, cfg *config.Config, staging string, idRe *regexp.Regexp) (store.Store, error) {
-	if cs := cfg.CheckpointStore; cs != nil && cs.Kind == "s3" {
-		return s3.New(ctx, *cs.S3, filepath.Join(cfg.DataDir, staging), idRe)
-	}
-	return dir.New(cmp.Or(cfg.CheckpointDir, filepath.Join(cfg.DataDir, "checkpoints")), idRe)
 }
 
 func dirExists(path string) bool {

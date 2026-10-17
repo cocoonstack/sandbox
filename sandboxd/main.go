@@ -82,7 +82,11 @@ func main() {
 	if err != nil {
 		logger.Fatalf(ctx, err, "init egress secrets")
 	}
-	mgr, err := pool.NewManager(ctx, cfg, eng, secrets)
+	backends, err := openBackends(ctx, cfg)
+	if err != nil {
+		logger.Fatalf(ctx, err, "open backends")
+	}
+	mgr, err := pool.NewManager(ctx, cfg, eng, secrets, backends)
 	if err != nil {
 		logger.Fatalf(ctx, err, "init pool manager")
 	}
@@ -122,7 +126,7 @@ func main() {
 		prober = httpProber
 		mgr.WithPeerHeal(cfg.CheckpointPeerHeal, func(id string) []string {
 			return httpProber.HealOwners(ctx, id)
-		}, cfg.APIToken)
+		}, &peer.HTTPPuller{Token: cfg.APIToken})
 		broadcaster := &peer.Broadcaster{Peers: msh.PeerAddrs, Token: cfg.APIToken}
 		mgr.WithPeerDelete(broadcaster.Delete)
 		go gossipNodeState(ctx, msh, mgr)

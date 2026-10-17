@@ -69,10 +69,11 @@ func TestReconcileRetainsVolumeCaptureGateWithoutCatalog(t *testing.T) {
 	eng := newFakeEngine()
 	dataDir := t.TempDir()
 	volumePath := writeVolumeImage(t, "dataset.img", "data")
-	m, err := NewManager(t.Context(), &config.Config{
+	cfg := &config.Config{
 		DataDir: dataDir,
 		Volumes: []config.VolumeSpec{{Name: "dataset", Path: volumePath, DirectIO: "off"}},
-	}, eng, testSecrets(t))
+	}
+	m, err := NewManager(t.Context(), cfg, eng, testSecrets(t), testBackends(t, cfg))
 	if err != nil {
 		t.Fatalf("setup manager: %v", err)
 	}

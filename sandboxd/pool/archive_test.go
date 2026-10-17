@@ -101,10 +101,11 @@ func TestArchiveWakeRehibernateWindowAborts(t *testing.T) {
 func TestArchiveCkHiddenAcrossNodes(t *testing.T) {
 	shared := t.TempDir()
 	mkMgr := func() *Manager {
-		m, err := NewManager(t.Context(), &config.Config{
+		cfg := &config.Config{
 			DataDir: t.TempDir(), CheckpointDir: shared,
 			Pools: []config.PoolSpec{archivePool(3600)},
-		}, newFakeEngine(), testSecrets(t))
+		}
+		m, err := NewManager(t.Context(), cfg, newFakeEngine(), testSecrets(t), testBackends(t, cfg))
 		if err != nil {
 			t.Fatalf("manager: %v", err)
 		}

@@ -28,6 +28,9 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/engine"
 	"github.com/cocoonstack/sandbox/sandboxd/pool"
 	"github.com/cocoonstack/sandbox/sandboxd/server"
+	"github.com/cocoonstack/sandbox/sandboxd/store"
+	storedir "github.com/cocoonstack/sandbox/sandboxd/store/dir"
+	"github.com/cocoonstack/sandbox/sandboxd/tenants/file"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 	sandbox "github.com/cocoonstack/sandbox/sdk/go"
 )
@@ -886,7 +889,23 @@ func startConfigStack(t *testing.T, apiToken string, cfg *config.Config) *stack 
 		t.Fatalf("secrets: %v", err)
 	}
 	cfg.DataDir, cfg.APIToken = dir, apiToken
-	mgr, err := pool.NewManager(t.Context(), cfg, eng, secrets)
+	ckpts, err := storedir.New(filepath.Join(dir, "checkpoints"), store.CheckpointIDRe)
+	if err != nil {
+		t.Fatalf("checkpoint store: %v", err)
+	}
+	tpls, err := storedir.New(filepath.Join(dir, "checkpoints"), store.TemplateIDRe)
+	if err != nil {
+		t.Fatalf("template store: %v", err)
+	}
+	var rootSum string
+	if apiToken != "" {
+		rootSum = config.TokenSHA256(apiToken)
+	}
+	src, err := file.Open(t.Context(), dir, rootSum)
+	if err != nil {
+		t.Fatalf("tenant set: %v", err)
+	}
+	mgr, err := pool.NewManager(t.Context(), cfg, eng, secrets, pool.Backends{Checkpoints: ckpts, Templates: tpls, Tenants: src})
 	if err != nil {
 		t.Fatalf("setup manager: %v", err)
 	}
