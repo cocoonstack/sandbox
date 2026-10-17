@@ -30,6 +30,7 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/server"
 	"github.com/cocoonstack/sandbox/sandboxd/store"
 	storedir "github.com/cocoonstack/sandbox/sandboxd/store/dir"
+	"github.com/cocoonstack/sandbox/sandboxd/tenants"
 	"github.com/cocoonstack/sandbox/sandboxd/tenants/file"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 	sandbox "github.com/cocoonstack/sandbox/sdk/go"
@@ -244,7 +245,7 @@ func TestCheckpointEndToEnd(t *testing.T) {
 }
 
 func TestTwoTenantFlow(t *testing.T) {
-	tenants := []config.TenantSpec{
+	tenants := []tenants.TenantSpec{
 		{Name: "acme", Token: "acme-tok", MaxClaims: 1},
 		{Name: "beta", Token: "beta-tok"},
 	}
@@ -863,7 +864,7 @@ func startStack(t *testing.T, apiToken string, pools ...config.PoolSpec) *stack 
 	return startTenantStack(t, apiToken, nil, nil, pools...)
 }
 
-func startTenantStack(t *testing.T, apiToken string, tenants []config.TenantSpec, volumes []config.VolumeSpec, pools ...config.PoolSpec) *stack {
+func startTenantStack(t *testing.T, apiToken string, tenants []tenants.TenantSpec, volumes []config.VolumeSpec, pools ...config.PoolSpec) *stack {
 	t.Helper()
 	st := startConfigStack(t, apiToken, &config.Config{Pools: pools, Volumes: volumes})
 	if len(tenants) > 0 {
@@ -899,7 +900,7 @@ func startConfigStack(t *testing.T, apiToken string, cfg *config.Config) *stack 
 	}
 	var rootSum string
 	if apiToken != "" {
-		rootSum = config.TokenSHA256(apiToken)
+		rootSum = tenants.TokenSHA256(apiToken)
 	}
 	src, err := file.Open(t.Context(), dir, rootSum)
 	if err != nil {

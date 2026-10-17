@@ -6,14 +6,13 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/cocoonstack/sandbox/sandboxd/config"
 	"github.com/cocoonstack/sandbox/sandboxd/tenants"
 	"github.com/cocoonstack/sandbox/sandboxd/tenants/tenantstest"
 )
 
 func TestContract(t *testing.T) {
 	tenantstest.Run(t, func(t *testing.T) tenants.Source {
-		s, err := Open(t.Context(), t.TempDir(), config.TokenSHA256("root"))
+		s, err := Open(t.Context(), t.TempDir(), tenants.TokenSHA256("root"))
 		if err != nil {
 			t.Fatalf("open: %v", err)
 		}
@@ -22,7 +21,7 @@ func TestContract(t *testing.T) {
 }
 
 func TestTheSetSurvivesAReopen(t *testing.T) {
-	dir, root := t.TempDir(), config.TokenSHA256("root")
+	dir, root := t.TempDir(), tenants.TokenSHA256("root")
 	s, err := Open(t.Context(), dir, root)
 	if err != nil {
 		t.Fatalf("open: %v", err)
@@ -51,7 +50,7 @@ func TestTheSetSurvivesAReopen(t *testing.T) {
 
 func TestATenantsFileNeedsTheRootToken(t *testing.T) {
 	dir := t.TempDir()
-	s, err := Open(t.Context(), dir, config.TokenSHA256("root"))
+	s, err := Open(t.Context(), dir, tenants.TokenSHA256("root"))
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}

@@ -15,7 +15,7 @@ import (
 
 	"github.com/projecteru2/core/log"
 
-	"github.com/cocoonstack/sandbox/sandboxd/config"
+	"github.com/cocoonstack/sandbox/sandboxd/tenants"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 	"github.com/cocoonstack/sandbox/sandboxd/utils"
 )
@@ -43,7 +43,7 @@ func (s *Server) clientAddrs(addrs []string) []string {
 	return clients
 }
 
-func withTenant(ctx context.Context, tenant *config.TenantRecord) context.Context {
+func withTenant(ctx context.Context, tenant *tenants.TenantRecord) context.Context {
 	return context.WithValue(ctx, tenantKey{}, tenant)
 }
 
@@ -55,8 +55,8 @@ func tenantFrom(ctx context.Context) string {
 }
 
 // tenantRecordFrom is nil for root.
-func tenantRecordFrom(ctx context.Context) *config.TenantRecord {
-	tenant, _ := ctx.Value(tenantKey{}).(*config.TenantRecord)
+func tenantRecordFrom(ctx context.Context) *tenants.TenantRecord {
+	tenant, _ := ctx.Value(tenantKey{}).(*tenants.TenantRecord)
 	return tenant
 }
 

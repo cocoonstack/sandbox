@@ -3,10 +3,7 @@ package config
 
 import (
 	"cmp"
-	"crypto/hmac"
-	"crypto/sha256"
 	"encoding/base64"
-	"encoding/hex"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"fmt"
@@ -156,22 +153,6 @@ type MetaStoreConfig struct {
 	Cell string `json:"cell,omitempty"`
 }
 
-// TenantSpec is one tenant as the tenant API takes it: its bearer token, its live-claim quota and its egress class.
-type TenantSpec struct {
-	Name        string `json:"name"`
-	Token       string `json:"token"`
-	MaxClaims   int    `json:"max_claims,omitzero"`
-	EgressClass string `json:"egress_class,omitempty"`
-}
-
-// TenantRecord stores a tenant's identity, quota and egress class without its plaintext token.
-type TenantRecord struct {
-	Name        string `json:"name"`
-	TokenSHA256 string `json:"token_sha256"`
-	MaxClaims   int    `json:"max_claims,omitzero"`
-	EgressClass string `json:"egress_class,omitempty"`
-}
-
 // VolumeSpec declares one operator-managed dataset disk, held by exactly one node.
 type VolumeSpec struct {
 	Name     string   `json:"name"`
@@ -294,52 +275,6 @@ type Config struct {
 // HasEgress reports whether the node can attach egress-lane VMs.
 func (c *Config) HasEgress() bool {
 	return len(c.Bridges) > 0 || len(c.Networks) > 0
-}
-
-// ClusterDigest fingerprints the must-match config, its egress layer and the live tenant records; without cluster_key it omits token hashes.
-func (c *Config) ClusterDigest(caFingerprint string, tenants []TenantRecord) string {
-	tenants = slices.Clone(tenants)
-	slices.SortFunc(tenants, func(a, b TenantRecord) int { return strings.Compare(a.Name, b.Name) })
-	eg := c.egressFingerprint()
-	if c.Mesh != nil {
-		if key, _ := c.Mesh.DecodedKey(); key != nil {
-			raw, _ := utils.DigestJSON([]any{c.APIToken, c.PreviewSecret, caFingerprint, tenants, c.CheckpointTTLHours, eg})
-			mac := hmac.New(sha256.New, key)
-			mac.Write(raw)
-			return hex.EncodeToString(mac.Sum(nil))
-		}
-	}
-	for i := range tenants {
-		tenants[i].TokenSHA256 = ""
-	}
-	return utils.DigestHex([]any{caFingerprint, tenants, c.CheckpointTTLHours, eg})
-}
-
-type egressFingerprint struct {
-	Classes  []EgressClass         `json:"classes,omitempty"`
-	Secrets  []egress.SecretSpec   `json:"secrets,omitempty"`
-	Internal []string              `json:"internal,omitempty"`
-	Upstream *EgressUpstreamConfig `json:"upstream,omitempty"`
-	Pools    map[string]PoolSpec   `json:"pools,omitempty"`
-}
-
-// egressFingerprint is the egress config every node must share, in an order-free form; secret values stay out.
-func (c *Config) egressFingerprint() egressFingerprint {
-	fp := egressFingerprint{
-		Classes:  slices.SortedFunc(slices.Values(c.EgressClasses), func(a, b EgressClass) int { return strings.Compare(a.Name, b.Name) }),
-		Internal: slices.Sorted(slices.Values(c.EgressInternalAllow)),
-		Secrets:  slices.SortedFunc(slices.Values(c.Secrets), func(a, b egress.SecretSpec) int { return strings.Compare(a.Name, b.Name) }),
-		Pools:    map[string]PoolSpec{},
-	}
-	if u := c.EgressUpstream; u != nil {
-		fp.Upstream = &EgressUpstreamConfig{ClaimEnv: u.ClaimEnv, Allow: slices.Sorted(slices.Values(u.Allow))}
-	}
-	for _, p := range c.Pools {
-		if p.Egress != nil || p.EgressUpstreamEnv != "" {
-			fp.Pools[poolLabel(p.PoolKey)] = PoolSpec{Egress: p.Egress, EgressUpstreamEnv: p.EgressUpstreamEnv}
-		}
-	}
-	return fp
 }
 
 func (c *Config) guardsEgressLane() bool {
@@ -705,12 +640,6 @@ func StorageBytes(s string) (int64, error) {
 		s += "B"
 	}
 	return units.RAMInBytes(s)
-}
-
-// TokenSHA256 is the hex SHA-256 a tenant token is kept as outside config.json.
-func TokenSHA256(token string) string {
-	sum := sha256.Sum256([]byte(token))
-	return hex.EncodeToString(sum[:])
 }
 
 func validatePolicy(p *egress.Policy, secrets map[string]struct{}) error {

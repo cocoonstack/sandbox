@@ -60,7 +60,7 @@ func openTenants(ctx context.Context, cfg *config.Config) (tenants.Source, error
 	}
 	var rootSum string
 	if cfg.APIToken != "" {
-		rootSum = config.TokenSHA256(cfg.APIToken)
+		rootSum = tenants.TokenSHA256(cfg.APIToken)
 	}
 	return file.Open(ctx, cfg.DataDir, rootSum)
 }

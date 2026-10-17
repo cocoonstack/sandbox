@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cocoonstack/sandbox/sandboxd/config"
 	"github.com/cocoonstack/sandbox/sandboxd/tenants"
 )
 
@@ -32,8 +31,8 @@ func Run(t *testing.T, open Opener) {
 }
 
 // Record builds a tenant record whose token is token.
-func Record(name, token string, maxClaims int, class string) config.TenantRecord {
-	return config.TenantRecord{Name: name, TokenSHA256: config.TokenSHA256(token), MaxClaims: maxClaims, EgressClass: class}
+func Record(name, token string, maxClaims int, class string) tenants.TenantRecord {
+	return tenants.TenantRecord{Name: name, TokenSHA256: tenants.TokenSHA256(token), MaxClaims: maxClaims, EgressClass: class}
 }
 
 // Sum is the SHA-256 Resolve takes for token.
@@ -55,7 +54,7 @@ func Eventually(t *testing.T, cond func() bool) bool {
 
 func testPutResolvePeek(t *testing.T, s tenants.Source) {
 	ctx := t.Context()
-	if _, err := s.Put(ctx, config.TenantRecord{Name: tenantOne}); !errors.Is(err, tenants.ErrInvalid) {
+	if _, err := s.Put(ctx, tenants.TenantRecord{Name: tenantOne}); !errors.Is(err, tenants.ErrInvalid) {
 		t.Errorf("a new tenant without a token: %v, want ErrInvalid", err)
 	}
 	c, err := s.Put(ctx, Record(tenantOne, "t1", 2, classDesk))
@@ -95,14 +94,14 @@ func testTokens(t *testing.T, s tenants.Source) {
 	if _, err := s.Put(ctx, Record(tenantOne, "old", 1, "")); err != nil {
 		t.Fatalf("put: %v", err)
 	}
-	c, err := s.Put(ctx, config.TenantRecord{Name: tenantOne, MaxClaims: 5, EgressClass: classDesk})
+	c, err := s.Put(ctx, tenants.TenantRecord{Name: tenantOne, MaxClaims: 5, EgressClass: classDesk})
 	if err != nil || !slices.Equal(c.Changed, []string{tenantOne}) {
 		t.Fatalf("change u-1 keeping its token: %+v %v", c, err)
 	}
 	if r, rerr := s.Resolve(ctx, Sum("old")); rerr != nil || r.MaxClaims != 5 || r.EgressClass != classDesk {
 		t.Errorf("the kept token after a change: %+v %v, want the new fields", r, rerr)
 	}
-	if c, err = s.Put(ctx, config.TenantRecord{Name: tenantOne, MaxClaims: 5, EgressClass: classDesk}); err != nil || !c.Empty() {
+	if c, err = s.Put(ctx, tenants.TenantRecord{Name: tenantOne, MaxClaims: 5, EgressClass: classDesk}); err != nil || !c.Empty() {
 		t.Errorf("an identical keep-token put: %+v %v, want no change", c, err)
 	}
 	if _, err = s.Put(ctx, Record(tenantOne, "new", 5, classDesk)); err != nil {
@@ -148,7 +147,7 @@ func testList(t *testing.T, s tenants.Source) {
 
 func testDeleteReplace(t *testing.T, s tenants.Source) {
 	ctx := t.Context()
-	for _, r := range []config.TenantRecord{Record("a", "ta", 0, ""), Record("b", "tb", 0, ""), Record("c", "tc", 0, "")} {
+	for _, r := range []tenants.TenantRecord{Record("a", "ta", 0, ""), Record("b", "tb", 0, ""), Record("c", "tc", 0, "")} {
 		if _, err := s.Put(ctx, r); err != nil {
 			t.Fatalf("put %s: %v", r.Name, err)
 		}
@@ -166,13 +165,13 @@ func testDeleteReplace(t *testing.T, s tenants.Source) {
 	if !Eventually(t, func() bool { _, p := s.Peek("b"); return p == tenants.Absent }) {
 		t.Error("peek of a deleted tenant never answered absent")
 	}
-	if _, err = s.Replace(ctx, []config.TenantRecord{{Name: "a"}, {Name: "fresh"}}); !errors.Is(err, tenants.ErrInvalid) {
+	if _, err = s.Replace(ctx, []tenants.TenantRecord{{Name: "a"}, {Name: "fresh"}}); !errors.Is(err, tenants.ErrInvalid) {
 		t.Errorf("replace naming a new tenant without a token: %v, want ErrInvalid", err)
 	}
 	if _, err = s.Resolve(ctx, Sum("tc")); err != nil {
 		t.Errorf("a refused replace changed the set: %v", err)
 	}
-	c, err = s.Replace(ctx, []config.TenantRecord{{Name: "a", MaxClaims: 3}, Record("d", "td", 0, "")})
+	c, err = s.Replace(ctx, []tenants.TenantRecord{{Name: "a", MaxClaims: 3}, Record("d", "td", 0, "")})
 	if err != nil || !slices.Equal(c.Added, []string{"d"}) || !slices.Equal(c.Changed, []string{"a"}) || !slices.Equal(c.Removed, []string{"c"}) {
 		t.Fatalf("replace: %+v %v, want d added, a changed, c removed", c, err)
 	}
@@ -186,12 +185,12 @@ func testDeleteReplace(t *testing.T, s tenants.Source) {
 
 func testReplaceSwap(t *testing.T, s tenants.Source) {
 	ctx := t.Context()
-	for _, r := range []config.TenantRecord{Record("a", "ta", 0, ""), Record("b", "tb", 0, "")} {
+	for _, r := range []tenants.TenantRecord{Record("a", "ta", 0, ""), Record("b", "tb", 0, "")} {
 		if _, err := s.Put(ctx, r); err != nil {
 			t.Fatalf("put %s: %v", r.Name, err)
 		}
 	}
-	if _, err := s.Replace(ctx, []config.TenantRecord{Record("a", "tb", 0, ""), Record("b", "ta", 0, "")}); err != nil {
+	if _, err := s.Replace(ctx, []tenants.TenantRecord{Record("a", "tb", 0, ""), Record("b", "ta", 0, "")}); err != nil {
 		t.Fatalf("replace swapping a's and b's tokens: %v", err)
 	}
 	if r, err := s.Resolve(ctx, Sum("ta")); err != nil || r.Name != "b" {

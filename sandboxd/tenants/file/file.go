@@ -18,7 +18,6 @@ import (
 
 	"github.com/projecteru2/core/log"
 
-	"github.com/cocoonstack/sandbox/sandboxd/config"
 	"github.com/cocoonstack/sandbox/sandboxd/tenants"
 	"github.com/cocoonstack/sandbox/sandboxd/utils"
 )
@@ -26,7 +25,7 @@ import (
 const fileName = "tenants.json"
 
 type persisted struct {
-	Tenants []config.TenantRecord `json:"tenants"`
+	Tenants []tenants.TenantRecord `json:"tenants"`
 }
 
 var _ tenants.Source = (*Source)(nil)
@@ -68,26 +67,26 @@ func Open(ctx context.Context, dataDir, rootSum string) (*Source, error) {
 	return s, nil
 }
 
-func (s *Source) Resolve(_ context.Context, sum [sha256.Size]byte) (*config.TenantRecord, error) {
+func (s *Source) Resolve(_ context.Context, sum [sha256.Size]byte) (*tenants.TenantRecord, error) {
 	if r, ok := s.set.Load().byToken[sum]; ok {
 		return r, nil
 	}
 	return nil, tenants.ErrUnknown
 }
 
-func (s *Source) Peek(name string) (config.TenantRecord, tenants.Presence) {
+func (s *Source) Peek(name string) (tenants.TenantRecord, tenants.Presence) {
 	if r, ok := s.set.Load().byName[name]; ok {
 		return r, tenants.Present
 	}
-	return config.TenantRecord{}, tenants.Absent
+	return tenants.TenantRecord{}, tenants.Absent
 }
 
-func (s *Source) Lookup(_ context.Context, name string) (config.TenantRecord, bool, error) {
+func (s *Source) Lookup(_ context.Context, name string) (tenants.TenantRecord, bool, error) {
 	r, p := s.Peek(name)
 	return r, p == tenants.Present, nil
 }
 
-func (s *Source) List(_ context.Context, after string, limit int) ([]config.TenantRecord, error) {
+func (s *Source) List(_ context.Context, after string, limit int) ([]tenants.TenantRecord, error) {
 	cur := s.set.Load()
 	i, found := slices.BinarySearch(cur.names, after)
 	if found {
@@ -95,7 +94,7 @@ func (s *Source) List(_ context.Context, after string, limit int) ([]config.Tena
 	}
 	names := cur.names[i:]
 	names = names[:min(len(names), limit)]
-	out := make([]config.TenantRecord, len(names))
+	out := make([]tenants.TenantRecord, len(names))
 	for j, name := range names {
 		out[j] = cur.byName[name]
 		out[j].TokenSHA256 = ""
@@ -103,20 +102,20 @@ func (s *Source) List(_ context.Context, after string, limit int) ([]config.Tena
 	return out, nil
 }
 
-func (s *Source) Put(_ context.Context, r config.TenantRecord) (tenants.Change, error) {
-	return s.apply(func(cur *set) ([]config.TenantRecord, error) {
-		kept, err := cur.keepToken(r)
+func (s *Source) Put(_ context.Context, r tenants.TenantRecord) (tenants.Change, error) {
+	return s.apply(func(cur *set) ([]tenants.TenantRecord, error) {
+		kept, err := tenants.KeepTokens(cur.byName, []tenants.TenantRecord{r})
 		if err != nil {
 			return nil, err
 		}
 		next := maps.Clone(cur.byName)
-		next[kept.Name] = kept
+		maps.Copy(next, kept)
 		return slices.Collect(maps.Values(next)), nil
 	})
 }
 
 func (s *Source) Delete(_ context.Context, name string) (tenants.Change, error) {
-	return s.apply(func(cur *set) ([]config.TenantRecord, error) {
+	return s.apply(func(cur *set) ([]tenants.TenantRecord, error) {
 		if _, ok := cur.byName[name]; !ok {
 			return nil, tenants.ErrUnknown
 		}
@@ -126,15 +125,15 @@ func (s *Source) Delete(_ context.Context, name string) (tenants.Change, error) 
 	})
 }
 
-func (s *Source) Replace(_ context.Context, records []config.TenantRecord) (tenants.Change, error) {
-	return s.apply(func(cur *set) ([]config.TenantRecord, error) {
-		out := make([]config.TenantRecord, len(records))
+func (s *Source) Replace(_ context.Context, records []tenants.TenantRecord) (tenants.Change, error) {
+	return s.apply(func(cur *set) ([]tenants.TenantRecord, error) {
+		next, err := tenants.KeepTokens(cur.byName, records)
+		if err != nil {
+			return nil, err
+		}
+		out := make([]tenants.TenantRecord, len(records))
 		for i, r := range records {
-			kept, err := cur.keepToken(r)
-			if err != nil {
-				return nil, err
-			}
-			out[i] = kept
+			out[i] = next[r.Name]
 		}
 		return out, nil
 	})
@@ -150,7 +149,7 @@ func (s *Source) Classes(context.Context) (map[string]int, error) {
 	return out, nil
 }
 
-func (s *Source) Records() []config.TenantRecord {
+func (s *Source) Records() []tenants.TenantRecord {
 	return s.set.Load().records()
 }
 
@@ -162,7 +161,7 @@ func (s *Source) Close() error {
 	return nil
 }
 
-func (s *Source) apply(next func(cur *set) ([]config.TenantRecord, error)) (tenants.Change, error) {
+func (s *Source) apply(next func(cur *set) ([]tenants.TenantRecord, error)) (tenants.Change, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	cur := s.set.Load()
@@ -186,16 +185,16 @@ func (s *Source) apply(next func(cur *set) ([]config.TenantRecord, error)) (tena
 }
 
 type set struct {
-	byToken map[[sha256.Size]byte]*config.TenantRecord
-	byName  map[string]config.TenantRecord
+	byToken map[[sha256.Size]byte]*tenants.TenantRecord
+	byName  map[string]tenants.TenantRecord
 	names   []string
 	digest  string
 }
 
-func newSet(records []config.TenantRecord, rootSum string) (*set, error) {
+func newSet(records []tenants.TenantRecord, rootSum string) (*set, error) {
 	s := &set{
-		byToken: make(map[[sha256.Size]byte]*config.TenantRecord, len(records)),
-		byName:  make(map[string]config.TenantRecord, len(records)),
+		byToken: make(map[[sha256.Size]byte]*tenants.TenantRecord, len(records)),
+		byName:  make(map[string]tenants.TenantRecord, len(records)),
 	}
 	for _, r := range records {
 		if err := tenants.Validate(r, rootSum); err != nil {
@@ -220,22 +219,10 @@ func newSet(records []config.TenantRecord, rootSum string) (*set, error) {
 	return s, nil
 }
 
-func (s *set) records() []config.TenantRecord {
-	out := make([]config.TenantRecord, len(s.names))
+func (s *set) records() []tenants.TenantRecord {
+	out := make([]tenants.TenantRecord, len(s.names))
 	for i, name := range s.names {
 		out[i] = s.byName[name]
 	}
 	return out
-}
-
-func (s *set) keepToken(r config.TenantRecord) (config.TenantRecord, error) {
-	if r.TokenSHA256 != "" {
-		return r, nil
-	}
-	kept, ok := s.byName[r.Name]
-	if !ok {
-		return config.TenantRecord{}, fmt.Errorf("%w: tenant %q needs a token", tenants.ErrInvalid, r.Name)
-	}
-	r.TokenSHA256 = kept.TokenSHA256
-	return r, nil
 }

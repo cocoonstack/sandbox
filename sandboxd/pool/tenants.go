@@ -30,12 +30,12 @@ type TenantPage struct {
 }
 
 // TenantByToken resolves a tenant bearer token to its tenant's shared, read-only record.
-func (m *Manager) TenantByToken(ctx context.Context, token string) (*config.TenantRecord, error) {
+func (m *Manager) TenantByToken(ctx context.Context, token string) (*tenants.TenantRecord, error) {
 	return m.tenants.Resolve(ctx, sha256.Sum256([]byte(token)))
 }
 
 // TenantRecords returns a node-local tenant set for the cluster config digest; a shared set returns nil.
-func (m *Manager) TenantRecords() []config.TenantRecord {
+func (m *Manager) TenantRecords() []tenants.TenantRecord {
 	return m.tenants.Records()
 }
 
@@ -73,8 +73,8 @@ func (m *Manager) OnTenants(f func()) {
 }
 
 // SetTenants replaces the whole tenant set; a tenant left out stops authenticating at once and its claims stay, and an entry may omit a kept tenant's token.
-func (m *Manager) SetTenants(ctx context.Context, specs []config.TenantSpec) error {
-	records := make([]config.TenantRecord, 0, len(specs))
+func (m *Manager) SetTenants(ctx context.Context, specs []tenants.TenantSpec) error {
+	records := make([]tenants.TenantRecord, 0, len(specs))
 	for _, spec := range specs {
 		r, err := m.tenantRecordOf(spec)
 		if err != nil {
@@ -86,7 +86,7 @@ func (m *Manager) SetTenants(ctx context.Context, specs []config.TenantSpec) err
 }
 
 // PutTenant adds or changes one tenant; an empty token keeps an existing tenant's token.
-func (m *Manager) PutTenant(ctx context.Context, spec config.TenantSpec) error {
+func (m *Manager) PutTenant(ctx context.Context, spec tenants.TenantSpec) error {
 	r, err := m.tenantRecordOf(spec)
 	if err != nil {
 		return err
@@ -99,16 +99,16 @@ func (m *Manager) DeleteTenant(ctx context.Context, name string) error {
 	return m.applyTenants(ctx, func() (tenants.Change, error) { return m.tenants.Delete(ctx, name) })
 }
 
-func (m *Manager) tenantRecordOf(spec config.TenantSpec) (config.TenantRecord, error) {
+func (m *Manager) tenantRecordOf(spec tenants.TenantSpec) (tenants.TenantRecord, error) {
 	if spec.EgressClass != "" && !m.view.Load().out.HasClass(spec.EgressClass) {
-		return config.TenantRecord{}, fmt.Errorf("%w: tenant %q names unknown egress class %q", ErrBadTenant, spec.Name, spec.EgressClass)
+		return tenants.TenantRecord{}, fmt.Errorf("%w: tenant %q names unknown egress class %q", ErrBadTenant, spec.Name, spec.EgressClass)
 	}
-	r := config.TenantRecord{Name: spec.Name, MaxClaims: spec.MaxClaims, EgressClass: spec.EgressClass}
+	r := tenants.TenantRecord{Name: spec.Name, MaxClaims: spec.MaxClaims, EgressClass: spec.EgressClass}
 	if spec.Token != "" {
-		r.TokenSHA256 = config.TokenSHA256(spec.Token)
+		r.TokenSHA256 = tenants.TokenSHA256(spec.Token)
 	}
 	if err := tenants.Validate(r, m.rootSum); err != nil {
-		return config.TenantRecord{}, err
+		return tenants.TenantRecord{}, err
 	}
 	return r, nil
 }

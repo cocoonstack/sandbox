@@ -18,7 +18,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"golang.org/x/time/rate"
 
-	"github.com/cocoonstack/sandbox/sandboxd/config"
 	"github.com/cocoonstack/sandbox/sandboxd/metastore"
 	"github.com/cocoonstack/sandbox/sandboxd/tenants"
 )
@@ -41,7 +40,7 @@ const (
 var schema string
 
 type entry struct {
-	rec *config.TenantRecord
+	rec *tenants.TenantRecord
 	sum [sha256.Size]byte
 }
 
@@ -91,7 +90,7 @@ func Open(ctx context.Context, dsn string) (*Source, error) {
 	return s, nil
 }
 
-func (s *Source) Resolve(ctx context.Context, sum [sha256.Size]byte) (*config.TenantRecord, error) {
+func (s *Source) Resolve(ctx context.Context, sum [sha256.Size]byte) (*tenants.TenantRecord, error) {
 	s.mu.RLock()
 	e := s.byName[s.byToken[sum]]
 	until, negative := s.misses[sum]
@@ -128,22 +127,22 @@ func (s *Source) Resolve(ctx context.Context, sum [sha256.Size]byte) (*config.Te
 	return &r, nil
 }
 
-func (s *Source) Peek(name string) (config.TenantRecord, tenants.Presence) {
+func (s *Source) Peek(name string) (tenants.TenantRecord, tenants.Presence) {
 	s.mu.RLock()
 	e, ok := s.byName[name]
 	s.mu.RUnlock()
 	switch {
 	case !ok:
 		s.fetch(name)
-		return config.TenantRecord{}, tenants.Unknown
+		return tenants.TenantRecord{}, tenants.Unknown
 	case e.rec != nil:
 		return *e.rec, tenants.Present
 	default:
-		return config.TenantRecord{}, tenants.Absent
+		return tenants.TenantRecord{}, tenants.Absent
 	}
 }
 
-func (s *Source) Lookup(ctx context.Context, name string) (config.TenantRecord, bool, error) {
+func (s *Source) Lookup(ctx context.Context, name string) (tenants.TenantRecord, bool, error) {
 	s.mu.RLock()
 	e, cached := s.byName[name]
 	start := s.seq
@@ -152,7 +151,7 @@ func (s *Source) Lookup(ctx context.Context, name string) (config.TenantRecord, 
 		if e.rec != nil {
 			return *e.rec, true, nil
 		}
-		return config.TenantRecord{}, false, nil
+		return tenants.TenantRecord{}, false, nil
 	}
 	r, ok, err := s.lookupNow(ctx, name)
 	s.mu.Lock()
@@ -161,21 +160,21 @@ func (s *Source) Lookup(ctx context.Context, name string) (config.TenantRecord, 
 	return r, ok, err
 }
 
-func (s *Source) List(ctx context.Context, after string, limit int) ([]config.TenantRecord, error) {
+func (s *Source) List(ctx context.Context, after string, limit int) ([]tenants.TenantRecord, error) {
 	qctx, cancel := context.WithTimeout(ctx, metastore.QueryTimeout)
 	defer cancel()
 	rows, err := s.pool.Query(qctx, `SELECT name, max_claims, egress_class FROM sandboxd_tenants WHERE name > $1 ORDER BY name LIMIT $2`, after, limit)
 	if err != nil {
 		return nil, unavailable(err)
 	}
-	out, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (config.TenantRecord, error) {
-		var r config.TenantRecord
+	out, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (tenants.TenantRecord, error) {
+		var r tenants.TenantRecord
 		return r, row.Scan(&r.Name, &r.MaxClaims, &r.EgressClass)
 	})
 	return out, unavailable(err)
 }
 
-func (s *Source) Put(ctx context.Context, r config.TenantRecord) (tenants.Change, error) {
+func (s *Source) Put(ctx context.Context, r tenants.TenantRecord) (tenants.Change, error) {
 	var c tenants.Change
 	err := s.write(ctx, r.Name, func(tx pgx.Tx) error {
 		if r.TokenSHA256 == "" {
@@ -215,7 +214,7 @@ func (s *Source) Delete(ctx context.Context, name string) (tenants.Change, error
 	return tenants.Change{Removed: []string{name}}, nil
 }
 
-func (s *Source) Replace(ctx context.Context, records []config.TenantRecord) (tenants.Change, error) {
+func (s *Source) Replace(ctx context.Context, records []tenants.TenantRecord) (tenants.Change, error) {
 	var c tenants.Change
 	err := s.write(ctx, flushAll, func(tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx, `LOCK TABLE sandboxd_tenants IN SHARE ROW EXCLUSIVE MODE`); err != nil {
@@ -225,12 +224,12 @@ func (s *Source) Replace(ctx context.Context, records []config.TenantRecord) (te
 		if err != nil {
 			return err
 		}
-		cur, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (config.TenantRecord, error) { return scanRecord(row) })
+		cur, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (tenants.TenantRecord, error) { return scanRecord(row) })
 		if err != nil {
 			return err
 		}
 		byName := indexByName(cur)
-		next, err := keepTokens(byName, records)
+		next, err := tenants.KeepTokens(byName, records)
 		if err != nil {
 			return err
 		}
@@ -270,7 +269,7 @@ func (s *Source) Classes(ctx context.Context) (map[string]int, error) {
 	return out, nil
 }
 
-func (s *Source) Records() []config.TenantRecord {
+func (s *Source) Records() []tenants.TenantRecord {
 	return nil
 }
 
@@ -304,15 +303,15 @@ func (s *Source) fetch(name string) {
 	}()
 }
 
-func (s *Source) lookupNow(ctx context.Context, name string) (config.TenantRecord, bool, error) {
+func (s *Source) lookupNow(ctx context.Context, name string) (tenants.TenantRecord, bool, error) {
 	qctx, cancel := context.WithTimeout(ctx, metastore.QueryTimeout)
 	defer cancel()
 	r, err := scanRecord(s.pool.QueryRow(qctx, `SELECT name, token_sha256, max_claims, egress_class FROM sandboxd_tenants WHERE name = $1`, name))
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
-		return config.TenantRecord{}, false, nil
+		return tenants.TenantRecord{}, false, nil
 	case err != nil:
-		return config.TenantRecord{}, false, unavailable(err)
+		return tenants.TenantRecord{}, false, unavailable(err)
 	}
 	return r, true, nil
 }
@@ -345,7 +344,7 @@ func (s *Source) fresh(name string, start uint64) bool {
 }
 
 // settle caches a by-name read that no eviction overtook; callers hold s.mu.
-func (s *Source) settle(name string, start uint64, r config.TenantRecord, ok bool, err error) {
+func (s *Source) settle(name string, start uint64, r tenants.TenantRecord, ok bool, err error) {
 	switch {
 	case err != nil || !s.fresh(name, start):
 	case ok:
@@ -357,7 +356,7 @@ func (s *Source) settle(name string, start uint64, r config.TenantRecord, ok boo
 }
 
 // cache stores a present record; callers hold s.mu.
-func (s *Source) cache(r *config.TenantRecord, sum [sha256.Size]byte) {
+func (s *Source) cache(r *tenants.TenantRecord, sum [sha256.Size]byte) {
 	if len(s.byName) >= maxCached {
 		s.clearCache()
 	}
@@ -390,7 +389,7 @@ func (s *Source) clearCache() {
 	clear(s.misses)
 }
 
-func keepTokenUpdate(ctx context.Context, tx pgx.Tx, r config.TenantRecord, c *tenants.Change) error {
+func keepTokenUpdate(ctx context.Context, tx pgx.Tx, r tenants.TenantRecord, c *tenants.Change) error {
 	var changed bool
 	err := tx.QueryRow(ctx, `WITH cur AS (SELECT max_claims, egress_class FROM sandboxd_tenants WHERE name = $1 FOR UPDATE),
 		upd AS (UPDATE sandboxd_tenants t SET max_claims = $2, egress_class = $3, updated_at = now() FROM cur
@@ -405,37 +404,19 @@ func keepTokenUpdate(ctx context.Context, tx pgx.Tx, r config.TenantRecord, c *t
 	return err
 }
 
-func keepTokens(cur map[string]config.TenantRecord, records []config.TenantRecord) (map[string]config.TenantRecord, error) {
-	next := make(map[string]config.TenantRecord, len(records))
-	for _, r := range records {
-		if _, dup := next[r.Name]; dup {
-			return nil, fmt.Errorf("%w: duplicate tenant name %q", tenants.ErrInvalid, r.Name)
-		}
-		if r.TokenSHA256 == "" {
-			kept, ok := cur[r.Name]
-			if !ok {
-				return nil, fmt.Errorf("%w: tenant %q needs a token", tenants.ErrInvalid, r.Name)
-			}
-			r.TokenSHA256 = kept.TokenSHA256
-		}
-		next[r.Name] = r
-	}
-	return next, nil
-}
-
-func indexByName(records []config.TenantRecord) map[string]config.TenantRecord {
-	out := make(map[string]config.TenantRecord, len(records))
+func indexByName(records []tenants.TenantRecord) map[string]tenants.TenantRecord {
+	out := make(map[string]tenants.TenantRecord, len(records))
 	for _, r := range records {
 		out[r.Name] = r
 	}
 	return out
 }
 
-func scanRecord(row pgx.Row) (config.TenantRecord, error) {
-	var r config.TenantRecord
+func scanRecord(row pgx.Row) (tenants.TenantRecord, error) {
+	var r tenants.TenantRecord
 	var sum []byte
 	if err := row.Scan(&r.Name, &sum, &r.MaxClaims, &r.EgressClass); err != nil {
-		return config.TenantRecord{}, err
+		return tenants.TenantRecord{}, err
 	}
 	r.TokenSHA256 = hex.EncodeToString(sum)
 	return r, nil

@@ -12,6 +12,7 @@ import (
 
 	"github.com/cocoonstack/sandbox/sandboxd/config"
 	"github.com/cocoonstack/sandbox/sandboxd/store"
+	"github.com/cocoonstack/sandbox/sandboxd/tenants"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
@@ -372,7 +373,7 @@ func TestHasPromotedTemplateIsTenantScoped(t *testing.T) {
 }
 
 func TestTemplateHashesAreTenantScoped(t *testing.T) {
-	m := tenantManager(t, t.TempDir(), config.TenantSpec{Name: "acme", Token: "acme-tok"})
+	m := tenantManager(t, t.TempDir(), tenants.TenantSpec{Name: "acme", Token: "acme-tok"})
 	a, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{TTL: time.Hour, Tenant: "acme"})
 	if err != nil {
 		t.Fatalf("claim: %v", err)

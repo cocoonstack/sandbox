@@ -18,6 +18,7 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/engine"
 	"github.com/cocoonstack/sandbox/sandboxd/outbound"
 	"github.com/cocoonstack/sandbox/sandboxd/outbound/outboundtest"
+	"github.com/cocoonstack/sandbox/sandboxd/tenants"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
@@ -654,7 +655,7 @@ func envManager(t *testing.T, eng *fakeEngine, dataDir string, pools ...config.P
 	if err != nil {
 		t.Fatalf("manager: %v", err)
 	}
-	putTenants(t, m, config.TenantSpec{Name: "acme", Token: "acme-tok"})
+	putTenants(t, m, tenants.TenantSpec{Name: "acme", Token: "acme-tok"})
 	return m
 }
 

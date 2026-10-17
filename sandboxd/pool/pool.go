@@ -483,7 +483,7 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 	}
 	m.maxClaims = cfg.MaxClaims
 	if cfg.APIToken != "" {
-		m.rootSum = config.TokenSHA256(cfg.APIToken)
+		m.rootSum = tenants.TokenSHA256(cfg.APIToken)
 	}
 	m.cfg = cfg
 	m.view.Store(newConfigView(cfg, secrets))
@@ -517,7 +517,7 @@ func (m *Manager) ClusterDigest() string {
 	m.reloadMu.Lock()
 	cfg := m.cfg
 	m.reloadMu.Unlock()
-	return cfg.ClusterDigest(m.out.CAFingerprint(), m.TenantRecords())
+	return clusterDigest(cfg, m.out.CAFingerprint(), m.TenantRecords())
 }
 
 // Run drives the refill and reap loops until ctx is canceled.

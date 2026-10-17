@@ -11,8 +11,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/cocoonstack/sandbox/sandboxd/config"
 	"github.com/cocoonstack/sandbox/sandboxd/pool"
+	"github.com/cocoonstack/sandbox/sandboxd/tenants"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
@@ -48,7 +48,7 @@ func TestLiveVolumeRoutesAuthorizeAndDecode(t *testing.T) {
 						return view, nil
 					},
 				}
-				ts := newTenantTestServer(t, "root-token", []config.TenantSpec{{Name: "acme", Token: "acme-token"}}, mgr, nil)
+				ts := newTenantTestServer(t, "root-token", []tenants.TenantSpec{{Name: "acme", Token: "acme-token"}}, mgr, nil)
 				body := `{"volumes":[{"name":"data"}]}`
 				if method == http.MethodPatch {
 					body = `{"remove":["data"]}`
@@ -137,7 +137,7 @@ func TestLiveVolumeRoutesHideOtherTenants(t *testing.T) {
 					return check(id, tenant)
 				},
 			}
-			ts := newTenantTestServer(t, "root", []config.TenantSpec{{Name: "other", Token: "other-token"}}, mgr, nil)
+			ts := newTenantTestServer(t, "root", []tenants.TenantSpec{{Name: "other", Token: "other-token"}}, mgr, nil)
 			body := `{"volumes":[]}`
 			if method == http.MethodPatch {
 				body = `{}`

@@ -10,18 +10,18 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cocoonstack/sandbox/sandboxd/config"
 	"github.com/cocoonstack/sandbox/sandboxd/pool"
+	"github.com/cocoonstack/sandbox/sandboxd/tenants"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
 func TestTenantRoutesAreRootOnlyAndNeverServeATokenBack(t *testing.T) {
-	var put config.TenantSpec
-	var set []config.TenantSpec
+	var put tenants.TenantSpec
+	var set []tenants.TenantSpec
 	mgr := &fakeManager{
 		tenantList: []pool.TenantInfo{{Name: "acme", MaxClaims: 2, Claims: 1}},
-		putTenant:  func(spec config.TenantSpec) error { put = spec; return nil },
-		setTenants: func(specs []config.TenantSpec) error { set = specs; return nil },
+		putTenant:  func(spec tenants.TenantSpec) error { put = spec; return nil },
+		setTenants: func(specs []tenants.TenantSpec) error { set = specs; return nil },
 		deleteTenant: func(name string) error {
 			if name != "acme" {
 				return pool.ErrUnknownTenant
@@ -29,7 +29,7 @@ func TestTenantRoutesAreRootOnlyAndNeverServeATokenBack(t *testing.T) {
 			return nil
 		},
 	}
-	ts := newTenantTestServer(t, "root", []config.TenantSpec{{Name: "acme", Token: "acme-tok"}}, mgr, nil)
+	ts := newTenantTestServer(t, "root", []tenants.TenantSpec{{Name: "acme", Token: "acme-tok"}}, mgr, nil)
 	for _, route := range []struct{ method, path, body string }{
 		{http.MethodGet, "/v1/tenants", ""},
 		{http.MethodPut, "/v1/tenants", `{"tenants":[]}`},
@@ -52,7 +52,7 @@ func TestTenantRoutesAreRootOnlyAndNeverServeATokenBack(t *testing.T) {
 
 	resp = doReq(t, http.MethodPut, ts.URL+"/v1/tenants/beta", "root", `{"token":"beta-tok","max_claims":3,"egress_class":"desk"}`)
 	_ = resp.Body.Close()
-	if resp.StatusCode != http.StatusNoContent || put != (config.TenantSpec{Name: "beta", Token: "beta-tok", MaxClaims: 3, EgressClass: "desk"}) {
+	if resp.StatusCode != http.StatusNoContent || put != (tenants.TenantSpec{Name: "beta", Token: "beta-tok", MaxClaims: 3, EgressClass: "desk"}) {
 		t.Errorf("PUT /v1/tenants/beta: %d, manager got %+v", resp.StatusCode, put)
 	}
 	resp = doReq(t, http.MethodPut, ts.URL+"/v1/tenants/u:42%2Fwest", "root", `{"token":"w"}`)
@@ -82,7 +82,7 @@ func TestTenantRoutesAreRootOnlyAndNeverServeATokenBack(t *testing.T) {
 
 func TestRootListsOneTenantsClaimsAndATenantCannotWiden(t *testing.T) {
 	mgr := &fakeManager{}
-	ts := newTenantTestServer(t, "root", []config.TenantSpec{{Name: "acme", Token: "acme-tok"}}, mgr, nil)
+	ts := newTenantTestServer(t, "root", []tenants.TenantSpec{{Name: "acme", Token: "acme-tok"}}, mgr, nil)
 	for _, tt := range []struct{ token, query, want string }{
 		{"root", "", ""},
 		{"root", "?tenant=gone", "gone"},
@@ -142,7 +142,7 @@ func TestConfigReloadIsRootOnlyAndNamesWhatChanged(t *testing.T) {
 			return pool.ReloadResult{}, fmt.Errorf("%w: parse config", pool.ErrBadConfig)
 		}
 	}
-	mgr := &fakeManager{tenants: []config.TenantSpec{{Name: "acme", Token: "acme-tok"}}}
+	mgr := &fakeManager{tenants: []tenants.TenantSpec{{Name: "acme", Token: "acme-tok"}}}
 	srv := New("root", "node:7777", mgr, &fakeDialer{}, nil, nil, nil, nil)
 	srv.SetConfigReload(reload)
 	ts := httptest.NewServer(srv.Handler())
@@ -174,7 +174,7 @@ func TestATenantClaimCarriesItsTokensEgressClassAndADownSourceIs503(t *testing.T
 	mgr := &fakeManager{warmClaim: func(context.Context, types.PoolKey, time.Duration) (*types.Sandbox, error) {
 		return &types.Sandbox{ID: "sb_1", Token: "sb-tok"}, nil
 	}}
-	ts := newTenantTestServer(t, "root", []config.TenantSpec{{Name: "acme", Token: "acme-tok", EgressClass: "desk"}}, mgr, nil)
+	ts := newTenantTestServer(t, "root", []tenants.TenantSpec{{Name: "acme", Token: "acme-tok", EgressClass: "desk"}}, mgr, nil)
 	claim := `{"template":"rt:24.04"}`
 	resp := doReq(t, http.MethodPost, ts.URL+"/v1/claim", "acme-tok", claim)
 	_ = resp.Body.Close()
