@@ -723,6 +723,15 @@ func AppendBulkRequest(buf []byte, op string, data []byte) []byte {
 	return append(buf, '"', '}', '\n')
 }
 
+// RequestOp returns the op tag of a request line, or "" when the line carries none; the line's head is enough.
+func RequestOp(line []byte) string {
+	op, err := frameTag(line, reqTagHead, "op")
+	if err != nil {
+		return ""
+	}
+	return string(op)
+}
+
 // IsContinuation reports whether a request line feeds the RPC in flight instead of opening one.
 func IsContinuation(line []byte) bool {
 	op, err := frameTag(line, reqTagHead, "op")
