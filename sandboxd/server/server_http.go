@@ -28,7 +28,7 @@ func (s *Server) writeRedirect(w http.ResponseWriter, addrs []string) bool {
 	if len(addrs) == 0 {
 		return false
 	}
-	writeJSON(w, http.StatusOK, types.ClaimResponse{Redirect: s.clientAddrs(addrs)})
+	writeJSON(w, http.StatusOK, ClaimResponse{Redirect: s.clientAddrs(addrs)})
 	return true
 }
 

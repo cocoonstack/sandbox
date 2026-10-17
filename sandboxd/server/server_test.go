@@ -57,7 +57,7 @@ func TestClaimHappyPath(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status %d, want 200", resp.StatusCode)
 	}
-	var cr types.ClaimResponse
+	var cr ClaimResponse
 	if err := json.UnmarshalRead(resp.Body, &cr); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
@@ -88,7 +88,7 @@ func TestClaimCarriesAnEgressOptOut(t *testing.T) {
 		if err != nil {
 			t.Fatalf("claim: %v", err)
 		}
-		var cr types.ClaimResponse
+		var cr ClaimResponse
 		decodeErr := json.UnmarshalRead(resp.Body, &cr)
 		_ = resp.Body.Close()
 		if resp.StatusCode != http.StatusOK || decodeErr != nil || mgr.gotNoEgress != want || cr.NetRoute != types.NetRouteRelay {
@@ -159,7 +159,7 @@ func TestRenewGrantsAndReportsTheDeadline(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status %d, want 200", resp.StatusCode)
 	}
-	var got types.RenewResponse
+	var got RenewResponse
 	if err := json.UnmarshalRead(resp.Body, &got); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
@@ -481,7 +481,7 @@ func TestVolumeCatalogReturnsScopedFleetProjection(t *testing.T) {
 	ts := newMeshTestServer(t, "root", mgr, placer, nil)
 	resp := doReq(t, http.MethodGet, ts.URL+"/v1/volumes", "acme-tok", "")
 	defer resp.Body.Close()
-	var got types.VolumeListResponse
+	var got VolumeListResponse
 	if err := json.UnmarshalRead(resp.Body, &got); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
@@ -989,7 +989,7 @@ func TestForkFlow(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status %d, want 200", resp.StatusCode)
 	}
-	var fr types.ForkResponse
+	var fr ForkResponse
 	if err := json.UnmarshalRead(resp.Body, &fr); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
@@ -1042,7 +1042,7 @@ func TestPromoteAndDeleteTemplateFlow(t *testing.T) {
 	}
 	ts := newTestServer(t, "sekret", mgr, nil)
 
-	promote := func(auth, body string) (int, types.PromoteResponse) {
+	promote := func(auth, body string) (int, PromoteResponse) {
 		req, _ := http.NewRequestWithContext(t.Context(), http.MethodPost, ts.URL+"/v1/sandboxes/sb_1/promote", strings.NewReader(body))
 		if auth != "" {
 			req.Header.Set("Authorization", auth)
@@ -1052,7 +1052,7 @@ func TestPromoteAndDeleteTemplateFlow(t *testing.T) {
 			t.Fatalf("do: %v", err)
 		}
 		defer resp.Body.Close()
-		var result types.PromoteResponse
+		var result PromoteResponse
 		if resp.StatusCode == http.StatusOK {
 			if err := json.UnmarshalRead(resp.Body, &result); err != nil {
 				t.Fatalf("decode promote response: %v", err)
@@ -1134,7 +1134,7 @@ func TestCheckpointFlow(t *testing.T) {
 
 	resp := postJSON(t, ts.URL+"/v1/sandboxes/sb_1/checkpoint", "api", `{"token":"tok","name":"step-1"}`)
 	defer resp.Body.Close()
-	var cr types.CheckpointResponse
+	var cr CheckpointResponse
 	if err := json.UnmarshalRead(resp.Body, &cr); err != nil || cr.Checkpoint.ID != "ck_0011223344556677" {
 		t.Fatalf("checkpoint: status %d, %+v, %v", resp.StatusCode, cr, err)
 	}
@@ -1144,7 +1144,7 @@ func TestCheckpointFlow(t *testing.T) {
 
 	resp2 := postJSON(t, ts.URL+"/v1/checkpoints/"+cr.Checkpoint.ID+"/claim", "api", `{}`)
 	defer resp2.Body.Close()
-	var claim types.ClaimResponse
+	var claim ClaimResponse
 	if err := json.UnmarshalRead(resp2.Body, &claim); err != nil || claim.ID != "sb_branch" {
 		t.Fatalf("claim from checkpoint: status %d, %+v, %v", resp2.StatusCode, claim, err)
 	}
@@ -1225,7 +1225,7 @@ func TestClaimRedirectsOnWarmMiss(t *testing.T) {
 		t.Fatalf("claim: %v", err)
 	}
 	defer resp.Body.Close()
-	var cr types.ClaimResponse
+	var cr ClaimResponse
 	if err := json.UnmarshalRead(resp.Body, &cr); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
@@ -1265,7 +1265,7 @@ func TestClaimRedirectsToTemplateOwner(t *testing.T) {
 				t.Fatalf("claim: %v", err)
 			}
 			defer resp.Body.Close()
-			var cr types.ClaimResponse
+			var cr ClaimResponse
 			if err := json.UnmarshalRead(resp.Body, &cr); err != nil {
 				t.Fatalf("decode: %v", err)
 			}
@@ -1314,7 +1314,7 @@ func TestDeleteTemplateRedirectsToOwner(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status %d, want 200 redirect", resp.StatusCode)
 	}
-	var cr types.ClaimResponse
+	var cr ClaimResponse
 	if decodeErr := json.UnmarshalRead(resp.Body, &cr); decodeErr != nil {
 		t.Fatalf("decode: %v", decodeErr)
 	}
@@ -1361,7 +1361,7 @@ func TestClaimProvisionsWhenNoCandidate(t *testing.T) {
 		t.Fatalf("claim: %v", err)
 	}
 	defer resp.Body.Close()
-	var cr types.ClaimResponse
+	var cr ClaimResponse
 	_ = json.UnmarshalRead(resp.Body, &cr)
 	if cr.ID != "sb_local" || len(cr.Redirect) != 0 {
 		t.Errorf("got %+v, want local sandbox", cr)
@@ -1413,7 +1413,7 @@ func TestVolumeClaimUsesWarmBeforeRedirectOrProvision(t *testing.T) {
 				t.Fatalf("claim: %v", err)
 			}
 			defer resp.Body.Close()
-			var got types.ClaimResponse
+			var got ClaimResponse
 			if err := json.UnmarshalRead(resp.Body, &got); err != nil {
 				t.Fatalf("decode: %v", err)
 			}
@@ -1517,7 +1517,7 @@ func TestVolumeClaimUsesVolumeAndTemplateIntersections(t *testing.T) {
 			}
 			ts := newMeshTestServer(t, "", mgr, placer, nil)
 
-			request := types.ClaimRequest{
+			request := ClaimRequest{
 				Template: "tpl", Volumes: []types.Volume{{Name: "imagenet"}},
 				NoRedirect: tt.noRedirect, RequirePromoted: tt.requirePromoted,
 			}
@@ -1598,7 +1598,7 @@ func TestVolumeClaimKeepsPoolContentAgainstPeerTemplates(t *testing.T) {
 			placer := &fakePlacer{owners: []string{"template:7777"}, templateVolumeOwners: []string{"both:7777"}}
 			ts := newMeshTestServer(t, "", mgr, placer, nil)
 
-			body, err := json.Marshal(types.ClaimRequest{
+			body, err := json.Marshal(ClaimRequest{
 				Template: "tpl", Volumes: []types.Volume{{Name: "imagenet"}},
 				RequirePromoted: tt.requirePromoted,
 			})
@@ -1633,7 +1633,7 @@ func TestVolumeClaimKeepsPoolContentAgainstPeerTemplates(t *testing.T) {
 }
 
 func TestForeignTemplateGossipNeverEscalates(t *testing.T) {
-	hash := types.ClaimRequest{Template: "tpl"}.Key().Hash()
+	hash := ClaimRequest{Template: "tpl"}.Key().Hash()
 	tenants := []config.TenantSpec{{Name: "acme", Token: "acme-tok"}, {Name: "beta", Token: "beta-tok"}}
 	for _, tt := range []struct {
 		name, token   string
@@ -1657,13 +1657,13 @@ func TestForeignTemplateGossipNeverEscalates(t *testing.T) {
 			mgr.tenants = tenants
 			ts := newMeshTestServer(t, "root-tok", mgr, placer, nil)
 
-			body, _ := json.Marshal(types.ClaimRequest{Template: "tpl", Volumes: tt.volumes})
+			body, _ := json.Marshal(ClaimRequest{Template: "tpl", Volumes: tt.volumes})
 			resp := postJSON(t, ts.URL+"/v1/claim", tt.token, string(body))
 			defer resp.Body.Close()
 			if resp.StatusCode != http.StatusOK {
 				t.Fatalf("status=%d, want 200", resp.StatusCode)
 			}
-			var cr types.ClaimResponse
+			var cr ClaimResponse
 			if err := json.UnmarshalRead(resp.Body, &cr); err != nil {
 				t.Fatalf("decode: %v", err)
 			}
@@ -1702,10 +1702,10 @@ func TestARequiredPromotedClaimIsNeverSentToAWarmPeer(t *testing.T) {
 			}}
 			ts := newMeshTestServer(t, "sekret", mgr, &fakePlacer{addrs: []string{"warm:7777"}}, nil)
 
-			body, _ := json.Marshal(types.ClaimRequest{Template: "ns/app", RequirePromoted: tt.require})
+			body, _ := json.Marshal(ClaimRequest{Template: "ns/app", RequirePromoted: tt.require})
 			resp := postJSON(t, ts.URL+"/v1/claim", "sekret", string(body))
 			defer resp.Body.Close()
-			var cr types.ClaimResponse
+			var cr ClaimResponse
 			_ = json.UnmarshalRead(resp.Body, &cr)
 			if resp.StatusCode != tt.wantStatus || (len(cr.Redirect) > 0) != tt.wantWarm {
 				t.Errorf("status=%d redirect=%v, want %d and warm redirect %v", resp.StatusCode, cr.Redirect, tt.wantStatus, tt.wantWarm)
@@ -1744,7 +1744,7 @@ func TestAPlainClaimRequiringAPromotedTemplateNeverColdBoots(t *testing.T) {
 			}
 			ts := newTestServer(t, "sekret", mgr, nil)
 
-			body, _ := json.Marshal(types.ClaimRequest{Template: "ns/app", RequirePromoted: tt.require})
+			body, _ := json.Marshal(ClaimRequest{Template: "ns/app", RequirePromoted: tt.require})
 			resp := postJSON(t, ts.URL+"/v1/claim", "sekret", string(body))
 			defer resp.Body.Close()
 			if resp.StatusCode != tt.wantStatus || mgr.provisionCalls != 1 || mgr.gotRequirePromoted != tt.wantPromoted {
@@ -1914,7 +1914,7 @@ func TestPreviewHandlerZeroDeadlineMintsLiveToken(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status %d, want 200", resp.StatusCode)
 	}
-	var out types.PreviewResponse
+	var out PreviewResponse
 	if err := json.UnmarshalRead(resp.Body, &out); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
@@ -1958,7 +1958,7 @@ func TestCheckpointClaimRedirectsToOwner(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200 carrying a redirect (the mesh redirect is a 200, not a 3xx)", resp.StatusCode)
 	}
-	var got types.ClaimResponse
+	var got ClaimResponse
 	if err := json.UnmarshalRead(resp.Body, &got); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
@@ -2008,7 +2008,7 @@ func TestCheckpointClaimRedirectBeatsHeal(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200 carrying a redirect", resp.StatusCode)
 	}
-	var got types.ClaimResponse
+	var got ClaimResponse
 	if err := json.UnmarshalRead(resp.Body, &got); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
@@ -2034,7 +2034,7 @@ func TestCheckpointClaimFallsBackToHealWhenNoOwner(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200", resp.StatusCode)
 	}
-	var got types.ClaimResponse
+	var got ClaimResponse
 	if err := json.UnmarshalRead(resp.Body, &got); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
@@ -2061,7 +2061,7 @@ func TestCheckpointClaimNoRedirectGoesStraightToHeal(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200", resp.StatusCode)
 	}
-	var got types.ClaimResponse
+	var got ClaimResponse
 	if err := json.UnmarshalRead(resp.Body, &got); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
@@ -2213,7 +2213,7 @@ func TestCheckpointClaimProbesRealPeerAndRedirects(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200 carrying a redirect", resp.StatusCode)
 	}
-	var got types.ClaimResponse
+	var got ClaimResponse
 	if err := json.UnmarshalRead(resp.Body, &got); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
@@ -2354,7 +2354,7 @@ func TestExpireActionThreadsThroughEveryDecoder(t *testing.T) {
 
 func assertVolumeClaimResponse(t *testing.T, body io.Reader, wantRedirect string, wantRequirePromoted bool) {
 	t.Helper()
-	var got types.ClaimResponse
+	var got ClaimResponse
 	if err := json.UnmarshalRead(body, &got); err != nil {
 		t.Fatalf("decode: %v", err)
 	}

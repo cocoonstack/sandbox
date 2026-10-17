@@ -107,7 +107,7 @@ func TestRenewOfARemovedTenantsClaimIsForbidden(t *testing.T) {
 }
 
 func TestRootFindsARemovedTenantsRemoteTemplate(t *testing.T) {
-	hash := types.ClaimRequest{Template: "tpl"}.Key().Hash()
+	hash := ClaimRequest{Template: "tpl"}.Key().Hash()
 	placer := &fakePlacer{ownersByProbe: map[string][]string{
 		types.TemplateGossipHash(hash, "gone"):                  {"peer:7777"},
 		types.TemplateGossipHash(hash, types.TemplateRootScope): {"peer:7777"},

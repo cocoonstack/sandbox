@@ -18,7 +18,6 @@ import (
 	"github.com/projecteru2/core/log"
 
 	"github.com/cocoonstack/sandbox/sandboxd/pool"
-	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
 // forwardedHeader marks a request one owner already forwarded; a token whose owner string no longer names this node must not bounce forever.
@@ -181,7 +180,7 @@ func (s *Server) handlePreview(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotImplemented, "preview not configured")
 		return
 	}
-	req, ok := decodeBody[types.PreviewRequest](w, r)
+	req, ok := decodeBody[PreviewRequest](w, r)
 	if !ok {
 		return
 	}
@@ -204,5 +203,5 @@ func (s *Server) handlePreview(w http.ResponseWriter, r *http.Request) {
 	case ttl <= 0:
 		ttl = previewTTL
 	}
-	writeJSON(w, http.StatusOK, types.PreviewResponse{URL: s.preview.Mint(id, req.Port, ttl)})
+	writeJSON(w, http.StatusOK, PreviewResponse{URL: s.preview.Mint(id, req.Port, ttl)})
 }

@@ -312,7 +312,7 @@ func (s *Server) Handler() http.Handler {
 }
 
 func (s *Server) handleClaim(w http.ResponseWriter, r *http.Request) {
-	req, ok := decodeBody[types.ClaimRequest](w, r)
+	req, ok := decodeBody[ClaimRequest](w, r)
 	if !ok || !validRequest(w, req.Metadata.Validate(), req.OnExpire.Validate(), req.Env.Validate()) {
 		return
 	}
@@ -344,7 +344,7 @@ func (s *Server) handleClaim(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (s *Server) handleVolumeClaim(w http.ResponseWriter, r *http.Request, req types.ClaimRequest, key types.PoolKey, hash, tenant string) {
+func (s *Server) handleVolumeClaim(w http.ResponseWriter, r *http.Request, req ClaimRequest, key types.PoolKey, hash, tenant string) {
 	volumes, err := types.ValidateVolumes(req.Volumes, req.VolumesAttachOnly)
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, fmt.Sprintf("%v: %v", pool.ErrBadVolume, err))
@@ -382,12 +382,12 @@ func (s *Server) handleVolumes(w http.ResponseWriter, r *http.Request) {
 	if s.placer != nil {
 		holders = s.placer.VolumeHolders()
 	}
-	writeJSON(w, http.StatusOK, types.VolumeListResponse{
+	writeJSON(w, http.StatusOK, VolumeListResponse{
 		Volumes: s.mgr.Volumes(tenantFrom(r.Context()), holders),
 	})
 }
 
-func (s *Server) redirectVolumeClaim(ctx context.Context, w http.ResponseWriter, req *types.ClaimRequest, key types.PoolKey, hash, tenant string) (bool, error) {
+func (s *Server) redirectVolumeClaim(ctx context.Context, w http.ResponseWriter, req *ClaimRequest, key types.PoolKey, hash, tenant string) (bool, error) {
 	names := types.VolumeNames(req.Volumes)
 	localVolumes, err := s.mgr.VolumePlacement(key, tenant, names)
 	if err != nil {
@@ -423,7 +423,7 @@ func (s *Server) redirectVolumeClaim(ctx context.Context, w http.ResponseWriter,
 	if len(owners) == 0 {
 		return false, pool.ErrVolumeUnavailable
 	}
-	writeJSON(w, http.StatusOK, types.ClaimResponse{Redirect: s.clientAddrs(owners), RequirePromoted: promoted})
+	writeJSON(w, http.StatusOK, ClaimResponse{Redirect: s.clientAddrs(owners), RequirePromoted: promoted})
 	return true, nil
 }
 
@@ -443,7 +443,7 @@ func (s *Server) templateOwners(query func(string) []string, hash, tenant string
 	return owners
 }
 
-func (s *Server) redirectClaim(ctx context.Context, w http.ResponseWriter, req types.ClaimRequest, key types.PoolKey, hash, tenant string) bool {
+func (s *Server) redirectClaim(ctx context.Context, w http.ResponseWriter, req ClaimRequest, key types.PoolKey, hash, tenant string) bool {
 	if s.placer == nil || req.NoRedirect {
 		return false
 	}
@@ -454,7 +454,7 @@ func (s *Server) redirectClaim(ctx context.Context, w http.ResponseWriter, req t
 	if len(owners) == 0 || s.mgr.HasGolden(ctx, key, tenant) {
 		return false
 	}
-	writeJSON(w, http.StatusOK, types.ClaimResponse{Redirect: s.clientAddrs(owners), RequirePromoted: true})
+	writeJSON(w, http.StatusOK, ClaimResponse{Redirect: s.clientAddrs(owners), RequirePromoted: true})
 	return true
 }
 
@@ -552,26 +552,26 @@ func (s *Server) handleRenew(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	req, ok := decodeOptionalBody[types.RenewRequest](w, r)
+	req, ok := decodeOptionalBody[RenewRequest](w, r)
 	if !ok || !validRequest(w, req.OnExpire.Validate()) {
 		return
 	}
 	id := r.PathValue("id")
 	deadline, err := s.mgr.Renew(r.Context(), id, s.sandboxCred(token), req.TTL(), req.OnExpire)
 	writeResult(w, r, "renew", id, "renew failed", err, func() {
-		writeJSON(w, http.StatusOK, types.RenewResponse{Deadline: deadline})
+		writeJSON(w, http.StatusOK, RenewResponse{Deadline: deadline})
 	})
 }
 
 func (s *Server) handleFork(w http.ResponseWriter, r *http.Request) {
-	req, ok := decodeBody[types.ForkRequest](w, r)
+	req, ok := decodeBody[ForkRequest](w, r)
 	if !ok || !validRequest(w, req.OnExpire.Validate()) {
 		return
 	}
 	id := r.PathValue("id")
 	children, err := s.mgr.Fork(r.Context(), id, s.bodyCred(r, req.Token), req.Count, req.TTL(), req.OnExpire, req.ClaimRefPrefix)
 	writeResult(w, r, "fork", id, "fork failed", err, func() {
-		resp := types.ForkResponse{Children: make([]types.ClaimResponse, len(children))}
+		resp := ForkResponse{Children: make([]ClaimResponse, len(children))}
 		for i, c := range children {
 			resp.Children[i] = s.claimResponse(c)
 		}
@@ -580,31 +580,31 @@ func (s *Server) handleFork(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handlePromote(w http.ResponseWriter, r *http.Request) {
-	req, ok := decodeBody[types.PromoteRequest](w, r)
+	req, ok := decodeBody[PromoteRequest](w, r)
 	if !ok {
 		return
 	}
 	id := r.PathValue("id")
 	key, digest, err := s.mgr.Promote(r.Context(), id, s.bodyCred(r, req.Token), req.Template, tenantFrom(r.Context()))
 	writeResult(w, r, "promote", id, "promote failed", err, func() {
-		writeJSON(w, http.StatusOK, types.PromoteResponse{Key: key, ContentDigest: digest})
+		writeJSON(w, http.StatusOK, PromoteResponse{Key: key, ContentDigest: digest})
 	})
 }
 
 func (s *Server) handleCheckpoint(w http.ResponseWriter, r *http.Request) {
-	req, ok := decodeBody[types.CheckpointRequest](w, r)
+	req, ok := decodeBody[CheckpointRequest](w, r)
 	if !ok {
 		return
 	}
 	id := r.PathValue("id")
 	ckpt, err := s.mgr.Checkpoint(r.Context(), id, s.bodyCred(r, req.Token), req.Name, tenantFrom(r.Context()))
 	writeResult(w, r, "checkpoint", id, "checkpoint failed", err, func() {
-		writeJSON(w, http.StatusOK, types.CheckpointResponse{Checkpoint: ckpt})
+		writeJSON(w, http.StatusOK, CheckpointResponse{Checkpoint: ckpt})
 	})
 }
 
 func (s *Server) handleClaimCheckpoint(w http.ResponseWriter, r *http.Request) {
-	req, ok := decodeBody[types.CheckpointClaimRequest](w, r)
+	req, ok := decodeBody[CheckpointClaimRequest](w, r)
 	if !ok || !validRequest(w, req.Metadata.Validate(), req.OnExpire.Validate(), req.Env.Validate()) {
 		return
 	}
@@ -654,7 +654,7 @@ func (s *Server) handleCheckpointProbe(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleListCheckpoints(w http.ResponseWriter, r *http.Request) {
 	ckpts, err := s.mgr.Checkpoints(r.Context(), tenantFrom(r.Context()))
 	writeResult(w, r, "list checkpoints", "", "list checkpoints failed", err, func() {
-		writeJSON(w, http.StatusOK, types.CheckpointListResponse{Checkpoints: ckpts})
+		writeJSON(w, http.StatusOK, CheckpointListResponse{Checkpoints: ckpts})
 	})
 }
 
@@ -862,15 +862,15 @@ func (s *Server) resolveScope(r *http.Request) (*config.TenantRecord, error) {
 	return s.mgr.TenantByToken(r.Context(), token)
 }
 
-func (s *Server) claimResponse(sb *types.Sandbox) types.ClaimResponse {
-	return types.ClaimResponse{
+func (s *Server) claimResponse(sb *types.Sandbox) ClaimResponse {
+	return ClaimResponse{
 		ID: sb.ID, Token: sb.Token, Deadline: sb.Deadline,
 		OwnerAddr: s.advertise, FromCheckpoint: sb.FromCheckpoint, TemplateDigest: sb.TemplateDigest,
 		Volumes: sb.Volumes, NetRoute: s.mgr.NetRoute(sb),
 	}
 }
 
-func claimOptions(req types.ClaimRequest, tenant *config.TenantRecord) pool.ClaimOptions {
+func claimOptions(req ClaimRequest, tenant *config.TenantRecord) pool.ClaimOptions {
 	o := pool.ClaimOptions{
 		TTL: req.TTL(), OnExpire: req.OnExpire, ClaimRef: req.ClaimRef, Metadata: req.Metadata, Volumes: req.Volumes,
 		NoEgress: req.Egress != nil && !*req.Egress, RequirePromoted: req.RequirePromoted, Env: req.Env,

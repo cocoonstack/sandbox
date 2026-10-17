@@ -22,7 +22,7 @@ func (s *Server) handleSandboxVolumes(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		view, err = s.mgr.GetVolumes(id, tenant)
 	case http.MethodPut:
-		req, ok := decodeBodyStrict[types.SetVolumesRequest](w, r)
+		req, ok := decodeBodyStrict[SetVolumesRequest](w, r)
 		if !ok {
 			return
 		}
