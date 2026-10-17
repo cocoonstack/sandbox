@@ -133,6 +133,8 @@ var (
 		func(d []byte) Response { return &Stderr{Data: d} },
 		func(d []byte) Response { return &DataResp{Data: d} },
 	)
+
+	dataRespHead = bulkResponses["data"].head
 )
 
 // Request is a client→server frame; Op is its wire tag.
@@ -698,6 +700,11 @@ func DecodeResponseInto(line []byte, scratch *[]byte) (Response, error) {
 		return nil, fmt.Errorf("unknown response type %q", typ)
 	}
 	return dec(line)
+}
+
+// DecodeData slices a canonical data response frame's payload into *scratch without allocating a Response; ok is false for any other shape, which takes DecodeResponseInto.
+func DecodeData(line []byte, scratch *[]byte) ([]byte, bool) {
+	return decodeBulk(line, dataRespHead, scratch)
 }
 
 // NewFrameScanner wraps r for newline-delimited frames capped at MaxFrame.

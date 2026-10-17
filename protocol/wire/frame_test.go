@@ -274,6 +274,25 @@ func TestDecodeResponseIntoReusesScratch(t *testing.T) {
 	}
 }
 
+func TestDecodeDataTakesOnlyCanonicalDataFrames(t *testing.T) {
+	var scratch []byte
+	got, ok := DecodeData([]byte(`{"type":"data","data":"aGVsbG8="}`), &scratch)
+	if !ok || string(got) != "hello" {
+		t.Fatalf("canonical frame: %q, %v", got, ok)
+	}
+	for _, frame := range []string{
+		`{"type":"stdout","data":"aGVsbG8="}`,
+		`{"type":"data","meta":{"data":"WFhY"},"data":"aGk="}`,
+		`{"type":"data","data":"aGk="}garbage`,
+		"{\"type\":\"data\",\"data\":\"Q\nQ==\"}",
+		`{"type":"done"}`,
+	} {
+		if data, ok := DecodeData([]byte(frame), &scratch); ok {
+			t.Errorf("frame %s decoded as %q", frame, data)
+		}
+	}
+}
+
 func TestDecodeResponseIntoMatchesDecodeResponse(t *testing.T) {
 	entries, err := os.ReadDir(fixtureDir)
 	if err != nil {
