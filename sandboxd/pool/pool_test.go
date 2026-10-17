@@ -1232,6 +1232,7 @@ type fakeEngine struct {
 	detachVolumeErr                   error
 	liveVolumeHook                    func(string) error
 	stopped                           map[string]bool
+	disks                             map[string][]types.VMDisk
 	creating                          map[string]bool
 	staleOutcome                      engine.StaleCreateOutcome
 	staleErr                          error
@@ -1497,6 +1498,9 @@ func (f *fakeEngine) Inspect(ctx context.Context, name string) (types.VMRecord, 
 	if i < 0 {
 		return types.VMRecord{}, false, nil
 	}
+	f.mu.Lock()
+	vms[i].AttachedDevices.Disks = f.disks[name]
+	f.mu.Unlock()
 	return vms[i], true, nil
 }
 

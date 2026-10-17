@@ -414,6 +414,50 @@ func TestPendingRemovalHoldsVolumesUntilDrained(t *testing.T) {
 	}
 }
 
+func TestRestartHoldsVolumesOfAStaleVMUntilItIsRemoved(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		claimed types.Volume
+		held    volumeHolders
+	}{
+		{name: "writable", claimed: types.Volume{Name: "scratch", Mode: types.VolumeModeRW}, held: volumeHolders{writers: 1}},
+		{name: "read-only", claimed: types.Volume{Name: "scratch"}, held: volumeHolders{readers: 1}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			path := writeVolumeImage(t, "scratch.img", "data")
+			dataDir := t.TempDir()
+			catalog := []config.VolumeSpec{{Name: "scratch", Path: path, Writable: true}}
+			eng := newFakeEngine()
+			m := newVolumeManagerAt(t, eng, dataDir, catalog)
+			sb, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Volumes: []types.Volume{tt.claimed}})
+			if err != nil {
+				t.Fatalf("ClaimProvision: %v", err)
+			}
+			eng.removeErrFor = sb.VMName
+			if err := m.Release(t.Context(), sb.ID, Cred{Token: sb.Token}); err == nil {
+				t.Fatal("Release reported success for a VM that survived removal")
+			}
+			eng.mu.Lock()
+			eng.disks = map[string][]types.VMDisk{sb.VMName: {{Name: "scratch", ReadOnly: !tt.claimed.RW()}}}
+			eng.mu.Unlock()
+
+			restarted := newVolumeManagerAt(t, eng, dataDir, catalog)
+			if err := restarted.Reconcile(t.Context()); err != nil {
+				t.Fatalf("Reconcile: %v", err)
+			}
+			if holders := volumeHoldersOf(restarted, "scratch"); holders != tt.held {
+				t.Fatalf("registry after the restart=%+v, want %+v", holders, tt.held)
+			}
+
+			eng.removeErrFor = ""
+			restarted.retryRemovals(t.Context()).Wait()
+			if holders := volumeHoldersOf(restarted, "scratch"); holders != (volumeHolders{}) {
+				t.Fatalf("registry after the stale VM is gone=%+v, want empty", holders)
+			}
+		})
+	}
+}
+
 func TestQuiesceBudgetScalesWithMounts(t *testing.T) {
 	for _, tt := range []struct {
 		mounts int

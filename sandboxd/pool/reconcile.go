@@ -168,7 +168,33 @@ func (m *Manager) removeStaleVM(ctx context.Context, name string, rec types.VMRe
 		}
 		// not-creating: the record moved on under the lock; remove normally.
 	}
-	return m.removeOrRetry(ctx, name, "", rec.TapDevice(), volumeTeardown{})
+	if m.removeVM(ctx, name) {
+		return true
+	}
+	m.queueRemoval(name, "", rec.TapDevice(), volumeTeardown{holds: m.holdStaleVolumes(ctx, name, rec)}, time.Time{})
+	return false
+}
+
+func (m *Manager) holdStaleVolumes(ctx context.Context, name string, rec types.VMRecord) []types.Volume {
+	if rec.State != vmStateRunning {
+		return nil
+	}
+	inspected, _, err := m.eng.Inspect(ctx, name)
+	if err != nil {
+		log.WithFunc("pool.holdStaleVolumes").Warnf(ctx, "inspect stale vm %s, its volumes stay unheld: %v", name, err)
+		return nil
+	}
+	holds := make([]types.Volume, len(inspected.AttachedDevices.Disks))
+	for i, disk := range inspected.AttachedDevices.Disks {
+		holds[i].Name = disk.Name
+		if !disk.ReadOnly {
+			holds[i].Mode = types.VolumeModeRW
+		}
+	}
+	m.mu.Lock()
+	m.adoptVolumes(holds)
+	m.mu.Unlock()
+	return holds
 }
 
 // resyncEgress re-locks adopted egress claims, quarantining any it cannot lock.
@@ -231,7 +257,7 @@ func (m *Manager) resyncEgress(ctx context.Context, live map[string]types.VMReco
 // quarantineClaim parks a claim whose teardown failed: out of service and queued until a remove succeeds.
 func (m *Manager) quarantineClaim(ctx context.Context, sb *types.Sandbox) bool {
 	td := m.quiesceVolumes(ctx, sb)
-	gone := m.removeOrRetry(ctx, sb.VMName, sb.ID, "", td)
+	gone := m.removeOrRetry(ctx, sb.VMName, sb.ID, td)
 	m.mu.Lock()
 	delete(m.claimed, sb.ID)
 	m.tenantDelta(sb.Tenant, -1)

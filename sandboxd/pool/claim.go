@@ -331,7 +331,7 @@ func (m *Manager) releaseResolved(ctx context.Context, id string, sb *types.Sand
 	case m.releaseDelay > 0:
 		m.queueRemoval(vmName, id, "", td, time.Now().Add(m.releaseDelay))
 	default:
-		if removed = m.removeOrRetry(ctx, vmName, id, "", td); !removed {
+		if removed = m.removeOrRetry(ctx, vmName, id, td); !removed {
 			err = fmt.Errorf("vm %s survived removal", vmName)
 		}
 	}
@@ -437,7 +437,7 @@ func (m *Manager) finalizeBatch(ctx context.Context, sbs []*types.Sandbox, ttl t
 		for _, sb := range sbs {
 			// the rw mount dirtied the journal, so the clean umount is still owed
 			td := m.quiesceVolumes(ctx, sb)
-			m.removeOrRetry(ctx, sb.VMName, "", "", td)
+			m.removeOrRetry(ctx, sb.VMName, "", td)
 		}
 		return err
 	}
@@ -490,13 +490,13 @@ func (m *Manager) rollbackClaim(ctx context.Context, sbs []*types.Sandbox) {
 	for i, sb := range sbs {
 		td := m.quiesceVolumes(ctx, sb)
 		td.holds = holds[i]
-		m.out.Disarm(sb.ID, m.removeOrRetry(ctx, sb.VMName, sb.ID, "", td))
+		m.out.Disarm(sb.ID, m.removeOrRetry(ctx, sb.VMName, sb.ID, td))
 	}
 }
 
 // abortVolumeClaim removes a failed claim's VM and clears reserved against a double release.
 func (m *Manager) abortVolumeClaim(ctx context.Context, vmName string, reserved *[]types.Volume) {
-	m.removeOrRetry(ctx, vmName, "", "", volumeTeardown{holds: *reserved})
+	m.removeOrRetry(ctx, vmName, "", volumeTeardown{holds: *reserved})
 	*reserved = nil
 }
 
@@ -624,7 +624,7 @@ func (m *Manager) reapOnce(ctx context.Context) {
 		default:
 			td := m.quiesceVolumes(ctx, v.sb)
 			td.holds = v.holds
-			m.out.Disarm(v.id, m.removeOrRetry(ctx, v.vmName, v.id, "", td))
+			m.out.Disarm(v.id, m.removeOrRetry(ctx, v.vmName, v.id, td))
 			m.dropSnap(ctx, v.snap)
 			m.counters.reaps.Add(1)
 			m.recordUsage(ctx, usageEvent{Event: "reap", ID: v.id, VMName: v.vmName})
