@@ -800,6 +800,40 @@ func TestSweepRemovesLineageMarkersOfDeadRecords(t *testing.T) {
 	}
 }
 
+func TestSweepKeepsListedReferencesOfARecordDeletedMidSweep(t *testing.T) {
+	const lineage = "sbx_00000000000000a6"
+	fake := &fakeS3{objects: map[string][]byte{}}
+	st := newTestStore(t, fake)
+	publish := func(id string) {
+		t.Helper()
+		staging := stageRecord(t, st, id, []byte(`{"id":"`+id+`"}`), "shared")
+		if err := st.Publish(t.Context(), staging, id, lineage); err != nil {
+			t.Fatalf("Publish %s: %v", id, err)
+		}
+	}
+	publish("ck_00000000000000a1")
+	fake.age("", 2*store.GenerationGrace)
+	fake.mu.Lock()
+	fake.beforeMetaGet = func() {
+		publish("ck_00000000000000a2")
+		if err := st.Delete(t.Context(), "ck_00000000000000a1"); err != nil {
+			t.Errorf("Delete: %v", err)
+		}
+	}
+	fake.mu.Unlock()
+
+	if err := st.SweepGenerations(t.Context()); err != nil {
+		t.Fatalf("SweepGenerations: %v", err)
+	}
+	dir, _, _, err := st.Fetch(t.Context(), "ck_00000000000000a2")
+	if err != nil {
+		t.Fatalf("Fetch of the record that reused the chunk: %v", err)
+	}
+	if got, err := os.ReadFile(filepath.Join(dir, "disk.img")); err != nil || string(got) != "shared" {
+		t.Errorf("fetched content = %q, %v, want shared", got, err)
+	}
+}
+
 func TestSweepSparesAnInFlightGeneration(t *testing.T) {
 	const id = "ck_00000000000000a7"
 	fake := &fakeS3{objects: map[string][]byte{}}

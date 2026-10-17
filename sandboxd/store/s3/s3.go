@@ -549,19 +549,20 @@ func (s *Store) referencedChunks(ctx context.Context, id, lineage string) (map[s
 func (s *Store) sweepRecord(ctx context.Context, rec *recordObjects, now time.Time, refs *chunkRefs) ([]string, error) {
 	current := ""
 	var metaModified *time.Time
+	vanished := false
 	if rec.meta != nil {
 		meta, out, err := s.getObject(ctx, *rec.meta.Key)
-		if errors.Is(err, store.ErrNotFound) {
-			return nil, nil // deleted mid-sweep
-		}
-		if err != nil {
+		vanished = errors.Is(err, store.ErrNotFound)
+		if err != nil && !vanished {
 			return nil, err
 		}
-		current, metaModified = store.ExportGen(meta), out.LastModified
+		if !vanished {
+			current, metaModified = store.ExportGen(meta), out.LastModified
+		}
 	}
 	var doomed []string
 	for gen, obj := range rec.manifests {
-		if gen != current && idle(obj.LastModified, now) && (rec.meta == nil || idle(metaModified, now)) {
+		if !vanished && gen != current && idle(obj.LastModified, now) && (rec.meta == nil || idle(metaModified, now)) {
 			doomed = append(doomed, *obj.Key)
 			continue
 		}
