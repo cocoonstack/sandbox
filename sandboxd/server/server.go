@@ -701,7 +701,12 @@ func (s *Server) handleOwner(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := r.PathValue("id")
-	if _, err := s.mgr.AgentSocket(id, token); err != nil {
+	_, err := s.mgr.AgentSocket(id, token)
+	if errors.Is(err, pool.ErrLeaseLost) {
+		writeErr(w, http.StatusNotFound, "not owned here")
+		return
+	}
+	if err != nil {
 		adopted, adoptErr := s.mgr.AdoptArchived(r.Context(), id, token)
 		switch {
 		case adoptErr != nil:

@@ -216,6 +216,9 @@ func (m *Manager) AgentSocket(id, token string) (string, error) {
 	if !ok {
 		return "", ErrUnknownSandbox
 	}
+	if m.fenced.Load() && sb.Replicated() {
+		return "", ErrLeaseLost
+	}
 	// no activity stamp: a control-plane poll must not keep an idle sandbox awake
 	return sb.VsockSocket, nil
 }

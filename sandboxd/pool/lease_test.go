@@ -251,6 +251,24 @@ func TestLeaseAdoptionDuringUnfenceDropsTheClaimWithoutServingIt(t *testing.T) {
 	})
 }
 
+func TestLeaseFencedNodeDoesNotAnswerAsOwnerOfReplicatedClaims(t *testing.T) {
+	c := newReplicaCluster(t)
+	a := c.node(t, "a", t.TempDir(), keepAnHour)
+	replicated, plain := mustClaim(t, a, testKey), mustClaim(t, a, testKey)
+	replicateNow(t, a, replicated)
+
+	if _, err := a.AgentSocket(replicated.ID, replicated.Token); !errors.Is(err, ErrLeaseLost) {
+		t.Errorf("owner lookup of a replicated claim while fenced: %v, want ErrLeaseLost", err)
+	}
+	if _, err := a.AgentSocket(plain.ID, plain.Token); err != nil {
+		t.Errorf("owner lookup of an unreplicated claim while fenced: %v", err)
+	}
+	a.fenced.Store(false)
+	if _, err := a.AgentSocket(replicated.ID, replicated.Token); err != nil {
+		t.Errorf("owner lookup once the fence lifted: %v", err)
+	}
+}
+
 func TestLeaseConfirmRetriesOnceOnAStaleEpoch(t *testing.T) {
 	c := newReplicaCluster(t)
 	a := c.node(t, "a", t.TempDir(), keepAnHour)

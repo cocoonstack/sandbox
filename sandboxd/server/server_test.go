@@ -1865,6 +1865,24 @@ func TestOwnerEndpoint(t *testing.T) {
 	}
 }
 
+func TestOwnerEndpointAnswers404ForAClaimItsFencedNodeCannotServe(t *testing.T) {
+	adopted := false
+	mgr := &fakeManager{
+		socket: func(string, string) (string, error) { return "", pool.ErrLeaseLost },
+		adopt: func(string, string) (bool, error) {
+			adopted = true
+			return true, nil
+		},
+	}
+	ts := newMeshTestServer(t, "", mgr, nil, nil)
+
+	resp := doReq(t, http.MethodGet, ts.URL+"/v1/sandboxes/sb_1/owner", "good", "")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound || adopted {
+		t.Errorf("fenced owner: status %d adopt tried %v, want 404 without an adoption", resp.StatusCode, adopted)
+	}
+}
+
 func TestOwnerEndpointAdoptsAnArchivedClaimItDoesNotHold(t *testing.T) {
 	var adoptErr error
 	mgr := &fakeManager{
