@@ -15,10 +15,20 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/metastore"
 )
 
-const table = "sandboxd_archives"
+const (
+	table      = "sandboxd_archives"
+	nodesTable = "sandboxd_nodes"
 
-//go:embed schema.sql
-var schema string
+	leaseExpired = `NOT EXISTS (SELECT 1 FROM sandboxd_nodes n WHERE n.cell = sandboxd_archives.cell AND n.node = sandboxd_archives.owner AND n.lease_until > now())`
+)
+
+var (
+	//go:embed schema.sql
+	schema string
+
+	//go:embed nodes.sql
+	nodesSchema string
+)
 
 var _ archives.Registry = (*Registry)(nil)
 
@@ -28,10 +38,14 @@ type Registry struct {
 	cell string
 }
 
-// Open connects to cell's rows and creates the table when it is missing.
+// Open connects to cell's rows and creates the tables when they are missing.
 func Open(ctx context.Context, dsn, cell string) (*Registry, error) {
 	pool, _, err := metastore.Open(ctx, dsn, table, schema)
 	if err != nil {
+		return nil, err
+	}
+	if err = metastore.EnsureTable(ctx, pool, nodesTable, nodesSchema); err != nil {
+		pool.Close()
 		return nil, err
 	}
 	return &Registry{pool: pool, cell: cell}, nil
@@ -60,7 +74,7 @@ func (r *Registry) Put(ctx context.Context, rec archives.Record) (int64, error) 
 
 func (r *Registry) Take(ctx context.Context, id string, expect int64, owner string) (int64, error) {
 	return r.advance(ctx, `UPDATE sandboxd_archives SET owner = $4, epoch = nextval('sandboxd_archives_epoch'), updated_at = now()
-		WHERE cell = $1 AND id = $2 AND epoch = $3 AND NOT consumed
+		WHERE cell = $1 AND id = $2 AND epoch = $3 AND NOT consumed AND (owner = $4 OR `+leaseExpired+`)
 		RETURNING epoch`, r.cell, id, expect, owner)
 }
 
@@ -99,7 +113,7 @@ func (r *Registry) Get(ctx context.Context, id string) (archives.Record, bool, e
 
 func (r *Registry) Sweepable(ctx context.Context, now time.Time, owner string) ([]archives.Record, error) {
 	return r.collect(ctx, `SELECT id, tenant, token_sha256, owner, epoch, consumed, checkpoint, deadline, NULL::jsonb
-		FROM sandboxd_archives WHERE cell = $2 AND (consumed OR deadline < $1 OR owner = $3)`, now, r.cell, owner)
+		FROM sandboxd_archives WHERE cell = $2 AND (consumed OR owner = $3 OR deadline < $1 AND `+leaseExpired+`)`, now, r.cell, owner)
 }
 
 func (r *Registry) Rows(ctx context.Context, ids []string) (map[string]archives.Record, error) {
@@ -113,6 +127,18 @@ func (r *Registry) Rows(ctx context.Context, ids []string) (map[string]archives.
 		rows[rec.ID] = rec
 	}
 	return rows, nil
+}
+
+func (r *Registry) Renew(ctx context.Context, node string, ttl time.Duration) error {
+	qctx, cancel := context.WithTimeout(ctx, metastore.QueryTimeout)
+	defer cancel()
+	_, err := r.pool.Exec(qctx, `INSERT INTO sandboxd_nodes (cell, node, lease_until)
+		VALUES ($1, $2, now() + $3::float8 * interval '1 second')
+		ON CONFLICT (cell, node) DO UPDATE SET lease_until = EXCLUDED.lease_until`, r.cell, node, ttl.Seconds())
+	if err != nil {
+		return unavailable(err)
+	}
+	return nil
 }
 
 // Close releases the connection pool.

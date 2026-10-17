@@ -38,7 +38,7 @@ func Open(ctx context.Context, dsn, table, schema string) (*pgxpool.Pool, *pgx.C
 	if err != nil {
 		return nil, nil, fmt.Errorf("open meta store: %w", err)
 	}
-	if err = ensureTable(ctx, pool, table, schema); err != nil {
+	if err = EnsureTable(ctx, pool, table, schema); err != nil {
 		pool.Close()
 		return nil, nil, err
 	}
@@ -86,7 +86,8 @@ func Listen(ctx context.Context, cfg *pgx.ConnConfig, channel string, synced fun
 	}
 }
 
-func ensureTable(ctx context.Context, pool *pgxpool.Pool, table, schema string) error {
+// EnsureTable runs schema only when table is missing.
+func EnsureTable(ctx context.Context, pool *pgxpool.Pool, table, schema string) error {
 	qctx, cancel := context.WithTimeout(ctx, QueryTimeout)
 	defer cancel()
 	var exists bool

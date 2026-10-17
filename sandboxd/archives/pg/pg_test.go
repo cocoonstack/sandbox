@@ -95,6 +95,34 @@ func TestADownDatabaseIsUnavailable(t *testing.T) {
 	}
 }
 
+func TestOpenAddsTheNodesTableToAnArchivesOnlyDatabase(t *testing.T) {
+	dsn := metastoretest.PGSchema(t)
+	first := open(t, dsn, "c1")
+	if _, err := first.pool.Exec(t.Context(), `DROP TABLE sandboxd_nodes`); err != nil {
+		t.Fatalf("drop nodes: %v", err)
+	}
+	second := open(t, dsn, "c1")
+	if err := second.Renew(t.Context(), "a", time.Minute); err != nil {
+		t.Errorf("renew on a database that predates the nodes table: %v", err)
+	}
+}
+
+func TestLeasesAreScopedToTheirCell(t *testing.T) {
+	dsn := metastoretest.PGSchema(t)
+	c1, c2 := open(t, dsn, "c1"), open(t, dsn, "c2")
+	ctx := t.Context()
+	if err := c1.Renew(ctx, "a", time.Hour); err != nil {
+		t.Fatalf("renew in c1: %v", err)
+	}
+	epoch, err := c2.Put(ctx, archives.Record{ID: "sb_1", TokenSHA256: "ab", Owner: "a", Checkpoint: "ck_1", Claim: []byte(`{}`)})
+	if err != nil {
+		t.Fatalf("put in c2: %v", err)
+	}
+	if _, err = c2.Take(ctx, "sb_1", epoch, "b"); err != nil {
+		t.Errorf("c2 take of a row whose owner holds a lease only in c1: %v, want it taken", err)
+	}
+}
+
 func open(t *testing.T, dsn, cell string) *Registry {
 	t.Helper()
 	r, err := Open(t.Context(), dsn, cell)
