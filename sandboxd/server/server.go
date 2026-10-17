@@ -123,6 +123,9 @@ type Manager interface {
 	AdoptArchived(ctx context.Context, id, token string) (bool, error)
 	DialPort(ctx context.Context, id string, cred pool.Cred, port uint16) (net.Conn, error)
 	WakeAgentSocket(ctx context.Context, id, token string) (string, <-chan struct{}, func(), error)
+	WakeAgentSocketOrRead(ctx context.Context, id, token string) (string, <-chan struct{}, func(), error)
+	SleepingSource(id, token string) string
+	DialReader(ctx context.Context, id, token string) (conn net.Conn, source string, err error)
 	SetPools(ctx context.Context, pools []config.PoolSpec) error
 	TenantByToken(ctx context.Context, token string) (*tenants.TenantRecord, error)
 	Tenants(ctx context.Context, after string, limit int) (pool.TenantPage, error)
@@ -229,7 +232,7 @@ type Server struct {
 	execBudget *semaphore.Weighted
 
 	relayMu     sync.Mutex
-	relays      map[net.Conn]net.Conn // client conn → guest conn
+	relays      map[net.Conn]io.Closer // client conn → what its relay holds open
 	relayClosed bool
 	relayWG     sync.WaitGroup
 }
@@ -250,7 +253,7 @@ func New(apiToken, advertise string, mgr Manager, dialer Dialer, placer Placer, 
 		apiToken:  apiToken,
 		advertise: advertise,
 		preview:   preview,
-		relays:    map[net.Conn]net.Conn{},
+		relays:    map[net.Conn]io.Closer{},
 
 		execBudget: semaphore.NewWeighted(execBufferBudget),
 	}

@@ -2554,6 +2554,7 @@ type fakeManager struct {
 	sandboxIndex       func(tenant, claimRef string) []pool.SandboxSummary
 	sandboxByID        func(id string) (pool.SandboxSummary, bool)
 	draining           bool
+	reader             *fakeReader
 }
 
 func (f *fakeManager) GetVolumes(id, tenant string) (types.SandboxVolumesResponse, error) {
@@ -2617,8 +2618,32 @@ func (f *fakeManager) AdoptArchived(_ context.Context, id, token string) (bool, 
 }
 
 func (f *fakeManager) WakeAgentSocket(_ context.Context, id, token string) (string, <-chan struct{}, func(), error) {
+	if f.reader != nil {
+		f.reader.wake()
+	}
 	sock, err := f.AgentSocket(id, token)
 	return sock, f.fenced, func() {}, err
+}
+
+func (f *fakeManager) WakeAgentSocketOrRead(ctx context.Context, id, token string) (string, <-chan struct{}, func(), error) {
+	if f.reader != nil && f.reader.source() != "" {
+		return "", nil, nil, pool.ErrSleeping
+	}
+	return f.WakeAgentSocket(ctx, id, token)
+}
+
+func (f *fakeManager) SleepingSource(_, _ string) string {
+	if f.reader == nil {
+		return ""
+	}
+	return f.reader.source()
+}
+
+func (f *fakeManager) DialReader(_ context.Context, _, _ string) (net.Conn, string, error) {
+	if f.reader == nil {
+		return nil, "", pool.ErrNoReader
+	}
+	return f.reader.dial()
 }
 
 func (f *fakeManager) Renew(_ context.Context, id string, cred pool.Cred, ttl time.Duration, onExpire types.ExpireAction) (time.Time, error) {

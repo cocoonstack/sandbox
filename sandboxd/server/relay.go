@@ -35,6 +35,8 @@ var (
 	silkdEnds = relayEnds{guest: func(c net.Conn) { _ = c.Close() }, client: drainClient}
 )
 
+type agentWaker func(ctx context.Context, id, token string) (string, <-chan struct{}, func(), error)
+
 // relayEnds is what a finished direction means to the peer that did not end it.
 type relayEnds struct {
 	guest, client func(net.Conn)
@@ -57,7 +59,12 @@ func (s *Server) handleAgent(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	guest, done, ok := s.wakeGuest(r.Context(), w, r.PathValue("id"), token)
+	id := r.PathValue("id")
+	guest, done, sleeping, ok := s.wakeGuest(r.Context(), w, id, token, s.mgr.WakeAgentSocketOrRead)
+	if sleeping {
+		s.serveSleeping(r.Context(), w, id, token)
+		return
+	}
 	if !ok {
 		return
 	}
@@ -66,19 +73,21 @@ func (s *Server) handleAgent(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	s.relay(r.Context(), r.PathValue("id"), client, clientBuf, guest)
+	s.relay(r.Context(), id, client, clientBuf, guest)
 }
 
-// wakeGuest dials the sandbox's silkd, waking a hibernated VM first; on failure it has already answered the request.
-func (s *Server) wakeGuest(ctx context.Context, w http.ResponseWriter, id, token string) (guest net.Conn, release func(), ok bool) {
-	sock, fenced, done, err := s.mgr.WakeAgentSocket(ctx, id, token)
+// wakeGuest dials the sandbox's silkd, waking a hibernated VM first unless wake answers ErrSleeping; on failure it has already answered the request.
+func (s *Server) wakeGuest(ctx context.Context, w http.ResponseWriter, id, token string, wake agentWaker) (guest net.Conn, release func(), sleeping, ok bool) {
+	sock, fenced, done, err := wake(ctx, id, token)
 	switch {
+	case errors.Is(err, pool.ErrSleeping):
+		return nil, nil, true, false
 	case writePoolErr(w, err):
-		return nil, nil, false
+		return nil, nil, false, false
 	case err != nil:
 		log.WithFunc("server.wakeGuest").Errorf(ctx, err, "agent socket for %s", id)
 		writeErr(w, http.StatusInternalServerError, "sandbox lookup failed")
-		return nil, nil, false
+		return nil, nil, false, false
 	}
 	guest, err = s.dialer.DialSilkd(ctx, sock)
 	if err != nil {
@@ -89,23 +98,26 @@ func (s *Server) wakeGuest(ctx context.Context, w http.ResponseWriter, id, token
 			log.WithFunc("server.wakeGuest").Errorf(ctx, err, "dial silkd for %s", id)
 		}
 		writeErr(w, http.StatusBadGateway, "guest agent unreachable")
-		return nil, nil, false
+		return nil, nil, false, false
 	}
 	if fenced == nil {
-		return guest, done, true
+		return guest, done, false, true
 	}
 	stop := pool.CloseOnFence(fenced, guest)
-	return guest, func() { stop(); done() }, true
+	return guest, func() { stop(); done() }, false, true
 }
 
 func (s *Server) relay(ctx context.Context, id string, client net.Conn, clientBuf *bufio.Reader, guest net.Conn) {
-	clientR := clientReader(client, clientBuf)
-	if s.mgr.AuditEnabled() {
-		clientR = &auditTee{r: clientR, record: func(line []byte) {
-			s.mgr.Audit(ctx, id, line)
-		}}
+	s.splice(client, s.audited(ctx, id, clientReader(client, clientBuf)), guest, switchingProtocols, silkdEnds)
+}
+
+func (s *Server) audited(ctx context.Context, id string, clientR io.Reader) io.Reader {
+	if !s.mgr.AuditEnabled() {
+		return clientR
 	}
-	s.splice(client, clientR, guest, switchingProtocols, silkdEnds)
+	return &auditTee{r: clientR, record: func(line []byte) {
+		s.mgr.Audit(ctx, id, line)
+	}}
 }
 
 func (s *Server) splice(client net.Conn, clientR io.Reader, guest net.Conn, hello []byte, ends relayEnds) {
@@ -121,30 +133,11 @@ func (s *Server) splice(client net.Conn, clientR io.Reader, guest net.Conn, hell
 	if _, err := client.Write(hello); err != nil {
 		return
 	}
-
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		_, err := io.Copy(guest, clientR)
-		if err != nil {
-			// the client died rather than half-closing, so nothing is left to answer it
-			_ = guest.Close()
-			return
-		}
-		ends.guest(guest)
-	}()
-
-	if _, err := io.Copy(client, guest); err != nil {
-		_ = client.Close()
-		_ = guest.Close()
-	} else {
-		ends.client(client)
-	}
-	<-done
+	copyBoth(client, clientR, guest, ends)
 }
 
 // trackRelay registers a hijacked pair for CloseRelays; !ok means the server is already draining.
-func (s *Server) trackRelay(client, guest net.Conn) (func(), bool) {
+func (s *Server) trackRelay(client net.Conn, guest io.Closer) (func(), bool) {
 	s.relayMu.Lock()
 	if s.relayClosed {
 		s.relayMu.Unlock()
@@ -163,6 +156,12 @@ func (s *Server) trackRelay(client, guest net.Conn) (func(), bool) {
 		s.relayMu.Unlock()
 		s.relayWG.Done()
 	}, true
+}
+
+func (s *Server) retargetRelay(client net.Conn, peer io.Closer) {
+	s.relayMu.Lock()
+	s.relays[client] = peer
+	s.relayMu.Unlock()
 }
 
 // auditTee records each request line it relays; input frames and the bytes past the cap pass unrecorded.
@@ -210,6 +209,28 @@ func (t *auditTee) endLine() {
 	}
 	t.buf = t.buf[:0]
 	t.skip = false
+}
+
+func copyBoth(client net.Conn, clientR io.Reader, guest net.Conn, ends relayEnds) {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, err := io.Copy(guest, clientR)
+		if err != nil {
+			// the client died rather than half-closing, so nothing is left to answer it
+			_ = guest.Close()
+			return
+		}
+		ends.guest(guest)
+	}()
+
+	if _, err := io.Copy(client, guest); err != nil {
+		_ = client.Close()
+		_ = guest.Close()
+	} else {
+		ends.client(client)
+	}
+	<-done
 }
 
 func keepAlive(client net.Conn) {

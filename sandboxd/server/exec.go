@@ -61,7 +61,7 @@ func (s *Server) handleExec(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx := r.Context()
 	id := r.PathValue("id")
-	guest, done, ok := s.wakeGuest(ctx, w, id, token)
+	guest, done, _, ok := s.wakeGuest(ctx, w, id, token, s.mgr.WakeAgentSocket)
 	if !ok {
 		return
 	}
