@@ -148,6 +148,73 @@ func TestReaderIsReleasedAfterItsIdleWindow(t *testing.T) {
 	})
 }
 
+func TestReaderNoConnectionAcquiresIsReleasedAfterTheIdleWindow(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		eng := newFakeEngine()
+		readerExport(t, eng)
+		m := newReaderManager(t, eng)
+		seedReaderVMs(m, "sbx-reader-1")
+		sb := mustClaim(t, m, testKey)
+		hibernateClaim(t, m, sb)
+		if err := m.ensureReader(t.Context(), sb); err != nil {
+			t.Fatalf("ensureReader: %v", err)
+		}
+
+		time.Sleep(readerIdle + time.Second)
+		synctest.Wait()
+		if removes, _ := readerLifecycle(eng); !slices.Contains(removes, "sbx-reader-1") {
+			t.Errorf("removes=%v, want the never-acquired reader destroyed", removes)
+		}
+		m.readers.mu.Lock()
+		defer m.readers.mu.Unlock()
+		if len(m.readers.live) != 0 {
+			t.Error("the never-acquired reader is still registered")
+		}
+	})
+}
+
+func TestReaderRegistrationRetiresTheOneItReplaces(t *testing.T) {
+	eng := newFakeEngine()
+	readerExport(t, eng)
+	m := newReaderManager(t, eng)
+	seedReaderVMs(m, "sbx-reader-2", "sbx-reader-1")
+	sb := mustClaim(t, m, testKey)
+	hibernateClaim(t, m, sb)
+
+	for range 2 {
+		if err := m.openReader(t.Context(), sb); err != nil {
+			t.Fatalf("openReader: %v", err)
+		}
+	}
+	removes, setups := readerLifecycle(eng)
+	if !slices.Contains(removes, "sbx-reader-1") || setups != 2 {
+		t.Errorf("removes=%v setups=%d, want the first reader destroyed when the second registered", removes, setups)
+	}
+	m.readers.mu.Lock()
+	defer m.readers.mu.Unlock()
+	if live := m.readers.live[sb.ID]; live == nil || live.vm != "sbx-reader-2" {
+		t.Errorf("live reader %+v, want the second one", live)
+	}
+}
+
+func TestReaderEnsureSkipsASetupAnotherFlightFinished(t *testing.T) {
+	eng := newFakeEngine()
+	readerExport(t, eng)
+	m := newReaderManager(t, eng)
+	seedReaderVMs(m, "sbx-reader-2", "sbx-reader-1")
+	sb := mustClaim(t, m, testKey)
+	hibernateClaim(t, m, sb)
+
+	for range 2 {
+		if err := m.ensureReader(t.Context(), sb); err != nil {
+			t.Fatalf("ensureReader: %v", err)
+		}
+	}
+	if removes, setups := readerLifecycle(eng); setups != 1 || len(removes) != 0 {
+		t.Errorf("removes=%v setups=%d, want one reader built and none destroyed", removes, setups)
+	}
+}
+
 func TestReaderKeepsTheClaimsLatestSleepOnly(t *testing.T) {
 	eng := newFakeEngine()
 	readerExport(t, eng)

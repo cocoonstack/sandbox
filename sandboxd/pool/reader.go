@@ -108,7 +108,7 @@ func (m *Manager) acquireReader(ctx context.Context, sb *types.Sandbox) (*reader
 		_, err, _ := rs.flights.Do(sb.ID, func() (any, error) {
 			setupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), readerSetupTimeout)
 			defer cancel()
-			return nil, m.openReader(setupCtx, sb)
+			return nil, m.ensureReader(setupCtx, sb)
 		})
 		if err != nil {
 			return nil, err
@@ -149,6 +149,20 @@ func (m *Manager) unregisterReader(r *reader, force bool) bool {
 	return true
 }
 
+func (m *Manager) ensureReader(ctx context.Context, sb *types.Sandbox) error {
+	m.mu.Lock()
+	want := sleepSource(sb)
+	m.mu.Unlock()
+	rs := m.readers
+	rs.mu.Lock()
+	r := rs.live[sb.ID]
+	rs.mu.Unlock()
+	if r != nil && r.source == want {
+		return nil
+	}
+	return m.openReader(ctx, sb)
+}
+
 func (m *Manager) openReader(ctx context.Context, sb *types.Sandbox) error {
 	start := time.Now()
 	r := &reader{claim: sb.ID, dir: filepath.Join(m.dataDir, readerDir, sb.ID+"-"+randHex(3))}
@@ -169,8 +183,13 @@ func (m *Manager) openReader(ctx context.Context, sb *types.Sandbox) error {
 	}
 	rs := m.readers
 	rs.mu.Lock()
+	old := rs.live[sb.ID]
 	rs.live[sb.ID] = r
+	r.idle = time.AfterFunc(readerIdle, func() { m.reapReader(r) })
 	rs.mu.Unlock()
+	if old != nil {
+		m.destroyReader(context.WithoutCancel(ctx), old)
+	}
 	log.WithFunc("pool.openReader").Infof(ctx, "reader %s for sleeping claim %s ready in %s", r.vm, sb.ID, time.Since(start).Round(time.Millisecond))
 	return nil
 }
