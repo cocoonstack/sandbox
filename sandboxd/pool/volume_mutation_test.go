@@ -685,6 +685,27 @@ func TestArchiveRenewRejectsAdmittedUnpublishedVolumes(t *testing.T) {
 	}
 }
 
+func TestRetriedTargetPersistsIntentBeforeDeviceCalls(t *testing.T) {
+	eng := newFakeEngine()
+	m := newVolumeManager(t, eng, liveCatalog(t))
+	sb := mustClaim(t, m, testKey)
+	restore := breakClaimStore(t, m)
+	request := []types.Volume{{Name: "data"}}
+	for range 2 {
+		if _, err := m.SetVolumes(t.Context(), sb.ID, sb.Tenant, request); err == nil {
+			t.Fatal("expected the intent write to fail")
+		}
+	}
+	if len(eng.volumeSpecs) != 0 {
+		t.Fatalf("device calls before the intent was durable: %v", eng.volumeSpecs)
+	}
+	restore()
+	if _, err := m.SetVolumes(t.Context(), sb.ID, sb.Tenant, request); err != nil {
+		t.Fatal(err)
+	}
+	assertLiveJournal(t, m, sb)
+}
+
 func TestRollbackClaimTakesOverAdmittedRunHolds(t *testing.T) {
 	eng := newFakeEngine()
 	m := newVolumeManager(t, eng, liveCatalog(t))

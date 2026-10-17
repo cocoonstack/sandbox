@@ -287,7 +287,7 @@ func (m *Manager) stageVolumeTarget(ctx context.Context, sb *types.Sandbox, run 
 	replaced := func(v types.Volume) bool {
 		return volumeIndex(sb.VolumesWant, v.Name) < 0 && volumeIndex(target, v.Name) >= 0
 	}
-	if len(additions) == 0 && slices.Equal(target, sb.VolumesWant) && !slices.ContainsFunc(sb.Volumes, replaced) {
+	if len(additions) == 0 && slices.Equal(target, sb.VolumesWant) && !slices.ContainsFunc(sb.Volumes, replaced) && m.store.synced() {
 		return claimSnapshot{}, false, nil
 	}
 	sb.Volumes = slices.DeleteFunc(slices.Clone(sb.Volumes), replaced)
