@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"net/url"
 	"sync/atomic"
 	"testing"
@@ -566,6 +567,102 @@ func TestBracketedIPv6AuthorityIsUnwrapped(t *testing.T) {
 		if (tc.decision == DecisionAllow) != allowed || (tc.decision == DecisionDeny) != denied {
 			t.Errorf("audit event for %s = %+v, want %v (allow on the bare address and 443, or deny with no port)", tc.authority, ev, tc.decision)
 		}
+	}
+}
+
+func TestAuditNamesTheConnectionEnds(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, "ok")
+	}))
+	defer upstream.Close()
+	echo := echoServer(t)
+	events := make(chan Event, 4)
+	dial := func(ctx context.Context, network, addr string) (net.Conn, error) {
+		target := upstream.Listener.Addr().String()
+		if addr == "echo.internal:443" {
+			target = echo
+		}
+		var d net.Dialer
+		return d.DialContext(ctx, network, target)
+	}
+	p := New(Policy{Allow: []Rule{{Host: "*"}}}, nil, nil, DialFunc(dial), func(ev Event) { events <- ev }, nil)
+	front := httptest.NewServer(p)
+	defer front.Close()
+
+	resp, err := proxyClient(t, front.URL).Get("http://api.internal/x")
+	if err != nil {
+		t.Fatalf("proxied GET: %v", err)
+	}
+	_ = resp.Body.Close()
+	if ev := recvEvent(t, events); ev.Local.IsValid() || ev.Remote.IsValid() {
+		t.Errorf("forward event %+v carries ends without RecordEnds", ev)
+	}
+	p.RecordEnds()
+
+	resp, err = proxyClient(t, front.URL).Get("http://api.internal/y")
+	if err != nil {
+		t.Fatalf("proxied GET: %v", err)
+	}
+	_ = resp.Body.Close()
+	if ev := recvEvent(t, events); ev.Remote.String() != upstream.Listener.Addr().String() || !ev.Local.IsValid() || ev.Local.Port() == 0 {
+		t.Errorf("forward audit ends %v -> %v, want a local port and %s", ev.Local, ev.Remote, upstream.Listener.Addr())
+	}
+
+	conn := dialConnect(t, front.Listener.Addr().String(), "echo.internal:443")
+	defer func() { _ = conn.Close() }()
+	if status := readStatus(t, bufio.NewReader(conn)); status != "HTTP/1.1 200 Connection Established" {
+		t.Fatalf("CONNECT status = %q", status)
+	}
+	if ev := recvEvent(t, events); ev.Remote.String() != echo || !ev.Local.IsValid() || ev.Local.Port() == 0 {
+		t.Errorf("CONNECT audit ends %v -> %v, want a local port and %s", ev.Local, ev.Remote, echo)
+	}
+}
+
+func TestARateLimitedConnectionAnswers429AndIsAudited(t *testing.T) {
+	events := make(chan Event, 4)
+	dial := DialFunc(func(context.Context, string, string) (net.Conn, error) { return nil, ErrRateLimited })
+	p := New(Policy{Allow: []Rule{{Host: "*"}}}, nil, nil, dial, func(ev Event) { events <- ev }, nil)
+	front := httptest.NewServer(p)
+	defer front.Close()
+
+	resp, err := proxyClient(t, front.URL).Get("http://api.internal/x")
+	if err != nil {
+		t.Fatalf("proxied GET: %v", err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusTooManyRequests {
+		t.Errorf("forward status %d, want 429", resp.StatusCode)
+	}
+	if ev := recvEvent(t, events); ev.Decision != DecisionRateLimited {
+		t.Errorf("forward audit %+v, want rate limited", ev)
+	}
+
+	conn := dialConnect(t, front.Listener.Addr().String(), "echo.internal:443")
+	defer func() { _ = conn.Close() }()
+	if status := readStatus(t, bufio.NewReader(conn)); status != "HTTP/1.1 429 Too Many Requests" {
+		t.Errorf("CONNECT status %q, want 429", status)
+	}
+	if ev := recvEvent(t, events); ev.Decision != DecisionRateLimited {
+		t.Errorf("CONNECT audit %+v, want rate limited", ev)
+	}
+}
+
+func TestRoutedConnReportsItsTargetNotTheUpstream(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer func() { _ = ln.Close() }()
+	conn, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+	target := netip.MustParseAddrPort("203.0.113.9:443")
+	var ev Event
+	ev.attach(&upstreamConn{Conn: conn, host: "up.example:3128", target: target}, nil)
+	if ev.Remote != target || ev.Local.String() != conn.LocalAddr().String() || ev.Upstream != "up.example:3128" {
+		t.Errorf("routed event %+v, want %s -> %v through up.example:3128", ev, conn.LocalAddr(), target)
 	}
 }
 

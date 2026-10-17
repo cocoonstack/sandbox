@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"github.com/cocoonstack/sandbox/sandboxd/config"
-	"github.com/cocoonstack/sandbox/sandboxd/egress"
 )
 
 func TestEgressDialerBlocksInternal(t *testing.T) {
@@ -30,20 +29,20 @@ func TestEgressDialerBlocksInternal(t *testing.T) {
 		"[64:ff9b::a00:1]:80",
 	}
 	for _, addr := range blocked {
-		if err := newDialer(func() []egress.InternalAllow { return nil }).Control("tcp", addr, nil); err == nil {
+		if err := newDialer(verdictOf(nil)).Control("tcp", addr, nil); err == nil {
 			t.Errorf("dial to internal %s allowed; SSRF not blocked", addr)
 		}
 	}
 
 	for _, addr := range []string{"93.184.216.34:443", "[2606:4700:4700::1111]:443", "[64:ff9b::5db8:d822]:443"} {
-		if err := newDialer(func() []egress.InternalAllow { return nil }).Control("tcp", addr, nil); err != nil {
+		if err := newDialer(verdictOf(nil)).Control("tcp", addr, nil); err != nil {
 			t.Errorf("dial to public %s blocked: %v", addr, err)
 		}
 	}
 }
 
 func TestEgressDialerAdmitsOnlyNamedInternalPrefixes(t *testing.T) {
-	d := newDialer(func() []egress.InternalAllow { return parseInternalAllow([]string{"fdc8::/16", "10.8.0.0/16"}) })
+	d := newDialer(verdictOf([]string{"fdc8::/16", "10.8.0.0/16"}))
 	check := func(addr string) error {
 		return d.Control("tcp", addr, nil)
 	}
@@ -76,7 +75,7 @@ func TestEgressDialerAdmitsOnlyNamedInternalPrefixes(t *testing.T) {
 }
 
 func TestEgressDialerWildcardAllowsEverything(t *testing.T) {
-	d := newDialer(func() []egress.InternalAllow { return parseInternalAllow([]string{"0.0.0.0/0", "::/0"}) })
+	d := newDialer(verdictOf([]string{"0.0.0.0/0", "::/0"}))
 	for _, addr := range []string{
 		"93.184.216.34:443",
 		"[fdc8:17:9:200f::1]:443",
@@ -92,9 +91,7 @@ func TestEgressDialerWildcardAllowsEverything(t *testing.T) {
 }
 
 func TestEgressDialerScopesInternalAllowToPorts(t *testing.T) {
-	d := newDialer(func() []egress.InternalAllow {
-		return parseInternalAllow([]string{"10.8.0.1/32:18090,9000", "fdc8::/16:443", "10.9.0.0/16"})
-	})
+	d := newDialer(verdictOf([]string{"10.8.0.1/32:18090,9000", "fdc8::/16:443", "10.9.0.0/16"}))
 	for name, tc := range map[string]struct {
 		addr    string
 		allowed bool
@@ -123,6 +120,54 @@ func TestEgressDialerScopesInternalAllowToPorts(t *testing.T) {
 	}
 }
 
+func TestEgressDialerBlocksTheNodesOwnAddresses(t *testing.T) {
+	d := newDialer(verdictOf([]string{"93.184.216.34/32:80,443"}, netip.MustParseAddr("93.184.216.34"), netip.MustParseAddr("2606:2800:220:1:248:1893:25c8:1946")))
+	for name, tc := range map[string]struct {
+		addr    string
+		allowed bool
+	}{
+		"own v4 ssh":                {"93.184.216.34:22", false},
+		"own v4 postgres":           {"93.184.216.34:5432", false},
+		"own v6 ssh":                {"[2606:2800:220:1:248:1893:25c8:1946]:22", false},
+		"own v6 https":              {"[2606:2800:220:1:248:1893:25c8:1946]:443", false},
+		"own v6 with a zone":        {"[2606:2800:220:1:248:1893:25c8:1946%eth0]:22", false},
+		"own v4 mapped in v6":       {"[::ffff:93.184.216.34]:22", false},
+		"own v4 https, re-admitted": {"93.184.216.34:443", true},
+		"another public host":       {"93.184.216.35:22", true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := d.Control("tcp", tc.addr, nil)
+			if tc.allowed && err != nil {
+				t.Errorf("%s was blocked: %v", tc.addr, err)
+			}
+			if !tc.allowed && (err == nil || !strings.Contains(err.Error(), "blocked internal address")) {
+				t.Errorf("%s: %v, want blocked internal address", tc.addr, err)
+			}
+		})
+	}
+}
+
+func TestSelfAddrsAreOnlyPublic(t *testing.T) {
+	for _, ip := range selfAddrs() {
+		if !ip.IsGlobalUnicast() || ip.IsPrivate() || ip.Is4In6() {
+			t.Errorf("self address %s is not a public unicast address", ip)
+		}
+	}
+}
+
+func TestTheHostGuardFollowsARefresh(t *testing.T) {
+	h := newHost(t, &fakeEngine{}, &config.Config{}, nil)
+	stale := netip.MustParseAddr("93.184.216.34")
+	h.self.Store(&[]netip.Addr{stale})
+	if _, err := h.o.Verdict(stale, 22); err == nil {
+		t.Fatalf("the node's own %s was not blocked", stale)
+	}
+	h.RefreshSelf()
+	if _, err := h.o.Verdict(stale, 22); err != nil {
+		t.Errorf("%s stayed blocked after a refresh dropped it: %v", stale, err)
+	}
+}
+
 func TestTheTunnelTargetPrefersIPv4(t *testing.T) {
 	h := newHost(t, &fakeEngine{}, &config.Config{}, func(o *Options) {
 		o.Verdict = func(netip.Addr, uint16) (bool, error) { return false, nil }
@@ -131,4 +176,9 @@ func TestTheTunnelTargetPrefersIPv4(t *testing.T) {
 	if err != nil || internal || target != netip.MustParseAddrPort("127.0.0.1:80") {
 		t.Errorf("target %v internal %v err %v, want 127.0.0.1:80 over ::1", target, internal, err)
 	}
+}
+
+func verdictOf(allow []string, self ...netip.Addr) VerdictFunc {
+	a := parseInternalAllow(allow)
+	return func(ip netip.Addr, port uint16) (bool, error) { return destVerdict(a, self, ip, port) }
 }

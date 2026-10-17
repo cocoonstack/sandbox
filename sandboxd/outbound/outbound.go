@@ -10,6 +10,7 @@ import (
 	"os"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/projecteru2/core/log"
@@ -34,6 +35,9 @@ type PooledFunc func(sb *types.Sandbox) bool
 // TapFunc applies or drops the nft lock on one tap.
 type TapFunc func(tap string) error
 
+// VerdictFunc judges a destination the way the internal-address guard does.
+type VerdictFunc func(ip netip.Addr, port uint16) (bool, error)
+
 // Options wires a Host to the node: its engine, the live egress view, and where events go.
 type Options struct {
 	Engine   Engine
@@ -43,10 +47,11 @@ type Options struct {
 	Transfer func(ctx context.Context, id, tenant string, ev egress.Event, sent, received int64)
 	CA       *egress.CA
 	// LockNIC nft-locks egress-lane NICs, which only a node with bridges has.
-	LockNIC bool
+	LockNIC    bool
+	RecordEnds bool
 	// Dial, Verdict, Lock, Unlock and Sweep default to the internal-address guard and netfilter; tests swap them.
 	Dial    egress.DialFunc
-	Verdict func(ip netip.Addr, port uint16) (bool, error)
+	Verdict VerdictFunc
 	Lock    TapFunc
 	Unlock  TapFunc
 	Sweep   func(keep map[string]bool) error
@@ -54,7 +59,8 @@ type Options struct {
 
 // Host holds every sandbox's doors and NIC lock; it guards its own state, never the caller's.
 type Host struct {
-	o Options
+	o    Options
+	self atomic.Pointer[[]netip.Addr]
 
 	mu       sync.Mutex
 	doors    map[string]*doors
@@ -65,6 +71,7 @@ type Host struct {
 // New builds a Host.
 func New(o Options) *Host {
 	h := &Host{o: o, doors: map[string]*doors{}, prebound: map[string]*doors{}, taps: map[string]string{}}
+	h.RefreshSelf()
 	if h.o.Lock == nil {
 		h.o.Lock = netfilter.Lock
 	}
@@ -75,10 +82,10 @@ func New(o Options) *Host {
 		h.o.Sweep = netfilter.SweepExcept
 	}
 	if h.o.Dial == nil {
-		h.o.Dial = newDialer(func() []egress.InternalAllow { return h.o.View().internalAllow }).DialContext
+		h.o.Dial = newDialer(h.verdict).DialContext
 	}
 	if h.o.Verdict == nil {
-		h.o.Verdict = func(ip netip.Addr, port uint16) (bool, error) { return destVerdict(h.o.View().internalAllow, ip, port) }
+		h.o.Verdict = h.verdict
 	}
 	return h
 }
@@ -115,6 +122,9 @@ func (h *Host) ArmProxy(ctx context.Context, sb *types.Sandbox) error {
 	}
 	c := newClaim(h, sb, v, policy)
 	proxy := egress.New(c, c, ca, c, func(ev egress.Event) { h.o.Record(evCtx, id, tenant, ev) }, sb)
+	if h.o.RecordEnds {
+		proxy.RecordEnds()
+	}
 	if v.usageBytes {
 		proxy.OnTransfer(func(ev egress.Event, sent, received int64) { h.o.Transfer(evCtx, id, tenant, ev, sent, received) })
 	}

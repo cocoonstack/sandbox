@@ -2,8 +2,10 @@ package pool
 
 import (
 	"context"
+	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"maps"
+	"net/netip"
 	"sync/atomic"
 	"time"
 
@@ -46,7 +48,19 @@ type counters struct {
 	claimNanos, wakeNanos                atomic.Uint64
 }
 
-// auditFrame is the addressing slice of a request frame worth auditing.
+// requestFrame is the addressing slice of a relayed request frame worth auditing.
+type requestFrame struct {
+	Op      string   `json:"op"`
+	Argv    []string `json:"argv,omitempty"`
+	Path    string   `json:"path,omitempty"`
+	Dest    string   `json:"dest,omitempty"`
+	From    string   `json:"from,omitempty"`
+	To      string   `json:"to,omitempty"`
+	URL     string   `json:"url,omitempty"`
+	Session string   `json:"session,omitempty"`
+	Port    uint16   `json:"port,omitzero"`
+}
+
 type auditFrame struct {
 	Op       string   `json:"op"`
 	Argv     []string `json:"argv,omitempty"`
@@ -64,6 +78,19 @@ type auditFrame struct {
 	Added    []string `json:"added,omitempty"`
 	Changed  []string `json:"changed,omitempty"`
 	Removed  []string `json:"removed,omitempty"`
+}
+
+type egressFrame struct {
+	Op       string         `json:"op"`
+	Dest     string         `json:"dest,omitempty"`
+	Method   string         `json:"method,omitempty"`
+	Port     uint16         `json:"port,omitzero"`
+	Decision string         `json:"decision,omitempty"`
+	Secret   string         `json:"secret,omitempty"`
+	Upstream string         `json:"upstream,omitempty"`
+	Tenant   string         `json:"tenant,omitempty"`
+	Src      netip.AddrPort `json:"src_addr,omitzero"`
+	Dst      netip.AddrPort `json:"dst_addr,omitzero"`
 }
 
 func (m *Manager) Counters() Counters {
@@ -101,11 +128,17 @@ func (m *Manager) Audit(ctx context.Context, id string, line []byte) {
 		m.recordAudit(ctx, id, auditFrame{Op: "oversized"})
 		return
 	}
-	var frame auditFrame
-	if err := json.Unmarshal(line, &frame); err != nil || frame.Op == "" {
+	var frame requestFrame
+	if json.Unmarshal(line, &frame) != nil {
+		frame = memberwiseFrame(line)
+	}
+	if frame.Op == "" {
 		return // torn cap boundary or a non-frame line: nothing to record
 	}
-	m.recordAudit(ctx, id, frame)
+	m.recordAudit(ctx, id, auditFrame{
+		Op: frame.Op, Argv: frame.Argv, Path: frame.Path, Dest: frame.Dest,
+		From: frame.From, To: frame.To, URL: frame.URL, Session: frame.Session, Port: frame.Port,
+	})
 }
 
 // AuditEnabled reports whether the relay should tap request frames at all.
@@ -117,23 +150,38 @@ func (m *Manager) recordAudit(ctx context.Context, id string, frame auditFrame) 
 	if m.audit == nil {
 		return
 	}
-	event := struct {
+	m.appendAudit(ctx, struct {
 		Time time.Time `json:"t"`
 		ID   string    `json:"id"`
 		auditFrame
-	}{time.Now(), id, frame}
+	}{time.Now(), id, frame})
+}
+
+func (m *Manager) appendAudit(ctx context.Context, event any) {
 	if err := m.audit.append(event); err != nil {
-		log.WithFunc("pool.recordAudit").Error(ctx, err, "append audit event")
+		log.WithFunc("pool.appendAudit").Error(ctx, err, "append audit event")
 	}
 }
 
 // recordEgress logs one guarded-egress decision and meters it as a usage event.
 func (m *Manager) recordEgress(ctx context.Context, id, tenant string, ev egress.Event) {
 	decision := "deny"
-	if ev.Decision == egress.DecisionAllow {
+	switch ev.Decision {
+	case egress.DecisionAllow:
 		decision = "allow"
+	case egress.DecisionRateLimited:
+		decision = "rate_limited"
 	}
-	m.recordAudit(ctx, id, auditFrame{Op: "egress", Dest: ev.Host, Port: ev.Port, Method: ev.Method, Decision: decision, Secret: ev.Injected, Upstream: ev.Upstream})
+	if m.audit != nil {
+		m.appendAudit(ctx, struct {
+			Time time.Time `json:"t"`
+			ID   string    `json:"id"`
+			egressFrame
+		}{time.Now(), id, egressFrame{
+			Op: "egress", Dest: ev.Host, Method: ev.Method, Port: ev.Port, Decision: decision, Secret: ev.Injected, Upstream: ev.Upstream,
+			Tenant: tenant, Src: ev.Local, Dst: ev.Remote,
+		}})
+	}
 	m.recordUsage(ctx, usageEvent{Event: "egress", ID: id, Tenant: tenant, Reference: ev.Host, Upstream: ev.Upstream, Secret: ev.Injected})
 }
 
@@ -143,4 +191,17 @@ func (m *Manager) recordUsage(ctx context.Context, ev usageEvent) {
 	if err := m.usage.append(ev); err != nil {
 		log.WithFunc("pool.recordUsage").Errorf(ctx, err, "append usage event %s %s", ev.Event, ev.ID)
 	}
+}
+
+func memberwiseFrame(line []byte) requestFrame {
+	var frame requestFrame
+	var members map[string]jsontext.Value
+	if json.Unmarshal(line, &members, jsontext.AllowDuplicateNames(true)) != nil {
+		return frame
+	}
+	for name, v := range members {
+		member, _ := jsontext.AppendQuote([]byte("{"), name)
+		_ = json.Unmarshal(append(append(append(member, ':'), v...), '}'), &frame)
+	}
+	return frame
 }

@@ -382,6 +382,9 @@ type Manager struct {
 	atCapacityUntil  time.Time
 	atCapacityReason string
 
+	diskLow        atomic.Bool
+	diskStatFailed atomic.Bool
+
 	refillSem  chan struct{}
 	maintSem   chan struct{}
 	probeSem   chan struct{}
@@ -530,12 +533,17 @@ func (m *Manager) Run(ctx context.Context) {
 		go m.followCellPools(ctx)
 	}
 	m.livenessOnce(ctx)
+	m.checkDisk(ctx)
 	m.refillOnce(ctx)
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-refill.C:
+			if m.view.Load().out.Guarded() {
+				m.out.RefreshSelf()
+			}
+			m.checkDisk(ctx)
 			m.refillOnce(ctx)
 		case <-m.refillKick:
 			m.refillOnce(ctx)
@@ -586,9 +594,8 @@ func (m *Manager) Info() ([]PoolInfo, Gauges) {
 		})
 	}
 	g := Gauges{Claimed: len(m.claimed), Draining: m.draining}
-	if now.Before(m.atCapacityUntil) {
-		g.AtCapacity, g.AtCapacityReason = true, m.atCapacityReason
-	}
+	g.AtCapacityReason = m.capacityReasonLocked(now)
+	g.AtCapacity = g.AtCapacityReason != ""
 	for _, sb := range m.claimed {
 		if sb.HibernateSnap != "" {
 			g.Hibernated++
@@ -627,9 +634,13 @@ func (m *Manager) WarmCounts() map[string]int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	counts := make(map[string]int, len(m.pools))
+	low := m.diskLow.Load()
 	for _, p := range m.pools {
 		if !p.removed {
 			counts[p.hash] = len(p.warm)
+			if low {
+				counts[p.hash] = 0
+			}
 		}
 	}
 	return counts
@@ -734,7 +745,7 @@ func logSweepResult(ctx context.Context, logger *log.Fields, err error, okMsg, f
 
 func benignSweepErr(err error) bool {
 	return errors.Is(err, ErrUnknownSandbox) || errors.Is(err, errWokeMeanwhile) ||
-		errors.Is(err, ErrNoEgressHibernate)
+		errors.Is(err, ErrNoEgressHibernate) || errors.Is(err, ErrQuota)
 }
 
 func vmName(key types.PoolKey) string {

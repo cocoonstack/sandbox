@@ -82,7 +82,8 @@ func (m *Manager) outboundOptions(ca *egress.CA) outbound.Options {
 		Transfer: func(ctx context.Context, id, tenant string, ev egress.Event, sent, received int64) {
 			m.recordUsage(ctx, usageEvent{Event: "egress_bytes", ID: id, Tenant: tenant, Reference: ev.Host, Upstream: ev.Upstream, Sent: sent, Received: received})
 		},
-		CA:      ca,
-		LockNIC: len(m.cfg.Bridges) > 0,
+		CA:         ca,
+		LockNIC:    len(m.cfg.Bridges) > 0,
+		RecordEnds: m.audit != nil,
 	}
 }

@@ -39,6 +39,11 @@ var (
 	}
 )
 
+// RefreshSelf rereads the node's own public addresses, which the dial guard blocks.
+func (h *Host) RefreshSelf() {
+	h.self.Store(new(selfAddrs()))
+}
+
 // upstreamTarget checks every address addr resolves to: a re-admitted internal one dials direct, a blocked one fails, else the first IPv4 (or the first) is the tunnel target.
 func (h *Host) upstreamTarget(ctx context.Context, addr string) (netip.AddrPort, bool, error) {
 	host, portText, err := net.SplitHostPort(addr)
@@ -73,33 +78,46 @@ func (h *Host) upstreamTarget(ctx context.Context, addr string) (netip.AddrPort,
 	return target, false, nil
 }
 
-func newDialer(allow func() []egress.InternalAllow) *net.Dialer {
+func (h *Host) verdict(ip netip.Addr, port uint16) (bool, error) {
+	return destVerdict(h.o.View().internalAllow, *h.self.Load(), ip, port)
+}
+
+func newDialer(verdict VerdictFunc) *net.Dialer {
 	return &net.Dialer{Control: func(_, address string, _ syscall.RawConn) error {
 		ap, err := netip.ParseAddrPort(address)
 		if err != nil {
 			return fmt.Errorf("egress: unresolved address %q: %w", address, err)
 		}
-		_, err = destVerdict(allow(), ap.Addr(), ap.Port())
+		_, err = verdict(ap.Addr(), ap.Port())
 		return err
 	}}
 }
 
-// destVerdict reports whether ip is an internal address allow re-admits; any other internal address is an error.
-func destVerdict(allow []egress.InternalAllow, ip netip.Addr, port uint16) (bool, error) {
-	ip = ip.Unmap()
-	if nat64Range.Contains(ip) {
-		b := ip.As16()
-		ip = netip.AddrFrom4([4]byte{b[12], b[13], b[14], b[15]})
-	}
+// destVerdict reports whether ip is an internal address allow re-admits; any other internal address, self included, is an error.
+func destVerdict(allow []egress.InternalAllow, self []netip.Addr, ip netip.Addr, port uint16) (bool, error) {
+	ip = canonicalAddr(ip)
 	// after the NAT64 unwrap and before the block, so a named prefix wins
 	if slices.ContainsFunc(allow, func(a egress.InternalAllow) bool { return a.Admits(ip, port) }) {
 		return true, nil
 	}
-	if !ip.IsGlobalUnicast() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
-		slices.ContainsFunc(internalRanges, func(p netip.Prefix) bool { return p.Contains(ip) }) {
+	if internalAddr(self, ip) {
 		return false, fmt.Errorf("egress: blocked internal address %s", ip)
 	}
 	return false, nil
+}
+
+func canonicalAddr(ip netip.Addr) netip.Addr {
+	ip = ip.Unmap().WithZone("")
+	if nat64Range.Contains(ip) {
+		b := ip.As16()
+		ip = netip.AddrFrom4([4]byte{b[12], b[13], b[14], b[15]})
+	}
+	return ip
+}
+
+func internalAddr(self []netip.Addr, ip netip.Addr) bool {
+	return !ip.IsGlobalUnicast() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
+		slices.Contains(self, ip) || slices.ContainsFunc(internalRanges, func(p netip.Prefix) bool { return p.Contains(ip) })
 }
 
 // parseInternalAllow turns the allow-list into entries; config validation already rejected bad ones.
@@ -108,6 +126,21 @@ func parseInternalAllow(entries []string) []egress.InternalAllow {
 	for _, e := range entries {
 		if a, err := egress.ParseInternalAllow(e); err == nil {
 			out = append(out, a)
+		}
+	}
+	return out
+}
+
+func selfAddrs() []netip.Addr {
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return nil
+	}
+	var out []netip.Addr
+	for _, a := range addrs {
+		p, err := netip.ParsePrefix(a.String())
+		if ip := canonicalAddr(p.Addr()); err == nil && !internalAddr(nil, ip) {
+			out = append(out, ip)
 		}
 	}
 	return out

@@ -22,6 +22,8 @@ func TestReloadDiffSortsReloadableOwnedAndRestartFields(t *testing.T) {
 		{PoolKey: v13, Warmup: []string{"node", "-e", "0"}, Storage: "40G"},
 	}
 	next.EgressClasses = []EgressClass{{Name: "desk", Egress: &egress.Policy{}}}
+	next.EgressConnRate = &EgressConnRate{PerSecond: 30, Burst: 600}
+	next.DiskReserve = &DiskReserve{Free: "100G"}
 	changed, ignored, err := cur.ReloadDiff(&next)
 	if err != nil {
 		t.Fatalf("ReloadDiff: %v", err)
@@ -29,6 +31,8 @@ func TestReloadDiffSortsReloadableOwnedAndRestartFields(t *testing.T) {
 	wantChanged := []string{
 		"egress_classes",
 		"egress_internal_allow",
+		"egress_conn_rate",
+		"disk_reserve",
 		"pools[desktop:v12 none small].egress",
 		"pools[desktop:v13 none small].warmup",
 		"pools[desktop:v13 none small].storage",

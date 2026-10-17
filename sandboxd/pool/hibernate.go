@@ -68,6 +68,9 @@ func (m *Manager) hibernateLocked(ctx context.Context, sb *types.Sandbox) error 
 		}
 		return nil
 	}
+	if err := m.diskErr(); err != nil {
+		return fmt.Errorf("hibernate %s: %w", sb.ID, err)
+	}
 	// a started transition must finish, or the record disagrees with the VM
 	ctx = context.WithoutCancel(ctx)
 	// cocoon rejects sb.ID's underscore, so the snapshot name is VMName-based
@@ -135,6 +138,9 @@ func (m *Manager) wakeResolved(ctx context.Context, sb *types.Sandbox) (string, 
 	// the egress lane never hibernates, so a hibernated one is corrupt state
 	if sb.Key.Net == types.NetEgress {
 		return "", fmt.Errorf("wake %s: egress lane cannot resume from hibernation", sb.ID)
+	}
+	if err := m.diskErr(); err != nil {
+		return "", fmt.Errorf("wake %s: %w", sb.ID, err)
 	}
 	// See Hibernate: a half-restored VM is worse than a wasted wake.
 	ctx = context.WithoutCancel(ctx)

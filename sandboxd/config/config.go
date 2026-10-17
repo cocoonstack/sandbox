@@ -121,6 +121,12 @@ type EgressUpstreamConfig struct {
 	Allow    []string `json:"allow"`
 }
 
+// EgressConnRate caps the new upstream connections each claim's proxy opens, as a token bucket.
+type EgressConnRate struct {
+	PerSecond float64 `json:"per_second"`
+	Burst     int     `json:"burst"`
+}
+
 // EgressCAConfig provisions HTTPS interception; the root private key never appears here.
 type EgressCAConfig struct {
 	RootCert         string `json:"root_cert"`
@@ -173,6 +179,12 @@ type VolumeSpec struct {
 	DirectIO string   `json:"directio,omitempty"`
 	Writable bool     `json:"writable,omitzero"`
 	Tenants  []string `json:"tenants,omitempty"`
+}
+
+// DiskReserve refuses claims, wakes and refills while a listed directory's filesystem has less than Free left.
+type DiskReserve struct {
+	Free string   `json:"free"`
+	Dirs []string `json:"dirs,omitempty"`
 }
 
 // MeshConfig configures cluster membership; every node shares one APIToken and tenant set.
@@ -257,12 +269,15 @@ type Config struct {
 	EgressCA            *EgressCAConfig       `json:"egress_ca,omitempty"`
 	EgressUpstream      *EgressUpstreamConfig `json:"egress_upstream,omitempty"`
 	EgressUsageBytes    bool                  `json:"egress_usage_bytes,omitzero"`
+	EgressConnRate      *EgressConnRate       `json:"egress_conn_rate,omitempty"`
 
 	MaxClaims           int  `json:"max_claims,omitzero"`
 	MaxForkCount        int  `json:"max_fork_count,omitzero"`
 	RefillConcurrency   int  `json:"refill_concurrency,omitzero"`
 	ReleaseDelaySeconds int  `json:"release_delay_seconds,omitzero"`
 	AuditLog            bool `json:"audit_log,omitzero"`
+
+	DiskReserve *DiskReserve `json:"disk_reserve,omitempty"`
 
 	Volumes []VolumeSpec `json:"volumes,omitempty"`
 	Mesh    *MeshConfig  `json:"mesh,omitempty"`
@@ -407,17 +422,10 @@ func (c *Config) validate() error {
 	if c.CheckpointPeerHeal && c.APIToken == "" {
 		return fmt.Errorf("checkpoint_peer_heal requires api_token: without it resolveScope leaves the raw checkpoint blob GET reachable with no credential")
 	}
-	if err := c.validateEgressRouting(); err != nil {
-		return err
-	}
-	if err := c.validateMetaStore(); err != nil {
-		return err
-	}
-	if err := c.validateVolumes(); err != nil {
-		return err
-	}
-	if err := c.validateMesh(); err != nil {
-		return err
+	for _, check := range []func() error{c.validateNodeEgress, c.validateDiskReserve, c.validateMetaStore, c.validateVolumes, c.validateMesh} {
+		if err := check(); err != nil {
+			return err
+		}
 	}
 	secrets, err := c.validateSecrets()
 	if err != nil {
@@ -582,7 +590,10 @@ func (c *Config) validateAttachment() error {
 	return validateShards(c.Networks, "networks", "conflist")
 }
 
-func (c *Config) validateEgressRouting() error {
+func (c *Config) validateNodeEgress() error {
+	if r := c.EgressConnRate; r != nil && (r.PerSecond <= 0 || r.Burst < 1) {
+		return fmt.Errorf("egress_conn_rate needs per_second above 0 and burst of at least 1, got %v and %d", r.PerSecond, r.Burst)
+	}
 	for _, entry := range c.EgressInternalAllow {
 		if _, err := egress.ParseInternalAllow(entry); err != nil {
 			return fmt.Errorf("egress_internal_allow %q: %w", entry, err)
@@ -623,6 +634,22 @@ func (c *Config) validateEgressRouting() error {
 		}
 		if !allow.Allows(parsed) {
 			return fmt.Errorf("egress_upstream_env %s: upstream %s is not in egress_upstream.allow", name, parsed.Host)
+		}
+	}
+	return nil
+}
+
+func (c *Config) validateDiskReserve() error {
+	r := c.DiskReserve
+	if r == nil {
+		return nil
+	}
+	if n, err := StorageBytes(r.Free); err != nil || n <= 0 {
+		return fmt.Errorf("disk_reserve.free %q must be a positive size like 100G", r.Free)
+	}
+	for _, d := range r.Dirs {
+		if !filepath.IsAbs(d) {
+			return fmt.Errorf("disk_reserve.dirs %q must be an absolute path", d)
 		}
 	}
 	return nil

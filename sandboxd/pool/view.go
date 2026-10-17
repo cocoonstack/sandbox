@@ -13,6 +13,8 @@ type configView struct {
 	poolWarmups map[types.PoolKey][]string
 	poolTrims   map[types.PoolKey]bool
 	poolStorage map[types.PoolKey]string
+	diskReserve int64
+	diskDirs    []string
 }
 
 func newConfigView(cfg *config.Config, secrets *egress.SecretStore) *configView {
@@ -21,6 +23,13 @@ func newConfigView(cfg *config.Config, secrets *egress.SecretStore) *configView 
 		poolWarmups: map[types.PoolKey][]string{},
 		poolTrims:   map[types.PoolKey]bool{},
 		poolStorage: map[types.PoolKey]string{},
+	}
+	if r := cfg.DiskReserve; r != nil {
+		v.diskReserve, _ = config.StorageBytes(r.Free)
+		v.diskDirs = r.Dirs
+		if len(v.diskDirs) == 0 {
+			v.diskDirs = []string{cfg.DataDir}
+		}
 	}
 	for _, spec := range cfg.Pools {
 		key := spec.PoolKey

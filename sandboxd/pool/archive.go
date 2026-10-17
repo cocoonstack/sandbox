@@ -146,6 +146,9 @@ func (m *Manager) wakeArchived(ctx context.Context, sb *types.Sandbox) (string, 
 	if err := m.tenantRemoved(ctx, sb.Tenant); err != nil {
 		return "", err
 	}
+	if err := m.diskErr(); err != nil {
+		return "", fmt.Errorf("wake %s: %w", sb.ID, err)
+	}
 	ctx = context.WithoutCancel(ctx)
 	ck := sb.ArchiveCk
 	l := m.recLock(ck)

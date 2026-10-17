@@ -372,10 +372,13 @@ func (m *Manager) admitClaim(tenant string, volumes []types.Volume) error {
 	return m.reserveVolumes(volumes)
 }
 
-// quotaErr answers ErrQuota over a cap or a draining node; callers hold m.mu.
+// quotaErr answers ErrQuota when the node takes no more claims; callers hold m.mu.
 func (m *Manager) quotaErr(extra int, tenant string) error {
 	if m.draining {
 		return fmt.Errorf("%w: node draining", ErrQuota)
+	}
+	if err := m.diskErr(); err != nil {
+		return err
 	}
 	if m.maxClaims > 0 && len(m.claimed)+extra > m.maxClaims {
 		return fmt.Errorf("%w: %d live claims, cap %d", ErrQuota, len(m.claimed), m.maxClaims)

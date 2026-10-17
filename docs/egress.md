@@ -104,9 +104,11 @@ The proxy also refuses to connect to internal addresses — every IANA
 special-purpose range that is not globally reachable (loopback, link-local
 incl. cloud metadata, private, carrier-grade NAT, benchmarking, documentation,
 reserved, per the registry snapshot in `sandboxd/outbound/dial.go`) plus the IPv4-embedding
-IPv6 forms (NAT64, 6to4, Teredo, IPv4-compatible) — so an allow-listed host
-that resolves, or is rebound, to one cannot reach the sandboxd host or a
-sibling VM.
+IPv6 forms (NAT64, 6to4, Teredo, IPv4-compatible), and the node's own public
+addresses, re-read from its interfaces every 2 s — so an
+allow-listed host that resolves, or is rebound, to one cannot reach the sandboxd
+host or a sibling VM. A node address the NIC does not carry (a cloud 1:1 NAT IP)
+is not seen; block it on the host.
 
 `egress_internal_allow` re-admits named prefixes through that guard for nodes
 whose sandboxes legitimately need internal services:

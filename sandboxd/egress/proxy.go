@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"crypto/tls"
 	"encoding/json/jsontext"
+	"errors"
 	"fmt"
 	"io"
 	"maps"
@@ -36,6 +37,9 @@ const (
 )
 
 var (
+	// ErrRateLimited refuses a new upstream connection over the claim's connection rate.
+	ErrRateLimited = errors.New("egress: connection rate limit")
+
 	// hopHeaders are hop-by-hop and proxy-scoped headers this hop owns, never passed on.
 	hopHeaders = []string{
 		"Connection", "Keep-Alive", "Proxy-Authenticate", "Proxy-Authorization",
@@ -81,6 +85,27 @@ type Event struct {
 	Decision Decision
 	Injected string
 	Upstream string
+	// Local and Remote are the upstream connection's node-side and destination ends.
+	Local, Remote netip.AddrPort
+}
+
+func (ev *Event) attach(conn net.Conn, err error) {
+	if errors.Is(err, ErrRateLimited) {
+		ev.Decision = DecisionRateLimited
+	}
+	if ue, ok := errors.AsType[*upstreamError](err); ok {
+		ev.Upstream = ue.host
+	}
+	if conn == nil {
+		return
+	}
+	if tlsConn, ok := conn.(*tls.Conn); ok {
+		conn = tlsConn.NetConn()
+	}
+	ev.Local, ev.Remote = tcpAddrPort(conn.LocalAddr()), tcpAddrPort(conn.RemoteAddr())
+	if uc, ok := conn.(*upstreamConn); ok {
+		ev.Upstream, ev.Remote = uc.host, uc.target
+	}
 }
 
 type routeKey struct {
@@ -113,6 +138,7 @@ type Proxy struct {
 	ca       *CA
 	audit    AuditFunc
 	transfer TransferFunc
+	ends     bool
 	router   Router
 	holder   Holder
 	pools    atomic.Pointer[connPools]
@@ -158,6 +184,9 @@ func New(policy Evaluator, secrets Secrets, ca *CA, router Router, audit AuditFu
 
 // OnTransfer reports every allowed tunnel's and request's payload bytes to f; call it before serving.
 func (p *Proxy) OnTransfer(f TransferFunc) { p.transfer = f }
+
+// RecordEnds puts every forwarded request's upstream connection ends on its Event; call it before serving.
+func (p *Proxy) RecordEnds() { p.ends = true }
 
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer p.hold()()
@@ -246,10 +275,10 @@ func (p *Proxy) serveConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	upstream, err := p.router.Dial(r.Context(), route, "tcp", net.JoinHostPort(host, strconv.Itoa(int(port))))
-	ev.Upstream = upstreamOf(upstream, err)
+	ev.attach(upstream, err)
 	p.record(ev)
 	if err != nil {
-		http.Error(w, "egress: upstream unreachable", http.StatusBadGateway)
+		upstreamFailed(w, err)
 		return
 	}
 	defer func() { _ = upstream.Close() }()
@@ -324,11 +353,11 @@ func (p *Proxy) relay(w http.ResponseWriter, r *http.Request, ev Event, rule Rul
 	}
 
 	ctx := r.Context()
-	var upstream *string
-	if route != "" {
-		upstream = new(string)
+	var got *net.Conn
+	if p.ends || route != "" {
+		got = new(net.Conn)
 		ctx = httptrace.WithClientTrace(ctx, &httptrace.ClientTrace{
-			GotConn: func(info httptrace.GotConnInfo) { *upstream = upstreamOf(info.Conn, nil) },
+			GotConn: func(info httptrace.GotConnInfo) { *got = info.Conn },
 		})
 	}
 	out := r.Clone(ctx)
@@ -361,12 +390,14 @@ func (p *Proxy) relay(w http.ResponseWriter, r *http.Request, ev Event, rule Rul
 	}()
 
 	resp, err := p.transport(route, mitm).RoundTrip(out)
-	if upstream != nil {
-		ev.Upstream = cmp.Or(*upstream, upstreamOf(nil, err))
+	var conn net.Conn
+	if got != nil {
+		conn = *got
 	}
+	ev.attach(conn, err)
 	p.record(ev)
 	if err != nil {
-		http.Error(w, "egress: upstream unreachable", http.StatusBadGateway)
+		upstreamFailed(w, err)
 		return
 	}
 	defer func() { _ = resp.Body.Close() }()
@@ -672,6 +703,14 @@ func copyFlushing(w http.ResponseWriter, body io.Reader) int64 {
 			return total
 		}
 	}
+}
+
+func upstreamFailed(w http.ResponseWriter, err error) {
+	if errors.Is(err, ErrRateLimited) {
+		http.Error(w, err.Error(), http.StatusTooManyRequests)
+		return
+	}
+	http.Error(w, "egress: upstream unreachable", http.StatusBadGateway)
 }
 
 func denied(w http.ResponseWriter, host string) {

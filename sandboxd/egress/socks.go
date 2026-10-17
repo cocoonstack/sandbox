@@ -73,10 +73,14 @@ func (p *Proxy) serveSocks(ctx context.Context, conn net.Conn) {
 	dialCtx, cancel := context.WithTimeout(ctx, socksTimeout)
 	defer cancel()
 	upstream, err := p.router.Dial(dialCtx, route, "tcp", net.JoinHostPort(host, strconv.Itoa(int(port))))
-	ev.Upstream = upstreamOf(upstream, err)
+	ev.attach(upstream, err)
 	p.record(ev)
 	if err != nil {
-		_ = socksReply(conn, socksUnreached)
+		reply := byte(socksUnreached)
+		if ev.Decision == DecisionRateLimited {
+			reply = socksDenied
+		}
+		_ = socksReply(conn, reply)
 		return
 	}
 	defer func() { _ = upstream.Close() }()
