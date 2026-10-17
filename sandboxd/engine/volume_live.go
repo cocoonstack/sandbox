@@ -141,7 +141,7 @@ func (e *Engine) resolveMount(ctx context.Context, vsockSocket, mount string, mo
 	if slices.ContainsFunc(mounts, func(m volumeMount) bool { return m.path == mount }) {
 		return mount
 	}
-	resolved, err := e.silkdOutput(ctx, vsockSocket, "realpath", "-m", "--", mount)
+	resolved, err := e.silkdOutput(ctx, vsockSocket, "realpath", mount)
 	if err != nil {
 		log.WithFunc("engine.resolveMount").Warnf(ctx, "resolve volume mount %s, checking it as given: %v", mount, err)
 		return mount
