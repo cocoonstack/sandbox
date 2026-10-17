@@ -135,8 +135,10 @@ func (m *Manager) Audit(ctx context.Context, id string, line []byte) {
 	if frame.Op == "" {
 		return // torn cap boundary or a non-frame line: nothing to record
 	}
-	m.recordAudit(ctx, id, auditFrame{Op: frame.Op, Argv: frame.Argv, Path: frame.Path, Dest: frame.Dest,
-		From: frame.From, To: frame.To, URL: frame.URL, Session: frame.Session, Port: frame.Port})
+	m.recordAudit(ctx, id, auditFrame{
+		Op: frame.Op, Argv: frame.Argv, Path: frame.Path, Dest: frame.Dest,
+		From: frame.From, To: frame.To, URL: frame.URL, Session: frame.Session, Port: frame.Port,
+	})
 }
 
 // AuditEnabled reports whether the relay should tap request frames at all.
