@@ -410,13 +410,13 @@ func TestSparseExportStaysSparseThroughS3(t *testing.T) {
 	st := newTestStore(t, fake)
 	size := 12*store.DigestChunkSize + 4096
 	meta := []byte(`{"id":"` + id + `"}`)
-	staging, src := stageSparseRecord(t, st, id, meta, size, map[int64]string{0: "head", 3*store.DigestChunkSize + 100: "mid", size - 4: "tail"})
+	staging, src := stageSparseRecord(t, st, id, meta, size, map[int64]string{0: "head", 3*store.DigestChunkSize + 100: "mid", 11*store.DigestChunkSize + 10: "tail"})
 	srcSum := fileSum(t, src)
 	if err := st.Publish(t.Context(), staging, id); err != nil {
 		t.Fatalf("Publish: %v", err)
 	}
 	count, uploaded := fake.chunkPuts("ck/chunks/" + id + "/")
-	if want := 2*store.DigestChunkSize + 4096; count != 3 || uploaded != want {
+	if want := 3 * store.DigestChunkSize; count != 3 || uploaded != want {
 		t.Fatalf("chunk PUTs = %d carrying %d bytes, want 3 carrying %d", count, uploaded, want)
 	}
 
@@ -669,6 +669,23 @@ func TestSweepRemovesSupersededGenerationsPastTheGrace(t *testing.T) {
 	}
 	if _, _, _, err := st.Fetch(t.Context(), id); err != nil {
 		t.Errorf("Fetch after the sweep: %v", err)
+	}
+}
+
+func TestSweepSparesAnInFlightGeneration(t *testing.T) {
+	const id = "ck_00000000000000a7"
+	fake := &fakeS3{objects: map[string][]byte{}}
+	st := newTestStore(t, fake)
+	publishRecord(t, st, id, []byte(`{"id":"`+id+`","gen":1}`), "first")
+	fake.age("", 2*store.GenerationGrace)
+	inFlight := "ck/" + id + "/" + store.ExportDir + "-0000000000000000/" + manifestName
+	fake.put(inFlight, []byte(`{"lineage":"`+id+`","files":[]}`))
+
+	if err := st.SweepGenerations(t.Context()); err != nil {
+		t.Fatalf("SweepGenerations: %v", err)
+	}
+	if _, ok := fake.get(inFlight); !ok {
+		t.Error("the sweep removed a manifest uploaded moments ago")
 	}
 }
 

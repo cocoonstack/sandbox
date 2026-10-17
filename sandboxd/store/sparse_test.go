@@ -23,7 +23,7 @@ func TestScanFileEmitsEachNonZeroChunkOnce(t *testing.T) {
 	if err = f.Truncate(size); err != nil {
 		t.Fatalf("truncate: %v", err)
 	}
-	for off, data := range map[int64]string{DigestChunkSize - 2: "abcd", DigestChunkSize + 10: "zz", 4*DigestChunkSize + 1: "t"} {
+	for off, data := range map[int64]string{DigestChunkSize - 2: "abcd", DigestChunkSize + 10: "zz", DigestChunkSize + 1<<20: "yy", 4*DigestChunkSize + 1: "t"} {
 		if _, err = f.WriteAt([]byte(data), off); err != nil {
 			t.Fatalf("write at %d: %v", off, err)
 		}
@@ -51,6 +51,32 @@ func TestScanFileEmitsEachNonZeroChunkOnce(t *testing.T) {
 	}
 	if !slices.Equal(digest.Chunks, want) {
 		t.Errorf("chunk sums differ from a dense read")
+	}
+}
+
+func TestScanFileDoesNotReadHoles(t *testing.T) {
+	size := 6 * DigestChunkSize
+	f, err := os.Create(filepath.Join(t.TempDir(), "holes.img"))
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	defer func() { _ = f.Close() }()
+	if err = f.Truncate(size); err != nil {
+		t.Fatalf("truncate: %v", err)
+	}
+	reads := 0
+	digest, err := ScanFile(f, "holes.img", size, func() []byte {
+		reads++
+		return make([]byte, DigestChunkSize)
+	}, func(Chunk) error { return nil })
+	if err != nil {
+		t.Fatalf("ScanFile: %v", err)
+	}
+	if reads != 0 {
+		t.Errorf("a hole-only file asked for %d read buffers, want 0", reads)
+	}
+	if len(digest.Chunks) != 6 || digest.Chunks[0] != zeroSum(DigestChunkSize) {
+		t.Errorf("hole chunks do not carry the zero-chunk sum: %d chunks", len(digest.Chunks))
 	}
 }
 

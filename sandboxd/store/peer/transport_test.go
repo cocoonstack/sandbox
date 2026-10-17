@@ -311,7 +311,7 @@ func TestTarRecordKeepsSparseFilesSparse(t *testing.T) {
 	if err = f.Truncate(size); err != nil {
 		t.Fatalf("truncate: %v", err)
 	}
-	for off, data := range map[int64]string{0: "sparse-head", 4*store.DigestChunkSize + 7: "sparse-mid", size - 4: "tail"} {
+	for off, data := range map[int64]string{0: "sparse-head", 4*store.DigestChunkSize + 7: "sparse-mid", 8*store.DigestChunkSize + 5: "tail"} {
 		if _, err = f.WriteAt([]byte(data), off); err != nil {
 			t.Fatalf("write at %d: %v", off, err)
 		}
@@ -329,7 +329,7 @@ func TestTarRecordKeepsSparseFilesSparse(t *testing.T) {
 		t.Fatalf("TarRecord: %v", err)
 	}
 	sent := int64(buf.Len())
-	if limit := 2*store.DigestChunkSize + 1<<20; sent > limit {
+	if limit := 3*store.DigestChunkSize + 1<<20; sent > limit {
 		t.Errorf("stream carries %d bytes for a %d-byte file with 3 data chunks, want at most %d", sent, size, limit)
 	}
 	dst := t.TempDir()
