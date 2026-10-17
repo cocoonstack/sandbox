@@ -783,6 +783,67 @@ func TestReplicaSweepRearmsATombstoneItsClaimStillNames(t *testing.T) {
 	}
 }
 
+func TestReplicaSweepSparesTheRowAndCheckpointOfAnUnsettledRound(t *testing.T) {
+	c := newReplicaCluster(t)
+	a := c.node(t, "a", t.TempDir(), keepAnHour)
+	sb := mustClaim(t, a, testKey)
+	a.archives = &hookRegistry{Registry: c.reg, losePutReply: true}
+	if err := a.replicate(t.Context(), sb); !errors.Is(err, ErrArchiveStoreDown) {
+		t.Fatalf("round whose put reply was lost: %v", err)
+	}
+	a.mu.Lock()
+	pending := sb.ReplicaPending
+	a.mu.Unlock()
+	rec, ok, _ := c.reg.Get(t.Context(), sb.ID)
+	if !ok || rec.Checkpoint != pending {
+		t.Fatalf("row %+v present %v, want it on the pending checkpoint %s", rec, ok, pending)
+	}
+
+	a.reconcileOwnRow(t.Context(), rec, time.Now())
+	if _, held := a.byID(sb.ID); !held {
+		t.Fatal("the sweep dropped the claim")
+	}
+	if again, ok, _ := c.reg.Get(t.Context(), sb.ID); !ok || again.Epoch != rec.Epoch || !ckExists(t, a, pending) {
+		t.Errorf("row %+v present %v, checkpoint kept %v, want both intact until the intent settles", again, ok, ckExists(t, a, pending))
+	}
+	if _, pinned := a.pinnedArchiveCks()[pending]; !pinned {
+		t.Error("the unsettled round's checkpoint is not pinned")
+	}
+	sb.Transition.Lock()
+	err := a.resolveIntent(t.Context(), sb)
+	sb.Transition.Unlock()
+	if err != nil || a.replicaOf(sb) != pending {
+		t.Errorf("settle: %v, replica %q, want the row's checkpoint %s adopted", err, a.replicaOf(sb), pending)
+	}
+}
+
+func TestReplicaRestartKeepsTheCheckpointOfARoundItCannotSettleYet(t *testing.T) {
+	c := newReplicaCluster(t)
+	dirA := t.TempDir()
+	a := c.node(t, "a", dirA, keepAnHour)
+	sb := mustClaim(t, a, testKey)
+	a.archives = &hookRegistry{Registry: c.reg, failPut: true}
+	if err := a.replicate(t.Context(), sb); !errors.Is(err, ErrArchiveStoreDown) {
+		t.Fatalf("round whose put failed: %v", err)
+	}
+	a.mu.Lock()
+	pending := sb.ReplicaPending
+	a.mu.Unlock()
+	if err := a.FlushClaims(); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+
+	restarted := c.restart(t, a)
+	restarted.ckpts = &unreadableStore{Store: restarted.ckpts}
+	if err := restarted.Reconcile(t.Context()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	held, ok := restarted.byID(sb.ID)
+	if !ok || held.ReplicaPending != pending || !ckExists(t, restarted, pending) {
+		t.Errorf("claim held %v, intent %q, ck kept %v, want the intent and its checkpoint kept for the next settle", ok, held.ReplicaPending, ckExists(t, restarted, pending))
+	}
+}
+
 func TestReplicaALeftoverDeleteMarkerSparesTheLiveReplica(t *testing.T) {
 	c := newReplicaCluster(t)
 	a := c.node(t, "a", t.TempDir(), keepAnHour)
