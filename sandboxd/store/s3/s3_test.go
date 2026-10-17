@@ -718,6 +718,68 @@ func TestTransferBudgetStaysBelowTheReuseWindow(t *testing.T) {
 	}
 }
 
+func TestFetchFileDownloadsOnlyTheRequestedFile(t *testing.T) {
+	const id = "ck_00000000000000aa"
+	meta := []byte(`{"id":"` + id + `"}`)
+	fake := &fakeS3{objects: map[string][]byte{}}
+	st := newTestStore(t, fake)
+	staging := stageRecord(t, st, id, meta, "disk-bytes")
+	if err := os.WriteFile(filepath.Join(staging, store.ExportDir, "memory.bin"), []byte("memory-bytes"), 0o600); err != nil {
+		t.Fatalf("write memory: %v", err)
+	}
+	if err := st.Publish(t.Context(), staging, id, ""); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+	fake.resetRequests()
+
+	path, err := st.FetchFile(t.Context(), id, "disk.img")
+	if err != nil {
+		t.Fatalf("FetchFile: %v", err)
+	}
+	if got, readErr := os.ReadFile(path); readErr != nil || string(got) != "disk-bytes" {
+		t.Fatalf("fetched file: %q, %v", got, readErr)
+	}
+	memory := sha256.Sum256([]byte("memory-bytes"))
+	memoryKey := "ck/chunks/" + id + "/" + hex.EncodeToString(memory[:])
+	if n := fake.requestCount(http.MethodGet, memoryKey); n != 0 {
+		t.Errorf("GET %s = %d requests, want 0", memoryKey, n)
+	}
+	disk := sha256.Sum256([]byte("disk-bytes"))
+	diskKey := "ck/chunks/" + id + "/" + hex.EncodeToString(disk[:])
+	if again, err := st.FetchFile(t.Context(), id, "disk.img"); err != nil || again != path {
+		t.Fatalf("second FetchFile = %q, %v, want the cached %q", again, err, path)
+	}
+	if n := fake.requestCount(http.MethodGet, diskKey); n != 1 {
+		t.Errorf("GET %s = %d requests, want 1 across two fetches", diskKey, n)
+	}
+}
+
+func TestFetchFileInstallsOnlyACompleteDownload(t *testing.T) {
+	const id = "ck_00000000000000aa"
+	meta := []byte(`{"id":"` + id + `"}`)
+	fake := &fakeS3{objects: map[string][]byte{}, exportGate: make(chan struct{}), exportEntered: make(chan struct{}, 1)}
+	st := newTestStore(t, fake)
+	publishRecord(t, st, id, meta, "disk-bytes")
+	cached := filepath.Join(st.staging, "cache", id, store.ExportGenHash(meta)+"-disk.img")
+
+	fetched := make(chan error, 1)
+	go func() {
+		_, err := st.FetchFile(t.Context(), id, "disk.img")
+		fetched <- err
+	}()
+	<-fake.exportEntered
+	if _, err := os.Stat(cached); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("a download in flight is already visible at the cache path: %v", err)
+	}
+	close(fake.exportGate)
+	if err := <-fetched; err != nil {
+		t.Fatalf("FetchFile: %v", err)
+	}
+	if got, err := os.ReadFile(cached); err != nil || string(got) != "disk-bytes" {
+		t.Errorf("cached file %q, %v, want the object's bytes", got, err)
+	}
+}
+
 func publishRecord(t *testing.T, st *Store, id string, meta []byte, content string) {
 	t.Helper()
 	staging := stageRecord(t, st, id, meta, content)

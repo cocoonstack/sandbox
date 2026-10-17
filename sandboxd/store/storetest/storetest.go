@@ -77,8 +77,22 @@ func RunContract(t *testing.T, st store.Store) {
 		t.Errorf("second-generation export: %q, %v", got, readErr)
 	}
 
+	filePath, err := st.FetchFile(ctx, id, "disk2.img")
+	if err != nil {
+		t.Fatalf("FetchFile: %v", err)
+	}
+	if got, readErr := os.ReadFile(filePath); readErr != nil || string(got) != "second-gen" { //nolint:gosec // test path
+		t.Errorf("fetched file: %q, %v", got, readErr)
+	}
+	if _, err = st.FetchFile(ctx, id, "absent.img"); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("FetchFile of an absent file: %v, want store.ErrNotFound", err)
+	}
+
 	if err = st.Delete(ctx, id); err != nil {
 		t.Fatalf("Delete: %v", err)
+	}
+	if _, err = st.FetchFile(ctx, id, "disk2.img"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("FetchFile after Delete: %v, want store.ErrNotFound", err)
 	}
 	if _, err = st.ReadMeta(ctx, id); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("ReadMeta after Delete: %v, want store.ErrNotFound", err)

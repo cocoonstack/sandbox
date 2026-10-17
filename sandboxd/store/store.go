@@ -65,6 +65,8 @@ type Store interface {
 	PublishDigested(ctx context.Context, staging, id, lineage string) (string, error)
 	// Fetch materializes a record's export locally; the caller holds the record lock until the clone ends.
 	Fetch(ctx context.Context, id string) (dir string, meta []byte, digest string, err error)
+	// FetchFile materializes one file of a record's export locally, read-only to the caller, without fetching the rest of the record.
+	FetchFile(ctx context.Context, id, rel string) (string, error)
 	// ReadMeta returns a record's metadata, or an error when the record does not exist.
 	ReadMeta(ctx context.Context, id string) ([]byte, error)
 	// Metas lists the metadata and digest of every record in this instance's id namespace.
