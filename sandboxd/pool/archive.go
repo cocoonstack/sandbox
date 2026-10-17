@@ -87,7 +87,13 @@ func (m *Manager) archive(ctx context.Context, sb *types.Sandbox) error {
 	if !ok {
 		return errWokeMeanwhile
 	}
-	if err := m.checkArchiveRow(ctx, sb.ID); err != nil {
+	sb.Transition.Lock()
+	err := m.resolveIntent(ctx, sb)
+	sb.Transition.Unlock()
+	if err != nil {
+		return fmt.Errorf("archive %s: settle intent: %w", sb.ID, err)
+	}
+	if err = m.checkArchiveRow(ctx, sb.ID); err != nil {
 		return fmt.Errorf("archive %s: registry: %w", sb.ID, err)
 	}
 	// pin the ck before Publish makes it listable, or a delete would strand the claim
@@ -127,7 +133,7 @@ func (m *Manager) archive(ctx context.Context, sb *types.Sandbox) error {
 		}
 		if epoch, err = m.putArchive(ctx, sb, ck.ID); err != nil {
 			sb.Transition.Unlock()
-			m.abandonArchive(ctx, sb, 0, ck.ID)
+			m.abandonRefusedPut(ctx, sb, ck.ID, err)
 			return fmt.Errorf("archive %s: registry: %w", sb.ID, err)
 		}
 		m.mu.Lock()

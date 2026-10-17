@@ -1663,6 +1663,114 @@ func TestFailoverRestartUndoesItsOwnInterruptedArchiveAndItsIntent(t *testing.T)
 	}
 }
 
+func TestFailoverReleaseAfterALostArchivePutReplyLeavesNothingAdoptable(t *testing.T) {
+	c := newFailoverCluster(t)
+	a, b := c.node(t, "a", t.TempDir(), keepAnHour), c.node(t, "b", t.TempDir(), keepAnHour)
+	sb := mustClaim(t, a, testKey)
+	if err := a.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
+		t.Fatalf("hibernate: %v", err)
+	}
+	a.archives = &hookRegistry{Registry: c.reg, losePutReply: true}
+	if err := a.archive(t.Context(), sb); !errors.Is(err, ErrArchiveStoreDown) {
+		t.Fatalf("archive whose put reply was lost: %v, want ErrArchiveStoreDown", err)
+	}
+	if err := a.Release(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
+		t.Fatalf("release: %v", err)
+	}
+	if metas, err := a.ckpts.Metas(t.Context()); err != nil || len(metas) != 0 {
+		t.Errorf("store holds %d exports %v after the release, want none", len(metas), err)
+	}
+	assertReleasedForGood(t, c, sb, a, b)
+}
+
+func TestFailoverTheNextArchiveSettlesALostPutReplyFirst(t *testing.T) {
+	c := newFailoverCluster(t)
+	a := c.node(t, "a", t.TempDir(), keepAnHour)
+	sb := mustClaim(t, a, testKey)
+	if err := a.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
+		t.Fatalf("hibernate: %v", err)
+	}
+	a.archives = &hookRegistry{Registry: c.reg, losePutReply: true}
+	if err := a.archive(t.Context(), sb); !errors.Is(err, ErrArchiveStoreDown) {
+		t.Fatalf("archive whose put reply was lost: %v, want ErrArchiveStoreDown", err)
+	}
+	a.archives = c.reg
+	if err := a.archive(t.Context(), sb); err != nil {
+		t.Fatalf("next archive: %v", err)
+	}
+	rec, _, _ := c.reg.Get(t.Context(), sb.ID)
+	metas, err := a.ckpts.Metas(t.Context())
+	if err != nil || len(metas) != 1 || rec.Checkpoint != sb.ArchiveCk || sb.ArchivePending != "" {
+		t.Errorf("%d exports %v, row names %s, claim %s pending %q, want one export the row and claim share", len(metas), err, rec.Checkpoint, sb.ArchiveCk, sb.ArchivePending)
+	}
+}
+
+func TestFailoverSweepSettlesALostArchivePutReply(t *testing.T) {
+	c := newFailoverCluster(t)
+	a := c.node(t, "a", t.TempDir(), keepAnHour)
+	sb := mustClaim(t, a, testKey)
+	if err := a.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
+		t.Fatalf("hibernate: %v", err)
+	}
+	a.archives = &hookRegistry{Registry: c.reg, losePutReply: true}
+	if err := a.archive(t.Context(), sb); !errors.Is(err, ErrArchiveStoreDown) {
+		t.Fatalf("archive whose put reply was lost: %v, want ErrArchiveStoreDown", err)
+	}
+	a.mu.Lock()
+	pending := sb.ArchivePending
+	a.mu.Unlock()
+	if pending == "" || !ckExists(t, a, pending) {
+		t.Fatal("setup: the lost put dropped its intent or its export")
+	}
+	a.sweepOrphanArchives(t.Context())
+	a.mu.Lock()
+	pending = sb.ArchivePending
+	a.mu.Unlock()
+	if _, ok, _ := c.reg.Get(t.Context(), sb.ID); ok || pending != "" {
+		t.Errorf("row present %v, intent %q after the sweep, want both settled", ok, pending)
+	}
+	if metas, err := a.ckpts.Metas(t.Context()); err != nil || len(metas) != 0 {
+		t.Errorf("store holds %d exports %v after the sweep, want none", len(metas), err)
+	}
+	if _, held := a.byID(sb.ID); !held || hibernated(a) != 1 {
+		t.Error("the sweep lost the hibernated claim")
+	}
+}
+
+func TestFailoverAReleaseFindsItsUnsettledArchiveTakenElsewhere(t *testing.T) {
+	c := newFailoverCluster(t)
+	a, b := c.node(t, "a", t.TempDir(), keepAnHour), c.node(t, "b", t.TempDir(), keepAnHour)
+	sb := mustClaim(t, a, testKey)
+	if err := a.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
+		t.Fatalf("hibernate: %v", err)
+	}
+	a.mu.Lock()
+	vm := sb.VMName
+	a.mu.Unlock()
+	a.archives = &hookRegistry{Registry: c.reg, losePutReply: true}
+	if err := a.archive(t.Context(), sb); !errors.Is(err, ErrArchiveStoreDown) {
+		t.Fatalf("archive whose put reply was lost: %v, want ErrArchiveStoreDown", err)
+	}
+	c.down["a"] = true
+	if adopted, err := b.AdoptArchived(t.Context(), sb.ID, sb.Token); err != nil || !adopted {
+		t.Fatalf("adopt: %v %v", adopted, err)
+	}
+	if _, _, err := b.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
+		t.Fatalf("adopter's wake: %v", err)
+	}
+	c.down["a"] = false
+
+	if err := a.Release(t.Context(), sb.ID, Cred{Token: sb.Token}); !errors.Is(err, ErrUnknownSandbox) {
+		t.Fatalf("old owner's release: %v, want ErrUnknownSandbox", err)
+	}
+	if _, held := a.byID(sb.ID); held || !a.eng.(*fakeEngine).removed(vm) {
+		t.Error("the old owner kept the claim or its VM")
+	}
+	if held, ok := b.byID(sb.ID); !ok || held.ArchiveCk != "" {
+		t.Error("the adopter lost the claim it woke")
+	}
+}
+
 type failoverCluster struct {
 	reg   *archivestest.Mem
 	ckDir string

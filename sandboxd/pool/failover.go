@@ -134,6 +134,12 @@ func (m *Manager) checkArchiveRow(ctx context.Context, id string) error {
 	return err
 }
 
+func (m *Manager) abandonRefusedPut(ctx context.Context, sb *types.Sandbox, ck string, putErr error) {
+	if errors.Is(putErr, archives.ErrLost) {
+		m.abandonArchive(ctx, sb, 0, ck)
+	}
+}
+
 func (m *Manager) abandonArchive(ctx context.Context, sb *types.Sandbox, epoch int64, ck string) {
 	if epoch != 0 {
 		if err := m.archives.Delete(ctx, sb.ID, epoch); err != nil {
@@ -250,6 +256,9 @@ func (m *Manager) reputArchive(ctx context.Context, sb *types.Sandbox, epoch int
 func (m *Manager) releaseRowed(ctx context.Context, id string, sb *types.Sandbox) error {
 	sb.Transition.Lock()
 	defer sb.Transition.Unlock()
+	if err := m.resolveIntent(context.WithoutCancel(ctx), sb); err != nil {
+		return err
+	}
 	consumed, err := m.consumeArchive(ctx, sb)
 	if err != nil {
 		return err
@@ -335,6 +344,7 @@ func (m *Manager) sweepOrphanArchives(ctx context.Context) {
 		return
 	}
 	defer m.orphanSweep.Store(false)
+	m.settleIntents(ctx)
 	now := time.Now()
 	recs, err := m.archives.Sweepable(ctx, now, m.nodeID)
 	if err != nil {
@@ -364,7 +374,7 @@ func (m *Manager) reconcileOwnRow(ctx context.Context, rec archives.Record, now 
 	sb.Transition.Lock()
 	defer sb.Transition.Unlock()
 	m.mu.Lock()
-	held, refs, epoch := m.claimed[rec.ID] == sb, sb.ArchiveCk == rec.Checkpoint, sb.ArchiveEpoch
+	held, refs, epoch := m.claimed[rec.ID] == sb, sb.ArchiveCk == rec.Checkpoint || sb.ArchivePending == rec.Checkpoint, sb.ArchiveEpoch
 	m.mu.Unlock()
 	switch {
 	case !held:
@@ -432,10 +442,17 @@ func (m *Manager) fenceArchived(ctx context.Context, claims map[string]*types.Sa
 			}
 		case ok && rec.Owner != m.nodeID:
 			drop = true
-		case ok && !rec.Consumed:
-			drop = m.settleInterruptedArchive(ctx, rows, sb, rec)
-		case !ok && sb.ArchivePending != "":
-			drop = m.settleArchiveIntent(ctx, sb)
+		case sb.ArchivePending != "" || ok && !rec.Consumed:
+			moved, err := m.settleIntent(ctx, id, sb.ArchivePending, rec, ok)
+			switch {
+			case err != nil:
+				logger.Warnf(ctx, "archive intent of %s left for the next restart: %v", id, err)
+			case moved:
+				drop = true
+			default:
+				sb.ArchivePending = ""
+				delete(rows, id)
+			}
 		}
 		if drop {
 			if sb.ArchiveCk != "" {
@@ -450,42 +467,86 @@ func (m *Manager) fenceArchived(ctx context.Context, claims map[string]*types.Sa
 	return rows, true
 }
 
-func (m *Manager) settleArchiveIntent(ctx context.Context, sb *types.Sandbox) bool {
-	_, err := m.ckpts.ReadMeta(ctx, sb.ArchivePending)
-	switch {
-	case errors.Is(err, store.ErrNotFound):
-		return true
-	case err != nil:
-		log.WithFunc("pool.settleArchiveIntent").Warnf(ctx, "archive intent %s of %s left for the next restart: %v", sb.ArchivePending, sb.ID, err)
-		return false
+func (m *Manager) settleIntent(ctx context.Context, id, pending string, rec archives.Record, ok bool) (bool, error) {
+	if ok && rec.Owner == m.nodeID {
+		err := m.archives.Delete(ctx, id, rec.Epoch)
+		if err == nil {
+			return false, nil
+		}
+		if !errors.Is(err, archives.ErrLost) {
+			return false, err
+		}
+		if rec, ok, err = m.archives.Get(ctx, id); err != nil {
+			return false, err
+		}
+		if ok && rec.Owner == m.nodeID {
+			return false, fmt.Errorf("archive row %s moved under its settle", id)
+		}
 	}
-	sb.ArchivePending = ""
-	return false
+	switch {
+	case ok:
+		return true, nil
+	case pending == "":
+		return false, nil
+	}
+	_, err := m.ckpts.ReadMeta(ctx, pending)
+	if errors.Is(err, store.ErrNotFound) {
+		return true, nil
+	}
+	return false, err
 }
 
-func (m *Manager) settleInterruptedArchive(ctx context.Context, rows map[string]archives.Record, sb *types.Sandbox, rec archives.Record) bool {
-	logger := log.WithFunc("pool.settleInterruptedArchive")
-	err := m.archives.Delete(ctx, rec.ID, rec.Epoch)
-	if err == nil {
-		delete(rows, rec.ID)
-		sb.ArchivePending = ""
-		return false
+func (m *Manager) resolveIntent(ctx context.Context, sb *types.Sandbox) error {
+	m.mu.Lock()
+	pending := sb.ArchivePending
+	m.mu.Unlock()
+	if pending == "" {
+		return nil
 	}
-	if !errors.Is(err, archives.ErrLost) {
-		logger.Warnf(ctx, "drop interrupted archive row %s: %v", rec.ID, err)
-		return false
+	rec, ok, err := m.archives.Get(ctx, sb.ID)
+	if err != nil {
+		return err
 	}
-	cur, ok, err := m.archives.Get(ctx, rec.ID)
+	moved, err := m.settleIntent(ctx, sb.ID, pending, rec, ok)
 	switch {
 	case err != nil:
-		logger.Warnf(ctx, "read interrupted archive row %s: %v", rec.ID, err)
-		return false
-	case !ok:
-		delete(rows, rec.ID)
-		return sb.ArchivePending != "" && m.settleArchiveIntent(ctx, sb)
+		return err
+	case moved:
+		m.dropMoved(ctx, sb)
+		return ErrUnknownSandbox
 	}
-	rows[rec.ID] = cur
-	return cur.Owner != m.nodeID
+	if m.clearArchiveIntent(ctx, sb, pending) {
+		m.deleteOrphanArchiveCk(ctx, pending)
+	}
+	return nil
+}
+
+func (m *Manager) settleIntents(ctx context.Context) {
+	m.mu.Lock()
+	var pending []*types.Sandbox
+	for id, sb := range m.claimed {
+		if _, busy := m.archiving[id]; sb.ArchivePending != "" && !busy {
+			pending = append(pending, sb)
+		}
+	}
+	m.mu.Unlock()
+	for _, sb := range pending {
+		sb.Transition.Lock()
+		if err := m.resolveIntent(ctx, sb); err != nil && !errors.Is(err, ErrUnknownSandbox) {
+			log.WithFunc("pool.settleIntents").Warnf(ctx, "settle archive intent of %s: %v", sb.ID, err)
+		}
+		sb.Transition.Unlock()
+	}
+}
+
+func (m *Manager) dropMoved(ctx context.Context, sb *types.Sandbox) {
+	m.mu.Lock()
+	vm, snap := sb.VMName, sb.HibernateSnap
+	m.mu.Unlock()
+	if m.forgetClaim(ctx, sb) {
+		m.destroy(ctx, vm)
+		m.dropSnap(ctx, snap)
+	}
 }
 
 func (m *Manager) archiveRowed(sb *types.Sandbox) bool {

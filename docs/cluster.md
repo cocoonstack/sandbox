@@ -205,6 +205,9 @@ it, so the claim path is unchanged.
   intent and no row keeps the claim while that checkpoint is still in the
   store, since the row never committed, and drops it once the checkpoint is
   gone, since only a node that consumed the row deletes it.
+  A put whose outcome is unknown leaves the intent in place, and a release,
+  the next archive and the hourly sweep settle it by the same rule before
+  they act on the claim.
 - **Departed owners and tombstones.** Every hour, on the store retention sweep,
   each node reads the rows past their retention deadline, the consumed rows,
   and its own rows. An expired row whose owner has left the mesh is purged
