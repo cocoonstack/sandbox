@@ -180,7 +180,7 @@ func TestPublishDigestedRetryAndMetaRequestAccounting(t *testing.T) {
 	meta := []byte(`{"id":"` + id + `","gen":1}`)
 	content := "retry-body"
 	chunk := sha256.Sum256([]byte(content))
-	exportKey := "ck/" + id + "/" + store.ExportGen(meta) + "/" + hex.EncodeToString(chunk[:])
+	exportKey := "ck/chunks/" + id + "/" + hex.EncodeToString(chunk[:])
 	metaKey := "ck/" + id + "/" + store.MetaFile
 	fake.setPutFailures(exportKey, 1)
 
@@ -255,7 +255,7 @@ func TestPublishDigestedFailurePreservesCommittedGeneration(t *testing.T) {
 	newMeta := []byte(`{"id":"` + id + `","gen":2}`)
 	newStaging := stageRecord(t, st, id, newMeta, "replacement")
 	replacement := sha256.Sum256([]byte("replacement"))
-	newExportKey := "ck/" + id + "/" + store.ExportGen(newMeta) + "/" + hex.EncodeToString(replacement[:])
+	newExportKey := "ck/chunks/" + id + "/" + hex.EncodeToString(replacement[:])
 	metaKey := "ck/" + id + "/" + store.MetaFile
 	markerPuts := fake.requestCount(http.MethodPut, metaKey)
 	fake.setPutFailures(newExportKey, 100)
@@ -323,10 +323,15 @@ func TestRepublishRetainsGenerationSelectedByAnotherStore(t *testing.T) {
 	if err = writer.Delete(t.Context(), id); err != nil {
 		t.Fatalf("delete all generations: %v", err)
 	}
-	fake.mu.Lock()
-	defer fake.mu.Unlock()
-	if len(fake.objects) != 0 {
-		t.Errorf("objects left after Delete: %v", fake.objects)
+	if keys := fake.keys(); len(keys) != 2 || slices.ContainsFunc(keys, func(k string) bool { return !strings.HasPrefix(k, "ck/chunks/") }) {
+		t.Errorf("objects after Delete = %v, want only the two chunks", keys)
+	}
+	fake.age("", 2*store.GenerationGrace)
+	if err = writer.SweepGenerations(t.Context()); err != nil {
+		t.Fatalf("SweepGenerations: %v", err)
+	}
+	if keys := fake.keys(); len(keys) != 0 {
+		t.Errorf("objects left after the sweep: %v", keys)
 	}
 }
 
@@ -410,7 +415,7 @@ func TestSparseExportStaysSparseThroughS3(t *testing.T) {
 	if err := st.Publish(t.Context(), staging, id); err != nil {
 		t.Fatalf("Publish: %v", err)
 	}
-	count, uploaded := fake.chunkPuts("ck/" + id + "/" + store.ExportGen(meta) + "/")
+	count, uploaded := fake.chunkPuts("ck/chunks/" + id + "/")
 	if want := 2*store.DigestChunkSize + 4096; count != 3 || uploaded != want {
 		t.Fatalf("chunk PUTs = %d carrying %d bytes, want 3 carrying %d", count, uploaded, want)
 	}
@@ -449,7 +454,7 @@ func TestAllZeroDataChunkIsNotUploaded(t *testing.T) {
 	if err := st.Publish(t.Context(), staging, id); err != nil {
 		t.Fatalf("Publish: %v", err)
 	}
-	if count, _ := fake.chunkPuts("ck/" + id + "/" + store.ExportGen(meta) + "/"); count != 1 {
+	if count, _ := fake.chunkPuts("ck/chunks/" + id + "/"); count != 1 {
 		t.Errorf("chunk PUTs = %d, want only the non-zero chunk", count)
 	}
 	dir, _, _, err := st.Fetch(t.Context(), id)
@@ -465,7 +470,7 @@ func TestFetchFailsOnDamagedChunks(t *testing.T) {
 	const id = "ck_00000000000000a3"
 	meta := []byte(`{"id":"` + id + `"}`)
 	sum := sha256.Sum256([]byte("payload"))
-	chunkKey := "ck/" + id + "/" + store.ExportGen(meta) + "/" + hex.EncodeToString(sum[:])
+	chunkKey := "ck/chunks/" + id + "/" + hex.EncodeToString(sum[:])
 	for _, tc := range []struct {
 		name   string
 		damage func(*fakeS3)
@@ -527,6 +532,143 @@ func TestPublishDigestedSplitsChunksAtTheFixedBoundary(t *testing.T) {
 	}
 	if digest != want {
 		t.Errorf("digest = %q, want %q", digest, want)
+	}
+}
+
+func TestLineageDedupUploadsOnlyChangedChunks(t *testing.T) {
+	const lineage = "sbx_00000000000000a1"
+	fake := &fakeS3{objects: map[string][]byte{}}
+	st := newTestStore(t, fake)
+	cs := store.DigestChunkSize
+	base := map[int64]string{0: "c0", 2 * cs: "c2", 4 * cs: "c4", 6 * cs: "c6"}
+	changed := maps.Clone(base)
+	changed[4*cs] = "changed"
+	publish := func(id string, gen int, writes map[int64]string, opts ...store.PublishOption) (puts int, srcSum [sha256.Size]byte) {
+		t.Helper()
+		before, _ := fake.chunkPuts("ck/chunks/")
+		staging, src := stageSparseRecord(t, st, id, fmt.Appendf(nil, `{"id":"%s","gen":%d}`, id, gen), 8*cs, writes)
+		srcSum = fileSum(t, src)
+		if err := st.Publish(t.Context(), staging, id, opts...); err != nil {
+			t.Fatalf("Publish %s: %v", id, err)
+		}
+		after, _ := fake.chunkPuts("ck/chunks/")
+		return after - before, srcSum
+	}
+
+	if puts, _ := publish("ck_00000000000000b1", 1, base, store.WithLineage(lineage)); puts != 4 {
+		t.Fatalf("first publish uploaded %d chunks, want 4", puts)
+	}
+	puts, srcSum := publish("ck_00000000000000b2", 1, changed, store.WithLineage(lineage))
+	if puts != 1 {
+		t.Errorf("second record of the lineage uploaded %d chunks, want only the changed one", puts)
+	}
+	if puts, _ = publish("ck_00000000000000b1", 2, base, store.WithLineage(lineage)); puts != 0 {
+		t.Errorf("re-publish of identical content uploaded %d chunks, want 0", puts)
+	}
+	if puts, _ = publish("ck_00000000000000b3", 1, base); puts != 4 {
+		t.Errorf("a record outside the lineage uploaded %d chunks, want all 4", puts)
+	}
+
+	dir, _, _, err := st.Fetch(t.Context(), "ck_00000000000000b2")
+	if err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	if fileSum(t, filepath.Join(dir, "disk.img")) != srcSum {
+		t.Errorf("fetched content differs from the source")
+	}
+}
+
+func TestSweepKeepsReferencedChunksAndRemovesUnreferencedPastTheGrace(t *testing.T) {
+	const lineage = "sbx_00000000000000a2"
+	fake := &fakeS3{objects: map[string][]byte{}}
+	st := newTestStore(t, fake)
+	publish := func(id, only string) {
+		t.Helper()
+		staging := stageRecord(t, st, id, []byte(`{"id":"`+id+`"}`), "shared")
+		if err := os.WriteFile(filepath.Join(staging, store.ExportDir, "extra.bin"), []byte(only), 0o600); err != nil {
+			t.Fatalf("write extra: %v", err)
+		}
+		if err := st.Publish(t.Context(), staging, id, store.WithLineage(lineage)); err != nil {
+			t.Fatalf("Publish %s: %v", id, err)
+		}
+	}
+	publish("ck_00000000000000b1", "only-a")
+	publish("ck_00000000000000b2", "only-b")
+	if err := st.Delete(t.Context(), "ck_00000000000000b1"); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	fake.age("", 2*store.GenerationGrace)
+	fresh := "ck/chunks/" + lineage + "/" + strings.Repeat("0", 64)
+	fake.put(fresh, []byte("in-flight"))
+
+	if err := st.SweepGenerations(t.Context()); err != nil {
+		t.Fatalf("SweepGenerations: %v", err)
+	}
+	chunk := func(content string) string {
+		sum := sha256.Sum256([]byte(content))
+		return "ck/chunks/" + lineage + "/" + hex.EncodeToString(sum[:])
+	}
+	for _, tc := range []struct {
+		key  string
+		want bool
+	}{
+		{chunk("shared"), true},
+		{chunk("only-b"), true},
+		{chunk("only-a"), false},
+		{fresh, true},
+	} {
+		if _, ok := fake.get(tc.key); ok != tc.want {
+			t.Errorf("chunk %s present = %v, want %v", tc.key, ok, tc.want)
+		}
+	}
+	if _, _, _, err := st.Fetch(t.Context(), "ck_00000000000000b2"); err != nil {
+		t.Errorf("Fetch of the surviving record: %v", err)
+	}
+}
+
+func TestSweepRemovesSupersededGenerationsPastTheGrace(t *testing.T) {
+	const id = "ck_00000000000000a6"
+	fake := &fakeS3{objects: map[string][]byte{}}
+	st := newTestStore(t, fake)
+	first := []byte(`{"id":"` + id + `","gen":1}`)
+	second := []byte(`{"id":"` + id + `","gen":2}`)
+	publishRecord(t, st, id, first, "first")
+	publishRecord(t, st, id, second, "second")
+	firstManifest := "ck/" + id + "/" + store.ExportGen(first) + "/" + manifestName
+	secondManifest := "ck/" + id + "/" + store.ExportGen(second) + "/" + manifestName
+
+	if err := st.SweepGenerations(t.Context()); err != nil {
+		t.Fatalf("SweepGenerations: %v", err)
+	}
+	if _, ok := fake.get(firstManifest); !ok {
+		t.Fatal("a generation superseded within the grace was swept")
+	}
+
+	fake.age(firstManifest, 2*store.GenerationGrace)
+	if err := st.SweepGenerations(t.Context()); err != nil {
+		t.Fatalf("SweepGenerations: %v", err)
+	}
+	if _, ok := fake.get(firstManifest); !ok {
+		t.Fatal("a generation was swept although the current meta is younger than the grace")
+	}
+
+	fake.age("", 2*store.GenerationGrace)
+	if err := st.SweepGenerations(t.Context()); err != nil {
+		t.Fatalf("SweepGenerations: %v", err)
+	}
+	if _, ok := fake.get(firstManifest); ok {
+		t.Error("a generation superseded past the grace survived the sweep")
+	}
+	if _, ok := fake.get(secondManifest); !ok {
+		t.Error("the current generation was swept")
+	}
+	secondChunk := sha256.Sum256([]byte("second"))
+	want := []string{"ck/chunks/" + id + "/" + hex.EncodeToString(secondChunk[:]), secondManifest, "ck/" + id + "/" + store.MetaFile}
+	if keys := fake.keys(); !slices.Equal(keys, want) {
+		t.Errorf("objects after the sweep = %v, want %v", keys, want)
+	}
+	if _, _, _, err := st.Fetch(t.Context(), id); err != nil {
+		t.Errorf("Fetch after the sweep: %v", err)
 	}
 }
 
@@ -661,6 +803,7 @@ type fakeS3 struct {
 	failPuts      map[string]int
 	requests      map[fakeRequest]int
 	putLengths    map[string][]int64
+	modified      map[string]time.Time
 	deleteBatches [][]string
 	failList      bool
 	failDelete    bool
@@ -733,7 +876,7 @@ func (f *fakeS3) chunkPuts(prefix string) (count int, bytes int64) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	for key, lengths := range f.putLengths {
-		if strings.HasPrefix(key, prefix) && !strings.HasSuffix(key, "/"+manifestName) {
+		if strings.HasPrefix(key, prefix) {
 			count += len(lengths)
 			for _, n := range lengths {
 				bytes += n
@@ -741,6 +884,39 @@ func (f *fakeS3) chunkPuts(prefix string) (count int, bytes int64) {
 		}
 	}
 	return count, bytes
+}
+
+func (f *fakeS3) put(key string, body []byte) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.objects[key] = body
+	if f.modified == nil {
+		f.modified = map[string]time.Time{}
+	}
+	f.modified[key] = time.Now()
+}
+
+func (f *fakeS3) get(key string) ([]byte, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	body, ok := f.objects[key]
+	return body, ok
+}
+
+func (f *fakeS3) keys() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Sorted(maps.Keys(f.objects))
+}
+
+func (f *fakeS3) age(prefix string, by time.Duration) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for key := range f.objects {
+		if strings.HasPrefix(key, prefix) {
+			f.modified[key] = time.Now().Add(-by)
+		}
+	}
 }
 
 func (f *fakeS3) resetRequests() {
@@ -771,6 +947,10 @@ func (f *fakeS3) handlePutObject(w http.ResponseWriter, r *http.Request, key str
 		f.metadata = map[string]map[string]string{}
 	}
 	f.objects[key] = bytes.Clone(body)
+	if f.modified == nil {
+		f.modified = map[string]time.Time{}
+	}
+	f.modified[key] = time.Now()
 	metadata := requestMetadata(r.Header)
 	if len(metadata) == 0 {
 		delete(f.metadata, key)
@@ -788,8 +968,9 @@ func (f *fakeS3) handleListObjects(w http.ResponseWriter, r *http.Request) {
 	prefix := r.URL.Query().Get("prefix")
 	delim := r.URL.Query().Get("delimiter")
 	type object struct {
-		Key  string `xml:"Key"`
-		Size int    `xml:"Size"`
+		Key          string `xml:"Key"`
+		Size         int    `xml:"Size"`
+		LastModified string `xml:"LastModified"`
 	}
 	type commonPrefix struct {
 		Prefix string `xml:"Prefix"`
@@ -815,7 +996,9 @@ func (f *fakeS3) handleListObjects(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 		}
-		result.Contents = append(result.Contents, object{Key: key, Size: len(body)})
+		result.Contents = append(result.Contents, object{
+			Key: key, Size: len(body), LastModified: f.modified[key].UTC().Format("2006-01-02T15:04:05.000Z"),
+		})
 	}
 	slices.SortFunc(result.Contents, func(a, b object) int { return cmp.Compare(a.Key, b.Key) })
 	slices.SortFunc(result.CommonPrefixes, func(a, b commonPrefix) int { return cmp.Compare(a.Prefix, b.Prefix) })

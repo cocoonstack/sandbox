@@ -384,11 +384,11 @@ type stallingSweepStore struct {
 	release chan struct{}
 }
 
-func (s *stallingSweepStore) SweepGenerations() error {
+func (s *stallingSweepStore) SweepGenerations(ctx context.Context) error {
 	select {
 	case s.entered <- struct{}{}:
 	default:
 	}
 	<-s.release
-	return s.Store.SweepGenerations()
+	return s.Store.SweepGenerations(ctx)
 }

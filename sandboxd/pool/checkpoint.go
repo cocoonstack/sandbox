@@ -189,7 +189,7 @@ func (m *Manager) publishCheckpoint(ctx context.Context, sb *types.Sandbox, ckID
 	if err := os.WriteFile(filepath.Join(staging, store.MetaFile), meta, 0o600); err != nil {
 		return types.Checkpoint{}, "", fmt.Errorf("write checkpoint meta: %w", err)
 	}
-	if err := m.ckpts.Publish(ctx, staging, ckpt.ID); err != nil {
+	if err := m.ckpts.Publish(ctx, staging, ckpt.ID, store.WithLineage(sb.ID)); err != nil {
 		return types.Checkpoint{}, "", fmt.Errorf("commit checkpoint: %w", err)
 	}
 	return ckpt, srcSnap, nil

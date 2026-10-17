@@ -8,6 +8,7 @@ package s3
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json/v2"
 	"errors"
@@ -15,6 +16,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -37,6 +39,7 @@ import (
 const (
 	digestMetadataKey   = "content-digest"
 	manifestName        = "manifest.json"
+	chunksDir           = "chunks"
 	uploadConcurrency   = 8 // chunk PUTs in flight per publish
 	metaReadConcurrency = 8
 	publishConcurrency  = 4 // files scanned in parallel
@@ -56,7 +59,8 @@ type publishFile struct {
 }
 
 type manifest struct {
-	Files []manifestFile `json:"files"`
+	Lineage string         `json:"lineage"`
+	Files   []manifestFile `json:"files"`
 }
 
 type manifestFile struct {
@@ -68,6 +72,16 @@ type manifestFile struct {
 type manifestChunk struct {
 	Index  int64  `json:"index"`
 	SHA256 string `json:"sha256"`
+}
+
+type recordObjects struct {
+	meta      *s3types.Object
+	manifests map[string]s3types.Object // by generation
+}
+
+type inventory struct {
+	records map[string]*recordObjects
+	chunks  map[string][]s3types.Object // by lineage
 }
 
 var _ store.Store = (*Store)(nil)
@@ -111,13 +125,13 @@ func (s *Store) Stage(id string) (string, error) {
 	return os.MkdirTemp(s.staging, id+"-*.tmp")
 }
 
-func (s *Store) Publish(ctx context.Context, staging, id string) error {
-	_, err := s.publish(ctx, staging, id, false)
+func (s *Store) Publish(ctx context.Context, staging, id string, opts ...store.PublishOption) error {
+	_, err := s.publish(ctx, staging, id, store.ResolvePublishOptions(opts).Lineage, false)
 	return err
 }
 
-func (s *Store) PublishDigested(ctx context.Context, staging, id string) (string, error) {
-	return s.publish(ctx, staging, id, true)
+func (s *Store) PublishDigested(ctx context.Context, staging, id string, opts ...store.PublishOption) (string, error) {
+	return s.publish(ctx, staging, id, store.ResolvePublishOptions(opts).Lineage, true)
 }
 
 func (s *Store) Fetch(ctx context.Context, id string) (string, []byte, string, error) {
@@ -208,10 +222,11 @@ func (s *Store) SetLabels(ctx context.Context, id string, labels []byte) error {
 func (s *Store) Delete(ctx context.Context, id string) error {
 	_ = os.RemoveAll(filepath.Join(s.staging, "cache", id))
 	metaKey := s.key(id, store.MetaFile)
-	keys, err := s.list(ctx, s.key(id, "")+"/")
+	objs, err := s.list(ctx, s.key(id, "")+"/")
 	if err != nil {
 		return err
 	}
+	keys := objectKeys(objs)
 	// keep the commit marker so a failed export cleanup remains discoverable on retry.
 	keys = slices.DeleteFunc(keys, func(key string) bool { return key == metaKey })
 	if err := s.deleteKeys(ctx, keys); err != nil {
@@ -222,10 +237,46 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 
 // SweepStaging clears local staging residue at startup.
 func (s *Store) SweepStaging() error {
-	return utils.RemoveDirEntries(s.staging, nil) // objects orphaned before meta.json fall to the bucket's lifecycle rule
+	return utils.RemoveDirEntries(s.staging, nil)
 }
 
-func (s *Store) SweepGenerations() error { return nil }
+func (s *Store) SweepGenerations(ctx context.Context) error {
+	objs, err := s.list(ctx, s.prefix)
+	if err != nil {
+		return err
+	}
+	inv := s.classify(objs)
+	now := time.Now()
+	refs := &chunkRefs{live: map[string]map[string]struct{}{}}
+	var doomed []string
+	var mu sync.Mutex
+	g, gctx := errgroup.WithContext(ctx)
+	g.SetLimit(metaReadConcurrency)
+	for _, rec := range inv.records {
+		g.Go(func() error {
+			dead, sweepErr := s.sweepRecord(gctx, rec, now, refs)
+			mu.Lock()
+			doomed = append(doomed, dead...)
+			mu.Unlock()
+			return sweepErr
+		})
+	}
+	if err = g.Wait(); err != nil {
+		return err
+	}
+	if err = s.deleteKeys(ctx, doomed); err != nil {
+		return err
+	}
+	var stale []string
+	for lineage, chunks := range inv.chunks {
+		for _, obj := range chunks {
+			if !refs.has(lineage, path.Base(*obj.Key)) && idle(obj, now) {
+				stale = append(stale, *obj.Key)
+			}
+		}
+	}
+	return s.deleteKeys(ctx, stale)
+}
 
 func (s *Store) readMeta(ctx context.Context, id string) ([]byte, string, error) {
 	meta, metadata, err := s.getObject(ctx, s.key(id, store.MetaFile))
@@ -272,7 +323,8 @@ func (s *Store) get(ctx context.Context, key string) (*awss3.GetObjectOutput, er
 	return out, nil
 }
 
-func (s *Store) publish(ctx context.Context, staging, id string, digested bool) (string, error) {
+func (s *Store) publish(ctx context.Context, staging, id, lineage string, digested bool) (string, error) {
+	lineage = cmp.Or(lineage, id)
 	metaRaw, err := os.ReadFile(filepath.Join(staging, store.MetaFile)) //nolint:gosec // our own staging dir
 	if err != nil {
 		return "", fmt.Errorf("staging has no %s: %w", store.MetaFile, err)
@@ -282,14 +334,15 @@ func (s *Store) publish(ctx context.Context, staging, id string, digested bool) 
 	if err != nil {
 		return "", err
 	}
-	man := manifest{Files: make([]manifestFile, len(files))}
+	have, err := s.chunkSet(ctx, lineage)
+	if err != nil {
+		return "", err
+	}
+	man := manifest{Lineage: lineage, Files: make([]manifestFile, len(files))}
 	digestFiles := make([]store.DigestFile, len(files))
 	chunkGroup, chunkCtx := errgroup.WithContext(ctx)
 	chunkGroup.SetLimit(uploadConcurrency)
-	up := &chunkUploader{
-		store: s, group: chunkGroup, ctx: chunkCtx, have: map[string]struct{}{},
-		key: func(sha string) string { return s.chunkKey(id, gen, sha) },
-	}
+	up := &chunkUploader{store: s, group: chunkGroup, ctx: chunkCtx, lineage: lineage, have: have}
 	fileGroup, fileCtx := errgroup.WithContext(chunkCtx)
 	fileGroup.SetLimit(publishConcurrency)
 	for i, file := range files {
@@ -324,7 +377,7 @@ func (s *Store) publish(ctx context.Context, staging, id string, digested bool) 
 	if err = s.putObject(ctx, s.key(id, store.MetaFile), metaRaw, metadata); err != nil {
 		return "", err
 	}
-	// keep old generations: another node may have selected the previous meta; Delete reclaims them.
+	// keep old generations: another node may have selected the previous meta; the sweep reclaims them.
 	if err := os.RemoveAll(staging); err != nil {
 		return "", err
 	}
@@ -346,8 +399,7 @@ func (s *Store) populate(ctx context.Context, id string, meta []byte, gen string
 	if err != nil {
 		return err
 	}
-	chunkKey := func(sha string) string { return s.chunkKey(id, exportGen, sha) }
-	if err := s.materialize(ctx, man, filepath.Join(local, store.ExportDir), chunkKey); err != nil {
+	if err := s.materialize(ctx, man, filepath.Join(local, store.ExportDir)); err != nil {
 		return err
 	}
 	if err := os.WriteFile(filepath.Join(local, store.MetaFile), meta, 0o600); err != nil {
@@ -364,7 +416,7 @@ func (s *Store) populate(ctx context.Context, id string, meta []byte, gen string
 }
 
 // materialize sizes each file to its logical length and writes only its present chunks, so holes stay holes.
-func (s *Store) materialize(ctx context.Context, man manifest, root string, chunkKey func(sha string) string) (err error) {
+func (s *Store) materialize(ctx context.Context, man manifest, root string) (err error) {
 	handles := make([]*os.File, len(man.Files))
 	defer func() {
 		for _, f := range handles {
@@ -389,7 +441,9 @@ func (s *Store) materialize(ctx context.Context, man manifest, root string, chun
 	g.SetLimit(fetchConcurrency)
 	for i, file := range man.Files {
 		for _, chunk := range file.Chunks {
-			g.Go(func() error { return s.fetchChunk(gctx, chunkKey(chunk.SHA256), handles[i], file.Size, chunk) })
+			g.Go(func() error {
+				return s.fetchChunk(gctx, s.chunkKey(man.Lineage, chunk.SHA256), handles[i], file.Size, chunk)
+			})
 		}
 	}
 	return g.Wait()
@@ -417,8 +471,82 @@ func (s *Store) key(id, rest string) string {
 	return s.prefix + id + "/" + filepath.ToSlash(rest)
 }
 
-func (s *Store) chunkKey(id, gen, sha string) string {
-	return s.key(id, gen+"/"+sha)
+func (s *Store) chunkKey(lineage, sha string) string {
+	return s.prefix + chunksDir + "/" + lineage + "/" + sha
+}
+
+func (s *Store) chunkSet(ctx context.Context, lineage string) (map[string]struct{}, error) {
+	prefix := s.chunkKey(lineage, "")
+	objs, err := s.list(ctx, prefix)
+	if err != nil {
+		return nil, err
+	}
+	have := make(map[string]struct{}, len(objs))
+	for _, obj := range objs {
+		have[strings.TrimPrefix(*obj.Key, prefix)] = struct{}{}
+	}
+	return have, nil
+}
+
+func (s *Store) classify(objs []s3types.Object) inventory {
+	inv := inventory{records: map[string]*recordObjects{}, chunks: map[string][]s3types.Object{}}
+	for _, obj := range objs {
+		first, rest, _ := strings.Cut(strings.TrimPrefix(*obj.Key, s.prefix), "/")
+		if first == chunksDir {
+			if lineage, _, ok := strings.Cut(rest, "/"); ok {
+				inv.chunks[lineage] = append(inv.chunks[lineage], obj)
+			}
+			continue
+		}
+		if !store.CheckpointIDRe.MatchString(first) && !store.TemplateIDRe.MatchString(first) {
+			continue
+		}
+		rec := inv.records[first]
+		if rec == nil {
+			rec = &recordObjects{manifests: map[string]s3types.Object{}}
+			inv.records[first] = rec
+		}
+		if rest == store.MetaFile {
+			rec.meta = &obj
+		} else if gen, name, ok := strings.Cut(rest, "/"); ok && name == manifestName {
+			rec.manifests[gen] = obj
+		}
+	}
+	return inv
+}
+
+func (s *Store) sweepRecord(ctx context.Context, rec *recordObjects, now time.Time, refs *chunkRefs) ([]string, error) {
+	current := ""
+	if rec.meta != nil {
+		meta, _, err := s.getObject(ctx, *rec.meta.Key)
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, nil // deleted mid-sweep
+		}
+		if err != nil {
+			return nil, err
+		}
+		current = store.ExportGen(meta)
+	}
+	var doomed []string
+	for gen, obj := range rec.manifests {
+		if gen != current && idle(obj, now) && (rec.meta == nil || idle(*rec.meta, now)) {
+			doomed = append(doomed, *obj.Key)
+			continue
+		}
+		raw, _, err := s.getObject(ctx, *obj.Key)
+		if errors.Is(err, store.ErrNotFound) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		var man manifest
+		if err = json.Unmarshal(raw, &man); err != nil {
+			return nil, fmt.Errorf("decode manifest %s: %w", *obj.Key, err)
+		}
+		refs.add(man)
+	}
+	return doomed, nil
 }
 
 func (s *Store) putObject(ctx context.Context, key string, body []byte, metadata map[string]string) error {
@@ -459,19 +587,17 @@ func (s *Store) deleteKeys(ctx context.Context, keys []string) error {
 	return nil
 }
 
-func (s *Store) list(ctx context.Context, prefix string) ([]string, error) {
-	var keys []string
+func (s *Store) list(ctx context.Context, prefix string) ([]s3types.Object, error) {
+	var objs []s3types.Object
 	p := awss3.NewListObjectsV2Paginator(s.client, &awss3.ListObjectsV2Input{Bucket: &s.bucket, Prefix: &prefix})
 	for p.HasMorePages() {
 		page, err := p.NextPage(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("list %s: %w", prefix, err)
 		}
-		for _, obj := range page.Contents {
-			keys = append(keys, *obj.Key)
-		}
+		objs = append(objs, page.Contents...)
 	}
-	return keys, nil
+	return objs, nil
 }
 
 func publishFiles(staging string) ([]publishFile, error) {
@@ -481,6 +607,18 @@ func publishFiles(staging string) ([]publishFile, error) {
 		return nil
 	})
 	return files, err
+}
+
+func objectKeys(objs []s3types.Object) []string {
+	keys := make([]string, len(objs))
+	for i, obj := range objs {
+		keys[i] = *obj.Key
+	}
+	return keys
+}
+
+func idle(obj s3types.Object, now time.Time) bool {
+	return now.Sub(aws.ToTime(obj.LastModified)) >= store.GenerationGrace
 }
 
 // pruneIdleGenerations drops cached generations of one record that no Fetch used within the grace; a hit refreshes the mtime.
@@ -501,7 +639,8 @@ type chunkUploader struct {
 	store *Store
 	group *errgroup.Group
 	ctx   context.Context // the group's, so a finished scan cannot cancel uploads in flight
-	key   func(sha string) string
+
+	lineage string
 
 	mu   sync.Mutex
 	have map[string]struct{}
@@ -538,7 +677,7 @@ func (u *chunkUploader) upload(ctx context.Context, c store.Chunk) error {
 	}
 	u.group.Go(func() error {
 		defer putChunkBuf(c.Data)
-		return u.store.putObject(u.ctx, u.key(c.SHA256), c.Data, nil)
+		return u.store.putObject(u.ctx, u.store.chunkKey(u.lineage, c.SHA256), c.Data, nil)
 	})
 	return nil
 }
@@ -558,4 +697,31 @@ func getChunkBuf() []byte { return *chunkBufs.Get().(*[]byte) }
 func putChunkBuf(buf []byte) {
 	buf = buf[:cap(buf)]
 	chunkBufs.Put(&buf)
+}
+
+type chunkRefs struct {
+	mu   sync.Mutex
+	live map[string]map[string]struct{} // lineage -> chunk sha
+}
+
+func (r *chunkRefs) add(man manifest) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	set := r.live[man.Lineage]
+	if set == nil {
+		set = map[string]struct{}{}
+		r.live[man.Lineage] = set
+	}
+	for _, file := range man.Files {
+		for _, chunk := range file.Chunks {
+			set[chunk.SHA256] = struct{}{}
+		}
+	}
+}
+
+func (r *chunkRefs) has(lineage, sha string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	_, ok := r.live[lineage][sha]
+	return ok
 }

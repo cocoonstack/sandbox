@@ -1982,9 +1982,9 @@ type publishCountingStore struct {
 	n atomic.Int32
 }
 
-func (s *publishCountingStore) Publish(ctx context.Context, staging, id string) error {
+func (s *publishCountingStore) Publish(ctx context.Context, staging, id string, opts ...store.PublishOption) error {
 	s.n.Add(1)
-	return s.Store.Publish(ctx, staging, id)
+	return s.Store.Publish(ctx, staging, id, opts...)
 }
 
 type unreadableStore struct {

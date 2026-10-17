@@ -274,7 +274,7 @@ func TestSweepGenerationsPairsCurrentAndSupersededDigests(t *testing.T) {
 		backdate(t, path)
 	}
 
-	if err = st.SweepGenerations(); err != nil {
+	if err = st.SweepGenerations(t.Context()); err != nil {
 		t.Fatalf("SweepGenerations: %v", err)
 	}
 	for _, path := range []string{firstGen, firstSidecar} {
@@ -320,7 +320,7 @@ func TestPublishRetriesAfterExpiredInstall(t *testing.T) {
 	if _, readErr := st.ReadMeta(t.Context(), id); !errors.Is(readErr, store.ErrNotFound) {
 		t.Fatalf("expired retry committed meta: %v", readErr)
 	}
-	if sweepErr := st.SweepGenerations(); sweepErr != nil {
+	if sweepErr := st.SweepGenerations(t.Context()); sweepErr != nil {
 		t.Fatalf("sweep expired generation: %v", sweepErr)
 	}
 	if _, statErr := os.Stat(gen); !errors.Is(statErr, fs.ErrNotExist) {
@@ -529,7 +529,7 @@ func TestSweepGenerationsToleratesConcurrentDelete(t *testing.T) {
 				return nil
 			default:
 			}
-			if err := st.SweepGenerations(); err != nil {
+			if err := st.SweepGenerations(t.Context()); err != nil {
 				return fmt.Errorf("sweep: %w", err)
 			}
 		}
