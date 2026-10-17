@@ -135,8 +135,11 @@ func (m *Manager) recordAudit(ctx context.Context, id string, frame auditFrame) 
 // recordEgress logs one guarded-egress decision and meters it as a usage event.
 func (m *Manager) recordEgress(ctx context.Context, id, tenant string, ev egress.Event) {
 	decision := "deny"
-	if ev.Decision == egress.DecisionAllow {
+	switch ev.Decision {
+	case egress.DecisionAllow:
 		decision = "allow"
+	case egress.DecisionRateLimited:
+		decision = "rate_limited"
 	}
 	m.recordAudit(ctx, id, auditFrame{
 		Op: "egress", Dest: ev.Host, Port: ev.Port, Method: ev.Method, Decision: decision, Secret: ev.Injected, Upstream: ev.Upstream,

@@ -5,8 +5,12 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"net/netip"
 	"sync/atomic"
 
+	"golang.org/x/time/rate"
+
+	"github.com/cocoonstack/sandbox/sandboxd/config"
 	"github.com/cocoonstack/sandbox/sandboxd/egress"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
@@ -19,6 +23,11 @@ type resolvedPolicy struct {
 	eval egress.Evaluator
 }
 
+type connBucket struct {
+	rate config.EgressConnRate
+	lim  *rate.Limiter
+}
+
 var (
 	_ egress.Evaluator = (*claim)(nil)
 	_ egress.Secrets   = (*claim)(nil)
@@ -27,9 +36,10 @@ var (
 
 // claim is one sandbox's side of its proxy: a policy that follows a reload, its secrets, and its upstream route.
 type claim struct {
-	h   *Host
-	sb  *types.Sandbox
-	cur atomic.Pointer[resolvedPolicy]
+	h      *Host
+	sb     *types.Sandbox
+	cur    atomic.Pointer[resolvedPolicy]
+	bucket atomic.Pointer[connBucket]
 }
 
 func newClaim(h *Host, sb *types.Sandbox, v *View, eval egress.Evaluator) *claim {
@@ -93,6 +103,9 @@ func (c *claim) Route() string {
 
 func (c *claim) Dial(ctx context.Context, route, network, addr string) (net.Conn, error) {
 	h := c.h
+	if !c.admitConn(addr) {
+		return nil, egress.ErrRateLimited
+	}
 	if route == "" {
 		return h.o.Dial(ctx, network, addr)
 	}
@@ -111,6 +124,28 @@ func (c *claim) Dial(ctx context.Context, route, network, addr string) (net.Conn
 		return h.o.Dial(ctx, network, target.String())
 	}
 	return egress.DialUpstream(ctx, u, target.String(), new(net.Dialer).DialContext)
+}
+
+func (c *claim) admitConn(addr string) bool {
+	r := c.h.o.View().connRate
+	if r == nil {
+		return true
+	}
+	// Internal addresses cost no token: the dial guard gates them.
+	if ap, err := netip.ParseAddrPort(addr); err == nil && internalAddr(*c.h.self.Load(), canonicalAddr(ap.Addr())) {
+		return true
+	}
+	return c.limiter(*r).Allow()
+}
+
+func (c *claim) limiter(r config.EgressConnRate) *rate.Limiter {
+	for {
+		b := c.bucket.Load()
+		if b != nil && b.rate == r {
+			return b.lim
+		}
+		c.bucket.CompareAndSwap(b, &connBucket{rate: r, lim: rate.NewLimiter(rate.Limit(r.PerSecond), r.Burst)})
+	}
 }
 
 // current denies everything once a reload leaves the claim with no policy.

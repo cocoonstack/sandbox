@@ -3,6 +3,7 @@ package outbound
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -188,6 +189,90 @@ func TestAnInjectShapeRidesIntoTheCredential(t *testing.T) {
 	}
 }
 
+func TestNewConnectionsPastTheClaimRateAreRefused(t *testing.T) {
+	var dials atomic.Int32
+	cfg := &config.Config{
+		EgressConnRate:      &config.EgressConnRate{PerSecond: 0.001, Burst: 2},
+		EgressInternalAllow: []string{"10.203.0.1/32:3142", "93.184.216.0/24"},
+	}
+	h := newHost(t, &fakeEngine{}, cfg, func(o *Options) { o.Dial = pipeDial(&dials) })
+	c := newClaim(h, nil, nil, nil)
+	for i, addr := range []string{"example.com:443", "93.184.216.34:443", "93.184.216.34:443", "example.com:443"} {
+		conn, err := c.Dial(t.Context(), "", "tcp", addr)
+		if i < 2 && err != nil {
+			t.Fatalf("dial %d to %s inside the burst: %v", i, addr, err)
+		}
+		if i >= 2 && !errors.Is(err, egress.ErrRateLimited) {
+			t.Fatalf("dial %d to %s past the burst: %v, want ErrRateLimited (a public allow entry is not free)", i, addr, err)
+		}
+		if conn != nil {
+			_ = conn.Close()
+		}
+	}
+	conn, err := c.Dial(t.Context(), "", "tcp", "10.203.0.1:3142")
+	if err != nil {
+		t.Fatalf("a re-admitted internal service was rate limited: %v", err)
+	}
+	_ = conn.Close()
+	if n := dials.Load(); n != 3 {
+		t.Errorf("dialed %d times, want 3: a refused connection must not dial", n)
+	}
+}
+
+func TestConcurrentFirstDialsShareOneBucket(t *testing.T) {
+	var dials atomic.Int32
+	cfg := &config.Config{EgressConnRate: &config.EgressConnRate{PerSecond: 0.001, Burst: 5}}
+	h := newHost(t, &fakeEngine{}, cfg, func(o *Options) { o.Dial = pipeDial(&dials) })
+	c := newClaim(h, nil, nil, nil)
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for range 256 {
+		wg.Go(func() {
+			<-start
+			if conn, err := c.Dial(t.Context(), "", "tcp", "example.com:443"); err == nil {
+				_ = conn.Close()
+			}
+		})
+	}
+	close(start)
+	wg.Wait()
+	if n := dials.Load(); n != 5 {
+		t.Errorf("%d concurrent first dials passed, want the burst of 5", n)
+	}
+}
+
+func TestAChangedRateStartsAFullBucket(t *testing.T) {
+	var dials atomic.Int32
+	var view atomic.Pointer[View]
+	view.Store(NewView(&config.Config{}, testSecrets(t)))
+	h := newHost(t, &fakeEngine{}, &config.Config{}, func(o *Options) {
+		o.Dial = pipeDial(&dials)
+		o.View = view.Load
+	})
+	c := newClaim(h, nil, nil, nil)
+	for i, step := range []struct {
+		rate *config.EgressConnRate
+		want int
+	}{
+		{nil, 4},
+		{&config.EgressConnRate{PerSecond: 0.001, Burst: 2}, 2},
+		{&config.EgressConnRate{PerSecond: 0.001, Burst: 2}, 0},
+		{&config.EgressConnRate{PerSecond: 0.001, Burst: 3}, 3},
+	} {
+		view.Store(NewView(&config.Config{EgressConnRate: step.rate}, testSecrets(t)))
+		passed := 0
+		for range 4 {
+			if conn, err := c.Dial(t.Context(), "", "tcp", "example.com:443"); err == nil {
+				passed++
+				_ = conn.Close()
+			}
+		}
+		if passed != step.want {
+			t.Errorf("step %d (%+v): %d of 4 dials passed, want %d", i, step.rate, passed, step.want)
+		}
+	}
+}
+
 func BenchmarkClaimSecretsHeader(b *testing.B) {
 	b.Setenv("GH_TOKEN", "node-gh")
 	store, err := egress.NewSecretStore([]egress.SecretSpec{{Name: "gh", Header: "Authorization", ValueEnv: "GH_TOKEN"}})
@@ -347,4 +432,13 @@ func (p *tunnel) serve(conn net.Conn) {
 	_, _ = io.WriteString(conn, "HTTP/1.1 200 OK\r\n\r\n")
 	go func() { _, _ = io.Copy(target, br) }()
 	_, _ = io.Copy(conn, target)
+}
+
+func pipeDial(n *atomic.Int32) egress.DialFunc {
+	return func(context.Context, string, string) (net.Conn, error) {
+		n.Add(1)
+		conn, peer := net.Pipe()
+		_ = peer.Close()
+		return conn, nil
+	}
 }

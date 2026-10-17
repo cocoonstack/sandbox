@@ -618,6 +618,35 @@ func TestAuditNamesTheConnectionEnds(t *testing.T) {
 	}
 }
 
+func TestARateLimitedConnectionAnswers429AndIsAudited(t *testing.T) {
+	events := make(chan Event, 4)
+	dial := DialFunc(func(context.Context, string, string) (net.Conn, error) { return nil, ErrRateLimited })
+	p := New(Policy{Allow: []Rule{{Host: "*"}}}, nil, nil, dial, func(ev Event) { events <- ev }, nil)
+	front := httptest.NewServer(p)
+	defer front.Close()
+
+	resp, err := proxyClient(t, front.URL).Get("http://api.internal/x")
+	if err != nil {
+		t.Fatalf("proxied GET: %v", err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusTooManyRequests {
+		t.Errorf("forward status %d, want 429", resp.StatusCode)
+	}
+	if ev := recvEvent(t, events); ev.Decision != DecisionRateLimited {
+		t.Errorf("forward audit %+v, want rate limited", ev)
+	}
+
+	conn := dialConnect(t, front.Listener.Addr().String(), "echo.internal:443")
+	defer func() { _ = conn.Close() }()
+	if status := readStatus(t, bufio.NewReader(conn)); status != "HTTP/1.1 429 Too Many Requests" {
+		t.Errorf("CONNECT status %q, want 429", status)
+	}
+	if ev := recvEvent(t, events); ev.Decision != DecisionRateLimited {
+		t.Errorf("CONNECT audit %+v, want rate limited", ev)
+	}
+}
+
 func TestRoutedConnReportsItsTargetNotTheUpstream(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

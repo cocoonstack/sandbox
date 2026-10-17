@@ -76,7 +76,11 @@ func (p *Proxy) serveSocks(ctx context.Context, conn net.Conn) {
 	ev.attach(upstream, err)
 	p.record(ev)
 	if err != nil {
-		_ = socksReply(conn, socksUnreached)
+		reply := byte(socksUnreached)
+		if ev.Decision == DecisionRateLimited {
+			reply = socksDenied
+		}
+		_ = socksReply(conn, reply)
 		return
 	}
 	defer func() { _ = upstream.Close() }()

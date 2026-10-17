@@ -22,6 +22,7 @@ type View struct {
 	upstreamEnv   string
 	upstreamAllow egress.UpstreamAllow
 	internalAllow []egress.InternalAllow
+	connRate      *config.EgressConnRate
 	secrets       *egress.SecretStore
 	guarded       bool
 	usageBytes    bool
@@ -35,6 +36,7 @@ func NewView(cfg *config.Config, secrets *egress.SecretStore) *View {
 		poolUpstream:  map[types.PoolKey]string{},
 		classUpstream: map[string]string{},
 		internalAllow: parseInternalAllow(cfg.EgressInternalAllow),
+		connRate:      cfg.EgressConnRate,
 		secrets:       secrets,
 		usageBytes:    cfg.EgressUsageBytes,
 	}

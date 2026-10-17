@@ -219,6 +219,8 @@ func TestLoadRejectsInvalid(t *testing.T) {
 	}{
 		{"bad json", `{`, "config"},
 		{"bad fork count", `{"max_fork_count":-1,"pools":[]}`, "max_fork_count"},
+		{"egress conn rate without a rate", `{"egress_conn_rate":{"per_second":0,"burst":10},"pools":[]}`, "egress_conn_rate"},
+		{"egress conn rate without a burst", `{"egress_conn_rate":{"per_second":30},"pools":[]}`, "egress_conn_rate"},
 		{"negative refill concurrency", `{"refill_concurrency":-1,"pools":[]}`, "refill_concurrency"},
 		{"bad restore mode", `{"restore_mode":"Mmap","pools":[]}`, "restore_mode"},
 		{"bad pool key", `{"pools":[{"template":"","net":"none","size":"small"}]}`, "pool"},

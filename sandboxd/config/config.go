@@ -121,6 +121,12 @@ type EgressUpstreamConfig struct {
 	Allow    []string `json:"allow"`
 }
 
+// EgressConnRate caps the new upstream connections each claim's proxy opens, as a token bucket.
+type EgressConnRate struct {
+	PerSecond float64 `json:"per_second"`
+	Burst     int     `json:"burst"`
+}
+
 // EgressCAConfig provisions HTTPS interception; the root private key never appears here.
 type EgressCAConfig struct {
 	RootCert         string `json:"root_cert"`
@@ -257,6 +263,7 @@ type Config struct {
 	EgressCA            *EgressCAConfig       `json:"egress_ca,omitempty"`
 	EgressUpstream      *EgressUpstreamConfig `json:"egress_upstream,omitempty"`
 	EgressUsageBytes    bool                  `json:"egress_usage_bytes,omitzero"`
+	EgressConnRate      *EgressConnRate       `json:"egress_conn_rate,omitempty"`
 
 	MaxClaims           int  `json:"max_claims,omitzero"`
 	MaxForkCount        int  `json:"max_fork_count,omitzero"`
@@ -583,6 +590,9 @@ func (c *Config) validateAttachment() error {
 }
 
 func (c *Config) validateEgressRouting() error {
+	if r := c.EgressConnRate; r != nil && (r.PerSecond <= 0 || r.Burst < 1) {
+		return fmt.Errorf("egress_conn_rate needs per_second above 0 and burst of at least 1, got %v and %d", r.PerSecond, r.Burst)
+	}
 	for _, entry := range c.EgressInternalAllow {
 		if _, err := egress.ParseInternalAllow(entry); err != nil {
 			return fmt.Errorf("egress_internal_allow %q: %w", entry, err)

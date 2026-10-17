@@ -12,6 +12,7 @@ import (
 const (
 	DecisionDeny Decision = iota
 	DecisionAllow
+	DecisionRateLimited
 
 	InterceptOff    InterceptMode = 0
 	InterceptInject InterceptMode = 1

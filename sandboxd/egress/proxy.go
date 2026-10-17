@@ -37,6 +37,9 @@ const (
 )
 
 var (
+	// ErrRateLimited refuses a new upstream connection over the claim's connection rate.
+	ErrRateLimited = errors.New("egress: connection rate limit")
+
 	// hopHeaders are hop-by-hop and proxy-scoped headers this hop owns, never passed on.
 	hopHeaders = []string{
 		"Connection", "Keep-Alive", "Proxy-Authenticate", "Proxy-Authorization",
@@ -87,6 +90,9 @@ type Event struct {
 }
 
 func (ev *Event) attach(conn net.Conn, err error) {
+	if errors.Is(err, ErrRateLimited) {
+		ev.Decision = DecisionRateLimited
+	}
 	if ue, ok := errors.AsType[*upstreamError](err); ok {
 		ev.Upstream = ue.host
 	}
@@ -272,7 +278,7 @@ func (p *Proxy) serveConnect(w http.ResponseWriter, r *http.Request) {
 	ev.attach(upstream, err)
 	p.record(ev)
 	if err != nil {
-		http.Error(w, "egress: upstream unreachable", http.StatusBadGateway)
+		upstreamFailed(w, err)
 		return
 	}
 	defer func() { _ = upstream.Close() }()
@@ -391,7 +397,7 @@ func (p *Proxy) relay(w http.ResponseWriter, r *http.Request, ev Event, rule Rul
 	ev.attach(conn, err)
 	p.record(ev)
 	if err != nil {
-		http.Error(w, "egress: upstream unreachable", http.StatusBadGateway)
+		upstreamFailed(w, err)
 		return
 	}
 	defer func() { _ = resp.Body.Close() }()
@@ -697,6 +703,14 @@ func copyFlushing(w http.ResponseWriter, body io.Reader) int64 {
 			return total
 		}
 	}
+}
+
+func upstreamFailed(w http.ResponseWriter, err error) {
+	if errors.Is(err, ErrRateLimited) {
+		http.Error(w, err.Error(), http.StatusTooManyRequests)
+		return
+	}
+	http.Error(w, "egress: upstream unreachable", http.StatusBadGateway)
 }
 
 func denied(w http.ResponseWriter, host string) {
