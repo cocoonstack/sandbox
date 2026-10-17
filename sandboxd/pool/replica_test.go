@@ -305,6 +305,9 @@ func TestReplicaInFlightRoundCannotRecreateARowTheAdopterFinished(t *testing.T) 
 	if _, held := b.byID(sb.ID); !held {
 		t.Error("the adopter lost the claim it woke")
 	}
+	if metas, err := a.ckpts.Metas(t.Context()); err != nil || len(metas) != 0 {
+		t.Errorf("store holds %d checkpoints %v, want the lost round's export deleted", len(metas), err)
+	}
 }
 
 func TestReplicaRoundWithAStaleEpochOfItsOwnRowKeepsTheClaim(t *testing.T) {

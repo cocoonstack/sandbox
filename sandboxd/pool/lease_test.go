@@ -274,6 +274,37 @@ func TestLeaseFencedNodeDoesNotAnswerAsOwnerOfReplicatedClaims(t *testing.T) {
 	}
 }
 
+func TestLeaseLiftAfterTheWindowClosedFencesAgain(t *testing.T) {
+	c := newReplicaCluster(t)
+	a := c.node(t, "a", t.TempDir(), keepAnHour)
+	a.tripFence()
+	late := time.Now().Add(-(leaseTTL - leaseMargin + time.Second))
+
+	a.lift(t.Context(), a.fence.Load(), late)
+	if !a.isFenced() {
+		t.Error("a lift that landed after the lease window left the node serving")
+	}
+
+	a.tripFence()
+	a.lift(t.Context(), a.fence.Load(), time.Now())
+	if a.isFenced() {
+		t.Error("a lift inside the window left the node fenced")
+	}
+}
+
+func TestLeaseLiftOfAReplacedStateChangesNothing(t *testing.T) {
+	c := newReplicaCluster(t)
+	a := c.node(t, "a", t.TempDir(), keepAnHour)
+	a.tripFence()
+	seen := a.fence.Load()
+	a.tripFence()
+
+	a.lift(t.Context(), seen, time.Now())
+	if !a.isFenced() {
+		t.Error("a lift of a state that was replaced unfenced the node")
+	}
+}
+
 func TestLeaseConfirmRetriesOnceOnAStaleEpoch(t *testing.T) {
 	c := newReplicaCluster(t)
 	a := c.node(t, "a", t.TempDir(), keepAnHour)

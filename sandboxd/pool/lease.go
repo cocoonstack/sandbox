@@ -94,6 +94,7 @@ func (m *Manager) trip(ctx context.Context) {
 // unfence confirms each replicated claim against its row, then lifts the fence if that finished inside the window the renewal at start still covers.
 func (m *Manager) unfence(ctx context.Context, start time.Time) {
 	logger := log.WithFunc("pool.unfence")
+	fenced := m.fence.Load()
 	m.mu.Lock()
 	held := map[string]*types.Sandbox{}
 	for id, sb := range m.claimed {
@@ -131,12 +132,20 @@ func (m *Manager) unfence(ctx context.Context, start time.Time) {
 	for _, td := range teardowns {
 		go td()
 	}
-	if time.Since(start) > m.lease.ttl-m.lease.margin {
-		logger.Warn(ctx, "replicated claims stay fenced: confirming ownership outlasted the lease window")
+	m.lift(ctx, fenced, start)
+}
+
+// lift replaces the fenced state this renewal saw, and trips again when the window closed before the lift landed.
+func (m *Manager) lift(ctx context.Context, fenced *fenceState, start time.Time) {
+	if !m.fence.CompareAndSwap(fenced, &fenceState{ch: make(chan struct{})}) {
 		return
 	}
-	m.fence.Store(&fenceState{ch: make(chan struct{})})
-	logger.Info(ctx, "node lease renewed; replicated claims are served again")
+	if time.Since(start) > m.lease.ttl-m.lease.margin {
+		log.WithFunc("pool.unfence").Warn(ctx, "replicated claims stay fenced: confirming ownership outlasted the lease window")
+		m.trip(ctx)
+		return
+	}
+	log.WithFunc("pool.unfence").Info(ctx, "node lease renewed; replicated claims are served again")
 }
 
 // confirmOwnership takes sb's row for this node in one compare-and-set; false means another node holds the claim.
