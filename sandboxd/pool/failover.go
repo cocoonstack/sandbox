@@ -161,7 +161,7 @@ func (m *Manager) clearArchiveIntent(ctx context.Context, sb *types.Sandbox, ck 
 	js := m.store.set(sb)
 	m.mu.Unlock()
 	if err := m.store.commit(js); err != nil {
-		m.recommit(ctx, js)
+		m.store.recommit(ctx, js)
 		return false
 	}
 	return true
@@ -332,7 +332,7 @@ func (m *Manager) forgetClaim(ctx context.Context, sb *types.Sandbox) bool {
 	js := m.store.del(sb.ID)
 	m.mu.Unlock()
 	if err := m.store.commit(js); err != nil {
-		m.recommit(ctx, js)
+		m.store.recommit(ctx, js)
 	}
 	return true
 }

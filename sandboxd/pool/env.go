@@ -93,7 +93,7 @@ func (m *Manager) writeEnv(ctx context.Context, id, tenant, verb string, next fu
 			rb = m.store.set(sb)
 		}
 		m.mu.Unlock()
-		m.recommit(ctx, rb)
+		m.store.recommit(ctx, rb)
 		return fmt.Errorf("%s env %s: persist claims: %w", verb, id, err)
 	}
 	return m.deliverGuestEnv(ctx, verb, id, sock, env, changed)

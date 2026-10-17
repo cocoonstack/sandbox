@@ -127,7 +127,7 @@ func (m *Manager) archive(ctx context.Context, sb *types.Sandbox) error {
 			rb := m.store.set(sb)
 			m.mu.Unlock()
 			sb.Transition.Unlock()
-			m.recommit(ctx, rb)
+			m.store.recommit(ctx, rb)
 			m.deleteOrphanArchiveCk(ctx, ck.ID)
 			return fmt.Errorf("archive %s: persist intent: %w", sb.ID, err)
 		}
@@ -163,7 +163,7 @@ func (m *Manager) archive(ctx context.Context, sb *types.Sandbox) error {
 		}
 		m.mu.Unlock()
 		sb.Transition.Unlock()
-		m.recommit(ctx, rb)
+		m.store.recommit(ctx, rb)
 		m.abandonArchive(ctx, sb, epoch, ck.ID)
 		return fmt.Errorf("archive %s: persist claims: %w", sb.ID, saveErr)
 	}
@@ -268,7 +268,7 @@ func (m *Manager) commitWake(ctx context.Context, sb *types.Sandbox, vmName, soc
 			rb = m.store.set(sb)
 		}
 		m.mu.Unlock()
-		m.recommit(ctx, rb)
+		m.store.recommit(ctx, rb)
 		log.WithFunc("pool.commitWake").Warnf(ctx, "persist claims: %v", err)
 		return true, false
 	}

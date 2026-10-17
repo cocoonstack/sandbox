@@ -196,7 +196,7 @@ func (m *Manager) Renew(ctx context.Context, id string, cred Cred, ttl time.Dura
 			rb = m.store.set(sb)
 		}
 		m.mu.Unlock()
-		m.recommit(ctx, rb)
+		m.store.recommit(ctx, rb)
 		return time.Time{}, fmt.Errorf("renew %s: persist claims: %w", id, err)
 	}
 	sb.Touch()
@@ -312,7 +312,7 @@ func (m *Manager) releaseResolved(ctx context.Context, id string, sb *types.Sand
 				logger.Warnf(ctx, "clear archive ck %s: %v", ck, clearErr)
 			}
 		}
-		m.recommit(ctx, rb)
+		m.store.recommit(ctx, rb)
 		logger.Errorf(ctx, saveErr, "persist release of %s", id)
 		return fmt.Errorf("release %s: %w", id, saveErr)
 	}
@@ -498,7 +498,7 @@ func (m *Manager) rollbackClaim(ctx context.Context, sbs []*types.Sandbox) {
 	}
 	rb := m.store.del(ids...)
 	m.mu.Unlock()
-	m.recommit(ctx, rb)
+	m.store.recommit(ctx, rb)
 	for i, sb := range sbs {
 		td := m.quiesceVolumes(ctx, sb)
 		td.holds = holds[i]
@@ -620,7 +620,7 @@ func (m *Manager) reapOnce(ctx context.Context) {
 				logger.Warnf(ctx, "clear archive ck %s: %v", ck, clearErr)
 			}
 		}
-		m.recommit(ctx, rb)
+		m.store.recommit(ctx, rb)
 		logger.Error(ctx, saveErr, "persist reap; rolled back")
 		return
 	}
@@ -683,29 +683,6 @@ func (m *Manager) purgeArchiveCk(ctx context.Context, id, ck, tenant string) {
 	m.recordUsage(ctx, usageEvent{Event: "archive_delete", ID: id, Reference: ck, Tenant: tenant})
 }
 
-// recommit keeps claims.json catching up with the store: one retrier at a time writes the current state until it is durable and nothing newer is pending.
-func (m *Manager) recommit(ctx context.Context, snap claimSnapshot) {
-	if !m.recommitting.CompareAndSwap(false, true) {
-		return
-	}
-	go func() {
-		backoff := recommitBackoff
-		for {
-			err := m.store.commit(snap)
-			if err == nil {
-				m.recommitting.Store(false)
-				if snap = m.store.mark(); !m.store.pending(snap) || !m.recommitting.CompareAndSwap(false, true) {
-					return
-				}
-				continue
-			}
-			log.WithFunc("pool.recommit").Error(ctx, err, "persist claims")
-			time.Sleep(backoff)
-			backoff = min(backoff*2, recommitMaxBackoff)
-		}
-	}()
-}
-
 func (m *Manager) commitIfLive(ctx context.Context, sb *types.Sandbox, mutate func()) (bool, error) {
 	m.mu.Lock()
 	live := m.claimed[sb.ID] == sb
@@ -719,7 +696,7 @@ func (m *Manager) commitIfLive(ctx context.Context, sb *types.Sandbox, mutate fu
 		return false, nil
 	}
 	if err := m.store.commit(js); err != nil {
-		m.recommit(ctx, js)
+		m.store.recommit(ctx, js)
 		return true, err
 	}
 	return true, nil

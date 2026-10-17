@@ -53,12 +53,10 @@ const (
 	removeVerifyTimeout = 15 * time.Second
 	cellRetry           = 5 * time.Second
 	// A full node clears only when VMs go away; retrying sooner buys nothing.
-	capacityBackoff    = buildRetryDelay
-	vsockPollInterval  = 100 * time.Millisecond
-	defaultTTL         = 5 * time.Minute
-	maxTTL             = 24 * time.Hour
-	recommitBackoff    = 20 * time.Millisecond
-	recommitMaxBackoff = 5 * time.Second
+	capacityBackoff   = buildRetryDelay
+	vsockPollInterval = 100 * time.Millisecond
+	defaultTTL        = 5 * time.Minute
+	maxTTL            = 24 * time.Hour
 	// One failed boot is ordinary; only an unbroken run predicts the next failure
 	refillFailStreak  = 8
 	refillBackoffBase = 250 * time.Millisecond
@@ -366,7 +364,6 @@ type Manager struct {
 	ckptTTL      time.Duration
 	ckptSweeping atomic.Bool
 	genSweeping  atomic.Bool
-	recommitting atomic.Bool
 
 	// tplSet caches each template id's key, digest and owning tenant ("" = operator).
 	tplMu  sync.Mutex

@@ -875,6 +875,6 @@ func breakClaimStore(t *testing.T, m *Manager) (restore func()) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		waitFor(t, func() bool { return !m.recommitting.Load() })
+		waitFor(t, func() bool { return !m.store.recommitting.Load() })
 	}
 }

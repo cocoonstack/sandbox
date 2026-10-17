@@ -265,7 +265,7 @@ func (m *Manager) quarantineClaim(ctx context.Context, sb *types.Sandbox) bool {
 	js := m.store.del(sb.ID)
 	m.mu.Unlock()
 	if err := m.store.commit(js); err != nil {
-		m.recommit(ctx, js)
+		m.store.recommit(ctx, js)
 	}
 	return gone
 }
