@@ -295,12 +295,13 @@ checkpoint store and keeps each claim's registry row on the latest snapshot:
   retention window, and the next call wakes it
   through the archive wake, which restores the guest with its memory and
   processes. The claim resumes from its last committed replica: everything
-  after it, and the connections open at the time, are lost. A round starts up
-  to one interval plus the 5-second tick after the previous one and commits only
-  when its capture, upload and registry write finish, so what a loss can cost is
-  up to about the interval, plus the tick, plus the duration of one round, which
-  grows with guest memory; while rounds fail it is the time since the last one
-  that committed.
+  after it, and the connections open at the time, are lost: up to the longer of
+  the interval and one replication pass, plus the 5-second tick, plus one
+  round's capture, upload and registry write. A pass covers all the node's due
+  claims of the replicating pools with bounded concurrency and a new pass cannot
+  start before the previous one ends, so it grows with claim count and guest
+  memory; for example, an interval of 30 s with a 90 s pass can lose about 185 s.
+  While rounds fail it is the time since the last one that committed.
 - **Lifecycle.** A release consumes the row, then deletes the replica and the
   tombstone. A hibernate leaves the row on the last replica. An archive puts its
   own checkpoint over the row, with its retention deadline, and deletes the
