@@ -392,35 +392,11 @@ func hashChunks(ctx context.Context, sources []digestSource, workers int, hashFn
 
 func collectDigestSources(root string) ([]digestSource, error) {
 	var sources []digestSource
-	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if path == root {
-			if !entry.IsDir() {
-				return fmt.Errorf("export root is not a directory")
-			}
-			return nil
-		}
-		if entry.IsDir() {
-			return nil
-		}
-		rel, relErr := filepath.Rel(root, path)
-		if relErr != nil {
-			return relErr
-		}
-		rel = filepath.ToSlash(rel)
-		entryInfo, infoErr := entry.Info()
-		if infoErr != nil {
-			return infoErr
-		}
-		if err := store.RequireRegular(rel, entryInfo.Mode()); err != nil {
-			return err
-		}
+	err := store.WalkExport(root, func(rel, path string, info fs.FileInfo) error {
 		sources = append(sources, digestSource{
 			path: path,
 			digest: store.DigestFile{
-				Path: rel, Size: entryInfo.Size(), Chunks: make([][sha256.Size]byte, store.ChunkCount(entryInfo.Size())),
+				Path: rel, Size: info.Size(), Chunks: make([][sha256.Size]byte, store.ChunkCount(info.Size())),
 			},
 		})
 		return nil

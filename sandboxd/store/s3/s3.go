@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -289,22 +290,7 @@ func (s *Store) publish(ctx context.Context, staging, id string, digested bool) 
 func (s *Store) publishFiles(staging, id, gen string) ([]publishFile, error) {
 	root := filepath.Join(staging, store.ExportDir)
 	var files []publishFile
-	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
-		if err != nil || entry.IsDir() {
-			return err
-		}
-		rel, err := filepath.Rel(root, path)
-		if err != nil {
-			return err
-		}
-		info, err := entry.Info()
-		if err != nil {
-			return err
-		}
-		rel = filepath.ToSlash(rel)
-		if err := store.RequireRegular(rel, info.Mode()); err != nil {
-			return err
-		}
+	err := store.WalkExport(root, func(rel, path string, _ fs.FileInfo) error {
 		files = append(files, publishFile{
 			path:       path,
 			key:        s.key(id, gen+"/"+rel),

@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -99,4 +100,35 @@ func RequireRegular(rel string, mode fs.FileMode) error {
 		return fmt.Errorf("export entry %s is not a regular file (%s)", rel, mode.Type())
 	}
 	return nil
+}
+
+// WalkExport calls fn for every file under a staged export root with its slash-separated path relative to root; any non-regular entry fails the walk.
+func WalkExport(root string, fn func(rel, path string, info fs.FileInfo) error) error {
+	return filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if path == root {
+			if !entry.IsDir() {
+				return fmt.Errorf("export root is not a directory")
+			}
+			return nil
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		rel = filepath.ToSlash(rel)
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		if err := RequireRegular(rel, info.Mode()); err != nil {
+			return err
+		}
+		return fn(rel, path, info)
+	})
 }
