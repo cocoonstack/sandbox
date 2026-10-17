@@ -144,6 +144,9 @@ func (m *Manager) wakeResolved(ctx context.Context, sb *types.Sandbox) (string, 
 	}
 	// See Hibernate: a half-restored VM is worse than a wasted wake.
 	ctx = context.WithoutCancel(ctx)
+	if err := m.resolveIntent(ctx, sb); err != nil {
+		return "", fmt.Errorf("wake %s: %w", sb.ID, err)
+	}
 	wakeStart := time.Now()
 	snap := sb.HibernateSnap
 	restoredSock, err := m.eng.Restore(ctx, sb.VMName, snap)
