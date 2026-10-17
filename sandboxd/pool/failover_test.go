@@ -478,7 +478,7 @@ func TestFailoverAdoptionMidWakeFencesTheOwnerOut(t *testing.T) {
 	}
 }
 
-func TestFailoverWakeRollbackPutsTheRowBack(t *testing.T) {
+func TestFailoverWakeRollbackRecoversOnTheNextWake(t *testing.T) {
 	c := newFailoverCluster(t)
 	a := c.node(t, "a", t.TempDir(), keepAnHour)
 	sb := mustClaim(t, a, testKey)
@@ -488,11 +488,10 @@ func TestFailoverWakeRollbackPutsTheRowBack(t *testing.T) {
 		t.Fatal("wake with claims.json unwritable succeeded")
 	}
 	a.mu.Lock()
-	ck, epoch := sb.ArchiveCk, sb.ArchiveEpoch
+	ck := sb.ArchiveCk
 	a.mu.Unlock()
-	rec, ok, _ := c.reg.Get(t.Context(), sb.ID)
-	if !ok || rec.Owner != "a" || rec.Epoch != epoch || rec.Checkpoint != ck || ck == "" {
-		t.Fatalf("row %+v present %v, local ck=%q epoch=%d, want the row back at the claim's epoch", rec, ok, ck, epoch)
+	if rec, ok, _ := c.reg.Get(t.Context(), sb.ID); !ok || rec.Owner != "a" || rec.Checkpoint != ck || ck == "" {
+		t.Fatalf("row %+v present %v, want this node's row for the rolled-back archive", rec, ok)
 	}
 	healStore(t, a)
 	if _, _, err := a.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
@@ -826,8 +825,8 @@ func TestFailoverRestartAfterAnAdopterReleasedDropsTheClaim(t *testing.T) {
 	if _, held := restarted.byID(sb.ID); held {
 		t.Error("the restarted node kept a claim the adopter released")
 	}
-	if rec, ok, _ := c.reg.Get(t.Context(), sb.ID); !ok || !rec.Consumed || rec.Owner != "b" {
-		t.Errorf("row %+v present %v, want the adopter's tombstone kept while its checkpoint delete is pending", rec, ok)
+	if rec, ok, _ := c.reg.Get(t.Context(), sb.ID); ok && !rec.Consumed {
+		t.Errorf("a live row %+v outlived the adopter's release", rec)
 	}
 }
 
@@ -971,8 +970,8 @@ func TestFailoverSweepLeavesADepartedOwnersTombstoneUntilItReturns(t *testing.T)
 	}
 	healthy := b.ckpts
 	b.ckpts = &failingDeleteStore{Store: healthy, attempts: make(chan string, 8)}
-	if err := b.Release(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
-		t.Fatalf("adopter's release: %v", err)
+	if _, _, err := b.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
+		t.Fatalf("adopter's wake: %v", err)
 	}
 	before, _, _ := c.reg.Get(t.Context(), sb.ID)
 	c.down["b"] = true
@@ -1126,12 +1125,14 @@ func TestFailoverReleaseAfterALostRearmReplyLeavesNoLiveRow(t *testing.T) {
 	a, b := c.node(t, "a", t.TempDir(), keepAnHour), c.node(t, "b", t.TempDir(), keepAnHour)
 	sb := mustClaim(t, a, testKey)
 	mustArchive(t, a, sb)
-	a.archives = &hookRegistry{Registry: c.reg, losePutReply: true}
-	breakStore(t, a)
-	if _, _, err := a.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err == nil {
-		t.Fatal("wake with claims.json unwritable succeeded")
+	a.archives = &hookRegistry{Registry: c.reg, loseConsumeReply: true}
+	if _, _, err := a.WakeAgentSocket(t.Context(), sb.ID, sb.Token); !errors.Is(err, ErrArchiveStoreDown) {
+		t.Fatalf("wake whose consume reply was lost: %v, want ErrArchiveStoreDown", err)
 	}
-	healStore(t, a)
+	a.archives = &hookRegistry{Registry: c.reg, losePutReply: true}
+	if _, _, err := a.WakeAgentSocket(t.Context(), sb.ID, sb.Token); !errors.Is(err, ErrArchiveStoreDown) {
+		t.Fatalf("wake whose re-arm reply was lost: %v, want ErrArchiveStoreDown", err)
+	}
 	if rec, _, _ := c.reg.Get(t.Context(), sb.ID); rec.Consumed {
 		t.Fatal("setup: the re-arm put did not land")
 	}
@@ -1178,44 +1179,6 @@ func TestFailoverARepeatedAdoptionOfAReleasedClaimIsRefused(t *testing.T) {
 	}
 }
 
-func TestFailoverAnArchiveWhosePutReplyWasLostDropsItsRowWithItsCheckpoint(t *testing.T) {
-	c := newFailoverCluster(t)
-	a := c.node(t, "a", t.TempDir(), keepAnHour)
-	sb := mustClaim(t, a, testKey)
-	if err := a.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
-		t.Fatalf("hibernate: %v", err)
-	}
-	a.archives = &hookRegistry{Registry: c.reg, losePutReply: true}
-	if err := a.archive(t.Context(), sb); !errors.Is(err, ErrArchiveStoreDown) {
-		t.Fatalf("archive whose put reply was lost: %v, want ErrArchiveStoreDown", err)
-	}
-	if rec, ok, _ := c.reg.Get(t.Context(), sb.ID); ok {
-		t.Errorf("row %+v outlived the abandoned archive", rec)
-	}
-	if metas, err := a.ckpts.Metas(t.Context()); err != nil || len(metas) != 0 {
-		t.Errorf("store holds %d checkpoints %v, want the export deleted", len(metas), err)
-	}
-}
-
-func TestFailoverAnArchiveWhosePutAndReadFailedKeepsItsCheckpoint(t *testing.T) {
-	c := newFailoverCluster(t)
-	a := c.node(t, "a", t.TempDir(), keepAnHour)
-	sb := mustClaim(t, a, testKey)
-	if err := a.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
-		t.Fatalf("hibernate: %v", err)
-	}
-	hook := &hookRegistry{Registry: c.reg, losePutReply: true}
-	hook.beforePut = func() { hook.failGet = true }
-	a.archives = hook
-	if err := a.archive(t.Context(), sb); !errors.Is(err, ErrArchiveStoreDown) {
-		t.Fatalf("archive whose put reply was lost: %v, want ErrArchiveStoreDown", err)
-	}
-	rec, ok, _ := c.reg.Get(t.Context(), sb.ID)
-	if !ok || !ckExists(t, a, rec.Checkpoint) {
-		t.Errorf("row %+v present %v names a deleted checkpoint", rec, ok)
-	}
-}
-
 func TestFailoverSweepDropsTheRowOfAnArchiveThatNeverCommitted(t *testing.T) {
 	c := newFailoverCluster(t)
 	a := c.node(t, "a", t.TempDir(), keepAnHour)
@@ -1223,9 +1186,7 @@ func TestFailoverSweepDropsTheRowOfAnArchiveThatNeverCommitted(t *testing.T) {
 	if err := a.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
 		t.Fatalf("hibernate: %v", err)
 	}
-	hook := &hookRegistry{Registry: c.reg, losePutReply: true}
-	hook.beforePut = func() { hook.failGet = true }
-	a.archives = hook
+	a.archives = &hookRegistry{Registry: c.reg, losePutReply: true}
 	if err := a.archive(t.Context(), sb); !errors.Is(err, ErrArchiveStoreDown) {
 		t.Fatalf("archive whose put reply was lost: %v, want ErrArchiveStoreDown", err)
 	}
@@ -1805,15 +1766,6 @@ type hookRegistry struct {
 	loseConsumeReply bool
 	loseTakeReply    bool
 	losePutReply     bool
-	failGet          bool
-}
-
-func (r *hookRegistry) Get(ctx context.Context, id string) (archives.Record, bool, error) {
-	if r.failGet {
-		r.failGet = false
-		return archives.Record{}, false, archives.ErrUnavailable
-	}
-	return r.Registry.Get(ctx, id)
 }
 
 func (r *hookRegistry) Put(ctx context.Context, rec archives.Record) (int64, error) {

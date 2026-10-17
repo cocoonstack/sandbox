@@ -134,22 +134,6 @@ func (m *Manager) checkArchiveRow(ctx context.Context, id string) error {
 	return err
 }
 
-func (m *Manager) abandonFailedPut(ctx context.Context, sb *types.Sandbox, ck string, putErr error) {
-	if errors.Is(putErr, archives.ErrLost) {
-		m.abandonArchive(ctx, sb, 0, ck)
-		return
-	}
-	rec, ok, err := m.archives.Get(ctx, sb.ID)
-	switch {
-	case err != nil:
-		log.WithFunc("pool.abandonFailedPut").Warnf(ctx, "archive %s: keeping ck %s, its row is unknown: %v", sb.ID, ck, err)
-	case ok && rec.Owner == m.nodeID && rec.Checkpoint == ck:
-		m.abandonArchive(ctx, sb, rec.Epoch, ck)
-	default:
-		m.abandonArchive(ctx, sb, 0, ck)
-	}
-}
-
 func (m *Manager) abandonArchive(ctx context.Context, sb *types.Sandbox, epoch int64, ck string) {
 	if epoch != 0 {
 		if err := m.archives.Delete(ctx, sb.ID, epoch); err != nil {
@@ -492,34 +476,27 @@ func (m *Manager) settleArchiveIntent(ctx context.Context, sb *types.Sandbox) bo
 
 func (m *Manager) settleInterruptedArchive(ctx context.Context, rows map[string]archives.Record, sb *types.Sandbox, rec archives.Record) bool {
 	logger := log.WithFunc("pool.settleInterruptedArchive")
-	for range 2 {
-		err := m.archives.Delete(ctx, rec.ID, rec.Epoch)
-		if err == nil {
-			delete(rows, rec.ID)
-			sb.ArchivePending = ""
-			return false
-		}
-		if !errors.Is(err, archives.ErrLost) {
-			logger.Warnf(ctx, "drop interrupted archive row %s: %v", rec.ID, err)
-			return false
-		}
-		cur, ok, err := m.archives.Get(ctx, rec.ID)
-		switch {
-		case err != nil:
-			logger.Warnf(ctx, "read interrupted archive row %s: %v", rec.ID, err)
-			return false
-		case !ok:
-			delete(rows, rec.ID)
-			return sb.ArchivePending != "" && m.settleArchiveIntent(ctx, sb)
-		case cur.Owner != m.nodeID:
-			return true
-		case cur.Consumed:
-			rows[rec.ID] = cur
-			return false
-		}
-		rec = cur
+	err := m.archives.Delete(ctx, rec.ID, rec.Epoch)
+	if err == nil {
+		delete(rows, rec.ID)
+		sb.ArchivePending = ""
+		return false
 	}
-	return false
+	if !errors.Is(err, archives.ErrLost) {
+		logger.Warnf(ctx, "drop interrupted archive row %s: %v", rec.ID, err)
+		return false
+	}
+	cur, ok, err := m.archives.Get(ctx, rec.ID)
+	switch {
+	case err != nil:
+		logger.Warnf(ctx, "read interrupted archive row %s: %v", rec.ID, err)
+		return false
+	case !ok:
+		delete(rows, rec.ID)
+		return sb.ArchivePending != "" && m.settleArchiveIntent(ctx, sb)
+	}
+	rows[rec.ID] = cur
+	return cur.Owner != m.nodeID
 }
 
 func (m *Manager) archiveRowed(sb *types.Sandbox) bool {

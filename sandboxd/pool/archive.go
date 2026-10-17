@@ -127,7 +127,7 @@ func (m *Manager) archive(ctx context.Context, sb *types.Sandbox) error {
 		}
 		if epoch, err = m.putArchive(ctx, sb, ck.ID); err != nil {
 			sb.Transition.Unlock()
-			m.abandonFailedPut(ctx, sb, ck.ID, err)
+			m.abandonArchive(ctx, sb, 0, ck.ID)
 			return fmt.Errorf("archive %s: registry: %w", sb.ID, err)
 		}
 		m.mu.Lock()
@@ -211,7 +211,6 @@ func (m *Manager) wakeArchived(ctx context.Context, sb *types.Sandbox) (string, 
 	}
 	if markErr := m.markArchiveCk(ck); markErr != nil {
 		m.destroy(ctx, built.VMName)
-		m.reputArchive(ctx, sb, epoch)
 		return "", fmt.Errorf("wake %s: track archive checkpoint: %w", sb.ID, markErr)
 	}
 	live, saved := m.commitWake(ctx, sb, built.VMName, built.VsockSocket)
@@ -220,7 +219,6 @@ func (m *Manager) wakeArchived(ctx context.Context, sb *types.Sandbox) (string, 
 		if !live {
 			return "", ErrUnknownSandbox
 		}
-		m.reputArchive(ctx, sb, epoch)
 		return "", fmt.Errorf("wake %s: persist claims", sb.ID)
 	}
 	logger := log.WithFunc("pool.wakeArchived")
