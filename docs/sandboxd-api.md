@@ -578,7 +578,7 @@ is deleted; a pool kept with `warm: 0` keeps its golden.
 Answers the fresh `GET /v1/info` payload. 400 bad key, negative warm/idle,
 `warm_max` below `warm`, `idle_hibernate_seconds` on an egress pool, a
 negative archive duration or an `archive_after_seconds` not above the pool's
-`idle_hibernate_seconds`, duplicate pool, or a config-owned `egress`/`warmup`/`capture_trim`/`storage`/`egress_upstream_env`
+`idle_hibernate_seconds`, duplicate pool, or a config-owned `egress`/`warmup`/`capture_trim`/`storage`/`replicate_seconds`/`egress_upstream_env`
 field; 401 bad api
 token; 409 egress pool on a node without an egress attachment; 503 the
 `meta_store` cannot take a cell's write.
@@ -695,7 +695,8 @@ URL; releasing the sandbox ends it early either way.
 has no `preview_listen`. The signed token embeds the sandbox id, port, and
 owner `advertise_addr`, so any node's preview listener can serve it (forwarding
 to the owner's main listener) and a released sandbox's URL simply stops
-resolving — no revocation list. See [deploy](deploy.md#preview-urls).
+resolving — no revocation list. A request for a replicated claim answers 503
+`lease lost; retry` while its node's lease is overdue. See [deploy](deploy.md#preview-urls).
 
 ## POST /v1/sandboxes/{id}/checkpoint
 
@@ -957,7 +958,10 @@ before the 101, reach silkd in order; the Go and Python SDKs send their first
 frames that way over plain HTTP, so a proxy in front of a plain-HTTP endpoint
 must forward them too (Go's `httputil.ReverseProxy` drops them; Caddy forwards
 them). 426 without the upgrade header, 404 unknown sandbox, 409 a failed
-sandbox, 502 guest unreachable.
+sandbox, 502 guest unreachable, 503 `lease lost; retry` for a replicated claim
+while its node's lease is overdue (see
+[running claims](cluster.md#running-claims-across-node-loss)). A relay already
+open when the lease turns overdue is not cut.
 
 ## GET /v1/sandboxes/{id}/ports/{port}
 
@@ -987,7 +991,8 @@ fork in flight, answers `409` at once; an open passive relay still holds the san
 400 a port outside 1-65535; 401 missing bearer token; 404 unknown sandbox or
 wrong token; 409 a failed sandbox or a passive relay to a paused one; 426 without the upgrade
 header; 502 when the guest cannot be reached on that port — no listener, or a
-hibernated sandbox whose restore failed. The node log carries which.
+hibernated sandbox whose restore failed. The node log carries which; 503
+`lease lost; retry` for a replicated claim while its node's lease is overdue.
 
 ## POST /v1/sandboxes/{id}/exec
 
@@ -1012,16 +1017,17 @@ does not exist are the caller's, not 502s; 401 missing bearer token; 404 unknown
 413 when stdout+stderr exceed 8 MiB; 503 with `Retry-After: 1` when the
 node's buffered-exec memory is exhausted (64 MiB of output across every
 buffered exec in flight; the command is killed); 502 guest unreachable or any other
-silkd error; 409 a failed sandbox; 504 when the command outlives `timeout_seconds`. A client that hangs up first gets no reply and the command is killed. A hibernated sandbox wakes transparently like on the relay.
+silkd error; 409 a failed sandbox; 503 `lease lost; retry` for a replicated claim
+while its node's lease is overdue; 504 when the command outlives `timeout_seconds`. A client that hangs up first gets no reply and the command is killed. A hibernated sandbox wakes transparently like on the relay.
 
 ## GET /v1/sandboxes/{id}/owner
 
 Auth: the sandbox's own token. Answers `{"owner_addr": "host:port"}` when
 this node owns the sandbox, 404 otherwise. With
 [`archive_failover`](cluster.md#archived-claims-across-node-loss), a node that
-does not hold the sandbox adopts it when its archive row names an owner that
-left the mesh, and answers 200; 503 with `Retry-After` when the meta store is
-down. With `client_advertise` configured,
+does not hold the sandbox adopts it when its row names an owner whose node
+lease expired, and answers 200; 503 with `Retry-After` when the meta store is
+down. A row whose owner's lease is live is never adopted: 404. With `client_advertise` configured,
 `owner_addr` is that node's full HTTP(S) origin instead; the same contract applies
 to claim and fork responses. Used by the SDK's `Lookup` scatter.
 
