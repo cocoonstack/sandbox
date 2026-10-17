@@ -17,7 +17,7 @@ from .conn import Conn, dial_agent, is_quiet, remaining_timeout
 from .endpoint import _endpoint_url
 from .errors import APIError, SandboxTimeout, require_field
 from .sandbox import Sandbox
-from .volumes import _volume_body
+from .template import _claim_body, _template_query
 
 T = TypeVar("T")
 
@@ -277,40 +277,6 @@ class Client:
             self._ssl_context = ssl.create_default_context()
             self._ssl_context.set_alpn_protocols(["http/1.1"])
         return self._ssl_context
-
-
-def _claim_body(
-    template: str,
-    net: str,
-    size: str,
-    ttl_seconds: int,
-    volumes: list[str | Mapping[str, str]] | None = None,
-    mount: bool = True,
-    claim_ref: str = "",
-) -> dict[str, Any]:
-    claim: dict[str, Any] = {"template": template}
-    if net:
-        claim["net"] = net
-    if size:
-        claim["size"] = size
-    if ttl_seconds:
-        claim["ttl_seconds"] = ttl_seconds
-    if volumes:
-        claim["volumes"] = [_volume_body(volume, mount) for volume in volumes]
-    if not mount:
-        claim["volumes_attach_only"] = True
-    if claim_ref:
-        claim["claim_ref"] = claim_ref
-    return claim
-
-
-def _template_query(template: str, net: str, size: str) -> dict[str, str]:
-    query = {"template": template}
-    if net:
-        query["net"] = net
-    if size:
-        query["size"] = size
-    return query
 
 
 def _error_message(raw: bytes) -> str:

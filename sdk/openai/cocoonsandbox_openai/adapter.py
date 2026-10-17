@@ -126,7 +126,7 @@ class CocoonSandboxSession(BaseSandboxSession):
         if self._sb is None:
             s = self.state
             client = Client(s.addr, api_token=s.api_token)
-            self._sb = Sandbox(client=client, id=s.sandbox_id, token=s.sandbox_token, owner=s.owner or s.addr)
+            self._sb = client.attach(s.owner or s.addr, s.sandbox_id, s.sandbox_token)
         return self._sb
 
     def _abs(self, path: Path | str) -> Path:
