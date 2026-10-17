@@ -294,10 +294,13 @@ checkpoint store and keeps each claim's registry row on the latest snapshot:
   records the claim as archived on the replica with the adopter pool's
   retention window, and the next call wakes it
   through the archive wake, which restores the guest with its memory and
-  processes. The claim resumes from its last snapshot: everything after it, and
-  the connections open at the time, are lost, so the data loss is at most the
-  time since the last successful round: one interval while rounds succeed, more
-  while they fail and the older replica stands.
+  processes. The claim resumes from its last committed replica: everything
+  after it, and the connections open at the time, are lost. A round starts up
+  to one interval plus the 5-second tick after the previous one and commits only
+  when its capture, upload and registry write finish, so what a loss can cost is
+  up to about the interval, plus the tick, plus the duration of one round, which
+  grows with guest memory; while rounds fail it is the time since the last one
+  that committed.
 - **Lifecycle.** A release consumes the row, then deletes the replica and the
   tombstone. A hibernate leaves the row on the last replica. An archive puts its
   own checkpoint over the row, with its retention deadline, and deletes the
