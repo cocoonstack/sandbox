@@ -842,13 +842,8 @@ func validateVolumeMount(mount string) error {
 	if filepath.Clean(mount) != mount {
 		return errors.New("must be clean")
 	}
-	if mount == "/" {
+	if mount == "/" || slices.ContainsFunc(guestOSMountRoots, func(root string) bool { return mount == root || pathWithin(root, mount) }) {
 		return errors.New("must be outside the guest OS tree")
-	}
-	for _, root := range guestOSMountRoots {
-		if mount == root || pathWithin(root, mount) {
-			return errors.New("must be outside the guest OS tree")
-		}
 	}
 	return nil
 }
