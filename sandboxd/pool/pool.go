@@ -658,11 +658,11 @@ func (m *Manager) WarmCounts() map[string]int {
 }
 
 // WithPeerHeal installs the healer ClaimCheckpointHeal pulls through.
-func (m *Manager) WithPeerHeal(enabled bool, owners peer.Owners, token string) {
+func (m *Manager) WithPeerHeal(enabled bool, owners peer.Owners, puller peer.Puller) {
 	if !enabled || owners == nil || m.ckptsShared {
 		return
 	}
-	m.healer = peer.NewHealer(owners, &peer.HTTPPuller{Token: token})
+	m.healer = peer.NewHealer(owners, puller)
 }
 
 // WithPeerDelete wires the broadcast DeleteCheckpoint makes after a local delete.
