@@ -200,7 +200,11 @@ it, so the claim path is unchanged.
   checkpoint a row references. A restart also settles an archive a crash
   interrupted: a live row it left for a claim it still holds is deleted with
   its checkpoint, and a claim whose row another node holds is dropped, its VM
-  and snapshot swept as stale.
+  and snapshot swept as stale. An archive journals its intent (the checkpoint
+  it is about to register) before it writes the row. A restart that finds the
+  intent and no row keeps the claim while that checkpoint is still in the
+  store, since the row never committed, and drops it once the checkpoint is
+  gone, since only a node that consumed the row deletes it.
 - **Departed owners and tombstones.** Every hour, on the store retention sweep,
   each node reads the rows past their retention deadline, the consumed rows,
   and its own rows. An expired row whose owner has left the mesh is purged

@@ -112,22 +112,34 @@ func (m *Manager) archive(ctx context.Context, sb *types.Sandbox) error {
 	}
 	var epoch int64
 	if m.archives != nil {
+		sb.ArchivePending = ck.ID
+		intent := m.store.set(sb)
 		m.mu.Unlock()
+		if err = m.store.commit(intent); err != nil {
+			m.mu.Lock()
+			sb.ArchivePending = ""
+			rb := m.store.set(sb)
+			m.mu.Unlock()
+			sb.Transition.Unlock()
+			m.recommit(ctx, rb)
+			m.deleteOrphanArchiveCk(ctx, ck.ID)
+			return fmt.Errorf("archive %s: persist intent: %w", sb.ID, err)
+		}
 		if epoch, err = m.putArchive(ctx, sb, ck.ID); err != nil {
 			sb.Transition.Unlock()
-			m.abandonFailedPut(ctx, sb.ID, ck.ID, err)
+			m.abandonFailedPut(ctx, sb, ck.ID, err)
 			return fmt.Errorf("archive %s: registry: %w", sb.ID, err)
 		}
 		m.mu.Lock()
 		if m.claimed[sb.ID] != sb {
 			m.mu.Unlock()
 			sb.Transition.Unlock()
-			m.abandonArchive(ctx, sb.ID, epoch, ck.ID)
+			m.abandonArchive(ctx, sb, epoch, ck.ID)
 			return errWokeMeanwhile
 		}
 	}
-	snap, vmName, sock, prevDeadline, prevEpoch := sb.HibernateSnap, sb.VMName, sb.VsockSocket, sb.Deadline, sb.ArchiveEpoch
-	sb.ArchiveCk, sb.ArchiveEpoch = ck.ID, epoch
+	snap, vmName, sock, prevDeadline, prevEpoch, prevPending := sb.HibernateSnap, sb.VMName, sb.VsockSocket, sb.Deadline, sb.ArchiveEpoch, sb.ArchivePending
+	sb.ArchiveCk, sb.ArchiveEpoch, sb.ArchivePending = ck.ID, epoch, ""
 	sb.HibernateSnap, sb.VsockSocket, sb.VMName = "", "", ""
 	sb.Deadline = m.retentionDeadline(sb.Key)
 	js := m.store.set(sb)
@@ -138,7 +150,7 @@ func (m *Manager) archive(ctx context.Context, sb *types.Sandbox) error {
 		var rb claimSnapshot
 		// a Release that landed meanwhile already deleted the claim; re-setting it would resurrect it
 		if m.claimed[sb.ID] == sb {
-			sb.ArchiveCk, sb.ArchiveEpoch = "", prevEpoch
+			sb.ArchiveCk, sb.ArchiveEpoch, sb.ArchivePending = "", prevEpoch, prevPending
 			sb.HibernateSnap, sb.VsockSocket, sb.VMName = snap, sock, vmName
 			sb.Deadline = prevDeadline
 			rb = m.store.set(sb)
@@ -146,7 +158,7 @@ func (m *Manager) archive(ctx context.Context, sb *types.Sandbox) error {
 		m.mu.Unlock()
 		sb.Transition.Unlock()
 		m.recommit(ctx, rb)
-		m.abandonArchive(ctx, sb.ID, epoch, ck.ID)
+		m.abandonArchive(ctx, sb, epoch, ck.ID)
 		return fmt.Errorf("archive %s: persist claims: %w", sb.ID, saveErr)
 	}
 	// disarm under Transition so a wake right after the release is not clobbered by a late disarm

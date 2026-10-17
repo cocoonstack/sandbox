@@ -824,8 +824,8 @@ func TestFailoverRestartAfterAnAdopterReleasedDropsTheClaim(t *testing.T) {
 	if _, held := restarted.byID(sb.ID); held {
 		t.Error("the restarted node kept a claim the adopter released")
 	}
-	if _, ok, _ := c.reg.Get(t.Context(), sb.ID); ok {
-		t.Error("a released claim got its row back")
+	if rec, ok, _ := c.reg.Get(t.Context(), sb.ID); !ok || !rec.Consumed || rec.Owner != "b" {
+		t.Errorf("row %+v present %v, want the adopter's tombstone kept while its checkpoint delete is pending", rec, ok)
 	}
 }
 
@@ -1174,8 +1174,11 @@ func TestFailoverARepeatedAdoptionOfAReleasedClaimIsRefused(t *testing.T) {
 	if <-adopted {
 		t.Error("a repeated adoption answered for a claim released under it")
 	}
-	if rec, ok, _ := c.reg.Get(t.Context(), sb.ID); ok && !rec.Consumed {
-		t.Errorf("a live row %+v outlived the released claim", rec)
+	if rec, ok, _ := c.reg.Get(t.Context(), sb.ID); ok {
+		t.Errorf("row %+v outlived the released claim", rec)
+	}
+	if ckExists(t, b, cur.ArchiveCk) {
+		t.Error("the retired row's checkpoint outlived it")
 	}
 }
 
@@ -1469,6 +1472,155 @@ func TestFailoverACoalescedAdoptionStillNeedsTheToken(t *testing.T) {
 	}
 }
 
+func TestFailoverArchivePersistsItsIntentBeforeThePut(t *testing.T) {
+	c := newFailoverCluster(t)
+	a := c.node(t, "a", t.TempDir(), keepAnHour)
+	sb := mustClaim(t, a, testKey)
+	if err := a.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
+		t.Fatalf("hibernate: %v", err)
+	}
+	var intent string
+	a.archives = &hookRegistry{Registry: c.reg, beforePut: func() {
+		stored, err := a.store.load()
+		if err != nil {
+			t.Errorf("load: %v", err)
+			return
+		}
+		intent = stored[sb.ID].ArchivePending
+	}}
+	if err := a.archive(t.Context(), sb); err != nil {
+		t.Fatalf("archive: %v", err)
+	}
+	stored, err := a.store.load()
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if intent == "" || intent != sb.ArchiveCk || stored[sb.ID].ArchivePending != "" {
+		t.Errorf("intent %q before the put and %q after the commit, want %s then none", intent, stored[sb.ID].ArchivePending, sb.ArchiveCk)
+	}
+}
+
+func TestFailoverRestartDropsAClaimWhoseInterruptedArchiveWasConsumedElsewhere(t *testing.T) {
+	c := newFailoverCluster(t)
+	a, b := c.node(t, "a", t.TempDir(), keepAnHour), c.node(t, "b", t.TempDir(), keepAnHour)
+	sb := mustClaim(t, a, testKey)
+	if err := a.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
+		t.Fatalf("hibernate: %v", err)
+	}
+	a.mu.Lock()
+	vm := sb.VMName
+	a.mu.Unlock()
+	ck := interruptArchive(t, a, sb, true)
+	c.down["a"] = true
+	if adopted, err := b.AdoptArchived(t.Context(), sb.ID, sb.Token); err != nil || !adopted {
+		t.Fatalf("adopt: %v %v", adopted, err)
+	}
+	if _, _, err := b.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
+		t.Fatalf("adopter's wake: %v", err)
+	}
+	if _, ok, _ := c.reg.Get(t.Context(), sb.ID); ok || ckExists(t, b, ck) {
+		t.Fatal("setup: the adopter's wake left the row or the checkpoint")
+	}
+	c.down["a"] = false
+
+	restarted := c.restart(t, a)
+	if err := restarted.Reconcile(t.Context()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if _, held := restarted.byID(sb.ID); held {
+		t.Error("the restarted node kept a claim another node adopted and woke")
+	}
+	if eng := a.eng.(*fakeEngine); !eng.removed(vm) {
+		t.Errorf("the dropped claim's VM %s was not swept", vm)
+	}
+}
+
+func TestFailoverRestartKeepsAClaimWhoseArchivePutNeverCommitted(t *testing.T) {
+	c := newFailoverCluster(t)
+	a := c.node(t, "a", t.TempDir(), keepAnHour)
+	sb := mustClaim(t, a, testKey)
+	if err := a.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
+		t.Fatalf("hibernate: %v", err)
+	}
+	ck := interruptArchive(t, a, sb, false)
+
+	restarted := c.restart(t, a)
+	if err := restarted.Reconcile(t.Context()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	held, ok := restarted.byID(sb.ID)
+	if !ok || held.ArchivePending != "" {
+		t.Fatalf("claim held %v, want it kept with its intent cleared", ok)
+	}
+	if ckExists(t, restarted, ck) {
+		t.Error("the restart kept the export of an archive whose put never committed")
+	}
+}
+
+func TestFailoverRestartKeepsAnIntentWhoseCheckpointItCannotRead(t *testing.T) {
+	c := newFailoverCluster(t)
+	a := c.node(t, "a", t.TempDir(), keepAnHour)
+	sb := mustClaim(t, a, testKey)
+	if err := a.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
+		t.Fatalf("hibernate: %v", err)
+	}
+	ck := interruptArchive(t, a, sb, false)
+
+	restarted := c.restart(t, a)
+	restarted.ckpts = &unreadableStore{Store: restarted.ckpts}
+	if err := restarted.Reconcile(t.Context()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	held, ok := restarted.byID(sb.ID)
+	if !ok || held.ArchivePending != ck {
+		t.Fatalf("claim held %v, want it kept with its intent for the next restart", ok)
+	}
+	if !ckExists(t, restarted, ck) {
+		t.Error("the restart reclaimed the export its kept intent names")
+	}
+}
+
+func TestFailoverRestartAfterAnAbandonClearedItsIntentReclaimsTheExport(t *testing.T) {
+	c := newFailoverCluster(t)
+	a := c.node(t, "a", t.TempDir(), keepAnHour)
+	sb := mustClaim(t, a, testKey)
+	if err := a.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
+		t.Fatalf("hibernate: %v", err)
+	}
+	ck := interruptArchive(t, a, sb, false)
+	if !a.clearArchiveIntent(t.Context(), sb, ck) {
+		t.Fatal("setup: clear intent")
+	}
+
+	restarted := c.restart(t, a)
+	if err := restarted.Reconcile(t.Context()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if _, held := restarted.byID(sb.ID); !held || ckExists(t, restarted, ck) {
+		t.Error("the restart dropped the claim or kept the export an abandon left")
+	}
+}
+
+func TestFailoverAnAbandonKeepsTheExportWhileItsIntentIsDurable(t *testing.T) {
+	c := newFailoverCluster(t)
+	a := c.node(t, "a", t.TempDir(), keepAnHour)
+	sb := mustClaim(t, a, testKey)
+	if err := a.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
+		t.Fatalf("hibernate: %v", err)
+	}
+	ck := interruptArchive(t, a, sb, true)
+	rec, _, _ := c.reg.Get(t.Context(), sb.ID)
+	breakStore(t, a)
+	a.abandonArchive(t.Context(), sb, rec.Epoch, ck)
+	if _, ok, _ := c.reg.Get(t.Context(), sb.ID); ok {
+		t.Error("the abandon kept the row")
+	}
+	if !ckExists(t, a, ck) {
+		t.Error("the abandon deleted the export while the journal still names it")
+	}
+	healStore(t, a)
+}
+
 type failoverCluster struct {
 	reg   *archivestest.Mem
 	ckDir string
@@ -1522,6 +1674,27 @@ func claimAnyAs(t *testing.T, m *Manager, tenant string) (*types.Sandbox, error)
 		return m.ClaimProvision(t.Context(), testKey, ClaimOptions{Tenant: tenant})
 	}
 	return sb, err
+}
+
+func interruptArchive(t *testing.T, m *Manager, sb *types.Sandbox, putCommitted bool) string {
+	t.Helper()
+	ck, _, err := m.publishCheckpoint(t.Context(), sb, store.CheckpointID(randHex(8)), "archive", sb.Tenant, true)
+	if err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+	m.mu.Lock()
+	sb.ArchivePending = ck.ID
+	js := m.store.set(sb)
+	m.mu.Unlock()
+	if err = m.store.commit(js); err != nil {
+		t.Fatalf("commit intent: %v", err)
+	}
+	if putCommitted {
+		if _, err = m.putArchive(t.Context(), sb, ck.ID); err != nil {
+			t.Fatalf("put: %v", err)
+		}
+	}
+	return ck.ID
 }
 
 func seedArchiveCk(t *testing.T, m *Manager, id, sandboxID string) {
@@ -1617,6 +1790,14 @@ type publishCountingStore struct {
 func (s *publishCountingStore) Publish(ctx context.Context, staging, id string) error {
 	s.n.Add(1)
 	return s.Store.Publish(ctx, staging, id)
+}
+
+type unreadableStore struct {
+	store.Store
+}
+
+func (s *unreadableStore) ReadMeta(context.Context, string) ([]byte, error) {
+	return nil, errors.New("store unreachable")
 }
 
 type agedRegistry struct {

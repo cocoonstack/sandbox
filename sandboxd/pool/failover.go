@@ -14,6 +14,7 @@ import (
 
 	"github.com/cocoonstack/sandbox/sandboxd/archives"
 	"github.com/cocoonstack/sandbox/sandboxd/config"
+	"github.com/cocoonstack/sandbox/sandboxd/store"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
@@ -93,7 +94,8 @@ func (m *Manager) adoptHeld(ctx context.Context, cur *types.Sandbox, epoch int64
 	}
 	if rec, ok, err := m.archives.Get(ctx, cur.ID); err == nil && ok && rec.Owner == m.nodeID && !rec.Consumed {
 		if consumed, err := m.archives.Consume(ctx, cur.ID, rec.Epoch); err == nil {
-			m.dropTombstone(ctx, cur.ID, consumed)
+			rec.Epoch, rec.Consumed = consumed, true
+			m.purgeArchiveRow(ctx, rec)
 		}
 	}
 	return false
@@ -109,7 +111,7 @@ func (m *Manager) putArchive(ctx context.Context, sb *types.Sandbox, ck string) 
 		deadline = m.retentionDeadline(sb.Key)
 	}
 	m.mu.Unlock()
-	dto.Token, dto.VMName, dto.VsockSocket, dto.HibernateSnap, dto.PendingSnap = "", "", "", "", ""
+	dto.Token, dto.VMName, dto.VsockSocket, dto.HibernateSnap, dto.PendingSnap, dto.ArchivePending = "", "", "", "", "", ""
 	dto.ArchiveCk, dto.Deadline = ck, deadline
 	claim, err := json.Marshal(&dto)
 	if err != nil {
@@ -132,30 +134,48 @@ func (m *Manager) checkArchiveRow(ctx context.Context, id string) error {
 	return err
 }
 
-func (m *Manager) abandonFailedPut(ctx context.Context, id, ck string, putErr error) {
+func (m *Manager) abandonFailedPut(ctx context.Context, sb *types.Sandbox, ck string, putErr error) {
 	if errors.Is(putErr, archives.ErrLost) {
-		m.deleteOrphanArchiveCk(ctx, ck)
+		m.abandonArchive(ctx, sb, 0, ck)
 		return
 	}
-	rec, ok, err := m.archives.Get(ctx, id)
+	rec, ok, err := m.archives.Get(ctx, sb.ID)
 	switch {
 	case err != nil:
-		log.WithFunc("pool.abandonFailedPut").Warnf(ctx, "archive %s: keeping ck %s, its row is unknown: %v", id, ck, err)
+		log.WithFunc("pool.abandonFailedPut").Warnf(ctx, "archive %s: keeping ck %s, its row is unknown: %v", sb.ID, ck, err)
 	case ok && rec.Owner == m.nodeID && rec.Checkpoint == ck:
-		m.abandonArchive(ctx, id, rec.Epoch, ck)
+		m.abandonArchive(ctx, sb, rec.Epoch, ck)
 	default:
+		m.abandonArchive(ctx, sb, 0, ck)
+	}
+}
+
+func (m *Manager) abandonArchive(ctx context.Context, sb *types.Sandbox, epoch int64, ck string) {
+	if epoch != 0 {
+		if err := m.archives.Delete(ctx, sb.ID, epoch); err != nil {
+			log.WithFunc("pool.abandonArchive").Warnf(ctx, "drop archive row %s, keeping ck %s: %v", sb.ID, ck, err)
+			return
+		}
+	}
+	if m.clearArchiveIntent(ctx, sb, ck) {
 		m.deleteOrphanArchiveCk(ctx, ck)
 	}
 }
 
-func (m *Manager) abandonArchive(ctx context.Context, id string, epoch int64, ck string) {
-	if epoch == 0 {
-		m.deleteOrphanArchiveCk(ctx, ck)
-		return
+func (m *Manager) clearArchiveIntent(ctx context.Context, sb *types.Sandbox, ck string) bool {
+	m.mu.Lock()
+	if m.claimed[sb.ID] != sb || sb.ArchivePending != ck {
+		m.mu.Unlock()
+		return true
 	}
-	if err := m.dropArchive(ctx, id, epoch, ck); err != nil {
-		log.WithFunc("pool.abandonArchive").Warnf(ctx, "drop archive row %s, keeping ck %s: %v", id, ck, err)
+	sb.ArchivePending = ""
+	js := m.store.set(sb)
+	m.mu.Unlock()
+	if err := m.store.commit(js); err != nil {
+		m.recommit(ctx, js)
+		return false
 	}
+	return true
 }
 
 // takeArchive fences an owner's wake against an adoption elsewhere; the caller holds Transition.
@@ -376,18 +396,18 @@ func (m *Manager) reconcileOwnRow(ctx context.Context, rec archives.Record, now 
 	case rec.Consumed:
 		m.purgeArchiveRow(ctx, rec)
 	default:
-		m.dropStaleRow(ctx, rec)
+		m.dropStaleRow(ctx, sb, rec)
 	}
 }
 
-func (m *Manager) dropStaleRow(ctx context.Context, rec archives.Record) {
+func (m *Manager) dropStaleRow(ctx context.Context, sb *types.Sandbox, rec archives.Record) {
 	if err := m.archives.Delete(ctx, rec.ID, rec.Epoch); err != nil {
 		if !errors.Is(err, archives.ErrLost) {
 			log.WithFunc("pool.dropStaleRow").Warnf(ctx, "drop stale archive row %s: %v", rec.ID, err)
 		}
 		return
 	}
-	if !m.archiveCkPinned(rec.Checkpoint) {
+	if !m.archiveCkPinned(rec.Checkpoint) && m.clearArchiveIntent(ctx, sb, rec.Checkpoint) {
 		m.deleteOrphanArchiveCk(ctx, rec.Checkpoint)
 	}
 }
@@ -410,14 +430,6 @@ func (m *Manager) purgeArchiveRow(ctx context.Context, rec archives.Record) {
 		m.recordUsage(ctx, usageEvent{Event: "archive_delete", ID: rec.ID, Reference: rec.Checkpoint, Tenant: rec.Tenant})
 	}
 	logger.Infof(ctx, "purged archive %s of %s", rec.ID, rec.Owner)
-}
-
-func (m *Manager) dropArchive(ctx context.Context, id string, epoch int64, ck string) error {
-	if err := m.archives.Delete(ctx, id, epoch); err != nil {
-		return err
-	}
-	m.deleteOrphanArchiveCk(ctx, ck)
-	return nil
 }
 
 // fenceArchived settles loaded claims against their rows and returns the rows; false when the registry did not answer.
@@ -450,6 +462,11 @@ func (m *Manager) fenceArchived(ctx context.Context, claims map[string]*types.Sa
 			drop = true
 		case ok && !rec.Consumed:
 			drop = m.settleInterruptedArchive(ctx, rows, rec)
+			if _, kept := rows[id]; !kept {
+				sb.ArchivePending = ""
+			}
+		case !ok && sb.ArchivePending != "":
+			drop = m.settleArchiveIntent(ctx, sb)
 		}
 		if drop {
 			if sb.ArchiveCk != "" {
@@ -462,6 +479,19 @@ func (m *Manager) fenceArchived(ctx context.Context, claims map[string]*types.Sa
 		}
 	}
 	return rows, true
+}
+
+func (m *Manager) settleArchiveIntent(ctx context.Context, sb *types.Sandbox) bool {
+	_, err := m.ckpts.ReadMeta(ctx, sb.ArchivePending)
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		return true
+	case err != nil:
+		log.WithFunc("pool.settleArchiveIntent").Warnf(ctx, "archive intent %s of %s left for the next restart: %v", sb.ArchivePending, sb.ID, err)
+		return false
+	}
+	sb.ArchivePending = ""
+	return false
 }
 
 func (m *Manager) settleInterruptedArchive(ctx context.Context, rows map[string]archives.Record, rec archives.Record) bool {

@@ -137,6 +137,7 @@ func (m *Manager) Release(ctx context.Context, id string, cred Cred) error {
 	}
 	sb.Transition.Lock()
 	defer sb.Transition.Unlock()
+	ck := sb.ArchiveCk
 	consumed, err := m.consumeArchive(ctx, sb)
 	if err != nil {
 		return err
@@ -144,7 +145,9 @@ func (m *Manager) Release(ctx context.Context, id string, cred Cred) error {
 	if err = m.releaseResolved(ctx, id, sb); err != nil {
 		return err
 	}
-	m.dropTombstone(context.WithoutCancel(ctx), id, consumed)
+	if !m.deleteMarked(ck) {
+		m.dropTombstone(context.WithoutCancel(ctx), id, consumed)
+	}
 	return nil
 }
 
