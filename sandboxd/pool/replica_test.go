@@ -86,6 +86,106 @@ func TestReplicaRefusedPutDropsTheCopyAndItsExport(t *testing.T) {
 	}
 }
 
+func TestReplicaLostPutReplyKeepsTheCheckpointTheRowNames(t *testing.T) {
+	c := newReplicaCluster(t)
+	a, b := c.node(t, "a", t.TempDir(), keepAnHour), c.node(t, "b", t.TempDir(), keepAnHour)
+	sb := mustClaim(t, a, testKey)
+	vm := lockedVMName(sb)
+	a.archives = &hookRegistry{Registry: c.reg, losePutReply: true}
+
+	if err := a.replicate(t.Context(), sb); !errors.Is(err, ErrArchiveStoreDown) {
+		t.Fatalf("round whose put reply was lost: %v, want ErrArchiveStoreDown", err)
+	}
+	row, ok, _ := c.reg.Get(t.Context(), sb.ID)
+	a.mu.Lock()
+	pending := sb.ReplicaPending
+	a.mu.Unlock()
+	if !ok || pending == "" || row.Checkpoint != pending || !ckExists(t, a, pending) || !sb.Replicated() {
+		t.Fatalf("row %+v present %v, pending %q kept %v replicated %v, want the row's checkpoint kept and the claim fenced",
+			row, ok, pending, ckExists(t, a, pending), sb.Replicated())
+	}
+
+	c.expire("a")
+	if adopted, err := b.AdoptArchived(t.Context(), sb.ID, sb.Token); err != nil || !adopted {
+		t.Fatalf("adopt: %v %v", adopted, err)
+	}
+	if _, _, _, err := b.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
+		t.Fatalf("the adopter's wake from the checkpoint: %v", err)
+	}
+	if got := b.eng.(*fakeEngine).cloneCount(); got != 1 {
+		t.Errorf("the wake cloned %d VMs, want the one restored from the checkpoint", got)
+	}
+
+	c.renew(t, "a")
+	sb.Transition.Lock()
+	err := a.resolveIntent(t.Context(), sb)
+	sb.Transition.Unlock()
+	if !errors.Is(err, ErrUnknownSandbox) {
+		t.Fatalf("the returning owner's settle: %v, want ErrUnknownSandbox", err)
+	}
+	if _, held := a.byID(sb.ID); held || !a.eng.(*fakeEngine).removed(vm) {
+		t.Errorf("old owner holds the claim %v, VM removed %v, want its copy dropped", held, a.eng.(*fakeEngine).removed(vm))
+	}
+}
+
+func TestReplicaUnavailablePutThatNeverLandedIsSettledAtTheNextRound(t *testing.T) {
+	c := newReplicaCluster(t)
+	a := c.node(t, "a", t.TempDir(), keepAnHour)
+	sb := mustClaim(t, a, testKey)
+	replicateNow(t, a, sb)
+	old := a.replicaOf(sb)
+	row, _, _ := c.reg.Get(t.Context(), sb.ID)
+	a.archives = &hookRegistry{Registry: c.reg, failPut: true}
+
+	if err := a.replicate(t.Context(), sb); !errors.Is(err, ErrArchiveStoreDown) {
+		t.Fatalf("round whose put failed: %v, want ErrArchiveStoreDown", err)
+	}
+	a.mu.Lock()
+	pending := sb.ReplicaPending
+	a.mu.Unlock()
+	if pending == "" || !ckExists(t, a, pending) || !ckExists(t, a, old) {
+		t.Fatalf("pending %q kept %v, old kept %v, want both checkpoints kept until settled", pending, ckExists(t, a, pending), ckExists(t, a, old))
+	}
+
+	a.archives = c.reg
+	replicateNow(t, a, sb)
+	if ckExists(t, a, pending) || ckExists(t, a, old) {
+		t.Errorf("failed round's checkpoint kept %v, old replica kept %v, want both gone", ckExists(t, a, pending), ckExists(t, a, old))
+	}
+	if rec, _, _ := c.reg.Get(t.Context(), sb.ID); rec.Checkpoint != a.replicaOf(sb) || rec.Epoch <= row.Epoch {
+		t.Errorf("row %s@%d, want it on the new replica %s", rec.Checkpoint, rec.Epoch, a.replicaOf(sb))
+	}
+}
+
+func TestReplicaRestartSettlesALostPutReply(t *testing.T) {
+	c := newReplicaCluster(t)
+	dirA := t.TempDir()
+	a := c.node(t, "a", dirA, keepAnHour)
+	sb := mustClaim(t, a, testKey)
+	a.archives = &hookRegistry{Registry: c.reg, losePutReply: true}
+	if err := a.replicate(t.Context(), sb); !errors.Is(err, ErrArchiveStoreDown) {
+		t.Fatalf("round whose put reply was lost: %v", err)
+	}
+	a.mu.Lock()
+	pending := sb.ReplicaPending
+	a.mu.Unlock()
+	if err := a.FlushClaims(); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+
+	restarted := c.restart(t, a)
+	if err := restarted.Reconcile(t.Context()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	held, ok := restarted.byID(sb.ID)
+	if !ok || restarted.replicaOf(held) != pending || !ckExists(t, restarted, pending) {
+		t.Fatalf("claim held %v, replica %q, ck kept %v, want the row's checkpoint %s adopted", ok, restarted.replicaOf(held), ckExists(t, restarted, pending), pending)
+	}
+	if held.ReplicaPending != "" {
+		t.Errorf("intent %q left after the restart settled it", held.ReplicaPending)
+	}
+}
+
 func TestReplicaFailedCaptureKeepsTheOldReplicaAndRow(t *testing.T) {
 	c := newReplicaCluster(t)
 	a := c.node(t, "a", t.TempDir(), keepAnHour)

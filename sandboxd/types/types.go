@@ -578,6 +578,8 @@ type Sandbox struct {
 	ArchivePending string `json:"archive_pending,omitempty"`
 	// ReplicaCk names the checkpoint the claim's registry row points at while the claim runs; empty means unreplicated.
 	ReplicaCk string `json:"replica_ck,omitempty"`
+	// ReplicaPending is the checkpoint a replication round is about to register; the row may already name it.
+	ReplicaPending string `json:"replica_pending,omitempty"`
 
 	// FromCheckpoint names the checkpoint this sandbox branched from; empty otherwise.
 	FromCheckpoint string `json:"from_checkpoint,omitempty"`
@@ -599,7 +601,7 @@ type Sandbox struct {
 
 	// lastActivity is unix-nanos of the last data-plane connection, stamped lock-free.
 	lastActivity atomic.Int64
-	// replicated mirrors ReplicaCk != "", so the data plane reads it without the manager mutex.
+	// replicated mirrors ReplicaCk or ReplicaPending being set, so the data plane reads it without the manager mutex.
 	replicated atomic.Bool
 	// open counts the data-plane connections held right now.
 	open atomic.Int32
@@ -620,9 +622,9 @@ func (s *Sandbox) TouchAt(t time.Time) { s.lastActivity.Store(t.UnixNano()) }
 func (s *Sandbox) LastSeen() time.Time { return time.Unix(0, s.lastActivity.Load()) }
 
 // SyncReplicated republishes the replica state to Replicated; callers hold the manager mutex.
-func (s *Sandbox) SyncReplicated() { s.replicated.Store(s.ReplicaCk != "") }
+func (s *Sandbox) SyncReplicated() { s.replicated.Store(s.ReplicaCk != "" || s.ReplicaPending != "") }
 
-// Replicated reports whether the claim's registry row names a replica.
+// Replicated reports whether the claim's registry row may name a replica.
 func (s *Sandbox) Replicated() bool { return s.replicated.Load() }
 
 // Hold registers an open data-plane connection; the idle sweep leaves a held sandbox alone.

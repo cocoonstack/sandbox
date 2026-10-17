@@ -31,7 +31,7 @@ func (m *Manager) replicateOnce(ctx context.Context) {
 		every, st := v.poolReplicate[sb.Key], m.replicas[id]
 		switch {
 		case every <= 0:
-			if sb.ReplicaCk != "" {
+			if sb.Replicated() {
 				retire = append(retire, sb)
 			}
 		case !m.replicable(sb):
@@ -84,6 +84,12 @@ func (m *Manager) replicate(ctx context.Context, sb *types.Sandbox) error {
 	if err := m.diskErr(); err != nil {
 		return fmt.Errorf("replicate %s: %w", sb.ID, err)
 	}
+	sb.Transition.Lock()
+	err := m.settleReplicaIntent(ctx, sb)
+	sb.Transition.Unlock()
+	if err != nil {
+		return fmt.Errorf("replicate %s: settle intent: %w", sb.ID, err)
+	}
 	if err := m.checkArchiveRow(ctx, sb.ID); err != nil {
 		if errors.Is(err, archives.ErrLost) {
 			sb.Transition.Lock()
@@ -104,22 +110,35 @@ func (m *Manager) replicate(ctx context.Context, sb *types.Sandbox) error {
 	defer sb.Transition.Unlock()
 	m.mu.Lock()
 	ok := m.claimed[sb.ID] == sb && sb.ArchiveCk == "" && sb.ArchivePending == ""
+	var intent claimSnapshot
+	if ok {
+		sb.ReplicaPending = ckID
+		sb.SyncReplicated()
+		intent = m.store.set(sb)
+	}
 	m.mu.Unlock()
 	if !ok {
 		m.deleteOrphanArchiveCk(ctx, ckID)
 		return errWokeMeanwhile
 	}
-	epoch, err := m.putArchive(ctx, sb, ckID)
-	if err != nil {
+	if err = m.store.commit(intent); err != nil {
+		m.clearReplicaIntent(ctx, sb, ckID)
 		m.deleteOrphanArchiveCk(ctx, ckID)
-		if errors.Is(err, archives.ErrLost) {
-			m.dropAdopted(ctx, sb)
-		}
+		return fmt.Errorf("replicate %s: persist intent: %w", sb.ID, err)
+	}
+	epoch, err := m.putArchive(ctx, sb, ckID)
+	switch {
+	case errors.Is(err, archives.ErrLost):
+		m.clearReplicaIntent(ctx, sb, ckID)
+		m.deleteOrphanArchiveCk(ctx, ckID)
+		m.dropAdopted(ctx, sb)
+		return fmt.Errorf("replicate %s: registry: %w", sb.ID, err)
+	case err != nil:
 		return fmt.Errorf("replicate %s: registry: %w", sb.ID, err)
 	}
 	var prev string
 	live, _ := m.commitIfLive(ctx, sb, func() {
-		prev, sb.ReplicaCk, sb.ArchiveEpoch = sb.ReplicaCk, ckID, epoch
+		prev, sb.ReplicaCk, sb.ReplicaPending, sb.ArchiveEpoch = sb.ReplicaCk, ckID, "", epoch
 		sb.SyncReplicated()
 	})
 	if !live {
@@ -132,6 +151,80 @@ func (m *Manager) replicate(ctx context.Context, sb *types.Sandbox) error {
 	return nil
 }
 
+// settleReplicaIntent resolves a round whose registry write may or may not have landed; the caller holds sb.Transition.
+func (m *Manager) settleReplicaIntent(ctx context.Context, sb *types.Sandbox) error {
+	m.mu.Lock()
+	pending := sb.ReplicaPending
+	m.mu.Unlock()
+	if pending == "" || m.archives == nil {
+		return nil
+	}
+	rec, ok, err := m.archives.Get(ctx, sb.ID)
+	if err != nil {
+		return err
+	}
+	gone := false
+	if !ok {
+		if gone, err = m.replicaGone(ctx, sb); err != nil {
+			return err
+		}
+	}
+	switch {
+	case gone:
+		m.dropAdopted(ctx, sb)
+		return ErrUnknownSandbox
+	case ok && rec.Owner != m.nodeID:
+		if rec.Checkpoint != pending {
+			m.deleteOrphanArchiveCk(ctx, pending)
+		}
+		m.dropAdopted(ctx, sb)
+		return ErrUnknownSandbox
+	case ok && !rec.Consumed && rec.Checkpoint == pending:
+		var prev string
+		live, _ := m.commitIfLive(ctx, sb, func() {
+			prev, sb.ReplicaCk, sb.ReplicaPending, sb.ArchiveEpoch = sb.ReplicaCk, pending, "", rec.Epoch
+			sb.SyncReplicated()
+		})
+		if !live {
+			return ErrUnknownSandbox
+		}
+		if prev != "" {
+			m.deleteOrphanArchiveCk(ctx, prev)
+		}
+		return nil
+	}
+	m.clearReplicaIntent(ctx, sb, pending)
+	m.deleteOrphanArchiveCk(ctx, pending)
+	return nil
+}
+
+// replicaGone reports whether the absence of sb's row means another node adopted the claim and finished with it.
+func (m *Manager) replicaGone(ctx context.Context, sb *types.Sandbox) (bool, error) {
+	m.mu.Lock()
+	confirmed, pending := sb.ArchiveEpoch != 0, sb.ReplicaPending
+	m.mu.Unlock()
+	if confirmed {
+		return true, nil
+	}
+	if pending == "" {
+		return false, nil
+	}
+	_, err := m.ckpts.ReadMeta(ctx, pending)
+	if errors.Is(err, store.ErrNotFound) {
+		return true, nil
+	}
+	return false, err
+}
+
+func (m *Manager) clearReplicaIntent(ctx context.Context, sb *types.Sandbox, ck string) {
+	_, _ = m.commitIfLive(ctx, sb, func() {
+		if sb.ReplicaPending == ck {
+			sb.ReplicaPending = ""
+			sb.SyncReplicated()
+		}
+	})
+}
+
 func (m *Manager) retireReplica(ctx context.Context, sb *types.Sandbox) {
 	sb.Transition.Lock()
 	defer sb.Transition.Unlock()
@@ -142,6 +235,12 @@ func (m *Manager) retireReplica(ctx context.Context, sb *types.Sandbox) {
 
 // dropReplica ends sb's replication; the caller holds sb.Transition.
 func (m *Manager) dropReplica(ctx context.Context, sb *types.Sandbox) error {
+	if err := m.settleReplicaIntent(ctx, sb); err != nil {
+		return err
+	}
+	if m.replicaOf(sb) == "" {
+		return nil
+	}
 	consumed, err := m.consumeArchive(ctx, sb)
 	if err != nil {
 		return err

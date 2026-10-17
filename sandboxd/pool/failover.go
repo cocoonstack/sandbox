@@ -102,7 +102,7 @@ func (m *Manager) putArchive(ctx context.Context, sb *types.Sandbox, ck string) 
 		deadline = m.retentionDeadline(sb.Key)
 	}
 	m.mu.Unlock()
-	dto.Token, dto.VMName, dto.VsockSocket, dto.HibernateSnap, dto.PendingSnap, dto.ArchivePending, dto.ReplicaCk = "", "", "", "", "", "", ""
+	dto.Token, dto.VMName, dto.VsockSocket, dto.HibernateSnap, dto.PendingSnap, dto.ArchivePending, dto.ReplicaCk, dto.ReplicaPending = "", "", "", "", "", "", "", ""
 	dto.ArchiveCk, dto.Deadline = ck, deadline
 	claim, err := json.Marshal(&dto)
 	if err != nil {
@@ -304,7 +304,7 @@ func (m *Manager) unrowExpired(ctx context.Context, sb *types.Sandbox) {
 	sb.Transition.Lock()
 	defer sb.Transition.Unlock()
 	var err error
-	if m.replicaOf(sb) != "" {
+	if sb.Replicated() {
 		err = m.dropReplica(ctx, sb)
 	} else {
 		_, err = m.consumeArchive(ctx, sb)
@@ -452,12 +452,21 @@ func (m *Manager) fenceArchived(ctx context.Context, claims map[string]*types.Sa
 			}
 		case ok && rec.Owner != m.nodeID:
 			drop = true
-		case sb.ReplicaCk != "" && sb.ArchivePending == "":
+		case (sb.ReplicaCk != "" || sb.ReplicaPending != "") && sb.ArchivePending == "":
+			moved, err := false, error(nil)
+			if !ok {
+				moved, err = m.replicaGone(ctx, sb)
+			}
 			switch {
-			case !ok && m.replicaConfirmed(sb):
+			case err != nil:
+				logger.Warnf(ctx, "replica intent of %s left for the next settle: %v", id, err)
+			case moved:
 				drop = true
-			case ok && !rec.Consumed:
-				sb.ReplicaCk, sb.ArchiveEpoch = rec.Checkpoint, rec.Epoch
+			default:
+				if ok && !rec.Consumed {
+					sb.ReplicaCk, sb.ArchiveEpoch = rec.Checkpoint, rec.Epoch
+				}
+				sb.ReplicaPending = ""
 				sb.SyncReplicated()
 			}
 		case sb.ArchivePending != "" || ok && !rec.Consumed:
@@ -518,6 +527,9 @@ func (m *Manager) resolveIntent(ctx context.Context, sb *types.Sandbox) error {
 	if m.archives == nil {
 		return nil
 	}
+	if err := m.settleReplicaIntent(ctx, sb); err != nil {
+		return err
+	}
 	m.mu.Lock()
 	pending := sb.ArchivePending
 	m.mu.Unlock()
@@ -546,7 +558,7 @@ func (m *Manager) settleIntents(ctx context.Context) {
 	m.mu.Lock()
 	var pending []*types.Sandbox
 	for id, sb := range m.claimed {
-		if _, busy := m.archiving[id]; sb.ArchivePending != "" && !busy {
+		if _, busy := m.archiving[id]; (sb.ArchivePending != "" || sb.ReplicaPending != "") && !busy {
 			pending = append(pending, sb)
 		}
 	}
@@ -565,5 +577,5 @@ func (m *Manager) archiveRowed(sb *types.Sandbox) bool {
 }
 
 func (m *Manager) expiryDropsRow(sb *types.Sandbox) bool {
-	return m.archiveRowed(sb) || sb.ReplicaCk != "" && !m.archivesAtDeadline(sb)
+	return m.archiveRowed(sb) || sb.Replicated() && !m.archivesAtDeadline(sb)
 }

@@ -1941,9 +1941,13 @@ type hookRegistry struct {
 	loseConsumeReply bool
 	loseTakeReply    bool
 	losePutReply     bool
+	failPut          bool
 }
 
 func (r *hookRegistry) Put(ctx context.Context, rec archives.Record) (int64, error) {
+	if r.failPut {
+		return 0, archives.ErrUnavailable
+	}
 	if hook := r.beforePut; hook != nil {
 		r.beforePut = nil
 		hook()

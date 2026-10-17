@@ -58,7 +58,7 @@ func (m *Manager) unfence(ctx context.Context) {
 	m.mu.Lock()
 	held := map[string]*types.Sandbox{}
 	for id, sb := range m.claimed {
-		if sb.ReplicaCk != "" {
+		if sb.Replicated() {
 			held[id] = sb
 		}
 	}
