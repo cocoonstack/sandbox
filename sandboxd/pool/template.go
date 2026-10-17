@@ -98,9 +98,7 @@ func (m *Manager) DeleteTemplate(ctx context.Context, key types.PoolKey, tenant,
 		return ErrPooledTemplate
 	}
 	id := store.TemplateID(key.Hash())
-	l := m.recLock(id)
-	l.Lock()
-	defer func() { l.Unlock(); m.recDone(id) }()
+	defer m.lockRec(id)()
 	if err := m.ownedTemplate(ctx, id, tenant); err != nil {
 		return err
 	}
@@ -145,9 +143,7 @@ func (m *Manager) SetTemplateLabels(ctx context.Context, key types.PoolKey, labe
 		return ErrPooledTemplate
 	}
 	id := store.TemplateID(key.Hash())
-	l := m.recLock(id)
-	l.Lock()
-	defer func() { l.Unlock(); m.recDone(id) }()
+	defer m.lockRec(id)()
 	err := m.ownedTemplate(ctx, id, tenant)
 	if err != nil {
 		return err
@@ -295,9 +291,7 @@ func (m *Manager) checkTemplateOwner(ctx context.Context, id, tenant string) err
 
 func (m *Manager) commitTemplate(ctx context.Context, staging string, rec templateRecord) (string, error) {
 	id := store.TemplateID(rec.Key.Hash())
-	l := m.recLock(id)
-	l.Lock()
-	defer func() { l.Unlock(); m.recDone(id) }()
+	defer m.lockRec(id)()
 	if ownerErr := m.checkTemplateOwner(ctx, id, rec.Tenant); ownerErr != nil {
 		return "", ownerErr
 	}
@@ -358,9 +352,7 @@ func (m *Manager) resolveGolden(ctx context.Context, key types.PoolKey, tenant s
 		return goldenResolution{}, nil // never resume a live-captured template on the egress lane; cold-boot instead
 	}
 	id := store.TemplateID(key.Hash())
-	l := m.recLock(id)
-	l.RLock()
-	cleanup := func() { l.RUnlock(); m.recDone(id) }
+	cleanup := m.rlockRec(id)
 	dir, meta, digest, err := m.tpls.Fetch(ctx, id)
 	if err != nil {
 		cleanup()

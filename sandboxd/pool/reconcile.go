@@ -40,14 +40,13 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 	referenced := map[string]bool{}
 	var adopted []*types.Sandbox
 	m.mu.Lock()
-	for id, sb := range claims {
+	for _, sb := range claims {
 		sb.SetEnv(sb.Env)
 		rec, ok := live[sb.VMName]
 		switch {
 		case sb.ArchiveCk != "":
 			// archived: no local VM by design, so adopt the stub and let the first exec wake it
-			m.claimed[id] = sb
-			m.tenantDelta(sb.Tenant, 1)
+			m.addClaimLocked(sb)
 			continue
 		case ok && rec.State == vmStateRunning:
 			sb.VsockSocket = rec.VsockSocket
@@ -66,8 +65,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 		default:
 			continue
 		}
-		m.claimed[id] = sb
-		m.tenantDelta(sb.Tenant, 1)
+		m.addClaimLocked(sb)
 		m.adoptVolumes(heldVolumes(sb))
 		owned[sb.VMName] = true
 		referenced[sb.HibernateSnap] = true
@@ -262,14 +260,7 @@ func (m *Manager) resyncEgress(ctx context.Context, live map[string]types.VMReco
 func (m *Manager) quarantineClaim(ctx context.Context, sb *types.Sandbox) bool {
 	td := m.quiesceVolumes(ctx, sb)
 	gone := m.removeOrRetry(ctx, sb.VMName, sb.ID, td)
-	m.mu.Lock()
-	delete(m.claimed, sb.ID)
-	m.tenantDelta(sb.Tenant, -1)
-	js := m.store.del(sb.ID)
-	m.mu.Unlock()
-	if err := m.store.commit(js); err != nil {
-		m.recommit(ctx, js)
-	}
+	m.forgetClaim(ctx, sb)
 	return gone
 }
 

@@ -15,6 +15,18 @@ func (m *Manager) recLock(id string) *sync.RWMutex {
 	return l
 }
 
+func (m *Manager) lockRec(id string) func() {
+	l := m.recLock(id)
+	l.Lock()
+	return func() { l.Unlock(); m.recDone(id) }
+}
+
+func (m *Manager) rlockRec(id string) func() {
+	l := m.recLock(id)
+	l.RLock()
+	return func() { l.RUnlock(); m.recDone(id) }
+}
+
 // recDone releases a reference taken by recLock; call after Unlock/RUnlock, never before.
 func (m *Manager) recDone(id string) {
 	m.recLocksMu.Lock()

@@ -53,12 +53,10 @@ const (
 	removeVerifyTimeout = 15 * time.Second
 	cellRetry           = 5 * time.Second
 	// A full node clears only when VMs go away; retrying sooner buys nothing.
-	capacityBackoff    = buildRetryDelay
-	vsockPollInterval  = 100 * time.Millisecond
-	defaultTTL         = 5 * time.Minute
-	maxTTL             = 24 * time.Hour
-	recommitBackoff    = 20 * time.Millisecond
-	recommitMaxBackoff = 5 * time.Second
+	capacityBackoff   = buildRetryDelay
+	vsockPollInterval = 100 * time.Millisecond
+	defaultTTL        = 5 * time.Minute
+	maxTTL            = 24 * time.Hour
 	// One failed boot is ordinary; only an unbroken run predicts the next failure
 	refillFailStreak  = 8
 	refillBackoffBase = 250 * time.Millisecond
@@ -360,9 +358,10 @@ type Manager struct {
 	// A cluster-wide backend makes heal and the delete broadcast no-ops
 	ckptsShared bool
 	healer      *peer.Healer
-	// healPending/healAbort, guarded by recLocksMu, let a delete veto a heal still staging.
-	healSem      chan struct{}
-	healFlights  singleflight.Group
+	healSem     chan struct{}
+	healFlights singleflight.Group
+	// healPending/healAbort, guarded by healMu, let a delete veto a heal still staging.
+	healMu       sync.Mutex
 	healPending  map[string]struct{}
 	healAbort    map[string]struct{}
 	peerDelete   PeerDeleteFunc
@@ -370,7 +369,6 @@ type Manager struct {
 	ckptTTL      time.Duration
 	ckptSweeping atomic.Bool
 	genSweeping  atomic.Bool
-	recommitting atomic.Bool
 
 	// tplSet caches each template id's key, digest and owning tenant ("" = operator).
 	tplMu  sync.Mutex

@@ -393,7 +393,7 @@ func TestUncertainTargetCommitReleasesOnlyConfirmedPrecleanedHolds(t *testing.T)
 				m.store.writeMu.Lock()
 				t.Cleanup(func() {
 					m.store.writeMu.Unlock()
-					waitFor(t, func() bool { return !m.recommitting.Load() })
+					waitFor(t, func() bool { return !m.store.recommitting.Load() })
 				})
 			}
 			if checkErr := os.Remove(m.store.path + ".tmp"); checkErr != nil {
@@ -404,7 +404,7 @@ func TestUncertainTargetCommitReleasesOnlyConfirmedPrecleanedHolds(t *testing.T)
 				if checkErr := m.store.commit(m.store.mark()); checkErr != nil {
 					t.Fatal(checkErr)
 				}
-				waitFor(t, func() bool { return !m.recommitting.Load() })
+				waitFor(t, func() bool { return !m.store.recommitting.Load() })
 			}
 			m2 := newVolumeManagerAt(t, eng, m.dataDir, catalog)
 			if checkErr := m2.Reconcile(t.Context()); checkErr != nil {

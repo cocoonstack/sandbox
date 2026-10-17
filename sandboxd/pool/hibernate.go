@@ -330,7 +330,7 @@ func (m *Manager) resolvePendingSnap(ctx context.Context, sb *types.Sandbox) (ad
 		return false, ErrUnknownSandbox
 	}
 	if err := m.store.commit(js); err != nil {
-		m.recommit(ctx, js)
+		m.store.recommit(ctx, js)
 		// the transition is decided in memory, so report the adoption for the caller to bill
 		return exists, fmt.Errorf("resolve hibernate intent %s: persist: %w", sb.ID, err)
 	}

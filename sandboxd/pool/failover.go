@@ -70,8 +70,7 @@ func (m *Manager) adoptArchived(ctx context.Context, id, token string) (bool, er
 		m.mu.Unlock()
 		return m.adoptHeld(ctx, cur, epoch), nil
 	}
-	m.claimed[id] = sb
-	m.tenantDelta(sb.Tenant, 1)
+	m.addClaimLocked(sb)
 	js := m.store.set(sb)
 	m.mu.Unlock()
 	if err := m.store.commit(js); err != nil {
@@ -162,7 +161,7 @@ func (m *Manager) clearArchiveIntent(ctx context.Context, sb *types.Sandbox, ck 
 	js := m.store.set(sb)
 	m.mu.Unlock()
 	if err := m.store.commit(js); err != nil {
-		m.recommit(ctx, js)
+		m.store.recommit(ctx, js)
 		return false
 	}
 	return true
@@ -329,12 +328,11 @@ func (m *Manager) forgetClaim(ctx context.Context, sb *types.Sandbox) bool {
 		m.mu.Unlock()
 		return false
 	}
-	delete(m.claimed, sb.ID)
-	m.tenantDelta(sb.Tenant, -1)
+	m.dropClaimLocked(sb)
 	js := m.store.del(sb.ID)
 	m.mu.Unlock()
 	if err := m.store.commit(js); err != nil {
-		m.recommit(ctx, js)
+		m.store.recommit(ctx, js)
 	}
 	return true
 }

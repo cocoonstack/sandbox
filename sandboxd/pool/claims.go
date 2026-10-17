@@ -1,6 +1,7 @@
 package pool
 
 import (
+	"context"
 	"encoding/json/v2"
 	"errors"
 	"fmt"
@@ -10,10 +11,18 @@ import (
 	"path/filepath"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
+
+	"github.com/projecteru2/core/log"
 
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 	"github.com/cocoonstack/sandbox/sandboxd/utils"
+)
+
+const (
+	recommitBackoff    = 20 * time.Millisecond
+	recommitMaxBackoff = 5 * time.Second
 )
 
 // claimSnapshot sequences one persist request; commit skips it once a newer write has landed.
@@ -73,6 +82,8 @@ type claimStore struct {
 	rows    map[string]*claimRow
 	seq     uint64
 	written uint64
+
+	recommitting atomic.Bool
 }
 
 func newClaimStore(dataDir string, sync bool) *claimStore {
@@ -179,6 +190,29 @@ func (s *claimStore) commit(snap claimSnapshot) error {
 	s.written = seq
 	s.mu.Unlock()
 	return nil
+}
+
+// recommit keeps claims.json catching up with the store: one retrier at a time writes the current state until it is durable and nothing newer is pending.
+func (s *claimStore) recommit(ctx context.Context, snap claimSnapshot) {
+	if !s.recommitting.CompareAndSwap(false, true) {
+		return
+	}
+	go func() {
+		backoff := recommitBackoff
+		for {
+			err := s.commit(snap)
+			if err == nil {
+				s.recommitting.Store(false)
+				if snap = s.mark(); !s.pending(snap) || !s.recommitting.CompareAndSwap(false, true) {
+					return
+				}
+				continue
+			}
+			log.WithFunc("pool.recommit").Error(ctx, err, "persist claims")
+			time.Sleep(backoff)
+			backoff = min(backoff*2, recommitMaxBackoff)
+		}
+	}()
 }
 
 // replace swaps claims.json for raw through the fixed temp name, durably when sync is set.

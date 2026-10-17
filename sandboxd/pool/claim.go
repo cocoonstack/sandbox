@@ -196,7 +196,7 @@ func (m *Manager) Renew(ctx context.Context, id string, cred Cred, ttl time.Dura
 			rb = m.store.set(sb)
 		}
 		m.mu.Unlock()
-		m.recommit(ctx, rb)
+		m.store.recommit(ctx, rb)
 		return time.Time{}, fmt.Errorf("renew %s: persist claims: %w", id, err)
 	}
 	sb.Touch()
@@ -296,15 +296,13 @@ func (m *Manager) releaseResolved(ctx context.Context, id string, sb *types.Sand
 	if ck != "" {
 		m.pendingCks[ck] = struct{}{}
 	}
-	delete(m.claimed, id)
-	m.tenantDelta(sb.Tenant, -1)
+	m.dropClaimLocked(sb)
 	js := m.store.del(id)
 	m.mu.Unlock()
 	if saveErr := m.store.commit(js); saveErr != nil {
 		m.mu.Lock()
-		m.claimed[id] = sb // roll back so memory matches the still-durable claim
+		m.addClaimLocked(sb) // roll back so memory matches the still-durable claim
 		m.restoreVolumeHolds(sb, volumeHolds)
-		m.tenantDelta(sb.Tenant, 1)
 		delete(m.pendingCks, ck)
 		rb := m.store.set(sb)
 		m.mu.Unlock()
@@ -314,7 +312,7 @@ func (m *Manager) releaseResolved(ctx context.Context, id string, sb *types.Sand
 				logger.Warnf(ctx, "clear archive ck %s: %v", ck, clearErr)
 			}
 		}
-		m.recommit(ctx, rb)
+		m.store.recommit(ctx, rb)
 		logger.Errorf(ctx, saveErr, "persist release of %s", id)
 		return fmt.Errorf("release %s: %w", id, saveErr)
 	}
@@ -412,6 +410,16 @@ func (m *Manager) tenantDelta(tenant string, delta int) {
 	}
 }
 
+func (m *Manager) addClaimLocked(sb *types.Sandbox) {
+	m.claimed[sb.ID] = sb
+	m.tenantDelta(sb.Tenant, 1)
+}
+
+func (m *Manager) dropClaimLocked(sb *types.Sandbox) {
+	delete(m.claimed, sb.ID)
+	m.tenantDelta(sb.Tenant, -1)
+}
+
 // finalize stamps identity and persists the claim; a failed write destroys the VM.
 func (m *Manager) finalize(ctx context.Context, sb *types.Sandbox, ttl time.Duration, inherited bool) (*types.Sandbox, error) {
 	if err := m.finalizeBatch(ctx, []*types.Sandbox{sb}, ttl, "", inherited); err != nil {
@@ -452,8 +460,7 @@ func (m *Manager) finalizeBatch(ctx context.Context, sbs []*types.Sandbox, ttl t
 		if _, pooled := m.activePool(sb.PolicyKey()); pooled {
 			sb.Layer = types.LayerPooled
 		}
-		m.claimed[sb.ID] = sb
-		m.tenantDelta(sb.Tenant, 1)
+		m.addClaimLocked(sb)
 	}
 	js := m.store.set(sbs...)
 	m.mu.Unlock()
@@ -486,13 +493,12 @@ func (m *Manager) rollbackClaim(ctx context.Context, sbs []*types.Sandbox) {
 	holds := make([][]types.Volume, len(sbs))
 	for i, sb := range sbs {
 		holds[i] = m.cancelVolumeRun(sb)
-		delete(m.claimed, sb.ID)
-		m.tenantDelta(sb.Tenant, -1)
+		m.dropClaimLocked(sb)
 		ids[i] = sb.ID
 	}
 	rb := m.store.del(ids...)
 	m.mu.Unlock()
-	m.recommit(ctx, rb)
+	m.store.recommit(ctx, rb)
 	for i, sb := range sbs {
 		td := m.quiesceVolumes(ctx, sb)
 		td.holds = holds[i]
@@ -545,8 +551,7 @@ func (m *Manager) reapOnce(ctx context.Context) {
 			expired = append(expired, victim{action: action, id: id, sb: sb})
 		default:
 			expired = append(expired, victim{action: reapDestroy, id: id, vmName: sb.VMName, snap: sb.HibernateSnap, tenant: sb.Tenant, sb: sb, holds: m.cancelVolumeRun(sb)})
-			delete(m.claimed, id)
-			m.tenantDelta(sb.Tenant, -1)
+			m.dropClaimLocked(sb)
 			dropped = append(dropped, id)
 		}
 	}
@@ -582,8 +587,7 @@ func (m *Manager) reapOnce(ctx context.Context) {
 				continue
 			}
 			m.pendingCks[v.ck] = struct{}{}
-			delete(m.claimed, v.id)
-			m.tenantDelta(v.tenant, -1)
+			m.dropClaimLocked(v.sb)
 			purgeCks = append(purgeCks, v.ck)
 			purged = append(purged, v.id)
 		}
@@ -603,9 +607,8 @@ func (m *Manager) reapOnce(ctx context.Context) {
 			if v.action == reapArchive || v.action == reapPause {
 				delete(m.archiving, v.id) // never removed from m.claimed
 			} else {
-				m.claimed[v.id] = v.sb // roll back so memory matches the still-durable claim
+				m.addClaimLocked(v.sb) // roll back so memory matches the still-durable claim
 				m.restoreVolumeHolds(v.sb, v.holds)
-				m.tenantDelta(v.tenant, 1)
 				delete(m.pendingCks, v.ck)
 				restored = append(restored, v.sb)
 			}
@@ -617,7 +620,7 @@ func (m *Manager) reapOnce(ctx context.Context) {
 				logger.Warnf(ctx, "clear archive ck %s: %v", ck, clearErr)
 			}
 		}
-		m.recommit(ctx, rb)
+		m.store.recommit(ctx, rb)
 		logger.Error(ctx, saveErr, "persist reap; rolled back")
 		return
 	}
@@ -680,29 +683,6 @@ func (m *Manager) purgeArchiveCk(ctx context.Context, id, ck, tenant string) {
 	m.recordUsage(ctx, usageEvent{Event: "archive_delete", ID: id, Reference: ck, Tenant: tenant})
 }
 
-// recommit keeps claims.json catching up with the store: one retrier at a time writes the current state until it is durable and nothing newer is pending.
-func (m *Manager) recommit(ctx context.Context, snap claimSnapshot) {
-	if !m.recommitting.CompareAndSwap(false, true) {
-		return
-	}
-	go func() {
-		backoff := recommitBackoff
-		for {
-			err := m.store.commit(snap)
-			if err == nil {
-				m.recommitting.Store(false)
-				if snap = m.store.mark(); !m.store.pending(snap) || !m.recommitting.CompareAndSwap(false, true) {
-					return
-				}
-				continue
-			}
-			log.WithFunc("pool.recommit").Error(ctx, err, "persist claims")
-			time.Sleep(backoff)
-			backoff = min(backoff*2, recommitMaxBackoff)
-		}
-	}()
-}
-
 func (m *Manager) commitIfLive(ctx context.Context, sb *types.Sandbox, mutate func()) (bool, error) {
 	m.mu.Lock()
 	live := m.claimed[sb.ID] == sb
@@ -716,7 +696,7 @@ func (m *Manager) commitIfLive(ctx context.Context, sb *types.Sandbox, mutate fu
 		return false, nil
 	}
 	if err := m.store.commit(js); err != nil {
-		m.recommit(ctx, js)
+		m.store.recommit(ctx, js)
 		return true, err
 	}
 	return true, nil

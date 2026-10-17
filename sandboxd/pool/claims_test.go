@@ -28,7 +28,7 @@ func TestRecommitKeepsOneRetrierWhileWritesFail(t *testing.T) {
 		m.mu.Lock()
 		snap := m.store.set(sb)
 		m.mu.Unlock()
-		m.recommit(t.Context(), snap)
+		m.store.recommit(t.Context(), snap)
 	}
 	if grown := runtime.NumGoroutine() - before; grown > 2 {
 		t.Fatalf("%d goroutines for 50 failed persists, want one retrier", grown)
@@ -39,7 +39,7 @@ func TestRecommitKeepsOneRetrierWhileWritesFail(t *testing.T) {
 	}
 	waitFor(t, func() bool {
 		_, err := os.Stat(m.store.path)
-		return err == nil && !m.recommitting.Load()
+		return err == nil && !m.store.recommitting.Load()
 	})
 }
 
@@ -57,7 +57,7 @@ func TestRecommitDrainsAChangeItWasTooBusyToSee(t *testing.T) {
 		return m.store.set(sb)
 	}
 
-	m.recommit(t.Context(), change())
+	m.store.recommit(t.Context(), change())
 	waitFor(t, func() bool {
 		if m.store.writeMu.TryLock() {
 			m.store.writeMu.Unlock()
@@ -65,7 +65,7 @@ func TestRecommitDrainsAChangeItWasTooBusyToSee(t *testing.T) {
 		}
 		return true
 	})
-	m.recommit(t.Context(), change())
+	m.store.recommit(t.Context(), change())
 
 	r, err := os.Open(fifo)
 	if err != nil {
@@ -73,7 +73,7 @@ func TestRecommitDrainsAChangeItWasTooBusyToSee(t *testing.T) {
 	}
 	_, _ = io.Copy(io.Discard, r)
 	_ = r.Close()
-	waitFor(t, func() bool { return !m.recommitting.Load() && !m.store.pending(m.store.mark()) })
+	waitFor(t, func() bool { return !m.store.recommitting.Load() && !m.store.pending(m.store.mark()) })
 }
 
 func TestStoreRoundTrip(t *testing.T) {

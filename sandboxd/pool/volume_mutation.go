@@ -322,7 +322,7 @@ func (m *Manager) commitVolumeApplied(ctx context.Context, sb *types.Sandbox, ru
 
 func (m *Manager) commitVolumeRun(ctx context.Context, sb *types.Sandbox, run *volumeRun, js claimSnapshot) error {
 	if err := m.store.commit(js); err != nil {
-		m.recommit(ctx, js)
+		m.store.recommit(ctx, js)
 		return fmt.Errorf("persist volumes: %w", err)
 	}
 	m.mu.Lock()
