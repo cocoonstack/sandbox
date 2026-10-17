@@ -46,7 +46,7 @@ func TestLiveVolumeConvergesMountAndDetach(t *testing.T) {
 	}
 	fake.mu.Lock()
 	defer fake.mu.Unlock()
-	if len(fake.execCalls) != 3 || fake.execCalls[2][0] != "umount" {
+	if changes := guestChanges(fake.execCalls); len(changes) != 3 || changes[2][0] != "umount" {
 		t.Fatalf("expected one mkdir/mount/umount, got %v", fake.execCalls)
 	}
 	args, err := os.ReadFile(os.Getenv("COCOON_TEST_ATTACH_ARGS"))
@@ -90,6 +90,31 @@ func TestLiveMountUnderSymlinkedParentConvergesAndDetaches(t *testing.T) {
 	unmounted := slices.ContainsFunc(fake.execCalls, func(argv []string) bool { return argv[0] == "umount" })
 	if !unmounted || len(slices.DeleteFunc(slices.Clone(fake.execCalls), func(argv []string) bool { return argv[0] != "mount" })) != 1 {
 		t.Fatalf("want one mount and an unmount, got %v", fake.execCalls)
+	}
+}
+
+func TestLiveMountRefusesAnOccupiedPathBehindASymlink(t *testing.T) {
+	sock := sockPath(t)
+	fake := serveFakeSilkd(t, sock)
+	configureVolumeDevices(fake)
+	spec := liveDiskCLI(t, "")
+	fake.mu.Lock()
+	fake.serial["/sys/block/vdc/dev"] = []byte("8:32\n")
+	fake.serial["/proc/self/mountinfo"] = []byte(rootMountInfo + "2 1 8:48 / /home/u/ws/data ro - ext4 /dev/vdd ro\n")
+	fake.realpath = map[string]string{"/workspace/data": "/home/u/ws/data"}
+	fake.mu.Unlock()
+	e := New("cocoon", nil, nil, false, false, "")
+	if err := e.DiskAttach(t.Context(), "sbx-1", spec); err != nil {
+		t.Fatal(err)
+	}
+	err := e.MountLiveVolume(t.Context(), sock, spec.Name, "/workspace/data", false)
+	if _, ok := errors.AsType[*VolumeMountConflict](err); !ok {
+		t.Fatalf("mounted over another device behind a symlink: %v", err)
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if slices.ContainsFunc(fake.execCalls, func(argv []string) bool { return argv[0] == "mount" }) {
+		t.Fatalf("mount ran over an occupied path: %v", fake.execCalls)
 	}
 }
 
@@ -144,8 +169,8 @@ func TestLiveAttachRejectsForeignMounts(t *testing.T) {
 			}
 			fake.mu.Lock()
 			defer fake.mu.Unlock()
-			if len(fake.execCalls) != 0 {
-				t.Fatalf("modified foreign mount: %v", fake.execCalls)
+			if changes := guestChanges(fake.execCalls); len(changes) != 0 {
+				t.Fatalf("modified foreign mount: %v", changes)
 			}
 		})
 	}
@@ -243,4 +268,8 @@ fi
 exit 2
 `)
 	return VolumeSpec{Name: "imagenet", Path: image}
+}
+
+func guestChanges(calls [][]string) [][]string {
+	return slices.DeleteFunc(slices.Clone(calls), func(argv []string) bool { return argv[0] == "realpath" })
 }

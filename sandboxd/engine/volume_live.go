@@ -120,14 +120,11 @@ func (e *Engine) volumeMounted(ctx context.Context, vsockSocket, device, mount s
 	if err != nil {
 		return false, err
 	}
-	target := mount
-	if slices.ContainsFunc(mounts, func(m volumeMount) bool { return m.devNum == devNum && m.path != mount }) {
-		resolved, err := e.silkdOutput(ctx, vsockSocket, "realpath", "-m", "--", mount)
-		if err != nil {
-			return false, fmt.Errorf("resolve volume mount %s: %w", mount, err)
-		}
-		target = strings.TrimSpace(string(resolved))
+	resolved, err := e.silkdOutput(ctx, vsockSocket, "realpath", "-m", "--", mount)
+	if err != nil {
+		return false, fmt.Errorf("resolve volume mount %s: %w", mount, err)
 	}
+	target := strings.TrimSpace(string(resolved))
 	matched := false
 	for _, entry := range mounts {
 		if entry.path != target {
