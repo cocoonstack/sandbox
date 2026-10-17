@@ -54,6 +54,7 @@ type claimDTO struct {
 	TAP            string             `json:"tap,omitempty"`
 	HibernateSnap  string             `json:"hibernate_snap,omitempty"`
 	PendingSnap    string             `json:"pending_snap,omitempty"`
+	ReaderSafe     bool               `json:"reader_safe,omitempty"`
 	ArchiveCk      string             `json:"archive_ck,omitempty"`
 	ArchiveEpoch   int64              `json:"archive_epoch,omitzero"`
 	ArchivePending string             `json:"archive_pending,omitempty"`
@@ -265,7 +266,7 @@ func dtoOf(sb *types.Sandbox) claimDTO {
 		PolicySource: sb.PolicySource, NoEgress: sb.NoEgress,
 		Tenant: sb.Tenant, EgressClass: sb.EgressClass, ClaimRef: sb.ClaimRef, Metadata: sb.Metadata, OnExpire: sb.OnExpire,
 		Volumes: slices.Clone(sb.Volumes), VolumesWant: volumesWantDTO(sb), Env: sb.Env, VsockSocket: sb.VsockSocket,
-		TAP: sb.TAP, HibernateSnap: sb.HibernateSnap, PendingSnap: sb.PendingSnap,
+		TAP: sb.TAP, HibernateSnap: sb.HibernateSnap, PendingSnap: sb.PendingSnap, ReaderSafe: sb.ReaderSafe,
 		ArchiveCk: sb.ArchiveCk, ArchiveEpoch: sb.ArchiveEpoch, ArchivePending: sb.ArchivePending, ReplicaCk: sb.ReplicaCk, ReplicaPending: sb.ReplicaPending, FromCheckpoint: sb.FromCheckpoint,
 		Restarts: sb.Restarts, RestartedAt: sb.RestartedAt, Failed: sb.Failed,
 	}

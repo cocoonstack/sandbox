@@ -571,6 +571,7 @@ type Sandbox struct {
 	HibernateSnap string `json:"hibernate_snap,omitempty"`
 	// PendingSnap is the journaled intent of a hibernate in flight, cleared by its commit.
 	PendingSnap string `json:"pending_snap,omitempty"`
+	ReaderSafe  bool   `json:"reader_safe,omitempty"`
 	// ArchiveCk names the store checkpoint holding an archived sandbox; empty means local.
 	ArchiveCk string `json:"archive_ck,omitempty"`
 	// ArchiveEpoch is the archive registry epoch this node last held for the claim; zero means no row.

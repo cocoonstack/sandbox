@@ -378,7 +378,7 @@ egress request) is not swept; the idle clock restarts when that connection ends.
 
 When the node configures a [`reader`](deploy.md#reading-sleeping-claims-without-waking-them),
 `Stat`, `ReadFile`, `ReadFileTo`, `ListDir` and `Pull` on a hibernated or archived handle are
-served without waking it, as of the last hibernate, and the handle's next call
+served without waking it, as of the guest `sync` just before the last hibernate, and the handle's next call
 that is anything else wakes the sandbox on the same connection.
 
 `WithArchiveOnExpire()` makes the lease's end archive the sandbox instead of

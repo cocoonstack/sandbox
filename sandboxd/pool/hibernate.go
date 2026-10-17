@@ -100,11 +100,17 @@ func (m *Manager) hibernateLocked(ctx context.Context, sb *types.Sandbox) error 
 		m.mu.Unlock()
 		return fmt.Errorf("hibernate %s: persist intent: %w", sb.ID, err)
 	}
+	readerSafe := false
 	if m.readers != nil {
-		if err := m.eng.SyncGuest(ctx, sb.VsockSocket); err != nil {
-			log.WithFunc("pool.hibernateLocked").Warnf(ctx, "sync %s before hibernate: %v", sb.ID, err)
+		err := m.eng.SyncGuest(ctx, sb.VsockSocket)
+		if err != nil {
+			log.WithFunc("pool.hibernateLocked").Warnf(ctx, "sync %s before hibernate, reads will wake it: %v", sb.ID, err)
 		}
+		readerSafe = err == nil
 	}
+	m.mu.Lock()
+	sb.ReaderSafe = readerSafe
+	m.mu.Unlock()
 	if hibErr := m.eng.Hibernate(ctx, sb.VMName, snap); hibErr != nil {
 		// the engine can report failure after the snapshot landed
 		adopted, resolveErr := m.settlePendingSnap(ctx, sb)
@@ -145,7 +151,7 @@ func (m *Manager) wakeOrRead(ctx context.Context, sb *types.Sandbox, readerOK bo
 	sb.Transition.Lock()
 	defer sb.Transition.Unlock()
 	if sb.ArchiveCk != "" {
-		if readerOK {
+		if readerOK && sb.ReaderSafe {
 			return "", ErrSleeping
 		}
 		return m.wakeArchived(ctx, sb)
@@ -168,7 +174,7 @@ func (m *Manager) wakeOrRead(ctx context.Context, sb *types.Sandbox, readerOK bo
 	if sb.Key.Net == types.NetEgress {
 		return "", fmt.Errorf("wake %s: egress lane cannot resume from hibernation", sb.ID)
 	}
-	if readerOK {
+	if readerOK && sb.ReaderSafe {
 		return "", ErrSleeping
 	}
 	if err := m.diskErr(); err != nil {
@@ -292,6 +298,7 @@ func (m *Manager) commitTransition(ctx context.Context, sb *types.Sandbox, snap,
 		sb.HibernateSnap = snap
 		sb.VsockSocket = sock
 		sb.PendingSnap = ""
+		sb.ReaderSafe = sb.ReaderSafe && snap != ""
 		if now := time.Now(); snap == "" && sb.OnExpire == types.ExpireArchive && !m.tenantGone(sb.Tenant) && now.After(sb.Deadline) {
 			sb.Deadline = now.Add(clampTTL(types.Seconds(sb.LeaseSeconds)))
 		}

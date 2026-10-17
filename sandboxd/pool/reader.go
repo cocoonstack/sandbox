@@ -201,7 +201,7 @@ func (m *Manager) readerSource(ctx context.Context, sb *types.Sandbox, r *reader
 func (m *Manager) captureSleeping(ctx context.Context, sb *types.Sandbox, r *reader) (archived bool, err error) {
 	sb.Transition.Lock()
 	defer sb.Transition.Unlock()
-	if sb.HibernateSnap == "" && sb.ArchiveCk == "" {
+	if (sb.HibernateSnap == "" && sb.ArchiveCk == "") || !sb.ReaderSafe {
 		return false, errNotSleeping
 	}
 	if sb.HibernateSnap == "" {
@@ -279,7 +279,7 @@ func (m *Manager) destroyReader(ctx context.Context, r *reader) {
 
 // sleepSource names a settled sleep's snapshot or record; callers hold m.mu.
 func sleepSource(sb *types.Sandbox) string {
-	if sb.Failed != "" || sb.PendingSnap != "" {
+	if sb.Failed != "" || sb.PendingSnap != "" || !sb.ReaderSafe {
 		return ""
 	}
 	return cmp.Or(sb.HibernateSnap, sb.ArchiveCk)

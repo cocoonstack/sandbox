@@ -497,6 +497,66 @@ func TestReaderOfAStaleSleepIsRetiredEvenWithAConnectionOpen(t *testing.T) {
 	}
 }
 
+func TestFailedPreHibernateSyncSendsReadsToTheWakePath(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		syncErr error
+		safe    bool
+	}{
+		{"sync ok", nil, true},
+		{"sync fails", errors.New("guest unreachable"), false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			eng := newFakeEngine()
+			readerExport(t, eng)
+			eng.syncErr = tt.syncErr
+			m := newReaderManager(t, eng)
+			seedReaderVMs(m, "sbx-reader-1")
+			sb := mustClaim(t, m, testKey)
+			hibernateClaim(t, m, sb)
+
+			if got, _ := newClaimStore(m.dataDir, false).load(); got[sb.ID] == nil || got[sb.ID].ReaderSafe != tt.safe {
+				t.Errorf("persisted reader_safe = %+v, want %t", got[sb.ID], tt.safe)
+			}
+			if got := m.SleepingSource(sb.ID, sb.Token); (got != "") != tt.safe {
+				t.Errorf("SleepingSource = %q with a safe sleep %t", got, tt.safe)
+			}
+			if tt.safe {
+				if _, _, err := m.WakeAgentSocketOrRead(t.Context(), sb.ID, sb.Token); !errors.Is(err, ErrSleeping) {
+					t.Fatalf("a safe sleep answered %v, want ErrSleeping", err)
+				}
+				return
+			}
+			if _, _, err := m.DialReader(t.Context(), sb.ID, sb.Token); !errors.Is(err, ErrNoReader) {
+				t.Errorf("DialReader of an unsafe sleep = %v, want ErrNoReader", err)
+			}
+			sock, done, err := m.WakeAgentSocketOrRead(t.Context(), sb.ID, sb.Token)
+			if err != nil || sock == "" {
+				t.Fatalf("a read of an unsafe sleep = %q, %v, want a wake", sock, err)
+			}
+			defer done()
+			if len(eng.restores) != 1 || len(eng.startedReaders) != 0 {
+				t.Errorf("restores=%v reader setups=%d, want the claim woken and no reader", eng.restores, len(eng.startedReaders))
+			}
+		})
+	}
+}
+
+func TestWakeClearsReaderSafe(t *testing.T) {
+	eng := newFakeEngine()
+	m := newReaderManager(t, eng)
+	sb := mustClaim(t, m, testKey)
+	hibernateClaim(t, m, sb)
+	if _, done, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
+		t.Fatalf("wake: %v", err)
+	} else {
+		done()
+	}
+	if got, _ := newClaimStore(m.dataDir, false).load(); got[sb.ID] == nil || got[sb.ID].ReaderSafe {
+		t.Errorf("persisted claim after a wake = %+v, want reader_safe cleared", got[sb.ID])
+	}
+}
+
 func TestReaderOffWakesAsBefore(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)

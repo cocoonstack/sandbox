@@ -1225,6 +1225,7 @@ type fakeEngine struct {
 	readerDials                       []string
 	startReaderErr                    error
 	readerDialErr                     error
+	syncErr                           error
 	caInstalls                        []string
 	warmups                           [][]string
 	warmupSocks                       []string
@@ -1683,7 +1684,7 @@ func (f *fakeEngine) SyncGuest(_ context.Context, vsockSocket string) error {
 	defer f.mu.Unlock()
 	f.syncs = append(f.syncs, vsockSocket)
 	f.volumeOps = append(f.volumeOps, "sync")
-	return nil
+	return f.syncErr
 }
 
 func (f *fakeEngine) StartReader(_ context.Context, vsockSocket string, d engine.ReaderDisks) error {

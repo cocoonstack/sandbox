@@ -227,9 +227,12 @@ the claim's bytes never reach a shared VM or the host kernel.
 
 Whenever a reader cannot be built (no warm reader VM, the disk reserve is low,
 a layer blob missing on this node, an image without `silkd` at that path), the
-call wakes the claim as it does without the feature. Hibernating a claim then
-runs a guest `sync` first, so the snapshot's disk holds what the page cache
-still held. Reads show the claim as of that hibernate.
+call wakes the claim as it does without the feature. With the feature on,
+every hibernate runs a guest `sync` right before the pause, and a reader shows
+the disk as of that `sync`: a write the guest makes in the instant between the
+`sync` and the pause is visible only after a wake. A hibernate whose `sync`
+fails or times out is marked not reader-safe, as is any sleep that began before
+the feature was on, and its reads wake the claim as without the feature.
 
 ### Dataset volumes
 

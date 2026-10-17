@@ -57,7 +57,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 			sb.PendingSnap = ""
 		case ok && sb.PendingSnap != "" && (snapsErr != nil || slices.Contains(snaps, sb.PendingSnap)):
 			// the journaled intent names the wake image, so adopt it when the snapshot is there
-			sb.HibernateSnap, sb.PendingSnap = sb.PendingSnap, ""
+			sb.HibernateSnap, sb.PendingSnap, sb.ReaderSafe = sb.PendingSnap, "", false
 			adopted = append(adopted, sb)
 		case ok:
 			// the VMM died with the host or on its own; the liveness pass restarts or fails it
