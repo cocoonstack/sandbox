@@ -300,9 +300,9 @@ type execManager struct {
 	wake func(context.Context, string, string) (string, error)
 }
 
-func (m *execManager) WakeAgentSocket(ctx context.Context, id, token string) (string, func(), error) {
+func (m *execManager) WakeAgentSocket(ctx context.Context, id, token string) (string, <-chan struct{}, func(), error) {
 	sock, err := m.wake(ctx, id, token)
-	return sock, func() {}, err
+	return sock, nil, func() {}, err
 }
 
 func postExec(t *testing.T, ts *httptest.Server, body string) (int, []byte) {

@@ -24,23 +24,24 @@ func (m *Manager) Hibernate(ctx context.Context, id string, cred Cred) error {
 	return m.hibernateLocked(ctx, sb)
 }
 
-// WakeAgentSocket resolves a data-plane connection's guest socket; the returned func ends the hold it takes.
-func (m *Manager) WakeAgentSocket(ctx context.Context, id, token string) (string, func(), error) {
+// WakeAgentSocket resolves a data-plane connection's guest socket; the returned func ends the hold it takes, and the channel closes when the stream must end.
+func (m *Manager) WakeAgentSocket(ctx context.Context, id, token string) (string, <-chan struct{}, func(), error) {
 	sb, ok := m.claim(id, token)
 	if !ok {
-		return "", nil, ErrUnknownSandbox
+		return "", nil, nil, ErrUnknownSandbox
 	}
-	if m.leaseFenced(sb) {
-		return "", nil, ErrLeaseLost
+	fenced, err := m.fenceWatch(sb)
+	if err != nil {
+		return "", nil, nil, err
 	}
 	sb.Touch()
 	sb.Hold()
 	sock, err := m.wakeResolved(ctx, sb)
 	if err != nil {
 		sb.Unhold()
-		return "", nil, err
+		return "", nil, nil, err
 	}
-	return sock, sb.Unhold, nil
+	return sock, fenced, sb.Unhold, nil
 }
 
 // hibernateLocked is Hibernate's body; the caller holds sb.Transition.

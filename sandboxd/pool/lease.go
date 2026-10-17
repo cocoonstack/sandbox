@@ -2,8 +2,10 @@ package pool
 
 import (
 	"context"
+	"io"
 	"maps"
 	"slices"
+	"sync"
 	"time"
 
 	"github.com/projecteru2/core/log"
@@ -46,6 +48,7 @@ func (m *Manager) renewLease(ctx context.Context, fence *time.Timer) {
 
 func (m *Manager) fence(ctx context.Context) {
 	if !m.fenced.Swap(true) {
+		close(*m.fenceCh.Load())
 		log.WithFunc("pool.fence").Warnf(ctx, "node lease not renewed for %s; replicated claims answer 503 until it is", m.lease.ttl-m.lease.margin)
 	}
 }
@@ -76,10 +79,34 @@ func (m *Manager) unfence(ctx context.Context) {
 			sb.Transition.Unlock()
 		}
 	}
+	m.fenceCh.Store(new(make(chan struct{})))
 	m.fenced.Store(false)
 	logger.Info(ctx, "node lease renewed; replicated claims are served again")
 }
 
-func (m *Manager) leaseFenced(sb *types.Sandbox) bool {
-	return m.fenced.Load() && m.replicaOf(sb) != ""
+// fenceWatch gates sb at resolution and returns the channel that closes when its streams must end; nil for an unreplicated claim.
+func (m *Manager) fenceWatch(sb *types.Sandbox) (<-chan struct{}, error) {
+	if !sb.Replicated() {
+		return nil, nil
+	}
+	if m.fenced.Load() {
+		return nil, ErrLeaseLost
+	}
+	return *m.fenceCh.Load(), nil
+}
+
+// CloseOnFence closes c when fenced closes; stop ends the watch.
+func CloseOnFence(fenced <-chan struct{}, c io.Closer) (stop func()) {
+	if fenced == nil {
+		return func() {}
+	}
+	stopped := make(chan struct{})
+	go func() {
+		select {
+		case <-fenced:
+			_ = c.Close()
+		case <-stopped:
+		}
+	}()
+	return sync.OnceFunc(func() { close(stopped) })
 }

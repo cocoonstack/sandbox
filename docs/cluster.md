@@ -297,12 +297,23 @@ checkpoint store and keeps each claim's registry row on the latest snapshot:
   node took, or took and finished, are dropped with their VMs. A node that
   starts fenced and lifts the fence with its first renewal. The margin makes
   the fence close 3 seconds before another node may adopt, so no moment has two
-  serving copies, partitions included. Connections already open when the fence
-  closes are not cut, and end when the client closes them.
+  serving copies, partitions included. When the fence closes, every open
+  stream of a replicated claim on the node is closed too: the agent relay
+  (including parked keep-alive relays, whose later RPCs never pass the
+  resolution gate), the exec call, port relays and preview requests. A client
+  retries and meets the 503 until the lease is back or the claim moved.
+  Streams of claims that are not replicated stay open.
+- **Availability.** The design chooses consistency over availability for
+  replicated claims. A registry outage longer than the fence threshold (12
+  seconds) stops service of replicated claims on every node until PostgreSQL
+  returns, because no node can prove it still owns them. Claims that are not
+  replicated, and archived claims, are unaffected.
 
 A replica costs, per claim per interval, one capture pause, one upload, one
 registry read, one write and one delete; the node's own cost is one scan of its
-claims every 5 seconds. The claim path and the data plane gain only a flag read.
+claims every 5 seconds. Resolving a claim for a stream gains one atomic load (two for a
+replicated claim); a replicated stream also holds one watcher goroutine.
+Nothing runs per frame.
 
 ## Templates on a cluster
 

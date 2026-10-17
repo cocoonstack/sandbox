@@ -29,7 +29,7 @@ func TestExpiryArchiveHibernatesAndArchivesARunningClaim(t *testing.T) {
 		if ck == "" || !deadline.IsZero() || !live || action != types.ExpireArchive {
 			t.Fatalf("round %d: archive %q deadline %v live %t action %q, want an archive kept forever with the action", round, ck, deadline, live, action)
 		}
-		if _, _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
+		if _, _, _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
 			t.Fatalf("round %d: wake: %v", round, err)
 		}
 		m.mu.Lock()
@@ -175,7 +175,7 @@ func TestExpiryArchiveWakeBeforeTheExportGrantsAFreshLease(t *testing.T) {
 	if err := m.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
 		t.Fatalf("hibernate: %v", err)
 	}
-	if _, _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
+	if _, _, _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
 		t.Fatalf("wake: %v", err)
 	}
 	m.mu.Lock()

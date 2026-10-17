@@ -69,8 +69,8 @@ func (s *Server) handleAgent(w http.ResponseWriter, r *http.Request) {
 }
 
 // wakeGuest dials the sandbox's silkd, waking a hibernated VM first; on failure it has already answered the request.
-func (s *Server) wakeGuest(ctx context.Context, w http.ResponseWriter, id, token string) (guest net.Conn, done func(), ok bool) {
-	sock, done, err := s.mgr.WakeAgentSocket(ctx, id, token)
+func (s *Server) wakeGuest(ctx context.Context, w http.ResponseWriter, id, token string) (guest net.Conn, release func(), ok bool) {
+	sock, fenced, done, err := s.mgr.WakeAgentSocket(ctx, id, token)
 	switch {
 	case writePoolErr(w, err):
 		return nil, nil, false
@@ -86,7 +86,8 @@ func (s *Server) wakeGuest(ctx context.Context, w http.ResponseWriter, id, token
 		writeErr(w, http.StatusBadGateway, "guest agent unreachable")
 		return nil, nil, false
 	}
-	return guest, done, true
+	stop := pool.CloseOnFence(fenced, guest)
+	return guest, func() { stop(); done() }, true
 }
 
 func (s *Server) relay(ctx context.Context, id string, client net.Conn, clientBuf *bufio.Reader, guest net.Conn) {

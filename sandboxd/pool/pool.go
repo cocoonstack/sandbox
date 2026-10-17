@@ -348,6 +348,7 @@ type Manager struct {
 	// fenced gates replicated claims while the lease is overdue; replicas belongs to the pass holding replicating.
 	lease       leaseTiming
 	fenced      atomic.Bool
+	fenceCh     atomic.Pointer[chan struct{}]
 	replicating atomic.Bool
 	replicas    map[string]replicaState
 
@@ -513,6 +514,9 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 	m.configSeedHash = poolSeedHash(cfg.Pools)
 	if m.archives != nil {
 		m.nodeID = cfg.Mesh.ID()
+		closed := make(chan struct{})
+		close(closed)
+		m.fenceCh.Store(&closed)
 		m.fenced.Store(true)
 	}
 	if err := m.adoptPools(ctx); err != nil {

@@ -322,7 +322,7 @@ func TestReplicaRestartKeepsItsRowAndStaysFencedUntilALeaseRenews(t *testing.T) 
 	if !rowOK || rec.Epoch != before.Epoch || restarted.replicaOf(held) != ck || !ckExists(t, restarted, ck) {
 		t.Errorf("row %+v present %v, replica %q, ck kept %v, want the row and replica kept", rec, rowOK, restarted.replicaOf(held), ckExists(t, restarted, ck))
 	}
-	if _, _, err := restarted.WakeAgentSocket(t.Context(), sb.ID, sb.Token); !errors.Is(err, ErrLeaseLost) {
+	if _, _, _, err := restarted.WakeAgentSocket(t.Context(), sb.ID, sb.Token); !errors.Is(err, ErrLeaseLost) {
 		t.Errorf("serving before the first renewal: %v, want ErrLeaseLost", err)
 	}
 }
@@ -396,7 +396,7 @@ func TestReplicaRestartDropsAClaimTheAdopterWokeAndFinished(t *testing.T) {
 	if adopted, err := b.AdoptArchived(t.Context(), sb.ID, sb.Token); err != nil || !adopted {
 		t.Fatalf("adopt: %v %v", adopted, err)
 	}
-	if _, _, err := b.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
+	if _, _, _, err := b.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
 		t.Fatalf("adopter's wake: %v", err)
 	}
 
@@ -508,7 +508,7 @@ func TestReplicaAdoptionWakesTheClaimFromTheLastReplica(t *testing.T) {
 	if moved.ArchiveCk != ck {
 		t.Fatalf("adopted claim names %q, want the replica %q", moved.ArchiveCk, ck)
 	}
-	if _, _, err := b.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
+	if _, _, _, err := b.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
 		t.Fatalf("adopter's wake: %v", err)
 	}
 	if got := b.eng.(*fakeEngine).cloneCount(); got != 1 {

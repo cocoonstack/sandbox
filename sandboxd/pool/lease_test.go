@@ -3,6 +3,8 @@ package pool
 import (
 	"context"
 	"errors"
+	"net"
+	"os"
 	"sync/atomic"
 	"testing"
 	"testing/synctest"
@@ -59,7 +61,7 @@ func TestLeaseOverdueRenewalFencesReplicatedClaimsOnly(t *testing.T) {
 		assertServed(t, a, replicated.ID, replicated.Token)
 		time.Sleep(2 * time.Second)
 		synctest.Wait()
-		if _, _, err := a.WakeAgentSocket(ctx, replicated.ID, replicated.Token); !errors.Is(err, ErrLeaseLost) {
+		if _, _, _, err := a.WakeAgentSocket(ctx, replicated.ID, replicated.Token); !errors.Is(err, ErrLeaseLost) {
 			t.Errorf("relay or exec of a replicated claim past the fence: %v, want ErrLeaseLost", err)
 		}
 		if _, err := a.DialPort(ctx, replicated.ID, Cred{Token: replicated.Token}, 80); !errors.Is(err, ErrLeaseLost) {
@@ -77,6 +79,95 @@ func TestLeaseOverdueRenewalFencesReplicatedClaimsOnly(t *testing.T) {
 		time.Sleep(leaseRenew)
 		synctest.Wait()
 		assertServed(t, a, replicated.ID, replicated.Token)
+	})
+}
+
+func TestLeaseFenceClosesOpenStreamsOfReplicatedClaimsOnly(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		c := newReplicaCluster(t)
+		a := c.node(t, "a", t.TempDir(), keepAnHour)
+		cut := &cutRegistry{Registry: c.reg}
+		a.archives = cut
+		replicated, plain := mustClaim(t, a, testKey), mustClaim(t, a, testKey)
+		replicateNow(t, a, replicated)
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		go a.keepLease(ctx)
+		synctest.Wait()
+
+		replicatedCred, plainCred := Cred{Token: replicated.Token}, Cred{Token: plain.Token}
+		a.eng.(*fakeEngine).guestDial = func() (net.Conn, error) {
+			host, _ := net.Pipe()
+			return host, nil
+		}
+		streams := map[string]net.Conn{}
+		defer func() {
+			for _, conn := range streams {
+				_ = conn.Close()
+			}
+		}()
+		for name, dial := range map[string]func() (net.Conn, error){
+			"port":    func() (net.Conn, error) { return a.DialPort(ctx, replicated.ID, replicatedCred, 80) },
+			"passive": func() (net.Conn, error) { return a.DialPort(ctx, replicated.ID, Cred{Operator: true}, 80) },
+			"preview": func() (net.Conn, error) { return a.PreviewDial(ctx, replicated.ID, 80) },
+			"plain":   func() (net.Conn, error) { return a.DialPort(ctx, plain.ID, plainCred, 80) },
+		} {
+			conn, err := dial()
+			if err != nil {
+				t.Fatalf("open %s: %v", name, err)
+			}
+			streams[name] = conn
+		}
+		_, relayFenced, relayDone, err := a.WakeAgentSocket(ctx, replicated.ID, replicated.Token)
+		if err != nil {
+			t.Fatalf("relay of the replicated claim: %v", err)
+		}
+		defer relayDone()
+		_, plainFenced, plainDone, err := a.WakeAgentSocket(ctx, plain.ID, plain.Token)
+		if err != nil || plainFenced != nil {
+			t.Fatalf("relay of the plain claim: fence channel %v, %v, want none", plainFenced, err)
+		}
+		defer plainDone()
+
+		cut.cut.Store(true)
+		time.Sleep(leaseTTL - leaseMargin + time.Second)
+		synctest.Wait()
+		select {
+		case <-relayFenced:
+		default:
+			t.Error("the replicated claim's relay was not told to end")
+		}
+		for name, conn := range streams {
+			_ = conn.SetReadDeadline(time.Now().Add(time.Second))
+			_, readErr := conn.Read(make([]byte, 1))
+			closed := !errors.Is(readErr, os.ErrDeadlineExceeded)
+			if closed != (name != "plain") {
+				t.Errorf("%s stream closed=%v (%v) after the fence, want closed=%v", name, closed, readErr, name != "plain")
+			}
+		}
+
+		cut.cut.Store(false)
+		time.Sleep(leaseRenew)
+		synctest.Wait()
+		conn, err := a.DialPort(ctx, replicated.ID, replicatedCred, 80)
+		if err != nil {
+			t.Fatalf("a new stream after the fence lifted: %v", err)
+		}
+		defer conn.Close()
+		_ = conn.SetReadDeadline(time.Now().Add(time.Second))
+		if _, readErr := conn.Read(make([]byte, 1)); !errors.Is(readErr, os.ErrDeadlineExceeded) {
+			t.Errorf("the new stream after unfence: %v, want it open", readErr)
+		}
+		_, fresh, done, err := a.WakeAgentSocket(ctx, replicated.ID, replicated.Token)
+		if err != nil {
+			t.Fatalf("relay after the fence lifted: %v", err)
+		}
+		defer done()
+		select {
+		case <-fresh:
+			t.Error("the fence channel after unfence is already closed")
+		default:
+		}
 	})
 }
 
@@ -105,7 +196,7 @@ func TestLeaseAdoptionWaitsOutTheFenceAndTheOldOwnerDropsItsCopy(t *testing.T) {
 				cut.cut.Store(true)
 				time.Sleep(leaseTTL - leaseMargin + time.Second)
 				synctest.Wait()
-				if _, _, err := a.WakeAgentSocket(ctx, sb.ID, sb.Token); !errors.Is(err, ErrLeaseLost) {
+				if _, _, _, err := a.WakeAgentSocket(ctx, sb.ID, sb.Token); !errors.Is(err, ErrLeaseLost) {
 					t.Fatalf("the cut-off owner past its fence: %v, want ErrLeaseLost", err)
 				}
 				if adopted, err := b.AdoptArchived(ctx, sb.ID, sb.Token); err != nil || adopted {
@@ -117,7 +208,7 @@ func TestLeaseAdoptionWaitsOutTheFenceAndTheOldOwnerDropsItsCopy(t *testing.T) {
 					t.Fatalf("adoption after the lease expired: %v %v, want adopted", adopted, err)
 				}
 				if tt.wakeBefore {
-					if _, _, err := b.WakeAgentSocket(ctx, sb.ID, sb.Token); err != nil {
+					if _, _, _, err := b.WakeAgentSocket(ctx, sb.ID, sb.Token); err != nil {
 						t.Fatalf("adopter's wake: %v", err)
 					}
 				}
@@ -131,7 +222,7 @@ func TestLeaseAdoptionWaitsOutTheFenceAndTheOldOwnerDropsItsCopy(t *testing.T) {
 				if a.fenced.Load() {
 					t.Error("the old owner stays fenced after its lease renewed")
 				}
-				if _, _, err := b.WakeAgentSocket(ctx, sb.ID, sb.Token); err != nil {
+				if _, _, _, err := b.WakeAgentSocket(ctx, sb.ID, sb.Token); err != nil {
 					t.Errorf("adopter's wake after the old owner dropped its copy: %v", err)
 				}
 			})
@@ -160,7 +251,7 @@ func (r *cutRegistry) Rows(ctx context.Context, ids []string) (map[string]archiv
 
 func assertServed(t *testing.T, m *Manager, id, token string) {
 	t.Helper()
-	_, done, err := m.WakeAgentSocket(t.Context(), id, token)
+	_, _, done, err := m.WakeAgentSocket(t.Context(), id, token)
 	if err != nil {
 		t.Fatalf("serving %s: %v", id, err)
 	}

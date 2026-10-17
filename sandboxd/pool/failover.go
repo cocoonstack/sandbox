@@ -458,6 +458,7 @@ func (m *Manager) fenceArchived(ctx context.Context, claims map[string]*types.Sa
 				drop = true
 			case ok && !rec.Consumed:
 				sb.ReplicaCk, sb.ArchiveEpoch = rec.Checkpoint, rec.Epoch
+				sb.SyncReplicated()
 			}
 		case sb.ArchivePending != "" || ok && !rec.Consumed:
 			moved, err := m.settleIntent(ctx, id, sb.ArchivePending, rec, ok)

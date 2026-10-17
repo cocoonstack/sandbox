@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"slices"
 	"strings"
 	"testing"
@@ -135,6 +136,36 @@ func TestRelayClientDisconnectClosesGuest(t *testing.T) {
 	case <-guestClosed:
 	case <-time.After(3 * time.Second):
 		t.Fatal("guest side not closed after client disconnect")
+	}
+}
+
+func TestRelayEndsWhenItsClaimIsFenced(t *testing.T) {
+	relayWithFence := func(fenced <-chan struct{}) (net.Conn, *bufio.Reader) {
+		dialer := &fakeDialer{dial: func(context.Context, string) (net.Conn, error) {
+			relayEnd, guestEnd := net.Pipe()
+			go func() { _, _ = io.Copy(io.Discard, guestEnd) }()
+			return relayEnd, nil
+		}}
+		srv := New("", "node:7777", &fakeManager{fenced: fenced}, dialer, nil, nil, nil, nil)
+		ts := httptest.NewServer(srv.Handler())
+		t.Cleanup(func() {
+			srv.CloseRelays()
+			ts.Close()
+		})
+		return upgradeConn(t, ts)
+	}
+	fenced := make(chan struct{})
+	conn, r := relayWithFence(fenced)
+	plainConn, plainR := relayWithFence(nil)
+	close(fenced)
+
+	_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	if _, err := r.ReadByte(); !errors.Is(err, io.EOF) {
+		t.Errorf("fenced relay read: %v, want EOF", err)
+	}
+	_ = plainConn.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
+	if _, err := plainR.ReadByte(); !errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Errorf("unreplicated relay read: %v, want it still open", err)
 	}
 }
 

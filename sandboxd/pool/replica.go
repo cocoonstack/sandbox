@@ -118,7 +118,10 @@ func (m *Manager) replicate(ctx context.Context, sb *types.Sandbox) error {
 		return fmt.Errorf("replicate %s: registry: %w", sb.ID, err)
 	}
 	var prev string
-	live, _ := m.commitIfLive(ctx, sb, func() { prev, sb.ReplicaCk, sb.ArchiveEpoch = sb.ReplicaCk, ckID, epoch })
+	live, _ := m.commitIfLive(ctx, sb, func() {
+		prev, sb.ReplicaCk, sb.ArchiveEpoch = sb.ReplicaCk, ckID, epoch
+		sb.SyncReplicated()
+	})
 	if !live {
 		m.abandonArchive(ctx, sb, epoch, ckID)
 		return errWokeMeanwhile
@@ -144,7 +147,10 @@ func (m *Manager) dropReplica(ctx context.Context, sb *types.Sandbox) error {
 		return err
 	}
 	var ck string
-	live, _ := m.commitIfLive(ctx, sb, func() { ck, sb.ReplicaCk = sb.ReplicaCk, "" })
+	live, _ := m.commitIfLive(ctx, sb, func() {
+		ck, sb.ReplicaCk = sb.ReplicaCk, ""
+		sb.SyncReplicated()
+	})
 	if !live {
 		return ErrUnknownSandbox
 	}

@@ -32,7 +32,7 @@ func TestReconcileJournalsAnAdoptedHibernate(t *testing.T) {
 	if err := restarted.Reconcile(t.Context()); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
-	if _, _, err := restarted.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
+	if _, _, _, err := restarted.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
 		t.Fatalf("wake: %v", err)
 	}
 	if got, want := usageEventsOf(t, restarted, sb.ID), "claim,hibernate,wake"; got != want {

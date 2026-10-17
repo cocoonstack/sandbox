@@ -226,8 +226,9 @@ func (m *Manager) dialPort(ctx context.Context, id string, cred Cred, port uint1
 	if !ok {
 		return nil, ErrUnknownSandbox
 	}
-	if m.leaseFenced(sb) {
-		return nil, ErrLeaseLost
+	fenced, err := m.fenceWatch(sb)
+	if err != nil {
+		return nil, err
 	}
 	sb.Touch()
 	m.recordAudit(ctx, id, auditFrame{Op: op, Port: port})
@@ -242,7 +243,8 @@ func (m *Manager) dialPort(ctx context.Context, id string, cred Cred, port uint1
 		sb.Unhold()
 		return nil, err
 	}
-	return &heldConn{Conn: conn, release: sync.OnceFunc(sb.Unhold)}, nil
+	stop := CloseOnFence(fenced, conn)
+	return &heldConn{Conn: conn, release: sync.OnceFunc(func() { stop(); sb.Unhold() })}, nil
 }
 
 func (m *Manager) dialPassive(ctx context.Context, id string, port uint16) (net.Conn, error) {
@@ -250,8 +252,9 @@ func (m *Manager) dialPassive(ctx context.Context, id string, port uint16) (net.
 	if !ok {
 		return nil, ErrUnknownSandbox
 	}
-	if m.leaseFenced(sb) {
-		return nil, ErrLeaseLost
+	fenced, err := m.fenceWatch(sb)
+	if err != nil {
+		return nil, err
 	}
 	if !sb.Transition.TryLock() {
 		return nil, ErrPaused
@@ -274,7 +277,8 @@ func (m *Manager) dialPassive(ctx context.Context, id string, port uint16) (net.
 		sb.UnholdIdle()
 		return nil, err
 	}
-	return &heldConn{Conn: conn, release: sync.OnceFunc(sb.UnholdIdle)}, nil
+	stop := CloseOnFence(fenced, conn)
+	return &heldConn{Conn: conn, release: sync.OnceFunc(func() { stop(); sb.UnholdIdle() })}, nil
 }
 
 // releaseResolved re-checks under m.mu that sb is still the live claim: no double teardown.

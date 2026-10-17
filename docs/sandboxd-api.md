@@ -960,8 +960,8 @@ must forward them too (Go's `httputil.ReverseProxy` drops them; Caddy forwards
 them). 426 without the upgrade header, 404 unknown sandbox, 409 a failed
 sandbox, 502 guest unreachable, 503 `lease lost; retry` for a replicated claim
 while its node's lease is overdue (see
-[running claims](cluster.md#running-claims-across-node-loss)). A relay already
-open when the lease turns overdue is not cut.
+[running claims](cluster.md#running-claims-across-node-loss)). A relay of a
+replicated claim already open when the lease turns overdue is closed.
 
 ## GET /v1/sandboxes/{id}/ports/{port}
 

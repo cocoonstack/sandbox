@@ -2484,6 +2484,7 @@ type fakeManager struct {
 	socket               func(id, token string) (string, error)
 	adopt                func(id, token string) (bool, error)
 	dialPort             func(id, token string, port uint16) (net.Conn, error)
+	fenced               <-chan struct{}
 	hibernate            sandboxVerbFunc
 	wake                 sandboxVerbFunc
 	renew                func(id, token string, ttl time.Duration) (time.Time, error)
@@ -2597,9 +2598,9 @@ func (f *fakeManager) AdoptArchived(_ context.Context, id, token string) (bool, 
 	return f.adopt(id, token)
 }
 
-func (f *fakeManager) WakeAgentSocket(_ context.Context, id, token string) (string, func(), error) {
+func (f *fakeManager) WakeAgentSocket(_ context.Context, id, token string) (string, <-chan struct{}, func(), error) {
 	sock, err := f.AgentSocket(id, token)
-	return sock, func() {}, err
+	return sock, f.fenced, func() {}, err
 }
 
 func (f *fakeManager) Renew(_ context.Context, id string, cred pool.Cred, ttl time.Duration, onExpire types.ExpireAction) (time.Time, error) {

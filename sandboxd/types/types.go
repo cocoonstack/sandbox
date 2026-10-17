@@ -599,6 +599,8 @@ type Sandbox struct {
 
 	// lastActivity is unix-nanos of the last data-plane connection, stamped lock-free.
 	lastActivity atomic.Int64
+	// replicated mirrors ReplicaCk != "", so the data plane reads it without the manager mutex.
+	replicated atomic.Bool
 	// open counts the data-plane connections held right now.
 	open atomic.Int32
 	// live is the env as of the last SetEnv, read by the egress proxy without the manager mutex.
@@ -616,6 +618,12 @@ func (s *Sandbox) TouchAt(t time.Time) { s.lastActivity.Store(t.UnixNano()) }
 
 // LastSeen returns the last data-plane activity time.
 func (s *Sandbox) LastSeen() time.Time { return time.Unix(0, s.lastActivity.Load()) }
+
+// SyncReplicated republishes the replica state to Replicated; callers hold the manager mutex.
+func (s *Sandbox) SyncReplicated() { s.replicated.Store(s.ReplicaCk != "") }
+
+// Replicated reports whether the claim's registry row names a replica.
+func (s *Sandbox) Replicated() bool { return s.replicated.Load() }
 
 // Hold registers an open data-plane connection; the idle sweep leaves a held sandbox alone.
 func (s *Sandbox) Hold() { s.open.Add(1) }

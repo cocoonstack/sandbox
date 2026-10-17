@@ -122,7 +122,7 @@ type Manager interface {
 	AgentSocket(id, token string) (string, error)
 	AdoptArchived(ctx context.Context, id, token string) (bool, error)
 	DialPort(ctx context.Context, id string, cred pool.Cred, port uint16) (net.Conn, error)
-	WakeAgentSocket(ctx context.Context, id, token string) (string, func(), error)
+	WakeAgentSocket(ctx context.Context, id, token string) (string, <-chan struct{}, func(), error)
 	SetPools(ctx context.Context, pools []config.PoolSpec) error
 	TenantByToken(ctx context.Context, token string) (*tenants.TenantRecord, error)
 	Tenants(ctx context.Context, after string, limit int) (pool.TenantPage, error)
