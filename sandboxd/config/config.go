@@ -414,17 +414,10 @@ func (c *Config) validate() error {
 	if c.CheckpointPeerHeal && c.APIToken == "" {
 		return fmt.Errorf("checkpoint_peer_heal requires api_token: without it resolveScope leaves the raw checkpoint blob GET reachable with no credential")
 	}
-	if err := c.validateEgressRouting(); err != nil {
-		return err
-	}
-	if err := c.validateMetaStore(); err != nil {
-		return err
-	}
-	if err := c.validateVolumes(); err != nil {
-		return err
-	}
-	if err := c.validateMesh(); err != nil {
-		return err
+	for _, check := range []func() error{c.validateNodeEgress, c.validateMetaStore, c.validateVolumes, c.validateMesh} {
+		if err := check(); err != nil {
+			return err
+		}
 	}
 	secrets, err := c.validateSecrets()
 	if err != nil {
@@ -589,7 +582,7 @@ func (c *Config) validateAttachment() error {
 	return validateShards(c.Networks, "networks", "conflist")
 }
 
-func (c *Config) validateEgressRouting() error {
+func (c *Config) validateNodeEgress() error {
 	if r := c.EgressConnRate; r != nil && (r.PerSecond <= 0 || r.Burst < 1) {
 		return fmt.Errorf("egress_conn_rate needs per_second above 0 and burst of at least 1, got %v and %d", r.PerSecond, r.Burst)
 	}
