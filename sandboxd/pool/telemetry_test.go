@@ -5,6 +5,7 @@ import (
 	"errors"
 	"maps"
 	"net/http"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"slices"
@@ -340,6 +341,39 @@ func TestEgressUsageEventNamesTheInjectedCredentials(t *testing.T) {
 	}
 	if ev.Event != "egress" || ev.Reference != "graph.example.com" || ev.Secret != "claim:FB" {
 		t.Errorf("usage event %+v, want egress to graph.example.com naming claim:FB", ev)
+	}
+}
+
+func TestEgressAuditNamesTenantAndEndsARelayedFrameCannot(t *testing.T) {
+	dir := t.TempDir()
+	m, err := NewManager(t.Context(), &config.Config{DataDir: dir, AuditLog: true, Pools: []config.PoolSpec{}}, newFakeEngine(), testSecrets(t))
+	if err != nil {
+		t.Fatalf("setup manager: %v", err)
+	}
+	m.recordEgress(t.Context(), "sb_v", "acme", egress.Event{
+		Method: http.MethodConnect, Host: "example.com", Port: 443, Decision: egress.DecisionAllow,
+		Local: netip.MustParseAddrPort("198.51.100.7:40123"), Remote: netip.MustParseAddrPort("93.184.216.34:443"),
+	})
+	m.Audit(t.Context(), "sb_v", []byte(`{"op":"egress","dest":"x","tenant":"other","src_addr":"198.51.100.7:1","dst_addr":"192.0.2.1:25"}`))
+	raw, err := os.ReadFile(filepath.Join(dir, "audit.jsonl"))
+	if err != nil {
+		t.Fatalf("read audit journal: %v", err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(raw)), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("audit lines %q, want 2", lines)
+	}
+	var got [2]auditFrame
+	for i, line := range lines {
+		if err := json.Unmarshal([]byte(line), &got[i]); err != nil {
+			t.Fatalf("bad audit line %q: %v", line, err)
+		}
+	}
+	if got[0].Tenant != "acme" || got[0].Src.String() != "198.51.100.7:40123" || got[0].Dst.String() != "93.184.216.34:443" {
+		t.Errorf("egress audit %+v, want tenant acme, 198.51.100.7:40123 -> 93.184.216.34:443", got[0])
+	}
+	if got[1].Tenant != "" || got[1].Src.IsValid() || got[1].Dst.IsValid() {
+		t.Errorf("relayed frame set attribution %+v", got[1])
 	}
 }
 

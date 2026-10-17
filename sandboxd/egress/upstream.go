@@ -3,7 +3,6 @@ package egress
 import (
 	"bufio"
 	"context"
-	"crypto/tls"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -68,6 +67,7 @@ type upstreamConn struct {
 	net.Conn
 	reader *bufio.Reader
 	host   string
+	target netip.AddrPort
 }
 
 func (c *upstreamConn) Read(b []byte) (int, error) {
@@ -150,23 +150,14 @@ func DialUpstream(ctx context.Context, u *url.URL, target string, dial DialFunc)
 		_ = conn.Close()
 		return nil, &upstreamError{host: u.Host, err: err}
 	}
-	return &upstreamConn{Conn: conn, reader: reader, host: u.Host}, nil
+	dest, _ := netip.ParseAddrPort(target)
+	return &upstreamConn{Conn: conn, reader: reader, host: u.Host, target: dest}, nil
 }
 
-func upstreamOf(conn net.Conn, err error) string {
-	if err != nil {
-		if ue, ok := errors.AsType[*upstreamError](err); ok {
-			return ue.host
-		}
-		return ""
-	}
-	if tlsConn, ok := conn.(*tls.Conn); ok {
-		conn = tlsConn.NetConn()
-	}
-	if conn, ok := conn.(*upstreamConn); ok {
-		return conn.host
-	}
-	return ""
+func tcpAddrPort(a net.Addr) netip.AddrPort {
+	ta, _ := a.(*net.TCPAddr)
+	ap := ta.AddrPort()
+	return netip.AddrPortFrom(ap.Addr().Unmap(), ap.Port())
 }
 
 // socksTunnel handshakes on conn itself, so the tunnel keeps the TCP conn's CloseWrite.

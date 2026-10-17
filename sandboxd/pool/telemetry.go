@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json/v2"
 	"maps"
+	"net/netip"
 	"sync/atomic"
 	"time"
 
@@ -46,24 +47,27 @@ type counters struct {
 	claimNanos, wakeNanos                atomic.Uint64
 }
 
-// auditFrame is the addressing slice of a request frame worth auditing.
+// auditFrame is the addressing slice of a request frame worth auditing, plus the egress attribution only the node sets.
 type auditFrame struct {
-	Op       string   `json:"op"`
-	Argv     []string `json:"argv,omitempty"`
-	Path     string   `json:"path,omitempty"`
-	Dest     string   `json:"dest,omitempty"`
-	Method   string   `json:"method,omitempty"`
-	From     string   `json:"from,omitempty"`
-	To       string   `json:"to,omitempty"`
-	URL      string   `json:"url,omitempty"`
-	Session  string   `json:"session,omitempty"`
-	Port     uint16   `json:"port,omitzero"`
-	Decision string   `json:"decision,omitempty"`
-	Secret   string   `json:"secret,omitempty"`
-	Upstream string   `json:"upstream,omitempty"`
-	Added    []string `json:"added,omitempty"`
-	Changed  []string `json:"changed,omitempty"`
-	Removed  []string `json:"removed,omitempty"`
+	Op       string         `json:"op"`
+	Argv     []string       `json:"argv,omitempty"`
+	Path     string         `json:"path,omitempty"`
+	Dest     string         `json:"dest,omitempty"`
+	Method   string         `json:"method,omitempty"`
+	From     string         `json:"from,omitempty"`
+	To       string         `json:"to,omitempty"`
+	URL      string         `json:"url,omitempty"`
+	Session  string         `json:"session,omitempty"`
+	Port     uint16         `json:"port,omitzero"`
+	Decision string         `json:"decision,omitempty"`
+	Secret   string         `json:"secret,omitempty"`
+	Upstream string         `json:"upstream,omitempty"`
+	Tenant   string         `json:"tenant,omitempty"`
+	Src      netip.AddrPort `json:"src_addr,omitzero"`
+	Dst      netip.AddrPort `json:"dst_addr,omitzero"`
+	Added    []string       `json:"added,omitempty"`
+	Changed  []string       `json:"changed,omitempty"`
+	Removed  []string       `json:"removed,omitempty"`
 }
 
 func (m *Manager) Counters() Counters {
@@ -105,6 +109,7 @@ func (m *Manager) Audit(ctx context.Context, id string, line []byte) {
 	if err := json.Unmarshal(line, &frame); err != nil || frame.Op == "" {
 		return // torn cap boundary or a non-frame line: nothing to record
 	}
+	frame.Tenant, frame.Src, frame.Dst = "", netip.AddrPort{}, netip.AddrPort{}
 	m.recordAudit(ctx, id, frame)
 }
 
@@ -133,7 +138,10 @@ func (m *Manager) recordEgress(ctx context.Context, id, tenant string, ev egress
 	if ev.Decision == egress.DecisionAllow {
 		decision = "allow"
 	}
-	m.recordAudit(ctx, id, auditFrame{Op: "egress", Dest: ev.Host, Port: ev.Port, Method: ev.Method, Decision: decision, Secret: ev.Injected, Upstream: ev.Upstream})
+	m.recordAudit(ctx, id, auditFrame{
+		Op: "egress", Dest: ev.Host, Port: ev.Port, Method: ev.Method, Decision: decision, Secret: ev.Injected, Upstream: ev.Upstream,
+		Tenant: tenant, Src: ev.Local, Dst: ev.Remote,
+	})
 	m.recordUsage(ctx, usageEvent{Event: "egress", ID: id, Tenant: tenant, Reference: ev.Host, Upstream: ev.Upstream, Secret: ev.Injected})
 }
 
