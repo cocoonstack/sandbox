@@ -110,7 +110,7 @@ func WalkExport(root string, fn func(rel, path string, info fs.FileInfo) error) 
 		}
 		if path == root {
 			if !entry.IsDir() {
-				return fmt.Errorf("export root is not a directory")
+				return errors.New("export root is not a directory")
 			}
 			return nil
 		}
