@@ -7,7 +7,6 @@ import (
 
 	"github.com/projecteru2/core/log"
 
-	"github.com/cocoonstack/sandbox/sandboxd/engine"
 	"github.com/cocoonstack/sandbox/sandboxd/pool"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
@@ -45,8 +44,8 @@ func (s *Server) handleSandboxVolumes(w http.ResponseWriter, r *http.Request) {
 	code := http.StatusOK
 	if err != nil {
 		code, view.Error = http.StatusInternalServerError, "volume convergence failed; inspect the volume states before retrying"
-		conflict, isConflict := errors.AsType[*engine.VolumeMountConflict](err)
-		unsupported, isUnsupported := errors.AsType[*engine.LiveVolumeUnsupported](err)
+		conflict, isConflict := errors.AsType[*pool.VolumeMountConflict](err)
+		unsupported, isUnsupported := errors.AsType[*pool.LiveVolumeUnsupported](err)
 		switch {
 		case isConflict:
 			code, view.Error = http.StatusConflict, conflict.Error()

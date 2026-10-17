@@ -153,6 +153,10 @@ type Engine interface {
 	WriteGuestEnv(ctx context.Context, vsockSocket string, doc []byte) error
 }
 
+type VolumeMountConflict = engine.VolumeMountConflict
+
+type LiveVolumeUnsupported = engine.LiveVolumeUnsupported
+
 // SandboxSummary is the ops view of one live claim.
 type SandboxSummary struct {
 	ID     string        `json:"id"`

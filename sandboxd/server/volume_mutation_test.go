@@ -12,7 +12,6 @@ import (
 	"testing"
 
 	"github.com/cocoonstack/sandbox/sandboxd/config"
-	"github.com/cocoonstack/sandbox/sandboxd/engine"
 	"github.com/cocoonstack/sandbox/sandboxd/pool"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
@@ -84,12 +83,12 @@ func TestLiveVolumeRoutesErrors(t *testing.T) {
 		{"failed", "root", `{"volumes":[]}`, pool.ErrFailed, http.StatusConflict},
 		{"sandbox token", "sandbox-token", `{"volumes":[]}`, nil, http.StatusUnauthorized},
 		{"invalid token", "invalid", `{"volumes":[]}`, nil, http.StatusUnauthorized},
-		{"foreign mount", "root", `{"volumes":[]}`, &engine.VolumeMountConflict{Message: `volume mount "/data" has a different device, root, or mode; restore the expected mount before retrying`}, http.StatusConflict},
-		{"bind mount", "root", `{"volumes":[]}`, &engine.VolumeMountConflict{Message: `volume device has another mount at "/other"; remove guest mount references before retrying`}, http.StatusConflict},
-		{"unmount refused", "root", `{"volumes":[]}`, &engine.VolumeMountConflict{Message: `cannot unmount "/data"; close guest references and retry`}, http.StatusConflict},
-		{"unsupported runtime", "root", `{"volumes":[]}`, &engine.LiveVolumeUnsupported{Version: "v0.7.1"}, http.StatusServiceUnavailable},
+		{"foreign mount", "root", `{"volumes":[]}`, &pool.VolumeMountConflict{Message: `volume mount "/data" has a different device, root, or mode; restore the expected mount before retrying`}, http.StatusConflict},
+		{"bind mount", "root", `{"volumes":[]}`, &pool.VolumeMountConflict{Message: `volume device has another mount at "/other"; remove guest mount references before retrying`}, http.StatusConflict},
+		{"unmount refused", "root", `{"volumes":[]}`, &pool.VolumeMountConflict{Message: `cannot unmount "/data"; close guest references and retry`}, http.StatusConflict},
+		{"unsupported runtime", "root", `{"volumes":[]}`, &pool.LiveVolumeUnsupported{Version: "v0.7.1"}, http.StatusServiceUnavailable},
 		{"tenant store down", "root", `{"volumes":[]}`, fmt.Errorf("%w: connect host /private/pg", pool.ErrTenantStoreDown), http.StatusServiceUnavailable},
-		{"unknown runtime", "root", `{"volumes":[]}`, &engine.LiveVolumeUnsupported{}, http.StatusServiceUnavailable},
+		{"unknown runtime", "root", `{"volumes":[]}`, &pool.LiveVolumeUnsupported{}, http.StatusServiceUnavailable},
 		{"timeout", "root", `{"volumes":[]}`, context.DeadlineExceeded, http.StatusGatewayTimeout},
 		{"cancel", "root", `{"volumes":[]}`, context.Canceled, http.StatusRequestTimeout},
 		{"engine", "root", `{"volumes":[]}`, errors.New("host /private/image failed"), http.StatusInternalServerError},
