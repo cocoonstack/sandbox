@@ -168,22 +168,9 @@ func (s *Store) ReadMeta(ctx context.Context, id string) ([]byte, error) {
 }
 
 func (s *Store) Metas(ctx context.Context) ([]store.Record, error) {
-	// delimiter listing yields one CommonPrefix per record instead of every export object.
-	var ids []string
-	p := awss3.NewListObjectsV2Paginator(s.client, &awss3.ListObjectsV2Input{
-		Bucket: &s.bucket, Prefix: &s.prefix, Delimiter: new("/"),
-	})
-	for p.HasMorePages() {
-		page, err := p.NextPage(ctx)
-		if err != nil {
-			return nil, fmt.Errorf("list %s: %w", s.prefix, err)
-		}
-		for _, cp := range page.CommonPrefixes {
-			id := strings.TrimSuffix(strings.TrimPrefix(*cp.Prefix, s.prefix), "/")
-			if s.idRe.MatchString(id) {
-				ids = append(ids, id)
-			}
-		}
+	ids, err := s.recordIDs(ctx)
+	if err != nil {
+		return nil, err
 	}
 	recs := make([]store.Record, len(ids))
 	g, gctx := errgroup.WithContext(ctx)
@@ -286,6 +273,14 @@ func (s *Store) readMeta(ctx context.Context, id string) ([]byte, string, error)
 	return meta, metadata[digestMetadataKey], nil
 }
 
+func (s *Store) currentManifest(ctx context.Context, id string) (manifest, error) {
+	meta, _, err := s.getObject(ctx, s.key(id, store.MetaFile))
+	if err != nil {
+		return manifest{}, err
+	}
+	return s.readManifest(ctx, id, store.ExportGen(meta))
+}
+
 func (s *Store) readManifest(ctx context.Context, id, gen string) (manifest, error) {
 	raw, _, err := s.getObject(ctx, s.key(id, gen+"/"+manifestName))
 	if err != nil {
@@ -334,7 +329,7 @@ func (s *Store) publish(ctx context.Context, staging, id, lineage string, digest
 	if err != nil {
 		return "", err
 	}
-	have, err := s.chunkSet(ctx, lineage)
+	have, err := s.referencedChunks(ctx, id, lineage)
 	if err != nil {
 		return "", err
 	}
@@ -475,15 +470,57 @@ func (s *Store) chunkKey(lineage, sha string) string {
 	return s.prefix + chunksDir + "/" + lineage + "/" + sha
 }
 
-func (s *Store) chunkSet(ctx context.Context, lineage string) (map[string]struct{}, error) {
-	prefix := s.chunkKey(lineage, "")
-	objs, err := s.list(ctx, prefix)
-	if err != nil {
+func (s *Store) recordIDs(ctx context.Context) ([]string, error) {
+	// delimiter listing yields one CommonPrefix per record instead of every export object.
+	var ids []string
+	p := awss3.NewListObjectsV2Paginator(s.client, &awss3.ListObjectsV2Input{
+		Bucket: &s.bucket, Prefix: &s.prefix, Delimiter: new("/"),
+	})
+	for p.HasMorePages() {
+		page, err := p.NextPage(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("list %s: %w", s.prefix, err)
+		}
+		for _, cp := range page.CommonPrefixes {
+			id := strings.TrimSuffix(strings.TrimPrefix(*cp.Prefix, s.prefix), "/")
+			if s.idRe.MatchString(id) {
+				ids = append(ids, id)
+			}
+		}
+	}
+	return ids, nil
+}
+
+func (s *Store) referencedChunks(ctx context.Context, id, lineage string) (map[string]struct{}, error) {
+	ids := []string{id}
+	if lineage != id {
+		var err error
+		if ids, err = s.recordIDs(ctx); err != nil {
+			return nil, err
+		}
+	}
+	refs := &chunkRefs{live: map[string]map[string]struct{}{}}
+	g, gctx := errgroup.WithContext(ctx)
+	g.SetLimit(metaReadConcurrency)
+	for _, recordID := range ids {
+		g.Go(func() error {
+			man, err := s.currentManifest(gctx, recordID)
+			if errors.Is(err, store.ErrNotFound) {
+				return nil
+			}
+			if err != nil {
+				return err
+			}
+			refs.add(man)
+			return nil
+		})
+	}
+	if err := g.Wait(); err != nil {
 		return nil, err
 	}
-	have := make(map[string]struct{}, len(objs))
-	for _, obj := range objs {
-		have[strings.TrimPrefix(*obj.Key, prefix)] = struct{}{}
+	have := refs.live[lineage]
+	if have == nil {
+		have = map[string]struct{}{}
 	}
 	return have, nil
 }

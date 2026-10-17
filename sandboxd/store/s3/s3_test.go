@@ -689,6 +689,40 @@ func TestSweepSparesAnInFlightGeneration(t *testing.T) {
 	}
 }
 
+func TestPublishUploadsAnUnreferencedChunkAgain(t *testing.T) {
+	const lineage = "sbx_00000000000000a3"
+	fake := &fakeS3{objects: map[string][]byte{}}
+	st := newTestStore(t, fake)
+	publishIn := func(id, content string, opts ...store.PublishOption) int {
+		t.Helper()
+		before, _ := fake.chunkPuts("ck/chunks/")
+		staging := stageRecord(t, st, id, []byte(`{"id":"`+id+`"}`), content)
+		if err := st.Publish(t.Context(), staging, id, opts...); err != nil {
+			t.Fatalf("Publish %s: %v", id, err)
+		}
+		after, _ := fake.chunkPuts("ck/chunks/")
+		return after - before
+	}
+	publish := func(id string) int { return publishIn(id, "orphaned", store.WithLineage(lineage)) }
+
+	if puts := publish("ck_00000000000000c1"); puts != 1 {
+		t.Fatalf("first publish uploaded %d chunks, want 1", puts)
+	}
+	if err := st.Delete(t.Context(), "ck_00000000000000c1"); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if puts := publish("ck_00000000000000c2"); puts != 1 {
+		t.Errorf("a listed chunk no manifest references was reused: %d uploads, want 1", puts)
+	}
+	if puts := publish("ck_00000000000000c3"); puts != 0 {
+		t.Errorf("a chunk a committed manifest references was uploaded again: %d uploads, want 0", puts)
+	}
+	publishIn("ck_00000000000000c4", "elsewhere")
+	if puts := publishIn("ck_00000000000000c5", "elsewhere", store.WithLineage(lineage)); puts != 1 {
+		t.Errorf("a chunk another lineage's manifest references was reused: %d uploads, want 1", puts)
+	}
+}
+
 func publishRecord(t *testing.T, st *Store, id string, meta []byte, content string) {
 	t.Helper()
 	staging := stageRecord(t, st, id, meta, content)
