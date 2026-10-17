@@ -497,6 +497,9 @@ func (m *Manager) settleIntent(ctx context.Context, id, pending string, rec arch
 }
 
 func (m *Manager) resolveIntent(ctx context.Context, sb *types.Sandbox) error {
+	if m.archives == nil {
+		return nil
+	}
 	m.mu.Lock()
 	pending := sb.ArchivePending
 	m.mu.Unlock()

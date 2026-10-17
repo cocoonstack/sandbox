@@ -1737,6 +1737,55 @@ func TestFailoverSweepSettlesALostArchivePutReply(t *testing.T) {
 	}
 }
 
+func TestFailoverAWakeSettlesALostArchivePutReplyFirst(t *testing.T) {
+	c := newFailoverCluster(t)
+	a := c.node(t, "a", t.TempDir(), keepAnHour)
+	sb := mustClaim(t, a, testKey)
+	if err := a.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
+		t.Fatalf("hibernate: %v", err)
+	}
+	a.archives = &hookRegistry{Registry: c.reg, losePutReply: true}
+	if err := a.archive(t.Context(), sb); !errors.Is(err, ErrArchiveStoreDown) {
+		t.Fatalf("archive whose put reply was lost: %v, want ErrArchiveStoreDown", err)
+	}
+	a.archives = c.reg
+	if _, _, err := a.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
+		t.Fatalf("wake: %v", err)
+	}
+	a.mu.Lock()
+	pending := sb.ArchivePending
+	a.mu.Unlock()
+	if _, ok, _ := c.reg.Get(t.Context(), sb.ID); ok || pending != "" {
+		t.Errorf("row present %v, intent %q after the wake, want both settled", ok, pending)
+	}
+	if metas, err := a.ckpts.Metas(t.Context()); err != nil || len(metas) != 0 {
+		t.Errorf("store holds %d exports %v after the wake, want none", len(metas), err)
+	}
+	if hibernated(a) != 0 {
+		t.Error("the claim stayed hibernated after the wake")
+	}
+}
+
+func TestFailoverAWakeWithoutARegistryKeepsItsPendingIntent(t *testing.T) {
+	c := newFailoverCluster(t)
+	a := c.node(t, "a", t.TempDir(), keepAnHour)
+	sb := mustClaim(t, a, testKey)
+	if err := a.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
+		t.Fatalf("hibernate: %v", err)
+	}
+	a.archives = &hookRegistry{Registry: c.reg, losePutReply: true}
+	if err := a.archive(t.Context(), sb); !errors.Is(err, ErrArchiveStoreDown) {
+		t.Fatalf("archive whose put reply was lost: %v, want ErrArchiveStoreDown", err)
+	}
+	a.archives = nil
+	if _, _, err := a.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
+		t.Fatalf("wake with failover off: %v", err)
+	}
+	if hibernated(a) != 0 {
+		t.Error("the claim stayed hibernated after the wake")
+	}
+}
+
 func TestFailoverAReleaseFindsItsUnsettledArchiveTakenElsewhere(t *testing.T) {
 	c := newFailoverCluster(t)
 	a, b := c.node(t, "a", t.TempDir(), keepAnHour), c.node(t, "b", t.TempDir(), keepAnHour)
