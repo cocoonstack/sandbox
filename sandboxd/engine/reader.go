@@ -49,6 +49,9 @@ func (e *Engine) StartReader(ctx context.Context, vsockSocket string, d ReaderDi
 	if err := e.silkdExec(ctx, vsockSocket, "mount", "-t", "overlay", "-o", opts, "--", "overlay", readerView); err != nil {
 		return fmt.Errorf("mount view: %w", err)
 	}
+	if err := e.silkdExec(ctx, vsockSocket, "test", "-x", readerView+readerSilkd); err != nil {
+		return fmt.Errorf("claim image has no silkd at %s: %w", readerSilkd, err)
+	}
 	if err := e.silkdSpawn(ctx, vsockSocket, "env", fmt.Sprintf("SILKD_PORT=%d", readerPort), "chroot", readerView, readerSilkd); err != nil {
 		return fmt.Errorf("start view silkd: %w", err)
 	}

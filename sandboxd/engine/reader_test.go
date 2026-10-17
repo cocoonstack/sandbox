@@ -26,6 +26,7 @@ func TestStartReaderAssemblesTheViewTopLayerFirst(t *testing.T) {
 		{"mount", "-o", "ro", "--", "/dev/vdc", "/run/reader/layer0"},
 		{"mkdir", "-p", "--", "/view"},
 		{"mount", "-t", "overlay", "-o", "ro,metacopy=on,redirect_dir=follow,lowerdir=/run/reader/cow/upper:/run/reader/layer1:/run/reader/layer0", "--", "overlay", "/view"},
+		{"test", "-x", "/view/usr/local/bin/silkd"},
 		{"env", "SILKD_PORT=2051", "chroot", "/view", "/usr/local/bin/silkd"},
 	}
 	fake.mu.Lock()
@@ -45,6 +46,25 @@ func TestStartReaderAssemblesTheViewTopLayerFirst(t *testing.T) {
 		if detached != (i == len(want)-1) {
 			t.Errorf("command %d detached=%v, want only the view silkd detached", i, detached)
 		}
+	}
+}
+
+func TestStartReaderFailsFastWhenTheClaimImageHasNoSilkd(t *testing.T) {
+	sock := sockPath(t)
+	fake := serveFakeSilkd(t, sock)
+	configureReaderDevices(fake)
+	fake.mu.Lock()
+	fake.execFailAt, fake.execCode = 9, 1
+	fake.mu.Unlock()
+
+	err := New("cocoon", nil, nil, false, false, "").StartReader(t.Context(), sock, ReaderDisks{Layers: []string{"rl0", "rl1"}, Cow: "rcow"})
+	if err == nil || !strings.Contains(err.Error(), "no silkd") {
+		t.Fatalf("StartReader = %v, want the missing silkd reported", err)
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if last := fake.execCalls[len(fake.execCalls)-1]; last[0] != "test" || slices.Contains(fake.execDetach, true) || slices.Contains(fake.connects, "CONNECT 2051") {
+		t.Errorf("last command %v, detached %v, connects %v: want the check last, with no spawn and no probe", last, fake.execDetach, fake.connects)
 	}
 }
 

@@ -215,7 +215,9 @@ The reader template must offer `mount`, `chroot`, `env`, `mkdir` and `sync`
 and boot a kernel that mounts erofs, ext4 and overlayfs, which the shipped
 images do. The claim's image must ship `silkd` at `/usr/local/bin/silkd`, as
 the shipped Linux images do; the android image does not, so its claims always
-wake. A reader is kept for 30 s after its last connection, then its VM is
+wake. A missing silkd is detected right after the view is mounted, so such a
+claim pays the snapshot export, one reader VM and the mounts before its call
+wakes it, never a probe timeout. A reader is kept for 30 s after its last connection, then its VM is
 destroyed and its copy deleted. A wake waits for a reader only while its
 setup exports the hibernate snapshot: milliseconds with a reflink, and the
 time to copy the memory image without one. A reader serves only the sleep it
