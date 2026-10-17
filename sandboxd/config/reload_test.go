@@ -56,7 +56,8 @@ func TestReloadDiffSortsReloadableOwnedAndRestartFields(t *testing.T) {
 
 	restart := *cur
 	restart.Listen, restart.Bridges, restart.EgressUsageBytes = "127.0.0.1:8888", []string{"br1"}, true
-	if _, _, err := cur.ReloadDiff(&restart); err == nil || err.Error() != "listen, bridges change only at a restart" {
+	restart.Reader = &ReaderSpec{Template: "desktop:v12"}
+	if _, _, err := cur.ReloadDiff(&restart); err == nil || err.Error() != "listen, bridges, reader change only at a restart" {
 		t.Errorf("ReloadDiff over restart fields: %v", err)
 	}
 	if changed, ignored, err := cur.ReloadDiff(cur); err != nil || changed != nil || ignored != nil {

@@ -167,6 +167,11 @@ func TestLoadRejectsInvalid(t *testing.T) {
 		{"duplicate volume name", `{"pools":[],"volumes":[{"name":"data","path":"/srv/datasets/a.img"},{"name":"data","path":"/srv/datasets/b.img"}]}`, "duplicate volume"},
 		{"relative volume path", `{"pools":[],"volumes":[{"name":"data","path":"datasets/a.img"}]}`, "path must be absolute"},
 		{"bad volume directio", `{"pools":[],"volumes":[{"name":"data","path":"/srv/datasets/a.img","directio":"yes"}]}`, "directio must be"},
+		{"reader without a pool", `{"pools":[{"template":"rt:24.04"}],"reader":{"template":"reader:24.04"}}`, "must be a configured pool"},
+		{"reader on another size", `{"pools":[{"template":"rt:24.04"}],"reader":{"template":"rt:24.04","size":"large"}}`, "must be a configured pool"},
+		{"reader pool without warm", `{"pools":[{"template":"rt:24.04","warm":0}],"reader":{"template":"rt:24.04"}}`, "warm of at least 1"},
+		{"reader without a template", `{"pools":[],"reader":{}}`, "reader: template"},
+		{"reader typo", `{"pools":[{"template":"rt:24.04"}],"reader":{"template":"rt:24.04","sizes":"small"}}`, "unknown object member"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			_, err := Load(writeConfig(t, tt.body))
@@ -277,6 +282,20 @@ func TestLoadAcceptsPreviewAdvertiseShapes(t *testing.T) {
 				t.Errorf("Load: %v, want the shape Mint accepts to pass validation", err)
 			}
 		})
+	}
+}
+
+func TestLoadAcceptsReaderOnAConfiguredPool(t *testing.T) {
+	cfg, err := Load(writeConfig(t, `{"pools":[{"template":"reader:24.04","warm":2}],"reader":{"template":"reader:24.04"}}`))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	want := types.PoolKey{Template: "reader:24.04", Net: types.NetNone, Size: types.SizeSmall}
+	if got := cfg.Reader.Key(); got != want {
+		t.Errorf("reader key = %+v, want the defaulted pool key %+v", got, want)
+	}
+	if cfg, err = Load(writeConfig(t, `{"pools":[]}`)); err != nil || cfg.Reader != nil {
+		t.Errorf("a config without reader loaded as %+v, %v, want the feature off", cfg.Reader, err)
 	}
 }
 
