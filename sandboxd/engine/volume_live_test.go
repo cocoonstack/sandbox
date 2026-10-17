@@ -158,7 +158,7 @@ func TestLiveAttachRejectsForeignMounts(t *testing.T) {
 }
 
 func TestLiveDetachKeepsBusyAndUnobservableDevices(t *testing.T) {
-	for _, mode := range []string{"busy", "second mount", "probe error", "guest error", "transport disconnect", "host error", "stacked mount"} {
+	for _, mode := range []string{"busy", "second mount", "probe error", "guest error", "transport disconnect", "host error", "stacked mount", "stacked bind"} {
 		t.Run(mode, func(t *testing.T) {
 			sock := sockPath(t)
 			fake := serveFakeSilkd(t, sock)
@@ -187,6 +187,8 @@ func TestLiveDetachKeepsBusyAndUnobservableDevices(t *testing.T) {
 				fake.readErr["/proc/self/mountinfo"] = "read failed"
 			case "stacked mount":
 				fake.serial["/proc/self/mountinfo"] = []byte(rootMountInfo + "2 1 8:32 / /data ro - ext4 /dev/vdc ro\n3 2 0:39 / /data rw - tmpfs guesttmp rw\n")
+			case "stacked bind":
+				fake.serial["/proc/self/mountinfo"] = []byte(rootMountInfo + "2 1 8:32 / /data ro - ext4 /dev/vdc ro\n3 2 8:32 /sub /data ro - ext4 /dev/vdc ro\n")
 			}
 			fake.mu.Unlock()
 			err := New("cocoon", nil, nil, false, false, "").DetachVolume(t.Context(), "sbx-1", sock, spec.Name, "/data")
@@ -194,7 +196,7 @@ func TestLiveDetachKeepsBusyAndUnobservableDevices(t *testing.T) {
 				t.Fatal("detach must fail closed")
 			}
 			conflict, isConflict := errors.AsType[*VolumeMountConflict](err)
-			wantPath := map[string]string{"busy": "/data", "second mount": "/other", "stacked mount": "/data"}[mode]
+			wantPath := map[string]string{"busy": "/data", "second mount": "/other", "stacked mount": "/data", "stacked bind": "/data"}[mode]
 			conflictExpected := wantPath != ""
 			if isConflict != conflictExpected {
 				t.Fatalf("conflict=%v error=%v", conflictExpected, err)
@@ -207,8 +209,8 @@ func TestLiveDetachKeepsBusyAndUnobservableDevices(t *testing.T) {
 			}
 			fake.mu.Lock()
 			defer fake.mu.Unlock()
-			if mode == "stacked mount" && len(guestChanges(fake.execCalls)) != 0 {
-				t.Fatalf("unmounted the guest's mount stacked on the volume: %v", fake.execCalls)
+			if !slices.Contains([]string{"busy", "guest error", "transport disconnect"}, mode) && len(guestChanges(fake.execCalls)) != 0 {
+				t.Fatalf("changed guest mounts: %v", fake.execCalls)
 			}
 		})
 	}
