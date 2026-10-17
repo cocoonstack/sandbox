@@ -216,9 +216,10 @@ and boot a kernel that mounts erofs, ext4 and overlayfs, which the shipped
 images do. The claim's image must ship `silkd` at `/usr/local/bin/silkd`, as
 the shipped Linux images do; the android image does not, so its claims always
 wake. A reader is kept for 30 s after its last connection, then its VM is
-destroyed and its copy deleted. A wake never waits for a reader, and a reader
-serves only the sleep it was built from: a later hibernate or archive gets a
-fresh one. The claim's own code runs in its reader with root, as it did in the
+destroyed and its copy deleted. A wake waits for a reader only while its
+setup exports the hibernate snapshot: milliseconds with a reflink, and the
+time to copy the memory image without one. A reader serves only the sleep it
+was built from: a later hibernate or archive gets a fresh one. The claim's own code runs in its reader with root, as it did in the
 claim; the reader has no NIC, serves one claim, and is destroyed afterwards, so
 the claim's bytes never reach a shared VM or the host kernel.
 
