@@ -3,11 +3,13 @@ package pool
 import (
 	"encoding/json/v2"
 	"errors"
+	"net"
 	"testing"
 	"testing/synctest"
 	"time"
 
 	"github.com/cocoonstack/sandbox/sandboxd/archives"
+	"github.com/cocoonstack/sandbox/sandboxd/config"
 	"github.com/cocoonstack/sandbox/sandboxd/store"
 	"github.com/cocoonstack/sandbox/sandboxd/tenants"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
@@ -354,6 +356,42 @@ func TestReplicaArchiveCannotRecreateARowTheAdopterFinished(t *testing.T) {
 	if _, held := a.byID(sb.ID); held {
 		t.Error("the old owner kept a claim the adopter runs")
 	}
+}
+
+func TestReplicaLeftoverJournalWithFailoverOffStillServesStreams(t *testing.T) {
+	eng := newFakeEngine()
+	dir := t.TempDir()
+	m := newTestManagerAt(t, eng, dir, config.PoolSpec{PoolKey: testKey, Warm: 1})
+	sb := mustClaim(t, m, testKey)
+	m.mu.Lock()
+	sb.ReplicaCk = "ck_leftover"
+	js := m.store.set(sb)
+	m.mu.Unlock()
+	if err := m.store.commit(js); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+
+	restarted := newTestManagerAt(t, eng, dir, config.PoolSpec{PoolKey: testKey, Warm: 1})
+	if err := restarted.Reconcile(t.Context()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	held, ok := restarted.byID(sb.ID)
+	if !ok || held.ReplicaCk != "ck_leftover" || held.Replicated() {
+		t.Fatalf("claim held %v replica %q replicated %v, want the leftover kept and not replicated", ok, held.ReplicaCk, held.Replicated())
+	}
+	_, fenced, done, err := restarted.WakeAgentSocket(t.Context(), sb.ID, sb.Token)
+	if err != nil || fenced != nil {
+		t.Fatalf("stream to a claim with a leftover replica and failover off: %v, fence %v, want served with no fence", err, fenced)
+	}
+	done()
+	guest, host := net.Pipe()
+	t.Cleanup(func() { _ = host.Close() })
+	eng.guestDial = func() (net.Conn, error) { return guest, nil }
+	conn, err := restarted.DialPort(t.Context(), sb.ID, Cred{Token: sb.Token}, 80)
+	if err != nil {
+		t.Fatalf("port dial: %v", err)
+	}
+	_ = conn.Close()
 }
 
 func TestReplicaFailedCaptureKeepsTheOldReplicaAndRow(t *testing.T) {
