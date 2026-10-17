@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import urllib.parse
 from collections.abc import Mapping
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
+
+from .volumes import _volume_body
 
 if TYPE_CHECKING:
     from .client import Client
@@ -32,9 +34,6 @@ class Template:
     ) -> Sandbox:
         """Claims the template, following placement when volumes require it.
         mount=False attaches the volumes without mounting them."""
-        # local import: a top-level one closes the client -> sandbox -> template cycle.
-        from .client import _claim_body
-
         claim = _claim_body(self.name, self.net, self.size, ttl_seconds, volumes, mount)
         claim["require_promoted"] = True
         if volumes:
@@ -44,10 +43,42 @@ class Template:
         return self._client._handle_from(self._addr, reply)
 
     def delete(self) -> None:
-        from .client import _template_query
-
         query = _template_query(self.name, self.net, self.size)
         query["no_redirect"] = "1"
         self._client._request(
             self._addr, "DELETE", "/v1/templates?" + urllib.parse.urlencode(query), None, "delete template"
         )
+
+
+def _claim_body(
+    template: str,
+    net: str,
+    size: str,
+    ttl_seconds: int,
+    volumes: list[str | Mapping[str, str]] | None = None,
+    mount: bool = True,
+    claim_ref: str = "",
+) -> dict[str, Any]:
+    claim: dict[str, Any] = {"template": template}
+    if net:
+        claim["net"] = net
+    if size:
+        claim["size"] = size
+    if ttl_seconds:
+        claim["ttl_seconds"] = ttl_seconds
+    if volumes:
+        claim["volumes"] = [_volume_body(volume, mount) for volume in volumes]
+    if not mount:
+        claim["volumes_attach_only"] = True
+    if claim_ref:
+        claim["claim_ref"] = claim_ref
+    return claim
+
+
+def _template_query(template: str, net: str, size: str) -> dict[str, str]:
+    query = {"template": template}
+    if net:
+        query["net"] = net
+    if size:
+        query["size"] = size
+    return query
