@@ -363,7 +363,7 @@ func TestEgressAuditNamesTenantAndEndsARelayedFrameCannot(t *testing.T) {
 	if len(lines) != 2 {
 		t.Fatalf("audit lines %q, want 2", lines)
 	}
-	var got [2]auditFrame
+	var got [2]egressFrame
 	for i, line := range lines {
 		if err := json.Unmarshal([]byte(line), &got[i]); err != nil {
 			t.Fatalf("bad audit line %q: %v", line, err)
