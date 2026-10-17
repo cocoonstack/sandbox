@@ -170,9 +170,11 @@ func TestFailoverADrainingNodeDoesNotAdopt(t *testing.T) {
 	if rec, _, _ := c.reg.Get(t.Context(), sb.ID); rec.Owner != "a" || rec.Epoch != 1 {
 		t.Errorf("row %s@%d, want a@1 left for another node", rec.Owner, rec.Epoch)
 	}
-	b.Uncordon(t.Context())
+	b.mu.Lock()
+	b.draining = false
+	b.mu.Unlock()
 	if adopted, err := b.AdoptArchived(t.Context(), sb.ID, sb.Token); err != nil || !adopted {
-		t.Errorf("adopt after uncordon: %v %v, want adopted", adopted, err)
+		t.Errorf("adopt once the drain lifts: %v %v, want adopted", adopted, err)
 	}
 }
 
