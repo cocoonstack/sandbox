@@ -11,7 +11,7 @@ use tokio::process::Command;
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::timeout;
 
-use crate::proc::{Chunk, Proc, Table, synth_pid};
+use crate::proc::{Proc, Table, synth_pid};
 use crate::proto::{self, ErrorKind, PtyReq, READ_CHUNK, Request, Response};
 use crate::sysutil;
 
@@ -86,13 +86,13 @@ pub async fn open<W: AsyncWrite + Unpin>(
     };
     if let Err(e) = proto::write_frame(out, &Response::Started { pid }).await {
         let _ = child.start_kill();
-        finish(&proc, -1);
+        proc.finish(-1);
         table.remove_if(pid, &proc);
         return Err(e);
     }
 
     let code = pump(&master, &proc, client, out, &mut child).await;
-    finish(&proc, code);
+    proc.finish(code);
     table.remove_if(pid, &proc);
     proto::write_frame(out, &Response::Exit { code }).await
 }
@@ -215,12 +215,6 @@ async fn drain<W: AsyncWrite + Unpin>(
         }
     })
     .await;
-}
-
-/// Publishes the terminal state once so attachers always see an Exit.
-fn finish(proc: &Arc<Proc>, code: i32) {
-    proc.mark_exited(code);
-    proc.emit(&Chunk::Exit(code));
 }
 
 async fn write_all(master: &Master, mut data: &[u8]) -> std::io::Result<()> {

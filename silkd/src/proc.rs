@@ -132,8 +132,9 @@ impl Proc {
         }
     }
 
-    pub fn mark_exited(&self, code: i32) {
+    pub fn finish(&self, code: i32) {
         *sysutil::lock(&self.state) = State::Exited(code);
+        self.emit(&Chunk::Exit(code));
     }
 
     /// Records a pty master fd (a dup, owned here) so `resize` can reach it.
@@ -297,8 +298,7 @@ mod tests {
         let table = Table::new();
         let proc = table.register(8, vec!["true".to_string()], true, 0);
         proc.emit_bytes(false, b"tail");
-        proc.mark_exited(5);
-        proc.emit(&Chunk::Exit(5));
+        proc.finish(5);
 
         let (replay, _rx, exit) = proc.attach_stream();
         assert_eq!(exit, Some(5));
@@ -318,8 +318,7 @@ mod tests {
         assert_eq!(proc.replay().1, None);
 
         proc.emit_bytes(false, b"tail");
-        proc.mark_exited(5);
-        proc.emit(&Chunk::Exit(5));
+        proc.finish(5);
         assert!(matches!(rx.try_recv(), Ok(Chunk::Stdout(d)) if &*d == b"tail"));
         assert!(matches!(rx.try_recv(), Ok(Chunk::Exit(5))));
     }
