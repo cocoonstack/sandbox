@@ -732,11 +732,11 @@ func TestFetchFileDownloadsOnlyTheRequestedFile(t *testing.T) {
 	}
 	fake.resetRequests()
 
-	path, err := st.FetchFile(t.Context(), id, "disk.img")
-	if err != nil {
+	dst := filepath.Join(t.TempDir(), "disk.img")
+	if err := st.FetchFile(t.Context(), id, "disk.img", dst); err != nil {
 		t.Fatalf("FetchFile: %v", err)
 	}
-	if got, readErr := os.ReadFile(path); readErr != nil || string(got) != "disk-bytes" {
+	if got, readErr := os.ReadFile(dst); readErr != nil || string(got) != "disk-bytes" {
 		t.Fatalf("fetched file: %q, %v", got, readErr)
 	}
 	memory := sha256.Sum256([]byte("memory-bytes"))
@@ -744,13 +744,8 @@ func TestFetchFileDownloadsOnlyTheRequestedFile(t *testing.T) {
 	if n := fake.requestCount(http.MethodGet, memoryKey); n != 0 {
 		t.Errorf("GET %s = %d requests, want 0", memoryKey, n)
 	}
-	disk := sha256.Sum256([]byte("disk-bytes"))
-	diskKey := "ck/chunks/" + id + "/" + hex.EncodeToString(disk[:])
-	if again, err := st.FetchFile(t.Context(), id, "disk.img"); err != nil || again != path {
-		t.Fatalf("second FetchFile = %q, %v, want the cached %q", again, err, path)
-	}
-	if n := fake.requestCount(http.MethodGet, diskKey); n != 1 {
-		t.Errorf("GET %s = %d requests, want 1 across two fetches", diskKey, n)
+	if _, err := os.Stat(filepath.Join(st.staging, "cache")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("FetchFile touched the shared fetch cache: %v", err)
 	}
 }
 
@@ -760,23 +755,50 @@ func TestFetchFileInstallsOnlyACompleteDownload(t *testing.T) {
 	fake := &fakeS3{objects: map[string][]byte{}, exportGate: make(chan struct{}), exportEntered: make(chan struct{}, 1)}
 	st := newTestStore(t, fake)
 	publishRecord(t, st, id, meta, "disk-bytes")
-	cached := filepath.Join(st.staging, "cache", id, store.ExportGenHash(meta)+"-disk.img")
+	dst := filepath.Join(t.TempDir(), "disk.img")
 
 	fetched := make(chan error, 1)
 	go func() {
-		_, err := st.FetchFile(t.Context(), id, "disk.img")
-		fetched <- err
+		fetched <- st.FetchFile(t.Context(), id, "disk.img", dst)
 	}()
 	<-fake.exportEntered
-	if _, err := os.Stat(cached); !errors.Is(err, os.ErrNotExist) {
-		t.Errorf("a download in flight is already visible at the cache path: %v", err)
+	if _, err := os.Stat(dst); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("a download in flight is already visible at the destination: %v", err)
 	}
 	close(fake.exportGate)
 	if err := <-fetched; err != nil {
 		t.Fatalf("FetchFile: %v", err)
 	}
-	if got, err := os.ReadFile(cached); err != nil || string(got) != "disk-bytes" {
-		t.Errorf("cached file %q, %v, want the object's bytes", got, err)
+	if got, err := os.ReadFile(dst); err != nil || string(got) != "disk-bytes" {
+		t.Errorf("destination %q, %v, want the object's bytes", got, err)
+	}
+	if _, err := os.Stat(dst + ".part"); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the partial download survived: %v", err)
+	}
+}
+
+func TestFetchFileKeepsHoles(t *testing.T) {
+	const id = "ck_00000000000000a2"
+	st := newTestStore(t, &fakeS3{objects: map[string][]byte{}})
+	size := 12*store.DigestChunkSize + 4096
+	staging, src := stageSparseRecord(t, st, id, []byte(`{"id":"`+id+`"}`), size, map[int64]string{0: "head", 11*store.DigestChunkSize + 10: "tail"})
+	srcSum := fileSum(t, src)
+	if err := st.Publish(t.Context(), staging, id, ""); err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+
+	dst := filepath.Join(t.TempDir(), "disk.img")
+	if err := st.FetchFile(t.Context(), id, "disk.img", dst); err != nil {
+		t.Fatalf("FetchFile: %v", err)
+	}
+	if info, err := os.Stat(dst); err != nil || info.Size() != size {
+		t.Fatalf("fetched size = %v, %v, want %d", info, err, size)
+	}
+	if fileSum(t, dst) != srcSum {
+		t.Errorf("fetched content differs from the source")
+	}
+	if blocks, limit := allocatedBytes(t, dst), 2*store.DigestChunkSize+1<<20; blocks > limit {
+		t.Errorf("fetched file allocates %d bytes, want at most %d for two data chunks", blocks, limit)
 	}
 }
 

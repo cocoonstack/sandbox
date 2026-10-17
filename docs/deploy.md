@@ -207,9 +207,10 @@ is built per claim from the claim's hibernate snapshot (or archive record):
   `data_dir` and cocoon's data directory on a filesystem that supports
   reflinks, as for checkpoints; without it the export copies the guest memory
   image too. An archived claim fetches only the record's `cow.raw` and
-  `cocoon.json`: the dir backend copies the file out of the record, the s3
-  backend downloads those two objects into the staging cache, which stays until
-  the claim wakes or is released.
+  `cocoon.json` straight into the reader's own directory: the dir backend
+  copies the file out of the record, the s3 backend downloads those two
+  objects. Nothing lands in the store's shared fetch cache, so releasing the
+  reader removes every byte it fetched.
 
 The reader template must offer `mount`, `chroot`, `env`, `mkdir` and `sync`
 and boot a kernel that mounts erofs, ext4 and overlayfs, which the shipped

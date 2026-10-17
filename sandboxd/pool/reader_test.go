@@ -299,6 +299,14 @@ func TestReaderServesAnArchivedClaimFromTwoFilesOfItsRecord(t *testing.T) {
 	if !strings.HasPrefix(cow.Path, filepath.Join(m.dataDir, readerDir)) {
 		t.Errorf("reader attached %s, want a private copy under %s", cow.Path, readerDir)
 	}
+
+	m.readers.mu.Lock()
+	live := m.readers.live[sb.ID]
+	m.readers.mu.Unlock()
+	m.dropReader(t.Context(), live, true)
+	if entries, _ := os.ReadDir(filepath.Join(m.dataDir, readerDir)); len(entries) != 0 {
+		t.Errorf("a released archived reader left %d entries under %s", len(entries), readerDir)
+	}
 }
 
 func TestReaderRefusesWhatAWakeRefuses(t *testing.T) {
@@ -522,7 +530,7 @@ func TestFailedPreHibernateSyncSendsReadsToTheWakePath(t *testing.T) {
 				t.Errorf("SleepingSource = %q with a safe sleep %t", got, tt.safe)
 			}
 			if tt.safe {
-				if _, _, err := m.WakeAgentSocketOrRead(t.Context(), sb.ID, sb.Token); !errors.Is(err, ErrSleeping) {
+				if _, _, _, err := m.WakeAgentSocketOrRead(t.Context(), sb.ID, sb.Token); !errors.Is(err, ErrSleeping) {
 					t.Fatalf("a safe sleep answered %v, want ErrSleeping", err)
 				}
 				return
@@ -530,7 +538,7 @@ func TestFailedPreHibernateSyncSendsReadsToTheWakePath(t *testing.T) {
 			if _, _, err := m.DialReader(t.Context(), sb.ID, sb.Token); !errors.Is(err, ErrNoReader) {
 				t.Errorf("DialReader of an unsafe sleep = %v, want ErrNoReader", err)
 			}
-			sock, done, err := m.WakeAgentSocketOrRead(t.Context(), sb.ID, sb.Token)
+			sock, _, done, err := m.WakeAgentSocketOrRead(t.Context(), sb.ID, sb.Token)
 			if err != nil || sock == "" {
 				t.Fatalf("a read of an unsafe sleep = %q, %v, want a wake", sock, err)
 			}
@@ -547,7 +555,7 @@ func TestWakeClearsReaderSafe(t *testing.T) {
 	m := newReaderManager(t, eng)
 	sb := mustClaim(t, m, testKey)
 	hibernateClaim(t, m, sb)
-	if _, done, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
+	if _, _, done, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
 		t.Fatalf("wake: %v", err)
 	} else {
 		done()
@@ -714,11 +722,11 @@ func (s *fetchCountingStore) Fetch(ctx context.Context, id string) (string, []by
 	return s.Store.Fetch(ctx, id)
 }
 
-func (s *fetchCountingStore) FetchFile(ctx context.Context, id, rel string) (string, error) {
+func (s *fetchCountingStore) FetchFile(ctx context.Context, id, rel, dst string) error {
 	s.mu.Lock()
 	s.fetched = append(s.fetched, rel)
 	s.mu.Unlock()
-	return s.Store.FetchFile(ctx, id, rel)
+	return s.Store.FetchFile(ctx, id, rel, dst)
 }
 
 func (s *fetchCountingStore) files() []string {

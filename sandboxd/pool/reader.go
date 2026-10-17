@@ -224,21 +224,15 @@ func (m *Manager) captureSleeping(ctx context.Context, sb *types.Sandbox, r *rea
 }
 
 func (m *Manager) fetchReaderDisk(ctx context.Context, r *reader) (string, error) {
-	disk, err := m.ckpts.FetchFile(ctx, r.source, readerCowFile)
-	if err != nil {
-		return "", archiveFetchErr(err)
-	}
-	sidecar, err := m.ckpts.FetchFile(ctx, r.source, readerSidecarFile)
-	if err != nil {
-		return "", archiveFetchErr(err)
-	}
-	if err = os.MkdirAll(r.dir, 0o750); err != nil {
+	if err := os.MkdirAll(r.dir, 0o750); err != nil {
 		return "", err
 	}
-	if err = utils.CloneFile(disk, filepath.Join(r.dir, readerCowFile)); err != nil {
-		return "", fmt.Errorf("copy archive disk: %w", err)
+	for _, name := range []string{readerCowFile, readerSidecarFile} {
+		if err := m.ckpts.FetchFile(ctx, r.source, name, filepath.Join(r.dir, name)); err != nil {
+			return "", archiveFetchErr(err)
+		}
 	}
-	return sidecar, nil
+	return filepath.Join(r.dir, readerSidecarFile), nil
 }
 
 func (m *Manager) takeReaderVM() (*types.Sandbox, error) {

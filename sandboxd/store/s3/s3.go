@@ -154,29 +154,29 @@ func (s *Store) Fetch(ctx context.Context, id string) (string, []byte, string, e
 	return export, meta, digest, nil
 }
 
-func (s *Store) FetchFile(ctx context.Context, id, rel string) (string, error) {
+func (s *Store) FetchFile(ctx context.Context, id, rel, dst string) error {
+	ctx, cancel := context.WithTimeout(ctx, transferBudget)
+	defer cancel()
 	meta, _, err := s.readMeta(ctx, id)
 	if err != nil {
-		return "", err
+		return err
 	}
-	path := filepath.Join(s.staging, "cache", id, store.ExportGenHash(meta)+"-"+strings.ReplaceAll(rel, "/", "_"))
-	if _, statErr := os.Stat(path); statErr == nil {
-		return path, nil
+	man, err := s.readManifest(ctx, id, store.ExportGen(meta))
+	if err != nil {
+		return err
 	}
-	flight := s.fetches.DoChan(path, func() (any, error) {
-		fctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), transferBudget)
-		defer cancel()
-		return nil, s.populateFile(fctx, id, store.ExportGen(meta), rel, path)
-	})
-	select {
-	case res := <-flight:
-		if res.Err != nil {
-			return "", res.Err
-		}
-	case <-ctx.Done():
-		return "", ctx.Err()
+	i := slices.IndexFunc(man.Files, func(f manifestFile) bool { return f.Path == rel })
+	if i < 0 {
+		return store.ErrNotFound
 	}
-	return path, nil
+	part := dst + ".part"
+	defer func() { _ = os.Remove(part) }()
+	file := man.Files[i]
+	file.Path = filepath.Base(part)
+	if err = s.materialize(ctx, manifest{Lineage: man.Lineage, Files: []manifestFile{file}}, filepath.Dir(part)); err != nil {
+		return err
+	}
+	return os.Rename(part, dst)
 }
 
 func (s *Store) ReadMeta(ctx context.Context, id string) ([]byte, error) {
@@ -437,29 +437,6 @@ func (s *Store) materialize(ctx context.Context, man manifest, root string) (err
 		}
 	}
 	return g.Wait()
-}
-
-// populateFile materializes one manifest file through the chunk path of a full fetch, so holes stay holes.
-func (s *Store) populateFile(ctx context.Context, id, gen, rel, path string) error {
-	if _, err := os.Stat(path); err == nil {
-		return nil
-	}
-	man, err := s.readManifest(ctx, id, gen)
-	if err != nil {
-		return err
-	}
-	i := slices.IndexFunc(man.Files, func(f manifestFile) bool { return f.Path == rel })
-	if i < 0 {
-		return store.ErrNotFound
-	}
-	part := path + ".part"
-	defer func() { _ = os.Remove(part) }()
-	one := manifest{Lineage: man.Lineage, Files: []manifestFile{man.Files[i]}}
-	one.Files[0].Path = filepath.Base(part)
-	if err = s.materialize(ctx, one, filepath.Dir(part)); err != nil {
-		return err
-	}
-	return os.Rename(part, path)
 }
 
 func (s *Store) fetchChunk(ctx context.Context, key string, f *os.File, size int64, chunk manifestChunk) error {

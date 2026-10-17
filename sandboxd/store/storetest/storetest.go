@@ -77,21 +77,27 @@ func RunContract(t *testing.T, st store.Store) {
 		t.Errorf("second-generation export: %q, %v", got, readErr)
 	}
 
-	filePath, err := st.FetchFile(ctx, id, "disk2.img")
-	if err != nil {
+	dst := filepath.Join(t.TempDir(), "fetched")
+	if err = st.FetchFile(ctx, id, "disk2.img", dst); err != nil {
 		t.Fatalf("FetchFile: %v", err)
 	}
-	if got, readErr := os.ReadFile(filePath); readErr != nil || string(got) != "second-gen" { //nolint:gosec // test path
+	if got, readErr := os.ReadFile(dst); readErr != nil || string(got) != "second-gen" { //nolint:gosec // test path
 		t.Errorf("fetched file: %q, %v", got, readErr)
 	}
-	if _, err = st.FetchFile(ctx, id, "absent.img"); !errors.Is(err, store.ErrNotFound) {
+	missing := filepath.Join(t.TempDir(), "missing")
+	if err = st.FetchFile(ctx, id, "absent.img", missing); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("FetchFile of an absent file: %v, want store.ErrNotFound", err)
+	}
+	for _, leftover := range []string{missing, missing + ".part"} {
+		if _, statErr := os.Stat(leftover); !errors.Is(statErr, os.ErrNotExist) {
+			t.Errorf("a failed FetchFile left %s behind: %v", leftover, statErr)
+		}
 	}
 
 	if err = st.Delete(ctx, id); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
-	if _, err = st.FetchFile(ctx, id, "disk2.img"); !errors.Is(err, store.ErrNotFound) {
+	if err = st.FetchFile(ctx, id, "disk2.img", filepath.Join(t.TempDir(), "deleted")); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("FetchFile after Delete: %v, want store.ErrNotFound", err)
 	}
 	if _, err = st.ReadMeta(ctx, id); !errors.Is(err, store.ErrNotFound) {
