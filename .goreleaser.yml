@@ -48,6 +48,7 @@ builds:
       - GOWORK=off
     ldflags:
       - -s
+      - -X main.version={{.Version}}
     goos:
       - linux
     goarch:

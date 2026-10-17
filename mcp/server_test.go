@@ -57,6 +57,9 @@ func TestServeSpeaksMCP(t *testing.T) {
 	if initResult["protocolVersion"] != protocolVersion {
 		t.Errorf("initialize protocolVersion = %v", initResult["protocolVersion"])
 	}
+	if info := initResult["serverInfo"].(map[string]any); info["version"] != version {
+		t.Errorf("initialize serverInfo = %v, want version %q", info, version)
+	}
 	tools := replies[2]["result"].(map[string]any)["tools"].([]any)
 	if len(tools) != len(toolSpecs()) {
 		t.Errorf("tools/list: %d tools, want %d", len(tools), len(toolSpecs()))

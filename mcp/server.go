@@ -24,6 +24,8 @@ const (
 	defaultToolTTL  = time.Hour
 )
 
+var version = "devel"
+
 type rpcRequest struct {
 	ID     jsontext.Value `json:"id"`
 	Method string         `json:"method"`
@@ -107,7 +109,7 @@ func (s *server) dispatch(ctx context.Context, req *rpcRequest) rpcResponse {
 		return result(req.ID, map[string]any{
 			"protocolVersion": protocolVersion,
 			"capabilities":    map[string]any{"tools": map[string]any{}},
-			"serverInfo":      map[string]any{"name": "sandbox-mcp", "version": "0.1.0"},
+			"serverInfo":      map[string]any{"name": "sandbox-mcp", "version": version},
 		})
 	case "tools/list":
 		return result(req.ID, map[string]any{"tools": toolSpecs()})
