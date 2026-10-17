@@ -56,6 +56,14 @@ func (m *Manager) adoptArchived(ctx context.Context, id, token string) (bool, er
 	if err = json.Unmarshal(rec.Claim, sb); err != nil {
 		return false, fmt.Errorf("adopt %s: decode claim: %w", id, err)
 	}
+	_, err = m.ckpts.ReadMeta(ctx, rec.Checkpoint)
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		m.retireRow(ctx, id, rec.Epoch)
+		return false, nil
+	case err != nil:
+		return false, fmt.Errorf("adopt %s: read checkpoint: %w", id, err)
+	}
 	epoch, err := m.archives.Take(ctx, id, rec.Epoch, m.nodeID)
 	if errors.Is(err, archives.ErrLost) {
 		return false, nil
@@ -82,6 +90,12 @@ func (m *Manager) adoptArchived(ctx context.Context, id, token string) (bool, er
 	return true, nil
 }
 
+func (m *Manager) retireRow(ctx context.Context, id string, epoch int64) {
+	if consumed, err := m.archives.Consume(ctx, id, epoch, true); err == nil {
+		m.dropTombstone(ctx, id, consumed)
+	}
+}
+
 func (m *Manager) adoptHeld(ctx context.Context, cur *types.Sandbox, epoch int64) bool {
 	cur.Transition.Lock()
 	defer cur.Transition.Unlock()
@@ -93,7 +107,7 @@ func (m *Manager) adoptHeld(ctx context.Context, cur *types.Sandbox, epoch int64
 		return true
 	}
 	if rec, ok, err := m.archives.Get(ctx, cur.ID); err == nil && ok && rec.Owner == m.nodeID && !rec.Consumed {
-		if consumed, err := m.archives.Consume(ctx, cur.ID, rec.Epoch); err == nil {
+		if consumed, err := m.archives.Consume(ctx, cur.ID, rec.Epoch, true); err == nil {
 			rec.Epoch, rec.Consumed = consumed, true
 			m.purgeArchiveRow(ctx, rec)
 		}
@@ -242,9 +256,9 @@ func (m *Manager) fenceWake(ctx context.Context, sb *types.Sandbox, epoch int64)
 	if epoch == 0 {
 		return 0, nil
 	}
-	consumed, err := m.archives.Consume(ctx, sb.ID, epoch)
+	consumed, err := m.archives.Consume(ctx, sb.ID, epoch, false)
 	if errors.Is(err, archives.ErrLost) {
-		consumed, err = m.settleConsume(ctx, sb)
+		consumed, err = m.settleConsume(ctx, sb, false)
 	}
 	switch {
 	case errors.Is(err, ErrUnknownSandbox):
@@ -281,9 +295,9 @@ func (m *Manager) consumeArchive(ctx context.Context, sb *types.Sandbox) (int64,
 		return 0, nil
 	}
 	ctx = context.WithoutCancel(ctx)
-	consumed, err := m.archives.Consume(ctx, sb.ID, sb.ArchiveEpoch)
+	consumed, err := m.archives.Consume(ctx, sb.ID, sb.ArchiveEpoch, true)
 	if errors.Is(err, archives.ErrLost) {
-		consumed, err = m.settleConsume(ctx, sb)
+		consumed, err = m.settleConsume(ctx, sb, true)
 	}
 	switch {
 	case errors.Is(err, ErrUnknownSandbox):
@@ -295,7 +309,7 @@ func (m *Manager) consumeArchive(ctx context.Context, sb *types.Sandbox) (int64,
 	return consumed, nil
 }
 
-func (m *Manager) settleConsume(ctx context.Context, sb *types.Sandbox) (int64, error) {
+func (m *Manager) settleConsume(ctx context.Context, sb *types.Sandbox, released bool) (int64, error) {
 	rec, ok, err := m.archives.Get(ctx, sb.ID)
 	switch {
 	case err != nil:
@@ -306,7 +320,7 @@ func (m *Manager) settleConsume(ctx context.Context, sb *types.Sandbox) (int64, 
 	case rec.Consumed:
 		return rec.Epoch, nil
 	}
-	consumed, err := m.archives.Consume(ctx, sb.ID, rec.Epoch)
+	consumed, err := m.archives.Consume(ctx, sb.ID, rec.Epoch, released)
 	if errors.Is(err, archives.ErrLost) {
 		m.dropAdopted(ctx, sb)
 		return 0, ErrUnknownSandbox
@@ -351,7 +365,6 @@ func (m *Manager) forgetClaim(ctx context.Context, sb *types.Sandbox) bool {
 	return true
 }
 
-// sweepOrphanArchives runs on every node; the epoch compare-and-set lets one win each row.
 func (m *Manager) sweepOrphanArchives(ctx context.Context) {
 	if !m.orphanSweep.CompareAndSwap(false, true) {
 		return
@@ -367,10 +380,24 @@ func (m *Manager) sweepOrphanArchives(ctx context.Context) {
 		switch {
 		case rec.Owner == m.nodeID:
 			m.reconcileOwnRow(ctx, rec, now)
-		case m.ownerGone(rec.Owner) && (!rec.Consumed || now.Sub(rec.UpdatedAt) > tombstoneGrace):
+		case !m.ownerGone(rec.Owner) || rec.Consumed && now.Sub(rec.UpdatedAt) <= tombstoneGrace:
+		case rec.Consumed && !rec.Released:
+			m.reviveArchive(ctx, rec)
+		default:
 			m.purgeArchiveRow(ctx, rec)
 		}
 	}
+}
+
+func (m *Manager) reviveArchive(ctx context.Context, rec archives.Record) {
+	logger := log.WithFunc("pool.reviveArchive")
+	if _, err := m.archives.Revive(ctx, rec.ID, rec.Epoch); err != nil {
+		if !errors.Is(err, archives.ErrLost) {
+			logger.Warnf(ctx, "revive archive %s: %v", rec.ID, err)
+		}
+		return
+	}
+	logger.Infof(ctx, "revived archive %s of %s", rec.ID, rec.Owner)
 }
 
 func (m *Manager) reconcileOwnRow(ctx context.Context, rec archives.Record, now time.Time) {

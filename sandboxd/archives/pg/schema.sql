@@ -7,6 +7,7 @@ CREATE TABLE IF NOT EXISTS sandboxd_archives (
     owner        text        NOT NULL,
     epoch        bigint      NOT NULL CHECK (epoch > 0),
     consumed     boolean     NOT NULL DEFAULT false,
+    released     boolean     NOT NULL DEFAULT false,
     checkpoint   text        NOT NULL,
     deadline     timestamptz,
     claim        jsonb       NOT NULL,

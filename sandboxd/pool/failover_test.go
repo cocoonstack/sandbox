@@ -611,7 +611,7 @@ func TestFailoverRestartAfterAConsumeWithoutCommitKeepsTheClaim(t *testing.T) {
 		t.Fatalf("take: %v", err)
 	}
 	a.setArchiveEpoch(t.Context(), sb, epoch)
-	if _, err = c.reg.Consume(t.Context(), sb.ID, epoch); err != nil {
+	if _, err = c.reg.Consume(t.Context(), sb.ID, epoch, false); err != nil {
 		t.Fatalf("consume: %v", err)
 	}
 	if err = a.FlushClaims(); err != nil {
@@ -956,7 +956,7 @@ func TestFailoverRestartLeavesItsOwnTombstoneToTheSweep(t *testing.T) {
 	}
 }
 
-func TestFailoverSweepPurgesADepartedOwnersTombstoneCheckpointFirst(t *testing.T) {
+func TestFailoverSweepPurgesADepartedOwnersReleaseTombstoneCheckpointFirst(t *testing.T) {
 	c := newFailoverCluster(t)
 	a, b := c.node(t, "a", t.TempDir(), keepAnHour), c.node(t, "b", t.TempDir(), keepAnHour)
 	d := c.node(t, "d", t.TempDir(), keepAnHour)
@@ -968,11 +968,14 @@ func TestFailoverSweepPurgesADepartedOwnersTombstoneCheckpointFirst(t *testing.T
 		t.Fatalf("adopt: %v %v", adopted, err)
 	}
 	b.ckpts = &failingDeleteStore{Store: b.ckpts, attempts: make(chan string, 8)}
-	if _, _, err := b.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
-		t.Fatalf("adopter's wake: %v", err)
+	if err := b.Release(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
+		t.Fatalf("adopter's release: %v", err)
 	}
 	c.down["b"] = true
 	aged, _, _ := c.reg.Get(t.Context(), sb.ID)
+	if !aged.Consumed || !aged.Released {
+		t.Fatalf("setup: row %+v, want a release tombstone", aged)
+	}
 	aged.UpdatedAt = aged.UpdatedAt.Add(-tombstoneGrace - time.Minute)
 	d.archives = &agedRegistry{Registry: c.reg, rec: aged}
 
@@ -1280,7 +1283,7 @@ func TestFailoverSweepSparesADepartedOwnersFreshTombstone(t *testing.T) {
 	if err != nil {
 		t.Fatalf("take: %v", err)
 	}
-	if _, err = c.reg.Consume(t.Context(), sb.ID, epoch); err != nil {
+	if _, err = c.reg.Consume(t.Context(), sb.ID, epoch, false); err != nil {
 		t.Fatalf("consume: %v", err)
 	}
 	c.down["a"] = true
@@ -1301,7 +1304,7 @@ func TestFailoverRestartAfterAConsumeWhileAPeerSweptKeepsTheClaim(t *testing.T) 
 		t.Fatalf("take: %v", err)
 	}
 	a.setArchiveEpoch(t.Context(), sb, epoch)
-	if _, err = c.reg.Consume(t.Context(), sb.ID, epoch); err != nil {
+	if _, err = c.reg.Consume(t.Context(), sb.ID, epoch, false); err != nil {
 		t.Fatalf("consume: %v", err)
 	}
 	if err = a.FlushClaims(); err != nil {
@@ -1621,6 +1624,91 @@ func TestFailoverAnAbandonKeepsTheExportWhileItsIntentIsDurable(t *testing.T) {
 	healStore(t, a)
 }
 
+func TestFailoverSweepRevivesADepartedOwnersWakeTombstone(t *testing.T) {
+	c := newFailoverCluster(t)
+	a, b := c.node(t, "a", t.TempDir(), keepAnHour), c.node(t, "b", t.TempDir(), keepAnHour)
+	sb := mustClaim(t, a, testKey)
+	mustArchive(t, a, sb)
+	ck := sb.ArchiveCk
+	crashAfterConsume(t, c, a, sb)
+	c.down["a"] = true
+	ageRow(t, c, b, sb.ID)
+
+	b.sweepOrphanArchives(t.Context())
+	if rec, ok, _ := c.reg.Get(t.Context(), sb.ID); !ok || rec.Consumed || rec.Owner != "a" || !ckExists(t, b, ck) {
+		t.Fatalf("row %+v present %v, want the wake tombstone revived for a with its checkpoint", rec, ok)
+	}
+	if adopted, err := b.AdoptArchived(t.Context(), sb.ID, sb.Token); err != nil || !adopted {
+		t.Fatalf("adopt of the revived archive: %v %v, want adopted", adopted, err)
+	}
+	if _, _, err := b.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
+		t.Fatalf("wake of the revived archive: %v", err)
+	}
+	if ckExists(t, b, ck) {
+		t.Error("the adopter's wake left the revived checkpoint")
+	}
+}
+
+func TestFailoverAnOwnerReturningAfterARevivalKeepsItsClaim(t *testing.T) {
+	c := newFailoverCluster(t)
+	a, b := c.node(t, "a", t.TempDir(), keepAnHour), c.node(t, "b", t.TempDir(), keepAnHour)
+	sb := mustClaim(t, a, testKey)
+	mustArchive(t, a, sb)
+	crashAfterConsume(t, c, a, sb)
+	c.down["a"] = true
+	ageRow(t, c, b, sb.ID)
+	b.sweepOrphanArchives(t.Context())
+	c.down["a"] = false
+
+	restarted := c.restart(t, a)
+	if err := restarted.Reconcile(t.Context()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	held, ok := restarted.byID(sb.ID)
+	rec, _, _ := c.reg.Get(t.Context(), sb.ID)
+	if !ok || held.ArchiveEpoch != rec.Epoch || rec.Owner != "a" {
+		t.Fatalf("claim held %v at row %+v, want it kept at the revived row's epoch", ok, rec)
+	}
+	if _, _, err := restarted.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
+		t.Errorf("wake after the revival: %v", err)
+	}
+}
+
+func TestFailoverARevivedRowWhoseCheckpointIsGoneIsRetired(t *testing.T) {
+	c := newFailoverCluster(t)
+	a, b := c.node(t, "a", t.TempDir(), keepAnHour), c.node(t, "b", t.TempDir(), keepAnHour)
+	sb := mustClaim(t, a, testKey)
+	mustArchive(t, a, sb)
+	a.archives = &hookRegistry{Registry: c.reg, failDelete: true}
+	if _, _, err := a.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
+		t.Fatalf("wake: %v", err)
+	}
+	if err := a.FlushClaims(); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+	if rec, ok, _ := c.reg.Get(t.Context(), sb.ID); !ok || !rec.Consumed {
+		t.Fatal("setup: the wake's tombstone was deleted")
+	}
+	c.down["a"] = true
+	ageRow(t, c, b, sb.ID)
+	b.sweepOrphanArchives(t.Context())
+
+	if adopted, err := b.AdoptArchived(t.Context(), sb.ID, sb.Token); err != nil || adopted {
+		t.Errorf("adopt of a revived row whose checkpoint is gone: %v %v, want refused", adopted, err)
+	}
+	if rec, ok, _ := c.reg.Get(t.Context(), sb.ID); ok {
+		t.Errorf("row %+v stays adoptable without its checkpoint", rec)
+	}
+	c.down["a"] = false
+	restarted := c.restart(t, a)
+	if err := restarted.Reconcile(t.Context()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if held, ok := restarted.byID(sb.ID); !ok || held.ArchiveCk != "" {
+		t.Error("the owner lost the claim its wake committed")
+	}
+}
+
 type failoverCluster struct {
 	reg   *archivestest.Mem
 	ckDir string
@@ -1676,6 +1764,28 @@ func claimAnyAs(t *testing.T, m *Manager, tenant string) (*types.Sandbox, error)
 	return sb, err
 }
 
+func crashAfterConsume(t *testing.T, c *failoverCluster, m *Manager, sb *types.Sandbox) {
+	t.Helper()
+	epoch, err := c.reg.Take(t.Context(), sb.ID, sb.ArchiveEpoch, m.nodeID)
+	if err != nil {
+		t.Fatalf("take: %v", err)
+	}
+	m.setArchiveEpoch(t.Context(), sb, epoch)
+	if _, err = c.reg.Consume(t.Context(), sb.ID, epoch, false); err != nil {
+		t.Fatalf("consume: %v", err)
+	}
+	if err = m.FlushClaims(); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+}
+
+func ageRow(t *testing.T, c *failoverCluster, m *Manager, id string) {
+	t.Helper()
+	aged, _, _ := c.reg.Get(t.Context(), id)
+	aged.UpdatedAt = aged.UpdatedAt.Add(-tombstoneGrace - time.Minute)
+	m.archives = &agedRegistry{Registry: c.reg, rec: aged}
+}
+
 func interruptArchive(t *testing.T, m *Manager, sb *types.Sandbox, putCommitted bool) string {
 	t.Helper()
 	ck, _, err := m.publishCheckpoint(t.Context(), sb, store.CheckpointID(randHex(8)), "archive", sb.Tenant, true)
@@ -1725,6 +1835,7 @@ type hookRegistry struct {
 	loseTakeReply    bool
 	losePutReply     bool
 	failGet          bool
+	failDelete       bool
 }
 
 func (r *hookRegistry) Get(ctx context.Context, id string) (archives.Record, bool, error) {
@@ -1766,15 +1877,19 @@ func (r *hookRegistry) Delete(ctx context.Context, id string, epoch int64) error
 		r.beforeDelete = nil
 		hook()
 	}
+	if r.failDelete {
+		r.failDelete = false
+		return archives.ErrUnavailable
+	}
 	return r.Registry.Delete(ctx, id, epoch)
 }
 
-func (r *hookRegistry) Consume(ctx context.Context, id string, expect int64) (int64, error) {
+func (r *hookRegistry) Consume(ctx context.Context, id string, expect int64, released bool) (int64, error) {
 	if hook := r.beforeConsume; hook != nil {
 		r.beforeConsume = nil
 		hook()
 	}
-	epoch, err := r.Registry.Consume(ctx, id, expect)
+	epoch, err := r.Registry.Consume(ctx, id, expect, released)
 	if r.loseConsumeReply && err == nil {
 		r.loseConsumeReply = false
 		return 0, archives.ErrUnavailable

@@ -44,7 +44,7 @@ func (r *Registry) Put(ctx context.Context, rec archives.Record) (int64, error) 
 	err := r.pool.QueryRow(qctx, `INSERT INTO sandboxd_archives (id, tenant, token_sha256, owner, epoch, checkpoint, deadline, claim, cell)
 		VALUES ($1, $2, $3, $4, nextval('sandboxd_archives_epoch'), $5, $6, $7, $8)
 		ON CONFLICT (cell, id) DO UPDATE SET tenant = EXCLUDED.tenant, token_sha256 = EXCLUDED.token_sha256,
-			epoch = EXCLUDED.epoch, consumed = false, checkpoint = EXCLUDED.checkpoint,
+			epoch = EXCLUDED.epoch, consumed = false, released = false, checkpoint = EXCLUDED.checkpoint,
 			deadline = EXCLUDED.deadline, claim = EXCLUDED.claim, updated_at = now()
 		WHERE sandboxd_archives.owner = EXCLUDED.owner
 		RETURNING epoch`,
@@ -64,9 +64,15 @@ func (r *Registry) Take(ctx context.Context, id string, expect int64, owner stri
 		RETURNING epoch`, r.cell, id, expect, owner)
 }
 
-func (r *Registry) Consume(ctx context.Context, id string, expect int64) (int64, error) {
-	return r.advance(ctx, `UPDATE sandboxd_archives SET consumed = true, epoch = nextval('sandboxd_archives_epoch'), updated_at = now()
+func (r *Registry) Consume(ctx context.Context, id string, expect int64, released bool) (int64, error) {
+	return r.advance(ctx, `UPDATE sandboxd_archives SET consumed = true, released = $4, epoch = nextval('sandboxd_archives_epoch'), updated_at = now()
 		WHERE cell = $1 AND id = $2 AND epoch = $3 AND NOT consumed
+		RETURNING epoch`, r.cell, id, expect, released)
+}
+
+func (r *Registry) Revive(ctx context.Context, id string, expect int64) (int64, error) {
+	return r.advance(ctx, `UPDATE sandboxd_archives SET consumed = false, epoch = nextval('sandboxd_archives_epoch'), updated_at = now()
+		WHERE cell = $1 AND id = $2 AND epoch = $3 AND consumed AND NOT released
 		RETURNING epoch`, r.cell, id, expect)
 }
 
@@ -86,7 +92,7 @@ func (r *Registry) Delete(ctx context.Context, id string, epoch int64) error {
 func (r *Registry) Get(ctx context.Context, id string) (archives.Record, bool, error) {
 	qctx, cancel := context.WithTimeout(ctx, metastore.QueryTimeout)
 	defer cancel()
-	rec, err := scan(r.pool.QueryRow(qctx, `SELECT id, tenant, token_sha256, owner, epoch, consumed, checkpoint, deadline, updated_at, claim
+	rec, err := scan(r.pool.QueryRow(qctx, `SELECT id, tenant, token_sha256, owner, epoch, consumed, released, checkpoint, deadline, updated_at, claim
 		FROM sandboxd_archives WHERE cell = $2 AND id = $1`, id, r.cell))
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
@@ -98,12 +104,12 @@ func (r *Registry) Get(ctx context.Context, id string) (archives.Record, bool, e
 }
 
 func (r *Registry) Sweepable(ctx context.Context, now time.Time, owner string) ([]archives.Record, error) {
-	return r.collect(ctx, `SELECT id, tenant, token_sha256, owner, epoch, consumed, checkpoint, deadline, updated_at, NULL::jsonb
+	return r.collect(ctx, `SELECT id, tenant, token_sha256, owner, epoch, consumed, released, checkpoint, deadline, updated_at, NULL::jsonb
 		FROM sandboxd_archives WHERE cell = $2 AND (consumed OR deadline < $1 OR owner = $3)`, now, r.cell, owner)
 }
 
 func (r *Registry) Rows(ctx context.Context, ids []string) (map[string]archives.Record, error) {
-	recs, err := r.collect(ctx, `SELECT id, tenant, token_sha256, owner, epoch, consumed, checkpoint, deadline, updated_at, NULL::jsonb
+	recs, err := r.collect(ctx, `SELECT id, tenant, token_sha256, owner, epoch, consumed, released, checkpoint, deadline, updated_at, NULL::jsonb
 		FROM sandboxd_archives WHERE cell = $1 AND id = ANY($2)`, r.cell, ids)
 	if err != nil {
 		return nil, err
@@ -154,7 +160,7 @@ func scan(row pgx.Row) (archives.Record, error) {
 		deadline *time.Time
 		claim    []byte
 	)
-	err := row.Scan(&rec.ID, &rec.Tenant, &rec.TokenSHA256, &rec.Owner, &rec.Epoch, &rec.Consumed, &rec.Checkpoint, &deadline, &rec.UpdatedAt, &claim)
+	err := row.Scan(&rec.ID, &rec.Tenant, &rec.TokenSHA256, &rec.Owner, &rec.Epoch, &rec.Consumed, &rec.Released, &rec.Checkpoint, &deadline, &rec.UpdatedAt, &claim)
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
 		return archives.Record{}, err
