@@ -172,7 +172,7 @@ func TestReconcileReclaimsOrphanArchiveCk(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(staging, store.MetaFile), []byte(meta), 0o600); err != nil {
 			t.Fatalf("meta: %v", err)
 		}
-		if err := m.ckpts.Publish(t.Context(), staging, id); err != nil {
+		if err := m.ckpts.Publish(t.Context(), staging, id, ""); err != nil {
 			t.Fatalf("publish: %v", err)
 		}
 	}
@@ -937,8 +937,8 @@ type stallingStore struct {
 	release   chan struct{}
 }
 
-func (s *stallingStore) Publish(ctx context.Context, staging, id string, opts ...store.PublishOption) error {
-	if err := s.Store.Publish(ctx, staging, id, opts...); err != nil {
+func (s *stallingStore) Publish(ctx context.Context, staging, id, lineage string) error {
+	if err := s.Store.Publish(ctx, staging, id, lineage); err != nil {
 		return err
 	}
 	s.published <- id
@@ -951,9 +951,9 @@ type lineageStore struct {
 	lineage string
 }
 
-func (s *lineageStore) Publish(ctx context.Context, staging, id string, opts ...store.PublishOption) error {
-	s.lineage = store.ResolvePublishOptions(opts).Lineage
-	return s.Store.Publish(ctx, staging, id, opts...)
+func (s *lineageStore) Publish(ctx context.Context, staging, id, lineage string) error {
+	s.lineage = lineage
+	return s.Store.Publish(ctx, staging, id, lineage)
 }
 
 type failingDeleteStore struct {

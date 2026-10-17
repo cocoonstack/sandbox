@@ -85,16 +85,17 @@ func TestWriteChunkRejectsWrongLengthAndChecksum(t *testing.T) {
 	sum := sha256.Sum256([]byte(data))
 	badSum := "0000000000000000000000000000000000000000000000000000000000000000"
 	for _, tc := range []struct {
-		name string
-		size int64
-		sha  string
-		body string
-		want string
+		name  string
+		size  int64
+		index int64
+		sha   string
+		body  string
+		want  string
 	}{
-		{"short body", int64(len(data)) + 1, hex.EncodeToString(sum[:]), data, "want 8"},
-		{"long body", int64(len(data)) - 1, hex.EncodeToString(sum[:]), data, "want 6"},
-		{"wrong sum", int64(len(data)), badSum, data, "checksum"},
-		{"index outside file", int64(len(data)), hex.EncodeToString(sum[:]), data, "outside"},
+		{"short body", int64(len(data)) + 1, 0, hex.EncodeToString(sum[:]), data, "want 8"},
+		{"long body", int64(len(data)) - 1, 0, hex.EncodeToString(sum[:]), data, "want 6"},
+		{"wrong sum", int64(len(data)), 0, badSum, data, "checksum"},
+		{"index outside file", int64(len(data)), 1, hex.EncodeToString(sum[:]), data, "outside"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f, err := os.Create(filepath.Join(t.TempDir(), "chunk"))
@@ -102,11 +103,7 @@ func TestWriteChunkRejectsWrongLengthAndChecksum(t *testing.T) {
 				t.Fatalf("create: %v", err)
 			}
 			defer func() { _ = f.Close() }()
-			index := int64(0)
-			if tc.name == "index outside file" {
-				index = 1
-			}
-			err = WriteChunk(f, tc.size, index, tc.sha, strings.NewReader(tc.body))
+			err = WriteChunk(f, tc.size, tc.index, tc.sha, strings.NewReader(tc.body))
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Errorf("WriteChunk = %v, want an error containing %q", err, tc.want)
 			}

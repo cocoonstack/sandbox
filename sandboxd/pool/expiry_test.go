@@ -312,10 +312,10 @@ type failingPublishStore struct {
 	publishes atomic.Int32
 }
 
-func (s *failingPublishStore) Publish(ctx context.Context, staging, id string, opts ...store.PublishOption) error {
+func (s *failingPublishStore) Publish(ctx context.Context, staging, id, lineage string) error {
 	s.publishes.Add(1)
 	if s.fail.Load() {
 		return errors.New("store unavailable")
 	}
-	return s.Store.Publish(ctx, staging, id, opts...)
+	return s.Store.Publish(ctx, staging, id, lineage)
 }

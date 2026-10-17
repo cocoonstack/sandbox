@@ -190,7 +190,7 @@ func TestPublishDigestedRetryAndMetaRequestAccounting(t *testing.T) {
 	fake.setPutFailures(exportKey, 1)
 
 	staging := stageRecord(t, st, id, meta, content)
-	digest, err := st.PublishDigested(t.Context(), staging, id)
+	digest, err := st.PublishDigested(t.Context(), staging, id, "")
 	if err != nil {
 		t.Fatalf("PublishDigested: %v", err)
 	}
@@ -252,7 +252,7 @@ func TestPublishDigestedFailurePreservesCommittedGeneration(t *testing.T) {
 	st := newTestStore(t, fake)
 	oldMeta := []byte(`{"id":"` + id + `","gen":1}`)
 	oldStaging := stageRecord(t, st, id, oldMeta, "old")
-	oldDigest, err := st.PublishDigested(t.Context(), oldStaging, id)
+	oldDigest, err := st.PublishDigested(t.Context(), oldStaging, id, "")
 	if err != nil {
 		t.Fatalf("publish old generation: %v", err)
 	}
@@ -264,7 +264,7 @@ func TestPublishDigestedFailurePreservesCommittedGeneration(t *testing.T) {
 	metaKey := "ck/" + id + "/" + store.MetaFile
 	markerPuts := fake.requestCount(http.MethodPut, metaKey)
 	fake.setPutFailures(newExportKey, 100)
-	digest, err := st.PublishDigested(t.Context(), newStaging, id)
+	digest, err := st.PublishDigested(t.Context(), newStaging, id, "")
 	if err == nil {
 		t.Fatal("PublishDigested succeeded with injected export failure")
 	}
@@ -288,7 +288,7 @@ func TestPublishDigestedFailurePreservesCommittedGeneration(t *testing.T) {
 	}
 
 	fake.setPutFailures(newExportKey, 0)
-	newDigest, err := st.PublishDigested(t.Context(), newStaging, id)
+	newDigest, err := st.PublishDigested(t.Context(), newStaging, id, "")
 	if err != nil {
 		t.Fatalf("retry PublishDigested: %v", err)
 	}
@@ -441,7 +441,7 @@ func TestSparseExportStaysSparseThroughS3(t *testing.T) {
 	meta := []byte(`{"id":"` + id + `"}`)
 	staging, src := stageSparseRecord(t, st, id, meta, size, map[int64]string{0: "head", 3*store.DigestChunkSize + 100: "mid", 11*store.DigestChunkSize + 10: "tail"})
 	srcSum := fileSum(t, src)
-	if err := st.Publish(t.Context(), staging, id); err != nil {
+	if err := st.Publish(t.Context(), staging, id, ""); err != nil {
 		t.Fatalf("Publish: %v", err)
 	}
 	count, uploaded := fake.chunkPuts("ck/chunks/" + id + "/")
@@ -480,7 +480,7 @@ func TestAllZeroDataChunkIsNotUploaded(t *testing.T) {
 	if err := os.WriteFile(src, dense, 0o600); err != nil {
 		t.Fatalf("write dense export: %v", err)
 	}
-	if err := st.Publish(t.Context(), staging, id); err != nil {
+	if err := st.Publish(t.Context(), staging, id, ""); err != nil {
 		t.Fatalf("Publish: %v", err)
 	}
 	if count, _ := fake.chunkPuts("ck/chunks/" + id + "/"); count != 1 {
@@ -530,7 +530,7 @@ func TestPublishDigestedHashesHolesLikeZeros(t *testing.T) {
 	size := 3*store.DigestChunkSize + 7
 	staging, src := stageSparseRecord(t, st, id, []byte(`{"id":"`+id+`"}`), size, map[int64]string{store.DigestChunkSize + 5: "data", size - 1: "z"})
 	sums := denseChunkSums(t, src)
-	digest, err := st.PublishDigested(t.Context(), staging, id)
+	digest, err := st.PublishDigested(t.Context(), staging, id, "")
 	if err != nil {
 		t.Fatalf("PublishDigested: %v", err)
 	}
@@ -548,7 +548,7 @@ func TestPublishDigestedSplitsChunksAtTheFixedBoundary(t *testing.T) {
 	st := newTestStore(t, &fakeS3{objects: map[string][]byte{}})
 	content := string(bytes.Repeat([]byte{'x'}, int(store.DigestChunkSize))) + "y"
 	staging := stageRecord(t, st, id, []byte(`{"id":"`+id+`"}`), content)
-	digest, err := st.PublishDigested(t.Context(), staging, id)
+	digest, err := st.PublishDigested(t.Context(), staging, id, "")
 	if err != nil {
 		t.Fatalf("PublishDigested: %v", err)
 	}
@@ -572,29 +572,29 @@ func TestLineageDedupUploadsOnlyChangedChunks(t *testing.T) {
 	base := map[int64]string{0: "c0", 2 * cs: "c2", 4 * cs: "c4", 6 * cs: "c6"}
 	changed := maps.Clone(base)
 	changed[4*cs] = "changed"
-	publish := func(id string, gen int, writes map[int64]string, opts ...store.PublishOption) (puts int, srcSum [sha256.Size]byte) {
+	publish := func(id string, gen int, writes map[int64]string, scope string) (puts int, srcSum [sha256.Size]byte) {
 		t.Helper()
 		before, _ := fake.chunkPuts("ck/chunks/")
 		staging, src := stageSparseRecord(t, st, id, fmt.Appendf(nil, `{"id":"%s","gen":%d}`, id, gen), 8*cs, writes)
 		srcSum = fileSum(t, src)
-		if err := st.Publish(t.Context(), staging, id, opts...); err != nil {
+		if err := st.Publish(t.Context(), staging, id, scope); err != nil {
 			t.Fatalf("Publish %s: %v", id, err)
 		}
 		after, _ := fake.chunkPuts("ck/chunks/")
 		return after - before, srcSum
 	}
 
-	if puts, _ := publish("ck_00000000000000b1", 1, base, store.WithLineage(lineage)); puts != 4 {
+	if puts, _ := publish("ck_00000000000000b1", 1, base, lineage); puts != 4 {
 		t.Fatalf("first publish uploaded %d chunks, want 4", puts)
 	}
-	puts, srcSum := publish("ck_00000000000000b2", 1, changed, store.WithLineage(lineage))
+	puts, srcSum := publish("ck_00000000000000b2", 1, changed, lineage)
 	if puts != 1 {
 		t.Errorf("second record of the lineage uploaded %d chunks, want only the changed one", puts)
 	}
-	if puts, _ = publish("ck_00000000000000b1", 2, base, store.WithLineage(lineage)); puts != 0 {
+	if puts, _ = publish("ck_00000000000000b1", 2, base, lineage); puts != 0 {
 		t.Errorf("re-publish of identical content uploaded %d chunks, want 0", puts)
 	}
-	if puts, _ = publish("ck_00000000000000b3", 1, base); puts != 4 {
+	if puts, _ = publish("ck_00000000000000b3", 1, base, ""); puts != 4 {
 		t.Errorf("a record outside the lineage uploaded %d chunks, want all 4", puts)
 	}
 
@@ -617,7 +617,7 @@ func TestSweepKeepsReferencedChunksAndRemovesUnreferencedPastTheGrace(t *testing
 		if err := os.WriteFile(filepath.Join(staging, store.ExportDir, "extra.bin"), []byte(only), 0o600); err != nil {
 			t.Fatalf("write extra: %v", err)
 		}
-		if err := st.Publish(t.Context(), staging, id, store.WithLineage(lineage)); err != nil {
+		if err := st.Publish(t.Context(), staging, id, lineage); err != nil {
 			t.Fatalf("Publish %s: %v", id, err)
 		}
 	}
@@ -711,7 +711,7 @@ func TestSweepReadsTheMetaAgeAtTheGet(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(staging, store.ExportDir, "extra.bin"), []byte(only), 0o600); err != nil {
 			t.Fatalf("write extra: %v", err)
 		}
-		if err := st.Publish(t.Context(), staging, id); err != nil {
+		if err := st.Publish(t.Context(), staging, id, ""); err != nil {
 			t.Fatalf("Publish gen %d: %v", gen, err)
 		}
 	}
@@ -743,7 +743,7 @@ func TestPublishReadsOnlyItsLineage(t *testing.T) {
 	publishIn := func(id string) {
 		t.Helper()
 		staging := stageRecord(t, st, id, []byte(`{"id":"`+id+`"}`), "claim")
-		if err := st.Publish(t.Context(), staging, id, store.WithLineage(lineage)); err != nil {
+		if err := st.Publish(t.Context(), staging, id, lineage); err != nil {
 			t.Fatalf("Publish %s: %v", id, err)
 		}
 	}
@@ -768,7 +768,7 @@ func TestSweepRemovesLineageMarkersOfDeadRecords(t *testing.T) {
 	publish := func(id string) {
 		t.Helper()
 		staging := stageRecord(t, st, id, []byte(`{"id":"`+id+`"}`), "claim")
-		if err := st.Publish(t.Context(), staging, id, store.WithLineage(lineage)); err != nil {
+		if err := st.Publish(t.Context(), staging, id, lineage); err != nil {
 			t.Fatalf("Publish %s: %v", id, err)
 		}
 	}
@@ -821,17 +821,17 @@ func TestPublishUploadsAnUnreferencedChunkAgain(t *testing.T) {
 	const lineage = "sbx_00000000000000a3"
 	fake := &fakeS3{objects: map[string][]byte{}}
 	st := newTestStore(t, fake)
-	publishIn := func(id, content string, opts ...store.PublishOption) int {
+	publishIn := func(id, content, scope string) int {
 		t.Helper()
 		before, _ := fake.chunkPuts("ck/chunks/")
 		staging := stageRecord(t, st, id, []byte(`{"id":"`+id+`"}`), content)
-		if err := st.Publish(t.Context(), staging, id, opts...); err != nil {
+		if err := st.Publish(t.Context(), staging, id, scope); err != nil {
 			t.Fatalf("Publish %s: %v", id, err)
 		}
 		after, _ := fake.chunkPuts("ck/chunks/")
 		return after - before
 	}
-	publish := func(id string) int { return publishIn(id, "orphaned", store.WithLineage(lineage)) }
+	publish := func(id string) int { return publishIn(id, "orphaned", lineage) }
 
 	if puts := publish("ck_00000000000000c1"); puts != 1 {
 		t.Fatalf("first publish uploaded %d chunks, want 1", puts)
@@ -845,8 +845,8 @@ func TestPublishUploadsAnUnreferencedChunkAgain(t *testing.T) {
 	if puts := publish("ck_00000000000000c3"); puts != 0 {
 		t.Errorf("a chunk a committed manifest references was uploaded again: %d uploads, want 0", puts)
 	}
-	publishIn("ck_00000000000000c4", "elsewhere")
-	if puts := publishIn("ck_00000000000000c5", "elsewhere", store.WithLineage(lineage)); puts != 1 {
+	publishIn("ck_00000000000000c4", "elsewhere", "")
+	if puts := publishIn("ck_00000000000000c5", "elsewhere", lineage); puts != 1 {
 		t.Errorf("a chunk another lineage's manifest references was reused: %d uploads, want 1", puts)
 	}
 }
@@ -854,7 +854,7 @@ func TestPublishUploadsAnUnreferencedChunkAgain(t *testing.T) {
 func publishRecord(t *testing.T, st *Store, id string, meta []byte, content string) {
 	t.Helper()
 	staging := stageRecord(t, st, id, meta, content)
-	if err := st.Publish(t.Context(), staging, id); err != nil {
+	if err := st.Publish(t.Context(), staging, id, ""); err != nil {
 		t.Fatalf("publish record: %v", err)
 	}
 }

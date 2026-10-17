@@ -441,7 +441,7 @@ func TestTemplatesListWhatTheNodeHoldsAcrossARestart(t *testing.T) {
 	if err = os.WriteFile(filepath.Join(staging, store.MetaFile), []byte(`{"id":"`+oldID+`","created_at":"2026-01-01T00:00:00Z"}`), 0o600); err != nil {
 		t.Fatalf("write keyless meta: %v", err)
 	}
-	if _, err = m.tpls.PublishDigested(t.Context(), staging, oldID); err != nil {
+	if _, err = m.tpls.PublishDigested(t.Context(), staging, oldID, ""); err != nil {
 		t.Fatalf("publish keyless record: %v", err)
 	}
 

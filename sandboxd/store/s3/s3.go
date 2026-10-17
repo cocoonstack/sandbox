@@ -80,12 +80,6 @@ type recordObjects struct {
 	manifests map[string]s3types.Object // by generation
 }
 
-type inventory struct {
-	records map[string]*recordObjects
-	chunks  map[string][]s3types.Object // by lineage
-	markers []s3types.Object
-}
-
 var _ store.Store = (*Store)(nil)
 
 // Store stages locally and publishes to the bucket; idRe names the instance's id namespace.
@@ -127,13 +121,13 @@ func (s *Store) Stage(id string) (string, error) {
 	return os.MkdirTemp(s.staging, id+"-*.tmp")
 }
 
-func (s *Store) Publish(ctx context.Context, staging, id string, opts ...store.PublishOption) error {
-	_, err := s.publish(ctx, staging, id, store.ResolvePublishOptions(opts).Lineage, false)
+func (s *Store) Publish(ctx context.Context, staging, id, lineage string) error {
+	_, err := s.publish(ctx, staging, id, lineage, false)
 	return err
 }
 
-func (s *Store) PublishDigested(ctx context.Context, staging, id string, opts ...store.PublishOption) (string, error) {
-	return s.publish(ctx, staging, id, store.ResolvePublishOptions(opts).Lineage, true)
+func (s *Store) PublishDigested(ctx context.Context, staging, id, lineage string) (string, error) {
+	return s.publish(ctx, staging, id, lineage, true)
 }
 
 func (s *Store) Fetch(ctx context.Context, id string) (string, []byte, string, error) {
@@ -237,7 +231,7 @@ func (s *Store) SweepGenerations(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	inv := s.classify(objs)
+	inv := newInventory(s.prefix, objs)
 	now := time.Now()
 	refs := &chunkRefs{live: map[string]map[string]struct{}{}}
 	var doomed []string
@@ -440,11 +434,11 @@ func (s *Store) materialize(ctx context.Context, man manifest, root string) (err
 		}
 	}()
 	for i, file := range man.Files {
-		path := filepath.Join(root, filepath.FromSlash(file.Path))
-		if err = os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+		target := filepath.Join(root, filepath.FromSlash(file.Path))
+		if err = os.MkdirAll(filepath.Dir(target), 0o750); err != nil {
 			return err
 		}
-		if handles[i], err = os.Create(path); err != nil { //nolint:gosec // path derives from our own temp dir
+		if handles[i], err = os.Create(target); err != nil { //nolint:gosec // path derives from our own temp dir
 			return err
 		}
 		if err = handles[i].Truncate(file.Size); err != nil {
@@ -552,53 +546,6 @@ func (s *Store) referencedChunks(ctx context.Context, id, lineage string) (map[s
 	return have, nil
 }
 
-func (inv inventory) alive(id string, dead map[string]struct{}) bool {
-	rec := inv.records[id]
-	if rec == nil {
-		return false
-	}
-	if rec.meta != nil {
-		return true
-	}
-	for _, obj := range rec.manifests {
-		if _, gone := dead[*obj.Key]; !gone {
-			return true
-		}
-	}
-	return false
-}
-
-func (s *Store) classify(objs []s3types.Object) inventory {
-	inv := inventory{records: map[string]*recordObjects{}, chunks: map[string][]s3types.Object{}}
-	for _, obj := range objs {
-		first, rest, _ := strings.Cut(strings.TrimPrefix(*obj.Key, s.prefix), "/")
-		if first == lineagesDir {
-			inv.markers = append(inv.markers, obj)
-			continue
-		}
-		if first == chunksDir {
-			if lineage, _, ok := strings.Cut(rest, "/"); ok {
-				inv.chunks[lineage] = append(inv.chunks[lineage], obj)
-			}
-			continue
-		}
-		if !store.CheckpointIDRe.MatchString(first) && !store.TemplateIDRe.MatchString(first) {
-			continue
-		}
-		rec := inv.records[first]
-		if rec == nil {
-			rec = &recordObjects{manifests: map[string]s3types.Object{}}
-			inv.records[first] = rec
-		}
-		if rest == store.MetaFile {
-			rec.meta = &obj
-		} else if gen, name, ok := strings.Cut(rest, "/"); ok && name == manifestName {
-			rec.manifests[gen] = obj
-		}
-	}
-	return inv
-}
-
 func (s *Store) sweepRecord(ctx context.Context, rec *recordObjects, now time.Time, refs *chunkRefs) ([]string, error) {
 	current := ""
 	var metaModified *time.Time
@@ -696,39 +643,26 @@ func (s *Store) list(ctx context.Context, prefix string) ([]s3types.Object, erro
 	return objs, nil
 }
 
-func publishFiles(staging string) ([]publishFile, error) {
-	var files []publishFile
-	err := store.WalkExport(filepath.Join(staging, store.ExportDir), func(rel, path string, _ fs.FileInfo) error {
-		files = append(files, publishFile{path: path, rel: rel})
-		return nil
-	})
-	return files, err
+type inventory struct {
+	records map[string]*recordObjects
+	chunks  map[string][]s3types.Object // by lineage
+	markers []s3types.Object
 }
 
-func objectKeys(objs []s3types.Object) []string {
-	keys := make([]string, len(objs))
-	for i, obj := range objs {
-		keys[i] = *obj.Key
+func (inv inventory) alive(id string, dead map[string]struct{}) bool {
+	rec := inv.records[id]
+	if rec == nil {
+		return false
 	}
-	return keys
-}
-
-func idle(modified *time.Time, now time.Time) bool {
-	return now.Sub(aws.ToTime(modified)) >= store.GenerationGrace
-}
-
-// pruneIdleGenerations drops cached generations of one record that no Fetch used within the grace; a hit refreshes the mtime.
-func pruneIdleGenerations(dir, keep string) {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return
+	if rec.meta != nil {
+		return true
 	}
-	for _, entry := range entries {
-		path := filepath.Join(dir, entry.Name())
-		if info, err := entry.Info(); err == nil && path != keep && time.Since(info.ModTime()) >= store.GenerationGrace {
-			_ = os.RemoveAll(path)
+	for _, obj := range rec.manifests {
+		if _, gone := dead[*obj.Key]; !gone {
+			return true
 		}
 	}
+	return false
 }
 
 type chunkUploader struct {
@@ -755,7 +689,7 @@ func (u *chunkUploader) scan(ctx context.Context, file publishFile) (store.Diges
 	if err = store.RequireRegular(file.rel, info.Mode()); err != nil {
 		return store.DigestFile{}, manifestFile{}, err
 	}
-	entry := manifestFile{Path: file.rel, Size: info.Size(), Chunks: []manifestChunk{}}
+	entry := manifestFile{Path: file.rel, Size: info.Size()}
 	digest, err := store.ScanFile(f, file.rel, info.Size(), getChunkBuf, func(c store.Chunk) error {
 		entry.Chunks = append(entry.Chunks, manifestChunk{Index: c.Index, SHA256: c.SHA256})
 		return u.upload(ctx, c)
@@ -788,13 +722,6 @@ func (u *chunkUploader) claim(sha string) bool {
 	return true
 }
 
-func getChunkBuf() []byte { return *chunkBufs.Get().(*[]byte) }
-
-func putChunkBuf(buf []byte) {
-	buf = buf[:cap(buf)]
-	chunkBufs.Put(&buf)
-}
-
 type chunkRefs struct {
 	mu   sync.Mutex
 	live map[string]map[string]struct{} // lineage -> chunk sha
@@ -820,4 +747,77 @@ func (r *chunkRefs) has(lineage, sha string) bool {
 	defer r.mu.Unlock()
 	_, ok := r.live[lineage][sha]
 	return ok
+}
+
+func publishFiles(staging string) ([]publishFile, error) {
+	var files []publishFile
+	err := store.WalkExport(filepath.Join(staging, store.ExportDir), func(rel, abs string, _ fs.FileInfo) error {
+		files = append(files, publishFile{path: abs, rel: rel})
+		return nil
+	})
+	return files, err
+}
+
+func objectKeys(objs []s3types.Object) []string {
+	keys := make([]string, len(objs))
+	for i, obj := range objs {
+		keys[i] = *obj.Key
+	}
+	return keys
+}
+
+func idle(modified *time.Time, now time.Time) bool {
+	return now.Sub(aws.ToTime(modified)) >= store.GenerationGrace
+}
+
+// pruneIdleGenerations drops cached generations of one record that no Fetch used within the grace; a hit refreshes the mtime.
+func pruneIdleGenerations(dir, keep string) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		entryPath := filepath.Join(dir, entry.Name())
+		if info, err := entry.Info(); err == nil && entryPath != keep && time.Since(info.ModTime()) >= store.GenerationGrace {
+			_ = os.RemoveAll(entryPath)
+		}
+	}
+}
+
+func newInventory(prefix string, objs []s3types.Object) inventory {
+	inv := inventory{records: map[string]*recordObjects{}, chunks: map[string][]s3types.Object{}}
+	for _, obj := range objs {
+		first, rest, _ := strings.Cut(strings.TrimPrefix(*obj.Key, prefix), "/")
+		if first == lineagesDir {
+			inv.markers = append(inv.markers, obj)
+			continue
+		}
+		if first == chunksDir {
+			if lineage, _, ok := strings.Cut(rest, "/"); ok {
+				inv.chunks[lineage] = append(inv.chunks[lineage], obj)
+			}
+			continue
+		}
+		if !store.CheckpointIDRe.MatchString(first) && !store.TemplateIDRe.MatchString(first) {
+			continue
+		}
+		rec := inv.records[first]
+		if rec == nil {
+			rec = &recordObjects{manifests: map[string]s3types.Object{}}
+			inv.records[first] = rec
+		}
+		if rest == store.MetaFile {
+			rec.meta = &obj
+		} else if gen, name, ok := strings.Cut(rest, "/"); ok && name == manifestName {
+			rec.manifests[gen] = obj
+		}
+	}
+	return inv
+}
+
+func getChunkBuf() []byte { return *chunkBufs.Get().(*[]byte) }
+
+func putChunkBuf(buf []byte) {
+	buf = buf[:cap(buf)]
+	chunkBufs.Put(&buf)
 }

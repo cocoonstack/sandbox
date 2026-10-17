@@ -56,11 +56,11 @@ func (d *Store) Stage(id string) (string, error) {
 	return os.MkdirTemp(d.root, id+"-*.tmp")
 }
 
-func (d *Store) Publish(ctx context.Context, staging, id string, _ ...store.PublishOption) error {
+func (d *Store) Publish(ctx context.Context, staging, id, _ string) error {
 	return d.publish(ctx, staging, id, "")
 }
 
-func (d *Store) PublishDigested(ctx context.Context, staging, id string, _ ...store.PublishOption) (string, error) {
+func (d *Store) PublishDigested(ctx context.Context, staging, id, _ string) (string, error) {
 	digest, err := hashExport(ctx, filepath.Join(staging, store.ExportDir))
 	if err != nil {
 		return "", fmt.Errorf("digest export: %w", err)

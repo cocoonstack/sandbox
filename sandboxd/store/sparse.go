@@ -20,7 +20,7 @@ var zeroChunkSum = sync.OnceValue(func() [sha256.Size]byte { return zeroSum(Dige
 // Chunk is one non-zero DigestChunkSize slice of a file; Data is owned by the emit callee.
 type Chunk struct {
 	Index  int64
-	SHA256 string // hex of the chunk bytes, the digest chunk entry
+	SHA256 string // hex of the chunk bytes
 	Data   []byte
 }
 
@@ -43,7 +43,7 @@ func ScanFile(f *os.File, rel string, size int64, newBuf func() []byte, emit fun
 				buf = newBuf()
 			}
 			data := buf[:chunkLen(size, index)]
-			if _, err = io.ReadFull(io.NewSectionReader(f, index*DigestChunkSize, int64(len(data))), data); err != nil {
+			if _, err = f.ReadAt(data, index*DigestChunkSize); err != nil {
 				return DigestFile{}, fmt.Errorf("read %s chunk %d: %w", rel, index, err)
 			}
 			next = index + 1

@@ -46,15 +46,6 @@ type Record struct {
 	Labels []byte
 }
 
-// PublishOptions is the resolved option set of one publish.
-type PublishOptions struct {
-	// Lineage scopes chunk dedup in a content-addressed backend; empty means the record id.
-	Lineage string
-}
-
-// PublishOption tunes one publish.
-type PublishOption func(*PublishOptions)
-
 // S3Config selects the bucket of the s3 backend; credentials come from the standard AWS chain, never this config.
 type S3Config struct {
 	Bucket         string `json:"bucket"`
@@ -68,10 +59,10 @@ type S3Config struct {
 type Store interface {
 	// Stage returns a writable staging directory whose Publish is atomic.
 	Stage(id string) (string, error)
-	// Publish atomically replaces the record's previous generation with the staged directory.
-	Publish(ctx context.Context, staging, id string, opts ...PublishOption) error
+	// Publish atomically replaces the record's previous generation with the staged directory; lineage scopes chunk dedup in a content-addressed backend and "" means the record id.
+	Publish(ctx context.Context, staging, id, lineage string) error
 	// PublishDigested applies Publish semantics and returns the export digest.
-	PublishDigested(ctx context.Context, staging, id string, opts ...PublishOption) (string, error)
+	PublishDigested(ctx context.Context, staging, id, lineage string) (string, error)
 	// Fetch materializes a record's export locally; the caller holds the record lock until the clone ends.
 	Fetch(ctx context.Context, id string) (dir string, meta []byte, digest string, err error)
 	// ReadMeta returns a record's metadata, or an error when the record does not exist.
@@ -86,20 +77,6 @@ type Store interface {
 	SweepStaging() error
 	// SweepGenerations runs generation retention without disturbing staging or fetch caches.
 	SweepGenerations(ctx context.Context) error
-}
-
-// WithLineage makes the publish share chunks with every record of the same lineage.
-func WithLineage(lineage string) PublishOption {
-	return func(o *PublishOptions) { o.Lineage = lineage }
-}
-
-// ResolvePublishOptions applies opts over the zero PublishOptions.
-func ResolvePublishOptions(opts []PublishOption) PublishOptions {
-	var o PublishOptions
-	for _, opt := range opts {
-		opt(&o)
-	}
-	return o
 }
 
 // CheckpointID, TemplateID, and TemplateHash are the one home for the ck_/tp_ id scheme.

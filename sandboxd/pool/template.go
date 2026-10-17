@@ -303,7 +303,7 @@ func (m *Manager) commitTemplate(ctx context.Context, staging string, rec templa
 	if err = os.WriteFile(filepath.Join(staging, store.MetaFile), meta, 0o600); err != nil {
 		return "", err
 	}
-	digest, err := m.tpls.PublishDigested(ctx, staging, id)
+	digest, err := m.tpls.PublishDigested(ctx, staging, id, "")
 	if err != nil {
 		return "", fmt.Errorf("publish template: %w", err)
 	}
