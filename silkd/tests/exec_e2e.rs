@@ -7,7 +7,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use serde_json::{Value, json};
-use silkd::proc::Chunk;
 use silkd::server::State;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 
@@ -193,8 +192,7 @@ async fn attach_keeps_a_tail_emitted_during_the_replay() {
     cr.read_exact(&mut out).await.unwrap();
 
     proc.emit_bytes(false, b"tail");
-    proc.mark_exited(0);
-    proc.emit(&Chunk::Exit(0));
+    proc.finish(0);
     cw.shutdown().await.unwrap();
     tokio::time::timeout(Duration::from_secs(8), cr.read_to_end(&mut out))
         .await

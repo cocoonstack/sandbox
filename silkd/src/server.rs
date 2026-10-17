@@ -231,7 +231,7 @@ impl State {
             w,
             &Response::Info {
                 version: Cow::Borrowed(env!("CARGO_PKG_VERSION")),
-                proto: proto::PROTO_VERSION,
+                proto: proto::KEEP_ALIVE_PROTO,
                 uptime_secs: self.started.elapsed().as_secs(),
                 procs: self.table.len(),
                 sessions: self.sessions.len(),
@@ -339,14 +339,9 @@ where
     R: AsyncBufRead + Unpin,
 {
     let mut line = Vec::new();
+    let mut data = Vec::new();
     while let Ok(true) = proto::read_frame_into(&mut reader, &mut line).await {
-        let mut data = Vec::new();
-        let req = if let Some(n) = proto::decode_data_frame(&line, &mut data) {
-            data.truncate(n);
-            Request::Data { data }
-        } else if let Ok(req) = serde_json::from_slice::<Request>(&line) {
-            req
-        } else {
+        let Ok(req) = proto::parse_request(&line, &mut data) else {
             break;
         };
         if !req.is_continuation() {

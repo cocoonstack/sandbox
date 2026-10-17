@@ -100,8 +100,7 @@ where
         if timeout(POST_EXIT_DRAIN, &mut pump).await.is_err() {
             pump.abort();
         }
-        sup_proc.mark_exited(code);
-        sup_proc.emit(&Chunk::Exit(code));
+        sup_proc.finish(code);
         if let Some(fg) = sup_fg {
             let _ = fg.send(Chunk::Exit(code)).await;
         }
@@ -127,9 +126,7 @@ where
         pump_abort.abort();
         let _ = supervise.await;
         if proc.exit_code().is_none() {
-            let code = reaped.get().copied().unwrap_or(-1);
-            proc.mark_exited(code);
-            proc.emit(&Chunk::Exit(code));
+            proc.finish(reaped.get().copied().unwrap_or(-1));
         }
         table.remove_if(pid, &proc);
         return Err(e);
