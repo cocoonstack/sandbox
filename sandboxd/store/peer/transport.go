@@ -15,7 +15,9 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/cocoonstack/sandbox/sandboxd/store"
@@ -31,6 +33,10 @@ const (
 
 	// recordTrailer is written last, so EOF without it means the transfer stopped early.
 	recordTrailer = ".record-complete"
+
+	// paxFileSize marks the entry that declares a sparse file; paxChunk marks one present chunk as "<index>:<sha256>".
+	paxFileSize = "SANDBOX.size"
+	paxChunk    = "SANDBOX.chunk"
 )
 
 // ErrNotFound reports that a peer does not hold the requested record.
@@ -109,6 +115,7 @@ func TarRecord(exportDir string, meta []byte, w io.Writer) error {
 // Untar writes a tar stream into dst, validating every entry name against traversal.
 func Untar(r io.Reader, dst string) error {
 	tr := tar.NewReader(r)
+	sizes := map[string]int64{}
 	var written int64
 	var complete bool
 	for {
@@ -143,11 +150,57 @@ func Untar(r io.Reader, dst string) error {
 			if written > maxRecordBytes {
 				return fmt.Errorf("untar: record exceeds %d bytes", int64(maxRecordBytes))
 			}
-			if err := writeFile(target, tr, os.FileMode(hdr.Mode).Perm()); err != nil { //nolint:gosec // Perm masks to 0777
+			if err := untarRegular(tr, hdr, target, sizes); err != nil {
 				return err
 			}
 		}
 	}
+}
+
+func untarRegular(r io.Reader, hdr *tar.Header, target string, sizes map[string]int64) error {
+	mode := os.FileMode(hdr.Mode).Perm() //nolint:gosec // Perm masks to 0777
+	if raw, ok := hdr.PAXRecords[paxFileSize]; ok {
+		return createSparse(target, raw, mode, sizes)
+	}
+	if raw, ok := hdr.PAXRecords[paxChunk]; ok {
+		return writeChunk(target, raw, r, sizes)
+	}
+	return writeFile(target, r, mode)
+}
+
+func createSparse(target, rawSize string, mode os.FileMode, sizes map[string]int64) error {
+	size, err := strconv.ParseInt(rawSize, 10, 64)
+	if err != nil || size < 0 || size > maxRecordBytes {
+		return fmt.Errorf("untar: bad size %q for %s", rawSize, target)
+	}
+	f, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, cmp.Or(mode, os.FileMode(0o600))) //nolint:gosec // target resolved by safeJoin
+	if err != nil {
+		return fmt.Errorf("untar create %s: %w", target, err)
+	}
+	if err = f.Truncate(size); err != nil {
+		_ = f.Close()
+		return fmt.Errorf("untar size %s: %w", target, err)
+	}
+	sizes[target] = size
+	return f.Close()
+}
+
+func writeChunk(target, raw string, r io.Reader, sizes map[string]int64) (err error) {
+	size, ok := sizes[target]
+	rawIndex, sum, found := strings.Cut(raw, ":")
+	index, parseErr := strconv.ParseInt(rawIndex, 10, 64)
+	if !ok || !found || parseErr != nil {
+		return fmt.Errorf("untar: bad chunk entry %q for %s", raw, target)
+	}
+	f, err := os.OpenFile(target, os.O_WRONLY, 0) //nolint:gosec // target resolved by safeJoin
+	if err != nil {
+		return fmt.Errorf("untar open %s: %w", target, err)
+	}
+	defer func() { err = errors.Join(err, f.Close()) }()
+	if err = store.WriteChunk(f, size, index, sum, r); err != nil {
+		return fmt.Errorf("untar %s: %w", target, err)
+	}
+	return nil
 }
 
 func writeFile(target string, r io.Reader, mode os.FileMode) error {
@@ -187,8 +240,9 @@ func safeJoin(root, name string) (string, error) {
 	return target, nil
 }
 
-// tarInto emits only regular files and directories: a symlink would steer the reader outside dst.
+// tarInto emits only regular files and directories (a symlink would steer the reader outside dst); a file is a size entry plus its non-zero chunks.
 func tarInto(src, prefix string, tw *tar.Writer) error {
+	scratch := sync.OnceValue(func() []byte { return make([]byte, store.DigestChunkSize) })
 	err := filepath.WalkDir(src, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -216,23 +270,39 @@ func tarInto(src, prefix string, tw *tar.Writer) error {
 			})
 		}
 		if err = tw.WriteHeader(&tar.Header{
-			Name:     name,
-			Mode:     int64(fi.Mode().Perm()),
-			Size:     fi.Size(),
-			Typeflag: tar.TypeReg,
+			Name:       name,
+			Mode:       int64(fi.Mode().Perm()),
+			Typeflag:   tar.TypeReg,
+			PAXRecords: map[string]string{paxFileSize: strconv.FormatInt(fi.Size(), 10)},
 		}); err != nil {
 			return err
 		}
-		f, err := os.Open(path) //nolint:gosec // path comes from WalkDir over src
-		if err != nil {
-			return err
-		}
-		defer func() { _ = f.Close() }()
-		_, err = io.Copy(tw, f)
-		return err
+		return tarChunks(path, name, fi.Size(), tw, scratch)
 	})
 	if err != nil {
 		return fmt.Errorf("tar %s: %w", src, err)
 	}
 	return nil
+}
+
+func tarChunks(path, name string, size int64, tw *tar.Writer, scratch func() []byte) error {
+	f, openErr := os.Open(path) //nolint:gosec // path comes from WalkDir over src
+	if openErr != nil {
+		return openErr
+	}
+	defer func() { _ = f.Close() }()
+	_, err := store.ScanFile(f, name, size, scratch, func(c store.Chunk) error {
+		if err := tw.WriteHeader(&tar.Header{
+			Name:       name,
+			Mode:       0o600,
+			Size:       int64(len(c.Data)),
+			Typeflag:   tar.TypeReg,
+			PAXRecords: map[string]string{paxChunk: strconv.FormatInt(c.Index, 10) + ":" + c.SHA256},
+		}); err != nil {
+			return err
+		}
+		_, err := tw.Write(c.Data)
+		return err
+	})
+	return err
 }
