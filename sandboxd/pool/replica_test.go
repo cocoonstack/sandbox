@@ -272,6 +272,82 @@ func TestReplicaFollowsThePolicyPoolOfAPromotedTemplate(t *testing.T) {
 	}
 }
 
+func TestReplicaInFlightRoundCannotRecreateARowTheAdopterFinished(t *testing.T) {
+	c := newReplicaCluster(t)
+	a, b := c.node(t, "a", t.TempDir(), keepAnHour), c.node(t, "b", t.TempDir(), keepAnHour)
+	sb := mustClaim(t, a, testKey)
+	vm := lockedVMName(sb)
+	replicateNow(t, a, sb)
+	a.archives = &hookRegistry{Registry: c.reg, beforePut: func() {
+		c.expire("a")
+		if adopted, err := b.AdoptArchived(t.Context(), sb.ID, sb.Token); err != nil || !adopted {
+			t.Errorf("adopt: %v %v", adopted, err)
+		}
+		if _, _, _, err := b.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
+			t.Errorf("the adopter's wake: %v", err)
+		}
+	}}
+
+	if err := a.replicate(t.Context(), sb); !errors.Is(err, archives.ErrLost) {
+		t.Fatalf("round that outlived the adoption: %v, want ErrLost", err)
+	}
+	if rec, ok, _ := c.reg.Get(t.Context(), sb.ID); ok {
+		t.Errorf("row %+v recreated by the old owner's round", rec)
+	}
+	if _, held := a.byID(sb.ID); held || !a.eng.(*fakeEngine).removed(vm) {
+		t.Errorf("old owner holds the claim %v, VM removed %v, want its copy dropped", held, a.eng.(*fakeEngine).removed(vm))
+	}
+	if _, held := b.byID(sb.ID); !held {
+		t.Error("the adopter lost the claim it woke")
+	}
+}
+
+func TestReplicaRoundWithAStaleEpochOfItsOwnRowKeepsTheClaim(t *testing.T) {
+	c := newReplicaCluster(t)
+	a := c.node(t, "a", t.TempDir(), keepAnHour)
+	sb := mustClaim(t, a, testKey)
+	replicateNow(t, a, sb)
+	row, _, _ := c.reg.Get(t.Context(), sb.ID)
+	if _, err := c.reg.Take(t.Context(), sb.ID, row.Epoch, "a"); err != nil {
+		t.Fatalf("take: %v", err)
+	}
+
+	if err := a.replicate(t.Context(), sb); !errors.Is(err, archives.ErrLost) {
+		t.Fatalf("round at a stale epoch: %v, want ErrLost", err)
+	}
+	if _, held := a.byID(sb.ID); !held {
+		t.Fatal("a stale epoch of the node's own row dropped the claim")
+	}
+	replicateNow(t, a, sb)
+}
+
+func TestReplicaArchiveCannotRecreateARowTheAdopterFinished(t *testing.T) {
+	c := newReplicaCluster(t)
+	a, b := c.node(t, "a", t.TempDir(), keepAnHour), c.node(t, "b", t.TempDir(), keepAnHour)
+	sb := mustClaim(t, a, testKey)
+	replicateNow(t, a, sb)
+	if err := a.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
+		t.Fatalf("hibernate: %v", err)
+	}
+	c.expire("a")
+	if adopted, err := b.AdoptArchived(t.Context(), sb.ID, sb.Token); err != nil || !adopted {
+		t.Fatalf("adopt: %v %v", adopted, err)
+	}
+	if _, _, _, err := b.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
+		t.Fatalf("the adopter's wake: %v", err)
+	}
+
+	if err := a.archive(t.Context(), sb); err == nil {
+		t.Fatal("an archive over a row the adopter finished succeeded")
+	}
+	if rec, ok, _ := c.reg.Get(t.Context(), sb.ID); ok {
+		t.Errorf("row %+v recreated by the old owner's archive", rec)
+	}
+	if _, held := a.byID(sb.ID); held {
+		t.Error("the old owner kept a claim the adopter runs")
+	}
+}
+
 func TestReplicaFailedCaptureKeepsTheOldReplicaAndRow(t *testing.T) {
 	c := newReplicaCluster(t)
 	a := c.node(t, "a", t.TempDir(), keepAnHour)

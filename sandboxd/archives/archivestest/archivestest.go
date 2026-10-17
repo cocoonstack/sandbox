@@ -54,6 +54,25 @@ func (m *Mem) Put(_ context.Context, rec archives.Record) (int64, error) {
 	return rec.Epoch, nil
 }
 
+func (m *Mem) Replace(ctx context.Context, rec archives.Record, expect int64) (int64, error) {
+	if expect == 0 {
+		return m.Put(ctx, rec)
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.down {
+		return 0, archives.ErrUnavailable
+	}
+	old, ok := m.rows[rec.ID]
+	if !ok || old.Owner != rec.Owner || old.Epoch != expect || old.Consumed {
+		return 0, archives.ErrLost
+	}
+	m.seq++
+	rec.Epoch, rec.Consumed = m.seq, false
+	m.rows[rec.ID] = rec
+	return rec.Epoch, nil
+}
+
 func (m *Mem) Take(_ context.Context, id string, expect int64, owner string) (int64, error) {
 	return m.advance(id, expect, func(rec *archives.Record) bool {
 		if rec.Owner != owner && m.leased(rec.Owner) {
@@ -192,6 +211,7 @@ func Run(t *testing.T, open Opener) {
 	t.Run("epochs are never reused", func(t *testing.T) { testEpochsNeverRepeat(t, open(t)) })
 	t.Run("sweepable lists expired, consumed and own rows", func(t *testing.T) { testSweepable(t, open(t)) })
 	t.Run("rows lists the named ids", func(t *testing.T) { testRows(t, open(t)) })
+	t.Run("replace is a compare-and-set", func(t *testing.T) { testReplace(t, open(t)) })
 	t.Run("take waits out a live lease", func(t *testing.T) { testTakeLease(t, open(t)) })
 	t.Run("sweepable spares a live owner's expired row", func(t *testing.T) { testSweepableLease(t, open(t)) })
 	t.Run("renew moves a lease forward", func(t *testing.T) { testRenewExtends(t, open(t)) })
@@ -391,6 +411,50 @@ func testRows(t *testing.T, r archives.Registry) {
 	}
 	if got, err = r.Rows(ctx, nil); err != nil || len(got) != 0 {
 		t.Errorf("rows of no ids: %+v %v, want none", got, err)
+	}
+}
+
+func testReplace(t *testing.T, r archives.Registry) {
+	ctx := t.Context()
+	absent := record("sb_none", "a", time.Time{})
+	if _, err := r.Replace(ctx, absent, 7); !errors.Is(err, archives.ErrLost) {
+		t.Errorf("replace of an absent row at a held epoch: %v, want ErrLost", err)
+	}
+	if _, ok, _ := r.Get(ctx, "sb_none"); ok {
+		t.Error("a refused replace inserted a row")
+	}
+	first, err := r.Replace(ctx, record("sb_1", "a", time.Time{}), 0)
+	if err != nil || first <= 0 {
+		t.Fatalf("replace at epoch 0: %d %v, want an insert", first, err)
+	}
+	next := record("sb_1", "a", time.Time{})
+	next.Checkpoint = "ck_next"
+	first, err = r.Replace(ctx, next, first)
+	if err != nil {
+		t.Fatalf("first replace: %v", err)
+	}
+	if _, err = r.Replace(ctx, next, first-1); !errors.Is(err, archives.ErrLost) {
+		t.Errorf("replace at a stale epoch: %v, want ErrLost", err)
+	}
+	if _, err = r.Replace(ctx, record("sb_1", "b", time.Time{}), first); !errors.Is(err, archives.ErrLost) {
+		t.Errorf("replace by another owner: %v, want ErrLost", err)
+	}
+	epoch, err := r.Replace(ctx, next, first)
+	if err != nil || epoch <= first {
+		t.Fatalf("replace at the held epoch: %d %v, want a new epoch above %d", epoch, err, first)
+	}
+	if got, _, _ := r.Get(ctx, "sb_1"); got.Checkpoint != "ck_next" || got.Epoch != epoch {
+		t.Errorf("row after the replace: %+v, want ck_next at %d", got, epoch)
+	}
+	if _, err = r.Replace(ctx, next, first); !errors.Is(err, archives.ErrLost) {
+		t.Errorf("replace at the superseded epoch: %v, want ErrLost", err)
+	}
+	spent, err := r.Consume(ctx, "sb_1", epoch)
+	if err != nil {
+		t.Fatalf("consume: %v", err)
+	}
+	if _, err = r.Replace(ctx, next, spent); !errors.Is(err, archives.ErrLost) {
+		t.Errorf("replace of a tombstone: %v, want ErrLost", err)
 	}
 }
 

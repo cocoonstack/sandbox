@@ -72,6 +72,16 @@ func (r *Registry) Put(ctx context.Context, rec archives.Record) (int64, error) 
 	return epoch, nil
 }
 
+func (r *Registry) Replace(ctx context.Context, rec archives.Record, expect int64) (int64, error) {
+	if expect == 0 {
+		return r.Put(ctx, rec)
+	}
+	return r.advance(ctx, `UPDATE sandboxd_archives SET tenant = $5, token_sha256 = $6, epoch = nextval('sandboxd_archives_epoch'),
+			checkpoint = $7, deadline = $8, claim = $9, updated_at = now()
+		WHERE cell = $1 AND id = $2 AND epoch = $3 AND owner = $4 AND NOT consumed
+		RETURNING epoch`, r.cell, rec.ID, expect, rec.Owner, rec.Tenant, rec.TokenSHA256, rec.Checkpoint, nullTime(rec.Deadline), []byte(rec.Claim))
+}
+
 func (r *Registry) Take(ctx context.Context, id string, expect int64, owner string) (int64, error) {
 	return r.advance(ctx, `UPDATE sandboxd_archives SET owner = $4, epoch = nextval('sandboxd_archives_epoch'), updated_at = now()
 		WHERE cell = $1 AND id = $2 AND epoch = $3 AND NOT consumed AND (owner = $4 OR `+leaseExpired+`)

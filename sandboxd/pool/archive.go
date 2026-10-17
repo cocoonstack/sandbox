@@ -12,6 +12,7 @@ import (
 
 	"github.com/projecteru2/core/log"
 
+	"github.com/cocoonstack/sandbox/sandboxd/archives"
 	"github.com/cocoonstack/sandbox/sandboxd/store"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
@@ -131,7 +132,16 @@ func (m *Manager) archive(ctx context.Context, sb *types.Sandbox) error {
 			m.deleteOrphanArchiveCk(ctx, ck.ID)
 			return fmt.Errorf("archive %s: persist intent: %w", sb.ID, err)
 		}
-		if epoch, err = m.putArchive(ctx, sb, ck.ID); err != nil {
+		replicated := m.replicaOf(sb) != ""
+		if replicated {
+			epoch, err = m.replaceArchive(ctx, sb, ck.ID)
+		} else {
+			epoch, err = m.putArchive(ctx, sb, ck.ID)
+		}
+		if err != nil {
+			if replicated && errors.Is(err, archives.ErrLost) {
+				_ = m.refusedReplace(ctx, sb)
+			}
 			sb.Transition.Unlock()
 			m.abandonRefusedPut(ctx, sb, ck.ID, err)
 			return fmt.Errorf("archive %s: registry: %w", sb.ID, err)

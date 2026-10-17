@@ -33,6 +33,8 @@ type Record struct {
 type Registry interface {
 	// Put writes rec for rec.Owner as a live row at a new epoch and returns it; ErrLost when another owner holds the row.
 	Put(ctx context.Context, rec Record) (int64, error)
+	// Replace writes rec over the live row of rec.Owner at epoch expect, at a new epoch; with expect 0 it is Put.
+	Replace(ctx context.Context, rec Record, expect int64) (int64, error)
 	// Take moves the live row at epoch expect to owner at a new epoch and returns it; another node's row moves only once its owner's lease expired.
 	Take(ctx context.Context, id string, expect int64, owner string) (int64, error)
 	// Consume turns the live row at epoch expect into a tombstone at a new epoch and returns it.

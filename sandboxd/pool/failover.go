@@ -95,20 +95,30 @@ func (m *Manager) adoptHeld(ctx context.Context, cur *types.Sandbox, epoch int64
 }
 
 func (m *Manager) putArchive(ctx context.Context, sb *types.Sandbox, ck string) (int64, error) {
-	return m.putRow(ctx, sb, ck, false)
+	return m.putRow(ctx, sb, ck, false, false)
+}
+
+// replaceArchive writes an archive row over the replica row this node holds, so a row that left meanwhile is not recreated.
+func (m *Manager) replaceArchive(ctx context.Context, sb *types.Sandbox, ck string) (int64, error) {
+	return m.putRow(ctx, sb, ck, false, true)
 }
 
 // putReplica writes a live claim's row with no deadline: retention starts when the claim is archived or adopted.
 func (m *Manager) putReplica(ctx context.Context, sb *types.Sandbox, ck string) (int64, error) {
-	return m.putRow(ctx, sb, ck, true)
+	return m.putRow(ctx, sb, ck, true, false)
 }
 
-func (m *Manager) putRow(ctx context.Context, sb *types.Sandbox, ck string, replica bool) (int64, error) {
+// replaceReplica moves the row from the epoch this node holds; a row another node took or deleted refuses the write.
+func (m *Manager) replaceReplica(ctx context.Context, sb *types.Sandbox, ck string) (int64, error) {
+	return m.putRow(ctx, sb, ck, true, true)
+}
+
+func (m *Manager) putRow(ctx context.Context, sb *types.Sandbox, ck string, replica, replace bool) (int64, error) {
 	if m.archives == nil {
 		return 0, nil
 	}
 	m.mu.Lock()
-	dto, deadline := dtoOf(sb), sb.Deadline
+	dto, deadline, held := dtoOf(sb), sb.Deadline, sb.ArchiveEpoch
 	switch {
 	case replica:
 		deadline = time.Time{}
@@ -122,10 +132,28 @@ func (m *Manager) putRow(ctx context.Context, sb *types.Sandbox, ck string, repl
 	if err != nil {
 		return 0, fmt.Errorf("encode claim: %w", err)
 	}
-	return m.archives.Put(ctx, archives.Record{
+	rec := archives.Record{
 		ID: sb.ID, Tenant: sb.Tenant, TokenSHA256: tenants.TokenSHA256(sb.Token), Owner: m.nodeID,
 		Checkpoint: ck, Deadline: deadline, Claim: claim,
-	})
+	}
+	if replace {
+		return m.archives.Replace(ctx, rec, held)
+	}
+	return m.archives.Put(ctx, rec)
+}
+
+// refusedReplace settles a refused replace: a row this node still owns only had a stale epoch, anything else means the claim moved.
+func (m *Manager) refusedReplace(ctx context.Context, sb *types.Sandbox) error {
+	rec, ok, err := m.archives.Get(ctx, sb.ID)
+	switch {
+	case err != nil:
+		return err
+	case ok && rec.Owner == m.nodeID:
+		_, _ = m.commitIfLive(ctx, sb, func() { sb.ArchiveEpoch = max(sb.ArchiveEpoch, rec.Epoch) })
+		return nil
+	}
+	m.dropAdopted(ctx, sb)
+	return ErrUnknownSandbox
 }
 
 func (m *Manager) checkArchiveRow(ctx context.Context, id string) error {

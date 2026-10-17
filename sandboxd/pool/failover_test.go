@@ -1960,6 +1960,22 @@ func (r *hookRegistry) Put(ctx context.Context, rec archives.Record) (int64, err
 	return epoch, err
 }
 
+func (r *hookRegistry) Replace(ctx context.Context, rec archives.Record, expect int64) (int64, error) {
+	if r.failPut {
+		return 0, archives.ErrUnavailable
+	}
+	if hook := r.beforePut; hook != nil {
+		r.beforePut = nil
+		hook()
+	}
+	epoch, err := r.Registry.Replace(ctx, rec, expect)
+	if r.losePutReply && err == nil {
+		r.losePutReply = false
+		return 0, archives.ErrUnavailable
+	}
+	return epoch, err
+}
+
 func (r *hookRegistry) Take(ctx context.Context, id string, expect int64, owner string) (int64, error) {
 	if hook := r.beforeTake; hook != nil {
 		r.beforeTake = nil
