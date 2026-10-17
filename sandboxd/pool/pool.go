@@ -70,8 +70,6 @@ const (
 	// A heal pulls a whole guest memory image, so a few saturate disk and NIC.
 	maxConcurrentHeals = 4
 
-	tombstoneGrace = 24 * time.Hour
-
 	vmPrefix        = "sbx-"
 	goldenPrefix    = "sbx-golden-"
 	hibernatePrefix = "sbx-hib-"

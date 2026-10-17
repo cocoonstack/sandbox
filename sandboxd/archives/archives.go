@@ -23,12 +23,10 @@ type Record struct {
 	Owner       string
 	Epoch       int64
 	Consumed    bool
-	Released    bool
 	Checkpoint  string
 	// Deadline is the retention deadline; zero keeps the archive forever.
-	Deadline  time.Time
-	UpdatedAt time.Time
-	Claim     jsontext.Value
+	Deadline time.Time
+	Claim    jsontext.Value
 }
 
 // Registry keeps the rows; every write is a compare-and-set, and every epoch it hands out is new.
@@ -37,10 +35,8 @@ type Registry interface {
 	Put(ctx context.Context, rec Record) (int64, error)
 	// Take moves the live row at epoch expect to owner at a new epoch and returns it.
 	Take(ctx context.Context, id string, expect int64, owner string) (int64, error)
-	// Consume turns the live row at epoch expect into a tombstone at a new epoch, marked released or woken, and returns it.
-	Consume(ctx context.Context, id string, expect int64, released bool) (int64, error)
-	// Revive turns the woken tombstone at epoch expect back into a live row at a new epoch and returns it.
-	Revive(ctx context.Context, id string, expect int64) (int64, error)
+	// Consume turns the live row at epoch expect into a tombstone at a new epoch and returns it.
+	Consume(ctx context.Context, id string, expect int64) (int64, error)
 	// Delete removes the row only while it is at epoch.
 	Delete(ctx context.Context, id string, epoch int64) error
 	// Get returns the row of id; false when there is none.

@@ -613,7 +613,7 @@ func TestFailoverRestartAfterAConsumeWithoutCommitKeepsTheClaim(t *testing.T) {
 		t.Fatalf("take: %v", err)
 	}
 	a.setArchiveEpoch(t.Context(), sb, epoch)
-	if _, err = c.reg.Consume(t.Context(), sb.ID, epoch, false); err != nil {
+	if _, err = c.reg.Consume(t.Context(), sb.ID, epoch); err != nil {
 		t.Fatalf("consume: %v", err)
 	}
 	if err = a.FlushClaims(); err != nil {
@@ -958,7 +958,7 @@ func TestFailoverRestartLeavesItsOwnTombstoneToTheSweep(t *testing.T) {
 	}
 }
 
-func TestFailoverSweepPurgesADepartedOwnersReleaseTombstoneCheckpointFirst(t *testing.T) {
+func TestFailoverSweepLeavesADepartedOwnersTombstoneUntilItReturns(t *testing.T) {
 	c := newFailoverCluster(t)
 	a, b := c.node(t, "a", t.TempDir(), keepAnHour), c.node(t, "b", t.TempDir(), keepAnHour)
 	d := c.node(t, "d", t.TempDir(), keepAnHour)
@@ -969,32 +969,23 @@ func TestFailoverSweepPurgesADepartedOwnersReleaseTombstoneCheckpointFirst(t *te
 	if adopted, err := b.AdoptArchived(t.Context(), sb.ID, sb.Token); err != nil || !adopted {
 		t.Fatalf("adopt: %v %v", adopted, err)
 	}
-	b.ckpts = &failingDeleteStore{Store: b.ckpts, attempts: make(chan string, 8)}
+	healthy := b.ckpts
+	b.ckpts = &failingDeleteStore{Store: healthy, attempts: make(chan string, 8)}
 	if err := b.Release(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
 		t.Fatalf("adopter's release: %v", err)
 	}
+	before, _, _ := c.reg.Get(t.Context(), sb.ID)
 	c.down["b"] = true
-	aged, _, _ := c.reg.Get(t.Context(), sb.ID)
-	if !aged.Consumed || !aged.Released {
-		t.Fatalf("setup: row %+v, want a release tombstone", aged)
-	}
-	aged.UpdatedAt = aged.UpdatedAt.Add(-tombstoneGrace - time.Minute)
-	d.archives = &agedRegistry{Registry: c.reg, rec: aged}
 
-	healthy := d.ckpts
-	d.ckpts = &failingDeleteStore{Store: healthy, attempts: make(chan string, 8)}
 	d.sweepOrphanArchives(t.Context())
-	if _, ok, _ := c.reg.Get(t.Context(), sb.ID); !ok {
-		t.Fatal("the sweep deleted the tombstone before its checkpoint")
+	if rec, ok, _ := c.reg.Get(t.Context(), sb.ID); !ok || rec.Epoch != before.Epoch || !ckExists(t, d, ck) {
+		t.Fatalf("row %+v present %v after a peer's sweep, want the departed owner's tombstone and checkpoint untouched", rec, ok)
 	}
-	d.ckpts = healthy
-	d.retryArchiveDeletes(t.Context())
-	d.sweepOrphanArchives(t.Context())
-	if _, ok, _ := c.reg.Get(t.Context(), sb.ID); ok || ckExists(t, d, ck) {
-		t.Error("the sweep kept the departed owner's tombstone or its checkpoint")
-	}
-	if n := d.counters.archiveDeletes.Load(); n != 0 {
-		t.Errorf("%d archive deletes recorded for a consumed archive, want 0", n)
+	c.down["b"] = false
+	b.ckpts = healthy
+	b.sweepOrphanArchives(t.Context())
+	if _, ok, _ := c.reg.Get(t.Context(), sb.ID); ok || ckExists(t, b, ck) {
+		t.Error("the returning owner's sweep kept its tombstone or its checkpoint")
 	}
 }
 
@@ -1276,7 +1267,7 @@ func TestFailoverSweepRearmsATombstoneItsArchivedClaimHolds(t *testing.T) {
 	}
 }
 
-func TestFailoverSweepSparesADepartedOwnersFreshTombstone(t *testing.T) {
+func TestFailoverSweepLeavesADepartedOwnersWakeTombstone(t *testing.T) {
 	c := newFailoverCluster(t)
 	a, b := c.node(t, "a", t.TempDir(), keepAnHour), c.node(t, "b", t.TempDir(), keepAnHour)
 	sb := mustClaim(t, a, testKey)
@@ -1285,14 +1276,14 @@ func TestFailoverSweepSparesADepartedOwnersFreshTombstone(t *testing.T) {
 	if err != nil {
 		t.Fatalf("take: %v", err)
 	}
-	if _, err = c.reg.Consume(t.Context(), sb.ID, epoch, false); err != nil {
+	if _, err = c.reg.Consume(t.Context(), sb.ID, epoch); err != nil {
 		t.Fatalf("consume: %v", err)
 	}
 	c.down["a"] = true
 
 	b.sweepOrphanArchives(t.Context())
 	if rec, ok, _ := c.reg.Get(t.Context(), sb.ID); !ok || !rec.Consumed || !ckExists(t, b, sb.ArchiveCk) {
-		t.Error("a sweep purged a departed owner's tombstone inside the grace")
+		t.Error("a sweep touched a departed owner's wake tombstone")
 	}
 }
 
@@ -1306,7 +1297,7 @@ func TestFailoverRestartAfterAConsumeWhileAPeerSweptKeepsTheClaim(t *testing.T) 
 		t.Fatalf("take: %v", err)
 	}
 	a.setArchiveEpoch(t.Context(), sb, epoch)
-	if _, err = c.reg.Consume(t.Context(), sb.ID, epoch, false); err != nil {
+	if _, err = c.reg.Consume(t.Context(), sb.ID, epoch); err != nil {
 		t.Fatalf("consume: %v", err)
 	}
 	if err = a.FlushClaims(); err != nil {
@@ -1626,88 +1617,33 @@ func TestFailoverAnAbandonKeepsTheExportWhileItsIntentIsDurable(t *testing.T) {
 	healStore(t, a)
 }
 
-func TestFailoverSweepRevivesADepartedOwnersWakeTombstone(t *testing.T) {
+func TestFailoverAnOwnerReturningWithItsWakeCommittedPurgesItsTombstone(t *testing.T) {
 	c := newFailoverCluster(t)
 	a, b := c.node(t, "a", t.TempDir(), keepAnHour), c.node(t, "b", t.TempDir(), keepAnHour)
 	sb := mustClaim(t, a, testKey)
 	mustArchive(t, a, sb)
 	ck := sb.ArchiveCk
-	crashAfterConsume(t, c, a, sb)
-	c.down["a"] = true
-	ageRow(t, c, b, sb.ID)
-
-	b.sweepOrphanArchives(t.Context())
-	if rec, ok, _ := c.reg.Get(t.Context(), sb.ID); !ok || rec.Consumed || rec.Owner != "a" || !ckExists(t, b, ck) {
-		t.Fatalf("row %+v present %v, want the wake tombstone revived for a with its checkpoint", rec, ok)
-	}
-	if adopted, err := b.AdoptArchived(t.Context(), sb.ID, sb.Token); err != nil || !adopted {
-		t.Fatalf("adopt of the revived archive: %v %v, want adopted", adopted, err)
-	}
-	if _, _, err := b.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
-		t.Fatalf("wake of the revived archive: %v", err)
-	}
-	if ckExists(t, b, ck) {
-		t.Error("the adopter's wake left the revived checkpoint")
-	}
-}
-
-func TestFailoverAnOwnerReturningAfterARevivalKeepsItsClaim(t *testing.T) {
-	c := newFailoverCluster(t)
-	a, b := c.node(t, "a", t.TempDir(), keepAnHour), c.node(t, "b", t.TempDir(), keepAnHour)
-	sb := mustClaim(t, a, testKey)
-	mustArchive(t, a, sb)
-	crashAfterConsume(t, c, a, sb)
-	c.down["a"] = true
-	ageRow(t, c, b, sb.ID)
-	b.sweepOrphanArchives(t.Context())
-	c.down["a"] = false
-
-	restarted := c.restart(t, a)
-	if err := restarted.Reconcile(t.Context()); err != nil {
-		t.Fatalf("reconcile: %v", err)
-	}
-	held, ok := restarted.byID(sb.ID)
-	rec, _, _ := c.reg.Get(t.Context(), sb.ID)
-	if !ok || held.ArchiveEpoch != rec.Epoch || rec.Owner != "a" {
-		t.Fatalf("claim held %v at row %+v, want it kept at the revived row's epoch", ok, rec)
-	}
-	if _, _, err := restarted.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
-		t.Errorf("wake after the revival: %v", err)
-	}
-}
-
-func TestFailoverARevivedRowWhoseCheckpointIsGoneIsRetired(t *testing.T) {
-	c := newFailoverCluster(t)
-	a, b := c.node(t, "a", t.TempDir(), keepAnHour), c.node(t, "b", t.TempDir(), keepAnHour)
-	sb := mustClaim(t, a, testKey)
-	mustArchive(t, a, sb)
-	a.archives = &hookRegistry{Registry: c.reg, failDelete: true}
+	a.ckpts = &failingDeleteStore{Store: a.ckpts, attempts: make(chan string, 8)}
 	if _, _, err := a.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
 		t.Fatalf("wake: %v", err)
 	}
 	if err := a.FlushClaims(); err != nil {
 		t.Fatalf("flush: %v", err)
 	}
-	if rec, ok, _ := c.reg.Get(t.Context(), sb.ID); !ok || !rec.Consumed {
-		t.Fatal("setup: the wake's tombstone was deleted")
-	}
 	c.down["a"] = true
-	ageRow(t, c, b, sb.ID)
 	b.sweepOrphanArchives(t.Context())
-
-	if adopted, err := b.AdoptArchived(t.Context(), sb.ID, sb.Token); err != nil || adopted {
-		t.Errorf("adopt of a revived row whose checkpoint is gone: %v %v, want refused", adopted, err)
-	}
-	if rec, ok, _ := c.reg.Get(t.Context(), sb.ID); ok {
-		t.Errorf("row %+v stays adoptable without its checkpoint", rec)
-	}
 	c.down["a"] = false
+
 	restarted := c.restart(t, a)
 	if err := restarted.Reconcile(t.Context()); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
+	restarted.sweepOrphanArchives(t.Context())
 	if held, ok := restarted.byID(sb.ID); !ok || held.ArchiveCk != "" {
-		t.Error("the owner lost the claim its wake committed")
+		t.Fatal("the returning owner lost the claim its wake committed")
+	}
+	if _, ok, _ := c.reg.Get(t.Context(), sb.ID); ok || ckExists(t, restarted, ck) {
+		t.Error("the returning owner's sweep kept its wake tombstone or the consumed checkpoint")
 	}
 }
 
@@ -1821,28 +1757,6 @@ func claimAnyAs(t *testing.T, m *Manager, tenant string) (*types.Sandbox, error)
 	return sb, err
 }
 
-func crashAfterConsume(t *testing.T, c *failoverCluster, m *Manager, sb *types.Sandbox) {
-	t.Helper()
-	epoch, err := c.reg.Take(t.Context(), sb.ID, sb.ArchiveEpoch, m.nodeID)
-	if err != nil {
-		t.Fatalf("take: %v", err)
-	}
-	m.setArchiveEpoch(t.Context(), sb, epoch)
-	if _, err = c.reg.Consume(t.Context(), sb.ID, epoch, false); err != nil {
-		t.Fatalf("consume: %v", err)
-	}
-	if err = m.FlushClaims(); err != nil {
-		t.Fatalf("flush: %v", err)
-	}
-}
-
-func ageRow(t *testing.T, c *failoverCluster, m *Manager, id string) {
-	t.Helper()
-	aged, _, _ := c.reg.Get(t.Context(), id)
-	aged.UpdatedAt = aged.UpdatedAt.Add(-tombstoneGrace - time.Minute)
-	m.archives = &agedRegistry{Registry: c.reg, rec: aged}
-}
-
 func interruptArchive(t *testing.T, m *Manager, sb *types.Sandbox, putCommitted bool) string {
 	t.Helper()
 	ck, _, err := m.publishCheckpoint(t.Context(), sb, store.CheckpointID(randHex(8)), "archive", sb.Tenant, true)
@@ -1892,7 +1806,6 @@ type hookRegistry struct {
 	loseTakeReply    bool
 	losePutReply     bool
 	failGet          bool
-	failDelete       bool
 }
 
 func (r *hookRegistry) Get(ctx context.Context, id string) (archives.Record, bool, error) {
@@ -1934,19 +1847,15 @@ func (r *hookRegistry) Delete(ctx context.Context, id string, epoch int64) error
 		r.beforeDelete = nil
 		hook()
 	}
-	if r.failDelete {
-		r.failDelete = false
-		return archives.ErrUnavailable
-	}
 	return r.Registry.Delete(ctx, id, epoch)
 }
 
-func (r *hookRegistry) Consume(ctx context.Context, id string, expect int64, released bool) (int64, error) {
+func (r *hookRegistry) Consume(ctx context.Context, id string, expect int64) (int64, error) {
 	if hook := r.beforeConsume; hook != nil {
 		r.beforeConsume = nil
 		hook()
 	}
-	epoch, err := r.Registry.Consume(ctx, id, expect, released)
+	epoch, err := r.Registry.Consume(ctx, id, expect)
 	if r.loseConsumeReply && err == nil {
 		r.loseConsumeReply = false
 		return 0, archives.ErrUnavailable
@@ -1970,21 +1879,6 @@ type unreadableStore struct {
 
 func (s *unreadableStore) ReadMeta(context.Context, string) ([]byte, error) {
 	return nil, errors.New("store unreachable")
-}
-
-type agedRegistry struct {
-	archives.Registry
-	rec archives.Record
-}
-
-func (r *agedRegistry) Sweepable(ctx context.Context, now time.Time, owner string) ([]archives.Record, error) {
-	recs, err := r.Registry.Sweepable(ctx, now, owner)
-	for i := range recs {
-		if recs[i].ID == r.rec.ID && recs[i].Epoch == r.rec.Epoch {
-			recs[i].UpdatedAt = r.rec.UpdatedAt
-		}
-	}
-	return recs, err
 }
 
 type countingRegistry struct {

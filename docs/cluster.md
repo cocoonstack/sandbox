@@ -208,12 +208,9 @@ it, so the claim path is unchanged.
 - **Departed owners and tombstones.** Every hour, on the store retention sweep,
   each node reads the rows past their retention deadline, the consumed rows,
   and its own rows. An expired row whose owner has left the mesh is purged
-  checkpoint first, then the row. A departed owner's tombstone waits 24 hours
-  after its last write. A tombstone a release or a retention purge left is
-  then purged the same way; one a wake left can be the only copy of a claim
-  whose wake never committed, so it is revived as a live row of its owner,
-  which Lookup can then adopt. An adoption refuses, and retires, a row whose
-  checkpoint is gone. The epoch compare-and-set lets exactly one node win each,
+  checkpoint first, then the row. No node touches another node's tombstone:
+  the owner settles it when it returns, through its sweep or its restart.
+  The epoch compare-and-set lets exactly one node win each,
   and `archive_delete` is recorded only for a row that was still archived.
   Each node also settles its own rows against its claims, which converges a
   registry write whose reply was lost: a tombstone its archived claim still
@@ -228,8 +225,10 @@ it, so the claim path is unchanged.
   of all nodes by sandbox id.
 
 Mesh liveness decides adoption, so a partitioned owner can lose an archived
-claim it still lists; the epoch fences it out. Running and hibernated claims
-are not covered.
+claim it still lists; the epoch fences it out. A claim that has entered its
+wake counts as running: running and hibernated claims are lost with their
+node, and an owner that never returns leaves behind only the tombstones and
+checkpoints of the claims it was waking or releasing when it died.
 
 ## Templates on a cluster
 

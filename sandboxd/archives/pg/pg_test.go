@@ -29,7 +29,7 @@ func TestCellsKeepTheirOwnRows(t *testing.T) {
 	if _, err = c2.Take(ctx, "sb_1", epoch, "n2"); !errors.Is(err, archives.ErrLost) {
 		t.Errorf("c2 takes c1's row: %v, want ErrLost", err)
 	}
-	if _, err = c2.Consume(ctx, "sb_1", epoch, false); !errors.Is(err, archives.ErrLost) {
+	if _, err = c2.Consume(ctx, "sb_1", epoch); !errors.Is(err, archives.ErrLost) {
 		t.Errorf("c2 consumes c1's row: %v, want ErrLost", err)
 	}
 	if err = c2.Delete(ctx, "sb_1", epoch); !errors.Is(err, archives.ErrLost) {
@@ -84,11 +84,8 @@ func TestADownDatabaseIsUnavailable(t *testing.T) {
 	if _, err := r.Take(ctx, "sb_1", 1, "a"); !errors.Is(err, archives.ErrUnavailable) {
 		t.Errorf("take on a closed pool: %v, want ErrUnavailable", err)
 	}
-	if _, err := r.Consume(ctx, "sb_1", 1, false); !errors.Is(err, archives.ErrUnavailable) {
+	if _, err := r.Consume(ctx, "sb_1", 1); !errors.Is(err, archives.ErrUnavailable) {
 		t.Errorf("consume on a closed pool: %v, want ErrUnavailable", err)
-	}
-	if _, err := r.Revive(ctx, "sb_1", 1); !errors.Is(err, archives.ErrUnavailable) {
-		t.Errorf("revive on a closed pool: %v, want ErrUnavailable", err)
 	}
 	if err := r.Delete(ctx, "sb_1", 1); !errors.Is(err, archives.ErrUnavailable) {
 		t.Errorf("delete on a closed pool: %v, want ErrUnavailable", err)

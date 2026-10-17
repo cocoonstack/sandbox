@@ -43,7 +43,7 @@ func (m *Mem) Put(_ context.Context, rec archives.Record) (int64, error) {
 		return 0, archives.ErrLost
 	}
 	m.seq++
-	rec.Epoch, rec.Consumed, rec.Released, rec.UpdatedAt = m.seq, false, false, time.Now()
+	rec.Epoch, rec.Consumed = m.seq, false
 	m.rows[rec.ID] = rec
 	return rec.Epoch, nil
 }
@@ -52,24 +52,8 @@ func (m *Mem) Take(_ context.Context, id string, expect int64, owner string) (in
 	return m.advance(id, expect, func(rec *archives.Record) { rec.Owner = owner })
 }
 
-func (m *Mem) Consume(_ context.Context, id string, expect int64, released bool) (int64, error) {
-	return m.advance(id, expect, func(rec *archives.Record) { rec.Consumed, rec.Released = true, released })
-}
-
-func (m *Mem) Revive(_ context.Context, id string, expect int64) (int64, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.down {
-		return 0, archives.ErrUnavailable
-	}
-	rec, ok := m.rows[id]
-	if !ok || rec.Epoch != expect || !rec.Consumed || rec.Released {
-		return 0, archives.ErrLost
-	}
-	m.seq++
-	rec.Consumed, rec.Epoch, rec.UpdatedAt = false, m.seq, time.Now()
-	m.rows[id] = rec
-	return rec.Epoch, nil
+func (m *Mem) Consume(_ context.Context, id string, expect int64) (int64, error) {
+	return m.advance(id, expect, func(rec *archives.Record) { rec.Consumed = true })
 }
 
 func (m *Mem) Delete(_ context.Context, id string, epoch int64) error {
@@ -154,7 +138,7 @@ func (m *Mem) advance(id string, expect int64, change func(*archives.Record)) (i
 	}
 	change(&rec)
 	m.seq++
-	rec.Epoch, rec.UpdatedAt = m.seq, time.Now()
+	rec.Epoch = m.seq
 	m.rows[id] = rec
 	return rec.Epoch, nil
 }
@@ -166,7 +150,6 @@ func Run(t *testing.T, open Opener) {
 	t.Run("take is a compare-and-set", func(t *testing.T) { testTake(t, open(t)) })
 	t.Run("one of concurrent takes wins", func(t *testing.T) { testTakeRace(t, open(t)) })
 	t.Run("consume leaves a tombstone", func(t *testing.T) { testConsume(t, open(t)) })
-	t.Run("revive re-arms a woken tombstone", func(t *testing.T) { testRevive(t, open(t)) })
 	t.Run("delete only at its epoch", func(t *testing.T) { testDelete(t, open(t)) })
 	t.Run("epochs are never reused", func(t *testing.T) { testEpochsNeverRepeat(t, open(t)) })
 	t.Run("sweepable lists expired, consumed and own rows", func(t *testing.T) { testSweepable(t, open(t)) })
@@ -265,17 +248,17 @@ func testTakeRace(t *testing.T, r archives.Registry) {
 func testConsume(t *testing.T, r archives.Registry) {
 	ctx := t.Context()
 	first := mustPut(t, r, record("sb_1", "a", time.Time{}))
-	if _, err := r.Consume(ctx, "sb_1", first-1, false); !errors.Is(err, archives.ErrLost) {
+	if _, err := r.Consume(ctx, "sb_1", first-1); !errors.Is(err, archives.ErrLost) {
 		t.Errorf("consume at a stale epoch: %v, want ErrLost", err)
 	}
-	consumed, err := r.Consume(ctx, "sb_1", first, false)
+	consumed, err := r.Consume(ctx, "sb_1", first)
 	if err != nil || consumed <= first {
 		t.Fatalf("consume: %d %v, want an epoch above %d", consumed, err, first)
 	}
 	if got, _, _ := r.Get(ctx, "sb_1"); !got.Consumed || got.Epoch != consumed || got.Owner != "a" {
 		t.Errorf("row after consume: %+v, want a's tombstone at %d", got, consumed)
 	}
-	if _, err = r.Consume(ctx, "sb_1", consumed, false); !errors.Is(err, archives.ErrLost) {
+	if _, err = r.Consume(ctx, "sb_1", consumed); !errors.Is(err, archives.ErrLost) {
 		t.Errorf("consume of a tombstone: %v, want ErrLost", err)
 	}
 	if _, err = r.Take(ctx, "sb_1", consumed, "b"); !errors.Is(err, archives.ErrLost) {
@@ -289,42 +272,6 @@ func testConsume(t *testing.T, r archives.Registry) {
 	rearmed := mustPut(t, r, stale)
 	if got, _, _ := r.Get(ctx, "sb_1"); got.Consumed || got.Epoch != rearmed || rearmed <= consumed {
 		t.Errorf("row after the owner's put: %+v, want live at a new epoch above %d", got, consumed)
-	}
-}
-
-func testRevive(t *testing.T, r archives.Registry) {
-	ctx := t.Context()
-	live := mustPut(t, r, record("sb_1", "a", time.Time{}))
-	if _, err := r.Revive(ctx, "sb_1", live); !errors.Is(err, archives.ErrLost) {
-		t.Errorf("revive of a live row: %v, want ErrLost", err)
-	}
-	released, err := r.Consume(ctx, "sb_1", live, true)
-	if err != nil {
-		t.Fatalf("consume released: %v", err)
-	}
-	if _, err = r.Revive(ctx, "sb_1", released); !errors.Is(err, archives.ErrLost) {
-		t.Errorf("revive of a released tombstone: %v, want ErrLost", err)
-	}
-	live = mustPut(t, r, record("sb_1", "a", time.Time{}))
-	if got, _, _ := r.Get(ctx, "sb_1"); got.Released || got.Consumed {
-		t.Errorf("row after the owner's put: %+v, want live and not released", got)
-	}
-	woken, err := r.Consume(ctx, "sb_1", live, false)
-	if err != nil {
-		t.Fatalf("consume woken: %v", err)
-	}
-	if _, err = r.Revive(ctx, "sb_1", woken-1); !errors.Is(err, archives.ErrLost) {
-		t.Errorf("revive at a stale epoch: %v, want ErrLost", err)
-	}
-	revived, err := r.Revive(ctx, "sb_1", woken)
-	if err != nil || revived <= woken {
-		t.Fatalf("revive: %d %v, want an epoch above %d", revived, err, woken)
-	}
-	if got, _, _ := r.Get(ctx, "sb_1"); got.Consumed || got.Owner != "a" || got.Epoch != revived {
-		t.Errorf("row after revive: %+v, want a's live row at %d", got, revived)
-	}
-	if _, err = r.Revive(ctx, "sb_1", revived); !errors.Is(err, archives.ErrLost) {
-		t.Errorf("revive of a revived row: %v, want ErrLost", err)
 	}
 }
 
@@ -375,16 +322,16 @@ func testSweepable(t *testing.T, r archives.Registry) {
 		mustPut(t, r, rec)
 	}
 	live := mustPut(t, r, record("sb_spent", "a", time.Time{}))
-	if _, err := r.Consume(ctx, "sb_spent", live, true); err != nil {
+	if _, err := r.Consume(ctx, "sb_spent", live); err != nil {
 		t.Fatalf("consume: %v", err)
 	}
 	got, err := r.Sweepable(ctx, now, "z")
 	ids := map[string]bool{}
 	for _, rec := range got {
-		ids[rec.ID] = rec.Checkpoint != "" && now.Sub(rec.UpdatedAt).Abs() < time.Minute
+		ids[rec.ID] = rec.Checkpoint != ""
 	}
 	if err != nil || len(got) != 3 || !ids["sb_past"] || !ids["sb_spent"] || !ids["sb_mine"] {
-		t.Errorf("sweepable for z %+v %v, want sb_past, sb_spent and sb_mine with their update times", got, err)
+		t.Errorf("sweepable for z %+v %v, want sb_past, sb_spent and sb_mine", got, err)
 	}
 }
 
@@ -393,12 +340,12 @@ func testRows(t *testing.T, r archives.Registry) {
 	mustPut(t, r, record("sb_a1", "a", time.Time{}))
 	a2 := mustPut(t, r, record("sb_a2", "a", time.Time{}))
 	mustPut(t, r, record("sb_b1", "b", time.Time{}))
-	spent, err := r.Consume(ctx, "sb_a2", a2, true)
+	spent, err := r.Consume(ctx, "sb_a2", a2)
 	if err != nil {
 		t.Fatalf("consume: %v", err)
 	}
 	got, err := r.Rows(ctx, []string{"sb_a2", "sb_b1", "sb_none"})
-	if err != nil || len(got) != 2 || got["sb_a2"].Epoch != spent || !got["sb_a2"].Consumed || !got["sb_a2"].Released || got["sb_a2"].Checkpoint != "ck_sb_a2" || got["sb_b1"].Owner != "b" {
+	if err != nil || len(got) != 2 || got["sb_a2"].Epoch != spent || !got["sb_a2"].Consumed || got["sb_a2"].Checkpoint != "ck_sb_a2" || got["sb_b1"].Owner != "b" {
 		t.Errorf("rows: %+v %v, want a's sb_a2 tombstone and b's sb_b1", got, err)
 	}
 	if got, err = r.Rows(ctx, nil); err != nil || len(got) != 0 {
