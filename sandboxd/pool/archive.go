@@ -144,8 +144,8 @@ func (m *Manager) archive(ctx context.Context, sb *types.Sandbox) error {
 			return errWokeMeanwhile
 		}
 	}
-	snap, vmName, sock, prevDeadline, prevEpoch, prevPending := sb.HibernateSnap, sb.VMName, sb.VsockSocket, sb.Deadline, sb.ArchiveEpoch, sb.ArchivePending
-	sb.ArchiveCk, sb.ArchiveEpoch, sb.ArchivePending = ck.ID, epoch, ""
+	snap, vmName, sock, prevDeadline, prevPending, replica := sb.HibernateSnap, sb.VMName, sb.VsockSocket, sb.Deadline, sb.ArchivePending, sb.ReplicaCk
+	sb.ArchiveCk, sb.ArchiveEpoch, sb.ArchivePending, sb.ReplicaCk = ck.ID, epoch, "", ""
 	sb.HibernateSnap, sb.VsockSocket, sb.VMName = "", "", ""
 	sb.Deadline = m.retentionDeadline(sb.Key)
 	js := m.store.set(sb)
@@ -156,7 +156,7 @@ func (m *Manager) archive(ctx context.Context, sb *types.Sandbox) error {
 		var rb claimSnapshot
 		// a Release that landed meanwhile already deleted the claim; re-setting it would resurrect it
 		if m.claimed[sb.ID] == sb {
-			sb.ArchiveCk, sb.ArchiveEpoch, sb.ArchivePending = "", prevEpoch, prevPending
+			sb.ArchiveCk, sb.ArchiveEpoch, sb.ArchivePending, sb.ReplicaCk = "", 0, prevPending, replica
 			sb.HibernateSnap, sb.VsockSocket, sb.VMName = snap, sock, vmName
 			sb.Deadline = prevDeadline
 			rb = m.store.set(sb)
@@ -173,6 +173,9 @@ func (m *Manager) archive(ctx context.Context, sb *types.Sandbox) error {
 	// the store ck is authoritative from here
 	m.destroy(ctx, vmName)
 	m.dropSnap(ctx, snap)
+	if replica != "" {
+		m.deleteOrphanArchiveCk(ctx, replica)
+	}
 	m.counters.archives.Add(1)
 	m.recordUsage(ctx, usageEvent{Event: "archive", ID: sb.ID, Reference: ck.ID, Tenant: sb.Tenant})
 	return nil

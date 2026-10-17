@@ -96,6 +96,24 @@ func TestPreviewRevokedWhenDialFails(t *testing.T) {
 	}
 }
 
+func TestPreviewAnswers503WhileTheLeaseIsLost(t *testing.T) {
+	ps := NewPreviewServer("secret", "node:9000", "node:7777", &fakePreviewMgr{
+		dial: func(string, uint16) (net.Conn, error) { return nil, pool.ErrLeaseLost },
+	})
+	ts := httptest.NewServer(ps.Handler())
+	t.Cleanup(ts.Close)
+	token := mintToken(ps, "sb_1", 3000, time.Hour)
+
+	resp, err := http.Get(ts.URL + "/p/" + token + "/")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusServiceUnavailable || resp.Header.Get("Retry-After") == "" {
+		t.Errorf("status %d retry-after %q, want 503 with a retry hint", resp.StatusCode, resp.Header.Get("Retry-After"))
+	}
+}
+
 func TestPreviewRechecksClaimForEveryRequest(t *testing.T) {
 	guestAddr := newGuestServer(t, func(*http.Request) string { return "guest" })
 

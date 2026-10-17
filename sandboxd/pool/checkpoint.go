@@ -320,6 +320,9 @@ func (m *Manager) pinnedArchiveCks() map[string]struct{} {
 		if sb.ArchiveCk != "" {
 			pinned[sb.ArchiveCk] = struct{}{}
 		}
+		if sb.ReplicaCk != "" {
+			pinned[sb.ReplicaCk] = struct{}{}
+		}
 	}
 	return pinned
 }

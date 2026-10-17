@@ -191,14 +191,6 @@ func (m *Mesh) Members() []NodeState {
 	return slices.Collect(maps.Values(m.view))
 }
 
-// Alive reports whether SWIM counts nodeID as a live member.
-func (m *Mesh) Alive(nodeID string) bool {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	_, ok := m.live[nodeID]
-	return ok
-}
-
 // PeerAddrs returns the data-plane addresses of the other nodes.
 func (m *Mesh) PeerAddrs() []string {
 	m.mu.Lock()

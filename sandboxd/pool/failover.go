@@ -1,6 +1,7 @@
 package pool
 
 import (
+	"cmp"
 	"context"
 	"crypto/subtle"
 	"encoding/json/v2"
@@ -18,15 +19,7 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
-// OwnerAlive reports whether the mesh counts node as a live member.
-type OwnerAlive func(node string) bool
-
-// WithArchiveOwners wires the mesh view that archive adoption and the departed-owner sweep consult.
-func (m *Manager) WithArchiveOwners(alive OwnerAlive) {
-	m.ownerAlive.Store(&alive)
-}
-
-// AdoptArchived takes over an archived claim whose owner left the mesh and reports whether this node owns it now.
+// AdoptArchived takes over a claim whose owner's lease expired and reports whether this node owns it now.
 func (m *Manager) AdoptArchived(ctx context.Context, id, token string) (bool, error) {
 	if m.archives == nil {
 		return false, nil
@@ -48,8 +41,7 @@ func (m *Manager) adoptArchived(ctx context.Context, id, token string) (bool, er
 		return false, err
 	}
 	sum := tenants.TokenSHA256(token)
-	if rec.Consumed || subtle.ConstantTimeCompare([]byte(sum), []byte(rec.TokenSHA256)) != 1 || (!rec.Deadline.IsZero() && time.Now().After(rec.Deadline)) ||
-		(rec.Owner != m.nodeID && !m.ownerGone(rec.Owner)) {
+	if rec.Consumed || subtle.ConstantTimeCompare([]byte(sum), []byte(rec.TokenSHA256)) != 1 || (!rec.Deadline.IsZero() && time.Now().After(rec.Deadline)) {
 		return false, nil
 	}
 	sb := &types.Sandbox{}
@@ -110,7 +102,7 @@ func (m *Manager) putArchive(ctx context.Context, sb *types.Sandbox, ck string) 
 		deadline = m.retentionDeadline(sb.Key)
 	}
 	m.mu.Unlock()
-	dto.Token, dto.VMName, dto.VsockSocket, dto.HibernateSnap, dto.PendingSnap, dto.ArchivePending = "", "", "", "", "", ""
+	dto.Token, dto.VMName, dto.VsockSocket, dto.HibernateSnap, dto.PendingSnap, dto.ArchivePending, dto.ReplicaCk = "", "", "", "", "", "", ""
 	dto.ArchiveCk, dto.Deadline = ck, deadline
 	claim, err := json.Marshal(&dto)
 	if err != nil {
@@ -244,7 +236,7 @@ func (m *Manager) reputArchive(ctx context.Context, sb *types.Sandbox, epoch int
 	if epoch == 0 {
 		return
 	}
-	epoch, err := m.putArchive(ctx, sb, sb.ArchiveCk)
+	epoch, err := m.putArchive(ctx, sb, cmp.Or(sb.ArchiveCk, sb.ReplicaCk))
 	if err != nil {
 		log.WithFunc("pool.reputArchive").Warnf(ctx, "re-put archive row %s: %v", sb.ID, err)
 		return
@@ -258,6 +250,7 @@ func (m *Manager) releaseRowed(ctx context.Context, id string, sb *types.Sandbox
 	if err := m.resolveIntent(context.WithoutCancel(ctx), sb); err != nil {
 		return err
 	}
+	replica := m.replicaOf(sb)
 	consumed, err := m.consumeArchive(ctx, sb)
 	if err != nil {
 		return err
@@ -265,12 +258,16 @@ func (m *Manager) releaseRowed(ctx context.Context, id string, sb *types.Sandbox
 	if err = m.releaseResolved(ctx, id, sb); err != nil {
 		return err
 	}
-	m.dropTombstone(context.WithoutCancel(ctx), id, consumed)
+	ctx = context.WithoutCancel(ctx)
+	m.dropTombstone(ctx, id, consumed)
+	if replica != "" {
+		m.deleteOrphanArchiveCk(ctx, replica)
+	}
 	return nil
 }
 
 func (m *Manager) consumeArchive(ctx context.Context, sb *types.Sandbox) (int64, error) {
-	if !m.archiveRowed(sb) {
+	if !m.archiveRowed(sb) && !m.replicaRowed(sb) {
 		return 0, nil
 	}
 	ctx = context.WithoutCancel(ctx)
@@ -301,24 +298,39 @@ func (m *Manager) settleConsume(ctx context.Context, sb *types.Sandbox) (int64, 
 	return consumed, err
 }
 
-// unrowExpired drops an expired archive's row, so the next reap purges it as a row-less archive.
+// unrowExpired drops an expired claim's row, so the next reap purges or destroys it as a row-less claim.
 func (m *Manager) unrowExpired(ctx context.Context, sb *types.Sandbox) {
 	defer m.untrack(m.archiving, sb.ID)
 	sb.Transition.Lock()
 	defer sb.Transition.Unlock()
-	if _, err := m.consumeArchive(ctx, sb); err != nil && !errors.Is(err, ErrUnknownSandbox) {
+	var err error
+	if m.replicaOf(sb) != "" {
+		err = m.dropReplica(ctx, sb)
+	} else {
+		_, err = m.consumeArchive(ctx, sb)
+	}
+	if err != nil && !errors.Is(err, ErrUnknownSandbox) {
 		log.WithFunc("pool.unrowExpired").Warnf(ctx, "purge %s: %v", sb.ID, err)
 	}
 }
 
-// dropAdopted forgets an archived claim another node owns now; its checkpoint is the new owner's.
+// dropAdopted forgets a claim another node owns now and removes its local VM; an archive checkpoint is the new owner's.
 func (m *Manager) dropAdopted(ctx context.Context, sb *types.Sandbox) {
 	logger := log.WithFunc("pool.dropAdopted")
-	if err := m.clearArchiveCk(sb.ArchiveCk); err != nil {
-		logger.Warnf(ctx, "clear archive ck %s: %v", sb.ArchiveCk, err)
+	m.mu.Lock()
+	ck, vm, snap := sb.ArchiveCk, sb.VMName, sb.HibernateSnap
+	m.mu.Unlock()
+	if ck != "" {
+		if err := m.clearArchiveCk(ck); err != nil {
+			logger.Warnf(ctx, "clear archive ck %s: %v", ck, err)
+		}
 	}
 	if m.forgetClaim(ctx, sb) {
-		logger.Infof(ctx, "archived sandbox %s moved to another node", sb.ID)
+		if vm != "" {
+			m.destroy(ctx, vm)
+		}
+		m.dropSnap(ctx, snap)
+		logger.Infof(ctx, "sandbox %s moved to another node", sb.ID)
 	}
 }
 
@@ -353,7 +365,7 @@ func (m *Manager) sweepOrphanArchives(ctx context.Context) {
 		switch {
 		case rec.Owner == m.nodeID:
 			m.reconcileOwnRow(ctx, rec, now)
-		case m.ownerGone(rec.Owner) && !rec.Consumed:
+		case !rec.Consumed:
 			m.purgeArchiveRow(ctx, rec)
 		}
 	}
@@ -372,7 +384,7 @@ func (m *Manager) reconcileOwnRow(ctx context.Context, rec archives.Record, now 
 	sb.Transition.Lock()
 	defer sb.Transition.Unlock()
 	m.mu.Lock()
-	held, refs, epoch := m.claimed[rec.ID] == sb, sb.ArchiveCk == rec.Checkpoint, sb.ArchiveEpoch
+	held, refs, epoch := m.claimed[rec.ID] == sb, sb.ArchiveCk == rec.Checkpoint || sb.ReplicaCk == rec.Checkpoint, sb.ArchiveEpoch
 	m.mu.Unlock()
 	switch {
 	case !held:
@@ -440,6 +452,13 @@ func (m *Manager) fenceArchived(ctx context.Context, claims map[string]*types.Sa
 			}
 		case ok && rec.Owner != m.nodeID:
 			drop = true
+		case sb.ReplicaCk != "" && sb.ArchivePending == "":
+			switch {
+			case !ok && m.replicaConfirmed(sb):
+				drop = true
+			case ok && !rec.Consumed:
+				sb.ReplicaCk, sb.ArchiveEpoch = rec.Checkpoint, rec.Epoch
+			}
 		case sb.ArchivePending != "" || ok && !rec.Consumed:
 			moved, err := m.settleIntent(ctx, id, sb.ArchivePending, rec, ok)
 			switch {
@@ -513,7 +532,7 @@ func (m *Manager) resolveIntent(ctx context.Context, sb *types.Sandbox) error {
 	case err != nil:
 		return err
 	case moved:
-		m.dropMoved(ctx, sb)
+		m.dropAdopted(ctx, sb)
 		return ErrUnknownSandbox
 	}
 	if m.clearArchiveIntent(ctx, sb, pending) {
@@ -540,21 +559,10 @@ func (m *Manager) settleIntents(ctx context.Context) {
 	}
 }
 
-func (m *Manager) dropMoved(ctx context.Context, sb *types.Sandbox) {
-	m.mu.Lock()
-	vm, snap := sb.VMName, sb.HibernateSnap
-	m.mu.Unlock()
-	if m.forgetClaim(ctx, sb) {
-		m.destroy(ctx, vm)
-		m.dropSnap(ctx, snap)
-	}
-}
-
 func (m *Manager) archiveRowed(sb *types.Sandbox) bool {
 	return m.archives != nil && sb.ArchiveCk != "" && sb.ArchiveEpoch != 0
 }
 
-func (m *Manager) ownerGone(node string) bool {
-	alive := m.ownerAlive.Load()
-	return alive != nil && !(*alive)(node)
+func (m *Manager) expiryDropsRow(sb *types.Sandbox) bool {
+	return m.archiveRowed(sb) || sb.ReplicaCk != "" && !m.archivesAtDeadline(sb)
 }

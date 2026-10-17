@@ -30,6 +30,9 @@ func (m *Manager) WakeAgentSocket(ctx context.Context, id, token string) (string
 	if !ok {
 		return "", nil, ErrUnknownSandbox
 	}
+	if m.leaseFenced(sb) {
+		return "", nil, ErrLeaseLost
+	}
 	sb.Touch()
 	sb.Hold()
 	sock, err := m.wakeResolved(ctx, sb)

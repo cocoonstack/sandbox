@@ -104,6 +104,7 @@ func TestPortRelayMapsDialErrors(t *testing.T) {
 		want int
 	}{
 		{"unknown sandbox or wrong token", pool.ErrUnknownSandbox, http.StatusNotFound},
+		{"node lease lost", pool.ErrLeaseLost, http.StatusServiceUnavailable},
 		{"no guest listener", errors.New("port_forward 49983: not_found"), http.StatusBadGateway},
 	}
 	for _, tt := range tests {

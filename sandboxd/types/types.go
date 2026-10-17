@@ -576,6 +576,8 @@ type Sandbox struct {
 	// ArchiveEpoch is the archive registry epoch this node last held for the claim; zero means no row.
 	ArchiveEpoch   int64  `json:"archive_epoch,omitzero"`
 	ArchivePending string `json:"archive_pending,omitempty"`
+	// ReplicaCk names the checkpoint the claim's registry row points at while the claim runs; empty means unreplicated.
+	ReplicaCk string `json:"replica_ck,omitempty"`
 
 	// FromCheckpoint names the checkpoint this sandbox branched from; empty otherwise.
 	FromCheckpoint string `json:"from_checkpoint,omitempty"`

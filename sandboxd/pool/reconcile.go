@@ -293,7 +293,7 @@ func (m *Manager) reclaimOrphanArchiveCks(ctx context.Context, claims map[string
 			continue
 		}
 		orig, mine := claims[ckpt.SandboxID]
-		if !mine || orig.ArchiveCk == ckpt.ID || orig.ArchivePending == ckpt.ID || rows[ckpt.SandboxID].Checkpoint == ckpt.ID {
+		if !mine || orig.ArchiveCk == ckpt.ID || orig.ReplicaCk == ckpt.ID || orig.ArchivePending == ckpt.ID || rows[ckpt.SandboxID].Checkpoint == ckpt.ID {
 			continue
 		}
 		if err := m.deleteArchiveCk(ctx, ckpt.ID); err != nil {

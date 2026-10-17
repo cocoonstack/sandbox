@@ -226,6 +226,9 @@ func (m *Manager) dialPort(ctx context.Context, id string, cred Cred, port uint1
 	if !ok {
 		return nil, ErrUnknownSandbox
 	}
+	if m.leaseFenced(sb) {
+		return nil, ErrLeaseLost
+	}
 	sb.Touch()
 	m.recordAudit(ctx, id, auditFrame{Op: op, Port: port})
 	sb.Hold()
@@ -246,6 +249,9 @@ func (m *Manager) dialPassive(ctx context.Context, id string, port uint16) (net.
 	sb, ok := m.byID(id)
 	if !ok {
 		return nil, ErrUnknownSandbox
+	}
+	if m.leaseFenced(sb) {
+		return nil, ErrLeaseLost
 	}
 	if !sb.Transition.TryLock() {
 		return nil, ErrPaused
@@ -530,7 +536,7 @@ func (m *Manager) reapOnce(ctx context.Context) {
 			continue
 		}
 		switch {
-		case m.archiveRowed(sb):
+		case m.expiryDropsRow(sb):
 			if _, busy := m.archiving[id]; !busy {
 				m.archiving[id] = struct{}{}
 				unrows = append(unrows, sb)

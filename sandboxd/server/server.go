@@ -57,6 +57,7 @@ var poolErrHTTP = []struct {
 	{pool.ErrTenantStoreDown, http.StatusServiceUnavailable, "tenant store down; retry"},
 	{pool.ErrPoolStoreDown, http.StatusServiceUnavailable, "pool set store down; retry"},
 	{pool.ErrArchiveStoreDown, http.StatusServiceUnavailable, "archive registry down; retry"},
+	{pool.ErrLeaseLost, http.StatusServiceUnavailable, "lease lost; retry"},
 	{pool.ErrNoEgress, http.StatusConflict, ""},
 	{pool.ErrNoEgressHibernate, http.StatusConflict, ""},
 	{pool.ErrNoEgressFork, http.StatusConflict, ""},
