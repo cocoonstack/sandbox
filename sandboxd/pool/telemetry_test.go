@@ -377,6 +377,40 @@ func TestEgressAuditNamesTenantAndEndsARelayedFrameCannot(t *testing.T) {
 	}
 }
 
+func TestARelayedFrameCannotForgeOrDropItsAuditLine(t *testing.T) {
+	dir := t.TempDir()
+	m, err := NewManager(t.Context(), &config.Config{DataDir: dir, AuditLog: true, Pools: []config.PoolSpec{}}, newFakeEngine(), testSecrets(t))
+	if err != nil {
+		t.Fatalf("setup manager: %v", err)
+	}
+	frames := []string{
+		`{"op":"exec","argv":["id"],"decision":1,"src_addr":"x","secret":"gh","upstream":"up:3128","method":"GET","added":["t"]}`,
+		`{"op":"exec","argv":["id"],"path":1}`,
+		`{"op":"exec","argv":["id"],"x":1,"x":2}`,
+	}
+	for _, frame := range frames {
+		m.Audit(t.Context(), "sb_f", []byte(frame))
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, "audit.jsonl"))
+	if err != nil {
+		t.Fatalf("read audit journal: %v", err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(raw)), "\n")
+	if len(lines) != len(frames) {
+		t.Fatalf("audit lines %q for %d frames", lines, len(frames))
+	}
+	for i, line := range lines {
+		if !strings.Contains(line, `"op":"exec"`) || !strings.Contains(line, `"argv":["id"]`) {
+			t.Errorf("frame %q audited as %q, want the exec and its argv", frames[i], line)
+		}
+		for _, forged := range []string{"decision", "src_addr", "secret", "upstream", "method", "added", "path"} {
+			if strings.Contains(line, `"`+forged+`"`) {
+				t.Errorf("audit line %q carries the frame's %s", line, forged)
+			}
+		}
+	}
+}
+
 func usageEventsOf(t *testing.T, m *Manager, id string) string {
 	t.Helper()
 	raw, err := os.ReadFile(filepath.Join(m.dataDir, "usage.jsonl"))

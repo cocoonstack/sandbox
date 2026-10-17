@@ -2,6 +2,7 @@ package pool
 
 import (
 	"context"
+	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"maps"
 	"net/netip"
@@ -47,18 +48,22 @@ type counters struct {
 	claimNanos, wakeNanos                atomic.Uint64
 }
 
-// auditFrame is the addressing slice of a request frame worth auditing, plus the egress attribution only the node sets.
+// requestFrame is the addressing slice of a relayed request frame worth auditing.
+type requestFrame struct {
+	Op      string   `json:"op"`
+	Argv    []string `json:"argv,omitempty"`
+	Path    string   `json:"path,omitempty"`
+	Dest    string   `json:"dest,omitempty"`
+	From    string   `json:"from,omitempty"`
+	To      string   `json:"to,omitempty"`
+	URL     string   `json:"url,omitempty"`
+	Session string   `json:"session,omitempty"`
+	Port    uint16   `json:"port,omitzero"`
+}
+
 type auditFrame struct {
-	Op       string         `json:"op"`
-	Argv     []string       `json:"argv,omitempty"`
-	Path     string         `json:"path,omitempty"`
-	Dest     string         `json:"dest,omitempty"`
+	requestFrame
 	Method   string         `json:"method,omitempty"`
-	From     string         `json:"from,omitempty"`
-	To       string         `json:"to,omitempty"`
-	URL      string         `json:"url,omitempty"`
-	Session  string         `json:"session,omitempty"`
-	Port     uint16         `json:"port,omitzero"`
 	Decision string         `json:"decision,omitempty"`
 	Secret   string         `json:"secret,omitempty"`
 	Upstream string         `json:"upstream,omitempty"`
@@ -105,12 +110,14 @@ func (m *Manager) Audit(ctx context.Context, id string, line []byte) {
 		m.recordAudit(ctx, id, auditFrame{Op: "oversized"})
 		return
 	}
-	var frame auditFrame
-	if err := json.Unmarshal(line, &frame); err != nil || frame.Op == "" {
+	var frame requestFrame
+	if json.Unmarshal(line, &frame) != nil {
+		frame = memberwiseFrame(line)
+	}
+	if frame.Op == "" {
 		return // torn cap boundary or a non-frame line: nothing to record
 	}
-	frame.Tenant, frame.Src, frame.Dst = "", netip.AddrPort{}, netip.AddrPort{}
-	m.recordAudit(ctx, id, frame)
+	m.recordAudit(ctx, id, auditFrame{requestFrame: frame})
 }
 
 // AuditEnabled reports whether the relay should tap request frames at all.
@@ -154,4 +161,17 @@ func (m *Manager) recordUsage(ctx context.Context, ev usageEvent) {
 	if err := m.usage.append(ev); err != nil {
 		log.WithFunc("pool.recordUsage").Errorf(ctx, err, "append usage event %s %s", ev.Event, ev.ID)
 	}
+}
+
+func memberwiseFrame(line []byte) requestFrame {
+	var frame requestFrame
+	var members map[string]jsontext.Value
+	if json.Unmarshal(line, &members, jsontext.AllowDuplicateNames(true)) != nil {
+		return frame
+	}
+	for name, v := range members {
+		member, _ := jsontext.AppendQuote([]byte("{"), name)
+		_ = json.Unmarshal(append(append(append(member, ':'), v...), '}'), &frame)
+	}
+	return frame
 }
