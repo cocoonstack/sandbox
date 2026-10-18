@@ -242,7 +242,8 @@ claim it still lists once its lease runs out; the epoch fences it out. A claim
 that has entered its wake counts as running. Running and hibernated claims of a
 pool without `replicate_seconds` are lost with their node, and an owner that
 never returns leaves behind only the tombstones and checkpoints of the claims it
-was waking or releasing when it died.
+was waking or releasing when it died, plus what a replicated claim leaves (see
+[running claims](#running-claims-across-node-loss)).
 
 ### Node lease
 
@@ -302,7 +303,8 @@ checkpoint store and keeps each claim's registry row on the latest snapshot:
   concurrency, each round a capture, upload and registry write, and a new pass
   cannot start before the previous one ends, so a pass grows with claim count
   and guest memory; for example, an interval of 30 s with a 90 s pass can lose
-  about 185 s.
+  about 185 s. The first round of a claim after a wake or adoption uploads the
+  whole claim, so that pass is the long pass in this bound.
   While rounds fail it is the time since the last one that committed.
 - **Lifecycle.** A release consumes the row, then deletes the replica and the
   tombstone. A hibernate leaves the row on the last replica. An archive puts its
@@ -322,8 +324,11 @@ checkpoint store and keeps each claim's registry row on the latest snapshot:
   hourly sweep never purges it, because no round refreshes it while the claim is
   hibernated, and retention starts when the claim is archived or adopted. The
   rows of a node that never returns therefore stay until a client adopts them, a
-  bounded residue of one row and one checkpoint per claim. Apart from that and
-  the lease rule the sweep is unchanged.
+  bounded residue of one row and up to two checkpoints per claim: the row's, and
+  a committed pending replica or a previous replica the node died before
+  deleting. Their metas stay live, so the store sweep never reclaims them and
+  they pin their chunks. Apart from that and the lease rule the sweep is
+  unchanged.
 - **Self-fencing.** A node whose renewal is overdue by 12 seconds (the lease
   length minus a 3 second margin, counted from the start of the last renewal
   that answered) stops serving every replicated claim it holds: relay, exec,
@@ -364,12 +369,19 @@ checkpoint store and keeps each claim's registry row on the latest snapshot:
   do not replicate are unaffected. An archived claim of a replicating pool is
   gated like a running one while the node is fenced, so its wake waits too.
 
-A replica costs, per claim per interval, one capture pause, one upload, one
-registry read, one write and one delete; the node's own cost is one scan of its
-claims every 5 seconds. Resolving a claim for a stream of a pool that does not
-replicate reads one plain field and no atomic; a replicated claim adds one
-atomic load of the fence state and its stream one watcher goroutine. Adding a
-claim to a failover node gains one map lookup. Nothing runs per frame.
+A replica costs, per claim per interval, one capture pause, an upload of the
+changed chunks plus a manifest and a meta, one registry read, one write and one
+delete of the previous replica; the node's own cost is one scan of its claims
+every 5 seconds. The delete is soft: the previous replica's manifest stays for
+the store's one-hour grace plus up to one hourly sweep, so the chunks only it
+names stay that long. Budget storage per replicated claim as the live replica
+plus roughly the per-round churn times (grace + sweep period) / interval. The
+first round after a wake or adoption uploads the whole claim again, because the
+wake deletes the record it restored from; later rounds dedup. Resolving a claim
+for a stream of a pool that does not replicate reads one plain field and no
+atomic; a replicated claim adds one atomic load of the fence state and its
+stream one watcher goroutine. Adding a claim to a failover node gains one map
+lookup. Nothing runs per frame.
 
 ## Templates on a cluster
 
