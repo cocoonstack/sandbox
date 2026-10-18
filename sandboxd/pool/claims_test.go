@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"runtime"
 	"slices"
+	"strings"
 	"sync"
 	"syscall"
 	"testing"
@@ -118,6 +119,18 @@ func TestClaimStoreSnapshotDetachesVolumes(t *testing.T) {
 	}
 	if !slices.Equal(loaded.Volumes, []types.Volume{{Name: "dataset-a", Mount: "/datasets/a"}}) {
 		t.Errorf("volumes %v, want detached snapshot", loaded.Volumes)
+	}
+}
+
+func TestClaimRowOmitsUnsetFlags(t *testing.T) {
+	raw, err := encodeRow(new(dtoOf(&types.Sandbox{ID: "sb_1", VMName: "vm"})))
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	for _, flag := range []string{"reader_safe", "no_egress"} {
+		if strings.Contains(string(raw), flag) {
+			t.Errorf("row %s carries the unset flag %s", raw, flag)
+		}
 	}
 }
 
