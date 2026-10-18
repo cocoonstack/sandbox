@@ -986,9 +986,11 @@ the instant between that `sync` and the pause is visible only after a wake. A
 hibernate whose `sync` failed, or one made before the pool had `reader`,
 is not served by a reader: its reads wake the sandbox. When no reader can be built (no warm VM in the pool, a failed attach, an archive from an older cocoon) the call wakes the sandbox as if the
 feature were off. Because the `101` has gone out by then, a failure on this path
-(unknown sandbox, a refused wake, an unreachable guest) arrives as a silkd
-`error` frame (`not_found` for an unknown sandbox, else `internal`) rather than
-an HTTP status, and the connection ends.
+(unknown sandbox, a refused wake, an unreachable guest, an overdue node lease)
+arrives as a silkd `error` frame (`not_found` for an unknown sandbox, else
+`internal`) rather than an HTTP status, and the connection ends. A connection
+served by a reader, or handed over to the woken sandbox, of a claim of a
+replicating pool is closed when the lease turns overdue, as an open relay is.
 
 ## GET /v1/sandboxes/{id}/ports/{port}
 

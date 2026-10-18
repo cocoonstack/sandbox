@@ -14,7 +14,7 @@ the cocoon CLI and needs a template image with silkd baked in.
   empty `snapshot list --format json`, which sandboxd's snapshot reconcile
   reads. sandboxd logs a warning at startup when the detected cocoon is below
   v0.6.9 (a dev/`master-<sha>` build is assumed current); changing volumes on
-  a running claim needs v0.7.2
+  a running claim needs v0.7.2, and a pool's `reader` needs v0.7.3
 - The sandbox boot artifact installed where cocoon finds it
   (`/boot/vmlinuz-sandbox`, `/boot/initrd.img-sandbox` — from
   `ghcr.io/cocoonstack/sandbox/boot:<kernel-ver>`)
@@ -186,7 +186,7 @@ the claim as before ([API](sandboxd-api.md#get-v1sandboxesidagent)).
 ```
 
 It needs Cloud Hypervisor and a cocoon whose `vm disk attach` takes
-`--from-snapshot` and `--from-dir` (released after v0.7.2). Leave `reader` off
+`--from-snapshot` and `--from-dir` (v0.7.3 or newer). Leave `reader` off
 on a Firecracker node or with an older cocoon: there every read spends a warm VM
 on an attach that fails, then wakes the claim. An archive exported by an older
 cocoon, whose `snapshot.json` has no `disk_attach_files`, wakes before any VM is
