@@ -154,6 +154,31 @@ func (s *Store) Fetch(ctx context.Context, id string) (string, []byte, string, e
 	return export, meta, digest, nil
 }
 
+func (s *Store) FetchFile(ctx context.Context, id, rel, dst string) error {
+	ctx, cancel := context.WithTimeout(ctx, transferBudget)
+	defer cancel()
+	meta, _, err := s.readMeta(ctx, id)
+	if err != nil {
+		return err
+	}
+	man, err := s.readManifest(ctx, id, store.ExportGen(meta))
+	if err != nil {
+		return err
+	}
+	i := slices.IndexFunc(man.Files, func(f manifestFile) bool { return f.Path == rel })
+	if i < 0 {
+		return store.ErrNotFound
+	}
+	part := dst + ".part"
+	defer func() { _ = os.Remove(part) }()
+	file := man.Files[i]
+	file.Path = filepath.Base(part)
+	if err = s.materialize(ctx, manifest{Lineage: man.Lineage, Files: []manifestFile{file}}, filepath.Dir(part)); err != nil {
+		return err
+	}
+	return os.Rename(part, dst)
+}
+
 func (s *Store) ReadMeta(ctx context.Context, id string) ([]byte, error) {
 	meta, _, err := s.readMeta(ctx, id)
 	return meta, err

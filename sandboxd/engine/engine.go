@@ -264,48 +264,12 @@ func (e *Engine) Inspect(ctx context.Context, name string) (rec types.VMRecord, 
 
 // DialSilkd connects to a VM's silkd through the hybrid-vsock UDS.
 func (e *Engine) DialSilkd(ctx context.Context, vsockSocket string) (net.Conn, error) {
-	var d net.Dialer
-	conn, err := d.DialContext(ctx, "unix", vsockSocket)
-	if err != nil {
-		return nil, err
-	}
-	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
-	defer stop()
-	if _, err = fmt.Fprintf(conn, "CONNECT %d\n", silkdPort); err != nil {
-		_ = conn.Close()
-		return nil, fmt.Errorf("write CONNECT: %w", err)
-	}
-	r := bufio.NewReaderSize(conn, connectMax)
-	reply, err := readBufLine(r, connectMax)
-	if err != nil {
-		_ = conn.Close()
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return nil, ctxErr
-		}
-		return nil, fmt.Errorf("read CONNECT reply: %w", err)
-	}
-	if !strings.HasPrefix(reply, "OK ") {
-		_ = conn.Close()
-		return nil, fmt.Errorf("hybrid vsock CONNECT %d: %s", silkdPort, strings.TrimSpace(reply))
-	}
-	return utils.WithBuffered(conn, r), nil
+	return e.dialVsock(ctx, vsockSocket, silkdPort)
 }
 
 // Probe polls until silkd completes an info round-trip — the claim-ready signal.
 func (e *Engine) Probe(ctx context.Context, vsockSocket string, timeout time.Duration) error {
-	ctx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-	var lastErr error
-	for {
-		if lastErr = e.infoRoundTrip(ctx, vsockSocket); lastErr == nil {
-			return nil
-		}
-		select {
-		case <-ctx.Done():
-			return fmt.Errorf("silkd probe: %w (last: %v)", ctx.Err(), lastErr)
-		case <-time.After(probeInterval):
-		}
-	}
+	return e.probe(ctx, vsockSocket, silkdPort, timeout)
 }
 
 // DialGuestPort opens a raw byte stream to 127.0.0.1:port inside the guest.
@@ -341,6 +305,50 @@ func (e *Engine) DialGuestPort(ctx context.Context, vsockSocket string, port uin
 		return nil, fmt.Errorf("port_forward %d: %s", port, respFail(resp))
 	}
 	return newGuestPortConn(conn, r), nil
+}
+
+func (e *Engine) dialVsock(ctx context.Context, vsockSocket string, port int) (net.Conn, error) {
+	var d net.Dialer
+	conn, err := d.DialContext(ctx, "unix", vsockSocket)
+	if err != nil {
+		return nil, err
+	}
+	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	defer stop()
+	if _, err = fmt.Fprintf(conn, "CONNECT %d\n", port); err != nil {
+		_ = conn.Close()
+		return nil, fmt.Errorf("write CONNECT: %w", err)
+	}
+	r := bufio.NewReaderSize(conn, connectMax)
+	reply, err := readBufLine(r, connectMax)
+	if err != nil {
+		_ = conn.Close()
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
+		return nil, fmt.Errorf("read CONNECT reply: %w", err)
+	}
+	if !strings.HasPrefix(reply, "OK ") {
+		_ = conn.Close()
+		return nil, fmt.Errorf("hybrid vsock CONNECT %d: %s", port, strings.TrimSpace(reply))
+	}
+	return utils.WithBuffered(conn, r), nil
+}
+
+func (e *Engine) probe(ctx context.Context, vsockSocket string, port int, timeout time.Duration) error {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	var lastErr error
+	for {
+		if lastErr = e.infoRoundTrip(ctx, vsockSocket, port); lastErr == nil {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("silkd probe: %w (last: %v)", ctx.Err(), lastErr)
+		case <-time.After(probeInterval):
+		}
+	}
 }
 
 func (e *Engine) cloneArgs(fromDir, name string, key types.PoolKey) []string {
@@ -435,8 +443,8 @@ func (e *Engine) runRecord(ctx context.Context, args ...string) (types.VMRecord,
 	return rec, nil
 }
 
-func (e *Engine) infoRoundTrip(ctx context.Context, vsockSocket string) error {
-	conn, err := e.DialSilkd(ctx, vsockSocket)
+func (e *Engine) infoRoundTrip(ctx context.Context, vsockSocket string, port int) error {
+	conn, err := e.dialVsock(ctx, vsockSocket, port)
 	if err != nil {
 		return err
 	}

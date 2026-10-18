@@ -88,6 +88,7 @@ func TestPoolSeedHashIgnoresConfigOwnedFields(t *testing.T) {
 		"capture_trim":        func(s *config.PoolSpec) { s.CaptureTrim = true },
 		"storage":             func(s *config.PoolSpec) { s.Storage = "20G" },
 		"replicate_seconds":   func(s *config.PoolSpec) { s.ReplicateSeconds = 60 },
+		"reader":              func(s *config.PoolSpec) { s.Reader = true },
 		"egress_upstream_env": func(s *config.PoolSpec) { s.EgressUpstreamEnv = "POOL_UPSTREAM" },
 	} {
 		spec := base

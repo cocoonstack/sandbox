@@ -28,6 +28,10 @@ type fakeEngine struct {
 	volumeVMs map[string]bool
 	guestEnvs map[string]string
 	seq       int
+
+	readerRoot     string
+	readerStarts   []string
+	readerAttaches []string
 }
 
 func newFakeEngine(dir string) *fakeEngine {
@@ -86,6 +90,33 @@ func (f *fakeEngine) SnapshotSave(_ context.Context, _, _ string) error { return
 
 func (f *fakeEngine) SnapshotExport(_ context.Context, _, toDir string) error {
 	return os.MkdirAll(toDir, 0o750)
+}
+
+func (f *fakeEngine) DiskAttachSnapshot(_ context.Context, vmName, snapName string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.readerAttaches = append(f.readerAttaches, vmName+":"+snapName)
+	return "snap-" + snapName, nil
+}
+
+func (f *fakeEngine) DiskAttachDir(context.Context, string, string) (string, error) {
+	return "", errors.New("no archive in this fake")
+}
+
+func (f *fakeEngine) StartReader(_ context.Context, vsockSocket, _ string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.readerStarts = append(f.readerStarts, vsockSocket)
+	return nil
+}
+
+func (f *fakeEngine) DialReader(_ context.Context, _ string) (net.Conn, error) {
+	f.mu.Lock()
+	root := f.readerRoot
+	f.mu.Unlock()
+	client, server := net.Pipe()
+	go silkdtest.NewFake(root).ServeConn(server)
+	return client, nil
 }
 
 func (f *fakeEngine) SnapshotRemove(_ context.Context, _ string) error { return nil }

@@ -413,6 +413,23 @@ func TestIsContinuation(t *testing.T) {
 	}
 }
 
+func TestRequestOp(t *testing.T) {
+	for _, tt := range []struct {
+		line string
+		want string
+	}{
+		{`{"v":1,"op":"fs_read","path":"/etc/hostname"}`, FsRead{}.Op()},
+		{`{"op":"fs_stat","v":1,"path":"/"}`, FsStat{}.Op()},
+		{`{"v":1,"op":"info"`, Info{}.Op()},
+		{`{"v":1,"path":"/"}`, ""},
+		{"", ""},
+	} {
+		if got := RequestOp([]byte(tt.line)); got != tt.want {
+			t.Errorf("RequestOp(%q) = %q, want %q", tt.line, got, tt.want)
+		}
+	}
+}
+
 func jsonEqual(t *testing.T, a, b []byte) bool {
 	t.Helper()
 	var av, bv any

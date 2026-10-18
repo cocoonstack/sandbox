@@ -6,7 +6,10 @@ the port) for the host only — a peer with any other vsock CID is refused —
 and started at sysinit in parallel with boot. It is what actually
 "runs something" inside a sandbox; sandboxd relays SDK connections to it
 byte-for-byte. Reaching silkd is the
-claim-readiness signal — a claim returns only once silkd answers.
+claim-readiness signal — a claim returns only once silkd answers. A
+[reader VM](deploy.md#reading-sleeping-claims-without-waking-them) runs a
+second copy, the claim's own, chrooted into a read-only view of the claim's
+filesystem on vsock port 2051.
 
 Most users never speak the protocol directly — the [Go SDK](sdk.md) and
 [Python SDK](sdk-python.md) cover the full surface. This page is the wire

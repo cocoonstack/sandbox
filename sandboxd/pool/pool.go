@@ -110,7 +110,10 @@ var (
 	ErrFailed              = errors.New("sandbox failed: its VMM is down; release it, or wake it to cold-boot its disk")
 	ErrNoInstanceMetadata  = engine.ErrNoInstanceMetadata
 	ErrQuota               = errors.New("node claim quota reached")
+	ErrSleeping            = errors.New("sandbox is hibernated or archived and a reader may serve it")
+	ErrNoReader            = errors.New("no reader for the sandbox")
 
+	errNotSleeping   = errors.New("sandbox is no longer hibernated or archived")
 	errWokeMeanwhile = errors.New("woke between sweep and hibernate")
 	errNoEgressTap   = errors.New("egress-lane claim has no lockable tap")
 )
@@ -147,6 +150,10 @@ type Engine interface {
 	MountLiveVolume(ctx context.Context, vsockSocket, name, mount string, rw bool) error
 	UnmountVolume(ctx context.Context, vsockSocket, mount string) error
 	SyncGuest(ctx context.Context, vsockSocket string) error
+	DiskAttachSnapshot(ctx context.Context, vmName, snapName string) (string, error)
+	DiskAttachDir(ctx context.Context, vmName, dir string) (string, error)
+	StartReader(ctx context.Context, vsockSocket, cowDisk string) error
+	DialReader(ctx context.Context, vsockSocket string) (net.Conn, error)
 	WriteInstanceMetadata(ctx context.Context, vsockSocket string, doc []byte) error
 	WriteGuestEnv(ctx context.Context, vsockSocket string, doc []byte) error
 }
@@ -279,6 +286,16 @@ func (p *pool) applySpec(spec config.PoolSpec) {
 	p.archiveDelete = time.Duration(spec.ArchiveDeleteAfterSeconds) * time.Second
 }
 
+func (p *pool) popWarm() *types.Sandbox {
+	n := len(p.warm)
+	if n == 0 {
+		return nil
+	}
+	sb := p.warm[n-1]
+	p.warm = p.warm[:n-1]
+	return sb
+}
+
 // trimWarm shrinks p.warm to at most target and returns the trimmed VM names; callers hold m.mu.
 func (p *pool) trimWarm(target int) []string {
 	var trim []string
@@ -399,6 +416,8 @@ type Manager struct {
 
 	out *outbound.Host
 
+	readers *readerSet
+
 	mu              sync.Mutex
 	pools           map[types.PoolKey]*pool
 	claimed         map[string]*types.Sandbox
@@ -445,6 +464,7 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 		claimed:         map[string]*types.Sandbox{},
 		pendingRemovals: map[string]pendingRemoval{},
 		tenantLive:      map[string]int{},
+		readers:         &readerSet{live: map[string]*reader{}},
 		archiving:       map[string]struct{}{},
 		pendingCks:      map[string]struct{}{},
 		recLocks:        map[string]*sync.RWMutex{},

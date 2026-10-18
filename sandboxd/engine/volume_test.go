@@ -3,6 +3,8 @@ package engine
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -51,6 +53,43 @@ func TestDiskAttachArgsRejectBadOptions(t *testing.T) {
 	_, err := New("cocoon", nil, nil, false, false, "").diskAttachArgs("sbx-1", VolumeSpec{DirectIO: "maybe"})
 	if err == nil || !strings.Contains(err.Error(), "on, off, or auto") {
 		t.Errorf("got %v, want directio validation error", err)
+	}
+}
+
+func TestDiskAttachCopyPassesTheSourceAndReturnsTheGuestSerial(t *testing.T) {
+	for _, tt := range []struct {
+		name     string
+		attach   func(*Engine) (string, error)
+		wantArgs string
+	}{
+		{"snapshot", func(e *Engine) (string, error) {
+			return e.DiskAttachSnapshot(t.Context(), "sbx-1", "snap-1")
+		}, "vm disk attach sbx-1 --from-snapshot snap-1 --output json"},
+		{"directory", func(e *Engine) (string, error) {
+			return e.DiskAttachDir(t.Context(), "sbx-1", "/srv/export")
+		}, "vm disk attach sbx-1 --from-dir /srv/export --output json"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			args := filepath.Join(t.TempDir(), "args")
+			t.Setenv("COCOON_TEST_ARGS", args)
+			fakeCocoon(t, "#!/bin/sh\necho \"$*\" > \"$COCOON_TEST_ARGS\"\necho '{\"vm\":\"sbx-1\",\"name\":\"snap-ab12cd34\",\"id\":\"d1\",\"format\":\"raw\"}'\n")
+			name, err := tt.attach(New("cocoon", nil, nil, false, false, ""))
+			if err != nil || name != "snap-ab12cd34" {
+				t.Fatalf("attach = %q, %v, want the serial cocoon reported", name, err)
+			}
+			if got, _ := os.ReadFile(args); strings.TrimSpace(string(got)) != tt.wantArgs {
+				t.Errorf("cocoon ran %q, want %q", got, tt.wantArgs)
+			}
+		})
+	}
+}
+
+func TestDiskAttachCopyRejectsAnUnnamedResult(t *testing.T) {
+	for _, body := range []string{"not json", `{"vm":"sbx-1"}`} {
+		fakeCocoon(t, "#!/bin/sh\necho '"+body+"'\n")
+		if name, err := New("cocoon", nil, nil, false, false, "").DiskAttachSnapshot(t.Context(), "sbx-1", "snap-1"); err == nil {
+			t.Errorf("DiskAttachSnapshot over %q = %q, want an error", body, name)
+		}
 	}
 }
 

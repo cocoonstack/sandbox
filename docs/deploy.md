@@ -14,7 +14,7 @@ the cocoon CLI and needs a template image with silkd baked in.
   empty `snapshot list --format json`, which sandboxd's snapshot reconcile
   reads. sandboxd logs a warning at startup when the detected cocoon is below
   v0.6.9 (a dev/`master-<sha>` build is assumed current); changing volumes on
-  a running claim needs v0.7.2
+  a running claim needs v0.7.2, and a pool's `reader` needs v0.7.3
 - The sandbox boot artifact installed where cocoon finds it
   (`/boot/vmlinuz-sandbox`, `/boot/initrd.img-sandbox` — from
   `ghcr.io/cocoonstack/sandbox/boot:<kernel-ver>`)
@@ -141,6 +141,7 @@ gets the intersection of the two.
 | `warm_max` (pool entry) | 0 (static) | turns on the demand-adaptive watermark for that pool: the warm target rises from `warm` toward `warm_max` while claims arrive faster than the measured provision lead covers, and decays back over ~a minute of silence. The pool follows the target down: warm VMs above it are destroyed once the count has stayed above it for a full decay period, so a burst does not leave the pool parked at its high-water mark |
 | `warmup` (pool entry) | unset | argv run in the golden VM after readiness and before its snapshot, so the files it touches are page-cache-resident in every clone, and again in every clone before it joins the warm pool, so those pages are already faulted into the restored VM when the first command runs — e.g. `["node", "-e", "0"]` on a Node flavor. It runs under the engine's 2-minute command timeout in silkd's base environment (`PATH`, `TERM`, and the guest image's proxy variables wherever nothing routes directly — the none lane and the locked bridge egress lane — with the proxy not yet serving, since a door pre-bound at refill only starts serving at claim); a non-zero exit or a timeout fails the golden build, so the pool stays unfilled until the config is fixed. Config-owned like `egress`: `PUT /v1/pools` rejects it, and a golden built with a different warmup is rebuilt |
 | `capture_trim` (pool entry) | `false` | Trim the guest's copy-on-write disk before a promote or checkpoint of this pool's sandboxes (and of the clones of a template promoted from it), so the record carries only live data: blocks a build deleted — a `COPY` step's archive, a `RUN` step's caches — are no longer captured. sandboxd mounts the disk init resolved from `cocoon.cow` a second time at `/run/sandboxd-trim` through silkd as root, runs `fstrim` and unmounts, under the capture's transition lock (about 15 ms on a warm clone). A failed trim is logged and the capture proceeds, larger. A hibernated or archived sandbox is captured untrimmed. Config-owned like `egress`: `PUT /v1/pools` rejects it |
+| `reader` (pool entry) | `false` | Serve read-only file calls on this pool's hibernated or archived claims from a warm VM of the same pool instead of waking them; needs `warm` of at least 1 and a cocoon whose `vm disk attach` takes `--from-snapshot` and `--from-dir`. See [Reading sleeping claims](#reading-sleeping-claims-without-waking-them). Config-owned like `capture_trim`: `PUT /v1/pools` rejects it |
 | `egress_classes` | unset | named tenant egress layers: `[{"name": "desk", "egress": {…}, "egress_upstream_env": "DESK_UPSTREAM"}]`. A tenant names one with `egress_class` through the [tenant API](sandboxd-api.md#tenants-v1tenants) and its claims take that policy intersected with the pool's. `egress` is required; `intercept` stays a pool-rule flag. Reloadable: a class's policy reaches live claims on their next request. A class removed while tenants still name it leaves them with no egress and is logged at load and at reload |
 | `egress_upstream_env` (pool or egress class entry) | unset | names a node environment variable holding the default upstream proxy URL for the pool's or class's claims (class before pool, a claim's own entry before both); needs `egress_upstream`, and the URL must be on its `allow`. Read and checked at startup. Config-owned like `egress`: `PUT /v1/pools` rejects it |
 | `replicate_seconds` (pool entry) | 0 (off) | snapshot every running claim of this pool to the checkpoint store this often and point the claim's registry row at the snapshot, so another node restores the claim, memory and processes included, when this node is lost (see [running claims across node loss](cluster.md#running-claims-across-node-loss)). Each round pauses the guest for the length of a memory and disk capture. A restore resumes from the last committed replica and loses everything after it: up to the longer of the interval and one replication pass, plus the 5-second tick, plus one more pass, since a claim can run first in one pass and last in the next. A pass covers all the node's due claims of the replicating pools with bounded concurrency, so it grows with claim count and guest memory; the first round of a claim after a wake or adoption uploads the whole claim, so that pass is the long pass. The claim's row carries no retention deadline while it runs. Requires `archive_failover` and a `none`-lane pool, both checked at config load; a claim with volumes is skipped. Config-owned like `egress`: `PUT /v1/pools` rejects it. Restart only: a claim is replicated by its pool's setting from the moment it is claimed, so a reload that changes it is refused (a pool restarted with 0 drops its claims' rows and replicas on the first pass) |
@@ -165,6 +166,84 @@ fragment the warm pools):
 | `large` | 4 | 4G |
 | `xlarge` | 4 | 8G |
 | `2xlarge` | 8 | 16G |
+
+### Reading sleeping claims without waking them
+
+A client that only lists or reads files (a UI showing an idle agent's
+workspace, a tool collecting results) would otherwise wake the claim and
+hold its memory until the next idle hibernate, and for an archived claim
+fetch the whole checkpoint first. With `reader` set on the claim's pool,
+`fs_stat`, `fs_list`, `fs_read` and `fs_pull` on a hibernated or archived
+claim are served from a reader instead; anything else on the connection wakes
+the claim as before ([API](sandboxd-api.md#get-v1sandboxesidagent)).
+
+```json
+{
+  "pools": [
+    {"template": "rt:24.04", "warm": 4, "reader": true, "idle_hibernate_seconds": 600}
+  ]
+}
+```
+
+It needs Cloud Hypervisor and a cocoon whose `vm disk attach` takes
+`--from-snapshot` and `--from-dir` (v0.7.3 or newer). Leave `reader` off
+on a Firecracker node or with an older cocoon: there every read spends a warm VM
+on an attach that fails, then wakes the claim. An archive exported by an older
+cocoon, whose `snapshot.json` has no `disk_attach_files`, wakes before any VM is
+taken. Unpooled claims (template and checkpoint claims) always wake.
+`reader` is reloadable like `capture_trim`; turning it off leaves open reader
+connections to finish, and the next connection wakes the claim.
+
+A reader is a warm VM taken from the claim's own pool, so it boots the claim's
+image with the claim's layers, and it has that pool's lane: no NIC on the none
+lane, the bridge NIC the claim had on the bridge lane (egress-lane claims never
+hibernate). Taking one removes a VM from the pool until the refill replaces it,
+and an empty pool never cold-boots one: the call wakes the claim. A reader is never shared: it
+serves one claim, and only the claim's own token reaches it. The guest's own
+kernel does the parsing, as it does for the claim:
+
+- a hibernated claim's copy-on-write disk is copied by cocoon (`vm disk attach
+  --from-snapshot`) into the reader VM and hot-attached read-write; cocoon uses
+  a reflink where the filesystem has them, copies only that disk, never the
+  memory image, and removes the copy with the VM. The claim's transition lock is
+  held for the copy so a wake cannot consume the snapshot meanwhile;
+- an archived claim's record is fetched only for `snapshot.json` and the files
+  its `disk_attach_files` lists, into the reader's own directory under
+  `data_dir` (the dir backend copies them out of the record, the s3 backend
+  downloads only the chunks those files name, holes stay holes), then attached with `--from-dir`. The fetched files
+  are deleted once cocoon has its copy, and nothing lands in the store's shared
+  fetch cache;
+- the reader mounts the attached disk writable, so the guest replays the ext4
+  journal onto the copy and never onto the original, and mounts read-only the
+  layers named by its own `cocoon.layers=` kernel parameter. It assembles a
+  read-only overlay at `/view` and starts the claim's own `silkd`
+  (`/usr/local/bin/silkd`) chrooted into it on guest vsock port 2051. Paths and
+  symlinks resolve inside the claim's filesystem, and a write fails at the
+  read-only overlay.
+
+The pool's image must offer `mount`, `chroot`, `env`, `mkdir` and `sync` and
+boot a kernel that mounts erofs, ext4 and overlayfs, which the shipped images
+do. The claim's image must ship `silkd` at `/usr/local/bin/silkd`, as the
+shipped Linux images do; the android image does not, so its claims always wake.
+A missing silkd is detected right after the view is mounted, so such a claim
+pays one reader VM, the copy and the mounts before its call wakes it, never a
+probe timeout. A reader is kept for 30 s after its last connection, then its VM
+is destroyed. A wake waits for a reader only while cocoon copies the disk:
+milliseconds with a reflink, the time to copy the whole disk without one. A
+reader serves only the sleep it was built from: a later hibernate or archive
+gets a fresh one. The claim's own code runs in its reader with root, as it did
+in the claim, and the reader serves one claim and is destroyed afterwards, so
+the claim's bytes never reach a shared VM or the host kernel.
+
+Whenever a reader cannot be built (no warm VM in the claim's pool, the disk
+reserve is low, a failed attach, an archive without
+`disk_attach_files`, an image without `silkd` at that path), the call wakes the
+claim as it does without the feature. With the feature on for the pool, every
+hibernate of its claims runs a guest `sync` right before the pause, and a reader
+shows the disk as of that `sync`: a write the guest makes in the instant between
+the `sync` and the pause is visible only after a wake. A hibernate whose `sync`
+fails or times out is marked not reader-safe, as is any sleep that began before
+the pool had `reader`, and its reads wake the claim as without the feature.
 
 ### Dataset volumes
 
@@ -711,7 +790,7 @@ validates it with the same code as boot, and applies the reloadable settings
 all at once or not at all. Every field falls into one of three classes:
 
 - **Reloaded**:
-  - per pool: `egress`, `warmup`, `capture_trim`, `storage`, `egress_upstream_env`, for existing keys and for keys new in the file;
+  - per pool: `egress`, `warmup`, `capture_trim`, `storage`, `reader`, `egress_upstream_env`, for existing keys and for keys new in the file;
   - `egress_classes`: each class's `egress` and `egress_upstream_env`;
   - node-wide: `egress_internal_allow`, `secrets`, `egress_upstream`, `egress_usage_bytes`, `egress_conn_rate` and `disk_reserve`.
 - **Left to their API**: a pool's targets (`warm`, `warm_max`, idle and archive

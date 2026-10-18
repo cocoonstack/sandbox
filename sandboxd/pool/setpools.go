@@ -50,6 +50,9 @@ func (m *Manager) desiredPools(specs []config.PoolSpec) (map[types.PoolKey]confi
 		if spec.CaptureTrim {
 			return nil, fmt.Errorf("%w: pool %q: capture_trim is set in the config file, not via the API", ErrBadKey, spec.Template)
 		}
+		if spec.Reader {
+			return nil, fmt.Errorf("%w: pool %q: reader is set in the config file, not via the API", ErrBadKey, spec.Template)
+		}
 		if spec.Storage != "" {
 			return nil, fmt.Errorf("%w: pool %q: storage is set in the config file, not via the API", ErrBadKey, spec.Template)
 		}

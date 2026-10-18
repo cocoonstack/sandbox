@@ -19,7 +19,7 @@ func TestReloadDiffSortsReloadableOwnedAndRestartFields(t *testing.T) {
 	next.EgressInternalAllow = []string{"10.8.0.0/16"}
 	next.Pools = []PoolSpec{
 		{PoolKey: key, Warm: 5, Egress: &egress.Policy{Allow: []egress.Rule{{Host: "pypi.org"}}}},
-		{PoolKey: v13, Warmup: []string{"node", "-e", "0"}, Storage: "40G"},
+		{PoolKey: v13, Warmup: []string{"node", "-e", "0"}, Storage: "40G", Reader: true},
 	}
 	next.EgressClasses = []EgressClass{{Name: "desk", Egress: &egress.Policy{}}}
 	next.EgressConnRate = &EgressConnRate{PerSecond: 30, Burst: 600}
@@ -36,6 +36,7 @@ func TestReloadDiffSortsReloadableOwnedAndRestartFields(t *testing.T) {
 		"pools[desktop:v12 none small].egress",
 		"pools[desktop:v13 none small].warmup",
 		"pools[desktop:v13 none small].storage",
+		"pools[desktop:v13 none small].reader",
 	}
 	if !slices.Equal(changed, wantChanged) {
 		t.Errorf("changed %v, want %v", changed, wantChanged)

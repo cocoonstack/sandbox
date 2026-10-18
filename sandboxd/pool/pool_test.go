@@ -623,6 +623,7 @@ func TestSetPoolsRejectsConfigOwnedFields(t *testing.T) {
 		{"capture_trim", config.PoolSpec{PoolKey: testKey, Warm: 1, CaptureTrim: true}},
 		{"storage", config.PoolSpec{PoolKey: testKey, Warm: 1, Storage: "40G"}},
 		{"replicate_seconds", config.PoolSpec{PoolKey: testKey, Warm: 1, ReplicateSeconds: 60}},
+		{"reader", config.PoolSpec{PoolKey: testKey, Warm: 1, Reader: true}},
 	} {
 		err := m.SetPools(t.Context(), []config.PoolSpec{tt.spec})
 		if !errors.Is(err, ErrBadKey) || !strings.Contains(err.Error(), tt.field+" is set in the config file") {
@@ -1220,6 +1221,16 @@ type fakeEngine struct {
 	hibernates, restores, snapRemoves []string
 	snapSaves, exports, snapshots     []string
 	exportContent                     []byte
+	exportFiles                       map[string]string
+	startedReaders                    []string
+	attachedCopies                    []string
+	attachedDirFiles                  []string
+	attachStall                       chan struct{}
+	readerDials                       []string
+	startReaderErr                    error
+	readerDialErr                     error
+	readerPeers                       chan net.Conn
+	syncErr                           error
 	caInstalls                        []string
 	warmups                           [][]string
 	warmupSocks                       []string
@@ -1392,6 +1403,14 @@ func (f *fakeEngine) SnapshotExport(_ context.Context, snapName, toDir string) e
 	}
 	if err := os.MkdirAll(toDir, 0o750); err != nil {
 		return err
+	}
+	f.mu.Lock()
+	files := maps.Clone(f.exportFiles)
+	f.mu.Unlock()
+	for name, body := range files {
+		if err := os.WriteFile(filepath.Join(toDir, name), []byte(body), 0o600); err != nil {
+			return err
+		}
 	}
 	if content == nil {
 		return nil
@@ -1670,7 +1689,61 @@ func (f *fakeEngine) SyncGuest(_ context.Context, vsockSocket string) error {
 	defer f.mu.Unlock()
 	f.syncs = append(f.syncs, vsockSocket)
 	f.volumeOps = append(f.volumeOps, "sync")
-	return nil
+	return f.syncErr
+}
+
+func (f *fakeEngine) DiskAttachSnapshot(_ context.Context, vmName, snapName string) (string, error) {
+	f.mu.Lock()
+	f.attachedCopies = append(f.attachedCopies, "snapshot:"+vmName+":"+snapName)
+	stall, err := f.attachStall, f.diskAttachErr
+	f.mu.Unlock()
+	if stall != nil {
+		<-stall
+	}
+	if err != nil {
+		return "", err
+	}
+	return "snap-" + snapName, nil
+}
+
+func (f *fakeEngine) DiskAttachDir(_ context.Context, vmName, dir string) (string, error) {
+	entries, err := os.ReadDir(dir)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err = cmp.Or(err, f.diskAttachErr); err != nil {
+		return "", err
+	}
+	f.attachedCopies = append(f.attachedCopies, "dir:"+vmName)
+	f.attachedDirFiles = nil
+	for _, entry := range entries {
+		f.attachedDirFiles = append(f.attachedDirFiles, entry.Name())
+	}
+	return "snap-dir", nil
+}
+
+func (f *fakeEngine) StartReader(_ context.Context, vsockSocket, cowDisk string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.startedReaders = append(f.startedReaders, cowDisk)
+	f.volumeOps = append(f.volumeOps, "reader-start:"+vsockSocket)
+	return f.startReaderErr
+}
+
+func (f *fakeEngine) DialReader(_ context.Context, vsockSocket string) (net.Conn, error) {
+	f.mu.Lock()
+	f.readerDials = append(f.readerDials, vsockSocket)
+	err, peers := f.readerDialErr, f.readerPeers
+	f.mu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+	conn, peer := net.Pipe()
+	if peers == nil {
+		_ = peer.Close()
+	} else {
+		peers <- peer
+	}
+	return conn, nil
 }
 
 func (f *fakeEngine) list(_ context.Context) ([]types.VMRecord, error) {

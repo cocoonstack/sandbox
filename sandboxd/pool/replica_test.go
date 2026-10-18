@@ -216,6 +216,66 @@ func TestReplicaRowOfAHibernatedClaimHasNoRetentionDeadline(t *testing.T) {
 	})
 }
 
+func TestReplicaRowIsNeverReaderSafe(t *testing.T) {
+	c := newReplicaCluster(t)
+	a, b := c.node(t, "a", t.TempDir(), keepAnHour), c.node(t, "b", t.TempDir(), keepAnHour)
+	sb := mustClaim(t, a, testKey)
+	a.mu.Lock()
+	sb.ReaderSafe = true
+	a.mu.Unlock()
+
+	replicateNow(t, a, sb)
+	row, ok, err := c.reg.Get(t.Context(), sb.ID)
+	if err != nil || !ok {
+		t.Fatalf("row: %v %v, want one", ok, err)
+	}
+	claim := &types.Sandbox{}
+	if err = json.Unmarshal(row.Claim, claim); err != nil || claim.ReaderSafe {
+		t.Errorf("replica row claim reader_safe %v (%v), want false", claim.ReaderSafe, err)
+	}
+	if !sb.ReaderSafe {
+		t.Error("writing the row cleared the live claim's reader_safe")
+	}
+
+	c.expire("a")
+	if adopted, adoptErr := b.AdoptArchived(t.Context(), sb.ID, sb.Token); adoptErr != nil || !adopted {
+		t.Fatalf("adopt: %v %v", adopted, adoptErr)
+	}
+	sock, _, done, err := b.WakeAgentSocketOrRead(t.Context(), sb.ID, sb.Token)
+	if err != nil || sock == "" {
+		t.Fatalf("read of the adopted replica = %q, %v, want a wake", sock, err)
+	}
+	done()
+}
+
+func TestArchiveRowKeepsReaderSafe(t *testing.T) {
+	c := newFailoverCluster(t)
+	a, b := c.node(t, "a", t.TempDir(), keepAnHour), c.node(t, "b", t.TempDir(), keepAnHour)
+	sb := mustClaim(t, a, testKey)
+	if err := a.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
+		t.Fatalf("hibernate: %v", err)
+	}
+	a.mu.Lock()
+	sb.ReaderSafe = true
+	a.mu.Unlock()
+	if err := a.archive(t.Context(), sb); err != nil {
+		t.Fatalf("archive: %v", err)
+	}
+
+	row, _, _ := c.reg.Get(t.Context(), sb.ID)
+	claim := &types.Sandbox{}
+	if err := json.Unmarshal(row.Claim, claim); err != nil || !claim.ReaderSafe {
+		t.Errorf("archive row claim reader_safe %v (%v), want true", claim.ReaderSafe, err)
+	}
+	c.expire("a")
+	if adopted, err := b.AdoptArchived(t.Context(), sb.ID, sb.Token); err != nil || !adopted {
+		t.Fatalf("adopt: %v %v", adopted, err)
+	}
+	if _, _, _, err := b.WakeAgentSocketOrRead(t.Context(), sb.ID, sb.Token); !errors.Is(err, ErrSleeping) {
+		t.Errorf("read of the adopted archive = %v, want ErrSleeping", err)
+	}
+}
+
 func TestReplicaRetireAfterAnArchiveLeavesTheArchiveRowAlone(t *testing.T) {
 	c := newReplicaCluster(t)
 	a := c.node(t, "a", t.TempDir(), keepAnHour)

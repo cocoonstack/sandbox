@@ -184,7 +184,7 @@ func TestWakeGuestLogsAClientCancelBelowError(t *testing.T) {
 	canceled, cancel := context.WithCancel(t.Context())
 	cancel()
 	w := httptest.NewRecorder()
-	if _, _, ok := srv.wakeGuest(canceled, w, "sb_1", "tok"); ok || w.Code != http.StatusBadGateway {
+	if _, _, _, ok := srv.wakeGuest(canceled, w, "sb_1", "tok", srv.mgr.WakeAgentSocket); ok || w.Code != http.StatusBadGateway {
 		t.Fatalf("canceled dial: ok %v status %d, want a refused 502", ok, w.Code)
 	}
 	if logs.Len() != 0 {
@@ -192,7 +192,7 @@ func TestWakeGuestLogsAClientCancelBelowError(t *testing.T) {
 	}
 
 	dialer.dial = func(context.Context, string) (net.Conn, error) { return nil, errors.New("connection refused") }
-	if _, _, ok := srv.wakeGuest(t.Context(), httptest.NewRecorder(), "sb_1", "tok"); ok {
+	if _, _, _, ok := srv.wakeGuest(t.Context(), httptest.NewRecorder(), "sb_1", "tok", srv.mgr.WakeAgentSocket); ok {
 		t.Fatal("a failing dial succeeded")
 	}
 	if !strings.Contains(logs.String(), `"level":"error"`) {
@@ -201,7 +201,7 @@ func TestWakeGuestLogsAClientCancelBelowError(t *testing.T) {
 
 	logs.Reset()
 	dialer.dial = func(context.Context, string) (net.Conn, error) { return nil, context.Canceled }
-	if _, _, ok := srv.wakeGuest(t.Context(), httptest.NewRecorder(), "sb_1", "tok"); ok {
+	if _, _, _, ok := srv.wakeGuest(t.Context(), httptest.NewRecorder(), "sb_1", "tok", srv.mgr.WakeAgentSocket); ok {
 		t.Fatal("a failing dial succeeded")
 	}
 	if !strings.Contains(logs.String(), `"level":"error"`) {

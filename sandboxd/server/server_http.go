@@ -89,10 +89,17 @@ func upgradeGate(w http.ResponseWriter, r *http.Request, proto string) (string, 
 
 // hijackClient on failure has already closed guest and answered the request.
 func hijackClient(ctx context.Context, w http.ResponseWriter, guest net.Conn) (net.Conn, *bufio.Reader, bool) {
+	client, buf, ok := hijack(ctx, w)
+	if !ok {
+		_ = guest.Close()
+	}
+	return client, buf, ok
+}
+
+func hijack(ctx context.Context, w http.ResponseWriter) (net.Conn, *bufio.Reader, bool) {
 	client, bufrw, err := http.NewResponseController(w).Hijack()
 	if err != nil {
-		_ = guest.Close()
-		log.WithFunc("server.hijackClient").Error(ctx, err, "hijack")
+		log.WithFunc("server.hijack").Error(ctx, err, "hijack")
 		writeErr(w, http.StatusInternalServerError, "connection cannot be hijacked")
 		return nil, nil, false
 	}
@@ -171,11 +178,16 @@ func writePoolErr(w http.ResponseWriter, err error) bool {
 }
 
 func mapPoolErr(w http.ResponseWriter, err error) (code int, msg string, ok bool) {
+	code, msg, ok = lookupPoolErr(err)
+	if ok && code == http.StatusServiceUnavailable {
+		w.Header().Set("Retry-After", retryAfterSeconds)
+	}
+	return code, msg, ok
+}
+
+func lookupPoolErr(err error) (code int, msg string, ok bool) {
 	for _, m := range poolErrHTTP {
 		if errors.Is(err, m.err) {
-			if m.code == http.StatusServiceUnavailable {
-				w.Header().Set("Retry-After", retryAfterSeconds)
-			}
 			return m.code, cmp.Or(m.msg, err.Error()), true
 		}
 	}

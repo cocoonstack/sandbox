@@ -90,6 +90,18 @@ func (d *Store) Fetch(ctx context.Context, id string) (string, []byte, string, e
 	return dir, meta, digest, nil
 }
 
+func (d *Store) FetchFile(ctx context.Context, id, rel, dst string) error {
+	meta, err := d.ReadMeta(ctx, id)
+	if err != nil {
+		return err
+	}
+	err = utils.CloneFile(filepath.Join(d.root, id, store.ExportGen(meta), rel), dst)
+	if errors.Is(err, fs.ErrNotExist) {
+		return store.ErrNotFound
+	}
+	return err
+}
+
 func (d *Store) ReadMeta(_ context.Context, id string) ([]byte, error) {
 	raw, err := os.ReadFile(filepath.Join(d.root, id, store.MetaFile)) //nolint:gosec // id pinned by the instance idRe before any call
 	if errors.Is(err, fs.ErrNotExist) {

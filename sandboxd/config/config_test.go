@@ -167,6 +167,7 @@ func TestLoadRejectsInvalid(t *testing.T) {
 		{"duplicate volume name", `{"pools":[],"volumes":[{"name":"data","path":"/srv/datasets/a.img"},{"name":"data","path":"/srv/datasets/b.img"}]}`, "duplicate volume"},
 		{"relative volume path", `{"pools":[],"volumes":[{"name":"data","path":"datasets/a.img"}]}`, "path must be absolute"},
 		{"bad volume directio", `{"pools":[],"volumes":[{"name":"data","path":"/srv/datasets/a.img","directio":"yes"}]}`, "directio must be"},
+		{"reader without warm", `{"pools":[{"template":"rt:24.04","warm":0,"reader":true}]}`, "reader needs warm"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			_, err := Load(writeConfig(t, tt.body))
@@ -277,6 +278,16 @@ func TestLoadAcceptsPreviewAdvertiseShapes(t *testing.T) {
 				t.Errorf("Load: %v, want the shape Mint accepts to pass validation", err)
 			}
 		})
+	}
+}
+
+func TestLoadReadsReader(t *testing.T) {
+	cfg, err := Load(writeConfig(t, `{"pools":[{"template":"rt:24.04","reader":true},{"template":"py:3.12"}]}`))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !cfg.Pools[0].Reader || cfg.Pools[1].Reader {
+		t.Errorf("reader %v/%v, want on for the pool that names it and off by default", cfg.Pools[0].Reader, cfg.Pools[1].Reader)
 	}
 }
 

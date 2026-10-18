@@ -53,6 +53,8 @@ type PoolSpec struct {
 	Storage string `json:"storage,omitempty"`
 	// ReplicateSeconds snapshots each running claim of the pool to the checkpoint store at this interval; zero turns replication off.
 	ReplicateSeconds int `json:"replicate_seconds,omitzero"`
+	// Reader serves read-only file calls on this pool's hibernated or archived claims from a warm VM, without waking them.
+	Reader bool `json:"reader,omitzero"`
 
 	IdleHibernateSeconds      int `json:"idle_hibernate_seconds,omitzero"`
 	ArchiveAfterSeconds       int `json:"archive_after_seconds,omitzero"`
@@ -92,6 +94,9 @@ func (s PoolSpec) ValidateLimits() error {
 	}
 	if s.Net == types.NetEgress && s.IdleHibernateSeconds > 0 {
 		return fmt.Errorf("idle_hibernate_seconds is not supported for egress pools")
+	}
+	if s.Reader && s.Warm < 1 {
+		return fmt.Errorf("reader needs warm of at least 1")
 	}
 	if slices.Contains(s.Warmup, "") {
 		return fmt.Errorf("warmup must not contain an empty argument")

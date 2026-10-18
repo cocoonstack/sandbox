@@ -334,7 +334,9 @@ checkpoint store and keeps each claim's registry row on the latest snapshot:
 - **Self-fencing.** A node whose renewal is overdue by 12 seconds (the lease
   length minus a 3 second margin, counted from the start of the last renewal
   that answered) stops serving every replicated claim it holds: relay, exec,
-  ports and preview answer `503 lease lost; retry`, and `/owner` answers 404 so
+  ports and preview answer `503 lease lost; retry` (a read through a
+  [reader](deploy.md#reading-sleeping-claims-without-waking-them) after the `101`
+  gets an `error` frame instead), and `/owner` answers 404 so
   a `Lookup` moves on to the other nodes. A claim is replicated when its policy
   pool has `replicate_seconds`, from the moment it is claimed, adopted or
   loaded, whether or not a round has run, so the fence covers it before its

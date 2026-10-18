@@ -16,6 +16,7 @@ type configView struct {
 	poolTrims     map[types.PoolKey]bool
 	poolStorage   map[types.PoolKey]string
 	poolReplicate map[types.PoolKey]time.Duration
+	poolReaders   map[types.PoolKey]bool
 	diskReserve   int64
 	diskDirs      []string
 }
@@ -27,6 +28,7 @@ func newConfigView(cfg *config.Config, secrets *egress.SecretStore) *configView 
 		poolTrims:     map[types.PoolKey]bool{},
 		poolStorage:   map[types.PoolKey]string{},
 		poolReplicate: map[types.PoolKey]time.Duration{},
+		poolReaders:   map[types.PoolKey]bool{},
 	}
 	if r := cfg.DiskReserve; r != nil {
 		v.diskReserve, _ = config.StorageBytes(r.Free)
@@ -48,6 +50,9 @@ func newConfigView(cfg *config.Config, secrets *egress.SecretStore) *configView 
 		}
 		if spec.ReplicateSeconds > 0 {
 			v.poolReplicate[key] = time.Duration(spec.ReplicateSeconds) * time.Second
+		}
+		if spec.Reader {
+			v.poolReaders[key] = true
 		}
 	}
 	return v

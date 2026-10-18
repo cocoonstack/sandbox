@@ -376,6 +376,11 @@ automatically with the same transparent wake. A claim with a connection live
 when the sweep checks it (a relay stream, a buffered exec, a preview dial, an
 egress request) is not swept; the idle clock restarts when that connection ends.
 
+When the sandbox's pool sets [`reader`](deploy.md#reading-sleeping-claims-without-waking-them),
+`Stat`, `ReadFile`, `ReadFileTo`, `ListDir` and `Pull` on a hibernated or archived handle are
+served without waking it, as of the guest `sync` just before the last hibernate, and the handle's next call
+that is anything else wakes the sandbox on the same connection.
+
 `WithArchiveOnExpire()` makes the lease's end archive the sandbox instead of
 destroying it, whatever the deployment's archive settings: the node hibernates
 it if it is running and moves it to the checkpoint store, and the next call
