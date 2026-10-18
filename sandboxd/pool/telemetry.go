@@ -62,22 +62,18 @@ type requestFrame struct {
 }
 
 type auditFrame struct {
-	Op       string   `json:"op"`
-	Argv     []string `json:"argv,omitempty"`
-	Path     string   `json:"path,omitempty"`
-	Dest     string   `json:"dest,omitempty"`
-	Method   string   `json:"method,omitempty"`
-	From     string   `json:"from,omitempty"`
-	To       string   `json:"to,omitempty"`
-	URL      string   `json:"url,omitempty"`
-	Session  string   `json:"session,omitempty"`
-	Port     uint16   `json:"port,omitzero"`
-	Decision string   `json:"decision,omitempty"`
-	Secret   string   `json:"secret,omitempty"`
-	Upstream string   `json:"upstream,omitempty"`
-	Added    []string `json:"added,omitempty"`
-	Changed  []string `json:"changed,omitempty"`
-	Removed  []string `json:"removed,omitempty"`
+	Op      string   `json:"op"`
+	Argv    []string `json:"argv,omitempty"`
+	Path    string   `json:"path,omitempty"`
+	Dest    string   `json:"dest,omitempty"`
+	From    string   `json:"from,omitempty"`
+	To      string   `json:"to,omitempty"`
+	URL     string   `json:"url,omitempty"`
+	Session string   `json:"session,omitempty"`
+	Port    uint16   `json:"port,omitzero"`
+	Added   []string `json:"added,omitempty"`
+	Changed []string `json:"changed,omitempty"`
+	Removed []string `json:"removed,omitempty"`
 }
 
 type egressFrame struct {
