@@ -100,11 +100,7 @@ func (s *Server) wakeGuest(ctx context.Context, w http.ResponseWriter, id, token
 		writeErr(w, http.StatusBadGateway, "guest agent unreachable")
 		return nil, nil, false, false
 	}
-	if fenced == nil {
-		return guest, done, false, true
-	}
-	stop := pool.CloseOnFence(fenced, guest)
-	return guest, func() { stop(); done() }, false, true
+	return guest, fenceGuest(guest, fenced, done), false, true
 }
 
 func (s *Server) relay(ctx context.Context, id string, client net.Conn, clientBuf *bufio.Reader, guest net.Conn) {
@@ -209,6 +205,14 @@ func (t *auditTee) endLine() {
 	}
 	t.buf = t.buf[:0]
 	t.skip = false
+}
+
+func fenceGuest(guest net.Conn, fenced <-chan struct{}, done func()) func() {
+	if fenced == nil {
+		return done
+	}
+	stop := pool.CloseOnFence(fenced, guest)
+	return func() { stop(); done() }
 }
 
 func copyBoth(client net.Conn, clientR io.Reader, guest net.Conn, ends relayEnds) {

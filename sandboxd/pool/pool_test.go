@@ -1229,6 +1229,7 @@ type fakeEngine struct {
 	readerDials                       []string
 	startReaderErr                    error
 	readerDialErr                     error
+	readerPeers                       chan net.Conn
 	syncErr                           error
 	caInstalls                        []string
 	warmups                           [][]string
@@ -1731,13 +1732,17 @@ func (f *fakeEngine) StartReader(_ context.Context, vsockSocket, cowDisk string)
 func (f *fakeEngine) DialReader(_ context.Context, vsockSocket string) (net.Conn, error) {
 	f.mu.Lock()
 	f.readerDials = append(f.readerDials, vsockSocket)
-	err := f.readerDialErr
+	err, peers := f.readerDialErr, f.readerPeers
 	f.mu.Unlock()
 	if err != nil {
 		return nil, err
 	}
 	conn, peer := net.Pipe()
-	_ = peer.Close()
+	if peers == nil {
+		_ = peer.Close()
+	} else {
+		peers <- peer
+	}
 	return conn, nil
 }
 

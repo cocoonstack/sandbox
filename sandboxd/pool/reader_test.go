@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"slices"
@@ -54,6 +55,70 @@ func TestReaderServesAHibernatedClaimWithoutWaking(t *testing.T) {
 	}
 	if entries, _ := os.ReadDir(filepath.Join(m.dataDir, readerDir)); len(entries) != 0 {
 		t.Errorf("a hibernated read left %d entries under %s", len(entries), readerDir)
+	}
+}
+
+func TestReaderObeysTheNodeLeaseFence(t *testing.T) {
+	eng := newFakeEngine()
+	m := newReaderManager(t, eng)
+	replicated, plain := mustClaim(t, m, testKey), mustClaim(t, m, testKey)
+	replicated.SetReplicated(true)
+	hibernateClaim(t, m, replicated)
+	hibernateClaim(t, m, plain)
+	seedReaderVMs(m, testKey, "sbx-reader-1", "sbx-reader-2")
+	m.tripFence()
+
+	if _, _, _, err := m.WakeAgentSocketOrRead(t.Context(), replicated.ID, replicated.Token); !errors.Is(err, ErrLeaseLost) {
+		t.Errorf("WakeAgentSocketOrRead of a replicated sleeper past the fence: %v, want ErrLeaseLost", err)
+	}
+	if _, _, err := m.DialReader(t.Context(), replicated.ID, replicated.Token); !errors.Is(err, ErrLeaseLost) {
+		t.Fatalf("DialReader of a replicated sleeper past the fence: %v, want ErrLeaseLost", err)
+	}
+	if len(eng.attachedCopies) != 0 {
+		t.Errorf("a fenced read set up a reader: %v", eng.attachedCopies)
+	}
+	conn, _, err := m.DialReader(t.Context(), plain.ID, plain.Token)
+	if err != nil {
+		t.Fatalf("DialReader of an unreplicated sleeper past the fence: %v", err)
+	}
+	_ = conn.Close()
+}
+
+func TestReaderConnectionEndsWhenTheFenceTrips(t *testing.T) {
+	eng := newFakeEngine()
+	eng.readerPeers = make(chan net.Conn, 2)
+	m := newReaderManager(t, eng)
+	m.liftFence()
+	replicated, plain := mustClaim(t, m, testKey), mustClaim(t, m, testKey)
+	replicated.SetReplicated(true)
+	hibernateClaim(t, m, replicated)
+	hibernateClaim(t, m, plain)
+	seedReaderVMs(m, testKey, "sbx-reader-1", "sbx-reader-2")
+
+	peers := map[string]net.Conn{}
+	for name, sb := range map[string]*types.Sandbox{"replicated": replicated, "plain": plain} {
+		conn, _, err := m.DialReader(t.Context(), sb.ID, sb.Token)
+		if err != nil {
+			t.Fatalf("DialReader of the %s claim: %v", name, err)
+		}
+		defer func() { _ = conn.Close() }()
+		peers[name] = <-eng.readerPeers
+	}
+	ended := func(peer net.Conn, wait time.Duration) bool {
+		_ = peer.SetReadDeadline(time.Now().Add(wait))
+		_, err := peer.Read(make([]byte, 1))
+		return !errors.Is(err, os.ErrDeadlineExceeded)
+	}
+	if ended(peers["replicated"], 100*time.Millisecond) || ended(peers["plain"], 100*time.Millisecond) {
+		t.Fatal("a reader connection ended before the fence tripped")
+	}
+
+	m.trip(t.Context())
+	if !ended(peers["replicated"], 3*time.Second) {
+		t.Error("the replicated claim's reader connection survived the fence")
+	}
+	if ended(peers["plain"], 100*time.Millisecond) {
+		t.Error("the fence ended an unreplicated claim's reader connection")
 	}
 }
 

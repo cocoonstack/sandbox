@@ -188,6 +188,7 @@ func TestSleepingFailuresAnswerWithAnErrorFrame(t *testing.T) {
 		message   string
 	}{
 		{"unknown sandbox", pool.ErrUnknownSandbox, nil, statFrame, wire.KindNotFound, "unknown sandbox"},
+		{"lease lost", pool.ErrLeaseLost, nil, statFrame, wire.KindInternal, "lease lost; retry"},
 		{"wake refused", pool.ErrNoReader, pool.ErrTenantRemoved, statFrame, wire.KindInternal, pool.ErrTenantRemoved.Error()},
 		{"wake fails", nil, errors.New("restore broke"), execFrame, wire.KindInternal, "sandbox lookup failed"},
 	} {
@@ -213,6 +214,21 @@ func TestSleepingFailuresAnswerWithAnErrorFrame(t *testing.T) {
 				t.Errorf("connection after the error frame: %v, want EOF", err)
 			}
 		})
+	}
+}
+
+func TestSleepingHandoverEndsWhenItsClaimIsFenced(t *testing.T) {
+	env := newSleepingEnv(t)
+	fenced := make(chan struct{})
+	env.manager.fenced = fenced
+	conn, r := env.upgrade(t)
+	send(t, conn, execFrame)
+	expectLine(t, r, "guest")
+
+	close(fenced)
+	_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	if _, err := r.ReadByte(); !errors.Is(err, io.EOF) {
+		t.Errorf("handed-over relay after the fence: %v, want EOF", err)
 	}
 }
 

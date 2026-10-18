@@ -88,7 +88,7 @@ func (r *router) run() (net.Conn, func(), bool) {
 			case err == nil:
 			case errors.Is(err, errReaderGone):
 				return nil, nil, false
-			case errors.Is(err, pool.ErrUnknownSandbox):
+			case errors.Is(err, pool.ErrUnknownSandbox), errors.Is(err, pool.ErrLeaseLost):
 				r.fail(err)
 				return nil, nil, false
 			default:
@@ -274,7 +274,7 @@ func (s *Server) serveSleeping(ctx context.Context, w http.ResponseWriter, id, t
 }
 
 func (s *Server) openGuest(ctx context.Context, id, token string) (net.Conn, func(), error) {
-	sock, _, done, err := s.mgr.WakeAgentSocket(ctx, id, token)
+	sock, fenced, done, err := s.mgr.WakeAgentSocket(ctx, id, token)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -283,5 +283,5 @@ func (s *Server) openGuest(ctx context.Context, id, token string) (net.Conn, fun
 		done()
 		return nil, nil, fmt.Errorf("%w: %w", errUnreachable, err)
 	}
-	return guest, done, nil
+	return guest, fenceGuest(guest, fenced, done), nil
 }

@@ -32,6 +32,10 @@ func (m *Manager) DialReader(ctx context.Context, id, token string) (conn net.Co
 	if !ok {
 		return nil, "", ErrUnknownSandbox
 	}
+	fenced, err := m.fenceWatch(sb)
+	if err != nil {
+		return nil, "", err
+	}
 	if !m.view.Load().poolReaders[sb.Key] {
 		return nil, "", ErrNoReader
 	}
@@ -45,7 +49,8 @@ func (m *Manager) DialReader(ctx context.Context, id, token string) (conn net.Co
 		m.dropReader(ctx, r, true)
 		return nil, "", fmt.Errorf("%w: %w", ErrNoReader, err)
 	}
-	return &heldConn{Conn: conn, release: sync.OnceFunc(func() { m.releaseReader(r) })}, r.source, nil
+	stop := CloseOnFence(fenced, conn)
+	return &heldConn{Conn: conn, release: sync.OnceFunc(func() { stop(); m.releaseReader(r) })}, r.source, nil
 }
 
 // SleepingSource names the hibernate snapshot or archive record a reader would serve, or "" when the claim is awake, failed or mid-transition.
