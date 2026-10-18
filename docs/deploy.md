@@ -210,7 +210,7 @@ kernel does the parsing, as it does for the claim:
 - an archived claim's record is fetched only for `snapshot.json` and the files
   its `disk_attach_files` lists, into the reader's own directory under
   `data_dir` (the dir backend copies them out of the record, the s3 backend
-  downloads those objects), then attached with `--from-dir`. The fetched files
+  downloads only the chunks those files name, holes stay holes), then attached with `--from-dir`. The fetched files
   are deleted once cocoon has its copy, and nothing lands in the store's shared
   fetch cache;
 - the reader mounts the attached disk writable, so the guest replays the ext4
