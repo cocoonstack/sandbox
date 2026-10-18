@@ -172,6 +172,9 @@ func (m *Manager) publishCheckpoint(ctx context.Context, sb *types.Sandbox, ckID
 		NoEgress:     sb.NoEgress,
 		Archive:      archive,
 	}
+	if archive {
+		ckpt.Node = m.nodeID
+	}
 	staging, err := m.ckpts.Stage(ckpt.ID)
 	if err != nil {
 		return types.Checkpoint{}, "", fmt.Errorf("stage checkpoint: %w", err)

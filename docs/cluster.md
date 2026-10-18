@@ -206,15 +206,16 @@ replication rounds write it, so the claim path is unchanged.
   record, and none of them deletes the checkpoint, which belongs to the new
   owner; the drop clears the old owner's delete marker first. Only a tombstone
   of its own means this node's commit never happened: the wake or the restart
-  re-arms it and keeps the claim. Orphan reclaim at restart never deletes a
-  checkpoint a row references. A restart also settles an archive a crash
-  interrupted: a live row it left for a claim it still holds is deleted with
-  its checkpoint, and a claim whose row another node holds is dropped, its VM
-  and snapshot swept as stale. An archive journals its intent (the checkpoint
-  it is about to register) before it writes the row. A restart that finds the
-  intent and no row keeps the claim while that checkpoint is still in the
-  store, since the row never committed, and drops it once the checkpoint is
-  gone, since only a node that consumed the row deletes it.
+  re-arms it and keeps the claim. Orphan reclaim at restart deletes only archive
+  checkpoints this node published, and never one a row references. A restart
+  also settles an archive a crash interrupted: a live row it left for a claim it
+  still holds is deleted with its checkpoint, and a claim whose row another node
+  holds is dropped, its VM and snapshot swept as stale. An archive journals its
+  intent (the checkpoint it is about to register) before it writes the row. A
+  restart that finds the intent and no row keeps the claim while that
+  checkpoint is still in the store, since the row never committed, and drops it
+  once the checkpoint is gone, since only a node that consumed the row deletes
+  it.
   A put whose outcome is unknown leaves the intent in place, and a release,
   the next archive and the hourly sweep settle it by the same rule before
   they act on the claim.

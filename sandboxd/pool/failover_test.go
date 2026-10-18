@@ -314,6 +314,30 @@ func TestFailoverRestartReclaimSparesACheckpointAdoptedMidReconcile(t *testing.T
 	}
 }
 
+func TestFailoverRestartReclaimsOnlyTheCheckpointsItPublished(t *testing.T) {
+	c := newFailoverCluster(t)
+	dirA := t.TempDir()
+	claims := map[string]*types.Sandbox{
+		"sb_x": {ID: "sb_x", VMName: "sbx-gone-1", Key: testKey, Token: "tok", HibernateSnap: "sbx-hib-x"},
+	}
+	if err := newClaimStore(dirA, false).save(claims); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	a := c.node(t, "a", dirA, keepAnHour)
+	const own, foreign = "ck_00000000000000e1", "ck_00000000000000e2"
+	seedArchiveCkBy(t, a, "a", own, "sb_x")
+	seedArchiveCkBy(t, a, "b", foreign, "sb_x")
+	if err := a.Reconcile(t.Context()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if ckExists(t, a, own) {
+		t.Error("reconcile kept its own orphan archive checkpoint")
+	}
+	if !ckExists(t, a, foreign) {
+		t.Error("reconcile deleted a checkpoint another node published")
+	}
+}
+
 func TestFailoverRestartDropsAClaimWhoseInterruptedArchiveWasAdopted(t *testing.T) {
 	c := newFailoverCluster(t)
 	a := c.node(t, "a", t.TempDir(), keepAnHour)
@@ -1946,6 +1970,11 @@ func interruptArchive(t *testing.T, m *Manager, sb *types.Sandbox, putCommitted 
 
 func seedArchiveCk(t *testing.T, m *Manager, id, sandboxID string) {
 	t.Helper()
+	seedArchiveCkBy(t, m, m.nodeID, id, sandboxID)
+}
+
+func seedArchiveCkBy(t *testing.T, m *Manager, node, id, sandboxID string) {
+	t.Helper()
 	staging, err := m.ckpts.Stage(id)
 	if err != nil {
 		t.Fatalf("stage: %v", err)
@@ -1953,7 +1982,7 @@ func seedArchiveCk(t *testing.T, m *Manager, id, sandboxID string) {
 	if err := os.MkdirAll(filepath.Join(staging, store.ExportDir), 0o750); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
-	meta := `{"id":"` + id + `","sandbox_id":"` + sandboxID + `","archive":true}`
+	meta := `{"id":"` + id + `","sandbox_id":"` + sandboxID + `","node":"` + node + `","archive":true}`
 	if err := os.WriteFile(filepath.Join(staging, store.MetaFile), []byte(meta), 0o600); err != nil {
 		t.Fatalf("meta: %v", err)
 	}

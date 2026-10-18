@@ -693,6 +693,7 @@ type Checkpoint struct {
 	ID        string    `json:"id"`
 	Name      string    `json:"name,omitempty"`
 	SandboxID string    `json:"sandbox_id"`
+	Node      string    `json:"node,omitempty"`
 	Key       PoolKey   `json:"key"`
 	Tenant    string    `json:"tenant,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
