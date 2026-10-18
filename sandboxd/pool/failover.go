@@ -140,6 +140,7 @@ func (m *Manager) putRow(ctx context.Context, sb *types.Sandbox, ck string, repl
 	m.mu.Unlock()
 	dto.Token, dto.VMName, dto.VsockSocket, dto.HibernateSnap, dto.PendingSnap, dto.ArchivePending, dto.ReplicaCk, dto.ReplicaPending = "", "", "", "", "", "", "", ""
 	dto.ArchiveCk, dto.Deadline = ck, deadline
+	dto.ReaderSafe = dto.ReaderSafe && !replica
 	claim, err := json.Marshal(&dto)
 	if err != nil {
 		return 0, fmt.Errorf("encode claim: %w", err)

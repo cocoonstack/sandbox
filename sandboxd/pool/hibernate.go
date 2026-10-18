@@ -356,8 +356,6 @@ func (m *Manager) resolvePendingSnap(ctx context.Context, sb *types.Sandbox) (ad
 	if live {
 		if exists {
 			sb.HibernateSnap = pending
-		} else {
-			sb.ReaderSafe = false
 		}
 		sb.PendingSnap = ""
 		js = m.store.set(sb)
