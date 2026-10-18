@@ -366,9 +366,9 @@ its manifest.
 **Cost of not running it.** Storage grows without bound. Every archive wake,
 user checkpoint delete and, with replication, every replica round leaves the
 superseded record's unique chunks behind. Successive captures of a running
-claim share few chunks because most memory chunks change between captures; on
-the test claim an archive uploaded about 912 MiB per capture, and all of it
-stays until your job removes it.
+claim share few memory chunks, because most of them change between captures, so
+each superseded capture leaves most of its memory image behind; an archive that
+took 10,752 MiB as whole files stored about 912 MiB as chunks.
 
 ### A fuller config
 
