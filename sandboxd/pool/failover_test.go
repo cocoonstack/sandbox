@@ -289,6 +289,31 @@ func TestFailoverRestartReclaimsAnInterruptedArchive(t *testing.T) {
 	}
 }
 
+func TestFailoverRestartReclaimSparesACheckpointAdoptedMidReconcile(t *testing.T) {
+	c := newFailoverCluster(t)
+	dirA := t.TempDir()
+	claims := map[string]*types.Sandbox{
+		"sb_x": {ID: "sb_x", VMName: "sbx-gone-1", Key: testKey, Token: "tok", HibernateSnap: "sbx-hib-x"},
+	}
+	if err := newClaimStore(dirA, false).save(claims); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	a := c.node(t, "a", dirA, keepAnHour)
+	const ck = "ck_00000000000000cc"
+	seedArchiveCk(t, a, ck, "sb_x")
+	a.archives = &hookRegistry{Registry: c.reg, afterRows: func() {
+		if _, err := c.reg.Put(t.Context(), archives.Record{ID: "sb_x", Owner: "b", Epoch: 1, Checkpoint: ck, Claim: []byte(`{}`)}); err != nil {
+			t.Errorf("adopter's put: %v", err)
+		}
+	}}
+	if err := a.Reconcile(t.Context()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if !ckExists(t, a, ck) {
+		t.Error("the restarted node deleted a checkpoint the adopter committed during its reconcile")
+	}
+}
+
 func TestFailoverRestartDropsAClaimWhoseInterruptedArchiveWasAdopted(t *testing.T) {
 	c := newFailoverCluster(t)
 	a := c.node(t, "a", t.TempDir(), keepAnHour)
@@ -1943,6 +1968,7 @@ type hookRegistry struct {
 	beforeTake       func()
 	beforeConsume    func()
 	beforeDelete     func()
+	afterRows        func()
 	loseConsumeReply bool
 	loseTakeReply    bool
 	losePutReply     bool
@@ -2000,6 +2026,15 @@ func (r *hookRegistry) Delete(ctx context.Context, id string, epoch int64) error
 		hook()
 	}
 	return r.Registry.Delete(ctx, id, epoch)
+}
+
+func (r *hookRegistry) Rows(ctx context.Context, ids []string) (map[string]archives.Record, error) {
+	rows, err := r.Registry.Rows(ctx, ids)
+	if hook := r.afterRows; hook != nil {
+		r.afterRows = nil
+		hook()
+	}
+	return rows, err
 }
 
 func (r *hookRegistry) Consume(ctx context.Context, id string, expect int64) (int64, error) {

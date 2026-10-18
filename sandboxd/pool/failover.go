@@ -494,16 +494,16 @@ func (m *Manager) purgeArchiveRow(ctx context.Context, rec archives.Record) {
 	logger.Infof(ctx, "purged archive %s of %s", rec.ID, rec.Owner)
 }
 
-// fenceArchived settles loaded claims against their rows and returns the rows; false when the registry did not answer.
-func (m *Manager) fenceArchived(ctx context.Context, claims map[string]*types.Sandbox) (map[string]archives.Record, bool) {
+// fenceArchived settles loaded claims against their rows; false when the registry did not answer.
+func (m *Manager) fenceArchived(ctx context.Context, claims map[string]*types.Sandbox) bool {
 	if m.archives == nil {
-		return nil, true
+		return true
 	}
 	logger := log.WithFunc("pool.fenceArchived")
 	rows, err := m.archives.Rows(ctx, slices.Collect(maps.Keys(claims)))
 	if err != nil {
 		logger.Warnf(ctx, "archive fencing and orphan reclaim skipped: %v", err)
-		return nil, false
+		return false
 	}
 	for id, sb := range claims {
 		rec, ok := rows[id]
@@ -548,7 +548,6 @@ func (m *Manager) fenceArchived(ctx context.Context, claims map[string]*types.Sa
 				drop = true
 			default:
 				sb.ArchivePending = ""
-				delete(rows, id)
 			}
 		}
 		if drop {
@@ -561,7 +560,7 @@ func (m *Manager) fenceArchived(ctx context.Context, claims map[string]*types.Sa
 			logger.Infof(ctx, "dropped sandbox %s: another node holds it", id)
 		}
 	}
-	return rows, true
+	return true
 }
 
 func (m *Manager) settleIntent(ctx context.Context, id, pending string, rec archives.Record, ok bool) (bool, error) {
