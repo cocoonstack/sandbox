@@ -326,8 +326,10 @@ checkpoint store and keeps each claim's registry row on the latest snapshot:
   rows of a node that never returns therefore stay until a client adopts them, a
   bounded residue of one row and up to two checkpoints per claim: the row's, and
   a committed pending replica or a previous replica the node died before
-  deleting. Their records and chunks stay in the store until the operator
-  removes them. Apart from that and the lease rule the sweep is unchanged.
+  deleting. Their metas stay live, so a reclaim by the documented rule keeps
+  them. They are archive checkpoints (`"archive": true` in their meta) that no
+  registry row names, which an operator can delete. Apart from that and the
+  lease rule the sweep is unchanged.
 - **Self-fencing.** A node whose renewal is overdue by 12 seconds (the lease
   length minus a 3 second margin, counted from the start of the last renewal
   that answered) stops serving every replicated claim it holds: relay, exec,
