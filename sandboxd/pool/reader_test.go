@@ -699,6 +699,23 @@ func TestFailedPreHibernateSyncSendsReadsToTheWakePath(t *testing.T) {
 	}
 }
 
+func TestFailedHibernateLeavesNoReaderSafeOnARunningClaim(t *testing.T) {
+	eng := newFakeEngine()
+	eng.hibernateErr = errors.New("snapshot failed")
+	m := newReaderManager(t, eng)
+	sb := mustClaim(t, m, testKey)
+
+	if err := m.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err == nil {
+		t.Fatal("hibernate succeeded, want the engine's failure")
+	}
+	if sb.HibernateSnap != "" || sb.PendingSnap != "" {
+		t.Fatalf("claim state after the failed hibernate: snap %q pending %q, want a running claim", sb.HibernateSnap, sb.PendingSnap)
+	}
+	if sb.ReaderSafe {
+		t.Error("a running claim keeps reader_safe from the hibernate that failed, and a replica row would carry it")
+	}
+}
+
 func TestWakeClearsReaderSafe(t *testing.T) {
 	eng := newFakeEngine()
 	m := newReaderManager(t, eng)
