@@ -149,7 +149,7 @@ gets the intersection of the two.
 | `disk_reserve` | unset | `{"free": "100G", "dirs": ["/srv/sbx/run"]}`: while the filesystem of any listed directory (default `data_dir`) has less than `free` available, checked every 2 s, the node refuses new claims, forks, checkpoint claims, wakes of hibernated or archived sandboxes, hibernates, checkpoint captures and promotes with 429, and parks refill; the idle sweep and a lease-end archive leave their sandboxes running and retry on the next tick; `/v1/info` reports it as at capacity and the mesh sees no warm VMs on it. Running sandboxes keep running. On an XFS project quota the free space is the project's. List cocoon's `run_dir` when it sits on another filesystem, since the copy-on-write disks grow there. Size `free` to at least two sandboxes' worst-case growth (copy-on-write disk plus memory file each) and keep the refusal above your disk alert's warning level, so the warning comes first: on a 640G project with 40G disks and 8G memory files, `100G` refuses at 84% used |
 | `idle_hibernate_seconds` | 0 (off) | node-wide idle policy for unpooled claims (template/checkpoint claims): a none-lane claim is hibernated once it has had no open data-plane connection (relay, buffered exec, preview) and no egress request in flight for this long; the clock restarts when the last connection closes, so a long command is never cut short. The next call that reaches the guest wakes it transparently. Per-pool `idle_hibernate_seconds` does the same for that pool's claims; pooled keys ignore the node-wide value, and egress pools reject it because they cannot resume safely. Opt in deliberately: a wake costs latency and the snapshot, so callers with their own idle logic must not pay twice |
 | `archive_after_seconds` | 0 (off) | tier below hibernation: a hibernated claim idle this long is checkpointed to the store and its local VM dropped, freeing the node entirely; the next call that reaches the guest restores it transparently (a checkpoint restore's latency) with a fresh lease of the length the claim was granted (the server default of 5m when it asked for none); a lease moves only when a client calls [`/renew`](sandboxd-api.md#post-v1sandboxesidrenew). Keep `idle_hibernate_seconds` under the leases your claims use, or a woken sandbox that idles again is destroyed by the reap before it can hibernate, its archive already consumed by the wake; one still in use when its lease ends is destroyed the same way, unless it claimed `on_expire: archive`, which archives at the lease end whatever this setting. Requires `idle_hibernate_seconds > 0` and must exceed it. Node-wide for unpooled keys; per-pool overrides for that pool |
-| `archive_delete_after_seconds` | 0 (keep) | purge an archived claim's store checkpoint this long after it was archived, reclaiming storage; the claim is then gone for good. On archive this retention window replaces the live claim deadline; 0 clears the deadline so the archive is kept forever. Same node-wide/per-pool split |
+| `archive_delete_after_seconds` | 0 (keep) | purge an archived claim's store checkpoint this long after it was archived; the claim is then gone for good. On S3, chunks and manifests remain until [offline reclamation](#reclaiming-s3-storage). On archive this retention window replaces the live claim deadline; 0 clears the deadline so the archive is kept forever. Same node-wide/per-pool split |
 | `archive_failover` | false | let another node adopt this node's archived claims when it leaves the mesh: each archive also writes a row (token SHA-256, owner, epoch, checkpoint id, retention deadline) to the shared PostgreSQL, and a `Lookup` that reaches any node takes the claim over there (see [archived claims across node loss](cluster.md#archived-claims-across-node-loss)). Requires `meta_store` with a `cell` (rows are scoped by it, so meshes sharing one database never adopt from each other), a `checkpoint_store` of kind `s3` and a `mesh`, all checked at config load. With the meta store down, archives, wakes and releases of archived claims fail and retry; running claims never touch it. Restart only |
 | `mesh` | unset | join a cluster ([Clusters](cluster.md)); unset = single node |
 | `pools[]` | — | warm pools, keyed by `(template, net, size)`. `warm` defaults to 4 only when both `warm` and `warm_max` are omitted; an explicit `warm: 0` is kept, so `warm: 0` under a `warm_max` starts the pool empty and grows it on demand, and `warm: 0` alone registers the key with no warm VMs (`PUT /v1/pools` never defaults `warm`); `net` is `none` or `egress`; `size` is a tier, below. Retune online without a restart via [`PUT /v1/pools`](sandboxd-api.md#put-v1pools) — omitted pools drain, and their goldens are deleted once they are idle (`warm: 0` keeps the golden). This is the **first-boot seed**: once a node takes a `PUT /v1/pools`, the applied set persists to `<data_dir>/pools.json` and overrides this section on every later boot (a startup log notes it); delete `pools.json` to return to config-owned pools. With a `meta_store` `cell`, the cell's set overrides it instead (see [shared pool set](#shared-pool-set)). Egress stays config-owned either way. A template re-pulled or re-imported under the same ref is picked up within a minute: the pool rebuilds its golden and replaces its warm VMs. See [state ownership](cluster.md#state-ownership) |
@@ -333,36 +333,26 @@ keeps its own local generation sweep.
 **What sandboxd never deletes:** chunks, manifests of deleted records,
 superseded generations of a live record, and stale markers.
 
-**Safe rule.** Let the grace be 1 hour and judge age only by the object's
-`LastModified`. Read every manifest first, then decide:
+**Offline reclamation only.** Stop every sandboxd node using the prefix and
+wait for all in-flight publishes, deletes and fetches to finish. Keep the
+prefix offline throughout the inventory-and-delete pass. Online reclamation
+is not supported: a publish can replace an old chunk after it was listed but
+before it is deleted. Object age and the transfer timeout do not close that
+window.
 
-1. A manifest may be deleted when it is older than the grace and either its
-   record had no `meta.json` in your listing, or it is a previous generation of
-   a live record and that record's `meta.json`, read fresh, is also older than
-   the grace.
-2. Every other listed manifest is a reference, including a previous
-   generation whose record's `meta.json` is younger than the grace: a
-   re-publish of that record may have reused its chunks. If the fresh `GET` of
-   a listed `meta.json` returns not-found, keep all of that record's listed
-   manifests as references for this pass.
-3. A chunk may be deleted only when no reference manifest names its digest
-   under its lineage and its `LastModified` is older than the grace. List the
-   chunks after you have read the manifests, never before, so a chunk uploaded
-   while you read cannot look unreferenced.
-4. A marker, or a `labels.json`, may be deleted when its record has no
-   `meta.json` and the object is older than the grace.
+From that stable inventory:
 
-Deleting is idempotent and safe to run concurrently with sandboxd and with
-another reclaimer. Do not use a bucket lifecycle expiry instead: it would
-remove chunks a live record still names.
+1. Read every live `meta.json` and keep the manifest of the generation it
+   selects, for both checkpoints and templates.
+2. Read all kept manifests and collect their chunk keys, including the
+   lineage. If the inventory or a required read fails, stop before deleting.
+3. Delete manifests outside that set and chunks no kept manifest references.
+   A lineage marker or `labels.json` may be deleted when its record has no
+   `meta.json`.
 
-**Why it is safe.** sandboxd bounds every publish to 30 minutes, below the
-1 hour grace, so a publish that reuses a chunk finishes inside the window in
-which that chunk's referencing manifest is still protected. A delete re-stamps
-the record's manifests, so their `LastModified` is the delete time and the
-grace runs from the delete, not from the original publish. A chunk an in-flight
-publish has just uploaded is protected by its own age until the publish writes
-its manifest.
+Deletion is idempotent under this offline precondition; a later pass must
+build a fresh inventory. Do not use a bucket lifecycle expiry instead: it
+would remove chunks a live record still names.
 
 **Cost of not running it.** Storage grows without bound. Every archive wake,
 user checkpoint delete and, with replication, every replica round leaves the
