@@ -3,6 +3,7 @@ package engine
 import (
 	"cmp"
 	"context"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"strings"
@@ -47,6 +48,16 @@ func (e *Engine) DiskAttach(ctx context.Context, vmName string, spec VolumeSpec)
 	}
 	_, err = e.run(ctx, args...)
 	return err
+}
+
+// DiskAttachSnapshot hot-attaches a private read-write copy of a local snapshot's copy-on-write disk and returns its guest serial.
+func (e *Engine) DiskAttachSnapshot(ctx context.Context, vmName, snapName string) (string, error) {
+	return e.diskAttachCopy(ctx, vmName, "--from-snapshot", snapName)
+}
+
+// DiskAttachDir is DiskAttachSnapshot from an export directory.
+func (e *Engine) DiskAttachDir(ctx context.Context, vmName, dir string) (string, error) {
+	return e.diskAttachCopy(ctx, vmName, "--from-dir", dir)
 }
 
 // MountVolume discovers and mounts a hot-attached disk at mount, read-only unless rw.
@@ -138,6 +149,20 @@ func (e *Engine) mountDevice(ctx context.Context, vsockSocket, device, name, mou
 		return fmt.Errorf("mount volume %s: %w", name, err)
 	}
 	return nil
+}
+
+func (e *Engine) diskAttachCopy(ctx context.Context, vmName, sourceFlag, source string) (string, error) {
+	out, err := e.run(ctx, "vm", "disk", "attach", vmName, sourceFlag, source, argOutput, formatJSON)
+	if err != nil {
+		return "", err
+	}
+	var attached struct {
+		Name string `json:"name"`
+	}
+	if err = json.Unmarshal(out, &attached); err != nil || attached.Name == "" {
+		return "", fmt.Errorf("parse disk attach result %q: %w", out, cmp.Or(err, errors.New("no disk name")))
+	}
+	return attached.Name, nil
 }
 
 func (e *Engine) diskAttachArgs(vmName string, spec VolumeSpec) ([]string, error) {

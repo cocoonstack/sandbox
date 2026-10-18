@@ -16,6 +16,7 @@ func editView(m *Manager, edit func(v *configView)) {
 	next.poolWarmups = maps.Clone(cur.poolWarmups)
 	next.poolTrims = maps.Clone(cur.poolTrims)
 	next.poolStorage = maps.Clone(cur.poolStorage)
+	next.poolReaders = maps.Clone(cur.poolReaders)
 	edit(&next)
 	m.view.Store(&next)
 }

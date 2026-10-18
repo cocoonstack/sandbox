@@ -62,6 +62,7 @@ func diffPools(cur, next []PoolSpec) (changed, ignored, restart []string) {
 			{"warmup", slices.Equal(x.Warmup, y.Warmup)},
 			{"capture_trim", x.CaptureTrim == y.CaptureTrim},
 			{"storage", x.Storage == y.Storage},
+			{"reader", x.Reader == y.Reader},
 			{"egress_upstream_env", x.EgressUpstreamEnv == y.EgressUpstreamEnv},
 		} {
 			if !f.same {

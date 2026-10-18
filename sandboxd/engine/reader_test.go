@@ -8,24 +8,24 @@ import (
 	"github.com/cocoonstack/sandbox/protocol/wire"
 )
 
-func TestStartReaderAssemblesTheViewTopLayerFirst(t *testing.T) {
+func TestStartReaderOverlaysTheAttachedDiskOnTheGuestsOwnLayers(t *testing.T) {
 	sock := sockPath(t)
 	fake := serveFakeSilkd(t, sock)
 	configureReaderDevices(fake)
 	e := New("cocoon", nil, nil, false, false, "")
 
-	if err := e.StartReader(t.Context(), sock, ReaderDisks{Layers: []string{"rl0", "rl1"}, Cow: "rcow"}); err != nil {
+	if err := e.StartReader(t.Context(), sock, "snap-ab12cd34"); err != nil {
 		t.Fatalf("StartReader: %v", err)
 	}
 	want := [][]string{
 		{"mkdir", "-p", "--", "/run/reader/cow"},
 		{"mount", "-o", "rw", "--", "/dev/vdb", "/run/reader/cow"},
-		{"mkdir", "-p", "--", "/run/reader/layer1"},
-		{"mount", "-o", "ro", "--", "/dev/vdd", "/run/reader/layer1"},
 		{"mkdir", "-p", "--", "/run/reader/layer0"},
 		{"mount", "-o", "ro", "--", "/dev/vdc", "/run/reader/layer0"},
+		{"mkdir", "-p", "--", "/run/reader/layer1"},
+		{"mount", "-o", "ro", "--", "/dev/vdd", "/run/reader/layer1"},
 		{"mkdir", "-p", "--", "/view"},
-		{"mount", "-t", "overlay", "-o", "ro,metacopy=on,redirect_dir=follow,lowerdir=/run/reader/cow/upper:/run/reader/layer1:/run/reader/layer0", "--", "overlay", "/view"},
+		{"mount", "-t", "overlay", "-o", "ro,metacopy=on,redirect_dir=follow,lowerdir=/run/reader/cow/upper:/run/reader/layer0:/run/reader/layer1", "--", "overlay", "/view"},
 		{"test", "-x", "/view/usr/local/bin/silkd"},
 		{"env", "SILKD_PORT=2051", "chroot", "/view", "/usr/local/bin/silkd"},
 	}
@@ -57,7 +57,7 @@ func TestStartReaderFailsFastWhenTheClaimImageHasNoSilkd(t *testing.T) {
 	fake.execFailAt, fake.execCode = 9, 1
 	fake.mu.Unlock()
 
-	err := New("cocoon", nil, nil, false, false, "").StartReader(t.Context(), sock, ReaderDisks{Layers: []string{"rl0", "rl1"}, Cow: "rcow"})
+	err := New("cocoon", nil, nil, false, false, "").StartReader(t.Context(), sock, "snap-ab12cd34")
 	if err == nil || !strings.Contains(err.Error(), "no silkd") {
 		t.Fatalf("StartReader = %v, want the missing silkd reported", err)
 	}
@@ -73,17 +73,55 @@ func TestStartReaderStopsAtTheFirstFailedMount(t *testing.T) {
 	fake := serveFakeSilkd(t, sock)
 	configureReaderDevices(fake)
 	fake.mu.Lock()
-	fake.execFailAt, fake.execCode = 4, 32
+	fake.execFailAt, fake.execCode = 6, 32
 	fake.mu.Unlock()
 
-	err := New("cocoon", nil, nil, false, false, "").StartReader(t.Context(), sock, ReaderDisks{Layers: []string{"rl0", "rl1"}, Cow: "rcow"})
+	err := New("cocoon", nil, nil, false, false, "").StartReader(t.Context(), sock, "snap-ab12cd34")
 	if err == nil || !strings.Contains(err.Error(), "mount layer 1") {
 		t.Fatalf("StartReader = %v, want the layer 1 mount failure", err)
 	}
 	fake.mu.Lock()
 	defer fake.mu.Unlock()
-	if len(fake.execCalls) != 4 {
-		t.Errorf("guest ran %d commands after the failed mount, want it to stop at 4: %v", len(fake.execCalls), fake.execCalls)
+	if len(fake.execCalls) != 6 {
+		t.Errorf("guest ran %d commands after the failed mount, want it to stop at 6: %v", len(fake.execCalls), fake.execCalls)
+	}
+}
+
+func TestStartReaderRefusesAGuestWithoutLayers(t *testing.T) {
+	sock := sockPath(t)
+	fake := serveFakeSilkd(t, sock)
+	configureReaderDevices(fake)
+	fake.mu.Lock()
+	fake.serial["/proc/cmdline"] = []byte("console=hvc0 cocoon.cow=cow\n")
+	fake.mu.Unlock()
+
+	err := New("cocoon", nil, nil, false, false, "").StartReader(t.Context(), sock, "snap-ab12cd34")
+	if err == nil || !strings.Contains(err.Error(), "cocoon.layers=") {
+		t.Fatalf("StartReader = %v, want the missing layers reported", err)
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if len(fake.execCalls) != 0 {
+		t.Errorf("guest ran %v, want nothing mounted", fake.execCalls)
+	}
+}
+
+func TestCmdlineLayersReadsTheLastParamInOrder(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		cmdline string
+		want    []string
+	}{
+		{"in order", "console=hvc0 cocoon.layers=l0,l1,l2 cocoon.cow=cow\n", []string{"l0", "l1", "l2"}},
+		{"last param wins", "cocoon.layers=old cocoon.layers=l0,l1", []string{"l0", "l1"}},
+		{"empty entries dropped", "cocoon.layers=a,,b,", []string{"a", "b"}},
+		{"absent", "console=hvc0 cocoon.cow=cow", nil},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := cmdlineLayers(tt.cmdline); !slices.Equal(got, tt.want) {
+				t.Errorf("cmdlineLayers = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }
 
@@ -111,8 +149,9 @@ func configureReaderDevices(f *fakeSilkd) {
 		{Name: "vdc", Kind: wire.FileKindSymlink},
 		{Name: "vdd", Kind: wire.FileKindSymlink},
 	}
-	for dev, serial := range map[string]string{"vda": "root", "vdb": "rcow", "vdc": "rl0", "vdd": "rl1"} {
+	for dev, serial := range map[string]string{"vda": "root", "vdb": "snap-ab12cd34", "vdc": "l0", "vdd": "l1"} {
 		f.serial["/sys/block/"+dev+"/serial"] = []byte(serial + "\n")
 		f.stat["/dev/"+dev] = true
 	}
+	f.serial["/proc/cmdline"] = []byte("console=hvc0 boot=cocoon-overlay cocoon.layers=l0,l1 cocoon.cow=cow\n")
 }

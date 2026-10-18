@@ -623,6 +623,7 @@ func TestSetPoolsRejectsConfigOwnedFields(t *testing.T) {
 		{"capture_trim", config.PoolSpec{PoolKey: testKey, Warm: 1, CaptureTrim: true}},
 		{"storage", config.PoolSpec{PoolKey: testKey, Warm: 1, Storage: "40G"}},
 		{"replicate_seconds", config.PoolSpec{PoolKey: testKey, Warm: 1, ReplicateSeconds: 60}},
+		{"reader", config.PoolSpec{PoolKey: testKey, Warm: 1, Reader: true}},
 	} {
 		err := m.SetPools(t.Context(), []config.PoolSpec{tt.spec})
 		if !errors.Is(err, ErrBadKey) || !strings.Contains(err.Error(), tt.field+" is set in the config file") {
@@ -1221,12 +1222,14 @@ type fakeEngine struct {
 	snapSaves, exports, snapshots     []string
 	exportContent                     []byte
 	exportFiles                       map[string]string
-	startedReaders                    []engine.ReaderDisks
+	startedReaders                    []string
+	attachedCopies                    []string
+	attachedDirFiles                  []string
+	attachStall                       chan struct{}
 	readerDials                       []string
 	startReaderErr                    error
 	readerDialErr                     error
 	syncErr                           error
-	managedDirs                       []string
 	caInstalls                        []string
 	warmups                           [][]string
 	warmupSocks                       []string
@@ -1618,9 +1621,6 @@ func (f *fakeEngine) DiskAttach(ctx context.Context, _ string, spec engine.Volum
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if err := f.refuseManagedPath(spec.Path); err != nil {
-		return err
-	}
 	f.mu.Lock()
 	f.volumeSpecs = append(f.volumeSpecs, spec)
 	f.volumeOps = append(f.volumeOps, "attach:"+spec.Name)
@@ -1691,10 +1691,39 @@ func (f *fakeEngine) SyncGuest(_ context.Context, vsockSocket string) error {
 	return f.syncErr
 }
 
-func (f *fakeEngine) StartReader(_ context.Context, vsockSocket string, d engine.ReaderDisks) error {
+func (f *fakeEngine) DiskAttachSnapshot(_ context.Context, vmName, snapName string) (string, error) {
+	f.mu.Lock()
+	f.attachedCopies = append(f.attachedCopies, "snapshot:"+vmName+":"+snapName)
+	stall, err := f.attachStall, f.diskAttachErr
+	f.mu.Unlock()
+	if stall != nil {
+		<-stall
+	}
+	if err != nil {
+		return "", err
+	}
+	return "snap-" + snapName, nil
+}
+
+func (f *fakeEngine) DiskAttachDir(_ context.Context, vmName, dir string) (string, error) {
+	entries, err := os.ReadDir(dir)
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.startedReaders = append(f.startedReaders, d)
+	if err = cmp.Or(err, f.diskAttachErr); err != nil {
+		return "", err
+	}
+	f.attachedCopies = append(f.attachedCopies, "dir:"+vmName)
+	f.attachedDirFiles = nil
+	for _, entry := range entries {
+		f.attachedDirFiles = append(f.attachedDirFiles, entry.Name())
+	}
+	return "snap-dir", nil
+}
+
+func (f *fakeEngine) StartReader(_ context.Context, vsockSocket, cowDisk string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.startedReaders = append(f.startedReaders, cowDisk)
 	f.volumeOps = append(f.volumeOps, "reader-start:"+vsockSocket)
 	return f.startReaderErr
 }
@@ -1710,26 +1739,6 @@ func (f *fakeEngine) DialReader(_ context.Context, vsockSocket string) (net.Conn
 	conn, peer := net.Pipe()
 	_ = peer.Close()
 	return conn, nil
-}
-
-func (f *fakeEngine) refuseManagedPath(path string) error {
-	f.mu.Lock()
-	dirs := slices.Clone(f.managedDirs)
-	f.mu.Unlock()
-	resolved, err := filepath.EvalSymlinks(path)
-	if err != nil {
-		resolved = path
-	}
-	for _, dir := range dirs {
-		root, evalErr := filepath.EvalSymlinks(dir)
-		if evalErr != nil {
-			root = dir
-		}
-		if rel, relErr := filepath.Rel(root, resolved); relErr == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-			return fmt.Errorf("external volume path %s is inside a cocoon-managed directory", path)
-		}
-	}
-	return nil
 }
 
 func (f *fakeEngine) list(_ context.Context) ([]types.VMRecord, error) {

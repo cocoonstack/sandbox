@@ -15,23 +15,16 @@ import (
 	"github.com/projecteru2/core/log"
 	"golang.org/x/sync/singleflight"
 
-	"github.com/cocoonstack/sandbox/sandboxd/engine"
 	"github.com/cocoonstack/sandbox/sandboxd/store"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
-	"github.com/cocoonstack/sandbox/sandboxd/utils"
 )
 
 const (
 	readerIdle         = 30 * time.Second
 	readerSetupTimeout = 5 * time.Minute
 	readerDir          = "readers"
-	readerCowDisk      = "rcow"
-	readerCowFile      = "cow.raw"
-	readerSidecarFile  = "cocoon.json"
-	layerRole          = "layer"
+	envelopeFile       = "snapshot.json"
 )
-
-var linkFile = os.Link
 
 // DialReader opens a silkd connection to a sleeping claim's reader VM without waking the claim.
 func (m *Manager) DialReader(ctx context.Context, id, token string) (conn net.Conn, source string, err error) {
@@ -39,7 +32,7 @@ func (m *Manager) DialReader(ctx context.Context, id, token string) (conn net.Co
 	if !ok {
 		return nil, "", ErrUnknownSandbox
 	}
-	if m.readers == nil {
+	if !m.view.Load().poolReaders[sb.Key] {
 		return nil, "", ErrNoReader
 	}
 	r, err := m.acquireReader(ctx, sb)
@@ -140,18 +133,18 @@ func (m *Manager) ensureReader(ctx context.Context, sb *types.Sandbox) error {
 func (m *Manager) openReader(ctx context.Context, sb *types.Sandbox) error {
 	start := time.Now()
 	r := &reader{claim: sb.ID, dir: filepath.Join(m.dataDir, readerDir, sb.ID+"-"+randHex(3))}
-	layers, err := m.readerSource(ctx, sb, r)
+	archived, err := m.stageReader(ctx, sb, r)
 	if err != nil {
 		_ = os.RemoveAll(r.dir)
 		return err
 	}
-	vm, err := m.takeReaderVM()
+	vm, err := m.takeReaderVM(sb.Key)
 	if err != nil {
 		_ = os.RemoveAll(r.dir)
 		return err
 	}
 	r.vm, r.sock = vm.VMName, vm.VsockSocket
-	if err = m.startReader(ctx, r, layers); err != nil {
+	if err = m.startReader(ctx, sb, r, archived); err != nil {
 		m.destroyReader(ctx, r)
 		return err
 	}
@@ -168,62 +161,63 @@ func (m *Manager) openReader(ctx context.Context, sb *types.Sandbox) error {
 	return nil
 }
 
-func (m *Manager) readerSource(ctx context.Context, sb *types.Sandbox, r *reader) ([]string, error) {
-	archived, err := m.captureSleeping(ctx, sb, r)
-	if err != nil {
-		return nil, err
+func (m *Manager) stageReader(ctx context.Context, sb *types.Sandbox, r *reader) (archived bool, err error) {
+	sb.Transition.Lock()
+	r.source, archived, err = m.readerSource(ctx, sb)
+	sb.Transition.Unlock()
+	if err != nil || !archived {
+		return archived, err
 	}
-	sidecar := filepath.Join(r.dir, readerSidecarFile)
-	if archived {
-		if sidecar, err = m.fetchReaderDisk(ctx, r); err != nil {
-			return nil, err
-		}
-	}
-	return readerLayers(sidecar)
+	return true, m.fetchReaderArchive(ctx, r)
 }
 
-// captureSleeping copies a hibernated snapshot under the Transition lock, which the wake that consumes the snapshot takes.
-func (m *Manager) captureSleeping(ctx context.Context, sb *types.Sandbox, r *reader) (archived bool, err error) {
-	sb.Transition.Lock()
-	defer sb.Transition.Unlock()
+// readerSource names the sleep a reader would serve; callers hold sb.Transition, which the wake that consumes the sleep takes.
+func (m *Manager) readerSource(ctx context.Context, sb *types.Sandbox) (source string, archived bool, err error) {
 	if (sb.HibernateSnap == "" && sb.ArchiveCk == "") || !sb.ReaderSafe {
-		return false, errNotSleeping
+		return "", false, errNotSleeping
 	}
-	if sb.HibernateSnap == "" {
+	archived = sb.HibernateSnap == ""
+	if archived {
 		if err = m.tenantRemoved(ctx, sb.Tenant); err != nil {
-			return false, err
+			return "", false, err
 		}
 	}
 	if err = m.diskErr(); err != nil {
-		return false, err
+		return "", false, err
 	}
-	if sb.HibernateSnap == "" {
-		r.source = sb.ArchiveCk
-		return true, nil
-	}
-	r.source = sb.HibernateSnap
-	if err = m.eng.SnapshotExport(ctx, r.source, r.dir); err != nil {
-		return false, fmt.Errorf("export snapshot: %w", err)
-	}
-	return false, utils.RemoveDirEntries(r.dir, func(name string) bool { return name != readerCowFile && name != readerSidecarFile })
+	return cmp.Or(sb.HibernateSnap, sb.ArchiveCk), archived, nil
 }
 
-func (m *Manager) fetchReaderDisk(ctx context.Context, r *reader) (string, error) {
+func (m *Manager) fetchReaderArchive(ctx context.Context, r *reader) error {
 	if err := os.MkdirAll(r.dir, 0o750); err != nil {
-		return "", err
+		return err
 	}
-	for _, name := range []string{readerCowFile, readerSidecarFile} {
-		if err := m.ckpts.FetchFile(ctx, r.source, name, filepath.Join(r.dir, name)); err != nil {
-			return "", archiveFetchErr(err)
+	if err := m.fetchReaderFile(ctx, r, envelopeFile); err != nil {
+		return err
+	}
+	names, err := diskAttachFiles(filepath.Join(r.dir, envelopeFile))
+	if err != nil {
+		return err
+	}
+	for _, name := range names {
+		if err = m.fetchReaderFile(ctx, r, name); err != nil {
+			return err
 		}
 	}
-	return filepath.Join(r.dir, readerSidecarFile), nil
+	return nil
 }
 
-func (m *Manager) takeReaderVM() (*types.Sandbox, error) {
+func (m *Manager) fetchReaderFile(ctx context.Context, r *reader, name string) error {
+	if err := m.ckpts.FetchFile(ctx, r.source, name, filepath.Join(r.dir, name)); err != nil {
+		return archiveFetchErr(err)
+	}
+	return nil
+}
+
+func (m *Manager) takeReaderVM(key types.PoolKey) (*types.Sandbox, error) {
 	m.mu.Lock()
 	var sb *types.Sandbox
-	if p, ok := m.activePool(m.readers.key); ok {
+	if p, ok := m.activePool(key); ok {
 		sb = p.popWarm()
 	}
 	m.mu.Unlock()
@@ -234,25 +228,25 @@ func (m *Manager) takeReaderVM() (*types.Sandbox, error) {
 	return sb, nil
 }
 
-func (m *Manager) startReader(ctx context.Context, r *reader, layers []string) error {
-	disks := engine.ReaderDisks{Cow: readerCowDisk}
-	for i, blob := range layers {
-		name := fmt.Sprintf("rl%d", i)
-		linked := filepath.Join(r.dir, name+".erofs")
-		if err := linkFile(blob, linked); err != nil {
-			if err = utils.CloneFile(blob, linked); err != nil {
-				return fmt.Errorf("link layer %d into the reader dir: %w", i, err)
-			}
-		}
-		if err := m.eng.DiskAttach(ctx, r.vm, engine.VolumeSpec{Name: name, Path: linked}); err != nil {
-			return fmt.Errorf("attach layer %d: %w", i, err)
-		}
-		disks.Layers = append(disks.Layers, name)
-	}
-	if err := m.eng.DiskAttach(ctx, r.vm, engine.VolumeSpec{Name: readerCowDisk, Path: filepath.Join(r.dir, readerCowFile), RW: true}); err != nil {
+func (m *Manager) startReader(ctx context.Context, sb *types.Sandbox, r *reader, archived bool) error {
+	disk, err := m.attachReaderDisk(ctx, sb, r, archived)
+	if err != nil {
 		return fmt.Errorf("attach claim disk: %w", err)
 	}
-	return m.eng.StartReader(ctx, r.sock, disks)
+	return m.eng.StartReader(ctx, r.sock, disk)
+}
+
+func (m *Manager) attachReaderDisk(ctx context.Context, sb *types.Sandbox, r *reader, archived bool) (string, error) {
+	if archived {
+		defer func() { _ = os.RemoveAll(r.dir) }()
+		return m.eng.DiskAttachDir(ctx, r.vm, r.dir)
+	}
+	sb.Transition.Lock()
+	defer sb.Transition.Unlock()
+	if source, _, err := m.readerSource(ctx, sb); err != nil || source != r.source {
+		return "", cmp.Or(err, errNotSleeping)
+	}
+	return m.eng.DiskAttachSnapshot(ctx, r.vm, r.source)
 }
 
 func (m *Manager) destroyReader(ctx context.Context, r *reader) {
@@ -263,7 +257,6 @@ func (m *Manager) destroyReader(ctx context.Context, r *reader) {
 }
 
 type readerSet struct {
-	key     types.PoolKey
 	mu      sync.Mutex
 	live    map[string]*reader
 	flights singleflight.Group
@@ -294,32 +287,24 @@ func archiveFetchErr(err error) error {
 	return fmt.Errorf("fetch archive: %w", err)
 }
 
-func readerLayers(sidecar string) ([]string, error) {
-	raw, err := os.ReadFile(sidecar) //nolint:gosec // path from our own export or fetch
+func diskAttachFiles(envelope string) ([]string, error) {
+	raw, err := os.ReadFile(envelope) //nolint:gosec // path from our own fetch
 	if err != nil {
-		return nil, fmt.Errorf("read snapshot sidecar: %w", err)
+		return nil, fmt.Errorf("read archive envelope: %w", err)
 	}
-	var meta struct {
-		StorageConfigs []struct {
-			Path string `json:"path"`
-			Role string `json:"role"`
-		} `json:"storage_configs"`
+	var doc struct {
+		Files []string `json:"disk_attach_files"`
 	}
-	if err = json.Unmarshal(raw, &meta); err != nil {
-		return nil, fmt.Errorf("parse snapshot sidecar: %w", err)
+	if err = json.Unmarshal(raw, &doc); err != nil {
+		return nil, fmt.Errorf("parse archive envelope: %w", err)
 	}
-	var layers []string
-	for _, sc := range meta.StorageConfigs {
-		if sc.Role != layerRole {
-			continue
+	if len(doc.Files) == 0 {
+		return nil, errors.New("archive envelope lists no disk_attach_files")
+	}
+	for _, name := range doc.Files {
+		if filepath.Base(name) != name || !filepath.IsLocal(name) {
+			return nil, fmt.Errorf("archive envelope lists disk attach file %q outside its directory", name)
 		}
-		if _, err = os.Stat(sc.Path); err != nil {
-			return nil, fmt.Errorf("layer blob: %w", err)
-		}
-		layers = append(layers, sc.Path)
 	}
-	if len(layers) == 0 {
-		return nil, errors.New("snapshot sidecar names no layers")
-	}
-	return layers, nil
+	return doc.Files, nil
 }

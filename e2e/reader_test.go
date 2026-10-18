@@ -8,15 +8,11 @@ import (
 
 	"github.com/cocoonstack/sandbox/sandboxd/config"
 	"github.com/cocoonstack/sandbox/sandboxd/pool"
-	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
-
-var readerKey = types.PoolKey{Template: "reader:24.04", Net: types.NetNone, Size: types.SizeSmall}
 
 func TestReaderServesAHibernatedClaimUntilAWriteWakesIt(t *testing.T) {
 	st := startConfigStack(t, "node-token", &config.Config{
-		Reader: &config.ReaderSpec{Template: readerKey.Template},
-		Pools:  []config.PoolSpec{{PoolKey: testKey, Warm: 1}, {PoolKey: readerKey, Warm: 1}},
+		Pools: []config.PoolSpec{{PoolKey: testKey, Warm: 2, Reader: true}},
 	})
 	root := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(root, "work"), 0o750); err != nil {
@@ -28,11 +24,6 @@ func TestReaderServesAHibernatedClaimUntilAWriteWakesIt(t *testing.T) {
 	st.eng.mu.Lock()
 	st.eng.readerRoot = root
 	st.eng.mu.Unlock()
-	waitFor(t, func() bool {
-		pools, _ := st.mgr.Info()
-		return slices.ContainsFunc(pools, func(p pool.PoolInfo) bool { return p.Key == readerKey && p.Warm >= 1 })
-	})
-
 	sb, err := st.client.New(t.Context(), testKey.Template)
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -41,6 +32,10 @@ func TestReaderServesAHibernatedClaimUntilAWriteWakesIt(t *testing.T) {
 	if err = sb.Hibernate(t.Context()); err != nil {
 		t.Fatalf("Hibernate: %v", err)
 	}
+	waitFor(t, func() bool {
+		pools, _ := st.mgr.Info()
+		return slices.ContainsFunc(pools, func(p pool.PoolInfo) bool { return p.Key == testKey && p.Warm >= 1 })
+	})
 
 	got, err := sb.ReadFile(t.Context(), "/work/out.txt")
 	if err != nil || string(got) != "result" {
@@ -50,10 +45,10 @@ func TestReaderServesAHibernatedClaimUntilAWriteWakesIt(t *testing.T) {
 		t.Fatal("reading a file woke the claim")
 	}
 	st.eng.mu.Lock()
-	started := len(st.eng.readerStarts)
+	started, attached := len(st.eng.readerStarts), len(st.eng.readerAttaches)
 	st.eng.mu.Unlock()
-	if started != 1 {
-		t.Errorf("%d readers started, want one", started)
+	if started != 1 || attached != 1 {
+		t.Errorf("%d readers started over %d snapshot copies, want one of each", started, attached)
 	}
 
 	if out, execErr := sb.Exec(t.Context(), "echo", "woke"); execErr != nil || out != "woke\n" {

@@ -150,7 +150,9 @@ type Engine interface {
 	MountLiveVolume(ctx context.Context, vsockSocket, name, mount string, rw bool) error
 	UnmountVolume(ctx context.Context, vsockSocket, mount string) error
 	SyncGuest(ctx context.Context, vsockSocket string) error
-	StartReader(ctx context.Context, vsockSocket string, d engine.ReaderDisks) error
+	DiskAttachSnapshot(ctx context.Context, vmName, snapName string) (string, error)
+	DiskAttachDir(ctx context.Context, vmName, dir string) (string, error)
+	StartReader(ctx context.Context, vsockSocket, cowDisk string) error
 	DialReader(ctx context.Context, vsockSocket string) (net.Conn, error)
 	WriteInstanceMetadata(ctx context.Context, vsockSocket string, doc []byte) error
 	WriteGuestEnv(ctx context.Context, vsockSocket string, doc []byte) error
@@ -462,6 +464,7 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 		claimed:         map[string]*types.Sandbox{},
 		pendingRemovals: map[string]pendingRemoval{},
 		tenantLive:      map[string]int{},
+		readers:         &readerSet{live: map[string]*reader{}},
 		archiving:       map[string]struct{}{},
 		pendingCks:      map[string]struct{}{},
 		recLocks:        map[string]*sync.RWMutex{},
@@ -473,9 +476,6 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 		probeSem:        make(chan struct{}, refill),
 		refillKick:      make(chan struct{}, 1),
 		healSem:         make(chan struct{}, maxConcurrentHeals),
-	}
-	if cfg.Reader != nil {
-		m.readers = &readerSet{key: cfg.Reader.Key(), live: map[string]*reader{}}
 	}
 	for _, volume := range cfg.Volumes {
 		m.volumes[volume.Name] = catalogVolume{

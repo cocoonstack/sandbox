@@ -53,6 +53,8 @@ type PoolSpec struct {
 	Storage string `json:"storage,omitempty"`
 	// ReplicateSeconds snapshots each running claim of the pool to the checkpoint store at this interval; zero turns replication off.
 	ReplicateSeconds int `json:"replicate_seconds,omitzero"`
+	// Reader serves read-only file calls on this pool's hibernated or archived claims from a warm VM, without waking them.
+	Reader bool `json:"reader,omitzero"`
 
 	IdleHibernateSeconds      int `json:"idle_hibernate_seconds,omitzero"`
 	ArchiveAfterSeconds       int `json:"archive_after_seconds,omitzero"`
@@ -92,6 +94,9 @@ func (s PoolSpec) ValidateLimits() error {
 	}
 	if s.Net == types.NetEgress && s.IdleHibernateSeconds > 0 {
 		return fmt.Errorf("idle_hibernate_seconds is not supported for egress pools")
+	}
+	if s.Reader && s.Warm < 1 {
+		return fmt.Errorf("reader needs warm of at least 1")
 	}
 	if slices.Contains(s.Warmup, "") {
 		return fmt.Errorf("warmup must not contain an empty argument")
@@ -162,16 +167,6 @@ type VolumeSpec struct {
 	DirectIO string   `json:"directio,omitempty"`
 	Writable bool     `json:"writable,omitzero"`
 	Tenants  []string `json:"tenants,omitempty"`
-}
-
-// ReaderSpec names the none-lane pool whose warm VMs serve read-only file calls on a hibernated or archived claim.
-type ReaderSpec struct {
-	Template string     `json:"template"`
-	Size     types.Size `json:"size,omitempty"`
-}
-
-func (r ReaderSpec) Key() types.PoolKey {
-	return types.PoolKey{Template: r.Template, Size: r.Size}.Defaulted()
 }
 
 // DiskReserve refuses claims, wakes and refills while a listed directory's filesystem has less than Free left.
@@ -278,7 +273,6 @@ type Config struct {
 	AuditLog            bool `json:"audit_log,omitzero"`
 
 	DiskReserve *DiskReserve `json:"disk_reserve,omitempty"`
-	Reader      *ReaderSpec  `json:"reader,omitempty"`
 
 	Volumes []VolumeSpec `json:"volumes,omitempty"`
 	Mesh    *MeshConfig  `json:"mesh,omitempty"`
@@ -377,7 +371,7 @@ func (c *Config) validate() error {
 	if c.CheckpointPeerHeal && c.APIToken == "" {
 		return fmt.Errorf("checkpoint_peer_heal requires api_token: without it resolveScope leaves the raw checkpoint blob GET reachable with no credential")
 	}
-	for _, check := range []func() error{c.validateNodeEgress, c.validateDiskReserve, c.validateReader, c.validateMetaStore, c.validateVolumes, c.validateMesh, c.validateReplication} {
+	for _, check := range []func() error{c.validateNodeEgress, c.validateDiskReserve, c.validateMetaStore, c.validateVolumes, c.validateMesh, c.validateReplication} {
 		if err := check(); err != nil {
 			return err
 		}
@@ -620,20 +614,6 @@ func (c *Config) validateDiskReserve() error {
 		if !filepath.IsAbs(d) {
 			return fmt.Errorf("disk_reserve.dirs %q must be an absolute path", d)
 		}
-	}
-	return nil
-}
-
-func (c *Config) validateReader() error {
-	if c.Reader == nil {
-		return nil
-	}
-	key := c.Reader.Key()
-	if err := key.Validate(); err != nil {
-		return fmt.Errorf("reader: %w", err)
-	}
-	if !slices.ContainsFunc(c.Pools, func(p PoolSpec) bool { return p.PoolKey == key && p.Warm > 0 }) {
-		return fmt.Errorf("reader %s %s/%s must be a configured pool with warm of at least 1", key.Template, key.Net, key.Size)
 	}
 	return nil
 }

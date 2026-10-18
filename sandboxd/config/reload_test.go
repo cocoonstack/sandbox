@@ -19,7 +19,7 @@ func TestReloadDiffSortsReloadableOwnedAndRestartFields(t *testing.T) {
 	next.EgressInternalAllow = []string{"10.8.0.0/16"}
 	next.Pools = []PoolSpec{
 		{PoolKey: key, Warm: 5, Egress: &egress.Policy{Allow: []egress.Rule{{Host: "pypi.org"}}}},
-		{PoolKey: v13, Warmup: []string{"node", "-e", "0"}, Storage: "40G"},
+		{PoolKey: v13, Warmup: []string{"node", "-e", "0"}, Storage: "40G", Reader: true},
 	}
 	next.EgressClasses = []EgressClass{{Name: "desk", Egress: &egress.Policy{}}}
 	next.EgressConnRate = &EgressConnRate{PerSecond: 30, Burst: 600}
@@ -36,6 +36,7 @@ func TestReloadDiffSortsReloadableOwnedAndRestartFields(t *testing.T) {
 		"pools[desktop:v12 none small].egress",
 		"pools[desktop:v13 none small].warmup",
 		"pools[desktop:v13 none small].storage",
+		"pools[desktop:v13 none small].reader",
 	}
 	if !slices.Equal(changed, wantChanged) {
 		t.Errorf("changed %v, want %v", changed, wantChanged)
@@ -56,8 +57,7 @@ func TestReloadDiffSortsReloadableOwnedAndRestartFields(t *testing.T) {
 
 	restart := *cur
 	restart.Listen, restart.Bridges, restart.EgressUsageBytes = "127.0.0.1:8888", []string{"br1"}, true
-	restart.Reader = &ReaderSpec{Template: "desktop:v12"}
-	if _, _, err := cur.ReloadDiff(&restart); err == nil || err.Error() != "listen, bridges, reader change only at a restart" {
+	if _, _, err := cur.ReloadDiff(&restart); err == nil || err.Error() != "listen, bridges change only at a restart" {
 		t.Errorf("ReloadDiff over restart fields: %v", err)
 	}
 	if changed, ignored, err := cur.ReloadDiff(cur); err != nil || changed != nil || ignored != nil {

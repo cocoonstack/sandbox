@@ -9,8 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -31,8 +29,9 @@ type fakeEngine struct {
 	guestEnvs map[string]string
 	seq       int
 
-	readerRoot   string
-	readerStarts []string
+	readerRoot     string
+	readerStarts   []string
+	readerAttaches []string
 }
 
 func newFakeEngine(dir string) *fakeEngine {
@@ -90,28 +89,21 @@ func (f *fakeEngine) ReconcileStaleCreate(context.Context, string) (engine.Stale
 func (f *fakeEngine) SnapshotSave(_ context.Context, _, _ string) error { return nil }
 
 func (f *fakeEngine) SnapshotExport(_ context.Context, _, toDir string) error {
-	if err := os.MkdirAll(toDir, 0o750); err != nil {
-		return err
-	}
-	if err := os.MkdirAll(f.cocoonRoot(), 0o750); err != nil {
-		return err
-	}
-	layer := filepath.Join(f.cocoonRoot(), "layer.erofs")
-	sidecar := `{"storage_configs":[{"path":` + strconv.Quote(layer) + `,"role":"layer"}]}`
-	files := map[string]string{
-		layer:                               "erofs",
-		filepath.Join(toDir, "cow.raw"):     "disk",
-		filepath.Join(toDir, "cocoon.json"): sidecar,
-	}
-	for path, body := range files {
-		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
-			return err
-		}
-	}
-	return nil
+	return os.MkdirAll(toDir, 0o750)
 }
 
-func (f *fakeEngine) StartReader(_ context.Context, vsockSocket string, _ engine.ReaderDisks) error {
+func (f *fakeEngine) DiskAttachSnapshot(_ context.Context, vmName, snapName string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.readerAttaches = append(f.readerAttaches, vmName+":"+snapName)
+	return "snap-" + snapName, nil
+}
+
+func (f *fakeEngine) DiskAttachDir(context.Context, string, string) (string, error) {
+	return "", errors.New("no archive in this fake")
+}
+
+func (f *fakeEngine) StartReader(_ context.Context, vsockSocket, _ string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.readerStarts = append(f.readerStarts, vsockSocket)
@@ -191,12 +183,6 @@ func (f *fakeEngine) Warmup(context.Context, string, []string) error { return ni
 func (f *fakeEngine) TrimCow(context.Context, string) error { return nil }
 
 func (f *fakeEngine) DiskAttach(_ context.Context, vmName string, spec engine.VolumeSpec) error {
-	if resolved, err := filepath.EvalSymlinks(spec.Path); err == nil {
-		root, _ := filepath.EvalSymlinks(f.cocoonRoot())
-		if rel, relErr := filepath.Rel(root, resolved); relErr == nil && !strings.HasPrefix(rel, "..") {
-			return fmt.Errorf("external volume path %s is inside a cocoon-managed directory", spec.Path)
-		}
-	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.volumeVMs[vmName] = true
@@ -237,10 +223,6 @@ func (f *fakeEngine) DetachVolume(ctx context.Context, _, sock, name, mount stri
 	defer f.mu.Unlock()
 	f.volumeOps = append(f.volumeOps, "detach:"+name)
 	return nil
-}
-
-func (f *fakeEngine) cocoonRoot() string {
-	return filepath.Join(f.dir, "cocoon-root")
 }
 
 func (f *fakeEngine) volumeOpsLog() []string {

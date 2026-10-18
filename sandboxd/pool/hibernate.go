@@ -29,9 +29,9 @@ func (m *Manager) WakeAgentSocket(ctx context.Context, id, token string) (string
 	return m.agentSocket(ctx, id, token, false)
 }
 
-// WakeAgentSocketOrRead is WakeAgentSocket, except that with a reader a sleeping claim answers ErrSleeping instead of waking.
+// WakeAgentSocketOrRead is WakeAgentSocket, except that a sleep a reader can serve answers ErrSleeping instead of waking.
 func (m *Manager) WakeAgentSocketOrRead(ctx context.Context, id, token string) (string, <-chan struct{}, func(), error) {
-	return m.agentSocket(ctx, id, token, m.readers != nil)
+	return m.agentSocket(ctx, id, token, true)
 }
 
 func (m *Manager) agentSocket(ctx context.Context, id, token string, readerOK bool) (string, <-chan struct{}, func(), error) {
@@ -101,7 +101,7 @@ func (m *Manager) hibernateLocked(ctx context.Context, sb *types.Sandbox) error 
 		return fmt.Errorf("hibernate %s: persist intent: %w", sb.ID, err)
 	}
 	readerSafe := false
-	if m.readers != nil {
+	if m.view.Load().poolReaders[sb.Key] {
 		err := m.eng.SyncGuest(ctx, sb.VsockSocket)
 		if err != nil {
 			log.WithFunc("pool.hibernateLocked").Warnf(ctx, "sync %s before hibernate, reads will wake it: %v", sb.ID, err)

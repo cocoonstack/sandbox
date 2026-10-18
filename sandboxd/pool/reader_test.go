@@ -7,28 +7,23 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strings"
 	"sync"
 	"testing"
 	"testing/synctest"
 	"time"
 
 	"github.com/cocoonstack/sandbox/sandboxd/config"
-	"github.com/cocoonstack/sandbox/sandboxd/engine"
 	"github.com/cocoonstack/sandbox/sandboxd/store"
 	"github.com/cocoonstack/sandbox/sandboxd/tenants"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
-var readerKey = types.PoolKey{Template: "reader:24.04", Net: types.NetNone, Size: types.SizeSmall}
-
 func TestReaderServesAHibernatedClaimWithoutWaking(t *testing.T) {
 	eng := newFakeEngine()
-	layers := readerExport(t, eng)
 	m := newReaderManager(t, eng)
-	seedReaderVMs(m, "sbx-reader-1")
 	sb := mustClaim(t, m, testKey)
 	hibernateClaim(t, m, sb)
+	seedReaderVMs(m, testKey, "sbx-reader-1")
 
 	if _, _, _, err := m.WakeAgentSocketOrRead(t.Context(), sb.ID, sb.Token); !errors.Is(err, ErrSleeping) {
 		t.Fatalf("WakeAgentSocketOrRead = %v, want ErrSleeping", err)
@@ -48,104 +43,117 @@ func TestReaderServesAHibernatedClaimWithoutWaking(t *testing.T) {
 	if len(eng.restores) != 0 || sb.HibernateSnap == "" {
 		t.Errorf("claim woke: restores=%v hibernate snapshot=%q", eng.restores, sb.HibernateSnap)
 	}
-	if got, want := readerOps(eng), []string{"attach:rl0", "attach:rl1", "attach:rcow", "reader-start:/vsock/sbx-reader-1"}; !slices.Equal(got, want) {
-		t.Errorf("reader setup ran %v, want %v", got, want)
+	if want := []string{"snapshot:sbx-reader-1:" + sb.HibernateSnap}; !slices.Equal(eng.attachedCopies, want) {
+		t.Errorf("attached %v, want the snapshot copied onto the reader VM %v", eng.attachedCopies, want)
 	}
-	cow := eng.volumeSpecs[len(eng.volumeSpecs)-1]
-	dir := filepath.Dir(cow.Path)
-	wantSpecs := []engine.VolumeSpec{{Name: "rl0", Path: filepath.Join(dir, "rl0.erofs")}, {Name: "rl1", Path: filepath.Join(dir, "rl1.erofs")}, {Name: "rcow", Path: cow.Path, RW: true}}
-	if !slices.Equal(eng.volumeSpecs, wantSpecs) {
-		t.Errorf("attached %+v, want read-only layers linked into the reader dir, then the writable copy %+v", eng.volumeSpecs, wantSpecs)
+	if want := []string{"snap-" + sb.HibernateSnap}; !slices.Equal(eng.startedReaders, want) {
+		t.Errorf("view started over %v, want the serial the attach returned %v", eng.startedReaders, want)
 	}
-	for i, blob := range layers {
-		linked, statErr := os.Stat(wantSpecs[i].Path)
-		orig, origErr := os.Stat(blob)
-		if statErr != nil || origErr != nil || !os.SameFile(linked, orig) {
-			t.Errorf("layer %d attached as %s, want a hard link of %s: %v %v", i, wantSpecs[i].Path, blob, statErr, origErr)
-		}
-	}
-	if want := (engine.ReaderDisks{Layers: []string{"rl0", "rl1"}, Cow: "rcow"}); len(eng.startedReaders) != 1 || !slices.Equal(eng.startedReaders[0].Layers, want.Layers) || eng.startedReaders[0].Cow != want.Cow {
-		t.Errorf("view started with %+v, want %+v", eng.startedReaders, want)
-	}
-	if got, readErr := os.ReadFile(cow.Path); readErr != nil || string(got) != "disk-bytes" {
-		t.Errorf("reader disk %q, %v, want the snapshot's copy-on-write bytes", got, readErr)
-	}
-	entries, _ := os.ReadDir(dir)
-	names := make([]string, len(entries))
-	for i, entry := range entries {
-		names[i] = entry.Name()
-	}
-	if want := []string{"cocoon.json", "cow.raw", "rl0.erofs", "rl1.erofs"}; !slices.Equal(names, want) {
-		t.Errorf("reader dir holds %v, want only %v", names, want)
-	}
-	if n := len(m.pools[readerKey].warm); n != 0 {
-		t.Errorf("reader pool holds %d warm VMs, want the one reader taken", n)
-	}
-}
-
-func TestReaderLayersFallBackToACopyWhenTheLinkFails(t *testing.T) {
-	linkFile = func(string, string) error { return errors.New("cross-device link") }
-	defer func() { linkFile = os.Link }()
-	eng := newFakeEngine()
-	layers := readerExport(t, eng)
-	m := newReaderManager(t, eng)
-	seedReaderVMs(m, "sbx-reader-1")
-	sb := mustClaim(t, m, testKey)
-	hibernateClaim(t, m, sb)
-
-	conn, _, err := m.DialReader(t.Context(), sb.ID, sb.Token)
-	if err != nil {
-		t.Fatalf("DialReader: %v", err)
-	}
-	_ = conn.Close()
-	for i, blob := range layers {
-		attached := eng.volumeSpecs[i].Path
-		copied, copyErr := os.Stat(attached)
-		orig, origErr := os.Stat(blob)
-		if copyErr != nil || origErr != nil || os.SameFile(copied, orig) {
-			t.Errorf("layer %d attached as %s, want a copy distinct from %s: %v %v", i, attached, blob, copyErr, origErr)
-		}
-		if got, _ := os.ReadFile(attached); string(got) != "erofs" {
-			t.Errorf("layer %d copy holds %q, want the blob's bytes", i, got)
-		}
-	}
-}
-
-func TestReaderReleaseRemovesItsLayerLinksAndKeepsTheBlobs(t *testing.T) {
-	eng := newFakeEngine()
-	layers := readerExport(t, eng)
-	m := newReaderManager(t, eng)
-	seedReaderVMs(m, "sbx-reader-1")
-	sb := mustClaim(t, m, testKey)
-	hibernateClaim(t, m, sb)
-	conn, _, err := m.DialReader(t.Context(), sb.ID, sb.Token)
-	if err != nil {
-		t.Fatalf("DialReader: %v", err)
-	}
-	_ = conn.Close()
-
-	m.readers.mu.Lock()
-	live := m.readers.live[sb.ID]
-	m.readers.mu.Unlock()
-	m.dropReader(t.Context(), live, true)
-	for _, blob := range layers {
-		if got, readErr := os.ReadFile(blob); readErr != nil || string(got) != "erofs" {
-			t.Errorf("release damaged the shared blob %s: %q, %v", blob, got, readErr)
-		}
+	if n := len(m.pools[testKey].warm); n != 0 {
+		t.Errorf("claim pool holds %d warm VMs, want the one reader taken", n)
 	}
 	if entries, _ := os.ReadDir(filepath.Join(m.dataDir, readerDir)); len(entries) != 0 {
-		t.Errorf("release left %d entries under %s", len(entries), readerDir)
+		t.Errorf("a hibernated read left %d entries under %s", len(entries), readerDir)
 	}
+}
+
+func TestReaderTakesItsVMFromTheClaimsOwnPool(t *testing.T) {
+	eng := newFakeEngine()
+	m := newReaderManager(t, eng, config.PoolSpec{PoolKey: otherKey, Warm: 1})
+	sb := mustClaim(t, m, testKey)
+	hibernateClaim(t, m, sb)
+	seedReaderVMs(m, testKey, "sbx-own")
+	seedReaderVMs(m, otherKey, "sbx-foreign")
+
+	conn, _, err := m.DialReader(t.Context(), sb.ID, sb.Token)
+	if err != nil {
+		t.Fatalf("DialReader: %v", err)
+	}
+	_ = conn.Close()
+	if want := []string{"snapshot:sbx-own:" + sb.HibernateSnap}; !slices.Equal(eng.attachedCopies, want) {
+		t.Errorf("attached %v, want the claim's own pool VM %v", eng.attachedCopies, want)
+	}
+	if n := len(m.pools[otherKey].warm); n != 1 {
+		t.Errorf("another pool holds %d warm VMs, want it untouched", n)
+	}
+}
+
+func TestReaderServesOnlyPoolsThatAskForIt(t *testing.T) {
+	eng := newFakeEngine()
+	m := newReaderManager(t, eng, config.PoolSpec{PoolKey: otherKey, Warm: 1})
+	sb := mustClaim(t, m, otherKey)
+	hibernateClaim(t, m, sb)
+	seedReaderVMs(m, otherKey, "sbx-reader-1")
+
+	if _, _, err := m.DialReader(t.Context(), sb.ID, sb.Token); !errors.Is(err, ErrNoReader) {
+		t.Errorf("DialReader of a pool without reader = %v, want ErrNoReader", err)
+	}
+	sock, _, done, err := m.WakeAgentSocketOrRead(t.Context(), sb.ID, sb.Token)
+	if err != nil || sock == "" {
+		t.Fatalf("WakeAgentSocketOrRead = %q, %v, want a wake", sock, err)
+	}
+	defer done()
+	if len(eng.restores) != 1 || len(eng.attachedCopies) != 0 || len(m.pools[otherKey].warm) != 1 {
+		t.Errorf("restores=%v attached=%v warm=%d, want a wake with no reader taken", eng.restores, eng.attachedCopies, len(m.pools[otherKey].warm))
+	}
+}
+
+func TestReloadTurnsTheReaderOnForLaterSleeps(t *testing.T) {
+	eng := newFakeEngine()
+	m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1})
+	next := *m.cfg
+	next.Pools = []config.PoolSpec{{PoolKey: testKey, Warm: 1, Reader: true}}
+	res, err := m.ReloadConfig(t.Context(), &next)
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	if want := []string{"pools[rt:24.04 none small].reader"}; !slices.Equal(res.Changed, want) {
+		t.Errorf("changed %v, want %v", res.Changed, want)
+	}
+	sb := mustClaim(t, m, testKey)
+	hibernateClaim(t, m, sb)
+	if _, _, _, err = m.WakeAgentSocketOrRead(t.Context(), sb.ID, sb.Token); !errors.Is(err, ErrSleeping) {
+		t.Errorf("WakeAgentSocketOrRead after the reload = %v, want ErrSleeping", err)
+	}
+}
+
+func TestReaderHoldsTheTransitionLockWhileTheSnapshotIsCopied(t *testing.T) {
+	eng := newFakeEngine()
+	eng.attachStall = make(chan struct{})
+	m := newReaderManager(t, eng)
+	sb := mustClaim(t, m, testKey)
+	hibernateClaim(t, m, sb)
+	seedReaderVMs(m, testKey, "sbx-reader-1")
+
+	var wg sync.WaitGroup
+	wg.Go(func() {
+		conn, _, err := m.DialReader(t.Context(), sb.ID, sb.Token)
+		if err != nil {
+			t.Errorf("DialReader: %v", err)
+			return
+		}
+		_ = conn.Close()
+	})
+	waitFor(t, func() bool { eng.mu.Lock(); defer eng.mu.Unlock(); return len(eng.attachedCopies) > 0 })
+	if sb.Transition.TryLock() {
+		sb.Transition.Unlock()
+		t.Error("the transition lock was free while the snapshot was being copied")
+	}
+	close(eng.attachStall)
+	wg.Wait()
+	if !sb.Transition.TryLock() {
+		t.Fatal("the reader kept the transition lock after the copy")
+	}
+	sb.Transition.Unlock()
 }
 
 func TestReaderCallsShareOneSetup(t *testing.T) {
 	eng := newFakeEngine()
-	readerExport(t, eng)
-	eng.exportStall = make(chan struct{})
+	eng.attachStall = make(chan struct{})
 	m := newReaderManager(t, eng)
-	seedReaderVMs(m, "sbx-reader-1", "sbx-reader-2")
 	sb := mustClaim(t, m, testKey)
 	hibernateClaim(t, m, sb)
+	seedReaderVMs(m, testKey, "sbx-reader-1", "sbx-reader-2")
 
 	const callers = 8
 	var wg sync.WaitGroup
@@ -159,14 +167,14 @@ func TestReaderCallsShareOneSetup(t *testing.T) {
 			_ = conn.Close()
 		})
 	}
-	waitFor(t, func() bool { eng.mu.Lock(); defer eng.mu.Unlock(); return len(eng.exports) > 0 })
-	close(eng.exportStall)
+	waitFor(t, func() bool { eng.mu.Lock(); defer eng.mu.Unlock(); return len(eng.attachedCopies) > 0 })
+	close(eng.attachStall)
 	wg.Wait()
 
 	eng.mu.Lock()
 	defer eng.mu.Unlock()
-	if len(eng.exports) != 1 || len(eng.startedReaders) != 1 {
-		t.Errorf("%d callers ran %d exports and %d reader setups, want one of each", callers, len(eng.exports), len(eng.startedReaders))
+	if len(eng.attachedCopies) != 1 || len(eng.startedReaders) != 1 {
+		t.Errorf("%d callers ran %d attaches and %d reader setups, want one of each", callers, len(eng.attachedCopies), len(eng.startedReaders))
 	}
 	if len(eng.readerDials) != callers {
 		t.Errorf("%d dials, want one per caller", len(eng.readerDials))
@@ -176,11 +184,10 @@ func TestReaderCallsShareOneSetup(t *testing.T) {
 func TestReaderIsReleasedAfterItsIdleWindow(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		eng := newFakeEngine()
-		readerExport(t, eng)
 		m := newReaderManager(t, eng)
-		seedReaderVMs(m, "sbx-reader-1")
 		sb := mustClaim(t, m, testKey)
 		hibernateClaim(t, m, sb)
+		seedReaderVMs(m, testKey, "sbx-reader-1")
 		dialAndClose := func() {
 			t.Helper()
 			conn, _, err := m.DialReader(t.Context(), sb.ID, sb.Token)
@@ -190,7 +197,6 @@ func TestReaderIsReleasedAfterItsIdleWindow(t *testing.T) {
 			_ = conn.Close()
 		}
 		dialAndClose()
-		dir := filepath.Dir(eng.volumeSpecs[len(eng.volumeSpecs)-1].Path)
 
 		time.Sleep(readerIdle * 2 / 3)
 		dialAndClose()
@@ -205,9 +211,6 @@ func TestReaderIsReleasedAfterItsIdleWindow(t *testing.T) {
 		if removes, _ := readerLifecycle(eng); !slices.Contains(removes, "sbx-reader-1") {
 			t.Errorf("removes=%v, want the idle reader's VM destroyed", removes)
 		}
-		if _, err := os.Stat(dir); !errors.Is(err, os.ErrNotExist) {
-			t.Errorf("reader dir survived the release: %v", err)
-		}
 		m.readers.mu.Lock()
 		defer m.readers.mu.Unlock()
 		if len(m.readers.live) != 0 {
@@ -219,11 +222,10 @@ func TestReaderIsReleasedAfterItsIdleWindow(t *testing.T) {
 func TestReaderNoConnectionAcquiresIsReleasedAfterTheIdleWindow(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		eng := newFakeEngine()
-		readerExport(t, eng)
 		m := newReaderManager(t, eng)
-		seedReaderVMs(m, "sbx-reader-1")
 		sb := mustClaim(t, m, testKey)
 		hibernateClaim(t, m, sb)
+		seedReaderVMs(m, testKey, "sbx-reader-1")
 		if err := m.ensureReader(t.Context(), sb); err != nil {
 			t.Fatalf("ensureReader: %v", err)
 		}
@@ -243,11 +245,10 @@ func TestReaderNoConnectionAcquiresIsReleasedAfterTheIdleWindow(t *testing.T) {
 
 func TestReaderRegistrationRetiresTheOneItReplaces(t *testing.T) {
 	eng := newFakeEngine()
-	readerExport(t, eng)
 	m := newReaderManager(t, eng)
-	seedReaderVMs(m, "sbx-reader-2", "sbx-reader-1")
 	sb := mustClaim(t, m, testKey)
 	hibernateClaim(t, m, sb)
+	seedReaderVMs(m, testKey, "sbx-reader-2", "sbx-reader-1")
 
 	for range 2 {
 		if err := m.openReader(t.Context(), sb); err != nil {
@@ -267,11 +268,10 @@ func TestReaderRegistrationRetiresTheOneItReplaces(t *testing.T) {
 
 func TestReaderEnsureSkipsASetupAnotherFlightFinished(t *testing.T) {
 	eng := newFakeEngine()
-	readerExport(t, eng)
 	m := newReaderManager(t, eng)
-	seedReaderVMs(m, "sbx-reader-2", "sbx-reader-1")
 	sb := mustClaim(t, m, testKey)
 	hibernateClaim(t, m, sb)
+	seedReaderVMs(m, testKey, "sbx-reader-2", "sbx-reader-1")
 
 	for range 2 {
 		if err := m.ensureReader(t.Context(), sb); err != nil {
@@ -285,11 +285,10 @@ func TestReaderEnsureSkipsASetupAnotherFlightFinished(t *testing.T) {
 
 func TestReaderKeepsTheClaimsLatestSleepOnly(t *testing.T) {
 	eng := newFakeEngine()
-	readerExport(t, eng)
 	m := newReaderManager(t, eng)
-	seedReaderVMs(m, "sbx-reader-2", "sbx-reader-1")
 	sb := mustClaim(t, m, testKey)
 	hibernateClaim(t, m, sb)
+	seedReaderVMs(m, testKey, "sbx-reader-2", "sbx-reader-1")
 	first, firstSource, err := m.DialReader(t.Context(), sb.ID, sb.Token)
 	if err != nil {
 		t.Fatalf("DialReader: %v", err)
@@ -314,23 +313,23 @@ func TestReaderKeepsTheClaimsLatestSleepOnly(t *testing.T) {
 	if secondSource == firstSource {
 		t.Errorf("both sleeps served from %q", firstSource)
 	}
-	if len(eng.exports) != 2 || len(eng.startedReaders) != 2 {
-		t.Errorf("exports=%d setups=%d, want a fresh reader per sleep", len(eng.exports), len(eng.startedReaders))
+	if len(eng.attachedCopies) != 2 || len(eng.startedReaders) != 2 {
+		t.Errorf("attaches=%d setups=%d, want a fresh reader per sleep", len(eng.attachedCopies), len(eng.startedReaders))
 	}
 	if !slices.Contains(eng.removes, "sbx-reader-1") {
 		t.Errorf("removes=%v, want the first sleep's reader destroyed", eng.removes)
 	}
 }
 
-func TestReaderServesAnArchivedClaimFromTwoFilesOfItsRecord(t *testing.T) {
+func TestReaderServesAnArchivedClaimFromTheFilesItsEnvelopeLists(t *testing.T) {
 	eng := newFakeEngine()
-	readerExport(t, eng)
+	readerExport(eng)
 	m := newReaderManager(t, eng)
-	seedReaderVMs(m, "sbx-reader-1")
 	counting := &fetchCountingStore{Store: m.ckpts}
 	m.ckpts = counting
 	sb := mustClaim(t, m, testKey)
 	mustArchive(t, m, sb)
+	seedReaderVMs(m, testKey, "sbx-reader-1")
 	clones := len(eng.clones) + len(eng.colds)
 
 	if _, _, _, err := m.WakeAgentSocketOrRead(t.Context(), sb.ID, sb.Token); !errors.Is(err, ErrSleeping) {
@@ -348,11 +347,17 @@ func TestReaderServesAnArchivedClaimFromTwoFilesOfItsRecord(t *testing.T) {
 	if ck == "" || source != ck {
 		t.Errorf("reader source %q, want the archive record %q", source, ck)
 	}
-	if got, want := counting.files(), []string{"cocoon.json", "cow.raw"}; !slices.Equal(got, want) {
+	if got, want := counting.files(), []string{"disk.img", envelopeFile}; !slices.Equal(got, want) {
 		t.Errorf("fetched files %v, want only %v", got, want)
 	}
 	if counting.fetches != 0 {
 		t.Errorf("%d whole-record fetches, want none", counting.fetches)
+	}
+	if want := []string{"disk.img", envelopeFile}; !slices.Equal(eng.attachedDirFiles, want) {
+		t.Errorf("attached directory held %v, want the envelope and its listed file %v", eng.attachedDirFiles, want)
+	}
+	if want := []string{"dir:sbx-reader-1"}; !slices.Equal(eng.attachedCopies, want) {
+		t.Errorf("attached %v, want the directory copied onto the reader VM %v", eng.attachedCopies, want)
 	}
 	if n := len(eng.clones) + len(eng.colds); n != clones || len(eng.restores) != 0 {
 		t.Errorf("an archived read booted a VM: clones/colds %d->%d, restores %v", clones, n, eng.restores)
@@ -360,41 +365,57 @@ func TestReaderServesAnArchivedClaimFromTwoFilesOfItsRecord(t *testing.T) {
 	if !ckExists(t, m, ck) {
 		t.Error("the archive record was consumed")
 	}
-	cow := eng.volumeSpecs[len(eng.volumeSpecs)-1]
-	if got, readErr := os.ReadFile(cow.Path); readErr != nil || string(got) != "disk-bytes" {
-		t.Errorf("reader disk %q, %v, want the record's bytes", got, readErr)
-	}
-	if !strings.HasPrefix(cow.Path, filepath.Join(m.dataDir, readerDir)) {
-		t.Errorf("reader attached %s, want a private copy under %s", cow.Path, readerDir)
-	}
-
-	m.readers.mu.Lock()
-	live := m.readers.live[sb.ID]
-	m.readers.mu.Unlock()
-	m.dropReader(t.Context(), live, true)
 	if entries, _ := os.ReadDir(filepath.Join(m.dataDir, readerDir)); len(entries) != 0 {
-		t.Errorf("a released archived reader left %d entries under %s", len(entries), readerDir)
+		t.Errorf("the fetched copy outlived its attach: %d entries under %s", len(entries), readerDir)
+	}
+}
+
+func TestReaderRefusesAnArchiveWithoutUsableAttachFiles(t *testing.T) {
+	for _, tt := range []struct{ name, envelope string }{
+		{"older export", `{"version":1}`},
+		{"empty list", `{"version":1,"disk_attach_files":[]}`},
+		{"parent path", `{"version":1,"disk_attach_files":["../escape"]}`},
+		{"nested path", `{"version":1,"disk_attach_files":["sub/disk.img"]}`},
+		{"absolute path", `{"version":1,"disk_attach_files":["/etc/passwd"]}`},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			eng := newFakeEngine()
+			eng.exportFiles = map[string]string{envelopeFile: tt.envelope, "disk.img": "disk-bytes"}
+			m := newReaderManager(t, eng)
+			sb := mustClaim(t, m, testKey)
+			mustArchive(t, m, sb)
+			seedReaderVMs(m, testKey, "sbx-reader-1")
+
+			if _, _, err := m.DialReader(t.Context(), sb.ID, sb.Token); !errors.Is(err, ErrNoReader) {
+				t.Fatalf("DialReader = %v, want ErrNoReader", err)
+			}
+			if len(m.pools[testKey].warm) != 1 || len(eng.attachedCopies) != 0 {
+				t.Errorf("a refused archive took a reader: warm=%d attached=%v", len(m.pools[testKey].warm), eng.attachedCopies)
+			}
+			if entries, _ := os.ReadDir(filepath.Join(m.dataDir, readerDir)); len(entries) != 0 {
+				t.Errorf("a refused archive left %d entries under %s", len(entries), readerDir)
+			}
+		})
 	}
 }
 
 func TestReaderRefusesWhatAWakeRefuses(t *testing.T) {
 	eng := newFakeEngine()
-	readerExport(t, eng)
-	cfg := &config.Config{
-		DataDir: t.TempDir(), APIToken: "root", Reader: &config.ReaderSpec{Template: readerKey.Template},
-		Pools: []config.PoolSpec{archivePool(0), {PoolKey: readerKey, Warm: 1}},
-	}
+	readerExport(eng)
+	pool := archivePool(0)
+	pool.Reader = true
+	cfg := &config.Config{DataDir: t.TempDir(), APIToken: "root", Pools: []config.PoolSpec{pool}}
 	m, err := NewManager(t.Context(), cfg, eng, testSecrets(t), testBackends(t, cfg))
 	if err != nil {
 		t.Fatalf("setup manager: %v", err)
 	}
-	seedReaderVMs(m, "sbx-reader-1")
 	putTenants(t, m, tenants.TenantSpec{Name: "acme", Token: "acme-tok"})
 	sb, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{TTL: time.Hour, Tenant: "acme"})
 	if err != nil {
 		t.Fatalf("claim: %v", err)
 	}
 	mustArchive(t, m, sb)
+	seedReaderVMs(m, testKey, "sbx-reader-1")
 	if err = m.DeleteTenant(t.Context(), "acme"); err != nil {
 		t.Fatalf("DeleteTenant: %v", err)
 	}
@@ -402,25 +423,24 @@ func TestReaderRefusesWhatAWakeRefuses(t *testing.T) {
 	if _, _, err = m.DialReader(t.Context(), sb.ID, sb.Token); !errors.Is(err, ErrNoReader) || !errors.Is(err, ErrTenantRemoved) {
 		t.Errorf("DialReader of a removed tenant's archive = %v, want ErrNoReader wrapping ErrTenantRemoved", err)
 	}
-	if len(eng.startedReaders) != 0 || len(m.pools[readerKey].warm) != 1 {
-		t.Errorf("a refused read still took a reader: setups=%d warm=%d", len(eng.startedReaders), len(m.pools[readerKey].warm))
+	if len(eng.startedReaders) != 0 || len(m.pools[testKey].warm) != 1 {
+		t.Errorf("a refused read still took a reader: setups=%d warm=%d", len(eng.startedReaders), len(m.pools[testKey].warm))
 	}
 }
 
 func TestReaderRefusesWhileTheDiskIsLow(t *testing.T) {
 	eng := newFakeEngine()
-	readerExport(t, eng)
 	m := newReaderManager(t, eng)
-	seedReaderVMs(m, "sbx-reader-1")
 	sb := mustClaim(t, m, testKey)
 	hibernateClaim(t, m, sb)
+	seedReaderVMs(m, testKey, "sbx-reader-1")
 	m.diskLow.Store(true)
 
 	if _, _, err := m.DialReader(t.Context(), sb.ID, sb.Token); !errors.Is(err, ErrNoReader) || !errors.Is(err, ErrQuota) {
 		t.Errorf("DialReader on a full disk = %v, want ErrNoReader wrapping ErrQuota", err)
 	}
-	if len(eng.exports) != 0 || len(m.pools[readerKey].warm) != 1 {
-		t.Errorf("a refused read still exported (%d) or took a reader (%d warm)", len(eng.exports), len(m.pools[readerKey].warm))
+	if len(eng.attachedCopies) != 0 || len(m.pools[testKey].warm) != 1 {
+		t.Errorf("a refused read still attached (%d) or took a reader (%d warm)", len(eng.attachedCopies), len(m.pools[testKey].warm))
 	}
 }
 
@@ -430,18 +450,17 @@ func TestReaderSetupFailureFallsBackAndCleansUp(t *testing.T) {
 		setup func(*fakeEngine)
 		warm  []string
 	}{
-		{"attach fails", func(e *fakeEngine) { e.diskAttachErrFor = "rcow" }, []string{"sbx-reader-1"}},
+		{"attach fails", func(e *fakeEngine) { e.diskAttachErr = errors.New("attach failed") }, []string{"sbx-reader-1"}},
 		{"view fails", func(e *fakeEngine) { e.startReaderErr = errors.New("mount failed") }, []string{"sbx-reader-1"}},
 		{"no warm reader", func(*fakeEngine) {}, nil},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			eng := newFakeEngine()
-			readerExport(t, eng)
 			tt.setup(eng)
 			m := newReaderManager(t, eng)
-			seedReaderVMs(m, tt.warm...)
 			sb := mustClaim(t, m, testKey)
 			hibernateClaim(t, m, sb)
+			seedReaderVMs(m, testKey, tt.warm...)
 
 			if _, _, err := m.DialReader(t.Context(), sb.ID, sb.Token); !errors.Is(err, ErrNoReader) {
 				t.Fatalf("DialReader = %v, want ErrNoReader", err)
@@ -492,11 +511,10 @@ func TestSleepingSourceNamesOnlyASettledSleepOfTheCallersClaim(t *testing.T) {
 
 func TestReaderThatStopsAnsweringIsRetired(t *testing.T) {
 	eng := newFakeEngine()
-	readerExport(t, eng)
 	m := newReaderManager(t, eng)
-	seedReaderVMs(m, "sbx-reader-2", "sbx-reader-1")
 	sb := mustClaim(t, m, testKey)
 	hibernateClaim(t, m, sb)
+	seedReaderVMs(m, testKey, "sbx-reader-2", "sbx-reader-1")
 	eng.readerDialErr = errors.New("vsock refused")
 
 	if _, _, err := m.DialReader(t.Context(), sb.ID, sb.Token); !errors.Is(err, ErrNoReader) {
@@ -548,11 +566,10 @@ func TestWakeAgentSocketStampsActivityOnlyWhenItServesTheGuest(t *testing.T) {
 
 func TestReaderOfAStaleSleepIsRetiredEvenWithAConnectionOpen(t *testing.T) {
 	eng := newFakeEngine()
-	readerExport(t, eng)
 	m := newReaderManager(t, eng)
-	seedReaderVMs(m, "sbx-reader-2", "sbx-reader-1")
 	sb := mustClaim(t, m, testKey)
 	hibernateClaim(t, m, sb)
+	seedReaderVMs(m, testKey, "sbx-reader-2", "sbx-reader-1")
 	open, _, err := m.DialReader(t.Context(), sb.ID, sb.Token)
 	if err != nil {
 		t.Fatalf("DialReader: %v", err)
@@ -584,12 +601,11 @@ func TestFailedPreHibernateSyncSendsReadsToTheWakePath(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			eng := newFakeEngine()
-			readerExport(t, eng)
 			eng.syncErr = tt.syncErr
 			m := newReaderManager(t, eng)
-			seedReaderVMs(m, "sbx-reader-1")
 			sb := mustClaim(t, m, testKey)
 			hibernateClaim(t, m, sb)
+			seedReaderVMs(m, testKey, "sbx-reader-1")
 
 			if got, _ := newClaimStore(m.dataDir, false).load(); got[sb.ID] == nil || got[sb.ID].ReaderSafe != tt.safe {
 				t.Errorf("persisted reader_safe = %+v, want %t", got[sb.ID], tt.safe)
@@ -720,13 +736,9 @@ func TestReconcileClearsReaderLeftovers(t *testing.T) {
 	}
 }
 
-func newReaderManager(t *testing.T, eng *fakeEngine) *Manager {
+func newReaderManager(t *testing.T, eng *fakeEngine, extra ...config.PoolSpec) *Manager {
 	t.Helper()
-	cfg := &config.Config{
-		DataDir: t.TempDir(),
-		Reader:  &config.ReaderSpec{Template: readerKey.Template},
-		Pools:   []config.PoolSpec{{PoolKey: testKey, Warm: 1}, {PoolKey: readerKey, Warm: 1}},
-	}
+	cfg := &config.Config{DataDir: t.TempDir(), Pools: append([]config.PoolSpec{{PoolKey: testKey, Warm: 1, Reader: true}}, extra...)}
 	m, err := NewManager(t.Context(), cfg, eng, testSecrets(t), testBackends(t, cfg))
 	if err != nil {
 		t.Fatalf("setup manager: %v", err)
@@ -734,9 +746,9 @@ func newReaderManager(t *testing.T, eng *fakeEngine) *Manager {
 	return m
 }
 
-func seedReaderVMs(m *Manager, names ...string) {
+func seedReaderVMs(m *Manager, key types.PoolKey, names ...string) {
 	for _, name := range names {
-		m.pools[readerKey].warm = append(m.pools[readerKey].warm, &types.Sandbox{VMName: name, Key: readerKey, VsockSocket: "/vsock/" + name})
+		m.pools[key].warm = append(m.pools[key].warm, &types.Sandbox{VMName: name, Key: key, VsockSocket: "/vsock/" + name})
 	}
 }
 
@@ -747,28 +759,13 @@ func hibernateClaim(t *testing.T, m *Manager, sb *types.Sandbox) {
 	}
 }
 
-// readerExport makes every snapshot export carry the disk, a sidecar naming two layers, and a memory image a reader must drop.
-func readerExport(t *testing.T, eng *fakeEngine) []string {
-	t.Helper()
-	dir := t.TempDir()
-	layers := []string{filepath.Join(dir, "base.erofs"), filepath.Join(dir, "top.erofs")}
-	for _, layer := range layers {
-		if err := os.WriteFile(layer, []byte("erofs"), 0o600); err != nil {
-			t.Fatalf("setup: %v", err)
-		}
+// readerExport makes every snapshot export carry an envelope that lists one disk file for a reader to attach, and a memory image it must not fetch.
+func readerExport(eng *fakeEngine) {
+	eng.exportFiles = map[string]string{
+		envelopeFile:    `{"version":1,"disk_attach_files":["disk.img"]}`,
+		"disk.img":      "disk-bytes",
+		"memory-ranges": "guest-memory",
 	}
-	sidecar := fmt.Sprintf(`{"storage_configs":[{"path":%q,"role":"layer"},{"path":%q,"role":"layer"},{"path":"/run/cow.raw","role":"cow"},{"path":"/run/cidata.img","role":"cidata"}]}`, layers[0], layers[1])
-	eng.exportFiles = map[string]string{"cow.raw": "disk-bytes", "cocoon.json": sidecar, "memory-ranges": "guest-memory"}
-	eng.managedDirs = []string{dir}
-	return layers
-}
-
-func readerOps(eng *fakeEngine) []string {
-	eng.mu.Lock()
-	defer eng.mu.Unlock()
-	return slices.DeleteFunc(slices.Clone(eng.volumeOps), func(op string) bool {
-		return !strings.HasPrefix(op, "attach:") && !strings.HasPrefix(op, "reader-start:")
-	})
 }
 
 func readerLifecycle(eng *fakeEngine) (removes []string, setups int) {
