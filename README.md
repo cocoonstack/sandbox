@@ -42,8 +42,10 @@ performance) — source in
   host-side credential injection and per-claim upstream proxies, runtime
   tenants, config reload (SIGHUP), usage + audit journals, /metrics, reap +
   restart reconcile with VMM cold restart, memberlist mesh with redirect
-  placement, and an optional shared PostgreSQL meta store for tenants,
-  pools and the cross-node adoption of archived claims
+  placement, a checkpoint store on a shared directory or S3 (sparse,
+  content-addressed chunks), and an optional shared PostgreSQL meta store
+  for tenants, pools, node leases and the cross-node adoption of archived
+  claims and of running claims a pool replicates (`replicate_seconds`)
 - `sdk/go/` — Go SDK: `Connect/New/Lookup`, `Exec/Run`, files,
   `Push/Pull`, sessions, `Find/Replace`, `Watch`, git verbs, `OpenPty`,
   `Renew/Fork/Hibernate/Promote/Checkpoint`, claim env, `DialPort/ProxyPort/PreviewURL`,
