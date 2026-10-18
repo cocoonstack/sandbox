@@ -156,6 +156,26 @@ func TestSleepingConnectionMovesToAFreshReaderWhenTheClaimSleepsAgain(t *testing
 	}
 }
 
+func TestSleepingFreshReaderEndClosesTheClient(t *testing.T) {
+	env := newSleepingEnv(t)
+	conn, r := env.upgrade(t)
+	send(t, conn, statFrame)
+	expectLine(t, r, "reader")
+
+	env.reader.mu.Lock()
+	env.reader.src = "snap-2"
+	env.reader.serve = func(c net.Conn) {
+		_, _ = bufio.NewReader(c).ReadString('\n')
+		_ = c.Close()
+	}
+	env.reader.mu.Unlock()
+	send(t, conn, readFrame)
+	_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	if _, err := r.ReadString('\n'); !errors.Is(err, io.EOF) {
+		t.Errorf("client after its fresh reader ended: %v, want EOF", err)
+	}
+}
+
 func TestSleepingUnavailableReaderWakes(t *testing.T) {
 	logs := captureLogs(t)
 	env := newSleepingEnv(t)

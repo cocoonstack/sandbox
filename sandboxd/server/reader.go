@@ -189,6 +189,7 @@ func (r *router) infoFollowed() (bool, error) {
 }
 
 func (r *router) startPump() {
+	r.superseded.Store(false)
 	r.pumped = make(chan struct{})
 	reader := r.reader
 	go func() {
