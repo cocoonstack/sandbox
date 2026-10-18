@@ -327,8 +327,8 @@ checkpoint store and keeps each claim's registry row on the latest snapshot:
   rows of a node that never returns therefore stay until a client adopts them, a
   bounded residue of one row and up to two checkpoints per claim: the row's, and
   a committed pending replica or a previous replica the node died before
-  deleting. Their metas stay live, so a reclaim by the documented rule keeps
-  them. They are archive checkpoints (`"archive": true` in their meta) that no
+  deleting. Their metas stay live, so offline reclamation keeps them.
+  They are archive checkpoints (`"archive": true` in their meta) that no
   registry row names, which an operator can delete. Apart from that and the
   lease rule the sweep is unchanged.
 - **Self-fencing.** A node whose renewal is overdue by 12 seconds (the lease
@@ -376,9 +376,9 @@ changed chunks plus a manifest and a meta, one registry read, one write and one
 delete of the previous replica; the node's own cost is one scan of its claims
 every 5 seconds. The delete is soft: the chunks only the previous replica names
 stay in the store until the operator's
-[reclaim](deploy.md#reclaiming-s3-storage) removes them. With replication this
+[offline reclamation](deploy.md#reclaiming-s3-storage) removes them. With replication this
 is the fastest-growing part of the store: roughly the per-round churn times the
-rounds since the last reclaim, per replicated claim, on top of the live replica.
+rounds since the last reclamation, per replicated claim, on top of the live replica.
 The first round after a wake or adoption uploads the whole claim again, because
 the wake deletes the record it restored from; later rounds dedup. Resolving a
 claim for a stream of a pool that does not replicate reads one plain field and
