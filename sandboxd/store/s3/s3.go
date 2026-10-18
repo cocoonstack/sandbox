@@ -510,28 +510,33 @@ func (s *Store) referencedChunks(ctx context.Context, id, lineage string) (map[s
 			ids = append(ids, path.Base(*marker.Key))
 		}
 	}
-	refs := &chunkRefs{live: map[string]map[string]struct{}{}}
+	have := map[string]struct{}{}
+	var mu sync.Mutex
 	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(metaReadConcurrency)
 	for _, recordID := range ids {
 		g.Go(func() error {
 			man, err := s.currentManifest(gctx, recordID)
-			if errors.Is(err, store.ErrNotFound) {
+			switch {
+			case errors.Is(err, store.ErrNotFound):
+				return nil
+			case err != nil:
+				return err
+			case man.Lineage != lineage:
 				return nil
 			}
-			if err != nil {
-				return err
+			mu.Lock()
+			defer mu.Unlock()
+			for _, file := range man.Files {
+				for _, chunk := range file.Chunks {
+					have[chunk.SHA256] = struct{}{}
+				}
 			}
-			refs.add(man)
 			return nil
 		})
 	}
 	if err := g.Wait(); err != nil {
 		return nil, err
-	}
-	have := refs.live[lineage]
-	if have == nil {
-		have = map[string]struct{}{}
 	}
 	return have, nil
 }
@@ -657,26 +662,6 @@ func (u *chunkUploader) claim(sha string) bool {
 	}
 	u.have[sha] = struct{}{}
 	return true
-}
-
-type chunkRefs struct {
-	mu   sync.Mutex
-	live map[string]map[string]struct{} // lineage -> chunk sha
-}
-
-func (r *chunkRefs) add(man manifest) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	set := r.live[man.Lineage]
-	if set == nil {
-		set = map[string]struct{}{}
-		r.live[man.Lineage] = set
-	}
-	for _, file := range man.Files {
-		for _, chunk := range file.Chunks {
-			set[chunk.SHA256] = struct{}{}
-		}
-	}
 }
 
 func publishFiles(staging string) ([]publishFile, error) {

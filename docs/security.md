@@ -64,10 +64,10 @@ all of them.
    packet in that shape can reach the local L2 segment.
 4. **Set `mesh.cluster_key` unless the gossip network is itself trusted**,
    and open the memberlist port node-to-node only.
-5. **Treat the checkpoint store like backups.** A checkpoint embeds full
-   guest memory — including any secret the workload held at capture.
-   Restrict store access; use S3 server-side encryption or an encrypted
-   mount where that matters.
+5. **Treat the checkpoint store like backups.** A checkpoint, an archive and
+   a replica each embed full guest memory, including any secret the workload
+   held at capture. Restrict store access; use S3 server-side encryption or
+   an encrypted mount where that matters.
 6. **No custom NAT64 prefix routed on a sandboxd host** — the SSRF guard
    cannot see through an operator-specific translator prefix
    ([egress](egress.md#deployment-constraints)).
@@ -149,6 +149,8 @@ Facts to plan around, stated so the boundary is honest:
 - **Rate limiting is capacity-based only** (`max_claims`, per-tenant
   caps answer 429). The API assumes callers inside the trust boundary;
   front it with your own limiter if semi-trusted automation can reach it.
-- **A dead node's sandboxes die with it** — memory state is node-local by
-  design ([clusters](cluster.md)); durability is the checkpoint store's
-  job, not the node's.
+- **A dead node's running sandboxes die with it** unless their pool
+  replicates them (`replicate_seconds`): another node then restores the last
+  replica, losing what ran after it. Archived claims are adopted from the
+  checkpoint store ([clusters](cluster.md#archived-claims-across-node-loss));
+  durability is the checkpoint store's job, not the node's.

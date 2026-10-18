@@ -90,15 +90,22 @@ func Listen(ctx context.Context, cfg *pgx.ConnConfig, channel string, synced fun
 func EnsureTable(ctx context.Context, pool *pgxpool.Pool, table, schema string) error {
 	qctx, cancel := context.WithTimeout(ctx, QueryTimeout)
 	defer cancel()
-	var exists bool
-	if err := pool.QueryRow(qctx, `SELECT to_regclass($1) IS NOT NULL`, table).Scan(&exists); err != nil {
-		return fmt.Errorf("find table %s: %w", table, err)
-	}
-	if exists {
-		return nil
+	if exists, err := tableExists(qctx, pool, table); err != nil || exists {
+		return err
 	}
 	if _, err := pool.Exec(qctx, schema); err != nil {
+		if exists, _ := tableExists(qctx, pool, table); exists {
+			return nil
+		}
 		return fmt.Errorf("create table %s: %w", table, err)
 	}
 	return nil
+}
+
+func tableExists(ctx context.Context, pool *pgxpool.Pool, table string) (bool, error) {
+	var exists bool
+	if err := pool.QueryRow(ctx, `SELECT to_regclass($1) IS NOT NULL`, table).Scan(&exists); err != nil {
+		return false, fmt.Errorf("find table %s: %w", table, err)
+	}
+	return exists, nil
 }

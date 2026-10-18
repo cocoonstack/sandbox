@@ -40,27 +40,22 @@ func (m *Manager) desiredPools(specs []config.PoolSpec) (map[types.PoolKey]confi
 		if err := spec.ValidateLimits(); err != nil {
 			return nil, fmt.Errorf("%w: %w", ErrBadCount, err)
 		}
-		// egress is config-owned; accepting it here would silently drop it
-		if spec.Egress != nil {
-			return nil, fmt.Errorf("%w: pool %q: egress is set in the config file, not via the API", ErrBadKey, spec.Template)
-		}
-		if spec.Warmup != nil {
-			return nil, fmt.Errorf("%w: pool %q: warmup is set in the config file, not via the API", ErrBadKey, spec.Template)
-		}
-		if spec.CaptureTrim {
-			return nil, fmt.Errorf("%w: pool %q: capture_trim is set in the config file, not via the API", ErrBadKey, spec.Template)
-		}
-		if spec.Reader {
-			return nil, fmt.Errorf("%w: pool %q: reader is set in the config file, not via the API", ErrBadKey, spec.Template)
-		}
-		if spec.Storage != "" {
-			return nil, fmt.Errorf("%w: pool %q: storage is set in the config file, not via the API", ErrBadKey, spec.Template)
-		}
-		if spec.ReplicateSeconds != 0 {
-			return nil, fmt.Errorf("%w: pool %q: replicate_seconds is set in the config file, not via the API", ErrBadKey, spec.Template)
-		}
-		if spec.EgressUpstreamEnv != "" {
-			return nil, fmt.Errorf("%w: pool %q: egress_upstream_env is set in the config file, not via the API", ErrBadKey, spec.Template)
+		// config-owned fields; accepting one here would silently drop it
+		for _, f := range []struct {
+			name string
+			set  bool
+		}{
+			{"egress", spec.Egress != nil},
+			{"warmup", spec.Warmup != nil},
+			{"capture_trim", spec.CaptureTrim},
+			{"reader", spec.Reader},
+			{"storage", spec.Storage != ""},
+			{"replicate_seconds", spec.ReplicateSeconds != 0},
+			{"egress_upstream_env", spec.EgressUpstreamEnv != ""},
+		} {
+			if f.set {
+				return nil, fmt.Errorf("%w: pool %q: %s is set in the config file, not via the API", ErrBadKey, spec.Template, f.name)
+			}
 		}
 		if _, ok := desired[spec.PoolKey]; ok {
 			return nil, fmt.Errorf("%w: duplicate pool %q", ErrBadKey, spec.Template)

@@ -21,7 +21,8 @@ vsock-only I/O (hardened default); `net=egress` attaches a bridge/CNI NIC.
 - [Deploying sandboxd](deploy.md) — single node, configuration reference,
   images, running as a service
 - [Clusters](cluster.md) — joining a mesh, querying members, how redirect
-  placement works, relocating handles
+  placement works, relocating handles, and surviving node loss (archived and
+  replicated claims)
 - [sandboxd HTTP API](sandboxd-api.md) — every endpoint: claim/release,
   renew, hibernate, fork, promote, checkpoints, preview, the guest-port
   relay, claim env, live volume changes, runtime tenants, config reload,

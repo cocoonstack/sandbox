@@ -14,8 +14,12 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/egress"
 )
 
-// AuditLineCap bounds how much of a relayed request frame the audit tap captures and records.
-const AuditLineCap = 4096
+const (
+	// AuditLineCap bounds how much of a relayed request frame the audit tap captures and records.
+	AuditLineCap = 4096
+
+	egressEvent = "egress"
+)
 
 // Counters is a monotonic snapshot for /metrics; gauges come from Info.
 type Counters struct {
@@ -62,22 +66,18 @@ type requestFrame struct {
 }
 
 type auditFrame struct {
-	Op       string   `json:"op"`
-	Argv     []string `json:"argv,omitempty"`
-	Path     string   `json:"path,omitempty"`
-	Dest     string   `json:"dest,omitempty"`
-	Method   string   `json:"method,omitempty"`
-	From     string   `json:"from,omitempty"`
-	To       string   `json:"to,omitempty"`
-	URL      string   `json:"url,omitempty"`
-	Session  string   `json:"session,omitempty"`
-	Port     uint16   `json:"port,omitzero"`
-	Decision string   `json:"decision,omitempty"`
-	Secret   string   `json:"secret,omitempty"`
-	Upstream string   `json:"upstream,omitempty"`
-	Added    []string `json:"added,omitempty"`
-	Changed  []string `json:"changed,omitempty"`
-	Removed  []string `json:"removed,omitempty"`
+	Op      string   `json:"op"`
+	Argv    []string `json:"argv,omitempty"`
+	Path    string   `json:"path,omitempty"`
+	Dest    string   `json:"dest,omitempty"`
+	From    string   `json:"from,omitempty"`
+	To      string   `json:"to,omitempty"`
+	URL     string   `json:"url,omitempty"`
+	Session string   `json:"session,omitempty"`
+	Port    uint16   `json:"port,omitzero"`
+	Added   []string `json:"added,omitempty"`
+	Changed []string `json:"changed,omitempty"`
+	Removed []string `json:"removed,omitempty"`
 }
 
 type egressFrame struct {
@@ -178,11 +178,11 @@ func (m *Manager) recordEgress(ctx context.Context, id, tenant string, ev egress
 			ID   string    `json:"id"`
 			egressFrame
 		}{time.Now(), id, egressFrame{
-			Op: "egress", Dest: ev.Host, Method: ev.Method, Port: ev.Port, Decision: decision, Secret: ev.Injected, Upstream: ev.Upstream,
+			Op: egressEvent, Dest: ev.Host, Method: ev.Method, Port: ev.Port, Decision: decision, Secret: ev.Injected, Upstream: ev.Upstream,
 			Tenant: tenant, Src: ev.Local, Dst: ev.Remote,
 		}})
 	}
-	m.recordUsage(ctx, usageEvent{Event: "egress", ID: id, Tenant: tenant, Reference: ev.Host, Upstream: ev.Upstream, Secret: ev.Injected})
+	m.recordUsage(ctx, usageEvent{Event: egressEvent, ID: id, Tenant: tenant, Reference: ev.Host, Upstream: ev.Upstream, Secret: ev.Injected})
 }
 
 // recordUsage appends one billing event; failures are logged, never propagated.

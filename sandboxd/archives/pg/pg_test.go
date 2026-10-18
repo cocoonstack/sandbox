@@ -2,6 +2,7 @@ package pg
 
 import (
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -120,6 +121,25 @@ func TestLeasesAreScopedToTheirCell(t *testing.T) {
 	}
 	if _, err = c2.Take(ctx, "sb_1", epoch, "b"); err != nil {
 		t.Errorf("c2 take of a row whose owner holds a lease only in c1: %v, want it taken", err)
+	}
+}
+
+func TestNodesStartingTogetherCreateTheTablesOnce(t *testing.T) {
+	dsn := metastoretest.PGSchema(t)
+	var wg sync.WaitGroup
+	errs := make([]error, 8)
+	for i := range errs {
+		wg.Go(func() {
+			r, err := Open(t.Context(), dsn, "c1")
+			if err == nil {
+				r.Close()
+			}
+			errs[i] = err
+		})
+	}
+	wg.Wait()
+	if err := errors.Join(errs...); err != nil {
+		t.Fatalf("a node starting beside others failed: %v", err)
 	}
 }
 

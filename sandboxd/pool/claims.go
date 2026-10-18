@@ -54,7 +54,7 @@ type claimDTO struct {
 	TAP            string             `json:"tap,omitempty"`
 	HibernateSnap  string             `json:"hibernate_snap,omitempty"`
 	PendingSnap    string             `json:"pending_snap,omitempty"`
-	ReaderSafe     bool               `json:"reader_safe,omitempty"`
+	ReaderSafe     bool               `json:"reader_safe,omitzero"`
 	ArchiveCk      string             `json:"archive_ck,omitempty"`
 	ArchiveEpoch   int64              `json:"archive_epoch,omitzero"`
 	ArchivePending string             `json:"archive_pending,omitempty"`
