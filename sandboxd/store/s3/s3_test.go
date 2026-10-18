@@ -885,6 +885,13 @@ func TestPublishUploadsAnUnreferencedChunkAgain(t *testing.T) {
 	}
 }
 
+func TestTransferBudgetStaysBelowTheReuseWindow(t *testing.T) {
+	budget := transferBudget
+	if budget >= store.GenerationGrace {
+		t.Errorf("transfer budget %v must stay below the generation grace %v", budget, store.GenerationGrace)
+	}
+}
+
 func publishRecord(t *testing.T, st *Store, id string, meta []byte, content string) {
 	t.Helper()
 	staging := stageRecord(t, st, id, meta, content)

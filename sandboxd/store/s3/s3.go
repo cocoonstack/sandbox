@@ -45,7 +45,7 @@ const (
 	metaReadConcurrency = 8
 	publishConcurrency  = 4 // files scanned in parallel
 	fetchConcurrency    = 8 // chunk GETs in flight per fetch
-	fetchBudget         = 30 * time.Minute
+	transferBudget      = 30 * time.Minute
 	deleteBatch         = 1000 // DeleteObjects caps one request at 1000 keys
 )
 
@@ -143,7 +143,7 @@ func (s *Store) Fetch(ctx context.Context, id string) (string, []byte, string, e
 		return export, meta, digest, nil
 	}
 	flight := s.fetches.DoChan(gen, func() (any, error) {
-		fctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), fetchBudget)
+		fctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), transferBudget)
 		defer cancel()
 		return nil, s.populate(fctx, id, meta, gen)
 	})
@@ -327,6 +327,8 @@ func (s *Store) get(ctx context.Context, key string) (*awss3.GetObjectOutput, er
 }
 
 func (s *Store) publish(ctx context.Context, staging, id, lineage string, digested bool) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, transferBudget)
+	defer cancel()
 	lineage = cmp.Or(lineage, id)
 	metaRaw, err := os.ReadFile(filepath.Join(staging, store.MetaFile)) //nolint:gosec // our own staging dir
 	if err != nil {
