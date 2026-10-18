@@ -24,7 +24,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	rows, fenced := m.fenceArchived(ctx, claims)
+	fenced := m.fenceArchived(ctx, claims)
 	vms, err := m.eng.List(ctx)
 	if err != nil {
 		return fmt.Errorf("list vms: %w", err)
@@ -102,7 +102,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 	_ = utils.RemoveDirEntries(m.dataDir, func(name string) bool { return strings.HasPrefix(name, "fork-") })
 
 	if fenced {
-		m.reclaimOrphanArchiveCks(ctx, claims, rows)
+		m.reclaimOrphanArchiveCks(ctx, claims)
 	}
 	m.retryArchiveDeletes(ctx)
 	removed := m.sweepStaleVMs(ctx, live, owned)
@@ -280,20 +280,36 @@ func (m *Manager) readoptEgressTap(sb *types.Sandbox, live map[string]types.VMRe
 }
 
 // reclaimOrphanArchiveCks reaps archives that crashed between publish and journal commit.
-func (m *Manager) reclaimOrphanArchiveCks(ctx context.Context, claims map[string]*types.Sandbox, rows map[string]archives.Record) {
+func (m *Manager) reclaimOrphanArchiveCks(ctx context.Context, claims map[string]*types.Sandbox) {
 	logger := log.WithFunc("pool.reclaimOrphanArchiveCks")
 	metas, err := m.ckpts.Metas(ctx)
 	if err != nil {
 		logger.Warnf(ctx, "list archive cks skipped: %v", err)
 		return
 	}
+	var orphans []types.Checkpoint
+	var ids []string
 	for _, rec := range metas {
 		var ckpt types.Checkpoint
 		if json.Unmarshal(rec.Meta, &ckpt) != nil || !ckpt.Archive {
 			continue
 		}
 		orig, mine := claims[ckpt.SandboxID]
-		if !mine || orig.ArchiveCk == ckpt.ID || orig.ArchivePending == ckpt.ID || rows[ckpt.SandboxID].Checkpoint == ckpt.ID {
+		if !mine || ckpt.Node != m.nodeID || orig.ArchiveCk == ckpt.ID || orig.ReplicaCk == ckpt.ID || orig.ReplicaPending == ckpt.ID || orig.ArchivePending == ckpt.ID {
+			continue
+		}
+		orphans = append(orphans, ckpt)
+		ids = append(ids, ckpt.SandboxID)
+	}
+	var rows map[string]archives.Record
+	if m.archives != nil && len(orphans) > 0 {
+		if rows, err = m.archives.Rows(ctx, ids); err != nil {
+			logger.Warnf(ctx, "reclaim orphan archive cks skipped: %v", err)
+			return
+		}
+	}
+	for _, ckpt := range orphans {
+		if row, ok := rows[ckpt.SandboxID]; ok && (row.Owner != m.nodeID || row.Checkpoint == ckpt.ID) {
 			continue
 		}
 		if err := m.deleteArchiveCk(ctx, ckpt.ID); err != nil {

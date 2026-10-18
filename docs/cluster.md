@@ -153,8 +153,8 @@ If a client kept a sandbox's `id` and `token` but lost the owner address
 entry node, then queries every peer concurrently
 (`GET /v1/sandboxes/{id}/owner` — the token is both authorization and
 ownership proof) and returns a handle bound to whichever node confirms
-ownership first. With `archive_failover`, a node may adopt an archived claim
-whose owner left the mesh and answer for it (see
+ownership first. With `archive_failover`, a node may adopt a claim whose
+owner's node lease expired and answer for it (see
 [archived claims across node loss](#archived-claims-across-node-loss)).
 
 ```go
@@ -167,25 +167,35 @@ sb, err := client.Lookup(ctx, savedID, savedToken)
 ## Archived claims across node loss
 
 A claim lives on one node, so a lost node takes its running and hibernated
-claims with it. An archived claim keeps only a pointer on the node; with
+claims with it, unless the claim is archived or [replicated](#running-claims-across-node-loss).
+An archived claim keeps only a pointer on the node; with
 [`archive_failover`](deploy.md#configuration) on every node (it needs
 `meta_store` with a `cell`, an `s3` `checkpoint_store` and a `mesh`), the
 archive also writes one row to the shared PostgreSQL, scoped by the cell: id,
 tenant, token SHA-256, owner node, epoch, a consumed flag, checkpoint id,
-retention deadline and the claim record without its token. Only archives write
-it, so the claim path is unchanged.
+retention deadline and the claim record without its token. Only archives and
+replication rounds write it, so the claim path is unchanged.
 
 - **Adoption.** `Lookup` asks the entry node, then every peer. A node that does
-  not hold the claim reads the row; when the token hash matches and the owner
-  has left the mesh (or is this node, with its record gone), it takes the row
-  with a compare-and-set on the epoch, records the claim as archived, and
+  not hold the claim reads the row; when the token hash matches, it takes the
+  row with one compare-and-set on the epoch. The same statement requires the
+  owner's [node lease](#node-lease) to be expired, unless the owner is this
+  node (with its record gone). The node records the claim as archived and
   answers as the owner. Two nodes adopting at once leave one owner; the other
-  answers 404. A tombstone is never adopted. The next exec or file call wakes the claim from the store as
-  usual. An owner still in the mesh answers for itself, so no other node adopts.
+  answers 404. A tombstone is never adopted. The next exec or file call wakes
+  the claim from the store as usual. An owner with a live lease answers for
+  itself, and a node that tries to take its row is refused with a 404.
   A draining node never adopts. Adoption checks no tenant `max_claims` or node
   `max_claims`: the claim already exists, and a refusal could strand it.
-- **Fencing.** Every write is a compare-and-set on the row's epoch, and every
-  epoch comes from one database sequence, so none is ever reused. A wake takes
+- **Fencing.** Take, consume and delete are compare-and-sets on the row's
+  epoch, and so is the write of a replica round and of the archive of a claim
+  that holds a replica (`Replace`, which also requires this node as owner and a
+  live row): an absent row at a held epoch refuses it, so a round that outlived
+  an adoption cannot recreate the row. The writes that remain owner-guarded
+  upserts are the first write of a row, when this node holds no epoch (the first
+  replica, the archive of a claim with no row), and the re-arm of this node's
+  own tombstone. Every epoch comes from one database sequence, so none is ever
+  reused. A wake takes
   the row before it restores and consumes it before it commits: the row turns
   into a tombstone, deleted only once the checkpoint is gone. A release or a
   retention purge consumes the row before the checkpoint goes; with failover
@@ -196,22 +206,23 @@ it, so the claim path is unchanged.
   record, and none of them deletes the checkpoint, which belongs to the new
   owner; the drop clears the old owner's delete marker first. Only a tombstone
   of its own means this node's commit never happened: the wake or the restart
-  re-arms it and keeps the claim. Orphan reclaim at restart never deletes a
-  checkpoint a row references. A restart also settles an archive a crash
-  interrupted: a live row it left for a claim it still holds is deleted with
-  its checkpoint, and a claim whose row another node holds is dropped, its VM
-  and snapshot swept as stale. An archive journals its intent (the checkpoint
-  it is about to register) before it writes the row. A restart that finds the
-  intent and no row keeps the claim while that checkpoint is still in the
-  store, since the row never committed, and drops it once the checkpoint is
-  gone, since only a node that consumed the row deletes it.
+  re-arms it and keeps the claim. Orphan reclaim at restart deletes only archive
+  checkpoints this node published, and never one a row references. A restart
+  also settles an archive a crash interrupted: a live row it left for a claim it
+  still holds is deleted with its checkpoint, and a claim whose row another node
+  holds is dropped, its VM and snapshot swept as stale. An archive journals its
+  intent (the checkpoint it is about to register) before it writes the row. A
+  restart that finds the intent and no row keeps the claim while that
+  checkpoint is still in the store, since the row never committed, and drops it
+  once the checkpoint is gone, since only a node that consumed the row deletes
+  it.
   A put whose outcome is unknown leaves the intent in place, and a release,
   the next archive and the hourly sweep settle it by the same rule before
   they act on the claim.
 - **Departed owners and tombstones.** Every hour, on the store retention sweep,
-  each node reads the rows past their retention deadline, the consumed rows,
-  and its own rows. An expired row whose owner has left the mesh is purged
-  checkpoint first, then the row. No node touches another node's tombstone:
+  each node reads the rows past their retention deadline whose owner's lease
+  expired, the consumed rows, and its own rows. An expired row of such an owner
+  is purged checkpoint first, then the row. No node touches another node's tombstone:
   the owner settles it when it returns, through its sweep or its restart.
   The epoch compare-and-set lets exactly one node win each,
   and `archive_delete` is recorded only for a row that was still archived.
@@ -227,11 +238,153 @@ it, so the claim path is unchanged.
   `archive_delete` is in the adopter's or the purging node's. Fold the journals
   of all nodes by sandbox id.
 
-Mesh liveness decides adoption, so a partitioned owner can lose an archived
-claim it still lists; the epoch fences it out. A claim that has entered its
-wake counts as running: running and hibernated claims are lost with their
-node, and an owner that never returns leaves behind only the tombstones and
-checkpoints of the claims it was waking or releasing when it died.
+The node lease decides adoption, so a partitioned owner can lose an archived
+claim it still lists once its lease runs out; the epoch fences it out. A claim
+that has entered its wake counts as running. Running and hibernated claims of a
+pool without `replicate_seconds` are lost with their node, and an owner that
+never returns leaves behind only the tombstones and checkpoints of the claims it
+was waking or releasing when it died, plus what a replicated claim leaves (see
+[running claims](#running-claims-across-node-loss)).
+
+### Node lease
+
+With `archive_failover` every node renews one row of `sandboxd_nodes (cell,
+node, lease_until)` every 5 seconds, with a single upsert on the database clock
+that covers the whole node: `lease_until = now() + 15 s`. A renewal that fails
+once does not lose the lease or trip the fence, as long as the next one
+answers within 2 seconds of its start. The table is created at start when it is missing, and a node
+with no row counts as expired. Adoption and the departed-owner sweep consult the
+lease, never mesh membership, so a node the mesh lost but the database still
+hears keeps its claims, and a node the mesh still lists but the database no
+longer hears loses them. The cost is one statement per node every 5 seconds; no
+claim path or data plane reads it.
+
+### Running claims across node loss
+
+A pool entry with [`replicate_seconds`](deploy.md#configuration) (a `none`-lane
+pool on a node with `archive_failover`) snapshots its running claims to the
+checkpoint store and keeps each claim's registry row on the latest snapshot:
+
+- **Round.** Every interval, each running claim of the pool is checkpointed:
+  cocoon pauses the guest, captures memory and the writable disk, and resumes
+  it, so the capture is consistent for any disk format and needs no guest
+  cooperation. The record is published as a replica: hidden like an archive's
+  wake image, so it is not listed, branched or deleted through the API. Then
+  the claim's row is put with this node as owner and the replica as checkpoint,
+  and the previous replica is deleted. A round that fails logs a warning and
+  retries at the next interval; the old replica and row stay as they were, and
+  the claim keeps running. The round journals the checkpoint it is about to
+  register before it writes the row, and deletes it only when the write is
+  refused. A write whose outcome is unknown leaves the checkpoint in place, and
+  the next round, a release, an archive, a wake, the hourly sweep and a restart
+  settle it by reading the row: a row on that checkpoint promotes it, another
+  owner's row drops the claim, and an absent row means the adopter finished
+  when the checkpoint is gone and a write that never landed when it is still
+  there. A refused write reads the row: one this node still owns only had a
+  stale epoch and is refreshed, and an absent or foreign row drops the claim and
+  its VM. A claim gets its first replica one interval after it is claimed (or
+  after a restart). A hibernated, archived or failed claim,
+  one whose tenant was removed, and one with volumes (capture refuses them;
+  logged once per claim) is skipped; a replicated claim that gains volumes
+  drops its row and replica. The claim's policy pool, not its own template key,
+  picks the interval, so a claim cloned from a template promoted out of a
+  replicating pool follows that pool. Rounds share the maintenance budget with
+  refill and never take the share refill keeps. A node whose lease is overdue
+  starts none, and a round whose registry is down fails before it captures.
+- **Restore.** A lost node's replica is adopted like an archive: the first
+  `Lookup` that reaches another node after the lease expires takes the row,
+  records the claim as archived on the replica with the adopter pool's
+  retention window, and the next call wakes it
+  through the archive wake, which restores the guest with its memory and
+  processes. The claim resumes from its last committed replica: everything
+  after it, and the connections open at the time, are lost: up to the longer of
+  the interval and one replication pass, plus the 5-second tick, plus one more
+  pass, since a claim can run first in one pass and last in the next. A pass
+  covers all the node's due claims of the replicating pools with bounded
+  concurrency, each round a capture, upload and registry write, and a new pass
+  cannot start before the previous one ends, so a pass grows with claim count
+  and guest memory; for example, an interval of 30 s with a 90 s pass can lose
+  about 185 s. The first round of a claim after a wake or adoption uploads the
+  whole claim, so that pass is the long pass in this bound.
+  While rounds fail it is the time since the last one that committed.
+- **Lifecycle.** A release consumes the row, then deletes the replica and the
+  tombstone. A hibernate leaves the row on the last replica. An archive puts its
+  own checkpoint over the row, with its retention deadline, and deletes the
+  replica. A lease expiry with `on_expire` release drops the row and the replica
+  first, and the next reap destroys the claim; with `on_expire` archive, the
+  archive puts its checkpoint over the row. Turning `replicate_seconds` off
+  takes a restart, since a reload that changes it is refused; the restarted node
+  drops the rows and replicas of the pool's claims on its first pass. A claim
+  that holds a replica when the node restarts with replication off is still
+  treated as replicated by the fence until the next restart, so during a
+  registry outage it answers 503 like a replicated claim; that costs
+  availability only, never a second copy or data. A restart keeps the node's own
+  live row for a running claim and takes the checkpoint a crashed round left on
+  it; a claim whose row another node holds, or whose row a finished adopter
+  consumed, is dropped with its VM. A replica row has no retention deadline: the
+  hourly sweep never purges it, because no round refreshes it while the claim is
+  hibernated, and retention starts when the claim is archived or adopted. The
+  rows of a node that never returns therefore stay until a client adopts them, a
+  bounded residue of one row and up to two checkpoints per claim: the row's, and
+  a committed pending replica or a previous replica the node died before
+  deleting. Their metas stay live, so offline reclamation keeps them.
+  They are archive checkpoints (`"archive": true` in their meta) that no
+  registry row names, which an operator can delete. Apart from that and the
+  lease rule the sweep is unchanged.
+- **Self-fencing.** A node whose renewal is overdue by 12 seconds (the lease
+  length minus a 3 second margin, counted from the start of the last renewal
+  that answered) stops serving every replicated claim it holds: relay, exec,
+  ports and preview answer `503 lease lost; retry`, and `/owner` answers 404 so
+  a `Lookup` moves on to the other nodes. A claim is replicated when its policy
+  pool has `replicate_seconds`, from the moment it is claimed, adopted or
+  loaded, whether or not a round has run, so the fence covers it before its
+  first replica; the setting is restart-only so that decision cannot go stale.
+  The guest has no NIC on the `none` lane, so it is unreachable except through
+  the node, and the node destroys nothing. Claims of pools that do not
+  replicate stay served. A node starts fenced and lifts the fence after its
+  first renewal that is followed by a confirmation. The confirmation runs beside the renew loop, which keeps
+  renewing: for each replicated claim the node takes the row back for itself in
+  one compare-and-set, which the row lock serializes against adopters, and
+  retries once on a stale epoch. A claim whose row another node took, or took
+  and finished, is forgotten at once and its VM removed in the background; a
+  claim whose row is still this node's but keeps refusing the write leaves the
+  node fenced and is retried at the next renewal. The lift replaces the fenced
+  state this renewal saw, only if it is still current, and trips again at once
+  if more than 12 seconds passed since the start of that renewal; a slower
+  confirmation therefore leaves the node fenced for the next renewal to repeat. The margin makes the fence close 3 seconds before
+  another node may adopt, so no moment has two serving copies, partitions
+  included. This holds while the node's clock and the database's run at the same
+  rate to within that margin over 12 seconds, and ignores skew between them,
+  because both sides count from a renewal's own start. The guest of a claim the
+  fence closed keeps running without a NIC until the node returns and removes
+  it, and its state is discarded. When the fence closes, every open
+  stream of a replicated claim on the node is closed too, one opened before the
+  claim's first replica included: the agent relay
+  (including parked keep-alive relays, whose later RPCs never pass the
+  resolution gate), the exec call, port relays and preview requests. A client
+  retries and meets the 503 until the lease is back or the claim moved.
+  Streams of claims that are not replicated stay open.
+- **Availability.** The design chooses consistency over availability for
+  replicated claims. A registry outage longer than the fence threshold (12
+  seconds) stops service of replicated claims on every node until PostgreSQL
+  returns, because no node can prove it still owns them. Claims of pools that
+  do not replicate are unaffected. An archived claim of a replicating pool is
+  gated like a running one while the node is fenced, so its wake waits too.
+
+A replica costs, per claim per interval, one capture pause, an upload of the
+changed chunks plus a manifest and a meta, one registry read, one write and one
+delete of the previous replica; the node's own cost is one scan of its claims
+every 5 seconds. The delete is soft: the chunks only the previous replica names
+stay in the store until the operator's
+[offline reclamation](deploy.md#reclaiming-s3-storage) removes them. With replication this
+is the fastest-growing part of the store: roughly the per-round churn times the
+rounds since the last reclamation, per replicated claim, on top of the live replica.
+The first round after a wake or adoption uploads the whole claim again, because
+the wake deletes the record it restored from; later rounds dedup. Resolving a
+claim for a stream of a pool that does not replicate reads one plain field and
+no atomic; a replicated claim adds one atomic load of the fence state and its
+stream one watcher goroutine. Adding a claim to a failover node gains one map
+lookup. Nothing runs per frame.
 
 ## Templates on a cluster
 

@@ -32,8 +32,8 @@ func (c *Config) ReloadDiff(next *Config) (changed, ignored []string, err error)
 		name, _, _ := strings.Cut(cur.Type().Field(i).Tag.Get("json"), ",")
 		switch {
 		case name == "pools":
-			ch, ig := diffPools(c.Pools, next.Pools)
-			changed, ignored = append(changed, ch...), append(ignored, ig...)
+			ch, ig, rs := diffPools(c.Pools, next.Pools)
+			changed, ignored, restart = append(changed, ch...), append(ignored, ig...), append(restart, rs...)
 		case reflect.DeepEqual(cur.Field(i).Interface(), nxt.Field(i).Interface()):
 		case reloadableFields[name]:
 			changed = append(changed, name)
@@ -47,7 +47,7 @@ func (c *Config) ReloadDiff(next *Config) (changed, ignored []string, err error)
 	return changed, ignored, nil
 }
 
-func diffPools(cur, next []PoolSpec) (changed, ignored []string) {
+func diffPools(cur, next []PoolSpec) (changed, ignored, restart []string) {
 	a, b := poolsByKey(cur), poolsByKey(next)
 	all := poolsByKey(slices.Concat(cur, next))
 	for _, k := range slices.SortedFunc(maps.Keys(all), func(x, y types.PoolKey) int { return strings.Compare(poolLabel(x), poolLabel(y)) }) {
@@ -71,8 +71,11 @@ func diffPools(cur, next []PoolSpec) (changed, ignored []string) {
 		if inA != inB || targetsOf(x) != targetsOf(y) {
 			ignored = append(ignored, label+" targets (PUT /v1/pools owns them)")
 		}
+		if x.ReplicateSeconds != y.ReplicateSeconds {
+			restart = append(restart, label+".replicate_seconds")
+		}
 	}
-	return changed, ignored
+	return changed, ignored, restart
 }
 
 func targetsOf(s PoolSpec) poolTargets {

@@ -131,7 +131,7 @@ func (m *Manager) archive(ctx context.Context, sb *types.Sandbox) error {
 			m.deleteOrphanArchiveCk(ctx, ck.ID)
 			return fmt.Errorf("archive %s: persist intent: %w", sb.ID, err)
 		}
-		if epoch, err = m.putArchive(ctx, sb, ck.ID); err != nil {
+		if epoch, err = m.writeArchiveRow(ctx, sb, ck.ID); err != nil {
 			sb.Transition.Unlock()
 			m.abandonRefusedPut(ctx, sb, ck.ID, err)
 			return fmt.Errorf("archive %s: registry: %w", sb.ID, err)
@@ -144,8 +144,8 @@ func (m *Manager) archive(ctx context.Context, sb *types.Sandbox) error {
 			return errWokeMeanwhile
 		}
 	}
-	snap, vmName, sock, prevDeadline, prevEpoch, prevPending := sb.HibernateSnap, sb.VMName, sb.VsockSocket, sb.Deadline, sb.ArchiveEpoch, sb.ArchivePending
-	sb.ArchiveCk, sb.ArchiveEpoch, sb.ArchivePending = ck.ID, epoch, ""
+	snap, vmName, sock, prevDeadline, prevPending, replica := sb.HibernateSnap, sb.VMName, sb.VsockSocket, sb.Deadline, sb.ArchivePending, sb.ReplicaCk
+	sb.ArchiveCk, sb.ArchiveEpoch, sb.ArchivePending, sb.ReplicaCk = ck.ID, epoch, "", ""
 	sb.HibernateSnap, sb.VsockSocket, sb.VMName = "", "", ""
 	sb.Deadline = m.retentionDeadline(sb.Key)
 	js := m.store.set(sb)
@@ -156,7 +156,7 @@ func (m *Manager) archive(ctx context.Context, sb *types.Sandbox) error {
 		var rb claimSnapshot
 		// a Release that landed meanwhile already deleted the claim; re-setting it would resurrect it
 		if m.claimed[sb.ID] == sb {
-			sb.ArchiveCk, sb.ArchiveEpoch, sb.ArchivePending = "", prevEpoch, prevPending
+			sb.ArchiveCk, sb.ArchiveEpoch, sb.ArchivePending, sb.ReplicaCk = "", 0, prevPending, replica
 			sb.HibernateSnap, sb.VsockSocket, sb.VMName = snap, sock, vmName
 			sb.Deadline = prevDeadline
 			rb = m.store.set(sb)
@@ -173,6 +173,9 @@ func (m *Manager) archive(ctx context.Context, sb *types.Sandbox) error {
 	// the store ck is authoritative from here
 	m.destroy(ctx, vmName)
 	m.dropSnap(ctx, snap)
+	if replica != "" {
+		m.deleteOrphanArchiveCk(ctx, replica)
+	}
 	m.counters.archives.Add(1)
 	m.recordUsage(ctx, usageEvent{Event: "archive", ID: sb.ID, Reference: ck.ID, Tenant: sb.Tenant})
 	return nil
@@ -255,8 +258,8 @@ func (m *Manager) commitWake(ctx context.Context, sb *types.Sandbox, vmName, soc
 		m.mu.Unlock()
 		return false, false
 	}
-	ck, deadline := sb.ArchiveCk, sb.Deadline
-	sb.VMName, sb.VsockSocket, sb.ArchiveCk = vmName, sock, ""
+	ck, deadline, epoch := sb.ArchiveCk, sb.Deadline, sb.ArchiveEpoch
+	sb.VMName, sb.VsockSocket, sb.ArchiveCk, sb.ArchiveEpoch = vmName, sock, "", 0
 	sb.Deadline = time.Now().Add(clampTTL(types.Seconds(sb.LeaseSeconds))) // a woken sandbox is a fresh lease
 	js := m.store.set(sb)
 	m.mu.Unlock()
@@ -264,7 +267,7 @@ func (m *Manager) commitWake(ctx context.Context, sb *types.Sandbox, vmName, soc
 		m.mu.Lock()
 		var rb claimSnapshot
 		if m.claimed[sb.ID] == sb {
-			sb.VMName, sb.VsockSocket, sb.ArchiveCk, sb.Deadline = "", "", ck, deadline
+			sb.VMName, sb.VsockSocket, sb.ArchiveCk, sb.ArchiveEpoch, sb.Deadline = "", "", ck, epoch, deadline
 			rb = m.store.set(sb)
 		}
 		m.mu.Unlock()

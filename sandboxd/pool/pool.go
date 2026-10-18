@@ -52,6 +52,10 @@ const (
 	vsockPollInterval = 100 * time.Millisecond
 	defaultTTL        = 5 * time.Minute
 	maxTTL            = 24 * time.Hour
+	// A renewal missed once fences only if the next, 2*every after the last success, takes over ttl-margin-2*every to answer.
+	leaseTTL    = 15 * time.Second
+	leaseRenew  = 5 * time.Second
+	leaseMargin = 3 * time.Second
 	// One failed boot is ordinary; only an unbroken run predicts the next failure
 	refillFailStreak  = 8
 	refillBackoffBase = 250 * time.Millisecond
@@ -101,6 +105,7 @@ var (
 	// Replaying a journal takes a writable mount, so readers stay out.
 	ErrVolumeNeedsRecovery = errors.New("volume needs recovery by a writable claim")
 	ErrArchived            = errors.New("sandbox is archived; an exec or file call wakes it first")
+	ErrLeaseLost           = errors.New("node lease lost; retry")
 	ErrPaused              = errors.New("sandbox is paused; an operator call does not wake it")
 	ErrFailed              = errors.New("sandbox failed: its VMM is down; release it, or wake it to cold-boot its disk")
 	ErrNoInstanceMetadata  = engine.ErrNoInstanceMetadata
@@ -338,9 +343,15 @@ type Manager struct {
 	// archives is the cluster archive registry, nil unless archive_failover is set.
 	archives     archives.Registry
 	nodeID       string
-	ownerAlive   atomic.Pointer[OwnerAlive]
 	orphanSweep  atomic.Bool
 	adoptFlights singleflight.Group
+	// fence gates replicated claims while the lease is overdue; replicaPools is fixed at start; replicas belongs to the pass holding replicating.
+	lease        leaseTiming
+	fence        atomic.Pointer[fenceState]
+	unfencing    atomic.Bool
+	replicaPools map[types.PoolKey]struct{}
+	replicating  atomic.Bool
+	replicas     map[string]replicaState
 
 	view atomic.Pointer[configView]
 	// cfg is the config the view was built from; reloadMu orders reloads, the only writers of cfg and view.
@@ -425,6 +436,7 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 		poolStore:       newPoolStore(cfg.DataDir),
 		poolShared:      b.CellPools,
 		archives:        b.Archives,
+		lease:           leaseTiming{ttl: leaseTTL, every: leaseRenew, margin: leaseMargin},
 		tenants:         b.Tenants,
 		ckpts:           b.Checkpoints,
 		ckptsShared:     b.SharedCheckpoints,
@@ -501,9 +513,18 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 	}
 	m.out = outbound.New(m.outboundOptions(ca))
 	m.configSeedHash = poolSeedHash(cfg.Pools)
+	start := &fenceState{ch: make(chan struct{}), fenced: m.archives != nil}
 	if m.archives != nil {
 		m.nodeID = cfg.Mesh.ID()
+		close(start.ch)
+		m.replicaPools = map[types.PoolKey]struct{}{}
+		for _, spec := range cfg.Pools {
+			if spec.ReplicateSeconds > 0 {
+				m.replicaPools[spec.PoolKey] = struct{}{}
+			}
+		}
 	}
+	m.fence.Store(start)
 	if err := m.adoptPools(ctx); err != nil {
 		return nil, err
 	}
@@ -540,6 +561,9 @@ func (m *Manager) Run(ctx context.Context) {
 	if m.poolShared != nil {
 		go m.followCellPools(ctx)
 	}
+	if m.archives != nil {
+		go m.keepLease(ctx)
+	}
 	m.livenessOnce(ctx)
 	m.checkDisk(ctx)
 	m.refillOnce(ctx)
@@ -560,6 +584,7 @@ func (m *Manager) Run(ctx context.Context) {
 			m.reapOnce(ctx)
 			m.idleOnce(ctx)
 			m.archiveOnce(ctx)
+			m.replicateOnce(ctx)
 			m.shrinkOnce(ctx)
 			go m.retryArchiveDeletes(ctx)
 		case <-liveness.C:

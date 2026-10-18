@@ -57,6 +57,7 @@ var poolErrHTTP = []struct {
 	{pool.ErrTenantStoreDown, http.StatusServiceUnavailable, "tenant store down; retry"},
 	{pool.ErrPoolStoreDown, http.StatusServiceUnavailable, "pool set store down; retry"},
 	{pool.ErrArchiveStoreDown, http.StatusServiceUnavailable, "archive registry down; retry"},
+	{pool.ErrLeaseLost, http.StatusServiceUnavailable, "lease lost; retry"},
 	{pool.ErrNoEgress, http.StatusConflict, ""},
 	{pool.ErrNoEgressHibernate, http.StatusConflict, ""},
 	{pool.ErrNoEgressFork, http.StatusConflict, ""},
@@ -121,7 +122,7 @@ type Manager interface {
 	AgentSocket(id, token string) (string, error)
 	AdoptArchived(ctx context.Context, id, token string) (bool, error)
 	DialPort(ctx context.Context, id string, cred pool.Cred, port uint16) (net.Conn, error)
-	WakeAgentSocket(ctx context.Context, id, token string) (string, func(), error)
+	WakeAgentSocket(ctx context.Context, id, token string) (string, <-chan struct{}, func(), error)
 	SetPools(ctx context.Context, pools []config.PoolSpec) error
 	TenantByToken(ctx context.Context, token string) (*tenants.TenantRecord, error)
 	Tenants(ctx context.Context, after string, limit int) (pool.TenantPage, error)
@@ -700,7 +701,12 @@ func (s *Server) handleOwner(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := r.PathValue("id")
-	if _, err := s.mgr.AgentSocket(id, token); err != nil {
+	_, err := s.mgr.AgentSocket(id, token)
+	if errors.Is(err, pool.ErrLeaseLost) {
+		writeErr(w, http.StatusNotFound, "not owned here")
+		return
+	}
+	if err != nil {
 		adopted, adoptErr := s.mgr.AdoptArchived(r.Context(), id, token)
 		switch {
 		case adoptErr != nil:

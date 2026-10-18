@@ -576,6 +576,10 @@ type Sandbox struct {
 	// ArchiveEpoch is the archive registry epoch this node last held for the claim; zero means no row.
 	ArchiveEpoch   int64  `json:"archive_epoch,omitzero"`
 	ArchivePending string `json:"archive_pending,omitempty"`
+	// ReplicaCk names the checkpoint the claim's registry row points at while the claim runs; empty means unreplicated.
+	ReplicaCk string `json:"replica_ck,omitempty"`
+	// ReplicaPending is the checkpoint a replication round is about to register; the row may already name it.
+	ReplicaPending string `json:"replica_pending,omitempty"`
 
 	// FromCheckpoint names the checkpoint this sandbox branched from; empty otherwise.
 	FromCheckpoint string `json:"from_checkpoint,omitempty"`
@@ -597,6 +601,8 @@ type Sandbox struct {
 
 	// lastActivity is unix-nanos of the last data-plane connection, stamped lock-free.
 	lastActivity atomic.Int64
+	// replicated marks a claim of a replicating pool; it is set before the claim is published and read without a lock.
+	replicated bool
 	// open counts the data-plane connections held right now.
 	open atomic.Int32
 	// live is the env as of the last SetEnv, read by the egress proxy without the manager mutex.
@@ -614,6 +620,19 @@ func (s *Sandbox) TouchAt(t time.Time) { s.lastActivity.Store(t.UnixNano()) }
 
 // LastSeen returns the last data-plane activity time.
 func (s *Sandbox) LastSeen() time.Time { return time.Unix(0, s.lastActivity.Load()) }
+
+// SetReplicated marks the claim as one of a replicating pool; it writes only a change, so a re-add of the same claim never races a reader.
+func (s *Sandbox) SetReplicated(v bool) {
+	if s.replicated != v {
+		s.replicated = v
+	}
+}
+
+// Replicated reports whether the claim's pool replicates it.
+func (s *Sandbox) Replicated() bool { return s.replicated }
+
+// HasReplica reports whether the claim's registry row may name a replica.
+func (s *Sandbox) HasReplica() bool { return s.ReplicaCk != "" || s.ReplicaPending != "" }
 
 // Hold registers an open data-plane connection; the idle sweep leaves a held sandbox alone.
 func (s *Sandbox) Hold() { s.open.Add(1) }
@@ -674,6 +693,7 @@ type Checkpoint struct {
 	ID        string    `json:"id"`
 	Name      string    `json:"name,omitempty"`
 	SandboxID string    `json:"sandbox_id"`
+	Node      string    `json:"node,omitempty"`
 	Key       PoolKey   `json:"key"`
 	Tenant    string    `json:"tenant,omitempty"`
 	CreatedAt time.Time `json:"created_at"`

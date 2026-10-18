@@ -150,7 +150,7 @@ func TestRemovedTenantsClaimIsNeitherArchivedNorWokenNorForked(t *testing.T) {
 	if marked || ck != "" {
 		t.Errorf("the idle sweep archived a removed tenant's claim: marked %t archive %q", marked, ck)
 	}
-	if _, _, err = m.WakeAgentSocket(t.Context(), archived.ID, archived.Token); !errors.Is(err, ErrTenantRemoved) {
+	if _, _, _, err = m.WakeAgentSocket(t.Context(), archived.ID, archived.Token); !errors.Is(err, ErrTenantRemoved) {
 		t.Errorf("wake from the archive: %v, want ErrTenantRemoved", err)
 	}
 	if _, err = m.Fork(t.Context(), running.ID, Cred{Token: running.Token}, 1, time.Hour, "", ""); !errors.Is(err, ErrTenantRemoved) {

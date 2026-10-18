@@ -74,7 +74,7 @@ func TestActivityStampsBlockIdleSweep(t *testing.T) {
 		sb := mustClaim(t, m, testKey)
 		backdate(m, sb, 2*time.Second)
 
-		_, done, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token)
+		_, _, done, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token)
 		if err != nil {
 			t.Fatalf("WakeAgentSocket: %v", err)
 		}
@@ -91,7 +91,7 @@ func TestHeldConnectionBlocksIdleSweep(t *testing.T) {
 		eng := newFakeEngine()
 		m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1, IdleHibernateSeconds: 1})
 		sb := mustClaim(t, m, testKey)
-		_, done, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token)
+		_, _, done, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token)
 		if err != nil {
 			t.Fatalf("WakeAgentSocket: %v", err)
 		}

@@ -1865,6 +1865,24 @@ func TestOwnerEndpoint(t *testing.T) {
 	}
 }
 
+func TestOwnerEndpointAnswers404ForAClaimItsFencedNodeCannotServe(t *testing.T) {
+	adopted := false
+	mgr := &fakeManager{
+		socket: func(string, string) (string, error) { return "", pool.ErrLeaseLost },
+		adopt: func(string, string) (bool, error) {
+			adopted = true
+			return true, nil
+		},
+	}
+	ts := newMeshTestServer(t, "", mgr, nil, nil)
+
+	resp := doReq(t, http.MethodGet, ts.URL+"/v1/sandboxes/sb_1/owner", "good", "")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound || adopted {
+		t.Errorf("fenced owner: status %d adopt tried %v, want 404 without an adoption", resp.StatusCode, adopted)
+	}
+}
+
 func TestOwnerEndpointAdoptsAnArchivedClaimItDoesNotHold(t *testing.T) {
 	var adoptErr error
 	mgr := &fakeManager{
@@ -2484,6 +2502,7 @@ type fakeManager struct {
 	socket               func(id, token string) (string, error)
 	adopt                func(id, token string) (bool, error)
 	dialPort             func(id, token string, port uint16) (net.Conn, error)
+	fenced               <-chan struct{}
 	hibernate            sandboxVerbFunc
 	wake                 sandboxVerbFunc
 	renew                func(id, token string, ttl time.Duration) (time.Time, error)
@@ -2597,9 +2616,9 @@ func (f *fakeManager) AdoptArchived(_ context.Context, id, token string) (bool, 
 	return f.adopt(id, token)
 }
 
-func (f *fakeManager) WakeAgentSocket(_ context.Context, id, token string) (string, func(), error) {
+func (f *fakeManager) WakeAgentSocket(_ context.Context, id, token string) (string, <-chan struct{}, func(), error) {
 	sock, err := f.AgentSocket(id, token)
-	return sock, func() {}, err
+	return sock, f.fenced, func() {}, err
 }
 
 func (f *fakeManager) Renew(_ context.Context, id string, cred pool.Cred, ttl time.Duration, onExpire types.ExpireAction) (time.Time, error) {

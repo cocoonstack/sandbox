@@ -622,6 +622,7 @@ func TestSetPoolsRejectsConfigOwnedFields(t *testing.T) {
 		{"warmup", config.PoolSpec{PoolKey: testKey, Warm: 1, Warmup: []string{"true"}}},
 		{"capture_trim", config.PoolSpec{PoolKey: testKey, Warm: 1, CaptureTrim: true}},
 		{"storage", config.PoolSpec{PoolKey: testKey, Warm: 1, Storage: "40G"}},
+		{"replicate_seconds", config.PoolSpec{PoolKey: testKey, Warm: 1, ReplicateSeconds: 60}},
 	} {
 		err := m.SetPools(t.Context(), []config.PoolSpec{tt.spec})
 		if !errors.Is(err, ErrBadKey) || !strings.Contains(err.Error(), tt.field+" is set in the config file") {
@@ -1246,14 +1247,14 @@ type fakeEngine struct {
 	vsockLateN                        int
 	sockRoot                          string
 
-	cloneErr, runColdErr, probeErr, hibernateErr, restoreErr, snapListErr, startErr error
-	removeErrFor                                                                    string
-	cloneFailNth                                                                    int
-	hibernateErrCompletes                                                           bool
-	tap                                                                             string
-	listCount                                                                       int
-	inspects                                                                        int
-	vmEvents                                                                        chan fakeVMEvent
+	cloneErr, runColdErr, probeErr, hibernateErr, restoreErr, snapListErr, snapSaveErr, startErr error
+	removeErrFor                                                                                 string
+	cloneFailNth                                                                                 int
+	hibernateErrCompletes                                                                        bool
+	tap                                                                                          string
+	listCount                                                                                    int
+	inspects                                                                                     int
+	vmEvents                                                                                     chan fakeVMEvent
 
 	attachRendezvous *sync.WaitGroup
 
@@ -1373,6 +1374,9 @@ func (f *fakeEngine) ReconcileStaleCreate(ctx context.Context, name string) (eng
 func (f *fakeEngine) SnapshotSave(_ context.Context, _, snapName string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.snapSaveErr != nil {
+		return f.snapSaveErr
+	}
 	f.snapSaves = append(f.snapSaves, snapName)
 	return nil
 }

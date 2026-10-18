@@ -53,6 +53,9 @@ func (m *Manager) desiredPools(specs []config.PoolSpec) (map[types.PoolKey]confi
 		if spec.Storage != "" {
 			return nil, fmt.Errorf("%w: pool %q: storage is set in the config file, not via the API", ErrBadKey, spec.Template)
 		}
+		if spec.ReplicateSeconds != 0 {
+			return nil, fmt.Errorf("%w: pool %q: replicate_seconds is set in the config file, not via the API", ErrBadKey, spec.Template)
+		}
 		if spec.EgressUpstreamEnv != "" {
 			return nil, fmt.Errorf("%w: pool %q: egress_upstream_env is set in the config file, not via the API", ErrBadKey, spec.Template)
 		}

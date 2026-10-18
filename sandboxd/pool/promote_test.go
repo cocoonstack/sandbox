@@ -114,7 +114,7 @@ func TestPromoteHibernatedUsesWakeImage(t *testing.T) {
 	if slices.Contains(eng.snapRemoves, eng.hibernates[0]) {
 		t.Error("hibernate snapshot dropped by promote — the parent could never wake")
 	}
-	if _, _, err := m.WakeAgentSocket(t.Context(), parent.ID, parent.Token); err != nil {
+	if _, _, _, err := m.WakeAgentSocket(t.Context(), parent.ID, parent.Token); err != nil {
 		t.Fatalf("wake after promote: %v", err)
 	}
 }

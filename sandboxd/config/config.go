@@ -51,6 +51,8 @@ type PoolSpec struct {
 	CaptureTrim bool `json:"capture_trim,omitzero"`
 	// Storage sizes the golden's copy-on-write disk in cocoon's --storage spelling; every clone inherits it, and empty keeps cocoon's default.
 	Storage string `json:"storage,omitempty"`
+	// ReplicateSeconds snapshots each running claim of the pool to the checkpoint store at this interval; zero turns replication off.
+	ReplicateSeconds int `json:"replicate_seconds,omitzero"`
 
 	IdleHibernateSeconds      int `json:"idle_hibernate_seconds,omitzero"`
 	ArchiveAfterSeconds       int `json:"archive_after_seconds,omitzero"`
@@ -240,7 +242,7 @@ type Config struct {
 	IdleHibernateSeconds      int `json:"idle_hibernate_seconds,omitzero"`
 	ArchiveAfterSeconds       int `json:"archive_after_seconds,omitzero"`
 	ArchiveDeleteAfterSeconds int `json:"archive_delete_after_seconds,omitzero"`
-	// ArchiveFailover lets another node adopt this node's archived claims once it leaves the mesh.
+	// ArchiveFailover lets another node adopt this node's archived and replicated claims once its node lease expires.
 	ArchiveFailover bool `json:"archive_failover,omitzero"`
 
 	PreviewListen    string `json:"preview_listen,omitempty"`
@@ -364,7 +366,7 @@ func (c *Config) validate() error {
 	if c.CheckpointPeerHeal && c.APIToken == "" {
 		return fmt.Errorf("checkpoint_peer_heal requires api_token: without it resolveScope leaves the raw checkpoint blob GET reachable with no credential")
 	}
-	for _, check := range []func() error{c.validateNodeEgress, c.validateDiskReserve, c.validateMetaStore, c.validateVolumes, c.validateMesh} {
+	for _, check := range []func() error{c.validateNodeEgress, c.validateDiskReserve, c.validateMetaStore, c.validateVolumes, c.validateMesh, c.validateReplication} {
 		if err := check(); err != nil {
 			return err
 		}
@@ -374,6 +376,20 @@ func (c *Config) validate() error {
 		return err
 	}
 	return c.validateEgress(secrets)
+}
+
+func (c *Config) validateReplication() error {
+	for _, p := range c.Pools {
+		switch {
+		case p.ReplicateSeconds < 0:
+			return fmt.Errorf("pool %q: replicate_seconds must not be negative", p.Template)
+		case p.ReplicateSeconds > 0 && !c.ArchiveFailover:
+			return fmt.Errorf("pool %q: replicate_seconds requires archive_failover", p.Template)
+		case p.ReplicateSeconds > 0 && p.Net != types.NetNone:
+			return fmt.Errorf("pool %q: replicate_seconds needs net %q: only the none lane captures", p.Template, types.NetNone)
+		}
+	}
+	return nil
 }
 
 func (c *Config) validateVolumes() error {

@@ -48,6 +48,12 @@ func TestReloadDiffSortsReloadableOwnedAndRestartFields(t *testing.T) {
 		t.Errorf("ignored %v, want %v", ignored, wantIgnored)
 	}
 
+	replicating := *cur
+	replicating.Pools = []PoolSpec{{PoolKey: key, Warm: 2, ReplicateSeconds: 60}}
+	if _, _, err := cur.ReloadDiff(&replicating); err == nil || err.Error() != "pools[desktop:v12 none small].replicate_seconds change only at a restart" {
+		t.Errorf("ReloadDiff over replicate_seconds: %v, want a restart refusal", err)
+	}
+
 	restart := *cur
 	restart.Listen, restart.Bridges, restart.EgressUsageBytes = "127.0.0.1:8888", []string{"br1"}, true
 	if _, _, err := cur.ReloadDiff(&restart); err == nil || err.Error() != "listen, bridges change only at a restart" {

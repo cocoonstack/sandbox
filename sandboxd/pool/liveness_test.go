@@ -33,7 +33,7 @@ func TestLivenessRestartsExitedVMM(t *testing.T) {
 	if !slices.Equal(eng.starts, []string{sb.VMName}) {
 		t.Errorf("starts %v, want %s cold-booted once", eng.starts, sb.VMName)
 	}
-	if _, _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
+	if _, _, _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
 		t.Errorf("data plane after restart: %v", err)
 	}
 	if got, want := usageEventsOf(t, m, sb.ID), "claim,vmm_exit,vmm_restart"; got != want {
@@ -63,7 +63,7 @@ func TestLivenessNonePolicyFailsAndWakeRestarts(t *testing.T) {
 	if _, g := m.Info(); g.Failed != 1 {
 		t.Errorf("failed gauge %d, want 1", g.Failed)
 	}
-	if _, _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token); !errors.Is(err, ErrFailed) {
+	if _, _, _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token); !errors.Is(err, ErrFailed) {
 		t.Errorf("relay on a failed claim: %v, want ErrFailed", err)
 	}
 	if _, err := m.DialPort(t.Context(), sb.ID, Cred{Operator: true}, 80); !errors.Is(err, ErrFailed) {

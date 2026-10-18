@@ -125,7 +125,7 @@ func (s *Server) handleExec(w http.ResponseWriter, r *http.Request) {
 func (s *Server) killExec(ctx context.Context, id, token string, pid uint32) error {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), execKillWait)
 	defer cancel()
-	sock, done, err := s.mgr.WakeAgentSocket(ctx, id, token)
+	sock, _, done, err := s.mgr.WakeAgentSocket(ctx, id, token)
 	if err != nil {
 		return err
 	}

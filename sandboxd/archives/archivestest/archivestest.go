@@ -12,7 +12,12 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/archives"
 )
 
-const racers = 8
+const (
+	racers = 8
+
+	shortLease = 300 * time.Millisecond
+	leaseWait  = 10 * time.Second
+)
 
 // Opener returns an empty registry; each call is a fresh table.
 type Opener func(t *testing.T) archives.Registry
@@ -23,6 +28,7 @@ var _ archives.Registry = (*Mem)(nil)
 type Mem struct {
 	mu      sync.Mutex
 	rows    map[string]archives.Record
+	leases  map[string]time.Time
 	seq     int64
 	down    bool
 	deletes int
@@ -30,7 +36,7 @@ type Mem struct {
 
 // NewMem returns an empty in-memory registry.
 func NewMem() *Mem {
-	return &Mem{rows: map[string]archives.Record{}}
+	return &Mem{rows: map[string]archives.Record{}, leases: map[string]time.Time{}}
 }
 
 func (m *Mem) Put(_ context.Context, rec archives.Record) (int64, error) {
@@ -48,12 +54,40 @@ func (m *Mem) Put(_ context.Context, rec archives.Record) (int64, error) {
 	return rec.Epoch, nil
 }
 
+func (m *Mem) Replace(ctx context.Context, rec archives.Record, expect int64) (int64, error) {
+	if expect == 0 {
+		return m.Put(ctx, rec)
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.down {
+		return 0, archives.ErrUnavailable
+	}
+	old, ok := m.rows[rec.ID]
+	if !ok || old.Owner != rec.Owner || old.Epoch != expect || old.Consumed {
+		return 0, archives.ErrLost
+	}
+	m.seq++
+	rec.Epoch, rec.Consumed = m.seq, false
+	m.rows[rec.ID] = rec
+	return rec.Epoch, nil
+}
+
 func (m *Mem) Take(_ context.Context, id string, expect int64, owner string) (int64, error) {
-	return m.advance(id, expect, func(rec *archives.Record) { rec.Owner = owner })
+	return m.advance(id, expect, func(rec *archives.Record) bool {
+		if rec.Owner != owner && m.leased(rec.Owner) {
+			return false
+		}
+		rec.Owner = owner
+		return true
+	})
 }
 
 func (m *Mem) Consume(_ context.Context, id string, expect int64) (int64, error) {
-	return m.advance(id, expect, func(rec *archives.Record) { rec.Consumed = true })
+	return m.advance(id, expect, func(rec *archives.Record) bool {
+		rec.Consumed = true
+		return true
+	})
 }
 
 func (m *Mem) Delete(_ context.Context, id string, epoch int64) error {
@@ -88,7 +122,7 @@ func (m *Mem) Sweepable(_ context.Context, now time.Time, owner string) ([]archi
 	}
 	var out []archives.Record
 	for _, rec := range m.rows {
-		if rec.Consumed || rec.Owner == owner || !rec.Deadline.IsZero() && rec.Deadline.Before(now) {
+		if rec.Consumed || rec.Owner == owner || !rec.Deadline.IsZero() && rec.Deadline.Before(now) && !m.leased(rec.Owner) {
 			rec.Claim = nil
 			out = append(out, rec)
 		}
@@ -112,6 +146,23 @@ func (m *Mem) Rows(_ context.Context, ids []string) (map[string]archives.Record,
 	return rows, nil
 }
 
+func (m *Mem) Renew(_ context.Context, node string, ttl time.Duration) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.down {
+		return archives.ErrUnavailable
+	}
+	m.leases[node] = time.Now().Add(ttl)
+	return nil
+}
+
+// Expire ends node's lease now.
+func (m *Mem) Expire(node string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.leases, node)
+}
+
 // SetDown makes every call answer ErrUnavailable while down is set.
 func (m *Mem) SetDown(down bool) {
 	m.mu.Lock()
@@ -126,7 +177,11 @@ func (m *Mem) Deletes() int {
 	return m.deletes
 }
 
-func (m *Mem) advance(id string, expect int64, change func(*archives.Record)) (int64, error) {
+func (m *Mem) leased(node string) bool {
+	return time.Now().Before(m.leases[node])
+}
+
+func (m *Mem) advance(id string, expect int64, change func(*archives.Record) bool) (int64, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.down {
@@ -136,7 +191,9 @@ func (m *Mem) advance(id string, expect int64, change func(*archives.Record)) (i
 	if !ok || rec.Epoch != expect || rec.Consumed {
 		return 0, archives.ErrLost
 	}
-	change(&rec)
+	if !change(&rec) {
+		return 0, archives.ErrLost
+	}
 	m.seq++
 	rec.Epoch = m.seq
 	m.rows[id] = rec
@@ -154,6 +211,10 @@ func Run(t *testing.T, open Opener) {
 	t.Run("epochs are never reused", func(t *testing.T) { testEpochsNeverRepeat(t, open(t)) })
 	t.Run("sweepable lists expired, consumed and own rows", func(t *testing.T) { testSweepable(t, open(t)) })
 	t.Run("rows lists the named ids", func(t *testing.T) { testRows(t, open(t)) })
+	t.Run("replace is a compare-and-set", func(t *testing.T) { testReplace(t, open(t)) })
+	t.Run("take waits out a live lease", func(t *testing.T) { testTakeLease(t, open(t)) })
+	t.Run("sweepable spares a live owner's expired row", func(t *testing.T) { testSweepableLease(t, open(t)) })
+	t.Run("renew moves a lease forward", func(t *testing.T) { testRenewExtends(t, open(t)) })
 }
 
 func testPutGet(t *testing.T, r archives.Registry) {
@@ -350,6 +411,123 @@ func testRows(t *testing.T, r archives.Registry) {
 	}
 	if got, err = r.Rows(ctx, nil); err != nil || len(got) != 0 {
 		t.Errorf("rows of no ids: %+v %v, want none", got, err)
+	}
+}
+
+func testReplace(t *testing.T, r archives.Registry) {
+	ctx := t.Context()
+	absent := record("sb_none", "a", time.Time{})
+	if _, err := r.Replace(ctx, absent, 7); !errors.Is(err, archives.ErrLost) {
+		t.Errorf("replace of an absent row at a held epoch: %v, want ErrLost", err)
+	}
+	if _, ok, _ := r.Get(ctx, "sb_none"); ok {
+		t.Error("a refused replace inserted a row")
+	}
+	first, err := r.Replace(ctx, record("sb_1", "a", time.Time{}), 0)
+	if err != nil || first <= 0 {
+		t.Fatalf("replace at epoch 0: %d %v, want an insert", first, err)
+	}
+	next := record("sb_1", "a", time.Time{})
+	next.Checkpoint = "ck_next"
+	first, err = r.Replace(ctx, next, first)
+	if err != nil {
+		t.Fatalf("first replace: %v", err)
+	}
+	if _, err = r.Replace(ctx, next, first-1); !errors.Is(err, archives.ErrLost) {
+		t.Errorf("replace at a stale epoch: %v, want ErrLost", err)
+	}
+	if _, err = r.Replace(ctx, record("sb_1", "b", time.Time{}), first); !errors.Is(err, archives.ErrLost) {
+		t.Errorf("replace by another owner: %v, want ErrLost", err)
+	}
+	epoch, err := r.Replace(ctx, next, first)
+	if err != nil || epoch <= first {
+		t.Fatalf("replace at the held epoch: %d %v, want a new epoch above %d", epoch, err, first)
+	}
+	if got, _, _ := r.Get(ctx, "sb_1"); got.Checkpoint != "ck_next" || got.Epoch != epoch {
+		t.Errorf("row after the replace: %+v, want ck_next at %d", got, epoch)
+	}
+	if _, err = r.Replace(ctx, next, first); !errors.Is(err, archives.ErrLost) {
+		t.Errorf("replace at the superseded epoch: %v, want ErrLost", err)
+	}
+	spent, err := r.Consume(ctx, "sb_1", epoch)
+	if err != nil {
+		t.Fatalf("consume: %v", err)
+	}
+	if _, err = r.Replace(ctx, next, spent); !errors.Is(err, archives.ErrLost) {
+		t.Errorf("replace of a tombstone: %v, want ErrLost", err)
+	}
+}
+
+func testTakeLease(t *testing.T, r archives.Registry) {
+	ctx := t.Context()
+	first := mustPut(t, r, record("sb_1", "a", time.Time{}))
+	if err := r.Renew(ctx, "a", shortLease); err != nil {
+		t.Fatalf("renew: %v", err)
+	}
+	if _, err := r.Take(ctx, "sb_1", first, "b"); !errors.Is(err, archives.ErrLost) {
+		t.Fatalf("take while the owner's lease is live: %v, want ErrLost", err)
+	}
+	if got, _, _ := r.Get(ctx, "sb_1"); got.Owner != "a" || got.Epoch != first {
+		t.Fatalf("row after a refused take: %s@%d, want a@%d", got.Owner, got.Epoch, first)
+	}
+	own, err := r.Take(ctx, "sb_1", first, "a")
+	if err != nil || own <= first {
+		t.Fatalf("the owner's own take with a live lease: %d %v, want a new epoch", own, err)
+	}
+	eventually(t, "the owner's lease to expire", func() bool {
+		_, err = r.Take(ctx, "sb_1", own, "b")
+		return err == nil
+	})
+	if got, _, _ := r.Get(ctx, "sb_1"); got.Owner != "b" {
+		t.Errorf("row owner after the expired-lease take: %s, want b", got.Owner)
+	}
+	never := mustPut(t, r, record("sb_2", "c", time.Time{}))
+	if _, err = r.Take(ctx, "sb_2", never, "b"); err != nil {
+		t.Errorf("take from a node that never held a lease: %v, want its row adoptable", err)
+	}
+}
+
+func testSweepableLease(t *testing.T, r archives.Registry) {
+	ctx := t.Context()
+	past := time.Now().Add(-time.Minute)
+	mustPut(t, r, record("sb_live", "a", past))
+	mustPut(t, r, record("sb_dead", "z", past))
+	if err := r.Renew(ctx, "a", shortLease); err != nil {
+		t.Fatalf("renew: %v", err)
+	}
+	got, err := r.Sweepable(ctx, time.Now(), "me")
+	if err != nil || len(got) != 1 || got[0].ID != "sb_dead" {
+		t.Fatalf("sweepable while a's lease is live: %+v %v, want sb_dead only", got, err)
+	}
+	eventually(t, "a's lease to expire", func() bool {
+		got, err = r.Sweepable(ctx, time.Now(), "me")
+		return err == nil && len(got) == 2
+	})
+}
+
+func testRenewExtends(t *testing.T, r archives.Registry) {
+	ctx := t.Context()
+	first := mustPut(t, r, record("sb_1", "a", time.Time{}))
+	if err := r.Renew(ctx, "a", shortLease); err != nil {
+		t.Fatalf("renew: %v", err)
+	}
+	if err := r.Renew(ctx, "a", time.Hour); err != nil {
+		t.Fatalf("renew again: %v", err)
+	}
+	time.Sleep(2 * shortLease)
+	if _, err := r.Take(ctx, "sb_1", first, "b"); !errors.Is(err, archives.ErrLost) {
+		t.Errorf("take after the first ttl but inside the renewed one: %v, want ErrLost", err)
+	}
+}
+
+func eventually(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(leaseWait)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s", what)
+		}
+		time.Sleep(shortLease / 10)
 	}
 }
 

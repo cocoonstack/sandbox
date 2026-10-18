@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -131,6 +132,11 @@ func (p *PreviewServer) proxyLocal(w http.ResponseWriter, r *http.Request, claim
 		},
 		Transport: p.transport,
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
+			if errors.Is(err, pool.ErrLeaseLost) {
+				w.Header().Set("Retry-After", retryAfterSeconds)
+				http.Error(w, "lease lost; retry", http.StatusServiceUnavailable)
+				return
+			}
 			log.WithFunc("server.proxyLocal").Errorf(r.Context(), err, "proxy %s:%d", claims.ID, claims.Port)
 			http.Error(w, "preview target unreachable", http.StatusBadGateway)
 		},

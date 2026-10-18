@@ -9,11 +9,15 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"slices"
 	"strings"
 	"testing"
 	"testing/iotest"
 	"time"
+
+	"github.com/projecteru2/core/log"
+	"github.com/rs/zerolog"
 
 	"github.com/cocoonstack/sandbox/protocol/wire"
 	"github.com/cocoonstack/sandbox/sandboxd/pool"
@@ -135,6 +139,73 @@ func TestRelayClientDisconnectClosesGuest(t *testing.T) {
 	case <-guestClosed:
 	case <-time.After(3 * time.Second):
 		t.Fatal("guest side not closed after client disconnect")
+	}
+}
+
+func TestRelayEndsWhenItsClaimIsFenced(t *testing.T) {
+	relayWithFence := func(fenced <-chan struct{}) (net.Conn, *bufio.Reader) {
+		dialer := &fakeDialer{dial: func(context.Context, string) (net.Conn, error) {
+			relayEnd, guestEnd := net.Pipe()
+			go func() { _, _ = io.Copy(io.Discard, guestEnd) }()
+			return relayEnd, nil
+		}}
+		srv := New("", "node:7777", &fakeManager{fenced: fenced}, dialer, nil, nil, nil, nil)
+		ts := httptest.NewServer(srv.Handler())
+		t.Cleanup(func() {
+			srv.CloseRelays()
+			ts.Close()
+		})
+		return upgradeConn(t, ts)
+	}
+	fenced := make(chan struct{})
+	conn, r := relayWithFence(fenced)
+	plainConn, plainR := relayWithFence(nil)
+	close(fenced)
+
+	_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	if _, err := r.ReadByte(); !errors.Is(err, io.EOF) {
+		t.Errorf("fenced relay read: %v, want EOF", err)
+	}
+	_ = plainConn.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
+	if _, err := plainR.ReadByte(); !errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Errorf("unreplicated relay read: %v, want it still open", err)
+	}
+}
+
+func TestWakeGuestLogsAClientCancelBelowError(t *testing.T) {
+	logs := &bytes.Buffer{}
+	global := log.GetGlobalLogger()
+	saved := *global
+	*global = zerolog.New(logs).Level(zerolog.InfoLevel)
+	t.Cleanup(func() { *global = saved })
+	dialer := &fakeDialer{dial: func(ctx context.Context, _ string) (net.Conn, error) { return nil, ctx.Err() }}
+	srv := New("", "node:7777", &fakeManager{}, dialer, nil, nil, nil, nil)
+
+	canceled, cancel := context.WithCancel(t.Context())
+	cancel()
+	w := httptest.NewRecorder()
+	if _, _, ok := srv.wakeGuest(canceled, w, "sb_1", "tok"); ok || w.Code != http.StatusBadGateway {
+		t.Fatalf("canceled dial: ok %v status %d, want a refused 502", ok, w.Code)
+	}
+	if logs.Len() != 0 {
+		t.Errorf("a client cancel logged %q, want nothing at info level", logs.String())
+	}
+
+	dialer.dial = func(context.Context, string) (net.Conn, error) { return nil, errors.New("connection refused") }
+	if _, _, ok := srv.wakeGuest(t.Context(), httptest.NewRecorder(), "sb_1", "tok"); ok {
+		t.Fatal("a failing dial succeeded")
+	}
+	if !strings.Contains(logs.String(), `"level":"error"`) {
+		t.Errorf("a real dial failure logged %q, want an error record", logs.String())
+	}
+
+	logs.Reset()
+	dialer.dial = func(context.Context, string) (net.Conn, error) { return nil, context.Canceled }
+	if _, _, ok := srv.wakeGuest(t.Context(), httptest.NewRecorder(), "sb_1", "tok"); ok {
+		t.Fatal("a failing dial succeeded")
+	}
+	if !strings.Contains(logs.String(), `"level":"error"`) {
+		t.Errorf("a cancel that did not come from the client logged %q, want an error record", logs.String())
 	}
 }
 

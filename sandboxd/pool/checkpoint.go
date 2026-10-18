@@ -172,6 +172,9 @@ func (m *Manager) publishCheckpoint(ctx context.Context, sb *types.Sandbox, ckID
 		NoEgress:     sb.NoEgress,
 		Archive:      archive,
 	}
+	if archive {
+		ckpt.Node = m.nodeID
+	}
 	staging, err := m.ckpts.Stage(ckpt.ID)
 	if err != nil {
 		return types.Checkpoint{}, "", fmt.Errorf("stage checkpoint: %w", err)
@@ -319,6 +322,12 @@ func (m *Manager) pinnedArchiveCks() map[string]struct{} {
 	for _, sb := range m.claimed {
 		if sb.ArchiveCk != "" {
 			pinned[sb.ArchiveCk] = struct{}{}
+		}
+		if sb.ReplicaCk != "" {
+			pinned[sb.ReplicaCk] = struct{}{}
+		}
+		if sb.ReplicaPending != "" {
+			pinned[sb.ReplicaPending] = struct{}{}
 		}
 	}
 	return pinned

@@ -130,7 +130,6 @@ func main() {
 		broadcaster := &peer.Broadcaster{Peers: msh.PeerAddrs, Token: cfg.APIToken}
 		mgr.WithPeerDelete(broadcaster.Delete)
 		go gossipNodeState(ctx, msh, mgr)
-		mgr.WithArchiveOwners(msh.Alive)
 		logger.Infof(ctx, "mesh %s joined (%d seeds)", cfg.Mesh.ID(), len(cfg.Mesh.Join))
 	}
 

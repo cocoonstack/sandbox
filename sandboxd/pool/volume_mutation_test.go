@@ -256,7 +256,7 @@ func TestLiveVolumeDoesNotBlockLifecycle(t *testing.T) {
 					_, err = m.GetVolumes(sb.ID, sb.Tenant)
 				case "relay":
 					var unhold func()
-					_, unhold, err = m.WakeAgentSocket(t.Context(), sb.ID, sb.Token)
+					_, _, unhold, err = m.WakeAgentSocket(t.Context(), sb.ID, sb.Token)
 					if unhold != nil {
 						unhold()
 					}

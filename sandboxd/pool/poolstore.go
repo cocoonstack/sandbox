@@ -117,7 +117,7 @@ func (m *Manager) adoptPools(ctx context.Context) error {
 	return nil
 }
 
-// poolSeedHash digests a pool set's warm-target shape, order-independent, without the config-owned egress, warmup, capture_trim, storage and egress_upstream_env.
+// poolSeedHash digests a pool set's warm-target shape, order-independent, without the config-owned egress, warmup, capture_trim, storage, replicate_seconds and egress_upstream_env.
 func poolSeedHash(specs []config.PoolSpec) string {
 	shaped := slices.Clone(specs)
 	for i := range shaped {
@@ -125,6 +125,7 @@ func poolSeedHash(specs []config.PoolSpec) string {
 		shaped[i].Warmup = nil
 		shaped[i].CaptureTrim = false
 		shaped[i].Storage = ""
+		shaped[i].ReplicateSeconds = 0
 		shaped[i].EgressUpstreamEnv = ""
 	}
 	slices.SortFunc(shaped, func(a, b config.PoolSpec) int { return a.Compare(b.PoolKey) })
