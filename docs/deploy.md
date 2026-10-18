@@ -135,7 +135,7 @@ gets the intersection of the two.
 | `preview_secret` | — | cluster-shared HMAC secret signing preview tokens (all nodes share one) |
 | `preview_advertise` | = `preview_listen` | the browser-facing preview base URL, minted into every preview URL, so it must name a routable host (a wildcard `preview_listen` needs it set explicitly); nodes behind one TLS proxy may share it, while signed tokens route internally through each owner's `advertise_addr` |
 | `checkpoint_dir` | `<data_dir>/checkpoints` | where checkpoints and promoted templates live. Point it at a shared FUSE mount (JuiceFS over object storage, NFS) and every node sharing the mount can branch every checkpoint — records are generation-addressed with `meta.json` as the atomic commit pointer, so no cross-node locking is required of the filesystem. A re-publish retains its superseded export generation for at least ~1h and until a following hourly sweep so an in-flight clone that resolved the old metadata can finish; budget the current generation plus every generation retained across that grace-and-sweep window. An explicit delete can make a concurrent clone fail visibly. One contract on any shared root (mount or bucket): a template key has a single writer — promotes go to the sandbox's owner node, and operators must not race promotes of one name from different nodes (checkpoint ids are node-generated and never collide) |
-| `checkpoint_store` | dir | checkpoint AND promoted-template backend (both live in one store root, id-namespaced ck_/tp_): `{"kind": "s3", "s3": {"bucket": "…", "prefix": "ck/", "endpoint": "…", "region": "…", "force_path_style": true}}` stores checkpoints in object storage (any node claims any checkpoint, no shared mount needed). Credentials come from the standard AWS chain (env/IAM role), never this file. An export file is stored as 16 MiB chunks keyed by SHA-256 under `<prefix>chunks/<lineage>/`, with one `<prefix>manifests/<id>/<generation>.json` per published generation naming each file's size and present chunks, and `<prefix><id>/meta.json` uploaded last as the commit marker (the record prefix exists only while the record is live). Holes and all-zero chunks are never uploaded, and a fetch recreates the file at its full size and writes only the present chunks, so a mostly-empty disk costs its data, not its size, on the wire and on the fetching node. A lineage is the dedup scope: it defaults to the record id, and every checkpoint and archive of one claim shares the claim's sandbox id, so consecutive captures upload only the chunks that changed (the first capture after a wake uploads everything again, because the wake deletes the record it restored from); a publish into a shared lineage writes a zero-byte marker `<prefix>lineages/<lineage>/<id>` after its manifest and before `meta.json`, and reads only the records those markers list; a crash between manifest and marker only costs a missed dedup, Delete removes the record's marker right away, and the sweep removes any marker left by a crash once the record is gone. Re-publish retains the prior generation's manifest so an in-flight fetch that selected old metadata can finish. The hourly store sweep, which every node runs, removes generations superseded for at least an hour and then every chunk older than an hour that no remaining manifest names; Delete removes `meta.json`, the labels and the lineage markers and re-stamps the manifests, so a fetch that already selected the record still completes and the sweep reclaims the manifests, then their chunks, after the grace; a crash before the commit marker leaves unreferenced chunks and a manifest that the sweep reclaims. A publish or fetch is aborted after 30 minutes, which keeps every publish inside the one-hour window in which its reused chunks are safe from the sweep. Do not put an expiry lifecycle rule on the prefix: it would delete chunks a live record still names. Budget storage for the current generations, the retained ones and chunks awaiting the sweep. When caching a new generation, each node prunes other cached generations of that record unused for at least an hour. Absent = the dir backend at `checkpoint_dir` |
+| `checkpoint_store` | dir | checkpoint AND promoted-template backend (both live in one store root, id-namespaced ck_/tp_): `{"kind": "s3", "s3": {"bucket": "…", "prefix": "ck/", "endpoint": "…", "region": "…", "force_path_style": true}}` stores checkpoints in object storage (any node claims any checkpoint, no shared mount needed). Credentials come from the standard AWS chain (env/IAM role), never this file. An export file is stored as 16 MiB chunks keyed by SHA-256 under `<prefix>chunks/<lineage>/`, with one `<prefix>manifests/<id>/<generation>.json` per published generation naming each file's size and present chunks, and `<prefix><id>/meta.json` uploaded last as the commit marker (the record prefix exists only while the record is live). Holes and all-zero chunks are never uploaded, and a fetch recreates the file at its full size and writes only the present chunks, so a mostly-empty disk costs its data, not its size, on the wire and on the fetching node. A lineage is the dedup scope: it defaults to the record id, and every checkpoint and archive of one claim shares the claim's sandbox id, so consecutive captures upload only the chunks that changed (the first capture after a wake uploads everything again, because the wake deletes the record it restored from); a publish into a shared lineage writes a zero-byte marker `<prefix>lineages/<lineage>/<id>` after its manifest and before `meta.json`, and reads only the records those markers list; a crash between manifest and marker only costs a missed dedup, and Delete removes the record's marker right away. Re-publish retains the prior generation's manifest so an in-flight fetch that selected old metadata can finish. sandboxd never deletes a chunk or a manifest from the bucket: Delete removes `meta.json`, the labels and the lineage markers and re-stamps the manifests, so a fetch that already selected the record still completes, and reclaiming storage is the operator's job, see [Reclaiming S3 storage](#reclaiming-s3-storage). A publish or fetch is aborted after 30 minutes. Do not put an expiry lifecycle rule on the prefix: it would delete chunks a live record still names. Budget storage for every generation and chunk until your reclaim runs. When caching a new generation, each node prunes other cached generations of that record unused for at least an hour. Absent = the dir backend at `checkpoint_dir` |
 | `checkpoint_ttl_hours` | 0 (keep forever) | ages out checkpoints older than this; the sweep runs hourly and at startup. Explicit deletes never wait for it. Must be nonzero and match fleet-wide when `checkpoint_peer_heal` is on — it is the expiry eligibility point for a healed replica a delete broadcast missed, after which its next successful hourly sweep removes it; persistent sweep failure extends retention until one succeeds, so it is not a hard ceiling |
 | `checkpoint_peer_heal` | false | on a cluster, lets a node pull a checkpoint it lacks from a peer — found via a live probe, not gossip — rather than failing the branch; see [placement lifecycle](cluster.md#checkpoints-on-a-cluster). Three requirements, all enforced at config load: a nonempty `api_token` (the blob transfer between peers authenticates with it; without one the raw record stream would be open), `mesh.cluster_key` set (the pull presents the fleet `api_token` to an address learned from the peer probe, so the gossip layer carrying that address must itself be authenticated), and `checkpoint_ttl_hours` nonzero (a replica a delete broadcast missed becomes eligible for expiry after it, and its next successful hourly sweep removes it — so it is the finite eligibility point, not an exact ceiling). A shared checkpoint store (`checkpoint_store` kind `s3`) ignores this setting — every node already resolves every checkpoint directly, so there is nothing to heal |
 | `warm_max` (pool entry) | 0 (static) | turns on the demand-adaptive watermark for that pool: the warm target rises from `warm` toward `warm_max` while claims arrive faster than the measured provision lead covers, and decays back over ~a minute of silence. The pool follows the target down: warm VMs above it are destroyed once the count has stayed above it for a full decay period, so a burst does not leave the pool parked at its high-water mark |
@@ -311,6 +311,64 @@ without unmounting cleanly carries no marker, so the next `ro` claim is
 admitted and fails at mount time (500) instead of being refused early (409).
 Whoever hands out attach-only `rw` access owns that trade; see
 [sandboxd-api](sandboxd-api.md#attach-only-volumes).
+
+### Reclaiming S3 storage
+
+sandboxd never garbage-collects the S3 `checkpoint_store`. It only adds
+objects and, on a delete, removes the record's `meta.json`, labels and lineage
+markers; chunks, manifests and everything a superseded record wrote stay in the
+bucket until an operator job removes them. The `dir` backend is different: it
+keeps its own local generation sweep.
+
+**Key layout** (`<prefix>` is the configured prefix, ending in `/`):
+
+| Key | Content |
+|---|---|
+| `<prefix><id>/meta.json` | The live record, uploaded last as the commit marker. Absent once the record is deleted. Its current generation is `export-` plus the first 16 hex characters of the SHA-256 of the object body. |
+| `<prefix><id>/labels.json` | Optional labels, removed with the record. |
+| `<prefix>manifests/<id>/<gen>.json` | One JSON manifest per published generation: `lineage` and, per file, `path`, `size` and the present `chunks` (`index`, `sha256`). `<gen>` is `export-<16 hex>`. |
+| `<prefix>chunks/<lineage>/<sha256>` | A 16 MiB chunk. A chunk is shared by every record of its lineage that names the same digest, and only by those. |
+| `<prefix>lineages/<lineage>/<id>` | Zero-byte marker: record `<id>` published into `<lineage>`. It only drives dedup, never chunk liveness. |
+
+**What sandboxd never deletes:** chunks, manifests of deleted records,
+superseded generations of a live record, and stale markers.
+
+**Safe rule.** Let the grace be 1 hour and judge age only by the object's
+`LastModified`. Read every manifest first, then decide:
+
+1. A manifest is a reference if its record has a `meta.json` and the manifest
+   is that meta's current generation, or if its `LastModified` is younger than
+   the grace. Decide a record from a fresh `GET` of its `meta.json`; if the
+   `GET` returns not-found mid-pass, treat all of its listed manifests as
+   references for this pass.
+2. A manifest may be deleted when it is older than the grace and either its
+   record has no `meta.json`, or it is a previous generation of a live record
+   and that record's `meta.json` is also older than the grace.
+3. A chunk may be deleted only when no reference manifest names its digest
+   under its lineage and its `LastModified` is older than the grace. List the
+   chunks after you have read the manifests, never before, so a chunk uploaded
+   while you read cannot look unreferenced.
+4. A marker may be deleted when its record has no `meta.json` and the marker
+   is older than the grace.
+
+Deleting is idempotent and safe to run concurrently with sandboxd and with
+another reclaimer. Do not use a bucket lifecycle expiry instead: it would
+remove chunks a live record still names.
+
+**Why it is safe.** sandboxd bounds every publish to 30 minutes, below the
+1 hour grace, so a publish that reuses a chunk finishes inside the window in
+which that chunk's referencing manifest is still protected. A delete re-stamps
+the record's manifests, so their `LastModified` is the delete time and the
+grace runs from the delete, not from the original publish. A chunk an in-flight
+publish has just uploaded is protected by its own age until the publish writes
+its manifest.
+
+**Cost of not running it.** Storage grows without bound. Every archive wake,
+user checkpoint delete and, with replication, every replica round leaves the
+superseded record's unique chunks behind. Successive captures of a running
+claim share few chunks because most memory chunks change between captures; on
+the test claim an archive uploaded about 912 MiB per capture, and all of it
+stays until your job removes it.
 
 ### A fuller config
 

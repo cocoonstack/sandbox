@@ -331,37 +331,6 @@ func TestRepublishRetainsGenerationSelectedByAnotherStore(t *testing.T) {
 	if err != nil || string(got) != "first" {
 		t.Fatalf("selected generation bytes: %q, %v, want first", got, err)
 	}
-	fake.age("", 2*store.GenerationGrace)
-	if err = writer.SweepGenerations(t.Context()); err != nil {
-		t.Fatalf("SweepGenerations: %v", err)
-	}
-	if keys := fake.keys(); len(keys) != 0 {
-		t.Errorf("objects left after the sweep: %v", keys)
-	}
-}
-
-func TestSweepKeepsChunksOfARecentlyDeletedRecord(t *testing.T) {
-	const id = "ck_00000000000000a8"
-	fake := &fakeS3{objects: map[string][]byte{}}
-	st := newTestStore(t, fake)
-	publishRecord(t, st, id, []byte(`{"id":"`+id+`"}`), "payload")
-	fake.age("", 2*store.GenerationGrace)
-	if err := st.Delete(t.Context(), id); err != nil {
-		t.Fatalf("Delete: %v", err)
-	}
-	if err := st.SweepGenerations(t.Context()); err != nil {
-		t.Fatalf("SweepGenerations: %v", err)
-	}
-	if keys := fake.keys(); len(keys) != 2 {
-		t.Errorf("objects after a sweep right after Delete = %v, want the manifest and its chunk", keys)
-	}
-	fake.age("", 2*store.GenerationGrace)
-	if err := st.SweepGenerations(t.Context()); err != nil {
-		t.Fatalf("SweepGenerations: %v", err)
-	}
-	if keys := fake.keys(); len(keys) != 0 {
-		t.Errorf("objects left after the grace: %v", keys)
-	}
 }
 
 func TestFetchPrunesSupersededGenerationsIdlePastTheGrace(t *testing.T) {
@@ -607,132 +576,6 @@ func TestLineageDedupUploadsOnlyChangedChunks(t *testing.T) {
 	}
 }
 
-func TestSweepKeepsReferencedChunksAndRemovesUnreferencedPastTheGrace(t *testing.T) {
-	const lineage = "sbx_00000000000000a2"
-	fake := &fakeS3{objects: map[string][]byte{}}
-	st := newTestStore(t, fake)
-	publish := func(id, only string) {
-		t.Helper()
-		staging := stageRecord(t, st, id, []byte(`{"id":"`+id+`"}`), "shared")
-		if err := os.WriteFile(filepath.Join(staging, store.ExportDir, "extra.bin"), []byte(only), 0o600); err != nil {
-			t.Fatalf("write extra: %v", err)
-		}
-		if err := st.Publish(t.Context(), staging, id, lineage); err != nil {
-			t.Fatalf("Publish %s: %v", id, err)
-		}
-	}
-	publish("ck_00000000000000b1", "only-a")
-	publish("ck_00000000000000b2", "only-b")
-	if err := st.Delete(t.Context(), "ck_00000000000000b1"); err != nil {
-		t.Fatalf("Delete: %v", err)
-	}
-	fake.age("", 2*store.GenerationGrace)
-	fresh := "ck/chunks/" + lineage + "/" + strings.Repeat("0", 64)
-	fake.put(fresh, []byte("in-flight"))
-
-	if err := st.SweepGenerations(t.Context()); err != nil {
-		t.Fatalf("SweepGenerations: %v", err)
-	}
-	chunk := func(content string) string {
-		sum := sha256.Sum256([]byte(content))
-		return "ck/chunks/" + lineage + "/" + hex.EncodeToString(sum[:])
-	}
-	for _, tc := range []struct {
-		key  string
-		want bool
-	}{
-		{chunk("shared"), true},
-		{chunk("only-b"), true},
-		{chunk("only-a"), false},
-		{fresh, true},
-	} {
-		if _, ok := fake.get(tc.key); ok != tc.want {
-			t.Errorf("chunk %s present = %v, want %v", tc.key, ok, tc.want)
-		}
-	}
-	if _, _, _, err := st.Fetch(t.Context(), "ck_00000000000000b2"); err != nil {
-		t.Errorf("Fetch of the surviving record: %v", err)
-	}
-}
-
-func TestSweepRemovesSupersededGenerationsPastTheGrace(t *testing.T) {
-	const id = "ck_00000000000000a6"
-	fake := &fakeS3{objects: map[string][]byte{}}
-	st := newTestStore(t, fake)
-	first := []byte(`{"id":"` + id + `","gen":1}`)
-	second := []byte(`{"id":"` + id + `","gen":2}`)
-	publishRecord(t, st, id, first, "first")
-	publishRecord(t, st, id, second, "second")
-	firstManifest := "ck/manifests/" + id + "/" + store.ExportGen(first) + manifestExt
-	secondManifest := "ck/manifests/" + id + "/" + store.ExportGen(second) + manifestExt
-
-	if err := st.SweepGenerations(t.Context()); err != nil {
-		t.Fatalf("SweepGenerations: %v", err)
-	}
-	if _, ok := fake.get(firstManifest); !ok {
-		t.Fatal("a generation superseded within the grace was swept")
-	}
-
-	fake.age(firstManifest, 2*store.GenerationGrace)
-	if err := st.SweepGenerations(t.Context()); err != nil {
-		t.Fatalf("SweepGenerations: %v", err)
-	}
-	if _, ok := fake.get(firstManifest); !ok {
-		t.Fatal("a generation was swept although the current meta is younger than the grace")
-	}
-
-	fake.age("", 2*store.GenerationGrace)
-	if err := st.SweepGenerations(t.Context()); err != nil {
-		t.Fatalf("SweepGenerations: %v", err)
-	}
-	if _, ok := fake.get(firstManifest); ok {
-		t.Error("a generation superseded past the grace survived the sweep")
-	}
-	if _, ok := fake.get(secondManifest); !ok {
-		t.Error("the current generation was swept")
-	}
-	secondChunk := sha256.Sum256([]byte("second"))
-	want := []string{"ck/chunks/" + id + "/" + hex.EncodeToString(secondChunk[:]), "ck/" + id + "/" + store.MetaFile, secondManifest}
-	if keys := fake.keys(); !slices.Equal(keys, want) {
-		t.Errorf("objects after the sweep = %v, want %v", keys, want)
-	}
-	if _, _, _, err := st.Fetch(t.Context(), id); err != nil {
-		t.Errorf("Fetch after the sweep: %v", err)
-	}
-}
-
-func TestSweepReadsTheMetaAgeAtTheGet(t *testing.T) {
-	const id = "ck_00000000000000a9"
-	fake := &fakeS3{objects: map[string][]byte{}}
-	st := newTestStore(t, fake)
-	publish := func(gen int, only string) {
-		t.Helper()
-		staging := stageRecord(t, st, id, fmt.Appendf(nil, `{"id":"%s","gen":%d}`, id, gen), "shared")
-		if err := os.WriteFile(filepath.Join(staging, store.ExportDir, "extra.bin"), []byte(only), 0o600); err != nil {
-			t.Fatalf("write extra: %v", err)
-		}
-		if err := st.Publish(t.Context(), staging, id, ""); err != nil {
-			t.Fatalf("Publish gen %d: %v", gen, err)
-		}
-	}
-	publish(1, "first")
-	fake.age("", 2*store.GenerationGrace)
-	fake.mu.Lock()
-	fake.beforeMetaGet = func() { publish(2, "second") }
-	fake.mu.Unlock()
-
-	if err := st.SweepGenerations(t.Context()); err != nil {
-		t.Fatalf("SweepGenerations: %v", err)
-	}
-	if _, _, _, err := st.Fetch(t.Context(), id); err != nil {
-		t.Errorf("Fetch of the generation published during the sweep: %v", err)
-	}
-	shared := sha256.Sum256([]byte("shared"))
-	if _, ok := fake.get("ck/chunks/" + id + "/" + hex.EncodeToString(shared[:])); !ok {
-		t.Error("the sweep deleted a chunk the generation published during it dedups")
-	}
-}
-
 func TestPublishReadsOnlyItsLineage(t *testing.T) {
 	const lineage = "sbx_00000000000000a4"
 	fake := &fakeS3{objects: map[string][]byte{}}
@@ -758,100 +601,6 @@ func TestPublishReadsOnlyItsLineage(t *testing.T) {
 	}
 	if got := meta("ck_00000000000000e1") + meta("ck_00000000000000e2"); got != 2 {
 		t.Errorf("a publish read %d metas of its lineage's records, want 2", got)
-	}
-}
-
-func TestSweepRemovesLineageMarkersOfDeadRecords(t *testing.T) {
-	const lineage = "sbx_00000000000000a5"
-	fake := &fakeS3{objects: map[string][]byte{}}
-	st := newTestStore(t, fake)
-	publish := func(id string) {
-		t.Helper()
-		staging := stageRecord(t, st, id, []byte(`{"id":"`+id+`"}`), "claim")
-		if err := st.Publish(t.Context(), staging, id, lineage); err != nil {
-			t.Fatalf("Publish %s: %v", id, err)
-		}
-	}
-	marker := func(id string) string { return "ck/lineages/" + lineage + "/" + id }
-	publish("ck_00000000000000f1")
-	publish("ck_00000000000000f2")
-	fresh := marker("ck_00000000000000f3")
-	fake.put(fresh, nil)
-	if err := st.Delete(t.Context(), "ck_00000000000000f1"); err != nil {
-		t.Fatalf("Delete: %v", err)
-	}
-	if _, ok := fake.get(marker("ck_00000000000000f1")); ok {
-		t.Error("Delete left the lineage marker of the deleted record")
-	}
-	fake.put(marker("ck_00000000000000f1"), nil)
-	fake.age("", 2*store.GenerationGrace)
-	fake.put(fresh, nil)
-
-	if err := st.SweepGenerations(t.Context()); err != nil {
-		t.Fatalf("SweepGenerations: %v", err)
-	}
-	for _, tc := range []struct {
-		id   string
-		want bool
-	}{
-		{"ck_00000000000000f1", false},
-		{"ck_00000000000000f2", true},
-		{"ck_00000000000000f3", true},
-	} {
-		if _, ok := fake.get(marker(tc.id)); ok != tc.want {
-			t.Errorf("marker of %s present = %v, want %v", tc.id, ok, tc.want)
-		}
-	}
-}
-
-func TestSweepKeepsListedReferencesOfARecordDeletedMidSweep(t *testing.T) {
-	const lineage = "sbx_00000000000000a6"
-	fake := &fakeS3{objects: map[string][]byte{}}
-	st := newTestStore(t, fake)
-	publish := func(id string) {
-		t.Helper()
-		staging := stageRecord(t, st, id, []byte(`{"id":"`+id+`"}`), "shared")
-		if err := st.Publish(t.Context(), staging, id, lineage); err != nil {
-			t.Fatalf("Publish %s: %v", id, err)
-		}
-	}
-	publish("ck_00000000000000a1")
-	fake.age("", 2*store.GenerationGrace)
-	fake.mu.Lock()
-	fake.beforeMetaGet = func() {
-		publish("ck_00000000000000a2")
-		if err := st.Delete(t.Context(), "ck_00000000000000a1"); err != nil {
-			t.Errorf("Delete: %v", err)
-		}
-	}
-	fake.mu.Unlock()
-
-	if err := st.SweepGenerations(t.Context()); err != nil {
-		t.Fatalf("SweepGenerations: %v", err)
-	}
-	dir, _, _, err := st.Fetch(t.Context(), "ck_00000000000000a2")
-	if err != nil {
-		t.Fatalf("Fetch of the record that reused the chunk: %v", err)
-	}
-	if got, err := os.ReadFile(filepath.Join(dir, "disk.img")); err != nil || string(got) != "shared" {
-		t.Errorf("fetched content = %q, %v, want shared", got, err)
-	}
-}
-
-func TestSweepSparesAnInFlightGeneration(t *testing.T) {
-	const id = "ck_00000000000000a7"
-	fake := &fakeS3{objects: map[string][]byte{}}
-	st := newTestStore(t, fake)
-	publishRecord(t, st, id, []byte(`{"id":"`+id+`","gen":1}`), "first")
-	fake.age("", 2*store.GenerationGrace)
-	inFlight := "ck/manifests/" + id + "/" + store.ExportDir + "-0000000000000000" + manifestExt
-	fake.put(inFlight, []byte(`{"lineage":"`+id+`","files":[]}`))
-
-	if err := st.SweepGenerations(t.Context()); err != nil {
-		t.Fatalf("SweepGenerations: %v", err)
-	}
-	if _, ok := fake.get(inFlight); !ok {
-		t.Error("the sweep removed a manifest uploaded moments ago")
 	}
 }
 
@@ -916,12 +665,49 @@ func TestDeletedRecordLeavesNoPrefixToList(t *testing.T) {
 		t.Errorf("Metas read the meta of the deleted record %d times, want 0", got)
 	}
 
-	if err = st.SweepGenerations(t.Context()); err != nil {
-		t.Fatalf("SweepGenerations: %v", err)
-	}
 	sum := sha256.Sum256([]byte("gone-payload"))
 	if _, ok := fake.get("ck/chunks/" + gone + "/" + hex.EncodeToString(sum[:])); !ok {
-		t.Error("the sweep freed the chunk of a record deleted within the grace")
+		t.Error("Delete freed the chunk of the deleted record")
+	}
+}
+
+func TestSweepGenerationsLeavesTheBucketAlone(t *testing.T) {
+	const id = "ck_00000000000000a8"
+	fake := &fakeS3{objects: map[string][]byte{}}
+	st := newTestStore(t, fake)
+	publishRecord(t, st, id, []byte(`{"id":"`+id+`","gen":1}`), "first")
+	publishRecord(t, st, id, []byte(`{"id":"`+id+`","gen":2}`), "second")
+	if err := st.Delete(t.Context(), id); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	fake.age("", 2*store.GenerationGrace)
+	want := fake.keys()
+	if err := st.SweepGenerations(t.Context()); err != nil {
+		t.Fatalf("SweepGenerations: %v", err)
+	}
+	if keys := fake.keys(); !slices.Equal(keys, want) {
+		t.Errorf("objects after SweepGenerations = %v, want %v", keys, want)
+	}
+}
+
+func TestDeleteRemovesTheLineageMarker(t *testing.T) {
+	const lineage = "sbx_00000000000000a5"
+	fake := &fakeS3{objects: map[string][]byte{}}
+	st := newTestStore(t, fake)
+	for _, id := range []string{"ck_00000000000000f1", "ck_00000000000000f2"} {
+		staging := stageRecord(t, st, id, []byte(`{"id":"`+id+`"}`), "claim")
+		if err := st.Publish(t.Context(), staging, id, lineage); err != nil {
+			t.Fatalf("Publish %s: %v", id, err)
+		}
+	}
+	if err := st.Delete(t.Context(), "ck_00000000000000f1"); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if _, ok := fake.get("ck/lineages/" + lineage + "/ck_00000000000000f1"); ok {
+		t.Error("Delete left the lineage marker of the deleted record")
+	}
+	if _, ok := fake.get("ck/lineages/" + lineage + "/ck_00000000000000f2"); !ok {
+		t.Error("Delete removed the marker of another record")
 	}
 }
 
@@ -1069,7 +855,6 @@ type fakeS3 struct {
 	failDelete    bool
 	exportGate    chan struct{}
 	exportEntered chan struct{}
-	beforeMetaGet func()
 }
 
 func (f *fakeS3) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -1080,15 +865,6 @@ func (f *fakeS3) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		default:
 		}
 		<-f.exportGate
-	}
-	if r.Method == http.MethodGet && strings.HasSuffix(key, "/"+store.MetaFile) {
-		f.mu.Lock()
-		hook := f.beforeMetaGet
-		f.beforeMetaGet = nil
-		f.mu.Unlock()
-		if hook != nil {
-			hook()
-		}
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -1154,16 +930,6 @@ func (f *fakeS3) chunkPuts(prefix string) (count int, bytes int64) {
 		}
 	}
 	return count, bytes
-}
-
-func (f *fakeS3) put(key string, body []byte) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.objects[key] = body
-	if f.modified == nil {
-		f.modified = map[string]time.Time{}
-	}
-	f.modified[key] = time.Now()
 }
 
 func (f *fakeS3) get(key string) ([]byte, bool) {

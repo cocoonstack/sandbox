@@ -76,11 +76,6 @@ type manifestChunk struct {
 	SHA256 string `json:"sha256"`
 }
 
-type recordObjects struct {
-	meta      *s3types.Object
-	manifests map[string]s3types.Object // by generation
-}
-
 var _ store.Store = (*Store)(nil)
 
 // Store stages locally and publishes to the bucket; idRe names the instance's id namespace.
@@ -226,56 +221,11 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 	return s.deleteKeys(ctx, []string{s.key(id, store.MetaFile)})
 }
 
+func (s *Store) SweepGenerations(context.Context) error { return nil }
+
 // SweepStaging clears local staging residue at startup.
 func (s *Store) SweepStaging() error {
 	return utils.RemoveDirEntries(s.staging, nil)
-}
-
-func (s *Store) SweepGenerations(ctx context.Context) error {
-	objs, err := s.list(ctx, s.prefix)
-	if err != nil {
-		return err
-	}
-	inv := newInventory(s.prefix, objs)
-	now := time.Now()
-	refs := &chunkRefs{live: map[string]map[string]struct{}{}}
-	var doomed []string
-	var mu sync.Mutex
-	g, gctx := errgroup.WithContext(ctx)
-	g.SetLimit(metaReadConcurrency)
-	for _, rec := range inv.records {
-		g.Go(func() error {
-			dead, sweepErr := s.sweepRecord(gctx, rec, now, refs)
-			mu.Lock()
-			doomed = append(doomed, dead...)
-			mu.Unlock()
-			return sweepErr
-		})
-	}
-	if err = g.Wait(); err != nil {
-		return err
-	}
-	if err = s.deleteKeys(ctx, doomed); err != nil {
-		return err
-	}
-	dead := make(map[string]struct{}, len(doomed))
-	for _, key := range doomed {
-		dead[key] = struct{}{}
-	}
-	var stale []string
-	for _, marker := range inv.markers {
-		if idle(marker.LastModified, now) && !inv.alive(path.Base(*marker.Key), dead) {
-			stale = append(stale, *marker.Key)
-		}
-	}
-	for lineage, chunks := range inv.chunks {
-		for _, obj := range chunks {
-			if !refs.has(lineage, path.Base(*obj.Key)) && idle(obj.LastModified, now) {
-				stale = append(stale, *obj.Key)
-			}
-		}
-	}
-	return s.deleteKeys(ctx, stale)
 }
 
 func (s *Store) readMeta(ctx context.Context, id string) ([]byte, string, error) {
@@ -392,7 +342,7 @@ func (s *Store) publish(ctx context.Context, staging, id, lineage string, digest
 	if err = s.putObject(ctx, s.key(id, store.MetaFile), metaRaw, metadata); err != nil {
 		return "", err
 	}
-	// keep old generations: another node may have selected the previous meta; the sweep reclaims them.
+	// keep old generations: another node may have selected the previous meta.
 	if err := os.RemoveAll(staging); err != nil {
 		return "", err
 	}
@@ -561,42 +511,6 @@ func (s *Store) referencedChunks(ctx context.Context, id, lineage string) (map[s
 	return have, nil
 }
 
-func (s *Store) sweepRecord(ctx context.Context, rec *recordObjects, now time.Time, refs *chunkRefs) ([]string, error) {
-	current := ""
-	var metaModified *time.Time
-	vanished := false
-	if rec.meta != nil {
-		meta, out, err := s.getObject(ctx, *rec.meta.Key)
-		vanished = errors.Is(err, store.ErrNotFound)
-		if err != nil && !vanished {
-			return nil, err
-		}
-		if !vanished {
-			current, metaModified = store.ExportGen(meta), out.LastModified
-		}
-	}
-	var doomed []string
-	for gen, obj := range rec.manifests {
-		if !vanished && gen != current && idle(obj.LastModified, now) && (rec.meta == nil || idle(metaModified, now)) {
-			doomed = append(doomed, *obj.Key)
-			continue
-		}
-		raw, _, err := s.getObject(ctx, *obj.Key)
-		if errors.Is(err, store.ErrNotFound) {
-			continue
-		}
-		if err != nil {
-			return nil, err
-		}
-		var man manifest
-		if err = json.Unmarshal(raw, &man); err != nil {
-			return nil, fmt.Errorf("decode manifest %s: %w", *obj.Key, err)
-		}
-		refs.add(man)
-	}
-	return doomed, nil
-}
-
 func (s *Store) refreshManifest(ctx context.Context, key string) (manifest, error) {
 	body, _, err := s.getObject(ctx, key)
 	if errors.Is(err, store.ErrNotFound) {
@@ -661,37 +575,6 @@ func (s *Store) list(ctx context.Context, prefix string) ([]s3types.Object, erro
 		objs = append(objs, page.Contents...)
 	}
 	return objs, nil
-}
-
-type inventory struct {
-	records map[string]*recordObjects
-	chunks  map[string][]s3types.Object // by lineage
-	markers []s3types.Object
-}
-
-func (inv inventory) alive(id string, dead map[string]struct{}) bool {
-	rec := inv.records[id]
-	if rec == nil {
-		return false
-	}
-	if rec.meta != nil {
-		return true
-	}
-	for _, obj := range rec.manifests {
-		if _, gone := dead[*obj.Key]; !gone {
-			return true
-		}
-	}
-	return false
-}
-
-func (inv inventory) record(id string) *recordObjects {
-	rec := inv.records[id]
-	if rec == nil {
-		rec = &recordObjects{manifests: map[string]s3types.Object{}}
-		inv.records[id] = rec
-	}
-	return rec
 }
 
 type chunkUploader struct {
@@ -771,13 +654,6 @@ func (r *chunkRefs) add(man manifest) {
 	}
 }
 
-func (r *chunkRefs) has(lineage, sha string) bool {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	_, ok := r.live[lineage][sha]
-	return ok
-}
-
 func publishFiles(staging string) ([]publishFile, error) {
 	var files []publishFile
 	err := store.WalkExport(filepath.Join(staging, store.ExportDir), func(rel, abs string, _ fs.FileInfo) error {
@@ -795,10 +671,6 @@ func objectKeys(objs []s3types.Object) []string {
 	return keys
 }
 
-func idle(modified *time.Time, now time.Time) bool {
-	return now.Sub(aws.ToTime(modified)) >= store.GenerationGrace
-}
-
 // pruneIdleGenerations drops cached generations of one record that no Fetch used within the grace; a hit refreshes the mtime.
 func pruneIdleGenerations(dir, keep string) {
 	entries, err := os.ReadDir(dir)
@@ -811,38 +683,6 @@ func pruneIdleGenerations(dir, keep string) {
 			_ = os.RemoveAll(entryPath)
 		}
 	}
-}
-
-func newInventory(prefix string, objs []s3types.Object) inventory {
-	inv := inventory{records: map[string]*recordObjects{}, chunks: map[string][]s3types.Object{}}
-	for _, obj := range objs {
-		first, rest, _ := strings.Cut(strings.TrimPrefix(*obj.Key, prefix), "/")
-		if first == manifestsDir {
-			id, name, _ := strings.Cut(rest, "/")
-			if gen, ok := strings.CutSuffix(name, manifestExt); ok && knownID(id) {
-				inv.record(id).manifests[gen] = obj
-			}
-			continue
-		}
-		if first == lineagesDir {
-			inv.markers = append(inv.markers, obj)
-			continue
-		}
-		if first == chunksDir {
-			if lineage, _, ok := strings.Cut(rest, "/"); ok {
-				inv.chunks[lineage] = append(inv.chunks[lineage], obj)
-			}
-			continue
-		}
-		if knownID(first) && rest == store.MetaFile {
-			inv.record(first).meta = &obj
-		}
-	}
-	return inv
-}
-
-func knownID(id string) bool {
-	return store.CheckpointIDRe.MatchString(id) || store.TemplateIDRe.MatchString(id)
 }
 
 func getChunkBuf() []byte { return *chunkBufs.Get().(*[]byte) }
