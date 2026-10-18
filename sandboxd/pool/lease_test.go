@@ -211,6 +211,53 @@ func TestLeaseSlowUnfenceStaysFencedAndKeepsRenewing(t *testing.T) {
 	})
 }
 
+func TestLeaseFailedConfirmKeepsTheTeardownOfAForgottenClaim(t *testing.T) {
+	for range 16 {
+		exercised := false
+		synctest.Test(t, func(t *testing.T) {
+			c := newReplicaCluster(t)
+			a, b := c.node(t, "a", t.TempDir(), keepAnHour), c.node(t, "b", t.TempDir(), keepAnHour)
+			moved, kept := mustClaim(t, a, testKey), mustClaim(t, a, testKey)
+			vm := lockedVMName(moved)
+			cut := &cutRegistry{Registry: c.reg, takeErr: func(id string) error {
+				a.mu.Lock()
+				_, known := a.claimed[moved.ID]
+				a.mu.Unlock()
+				if id != kept.ID || known {
+					return nil
+				}
+				exercised = true
+				return archives.ErrUnavailable
+			}}
+			a.archives = cut
+			replicateNow(t, a, moved)
+			replicateNow(t, a, kept)
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			go a.keepLease(ctx)
+			synctest.Wait()
+
+			cut.cut.Store(true)
+			time.Sleep(leaseTTL)
+			synctest.Wait()
+			c.expire("a")
+			if adopted, err := b.AdoptArchived(ctx, moved.ID, moved.Token); err != nil || !adopted {
+				t.Fatalf("adopt while the owner is fenced: %v %v", adopted, err)
+			}
+			cut.cut.Store(false)
+			time.Sleep(leaseRenew)
+			synctest.Wait()
+			if exercised && !a.eng.(*fakeEngine).removed(vm) {
+				t.Error("a failed confirmation dropped the teardown of a claim the owner had already forgotten")
+			}
+		})
+		if exercised {
+			return
+		}
+	}
+	t.Fatal("the failing confirmation never followed the forgotten claim")
+}
+
 func TestLeaseAdoptionDuringUnfenceDropsTheClaimWithoutServingIt(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		c := newReplicaCluster(t)
@@ -416,12 +463,18 @@ type cutRegistry struct {
 	cut        atomic.Bool
 	rowsDelay  atomic.Int64
 	beforeTake func()
+	takeErr    func(id string) error
 }
 
 func (r *cutRegistry) Take(ctx context.Context, id string, expect int64, owner string) (int64, error) {
 	if hook := r.beforeTake; hook != nil {
 		r.beforeTake = nil
 		hook()
+	}
+	if r.takeErr != nil {
+		if err := r.takeErr(id); err != nil {
+			return 0, err
+		}
 	}
 	return r.Registry.Take(ctx, id, expect, owner)
 }

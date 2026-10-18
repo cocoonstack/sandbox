@@ -112,7 +112,6 @@ func (m *Manager) unfence(ctx context.Context, start time.Time) {
 			return
 		}
 	}
-	var teardowns []func()
 	for id, sb := range held {
 		keep, err := m.confirmOwnership(ctx, sb, rows[id])
 		if err != nil {
@@ -123,15 +122,12 @@ func (m *Manager) unfence(ctx context.Context, start time.Time) {
 			continue
 		}
 		if td := m.forgetAdopted(ctx, sb); td != nil {
-			teardowns = append(teardowns, func() {
+			go func() {
 				sb.Transition.Lock()
 				defer sb.Transition.Unlock()
 				td()
-			})
+			}()
 		}
-	}
-	for _, td := range teardowns {
-		go td()
 	}
 	m.lift(ctx, fenced, start)
 }
