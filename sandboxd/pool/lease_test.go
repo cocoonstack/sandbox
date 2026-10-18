@@ -205,7 +205,7 @@ func TestLeaseSlowUnfenceStaysFencedAndKeepsRenewing(t *testing.T) {
 		}
 
 		cut.rowsDelay.Store(0)
-		time.Sleep(2 * leaseRenew)
+		time.Sleep(leaseTTL + 2*leaseRenew)
 		synctest.Wait()
 		assertServed(t, a, sb.ID, sb.Token)
 	})
