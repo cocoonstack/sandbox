@@ -185,17 +185,19 @@ the claim as before ([API](sandboxd-api.md#get-v1sandboxesidagent)).
 }
 ```
 
-It needs a cocoon whose `vm disk attach` takes `--from-snapshot` and
-`--from-dir` (released after v0.7.2) and Cloud Hypervisor: a claim on a
-Firecracker lane always wakes, as does an archive exported by an older cocoon,
-whose `snapshot.json` has no `disk_attach_files`. Unpooled claims (template and
-checkpoint claims) always wake too. `reader` is reloadable like `capture_trim`.
+It needs Cloud Hypervisor and a cocoon whose `vm disk attach` takes
+`--from-snapshot` and `--from-dir` (released after v0.7.2). Leave `reader` off
+on a Firecracker node or with an older cocoon: there every read spends a warm VM
+on an attach that fails, then wakes the claim. An archive exported by an older
+cocoon, whose `snapshot.json` has no `disk_attach_files`, wakes before any VM is
+taken. Unpooled claims (template and checkpoint claims) always wake.
+`reader` is reloadable like `capture_trim`.
 
 A reader is a warm VM taken from the claim's own pool, so it boots the claim's
 image with the claim's layers, and it has that pool's lane: no NIC on the none
-lane, the lane's NIC otherwise, though sandboxd never arms the claim's egress
-policy on it and only the four file calls reach it. Taking one removes a VM from the pool until the refill replaces it, and an empty pool
-never cold-boots one: the call wakes the claim. A reader is never shared: it
+lane, the bridge NIC the claim had on the bridge lane (egress-lane claims never
+hibernate). Taking one removes a VM from the pool until the refill replaces it,
+and an empty pool never cold-boots one: the call wakes the claim. A reader is never shared: it
 serves one claim, and only the claim's own token reaches it. The guest's own
 kernel does the parsing, as it does for the claim:
 
@@ -233,7 +235,7 @@ in the claim, and the reader serves one claim and is destroyed afterwards, so
 the claim's bytes never reach a shared VM or the host kernel.
 
 Whenever a reader cannot be built (no warm VM in the claim's pool, the disk
-reserve is low, a cocoon without `--from-snapshot`, a Firecracker lane, an archive without
+reserve is low, a failed attach, an archive without
 `disk_attach_files`, an image without `silkd` at that path), the call wakes the
 claim as it does without the feature. With the feature on for the pool, every
 hibernate of its claims runs a guest `sync` right before the pause, and a reader

@@ -984,7 +984,7 @@ and symlinks resolve inside the sandbox's own filesystem as of the guest `sync`
 that runs right before the last hibernate's pause; a write the guest made in
 the instant between that `sync` and the pause is visible only after a wake. A
 hibernate whose `sync` failed, or one made before the pool had `reader`,
-is not served by a reader: its reads wake the sandbox. When no reader can be built (no warm VM in the pool, a Firecracker lane, an archive from an older cocoon) the call wakes the sandbox as if the
+is not served by a reader: its reads wake the sandbox. When no reader can be built (no warm VM in the pool, a failed attach, an archive from an older cocoon) the call wakes the sandbox as if the
 feature were off. Because the `101` has gone out by then, a failure on this path
 (unknown sandbox, a refused wake, an unreachable guest) arrives as a silkd
 `error` frame (`not_found` for an unknown sandbox, else `internal`) rather than
