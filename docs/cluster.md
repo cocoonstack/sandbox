@@ -326,9 +326,8 @@ checkpoint store and keeps each claim's registry row on the latest snapshot:
   rows of a node that never returns therefore stay until a client adopts them, a
   bounded residue of one row and up to two checkpoints per claim: the row's, and
   a committed pending replica or a previous replica the node died before
-  deleting. Their metas stay live, so the store sweep never reclaims them and
-  they pin their chunks. Apart from that and the lease rule the sweep is
-  unchanged.
+  deleting. Their records and chunks stay in the store until the operator
+  removes them. Apart from that and the lease rule the sweep is unchanged.
 - **Self-fencing.** A node whose renewal is overdue by 12 seconds (the lease
   length minus a 3 second margin, counted from the start of the last renewal
   that answered) stops serving every replicated claim it holds: relay, exec,
@@ -372,14 +371,15 @@ checkpoint store and keeps each claim's registry row on the latest snapshot:
 A replica costs, per claim per interval, one capture pause, an upload of the
 changed chunks plus a manifest and a meta, one registry read, one write and one
 delete of the previous replica; the node's own cost is one scan of its claims
-every 5 seconds. The delete is soft: the previous replica's manifest stays for
-the store's one-hour grace plus up to one hourly sweep, so the chunks only it
-names stay that long. Budget storage per replicated claim as the live replica
-plus roughly the per-round churn times (grace + sweep period) / interval. The
-first round after a wake or adoption uploads the whole claim again, because the
-wake deletes the record it restored from; later rounds dedup. Resolving a claim
-for a stream of a pool that does not replicate reads one plain field and no
-atomic; a replicated claim adds one atomic load of the fence state and its
+every 5 seconds. The delete is soft: the chunks only the previous replica names
+stay in the store until the operator's
+[reclaim](deploy.md#reclaiming-s3-storage) removes them. With replication this
+is the fastest-growing part of the store: roughly the per-round churn times the
+rounds since the last reclaim, per replicated claim, on top of the live replica.
+The first round after a wake or adoption uploads the whole claim again, because
+the wake deletes the record it restored from; later rounds dedup. Resolving a
+claim for a stream of a pool that does not replicate reads one plain field and
+no atomic; a replicated claim adds one atomic load of the fence state and its
 stream one watcher goroutine. Adding a claim to a failover node gains one map
 lookup. Nothing runs per frame.
 
