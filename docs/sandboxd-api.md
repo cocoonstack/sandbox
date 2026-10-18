@@ -394,7 +394,7 @@ release). Atomically snapshots the VM and stops it,
 freeing its memory; the next agent access restores it transparently
 (sessions, processes, and memory state intact — cocoon's hibernate keeps the
 snapshot point and the stop coincident), except a read-only file call that a
-configured [reader](#get-v1sandboxesidagent) serves without waking it. Idempotent on an already-hibernated
+[reader](#get-v1sandboxesidagent) serves without waking it. Idempotent on an already-hibernated
 sandbox. The TTL keeps running: a hibernated sandbox is still reaped (VM and
 snapshot) at its deadline, unless it claimed `on_expire: archive` or its pool
 archives. When to hibernate is the caller's policy — the
@@ -579,7 +579,7 @@ is deleted; a pool kept with `warm: 0` keeps its golden.
 Answers the fresh `GET /v1/info` payload. 400 bad key, negative warm/idle,
 `warm_max` below `warm`, `idle_hibernate_seconds` on an egress pool, a
 negative archive duration or an `archive_after_seconds` not above the pool's
-`idle_hibernate_seconds`, duplicate pool, or a config-owned `egress`/`warmup`/`capture_trim`/`storage`/`replicate_seconds`/`egress_upstream_env`
+`idle_hibernate_seconds`, duplicate pool, or a config-owned `egress`/`warmup`/`capture_trim`/`storage`/`replicate_seconds`/`reader`/`egress_upstream_env`
 field; 401 bad api
 token; 409 egress pool on a node without an egress attachment; 503 the
 `meta_store` cannot take a cell's write.
@@ -966,10 +966,10 @@ claim of a replicating pool that is already open when the lease turns overdue
 is closed, whether or not it has a replica yet.
 
 A hibernated or archived sandbox wakes on the first frame that opens an RPC,
-unless the node configures a [`reader`](deploy.md#reading-sleeping-claims-without-waking-them).
-With one, the node answers the `101` before it touches the sandbox, reads the
+unless the sandbox's pool sets [`reader`](deploy.md#reading-sleeping-claims-without-waking-them).
+With it, the node answers the `101` before it touches the sandbox, reads the
 first frame, and serves `fs_stat`, `fs_list`, `fs_read` and `fs_pull` from a
-disposable reader VM that mounts the sandbox's disk read-only: the sandbox stays
+reader VM, a warm VM of the sandbox's pool that mounts a copy of the sandbox's disk read-only: the sandbox stays
 hibernated or archived, no `wake` usage event is recorded, and the read stamps
 neither the idle nor the archive clock. An `info` frame pipelined ahead of the
 call (the SDKs' first frames) rides along to the reader; one alone, with no call
@@ -983,8 +983,8 @@ from a stale sleep. Files
 and symlinks resolve inside the sandbox's own filesystem as of the guest `sync`
 that runs right before the last hibernate's pause; a write the guest made in
 the instant between that `sync` and the pause is visible only after a wake. A
-hibernate whose `sync` failed, or one made before the reader was configured,
-is not served by a reader: its reads wake the sandbox. When no reader can be built the call wakes the sandbox as if the
+hibernate whose `sync` failed, or one made before the pool had `reader`,
+is not served by a reader: its reads wake the sandbox. When no reader can be built (no warm VM in the pool, a Firecracker lane, an archive from an older cocoon) the call wakes the sandbox as if the
 feature were off. Because the `101` has gone out by then, a failure on this path
 (unknown sandbox, a refused wake, an unreachable guest) arrives as a silkd
 `error` frame (`not_found` for an unknown sandbox, else `internal`) rather than
