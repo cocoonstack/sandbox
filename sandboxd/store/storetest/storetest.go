@@ -106,7 +106,7 @@ func runDigestContract(t *testing.T, st store.Store) {
 	if err = os.WriteFile(filepath.Join(staging, store.MetaFile), []byte(`{"id":"`+id+`"}`), 0o600); err != nil {
 		t.Fatalf("write digested meta: %v", err)
 	}
-	digest, err := st.PublishDigested(ctx, staging, id)
+	digest, err := st.PublishDigested(ctx, staging, id, "")
 	if err != nil {
 		t.Fatalf("PublishDigested: %v", err)
 	}
@@ -199,7 +199,7 @@ func rejectNonRegularReplacement(t *testing.T, st store.Store, id, wantDigest st
 	if err = os.WriteFile(filepath.Join(staging, store.MetaFile), []byte(`{"id":"`+id+`","gen":2}`), 0o600); err != nil {
 		t.Fatalf("write non-regular meta: %v", err)
 	}
-	if _, err = st.PublishDigested(t.Context(), staging, id); err == nil {
+	if _, err = st.PublishDigested(t.Context(), staging, id, ""); err == nil {
 		t.Fatal("PublishDigested accepted a non-regular export entry")
 	}
 	dir, meta, digest, err := st.Fetch(t.Context(), id)
@@ -225,7 +225,7 @@ func publishRecord(t *testing.T, st store.Store, id, meta, file, content string)
 	if err = os.WriteFile(filepath.Join(staging, store.MetaFile), []byte(meta), 0o600); err != nil {
 		t.Fatalf("write meta: %v", err)
 	}
-	if err = st.Publish(t.Context(), staging, id); err != nil {
+	if err = st.Publish(t.Context(), staging, id, ""); err != nil {
 		t.Fatalf("Publish %s: %v", id, err)
 	}
 }

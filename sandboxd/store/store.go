@@ -59,10 +59,10 @@ type S3Config struct {
 type Store interface {
 	// Stage returns a writable staging directory whose Publish is atomic.
 	Stage(id string) (string, error)
-	// Publish atomically replaces the record's previous generation with the staged directory.
-	Publish(ctx context.Context, staging, id string) error
+	// Publish atomically replaces the record's previous generation with the staged directory; lineage scopes chunk dedup in a content-addressed backend and "" means the record id.
+	Publish(ctx context.Context, staging, id, lineage string) error
 	// PublishDigested applies Publish semantics and returns the export digest.
-	PublishDigested(ctx context.Context, staging, id string) (string, error)
+	PublishDigested(ctx context.Context, staging, id, lineage string) (string, error)
 	// Fetch materializes a record's export locally; the caller holds the record lock until the clone ends.
 	Fetch(ctx context.Context, id string) (dir string, meta []byte, digest string, err error)
 	// ReadMeta returns a record's metadata, or an error when the record does not exist.
@@ -76,7 +76,7 @@ type Store interface {
 	// SweepStaging removes abandoned staging left by a crash mid-publish.
 	SweepStaging() error
 	// SweepGenerations runs generation retention without disturbing staging or fetch caches.
-	SweepGenerations() error
+	SweepGenerations(ctx context.Context) error
 }
 
 // CheckpointID, TemplateID, and TemplateHash are the one home for the ck_/tp_ id scheme.

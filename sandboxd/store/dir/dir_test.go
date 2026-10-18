@@ -134,7 +134,7 @@ func TestPublishDigestedChunkBoundaries(t *testing.T) {
 			if err = os.WriteFile(filepath.Join(staging, store.MetaFile), []byte(metaJSON(tt.name)), 0o600); err != nil {
 				t.Fatalf("write meta: %v", err)
 			}
-			digest, err := st.PublishDigested(t.Context(), staging, id)
+			digest, err := st.PublishDigested(t.Context(), staging, id, "")
 			if err != nil {
 				t.Fatalf("PublishDigested: %v", err)
 			}
@@ -216,7 +216,7 @@ func TestPublishDigestedFailureAndFreshRetry(t *testing.T) {
 	if err = os.Mkdir(blocker, 0o750); err != nil {
 		t.Fatalf("block digest commit: %v", err)
 	}
-	if digest, publishErr := st.PublishDigested(t.Context(), failed, id); publishErr == nil || digest != "" {
+	if digest, publishErr := st.PublishDigested(t.Context(), failed, id, ""); publishErr == nil || digest != "" {
 		t.Fatalf("PublishDigested with blocked sidecar = %q, %v, want empty/error", digest, publishErr)
 	}
 	dir, meta, digest, err := st.Fetch(t.Context(), id)
@@ -274,7 +274,7 @@ func TestSweepGenerationsPairsCurrentAndSupersededDigests(t *testing.T) {
 		backdate(t, path)
 	}
 
-	if err = st.SweepGenerations(); err != nil {
+	if err = st.SweepGenerations(t.Context()); err != nil {
 		t.Fatalf("SweepGenerations: %v", err)
 	}
 	for _, path := range []string{firstGen, firstSidecar} {
@@ -311,7 +311,7 @@ func TestPublishRetriesAfterExpiredInstall(t *testing.T) {
 		t.Fatalf("stage retry: %v", err)
 	}
 	seedRecord(t, retry, "same")
-	if publishErr := st.Publish(t.Context(), retry, id); publishErr == nil {
+	if publishErr := st.Publish(t.Context(), retry, id, ""); publishErr == nil {
 		t.Fatal("expired installed generation was revived")
 	}
 	if removeErr := os.RemoveAll(retry); removeErr != nil {
@@ -320,7 +320,7 @@ func TestPublishRetriesAfterExpiredInstall(t *testing.T) {
 	if _, readErr := st.ReadMeta(t.Context(), id); !errors.Is(readErr, store.ErrNotFound) {
 		t.Fatalf("expired retry committed meta: %v", readErr)
 	}
-	if sweepErr := st.SweepGenerations(); sweepErr != nil {
+	if sweepErr := st.SweepGenerations(t.Context()); sweepErr != nil {
 		t.Fatalf("sweep expired generation: %v", sweepErr)
 	}
 	if _, statErr := os.Stat(gen); !errors.Is(statErr, fs.ErrNotExist) {
@@ -454,7 +454,7 @@ func TestSweepReclaimsOnlyAgedUncommittedGenerations(t *testing.T) {
 	if mkdirErr := os.MkdirAll(commitBlocker, 0o750); mkdirErr != nil {
 		t.Fatalf("block meta commit: %v", mkdirErr)
 	}
-	if publishErr := writer.Publish(t.Context(), staging, publishID); publishErr == nil {
+	if publishErr := writer.Publish(t.Context(), staging, publishID, ""); publishErr == nil {
 		t.Fatal("publish with blocked meta commit succeeded")
 	}
 	fresh := filepath.Join(root, publishID, store.ExportGen(meta))
@@ -513,7 +513,7 @@ func TestSweepGenerationsToleratesConcurrentDelete(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(staging, store.MetaFile), []byte(metaJSON(id)), 0o600); err != nil {
 				return err
 			}
-			if err := st.Publish(ctx, staging, id); err != nil {
+			if err := st.Publish(ctx, staging, id, ""); err != nil {
 				return fmt.Errorf("publish: %w", err)
 			}
 			if err := st.Delete(ctx, id); err != nil {
@@ -529,7 +529,7 @@ func TestSweepGenerationsToleratesConcurrentDelete(t *testing.T) {
 				return nil
 			default:
 			}
-			if err := st.SweepGenerations(); err != nil {
+			if err := st.SweepGenerations(t.Context()); err != nil {
 				return fmt.Errorf("sweep: %w", err)
 			}
 		}
@@ -646,7 +646,7 @@ func mustPublish(t testing.TB, st *Store, id, metaID string) {
 		t.Fatalf("stage %s: %v", metaID, err)
 	}
 	seedRecord(t, staging, metaID)
-	if err := st.Publish(t.Context(), staging, id); err != nil {
+	if err := st.Publish(t.Context(), staging, id, ""); err != nil {
 		t.Fatalf("publish %s: %v", metaID, err)
 	}
 }
@@ -658,7 +658,7 @@ func mustPublishDigested(t *testing.T, st *Store, id, metaID string) string {
 		t.Fatalf("stage %s: %v", metaID, err)
 	}
 	seedRecord(t, staging, metaID)
-	digest, err := st.PublishDigested(t.Context(), staging, id)
+	digest, err := st.PublishDigested(t.Context(), staging, id, "")
 	if err != nil {
 		t.Fatalf("publish digested %s: %v", metaID, err)
 	}

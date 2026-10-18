@@ -676,10 +676,13 @@ func (m *Manager) sweepStoreGenerations(ctx context.Context) {
 	}
 	defer m.genSweeping.Store(false)
 	logger := log.WithFunc("pool.sweepStoreGenerations")
-	if err := m.ckpts.SweepGenerations(); err != nil {
+	if err := m.ckpts.SweepGenerations(ctx); err != nil {
 		logger.Error(ctx, err, "sweep checkpoint generations")
 	}
-	if err := m.tpls.SweepGenerations(); err != nil {
+	if m.ckptsShared {
+		return
+	}
+	if err := m.tpls.SweepGenerations(ctx); err != nil {
 		logger.Error(ctx, err, "sweep template generations")
 	}
 }

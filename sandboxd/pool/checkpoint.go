@@ -189,7 +189,7 @@ func (m *Manager) publishCheckpoint(ctx context.Context, sb *types.Sandbox, ckID
 	if err := os.WriteFile(filepath.Join(staging, store.MetaFile), meta, 0o600); err != nil {
 		return types.Checkpoint{}, "", fmt.Errorf("write checkpoint meta: %w", err)
 	}
-	if err := m.ckpts.Publish(ctx, staging, ckpt.ID); err != nil {
+	if err := m.ckpts.Publish(ctx, staging, ckpt.ID, sb.ID); err != nil {
 		return types.Checkpoint{}, "", fmt.Errorf("commit checkpoint: %w", err)
 	}
 	return ckpt, srcSnap, nil
@@ -278,7 +278,7 @@ func (m *Manager) runHeal(ctx context.Context, ckptID string) (types.Checkpoint,
 	if ckpt, err := m.loadCheckpoint(ctx, ckptID); err == nil {
 		return ckpt, nil // published by another path while this one staged
 	}
-	if err := m.ckpts.Publish(ctx, staging, ckptID); err != nil {
+	if err := m.ckpts.Publish(ctx, staging, ckptID, ""); err != nil {
 		return types.Checkpoint{}, fmt.Errorf("publish healed checkpoint: %w", err)
 	}
 	return m.loadCheckpoint(ctx, ckptID)

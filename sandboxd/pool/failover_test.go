@@ -1914,7 +1914,7 @@ func seedArchiveCk(t *testing.T, m *Manager, id, sandboxID string) {
 	if err := os.WriteFile(filepath.Join(staging, store.MetaFile), []byte(meta), 0o600); err != nil {
 		t.Fatalf("meta: %v", err)
 	}
-	if err := m.ckpts.Publish(t.Context(), staging, id); err != nil {
+	if err := m.ckpts.Publish(t.Context(), staging, id, ""); err != nil {
 		t.Fatalf("publish: %v", err)
 	}
 }
@@ -1982,9 +1982,9 @@ type publishCountingStore struct {
 	n atomic.Int32
 }
 
-func (s *publishCountingStore) Publish(ctx context.Context, staging, id string) error {
+func (s *publishCountingStore) Publish(ctx context.Context, staging, id, lineage string) error {
 	s.n.Add(1)
-	return s.Store.Publish(ctx, staging, id)
+	return s.Store.Publish(ctx, staging, id, lineage)
 }
 
 type unreadableStore struct {

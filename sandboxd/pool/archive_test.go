@@ -51,6 +51,23 @@ func TestArchivePublishWindowPinsCheckpoint(t *testing.T) {
 	}
 }
 
+func TestArchivePublishesUnderTheSandboxLineage(t *testing.T) {
+	eng := newFakeEngine()
+	m := newTestManager(t, eng, archivePool(3600))
+	sb := mustClaim(t, m, testKey)
+	if err := m.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
+		t.Fatalf("hibernate: %v", err)
+	}
+	rec := &lineageStore{Store: m.ckpts}
+	m.ckpts = rec
+	if err := m.archive(t.Context(), sb); err != nil {
+		t.Fatalf("archive: %v", err)
+	}
+	if rec.lineage != sb.ID {
+		t.Errorf("archive lineage = %q, want the sandbox id %q", rec.lineage, sb.ID)
+	}
+}
+
 func TestArchiveWakeRehibernateWindowAborts(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng, archivePool(3600))
@@ -155,7 +172,7 @@ func TestReconcileReclaimsOrphanArchiveCk(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(staging, store.MetaFile), []byte(meta), 0o600); err != nil {
 			t.Fatalf("meta: %v", err)
 		}
-		if err := m.ckpts.Publish(t.Context(), staging, id); err != nil {
+		if err := m.ckpts.Publish(t.Context(), staging, id, ""); err != nil {
 			t.Fatalf("publish: %v", err)
 		}
 	}
@@ -920,13 +937,23 @@ type stallingStore struct {
 	release   chan struct{}
 }
 
-func (s *stallingStore) Publish(ctx context.Context, staging, id string) error {
-	if err := s.Store.Publish(ctx, staging, id); err != nil {
+func (s *stallingStore) Publish(ctx context.Context, staging, id, lineage string) error {
+	if err := s.Store.Publish(ctx, staging, id, lineage); err != nil {
 		return err
 	}
 	s.published <- id
 	<-s.release
 	return nil
+}
+
+type lineageStore struct {
+	store.Store
+	lineage string
+}
+
+func (s *lineageStore) Publish(ctx context.Context, staging, id, lineage string) error {
+	s.lineage = lineage
+	return s.Store.Publish(ctx, staging, id, lineage)
 }
 
 type failingDeleteStore struct {

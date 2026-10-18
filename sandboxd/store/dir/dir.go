@@ -56,11 +56,11 @@ func (d *Store) Stage(id string) (string, error) {
 	return os.MkdirTemp(d.root, id+"-*.tmp")
 }
 
-func (d *Store) Publish(ctx context.Context, staging, id string) error {
+func (d *Store) Publish(ctx context.Context, staging, id, _ string) error {
 	return d.publish(ctx, staging, id, "")
 }
 
-func (d *Store) PublishDigested(ctx context.Context, staging, id string) (string, error) {
+func (d *Store) PublishDigested(ctx context.Context, staging, id, _ string) (string, error) {
 	digest, err := hashExport(ctx, filepath.Join(staging, store.ExportDir))
 	if err != nil {
 		return "", fmt.Errorf("digest export: %w", err)
@@ -155,10 +155,14 @@ func (d *Store) SweepStaging() error {
 	if err := utils.RemoveDirEntries(d.root, func(name string) bool { return strings.HasSuffix(name, ".tmp") }); err != nil {
 		return err
 	}
-	return d.SweepGenerations()
+	return d.sweepRecords()
 }
 
-func (d *Store) SweepGenerations() error {
+func (d *Store) SweepGenerations(context.Context) error {
+	return d.sweepRecords()
+}
+
+func (d *Store) sweepRecords() error {
 	entries, err := os.ReadDir(d.root)
 	if err != nil {
 		return err

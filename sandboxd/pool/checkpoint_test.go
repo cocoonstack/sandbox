@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -363,6 +364,29 @@ func TestRejectedCheckpointOpsLeakNoRecLock(t *testing.T) {
 	}
 }
 
+func TestSharedStoreSweepsOncePerTick(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		shared    bool
+		wantCkpts int32
+		wantTpls  int32
+	}{
+		{"per-node store sweeps both views", false, 1, 1},
+		{"shared store sweeps its one prefix once", true, 1, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := newTestManager(t, newFakeEngine(), config.PoolSpec{PoolKey: testKey})
+			ckpts := &sweepCountingStore{Store: m.ckpts}
+			tpls := &sweepCountingStore{Store: m.tpls}
+			m.ckpts, m.tpls, m.ckptsShared = ckpts, tpls, tc.shared
+			m.sweepStoreGenerations(t.Context())
+			if ckpts.sweeps.Load() != tc.wantCkpts || tpls.sweeps.Load() != tc.wantTpls {
+				t.Errorf("sweeps = checkpoints %d, templates %d, want %d, %d", ckpts.sweeps.Load(), tpls.sweeps.Load(), tc.wantCkpts, tc.wantTpls)
+			}
+		})
+	}
+}
+
 type stallingMetasStore struct {
 	store.Store
 	entered chan struct{}
@@ -378,17 +402,27 @@ func (s *stallingMetasStore) Metas(ctx context.Context) ([]store.Record, error) 
 	return s.Store.Metas(ctx)
 }
 
+type sweepCountingStore struct {
+	store.Store
+	sweeps atomic.Int32
+}
+
+func (s *sweepCountingStore) SweepGenerations(ctx context.Context) error {
+	s.sweeps.Add(1)
+	return s.Store.SweepGenerations(ctx)
+}
+
 type stallingSweepStore struct {
 	store.Store
 	entered chan struct{}
 	release chan struct{}
 }
 
-func (s *stallingSweepStore) SweepGenerations() error {
+func (s *stallingSweepStore) SweepGenerations(ctx context.Context) error {
 	select {
 	case s.entered <- struct{}{}:
 	default:
 	}
 	<-s.release
-	return s.Store.SweepGenerations()
+	return s.Store.SweepGenerations(ctx)
 }
