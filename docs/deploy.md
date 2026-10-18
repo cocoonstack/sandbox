@@ -191,7 +191,8 @@ on a Firecracker node or with an older cocoon: there every read spends a warm VM
 on an attach that fails, then wakes the claim. An archive exported by an older
 cocoon, whose `snapshot.json` has no `disk_attach_files`, wakes before any VM is
 taken. Unpooled claims (template and checkpoint claims) always wake.
-`reader` is reloadable like `capture_trim`.
+`reader` is reloadable like `capture_trim`; turning it off leaves open reader
+connections to finish, and the next connection wakes the claim.
 
 A reader is a warm VM taken from the claim's own pool, so it boots the claim's
 image with the claim's layers, and it has that pool's lane: no NIC on the none
