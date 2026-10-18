@@ -36,8 +36,8 @@ func TestS3BackendContract(t *testing.T) {
 func TestDeleteRetryConverges(t *testing.T) {
 	const id = "ck_00000000000000bb"
 	fake := &fakeS3{objects: map[string][]byte{
-		"ck/" + id + "/" + store.MetaFile:                             []byte(`{"id":"` + id + `"}`),
-		"ck/" + id + "/" + store.ExportDir + "-first/" + manifestName: []byte(`{"files":[]}`),
+		"ck/" + id + "/" + store.MetaFile:                            []byte(`{"id":"` + id + `"}`),
+		"ck/manifests/" + id + "/" + store.ExportDir + "-first.json": []byte(`{"lineage":"` + id + `","files":[]}`),
 	}}
 	st := newTestStore(t, fake)
 	if err := st.Delete(t.Context(), id); err != nil {
@@ -46,7 +46,7 @@ func TestDeleteRetryConverges(t *testing.T) {
 	if err := st.Delete(t.Context(), id); err != nil {
 		t.Fatalf("delete retry after keys already gone: %v", err)
 	}
-	if keys := fake.keys(); len(keys) != 1 || !strings.HasSuffix(keys[0], manifestName) {
+	if keys := fake.keys(); len(keys) != 1 || !strings.HasPrefix(keys[0], "ck/manifests/") {
 		t.Errorf("objects after Delete = %v, want only the manifest", keys)
 	}
 }
@@ -55,8 +55,8 @@ func TestDeleteRetainsMetaUntilManifestsAreRefreshed(t *testing.T) {
 	const id = "ck_00000000000000bb"
 	metaKey := "ck/" + id + "/" + store.MetaFile
 	manifestKeys := []string{
-		"ck/" + id + "/export-first/" + manifestName,
-		"ck/" + id + "/export-second/" + manifestName,
+		"ck/manifests/" + id + "/export-first.json",
+		"ck/manifests/" + id + "/export-second.json",
 	}
 	for _, tc := range []struct {
 		name       string
@@ -70,8 +70,8 @@ func TestDeleteRetainsMetaUntilManifestsAreRefreshed(t *testing.T) {
 			fake := &fakeS3{
 				objects: map[string][]byte{
 					metaKey:         []byte(`{"id":"` + id + `"}`),
-					manifestKeys[0]: []byte(`{"files":[]}`),
-					manifestKeys[1]: []byte(`{"files":[]}`),
+					manifestKeys[0]: []byte(`{"lineage":"` + id + `","files":[]}`),
+					manifestKeys[1]: []byte(`{"lineage":"` + id + `","files":[]}`),
 				},
 				failList:   tc.failList,
 				failDelete: tc.failDelete,
@@ -663,8 +663,8 @@ func TestSweepRemovesSupersededGenerationsPastTheGrace(t *testing.T) {
 	second := []byte(`{"id":"` + id + `","gen":2}`)
 	publishRecord(t, st, id, first, "first")
 	publishRecord(t, st, id, second, "second")
-	firstManifest := "ck/" + id + "/" + store.ExportGen(first) + "/" + manifestName
-	secondManifest := "ck/" + id + "/" + store.ExportGen(second) + "/" + manifestName
+	firstManifest := "ck/manifests/" + id + "/" + store.ExportGen(first) + manifestExt
+	secondManifest := "ck/manifests/" + id + "/" + store.ExportGen(second) + manifestExt
 
 	if err := st.SweepGenerations(t.Context()); err != nil {
 		t.Fatalf("SweepGenerations: %v", err)
@@ -692,7 +692,7 @@ func TestSweepRemovesSupersededGenerationsPastTheGrace(t *testing.T) {
 		t.Error("the current generation was swept")
 	}
 	secondChunk := sha256.Sum256([]byte("second"))
-	want := []string{"ck/chunks/" + id + "/" + hex.EncodeToString(secondChunk[:]), secondManifest, "ck/" + id + "/" + store.MetaFile}
+	want := []string{"ck/chunks/" + id + "/" + hex.EncodeToString(secondChunk[:]), "ck/" + id + "/" + store.MetaFile, secondManifest}
 	if keys := fake.keys(); !slices.Equal(keys, want) {
 		t.Errorf("objects after the sweep = %v, want %v", keys, want)
 	}
@@ -780,6 +780,10 @@ func TestSweepRemovesLineageMarkersOfDeadRecords(t *testing.T) {
 	if err := st.Delete(t.Context(), "ck_00000000000000f1"); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
+	if _, ok := fake.get(marker("ck_00000000000000f1")); ok {
+		t.Error("Delete left the lineage marker of the deleted record")
+	}
+	fake.put(marker("ck_00000000000000f1"), nil)
 	fake.age("", 2*store.GenerationGrace)
 	fake.put(fresh, nil)
 
@@ -840,7 +844,7 @@ func TestSweepSparesAnInFlightGeneration(t *testing.T) {
 	st := newTestStore(t, fake)
 	publishRecord(t, st, id, []byte(`{"id":"`+id+`","gen":1}`), "first")
 	fake.age("", 2*store.GenerationGrace)
-	inFlight := "ck/" + id + "/" + store.ExportDir + "-0000000000000000/" + manifestName
+	inFlight := "ck/manifests/" + id + "/" + store.ExportDir + "-0000000000000000" + manifestExt
 	fake.put(inFlight, []byte(`{"lineage":"`+id+`","files":[]}`))
 
 	if err := st.SweepGenerations(t.Context()); err != nil {
@@ -882,6 +886,42 @@ func TestPublishUploadsAnUnreferencedChunkAgain(t *testing.T) {
 	publishIn("ck_00000000000000c4", "elsewhere", "")
 	if puts := publishIn("ck_00000000000000c5", "elsewhere", lineage); puts != 1 {
 		t.Errorf("a chunk another lineage's manifest references was reused: %d uploads, want 1", puts)
+	}
+}
+
+func TestDeletedRecordLeavesNoPrefixToList(t *testing.T) {
+	const (
+		gone = "ck_00000000000000b1"
+		live = "ck_00000000000000b2"
+	)
+	fake := &fakeS3{objects: map[string][]byte{}}
+	st := newTestStore(t, fake)
+	publishRecord(t, st, gone, []byte(`{"id":"`+gone+`"}`), "gone-payload")
+	publishRecord(t, st, live, []byte(`{"id":"`+live+`"}`), "live-payload")
+	if err := st.Delete(t.Context(), gone); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	for _, key := range fake.keys() {
+		if strings.HasPrefix(key, "ck/"+gone+"/") {
+			t.Errorf("Delete left %s under the record prefix", key)
+		}
+	}
+
+	fake.resetRequests()
+	recs, err := st.Metas(t.Context())
+	if err != nil || len(recs) != 1 {
+		t.Fatalf("Metas = %d records, %v, want only the live one", len(recs), err)
+	}
+	if got := fake.requestCount(http.MethodGet, "ck/"+gone+"/"+store.MetaFile); got != 0 {
+		t.Errorf("Metas read the meta of the deleted record %d times, want 0", got)
+	}
+
+	if err = st.SweepGenerations(t.Context()); err != nil {
+		t.Fatalf("SweepGenerations: %v", err)
+	}
+	sum := sha256.Sum256([]byte("gone-payload"))
+	if _, ok := fake.get("ck/chunks/" + gone + "/" + hex.EncodeToString(sum[:])); !ok {
+		t.Error("the sweep freed the chunk of a record deleted within the grace")
 	}
 }
 

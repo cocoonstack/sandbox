@@ -1,9 +1,9 @@
 // Package s3 is the object-store record backend for nodes without a
-// shared POSIX namespace: <prefix><id>/{export-<gen>/manifest.json,meta.json}
-// plus the content-addressed chunks the manifests name, meta.json uploaded
-// last as the commit marker (S3 has no atomic multi-object rename). Export
-// files are stored as 16 MiB chunks keyed by SHA-256; holes and all-zero
-// chunks are absent. The aws dependency is scoped to this package.
+// shared POSIX namespace: <prefix><id>/meta.json (live records only) plus
+// <prefix>manifests/<id>/<gen>.json and the content-addressed chunks the
+// manifests name, meta.json uploaded last as the commit marker (S3 has no
+// atomic multi-object rename). Exports are 16 MiB chunks keyed by SHA-256;
+// holes and all-zero chunks are absent. The aws dependency stays in this package.
 package s3
 
 import (
@@ -38,7 +38,8 @@ import (
 
 const (
 	digestMetadataKey   = "content-digest"
-	manifestName        = "manifest.json"
+	manifestsDir        = "manifests"
+	manifestExt         = ".json"
 	chunksDir           = "chunks"
 	lineagesDir         = "lineages"
 	uploadConcurrency   = 8 // chunk PUTs in flight per publish
@@ -204,18 +205,22 @@ func (s *Store) SetLabels(ctx context.Context, id string, labels []byte) error {
 
 func (s *Store) Delete(ctx context.Context, id string) error {
 	_ = os.RemoveAll(filepath.Join(s.staging, "cache", id))
-	objs, err := s.list(ctx, s.key(id, "")+"/")
+	objs, err := s.list(ctx, s.manifestPrefix(id))
 	if err != nil {
 		return err
 	}
+	drop := []string{s.key(id, store.LabelsFile)}
 	for _, key := range objectKeys(objs) {
-		if strings.HasSuffix(key, "/"+manifestName) {
-			if err = s.refreshObject(ctx, key); err != nil {
-				return err
-			}
+		man, refreshErr := s.refreshManifest(ctx, key)
+		if refreshErr != nil {
+			return refreshErr
+		}
+		lineage := cmp.Or(man.Lineage, id)
+		if marker := s.lineageKey(lineage, id); lineage != id && !slices.Contains(drop, marker) {
+			drop = append(drop, marker)
 		}
 	}
-	if err = s.deleteKeys(ctx, []string{s.key(id, store.LabelsFile)}); err != nil {
+	if err = s.deleteKeys(ctx, drop); err != nil {
 		return err
 	}
 	return s.deleteKeys(ctx, []string{s.key(id, store.MetaFile)})
@@ -290,7 +295,7 @@ func (s *Store) currentManifest(ctx context.Context, id string) (manifest, error
 }
 
 func (s *Store) readManifest(ctx context.Context, id, gen string) (manifest, error) {
-	raw, _, err := s.getObject(ctx, s.key(id, gen+"/"+manifestName))
+	raw, _, err := s.getObject(ctx, s.manifestKey(id, gen))
 	if err != nil {
 		return manifest{}, err
 	}
@@ -367,7 +372,7 @@ func (s *Store) publish(ctx context.Context, staging, id, lineage string, digest
 	if err != nil {
 		return "", fmt.Errorf("encode manifest: %w", err)
 	}
-	if err = s.putObject(ctx, s.key(id, gen+"/"+manifestName), manifestRaw, nil); err != nil {
+	if err = s.putObject(ctx, s.manifestKey(id, gen), manifestRaw, nil); err != nil {
 		return "", err
 	}
 	if lineage != id {
@@ -481,6 +486,14 @@ func (s *Store) key(id, rest string) string {
 	return s.prefix + id + "/" + filepath.ToSlash(rest)
 }
 
+func (s *Store) manifestPrefix(id string) string {
+	return s.prefix + manifestsDir + "/" + id + "/"
+}
+
+func (s *Store) manifestKey(id, gen string) string {
+	return s.manifestPrefix(id) + gen + manifestExt
+}
+
 func (s *Store) lineageKey(lineage, id string) string {
 	return s.prefix + lineagesDir + "/" + lineage + "/" + id
 }
@@ -584,15 +597,19 @@ func (s *Store) sweepRecord(ctx context.Context, rec *recordObjects, now time.Ti
 	return doomed, nil
 }
 
-func (s *Store) refreshObject(ctx context.Context, key string) error {
+func (s *Store) refreshManifest(ctx context.Context, key string) (manifest, error) {
 	body, _, err := s.getObject(ctx, key)
 	if errors.Is(err, store.ErrNotFound) {
-		return nil
+		return manifest{}, nil
 	}
 	if err != nil {
-		return err
+		return manifest{}, err
 	}
-	return s.putObject(ctx, key, body, nil)
+	var man manifest
+	if err = json.Unmarshal(body, &man); err != nil {
+		return manifest{}, fmt.Errorf("decode manifest %s: %w", key, err)
+	}
+	return man, s.putObject(ctx, key, body, nil)
 }
 
 func (s *Store) putObject(ctx context.Context, key string, body []byte, metadata map[string]string) error {
@@ -666,6 +683,15 @@ func (inv inventory) alive(id string, dead map[string]struct{}) bool {
 		}
 	}
 	return false
+}
+
+func (inv inventory) record(id string) *recordObjects {
+	rec := inv.records[id]
+	if rec == nil {
+		rec = &recordObjects{manifests: map[string]s3types.Object{}}
+		inv.records[id] = rec
+	}
+	return rec
 }
 
 type chunkUploader struct {
@@ -791,6 +817,13 @@ func newInventory(prefix string, objs []s3types.Object) inventory {
 	inv := inventory{records: map[string]*recordObjects{}, chunks: map[string][]s3types.Object{}}
 	for _, obj := range objs {
 		first, rest, _ := strings.Cut(strings.TrimPrefix(*obj.Key, prefix), "/")
+		if first == manifestsDir {
+			id, name, _ := strings.Cut(rest, "/")
+			if gen, ok := strings.CutSuffix(name, manifestExt); ok && knownID(id) {
+				inv.record(id).manifests[gen] = obj
+			}
+			continue
+		}
 		if first == lineagesDir {
 			inv.markers = append(inv.markers, obj)
 			continue
@@ -801,21 +834,15 @@ func newInventory(prefix string, objs []s3types.Object) inventory {
 			}
 			continue
 		}
-		if !store.CheckpointIDRe.MatchString(first) && !store.TemplateIDRe.MatchString(first) {
-			continue
-		}
-		rec := inv.records[first]
-		if rec == nil {
-			rec = &recordObjects{manifests: map[string]s3types.Object{}}
-			inv.records[first] = rec
-		}
-		if rest == store.MetaFile {
-			rec.meta = &obj
-		} else if gen, name, ok := strings.Cut(rest, "/"); ok && name == manifestName {
-			rec.manifests[gen] = obj
+		if knownID(first) && rest == store.MetaFile {
+			inv.record(first).meta = &obj
 		}
 	}
 	return inv
+}
+
+func knownID(id string) bool {
+	return store.CheckpointIDRe.MatchString(id) || store.TemplateIDRe.MatchString(id)
 }
 
 func getChunkBuf() []byte { return *chunkBufs.Get().(*[]byte) }
