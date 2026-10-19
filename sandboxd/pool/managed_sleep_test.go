@@ -24,10 +24,15 @@ type sleepTestEngine struct {
 	generation                uint64
 	reason                    string
 	vmID                      string
+	sourceID                  string
 	hooks                     []engine.VolumeHookCall
 	hookErr                   string
 	hookEntered, hookContinue chan struct{}
 	restoreAfterErr           bool
+	replaceSourceOnRestore    bool
+	snapshotRemoveErr         error
+	snapshotRemoveAfterEffect bool
+	snapshotRemoveMutation    string
 	mounted                   bool
 }
 
@@ -146,12 +151,56 @@ func (e *sleepTestEngine) Restore(ctx context.Context, name, snap string) (strin
 	e.sleepMu.Lock()
 	e.generation++
 	e.reason = "restore"
+	if e.replaceSourceOnRestore {
+		e.sourceID = "replacement-source"
+	}
 	postErr := e.restoreAfterErr
 	e.sleepMu.Unlock()
 	if postErr {
 		return "", errors.New("restore reply lost")
 	}
 	return sock, nil
+}
+
+func (e *sleepTestEngine) InspectHibernateSource(ctx context.Context, name string) (engine.HibernateSource, bool, error) {
+	source, found, err := e.fakeEngine.InspectHibernateSource(ctx, name)
+	e.sleepMu.Lock()
+	defer e.sleepMu.Unlock()
+	if found && e.sourceID != "" {
+		source.ID = e.sourceID
+	}
+	return source, found, err
+}
+
+func (e *sleepTestEngine) SnapshotRemove(ctx context.Context, name string) error {
+	e.sleepMu.Lock()
+	err := e.snapshotRemoveErr
+	afterEffect := e.snapshotRemoveAfterEffect
+	mutation := e.snapshotRemoveMutation
+	e.sleepMu.Unlock()
+	if err != nil && !afterEffect {
+		return err
+	}
+	if removeErr := e.fakeEngine.SnapshotRemove(ctx, name); removeErr != nil {
+		return removeErr
+	}
+	switch mutation {
+	case "vm id":
+		e.sleepMu.Lock()
+		e.vmID = "replacement-vm"
+		e.sleepMu.Unlock()
+	case "generation":
+		e.sleepMu.Lock()
+		e.generation++
+		e.sleepMu.Unlock()
+	case "process":
+		e.mu.Lock()
+		for vmName := range e.pids {
+			e.pids[vmName]++
+		}
+		e.mu.Unlock()
+	}
+	return err
 }
 
 func (e *sleepTestEngine) RunVolumeHook(_ context.Context, _ string, call engine.VolumeHookCall) error {
@@ -248,6 +297,9 @@ func TestManagedSleepAbortKeepsOriginalVM(t *testing.T) {
 			}
 			if e.hooks[len(e.hooks)-1].Action != "resume" {
 				t.Fatal("writers not resumed")
+			}
+			if len(e.snapRemoves) != 0 {
+				t.Fatalf("abort removed nonexistent source: %v", e.snapRemoves)
 			}
 		})
 	}
@@ -550,6 +602,38 @@ func TestManagedSleepUnknownSourceAndDeadResumingRefuse(t *testing.T) {
 	}
 }
 
+func TestManagedSleepDeadBoundVMIsReleaseOnly(t *testing.T) {
+	m, e, sb, _ := newSleepTest(t)
+	requireSleep(t, m, sb)
+	e.hookErr = "resume"
+	if err := m.Wake(t.Context(), sb.ID, Cred{Token: sb.Token}); err == nil {
+		t.Fatal("resume failure hidden")
+	}
+	h, _ := m.managedHold(sb.ID)
+	if h.Sleep == nil || h.Sleep.Restored == (processIdentity{}) || len(e.snapshots) != 0 {
+		t.Fatalf("wake did not bind before consuming source: %+v snapshots=%v", h, e.snapshots)
+	}
+	e.mu.Lock()
+	e.stopped[sb.VMName] = true
+	e.mu.Unlock()
+	restores := len(e.restores)
+	if err := m.Wake(t.Context(), sb.ID, Cred{Token: sb.Token}); err == nil {
+		t.Fatal("dead bound VM resumed")
+	}
+	if len(e.restores) != restores {
+		t.Fatal("dead bound VM replayed restore")
+	}
+	if err := m.Release(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
+		t.Fatal(err)
+	}
+	if _, held := m.managedHold(sb.ID); held {
+		t.Fatal("release retained dead bound owner")
+	}
+	if _, err := os.Stat(h.Refs[0].Path); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestManagedSleepReleaseWaitsForPrepare(t *testing.T) {
 	m, e, sb, _ := newSleepTest(t)
 	_, fenced, release, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token)
@@ -769,6 +853,199 @@ func TestManagedSleepRestoreBeforeEffectRetriesSameSource(t *testing.T) {
 	}
 	if len(e.restores) != 2 {
 		t.Fatal("safe stopped restore was not retried")
+	}
+}
+
+func TestManagedSleepWakeWaitsForSourceConsumption(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{"active restore lease", errors.New("snapshot is in use")},
+		{"remove failure", errors.New("snapshot delete failed")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, e, sb, _ := newSleepTest(t)
+			requireSleep(t, m, sb)
+			e.mu.Lock()
+			beforeOps := slices.Clone(e.volumeOps)
+			e.mu.Unlock()
+			e.sleepMu.Lock()
+			beforeHooks := len(e.hooks)
+			e.snapshotRemoveErr = tc.err
+			e.sleepMu.Unlock()
+
+			if err := m.Wake(t.Context(), sb.ID, Cred{Token: sb.Token}); err == nil {
+				t.Fatal("wake passed unavailable source-consumption barrier")
+			}
+			h, held := m.managedHold(sb.ID)
+			if !held || h.Sleep == nil || h.Sleep.Phase != sleepWaking || h.Sleep.Restored == (processIdentity{}) {
+				t.Fatalf("failed barrier lost waking owner: %+v", h)
+			}
+			if _, err := m.AgentSocket(sb.ID, sb.Token); !errors.Is(err, ErrPaused) {
+				t.Fatalf("failed barrier published guest: %v", err)
+			}
+			e.mu.Lock()
+			afterOps := slices.Clone(e.volumeOps)
+			sourcePresent := slices.Contains(e.snapshots, h.Sleep.Snapshot)
+			e.mu.Unlock()
+			e.sleepMu.Lock()
+			afterHooks := len(e.hooks)
+			e.snapshotRemoveErr = nil
+			e.sleepMu.Unlock()
+			if !slices.Equal(afterOps, beforeOps) || afterHooks != beforeHooks || !sourcePresent {
+				t.Fatalf("barrier failure reached guest: ops=%v hooks=%d source=%v", afterOps, afterHooks, sourcePresent)
+			}
+			generation := e.generation
+			if err := m.Wake(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
+				t.Fatal(err)
+			}
+			if len(e.restores) != 1 || e.generation != generation {
+				t.Fatalf("barrier retry replayed restore: restores=%d generation=%d want=%d", len(e.restores), e.generation, generation)
+			}
+		})
+	}
+}
+
+func TestManagedSleepWakeAcceptsRemoveErrorAfterSourceGone(t *testing.T) {
+	m, e, sb, _ := newSleepTest(t)
+	requireSleep(t, m, sb)
+	e.snapshotRemoveErr = errors.New("snapshot remove reply lost")
+	e.snapshotRemoveAfterEffect = true
+	if err := m.Wake(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
+		t.Fatal(err)
+	}
+	if len(e.snapRemoves) != 1 || len(e.snapshots) != 0 {
+		t.Fatalf("remove after-effect was not accepted: removes=%v snapshots=%v", e.snapRemoves, e.snapshots)
+	}
+}
+
+func TestManagedSleepWakeRetriesAfterConsumedSource(t *testing.T) {
+	m, e, sb, cfg := newSleepTest(t)
+	requireSleep(t, m, sb)
+	e.diskAttachErr = errors.New("attach unavailable")
+	if err := m.Wake(t.Context(), sb.ID, Cred{Token: sb.Token}); err == nil {
+		t.Fatal("attach failure hidden")
+	}
+	h, held := m.managedHold(sb.ID)
+	if !held || h.Sleep == nil || h.Sleep.Restored == (processIdentity{}) {
+		t.Fatalf("failed attach lost bound waking owner: %+v", h)
+	}
+	if len(e.snapshots) != 0 || len(e.snapRemoves) != 1 {
+		t.Fatalf("source was not consumed before attach: removes=%v snapshots=%v", e.snapRemoves, e.snapshots)
+	}
+	generation := e.generation
+	if err := m.Close(); err != nil {
+		t.Fatal(err)
+	}
+	e.diskAttachErr = nil
+	recovered, err := NewManager(t.Context(), cfg, e, testSecrets(t), testBackends(t, cfg))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer recovered.Close()
+	recovered.managed.process = e.identity
+	if err = recovered.Reconcile(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if err = recovered.Wake(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
+		t.Fatal(err)
+	}
+	if len(e.restores) != 1 || len(e.snapRemoves) != 1 || e.generation != generation {
+		t.Fatalf("consumed-source retry repeated effect: restores=%d removes=%d generation=%d want=%d", len(e.restores), len(e.snapRemoves), e.generation, generation)
+	}
+}
+
+func TestManagedSleepWakeRefusesReplacementSourceAfterRestore(t *testing.T) {
+	m, e, sb, _ := newSleepTest(t)
+	requireSleep(t, m, sb)
+	e.replaceSourceOnRestore = true
+	if err := m.Wake(t.Context(), sb.ID, Cred{Token: sb.Token}); err == nil {
+		t.Fatal("replacement source crossed restore barrier")
+	}
+	h, held := m.managedHold(sb.ID)
+	if !held || h.Sleep == nil || h.Sleep.Restored == (processIdentity{}) || len(e.snapRemoves) != 0 {
+		t.Fatalf("replacement source changed ownership: %+v removes=%v", h, e.snapRemoves)
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if len(e.disks[sb.VMName]) != 0 {
+		t.Fatalf("replacement source reached attach: %+v", e.disks[sb.VMName])
+	}
+}
+
+func TestManagedSleepWakeRevalidatesAfterSourceConsumption(t *testing.T) {
+	for _, mutation := range []string{"vm id", "generation", "process"} {
+		t.Run(mutation, func(t *testing.T) {
+			m, e, sb, _ := newSleepTest(t)
+			requireSleep(t, m, sb)
+			e.mu.Lock()
+			beforeOps := slices.Clone(e.volumeOps)
+			e.mu.Unlock()
+			e.snapshotRemoveMutation = mutation
+			if err := m.Wake(t.Context(), sb.ID, Cred{Token: sb.Token}); err == nil {
+				t.Fatal("changed restored VM crossed source barrier")
+			}
+			h, held := m.managedHold(sb.ID)
+			if !held || h.Sleep == nil || h.Sleep.Restored == (processIdentity{}) || len(e.snapshots) != 0 {
+				t.Fatalf("revalidation failure lost owner: %+v snapshots=%v", h, e.snapshots)
+			}
+			e.mu.Lock()
+			defer e.mu.Unlock()
+			if !slices.Equal(e.volumeOps, beforeOps) {
+				t.Fatalf("revalidation failure reached guest: before=%v after=%v", beforeOps, e.volumeOps)
+			}
+		})
+	}
+}
+
+func TestManagedSleepResumingWaitsForSourceConsumption(t *testing.T) {
+	m, e, sb, _ := newSleepTest(t)
+	requireSleep(t, m, sb)
+	h, _ := m.managedHold(sb.ID)
+	if _, err := e.Restore(t.Context(), sb.VMName, h.Sleep.Snapshot); err != nil {
+		t.Fatal(err)
+	}
+	rec, _, err := e.Inspect(t.Context(), sb.VMName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := e.identity(rec.PID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	next := *h.Sleep
+	next.Phase = sleepResuming
+	next.Restored = p
+	h.Process = p
+	if err = m.managed.commitManagedSleep(h, &next); err != nil {
+		t.Fatal(err)
+	}
+	e.mu.Lock()
+	beforeOps := slices.Clone(e.volumeOps)
+	e.mu.Unlock()
+	e.sleepMu.Lock()
+	beforeHooks := len(e.hooks)
+	e.snapshotRemoveErr = errors.New("snapshot is in use")
+	e.sleepMu.Unlock()
+	if err = m.Wake(t.Context(), sb.ID, Cred{Token: sb.Token}); err == nil {
+		t.Fatal("resuming guest passed unavailable source-consumption barrier")
+	}
+	e.mu.Lock()
+	afterOps := slices.Clone(e.volumeOps)
+	e.mu.Unlock()
+	e.sleepMu.Lock()
+	afterHooks := len(e.hooks)
+	e.snapshotRemoveErr = nil
+	e.sleepMu.Unlock()
+	if !slices.Equal(afterOps, beforeOps) || afterHooks != beforeHooks {
+		t.Fatalf("resuming barrier failure reached guest: ops=%v hooks=%d", afterOps, afterHooks)
+	}
+	if err = m.Wake(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
+		t.Fatal(err)
+	}
+	if len(e.restores) != 1 {
+		t.Fatalf("resuming barrier retry replayed restore: %v", e.restores)
 	}
 }
 

@@ -71,6 +71,31 @@ func (m *Manager) restoreManagedSleep(ctx context.Context, h volumeHold) (types.
 	return rec, nil
 }
 
+func (m *Manager) consumeManagedSleepSource(ctx context.Context, h volumeHold) (types.VMRecord, error) {
+	if h.Sleep.Restored == (processIdentity{}) || h.Process != h.Sleep.Restored {
+		return types.VMRecord{}, sleepRecoveryError()
+	}
+	source, exists, err := m.eng.InspectHibernateSource(ctx, h.Sleep.Snapshot)
+	if err != nil {
+		return types.VMRecord{}, err
+	}
+	if exists && source.ID != h.Sleep.SourceID {
+		return types.VMRecord{}, sleepRecoveryError()
+	}
+	var effectErr error
+	if exists {
+		effectErr = m.eng.SnapshotRemove(ctx, h.Sleep.Snapshot)
+	}
+	source, exists, err = m.eng.InspectHibernateSource(ctx, h.Sleep.Snapshot)
+	if err != nil {
+		return types.VMRecord{}, errors.Join(effectErr, err)
+	}
+	if exists {
+		return types.VMRecord{}, errors.Join(effectErr, sleepRecoveryError())
+	}
+	return m.sleepVM(ctx, h, true)
+}
+
 func (m *Manager) attachManagedSleep(ctx context.Context, h volumeHold, sock string, restored bool) error {
 	if err := m.verifySleepBacking(h); err != nil {
 		return err

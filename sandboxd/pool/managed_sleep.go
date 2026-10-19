@@ -282,6 +282,10 @@ func (m *Manager) wakeManagedSleep(ctx context.Context, sb *types.Sandbox, h vol
 		}
 		h.Sleep = &next
 	}
+	rec, err = m.consumeManagedSleepSource(ctx, h)
+	if err != nil {
+		return err
+	}
 	sock, err := m.probeReady(ctx, h.VMName, rec.VsockSocket, claimProbeTimeout)
 	if err != nil {
 		return err
@@ -296,7 +300,13 @@ func (m *Manager) wakeManagedSleep(ctx context.Context, sb *types.Sandbox, h vol
 }
 
 func (m *Manager) resumeManagedSleep(ctx context.Context, sb *types.Sandbox, h volumeHold, restored bool) error {
-	rec, err := m.sleepVM(ctx, h, restored)
+	var rec types.VMRecord
+	var err error
+	if restored {
+		rec, err = m.consumeManagedSleepSource(ctx, h)
+	} else {
+		rec, err = m.sleepVM(ctx, h, false)
+	}
 	if err != nil {
 		return err
 	}
@@ -344,7 +354,6 @@ func (m *Manager) resumeManagedSleep(ctx context.Context, sb *types.Sandbox, h v
 		m.counters.wakes.Add(1)
 		m.recordUsage(ctx, usageEvent{Event: "wake", ID: sb.ID, VMName: sb.VMName})
 	}
-	m.dropSnap(ctx, h.Sleep.Snapshot)
 	return nil
 }
 
