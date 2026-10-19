@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"strconv"
 	"strings"
@@ -20,7 +21,8 @@ func readProcessIdentityAt(procDir string, pid int) (processIdentity, error) {
 	if pid <= 0 {
 		return processIdentity{}, errors.New("VMM PID unavailable")
 	}
-	boot, err := os.ReadFile(procDir + "/sys/kernel/random/boot_id")
+	proc := os.DirFS(procDir)
+	boot, err := fs.ReadFile(proc, "sys/kernel/random/boot_id")
 	if err != nil {
 		// Missing boot metadata cannot prove that the PID is gone.
 		return processIdentity{}, fmt.Errorf("read VMM boot identity: %v", err)
@@ -29,7 +31,7 @@ func readProcessIdentityAt(procDir string, pid int) (processIdentity, error) {
 	if bootID == "" {
 		return processIdentity{}, errors.New("empty VMM boot identity")
 	}
-	stat, err := os.ReadFile(procDir + "/" + strconv.Itoa(pid) + "/stat")
+	stat, err := fs.ReadFile(proc, strconv.Itoa(pid)+"/stat")
 	if err != nil {
 		return processIdentity{}, err
 	}
@@ -74,29 +76,11 @@ func (m *Manager) admitManaged(tenant string, volumes []resolvedVolume) ([]types
 	}
 	h := volumeHold{SandboxID: "sb_" + randHex(8), Tenant: tenant, State: holdAttaching}
 	for _, volume := range volumes {
-		if volume.managedID != "" {
-			v, ok := r.data.Volumes[volume.applied.Name]
-			if !ok || v.ID != volume.managedID || (tenant != "" && v.Tenant != tenant) {
-				return nil, managedNotFound()
-			}
-			if v.State != volumeReady || r.verify(v) != nil {
-				return nil, managedStorageError()
-			}
-			for _, other := range r.data.Holds {
-				for _, ref := range other.Refs {
-					if ref.ID == v.ID && (ref.Volume.RW() || volume.applied.RW()) {
-						return nil, &VolumeError{Status: 409, Code: "volume_busy", Message: "volume is held by a sandbox", Volume: v.Name, Holders: r.holders(v.ID)}
-					}
-				}
-			}
-			h.Refs = append(h.Refs, volumeRef{Volume: volume.applied, ID: v.ID, Path: r.path(v.ID), Backing: v.Backing})
-		} else {
-			identity, err := catalogBacking(volume.disk.Path)
-			if err != nil {
-				return nil, ErrVolumeUnavailable
-			}
-			h.Refs = append(h.Refs, volumeRef{Volume: volume.applied, Path: volume.disk.Path, Backing: identity})
+		ref, err := r.referenceForAdmission(tenant, volume)
+		if err != nil {
+			return nil, err
 		}
+		h.Refs = append(h.Refs, ref)
 	}
 	if err := m.reserveVolumes(applied); err != nil {
 		return nil, err
@@ -113,6 +97,31 @@ func (m *Manager) admitManaged(tenant string, volumes []resolvedVolume) ([]types
 		return nil, err
 	}
 	return applied, nil
+}
+
+func (r *volumeRegistry) referenceForAdmission(tenant string, volume resolvedVolume) (volumeRef, error) {
+	if volume.managedID == "" {
+		identity, err := catalogBacking(volume.disk.Path)
+		if err != nil {
+			return volumeRef{}, ErrVolumeUnavailable
+		}
+		return volumeRef{Volume: volume.applied, Path: volume.disk.Path, Backing: identity}, nil
+	}
+	v, ok := r.data.Volumes[volume.applied.Name]
+	if !ok || v.ID != volume.managedID || (tenant != "" && v.Tenant != tenant) {
+		return volumeRef{}, managedNotFound()
+	}
+	if v.State != volumeReady || r.verify(v) != nil {
+		return volumeRef{}, managedStorageError()
+	}
+	for _, other := range r.data.Holds {
+		for _, ref := range other.Refs {
+			if ref.ID == v.ID && (ref.Volume.RW() || volume.applied.RW()) {
+				return volumeRef{}, &VolumeError{Status: 409, Code: volumeBusyCode, Message: "volume is held by a sandbox", Volume: v.Name, Holders: r.holders(v.ID)}
+			}
+		}
+	}
+	return volumeRef{Volume: volume.applied, ID: v.ID, Path: r.path(v.ID), Backing: v.Backing}, nil
 }
 
 func (m *Manager) releaseUnbound(volumes []resolvedVolume, reserved []types.Volume) {
@@ -379,5 +388,5 @@ func catalogBacking(path string) (backingIdentity, error) {
 		return backingIdentity{}, errors.New("catalog backing is not a regular file")
 	}
 	raw := st.Sys().(*syscall.Stat_t)
-	return backingIdentity{Device: uint64(raw.Dev), Inode: raw.Ino, Size: st.Size()}, nil
+	return backingIdentity{Device: backingDeviceID(raw.Dev), Inode: raw.Ino, Size: st.Size()}, nil
 }

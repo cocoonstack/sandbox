@@ -779,9 +779,9 @@ func (m *Manager) admitOptions(ctx context.Context, key types.PoolKey, o ClaimOp
 	if err := m.checkEnv(o.Env); err != nil {
 		return nil, nil, err
 	}
-	volumeSpecs, err := m.resolveVolumes(ctx, o.Tenant, o.Volumes)
-	if err != nil {
-		return nil, nil, err
+	volumeSpecs, resolveErr := m.resolveVolumes(ctx, o.Tenant, o.Volumes)
+	if resolveErr != nil {
+		return nil, nil, resolveErr
 	}
 	for _, v := range volumeSpecs {
 		if v.managedID != "" {

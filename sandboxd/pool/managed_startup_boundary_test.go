@@ -75,18 +75,18 @@ func TestManagedDirectoryRequiresTrustedAncestorOwner(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			parent := filepath.Join(t.TempDir(), "parent")
-			if err := os.Mkdir(parent, 0700); err != nil {
+			if err := os.Mkdir(parent, 0o700); err != nil {
 				t.Fatal(err)
 			}
-			mode := os.FileMode(0755)
+			mode := os.FileMode(0o755)
 			if tc.sticky {
-				mode = 0777 | os.ModeSticky
+				mode = 0o777 | os.ModeSticky
 			}
 			if err := os.Chmod(parent, mode); err != nil {
 				t.Fatal(err)
 			}
 			managed := filepath.Join(parent, "managed")
-			if err := os.Mkdir(managed, 0700); err != nil {
+			if err := os.Mkdir(managed, 0o700); err != nil {
 				t.Fatal(err)
 			}
 			if err := os.Chown(parent, tc.owner, tc.owner); err != nil {

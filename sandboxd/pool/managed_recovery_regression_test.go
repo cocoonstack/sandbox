@@ -27,9 +27,9 @@ func TestManagedQuarantineRemovalSurvivesFailedRetirementRestart(t *testing.T) {
 				e := newManagedEngine()
 				m := openManagedTest(t, cfg, e)
 				createManagedTest(t, m, "data")
-				sb, err := m.ClaimProvision(t.Context(), testKey, managedOptions("data"))
-				if err != nil {
-					t.Fatal(err)
+				sb, claimErr := m.ClaimProvision(t.Context(), testKey, managedOptions("data"))
+				if claimErr != nil {
+					t.Fatal(claimErr)
 				}
 				sb.Key.Net = types.NetEgress
 				if err := m.store.commit(m.store.set(sb)); err != nil {
@@ -55,16 +55,16 @@ func TestManagedQuarantineRemovalSurvivesFailedRetirementRestart(t *testing.T) {
 				if err := m.Reconcile(t.Context()); err != nil {
 					t.Fatal(err)
 				}
-				_, err = m.ClaimProvision(t.Context(), testKey, managedOptions("data"))
-				requireVolumeStatus(t, err, 409)
+				_, claimErr = m.ClaimProvision(t.Context(), testKey, managedOptions("data"))
+				requireVolumeStatus(t, claimErr, 409)
 				e.falseRemove.Store(false)
 				m.retryRemovals(t.Context()).Wait()
 				if _, present, err := e.Inspect(t.Context(), sb.VMName); err != nil || present {
 					t.Fatalf("quarantined VM survived removal retry after restart: present=%v err=%v", present, err)
 				}
-				replacement, err := m.ClaimProvision(t.Context(), testKey, managedOptions("data"))
-				if err != nil {
-					t.Fatalf("confirmed removal did not free managed disk: %v", err)
+				replacement, claimErr := m.ClaimProvision(t.Context(), testKey, managedOptions("data"))
+				if claimErr != nil {
+					t.Fatalf("confirmed removal did not free managed disk: %v", claimErr)
 				}
 				if err := m.Release(t.Context(), replacement.ID, Cred{Operator: true}); err != nil {
 					t.Fatal(err)
@@ -79,9 +79,9 @@ func TestManagedOrdinaryFailedClaimRetainsOwnershipOnRestart(t *testing.T) {
 	e := newManagedEngine()
 	m := openManagedTest(t, cfg, e)
 	createManagedTest(t, m, "data")
-	sb, err := m.ClaimProvision(t.Context(), testKey, managedOptions("data"))
-	if err != nil {
-		t.Fatal(err)
+	sb, claimErr := m.ClaimProvision(t.Context(), testKey, managedOptions("data"))
+	if claimErr != nil {
+		t.Fatal(claimErr)
 	}
 	sb.Failed = "ordinary failure requiring explicit release"
 	if err := m.store.commit(m.store.set(sb)); err != nil {
@@ -98,8 +98,8 @@ func TestManagedOrdinaryFailedClaimRetainsOwnershipOnRestart(t *testing.T) {
 	if _, present, err := e.Inspect(t.Context(), sb.VMName); err != nil || !present {
 		t.Fatalf("ordinary failed claim removed: %v %v", present, err)
 	}
-	_, err = m.ClaimProvision(t.Context(), testKey, managedOptions("data"))
-	requireVolumeStatus(t, err, 409)
+	_, claimErr = m.ClaimProvision(t.Context(), testKey, managedOptions("data"))
+	requireVolumeStatus(t, claimErr, 409)
 	if err := m.Release(t.Context(), sb.ID, Cred{Operator: true}); err != nil {
 		t.Fatal(err)
 	}
@@ -138,16 +138,16 @@ func TestManagedStartupCleansDeadOrphansAndRefusesUnknownProcess(t *testing.T) {
 				m.managed.process = readProcessIdentity
 			}
 			e.falseRemove.Store(tc.ineffectiveRemove)
-			err := m.Reconcile(t.Context())
+			reconcileErr := m.Reconcile(t.Context())
 			if tc.allow {
-				if err != nil {
-					t.Fatalf("dead orphan blocked startup: %v", err)
+				if reconcileErr != nil {
+					t.Fatalf("dead orphan blocked startup: %v", reconcileErr)
 				}
 				if _, present, err := e.Inspect(t.Context(), name); err != nil || present {
 					t.Fatalf("dead orphan survived cleanup: %v %v", present, err)
 				}
 			} else {
-				requireVolumeStatus(t, err, 503)
+				requireVolumeStatus(t, reconcileErr, 503)
 			}
 			if tc.processError == os.ErrPermission || (!tc.stopped && tc.pid == 0) {
 				e.mu.Lock()
@@ -188,9 +188,9 @@ func TestManagedStorePreservesBackingWhenCleanupAliasesDisks(t *testing.T) {
 			}
 			v := createManagedTest(t, m, "data")
 			backing := m.managed.path(volumeID(v.ID))
-			f, err := os.OpenFile(backing, os.O_WRONLY, 0)
-			if err != nil {
-				t.Fatal(err)
+			f, openErr := os.OpenFile(backing, os.O_WRONLY, 0)
+			if openErr != nil {
+				t.Fatal(openErr)
 			}
 			_, writeErr := f.WriteAt([]byte("preserved"), 4096)
 			if err := errors.Join(writeErr, f.Close(), m.Close()); err != nil {
@@ -203,17 +203,17 @@ func TestManagedStorePreservesBackingWhenCleanupAliasesDisks(t *testing.T) {
 			if err := os.Symlink(filepath.Join(cfg.ManagedVolumeDir, "disks"), cleanup); err != nil {
 				t.Fatal(err)
 			}
-			next, err := NewManager(t.Context(), cfg, e, testSecrets(t), testBackends(t, cfg))
-			if err == nil {
+			next, openErr := NewManager(t.Context(), cfg, e, testSecrets(t), testBackends(t, cfg))
+			if openErr == nil {
 				t.Error("constructor accepted cleanup alias into managed backing directory")
 				if err := next.Reconcile(t.Context()); err != nil {
 					t.Errorf("reconcile: %v", err)
 				}
 				next.Close()
 			}
-			f, err = os.Open(backing)
-			if err != nil {
-				t.Fatalf("managed backing lost: %v", err)
+			f, openErr = os.Open(backing)
+			if openErr != nil {
+				t.Fatalf("managed backing lost: %v", openErr)
 			}
 			defer f.Close()
 			marker := make([]byte, len("preserved"))

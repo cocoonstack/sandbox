@@ -119,21 +119,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 	m.retryArchiveDeletes(ctx)
 	removed := m.sweepStaleVMs(ctx, live, owned)
 
-	// an unreferenced hibernate snapshot is an orphan; fork and golden snapshots never span a restart
-	if snapsErr != nil {
-		logger.Warnf(ctx, "snapshot sweep skipped: %v", snapsErr)
-	} else {
-		orphans := slices.DeleteFunc(snaps, func(snap string) bool {
-			if strings.HasPrefix(snap, hibernatePrefix) {
-				return referenced[snap]
-			}
-			return !strings.HasPrefix(snap, forkPrefix) && !strings.HasPrefix(snap, goldenPrefix)
-		})
-		m.runBounded(ctx, len(orphans), func(ctx context.Context, i int) {
-			m.dropSnap(ctx, orphans[i])
-			logger.Infof(ctx, "removed orphan snapshot %s", orphans[i])
-		}).Wait()
-	}
+	m.sweepOrphanSnapshots(ctx, snaps, snapsErr, referenced)
 	m.resyncEgress(ctx, live, removed)
 	m.warnDeniedClaims(ctx)
 	logger.Infof(ctx, "adopted %d claims, %d VMs live", len(m.claimed), len(live))
@@ -342,5 +328,24 @@ func (m *Manager) reclaimOrphanArchiveCks(ctx context.Context, claims map[string
 		} else {
 			logger.Infof(ctx, "reclaimed orphan archive ck %s", ckpt.ID)
 		}
+	}
+}
+
+func (m *Manager) sweepOrphanSnapshots(ctx context.Context, snaps []string, snapsErr error, referenced map[string]bool) {
+	logger := log.WithFunc("pool.Reconcile")
+	// an unreferenced hibernate snapshot is an orphan; fork and golden snapshots never span a restart
+	if snapsErr != nil {
+		logger.Warnf(ctx, "snapshot sweep skipped: %v", snapsErr)
+	} else {
+		orphans := slices.DeleteFunc(snaps, func(snap string) bool {
+			if strings.HasPrefix(snap, hibernatePrefix) {
+				return referenced[snap]
+			}
+			return !strings.HasPrefix(snap, forkPrefix) && !strings.HasPrefix(snap, goldenPrefix)
+		})
+		m.runBounded(ctx, len(orphans), func(ctx context.Context, i int) {
+			m.dropSnap(ctx, orphans[i])
+			logger.Infof(ctx, "removed orphan snapshot %s", orphans[i])
+		}).Wait()
 	}
 }

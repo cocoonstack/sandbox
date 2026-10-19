@@ -21,7 +21,6 @@ import (
 )
 
 type managedTestEngine struct {
-	liveEntered, liveResume chan struct{}
 	*fakeEngine
 	next             atomic.Int64
 	falseRemove      atomic.Bool
@@ -33,24 +32,28 @@ type managedTestEngine struct {
 }
 
 func newManagedEngine() *managedTestEngine { return &managedTestEngine{fakeEngine: newFakeEngine()} }
+
 func (e *managedTestEngine) RunCold(ctx context.Context, name string, key types.PoolKey, storage string) (types.VMRecord, error) {
 	e.mu.Lock()
 	e.pids[name] = 1000 + int(e.next.Add(1))
 	e.mu.Unlock()
 	return e.fakeEngine.RunCold(ctx, name, key, storage)
 }
+
 func (e *managedTestEngine) Remove(ctx context.Context, name string) error {
 	if e.falseRemove.Load() {
 		return nil
 	}
 	return e.fakeEngine.Remove(ctx, name)
 }
+
 func (e *managedTestEngine) Inspect(ctx context.Context, name string) (types.VMRecord, bool, error) {
 	if e.missingInventory.Load() {
 		return types.VMRecord{}, false, nil
 	}
 	return e.fakeEngine.Inspect(ctx, name)
 }
+
 func (e *managedTestEngine) DiskAttach(ctx context.Context, name string, spec engine.VolumeSpec) error {
 	if e.attachEntered != nil {
 		e.attachEntered <- struct{}{}
@@ -58,6 +61,7 @@ func (e *managedTestEngine) DiskAttach(ctx context.Context, name string, spec en
 	}
 	return e.fakeEngine.DiskAttach(ctx, name, spec)
 }
+
 func (e *managedTestEngine) identity(pid int) (processIdentity, error) {
 	if e.processUnknown.Load() {
 		return processIdentity{}, os.ErrPermission
@@ -73,11 +77,13 @@ func (e *managedTestEngine) identity(pid int) (processIdentity, error) {
 	}
 	return processIdentity{}, os.ErrNotExist
 }
+
 func managedConfig(t *testing.T) *config.Config {
 	t.Helper()
 	dir := t.TempDir()
 	return &config.Config{DataDir: filepath.Join(dir, "data"), ManagedVolumeDir: filepath.Join(dir, "managed"), APIToken: "root", Pools: []config.PoolSpec{{PoolKey: testKey, Warm: 1}}}
 }
+
 func openManagedTest(t *testing.T, cfg *config.Config, e *managedTestEngine) *Manager {
 	t.Helper()
 	m, err := NewManager(t.Context(), cfg, e, testSecrets(t), testBackends(t, cfg))
@@ -94,6 +100,7 @@ func openManagedTest(t *testing.T, cfg *config.Config, e *managedTestEngine) *Ma
 	}
 	return m
 }
+
 func createManagedTest(t *testing.T, m *Manager, name string) types.ManagedVolumeInfo {
 	t.Helper()
 	v, created, err := m.CreateVolume(t.Context(), name, types.VolumeCreate{SizeGiB: 1}, "t1")
@@ -102,6 +109,7 @@ func createManagedTest(t *testing.T, m *Manager, name string) types.ManagedVolum
 	}
 	return v
 }
+
 func managedOptions(names ...string) ClaimOptions {
 	o := ClaimOptions{Tenant: "t1"}
 	for _, name := range names {
@@ -109,6 +117,7 @@ func managedOptions(names ...string) ClaimOptions {
 	}
 	return o
 }
+
 func requireVolumeStatus(t *testing.T, err error, status int) *VolumeError {
 	t.Helper()
 	var v *VolumeError
@@ -131,7 +140,7 @@ func TestManagedCreateReplaySparseOwnershipAndDeleteIdentity(t *testing.T) {
 	if st.Size() != 1<<30 || st.Sys().(*syscall.Stat_t).Blocks*512 >= st.Size() {
 		t.Fatal("backing is not a sparse GiB raw image")
 	}
-	f, err := os.OpenFile(path, os.O_WRONLY, 0600)
+	f, err := os.OpenFile(path, os.O_WRONLY, 0o600)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -195,12 +204,12 @@ func TestManagedConcurrentCreateAndWriterAdmission(t *testing.T) {
 	ids := make(chan string, 12)
 	for range 12 {
 		wg.Go(func() {
-			v, new, err := m.CreateVolume(t.Context(), "race", types.VolumeCreate{SizeGiB: 1}, "t1")
+			v, wasCreated, err := m.CreateVolume(t.Context(), "race", types.VolumeCreate{SizeGiB: 1}, "t1")
 			if err != nil {
 				t.Error(err)
 				return
 			}
-			if new {
+			if wasCreated {
 				created.Add(1)
 			}
 			ids <- v.ID
@@ -261,9 +270,9 @@ func TestManagedRetirementSurvivesRestartAndStaleClaim(t *testing.T) {
 			e := newManagedEngine()
 			m := openManagedTest(t, cfg, e)
 			v := createManagedTest(t, m, "data")
-			sb, err := m.ClaimProvision(t.Context(), testKey, managedOptions("data"))
-			if err != nil {
-				t.Fatal(err)
+			sb, claimErr := m.ClaimProvision(t.Context(), testKey, managedOptions("data"))
+			if claimErr != nil {
+				t.Fatal(claimErr)
 			}
 			e.falseRemove.Store(true)
 			if err := m.retireManaged(sb.ID); err != nil {
@@ -277,8 +286,8 @@ func TestManagedRetirementSurvivesRestartAndStaleClaim(t *testing.T) {
 			if _, ok := m.Sandbox(sb.ID); ok {
 				t.Fatal("retiring stale claim was adopted")
 			}
-			_, err = m.ClaimProvision(t.Context(), testKey, managedOptions("data"))
-			busy := requireVolumeStatus(t, err, 409)
+			_, claimErr = m.ClaimProvision(t.Context(), testKey, managedOptions("data"))
+			busy := requireVolumeStatus(t, claimErr, 409)
 			if busy.Holders[0].State != "retiring" || busy.Holders[0].SandboxID != sb.ID {
 				t.Fatalf("holder=%+v", busy)
 			}
@@ -360,10 +369,12 @@ func TestManagedPreclaimCrashRetainsOwnership(t *testing.T) {
 					if err := m.bindManaged(t.Context(), sb, specs); err != nil {
 						t.Fatal(err)
 					}
+					var applyErr error
 					if boundary == "attached" || boundary == "mounted" {
-						if err := m.applyVolume(t.Context(), sb, specs[0], false); err != nil {
-							t.Fatal(err)
-						}
+						applyErr = m.applyVolume(t.Context(), sb, specs[0], false)
+					}
+					if applyErr != nil {
+						t.Fatal(applyErr)
 					}
 					e.falseRemove.Store(true)
 				}
@@ -429,27 +440,27 @@ func TestManagedCreateUnrecordedInodeRequiresQuarantine(t *testing.T) {
 		}
 		return writeVolumeSnapshot(path, raw)
 	}
-	_, _, err := m.CreateVolume(t.Context(), "data", types.VolumeCreate{SizeGiB: 1}, "t1")
-	requireVolumeStatus(t, err, 503)
+	_, _, createErr := m.CreateVolume(t.Context(), "data", types.VolumeCreate{SizeGiB: 1}, "t1")
+	requireVolumeStatus(t, createErr, 503)
 	m.Close()
 	m = openManagedTest(t, cfg, e)
-	v, err := m.GetVolume("data", "t1")
-	if err != nil || v.State != "creating" {
-		t.Fatalf("interrupted create=%+v %v", v, err)
+	v, createErr := m.GetVolume("data", "t1")
+	if createErr != nil || v.State != "creating" {
+		t.Fatalf("interrupted create=%+v %v", v, createErr)
 	}
 	path := m.managed.path(volumeID(v.ID))
-	before, err := os.Stat(path)
-	if err != nil {
-		t.Fatal(err)
+	before, createErr := os.Stat(path)
+	if createErr != nil {
+		t.Fatal(createErr)
 	}
-	_, _, err = m.CreateVolume(t.Context(), "data", types.VolumeCreate{SizeGiB: 1}, "t1")
-	ve := requireVolumeStatus(t, err, 503)
+	_, _, createErr = m.CreateVolume(t.Context(), "data", types.VolumeCreate{SizeGiB: 1}, "t1")
+	ve := requireVolumeStatus(t, createErr, 503)
 	if ve.Code != "volume_create_incomplete" {
 		t.Fatal(ve)
 	}
 	requireVolumeStatus(t, m.DeleteVolume(t.Context(), "data", v.ID, "t1"), 503)
-	after, err := os.Stat(path)
-	if err != nil || !os.SameFile(before, after) {
+	after, createErr := os.Stat(path)
+	if createErr != nil || !os.SameFile(before, after) {
 		t.Fatal("unknown inode modified")
 	}
 	m.Close()
@@ -457,9 +468,9 @@ func TestManagedCreateUnrecordedInodeRequiresQuarantine(t *testing.T) {
 		t.Fatal(err)
 	}
 	m = openManagedTest(t, cfg, e)
-	repeat, created, err := m.CreateVolume(t.Context(), "data", types.VolumeCreate{SizeGiB: 1}, "t1")
-	if err != nil || created || repeat.ID != v.ID {
-		t.Fatalf("quarantine repair=%+v %v %v", repeat, created, err)
+	repeat, created, createErr := m.CreateVolume(t.Context(), "data", types.VolumeCreate{SizeGiB: 1}, "t1")
+	if createErr != nil || created || repeat.ID != v.ID {
+		t.Fatalf("quarantine repair=%+v %v %v", repeat, created, createErr)
 	}
 }
 
@@ -474,7 +485,7 @@ func TestManagedCorruptAndUnsafeStorage(t *testing.T) {
 			m.Close()
 			switch fault {
 			case "truncated":
-				if err := os.WriteFile(filepath.Join(cfg.ManagedVolumeDir, "registry.json"), []byte("{"), 0600); err != nil {
+				if err := os.WriteFile(filepath.Join(cfg.ManagedVolumeDir, "registry.json"), []byte("{"), 0o600); err != nil {
 					t.Fatal(err)
 				}
 			case "version":
@@ -488,7 +499,7 @@ func TestManagedCorruptAndUnsafeStorage(t *testing.T) {
 				}
 				data.Version = 99
 				raw, _ = json.Marshal(data)
-				if err := os.WriteFile(filepath.Join(cfg.ManagedVolumeDir, "registry.json"), raw, 0600); err != nil {
+				if err := os.WriteFile(filepath.Join(cfg.ManagedVolumeDir, "registry.json"), raw, 0o600); err != nil {
 					t.Fatal(err)
 				}
 			case "missing-registry":
@@ -499,7 +510,7 @@ func TestManagedCorruptAndUnsafeStorage(t *testing.T) {
 				if err := os.Rename(path, path+".original"); err != nil {
 					t.Fatal(err)
 				}
-				f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0600)
+				f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -519,7 +530,7 @@ func TestManagedCorruptAndUnsafeStorage(t *testing.T) {
 					t.Fatal(err)
 				}
 			case "permissions":
-				if err := os.Chmod(path, 0000); err != nil {
+				if err := os.Chmod(path, 0o000); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -544,7 +555,7 @@ func TestManagedStoreExclusiveAndDirectoryPermissions(t *testing.T) {
 		t.Fatal("second daemon accepted locked store")
 	}
 	m.Close()
-	if err := os.Chmod(cfg.ManagedVolumeDir, 0755); err != nil {
+	if err := os.Chmod(cfg.ManagedVolumeDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := NewManager(t.Context(), cfg, e, testSecrets(t), testBackends(t, cfg)); err == nil {
@@ -557,9 +568,9 @@ func TestManagedStalledAttachDoesNotBlockOtherClaims(t *testing.T) {
 	e := newManagedEngine()
 	m := openManagedTest(t, cfg, e)
 	v := createManagedTest(t, m, "data")
-	unrelated, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{})
-	if err != nil {
-		t.Fatal(err)
+	unrelated, claimErr := m.ClaimProvision(t.Context(), testKey, ClaimOptions{})
+	if claimErr != nil {
+		t.Fatal(claimErr)
 	}
 	e.attachEntered = make(chan struct{}, 1)
 	e.attachResume = make(chan struct{})
@@ -572,9 +583,9 @@ func TestManagedStalledAttachDoesNotBlockOtherClaims(t *testing.T) {
 	if err := m.Release(t.Context(), unrelated.ID, Cred{Operator: true}); err != nil {
 		t.Fatal(err)
 	}
-	got, err := m.GetVolume("data", "t1")
-	if err != nil || len(got.Holders) != 1 || got.Holders[0].State != "attaching" {
-		t.Fatalf("attaching projection=%+v %v", got, err)
+	got, claimErr := m.GetVolume("data", "t1")
+	if claimErr != nil || len(got.Holders) != 1 || got.Holders[0].State != "attaching" {
+		t.Fatalf("attaching projection=%+v %v", got, claimErr)
 	}
 	requireVolumeStatus(t, m.DeleteVolume(t.Context(), "data", v.ID, "t1"), 409)
 	close(e.attachResume)

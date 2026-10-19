@@ -54,7 +54,7 @@ func (c *Client) CreateVolume(ctx context.Context, name string, create VolumeCre
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
 		return nil, apiError("create volume", resp)
 	}
@@ -70,7 +70,7 @@ func (c *Client) GetVolume(ctx context.Context, name string) (*ManagedVolumeInfo
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return nil, apiError("get volume", resp)
 	}
@@ -97,7 +97,7 @@ func (c *Client) DeleteVolume(ctx context.Context, name, id string) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusNoContent {
 		return apiError("delete volume", resp)
 	}

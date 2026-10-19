@@ -14,7 +14,7 @@ import (
 )
 
 func TestManagedVolumeRequests(t *testing.T) {
-	want := ManagedVolumeInfo{VolumeInfo: VolumeInfo{Name: "data", Kind: "managed", ID: "vol_123", Tenant: "t1", Node: "node-1", State: "ready", CreatedAt: time.Date(2026, 10, 19, 0, 0, 0, 0, time.UTC), SizeBytes: 20 << 30, Available: true, Writable: true}, Holders: []VolumeHolder{{SandboxID: "sb_1", Mode: "rw", State: "attached"}}}
+	want := ManagedVolumeInfo{Name: "data", Kind: "managed", ID: "vol_123", Tenant: "t1", Node: "node-1", State: "ready", CreatedAt: time.Date(2026, 10, 19, 0, 0, 0, 0, time.UTC), SizeBytes: 20 << 30, Available: true, Writable: true, Holders: []VolumeHolder{{SandboxID: "sb_1", Mode: "rw", State: "attached"}}}
 	requests := 0
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests++
@@ -48,7 +48,7 @@ func TestManagedVolumeRequests(t *testing.T) {
 	}))
 	t.Cleanup(ts.Close)
 	c := testClient(t, ts, WithAPIToken("token"))
-	for i := 0; i < 2; i++ {
+	for range 2 {
 		got, err := c.CreateVolume(t.Context(), "data", VolumeCreate{SizeGiB: 20, Tenant: "t1"})
 		if err != nil || !reflect.DeepEqual(got, &want) {
 			t.Fatalf("create = %+v, %v", got, err)
@@ -73,7 +73,7 @@ func TestManagedVolumeFailures(t *testing.T) {
 	statuses := []int{400, 401, 403, 404, 409, 412, 428, 503}
 	for _, status := range statuses {
 		t.Run(http.StatusText(status), func(t *testing.T) {
-			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				w.WriteHeader(status)
 				_ = json.MarshalWrite(w, map[string]any{"error": "volume unavailable", "code": "volume_busy", "volume": "data", "holders": []map[string]string{{"sandbox_id": "sb_1", "mode": "rw", "state": "retiring", "host_path": "/secret"}}})
 			}))
@@ -92,7 +92,7 @@ func TestManagedVolumeFailures(t *testing.T) {
 
 func TestManagedVolumeRejectsInvalidRepliesAndInputs(t *testing.T) {
 	requests := 0
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		requests++
 		_, _ = w.Write([]byte(`{}`))
 	}))
@@ -119,7 +119,7 @@ func TestManagedVolumeRejectsInvalidRepliesAndInputs(t *testing.T) {
 		t.Fatalf("cancellation = %v", err)
 	}
 	if requests != 1 {
-		t.Fatalf("cancelled request reached server, count %d", requests)
+		t.Fatalf("canceled request reached server, count %d", requests)
 	}
 }
 
@@ -128,7 +128,7 @@ func TestManagedVolumeConflictPreservesAllHolders(t *testing.T) {
 	for i := range holders {
 		holders[i] = VolumeHolder{SandboxID: fmt.Sprintf("sb_%032d", i), Mode: "ro", State: "claimed"}
 	}
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusConflict)
 		_ = json.MarshalWrite(w, map[string]any{"error": "volume held", "code": "volume_busy", "volume": "data", "holders": holders})
 	}))

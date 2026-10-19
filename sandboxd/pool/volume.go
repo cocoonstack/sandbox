@@ -242,21 +242,8 @@ func (m *Manager) applyVolumes(ctx context.Context, sb *types.Sandbox, volumes [
 // applyVolume keeps one volume's steps strictly ordered; siblings overlap freely.
 func (m *Manager) applyVolume(ctx context.Context, sb *types.Sandbox, volume resolvedVolume, live bool) error {
 	if volume.managedID == "" {
-		if m.managedCatalogAlias(volume.disk.Path) {
-			return managedStorageError()
-		}
-		if h, managed := m.managedHold(sb.ID); managed {
-			matched := false
-			for _, ref := range h.Refs {
-				if ref.Volume.Name == volume.applied.Name && ref.Path == volume.disk.Path {
-					identity, err := catalogBacking(volume.disk.Path)
-					matched = err == nil && identity == ref.Backing
-					break
-				}
-			}
-			if !matched {
-				return managedStorageError()
-			}
+		if err := m.verifyCatalogBeforeAttach(sb.ID, volume); err != nil {
+			return err
 		}
 	}
 	if volume.managedID != "" {
@@ -293,6 +280,27 @@ func (m *Manager) applyVolume(ctx context.Context, sb *types.Sandbox, volume res
 		return fmt.Errorf("setup volume %q: %w", volume.applied.Name, err)
 	}
 	return nil
+}
+
+func (m *Manager) verifyCatalogBeforeAttach(id string, volume resolvedVolume) error {
+	if m.managedCatalogAlias(volume.disk.Path) {
+		return managedStorageError()
+	}
+	h, managed := m.managedHold(id)
+	if !managed {
+		return nil
+	}
+	for _, ref := range h.Refs {
+		if ref.Volume.Name != volume.applied.Name || ref.Path != volume.disk.Path {
+			continue
+		}
+		identity, err := catalogBacking(volume.disk.Path)
+		if err != nil || identity != ref.Backing {
+			return managedStorageError()
+		}
+		return nil
+	}
+	return managedStorageError()
 }
 
 // quiesceVolumes unmounts a claim's writable mounts in reverse; a failed unmount keeps the marker.

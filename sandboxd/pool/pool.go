@@ -570,8 +570,7 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 		for name, entry := range m.volumes {
 			_, collision := m.managed.data.Volumes[name]
 			if collision || m.managedCatalogAlias(entry.disk.Path) {
-				m.managed.close()
-				return nil, fmt.Errorf("catalog conflicts with existing managed resource")
+				return nil, errors.Join(fmt.Errorf("catalog conflicts with existing managed resource"), m.managed.close())
 			}
 		}
 	}

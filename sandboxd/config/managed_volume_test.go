@@ -36,12 +36,12 @@ func TestManagedVolumeStoreExcludesStartupCleanupPaths(t *testing.T) {
 
 func TestManagedVolumeStoreResolvesDataDirectoryAliases(t *testing.T) {
 	root := t.TempDir()
-	real := filepath.Join(root, "real")
+	realDir := filepath.Join(root, "real")
 	alias := filepath.Join(root, "alias")
-	if err := os.Mkdir(real, 0700); err != nil {
+	if err := os.Mkdir(realDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink(real, alias); err != nil {
+	if err := os.Symlink(realDir, alias); err != nil {
 		t.Fatal(err)
 	}
 	t.Chdir(root)
@@ -49,17 +49,17 @@ func TestManagedVolumeStoreResolvesDataDirectoryAliases(t *testing.T) {
 		name, data, managed string
 		allow               bool
 	}{
-		{"alias-readers", alias, filepath.Join(real, "readers", "managed"), false},
-		{"alias-goldens", alias, filepath.Join(real, "goldens"), false},
-		{"alias-fork", alias, filepath.Join(real, "fork-persistent"), false},
-		{"alias-new-suffix", filepath.Join(alias, "new", "data"), filepath.Join(real, "new", "data", "readers", "managed"), false},
-		{"alias-safe", alias, filepath.Join(real, "managed"), true},
-		{"relative", "real", filepath.Join(real, "readers", "managed"), false},
-		{"relative-safe", "real", filepath.Join(real, "readers-safe"), true},
+		{"alias-readers", alias, filepath.Join(realDir, "readers", "managed"), false},
+		{"alias-goldens", alias, filepath.Join(realDir, "goldens"), false},
+		{"alias-fork", alias, filepath.Join(realDir, "fork-persistent"), false},
+		{"alias-new-suffix", filepath.Join(alias, "new", "data"), filepath.Join(realDir, "new", "data", "readers", "managed"), false},
+		{"alias-safe", alias, filepath.Join(realDir, "managed"), true},
+		{"relative", "real", filepath.Join(realDir, "readers", "managed"), false},
+		{"relative-safe", "real", filepath.Join(realDir, "readers-safe"), true},
 		{"empty", "", filepath.Join(root, "fork-store"), false},
 		{"empty-safe", "", filepath.Join(root, "managed"), true},
-		{"ancestor", filepath.Join(real, "data"), real, true},
-		{"same-root", real, real, true},
+		{"ancestor", filepath.Join(realDir, "data"), realDir, true},
+		{"same-root", realDir, realDir, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := Config{DataDir: tc.data, ManagedVolumeDir: tc.managed, APIToken: "root"}
@@ -69,7 +69,7 @@ func TestManagedVolumeStoreResolvesDataDirectoryAliases(t *testing.T) {
 			}
 		})
 	}
-	if _, err := os.Stat(filepath.Join(real, "new")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(realDir, "new")); !os.IsNotExist(err) {
 		t.Fatalf("validation created data directories: %v", err)
 	}
 }
@@ -81,7 +81,7 @@ func TestManagedVolumeStoreRejectsCleanupDirectoryAliases(t *testing.T) {
 			data := filepath.Join(root, "data")
 			external := filepath.Join(root, "external")
 			for _, dir := range []string{data, external} {
-				if err := os.Mkdir(dir, 0700); err != nil {
+				if err := os.Mkdir(dir, 0o700); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -119,7 +119,7 @@ func TestManagedVolumeStoreProtectsBackingDirectoryFromCleanupAliases(t *testing
 				managed := filepath.Join(root, "managed")
 				aliasTarget := filepath.Join(managed, target)
 				for _, dir := range []string{data, aliasTarget} {
-					if err := os.MkdirAll(dir, 0700); err != nil {
+					if err := os.MkdirAll(dir, 0o700); err != nil {
 						t.Fatal(err)
 					}
 				}

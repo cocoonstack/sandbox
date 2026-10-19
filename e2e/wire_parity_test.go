@@ -135,21 +135,23 @@ func parseSDKFields(t *testing.T) map[string]map[string]string {
 			if !ok {
 				return true
 			}
-			if st, ok := spec.Type.(*ast.StructType); ok {
-				out[spec.Name.Name] = map[string]string{}
-				for _, f := range st.Fields.List {
-					if len(f.Names) == 0 {
-						if id, ok := f.Type.(*ast.Ident); ok {
-							embedded[spec.Name.Name] = append(embedded[spec.Name.Name], id.Name)
-						}
+			st, ok := spec.Type.(*ast.StructType)
+			if !ok {
+				return true
+			}
+			out[spec.Name.Name] = map[string]string{}
+			for _, f := range st.Fields.List {
+				if len(f.Names) == 0 {
+					if id, ok := f.Type.(*ast.Ident); ok {
+						embedded[spec.Name.Name] = append(embedded[spec.Name.Name], id.Name)
 					}
-					if f.Tag == nil {
-						continue
-					}
-					tag, _ := strconv.Unquote(f.Tag.Value)
-					if name, opts := splitJSONTag(reflect.StructTag(tag).Get("json")); name != "" && name != "-" {
-						out[spec.Name.Name][name] = opts
-					}
+				}
+				if f.Tag == nil {
+					continue
+				}
+				tag, _ := strconv.Unquote(f.Tag.Value)
+				if name, opts := splitJSONTag(reflect.StructTag(tag).Get("json")); name != "" && name != "-" {
+					out[spec.Name.Name][name] = opts
 				}
 			}
 			return true

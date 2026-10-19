@@ -97,7 +97,7 @@ func TestManagedRejectsCatalogReplacementBeforeAttach(t *testing.T) {
 				if err := os.Symlink(m.managed.path(volumeID(v.ID)), path); err != nil {
 					t.Fatal(err)
 				}
-			} else if err := os.WriteFile(path, []byte("replacement"), 0600); err != nil {
+			} else if err := os.WriteFile(path, []byte("replacement"), 0o600); err != nil {
 				t.Fatal(err)
 			}
 			for _, spec := range specs {
@@ -124,16 +124,16 @@ func TestManagedReleaseDoesNotClearReplacementCatalogDirtyMarker(t *testing.T) {
 	e := newManagedEngine()
 	m := openManagedTest(t, cfg, e)
 	createManagedTest(t, m, "data")
-	sb, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Tenant: "t1", Volumes: []types.Volume{
+	sb, claimErr := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Tenant: "t1", Volumes: []types.Volume{
 		{Name: "data", Mode: "rw"}, {Name: "catalog", Mode: "rw"},
 	}})
-	if err != nil {
-		t.Fatal(err)
+	if claimErr != nil {
+		t.Fatal(claimErr)
 	}
 	if err := os.Rename(path, path+".old"); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(path, []byte("replacement"), 0600); err != nil {
+	if err := os.WriteFile(path, []byte("replacement"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := m.Release(t.Context(), sb.ID, Cred{Operator: true}); err != nil {
@@ -142,9 +142,9 @@ func TestManagedReleaseDoesNotClearReplacementCatalogDirtyMarker(t *testing.T) {
 	if !volumeDirty(path) {
 		t.Fatal("release cleared a replacement backing's dirty marker")
 	}
-	_, err = m.ClaimProvision(t.Context(), testKey, ClaimOptions{Tenant: "t1", Volumes: []types.Volume{{Name: "catalog"}}})
-	if !errors.Is(err, ErrVolumeNeedsRecovery) {
-		t.Fatalf("replacement reader admitted: %v", err)
+	_, claimErr = m.ClaimProvision(t.Context(), testKey, ClaimOptions{Tenant: "t1", Volumes: []types.Volume{{Name: "catalog"}}})
+	if !errors.Is(claimErr, ErrVolumeNeedsRecovery) {
+		t.Fatalf("replacement reader admitted: %v", claimErr)
 	}
 }
 
@@ -154,21 +154,21 @@ func TestManagedSettledRetryDrainsPreviouslyUncertainCatalogRef(t *testing.T) {
 	e := newManagedEngine()
 	m := openManagedTest(t, cfg, e)
 	createManagedTest(t, m, "data")
-	sb, err := m.ClaimProvision(t.Context(), testKey, managedOptions("data"))
-	if err != nil {
-		t.Fatal(err)
+	sb, claimErr := m.ClaimProvision(t.Context(), testKey, managedOptions("data"))
+	if claimErr != nil {
+		t.Fatal(claimErr)
 	}
 	e.diskAttachErrFor, e.diskAttachErr = "catalog", errors.New("uncertain attach")
-	_, err = m.PatchVolumes(t.Context(), sb.ID, "", types.VolumePatch{Add: []types.Volume{{Name: "catalog"}}})
-	if err == nil {
+	_, claimErr = m.PatchVolumes(t.Context(), sb.ID, "", types.VolumePatch{Add: []types.Volume{{Name: "catalog"}}})
+	if claimErr == nil {
 		t.Fatal("injected attach succeeded")
 	}
 	e.diskAttachErr, e.diskAttachErrFor = nil, ""
-	if err := os.Mkdir(m.store.path+".tmp", 0700); err != nil {
+	if err := os.Mkdir(m.store.path+".tmp", 0o700); err != nil {
 		t.Fatal(err)
 	}
-	_, err = m.PatchVolumes(t.Context(), sb.ID, "", types.VolumePatch{Remove: []string{"catalog"}})
-	if err == nil {
+	_, claimErr = m.PatchVolumes(t.Context(), sb.ID, "", types.VolumePatch{Remove: []string{"catalog"}})
+	if claimErr == nil {
 		t.Fatal("injected claim commit succeeded")
 	}
 	if err := os.Remove(m.store.path + ".tmp"); err != nil {
@@ -182,9 +182,9 @@ func TestManagedSettledRetryDrainsPreviouslyUncertainCatalogRef(t *testing.T) {
 	if !ok || len(h.Refs) != 1 {
 		t.Fatalf("settled retry leaked uncertain reference: %+v", h)
 	}
-	writer, err := m.ClaimProvision(t.Context(), testKey, managedOptions("catalog"))
-	if err != nil {
-		t.Fatalf("confirmed detached catalog still busy: %v", err)
+	writer, claimErr := m.ClaimProvision(t.Context(), testKey, managedOptions("catalog"))
+	if claimErr != nil {
+		t.Fatalf("confirmed detached catalog still busy: %v", claimErr)
 	}
 	if err := m.Release(t.Context(), writer.ID, Cred{Operator: true}); err != nil {
 		t.Fatal(err)
@@ -209,9 +209,9 @@ func TestManagedReleaseCancelsExistingVolumeRunAndRetainsFullUnion(t *testing.T)
 	cfg := managedConfig(t)
 	cfg.Volumes = []config.VolumeSpec{{Name: "catalog", Path: writeVolumeImage(t, "catalog.img", "catalog"), Writable: true}}
 	e := &managedCancelEngine{managedTestEngine: newManagedEngine(), entered: make(chan struct{})}
-	m, err := NewManager(t.Context(), cfg, e, testSecrets(t), testBackends(t, cfg))
-	if err != nil {
-		t.Fatal(err)
+	m, openErr := NewManager(t.Context(), cfg, e, testSecrets(t), testBackends(t, cfg))
+	if openErr != nil {
+		t.Fatal(openErr)
 	}
 	t.Cleanup(func() { m.Close() })
 	m.managed.process = e.identity
@@ -219,9 +219,9 @@ func TestManagedReleaseCancelsExistingVolumeRunAndRetainsFullUnion(t *testing.T)
 		t.Fatal(err)
 	}
 	createManagedTest(t, m, "data")
-	sb, err := m.ClaimProvision(t.Context(), testKey, managedOptions("data"))
-	if err != nil {
-		t.Fatal(err)
+	sb, openErr := m.ClaimProvision(t.Context(), testKey, managedOptions("data"))
+	if openErr != nil {
+		t.Fatal(openErr)
 	}
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
@@ -247,9 +247,9 @@ func TestManagedReleaseCancelsExistingVolumeRunAndRetainsFullUnion(t *testing.T)
 	if !ok || h.State != holdRetiring || len(h.Refs) != 2 {
 		t.Fatalf("retirement lost possible device references: %+v", h)
 	}
-	_, err = m.ClaimProvision(t.Context(), testKey, managedOptions("catalog"))
-	if !errors.Is(err, ErrVolumeBusy) {
-		t.Fatalf("uncertain catalog writer admitted: %v", err)
+	_, openErr = m.ClaimProvision(t.Context(), testKey, managedOptions("catalog"))
+	if !errors.Is(openErr, ErrVolumeBusy) {
+		t.Fatalf("uncertain catalog writer admitted: %v", openErr)
 	}
 	e.falseRemove.Store(false)
 	m.retryRemovals(t.Context()).Wait()

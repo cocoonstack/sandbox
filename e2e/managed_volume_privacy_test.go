@@ -47,8 +47,10 @@ func TestLiveAttachManagedVolumePrivacy(t *testing.T) {
 type catalogPeerPlacer struct{ edgePlacer }
 
 func (*catalogPeerPlacer) VolumeCandidates(string, []string) []string { return []string{"peer:7777"} }
-func (*catalogPeerPlacer) VolumeOwners([]string) []string             { return []string{"peer:7777"} }
-func (*catalogPeerPlacer) VolumeHolders() map[string]int              { return map[string]int{"peer-only": 1} }
+
+func (*catalogPeerPlacer) VolumeOwners([]string) []string { return []string{"peer:7777"} }
+
+func (*catalogPeerPlacer) VolumeHolders() map[string]int { return map[string]int{"peer-only": 1} }
 
 func TestRootPeerCatalogRedirectWithManagedStore(t *testing.T) {
 	for _, enabled := range []bool{false, true} {
@@ -85,7 +87,7 @@ func TestStaticVolumePrivacyWithManagedStore(t *testing.T) {
 		t.Run(fmt.Sprint(enabled), func(t *testing.T) {
 			dir := t.TempDir()
 			path := filepath.Join(dir, "catalog.raw")
-			if err := os.WriteFile(path, []byte("catalog"), 0600); err != nil {
+			if err := os.WriteFile(path, []byte("catalog"), 0o600); err != nil {
 				t.Fatal(err)
 			}
 			cfg := &config.Config{Volumes: []config.VolumeSpec{{Name: "private-static", Path: path, Tenants: []string{"t1"}}}}

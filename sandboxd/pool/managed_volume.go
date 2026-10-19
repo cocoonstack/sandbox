@@ -16,6 +16,8 @@ import (
 
 // VolumeError carries only caller-safe details. Storage paths and process IDs
 // remain in the registry and never become API diagnostics.
+const volumeBusyCode = "volume_busy"
+
 type VolumeError struct {
 	Status  int                  `json:"-"`
 	Message string               `json:"error"`
@@ -26,14 +28,17 @@ type VolumeError struct {
 
 func (e *VolumeError) Error() string { return e.Message }
 func (e *VolumeError) Is(target error) bool {
-	return target == ErrVolumeBusy && e.Code == "volume_busy"
+	return target == ErrVolumeBusy && e.Code == volumeBusyCode
 }
+
 func volumeError(status int, code, message string) *VolumeError {
 	return &VolumeError{Status: status, Code: code, Message: message}
 }
+
 func managedStorageError() *VolumeError {
 	return volumeError(503, "volume_storage_unavailable", "volume storage requires recovery; retry after recovery")
 }
+
 func managedNotFound() *VolumeError { return volumeError(404, "volume_not_found", "unknown volume") }
 
 func (m *Manager) CreateVolume(ctx context.Context, name string, req types.VolumeCreate, tenant string) (types.ManagedVolumeInfo, bool, error) {
@@ -124,7 +129,7 @@ func (r *volumeRegistry) completeCreate(v managedVolume) error {
 		return managedStorageError()
 	}
 	raw := st.Sys().(*syscall.Stat_t)
-	v.Backing = backingIdentity{Device: uint64(raw.Dev), Inode: raw.Ino, Size: st.Size()}
+	v.Backing = backingIdentity{Device: backingDeviceID(raw.Dev), Inode: raw.Ino, Size: st.Size()}
 	v.State = volumeReady
 	r.data.Volumes[v.Name] = v
 	return r.commit()
@@ -190,7 +195,7 @@ func (m *Manager) DeleteVolume(ctx context.Context, name, expected, tenant strin
 		return volumeError(412, "volume_precondition_failed", "volume identity does not match")
 	}
 	if holders := r.holders(v.ID); len(holders) > 0 {
-		return &VolumeError{Status: 409, Code: "volume_busy", Message: "volume is held by a sandbox", Volume: name, Holders: holders}
+		return &VolumeError{Status: 409, Code: volumeBusyCode, Message: "volume is held by a sandbox", Volume: name, Holders: holders}
 	}
 	if err := r.verifyDirectories(); err != nil {
 		return managedStorageError()
@@ -243,8 +248,9 @@ func (r *volumeRegistry) holders(id volumeID) []types.VolumeHolder {
 	slices.SortFunc(holders, func(a, b types.VolumeHolder) int { return strings.Compare(a.SandboxID, b.SandboxID) })
 	return holders
 }
+
 func (r *volumeRegistry) info(v managedVolume) types.ManagedVolumeInfo {
-	return types.ManagedVolumeInfo{VolumeInfo: types.VolumeInfo{Name: v.Name, DefaultMount: types.DefaultVolumeMount(v.Name), SizeBytes: v.Size, Available: v.State == volumeReady, Nodes: 1, Writable: true, Kind: "managed", ID: string(v.ID), Tenant: v.Tenant, Node: v.Node, State: string(v.State), CreatedAt: v.CreatedAt}, Holders: r.holders(v.ID)}
+	return types.ManagedVolumeInfo{Name: v.Name, DefaultMount: types.DefaultVolumeMount(v.Name), SizeBytes: v.Size, Available: v.State == volumeReady, Nodes: 1, Writable: true, Kind: "managed", ID: string(v.ID), Tenant: v.Tenant, Node: v.Node, State: string(v.State), CreatedAt: v.CreatedAt, Holders: r.holders(v.ID)}
 }
 
 // ManagedVolumeStatus lets listing fail clearly rather than presenting a corrupt
@@ -394,7 +400,7 @@ func (m *Manager) managedCatalogAlias(path string) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for _, v := range r.data.Volumes {
-		if v.Backing.Inode != 0 && identity.Ino == v.Backing.Inode && uint64(identity.Dev) == v.Backing.Device {
+		if v.Backing.Inode != 0 && identity.Ino == v.Backing.Inode && backingDeviceID(identity.Dev) == v.Backing.Device {
 			return true
 		}
 		if backing, err := os.Lstat(r.path(v.ID)); err == nil && os.SameFile(info, backing) {

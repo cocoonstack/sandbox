@@ -724,9 +724,9 @@ func resolveExistingAncestors(path string) (string, error) {
 	for {
 		_, err := os.Lstat(path)
 		if err == nil {
-			resolved, err := filepath.EvalSymlinks(path)
-			if err != nil {
-				return "", err
+			resolved, resolveErr := filepath.EvalSymlinks(path)
+			if resolveErr != nil {
+				return "", resolveErr
 			}
 			return filepath.Join(resolved, suffix), nil
 		}
