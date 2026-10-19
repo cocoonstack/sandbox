@@ -46,13 +46,16 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 	if err := m.recoverManagedOrphans(ctx, claims, live, owned); err != nil {
 		return err
 	}
-	referenced := map[string]bool{}
+	referenced := m.managedSleepSources()
 	var adopted []*types.Sandbox
 	m.mu.Lock()
 	for _, sb := range claims {
 		sb.SetEnv(sb.Env)
 		rec, ok := live[sb.VMName]
+		h, managed := m.managedHold(sb.ID)
 		switch {
+		case managed && h.Sleep != nil:
+			projectSleepState(sb, h.Sleep)
 		case sb.ArchiveCk != "":
 			// archived: no local VM by design, so adopt the stub and let the first exec wake it
 			m.addClaimLocked(sb)
@@ -206,7 +209,7 @@ func (m *Manager) resyncEgress(ctx context.Context, live map[string]types.VMReco
 	for _, sb := range m.claimed {
 		sb.TouchAt(now)
 		// a hibernated or archived claim has no guest to serve; its wake arms the door
-		if sb.HibernateSnap != "" || sb.ArchiveCk != "" || sb.Failed != "" {
+		if sb.HibernateSnap != "" || sb.PendingSnap != "" || sb.ArchiveCk != "" || sb.Failed != "" {
 			continue
 		}
 		if m.out.LocksNIC(sb.Key) {

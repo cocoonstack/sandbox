@@ -49,7 +49,7 @@ func (m *Manager) archiveOnce(ctx context.Context) {
 	var victims []*types.Sandbox
 	m.mu.Lock()
 	for _, sb := range m.claimed {
-		if sb.HibernateSnap == "" || sb.ArchiveCk != "" || m.tenantGone(sb.Tenant) {
+		if m.hasVolumeHolds(sb) || sb.HibernateSnap == "" || sb.ArchiveCk != "" || m.tenantGone(sb.Tenant) {
 			continue
 		}
 		if _, busy := m.archiving[sb.ID]; busy {

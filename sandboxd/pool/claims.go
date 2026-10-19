@@ -162,10 +162,18 @@ func (s *claimStore) reset(claims map[string]*types.Sandbox) claimSnapshot {
 
 // commit atomically replaces claims.json, encoding only the rows changed since the last commit; fsync is opt-in (sync_claims).
 func (s *claimStore) commit(snap claimSnapshot) error {
+	return s.commitSnapshot(snap, false)
+}
+
+func (s *claimStore) commitDurable(snap claimSnapshot) error {
+	return s.commitSnapshot(snap, true)
+}
+
+func (s *claimStore) commitSnapshot(snap claimSnapshot, durable bool) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	s.mu.Lock()
-	if snap.seq <= s.written {
+	if !durable && snap.seq <= s.written {
 		s.mu.Unlock()
 		return nil
 	}
@@ -186,7 +194,7 @@ func (s *claimStore) commit(snap claimSnapshot) error {
 		s.buf = append(s.buf, row.raw...)
 	}
 	s.buf = append(s.buf, '}')
-	if err := s.replace(s.buf); err != nil {
+	if err := s.replaceMode(s.buf, durable || s.sync); err != nil {
 		return err
 	}
 	s.mu.Lock()
@@ -218,10 +226,9 @@ func (s *claimStore) recommit(ctx context.Context, snap claimSnapshot) {
 	}()
 }
 
-// replace swaps claims.json for raw through the fixed temp name, durably when sync is set.
-func (s *claimStore) replace(raw []byte) error {
+func (s *claimStore) replaceMode(raw []byte, durable bool) error {
 	tmp := s.path + ".tmp"
-	if !s.sync {
+	if !durable {
 		if err := os.WriteFile(tmp, raw, 0o600); err != nil {
 			return fmt.Errorf("write claims: %w", err)
 		}

@@ -402,12 +402,15 @@ freeing its memory; the next agent access restores it transparently
 snapshot point and the stop coincident), except a read-only file call that a
 [reader](#get-v1sandboxesidagent) serves without waking it. Idempotent on an already-hibernated
 sandbox. The TTL keeps running: a hibernated sandbox is still reaped (VM and
-snapshot) at its deadline, unless it claimed `on_expire: archive` or its pool
-archives. When to hibernate is the caller's policy — the
-node only provides the transition. 204 on success, 404 unknown id or wrong
-token, 409 on the egress lane or when volumes are attached (neither kind of
-sandbox hibernates; see [egress](egress.md)), 429 while the disk is under
-[`disk_reserve`](deploy.md).
+snapshot) at its deadline. Claims without volume holds are excepted when they
+claimed `on_expire: archive` or their pool archives. Hibernated managed-volume
+claims expire through release, which preserves the backing disk. When to hibernate
+is the caller's policy. The node only provides the transition. 204 on success, 404 unknown id or wrong
+token, 409 on the egress lane or unsupported volume claims, 429 while the disk is under
+[`disk_reserve`](deploy.md). An opt-in node hook supports one mounted writable
+managed volume on the `none` lane. See [managed volume hibernation](managed-volumes.md#hibernate-one-mounted-managed-volume)
+for hook installation, exclusive ownership, and failure recovery. Other volume
+capture operations remain blocked.
 
 ## POST /v1/sandboxes/{id}/wake
 

@@ -274,10 +274,11 @@ type Config struct {
 
 	DiskReserve *DiskReserve `json:"disk_reserve,omitempty"`
 
-	ManagedVolumeDir string       `json:"managed_volume_dir,omitempty"`
-	Volumes          []VolumeSpec `json:"volumes,omitempty"`
-	Mesh             *MeshConfig  `json:"mesh,omitempty"`
-	Pools            []PoolSpec   `json:"pools"`
+	ManagedVolumeHibernate *ManagedVolumeHibernate `json:"managed_volume_hibernate,omitempty"`
+	ManagedVolumeDir       string                  `json:"managed_volume_dir,omitempty"`
+	Volumes                []VolumeSpec            `json:"volumes,omitempty"`
+	Mesh                   *MeshConfig             `json:"mesh,omitempty"`
+	Pools                  []PoolSpec              `json:"pools"`
 }
 
 // HasEgress reports whether the node can attach egress-lane VMs.
@@ -427,6 +428,14 @@ func (c *Config) validateVolumes() error {
 }
 
 func (c *Config) ValidateManagedVolumeStore() error {
+	if c.ManagedVolumeHibernate != nil {
+		if err := c.ManagedVolumeHibernate.Validate(); err != nil {
+			return err
+		}
+		if c.ManagedVolumeDir == "" {
+			return fmt.Errorf("managed_volume_hibernate requires managed_volume_dir")
+		}
+	}
 	if c.ManagedVolumeDir == "" {
 		return nil
 	}

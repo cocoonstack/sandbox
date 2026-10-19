@@ -62,6 +62,7 @@ type processIdentity struct {
 }
 
 type volumeHold struct {
+	Sleep     *managedSleep   `json:"sleep,omitempty"`
 	SandboxID string          `json:"sandbox_id"`
 	Tenant    string          `json:"tenant"`
 	VMName    string          `json:"vm_name,omitempty"`
@@ -243,7 +244,7 @@ func (r *volumeRegistry) verify(v managedVolume) error {
 
 func (r *volumeRegistry) validate() error {
 	d := r.data
-	if d.Version != 1 || d.Volumes == nil || d.Holds == nil || d.Deleted == nil {
+	if (d.Version != 1 && d.Version != 2) || d.Volumes == nil || d.Holds == nil || d.Deleted == nil {
 		return errors.New("invalid volume registry format")
 	}
 	ids := map[volumeID]bool{}
@@ -315,6 +316,14 @@ func (r *volumeRegistry) validateHoldRecord(id string, h volumeHold, vms map[str
 		vms[h.VMName] = true
 	} else if h.State == holdClaimed {
 		return errors.New("claimed volume lacks VM")
+	}
+	if h.Sleep != nil {
+		if r.data.Version != 2 {
+			return errors.New("sleep requires registry version 2")
+		}
+		if err := validateManagedSleep(h); err != nil {
+			return err
+		}
 	}
 	names := map[string]bool{}
 	managed := false

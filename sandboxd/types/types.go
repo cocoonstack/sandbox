@@ -721,6 +721,7 @@ type VMConfig struct {
 // VMDisk is one hot-attached disk that `cocoon vm inspect` reports.
 type VMDisk struct {
 	Name     string `json:"name"`
+	Path     string `json:"path"`
 	ReadOnly bool   `json:"readonly,omitzero"`
 }
 
@@ -731,12 +732,15 @@ type VMDevices struct {
 
 // VMRecord is the subset of cocoon's VM records the control plane reads.
 type VMRecord struct {
-	State           string        `json:"state"`
-	PID             int           `json:"pid"`
-	VsockSocket     string        `json:"vsock_socket"`
-	NetworkConfigs  []VMNetConfig `json:"network_configs,omitempty"`
-	Config          VMConfig      `json:"config"`
-	AttachedDevices VMDevices     `json:"attached_devices,omitzero"`
+	ID                   string        `json:"id"`
+	TransitionGeneration uint64        `json:"transition_generation"`
+	LastTransitionReason string        `json:"last_transition_reason"`
+	State                string        `json:"state"`
+	PID                  int           `json:"pid"`
+	VsockSocket          string        `json:"vsock_socket"`
+	NetworkConfigs       []VMNetConfig `json:"network_configs,omitempty"`
+	Config               VMConfig      `json:"config"`
+	AttachedDevices      VMDevices     `json:"attached_devices,omitzero"`
 }
 
 // TapDevice returns the first NIC's host tap; empty when the record carries none.

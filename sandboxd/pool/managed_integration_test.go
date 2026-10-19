@@ -281,4 +281,9 @@ func TestManagedQuarantineStillRemovesVMWhenRetirementCannotCommit(t *testing.T)
 	if _, held := m.managedHold(sb.ID); !held {
 		t.Fatal("failed retirement discarded disk ownership")
 	}
+	waitFor(t, func() bool { return !m.store.recommitting.Load() && m.store.synced() })
+	persisted, loadErr := m.store.load()
+	if loadErr != nil || persisted[sb.ID] == nil || persisted[sb.ID].Failed != egressQuarantineFailure {
+		t.Fatalf("quarantine marker was not persisted: %v %v", persisted[sb.ID], loadErr)
+	}
 }

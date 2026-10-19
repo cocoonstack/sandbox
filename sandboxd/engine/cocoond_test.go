@@ -48,7 +48,7 @@ func TestInspectReadsOneVMAndReportsAMissingOne(t *testing.T) {
 		"echo \"Error: inspect: vm $3: vm not found\" >&2; exit 1\n")
 	e := New("cocoon", nil, nil, false, false, "")
 	rec, ok, err := e.Inspect(t.Context(), "sbx-1")
-	wantDisks := []types.VMDisk{{Name: "imagenet", ReadOnly: true}, {Name: "scratch"}}
+	wantDisks := []types.VMDisk{{Name: "imagenet", Path: "/v/a.img", ReadOnly: true}, {Name: "scratch", Path: "/v/b.img"}}
 	if err != nil || !ok || rec.State != "running" || rec.Config.Name != "sbx-1" || !slices.Equal(rec.AttachedDevices.Disks, wantDisks) {
 		t.Errorf("Inspect sbx-1 = %+v, %v, %v", rec, ok, err)
 	}

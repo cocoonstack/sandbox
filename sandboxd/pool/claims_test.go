@@ -231,3 +231,26 @@ func TestClaimStoreConcurrentCommits(t *testing.T) {
 		t.Fatalf("after concurrent commits: %+v, %v", got, err)
 	}
 }
+
+func TestDurableClaimBarrierRewritesLatestAlreadyWrittenRows(t *testing.T) {
+	s := newClaimStore(t.TempDir(), false)
+	sb := &types.Sandbox{ID: "sb-barrier", Token: "first"}
+	old := s.set(sb)
+	if err := s.commit(old); err != nil {
+		t.Fatal(err)
+	}
+	sb.Token = "latest"
+	if err := s.commit(s.set(sb)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(s.path, []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.commitDurable(old); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.load()
+	if err != nil || got[sb.ID] == nil || got[sb.ID].Token != "latest" {
+		t.Fatalf("durable barrier did not rewrite latest credentials: %v %v", got, err)
+	}
+}

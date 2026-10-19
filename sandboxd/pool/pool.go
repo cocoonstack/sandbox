@@ -72,6 +72,7 @@ const (
 	hibernatePrefix = "sbx-hib-"
 	forkPrefix      = "sbx-fork-"
 	vmStateRunning  = "running"
+	vmStateStopped  = "stopped"
 	vmStateCreating = "creating"
 
 	goldenStampSuffix = ".stamp"
@@ -144,6 +145,9 @@ type Engine interface {
 	Warmup(ctx context.Context, vsockSocket string, argv []string) error
 	TrimCow(ctx context.Context, vsockSocket string) error
 	CheckLiveVolumeSupport(ctx context.Context) error
+	RunVolumeHook(ctx context.Context, socket string, call engine.VolumeHookCall) error
+	VerifyMountedVolume(ctx context.Context, socket, name, mount string) error
+	InspectHibernateSource(ctx context.Context, name string) (engine.HibernateSource, bool, error)
 	DiskAttach(ctx context.Context, vmName string, spec engine.VolumeSpec) error
 	DetachVolume(ctx context.Context, vmName, sock, name, mount string) error
 	MountVolume(ctx context.Context, vsockSocket, name, mount string, rw bool) error
@@ -328,10 +332,12 @@ type Manager struct {
 	store   *claimStore
 	volumes map[string]catalogVolume
 	// volumeAdmission counts the live holders of each volume name; guarded by m.mu.
-	volumeAdmission map[string]volumeHolders
-	managed         *volumeRegistry
-	volumeRuns      map[*types.Sandbox]*volumeRun
-	volumeErrors    map[*types.Sandbox]map[string]string
+	volumeAdmission  map[string]volumeHolders
+	managed          *volumeRegistry
+	managedSleepHook *config.ManagedVolumeHibernate
+	managedStreams   map[*types.Sandbox]chan struct{}
+	volumeRuns       map[*types.Sandbox]*volumeRun
+	volumeErrors     map[*types.Sandbox]map[string]string
 
 	poolStore *poolStore
 	// poolShared is the cell's pool set with a meta store; poolVersion, under m.mu, is its newest version applied.
@@ -444,42 +450,44 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 	}
 	refill := cmp.Or(cfg.RefillConcurrency, defaultRefill)
 	m := &Manager{
-		eng:             eng,
-		dataDir:         cfg.DataDir,
-		egress:          cfg.HasEgress(),
-		releaseDelay:    time.Duration(cfg.ReleaseDelaySeconds) * time.Second,
-		vmmRestart:      cfg.VMMRestart,
-		cocoondSocket:   cfg.CocoondSocket,
-		maxFork:         cmp.Or(cfg.MaxForkCount, defaultMaxFork),
-		store:           newClaimStore(cfg.DataDir, cfg.SyncClaims),
-		volumes:         make(map[string]catalogVolume, len(cfg.Volumes)),
-		volumeAdmission: map[string]volumeHolders{},
-		volumeRuns:      map[*types.Sandbox]*volumeRun{},
-		volumeErrors:    map[*types.Sandbox]map[string]string{},
-		poolStore:       newPoolStore(cfg.DataDir),
-		poolShared:      b.CellPools,
-		archives:        b.Archives,
-		lease:           leaseTiming{ttl: leaseTTL, every: leaseRenew, margin: leaseMargin},
-		tenants:         b.Tenants,
-		ckpts:           b.Checkpoints,
-		ckptsShared:     b.SharedCheckpoints,
-		tpls:            b.Templates,
-		pools:           make(map[types.PoolKey]*pool, len(cfg.Pools)),
-		claimed:         map[string]*types.Sandbox{},
-		pendingRemovals: map[string]pendingRemoval{},
-		tenantLive:      map[string]int{},
-		readers:         &readerSet{live: map[string]*reader{}},
-		archiving:       map[string]struct{}{},
-		pendingCks:      map[string]struct{}{},
-		recLocks:        map[string]*sync.RWMutex{},
-		recRefs:         map[string]int{},
-		healPending:     map[string]struct{}{},
-		healAbort:       map[string]struct{}{},
-		refillSem:       make(chan struct{}, refill),
-		maintSem:        make(chan struct{}, max(1, refill-max(1, refill/4))),
-		probeSem:        make(chan struct{}, refill),
-		refillKick:      make(chan struct{}, 1),
-		healSem:         make(chan struct{}, maxConcurrentHeals),
+		eng:              eng,
+		dataDir:          cfg.DataDir,
+		egress:           cfg.HasEgress(),
+		releaseDelay:     time.Duration(cfg.ReleaseDelaySeconds) * time.Second,
+		vmmRestart:       cfg.VMMRestart,
+		cocoondSocket:    cfg.CocoondSocket,
+		maxFork:          cmp.Or(cfg.MaxForkCount, defaultMaxFork),
+		store:            newClaimStore(cfg.DataDir, cfg.SyncClaims),
+		volumes:          make(map[string]catalogVolume, len(cfg.Volumes)),
+		volumeAdmission:  map[string]volumeHolders{},
+		volumeRuns:       map[*types.Sandbox]*volumeRun{},
+		managedSleepHook: cfg.ManagedVolumeHibernate,
+		managedStreams:   map[*types.Sandbox]chan struct{}{},
+		volumeErrors:     map[*types.Sandbox]map[string]string{},
+		poolStore:        newPoolStore(cfg.DataDir),
+		poolShared:       b.CellPools,
+		archives:         b.Archives,
+		lease:            leaseTiming{ttl: leaseTTL, every: leaseRenew, margin: leaseMargin},
+		tenants:          b.Tenants,
+		ckpts:            b.Checkpoints,
+		ckptsShared:      b.SharedCheckpoints,
+		tpls:             b.Templates,
+		pools:            make(map[types.PoolKey]*pool, len(cfg.Pools)),
+		claimed:          map[string]*types.Sandbox{},
+		pendingRemovals:  map[string]pendingRemoval{},
+		tenantLive:       map[string]int{},
+		readers:          &readerSet{live: map[string]*reader{}},
+		archiving:        map[string]struct{}{},
+		pendingCks:       map[string]struct{}{},
+		recLocks:         map[string]*sync.RWMutex{},
+		recRefs:          map[string]int{},
+		healPending:      map[string]struct{}{},
+		healAbort:        map[string]struct{}{},
+		refillSem:        make(chan struct{}, refill),
+		maintSem:         make(chan struct{}, max(1, refill-max(1, refill/4))),
+		probeSem:         make(chan struct{}, refill),
+		refillKick:       make(chan struct{}, 1),
+		healSem:          make(chan struct{}, maxConcurrentHeals),
 	}
 	for _, volume := range cfg.Volumes {
 		m.volumes[volume.Name] = catalogVolume{

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -210,7 +211,11 @@ func (m *Manager) finishManaged(id string, clears []string) bool {
 	if r.fault != nil {
 		return false
 	}
-	if err := m.store.commit(m.store.del(id)); err != nil {
+	commit := m.store.commit
+	if h.Sleep != nil {
+		commit = m.store.commitDurable
+	}
+	if err := commit(m.store.del(id)); err != nil {
 		return false
 	}
 	for _, path := range clears {
@@ -259,6 +264,14 @@ func (m *Manager) recoverManaged(ctx context.Context, claims map[string]*types.S
 		}
 		m.mu.Unlock()
 		sb, exists := claims[h.SandboxID]
+		if h.Sleep != nil && h.State != holdRetiring {
+			if !exists || !sleepMatchesClaim(h, sb) {
+				return owned, managedStorageError()
+			}
+			projectSleepState(sb, h.Sleep)
+			owned[h.VMName] = true
+			continue
+		}
 		rec, present := live[h.VMName]
 		valid := exists && sb.VMName == h.VMName && sb.Tenant == h.Tenant && sb.Failed != egressQuarantineFailure && h.State != holdRetiring && present
 		if valid {
@@ -270,14 +283,7 @@ func (m *Manager) recoverManaged(ctx context.Context, claims map[string]*types.S
 		}
 		if valid {
 			for _, volume := range heldVolumes(sb) {
-				matched := false
-				for _, ref := range h.Refs {
-					if ref.Volume == volume {
-						matched = true
-						break
-					}
-				}
-				if !matched {
+				if !slices.ContainsFunc(h.Refs, func(ref volumeRef) bool { return ref.Volume == volume }) {
 					return owned, managedStorageError()
 				}
 			}

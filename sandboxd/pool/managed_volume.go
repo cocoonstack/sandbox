@@ -136,6 +136,9 @@ func (r *volumeRegistry) completeCreate(v managedVolume) error {
 }
 
 func (r *volumeRegistry) markRecovery(v managedVolume) error {
+	if r.sleepOwnsVolume(v.ID) {
+		return managedStorageError()
+	}
 	v.State = volumeRecovery
 	r.data.Volumes[v.Name] = v
 	if err := r.commit(); err != nil {
@@ -162,7 +165,7 @@ func (m *Manager) GetVolume(name, tenant string) (types.ManagedVolumeInfo, error
 		if err := r.markRecovery(v); r.fault != nil {
 			return types.ManagedVolumeInfo{}, err
 		}
-		v = r.data.Volumes[name]
+		v.State = volumeRecovery
 	}
 	return r.info(v), nil
 }

@@ -2009,3 +2009,14 @@ func seedGolden(t *testing.T, m *Manager, imageID string) string {
 	}
 	return g
 }
+
+func (f *fakeEngine) RunVolumeHook(_ context.Context, _ string, _ engine.VolumeHookCall) error {
+	return nil
+}
+
+func (f *fakeEngine) InspectHibernateSource(ctx context.Context, name string) (engine.HibernateSource, bool, error) {
+	names, err := f.SnapshotList(ctx)
+	return engine.HibernateSource{ID: name, Name: name}, slices.Contains(names, name), err
+}
+
+func (f *fakeEngine) VerifyMountedVolume(_ context.Context, _, _, _ string) error { return nil }

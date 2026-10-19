@@ -217,6 +217,9 @@ func (m *Manager) AgentSocket(id, token string) (string, error) {
 		return "", ErrLeaseLost
 	}
 	// no activity stamp: a control-plane poll must not keep an idle sandbox awake
+	if m.managedPaused(sb) {
+		return "", ErrPaused
+	}
 	return sb.VsockSocket, nil
 }
 
@@ -233,7 +236,12 @@ func (m *Manager) dialPort(ctx context.Context, id string, cred Cred, port uint1
 	sb.Touch()
 	m.recordAudit(ctx, id, auditFrame{Op: op, Port: port})
 	sb.Hold()
-	sock, err := m.wakeResolved(ctx, sb)
+	sb.Transition.Lock()
+	sock, err := m.wakeOrReadLocked(ctx, sb, false)
+	if err == nil {
+		fenced, err = m.fenceWatch(sb)
+	}
+	sb.Transition.Unlock()
 	if err != nil {
 		sb.Unhold()
 		return nil, err
@@ -256,15 +264,19 @@ func (m *Manager) dialPassive(ctx context.Context, id string, port uint16) (net.
 	if !ok {
 		return nil, ErrUnknownSandbox
 	}
-	fenced, err := m.fenceWatch(sb)
-	if err != nil {
+	if _, err := m.fenceWatch(sb); err != nil {
 		return nil, err
 	}
 	if !sb.Transition.TryLock() {
 		return nil, ErrPaused
 	}
+	fenced, err := m.fenceWatch(sb)
+	if err != nil {
+		sb.Transition.Unlock()
+		return nil, err
+	}
 	failed := sb.Failed != ""
-	paused, sock := sb.HibernateSnap != "" || sb.PendingSnap != "" || sb.ArchiveCk != "", sb.VsockSocket
+	paused, sock := m.managedPaused(sb) || sb.HibernateSnap != "" || sb.PendingSnap != "" || sb.ArchiveCk != "", sb.VsockSocket
 	if !paused && !failed {
 		sb.Hold()
 	}
@@ -291,6 +303,11 @@ func (m *Manager) dialPassive(ctx context.Context, id string, port uint16) (net.
 
 // releaseResolved re-checks under m.mu that sb is still the live claim: no double teardown.
 func (m *Manager) releaseResolved(ctx context.Context, id string, sb *types.Sandbox) error {
+	if m.managedLifecycle(sb) {
+		sb.Transition.Lock()
+		defer sb.Transition.Unlock()
+		return m.releaseManagedSleepLocked(ctx, sb, time.Time{})
+	}
 	var marked string
 	m.mu.Lock()
 	for {
@@ -433,6 +450,9 @@ func (m *Manager) tenantDelta(tenant string, delta int) {
 }
 
 func (m *Manager) addClaimLocked(sb *types.Sandbox) {
+	if _, ok := m.managedHold(sb.ID); ok {
+		m.managedStreams[sb] = make(chan struct{})
+	}
 	if m.archives != nil {
 		_, replicating := m.replicaPools[sb.PolicyKey()]
 		sb.SetReplicated(replicating || sb.HasReplica())
@@ -442,6 +462,14 @@ func (m *Manager) addClaimLocked(sb *types.Sandbox) {
 }
 
 func (m *Manager) dropClaimLocked(sb *types.Sandbox) {
+	if ch := m.managedStreams[sb]; ch != nil {
+		select {
+		case <-ch:
+		default:
+			close(ch)
+		}
+		delete(m.managedStreams, sb)
+	}
 	delete(m.claimed, sb.ID)
 	m.tenantDelta(sb.Tenant, -1)
 }
@@ -570,11 +598,16 @@ func (m *Manager) reapOnce(ctx context.Context) {
 	}
 	m.mu.Lock()
 	var expired []victim
+	var managedExpired []*types.Sandbox
 	var dropped, purges []string
 	var unrows []*types.Sandbox
 	for id, sb := range m.claimed {
 		// a zero deadline means no expiry (an archived claim kept forever).
 		if sb.Deadline.IsZero() || !now.After(sb.Deadline) {
+			continue
+		}
+		if m.managedLifecycle(sb) {
+			managedExpired = append(managedExpired, sb)
 			continue
 		}
 		switch {
@@ -610,9 +643,13 @@ func (m *Manager) reapOnce(ctx context.Context) {
 		m.store.del(dropped...)
 	}
 	m.mu.Unlock()
-	if len(unrows) > 0 {
-		m.runBounded(ctx, len(unrows), func(ctx context.Context, i int) { m.unrowExpired(ctx, unrows[i]) })
-	}
+	m.runBounded(ctx, len(managedExpired), func(ctx context.Context, i int) {
+		sb := managedExpired[i]
+		sb.Transition.Lock()
+		defer sb.Transition.Unlock()
+		_ = m.releaseManagedSleepLocked(ctx, sb, now)
+	})
+	m.runBounded(ctx, len(unrows), func(ctx context.Context, i int) { m.unrowExpired(ctx, unrows[i]) })
 	if len(expired) == 0 {
 		return
 	}
@@ -703,7 +740,7 @@ func (m *Manager) reapOnce(ctx context.Context) {
 }
 
 func (m *Manager) archivesAtDeadline(sb *types.Sandbox) bool {
-	return sb.Failed == "" && !m.tenantGone(sb.Tenant) && (sb.OnExpire == types.ExpireArchive || sb.HibernateSnap != "" && m.archiveAfterFor(sb.Key) > 0)
+	return !m.hasVolumeHolds(sb) && sb.Failed == "" && !m.tenantGone(sb.Tenant) && (sb.OnExpire == types.ExpireArchive || sb.HibernateSnap != "" && m.archiveAfterFor(sb.Key) > 0)
 }
 
 func (m *Manager) pauseExpired(ctx context.Context, sb *types.Sandbox) error {

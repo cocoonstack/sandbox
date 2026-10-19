@@ -230,7 +230,9 @@ promoted template; it is empty for other sources. `Owner()` names the owning
 node, and `Token()` returns the per-sandbox bearer to persist with `ID` for a
 later `Lookup`; `Close()` releases the sandbox (releasing one already gone is
 not an error, and `Close` is bounded internally so it stays defer-friendly).
-Volume sandboxes cannot hibernate, fork, checkpoint, or promote. Passing
+Volume sandboxes cannot fork, checkpoint, or promote. Explicit hibernate supports
+one mounted managed writable volume when the node enables a workload hook.
+See [managed volume hibernation](managed-volumes.md#hibernate-one-mounted-managed-volume). Passing
 `WithVolumes` or `WithClaimRef` to `Checkpoint.New` returns a local error:
 checkpoint branches support neither volumes nor a claim reference in this version.
 `WithMetadata`, `WithArchiveOnExpire` and `WithEnv` apply to `New`, `Template.New`, and

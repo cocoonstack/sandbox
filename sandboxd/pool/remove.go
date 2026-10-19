@@ -20,9 +20,15 @@ func (m *Manager) removeVM(ctx context.Context, name string) bool {
 	hold, managed := m.managedHoldByVM(name)
 	if managed {
 		if err := m.retireManaged(hold.SandboxID); err != nil {
+			if hold.Sleep != nil {
+				return false
+			}
 			_ = m.eng.Remove(ctx, name)
 			return false
 		}
+	}
+	if managed && hold.Sleep != nil {
+		return m.removeManagedSleep(ctx, hold)
 	}
 	err := m.eng.Remove(ctx, name)
 	if managed {
@@ -102,6 +108,9 @@ func (m *Manager) retryRemovals(ctx context.Context) *sync.WaitGroup {
 }
 
 func (m *Manager) retryRemoval(ctx context.Context, name string, pending pendingRemoval) {
+	if m.retryManagedSleepRemoval(ctx, name, pending) {
+		return
+	}
 	if pending.staleCreate {
 		switch outcome, err := m.eng.ReconcileStaleCreate(ctx, name); {
 		case err != nil:

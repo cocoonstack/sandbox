@@ -7,9 +7,10 @@ single-writer exclusion. It builds on the existing
 [read-only live volume API](live-volumes.md).
 
 This is a subset of [issue #300](https://github.com/cocoonstack/sandbox/issues/300).
-Hibernate/wake, online growth, placement by volume and archive export remain
-follow-up work. Attached volumes still block capture. Do not use this branch to
-claim that all of #300 is complete.
+Explicit hibernate and wake support one mounted writable managed volume when
+the node enables a workload hook. Online growth, placement by volume, and
+archive export remain follow-up work. Other capture operations still refuse
+volume holders. This does not complete all of #300.
 
 ## Configure one node
 
@@ -113,6 +114,78 @@ through the existing `GET/PUT/PATCH /v1/sandboxes/{id}/volumes` interface.
 Attach-only managed entries retain their empty mount across those changes and
 across daemon restart.
 
+## Hibernate one mounted managed volume
+
+The node can enable explicit Hibernate and Wake for one managed writable disk
+on a `net: none` claim. The applied, desired, and held volume sets must match.
+Attach-only volumes, additional disks, catalog mixtures, egress, replication,
+and archive remain unsupported. Idle hibernation continues to skip all volume
+claims. Existing API and SDK methods take no new arguments.
+
+Install the same workload hook at an absolute path in every supported guest
+image, together with GNU `timeout` and util-linux `flock` at `/usr/bin`.
+Enable the hook in node configuration and restart sandboxd.
+
+```json
+{
+  "managed_volume_dir": "/var/lib/sandboxd/managed-volumes",
+  "managed_volume_hibernate": {
+    "hook_argv": ["/usr/local/bin/workload-volume"],
+    "hook_timeout_seconds": 10
+  }
+}
+```
+
+`hook_timeout_seconds` accepts 1 through 300. The daemon appends five separate
+arguments to `hook_argv`.
+
+```text
+prepare|resume operation_id volume_id volume_name exact_mount_path
+```
+
+`prepare` must stop workload writers and close their filesystem references
+before returning success. The daemon then verifies the mount, unmounts without
+force, detaches the disk, and captures VM memory. `resume` restarts writers
+after the exact backing is attached and mounted. It also compensates for a
+failed preparation. Both actions must be idempotent for the same operation ID.
+The hook must not detach from its supervised process group or close inherited
+lock descriptors while descendants continue working.
+
+Hook calls execute as structured argv under a guest lock at
+`/run/sandboxd-volume-hook.lock`. GNU `timeout` kills the hook's process group
+at its execution limit. Lock acquisition has the same time limit, and the host
+RPC allows both limits plus a drain interval. A failed or disconnected call
+keeps access paused until serialized compensation or resume succeeds. A hook
+that deliberately escapes supervision is outside this contract.
+
+A successful hibernate keeps the managed hold and backing file. Another claim
+or a volume deletion receives 409 while the owner sleeps. Wake verifies the
+backing's path, device, inode, and size before restoring memory. A missing or
+replaced backing leaves the claim paused. Restore the original backing before
+retrying wake. A partial wake keeps the restored VM alive and retries attach,
+mount, and resume on that same process. It never restores old memory over a
+running VM. If that process dies after resume may have run, recovery refuses
+rather than replaying stale memory against changed disk contents.
+
+Existing data streams close before preparation. Explicit and data-plane wake
+publish access only after remount, resume, and durable ownership publication.
+Passive operator access stays paused during incomplete transitions. Readers
+never serve the detached snapshot.
+
+An effective outbound policy, including a proxy on the `none` lane, blocks managed
+hibernation before it changes the running guest. If a policy reload enables
+outbound access while the claim sleeps or resumes, wake stays paused until the
+effective policy is removed. Release remains available. Release and lease expiry
+remove the VM and snapshot before freeing the hold, while preserving the managed
+disk.
+
+The selected hook and operation ID remain in the durable sleep record. Retries
+use them even after a configuration change or disabling new managed sleeps.
+The first sleep durably upgrades the managed registry to version 2. Older
+binaries refuse that registry. Keep the upgraded binary when restarting it.
+Claim barriers preserve this lifecycle across daemon crashes with either value
+of `sync_claims`. They do not add a host-power-loss recovery guarantee.
+
 ## Ownership and recovery
 
 The managed registry supplements the existing flat `claims.json` journal.
@@ -142,11 +215,9 @@ remain in force.
 
 ## Follow-up order
 
-1. Add quiesce/unmount/detach/capture and restore/reattach/remount with failure
-   rollback. Keep single-writer ownership while a claim is hibernated.
-2. Add online growth with explicit block-device and guest-filesystem outcomes.
-3. Add owner-node placement and a clear unavailable-owner response.
-4. Add archive/export and restore of external data disks.
-5. Add Kubernetes lifecycle/status ownership once the daemon contracts are stable.
+1. Add online growth with explicit block-device and guest-filesystem outcomes.
+2. Add owner-node placement and a clear unavailable-owner response.
+3. Add archive/export and restore of external data disks.
+4. Add Kubernetes lifecycle/status ownership once the daemon contracts are stable.
 
 These are proposed next steps. None is implemented or qualified by this phase.

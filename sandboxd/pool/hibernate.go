@@ -44,7 +44,12 @@ func (m *Manager) agentSocket(ctx context.Context, id, token string, readerOK bo
 		return "", nil, nil, err
 	}
 	sb.Hold()
-	sock, err := m.wakeOrRead(ctx, sb, readerOK)
+	sb.Transition.Lock()
+	sock, err := m.wakeOrReadLocked(ctx, sb, readerOK)
+	if err == nil {
+		fenced, err = m.fenceWatch(sb)
+	}
+	sb.Transition.Unlock()
 	switch {
 	case errors.Is(err, ErrSleeping):
 		sb.UnholdIdle()
@@ -69,6 +74,9 @@ func (m *Manager) hibernateLocked(ctx context.Context, sb *types.Sandbox) error 
 	volumeBlocked := m.hasVolumeHolds(sb)
 	m.mu.Unlock()
 	if volumeBlocked {
+		if m.managedLifecycle(sb) {
+			return m.driveManagedSleepLocked(ctx, sb, managedSleeping)
+		}
 		return ErrVolumeCapture
 	}
 	if sb.Key.Net == types.NetEgress {
@@ -150,14 +158,24 @@ func (m *Manager) wakeResolved(ctx context.Context, sb *types.Sandbox) (string, 
 func (m *Manager) wakeOrRead(ctx context.Context, sb *types.Sandbox, readerOK bool) (string, error) {
 	sb.Transition.Lock()
 	defer sb.Transition.Unlock()
+	return m.wakeOrReadLocked(ctx, sb, readerOK)
+}
+
+func (m *Manager) wakeOrReadLocked(ctx context.Context, sb *types.Sandbox, readerOK bool) (string, error) {
+	if sb.Failed != "" {
+		return "", fmt.Errorf("%w: %s", ErrFailed, sb.Failed)
+	}
+	if m.managedPaused(sb) {
+		if err := m.driveManagedSleepLocked(ctx, sb, managedRunning); err != nil {
+			return "", err
+		}
+		return sb.VsockSocket, nil
+	}
 	if sb.ArchiveCk != "" {
 		if readerOK && sb.ReaderSafe {
 			return "", ErrSleeping
 		}
 		return m.wakeArchived(ctx, sb)
-	}
-	if sb.Failed != "" {
-		return "", fmt.Errorf("%w: %s", ErrFailed, sb.Failed)
 	}
 	// settle a dangling intent before choosing running vs hibernated
 	if _, err := m.settlePendingSnap(ctx, sb); err != nil {

@@ -70,7 +70,7 @@ func (m *Manager) writeEnv(ctx context.Context, id, tenant, verb string, next fu
 		}
 	}
 	changed := !env.SameGuest(prev)
-	paused := !locked || sb.HibernateSnap != "" || sb.PendingSnap != "" || sb.ArchiveCk != "" || failed
+	paused := !locked || m.managedPaused(sb) || sb.HibernateSnap != "" || sb.PendingSnap != "" || sb.ArchiveCk != "" || failed
 	if changed && paused {
 		m.mu.Unlock()
 		if failed {
