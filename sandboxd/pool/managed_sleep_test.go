@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -268,6 +269,26 @@ func TestManagedSleepRoundTripAndExclusiveHold(t *testing.T) {
 	}
 	if len(e.restores) != 1 || len(e.hooks) != 2 || e.hooks[0].Operation != e.hooks[1].Operation {
 		t.Fatalf("effects restores=%v hooks=%v", e.restores, e.hooks)
+	}
+}
+
+func TestManagedSleepSnapshotNameFitsEngineContract(t *testing.T) {
+	m, e, sb, _ := newSleepTest(t)
+	if err := m.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
+		t.Fatal(err)
+	}
+	if len(e.hibernates) != 1 {
+		t.Fatalf("hibernate calls = %v, want one", e.hibernates)
+	}
+	snapshot := e.hibernates[0]
+	if len(snapshot) > 63 {
+		t.Fatalf("snapshot name %q has length %d, exceeds Cocoon's 63-character limit", snapshot, len(snapshot))
+	}
+	if !regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._:/-]{0,62}$`).MatchString(snapshot) {
+		t.Fatalf("snapshot name %q violates Cocoon's name syntax", snapshot)
+	}
+	if err := m.Wake(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
+		t.Fatal(err)
 	}
 }
 

@@ -153,7 +153,7 @@ func (m *Manager) beginManagedSleep(ctx context.Context, sb *types.Sandbox) erro
 	}
 	hook := *m.managedSleepHook
 	hook.HookArgv = slices.Clone(hook.HookArgv)
-	next := &managedSleep{Operation: randHex(16), Phase: sleepPreparing, Snapshot: hibernatePrefix + strings.TrimPrefix(sb.VMName, vmPrefix) + "-" + randHex(8), Hook: hook, VMID: rec.ID, Generation: rec.TransitionGeneration, BeforeRestore: h.Process}
+	next := &managedSleep{Operation: randHex(16), Phase: sleepPreparing, Snapshot: hibernatePrefix + strings.TrimPrefix(sb.VMName, vmPrefix) + "-" + randHex(3), Hook: hook, VMID: rec.ID, Generation: rec.TransitionGeneration, BeforeRestore: h.Process}
 	if err = m.managed.commitManagedSleep(h, next); err != nil {
 		return err
 	}
