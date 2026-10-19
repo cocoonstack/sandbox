@@ -71,7 +71,10 @@ type renewResponse struct {
 }
 
 type errorResponse struct {
-	Error string `json:"error"`
+	Error   string         `json:"error"`
+	Code    string         `json:"code"`
+	Volume  string         `json:"volume"`
+	Holders []VolumeHolder `json:"holders"`
 }
 
 // APIError is a non-2xx control-plane reply.
@@ -443,7 +446,11 @@ func encodeBody(verb string, v any) ([]byte, error) {
 
 func apiError(verb string, resp *http.Response) error {
 	var er errorResponse
-	_ = json.UnmarshalRead(io.LimitReader(resp.Body, 4096), &er)
+	_ = json.UnmarshalRead(resp.Body, &er)
 	_, _ = io.Copy(io.Discard, resp.Body)
-	return &APIError{Verb: verb, Status: resp.StatusCode, Message: er.Error}
+	base := &APIError{Verb: verb, Status: resp.StatusCode, Message: er.Error}
+	if er.Code != "" || len(er.Holders) != 0 {
+		return &ManagedVolumeError{APIError: base, Code: er.Code, Volume: er.Volume, Holders: er.Holders}
+	}
+	return base
 }

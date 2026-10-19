@@ -44,6 +44,10 @@ var wirePairs = []struct {
 	{"checkpointRecord", false, types.Checkpoint{}, []string{"node", "key", "tenant", "policy_source", "no_egress", "guest_env", "archive"}},
 	{"volumeListResponse", false, server.VolumeListResponse{}, nil},
 	{"VolumeInfo", false, types.VolumeInfo{}, nil},
+	{"ManagedVolumeInfo", false, types.ManagedVolumeInfo{}, nil},
+	{"VolumeHolder", false, types.VolumeHolder{}, nil},
+	{"VolumeCreate", true, types.VolumeCreate{}, nil},
+	{"volumeResponse", false, server.VolumeResponse{}, nil},
 	{"VolumeState", false, types.VolumeState{}, nil},
 	{"SandboxVolumesResponse", false, types.SandboxVolumesResponse{}, nil},
 	{"VolumePatch", true, types.VolumePatch{}, nil},
@@ -117,6 +121,7 @@ func parseSDKFields(t *testing.T) map[string]map[string]string {
 		t.Fatal(err)
 	}
 	out := map[string]map[string]string{}
+	embedded := map[string][]string{}
 	for _, path := range paths {
 		if strings.HasSuffix(path, "_test.go") {
 			continue
@@ -133,6 +138,11 @@ func parseSDKFields(t *testing.T) map[string]map[string]string {
 			if st, ok := spec.Type.(*ast.StructType); ok {
 				out[spec.Name.Name] = map[string]string{}
 				for _, f := range st.Fields.List {
+					if len(f.Names) == 0 {
+						if id, ok := f.Type.(*ast.Ident); ok {
+							embedded[spec.Name.Name] = append(embedded[spec.Name.Name], id.Name)
+						}
+					}
 					if f.Tag == nil {
 						continue
 					}
@@ -144,6 +154,16 @@ func parseSDKFields(t *testing.T) map[string]map[string]string {
 			}
 			return true
 		})
+	}
+	var flatten func(string) map[string]string
+	flatten = func(name string) map[string]string {
+		for _, base := range embedded[name] {
+			maps.Copy(out[name], flatten(base))
+		}
+		return out[name]
+	}
+	for name := range out {
+		flatten(name)
 	}
 	return out
 }

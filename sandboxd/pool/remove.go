@@ -17,7 +17,17 @@ func (m *Manager) removeVM(ctx context.Context, name string) bool {
 	m.out.ClosePrebound(name)
 	// cancellation-immune: on a canceled ctx `cocoon vm rm` no-ops and orphans.
 	ctx = context.WithoutCancel(ctx)
+	hold, managed := m.managedHoldByVM(name)
+	if managed {
+		if err := m.retireManaged(hold.SandboxID); err != nil {
+			_ = m.eng.Remove(ctx, name)
+			return false
+		}
+	}
 	err := m.eng.Remove(ctx, name)
+	if managed {
+		return m.confirmGone(ctx, name) && m.managed.processGone(hold.Process)
+	}
 	if err == nil {
 		return true
 	}
@@ -44,8 +54,17 @@ func (m *Manager) confirmGone(ctx context.Context, name string) bool {
 
 // removeOrRetry reports whether the VM is confirmed gone; a survivor is queued for the reap tick.
 func (m *Manager) removeOrRetry(ctx context.Context, name, sandboxID string, td volumeTeardown) bool {
+	if h, ok := m.managedHoldByVM(name); ok {
+		td.managedID = h.SandboxID
+	}
 	if m.removeVM(ctx, name) {
 		m.finishVolumeTeardown(ctx, td)
+		if td.managedID != "" {
+			if _, held := m.managedHold(td.managedID); held {
+				m.queueRemoval(name, sandboxID, "", td, time.Time{})
+				return false
+			}
+		}
 		return true
 	}
 	m.queueRemoval(name, sandboxID, "", td, time.Time{})
@@ -102,6 +121,11 @@ func (m *Manager) retryRemoval(ctx context.Context, name string, pending pending
 		return
 	}
 	m.finishRemoval(ctx, pending)
+	if pending.volumes.managedID != "" {
+		if _, held := m.managedHold(pending.volumes.managedID); held {
+			m.queueRemoval(name, pending.sandboxID, pending.tap, pending.volumes, time.Time{})
+		}
+	}
 }
 
 func (m *Manager) finishRemoval(ctx context.Context, pending pendingRemoval) {

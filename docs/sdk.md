@@ -9,6 +9,9 @@ module). One `Client` talks to one entry node; sandbox handles dial their
 owning node directly, so a client works unchanged against a single node or a
 cluster.
 
+For node-local `CreateVolume`, `GetVolume`, `DeleteVolume`, managed detail
+types and structured errors, see [managed volumes](managed-volumes.md).
+
 ## A complete example
 
 Claim a sandbox, push a project into it, run a build, then freeze the built

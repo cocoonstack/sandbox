@@ -55,7 +55,7 @@ func (m *Manager) ClaimWarm(ctx context.Context, key types.PoolKey, o ClaimOptio
 	}
 	// holds belong to this path until finalize; past it the sandbox carries them.
 	reserved := applied
-	defer func() { m.unreserveVolumes(reserved) }()
+	defer func() { m.releaseUnbound(volumeSpecs, reserved) }()
 	m.mu.Lock()
 	var sb *types.Sandbox
 	if p := m.pools[key]; p != nil {
@@ -68,7 +68,7 @@ func (m *Manager) ClaimWarm(ctx context.Context, key types.PoolKey, o ClaimOptio
 		return nil, ErrNoWarm
 	}
 	if volumeErr := m.applyVolumes(ctx, sb, volumeSpecs, applied); volumeErr != nil {
-		m.abortVolumeClaim(ctx, sb.VMName, &reserved)
+		m.abortVolumeClaim(ctx, sb.VMName, &reserved, volumeSpecs)
 		return nil, volumeErr
 	}
 	o.apply(sb)
@@ -89,7 +89,7 @@ func (m *Manager) ClaimProvision(ctx context.Context, key types.PoolKey, o Claim
 		return nil, err
 	}
 	reserved := applied
-	defer func() { m.unreserveVolumes(reserved) }()
+	defer func() { m.releaseUnbound(volumeSpecs, reserved) }()
 	golden, err := m.resolveGolden(ctx, key, o.Tenant)
 	if err != nil {
 		return nil, fmt.Errorf("resolve template: %w", err)
@@ -104,7 +104,7 @@ func (m *Manager) ClaimProvision(ctx context.Context, key types.PoolKey, o Claim
 		return nil, err
 	}
 	if volumeErr := m.applyVolumes(ctx, sb, volumeSpecs, applied); volumeErr != nil {
-		m.abortVolumeClaim(ctx, sb.VMName, &reserved)
+		m.abortVolumeClaim(ctx, sb.VMName, &reserved, volumeSpecs)
 		return nil, volumeErr
 	}
 	sb.TemplateDigest = golden.templateDigest
@@ -309,6 +309,10 @@ func (m *Manager) releaseResolved(ctx context.Context, id string, sb *types.Sand
 		marked = ck
 		m.mu.Lock()
 	}
+	if err := m.retireManaged(id); err != nil {
+		m.mu.Unlock()
+		return err
+	}
 	volumeHolds := m.cancelVolumeRun(sb)
 	snap, ck, vmName := sb.HibernateSnap, sb.ArchiveCk, sb.VMName
 	if ck != "" {
@@ -454,13 +458,26 @@ func (m *Manager) finalize(ctx context.Context, sb *types.Sandbox, ttl time.Dura
 func (m *Manager) finalizeBatch(ctx context.Context, sbs []*types.Sandbox, ttl time.Duration, claimRefPrefix string, inherited bool) error {
 	now := time.Now()
 	for _, sb := range sbs {
+		id := sb.ID
+		_, managed := m.managedHold(id)
 		stampIdentity(sb, clampTTL(ttl))
+		if managed {
+			sb.ID = id
+		}
 		if claimRefPrefix != "" {
 			sb.ClaimRef = claimRefPrefix + sb.ID
 		}
 		sb.TouchAt(now)
 	}
-	err := m.checkInjects(m.view.Load(), sbs)
+	var err error
+	for _, sb := range sbs {
+		if err = m.activateManaged(sb.ID); err != nil {
+			break
+		}
+	}
+	if err == nil {
+		err = m.checkInjects(m.view.Load(), sbs)
+	}
 	if err == nil {
 		err = m.deliverEnv(ctx, sbs, inherited)
 	}
@@ -510,6 +527,9 @@ func (m *Manager) finalizeBatch(ctx context.Context, sbs []*types.Sandbox, ttl t
 
 // rollbackClaim unwinds a claim batch: a NIC that cannot be locked is never handed out.
 func (m *Manager) rollbackClaim(ctx context.Context, sbs []*types.Sandbox) {
+	for _, sb := range sbs {
+		_ = m.retireManaged(sb.ID)
+	}
 	m.mu.Lock()
 	ids := make([]string, len(sbs))
 	holds := make([][]types.Volume, len(sbs))
@@ -529,7 +549,13 @@ func (m *Manager) rollbackClaim(ctx context.Context, sbs []*types.Sandbox) {
 }
 
 // abortVolumeClaim removes a failed claim's VM and clears reserved against a double release.
-func (m *Manager) abortVolumeClaim(ctx context.Context, vmName string, reserved *[]types.Volume) {
+func (m *Manager) abortVolumeClaim(ctx context.Context, vmName string, reserved *[]types.Volume, specs []resolvedVolume) {
+	if len(specs) > 0 && specs[0].holdID != "" {
+		if h, ok := m.managedHold(specs[0].holdID); ok && h.VMName == "" {
+			m.releaseUnbound(specs, *reserved)
+			*reserved = nil
+		}
+	}
 	m.removeOrRetry(ctx, vmName, "", volumeTeardown{holds: *reserved})
 	*reserved = nil
 }
@@ -572,6 +598,9 @@ func (m *Manager) reapOnce(ctx context.Context) {
 			}
 			expired = append(expired, victim{action: action, id: id, sb: sb})
 		default:
+			if err := m.retireManaged(id); err != nil {
+				continue
+			}
 			expired = append(expired, victim{action: reapDestroy, id: id, vmName: sb.VMName, snap: sb.HibernateSnap, tenant: sb.Tenant, sb: sb, holds: m.cancelVolumeRun(sb)})
 			m.dropClaimLocked(sb)
 			dropped = append(dropped, id)
@@ -753,6 +782,15 @@ func (m *Manager) admitOptions(ctx context.Context, key types.PoolKey, o ClaimOp
 	volumeSpecs, err := m.resolveVolumes(ctx, o.Tenant, o.Volumes)
 	if err != nil {
 		return nil, nil, err
+	}
+	for _, v := range volumeSpecs {
+		if v.managedID != "" {
+			if err := m.tenantRemoved(ctx, o.Tenant); err != nil {
+				return nil, nil, err
+			}
+			applied, err := m.admitManaged(o.Tenant, volumeSpecs)
+			return volumeSpecs, applied, err
+		}
 	}
 	applied, err := m.admitVolumes(o.Tenant, volumeSpecs)
 	return volumeSpecs, applied, err

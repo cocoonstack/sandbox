@@ -268,7 +268,10 @@ func (s *Server) SetConfigReload(f ConfigReloader) {
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/claim", s.requireToken(s.handleClaim))
-	mux.HandleFunc("GET /v1/volumes", s.requireToken(s.handleVolumes))
+	mux.HandleFunc("GET /v1/volumes", s.requireVolumeListToken(s.handleVolumes))
+	mux.HandleFunc("PUT /v1/volumes/{name}", s.requireVolumeManager(s.handleCreateVolume))
+	mux.HandleFunc("GET /v1/volumes/{name}", s.requireVolumeManager(s.handleGetVolume))
+	mux.HandleFunc("DELETE /v1/volumes/{name}", s.requireVolumeManager(s.handleDeleteVolume))
 	mux.HandleFunc("POST /v1/sandboxes/{id}/release", s.handleSandboxVerb("release", s.mgr.Release))
 	mux.HandleFunc("POST /v1/sandboxes/{id}/hibernate", s.handleSandboxVerb("hibernate", s.mgr.Hibernate))
 	mux.HandleFunc("POST /v1/sandboxes/{id}/wake", s.handleSandboxVerb("wake", s.mgr.Wake))
@@ -383,6 +386,12 @@ func (s *Server) handleVolumeClaim(w http.ResponseWriter, r *http.Request, req C
 }
 
 func (s *Server) handleVolumes(w http.ResponseWriter, r *http.Request) {
+	if mgr, ok := s.mgr.(managedVolumeManager); ok {
+		if err := mgr.ManagedVolumeStatus(); err != nil {
+			writePoolErr(w, err)
+			return
+		}
+	}
 	var holders map[string]int
 	if s.placer != nil {
 		holders = s.placer.VolumeHolders()

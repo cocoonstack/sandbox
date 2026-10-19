@@ -329,6 +329,7 @@ type Manager struct {
 	volumes map[string]catalogVolume
 	// volumeAdmission counts the live holders of each volume name; guarded by m.mu.
 	volumeAdmission map[string]volumeHolders
+	managed         *volumeRegistry
 	volumeRuns      map[*types.Sandbox]*volumeRun
 	volumeErrors    map[*types.Sandbox]map[string]string
 
@@ -438,6 +439,9 @@ type Manager struct {
 
 // NewManager builds a manager from the node config over backends the caller selected from it.
 func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *egress.SecretStore, b Backends) (*Manager, error) {
+	if err := cfg.ValidateManagedVolumeStore(); err != nil {
+		return nil, err
+	}
 	refill := cmp.Or(cfg.RefillConcurrency, defaultRefill)
 	m := &Manager{
 		eng:             eng,
@@ -550,6 +554,27 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 	}
 	m.warnVolumeTenants(ctx, cfg.Volumes)
 	m.warnMissingClasses(ctx)
+	if cfg.ManagedVolumeDir != "" {
+		node, hostErr := os.Hostname()
+		if cfg.Mesh != nil {
+			node = cfg.Mesh.ID()
+		}
+		if node == "" {
+			return nil, fmt.Errorf("managed volume node identity unavailable: %v", hostErr)
+		}
+		var err error
+		m.managed, err = openVolumeRegistry(cfg.ManagedVolumeDir, node)
+		if err != nil {
+			return nil, err
+		}
+		for name, entry := range m.volumes {
+			_, collision := m.managed.data.Volumes[name]
+			if collision || m.managedCatalogAlias(entry.disk.Path) {
+				m.managed.close()
+				return nil, fmt.Errorf("catalog conflicts with existing managed resource")
+			}
+		}
+	}
 	return m, nil
 }
 

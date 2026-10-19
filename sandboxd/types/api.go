@@ -13,13 +13,35 @@ const (
 
 // VolumeInfo is the caller-visible, host-path-free catalog projection.
 type VolumeInfo struct {
-	Name         string `json:"name"`
-	DefaultMount string `json:"default_mount"`
-	SizeBytes    int64  `json:"size_bytes"`
-	Available    bool   `json:"available"`
-	Nodes        int    `json:"nodes"`
+	Kind         string    `json:"kind,omitempty"`
+	ID           string    `json:"id,omitempty"`
+	Tenant       string    `json:"tenant,omitempty"`
+	Node         string    `json:"node,omitempty"`
+	State        string    `json:"state,omitempty"`
+	CreatedAt    time.Time `json:"created_at,omitzero"`
+	Name         string    `json:"name"`
+	DefaultMount string    `json:"default_mount"`
+	SizeBytes    int64     `json:"size_bytes"`
+	Available    bool      `json:"available"`
+	Nodes        int       `json:"nodes"`
 	// Writable reports whether the operator allows rw claims of this name.
 	Writable bool `json:"writable,omitzero"`
+}
+
+type ManagedVolumeInfo struct {
+	VolumeInfo
+	Holders []VolumeHolder `json:"holders,omitempty"`
+}
+
+type VolumeHolder struct {
+	SandboxID string `json:"sandbox_id"`
+	Mode      string `json:"mode"`
+	State     string `json:"state"`
+}
+
+type VolumeCreate struct {
+	SizeGiB int64  `json:"size_gib"`
+	Tenant  string `json:"tenant,omitempty"`
 }
 
 // VolumePatch is the wire body of PATCH /v1/sandboxes/{id}/volumes.

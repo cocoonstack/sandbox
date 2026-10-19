@@ -274,9 +274,10 @@ type Config struct {
 
 	DiskReserve *DiskReserve `json:"disk_reserve,omitempty"`
 
-	Volumes []VolumeSpec `json:"volumes,omitempty"`
-	Mesh    *MeshConfig  `json:"mesh,omitempty"`
-	Pools   []PoolSpec   `json:"pools"`
+	ManagedVolumeDir string       `json:"managed_volume_dir,omitempty"`
+	Volumes          []VolumeSpec `json:"volumes,omitempty"`
+	Mesh             *MeshConfig  `json:"mesh,omitempty"`
+	Pools            []PoolSpec   `json:"pools"`
 }
 
 // HasEgress reports whether the node can attach egress-lane VMs.
@@ -398,6 +399,9 @@ func (c *Config) validateReplication() error {
 }
 
 func (c *Config) validateVolumes() error {
+	if err := c.ValidateManagedVolumeStore(); err != nil {
+		return err
+	}
 	names := make(map[string]struct{}, len(c.Volumes))
 	paths := make(map[string]string, len(c.Volumes))
 	for _, volume := range c.Volumes {
@@ -417,6 +421,58 @@ func (c *Config) validateVolumes() error {
 		paths[filepath.Clean(volume.Path)] = volume.Name
 		if !types.ValidDirectIO(volume.DirectIO) {
 			return fmt.Errorf("volume %q directio must be on, off, or auto, got %q", volume.Name, volume.DirectIO)
+		}
+	}
+	return nil
+}
+
+func (c *Config) ValidateManagedVolumeStore() error {
+	if c.ManagedVolumeDir == "" {
+		return nil
+	}
+	if !filepath.IsAbs(c.ManagedVolumeDir) || filepath.Clean(c.ManagedVolumeDir) != c.ManagedVolumeDir || c.ManagedVolumeDir == "/" {
+		return fmt.Errorf("managed_volume_dir must be a clean absolute non-root path")
+	}
+	if c.APIToken == "" {
+		return fmt.Errorf("managed_volume_dir requires a nonempty api_token")
+	}
+	dataDir, err := filepath.Abs(c.DataDir)
+	if err != nil {
+		return fmt.Errorf("resolve data_dir: %w", err)
+	}
+	resolved, err := resolveExistingAncestors(dataDir)
+	if err != nil {
+		return fmt.Errorf("resolve data_dir: %w", err)
+	}
+	for _, root := range []string{dataDir, resolved} {
+		relative, err := filepath.Rel(root, c.ManagedVolumeDir)
+		if err != nil {
+			return fmt.Errorf("compare managed_volume_dir with data_dir: %w", err)
+		}
+		first, _, _ := strings.Cut(relative, string(filepath.Separator))
+		if first == "readers" || first == "goldens" || strings.HasPrefix(first, "fork-") {
+			return fmt.Errorf("managed_volume_dir must be outside data_dir startup cleanup paths (readers, goldens, fork-*)")
+		}
+	}
+	for _, namespace := range []string{"readers", "goldens"} {
+		swept, err := resolveExistingAncestors(filepath.Join(dataDir, namespace))
+		if err != nil {
+			return fmt.Errorf("resolve data_dir cleanup path: %w", err)
+		}
+		relative, err := filepath.Rel(swept, c.ManagedVolumeDir)
+		if err != nil {
+			return fmt.Errorf("compare managed_volume_dir with cleanup path: %w", err)
+		}
+		if relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+			return fmt.Errorf("managed_volume_dir must be outside data_dir %s cleanup path", namespace)
+		}
+		relative, err = filepath.Rel(c.ManagedVolumeDir, swept)
+		if err != nil {
+			return fmt.Errorf("compare cleanup path with managed_volume_dir: %w", err)
+		}
+		first, _, _ := strings.Cut(relative, string(filepath.Separator))
+		if first == "disks" {
+			return fmt.Errorf("data_dir %s cleanup path must be outside managed volume backing storage", namespace)
 		}
 	}
 	return nil
@@ -661,6 +717,25 @@ func StorageBytes(s string) (int64, error) {
 		s += "B"
 	}
 	return units.RAMInBytes(s)
+}
+
+func resolveExistingAncestors(path string) (string, error) {
+	suffix := ""
+	for {
+		_, err := os.Lstat(path)
+		if err == nil {
+			resolved, err := filepath.EvalSymlinks(path)
+			if err != nil {
+				return "", err
+			}
+			return filepath.Join(resolved, suffix), nil
+		}
+		if !os.IsNotExist(err) || filepath.Dir(path) == path {
+			return "", err
+		}
+		suffix = filepath.Join(filepath.Base(path), suffix)
+		path = filepath.Dir(path)
+	}
 }
 
 func validatePolicy(p *egress.Policy, secrets map[string]struct{}) error {

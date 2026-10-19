@@ -36,7 +36,16 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 	snaps, snapsErr := m.eng.SnapshotList(ctx)
 	imageIDs := m.imageIDs(ctx)
 
-	owned := map[string]bool{}
+	if m.managed != nil {
+		m.store.reset(claims)
+	}
+	owned, err := m.recoverManaged(ctx, claims, live)
+	if err != nil {
+		return err
+	}
+	if err := m.recoverManagedOrphans(ctx, claims, live, owned); err != nil {
+		return err
+	}
 	referenced := map[string]bool{}
 	var adopted []*types.Sandbox
 	m.mu.Lock()
@@ -66,7 +75,9 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 			continue
 		}
 		m.addClaimLocked(sb)
-		m.adoptVolumes(heldVolumes(sb))
+		if _, managed := m.managedHold(sb.ID); !managed {
+			m.adoptVolumes(heldVolumes(sb))
+		}
 		owned[sb.VMName] = true
 		referenced[sb.HibernateSnap] = true
 	}
@@ -257,8 +268,21 @@ func (m *Manager) resyncEgress(ctx context.Context, live map[string]types.VMReco
 	}
 }
 
+const egressQuarantineFailure = "sandbox quarantined after egress recovery failure"
+
 // quarantineClaim parks a claim whose teardown failed: out of service and queued until a remove succeeds.
 func (m *Manager) quarantineClaim(ctx context.Context, sb *types.Sandbox) bool {
+	if m.retireManaged(sb.ID) != nil {
+		m.mu.Lock()
+		sb.Failed = egressQuarantineFailure
+		m.cancelVolumeRun(sb)
+		js := m.store.set(sb)
+		m.mu.Unlock()
+		m.store.recommit(ctx, js)
+		td := m.quiesceVolumes(ctx, sb)
+		m.removeOrRetry(ctx, sb.VMName, sb.ID, td)
+		return false
+	}
 	td := m.quiesceVolumes(ctx, sb)
 	gone := m.removeOrRetry(ctx, sb.VMName, sb.ID, td)
 	m.forgetClaim(ctx, sb)

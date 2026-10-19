@@ -31,20 +31,24 @@ type volumeHolders struct {
 }
 
 type resolvedVolume struct {
-	disk    engine.VolumeSpec
-	applied types.Volume
+	disk      engine.VolumeSpec
+	applied   types.Volume
+	managedID volumeID
+	holdID    string
 }
 
 // volumeTeardown captures marker paths at quiesce time; a later config can re-point the entry.
 type volumeTeardown struct {
-	holds  []types.Volume
-	clears []string
+	managedID string
+	holds     []types.Volume
+	clears    []string
 }
 
 type catalogVolume struct {
-	disk     engine.VolumeSpec
-	tenants  []string
-	writable bool
+	managedID volumeID
+	disk      engine.VolumeSpec
+	tenants   []string
+	writable  bool
 }
 
 func (v catalogVolume) allowed(tenant string) bool {
@@ -71,10 +75,12 @@ func (m *Manager) Volumes(tenant string, holders map[string]int) []types.VolumeI
 		}
 		infos = append(infos, info)
 	}
+	infos = append(infos, m.managedInfos(tenant)...)
 	// root can see peer-only names; a tenant needs local catalog metadata to apply the access list
 	if tenant == "" {
 		for name, nodes := range holders {
-			if _, ok := m.volumes[name]; !ok {
+			_, managed, _ := m.lookupManaged(name)
+			if _, ok := m.volumes[name]; !ok && !managed {
 				infos = append(infos, types.VolumeInfo{
 					Name:         name,
 					DefaultMount: types.DefaultVolumeMount(name),
@@ -109,16 +115,28 @@ func (m *Manager) VolumePlacement(key types.PoolKey, tenant string, names []stri
 	}
 	local := true
 	for _, name := range names {
-		volume, ok := m.volumes[name]
+		volume, ok, err := m.lookupVolume(name)
+		if !ok && err != nil {
+			return false, err
+		}
 		if !ok {
 			if tenant == "" {
 				local = false
 				continue
 			}
+			if m.managed != nil {
+				return false, managedNotFound()
+			}
 			return false, ErrVolumeUnavailable
 		}
 		if !volume.allowed(tenant) {
+			if m.managed != nil {
+				return false, managedNotFound()
+			}
 			return false, ErrVolumeUnavailable
+		}
+		if err != nil {
+			return false, err
 		}
 		if _, err := os.Stat(volume.disk.Path); err != nil {
 			local = false
@@ -138,9 +156,18 @@ func (m *Manager) resolveVolumes(ctx context.Context, tenant string, requested [
 	}
 	resolved := make([]resolvedVolume, 0, len(applied))
 	for _, volume := range applied {
-		entry, ok := m.volumes[volume.Name]
+		entry, ok, lookupErr := m.lookupVolume(volume.Name)
+		if !ok && lookupErr != nil {
+			return nil, lookupErr
+		}
 		if !ok || !entry.allowed(tenant) {
+			if m.managed != nil {
+				return nil, managedNotFound()
+			}
 			return nil, ErrVolumeUnavailable
+		}
+		if lookupErr != nil {
+			return nil, lookupErr
 		}
 		resolvedEntry, resolveErr := m.resolveCatalogVolume(ctx, volume)
 		if resolveErr != nil {
@@ -152,7 +179,10 @@ func (m *Manager) resolveVolumes(ctx context.Context, tenant string, requested [
 }
 
 func (m *Manager) resolveCatalogVolume(ctx context.Context, volume types.Volume) (resolvedVolume, error) {
-	entry, ok := m.volumes[volume.Name]
+	entry, ok, lookupErr := m.lookupVolume(volume.Name)
+	if lookupErr != nil {
+		return resolvedVolume{}, lookupErr
+	}
 	if !ok {
 		return resolvedVolume{}, ErrVolumeUnavailable
 	}
@@ -167,7 +197,17 @@ func (m *Manager) resolveCatalogVolume(ctx context.Context, volume types.Volume)
 	disk := entry.disk
 	disk.RW = volume.RW()
 	volume.AttachOnly = false // past validation the empty mount carries it
-	return resolvedVolume{disk: disk, applied: volume}, nil
+	return resolvedVolume{disk: disk, applied: volume, managedID: entry.managedID}, nil
+}
+
+func (m *Manager) lookupVolume(name string) (catalogVolume, bool, error) {
+	if entry, ok := m.volumes[name]; ok {
+		if m.managedCatalogAlias(entry.disk.Path) {
+			return catalogVolume{}, false, managedStorageError()
+		}
+		return entry, true, nil
+	}
+	return m.lookupManaged(name)
 }
 
 // confirmVolumesClean refuses a read-only claim of a dirty image; run after holds are taken.
@@ -185,6 +225,9 @@ func (m *Manager) applyVolumes(ctx context.Context, sb *types.Sandbox, volumes [
 	if len(volumes) == 0 {
 		return nil
 	}
+	if err := m.bindManaged(ctx, sb, volumes); err != nil {
+		return err
+	}
 	group, groupCtx := errgroup.WithContext(ctx)
 	for _, volume := range volumes {
 		group.Go(func() error { return m.applyVolume(groupCtx, sb, volume, false) })
@@ -198,6 +241,33 @@ func (m *Manager) applyVolumes(ctx context.Context, sb *types.Sandbox, volumes [
 
 // applyVolume keeps one volume's steps strictly ordered; siblings overlap freely.
 func (m *Manager) applyVolume(ctx context.Context, sb *types.Sandbox, volume resolvedVolume, live bool) error {
+	if volume.managedID == "" {
+		if m.managedCatalogAlias(volume.disk.Path) {
+			return managedStorageError()
+		}
+		if h, managed := m.managedHold(sb.ID); managed {
+			matched := false
+			for _, ref := range h.Refs {
+				if ref.Volume.Name == volume.applied.Name && ref.Path == volume.disk.Path {
+					identity, err := catalogBacking(volume.disk.Path)
+					matched = err == nil && identity == ref.Backing
+					break
+				}
+			}
+			if !matched {
+				return managedStorageError()
+			}
+		}
+	}
+	if volume.managedID != "" {
+		m.managed.mu.Lock()
+		v, ok := m.managed.data.Volumes[volume.applied.Name]
+		valid := ok && v.ID == volume.managedID && m.managed.fault == nil && m.managed.verify(v) == nil
+		m.managed.mu.Unlock()
+		if !valid {
+			return managedStorageError()
+		}
+	}
 	// attach-only mounts nothing, so there is no umount to verify and no marker.
 	attachOnly := volume.applied.Mount == ""
 	// write-ahead: the marker must be durable before any guest write can be.
@@ -228,6 +298,9 @@ func (m *Manager) applyVolume(ctx context.Context, sb *types.Sandbox, volume res
 // quiesceVolumes unmounts a claim's writable mounts in reverse; a failed unmount keeps the marker.
 func (m *Manager) quiesceVolumes(ctx context.Context, sb *types.Sandbox) volumeTeardown {
 	td := volumeTeardown{holds: heldVolumes(sb)}
+	if h, managed := m.managedHold(sb.ID); managed {
+		td.managedID = h.SandboxID
+	}
 	mounts := writableMounts(sb.Volumes)
 	if mounts == 0 {
 		return td
@@ -246,7 +319,9 @@ func (m *Manager) quiesceVolumes(ctx context.Context, sb *types.Sandbox) volumeT
 			stuck = true
 			continue
 		}
-		if entry, ok := m.volumes[volume.Name]; ok {
+		if path, ok := m.managedRefPath(sb.ID, volume.Name); ok {
+			td.clears = append(td.clears, path)
+		} else if entry, ok := m.volumes[volume.Name]; ok {
 			td.clears = append(td.clears, entry.disk.Path)
 		}
 	}
@@ -263,6 +338,10 @@ func (m *Manager) quiesceVolumes(ctx context.Context, sb *types.Sandbox) volumeT
 
 // finishVolumeTeardown runs only once the VM is gone, when its image lock is finally released.
 func (m *Manager) finishVolumeTeardown(ctx context.Context, td volumeTeardown) {
+	if td.managedID != "" {
+		m.finishManaged(td.managedID, td.clears)
+		return
+	}
 	if len(td.holds) == 0 {
 		return
 	}

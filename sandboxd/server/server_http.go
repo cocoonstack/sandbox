@@ -15,6 +15,7 @@ import (
 
 	"github.com/projecteru2/core/log"
 
+	"github.com/cocoonstack/sandbox/sandboxd/pool"
 	"github.com/cocoonstack/sandbox/sandboxd/tenants"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 	"github.com/cocoonstack/sandbox/sandboxd/utils"
@@ -170,6 +171,13 @@ func metadataFilter(pairs []string) (types.Metadata, error) {
 }
 
 func writePoolErr(w http.ResponseWriter, err error) bool {
+	if volumeErr, ok := errors.AsType[*pool.VolumeError](err); ok {
+		if volumeErr.Status == http.StatusServiceUnavailable {
+			w.Header().Set("Retry-After", retryAfterSeconds)
+		}
+		writeJSON(w, volumeErr.Status, volumeErr)
+		return true
+	}
 	code, msg, ok := mapPoolErr(w, err)
 	if ok {
 		writeErr(w, code, msg)
@@ -186,6 +194,9 @@ func mapPoolErr(w http.ResponseWriter, err error) (code int, msg string, ok bool
 }
 
 func lookupPoolErr(err error) (code int, msg string, ok bool) {
+	if volumeErr, ok := errors.AsType[*pool.VolumeError](err); ok {
+		return volumeErr.Status, volumeErr.Message, true
+	}
 	for _, m := range poolErrHTTP {
 		if errors.Is(err, m.err) {
 			return m.code, cmp.Or(m.msg, err.Error()), true

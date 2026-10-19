@@ -21,6 +21,9 @@ wire is chunked, the caller's copy is not). Wire fidelity is
 pinned by the shared protocol fixture corpus that the Rust guest, Go, and
 Python all round-trip in CI.
 
+For node-local `create_volume`, `get_volume`, `delete_volume` and the format-once
+workflow, see [managed volumes](managed-volumes.md).
+
 ## A complete example
 
 Claim a sandbox, push a project in, run a build, then freeze the built state

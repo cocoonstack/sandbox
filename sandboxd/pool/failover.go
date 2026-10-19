@@ -411,6 +411,13 @@ func (m *Manager) forgetClaim(ctx context.Context, sb *types.Sandbox) bool {
 		m.mu.Unlock()
 		return false
 	}
+	if _, managed := m.managedHold(sb.ID); managed {
+		if err := m.retireManaged(sb.ID); err != nil {
+			m.mu.Unlock()
+			return false
+		}
+		m.cancelVolumeRun(sb)
+	}
 	m.dropClaimLocked(sb)
 	js := m.store.del(sb.ID)
 	m.mu.Unlock()

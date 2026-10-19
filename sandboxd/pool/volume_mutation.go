@@ -85,7 +85,7 @@ func (m *Manager) changeVolumes(ctx context.Context, id, tenant string, change v
 		view = m.finishVolumeRun(sb, run)
 	}()
 	m.mu.Lock()
-	current, held := slices.Clone(sb.VolumesWant), heldVolumes(sb)
+	current, held := slices.Clone(sb.VolumesWant), slices.Clone(run.holds)
 	m.mu.Unlock()
 	target, err := change(current)
 	if err != nil {
@@ -98,6 +98,9 @@ func (m *Manager) changeVolumes(ctx context.Context, id, tenant string, change v
 	if err = validateLiveTarget(held, target); err != nil {
 		return view, err
 	}
+	if err = m.validateManagedTarget(sb.ID, target); err != nil {
+		return view, err
+	}
 	additions := volumeDifference(target, held)
 	if len(additions) != 0 {
 		if err = m.tenantRemoved(ctx, sb.Tenant); err != nil {
@@ -108,12 +111,17 @@ func (m *Manager) changeVolumes(ctx context.Context, id, tenant string, change v
 	if err != nil {
 		return view, err
 	}
+	for _, volume := range resolved {
+		if volume.managedID != "" {
+			return view, fmt.Errorf("%w: managed volumes support claim-time attachment only", ErrBadVolume)
+		}
+	}
 	if err = m.checkVolumeRun(ctx, sb, run); err != nil {
 		return view, err
 	}
 	sb.Touch()
 	m.mu.Lock()
-	uncertain := volumeDifference(volumeDifference(sb.VolumesWant, sb.Volumes), target)
+	uncertain := volumeDifference(volumeDifference(run.holds, sb.Volumes), target)
 	m.mu.Unlock()
 	for _, v := range uncertain {
 		failedName = v.Name
@@ -177,6 +185,16 @@ func (m *Manager) beginVolumeRun(ctx context.Context, sb *types.Sandbox) (contex
 			m.mu.Unlock()
 			return ctx, nil, ErrUnknownSandbox
 		}
+		if h, managed := m.managedHold(sb.ID); managed {
+			if m.ManagedVolumeStatus() != nil {
+				m.mu.Unlock()
+				return ctx, nil, managedStorageError()
+			}
+			if h.State != holdClaimed {
+				m.mu.Unlock()
+				return ctx, nil, ErrFailed
+			}
+		}
 		if active := m.volumeRuns[sb]; active != nil {
 			done := active.done
 			m.mu.Unlock()
@@ -189,6 +207,9 @@ func (m *Manager) beginVolumeRun(ctx context.Context, sb *types.Sandbox) (contex
 		}
 		runCtx, cancel := context.WithCancel(ctx)
 		run := &volumeRun{cancel: cancel, done: make(chan struct{}), holds: heldVolumes(sb)}
+		if held, managed := m.managedVolumesHeld(sb.ID); managed {
+			run.holds = held
+		}
 		m.volumeRuns[sb] = run
 		m.mu.Unlock()
 		return runCtx, run, nil
@@ -197,7 +218,7 @@ func (m *Manager) beginVolumeRun(ctx context.Context, sb *types.Sandbox) (contex
 
 func (m *Manager) finishVolumeRun(sb *types.Sandbox, run *volumeRun) types.SandboxVolumesResponse {
 	m.mu.Lock()
-	if m.claimed[sb.ID] == sb {
+	if _, managed := m.managedHold(sb.ID); m.claimed[sb.ID] == sb && !managed {
 		m.releaseVolumes(volumeDifference(run.holds, heldVolumes(sb)))
 	}
 	delete(m.volumeRuns, sb)
@@ -209,6 +230,9 @@ func (m *Manager) finishVolumeRun(sb *types.Sandbox, run *volumeRun) types.Sandb
 }
 
 func (m *Manager) restoreVolumeHolds(sb *types.Sandbox, holds []types.Volume) {
+	if _, managed := m.managedHold(sb.ID); managed {
+		return
+	}
 	if m.volumeRuns[sb] == nil {
 		m.releaseVolumes(volumeDifference(holds, heldVolumes(sb)))
 	}
@@ -227,6 +251,9 @@ func (m *Manager) checkVolumeRunLocked(ctx context.Context, sb *types.Sandbox, r
 	if !m.ownsRunLocked(sb, run) {
 		return ErrUnknownSandbox
 	}
+	if h, managed := m.managedHold(sb.ID); managed && h.State != holdClaimed {
+		return ErrFailed
+	}
 	switch {
 	case sb.Failed != "":
 		return ErrFailed
@@ -243,6 +270,9 @@ func (m *Manager) cancelVolumeRun(sb *types.Sandbox) []types.Volume {
 	if run := m.volumeRuns[sb]; run != nil {
 		run.cancel()
 		return slices.Clone(run.holds)
+	}
+	if held, managed := m.managedVolumesHeld(sb.ID); managed {
+		return held
 	}
 	return heldVolumes(sb)
 }
@@ -272,6 +302,14 @@ func (m *Manager) stageVolumeTarget(ctx context.Context, sb *types.Sandbox, run 
 		return claimSnapshot{}, false, err
 	}
 	run.holds = append(run.holds, additions...)
+	if err := m.managedLiveAdd(sb.ID, resolved); err != nil {
+		if m.ManagedVolumeStatus() == nil {
+			m.releaseVolumes(additions)
+			run.holds = volumeDifference(run.holds, additions)
+		}
+		m.mu.Unlock()
+		return claimSnapshot{}, false, err
+	}
 	m.mu.Unlock()
 	cleanErr := m.confirmVolumesClean(resolved)
 	m.mu.Lock()
@@ -280,6 +318,9 @@ func (m *Manager) stageVolumeTarget(ctx context.Context, sb *types.Sandbox, run 
 		return claimSnapshot{}, false, err
 	}
 	if cleanErr != nil {
+		if err := m.managedLiveRemove(sb.ID, additions); err != nil {
+			return claimSnapshot{}, false, err
+		}
 		m.releaseVolumes(additions)
 		run.holds = volumeDifference(run.holds, additions)
 		return claimSnapshot{}, false, cleanErr
@@ -287,7 +328,7 @@ func (m *Manager) stageVolumeTarget(ctx context.Context, sb *types.Sandbox, run 
 	replaced := func(v types.Volume) bool {
 		return volumeIndex(sb.VolumesWant, v.Name) < 0 && volumeIndex(target, v.Name) >= 0
 	}
-	if len(additions) == 0 && slices.Equal(target, sb.VolumesWant) && !slices.ContainsFunc(sb.Volumes, replaced) && m.store.synced() {
+	if len(additions) == 0 && slices.Equal(target, sb.VolumesWant) && !slices.ContainsFunc(sb.Volumes, replaced) && m.store.synced() && len(volumeDifference(run.holds, heldVolumes(sb))) == 0 {
 		return claimSnapshot{}, false, nil
 	}
 	sb.Volumes = slices.DeleteFunc(slices.Clone(sb.Volumes), replaced)
@@ -334,6 +375,9 @@ func (m *Manager) commitVolumeRun(ctx context.Context, sb *types.Sandbox, run *v
 		return err
 	}
 	dropped := volumeDifference(run.holds, heldVolumes(sb))
+	if err := m.managedLiveRemove(sb.ID, dropped); err != nil {
+		return err
+	}
 	m.releaseVolumes(dropped)
 	run.holds = volumeDifference(run.holds, dropped)
 	return nil

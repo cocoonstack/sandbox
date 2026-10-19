@@ -5,11 +5,13 @@ from __future__ import annotations
 import http.client
 import json
 import queue
+import re
 import ssl
 import threading
 import time
 import urllib.parse
 from collections.abc import Callable, Iterable, Mapping, Sequence
+from datetime import datetime
 from typing import Any, TypeVar, cast
 
 from .checkpoint import Checkpoint
@@ -20,6 +22,8 @@ from .sandbox import Sandbox
 from .template import _claim_body, _template_query
 
 T = TypeVar("T")
+
+_VOLUME_NAME = re.compile(r"^[a-z][a-z0-9_-]{0,19}$")
 
 _PEERS_TIMEOUT = 5.0
 _IDLE_CONNS = 8
@@ -133,6 +137,37 @@ class Client:
         reply = self._request(self.addr, "GET", "/v1/volumes", None, "list volumes")
         return [dict(volume) for volume in reply.get("volumes") or []]
 
+    def create_volume(self, name: str, size_gib: int, tenant: str = "") -> dict[str, Any]:
+        """Creates a raw managed disk or returns it for an identical retry."""
+        path = _volume_path(name)
+        if isinstance(size_gib, bool) or not isinstance(size_gib, int) or not 1 <= size_gib <= 1024:
+            raise ValueError("volume size_gib must be an integer between 1 and 1024")
+        body: dict[str, Any] = {"size_gib": size_gib}
+        if tenant:
+            body["tenant"] = tenant
+        reply = self._request(self.addr, "PUT", path, body, "create volume", expected_status=(200, 201))
+        return _managed_volume(reply, "create volume")
+
+    def get_volume(self, name: str) -> dict[str, Any]:
+        """Inspects one managed disk visible to this token."""
+        reply = self._request(self.addr, "GET", _volume_path(name), None, "get volume", expected_status=(200,))
+        return _managed_volume(reply, "get volume")
+
+    def delete_volume(self, name: str, resource_id: str) -> None:
+        """Deletes exactly resource_id, including when an earlier response was lost."""
+        path = _volume_path(name)
+        if not resource_id or '"' in resource_id or "\r" in resource_id or "\n" in resource_id:
+            raise ValueError("volume resource_id must be a nonempty unquoted id")
+        self._request(
+            self.addr,
+            "DELETE",
+            path,
+            None,
+            "delete volume",
+            headers={"If-Match": f'"{resource_id}"'},
+            expected_status=(204,),
+        )
+
     def info(self) -> dict[str, Any]:
         """The node's pool/claim counters, as served by GET /v1/info."""
         return self._request(self.addr, "GET", "/v1/info", None, "info")
@@ -198,11 +233,13 @@ class Client:
         bearer: str = "",
         timeout: float = 0.0,
         deadline: float | None = None,
+        headers: dict[str, str] | None = None,
+        expected_status: tuple[int, ...] | None = None,
     ) -> dict[str, Any]:
         timeout = remaining_timeout(timeout or self.timeout, deadline, verb)
         data = json.dumps(body).encode() if body is not None else None
         url = urllib.parse.urlsplit(addr + path if "://" in addr else f"{self._scheme}://{addr}{path}")
-        headers = {"Content-Type": "application/json"} if data is not None else {}
+        headers = {**(headers or {}), **({"Content-Type": "application/json"} if data is not None else {})}
         token = bearer or self.api_token
         if token:
             headers["Authorization"] = f"Bearer {token}"
@@ -218,6 +255,8 @@ class Client:
             except (ValueError, TypeError):
                 reply = None
             raise APIError(verb, status, _error_message(raw), reply=reply if isinstance(reply, dict) else None)
+        if expected_status is not None and status not in expected_status:
+            raise APIError(verb, status, "unexpected response status")
         if not raw:
             return {}
         try:
@@ -347,3 +386,39 @@ def _scatter(addrs: Sequence[str], probe: Callable[[str], T]) -> T:
             return cast(T, value)
         last_error = error
     raise cast(Exception, last_error)
+
+
+def _volume_path(name: str) -> str:
+    if not _VOLUME_NAME.fullmatch(name) or name.startswith("cocoon-"):
+        raise ValueError(f"invalid volume name {name!r}")
+    return "/v1/volumes/" + urllib.parse.quote(name, safe="")
+
+
+def _managed_volume(reply: dict[str, Any], verb: str) -> dict[str, Any]:
+    if not isinstance(reply, dict):
+        raise APIError(verb, 0, "reply without managed volume fields")
+    volume = require_field(reply, "volume", verb)
+    required = ("id", "name", "tenant", "node", "state", "created_at")
+    if (
+        not isinstance(volume, dict)
+        or volume.get("kind") != "managed"
+        or any(not isinstance(volume.get(key), str) or not volume[key] for key in required)
+    ):
+        raise APIError(verb, 0, "reply without managed volume fields")
+    size = volume.get("size_bytes")
+    if isinstance(size, bool) or not isinstance(size, int) or size < 1:
+        raise APIError(verb, 0, "reply with invalid managed volume capacity")
+    timestamp = re.fullmatch(
+        r"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.\d{1,9})?(Z|[+-]\d{2}:\d{2})",
+        volume["created_at"],
+    )
+    if timestamp is None:
+        raise APIError(verb, 0, "reply with invalid managed volume timestamp")
+    offset = timestamp[2]
+    if offset != "Z" and (int(offset[1:3]) > 23 or int(offset[4:6]) > 59):
+        raise APIError(verb, 0, "reply with invalid managed volume timestamp")
+    try:
+        datetime.fromisoformat(timestamp[1] + timestamp[2].replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise APIError(verb, 0, "reply with invalid managed volume timestamp") from exc
+    return dict(volume)

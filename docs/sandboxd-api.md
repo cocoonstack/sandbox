@@ -255,6 +255,12 @@ list; the field is emitted (as `true`) only for a writable entry this node
 declares and omitted otherwise (peer-only rows never carry it), so a read-only
 entry's response is byte-identical to v1.
 
+When `managed_volume_dir` is enabled, this list also includes caller-visible
+managed summaries and requires an explicit root or tenant token. Individual
+managed GET responses carry holder details. The node-local create, inspect
+and conditional-delete routes are documented in
+[Tenant managed persistent volumes](managed-volumes.md#manage-a-resource).
+
 ## GET /v1/sandboxes/{id}/volumes
 
 Returns the persisted desired set (`volumes_want`), confirmed applied set
