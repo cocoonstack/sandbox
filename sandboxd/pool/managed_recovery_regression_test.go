@@ -287,11 +287,11 @@ func TestManagedStoppedClaimRetainsOwnershipOnRestart(t *testing.T) {
 				}
 				_, err := m.ClaimProvision(t.Context(), testKey, managedOptions("data"))
 				requireVolumeStatus(t, err, 409)
-				if _, _, _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token); !errors.Is(err, ErrFailed) {
-					t.Fatalf("new data plane request returned %v, want ErrFailed", err)
+				if _, _, _, wakeErr := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token); !errors.Is(wakeErr, ErrFailed) {
+					t.Fatalf("new data plane request returned %v, want ErrFailed", wakeErr)
 				}
-				if err := m.Wake(t.Context(), sb.ID, Cred{Token: sb.Token}); !errors.Is(err, ErrFailed) {
-					t.Fatalf("explicit wake returned %v, want ErrFailed", err)
+				if wakeErr := m.Wake(t.Context(), sb.ID, Cred{Token: sb.Token}); !errors.Is(wakeErr, ErrFailed) {
+					t.Fatalf("explicit wake returned %v, want ErrFailed", wakeErr)
 				}
 				e.mu.Lock()
 				changed := len(e.removes) != 0 || len(e.starts) != 0

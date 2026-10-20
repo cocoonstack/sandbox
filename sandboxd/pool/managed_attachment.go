@@ -424,14 +424,14 @@ func (r *volumeRegistry) recoverableManagedClaim(h volumeHold, sb *types.Sandbox
 	if sb == nil || sb.VMName != h.VMName || sb.Tenant != h.Tenant || sb.Failed == egressQuarantineFailure || !present {
 		return false, nil
 	}
-	if rec.PID == 0 && rec.State == vmStateStopped {
-		if !r.processGone(h.Process) {
-			return false, managedStorageError()
-		}
-		if h.State != holdClaimed {
-			return false, nil
-		}
-	} else {
+	stopped := rec.PID == 0 && rec.State == vmStateStopped
+	if stopped && !r.processGone(h.Process) {
+		return false, managedStorageError()
+	}
+	if stopped && h.State != holdClaimed {
+		return false, nil
+	}
+	if !stopped {
 		identity, err := r.process(rec.PID)
 		if err != nil && !processMissing(err) {
 			return false, managedStorageError()
