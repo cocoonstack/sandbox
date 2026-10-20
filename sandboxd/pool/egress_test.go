@@ -1,6 +1,7 @@
 package pool
 
 import (
+	"context"
 	"crypto/tls"
 	"errors"
 	"net"
@@ -313,7 +314,7 @@ func TestQuarantineFailedRemoveStaysUnswept(t *testing.T) {
 
 	var gotKeep map[string]bool
 	withOutbound(t, m, func(o *outbound.Options) { o.Sweep = func(keep map[string]bool) error { gotKeep = keep; return nil } })
-	m.resyncEgress(t.Context(), live, removed, true)
+	_ = m.resyncEgress(t.Context(), live, removed, true)
 
 	if removed["sbx-q1"] {
 		t.Error("failed remove marked the VM gone; the sweep would drop its lock table")
@@ -755,11 +756,78 @@ func TestUnknownInventoryPreservesEgressTables(t *testing.T) {
 		o.LockNIC = true
 		o.Sweep = func(map[string]bool) error { swept = true; return nil }
 	})
-	m.resyncEgress(t.Context(), map[string]types.VMRecord{}, map[string]bool{}, false)
+	_ = m.resyncEgress(t.Context(), map[string]types.VMRecord{}, map[string]bool{}, false)
 	if live, present := m.Sandbox(sb.ID); present && live.Failed == "" {
 		t.Fatal("unknown inventory left an egress claim active without a verified lock")
 	}
 	if swept {
 		t.Fatal("unknown inventory swept potentially live egress locks")
+	}
+}
+
+func TestManagedFaultContainsRunningEgressVM(t *testing.T) {
+	for _, outcome := range []string{"stopped", "stop error", "false acknowledgement"} {
+		t.Run(outcome, func(t *testing.T) {
+			cfg := managedConfig(t)
+			cfg.Bridges = []string{"sbxbr0"}
+			cfg.Pools = []config.PoolSpec{{PoolKey: egKey, Warm: 1}}
+			e := newManagedEngine()
+			m := openManagedTest(t, cfg, e)
+			withOutbound(t, m, func(o *outbound.Options) { o.LockNIC = false })
+			v := createManagedTest(t, m, "data")
+			backing := filepath.Join(cfg.ManagedVolumeDir, "disks", v.ID+".raw")
+			before, err := os.Stat(backing)
+			if err != nil {
+				t.Fatal(err)
+			}
+			sb, err := m.ClaimProvision(t.Context(), egKey, managedOptions("data"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = m.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if err = os.WriteFile(filepath.Join(cfg.ManagedVolumeDir, "registry.json"), []byte("{"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			m = openManagedTest(t, cfg, e)
+			m.eng = &egressRecoveryEngine{managedTestEngine: e, outcome: outcome}
+			withOutbound(t, m, func(o *outbound.Options) {
+				o.LockNIC = true
+				o.Lock = func(string) error { return errors.New("lock unavailable") }
+				o.Sweep = func(map[string]bool) error { return nil }
+			})
+			err = m.Reconcile(t.Context())
+			if (err != nil) != (outcome != "stopped") {
+				t.Fatalf("containment outcome=%s error=%v", outcome, err)
+			}
+			rec, found, err := e.Inspect(t.Context(), sb.VMName)
+			if err != nil || !found || (rec.State == "stopped") != (outcome == "stopped") {
+				t.Fatalf("containment=%s found=%v state=%s error=%v", outcome, found, rec.State, err)
+			}
+			if current, present := m.Sandbox(sb.ID); !present || current.Failed == "" {
+				t.Fatal("uncertain owner claim was lost or served")
+			}
+			after, err := os.Stat(backing)
+			if err != nil || !os.SameFile(before, after) || before.Size() != after.Size() {
+				t.Fatal("containment changed volume backing", err)
+			}
+		})
+	}
+}
+
+type egressRecoveryEngine struct {
+	*managedTestEngine
+	outcome string
+}
+
+func (e *egressRecoveryEngine) Stop(ctx context.Context, name string) error {
+	switch e.outcome {
+	case "stop error":
+		return errors.New("stop failed")
+	case "false acknowledgement":
+		return nil
+	default:
+		return e.managedTestEngine.Stop(ctx, name)
 	}
 }

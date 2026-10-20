@@ -296,6 +296,10 @@ managed retirement persistence fails. A stubborn VM or unavailable registry
 can keep the hold for operator recovery. An uncooperative VMM may still retain
 the hold.
 
+An uncertain managed claim still requires host NIC-lock recovery. If that lock
+cannot be established, the daemon stops the VM while retaining its claim and
+backing. Startup recovery fails if the VM cannot be confirmed stopped.
+
 After restart, the persisted egress-quarantine failure marker resumes retirement
 and removal. Ordinary failed claims keep their existing ownership until release.
 Unclaimed stopped VM records are removed only after the recorded process is
@@ -304,7 +308,9 @@ while the node continues serving ordinary volume-free claims. It preserves
 uncertain claims, VM records, snapshots, and backing files. A matching healthy
 durable claim takes precedence over a legacy retiring hold. Unsafe configured
 directories and failure to acquire the daemon's directory lock still prevent
-startup.
+startup. Catalog holds from unclaimed running VMs are reconstructed from runtime
+disk inventory. If that inventory is unavailable, catalog admissions remain
+fenced too; ordinary volume-free claims can continue.
 
 An interrupted allocation with no recorded backing inode requires operator
 quarantine. The API does not delete or adopt that unproven file. Preserve the

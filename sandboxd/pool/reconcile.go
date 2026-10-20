@@ -3,6 +3,7 @@ package pool
 import (
 	"context"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"maps"
 	"os"
@@ -119,10 +120,10 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 	if managedErr == nil {
 		m.sweepOrphanSnapshots(ctx, snaps, snapsErr, referenced)
 	}
-	m.resyncEgress(ctx, live, removed, inventoryErr == nil)
+	egressErr := m.resyncEgress(ctx, live, removed, inventoryErr == nil)
 	m.warnDeniedClaims(ctx)
 	logger.Infof(ctx, "adopted %d claims, %d VMs live", len(m.claimed), len(live))
-	return saveErr
+	return errors.Join(saveErr, egressErr)
 }
 
 func (m *Manager) sweepLocalStaging(ctx context.Context, pooled map[string]bool) {
@@ -235,37 +236,39 @@ func (m *Manager) inspectStaleVolumes(ctx context.Context, name string) ([]types
 }
 
 // resyncEgress re-locks adopted egress claims, quarantining any it cannot lock.
-func (m *Manager) resyncEgress(ctx context.Context, live map[string]types.VMRecord, removed map[string]bool, inventoryKnown bool) {
+func (m *Manager) resyncEgress(ctx context.Context, live map[string]types.VMRecord, removed map[string]bool, inventoryKnown bool) error {
 	logger := log.WithFunc("pool.resyncEgress")
+	var containmentErr error
 	now := time.Now()
 	locked, lockedErr := m.out.LockedTaps()
 	var quarantine []*types.Sandbox
 	for _, sb := range m.claimed {
+		uncertain := m.managedClaimUncertain(sb)
 		sb.TouchAt(now)
 		// a hibernated or archived claim has no guest to serve; its wake arms the door
-		if sb.HibernateSnap != "" || sb.PendingSnap != "" || sb.ArchiveCk != "" || sb.Failed != "" {
+		if !uncertain && (sb.HibernateSnap != "" || sb.PendingSnap != "" || sb.ArchiveCk != "" || sb.Failed != "") {
 			continue
 		}
+		var lockErr error
 		if m.out.LocksNIC(sb.Key) {
 			tap := m.readoptEgressTap(sb, live)
 			// a down egress-lane VM has no guest to lock or mark; the liveness pass fails it
 			if rec, known := live[sb.VMName]; known && rec.State != vmStateRunning {
 				continue
 			}
-			if tap == "" {
-				logger.Errorf(ctx, errNoEgressTap, "egress claim %s has no lockable tap; quarantining", sb.ID)
+			lockErr = m.ensureEgressLock(ctx, sb, tap, locked, lockedErr)
+		}
+		if lockErr != nil {
+			logger.Errorf(ctx, lockErr, "ensure egress lock %s; quarantining", sb.ID)
+			if uncertain {
+				containmentErr = errors.Join(containmentErr, m.stopUncertainEgress(ctx, sb))
+			} else {
 				quarantine = append(quarantine, sb)
-				continue
 			}
-			err := lockedErr
-			if err == nil && !locked[tap] {
-				err = m.out.Relock(ctx, sb, tap)
-			}
-			if err != nil {
-				logger.Errorf(ctx, err, "ensure egress lock %s; quarantining", sb.ID)
-				quarantine = append(quarantine, sb)
-				continue
-			}
+			continue
+		}
+		if sb.Failed != "" {
+			continue
 		}
 		if proxyErr := m.out.ArmProxy(ctx, sb); proxyErr != nil {
 			logger.Errorf(ctx, proxyErr, "arm egress proxy %s", sb.ID)
@@ -281,7 +284,7 @@ func (m *Manager) resyncEgress(ctx context.Context, live map[string]types.VMReco
 		}
 	}
 	if !inventoryKnown {
-		return
+		return containmentErr
 	}
 	// keep every still-running VM's tap; sweep only a confirmed-gone VM's table.
 	for name, rec := range live {
@@ -292,6 +295,34 @@ func (m *Manager) resyncEgress(ctx context.Context, live map[string]types.VMReco
 	if sweepErr := m.out.Sweep(keep); sweepErr != nil {
 		logger.Warnf(ctx, "sweep orphan egress tables: %v", sweepErr)
 	}
+	return containmentErr
+}
+
+func (m *Manager) ensureEgressLock(ctx context.Context, sb *types.Sandbox, tap string, locked map[string]bool, inventoryErr error) error {
+	if tap == "" {
+		return errNoEgressTap
+	}
+	if inventoryErr != nil {
+		return inventoryErr
+	}
+	if locked[tap] {
+		return nil
+	}
+	return m.out.Relock(ctx, sb, tap)
+}
+
+func (m *Manager) stopUncertainEgress(ctx context.Context, sb *types.Sandbox) error {
+	if err := m.eng.Stop(ctx, sb.VMName); err != nil {
+		return fmt.Errorf("stop uncontained egress VM %s: %w", sb.VMName, err)
+	}
+	rec, found, err := m.eng.Inspect(ctx, sb.VMName)
+	if err != nil {
+		return fmt.Errorf("confirm egress VM %s stopped: %w", sb.VMName, err)
+	}
+	if found && rec.State != "stopped" {
+		return fmt.Errorf("egress VM %s is not confirmed stopped", sb.VMName)
+	}
+	return nil
 }
 
 const egressQuarantineFailure = "sandbox quarantined after egress recovery failure"
