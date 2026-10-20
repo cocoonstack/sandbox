@@ -276,12 +276,20 @@ before any disk effect. A live operation records the union of applied, desired
 and possibly attached entries before changing a device. A confirmed retry can
 trim that union only after device cleanup and claim-journal commit succeed.
 
-Release durably marks a hold retiring before cancelling the existing
-`volumeRun` and dropping the claim. A successful runtime removal command alone
-does not free the hold. Fresh runtime inspection must report absence and the
-recorded boot ID/PID/start generation must be gone. Failed writes, uncertain
-attachments and delayed removal retain ownership. These rules also apply when
+Release durably removes the claim before retiring its hold and removing the
+VM. A claim write that fails before publication restores the active claim and
+keeps its VM. An error after publication has an uncertain outcome and fences
+managed operations. A successful runtime removal command alone does not free
+the hold. Fresh runtime inspection must report absence and the recorded boot
+ID, PID, and start generation must be gone. Failed registry writes retain the
+hold until persistence and cleanup succeed. These barriers also apply when
 `sync_claims` is disabled.
+
+Temporary registry write failures retry in the background. The daemon logs
+failure and recovery transitions and exports managed write failure and recovery
+counters. An abandoned admission without a bound VM also retries its cleanup.
+GET, listing, and placement checks do not persist recovery state. A temporary
+backing inspection error therefore cannot permanently disable a healthy volume.
 
 A failed egress recovery fences the claim and attempts VM removal even if
 managed retirement persistence fails. A stubborn VM or unavailable registry
@@ -290,10 +298,18 @@ the hold.
 
 After restart, the persisted egress-quarantine failure marker resumes retirement
 and removal. Ordinary failed claims keep their existing ownership until release.
-Unclaimed stopped VM records with no live process are removed before startup
-continues. Unreadable process metadata and unconfirmed removal still block
-startup. The stale-create collector and recorded process-generation checks
-remain in force.
+Unclaimed stopped VM records are removed only after the recorded process is
+proved gone. Managed metadata or inventory uncertainty fences managed work
+while the node continues serving ordinary volume-free claims. It preserves
+uncertain claims, VM records, snapshots, and backing files. A matching healthy
+durable claim takes precedence over a legacy retiring hold. Unsafe configured
+directories and failure to acquire the daemon's directory lock still prevent
+startup.
+
+An interrupted allocation with no recorded backing inode requires operator
+quarantine. The API does not delete or adopt that unproven file. Preserve the
+registry and backing files before recovery. Supported additive registry fields
+survive writes; unsupported versions and lifecycle states remain fenced.
 
 ## Follow-up order
 
