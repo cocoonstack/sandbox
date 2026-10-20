@@ -235,7 +235,6 @@ func (m *Manager) inspectStaleVolumes(ctx context.Context, name string) ([]types
 	return holds, nil
 }
 
-// resyncEgress re-locks adopted egress claims and contains uncertain retained VMs.
 func (m *Manager) resyncEgress(ctx context.Context, live map[string]types.VMRecord, removed map[string]bool, inventoryKnown bool) error {
 	logger := log.WithFunc("pool.resyncEgress")
 	var containmentErr error
