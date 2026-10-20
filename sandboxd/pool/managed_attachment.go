@@ -352,7 +352,7 @@ func (m *Manager) recoverManaged(ctx context.Context, claims map[string]*types.S
 			r.mu.Lock()
 			g := r.data.Volumes[h.Refs[0].Volume.Name].Growth
 			r.mu.Unlock()
-			if !exists || !sleepMatchesClaim(h, sb) || g == nil || !m.growthRecordMatches(*g, sb, live[h.VMName]) {
+			if !exists || !sleepMatchesClaim(h, sb) || g == nil || !m.growthRecordMatches(*g, sb.VsockSocket, live[h.VMName]) {
 				return owned, managedStorageError()
 			}
 			continue

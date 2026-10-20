@@ -147,14 +147,14 @@ func (f *growthConcurrencyTest) waitEntered(t *testing.T, owner <-chan growthCal
 	}
 }
 
-func growthPrompt(t *testing.T, name string, done <-chan error) (error, bool) {
+func growthPrompt(t *testing.T, name string, done <-chan error) (bool, error) {
 	t.Helper()
 	select {
 	case err := <-done:
-		return err, true
+		return true, err
 	case <-time.After(time.Second):
 		t.Errorf("%s waited for the blocked growth engine", name)
-		return nil, false
+		return false, nil
 	}
 }
 
@@ -204,7 +204,7 @@ func (f *growthConcurrencyTest) guestAccess(t *testing.T) {
 		{"token DialPort", func() error { return f.dial(t.Context(), Cred{Token: f.sb.Token}) }},
 	}
 	for _, check := range checks {
-		if err, returned := growthPrompt(t, check.name, f.call(check.call)); returned && err != nil {
+		if returned, err := growthPrompt(t, check.name, f.call(check.call)); returned && err != nil {
 			t.Errorf("%s refused the running guest during growth: %v", check.name, err)
 		}
 	}
@@ -241,7 +241,7 @@ func (f *growthConcurrencyTest) lifecycleRefused(t *testing.T) {
 		{"Hibernate", func() error { return f.m.Hibernate(t.Context(), f.sb.ID, Cred{Operator: true}) }},
 		{"Release", func() error { return f.m.Release(t.Context(), f.sb.ID, Cred{Operator: true}) }},
 	} {
-		if err, returned := growthPrompt(t, call.name, f.call(call.fn)); returned {
+		if returned, err := growthPrompt(t, call.name, f.call(call.fn)); returned {
 			if call.name == "Hibernate" && f.m.managedSleepHook == nil && errors.Is(err, ErrVolumeCapture) {
 				continue
 			}
@@ -278,9 +278,12 @@ func TestManagedGrowthGuestConnectionsDuringEngineStalls(t *testing.T) {
 		{"admission disk inspection", "InspectDisk", 1},
 		{"admission guest observation", "ObserveVolume", 1},
 		{"dispatch disk inspection", "InspectDisk", 2},
+		{"dispatch VM qualification", "Inspect", 2},
 		{"disk growth", "GrowDisk", 1},
+		{"acknowledged VM qualification", "Inspect", 3},
 		{"acknowledged guest observation", "ObserveVolume", 2},
 		{"closing disk inspection", "InspectDisk", 3},
+		{"closing VM qualification", "Inspect", 4},
 	} {
 		t.Run(barrier.name, func(t *testing.T) {
 			f := newGrowthConcurrencyTest(t, barrier.method, barrier.occurrence)
@@ -338,17 +341,17 @@ func TestManagedGrowthCanceledOwnerRetainsExclusionUntilEngineReturns(t *testing
 			waiterCtx, cancelWaiter := context.WithCancel(t.Context())
 			waiter := f.grow(waiterCtx, growRequest())
 			cancelWaiter()
-			if err, returned := growthPrompt(t, "canceled identical waiter", f.call(func() error {
+			if returned, err := growthPrompt(t, "canceled identical waiter", f.call(func() error {
 				return (<-waiter).err
 			})); returned && !errors.Is(err, context.Canceled) {
 				t.Errorf("canceled waiter returned %v", err)
 			}
 			for _, changed := range []types.VolumeGrow{
-				{SizeGiB: 3, OperationID: growRequest().OperationID},
+				{SizeGiB: 3, OperationID: growRequest().OperationID, ExpectedGeneration: 99},
 				{SizeGiB: 2, OperationID: "c51b3d2b-4ccc-41d5-b430-3046340c30b0"},
 			} {
 				done := f.grow(t.Context(), changed)
-				if err, returned := growthPrompt(t, "conflicting growth", f.call(func() error { return (<-done).err })); returned {
+				if returned, err := growthPrompt(t, "conflicting growth", f.call(func() error { return (<-done).err })); returned {
 					requireVolumeStatus(t, err, 409)
 				}
 			}
@@ -365,13 +368,14 @@ func TestManagedGrowthCanceledOwnerRetainsExclusionUntilEngineReturns(t *testing
 			if err != nil {
 				t.Fatal(err)
 			}
-			if method == "Inspect" {
+			switch {
+			case method == "Inspect":
 				if calls != 0 || current.Growth != nil {
 					t.Errorf("canceled admission published intent or dispatched: calls=%d volume=%+v", calls, current)
 				}
-			} else if calls != 1 || current.Growth == nil || current.Growth.RuntimeOutcome != "acknowledged" {
+			case calls != 1 || current.Growth == nil || current.Growth.RuntimeOutcome != "acknowledged":
 				t.Errorf("canceled dispatch lost exact outcome: calls=%d volume=%+v", calls, current)
-			} else {
+			default:
 				retry := waitGrowthResult(t, f.grow(t.Context(), growRequest()))
 				if retry.err != nil || retry.info.Growth == nil || retry.info.Growth.State != "completed" {
 					t.Errorf("exact retry after canceled dispatch: %+v", retry)
@@ -452,6 +456,14 @@ func TestManagedGrowthCompletedReplayWaitsForDurableCommit(t *testing.T) {
 			if persisted.Volumes["data"].Growth.State == "completed" {
 				t.Fatal("completion barrier did not precede durable completion")
 			}
+			read, readErr := f.m.GetVolume("data", "t1")
+			if readErr != nil || read.CapacityGeneration != 0 || read.SizeBytes != 1<<30 || read.Growth == nil || read.Growth.State != growthPending || read.Growth.GuestSizeBytes != 2<<30 {
+				t.Errorf("GET published completion before durable commit: volume=%+v growth=%+v err=%v", read, read.Growth, readErr)
+			}
+			listed := f.m.Volumes("t1", nil)
+			if len(listed) != 1 || listed[0].SizeBytes != 1<<30 || listed[0].State != string(volumeGrowing) {
+				t.Errorf("list published completion before durable commit: %+v", listed)
+			}
 			replay := f.grow(t.Context(), growRequest())
 			var early *growthCallResult
 			select {
@@ -469,12 +481,17 @@ func TestManagedGrowthCompletedReplayWaitsForDurableCommit(t *testing.T) {
 			} else {
 				second = waitGrowthResult(t, replay)
 			}
+			read, readErr = f.m.GetVolume("data", "t1")
 			if fail {
+				requireVolumeStatus(t, readErr, 503)
 				if first.err == nil || second.err == nil {
 					t.Errorf("failed completion reported success: owner=%+v replay=%+v", first, second)
 				}
 				requireVolumeStatus(t, f.m.Release(t.Context(), f.sb.ID, Cred{Operator: true}), 409)
 			} else {
+				if readErr != nil || read.Growth == nil || read.Growth.State != growthCompleted || read.SizeBytes != 2<<30 || read.CapacityGeneration != 1 {
+					t.Errorf("GET after durable completion: volume=%+v growth=%+v err=%v", read, read.Growth, readErr)
+				}
 				for _, result := range []growthCallResult{first, second} {
 					if result.err != nil || result.info.Growth == nil || result.info.Growth.State != "completed" || result.info.CapacityGeneration != 1 {
 						t.Errorf("durable completed response: %+v", result)
@@ -487,5 +504,205 @@ func TestManagedGrowthCompletedReplayWaitsForDurableCommit(t *testing.T) {
 				t.Errorf("completion replay dispatched %d times", f.e.calls)
 			}
 		})
+	}
+}
+
+func TestManagedGrowthSourceChangesCannotDispatchOrComplete(t *testing.T) {
+	for _, stage := range []struct {
+		method     string
+		occurrence int
+		dispatched bool
+	}{
+		{"Inspect", 1, false},
+		{"ObserveVolume", 2, true},
+	} {
+		for _, change := range []string{"claim", "socket", "policy", "hold process", "held mount", "capacity generation", "runtime socket", "runtime process", "registry fault", "registry write fault"} {
+			t.Run(fmt.Sprintf("%s %s", stage.method, change), func(t *testing.T) {
+				f := newGrowthConcurrencyTest(t, stage.method, stage.occurrence)
+				owner := f.grow(t.Context(), growRequest())
+				f.waitEntered(t, owner)
+				f.m.mu.Lock()
+				f.m.managed.mu.Lock()
+				switch change {
+				case "claim":
+					f.m.claimed[f.sb.ID] = &types.Sandbox{ID: f.sb.ID, VMName: f.sb.VMName}
+				case "socket":
+					f.sb.VsockSocket = "/replacement.sock"
+				case "policy":
+					f.sb.NoEgress = !f.sb.NoEgress
+				case "hold process":
+					h := f.m.managed.data.Holds[f.sb.ID]
+					h.Process.Start++
+					f.m.managed.data.Holds[f.sb.ID] = h
+				case "held mount":
+					h := f.m.managed.data.Holds[f.sb.ID]
+					h.Refs[0].Volume.Mount = "/replacement"
+					f.m.managed.data.Holds[f.sb.ID] = h
+				case "capacity generation":
+					v := f.m.managed.data.Volumes["data"]
+					v.CapacityGeneration++
+					f.m.managed.data.Volumes["data"] = v
+				case "registry fault":
+					f.m.managed.fault = errors.New("injected registry fault")
+				case "registry write fault":
+					f.m.managed.writeFault = errors.New("injected write fault")
+				}
+				f.m.managed.mu.Unlock()
+				f.m.mu.Unlock()
+				f.e.mu.Lock()
+				switch change {
+				case "runtime socket":
+					f.e.vms[f.sb.VMName] = "/replacement.sock"
+				case "runtime process":
+					f.e.pids[f.sb.VMName]++
+				}
+				f.e.mu.Unlock()
+				f.e.unblock()
+				result := waitGrowthResult(t, owner)
+				if result.err == nil {
+					t.Fatalf("changed source returned success: %+v", result)
+				}
+				f.e.growMu.Lock()
+				calls := f.e.calls
+				f.e.growMu.Unlock()
+				f.m.managed.mu.Lock()
+				v := f.m.managed.data.Volumes["data"]
+				f.m.managed.mu.Unlock()
+				if stage.dispatched {
+					if calls != 1 || v.Growth == nil || v.Growth.Outcome != growthAcknowledged || v.Growth.State == growthCompleted {
+						t.Fatalf("changed source lost ACK or completed: calls=%d growth=%+v", calls, v.Growth)
+					}
+				} else if calls != 0 || v.Growth != nil {
+					t.Fatalf("changed admission source dispatched or published intent: calls=%d growth=%+v", calls, v.Growth)
+				}
+			})
+		}
+	}
+}
+
+func TestManagedGrowthCanceledWaiterDoesNotFinishOwner(t *testing.T) {
+	f := newGrowthConcurrencyTest(t, "Inspect", 1)
+	owner := f.grow(t.Context(), growRequest())
+	f.waitEntered(t, owner)
+	ctx, cancel := context.WithCancel(t.Context())
+	waiter := f.grow(ctx, growRequest())
+	cancel()
+	if got := waitGrowthResult(t, waiter); !errors.Is(got.err, context.Canceled) {
+		t.Fatalf("canceled waiter: %+v", got)
+	}
+	f.lifecycleRefused(t)
+	f.e.unblock()
+	if got := waitGrowthResult(t, owner); got.err != nil || got.info.Growth.State != growthCompleted {
+		t.Fatalf("owner after waiter cancellation: %+v", got)
+	}
+}
+
+func TestManagedGrowthStaleFinishKeepsCurrentReservation(t *testing.T) {
+	f := newGrowthConcurrencyTest(t, "", 0)
+	m, v := f.m, f.volume
+	first, _, err := m.beginGrowthRun(t.Context(), "data", v.ID, growRequest(), "t1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.finishGrowthRun(first)
+	second, _, err := m.beginGrowthRun(t.Context(), "data", v.ID, growRequest(), "t1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.finishGrowthRun(second)
+	m.finishGrowthRun(first)
+	requireVolumeStatus(t, m.Release(t.Context(), second.hold.SandboxID, Cred{Operator: true}), 409)
+	select {
+	case <-second.done:
+		t.Fatal("stale finish released the current owner")
+	default:
+	}
+}
+
+func TestManagedGrowthAdmissionRefusesForgetClaim(t *testing.T) {
+	f := newGrowthConcurrencyTest(t, "Inspect", 1)
+	owner := f.grow(t.Context(), growRequest())
+	f.waitEntered(t, owner)
+	if returned, err := growthPrompt(t, "forget claim", f.call(func() error {
+		if f.m.forgetClaim(t.Context(), f.sb) {
+			return errors.New("forgot the growth owner")
+		}
+		return nil
+	})); returned && err != nil {
+		t.Fatal(err)
+	}
+	if _, present := f.m.Sandbox(f.sb.ID); !present {
+		t.Fatal("growth claim disappeared")
+	}
+	f.lifecycleRefused(t)
+	f.e.unblock()
+	if got := waitGrowthResult(t, owner); got.err != nil || got.info.Growth.State != growthCompleted {
+		t.Fatalf("owner after refused forget: %+v", got)
+	}
+}
+
+func TestManagedGrowthDurableCompletionIgnoresUnrelatedPendingWrite(t *testing.T) {
+	f := newGrowthConcurrencyTest(t, "", 0)
+	r := f.m.managed
+	write := r.commitFile
+	completionEntered, completionResume := make(chan struct{}), make(chan struct{})
+	otherEntered, otherResume := make(chan struct{}), make(chan struct{})
+	complete := sync.OnceFunc(func() { close(completionResume) })
+	resumeOther := sync.OnceFunc(func() { close(otherResume) })
+	t.Cleanup(func() {
+		complete()
+		resumeOther()
+	})
+	var completionOnce, otherOnce sync.Once
+	r.commitFile = func(path string, raw []byte) error {
+		var saved volumeRegistryData
+		if err := json.Unmarshal(raw, &saved); err != nil {
+			return err
+		}
+		switch {
+		case saved.Volumes["other"].State == volumeCreating:
+			otherOnce.Do(func() { close(otherEntered) })
+			<-otherResume
+		case saved.Volumes["data"].Growth != nil && saved.Volumes["data"].Growth.State == growthCompleted:
+			completionOnce.Do(func() { close(completionEntered) })
+			<-completionResume
+		}
+		return write(path, raw)
+	}
+	owner := f.grow(t.Context(), growRequest())
+	select {
+	case <-completionEntered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("completion write did not start")
+	}
+	other := f.call(func() error {
+		_, _, err := f.m.CreateVolume(t.Context(), "other", types.VolumeCreate{SizeGiB: 1}, "t1")
+		return err
+	})
+	waitFor(t, func() bool {
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		return r.data.Volumes["other"].State == volumeCreating
+	})
+	f.m.mu.Lock()
+	unlock := sync.OnceFunc(f.m.mu.Unlock)
+	t.Cleanup(unlock)
+	complete()
+	select {
+	case <-otherEntered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("unrelated write did not start after completion")
+	}
+	read, err := f.m.GetVolume("data", "t1")
+	if err != nil || read.Growth == nil || read.Growth.State != growthCompleted || read.SizeBytes != 2<<30 || read.CapacityGeneration != 1 {
+		t.Errorf("unrelated write masked durable completion: volume=%+v growth=%+v err=%v", read, read.Growth, err)
+	}
+	unlock()
+	if got := waitGrowthResult(t, owner); got.err != nil || got.info.Growth == nil || got.info.Growth.State != growthCompleted {
+		t.Errorf("owner completion during unrelated write: %+v", got)
+	}
+	resumeOther()
+	if returned, err := growthPrompt(t, "unrelated create", other); returned && err != nil {
+		t.Fatal(err)
 	}
 }

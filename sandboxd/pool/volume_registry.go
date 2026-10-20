@@ -107,6 +107,7 @@ type volumeRegistry struct {
 	closed            bool
 	uncertainVMs      map[string]bool
 	discharging       map[string]bool
+	growthRuns        map[string]*growthRun
 	aliases           map[backingIdentity]bool
 	dir, node         string
 	lock              *os.File

@@ -424,15 +424,19 @@ func TestGrowthMissingInventoryCannotCompleteBeforeOwnerValidation(t *testing.T)
 
 func TestGrowthMissingInventoryPreservesUndispatchedIntent(t *testing.T) {
 	m, e, sb, cfg, v := newGrowthTest(t)
-	source := m.managed.data.Volumes["data"]
-	if err := m.admitGrowth(t.Context(), sb, source, growRequest(), e); err != nil {
+	run, _, err := m.beginGrowthRun(t.Context(), "data", v.ID, growRequest(), "t1")
+	if err != nil {
 		t.Fatal(err)
 	}
+	if err = m.admitGrowth(t.Context(), run, e); err != nil {
+		t.Fatal(err)
+	}
+	m.finishGrowthRun(run)
 	m.Close()
 	m = openGrowthTest(t, cfg, e)
 	m.eng = &growthInventoryEngine{growthTestEngine: e, omit: true, change: func(*types.VMRecord) {}}
 	requireManagedRecoveryFence(t, m, sb.ID)
-	_, err := m.GetVolume("data", "t1")
+	_, err = m.GetVolume("data", "t1")
 	requireVolumeStatus(t, err, 503)
 	pending := m.managed.data.Volumes["data"]
 	if pending.Growth.State != "pending" || pending.Growth.Outcome != "unobserved" || e.calls != 0 {

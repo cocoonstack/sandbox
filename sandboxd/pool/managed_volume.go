@@ -286,6 +286,10 @@ func (r *volumeRegistry) info(v managedVolume) types.ManagedVolumeInfo {
 	info := types.ManagedVolumeInfo{CapacityGeneration: v.CapacityGeneration, Name: v.Name, DefaultMount: types.DefaultVolumeMount(v.Name), SizeBytes: v.Size, Available: v.State == volumeReady, Nodes: 1, Writable: true, Kind: "managed", ID: string(v.ID), Tenant: v.Tenant, Node: v.Node, State: string(v.State), CreatedAt: v.CreatedAt, Holders: r.holders(v.ID)}
 	if g := v.Growth; g != nil {
 		info.Growth = &types.VolumeGrowth{OperationID: g.Request.OperationID, ExpectedGeneration: g.Request.ExpectedGeneration, TargetBytes: g.Runtime.TargetBytes, State: g.State, RuntimeOutcome: g.Outcome, GuestSizeBytes: g.GuestSizeBytes, FilesystemStatus: "not_managed"}
+		if run := r.activeGrowth(v.ID); run != nil && g.Request == run.request && g.State == growthCompleted && run.completionSeq > r.written {
+			info.SizeBytes, info.CapacityGeneration = run.volume.Size, run.volume.CapacityGeneration
+			info.State, info.Available, info.Growth.State = string(volumeGrowing), false, growthPending
+		}
 	}
 	return info
 }

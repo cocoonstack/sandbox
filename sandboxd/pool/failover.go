@@ -407,7 +407,7 @@ func (m *Manager) forgetAdopted(ctx context.Context, sb *types.Sandbox) func() {
 
 func (m *Manager) forgetClaim(ctx context.Context, sb *types.Sandbox) bool {
 	m.mu.Lock()
-	if m.claimed[sb.ID] != sb {
+	if m.claimed[sb.ID] != sb || m.growthOwnsHold(sb.ID) {
 		m.mu.Unlock()
 		return false
 	}
