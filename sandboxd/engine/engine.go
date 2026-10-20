@@ -407,6 +407,14 @@ func (e *Engine) netArgs(name string, key types.PoolKey, cold bool) []string {
 }
 
 func (e *Engine) run(ctx context.Context, args ...string) ([]byte, error) {
+	out, err := e.runOutput(ctx, args...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (e *Engine) runOutput(ctx context.Context, args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, cmdTimeout)
 	defer cancel()
 	log.WithFunc("engine.run").Debugf(ctx, "cocoon %s", strings.Join(args, " "))

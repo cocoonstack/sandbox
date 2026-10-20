@@ -112,8 +112,8 @@ func (r DiskGrowRequest) Equal(other DiskGrowRequest) bool {
 
 func (e *Engine) InspectDisk(ctx context.Context, ref DiskRef) (DiskInspection, error) {
 	var result DiskInspection
-	raw, err := e.run(ctx, "vm", "disk", "inspect", ref.VMID, "--disk-id", ref.DiskID, "--output", "json")
-	if parseErr := json.Unmarshal(raw, &result, json.RejectUnknownMembers(true)); parseErr != nil {
+	raw, err := e.runOutput(ctx, "vm", "disk", "inspect", ref.VMID, "--disk-id", ref.DiskID, "--output", "json")
+	if parseErr := json.Unmarshal(raw, &result); parseErr != nil {
 		return DiskInspection{}, errors.Join(err, parseErr)
 	}
 	if result.Requested != ref || result.GuestBlockStatus != diskUnobserved {
@@ -147,8 +147,8 @@ func (e *Engine) GrowDisk(ctx context.Context, request DiskGrowRequest) (DiskGro
 		return DiskGrowResult{}, err
 	}
 	var result DiskGrowResult
-	raw, err = e.run(ctx, "vm", "disk", "grow", "--expect", f.Name(), "--request-id", request.ID, "--target-bytes", strconv.FormatInt(request.TargetBytes, 10), "--output", "json")
-	if parseErr := json.Unmarshal(raw, &result, json.RejectUnknownMembers(true)); parseErr != nil {
+	raw, err = e.runOutput(ctx, "vm", "disk", "grow", "--expect", f.Name(), "--request-id", request.ID, "--target-bytes", strconv.FormatInt(request.TargetBytes, 10), "--output", "json")
+	if parseErr := json.Unmarshal(raw, &result); parseErr != nil {
 		return DiskGrowResult{}, errors.Join(err, parseErr)
 	}
 	if result.GuestBlockStatus != diskUnobserved {
