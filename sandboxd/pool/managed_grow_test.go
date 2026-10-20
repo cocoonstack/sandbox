@@ -389,7 +389,6 @@ func TestManagedGrowthAdmissionSerializesOrdinaryReleaseAndReap(t *testing.T) {
 		t.Fatal(err)
 	}
 	finishReap()
-	// A busy sweep returns promptly; the next sweep processes the expired owner.
 	startGrowthTestReap(t, m)()
 	if _, ok := m.Sandbox(sb.ID); ok {
 		t.Fatal("expiry retained claim after growth completed")

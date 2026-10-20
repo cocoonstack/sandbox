@@ -71,7 +71,7 @@ func (m *Manager) CreateVolume(ctx context.Context, name string, req types.Volum
 		return types.ManagedVolumeInfo{}, false, managedNotFound()
 	}
 	size := req.SizeGiB << 30
-	if exists && (v.Size != size || v.Tenant != owner) {
+	if exists && (r.committedCapacity(v).size != size || v.Tenant != owner) {
 		return types.ManagedVolumeInfo{}, false, volumeError(409, "volume_create_conflict", "volume already exists with different size or owner")
 	}
 	if !exists {
@@ -282,12 +282,30 @@ func (r *volumeRegistry) holders(id volumeID) []types.VolumeHolder {
 	return holders
 }
 
+type volumeCapacity struct {
+	size              int64
+	generation        uint64
+	completionPending bool
+}
+
+func (r *volumeRegistry) committedCapacity(v managedVolume) volumeCapacity {
+	capacity := volumeCapacity{size: v.Size, generation: v.CapacityGeneration}
+	g := v.Growth
+	if g == nil || g.State != growthCompleted {
+		return capacity
+	}
+	if run := r.activeGrowth(v.ID); run != nil && g.Request == run.request && run.completionSeq > r.written {
+		return volumeCapacity{size: run.volume.Size, generation: run.volume.CapacityGeneration, completionPending: true}
+	}
+	return capacity
+}
+
 func (r *volumeRegistry) info(v managedVolume) types.ManagedVolumeInfo {
-	info := types.ManagedVolumeInfo{CapacityGeneration: v.CapacityGeneration, Name: v.Name, DefaultMount: types.DefaultVolumeMount(v.Name), SizeBytes: v.Size, Available: v.State == volumeReady, Nodes: 1, Writable: true, Kind: "managed", ID: string(v.ID), Tenant: v.Tenant, Node: v.Node, State: string(v.State), CreatedAt: v.CreatedAt, Holders: r.holders(v.ID)}
+	capacity := r.committedCapacity(v)
+	info := types.ManagedVolumeInfo{CapacityGeneration: capacity.generation, Name: v.Name, DefaultMount: types.DefaultVolumeMount(v.Name), SizeBytes: capacity.size, Available: v.State == volumeReady, Nodes: 1, Writable: true, Kind: "managed", ID: string(v.ID), Tenant: v.Tenant, Node: v.Node, State: string(v.State), CreatedAt: v.CreatedAt, Holders: r.holders(v.ID)}
 	if g := v.Growth; g != nil {
 		info.Growth = &types.VolumeGrowth{OperationID: g.Request.OperationID, ExpectedGeneration: g.Request.ExpectedGeneration, TargetBytes: g.Runtime.TargetBytes, State: g.State, RuntimeOutcome: g.Outcome, GuestSizeBytes: g.GuestSizeBytes, FilesystemStatus: "not_managed"}
-		if run := r.activeGrowth(v.ID); run != nil && g.Request == run.request && g.State == growthCompleted && run.completionSeq > r.written {
-			info.SizeBytes, info.CapacityGeneration = run.volume.Size, run.volume.CapacityGeneration
+		if capacity.completionPending {
 			info.State, info.Available, info.Growth.State = string(volumeGrowing), false, growthPending
 		}
 	}

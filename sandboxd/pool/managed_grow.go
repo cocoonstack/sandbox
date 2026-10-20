@@ -38,7 +38,7 @@ type growthRun struct {
 	egressClass   string
 	request       types.VolumeGrow
 	done          chan struct{}
-	completionSeq uint64 // guarded by the registry mutex
+	completionSeq uint64
 }
 
 type managedGrowth struct {
@@ -570,7 +570,6 @@ func (m *Manager) checkGrowthSource(ctx context.Context, g managedGrowth, socket
 	return ctx.Err()
 }
 
-// A nil run is reserved for startup recovery before claims are published.
 func (m *Manager) driveGrowth(ctx context.Context, name, socket string, ge volumeGrowEngine, run *growthRun) error {
 	r := m.managed
 	r.mu.Lock()
@@ -609,7 +608,6 @@ func (m *Manager) driveGrowth(ctx context.Context, name, socket string, ge volum
 	if !receipt.Request.Equal(g.Runtime) || receipt.Revision != g.Runtime.Expected.Revision+1 {
 		return m.saveGrowth(v, g, growthRecovery, g.Outcome, 0, run)
 	}
-	// Retain a returned receipt even when the engine ignored cancellation.
 	switch receipt.Outcome {
 	case growthUnknown:
 		if err := m.saveGrowth(v, g, growthRecovery, growthUnknown, 0, run); err != nil {
