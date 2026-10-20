@@ -123,7 +123,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 	egressErr := m.resyncEgress(ctx, live, removed, inventoryErr == nil)
 	m.warnDeniedClaims(ctx)
 	logger.Infof(ctx, "adopted %d claims, %d VMs live", len(m.claimed), len(live))
-	return errors.Join(saveErr, egressErr)
+	return errors.Join(saveErr, egressErr, inventoryErr)
 }
 
 func (m *Manager) sweepLocalStaging(ctx context.Context, pooled map[string]bool) {
@@ -235,14 +235,16 @@ func (m *Manager) inspectStaleVolumes(ctx context.Context, name string) ([]types
 	return holds, nil
 }
 
-// resyncEgress re-locks adopted egress claims, quarantining any it cannot lock.
+// resyncEgress re-locks adopted egress claims and contains uncertain retained VMs.
 func (m *Manager) resyncEgress(ctx context.Context, live map[string]types.VMRecord, removed map[string]bool, inventoryKnown bool) error {
 	logger := log.WithFunc("pool.resyncEgress")
 	var containmentErr error
 	now := time.Now()
 	locked, lockedErr := m.out.LockedTaps()
 	var quarantine []*types.Sandbox
+	claimedVMs := make(map[string]bool, len(m.claimed))
 	for _, sb := range m.claimed {
+		claimedVMs[sb.VMName] = true
 		uncertain := m.managedClaimUncertain(sb)
 		sb.TouchAt(now)
 		// a hibernated or archived claim has no guest to serve; its wake arms the door
@@ -261,7 +263,7 @@ func (m *Manager) resyncEgress(ctx context.Context, live map[string]types.VMReco
 		if lockErr != nil {
 			logger.Errorf(ctx, lockErr, "ensure egress lock %s; quarantining", sb.ID)
 			if uncertain {
-				containmentErr = errors.Join(containmentErr, m.stopUncertainEgress(ctx, sb))
+				containmentErr = errors.Join(containmentErr, m.stopUncertainEgress(ctx, sb.VMName))
 			} else {
 				quarantine = append(quarantine, sb)
 			}
@@ -273,6 +275,13 @@ func (m *Manager) resyncEgress(ctx context.Context, live map[string]types.VMReco
 		if proxyErr := m.out.ArmProxy(ctx, sb); proxyErr != nil {
 			logger.Errorf(ctx, proxyErr, "arm egress proxy %s", sb.ID)
 		}
+	}
+	for name, rec := range live {
+		if claimedVMs[name] || !strings.HasPrefix(name, vmPrefix) || rec.State != vmStateRunning || !m.managedUncertainVM(name) {
+			continue
+		}
+		// Without a durable claim, the retained VM's network lane is unknown.
+		containmentErr = errors.Join(containmentErr, m.stopUncertainEgress(ctx, name))
 	}
 	// quarantine before the sweep so a failed remove's still-running tap is kept.
 	keep := make(map[string]bool, len(live))
@@ -311,16 +320,16 @@ func (m *Manager) ensureEgressLock(ctx context.Context, sb *types.Sandbox, tap s
 	return m.out.Relock(ctx, sb, tap)
 }
 
-func (m *Manager) stopUncertainEgress(ctx context.Context, sb *types.Sandbox) error {
-	if err := m.eng.Stop(ctx, sb.VMName); err != nil {
-		return fmt.Errorf("stop uncontained egress VM %s: %w", sb.VMName, err)
+func (m *Manager) stopUncertainEgress(ctx context.Context, name string) error {
+	if err := m.eng.Stop(ctx, name); err != nil {
+		return fmt.Errorf("stop uncontained egress VM %s: %w", name, err)
 	}
-	rec, found, err := m.eng.Inspect(ctx, sb.VMName)
+	rec, found, err := m.eng.Inspect(ctx, name)
 	if err != nil {
-		return fmt.Errorf("confirm egress VM %s stopped: %w", sb.VMName, err)
+		return fmt.Errorf("confirm egress VM %s stopped: %w", name, err)
 	}
 	if found && rec.State != "stopped" {
-		return fmt.Errorf("egress VM %s is not confirmed stopped", sb.VMName)
+		return fmt.Errorf("egress VM %s is not confirmed stopped", name)
 	}
 	return nil
 }

@@ -831,3 +831,98 @@ func (e *egressRecoveryEngine) Stop(ctx context.Context, name string) error {
 		return e.managedTestEngine.Stop(ctx, name)
 	}
 }
+
+func TestManagedFaultContainsUnclaimedVM(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		managed bool
+		outcome string
+	}{
+		{name: "managed", managed: true},
+		{name: "volume-free"},
+		{name: "stop error", managed: true, outcome: "stop error"},
+		{name: "false acknowledgement", managed: true, outcome: "false acknowledgement"},
+		{name: "inspection error", managed: true, outcome: "inspection error"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := managedConfig(t)
+			cfg.Bridges = []string{"sbxbr0"}
+			cfg.Pools = []config.PoolSpec{{PoolKey: egKey, Warm: 1}, {PoolKey: testKey, Warm: 1}}
+			e := newManagedEngine()
+			e.tap = "orphan-tap"
+			m := openManagedTest(t, cfg, e)
+			withOutbound(t, m, func(o *outbound.Options) { o.LockNIC = false })
+			v := createManagedTest(t, m, "data")
+			backing := filepath.Join(cfg.ManagedVolumeDir, "disks", v.ID+".raw")
+			before, err := os.Stat(backing)
+			if err != nil {
+				t.Fatal(err)
+			}
+			opts := managedOptions()
+			if tc.managed {
+				opts = managedOptions("data")
+			}
+			sb, err := m.ClaimProvision(t.Context(), egKey, opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.managed {
+				e.disks = map[string][]types.VMDisk{sb.VMName: {{Name: "data", Path: backing}}}
+			}
+			ordinary := foundationClaim(t, m)
+			e.vms["foreign-vm"] = "/foreign/socket"
+			m.releaseDelay = time.Hour
+			if err = m.Release(t.Context(), sb.ID, Cred{Operator: true}); err != nil {
+				t.Fatal(err)
+			}
+			if err = m.Close(); err != nil {
+				t.Fatal(err)
+			}
+			registry := filepath.Join(cfg.ManagedVolumeDir, "registry.json")
+			if err = os.WriteFile(registry, []byte("{"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			m = openManagedTest(t, cfg, e)
+			m.eng = &egressRecoveryEngine{managedTestEngine: e, outcome: tc.outcome}
+			withOutbound(t, m, func(o *outbound.Options) {
+				o.LockNIC = true
+				o.Lock = func(string) error { return nil }
+				o.Sweep = func(map[string]bool) error { return nil }
+			})
+			err = m.Reconcile(t.Context())
+			if (err != nil) != (tc.outcome != "") {
+				t.Errorf("containment outcome=%q startup error=%v", tc.outcome, err)
+			}
+			rec, found, err := e.Inspect(t.Context(), sb.VMName)
+			if err != nil || !found || (rec.State == "stopped") != (tc.outcome == "" || tc.outcome == "inspection error") {
+				t.Errorf("unclaimed containment outcome=%q found=%v state=%s error=%v", tc.outcome, found, rec.State, err)
+			}
+			if _, present := m.Sandbox(sb.ID); present {
+				t.Error("released claim was recreated")
+			}
+			for _, name := range []string{ordinary.VMName, "foreign-vm"} {
+				rec, found, err = e.Inspect(t.Context(), name)
+				if err != nil || !found || rec.State != vmStateRunning {
+					t.Errorf("unaffected VM %s found=%v state=%s error=%v", name, found, rec.State, err)
+				}
+			}
+			after, err := os.Stat(backing)
+			if err != nil || !os.SameFile(before, after) || before.Size() != after.Size() {
+				t.Error("containment changed volume backing", err)
+			}
+			if raw, err := os.ReadFile(registry); err != nil || string(raw) != "{" {
+				t.Errorf("containment rewrote fenced registry: %q %v", raw, err)
+			}
+			if len(m.pendingRemovals) != 0 {
+				t.Error("uncertain owner queued for destructive removal")
+			}
+		})
+	}
+}
+
+func (e *egressRecoveryEngine) Inspect(ctx context.Context, name string) (types.VMRecord, bool, error) {
+	if e.outcome == "inspection error" {
+		return types.VMRecord{}, false, errors.New("inspection unavailable")
+	}
+	return e.managedTestEngine.Inspect(ctx, name)
+}

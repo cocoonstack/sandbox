@@ -298,13 +298,21 @@ the hold.
 
 An uncertain managed claim still requires host NIC-lock recovery. If that lock
 cannot be established, the daemon stops the VM while retaining its claim and
-backing. Startup recovery fails if the VM cannot be confirmed stopped.
+backing. Startup recovery fails if the VM cannot be confirmed stopped. During
+managed recovery faults, an unclaimed running `sbx-` VM has no durable network
+policy.
+The daemon stops it and confirms the result through runtime inspection, even
+when its disk inventory is empty. It retains the VM record, volume charges,
+registry, and backing files. A failed stop or inspection prevents startup.
+A VM that rejects stopping can keep running. A startup error does not provide
+network isolation.
 
 After restart, the persisted egress-quarantine failure marker resumes retirement
 and removal. Ordinary failed claims keep their existing ownership until release.
 Unclaimed stopped VM records are removed only after the recorded process is
-proved gone. Managed metadata or inventory uncertainty fences managed work
-while the node continues serving ordinary volume-free claims. It preserves
+proved gone. Managed metadata uncertainty fences managed work while the node
+continues serving ordinary volume-free claims. A failed VM listing prevents startup,
+because it can hide unclaimed running VMs that require containment. It preserves
 uncertain claims, VM records, snapshots, and backing files. A matching healthy
 durable claim takes precedence over a legacy retiring hold. Unsafe configured
 directories and failure to acquire the daemon's directory lock still prevent

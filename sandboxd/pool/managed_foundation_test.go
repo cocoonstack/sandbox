@@ -2,6 +2,7 @@ package pool
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"os"
 	"os/exec"
@@ -774,4 +775,42 @@ func TestManagedFaultRetainsStaleCatalogWriter(t *testing.T) {
 			foundationClaim(t, m)
 		})
 	}
+}
+
+func TestManagedListFailureRetainsStateAndRejectsStartup(t *testing.T) {
+	cfg := managedConfig(t)
+	e := newManagedEngine()
+	m := openManagedTest(t, cfg, e)
+	createManagedTest(t, m, "data")
+	sb := foundationClaim(t, m, "data")
+	ordinary := foundationClaim(t, m)
+	if err := m.Close(); err != nil {
+		t.Fatal(err)
+	}
+	m = openManagedTest(t, cfg, e)
+	inventoryErr := errors.New("VM inventory unavailable")
+	m.eng = &failedListEngine{managedTestEngine: e, err: inventoryErr}
+	if err := m.Reconcile(t.Context()); !errors.Is(err, inventoryErr) {
+		t.Errorf("incomplete VM inventory permitted startup: %v", err)
+	}
+	for _, id := range []string{sb.ID, ordinary.ID} {
+		if _, present := m.Sandbox(id); !present {
+			t.Errorf("inventory failure lost durable claim %s", id)
+		}
+	}
+	if _, held := m.managedHold(sb.ID); !held {
+		t.Error("inventory failure discharged managed reservation")
+	}
+	if rec, found, err := e.Inspect(t.Context(), sb.VMName); err != nil || !found || rec.State != vmStateRunning {
+		t.Errorf("inventory failure destroyed retained VM: found=%v state=%s error=%v", found, rec.State, err)
+	}
+}
+
+type failedListEngine struct {
+	*managedTestEngine
+	err error
+}
+
+func (e *failedListEngine) List(context.Context) ([]types.VMRecord, error) {
+	return nil, e.err
 }
