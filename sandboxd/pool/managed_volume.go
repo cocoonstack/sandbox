@@ -143,6 +143,11 @@ func (r *volumeRegistry) completeCreate(v managedVolume) error {
 }
 
 func (r *volumeRegistry) markRecovery(v managedVolume) error {
+	current, ok := r.data.Volumes[v.Name]
+	if !ok || current.ID != v.ID || current.State != v.State || current.Size != v.Size ||
+		current.Backing != v.Backing || current.CapacityGeneration != v.CapacityGeneration || current.Growth != v.Growth {
+		return managedStorageError()
+	}
 	if r.sleepOwnsVolume(v.ID) || v.Growth.fenced() {
 		return managedStorageError()
 	}
