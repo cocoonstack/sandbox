@@ -439,7 +439,7 @@ func TestManagedSleepFinalWakeCommitKeepsUnrelatedRenewalLive(t *testing.T) {
 	}
 }
 
-func TestManagedSleepPolicyReloadWaitsForFinalWakeCommit(t *testing.T) {
+func TestManagedSleepPolicyReloadDuringFinalWakeCommitKeepsPaused(t *testing.T) {
 	m, _, sb, cfg := newSleepTest(t)
 	sb.EgressClass = "desk"
 	requireSleep(t, m, sb)
@@ -466,17 +466,36 @@ func TestManagedSleepPolicyReloadWaitsForFinalWakeCommit(t *testing.T) {
 	<-started
 	select {
 	case err := <-reload:
-		t.Fatalf("policy reload overtook final wake commit: %v", err)
-	case <-time.After(50 * time.Millisecond):
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("policy reload blocked by final wake journal commit")
 	}
 	unblock()
-	if err := <-wake; err != nil {
+	if err := <-wake; !errors.Is(err, ErrVolumeCapture) {
+		t.Fatalf("wake accepted policy published during final commit: %v", err)
+	}
+	if sock, err := m.AgentSocket(sb.ID, sb.Token); sock != "" || !errors.Is(err, ErrPaused) {
+		t.Fatalf("policy-blocked ready commit exposed guest: %q %v", sock, err)
+	}
+	if err := m.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if err := <-reload; err != nil {
+	registry, err := openVolumeRegistry(cfg.ManagedVolumeDir, m.nodeID)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if sock, err := m.AgentSocket(sb.ID, sb.Token); err != nil || sock == "" {
-		t.Fatalf("reload after ready commit hid running guest: %q %v", sock, err)
+	defer registry.close()
+	h := registry.data.Holds[sb.ID]
+	if h.Sleep == nil || h.Sleep.Phase != sleepResuming {
+		t.Fatalf("policy refusal lost durable resume fence: %+v", h.Sleep)
+	}
+	claims, err := m.store.load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if claim := claims[sb.ID]; claim == nil || claim.HibernateSnap != h.Sleep.Snapshot || claim.ReaderSafe {
+		t.Fatalf("policy refusal lost durable paused claim: %+v", claim)
 	}
 }
