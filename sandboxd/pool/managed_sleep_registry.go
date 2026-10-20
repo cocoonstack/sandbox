@@ -72,7 +72,7 @@ func (r *volumeRegistry) commitManagedSleep(h volumeHold, next *managedSleep) er
 	}
 	if r.data.Version == 1 {
 		r.data.Version = 2
-		if err := r.commitLocked(); err != nil {
+		if err := r.commitAndRelock(); err != nil {
 			return err
 		}
 	}
@@ -83,7 +83,7 @@ func (r *volumeRegistry) commitManagedSleep(h volumeHold, next *managedSleep) er
 		}
 	}
 	r.data.Holds[h.SandboxID] = h
-	if err := r.commitLocked(); err != nil {
+	if err := r.commitAndRelock(); err != nil {
 		if next == nil {
 			h.Sleep = current.Sleep
 			r.data.Holds[h.SandboxID] = h

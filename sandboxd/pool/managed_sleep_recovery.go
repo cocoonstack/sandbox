@@ -121,7 +121,7 @@ func (m *Manager) observeManagedRemoval(ctx context.Context, h volumeHold) (volu
 	next.Restored = p
 	h.Sleep = &next
 	r.data.Holds[h.SandboxID] = h
-	return h, true, r.commitLocked()
+	return h, true, r.commitAndRelock()
 }
 
 func (m *Manager) retryManagedSleepRemoval(ctx context.Context, name string, pending pendingRemoval) bool {

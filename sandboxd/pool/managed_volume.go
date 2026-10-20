@@ -77,7 +77,7 @@ func (m *Manager) CreateVolume(ctx context.Context, name string, req types.Volum
 	if !exists {
 		v = managedVolume{ID: volumeID("vol_" + randHex(16)), Name: name, Tenant: owner, Node: r.node, Size: size, State: volumeCreating, CreatedAt: time.Now().UTC()}
 		r.data.Volumes[name] = v
-		if err := r.commitLocked(); err != nil {
+		if err := r.commitAndRelock(); err != nil {
 			return types.ManagedVolumeInfo{}, false, err
 		}
 	}
@@ -139,7 +139,7 @@ func (r *volumeRegistry) completeCreate(v managedVolume) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.data.Volumes[v.Name] = v
-	return r.commitLocked()
+	return r.commitAndRelock()
 }
 
 func (r *volumeRegistry) markRecovery(v managedVolume) error {
@@ -153,7 +153,7 @@ func (r *volumeRegistry) markRecovery(v managedVolume) error {
 	}
 	v.State = volumeRecovery
 	r.data.Volumes[v.Name] = v
-	if err := r.commitLocked(); err != nil {
+	if err := r.commitAndRelock(); err != nil {
 		return err
 	}
 	return managedStorageError()
@@ -250,7 +250,7 @@ func (m *Manager) DeleteVolume(ctx context.Context, name, expected, tenant strin
 	if v.State != volumeDeleting {
 		v.State = volumeDeleting
 		r.data.Volumes[name] = v
-		if err := r.commitLocked(); err != nil {
+		if err := r.commitAndRelock(); err != nil {
 			return err
 		}
 	}
@@ -262,7 +262,7 @@ func (m *Manager) DeleteVolume(ctx context.Context, name, expected, tenant strin
 	}
 	r.data.Deleted[id] = volumeTombstone{ID: id, Name: name, Tenant: v.Tenant}
 	delete(r.data.Volumes, name)
-	return r.commitLocked()
+	return r.commitAndRelock()
 }
 
 func (r *volumeRegistry) holders(id volumeID) []types.VolumeHolder {
@@ -408,13 +408,13 @@ func (m *Manager) retireManaged(id string) error {
 	}
 	if h.State == holdRetiring {
 		if r.writeFault != nil {
-			return r.commitLocked()
+			return r.commitAndRelock()
 		}
 		return nil
 	}
 	h.State = holdRetiring
 	r.data.Holds[id] = h
-	return r.commitLocked()
+	return r.commitAndRelock()
 }
 
 func (m *Manager) managedRefPath(id, name string) (string, bool) {

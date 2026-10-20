@@ -156,7 +156,7 @@ func openVolumeRegistry(dir, node string) (*volumeRegistry, error) {
 			return r, nil
 		}
 		r.mu.Lock()
-		err = r.commitLocked()
+		err = r.commitAndRelock()
 		r.mu.Unlock()
 		if err != nil {
 			return r, nil
@@ -404,9 +404,7 @@ func (r *volumeRegistry) validateHoldRef(h volumeHold, ref volumeRef, names map[
 	return true, nil
 }
 
-// commitLocked is called with mu held and returns with it held. Only the writer
-// allocates a snapshot, after taking writeMu without holding the state lock.
-func (r *volumeRegistry) commitLocked() error {
+func (r *volumeRegistry) commitAndRelock() error {
 	if r.fault != nil || r.closed {
 		return managedStorageError()
 	}
@@ -495,7 +493,7 @@ func (m *Manager) retryManagedSnapshot() {
 		defer r.retrying.Store(false)
 		r.mu.Lock()
 		if r.writeFault != nil {
-			_ = r.commitLocked()
+			_ = r.commitAndRelock()
 		}
 		ids := r.unboundRetirements()
 		r.mu.Unlock()

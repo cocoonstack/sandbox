@@ -561,7 +561,7 @@ func TestManagedGrowthMigratesVersionTwoBeforeIntentAndKeepsSleepValid(t *testin
 	r := m.managed
 	r.data.Version = 2
 	r.mu.Lock()
-	if err := r.commitLocked(); err != nil {
+	if err := r.commitAndRelock(); err != nil {
 		t.Fatal(err)
 	}
 	r.mu.Unlock()
@@ -587,7 +587,7 @@ func TestManagedGrowthMigratesVersionTwoBeforeIntentAndKeepsSleepValid(t *testin
 	sleeping, _, sb, _ := newSleepTest(t)
 	sleeping.managed.data.Version = 3
 	sleeping.managed.mu.Lock()
-	if err := sleeping.managed.commitLocked(); err != nil {
+	if err := sleeping.managed.commitAndRelock(); err != nil {
 		t.Fatal(err)
 	}
 	sleeping.managed.mu.Unlock()

@@ -67,7 +67,7 @@ func (m *Manager) recoverManagedOrphans(ctx context.Context, claims map[string]*
 	}
 	r.mu.Lock()
 	r.data.Orphans = maps.Clone(orphans)
-	err := r.commitLocked()
+	err := r.commitAndRelock()
 	r.mu.Unlock()
 	if err != nil {
 		return err
@@ -82,7 +82,7 @@ func (m *Manager) recoverManagedOrphans(ctx context.Context, claims map[string]*
 		}
 		r.mu.Lock()
 		delete(r.data.Orphans, name)
-		err := r.commitLocked()
+		err := r.commitAndRelock()
 		r.mu.Unlock()
 		if err != nil {
 			return err

@@ -67,7 +67,7 @@ func TestManagedRegistryPreservesSupportedAdditiveFields(t *testing.T) {
 				t.Fatal(r.fault)
 			}
 			r.mu.Lock()
-			err = r.commitLocked()
+			err = r.commitAndRelock()
 			r.mu.Unlock()
 			if err != nil {
 				t.Fatal(err)

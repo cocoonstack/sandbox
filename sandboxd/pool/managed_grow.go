@@ -287,7 +287,7 @@ func (m *Manager) commitGrowthIntent(sb *types.Sandbox, v managedVolume, next ma
 	r.mu.Lock()
 	if r.data.Version != 3 {
 		r.data.Version = 3
-		if err := r.commitLocked(); err != nil {
+		if err := r.commitAndRelock(); err != nil {
 			r.mu.Unlock()
 			return err
 		}
@@ -316,7 +316,7 @@ func (m *Manager) commitGrowthIntent(sb *types.Sandbox, v managedVolume, next ma
 	current.Growth = &next
 	r.data.Volumes[v.Name] = current
 	m.mu.Unlock()
-	err = r.commitLocked()
+	err = r.commitAndRelock()
 	r.mu.Unlock()
 	return err
 }
@@ -479,7 +479,7 @@ func (m *Manager) saveGrowth(v managedVolume, g managedGrowth, state, outcome st
 		current.State = volumeRecovery
 	}
 	r.data.Volumes[v.Name] = current
-	return r.commitLocked()
+	return r.commitAndRelock()
 }
 
 func (r *volumeRegistry) validateGrowth(v managedVolume) error {

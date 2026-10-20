@@ -113,7 +113,7 @@ func (m *Manager) admitManaged(tenant string, volumes []resolvedVolume) ([]types
 	if cleanErr != nil {
 		delete(r.data.Holds, h.SandboxID)
 	}
-	err := r.commitLocked()
+	err := r.commitAndRelock()
 	r.mu.Unlock()
 	m.mu.Lock()
 	r.mu.Lock()
@@ -173,7 +173,7 @@ func (m *Manager) releaseUnbound(volumes []resolvedVolume, reserved []types.Volu
 	}
 	delete(r.data.Holds, id)
 	m.mu.Unlock()
-	err := r.commitLocked()
+	err := r.commitAndRelock()
 	r.mu.Unlock()
 	m.mu.Lock()
 	r.mu.Lock()
@@ -212,7 +212,7 @@ func (m *Manager) bindManaged(ctx context.Context, sb *types.Sandbox, volumes []
 	h.VMName = sb.VMName
 	h.Process = p
 	r.data.Holds[id] = h
-	return r.commitLocked()
+	return r.commitAndRelock()
 }
 
 func (m *Manager) activateManaged(id string) error {
@@ -234,7 +234,7 @@ func (m *Manager) activateManaged(id string) error {
 	}
 	h.State = holdClaimed
 	r.data.Holds[id] = h
-	return r.commitLocked()
+	return r.commitAndRelock()
 }
 
 func (m *Manager) finishManaged(id string, clears []string, charges ...[]types.Volume) bool {
@@ -280,7 +280,7 @@ func (m *Manager) finishManaged(id string, clears []string, charges ...[]types.V
 	}
 	r.discharging[id] = true
 	delete(r.data.Holds, id)
-	if r.commitLocked() != nil {
+	if r.commitAndRelock() != nil {
 		r.data.Holds[id] = h
 		delete(r.discharging, id)
 		return false
@@ -320,7 +320,7 @@ func (m *Manager) restoreManagedClaim(previous volumeHold, err error) {
 	if ok && h.State == holdRetiring {
 		h.State = previous.State
 		r.data.Holds[h.SandboxID] = h
-		_ = r.commitLocked()
+		_ = r.commitAndRelock()
 	}
 }
 
@@ -365,7 +365,7 @@ func (m *Manager) recoverManaged(ctx context.Context, claims map[string]*types.S
 				r.mu.Lock()
 				h.State = holdClaimed
 				r.data.Holds[h.SandboxID] = h
-				err := r.commitLocked()
+				err := r.commitAndRelock()
 				r.mu.Unlock()
 				if err != nil {
 					return owned, err
@@ -503,7 +503,7 @@ func (m *Manager) managedLiveRemove(id string, volumes []types.Volume) error {
 	}
 	h.Refs = refs
 	r.data.Holds[id] = h
-	return r.commitLocked()
+	return r.commitAndRelock()
 }
 
 func catalogBacking(path string) (backingIdentity, error) {
@@ -525,7 +525,7 @@ func (m *Manager) commitManaged() error {
 	r := m.managed
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return r.commitLocked()
+	return r.commitAndRelock()
 }
 
 func processMissing(err error) bool {
