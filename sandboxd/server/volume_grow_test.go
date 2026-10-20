@@ -19,6 +19,37 @@ const (
 	growBody      = `{"size_gib":40,"expected_generation":0,"operation_id":"` + growOperation + `"}`
 )
 
+func TestManagedVolumeRecoveryRetryHints(t *testing.T) {
+	for _, tc := range []struct {
+		code  string
+		retry bool
+	}{
+		{"volume_create_incomplete", false},
+		{"volume_backing_mismatch", false},
+		{"volume_storage_unavailable", true},
+		{"volume_grow_unsupported", false},
+	} {
+		t.Run(tc.code, func(t *testing.T) {
+			mgr := &volumeManagerFake{fakeManager: &fakeManager{}, get: func(string, string) (types.ManagedVolumeInfo, error) {
+				return types.ManagedVolumeInfo{}, &pool.VolumeError{Status: http.StatusServiceUnavailable, Code: tc.code, Message: "volume unavailable"}
+			}}
+			ts := newTestServer(t, "root", mgr, nil)
+			resp := doReq(t, http.MethodGet, ts.URL+"/v1/volumes/data", "root", "")
+			defer resp.Body.Close()
+			var body pool.VolumeError
+			if err := json.UnmarshalRead(resp.Body, &body); err != nil {
+				t.Fatal(err)
+			}
+			if resp.StatusCode != http.StatusServiceUnavailable || body.Code != tc.code || body.Message != "volume unavailable" {
+				t.Fatalf("status=%d error=%+v", resp.StatusCode, body)
+			}
+			if retry := resp.Header.Get("Retry-After") != ""; retry != tc.retry {
+				t.Fatalf("Retry-After=%q, want retry hint=%v", resp.Header.Get("Retry-After"), tc.retry)
+			}
+		})
+	}
+}
+
 type volumeManagerFake struct {
 	*fakeManager
 	get func(string, string) (types.ManagedVolumeInfo, error)
