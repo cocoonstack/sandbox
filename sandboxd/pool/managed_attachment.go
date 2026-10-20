@@ -208,7 +208,7 @@ func (m *Manager) finishManaged(id string, clears []string) bool {
 	if !ok {
 		return true
 	}
-	if r.fault != nil {
+	if r.fault != nil || r.growthOwnsHold(id) {
 		return false
 	}
 	commit := m.store.commit
@@ -264,6 +264,13 @@ func (m *Manager) recoverManaged(ctx context.Context, claims map[string]*types.S
 		}
 		m.mu.Unlock()
 		sb, exists := claims[h.SandboxID]
+		if m.growthOwnsHold(h.SandboxID) {
+			owned[h.VMName] = true
+			if !exists || !sleepMatchesClaim(h, sb) {
+				return owned, managedStorageError()
+			}
+			continue
+		}
 		if h.Sleep != nil && h.State != holdRetiring {
 			if !exists || !sleepMatchesClaim(h, sb) {
 				return owned, managedStorageError()
@@ -334,7 +341,7 @@ func (m *Manager) managedLiveAdd(id string, volumes []resolvedVolume) error {
 	if !ok {
 		return nil
 	}
-	if r.fault != nil || h.State != holdClaimed {
+	if r.fault != nil || h.State != holdClaimed || r.growthOwnsHold(id) {
 		return managedStorageError()
 	}
 	for _, v := range volumes {
@@ -367,7 +374,7 @@ func (m *Manager) managedLiveRemove(id string, volumes []types.Volume) error {
 	if !ok {
 		return nil
 	}
-	if r.fault != nil || h.State != holdClaimed {
+	if r.fault != nil || h.State != holdClaimed || r.growthOwnsHold(id) {
 		return managedStorageError()
 	}
 	remove := map[string]bool{}

@@ -24,6 +24,9 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	if err := m.recoverGrowth(ctx, claims); err != nil {
+		return err
+	}
 	fenced := m.fenceArchived(ctx, claims)
 	vms, err := m.eng.List(ctx)
 	if err != nil {
@@ -155,6 +158,9 @@ func (m *Manager) sweepStaleVMs(ctx context.Context, live map[string]types.VMRec
 
 // removeStaleVM reclaims one unowned VM, reporting whether it is gone.
 func (m *Manager) removeStaleVM(ctx context.Context, name string, rec types.VMRecord) bool {
+	if m.growthOwnsVM(name) {
+		return false
+	}
 	logger := log.WithFunc("pool.removeStaleVM")
 	if rec.State == vmStateCreating {
 		// a canceled ctx must not skip the busy check guarding the forced remove

@@ -67,7 +67,7 @@ func (r *volumeRegistry) commitManagedSleep(h volumeHold, next *managedSleep) er
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	current, ok := r.data.Holds[h.SandboxID]
-	if r.fault != nil || !ok || current.State != holdClaimed || (current.Sleep != nil && (h.Sleep == nil || current.Sleep.Operation != h.Sleep.Operation)) {
+	if r.fault != nil || r.growthOwnsHold(h.SandboxID) || !ok || current.State != holdClaimed || (current.Sleep != nil && (h.Sleep == nil || current.Sleep.Operation != h.Sleep.Operation)) {
 		return managedStorageError()
 	}
 	if r.data.Version == 1 {

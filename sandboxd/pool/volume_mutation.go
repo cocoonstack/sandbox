@@ -190,7 +190,7 @@ func (m *Manager) beginVolumeRun(ctx context.Context, sb *types.Sandbox) (contex
 				m.mu.Unlock()
 				return ctx, nil, managedStorageError()
 			}
-			if h.State != holdClaimed {
+			if h.State != holdClaimed || m.growthOwnsHold(sb.ID) {
 				m.mu.Unlock()
 				return ctx, nil, ErrFailed
 			}
@@ -251,7 +251,7 @@ func (m *Manager) checkVolumeRunLocked(ctx context.Context, sb *types.Sandbox, r
 	if !m.ownsRunLocked(sb, run) {
 		return ErrUnknownSandbox
 	}
-	if h, managed := m.managedHold(sb.ID); managed && h.State != holdClaimed {
+	if h, managed := m.managedHold(sb.ID); managed && (h.State != holdClaimed || m.growthOwnsHold(sb.ID)) {
 		return ErrFailed
 	}
 	switch {

@@ -129,6 +129,9 @@ func (m *Manager) watchedClaims(vmName string) []liveSuspect {
 func (m *Manager) recoverVMM(ctx context.Context, sb *types.Sandbox) {
 	sb.Transition.Lock()
 	defer sb.Transition.Unlock()
+	if m.growthOwnsHold(sb.ID) {
+		return
+	}
 	now := time.Now()
 	m.mu.Lock()
 	live := m.claimed[sb.ID] == sb && runningShaped(sb) && !m.leaseLapsed(sb, now)
@@ -204,6 +207,9 @@ func (m *Manager) restartFailed(ctx context.Context, sb *types.Sandbox) error {
 
 // restartLocked cold-boots sb's VM from its own disk and republishes it; the caller holds sb.Transition.
 func (m *Manager) restartLocked(ctx context.Context, sb *types.Sandbox) error {
+	if m.growthOwnsHold(sb.ID) {
+		return growBusy()
+	}
 	ctx = context.WithoutCancel(ctx)
 	if err := m.eng.Start(ctx, sb.VMName); err != nil {
 		m.stopVM(ctx, sb.VMName)

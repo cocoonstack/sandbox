@@ -93,6 +93,8 @@ func (m *Manager) CreateVolume(ctx context.Context, name string, req types.Volum
 			return types.ManagedVolumeInfo{}, false, err
 		}
 		v = r.data.Volumes[name]
+	case volumeGrowing:
+		return r.info(v), false, nil
 	case volumeReady:
 		if err := r.verify(v); err != nil {
 			return types.ManagedVolumeInfo{}, false, r.markRecovery(v)
@@ -136,7 +138,7 @@ func (r *volumeRegistry) completeCreate(v managedVolume) error {
 }
 
 func (r *volumeRegistry) markRecovery(v managedVolume) error {
-	if r.sleepOwnsVolume(v.ID) {
+	if r.sleepOwnsVolume(v.ID) || v.Growth.fenced() {
 		return managedStorageError()
 	}
 	v.State = volumeRecovery
@@ -160,6 +162,12 @@ func (m *Manager) GetVolume(name, tenant string) (types.ManagedVolumeInfo, error
 	v, ok := r.data.Volumes[name]
 	if !ok || (tenant != "" && v.Tenant != tenant) {
 		return types.ManagedVolumeInfo{}, managedNotFound()
+	}
+	if v.State == volumeGrowing {
+		actual, err := inspectBacking(r.path(v.ID))
+		if err != nil || r.verifyDirectories() != nil || actual.Device != v.Backing.Device || actual.Inode != v.Backing.Inode || (actual.Size != v.Size && actual.Size != v.Growth.Runtime.TargetBytes) {
+			return types.ManagedVolumeInfo{}, managedStorageError()
+		}
 	}
 	if v.State == volumeReady && r.verify(v) != nil {
 		if err := r.markRecovery(v); r.fault != nil {
@@ -197,6 +205,9 @@ func (m *Manager) DeleteVolume(ctx context.Context, name, expected, tenant strin
 	if v.ID != id {
 		return volumeError(412, "volume_precondition_failed", "volume identity does not match")
 	}
+	if v.Growth.fenced() {
+		return growBusy()
+	}
 	if holders := r.holders(v.ID); len(holders) > 0 {
 		return &VolumeError{Status: 409, Code: volumeBusyCode, Message: "volume is held by a sandbox", Volume: name, Holders: holders}
 	}
@@ -209,7 +220,7 @@ func (m *Manager) DeleteVolume(ctx context.Context, name, expected, tenant strin
 	if missing && v.State != volumeCreating && v.State != volumeDeleting {
 		return r.markRecovery(v)
 	}
-	if !missing && (err != nil || v.Backing.Inode == 0 || actual != v.Backing) {
+	if !missing && (err != nil || v.Backing.Inode == 0 || !growthBackingMatches(v, actual)) {
 		return volumeError(503, "volume_backing_mismatch", "volume backing requires operator recovery")
 	}
 	if v.State != volumeDeleting {
@@ -253,7 +264,12 @@ func (r *volumeRegistry) holders(id volumeID) []types.VolumeHolder {
 }
 
 func (r *volumeRegistry) info(v managedVolume) types.ManagedVolumeInfo {
-	return types.ManagedVolumeInfo{Name: v.Name, DefaultMount: types.DefaultVolumeMount(v.Name), SizeBytes: v.Size, Available: v.State == volumeReady, Nodes: 1, Writable: true, Kind: "managed", ID: string(v.ID), Tenant: v.Tenant, Node: v.Node, State: string(v.State), CreatedAt: v.CreatedAt, Holders: r.holders(v.ID)}
+	info := types.ManagedVolumeInfo{Name: v.Name, DefaultMount: types.DefaultVolumeMount(v.Name), SizeBytes: v.Size, Available: v.State == volumeReady, Nodes: 1, Writable: true, Kind: "managed", ID: string(v.ID), Tenant: v.Tenant, Node: v.Node, State: string(v.State), CreatedAt: v.CreatedAt, Holders: r.holders(v.ID)}
+	info.CapacityGeneration = v.CapacityGeneration
+	if g := v.Growth; g != nil {
+		info.Growth = &types.VolumeGrowth{OperationID: g.Request.OperationID, ExpectedGeneration: g.Request.ExpectedGeneration, TargetBytes: g.Runtime.TargetBytes, State: g.State, RuntimeOutcome: g.Outcome, GuestSizeBytes: g.GuestSizeBytes, FilesystemStatus: "not_managed"}
+	}
+	return info
 }
 
 // ManagedVolumeStatus lets listing fail clearly rather than presenting a corrupt
@@ -360,6 +376,9 @@ func (m *Manager) retireManaged(id string) error {
 	if r.fault != nil {
 		return managedStorageError()
 	}
+	if r.growthOwnsHold(id) {
+		return growBusy()
+	}
 	if h.State == holdRetiring {
 		return nil
 	}
@@ -411,4 +430,11 @@ func (m *Manager) managedCatalogAlias(path string) bool {
 		}
 	}
 	return false
+}
+
+func growthBackingMatches(v managedVolume, actual backingIdentity) bool {
+	if actual == v.Backing {
+		return true
+	}
+	return v.Growth != nil && v.Growth.Outcome == "old_vmm_gone" && actual.Device == v.Backing.Device && actual.Inode == v.Backing.Inode && actual.Size == v.Growth.Runtime.TargetBytes
 }

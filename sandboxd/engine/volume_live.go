@@ -32,6 +32,7 @@ func (e *LiveVolumeUnsupported) Error() string {
 
 type volumeMount struct {
 	devNum, root, path, options string
+	id                          string
 }
 
 // CheckLiveVolumeSupport rejects runtimes without idempotent live disk attach and detach.
@@ -112,7 +113,7 @@ func (e *Engine) volumeMounts(ctx context.Context, vsockSocket, device string) (
 		if len(fields) < 10 || !slices.Contains(fields[6:], "-") {
 			return "", nil, errors.New("invalid guest mountinfo")
 		}
-		mounts = append(mounts, volumeMount{fields[2], mountUnescaper.Replace(fields[3]), mountUnescaper.Replace(fields[4]), fields[5]})
+		mounts = append(mounts, volumeMount{fields[2], mountUnescaper.Replace(fields[3]), mountUnescaper.Replace(fields[4]), fields[5], fields[0]})
 	}
 	return strings.TrimSpace(string(devNum)), mounts, nil
 }

@@ -28,6 +28,9 @@ func (m *Manager) managedSleepPreflight(ctx context.Context, sb *types.Sandbox) 
 	busy := m.volumeRuns[sb] != nil
 	_, outbound := m.view.Load().out.Resolve(sb, m.claimPooledLocked)
 	m.mu.Unlock()
+	if m.growthOwnsHold(sb.ID) {
+		return h, types.VMRecord{}, growBusy()
+	}
 	if !ok || m.managedSleepHook == nil || h.State != holdClaimed || !sleepMatchesClaim(h, sb) || h.Refs[0].Volume.Mount == "" || !h.Refs[0].Volume.RW() || h.Refs[0].ID == "" || busy || outbound {
 		return h, types.VMRecord{}, ErrVolumeCapture
 	}
@@ -62,6 +65,9 @@ func (m *Manager) managedSleepPreflight(ctx context.Context, sb *types.Sandbox) 
 
 func (m *Manager) driveManagedSleepLocked(ctx context.Context, sb *types.Sandbox, target managedSleepTarget) error {
 	h, ok := m.managedHold(sb.ID)
+	if m.growthOwnsHold(sb.ID) {
+		return growBusy()
+	}
 	if !ok {
 		return ErrVolumeCapture
 	}

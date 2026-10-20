@@ -720,6 +720,7 @@ type VMConfig struct {
 
 // VMDisk is one hot-attached disk that `cocoon vm inspect` reports.
 type VMDisk struct {
+	ID       string `json:"id"`
 	Name     string `json:"name"`
 	Path     string `json:"path"`
 	ReadOnly bool   `json:"readonly,omitzero"`

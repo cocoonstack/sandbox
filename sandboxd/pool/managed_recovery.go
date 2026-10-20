@@ -31,7 +31,7 @@ func (m *Manager) recoverManagedOrphans(ctx context.Context, claims map[string]*
 		known[sb.VMName] = true
 	}
 	for name, rec := range live {
-		if !strings.HasPrefix(name, vmPrefix) || known[name] {
+		if !strings.HasPrefix(name, vmPrefix) || known[name] || m.growthOwnsVM(name) {
 			continue
 		}
 		if rec.State == vmStateCreating {
@@ -75,6 +75,9 @@ func (m *Manager) recoverManagedOrphans(ctx context.Context, claims map[string]*
 		return err
 	}
 	for name, p := range orphans {
+		if m.growthOwnsVM(name) {
+			continue
+		}
 		_ = m.eng.Remove(context.WithoutCancel(ctx), name)
 		if !m.confirmGone(ctx, name) || !r.processGone(p) {
 			return managedStorageError()

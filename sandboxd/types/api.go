@@ -13,17 +13,18 @@ const (
 
 // VolumeInfo is the caller-visible, host-path-free catalog projection.
 type VolumeInfo struct {
-	Kind         string    `json:"kind,omitempty"`
-	ID           string    `json:"id,omitempty"`
-	Tenant       string    `json:"tenant,omitempty"`
-	Node         string    `json:"node,omitempty"`
-	State        string    `json:"state,omitempty"`
-	CreatedAt    time.Time `json:"created_at,omitzero"`
-	Name         string    `json:"name"`
-	DefaultMount string    `json:"default_mount"`
-	SizeBytes    int64     `json:"size_bytes"`
-	Available    bool      `json:"available"`
-	Nodes        int       `json:"nodes"`
+	CapacityGeneration uint64    `json:"capacity_generation"`
+	Kind               string    `json:"kind,omitempty"`
+	ID                 string    `json:"id,omitempty"`
+	Tenant             string    `json:"tenant,omitempty"`
+	Node               string    `json:"node,omitempty"`
+	State              string    `json:"state,omitempty"`
+	CreatedAt          time.Time `json:"created_at,omitzero"`
+	Name               string    `json:"name"`
+	DefaultMount       string    `json:"default_mount"`
+	SizeBytes          int64     `json:"size_bytes"`
+	Available          bool      `json:"available"`
+	Nodes              int       `json:"nodes"`
 	// Writable reports whether the operator allows rw claims of this name.
 	Writable bool `json:"writable,omitzero"`
 }
@@ -31,6 +32,7 @@ type VolumeInfo struct {
 type ManagedVolumeInfo struct {
 	VolumeInfo
 	Holders []VolumeHolder `json:"holders,omitempty"`
+	Growth  *VolumeGrowth  `json:"growth,omitempty"`
 }
 
 type VolumeHolder struct {
@@ -72,4 +74,20 @@ type SandboxVolumesResponse struct {
 // Seconds converts wire seconds to a duration: a negative count is zero and a huge one saturates instead of wrapping.
 func Seconds(n int) time.Duration {
 	return time.Duration(min(max(int64(n), 0), math.MaxInt64/int64(time.Second))) * time.Second
+}
+
+type VolumeGrow struct {
+	SizeGiB            int64  `json:"size_gib"`
+	ExpectedGeneration uint64 `json:"expected_generation"`
+	OperationID        string `json:"operation_id"`
+}
+
+type VolumeGrowth struct {
+	OperationID        string `json:"operation_id"`
+	ExpectedGeneration uint64 `json:"expected_generation"`
+	TargetBytes        int64  `json:"target_bytes"`
+	State              string `json:"state"`
+	RuntimeOutcome     string `json:"runtime_outcome"`
+	GuestSizeBytes     int64  `json:"guest_size_bytes"`
+	FilesystemStatus   string `json:"filesystem_status"`
 }

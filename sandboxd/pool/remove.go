@@ -14,13 +14,16 @@ import (
 )
 
 func (m *Manager) removeVM(ctx context.Context, name string) bool {
+	if m.growthOwnsVM(name) {
+		return false
+	}
 	m.out.ClosePrebound(name)
 	// cancellation-immune: on a canceled ctx `cocoon vm rm` no-ops and orphans.
 	ctx = context.WithoutCancel(ctx)
 	hold, managed := m.managedHoldByVM(name)
 	if managed {
 		if err := m.retireManaged(hold.SandboxID); err != nil {
-			if hold.Sleep != nil {
+			if hold.Sleep != nil || m.growthOwnsHold(hold.SandboxID) {
 				return false
 			}
 			_ = m.eng.Remove(ctx, name)
@@ -108,6 +111,10 @@ func (m *Manager) retryRemovals(ctx context.Context) *sync.WaitGroup {
 }
 
 func (m *Manager) retryRemoval(ctx context.Context, name string, pending pendingRemoval) {
+	if m.growthOwnsVM(name) {
+		m.queueRemoval(name, pending.sandboxID, pending.tap, pending.volumes, pending.notBefore)
+		return
+	}
 	if m.retryManagedSleepRemoval(ctx, name, pending) {
 		return
 	}

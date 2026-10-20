@@ -24,6 +24,7 @@ type (
 const (
 	volumeCreating volumePhase = "creating"
 	volumeReady    volumePhase = "ready"
+	volumeGrowing  volumePhase = "growing"
 	volumeDeleting volumePhase = "deleting"
 	volumeRecovery volumePhase = "recovery_required"
 	holdAttaching  holdPhase   = "attaching"
@@ -38,14 +39,16 @@ type backingIdentity struct {
 }
 
 type managedVolume struct {
-	ID        volumeID        `json:"id"`
-	Name      string          `json:"name"`
-	Tenant    string          `json:"tenant"`
-	Node      string          `json:"node"`
-	Size      int64           `json:"size"`
-	Backing   backingIdentity `json:"backing"`
-	State     volumePhase     `json:"state"`
-	CreatedAt time.Time       `json:"created_at"`
+	CapacityGeneration uint64          `json:"capacity_generation,omitempty"`
+	Growth             *managedGrowth  `json:"growth,omitempty"`
+	ID                 volumeID        `json:"id"`
+	Name               string          `json:"name"`
+	Tenant             string          `json:"tenant"`
+	Node               string          `json:"node"`
+	Size               int64           `json:"size"`
+	Backing            backingIdentity `json:"backing"`
+	State              volumePhase     `json:"state"`
+	CreatedAt          time.Time       `json:"created_at"`
 }
 
 type volumeRef struct {
@@ -244,11 +247,17 @@ func (r *volumeRegistry) verify(v managedVolume) error {
 
 func (r *volumeRegistry) validate() error {
 	d := r.data
-	if (d.Version != 1 && d.Version != 2) || d.Volumes == nil || d.Holds == nil || d.Deleted == nil {
+	if (d.Version != 1 && d.Version != 2 && d.Version != 3) || d.Volumes == nil || d.Holds == nil || d.Deleted == nil {
 		return errors.New("invalid volume registry format")
 	}
 	ids := map[volumeID]bool{}
 	for name, v := range d.Volumes {
+		if err := r.validateGrowth(v); err != nil {
+			return err
+		}
+		if d.Version < 3 && v.CapacityGeneration != 0 {
+			return errors.New("capacity generation requires version 3")
+		}
 		if err := validateVolumeRecord(name, v, ids); err != nil {
 			return err
 		}
@@ -289,7 +298,7 @@ func validateVolumeRecord(name string, v managedVolume, ids map[volumeID]bool) e
 		return errors.New("invalid managed volume record")
 	}
 	switch v.State {
-	case volumeCreating, volumeReady, volumeDeleting, volumeRecovery:
+	case volumeCreating, volumeReady, volumeGrowing, volumeDeleting, volumeRecovery:
 	default:
 		return errors.New("invalid managed volume state")
 	}
@@ -318,7 +327,7 @@ func (r *volumeRegistry) validateHoldRecord(id string, h volumeHold, vms map[str
 		return errors.New("claimed volume lacks VM")
 	}
 	if h.Sleep != nil {
-		if r.data.Version != 2 {
+		if r.data.Version < 2 {
 			return errors.New("sleep requires registry version 2")
 		}
 		if err := validateManagedSleep(h); err != nil {
@@ -359,7 +368,7 @@ func (r *volumeRegistry) validateHoldRef(h volumeHold, ref volumeRef, names map[
 		return false, nil
 	}
 	v, ok := r.data.Volumes[ref.Volume.Name]
-	if !ok || (v.State != volumeReady && v.State != volumeRecovery) || ref.ID != v.ID || ref.Path != r.path(v.ID) || ref.Backing != v.Backing || (h.Tenant != "" && h.Tenant != v.Tenant) {
+	if !ok || (v.State != volumeReady && v.State != volumeRecovery && v.State != volumeGrowing) || ref.ID != v.ID || ref.Path != r.path(v.ID) || ref.Backing != v.Backing || (h.Tenant != "" && h.Tenant != v.Tenant) {
 		return false, errors.New("inconsistent managed volume reference")
 	}
 	return true, nil

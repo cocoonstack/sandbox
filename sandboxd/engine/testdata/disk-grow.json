@@ -1,0 +1,76 @@
+{
+  "guest_block_status": "unobserved",
+  "live": {
+    "binding": {
+      "backing": {
+        "device": 64512,
+        "fds": [
+          {
+            "access": "read_write",
+            "number": 250
+          },
+          {
+            "access": "read_write",
+            "number": 261
+          }
+        ],
+        "inode": 8520047
+      },
+      "format": "raw",
+      "mode": "read_write",
+      "observed_bytes": "42949672960",
+      "path": "/root/cg-owned-9578808062cc309c3b577001/managed/disks/vol_df3c2dd415fb32004a5f54a57aa2552f.raw",
+      "ref": {
+        "disk_id": "cocoon-disk-g09578808062cc",
+        "vm_id": "J426Z5BTLBPWO4WND6FCTMBUVD"
+      },
+      "revision": 1,
+      "serial": "g09578808062cc",
+      "vmm": {
+        "boot_id": "31594e64-377c-4047-bd49-f9ee9c611e92",
+        "pid": 1665882,
+        "start": 35979927
+      }
+    },
+    "state": "observed"
+  },
+  "receipt": {
+    "outcome": "acknowledged",
+    "request": {
+      "expected": {
+        "backing": {
+          "device": 64512,
+          "fds": [
+            {
+              "access": "read_write",
+              "number": 250
+            },
+            {
+              "access": "read_write",
+              "number": 261
+            }
+          ],
+          "inode": 8520047
+        },
+        "format": "raw",
+        "mode": "read_write",
+        "observed_bytes": "21474836480",
+        "path": "/root/cg-owned-9578808062cc309c3b577001/managed/disks/vol_df3c2dd415fb32004a5f54a57aa2552f.raw",
+        "ref": {
+          "disk_id": "cocoon-disk-g09578808062cc",
+          "vm_id": "J426Z5BTLBPWO4WND6FCTMBUVD"
+        },
+        "revision": 0,
+        "serial": "g09578808062cc",
+        "vmm": {
+          "boot_id": "31594e64-377c-4047-bd49-f9ee9c611e92",
+          "pid": 1665882,
+          "start": 35979927
+        }
+      },
+      "id": "b51b3d2b-4ccc-41d5-b430-3046340c30b0",
+      "target_bytes": "42949672960"
+    },
+    "revision": 1
+  }
+}
