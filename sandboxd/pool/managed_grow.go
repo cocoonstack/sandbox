@@ -599,7 +599,8 @@ func (m *Manager) driveGrowth(ctx context.Context, name, socket string, ge volum
 		if err := m.checkGrowthSource(ctx, g, socket, run); err != nil {
 			return err
 		}
-		result, _ := ge.GrowDisk(ctx, g.Runtime)
+		// cancellation-immune: a canceled request would kill `cocoon vm disk grow` mid-effect.
+		result, _ := ge.GrowDisk(context.WithoutCancel(ctx), g.Runtime)
 		receipt, live = result.Receipt, result.Live
 		if receipt == nil {
 			return ctx.Err()
