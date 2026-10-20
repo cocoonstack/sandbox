@@ -11,6 +11,35 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/engine"
 )
 
+func TestManagedBackingObservationCannotDiscardGrowth(t *testing.T) {
+	for _, unknown := range []bool{false, true} {
+		t.Run(map[bool]string{false: "completed", true: "unknown"}[unknown], func(t *testing.T) {
+			m, e, _, _, v := newGrowthTest(t)
+			m.managed.mu.Lock()
+			observed := m.managed.data.Volumes["data"]
+			m.managed.mu.Unlock()
+			e.unknown = unknown
+			_, growErr := m.GrowVolume(t.Context(), "data", v.ID, growRequest(), "t1")
+			if unknown {
+				requireVolumeStatus(t, growErr, 409)
+			} else if growErr != nil {
+				t.Fatal(growErr)
+			}
+			before, err := m.GetVolume("data", "t1")
+			if err != nil || before.Growth == nil {
+				t.Fatalf("growth result unavailable: %+v %v", before, err)
+			}
+			m.managed.mu.Lock()
+			_ = m.managed.markRecovery(observed)
+			m.managed.mu.Unlock()
+			after, err := m.GetVolume("data", "t1")
+			if err != nil || !reflect.DeepEqual(after, before) {
+				t.Fatalf("stale backing observation discarded growth: before=%+v after=%+v error=%v", before, after, err)
+			}
+		})
+	}
+}
+
 func TestGrowthMissingVMRecordPreservesDurableOwner(t *testing.T) {
 	m, e, sb, cfg, v := newGrowthTest(t)
 	e.unknown = true
