@@ -124,11 +124,11 @@ func TestGrowthAcceptsAdditiveRuntimeFields(t *testing.T) {
 	}
 	var expected DiskInspection
 	var result DiskGrowResult
-	if err := json.Unmarshal(inspect, &expected); err != nil {
-		t.Fatal(err)
+	if parseErr := json.Unmarshal(inspect, &expected); parseErr != nil {
+		t.Fatal(parseErr)
 	}
-	if err := json.Unmarshal(grow, &result); err != nil {
-		t.Fatal(err)
+	if parseErr := json.Unmarshal(grow, &result); parseErr != nil {
+		t.Fatal(parseErr)
 	}
 	t.Setenv("GROW_INSPECT", strings.ReplaceAll(string(inspect), "{", `{"future_field":{"nested":true},`))
 	t.Setenv("GROW_RESULT", strings.ReplaceAll(string(grow), "{", `{"future_field":{"nested":true},`))
