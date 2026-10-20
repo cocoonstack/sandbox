@@ -19,6 +19,7 @@ import (
 	"github.com/projecteru2/core/log"
 
 	"github.com/cocoonstack/sandbox/sandboxd/types"
+	"github.com/cocoonstack/sandbox/sandboxd/utils"
 )
 
 type (
@@ -157,11 +158,8 @@ func openVolumeRegistry(dir, node string) (*volumeRegistry, error) {
 			return r, nil
 		}
 		r.mu.Lock()
-		err = r.commitAndRelock()
+		_ = r.commitAndRelock()
 		r.mu.Unlock()
-		if err != nil {
-			return r, nil
-		}
 		return r, nil
 	}
 	if err != nil {
@@ -515,21 +513,7 @@ func (r *volumeRegistry) unboundRetirements() []string {
 }
 
 func writeVolumeSnapshot(path string, raw []byte) error {
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".registry-")
-	if err != nil {
-		return err
-	}
-	defer func() { _ = os.Remove(tmp.Name()) }()
-	if _, err := tmp.Write(raw); err != nil {
-		return errors.Join(err, tmp.Close())
-	}
-	if err := errors.Join(tmp.Sync(), tmp.Close()); err != nil {
-		return err
-	}
-	if err := os.Rename(tmp.Name(), path); err != nil {
-		return err
-	}
-	return syncDir(filepath.Dir(path))
+	return utils.WriteFileSync(path, raw, 0o600)
 }
 
 func (r *volumeRegistry) close() error {

@@ -466,11 +466,6 @@ func (m *Manager) stageManagedLiveAdd(id string, volumes []resolvedVolume) error
 		return managedStorageError()
 	}
 	for _, v := range volumes {
-		for _, ref := range h.Refs {
-			if ref.Volume.Name == v.applied.Name {
-				return volumeError(409, "volume_attachment_uncertain", "previous attachment requires sandbox release")
-			}
-		}
 		h.Refs = append(h.Refs, volumeRef{Volume: v.applied, Path: v.disk.Path, Backing: v.backing})
 	}
 	r.data.Holds[id] = h
