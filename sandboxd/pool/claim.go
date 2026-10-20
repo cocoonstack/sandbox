@@ -303,6 +303,9 @@ func (m *Manager) dialPassive(ctx context.Context, id string, port uint16) (net.
 
 // releaseResolved re-checks under m.mu that sb is still the live claim: no double teardown.
 func (m *Manager) releaseResolved(ctx context.Context, id string, sb *types.Sandbox) error {
+	if m.managedClaimUncertain(sb) {
+		return managedStorageError()
+	}
 	if m.managedLifecycle(sb) {
 		sb.Transition.Lock()
 		defer sb.Transition.Unlock()
@@ -326,10 +329,11 @@ func (m *Manager) releaseResolved(ctx context.Context, id string, sb *types.Sand
 		marked = ck
 		m.mu.Lock()
 	}
-	if err := m.retireManaged(id); err != nil {
+	if m.growthOwnsHold(id) {
 		m.mu.Unlock()
-		return err
+		return growBusy()
 	}
+	previousHold, _ := m.managedHold(id)
 	volumeHolds := m.cancelVolumeRun(sb)
 	snap, ck, vmName := sb.HibernateSnap, sb.ArchiveCk, sb.VMName
 	if ck != "" {
@@ -338,9 +342,15 @@ func (m *Manager) releaseResolved(ctx context.Context, id string, sb *types.Sand
 	m.dropClaimLocked(sb)
 	js := m.store.del(id)
 	m.mu.Unlock()
-	if saveErr := m.store.commit(js); saveErr != nil {
+	commit := m.store.commit
+	if previousHold.SandboxID != "" {
+		commit = m.store.commitDurable
+	}
+	saveErr := commit(js)
+	if saveErr != nil {
+		m.restoreManagedClaim(previousHold, saveErr)
 		m.mu.Lock()
-		m.addClaimLocked(sb) // roll back so memory matches the still-durable claim
+		m.addClaimLocked(sb)
 		m.restoreVolumeHolds(sb, volumeHolds)
 		delete(m.pendingCks, ck)
 		rb := m.store.set(sb)
@@ -355,6 +365,7 @@ func (m *Manager) releaseResolved(ctx context.Context, id string, sb *types.Sand
 		logger.Errorf(ctx, saveErr, "persist release of %s", id)
 		return fmt.Errorf("release %s: %w", id, saveErr)
 	}
+	_ = m.retireManaged(id)
 	// cleanup must survive the caller hanging up; the claim is already dropped.
 	ctx = context.WithoutCancel(ctx)
 	if ck != "" {
@@ -589,6 +600,7 @@ func (m *Manager) abortVolumeClaim(ctx context.Context, vmName string, reserved 
 }
 
 func (m *Manager) reapOnce(ctx context.Context) {
+	m.retryManagedSnapshot()
 	now := time.Now()
 	type victim struct {
 		action                       reapAction
@@ -602,11 +614,14 @@ func (m *Manager) reapOnce(ctx context.Context) {
 	var dropped, purges []string
 	var unrows []*types.Sandbox
 	for id, sb := range m.claimed {
+		if m.managedClaimUncertain(sb) {
+			continue
+		}
 		// a zero deadline means no expiry (an archived claim kept forever).
 		if sb.Deadline.IsZero() || !now.After(sb.Deadline) {
 			continue
 		}
-		if m.managedLifecycle(sb) {
+		if _, held := m.managedHold(sb.ID); held {
 			managedExpired = append(managedExpired, sb)
 			continue
 		}
@@ -631,9 +646,6 @@ func (m *Manager) reapOnce(ctx context.Context) {
 			}
 			expired = append(expired, victim{action: action, id: id, sb: sb})
 		default:
-			if err := m.retireManaged(id); err != nil {
-				continue
-			}
 			expired = append(expired, victim{action: reapDestroy, id: id, vmName: sb.VMName, snap: sb.HibernateSnap, tenant: sb.Tenant, sb: sb, holds: m.cancelVolumeRun(sb)})
 			m.dropClaimLocked(sb)
 			dropped = append(dropped, id)

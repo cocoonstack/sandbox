@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"os"
 	"path/filepath"
 	"slices"
 	"testing"
@@ -234,12 +235,15 @@ func TestManagedSleepExpiryHonorsRenewalWhileTransitionBusy(t *testing.T) {
 func TestManagedSleepReleasePersistenceFailureKeepsGuestAndHold(t *testing.T) {
 	m, e, sb, _ := newSleepTest(t)
 	before := slices.Clone(e.volumeOps)
-	path := m.store.path
-	m.store.path = filepath.Join(t.TempDir(), "missing", "claims.json")
+	if err := os.Mkdir(m.store.path+".tmp", 0o700); err != nil {
+		t.Fatal(err)
+	}
 	if err := m.Release(t.Context(), sb.ID, Cred{Token: sb.Token}); err == nil {
 		t.Fatal("failed durable deletion reported success")
 	}
-	m.store.path = path
+	if err := os.Remove(m.store.path + ".tmp"); err != nil {
+		t.Fatal(err)
+	}
 	if _, ok := m.Sandbox(sb.ID); !ok || !slices.Equal(before, e.volumeOps) {
 		t.Fatal("failed durable deletion dropped claim or touched guest")
 	}
@@ -251,9 +255,10 @@ func TestManagedSleepReleasePersistenceFailureKeepsGuestAndHold(t *testing.T) {
 	if release != nil {
 		release()
 	}
-	if err == nil || sock != "" {
-		t.Fatalf("retiring claim exposed guest with feature disabled: socket=%q err=%v", sock, err)
+	if err != nil || sock == "" {
+		t.Fatalf("failed pre-rename deletion must leave the active guest available: socket=%q err=%v", sock, err)
 	}
+	waitFor(t, func() bool { return !m.store.recommitting.Load() && m.store.synced() })
 	if err := m.Release(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
 		t.Fatal(err)
 	}

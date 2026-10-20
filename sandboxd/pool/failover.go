@@ -411,18 +411,23 @@ func (m *Manager) forgetClaim(ctx context.Context, sb *types.Sandbox) bool {
 		m.mu.Unlock()
 		return false
 	}
-	if _, managed := m.managedHold(sb.ID); managed {
-		if err := m.retireManaged(sb.ID); err != nil {
-			m.mu.Unlock()
-			return false
-		}
+	_, managed := m.managedHold(sb.ID)
+	if managed {
 		m.cancelVolumeRun(sb)
 	}
 	m.dropClaimLocked(sb)
 	js := m.store.del(sb.ID)
 	m.mu.Unlock()
-	if err := m.store.commit(js); err != nil {
+	commit := m.store.commit
+	if managed {
+		commit = m.store.commitDurable
+	}
+	if err := commit(js); err != nil {
 		m.store.recommit(ctx, js)
+		return !managed
+	}
+	if managed {
+		_ = m.retireManaged(sb.ID)
 	}
 	return true
 }

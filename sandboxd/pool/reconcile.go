@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json/v2"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -25,16 +26,17 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 		return err
 	}
 	vms, err := m.eng.List(ctx)
-	if err != nil {
+	inventoryErr := err
+	if err != nil && m.managed == nil {
 		return fmt.Errorf("list vms: %w", err)
 	}
+	clearManagedRecoveryFailures(claims)
+	originalClaims := maps.Clone(claims)
 	live := make(map[string]types.VMRecord, len(vms))
 	for _, vm := range vms {
 		live[vm.Config.Name] = vm
 	}
-	if err = m.recoverGrowth(ctx, claims, live); err != nil {
-		return err
-	}
+	managedErr := inventoryErr
 	fenced := m.fenceArchived(ctx, claims)
 	snaps, snapsErr := m.eng.SnapshotList(ctx)
 	imageIDs := m.imageIDs(ctx)
@@ -42,12 +44,16 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 	if m.managed != nil {
 		m.store.reset(claims)
 	}
-	owned, err := m.recoverManaged(ctx, claims, live)
-	if err != nil {
-		return err
+	owned := map[string]bool{}
+	if managedErr == nil {
+		owned, managedErr = m.reconcileManaged(ctx, claims, live)
 	}
-	if err := m.recoverManagedOrphans(ctx, claims, live, owned); err != nil {
-		return err
+	if managedErr != nil {
+		claims = originalClaims
+		m.fenceManagedRecovery(ctx, managedErr, claims, live)
+		for name := range live {
+			owned[name] = true
+		}
 	}
 	referenced := m.managedSleepSources()
 	var adopted []*types.Sandbox
@@ -57,6 +63,8 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 		rec, ok := live[sb.VMName]
 		h, managed := m.managedHold(sb.ID)
 		switch {
+		case managedErr != nil:
+			// Inventory uncertainty must retain the durable claim even without a VM record.
 		case managed && h.Sleep != nil:
 			projectSleepState(sb, h.Sleep)
 		case sb.ArchiveCk != "":
@@ -81,19 +89,21 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 			continue
 		}
 		m.addClaimLocked(sb)
-		if _, managed := m.managedHold(sb.ID); !managed {
+		if _, managed := m.managedHold(sb.ID); managedErr != nil || !managed {
 			m.adoptVolumes(heldVolumes(sb))
 		}
 		owned[sb.VMName] = true
 		referenced[sb.HibernateSnap] = true
 	}
-	saveErr := m.store.save(m.claimed)
+	js := m.store.reset(m.claimed)
+	m.markManagedRecoveryFailures()
 	pooled := make(map[string]bool, len(m.pools))
 	for _, p := range m.pools {
 		m.adoptGolden(p, imageIDs[p.key.Template])
 		pooled[p.hash] = true
 	}
 	m.mu.Unlock()
+	saveErr := m.store.commit(js)
 	for _, sb := range adopted {
 		m.recordHibernate(ctx, sb)
 	}
@@ -106,8 +116,10 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 	m.retryArchiveDeletes(ctx)
 	removed := m.sweepStaleVMs(ctx, live, owned)
 
-	m.sweepOrphanSnapshots(ctx, snaps, snapsErr, referenced)
-	m.resyncEgress(ctx, live, removed)
+	if managedErr == nil {
+		m.sweepOrphanSnapshots(ctx, snaps, snapsErr, referenced)
+		m.resyncEgress(ctx, live, removed)
+	}
 	m.warnDeniedClaims(ctx)
 	logger.Infof(ctx, "adopted %d claims, %d VMs live", len(m.claimed), len(live))
 	return saveErr
@@ -361,5 +373,77 @@ func (m *Manager) sweepOrphanSnapshots(ctx context.Context, snaps []string, snap
 			m.dropSnap(ctx, orphans[i])
 			logger.Infof(ctx, "removed orphan snapshot %s", orphans[i])
 		}).Wait()
+	}
+}
+
+func (m *Manager) fenceManagedRecovery(ctx context.Context, err error, claims map[string]*types.Sandbox, live map[string]types.VMRecord) {
+	r := m.managed
+	r.mu.Lock()
+	r.fault = err
+	r.uncertainVMs = make(map[string]bool, len(live)+len(claims))
+	for name := range live {
+		r.uncertainVMs[name] = true
+	}
+	for _, sb := range claims {
+		_, held := r.data.Holds[sb.ID]
+		if hasVolumes(sb) || held {
+			r.uncertainVMs[sb.VMName] = true
+		} else {
+			delete(r.uncertainVMs, sb.VMName)
+		}
+	}
+	r.mu.Unlock()
+	m.mu.Lock()
+	m.volumeAdmission = map[string]volumeHolders{}
+	m.mu.Unlock()
+	log.WithFunc("pool.Reconcile").Error(ctx, err, "managed storage fenced; retaining claims and VMs")
+}
+
+func (m *Manager) managedUncertainVM(name string) bool {
+	if m.managed == nil {
+		return false
+	}
+	m.managed.mu.Lock()
+	defer m.managed.mu.Unlock()
+	return m.managed.uncertainVMs[name]
+}
+
+const managedRecoveryFailure = "managed storage recovery required"
+
+func (m *Manager) managedClaimUncertain(sb *types.Sandbox) bool {
+	if m.managed == nil || !hasVolumes(sb) {
+		return false
+	}
+	r := m.managed
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.fault != nil || r.uncertainVMs[sb.VMName]
+}
+
+func (m *Manager) reconcileManaged(ctx context.Context, claims map[string]*types.Sandbox, live map[string]types.VMRecord) (map[string]bool, error) {
+	owned := map[string]bool{}
+	if err := m.recoverGrowth(ctx, claims, live); err != nil {
+		return owned, err
+	}
+	owned, err := m.recoverManaged(ctx, claims, live)
+	if err != nil {
+		return owned, err
+	}
+	return owned, m.recoverManagedOrphans(ctx, claims, live, owned)
+}
+
+func clearManagedRecoveryFailures(claims map[string]*types.Sandbox) {
+	for _, sb := range claims {
+		if sb.Failed == managedRecoveryFailure {
+			sb.Failed = ""
+		}
+	}
+}
+
+func (m *Manager) markManagedRecoveryFailures() {
+	for _, sb := range m.claimed {
+		if sb.Failed == "" && m.managedClaimUncertain(sb) {
+			sb.Failed = managedRecoveryFailure
+		}
 	}
 }

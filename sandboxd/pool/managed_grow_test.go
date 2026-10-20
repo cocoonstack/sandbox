@@ -560,9 +560,11 @@ func TestManagedGrowthMigratesVersionTwoBeforeIntentAndKeepsSleepValid(t *testin
 	m, e, sb, _, v := newGrowthTest(t)
 	r := m.managed
 	r.data.Version = 2
-	if err := r.commit(); err != nil {
+	r.mu.Lock()
+	if err := r.commitLocked(); err != nil {
 		t.Fatal(err)
 	}
+	r.mu.Unlock()
 	write := r.commitFile
 	var snapshots []volumeRegistryData
 	r.commitFile = func(path string, raw []byte) error {
@@ -584,9 +586,11 @@ func TestManagedGrowthMigratesVersionTwoBeforeIntentAndKeepsSleepValid(t *testin
 	}
 	sleeping, _, sb, _ := newSleepTest(t)
 	sleeping.managed.data.Version = 3
-	if err := sleeping.managed.commit(); err != nil {
+	sleeping.managed.mu.Lock()
+	if err := sleeping.managed.commitLocked(); err != nil {
 		t.Fatal(err)
 	}
+	sleeping.managed.mu.Unlock()
 	requireSleep(t, sleeping, sb)
 	if err := sleeping.managed.validate(); err != nil {
 		t.Fatal("version three rejected existing sleep", err)

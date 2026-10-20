@@ -67,12 +67,12 @@ func (r *volumeRegistry) commitManagedSleep(h volumeHold, next *managedSleep) er
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	current, ok := r.data.Holds[h.SandboxID]
-	if r.fault != nil || r.growthOwnsHold(h.SandboxID) || !ok || current.State != holdClaimed || (current.Sleep != nil && (h.Sleep == nil || current.Sleep.Operation != h.Sleep.Operation)) {
+	if r.fault != nil || r.writeFault != nil || r.growthOwnsHold(h.SandboxID) || !ok || current.State != holdClaimed || (current.Sleep != nil && (h.Sleep == nil || current.Sleep.Operation != h.Sleep.Operation)) {
 		return managedStorageError()
 	}
 	if r.data.Version == 1 {
 		r.data.Version = 2
-		if err := r.commit(); err != nil {
+		if err := r.commitLocked(); err != nil {
 			return err
 		}
 	}
@@ -83,7 +83,7 @@ func (r *volumeRegistry) commitManagedSleep(h volumeHold, next *managedSleep) er
 		}
 	}
 	r.data.Holds[h.SandboxID] = h
-	if err := r.commit(); err != nil {
+	if err := r.commitLocked(); err != nil {
 		if next == nil {
 			h.Sleep = current.Sleep
 			r.data.Holds[h.SandboxID] = h
@@ -101,12 +101,18 @@ func (m *Manager) verifySleepBacking(h volumeHold) error {
 	r := m.managed
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.fault != nil {
+	if r.fault != nil || r.writeFault != nil {
 		return managedStorageError()
 	}
 	ref := h.Refs[0]
 	v, ok := r.data.Volumes[ref.Volume.Name]
-	if !ok || v.ID != ref.ID || v.State != volumeReady || ref.Path != r.path(v.ID) || ref.Backing != v.Backing || (h.Tenant != "" && v.Tenant != h.Tenant) || r.verify(v) != nil {
+	if !ok || v.ID != ref.ID || v.State != volumeReady || ref.Path != r.path(v.ID) || ref.Backing != v.Backing || (h.Tenant != "" && v.Tenant != h.Tenant) {
+		return managedStorageError()
+	}
+	r.mu.Unlock()
+	err := r.verify(v)
+	r.mu.Lock()
+	if err != nil {
 		return managedStorageError()
 	}
 	return nil

@@ -24,12 +24,7 @@ func TestGrowthMissingVMRecordPreservesDurableOwner(t *testing.T) {
 	e.mu.Unlock()
 	e.processLives.Store(true)
 	m = openGrowthTest(t, cfg, e)
-	if err := m.Reconcile(t.Context()); err == nil {
-		t.Error("reconcile must fail closed before publishing or saving claims")
-	}
-	if _, found := m.Sandbox(sb.ID); found {
-		t.Fatal("missing VM inventory published owner")
-	}
+	requireManagedRecoveryFence(t, m, sb.ID)
 	claims, err := m.store.load()
 	if err != nil {
 		t.Fatal(err)
@@ -43,11 +38,7 @@ func TestGrowthMissingVMRecordPreservesDurableOwner(t *testing.T) {
 
 	m.Close()
 	m = openGrowthTest(t, cfg, e)
-	if err := m.Reconcile(t.Context()); err == nil {
-		t.Fatal("missing inventory must keep restart closed")
-	} else {
-		t.Log("missing inventory remains fail closed without deleting the claim", err)
-	}
+	requireManagedRecoveryFence(t, m, sb.ID)
 }
 
 func TestGrowthChangedVMRecordCannotPublishReplacement(t *testing.T) {
@@ -74,12 +65,7 @@ func TestGrowthChangedVMRecordCannotPublishReplacement(t *testing.T) {
 		}
 		return e.identity(pid)
 	}
-	if err := m.Reconcile(t.Context()); err == nil {
-		t.Error("reconcile must fail closed before publishing or saving claims")
-	}
-	if _, found := m.Sandbox(sb.ID); found {
-		t.Error("replacement generation published as original claim")
-	}
+	requireManagedRecoveryFence(t, m, sb.ID)
 	claims, err := m.store.load()
 	if err != nil {
 		t.Fatal(err)
@@ -210,12 +196,7 @@ func TestGrowthRecoveryRequiresOriginalInventoryAndProcess(t *testing.T) {
 			case "unreadable process":
 				e.processUnknown.Store(true)
 			}
-			if err = m.Reconcile(t.Context()); err == nil {
-				t.Fatal("mismatched owner was adopted")
-			}
-			if _, found := m.Sandbox(sb.ID); found {
-				t.Fatal("mismatched guest published")
-			}
+			requireManagedRecoveryFence(t, m, sb.ID)
 			after, readErr := os.ReadFile(m.store.path)
 			if readErr != nil || string(after) != string(original) {
 				t.Fatalf("owner journal changed: %v", readErr)
@@ -396,12 +377,12 @@ func TestGrowthMissingInventoryCannotCompleteBeforeOwnerValidation(t *testing.T)
 	e.lag = false
 	m = openGrowthTest(t, cfg, e)
 	m.eng = &growthInventoryEngine{growthTestEngine: e, omit: true, change: func(*types.VMRecord) {}}
-	if err = m.Reconcile(t.Context()); err == nil {
-		t.Error("missing inventory allowed completion and adoption")
-	}
-	got, getErr := m.GetVolume("data", "t1")
-	if getErr != nil || got.CapacityGeneration != 0 || got.SizeBytes != 1<<30 || !m.growthOwnsHold(sb.ID) {
-		t.Fatalf("missing owner escaped fence: %+v %v", got, getErr)
+	requireManagedRecoveryFence(t, m, sb.ID)
+	_, getErr := m.GetVolume("data", "t1")
+	requireVolumeStatus(t, getErr, 503)
+	got := m.managed.data.Volumes["data"]
+	if got.CapacityGeneration != 0 || got.Size != 1<<30 || !m.growthOwnsHold(sb.ID) {
+		t.Fatalf("missing owner escaped fence: %+v", got)
 	}
 	after, readErr := os.ReadFile(m.store.path)
 	if readErr != nil || string(after) != string(original) {
@@ -421,12 +402,12 @@ func TestGrowthMissingInventoryPreservesUndispatchedIntent(t *testing.T) {
 	m.Close()
 	m = openGrowthTest(t, cfg, e)
 	m.eng = &growthInventoryEngine{growthTestEngine: e, omit: true, change: func(*types.VMRecord) {}}
-	if err := m.Reconcile(t.Context()); err == nil {
-		t.Fatal("missing inventory must fail closed")
-	}
-	pending, err := m.GetVolume("data", "t1")
-	if err != nil || pending.Growth.State != "pending" || pending.Growth.RuntimeOutcome != "unobserved" || e.calls != 0 {
-		t.Fatalf("undispatched intent changed: %+v %v", pending, err)
+	requireManagedRecoveryFence(t, m, sb.ID)
+	_, err := m.GetVolume("data", "t1")
+	requireVolumeStatus(t, err, 503)
+	pending := m.managed.data.Volumes["data"]
+	if pending.Growth.State != "pending" || pending.Growth.Outcome != "unobserved" || e.calls != 0 {
+		t.Fatalf("undispatched intent changed: %+v", pending)
 	}
 	m.Close()
 	m = openGrowthTest(t, cfg, e)
@@ -436,5 +417,17 @@ func TestGrowthMissingInventoryPreservesUndispatchedIntent(t *testing.T) {
 	got, err := m.GrowVolume(t.Context(), "data", v.ID, growRequest(), "t1")
 	if err != nil || got.Growth.State != "completed" || e.calls != 1 {
 		t.Fatalf("recovered inventory cannot resume original intent: %+v %v", got, err)
+	}
+}
+
+func requireManagedRecoveryFence(t *testing.T, m *Manager, id string) {
+	t.Helper()
+	if err := m.Reconcile(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	requireVolumeStatus(t, m.ManagedVolumeStatus(), 503)
+	sb, found := m.Sandbox(id)
+	if !found || sb.Failed != managedRecoveryFailure {
+		t.Fatalf("uncertain managed claim must remain visible and unavailable: %+v %t", sb, found)
 	}
 }

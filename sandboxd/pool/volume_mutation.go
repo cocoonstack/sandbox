@@ -286,6 +286,13 @@ func (m *Manager) prepareVolumeTarget(ctx context.Context, sb *types.Sandbox, ru
 }
 
 func (m *Manager) stageVolumeTarget(ctx context.Context, sb *types.Sandbox, run *volumeRun, target, additions []types.Volume, resolved []resolvedVolume) (claimSnapshot, bool, error) {
+	for i := range resolved {
+		identity, err := catalogBacking(resolved[i].disk.Path)
+		if err != nil {
+			return claimSnapshot{}, false, ErrVolumeUnavailable
+		}
+		resolved[i].backing = identity
+	}
 	sb.Transition.Lock()
 	defer sb.Transition.Unlock()
 	m.mu.Lock()
@@ -302,8 +309,17 @@ func (m *Manager) stageVolumeTarget(ctx context.Context, sb *types.Sandbox, run 
 		return claimSnapshot{}, false, err
 	}
 	run.holds = append(run.holds, additions...)
-	if err := m.managedLiveAdd(sb.ID, resolved); err != nil {
-		if m.ManagedVolumeStatus() == nil {
+	addErr := m.stageManagedLiveAdd(sb.ID, resolved)
+	_, managed := m.managedHold(sb.ID)
+	if addErr == nil && managed && len(resolved) > 0 {
+		m.mu.Unlock()
+		sb.Transition.Unlock()
+		addErr = m.commitManaged()
+		sb.Transition.Lock()
+		m.mu.Lock()
+	}
+	if err := addErr; err != nil {
+		if m.ownsRunLocked(sb, run) && m.ManagedVolumeStatus() == nil {
 			m.releaseVolumes(additions)
 			run.holds = volumeDifference(run.holds, additions)
 		}
@@ -318,7 +334,15 @@ func (m *Manager) stageVolumeTarget(ctx context.Context, sb *types.Sandbox, run 
 		return claimSnapshot{}, false, err
 	}
 	if cleanErr != nil {
-		if err := m.managedLiveRemove(sb.ID, additions); err != nil {
+		m.mu.Unlock()
+		sb.Transition.Unlock()
+		removeErr := m.managedLiveRemove(sb.ID, additions)
+		sb.Transition.Lock()
+		m.mu.Lock()
+		if err := removeErr; err != nil {
+			return claimSnapshot{}, false, err
+		}
+		if err := m.checkVolumeRunLocked(ctx, sb, run); err != nil {
 			return claimSnapshot{}, false, err
 		}
 		m.releaseVolumes(additions)
@@ -375,8 +399,14 @@ func (m *Manager) commitVolumeRun(ctx context.Context, sb *types.Sandbox, run *v
 		return err
 	}
 	dropped := volumeDifference(run.holds, heldVolumes(sb))
-	if err := m.managedLiveRemove(sb.ID, dropped); err != nil {
+	m.mu.Unlock()
+	removeErr := m.managedLiveRemove(sb.ID, dropped)
+	m.mu.Lock()
+	if err := removeErr; err != nil {
 		return err
+	}
+	if !m.ownsRunLocked(sb, run) {
+		return ErrUnknownSandbox
 	}
 	m.releaseVolumes(dropped)
 	run.holds = volumeDifference(run.holds, dropped)

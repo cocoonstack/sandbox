@@ -56,7 +56,7 @@ func growRecovery() error {
 
 func (r *volumeRegistry) growthOwnsHold(id string) bool {
 	for _, v := range r.data.Volumes {
-		if v.Growth != nil && (v.Growth.fenced() || r.fault != nil) && v.Growth.SandboxID == id {
+		if v.Growth != nil && (v.Growth.fenced() || r.fault != nil || r.writeFault != nil) && v.Growth.SandboxID == id {
 			return true
 		}
 	}
@@ -79,7 +79,7 @@ func (m *Manager) growthOwnsVM(name string) bool {
 	m.managed.mu.Lock()
 	defer m.managed.mu.Unlock()
 	for _, v := range m.managed.data.Volumes {
-		if v.Growth != nil && (v.Growth.fenced() || m.managed.fault != nil) && v.Growth.VMName == name {
+		if v.Growth != nil && (v.Growth.fenced() || m.managed.fault != nil || m.managed.writeFault != nil) && v.Growth.VMName == name {
 			return true
 		}
 	}
@@ -227,9 +227,6 @@ func (m *Manager) growthHolderLocked(sb *types.Sandbox, v managedVolume) (volume
 	if !ok || m.claimed[sb.ID] != sb || h.State != holdClaimed || h.Sleep != nil || !sleepMatchesClaim(h, sb) || sb.Failed != "" || sb.HibernateSnap != "" || sb.PendingSnap != "" || m.volumeRuns[sb] != nil || outbound || removing || h.Refs[0].ID != v.ID || !h.Refs[0].Volume.RW() || h.Refs[0].Volume.Mount == "" || len(r.holders(v.ID)) != 1 || r.growthOwnsHold(sb.ID) {
 		return h, growBusy()
 	}
-	if r.verify(v) != nil {
-		return h, managedStorageError()
-	}
 	return h, nil
 }
 
@@ -240,6 +237,9 @@ func (r *volumeRegistry) growthBindingMatches(v managedVolume, h volumeHold, rec
 }
 
 func (m *Manager) admitGrowth(ctx context.Context, sb *types.Sandbox, v managedVolume, req types.VolumeGrow, ge volumeGrowEngine) error {
+	if m.managed.verify(v) != nil {
+		return managedStorageError()
+	}
 	r := m.managed
 	m.mu.Lock()
 	r.mu.Lock()
@@ -281,33 +281,44 @@ func (m *Manager) commitGrowthIntent(sb *types.Sandbox, v managedVolume, next ma
 		return err
 	}
 	r := m.managed
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	if r.verify(v) != nil {
+		return managedStorageError()
+	}
 	r.mu.Lock()
-	defer r.mu.Unlock()
-	current, err := r.growVolume(v.Name, string(v.ID), v.Tenant, next.Request)
-	if err != nil {
-		return err
-	}
-	if current.Growth != nil && current.Growth.Request == next.Request {
-		return nil
-	}
-	if _, err := m.growthHolderLocked(sb, current); err != nil {
-		return err
-	}
-	if current.Size != v.Size || current.Backing != v.Backing {
-		return growRecovery()
-	}
 	if r.data.Version != 3 {
 		r.data.Version = 3
-		if err := r.commit(); err != nil {
+		if err := r.commitLocked(); err != nil {
+			r.mu.Unlock()
 			return err
 		}
+	}
+	r.mu.Unlock()
+	m.mu.Lock()
+	r.mu.Lock()
+	current, err := r.growVolume(v.Name, string(v.ID), v.Tenant, next.Request)
+	if err == nil && current.Growth != nil && current.Growth.Request == next.Request {
+		r.mu.Unlock()
+		m.mu.Unlock()
+		return nil
+	}
+	if err == nil {
+		_, err = m.growthHolderLocked(sb, current)
+	}
+	if err == nil && (current.Size != v.Size || current.Backing != v.Backing) {
+		err = growRecovery()
+	}
+	if err != nil {
+		r.mu.Unlock()
+		m.mu.Unlock()
+		return err
 	}
 	current.State = volumeGrowing
 	current.Growth = &next
 	r.data.Volumes[v.Name] = current
-	return r.commit()
+	m.mu.Unlock()
+	err = r.commitLocked()
+	r.mu.Unlock()
+	return err
 }
 
 func (g managedGrowth) canDispatch(i engine.DiskInspection, err error) bool {
@@ -433,6 +444,14 @@ func (m *Manager) observeGrowth(ctx context.Context, v managedVolume, g managedG
 
 func (m *Manager) saveGrowth(v managedVolume, g managedGrowth, state, outcome string, guestSize int64) error {
 	r := m.managed
+	var actual backingIdentity
+	if state == growthCompleted {
+		var err error
+		actual, err = inspectBacking(r.path(v.ID))
+		if err != nil || actual.Device != v.Backing.Device || actual.Inode != v.Backing.Inode || actual.Size != g.Runtime.TargetBytes {
+			return managedStorageError()
+		}
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	current := r.data.Volumes[v.Name]
@@ -443,10 +462,6 @@ func (m *Manager) saveGrowth(v managedVolume, g managedGrowth, state, outcome st
 	current.Growth = &g
 	if state == growthCompleted {
 		if !current.Growth.fenced() && current.CapacityGeneration != g.Request.ExpectedGeneration {
-			return managedStorageError()
-		}
-		actual, err := inspectBacking(r.path(v.ID))
-		if err != nil || actual.Device != v.Backing.Device || actual.Inode != v.Backing.Inode || actual.Size != g.Runtime.TargetBytes {
 			return managedStorageError()
 		}
 		current.Size, current.Backing, current.State = actual.Size, actual, volumeReady
@@ -464,7 +479,7 @@ func (m *Manager) saveGrowth(v managedVolume, g managedGrowth, state, outcome st
 		current.State = volumeRecovery
 	}
 	r.data.Volumes[v.Name] = current
-	return r.commit()
+	return r.commitLocked()
 }
 
 func (r *volumeRegistry) validateGrowth(v managedVolume) error {

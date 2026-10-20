@@ -23,16 +23,18 @@ const (
 
 // Counters is a monotonic snapshot for /metrics; gauges come from Info.
 type Counters struct {
-	ClaimsWarm  uint64
-	ClaimsClone uint64
-	ClaimsCold  uint64
-	Wakes       uint64
-	Hibernates  uint64
-	Forks       uint64
-	Checkpoints uint64
-	Promotes    uint64
-	Releases    uint64
-	Reaps       uint64
+	ManagedWriteFailures   uint64
+	ManagedWriteRecoveries uint64
+	ClaimsWarm             uint64
+	ClaimsClone            uint64
+	ClaimsCold             uint64
+	Wakes                  uint64
+	Hibernates             uint64
+	Forks                  uint64
+	Checkpoints            uint64
+	Promotes               uint64
+	Releases               uint64
+	Reaps                  uint64
 
 	Archives       uint64
 	Unarchives     uint64
@@ -95,22 +97,29 @@ type egressFrame struct {
 
 func (m *Manager) Counters() Counters {
 	c := &m.counters
+	var managedFailures, managedRecoveries uint64
+	if m.managed != nil {
+		managedFailures = m.managed.writeFailures.Load()
+		managedRecoveries = m.managed.writeRecoveries.Load()
+	}
 	return Counters{
-		ClaimsWarm:     c.claimsWarm.Load(),
-		ClaimsClone:    c.claimsClone.Load(),
-		ClaimsCold:     c.claimsCold.Load(),
-		Wakes:          c.wakes.Load(),
-		Hibernates:     c.hibernates.Load(),
-		Forks:          c.forks.Load(),
-		Checkpoints:    c.checkpoints.Load(),
-		Promotes:       c.promotes.Load(),
-		Releases:       c.releases.Load(),
-		Reaps:          c.reaps.Load(),
-		Archives:       c.archives.Load(),
-		Unarchives:     c.unarchives.Load(),
-		ArchiveDeletes: c.archiveDeletes.Load(),
-		ClaimNanos:     c.claimNanos.Load(),
-		WakeNanos:      c.wakeNanos.Load(),
+		ManagedWriteFailures:   managedFailures,
+		ManagedWriteRecoveries: managedRecoveries,
+		ClaimsWarm:             c.claimsWarm.Load(),
+		ClaimsClone:            c.claimsClone.Load(),
+		ClaimsCold:             c.claimsCold.Load(),
+		Wakes:                  c.wakes.Load(),
+		Hibernates:             c.hibernates.Load(),
+		Forks:                  c.forks.Load(),
+		Checkpoints:            c.checkpoints.Load(),
+		Promotes:               c.promotes.Load(),
+		Releases:               c.releases.Load(),
+		Reaps:                  c.reaps.Load(),
+		Archives:               c.archives.Load(),
+		Unarchives:             c.unarchives.Load(),
+		ArchiveDeletes:         c.archiveDeletes.Load(),
+		ClaimNanos:             c.claimNanos.Load(),
+		WakeNanos:              c.wakeNanos.Load(),
 	}
 }
 

@@ -1,16 +1,22 @@
 package pool
 
 import (
+	"context"
 	"encoding/json/v2"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
+
+	"github.com/projecteru2/core/log"
 
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
@@ -91,13 +97,27 @@ type volumeRegistryData struct {
 type volumeRegistry struct {
 	rootDir, disksDir os.FileInfo
 	mu                sync.Mutex
+	writeMu           sync.Mutex
+	fileMu            sync.Mutex
+	seq, written      uint64
+	writeFault        error
+	writeFailures     atomic.Uint64
+	writeRecoveries   atomic.Uint64
+	retrying          atomic.Bool
+	closed            bool
+	uncertainVMs      map[string]bool
+	discharging       map[string]bool
+	aliases           map[backingIdentity]bool
 	dir, node         string
 	lock              *os.File
 	data              volumeRegistryData
+	original          []byte
 	fault             error
 	commitFile        func(string, []byte) error
 	process           func(int) (processIdentity, error)
 }
+
+var errBackingMismatch = errors.New("managed backing identity changed")
 
 var managedIDPattern = regexp.MustCompile(`^vol_[0-9a-f]{32}$`)
 
@@ -135,7 +155,10 @@ func openVolumeRegistry(dir, node string) (*volumeRegistry, error) {
 			r.fault = errors.New("missing registry with existing backing files")
 			return r, nil
 		}
-		if err = r.commit(); err != nil {
+		r.mu.Lock()
+		err = r.commitLocked()
+		r.mu.Unlock()
+		if err != nil {
 			return r, nil
 		}
 		return r, nil
@@ -145,13 +168,20 @@ func openVolumeRegistry(dir, node string) (*volumeRegistry, error) {
 		return r, nil
 	}
 	defer func() { _ = f.Close() }()
-	if err := json.UnmarshalRead(f, &r.data, json.RejectUnknownMembers(true)); err != nil {
+	raw, readErr := io.ReadAll(f)
+	if readErr != nil {
+		r.fault = readErr
+		return r, nil
+	}
+	r.original = raw
+	if err := json.Unmarshal(raw, &r.data); err != nil {
 		r.fault = err
 		return r, nil
 	}
 	if err := r.validate(); err != nil {
 		r.fault = err
 	}
+	r.indexBackings()
 	return r, nil
 }
 
@@ -240,7 +270,7 @@ func (r *volumeRegistry) verify(v managedVolume) error {
 		return err
 	}
 	if v.Backing.Inode == 0 || actual != v.Backing || actual.Size != v.Size {
-		return errors.New("managed backing identity changed")
+		return errBackingMismatch
 	}
 	return nil
 }
@@ -374,25 +404,115 @@ func (r *volumeRegistry) validateHoldRef(h volumeHold, ref volumeRef, names map[
 	return true, nil
 }
 
-// Any failed snapshot poisons mutations until restart. The attempted state remains
-// owned in memory because rename may already have published it.
-func (r *volumeRegistry) commit() error {
-	if r.fault != nil {
+// commitLocked is called with mu held and returns with it held. Only the writer
+// allocates a snapshot, after taking writeMu without holding the state lock.
+func (r *volumeRegistry) commitLocked() error {
+	if r.fault != nil || r.closed {
 		return managedStorageError()
 	}
-	if err := r.verifyDirectories(); err != nil {
-		r.fault = err
+	r.seq++
+	seq := r.seq
+	r.indexBackings()
+	r.mu.Unlock()
+	r.writeMu.Lock()
+	r.mu.Lock()
+	if r.closed || r.fault != nil {
+		r.writeMu.Unlock()
 		return managedStorageError()
 	}
+	if r.written >= seq {
+		r.writeMu.Unlock()
+		if r.writeFault != nil {
+			return managedStorageError()
+		}
+		return nil
+	}
+	seq = r.seq
 	raw, err := json.Marshal(r.data)
-	if err == nil {
-		err = r.commitFile(filepath.Join(r.dir, "registry.json"), raw)
+	if err == nil && len(r.original) != 0 {
+		raw, err = mergeRegistryFields(raw, r.original, reflect.TypeFor[volumeRegistryData]())
 	}
+	write := r.commitFile
+	r.mu.Unlock()
+	if err == nil {
+		err = r.verifyDirectories()
+		if err != nil {
+			r.mu.Lock()
+			r.fault = err
+			r.mu.Unlock()
+		}
+	}
+	if err == nil {
+		err = write(filepath.Join(r.dir, "registry.json"), raw)
+	}
+	r.mu.Lock()
+	previousFault := r.writeFault
+	r.writeFault = err
 	if err != nil {
-		r.fault = err
+		r.writeFailures.Add(1)
+	}
+	if err == nil && previousFault != nil {
+		r.writeRecoveries.Add(1)
+	}
+	if err == nil {
+		r.written = seq
+	}
+	r.writeMu.Unlock()
+	r.mu.Unlock()
+	if previousFault == nil && err != nil {
+		log.WithFunc("pool.volumeRegistry").Error(context.Background(), err, "managed registry write failed; retaining ownership for retry")
+	} else if previousFault != nil && err == nil {
+		log.WithFunc("pool.volumeRegistry").Info(context.Background(), "managed registry persistence recovered")
+	}
+	r.mu.Lock()
+	if err != nil || r.writeFault != nil || r.fault != nil {
 		return managedStorageError()
 	}
 	return nil
+}
+
+func (r *volumeRegistry) indexBackings() {
+	r.aliases = make(map[backingIdentity]bool, len(r.data.Volumes))
+	for _, v := range r.data.Volumes {
+		if v.Backing.Inode != 0 {
+			r.aliases[backingIdentity{Device: v.Backing.Device, Inode: v.Backing.Inode}] = true
+		}
+	}
+}
+
+func (m *Manager) retryManagedSnapshot() {
+	if m.managed == nil {
+		return
+	}
+	r := m.managed
+	r.mu.Lock()
+	retry := (r.writeFault != nil || len(r.unboundRetirements()) > 0) && r.fault == nil && !r.closed && r.retrying.CompareAndSwap(false, true)
+	r.mu.Unlock()
+	if !retry {
+		return
+	}
+	go func() {
+		defer r.retrying.Store(false)
+		r.mu.Lock()
+		if r.writeFault != nil {
+			_ = r.commitLocked()
+		}
+		ids := r.unboundRetirements()
+		r.mu.Unlock()
+		for _, id := range ids {
+			m.finishManaged(id, nil)
+		}
+	}()
+}
+
+func (r *volumeRegistry) unboundRetirements() []string {
+	var ids []string
+	for id, h := range r.data.Holds {
+		if h.State == holdRetiring && h.VMName == "" {
+			ids = append(ids, id)
+		}
+	}
+	return ids
 }
 
 func writeVolumeSnapshot(path string, raw []byte) error {
@@ -415,7 +535,12 @@ func writeVolumeSnapshot(path string, raw []byte) error {
 
 func (r *volumeRegistry) close() error {
 	r.mu.Lock()
-	defer r.mu.Unlock()
+	r.closed = true
+	r.mu.Unlock()
+	r.fileMu.Lock()
+	defer r.fileMu.Unlock()
+	r.writeMu.Lock()
+	defer r.writeMu.Unlock()
 	if r.lock == nil {
 		return nil
 	}

@@ -14,10 +14,12 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
-// VolumeError carries only caller-safe details. Storage paths and process IDs
-// remain in the registry and never become API diagnostics.
-const volumeBusyCode = "volume_busy"
+const (
+	volumeBusyCode    = "volume_busy"
+	volumeBusyMessage = "volume is held by a sandbox"
+)
 
+// VolumeError carries caller-safe details without storage paths or process IDs.
 type VolumeError struct {
 	Status  int                  `json:"-"`
 	Message string               `json:"error"`
@@ -42,34 +44,26 @@ func managedStorageError() *VolumeError {
 func managedNotFound() *VolumeError { return volumeError(404, "volume_not_found", "unknown volume") }
 
 func (m *Manager) CreateVolume(ctx context.Context, name string, req types.VolumeCreate, tenant string) (types.ManagedVolumeInfo, bool, error) {
-	if !types.ValidVolumeName(name) || req.SizeGiB < 1 || req.SizeGiB > 1024 {
-		return types.ManagedVolumeInfo{}, false, volumeError(400, "invalid_volume", "invalid volume name or size_gib (1 through 1024)")
-	}
-	if tenant != "" && req.Tenant != "" && tenant != req.Tenant {
-		return types.ManagedVolumeInfo{}, false, volumeError(403, "volume_owner_forbidden", "tenant cannot select another volume owner")
-	}
-	owner := req.Tenant
-	if tenant != "" {
-		owner = tenant
-	}
-	if !types.NameRe.MatchString(owner) {
-		return types.ManagedVolumeInfo{}, false, volumeError(400, "invalid_volume_owner", "an existing tenant owner is required")
-	}
-	if _, ok, err := m.tenants.Lookup(ctx, owner); err != nil {
-		return types.ManagedVolumeInfo{}, false, managedStorageError()
-	} else if !ok {
-		return types.ManagedVolumeInfo{}, false, volumeError(400, "invalid_volume_owner", "an existing tenant owner is required")
+	owner, err := m.volumeCreateOwner(ctx, name, req, tenant)
+	if err != nil {
+		return types.ManagedVolumeInfo{}, false, err
 	}
 	r := m.managed
 	if r == nil {
 		return types.ManagedVolumeInfo{}, false, managedStorageError()
 	}
+	m.mu.Lock()
+	admission := m.volumeAdmission[name]
+	m.mu.Unlock()
+	r.fileMu.Lock()
+	defer r.fileMu.Unlock()
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.fault != nil {
+	if r.closed || r.fault != nil || r.writeFault != nil {
 		return types.ManagedVolumeInfo{}, false, managedStorageError()
 	}
-	if _, ok := m.volumes[name]; ok {
+	_, managedName := r.data.Volumes[name]
+	if _, ok := m.volumes[name]; ok || r.retainedCatalogName(name) || !managedName && (admission.readers > 0 || admission.writers > 0) {
 		return types.ManagedVolumeInfo{}, false, volumeError(409, "volume_name_conflict", "volume name is unavailable")
 	}
 	v, exists := r.data.Volumes[name]
@@ -83,21 +77,30 @@ func (m *Manager) CreateVolume(ctx context.Context, name string, req types.Volum
 	if !exists {
 		v = managedVolume{ID: volumeID("vol_" + randHex(16)), Name: name, Tenant: owner, Node: r.node, Size: size, State: volumeCreating, CreatedAt: time.Now().UTC()}
 		r.data.Volumes[name] = v
-		if err := r.commit(); err != nil {
+		if err := r.commitLocked(); err != nil {
 			return types.ManagedVolumeInfo{}, false, err
 		}
 	}
 	switch v.State {
 	case volumeCreating:
-		if err := r.completeCreate(v); err != nil {
+		r.mu.Unlock()
+		err := r.completeCreate(v)
+		r.mu.Lock()
+		if err != nil {
 			return types.ManagedVolumeInfo{}, false, err
 		}
 		v = r.data.Volumes[name]
 	case volumeGrowing:
 		return r.info(v), false, nil
 	case volumeReady:
-		if err := r.verify(v); err != nil {
-			return types.ManagedVolumeInfo{}, false, r.markRecovery(v)
+		r.mu.Unlock()
+		err := r.verify(v)
+		r.mu.Lock()
+		if err != nil {
+			if errors.Is(err, errBackingMismatch) || errors.Is(err, os.ErrNotExist) {
+				return types.ManagedVolumeInfo{}, false, r.markRecovery(v)
+			}
+			return types.ManagedVolumeInfo{}, false, managedStorageError()
 		}
 	case volumeDeleting:
 		return types.ManagedVolumeInfo{}, false, volumeError(409, "volume_deleting", "volume deletion is pending")
@@ -133,8 +136,10 @@ func (r *volumeRegistry) completeCreate(v managedVolume) error {
 	raw := st.Sys().(*syscall.Stat_t)
 	v.Backing = backingIdentity{Device: backingDeviceID(raw.Dev), Inode: raw.Ino, Size: st.Size()}
 	v.State = volumeReady
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.data.Volumes[v.Name] = v
-	return r.commit()
+	return r.commitLocked()
 }
 
 func (r *volumeRegistry) markRecovery(v managedVolume) error {
@@ -143,7 +148,7 @@ func (r *volumeRegistry) markRecovery(v managedVolume) error {
 	}
 	v.State = volumeRecovery
 	r.data.Volumes[v.Name] = v
-	if err := r.commit(); err != nil {
+	if err := r.commitLocked(); err != nil {
 		return err
 	}
 	return managedStorageError()
@@ -156,26 +161,32 @@ func (m *Manager) GetVolume(name, tenant string) (types.ManagedVolumeInfo, error
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.fault != nil {
+	if r.closed || r.fault != nil || r.writeFault != nil {
 		return types.ManagedVolumeInfo{}, managedStorageError()
 	}
 	v, ok := r.data.Volumes[name]
 	if !ok || (tenant != "" && v.Tenant != tenant) {
 		return types.ManagedVolumeInfo{}, managedNotFound()
 	}
+	info := r.info(v)
+	r.mu.Unlock()
+	defer r.mu.Lock()
 	if v.State == volumeGrowing {
 		actual, err := inspectBacking(r.path(v.ID))
 		if err != nil || r.verifyDirectories() != nil || actual.Device != v.Backing.Device || actual.Inode != v.Backing.Inode || (actual.Size != v.Size && actual.Size != v.Growth.Runtime.TargetBytes) {
 			return types.ManagedVolumeInfo{}, managedStorageError()
 		}
 	}
-	if v.State == volumeReady && r.verify(v) != nil {
-		if err := r.markRecovery(v); r.fault != nil {
-			return types.ManagedVolumeInfo{}, err
+	if v.State == volumeReady {
+		if err := r.verify(v); err != nil {
+			if !errors.Is(err, errBackingMismatch) && !errors.Is(err, os.ErrNotExist) {
+				return types.ManagedVolumeInfo{}, managedStorageError()
+			}
+			info.State = string(volumeRecovery)
+			info.Available = false
 		}
-		v.State = volumeRecovery
 	}
-	return r.info(v), nil
+	return info, nil
 }
 
 func (m *Manager) DeleteVolume(ctx context.Context, name, expected, tenant string) error {
@@ -186,9 +197,11 @@ func (m *Manager) DeleteVolume(ctx context.Context, name, expected, tenant strin
 	if r == nil {
 		return managedNotFound()
 	}
+	r.fileMu.Lock()
+	defer r.fileMu.Unlock()
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.fault != nil {
+	if r.closed || r.fault != nil || r.writeFault != nil {
 		return managedStorageError()
 	}
 	if expected == "" {
@@ -209,13 +222,19 @@ func (m *Manager) DeleteVolume(ctx context.Context, name, expected, tenant strin
 		return growBusy()
 	}
 	if holders := r.holders(v.ID); len(holders) > 0 {
-		return &VolumeError{Status: 409, Code: volumeBusyCode, Message: "volume is held by a sandbox", Volume: name, Holders: holders}
+		return &VolumeError{Status: 409, Code: volumeBusyCode, Message: volumeBusyMessage, Volume: name, Holders: holders}
 	}
-	if err := r.verifyDirectories(); err != nil {
-		return managedStorageError()
-	}
+	r.mu.Unlock()
+	dirErr := r.verifyDirectories()
 	path := r.path(id)
 	actual, err := inspectBacking(path)
+	r.mu.Lock()
+	if dirErr != nil {
+		return managedStorageError()
+	}
+	if holders := r.holders(v.ID); len(holders) > 0 {
+		return &VolumeError{Status: 409, Code: volumeBusyCode, Message: volumeBusyMessage, Volume: name, Holders: holders}
+	}
 	missing := errors.Is(err, os.ErrNotExist)
 	if missing && v.State != volumeCreating && v.State != volumeDeleting {
 		return r.markRecovery(v)
@@ -226,24 +245,19 @@ func (m *Manager) DeleteVolume(ctx context.Context, name, expected, tenant strin
 	if v.State != volumeDeleting {
 		v.State = volumeDeleting
 		r.data.Volumes[name] = v
-		if err := r.commit(); err != nil {
+		if err := r.commitLocked(); err != nil {
 			return err
 		}
 	}
-	if !missing {
-		if err := os.Remove(path); err != nil {
-			return managedStorageError()
-		}
-	}
-	if err := syncDir(r.dir + "/disks"); err != nil {
-		return managedStorageError()
-	}
-	if err := clearVolumeDirty(path); err != nil {
+	r.mu.Unlock()
+	removeErr := removeManagedBacking(path, r.dir+"/disks", missing)
+	r.mu.Lock()
+	if removeErr != nil {
 		return managedStorageError()
 	}
 	r.data.Deleted[id] = volumeTombstone{ID: id, Name: name, Tenant: v.Tenant}
 	delete(r.data.Volumes, name)
-	return r.commit()
+	return r.commitLocked()
 }
 
 func (r *volumeRegistry) holders(id volumeID) []types.VolumeHolder {
@@ -279,7 +293,7 @@ func (m *Manager) ManagedVolumeStatus() error {
 	}
 	m.managed.mu.Lock()
 	defer m.managed.mu.Unlock()
-	if m.managed.fault != nil {
+	if m.managed.fault != nil || m.managed.writeFault != nil {
 		return managedStorageError()
 	}
 	return nil
@@ -291,19 +305,25 @@ func (m *Manager) managedInfos(tenant string) []types.VolumeInfo {
 		return nil
 	}
 	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.fault != nil {
+	if r.closed || r.fault != nil || r.writeFault != nil {
+		r.mu.Unlock()
 		return nil
 	}
-	infos := []types.VolumeInfo{}
+	var volumes []managedVolume
 	for _, v := range r.data.Volumes {
 		if tenant == "" || tenant == v.Tenant {
-			info := r.info(v)
-			if v.State == volumeReady && r.verify(v) != nil {
-				info.State = string(volumeRecovery)
-				info.Available = false
-			}
-			infos = append(infos, info.VolumeInfo)
+			volumes = append(volumes, v)
+		}
+	}
+	infos := make([]types.VolumeInfo, len(volumes))
+	for i, v := range volumes {
+		infos[i] = r.info(v).VolumeInfo
+	}
+	r.mu.Unlock()
+	for i, v := range volumes {
+		if v.State == volumeReady && r.verify(v) != nil {
+			infos[i].State = string(volumeRecovery)
+			infos[i].Available = false
 		}
 	}
 	return infos
@@ -316,7 +336,7 @@ func (m *Manager) lookupManaged(name string) (catalogVolume, bool, error) {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.fault != nil {
+	if r.closed || r.fault != nil || r.writeFault != nil {
 		return catalogVolume{}, false, managedStorageError()
 	}
 	v, ok := r.data.Volumes[name]
@@ -327,8 +347,11 @@ func (m *Manager) lookupManaged(name string) (catalogVolume, bool, error) {
 	if v.State != volumeReady {
 		return entry, true, managedStorageError()
 	}
-	if err := r.verify(v); err != nil {
-		return entry, true, r.markRecovery(v)
+	r.mu.Unlock()
+	err := r.verify(v)
+	r.mu.Lock()
+	if err != nil {
+		return entry, true, managedStorageError()
 	}
 	return entry, true, nil
 }
@@ -379,11 +402,14 @@ func (m *Manager) retireManaged(id string) error {
 		return growBusy()
 	}
 	if h.State == holdRetiring {
+		if r.writeFault != nil {
+			return r.commitLocked()
+		}
 		return nil
 	}
 	h.State = holdRetiring
 	r.data.Holds[id] = h
-	return r.commit()
+	return r.commitLocked()
 }
 
 func (m *Manager) managedRefPath(id, name string) (string, bool) {
@@ -420,15 +446,7 @@ func (m *Manager) managedCatalogAlias(path string) bool {
 	identity := info.Sys().(*syscall.Stat_t)
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	for _, v := range r.data.Volumes {
-		if v.Backing.Inode != 0 && identity.Ino == v.Backing.Inode && backingDeviceID(identity.Dev) == v.Backing.Device {
-			return true
-		}
-		if backing, err := os.Lstat(r.path(v.ID)); err == nil && os.SameFile(info, backing) {
-			return true
-		}
-	}
-	return false
+	return r.aliases[backingIdentity{Device: backingDeviceID(identity.Dev), Inode: identity.Ino}]
 }
 
 func growthBackingMatches(v managedVolume, actual backingIdentity) bool {
@@ -436,4 +454,49 @@ func growthBackingMatches(v managedVolume, actual backingIdentity) bool {
 		return true
 	}
 	return v.Growth.settled() && actual.Device == v.Backing.Device && actual.Inode == v.Backing.Inode && actual.Size == v.Growth.Runtime.TargetBytes
+}
+
+func (r *volumeRegistry) retainedCatalogName(name string) bool {
+	for _, h := range r.data.Holds {
+		for _, ref := range h.Refs {
+			if ref.ID == "" && ref.Volume.Name == name {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func removeManagedBacking(path, dir string, missing bool) error {
+	if !missing {
+		if err := os.Remove(path); err != nil {
+			return err
+		}
+	}
+	if err := syncDir(dir); err != nil {
+		return err
+	}
+	return clearVolumeDirty(path)
+}
+
+func (m *Manager) volumeCreateOwner(ctx context.Context, name string, req types.VolumeCreate, tenant string) (string, error) {
+	if !types.ValidVolumeName(name) || req.SizeGiB < 1 || req.SizeGiB > 1024 {
+		return "", volumeError(400, "invalid_volume", "invalid volume name or size_gib (1 through 1024)")
+	}
+	if tenant != "" && req.Tenant != "" && tenant != req.Tenant {
+		return "", volumeError(403, "volume_owner_forbidden", "tenant cannot select another volume owner")
+	}
+	owner := req.Tenant
+	if tenant != "" {
+		owner = tenant
+	}
+	if !types.NameRe.MatchString(owner) {
+		return "", volumeError(400, "invalid_volume_owner", "an existing tenant owner is required")
+	}
+	if _, ok, err := m.tenants.Lookup(ctx, owner); err != nil {
+		return "", ErrTenantStoreDown
+	} else if !ok {
+		return "", volumeError(400, "invalid_volume_owner", "an existing tenant owner is required")
+	}
+	return owner, nil
 }

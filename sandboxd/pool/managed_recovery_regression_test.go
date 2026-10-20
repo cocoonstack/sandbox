@@ -147,7 +147,10 @@ func TestManagedStartupCleansDeadOrphansAndRefusesUnknownProcess(t *testing.T) {
 					t.Fatalf("dead orphan survived cleanup: %v %v", present, err)
 				}
 			} else {
-				requireVolumeStatus(t, reconcileErr, 503)
+				if reconcileErr != nil {
+					t.Fatal(reconcileErr)
+				}
+				requireVolumeStatus(t, m.ManagedVolumeStatus(), 503)
 			}
 			if tc.processError == os.ErrPermission || (!tc.stopped && tc.pid == 0) {
 				e.mu.Lock()

@@ -90,6 +90,7 @@ func main() {
 	if err != nil {
 		logger.Fatalf(ctx, err, "init pool manager")
 	}
+	defer func() { _ = mgr.Close() }()
 
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()

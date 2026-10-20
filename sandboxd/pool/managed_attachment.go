@@ -14,6 +14,8 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
+var errProcessMetadata = errors.New("process metadata unavailable")
+
 func readProcessIdentity(pid int) (processIdentity, error) {
 	return readProcessIdentityAt("/proc", pid)
 }
@@ -26,7 +28,7 @@ func readProcessIdentityAt(procDir string, pid int) (processIdentity, error) {
 	boot, err := fs.ReadFile(proc, "sys/kernel/random/boot_id")
 	if err != nil {
 		// Missing boot metadata cannot prove that the PID is gone.
-		return processIdentity{}, fmt.Errorf("read VMM boot identity: %v", err)
+		return processIdentity{}, fmt.Errorf("%w: read VMM boot identity: %w", errProcessMetadata, err)
 	}
 	bootID := strings.TrimSpace(string(boot))
 	if bootID == "" {
@@ -56,7 +58,7 @@ func (r *volumeRegistry) processGone(p processIdentity) bool {
 		return false
 	}
 	current, err := r.process(p.PID)
-	if errors.Is(err, os.ErrNotExist) {
+	if processMissing(err) {
 		return true
 	}
 	return err == nil && current != p
@@ -64,6 +66,20 @@ func (r *volumeRegistry) processGone(p processIdentity) bool {
 
 func (m *Manager) admitManaged(tenant string, volumes []resolvedVolume) ([]types.Volume, error) {
 	applied := appliedVolumes(volumes)
+	for i := range volumes {
+		var err error
+		if volumes[i].managedID == "" {
+			volumes[i].backing, err = catalogBacking(volumes[i].disk.Path)
+		} else {
+			volumes[i].backing, err = inspectBacking(volumes[i].disk.Path)
+			if err == nil {
+				err = m.managed.verifyDirectories()
+			}
+		}
+		if err != nil {
+			return nil, managedStorageError()
+		}
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if err := m.quotaErr(1, tenant); err != nil {
@@ -86,39 +102,51 @@ func (m *Manager) admitManaged(tenant string, volumes []resolvedVolume) ([]types
 	if err := m.reserveVolumes(applied); err != nil {
 		return nil, err
 	}
-	if err := m.confirmVolumesClean(volumes); err != nil {
-		m.releaseVolumes(applied)
-		return nil, err
-	}
 	r.data.Holds[h.SandboxID] = h
 	for i := range volumes {
 		volumes[i].holdID = h.SandboxID
 	}
-	if err := r.commit(); err != nil {
+	r.mu.Unlock()
+	m.mu.Unlock()
+	cleanErr := m.confirmVolumesClean(volumes)
+	r.mu.Lock()
+	if cleanErr != nil {
+		delete(r.data.Holds, h.SandboxID)
+	}
+	err := r.commitLocked()
+	r.mu.Unlock()
+	m.mu.Lock()
+	r.mu.Lock()
+	if cleanErr != nil && err == nil {
+		m.releaseVolumes(applied)
+		return nil, cleanErr
+	}
+	if err != nil {
+		h.State = holdRetiring
+		r.data.Holds[h.SandboxID] = h
 		return nil, err
+	}
+	if current, ok := r.data.Holds[h.SandboxID]; !ok || current.State != holdAttaching || current.VMName != "" {
+		return nil, managedStorageError()
 	}
 	return applied, nil
 }
 
 func (r *volumeRegistry) referenceForAdmission(tenant string, volume resolvedVolume) (volumeRef, error) {
 	if volume.managedID == "" {
-		identity, err := catalogBacking(volume.disk.Path)
-		if err != nil {
-			return volumeRef{}, ErrVolumeUnavailable
-		}
-		return volumeRef{Volume: volume.applied, Path: volume.disk.Path, Backing: identity}, nil
+		return volumeRef{Volume: volume.applied, Path: volume.disk.Path, Backing: volume.backing}, nil
 	}
 	v, ok := r.data.Volumes[volume.applied.Name]
 	if !ok || v.ID != volume.managedID || (tenant != "" && v.Tenant != tenant) {
 		return volumeRef{}, managedNotFound()
 	}
-	if v.State != volumeReady || r.verify(v) != nil {
+	if v.State != volumeReady || v.Backing != volume.backing {
 		return volumeRef{}, managedStorageError()
 	}
 	for _, other := range r.data.Holds {
 		for _, ref := range other.Refs {
 			if ref.ID == v.ID && (ref.Volume.RW() || volume.applied.RW()) {
-				return volumeRef{}, &VolumeError{Status: 409, Code: volumeBusyCode, Message: "volume is held by a sandbox", Volume: v.Name, Holders: r.holders(v.ID)}
+				return volumeRef{}, &VolumeError{Status: 409, Code: volumeBusyCode, Message: volumeBusyMessage, Volume: v.Name, Holders: r.holders(v.ID)}
 			}
 		}
 	}
@@ -144,8 +172,16 @@ func (m *Manager) releaseUnbound(volumes []resolvedVolume, reserved []types.Volu
 		return
 	}
 	delete(r.data.Holds, id)
-	if r.commit() == nil {
+	m.mu.Unlock()
+	err := r.commitLocked()
+	r.mu.Unlock()
+	m.mu.Lock()
+	r.mu.Lock()
+	if err == nil {
 		m.releaseVolumes(reserved)
+	} else {
+		h.State = holdRetiring
+		r.data.Holds[id] = h
 	}
 }
 
@@ -176,7 +212,7 @@ func (m *Manager) bindManaged(ctx context.Context, sb *types.Sandbox, volumes []
 	h.VMName = sb.VMName
 	h.Process = p
 	r.data.Holds[id] = h
-	return r.commit()
+	return r.commitLocked()
 }
 
 func (m *Manager) activateManaged(id string) error {
@@ -193,30 +229,36 @@ func (m *Manager) activateManaged(id string) error {
 	if r.fault != nil || h.State == holdRetiring {
 		return managedStorageError()
 	}
+	if h.State == holdClaimed {
+		return nil
+	}
 	h.State = holdClaimed
 	r.data.Holds[id] = h
-	return r.commit()
+	return r.commitLocked()
 }
 
-func (m *Manager) finishManaged(id string, clears []string) bool {
+func (m *Manager) finishManaged(id string, clears []string, charges ...[]types.Volume) bool {
 	r := m.managed
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	r.fileMu.Lock()
+	defer r.fileMu.Unlock()
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	h, ok := r.data.Holds[id]
+	blocked := r.closed || r.fault != nil || r.writeFault != nil || r.growthOwnsHold(id) || r.discharging[id]
+	r.mu.Unlock()
 	if !ok {
-		return true
+		return !blocked
 	}
-	if r.fault != nil || r.growthOwnsHold(id) {
+	if blocked {
 		return false
 	}
-	commit := m.store.commit
-	if h.Sleep != nil {
-		commit = m.store.commitDurable
-	}
-	if err := commit(m.store.del(id)); err != nil {
-		return false
+	if m.store.contains(id) {
+		commit := m.store.commit
+		if h.Sleep != nil {
+			commit = m.store.commitDurable
+		}
+		if err := commit(m.store.del(id)); err != nil {
+			return false
+		}
 	}
 	for _, path := range clears {
 		for _, ref := range h.Refs {
@@ -228,17 +270,58 @@ func (m *Manager) finishManaged(id string, clears []string) bool {
 			}
 		}
 	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, ok := r.data.Holds[id]; !ok {
+		return true
+	}
+	if r.discharging == nil {
+		r.discharging = map[string]bool{}
+	}
+	r.discharging[id] = true
 	delete(r.data.Holds, id)
-	if r.commit() != nil {
+	if r.commitLocked() != nil {
 		r.data.Holds[id] = h
+		delete(r.discharging, id)
 		return false
 	}
-	refs := make([]types.Volume, len(h.Refs))
-	for i, ref := range h.Refs {
-		refs[i] = ref.Volume
+	r.mu.Unlock()
+	m.mu.Lock()
+	volumes := make([]types.Volume, 0, len(h.Refs))
+	for _, ref := range h.Refs {
+		volumes = append(volumes, ref.Volume)
 	}
-	m.releaseVolumes(refs)
+	for _, charge := range charges {
+		for _, volume := range charge {
+			if volumeIndex(volumes, volume.Name) < 0 {
+				volumes = append(volumes, volume)
+			}
+		}
+	}
+	m.releaseVolumes(volumes)
+	m.mu.Unlock()
+	r.mu.Lock()
+	delete(r.discharging, id)
 	return true
+}
+
+func (m *Manager) restoreManagedClaim(previous volumeHold, err error) {
+	if previous.SandboxID == "" {
+		return
+	}
+	r := m.managed
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, published := errors.AsType[*claimPublishError](err); published {
+		r.fault = err
+		return
+	}
+	h, ok := r.data.Holds[previous.SandboxID]
+	if ok && h.State == holdRetiring {
+		h.State = previous.State
+		r.data.Holds[h.SandboxID] = h
+		_ = r.commitLocked()
+	}
 }
 
 func (m *Manager) recoverManaged(ctx context.Context, claims map[string]*types.Sandbox, live map[string]types.VMRecord) (map[string]bool, error) {
@@ -274,9 +357,19 @@ func (m *Manager) recoverManaged(ctx context.Context, claims map[string]*types.S
 			}
 			continue
 		}
-		if h.Sleep != nil && h.State != holdRetiring {
+		if h.Sleep != nil && (h.State != holdRetiring || exists && sleepMatchesClaim(h, sb)) {
 			if !exists || !sleepMatchesClaim(h, sb) {
 				return owned, managedStorageError()
+			}
+			if h.State == holdRetiring {
+				r.mu.Lock()
+				h.State = holdClaimed
+				r.data.Holds[h.SandboxID] = h
+				err := r.commitLocked()
+				r.mu.Unlock()
+				if err != nil {
+					return owned, err
+				}
 			}
 			projectSleepState(sb, h.Sleep)
 			owned[h.VMName] = true
@@ -288,6 +381,12 @@ func (m *Manager) recoverManaged(ctx context.Context, claims map[string]*types.S
 		}
 		if valid {
 			owned[h.VMName] = true
+			if h.State == holdRetiring {
+				r.mu.Lock()
+				h.State = holdAttaching
+				r.data.Holds[h.SandboxID] = h
+				r.mu.Unlock()
+			}
 			if err := m.activateManaged(h.SandboxID); err != nil {
 				return owned, err
 			}
@@ -322,11 +421,17 @@ func (m *Manager) recoverManaged(ctx context.Context, claims map[string]*types.S
 
 func (r *volumeRegistry) recoverableManagedClaim(h volumeHold, sb *types.Sandbox, live map[string]types.VMRecord) (bool, error) {
 	rec, present := live[h.VMName]
-	if sb == nil || sb.VMName != h.VMName || sb.Tenant != h.Tenant || sb.Failed == egressQuarantineFailure || h.State == holdRetiring || !present {
+	if sb == nil || sb.VMName != h.VMName || sb.Tenant != h.Tenant || sb.Failed == egressQuarantineFailure || !present {
 		return false, nil
 	}
+	if rec.PID == 0 && rec.State == vmStateStopped {
+		if r.processGone(h.Process) {
+			return false, nil
+		}
+		return false, managedStorageError()
+	}
 	identity, err := r.process(rec.PID)
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
+	if err != nil && !processMissing(err) {
 		return false, managedStorageError()
 	}
 	if err != nil || identity != h.Process {
@@ -340,7 +445,7 @@ func (r *volumeRegistry) recoverableManagedClaim(h volumeHold, sb *types.Sandbox
 	return true, nil
 }
 
-func (m *Manager) managedLiveAdd(id string, volumes []resolvedVolume) error {
+func (m *Manager) stageManagedLiveAdd(id string, volumes []resolvedVolume) error {
 	if len(volumes) == 0 {
 		return nil
 	}
@@ -363,14 +468,10 @@ func (m *Manager) managedLiveAdd(id string, volumes []resolvedVolume) error {
 				return volumeError(409, "volume_attachment_uncertain", "previous attachment requires sandbox release")
 			}
 		}
-		identity, err := catalogBacking(v.disk.Path)
-		if err != nil {
-			return ErrVolumeUnavailable
-		}
-		h.Refs = append(h.Refs, volumeRef{Volume: v.applied, Path: v.disk.Path, Backing: identity})
+		h.Refs = append(h.Refs, volumeRef{Volume: v.applied, Path: v.disk.Path, Backing: v.backing})
 	}
 	r.data.Holds[id] = h
-	return r.commit()
+	return nil
 }
 
 func (m *Manager) managedLiveRemove(id string, volumes []types.Volume) error {
@@ -402,7 +503,7 @@ func (m *Manager) managedLiveRemove(id string, volumes []types.Volume) error {
 	}
 	h.Refs = refs
 	r.data.Holds[id] = h
-	return r.commit()
+	return r.commitLocked()
 }
 
 func catalogBacking(path string) (backingIdentity, error) {
@@ -415,4 +516,18 @@ func catalogBacking(path string) (backingIdentity, error) {
 	}
 	raw := st.Sys().(*syscall.Stat_t)
 	return backingIdentity{Device: backingDeviceID(raw.Dev), Inode: raw.Ino, Size: st.Size()}, nil
+}
+
+func (m *Manager) commitManaged() error {
+	if m.managed == nil {
+		return nil
+	}
+	r := m.managed
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.commitLocked()
+}
+
+func processMissing(err error) bool {
+	return errors.Is(err, os.ErrNotExist) && !errors.Is(err, errProcessMetadata)
 }

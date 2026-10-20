@@ -770,7 +770,11 @@ func TestManagedSleepMissingClaimRetainsOwnership(t *testing.T) {
 	}
 	defer recovered.Close()
 	recovered.managed.process = e.identity
-	if err = recovered.Reconcile(t.Context()); err == nil {
+	if err = recovered.Reconcile(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	requireVolumeStatus(t, recovered.ManagedVolumeStatus(), 503)
+	if _, exists := recovered.Sandbox(sb.ID); exists {
 		t.Fatal("missing credentials were reconstructed")
 	}
 	if _, held := recovered.managedHold(sb.ID); !held {

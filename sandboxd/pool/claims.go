@@ -17,7 +17,6 @@ import (
 	"github.com/projecteru2/core/log"
 
 	"github.com/cocoonstack/sandbox/sandboxd/types"
-	"github.com/cocoonstack/sandbox/sandboxd/utils"
 )
 
 const (
@@ -74,8 +73,9 @@ type claimRow struct {
 
 // claimStore persists claimed sandboxes across daemon restarts; warm VMs are not persisted.
 type claimStore struct {
-	path string
-	sync bool
+	path          string
+	sync          bool
+	syncDirectory func(string) error
 
 	// writeMu orders commits and guards every row's raw and buf.
 	writeMu sync.Mutex
@@ -90,7 +90,7 @@ type claimStore struct {
 }
 
 func newClaimStore(dataDir string, sync bool) *claimStore {
-	return &claimStore{path: filepath.Join(dataDir, "claims.json"), sync: sync, rows: map[string]*claimRow{}}
+	return &claimStore{path: filepath.Join(dataDir, "claims.json"), sync: sync, syncDirectory: syncDir, rows: map[string]*claimRow{}}
 }
 
 func (s *claimStore) load() (map[string]*types.Sandbox, error) {
@@ -241,8 +241,18 @@ func (s *claimStore) replaceMode(raw []byte, durable bool) error {
 	if err != nil {
 		return fmt.Errorf("write claims: %w", err)
 	}
-	if err := utils.ReplaceFileSync(f, s.path, raw); err != nil {
-		return fmt.Errorf("commit claims: %w", err)
+	defer func() { _ = os.Remove(tmp) }()
+	if _, err := f.Write(raw); err != nil {
+		return errors.Join(err, f.Close())
+	}
+	if err := errors.Join(f.Sync(), f.Close()); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, s.path); err != nil {
+		return err
+	}
+	if err := s.syncDirectory(filepath.Dir(s.path)); err != nil {
+		return &claimPublishError{err}
 	}
 	return nil
 }
@@ -285,4 +295,15 @@ func volumesWantDTO(sb *types.Sandbox) []types.Volume {
 		return nil
 	}
 	return append([]types.Volume{}, sb.VolumesWant...)
+}
+
+type claimPublishError struct{ error }
+
+func (e *claimPublishError) Unwrap() error { return e.error }
+
+func (s *claimStore) contains(id string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, ok := s.rows[id]
+	return ok
 }

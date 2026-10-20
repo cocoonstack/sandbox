@@ -35,6 +35,7 @@ type resolvedVolume struct {
 	applied   types.Volume
 	managedID volumeID
 	holdID    string
+	backing   backingIdentity
 }
 
 // volumeTeardown captures marker paths at quiesce time; a later config can re-point the entry.
@@ -249,9 +250,10 @@ func (m *Manager) applyVolume(ctx context.Context, sb *types.Sandbox, volume res
 	if volume.managedID != "" {
 		m.managed.mu.Lock()
 		v, ok := m.managed.data.Volumes[volume.applied.Name]
-		valid := ok && v.ID == volume.managedID && m.managed.fault == nil && m.managed.verify(v) == nil
+		h, held := m.managed.data.Holds[volume.holdID]
+		valid := ok && held && h.State == holdAttaching && h.VMName == sb.VMName && v.ID == volume.managedID && m.managed.fault == nil && m.managed.writeFault == nil
 		m.managed.mu.Unlock()
-		if !valid {
+		if !valid || m.managed.verify(v) != nil {
 			return managedStorageError()
 		}
 	}
@@ -347,7 +349,7 @@ func (m *Manager) quiesceVolumes(ctx context.Context, sb *types.Sandbox) volumeT
 // finishVolumeTeardown runs only once the VM is gone, when its image lock is finally released.
 func (m *Manager) finishVolumeTeardown(ctx context.Context, td volumeTeardown) {
 	if td.managedID != "" {
-		m.finishManaged(td.managedID, td.clears)
+		m.finishManaged(td.managedID, td.clears, td.holds)
 		return
 	}
 	if len(td.holds) == 0 {

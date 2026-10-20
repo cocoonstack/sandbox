@@ -14,7 +14,7 @@ import (
 )
 
 func (m *Manager) removeVM(ctx context.Context, name string) bool {
-	if m.growthOwnsVM(name) {
+	if m.managedUncertainVM(name) || m.growthOwnsVM(name) {
 		return false
 	}
 	target, allowed := m.growthTeardownTarget(ctx, name)

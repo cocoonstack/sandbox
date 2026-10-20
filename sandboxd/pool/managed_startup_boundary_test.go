@@ -40,7 +40,10 @@ func TestManagedStartupCollectsUnclaimedCreatingVMBeforeProcessProof(t *testing.
 					t.Fatalf("proven stale create blocked startup: %v", err)
 				}
 			} else {
-				requireVolumeStatus(t, err, 503)
+				if err != nil {
+					t.Fatal(err)
+				}
+				requireVolumeStatus(t, m.ManagedVolumeStatus(), 503)
 			}
 			e.mu.Lock()
 			defer e.mu.Unlock()

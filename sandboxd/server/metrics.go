@@ -68,6 +68,8 @@ func (s *Server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
 		{"forks_total", "fork operations", c.Forks},
 		{"checkpoints_total", "checkpoints captured", c.Checkpoints},
 		{"promotes_total", "templates promoted", c.Promotes},
+		{"managed_volume_write_failures_total", "failed managed registry writes", c.ManagedWriteFailures},
+		{"managed_volume_write_recoveries_total", "managed registry write recoveries", c.ManagedWriteRecoveries},
 		{"releases_total", "claims released", c.Releases},
 		{"reaps_total", "claims reaped at deadline", c.Reaps},
 		{"archives_total", "claims archived to the store", c.Archives},

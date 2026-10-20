@@ -262,7 +262,7 @@ func TestManagedConcurrentCreateAndWriterAdmission(t *testing.T) {
 	}
 }
 
-func TestManagedRetirementSurvivesRestartAndStaleClaim(t *testing.T) {
+func TestManagedRetirementWithoutDurableClaimSurvivesRestart(t *testing.T) {
 	for _, syncClaims := range []bool{false, true} {
 		t.Run(fmt.Sprint(syncClaims), func(t *testing.T) {
 			cfg := managedConfig(t)
@@ -275,6 +275,9 @@ func TestManagedRetirementSurvivesRestartAndStaleClaim(t *testing.T) {
 				t.Fatal(claimErr)
 			}
 			e.falseRemove.Store(true)
+			if err := m.store.commitDurable(m.store.del(sb.ID)); err != nil {
+				t.Fatal(err)
+			}
 			if err := m.retireManaged(sb.ID); err != nil {
 				t.Fatal(err)
 			}
@@ -530,7 +533,7 @@ func TestManagedCorruptAndUnsafeStorage(t *testing.T) {
 					t.Fatal(err)
 				}
 			case "permissions":
-				if err := os.Chmod(path, 0o000); err != nil {
+				if err := os.Chmod(path, 0o644); err != nil {
 					t.Fatal(err)
 				}
 			}

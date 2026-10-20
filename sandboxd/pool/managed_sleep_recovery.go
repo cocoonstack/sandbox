@@ -32,21 +32,26 @@ func (m *Manager) releaseManagedSleepLocked(ctx context.Context, sb *types.Sandb
 		m.mu.Unlock()
 		return nil
 	}
-	if err := m.retireManaged(sb.ID); err != nil {
+	if m.growthOwnsHold(sb.ID) {
 		m.mu.Unlock()
-		return err
+		return growBusy()
 	}
+	previousHold, _ := m.managedHold(sb.ID)
 	m.dropClaimLocked(sb)
 	js := m.store.del(sb.ID)
 	m.mu.Unlock()
-	if err := m.store.commitDurable(js); err != nil {
+	err := m.store.commitDurable(js)
+	if err != nil {
+		m.restoreManagedClaim(previousHold, err)
 		m.mu.Lock()
 		m.addClaimLocked(sb)
-		m.store.set(sb)
+		rb := m.store.set(sb)
 		m.mu.Unlock()
+		m.store.recommit(ctx, rb)
 		m.closeManagedStreams(sb)
 		return err
 	}
+	_ = m.retireManaged(sb.ID)
 	ctx = context.WithoutCancel(ctx)
 	h, _ := m.managedHold(sb.ID)
 	td := volumeTeardown{managedID: sb.ID}
@@ -116,7 +121,7 @@ func (m *Manager) observeManagedRemoval(ctx context.Context, h volumeHold) (volu
 	next.Restored = p
 	h.Sleep = &next
 	r.data.Holds[h.SandboxID] = h
-	return h, true, r.commit()
+	return h, true, r.commitLocked()
 }
 
 func (m *Manager) retryManagedSleepRemoval(ctx context.Context, name string, pending pendingRemoval) bool {
