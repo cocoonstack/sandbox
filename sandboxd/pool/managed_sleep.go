@@ -336,6 +336,7 @@ func (m *Manager) resumeManagedSleep(ctx context.Context, sb *types.Sandbox, h v
 	if err = m.eng.VerifyMountedVolume(ctx, sock, h.Refs[0].Volume.Name, h.Refs[0].Volume.Mount); err != nil {
 		return err
 	}
+	m.closeManagedStreams(sb)
 	m.mu.Lock()
 	sb.VsockSocket, sb.HibernateSnap, sb.PendingSnap, sb.ReaderSafe = sock, "", "", false
 	js := m.store.set(sb)
@@ -344,21 +345,25 @@ func (m *Manager) resumeManagedSleep(ctx context.Context, sb *types.Sandbox, h v
 		m.pauseManagedSleep(sb, h)
 		return err
 	}
-	m.reloadMu.Lock()
 	m.mu.Lock()
 	_, outbound := m.view.Load().out.Resolve(sb, m.claimPooledLocked)
 	m.mu.Unlock()
 	if outbound {
-		err = ErrVolumeCapture
-	} else {
-		err = m.managed.commitManagedSleep(h, nil)
+		return errors.Join(ErrVolumeCapture, m.projectManagedSleep(sb, h))
 	}
-	m.reloadMu.Unlock()
-	if err != nil {
+	if err = m.managed.commitManagedSleep(h, nil); err != nil {
 		m.pauseManagedSleep(sb, h)
 		return err
 	}
-	m.rotateManagedStreams(sb)
+	m.mu.Lock()
+	_, outbound = m.view.Load().out.Resolve(sb, m.claimPooledLocked)
+	if !outbound {
+		m.managedStreams[sb] = make(chan struct{})
+	}
+	m.mu.Unlock()
+	if outbound {
+		return errors.Join(ErrVolumeCapture, m.managed.commitManagedSleep(h, h.Sleep), m.projectManagedSleep(sb, h))
+	}
 	if restored {
 		m.counters.wakes.Add(1)
 		m.recordUsage(ctx, usageEvent{Event: "wake", ID: sb.ID, VMName: sb.VMName})
@@ -390,10 +395,4 @@ func (m *Manager) closeManagedStreams(sb *types.Sandbox) {
 			close(ch)
 		}
 	}
-}
-
-func (m *Manager) rotateManagedStreams(sb *types.Sandbox) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.managedStreams[sb] = make(chan struct{})
 }

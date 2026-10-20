@@ -207,24 +207,21 @@ func (m *Manager) PreviewDial(ctx context.Context, id string, port uint16) (net.
 
 // AgentSocket resolves a claimed sandbox's vsock UDS without waking it.
 func (m *Manager) AgentSocket(id, token string) (string, error) {
-	sb, ok := m.claim(id, token)
-	if !ok {
-		return "", ErrUnknownSandbox
-	}
-	if !sb.Transition.TryLock() {
-		return "", ErrPaused
-	}
-	defer sb.Transition.Unlock()
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	current, ok := m.authed(id, token)
-	if !ok || current != sb {
+	sb, ok := m.authed(id, token)
+	if !ok {
 		return "", ErrUnknownSandbox
 	}
 	if sb.Replicated() && m.fence.Load().fenced {
 		return "", ErrLeaseLost
 	}
 	// no activity stamp: a control-plane poll must not keep an idle sandbox awake
+	select {
+	case <-m.managedStreams[sb]:
+		return "", ErrPaused
+	default:
+	}
 	if m.managedPaused(sb) {
 		return "", ErrPaused
 	}

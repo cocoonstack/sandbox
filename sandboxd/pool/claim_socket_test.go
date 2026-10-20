@@ -33,8 +33,8 @@ func TestAgentSocketAvailableDuringMetadataUpdate(t *testing.T) {
 	go func() { done <- m.SetInstanceMetadata(t.Context(), sb.ID, []byte(`{"role":"test"}`)) }()
 	finish := sync.OnceFunc(func() {
 		close(gate.resume)
-		if err := <-done; err != nil {
-			t.Errorf("metadata update: %v", err)
+		if updateErr := <-done; updateErr != nil {
+			t.Errorf("metadata update: %v", updateErr)
 		}
 	})
 	t.Cleanup(finish)
