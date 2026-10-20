@@ -16,6 +16,7 @@ import (
 
 	"github.com/cocoonstack/sandbox/sandboxd/config"
 	"github.com/cocoonstack/sandbox/sandboxd/engine"
+	"github.com/cocoonstack/sandbox/sandboxd/tenants"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
@@ -704,5 +705,119 @@ func TestManagedGrowthDurableCompletionIgnoresUnrelatedPendingWrite(t *testing.T
 	resumeOther()
 	if returned, err := growthPrompt(t, "unrelated create", other); returned && err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestManagedGrowthCreateUsesCommittedCapacity(t *testing.T) {
+	for _, fail := range []bool{false, true} {
+		t.Run(fmt.Sprintf("write failure %t", fail), func(t *testing.T) {
+			f := newGrowthConcurrencyTest(t, "", 0)
+			f.m.managedSleepHook = &config.ManagedVolumeHibernate{HookArgv: []string{"/volume-hook"}, HookTimeoutSeconds: 1}
+			if err := f.m.PutTenant(t.Context(), tenants.TenantSpec{Name: "t2", Token: "other-token"}); err != nil {
+				t.Fatal(err)
+			}
+			r := f.m.managed
+			write := r.commitFile
+			entered, resume := make(chan struct{}), make(chan struct{})
+			unblock := sync.OnceFunc(func() { close(resume) })
+			t.Cleanup(unblock)
+			var once sync.Once
+			r.commitFile = func(path string, raw []byte) error {
+				var saved volumeRegistryData
+				if err := json.Unmarshal(raw, &saved); err != nil {
+					return err
+				}
+				if v := saved.Volumes["data"]; v.Growth != nil && v.Growth.State == growthCompleted {
+					once.Do(func() { close(entered) })
+					<-resume
+					if fail {
+						return errors.New("completion snapshot failed")
+					}
+				}
+				return write(path, raw)
+			}
+			owner := f.grow(t.Context(), growRequest())
+			select {
+			case <-entered:
+			case result := <-owner:
+				t.Fatalf("growth returned before completion write: %+v", result)
+			case <-time.After(5 * time.Second):
+				t.Fatal("completion snapshot was not attempted")
+			}
+			checkCreate := func(t *testing.T, sizeGiB int64, tenant string, status int, generation uint64, state string) {
+				t.Helper()
+				got, created, err := f.m.CreateVolume(t.Context(), "data", types.VolumeCreate{SizeGiB: sizeGiB}, tenant)
+				if status != 200 {
+					var refusal *VolumeError
+					if !errors.As(err, &refusal) || refusal.Status != status {
+						t.Errorf("create size %d tenant %s: created=%t volume=%+v growth=%+v err=%v, want status %d", sizeGiB, tenant, created, got, got.Growth, err, status)
+					}
+					return
+				}
+				if err != nil || created || got.ID != f.volume.ID || got.SizeBytes != sizeGiB<<30 || got.CapacityGeneration != generation || got.Growth == nil || got.Growth.State != state {
+					t.Errorf("identical create size %d: created=%t volume=%+v growth=%+v err=%v, want generation %d growth %s", sizeGiB, created, got, got.Growth, err, generation, state)
+					return
+				}
+				wantAvailable := state == growthCompleted
+				wantState := string(volumeGrowing)
+				if wantAvailable {
+					wantState = string(volumeReady)
+				}
+				if got.Available != wantAvailable || got.State != wantState {
+					t.Errorf("identical create size %d: available=%t state=%s, want available=%t state=%s", sizeGiB, got.Available, got.State, wantAvailable, wantState)
+				}
+			}
+			t.Run("blocked source capacity is identical", func(t *testing.T) {
+				checkCreate(t, 1, "t1", 200, 0, growthPending)
+			})
+			t.Run("blocked target capacity conflicts", func(t *testing.T) {
+				checkCreate(t, 2, "t1", 409, 0, "")
+			})
+			t.Run("blocked other tenant is concealed", func(t *testing.T) {
+				checkCreate(t, 1, "t2", 404, 0, "")
+				checkCreate(t, 2, "t2", 404, 0, "")
+			})
+			t.Run("blocked lifecycle retains owner", f.lifecycleRefused)
+			t.Run("blocked delete is busy", func(t *testing.T) {
+				done := f.call(func() error {
+					return f.m.DeleteVolume(t.Context(), "data", f.volume.ID, "t1")
+				})
+				if returned, err := growthPrompt(t, "delete", done); returned {
+					requireVolumeStatus(t, err, 409)
+				}
+			})
+			t.Run("blocked claim is busy", func(t *testing.T) {
+				done := f.call(func() error {
+					_, err := f.m.ClaimProvision(t.Context(), testKey, managedOptions("data"))
+					return err
+				})
+				if returned, err := growthPrompt(t, "claim", done); returned {
+					requireVolumeStatus(t, err, 409)
+				}
+			})
+			unblock()
+			result := waitGrowthResult(t, owner)
+			if fail {
+				requireVolumeStatus(t, result.err, 503)
+				t.Run("failed completion fences creates", func(t *testing.T) {
+					checkCreate(t, 1, "t1", 503, 0, "")
+					checkCreate(t, 2, "t1", 503, 0, "")
+				})
+				return
+			}
+			if result.err != nil || result.info.Growth == nil || result.info.Growth.State != growthCompleted {
+				t.Fatalf("durable completion failed: %+v", result)
+			}
+			t.Run("durable source capacity conflicts", func(t *testing.T) {
+				checkCreate(t, 1, "t1", 409, 0, "")
+			})
+			t.Run("durable target capacity is identical", func(t *testing.T) {
+				checkCreate(t, 2, "t1", 200, 1, growthCompleted)
+			})
+			t.Run("durable other tenant is concealed", func(t *testing.T) {
+				checkCreate(t, 1, "t2", 404, 0, "")
+				checkCreate(t, 2, "t2", 404, 0, "")
+			})
+		})
 	}
 }
