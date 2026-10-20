@@ -425,17 +425,20 @@ func (r *volumeRegistry) recoverableManagedClaim(h volumeHold, sb *types.Sandbox
 		return false, nil
 	}
 	if rec.PID == 0 && rec.State == vmStateStopped {
-		if r.processGone(h.Process) {
+		if !r.processGone(h.Process) {
+			return false, managedStorageError()
+		}
+		if h.State != holdClaimed {
 			return false, nil
 		}
-		return false, managedStorageError()
-	}
-	identity, err := r.process(rec.PID)
-	if err != nil && !processMissing(err) {
-		return false, managedStorageError()
-	}
-	if err != nil || identity != h.Process {
-		return false, nil
+	} else {
+		identity, err := r.process(rec.PID)
+		if err != nil && !processMissing(err) {
+			return false, managedStorageError()
+		}
+		if err != nil || identity != h.Process {
+			return false, nil
+		}
 	}
 	for _, volume := range heldVolumes(sb) {
 		if !slices.ContainsFunc(h.Refs, func(ref volumeRef) bool { return ref.Volume == volume }) {
