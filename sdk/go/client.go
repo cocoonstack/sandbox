@@ -19,7 +19,8 @@ import (
 )
 
 const (
-	idleConnsPerHost = 100
+	idleConnsPerHost  = 100
+	maxErrorBodyBytes = 1 << 20
 
 	templateQueryParam   = "template"
 	netQueryParam        = "net"
@@ -445,9 +446,13 @@ func encodeBody(verb string, v any) ([]byte, error) {
 }
 
 func apiError(verb string, resp *http.Response) error {
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBodyBytes+1))
 	var er errorResponse
-	_ = json.UnmarshalRead(resp.Body, &er)
-	_, _ = io.Copy(io.Discard, resp.Body)
+	if len(body) > maxErrorBodyBytes {
+		er.Error = fmt.Sprintf("error response body exceeds %d bytes", maxErrorBodyBytes)
+	} else {
+		_ = json.Unmarshal(body, &er)
+	}
 	base := &APIError{Verb: verb, Status: resp.StatusCode, Message: er.Error}
 	if er.Code != "" || len(er.Holders) != 0 {
 		return &ManagedVolumeError{APIError: base, Code: er.Code, Volume: er.Volume, Holders: er.Holders}
