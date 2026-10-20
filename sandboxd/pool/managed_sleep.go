@@ -344,13 +344,16 @@ func (m *Manager) resumeManagedSleep(ctx context.Context, sb *types.Sandbox, h v
 		m.pauseManagedSleep(sb, h)
 		return err
 	}
+	m.reloadMu.Lock()
 	m.mu.Lock()
-	if _, outbound := m.view.Load().out.Resolve(sb, m.claimPooledLocked); outbound {
+	_, outbound := m.view.Load().out.Resolve(sb, m.claimPooledLocked)
+	m.mu.Unlock()
+	if outbound {
 		err = ErrVolumeCapture
 	} else {
 		err = m.managed.commitManagedSleep(h, nil)
 	}
-	m.mu.Unlock()
+	m.reloadMu.Unlock()
 	if err != nil {
 		m.pauseManagedSleep(sb, h)
 		return err

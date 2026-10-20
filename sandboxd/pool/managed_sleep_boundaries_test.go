@@ -331,11 +331,11 @@ func TestManagedSleepPolicyReloadDuringResumeKeepsGuestPaused(t *testing.T) {
 
 func gateManagedSleepReadyCommit(m *Manager, fail bool) (<-chan struct{}, func()) {
 	entered, resume := make(chan struct{}), make(chan struct{})
-	var once sync.Once
+	var enteredOnce, resumeOnce sync.Once
 	commit := m.managed.commitFile
 	m.managed.commitFile = func(path string, raw []byte) error {
 		if !strings.Contains(string(raw), `"sleep":`) {
-			close(entered)
+			enteredOnce.Do(func() { close(entered) })
 			<-resume
 			if fail {
 				return errors.New("ready journal failed")
@@ -343,7 +343,7 @@ func gateManagedSleepReadyCommit(m *Manager, fail bool) (<-chan struct{}, func()
 		}
 		return commit(path, raw)
 	}
-	return entered, func() { once.Do(func() { close(resume) }) }
+	return entered, func() { resumeOnce.Do(func() { close(resume) }) }
 }
 
 func TestManagedSleepFinalWakeCommitKeepsUnrelatedRenewalLive(t *testing.T) {
