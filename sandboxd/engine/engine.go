@@ -414,7 +414,7 @@ func (e *Engine) run(ctx context.Context, args ...string) ([]byte, error) {
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	if err := cmd.Run(); err != nil {
-		return nil, fmt.Errorf("cocoon %s: %w: %s", strings.Join(args[:min(len(args), 2)], " "), err, tail(stderr.String()))
+		return stdout.Bytes(), fmt.Errorf("cocoon %s: %w: %s", strings.Join(args[:min(len(args), 2)], " "), err, tail(stderr.String()))
 	}
 	return stdout.Bytes(), nil
 }

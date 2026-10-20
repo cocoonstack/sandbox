@@ -250,7 +250,11 @@ func (m *Manager) stopVM(ctx context.Context, name string) {
 	if m.growthOwnsVM(name) {
 		return
 	}
-	if err := m.eng.Stop(ctx, name); err != nil {
+	target, allowed := m.growthTeardownTarget(ctx, name)
+	if !allowed {
+		return
+	}
+	if err := m.eng.Stop(ctx, target); err != nil {
 		log.WithFunc("pool.stopVM").Warnf(ctx, "stop vm %s: %v", name, err)
 	}
 }

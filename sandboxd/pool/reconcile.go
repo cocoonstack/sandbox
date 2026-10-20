@@ -24,10 +24,6 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if err := m.recoverGrowth(ctx, claims); err != nil {
-		return err
-	}
-	fenced := m.fenceArchived(ctx, claims)
 	vms, err := m.eng.List(ctx)
 	if err != nil {
 		return fmt.Errorf("list vms: %w", err)
@@ -36,6 +32,10 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 	for _, vm := range vms {
 		live[vm.Config.Name] = vm
 	}
+	if err = m.recoverGrowth(ctx, claims, live); err != nil {
+		return err
+	}
+	fenced := m.fenceArchived(ctx, claims)
 	snaps, snapsErr := m.eng.SnapshotList(ctx)
 	imageIDs := m.imageIDs(ctx)
 
@@ -98,6 +98,23 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 		m.recordHibernate(ctx, sb)
 	}
 	logger := log.WithFunc("pool.Reconcile")
+	m.sweepLocalStaging(ctx, pooled)
+
+	if fenced {
+		m.reclaimOrphanArchiveCks(ctx, claims)
+	}
+	m.retryArchiveDeletes(ctx)
+	removed := m.sweepStaleVMs(ctx, live, owned)
+
+	m.sweepOrphanSnapshots(ctx, snaps, snapsErr, referenced)
+	m.resyncEgress(ctx, live, removed)
+	m.warnDeniedClaims(ctx)
+	logger.Infof(ctx, "adopted %d claims, %d VMs live", len(m.claimed), len(live))
+	return saveErr
+}
+
+func (m *Manager) sweepLocalStaging(ctx context.Context, pooled map[string]bool) {
+	logger := log.WithFunc("pool.Reconcile")
 	if err := m.ckpts.SweepStaging(); err != nil {
 		logger.Error(ctx, err, "sweep checkpoint staging")
 	}
@@ -118,18 +135,6 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 	// a crash mid-export leaves a fork-* staging dir nothing in this life reuses
 	_ = utils.RemoveDirEntries(m.dataDir, func(name string) bool { return strings.HasPrefix(name, "fork-") })
 	_ = utils.RemoveDirEntries(filepath.Join(m.dataDir, readerDir), nil)
-
-	if fenced {
-		m.reclaimOrphanArchiveCks(ctx, claims)
-	}
-	m.retryArchiveDeletes(ctx)
-	removed := m.sweepStaleVMs(ctx, live, owned)
-
-	m.sweepOrphanSnapshots(ctx, snaps, snapsErr, referenced)
-	m.resyncEgress(ctx, live, removed)
-	m.warnDeniedClaims(ctx)
-	logger.Infof(ctx, "adopted %d claims, %d VMs live", len(m.claimed), len(live))
-	return saveErr
 }
 
 // sweepStaleVMs removes sbx-prefixed VMs no claim owns and returns the ones confirmed gone.

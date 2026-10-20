@@ -39,19 +39,18 @@ type Volume struct {
 
 // VolumeInfo describes one visible fleet catalog entry.
 type VolumeInfo struct {
-	Kind               string    `json:"kind,omitempty"`
-	ID                 string    `json:"id,omitempty"`
-	Tenant             string    `json:"tenant,omitempty"`
-	Node               string    `json:"node,omitempty"`
-	State              string    `json:"state,omitempty"`
-	CreatedAt          time.Time `json:"created_at,omitzero"`
-	Name               string    `json:"name"`
-	DefaultMount       string    `json:"default_mount"`
-	SizeBytes          int64     `json:"size_bytes"`
-	CapacityGeneration uint64    `json:"capacity_generation"`
-	Available          bool      `json:"available"`
-	Nodes              int       `json:"nodes"`
-	Writable           bool      `json:"writable,omitzero"`
+	Kind         string    `json:"kind,omitempty"`
+	ID           string    `json:"id,omitempty"`
+	Tenant       string    `json:"tenant,omitempty"`
+	Node         string    `json:"node,omitempty"`
+	State        string    `json:"state,omitempty"`
+	CreatedAt    time.Time `json:"created_at,omitzero"`
+	Name         string    `json:"name"`
+	DefaultMount string    `json:"default_mount"`
+	SizeBytes    int64     `json:"size_bytes"`
+	Available    bool      `json:"available"`
+	Nodes        int       `json:"nodes"`
+	Writable     bool      `json:"writable,omitzero"`
 }
 
 type VolumeHolder struct {

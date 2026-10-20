@@ -1,18 +1,21 @@
 package engine
 
 import (
-	"bytes"
 	"context"
 	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"slices"
 	"strconv"
 	"strings"
+)
+
+const (
+	diskObserved   = "observed"
+	diskUnobserved = "unobserved"
 )
 
 type DiskRef struct {
@@ -94,39 +97,32 @@ func (b DiskBinding) Validate() error {
 	}
 	return nil
 }
+
 func (b DiskBinding) SameIdentity(other DiskBinding) bool {
 	return b.Ref == other.Ref && b.VMM == other.VMM && b.Serial == other.Serial && b.Path == other.Path && b.Mode == other.Mode && b.Format == other.Format && b.Backing.Device == other.Backing.Device && b.Backing.Inode == other.Backing.Inode && slices.Equal(b.Backing.FDs, other.Backing.FDs)
 }
+
 func (b DiskBinding) Equal(other DiskBinding) bool {
 	return b.SameIdentity(other) && b.ObservedBytes == other.ObservedBytes && b.Revision == other.Revision
 }
+
 func (r DiskGrowRequest) Equal(other DiskGrowRequest) bool {
 	return r.ID == other.ID && r.TargetBytes == other.TargetBytes && r.Expected.Equal(other.Expected)
 }
 
-func (e *Engine) diskCommand(ctx context.Context, args ...string) ([]byte, error) {
-	ctx, cancel := context.WithTimeout(ctx, cmdTimeout)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, e.bin, args...)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &stdout, &stderr
-	runErr := cmd.Run()
-	return stdout.Bytes(), runErr
-}
-
 func (e *Engine) InspectDisk(ctx context.Context, ref DiskRef) (DiskInspection, error) {
 	var result DiskInspection
-	raw, err := e.diskCommand(ctx, "vm", "disk", "inspect", ref.VMID, "--disk-id", ref.DiskID, "--output", "json")
+	raw, err := e.run(ctx, "vm", "disk", "inspect", ref.VMID, "--disk-id", ref.DiskID, "--output", "json")
 	if parseErr := json.Unmarshal(raw, &result, json.RejectUnknownMembers(true)); parseErr != nil {
 		return DiskInspection{}, errors.Join(err, parseErr)
 	}
-	if result.Requested != ref || result.GuestBlockStatus != "unobserved" {
+	if result.Requested != ref || result.GuestBlockStatus != diskUnobserved {
 		return DiskInspection{}, errors.New("unsupported disk inspection")
 	}
-	if result.Live.State != "observed" && result.Live.State != "unavailable" {
+	if result.Live.State != diskObserved && result.Live.State != "unavailable" {
 		return DiskInspection{}, errors.New("invalid disk observation")
 	}
-	if result.Live.State == "observed" && (result.Live.Binding == nil || result.Live.Binding.Validate() != nil || result.Live.Binding.Ref != ref) {
+	if result.Live.State == diskObserved && (result.Live.Binding == nil || result.Live.Binding.Validate() != nil || result.Live.Binding.Ref != ref) {
 		return DiskInspection{}, errors.New("invalid observed binding")
 	}
 	return result, err
@@ -136,7 +132,7 @@ func (e *Engine) GrowDisk(ctx context.Context, request DiskGrowRequest) (DiskGro
 	if request.Expected.Validate() != nil || !ValidGrowID(request.ID) || request.TargetBytes <= request.Expected.ObservedBytes || request.TargetBytes%4096 != 0 {
 		return DiskGrowResult{}, errors.New("invalid disk grow request")
 	}
-	expected := DiskInspection{Requested: request.Expected.Ref, Live: DiskObservation{State: "observed", Binding: &request.Expected}, GuestBlockStatus: "unobserved"}
+	expected := DiskInspection{Requested: request.Expected.Ref, Live: DiskObservation{State: diskObserved, Binding: &request.Expected}, GuestBlockStatus: diskUnobserved}
 	raw, err := json.Marshal(expected)
 	if err != nil {
 		return DiskGrowResult{}, err
@@ -151,11 +147,11 @@ func (e *Engine) GrowDisk(ctx context.Context, request DiskGrowRequest) (DiskGro
 		return DiskGrowResult{}, err
 	}
 	var result DiskGrowResult
-	raw, err = e.diskCommand(ctx, "vm", "disk", "grow", "--expect", f.Name(), "--request-id", request.ID, "--target-bytes", strconv.FormatInt(request.TargetBytes, 10), "--output", "json")
+	raw, err = e.run(ctx, "vm", "disk", "grow", "--expect", f.Name(), "--request-id", request.ID, "--target-bytes", strconv.FormatInt(request.TargetBytes, 10), "--output", "json")
 	if parseErr := json.Unmarshal(raw, &result, json.RejectUnknownMembers(true)); parseErr != nil {
 		return DiskGrowResult{}, errors.Join(err, parseErr)
 	}
-	if result.GuestBlockStatus != "unobserved" {
+	if result.GuestBlockStatus != diskUnobserved {
 		return DiskGrowResult{}, errors.New("unsupported disk grow response")
 	}
 	return result, err
@@ -177,6 +173,7 @@ func (g GuestVolumeObservation) SameIdentity(other GuestVolumeObservation) bool 
 	g.SizeBytes = other.SizeBytes
 	return g == other
 }
+
 func (g GuestVolumeObservation) Valid() bool {
 	return g.BootID != "" && g.Serial != "" && strings.HasPrefix(g.Device, "/dev/") && g.DevNum != "" && g.MountID != "" && filepath.IsAbs(g.Mount) && g.Root == "/" && g.Mode == "rw" && g.SizeBytes > 0
 }

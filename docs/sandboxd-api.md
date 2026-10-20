@@ -257,7 +257,9 @@ entry's response is byte-identical to v1.
 
 When `managed_volume_dir` is enabled, this list also includes caller-visible
 managed summaries and requires an explicit root or tenant token. Individual
-managed GET responses carry holder details. The node-local create, inspect
+managed GET responses carry holder details, `capacity_generation` (including
+initial zero), and the latest growth operation. Catalog summaries retain their
+existing shape; use the individual GET for the authoritative capacity generation. The node-local create, inspect
 conditional-delete, and online-growth routes are documented in
 [Tenant managed persistent volumes](managed-volumes.md#manage-a-resource).
 

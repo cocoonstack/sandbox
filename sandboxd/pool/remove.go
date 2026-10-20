@@ -17,6 +17,10 @@ func (m *Manager) removeVM(ctx context.Context, name string) bool {
 	if m.growthOwnsVM(name) {
 		return false
 	}
+	target, allowed := m.growthTeardownTarget(ctx, name)
+	if !allowed {
+		return false
+	}
 	m.out.ClosePrebound(name)
 	// cancellation-immune: on a canceled ctx `cocoon vm rm` no-ops and orphans.
 	ctx = context.WithoutCancel(ctx)
@@ -26,22 +30,22 @@ func (m *Manager) removeVM(ctx context.Context, name string) bool {
 			if hold.Sleep != nil || m.growthOwnsHold(hold.SandboxID) {
 				return false
 			}
-			_ = m.eng.Remove(ctx, name)
+			_ = m.eng.Remove(ctx, target)
 			return false
 		}
 	}
 	if managed && hold.Sleep != nil {
 		return m.removeManagedSleep(ctx, hold)
 	}
-	err := m.eng.Remove(ctx, name)
+	err := m.eng.Remove(ctx, target)
 	if managed {
-		return m.confirmGone(ctx, name) && m.managed.processGone(hold.Process)
+		return m.confirmGone(ctx, target) && m.managed.processGone(hold.Process)
 	}
 	if err == nil {
 		return true
 	}
 	log.WithFunc("pool.removeVM").Warnf(ctx, "remove vm %s: %v; verifying", name, err)
-	return m.confirmGone(ctx, name)
+	return m.confirmGone(ctx, target)
 }
 
 func (m *Manager) confirmGone(ctx context.Context, name string) bool {

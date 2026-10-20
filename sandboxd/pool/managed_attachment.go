@@ -266,7 +266,10 @@ func (m *Manager) recoverManaged(ctx context.Context, claims map[string]*types.S
 		sb, exists := claims[h.SandboxID]
 		if m.growthOwnsHold(h.SandboxID) {
 			owned[h.VMName] = true
-			if !exists || !sleepMatchesClaim(h, sb) {
+			r.mu.Lock()
+			g := r.data.Volumes[h.Refs[0].Volume.Name].Growth
+			r.mu.Unlock()
+			if !exists || !sleepMatchesClaim(h, sb) || g == nil || !m.growthRecordMatches(*g, sb, live[h.VMName]) {
 				return owned, managedStorageError()
 			}
 			continue
@@ -279,21 +282,11 @@ func (m *Manager) recoverManaged(ctx context.Context, claims map[string]*types.S
 			owned[h.VMName] = true
 			continue
 		}
-		rec, present := live[h.VMName]
-		valid := exists && sb.VMName == h.VMName && sb.Tenant == h.Tenant && sb.Failed != egressQuarantineFailure && h.State != holdRetiring && present
-		if valid {
-			identity, err := r.process(rec.PID)
-			if err != nil && !errors.Is(err, os.ErrNotExist) {
-				return owned, managedStorageError()
-			}
-			valid = err == nil && identity == h.Process
+		valid, err := r.recoverableManagedClaim(h, sb, live)
+		if err != nil {
+			return owned, err
 		}
 		if valid {
-			for _, volume := range heldVolumes(sb) {
-				if !slices.ContainsFunc(h.Refs, func(ref volumeRef) bool { return ref.Volume == volume }) {
-					return owned, managedStorageError()
-				}
-			}
 			owned[h.VMName] = true
 			if err := m.activateManaged(h.SandboxID); err != nil {
 				return owned, err
@@ -325,6 +318,26 @@ func (m *Manager) recoverManaged(ctx context.Context, claims map[string]*types.S
 		}
 	}
 	return owned, nil
+}
+
+func (r *volumeRegistry) recoverableManagedClaim(h volumeHold, sb *types.Sandbox, live map[string]types.VMRecord) (bool, error) {
+	rec, present := live[h.VMName]
+	if sb == nil || sb.VMName != h.VMName || sb.Tenant != h.Tenant || sb.Failed == egressQuarantineFailure || h.State == holdRetiring || !present {
+		return false, nil
+	}
+	identity, err := r.process(rec.PID)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return false, managedStorageError()
+	}
+	if err != nil || identity != h.Process {
+		return false, nil
+	}
+	for _, volume := range heldVolumes(sb) {
+		if !slices.ContainsFunc(h.Refs, func(ref volumeRef) bool { return ref.Volume == volume }) {
+			return false, managedStorageError()
+		}
+	}
+	return true, nil
 }
 
 func (m *Manager) managedLiveAdd(id string, volumes []resolvedVolume) error {

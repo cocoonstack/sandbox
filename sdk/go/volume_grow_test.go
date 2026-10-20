@@ -163,3 +163,23 @@ func TestGrowVolumeLostResponseReplay(t *testing.T) {
 		t.Fatalf("replay = %+v, %v, requests %d", got, err, requests.Load())
 	}
 }
+
+func TestVolumeGenerationBelongsToManagedDetail(t *testing.T) {
+	catalog := VolumeInfo{Name: "data", DefaultMount: "/volumes/data", SizeBytes: 42, Available: true, Nodes: 1}
+	raw, err := json.Marshal(catalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const baseline = `{"name":"data","default_mount":"/volumes/data","size_bytes":42,"available":true,"nodes":1}`
+	if string(raw) != baseline {
+		t.Fatalf("catalog changed: %s", raw)
+	}
+	var detail ManagedVolumeInfo
+	if err = json.Unmarshal([]byte(`{"name":"data","capacity_generation":0}`), &detail); err != nil {
+		t.Fatal(err)
+	}
+	raw, err = json.Marshal(detail)
+	if err != nil || !strings.Contains(string(raw), `"capacity_generation":0`) {
+		t.Fatalf("managed initial generation missing: %s %v", raw, err)
+	}
+}

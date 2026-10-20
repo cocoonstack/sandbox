@@ -168,3 +168,26 @@ func pairsOf(n int, value string) Metadata {
 	}
 	return md
 }
+
+func TestVolumeCatalogWireAndManagedGeneration(t *testing.T) {
+	catalog := VolumeInfo{Name: "data", DefaultMount: "/volumes/data", SizeBytes: 42, Available: true, Nodes: 1}
+	raw, err := json.Marshal(catalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const baseline = `{"name":"data","default_mount":"/volumes/data","size_bytes":42,"available":true,"nodes":1}`
+	if string(raw) != baseline {
+		t.Fatalf("catalog changed from baseline: %s", raw)
+	}
+	raw, err = json.Marshal(ManagedVolumeInfo{VolumeInfo: catalog})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var detail map[string]any
+	if err = json.Unmarshal(raw, &detail); err != nil {
+		t.Fatal(err)
+	}
+	if generation, present := detail["capacity_generation"]; !present || generation != float64(0) {
+		t.Fatalf("managed initial generation missing: %s", raw)
+	}
+}

@@ -264,8 +264,7 @@ func (r *volumeRegistry) holders(id volumeID) []types.VolumeHolder {
 }
 
 func (r *volumeRegistry) info(v managedVolume) types.ManagedVolumeInfo {
-	info := types.ManagedVolumeInfo{Name: v.Name, DefaultMount: types.DefaultVolumeMount(v.Name), SizeBytes: v.Size, Available: v.State == volumeReady, Nodes: 1, Writable: true, Kind: "managed", ID: string(v.ID), Tenant: v.Tenant, Node: v.Node, State: string(v.State), CreatedAt: v.CreatedAt, Holders: r.holders(v.ID)}
-	info.CapacityGeneration = v.CapacityGeneration
+	info := types.ManagedVolumeInfo{CapacityGeneration: v.CapacityGeneration, Name: v.Name, DefaultMount: types.DefaultVolumeMount(v.Name), SizeBytes: v.Size, Available: v.State == volumeReady, Nodes: 1, Writable: true, Kind: "managed", ID: string(v.ID), Tenant: v.Tenant, Node: v.Node, State: string(v.State), CreatedAt: v.CreatedAt, Holders: r.holders(v.ID)}
 	if g := v.Growth; g != nil {
 		info.Growth = &types.VolumeGrowth{OperationID: g.Request.OperationID, ExpectedGeneration: g.Request.ExpectedGeneration, TargetBytes: g.Runtime.TargetBytes, State: g.State, RuntimeOutcome: g.Outcome, GuestSizeBytes: g.GuestSizeBytes, FilesystemStatus: "not_managed"}
 	}
@@ -436,5 +435,5 @@ func growthBackingMatches(v managedVolume, actual backingIdentity) bool {
 	if actual == v.Backing {
 		return true
 	}
-	return v.Growth != nil && v.Growth.Outcome == "old_vmm_gone" && actual.Device == v.Backing.Device && actual.Inode == v.Backing.Inode && actual.Size == v.Growth.Runtime.TargetBytes
+	return v.Growth.settled() && actual.Device == v.Backing.Device && actual.Inode == v.Backing.Inode && actual.Size == v.Growth.Runtime.TargetBytes
 }

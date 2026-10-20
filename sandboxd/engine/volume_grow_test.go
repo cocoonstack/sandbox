@@ -21,11 +21,11 @@ func TestGrowthQualifiedWireAndPrivateExpectation(t *testing.T) {
 	}
 	var expected DiskInspection
 	var result DiskGrowResult
-	if err := json.Unmarshal(inspect, &expected, json.RejectUnknownMembers(true)); err != nil {
-		t.Fatal(err)
+	if parseErr := json.Unmarshal(inspect, &expected, json.RejectUnknownMembers(true)); parseErr != nil {
+		t.Fatal(parseErr)
 	}
-	if err := json.Unmarshal(grow, &result, json.RejectUnknownMembers(true)); err != nil {
-		t.Fatal(err)
+	if parseErr := json.Unmarshal(grow, &result, json.RejectUnknownMembers(true)); parseErr != nil {
+		t.Fatal(parseErr)
 	}
 	if expected.Live.Binding.ObservedBytes != 20<<30 || result.Receipt.Request.TargetBytes != 40<<30 || !result.Receipt.Request.Expected.Equal(*expected.Live.Binding) || len(expected.Live.Binding.Backing.FDs) != 2 {
 		t.Fatal("qualified schema changed")
@@ -42,6 +42,7 @@ stat -c '%a' "$5" > "$GROW_CAPTURE/mode"
 printf '%s' "$5" > "$GROW_CAPTURE/temp-path"
 printf '%s\n' "$@" > "$GROW_CAPTURE/args"
 printf '%s' "$GROW_RESULT"
+echo "qualified runtime failure" >&2
 exit 1
 `)
 	e := New("cocoon", nil, nil, false, false, "")
@@ -50,7 +51,7 @@ exit 1
 		t.Fatalf("inspection %+v %v", got, err)
 	}
 	receipt, err := e.GrowDisk(t.Context(), result.Receipt.Request)
-	if err == nil || receipt.Receipt == nil || receipt.Receipt.Outcome != "acknowledged" {
+	if err == nil || !strings.Contains(err.Error(), "cocoon vm disk:") || !strings.Contains(err.Error(), "qualified runtime failure") || receipt.Receipt == nil || receipt.Receipt.Outcome != "acknowledged" {
 		t.Fatalf("nonzero stdout lost: %+v %v", receipt, err)
 	}
 	raw, _ := os.ReadFile(filepath.Join(dir, "expected"))
@@ -100,8 +101,8 @@ func TestGrowthRejectsMalformedWireEvenWithAValidReceiptPrefix(t *testing.T) {
 		t.Fatal(err)
 	}
 	var qualified DiskGrowResult
-	if err := json.Unmarshal(raw, &qualified); err != nil {
-		t.Fatal(err)
+	if parseErr := json.Unmarshal(raw, &qualified); parseErr != nil {
+		t.Fatal(parseErr)
 	}
 	t.Setenv("GROW_BAD_JSON", strings.TrimSpace(string(raw))+" invalid trailing bytes")
 	fakeCocoon(t, "#!/bin/sh\nprintf '%s' \"$GROW_BAD_JSON\"\nexit 1\n")

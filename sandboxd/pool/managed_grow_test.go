@@ -26,6 +26,7 @@ type growthTestEngine struct {
 	lag, unknown, lostResponse, mutateAfterGuest bool
 	guestChange                                  bool
 	entered, resume                              chan struct{}
+	vmName                                       string
 	intentSeen                                   bool
 }
 
@@ -38,18 +39,45 @@ func (e *growthTestEngine) DiskAttach(ctx context.Context, name string, spec eng
 	if e.disks == nil {
 		e.disks = map[string][]types.VMDisk{}
 	}
+	e.vmName = name
 	e.disks[name] = []types.VMDisk{{ID: "actual-ch-id", Name: spec.Name, Path: spec.Path, ReadOnly: !spec.RW}}
 	return nil
 }
 
+func (e *growthTestEngine) resolveVM(selector string) string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if selector == "immutable-grow-vm" {
+		return e.vmName
+	}
+	return selector
+}
+
+func (e *growthTestEngine) Remove(ctx context.Context, selector string) error {
+	return e.managedTestEngine.Remove(ctx, e.resolveVM(selector))
+}
+
+func (e *growthTestEngine) Stop(ctx context.Context, selector string) error {
+	return e.managedTestEngine.Stop(ctx, e.resolveVM(selector))
+}
+
+func (e *growthTestEngine) List(ctx context.Context) ([]types.VMRecord, error) {
+	records, err := e.managedTestEngine.List(ctx)
+	for i := range records {
+		records[i].ID = "immutable-grow-vm"
+	}
+	return records, err
+}
+
 func (e *growthTestEngine) Inspect(ctx context.Context, name string) (types.VMRecord, bool, error) {
-	rec, found, err := e.managedTestEngine.Inspect(ctx, name)
+	rec, found, err := e.managedTestEngine.Inspect(ctx, e.resolveVM(name))
 	rec.ID = "immutable-grow-vm"
 	for i := range rec.AttachedDevices.Disks {
 		rec.AttachedDevices.Disks[i].ID = "actual-ch-id"
 	}
 	return rec, found, err
 }
+
 func (e *growthTestEngine) InspectDisk(_ context.Context, ref engine.DiskRef) (engine.DiskInspection, error) {
 	e.growMu.Lock()
 	defer e.growMu.Unlock()
@@ -59,6 +87,7 @@ func (e *growthTestEngine) InspectDisk(_ context.Context, ref engine.DiskRef) (e
 	}
 	return engine.DiskInspection{Requested: ref, Live: engine.DiskObservation{State: "observed", Binding: &b}, LatestReceipt: e.receipt, GuestBlockStatus: "unobserved"}, nil
 }
+
 func (e *growthTestEngine) GrowDisk(_ context.Context, req engine.DiskGrowRequest) (engine.DiskGrowResult, error) {
 	e.growMu.Lock()
 	e.calls++
@@ -96,7 +125,8 @@ func (e *growthTestEngine) GrowDisk(_ context.Context, req engine.DiskGrowReques
 	}
 	return result, nil
 }
-func (e *growthTestEngine) ObserveVolume(_ context.Context, _ string, serial, mount string) (engine.GuestVolumeObservation, error) {
+
+func (e *growthTestEngine) ObserveVolume(_ context.Context, _, serial, mount string) (engine.GuestVolumeObservation, error) {
 	e.growMu.Lock()
 	defer e.growMu.Unlock()
 	e.observations++
@@ -121,6 +151,7 @@ func openGrowthTest(t *testing.T, cfg *config.Config, e *growthTestEngine) *Mana
 	t.Cleanup(func() { _ = m.Close() })
 	return m
 }
+
 func newGrowthTest(t *testing.T) (*Manager, *growthTestEngine, *types.Sandbox, *config.Config, types.ManagedVolumeInfo) {
 	t.Helper()
 	cfg := managedConfig(t)
@@ -141,6 +172,7 @@ func newGrowthTest(t *testing.T) (*Manager, *growthTestEngine, *types.Sandbox, *
 	e.binding = engine.DiskBinding{Ref: engine.DiskRef{VMID: "immutable-grow-vm", DiskID: "actual-ch-id"}, VMM: engine.DiskProcess{BootID: h.Process.BootID, PID: h.Process.PID, Start: h.Process.Start}, Serial: "data", Path: ref.Path, Mode: "read_write", Format: "raw", Backing: engine.DiskBacking{Device: ref.Backing.Device, Inode: ref.Backing.Inode, FDs: []engine.DiskFD{{Number: 250, Access: "read_write"}, {Number: 261, Access: "read_write"}}}, ObservedBytes: ref.Backing.Size}
 	return m, e, sb, cfg, v
 }
+
 func growRequest() types.VolumeGrow {
 	return types.VolumeGrow{SizeGiB: 2, OperationID: "b51b3d2b-4ccc-41d5-b430-3046340c30b0"}
 }
@@ -172,16 +204,16 @@ func TestManagedGrowthCommitReplayCASAndRestart(t *testing.T) {
 	}
 	_, err = m.GrowVolume(t.Context(), "data", v.ID, req, "t1")
 	requireVolumeStatus(t, err, 412)
-	if err := m.managed.validate(); err != nil {
-		t.Fatal(err)
+	if validateErr := m.managed.validate(); validateErr != nil {
+		t.Fatal(validateErr)
 	}
-	if err := m.FlushClaims(); err != nil {
-		t.Fatal(err)
+	if flushErr := m.FlushClaims(); flushErr != nil {
+		t.Fatal(flushErr)
 	}
 	m.Close()
 	m = openGrowthTest(t, cfg, e)
-	if err := m.Reconcile(t.Context()); err != nil {
-		t.Fatal(err)
+	if reconcileErr := m.Reconcile(t.Context()); reconcileErr != nil {
+		t.Fatal(reconcileErr)
 	}
 	got, err = m.GetVolume("data", "t1")
 	if err != nil || got.CapacityGeneration != 2 || got.SizeBytes != 3<<30 {
@@ -205,15 +237,15 @@ func TestManagedGrowthACKGuestLagAndLostResponseRecoverWithoutDispatch(t *testin
 			if m.managedPaused(sb) {
 				t.Fatal("growth paused data plane")
 			}
-			if err := m.FlushClaims(); err != nil {
-				t.Fatal(err)
+			if flushErr := m.FlushClaims(); flushErr != nil {
+				t.Fatal(flushErr)
 			}
 			m.Close()
 			e.lag = false
 			e.lostResponse = false
 			m = openGrowthTest(t, cfg, e)
-			if err := m.Reconcile(t.Context()); err != nil {
-				t.Fatal(err)
+			if reconcileErr := m.Reconcile(t.Context()); reconcileErr != nil {
+				t.Fatal(reconcileErr)
 			}
 			got, err = m.GrowVolume(t.Context(), "data", v.ID, growRequest(), "t1")
 			if err != nil || got.Growth.State != "completed" || got.CapacityGeneration != 1 || e.calls != 1 {
@@ -246,13 +278,13 @@ func TestManagedGrowthUnknownFencesLifecycleUntilExplicitExactStop(t *testing.T)
 	if m.removeVM(t.Context(), sb.VMName) || m.finishManaged(sb.ID, nil) {
 		t.Fatal("destructive fallback escaped guard")
 	}
-	if _, _, err := m.beginVolumeRun(t.Context(), sb); err == nil {
+	if _, _, runErr := m.beginVolumeRun(t.Context(), sb); runErr == nil {
 		t.Fatal("live mutation admitted")
 	}
-	if err := m.Hibernate(t.Context(), sb.ID, Cred{Operator: true}); err == nil {
+	if sleepErr := m.Hibernate(t.Context(), sb.ID, Cred{Operator: true}); sleepErr == nil {
 		t.Fatal("sleep admitted")
 	}
-	if err := m.DeleteVolume(t.Context(), "data", v.ID, "t1"); err == nil {
+	if deleteErr := m.DeleteVolume(t.Context(), "data", v.ID, "t1"); deleteErr == nil {
 		t.Fatal("delete admitted")
 	}
 	e.mu.Lock()
@@ -280,6 +312,9 @@ func TestManagedGrowthUnknownFencesLifecycleUntilExplicitExactStop(t *testing.T)
 		t.Fatal("process read error proved death")
 	}
 	e.processUnknown.Store(false)
+	if err = e.Stop(t.Context(), sb.VMName); err != nil {
+		t.Fatal(err)
+	}
 	m.managed.process = func(int) (processIdentity, error) { return processIdentity{}, os.ErrNotExist }
 	got, err := m.GrowVolume(t.Context(), "data", v.ID, growRequest(), "t1")
 	requireVolumeStatus(t, err, 409)
@@ -375,8 +410,8 @@ func TestManagedGrowthMissingClaimAndPriorOrphanPreserveOwner(t *testing.T) {
 	m.managed.mu.Unlock()
 	rec, _, _ := e.Inspect(t.Context(), sb.VMName)
 	live := map[string]types.VMRecord{sb.VMName: rec}
-	if err := m.recoverGrowth(t.Context(), map[string]*types.Sandbox{}); err != nil {
-		t.Fatal(err)
+	if err := m.recoverGrowth(t.Context(), map[string]*types.Sandbox{}, live); err == nil {
+		t.Fatal("missing growth owner must fail closed")
 	}
 	if _, err := m.recoverManaged(t.Context(), map[string]*types.Sandbox{}, live); err == nil {
 		t.Fatal("missing claim must fail closed")
@@ -427,7 +462,7 @@ func TestManagedGrowthConcurrentReplayAndReadOnlyGET(t *testing.T) {
 	if err := os.Rename(path, path+".replaced"); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(path, nil, 0600); err != nil {
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := m.GetVolume("data", "t1"); err == nil {
@@ -522,7 +557,7 @@ func TestManagedGrowthRefusesUnmountedOrUnappliedOwner(t *testing.T) {
 }
 
 func TestManagedGrowthMigratesVersionTwoBeforeIntentAndKeepsSleepValid(t *testing.T) {
-	m, _, _, _, v := newGrowthTest(t)
+	m, e, sb, _, v := newGrowthTest(t)
 	r := m.managed
 	r.data.Version = 2
 	if err := r.commit(); err != nil {
@@ -540,6 +575,9 @@ func TestManagedGrowthMigratesVersionTwoBeforeIntentAndKeepsSleepValid(t *testin
 	}
 	if _, err := m.GrowVolume(t.Context(), "data", v.ID, growRequest(), "t1"); err != nil {
 		t.Fatal(err)
+	}
+	if !e.intentSeen || snapshots[len(snapshots)-1].Volumes["data"].Growth.SandboxID != sb.ID {
+		t.Fatal("migration lost growth owner")
 	}
 	if len(snapshots) < 2 || snapshots[0].Version != 3 || snapshots[0].Volumes["data"].Growth != nil || snapshots[1].Volumes["data"].Growth == nil {
 		t.Fatal("migration was not durable before intent")

@@ -14,8 +14,9 @@ import (
 
 type ManagedVolumeInfo struct {
 	VolumeInfo
-	Holders []VolumeHolder `json:"holders,omitempty"`
-	Growth  *VolumeGrowth  `json:"growth,omitempty"`
+	CapacityGeneration uint64         `json:"capacity_generation"`
+	Holders            []VolumeHolder `json:"holders,omitempty"`
+	Growth             *VolumeGrowth  `json:"growth,omitempty"`
 }
 
 type ManagedVolumeError struct {

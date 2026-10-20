@@ -124,7 +124,8 @@ additional disks, egress, and unsupported runtimes are refused before admission.
 Configure every runtime lifecycle caller to use the same qualified Cocoon binary.
 Online block growth is qualified for Cloud Hypervisor, not Firecracker.
 
-Read the volume's immutable `id` and `capacity_generation`. Generate one UUID
+Read the volume's immutable `id` and `capacity_generation` from its individual
+GET response. The initial generation is zero; catalog summaries omit it. Generate one UUID
 for the operation and retain it with the absolute target and original generation.
 
 ```python
@@ -181,8 +182,15 @@ silently restarts the VM to resolve it. A `409` with
 `volume_grow_recovery_required` requires operator recovery. Inspect the volume,
 preserve its runtime record, and stop the exact recorded VM generation using
 the qualified runtime before repeating the same POST. A confirmed stopped
-generation permits ownership cleanup but does not count as online growth
-success. Offline data repair is outside this API.
+generation with a matching runtime receipt permits ownership cleanup but does
+not count as online growth success. An unknown receipt becomes `old_vmm_gone`;
+an acknowledged receipt stays `acknowledged` even when the guest stopped before
+capacity observation. Both settle as `recovery_required` without changing
+capacity or generation.
+
+If no matching runtime receipt exists, stopping the VM and retrying does not
+settle the intent. Retain the claim and registry records; operator quarantine
+outside this API is required. Offline data repair is outside this API.
 
 The first growth durably upgrades the managed registry to version 3. Older
 binaries refuse that registry. Keep the upgraded binary when restarting it.

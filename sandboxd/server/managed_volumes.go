@@ -165,8 +165,8 @@ func (s *Server) handleGrowVolume(w http.ResponseWriter, r *http.Request) {
 	}
 	grower, ok := mgr.(managedVolumeGrower)
 	if !ok {
-		if _, err := mgr.GetVolume(r.PathValue("name"), tenantFrom(r.Context())); err != nil {
-			if !writePoolErr(w, err) {
+		if _, getErr := mgr.GetVolume(r.PathValue("name"), tenantFrom(r.Context())); getErr != nil {
+			if !writePoolErr(w, getErr) {
 				volumeHTTPError(w, 503, "volume_storage_unavailable", "volume storage unavailable; retry")
 			}
 			return

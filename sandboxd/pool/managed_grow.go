@@ -9,6 +9,17 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
+const (
+	growthPending      = "pending"
+	growthCompleted    = "completed"
+	growthRecovery     = "recovery_required"
+	growthUnobserved   = "unobserved"
+	growthUnknown      = "outcome_unknown"
+	growthAcknowledged = "acknowledged"
+	growthVMMGone      = "old_vmm_gone"
+	growthObserved     = "observed"
+)
+
 type volumeGrowEngine interface {
 	InspectDisk(context.Context, engine.DiskRef) (engine.DiskInspection, error)
 	GrowDisk(context.Context, engine.DiskGrowRequest) (engine.DiskGrowResult, error)
@@ -23,18 +34,26 @@ type managedGrowth struct {
 	Guest          engine.GuestVolumeObservation `json:"guest"`
 	State          string                        `json:"state"`
 	Outcome        string                        `json:"outcome"`
+	VMMGone        bool                          `json:"vmm_gone,omitempty"`
 	GuestSizeBytes int64                         `json:"guest_size_bytes"`
 }
 
 func (g *managedGrowth) fenced() bool {
-	return g != nil && g.State != "completed" && g.Outcome != "old_vmm_gone"
+	return g != nil && g.State != growthCompleted && !g.settled()
 }
+
+func (g *managedGrowth) settled() bool {
+	return g != nil && (g.Outcome == growthVMMGone || g.VMMGone)
+}
+
 func growBusy() error {
 	return volumeError(409, "volume_grow_busy", "volume growth owns the sandbox lifecycle")
 }
+
 func growRecovery() error {
 	return volumeError(409, "volume_grow_recovery_required", "volume growth requires recovery; retain the operation ID and retry after recovery")
 }
+
 func (r *volumeRegistry) growthOwnsHold(id string) bool {
 	for _, v := range r.data.Volumes {
 		if v.Growth != nil && (v.Growth.fenced() || r.fault != nil) && v.Growth.SandboxID == id {
@@ -43,6 +62,7 @@ func (r *volumeRegistry) growthOwnsHold(id string) bool {
 	}
 	return false
 }
+
 func (m *Manager) growthOwnsHold(id string) bool {
 	if m.managed == nil {
 		return false
@@ -51,6 +71,7 @@ func (m *Manager) growthOwnsHold(id string) bool {
 	defer m.managed.mu.Unlock()
 	return m.managed.growthOwnsHold(id)
 }
+
 func (m *Manager) growthOwnsVM(name string) bool {
 	if m.managed == nil {
 		return false
@@ -63,6 +84,33 @@ func (m *Manager) growthOwnsVM(name string) bool {
 		}
 	}
 	return false
+}
+
+func (m *Manager) growthTeardownTarget(ctx context.Context, name string) (string, bool) {
+	r := m.managed
+	if r == nil {
+		return name, true
+	}
+	r.mu.Lock()
+	var settled []managedGrowth
+	for _, v := range r.data.Volumes {
+		g := v.Growth
+		if g == nil || g.VMName != name || !g.settled() {
+			continue
+		}
+		if _, held := r.data.Holds[g.SandboxID]; held {
+			settled = append(settled, *g)
+		}
+	}
+	r.mu.Unlock()
+	target := name
+	for _, g := range settled {
+		if !m.growthProcessStopped(ctx, g) || target != name && target != g.Runtime.Expected.Ref.VMID {
+			return "", false
+		}
+		target = g.Runtime.Expected.Ref.VMID
+	}
+	return target, true
 }
 
 func (r *volumeRegistry) growVolume(name, expectedID, tenant string, req types.VolumeGrow) (managedVolume, error) {
@@ -120,7 +168,7 @@ func (m *Manager) GrowVolume(ctx context.Context, name, expectedID string, req t
 	if v.Growth != nil && v.Growth.Request == req && !v.Growth.fenced() {
 		info := r.info(v)
 		r.mu.Unlock()
-		if v.Growth.State != "completed" {
+		if v.Growth.State != growthCompleted {
 			return info, growRecovery()
 		}
 		return info, nil
@@ -165,7 +213,7 @@ func (m *Manager) GrowVolume(ctx context.Context, name, expectedID string, req t
 	defer r.mu.Unlock()
 	v = r.data.Volumes[name]
 	info := r.info(v)
-	if v.Growth.State == "recovery_required" {
+	if v.Growth.State == growthRecovery {
 		return info, growRecovery()
 	}
 	return info, nil
@@ -183,6 +231,12 @@ func (m *Manager) growthHolderLocked(sb *types.Sandbox, v managedVolume) (volume
 		return h, managedStorageError()
 	}
 	return h, nil
+}
+
+func (r *volumeRegistry) growthBindingMatches(v managedVolume, h volumeHold, rec types.VMRecord, inspection engine.DiskInspection) bool {
+	b := inspection.Live.Binding
+	p, err := r.process(rec.PID)
+	return err == nil && p == h.Process && b != nil && b.Validate() == nil && b.Ref == inspection.Requested && b.Ref.VMID == rec.ID && b.Ref.DiskID == rec.AttachedDevices.Disks[0].ID && b.VMM == (engine.DiskProcess{BootID: p.BootID, PID: p.PID, Start: p.Start}) && b.Serial == v.Name && b.Path == r.path(v.ID) && b.Backing.Device == v.Backing.Device && b.Backing.Inode == v.Backing.Inode && b.ObservedBytes == v.Size && b.Revision != ^uint64(0)
 }
 
 func (m *Manager) admitGrowth(ctx context.Context, sb *types.Sandbox, v managedVolume, req types.VolumeGrow, ge volumeGrowEngine) error {
@@ -204,30 +258,38 @@ func (m *Manager) admitGrowth(ctx context.Context, sb *types.Sandbox, v managedV
 		return growRecovery()
 	}
 	inspection, err := ge.InspectDisk(ctx, engine.DiskRef{VMID: rec.ID, DiskID: disk.ID})
-	if err != nil || inspection.Error != nil || inspection.GuestBlockStatus != "unobserved" || inspection.Live.State != "observed" || inspection.Live.Binding == nil {
+	if err != nil || inspection.Error != nil || inspection.GuestBlockStatus != growthUnobserved || inspection.Live.State != growthObserved || inspection.Live.Binding == nil {
 		return volumeError(503, "volume_grow_unsupported", "runtime cannot provide a qualified disk binding")
 	}
 	binding := *inspection.Live.Binding
-	p, err := r.process(rec.PID)
-	if err != nil || p != h.Process || binding.Validate() != nil || binding.Ref != inspection.Requested || binding.Ref.VMID != rec.ID || binding.Ref.DiskID != disk.ID || binding.VMM != (engine.DiskProcess{BootID: p.BootID, PID: p.PID, Start: p.Start}) || binding.Serial != v.Name || binding.Path != r.path(v.ID) || binding.Backing.Device != v.Backing.Device || binding.Backing.Inode != v.Backing.Inode || binding.ObservedBytes != v.Size || binding.Revision == ^uint64(0) {
+	if !r.growthBindingMatches(v, h, rec, inspection) {
 		return growRecovery()
 	}
-	if inspection.LatestReceipt != nil && inspection.LatestReceipt.Outcome == "outcome_unknown" {
+	if inspection.LatestReceipt != nil && inspection.LatestReceipt.Outcome == growthUnknown {
 		return growRecovery()
 	}
 	guest, err := ge.ObserveVolume(ctx, rec.VsockSocket, v.Name, h.Refs[0].Volume.Mount)
 	if err != nil || !guest.Valid() || guest.Serial != v.Name || guest.SizeBytes != v.Size {
 		return growRecovery()
 	}
+	next := managedGrowth{Request: req, Runtime: engine.DiskGrowRequest{Expected: binding, ID: req.OperationID, TargetBytes: req.SizeGiB << 30}, SandboxID: sb.ID, VMName: h.VMName, Guest: guest, State: growthPending, Outcome: growthUnobserved}
+	return m.commitGrowthIntent(sb, v, next)
+}
+
+func (m *Manager) commitGrowthIntent(sb *types.Sandbox, v managedVolume, next managedGrowth) error {
+	if err := m.store.commitDurable(m.store.mark()); err != nil {
+		return err
+	}
+	r := m.managed
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	current, err := r.growVolume(v.Name, string(v.ID), v.Tenant, req)
+	current, err := r.growVolume(v.Name, string(v.ID), v.Tenant, next.Request)
 	if err != nil {
 		return err
 	}
-	if current.Growth != nil && current.Growth.Request == req {
+	if current.Growth != nil && current.Growth.Request == next.Request {
 		return nil
 	}
 	if _, err := m.growthHolderLocked(sb, current); err != nil {
@@ -243,9 +305,46 @@ func (m *Manager) admitGrowth(ctx context.Context, sb *types.Sandbox, v managedV
 		}
 	}
 	current.State = volumeGrowing
-	current.Growth = &managedGrowth{Request: req, Runtime: engine.DiskGrowRequest{Expected: binding, ID: req.OperationID, TargetBytes: req.SizeGiB << 30}, SandboxID: sb.ID, VMName: h.VMName, Guest: guest, State: "pending", Outcome: "unobserved"}
+	current.Growth = &next
 	r.data.Volumes[v.Name] = current
 	return r.commit()
+}
+
+func (g managedGrowth) canDispatch(i engine.DiskInspection, err error) bool {
+	return g.Outcome == growthUnobserved && g.State == growthPending && err == nil && i.Error == nil && i.Live.State == growthObserved && i.Live.Binding != nil && i.Live.Binding.Equal(g.Runtime.Expected) && (i.LatestReceipt == nil || i.LatestReceipt.Revision <= g.Runtime.Expected.Revision)
+}
+
+func (g managedGrowth) acknowledgedBinding(live engine.DiskObservation, revision uint64) bool {
+	b := live.Binding
+	return live.State == growthObserved && b != nil && b.Validate() == nil && b.SameIdentity(g.Runtime.Expected) && b.ObservedBytes == g.Runtime.TargetBytes && b.Revision == revision
+}
+
+func (m *Manager) growthProcessStopped(ctx context.Context, g managedGrowth) bool {
+	p := g.Runtime.Expected.VMM
+	if !m.managed.processGone(processIdentity{BootID: p.BootID, PID: p.PID, Start: p.Start}) {
+		return false
+	}
+	rec, present, err := m.eng.Inspect(ctx, g.VMName)
+	if err != nil {
+		return false
+	}
+	return !present || rec.ID == g.Runtime.Expected.Ref.VMID && rec.Config.Name == g.VMName && rec.State == vmStateStopped && (rec.PID == 0 || rec.PID == p.PID)
+}
+
+func (m *Manager) growthOwnerMatches(ctx context.Context, g managedGrowth, sb *types.Sandbox) bool {
+	if sb == nil || sb.VMName != g.VMName {
+		return false
+	}
+	rec, present, err := m.eng.Inspect(ctx, g.VMName)
+	return err == nil && present && m.growthRecordMatches(g, sb, rec)
+}
+
+func (m *Manager) growthRecordMatches(g managedGrowth, sb *types.Sandbox, rec types.VMRecord) bool {
+	if sb == nil || rec.ID != g.Runtime.Expected.Ref.VMID || rec.Config.Name != g.VMName || rec.State != vmStateRunning || rec.VsockSocket != sb.VsockSocket || rec.PID != g.Runtime.Expected.VMM.PID {
+		return false
+	}
+	p, err := m.managed.process(rec.PID)
+	return err == nil && p == (processIdentity{BootID: g.Runtime.Expected.VMM.BootID, PID: g.Runtime.Expected.VMM.PID, Start: g.Runtime.Expected.VMM.Start})
 }
 
 func (m *Manager) driveGrowth(ctx context.Context, name string, sb *types.Sandbox, ge volumeGrowEngine) error {
@@ -258,17 +357,16 @@ func (m *Manager) driveGrowth(ctx context.Context, name string, sb *types.Sandbo
 		return nil
 	}
 	inspection, inspectErr := ge.InspectDisk(ctx, g.Runtime.Expected.Ref)
-	if inspection.Requested != g.Runtime.Expected.Ref || inspection.GuestBlockStatus != "unobserved" {
+	if inspection.Requested != g.Runtime.Expected.Ref || inspection.GuestBlockStatus != growthUnobserved {
 		return nil
 	}
 	receipt, live := inspection.LatestReceipt, inspection.Live
 	if receipt == nil || !receipt.Request.Equal(g.Runtime) {
-		// Only the original source binding permits a first dispatch. A known receipt is query-only.
-		if sb == nil || g.Outcome != "unobserved" || g.State != "pending" || inspectErr != nil || inspection.Error != nil || live.State != "observed" || live.Binding == nil || !live.Binding.Equal(g.Runtime.Expected) {
-			return m.saveGrowth(v, g, "recovery_required", g.Outcome, 0)
+		if sb == nil {
+			return nil
 		}
-		if receipt != nil && receipt.Revision > g.Runtime.Expected.Revision {
-			return m.saveGrowth(v, g, "recovery_required", g.Outcome, 0)
+		if !g.canDispatch(inspection, inspectErr) {
+			return m.saveGrowth(v, g, growthRecovery, g.Outcome, 0)
 		}
 		result, _ := ge.GrowDisk(ctx, g.Runtime)
 		receipt, live = result.Receipt, result.Live
@@ -277,25 +375,33 @@ func (m *Manager) driveGrowth(ctx context.Context, name string, sb *types.Sandbo
 		}
 	}
 	if !receipt.Request.Equal(g.Runtime) || receipt.Revision != g.Runtime.Expected.Revision+1 {
-		return m.saveGrowth(v, g, "recovery_required", g.Outcome, 0)
+		return m.saveGrowth(v, g, growthRecovery, g.Outcome, 0)
 	}
 	switch receipt.Outcome {
-	case "outcome_unknown":
-		return m.saveGrowth(v, g, "recovery_required", "outcome_unknown", 0)
-	case "old_vmm_gone":
-		p := g.Runtime.Expected.VMM
-		if !r.processGone(processIdentity{BootID: p.BootID, PID: p.PID, Start: p.Start}) {
-			return m.saveGrowth(v, g, "recovery_required", g.Outcome, 0)
+	case growthUnknown:
+		return m.saveGrowth(v, g, growthRecovery, growthUnknown, 0)
+	case growthVMMGone:
+		if !m.growthProcessStopped(ctx, g) {
+			return m.saveGrowth(v, g, growthRecovery, g.Outcome, 0)
 		}
-		return m.saveGrowth(v, g, "recovery_required", "old_vmm_gone", 0)
-	case "acknowledged":
-		if live.State != "observed" || live.Binding == nil || live.Binding.Validate() != nil || !live.Binding.SameIdentity(g.Runtime.Expected) || live.Binding.ObservedBytes != g.Runtime.TargetBytes || live.Binding.Revision != receipt.Revision {
-			return m.saveGrowth(v, g, "recovery_required", "acknowledged", 0)
+		return m.saveGrowth(v, g, growthRecovery, growthVMMGone, 0)
+	case growthAcknowledged:
+		if m.growthProcessStopped(ctx, g) {
+			g.VMMGone = true
+			return m.saveGrowth(v, g, growthRecovery, growthAcknowledged, 0)
+		}
+		if !g.acknowledgedBinding(live, receipt.Revision) {
+			return m.saveGrowth(v, g, growthRecovery, growthAcknowledged, 0)
 		}
 	default:
-		return m.saveGrowth(v, g, "recovery_required", g.Outcome, 0)
+		return m.saveGrowth(v, g, growthRecovery, g.Outcome, 0)
 	}
-	if err := m.saveGrowth(v, g, "pending", "acknowledged", 0); err != nil {
+	return m.observeGrowth(ctx, v, g, sb, ge, live, receipt.Revision)
+}
+
+func (m *Manager) observeGrowth(ctx context.Context, v managedVolume, g managedGrowth, sb *types.Sandbox, ge volumeGrowEngine, live engine.DiskObservation, revision uint64) error {
+	r := m.managed
+	if err := m.saveGrowth(v, g, growthPending, growthAcknowledged, 0); err != nil {
 		return err
 	}
 	if sb == nil {
@@ -306,23 +412,23 @@ func (m *Manager) driveGrowth(ctx context.Context, name string, sb *types.Sandbo
 		return nil
 	}
 	if !guest.Valid() || !guest.SameIdentity(g.Guest) {
-		return m.saveGrowth(v, g, "recovery_required", "acknowledged", 0)
+		return m.saveGrowth(v, g, growthRecovery, growthAcknowledged, 0)
 	}
 	if guest.SizeBytes == g.Guest.SizeBytes {
 		return nil
 	}
 	if guest.SizeBytes != g.Runtime.TargetBytes {
-		return m.saveGrowth(v, g, "recovery_required", "acknowledged", guest.SizeBytes)
+		return m.saveGrowth(v, g, growthRecovery, growthAcknowledged, guest.SizeBytes)
 	}
 	closing, closeErr := ge.InspectDisk(ctx, g.Runtime.Expected.Ref)
-	if closeErr != nil || closing.Error != nil || closing.Requested != g.Runtime.Expected.Ref || closing.LatestReceipt == nil || !closing.LatestReceipt.Request.Equal(g.Runtime) || closing.LatestReceipt.Revision != receipt.Revision || closing.LatestReceipt.Outcome != "acknowledged" || closing.Live.State != "observed" || closing.Live.Binding == nil || !closing.Live.Binding.Equal(*live.Binding) {
-		return m.saveGrowth(v, g, "recovery_required", "acknowledged", guest.SizeBytes)
+	if closeErr != nil || closing.Error != nil || closing.Requested != g.Runtime.Expected.Ref || closing.LatestReceipt == nil || !closing.LatestReceipt.Request.Equal(g.Runtime) || closing.LatestReceipt.Revision != revision || closing.LatestReceipt.Outcome != growthAcknowledged || closing.Live.State != growthObserved || closing.Live.Binding == nil || !closing.Live.Binding.Equal(*live.Binding) {
+		return m.saveGrowth(v, g, growthRecovery, growthAcknowledged, guest.SizeBytes)
 	}
 	p, processErr := r.process(g.Runtime.Expected.VMM.PID)
 	if processErr != nil || p != (processIdentity{BootID: g.Runtime.Expected.VMM.BootID, PID: g.Runtime.Expected.VMM.PID, Start: g.Runtime.Expected.VMM.Start}) {
-		return m.saveGrowth(v, g, "recovery_required", "acknowledged", guest.SizeBytes)
+		return m.saveGrowth(v, g, growthRecovery, growthAcknowledged, guest.SizeBytes)
 	}
-	return m.saveGrowth(v, g, "completed", "acknowledged", guest.SizeBytes)
+	return m.saveGrowth(v, g, growthCompleted, growthAcknowledged, guest.SizeBytes)
 }
 
 func (m *Manager) saveGrowth(v managedVolume, g managedGrowth, state, outcome string, guestSize int64) error {
@@ -335,7 +441,7 @@ func (m *Manager) saveGrowth(v managedVolume, g managedGrowth, state, outcome st
 	}
 	g.State, g.Outcome, g.GuestSizeBytes = state, outcome, guestSize
 	current.Growth = &g
-	if state == "completed" {
+	if state == growthCompleted {
 		if !current.Growth.fenced() && current.CapacityGeneration != g.Request.ExpectedGeneration {
 			return managedStorageError()
 		}
@@ -354,7 +460,7 @@ func (m *Manager) saveGrowth(v managedVolume, g managedGrowth, state, outcome st
 			}
 			r.data.Holds[id] = h
 		}
-	} else if outcome == "old_vmm_gone" {
+	} else if g.settled() {
 		current.State = volumeRecovery
 	}
 	r.data.Volumes[v.Name] = current
@@ -369,40 +475,68 @@ func (r *volumeRegistry) validateGrowth(v managedVolume) error {
 		}
 		return nil
 	}
+	if r.data.Version != 3 {
+		return errors.New("invalid volume growth registry version")
+	}
+	if err := r.validateGrowthIntent(v); err != nil {
+		return err
+	}
+	return r.validateGrowthProgress(v)
+}
+
+func (r *volumeRegistry) validateGrowthIntent(v managedVolume) error {
+	g := v.Growth
 	b := g.Runtime.Expected
-	if r.data.Version != 3 || !engine.ValidGrowID(g.Request.OperationID) || g.Runtime.ID != g.Request.OperationID || g.Request.SizeGiB < 1 || g.Request.SizeGiB > 1024 || g.Runtime.TargetBytes != g.Request.SizeGiB<<30 || b.Validate() != nil || b.Revision == ^uint64(0) || b.Path != r.path(v.ID) || b.Serial != v.Name || b.Backing.Inode != v.Backing.Inode || b.Backing.Device != v.Backing.Device || b.ObservedBytes < 1<<30 || b.ObservedBytes%(1<<30) != 0 || b.ObservedBytes >= g.Runtime.TargetBytes || g.Request.ExpectedGeneration == ^uint64(0) || !g.Guest.Valid() || g.Guest.Serial != v.Name || g.Guest.SizeBytes != b.ObservedBytes || g.SandboxID == "" || g.VMName == "" {
+	if !engine.ValidGrowID(g.Request.OperationID) || g.Runtime.ID != g.Request.OperationID || g.Request.SizeGiB < 1 || g.Request.SizeGiB > 1024 || g.Runtime.TargetBytes != g.Request.SizeGiB<<30 || b.Validate() != nil || b.Revision == ^uint64(0) || b.Path != r.path(v.ID) || b.Serial != v.Name || b.Backing.Inode != v.Backing.Inode || b.Backing.Device != v.Backing.Device || b.ObservedBytes < 1<<30 || b.ObservedBytes%(1<<30) != 0 || b.ObservedBytes >= g.Runtime.TargetBytes || g.Request.ExpectedGeneration == ^uint64(0) || !g.Guest.Valid() || g.Guest.Serial != v.Name || g.Guest.SizeBytes != b.ObservedBytes || g.SandboxID == "" || g.VMName == "" {
 		return errors.New("invalid volume growth intent")
 	}
+	return nil
+}
+
+func (r *volumeRegistry) validateGrowthProgress(v managedVolume) error {
+	g := v.Growth
+	b := g.Runtime.Expected
+	if g.VMMGone && (g.Outcome != growthAcknowledged || g.State != growthRecovery) {
+		return errors.New("invalid stopped growth generation")
+	}
 	switch g.Outcome {
-	case "unobserved", "outcome_unknown", "acknowledged", "old_vmm_gone":
+	case growthUnobserved, growthUnknown, growthAcknowledged, growthVMMGone:
 	default:
 		return errors.New("invalid growth outcome")
 	}
 	switch g.State {
-	case "completed":
-		if (v.State != volumeReady && v.State != volumeDeleting && v.State != volumeRecovery) || g.Outcome != "acknowledged" || g.GuestSizeBytes != g.Runtime.TargetBytes || v.Size != g.Runtime.TargetBytes || g.Request.ExpectedGeneration == ^uint64(0) || v.CapacityGeneration != g.Request.ExpectedGeneration+1 {
+	case growthCompleted:
+		if (v.State != volumeReady && v.State != volumeDeleting && v.State != volumeRecovery) || g.Outcome != growthAcknowledged || g.GuestSizeBytes != g.Runtime.TargetBytes || v.Size != g.Runtime.TargetBytes || g.Request.ExpectedGeneration == ^uint64(0) || v.CapacityGeneration != g.Request.ExpectedGeneration+1 {
 			return errors.New("inconsistent completed growth")
 		}
-	case "pending", "recovery_required":
-		if g.State == "pending" && g.Outcome != "unobserved" && g.Outcome != "acknowledged" {
+	case growthPending, growthRecovery:
+		if g.State == growthPending && g.Outcome != growthUnobserved && g.Outcome != growthAcknowledged {
 			return errors.New("pending growth has terminal runtime outcome")
 		}
-		if v.Size != b.ObservedBytes || v.CapacityGeneration != g.Request.ExpectedGeneration || g.Outcome == "old_vmm_gone" && ((v.State != volumeRecovery && v.State != volumeDeleting) || g.State != "recovery_required") || g.Outcome != "old_vmm_gone" && v.State != volumeGrowing {
+		if v.Size != b.ObservedBytes || v.CapacityGeneration != g.Request.ExpectedGeneration || g.settled() && ((v.State != volumeRecovery && v.State != volumeDeleting) || g.State != growthRecovery) || !g.settled() && v.State != volumeGrowing {
 			return errors.New("inconsistent unresolved growth")
 		}
 		if g.fenced() {
-			h, ok := r.data.Holds[g.SandboxID]
-			if !ok || h.VMName != g.VMName || h.State != holdClaimed || h.Sleep != nil || len(h.Refs) != 1 || h.Refs[0].ID != v.ID || !h.Refs[0].Volume.RW() || h.Refs[0].Volume.Mount == "" || h.Process != (processIdentity{BootID: b.VMM.BootID, PID: b.VMM.PID, Start: b.VMM.Start}) {
-				return errors.New("growth lost owner")
-			}
+			return r.validateGrowthOwner(v)
 		}
+
 	default:
 		return errors.New("invalid growth state")
 	}
 	return nil
 }
 
-func (m *Manager) recoverGrowth(ctx context.Context, claims map[string]*types.Sandbox) error {
+func (r *volumeRegistry) validateGrowthOwner(v managedVolume) error {
+	g := v.Growth
+	b := g.Runtime.Expected
+	h, ok := r.data.Holds[g.SandboxID]
+	if !ok || h.VMName != g.VMName || h.State != holdClaimed || h.Sleep != nil || len(h.Refs) != 1 || h.Refs[0].ID != v.ID || !h.Refs[0].Volume.RW() || h.Refs[0].Volume.Mount == "" || h.Process != (processIdentity{BootID: b.VMM.BootID, PID: b.VMM.PID, Start: b.VMM.Start}) {
+		return errors.New("growth lost owner")
+	}
+	return nil
+}
+
+func (m *Manager) recoverGrowth(ctx context.Context, claims map[string]*types.Sandbox, live map[string]types.VMRecord) error {
 	r := m.managed
 	if r == nil {
 		return nil
@@ -426,11 +560,14 @@ func (m *Manager) recoverGrowth(ctx context.Context, claims map[string]*types.Sa
 	for _, v := range pending {
 		sb := claims[v.Growth.SandboxID]
 		h, held := m.managedHold(v.Growth.SandboxID)
-		if sb != nil && (!held || !sleepMatchesClaim(h, sb) || sb.VMName != v.Growth.VMName || sb.Tenant != v.Tenant) {
+		if sb != nil && (!held || !sleepMatchesClaim(h, sb) || sb.VMName != v.Growth.VMName || sb.Tenant != v.Tenant || !m.growthRecordMatches(*v.Growth, sb, live[v.Growth.VMName]) || !m.growthOwnerMatches(ctx, *v.Growth, sb)) {
 			sb = nil
 		}
 		if err := m.driveGrowth(ctx, v.Name, sb, ge); err != nil {
 			return err
+		}
+		if m.growthOwnsHold(v.Growth.SandboxID) && sb == nil {
+			return managedStorageError()
 		}
 	}
 	return nil
