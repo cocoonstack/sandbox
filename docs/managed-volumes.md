@@ -1,9 +1,9 @@
 # Tenant managed persistent volumes
 
 Managed volumes keep a tenant's data disk when a sandbox claim is released or
-replaced with a different template. This phase adds node-local create, inspect,
-list and conditional delete, claim-time attachment to warm VMs, and durable
-single-writer exclusion. It builds on the existing
+replaced with a different template. The node-local API supports create, inspect,
+list, and conditional delete. Claims can attach managed disks to warm VMs with
+durable single-writer exclusion. This builds on the existing
 [read-only live volume API](live-volumes.md).
 
 This is a subset of [issue #300](https://github.com/cocoonstack/sandbox/issues/300).
@@ -285,8 +285,8 @@ attachments and delayed removal retain ownership. These rules also apply when
 
 A failed egress recovery fences the claim and attempts VM removal even if
 managed retirement persistence fails. A stubborn VM or unavailable registry
-can keep the hold for operator recovery. This phase does not promise that an
-uncooperative VMM can always be killed.
+can keep the hold for operator recovery. An uncooperative VMM may still retain
+the hold.
 
 After restart, the persisted egress-quarantine failure marker resumes retirement
 and removal. Ordinary failed claims keep their existing ownership until release.
@@ -301,4 +301,5 @@ remain in force.
 2. Add archive/export and restore of external data disks.
 3. Add Kubernetes lifecycle/status ownership once the daemon contracts are stable.
 
-These are proposed next steps. None is implemented or qualified by this phase.
+These are proposed next steps. Owner-node placement and archive export are not
+implemented or qualified. Kubernetes lifecycle ownership also remains open.

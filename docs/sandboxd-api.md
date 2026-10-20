@@ -19,8 +19,10 @@ All bodies are JSON. Three token kinds:
 
 Endpoints below that say "node API token" accept root or tenant unless
 marked root-only. Errors are `{"error": "message"}` with the status codes
-listed per endpoint. Request bodies are capped at 1 MiB; a larger one is
-rejected with `400 {"error": "invalid request body"}`.
+listed per endpoint. Managed volume routes also return a `code` field and
+may return a `volume` name and `holders` array. Request bodies are capped
+at 1 MiB; a larger one is rejected with 400. Managed routes use their
+endpoint-specific error bodies.
 
 ## POST /v1/claim
 
@@ -259,9 +261,81 @@ When `managed_volume_dir` is enabled, this list also includes caller-visible
 managed summaries and requires an explicit root or tenant token. Individual
 managed GET responses carry holder details, `capacity_generation` (including
 initial zero), and the latest growth operation. Catalog summaries retain their
-existing shape; use the individual GET for the authoritative capacity generation. The node-local create, inspect
-conditional-delete, and online-growth routes are documented in
-[Tenant managed persistent volumes](managed-volumes.md#manage-a-resource).
+existing shape; use the individual GET for the authoritative capacity generation.
+
+## PUT /v1/volumes/{name}
+
+Creates a node-local managed volume. Auth requires an explicit root or tenant
+bearer token. A tenant token makes that tenant the owner. A root token must
+name an existing tenant in `tenant`. A tenant cannot name another owner.
+
+The strict JSON body requires `size_gib`, an integer from 1 through 1024.
+`tenant` is optional for a tenant token. The name must start with a lowercase
+letter and contain at most 19 more lowercase letters, digits, underscores, or
+hyphens. It must not start with `cocoon-`.
+
+```json
+{"size_gib":20}
+```
+
+`201` returns the `volume` envelope and an `ETag` containing the quoted,
+immutable `volume.id`. For example:
+
+```json
+{"volume":{"kind":"managed","id":"vol_1234567890abcdef1234567890abcdef",
+ "tenant":"acme","node":"node-1","state":"ready",
+ "created_at":"2026-10-20T00:00:00Z","name":"work",
+ "default_mount":"/volumes/work","size_bytes":21474836480,
+ "available":true,"nodes":1,"writable":true,"capacity_generation":0}}
+```
+
+An identical request for the same owner and size returns `200` with the same
+ID and ETag. The volume is a sparse raw disk. Creation does not format a
+filesystem. `holders` is present when sandboxes hold the volume. `growth` is
+present when a growth operation exists.
+
+Errors use `{"error":"message","code":"volume_code"}`. They include `400`
+for an invalid body, name, size, or owner; `401` for a missing or invalid token;
+`403` when a tenant selects another owner; `404` for another tenant's existing
+volume; `409` for a catalog name, different size or owner, or pending deletion;
+and `503` for unavailable storage or tenant lookup. A create interrupted after
+allocation may return `503` with code `volume_create_incomplete` and require
+operator recovery. `503` responses include `Retry-After`; the recovery codes
+do not promise that an immediate retry will succeed.
+
+## GET /v1/volumes/{name}
+
+Auth requires an explicit root or tenant bearer token. Root can inspect any
+managed volume. A tenant can inspect only its own. An unknown or foreign name
+returns the same `404` body with code `volume_not_found`.
+
+`200` returns `{"volume": {...}}` and the quoted immutable ID in `ETag`.
+The volume includes `capacity_generation` and, when present, `growth` with its
+latest operation. `holders` contains public `sandbox_id`, `mode`, and `state`
+values when the volume is held. Host backing paths and process IDs are absent.
+GET observes growth progress without advancing it.
+
+Other errors include `401` for a missing or invalid token and `503` when the
+managed store or backing inspection is unavailable. A `503` includes
+`Retry-After`.
+
+## DELETE /v1/volumes/{name}
+
+Auth requires an explicit root or tenant bearer token. Send the quoted ID
+from the volume's `ETag` as `If-Match`. Root can delete any managed volume;
+a tenant can delete only its own.
+
+`204` has no body. Repeating a completed deletion with the same name and ID
+also returns `204`. A new resource with the same name has a new ID, so replaying
+the old deletion does not remove it.
+
+Errors use the managed volume error body. They include `401` for a missing or
+invalid token; `404` for an unknown or foreign name or tombstone; `409` for a
+held volume or pending growth; `412` for a malformed or mismatched `If-Match`;
+`428` for a missing `If-Match`; and `503` for unavailable storage or backing
+identity that requires operator recovery. A busy response has code
+`volume_busy` and includes the volume name and public holder list. `503`
+responses include `Retry-After`.
 
 ## POST /v1/volumes/{name}/grow
 
