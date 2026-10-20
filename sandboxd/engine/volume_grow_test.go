@@ -112,3 +112,49 @@ func TestGrowthRejectsMalformedWireEvenWithAValidReceiptPrefix(t *testing.T) {
 		t.Fatalf("partial malformed stdout accepted: %+v %v", got, err)
 	}
 }
+
+func TestGrowthAcceptsAdditiveRuntimeFields(t *testing.T) {
+	inspect, err := os.ReadFile("testdata/disk-inspect.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	grow, err := os.ReadFile("testdata/disk-grow.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var expected DiskInspection
+	var result DiskGrowResult
+	if err := json.Unmarshal(inspect, &expected); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(grow, &result); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GROW_INSPECT", strings.ReplaceAll(string(inspect), "{", `{"future_field":{"nested":true},`))
+	t.Setenv("GROW_RESULT", strings.ReplaceAll(string(grow), "{", `{"future_field":{"nested":true},`))
+	fakeCocoon(t, `#!/bin/sh
+if [ "$3" = inspect ]; then printf '%s' "$GROW_INSPECT"; else printf '%s' "$GROW_RESULT"; fi
+`)
+	e := New("cocoon", nil, nil, false, false, "")
+	got, err := e.InspectDisk(t.Context(), expected.Requested)
+	if err != nil || got.Live.Binding == nil || !got.Live.Binding.Equal(*expected.Live.Binding) {
+		t.Errorf("additive inspection fields rejected: %+v %v", got, err)
+	}
+	ack, err := e.GrowDisk(t.Context(), result.Receipt.Request)
+	if err != nil || ack.Receipt == nil || !ack.Receipt.Request.Equal(result.Receipt.Request) {
+		t.Errorf("additive growth fields rejected: %+v %v", ack, err)
+	}
+	t.Setenv("GROW_INSPECT", strings.Replace(string(inspect), `"guest_block_status": "unobserved"`, `"guest_block_status": "unsupported"`, 1))
+	if _, err := e.InspectDisk(t.Context(), expected.Requested); err == nil {
+		t.Fatal("unsupported known inspection field accepted")
+	}
+}
+
+func TestRunDiscardsFailedOutputOutsideGrowth(t *testing.T) {
+	fakeCocoon(t, "#!/bin/sh\nprintf 'partial output'\nexit 1\n")
+	e := New("cocoon", nil, nil, false, false, "")
+	raw, err := e.run(t.Context(), "vm", "inspect", "test-vm")
+	if err == nil || len(raw) != 0 {
+		t.Fatalf("ordinary command returned failed output: %q %v", raw, err)
+	}
+}
