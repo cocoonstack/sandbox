@@ -178,6 +178,20 @@ func growRequest() types.VolumeGrow {
 	return types.VolumeGrow{SizeGiB: 2, OperationID: "b51b3d2b-4ccc-41d5-b430-3046340c30b0"}
 }
 
+func startGrowthTestReap(t *testing.T, m *Manager) func() {
+	t.Helper()
+	maint, refill := m.maintSem, m.refillSem
+	m.maintSem, m.refillSem = make(chan struct{}), make(chan struct{})
+	m.reapOnce(t.Context())
+	<-m.maintSem
+	<-m.refillSem
+	return sync.OnceFunc(func() {
+		m.refillSem <- struct{}{}
+		m.maintSem <- struct{}{}
+		m.maintSem, m.refillSem = maint, refill
+	})
+}
+
 func TestManagedGrowthCommitReplayCASAndRestart(t *testing.T) {
 	m, e, sb, cfg, v := newGrowthTest(t)
 	req := growRequest()
@@ -272,9 +286,14 @@ func TestManagedGrowthUnknownFencesLifecycleUntilExplicitExactStop(t *testing.T)
 	m.mu.Lock()
 	sb.Deadline = time.Now().Add(-time.Second)
 	m.mu.Unlock()
-	m.reapOnce(t.Context())
+	finishReap := startGrowthTestReap(t, m)
+	defer finishReap()
+	finishReap()
 	if _, ok := m.Sandbox(sb.ID); !ok {
 		t.Fatal("ordinary reap dropped grow owner")
+	}
+	if _, renewErr := m.Renew(t.Context(), sb.ID, Cred{Operator: true}, time.Hour, ""); renewErr != nil {
+		t.Fatal(renewErr)
 	}
 	if m.removeVM(t.Context(), sb.VMName) || m.finishManaged(sb.ID, nil) {
 		t.Fatal("destructive fallback escaped guard")
@@ -334,12 +353,22 @@ func TestManagedGrowthAdmissionSerializesOrdinaryReleaseAndReap(t *testing.T) {
 	m, e, sb, _, v := newGrowthTest(t)
 	e.entered = make(chan struct{})
 	e.resume = make(chan struct{})
-	done := make(chan error, 1)
-	go func() { _, err := m.GrowVolume(t.Context(), "data", v.ID, growRequest(), "t1"); done <- err }()
+	done := make(chan struct{})
+	var growErr error
+	go func() {
+		_, growErr = m.GrowVolume(t.Context(), "data", v.ID, growRequest(), "t1")
+		close(done)
+	}()
+	resumeGrowth := sync.OnceValue(func() error {
+		close(e.resume)
+		<-done
+		return growErr
+	})
+	defer resumeGrowth()
 	select {
 	case <-e.entered:
-	case err := <-done:
-		t.Fatalf("grow did not dispatch: %v", err)
+	case <-done:
+		t.Fatalf("grow did not dispatch: %v", growErr)
 	}
 	if m.managedLifecycle(sb) {
 		t.Fatal("test must cover release without Transition")
@@ -348,13 +377,26 @@ func TestManagedGrowthAdmissionSerializesOrdinaryReleaseAndReap(t *testing.T) {
 	m.mu.Lock()
 	sb.Deadline = time.Now().Add(-time.Second)
 	m.mu.Unlock()
-	m.reapOnce(t.Context())
+	finishReap := startGrowthTestReap(t, m)
+	defer func() {
+		resumeGrowth()
+		finishReap()
+	}()
 	if _, ok := m.Sandbox(sb.ID); !ok {
 		t.Fatal("reap dropped grow owner")
 	}
-	close(e.resume)
-	if err := <-done; err != nil {
+	if err := resumeGrowth(); err != nil {
 		t.Fatal(err)
+	}
+	finishReap()
+	if _, ok := m.Sandbox(sb.ID); ok {
+		t.Fatal("expiry retained claim after growth completed")
+	}
+	if _, held := m.managedHold(sb.ID); held {
+		t.Fatal("expiry retained volume hold after growth completed")
+	}
+	if _, present, err := e.Inspect(t.Context(), sb.VMName); err != nil || present {
+		t.Fatalf("expiry retained VM after growth completed: present=%t err=%v", present, err)
 	}
 }
 
