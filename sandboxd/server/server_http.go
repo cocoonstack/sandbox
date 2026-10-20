@@ -172,9 +172,7 @@ func metadataFilter(pairs []string) (types.Metadata, error) {
 
 func writePoolErr(w http.ResponseWriter, err error) bool {
 	if volumeErr, ok := errors.AsType[*pool.VolumeError](err); ok {
-		if volumeErr.Status == http.StatusServiceUnavailable {
-			w.Header().Set("Retry-After", retryAfterSeconds)
-		}
+		mapPoolErr(w, err)
 		writeJSON(w, volumeErr.Status, volumeErr)
 		return true
 	}
@@ -188,6 +186,10 @@ func writePoolErr(w http.ResponseWriter, err error) bool {
 func mapPoolErr(w http.ResponseWriter, err error) (code int, msg string, ok bool) {
 	code, msg, ok = lookupPoolErr(err)
 	if ok && code == http.StatusServiceUnavailable {
+		if volumeErr, managed := errors.AsType[*pool.VolumeError](err); managed &&
+			(volumeErr.Code == "volume_create_incomplete" || volumeErr.Code == "volume_backing_mismatch" || volumeErr.Code == "volume_grow_unsupported") {
+			return code, msg, ok
+		}
 		w.Header().Set("Retry-After", retryAfterSeconds)
 	}
 	return code, msg, ok
