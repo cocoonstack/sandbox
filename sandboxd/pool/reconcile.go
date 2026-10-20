@@ -50,7 +50,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 	}
 	if managedErr != nil {
 		claims = originalClaims
-		m.fenceManagedRecovery(ctx, managedErr, claims, live)
+		m.fenceManagedRecovery(ctx, managedErr, claims, live, inventoryErr == nil)
 		for name := range live {
 			owned[name] = true
 		}
@@ -205,10 +205,24 @@ func (m *Manager) holdStaleVolumes(ctx context.Context, name string, rec types.V
 	if rec.State != vmStateRunning {
 		return nil
 	}
-	inspected, _, err := m.eng.Inspect(ctx, name)
+	holds, err := m.inspectStaleVolumes(ctx, name)
 	if err != nil {
 		log.WithFunc("pool.holdStaleVolumes").Warnf(ctx, "inspect stale vm %s, its volumes stay unheld: %v", name, err)
 		return nil
+	}
+	m.mu.Lock()
+	m.adoptVolumes(holds)
+	m.mu.Unlock()
+	return holds
+}
+
+func (m *Manager) inspectStaleVolumes(ctx context.Context, name string) ([]types.Volume, error) {
+	inspected, found, err := m.eng.Inspect(ctx, name)
+	if err != nil {
+		return nil, err
+	}
+	if !found {
+		return nil, fmt.Errorf("stale VM %s absent from inspection", name)
 	}
 	holds := make([]types.Volume, len(inspected.AttachedDevices.Disks))
 	for i, disk := range inspected.AttachedDevices.Disks {
@@ -217,10 +231,7 @@ func (m *Manager) holdStaleVolumes(ctx context.Context, name string, rec types.V
 			holds[i].Mode = types.VolumeModeRW
 		}
 	}
-	m.mu.Lock()
-	m.adoptVolumes(holds)
-	m.mu.Unlock()
-	return holds
+	return holds, nil
 }
 
 // resyncEgress re-locks adopted egress claims, quarantining any it cannot lock.
@@ -379,7 +390,7 @@ func (m *Manager) sweepOrphanSnapshots(ctx context.Context, snaps []string, snap
 	}
 }
 
-func (m *Manager) fenceManagedRecovery(ctx context.Context, err error, claims map[string]*types.Sandbox, live map[string]types.VMRecord) {
+func (m *Manager) fenceManagedRecovery(ctx context.Context, err error, claims map[string]*types.Sandbox, live map[string]types.VMRecord, inventoryKnown bool) {
 	r := m.managed
 	r.mu.Lock()
 	r.fault = err
@@ -396,8 +407,31 @@ func (m *Manager) fenceManagedRecovery(ctx context.Context, err error, claims ma
 		}
 	}
 	r.mu.Unlock()
+	known := make(map[string]bool, len(claims))
+	for _, sb := range claims {
+		known[sb.VMName] = true
+	}
+	var retained []types.Volume
+	for name, rec := range live {
+		if known[name] || !strings.HasPrefix(name, vmPrefix) || rec.State != vmStateRunning {
+			continue
+		}
+		holds, inspectErr := m.inspectStaleVolumes(ctx, name)
+		if inspectErr != nil {
+			inventoryKnown = false
+			log.WithFunc("pool.Reconcile").Error(ctx, inspectErr, "stale volume inventory unavailable; catalog admissions fenced")
+			continue
+		}
+		retained = append(retained, holds...)
+	}
+	if !inventoryKnown {
+		for name := range m.volumes {
+			retained = append(retained, types.Volume{Name: name, Mode: types.VolumeModeRW})
+		}
+	}
 	m.mu.Lock()
 	m.volumeAdmission = map[string]volumeHolders{}
+	m.adoptVolumes(retained)
 	m.mu.Unlock()
 	log.WithFunc("pool.Reconcile").Error(ctx, err, "managed storage fenced; retaining claims and VMs")
 }

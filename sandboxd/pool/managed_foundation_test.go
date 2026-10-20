@@ -709,7 +709,7 @@ func TestManagedRecoveryFencesAgentSocket(t *testing.T) {
 	m.mu.Lock()
 	m.addClaimLocked(ordinary)
 	m.mu.Unlock()
-	m.fenceManagedRecovery(t.Context(), errors.New("inventory unavailable"), map[string]*types.Sandbox{sb.ID: sb, ordinary.ID: ordinary}, nil)
+	m.fenceManagedRecovery(t.Context(), errors.New("inventory unavailable"), map[string]*types.Sandbox{sb.ID: sb, ordinary.ID: ordinary}, nil, true)
 	if socket, err := m.AgentSocket(sb.ID, sb.Token); err == nil || socket != "" {
 		t.Fatalf("uncertain managed claim exposes socket %q, error=%v", socket, err)
 	}
@@ -719,5 +719,59 @@ func TestManagedRecoveryFencesAgentSocket(t *testing.T) {
 	sb.Volumes = nil
 	if socket, err := m.AgentSocket(sb.ID, sb.Token); err == nil || socket != "" {
 		t.Fatalf("recorded uncertain VM exposes socket after empty volume projection: %q, %v", socket, err)
+	}
+}
+
+func TestManagedFaultRetainsStaleCatalogWriter(t *testing.T) {
+	for _, unknown := range []bool{false, true} {
+		name := "observed"
+		if unknown {
+			name = "unknown"
+		}
+		t.Run(name, func(t *testing.T) {
+			cfg := managedConfig(t)
+			path := filepath.Join(filepath.Dir(cfg.DataDir), "catalog.img")
+			if err := os.WriteFile(path, []byte("catalog"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			freePath := filepath.Join(filepath.Dir(cfg.DataDir), "other.img")
+			if err := os.WriteFile(freePath, []byte("other"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			cfg.Volumes = []config.VolumeSpec{{Name: "catalog", Path: path, Writable: true}, {Name: "other", Path: freePath, Writable: true}}
+			e := newManagedEngine()
+			m := openManagedTest(t, cfg, e)
+			old := foundationClaim(t, m, "catalog")
+			e.disks = map[string][]types.VMDisk{old.VMName: {{Name: "catalog", Path: path, ReadOnly: false}}}
+			m.releaseDelay = time.Hour
+			if err := m.Release(t.Context(), old.ID, Cred{Operator: true}); err != nil {
+				t.Fatal(err)
+			}
+			if _, present := e.vms[old.VMName]; !present {
+				t.Fatal("delayed release removed VM")
+			}
+			if err := m.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(cfg.ManagedVolumeDir, "registry.json"), []byte("{"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			e.missingInventory.Store(unknown)
+			m = openManagedTest(t, cfg, e)
+			if err := m.Reconcile(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			if _, present := e.vms[old.VMName]; !present {
+				t.Fatal("unknown stale writer was swept")
+			}
+
+			if newer, err := m.ClaimProvision(t.Context(), testKey, managedOptions("catalog")); err == nil {
+				t.Fatalf("second writer %s admitted while old VM %s remains", newer.VMName, old.VMName)
+			}
+			if _, err := m.ClaimProvision(t.Context(), testKey, managedOptions("other")); (err != nil) != unknown {
+				t.Fatalf("unrelated catalog availability: unknown=%v error=%v", unknown, err)
+			}
+			foundationClaim(t, m)
+		})
 	}
 }
