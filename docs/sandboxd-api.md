@@ -258,8 +258,45 @@ entry's response is byte-identical to v1.
 When `managed_volume_dir` is enabled, this list also includes caller-visible
 managed summaries and requires an explicit root or tenant token. Individual
 managed GET responses carry holder details. The node-local create, inspect
-and conditional-delete routes are documented in
+conditional-delete, and online-growth routes are documented in
 [Tenant managed persistent volumes](managed-volumes.md#manage-a-resource).
+
+## POST /v1/volumes/{name}/grow
+
+Auth requires an explicit root or tenant management token. The node owning the
+managed volume handles the request. `If-Match` contains its quoted immutable
+resource ID. The strict JSON body requires `size_gib`, `expected_generation`,
+and `operation_id`. Capacity generation is independent of the identity ETag.
+
+```json
+{"size_gib":40,"expected_generation":0,"operation_id":"efbf4748-1c72-43ee-8304-b4e1a91322b5"}
+```
+
+The target is absolute GiB, from 1 through 1024, and must increase committed
+capacity for a fresh operation. The operation ID is a canonical lowercase
+nonzero UUID. `200` returns the `volume` envelope with `growth.state` completed.
+`202` returns the same envelope with pending progress. Only completion commits
+`size_bytes` and increments `capacity_generation`. The ETag remains the resource ID.
+
+`growth` reports `operation_id`, `expected_generation`, `target_bytes`, `state`,
+`runtime_outcome`, `guest_size_bytes`, and `filesystem_status`. State is pending,
+completed, or recovery_required. Runtime outcome is unobserved, outcome_unknown,
+acknowledged, or old_vmm_gone. Guest bytes remain zero until observed.
+Filesystem status is not_managed. Completion proves guest block capacity and
+does not extend the filesystem.
+
+GET detail exposes the latest operation without driving it. After a pending
+result or a lost response, repeat the original POST, including its original
+generation. An exact latest-operation replay is checked before the current
+generation. No permanent operation history is provided.
+
+Errors are `400` invalid arguments, `401` missing or invalid management token,
+`404` foreign or unknown volume, `409` conflicting request or lifecycle,
+`412` wrong identity or stale generation, `428` missing `If-Match`, and `503`
+unsupported runtime or unavailable storage. A terminal recovery result returns
+`409` with code `volume_grow_recovery_required`; GET retains its progress.
+See [Grow a running volume](managed-volumes.md#grow-a-running-volume) for the
+supported workload and recovery limits.
 
 ## GET /v1/sandboxes/{id}/volumes
 

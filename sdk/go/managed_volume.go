@@ -15,6 +15,7 @@ import (
 type ManagedVolumeInfo struct {
 	VolumeInfo
 	Holders []VolumeHolder `json:"holders,omitempty"`
+	Growth  *VolumeGrowth  `json:"growth,omitempty"`
 }
 
 type ManagedVolumeError struct {
@@ -26,7 +27,28 @@ type ManagedVolumeError struct {
 
 func (e *ManagedVolumeError) Unwrap() error { return e.APIError }
 
-var managedVolumeName = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,19}$`)
+var (
+	managedVolumeName = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,19}$`)
+	volumeOperationID = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+)
+
+// VolumeGrow requests an absolute block capacity. Reuse the complete request when retrying.
+type VolumeGrow struct {
+	SizeGiB            int64  `json:"size_gib"`
+	ExpectedGeneration uint64 `json:"expected_generation"`
+	OperationID        string `json:"operation_id"`
+}
+
+// VolumeGrowth reports the latest operation. Filesystem capacity is not managed.
+type VolumeGrowth struct {
+	OperationID        string `json:"operation_id"`
+	ExpectedGeneration uint64 `json:"expected_generation"`
+	TargetBytes        int64  `json:"target_bytes"`
+	State              string `json:"state"`
+	RuntimeOutcome     string `json:"runtime_outcome"`
+	GuestSizeBytes     int64  `json:"guest_size_bytes"`
+	FilesystemStatus   string `json:"filesystem_status"`
+}
 
 // VolumeCreate requests a raw managed disk owned by Tenant. A tenant token may leave Tenant empty.
 type VolumeCreate struct {
@@ -75,6 +97,52 @@ func (c *Client) GetVolume(ctx context.Context, name string) (*ManagedVolumeInfo
 		return nil, apiError("get volume", resp)
 	}
 	return decodeVolumeResponse("get volume", resp.Body)
+}
+
+// GrowVolume grows one running managed disk. A pending result requires the same request to reconcile.
+func (c *Client) GrowVolume(ctx context.Context, name, id string, grow VolumeGrow) (*ManagedVolumeInfo, error) {
+	if err := validManagedVolumeName(name); err != nil {
+		return nil, err
+	}
+	if id == "" || strings.ContainsAny(id, "\"\r\n") {
+		return nil, fmt.Errorf("volume id must be a nonempty unquoted resource id")
+	}
+	if grow.SizeGiB < 1 || grow.SizeGiB > 1024 {
+		return nil, fmt.Errorf("volume size_gib must be between 1 and 1024")
+	}
+	if !volumeOperationID.MatchString(grow.OperationID) || grow.OperationID == "00000000-0000-0000-0000-000000000000" {
+		return nil, fmt.Errorf("volume operation_id must be a canonical nonzero UUID")
+	}
+	body, err := encodeBody("grow volume", grow)
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.requestURL(c.addr, volumePath(name)+"/grow"), bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("If-Match", `"`+id+`"`)
+	if c.apiToken != "" {
+		req.Header.Set("Authorization", "Bearer "+c.apiToken)
+	}
+	resp, err := c.hc.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted {
+		return nil, apiError("grow volume", resp)
+	}
+	volume, err := decodeVolumeResponse("grow volume", resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	if volume.Growth == nil || volume.Growth.OperationID != grow.OperationID || volume.Growth.ExpectedGeneration != grow.ExpectedGeneration || volume.Growth.TargetBytes != grow.SizeGiB<<30 ||
+		(resp.StatusCode == http.StatusOK && volume.Growth.State != "completed") || (resp.StatusCode == http.StatusAccepted && volume.Growth.State != "pending") {
+		return nil, fmt.Errorf("decode grow volume response: missing or inconsistent growth result")
+	}
+	return volume, nil
 }
 
 // DeleteVolume deletes exactly id, including when an earlier response was lost.

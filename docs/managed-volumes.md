@@ -8,8 +8,9 @@ single-writer exclusion. It builds on the existing
 
 This is a subset of [issue #300](https://github.com/cocoonstack/sandbox/issues/300).
 Explicit hibernate and wake support one mounted writable managed volume when
-the node enables a workload hook. Online growth, placement by volume, and
-archive export remain follow-up work. Other capture operations still refuse
+the node enables a workload hook. Online block growth supports one running
+mounted writable managed volume on a qualified Cloud Hypervisor runtime.
+Placement by volume and archive export remain follow-up work. Other capture operations still refuse
 volume holders. This does not complete all of #300.
 
 ## Configure one node
@@ -60,6 +61,7 @@ tenant owner when creating one.
 | `PUT /v1/volumes/work` with `{"size_gib":20}` | `201`, `volume`, identity `ETag` | Identical retry returns `200` and the same identity; changed owner or capacity returns `409`. |
 | `GET /v1/volumes` | Catalog and managed summaries visible to caller | Managed summaries include identity and owner; use individual GET for holders. |
 | `GET /v1/volumes/work` | Managed detail with public holder IDs, modes and phases | Foreign and unknown names share `404`; host paths and process IDs stay private. |
+| `POST /v1/volumes/work/grow` with identity `If-Match` and a growth request | `200` completed or `202` pending, with `volume` | Repeat the exact request to reconcile; generation or identity mismatch returns `412`. |
 | `DELETE /v1/volumes/work` with `If-Match: "vol_…"` | `204` | Missing precondition `428`; wrong identity `412`; held resource `409`. |
 
 Capacity is an integer from 1 through 1024 GiB. The backing is a raw sparse file;
@@ -68,10 +70,10 @@ occur while guests write. Creation does not format or mount a filesystem.
 Deletion tombstones preserve the outcome of an earlier deletion. Replaying that
 old identity returns `204` without deleting a newly created same-name resource.
 
-The Go SDK exposes `CreateVolume`, `GetVolume` and `DeleteVolume`. Managed detail
+The Go SDK exposes `CreateVolume`, `GetVolume`, `GrowVolume`, and `DeleteVolume`. Managed detail
 uses `ManagedVolumeInfo`; existing `VolumeInfo` remains comparable. Structured
 `ManagedVolumeError` unwraps to `APIError`. Python exposes `create_volume`,
-`get_volume` and `delete_volume`; structured fields remain on `APIError`.
+`get_volume`, `grow_volume`, and `delete_volume`; structured fields remain on `APIError`.
 
 ## Format once, reuse across templates
 
@@ -113,6 +115,77 @@ A running managed claim can still change mounted read-only catalog entries
 through the existing `GET/PUT/PATCH /v1/sandboxes/{id}/volumes` interface.
 Attach-only managed entries retain their empty mount across those changes and
 across daemon restart.
+
+## Grow a running volume
+
+Growth requires one running claim with exactly one managed writable volume
+mounted and fully applied. Read-only disks, attach-only disks, sleeping claims,
+additional disks, egress, and unsupported runtimes are refused before admission.
+Configure every runtime lifecycle caller to use the same qualified Cocoon binary.
+Online block growth is qualified for Cloud Hypervisor, not Firecracker.
+
+Read the volume's immutable `id` and `capacity_generation`. Generate one UUID
+for the operation and retain it with the absolute target and original generation.
+
+```python
+import uuid
+
+volume = client.get_volume("work")
+operation_id = str(uuid.uuid4())
+request = dict(
+	expected_generation=volume["capacity_generation"],
+	operation_id=operation_id,
+)
+result = client.grow_volume("work", volume["id"], 40, **request)
+```
+
+The equivalent HTTP request is:
+
+```http
+POST /v1/volumes/work/grow
+Authorization: Bearer tenant-management-token
+If-Match: "vol_resource_identity"
+Content-Type: application/json
+
+{"size_gib":40,"expected_generation":0,"operation_id":"efbf4748-1c72-43ee-8304-b4e1a91322b5"}
+```
+
+`size_gib` is an absolute target from 1 through 1024 GiB. A new operation must
+increase committed capacity. `operation_id` is a lowercase canonical nonzero
+UUID. All three JSON fields are required. The identity ETag remains unchanged
+after growth. `capacity_generation` increases only after completion.
+
+`200` means the runtime acknowledged the operation and the same running guest
+observed the target block capacity with the same disk and mount identity.
+The response commits `size_bytes` and includes `growth.state: "completed"`.
+It does not extend a partition or filesystem. `growth.filesystem_status` is
+`not_managed`. Extend the guest filesystem separately after checking its layout.
+
+`202` means the operation remains pending. `size_bytes` and
+`capacity_generation` retain their committed values. Read `GET /v1/volumes/work`
+for the latest `growth`, then repeat the original POST to reconcile. GET is
+read-only. Repeat the same operation ID, original generation, target, and resource
+ID after a lost response or client timeout. The SDKs do not retry automatically
+or generate replacement operation IDs. Only the latest operation is retained.
+
+A changed request with the same operation ID returns `409`. A stale generation
+or wrong resource ID returns `412`, except an exact latest-operation replay
+still returns that operation's result. Missing `If-Match` returns `428`.
+Invalid JSON or arguments return `400`. Unsupported runtime capability returns
+`503`. Foreign and unknown volumes both return `404`.
+
+Release, sleep, wake, deletion, and live volume changes cannot discard an
+unresolved growth operation. An unknown runtime outcome remains fenced, even
+when the backing file or guest reports the target capacity. The daemon never
+silently restarts the VM to resolve it. A `409` with
+`volume_grow_recovery_required` requires operator recovery. Inspect the volume,
+preserve its runtime record, and stop the exact recorded VM generation using
+the qualified runtime before repeating the same POST. A confirmed stopped
+generation permits ownership cleanup but does not count as online growth
+success. Offline data repair is outside this API.
+
+The first growth durably upgrades the managed registry to version 3. Older
+binaries refuse that registry. Keep the upgraded binary when restarting it.
 
 ## Hibernate one mounted managed volume
 
@@ -181,7 +254,8 @@ disk.
 
 The selected hook and operation ID remain in the durable sleep record. Retries
 use them even after a configuration change or disabling new managed sleeps.
-The first sleep durably upgrades the managed registry to version 2. Older
+The first sleep durably upgrades a version 1 managed registry to version 2.
+Sleep also supports registries upgraded to version 3 by growth. Older
 binaries refuse that registry. Keep the upgraded binary when restarting it.
 Claim barriers preserve this lifecycle across daemon crashes with either value
 of `sync_claims`. They do not add a host-power-loss recovery guarantee.
@@ -215,9 +289,8 @@ remain in force.
 
 ## Follow-up order
 
-1. Add online growth with explicit block-device and guest-filesystem outcomes.
-2. Add owner-node placement and a clear unavailable-owner response.
-3. Add archive/export and restore of external data disks.
-4. Add Kubernetes lifecycle/status ownership once the daemon contracts are stable.
+1. Add owner-node placement and a clear unavailable-owner response.
+2. Add archive/export and restore of external data disks.
+3. Add Kubernetes lifecycle/status ownership once the daemon contracts are stable.
 
 These are proposed next steps. None is implemented or qualified by this phase.

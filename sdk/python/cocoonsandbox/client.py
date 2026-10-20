@@ -168,6 +168,54 @@ class Client:
             expected_status=(204,),
         )
 
+    def grow_volume(
+        self,
+        name: str,
+        resource_id: str,
+        size_gib: int,
+        *,
+        expected_generation: int,
+        operation_id: str,
+    ) -> dict[str, Any]:
+        """Grows block capacity. Reuse all arguments to reconcile a pending or lost response."""
+        path = _volume_path(name) + "/grow"
+        if not resource_id or '"' in resource_id or "\r" in resource_id or "\n" in resource_id:
+            raise ValueError("volume resource_id must be a nonempty unquoted id")
+        if isinstance(size_gib, bool) or not isinstance(size_gib, int) or not 1 <= size_gib <= 1024:
+            raise ValueError("volume size_gib must be an integer between 1 and 1024")
+        if (
+            isinstance(expected_generation, bool)
+            or not isinstance(expected_generation, int)
+            or not 0 <= expected_generation <= (1 << 64) - 1
+        ):
+            raise ValueError("volume expected_generation must be an unsigned 64-bit integer")
+        if (
+            not isinstance(operation_id, str)
+            or not re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", operation_id)
+            or operation_id == "00000000-0000-0000-0000-000000000000"
+        ):
+            raise ValueError("volume operation_id must be a canonical nonzero UUID")
+        reply = self._request(
+            self.addr,
+            "POST",
+            path,
+            {"size_gib": size_gib, "expected_generation": expected_generation, "operation_id": operation_id},
+            "grow volume",
+            headers={"If-Match": f'"{resource_id}"'},
+            expected_status=(200, 202),
+        )
+        volume = _managed_volume(reply, "grow volume")
+        growth = volume.get("growth")
+        if (
+            not isinstance(growth, dict)
+            or growth.get("operation_id") != operation_id
+            or growth.get("expected_generation") != expected_generation
+            or growth.get("target_bytes") != size_gib << 30
+            or growth.get("state") not in ("pending", "completed")
+        ):
+            raise APIError("grow volume", 0, "reply with missing or inconsistent growth result")
+        return volume
+
     def info(self) -> dict[str, Any]:
         """The node's pool/claim counters, as served by GET /v1/info."""
         return self._request(self.addr, "GET", "/v1/info", None, "info")

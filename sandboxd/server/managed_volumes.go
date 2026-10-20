@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"regexp"
 	"strings"
 
 	"github.com/cocoonstack/sandbox/sandboxd/pool"
@@ -19,6 +20,12 @@ type managedVolumeManager interface {
 	ManagedVolumeStatus() error
 	ManagedVolumesEnabled() bool
 }
+
+type managedVolumeGrower interface {
+	GrowVolume(context.Context, string, string, types.VolumeGrow, string) (types.ManagedVolumeInfo, error)
+}
+
+var volumeOperationID = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
 func volumeHTTPError(w http.ResponseWriter, status int, code, message string) {
 	writeJSON(w, status, &pool.VolumeError{Status: status, Code: code, Message: message})
@@ -126,4 +133,72 @@ func (s *Server) handleDeleteVolume(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleGrowVolume(w http.ResponseWriter, r *http.Request) {
+	mgr, ok := s.volumeManager(w)
+	if !ok {
+		return
+	}
+	expected := r.Header.Get("If-Match")
+	if expected == "" {
+		volumeHTTPError(w, 428, "volume_precondition_required", "If-Match must identify the volume")
+		return
+	}
+	if len(expected) < 3 || expected[0] != '"' || expected[len(expected)-1] != '"' || strings.ContainsAny(expected[1:len(expected)-1], "\",\\") {
+		volumeHTTPError(w, 412, "volume_precondition_failed", "If-Match must contain one quoted volume identity")
+		return
+	}
+	var body struct {
+		SizeGiB            *int64  `json:"size_gib"`
+		ExpectedGeneration *uint64 `json:"expected_generation"`
+		OperationID        *string `json:"operation_id"`
+	}
+	raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBodyBytes))
+	if err != nil || utils.DecodeStrictJSON(raw, &body) != nil || body.SizeGiB == nil || body.ExpectedGeneration == nil || body.OperationID == nil {
+		volumeHTTPError(w, 400, "invalid_volume_grow", "size_gib, expected_generation and operation_id are required")
+		return
+	}
+	if *body.SizeGiB < 1 || *body.SizeGiB > 1024 || !volumeOperationID.MatchString(*body.OperationID) || *body.OperationID == "00000000-0000-0000-0000-000000000000" {
+		volumeHTTPError(w, 400, "invalid_volume_grow", "size_gib must be between 1 and 1024 and operation_id must be a canonical nonzero UUID")
+		return
+	}
+	grower, ok := mgr.(managedVolumeGrower)
+	if !ok {
+		if _, err := mgr.GetVolume(r.PathValue("name"), tenantFrom(r.Context())); err != nil {
+			if !writePoolErr(w, err) {
+				volumeHTTPError(w, 503, "volume_storage_unavailable", "volume storage unavailable; retry")
+			}
+			return
+		}
+		volumeHTTPError(w, 503, "volume_grow_unsupported", "volume growth is not supported by this runtime")
+		return
+	}
+	v, err := grower.GrowVolume(r.Context(), r.PathValue("name"), expected[1:len(expected)-1], types.VolumeGrow{
+		SizeGiB: *body.SizeGiB, ExpectedGeneration: *body.ExpectedGeneration, OperationID: *body.OperationID,
+	}, tenantFrom(r.Context()))
+	if err != nil {
+		if !writePoolErr(w, err) {
+			volumeHTTPError(w, 503, "volume_storage_unavailable", "volume storage unavailable; retry")
+		}
+		return
+	}
+	if v.Growth == nil {
+		volumeHTTPError(w, 503, "volume_storage_unavailable", "volume growth result unavailable; query the volume before retrying")
+		return
+	}
+	status := http.StatusAccepted
+	switch v.Growth.State {
+	case "completed":
+		status = http.StatusOK
+	case "pending":
+	case "recovery_required":
+		volumeHTTPError(w, 409, "volume_grow_recovery_required", "volume growth requires operator recovery; inspect the volume")
+		return
+	default:
+		volumeHTTPError(w, 503, "volume_storage_unavailable", "volume growth result unavailable; query the volume before retrying")
+		return
+	}
+	w.Header().Set("ETag", `"`+v.ID+`"`)
+	writeJSON(w, status, VolumeResponse{Volume: v})
 }

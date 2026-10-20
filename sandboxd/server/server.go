@@ -271,6 +271,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/volumes", s.requireVolumeListToken(s.handleVolumes))
 	mux.HandleFunc("PUT /v1/volumes/{name}", s.requireVolumeManager(s.handleCreateVolume))
 	mux.HandleFunc("GET /v1/volumes/{name}", s.requireVolumeManager(s.handleGetVolume))
+	mux.HandleFunc("POST /v1/volumes/{name}/grow", s.requireVolumeManager(s.handleGrowVolume))
 	mux.HandleFunc("DELETE /v1/volumes/{name}", s.requireVolumeManager(s.handleDeleteVolume))
 	mux.HandleFunc("POST /v1/sandboxes/{id}/release", s.handleSandboxVerb("release", s.mgr.Release))
 	mux.HandleFunc("POST /v1/sandboxes/{id}/hibernate", s.handleSandboxVerb("hibernate", s.mgr.Hibernate))

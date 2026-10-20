@@ -183,3 +183,110 @@ def test_malformed_holder_container_preserves_api_error(node, holders):
     assert raised.value.status == 409 and raised.value.message == "busy"
     assert raised.value.holders == []
     assert raised.value.reply == {"error": "busy", "holders": holders}
+
+
+GROW_OPERATION = "efbf4748-1c72-43ee-8304-b4e1a91322b5"
+
+
+def growth_volume(state):
+    return {
+        "name": "data",
+        "kind": "managed",
+        "id": "vol_123",
+        "tenant": "t1",
+        "node": "node-1",
+        "state": "ready" if state == "completed" else "growing",
+        "created_at": "2026-10-19T00:00:00Z",
+        "size_bytes": (40 if state == "completed" else 20) << 30,
+        "capacity_generation": 1 if state == "completed" else 0,
+        "growth": {
+            "operation_id": GROW_OPERATION,
+            "expected_generation": 0,
+            "target_bytes": 40 << 30,
+            "state": state,
+            "runtime_outcome": "acknowledged",
+            "guest_size_bytes": (40 << 30) if state == "completed" else 0,
+            "filesystem_status": "not_managed",
+        },
+    }
+
+
+@pytest.mark.parametrize("status,state", [(200, "completed"), (202, "pending")])
+def test_grow_volume_sends_same_request_for_reconciliation(node, status, state):
+    volume = growth_volume(state)
+    seen = []
+
+    def grow(body, path):
+        seen.append((body, dict(FakeNode.last_headers)))
+        return status, {"volume": volume}
+
+    FakeNode.routes[("POST", "/v1/volumes/data/grow")] = grow
+    FakeNode.routes[("GET", "/v1/volumes/data")] = lambda body, path: (200, {"volume": volume})
+    client = Client(node, api_token="token")
+    for _ in range(2):
+        assert client.grow_volume("data", "vol_123", 40, expected_generation=0, operation_id=GROW_OPERATION) == volume
+    assert client.get_volume("data") == volume
+    assert len(seen) == 2
+    assert all(
+        request[0] == {"size_gib": 40, "expected_generation": 0, "operation_id": GROW_OPERATION} for request in seen
+    )
+    assert all(request[1]["If-Match"] == '"vol_123"' for request in seen)
+    assert all(request[1]["Authorization"] == "Bearer token" for request in seen)
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("name", "bad/name"),
+        ("resource_id", ""),
+        ("resource_id", '"vol_123"'),
+        ("size_gib", 0),
+        ("size_gib", 1025),
+        ("size_gib", True),
+        ("size_gib", 40.5),
+        ("expected_generation", -1),
+        ("expected_generation", 1 << 64),
+        ("expected_generation", True),
+        ("expected_generation", 0.5),
+        ("operation_id", ""),
+        ("operation_id", GROW_OPERATION.upper()),
+        ("operation_id", "00000000-0000-0000-0000-000000000000"),
+    ],
+)
+def test_grow_volume_validates_before_sending(node, field, value):
+    calls = []
+    FakeNode.routes[("POST", "/v1/volumes/data/grow")] = lambda body, path: (calls.append(body) or 503, {})
+    args = dict(name="data", resource_id="vol_123", size_gib=40, expected_generation=0, operation_id=GROW_OPERATION)
+    args[field] = value
+    with pytest.raises(ValueError):
+        Client(node).grow_volume(**args)
+    assert calls == []
+
+
+@pytest.mark.parametrize("status", [400, 401, 404, 409, 412, 428, 503])
+def test_grow_volume_preserves_errors_without_retry(node, status):
+    calls = []
+
+    def grow(body, path):
+        calls.append(body)
+        return status, {"error": "growth unavailable", "code": "volume_grow_recovery_required"}
+
+    FakeNode.routes[("POST", "/v1/volumes/data/grow")] = grow
+    with pytest.raises(APIError) as raised:
+        Client(node).grow_volume("data", "vol_123", 40, expected_generation=0, operation_id=GROW_OPERATION)
+    assert raised.value.status == status
+    assert raised.value.code == "volume_grow_recovery_required"
+    assert len(calls) == 1
+
+
+def test_grow_volume_timeout_and_invalid_reply(node, black_hole):
+    with pytest.raises(APIError) as raised:
+        Client(black_hole, timeout=0.05).grow_volume(
+            "data", "vol_123", 40, expected_generation=0, operation_id=GROW_OPERATION
+        )
+    assert raised.value.status == 0
+    volume = growth_volume("completed")
+    volume["growth"]["operation_id"] = "different"
+    FakeNode.routes[("POST", "/v1/volumes/data/grow")] = lambda body, path: (200, {"volume": volume})
+    with pytest.raises(APIError, match="growth result"):
+        Client(node).grow_volume("data", "vol_123", 40, expected_generation=0, operation_id=GROW_OPERATION)
