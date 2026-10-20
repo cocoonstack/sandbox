@@ -125,7 +125,7 @@ var managedIDPattern = regexp.MustCompile(`^vol_[0-9a-f]{32}$`)
 
 func openVolumeRegistry(dir, node string) (*volumeRegistry, error) {
 	if !filepath.IsAbs(dir) || filepath.Clean(dir) != dir || dir == "/" {
-		return nil, fmt.Errorf("invalid managed volume directory")
+		return nil, errors.New("invalid managed volume directory")
 	}
 	if err := privateVolumeDir(dir); err != nil {
 		return nil, err
@@ -195,13 +195,13 @@ func privateVolumeDir(path string) error {
 		}
 		owner := st.Sys().(*syscall.Stat_t).Uid
 		if owner != 0 && int64(owner) != int64(os.Geteuid()) {
-			return fmt.Errorf("managed directory ancestors must belong to root or the daemon user")
+			return errors.New("managed directory ancestors must belong to root or the daemon user")
 		}
 		if st.Mode().Perm()&0o022 != 0 && st.Mode()&os.ModeSticky == 0 {
-			return fmt.Errorf("managed directory ancestors must not be writable by others")
+			return errors.New("managed directory ancestors must not be writable by others")
 		}
 		if !st.IsDir() || st.Mode()&os.ModeSymlink != 0 {
-			return fmt.Errorf("managed directory component is not a directory")
+			return errors.New("managed directory component is not a directory")
 		}
 	}
 	if err := os.MkdirAll(path, 0o700); err != nil {
@@ -212,10 +212,10 @@ func privateVolumeDir(path string) error {
 		return err
 	}
 	if !st.IsDir() || st.Mode().Perm()&0o077 != 0 {
-		return fmt.Errorf("managed directory must be private (0700)")
+		return errors.New("managed directory must be private (0700)")
 	}
 	if int64(st.Sys().(*syscall.Stat_t).Uid) != int64(os.Geteuid()) {
-		return fmt.Errorf("managed directory must belong to the daemon user")
+		return errors.New("managed directory must belong to the daemon user")
 	}
 	return nil
 }
@@ -229,7 +229,7 @@ func openPrivateFile(path string, flags int) (*os.File, error) {
 	st, err := f.Stat()
 	if err != nil || !st.Mode().IsRegular() || st.Mode().Perm()&0o077 != 0 || st.Sys().(*syscall.Stat_t).Nlink != 1 || int64(st.Sys().(*syscall.Stat_t).Uid) != int64(os.Geteuid()) {
 		_ = f.Close()
-		return nil, fmt.Errorf("managed file must be private, owned, regular, and unlinked elsewhere")
+		return nil, errors.New("managed file must be private, owned, regular, and unlinked elsewhere")
 	}
 	return f, nil
 }

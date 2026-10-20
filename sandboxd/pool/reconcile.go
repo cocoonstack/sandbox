@@ -327,7 +327,7 @@ func (m *Manager) stopUncertainEgress(ctx context.Context, name string) error {
 	if err != nil {
 		return fmt.Errorf("confirm egress VM %s stopped: %w", name, err)
 	}
-	if found && rec.State != "stopped" {
+	if found && rec.State != vmStateStopped {
 		return fmt.Errorf("egress VM %s is not confirmed stopped", name)
 	}
 	return nil

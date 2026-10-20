@@ -179,6 +179,7 @@ func (m *Manager) confirmOwnership(ctx context.Context, sb *types.Sandbox, rec a
 	return false, fmt.Errorf("confirm %s: its row kept moving under this node", sb.ID)
 }
 
+// fenceWatch gates sb at resolution and returns the channel that closes when its streams must end; nil for an unreplicated, unmanaged claim.
 func (m *Manager) fenceWatch(sb *types.Sandbox) (<-chan struct{}, error) {
 	if !sb.Replicated() {
 		m.mu.Lock()

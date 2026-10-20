@@ -49,7 +49,7 @@ func (m *Manager) recoverManagedOrphans(ctx context.Context, claims map[string]*
 			continue
 		}
 		identity, err := r.process(rec.PID)
-		if (rec.PID > 0 && processMissing(err)) || (rec.PID == 0 && rec.State == "stopped") {
+		if (rec.PID > 0 && processMissing(err)) || (rec.PID == 0 && rec.State == vmStateStopped) {
 			_ = m.eng.Remove(context.WithoutCancel(ctx), name)
 			if !m.confirmGone(ctx, name) {
 				return managedStorageError()
