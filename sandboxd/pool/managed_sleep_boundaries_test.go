@@ -3,10 +3,13 @@ package pool
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -323,5 +326,157 @@ func TestManagedSleepPolicyReloadDuringResumeKeepsGuestPaused(t *testing.T) {
 	}
 	if len(e.restores) != 1 {
 		t.Fatal("policy retry replayed memory restore")
+	}
+}
+
+func gateManagedSleepReadyCommit(m *Manager, fail bool) (<-chan struct{}, func()) {
+	entered, resume := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	commit := m.managed.commitFile
+	m.managed.commitFile = func(path string, raw []byte) error {
+		if !strings.Contains(string(raw), `"sleep":`) {
+			close(entered)
+			<-resume
+			if fail {
+				return errors.New("ready journal failed")
+			}
+		}
+		return commit(path, raw)
+	}
+	return entered, func() { once.Do(func() { close(resume) }) }
+}
+
+func TestManagedSleepFinalWakeCommitKeepsUnrelatedRenewalLive(t *testing.T) {
+	for _, fail := range []bool{false, true} {
+		t.Run(map[bool]string{false: "success", true: "write failure"}[fail], func(t *testing.T) {
+			m, _, sb, _ := newSleepTest(t)
+			ordinary, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			requireSleep(t, m, sb)
+			entered, unblock := gateManagedSleepReadyCommit(m, fail)
+			var workers sync.WaitGroup
+			t.Cleanup(func() { unblock(); workers.Wait() })
+			wake := make(chan error, 1)
+			workers.Go(func() { wake <- m.Wake(t.Context(), sb.ID, Cred{Token: sb.Token}) })
+			select {
+			case <-entered:
+			case <-time.After(time.Second):
+				t.Fatal("wake did not reach final journal commit")
+			}
+			renew := make(chan error, 1)
+			workers.Go(func() {
+				_, err := m.Renew(t.Context(), ordinary.ID, Cred{Token: ordinary.Token}, time.Hour, "")
+				renew <- err
+			})
+			select {
+			case err := <-renew:
+				if err != nil {
+					t.Errorf("unrelated renewal failed during final wake commit: %v", err)
+				}
+			case <-time.After(time.Second):
+				t.Error("unrelated Renew blocked by final wake journal commit")
+			}
+			passive := make(chan error, 1)
+			workers.Go(func() {
+				sock, err := m.AgentSocket(sb.ID, sb.Token)
+				if sock != "" {
+					passive <- fmt.Errorf("passive socket exposed before final commit: %q", sock)
+					return
+				}
+				passive <- err
+			})
+			select {
+			case err := <-passive:
+				if !errors.Is(err, ErrPaused) {
+					t.Errorf("final commit did not fence passive readiness: %v", err)
+				}
+			case <-time.After(time.Second):
+				t.Error("passive readiness check blocked by final wake journal commit")
+			}
+			type socketResult struct {
+				sock string
+				err  error
+			}
+			active := make(chan socketResult, 1)
+			started := make(chan struct{})
+			workers.Go(func() {
+				close(started)
+				sock, _, release, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token)
+				if release != nil {
+					release()
+				}
+				active <- socketResult{sock, err}
+			})
+			<-started
+			var result socketResult
+			completed := false
+			select {
+			case result = <-active:
+				completed = true
+				t.Errorf("active socket completed before final commit: %+v", result)
+			case <-time.After(50 * time.Millisecond):
+			}
+			unblock()
+			if err := <-wake; (err != nil) != fail {
+				t.Errorf("wake after final commit: %v", err)
+			}
+			if !completed {
+				result = <-active
+			}
+			if fail {
+				if result.err == nil || result.sock != "" {
+					t.Errorf("failed ready journal exposed active socket: %+v", result)
+				}
+				if sock, err := m.AgentSocket(sb.ID, sb.Token); sock != "" || !errors.Is(err, ErrPaused) {
+					t.Errorf("failed ready journal exposed passive socket: %q %v", sock, err)
+				}
+			} else if result.err != nil || result.sock == "" {
+				t.Errorf("successful ready journal did not serve active socket: %+v", result)
+			}
+		})
+	}
+}
+
+func TestManagedSleepPolicyReloadWaitsForFinalWakeCommit(t *testing.T) {
+	m, _, sb, cfg := newSleepTest(t)
+	sb.EgressClass = "desk"
+	requireSleep(t, m, sb)
+	entered, unblock := gateManagedSleepReadyCommit(m, false)
+	var workers sync.WaitGroup
+	t.Cleanup(func() { unblock(); workers.Wait() })
+	wake := make(chan error, 1)
+	workers.Go(func() { wake <- m.Wake(t.Context(), sb.ID, Cred{Token: sb.Token}) })
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("wake did not reach final journal commit")
+	}
+	next := *cfg
+	next.Pools = slices.Clone(cfg.Pools)
+	next.Pools[0].Egress = &egress.Policy{Allow: []egress.Rule{{Host: "example.com"}}}
+	next.EgressClasses = []config.EgressClass{{Name: "desk", Egress: next.Pools[0].Egress}}
+	reload, started := make(chan error, 1), make(chan struct{})
+	workers.Go(func() {
+		close(started)
+		_, err := m.ReloadConfig(t.Context(), &next)
+		reload <- err
+	})
+	<-started
+	select {
+	case err := <-reload:
+		t.Fatalf("policy reload overtook final wake commit: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	unblock()
+	if err := <-wake; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-reload; err != nil {
+		t.Fatal(err)
+	}
+	if sock, err := m.AgentSocket(sb.ID, sb.Token); err != nil || sock == "" {
+		t.Fatalf("reload after ready commit hid running guest: %q %v", sock, err)
 	}
 }
