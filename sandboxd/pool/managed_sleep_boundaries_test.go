@@ -2,6 +2,7 @@ package pool
 
 import (
 	"context"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"net"
@@ -497,5 +498,134 @@ func TestManagedSleepPolicyReloadDuringFinalWakeCommitKeepsPaused(t *testing.T) 
 	}
 	if claim := claims[sb.ID]; claim == nil || claim.HibernateSnap != h.Sleep.Snapshot || claim.ReaderSafe {
 		t.Fatalf("policy refusal lost durable paused claim: %+v", claim)
+	}
+}
+
+func TestManagedSleepReadyCommitCrashRearmsReloadedPolicy(t *testing.T) {
+	m, e, sb, cfg := newSleepTest(t)
+	sb.EgressClass = "desk"
+	requireSleep(t, m, sb)
+	commit := m.managed.commitFile
+	m.managed.commitFile = func(path string, raw []byte) error {
+		if err := commit(path, raw); err != nil {
+			return err
+		}
+		if !strings.Contains(string(raw), `"sleep":`) {
+			return errors.New("crash after durable ready registry")
+		}
+		return nil
+	}
+	if err := m.Wake(t.Context(), sb.ID, Cred{Token: sb.Token}); err == nil {
+		t.Fatal("lost ready commit acknowledgement was hidden")
+	}
+	if err := m.Close(); err != nil {
+		t.Fatal(err)
+	}
+	next := *cfg
+	next.Pools = slices.Clone(cfg.Pools)
+	next.Pools[0].Egress = &egress.Policy{Allow: []egress.Rule{{Host: "example.com"}}}
+	next.EgressClasses = []config.EgressClass{{Name: "desk", Egress: next.Pools[0].Egress}}
+	sock := filepath.Join(outboundtest.SockRoot(t), "v")
+	e.mu.Lock()
+	e.vms[sb.VMName] = sock
+	e.mu.Unlock()
+	recovered, err := NewManager(t.Context(), &next, e, testSecrets(t), testBackends(t, &next))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { recovered.out.Disarm(sb.ID, false); _ = recovered.Close() })
+	recovered.managed.process = e.identity
+	if h, _ := recovered.managedHold(sb.ID); h.Sleep != nil {
+		t.Fatal("crash fixture did not reach durable ready registry")
+	}
+	if err := recovered.Reconcile(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := recovered.AgentSocket(sb.ID, sb.Token); err != nil || got != sock {
+		t.Fatalf("completed wake did not recover running guest: %q %v", got, err)
+	}
+	requireProxyDoor(t, sock)
+	if len(e.restores) != 1 {
+		t.Fatal("ready-commit crash replayed memory restore")
+	}
+}
+
+func TestManagedSleepLatePolicyRollbackWriteFailureStaysPaused(t *testing.T) {
+	for _, journal := range []string{"registry", "claims"} {
+		t.Run(journal, func(t *testing.T) {
+			m, _, sb, cfg := newSleepTest(t)
+			sb.EgressClass = "desk"
+			requireSleep(t, m, sb)
+			commit := m.managed.commitFile
+			entered, resume := make(chan struct{}), make(chan struct{})
+			unblock := sync.OnceFunc(func() { close(resume) })
+			var readyWritten bool
+			m.managed.commitFile = func(path string, raw []byte) error {
+				if readyWritten && journal == "registry" {
+					return errors.New("resume fence write failed")
+				}
+				if !strings.Contains(string(raw), `"sleep":`) {
+					close(entered)
+					<-resume
+					if journal == "claims" {
+						if err := os.Mkdir(m.store.path+".tmp", 0o700); err != nil {
+							return err
+						}
+					}
+					readyWritten = true
+				}
+				return commit(path, raw)
+			}
+			var workers sync.WaitGroup
+			t.Cleanup(func() { unblock(); workers.Wait() })
+			wake := make(chan error, 1)
+			workers.Go(func() { wake <- m.Wake(t.Context(), sb.ID, Cred{Token: sb.Token}) })
+			select {
+			case <-entered:
+			case <-time.After(time.Second):
+				t.Fatal("wake did not reach ready commit")
+			}
+			next := *cfg
+			next.Pools = slices.Clone(cfg.Pools)
+			next.Pools[0].Egress = &egress.Policy{Allow: []egress.Rule{{Host: "example.com"}}}
+			next.EgressClasses = []config.EgressClass{{Name: "desk", Egress: next.Pools[0].Egress}}
+			reload := make(chan error, 1)
+			workers.Go(func() { _, err := m.ReloadConfig(t.Context(), &next); reload <- err })
+			select {
+			case err := <-reload:
+				if err != nil {
+					t.Fatal(err)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("policy reload blocked by ready commit")
+			}
+			unblock()
+			if err := <-wake; !errors.Is(err, ErrVolumeCapture) || err == ErrVolumeCapture {
+				t.Fatalf("late policy rollback did not report its write failure: %v", err)
+			}
+			if got, err := m.AgentSocket(sb.ID, sb.Token); got != "" || !errors.Is(err, ErrPaused) {
+				t.Fatalf("failed rollback exposed passive guest: %q %v", got, err)
+			}
+			got, _, done, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token)
+			if done != nil {
+				done()
+			}
+			if got != "" || err == nil {
+				t.Fatalf("failed rollback exposed active guest: %q %v", got, err)
+			}
+			if journal == "claims" {
+				raw, err := os.ReadFile(filepath.Join(cfg.ManagedVolumeDir, "registry.json"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				var data volumeRegistryData
+				if err := json.Unmarshal(raw, &data); err != nil {
+					t.Fatal(err)
+				}
+				if h := data.Holds[sb.ID]; h.Sleep == nil || h.Sleep.Phase != sleepResuming {
+					t.Fatalf("claim projection failure lost durable resume fence: %+v", h.Sleep)
+				}
+			}
+		})
 	}
 }
