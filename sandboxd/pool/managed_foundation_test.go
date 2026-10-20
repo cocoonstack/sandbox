@@ -7,7 +7,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -578,35 +577,47 @@ func TestManagedClaimPostRenameFailureFencesWithoutTeardown(t *testing.T) {
 }
 
 func TestManagedStoppedZeroPIDRequiresOriginalProcessGone(t *testing.T) {
-	for _, gone := range []bool{false, true} {
-		t.Run(strconv.FormatBool(gone), func(t *testing.T) {
+	for _, unknown := range []bool{false, true} {
+		name := "live"
+		if unknown {
+			name = "unreadable"
+		}
+		t.Run(name, func(t *testing.T) {
 			cfg := managedConfig(t)
 			e := newManagedEngine()
 			m := openManagedTest(t, cfg, e)
 			createManagedTest(t, m, "data")
 			sb := foundationClaim(t, m, "data")
 			h, _ := m.managedHold(sb.ID)
-			m.Close()
+			if err := m.Close(); err != nil {
+				t.Fatal(err)
+			}
 			e.mu.Lock()
 			e.stopped[sb.VMName] = true
 			e.pids[sb.VMName] = 0
 			e.mu.Unlock()
 			m = openManagedTest(t, cfg, e)
 			m.managed.process = func(int) (processIdentity, error) {
-				if gone {
-					return processIdentity{}, os.ErrNotExist
+				if unknown {
+					return processIdentity{}, os.ErrPermission
 				}
 				return h.Process, nil
 			}
 			if err := m.Reconcile(t.Context()); err != nil {
 				t.Fatal(err)
 			}
-			_, held := m.managedHold(sb.ID)
-			if held == gone {
-				t.Fatalf("original process gone=%t but hold retained=%t", gone, held)
+			retained, held := m.managedHold(sb.ID)
+			if !held || retained.Process != h.Process || retained.State != holdClaimed {
+				t.Fatalf("uncertain original process lost ownership: %+v", retained)
 			}
-			if !gone {
-				requireVolumeStatus(t, m.ManagedVolumeStatus(), 503)
+			requireVolumeStatus(t, m.ManagedVolumeStatus(), 503)
+			if _, live := m.Sandbox(sb.ID); !live {
+				t.Fatal("uncertain original process lost its durable claim")
+			}
+			e.mu.Lock()
+			defer e.mu.Unlock()
+			if len(e.removes) != 0 || len(e.starts) != 0 {
+				t.Fatalf("uncertain original process changed VM: removes=%v starts=%v", e.removes, e.starts)
 			}
 		})
 	}

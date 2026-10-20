@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
@@ -222,6 +223,162 @@ func TestManagedStorePreservesBackingWhenCleanupAliasesDisks(t *testing.T) {
 			marker := make([]byte, len("preserved"))
 			if _, err := f.ReadAt(marker, 4096); err != nil || string(marker) != "preserved" {
 				t.Fatalf("managed bytes changed: %q %v", marker, err)
+			}
+		})
+	}
+}
+
+func TestManagedStoppedClaimRetainsOwnershipOnRestart(t *testing.T) {
+	for _, failed := range []bool{false, true} {
+		name := "new-failure-release"
+		if failed {
+			name = "previous-failure-expiry"
+		}
+		t.Run(name, func(t *testing.T) {
+			cfg := managedConfig(t)
+			e := newManagedEngine()
+			m := openManagedTest(t, cfg, e)
+			v := createManagedTest(t, m, "data")
+			sb := foundationClaim(t, m, "data")
+			h, _ := m.managedHold(sb.ID)
+			backing := m.managed.path(volumeID(v.ID))
+			identity, err := inspectBacking(backing)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if failed {
+				sb.Failed = "ordinary failure requiring explicit release"
+				if err := m.store.commit(m.store.set(sb)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := m.Close(); err != nil {
+				t.Fatal(err)
+			}
+			e.mu.Lock()
+			e.stopped[sb.VMName] = true
+			e.pids[sb.VMName] = 0
+			e.mu.Unlock()
+			for restart := range 2 {
+				m = openManagedTest(t, cfg, e)
+				if err := m.Reconcile(t.Context()); err != nil {
+					t.Fatal(err)
+				}
+				if _, live := m.Sandbox(sb.ID); !live {
+					t.Fatalf("restart %d discarded the durable stopped claim", restart)
+				}
+				runLiveness(t, m)
+				listed := m.Sandboxes("t1", "", nil)
+				if len(listed) != 1 || listed[0].ID != sb.ID || listed[0].Failed == "" {
+					t.Fatalf("restart %d did not list the failed owner: %+v", restart, listed)
+				}
+				retained, held := m.managedHold(sb.ID)
+				if !held || retained.State != holdClaimed || retained.Process != h.Process || retained.VMName != h.VMName || len(retained.Refs) != 1 || retained.Refs[0] != h.Refs[0] {
+					t.Fatalf("restart %d changed managed ownership: %+v", restart, retained)
+				}
+				if rec, present, err := e.Inspect(t.Context(), sb.VMName); err != nil || !present || rec.State != vmStateStopped || rec.PID != 0 {
+					t.Fatalf("restart %d changed stopped VM record: %+v present=%t err=%v", restart, rec, present, err)
+				}
+				if current, err := inspectBacking(backing); err != nil || current != identity {
+					t.Fatalf("restart %d changed backing identity: %+v %v", restart, current, err)
+				}
+				if err := m.ManagedVolumeStatus(); err != nil {
+					t.Fatalf("dead original process fenced healthy storage: %v", err)
+				}
+				_, err := m.ClaimProvision(t.Context(), testKey, managedOptions("data"))
+				requireVolumeStatus(t, err, 409)
+				if _, _, _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token); !errors.Is(err, ErrFailed) {
+					t.Fatalf("new data plane request returned %v, want ErrFailed", err)
+				}
+				if err := m.Wake(t.Context(), sb.ID, Cred{Token: sb.Token}); !errors.Is(err, ErrFailed) {
+					t.Fatalf("explicit wake returned %v, want ErrFailed", err)
+				}
+				e.mu.Lock()
+				changed := len(e.removes) != 0 || len(e.starts) != 0
+				e.mu.Unlock()
+				if changed {
+					t.Fatal("recovery cold-booted or removed the stopped owner")
+				}
+				persisted, err := m.store.load()
+				if err != nil || persisted[sb.ID] == nil || persisted[sb.ID].Failed == "" || persisted[sb.ID].VMName != sb.VMName {
+					t.Fatalf("failed claim identity not durable: %+v %v", persisted[sb.ID], err)
+				}
+				if !failed {
+					if events := usageEventsOf(t, m, sb.ID); events != "claim,vmm_exit,vmm_failed" {
+						t.Fatalf("restart %d lost or repeated VMM exit audit: %s", restart, events)
+					}
+				}
+				if restart == 0 {
+					if err := m.Close(); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			if failed {
+				m.mu.Lock()
+				m.claimed[sb.ID].Deadline = time.Now().Add(-time.Minute)
+				m.mu.Unlock()
+				m.reapOnce(t.Context())
+			} else if err := m.Release(t.Context(), sb.ID, Cred{Operator: true}); err != nil {
+				t.Fatal(err)
+			}
+			waitFor(t, func() bool { _, held := m.managedHold(sb.ID); return !held })
+			if _, live := m.Sandbox(sb.ID); live {
+				t.Fatal("release or expiry retained the failed claim")
+			}
+			if _, present, err := e.Inspect(t.Context(), sb.VMName); err != nil || present {
+				t.Fatalf("release or expiry retained VM record: present=%t err=%v", present, err)
+			}
+			if current, err := inspectBacking(backing); err != nil || current != identity {
+				t.Fatalf("release or expiry changed backing identity: %+v %v", current, err)
+			}
+			if _, err := m.ClaimProvision(t.Context(), testKey, managedOptions("data")); err != nil {
+				t.Fatalf("release or expiry did not free writer admission: %v", err)
+			}
+		})
+	}
+}
+
+func TestManagedStoppedUnownedClaimsStillRetire(t *testing.T) {
+	for _, name := range []string{"absent-claim", "quarantined-claim", "retiring-hold"} {
+		t.Run(name, func(t *testing.T) {
+			cfg := managedConfig(t)
+			e := newManagedEngine()
+			m := openManagedTest(t, cfg, e)
+			createManagedTest(t, m, "data")
+			sb := foundationClaim(t, m, "data")
+			if name == "quarantined-claim" {
+				sb.Failed = egressQuarantineFailure
+				if err := m.store.commit(m.store.set(sb)); err != nil {
+					t.Fatal(err)
+				}
+			} else if name == "retiring-hold" {
+				if err := m.retireManaged(sb.ID); err != nil {
+					t.Fatal(err)
+				}
+			} else if err := m.store.commit(m.store.del(sb.ID)); err != nil {
+				t.Fatal(err)
+			}
+			if err := m.Close(); err != nil {
+				t.Fatal(err)
+			}
+			e.mu.Lock()
+			e.stopped[sb.VMName] = true
+			e.pids[sb.VMName] = 0
+			e.mu.Unlock()
+			m = openManagedTest(t, cfg, e)
+			if err := m.Reconcile(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			m.retryRemovals(t.Context()).Wait()
+			if _, held := m.managedHold(sb.ID); held {
+				t.Fatal("unowned stopped VM retained its hold")
+			}
+			if _, present, err := e.Inspect(t.Context(), sb.VMName); err != nil || present {
+				t.Fatalf("unowned stopped VM survived teardown: present=%t err=%v", present, err)
+			}
+			if _, err := m.ClaimProvision(t.Context(), testKey, managedOptions("data")); err != nil {
+				t.Fatalf("unowned stopped VM still holds writer admission: %v", err)
 			}
 		})
 	}
