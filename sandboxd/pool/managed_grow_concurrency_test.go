@@ -32,7 +32,7 @@ type growthBarrierEngine struct {
 	connections     sync.WaitGroup
 }
 
-func (e *growthBarrierEngine) pause(method string) {
+func (e *growthBarrierEngine) pause(ctx context.Context, method string) error {
 	e.barrierMu.Lock()
 	block := false
 	if method == e.method {
@@ -44,25 +44,34 @@ func (e *growthBarrierEngine) pause(method string) {
 		close(e.entered)
 		<-e.resume
 	}
+	return ctx.Err()
 }
 
 func (e *growthBarrierEngine) Inspect(ctx context.Context, name string) (types.VMRecord, bool, error) {
-	e.pause("Inspect")
+	if err := e.pause(ctx, "Inspect"); err != nil {
+		return types.VMRecord{}, false, err
+	}
 	return e.growthTestEngine.Inspect(ctx, name)
 }
 
 func (e *growthBarrierEngine) InspectDisk(ctx context.Context, ref engine.DiskRef) (engine.DiskInspection, error) {
-	e.pause("InspectDisk")
+	if err := e.pause(ctx, "InspectDisk"); err != nil {
+		return engine.DiskInspection{}, err
+	}
 	return e.growthTestEngine.InspectDisk(ctx, ref)
 }
 
 func (e *growthBarrierEngine) GrowDisk(ctx context.Context, req engine.DiskGrowRequest) (engine.DiskGrowResult, error) {
-	e.pause("GrowDisk")
+	if err := e.pause(ctx, "GrowDisk"); err != nil {
+		return engine.DiskGrowResult{}, err
+	}
 	return e.growthTestEngine.GrowDisk(ctx, req)
 }
 
 func (e *growthBarrierEngine) ObserveVolume(ctx context.Context, socket, serial, mount string) (engine.GuestVolumeObservation, error) {
-	e.pause("ObserveVolume")
+	if err := e.pause(ctx, "ObserveVolume"); err != nil {
+		return engine.GuestVolumeObservation{}, err
+	}
 	return e.growthTestEngine.ObserveVolume(ctx, socket, serial, mount)
 }
 
