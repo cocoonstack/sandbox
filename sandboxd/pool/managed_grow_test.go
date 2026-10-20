@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -594,5 +595,51 @@ func TestManagedGrowthMigratesVersionTwoBeforeIntentAndKeepsSleepValid(t *testin
 	requireSleep(t, sleeping, sb)
 	if err := sleeping.managed.validate(); err != nil {
 		t.Fatal("version three rejected existing sleep", err)
+	}
+}
+
+func TestManagedGrowthRetryRequiresDurableIntent(t *testing.T) {
+	for _, phase := range []string{"intent", "completion"} {
+		t.Run(phase, func(t *testing.T) {
+			m, e, _, _, v := newGrowthTest(t)
+			r := m.managed
+			r.commitFile = func(path string, raw []byte) error {
+				var snapshot volumeRegistryData
+				if err := json.Unmarshal(raw, &snapshot); err != nil {
+					return err
+				}
+				growth := snapshot.Volumes["data"].Growth
+				if growth != nil && (phase == "intent" || growth.State == growthCompleted) {
+					return syscall.ENOSPC
+				}
+				return writeVolumeSnapshot(path, raw)
+			}
+			_, err := m.GrowVolume(t.Context(), "data", v.ID, growRequest(), "t1")
+			if err == nil {
+				t.Fatal("injected persistence failure did not fail")
+			}
+			wantCalls := 0
+			if phase == "completion" {
+				wantCalls = 1
+			}
+			if e.calls != wantCalls {
+				t.Fatalf("runtime calls=%d, want %d", e.calls, wantCalls)
+			}
+			_, err = m.GrowVolume(t.Context(), "data", v.ID, growRequest(), "t1")
+			requireVolumeStatus(t, err, 503)
+			if e.calls != wantCalls {
+				t.Fatal("retry dispatched undurable operation")
+			}
+			r.commitFile = writeVolumeSnapshot
+			m.retryManagedSnapshot()
+			waitFor(t, func() bool { return !r.retrying.Load() })
+			result, err := m.GrowVolume(t.Context(), "data", v.ID, growRequest(), "t1")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if e.calls != 1 || !e.intentSeen || result.SizeBytes != 2<<30 || result.CapacityGeneration != 1 {
+				t.Fatalf("recovered operation did not converge: calls=%d intent=%v result=%+v", e.calls, e.intentSeen, result)
+			}
+		})
 	}
 }

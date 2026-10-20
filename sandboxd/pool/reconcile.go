@@ -118,8 +118,8 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 
 	if managedErr == nil {
 		m.sweepOrphanSnapshots(ctx, snaps, snapsErr, referenced)
-		m.resyncEgress(ctx, live, removed)
 	}
+	m.resyncEgress(ctx, live, removed, inventoryErr == nil)
 	m.warnDeniedClaims(ctx)
 	logger.Infof(ctx, "adopted %d claims, %d VMs live", len(m.claimed), len(live))
 	return saveErr
@@ -224,7 +224,7 @@ func (m *Manager) holdStaleVolumes(ctx context.Context, name string, rec types.V
 }
 
 // resyncEgress re-locks adopted egress claims, quarantining any it cannot lock.
-func (m *Manager) resyncEgress(ctx context.Context, live map[string]types.VMRecord, removed map[string]bool) {
+func (m *Manager) resyncEgress(ctx context.Context, live map[string]types.VMRecord, removed map[string]bool, inventoryKnown bool) {
 	logger := log.WithFunc("pool.resyncEgress")
 	now := time.Now()
 	locked, lockedErr := m.out.LockedTaps()
@@ -238,7 +238,7 @@ func (m *Manager) resyncEgress(ctx context.Context, live map[string]types.VMReco
 		if m.out.LocksNIC(sb.Key) {
 			tap := m.readoptEgressTap(sb, live)
 			// a down egress-lane VM has no guest to lock or mark; the liveness pass fails it
-			if live[sb.VMName].State != vmStateRunning {
+			if rec, known := live[sb.VMName]; known && rec.State != vmStateRunning {
 				continue
 			}
 			if tap == "" {
@@ -268,6 +268,9 @@ func (m *Manager) resyncEgress(ctx context.Context, live map[string]types.VMReco
 		} else if sb.TAP != "" {
 			keep[sb.TAP] = true
 		}
+	}
+	if !inventoryKnown {
+		return
 	}
 	// keep every still-running VM's tap; sweep only a confirmed-gone VM's table.
 	for name, rec := range live {
@@ -411,13 +414,14 @@ func (m *Manager) managedUncertainVM(name string) bool {
 const managedRecoveryFailure = "managed storage recovery required"
 
 func (m *Manager) managedClaimUncertain(sb *types.Sandbox) bool {
-	if m.managed == nil || !hasVolumes(sb) {
+	if m.managed == nil {
 		return false
 	}
 	r := m.managed
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return r.fault != nil || r.uncertainVMs[sb.VMName]
+	_, held := r.data.Holds[sb.ID]
+	return r.uncertainVMs[sb.VMName] || r.fault != nil && (hasVolumes(sb) || held)
 }
 
 func (m *Manager) reconcileManaged(ctx context.Context, claims map[string]*types.Sandbox, live map[string]types.VMRecord) (map[string]bool, error) {

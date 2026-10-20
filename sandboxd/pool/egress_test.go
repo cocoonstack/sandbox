@@ -313,7 +313,7 @@ func TestQuarantineFailedRemoveStaysUnswept(t *testing.T) {
 
 	var gotKeep map[string]bool
 	withOutbound(t, m, func(o *outbound.Options) { o.Sweep = func(keep map[string]bool) error { gotKeep = keep; return nil } })
-	m.resyncEgress(t.Context(), live, removed)
+	m.resyncEgress(t.Context(), live, removed, true)
 
 	if removed["sbx-q1"] {
 		t.Error("failed remove marked the VM gone; the sweep would drop its lock table")
@@ -699,4 +699,67 @@ func withOutbound(t *testing.T, m *Manager, edit func(*outbound.Options)) {
 	o := m.outboundOptions(ca)
 	edit(&o)
 	m.out = outbound.New(o)
+}
+
+func TestManagedFaultPreservesOrdinaryEgressRecovery(t *testing.T) {
+	for _, corrupt := range []bool{false, true} {
+		name := "healthy"
+		if corrupt {
+			name = "corrupt"
+		}
+		t.Run(name, func(t *testing.T) {
+			cfg := managedConfig(t)
+			e := newManagedEngine()
+			m := openManagedTest(t, cfg, e)
+			sb := &types.Sandbox{ID: "sb_ordinary", VMName: "sbx-ordinary", Key: egKey, VsockSocket: "/fake/vsock", Token: "token"}
+			e.vms[sb.VMName] = sb.VsockSocket
+			if err := m.store.commitDurable(m.store.set(sb)); err != nil {
+				t.Fatal(err)
+			}
+			if err := m.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if corrupt {
+				if err := os.WriteFile(filepath.Join(cfg.ManagedVolumeDir, "registry.json"), []byte("{"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			m = openManagedTest(t, cfg, e)
+			withOutbound(t, m, func(o *outbound.Options) { o.LockNIC = true; o.Sweep = func(map[string]bool) error { return nil } })
+			if err := m.Reconcile(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			live, present := m.Sandbox(sb.ID)
+			failed := ""
+			if present {
+				failed = live.Failed
+			}
+			t.Logf("corrupt=%v claim_present=%v failed=%q locks_nic=%v uncertain_vm=%v", corrupt, present, failed, m.out.LocksNIC(egKey), m.managedUncertainVM(sb.VMName))
+			if present && failed == "" {
+				t.Error("ordinary egress claim with no lockable TAP remains active after recovery")
+			}
+		})
+	}
+}
+
+func TestUnknownInventoryPreservesEgressTables(t *testing.T) {
+	e := newManagedEngine()
+	m := openManagedTest(t, managedConfig(t), e)
+	sb := &types.Sandbox{ID: "sb_unknown", VMName: "sbx-unknown", Key: egKey, Token: "token", VsockSocket: "/fake/socket"}
+	e.vms[sb.VMName] = sb.VsockSocket
+	m.mu.Lock()
+	m.addClaimLocked(sb)
+	m.mu.Unlock()
+	swept := false
+	withOutbound(t, m, func(o *outbound.Options) {
+		o.LockNIC = true
+		o.Sweep = func(map[string]bool) error { swept = true; return nil }
+	})
+	m.resyncEgress(t.Context(), map[string]types.VMRecord{}, map[string]bool{}, false)
+	if live, present := m.Sandbox(sb.ID); present && live.Failed == "" {
+		t.Fatal("unknown inventory left an egress claim active without a verified lock")
+	}
+	if swept {
+		t.Fatal("unknown inventory swept potentially live egress locks")
+	}
 }

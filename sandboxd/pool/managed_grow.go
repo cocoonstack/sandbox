@@ -114,7 +114,7 @@ func (m *Manager) growthTeardownTarget(ctx context.Context, name string) (string
 }
 
 func (r *volumeRegistry) growVolume(name, expectedID, tenant string, req types.VolumeGrow) (managedVolume, error) {
-	if r.fault != nil {
+	if r.closed || r.fault != nil || r.writeFault != nil {
 		return managedVolume{}, managedStorageError()
 	}
 	v, ok := r.data.Volumes[name]

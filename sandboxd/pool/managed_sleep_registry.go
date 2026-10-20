@@ -127,7 +127,7 @@ func validSleepProcess(p processIdentity) bool { return p.PID > 0 && p.Start > 0
 
 func (m *Manager) managedPaused(sb *types.Sandbox) bool {
 	h, held := m.managedHold(sb.ID)
-	return held && (h.Sleep != nil || h.State == holdRetiring)
+	return m.managedClaimUncertain(sb) || held && (h.Sleep != nil || h.State == holdRetiring)
 }
 
 func (r *volumeRegistry) sleepOwnsVolume(id volumeID) bool {

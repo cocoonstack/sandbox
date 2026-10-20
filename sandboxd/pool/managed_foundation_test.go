@@ -701,3 +701,23 @@ func TestManagedMissingBootMetadataCannotProveProcessGone(t *testing.T) {
 		t.Fatal("missing boot metadata was treated as an absent VMM")
 	}
 }
+
+func TestManagedRecoveryFencesAgentSocket(t *testing.T) {
+	m, e, sb, _, _ := newGrowthTest(t)
+	ordinary := &types.Sandbox{ID: "sb_ordinary", VMName: "sbx-ordinary", Token: "ordinary-token", VsockSocket: "/ordinary/socket"}
+	e.vms[ordinary.VMName] = ordinary.VsockSocket
+	m.mu.Lock()
+	m.addClaimLocked(ordinary)
+	m.mu.Unlock()
+	m.fenceManagedRecovery(t.Context(), errors.New("inventory unavailable"), map[string]*types.Sandbox{sb.ID: sb, ordinary.ID: ordinary}, nil)
+	if socket, err := m.AgentSocket(sb.ID, sb.Token); err == nil || socket != "" {
+		t.Fatalf("uncertain managed claim exposes socket %q, error=%v", socket, err)
+	}
+	if socket, err := m.AgentSocket(ordinary.ID, ordinary.Token); err != nil || socket != ordinary.VsockSocket {
+		t.Fatalf("ordinary claim affected: socket=%q error=%v", socket, err)
+	}
+	sb.Volumes = nil
+	if socket, err := m.AgentSocket(sb.ID, sb.Token); err == nil || socket != "" {
+		t.Fatalf("recorded uncertain VM exposes socket after empty volume projection: %q, %v", socket, err)
+	}
+}

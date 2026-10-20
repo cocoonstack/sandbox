@@ -23,7 +23,7 @@ func mergeRegistryFields(current, original jsontext.Value, typ reflect.Type) (js
 		}
 		for i := range next {
 			for j := range old {
-				if registryObjectKey(next[i]) != "" && registryObjectKey(next[i]) == registryObjectKey(old[j]) {
+				if registryObjectKey(next[i], typ.Elem()) != "" && registryObjectKey(next[i], typ.Elem()) == registryObjectKey(old[j], typ.Elem()) {
 					value, err := mergeRegistryFields(next[i], old[j], typ.Elem())
 					if err != nil {
 						return nil, err
@@ -42,7 +42,7 @@ func mergeRegistryFields(current, original jsontext.Value, typ reflect.Type) (js
 	if json.Unmarshal(current, &next) != nil || json.Unmarshal(original, &old) != nil {
 		return current, nil
 	}
-	if a, b := registryObjectKey(current), registryObjectKey(original); typ.Kind() == reflect.Struct && a != b {
+	if a, b := registryObjectKey(current, typ), registryObjectKey(original, typ); typ.Kind() == reflect.Struct && a != b {
 		return current, nil
 	}
 	fields := map[string]reflect.Type{}
@@ -75,29 +75,44 @@ func mergeRegistryFields(current, original jsontext.Value, typ reflect.Type) (js
 	return json.Marshal(next)
 }
 
-func registryObjectKey(raw jsontext.Value) string {
+func registryObjectKey(raw jsontext.Value, typ reflect.Type) string {
+	for typ.Kind() == reflect.Pointer {
+		typ = typ.Elem()
+	}
+	if typ.Kind() != reflect.Struct {
+		return ""
+	}
+	fields := map[string]reflect.Type{}
+	for field := range typ.Fields() {
+		name, _, _ := strings.Cut(field.Tag.Get("json"), ",")
+		if name == "" {
+			name = field.Name
+		}
+		fields[name] = field.Type
+	}
+
 	var obj map[string]jsontext.Value
 	if json.Unmarshal(raw, &obj) != nil {
 		return ""
 	}
-	if request, ok := obj["request"]; ok {
-		if key := registryObjectKey(request); key != "" {
+	if request, ok := obj["request"]; ok && fields["request"] != nil {
+		if key := registryObjectKey(request, fields["request"]); key != "" {
 			return key
 		}
 	}
-	if boot, ok := obj["boot_id"]; ok {
+	if boot, ok := obj["boot_id"]; ok && fields["boot_id"] != nil {
 		return string(boot) + "/" + string(obj["pid"]) + "/" + string(obj["start"])
 	}
-	if inode, ok := obj["inode"]; ok {
+	if inode, ok := obj["inode"]; ok && fields["inode"] != nil {
 		return string(obj["device"]) + "/" + string(inode)
 	}
 	for _, key := range []string{"id", "sandbox_id", "operation", "operation_id", "name", "number"} {
-		if value, ok := obj[key]; ok {
+		if value, ok := obj[key]; ok && fields[key] != nil {
 			return key + string(value)
 		}
 	}
-	if volume, ok := obj["volume"]; ok {
-		return registryObjectKey(volume)
+	if volume, ok := obj["volume"]; ok && fields["volume"] != nil {
+		return registryObjectKey(volume, fields["volume"])
 	}
 	return ""
 }

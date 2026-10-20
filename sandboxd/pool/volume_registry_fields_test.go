@@ -50,6 +50,11 @@ func TestManagedRegistryPreservesSupportedAdditiveFields(t *testing.T) {
 			}
 			for _, object := range objects {
 				object["future_note"] = map[string]any{"value": "preserve"}
+				for _, field := range []string{"id", "name", "operation", "request"} {
+					if _, known := object[field]; !known {
+						object[field] = "future-extension"
+					}
+				}
 			}
 			raw, err = json.Marshal(doc)
 			if err != nil {
@@ -118,5 +123,58 @@ func TestManagedRegistryExtensionsFollowObjectIdentity(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestManagedAdditiveMetadataCannotBecomeObjectIdentity(t *testing.T) {
+	cfg := managedConfig(t)
+	m := openManagedTest(t, cfg, newManagedEngine())
+	createManagedTest(t, m, "data")
+	if err := m.Close(); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(cfg.ManagedVolumeDir, "registry.json")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc map[string]any
+	if err = json.Unmarshal(raw, &doc); err != nil {
+		t.Fatal(err)
+	}
+	doc["id"] = "future-registry-instance"
+	doc["future_note"] = "preserve"
+	raw, err = json.Marshal(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r, err := openVolumeRegistry(cfg.ManagedVolumeDir, "node")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.close()
+	if r.fault != nil {
+		t.Fatalf("extension was not accepted: %v", r.fault)
+	}
+	r.mu.Lock()
+	err = r.commitAndRelock()
+	r.mu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err = os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]any
+	if err = json.Unmarshal(raw, &got); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("persisted id=%v future_note=%v", got["id"], got["future_note"])
+	if got["id"] != doc["id"] || got["future_note"] != doc["future_note"] {
+		t.Error("accepted additive registry metadata was discarded by identity heuristic")
 	}
 }
