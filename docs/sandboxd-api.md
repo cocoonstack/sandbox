@@ -300,8 +300,8 @@ for an invalid body, name, size, or owner; `401` for a missing or invalid token;
 volume; `409` for a catalog name, different size or owner, or pending deletion;
 and `503` for unavailable storage or tenant lookup. A create interrupted after
 allocation may return `503` with code `volume_create_incomplete` and require
-operator recovery. `503` responses include `Retry-After`; the recovery codes
-do not promise that an immediate retry will succeed.
+operator recovery. `volume_create_incomplete` and `volume_backing_mismatch`
+omit `Retry-After`. Transient storage failures include a retry hint.
 
 ## GET /v1/volumes/{name}
 
@@ -334,8 +334,8 @@ invalid token; `404` for an unknown or foreign name or tombstone; `409` for a
 held volume or pending growth; `412` for a malformed or mismatched `If-Match`;
 `428` for a missing `If-Match`; and `503` for unavailable storage or backing
 identity that requires operator recovery. A busy response has code
-`volume_busy` and includes the volume name and public holder list. `503`
-responses include `Retry-After`.
+`volume_busy` and includes the volume name and public holder list. A backing
+mismatch omits `Retry-After`; transient storage failures include a retry hint.
 
 ## POST /v1/volumes/{name}/grow
 
@@ -371,6 +371,7 @@ Errors are `400` invalid arguments, `401` missing or invalid management token,
 `412` wrong identity or stale generation, `428` missing `If-Match`, and `503`
 unsupported runtime or unavailable storage. A terminal recovery result returns
 `409` with code `volume_grow_recovery_required`; GET retains its progress.
+An unsupported growth capability omits `Retry-After`.
 See [Grow a running volume](managed-volumes.md#grow-a-running-volume) for the
 supported workload and recovery limits.
 
