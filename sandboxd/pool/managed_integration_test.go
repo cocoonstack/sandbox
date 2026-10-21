@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -401,6 +402,69 @@ func TestManagedTeardownDuringLiveRemovalReleasesCatalogCharge(t *testing.T) {
 			if _, err := m.ClaimProvision(t.Context(), testKey, managedOptions("catalog")); err != nil {
 				t.Fatalf("catalog writer refused after teardown: %v", err)
 			}
+		})
+	}
+}
+
+func TestManagedLiveRemovalReleasesCatalogChargeWhenRegistryWriteFails(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		dirty      bool
+		goodWrites int32
+	}{
+		{"detached", false, 0},
+		{"dirty catalog refused", true, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := managedConfig(t)
+			catalog := writeVolumeImage(t, "catalog.img", "catalog")
+			cfg.Volumes = []config.VolumeSpec{{Name: "catalog", Path: catalog, Writable: true}}
+			m := openManagedTest(t, cfg, newManagedEngine())
+			createManagedTest(t, m, "data")
+			sb := foundationClaim(t, m, "data")
+			patch := types.VolumePatch{Add: []types.Volume{{Name: "catalog"}}}
+			if tc.dirty {
+				if err := markVolumeDirty(catalog); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				if _, err := m.PatchVolumes(t.Context(), sb.ID, "t1", patch); err != nil {
+					t.Fatal(err)
+				}
+				patch = types.VolumePatch{Remove: []string{"catalog"}}
+			}
+			var writes atomic.Int32
+			writes.Store(tc.goodWrites)
+			m.managed.mu.Lock()
+			m.managed.commitFile = func(path string, raw []byte) error {
+				if writes.Add(-1) < 0 {
+					return errors.New("injected registry write failure")
+				}
+				return writeVolumeSnapshot(path, raw)
+			}
+			m.managed.mu.Unlock()
+			if _, err := m.PatchVolumes(t.Context(), sb.ID, "t1", patch); err == nil {
+				t.Fatal("registry write failure hidden")
+			}
+			writes.Store(1 << 20)
+			m.retryManagedSnapshot()
+			waitFor(t, func() bool { return m.ManagedVolumeStatus() == nil && !m.managed.retrying.Load() })
+			if err := clearVolumeDirty(catalog); err != nil {
+				t.Fatal(err)
+			}
+			if view, _ := m.GetVolumes(sb.ID, "t1"); len(view.States) != 1 {
+				t.Fatalf("claim still lists the catalog: %+v", view)
+			}
+			writer, err := m.ClaimProvision(t.Context(), testKey, managedOptions("catalog"))
+			if err != nil {
+				t.Fatalf("catalog the claim no longer holds is still busy: %v", err)
+			}
+			for _, id := range []string{writer.ID, sb.ID} {
+				if err := m.Release(t.Context(), id, Cred{Operator: true}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			waitFor(t, func() bool { return volumeHoldersOf(m, "catalog") == (volumeHolders{}) })
 		})
 	}
 }
