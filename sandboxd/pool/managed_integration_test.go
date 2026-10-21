@@ -196,10 +196,11 @@ func TestManagedSettledRetryDrainsPreviouslyUncertainCatalogRef(t *testing.T) {
 type managedCancelEngine struct {
 	*managedTestEngine
 	entered chan struct{}
+	vm      string
 }
 
 func (e *managedCancelEngine) DiskAttach(ctx context.Context, name string, spec engine.VolumeSpec) error {
-	if spec.Name == "catalog" {
+	if spec.Name == "catalog" && (e.vm == "" || e.vm == name) {
 		close(e.entered)
 		<-ctx.Done()
 		return ctx.Err()
@@ -278,6 +279,8 @@ func TestManagedExpiryCancelsExistingVolumeRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	e.vm = sb.VMName
+	catalogReader(t, m)
 	done := make(chan error, 1)
 	go func() {
 		_, err := m.PatchVolumes(t.Context(), sb.ID, "t1", types.VolumePatch{Add: []types.Volume{{Name: "catalog"}}})
@@ -297,9 +300,18 @@ func TestManagedExpiryCancelsExistingVolumeRun(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("expiry did not cancel the live volume run")
 	}
-	if got := volumeHoldersOf(m, "catalog"); got != (volumeHolders{}) {
-		t.Fatalf("expired claim kept the canceled run's charge: %+v", got)
+	if got := volumeHoldersOf(m, "catalog"); got != (volumeHolders{readers: 1}) {
+		t.Fatalf("expired claim left catalog admission %+v, want only the bystander reader", got)
 	}
+}
+
+func catalogReader(t *testing.T, m *Manager) *types.Sandbox {
+	t.Helper()
+	sb, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Tenant: "t1", Volumes: []types.Volume{{Name: "catalog", Mode: types.VolumeModeRO, AttachOnly: true}}})
+	if err != nil {
+		t.Fatalf("bystander catalog reader: %v", err)
+	}
+	return sb
 }
 
 func TestManagedExpiryDropsVolumeDiagnostics(t *testing.T) {
@@ -365,6 +377,7 @@ func TestManagedTeardownDuringLiveRemovalReleasesCatalogCharge(t *testing.T) {
 			if _, err := m.PatchVolumes(t.Context(), sb.ID, "t1", types.VolumePatch{Add: []types.Volume{{Name: "catalog"}}}); err != nil {
 				t.Fatal(err)
 			}
+			bystander := catalogReader(t, m)
 			entered, resume := make(chan struct{}), make(chan struct{})
 			var once sync.Once
 			m.managed.mu.Lock()
@@ -396,8 +409,14 @@ func TestManagedTeardownDuringLiveRemovalReleasesCatalogCharge(t *testing.T) {
 			<-torn
 			<-patched
 			waitFor(t, func() bool { _, held := m.managedHold(sb.ID); return !held })
-			if got := volumeHoldersOf(m, "catalog"); got != (volumeHolders{}) {
-				t.Fatalf("%s during a live catalog removal kept its charge: %+v", path, got)
+			if got := volumeHoldersOf(m, "catalog"); got != (volumeHolders{readers: 1}) {
+				t.Fatalf("%s during a live catalog removal left catalog admission %+v, want only the bystander reader", path, got)
+			}
+			if _, err := m.ClaimProvision(t.Context(), testKey, managedOptions("catalog")); !errors.Is(err, ErrVolumeBusy) {
+				t.Fatalf("catalog writer beside the bystander reader = %v, want busy", err)
+			}
+			if err := m.Release(t.Context(), bystander.ID, Cred{Operator: true}); err != nil {
+				t.Fatal(err)
 			}
 			if _, err := m.ClaimProvision(t.Context(), testKey, managedOptions("catalog")); err != nil {
 				t.Fatalf("catalog writer refused after teardown: %v", err)
@@ -422,6 +441,7 @@ func TestManagedLiveRemovalReleasesCatalogChargeWhenRegistryWriteFails(t *testin
 			m := openManagedTest(t, cfg, newManagedEngine())
 			createManagedTest(t, m, "data")
 			sb := foundationClaim(t, m, "data")
+			bystander := catalogReader(t, m)
 			patch := types.VolumePatch{Add: []types.Volume{{Name: "catalog"}}}
 			if tc.dirty {
 				if err := markVolumeDirty(catalog); err != nil {
@@ -454,6 +474,15 @@ func TestManagedLiveRemovalReleasesCatalogChargeWhenRegistryWriteFails(t *testin
 			}
 			if view, _ := m.GetVolumes(sb.ID, "t1"); len(view.States) != 1 {
 				t.Fatalf("claim still lists the catalog: %+v", view)
+			}
+			if got := volumeHoldersOf(m, "catalog"); got != (volumeHolders{readers: 1}) {
+				t.Fatalf("failed removal write left catalog admission %+v, want only the bystander reader", got)
+			}
+			if _, err := m.ClaimProvision(t.Context(), testKey, managedOptions("catalog")); !errors.Is(err, ErrVolumeBusy) {
+				t.Fatalf("catalog writer beside the bystander reader = %v, want busy", err)
+			}
+			if err := m.Release(t.Context(), bystander.ID, Cred{Operator: true}); err != nil {
+				t.Fatal(err)
 			}
 			writer, err := m.ClaimProvision(t.Context(), testKey, managedOptions("catalog"))
 			if err != nil {
