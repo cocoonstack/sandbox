@@ -270,7 +270,7 @@ func TestManagedExpiryCancelsExistingVolumeRun(t *testing.T) {
 	}
 	t.Cleanup(func() { m.Close() })
 	m.managed.process = e.identity
-	if err := m.PutTenant(t.Context(), tenants.TenantSpec{Name: "t1", Token: "t1-token"}); err != nil {
+	if err = m.PutTenant(t.Context(), tenants.TenantSpec{Name: "t1", Token: "t1-token"}); err != nil {
 		t.Fatal(err)
 	}
 	createManagedTest(t, m, "data")
@@ -354,7 +354,7 @@ func TestManagedTeardownDuringLiveRemovalReleasesCatalogCharge(t *testing.T) {
 			}
 			t.Cleanup(func() { _ = m.Close() })
 			m.managed.process = process
-			if err := m.PutTenant(t.Context(), tenants.TenantSpec{Name: "t1", Token: "t1-token"}); err != nil {
+			if err = m.PutTenant(t.Context(), tenants.TenantSpec{Name: "t1", Token: "t1-token"}); err != nil {
 				t.Fatal(err)
 			}
 			createManagedTest(t, m, "data")
