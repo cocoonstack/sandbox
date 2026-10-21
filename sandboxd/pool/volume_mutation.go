@@ -339,14 +339,13 @@ func (m *Manager) stageVolumeTarget(ctx context.Context, sb *types.Sandbox, run 
 		removeErr := m.managedLiveRemove(sb.ID, additions)
 		sb.Transition.Lock()
 		m.mu.Lock()
+		m.releaseUnheldLocked(sb, run, additions)
 		if err := removeErr; err != nil {
 			return claimSnapshot{}, false, err
 		}
 		if err := m.checkVolumeRunLocked(ctx, sb, run); err != nil {
 			return claimSnapshot{}, false, err
 		}
-		m.releaseVolumes(additions)
-		run.holds = volumeDifference(run.holds, additions)
 		return claimSnapshot{}, false, cleanErr
 	}
 	replaced := func(v types.Volume) bool {
@@ -402,15 +401,26 @@ func (m *Manager) commitVolumeRun(ctx context.Context, sb *types.Sandbox, run *v
 	m.mu.Unlock()
 	removeErr := m.managedLiveRemove(sb.ID, dropped)
 	m.mu.Lock()
+	m.releaseUnheldLocked(sb, run, dropped)
 	if err := removeErr; err != nil {
 		return err
 	}
 	if !m.ownsRunLocked(sb, run) {
 		return ErrUnknownSandbox
 	}
-	m.releaseVolumes(dropped)
-	run.holds = volumeDifference(run.holds, dropped)
 	return nil
+}
+
+// releaseUnheldLocked frees run holds the managed hold no longer references; the registry retrier persists a failed drop.
+func (m *Manager) releaseUnheldLocked(sb *types.Sandbox, run *volumeRun, volumes []types.Volume) {
+	if !m.ownsRunLocked(sb, run) {
+		return
+	}
+	if held, managed := m.managedVolumesHeld(sb.ID); managed {
+		volumes = volumeDifference(volumes, held)
+	}
+	m.releaseVolumes(volumes)
+	run.holds = volumeDifference(run.holds, volumes)
 }
 
 func (m *Manager) ownsRunLocked(sb *types.Sandbox, run *volumeRun) bool {
