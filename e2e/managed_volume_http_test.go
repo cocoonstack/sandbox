@@ -299,17 +299,9 @@ func TestManagedVolumeHTTPMissingDirectoryIsTransient(t *testing.T) {
 		if err := os.Rename(moved+".aside", moved); err != nil {
 			t.Fatal(err)
 		}
-		reply := requestManagedVolume(t, st, http.MethodPost, "/v1/claim", "t1-token", claim, "")
-		var claimed rawClaimResponse
-		if reply.status != http.StatusOK {
-			t.Fatalf("claim after restoring %s: status=%d body=%s, want 200", filepath.Base(moved), reply.status, reply.body)
-		}
-		if err := json.Unmarshal(reply.body, &claimed); err != nil {
-			t.Fatal(err)
-		}
-		released := requestManagedVolume(t, st, http.MethodPost, "/v1/sandboxes/"+claimed.ID+"/release", claimed.Token, "", "")
-		if released.status != http.StatusNoContent {
-			t.Fatalf("release after restoring %s: status=%d body=%s", filepath.Base(moved), released.status, released.body)
+		replay := requestManagedVolume(t, st, http.MethodPut, "/v1/volumes/work", "t1-token", `{"size_gib":1}`, "")
+		if replay.status != http.StatusOK || decodeManagedVolume(t, replay.body).State != "ready" {
+			t.Fatalf("PUT after restoring %s: status=%d body=%s, want 200 ready", filepath.Base(moved), replay.status, replay.body)
 		}
 	}
 }
