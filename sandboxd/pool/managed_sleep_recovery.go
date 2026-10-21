@@ -37,6 +37,7 @@ func (m *Manager) releaseManagedSleepLocked(ctx context.Context, sb *types.Sandb
 		return growBusy()
 	}
 	previousHold, _ := m.managedHold(sb.ID)
+	volumeHolds := m.cancelVolumeRun(sb)
 	m.dropClaimLocked(sb)
 	js := m.store.del(sb.ID)
 	m.mu.Unlock()
@@ -58,6 +59,7 @@ func (m *Manager) releaseManagedSleepLocked(ctx context.Context, sb *types.Sandb
 	if h.Sleep == nil {
 		td = m.quiesceVolumes(ctx, sb)
 	}
+	td.holds = volumeHolds
 	removed := m.removeOrRetry(ctx, sb.VMName, sb.ID, td)
 	m.out.Disarm(sb.ID, removed)
 	if !removed {
