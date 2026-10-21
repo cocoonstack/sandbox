@@ -39,7 +39,9 @@ concurrent pathname swap.
 Keep the registry and backing files together. Do not resize, rename, replace or
 hardlink a backing file by hand. Each managed resource records its immutable
 ID, owner, node, capacity and backing device/inode/size. An identity mismatch
-requires operator recovery and fails closed.
+requires operator recovery and fails closed. The volume then reports state
+`recovery_required`, and PUT and claims return `503` with code
+`volume_recovery_required` and no `Retry-After`.
 
 The existing static catalog remains operator-owned. Its files and every path
 component must be controlled by trusted operator or daemon principals. Static

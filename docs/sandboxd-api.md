@@ -300,8 +300,11 @@ for an invalid body, name, size, or owner; `401` for a missing or invalid token;
 volume; `409` for a catalog name, different size or owner, or pending deletion;
 and `503` for unavailable storage or tenant lookup. A create interrupted after
 allocation may return `503` with code `volume_create_incomplete` and require
-operator recovery. `volume_create_incomplete` and `volume_backing_mismatch`
-omit `Retry-After`. Transient storage failures include a retry hint.
+operator recovery. A volume whose backing identity changed settles in state
+`recovery_required`, and PUT and claims of it return `503` with code
+`volume_recovery_required`. `volume_create_incomplete`, `volume_backing_mismatch`,
+and `volume_recovery_required` omit `Retry-After`. Transient storage failures
+include a retry hint.
 
 ## GET /v1/volumes/{name}
 
@@ -334,8 +337,10 @@ invalid token; `404` for an unknown or foreign name or tombstone; `409` for a
 held volume or pending growth; `412` for a malformed or mismatched `If-Match`;
 `428` for a missing `If-Match`; and `503` for unavailable storage or backing
 identity that requires operator recovery. A busy response has code
-`volume_busy` and includes the volume name and public holder list. A backing
-mismatch omits `Retry-After`; transient storage failures include a retry hint.
+`volume_busy` and includes the volume name and public holder list. A missing
+backing returns `volume_recovery_required`. A backing mismatch and
+`volume_recovery_required` omit `Retry-After`; transient storage failures
+include a retry hint.
 
 ## POST /v1/volumes/{name}/grow
 

@@ -41,6 +41,10 @@ func managedStorageError() *VolumeError {
 	return volumeError(503, "volume_storage_unavailable", "volume storage requires recovery; retry after recovery")
 }
 
+func managedRecoveryError() *VolumeError {
+	return volumeError(503, "volume_recovery_required", "volume requires operator recovery; inspect the volume")
+}
+
 func managedNotFound() *VolumeError { return volumeError(404, "volume_not_found", "unknown volume") }
 
 func (m *Manager) CreateVolume(ctx context.Context, name string, req types.VolumeCreate, tenant string) (types.ManagedVolumeInfo, bool, error) {
@@ -104,6 +108,8 @@ func (m *Manager) CreateVolume(ctx context.Context, name string, req types.Volum
 		}
 	case volumeDeleting:
 		return types.ManagedVolumeInfo{}, false, volumeError(409, "volume_deleting", "volume deletion is pending")
+	case volumeRecovery:
+		return types.ManagedVolumeInfo{}, false, managedRecoveryError()
 	default:
 		return types.ManagedVolumeInfo{}, false, managedStorageError()
 	}
@@ -156,7 +162,7 @@ func (r *volumeRegistry) markRecovery(v managedVolume) error {
 	if err := r.commitAndRelock(); err != nil {
 		return err
 	}
-	return managedStorageError()
+	return managedRecoveryError()
 }
 
 func (m *Manager) GetVolume(name, tenant string) (types.ManagedVolumeInfo, error) {
@@ -371,10 +377,13 @@ func (m *Manager) lookupManaged(name string) (catalogVolume, bool, error) {
 		return catalogVolume{}, false, nil
 	}
 	entry := catalogVolume{disk: engine.VolumeSpec{Name: name, Path: r.path(v.ID), DirectIO: types.DirectIOOff}, tenants: []string{v.Tenant}, writable: true, managedID: v.ID}
-	if v.State == volumeGrowing {
+	switch v.State {
+	case volumeReady:
+	case volumeGrowing:
 		return entry, true, &VolumeError{Status: 409, Code: volumeBusyCode, Message: volumeBusyMessage, Volume: name, Holders: r.holders(v.ID)}
-	}
-	if v.State != volumeReady {
+	case volumeRecovery:
+		return entry, true, managedRecoveryError()
+	default:
 		return entry, true, managedStorageError()
 	}
 	r.mu.Unlock()

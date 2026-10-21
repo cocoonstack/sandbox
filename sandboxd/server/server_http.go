@@ -190,7 +190,7 @@ func mapPoolErr(w http.ResponseWriter, err error) (code int, msg string, ok bool
 			return code, msg, ok
 		}
 		if volumeErr, managed := errors.AsType[*pool.VolumeError](err); managed &&
-			(volumeErr.Code == "volume_create_incomplete" || volumeErr.Code == "volume_backing_mismatch" || volumeErr.Code == "volume_grow_unsupported") {
+			(volumeErr.Code == "volume_create_incomplete" || volumeErr.Code == "volume_backing_mismatch" || volumeErr.Code == "volume_grow_unsupported" || volumeErr.Code == "volume_recovery_required") {
 			return code, msg, ok
 		}
 		w.Header().Set("Retry-After", retryAfterSeconds)
