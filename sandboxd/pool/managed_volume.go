@@ -371,6 +371,9 @@ func (m *Manager) lookupManaged(name string) (catalogVolume, bool, error) {
 		return catalogVolume{}, false, nil
 	}
 	entry := catalogVolume{disk: engine.VolumeSpec{Name: name, Path: r.path(v.ID), DirectIO: types.DirectIOOff}, tenants: []string{v.Tenant}, writable: true, managedID: v.ID}
+	if v.State == volumeGrowing {
+		return entry, true, &VolumeError{Status: 409, Code: volumeBusyCode, Message: volumeBusyMessage, Volume: name, Holders: r.holders(v.ID)}
+	}
 	if v.State != volumeReady {
 		return entry, true, managedStorageError()
 	}
