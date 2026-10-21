@@ -50,20 +50,62 @@ func TestManagedVolumeRecoveryRetryHints(t *testing.T) {
 	}
 }
 
+func TestManagedVolumeStorageFallbackKeepsRetryAfter(t *testing.T) {
+	outage := errors.New("write /private/claims.json: no space left on device")
+	for _, tc := range []struct {
+		name, method, path, match, body string
+		mgr                             Manager
+	}{
+		{"create", http.MethodPut, "/v1/volumes/data", "", `{"size_gib":1}`, &volumeManagerFake{fakeManager: &fakeManager{}, err: outage}},
+		{"delete", http.MethodDelete, "/v1/volumes/data", `"vol_123"`, "", &volumeManagerFake{fakeManager: &fakeManager{}, err: outage}},
+		{"grow", http.MethodPost, "/v1/volumes/data/grow", `"vol_123"`, growBody, &volumeGrowFake{volumeManagerFake: &volumeManagerFake{fakeManager: &fakeManager{}}, grow: func(context.Context, string, string, types.VolumeGrow, string) (types.ManagedVolumeInfo, error) {
+			return types.ManagedVolumeInfo{}, outage
+		}}},
+		{"grow unsupported lookup", http.MethodPost, "/v1/volumes/data/grow", `"vol_123"`, growBody, &volumeManagerFake{fakeManager: &fakeManager{}, get: func(string, string) (types.ManagedVolumeInfo, error) {
+			return types.ManagedVolumeInfo{}, outage
+		}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ts := newTestServer(t, "root-token", tc.mgr, nil)
+			req, _ := http.NewRequest(tc.method, ts.URL+tc.path, strings.NewReader(tc.body))
+			req.Header.Set("Authorization", "Bearer root-token")
+			if tc.match != "" {
+				req.Header.Set("If-Match", tc.match)
+			}
+			resp, err := ts.Client().Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+			var body pool.VolumeError
+			if err := json.UnmarshalRead(resp.Body, &body); err != nil {
+				t.Fatal(err)
+			}
+			if resp.StatusCode != http.StatusServiceUnavailable || body.Code != "volume_storage_unavailable" || strings.Contains(body.Message, "/private") {
+				t.Fatalf("status=%d body=%+v", resp.StatusCode, body)
+			}
+			if resp.Header.Get("Retry-After") == "" {
+				t.Fatalf("storage outage %q without Retry-After", body.Message)
+			}
+		})
+	}
+}
+
 type volumeManagerFake struct {
 	*fakeManager
 	get func(string, string) (types.ManagedVolumeInfo, error)
+	err error
 }
 
 func (f *volumeManagerFake) CreateVolume(context.Context, string, types.VolumeCreate, string) (types.ManagedVolumeInfo, bool, error) {
-	return types.ManagedVolumeInfo{}, false, nil
+	return types.ManagedVolumeInfo{}, false, f.err
 }
 
 func (f *volumeManagerFake) GetVolume(name, tenant string) (types.ManagedVolumeInfo, error) {
 	return f.get(name, tenant)
 }
 
-func (f *volumeManagerFake) DeleteVolume(context.Context, string, string, string) error { return nil }
+func (f *volumeManagerFake) DeleteVolume(context.Context, string, string, string) error { return f.err }
 
 func (f *volumeManagerFake) ManagedVolumeStatus() error { return nil }
 
