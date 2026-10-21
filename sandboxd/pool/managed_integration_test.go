@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -255,6 +256,152 @@ func TestManagedReleaseCancelsExistingVolumeRunAndRetainsFullUnion(t *testing.T)
 	m.retryRemovals(t.Context()).Wait()
 	if _, held := m.managedHold(sb.ID); held {
 		t.Fatal("hold retained after confirmed VMM removal")
+	}
+}
+
+func TestManagedExpiryCancelsExistingVolumeRun(t *testing.T) {
+	cfg := managedConfig(t)
+	cfg.Volumes = []config.VolumeSpec{{Name: "catalog", Path: writeVolumeImage(t, "catalog.img", "catalog"), Writable: true}}
+	e := &managedCancelEngine{managedTestEngine: newManagedEngine(), entered: make(chan struct{})}
+	m, err := NewManager(t.Context(), cfg, e, testSecrets(t), testBackends(t, cfg))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { m.Close() })
+	m.managed.process = e.identity
+	if err := m.PutTenant(t.Context(), tenants.TenantSpec{Name: "t1", Token: "t1-token"}); err != nil {
+		t.Fatal(err)
+	}
+	createManagedTest(t, m, "data")
+	sb, err := m.ClaimProvision(t.Context(), testKey, managedOptions("data"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := m.PatchVolumes(t.Context(), sb.ID, "t1", types.VolumePatch{Add: []types.Volume{{Name: "catalog"}}})
+		done <- err
+	}()
+	<-e.entered
+	m.mu.Lock()
+	sb.Deadline = time.Now().Add(-time.Second)
+	m.mu.Unlock()
+	m.reapOnce(t.Context())
+	waitFor(t, func() bool { _, held := m.managedHold(sb.ID); return !held })
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("mutation cancellation: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("expiry did not cancel the live volume run")
+	}
+	if got := volumeHoldersOf(m, "catalog"); got != (volumeHolders{}) {
+		t.Fatalf("expired claim kept the canceled run's charge: %+v", got)
+	}
+}
+
+func TestManagedExpiryDropsVolumeDiagnostics(t *testing.T) {
+	cfg := managedConfig(t)
+	cfg.Volumes = []config.VolumeSpec{{Name: "catalog", Path: writeVolumeImage(t, "catalog.img", "catalog")}}
+	e := newManagedEngine()
+	m := openManagedTest(t, cfg, e)
+	createManagedTest(t, m, "data")
+	sb := foundationClaim(t, m, "data")
+	if _, err := m.PatchVolumes(t.Context(), sb.ID, "t1", types.VolumePatch{Add: []types.Volume{{Name: "catalog"}}}); err != nil {
+		t.Fatal(err)
+	}
+	e.detachVolumeErr = &engine.VolumeMountConflict{Message: `cannot unmount "/volumes/catalog"; close guest references and retry`}
+	if _, err := m.PatchVolumes(t.Context(), sb.ID, "t1", types.VolumePatch{Remove: []string{"catalog"}}); err == nil {
+		t.Fatal("busy detach succeeded")
+	}
+	e.detachVolumeErr = nil
+	m.mu.Lock()
+	recorded := len(m.volumeErrors[sb])
+	sb.Deadline = time.Now().Add(-time.Second)
+	m.mu.Unlock()
+	if recorded == 0 {
+		t.Fatal("busy detach recorded no diagnostic")
+	}
+	m.reapOnce(t.Context())
+	waitFor(t, func() bool { _, live := m.Sandbox(sb.ID); return !live })
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if leaked := m.volumeErrors[sb]; leaked != nil {
+		t.Fatalf("expired claim kept its diagnostics: %v", leaked)
+	}
+}
+
+func TestManagedTeardownDuringLiveRemovalReleasesCatalogCharge(t *testing.T) {
+	for _, path := range []string{"release", "reap", "sleep-capable release"} {
+		t.Run(path, func(t *testing.T) {
+			cfg := managedConfig(t)
+			cfg.Volumes = []config.VolumeSpec{{Name: "catalog", Path: writeVolumeImage(t, "catalog.img", "catalog"), Writable: true}}
+			opts := managedOptions("data")
+			base := newManagedEngine()
+			var eng Engine = base
+			process := base.identity
+			if path == "sleep-capable release" {
+				cfg.ManagedVolumeHibernate = &config.ManagedVolumeHibernate{HookArgv: []string{"/usr/local/bin/volume-hook"}, HookTimeoutSeconds: 1}
+				se := &sleepTestEngine{managedTestEngine: base, generation: 2, reason: "boot", vmID: "immutable-vm", mounted: true}
+				eng, process = se, se.identity
+				opts.Volumes[0].AttachOnly = false
+			}
+			m, err := NewManager(t.Context(), cfg, eng, testSecrets(t), testBackends(t, cfg))
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = m.Close() })
+			m.managed.process = process
+			if err := m.PutTenant(t.Context(), tenants.TenantSpec{Name: "t1", Token: "t1-token"}); err != nil {
+				t.Fatal(err)
+			}
+			createManagedTest(t, m, "data")
+			sb, err := m.ClaimProvision(t.Context(), testKey, opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := m.PatchVolumes(t.Context(), sb.ID, "t1", types.VolumePatch{Add: []types.Volume{{Name: "catalog"}}}); err != nil {
+				t.Fatal(err)
+			}
+			entered, resume := make(chan struct{}), make(chan struct{})
+			var once sync.Once
+			m.managed.mu.Lock()
+			m.managed.commitFile = func(p string, raw []byte) error {
+				once.Do(func() { close(entered); <-resume })
+				return writeVolumeSnapshot(p, raw)
+			}
+			m.managed.mu.Unlock()
+			patched := make(chan error, 1)
+			go func() {
+				_, err := m.PatchVolumes(t.Context(), sb.ID, "t1", types.VolumePatch{Remove: []string{"catalog"}})
+				patched <- err
+			}()
+			<-entered
+			torn := make(chan struct{})
+			go func() {
+				defer close(torn)
+				if path == "reap" {
+					m.mu.Lock()
+					sb.Deadline = time.Now().Add(-time.Second)
+					m.mu.Unlock()
+					m.reapOnce(t.Context())
+					return
+				}
+				_ = m.Release(t.Context(), sb.ID, Cred{Operator: true})
+			}()
+			waitFor(t, func() bool { _, live := m.Sandbox(sb.ID); return !live })
+			close(resume)
+			<-torn
+			<-patched
+			waitFor(t, func() bool { _, held := m.managedHold(sb.ID); return !held })
+			if got := volumeHoldersOf(m, "catalog"); got != (volumeHolders{}) {
+				t.Fatalf("%s during a live catalog removal kept its charge: %+v", path, got)
+			}
+			if _, err := m.ClaimProvision(t.Context(), testKey, managedOptions("catalog")); err != nil {
+				t.Fatalf("catalog writer refused after teardown: %v", err)
+			}
+		})
 	}
 }
 
