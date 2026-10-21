@@ -281,6 +281,18 @@ func TestManagedGrowthOwnerReportsGrowBusyToLiveVolumeChanges(t *testing.T) {
 	}
 }
 
+func TestManagedGrowingVolumeReportsItsHolderToANewClaim(t *testing.T) {
+	m, e, sb, _, v := newGrowthTest(t)
+	e.unknown = true
+	_, err := m.GrowVolume(t.Context(), "data", v.ID, growRequest(), "t1")
+	requireVolumeStatus(t, err, 409)
+	_, err = m.ClaimProvision(t.Context(), testKey, managedOptions("data"))
+	got := requireVolumeStatus(t, err, 409)
+	if got.Code != volumeBusyCode || got.Volume != "data" || len(got.Holders) != 1 || got.Holders[0].SandboxID != sb.ID {
+		t.Fatalf("second writer during growth = %+v, want %s naming the owner", got, volumeBusyCode)
+	}
+}
+
 func TestManagedGrowthUnknownFencesLifecycleUntilExplicitExactStop(t *testing.T) {
 	m, e, sb, _, v := newGrowthTest(t)
 	e.unknown = true
