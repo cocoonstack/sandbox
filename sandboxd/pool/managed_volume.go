@@ -389,6 +389,9 @@ func (m *Manager) lookupManaged(name string) (catalogVolume, bool, error) {
 	r.mu.Unlock()
 	err := r.verify(v)
 	r.mu.Lock()
+	if errors.Is(err, errBackingMismatch) || errors.Is(err, os.ErrNotExist) {
+		return entry, true, managedRecoveryError()
+	}
 	if err != nil {
 		return entry, true, managedStorageError()
 	}
