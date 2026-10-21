@@ -270,6 +270,17 @@ func TestManagedGrowthACKGuestLagAndLostResponseRecoverWithoutDispatch(t *testin
 	}
 }
 
+func TestManagedGrowthOwnerReportsGrowBusyToLiveVolumeChanges(t *testing.T) {
+	m, e, sb, _, v := newGrowthTest(t)
+	e.unknown = true
+	_, err := m.GrowVolume(t.Context(), "data", v.ID, growRequest(), "t1")
+	requireVolumeStatus(t, err, 409)
+	_, err = m.PatchVolumes(t.Context(), sb.ID, "t1", types.VolumePatch{})
+	if got := requireVolumeStatus(t, err, 409); got.Code != "volume_grow_busy" {
+		t.Fatalf("live change during growth = %+v, want volume_grow_busy", got)
+	}
+}
+
 func TestManagedGrowthUnknownFencesLifecycleUntilExplicitExactStop(t *testing.T) {
 	m, e, sb, _, v := newGrowthTest(t)
 	e.unknown = true
