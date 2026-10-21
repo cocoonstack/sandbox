@@ -61,7 +61,7 @@ func TestManagedMountRequiresLiteralWritableRoot(t *testing.T) {
 			}
 			fake.mu.Lock()
 			defer fake.mu.Unlock()
-			if len(fake.execCalls) != 0 {
+			if len(guestChanges(fake.execCalls)) != 0 {
 				t.Fatal("mount preflight changed guest")
 			}
 		})

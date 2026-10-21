@@ -68,18 +68,19 @@ func (e *Engine) VerifyMountedVolume(ctx context.Context, socket, name, mount st
 	if err != nil {
 		return err
 	}
+	target := e.resolveMount(ctx, socket, mount, mounts)
 	matched := false
 	for _, entry := range mounts {
-		if entry.path != mount && entry.devNum != devNum {
+		if entry.path != target && entry.devNum != devNum {
 			continue
 		}
-		if matched || entry.path != mount || entry.devNum != devNum || entry.root != "/" || !slices.Contains(strings.Split(entry.options, ","), "rw") {
-			return &VolumeMountConflict{Message: "managed volume must have one exact writable root mount"}
+		if matched || entry.path != target || entry.devNum != devNum || entry.root != "/" || !slices.Contains(strings.Split(entry.options, ","), "rw") {
+			return &VolumeMountConflict{Message: fmt.Sprintf("managed volume must have one exact writable root mount at %q", target)}
 		}
 		matched = true
 	}
 	if !matched {
-		return &VolumeMountConflict{Message: "managed volume mount is absent"}
+		return &VolumeMountConflict{Message: fmt.Sprintf("managed volume mount %q is absent", target)}
 	}
 	return nil
 }
