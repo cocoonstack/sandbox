@@ -143,6 +143,38 @@ func TestHibernateVolumeCaptureMapsConflict(t *testing.T) {
 	}
 }
 
+func TestManagedSleepReportsGuestMountAndRuntimeRefusals(t *testing.T) {
+	const busy = `cannot unmount "/volumes/data"; close guest references and retry`
+	for _, tt := range []struct {
+		name  string
+		err   error
+		code  int
+		cause string
+	}{
+		{"busy unmount", errors.Join(&pool.VolumeMountConflict{Message: busy}, nil), http.StatusConflict, busy},
+		{"below cocoon floor", &pool.LiveVolumeUnsupported{Version: "v0.7.1"}, http.StatusServiceUnavailable, "Cocoon >= v0.7.2"},
+	} {
+		for _, verb := range []string{"hibernate", "wake"} {
+			t.Run(tt.name+"/"+verb, func(t *testing.T) {
+				refuse := func(string, string) error { return tt.err }
+				ts := newTestServer(t, "", &fakeManager{hibernate: refuse, wake: refuse}, nil)
+				resp := doReq(t, http.MethodPost, ts.URL+"/v1/sandboxes/sb_1/"+verb, "tok", "")
+				defer resp.Body.Close()
+				var got map[string]string
+				if err := json.UnmarshalRead(resp.Body, &got); err != nil {
+					t.Fatal(err)
+				}
+				if resp.StatusCode != tt.code || !strings.Contains(got["error"], tt.cause) {
+					t.Fatalf("status=%d body=%v, want %d naming %q", resp.StatusCode, got, tt.code, tt.cause)
+				}
+				if resp.Header.Get("Retry-After") != "" {
+					t.Fatalf("Retry-After=%q on a refusal that retrying alone cannot clear", resp.Header.Get("Retry-After"))
+				}
+			})
+		}
+	}
+}
+
 func TestRenewGrantsAndReportsTheDeadline(t *testing.T) {
 	want := time.Now().Add(time.Hour).UTC().Truncate(time.Second)
 	var gotTTL time.Duration
