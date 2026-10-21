@@ -31,6 +31,11 @@ func volumeHTTPError(w http.ResponseWriter, status int, code, message string) {
 	writeJSON(w, status, &pool.VolumeError{Status: status, Code: code, Message: message})
 }
 
+func volumeStorageUnavailable(w http.ResponseWriter) {
+	w.Header().Set("Retry-After", retryAfterSeconds)
+	volumeHTTPError(w, 503, "volume_storage_unavailable", "volume storage unavailable; retry")
+}
+
 func (s *Server) requireVolumeListToken(next http.HandlerFunc) http.HandlerFunc {
 	if mgr, ok := s.mgr.(managedVolumeManager); ok && mgr.ManagedVolumesEnabled() {
 		return s.requireVolumeManager(next)
@@ -86,7 +91,7 @@ func (s *Server) handleCreateVolume(w http.ResponseWriter, r *http.Request) {
 	v, created, err := mgr.CreateVolume(r.Context(), r.PathValue("name"), req, tenantFrom(r.Context()))
 	if err != nil {
 		if !writePoolErr(w, err) {
-			volumeHTTPError(w, 503, "volume_storage_unavailable", "volume storage unavailable; retry")
+			volumeStorageUnavailable(w)
 		}
 		return
 	}
@@ -128,7 +133,7 @@ func (s *Server) handleDeleteVolume(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := mgr.DeleteVolume(r.Context(), r.PathValue("name"), expected[1:len(expected)-1], tenantFrom(r.Context())); err != nil {
 		if !writePoolErr(w, err) {
-			volumeHTTPError(w, 503, "volume_storage_unavailable", "volume storage unavailable; retry")
+			volumeStorageUnavailable(w)
 		}
 		return
 	}
@@ -167,7 +172,7 @@ func (s *Server) handleGrowVolume(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		if _, getErr := mgr.GetVolume(r.PathValue("name"), tenantFrom(r.Context())); getErr != nil {
 			if !writePoolErr(w, getErr) {
-				volumeHTTPError(w, 503, "volume_storage_unavailable", "volume storage unavailable; retry")
+				volumeStorageUnavailable(w)
 			}
 			return
 		}
@@ -179,7 +184,7 @@ func (s *Server) handleGrowVolume(w http.ResponseWriter, r *http.Request) {
 	}, tenantFrom(r.Context()))
 	if err != nil {
 		if !writePoolErr(w, err) {
-			volumeHTTPError(w, 503, "volume_storage_unavailable", "volume storage unavailable; retry")
+			volumeStorageUnavailable(w)
 		}
 		return
 	}
