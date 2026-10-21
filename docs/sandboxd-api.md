@@ -235,7 +235,11 @@ unclean `rw` release (needs recovery — one `rw` claim must replay and cleanly
 release before `ro` claims resume; see
 [deploy](deploy.md#writable-dataset-volumes)); 429 node at `max_claims`, the
 calling tenant at its own `max_claims`, or the node draining; 500
-provisioning failed.
+provisioning failed. Managed volumes use the managed volume error body: a
+volume that is growing returns 409 `volume_busy` with its public holder list;
+a missing or replaced backing returns 503 `volume_recovery_required` without
+`Retry-After`; unavailable managed storage returns 503
+`volume_storage_unavailable` with `Retry-After`.
 
 ## GET /v1/volumes
 
@@ -529,7 +533,10 @@ token, 409 on the egress lane or unsupported volume claims, 429 while the disk i
 [`disk_reserve`](deploy.md). An opt-in node hook supports one mounted writable
 managed volume on the `none` lane. See [managed volume hibernation](managed-volumes.md#hibernate-one-mounted-managed-volume)
 for hook installation, exclusive ownership, and failure recovery. Other volume
-capture operations remain blocked.
+capture operations remain blocked. A managed hibernate also returns 409 when a
+guest mount blocks the unmount (close guest references and retry), 409
+`managed_sleep_recovery_required` when the guest could not be resumed after a
+failed preparation, and 503 without `Retry-After` below Cocoon v0.7.2.
 
 ## POST /v1/sandboxes/{id}/wake
 
@@ -544,6 +551,8 @@ while stored, and waking it starts a fresh lease of the length the claim was gra
 its own disk (memory is lost) and its restart budget resets. 204 on
 success, 404 unknown id or wrong token, 409 a failed egress-lane or volume
 sandbox, or one whose VM record is gone, 500 when the cold boot itself fails.
+A managed wake also returns 409 when a guest mount conflicts with the remount
+and 503 without `Retry-After` below Cocoon v0.7.2.
 
 ## POST /v1/sandboxes/{id}/renew
 
