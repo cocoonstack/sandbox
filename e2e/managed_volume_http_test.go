@@ -239,6 +239,7 @@ func TestManagedVolumeHTTPRecoveryRequiredOmitsRetryAfter(t *testing.T) {
 	}
 	claim := `{"template":"rt:24.04","net":"none","size":"small","volumes":[{"name":"work","mode":"rw"}]}`
 	for _, step := range []struct{ method, route, body string }{
+		{http.MethodPost, "/v1/claim", claim},
 		{http.MethodPut, "/v1/volumes/work", `{"size_gib":1}`},
 		{http.MethodPut, "/v1/volumes/work", `{"size_gib":1}`},
 		{http.MethodPost, "/v1/claim", claim},
