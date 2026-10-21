@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -212,10 +213,58 @@ func TestManagedVolumeHTTPRequiresExplicitCredential(t *testing.T) {
 	}
 }
 
+func TestManagedVolumeHTTPRecoveryRequiredOmitsRetryAfter(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "managed")
+	var cfg config.Config
+	if err := json.Unmarshal(fmt.Appendf(nil, `{"managed_volume_dir":%q}`, dir), &cfg); err != nil {
+		t.Fatal(err)
+	}
+	st := startConfigStack(t, "root-token", &cfg)
+	if err := st.mgr.SetTenants(t.Context(), []tenants.TenantSpec{{Name: "t1", Token: "t1-token"}}); err != nil {
+		t.Fatal(err)
+	}
+	created := requestManagedVolume(t, st, http.MethodPut, "/v1/volumes/work", "t1-token", `{"size_gib":1}`, "")
+	if created.status != http.StatusCreated {
+		t.Fatalf("create status=%d body=%s", created.status, created.body)
+	}
+	backing := filepath.Join(dir, "disks", decodeManagedVolume(t, created.body).ID+".raw")
+	if err := os.Remove(backing); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(backing, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Truncate(backing, 1<<30); err != nil {
+		t.Fatal(err)
+	}
+	claim := `{"template":"rt:24.04","net":"none","size":"small","volumes":[{"name":"work","mode":"rw"}]}`
+	for _, step := range []struct{ method, route, body string }{
+		{http.MethodPut, "/v1/volumes/work", `{"size_gib":1}`},
+		{http.MethodPut, "/v1/volumes/work", `{"size_gib":1}`},
+		{http.MethodPost, "/v1/claim", claim},
+	} {
+		reply := requestManagedVolume(t, st, step.method, step.route, "t1-token", step.body, "")
+		var failure struct {
+			Code string `json:"code"`
+		}
+		if err := json.Unmarshal(reply.body, &failure); err != nil {
+			t.Fatal(err)
+		}
+		if reply.status != http.StatusServiceUnavailable || failure.Code != "volume_recovery_required" || reply.retryAfter != "" {
+			t.Fatalf("%s %s after backing replacement: status=%d Retry-After=%q body=%s, want 503 volume_recovery_required without a retry hint", step.method, step.route, reply.status, reply.retryAfter, reply.body)
+		}
+	}
+	got := requestManagedVolume(t, st, http.MethodGet, "/v1/volumes/work", "t1-token", "", "")
+	if state := decodeManagedVolume(t, got.body).State; state != "recovery_required" {
+		t.Fatalf("GET state %q, want recovery_required", state)
+	}
+}
+
 type managedHTTPReply struct {
-	status int
-	body   []byte
-	etag   string
+	status     int
+	body       []byte
+	etag       string
+	retryAfter string
 }
 
 type managedHTTPVolume struct {
@@ -269,7 +318,7 @@ func requestManagedVolume(t *testing.T, st *stack, method, route, token, body, e
 		t.Fatal(err)
 	}
 	assertManagedReplyPrivate(t, data)
-	return managedHTTPReply{status: resp.StatusCode, body: data, etag: resp.Header.Get("ETag")}
+	return managedHTTPReply{status: resp.StatusCode, body: data, etag: resp.Header.Get("ETag"), retryAfter: resp.Header.Get("Retry-After")}
 }
 
 func decodeManagedVolume(t *testing.T, body []byte) managedHTTPVolume {
