@@ -201,7 +201,10 @@ func (m *Manager) prepareManagedSleep(ctx context.Context, sb *types.Sandbox, h 
 			return errors.Join(err, persistErr)
 		}
 		h, _ = m.managedHold(sb.ID)
-		return errors.Join(err, m.resumeManagedSleep(ctx, sb, h, false))
+		if resumeErr := m.resumeManagedSleep(ctx, sb, h, false); resumeErr != nil {
+			return errors.Join(err, sleepRecoveryError(), resumeErr)
+		}
+		return err
 	}
 	return m.setSleepPhase(h, sleepCapturing)
 }
