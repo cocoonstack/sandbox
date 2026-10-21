@@ -119,7 +119,7 @@ type volumeRegistry struct {
 	process           func(int) (processIdentity, error)
 }
 
-var errBackingMismatch = errors.New("managed backing identity changed")
+var errBackingMismatch = errors.New("managed backing is missing or changed")
 
 var managedIDPattern = regexp.MustCompile(`^vol_[0-9a-f]{32}$`)
 
@@ -265,13 +265,10 @@ func (r *volumeRegistry) verify(v managedVolume) error {
 		return err
 	}
 	actual, err := inspectBacking(r.path(v.ID))
-	if err != nil {
-		return err
-	}
-	if v.Backing.Inode == 0 || actual != v.Backing || actual.Size != v.Size {
+	if errors.Is(err, os.ErrNotExist) || err == nil && (v.Backing.Inode == 0 || actual != v.Backing || actual.Size != v.Size) {
 		return errBackingMismatch
 	}
-	return nil
+	return err
 }
 
 func (r *volumeRegistry) validate() error {

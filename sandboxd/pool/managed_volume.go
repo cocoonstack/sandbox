@@ -101,7 +101,7 @@ func (m *Manager) CreateVolume(ctx context.Context, name string, req types.Volum
 		err := r.verify(v)
 		r.mu.Lock()
 		if err != nil {
-			if errors.Is(err, errBackingMismatch) || errors.Is(err, os.ErrNotExist) {
+			if errors.Is(err, errBackingMismatch) {
 				return types.ManagedVolumeInfo{}, false, r.markRecovery(v)
 			}
 			return types.ManagedVolumeInfo{}, false, managedStorageError()
@@ -148,13 +148,16 @@ func (r *volumeRegistry) completeCreate(v managedVolume) error {
 	return r.commitAndRelock()
 }
 
-func (r *volumeRegistry) markRecovery(v managedVolume) error {
+// A sleep or a fenced growth reconciles its own backing, so a loss under either stays transient.
+func (r *volumeRegistry) recoverable(v managedVolume) bool {
 	current, ok := r.data.Volumes[v.Name]
-	if !ok || current.ID != v.ID || current.State != v.State || current.Size != v.Size ||
-		current.Backing != v.Backing || current.CapacityGeneration != v.CapacityGeneration || current.Growth != v.Growth {
-		return managedStorageError()
-	}
-	if r.sleepOwnsVolume(v.ID) || v.Growth.fenced() {
+	return ok && current.ID == v.ID && current.State == v.State && current.Size == v.Size &&
+		current.Backing == v.Backing && current.CapacityGeneration == v.CapacityGeneration && current.Growth == v.Growth &&
+		!r.sleepOwnsVolume(v.ID) && !v.Growth.fenced()
+}
+
+func (r *volumeRegistry) markRecovery(v managedVolume) error {
+	if !r.recoverable(v) {
 		return managedStorageError()
 	}
 	v.State = volumeRecovery
@@ -190,7 +193,7 @@ func (m *Manager) GetVolume(name, tenant string) (types.ManagedVolumeInfo, error
 	}
 	if v.State == volumeReady {
 		if err := r.verify(v); err != nil {
-			if !errors.Is(err, errBackingMismatch) && !errors.Is(err, os.ErrNotExist) {
+			if !errors.Is(err, errBackingMismatch) {
 				return types.ManagedVolumeInfo{}, managedStorageError()
 			}
 			info.State = string(volumeRecovery)
@@ -389,13 +392,14 @@ func (m *Manager) lookupManaged(name string) (catalogVolume, bool, error) {
 	r.mu.Unlock()
 	err := r.verify(v)
 	r.mu.Lock()
-	if errors.Is(err, errBackingMismatch) || errors.Is(err, os.ErrNotExist) {
+	switch {
+	case err == nil:
+		return entry, true, nil
+	case errors.Is(err, errBackingMismatch) && r.recoverable(v):
 		return entry, true, managedRecoveryError()
-	}
-	if err != nil {
+	default:
 		return entry, true, managedStorageError()
 	}
-	return entry, true, nil
 }
 
 func (m *Manager) managedHold(id string) (volumeHold, bool) {
