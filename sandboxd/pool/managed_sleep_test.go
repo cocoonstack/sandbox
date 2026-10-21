@@ -326,6 +326,31 @@ func TestManagedSleepAbortKeepsOriginalVM(t *testing.T) {
 	}
 }
 
+func TestManagedSleepMountConflictReportsFailedResume(t *testing.T) {
+	for _, resumeFails := range []bool{false, true} {
+		t.Run(map[bool]string{false: "resumed", true: "resume failed"}[resumeFails], func(t *testing.T) {
+			m, e, sb, _ := newSleepTest(t)
+			e.detachVolumeErr = &engine.VolumeMountConflict{Message: `cannot unmount "/volumes/data"; close guest references and retry`}
+			if resumeFails {
+				e.hookErr = "resume"
+			}
+			err := m.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token})
+			if _, conflict := errors.AsType[*engine.VolumeMountConflict](err); !conflict {
+				t.Fatalf("hibernate error %v lost the guest mount conflict", err)
+			}
+			if !resumeFails {
+				if v, ok := errors.AsType[*VolumeError](err); ok {
+					t.Fatalf("resumed abort reported %s, want only the guest mount conflict", v.Code)
+				}
+				return
+			}
+			if v := requireVolumeStatus(t, err, 409); v.Code != "managed_sleep_recovery_required" {
+				t.Fatalf("failed resume after a mount conflict = %s, want managed_sleep_recovery_required", v.Code)
+			}
+		})
+	}
+}
+
 func TestManagedSleepWakeFailuresKeepRestoredProcess(t *testing.T) {
 	for _, failure := range []string{"restore reply", "attach", "mount", "resume"} {
 		t.Run(failure, func(t *testing.T) {
