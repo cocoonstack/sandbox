@@ -387,11 +387,13 @@ func TestManagedSleepBackingRefusesBeforeRestore(t *testing.T) {
 			if len(infos) != 1 || infos[0].Available {
 				t.Fatalf("missing backing list: %+v", infos)
 			}
-			if _, _, err = m.CreateVolume(t.Context(), "data", types.VolumeCreate{SizeGiB: 1}, "t1"); err == nil {
-				t.Fatal("missing backing create replay succeeded")
+			_, _, err = m.CreateVolume(t.Context(), "data", types.VolumeCreate{SizeGiB: 1}, "t1")
+			if v := requireVolumeStatus(t, err, 503); v.Code != "volume_storage_unavailable" {
+				t.Fatalf("create replay over a sleeping volume's lost backing = %s, want volume_storage_unavailable while wake owns it", v.Code)
 			}
-			if _, err = m.ClaimProvision(t.Context(), testKey, managedOptions("data")); err == nil {
-				t.Fatal("missing backing admitted second writer")
+			_, err = m.ClaimProvision(t.Context(), testKey, managedOptions("data"))
+			if v := requireVolumeStatus(t, err, 503); v.Code != "volume_storage_unavailable" {
+				t.Fatalf("claim of a sleeping volume's lost backing = %s, want volume_storage_unavailable while wake owns it", v.Code)
 			}
 			if replace {
 				if err := os.Remove(path); err != nil {

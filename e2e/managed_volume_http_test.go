@@ -261,6 +261,59 @@ func TestManagedVolumeHTTPRecoveryRequiredOmitsRetryAfter(t *testing.T) {
 	}
 }
 
+func TestManagedVolumeHTTPMissingDirectoryIsTransient(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "managed")
+	var cfg config.Config
+	if err := json.Unmarshal(fmt.Appendf(nil, `{"managed_volume_dir":%q}`, dir), &cfg); err != nil {
+		t.Fatal(err)
+	}
+	st := startConfigStack(t, "root-token", &cfg)
+	if err := st.mgr.SetTenants(t.Context(), []tenants.TenantSpec{{Name: "t1", Token: "t1-token"}}); err != nil {
+		t.Fatal(err)
+	}
+	created := requestManagedVolume(t, st, http.MethodPut, "/v1/volumes/work", "t1-token", `{"size_gib":1}`, "")
+	if created.status != http.StatusCreated {
+		t.Fatalf("create status=%d body=%s", created.status, created.body)
+	}
+	claim := `{"template":"rt:24.04","net":"none","size":"small","volumes":[{"name":"work","mode":"ro"}]}`
+	for _, moved := range []string{filepath.Join(dir, "disks"), dir} {
+		if err := os.Rename(moved, moved+".aside"); err != nil {
+			t.Fatal(err)
+		}
+		for _, step := range []struct{ method, route, body string }{
+			{http.MethodPost, "/v1/claim", claim},
+			{http.MethodPut, "/v1/volumes/work", `{"size_gib":1}`},
+			{http.MethodPost, "/v1/claim", claim},
+		} {
+			reply := requestManagedVolume(t, st, step.method, step.route, "t1-token", step.body, "")
+			var failure struct {
+				Code string `json:"code"`
+			}
+			if err := json.Unmarshal(reply.body, &failure); err != nil {
+				t.Fatal(err)
+			}
+			if reply.status != http.StatusServiceUnavailable || failure.Code != "volume_storage_unavailable" || reply.retryAfter == "" {
+				t.Fatalf("%s %s with %s moved aside: status=%d Retry-After=%q body=%s, want 503 volume_storage_unavailable with a retry hint", step.method, step.route, filepath.Base(moved), reply.status, reply.retryAfter, reply.body)
+			}
+		}
+		if err := os.Rename(moved+".aside", moved); err != nil {
+			t.Fatal(err)
+		}
+		reply := requestManagedVolume(t, st, http.MethodPost, "/v1/claim", "t1-token", claim, "")
+		var claimed rawClaimResponse
+		if reply.status != http.StatusOK {
+			t.Fatalf("claim after restoring %s: status=%d body=%s, want 200", filepath.Base(moved), reply.status, reply.body)
+		}
+		if err := json.Unmarshal(reply.body, &claimed); err != nil {
+			t.Fatal(err)
+		}
+		released := requestManagedVolume(t, st, http.MethodPost, "/v1/sandboxes/"+claimed.ID+"/release", claimed.Token, "", "")
+		if released.status != http.StatusNoContent {
+			t.Fatalf("release after restoring %s: status=%d body=%s", filepath.Base(moved), released.status, released.body)
+		}
+	}
+}
+
 type managedHTTPReply struct {
 	status     int
 	body       []byte
