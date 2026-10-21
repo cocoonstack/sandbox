@@ -3,6 +3,7 @@ package engine
 import (
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 )
@@ -62,6 +63,37 @@ func TestManagedMountRequiresLiteralWritableRoot(t *testing.T) {
 			defer fake.mu.Unlock()
 			if len(fake.execCalls) != 0 {
 				t.Fatal("mount preflight changed guest")
+			}
+		})
+	}
+}
+
+func TestManagedMountResolvesASymlinkedParent(t *testing.T) {
+	for _, tc := range []struct {
+		name, mountinfo string
+		valid           bool
+	}{
+		{"mounted", "2 1 8:32 / /home/u/ws/data rw - ext4 /dev/vdc rw\n", true},
+		{"read only", "2 1 8:32 / /home/u/ws/data ro - ext4 /dev/vdc ro\n", false},
+		{"absent", "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sock := sockPath(t)
+			fake := serveFakeSilkd(t, sock)
+			configureVolumeDevices(fake)
+			fake.mu.Lock()
+			fake.serial["/sys/block/vdc/dev"] = []byte("8:32\n")
+			fake.serial["/proc/self/mountinfo"] = []byte(rootMountInfo + tc.mountinfo)
+			fake.realpath = map[string]string{"/workspace/data": "/home/u/ws/data"}
+			fake.mu.Unlock()
+			err := New("cocoon", nil, nil, false, false, "").VerifyMountedVolume(t.Context(), sock, "imagenet", "/workspace/data")
+			if tc.valid && err != nil {
+				t.Fatal(err)
+			}
+			if !tc.valid {
+				if _, ok := errors.AsType[*VolumeMountConflict](err); !ok || !strings.Contains(err.Error(), `"/home/u/ws/data"`) {
+					t.Fatalf("mount accepted or conflict hid the resolved guest path: %v", err)
+				}
 			}
 		})
 	}
