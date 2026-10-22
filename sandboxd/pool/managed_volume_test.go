@@ -1,6 +1,7 @@
 package pool
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -316,10 +317,20 @@ func TestManagedCreateInterruptedRetriesOrDeletes(t *testing.T) {
 				t.Fatal(err)
 			}
 			if finish == "put" {
+				if err = os.WriteFile(path, []byte("stale"), before.Mode().Perm()); err != nil {
+					t.Fatal(err)
+				}
 				got, _, putErr := m.CreateVolume(t.Context(), "data", types.VolumeCreate{SizeGiB: 1}, "t1")
-				after, statErr := os.Stat(path)
-				if putErr != nil || got.State != "ready" || got.ID != v.ID || statErr != nil || os.SameFile(before, after) {
-					t.Fatalf("identical PUT after an interrupted create = %+v %v, want the same volume ready on a fresh file", got, putErr)
+				head := make([]byte, 5)
+				f, openErr := os.Open(path)
+				if openErr != nil {
+					t.Fatal(openErr)
+				}
+				_, readErr := f.ReadAt(head, 0)
+				st, statErr := f.Stat()
+				_ = f.Close()
+				if putErr != nil || got.State != "ready" || got.ID != v.ID || readErr != nil || statErr != nil || st.Size() != 1<<30 || !bytes.Equal(head, make([]byte, 5)) {
+					t.Fatalf("identical PUT after an interrupted create = %+v %v, want the same volume ready on a fresh 1 GiB file without the leftover bytes", got, putErr)
 				}
 				return
 			}
