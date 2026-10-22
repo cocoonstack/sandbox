@@ -59,6 +59,8 @@ def _claim_body(
     mount: bool = True,
     claim_ref: str = "",
 ) -> dict[str, Any]:
+    if isinstance(volumes, (str, Mapping)):
+        raise TypeError("volumes takes a list of names or mappings")
     claim: dict[str, Any] = {"template": template}
     if net:
         claim["net"] = net

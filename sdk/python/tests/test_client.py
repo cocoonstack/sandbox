@@ -84,6 +84,16 @@ def test_claim_rejects_invalid_volumes(node, volumes, match):
         Client(node).new("rt:24.04", volumes=volumes)
 
 
+@pytest.mark.parametrize("volumes", ["work", {"name": "work"}])
+def test_claim_rejects_a_bare_string_or_mapping_volume_list(node, volumes):
+    seen = recording_claim({"id": "sb_1", "token": "tok"})
+    with pytest.raises(TypeError):
+        Client(node).new("rt:24.04", volumes=volumes)
+    with pytest.raises(TypeError):
+        Template(Client(node), node, "task:v1", "none", "small").new(volumes=volumes)
+    assert seen == []
+
+
 def test_claim_sends_volume_mode_rw(node):
     seen = recording_claim(
         {"id": "sb_1", "token": "tok", "volumes": [{"name": "scratch", "mount": "/data", "mode": "rw"}]}

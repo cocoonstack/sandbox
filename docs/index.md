@@ -29,6 +29,8 @@ vsock-only I/O (hardened default); `net=egress` attaches a bridge/CNI NIC.
   online pool reconfigure, metrics, the usage journal
 - [Replace a dataset in a running sandbox](live-volumes.md) — swapping a
   read-only catalog volume on a running claim with the volume API
+- [Tenant managed persistent volumes](managed-volumes.md) — node-local tenant
+  resources, warm attachment, hibernate, offline growth, and recovery limits
 - [Go SDK](sdk.md) — connecting (single node and clusters), every option,
   the full sandbox surface, error handling
 - [Python SDK](sdk-python.md) — the guest and data-plane surface for the

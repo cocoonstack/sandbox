@@ -47,6 +47,18 @@ func newFakeEngine(dir string) *fakeEngine {
 
 func (f *fakeEngine) CheckLiveVolumeSupport(context.Context) error { return nil }
 
+func (f *fakeEngine) RunVolumeHook(context.Context, string, engine.VolumeHookCall) error {
+	return errors.New("fakeEngine has no volume hook")
+}
+
+func (f *fakeEngine) VerifyMountedVolume(context.Context, string, string, string) error {
+	return errors.New("fakeEngine cannot verify mounted volumes")
+}
+
+func (f *fakeEngine) InspectHibernateSource(context.Context, string) (engine.HibernateSource, bool, error) {
+	return engine.HibernateSource{}, false, errors.New("fakeEngine cannot inspect hibernate sources")
+}
+
 func (f *fakeEngine) Clone(_ context.Context, _, name string, _ types.PoolKey) (types.VMRecord, error) {
 	return f.createRecord(name)
 }

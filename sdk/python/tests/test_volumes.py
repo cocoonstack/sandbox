@@ -159,8 +159,10 @@ def test_incomplete_volume_view_preserves_handle(spawn_node, status):
         lambda sb: sb.set_volumes("data"),
         lambda sb: sb.patch_volumes(add="data"),
         lambda sb: sb.patch_volumes(remove="old"),
+        lambda sb: sb.set_volumes({"name": "data"}),
+        lambda sb: sb.patch_volumes(add={"name": "data"}),
     ],
 )
-def test_volume_methods_reject_a_bare_string(black_hole, call):
+def test_volume_methods_reject_a_bare_string_or_mapping(black_hole, call):
     with pytest.raises(TypeError):
         call(sandbox_at(black_hole))

@@ -44,13 +44,7 @@ func (s *Server) handleSandboxVolumes(w http.ResponseWriter, r *http.Request) {
 	code := http.StatusOK
 	if err != nil {
 		code, view.Error = http.StatusInternalServerError, "volume convergence failed; inspect the volume states before retrying"
-		conflict, isConflict := errors.AsType[*pool.VolumeMountConflict](err)
-		unsupported, isUnsupported := errors.AsType[*pool.LiveVolumeUnsupported](err)
 		switch {
-		case isConflict:
-			code, view.Error = http.StatusConflict, conflict.Error()
-		case isUnsupported:
-			code, view.Error = http.StatusServiceUnavailable, unsupported.Error()
 		case errors.Is(err, context.DeadlineExceeded):
 			code, view.Error = http.StatusGatewayTimeout, "volume change timed out; inspect the volume states before retrying"
 		case errors.Is(err, context.Canceled):

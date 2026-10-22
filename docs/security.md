@@ -130,6 +130,28 @@ to every other tenant's next read. A dataset that genuinely needs multiple
 writers needs an out-of-band process for who writes when, which the catalog
 ACL does not provide.
 
+Managed volumes are node-local tenant resources, separate from the operator's
+catalog. Management requires an explicit root or tenant bearer token; a
+sandbox token cannot create, inspect, grow, or delete a resource. Tenant
+listings omit other tenants' resources. Individual reads and mutations return
+the same 404 for a foreign or unknown volume. Root can manage resources for
+any tenant, but must name an existing tenant when creating one. API responses
+expose resource IDs and public holder IDs, modes, and states. They do not
+expose backing paths or process IDs.
+
+The managed directory and its ancestors must stay under trusted host control.
+The daemon records the backing file's device, inode, and size; an identity
+mismatch blocks use and requires operator recovery. Deletion requires the
+quoted immutable resource ID in `If-Match`. A replay of a completed deletion
+cannot delete a new resource created under the same name. A held volume
+cannot be deleted, and only its tenant or root can request deletion.
+
+Growth refuses a held volume, so a running guest never sees its disk change
+size. The registry records the target before the file is extended, and a
+restart settles an interrupted growth from the file's size. Repeating the
+current size is a no-op, so a lost growth response is safe to retry. See
+[Tenant managed persistent volumes](managed-volumes.md#grow-an-unheld-volume).
+
 ## Known limitations
 
 Facts to plan around, stated so the boundary is honest:

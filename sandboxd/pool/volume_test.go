@@ -454,22 +454,23 @@ func TestVolumePlacementChecksAccessAndLocalAvailability(t *testing.T) {
 		{Name: "remote", Path: filepath.Join(t.TempDir(), "missing.img"), Tenants: []string{"acme"}},
 	})
 
-	if local, err := m.VolumePlacement(testKey, "acme", []string{"local"}); err != nil || !local {
+	if local, _, err := m.VolumePlacement(testKey, "acme", []string{"local"}); err != nil || !local {
 		t.Errorf("local placement=(%v, %v), want true, nil", local, err)
 	}
-	if local, err := m.VolumePlacement(testKey, "acme", []string{"local", "remote"}); err != nil || local {
+	if local, _, err := m.VolumePlacement(testKey, "acme", []string{"local", "remote"}); err != nil || local {
 		t.Errorf("partial local placement=(%v, %v), want false, nil", local, err)
 	}
-	_, forbiddenErr := m.VolumePlacement(testKey, "beta", []string{"local"})
-	_, unknownErr := m.VolumePlacement(testKey, "beta", []string{"unknown"})
-	if forbiddenErr == nil || unknownErr == nil || forbiddenErr.Error() != unknownErr.Error() {
-		t.Errorf("forbidden=%q unknown=%q, want byte-identical errors", forbiddenErr, unknownErr)
+	for _, name := range []string{"local", "unknown"} {
+		local, advertised, err := m.VolumePlacement(testKey, "beta", []string{name})
+		if err != nil || local || !slices.Equal(advertised, []string{types.ManagedVolumeGossipName("beta", name)}) {
+			t.Errorf("beta placement of %s = (%v, %v, %v), want a mesh lookup by beta's own key, alike for forbidden and unknown", name, local, advertised, err)
+		}
 	}
-	if local, err := m.VolumePlacement(testKey, "", []string{"peer-only"}); err != nil || local {
+	if local, _, err := m.VolumePlacement(testKey, "", []string{"peer-only"}); err != nil || local {
 		t.Errorf("root peer-only placement=(%v, %v), want false, nil", local, err)
 	}
 	badKey := types.PoolKey{Template: "rt:24.04", Net: "lan", Size: types.SizeSmall}
-	if _, err := m.VolumePlacement(badKey, "", []string{"local"}); !errors.Is(err, ErrBadKey) {
+	if _, _, err := m.VolumePlacement(badKey, "", []string{"local"}); !errors.Is(err, ErrBadKey) {
 		t.Errorf("invalid key error=%v, want ErrBadKey", err)
 	}
 }

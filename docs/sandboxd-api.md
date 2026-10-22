@@ -19,8 +19,10 @@ All bodies are JSON. Three token kinds:
 
 Endpoints below that say "node API token" accept root or tenant unless
 marked root-only. Errors are `{"error": "message"}` with the status codes
-listed per endpoint. Request bodies are capped at 1 MiB; a larger one is
-rejected with `400 {"error": "invalid request body"}`.
+listed per endpoint. Managed volume routes also return a `code` field and
+may return a `volume` name and `holders` array. Request bodies are capped
+at 1 MiB; a larger one is rejected with 400. Managed routes use their
+endpoint-specific error bodies.
 
 ## POST /v1/claim
 
@@ -233,7 +235,15 @@ unclean `rw` release (needs recovery — one `rw` claim must replay and cleanly
 release before `ro` claims resume; see
 [deploy](deploy.md#writable-dataset-volumes)); 429 node at `max_claims`, the
 calling tenant at its own `max_claims`, or the node draining; 500
-provisioning failed.
+provisioning failed. A tenant's managed volume on another mesh node redirects
+the claim to that node, like a catalog volume; another tenant's managed volume
+answers the same 400 as an unknown name. A local volume whose template no node
+holds alongside it answers 409. Managed volumes use the managed volume error
+body: a volume that is growing returns 409 `volume_busy`;
+a missing or replaced backing returns 503 `volume_recovery_required` without
+`Retry-After`, except while a hibernate or a growth owns the volume, when it
+is a storage error; unavailable managed storage returns 503
+`volume_storage_unavailable` with `Retry-After`.
 
 ## GET /v1/volumes
 
@@ -254,6 +264,115 @@ eventually consistent by one gossip tick.
 list; the field is emitted (as `true`) only for a writable entry this node
 declares and omitted otherwise (peer-only rows never carry it), so a read-only
 entry's response is byte-identical to v1.
+
+When `managed_volume_dir` is enabled, this list also includes caller-visible
+managed summaries. Individual
+managed GET responses carry holder details. Catalog summaries retain their
+existing shape.
+
+## PUT /v1/volumes/{name}
+
+Creates a node-local managed volume. Auth requires an explicit root or tenant
+bearer token. A tenant token makes that tenant the owner. A root token must
+name an existing tenant in `tenant`. A tenant cannot name another owner.
+Every `/v1/volumes/{name}` route authenticates like the other client routes:
+a missing, invalid, or sandbox token gets the same `401` body, and a tenant
+store outage gets `503` with `Retry-After`.
+
+The strict JSON body requires `size_gib`, an integer from 1 through 1024.
+`tenant` is optional for a tenant token. The name must start with a lowercase
+letter and contain at most 19 more lowercase letters, digits, underscores, or
+hyphens. It must not start with `cocoon-`.
+
+```json
+{"size_gib":20}
+```
+
+`201` returns the `volume` envelope and an `ETag` containing the quoted,
+immutable `volume.id`. For example:
+
+```json
+{"volume":{"kind":"managed","id":"vol_1234567890abcdef1234567890abcdef",
+ "tenant":"acme","node":"node-1","state":"ready",
+ "created_at":"2026-10-20T00:00:00Z","name":"work",
+ "default_mount":"/volumes/work","size_bytes":21474836480,
+ "available":true,"nodes":1,"writable":true}}
+```
+
+An identical request for the same owner and size returns `200` with the same
+ID and ETag. The volume is a sparse raw disk. Creation does not format a
+filesystem. `holders` is present when sandboxes hold the volume.
+
+Other errors use `{"error":"message","code":"volume_code"}`. They include `400`
+for an invalid body, name, size, or owner; `403` when a tenant selects another owner; `404` for another tenant's existing
+volume or on a node without `managed_volume_dir`; `409` for a catalog name, different size or owner, pending deletion,
+or a name the same owner already holds on another mesh node (the message names
+that node's client address; gossip lag leaves a window of about one gossip
+interval in which two nodes can both accept it);
+and `503` for unavailable storage or tenant lookup. A create interrupted after
+allocation stays `creating`; repeat the same PUT to finish it, or DELETE it. A
+volume whose backing identity changed settles in state `recovery_required`, and
+PUT and claims of it return `503` with code `volume_recovery_required`.
+`volume_backing_mismatch` and `volume_recovery_required` omit `Retry-After`. Transient storage failures
+include a retry hint.
+
+## GET /v1/volumes/{name}
+
+Auth requires an explicit root or tenant bearer token. Root can inspect any
+managed volume. A tenant can inspect only its own. An unknown or foreign name
+returns the same `404` body with code `volume_not_found`.
+
+`200` returns `{"volume": {...}}` and the quoted immutable ID in `ETag`.
+`holders` contains public `sandbox_id`, `mode`, and `state` values when the
+volume is held. Host backing paths and process IDs are absent.
+
+Other errors include `401` for a missing or invalid token and `503` when the
+managed store or backing inspection is unavailable. A `503` includes
+`Retry-After`.
+
+## DELETE /v1/volumes/{name}
+
+Auth requires an explicit root or tenant bearer token. Send the quoted ID
+from the volume's `ETag` as `If-Match`. Root can delete any managed volume;
+a tenant can delete only its own.
+
+`204` has no body. Deletion keeps no record, so repeating a completed deletion
+returns `404`. A new resource with the same name has a new ID, so replaying the
+old deletion returns `412` and does not remove it.
+
+Errors use the managed volume error body. They include `401` for a missing or
+invalid token; `404` for an unknown, foreign, or already deleted name; `409` for a
+held or growing volume; `412` for a malformed or mismatched `If-Match`;
+`428` for a missing `If-Match`; and `503` for unavailable storage or backing
+identity that requires operator recovery. A busy response has code
+`volume_busy` and includes the volume name and public holder list. An unheld
+volume whose backing file is gone is deleted with `204`, which is the API exit
+from `recovery_required`. A backing that is present but replaced returns
+`volume_backing_mismatch` without `Retry-After` and keeps the record;
+transient storage failures include a retry hint.
+
+## POST /v1/volumes/{name}/grow
+
+Auth requires an explicit root or tenant management token. The node owning the
+managed volume handles the request. `If-Match` contains its quoted immutable
+resource ID. The strict JSON body requires `size_gib`, the absolute target from
+1 through 1024.
+
+```json
+{"size_gib":40}
+```
+
+`200` returns the `volume` envelope at the new `size_bytes`; the ETag remains
+the resource ID. Growth applies only to a volume no sandbox holds. The current
+size returns `200` without a change, so a lost response is safe to retry.
+Growth does not extend a filesystem.
+
+Errors are `400` invalid body, name, or size; `401` missing or invalid token;
+`404` foreign or unknown volume; `409` a smaller size, a held volume (code
+`volume_busy` with the public holder list), a growth in progress, or a volume
+being created or deleted; `412` wrong identity; `428` missing `If-Match`; and
+`503` unavailable storage with `Retry-After`. See
+[Grow an unheld volume](managed-volumes.md#grow-an-unheld-volume).
 
 ## GET /v1/sandboxes/{id}/volumes
 
@@ -396,12 +515,21 @@ freeing its memory; the next agent access restores it transparently
 snapshot point and the stop coincident), except a read-only file call that a
 [reader](#get-v1sandboxesidagent) serves without waking it. Idempotent on an already-hibernated
 sandbox. The TTL keeps running: a hibernated sandbox is still reaped (VM and
-snapshot) at its deadline, unless it claimed `on_expire: archive` or its pool
-archives. When to hibernate is the caller's policy — the
-node only provides the transition. 204 on success, 404 unknown id or wrong
-token, 409 on the egress lane or when volumes are attached (neither kind of
-sandbox hibernates; see [egress](egress.md)), 429 while the disk is under
-[`disk_reserve`](deploy.md).
+snapshot) at its deadline. Claims without volume holds are excepted when they
+claimed `on_expire: archive` or their pool archives. Hibernated managed-volume
+claims expire through release, which preserves the backing disk. When to hibernate
+is the caller's policy. The node only provides the transition. 204 on success, 404 unknown id or wrong
+token, 409 on the egress lane or unsupported volume claims, 429 while the disk is under
+[`disk_reserve`](deploy.md). An opt-in node hook supports one mounted writable
+managed volume on the `none` lane. See [managed volume hibernation](managed-volumes.md#hibernate-one-mounted-managed-volume)
+for hook installation, exclusive ownership, and failure recovery. Other volume
+capture operations remain blocked. A managed hibernate also returns 409 when a
+guest mount blocks the unmount (close guest references and retry), 409
+`volume_hook_failed` with the hook's own exit code and output when the guest
+`prepare` hook exits non-zero (a host failure to reach the guest is a plain
+500), 409
+`managed_sleep_recovery_required` when the disk could not be reattached and
+remounted after a failed preparation, and 503 without `Retry-After` below Cocoon v0.7.2.
 
 ## POST /v1/sandboxes/{id}/wake
 
@@ -416,6 +544,8 @@ while stored, and waking it starts a fresh lease of the length the claim was gra
 its own disk (memory is lost) and its restart budget resets. 204 on
 success, 404 unknown id or wrong token, 409 a failed egress-lane or volume
 sandbox, or one whose VM record is gone, 500 when the cold boot itself fails.
+A managed wake also returns 409 when a guest mount conflicts with the remount
+and 503 without `Retry-After` below Cocoon v0.7.2.
 
 ## POST /v1/sandboxes/{id}/renew
 

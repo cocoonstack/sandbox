@@ -19,7 +19,8 @@ import (
 )
 
 const (
-	idleConnsPerHost = 100
+	idleConnsPerHost  = 100
+	maxErrorBodyBytes = 1 << 20
 
 	templateQueryParam   = "template"
 	netQueryParam        = "net"
@@ -71,7 +72,10 @@ type renewResponse struct {
 }
 
 type errorResponse struct {
-	Error string `json:"error"`
+	Error   string         `json:"error"`
+	Code    string         `json:"code"`
+	Volume  string         `json:"volume"`
+	Holders []VolumeHolder `json:"holders"`
 }
 
 // APIError is a non-2xx control-plane reply.
@@ -442,8 +446,16 @@ func encodeBody(verb string, v any) ([]byte, error) {
 }
 
 func apiError(verb string, resp *http.Response) error {
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBodyBytes+1))
 	var er errorResponse
-	_ = json.UnmarshalRead(io.LimitReader(resp.Body, 4096), &er)
-	_, _ = io.Copy(io.Discard, resp.Body)
-	return &APIError{Verb: verb, Status: resp.StatusCode, Message: er.Error}
+	if len(body) > maxErrorBodyBytes {
+		er.Error = fmt.Sprintf("error response body exceeds %d bytes", maxErrorBodyBytes)
+	} else {
+		_ = json.Unmarshal(body, &er)
+	}
+	base := &APIError{Verb: verb, Status: resp.StatusCode, Message: er.Error}
+	if er.Code != "" || len(er.Holders) != 0 {
+		return &ManagedVolumeError{APIError: base, Code: er.Code, Volume: er.Volume, Holders: er.Holders}
+	}
+	return base
 }

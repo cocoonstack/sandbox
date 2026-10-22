@@ -39,12 +39,24 @@ type Volume struct {
 
 // VolumeInfo describes one visible fleet catalog entry.
 type VolumeInfo struct {
-	Name         string `json:"name"`
-	DefaultMount string `json:"default_mount"`
-	SizeBytes    int64  `json:"size_bytes"`
-	Available    bool   `json:"available"`
-	Nodes        int    `json:"nodes"`
-	Writable     bool   `json:"writable,omitzero"`
+	Kind         string    `json:"kind,omitempty"`
+	ID           string    `json:"id,omitempty"`
+	Tenant       string    `json:"tenant,omitempty"`
+	Node         string    `json:"node,omitempty"`
+	State        string    `json:"state,omitempty"`
+	CreatedAt    time.Time `json:"created_at,omitzero"`
+	Name         string    `json:"name"`
+	DefaultMount string    `json:"default_mount"`
+	SizeBytes    int64     `json:"size_bytes"`
+	Available    bool      `json:"available"`
+	Nodes        int       `json:"nodes"`
+	Writable     bool      `json:"writable,omitzero"`
+}
+
+type VolumeHolder struct {
+	SandboxID string `json:"sandbox_id"`
+	Mode      string `json:"mode"`
+	State     string `json:"state"`
 }
 
 // EnvInject makes the node's egress proxy send a host-only entry's value to Hosts, exact or "*." suffix, as Header or as the Query parameter, where the guest sent a set Placeholder.

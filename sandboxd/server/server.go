@@ -53,6 +53,7 @@ var poolErrHTTP = []struct {
 	{pool.ErrBadTenant, http.StatusBadRequest, ""},
 	{pool.ErrBadConfig, http.StatusBadRequest, ""},
 	{pool.ErrReloadRefused, http.StatusConflict, ""},
+	{pool.ErrVolumePlacement, http.StatusConflict, ""},
 	{pool.ErrTenantRemoved, http.StatusForbidden, ""},
 	{pool.ErrTenantStoreDown, http.StatusServiceUnavailable, "tenant store down; retry"},
 	{pool.ErrPoolStoreDown, http.StatusServiceUnavailable, "pool set store down; retry"},
@@ -95,8 +96,12 @@ type Manager interface {
 	Checkpoint(ctx context.Context, id string, cred pool.Cred, name, tenant string) (types.Checkpoint, error)
 	Counters() pool.Counters
 	TenantClaims() map[string]int
-	VolumePlacement(key types.PoolKey, tenant string, names []string) (bool, error)
+	VolumePlacement(key types.PoolKey, tenant string, names []string) (bool, []string, error)
 	Volumes(tenant string, holders map[string]int) []types.VolumeInfo
+	CreateVolume(ctx context.Context, name string, req types.VolumeCreate, tenant string) (types.ManagedVolumeInfo, bool, error)
+	GetVolume(name, tenant string) (types.ManagedVolumeInfo, error)
+	GrowVolume(ctx context.Context, name, expectedID string, sizeGiB int64, tenant string) (types.ManagedVolumeInfo, error)
+	DeleteVolume(ctx context.Context, name, expectedID, tenant string) error
 	GetVolumes(id, tenant string) (types.SandboxVolumesResponse, error)
 	SetVolumes(ctx context.Context, id, tenant string, volumes []types.Volume) (types.SandboxVolumesResponse, error)
 	PatchVolumes(ctx context.Context, id, tenant string, patch types.VolumePatch) (types.SandboxVolumesResponse, error)
@@ -269,6 +274,10 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/claim", s.requireToken(s.handleClaim))
 	mux.HandleFunc("GET /v1/volumes", s.requireToken(s.handleVolumes))
+	mux.HandleFunc("PUT /v1/volumes/{name}", s.requireToken(s.handleCreateVolume))
+	mux.HandleFunc("GET /v1/volumes/{name}", s.requireToken(s.handleGetVolume))
+	mux.HandleFunc("POST /v1/volumes/{name}/grow", s.requireToken(s.handleGrowVolume))
+	mux.HandleFunc("DELETE /v1/volumes/{name}", s.requireToken(s.handleDeleteVolume))
 	mux.HandleFunc("POST /v1/sandboxes/{id}/release", s.handleSandboxVerb("release", s.mgr.Release))
 	mux.HandleFunc("POST /v1/sandboxes/{id}/hibernate", s.handleSandboxVerb("hibernate", s.mgr.Hibernate))
 	mux.HandleFunc("POST /v1/sandboxes/{id}/wake", s.handleSandboxVerb("wake", s.mgr.Wake))
@@ -356,7 +365,7 @@ func (s *Server) handleVolumeClaim(w http.ResponseWriter, r *http.Request, req C
 		return
 	}
 	req.Volumes = volumes
-	redirected, err := s.redirectVolumeClaim(r.Context(), w, &req, key, hash, tenant)
+	redirected, advertised, err := s.redirectVolumeClaim(r.Context(), w, &req, key, hash, tenant)
 	if err != nil {
 		writeResult(w, r, "claim", key.Template, "provisioning failed", err, func() {})
 		return
@@ -371,7 +380,7 @@ func (s *Server) handleVolumeClaim(w http.ResponseWriter, r *http.Request, req C
 	} else {
 		sb, err = s.mgr.ClaimWarm(r.Context(), key, o)
 		if errors.Is(err, pool.ErrNoWarm) {
-			if s.placer != nil && !req.NoRedirect && s.writeRedirect(w, s.placer.VolumeCandidates(hash, types.VolumeNames(req.Volumes))) {
+			if s.placer != nil && !req.NoRedirect && s.writeRedirect(w, s.placer.VolumeCandidates(hash, advertised)) {
 				return
 			}
 			sb, err = s.mgr.ClaimProvision(r.Context(), key, o)
@@ -392,11 +401,10 @@ func (s *Server) handleVolumes(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (s *Server) redirectVolumeClaim(ctx context.Context, w http.ResponseWriter, req *ClaimRequest, key types.PoolKey, hash, tenant string) (bool, error) {
-	names := types.VolumeNames(req.Volumes)
-	localVolumes, err := s.mgr.VolumePlacement(key, tenant, names)
+func (s *Server) redirectVolumeClaim(ctx context.Context, w http.ResponseWriter, req *ClaimRequest, key types.PoolKey, hash, tenant string) (bool, []string, error) {
+	localVolumes, names, err := s.mgr.VolumePlacement(key, tenant, types.VolumeNames(req.Volumes))
 	if err != nil {
-		return false, err
+		return false, nil, err
 	}
 
 	localTemplate := s.mgr.HasPromotedTemplate(ctx, key, tenant)
@@ -408,10 +416,10 @@ func (s *Server) redirectVolumeClaim(ctx context.Context, w http.ResponseWriter,
 	promoted := req.RequirePromoted || localTemplate || len(templateOwners) > 0
 	req.RequirePromoted = promoted
 	if localVolumes && (!promoted || localTemplate || pooled) {
-		return false, nil
+		return false, names, nil
 	}
 	if s.placer == nil || req.NoRedirect {
-		return false, pool.ErrVolumeUnavailable
+		return false, nil, pool.ErrVolumeUnavailable
 	}
 
 	var owners []string
@@ -425,11 +433,14 @@ func (s *Server) redirectVolumeClaim(ctx context.Context, w http.ResponseWriter,
 	if len(owners) == 0 {
 		owners = s.placer.VolumeOwners(names)
 	}
+	if len(owners) == 0 && localVolumes {
+		return false, nil, pool.ErrVolumePlacement
+	}
 	if len(owners) == 0 {
-		return false, pool.ErrVolumeUnavailable
+		return false, nil, pool.ErrVolumeUnavailable
 	}
 	writeJSON(w, http.StatusOK, ClaimResponse{Redirect: s.clientAddrs(owners), RequirePromoted: promoted})
-	return true, nil
+	return true, nil, nil
 }
 
 func (s *Server) templateOwners(query func(string) []string, hash, tenant string) []string {

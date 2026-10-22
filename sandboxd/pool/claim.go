@@ -217,6 +217,9 @@ func (m *Manager) AgentSocket(id, token string) (string, error) {
 		return "", ErrLeaseLost
 	}
 	// no activity stamp: a control-plane poll must not keep an idle sandbox awake
+	if sb.VolumeSleep != nil {
+		return "", ErrPaused
+	}
 	return sb.VsockSocket, nil
 }
 
@@ -368,13 +371,17 @@ func (m *Manager) overQuota(extra int, tenant string) error {
 	return m.quotaErr(extra, tenant)
 }
 
-// admitVolumes takes one claim's holds; a refusal on either check leaves nothing held.
+// admitVolumes takes one claim's holds; a refusal on any check leaves nothing held.
 func (m *Manager) admitVolumes(tenant string, volumes []resolvedVolume) ([]types.Volume, error) {
 	applied := appliedVolumes(volumes)
 	if err := m.admitClaim(tenant, applied); err != nil {
-		return nil, err
+		return nil, m.managedBusy(err, volumes)
 	}
-	if err := m.confirmVolumesClean(volumes); err != nil {
+	err := m.admitManaged(volumes)
+	if err == nil {
+		err = m.confirmVolumesClean(volumes)
+	}
+	if err != nil {
 		m.unreserveVolumes(applied)
 		return nil, err
 	}
@@ -535,6 +542,7 @@ func (m *Manager) abortVolumeClaim(ctx context.Context, vmName string, reserved 
 }
 
 func (m *Manager) reapOnce(ctx context.Context) {
+	m.retryManagedSnapshot()
 	now := time.Now()
 	type victim struct {
 		action                       reapAction
@@ -674,7 +682,7 @@ func (m *Manager) reapOnce(ctx context.Context) {
 }
 
 func (m *Manager) archivesAtDeadline(sb *types.Sandbox) bool {
-	return sb.Failed == "" && !m.tenantGone(sb.Tenant) && (sb.OnExpire == types.ExpireArchive || sb.HibernateSnap != "" && m.archiveAfterFor(sb.Key) > 0)
+	return !m.hasVolumeHolds(sb) && sb.Failed == "" && !m.tenantGone(sb.Tenant) && (sb.OnExpire == types.ExpireArchive || sb.HibernateSnap != "" && m.archiveAfterFor(sb.Key) > 0)
 }
 
 func (m *Manager) pauseExpired(ctx context.Context, sb *types.Sandbox) error {
@@ -754,6 +762,11 @@ func (m *Manager) admitOptions(ctx context.Context, key types.PoolKey, o ClaimOp
 	if err != nil {
 		return nil, nil, err
 	}
+	if slices.ContainsFunc(volumeSpecs, func(v resolvedVolume) bool { return v.managedID != "" }) {
+		if err = m.tenantRemoved(ctx, o.Tenant); err != nil {
+			return nil, nil, err
+		}
+	}
 	applied, err := m.admitVolumes(o.Tenant, volumeSpecs)
 	return volumeSpecs, applied, err
 }
@@ -801,8 +814,19 @@ func archivable(key types.PoolKey, volumes bool, onExpire types.ExpireAction) er
 	case key.Net == types.NetEgress:
 		return ErrNoEgressHibernate
 	case volumes:
-		return ErrVolumeCapture
+		return ErrVolumeArchive
 	default:
 		return nil
 	}
 }
+
+// ErrVolumeArchive refuses archive for a claim that holds volumes; it matches ErrVolumeCapture.
+var ErrVolumeArchive error = volumeArchiveError{}
+
+type volumeArchiveError struct{}
+
+func (volumeArchiveError) Error() string {
+	return "archive does not export volumes yet; release keeps the volume"
+}
+
+func (volumeArchiveError) Is(target error) bool { return target == ErrVolumeCapture }

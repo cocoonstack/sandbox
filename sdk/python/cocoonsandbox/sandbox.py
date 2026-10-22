@@ -77,7 +77,7 @@ class Sandbox:
         self, volumes: list[str | Mapping[str, str] | Volume], *, timeout: float | None = None
     ) -> SandboxVolumesResponse:
         """Replaces the desired set and converges; an explicit empty list clears mutable mounts."""
-        if volumes is None or isinstance(volumes, str):
+        if volumes is None or isinstance(volumes, (str, Mapping)):
             raise TypeError("set volumes requires an explicit list; use [] to clear volumes")
         return self._volumes_request(
             "PUT", {"volumes": [_volume_body(volume, True) for volume in volumes]}, "set volumes", timeout
@@ -91,7 +91,7 @@ class Sandbox:
         timeout: float | None = None,
     ) -> SandboxVolumesResponse:
         """Adds or removes mounted read-only entries by name; omitted arguments leave the set unchanged."""
-        if isinstance(add, str) or isinstance(remove, str):
+        if isinstance(add, (str, Mapping)) or isinstance(remove, str):
             raise TypeError("patch volumes takes lists of volumes and names")
         body: dict[str, Any] = {}
         if add is not None:

@@ -6,6 +6,10 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
+type VolumeResponse struct {
+	Volume types.ManagedVolumeInfo `json:"volume"`
+}
+
 // TTLField is the shared requested-lease field; zero means the server default.
 type TTLField struct {
 	TTLSeconds int `json:"ttl_seconds,omitzero"`
