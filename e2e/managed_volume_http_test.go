@@ -251,13 +251,15 @@ func TestManagedVolumeHTTPRecoveryRequiredOmitsRetryAfter(t *testing.T) {
 		t.Fatalf("create status=%d body=%s", created.status, created.body)
 	}
 	backing := filepath.Join(dir, "disks", decodeManagedVolume(t, created.body).ID+".raw")
-	if err := os.Remove(backing); err != nil {
+	// build the replacement while the original still exists, so the filesystem cannot reuse its inode
+	replacement := backing + ".new"
+	if err := os.WriteFile(replacement, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(backing, nil, 0o600); err != nil {
+	if err := os.Truncate(replacement, 1<<30); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Truncate(backing, 1<<30); err != nil {
+	if err := os.Rename(replacement, backing); err != nil {
 		t.Fatal(err)
 	}
 	claim := `{"template":"rt:24.04","net":"none","size":"small","volumes":[{"name":"work","mode":"rw"}]}`
