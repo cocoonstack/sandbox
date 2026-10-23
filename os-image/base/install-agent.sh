@@ -51,6 +51,7 @@ Environment=AGENT_LOG_LEVEL=info
 Restart=always
 RestartSec=2s
 LimitNOFILE=65536
+OOMPolicy=continue
 
 [Install]
 WantedBy=sysinit.target
