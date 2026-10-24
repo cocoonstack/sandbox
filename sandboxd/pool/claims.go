@@ -88,7 +88,7 @@ type claimStore struct {
 	seq         uint64
 	written     uint64
 	ackRows     []*claimRow
-	attemptRows []*claimRow
+	attemptRows map[*claimRow]struct{}
 	replaceFile func([]byte) error
 
 	recommitting atomic.Bool
@@ -118,7 +118,9 @@ func (s *claimStore) load() (map[string]*types.Sandbox, error) {
 	s.mu.Lock()
 	s.ackRows = make([]*claimRow, 0, len(claims))
 	for _, sb := range claims {
-		s.ackRows = append(s.ackRows, newClaimRow(sb))
+		if row := newClaimRow(sb); len(row.refs) > 0 {
+			s.ackRows = append(s.ackRows, row)
+		}
 	}
 	s.mu.Unlock()
 	return claims, nil
@@ -198,9 +200,12 @@ func (s *claimStore) commit(snap claimSnapshot) error {
 	}
 	s.buf = append(s.buf, '}')
 	s.mu.Lock()
+	if s.attemptRows == nil {
+		s.attemptRows = map[*claimRow]struct{}{}
+	}
 	for _, row := range rows {
-		if !slices.Contains(s.attemptRows, row) {
-			s.attemptRows = append(s.attemptRows, row)
+		if len(row.refs) > 0 {
+			s.attemptRows[row] = struct{}{}
 		}
 	}
 	s.mu.Unlock()
@@ -212,7 +217,12 @@ func (s *claimStore) commit(snap claimSnapshot) error {
 		return err
 	}
 	s.mu.Lock()
-	s.ackRows, s.attemptRows = rows, nil
+	s.ackRows, s.attemptRows = nil, nil
+	for _, row := range rows {
+		if len(row.refs) > 0 {
+			s.ackRows = append(s.ackRows, row)
+		}
+	}
 	s.written = seq
 	s.mu.Unlock()
 	return nil
@@ -314,18 +324,28 @@ func newClaimRow(sb *types.Sandbox) *claimRow {
 }
 
 // recoveryVolumes includes every reference a failed replacement may have installed.
-func (s *claimStore) recoveryVolumes() map[string][]types.Volume {
+func (s *claimStore) recoveryVolumes(owner ...string) map[string][]types.Volume {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if len(s.ackRows) == 0 && len(s.attemptRows) == 0 {
+		return nil
+	}
 	refs := map[string][]types.Volume{}
-	for _, rows := range [][]*claimRow{s.ackRows, s.attemptRows} {
-		for _, row := range rows {
-			for _, v := range row.refs {
-				if !slices.Contains(refs[row.id], v) {
-					refs[row.id] = append(refs[row.id], v)
-				}
+	add := func(row *claimRow) {
+		if len(owner) > 0 && row.id != owner[0] {
+			return
+		}
+		for _, v := range row.refs {
+			if !slices.Contains(refs[row.id], v) {
+				refs[row.id] = append(refs[row.id], v)
 			}
 		}
+	}
+	for _, row := range s.ackRows {
+		add(row)
+	}
+	for row := range s.attemptRows {
+		add(row)
 	}
 	return refs
 }

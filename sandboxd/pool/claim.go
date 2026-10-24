@@ -371,7 +371,7 @@ func (m *Manager) overQuota(extra int, tenant string) error {
 // admitVolumes takes one claim's holds; a refusal on either check leaves nothing held.
 func (m *Manager) admitVolumes(tenant string, volumes []resolvedVolume) ([]types.Volume, error) {
 	applied := appliedVolumes(volumes)
-	if err := m.admitClaim(tenant, applied); err != nil {
+	if err := m.admitClaim(tenant, volumes); err != nil {
 		return nil, err
 	}
 	if err := m.confirmVolumesClean(volumes); err != nil {
@@ -382,13 +382,13 @@ func (m *Manager) admitVolumes(tenant string, volumes []resolvedVolume) ([]types
 }
 
 // admitClaim refuses a busy volume or an over-quota tenant before any VM is built.
-func (m *Manager) admitClaim(tenant string, volumes []types.Volume) error {
+func (m *Manager) admitClaim(tenant string, volumes []resolvedVolume) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if err := m.quotaErr(1, tenant); err != nil {
 		return err
 	}
-	return m.reserveVolumes(volumes)
+	return m.reserveResolved(tenant, volumes, nil)
 }
 
 // quotaErr answers ErrQuota when the node takes no more claims; callers hold m.mu.

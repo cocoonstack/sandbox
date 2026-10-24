@@ -86,7 +86,7 @@ func (m *Manager) changeVolumes(ctx context.Context, id, tenant string, change v
 	}()
 	m.mu.Lock()
 	current, held := slices.Clone(sb.VolumesWant), heldVolumes(sb)
-	recovery := m.store.recoveryVolumes()[sb.ID]
+	recovery := m.store.recoveryVolumes(sb.ID)[sb.ID]
 	m.mu.Unlock()
 	target, err := change(current)
 	if err != nil {
@@ -105,7 +105,7 @@ func (m *Manager) changeVolumes(ctx context.Context, id, tenant string, change v
 			return view, err
 		}
 	}
-	resolved, err := m.resolveVolumes(ctx, sb.Tenant, additions)
+	resolved, err := m.resolveLiveAdditions(ctx, sb, additions, recovery)
 	if err != nil {
 		return view, err
 	}
@@ -258,23 +258,28 @@ func (m *Manager) prepareVolumeTarget(ctx context.Context, sb *types.Sandbox, ru
 
 func (m *Manager) stageVolumeTarget(ctx context.Context, sb *types.Sandbox, run *volumeRun, target, additions []types.Volume, resolved []resolvedVolume) (claimSnapshot, bool, error) {
 	sb.Transition.Lock()
-	defer sb.Transition.Unlock()
 	m.mu.Lock()
 	if err := m.checkVolumeRunLocked(ctx, sb, run); err != nil {
 		m.mu.Unlock()
+		sb.Transition.Unlock()
 		return claimSnapshot{}, false, err
 	}
 	if sb.OnExpire == types.ExpireArchive && len(target) > 0 {
 		m.mu.Unlock()
+		sb.Transition.Unlock()
 		return claimSnapshot{}, false, ErrVolumeCapture
 	}
-	if err := m.reserveVolumesFor(additions, sb); err != nil {
+	if err := m.reserveResolved(sb.Tenant, resolved, sb); err != nil {
 		m.mu.Unlock()
+		sb.Transition.Unlock()
 		return claimSnapshot{}, false, err
 	}
 	run.holds = append(run.holds, additions...)
 	m.mu.Unlock()
+	sb.Transition.Unlock()
 	cleanErr := m.confirmVolumesClean(resolved)
+	sb.Transition.Lock()
+	defer sb.Transition.Unlock()
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if err := m.checkVolumeRunLocked(ctx, sb, run); err != nil {
@@ -346,18 +351,19 @@ func (m *Manager) ownsRunLocked(sb *types.Sandbox, run *volumeRun) bool {
 
 func (m *Manager) hasVolumeHolds(sb *types.Sandbox) bool {
 	run := m.volumeRuns[sb]
-	return hasVolumes(sb) || run != nil && len(run.holds) > 0 || len(m.store.recoveryVolumes()[sb.ID]) > 0
+	return hasVolumes(sb) || run != nil && len(run.holds) > 0 || len(m.store.recoveryVolumes(sb.ID)[sb.ID]) > 0
 }
 
 func (m *Manager) volumeView(sb *types.Sandbox) types.SandboxVolumesResponse {
+	held := heldVolumes(sb)
+	recovering := volumeDifference(m.store.recoveryVolumes(sb.ID)[sb.ID], held)
 	view := types.SandboxVolumesResponse{
 		Volumes:     slices.Clone(sb.Volumes),
 		VolumesWant: slices.Clone(sb.VolumesWant),
 		States:      []types.VolumeState{},
-		Converging:  m.volumeRuns[sb] != nil,
+		Converging:  m.volumeRuns[sb] != nil || len(recovering) > 0,
 	}
-	held := heldVolumes(sb)
-	held = append(held, volumeDifference(m.store.recoveryVolumes()[sb.ID], held)...)
+	held = append(held, recovering...)
 	for _, v := range held {
 		state := types.VolumeAttached
 		if volumeIndex(sb.VolumesWant, v.Name) < 0 {
@@ -484,4 +490,24 @@ func validateDetachNames(names []string) error {
 
 func heldVolumes(sb *types.Sandbox) []types.Volume {
 	return slices.Concat(sb.Volumes, volumeDifference(sb.VolumesWant, sb.Volumes))
+}
+
+func (m *Manager) resolveLiveAdditions(ctx context.Context, sb *types.Sandbox, additions, recovery []types.Volume) ([]resolvedVolume, error) {
+	resolved := make([]resolvedVolume, 0, len(additions))
+	for _, v := range additions {
+		if slices.Contains(recovery, v) {
+			entry, err := m.resolveCatalogVolume(ctx, v)
+			if err != nil {
+				return nil, err
+			}
+			resolved = append(resolved, entry)
+			continue
+		}
+		entries, err := m.resolveVolumes(ctx, sb.Tenant, []types.Volume{v})
+		if err != nil {
+			return nil, err
+		}
+		resolved = append(resolved, entries...)
+	}
+	return resolved, nil
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -31,6 +32,7 @@ type volumeHolders struct {
 }
 
 type resolvedVolume struct {
+	entry   *catalogVolume
 	disk    engine.VolumeSpec
 	applied types.Volume
 }
@@ -53,8 +55,9 @@ func (v catalogVolume) allowed(tenant string) bool {
 
 // Volumes reports the caller-visible fleet catalog; an empty tenant means root.
 func (m *Manager) Volumes(tenant string, holders map[string]int) []types.VolumeInfo {
-	infos := make([]types.VolumeInfo, 0, len(m.volumes))
-	for name, volume := range m.volumes {
+	catalog := m.volumeCatalog()
+	infos := make([]types.VolumeInfo, 0, len(catalog))
+	for name, volume := range catalog {
 		if !volume.allowed(tenant) {
 			continue
 		}
@@ -64,7 +67,7 @@ func (m *Manager) Volumes(tenant string, holders map[string]int) []types.VolumeI
 			Nodes:        holders[name],
 			Writable:     volume.writable,
 		}
-		if st, err := os.Stat(volume.disk.Path); err == nil {
+		if st, err := m.statVolume(volume.disk.Path); err == nil {
 			info.SizeBytes = st.Size()
 			info.Available = true
 			info.Nodes = max(info.Nodes, 1)
@@ -74,7 +77,7 @@ func (m *Manager) Volumes(tenant string, holders map[string]int) []types.VolumeI
 	// root can see peer-only names; a tenant needs local catalog metadata to apply the access list
 	if tenant == "" {
 		for name, nodes := range holders {
-			if _, ok := m.volumes[name]; !ok {
+			if _, ok := catalog[name]; !ok {
 				infos = append(infos, types.VolumeInfo{
 					Name:         name,
 					DefaultMount: types.DefaultVolumeMount(name),
@@ -89,9 +92,10 @@ func (m *Manager) Volumes(tenant string, holders map[string]int) []types.VolumeI
 
 // VolumeNames returns the sorted names this node can currently serve.
 func (m *Manager) VolumeNames() []string {
-	names := make([]string, 0, len(m.volumes))
-	for name, volume := range m.volumes {
-		if _, err := os.Stat(volume.disk.Path); err == nil {
+	catalog := m.volumeCatalog()
+	names := make([]string, 0, len(catalog))
+	for name, volume := range catalog {
+		if _, err := m.statVolume(volume.disk.Path); err == nil {
 			names = append(names, name)
 		}
 	}
@@ -108,8 +112,9 @@ func (m *Manager) VolumePlacement(key types.PoolKey, tenant string, names []stri
 		return true, nil
 	}
 	local := true
+	catalog := m.volumeCatalog()
 	for _, name := range names {
-		volume, ok := m.volumes[name]
+		volume, ok := catalog[name]
 		if !ok {
 			if tenant == "" {
 				local = false
@@ -120,7 +125,7 @@ func (m *Manager) VolumePlacement(key types.PoolKey, tenant string, names []stri
 		if !volume.allowed(tenant) {
 			return false, ErrVolumeUnavailable
 		}
-		if _, err := os.Stat(volume.disk.Path); err != nil {
+		if _, err := m.statVolume(volume.disk.Path); err != nil {
 			local = false
 		}
 	}
@@ -136,13 +141,20 @@ func (m *Manager) resolveVolumes(ctx context.Context, tenant string, requested [
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrBadVolume, err)
 	}
+	m.mu.Lock()
+	if m.catalogPending != nil {
+		m.mu.Unlock()
+		return nil, ErrVolumeCatalogUnavailable
+	}
+	catalog := maps.Clone(m.volumes)
+	m.mu.Unlock()
 	resolved := make([]resolvedVolume, 0, len(applied))
 	for _, volume := range applied {
-		entry, ok := m.volumes[volume.Name]
+		entry, ok := catalog[volume.Name]
 		if !ok || !entry.allowed(tenant) {
 			return nil, ErrVolumeUnavailable
 		}
-		resolvedEntry, resolveErr := m.resolveCatalogVolume(ctx, volume)
+		resolvedEntry, resolveErr := m.resolveCatalogEntry(ctx, volume, entry)
 		if resolveErr != nil {
 			return nil, resolveErr
 		}
@@ -152,14 +164,24 @@ func (m *Manager) resolveVolumes(ctx context.Context, tenant string, requested [
 }
 
 func (m *Manager) resolveCatalogVolume(ctx context.Context, volume types.Volume) (resolvedVolume, error) {
-	entry, ok := m.volumes[volume.Name]
-	if !ok {
+	m.mu.Lock()
+	entry := m.volumes[volume.Name]
+	pending := m.catalogPending != nil
+	m.mu.Unlock()
+	if pending && entry == nil {
+		return resolvedVolume{}, ErrVolumeCatalogUnavailable
+	}
+	return m.resolveCatalogEntry(ctx, volume, entry)
+}
+
+func (m *Manager) resolveCatalogEntry(ctx context.Context, volume types.Volume, entry *catalogVolume) (resolvedVolume, error) {
+	if entry == nil {
 		return resolvedVolume{}, ErrVolumeUnavailable
 	}
 	if volume.RW() && !entry.writable {
 		return resolvedVolume{}, fmt.Errorf("%w: volume %q is not writable", ErrBadVolume, volume.Name)
 	}
-	if _, statErr := os.Stat(entry.disk.Path); statErr != nil {
+	if _, statErr := m.statVolume(entry.disk.Path); statErr != nil {
 		// the operator's path stays server-side; the refusal matches the unknown one
 		log.WithFunc("pool.resolveCatalogVolume").Warnf(ctx, "stat volume %q image %s: %v", volume.Name, entry.disk.Path, statErr)
 		return resolvedVolume{}, ErrVolumeUnavailable
@@ -167,7 +189,7 @@ func (m *Manager) resolveCatalogVolume(ctx context.Context, volume types.Volume)
 	disk := entry.disk
 	disk.RW = volume.RW()
 	volume.AttachOnly = false // past validation the empty mount carries it
-	return resolvedVolume{disk: disk, applied: volume}, nil
+	return resolvedVolume{entry: entry, disk: disk, applied: volume}, nil
 }
 
 // confirmVolumesClean refuses a read-only claim of a dirty image; run after holds are taken.
@@ -246,9 +268,11 @@ func (m *Manager) quiesceVolumes(ctx context.Context, sb *types.Sandbox) volumeT
 			stuck = true
 			continue
 		}
+		m.mu.Lock()
 		if entry, ok := m.volumes[volume.Name]; ok {
 			td.clears = append(td.clears, entry.disk.Path)
 		}
+		m.mu.Unlock()
 	}
 	if stuck {
 		// the unmounts may have spent the whole budget; the fallback flush gets its own
@@ -281,11 +305,17 @@ func (m *Manager) reserveVolumes(volumes []types.Volume) error {
 }
 
 func (m *Manager) reserveVolumesFor(volumes []types.Volume, owner *types.Sandbox) error {
+	if len(volumes) == 0 {
+		return nil
+	}
+	if len(volumes) > 0 && m.catalogPending != nil {
+		return ErrVolumeCatalogUnavailable
+	}
 	recovery := m.store.recoveryVolumes()
 	for _, volume := range volumes {
 		for id, refs := range recovery {
 			for _, ref := range refs {
-				if owner != nil && m.claimed[id] == owner && owner.ID == id && ref == volume {
+				if owner != nil && m.claimed[id] == owner && m.volumeRuns[owner] != nil && owner.ID == id && ref == volume {
 					continue
 				}
 				if ref.Name == volume.Name && (ref.RW() || volume.RW()) {
@@ -403,4 +433,41 @@ func syncDir(dir string) error {
 		return err
 	}
 	return errors.Join(d.Sync(), d.Close())
+}
+
+func (m *Manager) volumeCatalog() map[string]*catalogVolume {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return maps.Clone(m.volumes)
+}
+
+// reserveResolved revalidates the binding and policy in the same decision as admission.
+func (m *Manager) reserveResolved(tenant string, volumes []resolvedVolume, owner *types.Sandbox) error {
+	if len(volumes) > 0 && m.catalogPending != nil {
+		return ErrVolumeCatalogUnavailable
+	}
+	var held []types.Volume
+	if owner != nil && m.claimed[owner.ID] == owner && m.volumeRuns[owner] != nil {
+		held = slices.Concat(heldVolumes(owner), m.store.recoveryVolumes(owner.ID)[owner.ID])
+	}
+	for _, v := range volumes {
+		entry := m.volumes[v.applied.Name]
+		if entry == nil || entry != v.entry {
+			return ErrVolumeUnavailable
+		}
+		if !slices.Contains(held, v.applied) && !entry.allowed(tenant) {
+			return ErrVolumeUnavailable
+		}
+		if v.applied.RW() && !entry.writable {
+			return fmt.Errorf("%w: volume %q is not writable", ErrBadVolume, v.applied.Name)
+		}
+	}
+	return m.reserveVolumesFor(appliedVolumes(volumes), owner)
+}
+
+func (m *Manager) statVolume(path string) (os.FileInfo, error) {
+	if m.volumeStat != nil {
+		return m.volumeStat(path)
+	}
+	return os.Stat(path)
 }

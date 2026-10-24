@@ -398,9 +398,14 @@ func (c *Config) validateReplication() error {
 }
 
 func (c *Config) validateVolumes() error {
-	names := make(map[string]struct{}, len(c.Volumes))
-	paths := make(map[string]string, len(c.Volumes))
-	for _, volume := range c.Volumes {
+	return ValidateVolumeCatalog(c.Volumes)
+}
+
+// ValidateVolumeCatalog checks the shared static and runtime catalog rules without I/O.
+func ValidateVolumeCatalog(volumes []VolumeSpec) error {
+	names := make(map[string]struct{}, len(volumes))
+	paths := make(map[string]string, len(volumes))
+	for _, volume := range volumes {
 		if !types.ValidVolumeName(volume.Name) {
 			return fmt.Errorf("volume name %q must match %s and not start with cocoon-", volume.Name, types.VolumeNameRe)
 		}
