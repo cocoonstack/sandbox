@@ -3,6 +3,9 @@ package pool
 import (
 	"context"
 	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
 	"slices"
 	"sync/atomic"
 	"testing"
@@ -12,6 +15,74 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/engine"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
+
+func TestIncompleteStaleInventoryRetainsVolumeProtection(t *testing.T) {
+	requireCatalogRoot(t)
+	for _, state := range []string{vmStateRunning, vmStateCreating, "stopped"} {
+		t.Run(state, func(t *testing.T) {
+			base := newFakeEngine()
+			m := newVolumeManager(t, base, nil)
+			path := writeVolumeImage(t, "incomplete-inventory", "original")
+			if err := m.RegisterVolume(t.Context(), "data", types.VolumeRegistration{Path: path, Writable: true}); err != nil {
+				t.Fatal(err)
+			}
+			name := "sbx-incomplete-inventory"
+			base.vms[name] = "/vsock/incomplete"
+			base.creating[name] = state == vmStateCreating
+			base.staleOutcome = engine.StaleCreateBusy
+			base.removeErrFor = name
+			base.disks = map[string][]types.VMDisk{name: {{Name: "data", ReadOnly: false}}}
+			cli := filepath.Join(t.TempDir(), "inspect")
+			writeInspect := func(state, inventory string) {
+				t.Helper()
+				raw := fmt.Sprintf("#!/bin/sh\nprintf '%%s\\n' '{\"config\":{\"name\":\"%s\"},\"state\":\"%s\"%s}'\n", name, state, inventory)
+				if err := os.WriteFile(cli, []byte(raw), 0o700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			writeInspect(state, "")
+			m.eng = &incompleteInventoryEngine{fakeEngine: base, cli: engine.New(cli, nil, nil, false, false, "")}
+			rec := base.record(name)
+			rec.State = state
+			if m.removeStaleVM(t.Context(), name, rec) {
+				t.Fatal("stale VM unexpectedly disappeared")
+			}
+			for range 2 {
+				if err := m.UnregisterVolume(t.Context(), "data"); !errors.Is(err, ErrVolumeCatalogUnavailable) {
+					t.Fatalf("unregister must refuse incomplete inventory: %v", err)
+				}
+				if _, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Volumes: []types.Volume{{Name: "data", Mode: types.VolumeModeRW}}}); !errors.Is(err, ErrVolumeCatalogUnavailable) {
+					t.Fatalf("conflicting writer must refuse incomplete inventory: %v", err)
+				}
+				m.retryRemovals(t.Context()).Wait()
+			}
+			base.creating[name] = false
+			writeInspect(vmStateRunning, `,"attached_devices":{"disks":[{"name":"data","readonly":false}]}`)
+			m.retryRemovals(t.Context()).Wait()
+			if _, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Volumes: []types.Volume{{Name: "data", Mode: types.VolumeModeRW}}}); !errors.Is(err, ErrVolumeBusy) {
+				t.Errorf("complete inventory lost the surviving writer: %v", err)
+			}
+			other := writeVolumeImage(t, "complete-inventory-other", "other")
+			if err := m.RegisterVolume(t.Context(), "other", types.VolumeRegistration{Path: other}); err != nil {
+				t.Fatalf("complete inventory retained the global fence: %v", err)
+			}
+			base.removeErrFor = ""
+			m.retryRemovals(t.Context()).Wait()
+			if err := m.UnregisterVolume(t.Context(), "data"); err != nil {
+				t.Fatalf("confirmed removal retained volume protection: %v", err)
+			}
+		})
+	}
+}
+
+type incompleteInventoryEngine struct {
+	*fakeEngine
+	cli *engine.Engine
+}
+
+func (e *incompleteInventoryEngine) Inspect(ctx context.Context, name string) (types.VMRecord, bool, error) {
+	return e.cli.Inspect(ctx, name)
+}
 
 func TestRemovedVMKeepsVolumeUntilCanceledWorkerReturns(t *testing.T) {
 	requireCatalogRoot(t)
