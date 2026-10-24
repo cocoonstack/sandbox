@@ -233,7 +233,7 @@ func TestStaticOnlyCatalogDoesNotNeedRoot(t *testing.T) {
 		t.Fatal("static-only startup lost catalog")
 	}
 	if os.Geteuid() != 0 {
-		if err := m.RegisterVolume(t.Context(), "runtime", types.VolumeRegistration{Path: "/data"}); !errors.Is(err, ErrVolumeCatalogUnavailable) {
+		if err := m.RegisterVolume(t.Context(), "runtime", types.VolumeRegistration{Path: "/data"}); !errors.Is(err, ErrVolumeCatalogReadOnly) {
 			t.Fatalf("nonroot write: %v", err)
 		}
 	}

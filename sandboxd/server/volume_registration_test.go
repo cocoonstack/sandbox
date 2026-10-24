@@ -176,6 +176,7 @@ func TestVolumeRegistrationRoutesMapSafeErrors(t *testing.T) {
 		}{
 			{"invalid registration", fmt.Errorf("%w: invalid directio", pool.ErrBadVolume), http.StatusBadRequest},
 			{"binding conflict", fmt.Errorf("%w: /private/data.img", pool.ErrVolumeRegistrationConflict), http.StatusConflict},
+			{"OS root required", pool.ErrVolumeCatalogReadOnly, http.StatusConflict},
 			{"busy", fmt.Errorf("%w: /private/data.img", pool.ErrVolumeBusy), http.StatusConflict},
 			{"catalog unavailable", fmt.Errorf("%w: sync /private/runtime-volumes.json", pool.ErrVolumeCatalogUnavailable), http.StatusServiceUnavailable},
 			{"unexpected failure", errors.New("open /private/data.img: permission denied"), http.StatusInternalServerError},
@@ -201,6 +202,8 @@ func TestVolumeRegistrationRoutesMapSafeErrors(t *testing.T) {
 					if err != nil || seconds < 1 || !strings.Contains(got["error"], "retry") {
 						t.Fatalf("503 missing retry guidance: headers=%v body=%s", resp.Header, body)
 					}
+				} else if resp.Header.Get("Retry-After") != "" {
+					t.Fatalf("permanent refusal advertises retry: %v", resp.Header)
 				}
 			})
 		}

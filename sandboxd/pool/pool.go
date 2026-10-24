@@ -121,6 +121,7 @@ var (
 var (
 	ErrVolumeRegistrationConflict = errors.New("volume registration conflicts with the catalog")
 	ErrVolumeCatalogUnavailable   = errors.New("volume catalog requires a successful persistence retry")
+	ErrVolumeCatalogReadOnly      = errors.New("runtime volume registration requires sandboxd to run as OS root")
 )
 
 // Engine is the slice of the cocoon driver the manager consumes.
