@@ -172,7 +172,6 @@ func (m *Manager) removeStaleVM(ctx context.Context, name string, rec types.VMRe
 			return true
 		case outcome == engine.StaleCreateBusy:
 			logger.Infof(ctx, "stale create %s has an in-flight owner; queued for retry", name)
-			td = m.resolveStaleVolumes(ctx, name, td)
 			m.queueStaleCreate(name, rec.TapDevice(), td)
 			return false
 		}
@@ -194,6 +193,9 @@ func (m *Manager) resolveStaleVolumes(ctx context.Context, name string, td volum
 	inspected, present, err := m.eng.Inspect(ctx, name)
 	if err != nil {
 		log.WithFunc("pool.resolveStaleVolumes").Warnf(ctx, "inspect stale vm %s, keeping volume fence: %v", name, err)
+		return td
+	}
+	if present && (inspected.State != vmStateRunning || len(inspected.AttachedDevices.Disks) == 0) {
 		return td
 	}
 	var holds []types.Volume

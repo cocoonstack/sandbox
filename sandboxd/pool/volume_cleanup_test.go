@@ -58,6 +58,13 @@ func TestIncompleteStaleInventoryRetainsVolumeProtection(t *testing.T) {
 			}
 			base.creating[name] = false
 			writeInspect(vmStateRunning, `,"attached_devices":{"disks":[{"name":"data","readonly":false}]}`)
+			if state == vmStateCreating {
+				m.retryRemovals(t.Context()).Wait()
+				if _, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Volumes: []types.Volume{{Name: "data", Mode: types.VolumeModeRW}}}); !errors.Is(err, ErrVolumeCatalogUnavailable) {
+					t.Fatalf("busy owner must retain the unknown fence: %v", err)
+				}
+			}
+			base.staleOutcome = engine.StaleCreateNotCreating
 			m.retryRemovals(t.Context()).Wait()
 			if _, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Volumes: []types.Volume{{Name: "data", Mode: types.VolumeModeRW}}}); !errors.Is(err, ErrVolumeBusy) {
 				t.Errorf("complete inventory lost the surviving writer: %v", err)
@@ -246,6 +253,7 @@ func TestUnknownStaleVolumesFenceUntilInspectionOrRemoval(t *testing.T) {
 				wg.Wait()
 			}
 			eng.inspectFailed.Store(false)
+			base.stopped[name], base.creating[name] = false, false
 			base.staleOutcome = engine.StaleCreateNotCreating
 			m.retryRemovals(t.Context()).Wait()
 			if got := volumeHoldersOf(m, "data"); got != (volumeHolders{writers: 1}) {
