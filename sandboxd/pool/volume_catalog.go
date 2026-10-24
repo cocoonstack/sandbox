@@ -60,7 +60,12 @@ func (m *Manager) loadRuntimeVolumes() error {
 	if !st.Mode().IsRegular() || st.Mode().Perm() != 0o600 || st.Sys().(*syscall.Stat_t).Uid != 0 {
 		return fmt.Errorf("runtime volume catalog must be a root-owned regular file with mode 0600")
 	}
-	raw, err := os.ReadFile(path) //nolint:gosec // root-owned metadata below a protected directory
+	root, err := os.OpenRoot(m.dataDir)
+	if err != nil {
+		return fmt.Errorf("open runtime catalog directory: %w", err)
+	}
+	raw, readErr := root.ReadFile(runtimeVolumesFile)
+	err = errors.Join(readErr, root.Close())
 	if err != nil {
 		return fmt.Errorf("read runtime volume catalog: %w", err)
 	}
@@ -134,7 +139,6 @@ func (m *Manager) RegisterVolume(ctx context.Context, name string, spec types.Vo
 		return err
 	}
 	m.mu.Lock()
-	// A claim can acquire an unexplained recovery name while the backing is checked.
 	if m.unknownVolumes > 0 {
 		m.mu.Unlock()
 		return ErrVolumeCatalogUnavailable
@@ -188,7 +192,6 @@ func (m *Manager) UnregisterVolume(ctx context.Context, name string) error {
 	return m.commitPendingCatalog(ctx)
 }
 
-// volumeReferenced includes dispatched cleanup through its ordinary admission counts.
 func (m *Manager) volumeReferenced(name string) bool {
 	if holders := m.volumeAdmission[name]; holders.readers > 0 || holders.writers > 0 {
 		return true
@@ -211,7 +214,6 @@ func (m *Manager) volumeReferenced(name string) bool {
 	return false
 }
 
-// commitPendingCatalog holds catalogWriteMu, but never m.mu across filesystem work.
 func (m *Manager) commitPendingCatalog(ctx context.Context) error {
 	m.mu.Lock()
 	proposal := m.catalogPending

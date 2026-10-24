@@ -458,7 +458,6 @@ func (m *Manager) volumeCatalog() map[string]*catalogVolume {
 	return maps.Clone(m.volumes)
 }
 
-// reserveResolved revalidates the binding and policy in the same decision as admission.
 func (m *Manager) reserveResolved(tenant string, volumes []resolvedVolume, owner *types.Sandbox) error {
 	if len(volumes) > 0 && (m.catalogPending != nil || m.unknownVolumes > 0) {
 		return ErrVolumeCatalogUnavailable

@@ -321,7 +321,6 @@ func newClaimRow(sb *types.Sandbox) *claimRow {
 	return &claimRow{id: sb.ID, refs: refs, dto: dtoOf(sb)}
 }
 
-// recoveryVolumes includes every reference a failed replacement may have installed.
 func (s *claimStore) recoveryVolumes(owner ...string) map[string][]types.Volume {
 	s.mu.Lock()
 	defer s.mu.Unlock()
