@@ -118,6 +118,11 @@ var (
 	errNoEgressTap   = errors.New("egress-lane claim has no lockable tap")
 )
 
+var (
+	ErrVolumeRegistrationConflict = errors.New("volume registration conflicts with the catalog")
+	ErrVolumeCatalogUnavailable   = errors.New("volume catalog requires a successful persistence retry")
+)
+
 // Engine is the slice of the cocoon driver the manager consumes.
 type Engine interface {
 	Clone(ctx context.Context, fromDir, name string, key types.PoolKey) (types.VMRecord, error)
