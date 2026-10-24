@@ -68,8 +68,10 @@ type claimDTO struct {
 
 // claimRow keeps its encoded member until set replaces the row; set never edits one.
 type claimRow struct {
-	dto claimDTO
-	raw []byte
+	id   string
+	refs []types.Volume
+	dto  claimDTO
+	raw  []byte
 }
 
 // claimStore persists claimed sandboxes across daemon restarts; warm VMs are not persisted.
@@ -81,10 +83,13 @@ type claimStore struct {
 	writeMu sync.Mutex
 	buf     []byte
 
-	mu      sync.Mutex
-	rows    map[string]*claimRow
-	seq     uint64
-	written uint64
+	mu          sync.Mutex
+	rows        map[string]*claimRow
+	seq         uint64
+	written     uint64
+	ackRows     []*claimRow
+	attemptRows []*claimRow
+	replaceFile func([]byte) error
 
 	recommitting atomic.Bool
 }
@@ -110,6 +115,12 @@ func (s *claimStore) load() (map[string]*types.Sandbox, error) {
 			sb.VolumesWant = sb.Volumes
 		}
 	}
+	s.mu.Lock()
+	s.ackRows = make([]*claimRow, 0, len(claims))
+	for _, sb := range claims {
+		s.ackRows = append(s.ackRows, newClaimRow(sb))
+	}
+	s.mu.Unlock()
 	return claims, nil
 }
 
@@ -118,7 +129,7 @@ func (s *claimStore) set(sbs ...*types.Sandbox) claimSnapshot {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, sb := range sbs {
-		s.rows[sb.ID] = &claimRow{dto: dtoOf(sb)}
+		s.rows[sb.ID] = newClaimRow(sb)
 	}
 	s.seq++
 	return claimSnapshot{seq: s.seq}
@@ -154,7 +165,7 @@ func (s *claimStore) reset(claims map[string]*types.Sandbox) claimSnapshot {
 	defer s.mu.Unlock()
 	s.rows = make(map[string]*claimRow, len(claims))
 	for id, sb := range claims {
-		s.rows[id] = &claimRow{dto: dtoOf(sb)}
+		s.rows[id] = newClaimRow(sb)
 	}
 	s.seq++
 	return claimSnapshot{seq: s.seq}
@@ -186,10 +197,22 @@ func (s *claimStore) commit(snap claimSnapshot) error {
 		s.buf = append(s.buf, row.raw...)
 	}
 	s.buf = append(s.buf, '}')
-	if err := s.replace(s.buf); err != nil {
+	s.mu.Lock()
+	for _, row := range rows {
+		if !slices.Contains(s.attemptRows, row) {
+			s.attemptRows = append(s.attemptRows, row)
+		}
+	}
+	s.mu.Unlock()
+	replace := s.replace
+	if s.replaceFile != nil {
+		replace = s.replaceFile
+	}
+	if err := replace(s.buf); err != nil {
 		return err
 	}
 	s.mu.Lock()
+	s.ackRows, s.attemptRows = rows, nil
 	s.written = seq
 	s.mu.Unlock()
 	return nil
@@ -278,4 +301,31 @@ func volumesWantDTO(sb *types.Sandbox) []types.Volume {
 		return nil
 	}
 	return append([]types.Volume{}, sb.VolumesWant...)
+}
+
+func newClaimRow(sb *types.Sandbox) *claimRow {
+	refs := slices.Clone(sb.Volumes)
+	for _, v := range sb.VolumesWant {
+		if !slices.Contains(refs, v) {
+			refs = append(refs, v)
+		}
+	}
+	return &claimRow{id: sb.ID, refs: refs, dto: dtoOf(sb)}
+}
+
+// recoveryVolumes includes every reference a failed replacement may have installed.
+func (s *claimStore) recoveryVolumes() map[string][]types.Volume {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	refs := map[string][]types.Volume{}
+	for _, rows := range [][]*claimRow{s.ackRows, s.attemptRows} {
+		for _, row := range rows {
+			for _, v := range row.refs {
+				if !slices.Contains(refs[row.id], v) {
+					refs[row.id] = append(refs[row.id], v)
+				}
+			}
+		}
+	}
+	return refs
 }

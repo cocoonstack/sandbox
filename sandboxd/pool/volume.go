@@ -277,7 +277,22 @@ func (m *Manager) finishVolumeTeardown(ctx context.Context, td volumeTeardown) {
 
 // reserveVolumes admits one claim's volumes atomically; callers hold m.mu.
 func (m *Manager) reserveVolumes(volumes []types.Volume) error {
+	return m.reserveVolumesFor(volumes, nil)
+}
+
+func (m *Manager) reserveVolumesFor(volumes []types.Volume, owner *types.Sandbox) error {
+	recovery := m.store.recoveryVolumes()
 	for _, volume := range volumes {
+		for id, refs := range recovery {
+			for _, ref := range refs {
+				if owner != nil && m.claimed[id] == owner && owner.ID == id && ref == volume {
+					continue
+				}
+				if ref.Name == volume.Name && (ref.RW() || volume.RW()) {
+					return fmt.Errorf("%w: volume %q", ErrVolumeBusy, volume.Name)
+				}
+			}
+		}
 		holders := m.volumeAdmission[volume.Name]
 		if holders.writers > 0 || (volume.RW() && holders.readers > 0) {
 			return fmt.Errorf("%w: volume %q", ErrVolumeBusy, volume.Name)
