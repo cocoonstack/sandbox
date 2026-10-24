@@ -98,7 +98,7 @@ func (m *Manager) loadRuntimeVolumes() error {
 // RegisterVolume durably binds a root-managed name to an existing backing file.
 func (m *Manager) RegisterVolume(ctx context.Context, name string, spec types.VolumeRegistration) error {
 	if os.Geteuid() != 0 {
-		return fmt.Errorf("%w: runtime catalog mutation requires effective uid zero", ErrVolumeCatalogUnavailable)
+		return ErrVolumeCatalogReadOnly
 	}
 	m.catalogWriteMu.Lock()
 	defer m.catalogWriteMu.Unlock()
@@ -157,7 +157,7 @@ func (m *Manager) RegisterVolume(ctx context.Context, name string, spec types.Vo
 // UnregisterVolume retires an unreferenced runtime binding without touching its backing.
 func (m *Manager) UnregisterVolume(ctx context.Context, name string) error {
 	if os.Geteuid() != 0 {
-		return fmt.Errorf("%w: runtime catalog mutation requires effective uid zero", ErrVolumeCatalogUnavailable)
+		return ErrVolumeCatalogReadOnly
 	}
 	m.catalogWriteMu.Lock()
 	defer m.catalogWriteMu.Unlock()

@@ -289,6 +289,9 @@ Only registration metadata is persisted locally in
 is root-owned with mode 0600, and its directory must protect the record.
 Runtime mutations require sandboxd to run as OS root. The backing file does
 not require root ownership. Registration creates, grows, and deletes no disks.
+An OS-nonroot daemon refuses runtime mutations with 409 and no `Retry-After`.
+Malformed or conflicting metadata prevents startup. A temporarily missing
+backing file keeps its registration and refuses new attachment.
 Catalog replacement and synchronization are independent of `sync_claims`, which
 controls claim snapshot synchronization. Process-restart checks do not prove
 power-loss recovery. The catalog is node-local with one sandboxd writer.
@@ -313,6 +316,14 @@ orchestration is external; no controller implementation or composed lifecycle
 verification is included here. Downgrading to a daemon without runtime
 registration requires draining runtime references or supplying equivalent
 static volume config. Pending live volume changes must finish before downgrade.
+
+An unresolved stale VM keeps volume admission and catalog changes fenced while
+cleanup retries continue. Inspect success alone does not prove a complete disk
+inventory. A present VM with omitted disks, or an active creating owner, retains
+that fence until a complete running inventory or confirmed removal resolves it.
+An empty inventory is indistinguishable from an omitted one and stays fenced.
+Volume-free claims continue to work. Path uniqueness uses cleaned path strings;
+the operator coordinates symlink and hardlink aliases and cross-node ownership.
 
 ## GET /v1/sandboxes/{id}/volumes
 
