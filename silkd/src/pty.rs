@@ -76,7 +76,7 @@ pub async fn open<W: AsyncWrite + Unpin>(
     let proc = table.register(pid, vec![shell, "-i".to_string()], false, now);
     proc.set_pty_master(resize_fd);
 
-    let master: Master = match AsyncFd::new(master) {
+    let master: Master = match sysutil::watch_fd(master) {
         Ok(m) => Arc::new(m),
         Err(e) => {
             let _ = child.start_kill();

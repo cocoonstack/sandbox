@@ -9,6 +9,7 @@ use std::process::ExitStatus;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{LazyLock, Mutex};
 
+use tokio::io::unix::AsyncFd;
 use tokio::process::Command;
 
 static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
@@ -134,6 +135,12 @@ pub fn openpty(cols: u16, rows: u16) -> std::io::Result<(OwnedFd, OwnedFd)> {
     let pty = nix::pty::openpty(&ws, None)?;
     set_nonblocking(pty.master.as_raw_fd())?;
     Ok((pty.master, pty.slave))
+}
+
+/// Registers an owned fd with the tokio reactor for readiness-driven I/O.
+pub fn watch_fd(fd: OwnedFd) -> std::io::Result<AsyncFd<OwnedFd>> {
+    // SAFETY: an OwnedFd stays open and yields the same raw fd until the AsyncFd that owns it drops.
+    unsafe { AsyncFd::register(fd) }.map_err(|e| e.into_parts().1)
 }
 
 /// Resizes a pty via TIOCSWINSZ on its master fd.
