@@ -15,6 +15,7 @@ import (
 
 	"github.com/projecteru2/core/log"
 
+	"github.com/cocoonstack/sandbox/sandboxd/pool"
 	"github.com/cocoonstack/sandbox/sandboxd/tenants"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 	"github.com/cocoonstack/sandbox/sandboxd/utils"
@@ -170,6 +171,11 @@ func metadataFilter(pairs []string) (types.Metadata, error) {
 }
 
 func writePoolErr(w http.ResponseWriter, err error) bool {
+	if volumeErr, ok := errors.AsType[*pool.VolumeError](err); ok {
+		mapPoolErr(w, err)
+		writeJSON(w, volumeErr.Status, volumeErr)
+		return true
+	}
 	code, msg, ok := mapPoolErr(w, err)
 	if ok {
 		writeErr(w, code, msg)
@@ -180,12 +186,28 @@ func writePoolErr(w http.ResponseWriter, err error) bool {
 func mapPoolErr(w http.ResponseWriter, err error) (code int, msg string, ok bool) {
 	code, msg, ok = lookupPoolErr(err)
 	if ok && code == http.StatusServiceUnavailable {
+		if _, unsupported := errors.AsType[*pool.LiveVolumeUnsupported](err); unsupported {
+			return code, msg, ok
+		}
+		if volumeErr, managed := errors.AsType[*pool.VolumeError](err); managed &&
+			(volumeErr.Code == "volume_backing_mismatch" || volumeErr.Code == "volume_recovery_required") {
+			return code, msg, ok
+		}
 		w.Header().Set("Retry-After", retryAfterSeconds)
 	}
 	return code, msg, ok
 }
 
 func lookupPoolErr(err error) (code int, msg string, ok bool) {
+	if volumeErr, ok := errors.AsType[*pool.VolumeError](err); ok {
+		return volumeErr.Status, volumeErr.Message, true
+	}
+	if conflict, ok := errors.AsType[*pool.VolumeMountConflict](err); ok {
+		return http.StatusConflict, conflict.Error(), true
+	}
+	if unsupported, ok := errors.AsType[*pool.LiveVolumeUnsupported](err); ok {
+		return http.StatusServiceUnavailable, unsupported.Error(), true
+	}
 	for _, m := range poolErrHTTP {
 		if errors.Is(err, m.err) {
 			return m.code, cmp.Or(m.msg, err.Error()), true

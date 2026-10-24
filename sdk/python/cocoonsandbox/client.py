@@ -133,6 +133,44 @@ class Client:
         reply = self._request(self.addr, "GET", "/v1/volumes", None, "list volumes")
         return [dict(volume) for volume in reply.get("volumes") or []]
 
+    def create_volume(self, name: str, size_gib: int, tenant: str = "") -> dict[str, Any]:
+        """Creates a raw managed disk or returns it for an identical retry."""
+        body: dict[str, Any] = {"size_gib": size_gib}
+        if tenant:
+            body["tenant"] = tenant
+        reply = self._request(self.addr, "PUT", _volume_path(name), body, "create volume", expected_status=(200, 201))
+        return dict(require_field(reply, "volume", "create volume"))
+
+    def get_volume(self, name: str) -> dict[str, Any]:
+        """Inspects one managed disk visible to this token."""
+        reply = self._request(self.addr, "GET", _volume_path(name), None, "get volume", expected_status=(200,))
+        return dict(require_field(reply, "volume", "get volume"))
+
+    def delete_volume(self, name: str, resource_id: str) -> None:
+        """Deletes exactly resource_id, including when an earlier response was lost."""
+        self._request(
+            self.addr,
+            "DELETE",
+            _volume_path(name),
+            None,
+            "delete volume",
+            headers={"If-Match": f'"{resource_id}"'},
+            expected_status=(204,),
+        )
+
+    def grow_volume(self, name: str, resource_id: str, size_gib: int) -> dict[str, Any]:
+        """Grows an unheld managed disk to size_gib; repeating the current size is a no-op."""
+        reply = self._request(
+            self.addr,
+            "POST",
+            _volume_path(name) + "/grow",
+            {"size_gib": size_gib},
+            "grow volume",
+            headers={"If-Match": f'"{resource_id}"'},
+            expected_status=(200,),
+        )
+        return dict(require_field(reply, "volume", "grow volume"))
+
     def info(self) -> dict[str, Any]:
         """The node's pool/claim counters, as served by GET /v1/info."""
         return self._request(self.addr, "GET", "/v1/info", None, "info")
@@ -198,11 +236,13 @@ class Client:
         bearer: str = "",
         timeout: float = 0.0,
         deadline: float | None = None,
+        headers: dict[str, str] | None = None,
+        expected_status: tuple[int, ...] | None = None,
     ) -> dict[str, Any]:
         timeout = remaining_timeout(timeout or self.timeout, deadline, verb)
         data = json.dumps(body).encode() if body is not None else None
         url = urllib.parse.urlsplit(addr + path if "://" in addr else f"{self._scheme}://{addr}{path}")
-        headers = {"Content-Type": "application/json"} if data is not None else {}
+        headers = {**(headers or {}), **({"Content-Type": "application/json"} if data is not None else {})}
         token = bearer or self.api_token
         if token:
             headers["Authorization"] = f"Bearer {token}"
@@ -218,6 +258,8 @@ class Client:
             except (ValueError, TypeError):
                 reply = None
             raise APIError(verb, status, _error_message(raw), reply=reply if isinstance(reply, dict) else None)
+        if expected_status is not None and status not in expected_status:
+            raise APIError(verb, status, "unexpected response status")
         if not raw:
             return {}
         try:
@@ -347,3 +389,7 @@ def _scatter(addrs: Sequence[str], probe: Callable[[str], T]) -> T:
             return cast(T, value)
         last_error = error
     raise cast(Exception, last_error)
+
+
+def _volume_path(name: str) -> str:
+    return "/v1/volumes/" + urllib.parse.quote(name, safe="")

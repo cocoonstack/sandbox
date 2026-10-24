@@ -69,6 +69,9 @@ func (m *Manager) hibernateLocked(ctx context.Context, sb *types.Sandbox) error 
 	volumeBlocked := m.hasVolumeHolds(sb)
 	m.mu.Unlock()
 	if volumeBlocked {
+		if sb.VolumeSleep != nil || m.managedSleepHook != nil {
+			return m.driveManagedSleepLocked(ctx, sb, managedSleeping)
+		}
 		return ErrVolumeCapture
 	}
 	if sb.Key.Net == types.NetEgress {
@@ -158,6 +161,12 @@ func (m *Manager) wakeOrRead(ctx context.Context, sb *types.Sandbox, readerOK bo
 	}
 	if sb.Failed != "" {
 		return "", fmt.Errorf("%w: %s", ErrFailed, sb.Failed)
+	}
+	if sb.VolumeSleep != nil {
+		if err := m.driveManagedSleepLocked(ctx, sb, managedRunning); err != nil {
+			return "", err
+		}
+		return sb.VsockSocket, nil
 	}
 	// settle a dangling intent before choosing running vs hibernated
 	if _, err := m.settlePendingSnap(ctx, sb); err != nil {

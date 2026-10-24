@@ -582,6 +582,9 @@ type Sandbox struct {
 	// ReplicaPending is the checkpoint a replication round is about to register; the row may already name it.
 	ReplicaPending string `json:"replica_pending,omitempty"`
 
+	// VolumeSleep journals a managed volume sleep in flight; written under Transition and the manager mutex.
+	VolumeSleep *VolumeSleep `json:"volume_sleep,omitempty"`
+
 	// FromCheckpoint names the checkpoint this sandbox branched from; empty otherwise.
 	FromCheckpoint string `json:"from_checkpoint,omitempty"`
 	// TemplateDigest identifies the promoted-template export this sandbox was cloned from.
@@ -612,6 +615,36 @@ type Sandbox struct {
 	// Transition serializes captures and live volume changes; lock it before (never under) the manager mutex.
 	Transition sync.Mutex `json:"-"`
 }
+
+// VolumeSleep is the claim-row record of a managed volume hibernate or wake; a value is never edited in place.
+type VolumeSleep struct {
+	Operation  string     `json:"operation"`
+	Phase      SleepPhase `json:"phase"`
+	Snapshot   string     `json:"snapshot"`
+	SourceID   string     `json:"source_id,omitempty"`
+	VMID       string     `json:"vm_id"`
+	Generation uint64     `json:"generation"`
+	Hook       VolumeHook `json:"hook"`
+}
+
+// VolumeHook is the guest hook a managed sleep pins when it starts.
+type VolumeHook struct {
+	HookArgv           []string `json:"hook_argv"`
+	HookTimeoutSeconds int      `json:"hook_timeout_seconds"`
+}
+
+// SleepPhase is the managed sleep step whose intent the claim row last journaled.
+type SleepPhase string
+
+// Managed sleep phases in journal order; aborting returns a failed preparation to running.
+const (
+	SleepPreparing SleepPhase = "preparing"
+	SleepAborting  SleepPhase = "aborting"
+	SleepCapturing SleepPhase = "capturing"
+	SleepSleeping  SleepPhase = "sleeping"
+	SleepWaking    SleepPhase = "waking"
+	SleepResuming  SleepPhase = "resuming"
+)
 
 // Touch stamps last data-plane activity; lock-free, called on the relay hot path.
 func (s *Sandbox) Touch() { s.lastActivity.Store(time.Now().UnixNano()) }
@@ -721,6 +754,7 @@ type VMConfig struct {
 // VMDisk is one hot-attached disk that `cocoon vm inspect` reports.
 type VMDisk struct {
 	Name     string `json:"name"`
+	Path     string `json:"path"`
 	ReadOnly bool   `json:"readonly,omitzero"`
 }
 
@@ -731,12 +765,15 @@ type VMDevices struct {
 
 // VMRecord is the subset of cocoon's VM records the control plane reads.
 type VMRecord struct {
-	State           string        `json:"state"`
-	PID             int           `json:"pid"`
-	VsockSocket     string        `json:"vsock_socket"`
-	NetworkConfigs  []VMNetConfig `json:"network_configs,omitempty"`
-	Config          VMConfig      `json:"config"`
-	AttachedDevices VMDevices     `json:"attached_devices,omitzero"`
+	ID                   string        `json:"id"`
+	TransitionGeneration uint64        `json:"transition_generation"`
+	LastTransitionReason string        `json:"last_transition_reason"`
+	State                string        `json:"state"`
+	PID                  int           `json:"pid"`
+	VsockSocket          string        `json:"vsock_socket"`
+	NetworkConfigs       []VMNetConfig `json:"network_configs,omitempty"`
+	Config               VMConfig      `json:"config"`
+	AttachedDevices      VMDevices     `json:"attached_devices,omitzero"`
 }
 
 // TapDevice returns the first NIC's host tap; empty when the record carries none.
@@ -763,6 +800,12 @@ func (v Volume) RW() bool { return v.Mode == VolumeModeRW }
 func TemplateGossipHash(keyHash, tenant string) string {
 	sum := sha256.Sum256([]byte(keyHash + "|" + tenant))
 	return hex.EncodeToString(sum[:16])
+}
+
+// ManagedVolumeGossipName is the mesh key a node advertises for a tenant's managed volume; it never parses as a volume name.
+func ManagedVolumeGossipName(tenant, name string) string {
+	sum := sha256.Sum256([]byte("volume|" + tenant + "|" + name))
+	return "managed/" + hex.EncodeToString(sum[:16])
 }
 
 // ValidVolumeName reports whether name is a legal cocoon data-disk serial.

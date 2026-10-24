@@ -31,8 +31,9 @@ type volumeHolders struct {
 }
 
 type resolvedVolume struct {
-	disk    engine.VolumeSpec
-	applied types.Volume
+	disk      engine.VolumeSpec
+	applied   types.Volume
+	managedID volumeID
 }
 
 // volumeTeardown captures marker paths at quiesce time; a later config can re-point the entry.
@@ -42,9 +43,10 @@ type volumeTeardown struct {
 }
 
 type catalogVolume struct {
-	disk     engine.VolumeSpec
-	tenants  []string
-	writable bool
+	managedID volumeID
+	disk      engine.VolumeSpec
+	tenants   []string
+	writable  bool
 }
 
 func (v catalogVolume) allowed(tenant string) bool {
@@ -71,10 +73,15 @@ func (m *Manager) Volumes(tenant string, holders map[string]int) []types.VolumeI
 		}
 		infos = append(infos, info)
 	}
+	infos = append(infos, m.managedInfos(tenant)...)
 	// root can see peer-only names; a tenant needs local catalog metadata to apply the access list
 	if tenant == "" {
 		for name, nodes := range holders {
-			if _, ok := m.volumes[name]; !ok {
+			if !types.ValidVolumeName(name) {
+				continue
+			}
+			_, managed, _ := m.lookupManaged(name)
+			if _, ok := m.volumes[name]; !ok && !managed {
 				infos = append(infos, types.VolumeInfo{
 					Name:         name,
 					DefaultMount: types.DefaultVolumeMount(name),
@@ -95,36 +102,46 @@ func (m *Manager) VolumeNames() []string {
 			names = append(names, name)
 		}
 	}
+	names = append(names, m.managedGossipNames()...)
 	slices.Sort(names)
 	return names
 }
 
-// VolumePlacement checks catalog access and reports whether every named image is local.
-func (m *Manager) VolumePlacement(key types.PoolKey, tenant string, names []string) (bool, error) {
+// VolumePlacement checks catalog access, reports whether every named image is local, and returns the mesh keys to place them by.
+func (m *Manager) VolumePlacement(key types.PoolKey, tenant string, names []string) (bool, []string, error) {
 	if err := m.validate(key); err != nil {
-		return false, err
-	}
-	if len(names) == 0 {
-		return true, nil
+		return false, nil, err
 	}
 	local := true
+	advertised := make([]string, 0, len(names))
 	for _, name := range names {
-		volume, ok := m.volumes[name]
-		if !ok {
-			if tenant == "" {
-				local = false
-				continue
-			}
-			return false, ErrVolumeUnavailable
+		volume, ok, err := m.lookupVolume(name)
+		if !ok && err != nil {
+			return false, nil, err
 		}
-		if !volume.allowed(tenant) {
-			return false, ErrVolumeUnavailable
+		if !ok || !volume.allowed(tenant) {
+			if tenant == "" {
+				advertised = append(advertised, name)
+			} else {
+				// the tenant may own this name on a peer; a miss there answers like an unknown name
+				advertised = append(advertised, types.ManagedVolumeGossipName(tenant, name))
+			}
+			local = false
+			continue
+		}
+		if err != nil {
+			return false, nil, err
+		}
+		if volume.managedID != "" {
+			advertised = append(advertised, types.ManagedVolumeGossipName(volume.tenants[0], name))
+		} else {
+			advertised = append(advertised, name)
 		}
 		if _, err := os.Stat(volume.disk.Path); err != nil {
 			local = false
 		}
 	}
-	return local, nil
+	return local, advertised, nil
 }
 
 func (m *Manager) resolveVolumes(ctx context.Context, tenant string, requested []types.Volume) ([]resolvedVolume, error) {
@@ -138,9 +155,15 @@ func (m *Manager) resolveVolumes(ctx context.Context, tenant string, requested [
 	}
 	resolved := make([]resolvedVolume, 0, len(applied))
 	for _, volume := range applied {
-		entry, ok := m.volumes[volume.Name]
+		entry, ok, lookupErr := m.lookupVolume(volume.Name)
+		if !ok && lookupErr != nil {
+			return nil, lookupErr
+		}
 		if !ok || !entry.allowed(tenant) {
 			return nil, ErrVolumeUnavailable
+		}
+		if lookupErr != nil {
+			return nil, lookupErr
 		}
 		resolvedEntry, resolveErr := m.resolveCatalogVolume(ctx, volume)
 		if resolveErr != nil {
@@ -152,7 +175,10 @@ func (m *Manager) resolveVolumes(ctx context.Context, tenant string, requested [
 }
 
 func (m *Manager) resolveCatalogVolume(ctx context.Context, volume types.Volume) (resolvedVolume, error) {
-	entry, ok := m.volumes[volume.Name]
+	entry, ok, lookupErr := m.lookupVolume(volume.Name)
+	if lookupErr != nil {
+		return resolvedVolume{}, lookupErr
+	}
 	if !ok {
 		return resolvedVolume{}, ErrVolumeUnavailable
 	}
@@ -167,7 +193,17 @@ func (m *Manager) resolveCatalogVolume(ctx context.Context, volume types.Volume)
 	disk := entry.disk
 	disk.RW = volume.RW()
 	volume.AttachOnly = false // past validation the empty mount carries it
-	return resolvedVolume{disk: disk, applied: volume}, nil
+	return resolvedVolume{disk: disk, applied: volume, managedID: entry.managedID}, nil
+}
+
+func (m *Manager) lookupVolume(name string) (catalogVolume, bool, error) {
+	if entry, ok := m.volumes[name]; ok {
+		if m.managedCatalogAlias(entry.disk.Path) {
+			return catalogVolume{}, false, managedStorageError()
+		}
+		return entry, true, nil
+	}
+	return m.lookupManaged(name)
 }
 
 // confirmVolumesClean refuses a read-only claim of a dirty image; run after holds are taken.
@@ -232,6 +268,18 @@ func (m *Manager) quiesceVolumes(ctx context.Context, sb *types.Sandbox) volumeT
 	if mounts == 0 {
 		return td
 	}
+	// a sleep step owns the guest mount; removing the VM ends it
+	if sb.VolumeSleep != nil {
+		// capture is journaled only once prepare unmounted and detached the disk
+		if phase := sb.VolumeSleep.Phase; phase == types.SleepCapturing || phase == types.SleepSleeping {
+			for _, volume := range sb.Volumes {
+				if path, ok := m.managedPath(volume.Name); ok && needsUnmount(volume) {
+					td.clears = append(td.clears, path)
+				}
+			}
+		}
+		return td
+	}
 	logger := log.WithFunc("pool.quiesceVolumes")
 	// cancellation-immune like removal: a caller hanging up must not skip the flush.
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), quiesceBudget(mounts))
@@ -248,6 +296,8 @@ func (m *Manager) quiesceVolumes(ctx context.Context, sb *types.Sandbox) volumeT
 		}
 		if entry, ok := m.volumes[volume.Name]; ok {
 			td.clears = append(td.clears, entry.disk.Path)
+		} else if path, ok := m.managedPath(volume.Name); ok {
+			td.clears = append(td.clears, path)
 		}
 	}
 	if stuck {

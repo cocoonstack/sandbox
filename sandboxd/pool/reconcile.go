@@ -44,6 +44,9 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 		sb.SetEnv(sb.Env)
 		rec, ok := live[sb.VMName]
 		switch {
+		case ok && sb.VolumeSleep != nil:
+			// the sleep record, not the VM state, says where the next dial resumes
+			projectSleepState(sb, sb.VolumeSleep)
 		case sb.ArchiveCk != "":
 			// archived: no local VM by design, so adopt the stub and let the first exec wake it
 			m.addClaimLocked(sb)
@@ -69,6 +72,9 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 		m.adoptVolumes(heldVolumes(sb))
 		owned[sb.VMName] = true
 		referenced[sb.HibernateSnap] = true
+		if sb.VolumeSleep != nil {
+			referenced[sb.VolumeSleep.Snapshot] = true
+		}
 	}
 	saveErr := m.store.save(m.claimed)
 	pooled := make(map[string]bool, len(m.pools))
@@ -174,18 +180,31 @@ func (m *Manager) removeStaleVM(ctx context.Context, name string, rec types.VMRe
 	if m.removeVM(ctx, name) {
 		return true
 	}
-	m.queueRemoval(name, "", rec.TapDevice(), volumeTeardown{holds: m.holdStaleVolumes(ctx, name, rec)}, time.Time{})
+	pending := pendingRemoval{tap: rec.TapDevice()}
+	if rec.State == vmStateRunning {
+		pending.volumes.holds, pending.inventoryUnknown = m.holdStaleVolumes(ctx, name)
+	}
+	m.requeueRemoval(name, pending)
 	return false
 }
 
-func (m *Manager) holdStaleVolumes(ctx context.Context, name string, rec types.VMRecord) []types.Volume {
-	if rec.State != vmStateRunning {
-		return nil
+// holdStaleVolumes adopts the disks a stale VM has attached; with its inventory unknown it holds every managed name.
+func (m *Manager) holdStaleVolumes(ctx context.Context, name string) ([]types.Volume, bool) {
+	holds, err := m.staleVolumes(ctx, name)
+	if err != nil {
+		log.WithFunc("pool.holdStaleVolumes").Warnf(ctx, "inspect stale vm %s, holding every managed volume: %v", name, err)
+		holds = m.managedVolumeNames()
 	}
+	m.mu.Lock()
+	m.adoptVolumes(holds)
+	m.mu.Unlock()
+	return holds, err != nil
+}
+
+func (m *Manager) staleVolumes(ctx context.Context, name string) ([]types.Volume, error) {
 	inspected, _, err := m.eng.Inspect(ctx, name)
 	if err != nil {
-		log.WithFunc("pool.holdStaleVolumes").Warnf(ctx, "inspect stale vm %s, its volumes stay unheld: %v", name, err)
-		return nil
+		return nil, err
 	}
 	holds := make([]types.Volume, len(inspected.AttachedDevices.Disks))
 	for i, disk := range inspected.AttachedDevices.Disks {
@@ -194,10 +213,7 @@ func (m *Manager) holdStaleVolumes(ctx context.Context, name string, rec types.V
 			holds[i].Mode = types.VolumeModeRW
 		}
 	}
-	m.mu.Lock()
-	m.adoptVolumes(holds)
-	m.mu.Unlock()
-	return holds
+	return holds, nil
 }
 
 // resyncEgress re-locks adopted egress claims, quarantining any it cannot lock.

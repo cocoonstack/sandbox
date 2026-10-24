@@ -3,6 +3,7 @@ package pool
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -318,4 +319,11 @@ func (s *failingPublishStore) Publish(ctx context.Context, staging, id, lineage 
 		return errors.New("store unavailable")
 	}
 	return s.Store.Publish(ctx, staging, id, lineage)
+}
+
+func TestArchiveRefusalOfVolumeClaimNamesArchive(t *testing.T) {
+	err := archivable(testKey, true, types.ExpireArchive)
+	if !errors.Is(err, ErrVolumeCapture) || !strings.Contains(err.Error(), "archive") || strings.Contains(err.Error(), "hibernate") {
+		t.Fatalf("archive refusal = %q, want a volume-capture refusal that names archive and does not claim hibernate is impossible", err)
+	}
 }

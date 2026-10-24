@@ -21,6 +21,9 @@ wire is chunked, the caller's copy is not). Wire fidelity is
 pinned by the shared protocol fixture corpus that the Rust guest, Go, and
 Python all round-trip in CI.
 
+For node-local `create_volume`, `get_volume`, `delete_volume` and the format-once
+workflow, see [managed volumes](managed-volumes.md).
+
 ## A complete example
 
 Claim a sandbox, push a project in, run a build, then freeze the built state
@@ -123,7 +126,9 @@ branched). `sb.template_digest` is the exact content identity when the claim
 cloned a promoted template; it is empty for other sources. `Sandbox` is a
 context manager; `sb.close()` releases it (releasing one already gone is not
 an error — double-release and reap races stay silent).
-Volume sandboxes cannot hibernate, fork, checkpoint, or promote. Checkpoint
+Volume sandboxes cannot fork, checkpoint, or promote. Explicit hibernate supports
+one mounted managed writable volume when the node enables a workload hook.
+See [managed volume hibernation](managed-volumes.md#hibernate-one-mounted-managed-volume). Checkpoint
 branches do not accept volumes of either mode in this version.
 
 `mount=False` on `client.new` or `template.new` claims the same volumes

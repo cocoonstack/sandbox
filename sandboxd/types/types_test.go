@@ -168,3 +168,13 @@ func pairsOf(n int, value string) Metadata {
 	}
 	return md
 }
+
+func TestVolumeCatalogWireShape(t *testing.T) {
+	catalog := VolumeInfo{Name: "data", DefaultMount: "/volumes/data", SizeBytes: 42, Available: true, Nodes: 1}
+	const baseline = `{"name":"data","default_mount":"/volumes/data","size_bytes":42,"available":true,"nodes":1}`
+	for _, v := range []any{catalog, ManagedVolumeInfo{VolumeInfo: catalog}} {
+		if raw, err := json.Marshal(v); err != nil || string(raw) != baseline {
+			t.Fatalf("catalog changed from baseline: %s %v", raw, err)
+		}
+	}
+}

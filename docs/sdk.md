@@ -9,6 +9,9 @@ module). One `Client` talks to one entry node; sandbox handles dial their
 owning node directly, so a client works unchanged against a single node or a
 cluster.
 
+For node-local `CreateVolume`, `GetVolume`, `DeleteVolume`, managed detail
+types and structured errors, see [managed volumes](managed-volumes.md).
+
 ## A complete example
 
 Claim a sandbox, push a project into it, run a build, then freeze the built
@@ -227,7 +230,9 @@ promoted template; it is empty for other sources. `Owner()` names the owning
 node, and `Token()` returns the per-sandbox bearer to persist with `ID` for a
 later `Lookup`; `Close()` releases the sandbox (releasing one already gone is
 not an error, and `Close` is bounded internally so it stays defer-friendly).
-Volume sandboxes cannot hibernate, fork, checkpoint, or promote. Passing
+Volume sandboxes cannot fork, checkpoint, or promote. Explicit hibernate supports
+one mounted managed writable volume when the node enables a workload hook.
+See [managed volume hibernation](managed-volumes.md#hibernate-one-mounted-managed-volume). Passing
 `WithVolumes` or `WithClaimRef` to `Checkpoint.New` returns a local error:
 checkpoint branches support neither volumes nor a claim reference in this version.
 `WithMetadata`, `WithArchiveOnExpire` and `WithEnv` apply to `New`, `Template.New`, and

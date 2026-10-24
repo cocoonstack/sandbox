@@ -25,6 +25,14 @@ class APIError(SandboxError):
         self.status = status
         self.message = message
         self.reply = reply
+        self.code = (reply or {}).get("code", "")
+        self.volume = (reply or {}).get("volume", "")
+        holders = (reply or {}).get("holders")
+        self.holders = [
+            {key: entry[key] for key in ("sandbox_id", "mode", "state") if isinstance(entry.get(key), str)}
+            for entry in (holders if isinstance(holders, list) else [])
+            if isinstance(entry, dict)
+        ]
 
 
 class VolumeError(APIError):

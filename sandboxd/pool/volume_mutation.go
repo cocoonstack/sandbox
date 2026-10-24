@@ -98,6 +98,9 @@ func (m *Manager) changeVolumes(ctx context.Context, id, tenant string, change v
 	if err = validateLiveTarget(held, target); err != nil {
 		return view, err
 	}
+	if err = m.validateManagedTarget(held, target); err != nil {
+		return view, err
+	}
 	additions := volumeDifference(target, held)
 	if len(additions) != 0 {
 		if err = m.tenantRemoved(ctx, sb.Tenant); err != nil {
@@ -107,6 +110,9 @@ func (m *Manager) changeVolumes(ctx context.Context, id, tenant string, change v
 	resolved, err := m.resolveVolumes(ctx, sb.Tenant, additions)
 	if err != nil {
 		return view, err
+	}
+	if slices.ContainsFunc(resolved, func(v resolvedVolume) bool { return v.managedID != "" }) {
+		return view, fmt.Errorf("%w: managed volumes support claim-time attachment only", ErrBadVolume)
 	}
 	if err = m.checkVolumeRun(ctx, sb, run); err != nil {
 		return view, err

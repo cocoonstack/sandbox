@@ -53,8 +53,12 @@ func (m *Manager) removeOrRetry(ctx context.Context, name, sandboxID string, td 
 }
 
 func (m *Manager) queueRemoval(name, sandboxID, tap string, td volumeTeardown, notBefore time.Time) {
+	m.requeueRemoval(name, pendingRemoval{sandboxID: sandboxID, tap: tap, volumes: td, notBefore: notBefore})
+}
+
+func (m *Manager) requeueRemoval(name string, pending pendingRemoval) {
 	m.mu.Lock()
-	m.pendingRemovals[name] = pendingRemoval{sandboxID: sandboxID, tap: tap, volumes: td, notBefore: notBefore}
+	m.pendingRemovals[name] = pending
 	m.mu.Unlock()
 }
 
@@ -97,11 +101,28 @@ func (m *Manager) retryRemoval(ctx context.Context, name string, pending pending
 			return
 		}
 	}
+	if pending.inventoryUnknown {
+		pending = m.reinspectStale(ctx, name, pending)
+	}
 	if !m.removeVM(ctx, name) {
-		m.queueRemoval(name, pending.sandboxID, pending.tap, pending.volumes, time.Time{})
+		m.requeueRemoval(name, pendingRemoval{sandboxID: pending.sandboxID, tap: pending.tap, volumes: pending.volumes, inventoryUnknown: pending.inventoryUnknown})
 		return
 	}
 	m.finishRemoval(ctx, pending)
+}
+
+// reinspectStale narrows a stale VM's blanket hold to the disks it has attached once inspect answers.
+func (m *Manager) reinspectStale(ctx context.Context, name string, pending pendingRemoval) pendingRemoval {
+	holds, err := m.staleVolumes(ctx, name)
+	if err != nil {
+		return pending
+	}
+	m.mu.Lock()
+	m.adoptVolumes(holds)
+	m.releaseVolumes(pending.volumes.holds)
+	m.mu.Unlock()
+	pending.volumes.holds, pending.inventoryUnknown = holds, false
+	return pending
 }
 
 func (m *Manager) finishRemoval(ctx context.Context, pending pendingRemoval) {
