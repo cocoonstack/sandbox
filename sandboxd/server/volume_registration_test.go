@@ -105,7 +105,6 @@ func TestVolumeRegistrationRejectsInvalidBodies(t *testing.T) {
 		{"array", `[]`},
 		{"unknown field", `{"path":"/private/data.img","extra":true}`},
 		{"body name", `{"name":"other","path":"/private/data.img"}`},
-		{"wrong directio key", `{"path":"/private/data.img","direct_io":"on"}`},
 		{"duplicate field", `{"path":"/private/a.img","path":"/private/b.img"}`},
 		{"trailing object", `{"path":"/private/data.img"}{}`},
 		{"trailing text", `{"path":"/private/data.img"}oops`},

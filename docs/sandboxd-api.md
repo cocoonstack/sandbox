@@ -8,7 +8,7 @@ All bodies are JSON. Three token kinds:
   preview mint) and the tenant-scoped listings/deletes below; everything a
   tenant creates is stamped with its name. Operator surfaces
   (the per-id sandbox reads, `PUT /v1/sandboxes/{id}/instance-metadata`, `GET /v1/info`,
-  `PUT /v1/pools`, `POST/DELETE /v1/drain`, `GET /metrics`,
+  `PUT /v1/pools`, `PUT/DELETE /v1/volumes/{name}`, `POST/DELETE /v1/drain`, `GET /metrics`,
   `GET /v1/checkpoints/{id}/blob`)
   answer a tenant token `403` — authenticated but not authorized; an unknown
   token stays `401`. On a node with a shared
@@ -254,6 +254,65 @@ eventually consistent by one gossip tick.
 list; the field is emitted (as `true`) only for a writable entry this node
 declares and omitted otherwise (peer-only rows never carry it), so a read-only
 entry's response is byte-identical to v1.
+
+## PUT /v1/volumes/{name}
+
+Auth: root-only node API token. An empty configured `api_token` preserves the
+existing open-root mode. A tenant token returns 403 when authentication is
+enabled. Sandbox, unknown, and missing tokens return 401.
+
+Registers an existing backing file on this node. The URL supplies the name;
+the body has no `name` field. Unknown fields, duplicate fields, and trailing
+JSON return 400.
+
+```json
+{"path": "/srv/datasets/data.img", "directio": "off",
+ "writable": false, "tenants": ["acme"]}
+```
+
+- `name` matches `[a-z][a-z0-9_-]{0,19}` and cannot start with `cocoon-`.
+- `path` uses the same absolute-path validation as static volume config.
+- `directio` is `on`, `off`, or `auto`, and defaults to `off`.
+- `writable` defaults to `false` and controls writable claim admission.
+- `tenants` limits use to the named tenants. Omitted or empty permits all tenants.
+
+Success is 204 with an empty body. Repeating the same name, cleaned path, and
+normalized registration fields succeeds. A different binding or different
+registration fields return 409. Static and runtime registrations cannot share
+a name or a cleaned backing path. Invalid registration fields return 400.
+Unresolved catalog persistence returns 503 with `Retry-After`; retry the request.
+GET retains its existing projection without host paths or tenant access lists.
+Registration does not expand live mutation beyond mounted read-only volumes.
+
+Only registration metadata is persisted locally in
+`data_dir/runtime-volumes.json`, which loads before claim recovery. The record
+is root-owned with mode 0600, and its directory must protect the record.
+Runtime mutations require sandboxd to run as OS root. The backing file does
+not require root ownership. Registration creates, grows, and deletes no disks.
+Catalog replacement and synchronization are independent of `sync_claims`, which
+controls claim snapshot synchronization. Process-restart checks do not prove
+power-loss recovery. The catalog is node-local with one sandboxd writer.
+
+## DELETE /v1/volumes/{name}
+
+Auth and name validation match PUT. Removes only the runtime registration and
+never deletes or changes the backing file. Success, including an absent,
+unreferenced runtime name, is 204 with an empty body. Static registrations and
+names referenced by a claim, an in-flight operation, cleanup, or an
+unacknowledged recovery snapshot return 409. Catalog persistence uncertainty
+returns 503 with `Retry-After`; retry the request. An empty GET volume view alone
+does not establish that a recovery reference has retired.
+
+An external controller owns quiescence and guest unmount before detach. It
+confirms successful detach and recovery bookkeeping before hibernation, and
+keeps its own volume reservation while the sandbox sleeps. The controller
+gates every access path, including business requests that wake the sandbox,
+until wake, attach, and mount complete. Wake establishes only silkd readiness.
+It does not restore volume attachments or application readiness. Controller
+orchestration is external; no controller implementation or composed lifecycle
+verification is included here. Downgrading to a daemon without runtime
+registration requires draining runtime references or supplying equivalent
+static volume config. Pending live volume changes must finish before downgrade.
 
 ## GET /v1/sandboxes/{id}/volumes
 

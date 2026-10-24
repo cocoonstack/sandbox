@@ -9,6 +9,16 @@ file. Keep each name bound to the same immutable image while held. Use Cocoon
 v0.7.2 or newer and set `SANDBOX_ADDR` and `SANDBOX_API_TOKEN` for the client.
 A sandbox token alone cannot manage volumes.
 
+The node root token can [register existing backing files](sandboxd-api.md#put-v1volumesname)
+without editing static config. Registration persists only node-local catalog
+metadata and does not manage disk files. For a sleep and wake workflow, an
+external controller owns quiescence and unmount before detach, a reservation
+through sleep, and access gating until wake, attach, and mount complete. That
+gate also covers business requests that wake the sandbox. Wake establishes
+only silkd readiness. The API does not include a controller implementation or
+verify that composed workflow. Live changes remain limited to mounted
+read-only entries.
+
 Pause application reads before replacement. Close files, mmap mappings, cwd,
 and bind mount references on the old disk. Replacement unmounts the old disk
 before mounting the new one, so the path has a short unavailable interval.
