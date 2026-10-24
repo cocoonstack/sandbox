@@ -3,7 +3,6 @@ package pool
 import (
 	"errors"
 	"fmt"
-	"github.com/cocoonstack/sandbox/sandboxd/config"
 	"os"
 	"path/filepath"
 	"slices"
@@ -11,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cocoonstack/sandbox/sandboxd/config"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 	"github.com/cocoonstack/sandbox/sandboxd/utils"
 )
@@ -30,9 +30,9 @@ func TestRuntimeCatalogPersistsNormalizedSemantics(t *testing.T) {
 	if err := m.RegisterVolume(t.Context(), "runtime", spec); err != nil {
 		t.Fatalf("normalized retry: %v", err)
 	}
-	st, err := os.Stat(filepath.Join(m.dataDir, "runtime-volumes.json"))
-	if err != nil || st.Mode().Perm() != 0o600 {
-		t.Fatalf("metadata mode: %v %v", st, err)
+	st, statErr := os.Stat(filepath.Join(m.dataDir, "runtime-volumes.json"))
+	if statErr != nil || st.Mode().Perm() != 0o600 {
+		t.Fatalf("metadata mode: %v %v", st, statErr)
 	}
 	m2 := newVolumeManagerAt(t, eng, m.dataDir, nil)
 	if got := m2.VolumeNames(); !slices.Equal(got, []string{"runtime"}) {
@@ -345,6 +345,9 @@ func TestRuntimeCatalogRetirementBlocksUnregisterAndReuse(t *testing.T) {
 	}
 	if _, err := m.Checkpoint(t.Context(), sb.ID, Cred{Token: sb.Token}, "retirement-fenced", ""); !errors.Is(err, ErrVolumeCapture) {
 		t.Fatalf("capture: %v", err)
+	}
+	if err := m.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); !errors.Is(err, ErrVolumeCapture) {
+		t.Fatalf("hibernate before retirement: %v", err)
 	}
 	if err := os.Remove(tmp); err != nil {
 		t.Fatal(err)

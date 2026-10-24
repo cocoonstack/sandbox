@@ -100,7 +100,7 @@ func (m *Manager) changeVolumes(ctx context.Context, id, tenant string, change v
 		return view, err
 	}
 	additions := volumeDifference(target, held)
-	if len(additions) != 0 {
+	if slices.ContainsFunc(additions, func(v types.Volume) bool { return !slices.Contains(recovery, v) }) {
 		if err = m.tenantRemoved(ctx, sb.Tenant); err != nil {
 			return view, err
 		}

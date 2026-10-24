@@ -39,8 +39,10 @@ type resolvedVolume struct {
 
 // volumeTeardown captures marker paths at quiesce time; a later config can re-point the entry.
 type volumeTeardown struct {
-	holds  []types.Volume
-	clears []string
+	done    <-chan struct{}
+	unknown bool
+	holds   []types.Volume
+	clears  []string
 }
 
 type catalogVolume struct {
@@ -249,7 +251,12 @@ func (m *Manager) applyVolume(ctx context.Context, sb *types.Sandbox, volume res
 
 // quiesceVolumes unmounts a claim's writable mounts in reverse; a failed unmount keeps the marker.
 func (m *Manager) quiesceVolumes(ctx context.Context, sb *types.Sandbox) volumeTeardown {
+	m.mu.Lock()
 	td := volumeTeardown{holds: heldVolumes(sb)}
+	if run := m.volumeRuns[sb]; run != nil {
+		td.done = run.done
+	}
+	m.mu.Unlock()
 	mounts := writableMounts(sb.Volumes)
 	if mounts == 0 {
 		return td
@@ -286,9 +293,13 @@ func (m *Manager) quiesceVolumes(ctx context.Context, sb *types.Sandbox) volumeT
 }
 
 // finishVolumeTeardown runs only once the VM is gone, when its image lock is finally released.
-func (m *Manager) finishVolumeTeardown(ctx context.Context, td volumeTeardown) {
-	if len(td.holds) == 0 {
-		return
+func (m *Manager) finishVolumeTeardown(ctx context.Context, td volumeTeardown) bool {
+	if td.done != nil {
+		select {
+		case <-td.done:
+		default:
+			return false
+		}
 	}
 	logger := log.WithFunc("pool.finishVolumeTeardown")
 	for _, path := range td.clears {
@@ -296,7 +307,13 @@ func (m *Manager) finishVolumeTeardown(ctx context.Context, td volumeTeardown) {
 			logger.Errorf(ctx, err, "clear dirty marker %s", path)
 		}
 	}
-	m.unreserveVolumes(td.holds)
+	m.mu.Lock()
+	m.releaseVolumes(td.holds)
+	if td.unknown {
+		m.unknownVolumes--
+	}
+	m.mu.Unlock()
+	return true
 }
 
 // reserveVolumes admits one claim's volumes atomically; callers hold m.mu.
@@ -308,7 +325,7 @@ func (m *Manager) reserveVolumesFor(volumes []types.Volume, owner *types.Sandbox
 	if len(volumes) == 0 {
 		return nil
 	}
-	if len(volumes) > 0 && m.catalogPending != nil {
+	if m.catalogPending != nil || m.unknownVolumes > 0 {
 		return ErrVolumeCatalogUnavailable
 	}
 	recovery := m.store.recoveryVolumes()
@@ -443,7 +460,7 @@ func (m *Manager) volumeCatalog() map[string]*catalogVolume {
 
 // reserveResolved revalidates the binding and policy in the same decision as admission.
 func (m *Manager) reserveResolved(tenant string, volumes []resolvedVolume, owner *types.Sandbox) error {
-	if len(volumes) > 0 && m.catalogPending != nil {
+	if len(volumes) > 0 && (m.catalogPending != nil || m.unknownVolumes > 0) {
 		return ErrVolumeCatalogUnavailable
 	}
 	var held []types.Volume

@@ -339,6 +339,7 @@ type Manager struct {
 	volumeStat     func(string) (os.FileInfo, error)
 	// volumeAdmission counts the live holders of each volume name; guarded by m.mu.
 	volumeAdmission map[string]volumeHolders
+	unknownVolumes  int
 	volumeRuns      map[*types.Sandbox]*volumeRun
 	volumeErrors    map[*types.Sandbox]map[string]string
 

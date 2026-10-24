@@ -60,7 +60,7 @@ func (m *Manager) loadRuntimeVolumes() error {
 	if !st.Mode().IsRegular() || st.Mode().Perm() != 0o600 || st.Sys().(*syscall.Stat_t).Uid != 0 {
 		return fmt.Errorf("runtime volume catalog must be a root-owned regular file with mode 0600")
 	}
-	raw, err := os.ReadFile(path)
+	raw, err := os.ReadFile(path) //nolint:gosec // root-owned metadata below a protected directory
 	if err != nil {
 		return fmt.Errorf("read runtime volume catalog: %w", err)
 	}
@@ -105,6 +105,10 @@ func (m *Manager) RegisterVolume(ctx context.Context, name string, spec types.Vo
 		return err
 	}
 	m.mu.Lock()
+	if m.unknownVolumes > 0 {
+		m.mu.Unlock()
+		return ErrVolumeCatalogUnavailable
+	}
 	if current, ok := m.runtimeVolumes[name]; ok {
 		m.mu.Unlock()
 		if sameRegistration(current, normalized) {
@@ -131,6 +135,10 @@ func (m *Manager) RegisterVolume(ctx context.Context, name string, spec types.Vo
 	}
 	m.mu.Lock()
 	// A claim can acquire an unexplained recovery name while the backing is checked.
+	if m.unknownVolumes > 0 {
+		m.mu.Unlock()
+		return ErrVolumeCatalogUnavailable
+	}
 	if m.volumeReferenced(name) {
 		m.mu.Unlock()
 		return fmt.Errorf("%w: volume %q is referenced", ErrVolumeRegistrationConflict, name)
@@ -156,6 +164,10 @@ func (m *Manager) UnregisterVolume(ctx context.Context, name string) error {
 		return fmt.Errorf("%w: invalid volume name", ErrBadVolume)
 	}
 	m.mu.Lock()
+	if m.unknownVolumes > 0 {
+		m.mu.Unlock()
+		return ErrVolumeCatalogUnavailable
+	}
 	if _, runtime := m.runtimeVolumes[name]; !runtime {
 		_, exists := m.volumes[name]
 		referenced := m.volumeReferenced(name)
@@ -203,7 +215,11 @@ func (m *Manager) volumeReferenced(name string) bool {
 func (m *Manager) commitPendingCatalog(ctx context.Context) error {
 	m.mu.Lock()
 	proposal := m.catalogPending
+	unknown := m.unknownVolumes > 0
 	m.mu.Unlock()
+	if unknown {
+		return ErrVolumeCatalogUnavailable
+	}
 	if proposal == nil {
 		return nil
 	}

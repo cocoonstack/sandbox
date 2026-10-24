@@ -87,8 +87,8 @@ type claimStore struct {
 	rows        map[string]*claimRow
 	seq         uint64
 	written     uint64
-	ackRows     []*claimRow
-	attemptRows map[*claimRow]struct{}
+	ackRefs     map[string][]types.Volume
+	attemptRefs map[string][]types.Volume
 	replaceFile func([]byte) error
 
 	recommitting atomic.Bool
@@ -116,10 +116,13 @@ func (s *claimStore) load() (map[string]*types.Sandbox, error) {
 		}
 	}
 	s.mu.Lock()
-	s.ackRows = make([]*claimRow, 0, len(claims))
+	s.ackRefs = nil
 	for _, sb := range claims {
 		if row := newClaimRow(sb); len(row.refs) > 0 {
-			s.ackRows = append(s.ackRows, row)
+			if s.ackRefs == nil {
+				s.ackRefs = map[string][]types.Volume{}
+			}
+			s.ackRefs[row.id] = row.refs
 		}
 	}
 	s.mu.Unlock()
@@ -185,7 +188,14 @@ func (s *claimStore) commit(snap claimSnapshot) error {
 	rows, seq := slices.AppendSeq(make([]*claimRow, 0, len(s.rows)), maps.Values(s.rows)), s.seq
 	s.mu.Unlock()
 	s.buf = append(s.buf[:0], '{')
+	var refs map[string][]types.Volume
 	for i, row := range rows {
+		if len(row.refs) > 0 {
+			if refs == nil {
+				refs = map[string][]types.Volume{}
+			}
+			refs[row.id] = row.refs
+		}
 		if row.raw == nil {
 			raw, err := encodeRow(&row.dto)
 			if err != nil {
@@ -200,14 +210,7 @@ func (s *claimStore) commit(snap claimSnapshot) error {
 	}
 	s.buf = append(s.buf, '}')
 	s.mu.Lock()
-	if s.attemptRows == nil {
-		s.attemptRows = map[*claimRow]struct{}{}
-	}
-	for _, row := range rows {
-		if len(row.refs) > 0 {
-			s.attemptRows[row] = struct{}{}
-		}
-	}
+	s.attemptRefs = mergeRecoveryRefs(s.attemptRefs, refs)
 	s.mu.Unlock()
 	replace := s.replace
 	if s.replaceFile != nil {
@@ -217,12 +220,7 @@ func (s *claimStore) commit(snap claimSnapshot) error {
 		return err
 	}
 	s.mu.Lock()
-	s.ackRows, s.attemptRows = nil, nil
-	for _, row := range rows {
-		if len(row.refs) > 0 {
-			s.ackRows = append(s.ackRows, row)
-		}
-	}
+	s.ackRefs, s.attemptRefs = refs, nil
 	s.written = seq
 	s.mu.Unlock()
 	return nil
@@ -327,25 +325,32 @@ func newClaimRow(sb *types.Sandbox) *claimRow {
 func (s *claimStore) recoveryVolumes(owner ...string) map[string][]types.Volume {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if len(s.ackRows) == 0 && len(s.attemptRows) == 0 {
-		return nil
-	}
-	refs := map[string][]types.Volume{}
-	add := func(row *claimRow) {
-		if len(owner) > 0 && row.id != owner[0] {
-			return
+	if len(owner) > 0 {
+		id := owner[0]
+		refs := appendRecoveryRefs(slices.Clone(s.ackRefs[id]), s.attemptRefs[id])
+		if len(refs) == 0 {
+			return nil
 		}
-		for _, v := range row.refs {
-			if !slices.Contains(refs[row.id], v) {
-				refs[row.id] = append(refs[row.id], v)
-			}
+		return map[string][]types.Volume{id: refs}
+	}
+	return mergeRecoveryRefs(mergeRecoveryRefs(nil, s.ackRefs), s.attemptRefs)
+}
+
+func mergeRecoveryRefs(dst, src map[string][]types.Volume) map[string][]types.Volume {
+	if dst == nil && len(src) > 0 {
+		dst = make(map[string][]types.Volume, len(src))
+	}
+	for id, refs := range src {
+		dst[id] = appendRecoveryRefs(dst[id], refs)
+	}
+	return dst
+}
+
+func appendRecoveryRefs(dst, src []types.Volume) []types.Volume {
+	for _, v := range src {
+		if !slices.Contains(dst, v) {
+			dst = append(dst, v)
 		}
 	}
-	for _, row := range s.ackRows {
-		add(row)
-	}
-	for row := range s.attemptRows {
-		add(row)
-	}
-	return refs
+	return dst
 }

@@ -1,0 +1,290 @@
+package pool
+
+import (
+	"context"
+	"errors"
+	"slices"
+	"sync/atomic"
+	"testing"
+	"testing/synctest"
+	"time"
+
+	"github.com/cocoonstack/sandbox/sandboxd/engine"
+	"github.com/cocoonstack/sandbox/sandboxd/types"
+)
+
+func TestRemovedVMKeepsVolumeUntilCanceledWorkerReturns(t *testing.T) {
+	requireCatalogRoot(t)
+	base := newFakeEngine()
+	m := newVolumeManager(t, base, nil)
+	if err := m.RegisterVolume(t.Context(), "data", types.VolumeRegistration{Path: writeVolumeImage(t, "runtime", "bytes"), Writable: true}); err != nil {
+		t.Fatal(err)
+	}
+	sb := mustClaim(t, m, testKey)
+	eng := newGatedVolumeEngine(base)
+	m.eng = eng
+	changed := make(chan error, 1)
+	go func() { _, err := m.SetVolumes(t.Context(), sb.ID, "", []types.Volume{{Name: "data"}}); changed <- err }()
+	<-eng.entered
+	resumed := false
+	defer func() {
+		if !resumed {
+			close(eng.resume)
+			<-changed
+		}
+	}()
+	released := make(chan error, 1)
+	go func() { released <- m.Release(t.Context(), sb.ID, Cred{Token: sb.Token}) }()
+	select {
+	case err := <-released:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("release waited for paused worker")
+	}
+	if got := volumeHoldersOf(m, "data"); got != (volumeHolders{readers: 1}) {
+		t.Errorf("removed VM freed active worker count: %+v", got)
+	}
+	if _, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Volumes: []types.Volume{{Name: "data", Mode: types.VolumeModeRW}}}); !errors.Is(err, ErrVolumeBusy) {
+		t.Errorf("writer overtook paused canceled worker: %v", err)
+	}
+	if err := m.UnregisterVolume(t.Context(), "data"); !errors.Is(err, ErrVolumeRegistrationConflict) {
+		t.Errorf("unregister overtook paused worker: %v", err)
+	}
+	m.retryRemovals(t.Context()).Wait()
+	if got := volumeHoldersOf(m, "data"); got != (volumeHolders{readers: 1}) {
+		t.Errorf("maintenance freed active worker count: %+v", got)
+	}
+	close(eng.resume)
+	resumed = true
+	if err := <-changed; err == nil {
+		t.Fatal("removed claim accepted late attachment")
+	}
+	m.retryRemovals(t.Context()).Wait()
+	if got := volumeHoldersOf(m, "data"); got != (volumeHolders{}) {
+		t.Fatalf("completed worker leaked count: %+v", got)
+	}
+	if err := m.UnregisterVolume(t.Context(), "data"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDispatchedCleanupRetainsCatalogReference(t *testing.T) {
+	requireCatalogRoot(t)
+	base := newFakeEngine()
+	m := newVolumeManager(t, base, nil)
+	if err := m.RegisterVolume(t.Context(), "data", types.VolumeRegistration{Path: writeVolumeImage(t, "runtime", "bytes")}); err != nil {
+		t.Fatal(err)
+	}
+	sb, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Volumes: []types.Volume{{Name: "data"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	base.removeErrFor = sb.VMName
+	if err = m.Release(t.Context(), sb.ID, Cred{Token: sb.Token}); err == nil {
+		t.Fatal("expected survivor")
+	}
+	for range cap(m.maintSem) {
+		m.maintSem <- struct{}{}
+	}
+	wg := m.retryRemovals(t.Context())
+	m.mu.Lock()
+	queued := len(m.pendingRemovals)
+	m.mu.Unlock()
+	if queued != 0 {
+		t.Fatal("cleanup was not dispatched")
+	}
+	err = m.UnregisterVolume(t.Context(), "data")
+	for range cap(m.maintSem) {
+		<-m.maintSem
+	}
+	wg.Wait()
+	if !errors.Is(err, ErrVolumeRegistrationConflict) {
+		t.Fatalf("dispatched cleanup lost guard: %v", err)
+	}
+	base.removeErrFor = ""
+	m.retryRemovals(t.Context()).Wait()
+	if err := m.UnregisterVolume(t.Context(), "data"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+type unknownVolumeEngine struct {
+	*fakeEngine
+	inspectFailed  atomic.Bool
+	inspectEntered chan struct{}
+	inspectResume  chan struct{}
+	inspectGated   atomic.Bool
+}
+
+func (e *unknownVolumeEngine) Inspect(ctx context.Context, name string) (types.VMRecord, bool, error) {
+	if e.inspectEntered != nil && e.inspectGated.CompareAndSwap(false, true) {
+		close(e.inspectEntered)
+		<-e.inspectResume
+	}
+	if e.inspectFailed.Load() {
+		return types.VMRecord{}, false, errors.New("inspection unavailable")
+	}
+	return e.fakeEngine.Inspect(ctx, name)
+}
+
+func TestUnknownStaleVolumesFenceUntilInspectionOrRemoval(t *testing.T) {
+	requireCatalogRoot(t)
+	for _, state := range []string{"running", "stopped", "creating"} {
+		t.Run(state, func(t *testing.T) {
+			base := newFakeEngine()
+			m := newVolumeManager(t, base, nil)
+			path := writeVolumeImage(t, "runtime", "bytes")
+			if err := m.RegisterVolume(t.Context(), "data", types.VolumeRegistration{Path: path, Writable: true}); err != nil {
+				t.Fatal(err)
+			}
+			name := "sbx-stale-unknown"
+			base.vms[name] = "/vsock/stale"
+			base.stopped[name] = state == "stopped"
+			base.creating[name] = state == "creating"
+			base.staleOutcome = engine.StaleCreateBusy
+			base.removeErrFor = name
+			base.disks = map[string][]types.VMDisk{name: {{Name: "data", ReadOnly: false}}}
+			eng := &unknownVolumeEngine{fakeEngine: base}
+			eng.inspectFailed.Store(true)
+			m.eng = eng
+			if m.removeStaleVM(t.Context(), name, base.record(name)) {
+				t.Fatal("unknown stale VM unexpectedly gone")
+			}
+			for range 2 {
+				if _, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Volumes: []types.Volume{{Name: "data"}}}); !errors.Is(err, ErrVolumeCatalogUnavailable) {
+					t.Fatalf("unknown stale attachment admitted reader: %v", err)
+				}
+				if err := m.UnregisterVolume(t.Context(), "data"); !errors.Is(err, ErrVolumeCatalogUnavailable) {
+					t.Fatalf("unknown stale attachment allowed unregister: %v", err)
+				}
+				if _, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{}); err != nil {
+					t.Fatalf("volume-free claim blocked: %v", err)
+				}
+				for range cap(m.maintSem) {
+					m.maintSem <- struct{}{}
+				}
+				wg := m.retryRemovals(t.Context())
+				if err := m.RegisterVolume(t.Context(), "new", types.VolumeRegistration{Path: writeVolumeImage(t, "new", "bytes")}); !errors.Is(err, ErrVolumeCatalogUnavailable) {
+					t.Errorf("dispatched unknown fence lost: %v", err)
+				}
+				for range cap(m.maintSem) {
+					<-m.maintSem
+				}
+				wg.Wait()
+			}
+			eng.inspectFailed.Store(false)
+			base.staleOutcome = engine.StaleCreateNotCreating
+			m.retryRemovals(t.Context()).Wait()
+			if got := volumeHoldersOf(m, "data"); got != (volumeHolders{writers: 1}) {
+				t.Fatalf("inspection did not replace fence with known holds: %+v", got)
+			}
+			if err := m.RegisterVolume(t.Context(), "unrelated", types.VolumeRegistration{Path: writeVolumeImage(t, "unrelated", "bytes")}); err != nil {
+				t.Fatalf("resolved inspection left global fence: %v", err)
+			}
+			if _, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Volumes: []types.Volume{{Name: "data"}}}); !errors.Is(err, ErrVolumeBusy) {
+				t.Fatalf("known attachment lost exclusion: %v", err)
+			}
+			base.removeErrFor = ""
+			m.retryRemovals(t.Context()).Wait()
+			if err := m.UnregisterVolume(t.Context(), "data"); err != nil {
+				t.Fatalf("confirmed removal retained fence: %v", err)
+			}
+		})
+	}
+}
+
+func TestRuntimeCatalogLoadedBeforeClaimReconciliation(t *testing.T) {
+	requireCatalogRoot(t)
+	eng := newFakeEngine()
+	m := newVolumeManager(t, eng, nil)
+	path := writeVolumeImage(t, "runtime", "bytes")
+	if err := m.RegisterVolume(t.Context(), "data", types.VolumeRegistration{Path: path, Writable: true, Tenants: []string{"acme"}}); err != nil {
+		t.Fatal(err)
+	}
+	sb, claimErr := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Volumes: []types.Volume{{Name: "data"}}})
+	if claimErr != nil {
+		t.Fatal(claimErr)
+	}
+	m2 := newVolumeManagerAt(t, eng, m.dataDir, nil)
+	if got := m2.Volumes("acme", nil); len(got) != 1 || got[0].Name != "data" || !got[0].Available || !got[0].Writable {
+		t.Fatalf("catalog absent before reconcile: %+v", got)
+	}
+	if local, err := m2.VolumePlacement(testKey, "acme", []string{"data"}); err != nil || !local {
+		t.Fatalf("placement before reconcile: %v %v", local, err)
+	}
+	if err := m2.Reconcile(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	view, err := m2.GetVolumes(sb.ID, "")
+	if err != nil || !slices.Equal(view.Volumes, sb.Volumes) {
+		t.Fatalf("claim recovery: %+v %v", view, err)
+	}
+	if _, err := m2.ClaimProvision(t.Context(), testKey, ClaimOptions{Volumes: []types.Volume{{Name: "data", Mode: types.VolumeModeRW}}}); !errors.Is(err, ErrVolumeBusy) {
+		t.Fatalf("recovered holder missing: %v", err)
+	}
+}
+
+func TestUnknownFencePrecedesInspectionAndClearsAfterConfirmedRemoval(t *testing.T) {
+	base := newFakeEngine()
+	m := newVolumeManager(t, base, liveCatalog(t))
+	name := "sbx-stale-before-inspect"
+	base.vms[name] = "/vsock/stale"
+	base.removeErrFor = name
+	eng := &unknownVolumeEngine{fakeEngine: base, inspectEntered: make(chan struct{}), inspectResume: make(chan struct{})}
+	eng.inspectFailed.Store(true)
+	m.eng = eng
+	done := make(chan bool, 1)
+	go func() { done <- m.removeStaleVM(t.Context(), name, base.record(name)) }()
+	<-eng.inspectEntered
+	if !m.mu.TryLock() {
+		t.Fatal("stale inspection holds manager lock")
+	}
+	m.mu.Unlock()
+	_, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Volumes: []types.Volume{{Name: "data", Mode: types.VolumeModeRW}}})
+	close(eng.inspectResume)
+	if gone := <-done; gone {
+		t.Fatal("failed inspect/removal unexpectedly confirmed gone")
+	}
+	if !errors.Is(err, ErrVolumeCatalogUnavailable) {
+		t.Fatalf("admitted volume while inspection was blocked: %v", err)
+	}
+	base.removeErrFor = ""
+	m.retryRemovals(t.Context()).Wait()
+	if _, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Volumes: []types.Volume{{Name: "data", Mode: types.VolumeModeRW}}}); err != nil {
+		t.Fatalf("successful removal retained unknown fence: %v", err)
+	}
+}
+
+func TestCanceledRemovalDispatchKeepsUnknownFenceOwned(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		base := newFakeEngine()
+		m := newVolumeManager(t, base, liveCatalog(t))
+		name := "sbx-canceled-dispatch"
+		base.vms[name] = "/vsock/stale"
+		base.removeErrFor = name
+		eng := &unknownVolumeEngine{fakeEngine: base}
+		eng.inspectFailed.Store(true)
+		m.eng = eng
+		if m.removeStaleVM(t.Context(), name, base.record(name)) {
+			t.Fatal("expected survivor")
+		}
+		for range cap(m.maintSem) {
+			m.maintSem <- struct{}{}
+		}
+		ctx, cancel := context.WithCancel(t.Context())
+		wg := m.retryRemovals(ctx)
+		cancel()
+		synctest.Wait()
+		base.removeErrFor = ""
+		for range cap(m.maintSem) {
+			<-m.maintSem
+		}
+		wg.Wait()
+		m.retryRemovals(t.Context()).Wait()
+		if _, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Volumes: []types.Volume{{Name: "data", Mode: types.VolumeModeRW}}}); err != nil {
+			t.Fatalf("canceled dispatch stranded unknown fence: %v", err)
+		}
+	})
+}

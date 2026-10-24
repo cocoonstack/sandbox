@@ -2,6 +2,7 @@ package pool
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -92,7 +93,7 @@ func TestDetachedVolumeOwnRetryAndLaterAcknowledgment(t *testing.T) {
 			if err != nil || len(view.States) != 1 || view.States[0].State != types.VolumeDetaching {
 				t.Fatalf("unretired view: %+v, %v", view, err)
 			}
-			if err := os.Remove(tmp); err != nil {
+			if err = os.Remove(tmp); err != nil {
 				t.Fatal(err)
 			}
 			switch retry {
@@ -129,6 +130,7 @@ func TestFailedClaimIntroductionAfterRenameRemainsProtected(t *testing.T) {
 	catalog := liveCatalog(t)
 	m := newVolumeManager(t, eng, catalog)
 	sb := mustClaim(t, m, testKey)
+	m.store.sync = true
 	m.store.recommitting.Store(true)
 	calls := 0
 	m.store.replaceFile = func(raw []byte) error {
@@ -200,5 +202,76 @@ func TestClaimRecoveryReferencesSurviveResetAndAreCopied(t *testing.T) {
 	}
 	if len(s.recoveryVolumes()) != 0 {
 		t.Fatal("empty snapshot did not retire file references")
+	}
+}
+
+func TestClaimRecoveryAttemptsRetainOnlyDistinctReferences(t *testing.T) {
+	s := newClaimStore(t.TempDir(), false)
+	sb := &types.Sandbox{ID: "owner", Volumes: []types.Volume{{Name: "data", Mount: "/data"}}}
+	if err := s.commit(s.set(sb)); err != nil {
+		t.Fatal(err)
+	}
+	s.replaceFile = func([]byte) error { return errors.New("no space left") }
+	for i := range 200 {
+		sb.Token = fmt.Sprint(i)
+		sb.Volumes[0].Mount = []string{"/data", "/other"}[i%2]
+		if err := s.commit(s.set(sb)); err == nil {
+			t.Fatal("expected failed snapshot")
+		}
+	}
+	if len(s.attemptRefs) != 1 || len(s.attemptRefs[sb.ID]) != 2 {
+		t.Fatalf("renewals retained duplicate history: %+v", s.attemptRefs)
+	}
+	refs := s.recoveryVolumes(sb.ID)[sb.ID]
+	refs[0].Name = "caller-copy"
+	if got := s.recoveryVolumes(sb.ID)[sb.ID]; len(got) != 2 || got[0].Name != "data" {
+		t.Fatalf("recovery references not copied: %+v", got)
+	}
+	s.replaceFile = nil
+	if err := s.commit(s.mark()); err != nil {
+		t.Fatal(err)
+	}
+	if len(s.attemptRefs) != 0 || len(s.recoveryVolumes(sb.ID)[sb.ID]) != 1 {
+		t.Fatal("successful snapshot did not replace possibility history")
+	}
+}
+
+func TestRecoveryOnlyRetryPreservesHeldRepairAuthorization(t *testing.T) {
+	eng := newFakeEngine()
+	m, sb := newTenantVolumeManager(t, eng, liveCatalog(t))
+	if _, err := m.SetVolumes(t.Context(), sb.ID, "acme", []types.Volume{{Name: "data"}}); err != nil {
+		t.Fatal(err)
+	}
+	m.store.recommitting.Store(true)
+	tmp := m.store.path + ".tmp"
+	eng.liveVolumeHook = func(verb string) error {
+		if verb == "detach" {
+			return os.Mkdir(tmp, 0o700)
+		}
+		return nil
+	}
+	if _, err := m.SetVolumes(t.Context(), sb.ID, "acme", []types.Volume{}); err == nil {
+		t.Fatal("expected failed detach result commit")
+	}
+	eng.liveVolumeHook = nil
+	if err := m.DeleteTenant(t.Context(), "acme"); err != nil {
+		t.Fatal(err)
+	}
+	m.mu.Lock()
+	entry := *m.volumes["data"]
+	entry.tenants = []string{"different-tenant"}
+	m.volumes["data"] = &entry
+	m.mu.Unlock()
+	if err := os.Remove(tmp); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.SetVolumes(t.Context(), sb.ID, "", []types.Volume{{Name: "data"}}); err != nil {
+		t.Fatalf("exact recovery retry lost held authorization: %v", err)
+	}
+	if got := volumeHoldersOf(m, "data"); got != (volumeHolders{readers: 1}) {
+		t.Fatalf("repair reservation count: %+v", got)
+	}
+	if _, err := m.PatchVolumes(t.Context(), sb.ID, "", types.VolumePatch{Add: []types.Volume{{Name: "other"}}}); !errors.Is(err, ErrTenantRemoved) {
+		t.Fatalf("repair exemption admitted unrelated addition: %v", err)
 	}
 }
