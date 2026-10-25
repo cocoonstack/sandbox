@@ -307,6 +307,12 @@ JSON return 400.
   A missing backing retains its registration but cannot be attached until available.
   Registration success does not establish that Cocoon supports the backing type.
   Operators must keep the registered path and target stable.
+  Backing storage must be separate from daemon cleanup directories, including
+  `<data_dir>/readers`, `<data_dir>/goldens`, and `<data_dir>/fork-*`.
+  Backing paths must not resolve into cleanup directories.
+  Cleanup directories must not resolve into backing storage.
+  Startup and staging cleanup do not consult volume registrations and can
+  delete backing files placed in those locations.
 - `directio` is `on`, `off`, or `auto`, and defaults to `off`.
 - `writable` defaults to `false` and controls writable claim admission.
 - `tenants` grants the named tenants self-service access. Omitted or empty

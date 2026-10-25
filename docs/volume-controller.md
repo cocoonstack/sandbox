@@ -36,8 +36,14 @@ Use the current Python SDK with
 [per-entry attach-only support](sdk-python.md#changing-volumes), Cocoon v0.7.2 or newer,
 and Cloud Hypervisor.
 
-Prepare and format the backing outside sandboxd. Register it on the claim's
-node with the configured root token:
+Prepare and format the backing outside sandboxd. Store it in a dedicated
+persistent directory, such as `/srv/volumes`. Keep backing storage separate
+from daemon cleanup directories, including `<data_dir>/readers`,
+`<data_dir>/goldens`, and `<data_dir>/fork-*`, and prevent aliases between them.
+Startup and staging cleanup can delete a backing in those locations even
+while it remains registered.
+
+Register the backing on the claim's node with the configured root token:
 
 ```http
 PUT /v1/volumes/home
