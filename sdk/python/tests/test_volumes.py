@@ -292,3 +292,26 @@ def test_live_volume_iterables_are_consumed_once(spawn_node, method, kind):
     entries = [] if kind == "empty-generator" else [{"name": "data"}]
     assert seen == [{"volumes" if method == "set" else "add": entries}]
     assert consumed == (["data"] if kind == "generator" else [])
+
+
+@pytest.mark.parametrize("status", [200, 409])
+@pytest.mark.parametrize("field", ["volumes", "volumes_want", "states"])
+@pytest.mark.parametrize("entry", [None, "bad", []])
+def test_malformed_volume_view_preserves_error_and_handle(spawn_node, status, field, entry):
+    payload = {**VIEW, "error": "storage unavailable", field: [*VIEW[field], entry]}
+    sb = sandbox_at(spawn_node({("GET", PATH): lambda body, path: (status, payload)}))
+    sb.volumes = [{"name": "old"}]
+    sb.volumes_want = [{"name": "wanted"}]
+    with pytest.raises(APIError) as caught:
+        sb.get_volumes()
+    assert sb.volumes == [{"name": "old"}]
+    assert sb.volumes_want == [{"name": "wanted"}]
+    if status == 409:
+        assert isinstance(caught.value, VolumeError)
+        assert caught.value.status == 409
+        assert caught.value.message == "storage unavailable"
+        assert caught.value.reply == payload
+        assert caught.value.response is None
+    else:
+        assert caught.value.status == 0
+        assert caught.value.message == "reply without complete volume view"

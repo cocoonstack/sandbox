@@ -546,3 +546,31 @@ def test_response_decoder_only_interprets_volume_bearing_routes(spawn_node, path
         entry = reply["metadata"]["volumes"][0]
     assert (entry.get("attach_only") is True) is expected
     assert "attach_only" not in repr(payload)
+
+
+def test_claim_response_decoding_does_not_depend_on_route(spawn_node):
+    path = "/v1/custom-claims"
+    payload = {"id": "sb_1", "token": "tok", "volumes": [{"name": "raw"}]}
+    addr = spawn_node({("POST", path): lambda body, request_path: (200, payload)})
+    sb = Client(addr)._claim_from(addr, {}, path=path)
+    assert sb.volumes == [{"name": "raw", "attach_only": True}]
+    assert "attach_only" not in payload["volumes"][0]
+
+
+@pytest.mark.parametrize(
+    ("path", "fields"),
+    [
+        ("/v1/claim", {"volumes": [None]}),
+        ("/v1/sandboxes", {"sandboxes": [None]}),
+        ("/v1/sandboxes/sb_1/fork", {"children": [None]}),
+        ("/v1/sandboxes/sb_1/volumes", {"volumes": ["bad"]}),
+    ],
+)
+def test_malformed_error_details_do_not_hide_http_error(spawn_node, path, fields):
+    payload = {"error": "storage unavailable", **fields}
+    addr = spawn_node({("GET", path): lambda body, request_path: (503, payload)})
+    with pytest.raises(APIError) as caught:
+        Client(addr)._request(addr, "GET", path, None, "inspect")
+    assert caught.value.status == 503
+    assert caught.value.message == "storage unavailable"
+    assert caught.value.reply == payload
