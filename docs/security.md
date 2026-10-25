@@ -143,8 +143,23 @@ Live writable and attach-only changes enforce the same catalog ACL and local
 reader and writer admission as initial claims. Attach-only callers own quiescence,
 unmount, and filesystem consistency. Guest mountinfo checks do not prove the
 absence of raw block users, partition users, or users in other mount namespaces.
-A mounted writable dirty marker is cleared only with observed normal unmount
-and confirmed host detach; missing evidence leaves it in place.
+A mounted writable dirty marker is cleared only when the same removal observes
+the expected device at the managed root mount, writable mount and superblock
+options, successful normal unmount, no residual device mounts, and confirmed
+host detach. Marker cleanup precedes release of the old hold. Missing evidence
+leaves the marker in place.
+
+sandboxd writes and clears no daemon-managed marker for attach-only `rw`, even
+when the guest crashes while writing. Local reader and writer exclusion does not prove
+the image is consistent after detach or release. A later `ro` claim can be
+admitted without a marker. The controller must recover and verify the image
+before read-only publication.
+
+An external controller owns stop-write and unmount before detach, its own
+reservation across sleep, and access gating until wake, attach, and mount
+complete. Wake establishes silkd readiness, and business traffic may trigger
+it. The controller must gate those entry points too. The API does not implement
+or verify that composed lifecycle. See the [API contract](sandboxd-api.md#delete-v1volumesname).
 
 ## Known limitations
 

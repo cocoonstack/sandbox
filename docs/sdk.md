@@ -210,14 +210,15 @@ defer sb.Close()
 |---|---|---|---|
 | `WithNetwork(n)` | `NetNone`, `NetEgress` | `NetNone` | Cloud Hypervisor network shape: `NetNone` disables the NIC and uses vsock-only I/O; `NetEgress` attaches a bridge/CNI NIC |
 | `WithSize(s)` | `Small`, `Medium`, `Large`, `XLarge`, `XXLarge` | `Small` | resource tier: 1cpu/512M, 2cpu/1G, 4cpu/4G, 4cpu/8G, 8cpu/16G |
-| `WithVolumes(volumes...)` | `Volume{Name, Mount?, Mode?}` entries | none | attach and mount up to eight unique catalog dataset disks; `Mount` defaults to `/volumes/<name>`; `Mode` is `"ro"` (default) or `"rw"` — `"rw"` requires the catalog entry's `writable: true`; supported by `Client.New` and `Template.New` |
+| `WithVolumes(volumes...)` | keyed `Volume` entries with `Name`, optional `Mount`, `Mode`, and `AttachOnly` | none | attach up to eight unique catalog dataset disks; mounted entries default to `/volumes/<name>`; `Mode` is `"ro"` (default) or `"rw"`, which requires the catalog entry's `writable: true`; `Client.New` and `Template.New` accept all-mounted or all-attach-only lists |
 | `WithVolumesAttachOnly()` | — | mount | attach the requested volumes without mounting them; the workload finds each device and owns the mount. Rejects a `Volume.Mount` locally |
 | `WithTimeout(d)` | duration | server default 5m | sandbox TTL, rounded up to seconds, server-capped at 24h. The node reaps the sandbox after the TTL even if the client vanishes |
 
 `New` returns when the sandbox's silkd answers: a warm hit is milliseconds,
 a cold key can take the full boot. A volume claim may consume an ordinary warm
-VM and returns only after every requested disk is mounted; the finalized
-name, effective mount, and (for `rw` entries) mode are available in
+VM and returns after each mounted entry is ready. Attach-only entries skip
+mounting and may still be awaiting guest device enumeration. The finalized
+name, effective mount, mode, and attachment choice are available in
 `Sandbox.Volumes`. Custom mounts must be absolute and clean, stay outside the
 guest OS tree, and cannot duplicate or nest.
 `Sandbox.ID`, `Sandbox.Deadline`, and
@@ -227,15 +228,16 @@ promoted template; it is empty for other sources. `Owner()` names the owning
 node, and `Token()` returns the per-sandbox bearer to persist with `ID` for a
 later `Lookup`; `Close()` releases the sandbox (releasing one already gone is
 not an error, and `Close` is bounded internally so it stays defer-friendly).
-Volume sandboxes cannot hibernate, fork, checkpoint, or promote. Passing
+A sandbox cannot hibernate, fork, checkpoint, or promote while volume holds or
+unacknowledged recovery references remain. Passing
 `WithVolumes` or `WithClaimRef` to `Checkpoint.New` returns a local error:
 checkpoint branches support neither volumes nor a claim reference in this version.
 `WithMetadata`, `WithArchiveOnExpire` and `WithEnv` apply to `New`, `Template.New`, and
 `Checkpoint.New`: the labels follow the [claim bounds](sandboxd-api.md#post-v1claim),
 and a branch never inherits its source's labels or expiry action.
 
-For datasets chosen after the sandbox starts, set the desired read-only mounts
-on the same claim:
+For volumes chosen after the sandbox starts, set the desired set on the same
+claim. Live changes support mounted and attach-only entries in either mode:
 
 ```go
 view, err := sb.SetVolumes(ctx, []sandbox.Volume{
@@ -243,7 +245,7 @@ view, err := sb.SetVolumes(ctx, []sandbox.Volume{
 })
 view, err = sb.GetVolumes(ctx)
 view, err = sb.PatchVolumes(ctx, sandbox.VolumePatch{Remove: []string{"imagenet"}})
-// An explicit empty slice clears mutable mounts. A nil slice is rejected.
+// An explicit empty slice removes all entries. A nil slice is rejected.
 view, err = sb.SetVolumes(ctx, []sandbox.Volume{})
 ```
 
@@ -265,6 +267,12 @@ can include an `error`. Methods use the client API token on the owning node
 and update both public sets from each complete response, including a partial failure. Serialize changes to one handle as with
 `Renew`. Returned views do not share the handle's slices or dictionaries.
 
+HTTP responses keep the legacy `{name, mount?, mode?}` shape and omit
+`attach_only`. The current SDK sets `Volume.AttachOnly` when decoding a
+mountless response. An omitted mount in a new request still selects the
+default mount. A mountless entry echoed to the same sandbox retains its
+existing attach-only meaning, including when `AttachOnly` is false.
+
 Go returns `*sandbox.VolumeError` with a `Response` alongside the returned view.
 It wraps `*sandbox.APIError`, so `errors.As` can inspect the status. Python raises
 `VolumeError`, a subclass of `APIError`, with `.response`. A response is absent
@@ -274,29 +282,42 @@ the handle retains its last known sets. Retry an interrupted operation with the
 same full PUT target, or set a new target to recover. `Client.Sandboxes` exposes
 `VolumesWant` and `Volumes` for inspection with an API token.
 
-A PUT must retain existing writable and attach-only entries unchanged. PATCH
-cannot remove or change them. Paused sandboxes are not woken, and images must
+A PUT replaces all entries, including writable and attach-only entries. PATCH
+retains names it does not mention and can add or remove any of the four modes.
+Changing a held name's mount, mode, or mounted shape requires a successful
+remove before adding it again. Paused sandboxes are not woken, and images must
 exist on the owner node. Admission holds cover the union of desired and applied
 sets. A settled retained entry receives no new attach or mount calls. `converging`
 is true only during an active request. Pending or detaching entries with false
 require an explicit retry. Daemon restart replaces unfinished diagnostics with
-an interrupted message. Capture is refused while either set is nonempty.
+an interrupted message. Capture remains refused while either set or
+unacknowledged recovery references hold volumes.
 Release cancels convergence and hands held volumes to teardown. See the
 [API recovery contract](sandboxd-api.md#partial-failure-and-recovery) and
 [same-sandbox replacement tutorial](live-volumes.md). A failed sandbox with
 volume holds is release-only after VMM exit; an empty target cannot recover it.
 
-`WithVolumesAttachOnly()` claims the same volumes without mounting them: the
-entries in `Sandbox.Volumes` carry an empty `Mount`, and the workload finds
-each device by polling `/sys/block/*/serial` for the catalog name — not
-guaranteed present when the claim returns, typically within ~100ms — then
-confirms the `/dev/<blk>` node itself exists before mounting. Everything
-above describes the default and is unchanged by this option. What changes is
-that the mount and its consistency are entirely yours: sandboxd writes and
-clears no dirty marker for an attach-only `rw` claim, because it cannot verify
-your unmount, so releasing without unmounting cleanly leaves the image as a
-crash would — see
-[sandboxd-api](sandboxd-api.md#attach-only-volumes) for the full contract.
+`WithVolumesAttachOnly()` claims the same volumes without mounting them.
+Setting `AttachOnly: true` on every entry has the same effect. Both forms use
+the legacy claim-wide flag on the wire and omit per-entry flags. Mixed
+mounted and attach-only initial claims are rejected locally before any HTTP
+request. Claim without volumes, then call `SetVolumes` or `PatchVolumes` with
+the mixed list. This prevents older claim decoders from silently mounting an
+entry whose new flag they ignore. See [version compatibility](sandboxd-api.md#volume-version-compatibility)
+before sending a mixed initial claim directly over HTTP.
+
+Attach-only entries in `Sandbox.Volumes` have `AttachOnly: true` and an empty
+`Mount`. Poll `/sys/block/*/serial` for the catalog name, then confirm that the
+`/dev/<blk>` node exists before mounting. The claim may return before either
+appears. sandboxd writes and clears no dirty marker for attach-only `rw`, even
+if the guest crashes while writing. The caller owns filesystem consistency,
+recovery, and safe read-only publication. See the [attach-only contract](sandboxd-api.md#attach-only-volumes).
+
+The added `AttachOnly` field breaks unkeyed Go struct literals. Replace
+`sandbox.Volume{"data", "/data", "rw"}` with
+`sandbox.Volume{Name: "data", Mount: "/data", Mode: "rw"}`. These per-entry
+features describe the current unreleased source, not a new published SDK
+version.
 
 The caller-visible constraints are deliberate: volume claims may consume a
 warm VM, remain non-capturable, mount read-only by default, and require Cloud

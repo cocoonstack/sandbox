@@ -104,17 +104,32 @@ restores the original processes.
 
 ## Writable and attach-only entries
 
-Use `mode: "rw"` for a catalog entry that permits writing. Set per-entry `attach_only: true` when the caller mounts the device itself. Both choices can be
-mixed with mounted read-only entries in PUT, PATCH, or a new claim:
+Use `mode: "rw"` for a catalog entry that permits writing. Set per-entry
+`attach_only: true` when the caller manages the device. PUT and PATCH accept
+all four modes in a mixed list:
 
 ```json
 {"volumes":[{"name":"dataset"},{"name":"scratch","mode":"rw"},{"name":"raw-data","attach_only":true},{"name":"raw-work","mode":"rw","attach_only":true}]}
 ```
 
 Omitting a mount still selects `/volumes/<name>` for a new mounted entry. An
-attach-only entry cannot supply a nonempty mount. Responses preserve the flag
-through GET, PUT retries, and both SDKs. The existing Go claim option
-`WithVolumesAttachOnly()` and Python `mount=False` remain claim-wide aliases.
+attach-only entry cannot supply a nonempty mount. HTTP responses keep the
+legacy `{name, mount?, mode?}` fields and omit `attach_only`. The current SDKs
+infer the flag from a mountless response. Echoing that response to the same
+sandbox retains the held device-only entry. An omitted or false flag does not
+change that held shape. A mount or mode change requires a successful removal
+before adding the name again.
+
+The existing Go claim option `WithVolumesAttachOnly()` and Python `mount=False`
+remain claim-wide aliases. The current source SDKs also encode an all-attach-only
+initial list with the legacy global flag. They reject mixed mounted and
+attach-only initial claims before network I/O. Claim without volumes, as in the
+example above, then use the live API for a mixed list. Direct HTTP mixed initial
+claims require matching daemons across the serving fleet and redirect targets.
+Older claim decoders can silently ignore per-entry flags. See
+[version compatibility](sandboxd-api.md#volume-version-compatibility). These
+per-entry SDK features are unreleased. Published Python 0.1.19 can still echo a
+same-sandbox GET response but cannot construct the new mixed request mappings.
 
 Before removal, stop application access and close references. For attach-only
 devices, unmount the caller-managed filesystem first. sandboxd checks its guest
@@ -123,10 +138,14 @@ mount namespaces are idle. Keep the control-plane reservation across any sleep
 and gate access until wake, attach, and mount complete.
 
 For mounted writable entries, sandboxd clears its dirty marker only after
-observing a normal unmount of the expected writable root mount and confirming
-host detach. External pre-unmount, an absent device, or a lost result leaves the
+identifying the expected device at the managed root mount with writable mount
+and superblock options, completing a normal unmount, confirming no residual
+device mounts, and confirming host detach. The same removal must supply all
+that evidence before the old hold is released.
+External pre-unmount, an absent device, or a lost result leaves the
 marker conservatively in place. Detach can succeed while a subsequent read-only
 attach still requires recovery. Attach-only writers have no daemon-managed
-marker and remain the caller's filesystem responsibility. See the [API
+marker, including after a guest crash during writes. The caller owns recovery
+and must establish consistency before read-only publication. See the [API
 contract](sandboxd-api.md#patch-v1sandboxesidvolumes) for failure and retry
 semantics.

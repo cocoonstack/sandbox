@@ -106,16 +106,17 @@ sb = client.new("ghcr.io/cocoonstack/sandbox/rt:24.04",
 |---|---|---|---|
 | `net` | `"none"`, `"egress"` | `"none"` | Cloud Hypervisor network shape: `none` disables the NIC and uses vsock-only I/O; `egress` attaches a bridge/CNI NIC |
 | `size` | `"small"`, `"medium"`, `"large"`, `"xlarge"`, `"2xlarge"` | `"small"` | resource tier: 1cpu/512M, 2cpu/1G, 4cpu/4G, 4cpu/8G, 8cpu/16G |
-| `volumes` | bare names or `{name, mount?, mode?}` mappings | `None` | attach and mount up to eight unique catalog dataset disks; an omitted mount defaults to `/volumes/<name>`; `mode` is `"ro"` (default) or `"rw"` — `"rw"` requires the catalog entry's `writable: true`; accepted by `Client.new` and `Template.new` |
+| `volumes` | iterable of bare names or `{name, mount?, mode?, attach_only?}` mappings | `None` | attach up to eight unique catalog dataset disks; mounted entries default to `/volumes/<name>`; `mode` is `"ro"` (default) or `"rw"`, which requires the catalog entry's `writable: true`; `Client.new` and `Template.new` accept all-mounted or all-attach-only lists |
 | `mount` | bool | `True` | mount every requested volume. `False` attaches the devices and leaves the mounting to the workload; a mapping carrying `mount` is then a `TypeError` |
 | `ttl_seconds` | int | server default 5m | sandbox TTL, server-capped at 24h. The node reaps the sandbox after the TTL even if the client vanishes |
 | `deadline` | `time.monotonic()` value | `None` | keyword-only wall clock over the whole claim, redirect targets included: every request is bounded by whatever is left and a spent deadline raises `TimeoutError`. Without it each redirect candidate gets a fresh `timeout`, so a cluster with unreachable peers can cost a multiple of it. Also on `Template.new` and `Checkpoint.new` |
 
 `new` returns when the sandbox's silkd answers: a warm hit is milliseconds,
 a cold key can take the full boot. A volume claim may consume an ordinary warm
-VM and returns only after every requested disk is mounted; `sb.volumes` contains
-dictionaries with the finalized name, effective mount, and (for `rw` entries)
-mode. Custom mounts must be absolute and clean, stay outside the guest OS
+VM and returns after each mounted entry is ready. Attach-only entries skip
+mounting and may still be awaiting guest device enumeration. `sb.volumes`
+contains the finalized name, effective mount, mode, and attachment choice.
+Custom mounts must be absolute and clean, stay outside the guest OS
 tree, and cannot duplicate or nest. The handle
 exposes `sb.id`, `sb.token`,
 `sb.owner`, `sb.deadline`, and `sb.from_checkpoint` (the lineage edge when
@@ -123,20 +124,43 @@ branched). `sb.template_digest` is the exact content identity when the claim
 cloned a promoted template; it is empty for other sources. `Sandbox` is a
 context manager; `sb.close()` releases it (releasing one already gone is not
 an error — double-release and reap races stay silent).
-Volume sandboxes cannot hibernate, fork, checkpoint, or promote. Checkpoint
+A sandbox cannot hibernate, fork, checkpoint, or promote while volume holds or
+unacknowledged recovery references remain. Checkpoint
 branches do not accept volumes of either mode in this version.
 
-`mount=False` on `client.new` or `template.new` claims the same volumes
-without mounting them: the dictionaries in `sb.volumes` carry no `mount` key,
-and the workload finds each device by polling `/sys/block/*/serial` for the
-catalog name — not guaranteed present when the claim returns, typically
-within ~100ms — then confirms the `/dev/<blk>` node itself exists before
-mounting. Everything above describes the default (`mount=True`) and is
-unchanged by it. What changes is that the mount and its consistency are
-entirely yours: sandboxd writes and clears no dirty marker for an attach-only
-`rw` claim, because it cannot verify your unmount, so releasing without
-unmounting cleanly leaves the image as a crash would — see
-[sandboxd-api](sandboxd-api.md#attach-only-volumes) for the full contract.
+`volumes` accepts lists, tuples, generators, and sets of names. The SDK consumes
+an iterable once. A string, byte string, or single top-level mapping is not a
+volume list.
+
+`mount=False` on `client.new` or `template.new` attaches every volume without
+mounting it. Setting `attach_only: True` on every entry has the same effect.
+Both forms send the legacy claim-wide flag and omit per-entry flags. Mixed
+mounted and attach-only initial claims fail locally before an HTTP request.
+Claim without volumes, then use the live API for a mixed list:
+
+```python
+with client.new("rt:24.04") as sb:
+	view = sb.set_volumes([
+		{"name": "dataset"},
+		{"name": "scratch", "mode": "rw"},
+		{"name": "raw-data", "attach_only": True},
+		{"name": "raw-work", "mode": "rw", "attach_only": True},
+	])
+```
+
+This avoids older claim decoders silently mounting an entry whose new flag
+they ignore. See [version compatibility](sandboxd-api.md#volume-version-compatibility)
+before sending mixed initial claims directly over HTTP. The per-entry SDK
+features describe the current unreleased source. The published Python
+0.1.19 SDK does not accept `attach_only` in request mappings.
+
+The current SDK exposes attach-only response entries with `attach_only: True`
+and no `mount` key. Poll `/sys/block/*/serial` for the catalog name, then
+confirm that the `/dev/<blk>` node exists before mounting. The claim may return
+before either appears. sandboxd writes and clears no dirty marker for
+attach-only `rw`, including a guest crash during writes. The caller owns
+filesystem consistency, recovery, and safe read-only publication. See the
+[attach-only contract](sandboxd-api.md#attach-only-volumes).
 
 The caller-visible constraints are deliberate: volume claims may consume a
 warm VM, remain non-capturable, mount read-only by default, and require Cloud
@@ -161,18 +185,29 @@ peer advertising both the template and every volume; when that intersection is
 empty, one volume holder may self-verify access to a shared template store
 before provisioning.
 
-## Changing read-only datasets
+## Changing volumes
 
 Use `sb.get_volumes()`, `sb.set_volumes([...])`, and
 `sb.patch_volumes(add=[...], remove=[...])` on the same running sandbox. These
 methods use the client's API token on the owning node; a sandbox token cannot
-manage datasets. `set_volumes([])` clears mutable entries; `None` is rejected.
-PUT must retain writable and attach-only entries. PATCH retains omitted names.
+manage volumes. Live changes support mounted and attach-only entries in either
+mode, including mixed lists. `set_volumes([])` removes all entries; `None` is
+rejected. PATCH retains omitted names. To change a held name's mount, mode, or
+mounted shape, remove it successfully before adding it again.
 Each method takes `timeout=` (default: the client timeout, 120 s); a large
 replacement can need longer, and a call that times out cancels the server run,
 so retry the same target.
 
 Responses include `volumes_want`, `volumes`, `states`, and `converging`.
+The HTTP entries keep the legacy `{name, mount?, mode?}` shape and omit
+`attach_only`. The current SDK infers `attach_only: True` from mountless
+response entries, including partial failure views. Published Python 0.1.19
+can still echo a response to the same sandbox with
+`sb.set_volumes(sb.get_volumes()["volumes_want"])`. A new entry without a mount
+uses the default mount. A held mountless entry retains attach-only semantics
+when echoed with an omitted or false flag. Explicit nonempty mount or mode
+changes still require removal first.
+
 `VolumePhase` and `VOLUME_ATTACHED`, `VOLUME_PENDING`, and `VOLUME_DETACHING`
 name the three states. A pending state with `converging=False` needs an explicit
 retry. `VolumeError`, exported from `cocoonsandbox` and `cocoonsandbox.errors`,
