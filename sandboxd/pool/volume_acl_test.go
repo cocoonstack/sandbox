@@ -146,16 +146,16 @@ func TestRuntimeCatalogRecoveryReferenceDoesNotAuthorizeAttach(t *testing.T) {
 			if err != nil || claims[sb.ID] == nil || !slices.Equal(claims[sb.ID].Volumes, want) {
 				t.Fatalf("old durable attachment missing: %+v, %v", claims, err)
 			}
-			if _, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Volumes: want}); !errors.Is(err, ErrVolumeBusy) {
+			if _, err = m.ClaimProvision(t.Context(), testKey, ClaimOptions{Volumes: want}); !errors.Is(err, ErrVolumeBusy) {
 				t.Fatalf("recovery reference lost writer exclusion: %v", err)
 			}
-			if _, err := m.Checkpoint(t.Context(), sb.ID, Cred{Token: sb.Token}, "unretired", ""); !errors.Is(err, ErrVolumeCapture) {
+			if _, err = m.Checkpoint(t.Context(), sb.ID, Cred{Token: sb.Token}, "unretired", ""); !errors.Is(err, ErrVolumeCapture) {
 				t.Fatalf("capture ignored recovery reference: %v", err)
 			}
-			if err := m.UnregisterVolume(t.Context(), "home"); !errors.Is(err, ErrVolumeRegistrationConflict) {
+			if err = m.UnregisterVolume(t.Context(), "home"); !errors.Is(err, ErrVolumeRegistrationConflict) {
 				t.Fatalf("unregister ignored recovery reference: %v", err)
 			}
-			if err := os.Remove(tmp); err != nil {
+			if err = os.Remove(tmp); err != nil {
 				t.Fatal(err)
 			}
 			before := len(eng.volumeSpecs)
@@ -184,10 +184,10 @@ func TestRuntimeCatalogRecoveryReferenceDoesNotAuthorizeAttach(t *testing.T) {
 			if len(eng.volumeSpecs) != before {
 				t.Fatal("rejected tenant reached device attachment")
 			}
-			if _, err := m.SetVolumes(t.Context(), sb.ID, "", want); err != nil {
+			if _, err = m.SetVolumes(t.Context(), sb.ID, "", want); err != nil {
 				t.Fatalf("operator reattach: %v", err)
 			}
-			if _, err := m.SetVolumes(t.Context(), sb.ID, "acme", nil); err != nil {
+			if _, err = m.SetVolumes(t.Context(), sb.ID, "acme", nil); err != nil {
 				t.Fatalf("tenant cleanup after operator reattach: %v", err)
 			}
 		})

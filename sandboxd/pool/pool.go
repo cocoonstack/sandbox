@@ -486,7 +486,7 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 		m.catalog.entries[volume.Name] = &catalogVolume{
 			generation: m.catalog.generation,
 			disk:       engine.VolumeSpec{Name: volume.Name, Path: volume.Path, DirectIO: cmp.Or(volume.DirectIO, types.DirectIOOff)},
-			tenants:    slices.Clone(volume.Tenants),
+			acl:        newVolumeACL(volume.Tenants, volumePublic),
 			writable:   volume.Writable,
 		}
 	}

@@ -194,7 +194,7 @@ func (m *Manager) beginVolumeRun(ctx context.Context, sb *types.Sandbox, caller 
 		runCtx, cancel := context.WithCancel(ctx)
 		run := &volumeRun{
 			cancel: cancel, done: make(chan struct{}), holds: heldVolumes(sb),
-			access: volumeAccess{tenant: sb.Tenant, operator: caller == ""},
+			access: volumeAccessFor(caller, sb.Tenant),
 		}
 		m.volumeRuns[sb] = run
 		m.mu.Unlock()

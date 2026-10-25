@@ -58,7 +58,7 @@ func TestRemovedTenantRetainsAndRepairsHeldVolumes(t *testing.T) {
 	}
 	eng.detachVolumeErr = nil
 	entry := m.catalog.entries["data"]
-	entry.tenants = []string{"other-tenant"}
+	entry.acl = newVolumeACL([]string{"other-tenant"}, volumePublic)
 	m.catalog.entries["data"] = entry
 	if _, err := m.SetVolumes(t.Context(), sb.ID, "", []types.Volume{{Name: "data"}}); err != nil {
 		t.Fatalf("held repair checked new authorization: %v", err)

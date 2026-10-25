@@ -259,7 +259,7 @@ func TestRecoveryOnlyRetryRequiresNewAuthorization(t *testing.T) {
 	}
 	m.mu.Lock()
 	entry := *m.catalog.entries["data"]
-	entry.tenants = []string{"different-tenant"}
+	entry.acl = newVolumeACL([]string{"different-tenant"}, volumePublic)
 	m.catalog.entries["data"] = &entry
 	m.mu.Unlock()
 	if err := os.Remove(tmp); err != nil {

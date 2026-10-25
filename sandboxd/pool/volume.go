@@ -49,24 +49,54 @@ type catalogVolume struct {
 	generation uint64
 	runtime    bool
 	disk       engine.VolumeSpec
-	tenants    []string
+	acl        volumeACL
 	writable   bool
 }
 
+type volumeACLMode uint8
+
+const (
+	volumeOperatorOnly volumeACLMode = iota
+	volumePublic
+	volumeTenantList
+)
+
+type volumeACL struct {
+	mode    volumeACLMode
+	tenants []string
+}
+
 type volumeAccess struct {
-	tenant   string
+	owner    string
 	operator bool
 }
 
-func (v catalogVolume) allowed(tenant string) bool {
-	return v.allowedFor(volumeAccess{tenant: tenant, operator: tenant == ""})
+func newVolumeACL(tenants []string, fallback volumeACLMode) volumeACL {
+	if len(tenants) > 0 {
+		return volumeACL{mode: volumeTenantList, tenants: slices.Clone(tenants)}
+	}
+	return volumeACL{mode: fallback}
 }
 
-func (v catalogVolume) allowedFor(access volumeAccess) bool {
-	if v.runtime && len(v.tenants) == 0 {
+func volumeAccessFor(caller, owner string) volumeAccess {
+	return volumeAccess{owner: owner, operator: caller == ""}
+}
+
+func (v catalogVolume) allowed(tenant string) bool {
+	return v.acl.allowedFor(volumeAccessFor(tenant, tenant))
+}
+
+func (acl volumeACL) allowedFor(access volumeAccess) bool {
+	switch acl.mode {
+	case volumePublic:
+		return true
+	case volumeTenantList:
+		return access.owner == "" || slices.Contains(acl.tenants, access.owner)
+	case volumeOperatorOnly:
 		return access.operator
+	default:
+		return false
 	}
-	return access.tenant == "" || len(v.tenants) == 0 || slices.Contains(v.tenants, access.tenant)
 }
 
 // Volumes reports the caller-visible fleet catalog; an empty tenant means root.
@@ -149,7 +179,7 @@ func (m *Manager) VolumePlacement(key types.PoolKey, tenant string, names []stri
 }
 
 func (m *Manager) resolveVolumes(ctx context.Context, tenant string, requested []types.Volume) ([]resolvedVolume, error) {
-	return m.resolveVolumesFor(ctx, volumeAccess{tenant: tenant, operator: tenant == ""}, requested)
+	return m.resolveVolumesFor(ctx, volumeAccessFor(tenant, tenant), requested)
 }
 
 func (m *Manager) resolveVolumesFor(ctx context.Context, access volumeAccess, requested []types.Volume) ([]resolvedVolume, error) {
@@ -170,7 +200,7 @@ func (m *Manager) resolveVolumesFor(ctx context.Context, access volumeAccess, re
 	resolved := make([]resolvedVolume, 0, len(applied))
 	for _, volume := range applied {
 		entry, ok := catalog[volume.Name]
-		if !ok || !entry.allowedFor(access) {
+		if !ok || !entry.acl.allowedFor(access) {
 			return nil, ErrVolumeUnavailable
 		}
 		resolvedEntry, resolveErr := m.resolveCatalogEntry(ctx, volume, entry)
@@ -480,7 +510,7 @@ func (m *Manager) reserveResolved(access volumeAccess, volumes []resolvedVolume,
 		if entry == nil || entry.generation != v.generation {
 			return ErrVolumeUnavailable
 		}
-		if !slices.Contains(held, v.applied) && !entry.allowedFor(access) {
+		if !slices.Contains(held, v.applied) && !entry.acl.allowedFor(access) {
 			return ErrVolumeUnavailable
 		}
 		if v.applied.RW() && !entry.writable {

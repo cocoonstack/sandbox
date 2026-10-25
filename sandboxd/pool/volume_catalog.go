@@ -55,7 +55,7 @@ func (c *volumeCatalog) admissionError() error {
 }
 
 func (v catalogVolume) registration() types.VolumeRegistration {
-	return types.VolumeRegistration{Path: v.disk.Path, DirectIO: v.disk.DirectIO, Writable: v.writable, Tenants: v.tenants}
+	return types.VolumeRegistration{Path: v.disk.Path, DirectIO: v.disk.DirectIO, Writable: v.writable, Tenants: v.acl.tenants}
 }
 
 func catalogDefinitions(entries map[string]*catalogVolume) []config.VolumeSpec {
@@ -63,7 +63,7 @@ func catalogDefinitions(entries map[string]*catalogVolume) []config.VolumeSpec {
 	for name, entry := range entries {
 		volumes = append(volumes, config.VolumeSpec{
 			Name: name, Path: entry.disk.Path, DirectIO: entry.disk.DirectIO,
-			Writable: entry.writable, Tenants: entry.tenants,
+			Writable: entry.writable, Tenants: entry.acl.tenants,
 		})
 	}
 	return volumes
@@ -75,8 +75,11 @@ func (c *volumeCatalog) adding(name string, spec types.VolumeRegistration) (*cat
 	}
 	entries := maps.Clone(c.entries)
 	entries[name] = &catalogVolume{
-		disk:    engine.VolumeSpec{Name: name, Path: spec.Path, DirectIO: spec.DirectIO},
-		tenants: spec.Tenants, writable: spec.Writable, runtime: true, generation: c.generation + 1,
+		generation: c.generation + 1,
+		runtime:    true,
+		disk:       engine.VolumeSpec{Name: name, Path: spec.Path, DirectIO: spec.DirectIO},
+		acl:        newVolumeACL(spec.Tenants, volumeOperatorOnly),
+		writable:   spec.Writable,
 	}
 	if err := config.ValidateVolumeCatalog(catalogDefinitions(entries)); err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrVolumeRegistrationConflict, err)
@@ -143,8 +146,11 @@ func (m *Manager) loadRuntimeVolumes() error {
 		}
 		generation++
 		entries[name] = &catalogVolume{
-			disk:    engine.VolumeSpec{Name: name, Path: normalized.Path, DirectIO: normalized.DirectIO},
-			tenants: normalized.Tenants, writable: normalized.Writable, runtime: true, generation: generation,
+			generation: generation,
+			runtime:    true,
+			disk:       engine.VolumeSpec{Name: name, Path: normalized.Path, DirectIO: normalized.DirectIO},
+			acl:        newVolumeACL(normalized.Tenants, volumeOperatorOnly),
+			writable:   normalized.Writable,
 		}
 	}
 	if err := config.ValidateVolumeCatalog(catalogDefinitions(entries)); err != nil {
