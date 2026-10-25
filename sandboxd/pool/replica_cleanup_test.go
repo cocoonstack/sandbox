@@ -3,42 +3,99 @@ package pool
 import (
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/cocoonstack/sandbox/sandboxd/config"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
-func TestFailoverDisabledKeepsReplicaAndRefusesLiveWriter(t *testing.T) {
-	for _, pending := range []string{"published", "pending"} {
-		t.Run(pending, func(t *testing.T) {
-			m, c := newReplicaVolumeManager(t)
-			sb := mustClaim(t, m, testKey)
-			if pending == "pending" {
-				m.archives = &hookRegistry{Registry: c.reg, failPut: true}
-				if err := m.replicate(t.Context(), sb); !errors.Is(err, ErrArchiveStoreDown) {
-					t.Fatal(err)
-				}
-			} else {
-				replicateNow(t, m, sb)
-			}
-			replica, intent := sb.ReplicaCk, sb.ReplicaPending
-			restarted := newManagerWithoutRegistry(t, m, c)
-			if err := restarted.Reconcile(t.Context()); err != nil {
-				t.Fatal(err)
-			}
-			restored, ok := restarted.byID(sb.ID)
-			if !ok || restored.ReplicaCk != replica || restored.ReplicaPending != intent {
-				t.Fatalf("startup without a registry changed replica fields: ok=%t replica=%q pending=%q", ok, restored.ReplicaCk, restored.ReplicaPending)
-			}
-			for _, ck := range []string{replica, intent} {
-				if ck != "" && (!ckExists(t, restarted, ck) || restarted.deleteMarked(ck)) {
+// failoverState leaves sb with replica or archive state from a failover node and returns its checkpoints.
+type failoverState func(t *testing.T, m *Manager, c *failoverCluster, sb *types.Sandbox) []string
+
+var strandedStates = map[string]failoverState{
+	"published replica": func(t *testing.T, m *Manager, _ *failoverCluster, sb *types.Sandbox) []string {
+		replicateNow(t, m, sb)
+		return []string{sb.ReplicaCk}
+	},
+	"pending replica": func(t *testing.T, m *Manager, c *failoverCluster, sb *types.Sandbox) []string {
+		m.archives = &hookRegistry{Registry: c.reg, failPut: true}
+		if err := m.replicate(t.Context(), sb); !errors.Is(err, ErrArchiveStoreDown) {
+			t.Fatal(err)
+		}
+		return []string{sb.ReplicaPending}
+	},
+	"archive intent": func(t *testing.T, m *Manager, c *failoverCluster, sb *types.Sandbox) []string {
+		if err := m.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
+			t.Fatal(err)
+		}
+		m.archives = &hookRegistry{Registry: c.reg, failPut: true}
+		if err := m.archive(t.Context(), sb); !errors.Is(err, ErrArchiveStoreDown) {
+			t.Fatal(err)
+		}
+		return []string{sb.ArchivePending}
+	},
+}
+
+func restartStranded(t *testing.T, setup failoverState) (*Manager, *types.Sandbox, []string) {
+	t.Helper()
+	m, c := newReplicaVolumeManager(t)
+	sb := mustClaim(t, m, testKey)
+	checkpoints := setup(t, m, c, sb)
+	if checkpoints[0] == "" {
+		t.Fatal("fixture left no failover checkpoint")
+	}
+	restarted := newManagerWithoutRegistry(t, m, c)
+	if err := restarted.Reconcile(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	restored, ok := restarted.byID(sb.ID)
+	if !ok {
+		t.Fatal("startup without a registry lost the claim")
+	}
+	if restored.ReplicaCk != sb.ReplicaCk || restored.ReplicaPending != sb.ReplicaPending || restored.ArchivePending != sb.ArchivePending {
+		t.Fatalf("startup without a registry changed failover fields: replica=%q pending=%q archive=%q", restored.ReplicaCk, restored.ReplicaPending, restored.ArchivePending)
+	}
+	return restarted, restored, checkpoints
+}
+
+func TestFailoverDisabledKeepsStateAndRefusesLiveWriter(t *testing.T) {
+	for name, setup := range strandedStates {
+		t.Run(name, func(t *testing.T) {
+			m, sb, checkpoints := restartStranded(t, setup)
+			for _, ck := range checkpoints {
+				if !ckExists(t, m, ck) || m.deleteMarked(ck) {
 					t.Fatalf("startup without a registry queued or deleted checkpoint %s", ck)
 				}
 			}
+			if sb.HibernateSnap != "" {
+				if err := m.Wake(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
+					t.Fatal(err)
+				}
+			}
 			want := []types.Volume{{Name: "data", Mode: types.VolumeModeRW, AttachOnly: true}}
-			view, err := restarted.SetVolumes(t.Context(), sb.ID, "", want)
+			view, err := m.SetVolumes(t.Context(), sb.ID, "", want)
 			if !errors.Is(err, ErrReplicaStranded) || len(view.Volumes) != 0 || len(view.VolumesWant) != 0 {
-				t.Fatalf("live writer on a stranded replica: err=%v volumes=%v want=%v", err, view.Volumes, view.VolumesWant)
+				t.Fatalf("live writer on stranded failover state: err=%v volumes=%v want=%v", err, view.Volumes, view.VolumesWant)
+			}
+		})
+	}
+}
+
+func TestFailoverDisabledExpiryDestroysClaimAndKeepsCheckpoint(t *testing.T) {
+	for _, name := range []string{"published replica", "pending replica"} {
+		t.Run(name, func(t *testing.T) {
+			m, sb, checkpoints := restartStranded(t, strandedStates[name])
+			m.mu.Lock()
+			sb.Deadline = time.Now().Add(-time.Minute)
+			m.mu.Unlock()
+			for range 2 {
+				m.reapOnce(t.Context())
+			}
+			if _, ok := m.byID(sb.ID); ok {
+				t.Fatal("expired claim with failover state outlived the reaper")
+			}
+			if !ckExists(t, m, checkpoints[0]) {
+				t.Fatal("expiry without a registry deleted a checkpoint another node may own")
 			}
 		})
 	}
