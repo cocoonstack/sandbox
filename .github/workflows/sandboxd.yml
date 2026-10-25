@@ -67,14 +67,16 @@ jobs:
       - name: Test
         run: make go-test
 
-      - name: Test runtime catalog as root
+      - name: Test pool as root
         working-directory: sandboxd
         shell: bash
         run: |
           GOWORK=off go test -race -c -o "$RUNNER_TEMP/catalog.test" ./pool
-          sudo "$RUNNER_TEMP/catalog.test" -test.count=1 -test.v -test.run 'Test(RuntimeCatalog|RuntimeRegistration|ResolvedCatalog|IncompleteStaleInventory|RemovedVMKeepsVolume|DispatchedCleanup|UnknownStaleVolumes)' | tee "$RUNNER_TEMP/catalog-test.log"
+          sudo setpriv --bounding-set=-dac_override,-dac_read_search "$RUNNER_TEMP/catalog.test" -test.count=1 -test.v -test.skip '^Test(PromoteFailsClosedOnMetaError|NodesOfACellShareThePoolSet|AMetaStoreNodeWithoutACellKeepsItsOwnPools|TwoNodesOnOneMetaStoreShareTheTenantSet)$' | tee "$RUNNER_TEMP/catalog-test.log"
           grep -q '^--- PASS: TestRuntimeCatalogPersistsNormalizedSemantics ' "$RUNNER_TEMP/catalog-test.log"
-          ! grep -- '--- SKIP' "$RUNNER_TEMP/catalog-test.log"
+          if grep -- '--- SKIP:' "$RUNNER_TEMP/catalog-test.log"; then
+            exit 1
+          fi
 
       - name: Test the PostgreSQL meta store
         working-directory: sandboxd
@@ -84,7 +86,9 @@ jobs:
         run: |
           GOWORK=off go test -race -count=1 -v ./tenants/... ./poolset/... | tee "$RUNNER_TEMP/pg-test.log"
           GOWORK=off go test -race -count=1 -v -run 'TestTwoNodesOnOneMetaStore|TestNodesOfACell|TestAMetaStoreNodeWithoutACell' ./pool/ | tee -a "$RUNNER_TEMP/pg-test.log"
-          ! grep -- '--- SKIP' "$RUNNER_TEMP/pg-test.log"
+          if grep -- '--- SKIP:' "$RUNNER_TEMP/pg-test.log"; then
+            exit 1
+          fi
 
       - name: Set up Python
         uses: actions/setup-python@v7.0.0

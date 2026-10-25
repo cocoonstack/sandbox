@@ -247,6 +247,12 @@ the pool had `reader`, and its reads wake the claim as without the feature.
 
 ### Dataset volumes
 
+Volume `tenants` entries in static configuration must match the tenant name
+syntax used by the tenant API. Configurations containing invalid names that
+previously only produced warnings now fail validation at startup. Remove or
+correct those entries before upgrading. Valid names for tenants that have not
+yet been created remain accepted.
+
 Running claims can change mounted read-only catalog entries through the
 [GET, PUT, and PATCH volume API](sandboxd-api.md#get-v1sandboxesidvolumes)
 and both SDKs. The image must already exist on the owner node. Live changes

@@ -272,8 +272,10 @@ JSON return 400.
 
 - `name` matches `[a-z][a-z0-9_-]{0,19}` and cannot start with `cocoon-`.
 - `path` uses the same absolute-path validation as static volume config.
-  Registration also requires an existing regular file. A symlink to a regular
-  file is allowed; directories and device files return 400.
+  Creating a registration requires an existing regular file. A symlink to a
+  regular file is allowed; directories and device files return 400. This check
+  runs only when creating the registration, not on idempotent retries or
+  attachment. Operators must keep the registered path and target stable.
 - `directio` is `on`, `off`, or `auto`, and defaults to `off`.
 - `writable` defaults to `false` and controls writable claim admission.
 - `tenants` limits use to the named tenants. Omitted or empty permits all tenants.
@@ -284,10 +286,13 @@ Success is 204 with an empty body. Repeating the same name, cleaned path, and
 normalized registration fields succeeds. A different binding or different
 registration fields return 409. Static and runtime registrations cannot share
 a name or a cleaned backing path. Invalid registration fields return 400.
-Invalid catalog directory or file ownership, permissions, or type returns 409
+Violations of the catalog ownership, mode, directory, or file-type policy return 409
 without `Retry-After`, before accepting a new write. This refusal does not block
 claims using the existing catalog. The storage configuration must be repaired
-before that mutation can succeed.
+before that mutation can succeed. These checks cover metadata ownership,
+permissions, and path types, not every storage failure. Read-only filesystems,
+ENOSPC, immutable attributes, or access errors during the actual write still
+enter persistence recovery and can block volume admission until storage is repaired.
 
 An uncertain write returns 503 with `Retry-After`. The requested registration
 may still take effect through background retry or a later PUT or DELETE,

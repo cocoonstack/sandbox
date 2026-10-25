@@ -106,8 +106,11 @@ exposes host image paths or access lists.
 Runtime registration and unregistration require a configured root `api_token`;
 these endpoints return 403 when the token is unset. The daemon must also run
 as OS root to change the root-owned registration file. Runtime registration
-accepts existing regular files, including symlinks to regular files. Operators
-remain responsible for selecting backing paths and coordinating aliases.
+checks that the backing resolves to a regular file when creating a registration.
+Symlinks to regular files are allowed. An idempotent registration retry does not
+repeat this check, and attachment does not recheck the file type or pin the
+backing identity. Operators must prevent backing paths or symlink targets from
+being replaced while registered and coordinate aliases.
 
 Read-only is integrity protection for the shared image, not confidentiality.
 Mounting a dataset into an egress-lane sandbox gives that sandbox an export path
