@@ -124,6 +124,76 @@ func TestReplicaUnpublishedIntentSurvivesFailedClearAndRestart(t *testing.T) {
 	}
 }
 
+func TestReplicaPendingCheckpointCleanupWaitsForAcknowledgment(t *testing.T) {
+	m, c := newReplicaVolumeManager(t)
+	sb := mustClaim(t, m, testKey)
+	m.archives = &hookRegistry{Registry: c.reg, failPut: true}
+	if err := m.replicate(t.Context(), sb); !errors.Is(err, ErrArchiveStoreDown) {
+		t.Fatal(err)
+	}
+	pending := sb.ReplicaPending
+	m.archives = c.reg
+	m.store.recommitting.Store(true)
+	m.store.replaceFile = func([]byte) error { return errors.New("injected pending clear failure") }
+	m.retireReplica(t.Context(), sb)
+	if sb.ReplicaPending != "" || m.store.synced() {
+		t.Fatal("expected memory clear before snapshot acknowledgment")
+	}
+	if err := m.deleteArchiveCk(t.Context(), pending); err == nil {
+		t.Fatal("orphan delete ignored unacknowledged claim")
+	}
+	m.retryArchiveDeletes(t.Context())
+	if !ckExists(t, m, pending) || !m.deleteMarked(pending) {
+		t.Fatal("cleanup discarded pending checkpoint or retry marker")
+	}
+	t.Logf("cleanup deferred: checkpoint=%s exists=%t marker=%t synced=%t", pending, ckExists(t, m, pending), m.deleteMarked(pending), m.store.synced())
+	m.store.replaceFile = nil
+	if err := m.store.commit(m.store.mark()); err != nil {
+		t.Fatal(err)
+	}
+	m.retryArchiveDeletes(t.Context())
+	if ckExists(t, m, pending) || m.deleteMarked(pending) {
+		t.Fatal("acknowledged cleanup leaked checkpoint or retry marker")
+	}
+	t.Logf("cleanup acknowledged: exists=%t marker=%t synced=%t", ckExists(t, m, pending), m.deleteMarked(pending), m.store.synced())
+}
+
+func TestReplicaSettledCheckpointCleanupRetriesAfterFailedCommit(t *testing.T) {
+	m, c := newReplicaVolumeManager(t)
+	sb := mustClaim(t, m, testKey)
+	replicateNow(t, m, sb)
+	previous := sb.ReplicaCk
+	m.archives = &hookRegistry{Registry: c.reg, losePutReply: true}
+	if err := m.replicate(t.Context(), sb); !errors.Is(err, ErrArchiveStoreDown) {
+		t.Fatal(err)
+	}
+	pending := sb.ReplicaPending
+	m.archives = c.reg
+	m.store.recommitting.Store(true)
+	m.store.replaceFile = func([]byte) error { return errors.New("injected settled intent failure") }
+	sb.Transition.Lock()
+	err := m.settleReplicaIntent(t.Context(), sb)
+	sb.Transition.Unlock()
+	if err == nil || sb.ReplicaPending != "" || sb.ReplicaCk != pending || m.store.synced() {
+		t.Fatalf("settle state: %+v, %v", sb, err)
+	}
+	if !ckExists(t, m, previous) || !m.deleteMarked(previous) {
+		t.Fatal("failed settle lost old checkpoint or its queued cleanup")
+	}
+	m.retryArchiveDeletes(t.Context())
+	if !ckExists(t, m, previous) {
+		t.Fatal("old checkpoint deleted before clear acknowledgment")
+	}
+	m.store.replaceFile = nil
+	if err = m.store.commit(m.store.mark()); err != nil {
+		t.Fatal(err)
+	}
+	m.retryArchiveDeletes(t.Context())
+	if ckExists(t, m, previous) || m.deleteMarked(previous) || !ckExists(t, m, pending) {
+		t.Fatal("acknowledged settle failed to clean old checkpoint or removed current checkpoint")
+	}
+}
+
 func TestReplicaRecoveryDoesNotRepublishVolumeIntent(t *testing.T) {
 	m, c := newReplicaVolumeManager(t)
 	sb := mustClaim(t, m, testKey)
@@ -286,8 +356,8 @@ func TestLiveWriterWaitsForRetirementCommitAcknowledgment(t *testing.T) {
 		t.Fatalf("retirement tombstone: %+v, %v", rec, err)
 	}
 	m.reconcileOwnRow(t.Context(), rec, time.Now())
-	if _, ok, err := c.reg.Get(t.Context(), sb.ID); err != nil || !ok {
-		t.Fatalf("sweep erased pending retirement: %t, %v", ok, err)
+	if _, ok, getErr := c.reg.Get(t.Context(), sb.ID); getErr != nil || !ok {
+		t.Fatalf("sweep erased pending retirement: %t, %v", ok, getErr)
 	}
 	// Any newer whole-claim snapshot can acknowledge the clear; no special retry ticket is needed.
 	m.store.replaceFile = nil
