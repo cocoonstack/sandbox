@@ -74,6 +74,48 @@ func TestLiveVolumeConvergesMountAndDetach(t *testing.T) {
 	}
 }
 
+func TestLiveVolumeAcceptsEmptyMountSource(t *testing.T) {
+	for _, tt := range []struct {
+		name, mount string
+		rw          bool
+	}{
+		{name: "mounted read-only", mount: "/data"},
+		{name: "mounted writable", mount: "/data", rw: true},
+		{name: "attach-only"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			sock := sockPath(t)
+			fake := serveFakeSilkd(t, sock)
+			configureVolumeDevices(fake)
+			spec := liveDiskCLI(t, "")
+			const unrelated = "501 84 0:62 / /empty-source rw,relatime - tmpfs  rw,size=1024k,inode64\n"
+			fake.mu.Lock()
+			fake.serial["/sys/block/vdc/dev"] = []byte("8:32\n")
+			fake.serial["/proc/self/mountinfo"] = []byte(rootMountInfo + unrelated)
+			fake.execHook = func(argv []string) {
+				switch argv[0] {
+				case "mount":
+					mode := mountMode(tt.rw)
+					fake.serial["/proc/self/mountinfo"] = []byte(rootMountInfo + unrelated + "2 1 8:32 / /data " + mode + " - ext4 /dev/vdc " + mode + "\n")
+				case "umount":
+					fake.serial["/proc/self/mountinfo"] = []byte(rootMountInfo + unrelated)
+				}
+			}
+			fake.mu.Unlock()
+			e := New("cocoon", nil, nil, false, false, "")
+			if tt.mount != "" {
+				if err := e.MountLiveVolume(t.Context(), sock, spec.Name, tt.mount, tt.rw); err != nil {
+					t.Fatalf("mount with unrelated empty source: %v", err)
+				}
+			}
+			result, err := e.DetachVolume(t.Context(), "sbx-1", sock, spec.Name, tt.mount)
+			if err != nil || result.NormalUnmount != tt.rw {
+				t.Fatalf("detach with unrelated empty source: result=%+v err=%v", result, err)
+			}
+		})
+	}
+}
+
 func TestLiveMountRefusesAnOccupiedPathBehindASymlink(t *testing.T) {
 	sock := sockPath(t)
 	fake := serveFakeSilkd(t, sock)
