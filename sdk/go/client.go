@@ -124,6 +124,7 @@ func (r *claimRequest) prepareVolumes() error {
 		}
 	}
 	if !r.VolumesAttachOnly && attachOnly > 0 && attachOnly != len(r.Volumes) {
+		// Remove this guard only when every supported claim and redirect target honors per-entry attach_only.
 		return errors.New("mixed mounted and attach-only initial claims are not safe on older servers: claim without volumes, then use SetVolumes or PatchVolumes")
 	}
 	if attachOnly > 0 {
@@ -266,7 +267,7 @@ func (c *Client) ownerAt(ctx context.Context, addr, id, token string) (string, e
 }
 
 func (c *Client) handleFrom(dialed string, cr claimResponse) *Sandbox {
-	volumes := responseVolumes(cr.Volumes)
+	volumes := slices.Clone(cr.Volumes)
 	return &Sandbox{
 		ID: cr.ID, Deadline: cr.Deadline, Volumes: volumes, VolumesWant: slices.Clone(volumes),
 		FromCheckpoint: cr.FromCheckpoint, TemplateDigest: cr.TemplateDigest, NetRoute: cr.NetRoute,
@@ -329,7 +330,7 @@ func (c *Client) doJSON[T any](ctx context.Context, method, addr, path string, b
 	if resp.StatusCode != http.StatusOK {
 		return out, apiError(verb, resp)
 	}
-	if err := json.UnmarshalRead(resp.Body, &out); err != nil {
+	if err := json.UnmarshalRead(resp.Body, &out, json.WithUnmarshalers(responseUnmarshalers)); err != nil {
 		return out, fmt.Errorf("decode %s response: %w", verb, err)
 	}
 	return out, nil

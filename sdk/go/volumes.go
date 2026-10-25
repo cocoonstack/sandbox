@@ -3,6 +3,7 @@ package sandbox
 import (
 	"bytes"
 	"context"
+	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"errors"
 	"fmt"
@@ -91,14 +92,18 @@ func validateVolume(v Volume) error {
 }
 
 // Historical responses identify attach-only devices by their absent mount.
-// Keep that inference out of request decoding, where an absent mount means the default path.
-func responseVolumes(volumes []Volume) []Volume {
-	volumes = slices.Clone(volumes)
-	for i := range volumes {
-		volumes[i].AttachOnly = volumes[i].Mount == ""
+// Requests use the same public type, so this decoder applies only to network replies.
+type responseVolume Volume
+
+var responseUnmarshalers = json.UnmarshalFromFunc(func(in *jsontext.Decoder, v *Volume) error {
+	var wire responseVolume
+	if err := json.UnmarshalDecode(in, &wire); err != nil {
+		return err
 	}
-	return volumes
-}
+	*v = Volume(wire)
+	v.AttachOnly = v.Mount == ""
+	return nil
+})
 
 func (s *Sandbox) requestVolumes(ctx context.Context, method string, request any, verb string) (SandboxVolumesResponse, error) {
 	var out SandboxVolumesResponse
@@ -122,10 +127,10 @@ func (s *Sandbox) requestVolumes(ctx context.Context, method string, request any
 		Converging  *bool          `json:"converging"`
 		Error       string         `json:"error"`
 	}
-	decodeErr := json.UnmarshalRead(resp.Body, &wire)
+	decodeErr := json.UnmarshalRead(resp.Body, &wire, json.WithUnmarshalers(responseUnmarshalers))
 	complete := decodeErr == nil && wire.VolumesWant != nil && wire.Volumes != nil && wire.States != nil && wire.Converging != nil
 	if complete {
-		out = SandboxVolumesResponse{VolumesWant: responseVolumes(*wire.VolumesWant), Volumes: responseVolumes(*wire.Volumes), States: *wire.States, Converging: *wire.Converging, Error: wire.Error}
+		out = SandboxVolumesResponse{VolumesWant: *wire.VolumesWant, Volumes: *wire.Volumes, States: *wire.States, Converging: *wire.Converging, Error: wire.Error}
 		s.VolumesWant = slices.Clone(out.VolumesWant)
 		s.Volumes = slices.Clone(out.Volumes)
 	}

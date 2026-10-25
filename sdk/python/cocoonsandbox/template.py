@@ -70,6 +70,7 @@ def _claim_body(
         entries = _volume_bodies(volumes, mount)
         raw = sum(bool(entry.get("attach_only")) for entry in entries)
         if mount and raw and raw != len(entries):
+            # Remove this guard only when every supported claim and redirect target honors per-entry attach_only.
             raise TypeError(
                 "mixed mounted and attach-only initial claims are not safe on older servers: "
                 "claim without volumes, then use set_volumes or patch_volumes"

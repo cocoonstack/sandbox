@@ -503,7 +503,8 @@ def test_claim_volume_iterables_are_consumed_once(node, promoted, kind):
 def test_claim_and_summary_response_inference_copies_wire_data(node):
     client = Client(node)
     reply = {"id": "sb_1", "token": "tok", "volumes": [{"name": "raw"}, {"name": "mounted", "mount": "/data"}]}
-    sb = client._handle_from(node, reply)
+    FakeNode.routes[("POST", "/v1/claim")] = lambda body, path: (200, reply)
+    sb = client.new("rt:24.04")
     assert sb.volumes[0]["attach_only"] is True
     assert "attach_only" not in sb.volumes[1]
     assert "attach_only" not in reply["volumes"][0]
@@ -521,3 +522,27 @@ def test_claim_and_summary_response_inference_copies_wire_data(node):
     assert summaries[1]["volumes"] == summaries[1]["volumes_want"] == []
     assert "volumes" not in summaries[2]
     assert "attach_only" not in rows[0]["volumes"][0]
+
+
+@pytest.mark.parametrize(
+    ("path", "payload", "expected"),
+    [
+        ("/v1/checkpoints/ck_1/claim", {"volumes": [{"name": "raw"}]}, True),
+        ("/v1/sandboxes/sb_1/fork", {"children": [{"volumes": [{"name": "raw"}]}]}, True),
+        ("/v1/volumes", {"volumes": [{"name": "catalog"}]}, False),
+        ("/v1/info", {"metadata": {"volumes": [{"name": "opaque"}]}}, False),
+    ],
+)
+def test_response_decoder_only_interprets_volume_bearing_routes(spawn_node, path, payload, expected):
+    addr = spawn_node({("GET", path): lambda body, request_path: (200, payload)})
+    reply = Client(addr)._request(addr, "GET", path, None, "inspect")
+    if path.endswith("/claim"):
+        entry = reply["volumes"][0]
+    elif path.endswith("/fork"):
+        entry = reply["children"][0]["volumes"][0]
+    elif path == "/v1/volumes":
+        entry = reply["volumes"][0]
+    else:
+        entry = reply["metadata"]["volumes"][0]
+    assert (entry.get("attach_only") is True) is expected
+    assert "attach_only" not in repr(payload)

@@ -18,7 +18,7 @@ from .endpoint import _endpoint_url
 from .errors import APIError, SandboxTimeout, require_field
 from .sandbox import Sandbox
 from .template import _claim_body, _template_query
-from .volumes import Volume, _response_volumes
+from .volumes import Volume, _normalize_volume_reply
 
 T = TypeVar("T")
 
@@ -110,12 +110,7 @@ class Client:
     def sandboxes(self) -> list[dict[str, Any]]:
         """Lists the claims this token may see: id, key, deadline, claim_ref — never tokens or host paths."""
         reply = self._request(self.addr, "GET", "/v1/sandboxes", None, "list sandboxes")
-        rows = [dict(sb) for sb in reply.get("sandboxes") or []]
-        for row in rows:
-            for key in ("volumes", "volumes_want"):
-                if row.get(key) is not None:
-                    row[key] = _response_volumes(row[key])
-        return rows
+        return [dict(sb) for sb in reply.get("sandboxes") or []]
 
     def drain(self) -> dict[str, Any]:
         """Cordons the node (root token): new claims are refused, live ones run to their leases."""
@@ -186,7 +181,7 @@ class Client:
             deadline=reply.get("deadline", ""),
             from_checkpoint=reply.get("from_checkpoint", ""),
             template_digest=reply.get("template_digest", ""),
-            volumes=_response_volumes(reply.get("volumes") or []),
+            volumes=reply.get("volumes") or [],
         )
 
     def _post_json(
@@ -223,11 +218,17 @@ class Client:
                 reply = json.loads(raw)
             except (ValueError, TypeError):
                 reply = None
-            raise APIError(verb, status, _error_message(raw), reply=reply if isinstance(reply, dict) else None)
+            raise APIError(
+                verb,
+                status,
+                _error_message(raw),
+                reply=_normalize_volume_reply(path, reply) if isinstance(reply, dict) else None,
+            )
         if not raw:
             return {}
         try:
-            return cast(dict[str, Any], json.loads(raw))
+            reply = json.loads(raw)
+            return cast(dict[str, Any], _normalize_volume_reply(path, reply) if isinstance(reply, dict) else reply)
         except json.JSONDecodeError as exc:
             raise APIError(verb, 0, "malformed JSON in response") from exc
 

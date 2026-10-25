@@ -270,18 +270,37 @@ func TestVolumeResponseInferenceDoesNotChangeRequestDecoding(t *testing.T) {
 	}
 }
 
-func TestClaimResponseVolumesAreOwnedCopies(t *testing.T) {
-	c := &Client{}
-	wire := []Volume{{Name: "raw"}, {Name: "mounted", Mount: "/data"}}
-	sb := c.handleFrom("node", claimResponse{Volumes: wire})
-	if !sb.Volumes[0].AttachOnly || sb.Volumes[1].AttachOnly || wire[0].AttachOnly {
-		t.Fatalf("response inference changed wire data: handle=%+v wire=%+v", sb.Volumes, wire)
+func TestClaimResponseDecoderAndOwnedCopies(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, `{"id":"sb_1","token":"tok","volumes":[{"name":"raw"},{"name":"mounted","mount":"/data"}]}`)
+	}))
+	t.Cleanup(ts.Close)
+	c := testClient(t, ts)
+	wire, err := c.doJSON[claimResponse](t.Context(), http.MethodPost, c.addr, "/v1/claim", nil, "", "claim")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sb := c.handleFrom("node", wire)
+	if !sb.Volumes[0].AttachOnly || sb.Volumes[1].AttachOnly || !wire.Volumes[0].AttachOnly {
+		t.Fatalf("response decode lost attach-only state: handle=%+v wire=%+v", sb.Volumes, wire)
 	}
 	sb.Volumes[0].Name = "caller"
-	if wire[0].Name != "raw" || sb.VolumesWant[0].Name != "raw" {
+	if wire.Volumes[0].Name != "raw" || sb.VolumesWant[0].Name != "raw" {
 		t.Fatal("claim volume views alias the wire or each other")
 	}
 	if c.handleFrom("node", claimResponse{}).Volumes != nil || c.handleFrom("node", claimResponse{Volumes: []Volume{}}).Volumes == nil {
 		t.Fatal("claim response changed nil versus empty volume semantics")
+	}
+}
+
+func TestForkResponseDecodesNestedVolumes(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, `{"children":[{"id":"sb_child","token":"tok","volumes":[{"name":"raw"},{"name":"mounted","mount":"/data"}]}]}`)
+	}))
+	t.Cleanup(ts.Close)
+	c := testClient(t, ts)
+	reply, err := c.doJSON[forkResponse](t.Context(), http.MethodPost, c.addr, "/v1/sandboxes/sb_1/fork", nil, "", "fork")
+	if err != nil || len(reply.Children) != 1 || !reply.Children[0].Volumes[0].AttachOnly || reply.Children[0].Volumes[1].AttachOnly {
+		t.Fatalf("nested fork volumes did not decode: %+v err=%v", reply, err)
 	}
 }

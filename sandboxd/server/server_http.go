@@ -22,14 +22,17 @@ import (
 
 const retryAfterSeconds = "10"
 
-// Keep HTTP responses readable by SDKs that echo the historical three-field shape.
+// Keep HTTP responses readable by SDKs that echo the historical volume shape.
 // Storage and forwarded requests retain the canonical AttachOnly field.
+type volumeView struct {
+	Name       string `json:"name"`
+	Mount      string `json:"mount,omitempty"`
+	Mode       string `json:"mode,omitempty"`
+	AttachOnly bool   `json:"-"`
+}
+
 var responseMarshalers = json.MarshalToFunc(func(out *jsontext.Encoder, v types.Volume) error {
-	return json.MarshalEncode(out, struct {
-		Name  string `json:"name"`
-		Mount string `json:"mount,omitempty"`
-		Mode  string `json:"mode,omitempty"`
-	}{v.Name, v.Mount, v.Mode})
+	return json.MarshalEncode(out, volumeView(v))
 })
 
 type tenantKey struct{}

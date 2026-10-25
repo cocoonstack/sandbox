@@ -257,6 +257,10 @@ before changing devices.
 The current source Go and Python SDKs send all-attach-only initial claims using
 the existing `volumes_attach_only` flag without per-entry flags. They reject
 mixed mounted and attach-only initial claims locally, before network I/O.
+That restriction can be removed when the minimum supported server version
+honors per-entry `attach_only` on initial claims at every possible placement
+and redirect target. Until then, the SDK cannot know that a redirected claim
+will preserve the mixed mounting choice.
 Claim without volumes, then use PUT or PATCH for a mixed live list. These SDK
 changes are unreleased. The published Python 0.1.19 SDK accepts only `name`,
 `mount`, and `mode` in request mappings. HTTP responses retain those fields,
