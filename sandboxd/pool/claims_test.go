@@ -231,3 +231,32 @@ func TestClaimStoreConcurrentCommits(t *testing.T) {
 		t.Fatalf("after concurrent commits: %+v, %v", got, err)
 	}
 }
+
+func TestClaimLoadRestoresAttachOnlyBeforeRecoveryReferences(t *testing.T) {
+	dir := t.TempDir()
+	raw := `{"old":{"id":"old","volumes":[{"name":"raw","mode":"rw"},{"name":"mounted","mount":"/data"}],"volumes_want":[]},"desired":{"id":"desired","volumes":[],"volumes_want":[{"name":"raw"}]},"missing":{"id":"missing","volumes":[{"name":"raw"}]}}`
+	if err := os.WriteFile(filepath.Join(dir, "claims.json"), []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s := newClaimStore(dir, false)
+	claims, err := s.load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !claims["old"].Volumes[0].AttachOnly || claims["old"].Volumes[1].AttachOnly || claims["old"].VolumesWant == nil || len(claims["old"].VolumesWant) != 0 {
+		t.Fatalf("old shapes changed: %+v", claims["old"])
+	}
+	if !claims["desired"].VolumesWant[0].AttachOnly || !slices.Equal(claims["missing"].Volumes, claims["missing"].VolumesWant) {
+		t.Fatal("legacy desired or missing-desired fallback changed")
+	}
+	refs := s.recoveryVolumes()
+	if !refs["old"][0].AttachOnly || !refs["desired"][0].AttachOnly {
+		t.Fatalf("recovery references captured before canonicalization: %+v", refs)
+	}
+	if err = os.WriteFile(filepath.Join(dir, "claims.json"), []byte(`{"bad":{"id":"bad","volumes":[{"name":"data","mount":"/data","attach_only":true}]}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = newClaimStore(dir, false).load(); err == nil {
+		t.Fatal("accepted contradictory persisted shape")
+	}
+}

@@ -171,3 +171,45 @@ func TestLiveVolumeRoutesReportRefusalsOverRecordedDiagnostics(t *testing.T) {
 		})
 	}
 }
+
+func TestLiveVolumeRoutesPreserveMixedAttachOnlyRoundtrip(t *testing.T) {
+	want := []types.Volume{{Name: "mounted", Mount: "/volumes/mounted"}, {Name: "raw", Mode: types.VolumeModeRW, AttachOnly: true}}
+	view := types.SandboxVolumesResponse{VolumesWant: want, Volumes: want}
+	mgr := &fakeManager{
+		getVolumes: func(string, string) (types.SandboxVolumesResponse, error) { return view, nil },
+		setVolumes: func(_, _ string, got []types.Volume) (types.SandboxVolumesResponse, error) {
+			if !slices.Equal(got, want) {
+				t.Errorf("GET-to-PUT changed mixed intent: %+v", got)
+			}
+			return view, nil
+		},
+		patchVolumes: func(_, _ string, patch types.VolumePatch) (types.SandboxVolumesResponse, error) {
+			if !slices.Equal(patch.Add, want) {
+				t.Errorf("PATCH lost per-entry intent: %+v", patch.Add)
+			}
+			return view, nil
+		},
+	}
+	ts := newTenantTestServer(t, "root", nil, mgr, nil)
+	get := doReq(t, http.MethodGet, ts.URL+"/v1/sandboxes/sb_1/volumes", "root", "")
+	defer get.Body.Close()
+	var got types.SandboxVolumesResponse
+	if err := json.UnmarshalRead(get.Body, &got); err != nil || !slices.Equal(got.VolumesWant, want) {
+		t.Fatalf("GET lost explicit attach-only flag: %+v, %v", got, err)
+	}
+	for _, method := range []string{http.MethodPut, http.MethodPatch} {
+		key := "volumes"
+		if method == http.MethodPatch {
+			key = "add"
+		}
+		body, err := json.Marshal(map[string][]types.Volume{key: got.VolumesWant})
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp := doReq(t, method, ts.URL+"/v1/sandboxes/sb_1/volumes", "root", string(body))
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("%s status=%d", method, resp.StatusCode)
+		}
+	}
+}

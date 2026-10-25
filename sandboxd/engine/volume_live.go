@@ -62,39 +62,56 @@ func (e *Engine) MountLiveVolume(ctx context.Context, vsockSocket, name, mount s
 	return e.mountDevice(ctx, vsockSocket, device, name, mount, rw)
 }
 
+// VolumeDetachResult reports clean-unmount evidence from a confirmed host detach.
+type VolumeDetachResult struct {
+	NormalUnmount bool
+}
+
 // DetachVolume unmounts a guest volume before confirming host removal.
-func (e *Engine) DetachVolume(ctx context.Context, vmName, vsockSocket, name, mount string) error {
+func (e *Engine) DetachVolume(ctx context.Context, vmName, vsockSocket, name, mount string) (VolumeDetachResult, error) {
 	ctx, cancel := context.WithTimeout(ctx, VolumeMutationTimeout)
 	defer cancel()
 	device, found, err := e.findVolumeDevice(ctx, vsockSocket, name)
 	if err != nil {
-		return err
+		return VolumeDetachResult{}, err
 	}
+	normal := false
 	if found {
-		if err = e.unmountLiveVolume(ctx, vsockSocket, device, mount); err != nil {
-			return err
+		if normal, err = e.unmountLiveVolume(ctx, vsockSocket, device, mount); err != nil {
+			return VolumeDetachResult{}, err
 		}
 	}
-	_, err = e.run(ctx, "vm", "disk", "detach", vmName, argName, name)
-	return err
+	if _, err = e.run(ctx, "vm", "disk", "detach", vmName, argName, name); err != nil {
+		return VolumeDetachResult{}, err
+	}
+	return VolumeDetachResult{NormalUnmount: normal}, nil
 }
 
-func (e *Engine) unmountLiveVolume(ctx context.Context, vsockSocket, device, mount string) error {
+func (e *Engine) unmountLiveVolume(ctx context.Context, vsockSocket, device, mount string) (bool, error) {
+	if mount == "" {
+		return false, e.refuseOtherMounts(ctx, vsockSocket, device)
+	}
 	devNum, mounts, err := e.volumeMounts(ctx, vsockSocket, device)
 	if err != nil {
-		return err
+		return false, err
 	}
 	target := e.resolveMount(ctx, vsockSocket, mount, mounts)
 	atTarget := slices.DeleteFunc(mounts, func(m volumeMount) bool { return m.path != target })
+	normal := false
 	if len(atTarget) == 1 && atTarget[0].devNum == devNum && atTarget[0].root == "/" {
 		if err = e.UnmountVolume(ctx, vsockSocket, mount); err != nil {
 			if _, ok := errors.AsType[*guestExitError](err); ok {
-				return &VolumeMountConflict{Message: fmt.Sprintf("cannot unmount %q; close guest references and retry", mount)}
+				return false, &VolumeMountConflict{Message: fmt.Sprintf("cannot unmount %q; close guest references and retry", mount)}
 			}
-			return err
+			return false, err
 		}
+		mode, _, _ := strings.Cut(atTarget[0].options, ",")
+		normal = mode == "rw"
 	}
-	return e.refuseOtherMounts(ctx, vsockSocket, device)
+	if err = e.refuseOtherMounts(ctx, vsockSocket, device); err != nil {
+		return false, err
+	}
+	return normal, nil
 }
 
 func (e *Engine) volumeMounts(ctx context.Context, vsockSocket, device string) (string, []volumeMount, error) {

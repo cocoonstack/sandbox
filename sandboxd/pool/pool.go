@@ -152,7 +152,7 @@ type Engine interface {
 	TrimCow(ctx context.Context, vsockSocket string) error
 	CheckLiveVolumeSupport(ctx context.Context) error
 	DiskAttach(ctx context.Context, vmName string, spec engine.VolumeSpec) error
-	DetachVolume(ctx context.Context, vmName, sock, name, mount string) error
+	DetachVolume(ctx context.Context, vmName, sock, name, mount string) (engine.VolumeDetachResult, error)
 	MountVolume(ctx context.Context, vsockSocket, name, mount string, rw bool) error
 	MountLiveVolume(ctx context.Context, vsockSocket, name, mount string, rw bool) error
 	UnmountVolume(ctx context.Context, vsockSocket, mount string) error

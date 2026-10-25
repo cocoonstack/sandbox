@@ -16,8 +16,8 @@ external controller owns quiescence and unmount before detach, a reservation
 through sleep, and access gating until wake, attach, and mount complete. That
 gate also covers business requests that wake the sandbox. Wake establishes
 only silkd readiness. The API does not include a controller implementation or
-verify that composed workflow. Live changes remain limited to mounted
-read-only entries.
+verify that composed workflow. Live changes support mounted and attach-only
+entries in read-only or writable mode.
 
 Pause application reads before replacement. Close files, mmap mappings, cwd,
 and bind mount references on the old disk. Replacement unmounts the old disk
@@ -68,9 +68,9 @@ with client.new("rt:24.04", ttl_seconds=900) as sb:
 
 A successful run reads `v1`, then `v2`, and preserves every identity assertion.
 The repeated full target verifies that a settled mount can be retained.
-This example starts without other volumes. If your sandbox has writable or
-attach-only volumes, retain them in a full PUT or use PATCH to replace only
-the dataset names. `None`, a nil Go slice, and a missing `volumes` field do not
+This example starts without other volumes. A full PUT replaces the entire
+desired set, including writable and attach-only entries. Retain other entries
+in that list, or use PATCH to replace only the dataset names. `None`, a nil Go slice, and a missing `volumes` field do not
 mean an empty target.
 
 Go uses the same owning handle and client API token.
@@ -101,3 +101,32 @@ admission holds. Detailed errors survive only within one daemon lifetime.
 If the VMM exits, a sandbox holding volumes is release-only. Release it and
 create a new sandbox; neither PUT with an empty target nor daemon restart
 restores the original processes.
+
+## Writable and attach-only entries
+
+Use `mode: "rw"` for a catalog entry that permits writing. Set per-entry `attach_only: true` when the caller mounts the device itself. Both choices can be
+mixed with mounted read-only entries in PUT, PATCH, or a new claim:
+
+```json
+{"volumes":[{"name":"dataset"},{"name":"scratch","mode":"rw"},{"name":"raw-data","attach_only":true},{"name":"raw-work","mode":"rw","attach_only":true}]}
+```
+
+Omitting a mount still selects `/volumes/<name>` for a new mounted entry. An
+attach-only entry cannot supply a nonempty mount. Responses preserve the flag
+through GET, PUT retries, and both SDKs. The existing Go claim option
+`WithVolumesAttachOnly()` and Python `mount=False` remain claim-wide aliases.
+
+Before removal, stop application access and close references. For attach-only
+devices, unmount the caller-managed filesystem first. sandboxd checks its guest
+mount namespace, but cannot prove that raw block users, partitions, or other
+mount namespaces are idle. Keep the control-plane reservation across any sleep
+and gate access until wake, attach, and mount complete.
+
+For mounted writable entries, sandboxd clears its dirty marker only after
+observing a normal unmount of the expected writable root mount and confirming
+host detach. External pre-unmount, an absent device, or a lost result leaves the
+marker conservatively in place. Detach can succeed while a subsequent read-only
+attach still requires recovery. Attach-only writers have no daemon-managed
+marker and remain the caller's filesystem responsibility. See the [API
+contract](sandboxd-api.md#patch-v1sandboxesidvolumes) for failure and retry
+semantics.

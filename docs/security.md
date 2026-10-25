@@ -139,6 +139,13 @@ to every other tenant's next read. A dataset that genuinely needs multiple
 writers needs an out-of-band process for who writes when, which the catalog
 ACL does not provide.
 
+Live writable and attach-only changes enforce the same catalog ACL and local
+reader and writer admission as initial claims. Attach-only callers own quiescence,
+unmount, and filesystem consistency. Guest mountinfo checks do not prove the
+absence of raw block users, partition users, or users in other mount namespaces.
+A mounted writable dirty marker is cleared only with observed normal unmount
+and confirmed host detach; missing evidence leaves it in place.
+
 ## Known limitations
 
 Facts to plan around, stated so the boundary is honest:

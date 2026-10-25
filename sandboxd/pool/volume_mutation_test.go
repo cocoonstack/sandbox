@@ -68,8 +68,8 @@ func TestLiveAttachPreservesWritableAndAttachOnlyVolumes(t *testing.T) {
 			if _, err := m.SetVolumes(t.Context(), sb.ID, sb.Tenant, []types.Volume{{Name: "other", Mount: original.Mount}}); !errors.Is(err, ErrBadVolume) {
 				t.Fatalf("accepted mode change: %v", err)
 			}
-			if _, err := m.PatchVolumes(t.Context(), sb.ID, sb.Tenant, types.VolumePatch{Remove: []string{"data", "other"}}); !errors.Is(err, ErrBadVolume) || len(sb.Volumes) != 2 {
-				t.Fatalf("writable detach changed the batch: %v", err)
+			if _, err := m.PatchVolumes(t.Context(), sb.ID, sb.Tenant, types.VolumePatch{Remove: []string{"data", "other"}}); err != nil || len(sb.Volumes) != 0 {
+				t.Fatalf("writable detach failed: %v", err)
 			}
 		})
 	}
@@ -80,8 +80,8 @@ func TestLiveVolumeValidationPrecedesDeviceCalls(t *testing.T) {
 	m := newVolumeManager(t, eng, liveCatalog(t))
 	sb := mustClaim(t, m, testKey)
 	for _, request := range [][]types.Volume{
-		{{Name: "data", Mode: "rw"}},
-		{{Name: "data", AttachOnly: true}},
+		{{Name: "data", Mode: "unknown"}},
+		{{Name: "data", AttachOnly: true, Mount: "/data"}},
 		{{Name: "data", Mount: "/etc"}},
 		{{Name: "data"}, {Name: "data"}},
 		{{Name: "data", Mount: "/a"}, {Name: "other", Mount: "/a/b"}},

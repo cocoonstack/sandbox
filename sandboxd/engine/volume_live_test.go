@@ -54,7 +54,7 @@ func TestLiveVolumeConvergesMountAndDetach(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			if err := e.DetachVolume(t.Context(), "sbx-1", sock, spec.Name, tt.mount); err != nil {
+			if _, err := e.DetachVolume(t.Context(), "sbx-1", sock, spec.Name, tt.mount); err != nil {
 				t.Fatal(err)
 			}
 			fake.mu.Lock()
@@ -191,7 +191,7 @@ func TestLiveDetachKeepsBusyAndUnobservableDevices(t *testing.T) {
 				fake.serial["/proc/self/mountinfo"] = []byte(rootMountInfo + "2 1 8:32 / /data ro - ext4 /dev/vdc ro\n3 2 8:32 /sub /data ro - ext4 /dev/vdc ro\n")
 			}
 			fake.mu.Unlock()
-			err := New("cocoon", nil, nil, false, false, "").DetachVolume(t.Context(), "sbx-1", sock, spec.Name, "/data")
+			_, err := New("cocoon", nil, nil, false, false, "").DetachVolume(t.Context(), "sbx-1", sock, spec.Name, "/data")
 			if err == nil {
 				t.Fatal("detach must fail closed")
 			}
@@ -222,7 +222,7 @@ func TestLiveDetachMissingGuestStillChecksHost(t *testing.T) {
 			sock := sockPath(t)
 			serveFakeSilkd(t, sock)
 			spec := liveDiskCLI(t, hostErr)
-			err := New("cocoon", nil, nil, false, false, "").DetachVolume(t.Context(), "sbx-1", sock, spec.Name, "/data")
+			_, err := New("cocoon", nil, nil, false, false, "").DetachVolume(t.Context(), "sbx-1", sock, spec.Name, "/data")
 			wantErr := hostErr != ""
 			if (err != nil) != wantErr {
 				t.Fatalf("got %v, want error=%v", err, wantErr)
@@ -240,7 +240,7 @@ func TestLiveDetachIgnoresAnotherDeviceAtThePath(t *testing.T) {
 	fake.serial["/sys/block/vdc/dev"] = []byte("8:32\n")
 	fake.serial["/proc/self/mountinfo"] = []byte(rootMountInfo + "2 1 8:48 / /data ro - ext4 /dev/vdd ro\n")
 	fake.mu.Unlock()
-	if err := New("cocoon", nil, nil, false, false, "").DetachVolume(t.Context(), "sbx-1", sock, spec.Name, "/data"); err != nil {
+	if _, err := New("cocoon", nil, nil, false, false, "").DetachVolume(t.Context(), "sbx-1", sock, spec.Name, "/data"); err != nil {
 		t.Fatalf("detach of an unmounted device blocked by another device's mount: %v", err)
 	}
 	fake.mu.Lock()
@@ -281,4 +281,53 @@ exit 2
 
 func guestChanges(calls [][]string) [][]string {
 	return slices.DeleteFunc(slices.Clone(calls), func(argv []string) bool { return argv[0] == "realpath" })
+}
+
+func TestLiveDetachCleanEvidenceRequiresWritableUnmountAndHostSuccess(t *testing.T) {
+	for _, mode := range []string{"normal", "readonly", "pre-unmounted", "missing device", "host failure", "busy", "residual mount", "attach-only mounted"} {
+		t.Run(mode, func(t *testing.T) {
+			sock := sockPath(t)
+			fake := serveFakeSilkd(t, sock)
+			if mode != "missing device" {
+				configureVolumeDevices(fake)
+			}
+			hostErr := ""
+			if mode == "host failure" {
+				hostErr = "host removal failed after unmount"
+			}
+			spec := liveDiskCLI(t, hostErr)
+			mount := "/data"
+			fake.mu.Lock()
+			fake.serial["/sys/block/vdc/dev"] = []byte("8:32\n")
+			fake.serial["/proc/self/mountinfo"] = []byte(rootMountInfo + "2 1 8:32 / /data rw - ext4 /dev/vdc rw\n")
+			switch mode {
+			case "pre-unmounted", "missing device":
+				fake.serial["/proc/self/mountinfo"] = []byte(rootMountInfo)
+			case "readonly":
+				fake.serial["/proc/self/mountinfo"] = []byte(rootMountInfo + "2 1 8:32 / /data ro - ext4 /dev/vdc ro\n")
+			case "busy":
+				fake.execCode = 32
+			case "attach-only mounted":
+				mount = ""
+			}
+			fake.execHook = func(argv []string) {
+				if argv[0] == "umount" && mode != "residual mount" && mode != "busy" {
+					fake.serial["/proc/self/mountinfo"] = []byte(rootMountInfo)
+				}
+			}
+			fake.mu.Unlock()
+			result, err := New("cocoon", nil, nil, false, false, "").DetachVolume(t.Context(), "sbx-1", sock, spec.Name, mount)
+			wantErr := slices.Contains([]string{"host failure", "busy", "residual mount", "attach-only mounted"}, mode)
+			if (err != nil) != wantErr || result.NormalUnmount != (mode == "normal") {
+				t.Fatalf("mode=%s result=%+v err=%v", mode, result, err)
+			}
+			if mode == "attach-only mounted" {
+				fake.mu.Lock()
+				defer fake.mu.Unlock()
+				if len(guestChanges(fake.execCalls)) != 0 {
+					t.Fatal("attach-only detach unmounted a caller-managed filesystem")
+				}
+			}
+		})
+	}
 }

@@ -21,7 +21,7 @@ func TestAttachOnlyClaimAttachesWithoutMounting(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ClaimProvision: %v", err)
 	}
-	want := []types.Volume{{Name: "scratch", Mode: types.VolumeModeRW}}
+	want := []types.Volume{{Name: "scratch", Mode: types.VolumeModeRW, AttachOnly: true}}
 	if !slices.Equal(sb.Volumes, want) {
 		t.Errorf("applied volumes=%v, want %v", sb.Volumes, want)
 	}
@@ -78,11 +78,7 @@ func TestAttachOnlyClaimAttachesEveryVolumeConcurrently(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ClaimProvision: %v", err)
 	}
-	want := []types.Volume{
-		{Name: "scratch", Mode: types.VolumeModeRW},
-		{Name: "dataset"},
-		{Name: "cache", Mode: types.VolumeModeRW},
-	}
+	want := slices.Clone(requested)
 	if !slices.Equal(sb.Volumes, want) {
 		t.Errorf("volumes=%v, want the request order %v", sb.Volumes, want)
 	}

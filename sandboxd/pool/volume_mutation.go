@@ -7,6 +7,8 @@ import (
 	"maps"
 	"slices"
 
+	"github.com/projecteru2/core/log"
+
 	"github.com/cocoonstack/sandbox/sandboxd/engine"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
@@ -40,7 +42,7 @@ func (m *Manager) SetVolumes(ctx context.Context, id, tenant string, want []type
 	return m.changeVolumes(ctx, id, tenant, func([]types.Volume) ([]types.Volume, error) { return slices.Clone(want), nil })
 }
 
-// PatchVolumes adds and removes a running claim's read-only mounted volumes by name.
+// PatchVolumes adds and removes a running claim's volumes by name.
 func (m *Manager) PatchVolumes(ctx context.Context, id, tenant string, patch types.VolumePatch) (types.SandboxVolumesResponse, error) {
 	return m.changeVolumes(ctx, id, tenant, func(current []types.Volume) ([]types.Volume, error) {
 		if err := validateDetachNames(patch.Remove); err != nil {
@@ -302,13 +304,29 @@ func (m *Manager) stageVolumeTarget(ctx context.Context, sb *types.Sandbox, run 
 }
 
 func (m *Manager) detachVolumeRun(ctx context.Context, sb *types.Sandbox, run *volumeRun, v types.Volume) error {
-	if err := m.checkVolumeRun(ctx, sb, run); err != nil {
+	m.mu.Lock()
+	err := m.checkVolumeRunLocked(ctx, sb, run)
+	path := ""
+	if entry := m.catalog.entries[v.Name]; entry != nil {
+		path = entry.disk.Path
+	}
+	m.mu.Unlock()
+	if err != nil {
 		return err
 	}
-	if err := m.eng.DetachVolume(ctx, sb.VMName, sb.VsockSocket, v.Name, v.Mount); err != nil {
+	result, err := m.eng.DetachVolume(ctx, sb.VMName, sb.VsockSocket, v.Name, v.Mount)
+	if err != nil {
 		return fmt.Errorf("detach volume %q: %w", v.Name, err)
 	}
-	return m.checkVolumeRun(ctx, sb, run)
+	if err = m.checkVolumeRun(ctx, sb, run); err != nil {
+		return err
+	}
+	if needsUnmount(v) && result.NormalUnmount && path != "" {
+		if err = clearVolumeDirty(path); err != nil {
+			log.WithFunc("pool.detachVolumeRun").Errorf(ctx, err, "clear dirty marker for volume %s", v.Name)
+		}
+	}
+	return nil
 }
 
 func (m *Manager) commitVolumeApplied(ctx context.Context, sb *types.Sandbox, run *volumeRun, v types.Volume, attached bool) error {
@@ -422,29 +440,14 @@ func (m *Manager) clearVolumeError(sb *types.Sandbox, run *volumeRun, name strin
 }
 
 func normalizeLiveVolumes(volumes, held []types.Volume) ([]types.Volume, error) {
-	if len(volumes) > types.MaxClaimVolumes {
-		return nil, fmt.Errorf("%w: too many volumes", ErrBadVolume)
+	request := slices.Clone(volumes)
+	for i, v := range request {
+		if old := volumeIndex(held, v.Name); old >= 0 && held[old].Mount == "" && v.Mount == "" {
+			request[i].AttachOnly = true
+		}
 	}
-	out := make([]types.Volume, 0, len(volumes))
-	for _, v := range volumes {
-		attachOnly := v.AttachOnly
-		if i := volumeIndex(held, v.Name); i >= 0 && held[i].Mount == "" && v.Mount == "" {
-			attachOnly = true
-		}
-		normalized, err := types.ValidateVolumes([]types.Volume{v}, attachOnly)
-		if err != nil {
-			return nil, fmt.Errorf("%w: %w", ErrBadVolume, err)
-		}
-		if volumeIndex(out, v.Name) >= 0 {
-			return nil, fmt.Errorf("%w: duplicate volume %q", ErrBadVolume, v.Name)
-		}
-		if attachOnly {
-			normalized[0].AttachOnly = false
-		}
-		out = append(out, normalized[0])
-	}
-	mounted := slices.DeleteFunc(slices.Clone(out), func(v types.Volume) bool { return v.Mount == "" })
-	if _, err := types.ValidateVolumes(mounted, false); err != nil {
+	out, err := types.ValidateVolumes(request, false)
+	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrBadVolume, err)
 	}
 	return out, nil
@@ -456,17 +459,9 @@ func validateLiveTarget(held, target []types.Volume) error {
 		if i >= 0 && target[i] != v {
 			return fmt.Errorf("%w: remove volume %q before changing its mount or mode", ErrBadVolume, v.Name)
 		}
-		if immutableVolume(v) && i < 0 {
-			return fmt.Errorf("%w: writable and attach-only volumes cannot change live", ErrBadVolume)
-		}
-	}
-	if slices.ContainsFunc(volumeDifference(target, held), immutableVolume) {
-		return fmt.Errorf("%w: live additions require read-only mounts", ErrBadVolume)
 	}
 	return nil
 }
-
-func immutableVolume(v types.Volume) bool { return v.RW() || v.AttachOnly || v.Mount == "" }
 
 func volumeIndex(volumes []types.Volume, name string) int {
 	return slices.IndexFunc(volumes, func(v types.Volume) bool { return v.Name == name })

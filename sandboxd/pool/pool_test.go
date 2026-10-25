@@ -1658,24 +1658,28 @@ func (f *fakeEngine) MountLiveVolume(ctx context.Context, sock, name, mount stri
 	return f.MountVolume(ctx, sock, name, mount, rw)
 }
 
-func (f *fakeEngine) DetachVolume(ctx context.Context, _, sock, name, mount string) error {
+func (f *fakeEngine) DetachVolume(ctx context.Context, _, sock, name, mount string) (engine.VolumeDetachResult, error) {
 	if f.liveVolumeHook != nil {
 		if err := f.liveVolumeHook("detach"); err != nil {
-			return err
+			return engine.VolumeDetachResult{}, err
 		}
 	}
 	if err := ctx.Err(); err != nil {
-		return err
+		return engine.VolumeDetachResult{}, err
 	}
 	if mount != "" {
 		if err := f.UnmountVolume(ctx, sock, mount); err != nil {
-			return err
+			return engine.VolumeDetachResult{}, err
 		}
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.volumeOps = append(f.volumeOps, "detach:"+name)
-	return f.detachVolumeErr
+	if f.detachVolumeErr != nil {
+		return engine.VolumeDetachResult{}, f.detachVolumeErr
+	}
+	normal := slices.ContainsFunc(f.volumeMounts, func(v types.Volume) bool { return v.Name == name && v.Mount == mount && v.RW() })
+	return engine.VolumeDetachResult{NormalUnmount: normal}, nil
 }
 
 func (f *fakeEngine) UnmountVolume(_ context.Context, _, mount string) error {
