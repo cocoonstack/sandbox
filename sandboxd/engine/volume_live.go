@@ -129,15 +129,13 @@ func (e *Engine) volumeMounts(ctx context.Context, vsockSocket, device string) (
 	}
 	var mounts []volumeMount
 	for line := range strings.SplitSeq(strings.TrimSpace(string(raw)), "\n") {
-		fields := strings.Fields(line)
-		if len(fields) < 10 {
+		mount, filesystem, ok := strings.Cut(line, " - ")
+		fields := strings.Fields(mount)
+		fsFields := strings.Split(filesystem, " ")
+		if !ok || len(fields) < 6 || len(fsFields) != 3 || fsFields[0] == "" || fsFields[2] == "" {
 			return "", nil, errors.New("invalid guest mountinfo")
 		}
-		separator := slices.Index(fields[6:], "-") + 6
-		if separator < 6 || separator+4 != len(fields) {
-			return "", nil, errors.New("invalid guest mountinfo")
-		}
-		mounts = append(mounts, volumeMount{fields[2], mountUnescaper.Replace(fields[3]), mountUnescaper.Replace(fields[4]), fields[5], fields[separator+3]})
+		mounts = append(mounts, volumeMount{fields[2], mountUnescaper.Replace(fields[3]), mountUnescaper.Replace(fields[4]), fields[5], fsFields[2]})
 	}
 	return strings.TrimSpace(string(devNum)), mounts, nil
 }
