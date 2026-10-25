@@ -18,9 +18,10 @@ Keep `api_token` configured. List tenants explicitly to grant self-service;
 that permission also allows reattachment to another claim after detach. For a sleep and wake workflow, an
 external controller owns quiescence and unmount before detach, a reservation
 through sleep, and access gating until wake, attach, and mount complete. That
-gate also covers business requests that wake the sandbox. Wake establishes
-only silkd readiness. The API does not include a controller implementation or
-verify that composed workflow. Live changes support mounted and attach-only
+gate covers API and preview access on every node that can wake the sandbox.
+Wake establishes only silkd readiness. The [controller example](volume-controller.md)
+has SDK and HTTP contract tests. The controller still supplies the reservation,
+guest operations, and access gate. Live changes support mounted and attach-only
 entries in read-only or writable mode.
 
 Pause application reads before replacement. Close files, mmap mappings, cwd,

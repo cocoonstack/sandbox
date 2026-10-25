@@ -8,7 +8,19 @@ It does not add disk lifecycle management to sandboxd.
 ## Prepare the claim and controller
 
 Use a `net: none` claim on its owning node. Egress-lane claims cannot hibernate.
-Keep its TTL valid across the sleep interval. Use the current Python SDK with
+Keep its TTL valid across the sleep interval. Set `replicate_seconds: 0` and
+`archive_after_seconds: 0` on its pool, and use `on_expire: "destroy"` on the
+claim. Keep that pool configured while the controller owns the claim. If the
+pool is removed, the node-wide archive policy becomes the fallback. An
+archived or archiving claim refuses renew with 409, so renewing alone cannot
+preserve this sleep workflow when archiving is enabled.
+
+An existing or pending replica makes a new RW attachment return 409 volume
+busy. Setting `replicate_seconds: 0` retires replicas asynchronously. Keep the
+reservation and access gate closed, and retry attachment until it succeeds
+after retirement. A fixed delay does not acknowledge retirement.
+
+Use the current Python SDK with
 [per-entry attach-only support](sdk-python.md#changing-volumes), Cocoon v0.7.2 or newer,
 and Cloud Hypervisor.
 
@@ -45,10 +57,14 @@ Supply these application-specific operations before running the functions below:
   backing for this claim. The reservation must survive controller restart and
   the entire sleep interval. Keep it exclusively held during every step and
   renew any lease as needed. An assertion alone is not a lock or lease renewal.
-  Serialize operations for the same reservation.
+  Serialize operations for the same reservation. Verify the owning node too.
+  An owner change requires fencing the old node before another attachment.
 - `close_access` blocks and drains business requests before returning. It must
-  fail closed. Cover direct ports, guest API access, and requests that can wake
-  the claim. The controller's own maintenance calls may still reach silkd.
+  fail closed. Gate the API and preview listeners on every node that can serve
+  the claim, including direct ports and guest API access. A previously issued
+  preview URL can reach any node and wake the claim. Preview tokens have no
+  per-URL revocation, so stopping new URL issuance is not an access gate.
+  The controller's own maintenance calls may still reach silkd.
 - `quiesce_and_unmount` stops and reaps writers, flushes application state and
   filesystem writes, and ordinarily unmounts the volume. It raises if any step
   fails. Do not use lazy or forced unmount to turn a busy result into success.
@@ -61,8 +77,12 @@ Supply these application-specific operations before running the functions below:
 These callbacks are not supplied by sandboxd. An in-process lock or a local
 boolean is not a durable reservation or an access gate for other callers.
 The controller must enforce their contracts even when a step fails or its
-process restarts. Root-only attachment does not prevent a guest from accessing
-an already attached disk, or prevent the tenant from removing it for cleanup.
+process restarts. sandboxd holds no reservation for the disk once detach and
+reference retirement complete. During sleep, root can attach the same catalog
+entry to another claim. The controller must prevent that operation through its
+own ownership policy. Root-only attachment does not prevent a guest from
+accessing an already attached disk, or prevent the tenant from removing it for
+cleanup.
 
 Use one attach-only writable volume for this example. The controller mounts it
 explicitly and owns filesystem consistency after a crash. sandboxd writes no
@@ -71,50 +91,19 @@ RW entry without accounting for its [dirty-marker rules](sandboxd-api.md#attach-
 
 ## Controller functions
 
-Copy this block into the controller and pass its operations as `VolumeHooks`.
+Pass the controller operations as `VolumeHooks`.
 The functions do not release the reservation. Before the final `open_access`
 call, exceptions stop the sequence without attempting to open access or run
 another lifecycle operation. If a gate hook fails or has an uncertain result,
 that hook and the controller must recover the gate. These functions cannot
 prove that an external gate closed or undo a partially completed reopen.
 
-```python
-from collections.abc import Callable
-from dataclasses import dataclass
-
-from cocoonsandbox import Sandbox
-
-
-@dataclass(frozen=True)
-class VolumeHooks:
-    assert_reserved: Callable[[], None]
-    close_access: Callable[[], None]
-    quiesce_and_unmount: Callable[[], None]
-    mount_and_verify: Callable[[], None]
-    open_access: Callable[[], None]
-
-
-def hibernate_volume(sb: Sandbox, name: str, hooks: VolumeHooks) -> None:
-    hooks.close_access()
-    hooks.assert_reserved()
-    hooks.quiesce_and_unmount()
-    view = sb.patch_volumes(remove=[name])
-    if view["volumes_want"] or view["volumes"] or view["states"] or view["converging"]:
-        raise RuntimeError("volume references remain; keep access closed")
-    sb.hibernate()
-
-
-def resume_volume(sb: Sandbox, name: str, hooks: VolumeHooks) -> None:
-    hooks.close_access()
-    hooks.assert_reserved()
-    sb.exec("true")
-    volume = {"name": name, "mode": "rw", "attach_only": True}
-    view = sb.patch_volumes(add=[volume])
-    if view["volumes_want"] != [volume] or view["volumes"] != [volume] or view["converging"]:
-        raise RuntimeError("volume attachment is not settled; keep access closed")
-    hooks.mount_and_verify()
-    hooks.open_access()
-```
+The [tested Python example](../sdk/python/examples/volume_controller.py) defines
+`VolumeHooks`, `hibernate_volume`, and `resume_volume`. Copy that module into
+your controller, then supply the callbacks described above. The SDK's regular
+pytest suite exercises these functions through HTTP with mocked node replies.
+Those tests check request and response compatibility and failure ordering.
+They do not prove guest unmount, disk integrity, or an external access gate.
 
 Call `resume_volume` for initial attachment to an empty running claim, or after
 sleep. It wakes through a guest command, then attaches and mounts the disk.
@@ -139,6 +128,12 @@ does not acknowledge durable retirement. Retry the same remove target and
 require success before calling hibernate. Make the guest cleanup hook safe
 for a retry where the filesystem is already unmounted. Do not blindly rerun
 application writes, formatting, or an entire lifecycle sequence.
+
+If the owning node changes, treat the claim as a new placement even if its ID
+is unchanged. Keep access closed and fence the old node from the backing before
+reattaching on another node. Node-local admission and catalog registration do
+not provide a distributed single-writer lock. This example does not implement
+failover fencing or replica transfer.
 
 If hibernate or wake fails, inspect claim state and resume from the confirmed
 stage while retaining the reservation. `exec("true")` proves only silkd

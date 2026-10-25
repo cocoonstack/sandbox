@@ -170,8 +170,11 @@ before read-only publication.
 An external controller owns stop-write and unmount before detach, its own
 reservation across sleep, and access gating until wake, attach, and mount
 complete. Wake establishes silkd readiness, and business traffic may trigger
-it. The controller must gate those entry points too. The API does not implement
-or verify that composed lifecycle. See the [API contract](sandboxd-api.md#delete-v1volumesname).
+it. Gate the API and preview listeners on every node that can serve the claim.
+Previously issued preview URLs can still wake it. Node-local admission does not
+fence a writer on another node. Follow the [controller example](volume-controller.md)
+for replication, archiving, ownership changes, and recovery. The controller
+supplies the reservation and access gate. See the [API contract](sandboxd-api.md#delete-v1volumesname).
 
 ## Known limitations
 

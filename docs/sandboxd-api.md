@@ -369,16 +369,22 @@ has retired.
 
 An external controller owns quiescence and guest unmount before detach. It
 confirms successful detach and recovery bookkeeping before hibernation, and
-keeps its own volume reservation while the sandbox sleeps. For controller-only attachment, leave the runtime entry's `tenants` empty and
-keep `api_token` configured. A nonempty ACL allows those tenants to attach the
+keeps its own volume reservation while the sandbox sleeps. sandboxd holds no
+reservation after detach and reference retirement, so root can attach that
+volume elsewhere during sleep. For controller-only attachment, leave the runtime
+entry's `tenants` empty and keep `api_token` configured. A nonempty ACL allows those tenants to attach the
 volume themselves after detach; it does not reserve the volume for one claim.
 Removing `api_token` restores the daemon's unauthenticated root-scope mode, so
 operator-only admission then provides no network authentication. The controller
-gates every access path, including business requests that wake the sandbox,
-until wake, attach, and mount complete. Wake establishes only silkd readiness.
+gates every access path, including the API and preview listeners on all nodes
+that can serve or wake the sandbox, until wake, attach, and mount complete.
+Wake establishes only silkd readiness.
 It does not restore volume attachments or application readiness. Controller
 orchestration is external. The [controller example](volume-controller.md)
-shows the sequence and the reservation and access-gate contracts it requires.
+shows the sequence, the pool replication and archive settings, and the
+reservation and access-gate contracts it requires. A change of owning node
+requires the controller to fence the old node before attaching the same backing
+on a new node, even when the claim ID is unchanged.
 Downgrading to a daemon without runtime registration requires draining runtime references or supplying equivalent
 static volume config. Pending live volume changes must finish before downgrade.
 
