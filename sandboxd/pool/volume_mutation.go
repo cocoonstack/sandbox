@@ -14,8 +14,10 @@ import (
 )
 
 const (
-	volumeChangeFailed      = "volume change failed; retry the desired target"
-	volumeChangeInterrupted = "volume change interrupted; retry the desired target"
+	volumeChangeFailed       = "volume change failed; retry the desired target"
+	volumeChangeInterrupted  = "volume change interrupted; retry the desired target"
+	volumeReplicaFailed      = "replica retirement failed; background retry pending"
+	volumeReplicaUnavailable = "replica registry unavailable; background retry pending"
 )
 
 type volumeEdit func(current, shapeContext []types.Volume) ([]types.Volume, error)
@@ -130,6 +132,9 @@ func (m *Manager) changeVolumes(ctx context.Context, id, tenant string, change v
 	if err = m.prepareVolumeTarget(ctx, sb, run, target, additions, resolved); err != nil {
 		return view, err
 	}
+	if err = m.checkVolumeApply(ctx, sb, run); err != nil {
+		return view, err
+	}
 	m.mu.Lock()
 	removals := volumeDifferenceByName(sb.Volumes, target)
 	m.mu.Unlock()
@@ -148,7 +153,7 @@ func (m *Manager) changeVolumes(ctx context.Context, id, tenant string, change v
 	m.mu.Unlock()
 	for _, v := range pending {
 		failedName = v.Name
-		if err = m.checkVolumeRun(ctx, sb, run); err != nil {
+		if err = m.checkVolumeApply(ctx, sb, run); err != nil {
 			return view, err
 		}
 		repair, resolveErr := m.resolveCatalogVolume(ctx, v)
@@ -264,31 +269,9 @@ func (m *Manager) prepareVolumeTarget(ctx context.Context, sb *types.Sandbox, ru
 }
 
 func (m *Manager) stageVolumeTarget(ctx context.Context, sb *types.Sandbox, run *volumeRun, target, additions []types.Volume, resolved []resolvedVolume) (claimSnapshot, bool, error) {
-	sb.Transition.Lock()
-	m.mu.Lock()
-	if err := m.checkVolumeRunLocked(ctx, sb, run); err != nil {
-		m.mu.Unlock()
-		sb.Transition.Unlock()
+	if err := m.admitVolumeTarget(ctx, sb, run, target, additions, resolved); err != nil {
 		return claimSnapshot{}, false, err
 	}
-	if sb.OnExpire == types.ExpireArchive && len(target) > 0 {
-		m.mu.Unlock()
-		sb.Transition.Unlock()
-		return claimSnapshot{}, false, ErrVolumeCapture
-	}
-	if sb.HasReplica() && slices.ContainsFunc(additions, types.Volume.RW) {
-		m.mu.Unlock()
-		sb.Transition.Unlock()
-		return claimSnapshot{}, false, fmt.Errorf("%w: writable attachment requires replica retirement", ErrVolumeBusy)
-	}
-	if err := m.reserveResolved(run.access, resolved, sb); err != nil {
-		m.mu.Unlock()
-		sb.Transition.Unlock()
-		return claimSnapshot{}, false, err
-	}
-	run.holds = append(run.holds, additions...)
-	m.mu.Unlock()
-	sb.Transition.Unlock()
 	cleanErr := m.confirmVolumesClean(resolved)
 	sb.Transition.Lock()
 	defer sb.Transition.Unlock()
@@ -311,6 +294,48 @@ func (m *Manager) stageVolumeTarget(ctx context.Context, sb *types.Sandbox, run 
 	sb.Volumes = slices.DeleteFunc(slices.Clone(sb.Volumes), replaced)
 	sb.VolumesWant = slices.Clone(target)
 	return m.store.set(sb), true, nil
+}
+
+func (m *Manager) admitVolumeTarget(ctx context.Context, sb *types.Sandbox, run *volumeRun, target, additions []types.Volume, resolved []resolvedVolume) error {
+	sb.Transition.Lock()
+	defer sb.Transition.Unlock()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if err := m.checkVolumeRunLocked(ctx, sb, run); err != nil {
+		return err
+	}
+	if sb.OnExpire == types.ExpireArchive && len(target) > 0 {
+		return ErrVolumeCapture
+	}
+	if err := m.reserveResolved(run.access, resolved, sb); err != nil {
+		return err
+	}
+	run.holds = append(run.holds, additions...)
+	return nil
+}
+
+// checkVolumeApply keeps desired writers reserved while the scan retires a replica.
+// The claim snapshot must acknowledge retirement before a device can be exposed.
+func (m *Manager) checkVolumeApply(ctx context.Context, sb *types.Sandbox, run *volumeRun) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if err := m.checkVolumeRunLocked(ctx, sb, run); err != nil {
+		return err
+	}
+	if !slices.ContainsFunc(sb.VolumesWant, func(v types.Volume) bool { return pendingVolumeWriter(sb, v) }) {
+		return nil
+	}
+	if sb.HasReplica() {
+		return ErrReplicaPresent
+	}
+	if !m.store.synced() {
+		return ErrVolumePendingCommit
+	}
+	return nil
+}
+
+func pendingVolumeWriter(sb *types.Sandbox, v types.Volume) bool {
+	return v.RW() && volumeIndex(sb.VolumesWant, v.Name) >= 0 && volumeIndex(sb.Volumes, v.Name) < 0
 }
 
 func (m *Manager) detachVolumeRun(ctx context.Context, sb *types.Sandbox, run *volumeRun, v types.Volume) error {
@@ -406,6 +431,18 @@ func (m *Manager) volumeView(sb *types.Sandbox) types.SandboxVolumesResponse {
 			state = types.VolumePending
 		}
 		message := m.volumeErrors[sb][v.Name]
+		if pendingVolumeWriter(sb, v) {
+			switch {
+			case !m.store.synced():
+				message = ErrVolumePendingCommit.Error()
+			case sb.HasReplica():
+				if message != volumeReplicaFailed && message != volumeReplicaUnavailable {
+					message = ErrReplicaPresent.Error()
+				}
+			case message == volumeReplicaFailed || message == volumeReplicaUnavailable:
+				message = ""
+			}
+		}
 		if message == "" && state != types.VolumeAttached && !view.Converging {
 			message = volumeChangeInterrupted
 		}
@@ -425,7 +462,7 @@ func (m *Manager) recordVolumeError(sb *types.Sandbox, run *volumeRun, name stri
 		return
 	}
 	errs := m.volumeErrors[sb]
-	if name != "" {
+	if name != "" && !errors.Is(err, ErrReplicaPresent) && !errors.Is(err, ErrVolumePendingCommit) {
 		message := volumeChangeFailed
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			message = volumeChangeInterrupted

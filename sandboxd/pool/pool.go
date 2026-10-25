@@ -102,6 +102,10 @@ var (
 	ErrNoEgressFork      = errors.New("egress-lane sandboxes cannot fork, checkpoint, or promote: a resumed guest egresses before its fresh tap can be locked")
 	ErrVolumeCapture     = errors.New("sandboxes with volumes cannot hibernate, fork, checkpoint, or promote")
 	ErrVolumeBusy        = errors.New("volume is held by another claim")
+
+	ErrReplicaPresent      = errors.New("writable volume intent recorded; waiting for replica retirement before retry")
+	ErrVolumePendingCommit = errors.New("volume intent or replica retirement is not yet persisted; retry")
+
 	// Replaying a journal takes a writable mount, so readers stay out.
 	ErrVolumeNeedsRecovery = errors.New("volume needs recovery by a writable claim")
 	ErrArchived            = errors.New("sandbox is archived; an exec or file call wakes it first")

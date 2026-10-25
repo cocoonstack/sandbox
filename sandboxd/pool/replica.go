@@ -234,8 +234,31 @@ func (m *Manager) clearReplicaIntent(ctx context.Context, sb *types.Sandbox, ck 
 func (m *Manager) retireReplica(ctx context.Context, sb *types.Sandbox) {
 	sb.Transition.Lock()
 	defer sb.Transition.Unlock()
-	if err := m.dropReplica(ctx, sb); err != nil && !benignSweepErr(err) {
+	err := m.dropReplica(ctx, sb)
+	if err != nil && !benignSweepErr(err) {
 		log.WithFunc("pool.retireReplica").Warnf(ctx, "stop replicating %s: %v", sb.ID, err)
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.claimed[sb.ID] != sb {
+		return
+	}
+	for _, v := range sb.VolumesWant {
+		if !pendingVolumeWriter(sb, v) {
+			continue
+		}
+		if err != nil {
+			if m.volumeErrors[sb] == nil {
+				m.volumeErrors[sb] = map[string]string{}
+			}
+			message := volumeReplicaFailed
+			if errors.Is(err, ErrArchiveStoreDown) {
+				message = volumeReplicaUnavailable
+			}
+			m.volumeErrors[sb][v.Name] = message
+		} else if message := m.volumeErrors[sb][v.Name]; message == volumeReplicaFailed || message == volumeReplicaUnavailable {
+			delete(m.volumeErrors[sb], v.Name)
+		}
 	}
 }
 
@@ -252,11 +275,14 @@ func (m *Manager) dropReplica(ctx context.Context, sb *types.Sandbox) error {
 		return err
 	}
 	var ck string
-	live, _ := m.commitIfLive(ctx, sb, func() {
+	live, err := m.commitIfLive(ctx, sb, func() {
 		ck, sb.ReplicaCk = sb.ReplicaCk, ""
 	})
 	if !live {
 		return ErrUnknownSandbox
+	}
+	if err != nil {
+		return fmt.Errorf("persist replica retirement: %w", err)
 	}
 	m.dropTombstone(ctx, sb.ID, consumed)
 	m.deleteOrphanArchiveCk(ctx, ck)

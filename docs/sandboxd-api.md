@@ -531,6 +531,26 @@ retrying. Retry the same PUT to converge, or send a new
 target to abandon unfinished additions. Concurrent requests serialize per
 sandbox without blocking renewals or new exec, file, and port connections.
 
+A new RW target on a claim with an existing or pending replica is accepted into
+`volumes_want` and reserves the volume, but returns 409 with an explicit replica
+retirement error while that replica still blocks RW attachment. The normal background scan sees
+this desired hold, retires the replica, and stops publishing replicas even if
+`replicate_seconds` is positive. A repeated request cannot attach RW while the
+replica remains unresolved. Registry failures appear in `states[].error` and
+are retried by the scan. Removing the desired target cancels that reservation
+after normal cleanup; release also remains available.
+
+After the request ends, `converging` is false unless ordinary recovery-reference
+retirement is still pending. The replica scan never attaches the disk: poll the
+view and retry the same PUT or PATCH to finish. A successful retry acknowledges
+both replica retirement and attachment. Pending desired writers survive restart,
+keep their admission holds, and prevent checkpoint publication. If the replica
+clear has not been acknowledged by the claim journal, RW application also waits
+for a successful snapshot commit. Since that journal writes all claims together,
+an unacknowledged write for another claim can briefly delay RW application too.
+A consumed replica row is retained until the local clear is acknowledged, so a
+restart cannot mistake failed persistence for another node's adoption.
+
 Before applying a target, sandboxd journals `VolumesWant` beside `Volumes`,
 storing it only while it differs from `Volumes`. A
 superseding request may first clean up an older desired-only attachment while

@@ -130,6 +130,10 @@ func (m *Manager) putRow(ctx context.Context, sb *types.Sandbox, ck string, repl
 		return 0, nil
 	}
 	m.mu.Lock()
+	if replica && m.hasVolumeHolds(sb) {
+		m.mu.Unlock()
+		return 0, ErrVolumeCapture
+	}
 	dto, deadline, held := dtoOf(sb), sb.Deadline, sb.ArchiveEpoch
 	switch {
 	case replica:
@@ -476,6 +480,11 @@ func (m *Manager) dropStaleRow(ctx context.Context, sb *types.Sandbox, rec archi
 }
 
 func (m *Manager) purgeArchiveRow(ctx context.Context, rec archives.Record) {
+	// A failed replica clear can leave the old checkpoint in claims.json.
+	// Keep its consumed row until an acknowledged snapshot makes deletion safe.
+	if rec.Consumed && !m.store.synced() {
+		return
+	}
 	logger := log.WithFunc("pool.purgeArchiveRow")
 	if err := m.deleteArchiveCk(ctx, rec.Checkpoint); err != nil {
 		logger.Warnf(ctx, "purge archive %s: delete ck %s: %v", rec.ID, rec.Checkpoint, err)
