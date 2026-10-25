@@ -22,6 +22,16 @@ import (
 
 const retryAfterSeconds = "10"
 
+// Keep HTTP responses readable by SDKs that echo the historical three-field shape.
+// Storage and forwarded requests retain the canonical AttachOnly field.
+var responseMarshalers = json.MarshalToFunc(func(out *jsontext.Encoder, v types.Volume) error {
+	return json.MarshalEncode(out, struct {
+		Name  string `json:"name"`
+		Mount string `json:"mount,omitempty"`
+		Mode  string `json:"mode,omitempty"`
+	}{v.Name, v.Mount, v.Mode})
+})
+
 type tenantKey struct{}
 
 func (s *Server) writeRedirect(w http.ResponseWriter, addrs []string) bool {
@@ -212,7 +222,7 @@ func noContent(w http.ResponseWriter) func() {
 func writeJSON(w http.ResponseWriter, code int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
-	_ = json.MarshalWrite(w, v, jsontext.AllowInvalidUTF8(true))
+	_ = json.MarshalWrite(w, v, jsontext.AllowInvalidUTF8(true), json.WithMarshalers(responseMarshalers))
 }
 
 func writeErr(w http.ResponseWriter, code int, msg string) {

@@ -101,7 +101,7 @@ func (m *Manager) changeVolumes(ctx context.Context, id, tenant string, change v
 	if err = validateLiveTarget(slices.Concat(held, recovery), target); err != nil {
 		return view, err
 	}
-	additions := volumeDifference(target, held)
+	additions := volumeDifferenceByName(target, held)
 	if slices.ContainsFunc(additions, func(v types.Volume) bool { return !slices.Contains(recovery, v) }) {
 		if err = m.tenantRemoved(ctx, sb.Tenant); err != nil {
 			return view, err
@@ -116,7 +116,7 @@ func (m *Manager) changeVolumes(ctx context.Context, id, tenant string, change v
 	}
 	sb.Touch()
 	m.mu.Lock()
-	uncertain := volumeDifference(volumeDifference(sb.VolumesWant, sb.Volumes), target)
+	uncertain := volumeDifferenceByName(volumeDifferenceByName(sb.VolumesWant, sb.Volumes), target)
 	m.mu.Unlock()
 	for _, v := range uncertain {
 		failedName = v.Name
@@ -129,7 +129,7 @@ func (m *Manager) changeVolumes(ctx context.Context, id, tenant string, change v
 		return view, err
 	}
 	m.mu.Lock()
-	removals := volumeDifference(sb.Volumes, target)
+	removals := volumeDifferenceByName(sb.Volumes, target)
 	m.mu.Unlock()
 	for _, v := range removals {
 		failedName = v.Name
@@ -142,7 +142,7 @@ func (m *Manager) changeVolumes(ctx context.Context, id, tenant string, change v
 		m.clearVolumeError(sb, run, v.Name)
 	}
 	m.mu.Lock()
-	pending := volumeDifference(sb.VolumesWant, sb.Volumes)
+	pending := volumeDifferenceByName(sb.VolumesWant, sb.Volumes)
 	m.mu.Unlock()
 	for _, v := range pending {
 		failedName = v.Name
@@ -201,7 +201,7 @@ func (m *Manager) beginVolumeRun(ctx context.Context, sb *types.Sandbox) (contex
 func (m *Manager) finishVolumeRun(sb *types.Sandbox, run *volumeRun) types.SandboxVolumesResponse {
 	m.mu.Lock()
 	if m.claimed[sb.ID] == sb {
-		m.releaseVolumes(volumeDifference(run.holds, heldVolumes(sb)))
+		m.releaseVolumes(volumeDifferenceByName(run.holds, heldVolumes(sb)))
 	}
 	delete(m.volumeRuns, sb)
 	view := m.volumeView(sb)
@@ -213,7 +213,7 @@ func (m *Manager) finishVolumeRun(sb *types.Sandbox, run *volumeRun) types.Sandb
 
 func (m *Manager) restoreVolumeHolds(sb *types.Sandbox, holds []types.Volume) {
 	if m.volumeRuns[sb] == nil {
-		m.releaseVolumes(volumeDifference(holds, heldVolumes(sb)))
+		m.releaseVolumes(volumeDifferenceByName(holds, heldVolumes(sb)))
 	}
 }
 
@@ -289,7 +289,7 @@ func (m *Manager) stageVolumeTarget(ctx context.Context, sb *types.Sandbox, run 
 	}
 	if cleanErr != nil {
 		m.releaseVolumes(additions)
-		run.holds = volumeDifference(run.holds, additions)
+		run.holds = volumeDifferenceByName(run.holds, additions)
 		return claimSnapshot{}, false, cleanErr
 	}
 	replaced := func(v types.Volume) bool {
@@ -304,13 +304,7 @@ func (m *Manager) stageVolumeTarget(ctx context.Context, sb *types.Sandbox, run 
 }
 
 func (m *Manager) detachVolumeRun(ctx context.Context, sb *types.Sandbox, run *volumeRun, v types.Volume) error {
-	m.mu.Lock()
-	err := m.checkVolumeRunLocked(ctx, sb, run)
-	path := ""
-	if entry := m.catalog.entries[v.Name]; entry != nil {
-		path = entry.disk.Path
-	}
-	m.mu.Unlock()
+	path, err := m.detachImagePath(ctx, sb, run, v.Name)
 	if err != nil {
 		return err
 	}
@@ -327,6 +321,18 @@ func (m *Manager) detachVolumeRun(ctx context.Context, sb *types.Sandbox, run *v
 		}
 	}
 	return nil
+}
+
+func (m *Manager) detachImagePath(ctx context.Context, sb *types.Sandbox, run *volumeRun, name string) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if err := m.checkVolumeRunLocked(ctx, sb, run); err != nil {
+		return "", err
+	}
+	if entry := m.catalog.entries[name]; entry != nil {
+		return entry.disk.Path, nil
+	}
+	return "", nil
 }
 
 func (m *Manager) commitVolumeApplied(ctx context.Context, sb *types.Sandbox, run *volumeRun, v types.Volume, attached bool) error {
@@ -357,9 +363,9 @@ func (m *Manager) commitVolumeRun(ctx context.Context, sb *types.Sandbox, run *v
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	dropped := volumeDifference(run.holds, heldVolumes(sb))
+	dropped := volumeDifferenceByName(run.holds, heldVolumes(sb))
 	m.releaseVolumes(dropped)
-	run.holds = volumeDifference(run.holds, dropped)
+	run.holds = volumeDifferenceByName(run.holds, dropped)
 	return nil
 }
 
@@ -374,7 +380,7 @@ func (m *Manager) hasVolumeHolds(sb *types.Sandbox) bool {
 
 func (m *Manager) volumeView(sb *types.Sandbox) types.SandboxVolumesResponse {
 	held := heldVolumes(sb)
-	recovering := volumeDifference(m.store.recoveryVolumes(sb.ID)[sb.ID], held)
+	recovering := volumeDifferenceByName(m.store.recoveryVolumes(sb.ID)[sb.ID], held)
 	view := types.SandboxVolumesResponse{
 		Volumes:     slices.Clone(sb.Volumes),
 		VolumesWant: slices.Clone(sb.VolumesWant),
@@ -442,11 +448,11 @@ func (m *Manager) clearVolumeError(sb *types.Sandbox, run *volumeRun, name strin
 func normalizeLiveVolumes(volumes, held []types.Volume) ([]types.Volume, error) {
 	request := slices.Clone(volumes)
 	for i, v := range request {
-		if old := volumeIndex(held, v.Name); old >= 0 && held[old].Mount == "" && v.Mount == "" {
+		if old := volumeIndex(held, v.Name); old >= 0 && held[old].AttachOnly && v.Mount == "" {
 			request[i].AttachOnly = true
 		}
 	}
-	out, err := types.ValidateVolumes(request, false)
+	out, err := types.ValidateVolumes(request)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrBadVolume, err)
 	}
@@ -467,7 +473,7 @@ func volumeIndex(volumes []types.Volume, name string) int {
 	return slices.IndexFunc(volumes, func(v types.Volume) bool { return v.Name == name })
 }
 
-func volumeDifference(left, right []types.Volume) []types.Volume {
+func volumeDifferenceByName(left, right []types.Volume) []types.Volume {
 	return slices.DeleteFunc(slices.Clone(left), func(v types.Volume) bool { return volumeIndex(right, v.Name) >= 0 })
 }
 
@@ -484,7 +490,7 @@ func validateDetachNames(names []string) error {
 }
 
 func heldVolumes(sb *types.Sandbox) []types.Volume {
-	return slices.Concat(sb.Volumes, volumeDifference(sb.VolumesWant, sb.Volumes))
+	return slices.Concat(sb.Volumes, volumeDifferenceByName(sb.VolumesWant, sb.Volumes))
 }
 
 func (m *Manager) resolveLiveAdditions(ctx context.Context, sb *types.Sandbox, additions, recovery []types.Volume) ([]resolvedVolume, error) {

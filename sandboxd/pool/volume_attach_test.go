@@ -376,7 +376,7 @@ func TestQuiesceVolumesSkipsAttachOnlyEntries(t *testing.T) {
 	sb := &types.Sandbox{
 		ID: "sb_mixed", VMName: "sbx-mixed", Key: testKey, VsockSocket: "/vsock/mixed",
 		Volumes: []types.Volume{
-			{Name: "scratch", Mode: types.VolumeModeRW},
+			{Name: "scratch", Mode: types.VolumeModeRW, AttachOnly: true},
 			{Name: "mounted", Mount: "/volumes/mounted", Mode: types.VolumeModeRW},
 		},
 	}
@@ -402,11 +402,11 @@ func TestWritableMountsCountsOnlyQuiescableEntries(t *testing.T) {
 	}{
 		{"none", nil, 0},
 		{"read-only mount", []types.Volume{{Name: "a", Mount: "/a"}}, 0},
-		{"attach-only writer", []types.Volume{{Name: "a", Mode: types.VolumeModeRW}}, 0},
+		{"attach-only writer", []types.Volume{{Name: "a", Mode: types.VolumeModeRW, AttachOnly: true}}, 0},
 		{"writable mount", []types.Volume{{Name: "a", Mount: "/a", Mode: types.VolumeModeRW}}, 1},
 		{"mixed", []types.Volume{
 			{Name: "a", Mount: "/a", Mode: types.VolumeModeRW},
-			{Name: "b", Mode: types.VolumeModeRW},
+			{Name: "b", Mode: types.VolumeModeRW, AttachOnly: true},
 			{Name: "c", Mount: "/c"},
 		}, 1},
 	} {

@@ -27,11 +27,17 @@ type fakeEngine struct {
 	volumeOps []string
 	volumeVMs map[string]bool
 	guestEnvs map[string]string
+	mounts    map[string]map[string]fakeVolumeMount
 	seq       int
 
 	readerRoot     string
 	readerStarts   []string
 	readerAttaches []string
+}
+
+type fakeVolumeMount struct {
+	name string
+	rw   bool
 }
 
 func newFakeEngine(dir string) *fakeEngine {
@@ -42,6 +48,7 @@ func newFakeEngine(dir string) *fakeEngine {
 		socks:     map[string]string{},
 		volumeVMs: map[string]bool{},
 		guestEnvs: map[string]string{},
+		mounts:    map[string]map[string]fakeVolumeMount{},
 	}
 }
 
@@ -66,6 +73,7 @@ func (f *fakeEngine) Remove(_ context.Context, name string) error {
 		_ = l.Close()
 	}
 	delete(f.listeners, name)
+	delete(f.mounts, f.socks[name])
 	delete(f.socks, name)
 	if f.volumeVMs[name] {
 		delete(f.volumeVMs, name)
@@ -190,10 +198,14 @@ func (f *fakeEngine) DiskAttach(_ context.Context, vmName string, spec engine.Vo
 	return nil
 }
 
-func (f *fakeEngine) MountVolume(_ context.Context, _, name, mount string, rw bool) error {
+func (f *fakeEngine) MountVolume(_ context.Context, sock, name, mount string, rw bool) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.volumeOps = append(f.volumeOps, "mount:"+name+":"+mount+":"+volumeMode(rw))
+	if f.mounts[sock] == nil {
+		f.mounts[sock] = map[string]fakeVolumeMount{}
+	}
+	f.mounts[sock][mount] = fakeVolumeMount{name: name, rw: rw}
 	return nil
 }
 
@@ -201,11 +213,16 @@ func (f *fakeEngine) MountLiveVolume(ctx context.Context, sock, name, mount stri
 	return f.MountVolume(ctx, sock, name, mount, rw)
 }
 
-func (f *fakeEngine) UnmountVolume(_ context.Context, _, mount string) error {
+func (f *fakeEngine) UnmountVolume(_ context.Context, sock, mount string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.volumeOps = append(f.volumeOps, "umount:"+mount)
+	f.unmountVolumeLocked(sock, mount)
 	return nil
+}
+
+func (f *fakeEngine) unmountVolumeLocked(sock, mount string) {
+	f.volumeOps = append(f.volumeOps, "umount:"+mount)
+	delete(f.mounts[sock], mount)
 }
 
 func (f *fakeEngine) SyncGuest(_ context.Context, _ string) error {
@@ -215,14 +232,21 @@ func (f *fakeEngine) SyncGuest(_ context.Context, _ string) error {
 	return nil
 }
 
-func (f *fakeEngine) DetachVolume(ctx context.Context, _, sock, name, mount string) (engine.VolumeDetachResult, error) {
-	if err := f.UnmountVolume(ctx, sock, mount); err != nil {
-		return engine.VolumeDetachResult{}, err
-	}
+func (f *fakeEngine) DetachVolume(_ context.Context, _, sock, name, mount string) (engine.VolumeDetachResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	entry, mounted := f.mounts[sock][mount]
+	normal := mount != "" && mounted && entry.name == name && entry.rw
+	if mount != "" && mounted && entry.name == name {
+		f.unmountVolumeLocked(sock, mount)
+	}
+	for _, other := range f.mounts[sock] {
+		if other.name == name {
+			return engine.VolumeDetachResult{}, &engine.VolumeMountConflict{Message: "volume still has a simulated guest mount"}
+		}
+	}
 	f.volumeOps = append(f.volumeOps, "detach:"+name)
-	return engine.VolumeDetachResult{}, nil
+	return engine.VolumeDetachResult{NormalUnmount: normal}, nil
 }
 
 func (f *fakeEngine) volumeOpsLog() []string {

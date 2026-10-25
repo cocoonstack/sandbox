@@ -140,7 +140,7 @@ func (m *Manager) resolveVolumes(ctx context.Context, tenant string, requested [
 	if len(requested) == 0 {
 		return nil, nil
 	}
-	applied, err := types.ValidateVolumes(requested, false)
+	applied, err := types.ValidateVolumes(requested)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrBadVolume, err)
 	}
@@ -219,7 +219,7 @@ func (m *Manager) applyVolumes(ctx context.Context, sb *types.Sandbox, volumes [
 // applyVolume keeps one volume's steps strictly ordered; siblings overlap freely.
 func (m *Manager) applyVolume(ctx context.Context, sb *types.Sandbox, volume resolvedVolume, live bool) error {
 	// attach-only mounts nothing, so there is no umount to verify and no marker.
-	attachOnly := volume.applied.Mount == ""
+	attachOnly := volume.applied.AttachOnly
 	// write-ahead: the marker must be durable before any guest write can be.
 	if volume.disk.RW && !attachOnly {
 		if err := markVolumeDirty(volume.disk.Path); err != nil {
@@ -400,7 +400,7 @@ func writableMounts(volumes []types.Volume) int {
 }
 
 func needsUnmount(volume types.Volume) bool {
-	return volume.RW() && volume.Mount != ""
+	return volume.RW() && !volume.AttachOnly
 }
 
 func appliedVolumes(volumes []resolvedVolume) []types.Volume {

@@ -31,7 +31,7 @@ func (e *LiveVolumeUnsupported) Error() string {
 }
 
 type volumeMount struct {
-	devNum, root, path, options string
+	devNum, root, path, options, superOptions string
 }
 
 // CheckLiveVolumeSupport rejects runtimes without idempotent live disk attach and detach.
@@ -62,7 +62,12 @@ func (e *Engine) MountLiveVolume(ctx context.Context, vsockSocket, name, mount s
 	return e.mountDevice(ctx, vsockSocket, device, name, mount, rw)
 }
 
-// VolumeDetachResult reports clean-unmount evidence from a confirmed host detach.
+// VolumeDetachResult is usable only with a nil DetachVolume error.
+// NormalUnmount requires this call to find the expected device at its root
+// mount with writable mount and superblock options, ordinarily unmount it,
+// exclude remaining device mounts, and confirm host detach. Absence, an earlier
+// external unmount, attach-only requests, read-only state, and errors give no
+// proof. It cannot be reused across calls or certify externally managed writers.
 type VolumeDetachResult struct {
 	NormalUnmount bool
 }
@@ -105,8 +110,7 @@ func (e *Engine) unmountLiveVolume(ctx context.Context, vsockSocket, device, mou
 			}
 			return false, err
 		}
-		mode, _, _ := strings.Cut(atTarget[0].options, ",")
-		normal = mode == "rw"
+		normal = writableMountOptions(atTarget[0].options) && writableMountOptions(atTarget[0].superOptions)
 	}
 	if err = e.refuseOtherMounts(ctx, vsockSocket, device); err != nil {
 		return false, err
@@ -126,12 +130,21 @@ func (e *Engine) volumeMounts(ctx context.Context, vsockSocket, device string) (
 	var mounts []volumeMount
 	for line := range strings.SplitSeq(strings.TrimSpace(string(raw)), "\n") {
 		fields := strings.Fields(line)
-		if len(fields) < 10 || !slices.Contains(fields[6:], "-") {
+		if len(fields) < 10 {
 			return "", nil, errors.New("invalid guest mountinfo")
 		}
-		mounts = append(mounts, volumeMount{fields[2], mountUnescaper.Replace(fields[3]), mountUnescaper.Replace(fields[4]), fields[5]})
+		separator := slices.Index(fields[6:], "-") + 6
+		if separator < 6 || separator+4 != len(fields) {
+			return "", nil, errors.New("invalid guest mountinfo")
+		}
+		mounts = append(mounts, volumeMount{fields[2], mountUnescaper.Replace(fields[3]), mountUnescaper.Replace(fields[4]), fields[5], fields[separator+3]})
 	}
 	return strings.TrimSpace(string(devNum)), mounts, nil
+}
+
+func writableMountOptions(options string) bool {
+	parts := strings.Split(options, ",")
+	return slices.Contains(parts, "rw") && !slices.Contains(parts, "ro") && !slices.Contains(parts, "")
 }
 
 func (e *Engine) volumeMounted(ctx context.Context, vsockSocket, device, mount string, rw bool) (bool, error) {

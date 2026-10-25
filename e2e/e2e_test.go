@@ -800,7 +800,7 @@ func TestAttachOnlyVolumeWireShape(t *testing.T) {
 		{
 			"attach-only omits the mount",
 			`{"template":"rt:24.04","volumes_attach_only":true,"volumes":[{"name":"scratch","mode":"rw"}]}`,
-			map[string]any{"name": "scratch", "mode": "rw", "attach_only": true},
+			map[string]any{"name": "scratch", "mode": "rw"},
 		},
 		{
 			"eager claim is unchanged",

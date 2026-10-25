@@ -3,6 +3,7 @@ package e2e
 import (
 	"errors"
 	"net/http"
+	"os"
 	"slices"
 	"strings"
 	"testing"
@@ -10,6 +11,65 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/config"
 	sandbox "github.com/cocoonstack/sandbox/sdk/go"
 )
+
+func TestLiveWritableRemovalClearsMarkerThroughSDK(t *testing.T) {
+	for _, preUnmount := range []bool{false, true} {
+		t.Run(map[bool]string{false: "daemon unmount", true: "external unmount"}[preUnmount], func(t *testing.T) {
+			image := writeVolumeImage(t, "data.img", "original-data")
+			stack := startTenantStack(t, "node-token", nil, []config.VolumeSpec{{Name: "data", Path: image, Writable: true}})
+			writer, err := stack.client.New(t.Context(), "rt:24.04")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer writer.Close()
+			reader, err := stack.client.New(t.Context(), "rt:24.04")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer reader.Close()
+			if _, err = writer.SetVolumes(t.Context(), []sandbox.Volume{{Name: "data", Mode: "rw"}}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err = os.Stat(image + ".dirty"); err != nil {
+				t.Fatalf("writer has no dirty marker: %v", err)
+			}
+			if _, err = reader.SetVolumes(t.Context(), []sandbox.Volume{{Name: "data"}}); err == nil {
+				t.Fatal("reader admitted while writer was attached")
+			}
+			if preUnmount {
+				stack.eng.mu.Lock()
+				sock := ""
+				for guest, mounts := range stack.eng.mounts {
+					if mounts["/volumes/data"].name == "data" {
+						sock = guest
+						break
+					}
+				}
+				stack.eng.mu.Unlock()
+				if sock == "" {
+					t.Fatal("writer has no simulated mount")
+				}
+				if err = stack.eng.UnmountVolume(t.Context(), sock, "/volumes/data"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err = writer.PatchVolumes(t.Context(), sandbox.VolumePatch{Remove: []string{"data"}}); err != nil {
+				t.Fatal(err)
+			}
+			_, markerErr := os.Stat(image + ".dirty")
+			if preUnmount && markerErr != nil || !preUnmount && !errors.Is(markerErr, os.ErrNotExist) {
+				t.Fatalf("dirty marker disagrees with current-call proof: preUnmount=%t err=%v", preUnmount, markerErr)
+			}
+			_, err = reader.SetVolumes(t.Context(), []sandbox.Volume{{Name: "data"}})
+			if (err != nil) != preUnmount {
+				t.Fatalf("reader admission after detach: preUnmount=%t err=%v", preUnmount, err)
+			}
+			if data, readErr := os.ReadFile(image); readErr != nil || string(data) != "original-data" {
+				t.Fatalf("detach changed backing contents: %q, %v", data, readErr)
+			}
+		})
+	}
+}
 
 func TestLiveVolumesEndToEnd(t *testing.T) {
 	image := writeVolumeImage(t, "dataset.img", "dataset-bytes")

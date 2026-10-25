@@ -358,7 +358,7 @@ func (s *Server) handleClaim(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleVolumeClaim(w http.ResponseWriter, r *http.Request, req ClaimRequest, key types.PoolKey, hash, tenant string) {
-	volumes, err := types.ValidateVolumes(req.Volumes, req.VolumesAttachOnly)
+	volumes, err := req.normalizedVolumes()
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, fmt.Sprintf("%v: %v", pool.ErrBadVolume, err))
 		return

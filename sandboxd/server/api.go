@@ -1,6 +1,8 @@
 package server
 
 import (
+	"errors"
+	"slices"
 	"time"
 
 	"github.com/cocoonstack/sandbox/sandboxd/types"
@@ -40,6 +42,19 @@ type ClaimRequest struct {
 // Key resolves the requested pool key with the wire defaults filled.
 func (r ClaimRequest) Key() types.PoolKey {
 	return types.PoolKey{Template: r.Template, Net: r.Net, Size: r.Size}.Defaulted()
+}
+
+func (r ClaimRequest) normalizedVolumes() ([]types.Volume, error) {
+	volumes := slices.Clone(r.Volumes)
+	if r.VolumesAttachOnly {
+		if len(volumes) == 0 {
+			return nil, errors.New("volumes_attach_only requires at least one volume")
+		}
+		for i := range volumes {
+			volumes[i].AttachOnly = true
+		}
+	}
+	return types.ValidateVolumes(volumes)
 }
 
 // ClaimResponse is the wire reply of POST /v1/claim; success and Redirect are exclusive.

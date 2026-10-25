@@ -804,12 +804,9 @@ func VolumeRWNames(volumes []Volume) []string {
 }
 
 // ValidateVolumes returns detached entries with defaults filled and modes normalized.
-func ValidateVolumes(volumes []Volume, attachOnly bool) ([]Volume, error) {
+func ValidateVolumes(volumes []Volume) ([]Volume, error) {
 	if len(volumes) > MaxClaimVolumes {
 		return nil, fmt.Errorf("volumes must contain at most %d entries, got %d", MaxClaimVolumes, len(volumes))
-	}
-	if attachOnly && len(volumes) == 0 {
-		return nil, errors.New("volumes_attach_only requires at least one volume")
 	}
 	applied := make([]Volume, len(volumes))
 	names := make(map[string]struct{}, len(volumes))
@@ -829,7 +826,7 @@ func ValidateVolumes(volumes []Volume, attachOnly bool) ([]Volume, error) {
 		default:
 			return nil, fmt.Errorf("volumes[%d] mode %q must be %s or %s", i, mode, VolumeModeRO, VolumeModeRW)
 		}
-		if attachOnly || volume.AttachOnly {
+		if volume.AttachOnly {
 			if volume.Mount != "" {
 				return nil, fmt.Errorf("volumes[%d] mount %q is meaningless when the caller mounts the device itself", i, volume.Mount)
 			}

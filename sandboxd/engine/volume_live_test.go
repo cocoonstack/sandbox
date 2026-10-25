@@ -284,7 +284,7 @@ func guestChanges(calls [][]string) [][]string {
 }
 
 func TestLiveDetachCleanEvidenceRequiresWritableUnmountAndHostSuccess(t *testing.T) {
-	for _, mode := range []string{"normal", "readonly", "pre-unmounted", "missing device", "host failure", "busy", "residual mount", "attach-only mounted"} {
+	for _, mode := range []string{"normal", "readonly", "mount readonly", "contradictory mount", "superblock readonly", "contradictory superblock", "empty option", "unordered writable options", "missing superblock options", "extra superblock fields", "pre-unmounted", "missing device", "host failure", "busy", "residual mount", "attach-only mounted"} {
 		t.Run(mode, func(t *testing.T) {
 			sock := sockPath(t)
 			fake := serveFakeSilkd(t, sock)
@@ -305,6 +305,22 @@ func TestLiveDetachCleanEvidenceRequiresWritableUnmountAndHostSuccess(t *testing
 				fake.serial["/proc/self/mountinfo"] = []byte(rootMountInfo)
 			case "readonly":
 				fake.serial["/proc/self/mountinfo"] = []byte(rootMountInfo + "2 1 8:32 / /data ro - ext4 /dev/vdc ro\n")
+			case "mount readonly":
+				fake.serial["/proc/self/mountinfo"] = []byte(rootMountInfo + "2 1 8:32 / /data ro - ext4 /dev/vdc rw\n")
+			case "contradictory mount":
+				fake.serial["/proc/self/mountinfo"] = []byte(rootMountInfo + "2 1 8:32 / /data rw,ro - ext4 /dev/vdc rw\n")
+			case "empty option":
+				fake.serial["/proc/self/mountinfo"] = []byte(rootMountInfo + "2 1 8:32 / /data rw,,relatime - ext4 /dev/vdc rw\n")
+			case "superblock readonly":
+				fake.serial["/proc/self/mountinfo"] = []byte(rootMountInfo + "2 1 8:32 / /data rw - ext4 /dev/vdc ro,errors=remount-ro\n")
+			case "contradictory superblock":
+				fake.serial["/proc/self/mountinfo"] = []byte(rootMountInfo + "2 1 8:32 / /data rw - ext4 /dev/vdc rw,ro\n")
+			case "unordered writable options":
+				fake.serial["/proc/self/mountinfo"] = []byte(rootMountInfo + "2 1 8:32 / /data relatime,rw shared:4 - ext4 /dev/vdc errors=remount-ro,rw\n")
+			case "missing superblock options":
+				fake.serial["/proc/self/mountinfo"] = []byte(rootMountInfo + "2 1 8:32 / /data rw shared:4 - ext4 /dev/vdc\n")
+			case "extra superblock fields":
+				fake.serial["/proc/self/mountinfo"] = []byte(rootMountInfo + "2 1 8:32 / /data rw - ext4 /dev/vdc rw extra\n")
 			case "busy":
 				fake.execCode = 32
 			case "attach-only mounted":
@@ -317,8 +333,8 @@ func TestLiveDetachCleanEvidenceRequiresWritableUnmountAndHostSuccess(t *testing
 			}
 			fake.mu.Unlock()
 			result, err := New("cocoon", nil, nil, false, false, "").DetachVolume(t.Context(), "sbx-1", sock, spec.Name, mount)
-			wantErr := slices.Contains([]string{"host failure", "busy", "residual mount", "attach-only mounted"}, mode)
-			if (err != nil) != wantErr || result.NormalUnmount != (mode == "normal") {
+			wantErr := slices.Contains([]string{"host failure", "busy", "residual mount", "attach-only mounted", "missing superblock options", "extra superblock fields"}, mode)
+			if (err != nil) != wantErr || result.NormalUnmount != (mode == "normal" || mode == "unordered writable options") {
 				t.Fatalf("mode=%s result=%+v err=%v", mode, result, err)
 			}
 			if mode == "attach-only mounted" {
