@@ -373,9 +373,9 @@ operator-only admission then provides no network authentication. The controller
 gates every access path, including business requests that wake the sandbox,
 until wake, attach, and mount complete. Wake establishes only silkd readiness.
 It does not restore volume attachments or application readiness. Controller
-orchestration is external; no controller implementation or composed lifecycle
-verification is included here. Downgrading to a daemon without runtime
-registration requires draining runtime references or supplying equivalent
+orchestration is external. The [controller example](volume-controller.md)
+shows the sequence and the reservation and access-gate contracts it requires.
+Downgrading to a daemon without runtime registration requires draining runtime references or supplying equivalent
 static volume config. Pending live volume changes must finish before downgrade.
 
 Earlier development builds treated empty runtime ACLs as public. Loading those
@@ -420,7 +420,8 @@ when the volume is in both sets, `pending` when desired but not yet confirmed,
 or `detaching` when applied but no longer desired. An interrupted device call
 can leave the actual guest state different from the confirmed set. A failed
 PUT or PATCH adds a top-level `error` naming the refusal, and the affected
-state may carry its own `error`. `converging` is true only while a request worker is running.
+state may carry its own `error`. `converging` is true while a request worker
+is running or a recovery-only reference awaits an acknowledged claim write.
 `pending` with `converging: false` requires an explicit retry; there is no
 background convergence. GET retains the last safe per-volume error for the
 current daemon lifetime. After daemon restart, unfinished states report an
@@ -430,8 +431,10 @@ The sandbox index exposes both sets for operator inspection.
 ## PUT /v1/sandboxes/{id}/volumes
 
 Replaces the full desired set and converges synchronously. Auth matches GET.
-The owner tenant's catalog access list applies to newly admitted names, including
-for root. Retaining, repairing, or removing held names does not reauthorize
+For static entries and runtime entries with a nonempty ACL, the owner tenant's
+access list applies to newly admitted names, including for root. An empty runtime
+ACL instead requires the root caller, which can attach it to a tenant-owned claim.
+Retaining, repairing, or removing held names does not reauthorize
 them. A new image must exist on the owning node. The request must include a non-null `volumes`
 array. An explicit empty array removes all entries.
 
