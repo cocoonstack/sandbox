@@ -24,7 +24,7 @@ from .errors import (
 )
 from .frames import BULK_CHUNK, FS_CHUNK, KEEP_ALIVE_PROTO
 from .template import Template
-from .volumes import SandboxVolumesResponse, Volume, _response_volumes, _volume_bodies, _volume_response
+from .volumes import SandboxVolumesResponse, Volume, _volume_bodies, _volume_response
 
 if TYPE_CHECKING:
     from .client import Client
@@ -54,7 +54,7 @@ class Sandbox:
         self.deadline = deadline
         self.from_checkpoint = from_checkpoint
         self.template_digest = template_digest
-        self.volumes = [cast("dict[str, str | bool]", volume) for volume in _response_volumes(volumes or [])]
+        self.volumes = [dict(cast("Mapping[str, str | bool]", volume)) for volume in volumes or []]
         self.volumes_want = [dict(volume) for volume in self.volumes]
         self._pool = ConnPool(client.keep_alive)
         self._proto = 0

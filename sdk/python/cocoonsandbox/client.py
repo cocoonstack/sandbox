@@ -18,7 +18,7 @@ from .endpoint import _endpoint_url
 from .errors import APIError, SandboxTimeout, require_field
 from .sandbox import Sandbox
 from .template import _claim_body, _template_query
-from .volumes import Volume, _sandbox_response
+from .volumes import Volume, _response_volumes, _sandbox_response
 
 T = TypeVar("T")
 
@@ -181,7 +181,7 @@ class Client:
             deadline=reply.get("deadline", ""),
             from_checkpoint=reply.get("from_checkpoint", ""),
             template_digest=reply.get("template_digest", ""),
-            volumes=reply.get("volumes") or [],
+            volumes=_response_volumes(reply.get("volumes") or []),
         )
 
     def _post_json(
