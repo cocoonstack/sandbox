@@ -10,24 +10,27 @@ import (
 )
 
 type strandedState struct {
-	name      string
-	setup     func(t *testing.T, m *Manager, c *failoverCluster, sb *types.Sandbox) string
-	hibernate bool
+	name  string
+	setup func(t *testing.T, m *Manager, c *failoverCluster, sb *types.Sandbox) string
+	// wake: the fixture leaves the claim hibernated.
+	wake bool
+	// lifecycle: also check the replica checkpoint through release, expiry, and local archive.
+	lifecycle bool
 }
 
 var strandedStates = []strandedState{
-	{name: "published replica", setup: func(t *testing.T, m *Manager, _ *failoverCluster, sb *types.Sandbox) string {
+	{name: "published replica", lifecycle: true, setup: func(t *testing.T, m *Manager, _ *failoverCluster, sb *types.Sandbox) string {
 		replicateNow(t, m, sb)
 		return sb.ReplicaCk
 	}},
-	{name: "pending replica", setup: func(t *testing.T, m *Manager, c *failoverCluster, sb *types.Sandbox) string {
+	{name: "pending replica", lifecycle: true, setup: func(t *testing.T, m *Manager, c *failoverCluster, sb *types.Sandbox) string {
 		m.archives = &hookRegistry{Registry: c.reg, failPut: true}
 		if err := m.replicate(t.Context(), sb); !errors.Is(err, ErrArchiveStoreDown) {
 			t.Fatal(err)
 		}
 		return sb.ReplicaPending
 	}},
-	{name: "archive intent", hibernate: true, setup: func(t *testing.T, m *Manager, c *failoverCluster, sb *types.Sandbox) string {
+	{name: "archive intent", wake: true, setup: func(t *testing.T, m *Manager, c *failoverCluster, sb *types.Sandbox) string {
 		if err := m.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
 			t.Fatal(err)
 		}
@@ -64,48 +67,81 @@ func restartStranded(t *testing.T, state strandedState) (*Manager, *types.Sandbo
 	return restarted, restored, ck
 }
 
+func requireStrandedWriter(t *testing.T, m *Manager, sb *types.Sandbox) {
+	t.Helper()
+	want := []types.Volume{{Name: "data", Mode: types.VolumeModeRW, AttachOnly: true}}
+	view, err := m.SetVolumes(t.Context(), sb.ID, "", want)
+	if !errors.Is(err, ErrReplicaStranded) || len(view.Volumes) != 0 || len(view.VolumesWant) != 0 {
+		t.Fatalf("live writer on stranded failover state: err=%v volumes=%v want=%v", err, view.Volumes, view.VolumesWant)
+	}
+}
+
 func TestFailoverDisabledKeepsStateAndRefusesLiveWriter(t *testing.T) {
 	for _, state := range strandedStates {
 		t.Run(state.name, func(t *testing.T) {
 			m, sb, _ := restartStranded(t, state)
-			if state.hibernate {
+			if state.wake {
 				if err := m.Wake(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
 					t.Fatal(err)
 				}
 			}
-			want := []types.Volume{{Name: "data", Mode: types.VolumeModeRW, AttachOnly: true}}
-			view, err := m.SetVolumes(t.Context(), sb.ID, "", want)
-			if !errors.Is(err, ErrReplicaStranded) || len(view.Volumes) != 0 || len(view.VolumesWant) != 0 {
-				t.Fatalf("live writer on stranded failover state: err=%v volumes=%v want=%v", err, view.Volumes, view.VolumesWant)
-			}
+			requireStrandedWriter(t, m, sb)
 		})
 	}
 }
 
-func TestFailoverDisabledExpiryKeepsReplicaCheckpoint(t *testing.T) {
-	for _, state := range strandedStates[:2] {
-		for _, onExpire := range []types.ExpireAction{types.ExpireDestroy, types.ExpireArchive} {
-			t.Run(state.name+"/"+string(onExpire), func(t *testing.T) {
-				m, sb, ck := restartStranded(t, state)
+func TestFailoverDisabledLifecycleKeepsReplicaCheckpoint(t *testing.T) {
+	expire := func(m *Manager, sb *types.Sandbox, action types.ExpireAction) {
+		m.mu.Lock()
+		sb.OnExpire, sb.Deadline = action, time.Now().Add(-time.Minute)
+		m.mu.Unlock()
+		m.reapOnce(t.Context())
+	}
+	exits := []struct {
+		name string
+		run  func(t *testing.T, m *Manager, sb *types.Sandbox)
+	}{
+		{"release", func(t *testing.T, m *Manager, sb *types.Sandbox) {
+			if err := m.Release(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"expire destroy", func(t *testing.T, m *Manager, sb *types.Sandbox) {
+			expire(m, sb, types.ExpireDestroy)
+			waitFor(t, func() bool { return m.Counters().Reaps == 1 })
+		}},
+		{"expire archive", func(t *testing.T, m *Manager, sb *types.Sandbox) {
+			expire(m, sb, types.ExpireArchive)
+			waitFor(t, func() bool {
 				m.mu.Lock()
-				sb.OnExpire, sb.Deadline = onExpire, time.Now().Add(-time.Minute)
-				m.mu.Unlock()
-				m.reapOnce(t.Context())
-				var archived bool
-				for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(10 * time.Millisecond) {
-					m.mu.Lock()
-					_, busy := m.archiving[sb.ID]
-					archived = sb.ArchiveCk != ""
-					m.mu.Unlock()
-					if !busy || time.Now().After(deadline) {
-						break
-					}
-				}
-				if _, held := m.byID(sb.ID); held != archived || archived != (onExpire == types.ExpireArchive) {
-					t.Fatalf("expiry with on_expire=%s: held=%t archived=%t", onExpire, held, archived)
-				}
+				defer m.mu.Unlock()
+				_, busy := m.archiving[sb.ID]
+				return sb.ArchiveCk != "" && !busy
+			})
+		}},
+		{"archive and wake", func(t *testing.T, m *Manager, sb *types.Sandbox) {
+			if err := m.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
+				t.Fatal(err)
+			}
+			if err := m.archive(t.Context(), sb); err != nil {
+				t.Fatal(err)
+			}
+			if err := m.Wake(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
+				t.Fatal(err)
+			}
+			requireStrandedWriter(t, m, sb)
+		}},
+	}
+	for _, state := range strandedStates {
+		if !state.lifecycle {
+			continue
+		}
+		for _, exit := range exits {
+			t.Run(state.name+"/"+exit.name, func(t *testing.T) {
+				m, sb, ck := restartStranded(t, state)
+				exit.run(t, m, sb)
 				if !ckExists(t, m, ck) {
-					t.Fatal("expiry without a registry deleted a replica checkpoint another node may own")
+					t.Fatalf("%s without a registry deleted a replica checkpoint another node may own", exit.name)
 				}
 			})
 		}
