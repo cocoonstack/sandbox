@@ -473,7 +473,7 @@ func (m *Manager) catalogSnapshot() map[string]*catalogVolume {
 func (m *Manager) reserveResolved(access volumeAccess, volumes []resolvedVolume, owner *types.Sandbox) error {
 	var held []types.Volume
 	if owner != nil && m.claimed[owner.ID] == owner && m.volumeRuns[owner] != nil {
-		held = slices.Concat(heldVolumes(owner), m.store.recoveryVolumes(owner.ID)[owner.ID])
+		held = heldVolumes(owner)
 	}
 	for _, v := range volumes {
 		entry := m.catalog.entries[v.applied.Name]

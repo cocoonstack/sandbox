@@ -103,12 +103,12 @@ func (m *Manager) changeVolumes(ctx context.Context, id, tenant string, change v
 		return view, err
 	}
 	additions := volumeDifferenceByName(target, held)
-	if slices.ContainsFunc(additions, func(v types.Volume) bool { return !slices.Contains(recovery, v) }) {
+	if len(additions) > 0 {
 		if err = m.tenantRemoved(ctx, sb.Tenant); err != nil {
 			return view, err
 		}
 	}
-	resolved, err := m.resolveLiveAdditions(ctx, run.access, additions, recovery)
+	resolved, err := m.resolveVolumesFor(ctx, run.access, additions)
 	if err != nil {
 		return view, err
 	}
@@ -495,24 +495,4 @@ func validateDetachNames(names []string) error {
 
 func heldVolumes(sb *types.Sandbox) []types.Volume {
 	return slices.Concat(sb.Volumes, volumeDifferenceByName(sb.VolumesWant, sb.Volumes))
-}
-
-func (m *Manager) resolveLiveAdditions(ctx context.Context, access volumeAccess, additions, recovery []types.Volume) ([]resolvedVolume, error) {
-	resolved := make([]resolvedVolume, 0, len(additions))
-	for _, v := range additions {
-		if slices.Contains(recovery, v) {
-			entry, err := m.resolveCatalogVolume(ctx, v)
-			if err != nil {
-				return nil, err
-			}
-			resolved = append(resolved, entry)
-			continue
-		}
-		entries, err := m.resolveVolumesFor(ctx, access, []types.Volume{v})
-		if err != nil {
-			return nil, err
-		}
-		resolved = append(resolved, entries...)
-	}
-	return resolved, nil
 }
