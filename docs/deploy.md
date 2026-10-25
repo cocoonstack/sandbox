@@ -180,8 +180,9 @@ does not support running without a registry while claims still carry replica
 or archive state. If it does, live writable volume additions on such a claim
 return 409 until failover is re-enabled or the claim is released, and release
 or expiry leave the replica checkpoint in the checkpoint store. A local archive
-of such a claim deletes the replica checkpoint and clears the replica, as in
-earlier releases, so the 409 no longer applies after it wakes.
+of a claim with a published replica deletes that checkpoint and clears the
+replica, as in earlier releases, so the 409 no longer applies after it wakes.
+A pending replica survives the archive and keeps the 409.
 
 ### Reading sleeping claims without waking them
 
