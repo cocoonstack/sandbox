@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import urllib.parse
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any
 
-from .volumes import _volume_body
+from .volumes import Volume, _volume_body
 
 if TYPE_CHECKING:
     from .client import Client
@@ -27,7 +27,7 @@ class Template:
     def new(
         self,
         ttl_seconds: int = 0,
-        volumes: list[str | Mapping[str, str]] | None = None,
+        volumes: Sequence[str | Mapping[str, str | bool] | Volume] | None = None,
         mount: bool = True,
         *,
         deadline: float | None = None,
@@ -55,7 +55,7 @@ def _claim_body(
     net: str,
     size: str,
     ttl_seconds: int,
-    volumes: list[str | Mapping[str, str]] | None = None,
+    volumes: Sequence[str | Mapping[str, str | bool] | Volume] | None = None,
     mount: bool = True,
     claim_ref: str = "",
 ) -> dict[str, Any]:

@@ -115,6 +115,9 @@ func (r claimRequest) validateVolumes() error {
 		if v.Mode != "" && v.Mode != volumeModeRW {
 			return fmt.Errorf("volume %q: mode must be \"\", %q, or %q, got %q", v.Name, volumeModeRO, volumeModeRW, v.Mode)
 		}
+		if v.AttachOnly && v.Mount != "" {
+			return fmt.Errorf("volume %q: mount %q is meaningless with attach_only, which leaves mounting to the caller", v.Name, v.Mount)
+		}
 		if r.VolumesAttachOnly && v.Mount != "" {
 			return fmt.Errorf("volume %q: mount %q is meaningless with WithVolumesAttachOnly, which leaves mounting to the caller", v.Name, v.Mount)
 		}

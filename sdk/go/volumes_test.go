@@ -3,6 +3,7 @@ package sandbox
 import (
 	"context"
 	"encoding/json/v2"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -313,5 +314,60 @@ func TestSandboxVolumesEchoMode(t *testing.T) {
 	}
 	if !slices.Equal(sb.Volumes, want) {
 		t.Errorf("volumes = %+v, want %+v", sb.Volumes, want)
+	}
+}
+
+func TestPerEntryAttachOnlyClaimModes(t *testing.T) {
+	for _, promoted := range []bool{false, true} {
+		t.Run(fmt.Sprint(promoted), func(t *testing.T) {
+			want := []Volume{
+				{Name: "mounted-ro"},
+				{Name: "mounted-rw", Mount: "/work", Mode: "rw"},
+				{Name: "device-ro", AttachOnly: true},
+				{Name: "device-rw", Mode: "rw", AttachOnly: true},
+			}
+			var got claimRequest
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if err := json.UnmarshalRead(r.Body, &got); err != nil {
+					t.Errorf("decode mixed claim: %v", err)
+				}
+				_ = json.MarshalWrite(w, claimResponse{ID: "sb_1", Token: "tok", Volumes: want})
+			}))
+			t.Cleanup(ts.Close)
+			c := testClient(t, ts)
+			var sb *Sandbox
+			var err error
+			if promoted {
+				tpl := &Template{Name: "task:v1", c: c, addr: c.addr, net: "none", size: "small"}
+				sb, err = tpl.New(t.Context(), WithVolumes(want...))
+			} else {
+				sb, err = c.New(t.Context(), "rt:24.04", WithVolumes(want...))
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.VolumesAttachOnly || !slices.Equal(got.Volumes, want) || !slices.Equal(sb.Volumes, want) {
+				t.Fatalf("mixed claim=%+v reply=%+v, want=%+v", got, sb.Volumes, want)
+			}
+		})
+	}
+}
+
+func TestPerEntryAttachOnlyRejectsClaimMount(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { t.Error("invalid claim reached server") }))
+	t.Cleanup(ts.Close)
+	c := testClient(t, ts)
+	for _, promoted := range []bool{false, true} {
+		var err error
+		option := WithVolumes(Volume{Name: "data", Mount: "/data", AttachOnly: true})
+		if promoted {
+			tpl := &Template{Name: "task:v1", c: c, addr: c.addr}
+			_, err = tpl.New(t.Context(), option)
+		} else {
+			_, err = c.New(t.Context(), "rt:24.04", option)
+		}
+		if err == nil || !strings.Contains(err.Error(), "meaningless with attach_only") {
+			t.Fatalf("conflicting mount: %v", err)
+		}
 	}
 }

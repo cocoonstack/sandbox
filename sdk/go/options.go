@@ -29,12 +29,13 @@ type NetShape string
 // node's warm pools.
 type Size string
 
-// Volume requests one catalog entry at an optional guest mount path and mode.
+// Volume requests a catalog entry. AttachOnly leaves mounting and unmounting to the caller.
 type Volume struct {
 	Name  string `json:"name"`
 	Mount string `json:"mount,omitempty"`
 	// Mode is "rw" for a writable mount; empty (or "ro") means read-only.
-	Mode string `json:"mode,omitempty"`
+	Mode       string `json:"mode,omitempty"`
+	AttachOnly bool   `json:"attach_only,omitzero"`
 }
 
 // VolumeInfo describes one visible fleet catalog entry.

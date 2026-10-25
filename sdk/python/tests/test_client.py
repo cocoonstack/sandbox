@@ -382,3 +382,45 @@ def kept_node():
     threading.Thread(target=server.serve_forever, daemon=True).start()
     yield f"127.0.0.1:{server.server_port}"
     server.shutdown()
+
+
+@pytest.mark.parametrize("promoted", [False, True])
+def test_claim_preserves_mixed_volume_modes(node, promoted):
+    entries = [
+        {"name": "mounted-ro"},
+        {"name": "mounted-rw", "mount": "/work", "mode": "rw"},
+        {"name": "device-ro", "attach_only": True},
+        {"name": "device-rw", "mode": "rw", "attach_only": True},
+    ]
+    seen = recording_claim({"id": "sb_1", "token": "tok", "volumes": entries})
+    client = Client(node)
+    if promoted:
+        sb = Template(client, node, "task:v1", "none", "small").new(volumes=entries)
+    else:
+        sb = client.new("rt:24.04", volumes=entries)
+    assert seen[0]["volumes"] == entries
+    assert "volumes_attach_only" not in seen[0]
+    assert sb.volumes == entries
+
+
+@pytest.mark.parametrize("promoted", [False, True])
+def test_claim_global_attach_only_keeps_per_entry_flags(node, promoted):
+    entries = [{"name": "data", "attach_only": False}, {"name": "work", "mode": "rw", "attach_only": True}]
+    seen = recording_claim({"id": "sb_1", "token": "tok"})
+    client = Client(node)
+    if promoted:
+        Template(client, node, "task:v1", "none", "small").new(volumes=entries, mount=False)
+    else:
+        client.new("rt:24.04", volumes=entries, mount=False)
+    assert seen[0]["volumes_attach_only"] is True
+    assert seen[0]["volumes"] == entries
+
+
+@pytest.mark.parametrize("promoted", [False, True])
+def test_claim_rejects_per_entry_attach_only_mount(node, promoted):
+    entries = [{"name": "data", "mount": "/data", "attach_only": True}]
+    with pytest.raises(TypeError, match="meaningless with attach_only=True"):
+        if promoted:
+            Template(Client(node), node, "task:v1", "none", "small").new(volumes=entries)
+        else:
+            Client(node).new("rt:24.04", volumes=entries)

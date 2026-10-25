@@ -18,6 +18,7 @@ from .endpoint import _endpoint_url
 from .errors import APIError, SandboxTimeout, require_field
 from .sandbox import Sandbox
 from .template import _claim_body, _template_query
+from .volumes import Volume
 
 T = TypeVar("T")
 
@@ -60,7 +61,7 @@ class Client:
         size: str = "",
         ttl_seconds: int = 0,
         claim_ref: str = "",
-        volumes: list[str | Mapping[str, str]] | None = None,
+        volumes: Sequence[str | Mapping[str, str | bool] | Volume] | None = None,
         mount: bool = True,
         *,
         deadline: float | None = None,

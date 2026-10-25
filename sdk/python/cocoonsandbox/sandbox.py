@@ -7,7 +7,7 @@ import socket
 import threading
 import time
 from collections import deque
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, cast
 
 from .checkpoint import Checkpoint
@@ -45,7 +45,7 @@ class Sandbox:
         deadline: str = "",
         from_checkpoint: str = "",
         template_digest: str = "",
-        volumes: list[dict[str, str]] | None = None,
+        volumes: Sequence[Mapping[str, str | bool] | Volume] | None = None,
     ) -> None:
         self._client = client
         self.id = id
@@ -54,7 +54,7 @@ class Sandbox:
         self.deadline = deadline
         self.from_checkpoint = from_checkpoint
         self.template_digest = template_digest
-        self.volumes = [dict(volume) for volume in volumes or []]
+        self.volumes = [dict(cast(Mapping[str, str | bool], volume)) for volume in volumes or []]
         self.volumes_want = [dict(volume) for volume in self.volumes]
         self._pool = ConnPool(client.keep_alive)
         self._proto = 0
@@ -74,9 +74,9 @@ class Sandbox:
         return self._volumes_request("GET", None, "get volumes", timeout)
 
     def set_volumes(
-        self, volumes: list[str | Mapping[str, str] | Volume], *, timeout: float | None = None
+        self, volumes: Sequence[str | Mapping[str, str | bool] | Volume], *, timeout: float | None = None
     ) -> SandboxVolumesResponse:
-        """Replaces the desired set and converges; an explicit empty list clears mutable mounts."""
+        """Replaces the desired set and converges; an explicit empty list clears volumes."""
         if volumes is None or isinstance(volumes, str):
             raise TypeError("set volumes requires an explicit list; use [] to clear volumes")
         return self._volumes_request(
@@ -86,11 +86,11 @@ class Sandbox:
     def patch_volumes(
         self,
         *,
-        add: list[str | Mapping[str, str] | Volume] | None = None,
+        add: Sequence[str | Mapping[str, str | bool] | Volume] | None = None,
         remove: list[str] | None = None,
         timeout: float | None = None,
     ) -> SandboxVolumesResponse:
-        """Adds or removes mounted read-only entries by name; omitted arguments leave the set unchanged."""
+        """Adds or removes catalog volumes by name; omitted arguments leave the set unchanged."""
         if isinstance(add, str) or isinstance(remove, str):
             raise TypeError("patch volumes takes lists of volumes and names")
         body: dict[str, Any] = {}
@@ -445,8 +445,8 @@ class Sandbox:
         return view
 
     def _record_volumes(self, view: SandboxVolumesResponse) -> None:
-        self.volumes_want = [cast(dict[str, str], volume.copy()) for volume in view["volumes_want"]]
-        self.volumes = [cast(dict[str, str], volume.copy()) for volume in view["volumes"]]
+        self.volumes_want = [cast(dict[str, str | bool], volume.copy()) for volume in view["volumes_want"]]
+        self.volumes = [cast(dict[str, str | bool], volume.copy()) for volume in view["volumes"]]
 
     def _dial(self, deadline: float | None = None) -> Conn:
         return self._client._dial(self.owner, self.id, self.token, deadline)

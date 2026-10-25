@@ -46,8 +46,8 @@ def test_volume_requests_use_owner_and_api_token(spawn_node, method):
 @pytest.mark.parametrize("method", ["GET", "PUT", "PATCH"])
 def test_volume_error_preserves_typed_partial_view(spawn_node, method):
     partial = {
-        "volumes_want": [{"name": "new", "mount": "/new"}],
-        "volumes": [{"name": "old", "mount": "/old"}],
+        "volumes_want": [{"name": "new", "mode": "rw", "attach_only": True}],
+        "volumes": [{"name": "old", "attach_only": True}],
         "converging": False,
         "states": [
             {"name": "new", "state": "pending", "error": "retry"},
@@ -164,3 +164,59 @@ def test_incomplete_volume_view_preserves_handle(spawn_node, status):
 def test_volume_methods_reject_a_bare_string(black_hole, call):
     with pytest.raises(TypeError):
         call(sandbox_at(black_hole))
+
+
+def test_mixed_volume_modes_roundtrip(spawn_node):
+    entries = [
+        {"name": "mounted-ro", "mount": "/volumes/mounted-ro"},
+        {"name": "mounted-rw", "mount": "/work", "mode": "rw"},
+        {"name": "device-ro", "attach_only": True},
+        {"name": "device-rw", "mode": "rw", "attach_only": True},
+    ]
+    view = {"volumes_want": entries, "volumes": entries, "states": [], "converging": False}
+    seen = []
+
+    def reply(body, path):
+        seen.append(body)
+        return 200, view
+
+    sb = sandbox_at(spawn_node({("GET", PATH): reply, ("PUT", PATH): reply, ("PATCH", PATH): reply}))
+    got = sb.get_volumes()
+    sb.set_volumes(got["volumes_want"])
+    sb.patch_volumes(add=got["volumes"])
+    assert seen == [{}, {"volumes": entries}, {"add": entries}]
+    assert sb.volumes == sb.volumes_want == entries
+
+
+@pytest.mark.parametrize("value", [None, 0, 1, "true", [], {}])
+@pytest.mark.parametrize("method", ["set", "patch"])
+def test_attach_only_requires_a_boolean(black_hole, value, method):
+    sb = sandbox_at(black_hole)
+    with pytest.raises(TypeError, match="attach_only must be a boolean"):
+        if method == "set":
+            sb.set_volumes([{"name": "data", "attach_only": value}])
+        else:
+            sb.patch_volumes(add=[{"name": "data", "attach_only": value}])
+
+
+@pytest.mark.parametrize("method", ["set", "patch"])
+def test_attach_only_rejects_a_nonempty_mount(black_hole, method):
+    sb = sandbox_at(black_hole)
+    with pytest.raises(TypeError, match="meaningless with attach_only=True"):
+        if method == "set":
+            sb.set_volumes([{"name": "data", "mount": "/data", "attach_only": True}])
+        else:
+            sb.patch_volumes(add=[{"name": "data", "mount": "/data", "attach_only": True}])
+
+
+def test_attach_only_empty_mount_and_false_flag_remain_explicit(spawn_node):
+    seen = []
+
+    def reply(body, path):
+        seen.append(body)
+        return 200, {"volumes_want": [], "volumes": [], "states": [], "converging": False}
+
+    sb = sandbox_at(spawn_node({("PUT", PATH): reply}))
+    entries = [{"name": "device", "mount": "", "attach_only": True}, {"name": "mounted", "attach_only": False}]
+    sb.set_volumes(entries)
+    assert seen == [{"volumes": entries}]

@@ -51,7 +51,7 @@ func TestLiveVolumesUseOwnerAndAPIToken(t *testing.T) {
 func TestLiveVolumeFailureRetainsPartialView(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
-		_, _ = io.WriteString(w, `{"volumes_want":[{"name":"new","mount":"/new"}],"volumes":[{"name":"old","mount":"/old"}],"converging":false,"states":[{"name":"new","state":"pending","error":"retry"},{"name":"old","state":"detaching"}],"error":"convergence failed"}`)
+		_, _ = io.WriteString(w, `{"volumes_want":[{"name":"new","mode":"rw","attach_only":true}],"volumes":[{"name":"old","attach_only":true}],"converging":false,"states":[{"name":"new","state":"pending","error":"retry"},{"name":"old","state":"detaching"}],"error":"convergence failed"}`)
 	}))
 	t.Cleanup(ts.Close)
 	c := testClient(t, ts)
@@ -62,6 +62,11 @@ func TestLiveVolumeFailureRetainsPartialView(t *testing.T) {
 		api, isAPI := errors.AsType[*APIError](err)
 		if !isVolume || !isAPI || api.Status != http.StatusInternalServerError || failure.Response == nil {
 			t.Fatalf("%s error lost response or APIError: %v", method, err)
+		}
+		for _, entries := range [][]Volume{got.Volumes, got.VolumesWant, sb.Volumes, sb.VolumesWant} {
+			if len(entries) != 1 || !entries[0].AttachOnly {
+				t.Fatalf("%s partial view lost attach_only: %+v", method, entries)
+			}
 		}
 		if !reflect.DeepEqual(got, *failure.Response) || got.States[0].State != "pending" || got.States[1].State != "detaching" || sb.VolumesWant[0].Name != "new" || sb.Volumes[0].Name != "old" {
 			t.Fatalf("partial view=%+v handle=%+v", got, sb)
@@ -186,5 +191,42 @@ func callVolumes(t *testing.T, sb *Sandbox, method string) (SandboxVolumesRespon
 		return sb.PatchVolumes(t.Context(), VolumePatch{Add: []Volume{{Name: "data"}}, Remove: []string{"old"}})
 	default:
 		return sb.GetVolumes(t.Context())
+	}
+}
+
+func TestLiveVolumeAttachOnlyRoundTrip(t *testing.T) {
+	const entries = `[{"name":"mounted-ro","mount":"/volumes/mounted-ro"},{"name":"mounted-rw","mount":"/work","mode":"rw"},{"name":"device-ro","attach_only":true},{"name":"device-rw","mode":"rw","attach_only":true}]`
+	var forwarded []map[string]any
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPut {
+			var body struct {
+				Volumes []map[string]any `json:"volumes"`
+			}
+			if err := json.UnmarshalRead(r.Body, &body); err != nil {
+				t.Errorf("decode replacement: %v", err)
+			}
+			forwarded = body.Volumes
+		}
+		_, _ = io.WriteString(w, `{"volumes_want":`+entries+`,"volumes":`+entries+`,"states":[],"converging":false}`)
+	}))
+	t.Cleanup(ts.Close)
+	c := testClient(t, ts)
+	sb := &Sandbox{ID: "sb_1", owner: c.addr, c: c}
+	view, err := sb.GetVolumes(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = sb.SetVolumes(t.Context(), view.VolumesWant); err != nil {
+		t.Fatal(err)
+	}
+	var want []map[string]any
+	if err = json.Unmarshal([]byte(entries), &want); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(forwarded, want) {
+		t.Fatalf("GET-to-PUT changed volume intent: got=%v want=%v", forwarded, want)
+	}
+	if !slices.Equal(sb.Volumes, view.Volumes) || !slices.Equal(sb.VolumesWant, view.VolumesWant) {
+		t.Fatal("roundtrip changed handle state")
 	}
 }

@@ -16,10 +16,11 @@ class _VolumeName(TypedDict):
 
 
 class Volume(_VolumeName, total=False):
-    """A catalog volume by name, with its guest mount point and an `rw` mode for writable claims."""
+    """A catalog volume by name, with an optional mount, write mode, or caller-managed mounting."""
 
     mount: str
     mode: str
+    attach_only: bool
 
 
 class _VolumeState(TypedDict):
@@ -56,19 +57,24 @@ def _volume_response(reply: dict[str, Any] | None) -> SandboxVolumesResponse | N
     return cast(SandboxVolumesResponse, reply)
 
 
-def _volume_body(volume: str | Mapping[str, str] | Volume, mount: bool) -> dict[str, str]:
+def _volume_body(volume: str | Mapping[str, str | bool] | Volume, mount: bool) -> dict[str, str | bool]:
     if isinstance(volume, str):
         return {"name": volume}
     if not isinstance(volume, Mapping):
         raise TypeError("volume must be a name string or mapping")
-    unknown = sorted(set(volume) - {"name", "mount", "mode"})
+    unknown = sorted(set(volume) - {"name", "mount", "mode", "attach_only"})
     if unknown:
         raise TypeError(
-            f"volume mapping accepts only name, mount, and mode, got unexpected key(s): {', '.join(unknown)}"
+            "volume mapping accepts only name, mount, mode, and attach_only, "
+            f"got unexpected key(s): {', '.join(unknown)}"
         )
+    if "attach_only" in volume and not isinstance(volume["attach_only"], bool):
+        raise TypeError("volume attach_only must be a boolean")
+    if volume.get("attach_only") and volume.get("mount"):
+        raise TypeError("volume mount is meaningless with attach_only=True, which leaves mounting to the caller")
     if not mount and "mount" in volume:
         raise TypeError("volume mount is meaningless with mount=False, which leaves mounting to the caller")
-    body = dict(cast(Mapping[str, str], volume))
+    body = dict(cast(Mapping[str, str | bool], volume))
     mode = body.get("mode")
     if mode in (None, "", "ro"):
         body.pop("mode", None)
