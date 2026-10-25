@@ -288,7 +288,7 @@ Auth: the configured root node API token. With no configured `api_token`,
 registration and unregistration return 403. A tenant token returns 403.
 Sandbox, unknown, and missing tokens return 401 when `api_token` is configured.
 
-Registers an existing backing file on this node. The URL supplies the name;
+Registers a backing path on this node. The URL supplies the name;
 the body has no `name` field. Unknown fields, duplicate fields, and trailing
 JSON return 400.
 
@@ -299,10 +299,10 @@ JSON return 400.
 
 - `name` matches `[a-z][a-z0-9_-]{0,19}` and cannot start with `cocoon-`.
 - `path` uses the same absolute-path validation as static volume config.
-  Creating a registration requires an existing regular file. A symlink to a
-  regular file is allowed; directories and device files return 400. This check
-  runs only when creating the registration, not on idempotent retries or
-  attachment. Operators must keep the registered path and target stable.
+  Registration does not open the backing or check its type or availability.
+  A missing backing retains its registration but cannot be attached until available.
+  Registration success does not establish that Cocoon supports the backing type.
+  Operators must keep the registered path and target stable.
 - `directio` is `on`, `off`, or `auto`, and defaults to `off`.
 - `writable` defaults to `false` and controls writable claim admission.
 - `tenants` limits use to the named tenants. Omitted or empty permits all tenants.

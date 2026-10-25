@@ -105,12 +105,18 @@ exposes host image paths or access lists.
 
 Runtime registration and unregistration require a configured root `api_token`;
 these endpoints return 403 when the token is unset. The daemon must also run
-as OS root to change the root-owned registration file. Runtime registration
-checks that the backing resolves to a regular file when creating a registration.
-Symlinks to regular files are allowed. An idempotent registration retry does not
-repeat this check, and attachment does not recheck the file type or pin the
-backing identity. Operators must prevent backing paths or symlink targets from
-being replaced while registered and coordinate aliases.
+as OS root to change the root-owned registration file. Registration uses the
+same path validation as static configuration. It does not verify backing type
+or pin backing identity. Operators must supply a backing supported by Cocoon,
+prevent path or symlink target replacement while registered, and coordinate aliases.
+
+Mounted writable volumes use a dirty sidecar at the configured path plus `.dirty`.
+The sidecar directory must be writable and retain the marker across host restarts.
+Paths directly under ephemeral directories such as `/dev` do not provide that guarantee.
+An operator-controlled symlink in a durable directory keeps the sidecar beside
+that symlink, but alternate paths to the same backing still need operator coordination.
+Block-device backends are not qualified by registration. Attach-only writable
+volumes have no dirty marker and require external consistency checks.
 
 Read-only is integrity protection for the shared image, not confidentiality.
 Mounting a dataset into an egress-lane sandbox gives that sandbox an export path

@@ -531,8 +531,7 @@ func TestRuntimeCatalogCancellationBeforeAcceptanceDoesNotFenceClaims(t *testing
 	requireCatalogRoot(t)
 	m := newVolumeManager(t, newFakeEngine(), liveCatalog(t))
 	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	m.catalog.stat = func(path string) (os.FileInfo, error) { cancel(); return os.Stat(path) }
+	cancel()
 	m.catalog.replace = func(string, []byte) error { t.Fatal("canceled proposal attempted a write"); return nil }
 	err := m.RegisterVolume(ctx, "runtime", types.VolumeRegistration{Path: writeVolumeImage(t, "runtime", "bytes")})
 	if !errors.Is(err, context.Canceled) || errors.Is(err, ErrVolumeCatalogUnavailable) {

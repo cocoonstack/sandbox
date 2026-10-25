@@ -154,7 +154,7 @@ func (m *Manager) loadRuntimeVolumes() error {
 	return nil
 }
 
-// RegisterVolume durably binds a root-managed name to an existing backing file.
+// RegisterVolume durably binds a root-managed name to a backing path.
 func (m *Manager) RegisterVolume(ctx context.Context, name string, spec types.VolumeRegistration) error {
 	if os.Geteuid() != 0 {
 		return ErrVolumeCatalogReadOnly
@@ -171,9 +171,6 @@ func (m *Manager) RegisterVolume(ctx context.Context, name string, spec types.Vo
 	proposal, err := m.registrationProposal(name, normalized)
 	if err != nil || proposal == nil {
 		return err
-	}
-	if st, statErr := m.statVolume(normalized.Path); statErr != nil || !st.Mode().IsRegular() {
-		return fmt.Errorf("%w: backing for volume %q must be an available regular file", ErrBadVolume, name)
 	}
 	return m.writeCatalog(ctx, name, proposal)
 }
