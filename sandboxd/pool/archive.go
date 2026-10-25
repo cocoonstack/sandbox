@@ -122,10 +122,7 @@ func (m *Manager) archive(ctx context.Context, sb *types.Sandbox) error {
 		intent := m.store.set(sb)
 		m.mu.Unlock()
 		if err = m.store.commit(intent); err != nil {
-			m.mu.Lock()
-			sb.ArchivePending = ""
-			rb := m.store.set(sb)
-			m.mu.Unlock()
+			rb, _ := m.setIfLive(sb, func() { sb.ArchivePending = "" })
 			sb.Transition.Unlock()
 			m.store.recommit(ctx, rb)
 			m.deleteOrphanArchiveCk(ctx, ck.ID)

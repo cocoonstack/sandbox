@@ -970,6 +970,7 @@ func TestRenewRefusesAnArchivedClaim(t *testing.T) {
 	sb := mustClaim(t, m, testKey)
 	m.mu.Lock()
 	sb.ArchiveCk, sb.Deadline = "ck_1", time.Time{}
+	m.store.set(sb)
 	m.mu.Unlock()
 
 	if _, err := m.Renew(t.Context(), sb.ID, Cred{Token: sb.Token}, 0, ""); !errors.Is(err, ErrArchived) {
@@ -1087,7 +1088,10 @@ func TestOperatorPortDialNeverWakesAPausedSandbox(t *testing.T) {
 		"pending hibernate": func() { running.PendingSnap = "snap" },
 		"archived":          func() { running.PendingSnap, running.ArchiveCk = "", "ck" },
 	} {
+		m.mu.Lock()
 		set()
+		m.store.set(running)
+		m.mu.Unlock()
 		if _, err := m.DialPort(t.Context(), running.ID, operator, 49983); !errors.Is(err, ErrPaused) {
 			t.Errorf("%s: %v, want ErrPaused", name, err)
 		}
@@ -1939,6 +1943,18 @@ func newTestManagerAt(t testing.TB, eng *fakeEngine, dataDir string, pools ...co
 	if err != nil {
 		t.Fatalf("setup manager: %v", err)
 	}
+	t.Cleanup(func() {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		m.store.mu.Lock()
+		defer m.store.mu.Unlock()
+		for id, sb := range m.claimed {
+			row := m.store.rows[id]
+			if row == nil || !row.refs.matches(sb) {
+				t.Errorf("claim %s references differ from its store row", id)
+			}
+		}
+	})
 	return m
 }
 

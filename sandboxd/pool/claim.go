@@ -703,15 +703,18 @@ func (m *Manager) purgeArchiveCk(ctx context.Context, id, ck, tenant string) {
 	m.recordUsage(ctx, usageEvent{Event: "archive_delete", ID: id, Reference: ck, Tenant: tenant})
 }
 
-func (m *Manager) commitIfLive(ctx context.Context, sb *types.Sandbox, mutate func()) (bool, error) {
+func (m *Manager) setIfLive(sb *types.Sandbox, mutate func()) (claimSnapshot, bool) {
 	m.mu.Lock()
-	live := m.claimed[sb.ID] == sb
-	var js claimSnapshot
-	if live {
-		mutate()
-		js = m.store.set(sb)
+	defer m.mu.Unlock()
+	if m.claimed[sb.ID] != sb {
+		return claimSnapshot{}, false
 	}
-	m.mu.Unlock()
+	mutate()
+	return m.store.set(sb), true
+}
+
+func (m *Manager) commitIfLive(ctx context.Context, sb *types.Sandbox, mutate func()) (bool, error) {
+	js, live := m.setIfLive(sb, mutate)
 	if !live {
 		return false, nil
 	}

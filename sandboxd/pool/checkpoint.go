@@ -5,6 +5,7 @@ import (
 	"encoding/json/v2"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -318,16 +319,7 @@ func (m *Manager) pinnedArchiveCks() map[string]struct{} {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	pinned := m.store.checkpointReferences()
-	for id := range m.pendingCks {
-		pinned[id] = struct{}{}
-	}
-	for _, sb := range m.claimed {
-		for _, id := range [4]string{sb.ArchiveCk, sb.ArchivePending, sb.ReplicaCk, sb.ReplicaPending} {
-			if id != "" {
-				pinned[id] = struct{}{}
-			}
-		}
-	}
+	maps.Copy(pinned, m.pendingCks)
 	return pinned
 }
 
