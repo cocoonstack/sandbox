@@ -6,7 +6,7 @@ import urllib.parse
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any
 
-from .volumes import Volume, _volume_body
+from .volumes import Volume, _volume_bodies
 
 if TYPE_CHECKING:
     from .client import Client
@@ -66,8 +66,10 @@ def _claim_body(
         claim["size"] = size
     if ttl_seconds:
         claim["ttl_seconds"] = ttl_seconds
-    if volumes:
-        claim["volumes"] = [_volume_body(volume, mount) for volume in volumes]
+    if volumes is not None:
+        entries = _volume_bodies(volumes, mount)
+        if entries:
+            claim["volumes"] = entries
     if not mount:
         claim["volumes_attach_only"] = True
     if claim_ref:

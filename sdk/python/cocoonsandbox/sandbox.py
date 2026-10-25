@@ -24,7 +24,7 @@ from .errors import (
 )
 from .frames import BULK_CHUNK, FS_CHUNK, KEEP_ALIVE_PROTO
 from .template import Template
-from .volumes import SandboxVolumesResponse, Volume, _volume_body, _volume_response
+from .volumes import SandboxVolumesResponse, Volume, _volume_bodies, _volume_response
 
 if TYPE_CHECKING:
     from .client import Client
@@ -54,7 +54,7 @@ class Sandbox:
         self.deadline = deadline
         self.from_checkpoint = from_checkpoint
         self.template_digest = template_digest
-        self.volumes = [dict(cast(Mapping[str, str | bool], volume)) for volume in volumes or []]
+        self.volumes = [dict(cast("Mapping[str, str | bool]", volume)) for volume in volumes or []]
         self.volumes_want = [dict(volume) for volume in self.volumes]
         self._pool = ConnPool(client.keep_alive)
         self._proto = 0
@@ -77,11 +77,9 @@ class Sandbox:
         self, volumes: Sequence[str | Mapping[str, str | bool] | Volume], *, timeout: float | None = None
     ) -> SandboxVolumesResponse:
         """Replaces the desired set and converges; an explicit empty list clears volumes."""
-        if volumes is None or isinstance(volumes, str):
+        if volumes is None:
             raise TypeError("set volumes requires an explicit list; use [] to clear volumes")
-        return self._volumes_request(
-            "PUT", {"volumes": [_volume_body(volume, True) for volume in volumes]}, "set volumes", timeout
-        )
+        return self._volumes_request("PUT", {"volumes": _volume_bodies(volumes, True)}, "set volumes", timeout)
 
     def patch_volumes(
         self,
@@ -91,11 +89,11 @@ class Sandbox:
         timeout: float | None = None,
     ) -> SandboxVolumesResponse:
         """Adds or removes catalog volumes by name; omitted arguments leave the set unchanged."""
-        if isinstance(add, str) or isinstance(remove, str):
+        if isinstance(remove, (str, bytes, bytearray)):
             raise TypeError("patch volumes takes lists of volumes and names")
         body: dict[str, Any] = {}
         if add is not None:
-            body["add"] = [_volume_body(volume, True) for volume in add]
+            body["add"] = _volume_bodies(add, True)
         if remove is not None:
             body["remove"] = list(remove)
         return self._volumes_request("PATCH", body, "patch volumes", timeout)
@@ -445,8 +443,8 @@ class Sandbox:
         return view
 
     def _record_volumes(self, view: SandboxVolumesResponse) -> None:
-        self.volumes_want = [cast(dict[str, str | bool], volume.copy()) for volume in view["volumes_want"]]
-        self.volumes = [cast(dict[str, str | bool], volume.copy()) for volume in view["volumes"]]
+        self.volumes_want = [cast("dict[str, str | bool]", volume.copy()) for volume in view["volumes_want"]]
+        self.volumes = [cast("dict[str, str | bool]", volume.copy()) for volume in view["volumes"]]
 
     def _dial(self, deadline: float | None = None) -> Conn:
         return self._client._dial(self.owner, self.id, self.token, deadline)

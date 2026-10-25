@@ -424,3 +424,49 @@ def test_claim_rejects_per_entry_attach_only_mount(node, promoted):
             Template(Client(node), node, "task:v1", "none", "small").new(volumes=entries)
         else:
             Client(node).new("rt:24.04", volumes=entries)
+
+
+@pytest.mark.parametrize("promoted", [False, True])
+def test_claim_methods_reject_non_volume_sequences_before_request(node, promoted):
+    seen = recording_claim({"id": "sb_1", "token": "tok"})
+    client = Client(node)
+    claim = (
+        Template(client, node, "task:v1", "none", "small").new
+        if promoted
+        else lambda **kw: client.new("rt:24.04", **kw)
+    )
+    for volumes in ("data", "", b"data", b"", bytearray(), {"name": "data"}):
+        with pytest.raises(TypeError):
+            claim(volumes=volumes)
+    assert seen == []
+
+
+@pytest.mark.parametrize("promoted", [False, True])
+@pytest.mark.parametrize("field", ["name", "mount", "mode"])
+def test_claim_methods_reject_non_string_volume_fields_before_request(node, promoted, field):
+    seen = recording_claim({"id": "sb_1", "token": "tok"})
+    client = Client(node)
+    claim = (
+        Template(client, node, "task:v1", "none", "small").new
+        if promoted
+        else lambda **kw: client.new("rt:24.04", **kw)
+    )
+    volume = {"name": "data", field: True}
+    with pytest.raises(TypeError):
+        claim(volumes=[volume])
+    assert seen == []
+
+
+@pytest.mark.parametrize("promoted", [False, True])
+def test_claim_methods_preserve_empty_volume_sequence_semantics(node, promoted):
+    seen = recording_claim({"id": "sb_1", "token": "tok"})
+    client = Client(node)
+    claim = (
+        Template(client, node, "task:v1", "none", "small").new
+        if promoted
+        else lambda **kw: client.new("rt:24.04", **kw)
+    )
+    for volumes in (None, [], ()):
+        claim(volumes=volumes)
+    assert len(seen) == 3
+    assert all("volumes" not in body for body in seen)

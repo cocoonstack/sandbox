@@ -159,6 +159,7 @@ def test_incomplete_volume_view_preserves_handle(spawn_node, status):
         lambda sb: sb.set_volumes("data"),
         lambda sb: sb.patch_volumes(add="data"),
         lambda sb: sb.patch_volumes(remove="old"),
+        lambda sb: sb.patch_volumes(remove=b""),
     ],
 )
 def test_volume_methods_reject_a_bare_string(black_hole, call):
@@ -220,3 +221,40 @@ def test_attach_only_empty_mount_and_false_flag_remain_explicit(spawn_node):
     entries = [{"name": "device", "mount": "", "attach_only": True}, {"name": "mounted", "attach_only": False}]
     sb.set_volumes(entries)
     assert seen == [{"volumes": entries}]
+
+
+@pytest.mark.parametrize("method", ["set", "patch"])
+@pytest.mark.parametrize("field", ["name", "mount", "mode"])
+def test_live_volume_methods_reject_non_string_fields_before_request(spawn_node, method, field):
+    seen = []
+
+    def reply(body, path):
+        seen.append(body)
+        return 200, {"volumes_want": [], "volumes": [], "states": [], "converging": False}
+
+    sb = sandbox_at(spawn_node({("PUT", PATH): reply, ("PATCH", PATH): reply}))
+    volume = {"name": "data", field: True}
+    with pytest.raises(TypeError):
+        if method == "set":
+            sb.set_volumes([volume])
+        else:
+            sb.patch_volumes(add=[volume])
+    assert seen == []
+
+
+@pytest.mark.parametrize("method", ["set", "patch"])
+def test_live_volume_methods_reject_binary_collections_before_request(spawn_node, method):
+    seen = []
+
+    def reply(body, path):
+        seen.append(body)
+        return 200, {"volumes_want": [], "volumes": [], "states": [], "converging": False}
+
+    sb = sandbox_at(spawn_node({("PUT", PATH): reply, ("PATCH", PATH): reply}))
+    for volumes in (b"data", b"", bytearray(), {"name": "data"}):
+        with pytest.raises(TypeError):
+            if method == "set":
+                sb.set_volumes(volumes)
+            else:
+                sb.patch_volumes(add=volumes)
+    assert seen == []
