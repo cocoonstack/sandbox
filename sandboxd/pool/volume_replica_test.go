@@ -6,10 +6,46 @@ import (
 	"slices"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/cocoonstack/sandbox/sandboxd/config"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
+
+func TestLiveWriterConvergesThroughReplicaScans(t *testing.T) {
+	for _, pending := range []bool{false, true} {
+		t.Run(fmt.Sprintf("pending=%t", pending), func(t *testing.T) {
+			m, c := newReplicaVolumeManager(t)
+			sb := mustClaim(t, m, testKey)
+			if pending {
+				m.archives = &hookRegistry{Registry: c.reg, losePutReply: true}
+				if err := m.replicate(t.Context(), sb); !errors.Is(err, ErrArchiveStoreDown) {
+					t.Fatal(err)
+				}
+				m.archives = c.reg
+			} else {
+				replicateNow(t, m, sb)
+			}
+			writer := []types.Volume{{Name: "data", Mode: types.VolumeModeRW, AttachOnly: true}}
+			var view types.SandboxVolumesResponse
+			var err error
+			for cycle := range 5 {
+				view, err = m.SetVolumes(t.Context(), sb.ID, "", writer)
+				if err == nil {
+					if len(view.Volumes) != 1 || sb.HasReplica() {
+						t.Fatalf("writer exposed alongside replica: %+v, replica=%t", view, sb.HasReplica())
+					}
+					return
+				}
+				t.Logf("cycle %d: %+v, %v", cycle, view, err)
+				m.replicas = map[string]replicaState{sb.ID: {tried: time.Now().Add(-2 * time.Duration(replicateEvery) * time.Second)}}
+				m.replicateOnce(t.Context())
+				waitFor(t, func() bool { return !m.replicating.Load() })
+			}
+			t.Fatalf("writer never converged after five replica scans: %+v, %v", view, err)
+		})
+	}
+}
 
 func TestLiveWriterRefusesExistingReplica(t *testing.T) {
 	for _, pending := range []bool{false, true} {
