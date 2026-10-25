@@ -7,7 +7,7 @@ import socket
 import threading
 import time
 from collections import deque
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, cast
 
 from .checkpoint import Checkpoint
@@ -74,7 +74,7 @@ class Sandbox:
         return self._volumes_request("GET", None, "get volumes", timeout)
 
     def set_volumes(
-        self, volumes: Sequence[str | Mapping[str, str | bool] | Volume], *, timeout: float | None = None
+        self, volumes: Iterable[str | Mapping[str, str | bool] | Volume], *, timeout: float | None = None
     ) -> SandboxVolumesResponse:
         """Replaces the desired set and converges; an explicit empty list clears volumes."""
         if volumes is None:
@@ -84,7 +84,7 @@ class Sandbox:
     def patch_volumes(
         self,
         *,
-        add: Sequence[str | Mapping[str, str | bool] | Volume] | None = None,
+        add: Iterable[str | Mapping[str, str | bool] | Volume] | None = None,
         remove: list[str] | None = None,
         timeout: float | None = None,
     ) -> SandboxVolumesResponse:

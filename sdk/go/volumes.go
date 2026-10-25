@@ -60,6 +60,11 @@ func (s *Sandbox) SetVolumes(ctx context.Context, volumes []Volume) (SandboxVolu
 	if volumes == nil {
 		return SandboxVolumesResponse{}, errors.New("set volumes: use an explicit empty slice to clear volumes")
 	}
+	for _, volume := range volumes {
+		if err := validateVolume(volume); err != nil {
+			return SandboxVolumesResponse{}, err
+		}
+	}
 	return s.requestVolumes(ctx, http.MethodPut, struct {
 		Volumes []Volume `json:"volumes"`
 	}{Volumes: volumes}, "set volumes")
@@ -67,7 +72,32 @@ func (s *Sandbox) SetVolumes(ctx context.Context, volumes []Volume) (SandboxVolu
 
 // PatchVolumes adds or removes catalog volumes by name.
 func (s *Sandbox) PatchVolumes(ctx context.Context, patch VolumePatch) (SandboxVolumesResponse, error) {
+	for _, volume := range patch.Add {
+		if err := validateVolume(volume); err != nil {
+			return SandboxVolumesResponse{}, err
+		}
+	}
 	return s.requestVolumes(ctx, http.MethodPatch, patch, "patch volumes")
+}
+
+func validateVolume(v Volume) error {
+	if v.Mode != "" && v.Mode != volumeModeRO && v.Mode != volumeModeRW {
+		return fmt.Errorf("volume %q: mode must be \"\", %q, or %q, got %q", v.Name, volumeModeRO, volumeModeRW, v.Mode)
+	}
+	if v.AttachOnly && v.Mount != "" {
+		return fmt.Errorf("volume %q: mount %q is meaningless with attach_only, which leaves mounting to the caller", v.Name, v.Mount)
+	}
+	return nil
+}
+
+// Historical responses identify attach-only devices by their absent mount.
+// Keep that inference out of request decoding, where an absent mount means the default path.
+func responseVolumes(volumes []Volume) []Volume {
+	volumes = slices.Clone(volumes)
+	for i := range volumes {
+		volumes[i].AttachOnly = volumes[i].Mount == ""
+	}
+	return volumes
 }
 
 func (s *Sandbox) requestVolumes(ctx context.Context, method string, request any, verb string) (SandboxVolumesResponse, error) {
@@ -95,7 +125,7 @@ func (s *Sandbox) requestVolumes(ctx context.Context, method string, request any
 	decodeErr := json.UnmarshalRead(resp.Body, &wire)
 	complete := decodeErr == nil && wire.VolumesWant != nil && wire.Volumes != nil && wire.States != nil && wire.Converging != nil
 	if complete {
-		out = SandboxVolumesResponse{VolumesWant: *wire.VolumesWant, Volumes: *wire.Volumes, States: *wire.States, Converging: *wire.Converging, Error: wire.Error}
+		out = SandboxVolumesResponse{VolumesWant: responseVolumes(*wire.VolumesWant), Volumes: responseVolumes(*wire.Volumes), States: *wire.States, Converging: *wire.Converging, Error: wire.Error}
 		s.VolumesWant = slices.Clone(out.VolumesWant)
 		s.Volumes = slices.Clone(out.Volumes)
 	}

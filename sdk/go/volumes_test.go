@@ -254,7 +254,11 @@ func TestWithVolumesAttachOnlySendsFlagAndDecodesMountlessEcho(t *testing.T) {
 		if mount, present := entry["mount"]; present {
 			t.Errorf("volume %v carries mount %v, want none", entry["name"], mount)
 		}
+		if _, present := entry["attach_only"]; present {
+			t.Error("legacy attach-only claim carries a per-entry flag")
+		}
 	}
+	echo[0].AttachOnly, echo[1].AttachOnly = true, true
 	if !slices.Equal(sb.Volumes, echo) {
 		t.Errorf("volumes = %+v, want %+v", sb.Volumes, echo)
 	}
@@ -302,7 +306,7 @@ func TestRejectsInvalidVolumeModeLocally(t *testing.T) {
 }
 
 func TestSandboxVolumesEchoMode(t *testing.T) {
-	want := []Volume{{Name: "imagenet"}, {Name: "scratch", Mode: "rw"}}
+	want := []Volume{{Name: "imagenet", Mount: "/volumes/imagenet"}, {Name: "scratch", Mount: "/volumes/scratch", Mode: "rw"}}
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_ = json.MarshalWrite(w, claimResponse{ID: "sb_1", Token: "tok", Volumes: want})
 	}))
@@ -317,39 +321,57 @@ func TestSandboxVolumesEchoMode(t *testing.T) {
 	}
 }
 
-func TestPerEntryAttachOnlyClaimModes(t *testing.T) {
+func TestPerEntryAttachOnlyClaimCompatibility(t *testing.T) {
 	for _, promoted := range []bool{false, true} {
-		t.Run(fmt.Sprint(promoted), func(t *testing.T) {
-			want := []Volume{
-				{Name: "mounted-ro"},
-				{Name: "mounted-rw", Mount: "/work", Mode: "rw"},
-				{Name: "device-ro", AttachOnly: true},
-				{Name: "device-rw", Mode: "rw", AttachOnly: true},
-			}
-			var got claimRequest
-			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if err := json.UnmarshalRead(r.Body, &got); err != nil {
-					t.Errorf("decode mixed claim: %v", err)
+		for _, mixed := range []bool{false, true} {
+			t.Run(fmt.Sprintf("promoted=%t/mixed=%t", promoted, mixed), func(t *testing.T) {
+				volumes := []Volume{{Name: "device-ro", AttachOnly: true}, {Name: "device-rw", Mode: "rw", AttachOnly: true}}
+				if mixed {
+					volumes = append(volumes, Volume{Name: "mounted-ro"})
 				}
-				_ = json.MarshalWrite(w, claimResponse{ID: "sb_1", Token: "tok", Volumes: want})
-			}))
-			t.Cleanup(ts.Close)
-			c := testClient(t, ts)
-			var sb *Sandbox
-			var err error
-			if promoted {
-				tpl := &Template{Name: "task:v1", c: c, addr: c.addr, net: "none", size: "small"}
-				sb, err = tpl.New(t.Context(), WithVolumes(want...))
-			} else {
-				sb, err = c.New(t.Context(), "rt:24.04", WithVolumes(want...))
-			}
-			if err != nil {
-				t.Fatal(err)
-			}
-			if got.VolumesAttachOnly || !slices.Equal(got.Volumes, want) || !slices.Equal(sb.Volumes, want) {
-				t.Fatalf("mixed claim=%+v reply=%+v, want=%+v", got, sb.Volumes, want)
-			}
-		})
+				var got claimRequest
+				requests := 0
+				ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					requests++
+					if err := json.UnmarshalRead(r.Body, &got); err != nil {
+						t.Errorf("decode claim: %v", err)
+					}
+					// An older server understands only the claim-wide flag.
+					_ = json.MarshalWrite(w, claimResponse{ID: "sb_1", Token: "tok", Volumes: got.Volumes})
+				}))
+				t.Cleanup(ts.Close)
+				c := testClient(t, ts)
+				option := WithVolumes(volumes...)
+				var sb *Sandbox
+				var err error
+				if promoted {
+					tpl := &Template{Name: "task:v1", c: c, addr: c.addr, net: "none", size: "small"}
+					sb, err = tpl.New(t.Context(), option)
+				} else {
+					sb, err = c.New(t.Context(), "rt:24.04", option)
+				}
+				if mixed {
+					if err == nil || !strings.Contains(err.Error(), "claim without volumes") || requests != 0 {
+						t.Fatalf("mixed claim reached server: requests=%d err=%v", requests, err)
+					}
+					return
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !got.VolumesAttachOnly || !slices.Equal(sb.Volumes, volumes) {
+					t.Fatalf("claim=%+v reply=%+v want=%+v", got, sb.Volumes, volumes)
+				}
+				for _, v := range got.Volumes {
+					if v.AttachOnly {
+						t.Fatal("claim retained per-entry attach_only")
+					}
+				}
+				if _, err = c.New(t.Context(), "rt:24.04", option); err != nil || !got.VolumesAttachOnly {
+					t.Fatalf("reused option lost raw intent: claim=%+v err=%v", got, err)
+				}
+			})
+		}
 	}
 }
 

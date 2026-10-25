@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping
 from typing import Any, Final, Literal, TypedDict, cast
 
 VolumePhase = Literal["attached", "pending", "detaching"]
@@ -54,14 +54,27 @@ def _volume_response(reply: dict[str, Any] | None) -> SandboxVolumesResponse | N
         or not isinstance(reply.get("converging"), bool)
     ):
         return None
-    return cast(SandboxVolumesResponse, reply)
+    view = dict(reply)
+    view["volumes_want"] = _response_volumes(reply["volumes_want"])
+    view["volumes"] = _response_volumes(reply["volumes"])
+    view["states"] = [dict(state) for state in reply["states"]]
+    return cast(SandboxVolumesResponse, view)
+
+
+def _response_volumes(volumes: Iterable[Mapping[str, str | bool] | Volume]) -> list[Volume]:
+    # Response mounts identify raw devices; absent request mounts instead select a default path.
+    entries = [cast("Volume", dict(volume)) for volume in volumes]
+    for entry in entries:
+        if not entry.get("mount"):
+            entry["attach_only"] = True
+    return entries
 
 
 def _volume_bodies(
-    volumes: Sequence[str | Mapping[str, str | bool] | Volume], mount: bool
+    volumes: Iterable[str | Mapping[str, str | bool] | Volume], mount: bool
 ) -> list[dict[str, str | bool]]:
-    if isinstance(volumes, (str, bytes, bytearray)) or not isinstance(volumes, Sequence):
-        raise TypeError("volumes must be a sequence of volume names or mappings")
+    if isinstance(volumes, (str, bytes, bytearray, Mapping)) or not isinstance(volumes, Iterable):
+        raise TypeError("volumes must be an iterable of volume names or mappings")
     return [_volume_body(volume, mount) for volume in volumes]
 
 

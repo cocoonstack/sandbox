@@ -46,8 +46,8 @@ def test_volume_requests_use_owner_and_api_token(spawn_node, method):
 @pytest.mark.parametrize("method", ["GET", "PUT", "PATCH"])
 def test_volume_error_preserves_typed_partial_view(spawn_node, method):
     partial = {
-        "volumes_want": [{"name": "new", "mode": "rw", "attach_only": True}],
-        "volumes": [{"name": "old", "attach_only": True}],
+        "volumes_want": [{"name": "new", "mode": "rw"}],
+        "volumes": [{"name": "old"}],
         "converging": False,
         "states": [
             {"name": "new", "state": "pending", "error": "retry"},
@@ -65,9 +65,14 @@ def test_volume_error_preserves_typed_partial_view(spawn_node, method):
             sb.patch_volumes(remove=["old"])
     assert isinstance(caught.value, APIError)
     assert caught.value.status == 500
-    assert caught.value.response == partial
-    assert sb.volumes_want == partial["volumes_want"]
-    assert sb.volumes == partial["volumes"]
+    expected = {
+        **partial,
+        "volumes_want": [{**partial["volumes_want"][0], "attach_only": True}],
+        "volumes": [{**partial["volumes"][0], "attach_only": True}],
+    }
+    assert caught.value.response == expected
+    assert sb.volumes_want == expected["volumes_want"]
+    assert sb.volumes == expected["volumes"]
     caught.value.response["volumes"][0]["name"] = "caller copy"
     assert sb.volumes[0]["name"] == "old"
 
@@ -258,3 +263,32 @@ def test_live_volume_methods_reject_binary_collections_before_request(spawn_node
             else:
                 sb.patch_volumes(add=volumes)
     assert seen == []
+
+
+@pytest.mark.parametrize("method", ["set", "patch"])
+@pytest.mark.parametrize("kind", ["list", "tuple", "generator", "set", "empty-generator"])
+def test_live_volume_iterables_are_consumed_once(spawn_node, method, kind):
+    seen = []
+
+    def reply(body, path):
+        seen.append(body)
+        return 200, {"volumes_want": [], "volumes": [], "states": [], "converging": False}
+
+    consumed = []
+
+    def generate():
+        if kind != "empty-generator":
+            consumed.append("data")
+            yield "data"
+
+    volumes = {"list": ["data"], "tuple": ("data",), "set": {"data"}}.get(kind)
+    if volumes is None:
+        volumes = generate()
+    sb = sandbox_at(spawn_node({("PUT", PATH): reply, ("PATCH", PATH): reply}))
+    if method == "set":
+        sb.set_volumes(volumes)
+    else:
+        sb.patch_volumes(add=volumes)
+    entries = [] if kind == "empty-generator" else [{"name": "data"}]
+    assert seen == [{"volumes" if method == "set" else "add": entries}]
+    assert consumed == (["data"] if kind == "generator" else [])

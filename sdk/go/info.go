@@ -90,6 +90,10 @@ func (c *Client) Sandboxes(ctx context.Context) ([]SandboxSummary, error) {
 	if err != nil {
 		return nil, err
 	}
+	for i := range reply.Sandboxes {
+		reply.Sandboxes[i].Volumes = responseVolumes(reply.Sandboxes[i].Volumes)
+		reply.Sandboxes[i].VolumesWant = responseVolumes(reply.Sandboxes[i].VolumesWant)
+	}
 	return reply.Sandboxes, nil
 }
 

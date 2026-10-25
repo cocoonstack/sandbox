@@ -51,7 +51,7 @@ func TestLiveVolumesUseOwnerAndAPIToken(t *testing.T) {
 func TestLiveVolumeFailureRetainsPartialView(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
-		_, _ = io.WriteString(w, `{"volumes_want":[{"name":"new","mode":"rw","attach_only":true}],"volumes":[{"name":"old","attach_only":true}],"converging":false,"states":[{"name":"new","state":"pending","error":"retry"},{"name":"old","state":"detaching"}],"error":"convergence failed"}`)
+		_, _ = io.WriteString(w, `{"volumes_want":[{"name":"new","mode":"rw"}],"volumes":[{"name":"old"}],"converging":false,"states":[{"name":"new","state":"pending","error":"retry"},{"name":"old","state":"detaching"}],"error":"convergence failed"}`)
 	}))
 	t.Cleanup(ts.Close)
 	c := testClient(t, ts)
@@ -228,5 +228,60 @@ func TestLiveVolumeAttachOnlyRoundTrip(t *testing.T) {
 	}
 	if !slices.Equal(sb.Volumes, view.Volumes) || !slices.Equal(sb.VolumesWant, view.VolumesWant) {
 		t.Fatal("roundtrip changed handle state")
+	}
+}
+
+func TestLiveVolumesRejectConflictingAttachOnlyBeforeRequest(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { t.Error("invalid volume reached server") }))
+	t.Cleanup(ts.Close)
+	c := testClient(t, ts)
+	sb := c.Attach(c.addr, "sb_1", "tok")
+	volumes := []Volume{{Name: "data", Mount: "/data", AttachOnly: true}}
+	if _, err := sb.SetVolumes(t.Context(), volumes); err == nil {
+		t.Fatal("SetVolumes accepted mount with attach_only")
+	}
+	if _, err := sb.PatchVolumes(t.Context(), VolumePatch{Add: volumes}); err == nil {
+		t.Fatal("PatchVolumes accepted mount with attach_only")
+	}
+}
+
+func TestVolumeResponseInferenceDoesNotChangeRequestDecoding(t *testing.T) {
+	var request Volume
+	if err := json.Unmarshal([]byte(`{"name":"default-mounted"}`), &request); err != nil || request.AttachOnly {
+		t.Fatalf("ordinary request decode acquired raw intent: %+v err=%v", request, err)
+	}
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/sandboxes" {
+			_, _ = io.WriteString(w, `{"sandboxes":[{"id":"sb_1","volumes":[{"name":"raw"}],"volumes_want":[{"name":"mounted","mount":"/data"}]},{"id":"sb_2","volumes":[],"volumes_want":[]},{"id":"sb_3"}]}`)
+			return
+		}
+		_, _ = io.WriteString(w, `{"volumes":[{"name":"raw"}],"volumes_want":[{"name":"raw","mount":""}],"states":[],"converging":false}`)
+	}))
+	t.Cleanup(ts.Close)
+	c := testClient(t, ts)
+	rows, err := c.Sandboxes(t.Context())
+	if err != nil || !rows[0].Volumes[0].AttachOnly || rows[0].VolumesWant[0].AttachOnly || rows[1].Volumes == nil || rows[2].Volumes != nil {
+		t.Fatalf("summary inference or nil/empty changed: %+v err=%v", rows, err)
+	}
+	sb := c.Attach(c.addr, "sb_1", "tok")
+	view, err := sb.GetVolumes(t.Context())
+	if err != nil || !view.Volumes[0].AttachOnly || !view.VolumesWant[0].AttachOnly {
+		t.Fatalf("live inference: %+v err=%v", view, err)
+	}
+}
+
+func TestClaimResponseVolumesAreOwnedCopies(t *testing.T) {
+	c := &Client{}
+	wire := []Volume{{Name: "raw"}, {Name: "mounted", Mount: "/data"}}
+	sb := c.handleFrom("node", claimResponse{Volumes: wire})
+	if !sb.Volumes[0].AttachOnly || sb.Volumes[1].AttachOnly || wire[0].AttachOnly {
+		t.Fatalf("response inference changed wire data: handle=%+v wire=%+v", sb.Volumes, wire)
+	}
+	sb.Volumes[0].Name = "caller"
+	if wire[0].Name != "raw" || sb.VolumesWant[0].Name != "raw" {
+		t.Fatal("claim volume views alias the wire or each other")
+	}
+	if c.handleFrom("node", claimResponse{}).Volumes != nil || c.handleFrom("node", claimResponse{Volumes: []Volume{}}).Volumes == nil {
+		t.Fatal("claim response changed nil versus empty volume semantics")
 	}
 }

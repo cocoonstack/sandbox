@@ -110,16 +110,29 @@ func (r claimRequest) rejectPinnedAxes() error {
 	return nil
 }
 
-func (r claimRequest) validateVolumes() error {
+func (r *claimRequest) prepareVolumes() error {
+	attachOnly := 0
 	for _, v := range r.Volumes {
-		if v.Mode != "" && v.Mode != volumeModeRW {
-			return fmt.Errorf("volume %q: mode must be \"\", %q, or %q, got %q", v.Name, volumeModeRO, volumeModeRW, v.Mode)
-		}
-		if v.AttachOnly && v.Mount != "" {
-			return fmt.Errorf("volume %q: mount %q is meaningless with attach_only, which leaves mounting to the caller", v.Name, v.Mount)
+		if err := validateVolume(v); err != nil {
+			return err
 		}
 		if r.VolumesAttachOnly && v.Mount != "" {
 			return fmt.Errorf("volume %q: mount %q is meaningless with WithVolumesAttachOnly, which leaves mounting to the caller", v.Name, v.Mount)
+		}
+		if v.AttachOnly {
+			attachOnly++
+		}
+	}
+	if !r.VolumesAttachOnly && attachOnly > 0 && attachOnly != len(r.Volumes) {
+		return errors.New("mixed mounted and attach-only initial claims are not safe on older servers: claim without volumes, then use SetVolumes or PatchVolumes")
+	}
+	if attachOnly > 0 {
+		r.VolumesAttachOnly = true
+	}
+	if r.VolumesAttachOnly {
+		r.Volumes = slices.Clone(r.Volumes)
+		for i := range r.Volumes {
+			r.Volumes[i].AttachOnly = false
 		}
 	}
 	return nil
@@ -175,7 +188,7 @@ func (c *Client) New(ctx context.Context, template string, opts ...Option) (*San
 	for _, opt := range opts {
 		opt(&claim)
 	}
-	if err := claim.validateVolumes(); err != nil {
+	if err := claim.prepareVolumes(); err != nil {
 		return nil, err
 	}
 	addr, cr, err := claimFollow(c.addr, "claim", func(noRedirect, requirePromoted bool) ([]byte, error) {
@@ -253,8 +266,9 @@ func (c *Client) ownerAt(ctx context.Context, addr, id, token string) (string, e
 }
 
 func (c *Client) handleFrom(dialed string, cr claimResponse) *Sandbox {
+	volumes := responseVolumes(cr.Volumes)
 	return &Sandbox{
-		ID: cr.ID, Deadline: cr.Deadline, Volumes: cr.Volumes, VolumesWant: slices.Clone(cr.Volumes),
+		ID: cr.ID, Deadline: cr.Deadline, Volumes: volumes, VolumesWant: slices.Clone(volumes),
 		FromCheckpoint: cr.FromCheckpoint, TemplateDigest: cr.TemplateDigest, NetRoute: cr.NetRoute,
 		c: c, token: cr.Token, owner: cmp.Or(cr.OwnerAddr, dialed),
 	}

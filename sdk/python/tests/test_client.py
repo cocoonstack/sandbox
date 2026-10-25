@@ -119,7 +119,10 @@ def test_claim_attaches_volumes_without_mounting(node):
             "volumes_attach_only": True,
         }
     ]
-    assert sb.volumes == [{"name": "imagenet"}, {"name": "scratch", "mode": "rw"}]
+    assert sb.volumes == [
+        {"name": "imagenet", "attach_only": True},
+        {"name": "scratch", "mode": "rw", "attach_only": True},
+    ]
 
 
 def test_template_claim_attaches_volumes_without_mounting(node):
@@ -127,7 +130,7 @@ def test_template_claim_attaches_volumes_without_mounting(node):
     sb = Template(Client(node), node, "task:v1", "none", "small").new(volumes=["imagenet"], mount=False)
     assert seen[0]["volumes_attach_only"] is True
     assert seen[0]["volumes"] == [{"name": "imagenet"}]
-    assert sb.volumes == [{"name": "imagenet"}]
+    assert sb.volumes == [{"name": "imagenet", "attach_only": True}]
 
 
 def test_claim_rejects_mount_without_mounting(node):
@@ -385,35 +388,33 @@ def kept_node():
 
 
 @pytest.mark.parametrize("promoted", [False, True])
-def test_claim_preserves_mixed_volume_modes(node, promoted):
-    entries = [
-        {"name": "mounted-ro"},
-        {"name": "mounted-rw", "mount": "/work", "mode": "rw"},
-        {"name": "device-ro", "attach_only": True},
-        {"name": "device-rw", "mode": "rw", "attach_only": True},
-    ]
-    seen = recording_claim({"id": "sb_1", "token": "tok", "volumes": entries})
+def test_claim_rejects_mixed_mounting_before_request(node, promoted):
+    entries = [{"name": "mounted-ro"}, {"name": "device-rw", "mode": "rw", "attach_only": True}]
+    seen = recording_claim({"id": "sb_1", "token": "tok"})
     client = Client(node)
-    if promoted:
-        sb = Template(client, node, "task:v1", "none", "small").new(volumes=entries)
-    else:
-        sb = client.new("rt:24.04", volumes=entries)
-    assert seen[0]["volumes"] == entries
-    assert "volumes_attach_only" not in seen[0]
-    assert sb.volumes == entries
+    with pytest.raises(TypeError, match="claim without volumes"):
+        if promoted:
+            Template(client, node, "task:v1", "none", "small").new(volumes=entries)
+        else:
+            client.new("rt:24.04", volumes=entries)
+    assert seen == []
 
 
 @pytest.mark.parametrize("promoted", [False, True])
-def test_claim_global_attach_only_keeps_per_entry_flags(node, promoted):
-    entries = [{"name": "data", "attach_only": False}, {"name": "work", "mode": "rw", "attach_only": True}]
-    seen = recording_claim({"id": "sb_1", "token": "tok"})
+@pytest.mark.parametrize("global_flag", [False, True])
+def test_claim_attach_only_uses_legacy_wire_encoding(node, promoted, global_flag):
+    entries = [{"name": "data", "attach_only": not global_flag}, {"name": "work", "mode": "rw", "attach_only": True}]
+    wire_entries = [{"name": "data"}, {"name": "work", "mode": "rw"}]
+    seen = recording_claim({"id": "sb_1", "token": "tok", "volumes": wire_entries})
     client = Client(node)
     if promoted:
-        Template(client, node, "task:v1", "none", "small").new(volumes=entries, mount=False)
+        sb = Template(client, node, "task:v1", "none", "small").new(volumes=entries, mount=not global_flag)
     else:
-        client.new("rt:24.04", volumes=entries, mount=False)
+        sb = client.new("rt:24.04", volumes=entries, mount=not global_flag)
     assert seen[0]["volumes_attach_only"] is True
-    assert seen[0]["volumes"] == entries
+    assert seen[0]["volumes"] == wire_entries
+    assert sb.volumes == [{**entry, "attach_only": True} for entry in wire_entries]
+    assert entries[0]["attach_only"] is not global_flag
 
 
 @pytest.mark.parametrize("promoted", [False, True])
@@ -470,3 +471,53 @@ def test_claim_methods_preserve_empty_volume_sequence_semantics(node, promoted):
         claim(volumes=volumes)
     assert len(seen) == 3
     assert all("volumes" not in body for body in seen)
+
+
+@pytest.mark.parametrize("promoted", [False, True])
+@pytest.mark.parametrize("kind", ["list", "tuple", "generator", "set", "empty-generator"])
+def test_claim_volume_iterables_are_consumed_once(node, promoted, kind):
+    seen = recording_claim({"id": "sb_1", "token": "tok"})
+    consumed = []
+
+    def generate():
+        if kind != "empty-generator":
+            consumed.append("data")
+            yield "data"
+
+    volumes = {"list": ["data"], "tuple": ("data",), "set": {"data"}}.get(kind)
+    if volumes is None:
+        volumes = generate()
+    client = Client(node)
+    if promoted:
+        Template(client, node, "task:v1", "none", "small").new(volumes=volumes)
+        assert seen[0].get("no_redirect", False) is (kind == "empty-generator")
+    else:
+        client.new("rt:24.04", volumes=volumes)
+    if kind == "empty-generator":
+        assert "volumes" not in seen[0]
+    else:
+        assert seen[0]["volumes"] == [{"name": "data"}]
+    assert consumed == (["data"] if kind == "generator" else [])
+
+
+def test_claim_and_summary_response_inference_copies_wire_data(node):
+    client = Client(node)
+    reply = {"id": "sb_1", "token": "tok", "volumes": [{"name": "raw"}, {"name": "mounted", "mount": "/data"}]}
+    sb = client._handle_from(node, reply)
+    assert sb.volumes[0]["attach_only"] is True
+    assert "attach_only" not in sb.volumes[1]
+    assert "attach_only" not in reply["volumes"][0]
+    sb.volumes[0]["name"] = "caller"
+    assert sb.volumes_want[0]["name"] == reply["volumes"][0]["name"] == "raw"
+    rows = [
+        {"id": "sb_1", "volumes": [{"name": "raw"}], "volumes_want": [{"name": "raw", "mount": ""}]},
+        {"id": "sb_2", "volumes": [], "volumes_want": []},
+        {"id": "sb_3"},
+    ]
+    FakeNode.routes[("GET", "/v1/sandboxes")] = lambda body, path: (200, {"sandboxes": rows})
+    summaries = client.sandboxes()
+    assert summaries[0]["volumes"][0]["attach_only"] is True
+    assert summaries[0]["volumes_want"][0]["attach_only"] is True
+    assert summaries[1]["volumes"] == summaries[1]["volumes_want"] == []
+    assert "volumes" not in summaries[2]
+    assert "attach_only" not in rows[0]["volumes"][0]

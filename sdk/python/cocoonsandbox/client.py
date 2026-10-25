@@ -18,7 +18,7 @@ from .endpoint import _endpoint_url
 from .errors import APIError, SandboxTimeout, require_field
 from .sandbox import Sandbox
 from .template import _claim_body, _template_query
-from .volumes import Volume
+from .volumes import Volume, _response_volumes
 
 T = TypeVar("T")
 
@@ -61,7 +61,7 @@ class Client:
         size: str = "",
         ttl_seconds: int = 0,
         claim_ref: str = "",
-        volumes: Sequence[str | Mapping[str, str | bool] | Volume] | None = None,
+        volumes: Iterable[str | Mapping[str, str | bool] | Volume] | None = None,
         mount: bool = True,
         *,
         deadline: float | None = None,
@@ -110,7 +110,12 @@ class Client:
     def sandboxes(self) -> list[dict[str, Any]]:
         """Lists the claims this token may see: id, key, deadline, claim_ref — never tokens or host paths."""
         reply = self._request(self.addr, "GET", "/v1/sandboxes", None, "list sandboxes")
-        return [dict(sb) for sb in reply.get("sandboxes") or []]
+        rows = [dict(sb) for sb in reply.get("sandboxes") or []]
+        for row in rows:
+            for key in ("volumes", "volumes_want"):
+                if row.get(key) is not None:
+                    row[key] = _response_volumes(row[key])
+        return rows
 
     def drain(self) -> dict[str, Any]:
         """Cordons the node (root token): new claims are refused, live ones run to their leases."""
@@ -181,7 +186,7 @@ class Client:
             deadline=reply.get("deadline", ""),
             from_checkpoint=reply.get("from_checkpoint", ""),
             template_digest=reply.get("template_digest", ""),
-            volumes=reply.get("volumes") or [],
+            volumes=_response_volumes(reply.get("volumes") or []),
         )
 
     def _post_json(

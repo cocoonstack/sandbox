@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import urllib.parse
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping
 from typing import TYPE_CHECKING, Any
 
 from .volumes import Volume, _volume_bodies
@@ -27,7 +27,7 @@ class Template:
     def new(
         self,
         ttl_seconds: int = 0,
-        volumes: Sequence[str | Mapping[str, str | bool] | Volume] | None = None,
+        volumes: Iterable[str | Mapping[str, str | bool] | Volume] | None = None,
         mount: bool = True,
         *,
         deadline: float | None = None,
@@ -36,7 +36,7 @@ class Template:
         mount=False attaches the volumes without mounting them."""
         claim = _claim_body(self.name, self.net, self.size, ttl_seconds, volumes, mount)
         claim["require_promoted"] = True
-        if volumes:
+        if claim.get("volumes"):
             return self._client._claim_from(self._addr, claim, deadline=deadline)
         claim["no_redirect"] = True
         reply = self._client._post_json(self._addr, "/v1/claim", claim, "claim", deadline=deadline)
@@ -55,7 +55,7 @@ def _claim_body(
     net: str,
     size: str,
     ttl_seconds: int,
-    volumes: Sequence[str | Mapping[str, str | bool] | Volume] | None = None,
+    volumes: Iterable[str | Mapping[str, str | bool] | Volume] | None = None,
     mount: bool = True,
     claim_ref: str = "",
 ) -> dict[str, Any]:
@@ -68,6 +68,17 @@ def _claim_body(
         claim["ttl_seconds"] = ttl_seconds
     if volumes is not None:
         entries = _volume_bodies(volumes, mount)
+        raw = sum(bool(entry.get("attach_only")) for entry in entries)
+        if mount and raw and raw != len(entries):
+            raise TypeError(
+                "mixed mounted and attach-only initial claims are not safe on older servers: "
+                "claim without volumes, then use set_volumes or patch_volumes"
+            )
+        if raw:
+            mount = False
+        if not mount:
+            for entry in entries:
+                entry.pop("attach_only", None)
         if entries:
             claim["volumes"] = entries
     if not mount:
