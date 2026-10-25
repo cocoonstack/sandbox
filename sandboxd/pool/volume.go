@@ -53,7 +53,6 @@ type catalogVolume struct {
 	writable   bool
 }
 
-// volumeAccess separates the claim owner's ACL from the caller's operator authority.
 type volumeAccess struct {
 	tenant   string
 	operator bool

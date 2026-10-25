@@ -78,6 +78,18 @@ jobs:
             exit 1
           fi
 
+      - name: Test e2e as root
+        working-directory: e2e
+        shell: bash
+        run: |
+          GOWORK=off go test -race -c -o "$RUNNER_TEMP/volume-e2e.test" .
+          sudo setpriv --bounding-set=-dac_override,-dac_read_search "$RUNNER_TEMP/volume-e2e.test" -test.count=1 -test.v -test.skip '^TestCaddyTLSCluster$' | tee "$RUNNER_TEMP/volume-e2e-test.log"
+          grep -q '^--- PASS: TestRuntimeVolumeControllerAdmissionThroughHTTP ' "$RUNNER_TEMP/volume-e2e-test.log"
+          grep -q '^--- PASS: TestRuntimeVolumeExplicitACLAndStaticPublicThroughHTTP ' "$RUNNER_TEMP/volume-e2e-test.log"
+          if grep -- '--- SKIP:' "$RUNNER_TEMP/volume-e2e-test.log"; then
+            exit 1
+          fi
+
       - name: Test the PostgreSQL meta store
         working-directory: sandboxd
         shell: bash
