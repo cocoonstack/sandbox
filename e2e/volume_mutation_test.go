@@ -77,3 +77,45 @@ func TestEmptyVolumePatchChangesNothing(t *testing.T) {
 		t.Fatalf("empty patch: %+v err=%v", got, err)
 	}
 }
+
+func TestMixedLiveVolumeModesThroughSDK(t *testing.T) {
+	volumes := []sandbox.Volume{
+		{Name: "mounted-ro"},
+		{Name: "mounted-rw", Mode: "rw"},
+		{Name: "device-ro", AttachOnly: true},
+		{Name: "device-rw", Mode: "rw", AttachOnly: true},
+	}
+	var catalog []config.VolumeSpec
+	for _, volume := range volumes {
+		catalog = append(catalog, config.VolumeSpec{
+			Name: volume.Name, Path: writeVolumeImage(t, volume.Name+".img", "seed"), Writable: volume.Mode == "rw",
+		})
+	}
+	stack := startTenantStack(t, "node-token", nil, catalog)
+	sb, err := stack.client.New(t.Context(), "rt:24.04")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sb.Close()
+	view, err := sb.PatchVolumes(t.Context(), sandbox.VolumePatch{Add: volumes})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := slices.Clone(volumes)
+	want[0].Mount, want[1].Mount = "/volumes/mounted-ro", "/volumes/mounted-rw"
+	if !slices.Equal(view.Volumes, want) || !slices.Equal(sb.Volumes, want) {
+		t.Fatalf("mixed SDK attachment = %+v, handle=%+v, want %+v", view, sb.Volumes, want)
+	}
+	view, err = sb.GetVolumes(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	view, err = sb.SetVolumes(t.Context(), view.VolumesWant)
+	if err != nil || !slices.Equal(view.Volumes, want) || view.Converging {
+		t.Fatalf("mixed GET-to-PUT = %+v, err=%v", view, err)
+	}
+	view, err = sb.SetVolumes(t.Context(), []sandbox.Volume{})
+	if err != nil || len(view.Volumes) != 0 || len(view.VolumesWant) != 0 || view.Converging {
+		t.Fatalf("mixed removal = %+v, err=%v", view, err)
+	}
+}
