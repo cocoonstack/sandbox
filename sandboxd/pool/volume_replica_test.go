@@ -84,6 +84,46 @@ func TestReplicaRetirementKeepsTombstoneUntilClaimCommit(t *testing.T) {
 	}
 }
 
+func TestReplicaUnpublishedIntentSurvivesFailedClearAndRestart(t *testing.T) {
+	m, c := newReplicaVolumeManager(t)
+	sb := mustClaim(t, m, testKey)
+	m.archives = &hookRegistry{Registry: c.reg, failPut: true}
+	if err := m.replicate(t.Context(), sb); !errors.Is(err, ErrArchiveStoreDown) {
+		t.Fatal(err)
+	}
+	pending := sb.ReplicaPending
+	if pending == "" || !ckExists(t, m, pending) {
+		t.Fatal("missing unpublished checkpoint")
+	}
+	m.archives = c.reg
+	writer := []types.Volume{{Name: "data", Mode: types.VolumeModeRW, AttachOnly: true}}
+	if _, err := m.SetVolumes(t.Context(), sb.ID, "", writer); !errors.Is(err, ErrReplicaPresent) {
+		t.Fatal(err)
+	}
+	m.store.recommitting.Store(true)
+	m.store.replaceFile = func([]byte) error { return errors.New("injected pending clear failure") }
+	m.retireReplica(t.Context(), sb)
+	persisted, err := newClaimStore(m.dataDir, false).load()
+	if err != nil || persisted[sb.ID].ReplicaPending != pending || len(persisted[sb.ID].VolumesWant) != 1 {
+		t.Fatalf("failure did not retain old disk state: %+v, %v", persisted, err)
+	}
+	if !ckExists(t, m, pending) {
+		t.Error("failed pending clear deleted the checkpoint used to distinguish an unpublished intent from adoption")
+	}
+	t.Logf("failed unpublished clear: memory_pending=%q durable_pending=%q checkpoint_exists=%t wanted=%+v synced=%t", sb.ReplicaPending, persisted[sb.ID].ReplicaPending, ckExists(t, m, pending), persisted[sb.ID].VolumesWant, m.store.synced())
+	restarted := restartReplicaVolumeManager(t, m, c)
+	restored, ok := restarted.byID(sb.ID)
+	if !ok {
+		t.Fatal("restart mistook a failed pending clear for adoption and discarded the claim")
+	}
+	if len(restored.VolumesWant) != 1 || len(restored.Volumes) != 0 || volumeHoldersOf(restarted, "data").writers != 1 {
+		t.Fatalf("restart lost pending writer: %+v", restored)
+	}
+	if view, err := restarted.SetVolumes(t.Context(), sb.ID, "", writer); err != nil || len(view.Volumes) != 1 {
+		t.Fatalf("retry after restart: %+v, %v", view, err)
+	}
+}
+
 func TestReplicaRecoveryDoesNotRepublishVolumeIntent(t *testing.T) {
 	m, c := newReplicaVolumeManager(t)
 	sb := mustClaim(t, m, testKey)
