@@ -137,6 +137,38 @@ func TestDisabledRegistryKeepsArchivedClaimCheckpoint(t *testing.T) {
 	}
 }
 
+func TestDisabledRegistryKeepsArchiveIntentCheckpoint(t *testing.T) {
+	m, c := newReplicaVolumeManager(t)
+	sb := mustClaim(t, m, testKey)
+	replicateNow(t, m, sb)
+	replica, epoch := sb.ReplicaCk, sb.ArchiveEpoch
+	if err := m.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
+		t.Fatal(err)
+	}
+	m.archives = &hookRegistry{Registry: c.reg, failPut: true}
+	if err := m.archive(t.Context(), sb); !errors.Is(err, ErrArchiveStoreDown) {
+		t.Fatalf("archive intent fixture: %v", err)
+	}
+	pending := sb.ArchivePending
+	if pending == "" || sb.ArchiveCk != "" || sb.ReplicaCk != replica || sb.ArchiveEpoch != epoch {
+		t.Fatal("failed archive did not retain its checkpoint intent and replica")
+	}
+	drainClaimRow(t, c, sb.ID)
+	restarted := newManagerWithoutRegistry(t, m, c)
+	if err := restarted.Reconcile(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	restored, ok := restarted.byID(sb.ID)
+	if !ok || restored.ArchivePending != pending || restored.ReplicaCk != replica || restored.ArchiveEpoch != epoch {
+		t.Fatal("replica retirement changed an in-progress archive")
+	}
+	for _, ck := range []string{pending, replica} {
+		if !ckExists(t, restarted, ck) || restarted.deleteMarked(ck) {
+			t.Fatal("replica retirement queued or deleted an archive dependency")
+		}
+	}
+}
+
 func TestReplicaFailedClearQueuesCheckpointCleanup(t *testing.T) {
 	m, _ := newReplicaVolumeManager(t)
 	sb := mustClaim(t, m, testKey)
