@@ -18,7 +18,7 @@ const (
 	volumeChangeInterrupted = "volume change interrupted; retry the desired target"
 )
 
-type volumeEdit func([]types.Volume) ([]types.Volume, error)
+type volumeEdit func(current, shapeContext []types.Volume) ([]types.Volume, error)
 
 type volumeRun struct {
 	cancel context.CancelFunc
@@ -40,16 +40,16 @@ func (m *Manager) GetVolumes(id, tenant string) (types.SandboxVolumesResponse, e
 
 // SetVolumes converges a running claim onto the full desired volume set.
 func (m *Manager) SetVolumes(ctx context.Context, id, tenant string, want []types.Volume) (types.SandboxVolumesResponse, error) {
-	return m.changeVolumes(ctx, id, tenant, func([]types.Volume) ([]types.Volume, error) { return slices.Clone(want), nil })
+	return m.changeVolumes(ctx, id, tenant, func([]types.Volume, []types.Volume) ([]types.Volume, error) { return slices.Clone(want), nil })
 }
 
 // PatchVolumes adds and removes a running claim's volumes by name.
 func (m *Manager) PatchVolumes(ctx context.Context, id, tenant string, patch types.VolumePatch) (types.SandboxVolumesResponse, error) {
-	return m.changeVolumes(ctx, id, tenant, func(current []types.Volume) ([]types.Volume, error) {
+	return m.changeVolumes(ctx, id, tenant, func(current, shapeContext []types.Volume) ([]types.Volume, error) {
 		if err := validateDetachNames(patch.Remove); err != nil {
 			return nil, err
 		}
-		additions, err := normalizeLiveVolumes(patch.Add, current)
+		additions, err := normalizeLiveVolumes(patch.Add, shapeContext)
 		if err != nil {
 			return nil, err
 		}
@@ -91,15 +91,16 @@ func (m *Manager) changeVolumes(ctx context.Context, id, tenant string, change v
 	current, held := slices.Clone(sb.VolumesWant), heldVolumes(sb)
 	recovery := m.store.recoveryVolumes(sb.ID)[sb.ID]
 	m.mu.Unlock()
-	target, err := change(current)
+	shapeContext := slices.Concat(held, recovery)
+	target, err := change(current, shapeContext)
 	if err != nil {
 		return view, err
 	}
-	target, err = normalizeLiveVolumes(target, slices.Concat(held, recovery))
+	target, err = normalizeLiveVolumes(target, shapeContext)
 	if err != nil {
 		return view, err
 	}
-	if err = validateLiveTarget(slices.Concat(held, recovery), target); err != nil {
+	if err = validateLiveTarget(shapeContext, target); err != nil {
 		return view, err
 	}
 	additions := volumeDifferenceByName(target, held)

@@ -288,8 +288,9 @@ Changing a held name's mount, mode, or mounted shape requires a successful
 remove before adding it again. Paused sandboxes are not woken, and images must
 exist on the owner node. Admission holds cover the union of desired and applied
 sets. A settled retained entry receives no new attach or mount calls. `converging`
-is true only during an active request. Pending or detaching entries with false
-require an explicit retry. Daemon restart replaces unfinished diagnostics with
+is true while a request worker is running or a recovery-only reference awaits
+an acknowledged claim write. Pending or detaching entries with false require
+an explicit retry. Daemon restart replaces unfinished diagnostics with
 an interrupted message. Capture remains refused while either set or
 unacknowledged recovery references hold volumes.
 Release cancels convergence and hands held volumes to teardown. See the
