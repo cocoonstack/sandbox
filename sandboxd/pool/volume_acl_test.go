@@ -10,6 +10,17 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
+func TestUnsetVolumeACLRejectsAccess(t *testing.T) {
+	var acl volumeACL
+	for _, caller := range []string{"", "acme"} {
+		for _, owner := range []string{"", "acme"} {
+			if acl.allowedFor(volumeAccessFor(caller, owner)) {
+				t.Errorf("unset volume ACL allowed caller %q for owner %q", caller, owner)
+			}
+		}
+	}
+}
+
 func TestRuntimeCatalogDefaultACL(t *testing.T) {
 	requireCatalogRoot(t)
 	for _, tenants := range [][]string{nil, {}} {
