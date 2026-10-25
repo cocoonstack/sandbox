@@ -305,7 +305,10 @@ JSON return 400.
   Operators must keep the registered path and target stable.
 - `directio` is `on`, `off`, or `auto`, and defaults to `off`.
 - `writable` defaults to `false` and controls writable claim admission.
-- `tenants` limits use to the named tenants. Omitted or empty permits all tenants.
+- `tenants` grants the named tenants self-service access. Omitted or empty
+  makes a runtime entry operator-only. Root can attach it to a tenant-owned
+  claim; that tenant cannot add it to another claim. Static config entries
+  retain their existing public default for an empty list.
   Names use the tenant API name syntax. A valid name may be registered before
   that tenant exists; it grants no access until the tenant is created.
 
@@ -362,7 +365,11 @@ has retired.
 
 An external controller owns quiescence and guest unmount before detach. It
 confirms successful detach and recovery bookkeeping before hibernation, and
-keeps its own volume reservation while the sandbox sleeps. The controller
+keeps its own volume reservation while the sandbox sleeps. For controller-only attachment, leave the runtime entry's `tenants` empty and
+keep `api_token` configured. A nonempty ACL allows those tenants to attach the
+volume themselves after detach; it does not reserve the volume for one claim.
+Removing `api_token` restores the daemon's unauthenticated root-scope mode, so
+operator-only admission then provides no network authentication. The controller
 gates every access path, including business requests that wake the sandbox,
 until wake, attach, and mount complete. Wake establishes only silkd readiness.
 It does not restore volume attachments or application readiness. Controller
@@ -371,11 +378,20 @@ verification is included here. Downgrading to a daemon without runtime
 registration requires draining runtime references or supplying equivalent
 static volume config. Pending live volume changes must finish before downgrade.
 
+Earlier development builds treated empty runtime ACLs as public. Loading those
+records now restricts new admission to root without discarding existing claims
+or blocking their cleanup. Before downgrading to a build with the old ACL rule,
+drain and unregister operator-only entries. Leaving their registrations in place
+would make them public again; draining claims alone does not prevent that.
+
 An unresolved stale VM keeps volume admission and catalog changes fenced while
 cleanup retries continue. Inspect success alone does not prove a complete disk
 inventory. A present VM with omitted disks, or an active creating owner, retains
 that fence until a complete running inventory or confirmed removal resolves it.
-An empty inventory is indistinguishable from an omitted one and stays fenced.
+Cocoon v0.7.3 omits the disk list when its inventory query fails, and does not
+collect it for stopped VMs. An empty list is therefore not proof of absence.
+This availability limit also affects static read-only admission. Allowing readers
+would conflict with an unknown writer. Cleanup retries remain enabled.
 A warm VM name is not evidence that no volume is attached; attachment can
 succeed before claim finalization fails. Known inventories keep holds on their
 reported names. Volume-free claims continue to work. Path uniqueness uses

@@ -94,9 +94,11 @@ rather than confirming existence, and operator surfaces answer tenants 403.
 
 The volume catalog is an operator-owned data boundary. A volume name and its
 access list must mean the same thing fleet-wide, although membership is
-node-local. An empty entry `tenants` list permits every authenticated scope; a
-nonempty list permits only those named tenants, while the root token always
-has access. Access-list names must use valid tenant name syntax. A name that
+node-local. An empty static entry `tenants` list permits every authenticated
+scope. An empty runtime entry is operator-only. A nonempty list grants the
+named tenants self-service access. Root can attach an operator-only runtime
+entry to a tenant-owned claim. For other live additions, the claim owner must
+satisfy the entry's ACL, even when root sends the request. Access-list names must use valid tenant name syntax. A name that
 does not yet identify a tenant grants no access until that tenant exists.
 Claim lookup returns byte-identical errors for an unknown and a forbidden name, and catalog discovery filters before replying, so a tenant
 cannot enumerate restricted entries by probing. Gossip carries names only.
@@ -132,16 +134,20 @@ immutable and publish a new name/path for new content.
 Changing a running claim's volumes needs the root token or the owning tenant's
 API token. A sandbox token cannot, so a guest holding its own sandbox token
 cannot attach another dataset, and every addition passes the same access list
-as a claim.
+as a claim. An operator-only runtime addition instead checks the root caller.
+Already-held references can finish repair or removal without a new ACL grant.
+Keep `api_token` configured for controller-only admission; without it the daemon
+treats network requests as root. An ACL does not reserve a detached disk across
+sleep. The controller must retain that reservation and gate workload access.
 
 A writable entry (`writable: true`) adds a channel the read-only model does
 not have: whichever tenant is permitted to claim it `rw` changes what every
 other permitted tenant reads next, and any of them can be the writer in
 turn — a multi-tenant access list on a writable entry is a bidirectional
 channel between those tenants, not just a shared read. Recommend a writable
-entry's `tenants` name exactly one tenant — an empty list permits every
-authenticated scope, which for a writable entry means every tenant can write
-to every other tenant's next read. A dataset that genuinely needs multiple
+entry's `tenants` name exactly one tenant when tenant self-service is intended.
+An empty static list permits every tenant to write to other tenants' next reads.
+Use an empty runtime list when only the controller should initiate attachment. A dataset that genuinely needs multiple
 writers needs an out-of-band process for who writes when, which the catalog
 ACL does not provide.
 

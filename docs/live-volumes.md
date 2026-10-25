@@ -11,7 +11,10 @@ A sandbox token alone cannot manage volumes.
 
 A configured node root token can [register backing paths](sandboxd-api.md#put-v1volumesname)
 without editing static config. Registration persists only node-local catalog
-metadata and does not manage disk files. For a sleep and wake workflow, an
+metadata and does not manage disk files. An empty runtime `tenants` list allows
+only root to initiate attachment, including attachment to a tenant-owned claim.
+Keep `api_token` configured. List tenants explicitly to grant self-service;
+that permission also allows reattachment to another claim after detach. For a sleep and wake workflow, an
 external controller owns quiescence and unmount before detach, a reservation
 through sleep, and access gating until wake, attach, and mount complete. That
 gate also covers business requests that wake the sandbox. Wake establishes
