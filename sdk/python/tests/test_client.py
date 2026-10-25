@@ -7,7 +7,7 @@ from http.server import HTTPServer, ThreadingHTTPServer
 import pytest
 from conftest import FakeNode, sandbox_at
 
-from cocoonsandbox import APIError, Client, Template
+from cocoonsandbox import APIError, Client, Sandbox, Template
 
 
 class KeptNode(FakeNode):
@@ -583,3 +583,24 @@ def test_sandbox_handle_decodes_volume_responses(spawn_node, operation):
     assert sb.volumes == [{"name": "raw", "attach_only": True}, {"name": "mounted", "mount": "/data"}]
     assert sb.volumes_want == sb.volumes
     assert "attach_only" not in payload["volumes"][0]
+
+
+@pytest.mark.parametrize(
+    "volume",
+    [
+        {"name": "data"},
+        {"name": "data", "mount": ""},
+        {"name": "data", "attach_only": False},
+        {"name": "data", "attach_only": True},
+        {"name": "data", "mount": "/data"},
+    ],
+)
+def test_sandbox_constructor_preserves_volume_input(volume):
+    volumes = [volume]
+    sb = Sandbox(Client("unused.invalid:7777"), "sb_1", "tok", "unused.invalid:7777", volumes=volumes)
+    assert sb.volumes == sb.volumes_want == volumes
+    sb.volumes[0]["name"] = "caller"
+    assert sb.volumes_want == volumes
+    sb.volumes_want[0]["name"] = "desired"
+    assert volumes == [volume]
+    assert volume["name"] == "data"
