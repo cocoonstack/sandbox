@@ -463,6 +463,35 @@ func TestLoadAcceptsAShardedNetworkList(t *testing.T) {
 	}
 }
 
+func TestValidateVolumeCatalogTenantNames(t *testing.T) {
+	for _, tenant := range []string{"", "has space", "_leading", strings.Repeat("a", 64)} {
+		spec := VolumeSpec{Name: "data", Path: "/images/data", DirectIO: types.DirectIOOff, Tenants: []string{tenant}}
+		if err := ValidateVolumeCatalog([]VolumeSpec{spec}); err == nil {
+			t.Errorf("invalid tenant %q accepted", tenant)
+		}
+	}
+	spec := VolumeSpec{Name: "data", Path: "/images/data", DirectIO: types.DirectIOOff, Tenants: []string{"future-tenant", "team/project:v1"}}
+	if err := ValidateVolumeCatalog([]VolumeSpec{spec}); err != nil {
+		t.Fatalf("syntactically valid future tenant rejected: %v", err)
+	}
+}
+
+func TestLoadPreservesRestrictedACLWithInvalidVolumeTenants(t *testing.T) {
+	for _, tenants := range []string{`["acme", "has space", "", "beta"]`, `["has space"]`} {
+		cfg, err := Load(writeConfig(t, `{"pools":[],"volumes":[{"name":"data","path":"/images/data","tenants":`+tenants+`}]}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := []string{"has space"}
+		if strings.Contains(tenants, "acme") {
+			want = []string{"acme", "has space", "", "beta"}
+		}
+		if !slices.Equal(cfg.Volumes[0].Tenants, want) {
+			t.Fatalf("tenants = %v, want %v", cfg.Volumes[0].Tenants, want)
+		}
+	}
+}
+
 func writeConfig(t *testing.T, body string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "config.json")

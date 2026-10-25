@@ -45,7 +45,9 @@ func (m *Manager) confirmGone(ctx context.Context, name string) bool {
 // removeOrRetry reports whether the VM is confirmed gone; a survivor is queued for the reap tick.
 func (m *Manager) removeOrRetry(ctx context.Context, name, sandboxID string, td volumeTeardown) bool {
 	if m.removeVM(ctx, name) {
-		m.finishVolumeTeardown(ctx, td)
+		if !m.finishVolumeTeardown(ctx, td) {
+			m.queueRemoval(name, sandboxID, "", td, time.Time{})
+		}
 		return true
 	}
 	m.queueRemoval(name, sandboxID, "", td, time.Time{})
@@ -58,9 +60,9 @@ func (m *Manager) queueRemoval(name, sandboxID, tap string, td volumeTeardown, n
 	m.mu.Unlock()
 }
 
-func (m *Manager) queueStaleCreate(name, tap string) {
+func (m *Manager) queueStaleCreate(name, tap string, td volumeTeardown) {
 	m.mu.Lock()
-	m.pendingRemovals[name] = pendingRemoval{tap: tap, staleCreate: true}
+	m.pendingRemovals[name] = pendingRemoval{tap: tap, staleCreate: true, volumes: td}
 	m.mu.Unlock()
 }
 
@@ -77,7 +79,7 @@ func (m *Manager) retryRemovals(ctx context.Context) *sync.WaitGroup {
 	}
 	m.mu.Unlock()
 	names := slices.Collect(maps.Keys(batch))
-	return m.runBounded(ctx, len(names), func(ctx context.Context, i int) {
+	return m.runBounded(context.WithoutCancel(ctx), len(names), func(ctx context.Context, i int) {
 		m.retryRemoval(ctx, names[i], batch[names[i]])
 	})
 }
@@ -87,25 +89,29 @@ func (m *Manager) retryRemoval(ctx context.Context, name string, pending pending
 		switch outcome, err := m.eng.ReconcileStaleCreate(ctx, name); {
 		case err != nil:
 			log.WithFunc("pool.retryRemoval").Warnf(ctx, "reconcile stale create %s: %v; retrying", name, err)
-			m.queueStaleCreate(name, pending.tap)
+			m.queueStaleCreate(name, pending.tap, pending.volumes)
 			return
 		case outcome == engine.StaleCreateBusy:
-			m.queueStaleCreate(name, pending.tap)
+			m.queueStaleCreate(name, pending.tap, pending.volumes)
 			return
 		case outcome == engine.StaleCreateCollected, outcome == engine.StaleCreateNotFound:
-			m.finishRemoval(ctx, pending)
+			m.finishRemoval(ctx, name, pending)
 			return
 		}
 	}
+	pending.volumes = m.resolveStaleVolumes(ctx, name, pending.volumes)
 	if !m.removeVM(ctx, name) {
 		m.queueRemoval(name, pending.sandboxID, pending.tap, pending.volumes, time.Time{})
 		return
 	}
-	m.finishRemoval(ctx, pending)
+	m.finishRemoval(ctx, name, pending)
 }
 
-func (m *Manager) finishRemoval(ctx context.Context, pending pendingRemoval) {
-	m.finishVolumeTeardown(ctx, pending.volumes)
+func (m *Manager) finishRemoval(ctx context.Context, name string, pending pendingRemoval) {
+	if !m.finishVolumeTeardown(ctx, pending.volumes) {
+		m.queueRemoval(name, pending.sandboxID, pending.tap, pending.volumes, time.Time{})
+		return
+	}
 	if pending.sandboxID != "" {
 		m.out.Disarm(pending.sandboxID, true)
 	} else if pending.tap != "" {

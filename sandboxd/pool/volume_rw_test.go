@@ -229,7 +229,7 @@ func TestReserveVolumesExcludesReaderUnderWriter(t *testing.T) {
 	if err := m.reserveVolumes([]types.Volume{{Name: "scratch", Mount: "/volumes/scratch"}}); !errors.Is(err, ErrVolumeBusy) {
 		t.Errorf("read-only reservation under a writer: %v, want ErrVolumeBusy", err)
 	}
-	if holders := m.volumeAdmission["scratch"]; holders != (volumeHolders{writers: 1}) {
+	if holders := m.catalog.holders["scratch"]; holders != (volumeHolders{writers: 1}) {
 		t.Errorf("registry after the refusal=%+v, want the writer alone", holders)
 	}
 }
@@ -580,5 +580,5 @@ func newVolumeManagerAt(t *testing.T, eng *fakeEngine, dataDir string, volumes [
 func volumeHoldersOf(m *Manager, name string) volumeHolders {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.volumeAdmission[name]
+	return m.catalog.holders[name]
 }

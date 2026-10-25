@@ -119,7 +119,7 @@ gets the intersection of the two.
 | `advertise_addr` | = `listen` | internal HTTP host:port for peer traffic and preview forwarding; also used by clients when `client_advertise` is unset. Must be routable when `listen` is a wildcard; a node with `mesh` set refuses to load while it names an unspecified host |
 | `client_advertise` | unset | client-facing HTTP(S) origin for this node, e.g. `https://node-a.sandbox.example.com`; published in owner, redirect, and peer responses. No path, query, fragment, or userinfo |
 | `bridges` / `networks` | unset | egress-lane attachment: a list of host bridge devices, or a list of CNI conflist names. Mutually exclusive; with neither set the node serves only the no-network lane. A Linux bridge holds at most 1024 ports (kernel `BR_MAX_PORTS`), so an N-entry list raises the node's egress ceiling to N×1024 — VMs spread over the list by a stable hash of the VM name, so size it with headroom (the spread is statistical, not exact). `bridges` keeps the raw TAP-on-bridge attachment (taps in the root netns, no per-VM network namespace or CNI plugin execution); `networks` runs the CNI chain per VM. [Guarded egress](egress.md) on the egress lane (an egress-lane pool policy or any tenant policy) needs `bridges` and rejects a CNI network at load; none-lane pool policies ride the proxy on either |
-| `volumes` | unset | node-local catalog of operator-managed dataset images: `[ {"name":"imagenet","path":"/srv/datasets/imagenet.img","directio":"off","tenants":["acme"]}, {"name":"scratch-db","path":"/srv/datasets/scratch.img","writable":true} ]`. Names match `^[a-z][a-z0-9_-]{0,19}$` and cannot start with `cocoon-`; paths are absolute; `directio` is `on`, `off`, or `auto` and defaults to `off` for both read-only and writable entries. `tenants` is an optional access list: empty means every authenticated scope, and a listed name the tenant set does not hold grants nothing and logs a warning at boot (the [tenant API](sandboxd-api.md#tenants-v1tenants) may add it later); root always has access. `writable` (default `false`) lets a claim request `mode: "rw"` on that entry — see [Dataset volumes](#dataset-volumes). The catalog is intentionally not part of the cluster digest |
+| `volumes` | unset | node-local catalog of operator-managed dataset images: `[ {"name":"imagenet","path":"/srv/datasets/imagenet.img","directio":"off","tenants":["acme"]}, {"name":"scratch-db","path":"/srv/datasets/scratch.img","writable":true} ]`. Names match `^[a-z][a-z0-9_-]{0,19}$` and cannot start with `cocoon-`; paths are absolute; `directio` is `on`, `off`, or `auto` and defaults to `off` for both read-only and writable entries. `tenants` is an optional access list: empty means every authenticated scope, and a listed name the tenant set does not hold grants nothing and logs a warning at boot (the [tenant API](sandboxd-api.md#tenants-v1tenants) may add it later); root-owned claims have access; live additions use the claim owner's access list. `writable` (default `false`) lets a claim request `mode: "rw"` on that entry — see [Dataset volumes](#dataset-volumes). The catalog is intentionally not part of the cluster digest |
 | `secrets` | unset | credentials the egress proxy injects by name: `[{"name": "gh", "header": "Authorization", "value_env": "GH_TOKEN"}]`. A pool or egress-class rule references the name (on a claim where both apply, only the pool rule's secret is injected); the value comes from the claim's `guest: false` env, then the node's environment, never this file. Without `value_env` the secret's name is the env to read, and only claims supply it. See [egress](egress.md#claim-env-and-secrets) |
 | `egress_internal_allow` | unset | CIDR prefixes re-admitted through the egress proxy's SSRF guard, node-wide (every pool and tenant); `prefix:port,port` scopes an entry to those ports, a bare prefix admits every port. Prefer the port form. Prefixes, not a permit-private switch — the guest bridges are themselves ULA/RFC1918. See [egress](egress.md) |
 | `egress_upstream` | unset | per-claim upstream proxies: `{"claim_env": "EGRESS_UPSTREAM", "allow": ["res.example.com", "10.1.0.0/16"]}`. A claim's `guest: false` entry under `claim_env` (`http://` or `socks5://`, optional `user:pass@`, or `direct`) routes its egress through that upstream, which must be on `allow` (host names, IPs, CIDR prefixes). See [upstream proxies](egress.md#upstream-proxies) |
@@ -247,6 +247,12 @@ the pool had `reader`, and its reads wake the claim as without the feature.
 
 ### Dataset volumes
 
+Volume `tenants` entries use the tenant API name syntax. Static configuration
+warns about invalid names and skips them during access checks. A nonempty list containing
+only invalid names grants no tenant access. Runtime registration rejects invalid
+tenant names. Valid names for tenants that have not yet been created remain
+accepted.
+
 Running claims can change mounted read-only catalog entries through the
 [GET, PUT, and PATCH volume API](sandboxd-api.md#get-v1sandboxesidvolumes)
 and both SDKs. The image must already exist on the owner node. Live changes
@@ -324,7 +330,8 @@ set, promoted-template intersection, and redirect follow the fleet-wide rule
 in [cluster](cluster.md#volumes-and-placement).
 
 An empty catalog `tenants` list allows every authenticated scope; a nonempty
-list limits the image to those tenants, while root always bypasses it. A
+list limits the image to those claim owners. Root-owned claims can use any
+entry. Live additions use the claim owner's ACL, including requests sent by root. A
 listed tenant the set no longer holds grants nothing and logs a warning at
 boot.
 `GET /v1/volumes` reports the caller-visible fleet union and holder count, plus

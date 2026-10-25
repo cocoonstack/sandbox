@@ -47,6 +47,8 @@ var poolErrHTTP = []struct {
 }{
 	{pool.ErrBadKey, http.StatusBadRequest, ""},
 	{pool.ErrBadVolume, http.StatusBadRequest, ""},
+	{pool.ErrVolumeRegistrationConflict, http.StatusConflict, pool.ErrVolumeRegistrationConflict.Error()},
+	{pool.ErrVolumeCatalogUnavailable, http.StatusServiceUnavailable, "volume catalog unavailable; retry"},
 	{pool.ErrBadName, http.StatusBadRequest, ""},
 	{pool.ErrBadCount, http.StatusBadRequest, ""},
 	{pool.ErrBadEnv, http.StatusBadRequest, ""},
@@ -97,6 +99,8 @@ type Manager interface {
 	TenantClaims() map[string]int
 	VolumePlacement(key types.PoolKey, tenant string, names []string) (bool, error)
 	Volumes(tenant string, holders map[string]int) []types.VolumeInfo
+	RegisterVolume(ctx context.Context, name string, spec types.VolumeRegistration) error
+	UnregisterVolume(ctx context.Context, name string) error
 	GetVolumes(id, tenant string) (types.SandboxVolumesResponse, error)
 	SetVolumes(ctx context.Context, id, tenant string, volumes []types.Volume) (types.SandboxVolumesResponse, error)
 	PatchVolumes(ctx context.Context, id, tenant string, patch types.VolumePatch) (types.SandboxVolumesResponse, error)
@@ -269,6 +273,8 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/claim", s.requireToken(s.handleClaim))
 	mux.HandleFunc("GET /v1/volumes", s.requireToken(s.handleVolumes))
+	mux.HandleFunc("PUT /v1/volumes/{name}", s.requireRoot(s.handleVolumeRegistration))
+	mux.HandleFunc("DELETE /v1/volumes/{name}", s.requireRoot(s.handleVolumeRegistration))
 	mux.HandleFunc("POST /v1/sandboxes/{id}/release", s.handleSandboxVerb("release", s.mgr.Release))
 	mux.HandleFunc("POST /v1/sandboxes/{id}/hibernate", s.handleSandboxVerb("hibernate", s.mgr.Hibernate))
 	mux.HandleFunc("POST /v1/sandboxes/{id}/wake", s.handleSandboxVerb("wake", s.mgr.Wake))

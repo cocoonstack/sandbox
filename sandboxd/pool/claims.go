@@ -72,6 +72,8 @@ type claimRow struct {
 	raw []byte
 }
 
+type recoveryVolumeCount struct{ readers, writers int }
+
 // claimStore persists claimed sandboxes across daemon restarts; warm VMs are not persisted.
 type claimStore struct {
 	path string
@@ -81,16 +83,20 @@ type claimStore struct {
 	writeMu sync.Mutex
 	buf     []byte
 
-	mu          sync.Mutex
-	rows        map[string]*claimRow
-	seq         uint64
-	written     uint64
-	refs        map[string][4]string
-	retained    map[string][]string
-	changed     map[string]struct{}
-	checkpoints map[string]int
+	mu              sync.Mutex
+	rows            map[string]*claimRow
+	seq             uint64
+	written         uint64
+	refs            map[string][4]string
+	retained        map[string][]string
+	changed         map[string]struct{}
+	checkpoints     map[string]int
+	currentVolumes  map[string][]types.Volume
+	retainedVolumes map[string][]types.Volume
+	volumes         map[string]recoveryVolumeCount
 
-	recommitting atomic.Bool
+	recommitting           atomic.Bool
+	recoveryVolumesPresent atomic.Bool
 }
 
 func newClaimStore(dataDir string, sync bool) *claimStore {
@@ -98,6 +104,7 @@ func newClaimStore(dataDir string, sync bool) *claimStore {
 		path: filepath.Join(dataDir, "claims.json"), sync: sync,
 		rows: map[string]*claimRow{}, refs: map[string][4]string{}, retained: map[string][]string{},
 		changed: map[string]struct{}{}, checkpoints: map[string]int{},
+		currentVolumes: map[string][]types.Volume{}, retainedVolumes: map[string][]types.Volume{}, volumes: map[string]recoveryVolumeCount{},
 	}
 }
 
@@ -118,6 +125,10 @@ func (s *claimStore) load() (map[string]*types.Sandbox, error) {
 	for _, sb := range claims {
 		if sb.VolumesWant == nil {
 			sb.VolumesWant = sb.Volumes
+		}
+		if refs := volumeRefs(nil, slices.Clone(sb.Volumes), slices.Clone(sb.VolumesWant)); len(refs) != 0 {
+			s.changeRetainedVolumes(sb.ID, refs)
+			s.changed[sb.ID] = struct{}{}
 		}
 		if refs := checkpointRefs(sb); refs != [4]string{} {
 			s.changeRetainedRefs(sb.ID, appendRefs(nil, refs))
@@ -151,24 +162,34 @@ func (s *claimStore) del(ids ...string) claimSnapshot {
 
 func (s *claimStore) put(id string, sb *types.Sandbox) {
 	var refs [4]string
+	var volumes []types.Volume
 	if sb == nil {
 		delete(s.rows, id)
 	} else {
+		dto := dtoOf(sb)
 		refs = checkpointRefs(sb)
-		s.rows[id] = &claimRow{dto: dtoOf(sb)}
+		volumes = volumeRefs(s.currentVolumes[id], dto.Volumes, dto.VolumesWant)
+		s.rows[id] = &claimRow{dto: dto}
 	}
 	before := s.refs[id]
-	if before == refs {
-		return
+	if before != refs {
+		s.changeCheckpointCounts(before[:], -1)
+		s.changeCheckpointCounts(refs[:], 1)
+		if refs == [4]string{} {
+			delete(s.refs, id)
+		} else {
+			s.refs[id] = refs
+		}
+		s.changed[id] = struct{}{}
 	}
-	s.changeCheckpointCounts(before[:], -1)
-	s.changeCheckpointCounts(refs[:], 1)
-	if refs == [4]string{} {
-		delete(s.refs, id)
-	} else {
-		s.refs[id] = refs
+	if !slices.Equal(s.currentVolumes[id], volumes) {
+		if len(volumes) == 0 {
+			delete(s.currentVolumes, id)
+		} else {
+			s.currentVolumes[id] = volumes
+		}
+		s.changed[id] = struct{}{}
 	}
-	s.changed[id] = struct{}{}
 }
 
 // mark sequences a persist of the projection as it already stands.
@@ -211,9 +232,17 @@ func (s *claimStore) commit(snap claimSnapshot) error {
 	}
 	rows, seq := slices.AppendSeq(make([]*claimRow, 0, len(s.rows)), maps.Values(s.rows)), s.seq
 	captured := make(map[string][4]string, len(s.changed))
+	var capturedVolumes map[string][]types.Volume
 	for id := range s.changed {
 		captured[id] = s.refs[id]
-		s.changeRetainedRefs(id, appendRefs(s.retained[id], s.refs[id]))
+		s.changeRetainedRefs(id, appendRefs(slices.Clone(s.retained[id]), s.refs[id]))
+		if volumes := s.currentVolumes[id]; len(volumes) != 0 {
+			if capturedVolumes == nil {
+				capturedVolumes = make(map[string][]types.Volume)
+			}
+			capturedVolumes[id] = volumes
+		}
+		s.changeRetainedVolumes(id, appendRecoveryRefs(slices.Clone(s.retainedVolumes[id]), s.currentVolumes[id]))
 	}
 	s.mu.Unlock()
 	s.buf = append(s.buf[:0], '{')
@@ -237,7 +266,8 @@ func (s *claimStore) commit(snap claimSnapshot) error {
 	s.mu.Lock()
 	for id, refs := range captured {
 		s.changeRetainedRefs(id, appendRefs(nil, refs))
-		if s.refs[id] == refs {
+		s.changeRetainedVolumes(id, capturedVolumes[id])
+		if s.refs[id] == refs && slices.Equal(s.currentVolumes[id], capturedVolumes[id]) {
 			delete(s.changed, id)
 		}
 	}
@@ -340,6 +370,88 @@ func (s *claimStore) checkpointReferences() map[string]struct{} {
 	return refs
 }
 
+func (s *claimStore) changeVolumeCounts(refs []types.Volume, delta int) {
+	for _, v := range refs {
+		count := s.volumes[v.Name]
+		if v.RW() {
+			count.writers += delta
+		} else {
+			count.readers += delta
+		}
+		if count == (recoveryVolumeCount{}) {
+			delete(s.volumes, v.Name)
+		} else {
+			s.volumes[v.Name] = count
+		}
+	}
+}
+
+func (s *claimStore) changeRetainedVolumes(id string, after []types.Volume) {
+	s.changeVolumeCounts(s.retainedVolumes[id], -1)
+	s.changeVolumeCounts(after, 1)
+	if len(after) == 0 {
+		delete(s.retainedVolumes, id)
+	} else {
+		s.retainedVolumes[id] = after
+	}
+	s.recoveryVolumesPresent.Store(len(s.volumes) != 0)
+}
+
+func (s *claimStore) referencesVolume(name string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.volumes[name] != (recoveryVolumeCount{})
+}
+
+func (s *claimStore) volumeConflicts(volume types.Volume, ownerID string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	count := s.volumes[volume.Name]
+	for _, ref := range s.retainedVolumes[ownerID] {
+		if ref == volume {
+			if ref.RW() {
+				count.writers--
+			} else {
+				count.readers--
+			}
+		}
+	}
+	return count.writers > 0 || volume.RW() && count.readers > 0
+}
+
+func (s *claimStore) recoveryVolumesFor(owner string) []types.Volume {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.retainedVolumes[owner])
+}
+
+func (s *claimStore) detachingOwners() map[string]bool {
+	if !s.recoveryVolumesPresent.Load() {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var owners map[string]bool
+	for id := range s.changed {
+		if len(s.currentVolumes[id]) == 0 && len(s.retainedVolumes[id]) != 0 {
+			if owners == nil {
+				owners = map[string]bool{}
+			}
+			owners[id] = true
+		}
+	}
+	return owners
+}
+
+func (s *claimStore) hasRecoveryVolumes(owner string) bool {
+	if !s.recoveryVolumesPresent.Load() {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.retainedVolumes[owner]) != 0
+}
+
 func encodeRow(dto *claimDTO) ([]byte, error) {
 	raw, err := json.Marshal(map[string]*claimDTO{dto.ID: dto})
 	if err != nil {
@@ -380,4 +492,32 @@ func appendRefs(list []string, refs [4]string) []string {
 		}
 	}
 	return list
+}
+
+func appendRecoveryRefs(dst, src []types.Volume) []types.Volume {
+	for _, v := range src {
+		if !slices.Contains(dst, v) {
+			dst = append(dst, v)
+		}
+	}
+	return dst
+}
+
+func volumeRefs(previous, applied, wanted []types.Volume) []types.Volume {
+	if len(applied) == 0 {
+		applied, wanted = wanted, nil
+	}
+	for _, refs := range [2][]types.Volume{applied, wanted} {
+		for _, v := range refs {
+			if !slices.Contains(previous, v) {
+				return appendRecoveryRefs(applied, wanted)
+			}
+		}
+	}
+	for _, v := range previous {
+		if !slices.Contains(applied, v) && !slices.Contains(wanted, v) {
+			return appendRecoveryRefs(applied, wanted)
+		}
+	}
+	return previous
 }

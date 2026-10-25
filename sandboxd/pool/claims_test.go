@@ -88,9 +88,13 @@ func TestStoreRoundTrip(t *testing.T) {
 		if err := s.save(claims); err != nil {
 			t.Fatalf("save (sync=%v): %v", fsync, err)
 		}
-		got, err := newClaimStore(filepath.Dir(s.path), false).load()
+		loadedStore := newClaimStore(filepath.Dir(s.path), false)
+		got, err := loadedStore.load()
 		if err != nil {
 			t.Fatalf("load (sync=%v): %v", fsync, err)
+		}
+		if !loadedStore.hasRecoveryVolumes("sb_a") || loadedStore.hasRecoveryVolumes("sb_b") {
+			t.Fatal("loaded recovery volumes lost owner visibility")
 		}
 		if !reflect.DeepEqual(got, claims) {
 			t.Errorf("sync=%v: got %+v, want %+v", fsync, got, claims)
@@ -103,9 +107,10 @@ func TestStoreRoundTrip(t *testing.T) {
 
 func TestClaimStoreSnapshotDetachesVolumes(t *testing.T) {
 	s := newClaimStore(t.TempDir(), false)
-	sb := &types.Sandbox{ID: "sb_a", Volumes: []types.Volume{{Name: "dataset-a", Mount: "/datasets/a"}}}
+	sb := &types.Sandbox{ID: "sb_a", Volumes: []types.Volume{{Name: "dataset-a", Mount: "/datasets/a"}}, VolumesWant: []types.Volume{{Name: "dataset-b", Mount: "/datasets/b"}}}
 	snap := s.set(sb)
 	sb.Volumes[0].Mount = "/mutated"
+	sb.VolumesWant[0].Mount = "/mutated-wanted"
 	if err := s.commit(snap); err != nil {
 		t.Fatalf("commit: %v", err)
 	}
@@ -119,6 +124,9 @@ func TestClaimStoreSnapshotDetachesVolumes(t *testing.T) {
 	}
 	if !slices.Equal(loaded.Volumes, []types.Volume{{Name: "dataset-a", Mount: "/datasets/a"}}) {
 		t.Errorf("volumes %v, want detached snapshot", loaded.Volumes)
+	}
+	if !slices.Equal(loaded.VolumesWant, []types.Volume{{Name: "dataset-b", Mount: "/datasets/b"}}) {
+		t.Errorf("wanted volumes %v, want detached snapshot", loaded.VolumesWant)
 	}
 }
 

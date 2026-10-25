@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"maps"
 	"os"
+	"path/filepath"
 	"slices"
 	"sync"
 	"syscall"
@@ -14,17 +15,11 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
-const (
-	failWrite = iota
-	captureWrite
-	failAfterRename
-)
-
 func TestClaimCheckpointReferencesOutliveUnacknowledgedWrites(t *testing.T) {
 	recreate := func(s *claimStore) { s.set(&types.Sandbox{ID: "owner", ReplicaCk: "recreated"}) }
 	for _, tc := range []struct {
 		name                            string
-		fault                           int
+		fault                           func(*testing.T, *claimStore, claimSnapshot) func()
 		acked, next                     *types.Sandbox
 		startup                         func(claims map[string]*types.Sandbox)
 		mutate                          func(s *claimStore)
@@ -87,11 +82,8 @@ func TestClaimCheckpointReferencesOutliveUnacknowledgedWrites(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if tc.fault == failAfterRename && os.Geteuid() == 0 {
-				t.Skip("requires non-root: root can read the write-only directory")
-			}
 			dir := t.TempDir()
-			s := newClaimStore(dir, tc.fault == failAfterRename)
+			s := newClaimStore(dir, false)
 			if tc.acked != nil {
 				if err := s.commit(s.set(tc.acked)); err != nil {
 					t.Fatal(err)
@@ -109,51 +101,7 @@ func TestClaimCheckpointReferencesOutliveUnacknowledgedWrites(t *testing.T) {
 			} else {
 				snap = s.set(tc.next)
 			}
-			var finish func()
-			switch tc.fault {
-			case failWrite:
-				finish = failClaimWrites(t, s)
-				if err := s.commit(snap); err == nil {
-					t.Fatal("write succeeded under the fault")
-				}
-			case failAfterRename:
-				if err := os.Chmod(dir, 0o300); err != nil {
-					t.Fatal(err)
-				}
-				finish = func() { _ = os.Chmod(dir, 0o700) }
-				t.Cleanup(finish)
-				if err := s.commit(snap); !errors.Is(err, fs.ErrPermission) {
-					t.Fatalf("want a failed directory sync after the rename: %v", err)
-				}
-			case captureWrite:
-				if err := syscall.Mkfifo(s.path+".tmp", 0o600); err != nil {
-					t.Fatal(err)
-				}
-				done := make(chan error, 1)
-				go func() { done <- s.commit(snap) }()
-				waitFor(t, func() bool {
-					s.mu.Lock()
-					defer s.mu.Unlock()
-					return len(s.retained["owner"]) != 0
-				})
-				finish = func() {
-					r, err := os.Open(s.path + ".tmp")
-					if err != nil {
-						t.Fatal(err)
-					}
-					raw, err := io.ReadAll(r)
-					_ = r.Close()
-					if err = errors.Join(err, <-done); err != nil {
-						t.Fatal(err)
-					}
-					if err = os.Remove(s.path); err != nil {
-						t.Fatal(err)
-					}
-					if err = os.WriteFile(s.path, raw, 0o600); err != nil {
-						t.Fatal(err)
-					}
-				}
-			}
+			finish := tc.fault(t, s, snap)
 			if tc.mutate != nil {
 				tc.mutate(s)
 			}
@@ -207,4 +155,73 @@ func failClaimWrites(t *testing.T, s *claimStore) func() {
 	})
 	t.Cleanup(restore)
 	return restore
+}
+
+func captureClaimWrite(t *testing.T, s *claimStore, snap claimSnapshot, owner string) func() []byte {
+	t.Helper()
+	if err := syscall.Mkfifo(s.path+".tmp", 0o600); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- s.commit(snap) }()
+	waitFor(t, func() bool {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		return len(s.retained[owner]) != 0 || len(s.retainedVolumes[owner]) != 0
+	})
+	return func() []byte {
+		r, err := os.Open(s.path + ".tmp")
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw, err := io.ReadAll(r)
+		_ = r.Close()
+		if err = errors.Join(err, <-done); err != nil {
+			t.Fatal(err)
+		}
+		if err = os.Remove(s.path); err != nil {
+			t.Fatal(err)
+		}
+		if err = os.WriteFile(s.path, raw, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return raw
+	}
+}
+
+func failWrite(t *testing.T, s *claimStore, snap claimSnapshot) func() {
+	t.Helper()
+	restore := failClaimWrites(t, s)
+	if err := s.commit(snap); err == nil {
+		t.Fatal("write succeeded under the fault")
+	}
+	return restore
+}
+
+func failAfterRename(t *testing.T, s *claimStore, snap claimSnapshot) func() {
+	t.Helper()
+	if os.Geteuid() == 0 {
+		t.Skip("requires non-root: root can read the write-only directory")
+	}
+	s.sync = true
+	dir := filepath.Dir(s.path)
+	if err := os.Chmod(dir, 0o300); err != nil {
+		t.Fatal(err)
+	}
+	restore := func() {
+		if err := os.Chmod(dir, 0o700); err != nil {
+			t.Error(err)
+		}
+	}
+	t.Cleanup(restore)
+	if err := s.commit(snap); !errors.Is(err, fs.ErrPermission) {
+		t.Fatalf("want a failed directory sync after the rename: %v", err)
+	}
+	return restore
+}
+
+func captureWrite(t *testing.T, s *claimStore, snap claimSnapshot) func() {
+	t.Helper()
+	release := captureClaimWrite(t, s, snap, "owner")
+	return func() { release() }
 }

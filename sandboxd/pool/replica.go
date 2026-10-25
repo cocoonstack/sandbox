@@ -27,6 +27,7 @@ func (m *Manager) replicateOnce(ctx context.Context) {
 	var withVolumes []string
 	next := make(map[string]replicaState, len(m.replicas))
 	m.mu.Lock()
+	detaching := m.store.detachingOwners()
 	for id, sb := range m.claimed {
 		every, st := v.poolReplicate[sb.PolicyKey()], m.replicas[id]
 		switch {
@@ -35,7 +36,7 @@ func (m *Manager) replicateOnce(ctx context.Context) {
 				retire = append(retire, sb)
 			}
 		case !m.replicable(sb):
-		case m.hasVolumeHolds(sb):
+		case m.hasLiveVolumeHolds(sb) || detaching[id]:
 			if sb.HasReplica() {
 				retire = append(retire, sb)
 			}

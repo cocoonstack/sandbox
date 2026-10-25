@@ -22,7 +22,7 @@ func TestSettledVolumesDoNotCallDevicesOrResolveCatalog(t *testing.T) {
 	if _, err := m.SetVolumes(t.Context(), sb.ID, sb.Tenant, []types.Volume{{Name: "data"}}); err != nil {
 		t.Fatal(err)
 	}
-	delete(m.volumes, "data")
+	delete(m.catalog.entries, "data")
 	before := len(eng.volumeSpecs)
 	if _, err := m.SetVolumes(t.Context(), sb.ID, sb.Tenant, []types.Volume{{Name: "data"}, {Name: "other"}}); err != nil {
 		t.Fatal(err)
@@ -57,9 +57,9 @@ func TestRemovedTenantRetainsAndRepairsHeldVolumes(t *testing.T) {
 		t.Fatal("expected detaching state")
 	}
 	eng.detachVolumeErr = nil
-	entry := m.volumes["data"]
+	entry := m.catalog.entries["data"]
 	entry.tenants = []string{"other-tenant"}
-	m.volumes["data"] = entry
+	m.catalog.entries["data"] = entry
 	if _, err := m.SetVolumes(t.Context(), sb.ID, "", []types.Volume{{Name: "data"}}); err != nil {
 		t.Fatalf("held repair checked new authorization: %v", err)
 	}
@@ -313,7 +313,7 @@ func TestUnsupportedRuntimeDoesNotChangeVolumeIntent(t *testing.T) {
 }
 
 func TestVolumeHoldsRejectCaptureBeforeTrim(t *testing.T) {
-	for _, state := range []string{"applied", "desired", "admitted"} {
+	for _, state := range []string{"applied", "desired", "admitted", "recovery"} {
 		t.Run(state, func(t *testing.T) {
 			eng := newFakeEngine()
 			m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1, CaptureTrim: true})
@@ -321,9 +321,27 @@ func TestVolumeHoldsRejectCaptureBeforeTrim(t *testing.T) {
 			held := []types.Volume{{Name: "data", Mount: "/volumes/data"}}
 			switch state {
 			case "applied":
+				m.mu.Lock()
 				sb.Volumes = held
+				m.store.set(sb)
+				m.mu.Unlock()
 			case "desired":
+				m.mu.Lock()
 				sb.VolumesWant = held
+				m.store.set(sb)
+				m.mu.Unlock()
+			case "recovery":
+				m.mu.Lock()
+				sb.VolumesWant = held
+				js := m.store.set(sb)
+				m.mu.Unlock()
+				if err := m.store.commit(js); err != nil {
+					t.Fatal(err)
+				}
+				m.mu.Lock()
+				sb.VolumesWant = nil
+				m.store.set(sb)
+				m.mu.Unlock()
 			case "admitted":
 				_, run, err := m.beginVolumeRun(t.Context(), sb)
 				if err != nil {
@@ -349,6 +367,14 @@ func TestVolumeHoldsRejectCaptureBeforeTrim(t *testing.T) {
 			}
 			if len(eng.trims) != 0 {
 				t.Fatalf("capture trimmed held volume: %v", eng.trims)
+			}
+			if state == "recovery" {
+				if err := m.store.commit(m.store.mark()); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := m.Checkpoint(t.Context(), sb.ID, Cred{Token: sb.Token}, "retired", ""); err != nil {
+					t.Fatalf("checkpoint after recovery acknowledgment: %v", err)
+				}
 			}
 		})
 	}

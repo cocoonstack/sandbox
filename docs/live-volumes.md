@@ -9,6 +9,12 @@ file. Keep each name bound to the same immutable image while held. Use Cocoon
 v0.7.2 or newer and set `SANDBOX_ADDR` and `SANDBOX_API_TOKEN` for the client.
 A sandbox token alone cannot manage volumes.
 
+A configured node root token can [register backing paths](sandboxd-api.md#put-v1volumesname)
+without editing static config. Registration persists only node-local catalog
+metadata and does not manage disk files. Omitted or empty runtime `tenants`
+lists permit every authenticated scope. List tenants explicitly to restrict
+access. Live changes remain limited to mounted read-only entries.
+
 Pause application reads before replacement. Close files, mmap mappings, cwd,
 and bind mount references on the old disk. Replacement unmounts the old disk
 before mounting the new one, so the path has a short unavailable interval.

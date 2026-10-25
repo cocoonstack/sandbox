@@ -1255,6 +1255,9 @@ type fakeEngine struct {
 	detachVolumeErr                   error
 	liveVolumeHook                    func(string) error
 	stopped                           map[string]bool
+	inspectHook                       func() error
+	inspectDisksUnknown               bool
+	trackDisks                        bool
 	disks                             map[string][]types.VMDisk
 	creating                          map[string]bool
 	staleOutcome                      engine.StaleCreateOutcome
@@ -1526,14 +1529,22 @@ func (f *fakeEngine) List(ctx context.Context) ([]types.VMRecord, error) {
 func (f *fakeEngine) Inspect(ctx context.Context, name string) (types.VMRecord, bool, error) {
 	f.mu.Lock()
 	f.inspects++
+	hook := f.inspectHook
 	f.mu.Unlock()
+	if hook != nil {
+		if err := hook(); err != nil {
+			return types.VMRecord{}, false, err
+		}
+	}
 	vms, _ := f.list(ctx)
 	i := slices.IndexFunc(vms, func(vm types.VMRecord) bool { return vm.Config.Name == name })
 	if i < 0 {
 		return types.VMRecord{}, false, nil
 	}
 	f.mu.Lock()
-	vms[i].AttachedDevices.Disks = f.disks[name]
+	if !f.inspectDisksUnknown {
+		vms[i].AttachedDevices.Disks = f.disks[name]
+	}
 	f.mu.Unlock()
 	return vms[i], true, nil
 }
@@ -1618,7 +1629,7 @@ func (f *fakeEngine) TrimCow(_ context.Context, sock string) error {
 
 func (f *fakeEngine) CheckLiveVolumeSupport(context.Context) error { return nil }
 
-func (f *fakeEngine) DiskAttach(ctx context.Context, _ string, spec engine.VolumeSpec) error {
+func (f *fakeEngine) DiskAttach(ctx context.Context, name string, spec engine.VolumeSpec) error {
 	if f.liveVolumeHook != nil {
 		if err := f.liveVolumeHook("attach"); err != nil {
 			return err
@@ -1634,6 +1645,12 @@ func (f *fakeEngine) DiskAttach(ctx context.Context, _ string, spec engine.Volum
 	cancel, rendezvous, err := f.diskAttachCancel, f.attachRendezvous, f.diskAttachErr
 	if spec.Name == f.diskAttachErrFor {
 		err = errors.New("attach failed")
+	}
+	if err == nil && f.trackDisks {
+		if f.disks == nil {
+			f.disks = map[string][]types.VMDisk{}
+		}
+		f.disks[name] = append(f.disks[name], types.VMDisk{Name: spec.Name, ReadOnly: !spec.RW})
 	}
 	f.mu.Unlock()
 	if cancel != nil {

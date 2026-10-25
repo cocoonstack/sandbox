@@ -181,8 +181,8 @@ func TestReconcileStaleRunningVMSkipsVerb(t *testing.T) {
 	if !eng.removed("sbx-orphan-1") {
 		t.Error("unowned running VM not removed")
 	}
-	if eng.inspects != 0 {
-		t.Errorf("inspected a stale VM whose removal succeeded %d times", eng.inspects)
+	if eng.inspects != 1 {
+		t.Errorf("inspected stale VM %d times, want 1 before removal", eng.inspects)
 	}
 }
 

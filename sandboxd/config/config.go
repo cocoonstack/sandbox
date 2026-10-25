@@ -3,6 +3,7 @@ package config
 
 import (
 	"cmp"
+	"context"
 	"encoding/base64"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
@@ -18,6 +19,7 @@ import (
 	"strings"
 
 	"github.com/docker/go-units"
+	"github.com/projecteru2/core/log"
 
 	"github.com/cocoonstack/sandbox/sandboxd/egress"
 	"github.com/cocoonstack/sandbox/sandboxd/store"
@@ -398,28 +400,17 @@ func (c *Config) validateReplication() error {
 }
 
 func (c *Config) validateVolumes() error {
-	names := make(map[string]struct{}, len(c.Volumes))
-	paths := make(map[string]string, len(c.Volumes))
-	for _, volume := range c.Volumes {
-		if !types.ValidVolumeName(volume.Name) {
-			return fmt.Errorf("volume name %q must match %s and not start with cocoon-", volume.Name, types.VolumeNameRe)
-		}
-		if _, ok := names[volume.Name]; ok {
-			return fmt.Errorf("duplicate volume name %q", volume.Name)
-		}
-		names[volume.Name] = struct{}{}
-		if !filepath.IsAbs(volume.Path) {
-			return fmt.Errorf("volume %q path must be absolute", volume.Name)
-		}
-		if other, ok := paths[filepath.Clean(volume.Path)]; ok {
-			return fmt.Errorf("volume %q shares its path with volume %q: admission is keyed by name", volume.Name, other)
-		}
-		paths[filepath.Clean(volume.Path)] = volume.Name
-		if !types.ValidDirectIO(volume.DirectIO) {
-			return fmt.Errorf("volume %q directio must be on, off, or auto, got %q", volume.Name, volume.DirectIO)
-		}
+	validation := slices.Clone(c.Volumes)
+	for i, volume := range c.Volumes {
+		validation[i].Tenants = slices.DeleteFunc(slices.Clone(volume.Tenants), func(tenant string) bool {
+			if types.NameRe.MatchString(tenant) {
+				return false
+			}
+			log.WithFunc("config.validateVolumes").Warnf(context.Background(), "volume %q: skipping invalid tenant %q", volume.Name, tenant)
+			return true
+		})
 	}
-	return nil
+	return ValidateVolumeCatalog(validation)
 }
 
 func (c *Config) validatePreview() error {
@@ -633,6 +624,37 @@ func (c *Config) validateMetaStore() error {
 		return fmt.Errorf("meta_store.cell %q must match %s", ms.Cell, types.NameRe)
 	case c.APIToken == "":
 		return fmt.Errorf("meta_store needs api_token: the tenant API is root-only")
+	}
+	return nil
+}
+
+// ValidateVolumeCatalog checks the shared static and runtime catalog rules without I/O.
+func ValidateVolumeCatalog(volumes []VolumeSpec) error {
+	names := make(map[string]struct{}, len(volumes))
+	paths := make(map[string]string, len(volumes))
+	for _, volume := range volumes {
+		if !types.ValidVolumeName(volume.Name) {
+			return fmt.Errorf("volume name %q must match %s and not start with cocoon-", volume.Name, types.VolumeNameRe)
+		}
+		if _, ok := names[volume.Name]; ok {
+			return fmt.Errorf("duplicate volume name %q", volume.Name)
+		}
+		names[volume.Name] = struct{}{}
+		if !filepath.IsAbs(volume.Path) {
+			return fmt.Errorf("volume %q path must be absolute", volume.Name)
+		}
+		if other, ok := paths[filepath.Clean(volume.Path)]; ok {
+			return fmt.Errorf("volume %q shares its path with volume %q: admission is keyed by name", volume.Name, other)
+		}
+		paths[filepath.Clean(volume.Path)] = volume.Name
+		if !types.ValidDirectIO(volume.DirectIO) {
+			return fmt.Errorf("volume %q directio must be on, off, or auto, got %q", volume.Name, volume.DirectIO)
+		}
+		for _, tenant := range volume.Tenants {
+			if !types.NameRe.MatchString(tenant) {
+				return fmt.Errorf("volume %q tenant %q must match %s", volume.Name, tenant, types.NameRe)
+			}
+		}
 	}
 	return nil
 }
