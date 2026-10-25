@@ -531,28 +531,38 @@ retrying. Retry the same PUT to converge, or send a new
 target to abandon unfinished additions. Concurrent requests serialize per
 sandbox without blocking renewals or new exec, file, and port connections.
 
-A new RW target on a claim with an existing or pending replica is accepted into
-`volumes_want` and reserves the volume, but returns 409 with an explicit replica
-retirement error while that replica still blocks RW attachment. The normal background scan sees
-this desired hold, retires the replica, and stops publishing replicas even if
-`replicate_seconds` is positive. A repeated request cannot attach RW while the
-replica remains unresolved. Registry failures appear in `states[].error` and
-are retried by the scan. Removing the desired target cancels that reservation
-after normal cleanup; release also remains available.
+Adding a live RW volume requires a pool with `replicate_seconds: 0`. A
+replicating pool returns 409 `live writable volumes require a non-replicating
+pool` before recording the new target, reserving the volume, or changing devices.
+This restriction applies to live additions, including attach-only RW. An RW
+volume attached in the initial claim remains supported, and existing RW volumes
+can be retained or removed while replication is configured. RO live changes
+remain available. The effective pool is the claim's policy source when it has
+one. Changing `replicate_seconds` requires a daemon restart.
 
-After the request ends, `converging` is false unless ordinary recovery-reference
-retirement is still pending. The replica scan never attaches the disk: poll the
-view and retry the same PUT or PATCH to finish. A successful retry acknowledges
-both replica retirement and attachment. Pending desired writers survive restart,
-keep their admission holds, and prevent checkpoint publication. If the replica
-clear has not been acknowledged by the claim journal, RW application also waits
-for a successful snapshot commit. Since that journal writes all claims together,
-an unacknowledged write for another claim can briefly delay RW application too.
-A consumed replica row is retained until the local clear is acknowledged, so a
-restart cannot mistake failed persistence for another node's adoption.
-Unpublished replica checkpoints and their queued cleanup markers follow the same
-acknowledgment boundary. Archive checkpoint cleanup pauses while any claim write
-is unacknowledged and resumes after a successful snapshot commit.
+A non-replicating pool can still have an existing or pending replica after a
+restart. Live RW additions return 409 until that claim's replicas and recovery
+checkpoint references have retired. The background scan retires existing
+replicas; keep the controller's reservation and access gate closed, then retry
+the request. A failed claim write retains the affected checkpoint reference
+until a successful snapshot acknowledges its removal. Unrelated claims' writes
+and checkpoint references do not refuse this attachment.
+
+Older versions may have already recorded a desired RW target while replication
+was enabled. These targets remain visible after restart and retain their holds.
+They cannot attach while the pool replicates, but callers can remove them or
+release the claim. Cleanup of applied volumes runs before a remaining pending RW
+is refused, so a remove request can complete an RO detach and still return a
+partial 409 for that pending writer. Inspect the returned view before retrying.
+After a request ends, `converging` is false unless ordinary recovery-reference
+retirement remains active; no background worker attaches the desired disk.
+
+Consumed replica rows, unpublished checkpoints and queued deletion markers are
+retained while the affected checkpoint remains in a current claim projection,
+an acknowledged snapshot, or an attempted replacement whose result is uncertain.
+A later acknowledged snapshot retires removed references and permits cleanup.
+Checkpoint deletion waits only for actual references to that checkpoint, not
+for a node-wide pause in claim writes.
 
 Before applying a target, sandboxd journals `VolumesWant` beside `Volumes`,
 storing it only while it differs from `Volumes`. A

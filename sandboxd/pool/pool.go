@@ -103,8 +103,8 @@ var (
 	ErrVolumeCapture     = errors.New("sandboxes with volumes cannot hibernate, fork, checkpoint, or promote")
 	ErrVolumeBusy        = errors.New("volume is held by another claim")
 
-	ErrReplicaPresent      = errors.New("writable volume intent recorded; waiting for replica retirement before retry")
-	ErrVolumePendingCommit = errors.New("volume intent or replica retirement is not yet persisted; retry")
+	ErrReplicaPresent  = errors.New("live writable attachment requires replica and recovery checkpoint retirement")
+	ErrReplicatingPool = errors.New("live writable volumes require a non-replicating pool")
 
 	// Replaying a journal takes a writable mount, so readers stay out.
 	ErrVolumeNeedsRecovery = errors.New("volume needs recovery by a writable claim")

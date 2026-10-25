@@ -680,11 +680,14 @@ func TestArchiveDeleteRetryRechecksWakeRollback(t *testing.T) {
 		m.retryArchiveDeletes(t.Context())
 		close(retried)
 	}()
-	waitFor(t, func() bool {
-		m.recLocksMu.Lock()
-		defer m.recLocksMu.Unlock()
-		return m.recRefs[ck] >= 2
-	})
+	select {
+	case <-retried:
+	case <-time.After(3 * time.Second):
+		t.Fatal("retry did not defer the checkpoint still referenced by the journal")
+	}
+	if !ckExists(t, m, ck) {
+		t.Fatal("retry deleted the checkpoint before wake persistence completed")
+	}
 	breakStore(t, m)
 	m.store.writeMu.Unlock()
 	locked = false

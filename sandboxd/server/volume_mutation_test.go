@@ -153,7 +153,7 @@ func TestLiveVolumeRoutesHideOtherTenants(t *testing.T) {
 
 func TestLiveVolumeRoutesReportRefusalsOverRecordedDiagnostics(t *testing.T) {
 	const cause = "cannot unmount /data; close guest references and retry"
-	for _, refusal := range []error{pool.ErrVolumeBusy, pool.ErrVolumeCapture, pool.ErrReplicaPresent} {
+	for _, refusal := range []error{pool.ErrVolumeBusy, pool.ErrVolumeCapture, pool.ErrReplicaPresent, pool.ErrReplicatingPool} {
 		t.Run(refusal.Error(), func(t *testing.T) {
 			mgr := &fakeManager{setVolumes: func(string, string, []types.Volume) (types.SandboxVolumesResponse, error) {
 				return types.SandboxVolumesResponse{VolumesWant: []types.Volume{{Name: "old"}}, States: []types.VolumeState{{Name: "old", State: "pending", Error: cause}}, Error: "volume change failed; retry the desired target"}, fmt.Errorf("%w: volume %q", refusal, "data")

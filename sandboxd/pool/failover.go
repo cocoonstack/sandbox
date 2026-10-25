@@ -303,7 +303,9 @@ func (m *Manager) reputArchive(ctx context.Context, sb *types.Sandbox, held int6
 		epoch, err = m.putReplica(ctx, sb, sb.ReplicaCk)
 	}
 	if err != nil {
-		log.WithFunc("pool.reputArchive").Warnf(ctx, "re-put archive row %s: %v", sb.ID, err)
+		if !errors.Is(err, ErrVolumeCapture) {
+			log.WithFunc("pool.reputArchive").Warnf(ctx, "re-put archive row %s: %v", sb.ID, err)
+		}
 		return
 	}
 	_, _ = m.commitIfLive(ctx, sb, func() { sb.ArchiveEpoch = epoch })
@@ -480,14 +482,11 @@ func (m *Manager) dropStaleRow(ctx context.Context, sb *types.Sandbox, rec archi
 }
 
 func (m *Manager) purgeArchiveRow(ctx context.Context, rec archives.Record) {
-	// A failed replica clear can leave the old checkpoint in claims.json.
-	// Keep its consumed row until an acknowledged snapshot makes deletion safe.
-	if rec.Consumed && !m.store.synced() {
-		return
-	}
 	logger := log.WithFunc("pool.purgeArchiveRow")
 	if err := m.deleteArchiveCk(ctx, rec.Checkpoint); err != nil {
-		logger.Warnf(ctx, "purge archive %s: delete ck %s: %v", rec.ID, rec.Checkpoint, err)
+		if !errors.Is(err, errCheckpointReferenced) {
+			logger.Warnf(ctx, "purge archive %s: delete ck %s: %v", rec.ID, rec.Checkpoint, err)
+		}
 		return
 	}
 	switch err := m.archives.Delete(ctx, rec.ID, rec.Epoch); {

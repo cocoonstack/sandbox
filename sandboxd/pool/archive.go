@@ -18,6 +18,8 @@ import (
 
 const archiveDeleteDir = "archive-deletes"
 
+var errCheckpointReferenced = errors.New("checkpoint is referenced by a claim")
+
 // archive*For resolve a key's thresholds (pool's, else node default); callers hold m.mu.
 func (m *Manager) archiveAfterFor(key types.PoolKey) time.Duration {
 	if p, ok := m.activePool(key); ok {
@@ -280,7 +282,7 @@ func (m *Manager) commitWake(ctx context.Context, sb *types.Sandbox, vmName, soc
 }
 
 func (m *Manager) deleteOrphanArchiveCk(ctx context.Context, ckID string) {
-	if err := m.deleteArchiveCk(ctx, ckID); err != nil {
+	if err := m.deleteArchiveCk(ctx, ckID); err != nil && !errors.Is(err, errCheckpointReferenced) {
 		log.WithFunc("pool.deleteOrphanArchiveCk").Warnf(ctx, "delete orphaned archive ck %s: %v", ckID, err)
 	}
 }
@@ -356,9 +358,9 @@ func (m *Manager) deleteArchiveCk(ctx context.Context, ckID string) error {
 		return fmt.Errorf("track: %w", err)
 	}
 	unlock := m.lockRec(ckID)
-	if !m.store.synced() {
+	if _, referenced := m.store.checkpointRefs()[ckID]; referenced {
 		unlock()
-		return errors.New("checkpoint cleanup waits for claim persistence")
+		return errCheckpointReferenced
 	}
 	err := m.ckpts.Delete(ctx, ckID)
 	unlock()
@@ -393,7 +395,7 @@ func (m *Manager) retryArchiveDeletes(ctx context.Context) {
 
 func (m *Manager) retryArchiveDelete(ctx context.Context, ckID string) {
 	unlock := m.lockRec(ckID)
-	if !m.store.synced() || m.archiveCkPinned(ckID) || !m.deleteMarked(ckID) {
+	if m.archiveCkPinned(ckID) || !m.deleteMarked(ckID) {
 		unlock()
 		return
 	}

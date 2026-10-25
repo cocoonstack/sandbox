@@ -15,14 +15,18 @@ pool is removed, the node-wide archive policy becomes the fallback. An
 archived or archiving claim refuses renew with 409, so renewing alone cannot
 preserve this sleep workflow when archiving is enabled.
 
-An existing or pending replica makes a new RW attachment record its desired
-target and return 409 while the background scan retires the replica, even if
-`replicate_seconds` is positive. Keep the reservation and access gate closed,
-and retry attachment until it succeeds after retirement. No device is attached
-automatically. See [the live-volume retirement contract](sandboxd-api.md#partial-failure-and-recovery).
-Disabling replication remains required for this controller workflow: after
-detach, the claim no longer holds a volume and could otherwise be replicated
-again before wake and reattachment. A fixed delay does not acknowledge retirement.
+Live RW additions require `replicate_seconds: 0`; a replicating pool returns
+409 without recording the new target or reserving the volume. Changing this
+setting requires a daemon restart. A non-replicating pool may still hold an old
+replica or recovery checkpoint reference. Keep the reservation and access gate
+closed and retry attachment after that claim's retirement has been acknowledged.
+A fixed delay does not acknowledge retirement. See
+[the live-volume retirement contract](sandboxd-api.md#partial-failure-and-recovery).
+
+Keep replication disabled throughout this controller workflow. After detach,
+the claim no longer holds a volume and could otherwise be replicated again
+before wake and reattachment. RW volumes attached in the initial claim remain
+supported on replicating pools, but this does not permit later live RW additions.
 
 Use the current Python SDK with
 [per-entry attach-only support](sdk-python.md#changing-volumes), Cocoon v0.7.2 or newer,

@@ -1,6 +1,7 @@
 package pool
 
 import (
+	"encoding/json/v2"
 	"errors"
 	"io"
 	"io/fs"
@@ -17,6 +18,121 @@ import (
 
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
+
+func TestClaimCheckpointReferencesTrackPossibleSnapshots(t *testing.T) {
+	s := newClaimStore(t.TempDir(), false)
+	sb := &types.Sandbox{ID: "owner", ArchiveCk: "archive", ArchivePending: "archive-pending", ReplicaCk: "replica", ReplicaPending: "replica-pending", FromCheckpoint: "branch-origin"}
+	snap := s.set(sb)
+	if refs := s.checkpointRefs(sb.ID); len(refs) != 4 {
+		t.Fatalf("current references: %+v", refs)
+	}
+	if err := s.commit(snap); err != nil {
+		t.Fatal(err)
+	}
+	sb.ReplicaPending = "uncertain-replica"
+	s.replaceFile = func(raw []byte) error {
+		if err := s.replace(raw); err != nil {
+			return err
+		}
+		return errors.New("injected lost replacement acknowledgement")
+	}
+	if err := s.commit(s.set(sb)); err == nil {
+		t.Fatal("replacement unexpectedly acknowledged")
+	}
+	loaded, err := newClaimStore(filepath.Dir(s.path), false).load()
+	if err != nil || loaded[sb.ID].ReplicaPending != "uncertain-replica" {
+		t.Fatalf("lost acknowledgement fixture: %+v, %v", loaded, err)
+	}
+	sb.ArchiveCk, sb.ArchivePending, sb.ReplicaCk, sb.ReplicaPending = "", "", "", ""
+	s.set(sb)
+	s.set(&types.Sandbox{ID: "other", ReplicaPending: "other-replica"})
+	refs := s.checkpointRefs(sb.ID)
+	if len(refs) != 5 {
+		t.Fatalf("lost snapshot references: %+v", refs)
+	}
+	delete(refs, "uncertain-replica")
+	if _, retained := s.checkpointRefs(sb.ID)["uncertain-replica"]; !retained {
+		t.Fatal("caller mutated the retained reference set")
+	}
+	if len(s.checkpointRefs("unknown")) != 0 || len(s.checkpointRefs("other")) != 1 {
+		t.Fatal("checkpoint references crossed claim ownership")
+	}
+	s.replaceFile = nil
+	if err := s.commit(s.mark()); err != nil {
+		t.Fatal(err)
+	}
+	if len(s.checkpointRefs(sb.ID)) != 0 || len(s.checkpointRefs()) != 1 {
+		t.Fatal("acknowledged snapshot did not retire only the removed references")
+	}
+}
+
+func TestClaimCapturedCheckpointReferenceSurvivesConcurrentClear(t *testing.T) {
+	s := newClaimStore(t.TempDir(), false)
+	sb := &types.Sandbox{ID: "owner", ReplicaPending: "captured-replica"}
+	entered, resume := make(chan struct{}), make(chan struct{})
+	release := sync.OnceFunc(func() { close(resume) })
+	defer release()
+	s.replaceFile = func(raw []byte) error {
+		close(entered)
+		<-resume
+		var rows map[string]*types.Sandbox
+		if err := json.Unmarshal(raw, &rows); err != nil {
+			return err
+		}
+		if rows[sb.ID].ReplicaPending != "captured-replica" {
+			return errors.New("captured write lost its original checkpoint")
+		}
+		return s.replace(raw)
+	}
+	snap := s.set(sb)
+	committed := make(chan error, 1)
+	go func() { committed <- s.commit(snap) }()
+	<-entered
+	sb.ReplicaPending = ""
+	s.set(sb)
+	if _, retained := s.checkpointRefs(sb.ID)["captured-replica"]; !retained {
+		t.Error("captured replacement reference disappeared before acknowledgement")
+	}
+	release()
+	if err := <-committed; err != nil {
+		t.Fatal(err)
+	}
+	s.replaceFile = nil
+	if err := s.commit(s.mark()); err != nil {
+		t.Fatal(err)
+	}
+	if len(s.checkpointRefs(sb.ID)) != 0 {
+		t.Fatal("later acknowledgement retained an obsolete checkpoint")
+	}
+}
+
+func TestClaimCheckpointReferencesSurviveFailedStartupRewrite(t *testing.T) {
+	s := newClaimStore(t.TempDir(), false)
+	sb := &types.Sandbox{ID: "owner", ReplicaPending: "before-recovery"}
+	if err := s.commit(s.set(sb)); err != nil {
+		t.Fatal(err)
+	}
+	s = newClaimStore(filepath.Dir(s.path), false)
+	claims, err := s.load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	claims[sb.ID].ReplicaPending = ""
+	s.replaceFile = func([]byte) error { return errors.New("startup rewrite failed") }
+	if err = s.save(claims); err == nil {
+		t.Fatal("startup rewrite unexpectedly acknowledged")
+	}
+	if _, retained := s.checkpointRefs(sb.ID)["before-recovery"]; !retained {
+		t.Fatal("failed startup rewrite retired the loaded checkpoint")
+	}
+	s.replaceFile = nil
+	if err = s.save(claims); err != nil {
+		t.Fatal(err)
+	}
+	if len(s.checkpointRefs(sb.ID)) != 0 {
+		t.Fatal("successful startup rewrite retained the old checkpoint")
+	}
+}
 
 func TestRecommitKeepsOneRetrierWhileWritesFail(t *testing.T) {
 	m := newTestManager(t, newFakeEngine())

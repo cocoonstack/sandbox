@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"crypto/subtle"
+	"errors"
 	"fmt"
 	"net"
 	"slices"
@@ -696,10 +697,8 @@ func (m *Manager) pauseExpired(ctx context.Context, sb *types.Sandbox) error {
 
 func (m *Manager) purgeArchiveCk(ctx context.Context, id, ck, tenant string) {
 	logger := log.WithFunc("pool.purgeArchiveCk")
-	if err := m.deleteCkLocked(ctx, ck); err != nil {
+	if err := m.deleteArchiveCk(ctx, ck); err != nil && !errors.Is(err, errCheckpointReferenced) {
 		logger.Warnf(ctx, "delete archive ck %s: %v", ck, err)
-	} else if err := m.clearArchiveCk(ck); err != nil {
-		logger.Warnf(ctx, "clear archive ck %s: %v", ck, err)
 	}
 	m.counters.archiveDeletes.Add(1)
 	m.recordUsage(ctx, usageEvent{Event: "archive_delete", ID: id, Reference: ck, Tenant: tenant})

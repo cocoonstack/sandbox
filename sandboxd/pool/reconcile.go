@@ -3,6 +3,7 @@ package pool
 import (
 	"context"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -330,7 +331,9 @@ func (m *Manager) reclaimOrphanArchiveCks(ctx context.Context, claims map[string
 			continue
 		}
 		if err := m.deleteArchiveCk(ctx, ckpt.ID); err != nil {
-			logger.Warnf(ctx, "reclaim %s: %v", ckpt.ID, err)
+			if !errors.Is(err, errCheckpointReferenced) {
+				logger.Warnf(ctx, "reclaim %s: %v", ckpt.ID, err)
+			}
 		} else {
 			logger.Infof(ctx, "reclaimed orphan archive ck %s", ckpt.ID)
 		}

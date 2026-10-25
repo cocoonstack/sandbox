@@ -219,7 +219,7 @@ func TestClaimRecoveryAttemptsRetainOnlyDistinctReferences(t *testing.T) {
 			t.Fatal("expected failed snapshot")
 		}
 	}
-	if len(s.attemptRefs) != 1 || len(s.attemptRefs[sb.ID]) != 2 {
+	if len(s.attemptRefs) != 1 || len(s.attemptRefs[sb.ID].volumes) != 2 {
 		t.Fatalf("renewals retained duplicate history: %+v", s.attemptRefs)
 	}
 	refs := s.recoveryVolumes(sb.ID)[sb.ID]

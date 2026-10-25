@@ -5,7 +5,6 @@ import (
 	"encoding/json/v2"
 	"errors"
 	"fmt"
-	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -318,16 +317,16 @@ func (m *Manager) vetoIfHealPending(ckptID string) {
 func (m *Manager) pinnedArchiveCks() map[string]struct{} {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	pinned := maps.Clone(m.pendingCks)
+	pinned := m.store.checkpointRefs()
+	if pinned == nil {
+		pinned = map[string]struct{}{}
+	}
+	for id := range m.pendingCks {
+		pinned[id] = struct{}{}
+	}
 	for _, sb := range m.claimed {
-		if sb.ArchiveCk != "" {
-			pinned[sb.ArchiveCk] = struct{}{}
-		}
-		if sb.ReplicaCk != "" {
-			pinned[sb.ReplicaCk] = struct{}{}
-		}
-		if sb.ReplicaPending != "" {
-			pinned[sb.ReplicaPending] = struct{}{}
+		for _, id := range checkpointIDs(sb) {
+			pinned[id] = struct{}{}
 		}
 	}
 	return pinned
