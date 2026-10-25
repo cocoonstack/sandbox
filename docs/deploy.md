@@ -170,11 +170,16 @@ fragment the warm pools):
 ### Disabling archive failover
 
 Set `replicate_seconds: 0` while `archive_failover` is still enabled, then
-restart, so the replica scan retires existing replicas. A claim that still has
-a replica when `archive_failover` is disabled keeps it. sandboxd does not
-delete that checkpoint or touch the remote registry row, and live writable
-volume additions on the claim return 409 until it is released or failover is
-re-enabled.
+restart, so the replica scan retires existing replicas. Disabling the registry
+does not consume remote rows or fence other nodes, so keep peers that still run
+with `archive_failover` from adopting this node's claims until their rows are
+drained.
+
+A claim that still has a replica or an unfinished archive transition when
+`archive_failover` is disabled keeps that state. Live writable volume additions
+on it return 409 until failover is re-enabled or the claim is released. When
+such a claim expires it is destroyed, and its replica checkpoint stays on disk
+until failover is re-enabled.
 
 ### Reading sleeping claims without waking them
 

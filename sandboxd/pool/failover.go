@@ -657,5 +657,5 @@ func (m *Manager) archiveRowed(sb *types.Sandbox) bool {
 }
 
 func (m *Manager) expiryDropsRow(sb *types.Sandbox) bool {
-	return m.archiveRowed(sb) || sb.HasReplica() && !m.archivesAtDeadline(sb)
+	return m.archiveRowed(sb) || m.archives != nil && sb.HasReplica() && !m.archivesAtDeadline(sb)
 }

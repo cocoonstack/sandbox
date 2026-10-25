@@ -544,12 +544,12 @@ A non-replicating pool can still have an existing or pending replica after a
 restart. Live RW additions return 503 with `Retry-After` until that claim's
 replicas and recovery checkpoint references have retired. The background scan
 retires existing replicas; keep the controller's reservation and access gate
-closed, then retry the request. Without `archive_failover` nothing retires a
-leftover replica, so live RW additions on that claim return 409 instead; see
-[disabling archive failover](deploy.md#disabling-archive-failover). A failed
-claim write retains the affected checkpoint reference until a successful
-snapshot acknowledges its removal. Unrelated claims' writes and checkpoint
-references do not refuse this attachment.
+closed, then retry the request. A failed claim write retains the affected
+checkpoint reference until a successful snapshot acknowledges its removal.
+Unrelated claims' writes and checkpoint references do not refuse this
+attachment. Without `archive_failover` nothing retires a leftover replica or
+archive intent, so live RW additions on that claim return 409 instead; see
+[disabling archive failover](deploy.md#disabling-archive-failover).
 
 A retry of an admitted desired volume completes that operation without creating
 a new admission. Its volume hold continues to prevent replica publication.
