@@ -56,7 +56,7 @@ type catalogVolume struct {
 type volumeACLMode uint8
 
 const (
-	volumeOperatorOnly volumeACLMode = iota
+	volumeOperatorOnly volumeACLMode = iota + 1
 	volumePublic
 	volumeTenantList
 )

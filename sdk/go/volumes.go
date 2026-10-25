@@ -92,7 +92,6 @@ func validateVolume(v Volume) error {
 }
 
 // Historical responses identify attach-only devices by their absent mount.
-// Requests use the same public type, so this decoder applies only to network replies.
 type responseVolume Volume
 
 var responseUnmarshalers = json.UnmarshalFromFunc(func(in *jsontext.Decoder, v *Volume) error {

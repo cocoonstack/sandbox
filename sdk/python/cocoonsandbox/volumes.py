@@ -62,7 +62,6 @@ def _volume_response(reply: dict[str, Any] | None) -> SandboxVolumesResponse | N
 
 
 def _normalize_volume_reply(path: str, reply: dict[str, Any]) -> dict[str, Any]:
-    """Interpret mountless volume entries only in known HTTP response containers."""
     route = path.partition("?")[0].split("/")
     if route == ["", "v1", "claim"] or (
         len(route) == 5 and route[1:3] == ["v1", "checkpoints"] and route[4] == "claim"
