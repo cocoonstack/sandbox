@@ -53,8 +53,21 @@ type catalogVolume struct {
 	writable   bool
 }
 
+// volumeAccess separates the claim owner's ACL from the caller's operator authority.
+type volumeAccess struct {
+	tenant   string
+	operator bool
+}
+
 func (v catalogVolume) allowed(tenant string) bool {
-	return tenant == "" || len(v.tenants) == 0 || slices.Contains(v.tenants, tenant)
+	return v.allowedFor(volumeAccess{tenant: tenant, operator: tenant == ""})
+}
+
+func (v catalogVolume) allowedFor(access volumeAccess) bool {
+	if v.runtime && len(v.tenants) == 0 {
+		return access.operator
+	}
+	return access.tenant == "" || len(v.tenants) == 0 || slices.Contains(v.tenants, access.tenant)
 }
 
 // Volumes reports the caller-visible fleet catalog; an empty tenant means root.
@@ -137,6 +150,10 @@ func (m *Manager) VolumePlacement(key types.PoolKey, tenant string, names []stri
 }
 
 func (m *Manager) resolveVolumes(ctx context.Context, tenant string, requested []types.Volume) ([]resolvedVolume, error) {
+	return m.resolveVolumesFor(ctx, volumeAccess{tenant: tenant, operator: tenant == ""}, requested)
+}
+
+func (m *Manager) resolveVolumesFor(ctx context.Context, access volumeAccess, requested []types.Volume) ([]resolvedVolume, error) {
 	if len(requested) == 0 {
 		return nil, nil
 	}
@@ -154,7 +171,7 @@ func (m *Manager) resolveVolumes(ctx context.Context, tenant string, requested [
 	resolved := make([]resolvedVolume, 0, len(applied))
 	for _, volume := range applied {
 		entry, ok := catalog[volume.Name]
-		if !ok || !entry.allowed(tenant) {
+		if !ok || !entry.allowedFor(access) {
 			return nil, ErrVolumeUnavailable
 		}
 		resolvedEntry, resolveErr := m.resolveCatalogEntry(ctx, volume, entry)
@@ -454,7 +471,7 @@ func (m *Manager) catalogSnapshot() map[string]*catalogVolume {
 	return maps.Clone(m.catalog.entries)
 }
 
-func (m *Manager) reserveResolved(tenant string, volumes []resolvedVolume, owner *types.Sandbox) error {
+func (m *Manager) reserveResolved(access volumeAccess, volumes []resolvedVolume, owner *types.Sandbox) error {
 	var held []types.Volume
 	if owner != nil && m.claimed[owner.ID] == owner && m.volumeRuns[owner] != nil {
 		held = slices.Concat(heldVolumes(owner), m.store.recoveryVolumes(owner.ID)[owner.ID])
@@ -464,7 +481,7 @@ func (m *Manager) reserveResolved(tenant string, volumes []resolvedVolume, owner
 		if entry == nil || entry.generation != v.generation {
 			return ErrVolumeUnavailable
 		}
-		if !slices.Contains(held, v.applied) && !entry.allowed(tenant) {
+		if !slices.Contains(held, v.applied) && !entry.allowedFor(access) {
 			return ErrVolumeUnavailable
 		}
 		if v.applied.RW() && !entry.writable {

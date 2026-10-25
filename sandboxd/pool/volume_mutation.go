@@ -24,6 +24,7 @@ type volumeRun struct {
 	cancel context.CancelFunc
 	done   chan struct{}
 	holds  []types.Volume
+	access volumeAccess
 }
 
 // GetVolumes reads a claim's desired and applied volumes; a tenant reaches only its own claims.
@@ -75,7 +76,7 @@ func (m *Manager) changeVolumes(ctx context.Context, id, tenant string, change v
 	}
 	var run *volumeRun
 	if err = m.eng.CheckLiveVolumeSupport(ctx); err == nil {
-		ctx, run, err = m.beginVolumeRun(ctx, sb)
+		ctx, run, err = m.beginVolumeRun(ctx, sb, tenant)
 	}
 	if err != nil {
 		view, _ = m.GetVolumes(id, tenant)
@@ -107,7 +108,7 @@ func (m *Manager) changeVolumes(ctx context.Context, id, tenant string, change v
 			return view, err
 		}
 	}
-	resolved, err := m.resolveLiveAdditions(ctx, sb, additions, recovery)
+	resolved, err := m.resolveLiveAdditions(ctx, run.access, additions, recovery)
 	if err != nil {
 		return view, err
 	}
@@ -170,7 +171,7 @@ func (m *Manager) changeVolumes(ctx context.Context, id, tenant string, change v
 	return view, nil
 }
 
-func (m *Manager) beginVolumeRun(ctx context.Context, sb *types.Sandbox) (context.Context, *volumeRun, error) {
+func (m *Manager) beginVolumeRun(ctx context.Context, sb *types.Sandbox, caller string) (context.Context, *volumeRun, error) {
 	for {
 		if err := ctx.Err(); err != nil {
 			return ctx, nil, err
@@ -191,7 +192,10 @@ func (m *Manager) beginVolumeRun(ctx context.Context, sb *types.Sandbox) (contex
 			continue
 		}
 		runCtx, cancel := context.WithCancel(ctx)
-		run := &volumeRun{cancel: cancel, done: make(chan struct{}), holds: heldVolumes(sb)}
+		run := &volumeRun{
+			cancel: cancel, done: make(chan struct{}), holds: heldVolumes(sb),
+			access: volumeAccess{tenant: sb.Tenant, operator: caller == ""},
+		}
 		m.volumeRuns[sb] = run
 		m.mu.Unlock()
 		return runCtx, run, nil
@@ -271,7 +275,7 @@ func (m *Manager) stageVolumeTarget(ctx context.Context, sb *types.Sandbox, run 
 		sb.Transition.Unlock()
 		return claimSnapshot{}, false, ErrVolumeCapture
 	}
-	if err := m.reserveResolved(sb.Tenant, resolved, sb); err != nil {
+	if err := m.reserveResolved(run.access, resolved, sb); err != nil {
 		m.mu.Unlock()
 		sb.Transition.Unlock()
 		return claimSnapshot{}, false, err
@@ -493,7 +497,7 @@ func heldVolumes(sb *types.Sandbox) []types.Volume {
 	return slices.Concat(sb.Volumes, volumeDifferenceByName(sb.VolumesWant, sb.Volumes))
 }
 
-func (m *Manager) resolveLiveAdditions(ctx context.Context, sb *types.Sandbox, additions, recovery []types.Volume) ([]resolvedVolume, error) {
+func (m *Manager) resolveLiveAdditions(ctx context.Context, access volumeAccess, additions, recovery []types.Volume) ([]resolvedVolume, error) {
 	resolved := make([]resolvedVolume, 0, len(additions))
 	for _, v := range additions {
 		if slices.Contains(recovery, v) {
@@ -504,7 +508,7 @@ func (m *Manager) resolveLiveAdditions(ctx context.Context, sb *types.Sandbox, a
 			resolved = append(resolved, entry)
 			continue
 		}
-		entries, err := m.resolveVolumes(ctx, sb.Tenant, []types.Volume{v})
+		entries, err := m.resolveVolumesFor(ctx, access, []types.Volume{v})
 		if err != nil {
 			return nil, err
 		}

@@ -388,7 +388,7 @@ func (m *Manager) admitClaim(tenant string, volumes []resolvedVolume) error {
 	if err := m.quotaErr(1, tenant); err != nil {
 		return err
 	}
-	return m.reserveResolved(tenant, volumes, nil)
+	return m.reserveResolved(volumeAccess{tenant: tenant, operator: tenant == ""}, volumes, nil)
 }
 
 // quotaErr answers ErrQuota when the node takes no more claims; callers hold m.mu.

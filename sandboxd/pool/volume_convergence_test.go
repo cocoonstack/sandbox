@@ -81,7 +81,7 @@ func TestReaddedDetachIsPendingAtTheDurableIntentBoundary(t *testing.T) {
 	if _, err := m.SetVolumes(t.Context(), sb.ID, sb.Tenant, []types.Volume{}); err == nil {
 		t.Fatal("expected detach failure")
 	}
-	ctx, run, err := m.beginVolumeRun(t.Context(), sb)
+	ctx, run, err := m.beginVolumeRun(t.Context(), sb, sb.Tenant)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -115,7 +115,7 @@ func TestReleaseBeforeReservationDoesNotLeakAdmission(t *testing.T) {
 	eng := newFakeEngine()
 	m := newVolumeManager(t, eng, liveCatalog(t))
 	sb := mustClaim(t, m, testKey)
-	ctx, run, err := m.beginVolumeRun(t.Context(), sb)
+	ctx, run, err := m.beginVolumeRun(t.Context(), sb, sb.Tenant)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -325,7 +325,7 @@ func TestVolumeHoldsRejectCaptureBeforeTrim(t *testing.T) {
 			case "desired":
 				sb.VolumesWant = held
 			case "admitted":
-				_, run, err := m.beginVolumeRun(t.Context(), sb)
+				_, run, err := m.beginVolumeRun(t.Context(), sb, sb.Tenant)
 				if err != nil {
 					t.Fatal(err)
 				}

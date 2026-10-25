@@ -39,6 +39,13 @@ func TestRuntimeCatalogDefaultACL(t *testing.T) {
 				if _, err := current.resolveVolumes(t.Context(), "acme", []types.Volume{{Name: "data"}}); err != nil {
 					t.Errorf("public static volume changed: %v", err)
 				}
+				rootClaim, err := current.ClaimProvision(t.Context(), testKey, ClaimOptions{Volumes: []types.Volume{{Name: "home", Mode: types.VolumeModeRW, AttachOnly: true}}})
+				if err != nil {
+					t.Fatalf("operator initial attachment: %v", err)
+				}
+				if err := current.Release(t.Context(), rootClaim.ID, Cred{Token: rootClaim.Token}); err != nil {
+					t.Fatalf("operator initial claim cleanup: %v", err)
+				}
 			}
 		})
 	}

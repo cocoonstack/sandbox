@@ -850,7 +850,7 @@ func assertLiveJournal(t *testing.T, m *Manager, sb *types.Sandbox) {
 
 func beginAdmittedVolumeRun(t *testing.T, m *Manager, sb *types.Sandbox) *volumeRun {
 	t.Helper()
-	_, run, err := m.beginVolumeRun(t.Context(), sb)
+	_, run, err := m.beginVolumeRun(t.Context(), sb, sb.Tenant)
 	if err != nil {
 		t.Fatal(err)
 	}

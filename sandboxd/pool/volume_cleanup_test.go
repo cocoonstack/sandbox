@@ -455,7 +455,7 @@ func TestArchivedReleaseWithUnvalidatedVolumeRunHasNoCleanupHolds(t *testing.T) 
 	if sb.VMName != "" {
 		t.Fatalf("archived VM name = %q", sb.VMName)
 	}
-	ctx, run, err := m.beginVolumeRun(t.Context(), sb)
+	ctx, run, err := m.beginVolumeRun(t.Context(), sb, sb.Tenant)
 	if err != nil {
 		t.Fatal(err)
 	}
