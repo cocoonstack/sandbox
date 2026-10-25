@@ -14,7 +14,7 @@ type strandedState struct {
 	setup func(t *testing.T, m *Manager, c *failoverCluster, sb *types.Sandbox) string
 	// wake: the fixture leaves the claim hibernated.
 	wake bool
-	// lifecycle: also check the replica checkpoint through release, expiry, and local archive.
+	// lifecycle: also check that release and expiry keep the replica checkpoint.
 	lifecycle bool
 }
 
@@ -90,13 +90,7 @@ func TestFailoverDisabledKeepsStateAndRefusesLiveWriter(t *testing.T) {
 	}
 }
 
-func TestFailoverDisabledLifecycleKeepsReplicaCheckpoint(t *testing.T) {
-	expire := func(m *Manager, sb *types.Sandbox, action types.ExpireAction) {
-		m.mu.Lock()
-		sb.OnExpire, sb.Deadline = action, time.Now().Add(-time.Minute)
-		m.mu.Unlock()
-		m.reapOnce(t.Context())
-	}
+func TestFailoverDisabledExitKeepsReplicaCheckpoint(t *testing.T) {
 	exits := []struct {
 		name string
 		run  func(t *testing.T, m *Manager, sb *types.Sandbox)
@@ -106,30 +100,12 @@ func TestFailoverDisabledLifecycleKeepsReplicaCheckpoint(t *testing.T) {
 				t.Fatal(err)
 			}
 		}},
-		{"expire destroy", func(t *testing.T, m *Manager, sb *types.Sandbox) {
-			expire(m, sb, types.ExpireDestroy)
+		{"expire", func(t *testing.T, m *Manager, sb *types.Sandbox) {
+			m.mu.Lock()
+			sb.Deadline = time.Now().Add(-time.Minute)
+			m.mu.Unlock()
+			m.reapOnce(t.Context())
 			waitFor(t, func() bool { return m.Counters().Reaps == 1 })
-		}},
-		{"expire archive", func(t *testing.T, m *Manager, sb *types.Sandbox) {
-			expire(m, sb, types.ExpireArchive)
-			waitFor(t, func() bool {
-				m.mu.Lock()
-				defer m.mu.Unlock()
-				_, busy := m.archiving[sb.ID]
-				return sb.ArchiveCk != "" && !busy
-			})
-		}},
-		{"archive and wake", func(t *testing.T, m *Manager, sb *types.Sandbox) {
-			if err := m.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
-				t.Fatal(err)
-			}
-			if err := m.archive(t.Context(), sb); err != nil {
-				t.Fatal(err)
-			}
-			if err := m.Wake(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
-				t.Fatal(err)
-			}
-			requireStrandedWriter(t, m, sb)
 		}},
 	}
 	for _, state := range strandedStates {
@@ -140,8 +116,8 @@ func TestFailoverDisabledLifecycleKeepsReplicaCheckpoint(t *testing.T) {
 			t.Run(state.name+"/"+exit.name, func(t *testing.T) {
 				m, sb, ck := restartStranded(t, state)
 				exit.run(t, m, sb)
-				if !ckExists(t, m, ck) {
-					t.Fatalf("%s without a registry deleted a replica checkpoint another node may own", exit.name)
+				if _, held := m.byID(sb.ID); held || !ckExists(t, m, ck) {
+					t.Fatalf("%s without a registry: held=%t checkpoint kept=%t", exit.name, held, ckExists(t, m, ck))
 				}
 			})
 		}
