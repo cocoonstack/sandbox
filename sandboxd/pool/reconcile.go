@@ -24,9 +24,6 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if err = m.retireReplicasWithoutRegistry(claims); err != nil {
-		return err
-	}
 	fenced := m.fenceArchived(ctx, claims)
 	vms, err := m.eng.List(ctx)
 	if err != nil {
@@ -131,28 +128,6 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 	m.warnDeniedClaims(ctx)
 	logger.Infof(ctx, "adopted %d claims, %d VMs live", len(m.claimed), len(live))
 	return saveErr
-}
-
-func (m *Manager) retireReplicasWithoutRegistry(claims map[string]*types.Sandbox) error {
-	if m.archives != nil {
-		return nil
-	}
-	var checkpoints []string
-	for _, sb := range claims {
-		if sb.ArchiveCk == "" && sb.ArchivePending == "" {
-			checkpoints = append(checkpoints, checkpointIDs(sb)...)
-		}
-	}
-	// Without a registry this manager has no node identity for later orphan scans.
-	for id, err := range m.markArchiveCks(checkpoints) {
-		return fmt.Errorf("queue replica without registry %s: %w", id, err)
-	}
-	for _, sb := range claims {
-		if sb.ArchiveCk == "" && sb.ArchivePending == "" {
-			sb.ReplicaCk, sb.ReplicaPending, sb.ArchiveEpoch = "", "", 0
-		}
-	}
-	return nil
 }
 
 // sweepStaleVMs removes sbx-prefixed VMs no claim owns and returns the ones confirmed gone.

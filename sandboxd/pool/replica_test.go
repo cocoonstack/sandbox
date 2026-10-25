@@ -424,7 +424,7 @@ func TestReplicaLeftoverJournalWithFailoverOffStillServesStreams(t *testing.T) {
 	m := newTestManagerAt(t, eng, dir, config.PoolSpec{PoolKey: testKey, Warm: 1})
 	sb := mustClaim(t, m, testKey)
 	m.mu.Lock()
-	sb.ReplicaCk = "ck_0123456789abcdef"
+	sb.ReplicaCk = "ck_leftover"
 	js := m.store.set(sb)
 	m.mu.Unlock()
 	if err := m.store.commit(js); err != nil {
@@ -436,11 +436,8 @@ func TestReplicaLeftoverJournalWithFailoverOffStillServesStreams(t *testing.T) {
 		t.Fatalf("reconcile: %v", err)
 	}
 	held, ok := restarted.byID(sb.ID)
-	if !ok {
-		t.Fatal("reconcile lost the claim while retiring its leftover replica")
-	}
-	if held.HasReplica() || held.Replicated() {
-		t.Fatalf("claim held %v replica %q replicated %v, want the leftover retired and claim retained", ok, held.ReplicaCk, held.Replicated())
+	if !ok || held.ReplicaCk != "ck_leftover" || held.Replicated() {
+		t.Fatalf("claim held %v replica %q replicated %v, want the leftover kept and not replicated", ok, held.ReplicaCk, held.Replicated())
 	}
 	_, fenced, done, err := restarted.WakeAgentSocket(t.Context(), sb.ID, sb.Token)
 	if err != nil || fenced != nil {

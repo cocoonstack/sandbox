@@ -331,6 +331,10 @@ func (m *Manager) liveWriterError(sb *types.Sandbox) error {
 	if m.view.Load().poolReplicate[sb.PolicyKey()] > 0 {
 		return ErrReplicatingPool
 	}
+	if sb.HasReplica() && m.archives == nil {
+		// only the replica scan retires a replica, and it needs the registry
+		return ErrReplicaStranded
+	}
 	if sb.HasReplica() || len(m.store.checkpointRefs(sb.ID)) > 0 {
 		return ErrReplicaPresent
 	}

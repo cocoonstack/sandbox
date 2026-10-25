@@ -169,19 +169,12 @@ fragment the warm pools):
 
 ### Disabling archive failover
 
-Set `replicate_seconds: 0` while `archive_failover` remains enabled, restart,
-and let the existing replicas and their recovery references retire before
-disabling failover. Keep the old registry reachable during that transition.
-Before removing it, drain its remaining claim rows. If adopters must be stopped
-first, keep every adopter shut down or disabled until those rows are drained or
-the adoption domain is permanently retired. Disabling the local registry does
-not consume remote rows or fence another node.
-
-On startup without a registry, sandboxd clears replica fields from local running
-or sleeping claims and queues their checkpoints for deletion before rewriting
-the claims file. A failed rewrite keeps the affected checkpoints protected until
-their references retire. Archived claims and unfinished archive transitions
-retain their archive fields and checkpoints.
+Set `replicate_seconds: 0` while `archive_failover` is still enabled, then
+restart, so the replica scan retires existing replicas. A claim that still has
+a replica when `archive_failover` is disabled keeps it. sandboxd does not
+delete that checkpoint or touch the remote registry row, and live writable
+volume additions on the claim return 409 until it is released or failover is
+re-enabled.
 
 ### Reading sleeping claims without waking them
 
