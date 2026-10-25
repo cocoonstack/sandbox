@@ -173,7 +173,8 @@ func (m *Manager) archive(ctx context.Context, sb *types.Sandbox) error {
 	// the store ck is authoritative from here
 	m.destroy(ctx, vmName)
 	m.dropSnap(ctx, snap)
-	if replica != "" {
+	// without a registry a peer may still own this replica's row
+	if replica != "" && m.archives != nil {
 		m.deleteOrphanArchiveCk(ctx, replica)
 	}
 	m.counters.archives.Add(1)

@@ -20,9 +20,10 @@ Live RW additions require `replicate_seconds: 0`; a replicating pool returns
 setting requires a daemon restart. A non-replicating pool may still hold an old
 replica or recovery checkpoint reference, which returns 503 with `Retry-After`.
 Keep the reservation and access gate closed and retry attachment after that
-claim's retirement has been acknowledged. A claim that keeps a replica after
-[archive failover is disabled](deploy.md#disabling-archive-failover) returns 409
-until failover is re-enabled or the claim is released.
+claim's retirement has been acknowledged. A claim that keeps replica or
+archive state after
+[archive failover is disabled](deploy.md#disabling-archive-failover) returns
+409 until failover is re-enabled or the claim is released.
 A fixed delay does not acknowledge retirement. See
 [the live-volume retirement contract](sandboxd-api.md#partial-failure-and-recovery).
 
