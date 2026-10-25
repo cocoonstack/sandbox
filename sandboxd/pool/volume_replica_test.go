@@ -47,6 +47,63 @@ func TestLiveWriterConvergesThroughReplicaScans(t *testing.T) {
 	}
 }
 
+func TestReplicaRetirementKeepsTombstoneUntilClaimCommit(t *testing.T) {
+	m, c := newReplicaVolumeManager(t)
+	sb := mustClaim(t, m, testKey)
+	replicateNow(t, m, sb)
+	ck := sb.ReplicaCk
+	m.store.recommitting.Store(true)
+	m.store.replaceFile = func([]byte) error { return errors.New("injected claims write failure") }
+	sb.Transition.Lock()
+	err := m.dropReplica(t.Context(), sb)
+	sb.Transition.Unlock()
+	if err == nil {
+		t.Error("retirement acknowledged a failed claim commit")
+	}
+	rec, ok, err := c.reg.Get(t.Context(), sb.ID)
+	if err != nil || !ok || !rec.Consumed || !ckExists(t, m, ck) {
+		t.Fatalf("failed commit lost recovery tombstone/checkpoint: %+v, exists=%t, err=%v", rec, ok, err)
+	}
+	m.reconcileOwnRow(t.Context(), rec, time.Now())
+	if rec, ok, err = c.reg.Get(t.Context(), sb.ID); err != nil || !ok || !rec.Consumed {
+		t.Fatalf("sweep erased unacknowledged retirement: %+v, exists=%t, err=%v", rec, ok, err)
+	}
+	restarted := c.restart(t, m)
+	if err = restarted.Reconcile(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	restored, ok := restarted.byID(sb.ID)
+	if !ok {
+		t.Fatal("restart dropped a claim after failed retirement commit")
+	}
+	restarted.retireReplica(t.Context(), restored)
+	if restored.HasReplica() {
+		t.Fatal("restart did not finish retirement")
+	}
+}
+
+func TestReplicaRecoveryDoesNotRepublishVolumeIntent(t *testing.T) {
+	m, c := newReplicaVolumeManager(t)
+	sb := mustClaim(t, m, testKey)
+	replicateNow(t, m, sb)
+	// Reconstruct the durable state a pending writer leaves before replica retirement.
+	sb.VolumesWant = []types.Volume{{Name: "data", Mode: types.VolumeModeRW, AttachOnly: true}}
+	if err := m.store.commit(m.store.set(sb)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.reg.Consume(t.Context(), sb.ID, sb.ArchiveEpoch); err != nil {
+		t.Fatal(err)
+	}
+	rec, ok, err := c.reg.Get(t.Context(), sb.ID)
+	if err != nil || !ok || !rec.Consumed {
+		t.Fatalf("setup: %+v, %t, %v", rec, ok, err)
+	}
+	m.reconcileOwnRow(t.Context(), rec, time.Now())
+	if rec, ok, err = c.reg.Get(t.Context(), sb.ID); err != nil || !ok || !rec.Consumed {
+		t.Fatalf("recovery republished desired writer: %+v, %t, %v", rec, ok, err)
+	}
+}
+
 func TestLiveWriterRefusesExistingReplica(t *testing.T) {
 	for _, pending := range []bool{false, true} {
 		for _, attachOnly := range []bool{false, true} {
