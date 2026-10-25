@@ -54,6 +54,42 @@ func TestReconcileRetiresReplicasWhenFailoverDisabled(t *testing.T) {
 	}
 }
 
+func TestFailoverDisabledKeepsReplicaAndRefusesLiveWriter(t *testing.T) {
+	for _, pending := range []string{"published", "pending"} {
+		t.Run(pending, func(t *testing.T) {
+			m, c := newReplicaVolumeManager(t)
+			sb := mustClaim(t, m, testKey)
+			if pending == "pending" {
+				m.archives = &hookRegistry{Registry: c.reg, failPut: true}
+				if err := m.replicate(t.Context(), sb); !errors.Is(err, ErrArchiveStoreDown) {
+					t.Fatal(err)
+				}
+			} else {
+				replicateNow(t, m, sb)
+			}
+			replica, intent := sb.ReplicaCk, sb.ReplicaPending
+			restarted := newManagerWithoutRegistry(t, m, c)
+			if err := restarted.Reconcile(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			restored, ok := restarted.byID(sb.ID)
+			if !ok || restored.ReplicaCk != replica || restored.ReplicaPending != intent {
+				t.Fatalf("startup without a registry changed replica fields: ok=%t replica=%q pending=%q", ok, restored.ReplicaCk, restored.ReplicaPending)
+			}
+			for _, ck := range []string{replica, intent} {
+				if ck != "" && (!ckExists(t, restarted, ck) || restarted.deleteMarked(ck)) {
+					t.Fatalf("startup without a registry queued or deleted checkpoint %s", ck)
+				}
+			}
+			want := []types.Volume{{Name: "data", Mode: types.VolumeModeRW, AttachOnly: true}}
+			view, err := restarted.SetVolumes(t.Context(), sb.ID, "", want)
+			if !errors.Is(err, ErrReplicaStranded) || len(view.Volumes) != 0 || len(view.VolumesWant) != 0 {
+				t.Fatalf("live writer on a stranded replica: err=%v volumes=%v want=%v", err, view.Volumes, view.VolumesWant)
+			}
+		})
+	}
+}
+
 func TestDisabledReplicaCleanupSurvivesFailedStartupRewrite(t *testing.T) {
 	for _, renamed := range []bool{false, true} {
 		t.Run(fmt.Sprintf("renamed=%t", renamed), func(t *testing.T) {
