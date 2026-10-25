@@ -550,6 +550,9 @@ for a successful snapshot commit. Since that journal writes all claims together,
 an unacknowledged write for another claim can briefly delay RW application too.
 A consumed replica row is retained until the local clear is acknowledged, so a
 restart cannot mistake failed persistence for another node's adoption.
+Unpublished replica checkpoints and their queued cleanup markers follow the same
+acknowledgment boundary. Archive checkpoint cleanup pauses while any claim write
+is unacknowledged and resumes after a successful snapshot commit.
 
 Before applying a target, sandboxd journals `VolumesWant` beside `Volumes`,
 storing it only while it differs from `Volumes`. A

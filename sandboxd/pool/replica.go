@@ -129,19 +129,17 @@ func (m *Manager) replicate(ctx context.Context, sb *types.Sandbox) error {
 		return refusal
 	}
 	if err := m.store.commit(intent); err != nil {
-		m.clearReplicaIntent(ctx, sb, ckID)
-		m.deleteOrphanArchiveCk(ctx, ckID)
-		return fmt.Errorf("replicate %s: persist intent: %w", sb.ID, err)
+		clearErr := m.clearReplicaIntent(ctx, sb, ckID)
+		return fmt.Errorf("replicate %s: persist intent: %w", sb.ID, errors.Join(err, clearErr))
 	}
 	epoch, err := m.replaceReplica(ctx, sb, ckID)
 	switch {
 	case errors.Is(err, archives.ErrLost):
-		m.clearReplicaIntent(ctx, sb, ckID)
-		m.deleteOrphanArchiveCk(ctx, ckID)
+		clearErr := m.clearReplicaIntent(ctx, sb, ckID)
 		if settleErr := m.refusedReplace(ctx, sb); settleErr != nil && !errors.Is(settleErr, ErrUnknownSandbox) {
 			return fmt.Errorf("replicate %s: settle refused write: %w", sb.ID, settleErr)
 		}
-		return fmt.Errorf("replicate %s: registry: %w", sb.ID, err)
+		return fmt.Errorf("replicate %s: registry: %w", sb.ID, errors.Join(err, clearErr))
 	case err != nil:
 		return fmt.Errorf("replicate %s: registry: %w", sb.ID, err)
 	}
@@ -189,7 +187,7 @@ func (m *Manager) settleReplicaIntent(ctx context.Context, sb *types.Sandbox) er
 		return ErrUnknownSandbox
 	case ok && !rec.Consumed && rec.Checkpoint == pending:
 		var prev string
-		live, _ := m.commitIfLive(ctx, sb, func() {
+		live, commitErr := m.commitIfLive(ctx, sb, func() {
 			prev, sb.ReplicaCk, sb.ReplicaPending, sb.ArchiveEpoch = sb.ReplicaCk, pending, "", rec.Epoch
 		})
 		if !live {
@@ -198,11 +196,12 @@ func (m *Manager) settleReplicaIntent(ctx context.Context, sb *types.Sandbox) er
 		if prev != "" {
 			m.deleteOrphanArchiveCk(ctx, prev)
 		}
+		if commitErr != nil {
+			return fmt.Errorf("persist settled replica: %w", commitErr)
+		}
 		return nil
 	}
-	m.clearReplicaIntent(ctx, sb, pending)
-	m.deleteOrphanArchiveCk(ctx, pending)
-	return nil
+	return m.clearReplicaIntent(ctx, sb, pending)
 }
 
 // replicaGone reports whether the absence of sb's row means another node adopted the claim and finished with it.
@@ -223,12 +222,22 @@ func (m *Manager) replicaGone(ctx context.Context, sb *types.Sandbox) (bool, err
 	return false, err
 }
 
-func (m *Manager) clearReplicaIntent(ctx context.Context, sb *types.Sandbox, ck string) {
-	_, _ = m.commitIfLive(ctx, sb, func() {
+func (m *Manager) clearReplicaIntent(ctx context.Context, sb *types.Sandbox, ck string) error {
+	live, err := m.commitIfLive(ctx, sb, func() {
 		if sb.ReplicaPending == ck {
 			sb.ReplicaPending = ""
 		}
 	})
+	// Queue cleanup even on failure, but the delete boundary must wait for the
+	// full claim snapshot so restart can still identify an unpublished intent.
+	m.deleteOrphanArchiveCk(ctx, ck)
+	if !live {
+		return ErrUnknownSandbox
+	}
+	if err != nil {
+		return fmt.Errorf("persist replica intent clear: %w", err)
+	}
+	return nil
 }
 
 func (m *Manager) retireReplica(ctx context.Context, sb *types.Sandbox) {

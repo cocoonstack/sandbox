@@ -355,7 +355,14 @@ func (m *Manager) deleteArchiveCk(ctx context.Context, ckID string) error {
 	if err := m.markArchiveCk(ckID); err != nil {
 		return fmt.Errorf("track: %w", err)
 	}
-	if err := m.deleteCkLocked(ctx, ckID); err != nil {
+	unlock := m.lockRec(ckID)
+	if !m.store.synced() {
+		unlock()
+		return errors.New("checkpoint cleanup waits for claim persistence")
+	}
+	err := m.ckpts.Delete(ctx, ckID)
+	unlock()
+	if err != nil {
 		return err
 	}
 	if err := m.clearArchiveCk(ckID); err != nil {
@@ -386,7 +393,7 @@ func (m *Manager) retryArchiveDeletes(ctx context.Context) {
 
 func (m *Manager) retryArchiveDelete(ctx context.Context, ckID string) {
 	unlock := m.lockRec(ckID)
-	if m.archiveCkPinned(ckID) || !m.deleteMarked(ckID) {
+	if !m.store.synced() || m.archiveCkPinned(ckID) || !m.deleteMarked(ckID) {
 		unlock()
 		return
 	}
