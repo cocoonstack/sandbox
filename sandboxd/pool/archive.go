@@ -145,7 +145,10 @@ func (m *Manager) archive(ctx context.Context, sb *types.Sandbox) error {
 		}
 	}
 	snap, vmName, sock, prevDeadline, prevPending, replica := sb.HibernateSnap, sb.VMName, sb.VsockSocket, sb.Deadline, sb.ArchivePending, sb.ReplicaCk
-	sb.ArchiveCk, sb.ArchiveEpoch, sb.ArchivePending, sb.ReplicaCk = ck.ID, epoch, "", ""
+	sb.ArchiveCk, sb.ArchiveEpoch, sb.ArchivePending = ck.ID, epoch, ""
+	if m.archives != nil {
+		sb.ReplicaCk = ""
+	}
 	sb.HibernateSnap, sb.VsockSocket, sb.VMName = "", "", ""
 	sb.Deadline = m.retentionDeadline(sb.Key)
 	js := m.store.set(sb)
@@ -173,7 +176,7 @@ func (m *Manager) archive(ctx context.Context, sb *types.Sandbox) error {
 	// the store ck is authoritative from here
 	m.destroy(ctx, vmName)
 	m.dropSnap(ctx, snap)
-	// without a registry a peer may still own this replica's row
+	// without a registry a peer may still own this replica's row, so the claim keeps it
 	if replica != "" && m.archives != nil {
 		m.deleteOrphanArchiveCk(ctx, replica)
 	}

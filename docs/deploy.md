@@ -176,11 +176,12 @@ this node's rows from a node that still has the registry, or keep peers that
 run with `archive_failover` from adopting its claims.
 
 A claim that still has a replica or an unfinished archive transition when
-`archive_failover` is disabled keeps those fields. Live writable volume
-additions on it return 409 until failover is re-enabled or the claim is
-released. Whether the claim is released, expires, or archives locally, sandboxd
-leaves its replica checkpoint on disk. Remove that checkpoint only after no
-node can adopt the claim's registry row.
+`archive_failover` is disabled keeps its replica, including through a local
+archive. Live writable volume additions on it return 409 until failover is
+re-enabled or the claim is released. Whether the claim is released, expires, or
+archives locally, sandboxd leaves the replica checkpoint in the checkpoint
+store. After failover is re-enabled, the replica scan retires a remaining
+replica the next time the claim runs.
 
 ### Reading sleeping claims without waking them
 
