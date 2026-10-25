@@ -35,7 +35,7 @@ func TestHibernatePersistFailureSurfacesAndConverges(t *testing.T) {
 	if err := m.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
 		t.Fatalf("Hibernate retry after heal: %v", err)
 	}
-	got, err := (&claimStore{path: broken}).load()
+	got, err := newClaimStore(filepath.Dir(broken), false).load()
 	if err != nil || got[sb.ID] == nil || got[sb.ID].HibernateSnap == "" || got[sb.ID].PendingSnap != "" {
 		t.Fatalf("journal after healed retry: %+v, %v", got[sb.ID], err)
 	}
@@ -75,7 +75,7 @@ func TestWakePersistFailureSurfaces(t *testing.T) {
 			}
 			return eng.snapRemoved(snap)
 		})
-		got, loadErr := (&claimStore{path: broken}).load()
+		got, loadErr := newClaimStore(filepath.Dir(broken), false).load()
 		if loadErr != nil || got[sb.ID] == nil || got[sb.ID].HibernateSnap != "" {
 			t.Fatalf("journal after converge: %+v, %v", got[sb.ID], loadErr)
 		}
@@ -305,7 +305,7 @@ func TestResolveAdoptBillsWhenPersistFails(t *testing.T) {
 			t.Fatalf("heal store dir: %v", err)
 		}
 		waitFor(t, func() bool {
-			got, err := (&claimStore{path: broken}).load()
+			got, err := newClaimStore(filepath.Dir(broken), false).load()
 			return err == nil && got[sb.ID] != nil && got[sb.ID].HibernateSnap != ""
 		})
 	})
@@ -365,7 +365,7 @@ func TestFlushClaimsClosesShutdownWindow(t *testing.T) {
 	if err := m.FlushClaims(); err != nil {
 		t.Fatalf("FlushClaims: %v", err)
 	}
-	got, err := (&claimStore{path: broken}).load()
+	got, err := newClaimStore(filepath.Dir(broken), false).load()
 	if err != nil || got[sb.ID] == nil || got[sb.ID].HibernateSnap != "" {
 		t.Fatalf("journal after flush: %+v, %v", got[sb.ID], err)
 	}

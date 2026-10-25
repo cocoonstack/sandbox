@@ -313,9 +313,9 @@ func (m *Manager) reclaimOrphanArchiveCks(ctx context.Context, claims map[string
 		if row, ok := rows[ckpt.SandboxID]; ok && (row.Owner != m.nodeID || row.Checkpoint == ckpt.ID) {
 			continue
 		}
-		if err := m.deleteArchiveCk(ctx, ckpt.ID); err != nil {
+		if deleted, err := m.deleteArchiveCk(ctx, ckpt.ID); err != nil {
 			logger.Warnf(ctx, "reclaim %s: %v", ckpt.ID, err)
-		} else {
+		} else if deleted {
 			logger.Infof(ctx, "reclaimed orphan archive ck %s", ckpt.ID)
 		}
 	}
