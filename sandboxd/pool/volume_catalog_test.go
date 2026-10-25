@@ -141,19 +141,40 @@ func TestRuntimeCatalogInvalidDestinationDoesNotFenceStaticClaims(t *testing.T) 
 	}
 }
 
-func TestRuntimeRegistrationRejectsNonregularBacking(t *testing.T) {
+func TestRuntimeCatalogUsesStaticPathValidation(t *testing.T) {
 	requireCatalogRoot(t)
-	for _, path := range []string{t.TempDir(), os.DevNull} {
+	regular := writeVolumeImage(t, "backing", "unchanged")
+	link := filepath.Join(t.TempDir(), "backing-link")
+	if err := os.Symlink(regular, link); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{regular, link, os.DevNull, t.TempDir(), filepath.Join(t.TempDir(), "missing")} {
 		t.Run(filepath.Base(path), func(t *testing.T) {
-			m := newVolumeManager(t, newFakeEngine(), nil)
-			err := m.RegisterVolume(t.Context(), "runtime", types.VolumeRegistration{Path: path, Writable: true})
-			if !errors.Is(err, ErrBadVolume) {
-				t.Fatalf("nonregular backing registration: %v", err)
+			spec := config.VolumeSpec{Name: "runtime", Path: path, DirectIO: types.DirectIOOff, Writable: true}
+			if err := config.ValidateVolumeCatalog([]config.VolumeSpec{spec}); err != nil {
+				t.Fatalf("static validation: %v", err)
 			}
-			if names := m.VolumeNames(); len(names) != 0 {
-				t.Fatalf("rejected backing was published: %v", names)
+			m := newVolumeManager(t, newFakeEngine(), nil)
+			registration := types.VolumeRegistration{Path: path, Writable: true}
+			if err := m.RegisterVolume(t.Context(), "runtime", registration); err != nil {
+				t.Fatalf("runtime validation differs from static: %v", err)
+			}
+			m2 := newVolumeManagerAt(t, newFakeEngine(), m.dataDir, nil)
+			if err := m2.RegisterVolume(t.Context(), "runtime", registration); err != nil {
+				t.Fatalf("idempotent retry after restart: %v", err)
+			}
+			if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+				if _, resolveErr := m2.resolveVolumes(t.Context(), "", []types.Volume{{Name: "runtime"}}); !errors.Is(resolveErr, ErrVolumeUnavailable) {
+					t.Fatalf("missing backing resolved: %v", resolveErr)
+				}
+			}
+			if err := m2.UnregisterVolume(t.Context(), "runtime"); err != nil {
+				t.Fatal(err)
 			}
 		})
+	}
+	if got, err := os.ReadFile(regular); err != nil || string(got) != "unchanged" {
+		t.Fatalf("registration touched backing: %q %v", got, err)
 	}
 }
 
@@ -182,7 +203,7 @@ func TestRuntimeCatalogCollisionsAndRecoveryNames(t *testing.T) {
 	if err := m.UnregisterVolume(t.Context(), "unexplained"); !errors.Is(err, ErrVolumeRegistrationConflict) {
 		t.Fatalf("absent referenced removal: %v", err)
 	}
-	for _, spec := range []types.VolumeRegistration{{Path: "relative"}, {Path: other, DirectIO: "invalid"}, {Path: other + "missing"}} {
+	for _, spec := range []types.VolumeRegistration{{Path: "relative"}, {Path: other, DirectIO: "invalid"}} {
 		if err := m.RegisterVolume(t.Context(), "runtime", spec); !errors.Is(err, ErrBadVolume) {
 			t.Fatalf("invalid spec %+v: %v", spec, err)
 		}
