@@ -32,9 +32,9 @@ type volumeHolders struct {
 }
 
 type resolvedVolume struct {
-	entry   *catalogVolume
-	disk    engine.VolumeSpec
-	applied types.Volume
+	generation uint64
+	disk       engine.VolumeSpec
+	applied    types.Volume
 }
 
 // volumeTeardown captures marker paths at quiesce time; a later config can re-point the entry.
@@ -46,9 +46,11 @@ type volumeTeardown struct {
 }
 
 type catalogVolume struct {
-	disk     engine.VolumeSpec
-	tenants  []string
-	writable bool
+	generation uint64
+	runtime    bool
+	disk       engine.VolumeSpec
+	tenants    []string
+	writable   bool
 }
 
 func (v catalogVolume) allowed(tenant string) bool {
@@ -57,7 +59,7 @@ func (v catalogVolume) allowed(tenant string) bool {
 
 // Volumes reports the caller-visible fleet catalog; an empty tenant means root.
 func (m *Manager) Volumes(tenant string, holders map[string]int) []types.VolumeInfo {
-	catalog := m.volumeCatalog()
+	catalog := m.catalogSnapshot()
 	infos := make([]types.VolumeInfo, 0, len(catalog))
 	for name, volume := range catalog {
 		if !volume.allowed(tenant) {
@@ -94,7 +96,7 @@ func (m *Manager) Volumes(tenant string, holders map[string]int) []types.VolumeI
 
 // VolumeNames returns the sorted names this node can currently serve.
 func (m *Manager) VolumeNames() []string {
-	catalog := m.volumeCatalog()
+	catalog := m.catalogSnapshot()
 	names := make([]string, 0, len(catalog))
 	for name, volume := range catalog {
 		if _, err := m.statVolume(volume.disk.Path); err == nil {
@@ -114,7 +116,7 @@ func (m *Manager) VolumePlacement(key types.PoolKey, tenant string, names []stri
 		return true, nil
 	}
 	local := true
-	catalog := m.volumeCatalog()
+	catalog := m.catalogSnapshot()
 	for _, name := range names {
 		volume, ok := catalog[name]
 		if !ok {
@@ -144,11 +146,11 @@ func (m *Manager) resolveVolumes(ctx context.Context, tenant string, requested [
 		return nil, fmt.Errorf("%w: %w", ErrBadVolume, err)
 	}
 	m.mu.Lock()
-	if m.catalogPending != nil {
+	if err := m.catalog.admissionError(); err != nil {
 		m.mu.Unlock()
-		return nil, ErrVolumeCatalogUnavailable
+		return nil, err
 	}
-	catalog := maps.Clone(m.volumes)
+	catalog := maps.Clone(m.catalog.entries)
 	m.mu.Unlock()
 	resolved := make([]resolvedVolume, 0, len(applied))
 	for _, volume := range applied {
@@ -167,12 +169,8 @@ func (m *Manager) resolveVolumes(ctx context.Context, tenant string, requested [
 
 func (m *Manager) resolveCatalogVolume(ctx context.Context, volume types.Volume) (resolvedVolume, error) {
 	m.mu.Lock()
-	entry := m.volumes[volume.Name]
-	pending := m.catalogPending != nil
+	entry := m.catalog.entries[volume.Name]
 	m.mu.Unlock()
-	if pending && entry == nil {
-		return resolvedVolume{}, ErrVolumeCatalogUnavailable
-	}
 	return m.resolveCatalogEntry(ctx, volume, entry)
 }
 
@@ -191,7 +189,7 @@ func (m *Manager) resolveCatalogEntry(ctx context.Context, volume types.Volume, 
 	disk := entry.disk
 	disk.RW = volume.RW()
 	volume.AttachOnly = false // past validation the empty mount carries it
-	return resolvedVolume{entry: entry, disk: disk, applied: volume}, nil
+	return resolvedVolume{generation: entry.generation, disk: disk, applied: volume}, nil
 }
 
 // confirmVolumesClean refuses a read-only claim of a dirty image; run after holds are taken.
@@ -276,7 +274,7 @@ func (m *Manager) quiesceVolumes(ctx context.Context, sb *types.Sandbox) volumeT
 			continue
 		}
 		m.mu.Lock()
-		if entry, ok := m.volumes[volume.Name]; ok {
+		if entry, ok := m.catalog.entries[volume.Name]; ok {
 			td.clears = append(td.clears, entry.disk.Path)
 		}
 		m.mu.Unlock()
@@ -310,7 +308,7 @@ func (m *Manager) finishVolumeTeardown(ctx context.Context, td volumeTeardown) b
 	m.mu.Lock()
 	m.releaseVolumes(td.holds)
 	if td.unknown {
-		m.unknownVolumes--
+		m.catalog.unknown--
 	}
 	m.mu.Unlock()
 	return true
@@ -325,8 +323,8 @@ func (m *Manager) reserveVolumesFor(volumes []types.Volume, owner *types.Sandbox
 	if len(volumes) == 0 {
 		return nil
 	}
-	if m.catalogPending != nil || m.unknownVolumes > 0 {
-		return ErrVolumeCatalogUnavailable
+	if err := m.catalog.admissionError(); err != nil {
+		return err
 	}
 	recovery := m.store.recoveryVolumes()
 	for _, volume := range volumes {
@@ -340,7 +338,7 @@ func (m *Manager) reserveVolumesFor(volumes []types.Volume, owner *types.Sandbox
 				}
 			}
 		}
-		holders := m.volumeAdmission[volume.Name]
+		holders := m.catalog.holders[volume.Name]
 		if holders.writers > 0 || (volume.RW() && holders.readers > 0) {
 			return fmt.Errorf("%w: volume %q", ErrVolumeBusy, volume.Name)
 		}
@@ -352,30 +350,30 @@ func (m *Manager) reserveVolumesFor(volumes []types.Volume, owner *types.Sandbox
 // adoptVolumes counts volumes an adopted claim already holds; callers hold m.mu.
 func (m *Manager) adoptVolumes(volumes []types.Volume) {
 	for _, volume := range volumes {
-		holders := m.volumeAdmission[volume.Name]
+		holders := m.catalog.holders[volume.Name]
 		if volume.RW() {
 			holders.writers++
 		} else {
 			holders.readers++
 		}
-		m.volumeAdmission[volume.Name] = holders
+		m.catalog.holders[volume.Name] = holders
 	}
 }
 
 // releaseVolumes drops one claim's admission holds; callers hold m.mu.
 func (m *Manager) releaseVolumes(volumes []types.Volume) {
 	for _, volume := range volumes {
-		holders := m.volumeAdmission[volume.Name]
+		holders := m.catalog.holders[volume.Name]
 		if volume.RW() {
 			holders.writers--
 		} else {
 			holders.readers--
 		}
 		if holders.writers < 1 && holders.readers < 1 {
-			delete(m.volumeAdmission, volume.Name)
+			delete(m.catalog.holders, volume.Name)
 			continue
 		}
-		m.volumeAdmission[volume.Name] = holders
+		m.catalog.holders[volume.Name] = holders
 	}
 }
 
@@ -452,23 +450,20 @@ func syncDir(dir string) error {
 	return errors.Join(d.Sync(), d.Close())
 }
 
-func (m *Manager) volumeCatalog() map[string]*catalogVolume {
+func (m *Manager) catalogSnapshot() map[string]*catalogVolume {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return maps.Clone(m.volumes)
+	return maps.Clone(m.catalog.entries)
 }
 
 func (m *Manager) reserveResolved(tenant string, volumes []resolvedVolume, owner *types.Sandbox) error {
-	if len(volumes) > 0 && (m.catalogPending != nil || m.unknownVolumes > 0) {
-		return ErrVolumeCatalogUnavailable
-	}
 	var held []types.Volume
 	if owner != nil && m.claimed[owner.ID] == owner && m.volumeRuns[owner] != nil {
 		held = slices.Concat(heldVolumes(owner), m.store.recoveryVolumes(owner.ID)[owner.ID])
 	}
 	for _, v := range volumes {
-		entry := m.volumes[v.applied.Name]
-		if entry == nil || entry != v.entry {
+		entry := m.catalog.entries[v.applied.Name]
+		if entry == nil || entry.generation != v.generation {
 			return ErrVolumeUnavailable
 		}
 		if !slices.Contains(held, v.applied) && !entry.allowed(tenant) {
@@ -482,8 +477,8 @@ func (m *Manager) reserveResolved(tenant string, volumes []resolvedVolume, owner
 }
 
 func (m *Manager) statVolume(path string) (os.FileInfo, error) {
-	if m.volumeStat != nil {
-		return m.volumeStat(path)
+	if m.catalog.stat != nil {
+		return m.catalog.stat(path)
 	}
 	return os.Stat(path)
 }

@@ -423,6 +423,11 @@ func ValidateVolumeCatalog(volumes []VolumeSpec) error {
 		if !types.ValidDirectIO(volume.DirectIO) {
 			return fmt.Errorf("volume %q directio must be on, off, or auto, got %q", volume.Name, volume.DirectIO)
 		}
+		for _, tenant := range volume.Tenants {
+			if !types.NameRe.MatchString(tenant) {
+				return fmt.Errorf("volume %q tenant %q must match %s", volume.Name, tenant, types.NameRe)
+			}
+		}
 	}
 	return nil
 }

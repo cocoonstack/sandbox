@@ -1,8 +1,10 @@
 package pool
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"slices"
@@ -64,6 +66,97 @@ func TestRuntimeCatalogPersistsNormalizedSemantics(t *testing.T) {
 	}
 }
 
+func TestRuntimeCatalogInvalidDestinationDoesNotFenceStaticClaims(t *testing.T) {
+	requireCatalogRoot(t)
+	for _, kind := range []string{"symlink", "parent-owner", "parent-mode", "record-mode", "record-owner", "record-symlink"} {
+		t.Run(kind, func(t *testing.T) {
+			parent := t.TempDir()
+			dir := filepath.Join(parent, "state")
+			if err := os.Mkdir(dir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			static := liveCatalog(t)
+			m := newVolumeManagerAt(t, newFakeEngine(), dir, static)
+			if _, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Volumes: []types.Volume{{Name: "data"}}}); err != nil {
+				t.Fatalf("initial static claim: %v", err)
+			}
+			record := filepath.Join(dir, runtimeVolumesFile)
+			switch kind {
+			case "symlink":
+				link := filepath.Join(parent, "linked-state")
+				if err := os.Symlink(dir, link); err != nil {
+					t.Fatal(err)
+				}
+				m.dataDir = link
+			case "parent-owner":
+				if err := os.Chmod(parent, 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Chown(parent, 65534, 65534); err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() {
+					if err := os.Chown(parent, 0, 0); err != nil {
+						t.Error(err)
+					}
+				})
+			case "parent-mode":
+				if err := os.Chmod(parent, 0o777); err != nil {
+					t.Fatal(err)
+				}
+			default:
+				if err := os.WriteFile(record, []byte(`{"version":1,"volumes":{}}`), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				switch kind {
+				case "record-mode":
+					if err := os.Chmod(record, 0o644); err != nil {
+						t.Fatal(err)
+					}
+				case "record-owner":
+					if err := os.Chown(record, 65534, 65534); err != nil {
+						t.Fatal(err)
+					}
+				case "record-symlink":
+					if err := os.Rename(record, record+".target"); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.Symlink(record+".target", record); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			spec := types.VolumeRegistration{Path: writeVolumeImage(t, "runtime", "unchanged")}
+			for range 2 {
+				err := m.RegisterVolume(t.Context(), "runtime", spec)
+				if !errors.Is(err, ErrVolumeCatalogInvalid) {
+					t.Errorf("invalid destination should be a permanent refusal: %v", err)
+				}
+				m.retryVolumeCatalog(t.Context())
+				if _, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Volumes: []types.Volume{{Name: "data"}}}); err != nil {
+					t.Errorf("static claim after rejected registration: %v", err)
+				}
+			}
+		})
+	}
+}
+
+func TestRuntimeRegistrationRejectsNonregularBacking(t *testing.T) {
+	requireCatalogRoot(t)
+	for _, path := range []string{t.TempDir(), os.DevNull} {
+		t.Run(filepath.Base(path), func(t *testing.T) {
+			m := newVolumeManager(t, newFakeEngine(), nil)
+			err := m.RegisterVolume(t.Context(), "runtime", types.VolumeRegistration{Path: path, Writable: true})
+			if !errors.Is(err, ErrBadVolume) {
+				t.Fatalf("nonregular backing registration: %v", err)
+			}
+			if names := m.VolumeNames(); len(names) != 0 {
+				t.Fatalf("rejected backing was published: %v", names)
+			}
+		})
+	}
+}
+
 func TestRuntimeCatalogCollisionsAndRecoveryNames(t *testing.T) {
 	requireCatalogRoot(t)
 	eng := newFakeEngine()
@@ -101,7 +194,7 @@ func TestRuntimeCatalogPostRenameFailureFencesAndConverges(t *testing.T) {
 	eng := newFakeEngine()
 	m := newVolumeManager(t, eng, nil)
 	path := writeVolumeImage(t, "runtime", "bytes")
-	m.catalogReplace = func(path string, raw []byte) error {
+	m.catalog.replace = func(path string, raw []byte) error {
 		if err := utils.WriteFileSync(path, raw, 0o600); err != nil {
 			return err
 		}
@@ -121,11 +214,11 @@ func TestRuntimeCatalogPostRenameFailureFencesAndConverges(t *testing.T) {
 	if _, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{}); err != nil {
 		t.Fatalf("volume-free claim blocked: %v", err)
 	}
-	m.catalogReplace = nil
+	m.catalog.replace = nil
 	if err := m.RegisterVolume(t.Context(), "runtime", spec); err != nil {
 		t.Fatalf("retry pending register: %v", err)
 	}
-	m.catalogReplace = func(path string, raw []byte) error {
+	m.catalog.replace = func(path string, raw []byte) error {
 		if err := utils.WriteFileSync(path, raw, 0o600); err != nil {
 			return err
 		}
@@ -140,7 +233,7 @@ func TestRuntimeCatalogPostRenameFailureFencesAndConverges(t *testing.T) {
 	if err := m.RegisterVolume(t.Context(), "replacement", types.VolumeRegistration{Path: path}); !errors.Is(err, ErrVolumeCatalogUnavailable) {
 		t.Fatalf("pending unregister reuse: %v", err)
 	}
-	m.catalogReplace = nil
+	m.catalog.replace = nil
 	if err := m.RegisterVolume(t.Context(), "replacement", types.VolumeRegistration{Path: path}); err != nil {
 		t.Fatalf("retry did not converge before new request: %v", err)
 	}
@@ -220,7 +313,7 @@ func TestRuntimeRegistrationNormalization(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		spec types.VolumeRegistration
-	}{{"cocoon-reserved", input}, {"bad/name", input}, {"data", types.VolumeRegistration{Path: "relative"}}, {"data", types.VolumeRegistration{Path: "/data", DirectIO: "bad"}}} {
+	}{{"cocoon-reserved", input}, {"bad/name", input}, {"data", types.VolumeRegistration{Path: "relative"}}, {"data", types.VolumeRegistration{Path: "/data", DirectIO: "bad"}}, {"data", types.VolumeRegistration{Path: "/data", Tenants: []string{""}}}, {"data", types.VolumeRegistration{Path: "/data", Tenants: []string{"has space"}}}} {
 		if _, err := normalizeRegistration(tc.name, tc.spec); !errors.Is(err, ErrBadVolume) {
 			t.Fatalf("invalid registration %+v: %v", tc, err)
 		}
@@ -373,9 +466,9 @@ func TestRuntimeCatalogIOLeavesManagerAndTransitionUnlocked(t *testing.T) {
 			var once sync.Once
 			barrier := func() { once.Do(func() { close(entered) }); <-resume }
 			if operation == "stat" {
-				m.volumeStat = func(path string) (os.FileInfo, error) { barrier(); return os.Stat(path) }
+				m.catalog.stat = func(path string) (os.FileInfo, error) { barrier(); return os.Stat(path) }
 			} else {
-				m.catalogReplace = func(path string, raw []byte) error {
+				m.catalog.replace = func(path string, raw []byte) error {
 					if err := utils.WriteFileSync(path, raw, 0o600); err != nil {
 						return err
 					}
@@ -410,5 +503,176 @@ func TestRuntimeCatalogIOLeavesManagerAndTransitionUnlocked(t *testing.T) {
 				t.Fatal(err)
 			}
 		})
+	}
+}
+
+func TestRuntimeCatalogCancellationBeforeAcceptanceDoesNotFenceClaims(t *testing.T) {
+	requireCatalogRoot(t)
+	m := newVolumeManager(t, newFakeEngine(), liveCatalog(t))
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	m.catalog.stat = func(path string) (os.FileInfo, error) { cancel(); return os.Stat(path) }
+	m.catalog.replace = func(string, []byte) error { t.Fatal("canceled proposal attempted a write"); return nil }
+	err := m.RegisterVolume(ctx, "runtime", types.VolumeRegistration{Path: writeVolumeImage(t, "runtime", "bytes")})
+	if !errors.Is(err, context.Canceled) || errors.Is(err, ErrVolumeCatalogUnavailable) {
+		t.Fatalf("cancellation before acceptance: %v", err)
+	}
+	m.retryVolumeCatalog(t.Context())
+	if _, err := os.Stat(filepath.Join(m.dataDir, runtimeVolumesFile)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("canceled proposal left catalog: %v", err)
+	}
+	if _, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Volumes: []types.Volume{{Name: "data"}}}); err != nil {
+		t.Fatalf("canceled registration fenced static claim: %v", err)
+	}
+}
+
+func TestRuntimeCatalogCancellationAfterAcceptancePreservesWriteOutcome(t *testing.T) {
+	requireCatalogRoot(t)
+	for _, uncertain := range []bool{false, true} {
+		t.Run(fmt.Sprint(uncertain), func(t *testing.T) {
+			m := newVolumeManager(t, newFakeEngine(), nil)
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			m.catalog.replace = func(path string, raw []byte) error {
+				cancel()
+				if err := utils.WriteFileSync(path, raw, 0o600); err != nil {
+					return err
+				}
+				if uncertain {
+					return errors.New("directory sync result unavailable")
+				}
+				return nil
+			}
+			spec := types.VolumeRegistration{Path: writeVolumeImage(t, "runtime", "bytes")}
+			err := m.RegisterVolume(ctx, "runtime", spec)
+			if uncertain && !errors.Is(err, ErrVolumeCatalogUnavailable) || !uncertain && err != nil {
+				t.Fatalf("accepted write outcome: %v", err)
+			}
+			restarted := newVolumeManagerAt(t, newFakeEngine(), m.dataDir, nil)
+			if !slices.Equal(restarted.VolumeNames(), []string{"runtime"}) {
+				t.Fatal("accepted replacement was not recoverable")
+			}
+			if uncertain {
+				if _, err := m.resolveVolumes(t.Context(), "", []types.Volume{{Name: "runtime"}}); !errors.Is(err, ErrVolumeCatalogUnavailable) {
+					t.Fatalf("uncertain replacement admitted volume: %v", err)
+				}
+				m.catalog.replace = nil
+				if err := m.RegisterVolume(t.Context(), "runtime", spec); err != nil {
+					t.Fatalf("retry canceled request: %v", err)
+				}
+			}
+			if _, err := m.resolveVolumes(t.Context(), "", []types.Volume{{Name: "runtime"}}); err != nil {
+				t.Fatalf("completed replacement unavailable: %v", err)
+			}
+		})
+	}
+}
+
+func TestRuntimeCatalogPendingWriteSurvivesLaterPreflightRefusal(t *testing.T) {
+	requireCatalogRoot(t)
+	m := newVolumeManager(t, newFakeEngine(), liveCatalog(t))
+	m.catalog.replace = func(path string, raw []byte) error {
+		if err := utils.WriteFileSync(path, raw, 0o600); err != nil {
+			return err
+		}
+		return errors.New("directory sync result unavailable")
+	}
+	spec := types.VolumeRegistration{Path: writeVolumeImage(t, "runtime", "bytes")}
+	if err := m.RegisterVolume(t.Context(), "runtime", spec); !errors.Is(err, ErrVolumeCatalogUnavailable) {
+		t.Fatalf("initial uncertainty: %v", err)
+	}
+	m.catalog.replace = nil
+	record := filepath.Join(m.dataDir, runtimeVolumesFile)
+	if err := os.Chmod(record, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.UnregisterVolume(t.Context(), "runtime"); !errors.Is(err, ErrVolumeCatalogUnavailable) {
+		t.Fatalf("later invalid metadata cleared uncertainty: %v", err)
+	}
+	m.retryVolumeCatalog(t.Context())
+	if _, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Volumes: []types.Volume{{Name: "data"}}}); !errors.Is(err, ErrVolumeCatalogUnavailable) {
+		t.Fatalf("unconfirmed replacement lost fence: %v", err)
+	}
+	if err := os.Chmod(record, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if err := m.UnregisterVolume(ctx, "runtime"); !errors.Is(err, ErrVolumeCatalogUnavailable) {
+		t.Fatalf("canceled retry cleared uncertainty: %v", err)
+	}
+	m.retryVolumeCatalog(t.Context())
+	if !slices.Contains(m.VolumeNames(), "runtime") {
+		t.Fatal("retry lost original accepted registration")
+	}
+	if _, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Volumes: []types.Volume{{Name: "data"}}}); err != nil {
+		t.Fatalf("repair did not restore static admission: %v", err)
+	}
+}
+
+func TestResolvedCatalogGenerationChangesOnlyForReusedName(t *testing.T) {
+	requireCatalogRoot(t)
+	m := newVolumeManager(t, newFakeEngine(), nil)
+	spec := types.VolumeRegistration{Path: writeVolumeImage(t, "runtime", "bytes")}
+	if err := m.RegisterVolume(t.Context(), "runtime", spec); err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := m.resolveVolumes(t.Context(), "", []types.Volume{{Name: "runtime"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = m.RegisterVolume(t.Context(), "other", types.VolumeRegistration{Path: writeVolumeImage(t, "other", "bytes")}); err != nil {
+		t.Fatal(err)
+	}
+	holds, err := m.admitVolumes("", resolved)
+	if err != nil {
+		t.Fatalf("unrelated registration invalidated resolution: %v", err)
+	}
+	m.unreserveVolumes(holds)
+	if err := m.UnregisterVolume(t.Context(), "runtime"); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.RegisterVolume(t.Context(), "runtime", spec); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.admitVolumes("", resolved); !errors.Is(err, ErrVolumeUnavailable) {
+		t.Fatalf("same-file reuse admitted stale resolution: %v", err)
+	}
+}
+
+func TestRuntimeCatalogGenerationExhaustionDoesNotWrite(t *testing.T) {
+	requireCatalogRoot(t)
+	m := newVolumeManager(t, newFakeEngine(), liveCatalog(t))
+	m.catalog.generation = math.MaxUint64
+	m.catalog.replace = func(string, []byte) error { t.Fatal("exhausted generation attempted write"); return nil }
+	if err := m.RegisterVolume(t.Context(), "runtime", types.VolumeRegistration{Path: writeVolumeImage(t, "runtime", "bytes")}); !errors.Is(err, ErrVolumeRegistrationConflict) {
+		t.Fatalf("generation exhaustion: %v", err)
+	}
+	m.retryVolumeCatalog(t.Context())
+	if _, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Volumes: []types.Volume{{Name: "data"}}}); err != nil {
+		t.Fatalf("exhaustion fenced existing registration: %v", err)
+	}
+}
+
+func TestRuntimeCatalogIgnoresAbandonedTemporaryFiles(t *testing.T) {
+	requireCatalogRoot(t)
+	m := newVolumeManager(t, newFakeEngine(), nil)
+	path := writeVolumeImage(t, "runtime", "bytes")
+	raw := fmt.Sprintf(`{"version":1,"volumes":{"abandoned":{"path":%q}}}`, path)
+	tmp := filepath.Join(m.dataDir, runtimeVolumesFile+".interrupted.tmp")
+	if err := os.WriteFile(tmp, []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := newVolumeManagerAt(t, newFakeEngine(), m.dataDir, nil).VolumeNames(); len(got) != 0 {
+		t.Fatalf("temporary record promoted without canonical record: %v", got)
+	}
+	if err := m.RegisterVolume(t.Context(), "runtime", types.VolumeRegistration{Path: path}); err != nil {
+		t.Fatal(err)
+	}
+	if got := newVolumeManagerAt(t, newFakeEngine(), m.dataDir, nil).VolumeNames(); !slices.Equal(got, []string{"runtime"}) {
+		t.Fatalf("temporary record overrode canonical record: %v", got)
+	}
+	if got, err := os.ReadFile(tmp); err != nil || string(got) != raw {
+		t.Fatalf("abandoned evidence changed: %q %v", got, err)
 	}
 }

@@ -158,7 +158,7 @@ func (m *Manager) sweepStaleVMs(ctx context.Context, live map[string]types.VMRec
 func (m *Manager) removeStaleVM(ctx context.Context, name string, rec types.VMRecord) bool {
 	logger := log.WithFunc("pool.removeStaleVM")
 	m.mu.Lock()
-	m.unknownVolumes++
+	m.catalog.unknown++
 	m.mu.Unlock()
 	td := volumeTeardown{unknown: true}
 	if rec.State == vmStateCreating {
@@ -210,7 +210,7 @@ func (m *Manager) resolveStaleVolumes(ctx context.Context, name string, td volum
 	}
 	m.mu.Lock()
 	m.adoptVolumes(holds)
-	m.unknownVolumes--
+	m.catalog.unknown--
 	m.mu.Unlock()
 	td.unknown, td.holds = false, holds
 	return td

@@ -67,6 +67,15 @@ jobs:
       - name: Test
         run: make go-test
 
+      - name: Test runtime catalog as root
+        working-directory: sandboxd
+        shell: bash
+        run: |
+          GOWORK=off go test -race -c -o "$RUNNER_TEMP/catalog.test" ./pool
+          sudo "$RUNNER_TEMP/catalog.test" -test.count=1 -test.v -test.run 'Test(RuntimeCatalog|RuntimeRegistration|ResolvedCatalog|IncompleteStaleInventory|RemovedVMKeepsVolume|DispatchedCleanup|UnknownStaleVolumes)' | tee "$RUNNER_TEMP/catalog-test.log"
+          grep -q '^--- PASS: TestRuntimeCatalogPersistsNormalizedSemantics ' "$RUNNER_TEMP/catalog-test.log"
+          ! grep -- '--- SKIP' "$RUNNER_TEMP/catalog-test.log"
+
       - name: Test the PostgreSQL meta store
         working-directory: sandboxd
         shell: bash

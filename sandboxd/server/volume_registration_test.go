@@ -62,7 +62,7 @@ func TestVolumeRegistrationRoutesRequireRoot(t *testing.T) {
 
 func TestVolumeRegistrationRequiresConfiguredTokenBeforeReadingBody(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "data.img")
-	if err := os.WriteFile(path, []byte("existing backing"), 0600); err != nil {
+	if err := os.WriteFile(path, []byte("existing backing"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	for _, method := range []string{http.MethodPut, http.MethodDelete} {
@@ -213,6 +213,7 @@ func TestVolumeRegistrationRoutesMapSafeErrors(t *testing.T) {
 			{"invalid registration", fmt.Errorf("%w: invalid directio", pool.ErrBadVolume), http.StatusBadRequest},
 			{"binding conflict", fmt.Errorf("%w: /private/data.img", pool.ErrVolumeRegistrationConflict), http.StatusConflict},
 			{"OS root required", pool.ErrVolumeCatalogReadOnly, http.StatusConflict},
+			{"invalid catalog destination", fmt.Errorf("%w: /private/runtime-volumes.json", pool.ErrVolumeCatalogInvalid), http.StatusConflict},
 			{"catalog unavailable", fmt.Errorf("%w: sync /private/runtime-volumes.json", pool.ErrVolumeCatalogUnavailable), http.StatusServiceUnavailable},
 			{"uncertain cancellation", fmt.Errorf("%w: %w", pool.ErrVolumeCatalogUnavailable, context.Canceled), http.StatusServiceUnavailable},
 			{"uncertain timeout", fmt.Errorf("%w: %w", pool.ErrVolumeCatalogUnavailable, context.DeadlineExceeded), http.StatusServiceUnavailable},

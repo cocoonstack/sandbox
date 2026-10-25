@@ -12,6 +12,7 @@ import (
 	"testing/synctest"
 	"time"
 
+	"github.com/cocoonstack/sandbox/sandboxd/config"
 	"github.com/cocoonstack/sandbox/sandboxd/engine"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
@@ -366,4 +367,119 @@ func TestCanceledRemovalDispatchKeepsUnknownFenceOwned(t *testing.T) {
 			t.Fatalf("canceled dispatch stranded unknown fence: %v", err)
 		}
 	})
+}
+
+func TestWarmAttachBeforeFinalizeNeedsUnknownFenceAfterRestart(t *testing.T) {
+	base := newFakeEngine()
+	name := "sbx-warm-unfinalized"
+	base.vms[name] = "/vsock/warm"
+	base.diskAttachErrFor = "broken"
+	base.removeErrFor = name
+	rendezvousAttaches(base, 2)
+	catalog := []config.VolumeSpec{
+		{Name: "data", Path: writeVolumeImage(t, "warm-data", "data"), Writable: true},
+		{Name: "broken", Path: writeVolumeImage(t, "warm-broken", "broken")},
+	}
+	dir := t.TempDir()
+	m := newVolumePoolManager(t, base, dir, catalog)
+	m.eng = &emptyWarmInventoryEngine{fakeEngine: base}
+	warm := &types.Sandbox{VMName: name, Key: testKey, VsockSocket: "/vsock/warm"}
+	m.pools[testKey].warm = append(m.pools[testKey].warm, warm)
+	_, err := m.ClaimWarm(t.Context(), testKey, ClaimOptions{Volumes: []types.Volume{
+		{Name: "data", Mode: types.VolumeModeRW, AttachOnly: true},
+		{Name: "broken", AttachOnly: true},
+	}})
+	if err == nil {
+		t.Fatal("expected attach failure before finalization")
+	}
+	if warm.ID != "" {
+		t.Fatal("claim unexpectedly finalized")
+	}
+	base.mu.Lock()
+	attached := slices.Clone(base.disks[name])
+	base.attachRendezvous = nil
+	base.mu.Unlock()
+	if !slices.ContainsFunc(attached, func(d types.VMDisk) bool { return d.Name == "data" && !d.ReadOnly }) {
+		t.Fatalf("warm VM has no attached writer: %+v", attached)
+	}
+	claims, err := newClaimStore(dir, false).load()
+	if err != nil || len(claims) != 0 {
+		t.Fatalf("pre-finalize journal: %+v, %v", claims, err)
+	}
+	restarted := newVolumeManagerAt(t, base, dir, catalog)
+	restarted.eng = &emptyWarmInventoryEngine{fakeEngine: base}
+	if err := restarted.Reconcile(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := restarted.ClaimProvision(t.Context(), testKey, ClaimOptions{Volumes: []types.Volume{{Name: "data", Mode: types.VolumeModeRW}}}); !errors.Is(err, ErrVolumeCatalogUnavailable) {
+		t.Fatalf("ambiguous warm survivor admitted competing writer: %v", err)
+	}
+	base.removeErrFor = ""
+	restarted.retryRemovals(t.Context()).Wait()
+	if _, err := restarted.ClaimProvision(t.Context(), testKey, ClaimOptions{Volumes: []types.Volume{{Name: "data", Mode: types.VolumeModeRW}}}); err != nil {
+		t.Fatalf("confirmed removal failed to clear fence: %v", err)
+	}
+}
+
+type emptyWarmInventoryEngine struct{ *fakeEngine }
+
+func (e *emptyWarmInventoryEngine) Inspect(ctx context.Context, name string) (types.VMRecord, bool, error) {
+	rec, present, err := e.fakeEngine.Inspect(ctx, name)
+	rec.AttachedDevices.Disks = nil
+	return rec, present, err
+}
+
+func (e *emptyWarmInventoryEngine) DiskAttach(ctx context.Context, name string, spec engine.VolumeSpec) error {
+	if err := e.fakeEngine.DiskAttach(ctx, name, spec); err != nil {
+		return err
+	}
+	e.mu.Lock()
+	if e.disks == nil {
+		e.disks = map[string][]types.VMDisk{}
+	}
+	e.disks[name] = append(e.disks[name], types.VMDisk{Name: spec.Name, ReadOnly: !spec.RW})
+	e.mu.Unlock()
+	return nil
+}
+
+func TestArchivedReleaseWithUnvalidatedVolumeRunHasNoCleanupHolds(t *testing.T) {
+	base := newFakeEngine()
+	m := newTestManager(t, base, archivePool(3600))
+	sb := mustClaim(t, m, testKey)
+	if err := m.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.archive(t.Context(), sb); err != nil {
+		t.Fatal(err)
+	}
+	if sb.VMName != "" {
+		t.Fatalf("archived VM name = %q", sb.VMName)
+	}
+	ctx, run, err := m.beginVolumeRun(t.Context(), sb)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := m.checkVolumeRun(ctx, sb, run); !errors.Is(err, ErrArchived) {
+		t.Fatalf("archived mutation validation: %v", err)
+	}
+	td := m.quiesceVolumes(t.Context(), sb)
+	if td.done == nil || len(td.holds) != 0 || len(td.clears) != 0 || td.unknown {
+		t.Fatalf("archived teardown has cleanup obligations: %+v", td)
+	}
+	if m.finishVolumeTeardown(t.Context(), td) {
+		t.Fatal("open volume run unexpectedly completed")
+	}
+	if err := m.Release(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
+		t.Fatal(err)
+	}
+	m.finishVolumeRun(sb, run)
+	if len(m.pendingRemovals) != 0 {
+		t.Fatalf("empty teardown enqueued removal: %+v", m.pendingRemovals)
+	}
+	if slices.Contains(base.removedNames(), "") {
+		t.Fatal("release removed an empty VM name")
+	}
+	if len(m.store.recoveryVolumes()) != 0 {
+		t.Fatal("release retained archived journal references")
+	}
 }

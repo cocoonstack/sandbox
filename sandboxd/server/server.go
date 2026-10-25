@@ -49,6 +49,7 @@ var poolErrHTTP = []struct {
 	{pool.ErrBadVolume, http.StatusBadRequest, ""},
 	{pool.ErrVolumeRegistrationConflict, http.StatusConflict, pool.ErrVolumeRegistrationConflict.Error()},
 	{pool.ErrVolumeCatalogReadOnly, http.StatusConflict, pool.ErrVolumeCatalogReadOnly.Error()},
+	{pool.ErrVolumeCatalogInvalid, http.StatusConflict, pool.ErrVolumeCatalogInvalid.Error()},
 	{pool.ErrVolumeCatalogUnavailable, http.StatusServiceUnavailable, "volume catalog unavailable; retry"},
 	{pool.ErrBadName, http.StatusBadRequest, ""},
 	{pool.ErrBadCount, http.StatusBadRequest, ""},

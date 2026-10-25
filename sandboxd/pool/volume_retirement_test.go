@@ -258,9 +258,9 @@ func TestRecoveryOnlyRetryPreservesHeldRepairAuthorization(t *testing.T) {
 		t.Fatal(err)
 	}
 	m.mu.Lock()
-	entry := *m.volumes["data"]
+	entry := *m.catalog.entries["data"]
 	entry.tenants = []string{"different-tenant"}
-	m.volumes["data"] = &entry
+	m.catalog.entries["data"] = &entry
 	m.mu.Unlock()
 	if err := os.Remove(tmp); err != nil {
 		t.Fatal(err)
@@ -273,5 +273,46 @@ func TestRecoveryOnlyRetryPreservesHeldRepairAuthorization(t *testing.T) {
 	}
 	if _, err := m.PatchVolumes(t.Context(), sb.ID, "", types.VolumePatch{Add: []types.Volume{{Name: "other"}}}); !errors.Is(err, ErrTenantRemoved) {
 		t.Fatalf("repair exemption admitted unrelated addition: %v", err)
+	}
+}
+
+func TestClaimSnapshotAcknowledgesCapturedRowsBeforeNewerReplacement(t *testing.T) {
+	s := newClaimStore(t.TempDir(), false)
+	sb := &types.Sandbox{ID: "owner", Volumes: []types.Volume{{Name: "data"}}}
+	old := s.set(sb)
+	entered, resume := make(chan struct{}), make(chan struct{})
+	s.replaceFile = func(raw []byte) error { close(entered); <-resume; return s.replace(raw) }
+	done := make(chan error, 1)
+	go func() { done <- s.commit(old) }()
+	<-entered
+	newer := s.del(sb.ID)
+	close(resume)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if !s.pending(newer) {
+		t.Fatal("captured snapshot acknowledged newer deletion")
+	}
+	if refs := s.recoveryVolumes()[sb.ID]; len(refs) != 1 || refs[0].Name != "data" {
+		t.Fatalf("captured row not acknowledged: %+v", refs)
+	}
+	persisted, err := newClaimStore(filepath.Dir(s.path), false).load()
+	if err != nil || persisted[sb.ID] == nil {
+		t.Fatalf("captured disk snapshot: %+v, %v", persisted, err)
+	}
+	s.replaceFile = nil
+	if err = s.commit(newer); err != nil {
+		t.Fatal(err)
+	}
+	if len(s.recoveryVolumes()) != 0 {
+		t.Fatal("empty replacement retained old reference")
+	}
+	s.replaceFile = func([]byte) error { t.Fatal("old token attempted another replacement"); return nil }
+	if err = s.commit(old); err != nil {
+		t.Fatal(err)
+	}
+	persisted, err = newClaimStore(filepath.Dir(s.path), false).load()
+	if err != nil || len(persisted) != 0 {
+		t.Fatalf("old token resurrected snapshot: %+v, %v", persisted, err)
 	}
 }

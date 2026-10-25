@@ -471,3 +471,16 @@ func writeConfig(t *testing.T, body string) string {
 	}
 	return path
 }
+
+func TestValidateVolumeCatalogTenantNames(t *testing.T) {
+	for _, tenant := range []string{"", "has space", "_leading", strings.Repeat("a", 64)} {
+		spec := VolumeSpec{Name: "data", Path: "/images/data", DirectIO: types.DirectIOOff, Tenants: []string{tenant}}
+		if err := ValidateVolumeCatalog([]VolumeSpec{spec}); err == nil {
+			t.Errorf("invalid tenant %q accepted", tenant)
+		}
+	}
+	spec := VolumeSpec{Name: "data", Path: "/images/data", DirectIO: types.DirectIOOff, Tenants: []string{"future-tenant", "team/project:v1"}}
+	if err := ValidateVolumeCatalog([]VolumeSpec{spec}); err != nil {
+		t.Fatalf("syntactically valid future tenant rejected: %v", err)
+	}
+}

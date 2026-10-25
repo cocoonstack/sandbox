@@ -96,12 +96,18 @@ The volume catalog is an operator-owned data boundary. A volume name and its
 access list must mean the same thing fleet-wide, although membership is
 node-local. An empty entry `tenants` list permits every authenticated scope; a
 nonempty list permits only those named tenants, while the root token always
-has access. Config load rejects an access-list name that is not a configured
-tenant. Claim lookup returns byte-identical errors for an unknown and a
-forbidden name, and catalog discovery filters before replying, so a tenant
+has access. Access-list names must use valid tenant name syntax. A name that
+does not yet identify a tenant grants no access until that tenant exists.
+Claim lookup returns byte-identical errors for an unknown and a forbidden name, and catalog discovery filters before replying, so a tenant
 cannot enumerate restricted entries by probing. Gossip carries names only.
 Neither gossip, discovery, persisted claims, usage events, nor the sandbox index
 exposes host image paths or access lists.
+
+Runtime registration and unregistration require a configured root `api_token`;
+these endpoints return 403 when the token is unset. The daemon must also run
+as OS root to change the root-owned registration file. Runtime registration
+accepts existing regular files, including symlinks to regular files. Operators
+remain responsible for selecting backing paths and coordinating aliases.
 
 Read-only is integrity protection for the shared image, not confidentiality.
 Mounting a dataset into an egress-lane sandbox gives that sandbox an export path

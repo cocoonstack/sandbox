@@ -257,9 +257,9 @@ entry's response is byte-identical to v1.
 
 ## PUT /v1/volumes/{name}
 
-Auth: root-only node API token. An empty configured `api_token` preserves the
-existing open-root mode. A tenant token returns 403 when authentication is
-enabled. Sandbox, unknown, and missing tokens return 401.
+Auth: the configured root node API token. With no configured `api_token`,
+registration and unregistration return 403. A tenant token returns 403.
+Sandbox, unknown, and missing tokens return 401 when `api_token` is configured.
 
 Registers an existing backing file on this node. The URL supplies the name;
 the body has no `name` field. Unknown fields, duplicate fields, and trailing
@@ -272,21 +272,37 @@ JSON return 400.
 
 - `name` matches `[a-z][a-z0-9_-]{0,19}` and cannot start with `cocoon-`.
 - `path` uses the same absolute-path validation as static volume config.
+  Registration also requires an existing regular file. A symlink to a regular
+  file is allowed; directories and device files return 400.
 - `directio` is `on`, `off`, or `auto`, and defaults to `off`.
 - `writable` defaults to `false` and controls writable claim admission.
 - `tenants` limits use to the named tenants. Omitted or empty permits all tenants.
+  Names use the tenant API name syntax. A valid name may be registered before
+  that tenant exists; it grants no access until the tenant is created.
 
 Success is 204 with an empty body. Repeating the same name, cleaned path, and
 normalized registration fields succeeds. A different binding or different
 registration fields return 409. Static and runtime registrations cannot share
 a name or a cleaned backing path. Invalid registration fields return 400.
-Unresolved catalog persistence returns 503 with `Retry-After`; retry the request.
+Invalid catalog directory or file ownership, permissions, or type returns 409
+without `Retry-After`, before accepting a new write. This refusal does not block
+claims using the existing catalog. The storage configuration must be repaired
+before that mutation can succeed.
+
+An uncertain write returns 503 with `Retry-After`. The requested registration
+may still take effect through background retry or a later PUT or DELETE,
+including a request for another name. A 503 can also reject a request before
+acceptance, so it does not promise that the request will take effect. After
+repairing storage failures, retry the exact request to establish completion.
+Cancellation is not a rollback once a write has been accepted.
 GET retains its existing projection without host paths or tenant access lists.
 Registration does not expand live mutation beyond mounted read-only volumes.
 
 Only registration metadata is persisted locally in
 `data_dir/runtime-volumes.json`, which loads before claim recovery. The record
-is root-owned with mode 0600, and its directory must protect the record.
+is a root-owned regular file with mode 0600. The data directory and every
+ancestor must be root-owned directories, not symlinks. Group-writable or
+world-writable directories must have the sticky bit set.
 Runtime mutations require sandboxd to run as OS root. The backing file does
 not require root ownership. Registration creates, grows, and deletes no disks.
 An OS-nonroot daemon refuses runtime mutations with 409 and no `Retry-After`.
@@ -295,6 +311,10 @@ backing file keeps its registration and refuses new attachment.
 Catalog replacement and synchronization are independent of `sync_claims`, which
 controls claim snapshot synchronization. Process-restart checks do not prove
 power-loss recovery. The catalog is node-local with one sandboxd writer.
+Startup reads only `runtime-volumes.json`. Crash leftovers named
+`runtime-volumes.json.*.tmp` are neither loaded nor promoted. An operator can
+remove those leftovers after stopping sandboxd and preserving any needed
+evidence.
 
 ## DELETE /v1/volumes/{name}
 
@@ -303,8 +323,10 @@ never deletes or changes the backing file. Success, including an absent,
 unreferenced runtime name, is 204 with an empty body. Static registrations and
 names referenced by a claim, an in-flight operation, cleanup, or an
 unacknowledged recovery snapshot return 409. Catalog persistence uncertainty
-returns 503 with `Retry-After`; retry the request. An empty GET volume view alone
-does not establish that a recovery reference has retired.
+returns 503 with `Retry-After` and has the same asynchronous completion
+semantics as PUT. A failed DELETE may therefore remove the registration later.
+An empty GET volume view alone does not establish that a recovery reference
+has retired.
 
 An external controller owns quiescence and guest unmount before detach. It
 confirms successful detach and recovery bookkeeping before hibernation, and
@@ -322,8 +344,11 @@ cleanup retries continue. Inspect success alone does not prove a complete disk
 inventory. A present VM with omitted disks, or an active creating owner, retains
 that fence until a complete running inventory or confirmed removal resolves it.
 An empty inventory is indistinguishable from an omitted one and stays fenced.
-Volume-free claims continue to work. Path uniqueness uses cleaned path strings;
-the operator coordinates symlink and hardlink aliases and cross-node ownership.
+A warm VM name is not evidence that no volume is attached; attachment can
+succeed before claim finalization fails. Known inventories keep holds on their
+reported names. Volume-free claims continue to work. Path uniqueness uses
+cleaned path strings. The operator coordinates symlink and hardlink aliases
+and cross-node ownership.
 
 ## GET /v1/sandboxes/{id}/volumes
 
