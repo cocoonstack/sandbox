@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/json/v2"
 	"errors"
@@ -8,6 +9,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strconv"
 	"strings"
@@ -29,8 +32,8 @@ func TestVolumeRegistrationRoutesRequireRoot(t *testing.T) {
 			{"sandbox", "root", "sandbox-token", http.StatusUnauthorized},
 			{"unknown", "root", "unknown", http.StatusUnauthorized},
 			{"missing", "root", "", http.StatusUnauthorized},
-			{"open without token", "", "", http.StatusNoContent},
-			{"open with tenant token", "", "acme-token", http.StatusNoContent},
+			{"open without token", "", "", http.StatusForbidden},
+			{"open with tenant token", "", "acme-token", http.StatusForbidden},
 		} {
 			t.Run(method+"/"+tt.name, func(t *testing.T) {
 				called := false
@@ -51,6 +54,39 @@ func TestVolumeRegistrationRoutesRequireRoot(t *testing.T) {
 				}
 				if tt.code == http.StatusNoContent && len(got) != 0 {
 					t.Fatalf("204 response body = %q", got)
+				}
+			})
+		}
+	}
+}
+
+func TestVolumeRegistrationRequiresConfiguredTokenBeforeReadingBody(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "data.img")
+	if err := os.WriteFile(path, []byte("existing backing"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, method := range []string{http.MethodPut, http.MethodDelete} {
+		for _, token := range []string{"", "acme-token", "unknown"} {
+			t.Run(method+"/"+token, func(t *testing.T) {
+				called := false
+				mgr := &fakeManager{
+					registerVolume:   func(context.Context, string, types.VolumeRegistration) error { called = true; return nil },
+					unregisterVolume: func(context.Context, string) error { called = true; return nil },
+				}
+				handler := New("", "", mgr, nil, nil, nil, nil, nil).Handler()
+				body := bytes.NewBufferString(fmt.Sprintf(`{"path":%q,"writable":true}`, path))
+				bodyLen := body.Len()
+				req := httptest.NewRequest(method, "/v1/volumes/data", body)
+				if token != "" {
+					req.Header.Set("Authorization", "Bearer "+token)
+				}
+				w := httptest.NewRecorder()
+				handler.ServeHTTP(w, req)
+				if w.Code != http.StatusForbidden || called || body.Len() != bodyLen {
+					t.Fatalf("status=%d called=%v unread=%d/%d, want 403 without reading body or calling manager", w.Code, called, body.Len(), bodyLen)
+				}
+				if w.Header().Get("Retry-After") != "" {
+					t.Fatalf("permanent refusal advertises retry: %v", w.Header())
 				}
 			})
 		}
@@ -177,8 +213,11 @@ func TestVolumeRegistrationRoutesMapSafeErrors(t *testing.T) {
 			{"invalid registration", fmt.Errorf("%w: invalid directio", pool.ErrBadVolume), http.StatusBadRequest},
 			{"binding conflict", fmt.Errorf("%w: /private/data.img", pool.ErrVolumeRegistrationConflict), http.StatusConflict},
 			{"OS root required", pool.ErrVolumeCatalogReadOnly, http.StatusConflict},
-			{"busy", fmt.Errorf("%w: /private/data.img", pool.ErrVolumeBusy), http.StatusConflict},
 			{"catalog unavailable", fmt.Errorf("%w: sync /private/runtime-volumes.json", pool.ErrVolumeCatalogUnavailable), http.StatusServiceUnavailable},
+			{"uncertain cancellation", fmt.Errorf("%w: %w", pool.ErrVolumeCatalogUnavailable, context.Canceled), http.StatusServiceUnavailable},
+			{"uncertain timeout", fmt.Errorf("%w: %w", pool.ErrVolumeCatalogUnavailable, context.DeadlineExceeded), http.StatusServiceUnavailable},
+			{"timeout", fmt.Errorf("register: %w", context.DeadlineExceeded), http.StatusGatewayTimeout},
+			{"canceled", fmt.Errorf("register: %w", context.Canceled), http.StatusRequestTimeout},
 			{"unexpected failure", errors.New("open /private/data.img: permission denied"), http.StatusInternalServerError},
 		} {
 			t.Run(method+"/"+tt.name, func(t *testing.T) {
