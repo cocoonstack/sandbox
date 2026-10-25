@@ -525,27 +525,19 @@ def test_claim_and_summary_response_inference_copies_wire_data(node):
 
 
 @pytest.mark.parametrize(
-    ("path", "payload", "expected"),
+    ("path", "payload"),
     [
-        ("/v1/checkpoints/ck_1/claim", {"volumes": [{"name": "raw"}]}, True),
-        ("/v1/sandboxes/sb_1/fork", {"children": [{"volumes": [{"name": "raw"}]}]}, True),
-        ("/v1/volumes", {"volumes": [{"name": "catalog"}]}, False),
-        ("/v1/info", {"metadata": {"volumes": [{"name": "opaque"}]}}, False),
+        ("/v1/checkpoints/ck_1/claim", {"volumes": [{"name": "raw"}]}),
+        ("/v1/sandboxes/sb_1/fork", {"children": [{"volumes": [{"name": "raw"}]}]}),
+        ("/v1/volumes", {"volumes": [{"name": "catalog"}]}),
+        ("/v1/info", {"metadata": {"volumes": [{"name": "opaque"}]}}),
     ],
 )
-def test_response_decoder_only_interprets_volume_bearing_routes(spawn_node, path, payload, expected):
+def test_transport_keeps_json_uninterpreted(spawn_node, path, payload):
     addr = spawn_node({("GET", path): lambda body, request_path: (200, payload)})
     reply = Client(addr)._request(addr, "GET", path, None, "inspect")
-    if path.endswith("/claim"):
-        entry = reply["volumes"][0]
-    elif path.endswith("/fork"):
-        entry = reply["children"][0]["volumes"][0]
-    elif path == "/v1/volumes":
-        entry = reply["volumes"][0]
-    else:
-        entry = reply["metadata"]["volumes"][0]
-    assert (entry.get("attach_only") is True) is expected
-    assert "attach_only" not in repr(payload)
+    assert reply == payload
+    assert "attach_only" not in repr(reply)
 
 
 def test_claim_response_decoding_does_not_depend_on_route(spawn_node):
@@ -574,3 +566,20 @@ def test_malformed_error_details_do_not_hide_http_error(spawn_node, path, fields
     assert caught.value.status == 503
     assert caught.value.message == "storage unavailable"
     assert caught.value.reply == payload
+
+
+@pytest.mark.parametrize("operation", ["checkpoint", "fork"])
+def test_sandbox_handle_decodes_volume_responses(spawn_node, operation):
+    payload = {"id": "sb_2", "token": "tok", "volumes": [{"name": "raw"}, {"name": "mounted", "mount": "/data"}]}
+    if operation == "checkpoint":
+        path = "/v1/checkpoints/ck_1/claim"
+        response = payload
+    else:
+        path = "/v1/sandboxes/sb_1/fork"
+        response = {"children": [payload]}
+    addr = spawn_node({("POST", path): lambda body, request_path: (200, response)})
+    client = Client(addr)
+    sb = client.checkpoint("ck_1").new() if operation == "checkpoint" else sandbox_at(addr).fork(1)[0]
+    assert sb.volumes == [{"name": "raw", "attach_only": True}, {"name": "mounted", "mount": "/data"}]
+    assert sb.volumes_want == sb.volumes
+    assert "attach_only" not in payload["volumes"][0]

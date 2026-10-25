@@ -49,41 +49,25 @@ class SandboxVolumesResponse(_SandboxVolumesResponse, total=False):
 
 def _volume_response(reply: dict[str, Any] | None) -> SandboxVolumesResponse | None:
     if (
-        reply is None
-        or not all(isinstance(reply.get(key), list) for key in ("volumes_want", "volumes", "states"))
+        not isinstance(reply, dict)
+        or not all(
+            isinstance(reply.get(key), list) and all(isinstance(entry, dict) for entry in reply[key])
+            for key in ("volumes_want", "volumes", "states")
+        )
         or not isinstance(reply.get("converging"), bool)
     ):
         return None
-    view = dict(reply)
-    view["volumes_want"] = [dict(volume) for volume in reply["volumes_want"]]
-    view["volumes"] = [dict(volume) for volume in reply["volumes"]]
+    view = _sandbox_response(reply)
     view["states"] = [dict(state) for state in reply["states"]]
     return cast(SandboxVolumesResponse, view)
 
 
-def _normalize_volume_reply(path: str, reply: dict[str, Any]) -> dict[str, Any]:
-    route = path.partition("?")[0].split("/")
-    if route == ["", "v1", "claim"] or (
-        len(route) == 5 and route[1:3] == ["v1", "checkpoints"] and route[4] == "claim"
-    ):
-        _normalize_volume_field(reply, "volumes")
-    elif route == ["", "v1", "sandboxes"]:
-        for row in reply.get("sandboxes") or []:
-            _normalize_volume_field(row, "volumes")
-            _normalize_volume_field(row, "volumes_want")
-    elif len(route) == 5 and route[1:3] == ["v1", "sandboxes"]:
-        if route[4] == "fork":
-            for child in reply.get("children") or []:
-                _normalize_volume_field(child, "volumes")
-        elif route[4] == "volumes":
-            _normalize_volume_field(reply, "volumes")
-            _normalize_volume_field(reply, "volumes_want")
-    return reply
-
-
-def _normalize_volume_field(container: dict[str, Any], key: str) -> None:
-    if isinstance(container.get(key), list):
-        container[key] = _response_volumes(container[key])
+def _sandbox_response(reply: dict[str, Any]) -> dict[str, Any]:
+    view = dict(reply)
+    for key in ("volumes", "volumes_want"):
+        if isinstance(reply.get(key), list):
+            view[key] = _response_volumes(reply[key])
+    return view
 
 
 def _response_volumes(volumes: Iterable[Mapping[str, str | bool] | Volume]) -> list[Volume]:
