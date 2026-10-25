@@ -541,19 +541,18 @@ remain available. The effective pool is the claim's policy source when it has
 one. Changing `replicate_seconds` requires a daemon restart.
 
 A non-replicating pool can still have an existing or pending replica after a
-restart. Live RW additions return 409 until that claim's replicas and recovery
+restart. Live RW additions return 503 with `Retry-After` until that claim's replicas and recovery
 checkpoint references have retired. The background scan retires existing
 replicas; keep the controller's reservation and access gate closed, then retry
-the request. A failed claim write retains the affected checkpoint reference
+the request. When disabling `archive_failover`, follow
+[the registry transition requirements](deploy.md#disabling-archive-failover);
+startup without a registry retires only local replica references, not remote
+claim rows. A failed claim write retains the affected checkpoint reference
 until a successful snapshot acknowledges its removal. Unrelated claims' writes
 and checkpoint references do not refuse this attachment.
 
-Older versions may have already recorded a desired RW target while replication
-was enabled. These targets remain visible after restart and retain their holds.
-They cannot attach while the pool replicates, but callers can remove them or
-release the claim. Cleanup of applied volumes runs before a remaining pending RW
-is refused, so a remove request can complete an RO detach and still return a
-partial 409 for that pending writer. Inspect the returned view before retrying.
+A retry of an admitted desired volume completes that operation without creating
+a new admission. Its volume hold continues to prevent replica publication.
 After a request ends, `converging` is false unless ordinary recovery-reference
 retirement remains active; no background worker attaches the desired disk.
 

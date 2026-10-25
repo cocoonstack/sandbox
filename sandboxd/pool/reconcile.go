@@ -144,7 +144,6 @@ func (m *Manager) retireReplicasWithoutRegistry(claims map[string]*types.Sandbox
 		}
 	}
 	// Without a registry this manager has no node identity for later orphan scans.
-	// Queue cleanup before the last persisted replica reference can disappear.
 	for id, err := range m.markArchiveCks(checkpoints) {
 		return fmt.Errorf("queue replica without registry %s: %w", id, err)
 	}

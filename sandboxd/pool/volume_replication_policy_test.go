@@ -212,7 +212,7 @@ func TestLiveWriterWaitsOnlyForItsOwnCheckpointReferences(t *testing.T) {
 	}
 }
 
-func TestLegacyWriterIntentCanRemoveReadOnlyVolumes(t *testing.T) {
+func TestAdmittedWriterRetryAfterRestartCanRemoveReader(t *testing.T) {
 	eng := newFakeEngine()
 	catalog := liveCatalog(t)
 	m := newVolumeManager(t, eng, catalog)
@@ -220,20 +220,24 @@ func TestLegacyWriterIntentCanRemoveReadOnlyVolumes(t *testing.T) {
 	if _, err := m.SetVolumes(t.Context(), sb.ID, "", []types.Volume{{Name: "data"}}); err != nil {
 		t.Fatal(err)
 	}
-	m.mu.Lock()
-	sb.VolumesWant = append(slices.Clone(sb.Volumes), types.Volume{Name: "other", Mode: types.VolumeModeRW, AttachOnly: true})
-	snap := m.store.set(sb)
-	m.mu.Unlock()
-	if err := m.store.commit(snap); err != nil {
-		t.Fatal(err)
+	eng.liveVolumeHook = func(op string) error {
+		if op == "attach" {
+			return errors.New("injected writable attachment failure")
+		}
+		return nil
 	}
+	writer := types.Volume{Name: "other", Mode: types.VolumeModeRW, AttachOnly: true}
+	view, err := m.PatchVolumes(t.Context(), sb.ID, "", types.VolumePatch{Add: []types.Volume{writer}})
+	if err == nil || len(view.VolumesWant) != 2 || len(view.Volumes) != 1 {
+		t.Fatalf("attachment failure did not retain admitted target: %+v, %v", view, err)
+	}
+	eng.liveVolumeHook = nil
 	c := newReplicaCluster(t)
 	spec := archivePool(keepAnHour)
 	spec.ReplicateSeconds = c.replicate
 	cfg := &config.Config{APIToken: "root", DataDir: m.dataDir, CheckpointDir: c.ckDir, Volumes: catalog, Pools: []config.PoolSpec{spec}, Mesh: &config.MeshConfig{NodeID: "a"}}
 	backends := testBackends(t, cfg)
 	backends.Archives = c.reg
-	var err error
 	m, err = NewManager(t.Context(), cfg, eng, testSecrets(t), backends)
 	if err != nil {
 		t.Fatal(err)
@@ -243,58 +247,13 @@ func TestLegacyWriterIntentCanRemoveReadOnlyVolumes(t *testing.T) {
 		t.Fatal(err)
 	}
 	m.liftFence()
-	got, err := m.PatchVolumes(t.Context(), sb.ID, "", types.VolumePatch{Remove: []string{"data"}})
-	if !errors.Is(err, ErrReplicatingPool) || len(got.Volumes) != 0 || len(got.VolumesWant) != 1 || got.VolumesWant[0].Name != "other" {
-		t.Fatalf("legacy writer blocked reader cleanup: %+v, %v", got, err)
+	view, err = m.PatchVolumes(t.Context(), sb.ID, "", types.VolumePatch{Remove: []string{"data"}})
+	if err != nil || !slices.Equal(view.VolumesWant, []types.Volume{writer}) || !slices.Equal(view.Volumes, []types.Volume{writer}) {
+		t.Fatalf("admitted writer retry prevented reader removal: %+v, %v", view, err)
 	}
-	if got, err = m.SetVolumes(t.Context(), sb.ID, "", nil); err != nil || len(got.VolumesWant) != 0 || len(got.Volumes) != 0 {
-		t.Fatalf("legacy writer cannot be canceled: %+v, %v", got, err)
-	}
-	if volumeHoldersOf(m, "other") != (volumeHolders{}) {
-		t.Fatal("canceled legacy writer retained admission")
-	}
-}
-
-func TestLegacyWriterApplyWaitsForItsRetirementReference(t *testing.T) {
-	m, c := newReplicaVolumeManager(t)
-	sb := mustClaim(t, m, testKey)
-	replicateNow(t, m, sb)
-	writer := []types.Volume{{Name: "data", Mode: types.VolumeModeRW, AttachOnly: true}}
-	m.mu.Lock()
-	sb.VolumesWant = writer
-	snap := m.store.set(sb)
-	m.mu.Unlock()
-	if err := m.store.commit(snap); err != nil {
-		t.Fatal(err)
-	}
-	m = restartReplicaVolumeManager(t, m, c)
-	sb, _ = m.byID(sb.ID)
-	ctx, run, err := m.beginVolumeRun(t.Context(), sb, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer m.finishVolumeRun(sb, run)
-	if err = m.prepareVolumeTarget(ctx, sb, run, writer, nil, nil); err != nil {
-		t.Fatal(err)
-	}
-	before := m.eng.(*fakeEngine).volumeOpsLog()
-	m.store.recommitting.Store(true)
-	m.store.replaceFile = func([]byte) error { return errors.New("injected legacy retirement failure") }
-	m.retireReplica(t.Context(), sb)
-	if sb.HasReplica() || len(m.store.checkpointRefs(sb.ID)) == 0 {
-		t.Fatal("expected only an unacknowledged retirement reference")
-	}
-	if err = m.checkVolumeApply(ctx, sb, run, writer[0]); !errors.Is(err, ErrReplicaPresent) {
-		t.Fatalf("legacy apply ignored its retirement reference: %v", err)
-	}
-	if !slices.Equal(before, m.eng.(*fakeEngine).volumeOpsLog()) {
-		t.Fatal("legacy writer called the device before retirement acknowledgement")
-	}
-	m.store.replaceFile = nil
-	if err = m.store.commit(m.store.mark()); err != nil {
-		t.Fatal(err)
-	}
-	if err = m.checkVolumeApply(ctx, sb, run, writer[0]); err != nil {
-		t.Fatalf("acknowledged legacy retirement blocked apply: %v", err)
+	m.replicateOnce(t.Context())
+	waitFor(t, func() bool { return !m.replicating.Load() })
+	if rec, ok, err := c.reg.Get(t.Context(), sb.ID); err != nil || ok {
+		t.Fatalf("admitted writer acquired a replica row: %+v, exists=%t, %v", rec, ok, err)
 	}
 }

@@ -351,7 +351,6 @@ func (m *Manager) clearArchiveCk(ckID string) error {
 	return err
 }
 
-// deleteArchiveCk queues deletion and reports whether references allowed it to finish.
 func (m *Manager) deleteArchiveCk(ctx context.Context, ckID string) (bool, error) {
 	if err := m.markArchiveCk(ckID); err != nil {
 		return false, fmt.Errorf("track: %w", err)

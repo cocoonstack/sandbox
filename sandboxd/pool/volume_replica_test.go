@@ -159,14 +159,12 @@ func TestReplicaSettledCheckpointCleanupRetriesAfterFailedCommit(t *testing.T) {
 	}
 }
 
-func TestReplicaRecoveryDoesNotRepublishVolumeIntent(t *testing.T) {
+func TestReplicaRecoveryDoesNotRepublishReadOnlyHold(t *testing.T) {
 	m, c := newReplicaVolumeManager(t)
 	sb := mustClaim(t, m, testKey)
 	replicateNow(t, m, sb)
-	// Reconstruct the durable state a pending writer leaves before replica retirement.
-	sb.VolumesWant = []types.Volume{{Name: "data", Mode: types.VolumeModeRW, AttachOnly: true}}
-	if err := m.store.commit(m.store.set(sb)); err != nil {
-		t.Fatal(err)
+	if view, err := m.SetVolumes(t.Context(), sb.ID, "", []types.Volume{{Name: "data"}}); err != nil || len(view.Volumes) != 1 {
+		t.Fatalf("read-only live attachment: %+v, %v", view, err)
 	}
 	if _, err := c.reg.Consume(t.Context(), sb.ID, sb.ArchiveEpoch); err != nil {
 		t.Fatal(err)
@@ -177,7 +175,7 @@ func TestReplicaRecoveryDoesNotRepublishVolumeIntent(t *testing.T) {
 	}
 	m.reconcileOwnRow(t.Context(), rec, time.Now())
 	if rec, ok, err = c.reg.Get(t.Context(), sb.ID); err != nil || !ok || !rec.Consumed {
-		t.Fatalf("recovery republished desired writer: %+v, %t, %v", rec, ok, err)
+		t.Fatalf("recovery republished read-only hold: %+v, %t, %v", rec, ok, err)
 	}
 }
 

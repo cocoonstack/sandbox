@@ -165,7 +165,16 @@ func TestLiveVolumeRoutesReportRefusalsOverRecordedDiagnostics(t *testing.T) {
 			if err := json.UnmarshalRead(resp.Body, &got); err != nil {
 				t.Fatal(err)
 			}
-			if resp.StatusCode != http.StatusConflict || !strings.HasPrefix(got.Error, refusal.Error()) || len(got.States) != 1 || got.States[0].Error != cause {
+			wantStatus := http.StatusConflict
+			if errors.Is(refusal, pool.ErrReplicaPresent) {
+				wantStatus = http.StatusServiceUnavailable
+				if resp.Header.Get("Retry-After") == "" {
+					t.Fatal("temporary replica retirement refusal has no Retry-After")
+				}
+			} else if resp.Header.Get("Retry-After") != "" {
+				t.Fatal("permanent conflict advertises a retry delay")
+			}
+			if resp.StatusCode != wantStatus || !strings.HasPrefix(got.Error, refusal.Error()) || len(got.States) != 1 || got.States[0].Error != cause {
 				t.Fatalf("status=%d view=%+v", resp.StatusCode, got)
 			}
 		})

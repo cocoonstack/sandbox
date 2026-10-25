@@ -151,7 +151,7 @@ func (m *Manager) changeVolumes(ctx context.Context, id, tenant string, change v
 	m.mu.Unlock()
 	for _, v := range pending {
 		failedName = v.Name
-		if err = m.checkVolumeApply(ctx, sb, run, v); err != nil {
+		if err = m.checkVolumeRun(ctx, sb, run); err != nil {
 			return view, err
 		}
 		repair, resolveErr := m.resolveCatalogVolume(ctx, v)
@@ -326,18 +326,6 @@ func (m *Manager) checkLiveAdditions(sb *types.Sandbox, additions []types.Volume
 	return nil
 }
 
-func (m *Manager) checkVolumeApply(ctx context.Context, sb *types.Sandbox, run *volumeRun, v types.Volume) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if err := m.checkVolumeRunLocked(ctx, sb, run); err != nil {
-		return err
-	}
-	if v.RW() {
-		return m.liveWriterError(sb)
-	}
-	return nil
-}
-
 // liveWriterError checks the policy and recoverable replicas of this claim; callers hold m.mu.
 func (m *Manager) liveWriterError(sb *types.Sandbox) error {
 	if m.view.Load().poolReplicate[sb.PolicyKey()] > 0 {
@@ -442,11 +430,6 @@ func (m *Manager) volumeView(sb *types.Sandbox) types.SandboxVolumesResponse {
 			state = types.VolumePending
 		}
 		message := m.volumeErrors[sb][v.Name]
-		if state == types.VolumePending && v.RW() {
-			if err := m.liveWriterError(sb); err != nil {
-				message = err.Error()
-			}
-		}
 		if message == "" && state != types.VolumeAttached && !view.Converging {
 			message = volumeChangeInterrupted
 		}
@@ -466,7 +449,7 @@ func (m *Manager) recordVolumeError(sb *types.Sandbox, run *volumeRun, name stri
 		return
 	}
 	errs := m.volumeErrors[sb]
-	if name != "" && !errors.Is(err, ErrReplicaPresent) && !errors.Is(err, ErrReplicatingPool) {
+	if name != "" {
 		message := volumeChangeFailed
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			message = volumeChangeInterrupted

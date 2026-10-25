@@ -18,8 +18,10 @@ preserve this sleep workflow when archiving is enabled.
 Live RW additions require `replicate_seconds: 0`; a replicating pool returns
 409 without recording the new target or reserving the volume. Changing this
 setting requires a daemon restart. A non-replicating pool may still hold an old
-replica or recovery checkpoint reference. Keep the reservation and access gate
-closed and retry attachment after that claim's retirement has been acknowledged.
+replica or recovery checkpoint reference, which returns 503 with `Retry-After`.
+Keep the reservation and access gate closed and retry attachment after that
+claim's retirement has been acknowledged. When disabling failover, follow
+[the registry transition requirements](deploy.md#disabling-archive-failover).
 A fixed delay does not acknowledge retirement. See
 [the live-volume retirement contract](sandboxd-api.md#partial-failure-and-recovery).
 

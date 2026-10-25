@@ -67,7 +67,7 @@ var poolErrHTTP = []struct {
 	{pool.ErrNoEgressFork, http.StatusConflict, ""},
 	{pool.ErrVolumeCapture, http.StatusConflict, ""},
 	{pool.ErrVolumeBusy, http.StatusConflict, ""},
-	{pool.ErrReplicaPresent, http.StatusConflict, ""},
+	{pool.ErrReplicaPresent, http.StatusServiceUnavailable, ""},
 	{pool.ErrReplicatingPool, http.StatusConflict, ""},
 	{pool.ErrVolumeNeedsRecovery, http.StatusConflict, ""},
 	{pool.ErrArchived, http.StatusConflict, ""},
