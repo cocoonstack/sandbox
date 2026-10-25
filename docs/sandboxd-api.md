@@ -547,9 +547,10 @@ retires existing replicas; keep the controller's reservation and access gate
 closed, then retry the request. A failed claim write retains the affected
 checkpoint reference until a successful snapshot acknowledges its removal.
 Unrelated claims' writes and checkpoint references do not refuse this
-attachment. Without `archive_failover` nothing retires a leftover replica or
-archive intent, so live RW additions on that claim return 409 instead; see
-[disabling archive failover](deploy.md#disabling-archive-failover).
+attachment. Without `archive_failover`, live RW additions return 409 while the
+claim retains replica or archive intent fields. See
+[disabling archive failover](deploy.md#disabling-archive-failover) for transition
+checks, local archive exceptions, and recovery risks.
 
 A retry of an admitted desired volume completes that operation without creating
 a new admission. Its volume hold continues to prevent replica publication.

@@ -169,20 +169,31 @@ fragment the warm pools):
 
 ### Disabling archive failover
 
+Before changing `archive_failover`, verify local claim ownership and the
+corresponding remote rows from a node with registry access.
 Set `replicate_seconds: 0` while `archive_failover` is still enabled, then
 restart, so the replica scan retires existing replicas. Disabling
 `archive_failover` does not consume remote rows or fence other nodes. Drain
 this node's rows from a node that still has the registry, or keep peers that
 run with `archive_failover` from adopting its claims.
 
-Disable `archive_failover` only after those replicas have retired. sandboxd
-does not support running without a registry while claims still carry replica
-or archive state. If it does, live writable volume additions on such a claim
-return 409 until failover is re-enabled or the claim is released, and release
-or expiry leave the replica checkpoint in the checkpoint store. A local archive
-of a claim with a published replica deletes that checkpoint and clears the
-replica, as in earlier releases, so the 409 no longer applies after it wakes.
-A pending replica survives the archive and keeps the 409.
+Disable `archive_failover` only after those replicas have retired. If claims
+still carry `ReplicaCk`, `ReplicaPending`, or `ArchivePending`, startup without
+a registry retains those fields and refuses new live writable volume additions
+with 409 while any of them remain. Release and default destroy-on-expiry leave
+replica checkpoints in the checkpoint store. A successful local archive,
+including archive-on-expiry, clears `ReplicaCk` and `ArchivePending` and queues
+the published replica checkpoint for deletion. It retains `ReplicaPending`,
+which continues to refuse live writable additions after wake. Once the current
+fields clear, recovery checkpoint references can still require temporary 503
+retirement before admission.
+
+Re-enabling `archive_failover` does not guarantee recovery of a retained claim.
+Before re-enabling it, verify that a published replica's row still exists,
+belongs to this node, and can be retired. If the row is absent, was drained, or
+has moved to another owner, choose an explicit recovery procedure before the
+transition. Startup fencing can drop the local claim, and reconciliation can
+remove its VM, losing changes since the last checkpoint.
 
 ### Reading sleeping claims without waking them
 

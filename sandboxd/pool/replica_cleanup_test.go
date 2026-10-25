@@ -12,25 +12,21 @@ import (
 type strandedState struct {
 	name  string
 	setup func(t *testing.T, m *Manager, c *failoverCluster, sb *types.Sandbox) string
-	// wake: the fixture leaves the claim hibernated.
-	wake bool
-	// lifecycle: also check that release and expiry keep the replica checkpoint.
-	lifecycle bool
 }
 
 var strandedStates = []strandedState{
-	{name: "published replica", lifecycle: true, setup: func(t *testing.T, m *Manager, _ *failoverCluster, sb *types.Sandbox) string {
+	{name: "published replica", setup: func(t *testing.T, m *Manager, _ *failoverCluster, sb *types.Sandbox) string {
 		replicateNow(t, m, sb)
 		return sb.ReplicaCk
 	}},
-	{name: "pending replica", lifecycle: true, setup: func(t *testing.T, m *Manager, c *failoverCluster, sb *types.Sandbox) string {
+	{name: "pending replica", setup: func(t *testing.T, m *Manager, c *failoverCluster, sb *types.Sandbox) string {
 		m.archives = &hookRegistry{Registry: c.reg, failPut: true}
 		if err := m.replicate(t.Context(), sb); !errors.Is(err, ErrArchiveStoreDown) {
 			t.Fatal(err)
 		}
 		return sb.ReplicaPending
 	}},
-	{name: "archive intent", wake: true, setup: func(t *testing.T, m *Manager, c *failoverCluster, sb *types.Sandbox) string {
+	{name: "archive intent", setup: func(t *testing.T, m *Manager, c *failoverCluster, sb *types.Sandbox) string {
 		if err := m.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
 			t.Fatal(err)
 		}
@@ -80,10 +76,8 @@ func TestFailoverDisabledKeepsStateAndRefusesLiveWriter(t *testing.T) {
 	for _, state := range strandedStates {
 		t.Run(state.name, func(t *testing.T) {
 			m, sb, _ := restartStranded(t, state)
-			if state.wake {
-				if err := m.Wake(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
-					t.Fatal(err)
-				}
+			if err := m.Wake(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
+				t.Fatal(err)
 			}
 			requireStrandedWriter(t, m, sb)
 		})
@@ -109,9 +103,6 @@ func TestFailoverDisabledExitKeepsReplicaCheckpoint(t *testing.T) {
 		}},
 	}
 	for _, state := range strandedStates {
-		if !state.lifecycle {
-			continue
-		}
 		for _, exit := range exits {
 			t.Run(state.name+"/"+exit.name, func(t *testing.T) {
 				m, sb, ck := restartStranded(t, state)

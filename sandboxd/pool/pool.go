@@ -105,7 +105,7 @@ var (
 
 	ErrReplicaPresent  = errors.New("live writable attachment requires replica and recovery checkpoint retirement")
 	ErrReplicatingPool = errors.New("live writable volumes require a non-replicating pool")
-	ErrReplicaStranded = errors.New("claim keeps replica or archive state that only archive_failover can retire; re-enable it or release the claim")
+	ErrReplicaStranded = errors.New("live writable attachment is blocked by retained replica or archive state with archive_failover disabled")
 
 	// Replaying a journal takes a writable mount, so readers stay out.
 	ErrVolumeNeedsRecovery = errors.New("volume needs recovery by a writable claim")

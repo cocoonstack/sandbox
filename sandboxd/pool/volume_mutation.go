@@ -332,7 +332,6 @@ func (m *Manager) liveWriterError(sb *types.Sandbox) error {
 		return ErrReplicatingPool
 	}
 	if m.archives == nil && (sb.HasReplica() || sb.ArchivePending != "") {
-		// only registry-backed scans retire replicas and archive intents
 		return ErrReplicaStranded
 	}
 	if sb.HasReplica() || len(m.store.checkpointRefs(sb.ID)) > 0 {
