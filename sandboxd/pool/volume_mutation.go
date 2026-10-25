@@ -276,6 +276,11 @@ func (m *Manager) stageVolumeTarget(ctx context.Context, sb *types.Sandbox, run 
 		sb.Transition.Unlock()
 		return claimSnapshot{}, false, ErrVolumeCapture
 	}
+	if sb.HasReplica() && slices.ContainsFunc(additions, types.Volume.RW) {
+		m.mu.Unlock()
+		sb.Transition.Unlock()
+		return claimSnapshot{}, false, fmt.Errorf("%w: writable attachment requires replica retirement", ErrVolumeBusy)
+	}
 	if err := m.reserveResolved(run.access, resolved, sb); err != nil {
 		m.mu.Unlock()
 		sb.Transition.Unlock()

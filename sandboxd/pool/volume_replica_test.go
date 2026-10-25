@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"sync"
 	"testing"
 
 	"github.com/cocoonstack/sandbox/sandboxd/config"
@@ -69,13 +70,7 @@ func TestReplicaPublicationRefusesVolumeAdmittedDuringExport(t *testing.T) {
 	result := make(chan error, 1)
 	go func() { result <- m.replicate(t.Context(), sb) }()
 	ck := <-stalled.published
-	release := func() {
-		select {
-		case <-stalled.release:
-		default:
-			close(stalled.release)
-		}
-	}
+	release := sync.OnceFunc(func() { close(stalled.release) })
 	t.Cleanup(release)
 	writer := []types.Volume{{Name: "data", Mode: types.VolumeModeRW, AttachOnly: true}}
 	view, err := m.SetVolumes(t.Context(), sb.ID, "", writer)
@@ -94,6 +89,42 @@ func TestReplicaPublicationRefusesVolumeAdmittedDuringExport(t *testing.T) {
 	}
 	if err = m.replicate(t.Context(), sb); !errors.Is(err, ErrVolumeCapture) {
 		t.Fatalf("snapshot admission while writer is held: %v", err)
+	}
+}
+
+func TestReplicaCaptureRefusesPendingLiveWriter(t *testing.T) {
+	m, c := newReplicaVolumeManager(t)
+	sb := mustClaim(t, m, testKey)
+	eng := m.eng.(*fakeEngine)
+	entered, resume := make(chan struct{}), make(chan struct{})
+	release := sync.OnceFunc(func() { close(resume) })
+	t.Cleanup(release)
+	eng.liveVolumeHook = func(verb string) error {
+		if verb == "attach" {
+			close(entered)
+			<-resume
+		}
+		return nil
+	}
+	result := make(chan error, 1)
+	go func() {
+		_, err := m.SetVolumes(t.Context(), sb.ID, "", []types.Volume{{Name: "data", Mode: types.VolumeModeRW}})
+		result <- err
+	}()
+	<-entered
+	view, err := m.GetVolumes(sb.ID, "")
+	if err != nil || len(view.Volumes) != 0 || len(view.VolumesWant) != 1 || !view.Converging {
+		t.Fatalf("writer did not reach pending attachment: %+v, %v", view, err)
+	}
+	if err = m.replicate(t.Context(), sb); !errors.Is(err, ErrVolumeCapture) {
+		t.Fatalf("captured pending writer: %v", err)
+	}
+	if _, ok, getErr := c.reg.Get(t.Context(), sb.ID); getErr != nil || ok || len(eng.snapSaves) != 0 {
+		t.Fatalf("pending writer produced snapshot or row: snapshots=%v, row=%t, err=%v", eng.snapSaves, ok, getErr)
+	}
+	release()
+	if err = <-result; err != nil {
+		t.Fatalf("pending writer did not complete: %v", err)
 	}
 }
 
