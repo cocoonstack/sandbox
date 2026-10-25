@@ -85,6 +85,91 @@ func TestLiveVolumeFourModesAndMixedRoundtrip(t *testing.T) {
 	}
 }
 
+func TestLiveVolumeLegacyAttachOnlyRetryAfterFailedDetach(t *testing.T) {
+	for _, mode := range []string{"", types.VolumeModeRW} {
+		for _, method := range []string{"put", "patch"} {
+			t.Run(fmt.Sprintf("%s/%s", map[string]string{"": "ro", types.VolumeModeRW: "rw"}[mode], method), func(t *testing.T) {
+				eng := newFakeEngine()
+				m := newVolumeManager(t, eng, liveCatalog(t))
+				sb := mustClaim(t, m, testKey)
+				want := []types.Volume{{Name: "data", Mode: mode, AttachOnly: true}}
+				if _, err := m.SetVolumes(t.Context(), sb.ID, "", want); err != nil {
+					t.Fatal(err)
+				}
+				eng.detachVolumeErr = errors.New("host detach unavailable")
+				view, err := m.SetVolumes(t.Context(), sb.ID, "", []types.Volume{})
+				if err == nil || len(view.VolumesWant) != 0 || !slices.Equal(view.Volumes, want) {
+					t.Fatalf("failed detach lost applied device: %+v, %v", view, err)
+				}
+				eng.detachVolumeErr = nil
+				before := slices.Clone(eng.volumeOpsLog())
+				change := func(volumes []types.Volume) (types.SandboxVolumesResponse, error) {
+					if method == "patch" {
+						return m.PatchVolumes(t.Context(), sb.ID, "", types.VolumePatch{Add: volumes})
+					}
+					return m.SetVolumes(t.Context(), sb.ID, "", volumes)
+				}
+				if _, err = change([]types.Volume{{Name: "data", Mode: mode, Mount: "/changed"}}); !errors.Is(err, ErrBadVolume) {
+					t.Fatalf("held attachment changed shape: %v", err)
+				}
+				if !slices.Equal(before, eng.volumeOpsLog()) {
+					t.Fatal("rejected shape change operated on the device")
+				}
+				legacy := slices.Clone(want)
+				legacy[0].AttachOnly = false
+				view, err = change(legacy)
+				if err != nil {
+					t.Fatalf("legacy echo of held attach-only volume rejected: %v", err)
+				}
+				if !slices.Equal(view.VolumesWant, want) || !slices.Equal(view.Volumes, want) || view.Converging {
+					t.Fatalf("legacy retry did not retain the applied device: %+v", view)
+				}
+				before = slices.Clone(eng.volumeOpsLog())
+				if _, err = change(legacy); err != nil {
+					t.Fatalf("settled legacy retry: %v", err)
+				}
+				if !slices.Equal(before, eng.volumeOpsLog()) {
+					t.Fatalf("settled retry changed the retained device: %v -> %v", before, eng.volumeOpsLog())
+				}
+			})
+		}
+	}
+}
+
+func TestLiveVolumeLegacyAttachOnlyPatchAfterFailedCommit(t *testing.T) {
+	eng := newFakeEngine()
+	m := newVolumeManager(t, eng, liveCatalog(t))
+	sb := mustClaim(t, m, testKey)
+	want := []types.Volume{{Name: "data", Mode: types.VolumeModeRW, AttachOnly: true}}
+	if _, err := m.SetVolumes(t.Context(), sb.ID, "", want); err != nil {
+		t.Fatal(err)
+	}
+	m.store.recommitting.Store(true)
+	tmp := m.store.path + ".tmp"
+	eng.liveVolumeHook = func(verb string) error {
+		if verb == "detach" {
+			return os.Mkdir(tmp, 0o700)
+		}
+		return nil
+	}
+	view, err := m.SetVolumes(t.Context(), sb.ID, "", []types.Volume{})
+	eng.liveVolumeHook = nil
+	if err == nil || len(view.Volumes) != 0 || len(view.VolumesWant) != 0 || !view.Converging {
+		t.Fatalf("failed detach commit did not retain a recovery reference: %+v, %v", view, err)
+	}
+	if err = os.Remove(tmp); err != nil {
+		t.Fatal(err)
+	}
+	legacy := []types.Volume{{Name: "data", Mode: types.VolumeModeRW}}
+	view, err = m.PatchVolumes(t.Context(), sb.ID, "", types.VolumePatch{Add: legacy})
+	if err != nil {
+		t.Fatalf("legacy echo of recovery-only attach-only volume rejected: %v", err)
+	}
+	if !slices.Equal(view.VolumesWant, want) || !slices.Equal(view.Volumes, want) || view.Converging {
+		t.Fatalf("legacy retry lost recovery attachment shape: %+v", view)
+	}
+}
+
 func TestLiveWritableDetachRequiresCleanEvidence(t *testing.T) {
 	for _, proof := range []bool{false, true} {
 		t.Run(fmt.Sprint(proof), func(t *testing.T) {
