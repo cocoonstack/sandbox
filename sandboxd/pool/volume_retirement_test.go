@@ -236,7 +236,7 @@ func TestClaimRecoveryAttemptsRetainOnlyDistinctReferences(t *testing.T) {
 	}
 }
 
-func TestRecoveryOnlyRetryPreservesHeldRepairAuthorization(t *testing.T) {
+func TestRecoveryOnlyRetryRequiresNewAuthorization(t *testing.T) {
 	eng := newFakeEngine()
 	m, sb := newTenantVolumeManager(t, eng, liveCatalog(t))
 	if _, err := m.SetVolumes(t.Context(), sb.ID, "acme", []types.Volume{{Name: "data"}}); err != nil {
@@ -265,11 +265,14 @@ func TestRecoveryOnlyRetryPreservesHeldRepairAuthorization(t *testing.T) {
 	if err := os.Remove(tmp); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := m.SetVolumes(t.Context(), sb.ID, "", []types.Volume{{Name: "data"}}); err != nil {
-		t.Fatalf("exact recovery retry lost held authorization: %v", err)
+	if _, err := m.SetVolumes(t.Context(), sb.ID, "", []types.Volume{{Name: "data"}}); !errors.Is(err, ErrTenantRemoved) {
+		t.Fatalf("recovery-only retry bypassed tenant removal: %v", err)
 	}
-	if got := volumeHoldersOf(m, "data"); got != (volumeHolders{readers: 1}) {
-		t.Fatalf("repair reservation count: %+v", got)
+	if got := volumeHoldersOf(m, "data"); got != (volumeHolders{}) {
+		t.Fatalf("rejected recovery retry reserved a reader: %+v", got)
+	}
+	if _, err := m.SetVolumes(t.Context(), sb.ID, "", nil); err != nil {
+		t.Fatalf("recovery retirement after tenant removal: %v", err)
 	}
 	if _, err := m.PatchVolumes(t.Context(), sb.ID, "", types.VolumePatch{Add: []types.Volume{{Name: "other"}}}); !errors.Is(err, ErrTenantRemoved) {
 		t.Fatalf("repair exemption admitted unrelated addition: %v", err)

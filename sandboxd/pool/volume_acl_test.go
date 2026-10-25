@@ -2,6 +2,7 @@ package pool
 
 import (
 	"errors"
+	"os"
 	"slices"
 	"testing"
 
@@ -109,6 +110,87 @@ func TestRuntimeCatalogOperatorKeepsExplicitOwnerACL(t *testing.T) {
 	}
 	if _, err := m.SetVolumes(t.Context(), sb.ID, "", []types.Volume{{Name: "home"}}); !errors.Is(err, ErrVolumeUnavailable) {
 		t.Fatalf("operator bypassed explicit claim-owner ACL: %v", err)
+	}
+}
+
+func TestRuntimeCatalogRecoveryReferenceDoesNotAuthorizeAttach(t *testing.T) {
+	requireCatalogRoot(t)
+	for _, operation := range []string{"put", "patch", "reservation"} {
+		t.Run(operation, func(t *testing.T) {
+			eng := newFakeEngine()
+			m, sb := newTenantVolumeManager(t, eng, nil)
+			if err := m.RegisterVolume(t.Context(), "home", types.VolumeRegistration{Path: writeVolumeImage(t, "home.img", "private"), Writable: true}); err != nil {
+				t.Fatal(err)
+			}
+			want := []types.Volume{{Name: "home", Mode: types.VolumeModeRW, AttachOnly: true}}
+			if _, err := m.SetVolumes(t.Context(), sb.ID, "", want); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := m.SetVolumes(t.Context(), sb.ID, "acme", want); err != nil {
+				t.Fatalf("still-held retry: %v", err)
+			}
+			m.store.recommitting.Store(true)
+			tmp := m.store.path + ".tmp"
+			eng.liveVolumeHook = func(verb string) error {
+				if verb == "detach" {
+					return os.Mkdir(tmp, 0o700)
+				}
+				return nil
+			}
+			view, err := m.SetVolumes(t.Context(), sb.ID, "acme", nil)
+			eng.liveVolumeHook = nil
+			if err == nil || len(view.Volumes) != 0 || len(view.VolumesWant) != 0 {
+				t.Fatalf("detached result: %+v, %v", view, err)
+			}
+			claims, err := newClaimStore(m.dataDir, false).load()
+			if err != nil || claims[sb.ID] == nil || !slices.Equal(claims[sb.ID].Volumes, want) {
+				t.Fatalf("old durable attachment missing: %+v, %v", claims, err)
+			}
+			if _, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Volumes: want}); !errors.Is(err, ErrVolumeBusy) {
+				t.Fatalf("recovery reference lost writer exclusion: %v", err)
+			}
+			if _, err := m.Checkpoint(t.Context(), sb.ID, Cred{Token: sb.Token}, "unretired", ""); !errors.Is(err, ErrVolumeCapture) {
+				t.Fatalf("capture ignored recovery reference: %v", err)
+			}
+			if err := m.UnregisterVolume(t.Context(), "home"); !errors.Is(err, ErrVolumeRegistrationConflict) {
+				t.Fatalf("unregister ignored recovery reference: %v", err)
+			}
+			if err := os.Remove(tmp); err != nil {
+				t.Fatal(err)
+			}
+			before := len(eng.volumeSpecs)
+			switch operation {
+			case "put":
+				_, err = m.SetVolumes(t.Context(), sb.ID, "acme", want)
+			case "patch":
+				_, err = m.PatchVolumes(t.Context(), sb.ID, "acme", types.VolumePatch{Add: want})
+			case "reservation":
+				resolved, resolveErr := m.resolveVolumes(t.Context(), "", want)
+				if resolveErr != nil {
+					t.Fatal(resolveErr)
+				}
+				_, run, beginErr := m.beginVolumeRun(t.Context(), sb, "acme")
+				if beginErr != nil {
+					t.Fatal(beginErr)
+				}
+				m.mu.Lock()
+				err = m.reserveResolved(run.access, resolved, sb)
+				m.mu.Unlock()
+				m.finishVolumeRun(sb, run)
+			}
+			if !errors.Is(err, ErrVolumeUnavailable) {
+				t.Fatalf("recovery-only reference authorized tenant attachment: %v", err)
+			}
+			if len(eng.volumeSpecs) != before {
+				t.Fatal("rejected tenant reached device attachment")
+			}
+			if _, err := m.SetVolumes(t.Context(), sb.ID, "", want); err != nil {
+				t.Fatalf("operator reattach: %v", err)
+			}
+			if _, err := m.SetVolumes(t.Context(), sb.ID, "acme", nil); err != nil {
+				t.Fatalf("tenant cleanup after operator reattach: %v", err)
+			}
+		})
 	}
 }
 
