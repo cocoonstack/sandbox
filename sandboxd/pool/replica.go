@@ -267,11 +267,11 @@ func (m *Manager) dropReplica(ctx context.Context, sb *types.Sandbox) error {
 	if !live {
 		return ErrUnknownSandbox
 	}
+	m.deleteOrphanArchiveCk(ctx, ck)
 	if err != nil {
 		return fmt.Errorf("persist replica retirement: %w", err)
 	}
 	m.dropTombstone(ctx, sb.ID, consumed)
-	m.deleteOrphanArchiveCk(ctx, ck)
 	return nil
 }
 

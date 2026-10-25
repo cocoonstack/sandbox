@@ -101,8 +101,8 @@ func TestArchiveCheckpointCleanupIgnoresUnrelatedClaimWrites(t *testing.T) {
 	if m.store.synced() {
 		t.Fatal("expected an unrelated unacknowledged claim write")
 	}
-	if err := m.deleteArchiveCk(t.Context(), ck); err != nil {
-		t.Fatalf("unrelated claim delayed checkpoint cleanup: %v", err)
+	if deleted, err := m.deleteArchiveCk(t.Context(), ck); err != nil || !deleted {
+		t.Fatalf("unrelated claim delayed checkpoint cleanup: deleted=%t, %v", deleted, err)
 	}
 	if ckExists(t, m, ck) || m.deleteMarked(ck) {
 		t.Fatal("unreferenced checkpoint or delete marker remained")

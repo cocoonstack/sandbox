@@ -99,8 +99,8 @@ func TestReplicaPendingCheckpointCleanupWaitsForAcknowledgment(t *testing.T) {
 	if sb.ReplicaPending != "" || m.store.synced() {
 		t.Fatal("expected memory clear before snapshot acknowledgment")
 	}
-	if err := m.deleteArchiveCk(t.Context(), pending); err == nil {
-		t.Fatal("orphan delete ignored unacknowledged claim")
+	if deleted, err := m.deleteArchiveCk(t.Context(), pending); err != nil || deleted {
+		t.Fatalf("orphan delete ignored unacknowledged claim: deleted=%t, %v", deleted, err)
 	}
 	m.retryArchiveDeletes(t.Context())
 	if !ckExists(t, m, pending) || !m.deleteMarked(pending) {

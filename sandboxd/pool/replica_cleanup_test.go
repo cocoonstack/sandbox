@@ -3,6 +3,8 @@ package pool
 import (
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/cocoonstack/sandbox/sandboxd/config"
@@ -26,19 +28,9 @@ func TestReconcileRetiresReplicasWhenFailoverDisabled(t *testing.T) {
 			if pending {
 				ck = sb.ReplicaPending
 			}
-			cfg := &config.Config{
-				APIToken: "root", DataDir: m.dataDir, CheckpointDir: c.ckDir,
-				Pools:   []config.PoolSpec{{PoolKey: testKey}},
-				Volumes: []config.VolumeSpec{{Name: "data", Path: m.catalog.entries["data"].disk.Path, Writable: true}},
-			}
-			restarted, err := NewManager(t.Context(), cfg, m.eng, testSecrets(t), testBackends(t, cfg))
-			if err != nil {
-				t.Fatal(err)
-			}
-			if restarted.archives != nil {
-				t.Fatal("failover-disabled fixture unexpectedly has a registry")
-			}
-			if err = restarted.Reconcile(t.Context()); err != nil {
+			drainClaimRow(t, c, sb.ID)
+			restarted := newManagerWithoutRegistry(t, m, c)
+			if err := restarted.Reconcile(t.Context()); err != nil {
 				t.Fatal(err)
 			}
 			restored, ok := restarted.byID(sb.ID)
@@ -59,6 +51,89 @@ func TestReconcileRetiresReplicasWhenFailoverDisabled(t *testing.T) {
 				t.Error("disabled failover left the retired checkpoint without a cleanup marker")
 			}
 		})
+	}
+}
+
+func TestDisabledReplicaCleanupSurvivesFailedStartupRewrite(t *testing.T) {
+	for _, renamed := range []bool{false, true} {
+		t.Run(fmt.Sprintf("renamed=%t", renamed), func(t *testing.T) {
+			m, c := newReplicaVolumeManager(t)
+			sb := mustClaim(t, m, testKey)
+			replicateNow(t, m, sb)
+			ck := sb.ReplicaCk
+			drainClaimRow(t, c, sb.ID)
+			restarted := newManagerWithoutRegistry(t, m, c)
+			restarted.store.replaceFile = func(raw []byte) error {
+				if renamed {
+					if err := restarted.store.replace(raw); err != nil {
+						return err
+					}
+				}
+				return errors.New("injected startup replacement failure")
+			}
+			if err := restarted.Reconcile(t.Context()); err == nil {
+				t.Fatal("startup replacement unexpectedly succeeded")
+			}
+			if !restarted.deleteMarked(ck) || !ckExists(t, restarted, ck) {
+				t.Fatal("failed startup lost a checkpoint or its cleanup intent")
+			}
+			persisted, err := newClaimStore(m.dataDir, false).load()
+			if err != nil || persisted[sb.ID] == nil || persisted[sb.ID].HasReplica() == renamed {
+				t.Fatalf("startup failure did not reach the expected persisted state: %+v, %v", persisted, err)
+			}
+			recovered := newManagerWithoutRegistry(t, restarted, c)
+			if err = recovered.Reconcile(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			if restored, ok := recovered.byID(sb.ID); !ok || restored.HasReplica() || ckExists(t, recovered, ck) || recovered.deleteMarked(ck) {
+				t.Fatal("next startup did not retain the claim and finish queued cleanup")
+			}
+		})
+	}
+}
+
+func TestDisabledReplicaCleanupRequiresDurableMarker(t *testing.T) {
+	m, c := newReplicaVolumeManager(t)
+	sb := mustClaim(t, m, testKey)
+	replicateNow(t, m, sb)
+	ck := sb.ReplicaCk
+	drainClaimRow(t, c, sb.ID)
+	markerDir := filepath.Join(m.dataDir, archiveDeleteDir)
+	if err := os.WriteFile(markerDir, []byte("blocked"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	restarted := newManagerWithoutRegistry(t, m, c)
+	if err := restarted.Reconcile(t.Context()); err == nil {
+		t.Fatal("startup retired a replica without a durable cleanup marker")
+	}
+	persisted, err := newClaimStore(m.dataDir, false).load()
+	if err != nil || persisted[sb.ID] == nil || persisted[sb.ID].ReplicaCk != ck || !ckExists(t, restarted, ck) {
+		t.Fatalf("failed marker write changed the recoverable replica: %+v, %v", persisted, err)
+	}
+	if err = os.Remove(markerDir); err != nil {
+		t.Fatal(err)
+	}
+	if err = restarted.Reconcile(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if ckExists(t, restarted, ck) {
+		t.Fatal("marker repair did not permit checkpoint cleanup")
+	}
+}
+
+func TestDisabledRegistryKeepsArchivedClaimCheckpoint(t *testing.T) {
+	m, c := newReplicaVolumeManager(t)
+	sb := mustClaim(t, m, testKey)
+	mustArchive(t, m, sb)
+	ck, epoch := sb.ArchiveCk, sb.ArchiveEpoch
+	drainClaimRow(t, c, sb.ID)
+	restarted := newManagerWithoutRegistry(t, m, c)
+	if err := restarted.Reconcile(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	restored, ok := restarted.byID(sb.ID)
+	if !ok || restored.ArchiveCk != ck || restored.ArchiveEpoch != epoch || !ckExists(t, restarted, ck) || restarted.deleteMarked(ck) {
+		t.Fatal("replica retirement changed the archived claim or its checkpoint")
 	}
 }
 
@@ -89,5 +164,34 @@ func TestReplicaFailedClearQueuesCheckpointCleanup(t *testing.T) {
 	m.retryArchiveDeletes(t.Context())
 	if ckExists(t, m, ck) || m.deleteMarked(ck) {
 		t.Fatal("checkpoint cleanup did not finish after its reference retired")
+	}
+}
+
+func newManagerWithoutRegistry(t *testing.T, old *Manager, c *failoverCluster) *Manager {
+	t.Helper()
+	cfg := &config.Config{
+		APIToken: "root", DataDir: old.dataDir, CheckpointDir: c.ckDir,
+		Pools: []config.PoolSpec{{PoolKey: testKey}}, Volumes: old.cfg.Volumes,
+	}
+	m, err := NewManager(t.Context(), cfg, old.eng, testSecrets(t), testBackends(t, cfg))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.archives != nil {
+		t.Fatal("failover-disabled fixture unexpectedly has a registry")
+	}
+	return m
+}
+
+func drainClaimRow(t *testing.T, c *failoverCluster, id string) {
+	t.Helper()
+	rec, ok, err := c.reg.Get(t.Context(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok {
+		if err = c.reg.Delete(t.Context(), id, rec.Epoch); err != nil {
+			t.Fatal(err)
+		}
 	}
 }

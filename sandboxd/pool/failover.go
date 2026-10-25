@@ -483,10 +483,12 @@ func (m *Manager) dropStaleRow(ctx context.Context, sb *types.Sandbox, rec archi
 
 func (m *Manager) purgeArchiveRow(ctx context.Context, rec archives.Record) {
 	logger := log.WithFunc("pool.purgeArchiveRow")
-	if err := m.deleteArchiveCk(ctx, rec.Checkpoint); err != nil {
-		if !errors.Is(err, errCheckpointReferenced) {
-			logger.Warnf(ctx, "purge archive %s: delete ck %s: %v", rec.ID, rec.Checkpoint, err)
-		}
+	deleted, err := m.deleteArchiveCk(ctx, rec.Checkpoint)
+	if err != nil {
+		logger.Warnf(ctx, "purge archive %s: delete ck %s: %v", rec.ID, rec.Checkpoint, err)
+		return
+	}
+	if !deleted {
 		return
 	}
 	switch err := m.archives.Delete(ctx, rec.ID, rec.Epoch); {
