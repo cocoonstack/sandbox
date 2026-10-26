@@ -72,6 +72,7 @@ const (
 	hibernatePrefix = "sbx-hib-"
 	forkPrefix      = "sbx-fork-"
 	vmStateRunning  = "running"
+	vmStateStopped  = "stopped"
 	vmStateCreating = "creating"
 
 	goldenStampSuffix = ".stamp"

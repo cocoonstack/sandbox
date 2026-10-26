@@ -172,7 +172,7 @@ func (m *Manager) removeStaleVM(ctx context.Context, name string, rec types.VMRe
 			return true
 		case outcome == engine.StaleCreateBusy:
 			logger.Infof(ctx, "stale create %s has an in-flight owner; queued for retry", name)
-			m.queueStaleCreate(name, rec.TapDevice(), td)
+			m.queueStaleCreate(name, rec.TapDevice(), m.resolveStaleVolumes(ctx, name, td))
 			return false
 		}
 		// not-creating: the record moved on under the lock; remove normally.
@@ -196,26 +196,17 @@ func (m *Manager) resolveStaleVolumes(ctx context.Context, name string, td volum
 		return td
 	}
 	var holds []types.Volume
-	if present {
-		switch inspected.State {
-		case "stopped":
-			if inspected.Stale {
-				return td
+	switch {
+	case present && inspected.State == vmStateRunning && inspected.AttachedDevices.Disks != nil:
+		holds = make([]types.Volume, len(inspected.AttachedDevices.Disks))
+		for i, disk := range inspected.AttachedDevices.Disks {
+			holds[i].Name = disk.Name
+			if !disk.ReadOnly {
+				holds[i].Mode = types.VolumeModeRW
 			}
-		case vmStateRunning:
-			if inspected.AttachedDevices.Disks == nil {
-				return td
-			}
-			holds = make([]types.Volume, len(inspected.AttachedDevices.Disks))
-			for i, disk := range inspected.AttachedDevices.Disks {
-				holds[i].Name = disk.Name
-				if !disk.ReadOnly {
-					holds[i].Mode = types.VolumeModeRW
-				}
-			}
-		default:
-			return td
 		}
+	case present && inspected.State != vmStateStopped:
+		return td
 	}
 	m.mu.Lock()
 	m.adoptVolumes(holds)
