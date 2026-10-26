@@ -138,6 +138,7 @@ func (m *Manager) resolveVolumes(ctx context.Context, tenant string, requested [
 	if len(requested) == 0 {
 		return nil, nil
 	}
+	// an attach-only claim has no mounts to default; re-defaulting here would mount them
 	applied, err := types.ValidateVolumes(requested, types.VolumesAttachOnly(requested))
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrBadVolume, err)
@@ -181,7 +182,7 @@ func (m *Manager) resolveCatalogEntry(ctx context.Context, volume types.Volume, 
 	}
 	disk := entry.disk
 	disk.RW = volume.RW()
-	volume.AttachOnly = false
+	volume.AttachOnly = false // past validation the empty mount carries it
 	return resolvedVolume{entry: entry, disk: disk, applied: volume}, nil
 }
 
