@@ -149,7 +149,6 @@ func (s *claimStore) del(ids ...string) claimSnapshot {
 	return claimSnapshot{seq: s.seq}
 }
 
-// put replaces id's row with sb's projection, or drops it when sb is nil, and moves the checkpoint counts with it.
 func (s *claimStore) put(id string, sb *types.Sandbox) {
 	var refs [4]string
 	if sb == nil {

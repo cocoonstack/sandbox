@@ -193,7 +193,6 @@ func TestClaimSharedCheckpointReferencesRetirePerOwner(t *testing.T) {
 	}
 }
 
-// failClaimWrites makes claims.json writes fail until restore and keeps the background retrier from starting.
 func failClaimWrites(t *testing.T, s *claimStore) func() {
 	t.Helper()
 	tmp := s.path + ".tmp"
