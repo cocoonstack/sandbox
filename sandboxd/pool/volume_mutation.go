@@ -263,29 +263,24 @@ func (m *Manager) prepareVolumeTarget(ctx context.Context, sb *types.Sandbox, ru
 
 func (m *Manager) stageVolumeTarget(ctx context.Context, sb *types.Sandbox, run *volumeRun, target, additions []types.Volume, resolved []resolvedVolume) (claimSnapshot, bool, error) {
 	sb.Transition.Lock()
+	defer sb.Transition.Unlock()
 	m.mu.Lock()
 	if err := m.checkVolumeRunLocked(ctx, sb, run); err != nil {
 		m.mu.Unlock()
-		sb.Transition.Unlock()
 		return claimSnapshot{}, false, err
 	}
 	if sb.OnExpire == types.ExpireArchive && len(target) > 0 {
 		m.mu.Unlock()
-		sb.Transition.Unlock()
 		return claimSnapshot{}, false, ErrVolumeCapture
 	}
 	if err := m.checkResolved(resolved, sb.ID); err != nil {
 		m.mu.Unlock()
-		sb.Transition.Unlock()
 		return claimSnapshot{}, false, err
 	}
 	m.adoptVolumes(additions)
 	run.holds = append(run.holds, additions...)
 	m.mu.Unlock()
-	sb.Transition.Unlock()
 	cleanErr := m.confirmVolumesClean(resolved)
-	sb.Transition.Lock()
-	defer sb.Transition.Unlock()
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if err := m.checkVolumeRunLocked(ctx, sb, run); err != nil {
