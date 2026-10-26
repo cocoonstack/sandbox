@@ -122,10 +122,7 @@ func (m *Manager) archive(ctx context.Context, sb *types.Sandbox) error {
 		intent := m.store.set(sb)
 		m.mu.Unlock()
 		if err = m.store.commit(intent); err != nil {
-			m.mu.Lock()
-			sb.ArchivePending = ""
-			rb := m.store.set(sb)
-			m.mu.Unlock()
+			rb, _ := m.setIfLive(sb, func() { sb.ArchivePending = "" })
 			sb.Transition.Unlock()
 			m.store.recommit(ctx, rb)
 			m.deleteOrphanArchiveCk(ctx, ck.ID)
@@ -280,7 +277,7 @@ func (m *Manager) commitWake(ctx context.Context, sb *types.Sandbox, vmName, soc
 }
 
 func (m *Manager) deleteOrphanArchiveCk(ctx context.Context, ckID string) {
-	if err := m.deleteArchiveCk(ctx, ckID); err != nil {
+	if _, err := m.deleteArchiveCk(ctx, ckID); err != nil {
 		log.WithFunc("pool.deleteOrphanArchiveCk").Warnf(ctx, "delete orphaned archive ck %s: %v", ckID, err)
 	}
 }
@@ -351,17 +348,28 @@ func (m *Manager) clearArchiveCk(ckID string) error {
 	return err
 }
 
-func (m *Manager) deleteArchiveCk(ctx context.Context, ckID string) error {
+func (m *Manager) deleteArchiveCk(ctx context.Context, ckID string) (bool, error) {
 	if err := m.markArchiveCk(ckID); err != nil {
-		return fmt.Errorf("track: %w", err)
+		return false, fmt.Errorf("track: %w", err)
 	}
-	if err := m.deleteCkLocked(ctx, ckID); err != nil {
-		return err
+	return m.finishArchiveCkDelete(ctx, ckID)
+}
+
+func (m *Manager) finishArchiveCkDelete(ctx context.Context, ckID string) (bool, error) {
+	unlock := m.lockRec(ckID)
+	if m.store.referencesCheckpoint(ckID) {
+		unlock()
+		return false, nil
+	}
+	err := m.ckpts.Delete(ctx, ckID)
+	unlock()
+	if err != nil {
+		return false, err
 	}
 	if err := m.clearArchiveCk(ckID); err != nil {
-		return fmt.Errorf("clear: %w", err)
+		return false, fmt.Errorf("clear: %w", err)
 	}
-	return nil
+	return true, nil
 }
 
 func (m *Manager) retryArchiveDeletes(ctx context.Context) {

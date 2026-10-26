@@ -296,7 +296,10 @@ func (m *Manager) reclaimOrphanArchiveCks(ctx context.Context, claims map[string
 			continue
 		}
 		orig, mine := claims[ckpt.SandboxID]
-		if !mine || ckpt.Node != m.nodeID || orig.ArchiveCk == ckpt.ID || orig.ReplicaCk == ckpt.ID || orig.ReplicaPending == ckpt.ID || orig.ArchivePending == ckpt.ID {
+		if !mine || ckpt.Node != m.nodeID {
+			continue
+		}
+		if refs := checkpointRefs(orig); slices.Contains(refs[:], ckpt.ID) {
 			continue
 		}
 		orphans = append(orphans, ckpt)
@@ -313,9 +316,9 @@ func (m *Manager) reclaimOrphanArchiveCks(ctx context.Context, claims map[string
 		if row, ok := rows[ckpt.SandboxID]; ok && (row.Owner != m.nodeID || row.Checkpoint == ckpt.ID) {
 			continue
 		}
-		if err := m.deleteArchiveCk(ctx, ckpt.ID); err != nil {
+		if deleted, err := m.deleteArchiveCk(ctx, ckpt.ID); err != nil {
 			logger.Warnf(ctx, "reclaim %s: %v", ckpt.ID, err)
-		} else {
+		} else if deleted {
 			logger.Infof(ctx, "reclaimed orphan archive ck %s", ckpt.ID)
 		}
 	}

@@ -477,8 +477,12 @@ func (m *Manager) dropStaleRow(ctx context.Context, sb *types.Sandbox, rec archi
 
 func (m *Manager) purgeArchiveRow(ctx context.Context, rec archives.Record) {
 	logger := log.WithFunc("pool.purgeArchiveRow")
-	if err := m.deleteArchiveCk(ctx, rec.Checkpoint); err != nil {
+	deleted, err := m.deleteArchiveCk(ctx, rec.Checkpoint)
+	if err != nil {
 		logger.Warnf(ctx, "purge archive %s: delete ck %s: %v", rec.ID, rec.Checkpoint, err)
+		return
+	}
+	if !deleted {
 		return
 	}
 	switch err := m.archives.Delete(ctx, rec.ID, rec.Epoch); {
@@ -647,5 +651,5 @@ func (m *Manager) archiveRowed(sb *types.Sandbox) bool {
 }
 
 func (m *Manager) expiryDropsRow(sb *types.Sandbox) bool {
-	return m.archiveRowed(sb) || sb.HasReplica() && !m.archivesAtDeadline(sb)
+	return m.archiveRowed(sb) || m.archives != nil && sb.HasReplica() && !m.archivesAtDeadline(sb)
 }

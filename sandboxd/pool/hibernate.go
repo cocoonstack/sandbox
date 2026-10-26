@@ -93,11 +93,12 @@ func (m *Manager) hibernateLocked(ctx context.Context, sb *types.Sandbox) error 
 	// cocoon rejects sb.ID's underscore, so the snapshot name is VMName-based
 	snap := hibernatePrefix + strings.TrimPrefix(sb.VMName, vmPrefix) + "-" + randHex(3)
 	// journal the intent first so Reconcile can adopt a hibernate whose commit never landed
-	if err := m.store.commit(m.setPendingSnap(sb, snap)); err != nil {
-		m.mu.Lock()
-		sb.PendingSnap = ""
-		m.store.set(sb)
-		m.mu.Unlock()
+	intent, live := m.setIfLive(sb, func() { sb.PendingSnap = snap })
+	if !live {
+		return ErrUnknownSandbox
+	}
+	if err := m.store.commit(intent); err != nil {
+		m.setIfLive(sb, func() { sb.PendingSnap = "" })
 		return fmt.Errorf("hibernate %s: persist intent: %w", sb.ID, err)
 	}
 	readerSafe := false
@@ -321,13 +322,6 @@ func (m *Manager) dropStale(ctx context.Context, sb *types.Sandbox) {
 		sb.StaleSnap = ""
 		go m.dropSnap(ctx, snap)
 	}
-}
-
-func (m *Manager) setPendingSnap(sb *types.Sandbox, snap string) claimSnapshot {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	sb.PendingSnap = snap
-	return m.store.set(sb)
 }
 
 // settlePendingSnap settles a dangling hibernate intent and bills an adopted one, which never was.

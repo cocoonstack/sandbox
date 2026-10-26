@@ -318,18 +318,8 @@ func (m *Manager) vetoIfHealPending(ckptID string) {
 func (m *Manager) pinnedArchiveCks() map[string]struct{} {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	pinned := maps.Clone(m.pendingCks)
-	for _, sb := range m.claimed {
-		if sb.ArchiveCk != "" {
-			pinned[sb.ArchiveCk] = struct{}{}
-		}
-		if sb.ReplicaCk != "" {
-			pinned[sb.ReplicaCk] = struct{}{}
-		}
-		if sb.ReplicaPending != "" {
-			pinned[sb.ReplicaPending] = struct{}{}
-		}
-	}
+	pinned := m.store.checkpointReferences()
+	maps.Copy(pinned, m.pendingCks)
 	return pinned
 }
 

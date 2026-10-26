@@ -522,7 +522,7 @@ func TestArchiveWakeRequiresDeleteMarker(t *testing.T) {
 	if !archived || !ckExists(t, m, ck) {
 		t.Fatal("failed wake did not retain the archived claim and checkpoint")
 	}
-	claims, err := m.store.load()
+	claims, err := newClaimStore(m.dataDir, false).load()
 	if err != nil || claims[sb.ID] == nil || claims[sb.ID].ArchiveCk != ck {
 		t.Fatalf("failed wake changed the durable archive claim: %+v, %v", claims[sb.ID], err)
 	}
@@ -680,11 +680,14 @@ func TestArchiveDeleteRetryRechecksWakeRollback(t *testing.T) {
 		m.retryArchiveDeletes(t.Context())
 		close(retried)
 	}()
-	waitFor(t, func() bool {
-		m.recLocksMu.Lock()
-		defer m.recLocksMu.Unlock()
-		return m.recRefs[ck] >= 2
-	})
+	select {
+	case <-retried:
+	case <-time.After(3 * time.Second):
+		t.Fatal("retry did not defer the checkpoint still referenced by the journal")
+	}
+	if !ckExists(t, m, ck) {
+		t.Fatal("retry deleted the checkpoint before wake persistence completed")
+	}
 	breakStore(t, m)
 	m.store.writeMu.Unlock()
 	locked = false

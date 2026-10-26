@@ -40,7 +40,7 @@ func TestFailoverArchiveWritesTheRow(t *testing.T) {
 	if err = json.Unmarshal(rec.Claim, claim); err != nil || claim.ID != sb.ID || claim.Token != "" || claim.VMName != "" || claim.ArchiveCk != sb.ArchiveCk {
 		t.Errorf("row claim %+v %v, want the archived record without token or VM", claim, err)
 	}
-	stored, err := a.store.load()
+	stored, err := newClaimStore(a.dataDir, false).load()
 	if err != nil || stored[sb.ID].ArchiveEpoch != 1 {
 		t.Errorf("claims.json epoch %v %v, want 1", stored[sb.ID], err)
 	}
@@ -1492,7 +1492,7 @@ func TestFailoverArchivePersistsItsIntentBeforeThePut(t *testing.T) {
 	}
 	var intent string
 	a.archives = &hookRegistry{Registry: c.reg, beforePut: func() {
-		stored, err := a.store.load()
+		stored, err := newClaimStore(a.dataDir, false).load()
 		if err != nil {
 			t.Errorf("load: %v", err)
 			return
@@ -1502,7 +1502,7 @@ func TestFailoverArchivePersistsItsIntentBeforeThePut(t *testing.T) {
 	if err := a.archive(t.Context(), sb); err != nil {
 		t.Fatalf("archive: %v", err)
 	}
-	stored, err := a.store.load()
+	stored, err := newClaimStore(a.dataDir, false).load()
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}

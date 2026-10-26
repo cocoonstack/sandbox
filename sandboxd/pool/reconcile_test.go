@@ -24,7 +24,8 @@ func TestReconcileJournalsAnAdoptedHibernate(t *testing.T) {
 	if err := eng.Hibernate(t.Context(), sb.VMName, snap); err != nil {
 		t.Fatalf("engine hibernate: %v", err)
 	}
-	if err := m.store.commit(m.setPendingSnap(sb, snap)); err != nil {
+	intent, _ := m.setIfLive(sb, func() { sb.PendingSnap = snap })
+	if err := m.store.commit(intent); err != nil {
 		t.Fatalf("journal intent: %v", err)
 	}
 

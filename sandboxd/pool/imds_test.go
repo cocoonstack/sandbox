@@ -54,7 +54,10 @@ func TestSetInstanceMetadataRefusesAPausedSandboxWithoutWaking(t *testing.T) {
 	if err := m.SetInstanceMetadata(t.Context(), running.ID, doc); !errors.Is(err, ErrPaused) {
 		t.Errorf("pending hibernate: %v, want ErrPaused", err)
 	}
+	m.mu.Lock()
 	running.PendingSnap, running.ArchiveCk = "", "ck"
+	m.store.set(running)
+	m.mu.Unlock()
 	if err := m.SetInstanceMetadata(t.Context(), running.ID, doc); !errors.Is(err, ErrArchived) {
 		t.Errorf("archived: %v, want ErrArchived", err)
 	}

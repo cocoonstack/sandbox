@@ -696,24 +696,25 @@ func (m *Manager) pauseExpired(ctx context.Context, sb *types.Sandbox) error {
 
 func (m *Manager) purgeArchiveCk(ctx context.Context, id, ck, tenant string) {
 	logger := log.WithFunc("pool.purgeArchiveCk")
-	if err := m.deleteCkLocked(ctx, ck); err != nil {
+	if _, err := m.finishArchiveCkDelete(ctx, ck); err != nil {
 		logger.Warnf(ctx, "delete archive ck %s: %v", ck, err)
-	} else if err := m.clearArchiveCk(ck); err != nil {
-		logger.Warnf(ctx, "clear archive ck %s: %v", ck, err)
 	}
 	m.counters.archiveDeletes.Add(1)
 	m.recordUsage(ctx, usageEvent{Event: "archive_delete", ID: id, Reference: ck, Tenant: tenant})
 }
 
-func (m *Manager) commitIfLive(ctx context.Context, sb *types.Sandbox, mutate func()) (bool, error) {
+func (m *Manager) setIfLive(sb *types.Sandbox, mutate func()) (claimSnapshot, bool) {
 	m.mu.Lock()
-	live := m.claimed[sb.ID] == sb
-	var js claimSnapshot
-	if live {
-		mutate()
-		js = m.store.set(sb)
+	defer m.mu.Unlock()
+	if m.claimed[sb.ID] != sb {
+		return claimSnapshot{}, false
 	}
-	m.mu.Unlock()
+	mutate()
+	return m.store.set(sb), true
+}
+
+func (m *Manager) commitIfLive(ctx context.Context, sb *types.Sandbox, mutate func()) (bool, error) {
+	js, live := m.setIfLive(sb, mutate)
 	if !live {
 		return false, nil
 	}
