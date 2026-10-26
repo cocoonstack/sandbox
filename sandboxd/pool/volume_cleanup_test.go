@@ -436,28 +436,80 @@ func TestStaleInventoryClassifiesStoppedAndRunning(t *testing.T) {
 	}
 }
 
-func TestStaleInventoryNarrowsFenceBeforeBlockedRemoval(t *testing.T) {
+func TestStaleInventoryRetainsFenceUntilRemovalFails(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		eng := newFakeEngine()
 		m := newVolumeManager(t, eng, liveCatalog(t))
-		name := "sbx-known-before-remove"
+		name := "sbx-attach-during-remove"
 		eng.vms[name], eng.removeErrFor = "/vsock/stale", name
-		eng.disks = map[string][]types.VMDisk{name: {{Name: "data", ReadOnly: false}}}
+		eng.disks = map[string][]types.VMDisk{name: {{Name: "data", ReadOnly: true}}}
 		eng.removeStall = make(chan struct{})
-		done := make(chan bool, 1)
-		go func() { done <- m.removeStaleVM(t.Context(), name, eng.record(name)) }()
-		synctest.Wait()
-		if _, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Volumes: []types.Volume{{Name: "data"}}}); !errors.Is(err, ErrVolumeBusy) {
-			t.Errorf("known stale writer: %v", err)
-		}
-		if err := m.RegisterVolume(t.Context(), "unrelated", types.VolumeRegistration{Path: "/images/unrelated"}); err != nil {
-			t.Errorf("blocked removal retained global fence: %v", err)
-		}
-		close(eng.removeStall)
-		if <-done {
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			if m.removeStaleVM(t.Context(), name, eng.record(name)) {
+				t.Error("failed removal reported gone")
+			}
+		}()
+		checkStaleRemovalInventory(t, m, eng, name, done)
+	})
+}
+
+func TestStaleInventoryRetainsFenceUntilRetryFails(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		eng := newFakeEngine()
+		m := newVolumeManager(t, eng, liveCatalog(t))
+		name := "sbx-attach-during-retry"
+		eng.vms[name], eng.removeErrFor = "/vsock/stale", name
+		eng.disks = map[string][]types.VMDisk{name: {{Name: "data", ReadOnly: true}}}
+		eng.inspectDisksUnknown = true
+		if m.removeStaleVM(t.Context(), name, eng.record(name)) {
 			t.Fatal("failed removal reported gone")
 		}
+		eng.inspectDisksUnknown = false
+		eng.removeStall = make(chan struct{})
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			m.retryRemovals(t.Context()).Wait()
+		}()
+		checkStaleRemovalInventory(t, m, eng, name, done)
 	})
+}
+
+func checkStaleRemovalInventory(t *testing.T, m *Manager, eng *fakeEngine, name string, done <-chan struct{}) {
+	t.Helper()
+	synctest.Wait()
+	registration := types.VolumeRegistration{Path: writeVolumeImage(t, "unrelated.img", "unrelated")}
+	if _, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Volumes: []types.Volume{{Name: "data"}}}); !errors.Is(err, ErrVolumeCatalogUnavailable) {
+		t.Errorf("in-flight removal admitted a reader: %v", err)
+	}
+	if err := m.RegisterVolume(t.Context(), "unrelated", registration); !errors.Is(err, ErrVolumeCatalogUnavailable) {
+		t.Errorf("in-flight removal admitted registration: %v", err)
+	}
+	eng.mu.Lock()
+	eng.disks[name] = append(eng.disks[name], types.VMDisk{Name: "other"})
+	eng.mu.Unlock()
+	close(eng.removeStall)
+	<-done
+	if _, queued := m.pendingRemovals[name]; !queued {
+		t.Fatal("failed removal lost its retry")
+	}
+	if _, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Volumes: []types.Volume{{Name: "other", Mode: types.VolumeModeRW}}}); !errors.Is(err, ErrVolumeBusy) {
+		t.Errorf("writer attached during removal lost its hold: %v", err)
+	}
+	if _, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Volumes: []types.Volume{{Name: "data", Mode: types.VolumeModeRW}}}); !errors.Is(err, ErrVolumeBusy) {
+		t.Errorf("failed removal lost its reader hold: %v", err)
+	}
+	if _, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Volumes: []types.Volume{{Name: "data"}}}); err != nil {
+		t.Errorf("failed removal blocked a compatible reader: %v", err)
+	}
+	if err := m.RegisterVolume(t.Context(), "unrelated", registration); err != nil {
+		t.Fatalf("failed removal blocked unrelated registration: %v", err)
+	}
+	if _, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Volumes: []types.Volume{{Name: "unrelated"}}}); err != nil {
+		t.Errorf("failed removal blocked an unrelated reader: %v", err)
+	}
 }
 
 func TestBusyStaleCreateKeepsVolumeFenceUntilCleanup(t *testing.T) {
