@@ -65,6 +65,59 @@ func TestRuntimeCatalogOperatorKeepsExplicitOwnerACL(t *testing.T) {
 	}
 }
 
+func TestRuntimeCatalogPendingWritePreservesPrivateNameMasking(t *testing.T) {
+	for _, operation := range []string{"register", "unregister"} {
+		t.Run(operation, func(t *testing.T) {
+			eng := newFakeEngine()
+			m, sb := newTenantVolumeManager(t, eng, liveCatalog(t))
+			spec := types.VolumeRegistration{Path: writeVolumeImage(t, "private", "bytes"), Tenants: []string{"other"}}
+			if operation == "unregister" {
+				if err := m.RegisterVolume(t.Context(), "private", spec); err != nil {
+					t.Fatal(err)
+				}
+			}
+			blockCatalogRename(t, m)
+			var err error
+			if operation == "unregister" {
+				err = m.UnregisterVolume(t.Context(), "private")
+			} else {
+				err = m.RegisterVolume(t.Context(), "private", spec)
+			}
+			if !errors.Is(err, ErrVolumeCatalogUnavailable) {
+				t.Fatalf("obstructed catalog write: %v", err)
+			}
+			for _, requested := range [][]types.Volume{
+				{{Name: "private"}},
+				{{Name: "data"}, {Name: "private"}},
+				{{Name: "private"}, {Name: "data"}},
+			} {
+				missing := slices.Clone(requested)
+				for i := range missing {
+					if missing[i].Name == "private" {
+						missing[i].Name = "missing"
+					}
+				}
+				_, deniedErr := m.SetVolumes(t.Context(), sb.ID, "acme", requested)
+				_, missingErr := m.SetVolumes(t.Context(), sb.ID, "acme", missing)
+				if !errors.Is(deniedErr, ErrVolumeUnavailable) || !errors.Is(missingErr, ErrVolumeUnavailable) || deniedErr.Error() != missingErr.Error() {
+					t.Errorf("private name distinguishable for %+v: denied=%v missing=%v", requested, deniedErr, missingErr)
+				}
+			}
+			if view, err := m.GetVolumes(sb.ID, "acme"); err != nil || len(view.Volumes) != 0 || len(view.VolumesWant) != 0 {
+				t.Fatalf("refused request changed claim volumes: %+v, %v", view, err)
+			}
+			if len(eng.volumeSpecs) != 0 {
+				t.Fatal("refused request reached device attachment")
+			}
+			for _, name := range []string{"data", "private", "missing"} {
+				if got := volumeHoldersOf(m, name); got != (volumeHolders{}) {
+					t.Fatalf("refused request reserved %s: %+v", name, got)
+				}
+			}
+		})
+	}
+}
+
 func TestRuntimeCatalogRecoveryReferenceDoesNotAuthorizeAttach(t *testing.T) {
 	for _, operation := range []string{"put", "patch"} {
 		t.Run(operation, func(t *testing.T) {
