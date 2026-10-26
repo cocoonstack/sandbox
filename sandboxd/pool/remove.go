@@ -103,8 +103,8 @@ func (m *Manager) retryRemoval(ctx context.Context, name string, pending pending
 			return
 		}
 	}
-	pending.volumes = m.resolveStaleVolumes(ctx, name, pending.volumes)
 	if !m.removeVM(ctx, name) {
+		pending.volumes = m.resolveStaleVolumes(ctx, name, pending.volumes)
 		m.queueRemoval(name, pending.sandboxID, pending.tap, pending.volumes, time.Time{})
 		return
 	}

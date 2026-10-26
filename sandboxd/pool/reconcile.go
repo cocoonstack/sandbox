@@ -177,11 +177,11 @@ func (m *Manager) removeStaleVM(ctx context.Context, name string, rec types.VMRe
 		}
 		// not-creating: the record moved on under the lock; remove normally.
 	}
-	td = m.resolveStaleVolumes(ctx, name, td)
 	if m.removeVM(ctx, name) {
 		m.finishVolumeTeardown(ctx, td)
 		return true
 	}
+	td = m.resolveStaleVolumes(ctx, name, td)
 	m.queueRemoval(name, "", rec.TapDevice(), td, time.Time{})
 	return false
 }
