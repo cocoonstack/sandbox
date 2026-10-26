@@ -480,7 +480,7 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 	}
 	for _, volume := range cfg.Volumes {
 		m.catalog.entries[volume.Name] = &catalogVolume{
-			disk:     engine.VolumeSpec{Name: volume.Name, Path: volume.Path, DirectIO: cmp.Or(volume.DirectIO, types.DirectIOOff)},
+			disk:     engine.VolumeSpec{Name: volume.Name, Path: volume.Path, DirectIO: volume.DirectIO},
 			tenants:  slices.Clone(volume.Tenants),
 			writable: volume.Writable,
 		}

@@ -50,13 +50,13 @@ func (c *volumeCatalog) admissionError(name string) error {
 
 // RegisterVolume durably binds a root-managed name to a backing path.
 func (m *Manager) RegisterVolume(ctx context.Context, name string, spec types.VolumeRegistration) error {
-	m.catalog.writeMu.Lock()
-	defer m.catalog.writeMu.Unlock()
-	if err := m.commitPendingCatalog(ctx); err != nil {
+	volume, err := normalizeRegistration(name, spec)
+	if err != nil {
 		return err
 	}
-	normalized, err := normalizeRegistration(name, spec)
-	if err != nil {
+	m.catalog.writeMu.Lock()
+	defer m.catalog.writeMu.Unlock()
+	if err = m.commitPendingCatalog(ctx); err != nil {
 		return err
 	}
 	m.mu.Lock()
@@ -67,33 +67,28 @@ func (m *Manager) RegisterVolume(ctx context.Context, name string, spec types.Vo
 		return err
 	}
 	if entry := entries[name]; entry != nil {
-		if entry.runtime && sameRegistration(entry.registration(), normalized) {
+		if entry.runtime && entry.disk == volume.disk && entry.writable == volume.writable && slices.Equal(entry.tenants, volume.tenants) {
 			return nil
 		}
 		return fmt.Errorf("%w: volume %q already has different semantics or is static", ErrVolumeRegistrationConflict, name)
 	}
-	if err := catalogPathConflict(entries, normalized.Path); err != nil {
+	if err := catalogPathConflict(entries, volume.disk.Path); err != nil {
 		return fmt.Errorf("%w: %w", ErrVolumeRegistrationConflict, err)
 	}
 	entries = maps.Clone(entries)
-	entries[name] = &catalogVolume{
-		runtime:  true,
-		disk:     engine.VolumeSpec{Name: name, Path: normalized.Path, DirectIO: normalized.DirectIO},
-		tenants:  normalized.Tenants,
-		writable: normalized.Writable,
-	}
+	entries[name] = volume
 	return m.writeCatalog(ctx, name, entries)
 }
 
 // UnregisterVolume retires an unreferenced runtime binding without touching its backing.
 func (m *Manager) UnregisterVolume(ctx context.Context, name string) error {
+	if !types.ValidVolumeName(name) {
+		return fmt.Errorf("%w: invalid volume name", ErrBadVolume)
+	}
 	m.catalog.writeMu.Lock()
 	defer m.catalog.writeMu.Unlock()
 	if err := m.commitPendingCatalog(ctx); err != nil {
 		return err
-	}
-	if !types.ValidVolumeName(name) {
-		return fmt.Errorf("%w: invalid volume name", ErrBadVolume)
 	}
 	m.mu.Lock()
 	entries := m.catalog.entries
@@ -128,22 +123,17 @@ func (m *Manager) loadRuntimeVolumes() error {
 	}
 	entries := maps.Clone(m.catalog.entries)
 	for name, spec := range record.Volumes {
-		normalized, normalizeErr := normalizeRegistration(name, spec)
+		volume, normalizeErr := normalizeRegistration(name, spec)
 		if normalizeErr != nil {
 			return fmt.Errorf("runtime volume catalog: %w", normalizeErr)
 		}
 		if m.catalog.entries[name] != nil {
 			return fmt.Errorf("runtime volume catalog duplicates static name %q", name)
 		}
-		if err := catalogPathConflict(entries, normalized.Path); err != nil {
+		if err := catalogPathConflict(entries, volume.disk.Path); err != nil {
 			return fmt.Errorf("runtime volume catalog: %w", err)
 		}
-		entries[name] = &catalogVolume{
-			runtime:  true,
-			disk:     engine.VolumeSpec{Name: name, Path: normalized.Path, DirectIO: normalized.DirectIO},
-			tenants:  normalized.Tenants,
-			writable: normalized.Writable,
-		}
+		entries[name] = volume
 	}
 	m.catalog.entries = entries
 	return nil
@@ -157,16 +147,13 @@ func (m *Manager) writeCatalog(ctx context.Context, name string, entries map[str
 	record := runtimeCatalog{Version: 1, Volumes: map[string]types.VolumeRegistration{}}
 	for key, entry := range entries {
 		if entry.runtime {
-			record.Volumes[key] = entry.registration()
+			record.Volumes[key] = types.VolumeRegistration{Path: entry.disk.Path, DirectIO: entry.disk.DirectIO, Writable: entry.writable, Tenants: entry.tenants}
 		}
 	}
-	raw, err := json.Marshal(record, json.Deterministic(true))
-	if err != nil {
-		return fmt.Errorf("%w: %w", ErrBadVolume, err)
-	}
+	raw, _ := json.Marshal(record, json.Deterministic(true))
 	proposal := &catalogWrite{name: name, entries: entries, raw: raw}
 	m.mu.Lock()
-	err = ctx.Err()
+	err := ctx.Err()
 	if err == nil && m.volumeReferenced(name) {
 		err = fmt.Errorf("%w: volume %q is referenced", ErrVolumeRegistrationConflict, name)
 	}
@@ -223,20 +210,17 @@ func catalogPathConflict(entries map[string]*catalogVolume, path string) error {
 	return nil
 }
 
-func normalizeRegistration(name string, spec types.VolumeRegistration) (types.VolumeRegistration, error) {
+func normalizeRegistration(name string, spec types.VolumeRegistration) (*catalogVolume, error) {
 	spec.DirectIO = cmp.Or(spec.DirectIO, types.DirectIOOff)
 	if err := config.ValidateVolumeCatalog([]config.VolumeSpec{{
 		Name: name, Path: spec.Path, DirectIO: spec.DirectIO, Writable: spec.Writable, Tenants: spec.Tenants,
 	}}); err != nil {
-		return spec, fmt.Errorf("%w: %w", ErrBadVolume, err)
+		return nil, fmt.Errorf("%w: %w", ErrBadVolume, err)
 	}
-	spec.Path = filepath.Clean(spec.Path)
-	spec.Tenants = slices.Clone(spec.Tenants)
-	slices.Sort(spec.Tenants)
-	spec.Tenants = slices.Compact(spec.Tenants)
-	return spec, nil
-}
-
-func sameRegistration(a, b types.VolumeRegistration) bool {
-	return a.Path == b.Path && a.DirectIO == b.DirectIO && a.Writable == b.Writable && slices.Equal(a.Tenants, b.Tenants)
+	return &catalogVolume{
+		runtime:  true,
+		disk:     engine.VolumeSpec{Name: name, Path: filepath.Clean(spec.Path), DirectIO: spec.DirectIO},
+		tenants:  slices.Compact(slices.Sorted(slices.Values(spec.Tenants))),
+		writable: spec.Writable,
+	}, nil
 }

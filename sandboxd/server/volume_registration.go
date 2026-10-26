@@ -5,7 +5,6 @@ import (
 	"errors"
 	"net/http"
 
-	"github.com/cocoonstack/sandbox/sandboxd/pool"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
@@ -15,10 +14,6 @@ func (s *Server) handleVolumeRegistration(w http.ResponseWriter, r *http.Request
 		return
 	}
 	name := r.PathValue("name")
-	if !types.ValidVolumeName(name) {
-		writeErr(w, http.StatusBadRequest, "invalid volume name")
-		return
-	}
 	var err error
 	op := "unregister volume"
 	if r.Method == http.MethodPut {
@@ -32,8 +27,7 @@ func (s *Server) handleVolumeRegistration(w http.ResponseWriter, r *http.Request
 		err = s.mgr.UnregisterVolume(r.Context(), name)
 	}
 	switch {
-	case errors.Is(err, pool.ErrVolumeCatalogUnavailable):
-		writePoolErr(w, err)
+	case writePoolErr(w, err):
 	case errors.Is(err, context.DeadlineExceeded):
 		writeErr(w, http.StatusGatewayTimeout, op+" timed out")
 	case errors.Is(err, context.Canceled):

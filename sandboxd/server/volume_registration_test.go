@@ -165,44 +165,6 @@ func TestVolumeRegistrationRejectsInvalidBodies(t *testing.T) {
 	}
 }
 
-func TestVolumeRegistrationRoutesValidateNames(t *testing.T) {
-	for _, method := range []string{http.MethodPut, http.MethodDelete} {
-		for _, tt := range []struct {
-			name, encoded string
-			valid         bool
-		}{
-			{"data", "data", true},
-			{"a_b-0", "a_b-0", true},
-			{"abcdefghijklmnopqrst", "abcdefghijklmnopqrst", true},
-			{"Data", "Data", false},
-			{"1data", "1data", false},
-			{"cocoon-data", "cocoon-data", false},
-			{"abcdefghijklmnopqrstu", "abcdefghijklmnopqrstu", false},
-			{"data/set", "data%2Fset", false},
-			{"data set", "data%20set", false},
-		} {
-			t.Run(method+"/"+tt.name, func(t *testing.T) {
-				var gotName string
-				mgr := &fakeManager{
-					registerVolume:   func(_ context.Context, name string, _ types.VolumeRegistration) error { gotName = name; return nil },
-					unregisterVolume: func(_ context.Context, name string) error { gotName = name; return nil },
-				}
-				ts := newTestServer(t, "root", mgr, nil)
-				resp := doReq(t, method, ts.URL+"/v1/volumes/"+tt.encoded, "root", `{"path":"/private/data.img"}`)
-				defer resp.Body.Close()
-				body, _ := io.ReadAll(resp.Body)
-				wantCode, wantName := http.StatusBadRequest, ""
-				if tt.valid {
-					wantCode, wantName = http.StatusNoContent, tt.name
-				}
-				if resp.StatusCode != wantCode || gotName != wantName {
-					t.Fatalf("status=%d name=%q body=%s, want %d name=%q", resp.StatusCode, gotName, body, wantCode, wantName)
-				}
-			})
-		}
-	}
-}
-
 func TestVolumeRegistrationRoutesMapSafeErrors(t *testing.T) {
 	for _, method := range []string{http.MethodPut, http.MethodDelete} {
 		for _, tt := range []struct {

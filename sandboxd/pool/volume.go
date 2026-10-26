@@ -55,10 +55,6 @@ func (v *catalogVolume) allowedFor(tenant string) bool {
 	return tenant == "" || len(v.tenants) == 0 || slices.Contains(v.tenants, tenant)
 }
 
-func (v catalogVolume) registration() types.VolumeRegistration {
-	return types.VolumeRegistration{Path: v.disk.Path, DirectIO: v.disk.DirectIO, Writable: v.writable, Tenants: v.tenants}
-}
-
 // Volumes reports the caller-visible fleet catalog; an empty tenant means root.
 func (m *Manager) Volumes(tenant string, holders map[string]int) []types.VolumeInfo {
 	catalog := m.catalogSnapshot()

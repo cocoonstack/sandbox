@@ -364,10 +364,10 @@ func TestRuntimeCatalogMissingBackingAndUnrestrictedBackingOwner(t *testing.T) {
 func TestRuntimeRegistrationNormalization(t *testing.T) {
 	input := types.VolumeRegistration{Path: "/images/./data", Tenants: []string{"beta", "acme", "acme"}}
 	normalized, err := normalizeRegistration("data", input)
-	if err != nil || normalized.Path != "/images/data" || normalized.DirectIO != types.DirectIOOff || !slices.Equal(normalized.Tenants, []string{"acme", "beta"}) {
+	if err != nil || normalized.disk.Path != "/images/data" || normalized.disk.DirectIO != types.DirectIOOff || !slices.Equal(normalized.tenants, []string{"acme", "beta"}) {
 		t.Fatalf("normalization: %+v %v", normalized, err)
 	}
-	normalized.Tenants[0] = "caller-copy"
+	normalized.tenants[0] = "caller-copy"
 	if input.Tenants[1] != "acme" {
 		t.Fatal("normalization mutated caller input")
 	}
