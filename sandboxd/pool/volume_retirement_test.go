@@ -142,6 +142,9 @@ func TestPossibleClaimIntroductionRemainsProtected(t *testing.T) {
 	if _, err = m.ClaimProvision(t.Context(), testKey, writer); err != nil {
 		t.Fatalf("successful whole snapshot did not retire attempted row: %v", err)
 	}
+	if _, err = m.Checkpoint(t.Context(), sb.ID, Cred{Token: sb.Token}, "retired-introduction", ""); err != nil {
+		t.Fatalf("capture after acknowledgment: %v", err)
+	}
 }
 
 func TestClaimRecoveryReferencesRetireOnlyOnAcknowledgedWrite(t *testing.T) {

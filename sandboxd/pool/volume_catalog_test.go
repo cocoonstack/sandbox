@@ -137,9 +137,12 @@ func TestRuntimeCatalogRejectsCollisionsAndInvalidRegistrations(t *testing.T) {
 			t.Errorf("register %s %+v = %v, want %v", tc.name, tc.spec, err, tc.want)
 		}
 	}
-	for _, name := range []string{"data", "unexplained"} {
-		if err := m.UnregisterVolume(t.Context(), name); !errors.Is(err, ErrVolumeRegistrationConflict) {
-			t.Errorf("unregister %s: %v", name, err)
+	for _, tc := range []struct {
+		name string
+		want error
+	}{{"data", ErrVolumeRegistrationConflict}, {"unexplained", ErrVolumeRegistrationConflict}, {"bad/name", ErrBadVolume}} {
+		if err := m.UnregisterVolume(t.Context(), tc.name); !errors.Is(err, tc.want) {
+			t.Errorf("unregister %s = %v, want %v", tc.name, err, tc.want)
 		}
 	}
 }
@@ -163,6 +166,11 @@ func TestRuntimeCatalogPendingWriteConverges(t *testing.T) {
 	}
 	if err := m.UnregisterVolume(t.Context(), "runtime"); !errors.Is(err, ErrVolumeCatalogUnavailable) {
 		t.Fatalf("failed retry cleared pending write: %v", err)
+	}
+	for _, err := range []error{m.RegisterVolume(t.Context(), "bad/name", spec), m.UnregisterVolume(t.Context(), "bad/name")} {
+		if !errors.Is(err, ErrBadVolume) || errors.Is(err, ErrVolumeCatalogUnavailable) {
+			t.Fatalf("invalid name behind a pending write: %v", err)
+		}
 	}
 	m.retryVolumeCatalog(t.Context())
 	for _, volumes := range [][]types.Volume{nil, {{Name: "data"}}} {
