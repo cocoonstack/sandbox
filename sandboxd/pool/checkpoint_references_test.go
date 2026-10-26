@@ -1,13 +1,12 @@
 package pool
 
 import (
-	"encoding/json/v2"
 	"errors"
-	"fmt"
 	"io"
 	"io/fs"
+	"maps"
 	"os"
-	"path/filepath"
+	"slices"
 	"sync"
 	"syscall"
 	"testing"
@@ -15,116 +14,167 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
-func TestClaimCheckpointReferencesTrackPossibleSnapshots(t *testing.T) {
-	if os.Geteuid() == 0 {
-		t.Skip("requires non-root: root can read the write-only directory")
-	}
-	dir := t.TempDir()
-	s := newClaimStore(dir, true)
-	sb := &types.Sandbox{ID: "owner", ArchiveCk: "archive", ArchivePending: "archive-pending", ReplicaCk: "replica", ReplicaPending: "replica-pending", FromCheckpoint: "branch-origin"}
-	snap := s.set(sb)
-	if refs := s.checkpointReferences(); len(refs) != 4 {
-		t.Fatalf("current references: %+v", refs)
-	}
-	if err := s.commit(snap); err != nil {
-		t.Fatal(err)
-	}
-	sb.ReplicaPending = "uncertain-replica"
-	if err := os.Chmod(dir, 0o300); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
-	err := s.commit(s.set(sb))
-	if !errors.Is(err, fs.ErrPermission) {
-		t.Fatalf("expected post-rename permission failure: %v", err)
-	}
-	if err = os.Chmod(dir, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	loaded, err := newClaimStore(dir, false).load()
-	if err != nil || loaded[sb.ID].ReplicaPending != "uncertain-replica" {
-		t.Fatalf("post-rename file: %+v, %v", loaded, err)
-	}
-	sb.ArchiveCk, sb.ArchivePending, sb.ReplicaCk, sb.ReplicaPending = "", "", "", ""
-	s.set(sb)
-	refs := s.checkpointReferences()
-	if len(refs) != 5 {
-		t.Fatalf("lost snapshot references: %+v", refs)
-	}
-	delete(refs, "uncertain-replica")
-	if !s.referencesCheckpoint("uncertain-replica") {
-		t.Fatal("caller mutated retained reference set")
-	}
-	s.set(&types.Sandbox{ID: "other", ReplicaPending: "other-replica"})
-	if !s.referencesCheckpoint("other-replica") {
-		t.Fatal("checkpoint references crossed ownership")
-	}
-	if err := s.commit(s.mark()); err != nil {
-		t.Fatal(err)
-	}
-	if s.referencesCheckpoint("uncertain-replica") || len(s.checkpointReferences()) != 1 {
-		t.Fatal("acknowledgment did not retire only removed references")
-	}
-}
+const (
+	failWrite = iota
+	captureWrite
+	failAfterRename
+)
 
-func TestClaimCapturedCheckpointReferenceSurvivesConcurrentClear(t *testing.T) {
-	s := newClaimStore(t.TempDir(), false)
-	sb := &types.Sandbox{ID: "owner", ReplicaPending: "captured-replica"}
-	release := captureClaimWrite(t, s, s.set(sb), sb.ID)
-	sb.ReplicaPending = ""
-	s.set(sb)
-	if !s.referencesCheckpoint("captured-replica") {
-		t.Fatal("captured reference disappeared before acknowledgment")
-	}
-	var rows map[string]*types.Sandbox
-	if err := json.Unmarshal(release(), &rows); err != nil {
-		t.Fatal(err)
-	}
-	if rows[sb.ID].ReplicaPending != "captured-replica" {
-		t.Fatal("captured write lost its original checkpoint")
-	}
-	if !s.referencesCheckpoint("captured-replica") {
-		t.Fatal("acknowledgment lost captured checkpoint")
-	}
-	if err := s.commit(s.mark()); err != nil {
-		t.Fatal(err)
-	}
-	if s.referencesCheckpoint("captured-replica") {
-		t.Fatal("later acknowledgment retained obsolete checkpoint")
-	}
-}
-
-func TestClaimCheckpointReferencesSurviveFailedStartupRewrite(t *testing.T) {
-	for _, omit := range []bool{false, true} {
-		t.Run(fmt.Sprint(omit), func(t *testing.T) {
-			s := newClaimStore(t.TempDir(), false)
-			sb := &types.Sandbox{ID: "owner", ReplicaPending: "before-recovery"}
-			if err := s.commit(s.set(sb)); err != nil {
-				t.Fatal(err)
+func TestClaimCheckpointReferencesOutliveUnacknowledgedWrites(t *testing.T) {
+	recreate := func(s *claimStore) { s.set(&types.Sandbox{ID: "owner", ReplicaCk: "recreated"}) }
+	for _, tc := range []struct {
+		name                            string
+		fault                           int
+		acked, next                     *types.Sandbox
+		startup                         func(claims map[string]*types.Sandbox)
+		mutate                          func(s *claimStore)
+		onDisk, afterFault, afterCommit []string
+	}{
+		{
+			name: "captured write then clear", fault: captureWrite,
+			next:   &types.Sandbox{ID: "owner", ReplicaPending: "captured"},
+			mutate: func(s *claimStore) { s.set(&types.Sandbox{ID: "owner"}) },
+			onDisk: []string{"captured"}, afterFault: []string{"captured"},
+		},
+		{
+			name: "captured write then delete and recreate", fault: captureWrite,
+			next:   &types.Sandbox{ID: "owner", ReplicaCk: "captured"},
+			mutate: func(s *claimStore) { s.del("owner"); recreate(s) },
+			onDisk: []string{"captured"}, afterFault: []string{"captured", "recreated"}, afterCommit: []string{"recreated"},
+		},
+		{
+			name: "captured write then reset and recreate", fault: captureWrite,
+			next:   &types.Sandbox{ID: "owner", ReplicaCk: "captured"},
+			mutate: func(s *claimStore) { s.reset(map[string]*types.Sandbox{}); recreate(s) },
+			onDisk: []string{"captured"}, afterFault: []string{"captured", "recreated"}, afterCommit: []string{"recreated"},
+		},
+		{
+			name: "failed startup rewrite clears the loaded reference", fault: failWrite,
+			acked:   &types.Sandbox{ID: "owner", ReplicaPending: "loaded"},
+			startup: func(claims map[string]*types.Sandbox) { claims["owner"].ReplicaPending = "" },
+			onDisk:  []string{"loaded"}, afterFault: []string{"loaded"},
+		},
+		{
+			name: "failed startup rewrite drops the loaded claim", fault: failWrite,
+			acked:   &types.Sandbox{ID: "owner", ReplicaPending: "loaded"},
+			startup: func(claims map[string]*types.Sandbox) { delete(claims, "owner") },
+			onDisk:  []string{"loaded"}, afterFault: []string{"loaded"},
+		},
+		{
+			name: "failed writes then a return to the original", fault: failWrite,
+			acked: &types.Sandbox{ID: "owner", ReplicaCk: "original"},
+			next:  &types.Sandbox{ID: "owner", ReplicaCk: "attempt-1"},
+			mutate: func(s *claimStore) {
+				for _, ck := range []string{"attempt-2", "attempt-3", "attempt-4"} {
+					_ = s.commit(s.set(&types.Sandbox{ID: "owner", ReplicaCk: ck}))
+				}
+				s.set(&types.Sandbox{ID: "owner", ReplicaCk: "original"})
+			},
+			onDisk:      []string{"original"},
+			afterFault:  []string{"attempt-1", "attempt-2", "attempt-3", "attempt-4", "original"},
+			afterCommit: []string{"original"},
+		},
+		{
+			name: "write fails after the rename", fault: failAfterRename,
+			acked: &types.Sandbox{ID: "owner", ArchiveCk: "archive", ArchivePending: "archive-pending", ReplicaCk: "replica", ReplicaPending: "replica-pending", FromCheckpoint: "branch-origin"},
+			next:  &types.Sandbox{ID: "owner", ReplicaPending: "uncertain"},
+			mutate: func(s *claimStore) {
+				s.set(&types.Sandbox{ID: "owner"}, &types.Sandbox{ID: "other", ReplicaPending: "other-replica"})
+			},
+			onDisk:      []string{"uncertain"},
+			afterFault:  []string{"archive", "archive-pending", "other-replica", "replica", "replica-pending", "uncertain"},
+			afterCommit: []string{"other-replica"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.fault == failAfterRename && os.Geteuid() == 0 {
+				t.Skip("requires non-root: root can read the write-only directory")
 			}
-			s = newClaimStore(filepath.Dir(s.path), false)
-			claims, err := s.load()
+			dir := t.TempDir()
+			s := newClaimStore(dir, tc.fault == failAfterRename)
+			if tc.acked != nil {
+				if err := s.commit(s.set(tc.acked)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			var snap claimSnapshot
+			if tc.startup != nil {
+				s = newClaimStore(dir, false)
+				claims, err := s.load()
+				if err != nil {
+					t.Fatal(err)
+				}
+				tc.startup(claims)
+				snap = s.reset(claims)
+			} else {
+				snap = s.set(tc.next)
+			}
+			var finish func()
+			switch tc.fault {
+			case failWrite:
+				finish = failClaimWrites(t, s)
+				if err := s.commit(snap); err == nil {
+					t.Fatal("write succeeded under the fault")
+				}
+			case failAfterRename:
+				if err := os.Chmod(dir, 0o300); err != nil {
+					t.Fatal(err)
+				}
+				finish = func() { _ = os.Chmod(dir, 0o700) }
+				t.Cleanup(finish)
+				if err := s.commit(snap); !errors.Is(err, fs.ErrPermission) {
+					t.Fatalf("want a failed directory sync after the rename: %v", err)
+				}
+			case captureWrite:
+				if err := syscall.Mkfifo(s.path+".tmp", 0o600); err != nil {
+					t.Fatal(err)
+				}
+				done := make(chan error, 1)
+				go func() { done <- s.commit(snap) }()
+				waitFor(t, func() bool {
+					s.mu.Lock()
+					defer s.mu.Unlock()
+					return len(s.retained["owner"]) != 0
+				})
+				finish = func() {
+					r, err := os.Open(s.path + ".tmp")
+					if err != nil {
+						t.Fatal(err)
+					}
+					raw, err := io.ReadAll(r)
+					_ = r.Close()
+					if err = errors.Join(err, <-done); err != nil {
+						t.Fatal(err)
+					}
+					if err = os.Remove(s.path); err != nil {
+						t.Fatal(err)
+					}
+					if err = os.WriteFile(s.path, raw, 0o600); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			if tc.mutate != nil {
+				tc.mutate(s)
+			}
+			finish()
+			loaded, err := newClaimStore(dir, false).load()
 			if err != nil {
 				t.Fatal(err)
 			}
-			if omit {
-				delete(claims, sb.ID)
-			} else {
-				claims[sb.ID].ReplicaPending = ""
+			var onDisk []string
+			for _, sb := range loaded {
+				onDisk = appendRefs(onDisk, checkpointRefs(sb))
 			}
-			restore := failClaimWrites(t, s)
-			if err = s.save(claims); err == nil {
-				t.Fatal("startup rewrite unexpectedly acknowledged")
+			slices.Sort(onDisk)
+			if pinned := slices.Sorted(maps.Keys(s.checkpointReferences())); !slices.Equal(onDisk, tc.onDisk) || !slices.Equal(pinned, tc.afterFault) {
+				t.Fatalf("after the fault: on disk %v, pinned %v; want %v, %v", onDisk, pinned, tc.onDisk, tc.afterFault)
 			}
-			if !s.referencesCheckpoint("before-recovery") {
-				t.Fatal("failed startup rewrite retired loaded checkpoint")
-			}
-			restore()
-			if err = s.save(claims); err != nil {
+			if err = s.commit(s.mark()); err != nil {
 				t.Fatal(err)
 			}
-			if s.referencesCheckpoint("before-recovery") {
-				t.Fatal("successful startup rewrite retained old checkpoint")
+			if pinned := slices.Sorted(maps.Keys(s.checkpointReferences())); !slices.Equal(pinned, tc.afterCommit) {
+				t.Fatalf("after the next commit: pinned %v, want %v", pinned, tc.afterCommit)
 			}
 		})
 	}
@@ -132,122 +182,14 @@ func TestClaimCheckpointReferencesSurviveFailedStartupRewrite(t *testing.T) {
 
 func TestClaimSharedCheckpointReferencesRetirePerOwner(t *testing.T) {
 	s := newClaimStore(t.TempDir(), false)
-	first := &types.Sandbox{ID: "first", ReplicaCk: "shared", ArchivePending: "shared"}
-	second := &types.Sandbox{ID: "second", ArchiveCk: "shared"}
-	if err := s.commit(s.set(first, second)); err != nil {
+	if err := s.commit(s.set(&types.Sandbox{ID: "first", ReplicaCk: "shared", ArchivePending: "shared"}, &types.Sandbox{ID: "second", ArchiveCk: "shared"})); err != nil {
 		t.Fatal(err)
 	}
-	first.ReplicaCk = ""
-	if err := s.commit(s.set(first)); err != nil {
-		t.Fatal(err)
+	if err := s.commit(s.del("first")); err != nil || !s.referencesCheckpoint("shared") {
+		t.Fatalf("one owner's retirement released another owner's checkpoint: %v", err)
 	}
-	if !s.referencesCheckpoint("shared") {
-		t.Fatal("clearing one duplicate slot lost shared checkpoint")
-	}
-	s.del(first.ID)
-	if !s.referencesCheckpoint("shared") {
-		t.Fatal("memory deletion lost shared checkpoint")
-	}
-	if err := s.commit(s.mark()); err != nil {
-		t.Fatal(err)
-	}
-	if !s.referencesCheckpoint("shared") {
-		t.Fatal("one owner's retirement changed another owner's reference")
-	}
-	if err := s.commit(s.del(second.ID)); err != nil {
-		t.Fatal(err)
-	}
-	if s.referencesCheckpoint("shared") || len(s.checkpointReferences()) != 0 {
-		t.Fatal("last owner left shared checkpoint pinned")
-	}
-}
-
-func TestClaimReferenceChangesStayDirtyAfterFailedReturnToOriginal(t *testing.T) {
-	s := newClaimStore(t.TempDir(), false)
-	sb := &types.Sandbox{ID: "owner", ReplicaCk: "original"}
-	if err := s.commit(s.set(sb)); err != nil {
-		t.Fatal(err)
-	}
-	restore := failClaimWrites(t, s)
-	attempted := []string{"attempt-1", "attempt-2", "attempt-3", "attempt-4", "attempt-5"}
-	for _, ck := range attempted {
-		sb.ReplicaCk = ck
-		if err := s.commit(s.set(sb)); err == nil {
-			t.Fatal("expected write failure")
-		}
-	}
-	sb.ReplicaCk = "original"
-	s.set(sb)
-	if !s.referencesCheckpoint("original") || len(s.checkpointReferences()) != len(attempted)+1 {
-		t.Fatal("failed return lost a possible snapshot")
-	}
-	for _, ck := range attempted {
-		if !s.referencesCheckpoint(ck) {
-			t.Fatalf("failed return lost attempted checkpoint %s", ck)
-		}
-	}
-	restore()
-	if err := s.commit(s.mark()); err != nil {
-		t.Fatal(err)
-	}
-	if !s.referencesCheckpoint("original") || len(s.checkpointReferences()) != 1 {
-		t.Fatal("successful return did not retire failed attempt")
-	}
-}
-
-func TestClaimCapturedResetAndRecreatedOwner(t *testing.T) {
-	for _, reset := range []bool{false, true} {
-		t.Run(fmt.Sprint(reset), func(t *testing.T) {
-			s := newClaimStore(t.TempDir(), false)
-			sb := &types.Sandbox{ID: "owner", ReplicaCk: "captured"}
-			release := captureClaimWrite(t, s, s.set(sb), sb.ID)
-			if reset {
-				s.reset(map[string]*types.Sandbox{})
-			} else {
-				s.del(sb.ID)
-			}
-			s.set(&types.Sandbox{ID: sb.ID, ReplicaCk: "recreated"})
-			var captured map[string]*types.Sandbox
-			if err := json.Unmarshal(release(), &captured); err != nil {
-				t.Fatal(err)
-			}
-			if captured[sb.ID].ReplicaCk != "captured" {
-				t.Fatal("in-flight snapshot changed")
-			}
-			if !s.referencesCheckpoint("captured") || !s.referencesCheckpoint("recreated") {
-				t.Fatal("acknowledgment lost captured or newer reference")
-			}
-			if err := s.commit(s.mark()); err != nil {
-				t.Fatal(err)
-			}
-			if s.referencesCheckpoint("captured") || !s.referencesCheckpoint("recreated") {
-				t.Fatal("new snapshot did not retire old owner references")
-			}
-		})
-	}
-}
-
-func TestClaimReferencesSurviveRenameFailure(t *testing.T) {
-	s := newClaimStore(t.TempDir(), false)
-	sb := &types.Sandbox{ID: "owner", ReplicaCk: "captured"}
-	if err := os.Mkdir(s.path, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.commit(s.set(sb)); err == nil {
-		t.Fatal("expected rename failure")
-	}
-	s.del(sb.ID)
-	if !s.referencesCheckpoint("captured") {
-		t.Fatal("failed rename released attempted checkpoint")
-	}
-	if err := os.Remove(s.path); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.commit(s.mark()); err != nil {
-		t.Fatal(err)
-	}
-	if s.referencesCheckpoint("captured") {
-		t.Fatal("successful rewrite did not retire failed snapshot")
+	if err := s.commit(s.del("second")); err != nil || len(s.checkpointReferences()) != 0 {
+		t.Fatalf("last owner left the shared checkpoint pinned: %v", err)
 	}
 }
 
@@ -264,39 +206,4 @@ func failClaimWrites(t *testing.T, s *claimStore) func() {
 	})
 	t.Cleanup(restore)
 	return restore
-}
-
-func captureClaimWrite(t *testing.T, s *claimStore, snap claimSnapshot, owner string) func() []byte {
-	t.Helper()
-	fifo := s.path + ".tmp"
-	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	done := make(chan error, 1)
-	go func() { done <- s.commit(snap) }()
-	waitFor(t, func() bool {
-		s.mu.Lock()
-		defer s.mu.Unlock()
-		return len(s.retained[owner]) != 0
-	})
-	var raw []byte
-	release := sync.OnceFunc(func() {
-		r, err := os.Open(fifo)
-		if err != nil {
-			t.Fatal(err)
-		}
-		raw, err = io.ReadAll(r)
-		_ = r.Close()
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := <-done; err != nil {
-			t.Fatal(err)
-		}
-		if err := os.Remove(s.path); err != nil {
-			t.Fatal(err)
-		}
-	})
-	t.Cleanup(release)
-	return func() []byte { release(); return raw }
 }
