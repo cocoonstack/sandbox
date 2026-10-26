@@ -64,7 +64,7 @@ func TestRecommitDrainsAChangeItWasTooBusyToSee(t *testing.T) {
 	waitFor(t, func() bool {
 		m.store.mu.Lock()
 		defer m.store.mu.Unlock()
-		return slices.Contains(m.store.retained[sb.ID].attempted.checkpoints, "first")
+		return slices.Contains(m.store.retained[sb.ID], "first")
 	})
 	sb.ReplicaPending = "second"
 	m.store.recommit(t.Context(), change())
@@ -103,7 +103,7 @@ func TestStoreRoundTrip(t *testing.T) {
 		if err := s.save(claims); err != nil {
 			t.Fatalf("save (sync=%v): %v", fsync, err)
 		}
-		got, err := s.load()
+		got, err := newClaimStore(filepath.Dir(s.path), false).load()
 		if err != nil {
 			t.Fatalf("load (sync=%v): %v", fsync, err)
 		}
@@ -124,7 +124,7 @@ func TestClaimStoreSnapshotDetachesVolumes(t *testing.T) {
 	if err := s.commit(snap); err != nil {
 		t.Fatalf("commit: %v", err)
 	}
-	got, err := s.load()
+	got, err := newClaimStore(filepath.Dir(s.path), false).load()
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
@@ -180,7 +180,7 @@ func TestClaimStoreCommitCoalesces(t *testing.T) {
 	if err := s.commit(older); err != nil {
 		t.Fatalf("commit older: %v", err)
 	}
-	if got, err := s.load(); err != nil || len(got) != 2 {
+	if got, err := newClaimStore(filepath.Dir(s.path), false).load(); err != nil || len(got) != 2 {
 		t.Errorf("stale snapshot overwrote the newer state: %d claims (%v), want 2", len(got), err)
 	}
 }
@@ -196,7 +196,7 @@ func TestClaimStoreIncrementalProjection(t *testing.T) {
 	if err := s.commit(s.set(a)); err != nil {
 		t.Fatalf("commit update: %v", err)
 	}
-	got, err := s.load()
+	got, err := newClaimStore(filepath.Dir(s.path), false).load()
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
@@ -206,13 +206,13 @@ func TestClaimStoreIncrementalProjection(t *testing.T) {
 	if delErr := s.commit(s.del("sb_a")); delErr != nil {
 		t.Fatalf("commit del: %v", delErr)
 	}
-	if got, err = s.load(); err != nil || len(got) != 1 || got["sb_b"] == nil {
+	if got, err = newClaimStore(filepath.Dir(s.path), false).load(); err != nil || len(got) != 1 || got["sb_b"] == nil {
 		t.Fatalf("after del: %+v, %v", got, err)
 	}
 	if resetErr := s.commit(s.reset(map[string]*types.Sandbox{"sb_c": {ID: "sb_c", Key: testKey}})); resetErr != nil {
 		t.Fatalf("commit reset: %v", resetErr)
 	}
-	if got, err = s.load(); err != nil || len(got) != 1 || got["sb_c"] == nil {
+	if got, err = newClaimStore(filepath.Dir(s.path), false).load(); err != nil || len(got) != 1 || got["sb_c"] == nil {
 		t.Fatalf("after reset: %+v, %v", got, err)
 	}
 }
@@ -229,7 +229,7 @@ func TestClaimStoreMarkRepersists(t *testing.T) {
 	if !s.synced() {
 		t.Error("not synced after flushing the mark")
 	}
-	if got, err := s.load(); err != nil || len(got) != 1 {
+	if got, err := newClaimStore(filepath.Dir(s.path), false).load(); err != nil || len(got) != 1 {
 		t.Errorf("after mark flush: %+v, %v", got, err)
 	}
 }
@@ -242,7 +242,7 @@ func TestClaimStoreConcurrentCommits(t *testing.T) {
 		wg.Go(func() { _ = s.commit(s.set(sb)) })
 	}
 	wg.Wait()
-	if got, err := s.load(); err != nil || len(got) != 1 {
+	if got, err := newClaimStore(filepath.Dir(s.path), false).load(); err != nil || len(got) != 1 {
 		t.Fatalf("after concurrent commits: %+v, %v", got, err)
 	}
 }

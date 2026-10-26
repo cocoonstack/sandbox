@@ -16,8 +16,8 @@ import (
 )
 
 func TestClaimCheckpointReferencesTrackPossibleSnapshots(t *testing.T) {
-	if withoutDACOverride(t) {
-		return
+	if os.Geteuid() == 0 {
+		t.Skip("requires non-root: root can read the write-only directory")
 	}
 	dir := t.TempDir()
 	s := newClaimStore(dir, true)
@@ -56,13 +56,13 @@ func TestClaimCheckpointReferencesTrackPossibleSnapshots(t *testing.T) {
 		t.Fatal("caller mutated retained reference set")
 	}
 	s.set(&types.Sandbox{ID: "other", ReplicaPending: "other-replica"})
-	if s.hasCheckpointReferences("unknown") || !s.hasCheckpointReferences("other") {
+	if !s.referencesCheckpoint("other-replica") {
 		t.Fatal("checkpoint references crossed ownership")
 	}
 	if err := s.commit(s.mark()); err != nil {
 		t.Fatal(err)
 	}
-	if s.hasCheckpointReferences(sb.ID) || len(s.checkpointReferences()) != 1 {
+	if s.referencesCheckpoint("uncertain-replica") || len(s.checkpointReferences()) != 1 {
 		t.Fatal("acknowledgment did not retire only removed references")
 	}
 }
@@ -89,7 +89,7 @@ func TestClaimCapturedCheckpointReferenceSurvivesConcurrentClear(t *testing.T) {
 	if err := s.commit(s.mark()); err != nil {
 		t.Fatal(err)
 	}
-	if s.hasCheckpointReferences(sb.ID) {
+	if s.referencesCheckpoint("captured-replica") {
 		t.Fatal("later acknowledgment retained obsolete checkpoint")
 	}
 }
@@ -123,7 +123,7 @@ func TestClaimCheckpointReferencesSurviveFailedStartupRewrite(t *testing.T) {
 			if err = s.save(claims); err != nil {
 				t.Fatal(err)
 			}
-			if s.hasCheckpointReferences(sb.ID) || s.referencesCheckpoint("before-recovery") {
+			if s.referencesCheckpoint("before-recovery") {
 				t.Fatal("successful startup rewrite retained old checkpoint")
 			}
 		})
@@ -137,6 +137,13 @@ func TestClaimSharedCheckpointReferencesRetirePerOwner(t *testing.T) {
 	if err := s.commit(s.set(first, second)); err != nil {
 		t.Fatal(err)
 	}
+	first.ReplicaCk = ""
+	if err := s.commit(s.set(first)); err != nil {
+		t.Fatal(err)
+	}
+	if !s.referencesCheckpoint("shared") {
+		t.Fatal("clearing one duplicate slot lost shared checkpoint")
+	}
 	s.del(first.ID)
 	if !s.referencesCheckpoint("shared") {
 		t.Fatal("memory deletion lost shared checkpoint")
@@ -144,7 +151,7 @@ func TestClaimSharedCheckpointReferencesRetirePerOwner(t *testing.T) {
 	if err := s.commit(s.mark()); err != nil {
 		t.Fatal(err)
 	}
-	if !s.referencesCheckpoint("shared") || s.hasCheckpointReferences(first.ID) || !s.hasCheckpointReferences(second.ID) {
+	if !s.referencesCheckpoint("shared") {
 		t.Fatal("one owner's retirement changed another owner's reference")
 	}
 	if err := s.commit(s.del(second.ID)); err != nil {
@@ -162,20 +169,28 @@ func TestClaimReferenceChangesStayDirtyAfterFailedReturnToOriginal(t *testing.T)
 		t.Fatal(err)
 	}
 	restore := failClaimWrites(t, s)
-	sb.ReplicaCk = "attempted"
-	if err := s.commit(s.set(sb)); err == nil {
-		t.Fatal("expected write failure")
+	attempted := []string{"attempt-1", "attempt-2", "attempt-3", "attempt-4", "attempt-5"}
+	for _, ck := range attempted {
+		sb.ReplicaCk = ck
+		if err := s.commit(s.set(sb)); err == nil {
+			t.Fatal("expected write failure")
+		}
 	}
 	sb.ReplicaCk = "original"
 	s.set(sb)
-	if !s.referencesCheckpoint("original") || !s.referencesCheckpoint("attempted") {
+	if !s.referencesCheckpoint("original") || len(s.checkpointReferences()) != len(attempted)+1 {
 		t.Fatal("failed return lost a possible snapshot")
+	}
+	for _, ck := range attempted {
+		if !s.referencesCheckpoint(ck) {
+			t.Fatalf("failed return lost attempted checkpoint %s", ck)
+		}
 	}
 	restore()
 	if err := s.commit(s.mark()); err != nil {
 		t.Fatal(err)
 	}
-	if !s.referencesCheckpoint("original") || s.referencesCheckpoint("attempted") {
+	if !s.referencesCheckpoint("original") || len(s.checkpointReferences()) != 1 {
 		t.Fatal("successful return did not retire failed attempt")
 	}
 }
@@ -262,7 +277,7 @@ func captureClaimWrite(t *testing.T, s *claimStore, snap claimSnapshot, owner st
 	waitFor(t, func() bool {
 		s.mu.Lock()
 		defer s.mu.Unlock()
-		return !s.retained[owner].attempted.empty()
+		return len(s.retained[owner]) != 0
 	})
 	var raw []byte
 	release := sync.OnceFunc(func() {

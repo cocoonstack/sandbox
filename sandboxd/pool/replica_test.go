@@ -32,7 +32,7 @@ func TestReplicaRoundPublishesMovesTheRowAndDropsThePrevious(t *testing.T) {
 	if first == "" || rec.Owner != "a" || rec.Checkpoint != first || rec.Consumed || rec.TokenSHA256 != tenants.TokenSHA256(sb.Token) || !rec.Deadline.IsZero() {
 		t.Fatalf("row %+v with replica %q, want a live row of a on the replica with the token hash and no deadline", rec, first)
 	}
-	if stored, loadErr := a.store.load(); loadErr != nil || stored[sb.ID].ReplicaCk != first || stored[sb.ID].ArchiveEpoch != rec.Epoch {
+	if stored, loadErr := newClaimStore(a.dataDir, false).load(); loadErr != nil || stored[sb.ID].ReplicaCk != first || stored[sb.ID].ArchiveEpoch != rec.Epoch {
 		t.Errorf("claims.json replica %q epoch %d (%v), want %q at %d", stored[sb.ID].ReplicaCk, stored[sb.ID].ArchiveEpoch, loadErr, first, rec.Epoch)
 	}
 	meta, err := a.loadCheckpoint(t.Context(), first)

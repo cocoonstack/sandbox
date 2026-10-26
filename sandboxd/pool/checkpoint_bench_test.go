@@ -2,6 +2,7 @@ package pool
 
 import (
 	"fmt"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -25,7 +26,7 @@ func BenchmarkClaimCommitWithCheckpoints(b *testing.B) {
 					b.Fatal(err)
 				}
 			}
-			loaded, err := s.load()
+			loaded, err := newClaimStore(filepath.Dir(s.path), false).load()
 			if err != nil || len(loaded) != 5000 || !loaded[one.ID].Deadline.Equal(one.Deadline) || loaded[one.ID].ReplicaCk != one.ReplicaCk {
 				b.Fatalf("commit output: rows=%d err=%v", len(loaded), err)
 			}

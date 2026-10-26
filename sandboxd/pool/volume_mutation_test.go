@@ -287,7 +287,7 @@ func TestLiveVolumeDoesNotBlockLifecycle(t *testing.T) {
 				if attachErr == nil {
 					t.Fatal("released worker reported success")
 				}
-				claims, err := m.store.load()
+				claims, err := newClaimStore(m.dataDir, false).load()
 				if err != nil || claims[sb.ID] != nil {
 					t.Fatalf("late worker resurrected claim: %v %v", claims, err)
 				}
@@ -547,7 +547,7 @@ func TestReleaseOwnsUncertainHoldsUntilVMRemoval(t *testing.T) {
 	if volumeHoldersOf(m, "data").readers != 1 {
 		t.Fatal("late writer freed teardown-owned hold")
 	}
-	claims, err := m.store.load()
+	claims, err := newClaimStore(m.dataDir, false).load()
 	if err != nil || claims[sb.ID] != nil {
 		t.Fatalf("late writer resurrected claim: %v %v", claims, err)
 	}

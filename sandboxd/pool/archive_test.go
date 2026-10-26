@@ -522,7 +522,7 @@ func TestArchiveWakeRequiresDeleteMarker(t *testing.T) {
 	if !archived || !ckExists(t, m, ck) {
 		t.Fatal("failed wake did not retain the archived claim and checkpoint")
 	}
-	claims, err := m.store.load()
+	claims, err := newClaimStore(m.dataDir, false).load()
 	if err != nil || claims[sb.ID] == nil || claims[sb.ID].ArchiveCk != ck {
 		t.Fatalf("failed wake changed the durable archive claim: %+v, %v", claims[sb.ID], err)
 	}

@@ -36,119 +36,125 @@ var strandedStates = []strandedState{
 }
 
 func TestReplicaRetirementKeepsTombstoneUntilClaimCommit(t *testing.T) {
-	c := newReplicaCluster(t)
-	m := c.node(t, "a", t.TempDir(), keepAnHour)
-	sb := mustClaim(t, m, testKey)
-	replicateNow(t, m, sb)
-	ck := sb.ReplicaCk
-	m.store.recommitting.Store(true)
-	restoreWrites := failClaimWrites(t, m.store)
-	sb.Transition.Lock()
-	err := m.dropReplica(t.Context(), sb)
-	sb.Transition.Unlock()
-	if err == nil {
-		t.Error("retirement acknowledged a failed claim commit")
-	}
-	rec, ok, err := c.reg.Get(t.Context(), sb.ID)
-	if err != nil || !ok || !rec.Consumed || !ckExists(t, m, ck) {
-		t.Fatalf("failed commit lost recovery tombstone/checkpoint: %+v, exists=%t, err=%v", rec, ok, err)
-	}
-	m.reconcileOwnRow(t.Context(), rec, time.Now())
-	if rec, ok, err = c.reg.Get(t.Context(), sb.ID); err != nil || !ok || !rec.Consumed {
-		t.Fatalf("sweep erased unacknowledged retirement: %+v, exists=%t, err=%v", rec, ok, err)
-	}
-	restoreWrites()
-	restarted := c.restart(t, m)
-	if err = restarted.Reconcile(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-	restored, ok := restarted.byID(sb.ID)
-	if !ok {
-		t.Fatal("restart dropped a claim after failed retirement commit")
-	}
-	restarted.retireReplica(t.Context(), restored)
-	if restored.HasReplica() {
-		t.Fatal("restart did not finish retirement")
+	for _, restart := range []bool{false, true} {
+		t.Run(fmt.Sprintf("restart=%t", restart), func(t *testing.T) {
+			c := newReplicaCluster(t)
+			m := c.node(t, "a", t.TempDir(), keepAnHour)
+			sb := mustClaim(t, m, testKey)
+			replicateNow(t, m, sb)
+			ck := sb.ReplicaCk
+			m.store.recommitting.Store(true)
+			restoreWrites := failClaimWrites(t, m.store)
+			sb.Transition.Lock()
+			err := m.dropReplica(t.Context(), sb)
+			sb.Transition.Unlock()
+			if err == nil || sb.HasReplica() {
+				t.Fatalf("expected an unacknowledged memory clear: replica=%t, %v", sb.HasReplica(), err)
+			}
+			rec, ok, err := c.reg.Get(t.Context(), sb.ID)
+			if err != nil || !ok || !rec.Consumed || !ckExists(t, m, ck) {
+				t.Fatalf("failed commit lost recovery tombstone/checkpoint: %+v, exists=%t, err=%v", rec, ok, err)
+			}
+			if !m.deleteMarked(ck) {
+				t.Error("failed replica clear did not queue its checkpoint for cleanup")
+			}
+			m.reconcileOwnRow(t.Context(), rec, time.Now())
+			if rec, ok, err = c.reg.Get(t.Context(), sb.ID); err != nil || !ok || !rec.Consumed {
+				t.Fatalf("sweep erased unacknowledged retirement: %+v, exists=%t, err=%v", rec, ok, err)
+			}
+			m.retryArchiveDeletes(t.Context())
+			if !ckExists(t, m, ck) || !m.deleteMarked(ck) {
+				t.Fatal("cleanup discarded unacknowledged checkpoint or retry marker")
+			}
+			restoreWrites()
+			if restart {
+				m = c.restart(t, m)
+				if err = m.Reconcile(t.Context()); err != nil {
+					t.Fatal(err)
+				}
+				restored, ok := m.byID(sb.ID)
+				if !ok {
+					t.Fatal("restart dropped a claim after failed retirement commit")
+				}
+				m.retireReplica(t.Context(), restored)
+				if restored.HasReplica() {
+					t.Fatal("restart did not finish retirement")
+				}
+			} else if err = m.store.commit(m.store.mark()); err != nil {
+				t.Fatal(err)
+			}
+			m.retryArchiveDeletes(t.Context())
+			if ckExists(t, m, ck) || m.deleteMarked(ck) {
+				t.Fatal("checkpoint cleanup did not finish after its reference retired")
+			}
+			m.reconcileOwnRow(t.Context(), rec, time.Now())
+			if _, ok, err = c.reg.Get(t.Context(), sb.ID); err != nil || ok {
+				t.Fatalf("acknowledged retirement retained tombstone: %t, %v", ok, err)
+			}
+		})
 	}
 }
 
 func TestReplicaUnpublishedIntentSurvivesFailedClearAndRestart(t *testing.T) {
-	c := newReplicaCluster(t)
-	m := c.node(t, "a", t.TempDir(), keepAnHour)
-	sb := mustClaim(t, m, testKey)
-	m.archives = &hookRegistry{Registry: c.reg, failPut: true}
-	if err := m.replicate(t.Context(), sb); !errors.Is(err, ErrArchiveStoreDown) {
-		t.Fatal(err)
+	for _, restart := range []bool{false, true} {
+		t.Run(fmt.Sprintf("restart=%t", restart), func(t *testing.T) {
+			c := newReplicaCluster(t)
+			m := c.node(t, "a", t.TempDir(), keepAnHour)
+			sb := mustClaim(t, m, testKey)
+			m.archives = &hookRegistry{Registry: c.reg, failPut: true}
+			if err := m.replicate(t.Context(), sb); !errors.Is(err, ErrArchiveStoreDown) {
+				t.Fatal(err)
+			}
+			pending := sb.ReplicaPending
+			if pending == "" || !ckExists(t, m, pending) {
+				t.Fatal("missing unpublished checkpoint")
+			}
+			m.archives = c.reg
+			m.store.recommitting.Store(true)
+			restoreWrites := failClaimWrites(t, m.store)
+			m.retireReplica(t.Context(), sb)
+			persisted, err := newClaimStore(m.dataDir, false).load()
+			if err != nil || persisted[sb.ID].ReplicaPending != pending {
+				t.Fatalf("failure did not retain old disk state: %+v, %v", persisted, err)
+			}
+			if sb.ReplicaPending != "" || m.store.synced() {
+				t.Fatal("expected memory clear before snapshot acknowledgment")
+			}
+			if deleted, err := m.deleteArchiveCk(t.Context(), pending); err != nil || deleted {
+				t.Fatalf("orphan delete ignored unacknowledged claim: deleted=%t, %v", deleted, err)
+			}
+			m.retryArchiveDeletes(t.Context())
+			if !ckExists(t, m, pending) || !m.deleteMarked(pending) {
+				t.Fatal("cleanup discarded pending checkpoint or retry marker")
+			}
+			restoreWrites()
+			if restart {
+				m = c.restart(t, m)
+				if err := m.Reconcile(t.Context()); err != nil {
+					t.Fatal(err)
+				}
+				restored, ok := m.byID(sb.ID)
+				if !ok {
+					t.Fatal("restart mistook a failed pending clear for adoption and discarded the claim")
+				}
+				m.retireReplica(t.Context(), restored)
+				if restored.HasReplica() {
+					t.Fatal("restart failed to retire unpublished replica")
+				}
+			} else if err := m.store.commit(m.store.mark()); err != nil {
+				t.Fatal(err)
+			}
+			other := mustClaim(t, m, testKey)
+			m.mu.Lock()
+			other.LeaseSeconds++
+			m.store.set(other)
+			m.mu.Unlock()
+			m.retryArchiveDeletes(t.Context())
+			if ckExists(t, m, pending) || m.deleteMarked(pending) {
+				t.Fatal("acknowledged cleanup leaked checkpoint or retry marker")
+			}
+		})
 	}
-	pending := sb.ReplicaPending
-	if pending == "" || !ckExists(t, m, pending) {
-		t.Fatal("missing unpublished checkpoint")
-	}
-	m.archives = c.reg
-	m.store.recommitting.Store(true)
-	restoreWrites := failClaimWrites(t, m.store)
-	m.retireReplica(t.Context(), sb)
-	persisted, err := newClaimStore(m.dataDir, false).load()
-	if err != nil || persisted[sb.ID].ReplicaPending != pending {
-		t.Fatalf("failure did not retain old disk state: %+v, %v", persisted, err)
-	}
-	if !ckExists(t, m, pending) {
-		t.Error("failed pending clear deleted the checkpoint used to distinguish an unpublished intent from adoption")
-	}
-	t.Logf("failed unpublished clear: memory_pending=%q durable_pending=%q checkpoint_exists=%t synced=%t", sb.ReplicaPending, persisted[sb.ID].ReplicaPending, ckExists(t, m, pending), m.store.synced())
-	restoreWrites()
-	restarted := c.restart(t, m)
-	if err := restarted.Reconcile(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-	restored, ok := restarted.byID(sb.ID)
-	if !ok {
-		t.Fatal("restart mistook a failed pending clear for adoption and discarded the claim")
-	}
-	restarted.retireReplica(t.Context(), restored)
-	if restored.HasReplica() {
-		t.Fatal("restart failed to retire unpublished replica")
-	}
-}
-
-func TestReplicaPendingCheckpointCleanupWaitsForAcknowledgment(t *testing.T) {
-	c := newReplicaCluster(t)
-	m := c.node(t, "a", t.TempDir(), keepAnHour)
-	sb := mustClaim(t, m, testKey)
-	m.archives = &hookRegistry{Registry: c.reg, failPut: true}
-	if err := m.replicate(t.Context(), sb); !errors.Is(err, ErrArchiveStoreDown) {
-		t.Fatal(err)
-	}
-	pending := sb.ReplicaPending
-	m.archives = c.reg
-	m.store.recommitting.Store(true)
-	restoreWrites := failClaimWrites(t, m.store)
-	m.retireReplica(t.Context(), sb)
-	if sb.ReplicaPending != "" || m.store.synced() {
-		t.Fatal("expected memory clear before snapshot acknowledgment")
-	}
-	if deleted, err := m.deleteArchiveCk(t.Context(), pending); err != nil || deleted {
-		t.Fatalf("orphan delete ignored unacknowledged claim: deleted=%t, %v", deleted, err)
-	}
-	m.retryArchiveDeletes(t.Context())
-	if !ckExists(t, m, pending) || !m.deleteMarked(pending) {
-		t.Fatal("cleanup discarded pending checkpoint or retry marker")
-	}
-	t.Logf("cleanup deferred: checkpoint=%s exists=%t marker=%t synced=%t", pending, ckExists(t, m, pending), m.deleteMarked(pending), m.store.synced())
-	restoreWrites()
-	if err := m.store.commit(m.store.mark()); err != nil {
-		t.Fatal(err)
-	}
-	other := mustClaim(t, m, testKey)
-	m.mu.Lock()
-	other.LeaseSeconds++
-	m.store.set(other)
-	m.mu.Unlock()
-	m.retryArchiveDeletes(t.Context())
-	if ckExists(t, m, pending) || m.deleteMarked(pending) {
-		t.Fatal("acknowledged cleanup leaked checkpoint or retry marker")
-	}
-	t.Logf("cleanup acknowledged: exists=%t marker=%t synced=%t", ckExists(t, m, pending), m.deleteMarked(pending), m.store.synced())
 }
 
 func TestReplicaSettledCheckpointCleanupRetriesAfterFailedCommit(t *testing.T) {
@@ -277,37 +283,6 @@ func TestFailoverDisabledExitKeepsReplicaCheckpoint(t *testing.T) {
 				}
 			})
 		}
-	}
-}
-
-func TestReplicaFailedClearQueuesCheckpointCleanup(t *testing.T) {
-	c := newReplicaCluster(t)
-	m := c.node(t, "a", t.TempDir(), keepAnHour)
-	sb := mustClaim(t, m, testKey)
-	replicateNow(t, m, sb)
-	ck := sb.ReplicaCk
-	m.store.recommitting.Store(true)
-	restoreWrites := failClaimWrites(t, m.store)
-	sb.Transition.Lock()
-	err := m.dropReplica(t.Context(), sb)
-	sb.Transition.Unlock()
-	if err == nil || sb.HasReplica() {
-		t.Fatalf("expected an unacknowledged memory clear: replica=%t, %v", sb.HasReplica(), err)
-	}
-	if !m.deleteMarked(ck) {
-		t.Error("failed replica clear did not queue its checkpoint for cleanup")
-	}
-	m.retryArchiveDeletes(t.Context())
-	if !ckExists(t, m, ck) {
-		t.Fatal("queued cleanup deleted a checkpoint still referenced by claims.json")
-	}
-	restoreWrites()
-	if err = m.store.commit(m.store.mark()); err != nil {
-		t.Fatal(err)
-	}
-	m.retryArchiveDeletes(t.Context())
-	if ckExists(t, m, ck) || m.deleteMarked(ck) {
-		t.Fatal("checkpoint cleanup did not finish after its reference retired")
 	}
 }
 
