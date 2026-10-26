@@ -38,7 +38,7 @@ type resolvedVolume struct {
 
 // volumeTeardown captures marker paths at quiesce time; a later config can re-point the entry.
 type volumeTeardown struct {
-	done    <-chan struct{}
+	run     *volumeRun
 	unknown bool
 	holds   []types.Volume
 	clears  []string
@@ -247,10 +247,7 @@ func (m *Manager) applyVolume(ctx context.Context, sb *types.Sandbox, volume res
 // quiesceVolumes unmounts a claim's writable mounts in reverse; a failed unmount keeps the marker.
 func (m *Manager) quiesceVolumes(ctx context.Context, sb *types.Sandbox) volumeTeardown {
 	m.mu.Lock()
-	td := volumeTeardown{holds: heldVolumes(sb)}
-	if run := m.volumeRuns[sb]; run != nil {
-		td.done = run.done
-	}
+	td := volumeTeardown{run: m.volumeRuns[sb], holds: heldVolumes(sb)}
 	m.mu.Unlock()
 	mounts := writableMounts(sb.Volumes)
 	if mounts == 0 {
@@ -287,15 +284,8 @@ func (m *Manager) quiesceVolumes(ctx context.Context, sb *types.Sandbox) volumeT
 	return td
 }
 
-// finishVolumeTeardown runs only once the VM is gone, when its image lock is finally released.
-func (m *Manager) finishVolumeTeardown(ctx context.Context, td volumeTeardown) bool {
-	if td.done != nil {
-		select {
-		case <-td.done:
-		default:
-			return false
-		}
-	}
+// finishVolumeTeardown runs once the VM is gone; an in-flight volume run releases the holds instead.
+func (m *Manager) finishVolumeTeardown(ctx context.Context, td volumeTeardown) {
 	logger := log.WithFunc("pool.finishVolumeTeardown")
 	for _, path := range td.clears {
 		if err := clearVolumeDirty(path); err != nil {
@@ -303,12 +293,19 @@ func (m *Manager) finishVolumeTeardown(ctx context.Context, td volumeTeardown) b
 		}
 	}
 	m.mu.Lock()
-	m.releaseVolumes(td.holds)
+	defer m.mu.Unlock()
 	if td.unknown {
 		m.catalog.unknown--
 	}
-	m.mu.Unlock()
-	return true
+	if td.run != nil {
+		select {
+		case <-td.run.done:
+		default:
+			td.run.teardown = append(td.run.teardown, td.holds...)
+			return
+		}
+	}
+	m.releaseVolumes(td.holds)
 }
 
 // adoptVolumes counts volumes an adopted claim already holds; callers hold m.mu.

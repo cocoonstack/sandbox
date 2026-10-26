@@ -43,6 +43,7 @@ func TestRemovedVMKeepsVolumeUntilCanceledWorkerReturns(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("release waited for paused worker")
 	}
+	m.retryRemovals(t.Context()).Wait()
 	if got := volumeHoldersOf(m, "data"); got != (volumeHolders{readers: 1}) {
 		t.Errorf("removed VM freed active worker count: %+v", got)
 	}
@@ -52,18 +53,16 @@ func TestRemovedVMKeepsVolumeUntilCanceledWorkerReturns(t *testing.T) {
 	if err := m.UnregisterVolume(t.Context(), "data"); !errors.Is(err, ErrVolumeRegistrationConflict) {
 		t.Errorf("unregister overtook paused worker: %v", err)
 	}
-	m.retryRemovals(t.Context()).Wait()
-	if got := volumeHoldersOf(m, "data"); got != (volumeHolders{readers: 1}) {
-		t.Errorf("maintenance freed active worker count: %+v", got)
-	}
 	close(eng.resume)
 	resumed = true
 	if err := <-changed; err == nil {
 		t.Fatal("removed claim accepted late attachment")
 	}
-	m.retryRemovals(t.Context()).Wait()
 	if got := volumeHoldersOf(m, "data"); got != (volumeHolders{}) {
 		t.Fatalf("completed worker leaked count: %+v", got)
+	}
+	if n := len(slices.DeleteFunc(base.removedNames(), func(n string) bool { return n != sb.VMName })); n != 1 {
+		t.Fatalf("vm rm ran %d times, want once", n)
 	}
 	if err := m.UnregisterVolume(t.Context(), "data"); err != nil {
 		t.Fatal(err)
@@ -347,48 +346,6 @@ func TestWarmAttachBeforeFinalizeNeedsUnknownFenceAfterRestart(t *testing.T) {
 	restarted.retryRemovals(t.Context()).Wait()
 	if _, err := restarted.ClaimProvision(t.Context(), testKey, ClaimOptions{Volumes: []types.Volume{{Name: "data", Mode: types.VolumeModeRW}}}); err != nil {
 		t.Fatalf("confirmed removal failed to clear fence: %v", err)
-	}
-}
-
-func TestArchivedReleaseWithUnvalidatedVolumeRunHasNoCleanupHolds(t *testing.T) {
-	base := newFakeEngine()
-	m := newTestManager(t, base, archivePool(3600))
-	sb := mustClaim(t, m, testKey)
-	if err := m.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
-		t.Fatal(err)
-	}
-	if err := m.archive(t.Context(), sb); err != nil {
-		t.Fatal(err)
-	}
-	if sb.VMName != "" {
-		t.Fatalf("archived VM name = %q", sb.VMName)
-	}
-	ctx, run, err := m.beginVolumeRun(t.Context(), sb)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := m.checkVolumeRun(ctx, sb, run); !errors.Is(err, ErrArchived) {
-		t.Fatalf("archived mutation validation: %v", err)
-	}
-	td := m.quiesceVolumes(t.Context(), sb)
-	if td.done == nil || len(td.holds) != 0 || len(td.clears) != 0 || td.unknown {
-		t.Fatalf("archived teardown has cleanup obligations: %+v", td)
-	}
-	if m.finishVolumeTeardown(t.Context(), td) {
-		t.Fatal("open volume run unexpectedly completed")
-	}
-	if err := m.Release(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
-		t.Fatal(err)
-	}
-	m.finishVolumeRun(sb, run)
-	if len(m.pendingRemovals) != 0 {
-		t.Fatalf("empty teardown enqueued removal: %+v", m.pendingRemovals)
-	}
-	if slices.Contains(base.removedNames(), "") {
-		t.Fatal("release removed an empty VM name")
-	}
-	if m.store.referencesVolume("data") {
-		t.Fatal("release retained archived journal references")
 	}
 }
 

@@ -280,11 +280,8 @@ func TestLiveVolumeDoesNotBlockLifecycle(t *testing.T) {
 			}
 			close(resume)
 			attachErr := <-attached
-			if action == "release" || action == "reap" {
-				waitFor(t, func() bool {
-					m.retryRemovals(t.Context()).Wait()
-					return volumeHoldersOf(m, "data") == (volumeHolders{})
-				})
+			if action == "reap" {
+				waitFor(t, func() bool { return volumeHoldersOf(m, "data") == (volumeHolders{}) })
 			}
 			if action == "release" || action == "reap" {
 				if attachErr == nil {
@@ -721,7 +718,6 @@ func TestRollbackClaimTakesOverAdmittedRunHolds(t *testing.T) {
 	run := beginAdmittedVolumeRun(t, m, sb)
 	m.rollbackClaim(t.Context(), []*types.Sandbox{sb})
 	m.finishVolumeRun(sb, run)
-	m.retryRemovals(t.Context()).Wait()
 	waitFor(t, m.store.synced)
 	if got := volumeHoldersOf(m, "data"); got != (volumeHolders{}) {
 		t.Fatalf("rolled-back claim leaked its admitted hold: %+v", got)
