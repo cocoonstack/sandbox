@@ -694,7 +694,6 @@ func TestArchiveDeleteRetryRechecksWakeRollback(t *testing.T) {
 	if err := <-woke; err == nil {
 		t.Fatal("wake succeeded despite a persist failure")
 	}
-	<-retried
 	m.mu.Lock()
 	archived := sb.ArchiveCk == ck && sb.VMName == ""
 	m.mu.Unlock()

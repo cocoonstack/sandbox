@@ -340,18 +340,13 @@ func (m *Manager) sweepExpiredCheckpoints(ctx context.Context) {
 		if ckpt.CreatedAt.After(cutoff) {
 			continue
 		}
-		if err := m.deleteCkLocked(ctx, ckpt.ID); err != nil {
+		unlock := m.lockRec(ckpt.ID)
+		err := m.ckpts.Delete(ctx, ckpt.ID)
+		unlock()
+		if err != nil {
 			logger.Errorf(ctx, err, "expire %s", ckpt.ID)
 		}
 	}
-}
-
-// deleteCkLocked removes a checkpoint under its record lock, releasing it before eviction.
-func (m *Manager) deleteCkLocked(ctx context.Context, ckID string) error {
-	unlock := m.lockRec(ckID)
-	err := m.ckpts.Delete(ctx, ckID)
-	unlock()
-	return err
 }
 
 func (m *Manager) loadCheckpoint(ctx context.Context, ckptID string) (types.Checkpoint, error) {
