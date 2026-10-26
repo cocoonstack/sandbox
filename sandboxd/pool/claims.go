@@ -113,20 +113,17 @@ func (s *claimStore) load() (map[string]*types.Sandbox, error) {
 	if err := json.Unmarshal(raw, &claims); err != nil {
 		return nil, fmt.Errorf("parse claims: %w", err)
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	for _, sb := range claims {
 		if sb.VolumesWant == nil {
 			sb.VolumesWant = sb.Volumes
 		}
-	}
-	s.mu.Lock()
-	for _, sb := range claims {
-		refs := checkpointRefs(sb)
-		if refs != [4]string{} {
-			s.changeRetainedRefs(sb.ID, refs[:])
+		if refs := checkpointRefs(sb); refs != [4]string{} {
+			s.changeRetainedRefs(sb.ID, appendRefs(nil, refs))
+			s.changed[sb.ID] = struct{}{}
 		}
-		s.changed[sb.ID] = struct{}{}
 	}
-	s.mu.Unlock()
 	return claims, nil
 }
 
@@ -135,8 +132,7 @@ func (s *claimStore) set(sbs ...*types.Sandbox) claimSnapshot {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, sb := range sbs {
-		s.changeCurrentRefs(sb.ID, checkpointRefs(sb))
-		s.rows[sb.ID] = &claimRow{dto: dtoOf(sb)}
+		s.put(sb.ID, sb)
 	}
 	s.seq++
 	return claimSnapshot{seq: s.seq}
@@ -147,11 +143,33 @@ func (s *claimStore) del(ids ...string) claimSnapshot {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, id := range ids {
-		s.changeCurrentRefs(id, [4]string{})
-		delete(s.rows, id)
+		s.put(id, nil)
 	}
 	s.seq++
 	return claimSnapshot{seq: s.seq}
+}
+
+// put replaces id's row with sb's projection, or drops it when sb is nil, and moves the checkpoint counts with it.
+func (s *claimStore) put(id string, sb *types.Sandbox) {
+	var refs [4]string
+	if sb == nil {
+		delete(s.rows, id)
+	} else {
+		refs = checkpointRefs(sb)
+		s.rows[id] = &claimRow{dto: dtoOf(sb)}
+	}
+	before := s.refs[id]
+	if before == refs {
+		return
+	}
+	s.changeCheckpointCounts(before[:], -1)
+	s.changeCheckpointCounts(refs[:], 1)
+	if refs == [4]string{} {
+		delete(s.refs, id)
+	} else {
+		s.refs[id] = refs
+	}
+	s.changed[id] = struct{}{}
 }
 
 // mark sequences a persist of the projection as it already stands.
@@ -173,13 +191,11 @@ func (s *claimStore) reset(claims map[string]*types.Sandbox) claimSnapshot {
 	defer s.mu.Unlock()
 	for id := range s.rows {
 		if _, ok := claims[id]; !ok {
-			s.changeCurrentRefs(id, [4]string{})
-			delete(s.rows, id)
+			s.put(id, nil)
 		}
 	}
 	for id, sb := range claims {
-		s.changeCurrentRefs(id, checkpointRefs(sb))
-		s.rows[id] = &claimRow{dto: dtoOf(sb)}
+		s.put(id, sb)
 	}
 	s.seq++
 	return claimSnapshot{seq: s.seq}
@@ -195,20 +211,10 @@ func (s *claimStore) commit(snap claimSnapshot) error {
 		return nil
 	}
 	rows, seq := slices.AppendSeq(make([]*claimRow, 0, len(s.rows)), maps.Values(s.rows)), s.seq
-	captured := make(map[string][]string, len(s.changed))
+	captured := make(map[string][4]string, len(s.changed))
 	for id := range s.changed {
-		refs := s.currentRefs(id)
-		captured[id] = nil
-		if refs != [4]string{} {
-			captured[id] = refs[:]
-		}
-		retained := slices.Clone(s.retained[id])
-		for _, ck := range refs {
-			if ck != "" && !slices.Contains(retained, ck) {
-				retained = append(retained, ck)
-			}
-		}
-		s.changeRetainedRefs(id, retained)
+		captured[id] = s.refs[id]
+		s.changeRetainedRefs(id, appendRefs(s.retained[id], s.refs[id]))
 	}
 	s.mu.Unlock()
 	s.buf = append(s.buf[:0], '{')
@@ -231,10 +237,8 @@ func (s *claimStore) commit(snap claimSnapshot) error {
 	}
 	s.mu.Lock()
 	for id, refs := range captured {
-		s.changeRetainedRefs(id, refs)
-		var slots [4]string
-		copy(slots[:], refs)
-		if s.currentRefs(id) == slots {
+		s.changeRetainedRefs(id, appendRefs(nil, refs))
+		if s.refs[id] == refs {
 			delete(s.changed, id)
 		}
 	}
@@ -297,25 +301,6 @@ func (s *claimStore) synced() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.written == s.seq
-}
-
-func (s *claimStore) currentRefs(id string) [4]string {
-	return s.refs[id]
-}
-
-func (s *claimStore) changeCurrentRefs(id string, after [4]string) {
-	before := s.currentRefs(id)
-	if before == after {
-		return
-	}
-	s.changeCheckpointCounts(before[:], -1)
-	s.changeCheckpointCounts(after[:], 1)
-	if after == [4]string{} {
-		delete(s.refs, id)
-	} else {
-		s.refs[id] = after
-	}
-	s.changed[id] = struct{}{}
 }
 
 func (s *claimStore) changeCheckpointCounts(refs []string, delta int) {
@@ -387,4 +372,13 @@ func volumesWantDTO(sb *types.Sandbox) []types.Volume {
 
 func checkpointRefs(sb *types.Sandbox) [4]string {
 	return [4]string{sb.ArchiveCk, sb.ArchivePending, sb.ReplicaCk, sb.ReplicaPending}
+}
+
+func appendRefs(list []string, refs [4]string) []string {
+	for _, ck := range refs {
+		if ck != "" && !slices.Contains(list, ck) {
+			list = append(list, ck)
+		}
+	}
+	return list
 }
