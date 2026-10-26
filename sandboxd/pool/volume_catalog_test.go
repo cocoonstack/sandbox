@@ -205,6 +205,68 @@ func TestRuntimeCatalogWriteFailureFencesAndConverges(t *testing.T) {
 	}
 }
 
+func TestRuntimeCatalogWriteFailureOnlyFencesAffectedName(t *testing.T) {
+	for _, unregister := range []bool{false, true} {
+		t.Run(fmt.Sprintf("unregister=%t", unregister), func(t *testing.T) {
+			m := newVolumeManager(t, newFakeEngine(), liveCatalog(t))
+			for _, name := range []string{"healthy", "affected"} {
+				if name == "affected" && !unregister {
+					continue
+				}
+				if err := m.RegisterVolume(t.Context(), name, types.VolumeRegistration{Path: writeVolumeImage(t, name, "bytes")}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			sb := mustClaim(t, m, testKey)
+			var before []resolvedVolume
+			if unregister {
+				var err error
+				before, err = m.resolveVolumes(t.Context(), "", []types.Volume{{Name: "healthy"}, {Name: "affected"}})
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			restore := blockCatalogRename(t, m)
+			defer restore()
+			var err error
+			if unregister {
+				err = m.UnregisterVolume(t.Context(), "affected")
+			} else {
+				err = m.RegisterVolume(t.Context(), "affected", types.VolumeRegistration{Path: writeVolumeImage(t, "affected", "bytes")})
+			}
+			if !errors.Is(err, ErrVolumeCatalogUnavailable) {
+				t.Fatalf("obstructed catalog write: %v", err)
+			}
+			if unregister {
+				if _, err := m.admitVolumes("", before); !errors.Is(err, ErrVolumeCatalogUnavailable) {
+					t.Fatalf("resolved mixed admission: %v", err)
+				}
+			}
+			for _, volumes := range [][]types.Volume{{{Name: "affected"}}, {{Name: "healthy"}, {Name: "affected"}}} {
+				if _, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Volumes: volumes}); !errors.Is(err, ErrVolumeCatalogUnavailable) {
+					t.Fatalf("affected claim: %v", err)
+				}
+				if _, err := m.SetVolumes(t.Context(), sb.ID, "", volumes); !errors.Is(err, ErrVolumeCatalogUnavailable) {
+					t.Fatalf("affected live addition: %v", err)
+				}
+			}
+			for _, name := range []string{"healthy", "affected"} {
+				if got := volumeHoldersOf(m, name); got != (volumeHolders{}) {
+					t.Fatalf("refused request reserved %s: %+v", name, got)
+				}
+			}
+			for _, name := range []string{"data", "healthy"} {
+				if _, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Volumes: []types.Volume{{Name: name}}}); err != nil {
+					t.Errorf("unrelated %s claim: %v", name, err)
+				}
+			}
+			if _, err := m.SetVolumes(t.Context(), sb.ID, "", []types.Volume{{Name: "data"}, {Name: "healthy"}}); err != nil {
+				t.Errorf("unrelated live addition: %v", err)
+			}
+		})
+	}
+}
+
 func TestRuntimeCatalogPossibleReplacementFencesAndConverges(t *testing.T) {
 	eng := newFakeEngine()
 	m := newVolumeManager(t, eng, nil)
