@@ -1949,8 +1949,7 @@ func newTestManagerAt(t testing.TB, eng *fakeEngine, dataDir string, pools ...co
 		m.store.mu.Lock()
 		defer m.store.mu.Unlock()
 		for id, sb := range m.claimed {
-			row := m.store.rows[id]
-			if row == nil || row.refs != [4]string{sb.ArchiveCk, sb.ArchivePending, sb.ReplicaCk, sb.ReplicaPending} {
+			if m.store.rows[id] == nil || m.store.refs[id] != checkpointRefs(sb) {
 				t.Errorf("claim %s references differ from its store row", id)
 			}
 		}

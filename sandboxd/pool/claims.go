@@ -68,9 +68,8 @@ type claimDTO struct {
 
 // claimRow keeps its encoded member until set replaces the row; set never edits one.
 type claimRow struct {
-	refs [4]string
-	dto  claimDTO
-	raw  []byte
+	dto claimDTO
+	raw []byte
 }
 
 // claimStore persists claimed sandboxes across daemon restarts; warm VMs are not persisted.
@@ -86,6 +85,7 @@ type claimStore struct {
 	rows        map[string]*claimRow
 	seq         uint64
 	written     uint64
+	refs        map[string][4]string
 	retained    map[string][]string
 	changed     map[string]struct{}
 	checkpoints map[string]int
@@ -96,7 +96,7 @@ type claimStore struct {
 func newClaimStore(dataDir string, sync bool) *claimStore {
 	return &claimStore{
 		path: filepath.Join(dataDir, "claims.json"), sync: sync,
-		rows: map[string]*claimRow{}, retained: map[string][]string{},
+		rows: map[string]*claimRow{}, refs: map[string][4]string{}, retained: map[string][]string{},
 		changed: map[string]struct{}{}, checkpoints: map[string]int{},
 	}
 }
@@ -120,7 +120,7 @@ func (s *claimStore) load() (map[string]*types.Sandbox, error) {
 	}
 	s.mu.Lock()
 	for _, sb := range claims {
-		refs := newClaimRow(sb).refs
+		refs := checkpointRefs(sb)
 		if refs != [4]string{} {
 			s.changeRetainedRefs(sb.ID, refs[:])
 		}
@@ -135,9 +135,8 @@ func (s *claimStore) set(sbs ...*types.Sandbox) claimSnapshot {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, sb := range sbs {
-		row := newClaimRow(sb)
-		s.changeCurrentRefs(sb.ID, row.refs)
-		s.rows[sb.ID] = row
+		s.changeCurrentRefs(sb.ID, checkpointRefs(sb))
+		s.rows[sb.ID] = &claimRow{dto: dtoOf(sb)}
 	}
 	s.seq++
 	return claimSnapshot{seq: s.seq}
@@ -179,9 +178,8 @@ func (s *claimStore) reset(claims map[string]*types.Sandbox) claimSnapshot {
 		}
 	}
 	for id, sb := range claims {
-		row := newClaimRow(sb)
-		s.changeCurrentRefs(id, row.refs)
-		s.rows[id] = row
+		s.changeCurrentRefs(id, checkpointRefs(sb))
+		s.rows[id] = &claimRow{dto: dtoOf(sb)}
 	}
 	s.seq++
 	return claimSnapshot{seq: s.seq}
@@ -302,10 +300,7 @@ func (s *claimStore) synced() bool {
 }
 
 func (s *claimStore) currentRefs(id string) [4]string {
-	if row := s.rows[id]; row != nil {
-		return row.refs
-	}
-	return [4]string{}
+	return s.refs[id]
 }
 
 func (s *claimStore) changeCurrentRefs(id string, after [4]string) {
@@ -315,6 +310,11 @@ func (s *claimStore) changeCurrentRefs(id string, after [4]string) {
 	}
 	s.changeCheckpointCounts(before[:], -1)
 	s.changeCheckpointCounts(after[:], 1)
+	if after == [4]string{} {
+		delete(s.refs, id)
+	} else {
+		s.refs[id] = after
+	}
 	s.changed[id] = struct{}{}
 }
 
@@ -385,6 +385,6 @@ func volumesWantDTO(sb *types.Sandbox) []types.Volume {
 	return append([]types.Volume{}, sb.VolumesWant...)
 }
 
-func newClaimRow(sb *types.Sandbox) *claimRow {
-	return &claimRow{refs: [4]string{sb.ArchiveCk, sb.ArchivePending, sb.ReplicaCk, sb.ReplicaPending}, dto: dtoOf(sb)}
+func checkpointRefs(sb *types.Sandbox) [4]string {
+	return [4]string{sb.ArchiveCk, sb.ArchivePending, sb.ReplicaCk, sb.ReplicaPending}
 }
