@@ -696,7 +696,7 @@ func (m *Manager) pauseExpired(ctx context.Context, sb *types.Sandbox) error {
 
 func (m *Manager) purgeArchiveCk(ctx context.Context, id, ck, tenant string) {
 	logger := log.WithFunc("pool.purgeArchiveCk")
-	if _, err := m.deleteArchiveCk(ctx, ck); err != nil {
+	if _, err := m.finishArchiveCkDelete(ctx, ck); err != nil {
 		logger.Warnf(ctx, "delete archive ck %s: %v", ck, err)
 	}
 	m.counters.archiveDeletes.Add(1)

@@ -352,6 +352,10 @@ func (m *Manager) deleteArchiveCk(ctx context.Context, ckID string) (bool, error
 	if err := m.markArchiveCk(ckID); err != nil {
 		return false, fmt.Errorf("track: %w", err)
 	}
+	return m.finishArchiveCkDelete(ctx, ckID)
+}
+
+func (m *Manager) finishArchiveCkDelete(ctx context.Context, ckID string) (bool, error) {
 	unlock := m.lockRec(ckID)
 	if m.store.referencesCheckpoint(ckID) {
 		unlock()
