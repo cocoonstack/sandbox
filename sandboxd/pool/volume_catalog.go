@@ -150,15 +150,7 @@ func (m *Manager) loadRuntimeVolumes() error {
 }
 
 func (m *Manager) volumeReferenced(name string) bool {
-	if holders := m.catalog.holders[name]; holders.readers > 0 || holders.writers > 0 {
-		return true
-	}
-	for _, sb := range m.claimed {
-		if volumeIndex(sb.Volumes, name) >= 0 || volumeIndex(sb.VolumesWant, name) >= 0 {
-			return true
-		}
-	}
-	return m.store.referencesVolume(name)
+	return m.catalog.holders[name] != (volumeHolders{}) || m.store.referencesVolume(name)
 }
 
 func (m *Manager) writeCatalog(ctx context.Context, name string, entries map[string]*catalogVolume) error {
