@@ -72,8 +72,8 @@ func TestReplicaRetirementKeepsTombstoneUntilClaimCommit(t *testing.T) {
 				if err = m.Reconcile(t.Context()); err != nil {
 					t.Fatal(err)
 				}
-				restored, ok := m.byID(sb.ID)
-				if !ok {
+				restored, present := m.byID(sb.ID)
+				if !present {
 					t.Fatal("restart dropped a claim after failed retirement commit")
 				}
 				m.retireReplica(t.Context(), restored)
