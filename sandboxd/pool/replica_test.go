@@ -694,11 +694,18 @@ func TestReplicaExpiryDropsTheRowThenTheClaim(t *testing.T) {
 	vm := lockedVMName(sb)
 	replicateNow(t, a, sb)
 	ck := a.replicaOf(sb)
+	checkpointBeforeDelete := make(chan bool, 1)
+	a.archives = &hookRegistry{Registry: c.reg, beforeDelete: func() {
+		checkpointBeforeDelete <- ckExists(t, a, ck)
+	}}
 	a.mu.Lock()
 	sb.Deadline = time.Now().Add(-time.Second)
 	a.mu.Unlock()
 
 	a.reapOnce(t.Context())
+	if !<-checkpointBeforeDelete {
+		t.Fatal("checkpoint disappeared before its registry tombstone was deleted")
+	}
 	waitFor(t, func() bool { return a.replicaOf(sb) == "" && !ckExists(t, a, ck) })
 	if _, ok, _ := c.reg.Get(t.Context(), sb.ID); ok {
 		t.Error("the row outlived the first reap")
