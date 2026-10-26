@@ -147,21 +147,22 @@ func (m *Manager) resolveVolumes(ctx context.Context, tenant string, requested [
 		return nil, fmt.Errorf("%w: %w", ErrBadVolume, err)
 	}
 	m.mu.Lock()
+	catalog := m.catalog.entries
 	for _, volume := range applied {
+		entry := catalog[volume.Name]
+		if entry == nil || !entry.allowedFor(tenant) {
+			m.mu.Unlock()
+			return nil, ErrVolumeUnavailable
+		}
 		if err := m.catalog.admissionError(volume.Name); err != nil {
 			m.mu.Unlock()
 			return nil, err
 		}
 	}
-	catalog := m.catalog.entries
 	m.mu.Unlock()
 	resolved := make([]resolvedVolume, 0, len(applied))
 	for _, volume := range applied {
-		entry, ok := catalog[volume.Name]
-		if !ok || !entry.allowedFor(tenant) {
-			return nil, ErrVolumeUnavailable
-		}
-		resolvedEntry, resolveErr := m.resolveCatalogEntry(ctx, volume, entry)
+		resolvedEntry, resolveErr := m.resolveCatalogEntry(ctx, volume, catalog[volume.Name])
 		if resolveErr != nil {
 			return nil, resolveErr
 		}

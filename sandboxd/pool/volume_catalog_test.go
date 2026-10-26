@@ -179,8 +179,8 @@ func TestRuntimeCatalogWriteFailureFencesAndConverges(t *testing.T) {
 	if err := m.RegisterVolume(t.Context(), "runtime", spec); !errors.Is(err, ErrVolumeCatalogUnavailable) {
 		t.Fatalf("write failure: %v", err)
 	}
-	if _, err := m.resolveVolumes(t.Context(), "", []types.Volume{{Name: "runtime"}}); !errors.Is(err, ErrVolumeCatalogUnavailable) {
-		t.Fatalf("pending admission: %v", err)
+	if _, err := m.resolveVolumes(t.Context(), "", []types.Volume{{Name: "runtime"}}); !errors.Is(err, ErrVolumeUnavailable) {
+		t.Fatalf("unpublished admission: %v", err)
 	}
 	if _, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{}); err != nil {
 		t.Fatalf("volume-free claim blocked: %v", err)
@@ -242,11 +242,15 @@ func TestRuntimeCatalogWriteFailureOnlyFencesAffectedName(t *testing.T) {
 					t.Fatalf("resolved mixed admission: %v", err)
 				}
 			}
+			wantErr := ErrVolumeUnavailable
+			if unregister {
+				wantErr = ErrVolumeCatalogUnavailable
+			}
 			for _, volumes := range [][]types.Volume{{{Name: "affected"}}, {{Name: "healthy"}, {Name: "affected"}}} {
-				if _, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Volumes: volumes}); !errors.Is(err, ErrVolumeCatalogUnavailable) {
+				if _, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Volumes: volumes}); !errors.Is(err, wantErr) {
 					t.Fatalf("affected claim: %v", err)
 				}
-				if _, err := m.SetVolumes(t.Context(), sb.ID, "", volumes); !errors.Is(err, ErrVolumeCatalogUnavailable) {
+				if _, err := m.SetVolumes(t.Context(), sb.ID, "", volumes); !errors.Is(err, wantErr) {
 					t.Fatalf("affected live addition: %v", err)
 				}
 			}
@@ -280,8 +284,8 @@ func TestRuntimeCatalogPossibleReplacementFencesAndConverges(t *testing.T) {
 	if got := newVolumeManagerAt(t, eng, m.dataDir, nil).VolumeNames(); !slices.Equal(got, []string{"runtime"}) {
 		t.Fatalf("possible replacement not recovered: %v", got)
 	}
-	if _, err := m.resolveVolumes(t.Context(), "", []types.Volume{{Name: "runtime"}}); !errors.Is(err, ErrVolumeCatalogUnavailable) {
-		t.Fatalf("uncertain admission: %v", err)
+	if _, err := m.resolveVolumes(t.Context(), "", []types.Volume{{Name: "runtime"}}); !errors.Is(err, ErrVolumeUnavailable) {
+		t.Fatalf("unpublished admission: %v", err)
 	}
 	if _, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{}); err != nil {
 		t.Fatalf("volume-free claim blocked: %v", err)
@@ -508,8 +512,8 @@ func TestRuntimeCatalogPendingWriteSurvivesFailedAndCanceledRetry(t *testing.T) 
 		t.Fatalf("failed retry cleared pending write: %v", err)
 	}
 	m.retryVolumeCatalog(t.Context())
-	if _, err := m.resolveVolumes(t.Context(), "", []types.Volume{{Name: "runtime"}}); !errors.Is(err, ErrVolumeCatalogUnavailable) {
-		t.Fatalf("pending replacement lost fence: %v", err)
+	if _, err := m.resolveVolumes(t.Context(), "", []types.Volume{{Name: "runtime"}}); !errors.Is(err, ErrVolumeUnavailable) {
+		t.Fatalf("unpublished admission: %v", err)
 	}
 	restore()
 	ctx, cancel := context.WithCancel(t.Context())
