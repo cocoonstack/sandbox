@@ -415,6 +415,8 @@ func (m *Manager) deleteMarked(ckID string) bool {
 }
 
 func (m *Manager) archiveCkPinned(ckID string) bool {
-	_, pinned := m.pinnedArchiveCks()[ckID]
-	return pinned
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	_, pending := m.pendingCks[ckID]
+	return pending || m.store.referencesCheckpoint(ckID)
 }
