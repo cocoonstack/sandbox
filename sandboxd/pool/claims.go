@@ -81,20 +81,20 @@ type claimStore struct {
 	writeMu sync.Mutex
 	buf     []byte
 
-	mu              sync.Mutex
-	rows            map[string]*claimRow
-	seq             uint64
-	written         uint64
-	refs            map[string][4]string
-	retained        map[string][]string
-	changed         map[string]struct{}
-	checkpoints     map[string]int
-	currentVolumes  map[string][]types.Volume
-	retainedVolumes map[string][]types.Volume
-	volumes         map[string]volumeHolders
+	mu                   sync.Mutex
+	rows                 map[string]*claimRow
+	seq                  uint64
+	written              uint64
+	refs                 map[string][4]string
+	retained             map[string][]string
+	changed              map[string]struct{}
+	checkpoints          map[string]int
+	currentVolumes       map[string][]types.Volume
+	retainedVolumes      map[string][]types.Volume
+	retainedVolumeCounts map[string]volumeHolders
 
-	recommitting           atomic.Bool
-	recoveryVolumesPresent atomic.Bool
+	recommitting      atomic.Bool
+	anyRetainedVolume atomic.Bool
 }
 
 func newClaimStore(dataDir string, sync bool) *claimStore {
@@ -102,7 +102,7 @@ func newClaimStore(dataDir string, sync bool) *claimStore {
 		path: filepath.Join(dataDir, "claims.json"), sync: sync,
 		rows: map[string]*claimRow{}, refs: map[string][4]string{}, retained: map[string][]string{},
 		changed: map[string]struct{}{}, checkpoints: map[string]int{},
-		currentVolumes: map[string][]types.Volume{}, retainedVolumes: map[string][]types.Volume{}, volumes: map[string]volumeHolders{},
+		currentVolumes: map[string][]types.Volume{}, retainedVolumes: map[string][]types.Volume{}, retainedVolumeCounts: map[string]volumeHolders{},
 	}
 }
 
@@ -124,7 +124,7 @@ func (s *claimStore) load() (map[string]*types.Sandbox, error) {
 		if sb.VolumesWant == nil {
 			sb.VolumesWant = sb.Volumes
 		}
-		if refs := volumeRefs(nil, slices.Clone(sb.Volumes), slices.Clone(sb.VolumesWant)); len(refs) != 0 {
+		if refs := appendRecoveryRefs(slices.Clone(sb.Volumes), sb.VolumesWant); len(refs) != 0 {
 			s.changeRetainedVolumes(sb.ID, refs)
 			s.changed[sb.ID] = struct{}{}
 		}
@@ -363,43 +363,43 @@ func (s *claimStore) checkpointReferences() map[string]struct{} {
 	return refs
 }
 
-func (s *claimStore) changeVolumeCounts(refs []types.Volume, delta int) {
+func (s *claimStore) changeRetainedVolumeCounts(refs []types.Volume, delta int) {
 	for _, v := range refs {
-		count := s.volumes[v.Name]
+		count := s.retainedVolumeCounts[v.Name]
 		if v.RW() {
 			count.writers += delta
 		} else {
 			count.readers += delta
 		}
 		if count == (volumeHolders{}) {
-			delete(s.volumes, v.Name)
+			delete(s.retainedVolumeCounts, v.Name)
 		} else {
-			s.volumes[v.Name] = count
+			s.retainedVolumeCounts[v.Name] = count
 		}
 	}
 }
 
 func (s *claimStore) changeRetainedVolumes(id string, after []types.Volume) {
-	s.changeVolumeCounts(s.retainedVolumes[id], -1)
-	s.changeVolumeCounts(after, 1)
+	s.changeRetainedVolumeCounts(s.retainedVolumes[id], -1)
+	s.changeRetainedVolumeCounts(after, 1)
 	if len(after) == 0 {
 		delete(s.retainedVolumes, id)
 	} else {
 		s.retainedVolumes[id] = after
 	}
-	s.recoveryVolumesPresent.Store(len(s.volumes) != 0)
+	s.anyRetainedVolume.Store(len(s.retainedVolumeCounts) != 0)
 }
 
 func (s *claimStore) referencesVolume(name string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.volumes[name] != (volumeHolders{})
+	return s.retainedVolumeCounts[name] != (volumeHolders{})
 }
 
 func (s *claimStore) volumeConflicts(volume types.Volume, ownerID string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	count := s.volumes[volume.Name]
+	count := s.retainedVolumeCounts[volume.Name]
 	for _, ref := range s.retainedVolumes[ownerID] {
 		if ref == volume {
 			if ref.RW() {
@@ -419,7 +419,7 @@ func (s *claimStore) recoveryVolumesFor(owner string) []types.Volume {
 }
 
 func (s *claimStore) detachingOwners() map[string]bool {
-	if !s.recoveryVolumesPresent.Load() {
+	if !s.anyRetainedVolume.Load() {
 		return nil
 	}
 	s.mu.Lock()
@@ -437,7 +437,7 @@ func (s *claimStore) detachingOwners() map[string]bool {
 }
 
 func (s *claimStore) hasRecoveryVolumes(owner string) bool {
-	if !s.recoveryVolumesPresent.Load() {
+	if !s.anyRetainedVolume.Load() {
 		return false
 	}
 	s.mu.Lock()
