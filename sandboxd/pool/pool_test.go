@@ -323,8 +323,7 @@ func TestReconcile(t *testing.T) {
 		"sb_live": {ID: "sb_live", VMName: "sbx-live-1", Key: testKey, Token: "tok", VsockSocket: "/vsock/live-old"},
 		"sb_dead": {ID: "sb_dead", VMName: "sbx-dead-1", Key: testKey, Token: "tok"},
 	}
-	claimStore := newClaimStore(dataDir, false)
-	if err := claimStore.commit(claimStore.reset(claims)); err != nil {
+	if err := newClaimStore(dataDir, false).save(claims); err != nil {
 		t.Fatalf("setup: %v", err)
 	}
 	m := newTestManagerAt(t, eng, dataDir, config.PoolSpec{PoolKey: testKey, Warm: 1})

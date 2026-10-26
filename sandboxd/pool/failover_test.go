@@ -272,8 +272,7 @@ func TestFailoverRestartReclaimsAnInterruptedArchive(t *testing.T) {
 	claims := map[string]*types.Sandbox{
 		"sb_x": {ID: "sb_x", VMName: "sbx-gone-1", Key: testKey, Token: "tok", HibernateSnap: "sbx-hib-x"},
 	}
-	claimStore := newClaimStore(dirA, false)
-	if err := claimStore.commit(claimStore.reset(claims)); err != nil {
+	if err := newClaimStore(dirA, false).save(claims); err != nil {
 		t.Fatalf("setup: %v", err)
 	}
 	a := c.node(t, "a", dirA, keepAnHour)
@@ -296,8 +295,7 @@ func TestFailoverRestartReclaimSparesACheckpointAdoptedMidReconcile(t *testing.T
 	claims := map[string]*types.Sandbox{
 		"sb_x": {ID: "sb_x", VMName: "sbx-gone-1", Key: testKey, Token: "tok", HibernateSnap: "sbx-hib-x"},
 	}
-	claimStore := newClaimStore(dirA, false)
-	if err := claimStore.commit(claimStore.reset(claims)); err != nil {
+	if err := newClaimStore(dirA, false).save(claims); err != nil {
 		t.Fatalf("setup: %v", err)
 	}
 	a := c.node(t, "a", dirA, keepAnHour)
@@ -322,8 +320,7 @@ func TestFailoverRestartReclaimsOnlyTheCheckpointsItPublished(t *testing.T) {
 	claims := map[string]*types.Sandbox{
 		"sb_x": {ID: "sb_x", VMName: "sbx-gone-1", Key: testKey, Token: "tok", HibernateSnap: "sbx-hib-x"},
 	}
-	claimStore := newClaimStore(dirA, false)
-	if err := claimStore.commit(claimStore.reset(claims)); err != nil {
+	if err := newClaimStore(dirA, false).save(claims); err != nil {
 		t.Fatalf("setup: %v", err)
 	}
 	a := c.node(t, "a", dirA, keepAnHour)

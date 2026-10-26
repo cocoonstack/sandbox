@@ -2987,14 +2987,10 @@ func (f *fakePlacer) TemplateVolumeOwners(probe string, _ []string) []string {
 	}
 	return f.templateVolumeOwners
 }
-
 func (f *fakePlacer) VolumeHolders() map[string]int { return f.volumeHolders }
-
-func (f *fakePlacer) PeerAddrs() []string { return f.addrs }
-
+func (f *fakePlacer) PeerAddrs() []string           { return f.addrs }
 func (f *fakePlacer) ClientAddr(addr string) string { return addr }
-
-func (f *fakePlacer) ConfigMismatches() int { return 0 }
+func (f *fakePlacer) ConfigMismatches() int         { return 0 }
 
 type fakeProber struct {
 	owners    []string
@@ -3002,5 +2998,4 @@ type fakeProber struct {
 }
 
 func (f *fakeProber) Owners(context.Context, string) []string { return f.owners }
-
-func (f *fakeProber) Forget(id string) { f.forgotten = append(f.forgotten, id) }
+func (f *fakeProber) Forget(id string)                        { f.forgotten = append(f.forgotten, id) }

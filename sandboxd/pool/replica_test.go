@@ -4,7 +4,6 @@ import (
 	"encoding/json/v2"
 	"errors"
 	"net"
-	"os"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -1015,34 +1014,20 @@ func TestReplicaScanWaitsForDetachAcknowledgment(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	m.store.recommitting.Store(true)
 	eng := m.eng.(*fakeEngine)
-	tmp := m.store.path + ".tmp"
-	eng.liveVolumeHook = func(verb string) error {
-		if verb == "detach" {
-			return os.Mkdir(tmp, 0o700)
-		}
-		return nil
-	}
-	view, err := m.SetVolumes(t.Context(), sb.ID, "", nil)
-	eng.liveVolumeHook = nil
-	if err == nil || len(view.Volumes) != 0 || len(view.VolumesWant) != 0 {
-		t.Fatalf("detach did not fail after device removal: %+v, %v", view, err)
-	}
+	unblock := detachWithoutCommit(t, m, eng, sb.ID, "")
 	m.replicateOnce(t.Context())
 	if m.replicating.Load() || !m.replicas[sb.ID].skipLogged || !m.replicas[attached.ID].skipLogged || m.replicas[ordinary.ID].tried.IsZero() || m.replicas[ordinary.ID].skipLogged {
 		t.Fatalf("scan failed to distinguish detached, attached, and ordinary claims: %+v", m.replicas)
 	}
-	if err = m.replicate(t.Context(), sb); !errors.Is(err, ErrVolumeCapture) {
+	if err := m.replicate(t.Context(), sb); !errors.Is(err, ErrVolumeCapture) {
 		t.Fatalf("capture ignored retained attachment: %v", err)
 	}
 	if sb.HasReplica() || len(eng.snapSaves) != 0 {
 		t.Fatal("pending detach published a replica")
 	}
-	if err = os.Remove(tmp); err != nil {
-		t.Fatal(err)
-	}
-	if err = m.store.commit(m.store.mark()); err != nil {
+	unblock()
+	if err := m.store.commit(m.store.mark()); err != nil {
 		t.Fatal(err)
 	}
 	m.replicateOnce(t.Context())

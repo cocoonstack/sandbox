@@ -18,7 +18,7 @@ func BenchmarkStoreSaveScaling(b *testing.B) {
 			st := newClaimStore(b.TempDir(), false)
 			claims := benchClaims(n)
 			for b.Loop() {
-				if err := st.commit(st.reset(claims)); err != nil {
+				if err := st.save(claims); err != nil {
 					b.Fatalf("save: %v", err)
 				}
 			}
@@ -48,7 +48,7 @@ func BenchmarkStoreCommitEnv(b *testing.B) {
 						sb.Env = envs[arm]
 					}
 					s := newClaimStore(b.TempDir(), durable)
-					if err := s.commit(s.reset(claims)); err != nil {
+					if err := s.save(claims); err != nil {
 						b.Fatalf("save: %v", err)
 					}
 					one := claims[fmt.Sprintf("sb_%016x", 0)]
@@ -105,7 +105,7 @@ func benchPersistContention(b *testing.B, claims map[string]*types.Sandbox, arm 
 		switch arm {
 		case "under-lock":
 			mu.Lock()
-			_ = s.commit(s.reset(claims))
+			_ = s.save(claims)
 			mu.Unlock()
 		case "rebuild":
 			mu.Lock()

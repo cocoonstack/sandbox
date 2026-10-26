@@ -85,7 +85,7 @@ func TestStoreRoundTrip(t *testing.T) {
 	}
 	for _, fsync := range []bool{false, true} {
 		s := newClaimStore(t.TempDir(), fsync)
-		if err := s.commit(s.reset(claims)); err != nil {
+		if err := s.save(claims); err != nil {
 			t.Fatalf("save (sync=%v): %v", fsync, err)
 		}
 		loadedStore := newClaimStore(filepath.Dir(s.path), false)
@@ -238,4 +238,8 @@ func TestClaimStoreConcurrentCommits(t *testing.T) {
 	if got, err := newClaimStore(filepath.Dir(s.path), false).load(); err != nil || len(got) != 1 {
 		t.Fatalf("after concurrent commits: %+v, %v", got, err)
 	}
+}
+
+func (s *claimStore) save(claims map[string]*types.Sandbox) error {
+	return s.commit(s.reset(claims))
 }

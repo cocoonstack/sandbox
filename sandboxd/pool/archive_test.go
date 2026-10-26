@@ -155,8 +155,7 @@ func TestReconcileReclaimsOrphanArchiveCk(t *testing.T) {
 	claims := map[string]*types.Sandbox{
 		"sb_mine": {ID: "sb_mine", VMName: "sbx-gone-1", Key: testKey, Token: "tok"},
 	}
-	claimStore := newClaimStore(dataDir, false)
-	if err := claimStore.commit(claimStore.reset(claims)); err != nil {
+	if err := newClaimStore(dataDir, false).save(claims); err != nil {
 		t.Fatalf("setup: %v", err)
 	}
 	m := newTestManagerAt(t, eng, dataDir)

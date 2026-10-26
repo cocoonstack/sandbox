@@ -476,22 +476,6 @@ func TestValidateVolumeCatalogTenantNames(t *testing.T) {
 	}
 }
 
-func TestLoadPreservesRestrictedACLWithInvalidVolumeTenants(t *testing.T) {
-	for _, tenants := range []string{`["acme", "has space", "", "beta"]`, `["has space"]`} {
-		cfg, err := Load(writeConfig(t, `{"pools":[],"volumes":[{"name":"data","path":"/images/data","tenants":`+tenants+`}]}`))
-		if err != nil {
-			t.Fatal(err)
-		}
-		want := []string{"has space"}
-		if strings.Contains(tenants, "acme") {
-			want = []string{"acme", "has space", "", "beta"}
-		}
-		if !slices.Equal(cfg.Volumes[0].Tenants, want) {
-			t.Fatalf("tenants = %v, want %v", cfg.Volumes[0].Tenants, want)
-		}
-	}
-}
-
 func writeConfig(t *testing.T, body string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "config.json")

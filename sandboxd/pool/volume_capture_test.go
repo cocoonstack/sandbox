@@ -15,10 +15,7 @@ func TestVolumeClaimRejectsDirectCapture(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
 	sb := mustClaim(t, m, testKey)
-	m.mu.Lock()
 	sb.Volumes = []types.Volume{{Name: "dataset", Mount: "/datasets"}}
-	m.store.set(sb)
-	m.mu.Unlock()
 
 	tests := []struct {
 		name string
@@ -54,10 +51,7 @@ func TestVolumeClaimRunningWakeUnchanged(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
 	sb := mustClaim(t, m, testKey)
-	m.mu.Lock()
 	sb.Volumes = []types.Volume{{Name: "dataset", Mount: "/datasets"}}
-	m.store.set(sb)
-	m.mu.Unlock()
 
 	sock, _, _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token)
 	if err != nil {
@@ -129,10 +123,7 @@ func TestIdleOnceSkipsVolumeClaim(t *testing.T) {
 		eng := newFakeEngine()
 		m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1, IdleHibernateSeconds: 1})
 		sb := mustClaim(t, m, testKey)
-		m.mu.Lock()
 		sb.Volumes = []types.Volume{{Name: "dataset", Mount: "/datasets"}}
-		m.store.set(sb)
-		m.mu.Unlock()
 		backdate(m, sb, 2*time.Second)
 
 		sweepIdle(t, m)

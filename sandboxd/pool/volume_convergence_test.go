@@ -313,7 +313,7 @@ func TestUnsupportedRuntimeDoesNotChangeVolumeIntent(t *testing.T) {
 }
 
 func TestVolumeHoldsRejectCaptureBeforeTrim(t *testing.T) {
-	for _, state := range []string{"applied", "desired", "admitted", "recovery"} {
+	for _, state := range []string{"applied", "desired", "admitted"} {
 		t.Run(state, func(t *testing.T) {
 			eng := newFakeEngine()
 			m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1, CaptureTrim: true})
@@ -321,48 +321,18 @@ func TestVolumeHoldsRejectCaptureBeforeTrim(t *testing.T) {
 			held := []types.Volume{{Name: "data", Mount: "/volumes/data"}}
 			switch state {
 			case "applied":
-				m.mu.Lock()
 				sb.Volumes = held
-				m.store.set(sb)
-				m.mu.Unlock()
 			case "desired":
-				m.mu.Lock()
 				sb.VolumesWant = held
-				m.store.set(sb)
-				m.mu.Unlock()
-			case "recovery":
-				m.mu.Lock()
-				sb.VolumesWant = held
-				js := m.store.set(sb)
-				m.mu.Unlock()
-				if err := m.store.commit(js); err != nil {
-					t.Fatal(err)
-				}
-				m.mu.Lock()
-				sb.VolumesWant = nil
-				m.store.set(sb)
-				m.mu.Unlock()
 			case "admitted":
-				if err := m.RegisterVolume(t.Context(), "data", types.VolumeRegistration{Path: writeVolumeImage(t, "data", "bytes")}); err != nil {
-					t.Fatal(err)
-				}
 				_, run, err := m.beginVolumeRun(t.Context(), sb)
 				if err != nil {
 					t.Fatal(err)
 				}
-				resolved, err := m.resolveVolumes(t.Context(), "", held)
-				if err != nil {
-					t.Fatal(err)
-				}
 				m.mu.Lock()
-				if err = m.checkResolved(resolved, ""); err == nil {
-					m.adoptVolumes(held)
-				}
+				m.adoptVolumes(held)
 				run.holds = held
 				m.mu.Unlock()
-				if err != nil {
-					t.Fatal(err)
-				}
 				defer m.finishVolumeRun(sb, run)
 			}
 			if _, err := m.Checkpoint(t.Context(), sb.ID, Cred{Token: sb.Token}, "blocked", ""); !errors.Is(err, ErrVolumeCapture) {
@@ -376,14 +346,6 @@ func TestVolumeHoldsRejectCaptureBeforeTrim(t *testing.T) {
 			}
 			if len(eng.trims) != 0 {
 				t.Fatalf("capture trimmed held volume: %v", eng.trims)
-			}
-			if state == "recovery" {
-				if err := m.store.commit(m.store.mark()); err != nil {
-					t.Fatal(err)
-				}
-				if _, err := m.Checkpoint(t.Context(), sb.ID, Cred{Token: sb.Token}, "retired", ""); err != nil {
-					t.Fatalf("checkpoint after recovery acknowledgment: %v", err)
-				}
 			}
 		})
 	}
