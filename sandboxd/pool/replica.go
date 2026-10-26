@@ -124,17 +124,17 @@ func (m *Manager) replicate(ctx context.Context, sb *types.Sandbox) error {
 		return errWokeMeanwhile
 	}
 	if err := m.store.commit(intent); err != nil {
-		clearErr := m.clearReplicaIntent(ctx, sb, ckID)
-		return fmt.Errorf("replicate %s: persist intent: %w", sb.ID, errors.Join(err, clearErr))
+		_ = m.clearReplicaIntent(ctx, sb, ckID)
+		return fmt.Errorf("replicate %s: persist intent: %w", sb.ID, err)
 	}
 	epoch, err := m.replaceReplica(ctx, sb, ckID)
 	switch {
 	case errors.Is(err, archives.ErrLost):
-		clearErr := m.clearReplicaIntent(ctx, sb, ckID)
+		_ = m.clearReplicaIntent(ctx, sb, ckID)
 		if settleErr := m.refusedReplace(ctx, sb); settleErr != nil && !errors.Is(settleErr, ErrUnknownSandbox) {
 			return fmt.Errorf("replicate %s: settle refused write: %w", sb.ID, settleErr)
 		}
-		return fmt.Errorf("replicate %s: registry: %w", sb.ID, errors.Join(err, clearErr))
+		return fmt.Errorf("replicate %s: registry: %w", sb.ID, err)
 	case err != nil:
 		return fmt.Errorf("replicate %s: registry: %w", sb.ID, err)
 	}
