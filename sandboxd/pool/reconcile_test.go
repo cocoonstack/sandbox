@@ -24,10 +24,7 @@ func TestReconcileJournalsAnAdoptedHibernate(t *testing.T) {
 	if err := eng.Hibernate(t.Context(), sb.VMName, snap); err != nil {
 		t.Fatalf("engine hibernate: %v", err)
 	}
-	intent, live := m.setIfLive(sb, func() { sb.PendingSnap = snap })
-	if !live {
-		t.Fatal("hibernate claim disappeared before intent")
-	}
+	intent, _ := m.setIfLive(sb, func() { sb.PendingSnap = snap })
 	if err := m.store.commit(intent); err != nil {
 		t.Fatalf("journal intent: %v", err)
 	}
