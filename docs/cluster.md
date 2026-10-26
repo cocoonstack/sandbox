@@ -233,6 +233,9 @@ replication rounds write it, so the claim path is unchanged.
   tombstone no claim holds is purged checkpoint first. Retention is a lower
   bound: a purge can run up to an hour late. An archive kept forever (no
   `archive_delete_after_seconds`) stays until a client adopts and releases it.
+  A checkpoint the claims journal may still name is never deleted: after a
+  failed journal write its delete waits for the next write that lands, and a
+  replica retirement keeps its tombstone until the hourly sweep after that.
 - **Usage journal.** The journal stays per node: an adopted claim's `archive`
   is in the old owner's `usage.jsonl`, and its `unarchive`, `release` or
   `archive_delete` is in the adopter's or the purging node's. Fold the journals
@@ -307,10 +310,10 @@ checkpoint store and keeps each claim's registry row on the latest snapshot:
   about 185 s. The first round of a claim after a wake or adoption uploads the
   whole claim, so that pass is the long pass in this bound.
   While rounds fail it is the time since the last one that committed.
-- **Lifecycle.** A release consumes the row, then deletes the replica and the
-  tombstone. A hibernate leaves the row on the last replica. An archive puts its
+- **Lifecycle.** A release consumes the row, then deletes the tombstone and the
+  replica. A hibernate leaves the row on the last replica. An archive puts its
   own checkpoint over the row, with its retention deadline, and deletes the
-  replica. A lease expiry with `on_expire` release drops the row and the replica
+  replica. A lease expiry with `on_expire` destroy drops the row and the replica
   first, and the next reap destroys the claim; with `on_expire` archive, the
   archive puts its checkpoint over the row. Turning `replicate_seconds` off
   takes a restart, since a reload that changes it is refused; the restarted node
@@ -318,8 +321,11 @@ checkpoint store and keeps each claim's registry row on the latest snapshot:
   that holds a replica when the node restarts with replication off is still
   treated as replicated by the fence until the next restart, so during a
   registry outage it answers 503 like a replicated claim; that costs
-  availability only, never a second copy or data. A restart keeps the node's own
-  live row for a running claim and takes the checkpoint a crashed round left on
+  availability only, never a second copy or data. Turning `archive_failover`
+  off stops every registry read and write: a claim that holds a replica then
+  expires and is released like any other, and leaves its row and replica
+  checkpoint behind, the same residue as a node that never returns.
+  A restart keeps the node's own live row for a running claim and takes the checkpoint a crashed round left on
   it; a claim whose row another node holds, or whose row a finished adopter
   consumed, is dropped with its VM. A replica row has no retention deadline: the
   hourly sweep never purges it, because no round refreshes it while the claim is
