@@ -477,41 +477,6 @@ func TestStaleInventoryRetainsFenceUntilRetryFails(t *testing.T) {
 	})
 }
 
-func checkStaleRemovalInventory(t *testing.T, m *Manager, eng *fakeEngine, name string, done <-chan struct{}) {
-	t.Helper()
-	synctest.Wait()
-	registration := types.VolumeRegistration{Path: writeVolumeImage(t, "unrelated.img", "unrelated")}
-	if _, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Volumes: []types.Volume{{Name: "data"}}}); !errors.Is(err, ErrVolumeCatalogUnavailable) {
-		t.Errorf("in-flight removal admitted a reader: %v", err)
-	}
-	if err := m.RegisterVolume(t.Context(), "unrelated", registration); !errors.Is(err, ErrVolumeCatalogUnavailable) {
-		t.Errorf("in-flight removal admitted registration: %v", err)
-	}
-	eng.mu.Lock()
-	eng.disks[name] = append(eng.disks[name], types.VMDisk{Name: "other"})
-	eng.mu.Unlock()
-	close(eng.removeStall)
-	<-done
-	if _, queued := m.pendingRemovals[name]; !queued {
-		t.Fatal("failed removal lost its retry")
-	}
-	if _, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Volumes: []types.Volume{{Name: "other", Mode: types.VolumeModeRW}}}); !errors.Is(err, ErrVolumeBusy) {
-		t.Errorf("writer attached during removal lost its hold: %v", err)
-	}
-	if _, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Volumes: []types.Volume{{Name: "data", Mode: types.VolumeModeRW}}}); !errors.Is(err, ErrVolumeBusy) {
-		t.Errorf("failed removal lost its reader hold: %v", err)
-	}
-	if _, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Volumes: []types.Volume{{Name: "data"}}}); err != nil {
-		t.Errorf("failed removal blocked a compatible reader: %v", err)
-	}
-	if err := m.RegisterVolume(t.Context(), "unrelated", registration); err != nil {
-		t.Fatalf("failed removal blocked unrelated registration: %v", err)
-	}
-	if _, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Volumes: []types.Volume{{Name: "unrelated"}}}); err != nil {
-		t.Errorf("failed removal blocked an unrelated reader: %v", err)
-	}
-}
-
 func TestBusyStaleCreateKeepsVolumeFenceUntilCleanup(t *testing.T) {
 	for _, outcome := range []engine.StaleCreateOutcome{engine.StaleCreateCollected, engine.StaleCreateNotFound, engine.StaleCreateBusy} {
 		t.Run(string(outcome), func(t *testing.T) {
@@ -551,5 +516,40 @@ func TestBusyStaleCreateKeepsVolumeFenceUntilCleanup(t *testing.T) {
 				t.Fatalf("confirmed cleanup retained fence: %v", err)
 			}
 		})
+	}
+}
+
+func checkStaleRemovalInventory(t *testing.T, m *Manager, eng *fakeEngine, name string, done <-chan struct{}) {
+	t.Helper()
+	synctest.Wait()
+	registration := types.VolumeRegistration{Path: writeVolumeImage(t, "unrelated.img", "unrelated")}
+	if _, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Volumes: []types.Volume{{Name: "data"}}}); !errors.Is(err, ErrVolumeCatalogUnavailable) {
+		t.Errorf("in-flight removal admitted a reader: %v", err)
+	}
+	if err := m.RegisterVolume(t.Context(), "unrelated", registration); !errors.Is(err, ErrVolumeCatalogUnavailable) {
+		t.Errorf("in-flight removal admitted registration: %v", err)
+	}
+	eng.mu.Lock()
+	eng.disks[name] = append(eng.disks[name], types.VMDisk{Name: "other"})
+	eng.mu.Unlock()
+	close(eng.removeStall)
+	<-done
+	if _, queued := m.pendingRemovals[name]; !queued {
+		t.Fatal("failed removal lost its retry")
+	}
+	if _, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Volumes: []types.Volume{{Name: "other", Mode: types.VolumeModeRW}}}); !errors.Is(err, ErrVolumeBusy) {
+		t.Errorf("writer attached during removal lost its hold: %v", err)
+	}
+	if _, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Volumes: []types.Volume{{Name: "data", Mode: types.VolumeModeRW}}}); !errors.Is(err, ErrVolumeBusy) {
+		t.Errorf("failed removal lost its reader hold: %v", err)
+	}
+	if _, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Volumes: []types.Volume{{Name: "data"}}}); err != nil {
+		t.Errorf("failed removal blocked a compatible reader: %v", err)
+	}
+	if err := m.RegisterVolume(t.Context(), "unrelated", registration); err != nil {
+		t.Fatalf("failed removal blocked unrelated registration: %v", err)
+	}
+	if _, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Volumes: []types.Volume{{Name: "unrelated"}}}); err != nil {
+		t.Errorf("failed removal blocked an unrelated reader: %v", err)
 	}
 }
