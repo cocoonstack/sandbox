@@ -15,7 +15,7 @@ func BenchmarkClaimCommitWithCheckpoints(b *testing.B) {
 		b.Run(fmt.Sprintf("claims=5000/checkpoints=%t", checkpoints), func(b *testing.B) {
 			claims := checkpointBenchClaims(checkpoints)
 			s := newClaimStore(b.TempDir(), false)
-			if err := s.save(claims); err != nil {
+			if err := s.commit(s.reset(claims)); err != nil {
 				b.Fatal(err)
 			}
 			one := claims["sb_0000000000000000"]
@@ -39,7 +39,7 @@ func BenchmarkPinnedArchiveCheckpoints(b *testing.B) {
 		b.Run(fmt.Sprintf("claims=5000/checkpoints=%t", checkpoints), func(b *testing.B) {
 			m := newTestManager(b, newFakeEngine(), config.PoolSpec{PoolKey: testKey})
 			m.claimed = checkpointBenchClaims(checkpoints)
-			if err := m.store.save(m.claimed); err != nil {
+			if err := m.store.commit(m.store.reset(m.claimed)); err != nil {
 				b.Fatal(err)
 			}
 			want := 0

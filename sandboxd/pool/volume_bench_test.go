@@ -67,7 +67,7 @@ func volumeBenchManager(b *testing.B, checkpoints bool) *Manager {
 	b.Helper()
 	m := newTestManager(b, newFakeEngine(), config.PoolSpec{PoolKey: testKey})
 	m.claimed = checkpointBenchClaims(checkpoints)
-	if err := m.store.save(m.claimed); err != nil {
+	if err := m.store.commit(m.store.reset(m.claimed)); err != nil {
 		b.Fatal(err)
 	}
 	path := filepath.Join(b.TempDir(), "data.raw")

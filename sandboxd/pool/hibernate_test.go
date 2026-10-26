@@ -528,7 +528,8 @@ func TestReconcileAdoptsJournaledIntent(t *testing.T) {
 			VsockSocket: "/vsock/lagged", PendingSnap: hibernatePrefix + "lagged-1-abc123",
 		},
 	}
-	if err := newClaimStore(dataDir, false).save(claims); err != nil {
+	claimStore := newClaimStore(dataDir, false)
+	if err := claimStore.commit(claimStore.reset(claims)); err != nil {
 		t.Fatalf("setup: %v", err)
 	}
 	m := newTestManagerAt(t, eng, dataDir)
@@ -557,7 +558,8 @@ func TestReconcileIgnoresStaleOrphanSnapshot(t *testing.T) {
 		claims := map[string]*types.Sandbox{
 			"sb_orp": {ID: "sb_orp", VMName: "sbx-orphan-1", Key: testKey, Token: "tok", VsockSocket: "/vsock/orphan"},
 		}
-		if err := newClaimStore(dataDir, false).save(claims); err != nil {
+		claimStore := newClaimStore(dataDir, false)
+		if err := claimStore.commit(claimStore.reset(claims)); err != nil {
 			t.Fatalf("setup: %v", err)
 		}
 		m := newTestManagerAt(t, eng, dataDir)
@@ -583,7 +585,8 @@ func TestReconcileKeepsIntentWithoutImageAsRunning(t *testing.T) {
 			VsockSocket: "/vsock/noimg", PendingSnap: hibernatePrefix + "noimg-1-abc123",
 		},
 	}
-	if err := newClaimStore(dataDir, false).save(claims); err != nil {
+	claimStore := newClaimStore(dataDir, false)
+	if err := claimStore.commit(claimStore.reset(claims)); err != nil {
 		t.Fatalf("setup: %v", err)
 	}
 	m := newTestManagerAt(t, eng, dataDir)
@@ -613,7 +616,8 @@ func TestReconcileAdoptsHibernated(t *testing.T) {
 			HibernateSnap: hibernatePrefix + "hibernated-1",
 		},
 	}
-	if err := newClaimStore(dataDir, false).save(claims); err != nil {
+	claimStore := newClaimStore(dataDir, false)
+	if err := claimStore.commit(claimStore.reset(claims)); err != nil {
 		t.Fatalf("setup: %v", err)
 	}
 	m := newTestManagerAt(t, eng, dataDir, config.PoolSpec{PoolKey: testKey, Warm: 1})

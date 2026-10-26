@@ -85,7 +85,7 @@ func TestStoreRoundTrip(t *testing.T) {
 	}
 	for _, fsync := range []bool{false, true} {
 		s := newClaimStore(t.TempDir(), fsync)
-		if err := s.save(claims); err != nil {
+		if err := s.commit(s.reset(claims)); err != nil {
 			t.Fatalf("save (sync=%v): %v", fsync, err)
 		}
 		loadedStore := newClaimStore(filepath.Dir(s.path), false)

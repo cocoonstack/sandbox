@@ -731,6 +731,7 @@ type VMDevices struct {
 
 // VMRecord is the subset of cocoon's VM records the control plane reads.
 type VMRecord struct {
+	Stale           bool          `json:"stale,omitzero"`
 	State           string        `json:"state"`
 	PID             int           `json:"pid"`
 	VsockSocket     string        `json:"vsock_socket"`

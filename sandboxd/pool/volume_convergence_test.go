@@ -343,12 +343,19 @@ func TestVolumeHoldsRejectCaptureBeforeTrim(t *testing.T) {
 				m.store.set(sb)
 				m.mu.Unlock()
 			case "admitted":
+				if err := m.RegisterVolume(t.Context(), "data", types.VolumeRegistration{Path: writeVolumeImage(t, "data", "bytes")}); err != nil {
+					t.Fatal(err)
+				}
 				_, run, err := m.beginVolumeRun(t.Context(), sb)
 				if err != nil {
 					t.Fatal(err)
 				}
+				resolved, err := m.resolveVolumes(t.Context(), "", held)
+				if err != nil {
+					t.Fatal(err)
+				}
 				m.mu.Lock()
-				err = m.reserveVolumes(held)
+				err = m.reserveResolved(resolved, nil)
 				run.holds = held
 				m.mu.Unlock()
 				if err != nil {

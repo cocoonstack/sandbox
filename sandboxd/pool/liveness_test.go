@@ -486,7 +486,8 @@ func TestReconcileKeepsRunningClaimsTheHostLost(t *testing.T) {
 			claims := map[string]*types.Sandbox{
 				"sb_lost": {ID: "sb_lost", VMName: "sbx-lost-1", Key: testKey, Token: "tok", VsockSocket: "/vsock/lost"},
 			}
-			if err := newClaimStore(dataDir, false).save(claims); err != nil {
+			claimStore := newClaimStore(dataDir, false)
+			if err := claimStore.commit(claimStore.reset(claims)); err != nil {
 				t.Fatalf("setup: %v", err)
 			}
 			cfg := &config.Config{DataDir: dataDir, VMMRestart: tt.policy}

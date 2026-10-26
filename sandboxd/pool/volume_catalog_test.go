@@ -508,7 +508,7 @@ func TestRuntimeCatalogPendingWriteSurvivesFailedAndCanceledRetry(t *testing.T) 
 		t.Fatalf("failed retry cleared pending write: %v", err)
 	}
 	m.retryVolumeCatalog(t.Context())
-	if _, err := m.resolveVolumes(t.Context(), "", []types.Volume{{Name: "data"}}); !errors.Is(err, ErrVolumeCatalogUnavailable) {
+	if _, err := m.resolveVolumes(t.Context(), "", []types.Volume{{Name: "runtime"}}); !errors.Is(err, ErrVolumeCatalogUnavailable) {
 		t.Fatalf("pending replacement lost fence: %v", err)
 	}
 	restore()

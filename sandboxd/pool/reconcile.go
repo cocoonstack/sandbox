@@ -195,17 +195,26 @@ func (m *Manager) resolveStaleVolumes(ctx context.Context, name string, td volum
 		log.WithFunc("pool.resolveStaleVolumes").Warnf(ctx, "inspect stale vm %s, keeping volume fence: %v", name, err)
 		return td
 	}
-	if present && (inspected.State != vmStateRunning || inspected.AttachedDevices.Disks == nil) {
-		return td
-	}
 	var holds []types.Volume
 	if present {
-		holds = make([]types.Volume, len(inspected.AttachedDevices.Disks))
-		for i, disk := range inspected.AttachedDevices.Disks {
-			holds[i].Name = disk.Name
-			if !disk.ReadOnly {
-				holds[i].Mode = types.VolumeModeRW
+		switch inspected.State {
+		case "stopped":
+			if inspected.Stale {
+				return td
 			}
+		case vmStateRunning:
+			if inspected.AttachedDevices.Disks == nil {
+				return td
+			}
+			holds = make([]types.Volume, len(inspected.AttachedDevices.Disks))
+			for i, disk := range inspected.AttachedDevices.Disks {
+				holds[i].Name = disk.Name
+				if !disk.ReadOnly {
+					holds[i].Mode = types.VolumeModeRW
+				}
+			}
+		default:
+			return td
 		}
 	}
 	m.mu.Lock()

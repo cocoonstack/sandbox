@@ -323,7 +323,8 @@ func TestReconcile(t *testing.T) {
 		"sb_live": {ID: "sb_live", VMName: "sbx-live-1", Key: testKey, Token: "tok", VsockSocket: "/vsock/live-old"},
 		"sb_dead": {ID: "sb_dead", VMName: "sbx-dead-1", Key: testKey, Token: "tok"},
 	}
-	if err := newClaimStore(dataDir, false).save(claims); err != nil {
+	claimStore := newClaimStore(dataDir, false)
+	if err := claimStore.commit(claimStore.reset(claims)); err != nil {
 		t.Fatalf("setup: %v", err)
 	}
 	m := newTestManagerAt(t, eng, dataDir, config.PoolSpec{PoolKey: testKey, Warm: 1})
@@ -1256,6 +1257,7 @@ type fakeEngine struct {
 	liveVolumeHook                    func(string) error
 	stopped                           map[string]bool
 	inspectHook                       func() error
+	inspectStale                      bool
 	inspectDisksUnknown               bool
 	trackDisks                        bool
 	disks                             map[string][]types.VMDisk
@@ -1542,6 +1544,7 @@ func (f *fakeEngine) Inspect(ctx context.Context, name string) (types.VMRecord, 
 		return types.VMRecord{}, false, nil
 	}
 	f.mu.Lock()
+	vms[i].Stale = f.inspectStale
 	if !f.inspectDisksUnknown {
 		vms[i].AttachedDevices.Disks = f.disks[name]
 	}

@@ -147,9 +147,11 @@ func (m *Manager) resolveVolumes(ctx context.Context, tenant string, requested [
 		return nil, fmt.Errorf("%w: %w", ErrBadVolume, err)
 	}
 	m.mu.Lock()
-	if err := m.catalog.admissionError(); err != nil {
-		m.mu.Unlock()
-		return nil, err
+	for _, volume := range applied {
+		if err := m.catalog.admissionError(volume.Name); err != nil {
+			m.mu.Unlock()
+			return nil, err
+		}
 	}
 	catalog := m.catalog.entries
 	m.mu.Unlock()
@@ -308,35 +310,6 @@ func (m *Manager) finishVolumeTeardown(ctx context.Context, td volumeTeardown) b
 	return true
 }
 
-// reserveVolumes admits one claim's volumes atomically; callers hold m.mu.
-func (m *Manager) reserveVolumes(volumes []types.Volume) error {
-	return m.reserveVolumesFor(volumes, nil)
-}
-
-func (m *Manager) reserveVolumesFor(volumes []types.Volume, owner *types.Sandbox) error {
-	if len(volumes) == 0 {
-		return nil
-	}
-	if err := m.catalog.admissionError(); err != nil {
-		return err
-	}
-	ownerID := ""
-	if owner != nil && m.claimed[owner.ID] == owner && m.volumeRuns[owner] != nil {
-		ownerID = owner.ID
-	}
-	for _, volume := range volumes {
-		if m.store.volumeConflicts(volume, ownerID) {
-			return fmt.Errorf("%w: volume %q", ErrVolumeBusy, volume.Name)
-		}
-		holders := m.catalog.holders[volume.Name]
-		if holders.writers > 0 || (volume.RW() && holders.readers > 0) {
-			return fmt.Errorf("%w: volume %q", ErrVolumeBusy, volume.Name)
-		}
-	}
-	m.adoptVolumes(volumes)
-	return nil
-}
-
 // adoptVolumes counts volumes an adopted claim already holds; callers hold m.mu.
 func (m *Manager) adoptVolumes(volumes []types.Volume) {
 	for _, volume := range volumes {
@@ -382,13 +355,30 @@ func (m *Manager) catalogSnapshot() map[string]*catalogVolume {
 	return m.catalog.entries
 }
 
+// reserveResolved admits the entire request while callers hold m.mu.
 func (m *Manager) reserveResolved(volumes []resolvedVolume, owner *types.Sandbox) error {
-	for _, volume := range volumes {
-		if volume.entry == nil || m.catalog.entries[volume.applied.Name] != volume.entry {
+	ownerID := ""
+	if owner != nil && m.claimed[owner.ID] == owner && m.volumeRuns[owner] != nil {
+		ownerID = owner.ID
+	}
+	for _, resolved := range volumes {
+		volume := resolved.applied
+		if err := m.catalog.admissionError(volume.Name); err != nil {
+			return err
+		}
+		if m.catalog.entries[volume.Name] != resolved.entry {
 			return ErrVolumeUnavailable
 		}
+		if m.store.volumeConflicts(volume, ownerID) {
+			return fmt.Errorf("%w: volume %q", ErrVolumeBusy, volume.Name)
+		}
+		holders := m.catalog.holders[volume.Name]
+		if holders.writers > 0 || (volume.RW() && holders.readers > 0) {
+			return fmt.Errorf("%w: volume %q", ErrVolumeBusy, volume.Name)
+		}
 	}
-	return m.reserveVolumesFor(appliedVolumes(volumes), owner)
+	m.adoptVolumes(appliedVolumes(volumes))
+	return nil
 }
 
 // quiesceBudget bounds one quiesce: a slice per writable mount plus one for the sync fallback.

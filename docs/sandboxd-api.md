@@ -257,13 +257,10 @@ entry's response is byte-identical to v1.
 
 ## PUT /v1/volumes/{name}
 
-Auth: the configured root node API token. With no configured `api_token`,
-registration and unregistration return 403. A tenant token returns 403.
-Sandbox, unknown, and missing tokens return 401 when `api_token` is configured.
-
-Registers a backing path on this node. The URL supplies the name;
-the body has no `name` field. Unknown fields, duplicate fields, and trailing
-JSON return 400.
+Requires the configured root API token. A tenant token or a node without an
+`api_token` returns 403. Sandbox, unknown, and missing tokens return 401 when
+`api_token` is configured. The URL supplies the name. Unknown body fields,
+duplicate fields, and trailing JSON return 400.
 
 ```json
 {"path": "/srv/datasets/data.img", "directio": "off",
@@ -271,86 +268,60 @@ JSON return 400.
 ```
 
 - `name` matches `[a-z][a-z0-9_-]{0,19}` and cannot start with `cocoon-`.
-- `path` uses the same absolute-path validation as static volume config.
-  Registration does not open the backing or check its type or availability.
-  A missing backing retains its registration but cannot be attached until available.
-  Registration success does not establish that Cocoon supports the backing type.
-  Operators must keep the registered path and target stable.
-  Backing storage must be separate from daemon cleanup directories, including
+- `path` uses static config's absolute-path validation. Registration does not
+  open the backing or check its type or availability. A missing backing keeps
+  its registration but cannot be attached. Operators must keep the path and
+  target stable and separate from daemon cleanup directories, including
   `<data_dir>/readers`, `<data_dir>/goldens`, and `<data_dir>/fork-*`.
-  Backing paths must not resolve into cleanup directories.
-  Cleanup directories must not resolve into backing storage.
-  Startup and staging cleanup do not consult volume registrations and can
-  delete backing files placed in those locations.
 - `directio` is `on`, `off`, or `auto`, and defaults to `off`.
 - `writable` defaults to `false` and controls writable claim admission.
-- `tenants` grants the named tenants self-service access. Omitted or empty
-  permits every authenticated scope, for both static and runtime entries.
-  Names use the tenant API name syntax. Runtime registration rejects invalid
-  names. Static config warns and skips invalid names. A nonempty static list with no
-  valid names remains restricted and grants no tenant access. A valid name may be
-  registered before that tenant exists; it grants no access until the tenant
-  is created.
+- `tenants` grants named tenants self-service access. Omitted or empty permits
+  every authenticated scope for both static and runtime entries. Runtime
+  registration rejects invalid tenant names. Static config skips invalid names
+  and grants no tenant access if a nonempty list has no valid names.
+  A tenant name can be registered before that tenant exists.
 
-Success is 204 with an empty body. Repeating the same name, cleaned path, and
-normalized registration fields succeeds. A different binding or different
-registration fields return 409. Static and runtime registrations cannot share
-a name or a cleaned backing path. Invalid registration fields return 400.
-An uncertain write returns 503 with `Retry-After`. The requested registration
-may still take effect through background retry or a later PUT or DELETE,
-including a request for another name. A 503 can also reject a request before
-acceptance, so it does not promise that the request will take effect. After
-repairing storage failures, retry the exact request to establish completion.
-Cancellation is not a rollback once a write has been accepted.
-GET retains its existing projection without host paths or tenant access lists.
-Registered entries support the existing mounted read-only live volume API.
+Success is 204. An identical normalized registration is idempotent. A different
+binding, changed fields, or a static name or cleaned path collision returns 409.
+Invalid fields return 400. GET keeps its existing projection without host paths
+or tenant lists. Runtime entries support the existing live volume API.
 
-Only registration metadata is persisted locally in
-`data_dir/runtime-volumes.json`, which loads before claim recovery. New records
-use mode 0600. The daemon reads the record with the same filesystem permissions
-as `claims.json` and replaces it durably. Registration creates, grows, and deletes
-no disks.
-Malformed or conflicting metadata prevents startup. A temporarily missing
-backing file keeps its registration and refuses new attachment.
-Catalog replacement and synchronization are independent of `sync_claims`, which
-controls claim snapshot synchronization. Process-restart checks do not prove
-power-loss recovery. The catalog is node-local with one sandboxd writer.
-Startup reads only `runtime-volumes.json`. Crash leftovers named
-`runtime-volumes.json.*.tmp` are neither loaded nor promoted. An operator can
-remove those leftovers after stopping sandboxd and preserving any needed
-evidence.
+Persistence uncertainty returns 503 with `Retry-After`. An accepted change may
+complete through background retry or a later PUT or DELETE for any name.
+A 503 can also precede acceptance. Retry the exact request after repairing
+storage to establish completion. Cancellation does not undo an accepted write.
+Until persistence succeeds, new admission refuses the affected name while
+unrelated published names remain usable. Every catalog writer retries the
+accepted change before accepting another change.
+
+The node stores metadata in `data_dir/runtime-volumes.json` independently of
+`sync_claims` and loads it before claim recovery. New records use mode 0600. Malformed
+or conflicting metadata prevents startup. Temporary replacement files are not
+loaded. Registration creates, grows, and deletes no backing disks. The catalog
+is node-local with one sandboxd writer. The controller coordinates cross-node
+ownership, symlink and hardlink aliases, backing availability, and storage
+placement outside cleanup directories.
 
 ## DELETE /v1/volumes/{name}
 
-Auth and name validation match PUT. Removes only the runtime registration and
-never deletes or changes the backing file. Success, including an absent,
-unreferenced runtime name, is 204 with an empty body. Static registrations and
-names referenced by a claim, an in-flight operation, cleanup, or an
-unacknowledged recovery snapshot return 409. Catalog persistence uncertainty
-returns 503 with `Retry-After` and has the same asynchronous completion
-semantics as PUT. A failed DELETE may therefore remove the registration later.
-An empty GET volume view alone does not establish that a recovery reference
-has retired.
+Auth and name validation match PUT. Deletes only runtime registration metadata.
+Success, including an absent unreferenced name, is 204. Static names and names
+referenced by a claim, an in-flight operation, cleanup, or an unacknowledged
+recovery snapshot return 409. Persistence uncertainty returns 503 with
+`Retry-After` and the same retry semantics as PUT. A failed DELETE can complete
+later. An empty GET view does not establish that recovery references retired.
 
-Downgrading to a daemon without runtime registration requires draining runtime
-references or supplying equivalent static volume config. Pending live volume
-changes must finish before downgrade.
+Stale VM cleanup retains named holds after a complete running inventory.
+An ordinary stopped VM needs no volume holds. An inferred stopped result with
+`stale: true`, inspection errors, omitted or null running disk lists, and busy
+creating owners retain a node-wide admission fence. Any present inventory
+during busy cleanup retains that fence. Confirmed absence or removal clears it.
+This assumes sandboxd controls starts and attachments in its VM namespace.
+Volume-free claims remain available. Cleanup retries continue.
 
-Stale VM cleanup inspects attachments before removal. A complete running
-inventory retains holds only on the named volumes. An explicit empty disk
-array permits unrelated volume admission and catalog changes while removal
-retries continue. An omitted or null disk list, a stopped VM, an inspection
-failure, or an active creating owner retains the node-wide fence until
-inspection or confirmed removal resolves it. Cocoon v0.7.3 omits both empty
-inventories and failed disk queries, and does not collect disks for stopped
-VMs. Those results remain unknown and can block static read-only admission.
-Allowing readers would conflict with an unknown writer. Cleanup retries
-remain enabled.
-A warm VM name is not evidence that no volume is attached; attachment can
-succeed before claim finalization fails. Known inventories keep holds on their
-reported names. Volume-free claims continue to work. Path uniqueness uses
-cleaned path strings. The operator coordinates symlink and hardlink aliases
-and cross-node ownership.
+Before downgrading to a daemon without runtime registration, drain runtime
+references or supply equivalent static volume config and finish pending live
+volume changes.
 
 ## GET /v1/sandboxes/{id}/volumes
 

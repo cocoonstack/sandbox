@@ -403,7 +403,7 @@ func TestDesiredVolumesJournalMigration(t *testing.T) {
 			if got := claims["sb_1"].VolumesWant; !slices.Equal(got, tt.want) {
 				t.Fatalf("loaded target %v, want %v", got, tt.want)
 			}
-			if err = store.save(claims); err != nil {
+			if err = store.commit(store.reset(claims)); err != nil {
 				t.Fatal(err)
 			}
 			rawBytes, err := os.ReadFile(store.path)
@@ -854,10 +854,14 @@ func beginAdmittedVolumeRun(t *testing.T, m *Manager, sb *types.Sandbox) *volume
 	if err != nil {
 		t.Fatal(err)
 	}
+	transient := []types.Volume{{Name: "data", Mount: "/volumes/data"}}
+	resolved, err := m.resolveVolumes(t.Context(), "", transient)
+	if err != nil {
+		t.Fatal(err)
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	transient := []types.Volume{{Name: "data", Mount: "/volumes/data"}}
-	if err = m.reserveVolumes(transient); err != nil {
+	if err = m.reserveResolved(resolved, nil); err != nil {
 		t.Fatal(err)
 	}
 	run.holds = append(run.holds, transient...)

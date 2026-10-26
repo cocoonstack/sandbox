@@ -72,8 +72,6 @@ type claimRow struct {
 	raw []byte
 }
 
-type recoveryVolumeCount struct{ readers, writers int }
-
 // claimStore persists claimed sandboxes across daemon restarts; warm VMs are not persisted.
 type claimStore struct {
 	path string
@@ -93,7 +91,7 @@ type claimStore struct {
 	checkpoints     map[string]int
 	currentVolumes  map[string][]types.Volume
 	retainedVolumes map[string][]types.Volume
-	volumes         map[string]recoveryVolumeCount
+	volumes         map[string]volumeHolders
 
 	recommitting           atomic.Bool
 	recoveryVolumesPresent atomic.Bool
@@ -104,7 +102,7 @@ func newClaimStore(dataDir string, sync bool) *claimStore {
 		path: filepath.Join(dataDir, "claims.json"), sync: sync,
 		rows: map[string]*claimRow{}, refs: map[string][4]string{}, retained: map[string][]string{},
 		changed: map[string]struct{}{}, checkpoints: map[string]int{},
-		currentVolumes: map[string][]types.Volume{}, retainedVolumes: map[string][]types.Volume{}, volumes: map[string]recoveryVolumeCount{},
+		currentVolumes: map[string][]types.Volume{}, retainedVolumes: map[string][]types.Volume{}, volumes: map[string]volumeHolders{},
 	}
 }
 
@@ -235,14 +233,14 @@ func (s *claimStore) commit(snap claimSnapshot) error {
 	var capturedVolumes map[string][]types.Volume
 	for id := range s.changed {
 		captured[id] = s.refs[id]
-		s.changeRetainedRefs(id, appendRefs(slices.Clone(s.retained[id]), s.refs[id]))
+		s.changeRetainedRefs(id, appendRefs(s.retained[id], s.refs[id]))
 		if volumes := s.currentVolumes[id]; len(volumes) != 0 {
 			if capturedVolumes == nil {
 				capturedVolumes = make(map[string][]types.Volume)
 			}
 			capturedVolumes[id] = volumes
 		}
-		s.changeRetainedVolumes(id, appendRecoveryRefs(slices.Clone(s.retainedVolumes[id]), s.currentVolumes[id]))
+		s.changeRetainedVolumes(id, appendRecoveryRefs(s.retainedVolumes[id], s.currentVolumes[id]))
 	}
 	s.mu.Unlock()
 	s.buf = append(s.buf[:0], '{')
@@ -321,11 +319,6 @@ func (s *claimStore) replace(raw []byte) error {
 	return nil
 }
 
-// save is the combined form for the startup Reconcile pass, before contention exists.
-func (s *claimStore) save(claims map[string]*types.Sandbox) error {
-	return s.commit(s.reset(claims))
-}
-
 func (s *claimStore) synced() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -378,7 +371,7 @@ func (s *claimStore) changeVolumeCounts(refs []types.Volume, delta int) {
 		} else {
 			count.readers += delta
 		}
-		if count == (recoveryVolumeCount{}) {
+		if count == (volumeHolders{}) {
 			delete(s.volumes, v.Name)
 		} else {
 			s.volumes[v.Name] = count
@@ -400,7 +393,7 @@ func (s *claimStore) changeRetainedVolumes(id string, after []types.Volume) {
 func (s *claimStore) referencesVolume(name string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.volumes[name] != (recoveryVolumeCount{})
+	return s.volumes[name] != (volumeHolders{})
 }
 
 func (s *claimStore) volumeConflicts(volume types.Volume, ownerID string) bool {

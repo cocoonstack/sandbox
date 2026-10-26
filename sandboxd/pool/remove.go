@@ -92,6 +92,10 @@ func (m *Manager) retryRemoval(ctx context.Context, name string, pending pending
 			m.queueStaleCreate(name, pending.tap, pending.volumes)
 			return
 		case outcome == engine.StaleCreateBusy:
+			if _, present, inspectErr := m.eng.Inspect(ctx, name); inspectErr == nil && !present {
+				m.finishRemoval(ctx, name, pending)
+				return
+			}
 			m.queueStaleCreate(name, pending.tap, pending.volumes)
 			return
 		case outcome == engine.StaleCreateCollected, outcome == engine.StaleCreateNotFound:
