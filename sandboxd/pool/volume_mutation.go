@@ -141,17 +141,14 @@ func (m *Manager) changeVolumes(ctx context.Context, id, tenant string, change v
 		m.clearVolumeError(sb, run, v.Name)
 	}
 	m.mu.Lock()
-	pending := volumeDifference(sb.VolumesWant, sb.Volumes)
+	pending, catalog := volumeDifference(sb.VolumesWant, sb.Volumes), m.catalog.entries
 	m.mu.Unlock()
 	for _, v := range pending {
 		failedName = v.Name
 		if err = m.checkVolumeRun(ctx, sb, run); err != nil {
 			return view, err
 		}
-		m.mu.Lock()
-		entry := m.catalog.entries[v.Name]
-		m.mu.Unlock()
-		repair, resolveErr := m.resolveCatalogEntry(ctx, v, entry)
+		repair, resolveErr := m.resolveCatalogEntry(ctx, v, catalog[v.Name])
 		if resolveErr != nil {
 			return view, resolveErr
 		}

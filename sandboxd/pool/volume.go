@@ -244,6 +244,7 @@ func (m *Manager) applyVolume(ctx context.Context, sb *types.Sandbox, volume res
 func (m *Manager) quiesceVolumes(ctx context.Context, sb *types.Sandbox) volumeTeardown {
 	m.mu.Lock()
 	td := volumeTeardown{run: m.volumeRuns[sb], holds: heldVolumes(sb)}
+	catalog := m.catalog.entries
 	m.mu.Unlock()
 	mounts := writableMounts(sb.Volumes)
 	if mounts == 0 {
@@ -263,11 +264,9 @@ func (m *Manager) quiesceVolumes(ctx context.Context, sb *types.Sandbox) volumeT
 			stuck = true
 			continue
 		}
-		m.mu.Lock()
-		if entry, ok := m.catalog.entries[volume.Name]; ok {
+		if entry, ok := catalog[volume.Name]; ok {
 			td.clears = append(td.clears, entry.disk.Path)
 		}
-		m.mu.Unlock()
 	}
 	if stuck {
 		// the unmounts may have spent the whole budget; the fallback flush gets its own
