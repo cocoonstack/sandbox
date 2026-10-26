@@ -24,10 +24,12 @@ func BenchmarkVolumeAdmissionWithCheckpoints(b *testing.B) {
 				if len(resolved) != 1 || resolved[0].applied != requested[0] {
 					b.Fatalf("resolved volumes: %+v", resolved)
 				}
+				applied := appliedVolumes(resolved)
 				m.mu.Lock()
-				err = m.reserveResolved(resolved, nil)
+				err = m.checkResolved(resolved, "")
 				if err == nil {
-					m.releaseVolumes(appliedVolumes(resolved))
+					m.adoptVolumes(applied)
+					m.releaseVolumes(applied)
 				}
 				m.mu.Unlock()
 				if err != nil {

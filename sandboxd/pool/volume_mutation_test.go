@@ -857,9 +857,10 @@ func beginAdmittedVolumeRun(t *testing.T, m *Manager, sb *types.Sandbox) *volume
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if err = m.reserveResolved(resolved, nil); err != nil {
+	if err = m.checkResolved(resolved, ""); err != nil {
 		t.Fatal(err)
 	}
+	m.adoptVolumes(transient)
 	run.holds = append(run.holds, transient...)
 	return run
 }

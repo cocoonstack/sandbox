@@ -355,7 +355,9 @@ func TestVolumeHoldsRejectCaptureBeforeTrim(t *testing.T) {
 					t.Fatal(err)
 				}
 				m.mu.Lock()
-				err = m.reserveResolved(resolved, nil)
+				if err = m.checkResolved(resolved, ""); err == nil {
+					m.adoptVolumes(held)
+				}
 				run.holds = held
 				m.mu.Unlock()
 				if err != nil {

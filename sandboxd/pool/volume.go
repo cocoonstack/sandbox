@@ -353,12 +353,8 @@ func (m *Manager) catalogSnapshot() map[string]*catalogVolume {
 	return m.catalog.entries
 }
 
-// reserveResolved admits the entire request while callers hold m.mu.
-func (m *Manager) reserveResolved(volumes []resolvedVolume, owner *types.Sandbox) error {
-	ownerID := ""
-	if owner != nil && m.claimed[owner.ID] == owner && m.volumeRuns[owner] != nil {
-		ownerID = owner.ID
-	}
+// checkResolved refuses the request if any volume is fenced, rebound or busy; callers hold m.mu.
+func (m *Manager) checkResolved(volumes []resolvedVolume, ownerID string) error {
 	for _, resolved := range volumes {
 		volume := resolved.applied
 		if err := m.catalog.admissionError(volume.Name); err != nil {
@@ -375,7 +371,6 @@ func (m *Manager) reserveResolved(volumes []resolvedVolume, owner *types.Sandbox
 			return fmt.Errorf("%w: volume %q", ErrVolumeBusy, volume.Name)
 		}
 	}
-	m.adoptVolumes(appliedVolumes(volumes))
 	return nil
 }
 

@@ -274,11 +274,12 @@ func (m *Manager) stageVolumeTarget(ctx context.Context, sb *types.Sandbox, run 
 		sb.Transition.Unlock()
 		return claimSnapshot{}, false, ErrVolumeCapture
 	}
-	if err := m.reserveResolved(resolved, sb); err != nil {
+	if err := m.checkResolved(resolved, sb.ID); err != nil {
 		m.mu.Unlock()
 		sb.Transition.Unlock()
 		return claimSnapshot{}, false, err
 	}
+	m.adoptVolumes(additions)
 	run.holds = append(run.holds, additions...)
 	m.mu.Unlock()
 	sb.Transition.Unlock()
