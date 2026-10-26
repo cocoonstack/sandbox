@@ -311,13 +311,10 @@ recovery snapshot return 409. Persistence uncertainty returns 503 with
 `Retry-After` and the same retry semantics as PUT. A failed DELETE can complete
 later. An empty GET view does not establish that recovery references retired.
 
-Stale VM cleanup retains named holds after a complete running inventory.
-An ordinary stopped VM needs no volume holds. An inferred stopped result with
-`stale: true`, inspection errors, omitted or null running disk lists, and busy
-creating owners retain a node-wide admission fence. Any present inventory
-during busy cleanup retains that fence. Confirmed absence or removal clears it.
-This assumes sandboxd controls starts and attachments in its VM namespace.
-Volume-free claims remain available. Cleanup retries continue.
+Volume claims and registrations also return 503 with `Retry-After` while the
+node removes a leftover VM whose attached volumes it cannot determine. A
+stopped leftover VM holds none, which assumes sandboxd controls VM starts and
+disk attachments in its namespace. Volume-free claims are unaffected.
 
 Before downgrading to a daemon without runtime registration, drain runtime
 references or supply equivalent static volume config and finish pending live
