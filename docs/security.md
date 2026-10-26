@@ -94,25 +94,20 @@ rather than confirming existence, and operator surfaces answer tenants 403.
 
 The volume catalog is an operator-owned data boundary. A volume name and its
 access list must mean the same thing fleet-wide, although membership is
-node-local. An empty `tenants` list permits every authenticated scope for
-both static and runtime entries. A nonempty list grants the named tenants
-self-service access. For live additions, the claim owner must satisfy the
-entry's ACL, even when root sends the request. Runtime registration rejects
-invalid tenant names. Static config warns and skips them. A nonempty static
-list with no valid names permits no tenant access. A valid name that does not
-yet identify a tenant grants no access until that tenant exists.
-Claim lookup returns byte-identical errors for an unknown and a forbidden name, and catalog discovery filters before replying, so a tenant
-cannot enumerate restricted entries by probing. Gossip carries names only.
+node-local. Entry `tenants` lists follow the [access-list
+rule](sandboxd-api.md#volume-access-lists). Claim lookup returns byte-identical
+errors for an unknown and a forbidden name, and catalog discovery filters before
+replying, so a tenant cannot enumerate restricted entries by probing. Gossip
+carries names only.
 Neither gossip, discovery, persisted claims, usage events, nor the sandbox index
 exposes host image paths or access lists.
 
 Runtime registration and unregistration require a configured root `api_token`;
 these endpoints return 403 when the token is unset. New catalog records use
 mode 0600. Reads and replacements use the daemon's filesystem permissions.
-Registration uses the same path validation as static configuration. It does
-not verify backing type
-or pin backing identity. Operators must supply a backing supported by Cocoon,
-prevent path or symlink target replacement while registered, and coordinate aliases.
+Registration uses the same path validation as static configuration. It does not
+verify backing type or pin backing identity; the operator duties this leaves are
+listed under [PUT /v1/volumes/{name}](sandboxd-api.md#put-v1volumesname).
 
 Read-only is integrity protection for the shared image, not confidentiality.
 Mounting a dataset into an egress-lane sandbox gives that sandbox an export path
@@ -127,10 +122,8 @@ immutable and publish a new name/path for new content.
 
 Changing a running claim's volumes needs the root token or the owning tenant's
 API token. A sandbox token cannot, so a guest holding its own sandbox token
-cannot attach another dataset, and every addition passes the same access list
-as a claim. Already-held references can finish repair or removal without a
-new ACL grant. A recovery-only reference protects ownership and does not grant
-permission for a fresh attachment.
+cannot attach another dataset, and every addition passes the same
+[access list](sandboxd-api.md#volume-access-lists) as a claim.
 
 A writable entry (`writable: true`) adds a channel the read-only model does
 not have: whichever tenant is permitted to claim it `rw` changes what every

@@ -8,8 +8,8 @@ All bodies are JSON. Three token kinds:
   preview mint) and the tenant-scoped listings/deletes below; everything a
   tenant creates is stamped with its name. Operator surfaces
   (the per-id sandbox reads, `PUT /v1/sandboxes/{id}/instance-metadata`, `GET /v1/info`,
-  `PUT /v1/pools`, `PUT/DELETE /v1/volumes/{name}`, `POST/DELETE /v1/drain`, `GET /metrics`,
-  `GET /v1/checkpoints/{id}/blob`)
+  `PUT /v1/pools`, `PUT/DELETE /v1/volumes/{name}`, `POST/DELETE /v1/drain`,
+  `GET /metrics`, `GET /v1/checkpoints/{id}/blob`)
   answer a tenant token `403` — authenticated but not authorized; an unknown
   token stays `401`. On a node with a shared
   [`meta_store`](deploy.md#shared-tenant-database), a tenant token the node
@@ -270,16 +270,10 @@ duplicate fields, and trailing JSON return 400.
 - `name` matches `[a-z][a-z0-9_-]{0,19}` and cannot start with `cocoon-`.
 - `path` uses static config's absolute-path validation. Registration does not
   open the backing or check its type or availability. A missing backing keeps
-  its registration but cannot be attached. Operators must keep the path and
-  target stable and separate from daemon cleanup directories, including
-  `<data_dir>/readers`, `<data_dir>/goldens`, and `<data_dir>/fork-*`.
+  its registration but cannot be attached.
 - `directio` is `on`, `off`, or `auto`, and defaults to `off`.
 - `writable` defaults to `false` and controls writable claim admission.
-- `tenants` grants named tenants self-service access. Omitted or empty permits
-  every authenticated scope for both static and runtime entries. Runtime
-  registration rejects invalid tenant names. Static config skips invalid names
-  and grants no tenant access if a nonempty list has no valid names.
-  A tenant name can be registered before that tenant exists.
+- `tenants` is the entry's [access list](#volume-access-lists).
 
 Success is 204. An identical normalized registration is idempotent. A different
 binding, changed fields, or a static name or cleaned path collision returns 409.
@@ -295,12 +289,29 @@ unrelated published names remain usable. Every catalog writer retries the
 accepted change before accepting another change.
 
 The node stores metadata in `data_dir/runtime-volumes.json` independently of
-`sync_claims` and loads it before claim recovery. New records use mode 0600. Malformed
-or conflicting metadata prevents startup. Temporary replacement files are not
-loaded. Registration creates, grows, and deletes no backing disks. The catalog
-is node-local with one sandboxd writer. The controller coordinates cross-node
-ownership, symlink and hardlink aliases, backing availability, and storage
-placement outside cleanup directories.
+`sync_claims` and loads it before claim recovery. New records use mode 0600.
+Malformed or conflicting metadata prevents startup. Registration creates,
+grows, and deletes no backing disks. The catalog is node-local with one
+sandboxd writer.
+
+The operator or controller owns each backing: supply an image Cocoon supports,
+keep the path and its symlink target stable while registered, coordinate
+symlink and hardlink aliases, cross-node ownership, and availability, and keep
+backings outside daemon cleanup directories such as `<data_dir>/readers`,
+`<data_dir>/goldens`, and `<data_dir>/fork-*`.
+
+### Volume access lists
+
+Static and runtime entries share one `tenants` rule. An omitted or empty list
+permits every authenticated scope. A nonempty list permits only claims owned
+by the listed tenants, and root-owned claims can use any entry. Live additions
+check the claim owner's list even when root sends the request; held names
+finish repair or removal without a new grant, and a recovery-only reference
+grants no fresh attachment. Names use the tenant API syntax: runtime
+registration rejects an invalid name, while static config logs a warning and
+skips it, so a nonempty static list with no valid names permits no tenant. A
+valid name for a tenant that does not exist yet grants nothing until the
+tenant is created.
 
 ## DELETE /v1/volumes/{name}
 
@@ -342,8 +353,8 @@ when the volume is in both sets, `pending` when desired but not yet confirmed,
 or `detaching` when applied but no longer desired. An interrupted device call
 can leave the actual guest state different from the confirmed set. A failed
 PUT or PATCH adds a top-level `error` naming the refusal, and the affected
-state may carry its own `error`. `converging` is true while a request worker is running or a recovery-only
-reference awaits an acknowledged claim write.
+state may carry its own `error`. `converging` is true while a request worker
+is running or a recovery-only reference awaits an acknowledged claim write.
 `pending` with `converging: false` requires an explicit retry; there is no
 background convergence. GET retains the last safe per-volume error for the
 current daemon lifetime. After daemon restart, unfinished states report an
