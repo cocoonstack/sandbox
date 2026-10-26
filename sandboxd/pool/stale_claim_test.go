@@ -111,7 +111,6 @@ func TestIntentRollbackPreservesCurrentClaim(t *testing.T) {
 				if err := m.store.commit(m.store.mark()); err != nil {
 					t.Fatal(err)
 				}
-				waitFor(t, func() bool { return !m.store.recommitting.Load() })
 				assertStaleClaimPreserved(t, m, sb.ID, ck.ID, replace)
 			})
 		}
