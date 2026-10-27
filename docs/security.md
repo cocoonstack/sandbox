@@ -108,6 +108,10 @@ mode 0600. Reads and replacements use the daemon's filesystem permissions.
 Registration uses the same path validation as static configuration. It does not
 verify backing type or pin backing identity; the operator duties this leaves are
 listed under [PUT /v1/volumes/{name}](sandboxd-api.md#put-v1volumesname).
+Unless [`volume_roots`](deploy.md#configuration) restricts it, the root token can
+register any absolute host path, writable if requested, for every scope its
+[access list](sandboxd-api.md#volume-access-lists) permits. Protect the root
+token like host root, or set `volume_roots`.
 
 Read-only is integrity protection for the shared image, not confidentiality.
 Mounting a dataset into an egress-lane sandbox gives that sandbox an export path

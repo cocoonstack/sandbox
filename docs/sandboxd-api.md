@@ -268,9 +268,11 @@ duplicate fields, and trailing JSON return 400.
 ```
 
 - `name` matches `[a-z][a-z0-9_-]{0,19}` and cannot start with `cocoon-`.
-- `path` uses static config's absolute-path validation. Registration does not
-  open the backing or check its type or availability. A missing backing keeps
-  its registration but cannot be attached.
+- `path` uses static config's absolute-path validation. When the node sets
+  [`volume_roots`](deploy.md#configuration), the cleaned path must equal or sit
+  under one of them. Registration does not open the backing or check its type
+  or availability. A missing backing keeps its registration but cannot be
+  attached.
 - `directio` is `on`, `off`, or `auto`, and defaults to `off`.
 - `writable` defaults to `false` and controls writable claim admission.
 - `tenants` is the entry's [access list](#volume-access-lists).
