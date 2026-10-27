@@ -450,7 +450,7 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 		cocoondSocket:   cfg.CocoondSocket,
 		maxFork:         cmp.Or(cfg.MaxForkCount, defaultMaxFork),
 		store:           newClaimStore(cfg.DataDir, cfg.SyncClaims),
-		catalog:         volumeCatalog{entries: make(map[string]*catalogVolume, len(cfg.Volumes)), holders: map[string]volumeHolders{}},
+		catalog:         volumeCatalog{entries: make(map[string]*catalogVolume, len(cfg.Volumes)), roots: cfg.VolumeRoots, holders: map[string]volumeHolders{}},
 		volumeRuns:      map[*types.Sandbox]*volumeRun{},
 		volumeErrors:    map[*types.Sandbox]map[string]string{},
 		poolStore:       newPoolStore(cfg.DataDir),

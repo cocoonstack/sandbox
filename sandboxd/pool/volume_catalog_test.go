@@ -152,6 +152,47 @@ func TestRuntimeCatalogRejectsCollisionsAndInvalidRegistrations(t *testing.T) {
 	}
 }
 
+func TestRuntimeCatalogVolumeRootsBoundRegistration(t *testing.T) {
+	newRootedManager := func(t *testing.T, dataDir string, roots ...string) (*Manager, error) {
+		t.Helper()
+		cfg := &config.Config{DataDir: dataDir, VolumeRoots: roots}
+		return NewManager(t.Context(), cfg, newFakeEngine(), testSecrets(t), testBackends(t, cfg))
+	}
+	for _, tc := range []struct {
+		name, path string
+		roots      []string
+		want       error
+	}{
+		{"inside a root", "/srv/data/a.img", []string{"/mnt/other", "/srv/data"}, nil},
+		{"equal to a root", "/srv/data/", []string{"/srv/data"}, nil},
+		{"sibling sharing a prefix", "/srv/data2/a.img", []string{"/srv/data"}, ErrBadVolume},
+		{"dot-dot out of a root", "/srv/data/../etc/a.img", []string{"/srv/data"}, ErrBadVolume},
+		{"outside every root", "/etc/a.img", []string{"/srv/data"}, ErrBadVolume},
+		{"filesystem root", "/etc/a.img", []string{"/"}, nil},
+		{"no roots", "/etc/a.img", nil, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, err := newRootedManager(t, t.TempDir(), tc.roots...)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := m.RegisterVolume(t.Context(), "runtime", types.VolumeRegistration{Path: tc.path}); !errors.Is(err, tc.want) {
+				t.Fatalf("register %s under %v = %v, want %v", tc.path, tc.roots, err, tc.want)
+			}
+		})
+	}
+	m := newVolumeManager(t, newFakeEngine(), nil)
+	if err := m.RegisterVolume(t.Context(), "runtime", types.VolumeRegistration{Path: "/etc/a.img"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := newRootedManager(t, m.dataDir, "/etc"); err != nil {
+		t.Fatalf("restart with the registration inside volume_roots: %v", err)
+	}
+	if _, err := newRootedManager(t, m.dataDir, "/srv/data"); err == nil {
+		t.Fatal("restart accepted a persisted registration outside volume_roots")
+	}
+}
+
 func TestRuntimeCatalogPendingWriteConverges(t *testing.T) {
 	eng := newFakeEngine()
 	m := newVolumeManager(t, eng, liveCatalog(t))

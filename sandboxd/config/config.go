@@ -277,8 +277,10 @@ type Config struct {
 	DiskReserve *DiskReserve `json:"disk_reserve,omitempty"`
 
 	Volumes []VolumeSpec `json:"volumes,omitempty"`
-	Mesh    *MeshConfig  `json:"mesh,omitempty"`
-	Pools   []PoolSpec   `json:"pools"`
+	// VolumeRoots bounds runtime registration paths only; static volumes stay unchecked.
+	VolumeRoots []string    `json:"volume_roots,omitempty"`
+	Mesh        *MeshConfig `json:"mesh,omitempty"`
+	Pools       []PoolSpec  `json:"pools"`
 }
 
 // HasEgress reports whether the node can attach egress-lane VMs.
@@ -400,6 +402,12 @@ func (c *Config) validateReplication() error {
 }
 
 func (c *Config) validateVolumes() error {
+	for i, root := range c.VolumeRoots {
+		if !filepath.IsAbs(root) {
+			return fmt.Errorf("volume_roots %q must be an absolute path", root)
+		}
+		c.VolumeRoots[i] = filepath.Clean(root)
+	}
 	validation := slices.Clone(c.Volumes)
 	for i, volume := range c.Volumes {
 		validation[i].Tenants = slices.DeleteFunc(slices.Clone(volume.Tenants), func(tenant string) bool {

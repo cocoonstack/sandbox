@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"unicode/utf8"
 
@@ -36,6 +37,7 @@ type catalogWrite struct {
 
 type volumeCatalog struct {
 	entries map[string]*catalogVolume
+	roots   []string
 	pending *catalogWrite
 	holders map[string]volumeHolders
 	unknown int
@@ -51,7 +53,7 @@ func (c *volumeCatalog) admissionError(name string) error {
 
 // RegisterVolume durably binds a root-managed name to a backing path.
 func (m *Manager) RegisterVolume(ctx context.Context, name string, spec types.VolumeRegistration) error {
-	volume, err := normalizeRegistration(name, spec)
+	volume, err := normalizeRegistration(name, spec, m.catalog.roots)
 	if err != nil {
 		return err
 	}
@@ -124,7 +126,7 @@ func (m *Manager) loadRuntimeVolumes() error {
 	}
 	entries := maps.Clone(m.catalog.entries)
 	for name, spec := range record.Volumes {
-		volume, normalizeErr := normalizeRegistration(name, spec)
+		volume, normalizeErr := normalizeRegistration(name, spec, m.catalog.roots)
 		if normalizeErr != nil {
 			return fmt.Errorf("runtime volume catalog: %w", normalizeErr)
 		}
@@ -220,7 +222,7 @@ func catalogPathConflict(entries map[string]*catalogVolume, path string) error {
 	return nil
 }
 
-func normalizeRegistration(name string, spec types.VolumeRegistration) (*catalogVolume, error) {
+func normalizeRegistration(name string, spec types.VolumeRegistration, roots []string) (*catalogVolume, error) {
 	spec.DirectIO = cmp.Or(spec.DirectIO, types.DirectIOOff)
 	if !utf8.ValidString(spec.Path) {
 		return nil, fmt.Errorf("%w: volume %q path must be valid UTF-8", ErrBadVolume, name)
@@ -230,9 +232,15 @@ func normalizeRegistration(name string, spec types.VolumeRegistration) (*catalog
 	}}); err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrBadVolume, err)
 	}
+	path := filepath.Clean(spec.Path)
+	if len(roots) > 0 && !slices.ContainsFunc(roots, func(root string) bool {
+		return path == root || strings.HasPrefix(path, strings.TrimSuffix(root, string(filepath.Separator))+string(filepath.Separator))
+	}) {
+		return nil, fmt.Errorf("%w: volume %q path is outside volume_roots", ErrBadVolume, name)
+	}
 	return &catalogVolume{
 		runtime:  true,
-		disk:     engine.VolumeSpec{Name: name, Path: filepath.Clean(spec.Path), DirectIO: spec.DirectIO},
+		disk:     engine.VolumeSpec{Name: name, Path: path, DirectIO: spec.DirectIO},
 		tenants:  slices.Compact(slices.Sorted(slices.Values(spec.Tenants))),
 		writable: spec.Writable,
 	}, nil

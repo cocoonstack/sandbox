@@ -167,6 +167,8 @@ func TestLoadRejectsInvalid(t *testing.T) {
 		{"duplicate volume name", `{"pools":[],"volumes":[{"name":"data","path":"/srv/datasets/a.img"},{"name":"data","path":"/srv/datasets/b.img"}]}`, "duplicate volume"},
 		{"relative volume path", `{"pools":[],"volumes":[{"name":"data","path":"datasets/a.img"}]}`, "path must be absolute"},
 		{"bad volume directio", `{"pools":[],"volumes":[{"name":"data","path":"/srv/datasets/a.img","directio":"yes"}]}`, "directio must be"},
+		{"relative volume root", `{"pools":[],"volume_roots":["srv/datasets"]}`, "volume_roots"},
+		{"empty volume root", `{"pools":[],"volume_roots":[""]}`, "volume_roots"},
 		{"reader without warm", `{"pools":[{"template":"rt:24.04","warm":0,"reader":true}]}`, "reader needs warm"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -292,7 +294,7 @@ func TestLoadReadsReader(t *testing.T) {
 }
 
 func TestLoadAcceptsVolumes(t *testing.T) {
-	path := writeConfig(t, `{"pools":[],"volumes":[
+	path := writeConfig(t, `{"pools":[],"volume_roots":["/srv/models/"],"volumes":[
 		{"name":"imagenet","path":"/srv/datasets/imagenet.img"},
 		{"name":"weights-llama","path":"/srv/datasets/llama.img","directio":"on"}]}`)
 	cfg, err := Load(path)
@@ -302,6 +304,9 @@ func TestLoadAcceptsVolumes(t *testing.T) {
 	if len(cfg.Volumes) != 2 || cfg.Volumes[0].DirectIO != types.DirectIOOff ||
 		cfg.Volumes[1].DirectIO != types.DirectIOOn {
 		t.Errorf("volumes = %+v", cfg.Volumes)
+	}
+	if !slices.Equal(cfg.VolumeRoots, []string{"/srv/models"}) {
+		t.Errorf("volume_roots = %q, want the cleaned root with static volumes outside it accepted", cfg.VolumeRoots)
 	}
 }
 
