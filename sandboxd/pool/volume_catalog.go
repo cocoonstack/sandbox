@@ -51,6 +51,12 @@ func (c *volumeCatalog) admissionError(name string) error {
 	return nil
 }
 
+func (c *volumeCatalog) withinRoots(path string) bool {
+	return len(c.roots) == 0 || slices.ContainsFunc(c.roots, func(root string) bool {
+		return path == root || strings.HasPrefix(path, strings.TrimSuffix(root, string(filepath.Separator))+string(filepath.Separator))
+	})
+}
+
 // RegisterVolume durably binds a root-managed name to a backing path.
 func (m *Manager) RegisterVolume(ctx context.Context, name string, spec types.VolumeRegistration) error {
 	volume, err := normalizeRegistration(name, spec)
@@ -230,12 +236,6 @@ func catalogPathConflict(entries map[string]*catalogVolume, path string) error {
 		}
 	}
 	return nil
-}
-
-func (c *volumeCatalog) withinRoots(path string) bool {
-	return len(c.roots) == 0 || slices.ContainsFunc(c.roots, func(root string) bool {
-		return path == root || strings.HasPrefix(path, strings.TrimSuffix(root, string(filepath.Separator))+string(filepath.Separator))
-	})
 }
 
 func normalizeRegistration(name string, spec types.VolumeRegistration) (*catalogVolume, error) {
