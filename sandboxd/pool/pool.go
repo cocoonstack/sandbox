@@ -485,7 +485,7 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 			writable: volume.Writable,
 		}
 	}
-	if err := m.loadRuntimeVolumes(); err != nil {
+	if err := m.loadRuntimeVolumes(ctx); err != nil {
 		return nil, err
 	}
 	if err := os.MkdirAll(m.goldensDir(), 0o750); err != nil {

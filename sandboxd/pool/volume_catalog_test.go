@@ -153,10 +153,10 @@ func TestRuntimeCatalogRejectsCollisionsAndInvalidRegistrations(t *testing.T) {
 }
 
 func TestRuntimeCatalogVolumeRootsBoundRegistration(t *testing.T) {
-	newRootedManager := func(t *testing.T, dataDir string, roots ...string) (*Manager, error) {
+	newRootedManager := func(t *testing.T, eng *fakeEngine, dataDir string, roots ...string) (*Manager, error) {
 		t.Helper()
 		cfg := &config.Config{DataDir: dataDir, VolumeRoots: roots}
-		return NewManager(t.Context(), cfg, newFakeEngine(), testSecrets(t), testBackends(t, cfg))
+		return NewManager(t.Context(), cfg, eng, testSecrets(t), testBackends(t, cfg))
 	}
 	for _, tc := range []struct {
 		name, path string
@@ -172,7 +172,7 @@ func TestRuntimeCatalogVolumeRootsBoundRegistration(t *testing.T) {
 		{"no roots", "/etc/a.img", nil, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			m, err := newRootedManager(t, t.TempDir(), tc.roots...)
+			m, err := newRootedManager(t, newFakeEngine(), t.TempDir(), tc.roots...)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -181,15 +181,50 @@ func TestRuntimeCatalogVolumeRootsBoundRegistration(t *testing.T) {
 			}
 		})
 	}
-	m := newVolumeManager(t, newFakeEngine(), nil)
-	if err := m.RegisterVolume(t.Context(), "runtime", types.VolumeRegistration{Path: "/etc/a.img"}); err != nil {
+	eng := newFakeEngine()
+	m := newVolumeManager(t, eng, nil)
+	images := map[string]string{"outside": writeVolumeImage(t, "outside", "bytes"), "inside": writeVolumeImage(t, "inside", "bytes")}
+	for name, path := range images {
+		if err := m.RegisterVolume(t.Context(), name, types.VolumeRegistration{Path: path}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	outside, inside := filepath.Dir(images["outside"]), filepath.Dir(images["inside"])
+	sb, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Volumes: []types.Volume{{Name: "outside"}}})
+	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := newRootedManager(t, m.dataDir, "/etc"); err != nil {
+	wide, err := newRootedManager(t, eng, m.dataDir, outside, inside)
+	if err != nil || wide.catalogSnapshot()["outside"] == nil {
 		t.Fatalf("restart with the registration inside volume_roots: %v", err)
 	}
-	if _, err := newRootedManager(t, m.dataDir, "/srv/data"); err == nil {
-		t.Fatal("restart accepted a persisted registration outside volume_roots")
+	m2, err := newRootedManager(t, eng, m.dataDir, inside)
+	if err != nil {
+		t.Fatalf("restart refused a persisted registration outside volume_roots: %v", err)
+	}
+	if err = m2.Reconcile(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if got := m2.catalogSnapshot(); got["outside"] != nil || got["inside"] == nil {
+		t.Fatalf("narrowed catalog = %v, want only the in-root registration", slices.Sorted(maps.Keys(got)))
+	}
+	if got := volumeHoldersOf(m2, "outside"); got.readers != 1 {
+		t.Fatalf("recovered claim holders of the skipped registration = %+v", got)
+	}
+	if _, err = m2.ClaimProvision(t.Context(), testKey, ClaimOptions{Volumes: []types.Volume{{Name: "outside"}}}); !errors.Is(err, ErrVolumeUnavailable) {
+		t.Fatalf("claim of the skipped registration = %v, want ErrVolumeUnavailable", err)
+	}
+	if err = claimAndRelease(t, m2, types.Volume{Name: "inside"}); err != nil {
+		t.Fatalf("in-root registration: %v", err)
+	}
+	if err = m2.Release(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
+		t.Fatalf("release of a recovered claim holding the skipped registration: %v", err)
+	}
+	if err = m2.RegisterVolume(t.Context(), "later", types.VolumeRegistration{Path: filepath.Join(inside, "later")}); err != nil {
+		t.Fatal(err)
+	}
+	if wide, err = newRootedManager(t, eng, m.dataDir, outside, inside); err != nil || wide.catalogSnapshot()["outside"] != nil {
+		t.Fatalf("a later catalog write kept the skipped registration: %v", err)
 	}
 }
 

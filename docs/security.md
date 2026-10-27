@@ -105,13 +105,13 @@ exposes host image paths or access lists.
 Runtime registration and unregistration require a configured root `api_token`;
 these endpoints return 403 when the token is unset. New catalog records use
 mode 0600. Reads and replacements use the daemon's filesystem permissions.
-Registration uses the same path validation as static configuration. It does not
-verify backing type or pin backing identity; the operator duties this leaves are
-listed under [PUT /v1/volumes/{name}](sandboxd-api.md#put-v1volumesname).
-Unless [`volume_roots`](deploy.md#configuration) restricts it, the root token can
-register any absolute host path, writable if requested, for every scope its
-[access list](sandboxd-api.md#volume-access-lists) permits. Protect the root
-token like host root, or set `volume_roots`.
+Registration uses static configuration's path validation plus, when set, the
+[`volume_roots`](deploy.md#configuration) bound. It does not verify backing type
+or pin backing identity; the operator duties this leaves are listed under
+[PUT /v1/volumes/{name}](sandboxd-api.md#put-v1volumesname). Without
+`volume_roots` the root token can register any absolute host path, writable if
+requested, for every scope its [access list](sandboxd-api.md#volume-access-lists)
+permits. Protect the root token like host root, or set `volume_roots`.
 
 Read-only is integrity protection for the shared image, not confidentiality.
 Mounting a dataset into an egress-lane sandbox gives that sandbox an export path
