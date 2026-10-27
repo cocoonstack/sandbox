@@ -2,6 +2,7 @@ package pool
 
 import (
 	"context"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"maps"
@@ -368,6 +369,54 @@ func TestRuntimeCatalogAcceptanceRechecksReferences(t *testing.T) {
 	m.unreserveVolumes(holds)
 	if err := m.writeCatalog(t.Context(), "runtime", entries); err != nil {
 		t.Fatalf("reservation retirement did not unblock removal: %v", err)
+	}
+}
+
+func TestAdoptedClaimReferencesVolumeBeforeItsClaimWrite(t *testing.T) {
+	c := newFailoverCluster(t)
+	a, b := c.node(t, "a", t.TempDir(), keepAnHour), c.node(t, "b", t.TempDir(), keepAnHour)
+	if err := b.RegisterVolume(t.Context(), "data", types.VolumeRegistration{Path: writeVolumeImage(t, "adopted", "bytes")}); err != nil {
+		t.Fatal(err)
+	}
+	sb := mustClaim(t, a, testKey)
+	mustArchive(t, a, sb)
+	rec, _, err := c.reg.Get(t.Context(), sb.ID)
+	claim := &types.Sandbox{}
+	if err == nil {
+		err = json.Unmarshal(rec.Claim, claim)
+	}
+	// the row is a peer's record, so the adopter cannot assume it names no volumes
+	claim.Volumes = []types.Volume{{Name: "data", Mount: "/data"}}
+	if err == nil {
+		rec.Claim, err = json.Marshal(claim)
+	}
+	if err == nil {
+		_, err = c.reg.Put(t.Context(), rec)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.expire("a")
+	// an earlier claims.json write in flight keeps the adoption's write from starting
+	b.store.writeMu.Lock()
+	unlock := sync.OnceFunc(b.store.writeMu.Unlock)
+	t.Cleanup(unlock)
+	adopted := make(chan error, 1)
+	go func() {
+		ok, adoptErr := b.AdoptArchived(t.Context(), sb.ID, sb.Token)
+		if adoptErr == nil && !ok {
+			adoptErr = errors.New("not adopted")
+		}
+		adopted <- adoptErr
+	}()
+	waitFor(t, func() bool { _, held := b.byID(sb.ID); return held })
+	err = b.UnregisterVolume(t.Context(), "data")
+	unlock()
+	if adoptErr := <-adopted; adoptErr != nil {
+		t.Fatal(adoptErr)
+	}
+	if !errors.Is(err, ErrVolumeRegistrationConflict) {
+		t.Fatalf("unregister while a published adoption references the volume = %v", err)
 	}
 }
 

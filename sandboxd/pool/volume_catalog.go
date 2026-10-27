@@ -141,7 +141,16 @@ func (m *Manager) loadRuntimeVolumes() error {
 }
 
 func (m *Manager) volumeReferenced(name string) bool {
-	return m.catalog.holders[name] != (volumeHolders{}) || m.store.referencesVolume(name)
+	if m.catalog.holders[name] != (volumeHolders{}) {
+		return true
+	}
+	// an adopted claim is published with no holders before its claims.json write counts it
+	for _, sb := range m.claimed {
+		if volumeIndex(sb.Volumes, name) >= 0 || volumeIndex(sb.VolumesWant, name) >= 0 {
+			return true
+		}
+	}
+	return m.store.referencesVolume(name)
 }
 
 func (m *Manager) writeCatalog(ctx context.Context, name string, entries map[string]*catalogVolume) error {
