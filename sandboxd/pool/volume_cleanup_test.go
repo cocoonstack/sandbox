@@ -99,6 +99,7 @@ func TestDispatchedCleanupRetainsCatalogReference(t *testing.T) {
 func TestStaleVMFenceFollowsInspection(t *testing.T) {
 	writer, reader := []types.VMDisk{{Name: "data"}}, []types.VMDisk{{Name: "data", ReadOnly: true}}
 	busy, fenced, inspectErr := ErrVolumeBusy, ErrVolumeCatalogUnavailable, errors.New("inspection unavailable")
+	staleStop := vmStateStopped + " stale"
 	for _, tc := range []struct {
 		name, swept, listed, state string
 		disks                      []types.VMDisk
@@ -111,12 +112,14 @@ func TestStaleVMFenceFollowsInspection(t *testing.T) {
 		{"running empty", vmStateRunning, "sbx-stale", vmStateRunning, []types.VMDisk{}, nil, [3]error{}, nil},
 		{"running omitted disks", vmStateRunning, "sbx-stale", vmStateRunning, nil, nil, [3]error{fenced, fenced, fenced}, fenced},
 		{"stopped", vmStateRunning, "sbx-stale", vmStateStopped, writer, nil, [3]error{}, nil},
+		{"stopped stale (pid file lost)", vmStateRunning, "sbx-stale", staleStop, writer, nil, [3]error{fenced, fenced, fenced}, fenced},
 		{"inspected creating", vmStateRunning, "sbx-stale", vmStateCreating, writer, nil, [3]error{fenced, fenced, fenced}, fenced},
 		{"inspect error", vmStateRunning, "sbx-stale", vmStateRunning, writer, inspectErr, [3]error{fenced, fenced, fenced}, fenced},
 		{"busy creating", vmStateCreating, "sbx-stale", vmStateCreating, writer, nil, [3]error{fenced, fenced, fenced}, fenced},
 		{"busy running", vmStateCreating, "sbx-stale", vmStateRunning, reader, nil, [3]error{nil, busy, nil}, nil},
 		{"busy omitted disks", vmStateCreating, "sbx-stale", vmStateRunning, nil, nil, [3]error{fenced, fenced, fenced}, fenced},
 		{"busy stopped", vmStateCreating, "sbx-stale", vmStateStopped, writer, nil, [3]error{}, nil},
+		{"busy stopped stale", vmStateCreating, "sbx-stale", staleStop, writer, nil, [3]error{fenced, fenced, fenced}, fenced},
 		{"busy absent", vmStateCreating, "sbx-other", vmStateRunning, writer, nil, [3]error{}, nil},
 		{"busy inspect error", vmStateCreating, "sbx-stale", vmStateRunning, writer, inspectErr, [3]error{fenced, fenced, fenced}, fenced},
 	} {
@@ -125,7 +128,8 @@ func TestStaleVMFenceFollowsInspection(t *testing.T) {
 			m := newVolumeManager(t, eng, liveCatalog(t))
 			name := "sbx-stale"
 			eng.vms[tc.listed], eng.removeErrFor, eng.staleOutcome = "/vsock/stale", name, engine.StaleCreateBusy
-			eng.stopped[tc.listed], eng.creating[tc.listed] = tc.state == vmStateStopped, tc.state == vmStateCreating
+			eng.stopped[tc.listed], eng.creating[tc.listed] = tc.state == vmStateStopped || tc.state == staleStop, tc.state == vmStateCreating
+			eng.stale[tc.listed] = tc.state == staleStop
 			eng.inspectHook = func() error { return tc.inspectErr }
 			if m.removeStaleVM(t.Context(), name, types.VMRecord{State: tc.swept, Config: types.VMConfig{Name: name}}) {
 				t.Fatal("stale VM reported gone")

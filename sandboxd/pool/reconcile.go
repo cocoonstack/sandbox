@@ -205,7 +205,8 @@ func (m *Manager) resolveStaleVolumes(ctx context.Context, name string, td volum
 				holds[i].Mode = types.VolumeModeRW
 			}
 		}
-	case present && inspected.State != vmStateStopped:
+	// a stale stop is inferred from a lost PID file; the VMM may still be writing its disks
+	case present && (inspected.State != vmStateStopped || inspected.Stale):
 		return td
 	}
 	m.mu.Lock()

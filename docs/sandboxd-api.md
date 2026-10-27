@@ -323,9 +323,11 @@ recovery snapshot return 409. Persistence uncertainty returns 503 with
 later. An empty GET view does not establish that recovery references retired.
 
 Volume claims and registrations also return 503 with `Retry-After` while the
-node removes a leftover VM whose attached volumes it cannot determine. A
-stopped leftover VM holds none, which assumes sandboxd controls VM starts and
-disk attachments in its namespace. Volume-free claims are unaffected.
+node removes a leftover VM whose attached volumes it cannot determine,
+including one cocoon reports `stale` because it only inferred the stop from a
+lost PID file. Any other stopped leftover VM holds none, which assumes sandboxd
+controls VM starts and disk attachments in its namespace. Volume-free claims
+are unaffected.
 
 Before downgrading to a daemon without runtime registration, drain runtime
 references or supply equivalent static volume config and finish pending live

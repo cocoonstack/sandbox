@@ -1255,6 +1255,7 @@ type fakeEngine struct {
 	detachVolumeErr                   error
 	liveVolumeHook                    func(string) error
 	stopped                           map[string]bool
+	stale                             map[string]bool
 	inspectHook                       func() error
 	disks                             map[string][]types.VMDisk
 	creating                          map[string]bool
@@ -1296,7 +1297,7 @@ type fakeEngine struct {
 
 func newFakeEngine() *fakeEngine {
 	return &fakeEngine{
-		vms: map[string]string{}, stopped: map[string]bool{}, creating: map[string]bool{}, pids: map[string]int{},
+		vms: map[string]string{}, stopped: map[string]bool{}, stale: map[string]bool{}, creating: map[string]bool{}, pids: map[string]int{},
 		attachDirty: map[string]bool{}, removeSeenOps: map[string][]string{}, removeSeenDirty: map[string][]string{},
 		metadataDocs: map[string]string{}, guestEnvs: map[string]string{}, sockRoot: "/vsock",
 	}
@@ -1771,7 +1772,7 @@ func (f *fakeEngine) list(_ context.Context) ([]types.VMRecord, error) {
 		case f.stopped[name]:
 			state = vmStateStopped
 		}
-		rec := types.VMRecord{State: state, PID: f.pids[name], VsockSocket: sock, Config: types.VMConfig{Name: name}}
+		rec := types.VMRecord{Stale: f.stale[name], State: state, PID: f.pids[name], VsockSocket: sock, Config: types.VMConfig{Name: name}}
 		if f.tap != "" {
 			rec.NetworkConfigs = []types.VMNetConfig{{TAP: f.tap}}
 		}
