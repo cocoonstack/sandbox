@@ -132,10 +132,14 @@ func TestRuntimeCatalogRejectsCollisionsAndInvalidRegistrations(t *testing.T) {
 		{"runtime", types.VolumeRegistration{Path: "relative"}, ErrBadVolume},
 		{"runtime", types.VolumeRegistration{Path: other, DirectIO: "invalid"}, ErrBadVolume},
 		{"runtime", types.VolumeRegistration{Path: other, Tenants: []string{"has space"}}, ErrBadVolume},
+		{"runtime", types.VolumeRegistration{Path: "/srv/\xff"}, ErrBadVolume},
 	} {
 		if err := m.RegisterVolume(t.Context(), tc.name, tc.spec); !errors.Is(err, tc.want) {
 			t.Errorf("register %s %+v = %v, want %v", tc.name, tc.spec, err, tc.want)
 		}
+	}
+	if _, err := os.Stat(filepath.Join(m.dataDir, runtimeVolumesFile)); !errors.Is(err, os.ErrNotExist) || m.catalog.entries["runtime"] != nil {
+		t.Fatalf("rejected registration persisted: stat=%v entry=%+v", err, m.catalog.entries["runtime"])
 	}
 	for _, tc := range []struct {
 		name string

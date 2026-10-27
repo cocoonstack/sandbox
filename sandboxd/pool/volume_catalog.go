@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"slices"
 	"sync"
+	"unicode/utf8"
 
 	"github.com/projecteru2/core/log"
 
@@ -212,6 +213,9 @@ func catalogPathConflict(entries map[string]*catalogVolume, path string) error {
 
 func normalizeRegistration(name string, spec types.VolumeRegistration) (*catalogVolume, error) {
 	spec.DirectIO = cmp.Or(spec.DirectIO, types.DirectIOOff)
+	if !utf8.ValidString(spec.Path) {
+		return nil, fmt.Errorf("%w: volume %q path must be valid UTF-8", ErrBadVolume, name)
+	}
 	if err := config.ValidateVolumeCatalog([]config.VolumeSpec{{
 		Name: name, Path: spec.Path, DirectIO: spec.DirectIO, Writable: spec.Writable, Tenants: spec.Tenants,
 	}}); err != nil {
