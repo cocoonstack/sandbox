@@ -286,11 +286,11 @@ PUT and PATCH can add or remove mounted and attach-only entries in either mode.
 Changing a held entry's mount, mode, or `attach_only` requires successful
 removal first. See the [live volume contract](sandboxd-api.md#put-v1sandboxesidvolumes)
 for admission policy and dirty-marker handling. Paused sandboxes are not woken,
-and images must exist on the owner node. Admission holds cover the union of desired and applied
-sets. A settled retained entry receives no new attach or mount calls. `converging`
-is true during an active request or while a recovery-only reference awaits an
-acknowledged claim write. Pending or detaching entries with false
-require an explicit retry. Daemon restart replaces unfinished diagnostics with
+and images must exist on the owner node. Admission holds cover the union of
+desired and applied sets. A settled retained entry receives no new attach or
+mount calls. `converging` is true while a volume-change request is running.
+Pending or detaching entries with `converging: false` require an explicit retry.
+Daemon restart replaces unfinished diagnostics with
 an interrupted message. Capture is refused while either set is nonempty.
 Release cancels convergence and hands held volumes to teardown. See the
 [API recovery contract](sandboxd-api.md#partial-failure-and-recovery) and
