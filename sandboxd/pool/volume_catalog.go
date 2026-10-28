@@ -29,26 +29,11 @@ type runtimeCatalog struct {
 	Volumes map[string]types.VolumeRegistration `json:"volumes"`
 }
 
-type catalogWrite struct {
-	name    string
-	entries map[string]*catalogVolume
-	raw     []byte
-}
-
 type volumeCatalog struct {
 	entries map[string]*catalogVolume
 	roots   []string
-	pending *catalogWrite
 	holders map[string]volumeHolders
-	unknown int
 	writeMu sync.Mutex
-}
-
-func (c *volumeCatalog) admissionError(name string) error {
-	if c.unknown > 0 || c.pending != nil && c.pending.name == name {
-		return ErrVolumeCatalogUnavailable
-	}
-	return nil
 }
 
 func (c *volumeCatalog) withinRoots(path string) bool {
@@ -68,28 +53,35 @@ func (m *Manager) RegisterVolume(ctx context.Context, name string, spec types.Vo
 	}
 	m.catalog.writeMu.Lock()
 	defer m.catalog.writeMu.Unlock()
-	if err = m.commitPendingCatalog(ctx); err != nil {
+	if err := ctx.Err(); err != nil {
 		return err
 	}
 	m.mu.Lock()
 	entries := m.catalog.entries
-	err = m.catalog.admissionError(name)
-	m.mu.Unlock()
-	if err != nil {
-		return err
-	}
 	if entry := entries[name]; entry != nil {
+		m.mu.Unlock()
 		if entry.runtime && entry.disk == volume.disk && entry.writable == volume.writable && slices.Equal(entry.tenants, volume.tenants) {
 			return nil
 		}
 		return fmt.Errorf("%w: volume %q already has different semantics or is static", ErrVolumeRegistrationConflict, name)
 	}
+	if m.volumeReferenced(name) {
+		m.mu.Unlock()
+		return fmt.Errorf("%w: volume %q is referenced", ErrVolumeRegistrationConflict, name)
+	}
+	m.mu.Unlock()
 	if err := catalogPathConflict(entries, volume.disk.Path); err != nil {
 		return fmt.Errorf("%w: %w", ErrVolumeRegistrationConflict, err)
 	}
 	entries = maps.Clone(entries)
 	entries[name] = volume
-	return m.writeCatalog(ctx, name, entries)
+	if err := m.persistRuntimeCatalog(entries); err != nil {
+		return err
+	}
+	m.mu.Lock()
+	m.catalog.entries = entries
+	m.mu.Unlock()
+	return nil
 }
 
 // UnregisterVolume retires an unreferenced runtime binding without touching its backing.
@@ -99,23 +91,20 @@ func (m *Manager) UnregisterVolume(ctx context.Context, name string) error {
 	}
 	m.catalog.writeMu.Lock()
 	defer m.catalog.writeMu.Unlock()
-	if err := m.commitPendingCatalog(ctx); err != nil {
+	if err := ctx.Err(); err != nil {
 		return err
 	}
 	m.mu.Lock()
-	entries := m.catalog.entries
-	entry := entries[name]
-	err := m.catalog.admissionError(name)
-	if err == nil && ((entry != nil && !entry.runtime) || (entry == nil && m.volumeReferenced(name))) {
-		err = fmt.Errorf("%w: volume %q is static or referenced", ErrVolumeRegistrationConflict, name)
+	entry := m.catalog.entries[name]
+	if (entry != nil && !entry.runtime) || m.volumeReferenced(name) {
+		m.mu.Unlock()
+		return fmt.Errorf("%w: volume %q is static or referenced", ErrVolumeRegistrationConflict, name)
 	}
-	m.mu.Unlock()
-	if err != nil || entry == nil {
-		return err
-	}
-	entries = maps.Clone(entries)
+	entries := maps.Clone(m.catalog.entries)
 	delete(entries, name)
-	return m.writeCatalog(ctx, name, entries)
+	m.catalog.entries = entries
+	m.mu.Unlock()
+	return m.persistRuntimeCatalog(entries)
 }
 
 func (m *Manager) loadRuntimeVolumes(ctx context.Context) error {
@@ -162,71 +151,26 @@ func (m *Manager) volumeReferenced(name string) bool {
 	if m.catalog.holders[name] != (volumeHolders{}) {
 		return true
 	}
-	// an adopted claim is published with no holders before its claims.json write counts it
 	for _, sb := range m.claimed {
 		if volumeIndex(sb.Volumes, name) >= 0 || volumeIndex(sb.VolumesWant, name) >= 0 {
 			return true
 		}
 	}
-	return m.store.referencesVolume(name)
+	return false
 }
 
-func (m *Manager) writeCatalog(ctx context.Context, name string, entries map[string]*catalogVolume) error {
+func (m *Manager) persistRuntimeCatalog(entries map[string]*catalogVolume) error {
 	record := runtimeCatalog{Version: 1, Volumes: map[string]types.VolumeRegistration{}}
-	for key, entry := range entries {
+	for name, entry := range entries {
 		if entry.runtime {
-			record.Volumes[key] = types.VolumeRegistration{Path: entry.disk.Path, DirectIO: entry.disk.DirectIO, Writable: entry.writable, Tenants: entry.tenants}
+			record.Volumes[name] = types.VolumeRegistration{Path: entry.disk.Path, DirectIO: entry.disk.DirectIO, Writable: entry.writable, Tenants: entry.tenants}
 		}
 	}
 	raw, _ := json.Marshal(record, json.Deterministic(true))
-	proposal := &catalogWrite{name: name, entries: entries, raw: raw}
-	m.mu.Lock()
-	err := ctx.Err()
-	if err == nil && m.volumeReferenced(name) {
-		err = fmt.Errorf("%w: volume %q is referenced", ErrVolumeRegistrationConflict, name)
-	}
-	if err == nil {
-		m.catalog.pending = proposal
-	}
-	m.mu.Unlock()
-	if err != nil {
-		return err
-	}
-	return m.persistCatalog(proposal)
-}
-
-func (m *Manager) commitPendingCatalog(ctx context.Context) error {
-	m.mu.Lock()
-	proposal := m.catalog.pending
-	m.mu.Unlock()
-	if proposal == nil {
-		return nil
-	}
-	if err := ctx.Err(); err != nil {
+	if err := utils.WriteFileSync(filepath.Join(m.dataDir, runtimeVolumesFile), raw, 0o600); err != nil {
 		return fmt.Errorf("%w: %w", ErrVolumeCatalogUnavailable, err)
 	}
-	return m.persistCatalog(proposal)
-}
-
-func (m *Manager) persistCatalog(proposal *catalogWrite) error {
-	if err := utils.WriteFileSync(filepath.Join(m.dataDir, runtimeVolumesFile), proposal.raw, 0o600); err != nil {
-		return fmt.Errorf("%w: %w", ErrVolumeCatalogUnavailable, err)
-	}
-	m.mu.Lock()
-	m.catalog.entries = proposal.entries
-	m.catalog.pending = nil
-	m.mu.Unlock()
 	return nil
-}
-
-func (m *Manager) retryVolumeCatalog(ctx context.Context) {
-	if !m.catalog.writeMu.TryLock() {
-		return
-	}
-	defer m.catalog.writeMu.Unlock()
-	if err := m.commitPendingCatalog(ctx); err != nil {
-		log.WithFunc("pool.retryVolumeCatalog").Error(ctx, err, "persist runtime volume catalog")
-	}
 }
 
 func catalogPathConflict(entries map[string]*catalogVolume, path string) error {
@@ -240,6 +184,11 @@ func catalogPathConflict(entries map[string]*catalogVolume, path string) error {
 
 func normalizeRegistration(name string, spec types.VolumeRegistration) (*catalogVolume, error) {
 	spec.DirectIO = cmp.Or(spec.DirectIO, types.DirectIOOff)
+	for _, tenant := range spec.Tenants {
+		if !types.NameRe.MatchString(tenant) {
+			return nil, fmt.Errorf("%w: volume %q tenant %q must match %s", ErrBadVolume, name, tenant, types.NameRe)
+		}
+	}
 	if !utf8.ValidString(spec.Path) {
 		return nil, fmt.Errorf("%w: volume %q path must be valid UTF-8", ErrBadVolume, name)
 	}

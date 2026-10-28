@@ -45,8 +45,6 @@ func TestInspectReadsOneVMAndReportsAMissingOne(t *testing.T) {
 	fakeCocoon(t, "#!/bin/sh\n[ \"$1 $2\" = \"vm inspect\" ] || exit 2\n"+
 		"if [ \"$3\" = sbx-1 ]; then echo '{\"config\":{\"name\":\"sbx-1\"},\"state\":\"running\","+
 		"\"attached_devices\":{\"disks\":[{\"id\":\"disk-a\",\"name\":\"imagenet\",\"path\":\"/v/a.img\",\"readonly\":true},{\"id\":\"disk-b\",\"name\":\"scratch\",\"path\":\"/v/b.img\"}]}}'; exit 0; fi\n"+
-		"if [ \"$3\" = sbx-stale ]; then echo '{\"state\":\"stopped\",\"stale\":true,\"pid\":0}'; exit 0; fi\n"+
-		"if [ \"$3\" = sbx-stopped ]; then echo '{\"state\":\"stopped\"}'; exit 0; fi\n"+
 		"echo \"Error: inspect: vm $3: vm not found\" >&2; exit 1\n")
 	e := New("cocoon", nil, nil, false, false, "")
 	rec, ok, err := e.Inspect(t.Context(), "sbx-1")
@@ -54,34 +52,8 @@ func TestInspectReadsOneVMAndReportsAMissingOne(t *testing.T) {
 	if err != nil || !ok || rec.State != "running" || rec.Config.Name != "sbx-1" || !slices.Equal(rec.AttachedDevices.Disks, wantDisks) {
 		t.Errorf("Inspect sbx-1 = %+v, %v, %v", rec, ok, err)
 	}
-	for _, name := range []string{"sbx-stale", "sbx-stopped"} {
-		rec, present, err := e.Inspect(t.Context(), name)
-		if err != nil || !present || rec.State != "stopped" || rec.Stale != (name == "sbx-stale") {
-			t.Errorf("Inspect %s lost stopped classification: %+v, %v, %v", name, rec, present, err)
-		}
-	}
 	if _, ok, err := e.Inspect(t.Context(), "sbx-gone"); err != nil || ok {
 		t.Errorf("Inspect of a missing VM = %v, %v; want not found without an error", ok, err)
-	}
-}
-
-func TestInspectPreservesMissingDiskInventory(t *testing.T) {
-	for _, tc := range []struct {
-		name, inventory string
-		unknown         bool
-	}{
-		{"omitted devices", "", true},
-		{"omitted disks", `,"attached_devices":{}`, true},
-		{"null disks", `,"attached_devices":{"disks":null}`, true},
-		{"empty disks", `,"attached_devices":{"disks":[]}`, false},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			fakeCocoon(t, "#!/bin/sh\necho '{\"state\":\"running\""+tc.inventory+"}'\n")
-			rec, present, err := New("cocoon", nil, nil, false, false, "").Inspect(t.Context(), "sbx-1")
-			if err != nil || !present || (rec.AttachedDevices.Disks == nil) != tc.unknown {
-				t.Fatalf("inventory classification: %+v, %v, %v", rec, present, err)
-			}
-		})
 	}
 }
 

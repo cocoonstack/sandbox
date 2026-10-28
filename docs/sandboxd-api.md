@@ -282,13 +282,14 @@ binding, changed fields, or a static name or cleaned path collision returns 409.
 Invalid fields return 400. GET keeps its existing projection without host paths
 or tenant lists. Runtime entries support the existing live volume API.
 
-Persistence uncertainty returns 503 with `Retry-After`. An accepted change may
-complete through background retry or a later PUT or DELETE for any name.
-A 503 can also precede acceptance. Retry the exact request after repairing
-storage to establish completion. Cancellation does not undo an accepted write.
-Until persistence succeeds, new admission refuses the affected name while
-unrelated published names remain usable. Every catalog writer retries the
-accepted change before accepting another change.
+Persistence failure returns 503 with `Retry-After`. Retry the desired request
+after repairing storage. PUT writes the catalog before publishing the new
+entry. A failed PUT leaves that entry unavailable in the current process.
+If rename succeeded before a directory sync failed, a restart can load the
+entry despite the 503. A later successful catalog change can replace that
+unacknowledged entry. Failed requests are not replayed in the background.
+Cancellation before a change starts leaves it untouched. Once started, the
+write attempt completes even if the caller disconnects.
 
 The node stores metadata in `data_dir/runtime-volumes.json` independently of
 `sync_claims` and loads it before claim recovery. New records use mode 0600.
@@ -308,28 +309,29 @@ Static and runtime entries share one `tenants` rule. An omitted or empty list
 permits every authenticated scope. A nonempty list permits only claims owned
 by the listed tenants, and root-owned claims can use any entry. Live additions
 check the claim owner's list even when root sends the request; held names
-finish repair or removal without a new grant, and a recovery-only reference
-grants no fresh attachment. Names use the tenant API syntax: runtime
-registration rejects an invalid name, while static config logs a warning and
-skips it, so a nonempty static list with no valid names permits no tenant. A
-valid name for a tenant that does not exist yet grants nothing until the
-tenant is created.
+finish repair or removal without a new grant. Runtime registration rejects
+tenant names that do not match the tenant API syntax. Static config preserves
+its supplied tenant lists. An invalid static name matches no tenant, so a
+nonempty list containing only invalid names permits no tenant. A valid name
+for a tenant that does not exist yet grants nothing until the tenant is created.
 
 ## DELETE /v1/volumes/{name}
 
 Auth and name validation match PUT. Deletes only runtime registration metadata.
 Success, including an absent unreferenced name, is 204. Static names and names
-referenced by a claim, an in-flight operation, cleanup, or an unacknowledged
-recovery snapshot return 409. Persistence uncertainty returns 503 with
-`Retry-After` and the same retry semantics as PUT. A failed DELETE can complete
-later. An empty GET view does not establish that recovery references retired.
+referenced by a claim, an in-flight operation, or cleanup return 409, including
+references to names skipped by `volume_roots` during startup. DELETE checks
+references and removes the entry from memory before writing the catalog.
+Persistence failure returns 503 with `Retry-After`. The entry stays unavailable
+in memory, but a restart can restore the old registration if the write failed
+before rename. Retry DELETE even when GET no longer lists the name. DELETE
+always writes the absence, including when the name is already absent.
 
-Volume claims and registrations also return 503 with `Retry-After` while the
-node removes a leftover VM whose attached volumes it cannot determine,
-including one cocoon reports `stale` because it only inferred the stop from a
-lost PID file. Any other stopped leftover VM holds none, which assumes sandboxd
-controls VM starts and disk attachments in its namespace. Volume-free claims
-are unaffected.
+Claim recovery can restore conservative holds from an older claims file after
+a confirmed detach whose result write failed. Retry the claim's desired volume
+set to converge. Stale VM cleanup keeps the existing inventory behavior.
+Unreadable or incomplete inventory can leave an orphan's volumes unheld;
+runtime registration does not resolve that inventory limitation.
 
 Before downgrading to a daemon without runtime registration, drain runtime
 references or supply equivalent static volume config and finish pending live
@@ -358,7 +360,7 @@ or `detaching` when applied but no longer desired. An interrupted device call
 can leave the actual guest state different from the confirmed set. A failed
 PUT or PATCH adds a top-level `error` naming the refusal, and the affected
 state may carry its own `error`. `converging` is true while a request worker
-is running or a recovery-only reference awaits an acknowledged claim write.
+is running.
 `pending` with `converging: false` requires an explicit retry; there is no
 background convergence. GET retains the last safe per-volume error for the
 current daemon lifetime. After daemon restart, unfinished states report an

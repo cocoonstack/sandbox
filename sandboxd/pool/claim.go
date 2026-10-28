@@ -388,7 +388,7 @@ func (m *Manager) admitClaim(tenant string, volumes []resolvedVolume, applied []
 	if err := m.quotaErr(1, tenant); err != nil {
 		return err
 	}
-	if err := m.checkResolved(volumes, ""); err != nil {
+	if err := m.checkResolvedLocked(volumes); err != nil {
 		return err
 	}
 	m.adoptVolumes(applied)

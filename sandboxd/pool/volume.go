@@ -38,10 +38,9 @@ type resolvedVolume struct {
 
 // volumeTeardown captures marker paths at quiesce time; a later config can re-point the entry.
 type volumeTeardown struct {
-	run     *volumeRun
-	unknown bool
-	holds   []types.Volume
-	clears  []string
+	run    *volumeRun
+	holds  []types.Volume
+	clears []string
 }
 
 type catalogVolume struct {
@@ -150,10 +149,6 @@ func (m *Manager) resolveVolumes(ctx context.Context, tenant string, requested [
 		if entry == nil || !entry.allowedFor(tenant) {
 			m.mu.Unlock()
 			return nil, ErrVolumeUnavailable
-		}
-		if err := m.catalog.admissionError(volume.Name); err != nil {
-			m.mu.Unlock()
-			return nil, err
 		}
 	}
 	m.mu.Unlock()
@@ -290,9 +285,6 @@ func (m *Manager) finishVolumeTeardown(ctx context.Context, td volumeTeardown) {
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if td.unknown {
-		m.catalog.unknown--
-	}
 	if td.run != nil {
 		select {
 		case <-td.run.done:
@@ -349,18 +341,11 @@ func (m *Manager) catalogSnapshot() map[string]*catalogVolume {
 	return m.catalog.entries
 }
 
-// checkResolved refuses the request if any volume is fenced, rebound or busy; callers hold m.mu.
-func (m *Manager) checkResolved(volumes []resolvedVolume, ownerID string) error {
+func (m *Manager) checkResolvedLocked(volumes []resolvedVolume) error {
 	for _, resolved := range volumes {
 		volume := resolved.applied
-		if err := m.catalog.admissionError(volume.Name); err != nil {
-			return err
-		}
 		if m.catalog.entries[volume.Name] != resolved.entry {
 			return ErrVolumeUnavailable
-		}
-		if m.store.volumeConflicts(volume, ownerID) {
-			return fmt.Errorf("%w: volume %q", ErrVolumeBusy, volume.Name)
 		}
 		holders := m.catalog.holders[volume.Name]
 		if holders.writers > 0 || (volume.RW() && holders.readers > 0) {

@@ -70,14 +70,13 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 		owned[sb.VMName] = true
 		referenced[sb.HibernateSnap] = true
 	}
-	js := m.store.reset(m.claimed)
+	saveErr := m.store.save(m.claimed)
 	pooled := make(map[string]bool, len(m.pools))
 	for _, p := range m.pools {
 		m.adoptGolden(p, imageIDs[p.key.Template])
 		pooled[p.hash] = true
 	}
 	m.mu.Unlock()
-	saveErr := m.store.commit(js)
 	for _, sb := range adopted {
 		m.recordHibernate(ctx, sb)
 	}
@@ -157,10 +156,6 @@ func (m *Manager) sweepStaleVMs(ctx context.Context, live map[string]types.VMRec
 // removeStaleVM reclaims one unowned VM, reporting whether it is gone.
 func (m *Manager) removeStaleVM(ctx context.Context, name string, rec types.VMRecord) bool {
 	logger := log.WithFunc("pool.removeStaleVM")
-	m.mu.Lock()
-	m.catalog.unknown++
-	m.mu.Unlock()
-	td := volumeTeardown{unknown: true}
 	if rec.State == vmStateCreating {
 		// a canceled ctx must not skip the busy check guarding the forced remove
 		switch outcome, err := m.eng.ReconcileStaleCreate(context.WithoutCancel(ctx), name); {
@@ -168,53 +163,41 @@ func (m *Manager) removeStaleVM(ctx context.Context, name string, rec types.VMRe
 			// verb missing (cocoon < v0.5.8) or failed: keep the old sweep.
 			logger.Warnf(ctx, "reconcile stale create %s: %v; removing", name, err)
 		case outcome == engine.StaleCreateCollected, outcome == engine.StaleCreateNotFound:
-			m.finishVolumeTeardown(ctx, td)
 			return true
 		case outcome == engine.StaleCreateBusy:
 			logger.Infof(ctx, "stale create %s has an in-flight owner; queued for retry", name)
-			m.queueStaleCreate(name, rec.TapDevice(), m.resolveStaleVolumes(ctx, name, td))
+			m.queueStaleCreate(name, rec.TapDevice())
 			return false
 		}
 		// not-creating: the record moved on under the lock; remove normally.
 	}
 	if m.removeVM(ctx, name) {
-		m.finishVolumeTeardown(ctx, td)
 		return true
 	}
-	td = m.resolveStaleVolumes(ctx, name, td)
-	m.queueRemoval(name, "", rec.TapDevice(), td, time.Time{})
+	m.queueRemoval(name, "", rec.TapDevice(), volumeTeardown{holds: m.holdStaleVolumes(ctx, name, rec)}, time.Time{})
 	return false
 }
 
-func (m *Manager) resolveStaleVolumes(ctx context.Context, name string, td volumeTeardown) volumeTeardown {
-	if !td.unknown {
-		return td
+func (m *Manager) holdStaleVolumes(ctx context.Context, name string, rec types.VMRecord) []types.Volume {
+	if rec.State != vmStateRunning {
+		return nil
 	}
-	inspected, present, err := m.eng.Inspect(ctx, name)
+	inspected, _, err := m.eng.Inspect(ctx, name)
 	if err != nil {
-		log.WithFunc("pool.resolveStaleVolumes").Warnf(ctx, "inspect stale vm %s, keeping volume fence: %v", name, err)
-		return td
+		log.WithFunc("pool.holdStaleVolumes").Warnf(ctx, "inspect stale vm %s, its volumes stay unheld: %v", name, err)
+		return nil
 	}
-	var holds []types.Volume
-	switch {
-	case present && inspected.State == vmStateRunning && inspected.AttachedDevices.Disks != nil:
-		holds = make([]types.Volume, len(inspected.AttachedDevices.Disks))
-		for i, disk := range inspected.AttachedDevices.Disks {
-			holds[i].Name = disk.Name
-			if !disk.ReadOnly {
-				holds[i].Mode = types.VolumeModeRW
-			}
+	holds := make([]types.Volume, len(inspected.AttachedDevices.Disks))
+	for i, disk := range inspected.AttachedDevices.Disks {
+		holds[i].Name = disk.Name
+		if !disk.ReadOnly {
+			holds[i].Mode = types.VolumeModeRW
 		}
-	// a stale stop is inferred from a lost PID file; the VMM may still be writing its disks
-	case present && (inspected.State != vmStateStopped || inspected.Stale):
-		return td
 	}
 	m.mu.Lock()
 	m.adoptVolumes(holds)
-	m.catalog.unknown--
 	m.mu.Unlock()
-	td.unknown, td.holds = false, holds
-	return td
+	return holds
 }
 
 // resyncEgress re-locks adopted egress claims, quarantining any it cannot lock.

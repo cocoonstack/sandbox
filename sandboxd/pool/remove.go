@@ -58,9 +58,9 @@ func (m *Manager) queueRemoval(name, sandboxID, tap string, td volumeTeardown, n
 	m.mu.Unlock()
 }
 
-func (m *Manager) queueStaleCreate(name, tap string, td volumeTeardown) {
+func (m *Manager) queueStaleCreate(name, tap string) {
 	m.mu.Lock()
-	m.pendingRemovals[name] = pendingRemoval{tap: tap, staleCreate: true, volumes: td}
+	m.pendingRemovals[name] = pendingRemoval{tap: tap, staleCreate: true}
 	m.mu.Unlock()
 }
 
@@ -77,7 +77,7 @@ func (m *Manager) retryRemovals(ctx context.Context) *sync.WaitGroup {
 	}
 	m.mu.Unlock()
 	names := slices.Collect(maps.Keys(batch))
-	return m.runBounded(context.WithoutCancel(ctx), len(names), func(ctx context.Context, i int) {
+	return m.runBounded(ctx, len(names), func(ctx context.Context, i int) {
 		m.retryRemoval(ctx, names[i], batch[names[i]])
 	})
 }
@@ -87,10 +87,10 @@ func (m *Manager) retryRemoval(ctx context.Context, name string, pending pending
 		switch outcome, err := m.eng.ReconcileStaleCreate(ctx, name); {
 		case err != nil:
 			log.WithFunc("pool.retryRemoval").Warnf(ctx, "reconcile stale create %s: %v; retrying", name, err)
-			m.queueStaleCreate(name, pending.tap, pending.volumes)
+			m.queueStaleCreate(name, pending.tap)
 			return
 		case outcome == engine.StaleCreateBusy:
-			m.queueStaleCreate(name, pending.tap, m.resolveStaleVolumes(ctx, name, pending.volumes))
+			m.queueStaleCreate(name, pending.tap)
 			return
 		case outcome == engine.StaleCreateCollected, outcome == engine.StaleCreateNotFound:
 			m.finishRemoval(ctx, pending)
@@ -98,7 +98,6 @@ func (m *Manager) retryRemoval(ctx context.Context, name string, pending pending
 		}
 	}
 	if !m.removeVM(ctx, name) {
-		pending.volumes = m.resolveStaleVolumes(ctx, name, pending.volumes)
 		m.queueRemoval(name, pending.sandboxID, pending.tap, pending.volumes, time.Time{})
 		return
 	}

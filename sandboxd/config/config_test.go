@@ -468,16 +468,13 @@ func TestLoadAcceptsAShardedNetworkList(t *testing.T) {
 	}
 }
 
-func TestValidateVolumeCatalogTenantNames(t *testing.T) {
-	for _, tenant := range []string{"", "has space", "_leading", strings.Repeat("a", 64)} {
-		spec := VolumeSpec{Name: "data", Path: "/images/data", DirectIO: types.DirectIOOff, Tenants: []string{tenant}}
-		if err := ValidateVolumeCatalog([]VolumeSpec{spec}); err == nil {
-			t.Errorf("invalid tenant %q accepted", tenant)
-		}
+func TestLoadPreservesInvalidStaticVolumeTenants(t *testing.T) {
+	cfg, err := Load(writeConfig(t, `{"pools":[],"volumes":[{"name":"data","path":"/images/data","tenants":["has space", "future-tenant"]}]}`))
+	if err != nil {
+		t.Fatal(err)
 	}
-	spec := VolumeSpec{Name: "data", Path: "/images/data", DirectIO: types.DirectIOOff, Tenants: []string{"future-tenant", "team/project:v1"}}
-	if err := ValidateVolumeCatalog([]VolumeSpec{spec}); err != nil {
-		t.Fatalf("syntactically valid future tenant rejected: %v", err)
+	if got := cfg.Volumes[0].Tenants; !slices.Equal(got, []string{"has space", "future-tenant"}) {
+		t.Fatalf("static tenants changed: %v", got)
 	}
 }
 

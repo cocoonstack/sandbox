@@ -1255,8 +1255,6 @@ type fakeEngine struct {
 	detachVolumeErr                   error
 	liveVolumeHook                    func(string) error
 	stopped                           map[string]bool
-	stale                             map[string]bool
-	inspectHook                       func() error
 	disks                             map[string][]types.VMDisk
 	creating                          map[string]bool
 	staleOutcome                      engine.StaleCreateOutcome
@@ -1297,7 +1295,7 @@ type fakeEngine struct {
 
 func newFakeEngine() *fakeEngine {
 	return &fakeEngine{
-		vms: map[string]string{}, stopped: map[string]bool{}, stale: map[string]bool{}, creating: map[string]bool{}, pids: map[string]int{},
+		vms: map[string]string{}, stopped: map[string]bool{}, creating: map[string]bool{}, pids: map[string]int{},
 		attachDirty: map[string]bool{}, removeSeenOps: map[string][]string{}, removeSeenDirty: map[string][]string{},
 		metadataDocs: map[string]string{}, guestEnvs: map[string]string{}, sockRoot: "/vsock",
 	}
@@ -1528,13 +1526,7 @@ func (f *fakeEngine) List(ctx context.Context) ([]types.VMRecord, error) {
 func (f *fakeEngine) Inspect(ctx context.Context, name string) (types.VMRecord, bool, error) {
 	f.mu.Lock()
 	f.inspects++
-	hook := f.inspectHook
 	f.mu.Unlock()
-	if hook != nil {
-		if err := hook(); err != nil {
-			return types.VMRecord{}, false, err
-		}
-	}
 	vms, _ := f.list(ctx)
 	i := slices.IndexFunc(vms, func(vm types.VMRecord) bool { return vm.Config.Name == name })
 	if i < 0 {
@@ -1770,9 +1762,9 @@ func (f *fakeEngine) list(_ context.Context) ([]types.VMRecord, error) {
 		case f.creating[name]:
 			state = vmStateCreating
 		case f.stopped[name]:
-			state = vmStateStopped
+			state = "stopped"
 		}
-		rec := types.VMRecord{Stale: f.stale[name], State: state, PID: f.pids[name], VsockSocket: sock, Config: types.VMConfig{Name: name}}
+		rec := types.VMRecord{State: state, PID: f.pids[name], VsockSocket: sock, Config: types.VMConfig{Name: name}}
 		if f.tap != "" {
 			rec.NetworkConfigs = []types.VMNetConfig{{TAP: f.tap}}
 		}

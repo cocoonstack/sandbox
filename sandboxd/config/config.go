@@ -3,7 +3,6 @@ package config
 
 import (
 	"cmp"
-	"context"
 	"encoding/base64"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
@@ -19,7 +18,6 @@ import (
 	"strings"
 
 	"github.com/docker/go-units"
-	"github.com/projecteru2/core/log"
 
 	"github.com/cocoonstack/sandbox/sandboxd/egress"
 	"github.com/cocoonstack/sandbox/sandboxd/store"
@@ -408,17 +406,7 @@ func (c *Config) validateVolumes() error {
 		}
 		c.VolumeRoots[i] = filepath.Clean(root)
 	}
-	validation := slices.Clone(c.Volumes)
-	for i, volume := range c.Volumes {
-		validation[i].Tenants = slices.DeleteFunc(slices.Clone(volume.Tenants), func(tenant string) bool {
-			if types.NameRe.MatchString(tenant) {
-				return false
-			}
-			log.WithFunc("config.validateVolumes").Warnf(context.Background(), "volume %q: skipping invalid tenant %q", volume.Name, tenant)
-			return true
-		})
-	}
-	return ValidateVolumeCatalog(validation)
+	return ValidateVolumeCatalog(c.Volumes)
 }
 
 func (c *Config) validatePreview() error {
@@ -657,11 +645,6 @@ func ValidateVolumeCatalog(volumes []VolumeSpec) error {
 		paths[filepath.Clean(volume.Path)] = volume.Name
 		if !types.ValidDirectIO(volume.DirectIO) {
 			return fmt.Errorf("volume %q directio must be on, off, or auto, got %q", volume.Name, volume.DirectIO)
-		}
-		for _, tenant := range volume.Tenants {
-			if !types.NameRe.MatchString(tenant) {
-				return fmt.Errorf("volume %q tenant %q must match %s", volume.Name, tenant, types.NameRe)
-			}
 		}
 	}
 	return nil

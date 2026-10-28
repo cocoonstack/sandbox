@@ -126,8 +126,33 @@ func TestClaimCheckpointReferencesOutliveUnacknowledgedWrites(t *testing.T) {
 					t.Fatalf("want a failed directory sync after the rename: %v", err)
 				}
 			case captureWrite:
-				release := captureClaimWrite(t, s, snap, "owner")
-				finish = func() { release() }
+				if err := syscall.Mkfifo(s.path+".tmp", 0o600); err != nil {
+					t.Fatal(err)
+				}
+				done := make(chan error, 1)
+				go func() { done <- s.commit(snap) }()
+				waitFor(t, func() bool {
+					s.mu.Lock()
+					defer s.mu.Unlock()
+					return len(s.retained["owner"]) != 0
+				})
+				finish = func() {
+					r, err := os.Open(s.path + ".tmp")
+					if err != nil {
+						t.Fatal(err)
+					}
+					raw, err := io.ReadAll(r)
+					_ = r.Close()
+					if err = errors.Join(err, <-done); err != nil {
+						t.Fatal(err)
+					}
+					if err = os.Remove(s.path); err != nil {
+						t.Fatal(err)
+					}
+					if err = os.WriteFile(s.path, raw, 0o600); err != nil {
+						t.Fatal(err)
+					}
+				}
 			}
 			if tc.mutate != nil {
 				tc.mutate(s)
@@ -182,36 +207,4 @@ func failClaimWrites(t *testing.T, s *claimStore) func() {
 	})
 	t.Cleanup(restore)
 	return restore
-}
-
-func captureClaimWrite(t *testing.T, s *claimStore, snap claimSnapshot, owner string) func() []byte {
-	t.Helper()
-	if err := syscall.Mkfifo(s.path+".tmp", 0o600); err != nil {
-		t.Fatal(err)
-	}
-	done := make(chan error, 1)
-	go func() { done <- s.commit(snap) }()
-	waitFor(t, func() bool {
-		s.mu.Lock()
-		defer s.mu.Unlock()
-		return len(s.retained[owner]) != 0 || len(s.retainedVolumes[owner]) != 0
-	})
-	return func() []byte {
-		r, err := os.Open(s.path + ".tmp")
-		if err != nil {
-			t.Fatal(err)
-		}
-		raw, err := io.ReadAll(r)
-		_ = r.Close()
-		if err = errors.Join(err, <-done); err != nil {
-			t.Fatal(err)
-		}
-		if err = os.Remove(s.path); err != nil {
-			t.Fatal(err)
-		}
-		if err = os.WriteFile(s.path, raw, 0o600); err != nil {
-			t.Fatal(err)
-		}
-		return raw
-	}
 }

@@ -72,7 +72,6 @@ const (
 	hibernatePrefix = "sbx-hib-"
 	forkPrefix      = "sbx-fork-"
 	vmStateRunning  = "running"
-	vmStateStopped  = "stopped"
 	vmStateCreating = "creating"
 
 	goldenStampSuffix = ".stamp"
@@ -604,7 +603,6 @@ func (m *Manager) Run(ctx context.Context) {
 		case <-m.refillKick:
 			m.refillOnce(ctx)
 		case <-reap.C:
-			go m.retryVolumeCatalog(ctx)
 			m.retryRemovals(ctx)
 			m.reapOnce(ctx)
 			m.idleOnce(ctx)

@@ -1002,47 +1002,6 @@ func TestReplicaAdoptionWakesTheClaimFromTheLastReplica(t *testing.T) {
 	}
 }
 
-func TestReplicaScanWaitsForDetachAcknowledgment(t *testing.T) {
-	c := newReplicaCluster(t)
-	m := c.node(t, "a", t.TempDir(), keepAnHour)
-	if err := m.RegisterVolume(t.Context(), "data", types.VolumeRegistration{Path: writeVolumeImage(t, "replicated-data", "bytes")}); err != nil {
-		t.Fatal(err)
-	}
-	sb, attached, ordinary := mustClaim(t, m, testKey), mustClaim(t, m, testKey), mustClaim(t, m, testKey)
-	for _, owner := range []*types.Sandbox{sb, attached} {
-		if _, err := m.SetVolumes(t.Context(), owner.ID, "", []types.Volume{{Name: "data"}}); err != nil {
-			t.Fatal(err)
-		}
-	}
-	eng := m.eng.(*fakeEngine)
-	unblock := detachWithoutCommit(t, m, eng, sb.ID, "")
-	m.replicateOnce(t.Context())
-	if m.replicating.Load() || !m.replicas[sb.ID].skipLogged || !m.replicas[attached.ID].skipLogged || m.replicas[ordinary.ID].tried.IsZero() || m.replicas[ordinary.ID].skipLogged {
-		t.Fatalf("scan failed to distinguish detached, attached, and ordinary claims: %+v", m.replicas)
-	}
-	if err := m.replicate(t.Context(), sb); !errors.Is(err, ErrVolumeCapture) {
-		t.Fatalf("capture ignored retained attachment: %v", err)
-	}
-	if sb.HasReplica() || len(eng.snapSaves) != 0 {
-		t.Fatal("pending detach published a replica")
-	}
-	unblock()
-	if err := m.store.commit(m.store.mark()); err != nil {
-		t.Fatal(err)
-	}
-	m.replicateOnce(t.Context())
-	if st := m.replicas[sb.ID]; st.skipLogged || st.tried.IsZero() {
-		t.Fatalf("acknowledged detach stayed skipped: %+v", st)
-	}
-	m.replicas[sb.ID] = replicaState{tried: time.Now().Add(-time.Hour)}
-	m.replicateOnce(t.Context())
-	waitFor(t, func() bool { return !m.replicating.Load() })
-	rec, ok, err := c.reg.Get(t.Context(), sb.ID)
-	if err != nil || !ok || rec.Consumed || rec.Checkpoint == "" || !sb.HasReplica() {
-		t.Fatalf("acknowledged detach did not permit replication: %+v, %t, %v", rec, ok, err)
-	}
-}
-
 func newReplicaCluster(t *testing.T) *failoverCluster {
 	t.Helper()
 	c := newFailoverCluster(t)

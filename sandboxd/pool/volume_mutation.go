@@ -87,21 +87,20 @@ func (m *Manager) changeVolumes(ctx context.Context, id, tenant string, change v
 	}()
 	m.mu.Lock()
 	current, held := slices.Clone(sb.VolumesWant), heldVolumes(sb)
-	recovery := m.store.recoveryVolumesFor(sb.ID)
 	m.mu.Unlock()
 	target, err := change(current)
 	if err != nil {
 		return view, err
 	}
-	target, err = normalizeLiveVolumes(target, slices.Concat(held, recovery))
+	target, err = normalizeLiveVolumes(target, held)
 	if err != nil {
 		return view, err
 	}
-	if err = validateLiveTarget(slices.Concat(held, recovery), target); err != nil {
+	if err = validateLiveTarget(held, target); err != nil {
 		return view, err
 	}
 	additions := volumeDifference(target, held)
-	if len(additions) > 0 {
+	if len(additions) != 0 {
 		if err = m.tenantRemoved(ctx, sb.Tenant); err != nil {
 			return view, err
 		}
@@ -270,7 +269,7 @@ func (m *Manager) stageVolumeTarget(ctx context.Context, sb *types.Sandbox, run 
 		m.mu.Unlock()
 		return claimSnapshot{}, false, ErrVolumeCapture
 	}
-	if err := m.checkResolved(resolved, sb.ID); err != nil {
+	if err := m.checkResolvedLocked(resolved); err != nil {
 		m.mu.Unlock()
 		return claimSnapshot{}, false, err
 	}
@@ -347,26 +346,19 @@ func (m *Manager) ownsRunLocked(sb *types.Sandbox, run *volumeRun) bool {
 	return m.claimed[sb.ID] == sb && m.volumeRuns[sb] == run
 }
 
-func (m *Manager) hasLiveVolumeHolds(sb *types.Sandbox) bool {
+func (m *Manager) hasVolumeHolds(sb *types.Sandbox) bool {
 	run := m.volumeRuns[sb]
 	return hasVolumes(sb) || run != nil && len(run.holds) > 0
 }
 
-func (m *Manager) hasVolumeHolds(sb *types.Sandbox) bool {
-	return m.hasLiveVolumeHolds(sb) || m.store.hasRecoveryVolumes(sb.ID)
-}
-
 func (m *Manager) volumeView(sb *types.Sandbox) types.SandboxVolumesResponse {
-	held := heldVolumes(sb)
-	recovering := volumeDifference(m.store.recoveryVolumesFor(sb.ID), held)
 	view := types.SandboxVolumesResponse{
 		Volumes:     slices.Clone(sb.Volumes),
 		VolumesWant: slices.Clone(sb.VolumesWant),
 		States:      []types.VolumeState{},
-		Converging:  m.volumeRuns[sb] != nil || len(recovering) > 0,
+		Converging:  m.volumeRuns[sb] != nil,
 	}
-	held = append(held, recovering...)
-	for _, v := range held {
+	for _, v := range heldVolumes(sb) {
 		state := types.VolumeAttached
 		if volumeIndex(sb.VolumesWant, v.Name) < 0 {
 			state = types.VolumeDetaching
