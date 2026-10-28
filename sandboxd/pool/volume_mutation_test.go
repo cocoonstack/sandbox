@@ -193,6 +193,101 @@ func TestLiveVolumePersistenceFailureRetainsRecoverableState(t *testing.T) {
 	}
 }
 
+func TestLiveDetachResultWriteFailureSurvivesTwoRestarts(t *testing.T) {
+	eng := newFakeEngine()
+	catalog := liveCatalog(t)
+	m := newVolumeManager(t, eng, catalog)
+	a := mustClaim(t, m, testKey)
+	if _, err := m.SetVolumes(t.Context(), a.ID, a.Tenant, []types.Volume{{Name: "data"}}); err != nil {
+		t.Fatal(err)
+	}
+	loadClaims := func() map[string]*types.Sandbox {
+		t.Helper()
+		claims, err := newClaimStore(m.dataDir, false).load()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return claims
+	}
+	journalPath := m.store.path
+	m.store.recommitting.Store(true)
+	t.Cleanup(func() {
+		eng.liveVolumeHook = nil
+		m.store.path = journalPath
+		m.store.recommitting.Store(false)
+	})
+	eng.liveVolumeHook = func(verb string) error {
+		if verb == "detach" {
+			m.store.path = journalPath + "/unavailable"
+		}
+		return nil
+	}
+	view, err := m.SetVolumes(t.Context(), a.ID, a.Tenant, nil)
+	eng.liveVolumeHook = nil
+	m.store.path = journalPath
+	m.store.recommitting.Store(false)
+	if err == nil || len(view.Volumes) != 0 || len(view.VolumesWant) != 0 {
+		t.Fatalf("failed detach result write: view=%+v err=%v", view, err)
+	}
+	if ops := eng.volumeOpsLog(); !slices.Contains(ops, "detach:data") {
+		t.Fatalf("result write failed before device detach: %v", ops)
+	}
+	if got := volumeHoldersOf(m, "data"); got != (volumeHolders{}) {
+		t.Fatalf("successful detach retained live holders: %+v", got)
+	}
+	stale := loadClaims()[a.ID]
+	wantReader := []types.Volume{{Name: "data", Mount: "/volumes/data"}}
+	if stale == nil || !slices.Equal(stale.Volumes, wantReader) || stale.VolumesWant == nil || len(stale.VolumesWant) != 0 {
+		t.Fatalf("journal lost stale applied reader or empty target: %+v", stale)
+	}
+
+	m2 := newVolumeManagerAt(t, eng, m.dataDir, catalog)
+	if reconcileErr := m2.Reconcile(t.Context()); reconcileErr != nil {
+		t.Fatal(reconcileErr)
+	}
+	writer := ClaimOptions{Volumes: []types.Volume{{Name: "data", Mode: types.VolumeModeRW}}}
+	if _, claimErr := m2.ClaimProvision(t.Context(), testKey, writer); !errors.Is(claimErr, ErrVolumeBusy) {
+		t.Fatalf("stale reader admitted writer after restart: %v", claimErr)
+	}
+	if got := volumeHoldersOf(m2, "data"); got != (volumeHolders{readers: 1}) {
+		t.Fatalf("restart did not restore one conservative reader: %+v", got)
+	}
+	view, err = m2.SetVolumes(t.Context(), a.ID, a.Tenant, nil)
+	if err != nil || len(view.Volumes) != 0 || len(view.VolumesWant) != 0 || volumeHoldersOf(m2, "data") != (volumeHolders{}) {
+		t.Fatalf("retry empty target: view=%+v err=%v", view, err)
+	}
+	beforeWriter := len(eng.volumeOpsLog())
+	b, err := m2.ClaimProvision(t.Context(), testKey, writer)
+	if err != nil {
+		t.Fatalf("writer after recovered detach: %v", err)
+	}
+	claims := loadClaims()
+	wantWriter := []types.Volume{{Name: "data", Mount: "/volumes/data", Mode: types.VolumeModeRW}}
+	if savedA, savedB := claims[a.ID], claims[b.ID]; savedA == nil || savedB == nil || len(savedA.Volumes) != 0 || len(savedA.VolumesWant) != 0 || !slices.Equal(savedB.Volumes, wantWriter) {
+		t.Fatalf("successful writer kept obsolete reader journal: A=%+v B=%+v", savedA, savedB)
+	}
+
+	m3 := newVolumeManagerAt(t, eng, m.dataDir, catalog)
+	if reconcileErr := m3.Reconcile(t.Context()); reconcileErr != nil {
+		t.Fatal(reconcileErr)
+	}
+	if _, claimErr := m3.ClaimProvision(t.Context(), testKey, writer); !errors.Is(claimErr, ErrVolumeBusy) {
+		t.Fatalf("second restart admitted competing writer: %v", claimErr)
+	}
+	if got := volumeHoldersOf(m3, "data"); got != (volumeHolders{writers: 1}) {
+		t.Fatalf("second restart did not restore only one writer: %+v", got)
+	}
+	attaches := 0
+	for _, op := range eng.volumeOpsLog()[beforeWriter:] {
+		if op == "attach:data" {
+			attaches++
+		}
+	}
+	if attaches != 1 {
+		t.Fatalf("writer and second restart attached data %d times, want 1", attaches)
+	}
+}
+
 func TestLiveBatchPartialFailureRetriesWithoutDoubleHolds(t *testing.T) {
 	eng := newFakeEngine()
 	m := newVolumeManager(t, eng, liveCatalog(t))
