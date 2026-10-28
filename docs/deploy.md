@@ -394,20 +394,15 @@ Whoever hands out attach-only `rw` access owns that trade; see
 
 ### S3-compatible stores (GCS, MinIO)
 
-The s3 backend speaks the AWS SDK, so a non-AWS store needs two node env
-settings besides the endpoint:
-
-- `AWS_REQUEST_CHECKSUM_CALCULATION=when_required` and
-  `AWS_RESPONSE_CHECKSUM_VALIDATION=when_required`. The SDK otherwise adds
-  CRC32 checksum headers that MinIO and GCS reject or fail to verify.
-- Credentials through the standard AWS chain (`AWS_ACCESS_KEY_ID` /
-  `AWS_SECRET_ACCESS_KEY`); for GCS these are an HMAC key of the node's service
-  account.
-
-GCS through its XML API: `{"kind": "s3", "s3": {"bucket": "…", "prefix": "ck/",
-"endpoint": "https://storage.googleapis.com", "region": "auto",
-"force_path_style": true}}`. GCS rewrites `Accept-Encoding` in transit, so the
-backend sends that header unsigned; nothing else differs.
+A non-AWS store needs `AWS_REQUEST_CHECKSUM_CALCULATION=when_required` and
+`AWS_RESPONSE_CHECKSUM_VALIDATION=when_required` in the node env: the SDK
+otherwise sends CRC32 checksum headers that not every S3-compatible store
+accepts. For GCS through its XML API, set `endpoint` to
+`https://storage.googleapis.com`, `region` to `auto`, and `force_path_style`
+and `unsigned_accept_encoding` to true, and supply an HMAC key of the node's
+service account as `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`. GCS rewrites
+`Accept-Encoding` in transit, so a signature that covers it never verifies;
+`unsigned_accept_encoding` keeps that header out of the signature.
 
 ### Reclaiming S3 storage
 

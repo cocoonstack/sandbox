@@ -384,40 +384,35 @@ func TestFetchHitRefreshesTheGenerationsUse(t *testing.T) {
 	}
 }
 
-func TestAcceptEncodingIsSentUnsigned(t *testing.T) {
-	var mu sync.Mutex
-	var seen []*http.Request
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		mu.Lock()
-		seen = append(seen, r.Clone(r.Context()))
-		mu.Unlock()
-		w.WriteHeader(http.StatusNotFound)
-		_, _ = io.WriteString(w, "<Error><Code>NoSuchKey</Code></Error>")
-	}))
-	t.Cleanup(ts.Close)
-	t.Setenv("AWS_ACCESS_KEY_ID", "test")
-	t.Setenv("AWS_SECRET_ACCESS_KEY", "test")
-	st, err := New(t.Context(), store.S3Config{
-		Bucket: "testbucket", Endpoint: ts.URL, Region: "us-east-1", ForcePathStyle: true,
-	}, t.TempDir(), store.CheckpointIDRe)
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	if _, err = st.ReadMeta(t.Context(), "ck_0123456789abcdef"); !errors.Is(err, store.ErrNotFound) {
-		t.Fatalf("ReadMeta: %v, want ErrNotFound", err)
-	}
-	mu.Lock()
-	defer mu.Unlock()
-	if len(seen) == 0 {
-		t.Fatal("no request reached the endpoint")
-	}
-	for _, r := range seen {
-		if got := r.Header.Get("Accept-Encoding"); got != "identity" {
-			t.Errorf("Accept-Encoding = %q, want identity", got)
-		}
-		if auth := r.Header.Get("Authorization"); strings.Contains(strings.ToLower(auth), "accept-encoding") {
-			t.Errorf("Accept-Encoding is signed: %s", auth)
-		}
+func TestAcceptEncodingIsUnsignedOnlyWhenConfigured(t *testing.T) {
+	for _, unsigned := range []bool{false, true} {
+		t.Run(fmt.Sprintf("unsigned=%t", unsigned), func(t *testing.T) {
+			fake := &fakeS3{objects: map[string][]byte{}}
+			var mu sync.Mutex
+			var headers []http.Header
+			st := newTestStoreAt(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				mu.Lock()
+				headers = append(headers, r.Header.Clone())
+				mu.Unlock()
+				fake.ServeHTTP(w, r)
+			}), unsigned)
+			if _, err := st.ReadMeta(t.Context(), "ck_0123456789abcdef"); !errors.Is(err, store.ErrNotFound) {
+				t.Fatalf("ReadMeta: %v, want ErrNotFound", err)
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			if len(headers) == 0 {
+				t.Fatal("no request reached the endpoint")
+			}
+			for _, h := range headers {
+				if got := h.Get("Accept-Encoding"); got != "identity" {
+					t.Errorf("Accept-Encoding = %q, want identity", got)
+				}
+				if signed := strings.Contains(strings.ToLower(h.Get("Authorization")), "accept-encoding"); signed == unsigned {
+					t.Errorf("Accept-Encoding signed = %t, want %t", signed, !unsigned)
+				}
+			}
+		})
 	}
 }
 
@@ -931,7 +926,12 @@ func denseChunkSums(t *testing.T, path string) [][sha256.Size]byte {
 
 func newTestStore(t *testing.T, fake *fakeS3) *Store {
 	t.Helper()
-	ts := httptest.NewServer(fake)
+	return newTestStoreAt(t, fake, false)
+}
+
+func newTestStoreAt(t *testing.T, endpoint http.Handler, unsignedAcceptEncoding bool) *Store {
+	t.Helper()
+	ts := httptest.NewServer(endpoint)
 	t.Cleanup(ts.Close)
 	t.Setenv("AWS_ACCESS_KEY_ID", "test")
 	t.Setenv("AWS_SECRET_ACCESS_KEY", "test")
@@ -940,7 +940,7 @@ func newTestStore(t *testing.T, fake *fakeS3) *Store {
 	t.Setenv("AWS_RESPONSE_CHECKSUM_VALIDATION", "when_required")
 	st, err := New(t.Context(), store.S3Config{
 		Bucket: "testbucket", Prefix: "ck/", Endpoint: ts.URL,
-		Region: "us-east-1", ForcePathStyle: true,
+		Region: "us-east-1", ForcePathStyle: true, UnsignedAcceptEncoding: unsignedAcceptEncoding,
 	}, t.TempDir(), store.CheckpointIDRe)
 	if err != nil {
 		t.Fatalf("New: %v", err)

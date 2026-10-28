@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"net/http"
 	"os"
 	"path"
 	"path/filepath"
@@ -111,37 +112,19 @@ func New(ctx context.Context, cfg store.S3Config, stagingRoot string, idRe *rege
 			o.BaseEndpoint = new(cfg.Endpoint)
 		}
 		o.UsePathStyle = cfg.ForcePathStyle
-		o.APIOptions = append(o.APIOptions, unsignAcceptEncoding)
+		if cfg.UnsignedAcceptEncoding {
+			base := o.HTTPClient
+			o.HTTPClient = smithyhttp.ClientDoFunc(func(req *http.Request) (*http.Response, error) {
+				req.Header.Set("Accept-Encoding", "identity")
+				return base.Do(req)
+			})
+			o.APIOptions = append(o.APIOptions, func(stack *middleware.Stack) error {
+				_, err := stack.Finalize.Remove("DisableAcceptEncodingGzip")
+				return err
+			})
+		}
 	})
 	return &Store{client: client, bucket: cfg.Bucket, prefix: cfg.Prefix, staging: stagingRoot, idRe: idRe}, nil
-}
-
-type acceptEncodingKey struct{}
-
-// GCS's XML API rewrites Accept-Encoding in transit, so a SigV4 signature that covers it never verifies;
-// the header is lifted out for signing and put back, so it is still sent, unsigned.
-func unsignAcceptEncoding(stack *middleware.Stack) error {
-	lift := middleware.FinalizeMiddlewareFunc("LiftAcceptEncoding", func(ctx context.Context, in middleware.FinalizeInput, next middleware.FinalizeHandler) (middleware.FinalizeOutput, middleware.Metadata, error) {
-		if req, ok := in.Request.(*smithyhttp.Request); ok {
-			if v := req.Header.Values("Accept-Encoding"); len(v) > 0 {
-				ctx = middleware.WithStackValue(ctx, acceptEncodingKey{}, slices.Clone(v))
-				req.Header.Del("Accept-Encoding")
-			}
-		}
-		return next.HandleFinalize(ctx, in)
-	})
-	restore := middleware.FinalizeMiddlewareFunc("RestoreAcceptEncoding", func(ctx context.Context, in middleware.FinalizeInput, next middleware.FinalizeHandler) (middleware.FinalizeOutput, middleware.Metadata, error) {
-		if req, ok := in.Request.(*smithyhttp.Request); ok {
-			if v, ok := middleware.GetStackValue(ctx, acceptEncodingKey{}).([]string); ok {
-				req.Header["Accept-Encoding"] = v
-			}
-		}
-		return next.HandleFinalize(ctx, in)
-	})
-	if err := stack.Finalize.Insert(lift, "Signing", middleware.Before); err != nil {
-		return err
-	}
-	return stack.Finalize.Insert(restore, "Signing", middleware.After)
 }
 
 func (s *Store) Stage(id string) (string, error) {
