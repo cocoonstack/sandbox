@@ -3,10 +3,9 @@
 from __future__ import annotations
 
 import urllib.parse
-from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
-from .volumes import _volume_body
+from .volumes import Volume, _volume_body
 
 if TYPE_CHECKING:
     from .client import Client
@@ -27,7 +26,7 @@ class Template:
     def new(
         self,
         ttl_seconds: int = 0,
-        volumes: list[str | Mapping[str, str]] | None = None,
+        volumes: list[str | Volume] | None = None,
         mount: bool = True,
         *,
         deadline: float | None = None,
@@ -55,7 +54,7 @@ def _claim_body(
     net: str,
     size: str,
     ttl_seconds: int,
-    volumes: list[str | Mapping[str, str]] | None = None,
+    volumes: list[str | Volume] | None = None,
     mount: bool = True,
     claim_ref: str = "",
 ) -> dict[str, Any]:
@@ -66,8 +65,10 @@ def _claim_body(
         claim["size"] = size
     if ttl_seconds:
         claim["ttl_seconds"] = ttl_seconds
+    if volumes is not None and not isinstance(volumes, list):
+        raise TypeError("volumes must be a list")
     if volumes:
-        claim["volumes"] = [_volume_body(volume, mount) for volume in volumes]
+        claim["volumes"] = [_volume_body(volume) for volume in volumes]
     if not mount:
         claim["volumes_attach_only"] = True
     if claim_ref:

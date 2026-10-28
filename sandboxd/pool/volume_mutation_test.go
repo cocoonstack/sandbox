@@ -18,6 +18,75 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
+func TestLiveVolumeFourModesAndMixedRoundtrip(t *testing.T) {
+	eng := newFakeEngine()
+	catalog := []config.VolumeSpec{}
+	request := []types.Volume{{Name: "mounted"}, {Name: "writer", Mode: types.VolumeModeRW}, {Name: "raw", AttachOnly: true}, {Name: "raw-writer", Mode: types.VolumeModeRW, AttachOnly: true}}
+	for _, v := range request {
+		catalog = append(catalog, config.VolumeSpec{Name: v.Name, Path: writeVolumeImage(t, v.Name, "seed"), Writable: true})
+	}
+	m := newVolumeManager(t, eng, catalog)
+	sb := mustClaim(t, m, testKey)
+	view, err := m.PatchVolumes(t.Context(), sb.ID, "", types.VolumePatch{Add: request})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(view.Volumes) != 4 || len(eng.volumeMounts) != 2 {
+		t.Fatalf("mixed modes: view=%+v mounts=%+v", view, eng.volumeMounts)
+	}
+	for _, v := range view.Volumes {
+		if v.AttachOnly != (v.Mount == "") {
+			t.Fatalf("lost canonical shape: %+v", v)
+		}
+	}
+	before := slices.Clone(eng.volumeOpsLog())
+	if _, err = m.SetVolumes(t.Context(), sb.ID, "", view.VolumesWant); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(before, eng.volumeOpsLog()) {
+		t.Fatal("GET-to-PUT roundtrip changed devices")
+	}
+	for _, change := range []types.Volume{{Name: "raw", Mount: "/new"}, {Name: "raw-writer", AttachOnly: true}, {Name: "writer", Mount: "/other", Mode: types.VolumeModeRW}} {
+		if _, err = m.PatchVolumes(t.Context(), sb.ID, "", types.VolumePatch{Add: []types.Volume{change}}); !errors.Is(err, ErrBadVolume) {
+			t.Fatalf("held shape change accepted: %+v, %v", change, err)
+		}
+	}
+	legacy := slices.Clone(view.VolumesWant)
+	for i := range legacy {
+		legacy[i].AttachOnly = false
+	}
+	if _, err = m.SetVolumes(t.Context(), sb.ID, "", legacy); !errors.Is(err, ErrBadVolume) {
+		t.Fatalf("explicit false inherited attach-only: %v", err)
+	}
+	assertLiveJournal(t, m, sb)
+	raw, err := os.ReadFile(m.store.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(m.store.path, []byte(strings.ReplaceAll(string(raw), `,"attach_only":true`, "")), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	restarted := newVolumeManagerAt(t, eng, m.dataDir, catalog)
+	if err = restarted.Reconcile(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	recovered, err := restarted.GetVolumes(sb.ID, "")
+	if err != nil || !slices.Equal(recovered.Volumes, view.Volumes) {
+		t.Fatalf("mixed restart: %+v, %v", recovered, err)
+	}
+	if _, err = restarted.ClaimProvision(t.Context(), testKey, ClaimOptions{Volumes: []types.Volume{{Name: "raw-writer", AttachOnly: true}}}); !errors.Is(err, ErrVolumeBusy) {
+		t.Fatalf("restart lost writer exclusion: %v", err)
+	}
+	if _, err = restarted.SetVolumes(t.Context(), sb.ID, "", []types.Volume{}); err != nil {
+		t.Fatal(err)
+	}
+	for _, spec := range catalog {
+		if volumeDirty(spec.Path) || volumeHoldersOf(restarted, spec.Name) != (volumeHolders{}) {
+			t.Fatalf("detach leaked marker or hold: %s", spec.Name)
+		}
+	}
+}
+
 func TestLiveVolumesCommitAndRetry(t *testing.T) {
 	eng := newFakeEngine()
 	m := newVolumeManager(t, eng, liveCatalog(t))
@@ -68,8 +137,8 @@ func TestLiveAttachPreservesWritableAndAttachOnlyVolumes(t *testing.T) {
 			if _, err := m.SetVolumes(t.Context(), sb.ID, sb.Tenant, []types.Volume{{Name: "other", Mount: original.Mount}}); !errors.Is(err, ErrBadVolume) {
 				t.Fatalf("accepted mode change: %v", err)
 			}
-			if _, err := m.PatchVolumes(t.Context(), sb.ID, sb.Tenant, types.VolumePatch{Remove: []string{"data", "other"}}); !errors.Is(err, ErrBadVolume) || len(sb.Volumes) != 2 {
-				t.Fatalf("writable detach changed the batch: %v", err)
+			if _, err := m.PatchVolumes(t.Context(), sb.ID, sb.Tenant, types.VolumePatch{Remove: []string{"data", "other"}}); err != nil || len(sb.Volumes) != 0 {
+				t.Fatalf("writable detach failed: %v", err)
 			}
 		})
 	}
@@ -80,8 +149,8 @@ func TestLiveVolumeValidationPrecedesDeviceCalls(t *testing.T) {
 	m := newVolumeManager(t, eng, liveCatalog(t))
 	sb := mustClaim(t, m, testKey)
 	for _, request := range [][]types.Volume{
-		{{Name: "data", Mode: "rw"}},
-		{{Name: "data", AttachOnly: true}},
+		{{Name: "data", Mode: "unknown"}},
+		{{Name: "data", AttachOnly: true, Mount: "/data"}},
 		{{Name: "data", Mount: "/etc"}},
 		{{Name: "data"}, {Name: "data"}},
 		{{Name: "data", Mount: "/a"}, {Name: "other", Mount: "/a/b"}},
@@ -321,7 +390,7 @@ func TestLiveVolumeDoesNotBlockLifecycle(t *testing.T) {
 			eng.liveVolumeHook = func(string) error { close(entered); <-resume; return nil }
 			attached := make(chan error, 1)
 			go func() {
-				_, err := m.SetVolumes(t.Context(), sb.ID, sb.Tenant, []types.Volume{{Name: "data"}})
+				_, err := m.SetVolumes(t.Context(), sb.ID, sb.Tenant, []types.Volume{{Name: "data", Mode: types.VolumeModeRW, AttachOnly: true}})
 				attached <- err
 			}()
 			<-entered
@@ -402,7 +471,7 @@ func TestLiveVolumeCanceledRequestRetainsIntent(t *testing.T) {
 	sb := mustClaim(t, m, testKey)
 	ctx, cancel := context.WithCancel(t.Context())
 	eng.liveVolumeHook = func(string) error { cancel(); return nil }
-	_, err := m.SetVolumes(ctx, sb.ID, sb.Tenant, []types.Volume{{Name: "data"}})
+	_, err := m.SetVolumes(ctx, sb.ID, sb.Tenant, []types.Volume{{Name: "data", Mode: types.VolumeModeRW, AttachOnly: true}})
 	if !errors.Is(err, context.Canceled) || slices.Equal(sb.VolumesWant, sb.Volumes) {
 		t.Fatalf("canceled attach: %v, pending=%v", err, sb.VolumesWant)
 	}
@@ -479,6 +548,7 @@ func TestDesiredVolumesJournalMigration(t *testing.T) {
 		want        []types.Volume
 	}{
 		{"legacy", "", []types.Volume{{Name: "data", Mount: "/data"}}},
+		{"legacy attach-only desired", `,"volumes_want":[{"name":"raw","mode":"rw"}]`, []types.Volume{{Name: "raw", Mode: types.VolumeModeRW, AttachOnly: true}}},
 		{"explicit empty", `,"volumes_want":[]`, nil},
 		{"desired", `,"volumes_want":[{"name":"other","mount":"/other"}]`, []types.Volume{{Name: "other", Mount: "/other"}}},
 	} {
@@ -584,7 +654,10 @@ func TestCanceledVolumeWriterOwnsHardwareUntilReturn(t *testing.T) {
 		m.eng = eng
 		ctx, cancel := context.WithCancel(t.Context())
 		first := make(chan error, 1)
-		go func() { _, err := m.SetVolumes(ctx, sb.ID, sb.Tenant, []types.Volume{{Name: "data"}}); first <- err }()
+		go func() {
+			_, err := m.SetVolumes(ctx, sb.ID, sb.Tenant, []types.Volume{{Name: "data", Mode: types.VolumeModeRW, AttachOnly: true}})
+			first <- err
+		}()
 		<-eng.entered
 		cancel()
 		waitingCtx, stopWaiting := context.WithTimeout(t.Context(), 25*time.Millisecond)

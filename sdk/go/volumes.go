@@ -55,7 +55,7 @@ func (s *Sandbox) GetVolumes(ctx context.Context) (SandboxVolumesResponse, error
 	return s.requestVolumes(ctx, http.MethodGet, nil, "get volumes")
 }
 
-// SetVolumes converges the full desired set; an explicit empty slice clears mutable mounts, and nil is rejected.
+// SetVolumes converges the full desired set; an explicit empty slice detaches all volumes, and nil is rejected.
 func (s *Sandbox) SetVolumes(ctx context.Context, volumes []Volume) (SandboxVolumesResponse, error) {
 	if volumes == nil {
 		return SandboxVolumesResponse{}, errors.New("set volumes: use an explicit empty slice to clear volumes")
@@ -65,7 +65,7 @@ func (s *Sandbox) SetVolumes(ctx context.Context, volumes []Volume) (SandboxVolu
 	}{Volumes: volumes}, "set volumes")
 }
 
-// PatchVolumes adds or removes read-only mounted entries by name, retaining immutable entries.
+// PatchVolumes adds or removes volumes by name.
 func (s *Sandbox) PatchVolumes(ctx context.Context, patch VolumePatch) (SandboxVolumesResponse, error) {
 	return s.requestVolumes(ctx, http.MethodPatch, patch, "patch volumes")
 }

@@ -1253,6 +1253,8 @@ type fakeEngine struct {
 	mountVolumeErr                    error
 	unmountVolumeErr                  error
 	detachVolumeErr                   error
+	detachNormalUnmount               *bool
+	liveVolumeSupportErr              error
 	liveVolumeHook                    func(string) error
 	stopped                           map[string]bool
 	disks                             map[string][]types.VMDisk
@@ -1616,7 +1618,7 @@ func (f *fakeEngine) TrimCow(_ context.Context, sock string) error {
 	return f.trimErr
 }
 
-func (f *fakeEngine) CheckLiveVolumeSupport(context.Context) error { return nil }
+func (f *fakeEngine) CheckLiveVolumeSupport(context.Context) error { return f.liveVolumeSupportErr }
 
 func (f *fakeEngine) DiskAttach(ctx context.Context, _ string, spec engine.VolumeSpec) error {
 	if f.liveVolumeHook != nil {
@@ -1662,24 +1664,31 @@ func (f *fakeEngine) MountLiveVolume(ctx context.Context, sock, name, mount stri
 	return f.MountVolume(ctx, sock, name, mount, rw)
 }
 
-func (f *fakeEngine) DetachVolume(ctx context.Context, _, sock, name, mount string) error {
+func (f *fakeEngine) DetachVolume(ctx context.Context, _, sock, name, mount string) (cleanRW bool, err error) {
 	if f.liveVolumeHook != nil {
 		if err := f.liveVolumeHook("detach"); err != nil {
-			return err
+			return false, err
 		}
 	}
 	if err := ctx.Err(); err != nil {
-		return err
+		return false, err
 	}
 	if mount != "" {
 		if err := f.UnmountVolume(ctx, sock, mount); err != nil {
-			return err
+			return false, err
 		}
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.volumeOps = append(f.volumeOps, "detach:"+name)
-	return f.detachVolumeErr
+	if f.detachVolumeErr != nil {
+		return false, f.detachVolumeErr
+	}
+	normal := slices.ContainsFunc(f.volumeMounts, func(v types.Volume) bool { return v.Name == name && v.Mount == mount && v.RW() })
+	if f.detachNormalUnmount != nil {
+		normal = *f.detachNormalUnmount
+	}
+	return normal, nil
 }
 
 func (f *fakeEngine) UnmountVolume(_ context.Context, _, mount string) error {

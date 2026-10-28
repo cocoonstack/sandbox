@@ -17,9 +17,6 @@ const (
 	Large   Size = "large"
 	XLarge  Size = "xlarge"
 	XXLarge Size = "2xlarge"
-
-	volumeModeRO = "ro"
-	volumeModeRW = "rw"
 )
 
 // NetShape selects the sandbox network lane.
@@ -35,6 +32,8 @@ type Volume struct {
 	Mount string `json:"mount,omitempty"`
 	// Mode is "rw" for a writable mount; empty (or "ro") means read-only.
 	Mode string `json:"mode,omitempty"`
+	// AttachOnly leaves mounting and unmounting to the caller.
+	AttachOnly bool `json:"attach_only,omitzero"`
 }
 
 // VolumeInfo describes one visible fleet catalog entry.
@@ -80,18 +79,11 @@ func WithSize(s Size) Option {
 // read-only, set Volume.Mode to "rw" for a writable mount.
 func WithVolumes(volumes ...Volume) Option {
 	volumes = slices.Clone(volumes)
-	for i, v := range volumes {
-		if v.Mode == volumeModeRO {
-			volumes[i].Mode = ""
-		}
-	}
 	return func(r *claimRequest) { r.Volumes = volumes }
 }
 
-// WithVolumesAttachOnly attaches the claim's volumes without mounting them;
-// the workload finds each device by its serial and owns the mount — and its
-// flush — from there: release without a clean self-umount discards unsynced
-// guest pages, since the sandbox performs no sync of its own.
+// WithVolumesAttachOnly is the legacy claim-wide form of Volume.AttachOnly.
+// Callers mount, flush, and unmount devices; release does not sync them.
 func WithVolumesAttachOnly() Option {
 	return func(r *claimRequest) { r.VolumesAttachOnly = true }
 }

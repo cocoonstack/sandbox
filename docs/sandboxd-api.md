@@ -87,13 +87,12 @@ Auth: `Authorization: Bearer <api_token>` (when configured).
   defaults to `/volumes/<name>`; a custom value must be absolute and clean,
   outside the guest OS tree, unique, and non-nesting within the request.
   `mode` is `"ro"` (default, omitted) or `"rw"`; `"rw"` requires the catalog
-  entry's `writable: true` (see [deploy](deploy.md#dataset-volumes))
-- `volumes_attach_only` (default `false`) attaches every requested volume
-  without mounting it, handing the whole mount contract to the workload. It
-  requires at least one volume, and rejects any entry carrying a `mount` —
-  the path is meaningless when the caller mounts the device. Everything below
-  describes the default, eager behaviour, which is completely unchanged; the
-  attach-only contract is in [its own section](#attach-only-volumes)
+  entry's `writable: true` (see [deploy](deploy.md#dataset-volumes)).
+  `attach_only: true` attaches that entry without mounting it and requires an
+  empty or omitted `mount`. Mounted and attach-only entries can share a list
+- `volumes_attach_only` (default `false`) is the legacy claim-wide form of
+  `attach_only`. The server expands it onto every entry before validation.
+  It requires at least one volume and rejects a nonempty `mount`.
 
 Success:
 
@@ -135,12 +134,14 @@ an existing populated guest directory for the claim's life.
 
 ### Attach-only volumes
 
-`"volumes_attach_only": true` stops after the attach. The device appears in
-the guest, nothing is mounted, and the echoed entries carry no `mount` key:
+`"attach_only": true` stops after the attach for that entry. The device appears
+in the guest without a mount. Responses preserve `attach_only: true` and omit
+`mount`:
 
 ```json
 {"id": "sb_…", "token": "…",
- "volumes": [{"name": "imagenet"}, {"name": "scratch-db", "mode": "rw"}]}
+ "volumes": [{"name": "imagenet", "attach_only": true},
+             {"name": "scratch-db", "mode": "rw", "attach_only": true}]}
 ```
 
 Find each device by its virtio serial, which is the catalog name — poll this,
@@ -221,7 +222,7 @@ an unknown and a forbidden volume return the same error text.
 
 Errors: 400 unknown template axis, metadata over a bound (the message names
 it), an unknown `on_expire`, invalid/duplicate volumes,
-`volumes_attach_only` with no volumes or with an entry carrying a `mount`,
+`volumes_attach_only` with no volumes, or an attach-only entry with a nonempty `mount`,
 `mode: "rw"`
 against a non-writable entry, or a volume that is unknown or forbidden (the
 latter two are deliberately indistinguishable), or
@@ -354,22 +355,32 @@ Replaces the full desired set and converges synchronously. Auth matches GET.
 The owner tenant's catalog access list applies to newly admitted names, including
 for root. Retaining, repairing, or removing held names does not reauthorize
 them. A new image must exist on the owning node. The request must include a non-null `volumes`
-array. An explicit empty array removes all mutable entries.
+array. An explicit empty array removes all volumes.
 
 ```json
 {"volumes": [{"name": "imagenet", "mount": "/datasets/training"}]}
 ```
 
-Only mounted read-only catalog entries can change live (`mode` omitted or
-`ro`). A PUT must retain every existing writable or attach-only entry unchanged.
-The claim-time name, mount, and eight-volume limits apply to the desired set.
-An omitted mount defaults to `/volumes/<name>`, except that a held attach-only
-entry is retained by sending it as the claim returned it, without `mount`. To
-change an existing name's
-mount or mode, first remove that name and wait for successful convergence.
-An identical target can be retried. Claims with `on_expire: archive` must change
-that policy before adding a volume.
+Mounted read-only, mounted writable, attach-only read-only, and attach-only
+writable entries can change live, including mixed lists. The claim-time name,
+mount, and eight-volume limits apply. An omitted mount defaults to
+`/volumes/<name>` unless that entry has `attach_only: true`. Responses carry
+that flag directly, so a GET target can be sent back with PUT. Omitting the flag
+or sending `false` does not inherit an existing attachment's shape.
 
+To change a held name's mount, mode, or `attach_only`, first remove the name and
+wait for successful convergence. An identical target can be retried. Claims
+with `on_expire: archive` must change that policy before adding a volume.
+
+New live writable attachments require a non-replicating pool, including a
+promoted template's source pool. A replicating pool returns 409 before changing
+intent, holds, or devices. Initial claim-time writable volumes remain supported.
+An existing or pending replica, or this claim's unacknowledged checkpoint
+retirement, returns 503 with `Retry-After`. A replica or archive intent left
+with `archive_failover` disabled returns 409 because it cannot retire through
+the registry. A retained local checkpoint reference alone still returns 503.
+Volume mutation does not evict remote replicas. Read-only additions, exact
+retries of held writers, and removals remain available under these restrictions.
 The sandbox must be running. Paused, archived, and failed sandboxes return 409
 without waking. A failed sandbox holding volumes is release-only after its VMM
 exits; PUT with an empty target cannot restore its processes. Missing, invalid,
@@ -390,12 +401,28 @@ unchanged. An empty patch retries the current desired set.
 ```
 
 Adding an identical entry or removing an absent valid name is harmless.
-Duplicate names, a name in both arrays, or changes to writable or attach-only
-entries return 400. Removal refuses busy or foreign mounts and uses neither
+Duplicate names, a name in both arrays, or changes to a held entry's mount,
+mode, or `attach_only` return 400. Removal refuses busy or foreign mounts and uses neither
 lazy nor forced unmount. A foreign mount, another bind mount, or a completed
 ordinary unmount with nonzero exit returns 409 with the guest mount path and
 a safe per-volume reason. Guest transport failures remain server errors;
 timeouts return 504 and cancellation returns 408.
+
+A mounted writable attachment marks the image dirty before the guest can write.
+Live removal clears the marker only when this call observes and normally
+unmounts the exact writable whole-device filesystem, finds no residual device
+mounts, and confirms host detach. Both mount and superblock options must be
+writable. A missing device or pre-unmounted filesystem does not prove clean
+unmount. The marker remains on uncertainty and blocks subsequent readers.
+Attach-only writers have no automatic dirty-marker protection. The caller owns
+mounting, flushing, unmounting, recovery, and fencing before reuse.
+
+The per-entry field requires coordinated daemon and SDK releases. Older daemons
+can ignore `attach_only` in claims, and older Python SDKs reject the field when
+returned descriptors are reused in requests. Responses without the field do
+not safely roundtrip attach-only intent through new clients. The server still
+accepts the legacy claim-wide request flag and normalizes old persisted empty
+mounts when loading claims.
 
 ### Partial failure and recovery
 

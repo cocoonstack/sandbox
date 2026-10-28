@@ -234,16 +234,17 @@ checkpoint branches support neither volumes nor a claim reference in this versio
 `Checkpoint.New`: the labels follow the [claim bounds](sandboxd-api.md#post-v1claim),
 and a branch never inherits its source's labels or expiry action.
 
-For datasets chosen after the sandbox starts, set the desired read-only mounts
-on the same claim:
+For datasets chosen after the sandbox starts, set the desired volumes on
+the same claim:
 
 ```go
 view, err := sb.SetVolumes(ctx, []sandbox.Volume{
     {Name: "imagenet", Mount: "/datasets/training"},
+    {Name: "work", Mode: "rw", AttachOnly: true},
 })
 view, err = sb.GetVolumes(ctx)
 view, err = sb.PatchVolumes(ctx, sandbox.VolumePatch{Remove: []string{"imagenet"}})
-// An explicit empty slice clears mutable mounts. A nil slice is rejected.
+// An explicit empty slice detaches all volumes. A nil slice is rejected.
 view, err = sb.SetVolumes(ctx, []sandbox.Volume{})
 ```
 
@@ -255,6 +256,13 @@ view = sb.get_volumes()
 view = sb.patch_volumes(remove=["imagenet"])
 view = sb.set_volumes([])  # None is rejected.
 ```
+
+`Volume.AttachOnly` leaves mounting and unmounting to the caller. Each entry
+can independently use `Mode: "rw"` and `AttachOnly: true`. The SDK preserves
+these fields directly and leaves name, mode, and mount policy to sandboxd.
+Use matching daemon and SDK releases for attach-only GET-to-PUT retries.
+See the [live volume contract](sandboxd-api.md#put-v1sandboxesidvolumes) for
+writer exclusion, replica refusals, and dirty-marker limits.
 
 Each response contains `volumes_want`, `volumes`, `states`, and `converging`.
 Go exposes them as `SandboxVolumesResponse.VolumesWant`, `.Volumes`, `.States`,
@@ -274,11 +282,14 @@ the handle retains its last known sets. Retry an interrupted operation with the
 same full PUT target, or set a new target to recover. `Client.Sandboxes` exposes
 `VolumesWant` and `Volumes` for inspection with an API token.
 
-A PUT must retain existing writable and attach-only entries unchanged. PATCH
-cannot remove or change them. Paused sandboxes are not woken, and images must
-exist on the owner node. Admission holds cover the union of desired and applied
+PUT and PATCH can add or remove mounted and attach-only entries in either mode.
+Changing a held entry's mount, mode, or `attach_only` requires successful
+removal first. See the [live volume contract](sandboxd-api.md#put-v1sandboxesidvolumes)
+for admission policy and dirty-marker handling. Paused sandboxes are not woken,
+and images must exist on the owner node. Admission holds cover the union of desired and applied
 sets. A settled retained entry receives no new attach or mount calls. `converging`
-is true only during an active request. Pending or detaching entries with false
+is true during an active request or while a recovery-only reference awaits an
+acknowledged claim write. Pending or detaching entries with false
 require an explicit retry. Daemon restart replaces unfinished diagnostics with
 an interrupted message. Capture is refused while either set is nonempty.
 Release cancels convergence and hands held volumes to teardown. See the

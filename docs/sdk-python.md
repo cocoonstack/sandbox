@@ -161,13 +161,31 @@ peer advertising both the template and every volume; when that intersection is
 empty, one volume holder may self-verify access to a shared template store
 before provisioning.
 
-## Changing read-only datasets
+## Changing live volumes
 
 Use `sb.get_volumes()`, `sb.set_volumes([...])`, and
 `sb.patch_volumes(add=[...], remove=[...])` on the same running sandbox. These
 methods use the client's API token on the owning node; a sandbox token cannot
-manage datasets. `set_volumes([])` clears mutable entries; `None` is rejected.
-PUT must retain writable and attach-only entries. PATCH retains omitted names.
+manage volumes. `set_volumes([])` detaches all entries; `None` is rejected.
+PATCH retains omitted names. Parameters take lists of names or `Volume` mappings.
+The SDK sends volume policy to sandboxd and preserves `attach_only` directly.
+Use matching daemon and SDK releases for attach-only GET-to-PUT retries.
+
+```python
+from __future__ import annotations
+
+from cocoonsandbox import Volume
+
+volumes: list[str | Volume] = [
+    {"name": "dataset", "mount": "/datasets"},
+    {"name": "work", "mode": "rw", "attach_only": True},
+]
+view = sb.set_volumes(volumes)
+```
+
+The caller mounts, flushes, and unmounts attach-only devices. See the
+[live volume contract](sandboxd-api.md#put-v1sandboxesidvolumes) for
+writer exclusion, replica refusals, and dirty-marker limits.
 Each method takes `timeout=` (default: the client timeout, 120 s); a large
 replacement can need longer, and a call that times out cancels the server run,
 so retry the same target.

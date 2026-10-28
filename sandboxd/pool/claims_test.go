@@ -103,9 +103,10 @@ func TestStoreRoundTrip(t *testing.T) {
 
 func TestClaimStoreSnapshotDetachesVolumes(t *testing.T) {
 	s := newClaimStore(t.TempDir(), false)
-	sb := &types.Sandbox{ID: "sb_a", Volumes: []types.Volume{{Name: "dataset-a", Mount: "/datasets/a"}}}
+	sb := &types.Sandbox{ID: "sb_a", Volumes: []types.Volume{{Name: "dataset-a", Mount: "/datasets/a"}}, VolumesWant: []types.Volume{{Name: "dataset-b", Mount: "/datasets/b"}}}
 	snap := s.set(sb)
 	sb.Volumes[0].Mount = "/mutated"
+	sb.VolumesWant[0].Mount = "/mutated-wanted"
 	if err := s.commit(snap); err != nil {
 		t.Fatalf("commit: %v", err)
 	}
@@ -119,6 +120,9 @@ func TestClaimStoreSnapshotDetachesVolumes(t *testing.T) {
 	}
 	if !slices.Equal(loaded.Volumes, []types.Volume{{Name: "dataset-a", Mount: "/datasets/a"}}) {
 		t.Errorf("volumes %v, want detached snapshot", loaded.Volumes)
+	}
+	if !slices.Equal(loaded.VolumesWant, []types.Volume{{Name: "dataset-b", Mount: "/datasets/b"}}) {
+		t.Errorf("wanted volumes %v, want detached snapshot", loaded.VolumesWant)
 	}
 }
 

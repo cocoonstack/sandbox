@@ -1,5 +1,7 @@
 """Live volume HTTP contract and partial convergence recovery."""
 
+from collections import UserDict
+
 import pytest
 from conftest import FakeNode, sandbox_at
 
@@ -14,8 +16,31 @@ VIEW = {
 }
 
 
-@pytest.mark.parametrize("method", ["GET", "PUT", "PATCH"])
-def test_volume_requests_use_owner_and_api_token(spawn_node, method):
+def test_volume_mapping_is_json_encoded(spawn_node):
+    seen = []
+
+    def reply(body, path):
+        seen.append(body)
+        return 200, VIEW
+
+    sb = sandbox_at(spawn_node({("PUT", PATH): reply}))
+    sb.set_volumes([UserDict({"name": "data", "mount": "/data"})])
+    assert seen == [{"volumes": [{"name": "data", "mount": "/data"}]}]
+
+
+@pytest.mark.parametrize(
+    "method,body,call",
+    [
+        ("GET", {}, lambda sb: sb.get_volumes()),
+        ("PUT", {"volumes": [{"name": "data"}]}, lambda sb: sb.set_volumes(["data"])),
+        (
+            "PATCH",
+            {"add": [{"name": "data"}], "remove": ["old"]},
+            lambda sb: sb.patch_volumes(add=["data"], remove=["old"]),
+        ),
+    ],
+)
+def test_volume_requests_use_owner_and_api_token(spawn_node, method, body, call):
     seen = []
 
     def reply(body, path):
@@ -25,15 +50,8 @@ def test_volume_requests_use_owner_and_api_token(spawn_node, method):
     addr = spawn_node({(method, PATH): reply})
     sb = sandbox_at(addr, api_token="operator-token")
     sb._client.addr = "unused.invalid:7777"
-    if method == "GET":
-        got = sb.get_volumes()
-        assert seen == [{}]
-    elif method == "PUT":
-        got = sb.set_volumes(["data"])
-        assert seen == [{"volumes": [{"name": "data"}]}]
-    else:
-        got = sb.patch_volumes(add=["data"], remove=["old"])
-        assert seen == [{"add": [{"name": "data"}], "remove": ["old"]}]
+    got = call(sb)
+    assert seen == [body]
     assert FakeNode.last_headers["Authorization"] == "Bearer operator-token"
     assert got == VIEW
     assert sb.volumes == VIEW["volumes"]
@@ -43,11 +61,18 @@ def test_volume_requests_use_owner_and_api_token(spawn_node, method):
     assert sb.volumes[0]["name"] == sb.volumes_want[0]["name"] == "data"
 
 
-@pytest.mark.parametrize("method", ["GET", "PUT", "PATCH"])
-def test_volume_error_preserves_typed_partial_view(spawn_node, method):
+@pytest.mark.parametrize(
+    "method,call",
+    [
+        ("GET", lambda sb: sb.get_volumes()),
+        ("PUT", lambda sb: sb.set_volumes(["new"])),
+        ("PATCH", lambda sb: sb.patch_volumes(remove=["old"])),
+    ],
+)
+def test_volume_error_preserves_typed_partial_view(spawn_node, method, call):
     partial = {
-        "volumes_want": [{"name": "new", "mount": "/new"}],
-        "volumes": [{"name": "old", "mount": "/old"}],
+        "volumes_want": [{"name": "new", "mode": "rw", "attach_only": True}],
+        "volumes": [{"name": "old", "attach_only": True}],
         "converging": False,
         "states": [
             {"name": "new", "state": "pending", "error": "retry"},
@@ -57,12 +82,7 @@ def test_volume_error_preserves_typed_partial_view(spawn_node, method):
     }
     sb = sandbox_at(spawn_node({(method, PATH): lambda body, path: (500, partial)}))
     with pytest.raises(VolumeError) as caught:
-        if method == "GET":
-            sb.get_volumes()
-        elif method == "PUT":
-            sb.set_volumes(["new"])
-        else:
-            sb.patch_volumes(remove=["old"])
+        call(sb)
     assert isinstance(caught.value, APIError)
     assert caught.value.status == 500
     assert caught.value.response == partial
@@ -164,3 +184,38 @@ def test_incomplete_volume_view_preserves_handle(spawn_node, status):
 def test_volume_methods_reject_a_bare_string(black_hole, call):
     with pytest.raises(TypeError):
         call(sandbox_at(black_hole))
+
+
+def test_volume_mutations_encode_explicit_device_fields(spawn_node):
+    entries = [
+        {"name": "device", "mount": "", "mode": "rw", "attach_only": True},
+        {"name": "mounted", "attach_only": False},
+    ]
+    seen = []
+
+    def reply(body, path):
+        seen.append(body)
+        return 200, VIEW
+
+    sb = sandbox_at(spawn_node({("PUT", PATH): reply, ("PATCH", PATH): reply}))
+    sb.set_volumes(entries)
+    sb.patch_volumes(add=entries)
+    assert seen == [{"volumes": entries}, {"add": entries}]
+
+
+@pytest.mark.parametrize("status", [200, 409])
+@pytest.mark.parametrize("field", ["volumes", "volumes_want"])
+def test_malformed_volume_entry_preserves_error_and_handle(spawn_node, status, field):
+    payload = {**VIEW, "error": "storage unavailable", field: [None]}
+    sb = sandbox_at(spawn_node({("GET", PATH): lambda body, path: (status, payload)}))
+    sb.volumes = [{"name": "old"}]
+    sb.volumes_want = [{"name": "wanted"}]
+    with pytest.raises(APIError) as caught:
+        sb.get_volumes()
+    assert sb.volumes == [{"name": "old"}]
+    assert sb.volumes_want == [{"name": "wanted"}]
+    if status == 409:
+        assert isinstance(caught.value, VolumeError)
+        assert caught.value.status == 409
+        assert caught.value.message == "storage unavailable"
+        assert caught.value.reply == payload

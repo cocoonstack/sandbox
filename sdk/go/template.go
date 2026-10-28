@@ -29,9 +29,6 @@ func (t *Template) New(ctx context.Context, opts ...Option) (*Sandbox, error) {
 	if err := claim.rejectPinnedAxes(); err != nil {
 		return nil, err
 	}
-	if err := claim.validateVolumes(); err != nil {
-		return nil, err
-	}
 	claim.Net, claim.Size = t.net, t.size
 	noVolumes := len(claim.Volumes) == 0
 	addr, cr, err := claimFollow(t.addr, "claim", func(noRedirect, _ bool) ([]byte, error) {

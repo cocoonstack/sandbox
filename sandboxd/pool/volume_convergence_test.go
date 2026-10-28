@@ -287,7 +287,7 @@ func TestUnsupportedRuntimeDoesNotChangeVolumeIntent(t *testing.T) {
 	eng := newFakeEngine()
 	m := newVolumeManager(t, eng, liveCatalog(t))
 	sb := mustClaim(t, m, testKey)
-	m.eng = &unsupportedVolumeEngine{eng}
+	eng.liveVolumeSupportErr = &engine.LiveVolumeUnsupported{}
 	before, err := os.ReadFile(m.store.path)
 	if err != nil {
 		t.Fatal(err)
@@ -418,12 +418,6 @@ func TestUncertainTargetCommitReleasesOnlyConfirmedPrecleanedHolds(t *testing.T)
 			}
 		})
 	}
-}
-
-type unsupportedVolumeEngine struct{ *fakeEngine }
-
-func (e *unsupportedVolumeEngine) CheckLiveVolumeSupport(context.Context) error {
-	return &engine.LiveVolumeUnsupported{}
 }
 
 func unmountConflict() *engine.VolumeMountConflict {

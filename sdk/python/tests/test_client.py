@@ -75,8 +75,6 @@ def test_claim_sends_volumes(node):
     ("volumes", "match"),
     [
         ([("imagenet", "/datasets/imagenet")], "name string or mapping"),
-        ([{"name": "imagenet", "mode": "rwx"}], "volume 'imagenet': mode must be 'rw' or 'ro', got 'rwx'"),
-        ([{"name": "imagenet", "bogus": "x"}], r"unexpected key\(s\): bogus"),
     ],
 )
 def test_claim_rejects_invalid_volumes(node, volumes, match):
@@ -100,11 +98,12 @@ def test_claim_sends_volume_mode_rw(node):
     assert sb.volumes == [{"name": "scratch", "mount": "/data", "mode": "rw"}]
 
 
-def test_claim_omits_volume_mode_ro(node):
+def test_claim_preserves_explicit_volume_mode(node):
     seen = recording_claim({"id": "sb_1", "token": "tok"})
     Client(node).new("rt:24.04", volumes=[{"name": "imagenet", "mode": "ro"}])
     Client(node).new("rt:24.04", volumes=[{"name": "imagenet", "mode": ""}])
-    assert seen[0]["volumes"] == seen[1]["volumes"] == [{"name": "imagenet"}], seen
+    assert seen[0]["volumes"] == [{"name": "imagenet", "mode": "ro"}]
+    assert seen[1]["volumes"] == [{"name": "imagenet", "mode": ""}]
 
 
 def test_claim_attaches_volumes_without_mounting(node):
@@ -130,13 +129,12 @@ def test_template_claim_attaches_volumes_without_mounting(node):
     assert sb.volumes == [{"name": "imagenet"}]
 
 
-def test_claim_rejects_mount_without_mounting(node):
-    with pytest.raises(TypeError, match="meaningless with mount=False"):
-        Client(node).new("rt:24.04", volumes=[{"name": "imagenet", "mount": "/datasets"}], mount=False)
-    with pytest.raises(TypeError, match="meaningless with mount=False"):
-        Template(Client(node), node, "task:v1", "none", "small").new(
-            volumes=[{"name": "imagenet", "mount": "/datasets"}], mount=False
-        )
+def test_claim_leaves_volume_policy_to_server(node):
+    seen = recording_claim({"id": "sb_1", "token": "tok"})
+    entry = {"name": "imagenet", "mount": "/datasets", "attach_only": True, "mode": "future-mode"}
+    Client(node).new("rt:24.04", volumes=[entry], mount=False)
+    Template(Client(node), node, "task:v1", "none", "small").new(volumes=[entry], mount=False)
+    assert [request["volumes"] for request in seen] == [[entry], [entry]]
 
 
 def test_claim_keeps_mounting_by_default(node):

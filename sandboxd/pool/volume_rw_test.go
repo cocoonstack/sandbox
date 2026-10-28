@@ -3,6 +3,7 @@ package pool
 import (
 	"encoding/json/v2"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -15,6 +16,84 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/engine"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
+
+func TestLiveWritableDetachRequiresCleanEvidence(t *testing.T) {
+	for _, proof := range []bool{false, true} {
+		t.Run(fmt.Sprint(proof), func(t *testing.T) {
+			base := newFakeEngine()
+			catalog := liveCatalog(t)
+			m := newVolumeManager(t, base, catalog)
+			base.detachNormalUnmount = &proof
+			sb := mustClaim(t, m, testKey)
+			if _, err := m.SetVolumes(t.Context(), sb.ID, "", []types.Volume{{Name: "data", Mode: types.VolumeModeRW}}); err != nil {
+				t.Fatal(err)
+			}
+			path := catalog[0].Path
+			if !volumeDirty(path) || !base.attachDirty["data"] {
+				t.Fatal("writer was attached before dirty marker")
+			}
+			if _, err := m.SetVolumes(t.Context(), sb.ID, "", []types.Volume{}); err != nil {
+				t.Fatal(err)
+			}
+			if volumeDirty(path) == proof {
+				t.Fatalf("marker disagrees with clean evidence: proof=%t dirty=%t", proof, volumeDirty(path))
+			}
+			_, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Volumes: []types.Volume{{Name: "data"}}})
+			if proof && err != nil || !proof && !errors.Is(err, ErrVolumeNeedsRecovery) {
+				t.Fatalf("reader admission after detach: %v", err)
+			}
+		})
+	}
+}
+
+func TestLiveWritableFailedHostDetachKeepsMarkerAndHold(t *testing.T) {
+	eng := newFakeEngine()
+	catalog := liveCatalog(t)
+	m := newVolumeManager(t, eng, catalog)
+	sb := mustClaim(t, m, testKey)
+	if _, err := m.SetVolumes(t.Context(), sb.ID, "", []types.Volume{{Name: "data", Mode: types.VolumeModeRW}}); err != nil {
+		t.Fatal(err)
+	}
+	eng.detachVolumeErr = errors.New("host removal uncertain")
+	if _, err := m.SetVolumes(t.Context(), sb.ID, "", []types.Volume{}); err == nil {
+		t.Fatal("failed host detach reported success")
+	}
+	if !volumeDirty(catalog[0].Path) || volumeHoldersOf(m, "data").writers != 1 {
+		t.Fatal("failed host detach lost dirty marker or writer")
+	}
+	if _, err := m.Checkpoint(t.Context(), sb.ID, Cred{Token: sb.Token}, "uncertain", ""); !errors.Is(err, ErrVolumeCapture) {
+		t.Fatalf("capture after uncertain detach: %v", err)
+	}
+	eng.detachVolumeErr = nil
+	eng.detachNormalUnmount = new(bool)
+	if _, err := m.SetVolumes(t.Context(), sb.ID, "", []types.Volume{}); err != nil {
+		t.Fatal(err)
+	}
+	if !volumeDirty(catalog[0].Path) {
+		t.Fatal("absent-device retry invented clean evidence")
+	}
+}
+
+func TestLiveWritableUncertainAdditionClearsOnlyAfterDetach(t *testing.T) {
+	eng := newFakeEngine()
+	catalog := liveCatalog(t)
+	m := newVolumeManager(t, eng, catalog)
+	sb := mustClaim(t, m, testKey)
+	eng.mountVolumeErr = errors.New("mount response lost")
+	if _, err := m.SetVolumes(t.Context(), sb.ID, "", []types.Volume{{Name: "data", Mode: types.VolumeModeRW}}); err == nil {
+		t.Fatal("expected unknown mount result")
+	}
+	if len(sb.Volumes) != 0 || len(sb.VolumesWant) != 1 || !volumeDirty(catalog[0].Path) {
+		t.Fatal("pending writable attachment lost intent or marker")
+	}
+	eng.mountVolumeErr = nil
+	if _, err := m.SetVolumes(t.Context(), sb.ID, "", []types.Volume{}); err != nil {
+		t.Fatal(err)
+	}
+	if volumeDirty(catalog[0].Path) || volumeHoldersOf(m, "data") != (volumeHolders{}) {
+		t.Fatal("uncertain addition cleanup retained marker or hold")
+	}
+}
 
 func TestWritableClaimMarksDirtyBeforeAttachAndClearsOnRelease(t *testing.T) {
 	path := writeVolumeImage(t, "scratch.img", "data")

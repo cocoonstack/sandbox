@@ -764,7 +764,7 @@ func TestAttachOnlyVolumeEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("attach-only claim: %v", err)
 	}
-	if want := []sandbox.Volume{{Name: "scratch", Mode: "rw"}}; !slices.Equal(sb.Volumes, want) {
+	if want := []sandbox.Volume{{Name: "scratch", Mode: "rw", AttachOnly: true}}; !slices.Equal(sb.Volumes, want) {
 		t.Errorf("claim volumes %+v, want %+v", sb.Volumes, want)
 	}
 	applied := []string{"attach:scratch:rw"}
@@ -800,7 +800,7 @@ func TestAttachOnlyVolumeWireShape(t *testing.T) {
 		{
 			"attach-only omits the mount",
 			`{"template":"rt:24.04","volumes_attach_only":true,"volumes":[{"name":"scratch","mode":"rw"}]}`,
-			map[string]any{"name": "scratch", "mode": "rw"},
+			map[string]any{"name": "scratch", "mode": "rw", "attach_only": true},
 		},
 		{
 			"eager claim is unchanged",

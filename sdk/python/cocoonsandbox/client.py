@@ -9,7 +9,7 @@ import ssl
 import threading
 import time
 import urllib.parse
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from typing import Any, TypeVar, cast
 
 from .checkpoint import Checkpoint
@@ -18,6 +18,7 @@ from .endpoint import _endpoint_url
 from .errors import APIError, SandboxTimeout, require_field
 from .sandbox import Sandbox
 from .template import _claim_body, _template_query
+from .volumes import Volume
 
 T = TypeVar("T")
 
@@ -60,7 +61,7 @@ class Client:
         size: str = "",
         ttl_seconds: int = 0,
         claim_ref: str = "",
-        volumes: list[str | Mapping[str, str]] | None = None,
+        volumes: list[str | Volume] | None = None,
         mount: bool = True,
         *,
         deadline: float | None = None,
