@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"net/http"
 	"os"
 	"path"
 	"path/filepath"
@@ -29,6 +30,8 @@ import (
 	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/smithy-go"
+	"github.com/aws/smithy-go/middleware"
+	smithyhttp "github.com/aws/smithy-go/transport/http"
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/sync/singleflight"
 
@@ -109,6 +112,17 @@ func New(ctx context.Context, cfg store.S3Config, stagingRoot string, idRe *rege
 			o.BaseEndpoint = new(cfg.Endpoint)
 		}
 		o.UsePathStyle = cfg.ForcePathStyle
+		if cfg.UnsignedAcceptEncoding {
+			base := o.HTTPClient
+			o.HTTPClient = smithyhttp.ClientDoFunc(func(req *http.Request) (*http.Response, error) {
+				req.Header.Set("Accept-Encoding", "identity")
+				return base.Do(req)
+			})
+			o.APIOptions = append(o.APIOptions, func(stack *middleware.Stack) error {
+				_, err := stack.Finalize.Remove("DisableAcceptEncodingGzip")
+				return err
+			})
+		}
 	})
 	return &Store{client: client, bucket: cfg.Bucket, prefix: cfg.Prefix, staging: stagingRoot, idRe: idRe}, nil
 }
