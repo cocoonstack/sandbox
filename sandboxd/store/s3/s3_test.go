@@ -422,11 +422,12 @@ func TestS3BackendContractRealEndpoint(t *testing.T) {
 		t.Skip("SANDBOX_S3_E2E not set (export it to a MinIO endpoint to run)")
 	}
 	st, err := New(t.Context(), store.S3Config{
-		Bucket:         cmp.Or(os.Getenv("SANDBOX_S3_E2E_BUCKET"), "sbx-checkpoints"),
-		Prefix:         "contract/",
-		Endpoint:       endpoint,
-		Region:         "us-east-1",
-		ForcePathStyle: true,
+		Bucket:                 cmp.Or(os.Getenv("SANDBOX_S3_E2E_BUCKET"), "sbx-checkpoints"),
+		Prefix:                 "contract/",
+		Endpoint:               endpoint,
+		Region:                 "us-east-1",
+		ForcePathStyle:         true,
+		UnsignedAcceptEncoding: os.Getenv("SANDBOX_S3_E2E_UNSIGNED_ACCEPT_ENCODING") != "",
 	}, t.TempDir(), store.CheckpointIDRe)
 	if err != nil {
 		t.Fatalf("New: %v", err)
