@@ -384,6 +384,43 @@ func TestFetchHitRefreshesTheGenerationsUse(t *testing.T) {
 	}
 }
 
+func TestAcceptEncodingIsSentUnsigned(t *testing.T) {
+	var mu sync.Mutex
+	var seen []*http.Request
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		seen = append(seen, r.Clone(r.Context()))
+		mu.Unlock()
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = io.WriteString(w, "<Error><Code>NoSuchKey</Code></Error>")
+	}))
+	t.Cleanup(ts.Close)
+	t.Setenv("AWS_ACCESS_KEY_ID", "test")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "test")
+	st, err := New(t.Context(), store.S3Config{
+		Bucket: "testbucket", Endpoint: ts.URL, Region: "us-east-1", ForcePathStyle: true,
+	}, t.TempDir(), store.CheckpointIDRe)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if _, err = st.ReadMeta(t.Context(), "ck_0123456789abcdef"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("ReadMeta: %v, want ErrNotFound", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(seen) == 0 {
+		t.Fatal("no request reached the endpoint")
+	}
+	for _, r := range seen {
+		if got := r.Header.Get("Accept-Encoding"); got != "identity" {
+			t.Errorf("Accept-Encoding = %q, want identity", got)
+		}
+		if auth := r.Header.Get("Authorization"); strings.Contains(strings.ToLower(auth), "accept-encoding") {
+			t.Errorf("Accept-Encoding is signed: %s", auth)
+		}
+	}
+}
+
 func TestS3BackendContractRealEndpoint(t *testing.T) {
 	endpoint := os.Getenv("SANDBOX_S3_E2E")
 	if endpoint == "" {

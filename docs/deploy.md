@@ -392,6 +392,23 @@ admitted and fails at mount time (500) instead of being refused early (409).
 Whoever hands out attach-only `rw` access owns that trade; see
 [sandboxd-api](sandboxd-api.md#attach-only-volumes).
 
+### S3-compatible stores (GCS, MinIO)
+
+The s3 backend speaks the AWS SDK, so a non-AWS store needs two node env
+settings besides the endpoint:
+
+- `AWS_REQUEST_CHECKSUM_CALCULATION=when_required` and
+  `AWS_RESPONSE_CHECKSUM_VALIDATION=when_required`. The SDK otherwise adds
+  CRC32 checksum headers that MinIO and GCS reject or fail to verify.
+- Credentials through the standard AWS chain (`AWS_ACCESS_KEY_ID` /
+  `AWS_SECRET_ACCESS_KEY`); for GCS these are an HMAC key of the node's service
+  account.
+
+GCS through its XML API: `{"kind": "s3", "s3": {"bucket": "…", "prefix": "ck/",
+"endpoint": "https://storage.googleapis.com", "region": "auto",
+"force_path_style": true}}`. GCS rewrites `Accept-Encoding` in transit, so the
+backend sends that header unsigned; nothing else differs.
+
 ### Reclaiming S3 storage
 
 sandboxd never garbage-collects the S3 `checkpoint_store`. It only adds
