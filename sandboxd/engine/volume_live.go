@@ -193,7 +193,7 @@ func parseVolumeMounts(raw string) ([]volumeMount, error) {
 
 func writableMountOptions(options string) bool {
 	parts := strings.Split(options, ",")
-	return slices.Contains(parts, "rw") && !slices.Contains(parts, "ro") && !slices.Contains(parts, "")
+	return slices.Contains(parts, "rw") && !slices.ContainsFunc(parts, func(p string) bool { return p == "" || p == "ro" || p == "emergency_ro" })
 }
 
 func bindConflict(path string) *VolumeMountConflict {

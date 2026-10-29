@@ -260,6 +260,7 @@ func TestLiveDetachCleanEvidenceRequiresWritableUnmountAndHostSuccess(t *testing
 		{name: "readonly", options: "ro", superOptions: "ro", mount: "/data"},
 		{name: "mount readonly", options: "ro", superOptions: "rw", mount: "/data"},
 		{name: "superblock readonly", options: "rw", superOptions: "ro", mount: "/data"},
+		{name: "ext4 emergency read-only", options: "rw,relatime", superOptions: "rw,emergency_ro", mount: "/data"},
 		{name: "extra superblock fields", options: "rw", superOptions: "rw extra", mount: "/data", wantErr: true},
 		{name: "pre-unmounted", unmounted: true, mount: "/data"},
 		{name: "missing device", missing: true, unmounted: true, mount: "/data"},

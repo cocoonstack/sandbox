@@ -404,11 +404,13 @@ timeouts return 504 and cancellation returns 408.
 A mounted writable attachment marks the image dirty before the guest can write.
 Live removal and release clear the marker only when the unmount observes and
 normally unmounts the exact writable whole-device filesystem and finds no
-residual device mounts. Live removal also needs a confirmed host detach. Both mount and superblock options must be
-writable. A missing device or pre-unmounted filesystem does not prove clean
-unmount. The marker remains on uncertainty and blocks subsequent readers.
-Attach-only writers have no automatic dirty-marker protection. The caller owns
-mounting, flushing, unmounting, recovery, and fencing before reuse.
+residual device mounts. Live removal also needs a confirmed host detach. Both
+mount and superblock options must be writable; ext4's `emergency_ro` after a
+filesystem error counts as read-only. A missing device or pre-unmounted
+filesystem does not prove clean unmount. The marker remains on uncertainty and
+blocks subsequent readers. Attach-only writers have no automatic dirty-marker
+protection. The caller owns mounting, flushing, unmounting, recovery, and
+fencing before reuse.
 
 The per-entry field requires coordinated daemon and SDK releases. Older daemons
 ignore `attach_only` in claims and reject it in live PUT and PATCH with 400.
