@@ -25,8 +25,9 @@ vsock-only I/O (hardened default); `net=egress` attaches a bridge/CNI NIC.
   replicated claims)
 - [sandboxd HTTP API](sandboxd-api.md) — every endpoint: claim/release,
   renew, hibernate, fork, promote, checkpoints, preview, the guest-port
-  relay, claim env, live volume changes, runtime tenants, config reload,
-  online pool reconfigure, metrics, the usage journal
+  relay, claim env, runtime volume registration, live volume changes,
+  runtime tenants, config reload, online pool reconfigure, metrics, the usage
+  journal
 - [Replace a dataset in a running sandbox](live-volumes.md) — swapping a
   read-only catalog volume on a running claim with the volume API
 - [Hibernate with an external volume controller](volume-controller.md) — detach,
