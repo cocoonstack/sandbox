@@ -153,7 +153,7 @@ func TestLiveVolumeRoutesHideOtherTenants(t *testing.T) {
 
 func TestLiveVolumeRoutesReportRefusalsOverRecordedDiagnostics(t *testing.T) {
 	const cause = "cannot unmount /data; close guest references and retry"
-	for _, refusal := range []error{pool.ErrVolumeBusy, pool.ErrVolumeCapture, pool.ErrReplicaPresent, pool.ErrReplicatingPool, pool.ErrReplicaStranded} {
+	for _, refusal := range []error{pool.ErrVolumeBusy, pool.ErrVolumeCapture} {
 		t.Run(refusal.Error(), func(t *testing.T) {
 			mgr := &fakeManager{setVolumes: func(string, string, []types.Volume) (types.SandboxVolumesResponse, error) {
 				return types.SandboxVolumesResponse{VolumesWant: []types.Volume{{Name: "old"}}, States: []types.VolumeState{{Name: "old", State: "pending", Error: cause}}, Error: "volume change failed; retry the desired target"}, fmt.Errorf("%w: volume %q", refusal, "data")
@@ -165,16 +165,10 @@ func TestLiveVolumeRoutesReportRefusalsOverRecordedDiagnostics(t *testing.T) {
 			if err := json.UnmarshalRead(resp.Body, &got); err != nil {
 				t.Fatal(err)
 			}
-			wantStatus := http.StatusConflict
-			if errors.Is(refusal, pool.ErrReplicaPresent) {
-				wantStatus = http.StatusServiceUnavailable
-				if resp.Header.Get("Retry-After") == "" {
-					t.Fatal("temporary replica retirement refusal has no Retry-After")
-				}
-			} else if resp.Header.Get("Retry-After") != "" {
+			if resp.Header.Get("Retry-After") != "" {
 				t.Fatal("permanent conflict advertises a retry delay")
 			}
-			if resp.StatusCode != wantStatus || !strings.HasPrefix(got.Error, refusal.Error()) || len(got.States) != 1 || got.States[0].Error != cause {
+			if resp.StatusCode != http.StatusConflict || !strings.HasPrefix(got.Error, refusal.Error()) || len(got.States) != 1 || got.States[0].Error != cause {
 				t.Fatalf("status=%d view=%+v", resp.StatusCode, got)
 			}
 		})

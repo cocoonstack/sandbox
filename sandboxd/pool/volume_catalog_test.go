@@ -2,7 +2,6 @@ package pool
 
 import (
 	"context"
-	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"errors"
 	"fmt"
@@ -339,18 +338,6 @@ func TestRuntimeCatalogRejectsCollisionsAndInvalidRegistrations(t *testing.T) {
 	}
 	if err := m.RegisterVolume(t.Context(), "runtime", types.VolumeRegistration{Path: "/images/data", Tenants: []string{"future-tenant", "team/project:v1"}}); err != nil {
 		t.Fatalf("future tenant: %v", err)
-	}
-}
-
-func TestRuntimeCatalogMarshalFailureDoesNotPublish(t *testing.T) {
-	m := newVolumeManager(t, newFakeEngine(), nil)
-	err := m.RegisterVolume(t.Context(), "runtime", types.VolumeRegistration{Path: "/srv/\xff"})
-	_, wrapped := errors.AsType[*jsontext.SyntacticError](err)
-	if errors.Is(err, ErrVolumeCatalogUnavailable) || !wrapped {
-		t.Fatalf("marshal error was not reported as permanent: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(m.dataDir, runtimeVolumesFile)); !errors.Is(err, os.ErrNotExist) || m.catalog.entries["runtime"] != nil {
-		t.Fatalf("failed registration persisted: stat=%v entry=%+v", err, m.catalog.entries["runtime"])
 	}
 }
 

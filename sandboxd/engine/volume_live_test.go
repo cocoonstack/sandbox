@@ -260,6 +260,7 @@ func TestLiveDetachCleanEvidenceRequiresWritableUnmountAndHostSuccess(t *testing
 		{name: "readonly", options: "ro", superOptions: "ro", mount: "/data"},
 		{name: "mount readonly", options: "ro", superOptions: "rw", mount: "/data"},
 		{name: "superblock readonly", options: "rw", superOptions: "ro", mount: "/data"},
+		{name: "ext4 emergency read-only", options: "rw,relatime", superOptions: "rw,emergency_ro", mount: "/data"},
 		{name: "extra superblock fields", options: "rw", superOptions: "rw extra", mount: "/data", wantErr: true},
 		{name: "pre-unmounted", unmounted: true, mount: "/data"},
 		{name: "missing device", missing: true, unmounted: true, mount: "/data"},
@@ -302,6 +303,36 @@ func TestLiveDetachCleanEvidenceRequiresWritableUnmountAndHostSuccess(t *testing
 				if len(guestChanges(fake.execCalls)) != 0 {
 					t.Fatal("unmounted a caller-managed filesystem")
 				}
+			}
+		})
+	}
+}
+
+func TestUnmountVolumeReportsCleanWritableUnmount(t *testing.T) {
+	const entry = "2 1 8:32 / /data rw,relatime shared:4 - ext4 /dev/vdc "
+	for _, tc := range []struct {
+		name, mountinfo string
+		busy, wantClean bool
+		wantErr         bool
+	}{
+		{name: "clean", mountinfo: entry + "rw\n", wantClean: true},
+		{name: "ext4 emergency read-only", mountinfo: entry + "rw,emergency_ro\n"},
+		{name: "bind mount elsewhere", mountinfo: entry + "rw\n3 1 8:32 / /other rw - ext4 /dev/vdc rw\n"},
+		{name: "not mounted"},
+		{name: "busy", mountinfo: entry + "rw\n", busy: true, wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sock := sockPath(t)
+			fake := serveFakeSilkd(t, sock)
+			fake.mu.Lock()
+			fake.serial["/proc/self/mountinfo"] = []byte(rootMountInfo + tc.mountinfo)
+			if tc.busy {
+				fake.execCode = 32
+			}
+			fake.mu.Unlock()
+			clean, err := New("cocoon", nil, nil, false, false, "").UnmountVolume(t.Context(), sock, "/data")
+			if (err != nil) != tc.wantErr || clean != tc.wantClean {
+				t.Fatalf("clean=%t err=%v", clean, err)
 			}
 		})
 	}

@@ -37,7 +37,7 @@ func (m *Manager) GetVolumes(id, tenant string) (types.SandboxVolumesResponse, e
 
 // SetVolumes converges a running claim onto the full desired volume set.
 func (m *Manager) SetVolumes(ctx context.Context, id, tenant string, want []types.Volume) (types.SandboxVolumesResponse, error) {
-	return m.changeVolumes(ctx, id, tenant, func([]types.Volume) ([]types.Volume, error) { return slices.Clone(want), nil })
+	return m.changeVolumes(ctx, id, tenant, func([]types.Volume) ([]types.Volume, error) { return want, nil })
 }
 
 // PatchVolumes adds and removes a running claim's volumes by name.
@@ -108,13 +108,7 @@ func (m *Manager) changeVolumes(ctx context.Context, id, tenant string, change v
 	if err != nil {
 		return view, err
 	}
-	m.mu.Lock()
-	err = m.checkVolumeRunLocked(ctx, sb, run)
-	if err == nil && slices.ContainsFunc(additions, types.Volume.RW) {
-		err = m.liveWriterErrorLocked(sb)
-	}
-	m.mu.Unlock()
-	if err != nil {
+	if err = m.checkVolumeRun(ctx, sb, run); err != nil {
 		return view, err
 	}
 	sb.Touch()
@@ -265,11 +259,21 @@ func (m *Manager) stageVolumeTarget(ctx context.Context, sb *types.Sandbox, run 
 	sb.Transition.Lock()
 	defer sb.Transition.Unlock()
 	m.mu.Lock()
-	err := m.holdLiveAdditionsLocked(ctx, sb, run, target, additions, resolved)
-	m.mu.Unlock()
-	if err != nil {
+	if err := m.checkVolumeRunLocked(ctx, sb, run); err != nil {
+		m.mu.Unlock()
 		return claimSnapshot{}, false, err
 	}
+	if sb.OnExpire == types.ExpireArchive && len(target) > 0 {
+		m.mu.Unlock()
+		return claimSnapshot{}, false, ErrVolumeCapture
+	}
+	if err := m.checkResolvedLocked(resolved); err != nil {
+		m.mu.Unlock()
+		return claimSnapshot{}, false, err
+	}
+	m.adoptVolumes(additions)
+	run.holds = append(run.holds, additions...)
+	m.mu.Unlock()
 	cleanErr := m.confirmVolumesClean(resolved)
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -292,39 +296,6 @@ func (m *Manager) stageVolumeTarget(ctx context.Context, sb *types.Sandbox, run 
 	return m.store.set(sb), true, nil
 }
 
-func (m *Manager) holdLiveAdditionsLocked(ctx context.Context, sb *types.Sandbox, run *volumeRun, target, additions []types.Volume, resolved []resolvedVolume) error {
-	if err := m.checkVolumeRunLocked(ctx, sb, run); err != nil {
-		return err
-	}
-	if sb.OnExpire == types.ExpireArchive && len(target) > 0 {
-		return ErrVolumeCapture
-	}
-	if slices.ContainsFunc(additions, types.Volume.RW) {
-		if err := m.liveWriterErrorLocked(sb); err != nil {
-			return err
-		}
-	}
-	if err := m.checkResolvedLocked(resolved); err != nil {
-		return err
-	}
-	m.adoptVolumes(additions)
-	run.holds = append(run.holds, additions...)
-	return nil
-}
-
-func (m *Manager) liveWriterErrorLocked(sb *types.Sandbox) error {
-	if m.view.Load().poolReplicate[sb.PolicyKey()] > 0 {
-		return ErrReplicatingPool
-	}
-	if m.archives == nil && (sb.HasReplica() || sb.ArchivePending != "") {
-		return ErrReplicaStranded
-	}
-	if sb.HasReplica() || sb.ArchivePending != "" || m.store.hasCheckpointReferences(sb.ID) {
-		return ErrReplicaPresent
-	}
-	return nil
-}
-
 func (m *Manager) detachVolumeRun(ctx context.Context, sb *types.Sandbox, run *volumeRun, v types.Volume) error {
 	m.mu.Lock()
 	err := m.checkVolumeRunLocked(ctx, sb, run)
@@ -337,19 +308,10 @@ func (m *Manager) detachVolumeRun(ctx context.Context, sb *types.Sandbox, run *v
 	if err != nil {
 		return fmt.Errorf("detach volume %q: %w", v.Name, err)
 	}
-	clearMarker := needsUnmount(v) && cleanRW && entry != nil
-	hold := [1]types.Volume{v}
-	m.mu.Lock()
-	err = m.checkVolumeRunLocked(ctx, sb, run)
-	if err == nil && clearMarker {
-		m.adoptVolumes(hold[:])
-	}
-	m.mu.Unlock()
-	if err != nil {
+	if err = m.checkVolumeRun(ctx, sb, run); err != nil {
 		return err
 	}
-	if clearMarker {
-		defer m.unreserveVolumes(hold[:])
+	if needsUnmount(v) && cleanRW && entry != nil {
 		if err = clearVolumeDirty(entry.disk.Path); err != nil {
 			return fmt.Errorf("clear dirty marker for volume %q: %w", v.Name, err)
 		}

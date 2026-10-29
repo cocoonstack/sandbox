@@ -60,7 +60,7 @@ func (s *Server) handleSandboxVolumes(w http.ResponseWriter, r *http.Request) {
 				code, view.Error = mapped, msg
 			}
 		}
-		if code >= http.StatusInternalServerError && !errors.Is(err, pool.ErrReplicaPresent) {
+		if code >= http.StatusInternalServerError {
 			log.WithFunc("server.handleSandboxVolumes").Errorf(r.Context(), err, "converge volumes for %s", id)
 		}
 	}

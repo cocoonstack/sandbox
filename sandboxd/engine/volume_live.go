@@ -72,7 +72,7 @@ func (e *Engine) DetachVolume(ctx context.Context, vmName, vsockSocket, name, mo
 	}
 	clean := false
 	if found {
-		if clean, err = e.unmountLiveVolume(ctx, vsockSocket, device, mount); err != nil {
+		if clean, err = e.unmountDevice(ctx, vsockSocket, device, mount); err != nil {
 			return false, err
 		}
 	}
@@ -82,7 +82,30 @@ func (e *Engine) DetachVolume(ctx context.Context, vmName, vsockSocket, name, mo
 	return clean, nil
 }
 
-func (e *Engine) unmountLiveVolume(ctx context.Context, vsockSocket, device, mount string) (bool, error) {
+// UnmountVolume unmounts a guest mount before VM removal; true means its writable whole-filesystem mount closed cleanly.
+func (e *Engine) UnmountVolume(ctx context.Context, vsockSocket, mount string) (bool, error) {
+	raw, err := e.silkdReadFile(ctx, vsockSocket, "/proc/self/mountinfo", mountInfoMax)
+	if err != nil {
+		return false, err
+	}
+	mounts, err := parseVolumeMounts(string(raw))
+	if err != nil {
+		return false, err
+	}
+	target := e.resolveMount(ctx, vsockSocket, mount, mounts)
+	i := slices.IndexFunc(mounts, func(m volumeMount) bool { return m.path == target })
+	if i < 0 {
+		return false, nil
+	}
+	entry := mounts[i]
+	if err = e.umountVolume(ctx, vsockSocket, mount); err != nil {
+		return false, err
+	}
+	shared := slices.ContainsFunc(mounts, func(m volumeMount) bool { return m.devNum == entry.devNum && m != entry })
+	return !shared && cleanMount(entry), nil
+}
+
+func (e *Engine) unmountDevice(ctx context.Context, vsockSocket, device, mount string) (bool, error) {
 	if mount == "" {
 		return false, e.refuseOtherMounts(ctx, vsockSocket, device)
 	}
@@ -94,13 +117,13 @@ func (e *Engine) unmountLiveVolume(ctx context.Context, vsockSocket, device, mou
 	atTarget := slices.DeleteFunc(mounts, func(m volumeMount) bool { return m.path != target })
 	clean := false
 	if len(atTarget) == 1 && atTarget[0].devNum == devNum && atTarget[0].root == "/" {
-		if err = e.UnmountVolume(ctx, vsockSocket, mount); err != nil {
+		if err = e.umountVolume(ctx, vsockSocket, mount); err != nil {
 			if _, ok := errors.AsType[*guestExitError](err); ok {
 				return false, &VolumeMountConflict{Message: fmt.Sprintf("cannot unmount %q; close guest references and retry", mount)}
 			}
 			return false, err
 		}
-		clean = writableMountOptions(atTarget[0].options) && writableMountOptions(atTarget[0].superOptions)
+		clean = cleanMount(atTarget[0])
 	}
 	if err = e.refuseOtherMounts(ctx, vsockSocket, device); err != nil {
 		return false, err
@@ -188,9 +211,13 @@ func parseVolumeMounts(raw string) ([]volumeMount, error) {
 	return mounts, nil
 }
 
+func cleanMount(m volumeMount) bool {
+	return m.root == "/" && writableMountOptions(m.options) && writableMountOptions(m.superOptions)
+}
+
 func writableMountOptions(options string) bool {
 	parts := strings.Split(options, ",")
-	return slices.Contains(parts, "rw") && !slices.Contains(parts, "ro") && !slices.Contains(parts, "")
+	return slices.Contains(parts, "rw") && !slices.ContainsFunc(parts, func(p string) bool { return p == "" || p == "ro" || p == "emergency_ro" })
 }
 
 func bindConflict(path string) *VolumeMountConflict {

@@ -71,22 +71,21 @@ func (e *Engine) MountVolume(ctx context.Context, vsockSocket, name, mount strin
 	return e.mountDevice(ctx, vsockSocket, device, name, mount, rw)
 }
 
-// UnmountVolume flushes and detaches a guest mount before the VM is removed.
-func (e *Engine) UnmountVolume(ctx context.Context, vsockSocket, mount string) error {
-	ctx, cancel := context.WithTimeout(ctx, VolumeCallTimeout)
-	defer cancel()
-	if err := e.silkdExec(ctx, vsockSocket, "umount", "--", mount); err != nil {
-		return fmt.Errorf("unmount volume %s: %w", mount, err)
-	}
-	return nil
-}
-
 // SyncGuest flushes the guest page cache, the only flush left for a failed unmount.
 func (e *Engine) SyncGuest(ctx context.Context, vsockSocket string) error {
 	ctx, cancel := context.WithTimeout(ctx, VolumeCallTimeout)
 	defer cancel()
 	if err := e.silkdExec(ctx, vsockSocket, "sync"); err != nil {
 		return fmt.Errorf("sync guest: %w", err)
+	}
+	return nil
+}
+
+func (e *Engine) umountVolume(ctx context.Context, vsockSocket, mount string) error {
+	ctx, cancel := context.WithTimeout(ctx, VolumeCallTimeout)
+	defer cancel()
+	if err := e.silkdExec(ctx, vsockSocket, "umount", "--", mount); err != nil {
+		return fmt.Errorf("unmount volume %s: %w", mount, err)
 	}
 	return nil
 }

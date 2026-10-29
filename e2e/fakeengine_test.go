@@ -201,11 +201,11 @@ func (f *fakeEngine) MountLiveVolume(ctx context.Context, sock, name, mount stri
 	return f.MountVolume(ctx, sock, name, mount, rw)
 }
 
-func (f *fakeEngine) UnmountVolume(_ context.Context, _, mount string) error {
+func (f *fakeEngine) UnmountVolume(_ context.Context, _, mount string) (bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.volumeOps = append(f.volumeOps, "umount:"+mount)
-	return nil
+	return mount != "", nil
 }
 
 func (f *fakeEngine) SyncGuest(_ context.Context, _ string) error {
@@ -216,13 +216,14 @@ func (f *fakeEngine) SyncGuest(_ context.Context, _ string) error {
 }
 
 func (f *fakeEngine) DetachVolume(ctx context.Context, _, sock, name, mount string) (bool, error) {
-	if err := f.UnmountVolume(ctx, sock, mount); err != nil {
+	clean, err := f.UnmountVolume(ctx, sock, mount)
+	if err != nil {
 		return false, err
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.volumeOps = append(f.volumeOps, "detach:"+name)
-	return mount != "", nil
+	return clean, nil
 }
 
 func (f *fakeEngine) volumeOpsLog() []string {

@@ -372,15 +372,8 @@ To change a held name's mount, mode, or `attach_only`, first remove the name and
 wait for successful convergence. An identical target can be retried. Claims
 with `on_expire: archive` must change that policy before adding a volume.
 
-New live writable attachments require a non-replicating pool, including a
-promoted template's source pool. A replicating pool returns 409 before changing
-intent, holds, or devices. Initial claim-time writable volumes remain supported.
-An existing or pending replica, a pending archive, or this claim's unacknowledged checkpoint
-retirement, returns 503 with `Retry-After`. A replica or archive intent left
-with `archive_failover` disabled returns 409 because it cannot retire through
-the registry. A retained local checkpoint reference alone still returns 503.
-Volume mutation does not evict remote replicas. Read-only additions, exact
-retries of held writers, and removals remain available under these restrictions.
+A claim that holds volumes is not replicated. Its replica retires on the next
+replication pass, and a replica capture that races a live addition is refused.
 The sandbox must be running. Paused, archived, and failed sandboxes return 409
 without waking. A failed sandbox holding volumes is release-only after its VMM
 exits; PUT with an empty target cannot restore its processes. Missing, invalid,
@@ -409,13 +402,15 @@ a safe per-volume reason. Guest transport failures remain server errors;
 timeouts return 504 and cancellation returns 408.
 
 A mounted writable attachment marks the image dirty before the guest can write.
-Live removal clears the marker only when this call observes and normally
-unmounts the exact writable whole-device filesystem, finds no residual device
-mounts, and confirms host detach. Both mount and superblock options must be
-writable. A missing device or pre-unmounted filesystem does not prove clean
-unmount. The marker remains on uncertainty and blocks subsequent readers.
-Attach-only writers have no automatic dirty-marker protection. The caller owns
-mounting, flushing, unmounting, recovery, and fencing before reuse.
+Live removal and release clear the marker only when the unmount observes and
+normally unmounts the exact writable whole-device filesystem and finds no
+residual device mounts. Live removal also needs a confirmed host detach. Both
+mount and superblock options must be writable; ext4's `emergency_ro` after a
+filesystem error counts as read-only. A missing device or pre-unmounted
+filesystem does not prove clean unmount. The marker remains on uncertainty and
+blocks subsequent readers. Attach-only writers have no automatic dirty-marker
+protection. The caller owns mounting, flushing, unmounting, recovery, and
+fencing before reuse.
 
 The per-entry field requires coordinated daemon and SDK releases. Older daemons
 ignore `attach_only` in claims and reject it in live PUT and PATCH with 400.
