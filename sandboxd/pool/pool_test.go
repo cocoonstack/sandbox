@@ -1253,7 +1253,7 @@ type fakeEngine struct {
 	mountVolumeErr                    error
 	unmountVolumeErr                  error
 	detachVolumeErr                   error
-	detachNormalUnmount               *bool
+	detachUnclean                     bool
 	liveVolumeSupportErr              error
 	liveVolumeHook                    func(string) error
 	stopped                           map[string]bool
@@ -1684,11 +1684,7 @@ func (f *fakeEngine) DetachVolume(ctx context.Context, _, sock, name, mount stri
 	if f.detachVolumeErr != nil {
 		return false, f.detachVolumeErr
 	}
-	normal := slices.ContainsFunc(f.volumeMounts, func(v types.Volume) bool { return v.Name == name && v.Mount == mount && v.RW() })
-	if f.detachNormalUnmount != nil {
-		normal = *f.detachNormalUnmount
-	}
-	return normal, nil
+	return !f.detachUnclean && slices.ContainsFunc(f.volumeMounts, func(v types.Volume) bool { return v.Name == name && v.Mount == mount && v.RW() }), nil
 }
 
 func (f *fakeEngine) UnmountVolume(_ context.Context, _, mount string) error {

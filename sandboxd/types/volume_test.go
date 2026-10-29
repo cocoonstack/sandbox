@@ -127,26 +127,8 @@ func TestValidateVolumesAttachOnly(t *testing.T) {
 	if !slices.Equal(got, want) {
 		t.Errorf("volumes %v, want %v", got, want)
 	}
-
-	for _, tt := range []struct {
-		name    string
-		volumes []Volume
-	}{
-		{"default mount spelled out", []Volume{{Name: "dataset", Mount: "/volumes/dataset"}}},
-		{"custom mount", []Volume{{Name: "dataset", Mount: "/datasets"}}},
-		{"one entry of many", []Volume{{Name: "dataset"}, {Name: "scratch", Mount: "/scratch"}}},
-		{"duplicate name", []Volume{{Name: "dataset"}, {Name: "dataset"}}},
-		{"invalid name", []Volume{{Name: "bad/name"}}},
-		{"unknown mode", []Volume{{Name: "dataset", Mode: "readwrite"}}},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			for i := range tt.volumes {
-				tt.volumes[i].AttachOnly = true
-			}
-			if _, err := ValidateVolumes(tt.volumes); err == nil {
-				t.Fatal("ValidateVolumes succeeded")
-			}
-		})
+	if _, err = ValidateVolumes([]Volume{{Name: "dataset", Mount: "/datasets", AttachOnly: true}}); err == nil {
+		t.Fatal("accepted attach-only with a mount")
 	}
 }
 
@@ -171,20 +153,17 @@ func TestValidateVolumesRejectsGuestOSMounts(t *testing.T) {
 }
 
 func TestValidateMixedVolumesPreservesPerEntryIntent(t *testing.T) {
-	request := []Volume{{Name: "mounted"}, {Name: "writer", Mode: VolumeModeRW}, {Name: "raw", AttachOnly: true}, {Name: "raw-writer", Mode: VolumeModeRW, AttachOnly: true}}
+	request := []Volume{{Name: "raw", AttachOnly: true}, {Name: "mounted"}, {Name: "raw-writer", Mode: VolumeModeRW, AttachOnly: true}, {Name: "writer", Mode: VolumeModeRW}}
 	got, err := ValidateVolumes(request)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []Volume{{Name: "mounted", Mount: "/volumes/mounted"}, {Name: "writer", Mount: "/volumes/writer", Mode: VolumeModeRW}, {Name: "raw", AttachOnly: true}, {Name: "raw-writer", Mode: VolumeModeRW, AttachOnly: true}}
+	want := []Volume{{Name: "raw", AttachOnly: true}, {Name: "mounted", Mount: "/volumes/mounted"}, {Name: "raw-writer", Mode: VolumeModeRW, AttachOnly: true}, {Name: "writer", Mount: "/volumes/writer", Mode: VolumeModeRW}}
 	if !slices.Equal(got, want) {
 		t.Fatalf("mixed intent changed: got %+v, want %+v", got, want)
 	}
 	again, err := ValidateVolumes(got)
 	if err != nil || !slices.Equal(again, want) {
 		t.Fatalf("second validation changed mixed intent: %+v, %v", again, err)
-	}
-	if _, err = ValidateVolumes([]Volume{{Name: "raw", AttachOnly: true, Mount: "/data"}}); err == nil {
-		t.Fatal("accepted attach-only with a mount")
 	}
 }

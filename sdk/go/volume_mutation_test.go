@@ -194,7 +194,7 @@ func TestLiveVolumeMutationEncodesDeviceFields(t *testing.T) {
 	sb := &Sandbox{ID: "sb_1", owner: c.addr, c: c}
 	_, err := sb.SetVolumes(t.Context(), []Volume{
 		{Name: "device", Mode: "rw", AttachOnly: true},
-		{Name: "mounted", Mount: "/work", AttachOnly: false},
+		{Name: "mounted", Mount: "/work"},
 	})
 	if err != nil {
 		t.Fatal(err)

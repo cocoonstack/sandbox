@@ -71,15 +71,21 @@ def test_claim_sends_volumes(node):
     ]
 
 
+def test_claim_rejects_invalid_volumes(node):
+    with pytest.raises(TypeError, match="name string or mapping"):
+        Client(node).new("rt:24.04", volumes=[("imagenet", "/datasets/imagenet")])
+
+
 @pytest.mark.parametrize(
-    ("volumes", "match"),
+    "new",
     [
-        ([("imagenet", "/datasets/imagenet")], "name string or mapping"),
+        lambda node: Client(node).new("rt:24.04", volumes="data"),
+        lambda node: Template(Client(node), node, "task:v1", "none", "small").new(volumes="data"),
     ],
 )
-def test_claim_rejects_invalid_volumes(node, volumes, match):
-    with pytest.raises(TypeError, match=match):
-        Client(node).new("rt:24.04", volumes=volumes)
+def test_claim_rejects_a_bare_volume_string(node, new):
+    with pytest.raises(TypeError, match="volumes must be a list"):
+        new(node)
 
 
 def test_claim_sends_volume_mode_rw(node):

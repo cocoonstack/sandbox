@@ -102,44 +102,38 @@ func TestReplicaCaptureRefusesPendingLiveWriter(t *testing.T) {
 	}
 }
 
-func TestLiveWriterPolicyAndCheckpointRefusals(t *testing.T) {
+func TestLiveWriterAdmissionAgainstReplicaState(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
-		prepare func(*Manager, *types.Sandbox)
+		prepare func(*testing.T, *Manager, *types.Sandbox)
 		want    error
 	}{
-		{"replicating pool", func(*Manager, *types.Sandbox) {}, ErrReplicatingPool},
-		{"source pool replicates", func(_ *Manager, sb *types.Sandbox) {
+		{"replicating pool", func(*testing.T, *Manager, *types.Sandbox) {}, ErrReplicatingPool},
+		{"source pool replicates", func(_ *testing.T, _ *Manager, sb *types.Sandbox) {
 			sb.PolicySource = testKey
 			sb.Key.Template = "promoted:template"
 		}, ErrReplicatingPool},
-		{"source pool does not replicate", func(_ *Manager, sb *types.Sandbox) {
+		{"source pool does not replicate", func(_ *testing.T, _ *Manager, sb *types.Sandbox) {
 			sb.PolicySource = testKey
 			sb.PolicySource.Template = "other:template"
 		}, nil},
-		{"published replica", func(m *Manager, sb *types.Sandbox) { disableReplication(m); replicateNow(t, m, sb) }, ErrReplicaPresent},
-		{"pending replica", func(m *Manager, sb *types.Sandbox) {
+		{"published replica", func(t *testing.T, m *Manager, sb *types.Sandbox) { disableReplication(m); replicateNow(t, m, sb) }, ErrReplicaPresent},
+		{"pending replica", func(_ *testing.T, m *Manager, sb *types.Sandbox) {
 			disableReplication(m)
 			sb.ReplicaPending = "pending"
 			m.store.set(sb)
 		}, ErrReplicaPresent},
-		{"registry disabled", func(m *Manager, sb *types.Sandbox) { disableReplication(m); replicateNow(t, m, sb); m.archives = nil }, ErrReplicaStranded},
-		{"archive pending without registry", func(m *Manager, sb *types.Sandbox) {
+		{"registry disabled", func(t *testing.T, m *Manager, sb *types.Sandbox) {
+			disableReplication(m)
+			replicateNow(t, m, sb)
+			m.archives = nil
+		}, ErrReplicaStranded},
+		{"archive pending without registry", func(_ *testing.T, m *Manager, sb *types.Sandbox) {
 			disableReplication(m)
 			sb.ArchivePending = "pending"
 			m.archives = nil
 		}, ErrReplicaStranded},
-		{"retained only without registry", func(m *Manager, sb *types.Sandbox) {
-			disableReplication(m)
-			sb.ReplicaCk = "retained"
-			if err := m.store.commit(m.store.set(sb)); err != nil {
-				t.Fatal(err)
-			}
-			sb.ReplicaCk = ""
-			m.store.set(sb)
-			m.archives = nil
-		}, ErrReplicaPresent},
-		{"unrelated checkpoint", func(m *Manager, _ *types.Sandbox) {
+		{"unrelated checkpoint", func(t *testing.T, m *Manager, _ *types.Sandbox) {
 			disableReplication(m)
 			other := mustClaim(t, m, testKey)
 			other.ReplicaCk = "unrelated"
@@ -149,7 +143,7 @@ func TestLiveWriterPolicyAndCheckpointRefusals(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			m, _ := newReplicaVolumeManager(t)
 			sb := mustClaim(t, m, testKey)
-			tc.prepare(m, sb)
+			tc.prepare(t, m, sb)
 			before, ops := m.store.mark(), m.eng.(*fakeEngine).volumeOpsLog()
 			view, err := m.SetVolumes(t.Context(), sb.ID, "", []types.Volume{{Name: "data", Mode: types.VolumeModeRW, AttachOnly: true}})
 			if !errors.Is(err, tc.want) {

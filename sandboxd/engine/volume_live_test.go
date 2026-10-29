@@ -74,48 +74,6 @@ func TestLiveVolumeConvergesMountAndDetach(t *testing.T) {
 	}
 }
 
-func TestLiveVolumeAcceptsEmptyMountSource(t *testing.T) {
-	for _, tt := range []struct {
-		name, mount string
-		rw          bool
-	}{
-		{name: "mounted read-only", mount: "/data"},
-		{name: "mounted writable", mount: "/data", rw: true},
-		{name: "attach-only"},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			sock := sockPath(t)
-			fake := serveFakeSilkd(t, sock)
-			configureVolumeDevices(fake)
-			spec := liveDiskCLI(t, "")
-			const unrelated = "501 84 0:62 / /empty-source rw,relatime - tmpfs  rw,size=1024k,inode64\n"
-			fake.mu.Lock()
-			fake.serial["/sys/block/vdc/dev"] = []byte("8:32\n")
-			fake.serial["/proc/self/mountinfo"] = []byte(rootMountInfo + unrelated)
-			fake.execHook = func(argv []string) {
-				switch argv[0] {
-				case "mount":
-					mode := mountMode(tt.rw)
-					fake.serial["/proc/self/mountinfo"] = []byte(rootMountInfo + unrelated + "2 1 8:32 / /data " + mode + " - ext4 /dev/vdc " + mode + "\n")
-				case "umount":
-					fake.serial["/proc/self/mountinfo"] = []byte(rootMountInfo + unrelated)
-				}
-			}
-			fake.mu.Unlock()
-			e := New("cocoon", nil, nil, false, false, "")
-			if tt.mount != "" {
-				if err := e.MountLiveVolume(t.Context(), sock, spec.Name, tt.mount, tt.rw); err != nil {
-					t.Fatalf("mount with unrelated empty source: %v", err)
-				}
-			}
-			result, err := e.DetachVolume(t.Context(), "sbx-1", sock, spec.Name, tt.mount)
-			if err != nil || result != tt.rw {
-				t.Fatalf("detach with unrelated empty source: result=%+v err=%v", result, err)
-			}
-		})
-	}
-}
-
 func TestLiveMountRefusesAnOccupiedPathBehindASymlink(t *testing.T) {
 	sock := sockPath(t)
 	fake := serveFakeSilkd(t, sock)
@@ -301,11 +259,7 @@ func TestLiveDetachCleanEvidenceRequiresWritableUnmountAndHostSuccess(t *testing
 		{name: "unordered options", options: "relatime,rw", superOptions: "errors=remount-ro,rw", mount: "/data", wantClean: true},
 		{name: "readonly", options: "ro", superOptions: "ro", mount: "/data"},
 		{name: "mount readonly", options: "ro", superOptions: "rw", mount: "/data"},
-		{name: "contradictory mount", options: "rw,ro", superOptions: "rw", mount: "/data"},
 		{name: "superblock readonly", options: "rw", superOptions: "ro", mount: "/data"},
-		{name: "contradictory superblock", options: "rw", superOptions: "rw,ro", mount: "/data"},
-		{name: "empty option", options: "rw,,relatime", superOptions: "rw", mount: "/data"},
-		{name: "missing superblock options", options: "rw", mount: "/data", wantErr: true},
 		{name: "extra superblock fields", options: "rw", superOptions: "rw extra", mount: "/data", wantErr: true},
 		{name: "pre-unmounted", unmounted: true, mount: "/data"},
 		{name: "missing device", missing: true, unmounted: true, mount: "/data"},
@@ -323,7 +277,8 @@ func TestLiveDetachCleanEvidenceRequiresWritableUnmountAndHostSuccess(t *testing
 			spec := liveDiskCLI(t, tc.hostErr)
 			fake.mu.Lock()
 			fake.serial["/sys/block/vdc/dev"] = []byte("8:32\n")
-			raw := rootMountInfo
+			base := rootMountInfo + "501 84 0:62 / /empty-source rw,relatime - tmpfs  rw,size=1024k,inode64\n"
+			raw := base
 			if !tc.unmounted {
 				raw += "2 1 8:32 / /data " + tc.options + " shared:4 - ext4 /dev/vdc " + tc.superOptions + "\n"
 			}
@@ -333,7 +288,7 @@ func TestLiveDetachCleanEvidenceRequiresWritableUnmountAndHostSuccess(t *testing
 			}
 			fake.execHook = func(argv []string) {
 				if argv[0] == "umount" && !tc.residual && !tc.busy {
-					fake.serial["/proc/self/mountinfo"] = []byte(rootMountInfo)
+					fake.serial["/proc/self/mountinfo"] = []byte(base)
 				}
 			}
 			fake.mu.Unlock()

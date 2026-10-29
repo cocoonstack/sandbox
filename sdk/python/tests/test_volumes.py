@@ -159,9 +159,16 @@ def test_volume_methods_reject_non_positive_timeout(black_hole, timeout):
 
 
 @pytest.mark.parametrize("status", [200, 409])
-def test_incomplete_volume_view_preserves_handle(spawn_node, status):
-    incomplete = {"volumes_want": [], "volumes": [], "states": []}
-    sb = sandbox_at(spawn_node({("GET", PATH): lambda body, path: (status, incomplete)}))
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"volumes_want": [], "volumes": [], "states": [], "error": "storage unavailable"},
+        {**VIEW, "error": "storage unavailable", "volumes": [None]},
+        {**VIEW, "error": "storage unavailable", "volumes_want": [None]},
+    ],
+)
+def test_incomplete_volume_view_preserves_handle(spawn_node, status, payload):
+    sb = sandbox_at(spawn_node({("GET", PATH): lambda body, path: (status, payload)}))
     sb.volumes = [{"name": "old"}]
     sb.volumes_want = [{"name": "wanted"}]
     with pytest.raises(APIError) as caught:
@@ -171,6 +178,8 @@ def test_incomplete_volume_view_preserves_handle(spawn_node, status):
     if status == 409:
         assert isinstance(caught.value, VolumeError)
         assert caught.value.response is None
+        assert caught.value.message == "storage unavailable"
+        assert caught.value.reply == payload
 
 
 @pytest.mark.parametrize(
@@ -201,21 +210,3 @@ def test_volume_mutations_encode_explicit_device_fields(spawn_node):
     sb.set_volumes(entries)
     sb.patch_volumes(add=entries)
     assert seen == [{"volumes": entries}, {"add": entries}]
-
-
-@pytest.mark.parametrize("status", [200, 409])
-@pytest.mark.parametrize("field", ["volumes", "volumes_want"])
-def test_malformed_volume_entry_preserves_error_and_handle(spawn_node, status, field):
-    payload = {**VIEW, "error": "storage unavailable", field: [None]}
-    sb = sandbox_at(spawn_node({("GET", PATH): lambda body, path: (status, payload)}))
-    sb.volumes = [{"name": "old"}]
-    sb.volumes_want = [{"name": "wanted"}]
-    with pytest.raises(APIError) as caught:
-        sb.get_volumes()
-    assert sb.volumes == [{"name": "old"}]
-    assert sb.volumes_want == [{"name": "wanted"}]
-    if status == 409:
-        assert isinstance(caught.value, VolumeError)
-        assert caught.value.status == 409
-        assert caught.value.message == "storage unavailable"
-        assert caught.value.reply == payload

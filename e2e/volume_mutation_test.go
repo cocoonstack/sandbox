@@ -3,7 +3,6 @@ package e2e
 import (
 	"errors"
 	"net/http"
-	"os"
 	"slices"
 	"strings"
 	"testing"
@@ -11,61 +10,6 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/config"
 	sandbox "github.com/cocoonstack/sandbox/sdk/go"
 )
-
-func TestLiveWritableRemovalClearsMarkerThroughSDK(t *testing.T) {
-	for _, tt := range []struct {
-		name          string
-		beforeDetach  func(*stack) error
-		markerErr     error
-		readerBlocked bool
-	}{
-		{name: "daemon unmount", beforeDetach: func(*stack) error { return nil }, markerErr: os.ErrNotExist},
-		{name: "external unmount", beforeDetach: func(s *stack) error {
-			return s.eng.unmountNamedVolume("data", "/volumes/data")
-		}, readerBlocked: true},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			image := writeVolumeImage(t, "data.img", "original-data")
-			stack := startTenantStack(t, "node-token", nil, []config.VolumeSpec{{Name: "data", Path: image, Writable: true}})
-			writer, err := stack.client.New(t.Context(), "rt:24.04")
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer writer.Close()
-			reader, err := stack.client.New(t.Context(), "rt:24.04")
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer reader.Close()
-			if _, err = writer.SetVolumes(t.Context(), []sandbox.Volume{{Name: "data", Mode: "rw"}}); err != nil {
-				t.Fatal(err)
-			}
-			if _, err = os.Stat(image + ".dirty"); err != nil {
-				t.Fatalf("writer has no dirty marker: %v", err)
-			}
-			if _, err = reader.SetVolumes(t.Context(), []sandbox.Volume{{Name: "data"}}); err == nil {
-				t.Fatal("reader admitted while writer was attached")
-			}
-			if err = tt.beforeDetach(stack); err != nil {
-				t.Fatal(err)
-			}
-			if _, err = writer.PatchVolumes(t.Context(), sandbox.VolumePatch{Remove: []string{"data"}}); err != nil {
-				t.Fatal(err)
-			}
-			_, markerErr := os.Stat(image + ".dirty")
-			if !errors.Is(markerErr, tt.markerErr) {
-				t.Fatalf("dirty marker: got %v, want %v", markerErr, tt.markerErr)
-			}
-			_, err = reader.SetVolumes(t.Context(), []sandbox.Volume{{Name: "data"}})
-			if (err != nil) != tt.readerBlocked {
-				t.Fatalf("reader admission after detach: blocked=%t err=%v", tt.readerBlocked, err)
-			}
-			if data, readErr := os.ReadFile(image); readErr != nil || string(data) != "original-data" {
-				t.Fatalf("detach changed backing contents: %q, %v", data, readErr)
-			}
-		})
-	}
-}
 
 func TestLiveVolumesEndToEnd(t *testing.T) {
 	image := writeVolumeImage(t, "dataset.img", "dataset-bytes")

@@ -17,11 +17,6 @@ import (
 	"github.com/cocoonstack/sandbox/sdk/go/silkd/silkdtest"
 )
 
-type fakeVolumeMount struct {
-	name string
-	rw   bool
-}
-
 type fakeEngine struct {
 	real *engine.Engine
 	dir  string
@@ -32,7 +27,6 @@ type fakeEngine struct {
 	volumeOps []string
 	volumeVMs map[string]bool
 	guestEnvs map[string]string
-	mounts    map[string]map[string]fakeVolumeMount
 	seq       int
 
 	readerRoot     string
@@ -48,7 +42,6 @@ func newFakeEngine(dir string) *fakeEngine {
 		socks:     map[string]string{},
 		volumeVMs: map[string]bool{},
 		guestEnvs: map[string]string{},
-		mounts:    map[string]map[string]fakeVolumeMount{},
 	}
 }
 
@@ -73,7 +66,6 @@ func (f *fakeEngine) Remove(_ context.Context, name string) error {
 		_ = l.Close()
 	}
 	delete(f.listeners, name)
-	delete(f.mounts, f.socks[name])
 	delete(f.socks, name)
 	if f.volumeVMs[name] {
 		delete(f.volumeVMs, name)
@@ -198,14 +190,10 @@ func (f *fakeEngine) DiskAttach(_ context.Context, vmName string, spec engine.Vo
 	return nil
 }
 
-func (f *fakeEngine) MountVolume(_ context.Context, sock, name, mount string, rw bool) error {
+func (f *fakeEngine) MountVolume(_ context.Context, _, name, mount string, rw bool) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.volumeOps = append(f.volumeOps, "mount:"+name+":"+mount+":"+volumeMode(rw))
-	if f.mounts[sock] == nil {
-		f.mounts[sock] = map[string]fakeVolumeMount{}
-	}
-	f.mounts[sock][mount] = fakeVolumeMount{name: name, rw: rw}
 	return nil
 }
 
@@ -213,10 +201,10 @@ func (f *fakeEngine) MountLiveVolume(ctx context.Context, sock, name, mount stri
 	return f.MountVolume(ctx, sock, name, mount, rw)
 }
 
-func (f *fakeEngine) UnmountVolume(_ context.Context, sock, mount string) error {
+func (f *fakeEngine) UnmountVolume(_ context.Context, _, mount string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.unmountVolumeLocked(sock, mount)
+	f.volumeOps = append(f.volumeOps, "umount:"+mount)
 	return nil
 }
 
@@ -227,38 +215,14 @@ func (f *fakeEngine) SyncGuest(_ context.Context, _ string) error {
 	return nil
 }
 
-func (f *fakeEngine) DetachVolume(_ context.Context, _, sock, name, mount string) (bool, error) {
+func (f *fakeEngine) DetachVolume(ctx context.Context, _, sock, name, mount string) (bool, error) {
+	if err := f.UnmountVolume(ctx, sock, mount); err != nil {
+		return false, err
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	entry, mounted := f.mounts[sock][mount]
-	normal := mount != "" && mounted && entry.name == name && entry.rw
-	if mount != "" && mounted && entry.name == name {
-		f.unmountVolumeLocked(sock, mount)
-	}
-	for _, other := range f.mounts[sock] {
-		if other.name == name {
-			return false, &engine.VolumeMountConflict{Message: "volume still has a simulated guest mount"}
-		}
-	}
 	f.volumeOps = append(f.volumeOps, "detach:"+name)
-	return normal, nil
-}
-
-func (f *fakeEngine) unmountNamedVolume(name, mount string) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	for sock, mounts := range f.mounts {
-		if mounts[mount].name == name {
-			f.unmountVolumeLocked(sock, mount)
-			return nil
-		}
-	}
-	return fmt.Errorf("volume %q is not mounted at %q", name, mount)
-}
-
-func (f *fakeEngine) unmountVolumeLocked(sock, mount string) {
-	f.volumeOps = append(f.volumeOps, "umount:"+mount)
-	delete(f.mounts[sock], mount)
+	return mount != "", nil
 }
 
 func (f *fakeEngine) volumeOpsLog() []string {

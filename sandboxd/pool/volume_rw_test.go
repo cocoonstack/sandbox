@@ -3,7 +3,6 @@ package pool
 import (
 	"encoding/json/v2"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -18,12 +17,18 @@ import (
 )
 
 func TestLiveWritableDetachRequiresCleanEvidence(t *testing.T) {
-	for _, proof := range []bool{false, true} {
-		t.Run(fmt.Sprint(proof), func(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		unclean bool
+	}{
+		{"clean unmount", false},
+		{"unclean unmount", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			base := newFakeEngine()
 			catalog := liveCatalog(t)
 			m := newVolumeManager(t, base, catalog)
-			base.detachNormalUnmount = &proof
+			base.detachUnclean = tc.unclean
 			sb := mustClaim(t, m, testKey)
 			if _, err := m.SetVolumes(t.Context(), sb.ID, "", []types.Volume{{Name: "data", Mode: types.VolumeModeRW}}); err != nil {
 				t.Fatal(err)
@@ -35,11 +40,11 @@ func TestLiveWritableDetachRequiresCleanEvidence(t *testing.T) {
 			if _, err := m.SetVolumes(t.Context(), sb.ID, "", []types.Volume{}); err != nil {
 				t.Fatal(err)
 			}
-			if volumeDirty(path) == proof {
-				t.Fatalf("marker disagrees with clean evidence: proof=%t dirty=%t", proof, volumeDirty(path))
+			if volumeDirty(path) != tc.unclean {
+				t.Fatalf("marker disagrees with clean evidence: unclean=%t dirty=%t", tc.unclean, volumeDirty(path))
 			}
 			_, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Volumes: []types.Volume{{Name: "data"}}})
-			if proof && err != nil || !proof && !errors.Is(err, ErrVolumeNeedsRecovery) {
+			if !tc.unclean && err != nil || tc.unclean && !errors.Is(err, ErrVolumeNeedsRecovery) {
 				t.Fatalf("reader admission after detach: %v", err)
 			}
 		})
@@ -65,7 +70,7 @@ func TestLiveWritableFailedHostDetachKeepsMarkerAndHold(t *testing.T) {
 		t.Fatalf("capture after uncertain detach: %v", err)
 	}
 	eng.detachVolumeErr = nil
-	eng.detachNormalUnmount = new(bool)
+	eng.detachUnclean = true
 	if _, err := m.SetVolumes(t.Context(), sb.ID, "", []types.Volume{}); err != nil {
 		t.Fatal(err)
 	}
@@ -99,7 +104,7 @@ func TestLiveWritableMarkerClearFailureRetainsOnlyClaimHold(t *testing.T) {
 	if !volumeDirty(catalog[0].Path) || volumeHoldersOf(m, "data") != (volumeHolders{writers: 1}) {
 		t.Fatal("failed marker clear lost the marker or leaked an operation hold")
 	}
-	eng.detachNormalUnmount = new(bool)
+	eng.detachUnclean = true
 	if _, err := m.SetVolumes(t.Context(), sb.ID, "", []types.Volume{}); err != nil {
 		t.Fatal(err)
 	}

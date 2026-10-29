@@ -78,9 +78,8 @@ func TestAttachOnlyClaimAttachesEveryVolumeConcurrently(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ClaimProvision: %v", err)
 	}
-	want := slices.Clone(requested)
-	if !slices.Equal(sb.Volumes, want) {
-		t.Errorf("volumes=%v, want the request order %v", sb.Volumes, want)
+	if !slices.Equal(sb.Volumes, requested) {
+		t.Errorf("volumes=%v, want the request order %v", sb.Volumes, requested)
 	}
 	wantOps := []string{"attach:cache", "attach:dataset", "attach:scratch", "probe", "provision"}
 	if ops := slices.Sorted(slices.Values(eng.volumeOpsLog())); !slices.Equal(ops, wantOps) {

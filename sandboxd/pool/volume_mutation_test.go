@@ -1,6 +1,7 @@
 package pool
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -63,7 +64,7 @@ func TestLiveVolumeFourModesAndMixedRoundtrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = os.WriteFile(m.store.path, []byte(strings.ReplaceAll(string(raw), `,"attach_only":true`, "")), 0o600); err != nil {
+	if err = os.WriteFile(m.store.path, bytes.ReplaceAll(raw, []byte(`,"attach_only":true`), nil), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	restarted := newVolumeManagerAt(t, eng, m.dataDir, catalog)
@@ -390,7 +391,7 @@ func TestLiveVolumeDoesNotBlockLifecycle(t *testing.T) {
 			eng.liveVolumeHook = func(string) error { close(entered); <-resume; return nil }
 			attached := make(chan error, 1)
 			go func() {
-				_, err := m.SetVolumes(t.Context(), sb.ID, sb.Tenant, []types.Volume{{Name: "data", Mode: types.VolumeModeRW, AttachOnly: true}})
+				_, err := m.SetVolumes(t.Context(), sb.ID, sb.Tenant, []types.Volume{{Name: "data"}})
 				attached <- err
 			}()
 			<-entered
@@ -471,7 +472,7 @@ func TestLiveVolumeCanceledRequestRetainsIntent(t *testing.T) {
 	sb := mustClaim(t, m, testKey)
 	ctx, cancel := context.WithCancel(t.Context())
 	eng.liveVolumeHook = func(string) error { cancel(); return nil }
-	_, err := m.SetVolumes(ctx, sb.ID, sb.Tenant, []types.Volume{{Name: "data", Mode: types.VolumeModeRW, AttachOnly: true}})
+	_, err := m.SetVolumes(ctx, sb.ID, sb.Tenant, []types.Volume{{Name: "data"}})
 	if !errors.Is(err, context.Canceled) || slices.Equal(sb.VolumesWant, sb.Volumes) {
 		t.Fatalf("canceled attach: %v, pending=%v", err, sb.VolumesWant)
 	}
@@ -654,10 +655,7 @@ func TestCanceledVolumeWriterOwnsHardwareUntilReturn(t *testing.T) {
 		m.eng = eng
 		ctx, cancel := context.WithCancel(t.Context())
 		first := make(chan error, 1)
-		go func() {
-			_, err := m.SetVolumes(ctx, sb.ID, sb.Tenant, []types.Volume{{Name: "data", Mode: types.VolumeModeRW, AttachOnly: true}})
-			first <- err
-		}()
+		go func() { _, err := m.SetVolumes(ctx, sb.ID, sb.Tenant, []types.Volume{{Name: "data"}}); first <- err }()
 		<-eng.entered
 		cancel()
 		waitingCtx, stopWaiting := context.WithTimeout(t.Context(), 25*time.Millisecond)
@@ -922,7 +920,7 @@ func TestLivenessRefusesAdmittedVolumeRun(t *testing.T) {
 	m.finishVolumeRun(sb, run)
 }
 
-func TestRemovedTenantCanRemoveReadOnlyVolumeBesideImmutableVolume(t *testing.T) {
+func TestRemovedTenantCanRemoveReadOnlyVolumeBesideWritableVolume(t *testing.T) {
 	eng := newFakeEngine()
 	m, sb := newTenantVolumeManager(t, eng, liveCatalog(t), types.Volume{Name: "other", Mode: "rw"})
 	if _, err := m.PatchVolumes(t.Context(), sb.ID, sb.Tenant, types.VolumePatch{Add: []types.Volume{{Name: "data"}}}); err != nil {
@@ -936,7 +934,7 @@ func TestRemovedTenantCanRemoveReadOnlyVolumeBesideImmutableVolume(t *testing.T)
 		t.Fatalf("removed tenant cleanup=%+v %v", view, err)
 	}
 	if volumeHoldersOf(m, "data") != (volumeHolders{}) || volumeHoldersOf(m, "other").writers != 1 {
-		t.Fatal("cleanup altered immutable hold")
+		t.Fatal("cleanup altered writable hold")
 	}
 }
 
