@@ -85,5 +85,6 @@ func (m *Manager) outboundOptions(ca *egress.CA) outbound.Options {
 		CA:         ca,
 		LockNIC:    len(m.cfg.Bridges) > 0,
 		RecordEnds: m.audit != nil,
+		NoRxSplice: m.cfg.NoRxSplice,
 	}
 }

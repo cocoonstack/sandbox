@@ -271,7 +271,7 @@ func (s *Server) serveSleeping(ctx context.Context, w http.ResponseWriter, id, t
 	defer done()
 	defer func() { _ = guest.Close() }()
 	s.retargetRelay(client, guest)
-	copyBoth(client, s.audited(ctx, id, io.MultiReader(bytes.NewReader(rt.replay), rt.br)), guest, silkdEnds)
+	copyBoth(client, s.audited(ctx, id, io.MultiReader(bytes.NewReader(rt.replay), rt.br)), guest, silkdEnds, s.noSplice)
 }
 
 func (s *Server) openGuest(ctx context.Context, id, token string) (net.Conn, func(), error) {

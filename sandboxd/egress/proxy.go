@@ -139,6 +139,7 @@ type Proxy struct {
 	audit    AuditFunc
 	transfer TransferFunc
 	ends     bool
+	noSplice bool
 	router   Router
 	holder   Holder
 	pools    atomic.Pointer[connPools]
@@ -187,6 +188,9 @@ func (p *Proxy) OnTransfer(f TransferFunc) { p.transfer = f }
 
 // RecordEnds puts every forwarded request's upstream connection ends on its Event; call it before serving.
 func (p *Proxy) RecordEnds() { p.ends = true }
+
+// NoRxSplice copies upstream bytes to the guest in user space; call it before serving.
+func (p *Proxy) NoRxSplice() { p.noSplice = true }
 
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer p.hold()()
@@ -304,7 +308,7 @@ func (p *Proxy) serveConnect(w http.ResponseWriter, r *http.Request) {
 		p.reportTransfer(ev, early, 0)
 		return
 	}
-	sent, received := splice(client, upstream)
+	sent, received := splice(client, upstream, p.noSplice)
 	p.reportTransfer(ev, early+sent, received)
 }
 
@@ -641,11 +645,11 @@ func stripHop(h http.Header) {
 }
 
 // splice copies both ways until either side ends, half-closing the peer so EOF propagates; it returns the bytes a sent to b and b sent to a.
-func splice(a, b net.Conn) (aToB, bToA int64) {
+func splice(a, b net.Conn, noSplice bool) (aToB, bToA int64) {
 	ra := spliceable(a)
 	done := make(chan int64, 1)
 	go func() {
-		n, _ := io.Copy(ra, b)
+		n, _ := utils.CopyIn(ra, b, noSplice)
 		utils.CloseWrite(a)
 		done <- n
 	}()

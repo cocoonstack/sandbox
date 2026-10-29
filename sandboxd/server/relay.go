@@ -129,7 +129,7 @@ func (s *Server) splice(client net.Conn, clientR io.Reader, guest net.Conn, hell
 	if _, err := client.Write(hello); err != nil {
 		return
 	}
-	copyBoth(client, clientR, guest, ends)
+	copyBoth(client, clientR, guest, ends, s.noSplice)
 }
 
 // trackRelay registers a hijacked pair for CloseRelays; !ok means the server is already draining.
@@ -215,11 +215,11 @@ func fenceGuest(guest net.Conn, fenced <-chan struct{}, done func()) func() {
 	return func() { stop(); done() }
 }
 
-func copyBoth(client net.Conn, clientR io.Reader, guest net.Conn, ends relayEnds) {
+func copyBoth(client net.Conn, clientR io.Reader, guest net.Conn, ends relayEnds, noSplice bool) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		_, err := io.Copy(guest, clientR)
+		_, err := utils.CopyIn(guest, clientR, noSplice)
 		if err != nil {
 			// the client died rather than half-closing, so nothing is left to answer it
 			_ = guest.Close()

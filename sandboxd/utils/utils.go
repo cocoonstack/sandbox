@@ -7,10 +7,16 @@ import (
 	"encoding/hex"
 	"encoding/json/v2"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
+	"sync"
 )
+
+const inCopyBuf = 256 << 10
+
+var inBufs = sync.Pool{New: func() any { b := make([]byte, inCopyBuf); return &b }}
 
 type bufferedConn struct {
 	net.Conn
@@ -37,6 +43,16 @@ func WithBuffered(c net.Conn, r *bufio.Reader) net.Conn {
 		return c
 	}
 	return &bufferedConn{Conn: c, r: r}
+}
+
+// CopyIn copies src into a guest-side dst; noSplice trades the kernel splice io.Copy picks for a pooled user-space copy.
+func CopyIn(dst io.Writer, src io.Reader, noSplice bool) (int64, error) {
+	if !noSplice {
+		return io.Copy(dst, src)
+	}
+	buf := inBufs.Get().(*[]byte)
+	defer inBufs.Put(buf)
+	return io.CopyBuffer(struct{ io.Writer }{dst}, struct{ io.Reader }{src}, *buf)
 }
 
 // WriteFileSync durably replaces path with data (temp + fsync + rename + dir fsync).
