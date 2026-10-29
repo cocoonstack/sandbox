@@ -69,9 +69,7 @@ func (m *Manager) adoptArchived(ctx context.Context, id, token string) (bool, er
 	js := m.store.set(sb)
 	m.mu.Unlock()
 	if err := m.store.commit(js); err != nil {
-		if m.forgetClaim(ctx, sb) {
-			m.unreserveVolumes(heldVolumes(sb))
-		}
+		m.forgetClaim(ctx, sb)
 		return false, fmt.Errorf("adopt %s: persist claims: %w", id, err)
 	}
 	log.WithFunc("pool.AdoptArchived").Infof(ctx, "adopted archived sandbox %s from %s", id, rec.Owner)
@@ -413,6 +411,9 @@ func (m *Manager) forgetClaim(ctx context.Context, sb *types.Sandbox) bool {
 	if m.claimed[sb.ID] != sb {
 		m.mu.Unlock()
 		return false
+	}
+	if sb.ArchiveCk != "" && sb.VMName == "" {
+		m.releaseVolumes(heldVolumes(sb))
 	}
 	m.dropClaimLocked(sb)
 	js := m.store.del(sb.ID)

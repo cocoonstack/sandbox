@@ -85,32 +85,48 @@ func TestRuntimeCatalogPersistsNormalizedSemantics(t *testing.T) {
 }
 
 func TestRuntimeCatalogRecoversLegacyArchivedVolumeReference(t *testing.T) {
-	m := newVolumeManager(t, newFakeEngine(), nil)
-	if err := m.RegisterVolume(t.Context(), "data", types.VolumeRegistration{Path: "/images/data"}); err != nil {
-		t.Fatal(err)
-	}
-	sb := &types.Sandbox{
-		ID: "sb_legacy", Key: testKey, Token: "legacy-token", ArchiveCk: "ck_00000000000000aa",
-		Volumes: []types.Volume{{Name: "data", Mount: "/volumes/data"}},
-	}
-	if err := m.store.save(map[string]*types.Sandbox{sb.ID: sb}); err != nil {
-		t.Fatal(err)
-	}
-	m = newVolumeManagerAt(t, newFakeEngine(), m.dataDir, nil)
-	if err := m.Reconcile(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := m.byID(sb.ID); !ok {
-		t.Fatal("archived claim did not survive restart")
-	}
-	if err := m.UnregisterVolume(t.Context(), "data"); !errors.Is(err, ErrVolumeRegistrationConflict) {
-		t.Fatalf("unregister recovered reference: %v", err)
-	}
-	if err := m.Release(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
-		t.Fatal(err)
-	}
-	if err := m.UnregisterVolume(t.Context(), "data"); err != nil {
-		t.Fatalf("unregister after release: %v", err)
+	for _, tc := range []struct {
+		name   string
+		finish func(*Manager, *types.Sandbox) error
+	}{
+		{"release", func(m *Manager, sb *types.Sandbox) error {
+			return m.Release(t.Context(), sb.ID, Cred{Token: sb.Token})
+		}},
+		{"ownership transfer", func(m *Manager, sb *types.Sandbox) error {
+			m.dropAdopted(t.Context(), sb)
+			return nil
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := newVolumeManager(t, newFakeEngine(), nil)
+			if err := m.RegisterVolume(t.Context(), "data", types.VolumeRegistration{Path: "/images/data"}); err != nil {
+				t.Fatal(err)
+			}
+			sb := &types.Sandbox{
+				ID: "sb_legacy", Key: testKey, Token: "legacy-token", ArchiveCk: "ck_00000000000000aa",
+				Volumes: []types.Volume{{Name: "data", Mount: "/volumes/data"}},
+			}
+			if err := m.store.save(map[string]*types.Sandbox{sb.ID: sb}); err != nil {
+				t.Fatal(err)
+			}
+			m = newVolumeManagerAt(t, newFakeEngine(), m.dataDir, nil)
+			if err := m.Reconcile(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			recovered, ok := m.byID(sb.ID)
+			if !ok {
+				t.Fatal("archived claim did not survive restart")
+			}
+			if err := m.UnregisterVolume(t.Context(), "data"); !errors.Is(err, ErrVolumeRegistrationConflict) {
+				t.Fatalf("unregister recovered reference: %v", err)
+			}
+			if err := tc.finish(m, recovered); err != nil {
+				t.Fatal(err)
+			}
+			if err := m.UnregisterVolume(t.Context(), "data"); err != nil {
+				t.Fatalf("unregister after claim removal: %v", err)
+			}
+		})
 	}
 }
 
