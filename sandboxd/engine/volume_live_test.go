@@ -54,7 +54,7 @@ func TestLiveVolumeConvergesMountAndDetach(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			if err := e.DetachVolume(t.Context(), "sbx-1", sock, spec.Name, tt.mount); err != nil {
+			if _, err := e.DetachVolume(t.Context(), "sbx-1", sock, spec.Name, tt.mount); err != nil {
 				t.Fatal(err)
 			}
 			fake.mu.Lock()
@@ -191,7 +191,7 @@ func TestLiveDetachKeepsBusyAndUnobservableDevices(t *testing.T) {
 				fake.serial["/proc/self/mountinfo"] = []byte(rootMountInfo + "2 1 8:32 / /data ro - ext4 /dev/vdc ro\n3 2 8:32 /sub /data ro - ext4 /dev/vdc ro\n")
 			}
 			fake.mu.Unlock()
-			err := New("cocoon", nil, nil, false, false, "").DetachVolume(t.Context(), "sbx-1", sock, spec.Name, "/data")
+			_, err := New("cocoon", nil, nil, false, false, "").DetachVolume(t.Context(), "sbx-1", sock, spec.Name, "/data")
 			if err == nil {
 				t.Fatal("detach must fail closed")
 			}
@@ -222,7 +222,7 @@ func TestLiveDetachMissingGuestStillChecksHost(t *testing.T) {
 			sock := sockPath(t)
 			serveFakeSilkd(t, sock)
 			spec := liveDiskCLI(t, hostErr)
-			err := New("cocoon", nil, nil, false, false, "").DetachVolume(t.Context(), "sbx-1", sock, spec.Name, "/data")
+			_, err := New("cocoon", nil, nil, false, false, "").DetachVolume(t.Context(), "sbx-1", sock, spec.Name, "/data")
 			wantErr := hostErr != ""
 			if (err != nil) != wantErr {
 				t.Fatalf("got %v, want error=%v", err, wantErr)
@@ -240,13 +240,70 @@ func TestLiveDetachIgnoresAnotherDeviceAtThePath(t *testing.T) {
 	fake.serial["/sys/block/vdc/dev"] = []byte("8:32\n")
 	fake.serial["/proc/self/mountinfo"] = []byte(rootMountInfo + "2 1 8:48 / /data ro - ext4 /dev/vdd ro\n")
 	fake.mu.Unlock()
-	if err := New("cocoon", nil, nil, false, false, "").DetachVolume(t.Context(), "sbx-1", sock, spec.Name, "/data"); err != nil {
+	if _, err := New("cocoon", nil, nil, false, false, "").DetachVolume(t.Context(), "sbx-1", sock, spec.Name, "/data"); err != nil {
 		t.Fatalf("detach of an unmounted device blocked by another device's mount: %v", err)
 	}
 	fake.mu.Lock()
 	defer fake.mu.Unlock()
 	if changes := guestChanges(fake.execCalls); len(changes) != 0 {
 		t.Fatalf("touched another device's mount: %v", changes)
+	}
+}
+
+func TestLiveDetachCleanEvidenceRequiresWritableUnmountAndHostSuccess(t *testing.T) {
+	for _, tc := range []struct {
+		name, options, superOptions, mount, hostErr            string
+		missing, unmounted, busy, residual, wantClean, wantErr bool
+	}{
+		{name: "normal", options: "rw", superOptions: "rw", mount: "/data", wantClean: true},
+		{name: "unordered options", options: "relatime,rw", superOptions: "errors=remount-ro,rw", mount: "/data", wantClean: true},
+		{name: "readonly", options: "ro", superOptions: "ro", mount: "/data"},
+		{name: "mount readonly", options: "ro", superOptions: "rw", mount: "/data"},
+		{name: "superblock readonly", options: "rw", superOptions: "ro", mount: "/data"},
+		{name: "extra superblock fields", options: "rw", superOptions: "rw extra", mount: "/data", wantErr: true},
+		{name: "pre-unmounted", unmounted: true, mount: "/data"},
+		{name: "missing device", missing: true, unmounted: true, mount: "/data"},
+		{name: "host failure", options: "rw", superOptions: "rw", mount: "/data", hostErr: "host removal failed", wantErr: true},
+		{name: "busy", options: "rw", superOptions: "rw", mount: "/data", busy: true, wantErr: true},
+		{name: "residual mount", options: "rw", superOptions: "rw", mount: "/data", residual: true, wantErr: true},
+		{name: "attach-only mounted", options: "rw", superOptions: "rw", wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sock := sockPath(t)
+			fake := serveFakeSilkd(t, sock)
+			if !tc.missing {
+				configureVolumeDevices(fake)
+			}
+			spec := liveDiskCLI(t, tc.hostErr)
+			fake.mu.Lock()
+			fake.serial["/sys/block/vdc/dev"] = []byte("8:32\n")
+			base := rootMountInfo + "501 84 0:62 / /empty-source rw,relatime - tmpfs  rw,size=1024k,inode64\n"
+			raw := base
+			if !tc.unmounted {
+				raw += "2 1 8:32 / /data " + tc.options + " shared:4 - ext4 /dev/vdc " + tc.superOptions + "\n"
+			}
+			fake.serial["/proc/self/mountinfo"] = []byte(raw)
+			if tc.busy {
+				fake.execCode = 32
+			}
+			fake.execHook = func(argv []string) {
+				if argv[0] == "umount" && !tc.residual && !tc.busy {
+					fake.serial["/proc/self/mountinfo"] = []byte(base)
+				}
+			}
+			fake.mu.Unlock()
+			clean, err := New("cocoon", nil, nil, false, false, "").DetachVolume(t.Context(), "sbx-1", sock, spec.Name, tc.mount)
+			if (err != nil) != tc.wantErr || clean != tc.wantClean {
+				t.Fatalf("clean=%t err=%v", clean, err)
+			}
+			if tc.mount == "" {
+				fake.mu.Lock()
+				defer fake.mu.Unlock()
+				if len(guestChanges(fake.execCalls)) != 0 {
+					t.Fatal("unmounted a caller-managed filesystem")
+				}
+			}
+		})
 	}
 }
 

@@ -153,7 +153,7 @@ func TestLiveVolumeRoutesHideOtherTenants(t *testing.T) {
 
 func TestLiveVolumeRoutesReportRefusalsOverRecordedDiagnostics(t *testing.T) {
 	const cause = "cannot unmount /data; close guest references and retry"
-	for _, refusal := range []error{pool.ErrVolumeBusy, pool.ErrVolumeCapture} {
+	for _, refusal := range []error{pool.ErrVolumeBusy, pool.ErrVolumeCapture, pool.ErrReplicaPresent, pool.ErrReplicatingPool, pool.ErrReplicaStranded} {
 		t.Run(refusal.Error(), func(t *testing.T) {
 			mgr := &fakeManager{setVolumes: func(string, string, []types.Volume) (types.SandboxVolumesResponse, error) {
 				return types.SandboxVolumesResponse{VolumesWant: []types.Volume{{Name: "old"}}, States: []types.VolumeState{{Name: "old", State: "pending", Error: cause}}, Error: "volume change failed; retry the desired target"}, fmt.Errorf("%w: volume %q", refusal, "data")
@@ -165,8 +165,44 @@ func TestLiveVolumeRoutesReportRefusalsOverRecordedDiagnostics(t *testing.T) {
 			if err := json.UnmarshalRead(resp.Body, &got); err != nil {
 				t.Fatal(err)
 			}
-			if resp.StatusCode != http.StatusConflict || !strings.HasPrefix(got.Error, refusal.Error()) || len(got.States) != 1 || got.States[0].Error != cause {
+			wantStatus := http.StatusConflict
+			if errors.Is(refusal, pool.ErrReplicaPresent) {
+				wantStatus = http.StatusServiceUnavailable
+				if resp.Header.Get("Retry-After") == "" {
+					t.Fatal("temporary replica retirement refusal has no Retry-After")
+				}
+			} else if resp.Header.Get("Retry-After") != "" {
+				t.Fatal("permanent conflict advertises a retry delay")
+			}
+			if resp.StatusCode != wantStatus || !strings.HasPrefix(got.Error, refusal.Error()) || len(got.States) != 1 || got.States[0].Error != cause {
 				t.Fatalf("status=%d view=%+v", resp.StatusCode, got)
+			}
+		})
+	}
+}
+
+func TestClaimVolumeCompatibilityExpansion(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		req  ClaimRequest
+		want []types.Volume
+		err  bool
+	}{
+		{"default mount", ClaimRequest{Volumes: []types.Volume{{Name: "data"}}}, []types.Volume{{Name: "data", Mount: "/volumes/data"}}, false},
+		{"legacy all devices", ClaimRequest{VolumesAttachOnly: true, Volumes: []types.Volume{{Name: "data"}, {Name: "work", Mode: types.VolumeModeRW}}}, []types.Volume{{Name: "data", AttachOnly: true}, {Name: "work", Mode: types.VolumeModeRW, AttachOnly: true}}, false},
+		{"mixed", ClaimRequest{Volumes: []types.Volume{{Name: "data"}, {Name: "work", AttachOnly: true}}}, []types.Volume{{Name: "data", Mount: "/volumes/data"}, {Name: "work", AttachOnly: true}}, false},
+		{"mixed reversed", ClaimRequest{Volumes: []types.Volume{{Name: "work", AttachOnly: true}, {Name: "data"}}}, []types.Volume{{Name: "work", AttachOnly: true}, {Name: "data", Mount: "/volumes/data"}}, false},
+		{"empty legacy", ClaimRequest{VolumesAttachOnly: true}, nil, true},
+		{"legacy mount conflict", ClaimRequest{VolumesAttachOnly: true, Volumes: []types.Volume{{Name: "data", Mount: "/data"}}}, nil, true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			before := slices.Clone(tt.req.Volumes)
+			got, err := tt.req.normalizedVolumes()
+			if (err != nil) != tt.err || !slices.Equal(got, tt.want) {
+				t.Fatalf("normalized volumes=%+v err=%v, want %+v error=%t", got, err, tt.want, tt.err)
+			}
+			if !slices.Equal(tt.req.Volumes, before) {
+				t.Fatal("legacy expansion mutated caller input")
 			}
 		})
 	}

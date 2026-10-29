@@ -145,7 +145,7 @@ gets the intersection of the two.
 | `reader` (pool entry) | `false` | Serve read-only file calls on this pool's hibernated or archived claims from a warm VM of the same pool instead of waking them; needs `warm` of at least 1 and a cocoon whose `vm disk attach` takes `--from-snapshot` and `--from-dir`. See [Reading sleeping claims](#reading-sleeping-claims-without-waking-them). Config-owned like `capture_trim`: `PUT /v1/pools` rejects it |
 | `egress_classes` | unset | named tenant egress layers: `[{"name": "desk", "egress": {…}, "egress_upstream_env": "DESK_UPSTREAM"}]`. A tenant names one with `egress_class` through the [tenant API](sandboxd-api.md#tenants-v1tenants) and its claims take that policy intersected with the pool's. `egress` is required; `intercept` stays a pool-rule flag. Reloadable: a class's policy reaches live claims on their next request. A class removed while tenants still name it leaves them with no egress and is logged at load and at reload |
 | `egress_upstream_env` (pool or egress class entry) | unset | names a node environment variable holding the default upstream proxy URL for the pool's or class's claims (class before pool, a claim's own entry before both); needs `egress_upstream`, and the URL must be on its `allow`. Read and checked at startup. Config-owned like `egress`: `PUT /v1/pools` rejects it |
-| `replicate_seconds` (pool entry) | 0 (off) | snapshot every running claim of this pool to the checkpoint store this often and point the claim's registry row at the snapshot, so another node restores the claim, memory and processes included, when this node is lost (see [running claims across node loss](cluster.md#running-claims-across-node-loss)). Each round pauses the guest for the length of a memory and disk capture. A restore resumes from the last committed replica and loses everything after it: up to the longer of the interval and one replication pass, plus the 5-second tick, plus one more pass, since a claim can run first in one pass and last in the next. A pass covers all the node's due claims of the replicating pools with bounded concurrency, so it grows with claim count and guest memory; the first round of a claim after a wake or adoption uploads the whole claim, so that pass is the long pass. The claim's row carries no retention deadline while it runs. Requires `archive_failover` and a `none`-lane pool, both checked at config load; a claim with volumes is skipped. Config-owned like `egress`: `PUT /v1/pools` rejects it. Restart only: a claim is replicated by its pool's setting from the moment it is claimed, so a reload that changes it is refused (a pool restarted with 0 drops its claims' rows and replicas on the first pass) |
+| `replicate_seconds` (pool entry) | 0 (off) | snapshot every running claim of this pool to the checkpoint store this often and point the claim's registry row at the snapshot, so another node restores the claim, memory and processes included, when this node is lost (see [running claims across node loss](cluster.md#running-claims-across-node-loss)). Each round pauses the guest for the length of a memory and disk capture. A restore resumes from the last committed replica and loses everything after it: up to the longer of the interval and one replication pass, plus the 5-second tick, plus one more pass, since a claim can run first in one pass and last in the next. A pass covers all the node's due claims of the replicating pools with bounded concurrency, so it grows with claim count and guest memory; the first round of a claim after a wake or adoption uploads the whole claim, so that pass is the long pass. The claim's row carries no retention deadline while it runs. Requires `archive_failover` and a `none`-lane pool, both checked at config load; a claim with volumes is skipped. Config-owned like `egress`: `PUT /v1/pools` rejects it. Restart only: a claim is replicated by its pool's setting from the moment it is claimed, so a reload that changes it is refused (a pool restarted with 0 starts retiring its replicas while the registry remains enabled; see [Disabling archive failover](#disabling-archive-failover)) |
 | `storage` (pool entry) | unset (cocoon's default, 10G) | size of the copy-on-write disk the pool's golden is cold-booted with, in cocoon's own `--storage` spelling (`"40G"`, `"40GiB"`, `"40Gi"`: Docker/Kubernetes units, all binary) and passed to it verbatim; every clone, fork, checkpoint branch and promoted template of the pool inherits it. At least cocoon's default of 10G. Equal sizes spelled differently build the same golden; a changed size rebuilds the golden on the next build, and claims already out keep their disk. Config-owned like `egress`: `PUT /v1/pools` rejects it |
 | `max_claims` | 0 (unlimited) | node-wide cap on live claims; claim/fork/branch requests beyond it answer 429 with the pool state unharmed (on a cluster a non-volume claim tries a warm-peer redirect first; a volume claim answers the 429 with no redirect) |
 | `audit_log` | false | append every relayed frame that opens an RPC — its op + addressing fields, never payloads — to `<data_dir>/audit.jsonl`; continuation `data`, `data_end`, `stdin`, and `stdin_close` frames pass through unrecorded. The file is size-rotated with one `.1` backup. Records are `{t, id, op}` plus whichever addressing fields the op carries (`argv`, `path`, `dest`, `from`, `to`, `url`, `session`, `port`), plus `method` (`GET`, `CONNECT`, `SOCKS5`, …), `decision` (`allow`, `deny`, `rate_limited`), `secret` (the ref name, never its value), `upstream` (the [upstream proxy](egress.md#upstream-proxies)'s `host:port`, when one carried it), `tenant`, and on an allowed connection `src_addr` and `dst_addr` (the node-side and destination `ip:port` of the upstream TCP connection, the tunnel target through an upstream proxy) on `egress` records, which a relayed frame cannot set; preview accesses record as op `preview`, one per request; a tenant change records as op `tenants` with the `added`, `changed` and `removed` names, never a token. An opening frame whose first line exceeds 4 KiB records as op `oversized` with no addressing fields |
@@ -248,9 +248,13 @@ the pool had `reader`, and its reads wake the claim as without the feature.
 
 ### Dataset volumes
 
-Running claims can change mounted read-only catalog entries through the
+Running claims can add or remove mounted and attach-only catalog entries in
+read-only or writable mode through the
 [GET, PUT, and PATCH volume API](sandboxd-api.md#get-v1sandboxesidvolumes)
-and both SDKs. The image must already exist on the owner node. Live changes
+and both SDKs. Changing a held entry's descriptor requires successful removal
+first. The [live volume contract](sandboxd-api.md#put-v1sandboxesidvolumes)
+defines admission policy and dirty-marker handling.
+The image must already exist on the owner node. Live changes
 require Cocoon v0.7.2 or newer for idempotent disk attach and detach. PUT and
 PATCH reject an older release, or a runtime whose version cannot be queried,
 with 503 before any intent, hold, or device change; a dev build is assumed
@@ -337,7 +341,8 @@ below. With `directio=off`, readers share the host page cache; use
 `directio=on` when cache interference matters.
 A dataset mounted into an egress-lane sandbox can be uploaded wherever that
 tenant's egress policy permits, so treat the ACL and egress policy as one access
-decision. Image replication, detach, and refcounting remain out of scope.
+decision. Operators remain responsible for image distribution and cross-node
+ownership. sandboxd tracks local holds and handles live detach through the volume API.
 
 #### Writable dataset volumes
 
@@ -704,6 +709,36 @@ To empty a node for maintenance, cordon it first:
 drains the warm pools; poll `GET /v1/info` until `claimed` reaches zero (or
 let the leases expire), then stop sandboxd. `DELETE /v1/drain` uncordons.
 The drain is not persisted — a restarted node serves again.
+
+### Disabling archive failover
+
+Stop admitting claims that use `on_expire: archive`. Set the node and affected
+pools' `archive_after_seconds` to `0`, and use
+[`renew`](sandboxd-api.md#post-v1sandboxesidrenew) to switch existing active claims
+to `on_expire: destroy` while keeping their leases valid. These changes stop
+idle-time and expiry-triggered archives. Before setting `archive_failover` to `false`:
+
+1. Set every affected pool's `replicate_seconds` to `0` and restart its nodes
+   with failover and the registry still enabled. Keep the registry reachable
+   while replica retirement retries.
+2. Check each node's `<data_dir>/claims.json` for affected claims. Wait until
+   `replica_ck` and `replica_pending` are absent after successful journal writes.
+   Use `sync_claims: true` when completion must survive power loss.
+3. Wake or release existing registered archives while failover remains enabled.
+   Wait for `archive_pending` to clear in the journal. Verify that the affected
+   IDs have no rows in PostgreSQL's
+   `sandboxd_archives` table for your `meta_store.cell`. A consumed row is a
+   non-adoptable tombstone; wait for its cleanup retries to finish too.
+4. Set `archive_failover` to `false` and restart the nodes.
+
+The public API omits replica journal fields. A fixed delay or an absence of
+warnings does not prove retirement. Disabling failover first stops replica
+retirement and leaves residual references that reject new live RW attachments.
+A local archive can still wake and clear `archive_ck`, but that does not clear a
+retained `replica_pending` or retire an old shared row. Release can remove local
+state without reconciling that row. Re-enabling failover against stale rows can
+fence or drop a local claim if another node has adopted it. Resolve registry
+ownership before serving that claim again.
 
 ### Shared tenant database
 

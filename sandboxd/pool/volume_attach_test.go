@@ -21,7 +21,7 @@ func TestAttachOnlyClaimAttachesWithoutMounting(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ClaimProvision: %v", err)
 	}
-	want := []types.Volume{{Name: "scratch", Mode: types.VolumeModeRW}}
+	want := []types.Volume{{Name: "scratch", Mode: types.VolumeModeRW, AttachOnly: true}}
 	if !slices.Equal(sb.Volumes, want) {
 		t.Errorf("applied volumes=%v, want %v", sb.Volumes, want)
 	}
@@ -78,13 +78,8 @@ func TestAttachOnlyClaimAttachesEveryVolumeConcurrently(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ClaimProvision: %v", err)
 	}
-	want := []types.Volume{
-		{Name: "scratch", Mode: types.VolumeModeRW},
-		{Name: "dataset"},
-		{Name: "cache", Mode: types.VolumeModeRW},
-	}
-	if !slices.Equal(sb.Volumes, want) {
-		t.Errorf("volumes=%v, want the request order %v", sb.Volumes, want)
+	if !slices.Equal(sb.Volumes, requested) {
+		t.Errorf("volumes=%v, want the request order %v", sb.Volumes, requested)
 	}
 	wantOps := []string{"attach:cache", "attach:dataset", "attach:scratch", "probe", "provision"}
 	if ops := slices.Sorted(slices.Values(eng.volumeOpsLog())); !slices.Equal(ops, wantOps) {
@@ -380,7 +375,7 @@ func TestQuiesceVolumesSkipsAttachOnlyEntries(t *testing.T) {
 	sb := &types.Sandbox{
 		ID: "sb_mixed", VMName: "sbx-mixed", Key: testKey, VsockSocket: "/vsock/mixed",
 		Volumes: []types.Volume{
-			{Name: "scratch", Mode: types.VolumeModeRW},
+			{Name: "scratch", Mode: types.VolumeModeRW, AttachOnly: true},
 			{Name: "mounted", Mount: "/volumes/mounted", Mode: types.VolumeModeRW},
 		},
 	}
@@ -406,11 +401,11 @@ func TestWritableMountsCountsOnlyQuiescableEntries(t *testing.T) {
 	}{
 		{"none", nil, 0},
 		{"read-only mount", []types.Volume{{Name: "a", Mount: "/a"}}, 0},
-		{"attach-only writer", []types.Volume{{Name: "a", Mode: types.VolumeModeRW}}, 0},
+		{"attach-only writer", []types.Volume{{Name: "a", Mode: types.VolumeModeRW, AttachOnly: true}}, 0},
 		{"writable mount", []types.Volume{{Name: "a", Mount: "/a", Mode: types.VolumeModeRW}}, 1},
 		{"mixed", []types.Volume{
 			{Name: "a", Mount: "/a", Mode: types.VolumeModeRW},
-			{Name: "b", Mode: types.VolumeModeRW},
+			{Name: "b", Mode: types.VolumeModeRW, AttachOnly: true},
 			{Name: "c", Mount: "/c"},
 		}, 1},
 	} {

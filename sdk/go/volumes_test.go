@@ -196,7 +196,7 @@ func TestWithVolumesEncodesMode(t *testing.T) {
 		mode string
 	}{
 		{"empty stays omitted", ""},
-		{"ro normalizes to omitted", "ro"},
+		{"ro stays explicit", "ro"},
 		{"rw rides the wire", "rw"},
 	}
 	for _, tt := range tests {
@@ -215,9 +215,9 @@ func TestWithVolumesEncodesMode(t *testing.T) {
 				t.Fatalf("New: %v", err)
 			}
 			got, present := raw.Volumes[0]["mode"]
-			if tt.mode == volumeModeRW {
-				if !present || got != volumeModeRW {
-					t.Errorf("wire mode = %v (present=%v), want %q", got, present, volumeModeRW)
+			if tt.mode != "" {
+				if !present || got != tt.mode {
+					t.Errorf("wire mode = %v (present=%v), want %q", got, present, tt.mode)
 				}
 			} else if present {
 				t.Errorf("wire mode = %v, want omitted", got)
@@ -231,7 +231,7 @@ func TestWithVolumesAttachOnlySendsFlagAndDecodesMountlessEcho(t *testing.T) {
 		Volumes           []map[string]any `json:"volumes"`
 		VolumesAttachOnly bool             `json:"volumes_attach_only"`
 	}
-	echo := []Volume{{Name: "imagenet"}, {Name: "scratch", Mode: "rw"}}
+	echo := []Volume{{Name: "imagenet", AttachOnly: true}, {Name: "scratch", Mode: "rw", AttachOnly: true}}
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if err := json.UnmarshalRead(r.Body, &raw); err != nil {
 			t.Errorf("decode body: %v", err)
@@ -259,20 +259,7 @@ func TestWithVolumesAttachOnlySendsFlagAndDecodesMountlessEcho(t *testing.T) {
 	}
 }
 
-func TestWithVolumesAttachOnlyRejectsMountLocally(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
-		t.Error("server should not be contacted for a locally invalid claim")
-	}))
-	t.Cleanup(ts.Close)
-
-	_, err := testClient(t, ts).New(t.Context(), "rt:24.04",
-		WithVolumes(Volume{Name: "imagenet", Mount: "/datasets"}), WithVolumesAttachOnly())
-	if err == nil || !strings.Contains(err.Error(), "meaningless with WithVolumesAttachOnly") {
-		t.Errorf("err = %v, want local mount rejection", err)
-	}
-}
-
-func TestRejectsInvalidVolumeModeLocally(t *testing.T) {
+func TestVolumePolicyErrorsComeFromServer(t *testing.T) {
 	tests := []struct {
 		name  string
 		claim func(ctx context.Context, c *Client) (*Sandbox, error)
@@ -287,14 +274,15 @@ func TestRejectsInvalidVolumeModeLocally(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ts := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
-				t.Error("server should not be contacted for a locally invalid mode")
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusBadRequest)
+				_, _ = w.Write([]byte(`{"error":"mode must be ro or rw"}`))
 			}))
 			t.Cleanup(ts.Close)
 
 			_, err := tt.claim(t.Context(), testClient(t, ts))
 			if err == nil || !strings.Contains(err.Error(), "mode must be") {
-				t.Errorf("err = %v, want local mode rejection", err)
+				t.Errorf("err = %v, want server mode rejection", err)
 			}
 		})
 	}

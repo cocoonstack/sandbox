@@ -35,7 +35,7 @@ performance) — source in
 - `sandboxd/` — per-node control plane (Go): warm pools refilled from golden
   snapshot exports (online-retunable), claim/release/renew/hibernate/fork/
   promote/checkpoint HTTP API, operator-catalog dataset volumes (read-only or
-  writable; read-only ones change on a running claim), signed preview URLs,
+  writable, mounted or attach-only, with live add and remove), signed preview URLs,
   the HTTP-upgrade byte relays to silkd and to any guest port, read-only file
   access to hibernated or archived claims from a warm VM of their pool
   (opt-in per pool `reader`), claim env with

@@ -112,16 +112,21 @@ func (m *Manager) replicate(ctx context.Context, sb *types.Sandbox) error {
 	sb.Transition.Lock()
 	defer sb.Transition.Unlock()
 	m.mu.Lock()
-	ok := m.claimed[sb.ID] == sb && sb.ArchiveCk == "" && sb.ArchivePending == ""
 	var intent claimSnapshot
-	if ok {
+	var refusal error
+	switch {
+	case m.claimed[sb.ID] != sb || sb.ArchiveCk != "" || sb.ArchivePending != "":
+		refusal = errWokeMeanwhile
+	case m.hasVolumeHolds(sb):
+		refusal = ErrVolumeCapture
+	default:
 		sb.ReplicaPending = ckID
 		intent = m.store.set(sb)
 	}
 	m.mu.Unlock()
-	if !ok {
+	if refusal != nil {
 		m.deleteOrphanArchiveCk(ctx, ckID)
-		return errWokeMeanwhile
+		return refusal
 	}
 	if err := m.store.commit(intent); err != nil {
 		_ = m.clearReplicaIntent(ctx, sb, ckID)

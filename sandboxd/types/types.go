@@ -752,8 +752,8 @@ type Volume struct {
 	Name  string `json:"name"`
 	Mount string `json:"mount,omitempty"`
 	Mode  string `json:"mode,omitempty"`
-	// AttachOnly carries the claim's flag into validation; past it the empty Mount is the signal.
-	AttachOnly bool `json:"-"`
+	// AttachOnly leaves mounting and unmounting to the caller.
+	AttachOnly bool `json:"attach_only,omitzero"`
 }
 
 // RW reports whether the entry asks for write access.
@@ -803,18 +803,10 @@ func VolumeRWNames(volumes []Volume) []string {
 	return names
 }
 
-// VolumesAttachOnly reports whether the caller mounts the devices itself.
-func VolumesAttachOnly(volumes []Volume) bool {
-	return slices.ContainsFunc(volumes, func(v Volume) bool { return v.AttachOnly })
-}
-
 // ValidateVolumes returns detached entries with defaults filled and modes normalized.
-func ValidateVolumes(volumes []Volume, attachOnly bool) ([]Volume, error) {
+func ValidateVolumes(volumes []Volume) ([]Volume, error) {
 	if len(volumes) > MaxClaimVolumes {
 		return nil, fmt.Errorf("volumes must contain at most %d entries, got %d", MaxClaimVolumes, len(volumes))
-	}
-	if attachOnly && len(volumes) == 0 {
-		return nil, errors.New("volumes_attach_only requires at least one volume")
 	}
 	applied := make([]Volume, len(volumes))
 	names := make(map[string]struct{}, len(volumes))
@@ -834,7 +826,7 @@ func ValidateVolumes(volumes []Volume, attachOnly bool) ([]Volume, error) {
 		default:
 			return nil, fmt.Errorf("volumes[%d] mode %q must be %s or %s", i, mode, VolumeModeRO, VolumeModeRW)
 		}
-		if attachOnly {
+		if volume.AttachOnly {
 			if volume.Mount != "" {
 				return nil, fmt.Errorf("volumes[%d] mount %q is meaningless when the caller mounts the device itself", i, volume.Mount)
 			}
@@ -847,6 +839,9 @@ func ValidateVolumes(volumes []Volume, attachOnly bool) ([]Volume, error) {
 		}
 		for j := range i {
 			other := applied[j].Mount
+			if other == "" {
+				continue
+			}
 			switch {
 			case mount == other:
 				return nil, fmt.Errorf("volumes[%d] mount %q duplicates volumes[%d]", i, mount, j)

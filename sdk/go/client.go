@@ -110,18 +110,6 @@ func (r claimRequest) rejectPinnedAxes() error {
 	return nil
 }
 
-func (r claimRequest) validateVolumes() error {
-	for _, v := range r.Volumes {
-		if v.Mode != "" && v.Mode != volumeModeRW {
-			return fmt.Errorf("volume %q: mode must be \"\", %q, or %q, got %q", v.Name, volumeModeRO, volumeModeRW, v.Mode)
-		}
-		if r.VolumesAttachOnly && v.Mount != "" {
-			return fmt.Errorf("volume %q: mount %q is meaningless with WithVolumesAttachOnly, which leaves mounting to the caller", v.Name, v.Mount)
-		}
-	}
-	return nil
-}
-
 type claimResponse struct {
 	ID              string    `json:"id"`
 	Token           string    `json:"token"`
@@ -171,9 +159,6 @@ func (c *Client) New(ctx context.Context, template string, opts ...Option) (*San
 	claim := claimRequest{Template: template}
 	for _, opt := range opts {
 		opt(&claim)
-	}
-	if err := claim.validateVolumes(); err != nil {
-		return nil, err
 	}
 	addr, cr, err := claimFollow(c.addr, "claim", func(noRedirect, requirePromoted bool) ([]byte, error) {
 		claim.NoRedirect, claim.RequirePromoted = noRedirect, requirePromoted
