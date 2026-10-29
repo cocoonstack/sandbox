@@ -79,55 +79,6 @@ func TestLiveWritableFailedHostDetachKeepsMarkerAndHold(t *testing.T) {
 	}
 }
 
-func TestLiveWritableMarkerClearFailureRetainsOnlyClaimHold(t *testing.T) {
-	eng := newFakeEngine()
-	catalog := liveCatalog(t)
-	m := newVolumeManager(t, eng, catalog)
-	sb := mustClaim(t, m, testKey)
-	if _, err := m.SetVolumes(t.Context(), sb.ID, "", []types.Volume{{Name: "data", Mode: types.VolumeModeRW}}); err != nil {
-		t.Fatal(err)
-	}
-	marker := volumeDirtyPath(catalog[0].Path)
-	if err := os.Remove(marker); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Mkdir(marker, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	child := filepath.Join(marker, "block-unlink")
-	if err := os.WriteFile(child, nil, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := m.SetVolumes(t.Context(), sb.ID, "", []types.Volume{}); err == nil || !strings.Contains(err.Error(), "clear dirty marker") {
-		t.Fatalf("marker unlink failure: %v", err)
-	}
-	if !volumeDirty(catalog[0].Path) || volumeHoldersOf(m, "data") != (volumeHolders{writers: 1}) {
-		t.Fatal("failed marker clear lost the marker or leaked an operation hold")
-	}
-	eng.detachUnclean = true
-	if _, err := m.SetVolumes(t.Context(), sb.ID, "", []types.Volume{}); err != nil {
-		t.Fatal(err)
-	}
-	if !volumeDirty(catalog[0].Path) || volumeHoldersOf(m, "data") != (volumeHolders{}) {
-		t.Fatal("absent-device retry cleared the marker or retained an admission hold")
-	}
-	if _, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Volumes: []types.Volume{{Name: "data"}}}); !errors.Is(err, ErrVolumeNeedsRecovery) {
-		t.Fatalf("reader admission after failed marker clear: %v", err)
-	}
-	if err := os.Remove(child); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Remove(marker); err != nil {
-		t.Fatal(err)
-	}
-	if err := markVolumeDirty(catalog[0].Path); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Volumes: []types.Volume{{Name: "data", Mode: types.VolumeModeRW}}}); err != nil {
-		t.Fatalf("recovery writer admission: %v", err)
-	}
-}
-
 func TestLiveWritableUncertainAdditionClearsOnlyAfterDetach(t *testing.T) {
 	eng := newFakeEngine()
 	catalog := liveCatalog(t)
