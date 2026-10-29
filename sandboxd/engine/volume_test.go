@@ -243,6 +243,21 @@ func TestMountVolumeRetriesUntilTheDeviceOpens(t *testing.T) {
 	}
 }
 
+func TestMountVolumeNotReadyUntilDeadlineReportsTheTimeout(t *testing.T) {
+	path := sockPath(t)
+	fake := serveFakeSilkd(t, path)
+	configureVolumeDevices(fake)
+	fake.mu.Lock()
+	fake.notReady = 1 << 20
+	fake.mu.Unlock()
+	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+	defer cancel()
+	err := New("cocoon", nil, nil, false, false, "").MountVolume(ctx, path, "imagenet", "/datasets/training", false)
+	if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "mount volume imagenet") {
+		t.Fatalf("got %v, want the mount deadline", err)
+	}
+}
+
 func TestMountVolumeStopsAtFailedStage(t *testing.T) {
 	for _, tt := range []struct {
 		name     string

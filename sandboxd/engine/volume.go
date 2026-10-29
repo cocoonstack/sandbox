@@ -148,15 +148,17 @@ func (e *Engine) mountDevice(ctx context.Context, vsockSocket, device, name, mou
 	defer ticker.Stop()
 	for {
 		err := e.silkdExec(ctx, vsockSocket, "mount", "-o", mountMode(rw), "--", device, mount)
-		if err == nil {
+		switch {
+		case err == nil:
 			return nil
-		}
-		if !deviceNotReady(err) {
+		case ctx.Err() != nil:
+			return fmt.Errorf("mount volume %s: %w: %w", name, ctx.Err(), err)
+		case !deviceNotReady(err):
 			return fmt.Errorf("mount volume %s: %w", name, err)
 		}
 		select {
 		case <-ctx.Done():
-			return fmt.Errorf("mount volume %s: %w", name, err)
+			return fmt.Errorf("mount volume %s: %w: %w", name, ctx.Err(), err)
 		case <-ticker.C:
 		}
 	}
