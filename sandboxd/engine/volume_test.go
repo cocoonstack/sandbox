@@ -226,6 +226,23 @@ func TestMountVolumeWaitsForDelayedDevNode(t *testing.T) {
 	}
 }
 
+func TestMountVolumeRetriesUntilTheDeviceOpens(t *testing.T) {
+	path := sockPath(t)
+	fake := serveFakeSilkd(t, path)
+	configureVolumeDevices(fake)
+	fake.mu.Lock()
+	fake.notReady = 2
+	fake.mu.Unlock()
+	if err := New("cocoon", nil, nil, false, false, "").MountVolume(t.Context(), path, "imagenet", "/datasets/training", false); err != nil {
+		t.Fatalf("MountVolume: %v", err)
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if mounts := len(fake.execCalls) - 1; mounts != 3 {
+		t.Fatalf("mount attempts = %d, want 3: %v", mounts, fake.execCalls)
+	}
+}
+
 func TestMountVolumeStopsAtFailedStage(t *testing.T) {
 	for _, tt := range []struct {
 		name     string
