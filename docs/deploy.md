@@ -310,7 +310,8 @@ A volume claim may consume an ordinary warm Cloud Hypervisor VM. sandboxd
 attaches after the warm pop or provision, waits for the device settle — a
 serial match under `/sys/block`, then the `/dev/<name>` node itself, since the
 kernel publishes sysfs before devtmpfs creates it — up to 2 seconds, then
-mounts the device before finalizing the claim: `mode: "ro"` (the default)
+mounts the device, retrying `not a valid block device` within the 10-second
+setup budget, before finalizing the claim: `mode: "ro"` (the default)
 attaches and mounts read-only; `mode: "rw"` requires the catalog entry's
 `writable: true` and attaches and mounts read-write. Setup failure destroys
 the VM without quiescing — the claim was never handed out, so no workload
