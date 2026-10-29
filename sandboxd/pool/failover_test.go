@@ -121,9 +121,9 @@ func TestFailoverLegacyVolumeTransferPreservesOtherReader(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	raw, err := os.ReadFile("testdata/legacy-volume-replica.json")
-	if err != nil {
-		t.Fatal(err)
+	raw, readErr := os.ReadFile("testdata/legacy-volume-replica.json")
+	if readErr != nil {
+		t.Fatal(readErr)
 	}
 	var fixture struct {
 		Token  string

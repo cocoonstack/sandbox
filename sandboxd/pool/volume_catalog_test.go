@@ -147,9 +147,9 @@ func TestRuntimeCatalogRecoversLegacyArchivedVolumeReference(t *testing.T) {
 				if _, err := m.ClaimProvision(t.Context(), testKey, writer); !errors.Is(err, ErrVolumeBusy) {
 					t.Fatalf("writer beside recovered reference: %v", err)
 				}
-				reader, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Volumes: []types.Volume{{Name: "data"}}})
-				if err != nil {
-					t.Fatal(err)
+				reader, claimErr := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Volumes: []types.Volume{{Name: "data"}}})
+				if claimErr != nil {
+					t.Fatal(claimErr)
 				}
 				for range 2 {
 					if err := tc.finish(t, m, recovered); err != nil && !errors.Is(err, ErrUnknownSandbox) {
