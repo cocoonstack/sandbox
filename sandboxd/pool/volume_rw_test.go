@@ -152,10 +152,7 @@ func TestConfirmVolumesCleanCatchesMarkerAfterAdmission(t *testing.T) {
 	if markErr := markVolumeDirty(path); markErr != nil {
 		t.Fatalf("mark dirty: %v", markErr)
 	}
-	m.mu.Lock()
-	reserveErr := m.reserveVolumes(appliedVolumes(resolved))
-	m.mu.Unlock()
-	if reserveErr != nil {
+	if reserveErr := m.admitClaim("", resolved, appliedVolumes(resolved)); reserveErr != nil {
 		t.Fatalf("reserve once the writer released: %v", reserveErr)
 	}
 
@@ -219,17 +216,21 @@ func TestVolumeAdmissionMatrix(t *testing.T) {
 	}
 }
 
-func TestReserveVolumesExcludesReaderUnderWriter(t *testing.T) {
+func TestAdmitClaimExcludesReaderUnderWriter(t *testing.T) {
 	path := writeVolumeImage(t, "scratch.img", "data")
 	m := newVolumeManager(t, newFakeEngine(), []config.VolumeSpec{{Name: "scratch", Path: path, Writable: true}})
+	resolved, err := m.resolveVolumes(t.Context(), "", []types.Volume{{Name: "scratch", Mount: "/volumes/scratch"}})
+	if err != nil {
+		t.Fatal(err)
+	}
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	m.adoptVolumes([]types.Volume{{Name: "scratch", Mount: "/volumes/scratch", Mode: types.VolumeModeRW}})
+	m.mu.Unlock()
 
-	if err := m.reserveVolumes([]types.Volume{{Name: "scratch", Mount: "/volumes/scratch"}}); !errors.Is(err, ErrVolumeBusy) {
+	if err := m.admitClaim("", resolved, appliedVolumes(resolved)); !errors.Is(err, ErrVolumeBusy) {
 		t.Errorf("read-only reservation under a writer: %v, want ErrVolumeBusy", err)
 	}
-	if holders := m.volumeAdmission["scratch"]; holders != (volumeHolders{writers: 1}) {
+	if holders := volumeHoldersOf(m, "scratch"); holders != (volumeHolders{writers: 1}) {
 		t.Errorf("registry after the refusal=%+v, want the writer alone", holders)
 	}
 }
@@ -580,5 +581,5 @@ func newVolumeManagerAt(t *testing.T, eng *fakeEngine, dataDir string, volumes [
 func volumeHoldersOf(m *Manager, name string) volumeHolders {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.volumeAdmission[name]
+	return m.catalog.holders[name]
 }

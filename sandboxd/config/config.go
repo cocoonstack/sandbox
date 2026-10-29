@@ -275,8 +275,10 @@ type Config struct {
 	DiskReserve *DiskReserve `json:"disk_reserve,omitempty"`
 
 	Volumes []VolumeSpec `json:"volumes,omitempty"`
-	Mesh    *MeshConfig  `json:"mesh,omitempty"`
-	Pools   []PoolSpec   `json:"pools"`
+	// VolumeRoots bounds runtime registration paths only; static volumes stay unchecked.
+	VolumeRoots []string    `json:"volume_roots,omitempty"`
+	Mesh        *MeshConfig `json:"mesh,omitempty"`
+	Pools       []PoolSpec  `json:"pools"`
 }
 
 // HasEgress reports whether the node can attach egress-lane VMs.
@@ -398,28 +400,13 @@ func (c *Config) validateReplication() error {
 }
 
 func (c *Config) validateVolumes() error {
-	names := make(map[string]struct{}, len(c.Volumes))
-	paths := make(map[string]string, len(c.Volumes))
-	for _, volume := range c.Volumes {
-		if !types.ValidVolumeName(volume.Name) {
-			return fmt.Errorf("volume name %q must match %s and not start with cocoon-", volume.Name, types.VolumeNameRe)
+	for i, root := range c.VolumeRoots {
+		if !filepath.IsAbs(root) {
+			return fmt.Errorf("volume_roots %q must be an absolute path", root)
 		}
-		if _, ok := names[volume.Name]; ok {
-			return fmt.Errorf("duplicate volume name %q", volume.Name)
-		}
-		names[volume.Name] = struct{}{}
-		if !filepath.IsAbs(volume.Path) {
-			return fmt.Errorf("volume %q path must be absolute", volume.Name)
-		}
-		if other, ok := paths[filepath.Clean(volume.Path)]; ok {
-			return fmt.Errorf("volume %q shares its path with volume %q: admission is keyed by name", volume.Name, other)
-		}
-		paths[filepath.Clean(volume.Path)] = volume.Name
-		if !types.ValidDirectIO(volume.DirectIO) {
-			return fmt.Errorf("volume %q directio must be on, off, or auto, got %q", volume.Name, volume.DirectIO)
-		}
+		c.VolumeRoots[i] = filepath.Clean(root)
 	}
-	return nil
+	return ValidateVolumeCatalog(c.Volumes)
 }
 
 func (c *Config) validatePreview() error {
@@ -633,6 +620,32 @@ func (c *Config) validateMetaStore() error {
 		return fmt.Errorf("meta_store.cell %q must match %s", ms.Cell, types.NameRe)
 	case c.APIToken == "":
 		return fmt.Errorf("meta_store needs api_token: the tenant API is root-only")
+	}
+	return nil
+}
+
+// ValidateVolumeCatalog checks the shared static and runtime catalog rules without I/O.
+func ValidateVolumeCatalog(volumes []VolumeSpec) error {
+	names := make(map[string]struct{}, len(volumes))
+	paths := make(map[string]string, len(volumes))
+	for _, volume := range volumes {
+		if !types.ValidVolumeName(volume.Name) {
+			return fmt.Errorf("volume name %q must match %s and not start with cocoon-", volume.Name, types.VolumeNameRe)
+		}
+		if _, ok := names[volume.Name]; ok {
+			return fmt.Errorf("duplicate volume name %q", volume.Name)
+		}
+		names[volume.Name] = struct{}{}
+		if !filepath.IsAbs(volume.Path) {
+			return fmt.Errorf("volume %q path must be absolute", volume.Name)
+		}
+		if other, ok := paths[filepath.Clean(volume.Path)]; ok {
+			return fmt.Errorf("volume %q shares its path with volume %q: admission is keyed by name", volume.Name, other)
+		}
+		paths[filepath.Clean(volume.Path)] = volume.Name
+		if !types.ValidDirectIO(volume.DirectIO) {
+			return fmt.Errorf("volume %q directio must be on, off, or auto, got %q", volume.Name, volume.DirectIO)
+		}
 	}
 	return nil
 }

@@ -22,7 +22,7 @@ func TestSettledVolumesDoNotCallDevicesOrResolveCatalog(t *testing.T) {
 	if _, err := m.SetVolumes(t.Context(), sb.ID, sb.Tenant, []types.Volume{{Name: "data"}}); err != nil {
 		t.Fatal(err)
 	}
-	delete(m.volumes, "data")
+	delete(m.catalog.entries, "data")
 	before := len(eng.volumeSpecs)
 	if _, err := m.SetVolumes(t.Context(), sb.ID, sb.Tenant, []types.Volume{{Name: "data"}, {Name: "other"}}); err != nil {
 		t.Fatal(err)
@@ -57,9 +57,8 @@ func TestRemovedTenantRetainsAndRepairsHeldVolumes(t *testing.T) {
 		t.Fatal("expected detaching state")
 	}
 	eng.detachVolumeErr = nil
-	entry := m.volumes["data"]
+	entry := m.catalog.entries["data"]
 	entry.tenants = []string{"other-tenant"}
-	m.volumes["data"] = entry
 	if _, err := m.SetVolumes(t.Context(), sb.ID, "", []types.Volume{{Name: "data"}}); err != nil {
 		t.Fatalf("held repair checked new authorization: %v", err)
 	}
@@ -330,12 +329,9 @@ func TestVolumeHoldsRejectCaptureBeforeTrim(t *testing.T) {
 					t.Fatal(err)
 				}
 				m.mu.Lock()
-				err = m.reserveVolumes(held)
+				m.adoptVolumes(held)
 				run.holds = held
 				m.mu.Unlock()
-				if err != nil {
-					t.Fatal(err)
-				}
 				defer m.finishVolumeRun(sb, run)
 			}
 			if _, err := m.Checkpoint(t.Context(), sb.ID, Cred{Token: sb.Token}, "blocked", ""); !errors.Is(err, ErrVolumeCapture) {

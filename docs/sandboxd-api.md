@@ -8,8 +8,8 @@ All bodies are JSON. Three token kinds:
   preview mint) and the tenant-scoped listings/deletes below; everything a
   tenant creates is stamped with its name. Operator surfaces
   (the per-id sandbox reads, `PUT /v1/sandboxes/{id}/instance-metadata`, `GET /v1/info`,
-  `PUT /v1/pools`, `POST/DELETE /v1/drain`, `GET /metrics`,
-  `GET /v1/checkpoints/{id}/blob`)
+  `PUT /v1/pools`, `PUT/DELETE /v1/volumes/{name}`, `POST/DELETE /v1/drain`,
+  `GET /metrics`, `GET /v1/checkpoints/{id}/blob`)
   answer a tenant token `403` — authenticated but not authorized; an unknown
   token stays `401`. On a node with a shared
   [`meta_store`](deploy.md#shared-tenant-database), a tenant token the node
@@ -255,6 +255,70 @@ list; the field is emitted (as `true`) only for a writable entry this node
 declares and omitted otherwise (peer-only rows never carry it), so a read-only
 entry's response is byte-identical to v1.
 
+## PUT /v1/volumes/{name}
+
+Requires the configured root API token. A tenant token or a node without an
+`api_token` returns 403. Sandbox, unknown, and missing tokens return 401 when
+`api_token` is configured. The URL supplies the name. Unknown body fields,
+duplicate fields, and trailing JSON return 400.
+
+```json
+{"path": "/srv/datasets/data.img", "directio": "off",
+ "writable": false, "tenants": ["acme"]}
+```
+
+- `name` matches `[a-z][a-z0-9_-]{0,19}` and cannot start with `cocoon-`.
+- `path` uses static config's absolute-path validation. When the node sets
+  [`volume_roots`](deploy.md#configuration), the cleaned path must equal or sit
+  under one of them. Registration does not open the backing or check its type
+  or availability. A missing backing keeps its registration but cannot be
+  attached.
+- `directio` is `on`, `off`, or `auto`, and defaults to `off`.
+- `writable` defaults to `false` and controls writable claim admission.
+- `tenants` is the entry's [access list](#volume-access-lists).
+
+Success is 204. An identical normalized registration is idempotent. A different
+binding, changed fields, or a static name or cleaned path collision returns 409.
+Invalid fields return 400. GET keeps its existing projection without host paths
+or tenant lists. Runtime entries support the existing live volume API.
+
+Persistence failure returns 503 with `Retry-After`. Retry the same request;
+after a restart, either state can load.
+
+The node stores metadata in `data_dir/runtime-volumes.json` independently of
+`sync_claims` and loads it before claim recovery. New records use mode 0600.
+Malformed or conflicting metadata, including a saved path outside `volume_roots`,
+prevents startup. The catalog is node-local with one sandboxd writer.
+
+Sandboxd does not create, check, or delete backings. Keep them outside its
+cleanup directories: `<data_dir>/readers`, `<data_dir>/goldens`, and
+`<data_dir>/fork-*`.
+
+### Volume access lists
+
+Static and runtime entries share one `tenants` rule. An omitted or empty list
+permits every authenticated scope. A nonempty list permits only claims owned
+by the listed tenants, and root-owned claims can use any entry. Live additions
+check the claim owner's list even when root sends the request; held names
+finish repair or removal without a new grant. Runtime registration rejects
+tenant names that do not match the tenant API syntax. Static config preserves
+its supplied tenant lists. An invalid static name matches no tenant, so a
+nonempty list containing only invalid names permits no tenant. A valid name
+for a tenant that does not exist yet grants nothing until the tenant is created.
+
+## DELETE /v1/volumes/{name}
+
+Auth and name validation match PUT. Deletes only runtime registration metadata.
+Success, including an absent unreferenced name, is 204. Static names and names
+referenced by a claim, an in-flight operation, or cleanup return 409.
+DELETE always writes the absence, including when the name is already absent.
+Persistence failure returns 503 with `Retry-After`. Retry the same DELETE,
+even if GET no longer lists the name; a restart can restore the old registration.
+
+Before downgrading to a daemon without runtime registration, drain runtime
+references or supply equivalent static volume config and finish pending live
+volume changes.
+
 ## GET /v1/sandboxes/{id}/volumes
 
 Returns the persisted desired set (`volumes_want`), confirmed applied set
@@ -277,7 +341,8 @@ when the volume is in both sets, `pending` when desired but not yet confirmed,
 or `detaching` when applied but no longer desired. An interrupted device call
 can leave the actual guest state different from the confirmed set. A failed
 PUT or PATCH adds a top-level `error` naming the refusal, and the affected
-state may carry its own `error`. `converging` is true only while a request worker is running.
+state may carry its own `error`. `converging` is true while a request worker
+is running.
 `pending` with `converging: false` requires an explicit retry; there is no
 background convergence. GET retains the last safe per-volume error for the
 current daemon lifetime. After daemon restart, unfinished states report an

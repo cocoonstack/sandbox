@@ -94,14 +94,24 @@ rather than confirming existence, and operator surfaces answer tenants 403.
 
 The volume catalog is an operator-owned data boundary. A volume name and its
 access list must mean the same thing fleet-wide, although membership is
-node-local. An empty entry `tenants` list permits every authenticated scope; a
-nonempty list permits only those named tenants, while the root token always
-has access. Config load rejects an access-list name that is not a configured
-tenant. Claim lookup returns byte-identical errors for an unknown and a
-forbidden name, and catalog discovery filters before replying, so a tenant
-cannot enumerate restricted entries by probing. Gossip carries names only.
+node-local. Entry `tenants` lists follow the [access-list
+rule](sandboxd-api.md#volume-access-lists). Claim lookup returns byte-identical
+errors for an unknown and a forbidden name, and catalog discovery filters before
+replying, so a tenant cannot enumerate restricted entries by probing. Gossip
+carries names only.
 Neither gossip, discovery, persisted claims, usage events, nor the sandbox index
 exposes host image paths or access lists.
+
+Runtime [registration and unregistration](sandboxd-api.md#put-v1volumesname)
+require a configured root `api_token`;
+these endpoints return 403 when the token is unset. New catalog records use
+mode 0600. Reads and replacements use the daemon's filesystem permissions.
+Registration uses static configuration's path validation plus, when set, the
+[`volume_roots`](deploy.md#configuration) bound. It does not verify backing type
+or pin backing identity. Without
+`volume_roots` the root token can register any absolute host path, writable if
+requested, for every scope its [access list](sandboxd-api.md#volume-access-lists)
+permits. Protect the root token like host root, or set `volume_roots`.
 
 Read-only is integrity protection for the shared image, not confidentiality.
 Mounting a dataset into an egress-lane sandbox gives that sandbox an export path
@@ -116,8 +126,8 @@ immutable and publish a new name/path for new content.
 
 Changing a running claim's volumes needs the root token or the owning tenant's
 API token. A sandbox token cannot, so a guest holding its own sandbox token
-cannot attach another dataset, and every addition passes the same access list
-as a claim.
+cannot attach another dataset, and every addition passes the same
+[access list](sandboxd-api.md#volume-access-lists) as a claim.
 
 A writable entry (`writable: true`) adds a channel the read-only model does
 not have: whichever tenant is permitted to claim it `rw` changes what every

@@ -2482,6 +2482,8 @@ type checkpointClaimFunc func(string) (*types.Sandbox, error)
 type idActionFunc func(string) error
 
 type fakeManager struct {
+	registerVolume       func(context.Context, string, types.VolumeRegistration) error
+	unregisterVolume     func(context.Context, string) error
 	getVolumes           func(string, string) (types.SandboxVolumesResponse, error)
 	setVolumes           func(string, string, []types.Volume) (types.SandboxVolumesResponse, error)
 	patchVolumes         func(string, string, types.VolumePatch) (types.SandboxVolumesResponse, error)
@@ -2555,6 +2557,14 @@ type fakeManager struct {
 	sandboxByID        func(id string) (pool.SandboxSummary, bool)
 	draining           bool
 	reader             *fakeReader
+}
+
+func (f *fakeManager) RegisterVolume(ctx context.Context, name string, spec types.VolumeRegistration) error {
+	return f.registerVolume(ctx, name, spec)
+}
+
+func (f *fakeManager) UnregisterVolume(ctx context.Context, name string) error {
+	return f.unregisterVolume(ctx, name)
 }
 
 func (f *fakeManager) GetVolumes(id, tenant string) (types.SandboxVolumesResponse, error) {

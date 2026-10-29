@@ -22,6 +22,14 @@ type VolumeInfo struct {
 	Writable bool `json:"writable,omitzero"`
 }
 
+// VolumeRegistration binds a backing path to a runtime catalog name.
+type VolumeRegistration struct {
+	Path     string   `json:"path"`
+	DirectIO string   `json:"directio,omitempty"`
+	Writable bool     `json:"writable,omitzero"`
+	Tenants  []string `json:"tenants,omitempty"`
+}
+
 // VolumePatch is the wire body of PATCH /v1/sandboxes/{id}/volumes.
 type VolumePatch struct {
 	Add    []Volume `json:"add,omitzero"`
