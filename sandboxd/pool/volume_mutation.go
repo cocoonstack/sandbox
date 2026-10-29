@@ -56,7 +56,7 @@ func (m *Manager) PatchVolumes(ctx context.Context, id, tenant string, patch typ
 			}
 			if i := volumeIndex(current, v.Name); i >= 0 {
 				if current[i] != v {
-					return nil, fmt.Errorf("%w: volume %q already has a different mount or mode", ErrBadVolume, v.Name)
+					return nil, fmt.Errorf("%w: volume %q already has a different mount, mode, or attach_only", ErrBadVolume, v.Name)
 				}
 			} else {
 				current = append(current, v)
@@ -264,27 +264,10 @@ func (m *Manager) prepareVolumeTarget(ctx context.Context, sb *types.Sandbox, ru
 func (m *Manager) stageVolumeTarget(ctx context.Context, sb *types.Sandbox, run *volumeRun, target, additions []types.Volume, resolved []resolvedVolume) (claimSnapshot, bool, error) {
 	sb.Transition.Lock()
 	defer sb.Transition.Unlock()
-	if err := func() error {
-		m.mu.Lock()
-		defer m.mu.Unlock()
-		if err := m.checkVolumeRunLocked(ctx, sb, run); err != nil {
-			return err
-		}
-		if sb.OnExpire == types.ExpireArchive && len(target) > 0 {
-			return ErrVolumeCapture
-		}
-		if slices.ContainsFunc(additions, types.Volume.RW) {
-			if err := m.liveWriterErrorLocked(sb); err != nil {
-				return err
-			}
-		}
-		if err := m.checkResolvedLocked(resolved); err != nil {
-			return err
-		}
-		m.adoptVolumes(additions)
-		run.holds = append(run.holds, additions...)
-		return nil
-	}(); err != nil {
+	m.mu.Lock()
+	err := m.holdLiveAdditionsLocked(ctx, sb, run, target, additions, resolved)
+	m.mu.Unlock()
+	if err != nil {
 		return claimSnapshot{}, false, err
 	}
 	cleanErr := m.confirmVolumesClean(resolved)
@@ -307,6 +290,26 @@ func (m *Manager) stageVolumeTarget(ctx context.Context, sb *types.Sandbox, run 
 	sb.Volumes = slices.DeleteFunc(slices.Clone(sb.Volumes), replaced)
 	sb.VolumesWant = slices.Clone(target)
 	return m.store.set(sb), true, nil
+}
+
+func (m *Manager) holdLiveAdditionsLocked(ctx context.Context, sb *types.Sandbox, run *volumeRun, target, additions []types.Volume, resolved []resolvedVolume) error {
+	if err := m.checkVolumeRunLocked(ctx, sb, run); err != nil {
+		return err
+	}
+	if sb.OnExpire == types.ExpireArchive && len(target) > 0 {
+		return ErrVolumeCapture
+	}
+	if slices.ContainsFunc(additions, types.Volume.RW) {
+		if err := m.liveWriterErrorLocked(sb); err != nil {
+			return err
+		}
+	}
+	if err := m.checkResolvedLocked(resolved); err != nil {
+		return err
+	}
+	m.adoptVolumes(additions)
+	run.holds = append(run.holds, additions...)
+	return nil
 }
 
 func (m *Manager) liveWriterErrorLocked(sb *types.Sandbox) error {
@@ -473,7 +476,7 @@ func validateLiveTarget(held, target []types.Volume) error {
 	for _, v := range held {
 		i := volumeIndex(target, v.Name)
 		if i >= 0 && target[i] != v {
-			return fmt.Errorf("%w: remove volume %q before changing its mount or mode", ErrBadVolume, v.Name)
+			return fmt.Errorf("%w: remove volume %q before changing its mount, mode, or attach_only", ErrBadVolume, v.Name)
 		}
 	}
 	return nil

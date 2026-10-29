@@ -375,7 +375,7 @@ with `on_expire: archive` must change that policy before adding a volume.
 New live writable attachments require a non-replicating pool, including a
 promoted template's source pool. A replicating pool returns 409 before changing
 intent, holds, or devices. Initial claim-time writable volumes remain supported.
-An existing or pending replica, or this claim's unacknowledged checkpoint
+An existing or pending replica, a pending archive, or this claim's unacknowledged checkpoint
 retirement, returns 503 with `Retry-After`. A replica or archive intent left
 with `archive_failover` disabled returns 409 because it cannot retire through
 the registry. A retained local checkpoint reference alone still returns 503.
@@ -418,7 +418,8 @@ Attach-only writers have no automatic dirty-marker protection. The caller owns
 mounting, flushing, unmounting, recovery, and fencing before reuse.
 
 The per-entry field requires coordinated daemon and SDK releases. Older daemons
-can ignore `attach_only` in claims, and older Python SDKs reject the field when
+ignore `attach_only` in claims and reject it in live PUT and PATCH with 400.
+Older Python SDKs reject the field when
 returned descriptors are reused in requests. Responses without the field do
 not safely roundtrip attach-only intent through new clients. The server still
 accepts the legacy claim-wide request flag and normalizes old persisted empty

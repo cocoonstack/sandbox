@@ -83,7 +83,6 @@ func WithVolumes(volumes ...Volume) Option {
 }
 
 // WithVolumesAttachOnly is the legacy claim-wide form of Volume.AttachOnly.
-// Callers mount, flush, and unmount devices; release does not sync them.
 func WithVolumesAttachOnly() Option {
 	return func(r *claimRequest) { r.VolumesAttachOnly = true }
 }

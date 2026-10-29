@@ -45,14 +45,15 @@ func (r ClaimRequest) Key() types.PoolKey {
 }
 
 func (r ClaimRequest) normalizedVolumes() ([]types.Volume, error) {
+	if !r.VolumesAttachOnly {
+		return types.ValidateVolumes(r.Volumes)
+	}
+	if len(r.Volumes) == 0 {
+		return nil, errors.New("volumes_attach_only requires at least one volume")
+	}
 	volumes := slices.Clone(r.Volumes)
-	if r.VolumesAttachOnly {
-		if len(volumes) == 0 {
-			return nil, errors.New("volumes_attach_only requires at least one volume")
-		}
-		for i := range volumes {
-			volumes[i].AttachOnly = true
-		}
+	for i := range volumes {
+		volumes[i].AttachOnly = true
 	}
 	return types.ValidateVolumes(volumes)
 }

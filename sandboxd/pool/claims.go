@@ -118,7 +118,7 @@ func (s *claimStore) load() (map[string]*types.Sandbox, error) {
 	for _, sb := range claims {
 		for _, volumes := range [][]types.Volume{sb.Volumes, sb.VolumesWant} {
 			for i := range volumes {
-				volumes[i].AttachOnly = volumes[i].AttachOnly || volumes[i].Mount == ""
+				volumes[i].AttachOnly = volumes[i].Mount == ""
 			}
 		}
 		if sb.VolumesWant == nil {

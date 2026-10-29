@@ -62,25 +62,24 @@ func (e *Engine) MountLiveVolume(ctx context.Context, vsockSocket, name, mount s
 	return e.mountDevice(ctx, vsockSocket, device, name, mount, rw)
 }
 
-// DetachVolume returns cleanRW only after normally unmounting the exact whole-device
-// mount with writable mount and superblock options, no residual mounts, and successful host detach.
-func (e *Engine) DetachVolume(ctx context.Context, vmName, vsockSocket, name, mount string) (cleanRW bool, err error) {
+// DetachVolume unmounts and detaches a guest volume; true means a writable mount closed cleanly.
+func (e *Engine) DetachVolume(ctx context.Context, vmName, vsockSocket, name, mount string) (bool, error) {
 	ctx, cancel := context.WithTimeout(ctx, VolumeMutationTimeout)
 	defer cancel()
 	device, found, err := e.findVolumeDevice(ctx, vsockSocket, name)
 	if err != nil {
 		return false, err
 	}
-	normal := false
+	clean := false
 	if found {
-		if normal, err = e.unmountLiveVolume(ctx, vsockSocket, device, mount); err != nil {
+		if clean, err = e.unmountLiveVolume(ctx, vsockSocket, device, mount); err != nil {
 			return false, err
 		}
 	}
 	if _, err = e.run(ctx, "vm", "disk", "detach", vmName, argName, name); err != nil {
 		return false, err
 	}
-	return normal, nil
+	return clean, nil
 }
 
 func (e *Engine) unmountLiveVolume(ctx context.Context, vsockSocket, device, mount string) (bool, error) {
@@ -93,7 +92,7 @@ func (e *Engine) unmountLiveVolume(ctx context.Context, vsockSocket, device, mou
 	}
 	target := e.resolveMount(ctx, vsockSocket, mount, mounts)
 	atTarget := slices.DeleteFunc(mounts, func(m volumeMount) bool { return m.path != target })
-	normal := false
+	clean := false
 	if len(atTarget) == 1 && atTarget[0].devNum == devNum && atTarget[0].root == "/" {
 		if err = e.UnmountVolume(ctx, vsockSocket, mount); err != nil {
 			if _, ok := errors.AsType[*guestExitError](err); ok {
@@ -101,12 +100,12 @@ func (e *Engine) unmountLiveVolume(ctx context.Context, vsockSocket, device, mou
 			}
 			return false, err
 		}
-		normal = writableMountOptions(atTarget[0].options) && writableMountOptions(atTarget[0].superOptions)
+		clean = writableMountOptions(atTarget[0].options) && writableMountOptions(atTarget[0].superOptions)
 	}
 	if err = e.refuseOtherMounts(ctx, vsockSocket, device); err != nil {
 		return false, err
 	}
-	return normal, nil
+	return clean, nil
 }
 
 func (e *Engine) volumeMounts(ctx context.Context, vsockSocket, device string) (string, []volumeMount, error) {
@@ -178,7 +177,13 @@ func parseVolumeMounts(raw string) ([]volumeMount, error) {
 		if !ok || len(fields) < 6 || len(fsFields) != 3 || fsFields[0] == "" || fsFields[2] == "" {
 			return nil, errors.New("invalid guest mountinfo")
 		}
-		mounts = append(mounts, volumeMount{fields[2], mountUnescaper.Replace(fields[3]), mountUnescaper.Replace(fields[4]), fields[5], fsFields[2]})
+		mounts = append(mounts, volumeMount{
+			devNum:       fields[2],
+			root:         mountUnescaper.Replace(fields[3]),
+			path:         mountUnescaper.Replace(fields[4]),
+			options:      fields[5],
+			superOptions: fsFields[2],
+		})
 	}
 	return mounts, nil
 }
