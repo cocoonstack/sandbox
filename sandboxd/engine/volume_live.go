@@ -82,10 +82,10 @@ func (e *Engine) UnmountVolume(ctx context.Context, vsockSocket, name, mount str
 	if err != nil || !found {
 		return false, err
 	}
-	return e.unmountLiveVolume(ctx, vsockSocket, device, mount)
+	return e.unmountDevice(ctx, vsockSocket, device, mount)
 }
 
-func (e *Engine) unmountLiveVolume(ctx context.Context, vsockSocket, device, mount string) (bool, error) {
+func (e *Engine) unmountDevice(ctx context.Context, vsockSocket, device, mount string) (bool, error) {
 	if mount == "" {
 		return false, e.refuseOtherMounts(ctx, vsockSocket, device)
 	}
