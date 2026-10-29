@@ -64,7 +64,6 @@ func (m *Manager) adoptArchived(ctx context.Context, id, token string) (bool, er
 		m.mu.Unlock()
 		return m.adoptHeld(ctx, cur, epoch), nil
 	}
-	m.adoptVolumes(heldVolumes(sb))
 	m.addClaimLocked(sb)
 	js := m.store.set(sb)
 	m.mu.Unlock()
@@ -420,10 +419,6 @@ func (m *Manager) forgetClaim(ctx context.Context, sb *types.Sandbox) ([]types.V
 		return nil, false
 	}
 	holds := m.cancelVolumeRun(sb)
-	if sb.ArchiveCk != "" {
-		m.releaseVolumes(holds)
-		holds = nil
-	}
 	m.dropClaimLocked(sb)
 	js := m.store.del(sb.ID)
 	m.mu.Unlock()
