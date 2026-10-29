@@ -108,13 +108,7 @@ func (m *Manager) changeVolumes(ctx context.Context, id, tenant string, change v
 	if err != nil {
 		return view, err
 	}
-	m.mu.Lock()
-	err = m.checkVolumeRunLocked(ctx, sb, run)
-	if err == nil && slices.ContainsFunc(additions, types.Volume.RW) {
-		err = m.liveWriterErrorLocked(sb)
-	}
-	m.mu.Unlock()
-	if err != nil {
+	if err = m.checkVolumeRun(ctx, sb, run); err != nil {
 		return view, err
 	}
 	sb.Touch()
@@ -299,29 +293,11 @@ func (m *Manager) holdLiveAdditionsLocked(ctx context.Context, sb *types.Sandbox
 	if sb.OnExpire == types.ExpireArchive && len(target) > 0 {
 		return ErrVolumeCapture
 	}
-	if slices.ContainsFunc(additions, types.Volume.RW) {
-		if err := m.liveWriterErrorLocked(sb); err != nil {
-			return err
-		}
-	}
 	if err := m.checkResolvedLocked(resolved); err != nil {
 		return err
 	}
 	m.adoptVolumes(additions)
 	run.holds = append(run.holds, additions...)
-	return nil
-}
-
-func (m *Manager) liveWriterErrorLocked(sb *types.Sandbox) error {
-	if m.view.Load().poolReplicate[sb.PolicyKey()] > 0 {
-		return ErrReplicatingPool
-	}
-	if m.archives == nil && (sb.HasReplica() || sb.ArchivePending != "") {
-		return ErrReplicaStranded
-	}
-	if sb.HasReplica() || sb.ArchivePending != "" || m.store.hasCheckpointReferences(sb.ID) {
-		return ErrReplicaPresent
-	}
 	return nil
 }
 
@@ -337,19 +313,10 @@ func (m *Manager) detachVolumeRun(ctx context.Context, sb *types.Sandbox, run *v
 	if err != nil {
 		return fmt.Errorf("detach volume %q: %w", v.Name, err)
 	}
-	clearMarker := needsUnmount(v) && cleanRW && entry != nil
-	hold := [1]types.Volume{v}
-	m.mu.Lock()
-	err = m.checkVolumeRunLocked(ctx, sb, run)
-	if err == nil && clearMarker {
-		m.adoptVolumes(hold[:])
-	}
-	m.mu.Unlock()
-	if err != nil {
+	if err = m.checkVolumeRun(ctx, sb, run); err != nil {
 		return err
 	}
-	if clearMarker {
-		defer m.unreserveVolumes(hold[:])
+	if needsUnmount(v) && cleanRW && entry != nil {
 		if err = clearVolumeDirty(entry.disk.Path); err != nil {
 			return fmt.Errorf("clear dirty marker for volume %q: %w", v.Name, err)
 		}

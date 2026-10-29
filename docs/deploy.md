@@ -734,7 +734,7 @@ idle-time and expiry-triggered archives. Before setting `archive_failover` to `f
 
 The public API omits replica journal fields. A fixed delay or an absence of
 warnings does not prove retirement. Disabling failover first stops replica
-retirement and leaves residual references that reject new live RW attachments.
+retirement and leaves residual references.
 A local archive can still wake and clear `archive_ck`, but that does not clear a
 retained `replica_pending` or retire an old shared row. Release can remove local
 state without reconciling that row. Re-enabling failover against stale rows can

@@ -379,6 +379,7 @@ func TestQuiesceVolumesSkipsAttachOnlyEntries(t *testing.T) {
 			{Name: "mounted", Mount: "/volumes/mounted", Mode: types.VolumeModeRW},
 		},
 	}
+	eng.volumeMounts = sb.Volumes[1:]
 
 	td := m.quiesceVolumes(t.Context(), sb)
 

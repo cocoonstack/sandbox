@@ -196,6 +196,23 @@ func TestWritableClaimMarksDirtyBeforeAttachAndClearsOnRelease(t *testing.T) {
 	}
 }
 
+func TestReleaseKeepsMarkerAfterUncleanUnmount(t *testing.T) {
+	path := writeVolumeImage(t, "scratch.img", "data")
+	eng := newFakeEngine()
+	m := newVolumeManager(t, eng, []config.VolumeSpec{{Name: "scratch", Path: path, Writable: true}})
+	sb, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Volumes: []types.Volume{{Name: "scratch", Mode: types.VolumeModeRW}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	eng.detachUnclean = true
+	if err := m.Release(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
+		t.Fatal(err)
+	}
+	if !volumeDirty(path) {
+		t.Error("release cleared the marker after an unclean unmount")
+	}
+}
+
 func TestClaimRejectsWriteOnReadOnlyEntry(t *testing.T) {
 	readOnly := writeVolumeImage(t, "data.img", "data")
 	writable := writeVolumeImage(t, "scratch.img", "scratch")
@@ -434,6 +451,7 @@ func TestRollbackQuiescesWritableVolumesBeforeRemoval(t *testing.T) {
 			ID: "sb_rw", VMName: "sbx-rw", Key: testKey, VsockSocket: "/vsock/rw",
 			Volumes: []types.Volume{{Name: "scratch", Mount: "/volumes/scratch", Mode: types.VolumeModeRW}},
 		}
+		eng.volumeMounts = sb.Volumes
 		m.mu.Lock()
 		m.claimed[sb.ID] = sb
 		m.adoptVolumes(sb.Volumes)

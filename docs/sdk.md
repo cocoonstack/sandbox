@@ -262,7 +262,7 @@ can independently use `Mode: "rw"` and `AttachOnly: true`. The SDK preserves
 these fields directly and leaves name, mode, and mount policy to sandboxd.
 Use matching daemon and SDK releases for attach-only GET-to-PUT retries.
 See the [live volume contract](sandboxd-api.md#put-v1sandboxesidvolumes) for
-writer exclusion, replica refusals, and dirty-marker limits.
+writer exclusion and dirty-marker limits.
 
 Each response contains `volumes_want`, `volumes`, `states`, and `converging`.
 Go exposes them as `SandboxVolumesResponse.VolumesWant`, `.Volumes`, `.States`,

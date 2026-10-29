@@ -62,24 +62,27 @@ func (e *Engine) MountLiveVolume(ctx context.Context, vsockSocket, name, mount s
 	return e.mountDevice(ctx, vsockSocket, device, name, mount, rw)
 }
 
-// DetachVolume unmounts and detaches a guest volume; true means a writable mount closed cleanly.
+// DetachVolume runs UnmountVolume, then detaches the disk from the VM.
 func (e *Engine) DetachVolume(ctx context.Context, vmName, vsockSocket, name, mount string) (bool, error) {
 	ctx, cancel := context.WithTimeout(ctx, VolumeMutationTimeout)
 	defer cancel()
-	device, found, err := e.findVolumeDevice(ctx, vsockSocket, name)
+	clean, err := e.UnmountVolume(ctx, vsockSocket, name, mount)
 	if err != nil {
 		return false, err
-	}
-	clean := false
-	if found {
-		if clean, err = e.unmountLiveVolume(ctx, vsockSocket, device, mount); err != nil {
-			return false, err
-		}
 	}
 	if _, err = e.run(ctx, "vm", "disk", "detach", vmName, argName, name); err != nil {
 		return false, err
 	}
 	return clean, nil
+}
+
+// UnmountVolume unmounts a guest volume; true means its writable whole-device mount closed cleanly.
+func (e *Engine) UnmountVolume(ctx context.Context, vsockSocket, name, mount string) (bool, error) {
+	device, found, err := e.findVolumeDevice(ctx, vsockSocket, name)
+	if err != nil || !found {
+		return false, err
+	}
+	return e.unmountLiveVolume(ctx, vsockSocket, device, mount)
 }
 
 func (e *Engine) unmountLiveVolume(ctx context.Context, vsockSocket, device, mount string) (bool, error) {
@@ -94,7 +97,7 @@ func (e *Engine) unmountLiveVolume(ctx context.Context, vsockSocket, device, mou
 	atTarget := slices.DeleteFunc(mounts, func(m volumeMount) bool { return m.path != target })
 	clean := false
 	if len(atTarget) == 1 && atTarget[0].devNum == devNum && atTarget[0].root == "/" {
-		if err = e.UnmountVolume(ctx, vsockSocket, mount); err != nil {
+		if err = e.umountVolume(ctx, vsockSocket, mount); err != nil {
 			if _, ok := errors.AsType[*guestExitError](err); ok {
 				return false, &VolumeMountConflict{Message: fmt.Sprintf("cannot unmount %q; close guest references and retry", mount)}
 			}

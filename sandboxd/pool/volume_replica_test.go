@@ -2,7 +2,6 @@ package pool
 
 import (
 	"errors"
-	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -99,93 +98,6 @@ func TestReplicaCaptureRefusesPendingLiveWriter(t *testing.T) {
 	release()
 	if err = <-result; err != nil {
 		t.Fatalf("pending writer did not complete: %v", err)
-	}
-}
-
-func TestLiveWriterAdmissionAgainstReplicaState(t *testing.T) {
-	for _, tc := range []struct {
-		name    string
-		prepare func(*testing.T, *Manager, *types.Sandbox)
-		want    error
-	}{
-		{"replicating pool", func(*testing.T, *Manager, *types.Sandbox) {}, ErrReplicatingPool},
-		{"source pool replicates", func(_ *testing.T, _ *Manager, sb *types.Sandbox) {
-			sb.PolicySource = testKey
-			sb.Key.Template = "promoted:template"
-		}, ErrReplicatingPool},
-		{"source pool does not replicate", func(_ *testing.T, _ *Manager, sb *types.Sandbox) {
-			sb.PolicySource = testKey
-			sb.PolicySource.Template = "other:template"
-		}, nil},
-		{"published replica", func(t *testing.T, m *Manager, sb *types.Sandbox) { disableReplication(m); replicateNow(t, m, sb) }, ErrReplicaPresent},
-		{"pending replica", func(_ *testing.T, m *Manager, sb *types.Sandbox) {
-			disableReplication(m)
-			sb.ReplicaPending = "pending"
-			m.store.set(sb)
-		}, ErrReplicaPresent},
-		{"registry disabled", func(t *testing.T, m *Manager, sb *types.Sandbox) {
-			disableReplication(m)
-			replicateNow(t, m, sb)
-			m.archives = nil
-		}, ErrReplicaStranded},
-		{"archive pending without registry", func(_ *testing.T, m *Manager, sb *types.Sandbox) {
-			disableReplication(m)
-			sb.ArchivePending = "pending"
-			m.archives = nil
-		}, ErrReplicaStranded},
-		{"unrelated checkpoint", func(t *testing.T, m *Manager, _ *types.Sandbox) {
-			disableReplication(m)
-			other := mustClaim(t, m, testKey)
-			other.ReplicaCk = "unrelated"
-			m.store.set(other)
-		}, nil},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			m, _ := newReplicaVolumeManager(t)
-			sb := mustClaim(t, m, testKey)
-			tc.prepare(t, m, sb)
-			before, ops := m.store.mark(), m.eng.(*fakeEngine).volumeOpsLog()
-			view, err := m.SetVolumes(t.Context(), sb.ID, "", []types.Volume{{Name: "data", Mode: types.VolumeModeRW, AttachOnly: true}})
-			if !errors.Is(err, tc.want) {
-				t.Fatalf("writer refusal = %v, want %v", err, tc.want)
-			}
-			if tc.want != nil && (len(view.VolumesWant) != 0 || len(view.Volumes) != 0 || view.Converging || m.store.mark() != before || volumeHoldersOf(m, "data") != (volumeHolders{}) || !slices.Equal(ops, m.eng.(*fakeEngine).volumeOpsLog())) {
-				t.Fatalf("refusal changed claim or device: %+v", view)
-			}
-		})
-	}
-}
-
-func TestInitialWriterAndRetiredReplicaAllowLiveWork(t *testing.T) {
-	m, _ := newReplicaVolumeManager(t)
-	sb, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Volumes: []types.Volume{{Name: "data", Mode: types.VolumeModeRW}}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err = m.SetVolumes(t.Context(), sb.ID, "", sb.Volumes); err != nil {
-		t.Fatalf("held writer retry: %v", err)
-	}
-	if _, err = m.SetVolumes(t.Context(), sb.ID, "", nil); err != nil {
-		t.Fatalf("writer cleanup: %v", err)
-	}
-	replicateNow(t, m, sb)
-	disableReplication(m)
-	m.store.recommitting.Store(true)
-	restore := failClaimWrites(t, m.store)
-	m.retireReplica(t.Context(), sb)
-	writer := []types.Volume{{Name: "data", Mode: types.VolumeModeRW}}
-	if sb.HasReplica() || !m.store.hasCheckpointReferences(sb.ID) {
-		t.Fatal("failed clear lost checkpoint uncertainty")
-	}
-	if _, err = m.SetVolumes(t.Context(), sb.ID, "", writer); !errors.Is(err, ErrReplicaPresent) {
-		t.Fatalf("unacknowledged retirement: %v", err)
-	}
-	restore()
-	if err = m.store.commit(m.store.mark()); err != nil {
-		t.Fatal(err)
-	}
-	if _, err = m.SetVolumes(t.Context(), sb.ID, "", writer); err != nil {
-		t.Fatalf("acknowledged retirement: %v", err)
 	}
 }
 

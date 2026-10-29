@@ -185,7 +185,7 @@ view = sb.set_volumes(volumes)
 
 The caller mounts, flushes, and unmounts attach-only devices. See the
 [live volume contract](sandboxd-api.md#put-v1sandboxesidvolumes) for
-writer exclusion, replica refusals, and dirty-marker limits.
+writer exclusion and dirty-marker limits.
 Each method takes `timeout=` (default: the client timeout, 120 s); a large
 replacement can need longer, and a call that times out cancels the server run,
 so retry the same target.

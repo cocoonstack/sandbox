@@ -136,15 +136,15 @@ func TestMountVolumeUsesSysfsAndRequestedMode(t *testing.T) {
 	}
 }
 
-func TestUnmountVolumeExecsBoundedUmount(t *testing.T) {
+func TestUmountVolumeExecsBoundedUmount(t *testing.T) {
 	if VolumeCallTimeout != 2*time.Second {
 		t.Fatalf("volume call timeout = %s, want 2s", VolumeCallTimeout)
 	}
 	path := sockPath(t)
 	fake := serveFakeSilkd(t, path)
 	e := New("cocoon", nil, nil, false, false, "")
-	if err := e.UnmountVolume(t.Context(), path, "/datasets/training"); err != nil {
-		t.Fatalf("UnmountVolume: %v", err)
+	if err := e.umountVolume(t.Context(), path, "/datasets/training"); err != nil {
+		t.Fatalf("umountVolume: %v", err)
 	}
 
 	fake.mu.Lock()
@@ -154,7 +154,7 @@ func TestUnmountVolumeExecsBoundedUmount(t *testing.T) {
 	}
 	fake.execCode, fake.execFailAt = 32, 2
 	fake.mu.Unlock()
-	err := e.UnmountVolume(t.Context(), path, "/datasets/training")
+	err := e.umountVolume(t.Context(), path, "/datasets/training")
 	if err == nil || !strings.Contains(err.Error(), "unmount volume /datasets/training") {
 		t.Errorf("got %v, want umount failure", err)
 	}

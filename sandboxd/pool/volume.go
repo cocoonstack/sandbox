@@ -228,7 +228,7 @@ func (m *Manager) applyVolume(ctx context.Context, sb *types.Sandbox, volume res
 	return nil
 }
 
-// quiesceVolumes unmounts a claim's writable mounts in reverse; a failed unmount keeps the marker.
+// quiesceVolumes unmounts a claim's writable mounts in reverse; an unclean unmount keeps the marker.
 func (m *Manager) quiesceVolumes(ctx context.Context, sb *types.Sandbox) volumeTeardown {
 	td := volumeTeardown{holds: heldVolumes(sb)}
 	mounts := writableMounts(sb.Volumes)
@@ -245,12 +245,13 @@ func (m *Manager) quiesceVolumes(ctx context.Context, sb *types.Sandbox) volumeT
 		if !needsUnmount(volume) {
 			continue // attach-only: no mount to bring down, VM removal closes the device
 		}
-		if err := m.eng.UnmountVolume(ctx, sb.VsockSocket, volume.Mount); err != nil {
+		clean, err := m.eng.UnmountVolume(ctx, sb.VsockSocket, volume.Name, volume.Mount)
+		if err != nil {
 			logger.Errorf(ctx, err, "unmount volume %s of %s", volume.Name, sb.ID)
 			stuck = true
 			continue
 		}
-		if entry, ok := catalog[volume.Name]; ok {
+		if entry, ok := catalog[volume.Name]; ok && clean {
 			td.clears = append(td.clears, entry.disk.Path)
 		}
 	}

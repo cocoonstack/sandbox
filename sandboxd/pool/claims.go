@@ -345,12 +345,6 @@ func (s *claimStore) checkpointReferences() map[string]struct{} {
 	return refs
 }
 
-func (s *claimStore) hasCheckpointReferences(owner string) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.refs[owner] != [4]string{} || len(s.retained[owner]) != 0
-}
-
 func encodeRow(dto *claimDTO) ([]byte, error) {
 	raw, err := json.Marshal(map[string]*claimDTO{dto.ID: dto})
 	if err != nil {
