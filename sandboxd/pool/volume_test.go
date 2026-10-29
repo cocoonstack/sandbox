@@ -607,7 +607,7 @@ func newVolumePoolManager(t *testing.T, eng *fakeEngine, dataDir string, volumes
 	return m
 }
 
-func writeVolumeImage(t *testing.T, name, content string) string {
+func writeVolumeImage(t testing.TB, name, content string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), name)
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {

@@ -1,8 +1,6 @@
 package pool
 
 import (
-	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/cocoonstack/sandbox/sandboxd/config"
@@ -45,11 +43,7 @@ func volumeBenchManager(b *testing.B) *Manager {
 	if err := m.store.save(m.claimed); err != nil {
 		b.Fatal(err)
 	}
-	path := filepath.Join(b.TempDir(), "data.raw")
-	if err := os.WriteFile(path, []byte("benchmark backing"), 0o600); err != nil {
-		b.Fatal(err)
-	}
-	if err := m.RegisterVolume(b.Context(), "bench-data", types.VolumeRegistration{Path: path}); err != nil {
+	if err := m.RegisterVolume(b.Context(), "bench-data", types.VolumeRegistration{Path: writeVolumeImage(b, "data.raw", "benchmark backing")}); err != nil {
 		b.Fatal(err)
 	}
 	return m
