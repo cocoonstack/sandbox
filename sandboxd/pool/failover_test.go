@@ -111,6 +111,67 @@ func TestFailoverOwnerWakeWithTheRegistryDownFailsClosed(t *testing.T) {
 	}
 }
 
+func TestFailoverLegacyVolumeTransferPreservesOtherReader(t *testing.T) {
+	c := newFailoverCluster(t)
+	b := c.node(t, "b", t.TempDir(), keepAnHour)
+	d := c.node(t, "d", t.TempDir(), keepAnHour)
+	backing := writeVolumeImage(t, "data", "volume bytes")
+	for _, m := range []*Manager{b, d} {
+		if err := m.RegisterVolume(t.Context(), "data", types.VolumeRegistration{Path: backing, Writable: true}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	raw, err := os.ReadFile("testdata/legacy-volume-replica.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixture struct {
+		Token  string
+		Record archives.Record
+	}
+	if err := json.Unmarshal(raw, &fixture); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.reg.Put(t.Context(), fixture.Record); err != nil {
+		t.Fatal(err)
+	}
+	c.expire(fixture.Record.Owner)
+	for range 2 {
+		if adopted, err := b.AdoptArchived(t.Context(), fixture.Record.ID, fixture.Token); err != nil || !adopted {
+			t.Fatalf("adopt recorded legacy row: adopted=%v err=%v", adopted, err)
+		}
+	}
+	writer := ClaimOptions{Volumes: []types.Volume{{Name: "data", Mode: types.VolumeModeRW}}}
+	if _, err := b.ClaimProvision(t.Context(), plainKey, writer); !errors.Is(err, ErrVolumeBusy) {
+		t.Fatalf("adopted reader failed to exclude writer: %v", err)
+	}
+	other, err := b.ClaimProvision(t.Context(), plainKey, ClaimOptions{Volumes: []types.Volume{{Name: "data"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.expire("b")
+	if adopted, err := d.AdoptArchived(t.Context(), fixture.Record.ID, fixture.Token); err != nil || !adopted {
+		t.Fatalf("transfer recorded row: adopted=%v err=%v", adopted, err)
+	}
+	for range 2 {
+		if err := b.Release(t.Context(), fixture.Record.ID, Cred{Token: fixture.Token}); !errors.Is(err, ErrUnknownSandbox) {
+			t.Fatalf("former owner release: %v", err)
+		}
+		if _, err := b.ClaimProvision(t.Context(), plainKey, writer); !errors.Is(err, ErrVolumeBusy) {
+			t.Fatalf("former owner released independent reader: %v", err)
+		}
+	}
+	if err := b.Release(t.Context(), other.ID, Cred{Token: other.Token}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.ClaimProvision(t.Context(), plainKey, writer); err != nil {
+		t.Fatalf("former owner leaked reader hold: %v", err)
+	}
+	if _, err := d.ClaimProvision(t.Context(), plainKey, writer); !errors.Is(err, ErrVolumeBusy) {
+		t.Fatalf("new owner failed to exclude writer: %v", err)
+	}
+}
+
 func TestFailoverAdoptionMovesTheClaimAndTheOldOwnerLetsGo(t *testing.T) {
 	c := newFailoverCluster(t)
 	a, b := c.node(t, "a", t.TempDir(), keepAnHour), c.node(t, "b", t.TempDir(), keepAnHour)

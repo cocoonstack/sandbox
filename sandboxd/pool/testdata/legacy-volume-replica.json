@@ -1,0 +1,15 @@
+{
+  "Source": "5cd5c4caa0b85e90489e62e25b8c8e7277040a78",
+  "Token": "6892970471eef08bd0c28f34aa10cb09",
+  "Record": {
+    "ID": "sb_9200d2ad82fc1f9c",
+    "Tenant": "",
+    "TokenSHA256": "eaf458d283c8c6fcf8f647f20336395939a074412bef97a19f9ca604caa977eb",
+    "Owner": "a",
+    "Epoch": 1,
+    "Consumed": false,
+    "Checkpoint": "ck_96a0c036f8fafaca",
+    "Deadline": "0001-01-01T00:00:00Z",
+    "Claim": {"id":"sb_9200d2ad82fc1f9c","vm_name":"","key":{"template":"rt:24.04","net":"none","size":"small"},"claimed_at":"2026-10-29T00:50:38.542878594Z","lease_seconds":300,"policy_layer":"pooled","volumes":[{"name":"data","mount":"/volumes/data"}],"archive_ck":"ck_96a0c036f8fafaca"}
+  }
+}
