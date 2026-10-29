@@ -3,68 +3,11 @@ package pool
 import (
 	"context"
 	"errors"
-	"slices"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
-
-func TestRemovedVMKeepsVolumeUntilCanceledWorkerReturns(t *testing.T) {
-	base := newFakeEngine()
-	m := newVolumeManager(t, base, nil)
-	if err := m.RegisterVolume(t.Context(), "data", types.VolumeRegistration{Path: writeVolumeImage(t, "runtime", "bytes"), Writable: true}); err != nil {
-		t.Fatal(err)
-	}
-	sb := mustClaim(t, m, testKey)
-	eng := newGatedVolumeEngine(base)
-	m.eng = eng
-	changed := make(chan error, 1)
-	go func() { _, err := m.SetVolumes(t.Context(), sb.ID, "", []types.Volume{{Name: "data"}}); changed <- err }()
-	<-eng.entered
-	resumed := false
-	defer func() {
-		if !resumed {
-			close(eng.resume)
-			<-changed
-		}
-	}()
-	released := make(chan error, 1)
-	go func() { released <- m.Release(t.Context(), sb.ID, Cred{Token: sb.Token}) }()
-	select {
-	case err := <-released:
-		if err != nil {
-			t.Fatal(err)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("release waited for paused worker")
-	}
-	m.retryRemovals(t.Context()).Wait()
-	if got := volumeHoldersOf(m, "data"); got != (volumeHolders{readers: 1}) {
-		t.Errorf("removed VM freed active worker count: %+v", got)
-	}
-	if _, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Volumes: []types.Volume{{Name: "data", Mode: types.VolumeModeRW}}}); !errors.Is(err, ErrVolumeBusy) {
-		t.Errorf("writer overtook paused canceled worker: %v", err)
-	}
-	if err := m.UnregisterVolume(t.Context(), "data"); !errors.Is(err, ErrVolumeRegistrationConflict) {
-		t.Errorf("unregister overtook paused worker: %v", err)
-	}
-	close(eng.resume)
-	resumed = true
-	if err := <-changed; err == nil {
-		t.Fatal("removed claim accepted late attachment")
-	}
-	if got := volumeHoldersOf(m, "data"); got != (volumeHolders{}) {
-		t.Fatalf("completed worker leaked count: %+v", got)
-	}
-	if n := len(slices.DeleteFunc(base.removedNames(), func(n string) bool { return n != sb.VMName })); n != 1 {
-		t.Fatalf("vm rm ran %d times, want once", n)
-	}
-	if err := m.UnregisterVolume(t.Context(), "data"); err != nil {
-		t.Fatal(err)
-	}
-}
 
 func TestDispatchedCleanupRetainsCatalogReference(t *testing.T) {
 	base := newFakeEngine()

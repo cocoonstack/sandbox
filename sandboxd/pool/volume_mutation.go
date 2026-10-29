@@ -19,10 +19,9 @@ const (
 type volumeEdit func([]types.Volume) ([]types.Volume, error)
 
 type volumeRun struct {
-	cancel   context.CancelFunc
-	done     chan struct{}
-	holds    []types.Volume
-	teardown []types.Volume
+	cancel context.CancelFunc
+	done   chan struct{}
+	holds  []types.Volume
 }
 
 // GetVolumes reads a claim's desired and applied volumes; a tenant reaches only its own claims.
@@ -201,7 +200,6 @@ func (m *Manager) finishVolumeRun(sb *types.Sandbox, run *volumeRun) types.Sandb
 	if m.claimed[sb.ID] == sb {
 		m.releaseVolumes(volumeDifference(run.holds, heldVolumes(sb)))
 	}
-	m.releaseVolumes(run.teardown)
 	delete(m.volumeRuns, sb)
 	view := m.volumeView(sb)
 	close(run.done)

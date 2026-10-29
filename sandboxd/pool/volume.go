@@ -38,7 +38,6 @@ type resolvedVolume struct {
 
 // volumeTeardown captures marker paths at quiesce time; a later config can re-point the entry.
 type volumeTeardown struct {
-	run    *volumeRun
 	holds  []types.Volume
 	clears []string
 }
@@ -233,14 +232,12 @@ func (m *Manager) applyVolume(ctx context.Context, sb *types.Sandbox, volume res
 
 // quiesceVolumes unmounts a claim's writable mounts in reverse; a failed unmount keeps the marker.
 func (m *Manager) quiesceVolumes(ctx context.Context, sb *types.Sandbox) volumeTeardown {
-	m.mu.Lock()
-	td := volumeTeardown{run: m.volumeRuns[sb], holds: heldVolumes(sb)}
-	catalog := m.catalog.entries
-	m.mu.Unlock()
+	td := volumeTeardown{holds: heldVolumes(sb)}
 	mounts := writableMounts(sb.Volumes)
 	if mounts == 0 {
 		return td
 	}
+	catalog := m.catalogSnapshot()
 	logger := log.WithFunc("pool.quiesceVolumes")
 	// cancellation-immune like removal: a caller hanging up must not skip the flush.
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), quiesceBudget(mounts))
@@ -270,25 +267,18 @@ func (m *Manager) quiesceVolumes(ctx context.Context, sb *types.Sandbox) volumeT
 	return td
 }
 
-// finishVolumeTeardown runs once the VM is gone; an in-flight volume run releases the holds instead.
+// finishVolumeTeardown runs only once the VM is gone, when its image lock is finally released.
 func (m *Manager) finishVolumeTeardown(ctx context.Context, td volumeTeardown) {
+	if len(td.holds) == 0 {
+		return
+	}
 	logger := log.WithFunc("pool.finishVolumeTeardown")
 	for _, path := range td.clears {
 		if err := clearVolumeDirty(path); err != nil {
 			logger.Errorf(ctx, err, "clear dirty marker %s", path)
 		}
 	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if td.run != nil {
-		select {
-		case <-td.run.done:
-		default:
-			td.run.teardown = append(td.run.teardown, td.holds...)
-			return
-		}
-	}
-	m.releaseVolumes(td.holds)
+	m.unreserveVolumes(td.holds)
 }
 
 // adoptVolumes counts volumes an adopted claim already holds; callers hold m.mu.
