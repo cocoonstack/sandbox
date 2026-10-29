@@ -10,6 +10,18 @@ import (
 )
 
 func TestSpliceCopiesThroughADoorConnInTheKernel(t *testing.T) {
+	for _, tt := range []struct {
+		name     string
+		noSplice bool
+	}{
+		{"splice", false},
+		{"no rx splice", true},
+	} {
+		t.Run(tt.name, func(t *testing.T) { testSpliceThroughDoor(t, tt.noSplice) })
+	}
+}
+
+func testSpliceThroughDoor(t *testing.T, noSplice bool) {
 	const total = 16 << 20
 	uln, err := net.Listen("unix", filepath.Join(t.TempDir(), "door"))
 	if err != nil {
@@ -62,13 +74,13 @@ func TestSpliceCopiesThroughADoorConnInTheKernel(t *testing.T) {
 	runtime.GC()
 	var before, after runtime.MemStats
 	runtime.ReadMemStats(&before)
-	up, down := splice(door, upstream)
+	up, down := splice(door, upstream, noSplice)
 	runtime.ReadMemStats(&after)
 	<-guestDone
 	if up != total || down != total {
 		t.Fatalf("moved %d up and %d down, want %d each", up, down, total)
 	}
-	if alloc := after.TotalAlloc - before.TotalAlloc; alloc >= 32<<10 {
+	if alloc := after.TotalAlloc - before.TotalAlloc; !noSplice && alloc >= 32<<10 {
 		t.Errorf("splice allocated %d bytes: a door conn fell back to buffered copies", alloc)
 	}
 }

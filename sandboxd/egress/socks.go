@@ -92,7 +92,7 @@ func (p *Proxy) serveSocks(ctx context.Context, conn net.Conn) {
 		return
 	}
 	_ = conn.SetDeadline(time.Time{})
-	sent, received := splice(conn, upstream)
+	sent, received := splice(conn, upstream, p.noSplice)
 	p.reportTransfer(ev, sent, received)
 }
 

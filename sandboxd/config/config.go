@@ -235,6 +235,7 @@ type Config struct {
 	RestoreMode types.RestoreMode `json:"restore_mode,omitempty"`
 	NoDirectIO  bool              `json:"no_direct_io,omitzero"`
 	NoBalloon   bool              `json:"no_balloon,omitzero"`
+	NoRxSplice  bool              `json:"no_rx_splice,omitzero"`
 	SyncClaims  bool              `json:"sync_claims,omitzero"`
 	VMMRestart  types.VMMRestart  `json:"vmm_restart,omitempty"`
 	// CocoondSocket is cocoon daemon's API socket; its event stream detects VMM exits without polling.

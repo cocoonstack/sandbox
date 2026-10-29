@@ -235,6 +235,7 @@ type Server struct {
 	advertise string
 	preview   *PreviewServer
 	reload    ConfigReloader
+	noSplice  bool
 
 	execBudget *semaphore.Weighted
 
@@ -270,6 +271,9 @@ func New(apiToken, advertise string, mgr Manager, dialer Dialer, placer Placer, 
 func (s *Server) SetConfigReload(f ConfigReloader) {
 	s.reload = f
 }
+
+// NoRxSplice copies client bytes to guests in user space; call it before serving.
+func (s *Server) NoRxSplice() { s.noSplice = true }
 
 // Handler builds the route table.
 func (s *Server) Handler() http.Handler {

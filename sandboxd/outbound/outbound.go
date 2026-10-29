@@ -48,6 +48,7 @@ type Options struct {
 	// LockNIC nft-locks egress-lane NICs, which only a node with bridges has.
 	LockNIC    bool
 	RecordEnds bool
+	NoRxSplice bool
 	// Dial, Verdict, Lock, Unlock and Sweep default to the internal-address guard and netfilter; tests swap them.
 	Dial    egress.DialFunc
 	Verdict VerdictFunc
@@ -123,6 +124,9 @@ func (h *Host) ArmProxy(ctx context.Context, sb *types.Sandbox) error {
 	proxy := egress.New(c, c, ca, c, func(ev egress.Event) { h.o.Record(evCtx, id, tenant, ev) }, sb)
 	if h.o.RecordEnds {
 		proxy.RecordEnds()
+	}
+	if h.o.NoRxSplice {
+		proxy.NoRxSplice()
 	}
 	if v.usageBytes {
 		proxy.OnTransfer(func(ev egress.Event, sent, received int64) { h.o.Transfer(evCtx, id, tenant, ev, sent, received) })
