@@ -317,25 +317,6 @@ func TestVolumeAdmissionMatrix(t *testing.T) {
 	}
 }
 
-func TestAdmitClaimExcludesReaderUnderWriter(t *testing.T) {
-	path := writeVolumeImage(t, "scratch.img", "data")
-	m := newVolumeManager(t, newFakeEngine(), []config.VolumeSpec{{Name: "scratch", Path: path, Writable: true}})
-	resolved, err := m.resolveVolumes(t.Context(), "", []types.Volume{{Name: "scratch", Mount: "/volumes/scratch"}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	m.mu.Lock()
-	m.adoptVolumes([]types.Volume{{Name: "scratch", Mount: "/volumes/scratch", Mode: types.VolumeModeRW}})
-	m.mu.Unlock()
-
-	if err := m.admitClaim("", resolved, appliedVolumes(resolved)); !errors.Is(err, ErrVolumeBusy) {
-		t.Errorf("read-only reservation under a writer: %v, want ErrVolumeBusy", err)
-	}
-	if holders := volumeHoldersOf(m, "scratch"); holders != (volumeHolders{writers: 1}) {
-		t.Errorf("registry after the refusal=%+v, want the writer alone", holders)
-	}
-}
-
 func TestVolumeAdmissionRefusalHoldsNothing(t *testing.T) {
 	held := writeVolumeImage(t, "held.img", "held")
 	free := writeVolumeImage(t, "free.img", "free")

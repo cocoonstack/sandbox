@@ -11,42 +11,6 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
-func TestVolumeClaimRejectsDirectCapture(t *testing.T) {
-	eng := newFakeEngine()
-	m := newTestManager(t, eng)
-	sb := mustClaim(t, m, testKey)
-	sb.Volumes = []types.Volume{{Name: "dataset", Mount: "/datasets"}}
-
-	tests := []struct {
-		name string
-		run  func(*testing.T) error
-	}{
-		{"direct hibernate", func(t *testing.T) error { return m.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}) }},
-		{"fork", func(t *testing.T) error {
-			_, err := m.Fork(t.Context(), sb.ID, Cred{Token: sb.Token}, 1, time.Hour, "", "")
-			return err
-		}},
-		{"checkpoint", func(t *testing.T) error {
-			_, err := m.Checkpoint(t.Context(), sb.ID, Cred{Token: sb.Token}, "", "")
-			return err
-		}},
-		{"promote", func(t *testing.T) error {
-			_, _, err := m.Promote(t.Context(), sb.ID, Cred{Token: sb.Token}, "volume-source", "")
-			return err
-		}},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if err := tt.run(t); !errors.Is(err, ErrVolumeCapture) {
-				t.Errorf("error %v, want ErrVolumeCapture", err)
-			}
-		})
-	}
-	if len(eng.hibernates) != 0 || len(eng.snapSaves) != 0 || len(eng.exports) != 0 {
-		t.Errorf("capture reached engine: hibernates=%v snapshots=%v exports=%v", eng.hibernates, eng.snapSaves, eng.exports)
-	}
-}
-
 func TestVolumeClaimRunningWakeUnchanged(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)

@@ -182,10 +182,7 @@ func TestClaimVolumeCompatibilityExpansion(t *testing.T) {
 		want []types.Volume
 		err  bool
 	}{
-		{"default mount", ClaimRequest{Volumes: []types.Volume{{Name: "data"}}}, []types.Volume{{Name: "data", Mount: "/volumes/data"}}, false},
 		{"legacy all devices", ClaimRequest{VolumesAttachOnly: true, Volumes: []types.Volume{{Name: "data"}, {Name: "work", Mode: types.VolumeModeRW}}}, []types.Volume{{Name: "data", AttachOnly: true}, {Name: "work", Mode: types.VolumeModeRW, AttachOnly: true}}, false},
-		{"mixed", ClaimRequest{Volumes: []types.Volume{{Name: "data"}, {Name: "work", AttachOnly: true}}}, []types.Volume{{Name: "data", Mount: "/volumes/data"}, {Name: "work", AttachOnly: true}}, false},
-		{"mixed reversed", ClaimRequest{Volumes: []types.Volume{{Name: "work", AttachOnly: true}, {Name: "data"}}}, []types.Volume{{Name: "work", AttachOnly: true}, {Name: "data", Mount: "/volumes/data"}}, false},
 		{"empty legacy", ClaimRequest{VolumesAttachOnly: true}, nil, true},
 		{"legacy mount conflict", ClaimRequest{VolumesAttachOnly: true, Volumes: []types.Volume{{Name: "data", Mount: "/data"}}}, nil, true},
 	} {

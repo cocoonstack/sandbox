@@ -713,33 +713,12 @@ The drain is not persisted — a restarted node serves again.
 
 ### Disabling archive failover
 
-Stop admitting claims that use `on_expire: archive`. Set the node and affected
-pools' `archive_after_seconds` to `0`, and use
-[`renew`](sandboxd-api.md#post-v1sandboxesidrenew) to switch existing active claims
-to `on_expire: destroy` while keeping their leases valid. These changes stop
-idle-time and expiry-triggered archives. Before setting `archive_failover` to `false`:
-
-1. Set every affected pool's `replicate_seconds` to `0` and restart its nodes
-   with failover and the registry still enabled. Keep the registry reachable
-   while replica retirement retries.
-2. Check each node's `<data_dir>/claims.json` for affected claims. Wait until
-   `replica_ck` and `replica_pending` are absent after successful journal writes.
-   Use `sync_claims: true` when completion must survive power loss.
-3. Wake or release existing registered archives while failover remains enabled.
-   Wait for `archive_pending` to clear in the journal. Verify that the affected
-   IDs have no rows in PostgreSQL's
-   `sandboxd_archives` table for your `meta_store.cell`. A consumed row is a
-   non-adoptable tombstone; wait for its cleanup retries to finish too.
-4. Set `archive_failover` to `false` and restart the nodes.
-
-The public API omits replica journal fields. A fixed delay or an absence of
-warnings does not prove retirement. Disabling failover first stops replica
-retirement and leaves residual references.
-A local archive can still wake and clear `archive_ck`, but that does not clear a
-retained `replica_pending` or retire an old shared row. Release can remove local
-state without reconciling that row. Re-enabling failover against stale rows can
-fence or drop a local claim if another node has adopted it. Resolve registry
-ownership before serving that claim again.
+Replicas and archive rows retire only through the registry. Before setting
+`archive_failover` to `false`, set the affected pools' `replicate_seconds` to
+`0` and restart with failover still on until the claims in `claims.json` carry
+no `replica_ck`, `replica_pending` or `archive_pending`. Rows left behind are
+not retired while failover is off, and turning it back on against them can
+fence or drop a local claim that another node has adopted.
 
 ### Shared tenant database
 

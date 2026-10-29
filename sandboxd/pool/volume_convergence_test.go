@@ -343,8 +343,11 @@ func TestVolumeHoldsRejectCaptureBeforeTrim(t *testing.T) {
 			if err := m.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); !errors.Is(err, ErrVolumeCapture) {
 				t.Fatalf("hibernate: %v", err)
 			}
-			if len(eng.trims) != 0 {
-				t.Fatalf("capture trimmed held volume: %v", eng.trims)
+			if _, err := m.Fork(t.Context(), sb.ID, Cred{Token: sb.Token}, 1, time.Hour, "", ""); !errors.Is(err, ErrVolumeCapture) {
+				t.Fatalf("fork: %v", err)
+			}
+			if len(eng.trims) != 0 || len(eng.hibernates) != 0 || len(eng.snapSaves) != 0 || len(eng.exports) != 0 {
+				t.Fatalf("capture reached the engine: trims=%v hibernates=%v snapshots=%v exports=%v", eng.trims, eng.hibernates, eng.snapSaves, eng.exports)
 			}
 		})
 	}
