@@ -381,7 +381,7 @@ func (m *Manager) admitVolumes(tenant string, volumes []resolvedVolume) ([]types
 	return applied, nil
 }
 
-// admitClaim refuses a busy volume or an over-quota tenant before any VM is built.
+// admitClaim refuses a busy or retired volume or an over-quota tenant before any VM is built.
 func (m *Manager) admitClaim(tenant string, volumes []resolvedVolume, applied []types.Volume) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
