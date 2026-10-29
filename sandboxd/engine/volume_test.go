@@ -226,6 +226,38 @@ func TestMountVolumeWaitsForDelayedDevNode(t *testing.T) {
 	}
 }
 
+func TestMountVolumeRetriesUntilTheDeviceOpens(t *testing.T) {
+	path := sockPath(t)
+	fake := serveFakeSilkd(t, path)
+	configureVolumeDevices(fake)
+	fake.mu.Lock()
+	fake.notReady = 2
+	fake.mu.Unlock()
+	if err := New("cocoon", nil, nil, false, false, "").MountVolume(t.Context(), path, "imagenet", "/datasets/training", false); err != nil {
+		t.Fatalf("MountVolume: %v", err)
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if mounts := len(fake.execCalls) - 1; mounts != 3 {
+		t.Fatalf("mount attempts = %d, want 3: %v", mounts, fake.execCalls)
+	}
+}
+
+func TestMountVolumeNotReadyUntilDeadlineReportsTheTimeout(t *testing.T) {
+	path := sockPath(t)
+	fake := serveFakeSilkd(t, path)
+	configureVolumeDevices(fake)
+	fake.mu.Lock()
+	fake.notReady = 1 << 20
+	fake.mu.Unlock()
+	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+	defer cancel()
+	err := New("cocoon", nil, nil, false, false, "").MountVolume(ctx, path, "imagenet", "/datasets/training", false)
+	if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "mount volume imagenet") {
+		t.Fatalf("got %v, want the mount deadline", err)
+	}
+}
+
 func TestMountVolumeStopsAtFailedStage(t *testing.T) {
 	for _, tt := range []struct {
 		name     string

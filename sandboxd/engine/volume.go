@@ -144,10 +144,24 @@ func (e *Engine) mountDevice(ctx context.Context, vsockSocket, device, name, mou
 	if err := e.silkdExec(ctx, vsockSocket, "mkdir", "-p", "--", mount); err != nil {
 		return fmt.Errorf("create volume mount point %s: %w", mount, err)
 	}
-	if err := e.silkdExec(ctx, vsockSocket, "mount", "-o", mountMode(rw), "--", device, mount); err != nil {
-		return fmt.Errorf("mount volume %s: %w", name, err)
+	ticker := time.NewTicker(volumePollInterval)
+	defer ticker.Stop()
+	for {
+		err := e.silkdExec(ctx, vsockSocket, "mount", "-o", mountMode(rw), "--", device, mount)
+		switch {
+		case err == nil:
+			return nil
+		case ctx.Err() != nil:
+			return fmt.Errorf("mount volume %s: %w: %w", name, ctx.Err(), err)
+		case !deviceNotReady(err):
+			return fmt.Errorf("mount volume %s: %w", name, err)
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("mount volume %s: %w: %w", name, ctx.Err(), err)
+		case <-ticker.C:
+		}
 	}
-	return nil
 }
 
 func (e *Engine) diskAttachCopy(ctx context.Context, vmName, sourceFlag, source string) (string, error) {
@@ -178,6 +192,11 @@ func (e *Engine) diskAttachArgs(vmName string, spec VolumeSpec) ([]string, error
 		args = append(args, "--readonly")
 	}
 	return append(args, "--directio", directIO), nil
+}
+
+func deviceNotReady(err error) bool {
+	exit, ok := errors.AsType[*guestExitError](err)
+	return ok && strings.Contains(exit.output, "not a valid block device")
 }
 
 func isNotFound(err error) bool {
