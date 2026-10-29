@@ -105,7 +105,7 @@ exposes host image paths or access lists.
 Runtime [registration and unregistration](sandboxd-api.md#put-v1volumesname)
 require a configured root `api_token`;
 these endpoints return 403 when the token is unset. New catalog records use
-mode 0600. Reads and replacements use the daemon's filesystem permissions.
+mode 0600.
 Registration uses static configuration's path validation plus, when set, the
 [`volume_roots`](deploy.md#configuration) bound. It does not verify backing type
 or pin backing identity. Without

@@ -278,7 +278,9 @@ duplicate fields, and trailing JSON return 400.
 - `tenants` is the entry's [access list](#volume-access-lists).
 
 Success is 204. An identical normalized registration is idempotent. A different
-binding, changed fields, or a static name or cleaned path collision returns 409.
+binding, changed fields, a static name or cleaned path collision, or a name a
+claim still holds returns 409. Each change is an `op:"volumes"` audit record
+naming the volume added or removed.
 Invalid fields return 400. GET keeps its existing projection without host paths
 or tenant lists. Runtime entries support the existing live volume API.
 
@@ -297,27 +299,25 @@ cleanup directories: `<data_dir>/readers`, `<data_dir>/goldens`, and
 ### Volume access lists
 
 Static and runtime entries share one `tenants` rule. An omitted or empty list
-permits every authenticated scope. A nonempty list permits only claims owned
-by the listed tenants, and root-owned claims can use any entry. Live additions
-check the claim owner's list even when root sends the request; held names
-finish repair or removal without a new grant. Runtime registration rejects
-tenant names that do not match the tenant API syntax. Static config preserves
-its supplied tenant lists. An invalid static name matches no tenant, so a
-nonempty list containing only invalid names permits no tenant. A valid name
-for a tenant that does not exist yet grants nothing until the tenant is created.
+permits every authenticated scope. A nonempty list permits only claims owned by
+the listed tenants, and root-owned claims can use any entry. Runtime
+registration rejects tenant names that do not match the tenant API syntax.
+Static config preserves its supplied tenant lists. An invalid static name
+matches no tenant, so a nonempty list containing only invalid names permits no
+tenant. A valid name for a tenant that does not exist yet grants nothing until
+the tenant is created.
 
 ## DELETE /v1/volumes/{name}
 
 Auth and name validation match PUT. Deletes only runtime registration metadata.
-Success, including an absent unreferenced name, is 204. Static names and names
-referenced by a claim, an in-flight operation, or cleanup return 409.
-DELETE always writes the absence, including when the name is already absent.
+Static names and names referenced by a claim, an in-flight operation, or
+cleanup return 409. Otherwise DELETE writes the absence and returns 204, also
+for an absent name.
 Persistence failure returns 503 with `Retry-After`. Retry the same DELETE,
 even if GET no longer lists the name; a restart can restore the old registration.
 
-Before downgrading to a daemon without runtime registration, drain runtime
-references or supply equivalent static volume config and finish pending live
-volume changes.
+Before downgrading to a daemon without runtime registration, release claims
+that use runtime names or declare those names in static `volumes`.
 
 ## GET /v1/sandboxes/{id}/volumes
 
@@ -341,8 +341,7 @@ when the volume is in both sets, `pending` when desired but not yet confirmed,
 or `detaching` when applied but no longer desired. An interrupted device call
 can leave the actual guest state different from the confirmed set. A failed
 PUT or PATCH adds a top-level `error` naming the refusal, and the affected
-state may carry its own `error`. `converging` is true while a request worker
-is running.
+state may carry its own `error`. `converging` is true only while a request worker is running.
 `pending` with `converging: false` requires an explicit retry; there is no
 background convergence. GET retains the last safe per-volume error for the
 current daemon lifetime. After daemon restart, unfinished states report an
