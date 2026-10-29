@@ -345,7 +345,7 @@ func TestDaemonSyncRecoversAClaimTheSnapshotShowsDown(t *testing.T) {
 
 	eng.vmEvents <- fakeVMEvent{sync: []engine.VMStatus{{Name: sb.VMName}}}
 
-	waitFor(t, func() bool { got, _ := m.Sandbox(sb.ID); return got.Restarts == 1 })
+	waitFor(t, func() bool { got, _ := m.Sandbox(sb.ID); return got.Restarts == 1 && len(m.maintSem) == 0 })
 }
 
 func TestPollBackstopsTheDaemonStream(t *testing.T) {
