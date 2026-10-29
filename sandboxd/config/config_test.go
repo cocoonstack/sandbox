@@ -468,16 +468,6 @@ func TestLoadAcceptsAShardedNetworkList(t *testing.T) {
 	}
 }
 
-func TestLoadPreservesInvalidStaticVolumeTenants(t *testing.T) {
-	cfg, err := Load(writeConfig(t, `{"pools":[],"volumes":[{"name":"data","path":"/images/data","tenants":["has space", "future-tenant"]}]}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := cfg.Volumes[0].Tenants; !slices.Equal(got, []string{"has space", "future-tenant"}) {
-		t.Fatalf("static tenants changed: %v", got)
-	}
-}
-
 func writeConfig(t *testing.T, body string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "config.json")

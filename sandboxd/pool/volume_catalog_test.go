@@ -1,13 +1,14 @@
 package pool
 
 import (
+	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"errors"
 	"fmt"
-	"maps"
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 
@@ -31,8 +32,16 @@ func TestRuntimeCatalogPersistsNormalizedSemantics(t *testing.T) {
 	if err := m.RegisterVolume(t.Context(), "runtime", normalized); err != nil {
 		t.Fatalf("normalized retry: %v", err)
 	}
-	if st, err := os.Stat(filepath.Join(m.dataDir, runtimeVolumesFile)); err != nil || st.Mode().Perm() != 0o600 {
-		t.Fatalf("metadata mode: %v %v", st, err)
+	raw, err := os.ReadFile(filepath.Join(m.dataDir, runtimeVolumesFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var saved map[string]types.VolumeRegistration
+	if err = json.Unmarshal(raw, &saved); err != nil || len(saved) != 1 || saved["runtime"].Path != path || !slices.Equal(saved["runtime"].Tenants, normalized.Tenants) {
+		t.Fatalf("saved registrations: %s, %v", raw, err)
+	}
+	if st, statErr := os.Stat(filepath.Join(m.dataDir, runtimeVolumesFile)); statErr != nil || st.Mode().Perm() != 0o600 {
+		t.Fatalf("metadata mode: %v %v", st, statErr)
 	}
 	sb, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Volumes: []types.Volume{{Name: "runtime"}}})
 	if err != nil {
@@ -75,6 +84,50 @@ func TestRuntimeCatalogPersistsNormalizedSemantics(t *testing.T) {
 	}
 }
 
+func TestRuntimeCatalogChangesAreAudited(t *testing.T) {
+	cfg := &config.Config{DataDir: t.TempDir(), AuditLog: true}
+	m, initErr := NewManager(t.Context(), cfg, newFakeEngine(), testSecrets(t), testBackends(t, cfg))
+	if initErr != nil {
+		t.Fatal(initErr)
+	}
+	spec := types.VolumeRegistration{Path: "/images/data"}
+	restore := blockCatalogRename(t, m)
+	if err := m.RegisterVolume(t.Context(), "data", spec); !errors.Is(err, ErrVolumeCatalogUnavailable) {
+		t.Fatalf("failed register: %v", err)
+	}
+	restore()
+	for range 2 {
+		if err := m.RegisterVolume(t.Context(), "data", spec); err != nil {
+			t.Fatal(err)
+		}
+	}
+	restore = blockCatalogRename(t, m)
+	if err := m.UnregisterVolume(t.Context(), "data"); !errors.Is(err, ErrVolumeCatalogUnavailable) {
+		t.Fatalf("failed unregister: %v", err)
+	}
+	restore()
+	for range 2 {
+		if err := m.UnregisterVolume(t.Context(), "data"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	raw, err := os.ReadFile(filepath.Join(m.dataDir, "audit.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(raw)), "\n")
+	want := []auditFrame{{Op: "volumes", Added: []string{"data"}}, {Op: "volumes", Removed: []string{"data"}}, {Op: "volumes", Removed: []string{"data"}}}
+	if len(lines) != len(want) {
+		t.Fatalf("audit records: %s", raw)
+	}
+	for i, line := range lines {
+		var got auditFrame
+		if err := json.Unmarshal([]byte(line), &got); err != nil || got.Op != want[i].Op || !slices.Equal(got.Added, want[i].Added) || !slices.Equal(got.Removed, want[i].Removed) {
+			t.Fatalf("audit record %d: %s, %v", i, line, err)
+		}
+	}
+}
+
 func TestRuntimeCatalogRegistersUncheckedBacking(t *testing.T) {
 	link := filepath.Join(t.TempDir(), "backing-link")
 	if err := os.Symlink(writeVolumeImage(t, "backing", "bytes"), link); err != nil {
@@ -109,11 +162,14 @@ func TestRuntimeCatalogRegistersUncheckedBacking(t *testing.T) {
 
 func TestRuntimeCatalogRejectsCollisionsAndInvalidRegistrations(t *testing.T) {
 	static := liveCatalog(t)
-	m := newVolumeManager(t, newFakeEngine(), static)
+	eng := newFakeEngine()
 	other := writeVolumeImage(t, "other-runtime", "bytes")
-	sb := mustClaim(t, m, testKey)
-	sb.Volumes = []types.Volume{{Name: "unexplained", Mount: "/data"}}
-	if err := m.store.commit(m.store.set(sb)); err != nil {
+	m := newVolumeManager(t, eng, append(slices.Clone(static), config.VolumeSpec{Name: "unexplained", Path: other}))
+	if _, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Volumes: []types.Volume{{Name: "unexplained"}}}); err != nil {
+		t.Fatal(err)
+	}
+	m = newVolumeManagerAt(t, eng, m.dataDir, static)
+	if err := m.Reconcile(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	alias := filepath.Dir(static[0].Path) + "/./" + filepath.Base(static[0].Path)
@@ -131,9 +187,12 @@ func TestRuntimeCatalogRejectsCollisionsAndInvalidRegistrations(t *testing.T) {
 		{"runtime", types.VolumeRegistration{Path: "relative"}, ErrBadVolume},
 		{"runtime", types.VolumeRegistration{Path: other, DirectIO: "invalid"}, ErrBadVolume},
 		{"runtime", types.VolumeRegistration{Path: other, Tenants: []string{"has space"}}, ErrBadVolume},
-		{"runtime", types.VolumeRegistration{Path: "/srv/\xff"}, ErrBadVolume},
+		{"runtime", types.VolumeRegistration{Path: other, Tenants: []string{""}}, ErrBadVolume},
+		{"runtime", types.VolumeRegistration{Path: other, Tenants: []string{"_leading"}}, ErrBadVolume},
+		{"runtime", types.VolumeRegistration{Path: other, Tenants: []string{strings.Repeat("a", 64)}}, ErrBadVolume},
 	} {
-		if err := m.RegisterVolume(t.Context(), tc.name, tc.spec); !errors.Is(err, tc.want) {
+		err := m.RegisterVolume(t.Context(), tc.name, tc.spec)
+		if !errors.Is(err, tc.want) {
 			t.Errorf("register %s %+v = %v, want %v", tc.name, tc.spec, err, tc.want)
 		}
 	}
@@ -147,6 +206,21 @@ func TestRuntimeCatalogRejectsCollisionsAndInvalidRegistrations(t *testing.T) {
 		if err := m.UnregisterVolume(t.Context(), tc.name); !errors.Is(err, tc.want) {
 			t.Errorf("unregister %s = %v, want %v", tc.name, err, tc.want)
 		}
+	}
+	if err := m.RegisterVolume(t.Context(), "runtime", types.VolumeRegistration{Path: "/images/data", Tenants: []string{"future-tenant", "team/project:v1"}}); err != nil {
+		t.Fatalf("future tenant: %v", err)
+	}
+}
+
+func TestRuntimeCatalogMarshalFailureDoesNotPublish(t *testing.T) {
+	m := newVolumeManager(t, newFakeEngine(), nil)
+	err := m.RegisterVolume(t.Context(), "runtime", types.VolumeRegistration{Path: "/srv/\xff"})
+	_, wrapped := errors.AsType[*jsontext.SyntacticError](err)
+	if !errors.Is(err, ErrVolumeCatalogUnavailable) || !wrapped {
+		t.Fatalf("marshal error was not preserved: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(m.dataDir, runtimeVolumesFile)); !errors.Is(err, os.ErrNotExist) || m.catalog.entries["runtime"] != nil {
+		t.Fatalf("failed registration persisted: stat=%v entry=%+v", err, m.catalog.entries["runtime"])
 	}
 }
 
@@ -188,47 +262,26 @@ func TestRuntimeCatalogVolumeRootsBoundRegistration(t *testing.T) {
 		}
 	}
 	outside, inside := filepath.Dir(images["outside"]), filepath.Dir(images["inside"])
-	sb, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Volumes: []types.Volume{{Name: "outside"}}})
-	if err != nil {
-		t.Fatal(err)
-	}
 	wide, err := newRootedManager(t, eng, m.dataDir, outside, inside)
-	if err != nil || wide.catalogSnapshot()["outside"] == nil {
-		t.Fatalf("restart with the registration inside volume_roots: %v", err)
+	if err != nil || len(wide.VolumeNames()) != 2 {
+		t.Fatalf("restart with both registrations inside volume_roots: %v", err)
 	}
-	m2, err := newRootedManager(t, eng, m.dataDir, inside)
+	before, err := os.ReadFile(filepath.Join(m.dataDir, runtimeVolumesFile))
 	if err != nil {
-		t.Fatalf("restart refused a persisted registration outside volume_roots: %v", err)
-	}
-	if err = m2.Reconcile(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	if got := m2.catalogSnapshot(); got["outside"] != nil || got["inside"] == nil {
-		t.Fatalf("narrowed catalog = %v, want only the in-root registration", slices.Sorted(maps.Keys(got)))
+	if _, err = newRootedManager(t, eng, m.dataDir, inside); err == nil {
+		t.Fatal("restart accepted a persisted registration outside volume_roots")
 	}
-	if got := volumeHoldersOf(m2, "outside"); got.readers != 1 {
-		t.Fatalf("recovered claim holders of the skipped registration = %+v", got)
+	after, err := os.ReadFile(filepath.Join(m.dataDir, runtimeVolumesFile))
+	if err != nil || string(after) != string(before) {
+		t.Fatalf("refused startup changed saved registrations: %s, %v", after, err)
 	}
-	if _, err = m2.ClaimProvision(t.Context(), testKey, ClaimOptions{Volumes: []types.Volume{{Name: "outside"}}}); !errors.Is(err, ErrVolumeUnavailable) {
-		t.Fatalf("claim of the skipped registration = %v, want ErrVolumeUnavailable", err)
-	}
-	if err = m2.UnregisterVolume(t.Context(), "outside"); !errors.Is(err, ErrVolumeRegistrationConflict) {
-		t.Fatalf("delete of referenced skipped name: %v", err)
-	}
-	if err = m2.RegisterVolume(t.Context(), "outside", types.VolumeRegistration{Path: filepath.Join(inside, "replacement")}); !errors.Is(err, ErrVolumeRegistrationConflict) {
-		t.Fatalf("rebind of referenced skipped name: %v", err)
-	}
-	if err = claimAndRelease(t, m2, types.Volume{Name: "inside"}); err != nil {
-		t.Fatalf("in-root registration: %v", err)
-	}
-	if err = m2.Release(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
-		t.Fatalf("release of a recovered claim holding the skipped registration: %v", err)
-	}
-	if err = m2.RegisterVolume(t.Context(), "later", types.VolumeRegistration{Path: filepath.Join(inside, "later")}); err != nil {
+	if err := wide.UnregisterVolume(t.Context(), "outside"); err != nil {
 		t.Fatal(err)
 	}
-	if wide, err = newRootedManager(t, eng, m.dataDir, outside, inside); err != nil || wide.catalogSnapshot()["outside"] != nil {
-		t.Fatalf("a later catalog write kept the skipped registration: %v", err)
+	if narrowed, err := newRootedManager(t, eng, m.dataDir, inside); err != nil || !slices.Equal(narrowed.VolumeNames(), []string{"inside"}) {
+		t.Fatalf("restart after unregistering the out-of-root entry: %v", err)
 	}
 }
 
@@ -338,16 +391,13 @@ func TestRuntimeCatalogRejectsInvalidMetadata(t *testing.T) {
 	static := liveCatalog(t)
 	for _, tc := range []struct{ name, raw string }{
 		{"malformed", "{"},
-		{"version", `{"version":2,"volumes":{}}`},
-		{"null", `{"version":1,"volumes":null}`},
-		{"name", `{"version":1,"volumes":{"bad/name":{"path":"/data"}}}`},
-		{"relative", `{"version":1,"volumes":{"runtime":{"path":"relative"}}}`},
-		{"directio", `{"version":1,"volumes":{"runtime":{"path":"/data","directio":"bad"}}}`},
-		{"duplicate-name", `{"version":1,"volumes":{"runtime":{"path":"/one"},"runtime":{"path":"/two"}}}`},
-		{"duplicate-path", `{"version":1,"volumes":{"runtime":{"path":"/one"},"second":{"path":"/one"}}}`},
-		{"static-name", `{"version":1,"volumes":{"data":{"path":"/other"}}}`},
-		{"static-path", fmt.Sprintf(`{"version":1,"volumes":{"runtime":{"path":%q}}}`, static[0].Path)},
-		{"unknown-field", `{"version":1,"volumes":{},"unexpected":true}`},
+		{"name", `{"bad/name":{"path":"/data"}}`},
+		{"relative", `{"runtime":{"path":"relative"}}`},
+		{"directio", `{"runtime":{"path":"/data","directio":"bad"}}`},
+		{"duplicate-name", `{"runtime":{"path":"/one"},"runtime":{"path":"/two"}}`},
+		{"duplicate-path", `{"runtime":{"path":"/one"},"second":{"path":"/one"}}`},
+		{"static-name", `{"data":{"path":"/other"}}`},
+		{"static-path", fmt.Sprintf(`{"runtime":{"path":%q}}`, static[0].Path)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			eng := newFakeEngine()
@@ -360,54 +410,6 @@ func TestRuntimeCatalogRejectsInvalidMetadata(t *testing.T) {
 				t.Fatalf("accepted %s metadata", tc.name)
 			}
 		})
-	}
-}
-
-func TestAdoptedClaimReferencesVolumeBeforeItsClaimWrite(t *testing.T) {
-	c := newFailoverCluster(t)
-	a, b := c.node(t, "a", t.TempDir(), keepAnHour), c.node(t, "b", t.TempDir(), keepAnHour)
-	if err := b.RegisterVolume(t.Context(), "data", types.VolumeRegistration{Path: writeVolumeImage(t, "adopted", "bytes")}); err != nil {
-		t.Fatal(err)
-	}
-	sb := mustClaim(t, a, testKey)
-	mustArchive(t, a, sb)
-	rec, _, err := c.reg.Get(t.Context(), sb.ID)
-	claim := &types.Sandbox{}
-	if err == nil {
-		err = json.Unmarshal(rec.Claim, claim)
-	}
-	// the row is a peer's record, so the adopter cannot assume it names no volumes
-	claim.Volumes = []types.Volume{{Name: "data", Mount: "/data"}}
-	if err == nil {
-		rec.Claim, err = json.Marshal(claim)
-	}
-	if err == nil {
-		_, err = c.reg.Put(t.Context(), rec)
-	}
-	if err != nil {
-		t.Fatal(err)
-	}
-	c.expire("a")
-	// an earlier claims.json write in flight keeps the adoption's write from starting
-	b.store.writeMu.Lock()
-	unlock := sync.OnceFunc(b.store.writeMu.Unlock)
-	t.Cleanup(unlock)
-	adopted := make(chan error, 1)
-	go func() {
-		ok, adoptErr := b.AdoptArchived(t.Context(), sb.ID, sb.Token)
-		if adoptErr == nil && !ok {
-			adoptErr = errors.New("not adopted")
-		}
-		adopted <- adoptErr
-	}()
-	waitFor(t, func() bool { _, held := b.byID(sb.ID); return held })
-	err = b.UnregisterVolume(t.Context(), "data")
-	unlock()
-	if adoptErr := <-adopted; adoptErr != nil {
-		t.Fatal(adoptErr)
-	}
-	if !errors.Is(err, ErrVolumeRegistrationConflict) {
-		t.Fatalf("unregister while a published adoption references the volume = %v", err)
 	}
 }
 

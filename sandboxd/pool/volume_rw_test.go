@@ -216,7 +216,7 @@ func TestVolumeAdmissionMatrix(t *testing.T) {
 	}
 }
 
-func TestReserveVolumesExcludesReaderUnderWriter(t *testing.T) {
+func TestAdmitClaimExcludesReaderUnderWriter(t *testing.T) {
 	path := writeVolumeImage(t, "scratch.img", "data")
 	m := newVolumeManager(t, newFakeEngine(), []config.VolumeSpec{{Name: "scratch", Path: path, Writable: true}})
 	resolved, err := m.resolveVolumes(t.Context(), "", []types.Volume{{Name: "scratch", Mount: "/volumes/scratch"}})

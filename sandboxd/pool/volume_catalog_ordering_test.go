@@ -1,10 +1,8 @@
 package pool
 
 import (
-	"context"
 	"errors"
 	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -126,40 +124,5 @@ func TestRuntimeCatalogRenameSucceededBeforeDirectoryOpenFailed(t *testing.T) {
 				t.Fatalf("retry publication: %v", m.VolumeNames())
 			}
 		})
-	}
-}
-
-func TestRuntimeCatalogCancellationBeforeMutation(t *testing.T) {
-	m := newVolumeManager(t, newFakeEngine(), nil)
-	spec := types.VolumeRegistration{Path: writeVolumeImage(t, "data", "bytes")}
-	ctx, cancel := context.WithCancel(t.Context())
-	cancel()
-	if err := m.RegisterVolume(ctx, "data", spec); !errors.Is(err, context.Canceled) {
-		t.Fatal(err)
-	}
-	if _, err := os.Stat(filepath.Join(m.dataDir, runtimeVolumesFile)); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("canceled put wrote catalog: %v", err)
-	}
-	if err := m.RegisterVolume(t.Context(), "data", spec); err != nil {
-		t.Fatal(err)
-	}
-	if err := m.UnregisterVolume(ctx, "data"); !errors.Is(err, context.Canceled) {
-		t.Fatal(err)
-	}
-	if got := m.VolumeNames(); !slices.Equal(got, []string{"data"}) {
-		t.Fatalf("canceled delete unpublished data: %v", got)
-	}
-}
-
-func TestRuntimeCatalogValidatesTenantNames(t *testing.T) {
-	m := newVolumeManager(t, newFakeEngine(), nil)
-	for _, tenant := range []string{"", "has space", "_leading", strings.Repeat("a", 64)} {
-		spec := types.VolumeRegistration{Path: "/images/data", Tenants: []string{tenant}}
-		if err := m.RegisterVolume(t.Context(), "data", spec); !errors.Is(err, ErrBadVolume) {
-			t.Errorf("invalid tenant %q: %v", tenant, err)
-		}
-	}
-	if err := m.RegisterVolume(t.Context(), "data", types.VolumeRegistration{Path: "/images/data", Tenants: []string{"future-tenant", "team/project:v1"}}); err != nil {
-		t.Fatalf("future tenant: %v", err)
 	}
 }

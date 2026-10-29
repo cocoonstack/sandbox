@@ -64,11 +64,14 @@ func (m *Manager) adoptArchived(ctx context.Context, id, token string) (bool, er
 		m.mu.Unlock()
 		return m.adoptHeld(ctx, cur, epoch), nil
 	}
+	m.adoptVolumes(heldVolumes(sb))
 	m.addClaimLocked(sb)
 	js := m.store.set(sb)
 	m.mu.Unlock()
 	if err := m.store.commit(js); err != nil {
-		m.forgetClaim(ctx, sb)
+		if m.forgetClaim(ctx, sb) {
+			m.unreserveVolumes(heldVolumes(sb))
+		}
 		return false, fmt.Errorf("adopt %s: persist claims: %w", id, err)
 	}
 	log.WithFunc("pool.AdoptArchived").Infof(ctx, "adopted archived sandbox %s from %s", id, rec.Owner)

@@ -282,26 +282,17 @@ binding, changed fields, or a static name or cleaned path collision returns 409.
 Invalid fields return 400. GET keeps its existing projection without host paths
 or tenant lists. Runtime entries support the existing live volume API.
 
-Persistence failure returns 503 with `Retry-After`. Retry the desired request
-after repairing storage. PUT writes the catalog before publishing the new
-entry. A failed PUT leaves that entry unavailable in the current process.
-If rename succeeded before a directory sync failed, a restart can load the
-entry despite the 503. A later successful catalog change can replace that
-unacknowledged entry. Failed requests are not replayed in the background.
-Cancellation before a change starts leaves it untouched. Once started, the
-write attempt completes even if the caller disconnects.
+Persistence failure returns 503 with `Retry-After`. Retry the same request;
+after a restart, either state can load.
 
 The node stores metadata in `data_dir/runtime-volumes.json` independently of
 `sync_claims` and loads it before claim recovery. New records use mode 0600.
-Malformed or conflicting metadata prevents startup. Registration creates,
-grows, and deletes no backing disks. The catalog is node-local with one
-sandboxd writer.
+Malformed or conflicting metadata, including a saved path outside `volume_roots`,
+prevents startup. The catalog is node-local with one sandboxd writer.
 
-The operator or controller owns each backing: supply an image Cocoon supports,
-keep the path and its symlink target stable while registered, coordinate
-symlink and hardlink aliases, cross-node ownership, and availability, and keep
-backings outside daemon cleanup directories such as `<data_dir>/readers`,
-`<data_dir>/goldens`, and `<data_dir>/fork-*`.
+Sandboxd does not create, check, or delete backings. Keep them outside its
+cleanup directories: `<data_dir>/readers`, `<data_dir>/goldens`, and
+`<data_dir>/fork-*`.
 
 ### Volume access lists
 
@@ -319,19 +310,10 @@ for a tenant that does not exist yet grants nothing until the tenant is created.
 
 Auth and name validation match PUT. Deletes only runtime registration metadata.
 Success, including an absent unreferenced name, is 204. Static names and names
-referenced by a claim, an in-flight operation, or cleanup return 409, including
-references to names skipped by `volume_roots` during startup. DELETE checks
-references and removes the entry from memory before writing the catalog.
-Persistence failure returns 503 with `Retry-After`. The entry stays unavailable
-in memory, but a restart can restore the old registration if the write failed
-before rename. Retry DELETE even when GET no longer lists the name. DELETE
-always writes the absence, including when the name is already absent.
-
-Claim recovery can restore conservative holds from an older claims file after
-a confirmed detach whose result write failed. Retry the claim's desired volume
-set to converge. Stale VM cleanup keeps the existing inventory behavior.
-Unreadable or incomplete inventory can leave an orphan's volumes unheld;
-runtime registration does not resolve that inventory limitation.
+referenced by a claim, an in-flight operation, or cleanup return 409.
+DELETE always writes the absence, including when the name is already absent.
+Persistence failure returns 503 with `Retry-After`. Retry the same DELETE,
+even if GET no longer lists the name; a restart can restore the old registration.
 
 Before downgrading to a daemon without runtime registration, drain runtime
 references or supply equivalent static volume config and finish pending live

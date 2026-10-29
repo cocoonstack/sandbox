@@ -50,7 +50,7 @@ type catalogVolume struct {
 	writable bool
 }
 
-func (v *catalogVolume) allowedFor(tenant string) bool {
+func (v *catalogVolume) allowed(tenant string) bool {
 	return tenant == "" || len(v.tenants) == 0 || slices.Contains(v.tenants, tenant)
 }
 
@@ -59,7 +59,7 @@ func (m *Manager) Volumes(tenant string, holders map[string]int) []types.VolumeI
 	catalog := m.catalogSnapshot()
 	infos := make([]types.VolumeInfo, 0, len(catalog))
 	for name, volume := range catalog {
-		if !volume.allowedFor(tenant) {
+		if !volume.allowed(tenant) {
 			continue
 		}
 		info := types.VolumeInfo{
@@ -123,7 +123,7 @@ func (m *Manager) VolumePlacement(key types.PoolKey, tenant string, names []stri
 			}
 			return false, ErrVolumeUnavailable
 		}
-		if !volume.allowedFor(tenant) {
+		if !volume.allowed(tenant) {
 			return false, ErrVolumeUnavailable
 		}
 		if _, err := os.Stat(volume.disk.Path); err != nil {
@@ -142,19 +142,14 @@ func (m *Manager) resolveVolumes(ctx context.Context, tenant string, requested [
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrBadVolume, err)
 	}
-	m.mu.Lock()
-	catalog := m.catalog.entries
-	for _, volume := range applied {
-		entry := catalog[volume.Name]
-		if entry == nil || !entry.allowedFor(tenant) {
-			m.mu.Unlock()
-			return nil, ErrVolumeUnavailable
-		}
-	}
-	m.mu.Unlock()
+	catalog := m.catalogSnapshot()
 	resolved := make([]resolvedVolume, 0, len(applied))
 	for _, volume := range applied {
-		resolvedEntry, resolveErr := m.resolveCatalogEntry(ctx, volume, catalog[volume.Name])
+		entry := catalog[volume.Name]
+		if entry == nil || !entry.allowed(tenant) {
+			return nil, ErrVolumeUnavailable
+		}
+		resolvedEntry, resolveErr := m.resolveCatalogEntry(ctx, volume, entry)
 		if resolveErr != nil {
 			return nil, resolveErr
 		}

@@ -12,9 +12,6 @@ import (
 	"slices"
 	"strings"
 	"sync"
-	"unicode/utf8"
-
-	"github.com/projecteru2/core/log"
 
 	"github.com/cocoonstack/sandbox/sandboxd/config"
 	"github.com/cocoonstack/sandbox/sandboxd/engine"
@@ -23,11 +20,6 @@ import (
 )
 
 const runtimeVolumesFile = "runtime-volumes.json"
-
-type runtimeCatalog struct {
-	Version int                                 `json:"version"`
-	Volumes map[string]types.VolumeRegistration `json:"volumes"`
-}
 
 type volumeCatalog struct {
 	entries map[string]*catalogVolume
@@ -53,9 +45,6 @@ func (m *Manager) RegisterVolume(ctx context.Context, name string, spec types.Vo
 	}
 	m.catalog.writeMu.Lock()
 	defer m.catalog.writeMu.Unlock()
-	if err := ctx.Err(); err != nil {
-		return err
-	}
 	m.mu.Lock()
 	entries := m.catalog.entries
 	if entry := entries[name]; entry != nil {
@@ -81,6 +70,7 @@ func (m *Manager) RegisterVolume(ctx context.Context, name string, spec types.Vo
 	m.mu.Lock()
 	m.catalog.entries = entries
 	m.mu.Unlock()
+	m.recordAudit(ctx, "", auditFrame{Op: "volumes", Added: []string{name}})
 	return nil
 }
 
@@ -91,9 +81,6 @@ func (m *Manager) UnregisterVolume(ctx context.Context, name string) error {
 	}
 	m.catalog.writeMu.Lock()
 	defer m.catalog.writeMu.Unlock()
-	if err := ctx.Err(); err != nil {
-		return err
-	}
 	m.mu.Lock()
 	entry := m.catalog.entries[name]
 	if (entry != nil && !entry.runtime) || m.volumeReferenced(name) {
@@ -104,10 +91,14 @@ func (m *Manager) UnregisterVolume(ctx context.Context, name string) error {
 	delete(entries, name)
 	m.catalog.entries = entries
 	m.mu.Unlock()
-	return m.persistRuntimeCatalog(entries)
+	if err := m.persistRuntimeCatalog(entries); err != nil {
+		return err
+	}
+	m.recordAudit(ctx, "", auditFrame{Op: "volumes", Removed: []string{name}})
+	return nil
 }
 
-func (m *Manager) loadRuntimeVolumes(ctx context.Context) error {
+func (m *Manager) loadRuntimeVolumes() error {
 	raw, err := os.ReadFile(filepath.Join(m.dataDir, runtimeVolumesFile))
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
@@ -115,18 +106,18 @@ func (m *Manager) loadRuntimeVolumes(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("read runtime volume catalog: %w", err)
 	}
-	var record runtimeCatalog
-	if err = json.Unmarshal(raw, &record, json.RejectUnknownMembers(true)); err != nil {
+	var record map[string]types.VolumeRegistration
+	if err = json.Unmarshal(raw, &record); err != nil {
 		return fmt.Errorf("parse runtime volume catalog: %w", err)
 	}
-	if record.Version != 1 || record.Volumes == nil {
-		return errors.New("invalid runtime volume catalog version or volumes")
-	}
 	entries := maps.Clone(m.catalog.entries)
-	for name, spec := range record.Volumes {
+	for name, spec := range record {
 		volume, normalizeErr := normalizeRegistration(name, spec)
 		if normalizeErr != nil {
 			return fmt.Errorf("runtime volume catalog: %w", normalizeErr)
+		}
+		if !m.catalog.withinRoots(volume.disk.Path) {
+			return fmt.Errorf("runtime volume catalog: volume %q path is outside volume_roots", name)
 		}
 		if m.catalog.entries[name] != nil {
 			return fmt.Errorf("runtime volume catalog duplicates static name %q", name)
@@ -136,37 +127,25 @@ func (m *Manager) loadRuntimeVolumes(ctx context.Context) error {
 		}
 		entries[name] = volume
 	}
-	// skip only once every entry validated, so other bad metadata still refuses startup
-	for name := range record.Volumes {
-		if path := entries[name].disk.Path; !m.catalog.withinRoots(path) {
-			log.WithFunc("pool.loadRuntimeVolumes").Warnf(ctx, "runtime volume %q: skipping image %s outside volume_roots", name, path)
-			delete(entries, name)
-		}
-	}
 	m.catalog.entries = entries
 	return nil
 }
 
 func (m *Manager) volumeReferenced(name string) bool {
-	if m.catalog.holders[name] != (volumeHolders{}) {
-		return true
-	}
-	for _, sb := range m.claimed {
-		if volumeIndex(sb.Volumes, name) >= 0 || volumeIndex(sb.VolumesWant, name) >= 0 {
-			return true
-		}
-	}
-	return false
+	return m.catalog.holders[name] != (volumeHolders{})
 }
 
 func (m *Manager) persistRuntimeCatalog(entries map[string]*catalogVolume) error {
-	record := runtimeCatalog{Version: 1, Volumes: map[string]types.VolumeRegistration{}}
+	record := map[string]types.VolumeRegistration{}
 	for name, entry := range entries {
 		if entry.runtime {
-			record.Volumes[name] = types.VolumeRegistration{Path: entry.disk.Path, DirectIO: entry.disk.DirectIO, Writable: entry.writable, Tenants: entry.tenants}
+			record[name] = types.VolumeRegistration{Path: entry.disk.Path, DirectIO: entry.disk.DirectIO, Writable: entry.writable, Tenants: entry.tenants}
 		}
 	}
-	raw, _ := json.Marshal(record, json.Deterministic(true))
+	raw, err := json.Marshal(record)
+	if err != nil {
+		return fmt.Errorf("%w: marshal runtime volume catalog: %w", ErrVolumeCatalogUnavailable, err)
+	}
 	if err := utils.WriteFileSync(filepath.Join(m.dataDir, runtimeVolumesFile), raw, 0o600); err != nil {
 		return fmt.Errorf("%w: %w", ErrVolumeCatalogUnavailable, err)
 	}
@@ -188,9 +167,6 @@ func normalizeRegistration(name string, spec types.VolumeRegistration) (*catalog
 		if !types.NameRe.MatchString(tenant) {
 			return nil, fmt.Errorf("%w: volume %q tenant %q must match %s", ErrBadVolume, name, tenant, types.NameRe)
 		}
-	}
-	if !utf8.ValidString(spec.Path) {
-		return nil, fmt.Errorf("%w: volume %q path must be valid UTF-8", ErrBadVolume, name)
 	}
 	if err := config.ValidateVolumeCatalog([]config.VolumeSpec{{
 		Name: name, Path: spec.Path, DirectIO: spec.DirectIO, Writable: spec.Writable, Tenants: spec.Tenants,

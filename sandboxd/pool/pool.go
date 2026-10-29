@@ -102,6 +102,10 @@ var (
 	ErrNoEgressFork      = errors.New("egress-lane sandboxes cannot fork, checkpoint, or promote: a resumed guest egresses before its fresh tap can be locked")
 	ErrVolumeCapture     = errors.New("sandboxes with volumes cannot hibernate, fork, checkpoint, or promote")
 	ErrVolumeBusy        = errors.New("volume is held by another claim")
+
+	ErrVolumeRegistrationConflict = errors.New("volume registration conflicts with the catalog")
+	ErrVolumeCatalogUnavailable   = errors.New("volume catalog requires a successful persistence retry")
+
 	// Replaying a journal takes a writable mount, so readers stay out.
 	ErrVolumeNeedsRecovery = errors.New("volume needs recovery by a writable claim")
 	ErrArchived            = errors.New("sandbox is archived; an exec or file call wakes it first")
@@ -116,9 +120,6 @@ var (
 	errNotSleeping   = errors.New("sandbox is no longer hibernated or archived")
 	errWokeMeanwhile = errors.New("woke between sweep and hibernate")
 	errNoEgressTap   = errors.New("egress-lane claim has no lockable tap")
-
-	ErrVolumeRegistrationConflict = errors.New("volume registration conflicts with the catalog")
-	ErrVolumeCatalogUnavailable   = errors.New("volume catalog requires a successful persistence retry")
 )
 
 // Engine is the slice of the cocoon driver the manager consumes.
@@ -484,7 +485,7 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 			writable: volume.Writable,
 		}
 	}
-	if err := m.loadRuntimeVolumes(ctx); err != nil {
+	if err := m.loadRuntimeVolumes(); err != nil {
 		return nil, err
 	}
 	if err := os.MkdirAll(m.goldensDir(), 0o750); err != nil {
