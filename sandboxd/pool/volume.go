@@ -279,7 +279,6 @@ func (m *Manager) finishVolumeTeardown(ctx context.Context, td volumeTeardown) {
 	m.unreserveVolumes(td.holds)
 }
 
-// adoptVolumes counts volumes an adopted claim already holds; callers hold m.mu.
 func (m *Manager) adoptVolumes(volumes []types.Volume) {
 	for _, volume := range volumes {
 		holders := m.catalog.holders[volume.Name]
@@ -292,7 +291,6 @@ func (m *Manager) adoptVolumes(volumes []types.Volume) {
 	}
 }
 
-// releaseVolumes drops one claim's admission holds; callers hold m.mu.
 func (m *Manager) releaseVolumes(volumes []types.Volume) {
 	for _, volume := range volumes {
 		holders := m.catalog.holders[volume.Name]

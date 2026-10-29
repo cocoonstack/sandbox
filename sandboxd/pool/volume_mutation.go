@@ -334,10 +334,19 @@ func (m *Manager) detachVolumeRun(ctx context.Context, sb *types.Sandbox, run *v
 	if err != nil {
 		return fmt.Errorf("detach volume %q: %w", v.Name, err)
 	}
-	if err = m.checkVolumeRun(ctx, sb, run); err != nil {
+	clearMarker := needsUnmount(v) && cleanRW && entry != nil
+	hold := [1]types.Volume{v}
+	m.mu.Lock()
+	err = m.checkVolumeRunLocked(ctx, sb, run)
+	if err == nil && clearMarker {
+		m.adoptVolumes(hold[:])
+	}
+	m.mu.Unlock()
+	if err != nil {
 		return err
 	}
-	if needsUnmount(v) && cleanRW && entry != nil {
+	if clearMarker {
+		defer m.unreserveVolumes(hold[:])
 		if err = clearVolumeDirty(entry.disk.Path); err != nil {
 			return fmt.Errorf("clear dirty marker for volume %q: %w", v.Name, err)
 		}
