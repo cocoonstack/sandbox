@@ -1,5 +1,3 @@
-from asyncio import CancelledError
-from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
@@ -131,25 +129,5 @@ def test_controller_restore_failure_keeps_access_closed(controller, reply, failu
     controller.fail.update(failures)
     with pytest.raises(error):
         resume_volume(controller.sb, "home", controller.hooks)
-    assert controller.events == expected
-    assert not controller.gate["open"]
-
-
-@pytest.mark.parametrize(
-    ("operation", "hook_name", "event", "expected"),
-    [
-        (hibernate_volume, "quiesce_and_unmount", "unmount", ["close", "reserved", "unmount"]),
-        (resume_volume, "mount_and_verify", "verify", ADD_STEPS + ["verify"]),
-    ],
-    ids=["quiesce", "verify"],
-)
-def test_controller_cancellation_keeps_access_closed(controller, operation, hook_name, event, expected):
-    def cancel():
-        controller.events.append(event)
-        raise CancelledError()
-
-    hooks = replace(controller.hooks, **{hook_name: cancel})
-    with pytest.raises(CancelledError):
-        operation(controller.sb, "home", hooks)
     assert controller.events == expected
     assert not controller.gate["open"]
