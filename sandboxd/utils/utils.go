@@ -45,14 +45,16 @@ func WithBuffered(c net.Conn, r *bufio.Reader) net.Conn {
 	return &bufferedConn{Conn: c, r: r}
 }
 
-// CopyIn copies src into a guest-side dst; noSplice trades the kernel splice io.Copy picks for a pooled user-space copy.
+// CopyIn copies src into a guest-side dst; with noSplice, a unix dst takes a pooled user-space copy instead of the kernel splice.
 func CopyIn(dst io.Writer, src io.Reader, noSplice bool) (int64, error) {
-	if !noSplice {
-		return io.Copy(dst, src)
+	if noSplice {
+		if _, unix := dst.(*net.UnixConn); unix {
+			buf := inBufs.Get().(*[]byte)
+			defer inBufs.Put(buf)
+			return io.CopyBuffer(dst, struct{ io.Reader }{src}, *buf)
+		}
 	}
-	buf := inBufs.Get().(*[]byte)
-	defer inBufs.Put(buf)
-	return io.CopyBuffer(struct{ io.Writer }{dst}, struct{ io.Reader }{src}, *buf)
+	return io.Copy(dst, src)
 }
 
 // WriteFileSync durably replaces path with data (temp + fsync + rename + dir fsync).
