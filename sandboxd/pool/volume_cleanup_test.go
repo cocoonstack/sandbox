@@ -36,6 +36,29 @@ func TestDispatchedCleanupRetainsCatalogReference(t *testing.T) {
 	}
 }
 
+func TestOwnershipTransferReleasesRunningVolumeHoldAfterRemoval(t *testing.T) {
+	base := newFakeEngine()
+	m := newVolumeManager(t, base, nil)
+	if err := m.RegisterVolume(t.Context(), "data", types.VolumeRegistration{Path: writeVolumeImage(t, "runtime", "bytes"), Writable: true}); err != nil {
+		t.Fatal(err)
+	}
+	sb, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Volumes: []types.Volume{{Name: "data"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer := ClaimOptions{Volumes: []types.Volume{{Name: "data", Mode: types.VolumeModeRW}}}
+	base.removeErrFor = sb.VMName
+	m.dropAdopted(t.Context(), sb)
+	if _, err := m.ClaimProvision(t.Context(), testKey, writer); !errors.Is(err, ErrVolumeBusy) {
+		t.Fatalf("writer beside surviving VM: %v", err)
+	}
+	base.removeErrFor = ""
+	m.retryRemovals(t.Context()).Wait()
+	if err := m.UnregisterVolume(t.Context(), "data"); err != nil {
+		t.Fatalf("unregister after transferred VM removal: %v", err)
+	}
+}
+
 // dispatchBlocked moves the removal queue into workers parked on a full maintenance semaphore.
 func dispatchBlocked(ctx context.Context, t *testing.T, m *Manager) *sync.WaitGroup {
 	t.Helper()

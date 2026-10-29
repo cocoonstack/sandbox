@@ -34,14 +34,35 @@ func (c *volumeCatalog) withinRoots(path string) bool {
 	})
 }
 
+func (c *volumeCatalog) normalize(name string, spec types.VolumeRegistration) (*catalogVolume, error) {
+	spec.DirectIO = cmp.Or(spec.DirectIO, types.DirectIOOff)
+	for _, tenant := range spec.Tenants {
+		if !types.NameRe.MatchString(tenant) {
+			return nil, fmt.Errorf("%w: volume %q tenant %q must match %s", ErrBadVolume, name, tenant, types.NameRe)
+		}
+	}
+	if err := config.ValidateVolumeCatalog([]config.VolumeSpec{{
+		Name: name, Path: spec.Path, DirectIO: spec.DirectIO, Writable: spec.Writable, Tenants: spec.Tenants,
+	}}); err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrBadVolume, err)
+	}
+	volume := &catalogVolume{
+		runtime:  true,
+		disk:     engine.VolumeSpec{Name: name, Path: filepath.Clean(spec.Path), DirectIO: spec.DirectIO},
+		tenants:  slices.Compact(slices.Sorted(slices.Values(spec.Tenants))),
+		writable: spec.Writable,
+	}
+	if !c.withinRoots(volume.disk.Path) {
+		return nil, fmt.Errorf("%w: volume %q path is outside volume_roots", ErrBadVolume, name)
+	}
+	return volume, nil
+}
+
 // RegisterVolume durably binds a root-managed name to a backing path.
 func (m *Manager) RegisterVolume(ctx context.Context, name string, spec types.VolumeRegistration) error {
-	volume, err := normalizeRegistration(name, spec)
+	volume, err := m.catalog.normalize(name, spec)
 	if err != nil {
 		return err
-	}
-	if !m.catalog.withinRoots(volume.disk.Path) {
-		return fmt.Errorf("%w: volume %q path is outside volume_roots", ErrBadVolume, name)
 	}
 	m.catalog.writeMu.Lock()
 	defer m.catalog.writeMu.Unlock()
@@ -110,24 +131,19 @@ func (m *Manager) loadRuntimeVolumes() error {
 	if err = json.Unmarshal(raw, &record); err != nil {
 		return fmt.Errorf("parse runtime volume catalog: %w", err)
 	}
-	entries := maps.Clone(m.catalog.entries)
 	for name, spec := range record {
-		volume, normalizeErr := normalizeRegistration(name, spec)
+		volume, normalizeErr := m.catalog.normalize(name, spec)
 		if normalizeErr != nil {
 			return fmt.Errorf("runtime volume catalog: %w", normalizeErr)
-		}
-		if !m.catalog.withinRoots(volume.disk.Path) {
-			return fmt.Errorf("runtime volume catalog: volume %q path is outside volume_roots", name)
 		}
 		if m.catalog.entries[name] != nil {
 			return fmt.Errorf("runtime volume catalog duplicates static name %q", name)
 		}
-		if err := catalogPathConflict(entries, volume.disk.Path); err != nil {
+		if err := catalogPathConflict(m.catalog.entries, volume.disk.Path); err != nil {
 			return fmt.Errorf("runtime volume catalog: %w", err)
 		}
-		entries[name] = volume
+		m.catalog.entries[name] = volume
 	}
-	m.catalog.entries = entries
 	return nil
 }
 
@@ -144,7 +160,7 @@ func (m *Manager) persistRuntimeCatalog(entries map[string]*catalogVolume) error
 	}
 	raw, err := json.Marshal(record)
 	if err != nil {
-		return fmt.Errorf("%w: marshal runtime volume catalog: %w", ErrVolumeCatalogUnavailable, err)
+		return fmt.Errorf("marshal runtime volume catalog: %w", err)
 	}
 	if err := utils.WriteFileSync(filepath.Join(m.dataDir, runtimeVolumesFile), raw, 0o600); err != nil {
 		return fmt.Errorf("%w: %w", ErrVolumeCatalogUnavailable, err)
@@ -159,24 +175,4 @@ func catalogPathConflict(entries map[string]*catalogVolume, path string) error {
 		}
 	}
 	return nil
-}
-
-func normalizeRegistration(name string, spec types.VolumeRegistration) (*catalogVolume, error) {
-	spec.DirectIO = cmp.Or(spec.DirectIO, types.DirectIOOff)
-	for _, tenant := range spec.Tenants {
-		if !types.NameRe.MatchString(tenant) {
-			return nil, fmt.Errorf("%w: volume %q tenant %q must match %s", ErrBadVolume, name, tenant, types.NameRe)
-		}
-	}
-	if err := config.ValidateVolumeCatalog([]config.VolumeSpec{{
-		Name: name, Path: spec.Path, DirectIO: spec.DirectIO, Writable: spec.Writable, Tenants: spec.Tenants,
-	}}); err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrBadVolume, err)
-	}
-	return &catalogVolume{
-		runtime:  true,
-		disk:     engine.VolumeSpec{Name: name, Path: filepath.Clean(spec.Path), DirectIO: spec.DirectIO},
-		tenants:  slices.Compact(slices.Sorted(slices.Values(spec.Tenants))),
-		writable: spec.Writable,
-	}, nil
 }
