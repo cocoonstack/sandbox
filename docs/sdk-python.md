@@ -106,8 +106,8 @@ sb = client.new("ghcr.io/cocoonstack/sandbox/rt:24.04",
 |---|---|---|---|
 | `net` | `"none"`, `"egress"` | `"none"` | Cloud Hypervisor network shape: `none` disables the NIC and uses vsock-only I/O; `egress` attaches a bridge/CNI NIC |
 | `size` | `"small"`, `"medium"`, `"large"`, `"xlarge"`, `"2xlarge"` | `"small"` | resource tier: 1cpu/512M, 2cpu/1G, 4cpu/4G, 4cpu/8G, 8cpu/16G |
-| `volumes` | bare names or `{name, mount?, mode?}` mappings | `None` | attach and mount up to eight unique catalog dataset disks; an omitted mount defaults to `/volumes/<name>`; `mode` is `"ro"` (default) or `"rw"` — `"rw"` requires the catalog entry's `writable: true`; accepted by `Client.new` and `Template.new` |
-| `mount` | bool | `True` | mount every requested volume. `False` attaches the devices and leaves the mounting to the workload; a mapping carrying `mount` is then a `TypeError` |
+| `volumes` | bare names or `{name, mount?, mode?, attach_only?}` mappings | `None` | attach and mount up to eight unique catalog dataset disks; an omitted mount defaults to `/volumes/<name>`; `mode` is `"ro"` (default) or `"rw"` — `"rw"` requires the catalog entry's `writable: true`; accepted by `Client.new` and `Template.new` |
+| `mount` | bool | `True` | mount every requested volume. `False` attaches the devices and leaves the mounting to the workload; sandboxd then rejects a mapping carrying `mount` with 400 |
 | `ttl_seconds` | int | server default 5m | sandbox TTL, server-capped at 24h. The node reaps the sandbox after the TTL even if the client vanishes |
 | `deadline` | `time.monotonic()` value | `None` | keyword-only wall clock over the whole claim, redirect targets included: every request is bounded by whatever is left and a spent deadline raises `TimeoutError`. Without it each redirect candidate gets a fresh `timeout`, so a cluster with unreachable peers can cost a multiple of it. Also on `Template.new` and `Checkpoint.new` |
 
