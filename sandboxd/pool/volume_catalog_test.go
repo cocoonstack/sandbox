@@ -84,6 +84,36 @@ func TestRuntimeCatalogPersistsNormalizedSemantics(t *testing.T) {
 	}
 }
 
+func TestRuntimeCatalogRecoversLegacyArchivedVolumeReference(t *testing.T) {
+	m := newVolumeManager(t, newFakeEngine(), nil)
+	if err := m.RegisterVolume(t.Context(), "data", types.VolumeRegistration{Path: "/images/data"}); err != nil {
+		t.Fatal(err)
+	}
+	sb := &types.Sandbox{
+		ID: "sb_legacy", Key: testKey, Token: "legacy-token", ArchiveCk: "ck_00000000000000aa",
+		Volumes: []types.Volume{{Name: "data", Mount: "/volumes/data"}},
+	}
+	if err := m.store.save(map[string]*types.Sandbox{sb.ID: sb}); err != nil {
+		t.Fatal(err)
+	}
+	m = newVolumeManagerAt(t, newFakeEngine(), m.dataDir, nil)
+	if err := m.Reconcile(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := m.byID(sb.ID); !ok {
+		t.Fatal("archived claim did not survive restart")
+	}
+	if err := m.UnregisterVolume(t.Context(), "data"); !errors.Is(err, ErrVolumeRegistrationConflict) {
+		t.Fatalf("unregister recovered reference: %v", err)
+	}
+	if err := m.Release(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.UnregisterVolume(t.Context(), "data"); err != nil {
+		t.Fatalf("unregister after release: %v", err)
+	}
+}
+
 func TestRuntimeCatalogChangesAreAudited(t *testing.T) {
 	cfg := &config.Config{DataDir: t.TempDir(), AuditLog: true}
 	m, initErr := NewManager(t.Context(), cfg, newFakeEngine(), testSecrets(t), testBackends(t, cfg))
