@@ -13,9 +13,12 @@ readme = "README.md"
 [tool.setuptools.packages.find]
 include = ["cocoonsandbox*"]
 
+[tool.pytest.ini_options]
+pythonpath = ["."]
+
 [tool.mypy]
 strict = true
-files = ["cocoonsandbox"]
+files = ["cocoonsandbox", "examples"]
 
 [tool.ruff]
 line-length = 120

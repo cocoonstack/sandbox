@@ -137,6 +137,9 @@ entirely yours: sandboxd writes and clears no dirty marker for an attach-only
 `rw` claim, because it cannot verify your unmount, so releasing without
 unmounting cleanly leaves the image as a crash would — see
 [sandboxd-api](sandboxd-api.md#attach-only-volumes) for the full contract.
+For a root client managing a tenant claim, see the
+[external volume controller example](volume-controller.md). It keeps the
+controller reservation and access gate across detach, hibernate, and wake.
 
 The caller-visible constraints are deliberate: volume claims may consume a
 warm VM, remain non-capturable, mount read-only by default, and require Cloud

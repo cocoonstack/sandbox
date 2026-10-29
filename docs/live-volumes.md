@@ -7,7 +7,8 @@ Register both read-only catalog entries on the owning node and grant the
 sandbox's tenant access to them. Put `v1` and `v2` in each image's `/version`
 file. Keep each name bound to the same immutable image while held. Use Cocoon
 v0.7.2 or newer and set `SANDBOX_ADDR` and `SANDBOX_API_TOKEN` for the client.
-A sandbox token alone cannot manage volumes.
+A sandbox token alone cannot manage volumes. For a complete sleep and wake sequence,
+see [the external controller example](volume-controller.md).
 
 Entries [registered at runtime](sandboxd-api.md#put-v1volumesname) work the
 same way. The API also supports
