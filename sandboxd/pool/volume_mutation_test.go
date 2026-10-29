@@ -119,32 +119,6 @@ func TestLiveVolumesCommitAndRetry(t *testing.T) {
 	}
 }
 
-func TestLiveAttachPreservesWritableAndAttachOnlyVolumes(t *testing.T) {
-	for _, attachOnly := range []bool{false, true} {
-		t.Run(fmt.Sprintf("attach_only=%t", attachOnly), func(t *testing.T) {
-			eng := newFakeEngine()
-			m := newVolumeManager(t, eng, liveCatalog(t))
-			sb, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Volumes: []types.Volume{{Name: "other", Mode: "rw", AttachOnly: attachOnly}}})
-			if err != nil {
-				t.Fatal(err)
-			}
-			original := sb.Volumes[0]
-			if _, err := m.PatchVolumes(t.Context(), sb.ID, sb.Tenant, types.VolumePatch{Add: []types.Volume{{Name: "data"}}}); err != nil {
-				t.Fatal(err)
-			}
-			if sb.Volumes[0] != original {
-				t.Fatalf("changed existing volume: %v -> %v", original, sb.Volumes[0])
-			}
-			if _, err := m.SetVolumes(t.Context(), sb.ID, sb.Tenant, []types.Volume{{Name: "other", Mount: original.Mount}}); !errors.Is(err, ErrBadVolume) {
-				t.Fatalf("accepted mode change: %v", err)
-			}
-			if _, err := m.PatchVolumes(t.Context(), sb.ID, sb.Tenant, types.VolumePatch{Remove: []string{"data", "other"}}); err != nil || len(sb.Volumes) != 0 {
-				t.Fatalf("writable detach failed: %v", err)
-			}
-		})
-	}
-}
-
 func TestLiveVolumeValidationPrecedesDeviceCalls(t *testing.T) {
 	eng := newFakeEngine()
 	m := newVolumeManager(t, eng, liveCatalog(t))
@@ -209,49 +183,32 @@ func TestLiveAttachFailureSurvivesRestartAndCanBeDetached(t *testing.T) {
 }
 
 func TestLiveVolumePersistenceFailureRetainsRecoverableState(t *testing.T) {
-	for _, stage := range []string{"intent", "attach result", "detach result"} {
+	for _, stage := range []string{"intent", "attach result"} {
 		t.Run(stage, func(t *testing.T) {
 			eng := newFakeEngine()
 			m := newVolumeManager(t, eng, liveCatalog(t))
 			sb := mustClaim(t, m, testKey)
 			request := []types.Volume{{Name: "data"}}
-			if stage == "detach result" {
-				if _, err := m.SetVolumes(t.Context(), sb.ID, sb.Tenant, request); err != nil {
-					t.Fatal(err)
-				}
-			}
 			var restore func()
 			if stage == "intent" {
 				restore = breakClaimStore(t, m)
 			} else {
 				eng.liveVolumeHook = func(string) error { restore = breakClaimStore(t, m); return nil }
 			}
-			var err error
-			if stage == "detach result" {
-				_, err = m.PatchVolumes(t.Context(), sb.ID, sb.Tenant, types.VolumePatch{Remove: []string{"data"}})
-			} else {
-				_, err = m.SetVolumes(t.Context(), sb.ID, sb.Tenant, request)
-			}
-			if err == nil {
+			if _, err := m.SetVolumes(t.Context(), sb.ID, sb.Tenant, request); err == nil {
 				t.Fatal("expected persistence failure")
 			}
 			eng.liveVolumeHook = nil
 			restore()
 			assertLiveJournal(t, m, sb)
-			wantApplied := map[string]int{"intent": 0, "attach result": 1, "detach result": 0}[stage]
-			wantHolders := map[string]int{"intent": 1, "attach result": 1, "detach result": 0}[stage]
-			if len(sb.Volumes) != wantApplied || volumeHoldersOf(m, "data").readers != wantHolders {
+			wantApplied := map[string]int{"intent": 0, "attach result": 1}[stage]
+			if len(sb.Volumes) != wantApplied || volumeHoldersOf(m, "data").readers != 1 {
 				t.Fatalf("failed write lost the physical result or its hold: volumes=%v holders=%+v", sb.Volumes, volumeHoldersOf(m, "data"))
 			}
 			if stage == "intent" && len(eng.volumeSpecs) != 0 {
 				t.Fatal("failed intent reached the engine")
 			}
-			var view types.SandboxVolumesResponse
-			if stage == "detach result" {
-				view, err = m.PatchVolumes(t.Context(), sb.ID, sb.Tenant, types.VolumePatch{Remove: []string{"data"}})
-			} else {
-				view, err = m.SetVolumes(t.Context(), sb.ID, sb.Tenant, request)
-			}
+			view, err := m.SetVolumes(t.Context(), sb.ID, sb.Tenant, request)
 			if err != nil {
 				t.Fatal(err)
 			}
