@@ -1,7 +1,6 @@
 package pool
 
 import (
-	"context"
 	"encoding/json/v2"
 	"errors"
 	"fmt"
@@ -11,7 +10,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"testing/synctest"
 
 	"github.com/cocoonstack/sandbox/sandboxd/config"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
@@ -82,134 +80,6 @@ func TestRuntimeCatalogPersistsNormalizedSemantics(t *testing.T) {
 	}
 	if got := newVolumeManagerAt(t, eng, m.dataDir, nil).VolumeNames(); len(got) != 0 {
 		t.Fatalf("unregister not durable: %v", got)
-	}
-}
-
-func TestRuntimeCatalogRecoversLegacyArchivedVolumeReference(t *testing.T) {
-	for _, tc := range []struct {
-		name   string
-		finish func(*testing.T, *Manager, *types.Sandbox) error
-	}{
-		{"release", func(t *testing.T, m *Manager, sb *types.Sandbox) error {
-			return m.Release(t.Context(), sb.ID, Cred{Token: sb.Token})
-		}},
-		{"ownership transfer", func(t *testing.T, m *Manager, sb *types.Sandbox) error {
-			m.dropAdopted(t.Context(), sb)
-			return nil
-		}},
-		{"reap", func(t *testing.T, m *Manager, sb *types.Sandbox) error {
-			expire(m, sb)
-			m.reapOnce(t.Context())
-			return nil
-		}},
-		{"reap with canceled cleanup", func(t *testing.T, m *Manager, sb *types.Sandbox) error {
-			for range cap(m.maintSem) {
-				m.maintSem <- struct{}{}
-			}
-			ctx, cancel := context.WithCancel(t.Context())
-			cancel()
-			expire(m, sb)
-			m.reapOnce(ctx)
-			synctest.Wait()
-			for range cap(m.maintSem) {
-				<-m.maintSem
-			}
-			return nil
-		}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			synctest.Test(t, func(t *testing.T) {
-				m, recovered := recoverLegacyArchived(t)
-				if err := m.UnregisterVolume(t.Context(), "data"); !errors.Is(err, ErrVolumeRegistrationConflict) {
-					t.Fatalf("unregister recovered reference: %v", err)
-				}
-				writer := ClaimOptions{Volumes: []types.Volume{{Name: "data", Mode: types.VolumeModeRW}}}
-				if _, err := m.ClaimProvision(t.Context(), testKey, writer); !errors.Is(err, ErrVolumeBusy) {
-					t.Fatalf("writer beside recovered reference: %v", err)
-				}
-				reader, claimErr := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Volumes: []types.Volume{{Name: "data"}}})
-				if claimErr != nil {
-					t.Fatal(claimErr)
-				}
-				for range 2 {
-					if err := tc.finish(t, m, recovered); err != nil && !errors.Is(err, ErrUnknownSandbox) {
-						t.Fatal(err)
-					}
-					synctest.Wait()
-					if _, ok := m.byID(recovered.ID); ok {
-						t.Fatal("archived claim survived retirement")
-					}
-					if _, err := m.ClaimProvision(t.Context(), testKey, writer); !errors.Is(err, ErrVolumeBusy) {
-						t.Fatalf("writer beside remaining reader: %v", err)
-					}
-					if err := m.UnregisterVolume(t.Context(), "data"); !errors.Is(err, ErrVolumeRegistrationConflict) {
-						t.Fatalf("unregister beside remaining reader: %v", err)
-					}
-				}
-				if err := m.Release(t.Context(), reader.ID, Cred{Token: reader.Token}); err != nil {
-					t.Fatal(err)
-				}
-				writable, err := m.ClaimProvision(t.Context(), testKey, writer)
-				if err != nil {
-					t.Fatalf("writer after both readers retire: %v", err)
-				}
-				if err := m.Release(t.Context(), writable.ID, Cred{Token: writable.Token}); err != nil {
-					t.Fatal(err)
-				}
-				if err := m.UnregisterVolume(t.Context(), "data"); err != nil {
-					t.Fatalf("unregister after claim removal: %v", err)
-				}
-			})
-		})
-	}
-}
-
-func TestRuntimeCatalogRetainsArchivedVolumeReferenceAfterFailedReap(t *testing.T) {
-	for _, tc := range []struct {
-		name       string
-		breakStore func(*testing.T, *Manager) func()
-	}{
-		{"delete marker", func(t *testing.T, m *Manager) func() {
-			blocker := filepath.Join(m.dataDir, archiveDeleteDir)
-			if err := os.WriteFile(blocker, nil, 0o600); err != nil {
-				t.Fatal(err)
-			}
-			return func() {
-				if err := os.Remove(blocker); err != nil {
-					t.Fatal(err)
-				}
-			}
-		}},
-		{"claim store", func(t *testing.T, m *Manager) func() {
-			breakStore(t, m)
-			return func() { healStore(t, m) }
-		}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			synctest.Test(t, func(t *testing.T) {
-				m, recovered := recoverLegacyArchived(t)
-				restore := sync.OnceFunc(tc.breakStore(t, m))
-				defer restore()
-				expire(m, recovered)
-				m.reapOnce(t.Context())
-				if _, ok := m.byID(recovered.ID); !ok {
-					t.Fatal("failed reap removed the archived claim")
-				}
-				if err := m.UnregisterVolume(t.Context(), "data"); !errors.Is(err, ErrVolumeRegistrationConflict) {
-					t.Fatalf("unregister after failed reap: %v", err)
-				}
-				writer := ClaimOptions{Volumes: []types.Volume{{Name: "data", Mode: types.VolumeModeRW}}}
-				if _, err := m.ClaimProvision(t.Context(), testKey, writer); !errors.Is(err, ErrVolumeBusy) {
-					t.Fatalf("writer after failed reap: %v", err)
-				}
-				restore()
-				m.reapOnce(t.Context())
-				synctest.Wait()
-				if err := m.UnregisterVolume(t.Context(), "data"); err != nil {
-					t.Fatalf("unregister after reap retry: %v", err)
-				}
-			})
-		})
 	}
 }
 
@@ -557,28 +427,4 @@ func claimAndRelease(t *testing.T, m *Manager, volumes ...types.Volume) error {
 		return err
 	}
 	return m.Release(t.Context(), sb.ID, Cred{Token: sb.Token})
-}
-
-func recoverLegacyArchived(t *testing.T) (*Manager, *types.Sandbox) {
-	t.Helper()
-	m := newVolumeManager(t, newFakeEngine(), nil)
-	if err := m.RegisterVolume(t.Context(), "data", types.VolumeRegistration{Path: writeVolumeImage(t, "data", "bytes"), Writable: true}); err != nil {
-		t.Fatal(err)
-	}
-	sb := &types.Sandbox{
-		ID: "sb_legacy", Key: testKey, Token: "legacy-token", ArchiveCk: "ck_00000000000000aa",
-		Volumes: []types.Volume{{Name: "data", Mount: "/volumes/data"}},
-	}
-	if err := m.store.save(map[string]*types.Sandbox{sb.ID: sb}); err != nil {
-		t.Fatal(err)
-	}
-	m = newVolumeManagerAt(t, newFakeEngine(), m.dataDir, nil)
-	if err := m.Reconcile(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-	recovered, ok := m.byID(sb.ID)
-	if !ok {
-		t.Fatal("archived claim did not survive restart")
-	}
-	return m, recovered
 }

@@ -47,7 +47,6 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 		case sb.ArchiveCk != "":
 			// archived: no local VM by design, so adopt the stub and let the first exec wake it
 			m.addClaimLocked(sb)
-			m.adoptVolumes(heldVolumes(sb))
 			continue
 		case ok && rec.State == vmStateRunning:
 			sb.VsockSocket = rec.VsockSocket
