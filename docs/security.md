@@ -102,13 +102,13 @@ carries names only.
 Neither gossip, discovery, persisted claims, usage events, nor the sandbox index
 exposes host image paths or access lists.
 
-Runtime registration and unregistration require a configured root `api_token`;
+Runtime [registration and unregistration](sandboxd-api.md#put-v1volumesname)
+require a configured root `api_token`;
 these endpoints return 403 when the token is unset. New catalog records use
 mode 0600. Reads and replacements use the daemon's filesystem permissions.
 Registration uses static configuration's path validation plus, when set, the
 [`volume_roots`](deploy.md#configuration) bound. It does not verify backing type
-or pin backing identity. See
-[PUT /v1/volumes/{name}](sandboxd-api.md#put-v1volumesname). Without
+or pin backing identity. Without
 `volume_roots` the root token can register any absolute host path, writable if
 requested, for every scope its [access list](sandboxd-api.md#volume-access-lists)
 permits. Protect the root token like host root, or set `volume_roots`.

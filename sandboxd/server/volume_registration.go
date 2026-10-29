@@ -1,8 +1,6 @@
 package server
 
 import (
-	"context"
-	"errors"
 	"net/http"
 
 	"github.com/cocoonstack/sandbox/sandboxd/types"
@@ -26,13 +24,5 @@ func (s *Server) handleVolumeRegistration(w http.ResponseWriter, r *http.Request
 	} else {
 		err = s.mgr.UnregisterVolume(r.Context(), name)
 	}
-	switch {
-	case writePoolErr(w, err):
-	case errors.Is(err, context.DeadlineExceeded):
-		writeErr(w, http.StatusGatewayTimeout, op+" timed out")
-	case errors.Is(err, context.Canceled):
-		writeErr(w, http.StatusRequestTimeout, op+" canceled")
-	default:
-		writeResult(w, r, op, name, op+" failed", err, noContent(w))
-	}
+	writeResult(w, r, op, name, op+" failed", err, noContent(w))
 }

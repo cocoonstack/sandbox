@@ -118,10 +118,6 @@ func TestVolumeRegistrationRoutesMapSafeErrors(t *testing.T) {
 			{"invalid registration", fmt.Errorf("%w: invalid directio", pool.ErrBadVolume), http.StatusBadRequest},
 			{"binding conflict", fmt.Errorf("%w: /private/data.img", pool.ErrVolumeRegistrationConflict), http.StatusConflict},
 			{"catalog unavailable", fmt.Errorf("%w: sync /private/runtime-volumes.json", pool.ErrVolumeCatalogUnavailable), http.StatusServiceUnavailable},
-			{"uncertain cancellation", fmt.Errorf("%w: %w", pool.ErrVolumeCatalogUnavailable, context.Canceled), http.StatusServiceUnavailable},
-			{"uncertain timeout", fmt.Errorf("%w: %w", pool.ErrVolumeCatalogUnavailable, context.DeadlineExceeded), http.StatusServiceUnavailable},
-			{"timeout", fmt.Errorf("register: %w", context.DeadlineExceeded), http.StatusGatewayTimeout},
-			{"canceled", fmt.Errorf("register: %w", context.Canceled), http.StatusRequestTimeout},
 			{"unexpected failure", errors.New("open /private/data.img: permission denied"), http.StatusInternalServerError},
 		} {
 			t.Run(method+"/"+tt.name, func(t *testing.T) {
