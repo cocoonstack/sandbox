@@ -1,3 +1,5 @@
+"""External volume controller: detach before hibernation, reattach after wake (docs/volume-controller.md)."""
+
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -6,33 +8,7 @@ from cocoonsandbox import Sandbox, Volume
 
 @dataclass(frozen=True)
 class VolumeHooks:
-    """Application operations required by the controller functions.
-
-    assert_reserved verifies exclusive backing ownership and the owning node.
-    Hold a durable external reservation throughout use, detached sleep, failures,
-    and controller restarts. Renew leases separately and serialize operations.
-    Fence the old node before attaching at a new placement. This assertion is
-    neither a lock nor lease renewal. Tenant ACLs are not a reservation.
-
-    close_access blocks and drains business requests before returning, including
-    API, guest API, direct ports, and preview listeners on every serving node.
-    Issued preview URLs can wake the claim and have no per-URL revocation.
-    Stopping URL issuance is insufficient. Maintenance calls may reach silkd.
-
-    quiesce_and_unmount stops and reaps writers, flushes application and filesystem
-    state, and ordinarily unmounts. Raise on failure, including a busy mount.
-    Never use lazy or forced unmount. Account for raw-device users, partitions,
-    and other mount namespaces. A retry must tolerate an already unmounted disk.
-
-    mount_and_verify finds the device by catalog serial, mounts its existing
-    filesystem, and checks its identity and data. Restart the application behind
-    the closed gate if needed. Raise before admitting traffic if any check fails.
-    open_access admits traffic only after verification succeeds.
-
-    Keep access closed on exceptions, cancellation, or uncertain results. These
-    functions cannot prove an external gate closed or undo a partial reopen.
-    Recover failed gate operations externally while retaining the reservation.
-    """
+    """Application operations the controller calls; docs/volume-controller.md states each contract."""
 
     assert_reserved: Callable[[], None]
     close_access: Callable[[], None]
