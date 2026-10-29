@@ -1676,7 +1676,7 @@ func (f *fakeEngine) DetachVolume(ctx context.Context, _, sock, name, mount stri
 	clean := false
 	if mount != "" {
 		var err error
-		if clean, err = f.UnmountVolume(ctx, sock, name, mount); err != nil {
+		if clean, err = f.UnmountVolume(ctx, sock, mount); err != nil {
 			return false, err
 		}
 	}
@@ -1689,14 +1689,14 @@ func (f *fakeEngine) DetachVolume(ctx context.Context, _, sock, name, mount stri
 	return clean, nil
 }
 
-func (f *fakeEngine) UnmountVolume(_ context.Context, _, name, mount string) (bool, error) {
+func (f *fakeEngine) UnmountVolume(_ context.Context, _, mount string) (bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.volumeOps = append(f.volumeOps, "umount:"+mount)
 	if f.unmountVolumeErr != nil {
 		return false, f.unmountVolumeErr
 	}
-	return !f.detachUnclean && slices.ContainsFunc(f.volumeMounts, func(v types.Volume) bool { return v.Name == name && v.Mount == mount && v.RW() }), nil
+	return !f.detachUnclean && slices.ContainsFunc(f.volumeMounts, func(v types.Volume) bool { return v.Mount == mount && v.RW() }), nil
 }
 
 func (f *fakeEngine) SyncGuest(_ context.Context, vsockSocket string) error {

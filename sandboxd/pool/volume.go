@@ -245,7 +245,7 @@ func (m *Manager) quiesceVolumes(ctx context.Context, sb *types.Sandbox) volumeT
 		if !needsUnmount(volume) {
 			continue // attach-only: no mount to bring down, VM removal closes the device
 		}
-		clean, err := m.eng.UnmountVolume(ctx, sb.VsockSocket, volume.Name, volume.Mount)
+		clean, err := m.eng.UnmountVolume(ctx, sb.VsockSocket, volume.Mount)
 		if err != nil {
 			logger.Errorf(ctx, err, "unmount volume %s of %s", volume.Name, sb.ID)
 			stuck = true

@@ -152,7 +152,7 @@ type Engine interface {
 	DetachVolume(ctx context.Context, vmName, sock, name, mount string) (cleanRW bool, err error)
 	MountVolume(ctx context.Context, vsockSocket, name, mount string, rw bool) error
 	MountLiveVolume(ctx context.Context, vsockSocket, name, mount string, rw bool) error
-	UnmountVolume(ctx context.Context, vsockSocket, name, mount string) (bool, error)
+	UnmountVolume(ctx context.Context, vsockSocket, mount string) (bool, error)
 	SyncGuest(ctx context.Context, vsockSocket string) error
 	DiskAttachSnapshot(ctx context.Context, vmName, snapName string) (string, error)
 	DiskAttachDir(ctx context.Context, vmName, dir string) (string, error)
