@@ -14,6 +14,7 @@ import (
 
 	"github.com/cocoonstack/sandbox/sandboxd/store"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
+	"github.com/cocoonstack/sandbox/sandboxd/utils"
 )
 
 const archiveDeleteDir = "archive-deletes"
@@ -315,7 +316,7 @@ func (m *Manager) markArchiveCks(ckIDs []string) (failed map[string]error) {
 	if len(written) == 0 {
 		return failed
 	}
-	if err := syncDir(dir); err != nil {
+	if err := utils.SyncDir(dir); err != nil {
 		for _, id := range written {
 			failed[id] = err
 		}

@@ -15,13 +15,13 @@ import (
 
 	"github.com/cocoonstack/sandbox/sandboxd/engine"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
+	"github.com/cocoonstack/sandbox/sandboxd/utils"
 )
 
 const (
 	// sidecar, not data_dir: the marker travels with the image and survives a data_dir wipe
 	volumeDirtySuffix = ".dirty"
-	// caps the per-mount budget below, so teardown can never hang for long.
-	volumeQuiesceMax = 10 * time.Second
+	volumeQuiesceMax  = 10 * time.Second
 )
 
 // volumeHolders is one name's live admission state: a writer excludes every other claim.
@@ -372,14 +372,14 @@ func markVolumeDirty(path string) error {
 	if err := f.Close(); err != nil {
 		return err
 	}
-	return syncDir(filepath.Dir(path))
+	return utils.SyncDir(filepath.Dir(path))
 }
 
 func clearVolumeDirty(path string) error {
 	if err := os.Remove(volumeDirtyPath(path)); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	_ = syncDir(filepath.Dir(path)) // a lost removal re-converges on the next clean release
+	_ = utils.SyncDir(filepath.Dir(path)) // a lost removal re-converges on the next clean release
 	return nil
 }
 
@@ -391,12 +391,4 @@ func volumeDirty(path string) bool {
 
 func volumeDirtyPath(path string) string {
 	return path + volumeDirtySuffix
-}
-
-func syncDir(dir string) error {
-	d, err := os.Open(dir) //nolint:gosec // parent of an operator-configured image path
-	if err != nil {
-		return err
-	}
-	return errors.Join(d.Sync(), d.Close())
 }
