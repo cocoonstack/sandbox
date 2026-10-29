@@ -394,26 +394,29 @@ func (m *Manager) forgetAdopted(ctx context.Context, sb *types.Sandbox) func() {
 			logger.Warnf(ctx, "clear archive ck %s: %v", ck, err)
 		}
 	}
-	if !m.forgetClaim(ctx, sb) {
+	holds, ok := m.forgetClaim(ctx, sb)
+	if !ok {
 		return nil
 	}
 	return func() {
 		if vm != "" {
-			m.destroy(ctx, vm)
+			m.removeOrRetry(ctx, vm, "", volumeTeardown{holds: holds})
 		}
 		m.dropSnap(ctx, snap)
 		logger.Infof(ctx, "sandbox %s moved to another node", sb.ID)
 	}
 }
 
-func (m *Manager) forgetClaim(ctx context.Context, sb *types.Sandbox) bool {
+func (m *Manager) forgetClaim(ctx context.Context, sb *types.Sandbox) ([]types.Volume, bool) {
 	m.mu.Lock()
 	if m.claimed[sb.ID] != sb {
 		m.mu.Unlock()
-		return false
+		return nil, false
 	}
+	holds := m.cancelVolumeRun(sb)
 	if sb.ArchiveCk != "" {
-		m.releaseVolumes(heldVolumes(sb))
+		m.releaseVolumes(holds)
+		holds = nil
 	}
 	m.dropClaimLocked(sb)
 	js := m.store.del(sb.ID)
@@ -421,7 +424,7 @@ func (m *Manager) forgetClaim(ctx context.Context, sb *types.Sandbox) bool {
 	if err := m.store.commit(js); err != nil {
 		m.store.recommit(ctx, js)
 	}
-	return true
+	return holds, true
 }
 
 func (m *Manager) sweepOrphanArchives(ctx context.Context) {
