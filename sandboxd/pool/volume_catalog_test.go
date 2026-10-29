@@ -227,7 +227,8 @@ func TestRuntimeCatalogRetainsArchivedVolumeReferenceAfterFailedReap(t *testing.
 				if !ok {
 					t.Fatal("archived claim did not survive restart")
 				}
-				restore := tc.breakStore(t, m)
+				restore := sync.OnceFunc(tc.breakStore(t, m))
+				defer restore()
 				expire(m, recovered)
 				m.reapOnce(t.Context())
 				if _, ok := m.byID(sb.ID); !ok {

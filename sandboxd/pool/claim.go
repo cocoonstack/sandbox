@@ -613,6 +613,7 @@ func (m *Manager) reapOnce(ctx context.Context) {
 				continue
 			}
 			m.pendingCks[v.ck] = struct{}{}
+			v.holds = m.cancelVolumeRun(v.sb)
 			m.dropClaimLocked(v.sb)
 			purgeCks = append(purgeCks, v.ck)
 			purged = append(purged, v.id)
@@ -649,6 +650,11 @@ func (m *Manager) reapOnce(ctx context.Context) {
 		m.store.recommit(ctx, rb)
 		logger.Error(ctx, saveErr, "persist reap; rolled back")
 		return
+	}
+	for _, v := range expired {
+		if v.action == reapPurge {
+			m.unreserveVolumes(v.holds)
+		}
 	}
 	// engine teardown can take minutes, so fan out bounded and never stall the ticker loop
 	m.runBounded(ctx, len(expired), func(ctx context.Context, i int) {

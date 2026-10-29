@@ -412,7 +412,7 @@ func (m *Manager) forgetClaim(ctx context.Context, sb *types.Sandbox) bool {
 		m.mu.Unlock()
 		return false
 	}
-	if sb.ArchiveCk != "" && sb.VMName == "" {
+	if sb.ArchiveCk != "" {
 		m.releaseVolumes(heldVolumes(sb))
 	}
 	m.dropClaimLocked(sb)
