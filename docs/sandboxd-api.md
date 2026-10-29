@@ -890,7 +890,7 @@ an SDK caller should set.
 Auth: node API token. Root sees every live claim; a tenant sees only its own.
 The index is `{"sandboxes": [{id, key, tenant?, deadline, claimed_at?, hibernated,
 archived?, from_checkpoint?, claim_ref?, metadata?, on_expire?, cpu_count, mem_total_bytes,
-volumes?: [{name, mount?, mode?}], volumes_want?: [{name, mount?, mode?}], restarts?, restarted_at?, failed?}]}` — `cpu_count` and `mem_total_bytes` are the
+volumes?: [{name, mount?, mode?, attach_only?}], volumes_want?: [{name, mount?, mode?, attach_only?}], restarts?, restarted_at?, failed?}]}` — `cpu_count` and `mem_total_bytes` are the
 size tier's allocation; `restarts` counts the cold boots that replaced an
 exited VMM and `restarted_at` stamps the last one (each loses guest memory and
 the instance-metadata document, so a caller re-establishes guest state when
