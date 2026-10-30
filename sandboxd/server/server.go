@@ -14,7 +14,6 @@ import (
 	"net/netip"
 	"net/url"
 	"slices"
-	"strconv"
 	"sync"
 	"time"
 
@@ -37,11 +36,8 @@ const (
 	maxMetadataDoc  = 4 << 10
 	previewTTL      = time.Hour
 
-	defaultTenantPage = 1000
-	maxTenantPage     = 10000
-
-	defaultUsagePage = 1000
-	maxUsagePage     = 10000
+	defaultPage = 1000
+	maxPage     = 10000
 )
 
 var poolErrHTTP = []struct {
@@ -771,14 +767,10 @@ func (s *Server) handleReload(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleTenants(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	limit := defaultTenantPage
-	if raw := q.Get("limit"); raw != "" {
-		n, err := strconv.Atoi(raw)
-		if err != nil || n < 1 || n > maxTenantPage {
-			writeErr(w, http.StatusBadRequest, fmt.Sprintf("limit must be 1..%d", maxTenantPage))
-			return
-		}
-		limit = n
+	limit, err := pageLimit(q.Get("limit"))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
 	}
 	page, err := s.mgr.Tenants(r.Context(), q.Get("after"), limit)
 	writeResult(w, r, "tenants", "", "list tenants failed", err, func() { writeJSON(w, http.StatusOK, page) })

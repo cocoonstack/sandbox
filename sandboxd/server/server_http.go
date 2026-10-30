@@ -11,6 +11,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/projecteru2/core/log"
@@ -167,6 +168,17 @@ func metadataFilter(pairs []string) (types.Metadata, error) {
 		filter[k] = v
 	}
 	return filter, nil
+}
+
+func pageLimit(raw string) (int, error) {
+	if raw == "" {
+		return defaultPage, nil
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n < 1 || n > maxPage {
+		return 0, fmt.Errorf("limit must be 1..%d", maxPage)
+	}
+	return n, nil
 }
 
 func writePoolErr(w http.ResponseWriter, err error) bool {

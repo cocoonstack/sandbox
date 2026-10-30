@@ -37,17 +37,15 @@ func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
 }
 
 func usageQuery(v url.Values) (usage.Query, error) {
-	q := usage.Query{Tenant: v.Get("tenant"), Limit: defaultUsagePage}
+	q := usage.Query{Tenant: v.Get("tenant")}
 	var err error
 	if raw := v.Get("after"); raw != "" {
 		if q.After, err = strconv.ParseInt(raw, 10, 64); err != nil || q.After < 0 {
 			return usage.Query{}, errors.New("after must be a non-negative cursor")
 		}
 	}
-	if raw := v.Get("limit"); raw != "" {
-		if q.Limit, err = strconv.Atoi(raw); err != nil || q.Limit < 1 || q.Limit > maxUsagePage {
-			return usage.Query{}, fmt.Errorf("limit must be 1..%d", maxUsagePage)
-		}
+	if q.Limit, err = pageLimit(v.Get("limit")); err != nil {
+		return usage.Query{}, err
 	}
 	if q.Since, err = usageTime(v, "since"); err != nil {
 		return usage.Query{}, err
