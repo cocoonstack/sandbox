@@ -318,6 +318,9 @@ func TestUnmountVolumeReportsCleanWritableUnmount(t *testing.T) {
 		{name: "clean", mountinfo: entry + "rw\n", wantClean: true},
 		{name: "ext4 emergency read-only", mountinfo: entry + "rw,emergency_ro\n"},
 		{name: "bind mount elsewhere", mountinfo: entry + "rw\n3 1 8:32 / /other rw - ext4 /dev/vdc rw\n"},
+		{name: "stacked filesystem", mountinfo: entry + "rw\n3 2 0:39 / /data rw - tmpfs tmpfs rw\n"},
+		{name: "stacked filesystem listed first", mountinfo: "3 2 0:39 / /data rw - tmpfs tmpfs rw\n" + entry + "rw\n"},
+		{name: "stacked whole-device bind", mountinfo: entry + "rw\n3 2 8:32 / /data rw,relatime shared:4 - ext4 /dev/vdc rw\n"},
 		{name: "not mounted"},
 		{name: "busy", mountinfo: entry + "rw\n", busy: true, wantErr: true},
 	} {
