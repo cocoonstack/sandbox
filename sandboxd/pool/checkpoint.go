@@ -15,6 +15,7 @@ import (
 
 	"github.com/cocoonstack/sandbox/sandboxd/store"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
+	"github.com/cocoonstack/sandbox/sandboxd/usage"
 )
 
 // DeleteScope selects how far a checkpoint delete reaches; fleet-wide is the zero value.
@@ -53,7 +54,7 @@ func (m *Manager) Checkpoint(ctx context.Context, id string, cred Cred, name, te
 		return types.Checkpoint{}, err
 	}
 	m.counters.checkpoints.Add(1)
-	m.recordUsage(ctx, usageEvent{Event: "checkpoint", ID: sb.ID, VMName: lockedVMName(sb), Reference: ckpt.ID})
+	m.recordUsage(ctx, usage.Event{Event: "checkpoint", ID: sb.ID, VMName: lockedVMName(sb), Tenant: sb.Tenant, Reference: ckpt.ID})
 	return ckpt, nil
 }
 

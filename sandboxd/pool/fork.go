@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/cocoonstack/sandbox/sandboxd/types"
+	"github.com/cocoonstack/sandbox/sandboxd/usage"
 )
 
 // Fork clones a claimed sandbox into count children, each a fresh claim; all-or-nothing.
@@ -56,7 +57,7 @@ func (m *Manager) Fork(ctx context.Context, id string, cred Cred, count int, ttl
 	for i, c := range children {
 		ids[i] = c.ID
 	}
-	m.recordUsage(ctx, usageEvent{Event: "fork", ID: sb.ID, VMName: lockedVMName(sb), Children: ids})
+	m.recordUsage(ctx, usage.Event{Event: "fork", ID: sb.ID, VMName: lockedVMName(sb), Tenant: sb.Tenant, Children: ids})
 	return children, nil
 }
 

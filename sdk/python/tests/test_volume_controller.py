@@ -7,16 +7,17 @@ from cocoonsandbox import Client, VolumeError
 from examples.volume_controller import VolumeHooks, hibernate_volume, resume_volume
 
 PATH = "/v1/sandboxes/sb_1"
+HOME = {"name": "home", "mode": "rw", "attach_only": True}
 EMPTY = {"volumes_want": [], "volumes": [], "states": [], "converging": False}
 ATTACHED = {
-    "volumes_want": [{"name": "home", "mode": "rw", "attach_only": True}],
-    "volumes": [{"name": "home", "mode": "rw", "attach_only": True}],
+    "volumes_want": [HOME],
+    "volumes": [HOME],
     "states": [{"name": "home", "state": "attached"}],
     "converging": False,
 }
 
 REMOVE = ("patch", {"remove": ["home"]})
-ADD = ("patch", {"add": [{"name": "home", "mode": "rw", "attach_only": True}]})
+ADD = ("patch", {"add": [HOME]})
 REMOVE_STEPS = ["close", "reserved", "unmount", REMOVE]
 ADD_STEPS = ["close", "reserved", "wake", ADD]
 
@@ -75,7 +76,7 @@ def test_controller_cycle_opens_after_verification(controller):
     resume_volume(controller.sb, "home", controller.hooks)
     assert controller.events == REMOVE_STEPS + ["hibernate"] + ADD_STEPS + ["verify", "open"]
     assert controller.gate["open"]
-    assert controller.sb.volumes == [{"name": "home", "mode": "rw", "attach_only": True}]
+    assert controller.sb.volumes == [HOME]
 
 
 @pytest.mark.parametrize(

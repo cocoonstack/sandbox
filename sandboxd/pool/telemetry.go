@@ -12,6 +12,7 @@ import (
 	"github.com/projecteru2/core/log"
 
 	"github.com/cocoonstack/sandbox/sandboxd/egress"
+	"github.com/cocoonstack/sandbox/sandboxd/usage"
 )
 
 const (
@@ -66,15 +67,7 @@ type requestFrame struct {
 }
 
 type auditFrame struct {
-	Op      string   `json:"op"`
-	Argv    []string `json:"argv,omitempty"`
-	Path    string   `json:"path,omitempty"`
-	Dest    string   `json:"dest,omitempty"`
-	From    string   `json:"from,omitempty"`
-	To      string   `json:"to,omitempty"`
-	URL     string   `json:"url,omitempty"`
-	Session string   `json:"session,omitempty"`
-	Port    uint16   `json:"port,omitzero"`
+	requestFrame
 	Added   []string `json:"added,omitempty"`
 	Changed []string `json:"changed,omitempty"`
 	Removed []string `json:"removed,omitempty"`
@@ -135,10 +128,7 @@ func (m *Manager) Audit(ctx context.Context, id string, line []byte) {
 	if frame.Op == "" {
 		return // torn cap boundary or a non-frame line: nothing to record
 	}
-	m.recordAudit(ctx, id, auditFrame{
-		Op: frame.Op, Argv: frame.Argv, Path: frame.Path, Dest: frame.Dest,
-		From: frame.From, To: frame.To, URL: frame.URL, Session: frame.Session, Port: frame.Port,
-	})
+	m.recordAudit(ctx, id, auditFrame{requestFrame: frame})
 }
 
 // AuditEnabled reports whether the relay should tap request frames at all.
@@ -182,11 +172,11 @@ func (m *Manager) recordEgress(ctx context.Context, id, tenant string, ev egress
 			Tenant: tenant, Src: ev.Local, Dst: ev.Remote,
 		}})
 	}
-	m.recordUsage(ctx, usageEvent{Event: egressEvent, ID: id, Tenant: tenant, Reference: ev.Host, Upstream: ev.Upstream, Secret: ev.Injected})
+	m.recordUsage(ctx, usage.Event{Event: egressEvent, ID: id, Tenant: tenant, Reference: ev.Host, Upstream: ev.Upstream, Secret: ev.Injected})
 }
 
 // recordUsage appends one billing event; failures are logged, never propagated.
-func (m *Manager) recordUsage(ctx context.Context, ev usageEvent) {
+func (m *Manager) recordUsage(ctx context.Context, ev usage.Event) {
 	ev.Time = time.Now()
 	if err := m.usage.append(ev); err != nil {
 		log.WithFunc("pool.recordUsage").Errorf(ctx, err, "append usage event %s %s", ev.Event, ev.ID)

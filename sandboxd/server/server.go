@@ -14,7 +14,6 @@ import (
 	"net/netip"
 	"net/url"
 	"slices"
-	"strconv"
 	"sync"
 	"time"
 
@@ -26,6 +25,7 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/store/peer"
 	"github.com/cocoonstack/sandbox/sandboxd/tenants"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
+	"github.com/cocoonstack/sandbox/sandboxd/usage"
 )
 
 const (
@@ -36,8 +36,8 @@ const (
 	maxMetadataDoc  = 4 << 10
 	previewTTL      = time.Hour
 
-	defaultTenantPage = 1000
-	maxTenantPage     = 10000
+	defaultPage = 1000
+	maxPage     = 10000
 )
 
 var poolErrHTTP = []struct {
@@ -166,6 +166,11 @@ type CheckpointProber interface {
 	Forget(id string)
 }
 
+// UsageReader reads the cell's shared usage table.
+type UsageReader interface {
+	List(ctx context.Context, q usage.Query) ([]usage.Record, error)
+}
+
 // ConfigReloader re-reads the node config and applies its reloadable settings.
 type ConfigReloader func(ctx context.Context) (pool.ReloadResult, error)
 
@@ -221,6 +226,12 @@ type PoolUpdateRequest struct {
 	Pools []config.PoolSpec `json:"pools"`
 }
 
+// UsageResponse is the wire reply of GET /v1/usage; Next is set when the page is full.
+type UsageResponse struct {
+	Events []usage.Record `json:"events"`
+	Next   int64          `json:"next,omitzero"`
+}
+
 // Server serves the control plane for one node.
 type Server struct {
 	mgr       Manager
@@ -232,6 +243,7 @@ type Server struct {
 	advertise string
 	preview   *PreviewServer
 	reload    ConfigReloader
+	usage     UsageReader
 	noSplice  bool
 
 	execBudget *semaphore.Weighted
@@ -267,6 +279,11 @@ func New(apiToken, advertise string, mgr Manager, dialer Dialer, placer Placer, 
 // SetConfigReload wires the reload POST /v1/config/reload runs; set it before serving.
 func (s *Server) SetConfigReload(f ConfigReloader) {
 	s.reload = f
+}
+
+// SetUsage serves GET /v1/usage from u; set it before serving.
+func (s *Server) SetUsage(u UsageReader) {
+	s.usage = u
 }
 
 // NoRxSplice copies client bytes to guests in user space; call it before serving.
@@ -311,6 +328,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("DELETE /v1/tenants/{name}", s.requireRoot(s.handleDeleteTenant))
 	mux.HandleFunc("POST /v1/drain", s.requireRoot(s.handleDrain))
 	mux.HandleFunc("DELETE /v1/drain", s.requireRoot(s.handleUncordon))
+	mux.HandleFunc("GET /v1/usage", s.requireRoot(s.handleUsage))
 	mux.HandleFunc("GET /v1/sandboxes/{id}/agent", s.handleAgent)
 	mux.HandleFunc("GET /v1/sandboxes/{id}/ports/{port}", s.handlePort)
 	mux.HandleFunc("POST /v1/sandboxes/{id}/exec", s.handleExec)
@@ -749,14 +767,10 @@ func (s *Server) handleReload(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleTenants(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	limit := defaultTenantPage
-	if raw := q.Get("limit"); raw != "" {
-		n, err := strconv.Atoi(raw)
-		if err != nil || n < 1 || n > maxTenantPage {
-			writeErr(w, http.StatusBadRequest, fmt.Sprintf("limit must be 1..%d", maxTenantPage))
-			return
-		}
-		limit = n
+	limit, err := pageLimit(q.Get("limit"))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
 	}
 	page, err := s.mgr.Tenants(r.Context(), q.Get("after"), limit)
 	writeResult(w, r, "tenants", "", "list tenants failed", err, func() { writeJSON(w, http.StatusOK, page) })

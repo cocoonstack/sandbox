@@ -238,8 +238,11 @@ replication rounds write it, so the claim path is unchanged.
   replica retirement keeps its tombstone until the hourly sweep after that.
 - **Usage journal.** The journal stays per node: an adopted claim's `archive`
   is in the old owner's `usage.jsonl`, and its `unarchive`, `release` or
-  `archive_delete` is in the adopter's or the purging node's. Fold the journals
-  of all nodes by sandbox id.
+  `archive_delete` is in the adopter's or the purging node's. Fold the events
+  of all nodes by sandbox id. With `meta_store.usage` every node lands its
+  journal in the cell's [shared usage table](deploy.md#shared-usage-table), and
+  [`GET /v1/usage`](sandboxd-api.md#get-v1usage) on any node returns the
+  events of all of them.
 
 The node lease decides adoption, so a partitioned owner can lose an archived
 claim it still lists once its lease runs out; the epoch fences it out. A claim

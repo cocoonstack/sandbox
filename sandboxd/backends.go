@@ -17,6 +17,7 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/tenants"
 	"github.com/cocoonstack/sandbox/sandboxd/tenants/file"
 	tenantspg "github.com/cocoonstack/sandbox/sandboxd/tenants/pg"
+	usagepg "github.com/cocoonstack/sandbox/sandboxd/usage/pg"
 )
 
 func openBackends(ctx context.Context, cfg *config.Config) (pool.Backends, error) {
@@ -45,6 +46,21 @@ func openBackends(ctx context.Context, cfg *config.Config) (pool.Backends, error
 		}
 	}
 	return b, nil
+}
+
+func openUsage(ctx context.Context, cfg *config.Config) (*usagepg.Store, error) {
+	ms := cfg.MetaStore
+	if ms == nil || !ms.Usage {
+		return nil, nil
+	}
+	return usagepg.Open(ctx, os.Getenv(ms.DSNEnv), ms.Cell)
+}
+
+func usageNode(cfg *config.Config) (string, error) {
+	if cfg.Mesh != nil {
+		return cfg.Mesh.ID(), nil
+	}
+	return os.Hostname()
 }
 
 func newStoreView(ctx context.Context, cfg *config.Config, staging string, idRe *regexp.Regexp) (store.Store, error) {

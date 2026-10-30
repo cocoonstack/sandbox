@@ -15,6 +15,7 @@ import (
 
 	"github.com/cocoonstack/sandbox/sandboxd/store"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
+	"github.com/cocoonstack/sandbox/sandboxd/usage"
 )
 
 // TemplateInfo is the ops view of one promoted template; an empty Tenant means the operator (root).
@@ -85,7 +86,7 @@ func (m *Manager) Promote(ctx context.Context, id string, cred Cred, template, t
 		m.notifyTemplates()
 	}
 	m.counters.promotes.Add(1)
-	m.recordUsage(ctx, usageEvent{Event: "promote", ID: sb.ID, VMName: vmName, Reference: key.Template})
+	m.recordUsage(ctx, usage.Event{Event: "promote", ID: sb.ID, VMName: vmName, Tenant: sb.Tenant, Reference: key.Template})
 	return key, digest, nil
 }
 

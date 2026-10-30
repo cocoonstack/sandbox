@@ -195,6 +195,13 @@ func TestLoadMetaStore(t *testing.T) {
 	if _, _, err := cfg.ReloadDiff(&next); err == nil || !strings.Contains(err.Error(), "meta_store") {
 		t.Errorf("a reload that drops meta_store: %v, want a restart refusal", err)
 	}
+	withUsage, usageErr := Load(writeConfig(t, `{"api_token":"r","pools":[],"meta_store":{"kind":"pg","dsn_env":"SANDBOX_TEST_DSN","usage":true}}`))
+	if usageErr != nil || !withUsage.MetaStore.Usage || cfg.MetaStore.Usage {
+		t.Fatalf("Load with usage: %+v %v, want usage only where set", withUsage, usageErr)
+	}
+	if _, _, err := cfg.ReloadDiff(withUsage); err == nil || !strings.Contains(err.Error(), "meta_store") {
+		t.Errorf("a reload that turns usage on: %v, want a restart refusal", err)
+	}
 }
 
 func TestLoadArchiveFailover(t *testing.T) {

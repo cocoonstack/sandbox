@@ -16,6 +16,7 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/store"
 	"github.com/cocoonstack/sandbox/sandboxd/tenants"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
+	"github.com/cocoonstack/sandbox/sandboxd/usage"
 )
 
 // AdoptArchived takes over a claim whose owner's lease expired and reports whether this node owns it now.
@@ -502,7 +503,7 @@ func (m *Manager) purgeArchiveRow(ctx context.Context, rec archives.Record) {
 	}
 	if !rec.Consumed {
 		m.counters.archiveDeletes.Add(1)
-		m.recordUsage(ctx, usageEvent{Event: "archive_delete", ID: rec.ID, Reference: rec.Checkpoint, Tenant: rec.Tenant})
+		m.recordUsage(ctx, usage.Event{Event: "archive_delete", ID: rec.ID, Reference: rec.Checkpoint, Tenant: rec.Tenant})
 	}
 	logger.Infof(ctx, "purged archive %s of %s", rec.ID, rec.Owner)
 }

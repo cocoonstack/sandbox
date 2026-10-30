@@ -1,7 +1,6 @@
 package pool
 
 import (
-	"encoding/json/v2"
 	"errors"
 	"os"
 	"path/filepath"
@@ -631,15 +630,7 @@ func TestWritableDiscoveryAndUsageEvent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ClaimProvision: %v", err)
 	}
-	raw, err := os.ReadFile(filepath.Join(m.dataDir, "usage.jsonl"))
-	if err != nil {
-		t.Fatalf("read usage journal: %v", err)
-	}
-	for line := range strings.SplitSeq(strings.TrimSpace(string(raw)), "\n") {
-		var event usageEvent
-		if err := json.Unmarshal([]byte(line), &event); err != nil {
-			t.Fatalf("decode usage event: %v", err)
-		}
+	for _, event := range usageJournal(t, m) {
 		if event.Event != "claim" || event.ID != sb.ID {
 			continue
 		}

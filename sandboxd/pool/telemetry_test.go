@@ -15,7 +15,9 @@ import (
 
 	"github.com/cocoonstack/sandbox/sandboxd/config"
 	"github.com/cocoonstack/sandbox/sandboxd/egress"
+	"github.com/cocoonstack/sandbox/sandboxd/tenants"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
+	"github.com/cocoonstack/sandbox/sandboxd/usage"
 )
 
 func TestUsageJournalRecordsLifecycle(t *testing.T) {
@@ -53,7 +55,7 @@ func TestJournalRotationKeepsOneBackup(t *testing.T) {
 	}
 	j.size = journalMaxBytes
 
-	if err := j.append(usageEvent{Event: "claim", ID: "sb_1"}); err != nil {
+	if err := j.append(usage.Event{Event: "claim", ID: "sb_1"}); err != nil {
 		t.Fatalf("append: %v", err)
 	}
 	if _, err := os.Stat(path + ".1"); err != nil {
@@ -137,16 +139,8 @@ func TestTenantStampedInJournals(t *testing.T) {
 		t.Errorf("persisted claim %+v, want tenant acme", claims[sb.ID])
 	}
 
-	usage, err := os.ReadFile(filepath.Join(m.dataDir, "usage.jsonl"))
-	if err != nil {
-		t.Fatalf("read usage journal: %v", err)
-	}
 	found := false
-	for line := range strings.SplitSeq(strings.TrimSpace(string(usage)), "\n") {
-		var ev usageEvent
-		if err := json.Unmarshal([]byte(line), &ev); err != nil {
-			t.Fatalf("bad journal line %q: %v", line, err)
-		}
+	for _, ev := range usageJournal(t, m) {
 		if ev.Event == "claim" && ev.ID == sb.ID {
 			found = true
 			if ev.Tenant != "acme" {
@@ -156,6 +150,54 @@ func TestTenantStampedInJournals(t *testing.T) {
 	}
 	if !found {
 		t.Error("no claim event for the tenant claim")
+	}
+}
+
+func TestEveryClaimScopedUsageEventCarriesTheTenant(t *testing.T) {
+	m := tenantManager(t, t.TempDir())
+	ctx := t.Context()
+	if err := m.PutTenant(ctx, tenants.TenantSpec{Name: "acme", Token: "acme-tok"}); err != nil {
+		t.Fatalf("put tenant: %v", err)
+	}
+	sb, err := m.ClaimProvision(ctx, testKey, ClaimOptions{TTL: time.Hour, Tenant: "acme"})
+	if err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	cred := Cred{Token: sb.Token}
+	if err = m.Hibernate(ctx, sb.ID, cred); err != nil {
+		t.Fatalf("hibernate: %v", err)
+	}
+	if _, _, _, err = m.WakeAgentSocket(ctx, sb.ID, sb.Token); err != nil {
+		t.Fatalf("wake: %v", err)
+	}
+	children, err := m.Fork(ctx, sb.ID, cred, 1, time.Hour, "", "")
+	if err != nil {
+		t.Fatalf("fork: %v", err)
+	}
+	if _, err = m.Checkpoint(ctx, sb.ID, cred, "", ""); err != nil {
+		t.Fatalf("checkpoint: %v", err)
+	}
+	if _, _, err = m.Promote(ctx, sb.ID, cred, "tpl:acme", "acme"); err != nil {
+		t.Fatalf("promote: %v", err)
+	}
+	if err = m.Release(ctx, sb.ID, cred); err != nil {
+		t.Fatalf("release: %v", err)
+	}
+	expire(m, children[0])
+	m.reapOnce(ctx)
+	waitFor(t, func() bool { return strings.HasSuffix(usageEventsOf(t, m, children[0].ID), ",reap") })
+
+	kinds := map[string]bool{}
+	for _, ev := range usageJournal(t, m) {
+		kinds[ev.Event] = true
+		if ev.Tenant != "acme" {
+			t.Errorf("%s event of %s carries tenant %q, want acme", ev.Event, ev.ID, ev.Tenant)
+		}
+	}
+	for _, kind := range []string{"claim", "hibernate", "wake", "fork", "checkpoint", "promote", "release", "reap"} {
+		if !kinds[kind] {
+			t.Errorf("no %s event in the journal", kind)
+		}
 	}
 }
 
@@ -332,16 +374,8 @@ func TestClaimMetadataSurvivesARestart(t *testing.T) {
 func TestEgressUsageEventNamesTheInjectedCredentials(t *testing.T) {
 	m := newTestManager(t, newFakeEngine(), config.PoolSpec{PoolKey: testKey})
 	m.recordEgress(t.Context(), "sb_v", "acme", egress.Event{Method: http.MethodGet, Host: "graph.example.com", Port: 443, Decision: egress.DecisionAllow, Injected: "claim:FB"})
-	raw, err := os.ReadFile(filepath.Join(m.dataDir, "usage.jsonl"))
-	if err != nil {
-		t.Fatalf("read journal: %v", err)
-	}
-	var ev usageEvent
-	if err = json.Unmarshal(raw, &ev); err != nil {
-		t.Fatalf("decode %q: %v", raw, err)
-	}
-	if ev.Event != "egress" || ev.Reference != "graph.example.com" || ev.Secret != "claim:FB" {
-		t.Errorf("usage event %+v, want egress to graph.example.com naming claim:FB", ev)
+	if evs := usageJournal(t, m); len(evs) != 1 || evs[0].Event != "egress" || evs[0].Reference != "graph.example.com" || evs[0].Secret != "claim:FB" {
+		t.Errorf("usage events %+v, want one egress to graph.example.com naming claim:FB", evs)
 	}
 }
 
@@ -414,18 +448,27 @@ func TestARelayedFrameCannotForgeOrDropItsAuditLine(t *testing.T) {
 	}
 }
 
-func usageEventsOf(t *testing.T, m *Manager, id string) string {
+func usageJournal(t *testing.T, m *Manager) []usage.Event {
 	t.Helper()
-	raw, err := os.ReadFile(filepath.Join(m.dataDir, "usage.jsonl"))
+	raw, err := os.ReadFile(filepath.Join(m.dataDir, usage.JournalFile))
 	if err != nil {
-		t.Fatalf("read journal: %v", err)
+		t.Fatalf("read usage journal: %v", err)
 	}
-	var events []string
+	var events []usage.Event
 	for line := range strings.SplitSeq(strings.TrimSpace(string(raw)), "\n") {
-		var ev usageEvent
+		var ev usage.Event
 		if err := json.Unmarshal([]byte(line), &ev); err != nil {
 			t.Fatalf("bad journal line %q: %v", line, err)
 		}
+		events = append(events, ev)
+	}
+	return events
+}
+
+func usageEventsOf(t *testing.T, m *Manager, id string) string {
+	t.Helper()
+	var events []string
+	for _, ev := range usageJournal(t, m) {
 		if ev.ID == id {
 			events = append(events, ev.Event)
 		}

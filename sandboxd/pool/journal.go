@@ -6,29 +6,10 @@ import (
 	"errors"
 	"os"
 	"sync"
-	"time"
 )
 
 // journalMaxBytes rotates a journal once it crosses this size; one .1 backup is kept.
 const journalMaxBytes = 64 * 1024 * 1024
-
-// usageEvent is one line of usage.jsonl, the billing stream the platform collector folds.
-type usageEvent struct {
-	Time      time.Time `json:"t"`
-	Event     string    `json:"ev"`
-	ID        string    `json:"id"`
-	VMName    string    `json:"vm,omitempty"`
-	KeyHash   string    `json:"key,omitempty"`
-	Tenant    string    `json:"tenant,omitempty"`
-	Volumes   []string  `json:"volumes,omitempty"`
-	VolumesRW []string  `json:"volumes_rw,omitempty"`
-	Children  []string  `json:"children,omitempty"`
-	Reference string    `json:"ref,omitempty"`
-	Upstream  string    `json:"upstream,omitempty"`
-	Secret    string    `json:"secret,omitempty"`
-	Sent      int64     `json:"tx,omitzero"`
-	Received  int64     `json:"rx,omitzero"`
-}
 
 // journal is an append-only JSONL writer with size rotation; its lock only orders appends.
 type journal struct {
@@ -39,7 +20,7 @@ type journal struct {
 }
 
 func newJournal(path string) (*journal, error) {
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600) //nolint:gosec // under data_dir
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0o600) //nolint:gosec // under data_dir
 	if err != nil {
 		return nil, err
 	}
@@ -48,7 +29,12 @@ func newJournal(path string) (*journal, error) {
 		_ = f.Close()
 		return nil, err
 	}
-	return &journal{path: path, f: f, size: st.Size()}, nil
+	j := &journal{path: path, f: f, size: st.Size()}
+	if err = j.endTornLine(); err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+	return j, nil
 }
 
 func (j *journal) append(v any) error {
@@ -66,6 +52,22 @@ func (j *journal) append(v any) error {
 	n, err := j.f.Write(line)
 	j.size += int64(n)
 	return errors.Join(rotateErr, err)
+}
+
+func (j *journal) endTornLine() error {
+	if j.size == 0 {
+		return nil
+	}
+	last := make([]byte, 1)
+	if _, err := j.f.ReadAt(last, j.size-1); err != nil {
+		return err
+	}
+	if last[0] == '\n' {
+		return nil
+	}
+	n, err := j.f.Write([]byte{'\n'})
+	j.size += int64(n)
+	return err
 }
 
 // rotate moves the live file to .1 and reopens; the old descriptor closes last.

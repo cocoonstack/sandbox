@@ -158,6 +158,8 @@ type MetaStoreConfig struct {
 	DSNEnv string `json:"dsn_env"`
 	// Cell opts the node into one pool set for every node of the cell; empty keeps the pool set per node.
 	Cell string `json:"cell,omitempty"`
+	// Usage lands the node's usage journal in the shared usage table and serves GET /v1/usage from it.
+	Usage bool `json:"usage,omitzero"`
 }
 
 // VolumeSpec declares one operator-managed dataset disk, held by exactly one node.

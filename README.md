@@ -45,8 +45,8 @@ performance) — source in
   restart reconcile with VMM cold restart, memberlist mesh with redirect
   placement, a checkpoint store on a shared directory or S3 (sparse,
   content-addressed chunks), and an optional shared PostgreSQL meta store
-  for tenants, pools, node leases and the cross-node adoption of archived
-  claims and of running claims a pool replicates (`replicate_seconds`)
+  for tenants, pools, node leases, usage events and the cross-node adoption of
+  archived claims and of running claims a pool replicates (`replicate_seconds`)
 - `sdk/go/` — Go SDK: `Connect/New/Lookup`, `Exec/Run`, files,
   `Push/Pull`, sessions, `Find/Replace`, `Watch`, git verbs, `OpenPty`,
   `Renew/Fork/Hibernate/Promote/Checkpoint`, claim env, `DialPort/ProxyPort/PreviewURL`,

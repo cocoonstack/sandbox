@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"runtime/debug"
 	"slices"
 	"syscall"
@@ -26,6 +27,7 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/pool"
 	"github.com/cocoonstack/sandbox/sandboxd/server"
 	"github.com/cocoonstack/sandbox/sandboxd/store/peer"
+	"github.com/cocoonstack/sandbox/sandboxd/usage"
 )
 
 const (
@@ -85,6 +87,10 @@ func main() {
 	backends, err := openBackends(ctx, cfg)
 	if err != nil {
 		logger.Fatalf(ctx, err, "open backends")
+	}
+	usageStore, err := openUsage(ctx, cfg)
+	if err != nil {
+		logger.Fatalf(ctx, err, "open usage store")
 	}
 	mgr, err := pool.NewManager(ctx, cfg, eng, secrets, backends)
 	if err != nil {
@@ -153,6 +159,15 @@ func main() {
 	srv.SetConfigReload(reload)
 	if cfg.NoRxSplice {
 		srv.NoRxSplice()
+	}
+	if usageStore != nil {
+		node, err := usageNode(cfg)
+		if err != nil {
+			logger.Fatalf(ctx, err, "name the usage node")
+		}
+		go usage.Ship(ctx, filepath.Join(cfg.DataDir, usage.JournalFile), node, usageStore)
+		logger.Infof(ctx, "usage journal lands in the shared table as node %s", node)
+		srv.SetUsage(usageStore)
 	}
 	httpSrv := &http.Server{
 		Addr:              cfg.Listen,
