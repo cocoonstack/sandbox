@@ -748,6 +748,9 @@ through `/v1/tenants` on any node.
   - The pool defaults to `max(4, CPUs)` connections; set `pool_max_conns` in
     the DSN (4 suffices) so a fleet stays within the database's
     `max_connections`.
+  - Every other shared table a node opens adds a query pool of the same size:
+    the pool set with a `cell`, the archive registry with `archive_failover`,
+    and the usage table with `usage`. Count each in `max_connections`.
   - LISTEN needs a session-mode connection, so a connection pooler in front
     of the database must not run in transaction mode for that DSN.
   - A write runs in one transaction with a `pg_notify`.
@@ -878,7 +881,10 @@ only; computing durations or prices stays with the consumer.
   advisory lock, so `cursor` grows in commit order and a reader that pages by
   cursor never skips a row that commits later. A backfilled row gets a newer
   cursor than rows with a later `t`.
-- **Connection:** the table has its own query pool and no LISTEN session.
+- **Connection:** the table has its own query pool, sized like the others (see
+  [shared tenant database](#shared-tenant-database)), and no LISTEN session.
+  The node lands on one connection at a time; `GET /v1/usage` reads take
+  more.
 - **Outage:** claims and the journal carry on; the node logs one warning,
   retries every 5 s, and backfills when the database returns. Nothing is lost
   while the unlanded lines are still in `usage.jsonl` or `usage.jsonl.1`, so
