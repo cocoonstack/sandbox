@@ -48,7 +48,6 @@ func openBackends(ctx context.Context, cfg *config.Config) (pool.Backends, error
 	return b, nil
 }
 
-// openUsage opens the shared usage table when meta_store.usage is set; nil otherwise.
 func openUsage(ctx context.Context, cfg *config.Config) (*usagepg.Store, error) {
 	ms := cfg.MetaStore
 	if ms == nil || !ms.Usage {
@@ -57,7 +56,6 @@ func openUsage(ctx context.Context, cfg *config.Config) (*usagepg.Store, error) 
 	return usagepg.Open(ctx, os.Getenv(ms.DSNEnv), ms.Cell)
 }
 
-// usageNode names this node in the usage table: its mesh id, else its host name.
 func usageNode(cfg *config.Config) (string, error) {
 	if cfg.Mesh != nil {
 		return cfg.Mesh.ID(), nil
