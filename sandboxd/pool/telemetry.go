@@ -67,15 +67,7 @@ type requestFrame struct {
 }
 
 type auditFrame struct {
-	Op      string   `json:"op"`
-	Argv    []string `json:"argv,omitempty"`
-	Path    string   `json:"path,omitempty"`
-	Dest    string   `json:"dest,omitempty"`
-	From    string   `json:"from,omitempty"`
-	To      string   `json:"to,omitempty"`
-	URL     string   `json:"url,omitempty"`
-	Session string   `json:"session,omitempty"`
-	Port    uint16   `json:"port,omitzero"`
+	requestFrame
 	Added   []string `json:"added,omitempty"`
 	Changed []string `json:"changed,omitempty"`
 	Removed []string `json:"removed,omitempty"`
@@ -136,10 +128,7 @@ func (m *Manager) Audit(ctx context.Context, id string, line []byte) {
 	if frame.Op == "" {
 		return // torn cap boundary or a non-frame line: nothing to record
 	}
-	m.recordAudit(ctx, id, auditFrame{
-		Op: frame.Op, Argv: frame.Argv, Path: frame.Path, Dest: frame.Dest,
-		From: frame.From, To: frame.To, URL: frame.URL, Session: frame.Session, Port: frame.Port,
-	})
+	m.recordAudit(ctx, id, auditFrame{requestFrame: frame})
 }
 
 // AuditEnabled reports whether the relay should tap request frames at all.
