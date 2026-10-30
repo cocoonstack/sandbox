@@ -1051,7 +1051,8 @@ node of the cell from the [shared usage table](deploy.md#shared-usage-table).
 - **Events:** each is one journal line with its keys as in
   [usage.jsonl](#usage-journal-usagejsonl), `t` in UTC to the microsecond, plus
   `cursor` (its place in the table), `node` (the node that recorded it) and
-  `seq` (its place among that node's landed lines, from 1).
+  `seq` (grows from 1 in that node's journal order, skipping a number where
+  a line that had already landed took one).
 - **Filters:** `tenant` keeps one tenant's events; `since` (inclusive) and
   `until` (exclusive) are RFC 3339 times compared with `t`. Each is optional.
 - **Order and paging:**

@@ -27,7 +27,7 @@ type Event struct {
 	Received  int64     `json:"rx,omitzero"`
 }
 
-// Mark places a landed line in its node's journal: Seq numbers the node's landed lines from 1, Digest is the line's SHA-256.
+// Mark places a landed line in its node's journal: Seq grows from 1 in journal order, Digest is the line's SHA-256.
 type Mark struct {
 	Seq    int64    `json:"seq"`
 	Digest [32]byte `json:"-"`
@@ -54,7 +54,7 @@ type Query struct {
 type Store interface {
 	// Last returns the mark of node's newest landed event; a zero Mark when none landed.
 	Last(ctx context.Context, node string) (Mark, error)
-	// Land appends recs in one transaction, failing whole when any node seq already landed; cursors grow in commit order.
+	// Land appends recs in one transaction, skipping a line whose node and digest already landed and failing whole on a landed seq; cursors grow in commit order.
 	Land(ctx context.Context, recs []Record) error
 	// List returns the events q selects in cursor order.
 	List(ctx context.Context, q Query) ([]Record, error)

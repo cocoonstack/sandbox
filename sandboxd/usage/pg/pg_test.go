@@ -99,7 +99,9 @@ func TestLandIsWholeAndRefusesALandedSeq(t *testing.T) {
 	s := open(t, metastoretest.PGSchema(t), "c1")
 	ev := usage.Event{Time: time.Now(), Event: "claim", ID: "sb_1"}
 	land(t, s, record("n1", 1, ev))
-	if err := s.Land(t.Context(), []usage.Record{record("n1", 2, ev), record("n1", 1, ev)}); err == nil {
+	other := record("n1", 1, ev)
+	other.Digest = digest("n1", 9)
+	if err := s.Land(t.Context(), []usage.Record{record("n1", 2, ev), other}); err == nil {
 		t.Fatal("land of a landed seq succeeded")
 	}
 	if recs, _ := s.List(t.Context(), usage.Query{Limit: 10}); len(recs) != 1 {
@@ -158,8 +160,8 @@ func TestSchemaIndexesTheQueries(t *testing.T) {
 	s := open(t, metastoretest.PGSchema(t), "c1")
 	var n int
 	if err := s.pool.QueryRow(t.Context(), `SELECT count(*) FROM pg_indexes
-		WHERE schemaname = current_schema() AND tablename = 'sandboxd_usage'`).Scan(&n); err != nil || n != 4 {
-		t.Errorf("usage index count %d %v, want 4 (primary key, node seq, tenant, time)", n, err)
+		WHERE schemaname = current_schema() AND tablename = 'sandboxd_usage'`).Scan(&n); err != nil || n != 5 {
+		t.Errorf("usage index count %d %v, want 5 (primary key, node seq, node digest, tenant, time)", n, err)
 	}
 }
 
@@ -183,6 +185,47 @@ func TestShipLandsAJournalOnceAcrossRestarts(t *testing.T) {
 		if want := fmt.Sprintf("sb_%d", i+1); r.ID != want || r.Seq != int64(i)+1 || r.Node != "n1" {
 			t.Errorf("record %d: %s seq %d node %s, want %s seq %d n1", i, r.ID, r.Seq, r.Node, want, i+1)
 		}
+	}
+}
+
+func TestShipLandsNoLineTwiceAfterTheJournalLosesItsLandedTail(t *testing.T) {
+	s := open(t, metastoretest.PGSchema(t), "c1")
+	path := filepath.Join(t.TempDir(), usage.JournalFile)
+	writeJournal(t, path, "sb_1", "sb_2", "sb_3")
+	ship(t, s, path, 3)
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read journal: %v", err)
+	}
+	if err = os.WriteFile(path, []byte(strings.Join(strings.SplitAfter(string(raw), "\n")[:2], "")), 0o600); err != nil {
+		t.Fatalf("cut journal: %v", err)
+	}
+	writeJournal(t, path, "sb_4")
+	ship(t, s, path, 4)
+	recs, err := s.List(t.Context(), usage.Query{Limit: 10})
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	for i, r := range recs {
+		if want := fmt.Sprintf("sb_%d", i+1); r.ID != want || (i > 0 && r.Seq <= recs[i-1].Seq) {
+			t.Errorf("record %d: %s seq %d, want %s after seq %d", i, r.ID, r.Seq, want, recs[max(i-1, 0)].Seq)
+		}
+	}
+}
+
+func TestLandSkipsALandedLine(t *testing.T) {
+	s := open(t, metastoretest.PGSchema(t), "c1")
+	ev := usage.Event{Time: time.Now(), Event: "claim", ID: "sb_1"}
+	land(t, s, record("n1", 1, ev))
+	again := record("n1", 2, ev)
+	again.Digest = digest("n1", 1)
+	land(t, s, again, record("n1", 3, ev))
+	recs, err := s.List(t.Context(), usage.Query{Limit: 10})
+	if err != nil || len(recs) != 2 || recs[1].Seq != 3 {
+		t.Errorf("rows after relanding a digest: %+v %v, want seq 1 and 3", recs, err)
+	}
+	if mark, _ := s.Last(t.Context(), "n1"); mark.Seq != 3 {
+		t.Errorf("mark %+v, want seq 3", mark)
 	}
 }
 

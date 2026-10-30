@@ -22,15 +22,15 @@ const (
 	// cellLock serializes a cell's lands, so cursors commit in order and a reader paging by cursor never skips a row.
 	cellLock = `SELECT pg_advisory_xact_lock(hashtextextended('sandboxd_usage/' || $1, 0))`
 
+	insertRow = `INSERT INTO sandboxd_usage (cell, node, seq, line_sha256, t, ev, id, vm, key, tenant, volumes, volumes_rw, children, ref, upstream, secret, tx, rx)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+		ON CONFLICT (cell, node, line_sha256) DO NOTHING`
+
 	listColumns = `cursor, node, seq, t, ev, id, vm, key, tenant, volumes, volumes_rw, children, ref, upstream, secret, tx, rx`
 )
 
-var (
-	//go:embed schema.sql
-	schema string
-
-	landColumns = []string{"cell", "node", "seq", "line_sha256", "t", "ev", "id", "vm", "key", "tenant", "volumes", "volumes_rw", "children", "ref", "upstream", "secret", "tx", "rx"}
-)
+//go:embed schema.sql
+var schema string
 
 var _ usage.Store = (*Store)(nil)
 
@@ -74,14 +74,12 @@ func (s *Store) Land(ctx context.Context, recs []usage.Record) error {
 		if _, err := tx.Exec(qctx, cellLock, s.cell); err != nil {
 			return err
 		}
-		_, err := tx.CopyFrom(qctx, pgx.Identifier{table}, landColumns, pgx.CopyFromSlice(len(recs), func(i int) ([]any, error) {
-			r := recs[i]
-			return []any{
-				s.cell, r.Node, r.Seq, r.Digest[:], r.Time, r.Event.Event, r.ID, r.VMName, r.KeyHash, r.Tenant, r.Volumes, r.VolumesRW, r.Children,
-				strings.ReplaceAll(r.Reference, "\x00", "\uFFFD"), r.Upstream, r.Secret, r.Sent, r.Received,
-			}, nil
-		}))
-		return err
+		var batch pgx.Batch
+		for _, r := range recs {
+			batch.Queue(insertRow, s.cell, r.Node, r.Seq, r.Digest[:], r.Time, r.Event.Event, r.ID, r.VMName, r.KeyHash, r.Tenant, r.Volumes, r.VolumesRW, r.Children,
+				strings.ReplaceAll(r.Reference, "\x00", "\uFFFD"), r.Upstream, r.Secret, r.Sent, r.Received)
+		}
+		return tx.SendBatch(qctx, &batch).Close()
 	})
 }
 

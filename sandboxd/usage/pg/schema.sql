@@ -19,7 +19,8 @@ CREATE TABLE IF NOT EXISTS sandboxd_usage (
     tx          bigint      NOT NULL DEFAULT 0,
     rx          bigint      NOT NULL DEFAULT 0,
     PRIMARY KEY (cell, cursor),
-    UNIQUE (cell, node, seq)
+    UNIQUE (cell, node, seq),
+    UNIQUE (cell, node, line_sha256)
 );
 CREATE INDEX IF NOT EXISTS sandboxd_usage_tenant ON sandboxd_usage (cell, tenant, cursor);
 CREATE INDEX IF NOT EXISTS sandboxd_usage_t ON sandboxd_usage (cell, t);

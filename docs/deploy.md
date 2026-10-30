@@ -848,7 +848,8 @@ only; computing durations or prices stays with the consumer.
       tx          bigint      NOT NULL DEFAULT 0,
       rx          bigint      NOT NULL DEFAULT 0,
       PRIMARY KEY (cell, cursor),
-      UNIQUE (cell, node, seq)
+      UNIQUE (cell, node, seq),
+      UNIQUE (cell, node, line_sha256)
   );
   CREATE INDEX IF NOT EXISTS sandboxd_usage_tenant ON sandboxd_usage (cell, tenant, cursor);
   CREATE INDEX IF NOT EXISTS sandboxd_usage_t ON sandboxd_usage (cell, t);
@@ -858,13 +859,18 @@ only; computing durations or prices stays with the consumer.
   keys, with an absent key as `''`, `0` or `NULL`, plus `cell` (`''` without
   one), `node`, `seq` and `line_sha256`, the SHA-256 of the line. `t` keeps
   microseconds, and a NUL in `ref` lands as U+FFFD.
-- **Exactly once:** `seq` numbers a node's landed lines from 1 in journal
-  order, and `(cell, node, seq)` is unique. The node's newest row is its
-  resume point: at boot and after a failed land, the node reads that row's
-  `seq` and `line_sha256` and resumes after that line in `usage.jsonl.1` or
-  `usage.jsonl`. A restart, a retry or a commit whose reply was lost lands no
-  line twice. When neither file holds the line any more, the node lands
-  everything the two files hold. A line that does not decode is skipped with
+- **At most once per line:** `(cell, node, line_sha256)` is unique, and a
+  land skips a line whose digest already landed for its node, so no journal
+  line lands twice. `seq` grows from 1 in a node's journal order and is
+  unique too; it skips a number where a skipped line took one. The node's
+  newest row is its resume point: at boot and after a failed land, the node
+  reads that row's `seq` and `line_sha256` and resumes after that line in
+  `usage.jsonl.1` or `usage.jsonl`. When neither file holds the line any
+  more (a crash lost a journal tail the node had already landed, or the
+  journal was reset), the node reads both files from the start and lands only
+  the lines not landed yet. A restart, a retry or a commit whose reply was
+  lost therefore lands no line twice. Two byte-identical lines of one node
+  (same nanosecond `t` and fields) land once. A line that does not decode is skipped with
   a warning, and a last line without its newline waits for it. A line a
   crash cut short stays a line of its own: the node ends it with a newline
   when it opens the journal, so the first event after the restart is whole.

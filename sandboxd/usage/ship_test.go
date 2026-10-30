@@ -114,6 +114,16 @@ func TestShipStartsOverOnANewJournal(t *testing.T) {
 	assertLanded(t, store, "a,b,c")
 }
 
+func TestShipLandsNoLineTwiceAfterTheJournalLosesItsLandedTail(t *testing.T) {
+	path, store := journalAt(t), &memStore{}
+	appendEvents(t, path, "a", "b", "c")
+	newShipper(path, store).drain(t.Context())
+	keepLines(t, path, 2)
+	appendEvents(t, path, "d")
+	newShipper(path, store).drain(t.Context())
+	assertLanded(t, store, "a,b,c,d")
+}
+
 func TestShipSkipsAnUndecodableLineAndWaitsForATornOne(t *testing.T) {
 	path, store := journalAt(t), &memStore{}
 	s := newShipper(path, store)
@@ -200,6 +210,18 @@ func appendRaw(t *testing.T, path, s string) {
 	}
 }
 
+func keepLines(t *testing.T, path string, n int) {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read journal: %v", err)
+	}
+	lines := strings.SplitAfter(string(raw), "\n")
+	if err = os.WriteFile(path, []byte(strings.Join(lines[:n], "")), 0o600); err != nil {
+		t.Fatalf("cut journal: %v", err)
+	}
+}
+
 func rotate(t *testing.T, path string) {
 	t.Helper()
 	if err := os.Rename(path, path+".1"); err != nil {
@@ -213,18 +235,20 @@ func assertLanded(t *testing.T, store *memStore, want string) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	ids := make([]string, len(store.recs))
+	var seq int64
 	for i, r := range store.recs {
 		ids[i] = r.ID
-		if r.Seq != int64(i)+1 || r.Cursor != int64(i)+1 || r.Node != "n1" {
-			t.Errorf("record %d: cursor %d node %s seq %d, want %d n1 %d", i, r.Cursor, r.Node, r.Seq, i+1, i+1)
+		if r.Seq <= seq || r.Cursor != int64(i)+1 || r.Node != "n1" {
+			t.Errorf("record %d: cursor %d node %s seq %d, want cursor %d, node n1, seq above %d", i, r.Cursor, r.Node, r.Seq, i+1, seq)
 		}
+		seq = r.Seq
 	}
 	if got := strings.Join(ids, ","); got != want {
 		t.Errorf("landed %s, want %s", got, want)
 	}
 }
 
-// memStore lands like the PostgreSQL store: whole batches, refusing a seq that already landed.
+// memStore lands like the PostgreSQL store: whole batches that skip a landed digest and refuse a landed seq.
 type memStore struct {
 	mu    sync.Mutex
 	recs  []Record
@@ -254,12 +278,18 @@ func (m *memStore) Land(_ context.Context, recs []Record) error {
 	if m.down {
 		return errDown
 	}
+	landed := func(match func(o Record) bool) bool { return slices.ContainsFunc(m.recs, match) }
+	var fresh []Record
 	for _, r := range recs {
-		if slices.ContainsFunc(m.recs, func(o Record) bool { return o.Node == r.Node && o.Seq == r.Seq }) {
+		switch {
+		case landed(func(o Record) bool { return o.Node == r.Node && o.Digest == r.Digest }):
+		case landed(func(o Record) bool { return o.Node == r.Node && o.Seq == r.Seq }):
 			return errConflict
+		default:
+			fresh = append(fresh, r)
 		}
 	}
-	for _, r := range recs {
+	for _, r := range fresh {
 		r.Cursor = int64(len(m.recs)) + 1
 		m.recs = append(m.recs, r)
 	}
