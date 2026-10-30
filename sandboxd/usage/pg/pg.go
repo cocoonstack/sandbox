@@ -1,0 +1,129 @@
+// Package pg keeps the usage events of every node of a cell in one shared PostgreSQL table.
+package pg
+
+import (
+	"context"
+	_ "embed"
+	"errors"
+	"fmt"
+	"strconv"
+	"strings"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/cocoonstack/sandbox/sandboxd/metastore"
+	"github.com/cocoonstack/sandbox/sandboxd/usage"
+)
+
+const (
+	table = "sandboxd_usage"
+
+	// cellLock serializes a cell's lands, so cursors commit in order and a reader paging by cursor never skips a row.
+	cellLock = `SELECT pg_advisory_xact_lock(hashtextextended('sandboxd_usage/' || $1, 0))`
+
+	listColumns = `cursor, node, seq, t, ev, id, vm, key, tenant, volumes, volumes_rw, children, ref, upstream, secret, tx, rx`
+)
+
+var (
+	//go:embed schema.sql
+	schema string
+
+	landColumns = []string{"cell", "node", "seq", "line_sha256", "t", "ev", "id", "vm", "key", "tenant", "volumes", "volumes_rw", "children", "ref", "upstream", "secret", "tx", "rx"}
+)
+
+var _ usage.Store = (*Store)(nil)
+
+// Store is the shared usage table.
+type Store struct {
+	pool *pgxpool.Pool
+	cell string
+}
+
+// Open connects to cell's rows and creates the table when it is missing.
+func Open(ctx context.Context, dsn, cell string) (*Store, error) {
+	pool, _, err := metastore.Open(ctx, dsn, table, schema)
+	if err != nil {
+		return nil, err
+	}
+	return &Store{pool: pool, cell: cell}, nil
+}
+
+func (s *Store) Last(ctx context.Context, node string) (usage.Mark, error) {
+	qctx, cancel := context.WithTimeout(ctx, metastore.QueryTimeout)
+	defer cancel()
+	var (
+		mark   usage.Mark
+		digest []byte
+	)
+	err := s.pool.QueryRow(qctx, `SELECT seq, line_sha256 FROM sandboxd_usage WHERE cell = $1 AND node = $2 ORDER BY seq DESC LIMIT 1`, s.cell, node).Scan(&mark.Seq, &digest)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		return usage.Mark{}, nil
+	case err != nil:
+		return usage.Mark{}, err
+	}
+	copy(mark.Digest[:], digest)
+	return mark, nil
+}
+
+func (s *Store) Land(ctx context.Context, recs []usage.Record) error {
+	qctx, cancel := context.WithTimeout(ctx, metastore.QueryTimeout)
+	defer cancel()
+	return pgx.BeginFunc(qctx, s.pool, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(qctx, cellLock, s.cell); err != nil {
+			return err
+		}
+		_, err := tx.CopyFrom(qctx, pgx.Identifier{table}, landColumns, pgx.CopyFromSlice(len(recs), func(i int) ([]any, error) {
+			r := recs[i]
+			return []any{
+				s.cell, r.Node, r.Seq, r.Digest[:], r.Time, r.Event.Event, r.ID, r.VMName, r.KeyHash, r.Tenant, r.Volumes, r.VolumesRW, r.Children,
+				strings.ReplaceAll(r.Reference, "\x00", "\uFFFD"), r.Upstream, r.Secret, r.Sent, r.Received,
+			}, nil
+		}))
+		return err
+	})
+}
+
+func (s *Store) List(ctx context.Context, q usage.Query) ([]usage.Record, error) {
+	sql := `SELECT ` + listColumns + ` FROM sandboxd_usage WHERE cell = $1 AND cursor > $2`
+	args := []any{s.cell, q.After}
+	where := func(cond string, arg any) {
+		args = append(args, arg)
+		sql += " AND " + cond + " $" + strconv.Itoa(len(args))
+	}
+	if q.Tenant != "" {
+		where("tenant =", q.Tenant)
+	}
+	if !q.Since.IsZero() {
+		where("t >=", q.Since)
+	}
+	if !q.Until.IsZero() {
+		where("t <", q.Until)
+	}
+	args = append(args, q.Limit)
+	sql += " ORDER BY cursor LIMIT $" + strconv.Itoa(len(args))
+	qctx, cancel := context.WithTimeout(ctx, metastore.QueryTimeout)
+	defer cancel()
+	rows, err := s.pool.Query(qctx, sql, args...)
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, scan)
+}
+
+// Close releases the connection pool.
+func (s *Store) Close() {
+	s.pool.Close()
+}
+
+func scan(row pgx.CollectableRow) (usage.Record, error) {
+	var rec usage.Record
+	err := row.Scan(&rec.Cursor, &rec.Node, &rec.Seq, &rec.Time, &rec.Event.Event, &rec.ID, &rec.VMName, &rec.KeyHash, &rec.Tenant,
+		&rec.Volumes, &rec.VolumesRW, &rec.Children, &rec.Reference, &rec.Upstream, &rec.Secret, &rec.Sent, &rec.Received)
+	if err != nil {
+		return usage.Record{}, fmt.Errorf("scan usage row: %w", err)
+	}
+	rec.Time = rec.Time.UTC()
+	return rec, nil
+}

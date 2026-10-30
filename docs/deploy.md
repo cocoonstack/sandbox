@@ -129,7 +129,7 @@ gets the intersection of the two.
 | `egress_usage_bytes` | `false` | append an `egress_bytes` usage event with the payload bytes of every allowed egress tunnel or request when it ends; one extra usage-journal write per connection |
 | `egress_ca` | unset | [HTTPS-interception](egress.md#https-interception) PKI: `root_cert` (the cluster root baked into intercepted guests; may bundle old+new roots during rotation) plus this node's `intermediate_cert`/`intermediate_key` from `sandboxd ca issue-intermediate`. Required when any pool rule sets `intercept` |
 | `api_token` | unset | the operator (root) credential: when set, guards the node-level endpoints (Bearer) with full access, including release-by-id cleanup. Per-sandbox tokens guard ordinary sandbox-scoped calls |
-| `meta_store` | unset | `{"kind": "pg", "dsn_env": "SANDBOXD_PG_DSN"}`: keep the tenant set in one shared PostgreSQL instead of each node's `tenants.json` (see [shared tenant database](#shared-tenant-database)). `dsn_env` names the node env holding the connection string. An optional `cell` also keeps the API-applied pool set there, one per cell, instead of in each node's `pools.json` (see [shared pool set](#shared-pool-set)); without it pool targets stay per node. Needs `api_token`. Restart only |
+| `meta_store` | unset | `{"kind": "pg", "dsn_env": "SANDBOXD_PG_DSN"}`: keep the tenant set in one shared PostgreSQL instead of each node's `tenants.json` (see [shared tenant database](#shared-tenant-database)). `dsn_env` names the node env holding the connection string. An optional `cell` also keeps the API-applied pool set there, one per cell, instead of in each node's `pools.json` (see [shared pool set](#shared-pool-set)); without it pool targets stay per node. An optional `usage: true` also lands this node's usage journal in one shared table and serves [`GET /v1/usage`](sandboxd-api.md#get-v1usage) from it (see [shared usage table](#shared-usage-table)). Needs `api_token`. Restart only |
 | `max_fork_count` | 16 | children a single `fork` may create; each is a full-RAM VM, so this bounds one request's memory blast radius to the node's capacity |
 | `refill_concurrency` | 0 (auto) | concurrent VM provisioning budget, shared by warm-pool refills, fork clones, and the reap/hibernate/reconcile engine batches; the batches never take the last quarter of it (at least one slot), so a mass expiry or idle sweep cannot stop refills. 0 sizes it from the node: `NumCPU*2/3` clamped to [4, 256] — a 384-core node gets 256; small nodes keep a floor of 4 |
 | `release_delay_seconds` | 0 | seconds a released VM waits in the removal queue before `cocoon vm rm`. The claim is dropped and journaled and its egress listener closed at release; the VM removal, the volume hold release and the egress tap unlock run on the first reap tick (5 s) after the delay, on the `refill_concurrency` budget like every other batch teardown, so a burst of releases does not compete with the claims still running. Until then the VM holds its memory and its volume reservations without counting as a claim. 0 removes inline |
@@ -600,7 +600,7 @@ sandbox and checkpoint listings filter to the caller's tenant, and a tenant
 can delete only its own checkpoints and templates (root sees everything).
 Operator surfaces stay root-only — per-id sandbox reads and stats,
 `GET /v1/checkpoints/{id}/blob`, `GET /v1/info`, `PUT /v1/pools`,
-`/v1/tenants`, `/v1/config/reload`, `POST/DELETE /v1/drain`, `/metrics`; a
+`/v1/tenants`, `/v1/config/reload`, `POST/DELETE /v1/drain`, `/metrics`, `GET /v1/usage`; a
 tenant token there is authenticated but not authorized, so it answers 403 (a
 wrong token stays 401). Per-sandbox
 tokens are unchanged: whoever holds a sandbox's token drives that sandbox.
@@ -808,6 +808,77 @@ the tenant set.
   replace, so a retry after a timeout that did commit changes nothing more.
 - **Reverting** to config-owned pools is a `PUT` of the config pools; changing
   a node's `cell` takes a restart.
+
+### Shared usage table
+
+With `meta_store.usage: true`, each node also lands its usage journal in one
+table, and root reads the events of every node of the cell through
+[`GET /v1/usage`](sandboxd-api.md#get-v1usage) on any of them. It is off by
+default, so an upgrade adds no table and no writes. The table holds raw events
+only; computing durations or prices stays with the consumer.
+
+- **Landing:** a background loop reads `usage.jsonl` and its `.1` backup every
+  5 s and lands the lines it has not landed yet, up to 1000 per transaction,
+  until it catches up. The journal append is unchanged, so a claim, release,
+  hibernate or wake never waits on the database.
+- **Node:** rows carry the node's mesh `node_id` (its `bind` when unset), or
+  its host name without a mesh. The name must be unique within the cell.
+- **Schema:** sandboxd creates the table at boot when it is missing; create it
+  ahead with the same DDL when the node's role has no `CREATE` right:
+
+  ```sql
+  CREATE TABLE IF NOT EXISTS sandboxd_usage (
+      cell        text        NOT NULL,
+      cursor      bigint      GENERATED ALWAYS AS IDENTITY,
+      node        text        NOT NULL,
+      seq         bigint      NOT NULL CHECK (seq > 0),
+      line_sha256 bytea       NOT NULL,
+      t           timestamptz NOT NULL,
+      ev          text        NOT NULL,
+      id          text        NOT NULL,
+      vm          text        NOT NULL DEFAULT '',
+      key         text        NOT NULL DEFAULT '',
+      tenant      text        NOT NULL DEFAULT '',
+      volumes     text[],
+      volumes_rw  text[],
+      children    text[],
+      ref         text        NOT NULL DEFAULT '',
+      upstream    text        NOT NULL DEFAULT '',
+      secret      text        NOT NULL DEFAULT '',
+      tx          bigint      NOT NULL DEFAULT 0,
+      rx          bigint      NOT NULL DEFAULT 0,
+      PRIMARY KEY (cell, cursor),
+      UNIQUE (cell, node, seq)
+  );
+  CREATE INDEX IF NOT EXISTS sandboxd_usage_tenant ON sandboxd_usage (cell, tenant, cursor);
+  CREATE INDEX IF NOT EXISTS sandboxd_usage_t ON sandboxd_usage (cell, t);
+  ```
+
+- **Columns:** the [journal line](sandboxd-api.md#usage-journal-usagejsonl)'s
+  keys, with an absent key as `''`, `0` or `NULL`, plus `cell` (`''` without
+  one), `node`, `seq` and `line_sha256`, the SHA-256 of the line. `t` keeps
+  microseconds, and a NUL in `ref` lands as U+FFFD.
+- **Exactly once:** `seq` numbers a node's landed lines from 1 in journal
+  order, and `(cell, node, seq)` is unique. The node's newest row is its
+  resume point: at boot and after a failed land, the node reads that row's
+  `seq` and `line_sha256` and resumes after that line in `usage.jsonl.1` or
+  `usage.jsonl`. A restart, a retry or a commit whose reply was lost lands no
+  line twice. When neither file holds the line any more, the node lands
+  everything the two files hold. A line that does not decode is skipped with
+  a warning, and a last line without its newline waits for it.
+- **Order:** a cell's lands commit one at a time under a transaction-scoped
+  advisory lock, so `cursor` grows in commit order and a reader that pages by
+  cursor never skips a row that commits later. A backfilled row gets a newer
+  cursor than rows with a later `t`.
+- **Connection:** the table has its own query pool and no LISTEN session.
+- **Outage:** claims and the journal carry on; the node logs one warning,
+  retries every 5 s, and backfills when the database returns. Nothing is lost
+  while the unlanded lines are still in `usage.jsonl` or `usage.jsonl.1`, so
+  an outage loses lines only after the journal rotates twice past the last
+  landed one (64 MiB each); the node no longer holds those either. A node
+  needs the database at boot, like the other shared tables.
+- **Renaming** a node, or moving it to another cell, starts a new `seq` at 1:
+  the node lands what its journal still holds again under the new name.
 
 ### Reloading the config
 

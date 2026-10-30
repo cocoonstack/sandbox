@@ -9,7 +9,7 @@ All bodies are JSON. Three token kinds:
   tenant creates is stamped with its name. Operator surfaces
   (the per-id sandbox reads, `PUT /v1/sandboxes/{id}/instance-metadata`, `GET /v1/info`,
   `PUT /v1/pools`, `PUT/DELETE /v1/volumes/{name}`, `POST/DELETE /v1/drain`,
-  `GET /metrics`, `GET /v1/checkpoints/{id}/blob`)
+  `GET /metrics`, `GET /v1/usage`, `GET /v1/checkpoints/{id}/blob`)
   answer a tenant token `403` — authenticated but not authorized; an unknown
   token stays `401`. On a node with a shared
   [`meta_store`](deploy.md#shared-tenant-database), a tenant token the node
@@ -1035,7 +1035,36 @@ point, and `vmm_failed` is informational; hibernated storage seconds =
 VM's RAM. An interval left open by a crash clamps to the claim's
 deadline; reconcile records nothing for the claims it drops (those whose VM
 record is gone), so a restart leaves those intervals without a terminal event. The `vm` name joins
-cocoon's machine-level metering ledger for audit cross-checks.
+cocoon's machine-level metering ledger for audit cross-checks. With
+`meta_store.usage`, the node also lands every line in the cell's
+[shared usage table](deploy.md#shared-usage-table), read through
+[`GET /v1/usage`](#get-v1usage).
+
+## GET /v1/usage
+
+Auth: root only (tenant tokens get 403). Reads the raw usage events of every
+node of the cell from the [shared usage table](deploy.md#shared-usage-table).
+
+- `GET /v1/usage?tenant=<name>&since=<time>&until=<time>&after=<cursor>&limit=<n>` →
+  `{"events": [{"cursor": 41, "node": "n1", "seq": 17, "t": "2026-10-30T08:00:00.123456Z", "ev": "claim", "id": "sb_…", "vm": "sbx-…", "key": "…", "tenant": "acme"}], "next": 41}`.
+- **Events:** each is one journal line with its keys as in
+  [usage.jsonl](#usage-journal-usagejsonl), `t` in UTC to the microsecond, plus
+  `cursor` (its place in the table), `node` (the node that recorded it) and
+  `seq` (its place among that node's landed lines, from 1).
+- **Filters:** `tenant` keeps one tenant's events; `since` (inclusive) and
+  `until` (exclusive) are RFC 3339 times compared with `t`. Each is optional.
+- **Order and paging:**
+  - events come in `cursor` order, the order they landed, which is not `t`
+    order: a node that was cut off from the database lands its backlog later;
+  - `after` returns only events with a larger cursor (default 0);
+  - `limit` defaults to 1000, at most 10000;
+  - `next` is the last event's cursor when the page is full, absent otherwise;
+    pass it as the following page's `after`;
+  - the cell's lands commit in cursor order, so polling with the last cursor seen
+    as `after` returns every event exactly once, backfill included.
+- 400 on a malformed `after`, `limit`, `since` or `until`; 501
+  `no shared usage store configured` on a node without `meta_store.usage`; 503
+  `usage store down; retry` while the database is unreachable.
 
 ## GET /v1/sandboxes/{id}/agent
 
