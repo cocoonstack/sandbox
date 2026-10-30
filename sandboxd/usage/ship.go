@@ -90,8 +90,8 @@ func (s *shipper) shipOnce(ctx context.Context) (int, error) {
 		return 0, err
 	}
 	defer func() { _ = live.Close() }()
-	backup, err := openBackup(s.path + ".1")
-	if err != nil {
+	backup, err := os.Open(s.path + ".1")
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return 0, err
 	}
 	if backup != nil {
@@ -221,14 +221,6 @@ func decode(line []byte) (Event, error) {
 		return Event{}, errNoEvent
 	}
 	return ev, nil
-}
-
-func openBackup(path string) (*os.File, error) {
-	f, err := os.Open(path) //nolint:gosec // under data_dir
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil, nil
-	}
-	return f, err
 }
 
 func sameFile(a, b *os.File) bool {
