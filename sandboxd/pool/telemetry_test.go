@@ -16,6 +16,7 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/config"
 	"github.com/cocoonstack/sandbox/sandboxd/egress"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
+	"github.com/cocoonstack/sandbox/sandboxd/usage"
 )
 
 func TestUsageJournalRecordsLifecycle(t *testing.T) {
@@ -53,7 +54,7 @@ func TestJournalRotationKeepsOneBackup(t *testing.T) {
 	}
 	j.size = journalMaxBytes
 
-	if err := j.append(usageEvent{Event: "claim", ID: "sb_1"}); err != nil {
+	if err := j.append(usage.Event{Event: "claim", ID: "sb_1"}); err != nil {
 		t.Fatalf("append: %v", err)
 	}
 	if _, err := os.Stat(path + ".1"); err != nil {
@@ -137,13 +138,13 @@ func TestTenantStampedInJournals(t *testing.T) {
 		t.Errorf("persisted claim %+v, want tenant acme", claims[sb.ID])
 	}
 
-	usage, err := os.ReadFile(filepath.Join(m.dataDir, "usage.jsonl"))
+	journal, err := os.ReadFile(filepath.Join(m.dataDir, "usage.jsonl"))
 	if err != nil {
 		t.Fatalf("read usage journal: %v", err)
 	}
 	found := false
-	for line := range strings.SplitSeq(strings.TrimSpace(string(usage)), "\n") {
-		var ev usageEvent
+	for line := range strings.SplitSeq(strings.TrimSpace(string(journal)), "\n") {
+		var ev usage.Event
 		if err := json.Unmarshal([]byte(line), &ev); err != nil {
 			t.Fatalf("bad journal line %q: %v", line, err)
 		}
@@ -336,7 +337,7 @@ func TestEgressUsageEventNamesTheInjectedCredentials(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read journal: %v", err)
 	}
-	var ev usageEvent
+	var ev usage.Event
 	if err = json.Unmarshal(raw, &ev); err != nil {
 		t.Fatalf("decode %q: %v", raw, err)
 	}
@@ -422,7 +423,7 @@ func usageEventsOf(t *testing.T, m *Manager, id string) string {
 	}
 	var events []string
 	for line := range strings.SplitSeq(strings.TrimSpace(string(raw)), "\n") {
-		var ev usageEvent
+		var ev usage.Event
 		if err := json.Unmarshal([]byte(line), &ev); err != nil {
 			t.Fatalf("bad journal line %q: %v", line, err)
 		}

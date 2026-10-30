@@ -32,6 +32,7 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/store/peer"
 	"github.com/cocoonstack/sandbox/sandboxd/tenants"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
+	"github.com/cocoonstack/sandbox/sandboxd/usage"
 )
 
 const (
@@ -505,11 +506,11 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 			m.tplSet[rec.ID] = info
 		}
 	}
-	usage, err := newJournal(filepath.Join(cfg.DataDir, "usage.jsonl"))
+	usageJournal, err := newJournal(filepath.Join(cfg.DataDir, usage.JournalFile))
 	if err != nil {
 		return nil, fmt.Errorf("open usage journal: %w", err)
 	}
-	m.usage = usage
+	m.usage = usageJournal
 	if cfg.AuditLog {
 		audit, err := newJournal(filepath.Join(cfg.DataDir, "audit.jsonl"))
 		if err != nil {

@@ -12,6 +12,7 @@ import (
 	"github.com/projecteru2/core/log"
 
 	"github.com/cocoonstack/sandbox/sandboxd/egress"
+	"github.com/cocoonstack/sandbox/sandboxd/usage"
 )
 
 const (
@@ -182,11 +183,11 @@ func (m *Manager) recordEgress(ctx context.Context, id, tenant string, ev egress
 			Tenant: tenant, Src: ev.Local, Dst: ev.Remote,
 		}})
 	}
-	m.recordUsage(ctx, usageEvent{Event: egressEvent, ID: id, Tenant: tenant, Reference: ev.Host, Upstream: ev.Upstream, Secret: ev.Injected})
+	m.recordUsage(ctx, usage.Event{Event: egressEvent, ID: id, Tenant: tenant, Reference: ev.Host, Upstream: ev.Upstream, Secret: ev.Injected})
 }
 
 // recordUsage appends one billing event; failures are logged, never propagated.
-func (m *Manager) recordUsage(ctx context.Context, ev usageEvent) {
+func (m *Manager) recordUsage(ctx context.Context, ev usage.Event) {
 	ev.Time = time.Now()
 	if err := m.usage.append(ev); err != nil {
 		log.WithFunc("pool.recordUsage").Errorf(ctx, err, "append usage event %s %s", ev.Event, ev.ID)

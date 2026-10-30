@@ -12,6 +12,7 @@ import (
 	"github.com/projecteru2/core/log"
 
 	"github.com/cocoonstack/sandbox/sandboxd/types"
+	"github.com/cocoonstack/sandbox/sandboxd/usage"
 )
 
 func (m *Manager) Hibernate(ctx context.Context, id string, cred Cred) error {
@@ -207,7 +208,7 @@ func (m *Manager) wakeOrRead(ctx context.Context, sb *types.Sandbox, readerOK bo
 	}
 	m.counters.wakes.Add(1)
 	m.counters.wakeNanos.Add(uint64(time.Since(wakeStart))) //nolint:gosec // durations are positive
-	m.recordUsage(ctx, usageEvent{Event: "wake", ID: sb.ID, VMName: sb.VMName})
+	m.recordUsage(ctx, usage.Event{Event: "wake", ID: sb.ID, VMName: sb.VMName})
 	if proxyErr := m.out.ArmProxy(ctx, sb); proxyErr != nil {
 		log.WithFunc("pool.wakeOrRead").Errorf(ctx, proxyErr, "arm egress proxy %s", sb.ID)
 	}
@@ -372,7 +373,7 @@ func (m *Manager) resolvePendingSnap(ctx context.Context, sb *types.Sandbox) (ad
 
 func (m *Manager) recordHibernate(ctx context.Context, sb *types.Sandbox) {
 	m.counters.hibernates.Add(1)
-	m.recordUsage(ctx, usageEvent{Event: "hibernate", ID: sb.ID, VMName: sb.VMName})
+	m.recordUsage(ctx, usage.Event{Event: "hibernate", ID: sb.ID, VMName: sb.VMName})
 }
 
 func skipIdle(sb *types.Sandbox) bool {

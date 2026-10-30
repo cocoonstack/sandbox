@@ -10,6 +10,7 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/egress"
 	"github.com/cocoonstack/sandbox/sandboxd/outbound"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
+	"github.com/cocoonstack/sandbox/sandboxd/usage"
 )
 
 // NetRoute reports sb's route as its outbound host sees it.
@@ -80,7 +81,7 @@ func (m *Manager) outboundOptions(ca *egress.CA) outbound.Options {
 		Pooled: m.claimPooled,
 		Record: m.recordEgress,
 		Transfer: func(ctx context.Context, id, tenant string, ev egress.Event, sent, received int64) {
-			m.recordUsage(ctx, usageEvent{Event: "egress_bytes", ID: id, Tenant: tenant, Reference: ev.Host, Upstream: ev.Upstream, Sent: sent, Received: received})
+			m.recordUsage(ctx, usage.Event{Event: "egress_bytes", ID: id, Tenant: tenant, Reference: ev.Host, Upstream: ev.Upstream, Sent: sent, Received: received})
 		},
 		CA:         ca,
 		LockNIC:    len(m.cfg.Bridges) > 0,

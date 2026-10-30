@@ -14,6 +14,7 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/config"
 	"github.com/cocoonstack/sandbox/sandboxd/engine"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
+	"github.com/cocoonstack/sandbox/sandboxd/usage"
 )
 
 func TestClaimProvisionAppliesVolumesInRequestOrder(t *testing.T) {
@@ -503,7 +504,7 @@ func TestVolumeClaimUsageAndScopedSummaries(t *testing.T) {
 		t.Fatalf("read usage journal: %v", err)
 	}
 	for line := range strings.SplitSeq(strings.TrimSpace(string(raw)), "\n") {
-		var event usageEvent
+		var event usage.Event
 		if err := json.Unmarshal([]byte(line), &event); err != nil {
 			t.Fatalf("decode usage event: %v", err)
 		}

@@ -12,6 +12,7 @@ import (
 
 	"github.com/cocoonstack/sandbox/sandboxd/engine"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
+	"github.com/cocoonstack/sandbox/sandboxd/usage"
 )
 
 const (
@@ -149,7 +150,7 @@ func (m *Manager) recoverVMM(ctx context.Context, sb *types.Sandbox) {
 	}
 	if !sb.ExitRecorded {
 		sb.ExitRecorded = true
-		m.recordUsage(ctx, usageEvent{Event: "vmm_exit", ID: sb.ID, VMName: sb.VMName, Tenant: sb.Tenant})
+		m.recordUsage(ctx, usage.Event{Event: "vmm_exit", ID: sb.ID, VMName: sb.VMName, Tenant: sb.Tenant})
 	}
 	reason := coldBootBlocker(sb, found, volumes)
 	if reason == "" && m.vmmRestart == types.VMMRestartNone {
@@ -243,7 +244,7 @@ func (m *Manager) restartLocked(ctx context.Context, sb *types.Sandbox) error {
 	}
 	sb.ExitRecorded = false
 	sb.Touch()
-	m.recordUsage(ctx, usageEvent{Event: "vmm_restart", ID: sb.ID, VMName: sb.VMName, Tenant: sb.Tenant})
+	m.recordUsage(ctx, usage.Event{Event: "vmm_restart", ID: sb.ID, VMName: sb.VMName, Tenant: sb.Tenant})
 	log.WithFunc("pool.restartLocked").Warnf(ctx, "restarted %s (%s) from its disk; guest memory is lost", sb.ID, sb.VMName)
 	return nil
 }
@@ -253,7 +254,7 @@ func (m *Manager) failLocked(ctx context.Context, sb *types.Sandbox, reason stri
 	if live, _ := m.commitIfLive(ctx, sb, func() { sb.Failed = reason }); !live {
 		return
 	}
-	m.recordUsage(ctx, usageEvent{Event: "vmm_failed", ID: sb.ID, VMName: sb.VMName, Tenant: sb.Tenant, Reference: reason})
+	m.recordUsage(ctx, usage.Event{Event: "vmm_failed", ID: sb.ID, VMName: sb.VMName, Tenant: sb.Tenant, Reference: reason})
 	log.WithFunc("pool.failLocked").Warnf(ctx, "sandbox %s failed: %s", sb.ID, reason)
 }
 
