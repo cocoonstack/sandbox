@@ -891,6 +891,17 @@ only; computing durations or prices stays with the consumer.
   an outage loses lines only after the journal rotates twice past the last
   landed one (64 MiB each); the node no longer holds those either. A node
   needs the database at boot, like the other shared tables.
+- **Retention:** sandboxd never deletes a row. Prune only rows every consumer
+  has paged past, and keep each node's newest row: it is the node's resume
+  point, and a node that finds none lands its whole journal again. A crash
+  that loses that line from the journal also lands again the pruned lines the
+  journal still holds.
+
+  ```sql
+  DELETE FROM sandboxd_usage u
+  WHERE cell = $1 AND cursor <= $2
+    AND seq < (SELECT max(seq) FROM sandboxd_usage WHERE cell = u.cell AND node = u.node);
+  ```
 - **Renaming** a node, or moving it to another cell, starts a new `seq` at 1:
   the node lands what its journal still holds again under the new name.
 

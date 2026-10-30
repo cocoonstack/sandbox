@@ -1055,6 +1055,9 @@ node of the cell from the [shared usage table](deploy.md#shared-usage-table).
   a line that had already landed took one).
 - **Filters:** `tenant` keeps one tenant's events; `since` (inclusive) and
   `until` (exclusive) are RFC 3339 times compared with `t`. Each is optional.
+  A journal written by v0.1.20 or earlier stamps `tenant` only on `claim`,
+  `archive`, `unarchive`, `archive_delete`, `egress`, `egress_bytes` and
+  `vmm_*`; join its other events on `id` to the `claim`.
 - **Order and paging:**
   - events come in `cursor` order, the order they landed, which is not `t`
     order: a node that was cut off from the database lands its backlog later;
