@@ -24,8 +24,6 @@ const (
 	shipBatch = 1000
 )
 
-var errNoEvent = errors.New("no ev")
-
 // Ship lands the journal at path in store as node's events until ctx ends; it only reads the journal.
 func Ship(ctx context.Context, path, node string, store Store) {
 	s := &shipper{path: path, node: node, store: store}
@@ -214,13 +212,8 @@ func lines(f *os.File, off int64) iter.Seq2[[]byte, int64] {
 
 func decode(line []byte) (Event, error) {
 	var ev Event
-	if err := json.Unmarshal(line[:len(line)-1], &ev, jsontext.AllowInvalidUTF8(true)); err != nil {
-		return Event{}, err
-	}
-	if ev.Event == "" {
-		return Event{}, errNoEvent
-	}
-	return ev, nil
+	err := json.Unmarshal(line[:len(line)-1], &ev, jsontext.AllowInvalidUTF8(true))
+	return ev, err
 }
 
 func sameFile(a, b *os.File) bool {

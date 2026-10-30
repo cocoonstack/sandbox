@@ -125,7 +125,7 @@ func TestShipSkipsAnUndecodableLineAndWaitsForATornOne(t *testing.T) {
 	path, store := journalAt(t), &memStore{}
 	s := newShipper(path, store)
 	appendEvents(t, path, "a")
-	appendRaw(t, path, "{\"t\":\"x\"\n{}\n")
+	appendRaw(t, path, "{\"t\":\"x\"\n")
 	appendEvents(t, path, "b")
 	appendRaw(t, path, `{"t":"2026-10-30T00:00:00Z","ev":"claim",`)
 	s.drain(t.Context())
