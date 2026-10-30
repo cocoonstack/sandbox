@@ -20,7 +20,7 @@ import (
 func TestLandListsInCursorOrderAndResumesFromTheMark(t *testing.T) {
 	s := open(t, metastoretest.PGSchema(t), "c1")
 	ctx := t.Context()
-	if mark, err := s.Last(ctx, "n1"); err != nil || mark != (usage.Mark{}) {
+	if mark, err := s.Last(ctx, "n1"); err != nil || mark != ([32]byte{}) {
 		t.Fatalf("mark of a node with nothing landed: %+v %v", mark, err)
 	}
 	t0 := time.Date(2026, 10, 30, 0, 0, 0, 0, time.UTC)
@@ -35,14 +35,14 @@ func TestLandListsInCursorOrderAndResumesFromTheMark(t *testing.T) {
 	if err != nil || len(recs) != 3 {
 		t.Fatalf("list: %d %v", len(recs), err)
 	}
-	if got := recs[0]; got.Node != "n1" || got.Seq != 1 || !equalEvents(got.Event, full) {
-		t.Errorf("first record %+v, want n1 seq 1 %+v", got, full)
+	if got := recs[0]; got.Node != "n1" || !equalEvents(got.Event, full) {
+		t.Errorf("first record %+v, want n1 %+v", got, full)
 	}
 	if !slices.IsSortedFunc(recs, func(a, b usage.Record) int { return cmp.Compare(a.Cursor, b.Cursor) }) || recs[2].Children[0] != "sb_3" {
 		t.Errorf("records out of cursor order or lost children: %+v", recs)
 	}
-	if mark, _ := s.Last(ctx, "n1"); mark.Seq != 2 || mark.Digest != digest("n1", 2) {
-		t.Errorf("mark of n1 %+v, want seq 2 and its digest", mark)
+	if mark, _ := s.Last(ctx, "n1"); mark != digest("n1", 2) {
+		t.Errorf("mark of n1 %x, want the digest of its second line", mark)
 	}
 }
 
@@ -51,13 +51,13 @@ func TestListFiltersAndPages(t *testing.T) {
 	ctx := t.Context()
 	t0 := time.Date(2026, 10, 30, 0, 0, 0, 0, time.UTC)
 	for i, tenant := range []string{"acme", "beta", "acme", "acme", "beta"} {
-		land(t, s, record("n1", int64(i)+1, usage.Event{Time: t0.Add(time.Duration(i) * time.Minute), Event: "claim", ID: "sb_" + tenant, Tenant: tenant}))
+		land(t, s, record("n1", int64(i)+1, usage.Event{Time: t0.Add(time.Duration(i) * time.Minute), Event: "claim", ID: fmt.Sprintf("%s%d", tenant, i+1), Tenant: tenant}))
 	}
 	all, err := s.List(ctx, usage.Query{Limit: 10})
 	if err != nil || len(all) != 5 {
 		t.Fatalf("list: %d %v", len(all), err)
 	}
-	seqs := func(q usage.Query) string {
+	ids := func(q usage.Query) string {
 		t.Helper()
 		q.Limit = max(q.Limit, 10)
 		recs, listErr := s.List(ctx, q)
@@ -66,7 +66,7 @@ func TestListFiltersAndPages(t *testing.T) {
 		}
 		var out []string
 		for _, r := range recs {
-			out = append(out, fmt.Sprintf("%s%d", r.Tenant, r.Seq))
+			out = append(out, r.ID)
 		}
 		return strings.Join(out, ",")
 	}
@@ -82,7 +82,7 @@ func TestListFiltersAndPages(t *testing.T) {
 		{"after", usage.Query{After: all[2].Cursor}, "acme4,beta5"},
 		{"after and tenant", usage.Query{Tenant: "acme", After: all[0].Cursor}, "acme3,acme4"},
 	} {
-		if got := seqs(tt.q); got != tt.want {
+		if got := ids(tt.q); got != tt.want {
 			t.Errorf("%s: %s, want %s", tt.name, got, tt.want)
 		}
 	}
@@ -95,20 +95,6 @@ func TestListFiltersAndPages(t *testing.T) {
 	}
 }
 
-func TestLandIsWholeAndRefusesALandedSeq(t *testing.T) {
-	s := open(t, metastoretest.PGSchema(t), "c1")
-	ev := usage.Event{Time: time.Now(), Event: "claim", ID: "sb_1"}
-	land(t, s, record("n1", 1, ev))
-	other := record("n1", 1, ev)
-	other.Digest = digest("n1", 9)
-	if err := s.Land(t.Context(), []usage.Record{record("n1", 2, ev), other}); err == nil {
-		t.Fatal("land of a landed seq succeeded")
-	}
-	if recs, _ := s.List(t.Context(), usage.Query{Limit: 10}); len(recs) != 1 {
-		t.Errorf("%d rows after a refused land, want 1", len(recs))
-	}
-}
-
 func TestCellsKeepTheirOwnRows(t *testing.T) {
 	dsn := metastoretest.PGSchema(t)
 	c1, c2 := open(t, dsn, "c1"), open(t, dsn, "c2")
@@ -118,8 +104,8 @@ func TestCellsKeepTheirOwnRows(t *testing.T) {
 	if recs, err := c2.List(t.Context(), usage.Query{Limit: 10}); err != nil || len(recs) != 1 {
 		t.Errorf("c2 lists %d rows %v, want its own 1", len(recs), err)
 	}
-	if mark, _ := c2.Last(t.Context(), "n1"); mark.Seq != 1 {
-		t.Errorf("c2's mark of n1 %+v, want seq 1", mark)
+	if mark, _ := c2.Last(t.Context(), "n1"); mark != digest("n1", 1) {
+		t.Errorf("c2's mark of n1 %x, want its one line", mark)
 	}
 }
 
@@ -161,7 +147,7 @@ func TestSchemaIndexesTheQueries(t *testing.T) {
 	var n int
 	if err := s.pool.QueryRow(t.Context(), `SELECT count(*) FROM pg_indexes
 		WHERE schemaname = current_schema() AND tablename = 'sandboxd_usage'`).Scan(&n); err != nil || n != 5 {
-		t.Errorf("usage index count %d %v, want 5 (primary key, node seq, node digest, tenant, time)", n, err)
+		t.Errorf("usage index count %d %v, want 5 (primary key, node digest, node cursor, tenant, time)", n, err)
 	}
 }
 
@@ -182,8 +168,8 @@ func TestShipLandsAJournalOnceAcrossRestarts(t *testing.T) {
 		t.Fatalf("list: %v", err)
 	}
 	for i, r := range recs {
-		if want := fmt.Sprintf("sb_%d", i+1); r.ID != want || r.Seq != int64(i)+1 || r.Node != "n1" {
-			t.Errorf("record %d: %s seq %d node %s, want %s seq %d n1", i, r.ID, r.Seq, r.Node, want, i+1)
+		if want := fmt.Sprintf("sb_%d", i+1); r.ID != want || r.Node != "n1" {
+			t.Errorf("record %d: %s node %s, want %s n1", i, r.ID, r.Node, want)
 		}
 	}
 }
@@ -207,25 +193,23 @@ func TestShipLandsNoLineTwiceAfterTheJournalLosesItsLandedTail(t *testing.T) {
 		t.Fatalf("list: %v", err)
 	}
 	for i, r := range recs {
-		if want := fmt.Sprintf("sb_%d", i+1); r.ID != want || (i > 0 && r.Seq <= recs[i-1].Seq) {
-			t.Errorf("record %d: %s seq %d, want %s after seq %d", i, r.ID, r.Seq, want, recs[max(i-1, 0)].Seq)
+		if want := fmt.Sprintf("sb_%d", i+1); r.ID != want {
+			t.Errorf("record %d: %s, want %s", i, r.ID, want)
 		}
 	}
 }
 
 func TestLandSkipsALandedLine(t *testing.T) {
 	s := open(t, metastoretest.PGSchema(t), "c1")
-	ev := usage.Event{Time: time.Now(), Event: "claim", ID: "sb_1"}
-	land(t, s, record("n1", 1, ev))
-	again := record("n1", 2, ev)
-	again.Digest = digest("n1", 1)
-	land(t, s, again, record("n1", 3, ev))
+	first, second := usage.Event{Time: time.Now(), Event: "claim", ID: "sb_1"}, usage.Event{Time: time.Now(), Event: "release", ID: "sb_1"}
+	land(t, s, record("n1", 1, first))
+	land(t, s, record("n1", 1, first), record("n1", 2, second))
 	recs, err := s.List(t.Context(), usage.Query{Limit: 10})
-	if err != nil || len(recs) != 2 || recs[1].Seq != 3 {
-		t.Errorf("rows after relanding a digest: %+v %v, want seq 1 and 3", recs, err)
+	if err != nil || len(recs) != 2 || recs[0].Event.Event != "claim" || recs[1].Event.Event != "release" {
+		t.Errorf("rows after relanding a digest: %+v %v, want the claim and the release once each", recs, err)
 	}
-	if mark, _ := s.Last(t.Context(), "n1"); mark.Seq != 3 {
-		t.Errorf("mark %+v, want seq 3", mark)
+	if mark, _ := s.Last(t.Context(), "n1"); mark != digest("n1", 2) {
+		t.Errorf("mark %x, want line 2", mark)
 	}
 }
 
@@ -246,12 +230,12 @@ func land(t *testing.T, s *Store, recs ...usage.Record) {
 	}
 }
 
-func record(node string, seq int64, ev usage.Event) usage.Record {
-	return usage.Record{Node: node, Seq: seq, Digest: digest(node, seq), Event: ev}
+func record(node string, line int64, ev usage.Event) usage.Record {
+	return usage.Record{Node: node, Digest: digest(node, line), Event: ev}
 }
 
-func digest(node string, seq int64) [32]byte {
-	return sha256.Sum256(fmt.Appendf(nil, "%s/%d", node, seq))
+func digest(node string, line int64) [32]byte {
+	return sha256.Sum256(fmt.Appendf(nil, "%s/%d", node, line))
 }
 
 func equalEvents(a, b usage.Event) bool {

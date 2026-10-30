@@ -32,15 +32,15 @@ func TestUsageIsRootOnlyAndNamesAMissingStore(t *testing.T) {
 func TestUsagePassesTheQueryAndPages(t *testing.T) {
 	t0 := time.Date(2026, 10, 30, 1, 2, 3, 400000000, time.UTC)
 	reader := &fakeUsage{recs: []usage.Record{
-		{Cursor: 7, Node: "n1", Seq: 3, Digest: [32]byte{1}, Event: usage.Event{Time: t0, Event: "claim", ID: "sb_1", Tenant: "acme"}},
-		{Cursor: 9, Node: "n2", Seq: 1, Event: usage.Event{Time: t0, Event: "release", ID: "sb_1"}},
+		{Cursor: 7, Node: "n1", Digest: [32]byte{1}, Event: usage.Event{Time: t0, Event: "claim", ID: "sb_1", Tenant: "acme"}},
+		{Cursor: 9, Node: "n2", Event: usage.Event{Time: t0, Event: "release", ID: "sb_1"}},
 	}}
 	ts := usageTestServer(t, reader)
 	resp := doReq(t, http.MethodGet, ts.URL+"/v1/usage?tenant=acme&since=2026-10-30T00:00:00Z&until=2026-10-31T00:00:00.5%2B08:00&after=5&limit=2", "root", "")
 	body, _ := io.ReadAll(resp.Body)
 	_ = resp.Body.Close()
-	want := `{"events":[{"cursor":7,"node":"n1","seq":3,"t":"2026-10-30T01:02:03.4Z","ev":"claim","id":"sb_1","tenant":"acme"},` +
-		`{"cursor":9,"node":"n2","seq":1,"t":"2026-10-30T01:02:03.4Z","ev":"release","id":"sb_1"}],"next":9}`
+	want := `{"events":[{"cursor":7,"node":"n1","t":"2026-10-30T01:02:03.4Z","ev":"claim","id":"sb_1","tenant":"acme"},` +
+		`{"cursor":9,"node":"n2","t":"2026-10-30T01:02:03.4Z","ev":"release","id":"sb_1"}],"next":9}`
 	if resp.StatusCode != http.StatusOK || string(body) != want {
 		t.Errorf("full page: %d %s, want %s", resp.StatusCode, body, want)
 	}

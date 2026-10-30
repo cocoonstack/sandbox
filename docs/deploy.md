@@ -834,7 +834,6 @@ only; computing durations or prices stays with the consumer.
       cell        text        NOT NULL,
       cursor      bigint      GENERATED ALWAYS AS IDENTITY,
       node        text        NOT NULL,
-      seq         bigint      NOT NULL CHECK (seq > 0),
       line_sha256 bytea       NOT NULL,
       t           timestamptz NOT NULL,
       ev          text        NOT NULL,
@@ -851,23 +850,22 @@ only; computing durations or prices stays with the consumer.
       tx          bigint      NOT NULL DEFAULT 0,
       rx          bigint      NOT NULL DEFAULT 0,
       PRIMARY KEY (cell, cursor),
-      UNIQUE (cell, node, seq),
       UNIQUE (cell, node, line_sha256)
   );
+  CREATE INDEX IF NOT EXISTS sandboxd_usage_node ON sandboxd_usage (cell, node, cursor);
   CREATE INDEX IF NOT EXISTS sandboxd_usage_tenant ON sandboxd_usage (cell, tenant, cursor);
   CREATE INDEX IF NOT EXISTS sandboxd_usage_t ON sandboxd_usage (cell, t);
   ```
 
 - **Columns:** the [journal line](sandboxd-api.md#usage-journal-usagejsonl)'s
   keys, with an absent key as `''`, `0` or `NULL`, plus `cell` (`''` without
-  one), `node`, `seq` and `line_sha256`, the SHA-256 of the line. `t` keeps
+  one), `node` and `line_sha256`, the SHA-256 of the line. `t` keeps
   microseconds, and a NUL in `ref` lands as U+FFFD.
 - **At most once per line:** `(cell, node, line_sha256)` is unique, and a
   land skips a line whose digest already landed for its node, so no journal
-  line lands twice. `seq` grows from 1 in a node's journal order and is
-  unique too; it skips a number where a skipped line took one. The node's
-  newest row is its resume point: at boot and after a failed land, the node
-  reads that row's `seq` and `line_sha256` and resumes after that line in
+  line lands twice. The node's newest row (by `cursor`) is its resume point:
+  at boot and after a failed land, the node reads that row's `line_sha256`
+  and resumes after that line in
   `usage.jsonl.1` or `usage.jsonl`. When neither file holds the line any
   more (a crash lost a journal tail the node had already landed, or the
   journal was reset), the node reads both files from the start and lands only
@@ -879,8 +877,9 @@ only; computing durations or prices stays with the consumer.
   when it opens the journal, so the first event after the restart is whole.
 - **Order:** a cell's lands commit one at a time under a transaction-scoped
   advisory lock, so `cursor` grows in commit order and a reader that pages by
-  cursor never skips a row that commits later. A backfilled row gets a newer
-  cursor than rows with a later `t`.
+  cursor never skips a row that commits later. A node lands its lines in
+  journal order, so its rows follow that order by `cursor`. A backfilled row
+  gets a newer cursor than rows with a later `t`.
 - **Connection:** the table has its own query pool, sized like the others (see
   [shared tenant database](#shared-tenant-database)), and no LISTEN session.
   The node lands on one connection at a time; `GET /v1/usage` reads take
@@ -900,9 +899,9 @@ only; computing durations or prices stays with the consumer.
   ```sql
   DELETE FROM sandboxd_usage u
   WHERE cell = $1 AND cursor <= $2
-    AND seq < (SELECT max(seq) FROM sandboxd_usage WHERE cell = u.cell AND node = u.node);
+    AND cursor < (SELECT max(cursor) FROM sandboxd_usage WHERE cell = u.cell AND node = u.node);
   ```
-- **Renaming** a node, or moving it to another cell, starts a new `seq` at 1:
+- **Renaming** a node, or moving it to another cell, starts it with no rows:
   the node lands what its journal still holds again under the new name.
 
 ### Reloading the config

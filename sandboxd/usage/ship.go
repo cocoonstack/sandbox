@@ -45,7 +45,7 @@ type shipper struct {
 	path    string
 	node    string
 	store   Store
-	mark    Mark
+	mark    [32]byte
 	synced  bool
 	at      anchor
 	failing bool
@@ -110,7 +110,7 @@ func (s *shipper) shipOnce(ctx context.Context) (int, error) {
 		if err = s.store.Land(ctx, recs); err != nil {
 			return 0, fmt.Errorf("land %d events: %w", len(recs), err)
 		}
-		s.mark = recs[len(recs)-1].Mark
+		s.mark = recs[len(recs)-1].Digest
 	}
 	if n > 0 {
 		s.at = last
@@ -126,7 +126,7 @@ func (s *shipper) locate(live, backup *os.File) (*os.File, int64) {
 		}
 	}
 	oldest := cmp.Or(backup, live)
-	if s.mark.Seq == 0 {
+	if s.mark == ([32]byte{}) {
 		return oldest, 0
 	}
 	var found *os.File
@@ -135,7 +135,7 @@ func (s *shipper) locate(live, backup *os.File) (*os.File, int64) {
 			continue
 		}
 		for line, end := range lines(f, 0) {
-			if a := newAnchor(line, end); a.digest == s.mark.Digest {
+			if a := newAnchor(line, end); a.digest == s.mark {
 				found, s.at = f, a
 			}
 		}
@@ -161,7 +161,7 @@ func (s *shipper) read(ctx context.Context, files []*os.File, off int64) ([]Reco
 			if err != nil {
 				log.WithFunc("usage.Ship").Warnf(ctx, "skip undecodable line ending at %s:%d: %v", f.Name(), end, err)
 			} else {
-				recs = append(recs, Record{Node: s.node, Seq: s.mark.Seq + int64(len(recs)) + 1, Digest: last.digest, Event: ev})
+				recs = append(recs, Record{Node: s.node, Digest: last.digest, Event: ev})
 			}
 			if n == shipBatch {
 				return recs, last, n

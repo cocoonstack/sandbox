@@ -15,10 +15,7 @@ import (
 	"time"
 )
 
-var (
-	errDown     = errors.New("store down")
-	errConflict = errors.New("seq already landed")
-)
+var errDown = errors.New("store down")
 
 func TestShipLandsEachLineOnceAcrossRestarts(t *testing.T) {
 	path, store := journalAt(t), &memStore{}
@@ -235,20 +232,18 @@ func assertLanded(t *testing.T, store *memStore, want string) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	ids := make([]string, len(store.recs))
-	var seq int64
 	for i, r := range store.recs {
 		ids[i] = r.ID
-		if r.Seq <= seq || r.Cursor != int64(i)+1 || r.Node != "n1" {
-			t.Errorf("record %d: cursor %d node %s seq %d, want cursor %d, node n1, seq above %d", i, r.Cursor, r.Node, r.Seq, i+1, seq)
+		if r.Cursor != int64(i)+1 || r.Node != "n1" {
+			t.Errorf("record %d: cursor %d node %s, want cursor %d and node n1", i, r.Cursor, r.Node, i+1)
 		}
-		seq = r.Seq
 	}
 	if got := strings.Join(ids, ","); got != want {
 		t.Errorf("landed %s, want %s", got, want)
 	}
 }
 
-// memStore lands like the PostgreSQL store: whole batches that skip a landed digest and refuse a landed seq.
+// memStore lands like the PostgreSQL store: whole batches that skip a landed digest.
 type memStore struct {
 	mu    sync.Mutex
 	recs  []Record
@@ -257,16 +252,16 @@ type memStore struct {
 	lands int
 }
 
-func (m *memStore) Last(_ context.Context, node string) (Mark, error) {
+func (m *memStore) Last(_ context.Context, node string) ([32]byte, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	var mark [32]byte
 	if m.down {
-		return Mark{}, errDown
+		return mark, errDown
 	}
-	var mark Mark
 	for _, r := range m.recs {
 		if r.Node == node {
-			mark = r.Mark
+			mark = r.Digest
 		}
 	}
 	return mark, nil
@@ -278,20 +273,11 @@ func (m *memStore) Land(_ context.Context, recs []Record) error {
 	if m.down {
 		return errDown
 	}
-	landed := func(match func(o Record) bool) bool { return slices.ContainsFunc(m.recs, match) }
-	var fresh []Record
 	for _, r := range recs {
-		switch {
-		case landed(func(o Record) bool { return o.Node == r.Node && o.Digest == r.Digest }):
-		case landed(func(o Record) bool { return o.Node == r.Node && o.Seq == r.Seq }):
-			return errConflict
-		default:
-			fresh = append(fresh, r)
+		if !slices.ContainsFunc(m.recs, func(o Record) bool { return o.Node == r.Node && o.Digest == r.Digest }) {
+			r.Cursor = int64(len(m.recs)) + 1
+			m.recs = append(m.recs, r)
 		}
-	}
-	for _, r := range fresh {
-		r.Cursor = int64(len(m.recs)) + 1
-		m.recs = append(m.recs, r)
 	}
 	m.lands++
 	if m.lose > 0 {
