@@ -57,7 +57,7 @@ func (m *Manager) Fork(ctx context.Context, id string, cred Cred, count int, ttl
 	for i, c := range children {
 		ids[i] = c.ID
 	}
-	m.recordUsage(ctx, usage.Event{Event: "fork", ID: sb.ID, VMName: lockedVMName(sb), Children: ids})
+	m.recordUsage(ctx, usage.Event{Event: "fork", ID: sb.ID, VMName: lockedVMName(sb), Tenant: sb.Tenant, Children: ids})
 	return children, nil
 }
 

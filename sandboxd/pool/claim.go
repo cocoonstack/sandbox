@@ -358,7 +358,7 @@ func (m *Manager) releaseResolved(ctx context.Context, id string, sb *types.Sand
 	m.out.Disarm(id, removed)
 	m.dropSnap(ctx, snap)
 	m.counters.releases.Add(1)
-	m.recordUsage(ctx, usage.Event{Event: "release", ID: id, VMName: vmName})
+	m.recordUsage(ctx, usage.Event{Event: "release", ID: id, VMName: vmName, Tenant: sb.Tenant})
 	return err
 }
 
@@ -660,7 +660,7 @@ func (m *Manager) reapOnce(ctx context.Context) {
 			m.purgeArchiveCk(ctx, v.id, v.ck, v.tenant)
 			m.untrack(m.pendingCks, v.ck)
 			m.counters.reaps.Add(1)
-			m.recordUsage(ctx, usage.Event{Event: "reap", ID: v.id})
+			m.recordUsage(ctx, usage.Event{Event: "reap", ID: v.id, Tenant: v.tenant})
 			logger.Infof(ctx, "purged archived sandbox %s", v.id)
 		case reapArchive:
 			logSweepResult(ctx, logger, m.archive(ctx, v.sb), "archived expired sandbox "+v.id, "archive expired sandbox "+v.id)
@@ -672,7 +672,7 @@ func (m *Manager) reapOnce(ctx context.Context) {
 			m.out.Disarm(v.id, m.removeOrRetry(ctx, v.vmName, v.id, td))
 			m.dropSnap(ctx, v.snap)
 			m.counters.reaps.Add(1)
-			m.recordUsage(ctx, usage.Event{Event: "reap", ID: v.id, VMName: v.vmName})
+			m.recordUsage(ctx, usage.Event{Event: "reap", ID: v.id, VMName: v.vmName, Tenant: v.tenant})
 			logger.Infof(ctx, "reaped expired sandbox %s (%s)", v.id, v.vmName)
 		}
 	})

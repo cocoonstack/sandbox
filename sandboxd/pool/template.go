@@ -86,7 +86,7 @@ func (m *Manager) Promote(ctx context.Context, id string, cred Cred, template, t
 		m.notifyTemplates()
 	}
 	m.counters.promotes.Add(1)
-	m.recordUsage(ctx, usage.Event{Event: "promote", ID: sb.ID, VMName: vmName, Reference: key.Template})
+	m.recordUsage(ctx, usage.Event{Event: "promote", ID: sb.ID, VMName: vmName, Tenant: sb.Tenant, Reference: key.Template})
 	return key, digest, nil
 }
 

@@ -15,6 +15,7 @@ import (
 
 	"github.com/cocoonstack/sandbox/sandboxd/config"
 	"github.com/cocoonstack/sandbox/sandboxd/egress"
+	"github.com/cocoonstack/sandbox/sandboxd/tenants"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 	"github.com/cocoonstack/sandbox/sandboxd/usage"
 )
@@ -157,6 +158,62 @@ func TestTenantStampedInJournals(t *testing.T) {
 	}
 	if !found {
 		t.Error("no claim event for the tenant claim")
+	}
+}
+
+func TestEveryClaimScopedUsageEventCarriesTheTenant(t *testing.T) {
+	m := tenantManager(t, t.TempDir())
+	ctx := t.Context()
+	if err := m.PutTenant(ctx, tenants.TenantSpec{Name: "acme", Token: "acme-tok"}); err != nil {
+		t.Fatalf("put tenant: %v", err)
+	}
+	sb, err := m.ClaimProvision(ctx, testKey, ClaimOptions{TTL: time.Hour, Tenant: "acme"})
+	if err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	cred := Cred{Token: sb.Token}
+	if err = m.Hibernate(ctx, sb.ID, cred); err != nil {
+		t.Fatalf("hibernate: %v", err)
+	}
+	if _, _, _, err = m.WakeAgentSocket(ctx, sb.ID, sb.Token); err != nil {
+		t.Fatalf("wake: %v", err)
+	}
+	children, err := m.Fork(ctx, sb.ID, cred, 1, time.Hour, "", "")
+	if err != nil {
+		t.Fatalf("fork: %v", err)
+	}
+	if _, err = m.Checkpoint(ctx, sb.ID, cred, "", ""); err != nil {
+		t.Fatalf("checkpoint: %v", err)
+	}
+	if _, _, err = m.Promote(ctx, sb.ID, cred, "tpl:acme", "acme"); err != nil {
+		t.Fatalf("promote: %v", err)
+	}
+	if err = m.Release(ctx, sb.ID, cred); err != nil {
+		t.Fatalf("release: %v", err)
+	}
+	expire(m, children[0])
+	m.reapOnce(ctx)
+	waitFor(t, func() bool { return strings.HasSuffix(usageEventsOf(t, m, children[0].ID), ",reap") })
+
+	raw, err := os.ReadFile(filepath.Join(m.dataDir, "usage.jsonl"))
+	if err != nil {
+		t.Fatalf("read usage journal: %v", err)
+	}
+	kinds := map[string]bool{}
+	for line := range strings.SplitSeq(strings.TrimSpace(string(raw)), "\n") {
+		var ev usage.Event
+		if err = json.Unmarshal([]byte(line), &ev); err != nil {
+			t.Fatalf("bad journal line %q: %v", line, err)
+		}
+		kinds[ev.Event] = true
+		if ev.Tenant != "acme" {
+			t.Errorf("%s event of %s carries tenant %q, want acme", ev.Event, ev.ID, ev.Tenant)
+		}
+	}
+	for _, kind := range []string{"claim", "hibernate", "wake", "fork", "checkpoint", "promote", "release", "reap"} {
+		if !kinds[kind] {
+			t.Errorf("no %s event in the journal", kind)
+		}
 	}
 }
 

@@ -607,7 +607,7 @@ tokens are unchanged: whoever holds a sandbox's token drives that sandbox.
 Fork children inherit the parent's tenant and count against its
 `max_claims` (0 = unlimited, a per-node cap, so a tenant's cluster limit is
 `max_claims` × nodes); a tenant at its cap gets 429 exactly like a node at
-`max_claims`, and the usage journal's claim events carry the tenant for
+`max_claims`, and every usage event of a tenant's claim carries the tenant for
 per-tenant billing. `config.json` has no `tenants` field: a node starts with
 no tenants until the API adds them.
 
