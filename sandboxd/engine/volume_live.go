@@ -101,7 +101,7 @@ func (e *Engine) UnmountVolume(ctx context.Context, vsockSocket, mount string) (
 	if err = e.umountVolume(ctx, vsockSocket, mount); err != nil {
 		return false, err
 	}
-	shared := slices.ContainsFunc(mounts, func(m volumeMount) bool { return m.devNum == entry.devNum && m != entry })
+	shared := slices.ContainsFunc(slices.Delete(mounts, i, i+1), func(m volumeMount) bool { return m.path == target || m.devNum == entry.devNum })
 	return !shared && cleanMount(entry), nil
 }
 
