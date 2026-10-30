@@ -139,16 +139,8 @@ func TestTenantStampedInJournals(t *testing.T) {
 		t.Errorf("persisted claim %+v, want tenant acme", claims[sb.ID])
 	}
 
-	journal, err := os.ReadFile(filepath.Join(m.dataDir, "usage.jsonl"))
-	if err != nil {
-		t.Fatalf("read usage journal: %v", err)
-	}
 	found := false
-	for line := range strings.SplitSeq(strings.TrimSpace(string(journal)), "\n") {
-		var ev usage.Event
-		if err := json.Unmarshal([]byte(line), &ev); err != nil {
-			t.Fatalf("bad journal line %q: %v", line, err)
-		}
+	for _, ev := range usageJournal(t, m) {
 		if ev.Event == "claim" && ev.ID == sb.ID {
 			found = true
 			if ev.Tenant != "acme" {
@@ -195,16 +187,8 @@ func TestEveryClaimScopedUsageEventCarriesTheTenant(t *testing.T) {
 	m.reapOnce(ctx)
 	waitFor(t, func() bool { return strings.HasSuffix(usageEventsOf(t, m, children[0].ID), ",reap") })
 
-	raw, err := os.ReadFile(filepath.Join(m.dataDir, "usage.jsonl"))
-	if err != nil {
-		t.Fatalf("read usage journal: %v", err)
-	}
 	kinds := map[string]bool{}
-	for line := range strings.SplitSeq(strings.TrimSpace(string(raw)), "\n") {
-		var ev usage.Event
-		if err = json.Unmarshal([]byte(line), &ev); err != nil {
-			t.Fatalf("bad journal line %q: %v", line, err)
-		}
+	for _, ev := range usageJournal(t, m) {
 		kinds[ev.Event] = true
 		if ev.Tenant != "acme" {
 			t.Errorf("%s event of %s carries tenant %q, want acme", ev.Event, ev.ID, ev.Tenant)
@@ -390,16 +374,8 @@ func TestClaimMetadataSurvivesARestart(t *testing.T) {
 func TestEgressUsageEventNamesTheInjectedCredentials(t *testing.T) {
 	m := newTestManager(t, newFakeEngine(), config.PoolSpec{PoolKey: testKey})
 	m.recordEgress(t.Context(), "sb_v", "acme", egress.Event{Method: http.MethodGet, Host: "graph.example.com", Port: 443, Decision: egress.DecisionAllow, Injected: "claim:FB"})
-	raw, err := os.ReadFile(filepath.Join(m.dataDir, "usage.jsonl"))
-	if err != nil {
-		t.Fatalf("read journal: %v", err)
-	}
-	var ev usage.Event
-	if err = json.Unmarshal(raw, &ev); err != nil {
-		t.Fatalf("decode %q: %v", raw, err)
-	}
-	if ev.Event != "egress" || ev.Reference != "graph.example.com" || ev.Secret != "claim:FB" {
-		t.Errorf("usage event %+v, want egress to graph.example.com naming claim:FB", ev)
+	if evs := usageJournal(t, m); len(evs) != 1 || evs[0].Event != "egress" || evs[0].Reference != "graph.example.com" || evs[0].Secret != "claim:FB" {
+		t.Errorf("usage events %+v, want one egress to graph.example.com naming claim:FB", evs)
 	}
 }
 
@@ -472,18 +448,27 @@ func TestARelayedFrameCannotForgeOrDropItsAuditLine(t *testing.T) {
 	}
 }
 
-func usageEventsOf(t *testing.T, m *Manager, id string) string {
+func usageJournal(t *testing.T, m *Manager) []usage.Event {
 	t.Helper()
-	raw, err := os.ReadFile(filepath.Join(m.dataDir, "usage.jsonl"))
+	raw, err := os.ReadFile(filepath.Join(m.dataDir, usage.JournalFile))
 	if err != nil {
-		t.Fatalf("read journal: %v", err)
+		t.Fatalf("read usage journal: %v", err)
 	}
-	var events []string
+	var events []usage.Event
 	for line := range strings.SplitSeq(strings.TrimSpace(string(raw)), "\n") {
 		var ev usage.Event
 		if err := json.Unmarshal([]byte(line), &ev); err != nil {
 			t.Fatalf("bad journal line %q: %v", line, err)
 		}
+		events = append(events, ev)
+	}
+	return events
+}
+
+func usageEventsOf(t *testing.T, m *Manager, id string) string {
+	t.Helper()
+	var events []string
+	for _, ev := range usageJournal(t, m) {
 		if ev.ID == id {
 			events = append(events, ev.Event)
 		}
