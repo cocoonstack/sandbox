@@ -865,7 +865,9 @@ only; computing durations or prices stays with the consumer.
   `usage.jsonl`. A restart, a retry or a commit whose reply was lost lands no
   line twice. When neither file holds the line any more, the node lands
   everything the two files hold. A line that does not decode is skipped with
-  a warning, and a last line without its newline waits for it.
+  a warning, and a last line without its newline waits for it. A line a
+  crash cut short stays a line of its own: the node ends it with a newline
+  when it opens the journal, so the first event after the restart is whole.
 - **Order:** a cell's lands commit one at a time under a transaction-scoped
   advisory lock, so `cursor` grows in commit order and a reader that pages by
   cursor never skips a row that commits later. A backfilled row gets a newer

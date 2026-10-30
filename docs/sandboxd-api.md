@@ -1025,7 +1025,8 @@ them in `secret` (`gh,claim:<entry>`, never a value). An egress event routed thr
 the subset of those names claimed `rw`, so billing can discriminate write
 access (mounts and host paths are not billing dimensions). The file rotates at
 64 MiB keeping one `.1` backup, so a tailing collector never loses a window
-silently. Folding rules: billable compute seconds per sandbox =
+silently. A last line a crash cut short is ended with a newline when the node
+reopens the journal, so it never swallows the next event. Folding rules: billable compute seconds per sandbox =
 Σ(claim→release/reap) − Σ(hibernate→wake) − Σ(vmm_exit→vmm_restart/release/reap);
 `vmm_exit` is stamped when the node first finds the VMM gone, so an outage
 before sandboxd runs again (a host that was down) stays billed up to that

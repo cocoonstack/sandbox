@@ -1,12 +1,15 @@
 package pool
 
 import (
+	"encoding/json/v2"
 	"errors"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/cocoonstack/sandbox/sandboxd/usage"
 )
 
 func TestJournalRotateFailureDegradesAndRecovers(t *testing.T) {
@@ -88,6 +91,46 @@ func TestJournalRotateReopenFailureKeepsWriting(t *testing.T) {
 	}
 	if got := tail(t, path); !strings.Contains(got, `"ev":"a"`) || !strings.Contains(got, `"ev":"b"`) {
 		t.Errorf("events lost to a closed descriptor: %q", got)
+	}
+}
+
+func TestJournalKeepsTheFirstAppendAfterATornLine(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "usage.jsonl")
+	if err := os.WriteFile(path, []byte(`{"ev":"claim","id":"sb_a"}`+"\n"+`{"t":"2026-10-30T00:00:00Z","ev":"rel`), 0o600); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	j, err := newJournal(path)
+	if err != nil {
+		t.Fatalf("new journal: %v", err)
+	}
+	if err = j.append(usage.Event{Event: "claim", ID: "sb_b"}); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	lines := strings.Split(strings.TrimSuffix(string(raw), "\n"), "\n")
+	var ev usage.Event
+	if len(lines) != 3 || json.Unmarshal([]byte(lines[2]), &ev) != nil || ev.ID != "sb_b" {
+		t.Errorf("journal after a torn line %q, want the append on a line of its own", raw)
+	}
+	if st, _ := os.Stat(path); j.size != st.Size() {
+		t.Errorf("journal size %d, file %d", j.size, st.Size())
+	}
+}
+
+func TestJournalLeavesAWholeLastLine(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "usage.jsonl")
+	if err := os.WriteFile(path, []byte(`{"ev":"claim"}`+"\n"), 0o600); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	j, err := newJournal(path)
+	if err != nil {
+		t.Fatalf("new journal: %v", err)
+	}
+	if j.size != 15 {
+		t.Errorf("journal size %d after opening a whole file, want 15", j.size)
 	}
 }
 

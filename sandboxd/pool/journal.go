@@ -20,7 +20,7 @@ type journal struct {
 }
 
 func newJournal(path string) (*journal, error) {
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600) //nolint:gosec // under data_dir
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0o600) //nolint:gosec // under data_dir
 	if err != nil {
 		return nil, err
 	}
@@ -29,7 +29,12 @@ func newJournal(path string) (*journal, error) {
 		_ = f.Close()
 		return nil, err
 	}
-	return &journal{path: path, f: f, size: st.Size()}, nil
+	j := &journal{path: path, f: f, size: st.Size()}
+	if err = j.endTornLine(); err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+	return j, nil
 }
 
 func (j *journal) append(v any) error {
@@ -47,6 +52,22 @@ func (j *journal) append(v any) error {
 	n, err := j.f.Write(line)
 	j.size += int64(n)
 	return errors.Join(rotateErr, err)
+}
+
+func (j *journal) endTornLine() error {
+	if j.size == 0 {
+		return nil
+	}
+	last := make([]byte, 1)
+	if _, err := j.f.ReadAt(last, j.size-1); err != nil {
+		return err
+	}
+	if last[0] == '\n' {
+		return nil
+	}
+	n, err := j.f.Write([]byte{'\n'})
+	j.size += int64(n)
+	return err
 }
 
 // rotate moves the live file to .1 and reopens; the old descriptor closes last.
