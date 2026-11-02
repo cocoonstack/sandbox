@@ -17,8 +17,10 @@ type Event struct {
 	VMName    string    `json:"vm,omitempty"`
 	KeyHash   string    `json:"key,omitempty"`
 	Template  string    `json:"template,omitempty"`
+	Net       string    `json:"net,omitempty"`
 	Size      string    `json:"size,omitempty"`
 	Tenant    string    `json:"tenant,omitempty"`
+	Deadline  time.Time `json:"deadline,omitzero"`
 	Volumes   []string  `json:"volumes,omitempty"`
 	VolumesRW []string  `json:"volumes_rw,omitempty"`
 	Children  []string  `json:"children,omitempty"`

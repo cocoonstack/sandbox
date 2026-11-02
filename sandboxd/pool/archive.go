@@ -146,7 +146,8 @@ func (m *Manager) archive(ctx context.Context, sb *types.Sandbox) error {
 	snap, vmName, sock, prevDeadline, prevPending, replica := sb.HibernateSnap, sb.VMName, sb.VsockSocket, sb.Deadline, sb.ArchivePending, sb.ReplicaCk
 	sb.ArchiveCk, sb.ArchiveEpoch, sb.ArchivePending, sb.ReplicaCk = ck.ID, epoch, "", ""
 	sb.HibernateSnap, sb.VsockSocket, sb.VMName = "", "", ""
-	sb.Deadline = m.retentionDeadline(sb.Key)
+	retention := m.retentionDeadline(sb.Key)
+	sb.Deadline = retention
 	js := m.store.set(sb)
 	m.mu.Unlock()
 	if saveErr := m.store.commit(js); saveErr != nil {
@@ -176,7 +177,7 @@ func (m *Manager) archive(ctx context.Context, sb *types.Sandbox) error {
 		m.deleteOrphanArchiveCk(ctx, replica)
 	}
 	m.counters.archives.Add(1)
-	m.recordUsage(ctx, usage.Event{Event: "archive", ID: sb.ID, Reference: ck.ID, Tenant: sb.Tenant})
+	m.recordUsage(ctx, usage.Event{Event: "archive", ID: sb.ID, Reference: ck.ID, Tenant: sb.Tenant, Deadline: retention})
 	return nil
 }
 
@@ -245,7 +246,7 @@ func (m *Manager) wakeArchived(ctx context.Context, sb *types.Sandbox) (string, 
 		return "", ErrUnknownSandbox
 	}
 	m.counters.unarchives.Add(1)
-	m.recordUsage(ctx, usage.Event{Event: "unarchive", ID: sb.ID, Reference: ck, Tenant: sb.Tenant})
+	m.recordUsage(ctx, usage.Event{Event: "unarchive", ID: sb.ID, Reference: ck, Tenant: sb.Tenant, Deadline: m.deadlineOf(sb)})
 	return built.VsockSocket, nil
 }
 

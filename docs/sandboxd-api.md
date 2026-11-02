@@ -1013,13 +1013,17 @@ truth is the usage journal below.
 
 Always on: every lifecycle transition appends one JSONL event to
 `<data_dir>/usage.jsonl` — `{"t": <RFC3339>, "ev":
-"claim|hibernate|wake|fork|checkpoint|promote|release|reap|archive|unarchive|archive_delete|egress|egress_bytes|vmm_exit|vmm_restart|vmm_failed",
+"claim|renew|hibernate|wake|fork|checkpoint|promote|release|reap|archive|unarchive|archive_delete|egress|egress_bytes|vmm_exit|vmm_restart|vmm_failed",
 "id": "sb_…", "vm": "sbx-…"}` plus `key` (the pool key's stable hash, claim
-events), `template` and `size` (the claim's template and size tier, claim
-events, so a consumer can price a sandbox by its shape without the claim
-record, which is gone after release), `tenant` (the owning tenant, on every
-event of a tenant's claim), `children` (fork) and `ref` (the promoted
-template / checkpoint id, the egress host, or a `vmm_failed` reason). An egress event that injected credentials names
+events), `template`, `net` and `size` (the claim's template, lane and size
+tier, claim events, so a consumer can price a sandbox by its shape without the
+claim record, which is gone after release; `size` sets the CPU and memory,
+while `template` is only a label, because a promoted template's name is the
+caller's choice), `deadline` (the deadline in force after this event: `claim`,
+`renew`, `wake` and `unarchive` carry the lease, `archive` the retention end, or
+nothing for an archive kept forever), `tenant` (the owning tenant, on every event of a
+tenant's claim), `children` (fork) and `ref` (the promoted template / checkpoint
+id, the egress host, a `vmm_failed` reason, or why reconcile ended a claim). An egress event that injected credentials names
 them in `secret` (`gh,claim:<entry>`, never a value). An egress event routed through an
 [upstream proxy](egress.md#upstream-proxies) carries `upstream` (its `host:port`), and with
 `egress_usage_bytes` on, `egress_bytes` events add the connection's payload `tx`/`rx` bytes. A volume claim also carries
@@ -1035,9 +1039,11 @@ before sandboxd runs again (a host that was down) stays billed up to that
 point, and `vmm_failed` is informational; hibernated storage seconds =
 Σ(hibernate→wake) minus the archived span; archived storage seconds =
 Σ(archive→unarchive/archive_delete), a cheaper store tier than a hibernated
-VM's RAM. An interval left open by a crash clamps to the claim's
-deadline; reconcile records nothing for the claims it drops (those whose VM
-record is gone), so a restart leaves those intervals without a terminal event. The `vm` name joins
+VM's RAM. An interval left open by a crash, or by a node that never returns,
+clamps to the last `deadline` among the claim's events. Reconcile ends a claim
+it drops with a `reap`: `ref` is `vm_gone` when the VM record is gone and
+`quarantined` when it cannot re-lock the egress NIC. Its `t` is the node's
+return, so clamp it the same way. The `vm` name joins
 cocoon's machine-level metering ledger for audit cross-checks. With
 `meta_store.usage`, the node also lands every line in the cell's
 [shared usage table](deploy.md#shared-usage-table), read through
@@ -1049,12 +1055,13 @@ Auth: root only (tenant tokens get 403). Reads the raw usage events of every
 node of the cell from the [shared usage table](deploy.md#shared-usage-table).
 
 - `GET /v1/usage?tenant=<name>&since=<time>&until=<time>&after=<cursor>&limit=<n>` →
-  `{"events": [{"cursor": 41, "node": "n1", "t": "2026-10-30T08:00:00.123456Z", "ev": "claim", "id": "sb_…", "vm": "sbx-…", "key": "…", "template": "…", "size": "large", "tenant": "acme"}], "next": 41}`.
+  `{"events": [{"cursor": 41, "node": "n1", "t": "2026-10-30T08:00:00.123456Z", "ev": "claim", "id": "sb_…", "vm": "sbx-…", "key": "…", "template": "…", "net": "none", "size": "large", "tenant": "acme", "deadline": "2026-10-30T09:00:00.123456Z"}], "next": 41}`.
 - **Events:** each is one journal line with its keys as in
   [usage.jsonl](#usage-journal-usagejsonl), `t` in UTC to the microsecond, plus
   `cursor` (its place in the table; one node's events follow its journal
-  order) and `node` (the node that recorded it). A `claim` line written by
-  v0.1.20 or earlier has no `template` or `size`.
+  order) and `node` (the node that recorded it). A journal written by
+  v0.1.20 or earlier has no `renew` events and no `deadline`, and its `claim`
+  lines have no `template`, `net` or `size`.
 - **Filters:** `tenant` keeps one tenant's events; `since` (inclusive) and
   `until` (exclusive) are RFC 3339 times compared with `t`. Each is optional.
   A journal written by v0.1.20 or earlier stamps `tenant` only on `claim`,

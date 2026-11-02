@@ -146,8 +146,11 @@ func TestTenantStampedInJournals(t *testing.T) {
 			if ev.Tenant != "acme" {
 				t.Errorf("claim event tenant %q, want acme", ev.Tenant)
 			}
-			if ev.Template != testKey.Template || ev.Size != string(testKey.Size) {
-				t.Errorf("claim event template %q size %q, want %q %q", ev.Template, ev.Size, testKey.Template, testKey.Size)
+			if ev.Template != testKey.Template || ev.Net != string(testKey.Net) || ev.Size != string(testKey.Size) {
+				t.Errorf("claim event template %q net %q size %q, want the key %+v", ev.Template, ev.Net, ev.Size, testKey)
+			}
+			if !ev.Deadline.Equal(sb.Deadline) {
+				t.Errorf("claim event deadline %v, want %v", ev.Deadline, sb.Deadline)
 			}
 		}
 	}
@@ -167,6 +170,9 @@ func TestEveryClaimScopedUsageEventCarriesTheTenant(t *testing.T) {
 		t.Fatalf("claim: %v", err)
 	}
 	cred := Cred{Token: sb.Token}
+	if _, err = m.Renew(ctx, sb.ID, cred, time.Hour, ""); err != nil {
+		t.Fatalf("renew: %v", err)
+	}
 	if err = m.Hibernate(ctx, sb.ID, cred); err != nil {
 		t.Fatalf("hibernate: %v", err)
 	}
@@ -197,10 +203,106 @@ func TestEveryClaimScopedUsageEventCarriesTheTenant(t *testing.T) {
 			t.Errorf("%s event of %s carries tenant %q, want acme", ev.Event, ev.ID, ev.Tenant)
 		}
 	}
-	for _, kind := range []string{"claim", "hibernate", "wake", "fork", "checkpoint", "promote", "release", "reap"} {
+	for _, kind := range []string{"claim", "renew", "hibernate", "wake", "fork", "checkpoint", "promote", "release", "reap"} {
 		if !kinds[kind] {
 			t.Errorf("no %s event in the journal", kind)
 		}
+	}
+}
+
+func TestEveryEventThatMovesTheDeadlineStatesIt(t *testing.T) {
+	m := newTestManager(t, newFakeEngine(), archivePool(3600))
+	ctx := t.Context()
+	sb := mustClaim(t, m, testKey)
+	cred := Cred{Token: sb.Token}
+	assertDeadline := func(kind string) {
+		t.Helper()
+		evs := usageJournal(t, m)
+		last := evs[len(evs)-1]
+		if want := m.deadlineOf(sb); last.Event != kind || want.IsZero() || !last.Deadline.Equal(want) {
+			t.Errorf("last event %s deadline %v, want %s deadline %v", last.Event, last.Deadline, kind, want)
+		}
+	}
+	assertDeadline("claim")
+	if _, err := m.Renew(ctx, sb.ID, cred, 2*time.Hour, ""); err != nil {
+		t.Fatalf("renew: %v", err)
+	}
+	assertDeadline("renew")
+	if err := m.Hibernate(ctx, sb.ID, cred); err != nil {
+		t.Fatalf("hibernate: %v", err)
+	}
+	if _, _, _, err := m.WakeAgentSocket(ctx, sb.ID, sb.Token); err != nil {
+		t.Fatalf("wake: %v", err)
+	}
+	assertDeadline("wake")
+	mustArchive(t, m, sb)
+	assertDeadline("archive")
+	if _, _, _, err := m.WakeAgentSocket(ctx, sb.ID, sb.Token); err != nil {
+		t.Fatalf("wake archived: %v", err)
+	}
+	assertDeadline("unarchive")
+}
+
+func TestAnArchiveKeptForeverStatesNoDeadline(t *testing.T) {
+	m := newTestManager(t, newFakeEngine(), archivePool(0))
+	sb := mustClaim(t, m, testKey)
+	mustArchive(t, m, sb)
+	evs := usageJournal(t, m)
+	if last := evs[len(evs)-1]; last.Event != "archive" || !last.Deadline.IsZero() {
+		t.Errorf("last event %s deadline %v, want an archive without one", last.Event, last.Deadline)
+	}
+}
+
+func TestReconcileRecordsTheEndOfTheClaimsItDrops(t *testing.T) {
+	eng := newFakeEngine()
+	dir := t.TempDir()
+	m := newTestManagerAt(t, eng, dir)
+	lost, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{TTL: time.Hour, Tenant: "acme"})
+	if err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	kept := mustClaim(t, m, testKey)
+	delete(eng.vms, lost.VMName)
+
+	m2 := newTestManagerAt(t, eng, dir)
+	if err = m2.Reconcile(t.Context()); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if got, want := usageEventsOf(t, m2, lost.ID), "claim,reap"; got != want {
+		t.Errorf("events of the dropped claim %s, want %s", got, want)
+	}
+	if got, want := usageEventsOf(t, m2, kept.ID), "claim"; got != want {
+		t.Errorf("events of the kept claim %s, want %s", got, want)
+	}
+	evs := usageJournal(t, m2)
+	if last := evs[len(evs)-1]; last.Reference != endVMGone || last.Tenant != "acme" || last.VMName != lost.VMName {
+		t.Errorf("reap of the dropped claim %+v, want vm_gone of %s under acme", last, lost.VMName)
+	}
+}
+
+func TestReconcileRecordsTheEndOnceTheDropIsDurable(t *testing.T) {
+	eng := newFakeEngine()
+	dir := t.TempDir()
+	m := newTestManagerAt(t, eng, dir)
+	sb := mustClaim(t, m, testKey)
+	delete(eng.vms, sb.VMName)
+
+	m2 := newTestManagerAt(t, eng, dir)
+	restore := breakClaimStore(t, m2)
+	if err := m2.Reconcile(t.Context()); err == nil {
+		t.Fatal("Reconcile with claims.json unwritable succeeded")
+	}
+	if got, want := usageEventsOf(t, m2, sb.ID), "claim"; got != want {
+		t.Errorf("events after a failed save %s, want %s", got, want)
+	}
+	restore()
+
+	m3 := newTestManagerAt(t, eng, dir)
+	if err := m3.Reconcile(t.Context()); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if got, want := usageEventsOf(t, m3, sb.ID), "claim,reap"; got != want {
+		t.Errorf("events after the next boot %s, want %s", got, want)
 	}
 }
 

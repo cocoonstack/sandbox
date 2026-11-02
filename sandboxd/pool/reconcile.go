@@ -15,7 +15,13 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/archives"
 	"github.com/cocoonstack/sandbox/sandboxd/engine"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
+	"github.com/cocoonstack/sandbox/sandboxd/usage"
 	"github.com/cocoonstack/sandbox/sandboxd/utils"
+)
+
+const (
+	endVMGone      = "vm_gone"
+	endQuarantined = "quarantined"
 )
 
 // Reconcile aligns claims and VMs after a restart; it runs before the server because it swaps in fresh records that would bypass in-flight Transition locks.
@@ -38,7 +44,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 
 	owned := map[string]bool{}
 	referenced := map[string]bool{}
-	var adopted []*types.Sandbox
+	var adopted, dropped []*types.Sandbox
 	m.mu.Lock()
 	for _, sb := range claims {
 		sb.SetEnv(sb.Env)
@@ -63,6 +69,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 			// the VMM died with the host or on its own; the liveness pass restarts or fails it
 			sb.PendingSnap = ""
 		default:
+			dropped = append(dropped, sb)
 			continue
 		}
 		m.addClaimLocked(sb)
@@ -79,6 +86,12 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 	m.mu.Unlock()
 	for _, sb := range adopted {
 		m.recordHibernate(ctx, sb)
+	}
+	// A failed save keeps the record, so the next boot drops it and records its end
+	if saveErr == nil {
+		for _, sb := range dropped {
+			m.recordEnd(ctx, sb, endVMGone)
+		}
 	}
 	logger := log.WithFunc("pool.Reconcile")
 	if err := m.ckpts.SweepStaging(); err != nil {
@@ -261,8 +274,14 @@ func (m *Manager) resyncEgress(ctx context.Context, live map[string]types.VMReco
 func (m *Manager) quarantineClaim(ctx context.Context, sb *types.Sandbox) bool {
 	td := m.quiesceVolumes(ctx, sb)
 	gone := m.removeOrRetry(ctx, sb.VMName, sb.ID, td)
-	m.forgetClaim(ctx, sb)
+	if _, ok := m.forgetClaim(ctx, sb); ok {
+		m.recordEnd(ctx, sb, endQuarantined)
+	}
 	return gone
+}
+
+func (m *Manager) recordEnd(ctx context.Context, sb *types.Sandbox, reason string) {
+	m.recordUsage(ctx, usage.Event{Event: reapEvent, ID: sb.ID, VMName: sb.VMName, Tenant: sb.Tenant, Reference: reason})
 }
 
 // readoptEgressTap records and returns a live egress claim's tap, "" when there is none.

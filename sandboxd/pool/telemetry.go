@@ -20,6 +20,7 @@ const (
 	AuditLineCap = 4096
 
 	egressEvent = "egress"
+	reapEvent   = "reap"
 )
 
 // Counters is a monotonic snapshot for /metrics; gauges come from Info.

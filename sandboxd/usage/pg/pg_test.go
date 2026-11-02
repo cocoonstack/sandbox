@@ -25,7 +25,7 @@ func TestLandListsInCursorOrderAndResumesFromTheMark(t *testing.T) {
 	}
 	t0 := time.Date(2026, 10, 30, 0, 0, 0, 0, time.UTC)
 	full := usage.Event{
-		Time: t0.Add(time.Microsecond), Event: "claim", ID: "sb_1", VMName: "sbx-1", KeyHash: "k", Template: "rt:24.04", Size: "xlarge", Tenant: "acme",
+		Time: t0.Add(time.Microsecond), Event: "claim", ID: "sb_1", VMName: "sbx-1", KeyHash: "k", Template: "rt:24.04", Net: "egress", Size: "xlarge", Tenant: "acme", Deadline: t0.Add(time.Hour),
 		Volumes: []string{"data", "ro"}, VolumesRW: []string{"data"}, Reference: "ref", Upstream: "up:1", Secret: "gh", Sent: 7, Received: 9,
 	}
 	land(t, s, record("n1", 1, full), record("n2", 1, usage.Event{Time: t0, Event: "claim", ID: "sb_2"}))
@@ -37,6 +37,10 @@ func TestLandListsInCursorOrderAndResumesFromTheMark(t *testing.T) {
 	}
 	if got := recs[0]; got.Node != "n1" || !equalEvents(got.Event, full) {
 		t.Errorf("first record %+v, want n1 %+v", got, full)
+	}
+	var nulls int
+	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM sandboxd_usage WHERE id = 'sb_2' AND deadline IS NULL`).Scan(&nulls); err != nil || nulls != 1 || !recs[1].Deadline.IsZero() {
+		t.Errorf("a line without a deadline: %d NULL rows, %v, reads back %v", nulls, err, recs[1].Deadline)
 	}
 	if !slices.IsSortedFunc(recs, func(a, b usage.Record) int { return cmp.Compare(a.Cursor, b.Cursor) }) || recs[2].Children[0] != "sb_3" {
 		t.Errorf("records out of cursor order or lost children: %+v", recs)

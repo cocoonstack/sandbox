@@ -198,6 +198,7 @@ func (m *Manager) Renew(ctx context.Context, id string, cred Cred, ttl time.Dura
 		return time.Time{}, fmt.Errorf("renew %s: persist claims: %w", id, err)
 	}
 	sb.Touch()
+	m.recordUsage(ctx, usage.Event{Event: "renew", ID: id, Tenant: sb.Tenant, Deadline: deadline})
 	return deadline, nil
 }
 
@@ -458,8 +459,11 @@ func (m *Manager) finalize(ctx context.Context, sb *types.Sandbox, ttl time.Dura
 // finalizeBatch persists the batch as one write, all-or-nothing; one tenant per batch.
 func (m *Manager) finalizeBatch(ctx context.Context, sbs []*types.Sandbox, ttl time.Duration, claimRefPrefix string, inherited bool) error {
 	now := time.Now()
-	for _, sb := range sbs {
+	// A renew can move the deadline once the claim is visible
+	deadlines := make([]time.Time, len(sbs))
+	for i, sb := range sbs {
 		stampIdentity(sb, clampTTL(ttl))
+		deadlines[i] = sb.Deadline
 		if claimRefPrefix != "" {
 			sb.ClaimRef = claimRefPrefix + sb.ID
 		}
@@ -502,15 +506,22 @@ func (m *Manager) finalizeBatch(ctx context.Context, sbs []*types.Sandbox, ttl t
 		}
 	}
 	// usage lands only after the batch armed, so a rollback leaves no unterminated claim event
-	for _, sb := range sbs {
+	for i, sb := range sbs {
 		m.recordUsage(ctx, usage.Event{
 			Event: "claim",
 			ID:    sb.ID, VMName: sb.VMName,
-			KeyHash: sb.Key.Hash(), Template: sb.Key.Template, Size: string(sb.Key.Size), Tenant: sb.Tenant,
+			KeyHash: sb.Key.Hash(), Template: sb.Key.Template, Net: string(sb.Key.Net), Size: string(sb.Key.Size),
+			Tenant: sb.Tenant, Deadline: deadlines[i],
 			Volumes: types.VolumeNames(sb.Volumes), VolumesRW: types.VolumeRWNames(sb.Volumes),
 		})
 	}
 	return nil
+}
+
+func (m *Manager) deadlineOf(sb *types.Sandbox) time.Time {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return sb.Deadline
 }
 
 // rollbackClaim unwinds a claim batch: a NIC that cannot be locked is never handed out.
@@ -660,7 +671,7 @@ func (m *Manager) reapOnce(ctx context.Context) {
 			m.purgeArchiveCk(ctx, v.id, v.ck, v.tenant)
 			m.untrack(m.pendingCks, v.ck)
 			m.counters.reaps.Add(1)
-			m.recordUsage(ctx, usage.Event{Event: "reap", ID: v.id, Tenant: v.tenant})
+			m.recordUsage(ctx, usage.Event{Event: reapEvent, ID: v.id, Tenant: v.tenant})
 			logger.Infof(ctx, "purged archived sandbox %s", v.id)
 		case reapArchive:
 			logSweepResult(ctx, logger, m.archive(ctx, v.sb), "archived expired sandbox "+v.id, "archive expired sandbox "+v.id)
@@ -672,7 +683,7 @@ func (m *Manager) reapOnce(ctx context.Context) {
 			m.out.Disarm(v.id, m.removeOrRetry(ctx, v.vmName, v.id, td))
 			m.dropSnap(ctx, v.snap)
 			m.counters.reaps.Add(1)
-			m.recordUsage(ctx, usage.Event{Event: "reap", ID: v.id, VMName: v.vmName, Tenant: v.tenant})
+			m.recordUsage(ctx, usage.Event{Event: reapEvent, ID: v.id, VMName: v.vmName, Tenant: v.tenant})
 			logger.Infof(ctx, "reaped expired sandbox %s (%s)", v.id, v.vmName)
 		}
 	})
