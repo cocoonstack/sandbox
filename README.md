@@ -149,7 +149,7 @@ alone has hidden Linux-only breakage before.
 ## License
 
 The server stack — sandboxd, silkd, the boot chain, the OS images, and the
-MCP server — is licensed under [AGPL-3.0](LICENSE). The client SDKs
+MCP server — is a product, and is licensed under [AGPL-3.0](LICENSE). The client SDKs
 (`sdk/go`, `sdk/python`, `sdk/openai`, `sdk/langchain`) and the
 `protocol/wire` module the Go SDK requires are licensed under Apache-2.0
 (see the `LICENSE` file in each directory) and carry no copyleft obligation.
