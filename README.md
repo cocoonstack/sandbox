@@ -24,8 +24,10 @@ vsock-only I/O (hardened default); `net=egress` attaches a bridge/CNI NIC.
 
 ## Quick start
 
-On a Linux node with KVM and [cocoon](https://github.com/cocoonstack/cocoon)
-v0.6.9 or newer, as root, from a checkout with Go installed:
+On a Linux node with KVM, [cocoon](https://github.com/cocoonstack/cocoon) v0.6.9
+or newer, Cloud Hypervisor and `jq`, as root, from a checkout with Go installed.
+Not on a node that already runs sandboxd on the same cocoon root: at start
+sandboxd removes every `sbx-` VM it does not own.
 
 ```bash
 make sandboxd
@@ -49,6 +51,14 @@ until curl -sf -H 'Authorization: Bearer change-me' http://127.0.0.1:7777/v1/inf
 # Claim, exec and release three times; prints each latency.
 (cd e2e && GOWORK=off go run ./cmd/demo -addr 127.0.0.1:7777 -token change-me \
   -template ghcr.io/cocoonstack/sandbox/rt:24.04)
+```
+
+A stopped sandboxd leaves its VMs for the next start. To remove them:
+
+```bash
+kill %1
+cocoon vm list --format json | jq -r '.[].config.name | select(startswith("sbx-"))' |
+  while read -r vm; do cocoon vm stop --force "$vm"; cocoon vm rm --force "$vm"; done
 ```
 
 `demo` is a small program over the [Go SDK](docs/sdk.md); the
