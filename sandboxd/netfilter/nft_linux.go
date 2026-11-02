@@ -85,9 +85,9 @@ func SweepExcept(keep map[string]bool) error {
 	return c.Flush()
 }
 
-// dropTable queues the delete after an add, because a delete of a missing table aborts the batch and an abort waits one RCU grace period.
+// dropTable queues a delete only for a table that exists, because a delete of a missing table aborts the batch and an abort waits one RCU grace period.
 func dropTable(c *nftables.Conn, tap string) {
-	t := &nftables.Table{Family: nftables.TableFamilyNetdev, Name: tablePrefix + tap}
-	c.AddTable(t)
-	c.DelTable(t)
+	if t, err := c.ListTableOfFamily(tablePrefix+tap, nftables.TableFamilyNetdev); err == nil {
+		c.DelTable(t)
+	}
 }
