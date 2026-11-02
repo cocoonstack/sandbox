@@ -128,8 +128,9 @@ and persisted at finalization — `mode` is omitted from the echo for `ro`
 entries, matching the request shape. sandboxd attaches each disk, waits for
 the device settle — a serial match under `/sys/block`, then the `/dev/<name>`
 node itself, since the kernel publishes sysfs before devtmpfs creates it — up
-to 2 seconds total, and mounts the filesystem — read-only, unless the entry
-requested and was granted `rw` — before returning. A mount that reports
+to 2 seconds total, and mounts the filesystem — as ext4 first, then with mount's
+own probe if that is refused; read-only, unless the entry requested and was
+granted `rw` — before returning. A mount that reports
 `not a valid block device` is retried within the 10-second setup budget,
 since the new node can exist before the kernel opens the disk. A custom mount
 may shadow an existing populated guest directory for the claim's life.

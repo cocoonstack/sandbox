@@ -99,6 +99,8 @@ type fakeSilkd struct {
 	statCalls  []string
 	connects   []string
 	execDetach []bool
+
+	execFailFrom int
 }
 
 func serveFakeSilkd(t *testing.T, path string) *fakeSilkd {
@@ -219,7 +221,7 @@ func (f *fakeSilkd) handleExec(conn net.Conn, argv []string, env map[string]stri
 			code = 1
 		}
 	}
-	if f.execFailAt > 0 && len(f.execCalls) != f.execFailAt {
+	if f.execFailAt > 0 && len(f.execCalls) != f.execFailAt || len(f.execCalls) < f.execFailFrom {
 		code, reply = 0, ""
 	}
 	stderr := ""

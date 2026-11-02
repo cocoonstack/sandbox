@@ -116,7 +116,7 @@ func TestMountVolumeUsesSysfsAndRequestedMode(t *testing.T) {
 			defer fake.mu.Unlock()
 			wantExec := [][]string{
 				{"mkdir", "-p", "--", "/datasets/training"},
-				{"mount", "-o", tt.wantMode, "--", "/dev/vdc", "/datasets/training"},
+				{"mount", "-t", "ext4", "-o", tt.wantMode, "--", "/dev/vdc", "/datasets/training"},
 			}
 			if !slices.EqualFunc(fake.execCalls, wantExec, slices.Equal) {
 				t.Errorf("exec calls = %v, want %v", fake.execCalls, wantExec)
@@ -255,6 +255,57 @@ func TestMountVolumeWaitsForDelayedDevNode(t *testing.T) {
 	}
 }
 
+func TestMountVolumeFallsBackToTheProbeForAnotherFilesystem(t *testing.T) {
+	path := sockPath(t)
+	fake := serveFakeSilkd(t, path)
+	configureVolumeDevices(fake)
+	fake.mu.Lock()
+	fake.execCode, fake.execFailAt = 32, 2
+	fake.mu.Unlock()
+	if err := New("cocoon", nil, nil, false, false, "").MountVolume(t.Context(), path, "imagenet", "/datasets/training", false); err != nil {
+		t.Fatalf("MountVolume: %v", err)
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	want := [][]string{
+		{"mkdir", "-p", "--", "/datasets/training"},
+		{"mount", "-t", "ext4", "-o", "ro", "--", "/dev/vdc", "/datasets/training"},
+		{"mount", "-o", "ro", "--", "/dev/vdc", "/datasets/training"},
+	}
+	if !slices.EqualFunc(fake.execCalls, want, slices.Equal) {
+		t.Errorf("exec calls = %v, want %v", fake.execCalls, want)
+	}
+}
+
+func TestMountVolumeReadsEachOtherSerialOnce(t *testing.T) {
+	path := sockPath(t)
+	fake := serveFakeSilkd(t, path)
+	configureVolumeDevices(fake)
+	fake.mu.Lock()
+	imagenet := fake.serial["/sys/block/vdc/serial"]
+	fake.serial["/sys/block/vdc/serial"] = []byte("\n")
+	fake.mu.Unlock()
+	time.AfterFunc(60*time.Millisecond, func() {
+		fake.mu.Lock()
+		defer fake.mu.Unlock()
+		fake.serial["/sys/block/vdc/serial"] = imagenet
+	})
+	if err := New("cocoon", nil, nil, false, false, "").MountVolume(t.Context(), path, "imagenet", "/datasets/training", false); err != nil {
+		t.Fatalf("MountVolume: %v", err)
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if fake.listCalls < 2 {
+		t.Fatalf("list calls = %d, want the device to arrive on a later poll", fake.listCalls)
+	}
+	if got := len(slices.DeleteFunc(slices.Clone(fake.readCalls), func(p string) bool { return p != "/sys/block/vda/serial" })); got != 1 {
+		t.Errorf("read the root disk's serial %d times, want once: %v", got, fake.readCalls)
+	}
+	if got := len(slices.DeleteFunc(slices.Clone(fake.readCalls), func(p string) bool { return p != "/sys/block/vdc/serial" })); got < 2 {
+		t.Errorf("read the awaited disk's serial %d times, want a retry: %v", got, fake.readCalls)
+	}
+}
+
 func TestMountVolumeRetriesUntilTheDeviceOpens(t *testing.T) {
 	path := sockPath(t)
 	fake := serveFakeSilkd(t, path)
@@ -269,6 +320,9 @@ func TestMountVolumeRetriesUntilTheDeviceOpens(t *testing.T) {
 	defer fake.mu.Unlock()
 	if mounts := len(fake.execCalls) - 1; mounts != 3 {
 		t.Fatalf("mount attempts = %d, want 3: %v", mounts, fake.execCalls)
+	}
+	if last := fake.execCalls[len(fake.execCalls)-1]; !slices.Contains(last, "ext4") {
+		t.Errorf("a device that was not ready lost the ext4 hint: %v", last)
 	}
 }
 
@@ -298,7 +352,7 @@ func TestMountVolumeStopsAtFailedStage(t *testing.T) {
 		{"read", func(f *fakeSilkd) { f.readErr["/sys/block/vda/serial"] = "read failed" }, "wait for volume device imagenet", 0},
 		{"stat", func(f *fakeSilkd) { f.statErr["/dev/vdc"] = "stat failed" }, "wait for volume device imagenet", 0},
 		{"mkdir", func(f *fakeSilkd) { f.execCode, f.execFailAt = 3, 1 }, "create volume mount point", 1},
-		{"mount", func(f *fakeSilkd) { f.execCode, f.execFailAt = 3, 2 }, "mount volume imagenet", 2},
+		{"mount as ext4 then by probe", func(f *fakeSilkd) { f.execCode = 3; f.execFailFrom = 2 }, "mount volume imagenet", 3},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			path := sockPath(t)
