@@ -1007,8 +1007,13 @@ gauges, a per-tenant live-claim gauge (`sandboxd_tenant_claims{tenant="…"}`,
 tenants holding live claims only, so the label set is bounded by the node's claims), `sandboxd_config_digest_mismatch` on a mesh, claims
 by tier (warm/clone/cold),
 wake/hibernate/fork/checkpoint/promote/release/reap counters plus
-archive/unarchive/archive-delete counters, and claim/wake `*_seconds_total`
-for average latency. /metrics is a derived ops view; the billing source of
+archive/unarchive/archive-delete counters, claim/wake `*_seconds_total`
+for average latency, `sandboxd_claim_duration_seconds{tier}`, a histogram of pool
+claims by tier, and `sandboxd_claim_redirects_total`, claims this node handed to a
+peer. The warm hit rate is `sandboxd_claim_duration_seconds_count{tier="warm"}`
+over the three tiers' counts: `sandboxd_claims_total` also counts forked children
+and checkpoint branches under `clone`, and the histogram does not. A claim with
+volumes includes their attach and mount in its tier. /metrics is a derived ops view; the billing source of
 truth is the usage journal below.
 
 ## Usage journal (usage.jsonl)

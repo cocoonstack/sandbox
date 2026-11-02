@@ -6,6 +6,7 @@ import (
 	"encoding/json/v2"
 	"maps"
 	"net/netip"
+	"slices"
 	"sync/atomic"
 	"time"
 
@@ -22,6 +23,18 @@ const (
 	egressEvent = "egress"
 	reapEvent   = "reap"
 )
+
+// ClaimBuckets are the upper bounds of the claim latency histogram.
+var ClaimBuckets = [...]time.Duration{
+	500 * time.Microsecond, time.Millisecond, 2500 * time.Microsecond, 5 * time.Millisecond, 10 * time.Millisecond, 25 * time.Millisecond,
+	50 * time.Millisecond, 100 * time.Millisecond, 250 * time.Millisecond, 500 * time.Millisecond, time.Second, 2500 * time.Millisecond,
+}
+
+// ClaimLatency is one tier's histogram: one count per ClaimBuckets bound, then the overflow.
+type ClaimLatency struct {
+	Counts [len(ClaimBuckets) + 1]uint64
+	Nanos  uint64
+}
 
 // Counters is a monotonic snapshot for /metrics; gauges come from Info.
 type Counters struct {
@@ -40,7 +53,8 @@ type Counters struct {
 	Unarchives     uint64
 	ArchiveDeletes uint64
 
-	// nanosecond totals paired with the counters above: avg latency without histograms
+	ClaimWarmLatency, ClaimCloneLatency, ClaimColdLatency ClaimLatency
+
 	ClaimNanos uint64
 	WakeNanos  uint64
 }
@@ -51,7 +65,28 @@ type counters struct {
 	forks, checkpoints, promotes         atomic.Uint64
 	releases, reaps                      atomic.Uint64
 	archives, unarchives, archiveDeletes atomic.Uint64
-	claimNanos, wakeNanos                atomic.Uint64
+	wakeNanos                            atomic.Uint64
+
+	claimWarmLatency, claimCloneLatency, claimColdLatency claimHistogram
+}
+
+type claimHistogram struct {
+	counts [len(ClaimBuckets) + 1]atomic.Uint64
+	nanos  atomic.Uint64
+}
+
+func (h *claimHistogram) observe(d time.Duration) {
+	i, _ := slices.BinarySearch(ClaimBuckets[:], d)
+	h.counts[i].Add(1)
+	h.nanos.Add(uint64(d)) //nolint:gosec // durations are positive
+}
+
+func (h *claimHistogram) snapshot() ClaimLatency {
+	out := ClaimLatency{Nanos: h.nanos.Load()}
+	for i := range h.counts {
+		out.Counts[i] = h.counts[i].Load()
+	}
+	return out
 }
 
 // requestFrame is the addressing slice of a relayed request frame worth auditing.
@@ -89,6 +124,7 @@ type egressFrame struct {
 
 func (m *Manager) Counters() Counters {
 	c := &m.counters
+	warm, clone, cold := c.claimWarmLatency.snapshot(), c.claimCloneLatency.snapshot(), c.claimColdLatency.snapshot()
 	return Counters{
 		ClaimsWarm:     c.claimsWarm.Load(),
 		ClaimsClone:    c.claimsClone.Load(),
@@ -103,8 +139,12 @@ func (m *Manager) Counters() Counters {
 		Archives:       c.archives.Load(),
 		Unarchives:     c.unarchives.Load(),
 		ArchiveDeletes: c.archiveDeletes.Load(),
-		ClaimNanos:     c.claimNanos.Load(),
+		ClaimNanos:     warm.Nanos + clone.Nanos + cold.Nanos,
 		WakeNanos:      c.wakeNanos.Load(),
+
+		ClaimWarmLatency:  warm,
+		ClaimCloneLatency: clone,
+		ClaimColdLatency:  cold,
 	}
 }
 

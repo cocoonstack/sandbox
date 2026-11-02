@@ -2,12 +2,15 @@ package server
 
 import (
 	"fmt"
+	"io"
 	"maps"
 	"net/http"
 	"slices"
+
+	"github.com/cocoonstack/sandbox/sandboxd/pool"
 )
 
-// handleMetrics renders Prometheus text format by hand, counters and gauges only.
+// handleMetrics renders Prometheus text format by hand.
 func (s *Server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
 	pools, g := s.mgr.Info()
 	c := s.mgr.Counters()
@@ -57,6 +60,12 @@ func (s *Server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
 	_, _ = fmt.Fprintf(w, "sandboxd_claims_total{tier=\"cold\"} %d\n", c.ClaimsCold)
 	metric("claim_seconds_total", "counter", "time spent serving claims")
 	_, _ = fmt.Fprintf(w, "sandboxd_claim_seconds_total %.6f\n", float64(c.ClaimNanos)/1e9)
+	metric("claim_duration_seconds", "histogram", "time to serve a pool claim, by provisioning tier")
+	writeClaimLatency(w, "warm", c.ClaimWarmLatency)
+	writeClaimLatency(w, "clone", c.ClaimCloneLatency)
+	writeClaimLatency(w, "cold", c.ClaimColdLatency)
+	metric("claim_redirects_total", "counter", "claims handed to a peer instead of served here")
+	_, _ = fmt.Fprintf(w, "sandboxd_claim_redirects_total %d\n", s.claimRedirects.Load())
 	metric("wake_seconds_total", "counter", "time spent waking")
 	_, _ = fmt.Fprintf(w, "sandboxd_wake_seconds_total %.6f\n", float64(c.WakeNanos)/1e9)
 	for _, row := range []struct {
@@ -77,4 +86,16 @@ func (s *Server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
 		metric(row.name, "counter", row.help)
 		_, _ = fmt.Fprintf(w, "sandboxd_%s %d\n", row.name, row.value)
 	}
+}
+
+func writeClaimLatency(w io.Writer, tier string, latency pool.ClaimLatency) {
+	var total uint64
+	for i, bound := range pool.ClaimBuckets {
+		total += latency.Counts[i]
+		_, _ = fmt.Fprintf(w, "sandboxd_claim_duration_seconds_bucket{tier=%q,le=\"%g\"} %d\n", tier, bound.Seconds(), total)
+	}
+	total += latency.Counts[len(pool.ClaimBuckets)]
+	_, _ = fmt.Fprintf(w, "sandboxd_claim_duration_seconds_bucket{tier=%q,le=\"+Inf\"} %d\n", tier, total)
+	_, _ = fmt.Fprintf(w, "sandboxd_claim_duration_seconds_sum{tier=%q} %.6f\n", tier, float64(latency.Nanos)/1e9)
+	_, _ = fmt.Fprintf(w, "sandboxd_claim_duration_seconds_count{tier=%q} %d\n", tier, total)
 }

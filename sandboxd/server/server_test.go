@@ -674,6 +674,83 @@ func TestMetricsTenantGauge(t *testing.T) {
 	}
 }
 
+func TestMetricsClaimHistogramIsCumulative(t *testing.T) {
+	var latency pool.ClaimLatency
+	latency.Counts[0], latency.Counts[1], latency.Counts[len(pool.ClaimBuckets)] = 2, 3, 1
+	latency.Nanos = 1_500_000
+	ts := newTestServer(t, "", &fakeManager{counters: pool.Counters{ClaimCloneLatency: latency}}, nil)
+
+	resp, err := http.Get(ts.URL + "/metrics")
+	if err != nil {
+		t.Fatalf("metrics: %v", err)
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	body := string(raw)
+	for _, want := range []string{
+		"# TYPE sandboxd_claim_duration_seconds histogram\n",
+		`sandboxd_claim_duration_seconds_bucket{tier="clone",le="0.0005"} 2` + "\n",
+		`sandboxd_claim_duration_seconds_bucket{tier="clone",le="0.001"} 5` + "\n",
+		`sandboxd_claim_duration_seconds_bucket{tier="clone",le="2.5"} 5` + "\n",
+		`sandboxd_claim_duration_seconds_bucket{tier="clone",le="+Inf"} 6` + "\n",
+		`sandboxd_claim_duration_seconds_sum{tier="clone"} 0.001500` + "\n",
+		`sandboxd_claim_duration_seconds_count{tier="clone"} 6` + "\n",
+		`sandboxd_claim_duration_seconds_count{tier="warm"} 0` + "\n",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("missing %q in:\n%s", want, body)
+		}
+	}
+}
+
+func TestClaimRedirectsAreCounted(t *testing.T) {
+	sandbox := func(context.Context, types.PoolKey, time.Duration) (*types.Sandbox, error) {
+		return &types.Sandbox{ID: "sb_local", Token: "tok"}, nil
+	}
+	for _, tt := range []struct {
+		name   string
+		body   string
+		mgr    *fakeManager
+		placer *fakePlacer
+		want   string
+	}{
+		{"warm miss with a peer", `{"template":"rt:24.04"}`, &fakeManager{claim: sandbox}, &fakePlacer{addrs: []string{"peer:7777"}}, "1"},
+		{"warm miss served here", `{"template":"rt:24.04"}`, &fakeManager{claim: sandbox}, &fakePlacer{}, "0"},
+		{
+			"over quota with a peer", `{"template":"rt:24.04"}`,
+			&fakeManager{warmClaim: func(context.Context, types.PoolKey, time.Duration) (*types.Sandbox, error) { return nil, pool.ErrQuota }},
+			&fakePlacer{addrs: []string{"peer:7777"}}, "1",
+		},
+		{
+			"volume warm miss with a peer", `{"template":"rt:24.04","volumes":[{"name":"imagenet"}]}`,
+			&fakeManager{claim: sandbox}, &fakePlacer{volumeCandidates: []string{"peer:7777"}}, "1",
+		},
+		{
+			"volume this node does not hold", `{"template":"rt:24.04","volumes":[{"name":"imagenet"}]}`,
+			&fakeManager{claim: sandbox, hasGolden: true, volumePlacement: func(types.PoolKey, string, []string) (bool, error) { return false, nil }},
+			&fakePlacer{volumeOwners: []string{"peer:7777"}}, "1",
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			ts := newMeshTestServer(t, "", tt.mgr, tt.placer, nil)
+			resp, err := http.Post(ts.URL+"/v1/claim", "application/json", strings.NewReader(tt.body))
+			if err != nil {
+				t.Fatalf("claim: %v", err)
+			}
+			_ = resp.Body.Close()
+			metrics, err := http.Get(ts.URL + "/metrics")
+			if err != nil {
+				t.Fatalf("metrics: %v", err)
+			}
+			defer metrics.Body.Close()
+			raw, _ := io.ReadAll(metrics.Body)
+			if want := "sandboxd_claim_redirects_total " + tt.want + "\n"; !strings.Contains(string(raw), want) {
+				t.Errorf("missing %q in:\n%s", want, raw)
+			}
+		})
+	}
+}
+
 func TestPutPoolsRejectsUnknownFields(t *testing.T) {
 	ts := newTestServer(t, "sekret", &fakeManager{}, nil)
 	resp := doReq(t, http.MethodPut, ts.URL+"/v1/pools", "sekret", `{"pools":[{"template":"rt:24.04","net":"none","size":"small","egres":{"allow":[]}}]}`)
@@ -2482,6 +2559,7 @@ type checkpointClaimFunc func(string) (*types.Sandbox, error)
 type idActionFunc func(string) error
 
 type fakeManager struct {
+	counters             pool.Counters
 	registerVolume       func(context.Context, string, types.VolumeRegistration) error
 	unregisterVolume     func(context.Context, string) error
 	getVolumes           func(string, string) (types.SandboxVolumesResponse, error)
@@ -2730,7 +2808,7 @@ func (f *fakeManager) ClaimDeadline(id, token string) (time.Time, error) {
 	return time.Now().Add(time.Hour), nil
 }
 
-func (f *fakeManager) Counters() pool.Counters { return pool.Counters{} }
+func (f *fakeManager) Counters() pool.Counters { return f.counters }
 
 func (f *fakeManager) TenantClaims() map[string]int { return f.tenantClaims }
 
