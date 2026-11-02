@@ -140,6 +140,8 @@ class Sandbox:
         """Streams raw output bytes and returns the exit code; timeout bounds the call and kills what it cuts."""
         if timeout is not None and timeout <= 0:
             raise ValueError("timeout must be positive")
+        if stdin and not isinstance(stdin, (bytes, bytearray, memoryview)):
+            raise TypeError("stdin must be bytes")
         deadline = None if timeout is None else time.monotonic() + timeout
         expired = threading.Event()
         started: deque[int] = deque(maxlen=1)

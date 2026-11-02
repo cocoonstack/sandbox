@@ -62,6 +62,20 @@ def test_run_pumps_stdin_while_reading_output(monkeypatch):
     assert blocking.sent[-1][0] == "stdin_close"
 
 
+@pytest.mark.parametrize(
+    "call",
+    [lambda sb: sb.run(["cat"], stdin="hi"), lambda sb: sb.exec("cat", stdin="hi")],
+    ids=["run", "exec"],
+)
+def test_a_text_stdin_is_refused_before_dialing(monkeypatch, call):
+    sb = sandbox_at("127.0.0.1:1", keep_alive=0)
+    conn = StdinGatedConn([{"type": "exit", "code": 0}])
+    monkeypatch.setattr(sb, "_dial", lambda deadline=None: conn)
+    with pytest.raises(TypeError, match="stdin must be bytes"):
+        call(sb)
+    assert conn.sent == []
+
+
 class FakeConn:
     """Answers one RPC with a canned frame list."""
 
@@ -109,6 +123,23 @@ class BlockingStdinConn(FakeConn):
     def recv(self):
         self._read = True
         self._room.release()
+        return super().recv()
+
+
+class StdinGatedConn(FakeConn):
+    """A guest that answers only after stdin closes, as cat does."""
+
+    def __init__(self, frames):
+        super().__init__(frames)
+        self._closed = threading.Event()
+
+    def send(self, op, **fields):
+        super().send(op, **fields)
+        if op == "stdin_close":
+            self._closed.set()
+
+    def recv(self):
+        assert self._closed.wait(2), "stdin_close never sent"
         return super().recv()
 
 
