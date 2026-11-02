@@ -35,6 +35,29 @@ func TestGoldenBuildRunsWarmupBeforeSnapshot(t *testing.T) {
 	}
 }
 
+func TestGoldenBuildSettlesTheGuestBetweenWarmupAndSnapshot(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		err  error
+	}{
+		{"settled", nil},
+		{"a guest that cannot settle still gets a golden", errors.New("no systemctl")},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			eng := newFakeEngine()
+			eng.settleErr = tt.err
+			m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1, Warmup: []string{"true"}})
+			final := filepath.Join(m.goldensDir(), testKey.Hash())
+			if err := m.buildGoldenSteps(t.Context(), m.view.Load(), testKey, "sbx-gb", "snap", final, ""); err != nil {
+				t.Fatalf("buildGoldenSteps: %v", err)
+			}
+			if eng.settles != 1 || eng.settleAfterSnap || !eng.settleAfterWarmup || len(eng.snapSaves) != 1 {
+				t.Errorf("settles %d, after snapshot %t, after warmup %t, snapshots %d", eng.settles, eng.settleAfterSnap, eng.settleAfterWarmup, len(eng.snapSaves))
+			}
+		})
+	}
+}
+
 func TestGoldenBuildSkipsWarmupWhenUnset(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1})

@@ -1293,6 +1293,10 @@ type fakeEngine struct {
 	metadataErr  error
 	guestEnvs    map[string]string
 	guestEnvErr  error
+
+	settles                            int
+	settleAfterSnap, settleAfterWarmup bool
+	settleErr                          error
 }
 
 func newFakeEngine() *fakeEngine {
@@ -1597,6 +1601,15 @@ func (f *fakeEngine) MarkLane(_ context.Context, _ string, lane types.NetRoute) 
 	defer f.mu.Unlock()
 	f.laneMarks = append(f.laneMarks, string(lane))
 	return nil
+}
+
+func (f *fakeEngine) SettleGuest(context.Context, string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.settles++
+	f.settleAfterSnap = f.settleAfterSnap || len(f.snapSaves) > 0
+	f.settleAfterWarmup = len(f.warmups) > 0
+	return f.settleErr
 }
 
 func (f *fakeEngine) Warmup(_ context.Context, sock string, argv []string) error {

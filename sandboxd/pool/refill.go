@@ -243,6 +243,9 @@ func (m *Manager) buildGoldenSteps(ctx context.Context, v *configView, key types
 	if err = m.runWarmup(ctx, v.poolWarmups[key], sock); err != nil {
 		return fmt.Errorf("warmup: %w", err)
 	}
+	if err = m.eng.SettleGuest(ctx, sock); err != nil {
+		log.WithFunc("pool.buildGoldenSteps").Warnf(ctx, "capture golden of %s before its guest settled: %v", key.Template, err)
+	}
 	if err := m.eng.SnapshotSave(ctx, name, snap); err != nil {
 		return err
 	}
