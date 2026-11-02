@@ -2,6 +2,7 @@ package sandbox
 
 import (
 	"bufio"
+	"cmp"
 	"context"
 	"crypto/tls"
 	"fmt"
@@ -77,7 +78,7 @@ func (c *Client) dialAgent(ctx context.Context, addr, id, token string) (*upgrad
 		secured := tls.Client(raw, cfg)
 		if err = secured.HandshakeContext(ctx); err != nil {
 			_ = raw.Close()
-			return nil, fmt.Errorf("agent TLS handshake: %w", err)
+			return nil, fmt.Errorf("agent TLS handshake: %w", cmp.Or(ctx.Err(), err))
 		}
 		conn = secured
 	}
