@@ -80,7 +80,7 @@ pub async fn pull<W: AsyncWrite + Unpin>(w: &mut W, path: String) -> io::Result<
     }
     let status = child.wait().await?;
     let msg = err_task.await.unwrap_or_default();
-    proto::subprocess_result(w, status.success(), "tar create", msg.as_bytes()).await
+    proto::subprocess_result(w, status.success(), "tar create", &msg).await
 }
 
 /// The caller owns removing `staging` on every path.
@@ -116,7 +116,7 @@ where
         return proto::write_feed_error(w, fail).await;
     }
     if !status.success() {
-        return proto::subprocess_result(w, status.success(), "tar extract", msg.as_bytes()).await;
+        return proto::subprocess_result(w, status.success(), "tar extract", &msg).await;
     }
     // spawn_blocking: a big tree is thousands of local fs syscalls.
     let merged = tokio::task::spawn_blocking(move || merge_tree(&staging, &dest))
@@ -132,7 +132,7 @@ where
 /// Spawns tar draining stderr on its own task, so a full stderr pipe cannot deadlock.
 fn spawn_tar(
     mut cmd: Command,
-) -> io::Result<(tokio::process::Child, tokio::task::JoinHandle<String>)> {
+) -> io::Result<(tokio::process::Child, tokio::task::JoinHandle<Vec<u8>>)> {
     let mut child = cmd.stderr(Stdio::piped()).kill_on_drop(true).spawn()?;
     let stderr = child
         .stderr
@@ -187,7 +187,7 @@ fn is_dir(mode: stat::mode_t) -> bool {
 }
 
 /// Reads a child's stderr up to STDERR_CAP; tar's first error is the useful one.
-async fn drain(mut stderr: tokio::process::ChildStderr) -> String {
+async fn drain(mut stderr: tokio::process::ChildStderr) -> Vec<u8> {
     let mut out = Vec::new();
     let mut buf = [0u8; 4096];
     while let Ok(n) = stderr.read(&mut buf).await {
@@ -198,7 +198,7 @@ async fn drain(mut stderr: tokio::process::ChildStderr) -> String {
             out.extend_from_slice(&buf[..(n.min(STDERR_CAP - out.len()))]);
         }
     }
-    String::from_utf8(out).unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned())
+    out
 }
 
 #[cfg(test)]
