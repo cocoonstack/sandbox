@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/projecteru2/core/log"
@@ -248,6 +249,8 @@ type Server struct {
 
 	execBudget *semaphore.Weighted
 
+	claimRedirects atomic.Uint64
+
 	relayMu     sync.Mutex
 	relays      map[net.Conn]io.Closer // client conn → what its relay holds open
 	relayClosed bool
@@ -364,12 +367,14 @@ func (s *Server) handleClaim(w http.ResponseWriter, r *http.Request) {
 	}
 	if errors.Is(err, pool.ErrNoWarm) {
 		if s.redirectClaim(r.Context(), w, req, key, key.Hash(), tenant) {
+			s.claimRedirects.Add(1)
 			return
 		}
 		sb, err = s.mgr.ClaimProvision(r.Context(), key, o)
 	}
 	if errors.Is(err, pool.ErrQuota) && s.placer != nil && !req.NoRedirect && !req.RequirePromoted &&
 		s.writeRedirect(w, s.placer.Candidates(key.Hash())) {
+		s.claimRedirects.Add(1)
 		return
 	}
 	writeResult(w, r, "claim", key.Template, "provisioning failed", err, func() {
@@ -390,6 +395,7 @@ func (s *Server) handleVolumeClaim(w http.ResponseWriter, r *http.Request, req C
 		return
 	}
 	if redirected {
+		s.claimRedirects.Add(1)
 		return
 	}
 	var sb *types.Sandbox
@@ -400,6 +406,7 @@ func (s *Server) handleVolumeClaim(w http.ResponseWriter, r *http.Request, req C
 		sb, err = s.mgr.ClaimWarm(r.Context(), key, o)
 		if errors.Is(err, pool.ErrNoWarm) {
 			if s.placer != nil && !req.NoRedirect && s.writeRedirect(w, s.placer.VolumeCandidates(hash, types.VolumeNames(req.Volumes))) {
+				s.claimRedirects.Add(1)
 				return
 			}
 			sb, err = s.mgr.ClaimProvision(r.Context(), key, o)

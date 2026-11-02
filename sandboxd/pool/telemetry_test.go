@@ -48,6 +48,83 @@ func TestUsageJournalRecordsLifecycle(t *testing.T) {
 	}
 }
 
+func TestClaimLatencyFillsTheBucketThatBoundsIt(t *testing.T) {
+	var h claimHistogram
+	last := len(ClaimBuckets)
+	for _, tt := range []struct {
+		d    time.Duration
+		want int
+	}{
+		{0, 0},
+		{ClaimBuckets[0], 0},
+		{ClaimBuckets[0] + 1, 1},
+		{ClaimBuckets[last-1], last - 1},
+		{ClaimBuckets[last-1] + 1, last},
+	} {
+		before := h.snapshot()
+		h.observe(tt.d)
+		after := h.snapshot()
+		if after.Counts[tt.want] != before.Counts[tt.want]+1 {
+			t.Errorf("%v: counts %v, want bucket %d to grow", tt.d, after.Counts, tt.want)
+		}
+		if after.Nanos-before.Nanos != uint64(tt.d) {
+			t.Errorf("%v: nanos grew by %d", tt.d, after.Nanos-before.Nanos)
+		}
+	}
+}
+
+func TestClaimLatencyCountsPoolClaimsByTierOnly(t *testing.T) {
+	m := newTestManager(t, newFakeEngine(), config.PoolSpec{PoolKey: testKey, Warm: 1})
+	refillWarmVM(t, m)
+	warm, err := m.ClaimWarm(t.Context(), testKey, ClaimOptions{TTL: time.Hour})
+	if err != nil {
+		t.Fatalf("warm claim: %v", err)
+	}
+	if _, err = m.Fork(t.Context(), warm.ID, Cred{Token: warm.Token}, 1, 0, "", ""); err != nil {
+		t.Fatalf("fork: %v", err)
+	}
+	if _, err = m.ClaimProvision(t.Context(), testKey, ClaimOptions{TTL: time.Hour}); err != nil {
+		t.Fatalf("clone claim: %v", err)
+	}
+	ckpt, err := m.Checkpoint(t.Context(), warm.ID, Cred{Token: warm.Token}, "", "")
+	if err != nil {
+		t.Fatalf("checkpoint: %v", err)
+	}
+	if _, err = m.ClaimCheckpoint(t.Context(), ckpt.ID, ClaimOptions{TTL: time.Hour}); err != nil {
+		t.Fatalf("claim checkpoint: %v", err)
+	}
+	cold := testKey
+	cold.Template = "cold:1"
+	if _, err = m.ClaimProvision(t.Context(), cold, ClaimOptions{TTL: time.Hour}); err != nil {
+		t.Fatalf("cold claim: %v", err)
+	}
+
+	c := m.Counters()
+	for _, tt := range []struct {
+		tier    string
+		latency ClaimLatency
+		claims  uint64
+	}{
+		{"warm", c.ClaimWarmLatency, 1},
+		{"clone", c.ClaimCloneLatency, 1},
+		{"cold", c.ClaimColdLatency, 1},
+	} {
+		var total uint64
+		for _, n := range tt.latency.Counts {
+			total += n
+		}
+		if total != tt.claims || tt.latency.Nanos == 0 {
+			t.Errorf("%s: %d observations and %d ns, want %d", tt.tier, total, tt.latency.Nanos, tt.claims)
+		}
+	}
+	if c.ClaimsClone < 3 {
+		t.Errorf("claims_total clone = %d, want the fork child and the checkpoint branch counted", c.ClaimsClone)
+	}
+	if want := c.ClaimWarmLatency.Nanos + c.ClaimCloneLatency.Nanos + c.ClaimColdLatency.Nanos; c.ClaimNanos != want {
+		t.Errorf("ClaimNanos %d, want the tiers' sum %d", c.ClaimNanos, want)
+	}
+}
+
 func TestJournalRotationKeepsOneBackup(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "usage.jsonl")
 	j, err := newJournal(path)

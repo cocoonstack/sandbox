@@ -76,7 +76,7 @@ func (m *Manager) ClaimWarm(ctx context.Context, key types.PoolKey, o ClaimOptio
 	out, err := m.finalize(ctx, sb, o.TTL, false)
 	if err == nil {
 		m.counters.claimsWarm.Add(1)
-		m.counters.claimNanos.Add(uint64(time.Since(start))) //nolint:gosec // durations are positive
+		m.counters.claimWarmLatency.observe(time.Since(start))
 	}
 	return out, err
 }
@@ -115,10 +115,11 @@ func (m *Manager) ClaimProvision(ctx context.Context, key types.PoolKey, o Claim
 	if err == nil {
 		if golden.dir != "" {
 			m.counters.claimsClone.Add(1)
+			m.counters.claimCloneLatency.observe(time.Since(start))
 		} else {
 			m.counters.claimsCold.Add(1)
+			m.counters.claimColdLatency.observe(time.Since(start))
 		}
-		m.counters.claimNanos.Add(uint64(time.Since(start))) //nolint:gosec // durations are positive
 	}
 	return out, err
 }
