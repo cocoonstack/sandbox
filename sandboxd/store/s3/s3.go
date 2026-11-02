@@ -198,6 +198,11 @@ func (s *Store) ReadMeta(ctx context.Context, id string) ([]byte, error) {
 	return meta, err
 }
 
+func (s *Store) ReadDigest(ctx context.Context, id string) (string, error) {
+	_, digest, err := s.readMeta(ctx, id)
+	return digest, err
+}
+
 func (s *Store) Metas(ctx context.Context) ([]store.Record, error) {
 	ids, err := s.recordIDs(ctx)
 	if err != nil {

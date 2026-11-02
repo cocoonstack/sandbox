@@ -102,6 +102,14 @@ func (d *Store) FetchFile(ctx context.Context, id, rel, dst string) error {
 	return err
 }
 
+func (d *Store) ReadDigest(ctx context.Context, id string) (string, error) {
+	meta, err := d.ReadMeta(ctx, id)
+	if err != nil {
+		return "", err
+	}
+	return d.readDigest(id, meta)
+}
+
 func (d *Store) ReadMeta(_ context.Context, id string) ([]byte, error) {
 	raw, err := os.ReadFile(filepath.Join(d.root, id, store.MetaFile)) //nolint:gosec // id pinned by the instance idRe before any call
 	if errors.Is(err, fs.ErrNotExist) {

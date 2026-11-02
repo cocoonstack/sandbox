@@ -103,11 +103,8 @@ func (m *Manager) DeleteTemplate(ctx context.Context, key types.PoolKey, tenant,
 	if err := m.ownedTemplate(ctx, id, tenant); err != nil {
 		return err
 	}
-	m.tplMu.Lock()
-	held := m.tplSet[id].ContentDigest
-	m.tplMu.Unlock()
-	if digest != "" && held != digest {
-		return ErrTemplateReplaced
+	if err := m.checkTemplateDigest(ctx, id, digest); err != nil {
+		return err
 	}
 	if err := m.tpls.Delete(ctx, id); err != nil {
 		return fmt.Errorf("delete template: %w", err)
@@ -149,11 +146,8 @@ func (m *Manager) SetTemplateLabels(ctx context.Context, key types.PoolKey, labe
 	if err != nil {
 		return err
 	}
-	m.tplMu.Lock()
-	held := m.tplSet[id].ContentDigest
-	m.tplMu.Unlock()
-	if digest != "" && held != digest {
-		return ErrTemplateReplaced
+	if err = m.checkTemplateDigest(ctx, id, digest); err != nil {
+		return err
 	}
 	var payload []byte
 	if len(labels) == 0 {
@@ -236,6 +230,20 @@ func (m *Manager) ownedTemplate(ctx context.Context, id, tenant string) error {
 		if json.Unmarshal(raw, &rec) != nil || !tenantOwns(tenant, rec.Tenant) {
 			return ErrUnknownTemplate
 		}
+	}
+	return nil
+}
+
+func (m *Manager) checkTemplateDigest(ctx context.Context, id, digest string) error {
+	if digest == "" {
+		return nil
+	}
+	held, err := m.tpls.ReadDigest(ctx, id)
+	if err != nil {
+		return fmt.Errorf("read template digest: %w", err)
+	}
+	if held != digest {
+		return ErrTemplateReplaced
 	}
 	return nil
 }
