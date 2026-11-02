@@ -15,11 +15,10 @@ the cocoon CLI and needs a template image with silkd baked in.
   reads. sandboxd logs a warning at startup when the detected cocoon is below
   v0.6.9 (a dev/`master-<sha>` build is assumed current); changing volumes on
   a running claim needs v0.7.2, and a pool's `reader` needs v0.7.3
-- The sandbox boot artifact installed where cocoon finds it
-  (`/boot/vmlinuz-sandbox`, `/boot/initrd.img-sandbox` — from
-  `ghcr.io/cocoonstack/sandbox/boot:<kernel-ver>`)
 - A silkd-baked template image, e.g. `ghcr.io/cocoonstack/sandbox/base:24.04`
-  (pull via cocoon, or `cocoon image import` a tar)
+  (pull via cocoon, or `cocoon image import` a tar). The image carries the boot
+  artifact (`/boot/vmlinuz-sandbox`, `/boot/initrd.img-sandbox`), so the host
+  needs neither file
 
 Prebuilt static linux/amd64 and linux/arm64 binaries (`sandboxd`,
 `sandboxd.dbg`, `sandbox-mcp`, `silkd`, with `checksums.txt`) ship with every
