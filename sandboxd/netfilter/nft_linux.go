@@ -15,11 +15,11 @@ const tablePrefix = "sandbox_egress_"
 
 // Lock drops a tap's guest egress (DHCP excepted) at its ingress hook; idempotent.
 func Lock(tap string) error {
-	_ = Unlock(tap) // a prior table for this tap would block a clean re-lock
 	c, err := nftables.New()
 	if err != nil {
 		return fmt.Errorf("nft conn: %w", err)
 	}
+	dropTable(c, tap)
 	t := c.AddTable(&nftables.Table{Family: nftables.TableFamilyNetdev, Name: tablePrefix + tap})
 	ch := c.AddChain(&nftables.Chain{
 		Name:     "ingress",
@@ -78,9 +78,8 @@ func Unlock(tap string) error {
 	if err != nil {
 		return fmt.Errorf("nft conn: %w", err)
 	}
-	c.DelTable(&nftables.Table{Family: nftables.TableFamilyNetdev, Name: tablePrefix + tap})
-	_ = c.Flush() // ENOENT when absent — idempotent
-	return nil
+	dropTable(c, tap)
+	return c.Flush()
 }
 
 // SweepExcept drops every per-tap egress table whose tap is not in keep; one sandboxd per host.
@@ -99,4 +98,11 @@ func SweepExcept(keep map[string]bool) error {
 		}
 	}
 	return c.Flush()
+}
+
+// dropTable queues the delete after an add, because a delete of a missing table aborts the batch and an abort waits one RCU grace period.
+func dropTable(c *nftables.Conn, tap string) {
+	t := &nftables.Table{Family: nftables.TableFamilyNetdev, Name: tablePrefix + tap}
+	c.AddTable(t)
+	c.DelTable(t)
 }
