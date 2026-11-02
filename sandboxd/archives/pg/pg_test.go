@@ -47,7 +47,7 @@ func TestCellsKeepTheirOwnRows(t *testing.T) {
 	}
 }
 
-func TestSchemaIndexesTheCellDeadline(t *testing.T) {
+func TestSchemaIndexesDeadlineAndConsumed(t *testing.T) {
 	r := open(t, metastoretest.PGSchema(t), "c1")
 	var n int
 	if err := r.pool.QueryRow(t.Context(), `SELECT count(*) FROM pg_indexes

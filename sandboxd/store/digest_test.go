@@ -41,20 +41,10 @@ func TestAssembleDigestVectors(t *testing.T) {
 	}
 }
 
-func TestAssembleDigestUsesChunkOffsetOrder(t *testing.T) {
+func TestAssembleDigestMultiChunkVector(t *testing.T) {
 	first := sha256.Sum256(bytes.Repeat([]byte("a"), int(DigestChunkSize)))
 	second := sha256.Sum256([]byte("b"))
-	completed := []struct {
-		index int
-		sum   [sha256.Size]byte
-	}{
-		{index: 1, sum: second},
-		{index: 0, sum: first},
-	}
-	chunks := make([][sha256.Size]byte, len(completed))
-	for _, result := range completed {
-		chunks[result.index] = result.sum
-	}
+	chunks := [][sha256.Size]byte{first, second}
 
 	got, err := AssembleDigest([]DigestFile{{Path: "big.bin", Size: DigestChunkSize + 1, Chunks: chunks}})
 	if err != nil {
