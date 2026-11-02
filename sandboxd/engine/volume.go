@@ -95,8 +95,9 @@ func (e *Engine) waitForVolumeDevice(ctx context.Context, vsockSocket, name stri
 	defer cancel()
 	ticker := time.NewTicker(volumePollInterval)
 	defer ticker.Stop()
+	others := map[string]bool{}
 	for {
-		device, found, err := e.findVolumeDevice(ctx, vsockSocket, name)
+		device, found, err := e.findVolumeDevice(ctx, vsockSocket, name, others)
 		if err != nil {
 			return "", cmp.Or(ctx.Err(), err)
 		}
@@ -111,20 +112,24 @@ func (e *Engine) waitForVolumeDevice(ctx context.Context, vsockSocket, name stri
 	}
 }
 
-func (e *Engine) findVolumeDevice(ctx context.Context, vsockSocket, name string) (string, bool, error) {
+func (e *Engine) findVolumeDevice(ctx context.Context, vsockSocket, name string, others map[string]bool) (string, bool, error) {
 	entries, err := e.silkdList(ctx, vsockSocket, "/sys/block")
 	if err != nil {
 		return "", false, err
 	}
 	for _, entry := range entries {
-		serial, err := e.silkdReadFile(ctx, vsockSocket, "/sys/block/"+entry.Name+"/serial", silkdReadMax)
+		if others[entry.Name] {
+			continue
+		}
+		raw, err := e.silkdReadFile(ctx, vsockSocket, "/sys/block/"+entry.Name+"/serial", silkdReadMax)
 		if isNotFound(err) {
 			continue
 		}
 		if err != nil {
 			return "", false, err
 		}
-		if strings.TrimSpace(string(serial)) != name {
+		if serial := strings.TrimSpace(string(raw)); serial != name {
+			others[entry.Name] = serial != ""
 			continue
 		}
 		device := "/dev/" + entry.Name
@@ -146,14 +151,20 @@ func (e *Engine) mountDevice(ctx context.Context, vsockSocket, device, name, mou
 	}
 	ticker := time.NewTicker(volumePollInterval)
 	defer ticker.Stop()
+	asExt4 := true
 	for {
-		err := e.silkdExec(ctx, vsockSocket, "mount", "-o", mountMode(rw), "--", device, mount)
+		err := e.silkdExec(ctx, vsockSocket, mountArgv(asExt4, mountMode(rw), device, mount)...)
+		_, refused := errors.AsType[*guestExitError](err)
 		switch {
 		case err == nil:
 			return nil
 		case ctx.Err() != nil:
 			return fmt.Errorf("mount volume %s: %w: %w", name, ctx.Err(), err)
-		case !deviceNotReady(err):
+		case deviceNotReady(err):
+		case asExt4 && refused:
+			asExt4 = false
+			continue
+		default:
 			return fmt.Errorf("mount volume %s: %w", name, err)
 		}
 		select {
@@ -192,6 +203,14 @@ func (e *Engine) diskAttachArgs(vmName string, spec VolumeSpec) ([]string, error
 		args = append(args, "--readonly")
 	}
 	return append(args, "--directio", directIO), nil
+}
+
+// mountArgv names ext4 first, since it spares mount the filesystem probe; a refusal falls back to the probe.
+func mountArgv(asExt4 bool, mode, device, mount string) []string {
+	if asExt4 {
+		return []string{"mount", "-t", "ext4", "-o", mode, "--", device, mount}
+	}
+	return []string{"mount", "-o", mode, "--", device, mount}
 }
 
 func deviceNotReady(err error) bool {

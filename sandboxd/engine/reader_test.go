@@ -19,11 +19,11 @@ func TestStartReaderOverlaysTheAttachedDiskOnTheGuestsOwnLayers(t *testing.T) {
 	}
 	want := [][]string{
 		{"mkdir", "-p", "--", "/run/reader/cow"},
-		{"mount", "-o", "rw", "--", "/dev/vdb", "/run/reader/cow"},
+		{"mount", "-t", "ext4", "-o", "rw", "--", "/dev/vdb", "/run/reader/cow"},
 		{"mkdir", "-p", "--", "/run/reader/layer0"},
-		{"mount", "-o", "ro", "--", "/dev/vdc", "/run/reader/layer0"},
+		{"mount", "-t", "ext4", "-o", "ro", "--", "/dev/vdc", "/run/reader/layer0"},
 		{"mkdir", "-p", "--", "/run/reader/layer1"},
-		{"mount", "-o", "ro", "--", "/dev/vdd", "/run/reader/layer1"},
+		{"mount", "-t", "ext4", "-o", "ro", "--", "/dev/vdd", "/run/reader/layer1"},
 		{"mkdir", "-p", "--", "/view"},
 		{"mount", "-t", "overlay", "-o", "ro,metacopy=on,redirect_dir=follow,lowerdir=/run/reader/cow/upper:/run/reader/layer0:/run/reader/layer1", "--", "overlay", "/view"},
 		{"test", "-x", "/view/usr/local/bin/silkd"},
@@ -73,7 +73,7 @@ func TestStartReaderStopsAtTheFirstFailedMount(t *testing.T) {
 	fake := serveFakeSilkd(t, sock)
 	configureReaderDevices(fake)
 	fake.mu.Lock()
-	fake.execFailAt, fake.execCode = 6, 32
+	fake.execFailFrom, fake.execCode = 6, 32
 	fake.mu.Unlock()
 
 	err := New("cocoon", nil, nil, false, false, "").StartReader(t.Context(), sock, "snap-ab12cd34")
@@ -82,8 +82,8 @@ func TestStartReaderStopsAtTheFirstFailedMount(t *testing.T) {
 	}
 	fake.mu.Lock()
 	defer fake.mu.Unlock()
-	if len(fake.execCalls) != 6 {
-		t.Errorf("guest ran %d commands after the failed mount, want it to stop at 6: %v", len(fake.execCalls), fake.execCalls)
+	if len(fake.execCalls) != 7 {
+		t.Errorf("guest ran %d commands after the failed mount, want it to stop at 7: %v", len(fake.execCalls), fake.execCalls)
 	}
 }
 
