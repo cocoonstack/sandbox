@@ -95,7 +95,7 @@ func TestRemovedTenantRunsToItsDeadlineButCannotExtend(t *testing.T) {
 	if got := m.Sandboxes("", "", nil); len(got) != 1 || got[0].Tenant != "acme" {
 		t.Fatalf("root listing %+v, want the claim kept under acme", got)
 	}
-	infos, _ := listTenants(t, m)
+	infos := listTenants(t, m)
 	if !slices.Contains(infos, TenantInfo{Name: "acme", Claims: 1, Removed: true}) {
 		t.Errorf("Tenants %+v, want acme listed as removed with its claim", infos)
 	}
@@ -345,7 +345,7 @@ func TestARuntimeTenantTakesItsEgressClassWithoutARestart(t *testing.T) {
 	if classed.EgressClass != "desk" || later.EgressClass != "" {
 		t.Errorf("classes live %q new %q: a class change reaches only claims made after it", classed.EgressClass, later.EgressClass)
 	}
-	infos, _ := listTenants(t, m)
+	infos := listTenants(t, m)
 	if i := slices.IndexFunc(infos, func(ti TenantInfo) bool { return ti.Name == "u-1" }); i < 0 || infos[i].EgressClass != "" {
 		t.Errorf("tenant list %+v, want u-1 without a class", infos)
 	}
@@ -417,13 +417,13 @@ func tenantOf(t *testing.T, m *Manager, token string) (string, bool) {
 	return r.Name, true
 }
 
-func listTenants(t *testing.T, m *Manager) ([]TenantInfo, string) {
+func listTenants(t *testing.T, m *Manager) []TenantInfo {
 	t.Helper()
 	page, err := m.Tenants(t.Context(), "", 1000)
 	if err != nil {
 		t.Fatalf("list tenants: %v", err)
 	}
-	return page.Tenants, page.Digest
+	return page.Tenants
 }
 
 func tenantManager(t *testing.T, dir string, tenants ...tenants.TenantSpec) *Manager {

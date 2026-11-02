@@ -408,17 +408,7 @@ func (p *healPuller) Pull(_ context.Context, _, _, dst string) error {
 	if p.release != nil {
 		<-p.release
 	}
-	if err := os.MkdirAll(filepath.Join(dst, store.ExportDir), 0o750); err != nil {
-		return err
-	}
-	if err := os.WriteFile(filepath.Join(dst, store.ExportDir, "mem"), []byte("state"), 0o600); err != nil {
-		return err
-	}
-	meta, err := json.Marshal(p.ckpt)
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(filepath.Join(dst, store.MetaFile), meta, 0o600)
+	return writeHealedRecord(dst, p.ckpt)
 }
 
 func (p *healPuller) count() int {
@@ -436,17 +426,7 @@ type blockingPuller struct {
 func (p *blockingPuller) Pull(_ context.Context, _, id, dst string) error {
 	p.once.Do(func() { close(p.started) })
 	<-p.release
-	if err := os.MkdirAll(filepath.Join(dst, store.ExportDir), 0o750); err != nil {
-		return err
-	}
-	if err := os.WriteFile(filepath.Join(dst, store.ExportDir, "mem"), []byte("state"), 0o600); err != nil {
-		return err
-	}
-	meta, err := json.Marshal(types.Checkpoint{ID: id, Key: testKey, CreatedAt: time.Now()})
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(filepath.Join(dst, store.MetaFile), meta, 0o600)
+	return writeHealedRecord(dst, types.Checkpoint{ID: id, Key: testKey, CreatedAt: time.Now()})
 }
 
 func plantHealedRecord(t *testing.T, dir string, ckpt types.Checkpoint) {
@@ -454,19 +434,23 @@ func plantHealedRecord(t *testing.T, dir string, ckpt types.Checkpoint) {
 	if ckpt.Key == (types.PoolKey{}) {
 		ckpt.Key = testKey
 	}
-	if err := os.MkdirAll(filepath.Join(dir, store.ExportDir), 0o750); err != nil {
+	if err := writeHealedRecord(dir, ckpt); err != nil {
 		t.Fatalf("setup: %v", err)
 	}
+}
+
+func writeHealedRecord(dir string, ckpt types.Checkpoint) error {
+	if err := os.MkdirAll(filepath.Join(dir, store.ExportDir), 0o750); err != nil {
+		return err
+	}
 	if err := os.WriteFile(filepath.Join(dir, store.ExportDir, "mem"), []byte("state"), 0o600); err != nil {
-		t.Fatalf("setup: %v", err)
+		return err
 	}
 	meta, err := json.Marshal(ckpt)
 	if err != nil {
-		t.Fatalf("setup: %v", err)
+		return err
 	}
-	if err := os.WriteFile(filepath.Join(dir, store.MetaFile), meta, 0o600); err != nil {
-		t.Fatalf("setup: %v", err)
-	}
+	return os.WriteFile(filepath.Join(dir, store.MetaFile), meta, 0o600)
 }
 
 func plantExportDir(t *testing.T, dir string, sub ...string) {
