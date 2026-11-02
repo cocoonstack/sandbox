@@ -1,6 +1,6 @@
 //! `pty.open` / `pty.resize`: a pty is a process, so it registers in the proc table and `ps`/`kill`/`attach`/`logs` apply unchanged.
 
-use std::os::fd::{AsRawFd, OwnedFd};
+use std::os::fd::OwnedFd;
 use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
@@ -147,7 +147,7 @@ async fn pump<W: AsyncWrite + Unpin>(
                     Ok(g) => g,
                     Err(_) => { eof = true; continue }
                 };
-                match guard.try_io(|fd| sysutil::read_fd(fd.get_ref().as_raw_fd(), &mut buf)) {
+                match guard.try_io(|fd| nix::unistd::read(fd.get_ref(), &mut buf).map_err(Into::into)) {
                     // a read of 0 (BSD) or any error (EIO on Linux) means the slave is fully closed.
                     Ok(Ok(0)) | Ok(Err(_)) => eof = true,
                     Ok(Ok(n)) => {
@@ -199,7 +199,7 @@ async fn drain<W: AsyncWrite + Unpin>(
             let Ok(mut guard) = master.readable().await else {
                 return;
             };
-            match guard.try_io(|fd| sysutil::read_fd(fd.get_ref().as_raw_fd(), buf)) {
+            match guard.try_io(|fd| nix::unistd::read(fd.get_ref(), buf).map_err(Into::into)) {
                 Ok(Ok(0)) | Ok(Err(_)) => return,
                 Ok(Ok(n)) => {
                     proc.emit_bytes(false, &buf[..n]);
@@ -220,7 +220,7 @@ async fn drain<W: AsyncWrite + Unpin>(
 async fn write_all(master: &Master, mut data: &[u8]) -> std::io::Result<()> {
     while !data.is_empty() {
         let mut guard = master.writable().await?;
-        match guard.try_io(|fd| sysutil::write_fd(fd.get_ref().as_raw_fd(), data)) {
+        match guard.try_io(|fd| nix::unistd::write(fd.get_ref(), data).map_err(Into::into)) {
             Ok(Ok(n)) => data = &data[n..],
             Ok(Err(e)) => return Err(e),
             Err(_would_block) => continue,
