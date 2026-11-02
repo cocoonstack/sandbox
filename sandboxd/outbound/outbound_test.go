@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -117,6 +118,24 @@ func TestArmEgressLocksEgressLaneWithoutPolicy(t *testing.T) {
 	sb := &types.Sandbox{ID: "sb_eg_np", Key: egKey, VMName: "sbx-np-1"}
 	if armErr := h.Arm(t.Context(), sb); armErr == nil {
 		t.Fatal("policyless egress-lane claim must still lock the NIC, not skip it")
+	}
+}
+
+func TestLockFallsBackToALookupForPreTapClaims(t *testing.T) {
+	eng := &fakeEngine{taps: map[string]string{"sbx-old": "tap-fake1"}}
+	var taps outboundtest.TapLog
+	h := newHost(t, eng, poolConfig(egKey, egPolicy), func(o *Options) {
+		o.LockNIC = true
+		o.Lock, o.Unlock = taps.Lock, taps.Unlock
+	})
+
+	sb := &types.Sandbox{ID: "sb_old", Key: egKey, VMName: "sbx-old"}
+	lockErr := h.Arm(t.Context(), sb)
+	if calls := eng.lookups(); calls != 1 {
+		t.Errorf("fallback looked the VM up %d times, want 1", calls)
+	}
+	if got := taps.Locked(); lockErr != nil || !slices.Equal(got, []string{"tap-fake1"}) {
+		t.Errorf("fallback locked %v (err %v), want tap-fake1", got, lockErr)
 	}
 }
 
@@ -257,7 +276,22 @@ func testSecrets(t *testing.T) *egress.SecretStore {
 	return s
 }
 
-type fakeEngine struct{}
+type fakeEngine struct {
+	mu       sync.Mutex
+	taps     map[string]string
+	inspects int
+}
+
+func (f *fakeEngine) Inspect(_ context.Context, name string) (types.VMRecord, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.inspects++
+	tap, ok := f.taps[name]
+	if !ok {
+		return types.VMRecord{}, false, nil
+	}
+	return types.VMRecord{Config: types.VMConfig{Name: name}, NetworkConfigs: []types.VMNetConfig{{TAP: tap}}}, true, nil
+}
 
 func (f *fakeEngine) InstallCACert(context.Context, string, []byte) error {
 	return nil
@@ -265,4 +299,10 @@ func (f *fakeEngine) InstallCACert(context.Context, string, []byte) error {
 
 func (f *fakeEngine) MarkLane(context.Context, string, types.NetRoute) error {
 	return nil
+}
+
+func (f *fakeEngine) lookups() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.inspects
 }

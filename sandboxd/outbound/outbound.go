@@ -21,8 +21,9 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
-// Engine is the VM engine surface the host needs: a guest's lane verdict and egress root.
+// Engine is the VM engine surface the host needs: a VM's tap, and a guest's lane verdict and egress root.
 type Engine interface {
+	Inspect(ctx context.Context, name string) (types.VMRecord, bool, error)
 	MarkLane(ctx context.Context, vsockSocket string, lane types.NetRoute) error
 	InstallCACert(ctx context.Context, vsockSocket string, certPEM []byte) error
 }
@@ -91,7 +92,7 @@ func New(o Options) *Host {
 
 // Arm locks an egress-lane NIC, then serves the proxy: fail-closed, never a free NIC.
 func (h *Host) Arm(ctx context.Context, sb *types.Sandbox) error {
-	if err := h.lockNIC(sb); err != nil {
+	if err := h.lockNIC(ctx, sb); err != nil {
 		return err
 	}
 	return h.ArmProxy(ctx, sb)
@@ -325,18 +326,36 @@ func (h *Host) markLane(ctx context.Context, key types.PoolKey, sock string) err
 	return nil
 }
 
-func (h *Host) lockNIC(sb *types.Sandbox) error {
+func (h *Host) lockNIC(ctx context.Context, sb *types.Sandbox) error {
 	if !h.LocksNIC(sb.Key) {
 		return nil
 	}
-	if sb.TAP == "" {
-		return fmt.Errorf("no tap for %s", sb.VMName)
+	tap := sb.TAP
+	if tap == "" {
+		var err error
+		if tap, err = h.tapOf(ctx, sb.VMName); err != nil {
+			return err
+		}
 	}
-	if err := h.o.Lock(sb.TAP); err != nil {
-		return fmt.Errorf("nft lock %s: %w", sb.TAP, err)
+	if err := h.o.Lock(tap); err != nil {
+		return fmt.Errorf("nft lock %s: %w", tap, err)
 	}
-	h.KeepLock(sb.ID, sb.TAP)
+	h.KeepLock(sb.ID, tap)
 	return nil
+}
+
+func (h *Host) tapOf(ctx context.Context, vmName string) (string, error) {
+	vm, ok, err := h.o.Engine.Inspect(ctx, vmName)
+	if err != nil {
+		return "", fmt.Errorf("list %s: %w", vmName, err)
+	}
+	if !ok {
+		return "", fmt.Errorf("no NIC config for %s", vmName)
+	}
+	if tap := vm.TapDevice(); tap != "" {
+		return tap, nil
+	}
+	return "", fmt.Errorf("no tap for %s", vmName)
 }
 
 // LoadCA reads cfg's egress root and this node's intermediate, nil when no pool intercepts.
