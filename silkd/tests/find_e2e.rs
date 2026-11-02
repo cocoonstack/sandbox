@@ -183,9 +183,8 @@ async fn replace_skips_a_file_over_the_size_bound() {
     assert_eq!(replaced.len(), 1, "{frames:?}");
     assert_eq!(replaced[0]["replacements"], 0);
     assert_eq!(type_of(frames.last().unwrap()), "done");
-    assert_eq!(
-        tokio::fs::read_to_string(&big).await.unwrap().len(),
-        body.len(),
+    assert!(
+        tokio::fs::read_to_string(&big).await.unwrap() == body,
         "an oversized file must not be rewritten"
     );
 }
@@ -236,6 +235,10 @@ async fn replace_preserves_exec_bit() {
         .mode()
         & 0o777;
     assert_eq!(mode, 0o755, "exec bit stripped by replace");
+    assert_eq!(
+        tokio::fs::read_to_string(&script).await.unwrap(),
+        "#!/bin/sh\nbar\n"
+    );
 }
 
 #[tokio::test]

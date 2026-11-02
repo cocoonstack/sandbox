@@ -5,9 +5,16 @@ mod common;
 
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 
-use serde_json::json;
+use nix::sys::stat::Mode;
+use serde_json::{Value, json};
 
-use common::{b64, exchange, payload, type_of};
+use common::{b64, data_frames, exchange, payload, type_of};
+
+async fn fs_write(req: Value, body: &[u8]) -> Vec<Value> {
+    let mut lines = vec![req.to_string()];
+    lines.extend(data_frames(body));
+    exchange(&lines).await
+}
 
 #[tokio::test]
 async fn write_then_read_roundtrips_bytes() {
@@ -15,11 +22,10 @@ async fn write_then_read_roundtrips_bytes() {
     let path = dir.path().join("hello.txt");
     let path = path.to_str().unwrap();
 
-    let wrote = exchange(&[
-        json!({"op":"fs_write","path":path,"mode":0o600}).to_string(),
-        json!({"op":"data","data":b64(b"silk file body")}).to_string(),
-        json!({"op":"data_end"}).to_string(),
-    ])
+    let wrote = fs_write(
+        json!({"op":"fs_write","path":path,"mode":0o600}),
+        b"silk file body",
+    )
     .await;
     assert_eq!(
         type_of(&wrote[0]),
@@ -36,11 +42,10 @@ async fn write_then_read_roundtrips_bytes() {
 async fn list_reports_written_entry() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("a.txt");
-    exchange(&[
-        json!({"op":"fs_write","path":path.to_str().unwrap()}).to_string(),
-        json!({"op":"data","data":b64(b"abc")}).to_string(),
-        json!({"op":"data_end"}).to_string(),
-    ])
+    fs_write(
+        json!({"op":"fs_write","path":path.to_str().unwrap()}),
+        b"abc",
+    )
     .await;
 
     let listed =
@@ -84,11 +89,10 @@ async fn list_batches_large_directories() {
 async fn stat_reports_kind_and_size() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("s.bin");
-    exchange(&[
-        json!({"op":"fs_write","path":path.to_str().unwrap()}).to_string(),
-        json!({"op":"data","data":b64(&[0u8; 10])}).to_string(),
-        json!({"op":"data_end"}).to_string(),
-    ])
+    fs_write(
+        json!({"op":"fs_write","path":path.to_str().unwrap()}),
+        &[0u8; 10],
+    )
     .await;
 
     let st = exchange(&[json!({"op":"fs_stat","path":path.to_str().unwrap()}).to_string()]).await;
@@ -101,11 +105,10 @@ async fn stat_reports_kind_and_size() {
 async fn stat_mode_excludes_type_bits() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("m.txt");
-    exchange(&[
-        json!({"op":"fs_write","path":path.to_str().unwrap(),"mode":0o640}).to_string(),
-        json!({"op":"data","data":b64(b"x")}).to_string(),
-        json!({"op":"data_end"}).to_string(),
-    ])
+    fs_write(
+        json!({"op":"fs_write","path":path.to_str().unwrap(),"mode":0o640}),
+        b"x",
+    )
     .await;
     let st = exchange(&[json!({"op":"fs_stat","path":path.to_str().unwrap()}).to_string()]).await;
     assert_eq!(
@@ -143,9 +146,7 @@ async fn mkdir_rename_rm_lifecycle() {
 async fn read_of_a_non_regular_file_is_bad_request() {
     let dir = tempfile::tempdir().unwrap();
     let fifo = dir.path().join("pipe");
-    let c_fifo = std::ffi::CString::new(fifo.to_str().unwrap()).unwrap();
-    // SAFETY: a valid NUL-terminated path; mkfifo touches nothing else.
-    assert_eq!(unsafe { libc::mkfifo(c_fifo.as_ptr(), 0o600) }, 0);
+    nix::unistd::mkfifo(&fifo, Mode::S_IRUSR | Mode::S_IWUSR).unwrap();
     for path in [
         dir.path().to_str().unwrap(),
         "/dev/null",
@@ -196,11 +197,10 @@ async fn overwrite_preserves_destination_mode() {
     let path = dir.path().join("script.sh");
     std::fs::write(&path, b"old").unwrap();
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
-    let f = exchange(&[
-        json!({"op":"fs_write","path":path.to_str().unwrap()}).to_string(),
-        json!({"op":"data","data":b64(b"new content")}).to_string(),
-        json!({"op":"data_end"}).to_string(),
-    ])
+    let f = fs_write(
+        json!({"op":"fs_write","path":path.to_str().unwrap()}),
+        b"new content",
+    )
     .await;
     assert_eq!(type_of(&f[0]), "done");
     let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o7777;
@@ -217,11 +217,10 @@ async fn overwrite_keeps_the_destination_owner_and_mode_under_root() {
         std::fs::write(&path, b"old").unwrap();
         std::os::unix::fs::chown(&path, Some(1000), Some(1000)).unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(want)).unwrap();
-        let f = exchange(&[
-            json!({"op":"fs_write","path":path.to_str().unwrap()}).to_string(),
-            json!({"op":"data","data":b64(b"new")}).to_string(),
-            json!({"op":"data_end"}).to_string(),
-        ])
+        let f = fs_write(
+            json!({"op":"fs_write","path":path.to_str().unwrap()}),
+            b"new",
+        )
         .await;
         assert_eq!(type_of(&f[0]), "done", "{f:?}");
         let meta = std::fs::metadata(&path).unwrap();
@@ -257,11 +256,10 @@ async fn rm_plain_file_and_missing_and_nonempty_dir() {
 async fn failed_overwrite_preserves_original() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("keep.txt");
-    exchange(&[
-        json!({"op":"fs_write","path":path.to_str().unwrap()}).to_string(),
-        json!({"op":"data","data":b64(b"ORIGINAL")}).to_string(),
-        json!({"op":"data_end"}).to_string(),
-    ])
+    fs_write(
+        json!({"op":"fs_write","path":path.to_str().unwrap()}),
+        b"ORIGINAL",
+    )
     .await;
     exchange(&[
         json!({"op":"fs_write","path":path.to_str().unwrap()}).to_string(),

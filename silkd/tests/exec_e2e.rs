@@ -11,8 +11,7 @@ use silkd::server::State;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 
 use common::{
-    b64, connect, decode, exchange, frames_until, next_frame, one, roundtrip, send, stdout_body,
-    type_of,
+    b64, connect, exchange, frames_until, next_frame, one, roundtrip, send, stdout_body, type_of,
 };
 
 async fn detached_pid(state: &Arc<State>, script: &str) -> u64 {
@@ -136,10 +135,7 @@ async fn daemonizer_exit_is_the_last_frame() {
         "exit must be last: {frames:?}"
     );
     assert!(
-        !frames
-            .iter()
-            .filter(|f| type_of(f) == "stdout")
-            .any(|f| String::from_utf8_lossy(&decode(f)).contains("late")),
+        !stdout_body(&frames).contains("late"),
         "grandchild output must not leak after exit"
     );
 }

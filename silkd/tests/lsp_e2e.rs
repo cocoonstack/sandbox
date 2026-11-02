@@ -83,18 +83,25 @@ async fn lsp_start_missing_manifest_is_not_found() {
 #[tokio::test]
 async fn lsp_start_language_name_cannot_escape() {
     let _env_lock = ENV_LOCK.lock().await;
-    for bad in ["../etc/passwd", "a/b", ".."] {
+    let (env, state, server_id) = started_server("real", "#!/bin/sh\nsleep 60\n").await;
+    let base = env.path().file_name().unwrap().to_str().unwrap();
+    std::fs::create_dir(env.path().join("sub")).unwrap();
+    std::fs::copy(env.path().join("real"), env.path().join("sub/real")).unwrap();
+    for bad in [format!("../{base}/real"), "sub/real".to_string()] {
         let frames = one(
-            &Arc::new(State::new()),
+            &state,
             &json!({"op":"lsp_start","language":bad}).to_string(),
         )
         .await;
-        assert_eq!(
-            type_of(frames.last().unwrap()),
-            "error",
-            "{bad} should be rejected"
-        );
+        let last = frames.last().unwrap();
+        assert_eq!(type_of(last), "error", "{bad} should be rejected");
+        assert_eq!(last["kind"], "not_found", "{bad}");
     }
+    one(
+        &state,
+        &json!({"op":"lsp_stop","server_id":server_id}).to_string(),
+    )
+    .await;
 }
 
 #[tokio::test]

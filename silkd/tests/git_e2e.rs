@@ -179,18 +179,7 @@ async fn status_handles_rename_and_spaces() {
 
 #[tokio::test]
 async fn commit_works_without_preconfigured_identity() {
-    let dir = tempfile::tempdir().unwrap();
-    assert!(
-        std::process::Command::new("git")
-            .arg("-C")
-            .arg(dir.path())
-            .args(["-c", "init.defaultBranch=main", "init", "-q"])
-            .env_remove("GIT_AUTHOR_NAME")
-            .env_remove("GIT_COMMITTER_NAME")
-            .status()
-            .unwrap()
-            .success()
-    );
+    let dir = init_repo();
     std::fs::write(dir.path().join("f"), "x").unwrap();
     let p = dir.path().to_str().unwrap();
     let add = exchange(&[json!({"op":"git_add","path":p,"files":["f"]}).to_string()]).await;
@@ -205,13 +194,22 @@ async fn commit_works_without_preconfigured_identity() {
         "git_commit_result",
         "commit failed: {commit:?}"
     );
+    let log = std::process::Command::new("git")
+        .arg("-C")
+        .arg(dir.path())
+        .args(["log", "-1", "--format=%cn <%ce>"])
+        .output()
+        .unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&log.stdout).trim(),
+        "Dev <dev@example.com>",
+        "the committer must come from the author, not the host's git config"
+    );
 }
 
 #[tokio::test]
+#[ignore = "needs root"]
 async fn git_runs_as_the_repo_owner_under_root() {
-    if !nix::unistd::geteuid().is_root() {
-        return;
-    }
     let repo = init_repo();
     let p = repo.path().to_str().unwrap();
     std::fs::write(repo.path().join("a.txt"), "hello\n").unwrap();
