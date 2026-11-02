@@ -8,18 +8,17 @@ import (
 
 	"github.com/google/nftables"
 	"github.com/google/nftables/expr"
-	"golang.org/x/sys/unix"
 )
 
 const tablePrefix = "sandbox_egress_"
 
-// Lock drops a tap's guest egress (DHCP excepted) at its ingress hook; idempotent.
+// Lock drops a tap's guest egress at its ingress hook; idempotent.
 func Lock(tap string) error {
-	_ = Unlock(tap) // a prior table for this tap would block a clean re-lock
 	c, err := nftables.New()
 	if err != nil {
 		return fmt.Errorf("nft conn: %w", err)
 	}
+	dropTable(c, tap)
 	t := c.AddTable(&nftables.Table{Family: nftables.TableFamilyNetdev, Name: tablePrefix + tap})
 	ch := c.AddChain(&nftables.Chain{
 		Name:     "ingress",
@@ -30,20 +29,6 @@ func Lock(tap string) error {
 		Policy:   new(nftables.ChainPolicyAccept),
 		Device:   tap,
 	})
-	// accept only IPv4 broadcast DHCP; egress VMs must not share a broadcast domain.
-	c.AddRule(&nftables.Rule{Table: t, Chain: ch, Exprs: []expr.Any{
-		&expr.Meta{Key: expr.MetaKeyNFPROTO, Register: 1},
-		&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{unix.NFPROTO_IPV4}},
-		&expr.Meta{Key: expr.MetaKeyL4PROTO, Register: 1},
-		&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{unix.IPPROTO_UDP}},
-		&expr.Payload{DestRegister: 1, Base: expr.PayloadBaseTransportHeader, Offset: 0, Len: 2},
-		&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{0x00, 0x44}}, // sport 68 (DHCP client)
-		&expr.Payload{DestRegister: 1, Base: expr.PayloadBaseTransportHeader, Offset: 2, Len: 2},
-		&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{0x00, 0x43}}, // dport 67 (DHCP server)
-		&expr.Payload{DestRegister: 1, Base: expr.PayloadBaseNetworkHeader, Offset: 16, Len: 4},
-		&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{0xff, 0xff, 0xff, 0xff}}, // dst broadcast
-		&expr.Verdict{Kind: expr.VerdictAccept},
-	}})
 	c.AddRule(&nftables.Rule{Table: t, Chain: ch, Exprs: []expr.Any{
 		&expr.Verdict{Kind: expr.VerdictDrop},
 	}})
@@ -78,9 +63,8 @@ func Unlock(tap string) error {
 	if err != nil {
 		return fmt.Errorf("nft conn: %w", err)
 	}
-	c.DelTable(&nftables.Table{Family: nftables.TableFamilyNetdev, Name: tablePrefix + tap})
-	_ = c.Flush() // ENOENT when absent — idempotent
-	return nil
+	dropTable(c, tap)
+	return c.Flush()
 }
 
 // SweepExcept drops every per-tap egress table whose tap is not in keep; one sandboxd per host.
@@ -99,4 +83,11 @@ func SweepExcept(keep map[string]bool) error {
 		}
 	}
 	return c.Flush()
+}
+
+// dropTable queues a delete only for a table that exists, because a delete of a missing table aborts the batch and an abort waits one RCU grace period.
+func dropTable(c *nftables.Conn, tap string) {
+	if t, err := c.ListTableOfFamily(tablePrefix+tap, nftables.TableFamilyNetdev); err == nil {
+		c.DelTable(t)
+	}
 }

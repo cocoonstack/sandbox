@@ -28,7 +28,7 @@ exposing any part of a deployment beyond a single trusted host.
   plus, on a policy that opts into `socks5`, a SOCKS5 door to the same
   allow-list that carries arbitrary TCP rather than HTTP only.
   On the egress lane: the same vsock paths plus a NIC whose every
-  guest-initiated packet except IPv4 broadcast DHCP is dropped by an nftables lock in the host
+  guest-initiated packet is dropped by an nftables lock in the host
   root netns ([egress](egress.md)); the lock is fail-closed and applied
   before the claim is handed out. On both lanes the proxy refuses
   loopback, private, link-local (cloud metadata), CGN, the
@@ -59,16 +59,13 @@ all of them.
 2. **One sandboxd per host.** The restart sweep owns the whole
    `sandbox_egress_*` nftables namespace; a second daemon would clear the
    first's locks.
-3. **The egress bridge shares no broadcast domain with untrusted
-   listeners.** The DHCP lock exception is matched by header shape, so a
-   packet in that shape can reach the local L2 segment.
-4. **Set `mesh.cluster_key` unless the gossip network is itself trusted**,
+3. **Set `mesh.cluster_key` unless the gossip network is itself trusted**,
    and open the memberlist port node-to-node only.
-5. **Treat the checkpoint store like backups.** A checkpoint, an archive and
+4. **Treat the checkpoint store like backups.** A checkpoint, an archive and
    a replica each embed full guest memory, including any secret the workload
    held at capture. Restrict store access; use S3 server-side encryption or
    an encrypted mount where that matters.
-6. **No custom NAT64 prefix routed on a sandboxd host** — the SSRF guard
+5. **No custom NAT64 prefix routed on a sandboxd host** — the SSRF guard
    cannot see through an operator-specific translator prefix
    ([egress](egress.md#deployment-constraints)).
 
