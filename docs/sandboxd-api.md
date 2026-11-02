@@ -1017,8 +1017,8 @@ Always on: every lifecycle transition appends one JSONL event to
 "id": "sb_…", "vm": "sbx-…"}` plus `key` (the pool key's stable hash, claim
 events), `template` and `size` (the claim's template and size tier, claim
 events, so a consumer can price a sandbox by its shape without the claim
-record, which is gone after release), `tenant` (the owning tenant, on every event of a tenant's claim),
-`children` (fork) and `ref` (the promoted
+record, which is gone after release), `tenant` (the owning tenant, on every
+event of a tenant's claim), `children` (fork) and `ref` (the promoted
 template / checkpoint id, the egress host, or a `vmm_failed` reason). An egress event that injected credentials names
 them in `secret` (`gh,claim:<entry>`, never a value). An egress event routed through an
 [upstream proxy](egress.md#upstream-proxies) carries `upstream` (its `host:port`), and with
@@ -1049,11 +1049,12 @@ Auth: root only (tenant tokens get 403). Reads the raw usage events of every
 node of the cell from the [shared usage table](deploy.md#shared-usage-table).
 
 - `GET /v1/usage?tenant=<name>&since=<time>&until=<time>&after=<cursor>&limit=<n>` →
-  `{"events": [{"cursor": 41, "node": "n1", "t": "2026-10-30T08:00:00.123456Z", "ev": "claim", "id": "sb_…", "vm": "sbx-…", "key": "…", "tenant": "acme"}], "next": 41}`.
+  `{"events": [{"cursor": 41, "node": "n1", "t": "2026-10-30T08:00:00.123456Z", "ev": "claim", "id": "sb_…", "vm": "sbx-…", "key": "…", "template": "…", "size": "large", "tenant": "acme"}], "next": 41}`.
 - **Events:** each is one journal line with its keys as in
   [usage.jsonl](#usage-journal-usagejsonl), `t` in UTC to the microsecond, plus
   `cursor` (its place in the table; one node's events follow its journal
-  order) and `node` (the node that recorded it).
+  order) and `node` (the node that recorded it). A `claim` line written by
+  v0.1.20 or earlier has no `template` or `size`.
 - **Filters:** `tenant` keeps one tenant's events; `since` (inclusive) and
   `until` (exclusive) are RFC 3339 times compared with `t`. Each is optional.
   A journal written by v0.1.20 or earlier stamps `tenant` only on `claim`,
