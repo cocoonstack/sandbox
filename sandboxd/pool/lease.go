@@ -2,7 +2,6 @@ package pool
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"maps"
@@ -142,36 +141,21 @@ func (m *Manager) lift(ctx context.Context, fenced *fenceState, start time.Time)
 
 // confirmOwnership takes sb's row for this node in one compare-and-set; false means another node holds the claim.
 func (m *Manager) confirmOwnership(ctx context.Context, sb *types.Sandbox, rec archives.Record) (bool, error) {
-	for attempt := range 3 {
-		switch {
-		case rec.ID == "":
-			gone, err := m.replicaGone(ctx, sb)
-			return !gone, err
-		case rec.Owner != m.nodeID:
-			return false, nil
-		case rec.Consumed:
-			return true, nil
-		}
-		if attempt == 2 {
-			break
-		}
-		epoch, err := m.archives.Take(ctx, sb.ID, rec.Epoch, m.nodeID)
-		if err == nil {
-			_, _ = m.commitIfLive(ctx, sb, func() { sb.ArchiveEpoch = max(sb.ArchiveEpoch, epoch) })
-			return true, nil
-		}
-		if !errors.Is(err, archives.ErrLost) {
-			return false, err
-		}
-		var found bool
-		if rec, found, err = m.archives.Get(ctx, sb.ID); err != nil {
-			return false, err
-		}
-		if !found {
-			rec = archives.Record{}
-		}
+	switch {
+	case rec.ID == "":
+		gone, err := m.replicaGone(ctx, sb)
+		return !gone, err
+	case rec.Owner != m.nodeID:
+		return false, nil
+	case rec.Consumed:
+		return true, nil
 	}
-	return false, fmt.Errorf("confirm %s: its row kept moving under this node", sb.ID)
+	epoch, err := m.archives.Take(ctx, sb.ID, rec.Epoch, m.nodeID)
+	if err != nil {
+		return false, fmt.Errorf("confirm %s: %w", sb.ID, err)
+	}
+	_, _ = m.commitIfLive(ctx, sb, func() { sb.ArchiveEpoch = max(sb.ArchiveEpoch, epoch) })
+	return true, nil
 }
 
 // fenceWatch gates sb at resolution and returns the channel that closes when its streams must end; nil for an unreplicated claim.
