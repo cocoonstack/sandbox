@@ -506,7 +506,7 @@ func (m *Manager) finalizeBatch(ctx context.Context, sbs []*types.Sandbox, ttl t
 		m.recordUsage(ctx, usage.Event{
 			Event: "claim",
 			ID:    sb.ID, VMName: sb.VMName,
-			KeyHash: sb.Key.Hash(), Tenant: sb.Tenant,
+			KeyHash: sb.Key.Hash(), Template: sb.Key.Template, Size: string(sb.Key.Size), Tenant: sb.Tenant,
 			Volumes: types.VolumeNames(sb.Volumes), VolumesRW: types.VolumeRWNames(sb.Volumes),
 		})
 	}

@@ -146,6 +146,9 @@ func TestTenantStampedInJournals(t *testing.T) {
 			if ev.Tenant != "acme" {
 				t.Errorf("claim event tenant %q, want acme", ev.Tenant)
 			}
+			if ev.Template != testKey.Template || ev.Size != string(testKey.Size) {
+				t.Errorf("claim event template %q size %q, want %q %q", ev.Template, ev.Size, testKey.Template, testKey.Size)
+			}
 		}
 	}
 	if !found {

@@ -22,11 +22,11 @@ const (
 	// cellLock serializes a cell's lands, so cursors commit in order and a reader paging by cursor never skips a row.
 	cellLock = `SELECT pg_advisory_xact_lock(hashtextextended('sandboxd_usage/' || $1, 0))`
 
-	insertRow = `INSERT INTO sandboxd_usage (cell, node, line_sha256, t, ev, id, vm, key, tenant, volumes, volumes_rw, children, ref, upstream, secret, tx, rx)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+	insertRow = `INSERT INTO sandboxd_usage (cell, node, line_sha256, t, ev, id, vm, key, template, size, tenant, volumes, volumes_rw, children, ref, upstream, secret, tx, rx)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
 		ON CONFLICT (cell, node, line_sha256) DO NOTHING`
 
-	listColumns = `cursor, node, t, ev, id, vm, key, tenant, volumes, volumes_rw, children, ref, upstream, secret, tx, rx`
+	listColumns = `cursor, node, t, ev, id, vm, key, template, size, tenant, volumes, volumes_rw, children, ref, upstream, secret, tx, rx`
 )
 
 //go:embed schema.sql
@@ -71,7 +71,7 @@ func (s *Store) Land(ctx context.Context, recs []usage.Record) error {
 		}
 		var batch pgx.Batch
 		for _, r := range recs {
-			batch.Queue(insertRow, s.cell, r.Node, r.Digest[:], r.Time, r.Event.Event, r.ID, r.VMName, r.KeyHash, r.Tenant, r.Volumes, r.VolumesRW, r.Children,
+			batch.Queue(insertRow, s.cell, r.Node, r.Digest[:], r.Time, r.Event.Event, r.ID, r.VMName, r.KeyHash, r.Template, r.Size, r.Tenant, r.Volumes, r.VolumesRW, r.Children,
 				strings.ReplaceAll(r.Reference, "\x00", "\uFFFD"), r.Upstream, r.Secret, r.Sent, r.Received)
 		}
 		return tx.SendBatch(qctx, &batch).Close()
@@ -112,7 +112,7 @@ func (s *Store) Close() {
 
 func scan(row pgx.CollectableRow) (usage.Record, error) {
 	var rec usage.Record
-	err := row.Scan(&rec.Cursor, &rec.Node, &rec.Time, &rec.Event.Event, &rec.ID, &rec.VMName, &rec.KeyHash, &rec.Tenant,
+	err := row.Scan(&rec.Cursor, &rec.Node, &rec.Time, &rec.Event.Event, &rec.ID, &rec.VMName, &rec.KeyHash, &rec.Template, &rec.Size, &rec.Tenant,
 		&rec.Volumes, &rec.VolumesRW, &rec.Children, &rec.Reference, &rec.Upstream, &rec.Secret, &rec.Sent, &rec.Received)
 	if err != nil {
 		return usage.Record{}, fmt.Errorf("scan usage row: %w", err)

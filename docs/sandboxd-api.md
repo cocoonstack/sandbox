@@ -1015,7 +1015,9 @@ Always on: every lifecycle transition appends one JSONL event to
 `<data_dir>/usage.jsonl` — `{"t": <RFC3339>, "ev":
 "claim|hibernate|wake|fork|checkpoint|promote|release|reap|archive|unarchive|archive_delete|egress|egress_bytes|vmm_exit|vmm_restart|vmm_failed",
 "id": "sb_…", "vm": "sbx-…"}` plus `key` (the pool key's stable hash, claim
-events), `tenant` (the owning tenant, on every event of a tenant's claim),
+events), `template` and `size` (the claim's template and size tier, claim
+events, so a consumer can price a sandbox by its shape without the claim
+record, which is gone after release), `tenant` (the owning tenant, on every event of a tenant's claim),
 `children` (fork) and `ref` (the promoted
 template / checkpoint id, the egress host, or a `vmm_failed` reason). An egress event that injected credentials names
 them in `secret` (`gh,claim:<entry>`, never a value). An egress event routed through an

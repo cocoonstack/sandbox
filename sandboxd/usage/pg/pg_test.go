@@ -25,7 +25,7 @@ func TestLandListsInCursorOrderAndResumesFromTheMark(t *testing.T) {
 	}
 	t0 := time.Date(2026, 10, 30, 0, 0, 0, 0, time.UTC)
 	full := usage.Event{
-		Time: t0.Add(time.Microsecond), Event: "claim", ID: "sb_1", VMName: "sbx-1", KeyHash: "k", Tenant: "acme",
+		Time: t0.Add(time.Microsecond), Event: "claim", ID: "sb_1", VMName: "sbx-1", KeyHash: "k", Template: "rt:24.04", Size: "xlarge", Tenant: "acme",
 		Volumes: []string{"data", "ro"}, VolumesRW: []string{"data"}, Reference: "ref", Upstream: "up:1", Secret: "gh", Sent: 7, Received: 9,
 	}
 	land(t, s, record("n1", 1, full), record("n2", 1, usage.Event{Time: t0, Event: "claim", ID: "sb_2"}))

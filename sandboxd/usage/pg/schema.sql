@@ -8,6 +8,8 @@ CREATE TABLE IF NOT EXISTS sandboxd_usage (
     id          text        NOT NULL,
     vm          text        NOT NULL DEFAULT '',
     key         text        NOT NULL DEFAULT '',
+    template    text        NOT NULL DEFAULT '',
+    size        text        NOT NULL DEFAULT '',
     tenant      text        NOT NULL DEFAULT '',
     volumes     text[],
     volumes_rw  text[],
