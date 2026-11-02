@@ -133,3 +133,32 @@ func TestEgressDoorCapsConcurrentConnections(t *testing.T) {
 	}
 	h.Disarm(sb.ID, true)
 }
+
+func TestReachedSeesAGuestInTheBacklog(t *testing.T) {
+	dir, err := os.MkdirTemp("/tmp", "door")
+	if err != nil {
+		t.Fatalf("temp dir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	path := filepath.Join(dir, "d.sock")
+	ln, err := listenUnix(path)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	door := limitDoor(ln)
+	if reached(door) {
+		t.Fatal("a door no guest dialed reads as reached")
+	}
+	conn, err := net.Dial("unix", path)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	if !reached(door) {
+		t.Error("a door with a pending connection reads as unreached")
+	}
+	_ = conn.Close()
+	if !reached(door) {
+		t.Error("a door whose guest hung up reads as unreached")
+	}
+}
