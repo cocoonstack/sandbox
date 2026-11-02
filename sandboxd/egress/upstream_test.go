@@ -389,7 +389,6 @@ func assertEcho(t *testing.T, conn net.Conn) {
 	}
 }
 
-// fakeConnectProxy answers one CONNECT with status and, on 200, echoes the tunnel.
 func fakeConnectProxy(t *testing.T, status int, greeting string) (string, <-chan string) {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -418,7 +417,6 @@ func fakeConnectProxy(t *testing.T, status int, greeting string) (string, <-chan
 	return ln.Addr().String(), seen
 }
 
-// fakeSOCKS5 accepts one user/password CONNECT and echoes the tunnel.
 func fakeSOCKS5(t *testing.T) (string, <-chan string) {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
