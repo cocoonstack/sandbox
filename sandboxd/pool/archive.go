@@ -146,8 +146,7 @@ func (m *Manager) archive(ctx context.Context, sb *types.Sandbox) error {
 	snap, vmName, sock, prevDeadline, prevPending, replica := sb.HibernateSnap, sb.VMName, sb.VsockSocket, sb.Deadline, sb.ArchivePending, sb.ReplicaCk
 	sb.ArchiveCk, sb.ArchiveEpoch, sb.ArchivePending, sb.ReplicaCk = ck.ID, epoch, "", ""
 	sb.HibernateSnap, sb.VsockSocket, sb.VMName = "", "", ""
-	retention := m.retentionDeadline(sb.Key)
-	sb.Deadline = retention
+	sb.Deadline = m.retentionDeadline(sb.Key)
 	js := m.store.set(sb)
 	m.mu.Unlock()
 	if saveErr := m.store.commit(js); saveErr != nil {
@@ -167,6 +166,8 @@ func (m *Manager) archive(ctx context.Context, sb *types.Sandbox) error {
 		m.abandonArchive(ctx, sb, epoch, ck.ID)
 		return fmt.Errorf("archive %s: persist claims: %w", sb.ID, saveErr)
 	}
+	m.counters.archives.Add(1)
+	m.recordUsage(ctx, usage.Event{Event: "archive", ID: sb.ID, Reference: ck.ID, Tenant: sb.Tenant, Deadline: sb.Deadline})
 	// disarm under Transition so a wake right after the release is not clobbered by a late disarm
 	m.out.Disarm(sb.ID, true)
 	sb.Transition.Unlock()
@@ -176,8 +177,6 @@ func (m *Manager) archive(ctx context.Context, sb *types.Sandbox) error {
 	if replica != "" {
 		m.deleteOrphanArchiveCk(ctx, replica)
 	}
-	m.counters.archives.Add(1)
-	m.recordUsage(ctx, usage.Event{Event: "archive", ID: sb.ID, Reference: ck.ID, Tenant: sb.Tenant, Deadline: retention})
 	return nil
 }
 

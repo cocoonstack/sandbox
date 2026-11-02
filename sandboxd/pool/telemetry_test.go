@@ -253,6 +253,33 @@ func TestAnArchiveKeptForeverStatesNoDeadline(t *testing.T) {
 	}
 }
 
+func TestArchiveEventPrecedesAWakeDuringItsTeardown(t *testing.T) {
+	eng := newFakeEngine()
+	m := newTestManager(t, eng, archivePool(3600))
+	ctx := t.Context()
+	sb := mustClaim(t, m, testKey)
+	if err := m.Hibernate(ctx, sb.ID, Cred{Token: sb.Token}); err != nil {
+		t.Fatalf("hibernate: %v", err)
+	}
+	stall := make(chan struct{})
+	eng.mu.Lock()
+	eng.removeStall = stall
+	eng.mu.Unlock()
+	archived := make(chan error, 1)
+	go func() { archived <- m.archive(ctx, sb) }()
+	waitFor(t, func() bool { return archivedCount(m) == 1 })
+	if _, _, _, err := m.WakeAgentSocket(ctx, sb.ID, sb.Token); err != nil {
+		t.Fatalf("wake: %v", err)
+	}
+	close(stall)
+	if err := <-archived; err != nil {
+		t.Fatalf("archive: %v", err)
+	}
+	if got, want := usageEventsOf(t, m, sb.ID), "claim,hibernate,archive,unarchive"; got != want {
+		t.Errorf("events %s, want %s", got, want)
+	}
+}
+
 func TestReconcileRecordsTheEndOfTheClaimsItDrops(t *testing.T) {
 	eng := newFakeEngine()
 	dir := t.TempDir()
