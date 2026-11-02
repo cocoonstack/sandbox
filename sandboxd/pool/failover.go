@@ -581,16 +581,13 @@ func (m *Manager) fenceArchived(ctx context.Context, claims map[string]*types.Sa
 }
 
 func (m *Manager) settleIntent(ctx context.Context, sb *types.Sandbox, pending string, rec archives.Record, ok bool) (moved bool, err error) {
+	m.mu.Lock()
+	replica := sb.ReplicaCk
+	m.mu.Unlock()
+	if ok && rec.Owner == m.nodeID && replica != "" {
+		return false, m.restoreReplicaRow(ctx, sb, replica, rec)
+	}
 	if ok && rec.Owner == m.nodeID {
-		m.mu.Lock()
-		replica := sb.ReplicaCk
-		if replica != "" {
-			sb.ArchiveEpoch = rec.Epoch
-		}
-		m.mu.Unlock()
-		if replica != "" {
-			return false, m.restoreReplicaRow(ctx, sb, replica, rec)
-		}
 		err = m.archives.Delete(ctx, sb.ID, rec.Epoch)
 		if err == nil {
 			return false, nil
@@ -619,6 +616,9 @@ func (m *Manager) settleIntent(ctx context.Context, sb *types.Sandbox, pending s
 }
 
 func (m *Manager) restoreReplicaRow(ctx context.Context, sb *types.Sandbox, replica string, rec archives.Record) error {
+	m.mu.Lock()
+	sb.ArchiveEpoch = rec.Epoch
+	m.mu.Unlock()
 	if rec.Checkpoint == replica || rec.Consumed {
 		return nil
 	}
