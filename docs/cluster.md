@@ -359,12 +359,12 @@ checkpoint store and keeps each claim's registry row on the latest snapshot:
   the node, and the node destroys nothing. Claims of pools that do not
   replicate stay served. A node starts fenced and lifts the fence after its
   first renewal that is followed by a confirmation. The confirmation runs beside the renew loop, which keeps
-  renewing: for each replicated claim the node reads the row and takes it back
-  for itself in one compare-and-set, which the row lock serializes against
-  adopters. A claim whose row reads as another node's, or as gone after this
-  node held it, is forgotten at once and its VM removed in the background; a
-  refused write, whoever moved the row, leaves the node fenced until the next
-  renewal, about 5 seconds later, reads the row again. The lift replaces the fenced
+  renewing: for each replicated claim the node takes the row back for itself in
+  one compare-and-set, which the row lock serializes against adopters, and
+  retries once on a stale epoch. A claim whose row another node took, or took
+  and finished, is forgotten at once and its VM removed in the background; a
+  claim whose row is still this node's but keeps refusing the write leaves the
+  node fenced and is retried at the next renewal. The lift replaces the fenced
   state this renewal saw, only if it is still current, and trips again at once
   if more than 12 seconds passed since the start of that renewal; a slower
   confirmation therefore leaves the node fenced for the next renewal to repeat. The margin makes the fence close 3 seconds before

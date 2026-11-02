@@ -284,7 +284,7 @@ func TestLeaseAdoptionDuringUnfenceDropsTheClaimWithoutServingIt(t *testing.T) {
 			}
 		}
 		cut.cut.Store(false)
-		time.Sleep(2 * leaseRenew)
+		time.Sleep(leaseRenew)
 		synctest.Wait()
 
 		if !fencedAtTake {
@@ -374,7 +374,7 @@ func TestLeaseConfirmThatKeepsLosingOnItsOwnRowStaysFencedAndKeepsTheClaim(t *te
 	}
 }
 
-func TestLeaseStaleEpochRefusesTheConfirmAndTheNextPassLifts(t *testing.T) {
+func TestLeaseConfirmRetriesOnceOnAStaleEpoch(t *testing.T) {
 	c := newReplicaCluster(t)
 	a := c.node(t, "a", t.TempDir(), keepAnHour)
 	sb := mustClaim(t, a, testKey)
@@ -382,16 +382,8 @@ func TestLeaseStaleEpochRefusesTheConfirmAndTheNextPassLifts(t *testing.T) {
 	stale, _, _ := c.reg.Get(t.Context(), sb.ID)
 	replicateNow(t, a, sb)
 
-	if keep, err := a.confirmOwnership(t.Context(), sb, stale); !errors.Is(err, archives.ErrLost) || keep {
-		t.Fatalf("confirm on a row read before a newer round: %v %v, want ErrLost", keep, err)
-	}
-	if _, held := a.byID(sb.ID); !held {
-		t.Fatal("a refused confirm dropped a claim whose row is still this node's")
-	}
-	a.tripFence()
-	a.unfence(t.Context(), time.Now())
-	if a.isFenced() {
-		t.Error("the next pass read a fresh row and did not lift the fence")
+	if keep, err := a.confirmOwnership(t.Context(), sb, stale); err != nil || !keep {
+		t.Fatalf("confirm on a row read before a newer round: %v %v, want kept", keep, err)
 	}
 	current, _, _ := c.reg.Get(t.Context(), sb.ID)
 	if a.epochOf(sb) != current.Epoch {
