@@ -457,8 +457,11 @@ func (m *Manager) reconcileOwnRow(ctx context.Context, rec archives.Record, now 
 	sb := m.claimed[rec.ID]
 	m.mu.Unlock()
 	if sb == nil {
-		if rec.Consumed || !rec.Deadline.IsZero() && now.After(rec.Deadline) {
+		switch {
+		case rec.Consumed || !rec.Deadline.IsZero() && now.After(rec.Deadline):
 			m.purgeArchiveRow(ctx, rec)
+		case rec.Deadline.IsZero():
+			m.startRowRetention(ctx, rec.ID, rec.Epoch)
 		}
 		return
 	}
@@ -476,6 +479,32 @@ func (m *Manager) reconcileOwnRow(ctx context.Context, rec archives.Record, now 
 		m.purgeArchiveRow(ctx, rec)
 	default:
 		m.dropStaleRow(ctx, sb, rec)
+	}
+}
+
+func (m *Manager) startRowRetention(ctx context.Context, id string, epoch int64) {
+	logger := log.WithFunc("pool.startRowRetention")
+	rec, ok, err := m.archives.Get(ctx, id)
+	if err != nil {
+		logger.Warnf(ctx, "read archive row %s: %v", id, err)
+		return
+	}
+	if !ok || rec.Epoch != epoch {
+		return
+	}
+	sb := &types.Sandbox{}
+	if err = json.Unmarshal(rec.Claim, sb); err != nil {
+		logger.Warnf(ctx, "decode archive row %s: %v", id, err)
+		return
+	}
+	m.mu.Lock()
+	rec.Deadline = m.retentionDeadline(sb.Key)
+	m.mu.Unlock()
+	if rec.Deadline.IsZero() {
+		return
+	}
+	if _, err = m.archives.Replace(ctx, rec, epoch); err != nil && !errors.Is(err, archives.ErrLost) {
+		logger.Warnf(ctx, "start retention of archive row %s: %v", id, err)
 	}
 }
 

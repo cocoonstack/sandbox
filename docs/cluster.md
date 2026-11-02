@@ -332,7 +332,10 @@ checkpoint store and keeps each claim's registry row on the latest snapshot:
   it; a claim whose row another node holds, or whose row a finished adopter
   consumed, is dropped with its VM. A replica row has no retention deadline: the
   hourly sweep never purges it, because no round refreshes it while the claim is
-  hibernated, and retention starts when the claim is archived or adopted. The
+  hibernated, and retention starts when the claim is archived or adopted. A row
+  the node still holds after reconcile dropped its claim, because the VM record
+  was gone, gains the retention deadline on that sweep: the claim stays adoptable
+  until it passes, and `archive_delete_after_seconds` 0 keeps the row. The
   rows of a node that never returns therefore stay until a client adopts them, a
   bounded residue of one row and up to two checkpoints per claim: the row's, and
   a committed pending replica or a previous replica the node died before

@@ -815,6 +815,90 @@ func TestAdoptingAReplicaRecordsItsCheckpointAndRetention(t *testing.T) {
 	}
 }
 
+func TestAReplicaRowWithNoClaimLeftGainsRetentionAndIsPurged(t *testing.T) {
+	c := newReplicaCluster(t)
+	a := c.node(t, "a", t.TempDir(), keepAnHour)
+	lost, kept := mustClaim(t, a, testKey), mustClaim(t, a, testKey)
+	replicateNow(t, a, lost)
+	replicateNow(t, a, kept)
+	ck := a.replicaOf(lost)
+	if err := a.FlushClaims(); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+	delete(a.eng.(*fakeEngine).vms, lost.VMName)
+	restarted := c.restart(t, a)
+	if err := restarted.Reconcile(t.Context()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	restarted.sweepOrphanArchives(t.Context())
+	rec, ok, err := c.reg.Get(t.Context(), lost.ID)
+	if err != nil || !ok || rec.Deadline.IsZero() || !ckExists(t, restarted, ck) {
+		t.Fatalf("row of the dropped claim after a sweep: %+v %t %v, want it kept with a deadline", rec, ok, err)
+	}
+	liveRow, _, err := c.reg.Get(t.Context(), kept.ID)
+	if err != nil || !liveRow.Deadline.IsZero() {
+		t.Errorf("row of the live claim: %+v %v, want no deadline", liveRow, err)
+	}
+
+	rec.Deadline = time.Now().Add(-time.Second)
+	if _, err = c.reg.Replace(t.Context(), rec, rec.Epoch); err != nil {
+		t.Fatalf("age the row: %v", err)
+	}
+	restarted.sweepOrphanArchives(t.Context())
+	if _, ok, err = c.reg.Get(t.Context(), lost.ID); err != nil || ok || ckExists(t, restarted, ck) {
+		t.Errorf("row %t %v after retention, want the row and its checkpoint gone", ok, err)
+	}
+	if got, want := usageEventsOf(t, restarted, lost.ID), "claim,reap,archive_delete"; got != want {
+		t.Errorf("events %s, want %s", got, want)
+	}
+}
+
+func TestAReplicaRowWithNoClaimLeftStaysAdoptable(t *testing.T) {
+	c := newReplicaCluster(t)
+	a := c.node(t, "a", t.TempDir(), keepAnHour)
+	sb := mustClaim(t, a, testKey)
+	replicateNow(t, a, sb)
+	if err := a.FlushClaims(); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+	delete(a.eng.(*fakeEngine).vms, sb.VMName)
+	restarted := c.restart(t, a)
+	if err := restarted.Reconcile(t.Context()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	restarted.sweepOrphanArchives(t.Context())
+	if adopted, err := restarted.AdoptArchived(t.Context(), sb.ID, sb.Token); err != nil || !adopted {
+		t.Errorf("adopt inside retention: %t %v", adopted, err)
+	}
+}
+
+func TestAReplicaRowOfAKeepForeverPoolKeepsNoDeadline(t *testing.T) {
+	c := newReplicaCluster(t)
+	dir := t.TempDir()
+	a := c.node(t, "a", dir, keepAnHour)
+	sb := mustClaim(t, a, testKey)
+	replicateNow(t, a, sb)
+	if err := a.FlushClaims(); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+	eng := a.eng.(*fakeEngine)
+	delete(eng.vms, sb.VMName)
+	restarted := c.nodeOn(t, eng, "a", dir, 0)
+	if err := restarted.Reconcile(t.Context()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	before, _, err := c.reg.Get(t.Context(), sb.ID)
+	if err != nil {
+		t.Fatalf("read row: %v", err)
+	}
+	restarted.sweepOrphanArchives(t.Context())
+	rec, ok, err := c.reg.Get(t.Context(), sb.ID)
+	if err != nil || !ok || !rec.Deadline.IsZero() || rec.Epoch != before.Epoch {
+		t.Errorf("row %+v %t %v, want it untouched at epoch %d", rec, ok, err, before.Epoch)
+	}
+}
+
 func TestReplicaRestartDropsAClaimAdoptedElsewhere(t *testing.T) {
 	c := newReplicaCluster(t)
 	dirA := t.TempDir()
