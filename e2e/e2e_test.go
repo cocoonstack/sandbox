@@ -1,7 +1,4 @@
-// Package e2e drives the full host stack in one process: real pool manager,
-// real engine dialing real hybrid-vsock sockets, real HTTP server and relay,
-// real SDK — only cocoon and the guest are faked. It doubles as the drift
-// guard between the SDK's wire mirrors and sandboxd's types.
+// Package e2e drives the full host stack in one process with only cocoon and the guest faked.
 package e2e
 
 import (
