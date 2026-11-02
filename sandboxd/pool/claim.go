@@ -245,12 +245,7 @@ func (m *Manager) dialPort(ctx context.Context, id string, cred Cred, port uint1
 		sb.Unhold()
 		return nil, err
 	}
-	release := sb.Unhold
-	if fenced != nil {
-		stop := CloseOnFence(fenced, conn)
-		release = func() { stop(); sb.Unhold() }
-	}
-	return &heldConn{Conn: conn, release: sync.OnceFunc(release)}, nil
+	return newHeldConn(conn, fenced, sb.Unhold), nil
 }
 
 func (m *Manager) dialPassive(ctx context.Context, id string, port uint16) (net.Conn, error) {
@@ -283,12 +278,7 @@ func (m *Manager) dialPassive(ctx context.Context, id string, port uint16) (net.
 		sb.UnholdIdle()
 		return nil, err
 	}
-	release := sb.UnholdIdle
-	if fenced != nil {
-		stop := CloseOnFence(fenced, conn)
-		release = func() { stop(); sb.UnholdIdle() }
-	}
-	return &heldConn{Conn: conn, release: sync.OnceFunc(release)}, nil
+	return newHeldConn(conn, fenced, sb.UnholdIdle), nil
 }
 
 // releaseResolved re-checks under m.mu that sb is still the live claim: no double teardown.
@@ -776,6 +766,11 @@ func (m *Manager) admitOptions(ctx context.Context, key types.PoolKey, o ClaimOp
 type heldConn struct {
 	net.Conn
 	release func()
+}
+
+func newHeldConn(conn net.Conn, fenced <-chan struct{}, release func()) *heldConn {
+	stop := CloseOnFence(fenced, conn)
+	return &heldConn{Conn: conn, release: sync.OnceFunc(func() { stop(); release() })}
 }
 
 func (c *heldConn) Close() error {

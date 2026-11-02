@@ -46,14 +46,13 @@ func CloseOnFence(fenced <-chan struct{}, c io.Closer) (stop func()) {
 func (m *Manager) keepLease(ctx context.Context) {
 	fence := time.AfterFunc(m.lease.ttl-m.lease.margin, func() { m.trip(ctx) })
 	defer fence.Stop()
-	tick := time.NewTicker(m.lease.every)
-	defer tick.Stop()
+	tick := time.Tick(m.lease.every)
 	for {
 		m.renewLease(ctx, fence)
 		select {
 		case <-ctx.Done():
 			return
-		case <-tick.C:
+		case <-tick:
 		}
 	}
 }

@@ -93,8 +93,7 @@ func (e *Engine) umountVolume(ctx context.Context, vsockSocket, mount string) er
 func (e *Engine) waitForVolumeDevice(ctx context.Context, vsockSocket, name string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, volumeProbeTimeout)
 	defer cancel()
-	ticker := time.NewTicker(volumePollInterval)
-	defer ticker.Stop()
+	tick := time.Tick(volumePollInterval)
 	others := map[string]bool{}
 	for {
 		device, found, err := e.findVolumeDevice(ctx, vsockSocket, name, others)
@@ -107,7 +106,7 @@ func (e *Engine) waitForVolumeDevice(ctx context.Context, vsockSocket, name stri
 		select {
 		case <-ctx.Done():
 			return "", ctx.Err()
-		case <-ticker.C:
+		case <-tick:
 		}
 	}
 }
@@ -149,8 +148,7 @@ func (e *Engine) mountDevice(ctx context.Context, vsockSocket, device, name, mou
 	if err := e.silkdExec(ctx, vsockSocket, "mkdir", "-p", "--", mount); err != nil {
 		return fmt.Errorf("create volume mount point %s: %w", mount, err)
 	}
-	ticker := time.NewTicker(volumePollInterval)
-	defer ticker.Stop()
+	tick := time.Tick(volumePollInterval)
 	asExt4 := true
 	for {
 		err := e.silkdExec(ctx, vsockSocket, mountArgv(asExt4, mountMode(rw), device, mount)...)
@@ -170,7 +168,7 @@ func (e *Engine) mountDevice(ctx context.Context, vsockSocket, device, name, mou
 		select {
 		case <-ctx.Done():
 			return fmt.Errorf("mount volume %s: %w: %w", name, ctx.Err(), err)
-		case <-ticker.C:
+		case <-tick:
 		}
 	}
 }
