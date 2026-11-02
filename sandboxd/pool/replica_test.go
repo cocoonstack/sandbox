@@ -1140,6 +1140,89 @@ func TestReplicaAdoptionWakesTheClaimFromTheLastReplica(t *testing.T) {
 	}
 }
 
+func TestReplicaArchiveRetriedAfterARegistryFaultKeepsTheClaim(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		reg  func(*failoverCluster) *hookRegistry
+	}{
+		{"the replace failed", func(c *failoverCluster) *hookRegistry { return &hookRegistry{Registry: c.reg, failPut: true} }},
+		{"the replace landed and its reply was lost", func(c *failoverCluster) *hookRegistry {
+			return &hookRegistry{Registry: c.reg, losePutReply: true}
+		}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			c := newReplicaCluster(t)
+			a := c.node(t, "a", t.TempDir(), keepAnHour)
+			sb := mustClaim(t, a, testKey)
+			replicateNow(t, a, sb)
+			if err := a.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
+				t.Fatalf("hibernate: %v", err)
+			}
+			a.archives = tt.reg(c)
+			if err := a.archive(t.Context(), sb); err == nil {
+				t.Fatal("archive under the fault succeeded")
+			}
+			a.archives = c.reg
+			if err := a.archive(t.Context(), sb); err != nil {
+				t.Fatalf("retried archive: %v", err)
+			}
+			if _, held := a.byID(sb.ID); !held || sb.ArchiveCk == "" {
+				t.Fatalf("claim held=%v archive ck %q, want it archived", held, sb.ArchiveCk)
+			}
+			rec, ok, err := c.reg.Get(t.Context(), sb.ID)
+			if err != nil || !ok || rec.Consumed || rec.Checkpoint != sb.ArchiveCk || rec.Epoch != sb.ArchiveEpoch {
+				t.Errorf("row %+v ok=%v err=%v, want it live on %s at epoch %d", rec, ok, err, sb.ArchiveCk, sb.ArchiveEpoch)
+			}
+		})
+	}
+}
+
+func TestReplicaRestartMidArchiveKeepsTheClaim(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		landed bool
+	}{
+		{"the archive row never landed", false},
+		{"the archive row landed", true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			c := newReplicaCluster(t)
+			dir := t.TempDir()
+			a := c.node(t, "a", dir, keepAnHour)
+			sb := mustClaim(t, a, testKey)
+			vm := lockedVMName(sb)
+			replicateNow(t, a, sb)
+			replica := sb.ReplicaCk
+			if err := a.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
+				t.Fatalf("hibernate: %v", err)
+			}
+			interruptArchive(t, a, sb, tt.landed)
+			eng := a.eng.(*fakeEngine)
+
+			restarted := c.nodeOn(t, eng, "a", dir, keepAnHour)
+			if err := restarted.Reconcile(t.Context()); err != nil {
+				t.Fatalf("reconcile: %v", err)
+			}
+			rec, ok, err := c.reg.Get(t.Context(), sb.ID)
+			if err != nil || !ok || rec.Consumed || rec.Checkpoint != replica {
+				t.Errorf("row %+v ok=%v err=%v, want it live on the replica %s", rec, ok, err, replica)
+			}
+			c.renew(t, "a")
+			restarted.unfence(t.Context(), time.Now())
+			held, kept := restarted.byID(sb.ID)
+			if !kept || eng.removed(vm) {
+				t.Fatalf("restart dropped a claim nobody adopted: held=%v VM removed=%v", kept, eng.removed(vm))
+			}
+			if err = restarted.archive(t.Context(), held); err != nil {
+				t.Fatalf("archive after the restart: %v", err)
+			}
+			if rec, ok, err = c.reg.Get(t.Context(), sb.ID); err != nil || !ok || rec.Checkpoint != held.ArchiveCk {
+				t.Errorf("row %+v ok=%v err=%v, want it on %s", rec, ok, err, held.ArchiveCk)
+			}
+		})
+	}
+}
+
 func restartWithoutVM(t *testing.T, c *failoverCluster, a *Manager, sb *types.Sandbox, deleteAfter int) *Manager {
 	t.Helper()
 	if err := a.FlushClaims(); err != nil {

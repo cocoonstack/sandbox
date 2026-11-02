@@ -557,7 +557,7 @@ func (m *Manager) fenceArchived(ctx context.Context, claims map[string]*types.Sa
 				sb.ReplicaPending = ""
 			}
 		case sb.ArchivePending != "" || ok && !rec.Consumed:
-			moved, err := m.settleIntent(ctx, id, sb.ArchivePending, rec, ok)
+			moved, err := m.settleIntent(ctx, sb, sb.ArchivePending, rec, ok)
 			switch {
 			case err != nil:
 				logger.Warnf(ctx, "archive intent of %s left for the next restart: %v", id, err)
@@ -580,20 +580,29 @@ func (m *Manager) fenceArchived(ctx context.Context, claims map[string]*types.Sa
 	return true
 }
 
-func (m *Manager) settleIntent(ctx context.Context, id, pending string, rec archives.Record, ok bool) (bool, error) {
+func (m *Manager) settleIntent(ctx context.Context, sb *types.Sandbox, pending string, rec archives.Record, ok bool) (moved bool, err error) {
 	if ok && rec.Owner == m.nodeID {
-		err := m.archives.Delete(ctx, id, rec.Epoch)
+		m.mu.Lock()
+		replica := sb.ReplicaCk
+		if replica != "" {
+			sb.ArchiveEpoch = rec.Epoch
+		}
+		m.mu.Unlock()
+		if replica != "" {
+			return false, m.restoreReplicaRow(ctx, sb, replica, rec)
+		}
+		err = m.archives.Delete(ctx, sb.ID, rec.Epoch)
 		if err == nil {
 			return false, nil
 		}
 		if !errors.Is(err, archives.ErrLost) {
 			return false, err
 		}
-		if rec, ok, err = m.archives.Get(ctx, id); err != nil {
+		if rec, ok, err = m.archives.Get(ctx, sb.ID); err != nil {
 			return false, err
 		}
 		if ok && rec.Owner == m.nodeID {
-			return false, fmt.Errorf("archive row %s moved under its settle", id)
+			return false, fmt.Errorf("archive row %s moved under its settle", sb.ID)
 		}
 	}
 	switch {
@@ -602,11 +611,25 @@ func (m *Manager) settleIntent(ctx context.Context, id, pending string, rec arch
 	case pending == "":
 		return false, nil
 	}
-	_, err := m.ckpts.ReadMeta(ctx, pending)
+	_, err = m.ckpts.ReadMeta(ctx, pending)
 	if errors.Is(err, store.ErrNotFound) {
 		return true, nil
 	}
 	return false, err
+}
+
+func (m *Manager) restoreReplicaRow(ctx context.Context, sb *types.Sandbox, replica string, rec archives.Record) error {
+	if rec.Checkpoint == replica || rec.Consumed {
+		return nil
+	}
+	epoch, err := m.replaceReplica(ctx, sb, replica)
+	if err != nil {
+		return err
+	}
+	m.mu.Lock()
+	sb.ArchiveEpoch = epoch
+	m.mu.Unlock()
+	return nil
 }
 
 func (m *Manager) resolveIntent(ctx context.Context, sb *types.Sandbox) error {
@@ -626,7 +649,7 @@ func (m *Manager) resolveIntent(ctx context.Context, sb *types.Sandbox) error {
 	if err != nil {
 		return err
 	}
-	moved, err := m.settleIntent(ctx, sb.ID, pending, rec, ok)
+	moved, err := m.settleIntent(ctx, sb, pending, rec, ok)
 	switch {
 	case err != nil:
 		return err

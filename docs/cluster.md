@@ -217,7 +217,8 @@ replication rounds write it, so the claim path is unchanged.
   restart that finds the intent and no row keeps the claim while that
   checkpoint is still in the store, since the row never committed, and drops it
   once the checkpoint is gone, since only a node that consumed the row deletes
-  it.
+  it. A replicated claim's row stays: one the archive moved goes back to the
+  replica, so the row is never absent while the claim is held.
   A put whose outcome is unknown leaves the intent in place, and a release,
   the next archive and the hourly sweep settle it by the same rule before
   they act on the claim.
