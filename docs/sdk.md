@@ -11,7 +11,8 @@ cluster.
 
 ## A complete example
 
-Claim a sandbox, push a project into it, run a build, then freeze the built
+Claim a `node:24.04` sandbox (it carries `make`; `rt:24.04` does not), push a
+project into it, run a build, then freeze the built
 state and fan out two independent workers from that exact moment:
 
 ```go
@@ -40,7 +41,7 @@ func main() {
 		log.Fatal(err)
 	}
 
-	sb, err := client.New(ctx, "rt:24.04",
+	sb, err := client.New(ctx, "node:24.04",
 		sandbox.WithSize(sandbox.Medium),
 		sandbox.WithTimeout(10*time.Minute))
 	if err != nil {
@@ -227,7 +228,8 @@ promoted template; it is empty for other sources. `Owner()` names the owning
 node, and `Token()` returns the per-sandbox bearer to persist with `ID` for a
 later `Lookup`; `Close()` releases the sandbox (releasing one already gone is
 not an error, and `Close` is bounded internally so it stays defer-friendly).
-Volume sandboxes cannot hibernate, fork, checkpoint, or promote. Passing
+Volume sandboxes cannot hibernate, fork, checkpoint, or promote. Egress-lane
+sandboxes cannot either, nor take `WithArchiveOnExpire`; each answers 409. Passing
 `WithVolumes` or `WithClaimRef` to `Checkpoint.New` returns a local error:
 checkpoint branches support neither volumes nor a claim reference in this version.
 `WithMetadata`, `WithArchiveOnExpire` and `WithEnv` apply to `New`, `Template.New`, and
@@ -438,7 +440,7 @@ answers 404 instead of taking a warm VM or cold-booting an image named like it.
 `Promote` publishes the sandbox's state as a template on its owning node,
 keyed by (name, the sandbox's network lane, its size). Claims clone on
 demand (~a golden-clone's latency); there is no warm pool for promoted
-templates unless the node's config adds one. Re-promoting to the same name
+templates. Re-promoting to the same name
 replaces the template. `Template.ContentDigest` identifies the published
 export bytes; a claim from that exact generation carries the same value in
 `Sandbox.TemplateDigest`. A caller pinning a mutable template name can compare
@@ -742,7 +744,7 @@ sb = client.Attach(ownerAddr, id, token)  // bind a known handle, no lookup roun
 err = client.PutTenant(ctx, sandbox.TenantSpec{Name: "u:42", Token: tok, MaxClaims: 10})
 res, _ = client.PutTenantCluster(ctx, sandbox.TenantSpec{Name: "u:42", MaxClaims: 20}) // token kept
 res, _ = client.DeleteTenantCluster(ctx, "u:42")
-tenants, _ := client.Tenants(ctx)         // names, caps, live claims, removed tenants; never tokens
+page, _ := client.Tenants(ctx, "", 0)     // page.Tenants: names, caps, live claims, removed tenants; never tokens; page.Next pages
 ```
 
 `Sandboxes` is scoped to the calling token, so a tenant sees only its own

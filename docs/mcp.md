@@ -44,6 +44,8 @@ in the guest, which can hold its reply up to 5 s past the cap.
 | `release` | destroy the sandbox and its files; the session forgets the id, so a second release is rejected as unknown |
 | `node_info` | warm pools, promoted templates, live claims, drain state, capacity and mesh peers; needs the operator token |
 
+An egress-lane sandbox cannot `fork`, `checkpoint`, `hibernate` or `promote`.
+
 Sandbox handles (and their tokens) are held by the server process for the
 session, and released with it: when the MCP client disconnects or the server
 is signalled, it destroys every sandbox that session claimed, whatever

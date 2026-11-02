@@ -14,7 +14,7 @@ synchronous by design (agent frameworks that need async wrap calls in
 does). It matches the [Go SDK](sdk.md) guest and data-plane surface, with these
 exceptions: the operator pool and tenant verbs (`SetPools`, `PutTenant` and
 their siblings), the claim env (`WithEnv`, `Env`/`SetEnv`/`PatchEnv`) and
-setting claim `metadata` or `on_expire` remain Go-only, `Template.new` takes no
+setting claim `metadata` or `on_expire`, and reading a claim's `net_route` remain Go-only, `Template.new` takes no
 `claim_ref`, and file and tar payloads are whole `bytes` values rather than
 streams (`read_file`/`pull` return them, `write_file`/`push` take them; the
 wire is chunked, the caller's copy is not). Wire fidelity is
@@ -23,8 +23,8 @@ Python all round-trip in CI.
 
 ## A complete example
 
-Claim a sandbox, push a project in, run a build, then freeze the built state
-and fan out two independent workers from that exact moment:
+Claim a `node:24.04` sandbox (it carries `make`; `rt:24.04` does not), push a
+project in, run a build, then freeze the built state and fan out two independent workers from that exact moment:
 
 ```python
 import io
@@ -46,7 +46,7 @@ def project_tar() -> bytes:
 
 def main() -> None:
     client = Client(os.environ["SANDBOXD_ADDR"], api_token=os.environ["SANDBOXD_TOKEN"])
-    with client.new("rt:24.04", size="medium", ttl_seconds=600) as sb:
+    with client.new("node:24.04", size="medium", ttl_seconds=600) as sb:
         print(f"claimed {sb.id} on {sb.owner}")
 
         sb.push("/work", project_tar())  # only ingestion path on the no-network lane
@@ -123,7 +123,8 @@ branched). `sb.template_digest` is the exact content identity when the claim
 cloned a promoted template; it is empty for other sources. `Sandbox` is a
 context manager; `sb.close()` releases it (releasing one already gone is not
 an error — double-release and reap races stay silent).
-Volume sandboxes cannot hibernate, fork, checkpoint, or promote. Checkpoint
+Volume sandboxes cannot hibernate, fork, checkpoint, or promote. Egress-lane
+sandboxes cannot either; each answers 409. Checkpoint
 branches do not accept volumes of either mode in this version.
 
 `mount=False` on `client.new` or `template.new` claims the same volumes

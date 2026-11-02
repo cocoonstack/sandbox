@@ -585,7 +585,7 @@ the body:
 
 Publishes the sandbox's current state as a node-local template under
 (template, this sandbox's net, its size): later claims for that key clone
-from it, provision-on-demand — no warm pool unless the node config adds one.
+from it, provision-on-demand, with no warm pool.
 Re-promoting to the same name replaces the template. A hibernated sandbox is
 promoted from its memory image without waking. 200 returns the template's
 full key and immutable content identity. On the default local-disk backend a
