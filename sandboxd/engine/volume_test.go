@@ -282,27 +282,21 @@ func TestMountVolumeReadsEachOtherSerialOnce(t *testing.T) {
 	fake := serveFakeSilkd(t, path)
 	configureVolumeDevices(fake)
 	fake.mu.Lock()
-	imagenet := fake.serial["/sys/block/vdc/serial"]
-	fake.serial["/sys/block/vdc/serial"] = []byte("\n")
+	fake.blankReads["/sys/block/vdc/serial"] = 3
 	fake.mu.Unlock()
-	time.AfterFunc(60*time.Millisecond, func() {
-		fake.mu.Lock()
-		defer fake.mu.Unlock()
-		fake.serial["/sys/block/vdc/serial"] = imagenet
-	})
 	if err := New("cocoon", nil, nil, false, false, "").MountVolume(t.Context(), path, "imagenet", "/datasets/training", false); err != nil {
 		t.Fatalf("MountVolume: %v", err)
 	}
 	fake.mu.Lock()
 	defer fake.mu.Unlock()
-	if fake.listCalls < 2 {
-		t.Fatalf("list calls = %d, want the device to arrive on a later poll", fake.listCalls)
+	if fake.listCalls != 4 {
+		t.Fatalf("list calls = %d, want 4 (3 blank serials + the successful poll)", fake.listCalls)
 	}
 	if got := len(slices.DeleteFunc(slices.Clone(fake.readCalls), func(p string) bool { return p != "/sys/block/vda/serial" })); got != 1 {
 		t.Errorf("read the root disk's serial %d times, want once: %v", got, fake.readCalls)
 	}
-	if got := len(slices.DeleteFunc(slices.Clone(fake.readCalls), func(p string) bool { return p != "/sys/block/vdc/serial" })); got < 2 {
-		t.Errorf("read the awaited disk's serial %d times, want a retry: %v", got, fake.readCalls)
+	if got := len(slices.DeleteFunc(slices.Clone(fake.readCalls), func(p string) bool { return p != "/sys/block/vdc/serial" })); got != 4 {
+		t.Errorf("read the awaited disk's serial %d times, want 4: %v", got, fake.readCalls)
 	}
 }
 
