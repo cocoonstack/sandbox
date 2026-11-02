@@ -1013,14 +1013,14 @@ truth is the usage journal below.
 
 Always on: every lifecycle transition appends one JSONL event to
 `<data_dir>/usage.jsonl` — `{"t": <RFC3339>, "ev":
-"claim|renew|hibernate|wake|fork|checkpoint|promote|release|reap|archive|unarchive|archive_delete|egress|egress_bytes|vmm_exit|vmm_restart|vmm_failed",
+"claim|renew|hibernate|wake|fork|checkpoint|adopt|promote|release|reap|archive|unarchive|archive_delete|egress|egress_bytes|vmm_exit|vmm_restart|vmm_failed",
 "id": "sb_…", "vm": "sbx-…"}` plus `key` (the pool key's stable hash, claim
 events), `template`, `net` and `size` (the claim's template, lane and size
 tier, claim events, so a consumer can price a sandbox by its shape without the
 claim record, which is gone after release; `size` sets the CPU and memory,
 and `template` is a label, since promote lets the caller name it), `deadline` (the deadline in force after this event: `claim`,
-`renew`, `wake` and `unarchive` carry the lease, `archive` the retention end, or
-nothing for an archive kept forever), `tenant` (the owning tenant, on every event of a
+`renew`, `wake` and `unarchive` carry the lease, `archive` and `adopt` the retention
+end, or nothing for an archive kept forever), `tenant` (the owning tenant, on every event of a
 tenant's claim), `children` (fork) and `ref` (the promoted template / checkpoint
 id, the egress host, a `vmm_failed` reason, or why reconcile ended a claim). An egress event that injected credentials names
 them in `secret` (`gh,claim:<entry>`, never a value). An egress event routed through an
@@ -1031,19 +1031,28 @@ the subset of those names claimed `rw`, so billing can discriminate write
 access (mounts and host paths are not billing dimensions). The file rotates at
 64 MiB keeping one `.1` backup, so a tailing collector never loses a window
 silently. A last line a crash cut short is ended with a newline when the node
-reopens the journal, so it never swallows the next event. Folding rules: billable compute seconds per sandbox =
-Σ(claim→release/reap) − Σ(hibernate→wake) − Σ(vmm_exit→vmm_restart/release/reap);
+reopens the journal, so it never swallows the next event. Folding rules, in `t` order: billable compute seconds per sandbox =
+Σ(claim→release/reap) − Σ(hibernate→wake/unarchive) − Σ(vmm_exit→vmm_restart/unarchive/release/reap);
 `vmm_exit` is stamped when the node first finds the VMM gone, so an outage
 before sandboxd runs again (a host that was down) stays billed up to that
 point, and `vmm_failed` is informational; hibernated storage seconds =
-Σ(hibernate→wake) minus the archived span; archived storage seconds =
+Σ(hibernate→wake/unarchive/archive_delete) minus the archived span; archived storage seconds =
 Σ(archive→unarchive/archive_delete), a cheaper store tier than a hibernated
 VM's RAM. An interval left open by a crash, or by a node that never returns,
 clamps to the last `deadline` among the claim's events; an `archive` without
-one leaves its span unbounded. Reconcile ends a claim
+one leaves its span unbounded. Every `reap` closes compute at min(`t`, the last
+`deadline` among the claim's events), whatever its `ref`, because `t` can follow
+the true end by the reaper's tick, the VM's teardown, the node's downtime or an
+archive's retention; `release` closes at its `t`. A `hibernate` or `vmm_exit`
+span still open closes at the same instant, and a span is clipped to that close.
+A claim whose events carry no `deadline` closes at `t`. Reconcile ends a claim
 it drops with a `reap`: `ref` is `vm_gone` when the VM record is gone and
-`quarantined` when it cannot re-lock the egress NIC. Its `t` is the node's
-return, so clamp it the same way. The `vm` name joins
+`quarantined` when it cannot re-lock the egress NIC. An `adopt` names a claim
+another node took over after its node was lost, with `ref` the checkpoint it
+holds. With no `archive` open, it ends the claim's compute or hibernated span at
+min(`t`, the last `deadline` before it) and opens the archived span, and an
+`unarchive` then reopens compute, also after a `reap`; with an `archive` open it
+changes nothing. The `vm` name joins
 cocoon's machine-level metering ledger for audit cross-checks. With
 `meta_store.usage`, the node also lands every line in the cell's
 [shared usage table](deploy.md#shared-usage-table), read through
@@ -1060,7 +1069,7 @@ node of the cell from the [shared usage table](deploy.md#shared-usage-table).
   [usage.jsonl](#usage-journal-usagejsonl), `t` in UTC to the microsecond, plus
   `cursor` (its place in the table; one node's events follow its journal
   order) and `node` (the node that recorded it). A journal written by
-  v0.1.20 or earlier has no `renew` events and no `deadline`, and its `claim`
+  v0.1.20 or earlier has no `renew` or `adopt` events and no `deadline`, and its `claim`
   lines have no `template`, `net` or `size`.
 - **Filters:** `tenant` keeps one tenant's events; `since` (inclusive) and
   `until` (exclusive) are RFC 3339 times compared with `t`. Each is optional.

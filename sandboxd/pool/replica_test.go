@@ -777,6 +777,30 @@ func TestReplicaRestartAdoptsTheRowsCheckpointOfAnInterruptedRound(t *testing.T)
 	}
 }
 
+func TestAdoptingAReplicaRecordsItsCheckpointAndRetention(t *testing.T) {
+	c := newReplicaCluster(t)
+	a, b := c.node(t, "a", t.TempDir(), keepAnHour), c.node(t, "b", t.TempDir(), keepAnHour)
+	sb := mustClaim(t, a, testKey)
+	replicateNow(t, a, sb)
+	ck := a.replicaOf(sb)
+	c.expire("a")
+	if adopted, err := b.AdoptArchived(t.Context(), sb.ID, sb.Token); err != nil || !adopted {
+		t.Fatalf("adopt: %v %v", adopted, err)
+	}
+	moved, _ := b.byID(sb.ID)
+	evs := usageJournal(t, b)
+	last := evs[len(evs)-1]
+	if want := b.deadlineOf(moved); last.Event != "adopt" || last.ID != sb.ID || last.Reference != ck || want.IsZero() || !last.Deadline.Equal(want) {
+		t.Errorf("last event %+v, want an adopt of %s naming %s with deadline %v", last, sb.ID, ck, want)
+	}
+	if _, _, _, err := b.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
+		t.Fatalf("wake: %v", err)
+	}
+	if got, want := usageEventsOf(t, b, sb.ID), "adopt,unarchive"; got != want {
+		t.Errorf("events on the adopter %s, want %s", got, want)
+	}
+}
+
 func TestReplicaRestartDropsAClaimAdoptedElsewhere(t *testing.T) {
 	c := newReplicaCluster(t)
 	dirA := t.TempDir()

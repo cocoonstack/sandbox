@@ -72,6 +72,7 @@ func (m *Manager) adoptArchived(ctx context.Context, id, token string) (bool, er
 		m.forgetClaim(ctx, sb)
 		return false, fmt.Errorf("adopt %s: persist claims: %w", id, err)
 	}
+	m.recordUsage(ctx, usage.Event{Event: "adopt", ID: id, Reference: rec.Checkpoint, Tenant: sb.Tenant, Deadline: m.deadlineOf(sb)})
 	log.WithFunc("pool.AdoptArchived").Infof(ctx, "adopted archived sandbox %s from %s", id, rec.Owner)
 	return true, nil
 }
