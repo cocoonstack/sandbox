@@ -84,7 +84,7 @@ lane needs. The
 lock is fail-closed — a claim whose NIC cannot be locked is rejected, not handed
 out unlocked, and no policy still means a locked NIC (default-deny), never a free
 one. It lives in the host root netns and is removed once the VM is gone (a failed
-remove keeps an existing lock in place; the next restart retries the remove). A
+remove keeps an existing lock in place; each reap tick retries the remove). A
 lock that never applied plus a failed remove leaves the VM unguarded until a
 later remove succeeds.
 
@@ -248,7 +248,9 @@ woken sandbox binds at arm time.
   it only for a claim with a [credential](#claim-credentials) for that host; for
   every other claim the rule is a plain one, so its tunnels splice and HTTP/2,
   WebSocket and pinned clients keep working. An `"inject"` rule cannot carry a
-  `secret`. Only a pool rule may set `intercept`.
+  `secret`. Only a pool rule may set `intercept`. A `true` rule does not serve
+  the forward door: a plain `http://` or absolute-form `https://` request that
+  only it matches answers 403.
 - No policy on a claim ⇒ no egress at all (the proxy is not started).
 
 Each decision is metered as an `egress` usage event, which names the injected
@@ -278,8 +280,11 @@ gateway key per user, while the guest holds a placeholder.
   which hosts receive a secret, and the claim only supplies its value. A
   `guest: true` entry never feeds a secret.
 - **Precedence.** The claim's entry wins over the node's value for that claim;
-  an entry set to `""` suppresses the node's value. With neither, the matched
-  request passes as the guest sent it.
+  an entry set to `""` suppresses the node's value. A secret with `value_env`
+  needs that variable set on the node: unset or empty, it stops the daemon at
+  start and a reload answers 400. A secret only claims supply omits `value_env`;
+  on a claim with no entry for it, the matched request passes as the guest sent
+  it.
 - **Lifetime.** The env lives in the claim record in `claims.json` (0600
   under `data_dir`), survives a restart, hibernate, wake, archive and
   unarchive, and goes with the release or reap. A fork child, a checkpoint
@@ -436,7 +441,7 @@ that fails answers the guest 502 (SOCKS5: host unreachable) and never falls
 back to a direct dial. An allowed connection's audit and usage records name
 the upstream's `host:port`, never its credentials, and `GET env` blanks the value like every
 `guest: false` entry. Cost: a node without `egress_upstream` pays nothing; with
-it, each allowed request reads the claim's env under the manager lock.
+it, each allowed request reads the claim's env snapshot, without a lock.
 
 `egress_usage_bytes: true` adds one `egress_bytes` usage event per allowed
 tunnel or request when it ends, with the payload bytes it moved (`tx` guest to
