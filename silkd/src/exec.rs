@@ -87,7 +87,7 @@ where
     let pump = tokio::spawn(pump_out(Arc::clone(&proc), stdout, stderr, pump_fg));
     let pump_abort = pump.abort_handle();
     // stdin rides its own task so a slow write cannot stall output or reaping.
-    tokio::spawn(pump_stdin(stdin, client, req.detach));
+    let stdin_task = tokio::spawn(pump_stdin(stdin, client, req.detach));
 
     // record the reaped code before the drain: an abort mid-drain must publish the real code, not -1.
     let reaped: Arc<OnceLock<i32>> = Arc::new(OnceLock::new());
@@ -132,6 +132,7 @@ where
         return Err(e);
     }
     let code = supervise.await.unwrap_or(-1);
+    stdin_task.abort();
     table.remove_if(pid, &proc);
     proto::write_frame(out, &Response::Exit { code }).await
 }

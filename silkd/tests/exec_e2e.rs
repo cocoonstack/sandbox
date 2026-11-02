@@ -11,7 +11,8 @@ use silkd::server::State;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 
 use common::{
-    b64, connect, decode, exchange, next_frame, one, roundtrip, send, stdout_body, type_of,
+    b64, connect, decode, exchange, frames_until, next_frame, one, roundtrip, send, stdout_body,
+    type_of,
 };
 
 async fn detached_pid(state: &Arc<State>, script: &str) -> u64 {
@@ -336,4 +337,32 @@ async fn disconnect_during_drain_publishes_real_exit_code() {
         "attach must end with exit: {frames:?}"
     );
     assert_eq!(last["code"], 7, "real exit code, not a fabricated -1");
+}
+
+#[tokio::test]
+async fn stdin_held_by_a_forked_child_does_not_wedge_the_next_rpc() {
+    let state = Arc::new(State::new());
+    let (mut cw, mut lines, handle) = connect(&state);
+    send(
+        &mut cw,
+        json!({
+            "op": "exec",
+            "argv": ["/bin/sh", "-c", "exec 3<&0; sleep 8 <&3 3<&- & exit 0"]
+        }),
+    )
+    .await;
+    let chunk = b64(&[b'x'; 32 * 1024]);
+    for _ in 0..30 {
+        send(&mut cw, json!({"op":"stdin","data":chunk})).await;
+    }
+    let frames = frames_until(&mut lines, |f| type_of(f) == "exit").await;
+    assert_eq!(frames.last().unwrap()["code"], 0, "{frames:?}");
+
+    send(&mut cw, json!({"op":"info"})).await;
+    let info = tokio::time::timeout(Duration::from_secs(3), next_frame(&mut lines))
+        .await
+        .expect("the next RPC is wedged on a stdin nobody reads");
+    assert_eq!(type_of(&info), "info");
+    cw.shutdown().await.unwrap();
+    handle.await.unwrap().unwrap();
 }
