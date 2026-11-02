@@ -101,7 +101,7 @@ per dial, dial-per-RPC p50 0.317 → 0.300 ms over 12 interleaved runs
 ## Engine process start
 
 Every engine op is one `cocoon` process, and a Go runtime starts slower with more
-Ps, so sandboxd runs cocoon with `GOMAXPROCS=4`. `cocoon version` p50 on a 384-core
+Ps, so sandboxd caps cocoon's `GOMAXPROCS` at 4, or at its own value when that is lower. `cocoon version` p50 on a 384-core
 bare-metal node (2026-11-02, n=40 interleaved): 24.0 ms at the default, 6.2 ms at 4.
 A pool-miss clone claim went from 77.9 to 63.0 ms p50 (`small`, n=60, arms
 interleaved). No warm claim runs cocoon. A machine with few cores gains less.
