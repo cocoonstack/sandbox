@@ -22,7 +22,7 @@ pub const PROTO_VERSION: u32 = 1;
 /// 2 serves RPCs back to back on one connection; 1 closed after one.
 pub const KEEP_ALIVE_PROTO: u32 = 2;
 
-/// Chunk size for streaming a file back over `fs.read`.
+/// Read size for exec, pty and session output.
 pub const READ_CHUNK: usize = 32 * 1024;
 /// Chunk size for bulk streams; stays under MAX_FRAME after base64.
 pub const BULK_CHUNK: usize = 256 * 1024;

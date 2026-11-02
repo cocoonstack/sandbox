@@ -52,7 +52,7 @@ pub fn rand_token() -> std::io::Result<String> {
         .collect())
 }
 
-/// SIGKILLs the group led by `pgid`, so a session's external command dies with its shell; a synthetic id misses with ESRCH.
+/// SIGKILLs the group led by `pgid`, so a session's external command dies with its shell.
 pub fn kill_group(pgid: u32) {
     if is_valid_pid(pgid) {
         send_signal(-(pgid as libc::pid_t), libc::SIGKILL);
