@@ -143,6 +143,8 @@ func TestFetchOutlivesTheCallerThatStartedIt(t *testing.T) {
 	metaKey := "ck/" + id + "/" + store.MetaFile
 	fake := &fakeS3{objects: map[string][]byte{}, exportGate: make(chan struct{}), exportEntered: make(chan struct{}, 1)}
 	st := newTestStore(t, fake)
+	release := sync.OnceFunc(func() { close(fake.exportGate) })
+	t.Cleanup(release)
 	publishRecord(t, st, id, []byte(`{"id":"`+id+`"}`), "payload")
 	fake.resetRequests()
 
@@ -169,10 +171,10 @@ func TestFetchOutlivesTheCallerThatStartedIt(t *testing.T) {
 			t.Fatalf("first caller's Fetch = %v, want its own cancellation", err)
 		}
 	case <-time.After(5 * time.Second):
-		close(fake.exportGate)
+		release()
 		t.Fatal("first caller's Fetch still blocked on the stalled download after it hung up")
 	}
-	close(fake.exportGate)
+	release()
 	if err := <-joined; err != nil {
 		t.Fatalf("second caller's Fetch = %v after the first caller hung up, want the shared download", err)
 	}
@@ -461,7 +463,7 @@ func TestSparseExportStaysSparseThroughS3(t *testing.T) {
 		t.Fatalf("fetched size = %v, %v, want %d", info, err, size)
 	}
 	if fileSum(t, got) != srcSum {
-		t.Errorf("fetched content differs from the source")
+		t.Error("fetched content differs from the source")
 	}
 	if blocks := allocatedBytes(t, got); blocks > uploaded+(1<<20) {
 		t.Errorf("fetched file allocates %d bytes, want at most the %d uploaded", blocks, uploaded)
@@ -605,7 +607,7 @@ func TestLineageDedupUploadsOnlyChangedChunks(t *testing.T) {
 		t.Fatalf("Fetch: %v", err)
 	}
 	if fileSum(t, filepath.Join(dir, "disk.img")) != srcSum {
-		t.Errorf("fetched content differs from the source")
+		t.Error("fetched content differs from the source")
 	}
 }
 
@@ -785,8 +787,10 @@ func TestFetchFileDownloadsOnlyTheRequestedFile(t *testing.T) {
 func TestFetchFileInstallsOnlyACompleteDownload(t *testing.T) {
 	const id = "ck_00000000000000aa"
 	meta := []byte(`{"id":"` + id + `"}`)
-	fake := &fakeS3{objects: map[string][]byte{}, exportGate: make(chan struct{}), exportEntered: make(chan struct{}, 1)}
+	fake := &fakeS3{objects: map[string][]byte{}, exportGate: make(chan struct{}), exportEntered: make(chan struct{}, 1), gateOn: "/chunks/"}
 	st := newTestStore(t, fake)
+	release := sync.OnceFunc(func() { close(fake.exportGate) })
+	t.Cleanup(release)
 	publishRecord(t, st, id, meta, "disk-bytes")
 	dst := filepath.Join(t.TempDir(), "disk.img")
 
@@ -798,7 +802,7 @@ func TestFetchFileInstallsOnlyACompleteDownload(t *testing.T) {
 	if _, err := os.Stat(dst); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("a download in flight is already visible at the destination: %v", err)
 	}
-	close(fake.exportGate)
+	release()
 	if err := <-fetched; err != nil {
 		t.Fatalf("FetchFile: %v", err)
 	}
@@ -828,7 +832,7 @@ func TestFetchFileKeepsHoles(t *testing.T) {
 		t.Fatalf("fetched size = %v, %v, want %d", info, err, size)
 	}
 	if fileSum(t, dst) != srcSum {
-		t.Errorf("fetched content differs from the source")
+		t.Error("fetched content differs from the source")
 	}
 	if blocks, limit := allocatedBytes(t, dst), 2*store.DigestChunkSize+1<<20; blocks > limit {
 		t.Errorf("fetched file allocates %d bytes, want at most %d for two data chunks", blocks, limit)
@@ -977,11 +981,12 @@ type fakeS3 struct {
 	failDelete    bool
 	exportGate    chan struct{}
 	exportEntered chan struct{}
+	gateOn        string
 }
 
 func (f *fakeS3) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	key := strings.TrimPrefix(r.URL.Path, "/testbucket/")
-	if f.exportGate != nil && r.Method == http.MethodGet && strings.Contains(key, "/"+store.ExportDir) {
+	if f.exportGate != nil && r.Method == http.MethodGet && strings.Contains(key, cmp.Or(f.gateOn, "/"+store.ExportDir)) {
 		select {
 		case f.exportEntered <- struct{}{}:
 		default:
@@ -1145,8 +1150,8 @@ func (f *fakeS3) handleListObjects(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		if delim != "" {
-			if i := strings.Index(key[len(prefix):], delim); i >= 0 {
-				common := key[:len(prefix)+i+1]
+			if before, _, ok := strings.Cut(key[len(prefix):], delim); ok {
+				common := prefix + before + delim
 				if !seen[common] {
 					seen[common] = true
 					result.CommonPrefixes = append(result.CommonPrefixes, commonPrefix{Prefix: common})

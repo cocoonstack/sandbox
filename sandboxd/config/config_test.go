@@ -101,10 +101,11 @@ func TestAutoRefillConcurrency(t *testing.T) {
 }
 
 func TestLoadRejectsInvalid(t *testing.T) {
+	t.Setenv("SANDBOX_TEST_DSN", "postgres://sandboxd@db/sandboxd")
 	for _, tt := range []struct {
 		name, body, want string
 	}{
-		{"bad json", `{`, "config"},
+		{"bad json", `{`, "parse config"},
 		{"bad fork count", `{"max_fork_count":-1,"pools":[]}`, "max_fork_count"},
 		{"egress conn rate without a rate", `{"egress_conn_rate":{"per_second":0,"burst":10},"pools":[]}`, "egress_conn_rate"},
 		{"egress conn rate without a burst", `{"egress_conn_rate":{"per_second":30},"pools":[]}`, "egress_conn_rate"},
@@ -130,7 +131,7 @@ func TestLoadRejectsInvalid(t *testing.T) {
 		{"pool egress unknown secret", `{"pools":[{"template":"rt:24.04","net":"none","size":"small","egress":{"allow":[{"host":"api.github.com","secret":"gh"}]}}]}`, "unknown secret"},
 		{"meta_store unknown kind", `{"api_token":"r","pools":[],"meta_store":{"kind":"redis","dsn_env":"HOME"}}`, "not supported"},
 		{"meta_store dsn env unset", `{"api_token":"r","pools":[],"meta_store":{"kind":"pg","dsn_env":"SANDBOX_TEST_UNSET_DSN"}}`, "must name a set node env"},
-		{"meta_store bad cell", `{"api_token":"r","pools":[],"meta_store":{"kind":"pg","dsn_env":"HOME","cell":"Cell A"}}`, "meta_store.cell"},
+		{"meta_store bad cell", `{"api_token":"r","pools":[],"meta_store":{"kind":"pg","dsn_env":"SANDBOX_TEST_DSN","cell":"Cell A"}}`, "meta_store.cell"},
 		{"egress class unknown secret", `{"pools":[],"egress_classes":[{"name":"desk","egress":{"allow":[{"host":"x","secret":"gh"}]}}]}`, "unknown secret"},
 		{"egress class intercepts", `{"pools":[],"egress_classes":[{"name":"desk","egress":{"allow":[{"host":"x","intercept":true}]}}]}`, "only be set on a pool rule"},
 		{"egress class without egress", `{"pools":[],"egress_classes":[{"name":"desk"}]}`, "needs egress"},
