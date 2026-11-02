@@ -1206,29 +1206,18 @@ func TestFailoverARepeatedAdoptionOfAReleasedClaimIsRefused(t *testing.T) {
 		t.Fatalf("adopt: %v %v", adopted, err)
 	}
 	cur, _ := b.byID(sb.ID)
-	before, _, _ := c.reg.Get(t.Context(), sb.ID)
+	ck := cur.ArchiveCk
+	if err := b.Release(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
+		t.Fatalf("release: %v", err)
+	}
 
-	cur.Transition.Lock()
-	adopted := make(chan bool, 1)
-	go func() {
-		ok, err := b.AdoptArchived(t.Context(), sb.ID, sb.Token)
-		if err != nil {
-			t.Errorf("repeated adopt: %v", err)
-		}
-		adopted <- ok
-	}()
-	waitFor(t, func() bool { rec, _, _ := c.reg.Get(t.Context(), sb.ID); return rec.Epoch != before.Epoch })
-	time.Sleep(50 * time.Millisecond)
-	b.forgetClaim(t.Context(), cur)
-	cur.Transition.Unlock()
-
-	if <-adopted {
-		t.Error("a repeated adoption answered for a claim released under it")
+	if adopted, err := b.AdoptArchived(t.Context(), sb.ID, sb.Token); err != nil || adopted {
+		t.Errorf("repeated adopt of a released claim: %v %v, want refused", adopted, err)
 	}
 	if rec, ok, _ := c.reg.Get(t.Context(), sb.ID); ok {
 		t.Errorf("row %+v outlived the released claim", rec)
 	}
-	if ckExists(t, b, cur.ArchiveCk) {
+	if ckExists(t, b, ck) {
 		t.Error("the retired row's checkpoint outlived it")
 	}
 }
@@ -1385,24 +1374,18 @@ func TestFailoverAWakeKeepsItsFenceAgainstThisNodesOwnAdoption(t *testing.T) {
 	if adopted, err := b.AdoptArchived(t.Context(), sb.ID, sb.Token); err != nil || !adopted {
 		t.Fatalf("adopt: %v %v", adopted, err)
 	}
-	second := make(chan bool, 1)
 	b.archives = &hookRegistry{Registry: c.reg, beforeConsume: func() {
 		taken, _, _ := c.reg.Get(t.Context(), sb.ID)
-		go func() {
-			ok, err := b.AdoptArchived(t.Context(), sb.ID, sb.Token)
-			if err != nil {
-				t.Errorf("second adopt: %v", err)
-			}
-			second <- ok
-		}()
-		waitFor(t, func() bool { rec, _, _ := c.reg.Get(t.Context(), sb.ID); return rec.Epoch != taken.Epoch })
+		if adopted, err := b.AdoptArchived(t.Context(), sb.ID, sb.Token); err != nil || !adopted {
+			t.Errorf("racing adopt: %v %v, want this node to answer for the claim", adopted, err)
+		}
+		if rec, _, _ := c.reg.Get(t.Context(), sb.ID); rec.Epoch != taken.Epoch {
+			t.Errorf("the racing adoption moved the row from epoch %d to %d under the wake", taken.Epoch, rec.Epoch)
+		}
 	}}
 
 	if _, _, _, err := b.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
 		t.Fatalf("wake raced by this node's own adoption: %v, want it to commit", err)
-	}
-	if !<-second {
-		t.Error("the racing adoption answered that this node does not hold the claim")
 	}
 	held, ok := b.byID(sb.ID)
 	if !ok || held.ArchiveCk != "" {

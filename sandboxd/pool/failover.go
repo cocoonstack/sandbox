@@ -31,9 +31,13 @@ func (m *Manager) AdoptArchived(ctx context.Context, id, token string) (bool, er
 func (m *Manager) adoptArchived(ctx context.Context, id, token string) (bool, error) {
 	m.mu.Lock()
 	draining := m.draining
+	_, held := m.authed(id, token)
 	m.mu.Unlock()
-	if draining {
+	switch {
+	case draining:
 		return false, nil
+	case held:
+		return true, nil
 	}
 	ctx = context.WithoutCancel(ctx)
 	rec, ok, err := m.archives.Get(ctx, id)
@@ -61,10 +65,6 @@ func (m *Manager) adoptArchived(ctx context.Context, id, token string) (bool, er
 	if sb.Deadline.IsZero() {
 		sb.Deadline = m.retentionDeadline(sb.Key)
 	}
-	if cur, dup := m.claimed[id]; dup {
-		m.mu.Unlock()
-		return m.adoptHeld(ctx, cur, epoch), nil
-	}
 	m.addClaimLocked(sb)
 	js := m.store.set(sb)
 	m.mu.Unlock()
@@ -75,25 +75,6 @@ func (m *Manager) adoptArchived(ctx context.Context, id, token string) (bool, er
 	m.recordUsage(ctx, usage.Event{Event: "adopt", ID: id, Reference: rec.Checkpoint, Tenant: sb.Tenant, Deadline: m.deadlineOf(sb)})
 	log.WithFunc("pool.adoptArchived").Infof(ctx, "adopted archived sandbox %s from %s", id, rec.Owner)
 	return true, nil
-}
-
-func (m *Manager) adoptHeld(ctx context.Context, cur *types.Sandbox, epoch int64) bool {
-	cur.Transition.Lock()
-	defer cur.Transition.Unlock()
-	m.mu.Lock()
-	held := m.claimed[cur.ID] == cur
-	m.mu.Unlock()
-	if held {
-		_, _ = m.commitIfLive(ctx, cur, func() { cur.ArchiveEpoch = epoch })
-		return true
-	}
-	if rec, ok, err := m.archives.Get(ctx, cur.ID); err == nil && ok && rec.Owner == m.nodeID && !rec.Consumed {
-		if consumed, err := m.archives.Consume(ctx, cur.ID, rec.Epoch); err == nil {
-			rec.Epoch, rec.Consumed = consumed, true
-			m.purgeArchiveRow(ctx, rec)
-		}
-	}
-	return false
 }
 
 func (m *Manager) putArchive(ctx context.Context, sb *types.Sandbox, ck string) (int64, error) {
