@@ -168,10 +168,11 @@ func (m *Manager) recordEgress(ctx context.Context, id, tenant string, ev egress
 			Time time.Time `json:"t"`
 			ID   string    `json:"id"`
 			egressFrame
-		}{time.Now(), id, egressFrame{
+		}{
+			Time: time.Now(), ID: id,
 			Op: egressEvent, Dest: ev.Host, Method: ev.Method, Port: ev.Port, Decision: decision, Secret: ev.Injected, Upstream: ev.Upstream,
 			Tenant: tenant, Src: ev.Local, Dst: ev.Remote,
-		}})
+		})
 	}
 	m.recordUsage(ctx, usage.Event{Event: egressEvent, ID: id, Tenant: tenant, Reference: ev.Host, Upstream: ev.Upstream, Secret: ev.Injected})
 }

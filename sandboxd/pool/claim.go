@@ -40,7 +40,6 @@ type ClaimOptions struct {
 	EgressClass string
 }
 
-// apply stamps the options a claim carries for its life.
 func (o ClaimOptions) apply(sb *types.Sandbox) {
 	sb.Tenant, sb.ClaimRef, sb.Metadata, sb.OnExpire, sb.NoEgress = o.Tenant, o.ClaimRef, o.Metadata, o.OnExpire.Or(""), o.NoEgress
 	sb.EgressClass = o.EgressClass
@@ -321,7 +320,7 @@ func (m *Manager) releaseResolved(ctx context.Context, id string, sb *types.Sand
 	m.mu.Unlock()
 	if saveErr := m.store.commit(js); saveErr != nil {
 		m.mu.Lock()
-		m.addClaimLocked(sb) // roll back so memory matches the still-durable claim
+		m.addClaimLocked(sb)
 		m.restoreVolumeHolds(sb, volumeHolds)
 		delete(m.pendingCks, ck)
 		rb := m.store.set(sb)
@@ -383,7 +382,6 @@ func (m *Manager) admitVolumes(tenant string, volumes []resolvedVolume) ([]types
 	return applied, nil
 }
 
-// admitClaim refuses a busy or retired volume or an over-quota tenant before any VM is built.
 func (m *Manager) admitClaim(tenant string, volumes []resolvedVolume, applied []types.Volume) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -515,12 +513,6 @@ func (m *Manager) finalizeBatch(ctx context.Context, sbs []*types.Sandbox, ttl t
 	return nil
 }
 
-func (m *Manager) deadlineOf(sb *types.Sandbox) time.Time {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return sb.Deadline
-}
-
 // rollbackClaim unwinds a claim batch: a NIC that cannot be locked is never handed out.
 func (m *Manager) rollbackClaim(ctx context.Context, sbs []*types.Sandbox) {
 	m.mu.Lock()
@@ -552,6 +544,7 @@ func (m *Manager) reapOnce(ctx context.Context) {
 	type victim struct {
 		action                       reapAction
 		id, vmName, snap, ck, tenant string
+		deadline                     time.Time
 		sb                           *types.Sandbox
 		holds                        []types.Volume
 	}
@@ -571,7 +564,7 @@ func (m *Manager) reapOnce(ctx context.Context) {
 				unrows = append(unrows, sb)
 			}
 		case sb.ArchiveCk != "":
-			expired = append(expired, victim{action: reapPurge, id: id, ck: sb.ArchiveCk, tenant: sb.Tenant, sb: sb})
+			expired = append(expired, victim{action: reapPurge, id: id, ck: sb.ArchiveCk, tenant: sb.Tenant, deadline: sb.Deadline, sb: sb})
 			purges = append(purges, sb.ArchiveCk)
 		case m.archivesAtDeadline(sb):
 			// archive instead of destroy, kept in m.claimed for archive() to move
@@ -585,7 +578,7 @@ func (m *Manager) reapOnce(ctx context.Context) {
 			}
 			expired = append(expired, victim{action: action, id: id, sb: sb})
 		default:
-			expired = append(expired, victim{action: reapDestroy, id: id, vmName: sb.VMName, snap: sb.HibernateSnap, tenant: sb.Tenant, sb: sb, holds: m.cancelVolumeRun(sb)})
+			expired = append(expired, victim{action: reapDestroy, id: id, vmName: sb.VMName, snap: sb.HibernateSnap, tenant: sb.Tenant, deadline: sb.Deadline, sb: sb, holds: m.cancelVolumeRun(sb)})
 			m.dropClaimLocked(sb)
 			dropped = append(dropped, id)
 		}
@@ -642,7 +635,7 @@ func (m *Manager) reapOnce(ctx context.Context) {
 			if v.action == reapArchive || v.action == reapPause {
 				delete(m.archiving, v.id) // never removed from m.claimed
 			} else {
-				m.addClaimLocked(v.sb) // roll back so memory matches the still-durable claim
+				m.addClaimLocked(v.sb)
 				m.restoreVolumeHolds(v.sb, v.holds)
 				delete(m.pendingCks, v.ck)
 				restored = append(restored, v.sb)
@@ -668,7 +661,7 @@ func (m *Manager) reapOnce(ctx context.Context) {
 			m.purgeArchiveCk(ctx, v.id, v.ck, v.tenant)
 			m.untrack(m.pendingCks, v.ck)
 			m.counters.reaps.Add(1)
-			m.recordUsage(ctx, usage.Event{Event: reapEvent, ID: v.id, Tenant: v.tenant})
+			m.recordUsage(ctx, usage.Event{Event: reapEvent, ID: v.id, Tenant: v.tenant, Deadline: v.deadline})
 			logger.Infof(ctx, "purged archived sandbox %s", v.id)
 		case reapArchive:
 			logSweepResult(ctx, logger, m.archive(ctx, v.sb), "archived expired sandbox "+v.id, "archive expired sandbox "+v.id)
@@ -680,7 +673,7 @@ func (m *Manager) reapOnce(ctx context.Context) {
 			m.out.Disarm(v.id, m.removeOrRetry(ctx, v.vmName, v.id, td))
 			m.dropSnap(ctx, v.snap)
 			m.counters.reaps.Add(1)
-			m.recordUsage(ctx, usage.Event{Event: reapEvent, ID: v.id, VMName: v.vmName, Tenant: v.tenant})
+			m.recordUsage(ctx, usage.Event{Event: reapEvent, ID: v.id, VMName: v.vmName, Tenant: v.tenant, Deadline: v.deadline})
 			logger.Infof(ctx, "reaped expired sandbox %s (%s)", v.id, v.vmName)
 		}
 	})
@@ -744,7 +737,13 @@ func (m *Manager) claim(id, token string) (*types.Sandbox, bool) {
 	return m.authed(id, token)
 }
 
-// authed looks up a claim by id and token; callers hold m.mu.
+func (m *Manager) deadlineOf(sb *types.Sandbox) time.Time {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return sb.Deadline
+}
+
+// Callers hold m.mu.
 func (m *Manager) authed(id, token string) (*types.Sandbox, bool) {
 	sb := m.claimed[id]
 	if sb == nil || subtle.ConstantTimeCompare([]byte(sb.Token), []byte(token)) != 1 {

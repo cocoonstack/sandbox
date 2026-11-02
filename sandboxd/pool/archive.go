@@ -150,7 +150,6 @@ func (m *Manager) archive(ctx context.Context, sb *types.Sandbox) error {
 	js := m.store.set(sb)
 	m.mu.Unlock()
 	if saveErr := m.store.commit(js); saveErr != nil {
-		// roll back so memory matches the still-durable hibernated record
 		m.mu.Lock()
 		var rb claimSnapshot
 		// a Release that landed meanwhile already deleted the claim; re-setting it would resurrect it
@@ -180,7 +179,7 @@ func (m *Manager) archive(ctx context.Context, sb *types.Sandbox) error {
 	return nil
 }
 
-// wakeArchived restores an archived claim into a fresh local VM; caller holds Transition.
+// Caller holds Transition.
 func (m *Manager) wakeArchived(ctx context.Context, sb *types.Sandbox) (string, error) {
 	// egress never archives; a corrupt archived egress claim must fail closed.
 	if sb.Key.Net == types.NetEgress {
@@ -221,7 +220,7 @@ func (m *Manager) wakeArchived(ctx context.Context, sb *types.Sandbox) (string, 
 	}
 	live, saved := m.commitWake(ctx, sb, built.VMName, built.VsockSocket)
 	if !live || !saved {
-		m.destroy(ctx, built.VMName) // released, or persist rolled back to archived
+		m.destroy(ctx, built.VMName)
 		if !live {
 			return "", ErrUnknownSandbox
 		}
@@ -249,7 +248,6 @@ func (m *Manager) wakeArchived(ctx context.Context, sb *types.Sandbox) (string, 
 	return built.VsockSocket, nil
 }
 
-// commitWake swaps an archived record back to a live VM if the claim is still live.
 func (m *Manager) commitWake(ctx context.Context, sb *types.Sandbox, vmName, sock string) (live, saved bool) {
 	m.mu.Lock()
 	live = m.claimed[sb.ID] == sb

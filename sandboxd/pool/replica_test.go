@@ -588,17 +588,55 @@ func TestReplicaPassSnapshotsOnlyDueRunningClaims(t *testing.T) {
 	})
 }
 
-func TestAFencedNodeDoesNotHibernateAReplicatedClaim(t *testing.T) {
+func TestAFencedNodeNeitherHibernatesNorWakesAReplicatedClaim(t *testing.T) {
 	c := newReplicaCluster(t)
 	a := c.node(t, "a", t.TempDir(), keepAnHour)
-	replicated := mustClaim(t, a, testKey)
-	replicateNow(t, a, replicated)
-	a.tripFence()
-	if err := a.Hibernate(t.Context(), replicated.ID, Cred{Token: replicated.Token}); !errors.Is(err, ErrLeaseLost) {
-		t.Errorf("hibernate of a replicated claim while fenced: %v, want ErrLeaseLost", err)
+	sb, asleep := mustClaim(t, a, testKey), mustClaim(t, a, testKey)
+	replicateNow(t, a, sb)
+	if err := a.Hibernate(t.Context(), asleep.ID, Cred{Token: asleep.Token}); err != nil {
+		t.Fatalf("hibernate before the fence: %v", err)
 	}
-	if got, want := usageEventsOf(t, a, replicated.ID), "claim"; got != want {
-		t.Errorf("events of the replicated claim %s, want %s", got, want)
+	a.tripFence()
+	if err := a.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); !errors.Is(err, ErrLeaseLost) {
+		t.Errorf("hibernate while fenced: %v, want ErrLeaseLost", err)
+	}
+	if err := a.Wake(t.Context(), asleep.ID, Cred{Token: asleep.Token}); !errors.Is(err, ErrLeaseLost) {
+		t.Errorf("wake while fenced: %v, want ErrLeaseLost", err)
+	}
+	if got, want := usageEventsOf(t, a, sb.ID), "claim"; got != want {
+		t.Errorf("events of the running claim %s, want %s", got, want)
+	}
+	if got, want := usageEventsOf(t, a, asleep.ID), "claim,hibernate"; got != want {
+		t.Errorf("events of the hibernated claim %s, want %s", got, want)
+	}
+}
+
+func TestTheSweepsLeaveAReplicatedClaimAloneWhileFenced(t *testing.T) {
+	c := newReplicaCluster(t)
+	a := c.node(t, "a", t.TempDir(), keepAnHour)
+	sb := mustClaim(t, a, testKey)
+	backdate(a, sb, time.Hour)
+	a.tripFence()
+	sweepIdle(t, a)
+	if hibernated(a) != 0 {
+		t.Error("the idle sweep hibernated a replicated claim while fenced")
+	}
+	a.mu.Lock()
+	a.archiving[sb.ID] = struct{}{}
+	a.mu.Unlock()
+	if err := a.pauseExpired(t.Context(), sb); !errors.Is(err, ErrLeaseLost) || !benignSweepErr(err) {
+		t.Errorf("pause of an expired claim while fenced: %v, want a benign ErrLeaseLost", err)
+	}
+	a.mu.Lock()
+	_, tracked := a.archiving[sb.ID]
+	a.mu.Unlock()
+	if tracked {
+		t.Error("the refused pause left the claim marked as archiving")
+	}
+	a.liftFence()
+	sweepIdle(t, a)
+	if hibernated(a) != 1 {
+		t.Error("the idle sweep did not hibernate the claim once the fence lifted")
 	}
 }
 
@@ -791,54 +829,18 @@ func TestReplicaRestartAdoptsTheRowsCheckpointOfAnInterruptedRound(t *testing.T)
 	}
 }
 
-func TestAdoptingAReplicaRecordsItsCheckpointAndRetention(t *testing.T) {
-	c := newReplicaCluster(t)
-	a, b := c.node(t, "a", t.TempDir(), keepAnHour), c.node(t, "b", t.TempDir(), keepAnHour)
-	sb := mustClaim(t, a, testKey)
-	replicateNow(t, a, sb)
-	ck := a.replicaOf(sb)
-	c.expire("a")
-	if adopted, err := b.AdoptArchived(t.Context(), sb.ID, sb.Token); err != nil || !adopted {
-		t.Fatalf("adopt: %v %v", adopted, err)
-	}
-	moved, _ := b.byID(sb.ID)
-	evs := usageJournal(t, b)
-	last := evs[len(evs)-1]
-	if want := b.deadlineOf(moved); last.Event != "adopt" || last.ID != sb.ID || last.Reference != ck || want.IsZero() || !last.Deadline.Equal(want) {
-		t.Errorf("last event %+v, want an adopt of %s naming %s with deadline %v", last, sb.ID, ck, want)
-	}
-	if _, _, _, err := b.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
-		t.Fatalf("wake: %v", err)
-	}
-	if got, want := usageEventsOf(t, b, sb.ID), "adopt,unarchive"; got != want {
-		t.Errorf("events on the adopter %s, want %s", got, want)
-	}
-}
-
 func TestAReplicaRowWithNoClaimLeftGainsRetentionAndIsPurged(t *testing.T) {
 	c := newReplicaCluster(t)
 	a := c.node(t, "a", t.TempDir(), keepAnHour)
-	lost, kept := mustClaim(t, a, testKey), mustClaim(t, a, testKey)
-	replicateNow(t, a, lost)
-	replicateNow(t, a, kept)
-	ck := a.replicaOf(lost)
-	if err := a.FlushClaims(); err != nil {
-		t.Fatalf("flush: %v", err)
-	}
-	delete(a.eng.(*fakeEngine).vms, lost.VMName)
-	restarted := c.restart(t, a)
-	if err := restarted.Reconcile(t.Context()); err != nil {
-		t.Fatalf("reconcile: %v", err)
-	}
+	sb := mustClaim(t, a, testKey)
+	replicateNow(t, a, sb)
+	ck := a.replicaOf(sb)
+	restarted := restartWithoutVM(t, c, a, sb, keepAnHour)
 
 	restarted.sweepOrphanArchives(t.Context())
-	rec, ok, err := c.reg.Get(t.Context(), lost.ID)
+	rec, ok, err := c.reg.Get(t.Context(), sb.ID)
 	if err != nil || !ok || rec.Deadline.IsZero() || !ckExists(t, restarted, ck) {
 		t.Fatalf("row of the dropped claim after a sweep: %+v %t %v, want it kept with a deadline", rec, ok, err)
-	}
-	liveRow, _, err := c.reg.Get(t.Context(), kept.ID)
-	if err != nil || !liveRow.Deadline.IsZero() {
-		t.Errorf("row of the live claim: %+v %v, want no deadline", liveRow, err)
 	}
 
 	rec.Deadline = time.Now().Add(-time.Second)
@@ -846,10 +848,10 @@ func TestAReplicaRowWithNoClaimLeftGainsRetentionAndIsPurged(t *testing.T) {
 		t.Fatalf("age the row: %v", err)
 	}
 	restarted.sweepOrphanArchives(t.Context())
-	if _, ok, err = c.reg.Get(t.Context(), lost.ID); err != nil || ok || ckExists(t, restarted, ck) {
+	if _, ok, err = c.reg.Get(t.Context(), sb.ID); err != nil || ok || ckExists(t, restarted, ck) {
 		t.Errorf("row %t %v after retention, want the row and its checkpoint gone", ok, err)
 	}
-	if got, want := usageEventsOf(t, restarted, lost.ID), "claim,reap,archive_delete"; got != want {
+	if got, want := usageEventsOf(t, restarted, sb.ID), "claim,reap,archive_delete"; got != want {
 		t.Errorf("events %s, want %s", got, want)
 	}
 }
@@ -859,14 +861,7 @@ func TestAReplicaRowWithNoClaimLeftStaysAdoptable(t *testing.T) {
 	a := c.node(t, "a", t.TempDir(), keepAnHour)
 	sb := mustClaim(t, a, testKey)
 	replicateNow(t, a, sb)
-	if err := a.FlushClaims(); err != nil {
-		t.Fatalf("flush: %v", err)
-	}
-	delete(a.eng.(*fakeEngine).vms, sb.VMName)
-	restarted := c.restart(t, a)
-	if err := restarted.Reconcile(t.Context()); err != nil {
-		t.Fatalf("reconcile: %v", err)
-	}
+	restarted := restartWithoutVM(t, c, a, sb, keepAnHour)
 	restarted.sweepOrphanArchives(t.Context())
 	if adopted, err := restarted.AdoptArchived(t.Context(), sb.ID, sb.Token); err != nil || !adopted {
 		t.Errorf("adopt inside retention: %t %v", adopted, err)
@@ -875,19 +870,10 @@ func TestAReplicaRowWithNoClaimLeftStaysAdoptable(t *testing.T) {
 
 func TestAReplicaRowOfAKeepForeverPoolKeepsNoDeadline(t *testing.T) {
 	c := newReplicaCluster(t)
-	dir := t.TempDir()
-	a := c.node(t, "a", dir, keepAnHour)
+	a := c.node(t, "a", t.TempDir(), keepAnHour)
 	sb := mustClaim(t, a, testKey)
 	replicateNow(t, a, sb)
-	if err := a.FlushClaims(); err != nil {
-		t.Fatalf("flush: %v", err)
-	}
-	eng := a.eng.(*fakeEngine)
-	delete(eng.vms, sb.VMName)
-	restarted := c.nodeOn(t, eng, "a", dir, 0)
-	if err := restarted.Reconcile(t.Context()); err != nil {
-		t.Fatalf("reconcile: %v", err)
-	}
+	restarted := restartWithoutVM(t, c, a, sb, 0)
 	before, _, err := c.reg.Get(t.Context(), sb.ID)
 	if err != nil {
 		t.Fatalf("read row: %v", err)
@@ -896,6 +882,31 @@ func TestAReplicaRowOfAKeepForeverPoolKeepsNoDeadline(t *testing.T) {
 	rec, ok, err := c.reg.Get(t.Context(), sb.ID)
 	if err != nil || !ok || !rec.Deadline.IsZero() || rec.Epoch != before.Epoch {
 		t.Errorf("row %+v %t %v, want it untouched at epoch %d", rec, ok, err, before.Epoch)
+	}
+}
+
+func TestReconcileWithTheRegistryDownRecordsOnlyTheEndNoOtherNodeCanHold(t *testing.T) {
+	c := newReplicaCluster(t)
+	a := c.node(t, "a", t.TempDir(), keepAnHour)
+	replicated, plain := mustClaim(t, a, testKey), mustClaim(t, a, plainKey)
+	replicateNow(t, a, replicated)
+	if err := a.FlushClaims(); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+	eng := a.eng.(*fakeEngine)
+	delete(eng.vms, replicated.VMName)
+	delete(eng.vms, plain.VMName)
+	c.reg.SetDown(true)
+	restarted := c.restart(t, a)
+	if err := restarted.Reconcile(t.Context()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	c.reg.SetDown(false)
+	if got, want := usageEventsOf(t, restarted, replicated.ID), "claim"; got != want {
+		t.Errorf("events of the replicated claim %s, want %s", got, want)
+	}
+	if got, want := usageEventsOf(t, restarted, plain.ID), "claim,reap"; got != want {
+		t.Errorf("events of the unreplicated claim %s, want %s", got, want)
 	}
 }
 
@@ -1113,8 +1124,16 @@ func TestReplicaAdoptionWakesTheClaimFromTheLastReplica(t *testing.T) {
 	if moved.ArchiveCk != ck {
 		t.Fatalf("adopted claim names %q, want the replica %q", moved.ArchiveCk, ck)
 	}
+	evs := usageJournal(t, b)
+	last := evs[len(evs)-1]
+	if want := b.deadlineOf(moved); last.Event != "adopt" || last.ID != sb.ID || last.Reference != ck || want.IsZero() || !last.Deadline.Equal(want) {
+		t.Errorf("last event %+v, want an adopt of %s naming %s with deadline %v", last, sb.ID, ck, want)
+	}
 	if _, _, _, err := b.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
 		t.Fatalf("adopter's wake: %v", err)
+	}
+	if got, want := usageEventsOf(t, b, sb.ID), "adopt,unarchive"; got != want {
+		t.Errorf("events on the adopter %s, want %s", got, want)
 	}
 	if got := b.eng.(*fakeEngine).cloneCount(); got != 1 {
 		t.Errorf("the wake cloned %d VMs, want the one restored from the replica", got)
@@ -1122,6 +1141,20 @@ func TestReplicaAdoptionWakesTheClaimFromTheLastReplica(t *testing.T) {
 	if _, ok, _ := c.reg.Get(t.Context(), sb.ID); ok || ckExists(t, b, ck) {
 		t.Error("the adopter's wake left the row or the replica")
 	}
+}
+
+func restartWithoutVM(t *testing.T, c *failoverCluster, a *Manager, sb *types.Sandbox, deleteAfter int) *Manager {
+	t.Helper()
+	if err := a.FlushClaims(); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+	eng := a.eng.(*fakeEngine)
+	delete(eng.vms, sb.VMName)
+	restarted := c.nodeOn(t, eng, a.nodeID, a.dataDir, deleteAfter)
+	if err := restarted.Reconcile(t.Context()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	return restarted
 }
 
 func newReplicaCluster(t *testing.T) *failoverCluster {

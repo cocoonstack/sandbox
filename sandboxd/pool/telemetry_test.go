@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/cocoonstack/sandbox/sandboxd/config"
@@ -195,6 +196,10 @@ func TestEveryClaimScopedUsageEventCarriesTheTenant(t *testing.T) {
 	expire(m, children[0])
 	m.reapOnce(ctx)
 	waitFor(t, func() bool { return strings.HasSuffix(usageEventsOf(t, m, children[0].ID), ",reap") })
+	evs := usageJournal(t, m)
+	if last := evs[len(evs)-1]; last.ID != children[0].ID || !last.Deadline.Equal(children[0].Deadline) {
+		t.Errorf("reap %+v, want the deadline it ended under, %v", last, children[0].Deadline)
+	}
 
 	kinds := map[string]bool{}
 	for _, ev := range usageJournal(t, m) {
@@ -243,6 +248,20 @@ func TestEveryEventThatMovesTheDeadlineStatesIt(t *testing.T) {
 	assertDeadline("unarchive")
 }
 
+func TestAPurgeReapStatesTheRetentionEnd(t *testing.T) {
+	m := newTestManager(t, newFakeEngine(), archivePool(3600))
+	sb := mustClaim(t, m, testKey)
+	mustArchive(t, m, sb)
+	expire(m, sb)
+	want := m.deadlineOf(sb)
+	m.reapOnce(t.Context())
+	waitFor(t, func() bool { return strings.HasSuffix(usageEventsOf(t, m, sb.ID), ",reap") })
+	evs := usageJournal(t, m)
+	if last := evs[len(evs)-1]; !last.Deadline.Equal(want) {
+		t.Errorf("purge reap deadline %v, want %v", last.Deadline, want)
+	}
+}
+
 func TestAnArchiveKeptForeverStatesNoDeadline(t *testing.T) {
 	m := newTestManager(t, newFakeEngine(), archivePool(0))
 	sb := mustClaim(t, m, testKey)
@@ -254,30 +273,32 @@ func TestAnArchiveKeptForeverStatesNoDeadline(t *testing.T) {
 }
 
 func TestArchiveEventPrecedesAWakeDuringItsTeardown(t *testing.T) {
-	eng := newFakeEngine()
-	m := newTestManager(t, eng, archivePool(3600))
-	ctx := t.Context()
-	sb := mustClaim(t, m, testKey)
-	if err := m.Hibernate(ctx, sb.ID, Cred{Token: sb.Token}); err != nil {
-		t.Fatalf("hibernate: %v", err)
-	}
-	stall := make(chan struct{})
-	eng.mu.Lock()
-	eng.removeStall = stall
-	eng.mu.Unlock()
-	archived := make(chan error, 1)
-	go func() { archived <- m.archive(ctx, sb) }()
-	waitFor(t, func() bool { return archivedCount(m) == 1 })
-	if _, _, _, err := m.WakeAgentSocket(ctx, sb.ID, sb.Token); err != nil {
-		t.Fatalf("wake: %v", err)
-	}
-	close(stall)
-	if err := <-archived; err != nil {
-		t.Fatalf("archive: %v", err)
-	}
-	if got, want := usageEventsOf(t, m, sb.ID), "claim,hibernate,archive,unarchive"; got != want {
-		t.Errorf("events %s, want %s", got, want)
-	}
+	synctest.Test(t, func(t *testing.T) {
+		eng := newFakeEngine()
+		m := newTestManager(t, eng, archivePool(3600))
+		ctx := t.Context()
+		sb := mustClaim(t, m, testKey)
+		if err := m.Hibernate(ctx, sb.ID, Cred{Token: sb.Token}); err != nil {
+			t.Fatalf("hibernate: %v", err)
+		}
+		stall := make(chan struct{})
+		eng.mu.Lock()
+		eng.removeStall = stall
+		eng.mu.Unlock()
+		archived := make(chan error, 1)
+		go func() { archived <- m.archive(ctx, sb) }()
+		synctest.Wait()
+		if _, _, _, err := m.WakeAgentSocket(ctx, sb.ID, sb.Token); err != nil {
+			t.Fatalf("wake: %v", err)
+		}
+		close(stall)
+		if err := <-archived; err != nil {
+			t.Fatalf("archive: %v", err)
+		}
+		if got, want := usageEventsOf(t, m, sb.ID), "claim,hibernate,archive,unarchive"; got != want {
+			t.Errorf("events %s, want %s", got, want)
+		}
+	})
 }
 
 func TestReconcileRecordsTheEndOfTheClaimsItDrops(t *testing.T) {
@@ -302,8 +323,31 @@ func TestReconcileRecordsTheEndOfTheClaimsItDrops(t *testing.T) {
 		t.Errorf("events of the kept claim %s, want %s", got, want)
 	}
 	evs := usageJournal(t, m2)
-	if last := evs[len(evs)-1]; last.Reference != "vm_gone" || last.Tenant != "acme" || last.VMName != lost.VMName {
-		t.Errorf("reap of the dropped claim %+v, want vm_gone of %s under acme", last, lost.VMName)
+	if last := evs[len(evs)-1]; last.Reference != "vm_gone" || last.Tenant != "acme" || last.VMName != lost.VMName || !last.Deadline.Equal(lost.Deadline) {
+		t.Errorf("reap of the dropped claim %+v, want vm_gone of %s under acme with deadline %v", last, lost.VMName, lost.Deadline)
+	}
+}
+
+func TestReconcileRecordsTheWakeACrashLost(t *testing.T) {
+	eng := newFakeEngine()
+	dir := t.TempDir()
+	m := newTestManagerAt(t, eng, dir)
+	sb := mustClaim(t, m, testKey)
+	if err := m.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
+		t.Fatalf("hibernate: %v", err)
+	}
+	delete(eng.stopped, sb.VMName)
+
+	m2 := newTestManagerAt(t, eng, dir)
+	if err := m2.Reconcile(t.Context()); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if got, want := usageEventsOf(t, m2, sb.ID), "claim,hibernate,wake"; got != want {
+		t.Errorf("events %s, want %s", got, want)
+	}
+	evs := usageJournal(t, m2)
+	if last := evs[len(evs)-1]; !last.Deadline.Equal(sb.Deadline) {
+		t.Errorf("wake deadline %v, want %v", last.Deadline, sb.Deadline)
 	}
 }
 

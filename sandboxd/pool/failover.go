@@ -73,7 +73,7 @@ func (m *Manager) adoptArchived(ctx context.Context, id, token string) (bool, er
 		return false, fmt.Errorf("adopt %s: persist claims: %w", id, err)
 	}
 	m.recordUsage(ctx, usage.Event{Event: "adopt", ID: id, Reference: rec.Checkpoint, Tenant: sb.Tenant, Deadline: m.deadlineOf(sb)})
-	log.WithFunc("pool.AdoptArchived").Infof(ctx, "adopted archived sandbox %s from %s", id, rec.Owner)
+	log.WithFunc("pool.adoptArchived").Infof(ctx, "adopted archived sandbox %s from %s", id, rec.Owner)
 	return true, nil
 }
 
@@ -461,7 +461,9 @@ func (m *Manager) reconcileOwnRow(ctx context.Context, rec archives.Record, now 
 		case rec.Consumed || !rec.Deadline.IsZero() && now.After(rec.Deadline):
 			m.purgeArchiveRow(ctx, rec)
 		case rec.Deadline.IsZero():
-			m.startRowRetention(ctx, rec.ID, rec.Epoch)
+			if err := m.startRowRetention(ctx, rec.ID, rec.Epoch); err != nil && !errors.Is(err, archives.ErrLost) {
+				log.WithFunc("pool.reconcileOwnRow").Warnf(ctx, "start retention of archive row %s: %v", rec.ID, err)
+			}
 		}
 		return
 	}
@@ -482,30 +484,23 @@ func (m *Manager) reconcileOwnRow(ctx context.Context, rec archives.Record, now 
 	}
 }
 
-func (m *Manager) startRowRetention(ctx context.Context, id string, epoch int64) {
-	logger := log.WithFunc("pool.startRowRetention")
+func (m *Manager) startRowRetention(ctx context.Context, id string, epoch int64) error {
 	rec, ok, err := m.archives.Get(ctx, id)
-	if err != nil {
-		logger.Warnf(ctx, "read archive row %s: %v", id, err)
-		return
-	}
-	if !ok || rec.Epoch != epoch {
-		return
+	if err != nil || !ok {
+		return err
 	}
 	sb := &types.Sandbox{}
 	if err = json.Unmarshal(rec.Claim, sb); err != nil {
-		logger.Warnf(ctx, "decode archive row %s: %v", id, err)
-		return
+		return err
 	}
 	m.mu.Lock()
 	rec.Deadline = m.retentionDeadline(sb.Key)
 	m.mu.Unlock()
 	if rec.Deadline.IsZero() {
-		return
+		return nil
 	}
-	if _, err = m.archives.Replace(ctx, rec, epoch); err != nil && !errors.Is(err, archives.ErrLost) {
-		logger.Warnf(ctx, "start retention of archive row %s: %v", id, err)
-	}
+	_, err = m.archives.Replace(ctx, rec, epoch)
+	return err
 }
 
 func (m *Manager) dropStaleRow(ctx context.Context, sb *types.Sandbox, rec archives.Record) {
