@@ -52,24 +52,14 @@ func Open(ctx context.Context, dsn, cell string) (*Registry, error) {
 }
 
 func (r *Registry) Put(ctx context.Context, rec archives.Record) (int64, error) {
-	qctx, cancel := context.WithTimeout(ctx, metastore.QueryTimeout)
-	defer cancel()
-	var epoch int64
-	err := r.pool.QueryRow(qctx, `INSERT INTO sandboxd_archives (id, tenant, token_sha256, owner, epoch, checkpoint, deadline, claim, cell)
+	return r.advance(ctx, `INSERT INTO sandboxd_archives (id, tenant, token_sha256, owner, epoch, checkpoint, deadline, claim, cell)
 		VALUES ($1, $2, $3, $4, nextval('sandboxd_archives_epoch'), $5, $6, $7, $8)
 		ON CONFLICT (cell, id) DO UPDATE SET tenant = EXCLUDED.tenant, token_sha256 = EXCLUDED.token_sha256,
 			epoch = EXCLUDED.epoch, consumed = false, checkpoint = EXCLUDED.checkpoint,
 			deadline = EXCLUDED.deadline, claim = EXCLUDED.claim, updated_at = now()
 		WHERE sandboxd_archives.owner = EXCLUDED.owner
 		RETURNING epoch`,
-		rec.ID, rec.Tenant, rec.TokenSHA256, rec.Owner, rec.Checkpoint, nullTime(rec.Deadline), []byte(rec.Claim), r.cell).Scan(&epoch)
-	switch {
-	case errors.Is(err, pgx.ErrNoRows):
-		return 0, archives.ErrLost
-	case err != nil:
-		return 0, unavailable(err)
-	}
-	return epoch, nil
+		rec.ID, rec.Tenant, rec.TokenSHA256, rec.Owner, rec.Checkpoint, nullTime(rec.Deadline), []byte(rec.Claim), r.cell)
 }
 
 func (r *Registry) Replace(ctx context.Context, rec archives.Record, expect int64) (int64, error) {

@@ -473,11 +473,8 @@ func (s *Store) fetchChunk(ctx context.Context, key string, f *os.File, size int
 	return nil
 }
 
-func (s *Store) key(id, rest string) string {
-	if rest == "" {
-		return s.prefix + id
-	}
-	return s.prefix + id + "/" + filepath.ToSlash(rest)
+func (s *Store) key(id, file string) string {
+	return s.prefix + id + "/" + file
 }
 
 func (s *Store) manifestPrefix(id string) string {

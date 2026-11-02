@@ -133,7 +133,7 @@ func (e *Engine) findVolumeDevice(ctx context.Context, vsockSocket, name string,
 		}
 		device := "/dev/" + entry.Name
 		// the kernel publishes /sys/block before devtmpfs creates the node.
-		if err := e.silkdStat(ctx, vsockSocket, device); err != nil {
+		if err := e.silkdOnce[*wire.Stat](ctx, vsockSocket, wire.FsStat{Path: device}); err != nil {
 			if isNotFound(err) {
 				return "", false, nil
 			}

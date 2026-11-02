@@ -367,7 +367,6 @@ type Manager struct {
 	orphanSweep  atomic.Bool
 	adoptFlights singleflight.Group
 	// fence gates replicated claims while the lease is overdue; replicaPools is fixed at start; replicas belongs to the pass holding replicating.
-	lease        leaseTiming
 	fence        atomic.Pointer[fenceState]
 	unfencing    atomic.Bool
 	replicaPools map[types.PoolKey]struct{}
@@ -458,7 +457,6 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 		poolStore:       newPoolStore(cfg.DataDir),
 		poolShared:      b.CellPools,
 		archives:        b.Archives,
-		lease:           leaseTiming{ttl: leaseTTL, every: leaseRenew, margin: leaseMargin},
 		tenants:         b.Tenants,
 		ckpts:           b.Checkpoints,
 		ckptsShared:     b.SharedCheckpoints,

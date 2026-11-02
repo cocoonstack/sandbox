@@ -1,7 +1,6 @@
 package peer
 
 import (
-	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -24,9 +23,6 @@ type Validate func(staging string) error
 type Healer struct {
 	owners Owners
 	puller Puller
-
-	// budget overrides healBudget; a test seam, 30 minutes is unwaitable.
-	budget time.Duration
 }
 
 func NewHealer(owners Owners, puller Puller) *Healer {
@@ -42,15 +38,14 @@ func (h *Healer) Pull(ctx context.Context, id, staging string, validate Validate
 	if len(addrs) == 0 {
 		return store.ErrNotFound
 	}
-	budget := cmp.Or(h.budget, healBudget)
 	// a client hanging up must not abandon a started pull; the budget bounds it.
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), budget)
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), healBudget)
 	defer cancel()
-	return h.pullFrom(ctx, id, staging, addrs, budget, validate)
+	return h.pullFrom(ctx, id, staging, addrs, validate)
 }
 
-func (h *Healer) pullFrom(ctx context.Context, id, staging string, addrs []string, budget time.Duration, validate Validate) error {
-	perOwner := budget / time.Duration(len(addrs))
+func (h *Healer) pullFrom(ctx context.Context, id, staging string, addrs []string, validate Validate) error {
+	perOwner := healBudget / time.Duration(len(addrs))
 	var errs []error
 	for _, addr := range addrs {
 		// one peer's rejected or partial transfer must not linger into the next's.
