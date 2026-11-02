@@ -371,7 +371,7 @@ type Manager struct {
 	unfencing    atomic.Bool
 	replicaPools map[types.PoolKey]struct{}
 	replicating  atomic.Bool
-	replicas     map[string]replicaState
+	replicas     map[string]time.Time
 
 	view atomic.Pointer[configView]
 	// cfg is the config the view was built from; reloadMu orders reloads, the only writers of cfg and view.

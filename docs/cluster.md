@@ -292,8 +292,8 @@ checkpoint store and keeps each claim's registry row on the latest snapshot:
   stale epoch and is refreshed, and an absent or foreign row drops the claim and
   its VM. A claim gets its first replica one interval after it is claimed (or
   after a restart). A hibernated, archived or failed claim,
-  one whose tenant was removed, and one with volumes (capture refuses them;
-  logged once per claim) is skipped; a replicated claim that gains volumes
+  one whose tenant was removed, and one with volumes (capture refuses them) is
+  skipped; a replicated claim that gains volumes
   drops its row and replica. The claim's policy pool, not its own template key,
   picks the interval, so a claim cloned from a template promoted out of a
   replicating pool follows that pool. Rounds share the maintenance budget with

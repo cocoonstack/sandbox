@@ -13,22 +13,16 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
-type replicaState struct {
-	tried      time.Time
-	skipLogged bool
-}
-
 func (m *Manager) replicateOnce(ctx context.Context) {
 	if m.archives == nil || m.isFenced() || !m.replicating.CompareAndSwap(false, true) {
 		return
 	}
 	now, v := time.Now(), m.view.Load()
 	var due, retire []*types.Sandbox
-	var withVolumes []string
-	next := make(map[string]replicaState, len(m.replicas))
+	next := make(map[string]time.Time, len(m.replicas))
 	m.mu.Lock()
 	for id, sb := range m.claimed {
-		every, st := v.poolReplicate[sb.PolicyKey()], m.replicas[id]
+		every, tried := v.poolReplicate[sb.PolicyKey()], m.replicas[id]
 		switch {
 		case every <= 0:
 			if sb.HasReplica() {
@@ -39,29 +33,22 @@ func (m *Manager) replicateOnce(ctx context.Context) {
 			if sb.HasReplica() {
 				retire = append(retire, sb)
 			}
-			if !st.skipLogged {
-				withVolumes = append(withVolumes, id)
-			}
-			next[id] = replicaState{skipLogged: true}
-		case st.tried.IsZero():
-			next[id] = replicaState{tried: now}
-		case now.Sub(st.tried) < every:
-			next[id] = st
+		case tried.IsZero():
+			next[id] = now
+		case now.Sub(tried) < every:
+			next[id] = tried
 		default:
-			next[id] = replicaState{tried: now}
+			next[id] = now
 			due = append(due, sb)
 		}
 	}
 	m.mu.Unlock()
 	m.replicas = next
-	logger := log.WithFunc("pool.replicateOnce")
-	for _, id := range withVolumes {
-		logger.Infof(ctx, "sandbox %s holds volumes and is not replicated", id)
-	}
 	if len(due)+len(retire) == 0 {
 		m.replicating.Store(false)
 		return
 	}
+	logger := log.WithFunc("pool.replicateOnce")
 	go func() {
 		defer m.replicating.Store(false)
 		m.runBounded(ctx, len(due)+len(retire), func(ctx context.Context, i int) {

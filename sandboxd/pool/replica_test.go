@@ -330,7 +330,7 @@ func TestReplicaFollowsThePolicyPoolOfAPromotedTemplate(t *testing.T) {
 	a.replicateOnce(t.Context())
 	waitFor(t, func() bool { return !a.replicating.Load() })
 	a.mu.Lock()
-	a.replicas[sb.ID] = replicaState{tried: time.Now().Add(-time.Hour)}
+	a.replicas[sb.ID] = time.Now().Add(-time.Hour)
 	a.mu.Unlock()
 	a.replicateOnce(t.Context())
 	waitFor(t, func() bool { return !a.replicating.Load() })
@@ -578,9 +578,6 @@ func TestReplicaPassSnapshotsOnlyDueRunningClaims(t *testing.T) {
 		}
 		if a.replicaOf(paused) != "" || a.replicaOf(withVolume) != "" {
 			t.Error("a hibernated claim or one with volumes was replicated")
-		}
-		if !a.replicas[withVolume.ID].skipLogged {
-			t.Error("a claim with volumes was not skipped and logged")
 		}
 		if _, ok, _ := c.reg.Get(t.Context(), running.ID); !ok {
 			t.Error("the due claim has no row")
