@@ -44,15 +44,7 @@ func TestCloseRelaysRefusesLateRelays(t *testing.T) {
 	})
 	srv.CloseRelays()
 
-	conn, err := net.Dial("tcp", ts.Listener.Addr().String())
-	if err != nil {
-		t.Fatalf("dial: %v", err)
-	}
-	defer conn.Close()
-	_ = conn.SetDeadline(time.Now().Add(3 * time.Second))
-	if _, err := io.WriteString(conn, agentRequest); err != nil {
-		t.Fatalf("write request: %v", err)
-	}
+	conn := dialPortConn(t, ts, agentRequest)
 	if _, err := io.Copy(io.Discard, conn); err != nil {
 		t.Errorf("late relay not refused promptly: %v", err)
 	}
@@ -106,16 +98,7 @@ func TestRelayDeliversPipelinedBytes(t *testing.T) {
 		_, _ = io.WriteString(c, line)
 	})
 
-	conn, err := net.Dial("tcp", ts.Listener.Addr().String())
-	if err != nil {
-		t.Fatalf("dial: %v", err)
-	}
-	defer conn.Close()
-	_ = conn.SetDeadline(time.Now().Add(3 * time.Second))
-	if _, err = io.WriteString(conn, agentRequest+execFrame); err != nil {
-		t.Fatalf("write: %v", err)
-	}
-	r := bufio.NewReader(conn)
+	r := bufio.NewReader(dialPortConn(t, ts, agentRequest+execFrame))
 	readStatus101(t, r)
 	got, err := r.ReadString('\n')
 	if err != nil {
@@ -150,12 +133,7 @@ func TestRelayEndsWhenItsClaimIsFenced(t *testing.T) {
 			return relayEnd, nil
 		}}
 		srv := New("", "node:7777", &fakeManager{fenced: fenced}, dialer, nil, nil, nil, nil)
-		ts := httptest.NewServer(srv.Handler())
-		t.Cleanup(func() {
-			srv.CloseRelays()
-			ts.Close()
-		})
-		return upgradeConn(t, ts)
+		return upgradeConn(t, serveTestServer(t, srv))
 	}
 	fenced := make(chan struct{})
 	conn, r := relayWithFence(fenced)
@@ -173,11 +151,9 @@ func TestRelayEndsWhenItsClaimIsFenced(t *testing.T) {
 }
 
 func TestWakeGuestLogsAClientCancelBelowError(t *testing.T) {
-	logs := &bytes.Buffer{}
+	logs := captureLogs(t)
 	global := log.GetGlobalLogger()
-	saved := *global
-	*global = zerolog.New(logs).Level(zerolog.InfoLevel)
-	t.Cleanup(func() { *global = saved })
+	*global = global.Level(zerolog.InfoLevel)
 	dialer := &fakeDialer{dial: func(ctx context.Context, _ string) (net.Conn, error) { return nil, ctx.Err() }}
 	srv := New("", "node:7777", &fakeManager{}, dialer, nil, nil, nil, nil)
 
@@ -187,7 +163,7 @@ func TestWakeGuestLogsAClientCancelBelowError(t *testing.T) {
 	if _, _, _, ok := srv.wakeGuest(canceled, w, "sb_1", "tok", srv.mgr.WakeAgentSocket); ok || w.Code != http.StatusBadGateway {
 		t.Fatalf("canceled dial: ok %v status %d, want a refused 502", ok, w.Code)
 	}
-	if logs.Len() != 0 {
+	if logs.String() != "" {
 		t.Errorf("a client cancel logged %q, want nothing at info level", logs.String())
 	}
 
@@ -279,25 +255,12 @@ func newRelayServer(t *testing.T, guest func(net.Conn)) (*httptest.Server, *Serv
 		return relayEnd, nil
 	}}
 	srv := New("", "node:7777", &fakeManager{}, dialer, nil, nil, nil, nil)
-	ts := httptest.NewServer(srv.Handler())
-	t.Cleanup(func() {
-		srv.CloseRelays()
-		ts.Close()
-	})
-	return ts, srv
+	return serveTestServer(t, srv), srv
 }
 
 func upgradeConn(t *testing.T, ts *httptest.Server) (net.Conn, *bufio.Reader) {
 	t.Helper()
-	conn, err := net.Dial("tcp", ts.Listener.Addr().String())
-	if err != nil {
-		t.Fatalf("dial: %v", err)
-	}
-	t.Cleanup(func() { _ = conn.Close() })
-	_ = conn.SetDeadline(time.Now().Add(3 * time.Second))
-	if _, err := io.WriteString(conn, agentRequest); err != nil {
-		t.Fatalf("write request: %v", err)
-	}
+	conn := dialPortConn(t, ts, agentRequest)
 	r := bufio.NewReader(conn)
 	readStatus101(t, r)
 	return conn, r

@@ -228,8 +228,7 @@ func TestExecTimeoutStartsAfterWake(t *testing.T) {
 		return relayEnd, nil
 	}}
 	srv := New("", "node:7777", mgr, dialer, nil, nil, nil, nil)
-	ts := httptest.NewServer(srv.Handler())
-	t.Cleanup(func() { ts.Close(); srv.CloseRelays() })
+	ts := serveTestServer(t, srv)
 
 	if status, body := postExec(t, ts, `{"argv":["true"],"timeout_seconds":1}`); status != http.StatusOK {
 		t.Fatalf("status %d, want 200: %s", status, body)
