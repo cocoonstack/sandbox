@@ -368,7 +368,6 @@ func (m *Manager) exportGolden(ctx context.Context, snap, final string) error {
 	return os.Rename(tmp, final)
 }
 
-// provision creates one claim-ready VM, cloning from a golden when available.
 func (m *Manager) provision(ctx context.Context, key types.PoolKey, golden string) (*types.Sandbox, error) {
 	if golden == "" {
 		return m.provisionCold(ctx, key)

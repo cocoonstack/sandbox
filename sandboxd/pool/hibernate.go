@@ -58,7 +58,7 @@ func (m *Manager) agentSocket(ctx context.Context, id, token string, readerOK bo
 	return sock, fenced, sb.Unhold, nil
 }
 
-// hibernateLocked is Hibernate's body; the caller holds sb.Transition.
+// Caller holds sb.Transition.
 func (m *Manager) hibernateLocked(ctx context.Context, sb *types.Sandbox) error {
 	if sb.ArchiveCk != "" {
 		return nil // already off the node
@@ -147,7 +147,6 @@ func (m *Manager) hibernateLocked(ctx context.Context, sb *types.Sandbox) error 
 	return nil
 }
 
-// wakeResolved is the wake body shared by the token and id-only entry points.
 func (m *Manager) wakeResolved(ctx context.Context, sb *types.Sandbox) (string, error) {
 	return m.wakeOrRead(ctx, sb, false)
 }

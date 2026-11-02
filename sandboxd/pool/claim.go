@@ -17,9 +17,9 @@ import (
 )
 
 const (
-	reapDestroy reapAction = iota // engine teardown + drop snapshot
-	reapArchive                   // hibernated with archive enabled or on_expire archive: archive, keep the claim
-	reapPurge                     // archived past retention: delete the store checkpoint
+	reapDestroy reapAction = iota
+	reapArchive
+	reapPurge
 	reapPause
 )
 
@@ -386,7 +386,7 @@ func (m *Manager) admitClaim(tenant string, volumes []resolvedVolume, applied []
 	return nil
 }
 
-// quotaErr answers ErrQuota when the node takes no more claims; callers hold m.mu.
+// Callers hold m.mu.
 func (m *Manager) quotaErr(extra int, tenant string) error {
 	if m.draining {
 		return fmt.Errorf("%w: node draining", ErrQuota)
@@ -411,7 +411,7 @@ func (m *Manager) quotaErr(extra int, tenant string) error {
 	return nil
 }
 
-// tenantDelta tracks tenantLive as m.claimed changes; callers hold m.mu.
+// Callers hold m.mu.
 func (m *Manager) tenantDelta(tenant string, delta int) {
 	if tenant == "" {
 		return
@@ -524,7 +524,6 @@ func (m *Manager) rollbackClaim(ctx context.Context, sbs []*types.Sandbox) {
 	}
 }
 
-// abortVolumeClaim removes a failed claim's VM and clears reserved against a double release.
 func (m *Manager) abortVolumeClaim(ctx context.Context, vmName string, reserved *[]types.Volume) {
 	m.removeOrRetry(ctx, vmName, "", volumeTeardown{holds: *reserved})
 	*reserved = nil
