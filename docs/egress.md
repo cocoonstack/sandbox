@@ -77,8 +77,10 @@ proxy over the same vsock path. To stop it bypassing the proxy, sandboxd locks
 the NIC at claim — until then a warm VM of the pool, and the pool's golden
 build, sit on the bridge unlocked, running only the image's own services, never
 tenant code: an nftables netdev table (`sandbox_egress_<tap>`) with an
-ingress hook on the guest's tap drops every guest-initiated packet except IPv4
-broadcast DHCP, so the guest's only routed egress is the audited vsock proxy. The
+ingress hook on the guest's tap drops every guest-initiated packet, so the guest's
+only egress is the audited vsock proxy. A locked guest therefore cannot renew a
+DHCP lease and loses its NIC address when the lease ends, which nothing on this
+lane needs. The
 lock is fail-closed — a claim whose NIC cannot be locked is rejected, not handed
 out unlocked, and no policy still means a locked NIC (default-deny), never a free
 one. It lives in the host root netns and is removed once the VM is gone (a failed
@@ -138,10 +140,6 @@ domain policy first; the allow-list widens the IP gate only.
 
 - **One sandboxd per host.** The restart sweep owns the whole `sandbox_egress_*`
   table namespace in the root netns; a second daemon would clear the first's locks.
-- **No shared broadcast domain with untrusted peers.** The DHCP exception is
-  matched by header fields, not payload, so a broadcast in that shape can still
-  reach the local L2 segment (never routed off-link). Give egress-lane VMs a
-  bridge they do not share with an untrusted listener.
 - **Bridge lane only (egress lane).** A CNI network's tap lives in the VM netns,
   out of reach of the root-netns lock, so a guarded egress *lane* needs the
   `bridges` form (those taps stay in the root netns) and is rejected on CNI
