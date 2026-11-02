@@ -63,6 +63,9 @@ func (m *Manager) hibernateLocked(ctx context.Context, sb *types.Sandbox) error 
 	if sb.ArchiveCk != "" {
 		return nil // already off the node
 	}
+	if _, err := m.fenceWatch(sb); err != nil {
+		return err
+	}
 	if sb.Failed != "" {
 		return ErrFailed
 	}

@@ -373,7 +373,9 @@ checkpoint store and keeps each claim's registry row on the latest snapshot:
   claim's first replica included: the agent relay
   (including parked keep-alive relays, whose later RPCs never pass the
   resolution gate), the exec call, port relays and preview requests. A client
-  retries and meets the 503 until the lease is back or the claim moved.
+  retries and meets the 503 until the lease is back or the claim moved. Neither
+  an API call nor the idle sweep hibernates such a claim while the fence is
+  closed, so the node journals no `hibernate` for a claim another node may hold.
   Streams of claims that are not replicated stay open.
 - **Availability.** The design chooses consistency over availability for
   replicated claims. A registry outage longer than the fence threshold (12

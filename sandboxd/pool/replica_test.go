@@ -588,6 +588,20 @@ func TestReplicaPassSnapshotsOnlyDueRunningClaims(t *testing.T) {
 	})
 }
 
+func TestAFencedNodeDoesNotHibernateAReplicatedClaim(t *testing.T) {
+	c := newReplicaCluster(t)
+	a := c.node(t, "a", t.TempDir(), keepAnHour)
+	replicated := mustClaim(t, a, testKey)
+	replicateNow(t, a, replicated)
+	a.tripFence()
+	if err := a.Hibernate(t.Context(), replicated.ID, Cred{Token: replicated.Token}); !errors.Is(err, ErrLeaseLost) {
+		t.Errorf("hibernate of a replicated claim while fenced: %v, want ErrLeaseLost", err)
+	}
+	if got, want := usageEventsOf(t, a, replicated.ID), "claim"; got != want {
+		t.Errorf("events of the replicated claim %s, want %s", got, want)
+	}
+}
+
 func TestReplicaPassSkipsWhileFenced(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		c := newReplicaCluster(t)

@@ -801,7 +801,7 @@ func logSweepResult(ctx context.Context, logger *log.Fields, err error, okMsg, f
 
 func benignSweepErr(err error) bool {
 	return errors.Is(err, ErrUnknownSandbox) || errors.Is(err, errWokeMeanwhile) ||
-		errors.Is(err, ErrNoEgressHibernate) || errors.Is(err, ErrQuota)
+		errors.Is(err, ErrNoEgressHibernate) || errors.Is(err, ErrQuota) || errors.Is(err, ErrLeaseLost)
 }
 
 func vmName(key types.PoolKey) string {
