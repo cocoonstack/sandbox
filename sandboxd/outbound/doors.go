@@ -1,13 +1,14 @@
 package outbound
 
 import (
-	"errors"
 	"fmt"
 	"net"
 	"net/http"
 	"os"
 	"sync"
 	"syscall"
+
+	"golang.org/x/sys/unix"
 
 	"github.com/cocoonstack/sandbox/sandboxd/egress"
 	"github.com/cocoonstack/sandbox/sandboxd/engine"
@@ -108,7 +109,7 @@ func listenUnix(path string) (*net.UnixListener, error) {
 	return net.ListenUnix("unix", &net.UnixAddr{Name: path, Net: "unix"})
 }
 
-// reached reports whether a guest connected to a door before it was armed; only a clean EAGAIN says no.
+// reached reports whether a guest connected to a door before it was armed; a failed poll counts as reached.
 func reached(ln net.Listener) bool {
 	rc, err := ln.(syscall.Conn).SyscallConn()
 	if err != nil {
@@ -116,14 +117,8 @@ func reached(ln net.Listener) bool {
 	}
 	waiting := true
 	_ = rc.Control(func(fd uintptr) {
-		syscall.ForkLock.RLock()
-		defer syscall.ForkLock.RUnlock()
-		nfd, _, err := syscall.Accept(int(fd))
-		if err == nil {
-			_ = syscall.Close(nfd)
-			return
-		}
-		waiting = !errors.Is(err, syscall.EAGAIN)
+		ready, pollErr := unix.Poll([]unix.PollFd{{Fd: int32(fd), Events: unix.POLLIN}}, 0) //nolint:gosec // a listener's fd fits
+		waiting = pollErr != nil || ready > 0
 	})
 	return waiting
 }
