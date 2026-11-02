@@ -119,7 +119,7 @@ func (s *Sandbox) Run(ctx context.Context, cmd Cmd) (int, error) {
 
 	stdinDone := make(chan struct{})
 	if cmd.Stdin == nil {
-		// a guest that already answered and closed fails this send; the frames it sent still come back below
+		// A guest that already answered and closed fails this send; the frames it sent still come back below
 		_ = conn.Send(wire.StdinClose{})
 		close(stdinDone)
 	} else {
@@ -130,7 +130,7 @@ func (s *Sandbox) Run(ctx context.Context, cmd Cmd) (int, error) {
 	}
 
 	pid, code, exited, err := pumpStdio(ctx, conn, cmd.Stdout, cmd.Stderr)
-	// a pump still parked in Read would write into the next RPC, so its connection is not kept
+	// A pump still parked in Read would write into the next RPC, so its connection is not kept
 	select {
 	case <-stdinDone:
 		err = l.done(err)

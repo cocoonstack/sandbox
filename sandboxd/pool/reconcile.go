@@ -46,25 +46,25 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 		rec, ok := live[sb.VMName]
 		switch {
 		case sb.ArchiveCk != "":
-			// archived: no local VM by design, so adopt the stub and let the first exec wake it
+			// Archived: no local VM by design, so adopt the stub and let the first exec wake it
 			m.addClaimLocked(sb)
 			continue
 		case ok && rec.State == vmStateRunning:
 			sb.VsockSocket = rec.VsockSocket
-			// running with either flag set means a crashed wake or an intent the engine never saw
+			// Running with either flag set means a crashed wake or an intent the engine never saw
 			if sb.HibernateSnap != "" {
 				resumed = append(resumed, sb)
 			}
 			sb.HibernateSnap, sb.PendingSnap = "", ""
 		case ok && sb.HibernateSnap != "":
-			// hibernated: the VM is stopped by design and wakes on demand.
+			// Hibernated: the VM is stopped by design and wakes on demand.
 			sb.PendingSnap = ""
 		case ok && sb.PendingSnap != "" && (snapsErr != nil || slices.Contains(snaps, sb.PendingSnap)):
-			// the journaled intent names the wake image, so adopt it when the snapshot is there
+			// The journaled intent names the wake image, so adopt it when the snapshot is there
 			sb.HibernateSnap, sb.PendingSnap, sb.ReaderSafe = sb.PendingSnap, "", false
 			adopted = append(adopted, sb)
 		case ok:
-			// the VMM died with the host or on its own; the liveness pass restarts or fails it
+			// The VMM died with the host or on its own; the liveness pass restarts or fails it
 			sb.PendingSnap = ""
 		default:
 			dropped = append(dropped, sb)
@@ -107,7 +107,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 			logger.Infof(ctx, "removed orphan golden %s", name)
 		}
 	}
-	// a crash mid-export leaves a fork-* staging dir nothing in this life reuses
+	// A crash mid-export leaves a fork-* staging dir nothing in this life reuses
 	_ = utils.RemoveDirEntries(m.dataDir, func(name string) bool { return strings.HasPrefix(name, "fork-") })
 	_ = utils.RemoveDirEntries(filepath.Join(m.dataDir, readerDir), nil)
 
@@ -117,7 +117,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 	m.retryArchiveDeletes(ctx)
 	removed := m.sweepStaleVMs(ctx, live, owned)
 
-	// an unreferenced hibernate snapshot is an orphan; fork and golden snapshots never span a restart
+	// An unreferenced hibernate snapshot is an orphan; fork and golden snapshots never span a restart
 	if snapsErr != nil {
 		logger.Warnf(ctx, "snapshot sweep skipped: %v", snapsErr)
 	} else {
@@ -166,10 +166,10 @@ func (m *Manager) sweepStaleVMs(ctx context.Context, live map[string]types.VMRec
 func (m *Manager) removeStaleVM(ctx context.Context, name string, rec types.VMRecord) bool {
 	logger := log.WithFunc("pool.removeStaleVM")
 	if rec.State == vmStateCreating {
-		// a canceled ctx must not skip the busy check guarding the forced remove
+		// A canceled ctx must not skip the busy check guarding the forced remove
 		switch outcome, err := m.eng.ReconcileStaleCreate(context.WithoutCancel(ctx), name); {
 		case err != nil:
-			// verb missing (cocoon < v0.5.8) or failed: keep the old sweep.
+			// Verb missing (cocoon < v0.5.8) or failed: keep the old sweep.
 			logger.Warnf(ctx, "reconcile stale create %s: %v; removing", name, err)
 		case outcome == engine.StaleCreateCollected, outcome == engine.StaleCreateNotFound:
 			return true
@@ -178,7 +178,7 @@ func (m *Manager) removeStaleVM(ctx context.Context, name string, rec types.VMRe
 			m.queueStaleCreate(name, rec.TapDevice())
 			return false
 		}
-		// not-creating: the record moved on under the lock; remove normally.
+		// Not-creating: the record moved on under the lock; remove normally.
 	}
 	if m.removeVM(ctx, name) {
 		return true
@@ -217,13 +217,13 @@ func (m *Manager) resyncEgress(ctx context.Context, live map[string]types.VMReco
 	var quarantine []*types.Sandbox
 	for _, sb := range m.claimed {
 		sb.TouchAt(now)
-		// a hibernated or archived claim has no guest to serve; its wake arms the door
+		// A hibernated or archived claim has no guest to serve; its wake arms the door
 		if sb.HibernateSnap != "" || sb.ArchiveCk != "" || sb.Failed != "" {
 			continue
 		}
 		if m.out.LocksNIC(sb.Key) {
 			tap := m.readoptEgressTap(sb, live)
-			// a down egress-lane VM has no guest to lock or mark; the liveness pass fails it
+			// A down egress-lane VM has no guest to lock or mark; the liveness pass fails it
 			if live[sb.VMName].State != vmStateRunning {
 				continue
 			}
@@ -246,7 +246,7 @@ func (m *Manager) resyncEgress(ctx context.Context, live map[string]types.VMReco
 			logger.Errorf(ctx, proxyErr, "arm egress proxy %s", sb.ID)
 		}
 	}
-	// quarantine before the sweep so a failed remove's still-running tap is kept.
+	// Quarantine before the sweep so a failed remove's still-running tap is kept.
 	keep := make(map[string]bool, len(live))
 	for _, sb := range quarantine {
 		if m.quarantineClaim(ctx, sb) {
@@ -255,7 +255,7 @@ func (m *Manager) resyncEgress(ctx context.Context, live map[string]types.VMReco
 			keep[sb.TAP] = true
 		}
 	}
-	// keep every still-running VM's tap; sweep only a confirmed-gone VM's table.
+	// Keep every still-running VM's tap; sweep only a confirmed-gone VM's table.
 	for name, rec := range live {
 		if tap := rec.TapDevice(); tap != "" && !removed[name] {
 			keep[tap] = true

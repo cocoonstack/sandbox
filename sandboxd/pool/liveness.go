@@ -18,7 +18,7 @@ import (
 const (
 	vmmRestartBudget = 3
 	vmmRestartWindow = 10 * time.Minute
-	// with the cocoon daemon stream live, the list only catches an event the stream dropped
+	// With the cocoon daemon stream live, the list only catches an event the stream dropped
 	livenessBackstop   = time.Minute
 	vmEventsBackoff    = time.Second
 	vmEventsMaxBackoff = 30 * time.Second
@@ -139,7 +139,7 @@ func (m *Manager) recoverVMM(ctx context.Context, sb *types.Sandbox) {
 		return
 	}
 	logger := log.WithFunc("pool.recoverVMM")
-	// the sweep's list predates this lock, so a wake that finished in between reads as down there
+	// The sweep's list predates this lock, so a wake that finished in between reads as down there
 	vm, found, err := m.eng.Inspect(ctx, sb.VMName)
 	switch {
 	case err != nil:
@@ -219,7 +219,7 @@ func (m *Manager) restartLocked(ctx context.Context, sb *types.Sandbox) error {
 	m.mu.Lock()
 	sb.VsockSocket = sock
 	m.mu.Unlock()
-	// a displaced door's close unlinks the rebound path, so the old door goes first
+	// A displaced door's close unlinks the rebound path, so the old door goes first
 	m.out.Disarm(sb.ID, false)
 	err = m.out.ArmProxy(ctx, sb)
 	if err == nil {
@@ -235,7 +235,7 @@ func (m *Manager) restartLocked(ctx context.Context, sb *types.Sandbox) error {
 		sb.Restarts++
 		sb.RestartedAt = time.Now()
 	}); !live {
-		// the release that dropped the claim owns the VM teardown
+		// The release that dropped the claim owns the VM teardown
 		m.out.Disarm(sb.ID, true)
 		return ErrUnknownSandbox
 	}
@@ -274,7 +274,7 @@ func coldBootBlocker(sb *types.Sandbox, found, volumes bool) string {
 	case !found:
 		return "vm record gone"
 	case sb.Key.Net == types.NetEgress:
-		// the netdev nft chain dies with the tap, so the guest would boot with an unlocked NIC
+		// The netdev nft chain dies with the tap, so the guest would boot with an unlocked NIC
 		return "vmm exited; an egress-lane sandbox cannot cold-boot"
 	case volumes:
 		return "vmm exited; volume mounts do not survive a cold boot"

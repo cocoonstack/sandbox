@@ -80,7 +80,7 @@ func (m *Manager) archiveOnce(ctx context.Context) {
 }
 
 func (m *Manager) archive(ctx context.Context, sb *types.Sandbox) error {
-	// must finish even if the sweep ctx is canceled, or the record diverges from the store.
+	// Must finish even if the sweep ctx is canceled, or the record diverges from the store.
 	ctx = context.WithoutCancel(ctx)
 	defer m.untrack(m.archiving, sb.ID)
 	m.mu.Lock()
@@ -98,18 +98,18 @@ func (m *Manager) archive(ctx context.Context, sb *types.Sandbox) error {
 	if err = m.checkArchiveRow(ctx, sb.ID); err != nil {
 		return fmt.Errorf("archive %s: registry: %w", sb.ID, err)
 	}
-	// pin the ck before Publish makes it listable, or a delete would strand the claim
+	// Pin the ck before Publish makes it listable, or a delete would strand the claim
 	ckID := store.CheckpointID(randHex(8))
 	m.mu.Lock()
 	m.pendingCks[ckID] = struct{}{}
 	m.mu.Unlock()
 	defer m.untrack(m.pendingCks, ckID)
-	// a hibernated source is copied from its wake image, so no VM starts.
+	// A hibernated source is copied from its wake image, so no VM starts.
 	ck, srcSnap, err := m.publishCheckpoint(ctx, sb, ckID, "archive", sb.Tenant, true)
 	if err != nil {
 		return err
 	}
-	// the claim must still hold the exact snapshot the export captured, or the ck is stale
+	// The claim must still hold the exact snapshot the export captured, or the ck is stale
 	sb.Transition.Lock()
 	m.mu.Lock()
 	if m.claimed[sb.ID] != sb || sb.HibernateSnap != srcSnap || sb.ArchiveCk != "" {
@@ -152,7 +152,7 @@ func (m *Manager) archive(ctx context.Context, sb *types.Sandbox) error {
 	if saveErr := m.store.commit(js); saveErr != nil {
 		m.mu.Lock()
 		var rb claimSnapshot
-		// a Release that landed meanwhile already deleted the claim; re-setting it would resurrect it
+		// A Release that landed meanwhile already deleted the claim; re-setting it would resurrect it
 		if m.claimed[sb.ID] == sb {
 			sb.ArchiveCk, sb.ArchiveEpoch, sb.ArchivePending, sb.ReplicaCk = "", 0, prevPending, replica
 			sb.HibernateSnap, sb.VsockSocket, sb.VMName = snap, sock, vmName
@@ -167,10 +167,10 @@ func (m *Manager) archive(ctx context.Context, sb *types.Sandbox) error {
 	}
 	m.counters.archives.Add(1)
 	m.recordUsage(ctx, usage.Event{Event: "archive", ID: sb.ID, Reference: ck.ID, Tenant: sb.Tenant, Deadline: sb.Deadline})
-	// disarm under Transition so a wake right after the release is not clobbered by a late disarm
+	// Disarm under Transition so a wake right after the release is not clobbered by a late disarm
 	m.out.Disarm(sb.ID, true)
 	sb.Transition.Unlock()
-	// the store ck is authoritative from here
+	// The store ck is authoritative from here
 	m.destroy(ctx, vmName)
 	m.dropSnap(ctx, snap)
 	if replica != "" {
@@ -181,7 +181,7 @@ func (m *Manager) archive(ctx context.Context, sb *types.Sandbox) error {
 
 // Caller holds Transition.
 func (m *Manager) wakeArchived(ctx context.Context, sb *types.Sandbox) (string, error) {
-	// egress never archives; a corrupt archived egress claim must fail closed.
+	// Egress never archives; a corrupt archived egress claim must fail closed.
 	if sb.Key.Net == types.NetEgress {
 		return "", fmt.Errorf("wake %s: egress lane cannot resume from archive", sb.ID)
 	}
@@ -227,7 +227,7 @@ func (m *Manager) wakeArchived(ctx context.Context, sb *types.Sandbox) (string, 
 		return "", fmt.Errorf("wake %s: persist claims", sb.ID)
 	}
 	logger := log.WithFunc("pool.wakeArchived")
-	// the pre-commit marker keeps a failed delete retryable after the journal update.
+	// The pre-commit marker keeps a failed delete retryable after the journal update.
 	if delErr := m.ckpts.Delete(ctx, ck); delErr != nil {
 		logger.Warnf(ctx, "delete consumed archive ck %s: %v", ck, delErr)
 	} else {
@@ -236,7 +236,7 @@ func (m *Manager) wakeArchived(ctx context.Context, sb *types.Sandbox) (string, 
 		}
 		m.dropTombstone(ctx, sb.ID, consumed)
 	}
-	// only the none lane reaches here, so there is no NIC to re-lock
+	// Only the none lane reaches here, so there is no NIC to re-lock
 	if proxyErr := m.out.ArmProxy(ctx, sb); proxyErr != nil {
 		logger.Errorf(ctx, proxyErr, "arm egress proxy %s", sb.ID)
 	}

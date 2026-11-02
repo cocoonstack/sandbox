@@ -56,14 +56,14 @@ func (m *Manager) Promote(ctx context.Context, id string, cred Cred, template, t
 	}
 	key := types.PoolKey{Template: template, Net: sb.Key.Net, Size: sb.Key.Size}
 	if m.pooled(key) {
-		// a configured pool owns this key; promoting over it would change what refills produce
+		// A configured pool owns this key; promoting over it would change what refills produce
 		return types.PoolKey{}, "", ErrPooledTemplate
 	}
 	// commitTemplate re-checks under the template lock; this only fast-fails before the export
 	if err := m.checkTemplateOwner(ctx, store.TemplateID(key.Hash()), tenant); err != nil {
 		return types.PoolKey{}, "", err
 	}
-	// a started promote must finish uncanceled
+	// A started promote must finish uncanceled
 	ctx = context.WithoutCancel(ctx)
 	staging, err := m.tpls.Stage(store.TemplateID(key.Hash()))
 	if err != nil {
@@ -202,7 +202,7 @@ func (m *Manager) HasPromotedTemplate(ctx context.Context, key types.PoolKey, te
 	m.tplMu.Unlock()
 	owner := held.Tenant
 	if !cached {
-		// only a shared-store template promoted elsewhere after startup.
+		// Only a shared-store template promoted elsewhere after startup.
 		raw, err := m.tpls.ReadMeta(ctx, id)
 		if err != nil {
 			return false

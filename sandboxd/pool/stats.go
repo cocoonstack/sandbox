@@ -22,7 +22,7 @@ type SandboxStats struct {
 
 // Stats reports one live claim's resource usage.
 func (m *Manager) Stats(ctx context.Context, id string) (SandboxStats, bool) {
-	// hibernate and archive rewrite HibernateSnap and VMName under m.mu; the /proc read needs none
+	// Hibernate and archive rewrite HibernateSnap and VMName under m.mu; the /proc read needs none
 	m.mu.Lock()
 	sb := m.claimed[id]
 	if sb == nil {

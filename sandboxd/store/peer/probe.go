@@ -74,7 +74,7 @@ func (p *HTTPProber) Owners(ctx context.Context, id string) []string {
 // HealOwners is Owners' wide twin: a heal wants the largest source list, uncached.
 func (p *HTTPProber) HealOwners(ctx context.Context, id string) []string {
 	v, _, _ := p.healFlight.Do(id, func() (any, error) {
-		// no grace: a heal must not stop early on a fast owner and hide a slower valid source.
+		// No grace: a heal must not stop early on a fast owner and hide a slower valid source.
 		return p.fanOut(ctx, id, maxHealOwners, 0), nil
 	})
 	return v.([]string)
@@ -108,7 +108,7 @@ func (p *HTTPProber) fanOut(ctx context.Context, id string, maxOwners int, grace
 	}
 	go func() { wg.Wait(); close(wins) }()
 
-	// grace opens only after the first win: a genuine miss must hear from every peer.
+	// Grace opens only after the first win: a genuine miss must hear from every peer.
 	var owners []string
 	var graceCh <-chan time.Time
 	for {

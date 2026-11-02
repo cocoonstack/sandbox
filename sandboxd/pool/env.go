@@ -40,7 +40,7 @@ func (m *Manager) writeEnv(ctx context.Context, id, tenant, verb string, next fu
 	if !ok || !tenantOwns(tenant, sb.Tenant) {
 		return ErrUnknownSandbox
 	}
-	// a guest write must not race a capture
+	// A guest write must not race a capture
 	locked := sb.Transition.TryLock()
 	if locked {
 		defer sb.Transition.Unlock()

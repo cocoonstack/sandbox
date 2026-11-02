@@ -40,7 +40,7 @@ func (m *Manager) desiredPools(specs []config.PoolSpec) (map[types.PoolKey]confi
 		if err := spec.ValidateLimits(); err != nil {
 			return nil, fmt.Errorf("%w: %w", ErrBadCount, err)
 		}
-		// config-owned fields; accepting one here would silently drop it
+		// Config-owned fields; accepting one here would silently drop it
 		for _, f := range []struct {
 			name string
 			set  bool
@@ -74,12 +74,12 @@ func (m *Manager) applyPools(ctx context.Context, desired map[types.PoolKey]conf
 		return nil
 	}
 	m.poolVersion = version
-	// sequenced under the mutex (apply order) so commit drops a write a later apply superseded.
+	// Sequenced under the mutex (apply order) so commit drops a write a later apply superseded.
 	seq := m.poolStore.seq.Add(1)
 	now := time.Now()
 	for key, p := range m.pools {
 		spec, ok := desired[key]
-		// a removed key gets the zero spec, so a lingering pool sheds a stale archiveAfter
+		// A removed key gets the zero spec, so a lingering pool sheds a stale archiveAfter
 		p.applySpec(spec)
 		p.removed = !ok
 		trim = append(trim, p.trimWarm(p.effectiveTarget(now))...)
@@ -100,7 +100,7 @@ func (m *Manager) applyPools(ctx context.Context, desired map[types.PoolKey]conf
 	runCtx := context.WithoutCancel(ctx)
 	m.destroyAll(runCtx, trim).Wait()
 	m.refillOnce(runCtx)
-	// persist the applied set so a restart rebuilds from it, not the config seed.
+	// Persist the applied set so a restart rebuilds from it, not the config seed.
 	return m.poolStore.commit(seq, poolset.Set{ConfigSeed: m.configSeedHash, Pools: slices.Collect(maps.Values(desired))})
 }
 

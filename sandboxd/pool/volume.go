@@ -19,7 +19,7 @@ import (
 )
 
 const (
-	// sidecar, not data_dir: the marker travels with the image and survives a data_dir wipe
+	// Sidecar, not data_dir: the marker travels with the image and survives a data_dir wipe
 	volumeDirtySuffix = ".dirty"
 	volumeQuiesceMax  = 10 * time.Second
 )
@@ -74,7 +74,7 @@ func (m *Manager) Volumes(tenant string, holders map[string]int) []types.VolumeI
 		}
 		infos = append(infos, info)
 	}
-	// root can see peer-only names; a tenant needs local catalog metadata to apply the access list
+	// Root can see peer-only names; a tenant needs local catalog metadata to apply the access list
 	if tenant == "" {
 		for name, nodes := range holders {
 			if _, ok := catalog[name]; !ok {
@@ -164,7 +164,7 @@ func (m *Manager) resolveCatalogEntry(ctx context.Context, volume types.Volume, 
 		return resolvedVolume{}, fmt.Errorf("%w: volume %q is not writable", ErrBadVolume, volume.Name)
 	}
 	if _, statErr := os.Stat(entry.disk.Path); statErr != nil {
-		// the operator's path stays server-side; the refusal matches the unknown one
+		// The operator's path stays server-side; the refusal matches the unknown one
 		log.WithFunc("pool.resolveCatalogEntry").Warnf(ctx, "stat volume %q image %s: %v", volume.Name, entry.disk.Path, statErr)
 		return resolvedVolume{}, ErrVolumeUnavailable
 	}
@@ -201,9 +201,9 @@ func (m *Manager) applyVolumes(ctx context.Context, sb *types.Sandbox, volumes [
 
 // applyVolume keeps one volume's steps strictly ordered; siblings overlap freely.
 func (m *Manager) applyVolume(ctx context.Context, sb *types.Sandbox, volume resolvedVolume, live bool) error {
-	// attach-only mounts nothing, so there is no umount to verify and no marker.
+	// Attach-only mounts nothing, so there is no umount to verify and no marker.
 	attachOnly := volume.applied.AttachOnly
-	// write-ahead: the marker must be durable before any guest write can be.
+	// Write-ahead: the marker must be durable before any guest write can be.
 	if volume.disk.RW && !attachOnly {
 		if err := markVolumeDirty(volume.disk.Path); err != nil {
 			return fmt.Errorf("mark volume %q dirty: %w", volume.applied.Name, err)
@@ -237,7 +237,7 @@ func (m *Manager) quiesceVolumes(ctx context.Context, sb *types.Sandbox) volumeT
 	}
 	catalog := m.catalogSnapshot()
 	logger := log.WithFunc("pool.quiesceVolumes")
-	// cancellation-immune like removal: a caller hanging up must not skip the flush.
+	// Cancellation-immune like removal: a caller hanging up must not skip the flush.
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), quiesceBudget(mounts))
 	defer cancel()
 	stuck := false
@@ -256,7 +256,7 @@ func (m *Manager) quiesceVolumes(ctx context.Context, sb *types.Sandbox) volumeT
 		}
 	}
 	if stuck {
-		// the unmounts may have spent the whole budget; the fallback flush gets its own
+		// The unmounts may have spent the whole budget; the fallback flush gets its own
 		syncCtx, cancelSync := context.WithTimeout(context.WithoutCancel(ctx), engine.VolumeCallTimeout)
 		defer cancelSync()
 		if err := m.eng.SyncGuest(syncCtx, sb.VsockSocket); err != nil {

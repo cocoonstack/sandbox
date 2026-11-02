@@ -48,7 +48,7 @@ func (p *Proxy) serveIntercept(w http.ResponseWriter, r *http.Request, host stri
 	if _, err := io.WriteString(client, "HTTP/1.1 200 Connection Established\r\n\r\n"); err != nil {
 		return
 	}
-	// a guest that never sends a ClientHello would pin this goroutine until the sandbox dies.
+	// A guest that never sends a ClientHello would pin this goroutine until the sandbox dies.
 	_ = client.SetDeadline(time.Now().Add(interceptTimeout))
 	tlsConn := tls.Server(utils.WithBuffered(client, brw.Reader), cfg)
 	if err := tlsConn.HandshakeContext(r.Context()); err != nil {
@@ -67,7 +67,7 @@ func (p *Proxy) serveIntercept(w http.ResponseWriter, r *http.Request, host stri
 func (p *Proxy) leafFor(host string) (*tls.Certificate, error) {
 	p.leafMu.Lock()
 	defer p.leafMu.Unlock()
-	// a leaf clamped to the intermediate's own end has nothing to renew into
+	// A leaf clamped to the intermediate's own end has nothing to renew into
 	if crt, ok := p.leaves[host]; ok && (time.Now().Before(crt.Leaf.NotAfter.Add(-leafRenewBefore)) || !crt.Leaf.NotAfter.Before(p.ca.interCert.NotAfter)) {
 		return crt, nil
 	}
@@ -97,7 +97,7 @@ func (h *interceptHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	p.relay(w, r, ev, rule, route, true, func(out *http.Request) {
 		out.URL.Scheme = "https"
 		out.URL.Host = h.authority
-		// keep the guest's Host when it names the CONNECT host: SigV4 signing breaks on a rewrite.
+		// Keep the guest's Host when it names the CONNECT host: SigV4 signing breaks on a rewrite.
 		if inner, _, _ := hostPort(r.Host, 0); !strings.EqualFold(inner, h.host) {
 			out.Host = h.authority
 		}

@@ -55,7 +55,7 @@ func (m *Manager) exportSource(ctx context.Context, sb *types.Sandbox, exportDir
 	}
 	defer cleanup()
 	vmName, guestEnv = sb.VMName, m.heldGuestEnv(sb)
-	// a fresh snapshot is this capture's alone, so dials need not wait out its export; a wake consumes a hibernate snapshot
+	// A fresh snapshot is this capture's alone, so dials need not wait out its export; a wake consumes a hibernate snapshot
 	if snap != sb.HibernateSnap {
 		sb.Transition.Unlock()
 	} else {
