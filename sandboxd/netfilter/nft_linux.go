@@ -32,8 +32,8 @@ func Lock(tap string) error {
 	})
 	// accept only IPv4 broadcast DHCP; egress VMs must not share a broadcast domain.
 	c.AddRule(&nftables.Rule{Table: t, Chain: ch, Exprs: []expr.Any{
-		&expr.Meta{Key: expr.MetaKeyPROTOCOL, Register: 1},
-		&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{0x08, 0x00}}, // ethertype IPv4
+		&expr.Meta{Key: expr.MetaKeyNFPROTO, Register: 1},
+		&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{unix.NFPROTO_IPV4}},
 		&expr.Meta{Key: expr.MetaKeyL4PROTO, Register: 1},
 		&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{unix.IPPROTO_UDP}},
 		&expr.Payload{DestRegister: 1, Base: expr.PayloadBaseTransportHeader, Offset: 0, Len: 2},
