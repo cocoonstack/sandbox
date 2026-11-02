@@ -98,7 +98,7 @@ func TestRunCancelKillsTheCommandItStarted(t *testing.T) {
 			case *wire.Info:
 				_, _ = io.WriteString(conn, `{"type":"info","version":"test","proto":2}`+"\n")
 			case *wire.Exec:
-				_, _ = io.WriteString(conn, `{"type":"started","pid":7}`+"\n")
+				_, _ = io.WriteString(conn, `{"type":"started","pid":7}`+"\n"+`{"type":"stdout","data":"NDIK"}`+"\n")
 				_, _ = io.Copy(io.Discard, r)
 				return
 			case *wire.Kill:
@@ -108,10 +108,10 @@ func TestRunCancelKillsTheCommandItStarted(t *testing.T) {
 		}
 	}))
 
-	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
-	if _, err := sb.Run(ctx, Cmd{Argv: []string{"sleep", "300"}}); !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("got %v, want deadline exceeded", err)
+	if _, err := sb.Run(ctx, Cmd{Argv: []string{"sleep", "300"}, Stdout: onWrite(cancel)}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("got %v, want canceled", err)
 	}
 	select {
 	case pid := <-killed:
@@ -310,4 +310,11 @@ func legacySandbox(t *testing.T, ts *httptest.Server) *Sandbox {
 	sb := testSandbox(t, ts)
 	sb.proto.Store(1)
 	return sb
+}
+
+type onWrite func()
+
+func (f onWrite) Write(p []byte) (int, error) {
+	f()
+	return len(p), nil
 }
