@@ -53,7 +53,7 @@ func NewPreviewServer(secret, base, owner string, mgr PreviewManager) *PreviewSe
 	}
 	p := &PreviewServer{secret: []byte(secret), base: base, owner: owner, mgr: mgr}
 	p.transport = &http.Transport{
-		// a pooled guest conn skips PreviewDial, and with it wakeResolved and the Transition lock
+		// A pooled guest conn skips PreviewDial, and with it wakeResolved and the Transition lock
 		DisableKeepAlives: true,
 		DialContext: func(ctx context.Context, _, addr string) (net.Conn, error) {
 			id, portStr, err := net.SplitHostPort(addr)
@@ -97,7 +97,7 @@ func (p *PreviewServer) serve(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid or expired preview token", http.StatusForbidden)
 		return
 	}
-	// the token names the owner by its advertise address at mint time; holding the claim is what counts
+	// The token names the owner by its advertise address at mint time; holding the claim is what counts
 	if _, held := p.mgr.Sandbox(claims.ID); !held && claims.Owner != p.owner {
 		if r.Header.Get(forwardedHeader) != "" {
 			http.Error(w, "preview owner is not this node", http.StatusBadGateway)
@@ -113,10 +113,10 @@ func (p *PreviewServer) proxyLocal(w http.ResponseWriter, r *http.Request, claim
 	rp := &httputil.ReverseProxy{
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			pr.Out.URL.Scheme = "http"
-			// the synthetic host carries PreviewDial's target
+			// The synthetic host carries PreviewDial's target
 			pr.Out.URL.Host = fmt.Sprintf("%s:%d", claims.ID, claims.Port)
 			pr.Out.URL.Path = "/" + strings.TrimPrefix(pr.In.URL.Path, "/p/"+r.PathValue("token")+"/")
-			// the raw form drops the same two segments however the client spelled them, so %2F survives
+			// The raw form drops the same two segments however the client spelled them, so %2F survives
 			raw := pr.In.URL.EscapedPath()
 			for range 2 {
 				if i := strings.IndexByte(raw[1:], '/'); i >= 0 {
@@ -126,7 +126,7 @@ func (p *PreviewServer) proxyLocal(w http.ResponseWriter, r *http.Request, claim
 				}
 			}
 			pr.Out.URL.RawPath = raw
-			// browser credentials for the preview domain must not reach guest code
+			// Browser credentials for the preview domain must not reach guest code
 			pr.Out.Header.Del("Cookie")
 			pr.Out.Header.Del("Authorization")
 		},

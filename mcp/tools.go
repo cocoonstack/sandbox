@@ -109,7 +109,7 @@ func toolCreateSandbox(ctx context.Context, s *server, raw jsontext.Value) (stri
 	if args.TTLSeconds < 0 {
 		return "", fmt.Errorf("ttl_seconds must not be negative, got %d", args.TTLSeconds)
 	}
-	// an agent session outlives the node's 5-minute default, and nothing renews a lease
+	// An agent session outlives the node's 5-minute default, and nothing renews a lease
 	ttl := cmp.Or(time.Duration(args.TTLSeconds)*time.Second, defaultToolTTL)
 	opts := []sandbox.Option{sandbox.WithTimeout(ttl)}
 	if args.Net != "" {

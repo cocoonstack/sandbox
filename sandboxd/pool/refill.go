@@ -35,7 +35,7 @@ func (m *Manager) refillOnce(ctx context.Context) {
 		return
 	}
 	now := time.Now()
-	// spawning VMs into a full node still takes the global rtnl lock even when doomed to fail
+	// Spawning VMs into a full node still takes the global rtnl lock even when doomed to fail
 	parked := m.capacityReasonLocked(now) != ""
 	inFlight := 0
 	for _, p := range m.pools {
@@ -121,7 +121,7 @@ func (m *Manager) refillOne(ctx context.Context, p *pool, golden string, gen uin
 		p.noteLead(time.Since(start))
 		keep = true
 	}
-	// a canceled context or a capacity failure says nothing about this pool's health
+	// A canceled context or a capacity failure says nothing about this pool's health
 	backedOff := false
 	if ctx.Err() == nil && capReason == "" {
 		backedOff = p.noteRefillResult(now, err != nil)
@@ -210,7 +210,7 @@ func (m *Manager) buildGolden(ctx context.Context, p *pool) {
 		p.goldenGen++
 	default:
 		p.nextBuild = time.Now().Add(buildRetryDelay)
-		// a cold boot hits the same bridge and disk as a refill, so it feeds the park too
+		// A cold boot hits the same bridge and disk as a refill, so it feeds the park too
 		if reason := engine.CapacitySignature(err); reason != "" {
 			m.noteCapacityLocked(time.Now(), reason)
 		}
@@ -266,7 +266,7 @@ func (m *Manager) runWarmup(ctx context.Context, warmup []string, sock string) e
 	return m.eng.Warmup(ctx, sock, warmup)
 }
 
-// a restore maps the golden memory lazily, so the warmup's pages fault in here instead of under the first claim
+// A restore maps the golden memory lazily, so the warmup's pages fault in here instead of under the first claim
 func (m *Manager) warmClone(ctx context.Context, sb *types.Sandbox) error {
 	if err := m.runWarmup(ctx, m.view.Load().poolWarmups[sb.Key], sb.VsockSocket); err != nil {
 		m.destroy(ctx, sb.VMName)
@@ -310,7 +310,7 @@ func (m *Manager) goldenStamp(v *configView, key types.PoolKey, imageID string) 
 		fp = m.out.CAFingerprint()
 	}
 	fields := []string{fp, string(m.out.Lane(key)), imageID}
-	// only a sized pool stamps its disk, in bytes so "40G" and "40GiB" match and unsized goldens stay adoptable
+	// Only a sized pool stamps its disk, in bytes so "40G" and "40GiB" match and unsized goldens stay adoptable
 	if storage := v.poolStorage[key]; storage != "" {
 		n, _ := config.StorageBytes(storage)
 		fields = append(fields, "storage="+strconv.FormatInt(n, 10))
@@ -384,7 +384,7 @@ func (m *Manager) provisionCold(ctx context.Context, key types.PoolKey) (*types.
 	if err != nil {
 		return nil, err
 	}
-	// a pre-golden cold claim must trust the root, or intercepted hosts fail TLS for its life
+	// A pre-golden cold claim must trust the root, or intercepted hosts fail TLS for its life
 	if err := m.out.PrepareGuest(ctx, m.view.Load().out, key, sb.VsockSocket); err != nil {
 		m.destroy(ctx, sb.VMName)
 		return nil, err
@@ -502,7 +502,7 @@ func (m *Manager) destroyAll(ctx context.Context, names []string) *sync.WaitGrou
 func (m *Manager) runBounded(ctx context.Context, n int, f func(context.Context, int)) *sync.WaitGroup {
 	var wg sync.WaitGroup
 	for i := range n {
-		// acquire inside the goroutine so a batch larger than the budget cannot block the caller
+		// Acquire inside the goroutine so a batch larger than the budget cannot block the caller
 		wg.Go(func() {
 			for _, sem := range [...]chan struct{}{m.maintSem, m.refillSem} {
 				select {

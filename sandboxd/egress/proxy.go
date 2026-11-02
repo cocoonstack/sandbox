@@ -170,7 +170,7 @@ func New(policy Evaluator, secrets Secrets, ca *CA, router Router, audit AuditFu
 		holder:  holder,
 		conns:   map[net.Conn]struct{}{},
 	}
-	// the stdlib default of 2 idle conns per host re-dials bursty same-host traffic.
+	// The stdlib default of 2 idle conns per host re-dials bursty same-host traffic.
 	pools := &connPools{tr: &http.Transport{DialContext: direct, MaxIdleConns: maxIdleConns, MaxIdleConnsPerHost: 8, IdleConnTimeout: idleConnTimeout}, routed: map[routeKey]*http.Transport{}}
 	if ca != nil {
 		pools.mitm = pools.tr.Clone()
@@ -314,7 +314,7 @@ func (p *Proxy) serveConnect(w http.ResponseWriter, r *http.Request) {
 
 // tunnelDecision treats an inject rule as a plain one when injects is false.
 func (p *Proxy) tunnelDecision(host string, port uint16, injects bool) (decision Decision, intercept bool) {
-	// host-gate interception: the tunnel's CONNECT verb is not the request method.
+	// Host-gate interception: the tunnel's CONNECT verb is not the request method.
 	if p.ca != nil {
 		if rule, d := p.policy.EvalHost(host, port); d == DecisionAllow &&
 			(rule.Intercept == InterceptAlways || rule.Intercept == InterceptInject && injects && p.holdsCredential(host)) {
@@ -374,7 +374,7 @@ func (p *Proxy) relay(w http.ResponseWriter, r *http.Request, ev Event, rule Rul
 	var sc *scrubber
 	ev.Injected, sc = p.inject(rule, out, ev.Host, mitm)
 	if sc != nil {
-		// the scrub needs the whole body uncompressed.
+		// The scrub needs the whole body uncompressed.
 		for _, h := range []string{"Accept-Encoding", "Range", "If-Range"} {
 			out.Header.Del(h)
 		}

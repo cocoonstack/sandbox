@@ -115,7 +115,7 @@ func (h *Host) ArmProxy(ctx context.Context, sb *types.Sandbox) error {
 	d := h.prebound[sb.VMName]
 	delete(h.prebound, sb.VMName)
 	h.mu.Unlock()
-	// only an intercepting pool pays for the TLS transport and leaf cache
+	// Only an intercepting pool pays for the TLS transport and leaf cache
 	ca := h.o.CA
 	if !v.Intercepts(sb.PolicyKey()) {
 		ca = nil

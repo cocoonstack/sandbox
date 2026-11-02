@@ -89,7 +89,7 @@ func (c *Client) dialAgent(ctx context.Context, addr, id, token string) (*upgrad
 	if scheme != httpsScheme {
 		return u, nil
 	}
-	// a TLS edge may be a proxy that drops bytes sent ahead of the 101
+	// A TLS edge may be a proxy that drops bytes sent ahead of the 101
 	if _, err = u.Write(nil); err != nil {
 		_ = raw.Close()
 		return nil, fmt.Errorf("write upgrade request: %w", err)

@@ -69,7 +69,7 @@ func (s *Sandbox) drainProc(ctx context.Context, req wire.Request, stdout, stder
 	}
 	defer l.close()
 	_, code, exited, err := pumpStdio(ctx, conn, stdout, stderr)
-	// logs closes with done after the exit frame
+	// Logs closes with done after the exit frame
 	if _, replay := req.(*wire.Logs); replay && exited && err == nil {
 		err = terminalErr(ctx, conn)
 	}

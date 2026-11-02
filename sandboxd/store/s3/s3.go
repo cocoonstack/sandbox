@@ -96,7 +96,7 @@ func New(ctx context.Context, cfg store.S3Config, stagingRoot string, idRe *rege
 	if cfg.Bucket == "" {
 		return nil, fmt.Errorf("s3 checkpoint store needs a bucket")
 	}
-	// a prefix without its trailing slash hides every record from the delimiter listing.
+	// A prefix without its trailing slash hides every record from the delimiter listing.
 	if cfg.Prefix != "" && !strings.HasSuffix(cfg.Prefix, "/") {
 		cfg.Prefix += "/"
 	}
@@ -386,7 +386,7 @@ func (s *Store) publish(ctx context.Context, staging, id, lineage string, digest
 	if err = s.putObject(ctx, s.key(id, store.MetaFile), metaRaw, metadata); err != nil {
 		return "", err
 	}
-	// keep old generations: another node may have selected the previous meta.
+	// Keep old generations: another node may have selected the previous meta.
 	if err := os.RemoveAll(staging); err != nil {
 		return "", err
 	}
@@ -494,7 +494,7 @@ func (s *Store) chunkKey(lineage, sha string) string {
 }
 
 func (s *Store) recordIDs(ctx context.Context) ([]string, error) {
-	// delimiter listing yields one CommonPrefix per record instead of every export object.
+	// Delimiter listing yields one CommonPrefix per record instead of every export object.
 	var ids []string
 	p := awss3.NewListObjectsV2Paginator(s.client, &awss3.ListObjectsV2Input{
 		Bucket: &s.bucket, Prefix: &s.prefix, Delimiter: new("/"),
@@ -600,7 +600,7 @@ func (s *Store) deleteKeys(ctx context.Context, keys []string) error {
 			return fmt.Errorf("delete %d objects: %w", len(chunk), err)
 		}
 		for _, e := range out.Errors {
-			// strict backends error on deleting an absent key where AWS succeeds silently.
+			// Strict backends error on deleting an absent key where AWS succeeds silently.
 			if code := aws.ToString(e.Code); code == "NoSuchKey" || code == "NoSuchVersion" {
 				continue
 			}
