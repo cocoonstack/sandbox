@@ -21,7 +21,7 @@ func TestKickRefillCoalescesAndNeverBlocks(t *testing.T) {
 	<-m.refillKick
 	m.kickRefill()
 	if len(m.refillKick) != 1 {
-		t.Fatalf("kick after drain not delivered")
+		t.Fatal("kick after drain not delivered")
 	}
 }
 

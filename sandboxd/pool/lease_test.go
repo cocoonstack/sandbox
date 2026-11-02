@@ -212,7 +212,7 @@ func TestLeaseSlowUnfenceStaysFencedAndKeepsRenewing(t *testing.T) {
 }
 
 func TestLeaseFailedConfirmKeepsTheTeardownOfAForgottenClaim(t *testing.T) {
-	for range 16 {
+	for range 64 {
 		exercised := false
 		synctest.Test(t, func(t *testing.T) {
 			c := newReplicaCluster(t)

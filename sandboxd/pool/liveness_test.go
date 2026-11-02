@@ -294,6 +294,9 @@ func TestRestartThatCannotDeliverTheEnvFailsAndSpendsTheBudget(t *testing.T) {
 }
 
 func TestRestartThatCannotArmTheEgressDoorFailsAndSpendsTheBudget(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores file permissions")
+	}
 	eng := newFakeEngine()
 	eng.sockRoot = outboundtest.SockRoot(t)
 	m := egressManager(t, eng, config.PoolSpec{PoolKey: testKey, Egress: &egress.Policy{Allow: []egress.Rule{{Host: "example.com"}}}})

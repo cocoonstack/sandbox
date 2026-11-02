@@ -136,7 +136,11 @@ func TestCheckpointCleanupWaitsForTheClaimWrite(t *testing.T) {
 					}
 				}
 				m.sweepOrphanArchives(t.Context())
-				if rec, ok, _ := c.reg.Get(t.Context(), sb.ID); ok && rec.Consumed {
+				rec, ok, err := c.reg.Get(t.Context(), sb.ID)
+				if err != nil {
+					t.Fatalf("registry get: %v", err)
+				}
+				if ok && rec.Consumed {
 					t.Error("sweep kept the tombstone after the claim write landed")
 				}
 			})
