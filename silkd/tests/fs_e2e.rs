@@ -3,7 +3,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 mod common;
 
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
 
 use serde_json::json;
 
@@ -206,6 +206,29 @@ async fn overwrite_preserves_destination_mode() {
     let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o7777;
     assert_eq!(mode, 0o755, "overwrite must preserve the executable bit");
     assert_eq!(std::fs::read(&path).unwrap(), b"new content");
+}
+
+#[tokio::test]
+#[ignore = "needs root"]
+async fn overwrite_keeps_the_destination_owner_and_mode_under_root() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("owned");
+    for want in [0o644, 0o4755] {
+        std::fs::write(&path, b"old").unwrap();
+        std::os::unix::fs::chown(&path, Some(1000), Some(1000)).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(want)).unwrap();
+        let f = exchange(&[
+            json!({"op":"fs_write","path":path.to_str().unwrap()}).to_string(),
+            json!({"op":"data","data":b64(b"new")}).to_string(),
+            json!({"op":"data_end"}).to_string(),
+        ])
+        .await;
+        assert_eq!(type_of(&f[0]), "done", "{f:?}");
+        let meta = std::fs::metadata(&path).unwrap();
+        assert_eq!((meta.uid(), meta.gid()), (1000, 1000));
+        assert_eq!(meta.permissions().mode() & 0o7777, want);
+        assert_eq!(std::fs::read(&path).unwrap(), b"new");
+    }
 }
 
 #[tokio::test]

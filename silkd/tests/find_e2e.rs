@@ -3,7 +3,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 mod common;
 
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::sync::Arc;
 
 use serde_json::{Value, json};
@@ -236,4 +236,26 @@ async fn replace_preserves_exec_bit() {
         .mode()
         & 0o777;
     assert_eq!(mode, 0o755, "exec bit stripped by replace");
+}
+
+#[tokio::test]
+#[ignore = "needs root"]
+async fn replace_keeps_the_destination_owner_under_root() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("owned.txt");
+    std::fs::write(&file, "foo\n").unwrap();
+    std::os::unix::fs::chown(&file, Some(1000), Some(1000)).unwrap();
+
+    exchange(&[json!({
+        "op": "fs_replace",
+        "files": [file.to_str().unwrap()],
+        "pattern": "foo",
+        "replacement": "bar"
+    })
+    .to_string()])
+    .await;
+
+    let meta = std::fs::metadata(&file).unwrap();
+    assert_eq!((meta.uid(), meta.gid()), (1000, 1000));
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "bar\n");
 }
