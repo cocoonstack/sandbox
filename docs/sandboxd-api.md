@@ -1018,8 +1018,7 @@ Always on: every lifecycle transition appends one JSONL event to
 events), `template`, `net` and `size` (the claim's template, lane and size
 tier, claim events, so a consumer can price a sandbox by its shape without the
 claim record, which is gone after release; `size` sets the CPU and memory,
-while `template` is only a label, because a promoted template's name is the
-caller's choice), `deadline` (the deadline in force after this event: `claim`,
+and `template` is a label, since promote lets the caller name it), `deadline` (the deadline in force after this event: `claim`,
 `renew`, `wake` and `unarchive` carry the lease, `archive` the retention end, or
 nothing for an archive kept forever), `tenant` (the owning tenant, on every event of a
 tenant's claim), `children` (fork) and `ref` (the promoted template / checkpoint
@@ -1040,7 +1039,8 @@ point, and `vmm_failed` is informational; hibernated storage seconds =
 Σ(hibernate→wake) minus the archived span; archived storage seconds =
 Σ(archive→unarchive/archive_delete), a cheaper store tier than a hibernated
 VM's RAM. An interval left open by a crash, or by a node that never returns,
-clamps to the last `deadline` among the claim's events. Reconcile ends a claim
+clamps to the last `deadline` among the claim's events; an `archive` without
+one leaves its span unbounded. Reconcile ends a claim
 it drops with a `reap`: `ref` is `vm_gone` when the VM record is gone and
 `quarantined` when it cannot re-lock the egress NIC. Its `t` is the node's
 return, so clamp it the same way. The `vm` name joins

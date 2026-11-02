@@ -321,7 +321,7 @@ func TestQuarantineFailedRemoveStaysUnswept(t *testing.T) {
 	if !gotKeep["tap-q1"] {
 		t.Error("failed-remove VM's journal tap not kept; the sweep would unlock a running guest")
 	}
-	if evs := usageJournal(t, m); len(evs) != 1 || evs[0].ID != sb.ID || evs[0].Event != "reap" || evs[0].Reference != endQuarantined {
+	if evs := usageJournal(t, m); len(evs) != 1 || evs[0].ID != sb.ID || evs[0].Event != "reap" || evs[0].Reference != "quarantined" {
 		t.Errorf("usage events of a quarantined claim: %+v, want one reap naming the quarantine", evs)
 	}
 	m.mu.Lock()

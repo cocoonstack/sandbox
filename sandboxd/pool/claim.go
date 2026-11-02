@@ -459,11 +459,8 @@ func (m *Manager) finalize(ctx context.Context, sb *types.Sandbox, ttl time.Dura
 // finalizeBatch persists the batch as one write, all-or-nothing; one tenant per batch.
 func (m *Manager) finalizeBatch(ctx context.Context, sbs []*types.Sandbox, ttl time.Duration, claimRefPrefix string, inherited bool) error {
 	now := time.Now()
-	// A renew can move the deadline once the claim is visible
-	deadlines := make([]time.Time, len(sbs))
-	for i, sb := range sbs {
+	for _, sb := range sbs {
 		stampIdentity(sb, clampTTL(ttl))
-		deadlines[i] = sb.Deadline
 		if claimRefPrefix != "" {
 			sb.ClaimRef = claimRefPrefix + sb.ID
 		}
@@ -506,12 +503,12 @@ func (m *Manager) finalizeBatch(ctx context.Context, sbs []*types.Sandbox, ttl t
 		}
 	}
 	// usage lands only after the batch armed, so a rollback leaves no unterminated claim event
-	for i, sb := range sbs {
+	for _, sb := range sbs {
 		m.recordUsage(ctx, usage.Event{
 			Event: "claim",
 			ID:    sb.ID, VMName: sb.VMName,
 			KeyHash: sb.Key.Hash(), Template: sb.Key.Template, Net: string(sb.Key.Net), Size: string(sb.Key.Size),
-			Tenant: sb.Tenant, Deadline: deadlines[i],
+			Tenant: sb.Tenant, Deadline: sb.ClaimedAt.Add(clampTTL(ttl)),
 			Volumes: types.VolumeNames(sb.Volumes), VolumesRW: types.VolumeRWNames(sb.Volumes),
 		})
 	}

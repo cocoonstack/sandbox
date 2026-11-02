@@ -19,11 +19,6 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/utils"
 )
 
-const (
-	endVMGone      = "vm_gone"
-	endQuarantined = "quarantined"
-)
-
 // Reconcile aligns claims and VMs after a restart; it runs before the server because it swaps in fresh records that would bypass in-flight Transition locks.
 func (m *Manager) Reconcile(ctx context.Context) error {
 	claims, err := m.store.load()
@@ -90,7 +85,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 	// A failed save keeps the record, so the next boot drops it and records its end
 	if saveErr == nil {
 		for _, sb := range dropped {
-			m.recordEnd(ctx, sb, endVMGone)
+			m.recordEnd(ctx, sb, "vm_gone")
 		}
 	}
 	logger := log.WithFunc("pool.Reconcile")
@@ -274,9 +269,8 @@ func (m *Manager) resyncEgress(ctx context.Context, live map[string]types.VMReco
 func (m *Manager) quarantineClaim(ctx context.Context, sb *types.Sandbox) bool {
 	td := m.quiesceVolumes(ctx, sb)
 	gone := m.removeOrRetry(ctx, sb.VMName, sb.ID, td)
-	if _, ok := m.forgetClaim(ctx, sb); ok {
-		m.recordEnd(ctx, sb, endQuarantined)
-	}
+	m.forgetClaim(ctx, sb)
+	m.recordEnd(ctx, sb, "quarantined")
 	return gone
 }
 

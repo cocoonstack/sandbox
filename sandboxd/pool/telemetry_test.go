@@ -275,7 +275,7 @@ func TestReconcileRecordsTheEndOfTheClaimsItDrops(t *testing.T) {
 		t.Errorf("events of the kept claim %s, want %s", got, want)
 	}
 	evs := usageJournal(t, m2)
-	if last := evs[len(evs)-1]; last.Reference != endVMGone || last.Tenant != "acme" || last.VMName != lost.VMName {
+	if last := evs[len(evs)-1]; last.Reference != "vm_gone" || last.Tenant != "acme" || last.VMName != lost.VMName {
 		t.Errorf("reap of the dropped claim %+v, want vm_gone of %s under acme", last, lost.VMName)
 	}
 }
