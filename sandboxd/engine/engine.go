@@ -12,6 +12,7 @@ import (
 	"hash/fnv"
 	"io"
 	"net"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -55,6 +56,8 @@ const (
 	vmNotFound     = "vm not found" // cocoon's hypervisor.ErrNotFound text
 	// At 16 concurrent memory dumps cocoon's sqlite writers already time out on its 5 s lock wait; 8 measured clean
 	memoryDumps = 8
+	// A Go runtime starts slower with more Ps, and every cocoon op is one short process
+	cocoonGoMaxProcs = "GOMAXPROCS=4"
 )
 
 // capacitySignatures mean the node cannot attach another VM, not that this VM failed.
@@ -411,6 +414,7 @@ func (e *Engine) run(ctx context.Context, args ...string) ([]byte, error) {
 	defer cancel()
 	log.WithFunc("engine.run").Debugf(ctx, "cocoon %s", strings.Join(args, " "))
 	cmd := exec.CommandContext(ctx, e.bin, args...) //nolint:gosec // bin comes from node config, args are built internally
+	cmd.Env = append(os.Environ(), cocoonGoMaxProcs)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	if err := cmd.Run(); err != nil {
