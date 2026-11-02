@@ -390,7 +390,7 @@ code = sb.run(["bash", "-c", "make test"],
 ```
 
 `timeout` on `exec` and `run` is a wall clock over the dial and the run: at
-its end the connection is cut, which makes silkd kill the command, and
+its end the SDK cuts the connection and kills the reported pid, and
 `TimeoutError` is raised.
 
 `exec` returns stdout and raises `ExitError` on a non-zero exit — carrying

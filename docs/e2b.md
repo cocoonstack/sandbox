@@ -86,7 +86,7 @@ sources that cannot be pinned (a `curl | bash` setup script, an unversioned git
 dependency, moving release archives), so they wait for a reproducible source.
 
 Every pip dependency is pinned by `constraints.txt` and `server-constraints.txt`
-beside the Dockerfile, and bytecode is compiled hash-checked at the end, so a
+beside the Dockerfile, and bytecode is compiled hash-based (unchecked) at the end, so a
 rebuild of one commit against the same base yields the same layer. That holds
 for the OCI and registry exporters with `SOURCE_DATE_EPOCH` and
 `rewrite-timestamp=true`, as the image workflow builds; the `docker` exporter

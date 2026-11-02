@@ -115,9 +115,10 @@ older silkd ignores the file; units that read it still see it.
 
 - 8 MiB frame cap (a malformed peer cannot OOM the daemon)
 - foreground exec output is backpressured while the child runs: a slow client
-  paces it rather than losing output. Once the child exits, the client has 2
-  seconds to drain what is still queued (up to 8 MiB) before `exit` is sent
-  and the rest is dropped. Detached observers ride a best-effort broadcast
+  paces it rather than losing output. Once the child exits, the pump has 2
+  seconds to queue the rest of its output, and what is not queued by then is
+  dropped. What is queued (up to 8 MiB) reaches the client ahead of `exit`, with
+  no time limit. Detached observers ride a best-effort broadcast
 - no fsync durability on writes (guest page cache semantics)
 - `fs_push` is network-failure atomic: the stream extracts into a staging
   dir inside `dest` and merges (local renames) only after the tar terminates
