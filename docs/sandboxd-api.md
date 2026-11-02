@@ -68,7 +68,7 @@ Auth: `Authorization: Bearer <api_token>` (when configured).
   cold-booting an image named like the template
 - `env` is the claim's own environment, at most 64 entries: each name a shell
   identifier of at most 128 bytes, each value at most 8 KiB with no control
-  characters other than tab, and names plus values at most 64 KiB in total. An entry holds only `value`, `guest` and `inject`; any other
+  characters other than tab, and names, values and inject fields at most 64 KiB in total. An entry holds only `value`, `guest` and `inject`; any other
   member, or `"guest": null`, answers 400, so a mistyped flag never lands a
   host-only value in the guest. `guest` (default `true`) delivers the entry into the guest; a
   `guest: false` entry never enters it and only feeds the node's egress
@@ -475,7 +475,9 @@ independent guest processes and sessions continue. See the
 ## POST /v1/sandboxes/{id}/release
 
 Auth: the sandbox's own token, or the root token for operator cleanup by id.
-Destroys the VM. 204 on success, 404 for an unknown id or wrong token.
+Destroys the VM. 204 on success, 404 for an unknown id or wrong token, 500 when
+the VM survives removal: the claim is already gone and the node retries the
+removal.
 Releasing an already-gone sandbox is 404 — the SDK treats it as success.
 
 ## POST /v1/sandboxes/{id}/hibernate
@@ -507,7 +509,8 @@ while stored, and waking it starts a fresh lease of the length the claim was gra
 [failed](deploy.md#dead-vmms-and-host-restarts) sandbox is cold-booted from
 its own disk (memory is lost) and its restart budget resets. 204 on
 success, 404 unknown id or wrong token, 409 a failed egress-lane or volume
-sandbox, or one whose VM record is gone, 500 when the cold boot itself fails,
+sandbox, or one whose VM record is gone, 403 a removed tenant's archive,
+429 while the disk reserve is low, 500 when the cold boot or a restore fails,
 503 `lease lost; retry` for a replicated claim while its node's lease is overdue.
 
 ## POST /v1/sandboxes/{id}/renew
@@ -679,8 +682,8 @@ token; 409 egress pool on a node without an egress attachment; 503 the
 
 ## Tenants (/v1/tenants)
 
-Auth: root only (tenant tokens get 403); a node without `api_token` answers 400,
-since tenants need it. The API is the only way in: `config.json` has no
+Auth: root only (tenant tokens get 403); a node without `api_token` answers 400
+to a write, since tenants need it. The API is the only way in: `config.json` has no
 `tenants` field, and a node starts with no tenants. The set changes at
 runtime, with no restart:
 
@@ -893,7 +896,7 @@ an SDK caller should set.
 Auth: node API token. Root sees every live claim; a tenant sees only its own.
 The index is `{"sandboxes": [{id, key, tenant?, deadline, claimed_at?, hibernated,
 archived?, from_checkpoint?, claim_ref?, metadata?, on_expire?, cpu_count, mem_total_bytes,
-volumes?: [{name, mount?, mode?, attach_only?}], volumes_want?: [{name, mount?, mode?, attach_only?}], restarts?, restarted_at?, failed?}]}` — `cpu_count` and `mem_total_bytes` are the
+volumes?: [{name, mount?, mode?, attach_only?}], volumes_want?: [{name, mount?, mode?, attach_only?}], restarts?, restarted_at?, failed?}]}` — `deadline` is `0001-01-01T00:00:00Z` on an archive kept forever; `cpu_count` and `mem_total_bytes` are the
 size tier's allocation; `restarts` counts the cold boots that replaced an
 exited VMM and `restarted_at` stamps the last one (each loses guest memory and
 the instance-metadata document, so a caller re-establishes guest state when
@@ -1113,8 +1116,9 @@ clock, so a client that keeps a connection warm must close it when idle for
 before the 101, reach silkd in order; the Go and Python SDKs send their first
 frames that way over plain HTTP, so a proxy in front of a plain-HTTP endpoint
 must forward them too (Go's `httputil.ReverseProxy` drops them; Caddy forwards
-them). 426 without the upgrade header, 404 unknown sandbox, 409 a failed
-sandbox, 502 guest unreachable, 503 `lease lost; retry` for a replicated claim
+them). 426 without the upgrade header, 403 a removed tenant's archive, 404
+unknown sandbox, 409 a failed sandbox, 429 while the disk reserve is low, 500 a
+failed restore, 502 guest unreachable, 503 `lease lost; retry` for a replicated claim
 while its node's lease is overdue (see
 [running claims](cluster.md#running-claims-across-node-loss)). A relay of a
 claim of a replicating pool that is already open when the lease turns overdue
@@ -1175,7 +1179,8 @@ fork in flight, answers `409` at once; an open passive relay still holds the san
 400 a port outside 1-65535; 401 missing bearer token; 404 unknown sandbox or
 wrong token; 409 a failed sandbox or a passive relay to a paused one; 426 without the upgrade
 header; 502 when the guest cannot be reached on that port — no listener, or a
-hibernated sandbox whose restore failed. The node log carries which; 503
+hibernated sandbox whose restore failed. The node log carries which; 403 a
+removed tenant's archive; 429 while the disk reserve is low; 503
 `lease lost; retry` for a replicated claim while its node's lease is overdue.
 
 ## POST /v1/sandboxes/{id}/exec
@@ -1201,7 +1206,8 @@ does not exist are the caller's, not 502s; 401 missing bearer token; 404 unknown
 413 when stdout+stderr exceed 8 MiB; 503 with `Retry-After: 1` when the
 node's buffered-exec memory is exhausted (64 MiB of output across every
 buffered exec in flight; the command is killed); 502 guest unreachable or any other
-silkd error; 409 a failed sandbox; 503 `lease lost; retry` for a replicated claim
+silkd error; 403 a removed tenant's archive; 409 a failed sandbox; 429 while the
+disk reserve is low; 500 a failed restore; 503 `lease lost; retry` for a replicated claim
 while its node's lease is overdue; 504 when the command outlives `timeout_seconds`. A client that hangs up first gets no reply and the command is killed. A hibernated sandbox wakes transparently like on the relay.
 
 ## GET /v1/sandboxes/{id}/owner
