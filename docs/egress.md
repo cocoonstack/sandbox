@@ -362,9 +362,10 @@ guest's next connection; a tunnel the guest keeps open stays as it was.
 The placeholder is not a secret: it stays in the guest and in `GET /env`.
 The entry rides the claim request or any `/env` write, and rotation is the
 same `PATCH`, accepted on a hibernated or archived claim without waking it.
-The write does not reach an archived claim's `archive_failover` row: after that
-claim's node is lost, an adopter starts from the row, which holds the value
-from the archive.
+With [`archive_failover`](deploy.md#configuration) the write also replaces an
+archived claim's row, so an adopter starts from the rotated value. While the
+meta store is down the write answers 503 with the claim's own record already
+changed: resend it, and the resend replaces the row.
 
 - **Envelope.** The operator still decides which hosts can carry a
   credential: every host must be covered by an `intercept` rule (`true` or

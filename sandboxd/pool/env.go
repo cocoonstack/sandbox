@@ -2,12 +2,14 @@ package pool
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
 
 	"golang.org/x/sync/errgroup"
 
+	"github.com/cocoonstack/sandbox/sandboxd/archives"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
@@ -78,25 +80,59 @@ func (m *Manager) writeEnv(ctx context.Context, id, tenant, verb string, next fu
 		}
 		return ErrPaused
 	}
+	rowed, deliver := m.archiveRowed(sb), !paused
 	if env.Equal(prev) {
 		m.mu.Unlock()
-		return m.deliverGuestEnv(ctx, verb, id, sock, env, !paused)
-	}
-	sb.SetEnv(env)
-	js := m.store.set(sb)
-	m.mu.Unlock()
-	if err := m.store.commit(js); err != nil {
-		m.mu.Lock()
-		var rb claimSnapshot
-		if m.claimed[id] == sb && sb.Env.Equal(env) {
-			sb.SetEnv(prev)
-			rb = m.store.set(sb)
-		}
+	} else {
+		deliver = changed
+		sb.SetEnv(env)
+		js := m.store.set(sb)
 		m.mu.Unlock()
-		m.store.recommit(ctx, rb)
-		return fmt.Errorf("%s env %s: persist claims: %w", verb, id, err)
+		if err := m.store.commit(js); err != nil {
+			m.mu.Lock()
+			var rb claimSnapshot
+			if m.claimed[id] == sb && sb.Env.Equal(env) {
+				sb.SetEnv(prev)
+				rb = m.store.set(sb)
+			}
+			m.mu.Unlock()
+			m.store.recommit(ctx, rb)
+			return fmt.Errorf("%s env %s: persist claims: %w", verb, id, err)
+		}
 	}
-	return m.deliverGuestEnv(ctx, verb, id, sock, env, changed)
+	if rowed {
+		if err := m.rewriteArchiveRow(ctx, sb, locked); err != nil {
+			return fmt.Errorf("%s env %s: %w", verb, id, err)
+		}
+	}
+	return m.deliverGuestEnv(ctx, verb, id, sock, env, deliver)
+}
+
+func (m *Manager) rewriteArchiveRow(ctx context.Context, sb *types.Sandbox, locked bool) error {
+	if !locked {
+		sb.Transition.Lock()
+		defer sb.Transition.Unlock()
+	}
+	for range 2 {
+		m.mu.Lock()
+		ck, rowed := sb.ArchiveCk, m.claimed[sb.ID] == sb && m.archiveRowed(sb)
+		m.mu.Unlock()
+		if !rowed {
+			return nil
+		}
+		epoch, err := m.replaceArchive(ctx, sb, ck)
+		if err == nil {
+			_, _ = m.commitIfLive(ctx, sb, func() { sb.ArchiveEpoch = epoch })
+			return nil
+		}
+		if !errors.Is(err, archives.ErrLost) {
+			return err
+		}
+		if err = m.refusedReplace(ctx, sb); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (m *Manager) deliverGuestEnv(ctx context.Context, verb, id, sock string, env types.Env, deliver bool) error {
