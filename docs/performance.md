@@ -98,6 +98,15 @@ byte per `read(2)` until #304 moved it to one buffered read: 13 fewer syscalls
 per dial, dial-per-RPC p50 0.317 → 0.300 ms over 12 interleaved runs
 (bare metal, 2026-10-03, d5d7887 vs #304); the kept connection is unaffected.
 
+## Engine process start
+
+Every engine op is one `cocoon` process, and a Go runtime starts slower with more
+Ps, so sandboxd caps cocoon's `GOMAXPROCS` at 4, or at its own value when that is lower. `cocoon version` p50 on a 384-core
+bare-metal node (2026-11-02, n=40 interleaved): 24.0 ms at the default, 6.2 ms at 4.
+A pool-miss clone claim went from 77.9 to 63.0 ms p50 (`small`, n=60, arms
+interleaved). A warm claim with no volume runs no cocoon; one with volumes runs one
+`vm disk attach` per volume and saves on each. A machine with few cores gains less.
+
 ## Boot chain
 
 Kernel entry → rootfs handoff (custom all-builtin kernel + Rust initramfs,
