@@ -63,6 +63,9 @@ func (m *Manager) hibernateLocked(ctx context.Context, sb *types.Sandbox) error 
 	if sb.ArchiveCk != "" {
 		return nil // already off the node
 	}
+	if _, err := m.fenceWatch(sb); err != nil {
+		return err
+	}
 	if sb.Failed != "" {
 		return ErrFailed
 	}
@@ -161,7 +164,6 @@ func (m *Manager) wakeOrRead(ctx context.Context, sb *types.Sandbox, readerOK bo
 	if sb.Failed != "" {
 		return "", fmt.Errorf("%w: %s", ErrFailed, sb.Failed)
 	}
-	// settle a dangling intent before choosing running vs hibernated
 	if _, err := m.settlePendingSnap(ctx, sb); err != nil {
 		return "", fmt.Errorf("wake %s: %w", sb.ID, err)
 	}
@@ -208,7 +210,7 @@ func (m *Manager) wakeOrRead(ctx context.Context, sb *types.Sandbox, readerOK bo
 	}
 	m.counters.wakes.Add(1)
 	m.counters.wakeNanos.Add(uint64(time.Since(wakeStart))) //nolint:gosec // durations are positive
-	m.recordUsage(ctx, usage.Event{Event: "wake", ID: sb.ID, VMName: sb.VMName, Tenant: sb.Tenant})
+	m.recordUsage(ctx, usage.Event{Event: "wake", ID: sb.ID, VMName: sb.VMName, Tenant: sb.Tenant, Deadline: m.deadlineOf(sb)})
 	if proxyErr := m.out.ArmProxy(ctx, sb); proxyErr != nil {
 		log.WithFunc("pool.wakeOrRead").Errorf(ctx, proxyErr, "arm egress proxy %s", sb.ID)
 	}
@@ -225,7 +227,7 @@ func (m *Manager) wakeOrRead(ctx context.Context, sb *types.Sandbox, readerOK bo
 		return "", fmt.Errorf("wake %s: persist claims: %w", sb.ID, err)
 	}
 	m.dropStale(ctx, sb)
-	// the resume consumed the memory image; reclaim its disk off the wake-return path (the randHex suffix keeps a re-hibernate from reusing the name)
+	// The randHex suffix keeps a re-hibernate from reusing the name
 	go m.dropSnap(ctx, snap)
 	return sock, nil
 }
@@ -277,7 +279,6 @@ func (m *Manager) idleOnce(ctx context.Context) {
 	}()
 }
 
-// idleHibernate re-validates a sweep victim under the Transition lock.
 func (m *Manager) idleHibernate(ctx context.Context, id, token string, sweepStart time.Time) error {
 	sb, ok := m.claim(id, token)
 	if !ok {
@@ -294,7 +295,6 @@ func (m *Manager) idleHibernate(ctx context.Context, id, token string, sweepStar
 	return m.hibernateLocked(ctx, sb)
 }
 
-// commitTransition publishes a hibernate/wake result only if the claim is still live.
 func (m *Manager) commitTransition(ctx context.Context, sb *types.Sandbox, snap, sock string) (live bool, err error) {
 	return m.commitIfLive(ctx, sb, func() {
 		sb.HibernateSnap = snap
@@ -334,7 +334,6 @@ func (m *Manager) settlePendingSnap(ctx context.Context, sb *types.Sandbox) (ado
 	return adopted, err
 }
 
-// resolvePendingSnap settles an unconfirmed hibernate intent against the engine's snapshot list.
 func (m *Manager) resolvePendingSnap(ctx context.Context, sb *types.Sandbox) (adopted bool, err error) {
 	if sb.PendingSnap == "" {
 		return false, nil

@@ -491,7 +491,8 @@ archives. When to hibernate is the caller's policy — the
 node only provides the transition. 204 on success, 404 unknown id or wrong
 token, 409 on the egress lane or when volumes are attached (neither kind of
 sandbox hibernates; see [egress](egress.md)), 429 while the disk is under
-[`disk_reserve`](deploy.md).
+[`disk_reserve`](deploy.md), 503 `lease lost; retry` for a replicated claim that
+is not archived while its node's lease is overdue, even one already hibernated.
 
 ## POST /v1/sandboxes/{id}/wake
 
@@ -505,7 +506,8 @@ while stored, and waking it starts a fresh lease of the length the claim was gra
 [failed](deploy.md#dead-vmms-and-host-restarts) sandbox is cold-booted from
 its own disk (memory is lost) and its restart budget resets. 204 on
 success, 404 unknown id or wrong token, 409 a failed egress-lane or volume
-sandbox, or one whose VM record is gone, 500 when the cold boot itself fails.
+sandbox, or one whose VM record is gone, 500 when the cold boot itself fails,
+503 `lease lost; retry` for a replicated claim while its node's lease is overdue.
 
 ## POST /v1/sandboxes/{id}/renew
 
@@ -1013,13 +1015,18 @@ truth is the usage journal below.
 
 Always on: every lifecycle transition appends one JSONL event to
 `<data_dir>/usage.jsonl` — `{"t": <RFC3339>, "ev":
-"claim|hibernate|wake|fork|checkpoint|promote|release|reap|archive|unarchive|archive_delete|egress|egress_bytes|vmm_exit|vmm_restart|vmm_failed",
-"id": "sb_…", "vm": "sbx-…"}` plus `key` (the pool key's stable hash, claim
-events), `template` and `size` (the claim's template and size tier, claim
-events, so a consumer can price a sandbox by its shape without the claim
-record, which is gone after release), `tenant` (the owning tenant, on every
-event of a tenant's claim), `children` (fork) and `ref` (the promoted
-template / checkpoint id, the egress host, or a `vmm_failed` reason). An egress event that injected credentials names
+"claim|renew|hibernate|wake|fork|checkpoint|adopt|promote|release|reap|archive|unarchive|archive_delete|egress|egress_bytes|vmm_exit|vmm_restart|vmm_failed",
+"id": "sb_…"}` plus `vm` (the VM's name; absent on `renew`, `adopt`, `archive`,
+`unarchive`, `archive_delete`, `egress`, `egress_bytes`, and the `reap` or
+`release` of an archived claim), `key` (the pool key's stable hash, claim
+events), `template`, `net` and `size` (the claim's template, lane and size
+tier, claim events, so a consumer can price a sandbox by its shape without the
+claim record, which is gone after release; `size` sets the CPU and memory,
+and `template` is a label, since promote lets the caller name it), `deadline` (the deadline in force after this event: `claim`,
+`renew`, `wake` and `unarchive` carry the lease, `archive` and `adopt` the retention
+end, or nothing for an archive kept forever, and `reap` the deadline it ended under), `tenant` (the owning tenant, on every event of a
+tenant's claim), `children` (fork) and `ref` (the promoted template / checkpoint
+id, the egress host, a `vmm_failed` reason, or why reconcile ended a claim). An egress event that injected credentials names
 them in `secret` (`gh,claim:<entry>`, never a value). An egress event routed through an
 [upstream proxy](egress.md#upstream-proxies) carries `upstream` (its `host:port`), and with
 `egress_usage_bytes` on, `egress_bytes` events add the connection's payload `tx`/`rx` bytes. A volume claim also carries
@@ -1028,16 +1035,30 @@ the subset of those names claimed `rw`, so billing can discriminate write
 access (mounts and host paths are not billing dimensions). The file rotates at
 64 MiB keeping one `.1` backup, so a tailing collector never loses a window
 silently. A last line a crash cut short is ended with a newline when the node
-reopens the journal, so it never swallows the next event. Folding rules: billable compute seconds per sandbox =
-Σ(claim→release/reap) − Σ(hibernate→wake) − Σ(vmm_exit→vmm_restart/release/reap);
-`vmm_exit` is stamped when the node first finds the VMM gone, so an outage
-before sandboxd runs again (a host that was down) stays billed up to that
-point, and `vmm_failed` is informational; hibernated storage seconds =
-Σ(hibernate→wake) minus the archived span; archived storage seconds =
-Σ(archive→unarchive/archive_delete), a cheaper store tier than a hibernated
-VM's RAM. An interval left open by a crash clamps to the claim's
-deadline; reconcile records nothing for the claims it drops (those whose VM
-record is gone), so a restart leaves those intervals without a terminal event. The `vm` name joins
+reopens the journal, so it never swallows the next event. Folding rules: fold a sandbox's events of all nodes in `t` order.
+An event ends the current span at its `t` and enters a state: `claim`, `wake`,
+`unarchive` and `vmm_restart` enter `running`, `hibernate` enters `hibernated`,
+`archive` enters `archived`, and `vmm_exit`, `archive_delete`, `release` and
+`reap` enter `ended`. Other events, `vmm_failed` included, change no state, and
+`reap`, `adopt` and `archive_delete` have the exceptions below.
+Billable compute, hibernated storage and archived storage seconds are the time
+in `running`, `hibernated` and `archived`, a cheaper store tier than a hibernated
+VM's RAM. `vmm_exit` is stamped when the node first finds the VMM gone, so an
+outage before sandboxd runs again (a host that was down) stays billed up to that
+point. A `reap` instead ends the current span at min(`t`, its `deadline`), or `t`
+with none, because `t` can follow the true end by the reaper's tick, the VM's
+teardown or the node's downtime. Outside `archived`, an `archive_delete` ends the
+current span at min(`t`, the last `deadline`), because a purge can follow a claim
+that has no end event by a whole retention window. An `adopt` names a claim
+a node took over, from a lost node or from its own lost record, with `ref` the
+checkpoint it holds. In `archived` it changes nothing; otherwise it ends the
+current span at min(`t`, the last `deadline` before it) and enters `archived` at
+its `t`. A span is never shorter than zero. A span still open ends at min(now,
+the last `deadline`), and one entered by an `archive` or `adopt` without a
+`deadline` stays open. A claim reconcile drops because its VM record is gone
+ends with a `reap` whose `ref` is `vm_gone`, and one that cannot re-lock its
+egress NIC with `quarantined`; a claim another node holds is dropped with no
+event, and neither has a replicated claim dropped while the registry is down. The `vm` name joins
 cocoon's machine-level metering ledger for audit cross-checks. With
 `meta_store.usage`, the node also lands every line in the cell's
 [shared usage table](deploy.md#shared-usage-table), read through
@@ -1049,12 +1070,14 @@ Auth: root only (tenant tokens get 403). Reads the raw usage events of every
 node of the cell from the [shared usage table](deploy.md#shared-usage-table).
 
 - `GET /v1/usage?tenant=<name>&since=<time>&until=<time>&after=<cursor>&limit=<n>` →
-  `{"events": [{"cursor": 41, "node": "n1", "t": "2026-10-30T08:00:00.123456Z", "ev": "claim", "id": "sb_…", "vm": "sbx-…", "key": "…", "template": "…", "size": "large", "tenant": "acme"}], "next": 41}`.
+  `{"events": [{"cursor": 41, "node": "n1", "t": "2026-10-30T08:00:00.123456Z", "ev": "claim", "id": "sb_…", "vm": "sbx-…", "key": "…", "template": "…", "net": "none", "size": "large", "tenant": "acme", "deadline": "2026-10-30T09:00:00.123456Z"}], "next": 41}`.
 - **Events:** each is one journal line with its keys as in
   [usage.jsonl](#usage-journal-usagejsonl), `t` in UTC to the microsecond, plus
   `cursor` (its place in the table; one node's events follow its journal
-  order) and `node` (the node that recorded it). A `claim` line written by
-  v0.1.20 or earlier has no `template` or `size`.
+  order) and `node` (the node that recorded it). A journal written by
+  v0.1.20 or earlier has no `renew` or `adopt` events and no `deadline`, a claim
+  reconcile dropped has no end event, and its `claim` lines have no `template`,
+  `net` or `size`.
 - **Filters:** `tenant` keeps one tenant's events; `since` (inclusive) and
   `until` (exclusive) are RFC 3339 times compared with `t`. Each is optional.
   A journal written by v0.1.20 or earlier stamps `tenant` only on `claim`,

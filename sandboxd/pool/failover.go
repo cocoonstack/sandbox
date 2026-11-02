@@ -72,7 +72,8 @@ func (m *Manager) adoptArchived(ctx context.Context, id, token string) (bool, er
 		m.forgetClaim(ctx, sb)
 		return false, fmt.Errorf("adopt %s: persist claims: %w", id, err)
 	}
-	log.WithFunc("pool.AdoptArchived").Infof(ctx, "adopted archived sandbox %s from %s", id, rec.Owner)
+	m.recordUsage(ctx, usage.Event{Event: "adopt", ID: id, Reference: rec.Checkpoint, Tenant: sb.Tenant, Deadline: m.deadlineOf(sb)})
+	log.WithFunc("pool.adoptArchived").Infof(ctx, "adopted archived sandbox %s from %s", id, rec.Owner)
 	return true, nil
 }
 
@@ -456,8 +457,13 @@ func (m *Manager) reconcileOwnRow(ctx context.Context, rec archives.Record, now 
 	sb := m.claimed[rec.ID]
 	m.mu.Unlock()
 	if sb == nil {
-		if rec.Consumed || !rec.Deadline.IsZero() && now.After(rec.Deadline) {
+		switch {
+		case rec.Consumed || !rec.Deadline.IsZero() && now.After(rec.Deadline):
 			m.purgeArchiveRow(ctx, rec)
+		case rec.Deadline.IsZero():
+			if err := m.startRowRetention(ctx, rec.ID, rec.Epoch); err != nil && !errors.Is(err, archives.ErrLost) {
+				log.WithFunc("pool.reconcileOwnRow").Warnf(ctx, "start retention of archive row %s: %v", rec.ID, err)
+			}
 		}
 		return
 	}
@@ -476,6 +482,25 @@ func (m *Manager) reconcileOwnRow(ctx context.Context, rec archives.Record, now 
 	default:
 		m.dropStaleRow(ctx, sb, rec)
 	}
+}
+
+func (m *Manager) startRowRetention(ctx context.Context, id string, epoch int64) error {
+	rec, ok, err := m.archives.Get(ctx, id)
+	if err != nil || !ok {
+		return err
+	}
+	sb := &types.Sandbox{}
+	if err = json.Unmarshal(rec.Claim, sb); err != nil {
+		return err
+	}
+	m.mu.Lock()
+	rec.Deadline = m.retentionDeadline(sb.Key)
+	m.mu.Unlock()
+	if rec.Deadline.IsZero() {
+		return nil
+	}
+	_, err = m.archives.Replace(ctx, rec, epoch)
+	return err
 }
 
 func (m *Manager) dropStaleRow(ctx context.Context, sb *types.Sandbox, rec archives.Record) {

@@ -32,6 +32,9 @@ func (m *Manager) Wake(ctx context.Context, id string, cred Cred) error {
 	if !ok {
 		return ErrUnknownSandbox
 	}
+	if _, err := m.fenceWatch(sb); err != nil {
+		return err
+	}
 	if err := m.restartFailed(ctx, sb); err != nil {
 		return err
 	}

@@ -299,8 +299,8 @@ checkpoint store and keeps each claim's registry row on the latest snapshot:
   starts none, and a round whose registry is down fails before it captures.
 - **Restore.** A lost node's replica is adopted like an archive: the first
   `Lookup` that reaches another node after the lease expires takes the row,
-  records the claim as archived on the replica with the adopter pool's
-  retention window, and the next call wakes it
+  records the claim as archived on the replica with the row's retention deadline,
+  or the adopter pool's window when it has none, and the next call wakes it
   through the archive wake, which restores the guest with its memory and
   processes. The claim resumes from its last committed replica: everything
   after it, and the connections open at the time, are lost: up to the longer of
@@ -330,15 +330,18 @@ checkpoint store and keeps each claim's registry row on the latest snapshot:
   checkpoint behind, the same residue as a node that never returns.
   A restart keeps the node's own live row for a running claim and takes the checkpoint a crashed round left on
   it; a claim whose row another node holds, or whose row a finished adopter
-  consumed, is dropped with its VM. A replica row has no retention deadline: the
-  hourly sweep never purges it, because no round refreshes it while the claim is
-  hibernated, and retention starts when the claim is archived or adopted. The
+  consumed, is dropped with its VM. A live claim's replica row has no retention
+  deadline: the hourly sweep never purges it, because no round refreshes it while
+  the claim is hibernated, and retention starts when the claim is archived or
+  adopted. A row the node holds with no claim, as after reconcile dropped it
+  because the VM record was gone, gains the retention deadline on that sweep: the claim stays adoptable
+  until it passes, and `archive_delete_after_seconds` 0 keeps the row. The
   rows of a node that never returns therefore stay until a client adopts them, a
   bounded residue of one row and up to two checkpoints per claim: the row's, and
   a committed pending replica or a previous replica the node died before
   deleting. Their metas stay live, so offline reclamation keeps them.
   They are archive checkpoints (`"archive": true` in their meta) that no
-  registry row names, which an operator can delete. Apart from that and the
+  registry row names, which an operator can delete. Apart from these and the
   lease rule the sweep is unchanged.
 - **Self-fencing.** A node whose renewal is overdue by 12 seconds (the lease
   length minus a 3 second margin, counted from the start of the last renewal
@@ -373,7 +376,9 @@ checkpoint store and keeps each claim's registry row on the latest snapshot:
   claim's first replica included: the agent relay
   (including parked keep-alive relays, whose later RPCs never pass the
   resolution gate), the exec call, port relays and preview requests. A client
-  retries and meets the 503 until the lease is back or the claim moved.
+  retries and meets the 503 until the lease is back or the claim moved. Neither
+  an API call nor the idle sweep starts a hibernate or a wake of such a claim
+  while the fence is closed, so an idle claim stays billed until the fence lifts.
   Streams of claims that are not replicated stay open.
 - **Availability.** The design chooses consistency over availability for
   replicated claims. A registry outage longer than the fence threshold (12

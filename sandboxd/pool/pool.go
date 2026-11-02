@@ -568,17 +568,12 @@ func (m *Manager) ClusterDigest() string {
 
 // Run drives the refill and reap loops until ctx is canceled.
 func (m *Manager) Run(ctx context.Context) {
-	refill := time.NewTicker(refillInterval)
-	defer refill.Stop()
-	reap := time.NewTicker(reapInterval)
-	defer reap.Stop()
-	liveness := time.NewTicker(livenessInterval)
-	defer liveness.Stop()
-	images := time.NewTicker(imageInterval)
-	defer images.Stop()
+	refill := time.Tick(refillInterval)
+	reap := time.Tick(reapInterval)
+	liveness := time.Tick(livenessInterval)
+	images := time.Tick(imageInterval)
 	// Store retention is hourly: each sweep is cluster-visible I/O on a shared root
-	storeSweep := time.NewTicker(time.Hour)
-	defer storeSweep.Stop()
+	storeSweep := time.Tick(time.Hour)
 	go m.sweepExpiredCheckpoints(ctx)
 	if m.cocoondSocket != "" {
 		go m.watchVMMs(ctx)
@@ -596,7 +591,7 @@ func (m *Manager) Run(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
-		case <-refill.C:
+		case <-refill:
 			if m.view.Load().out.Guarded() {
 				m.out.RefreshSelf()
 			}
@@ -604,7 +599,7 @@ func (m *Manager) Run(ctx context.Context) {
 			m.refillOnce(ctx)
 		case <-m.refillKick:
 			m.refillOnce(ctx)
-		case <-reap.C:
+		case <-reap:
 			m.retryRemovals(ctx)
 			m.reapOnce(ctx)
 			m.idleOnce(ctx)
@@ -612,11 +607,11 @@ func (m *Manager) Run(ctx context.Context) {
 			m.replicateOnce(ctx)
 			m.shrinkOnce(ctx)
 			go m.retryArchiveDeletes(ctx)
-		case <-liveness.C:
+		case <-liveness:
 			m.livenessOnce(ctx)
-		case <-images.C:
+		case <-images:
 			go m.checkImagesOnce(ctx)
-		case <-storeSweep.C:
+		case <-storeSweep:
 			go m.sweepStoreGenerations(ctx)
 			go m.sweepExpiredCheckpoints(ctx)
 			if m.archives != nil {
@@ -801,7 +796,7 @@ func logSweepResult(ctx context.Context, logger *log.Fields, err error, okMsg, f
 
 func benignSweepErr(err error) bool {
 	return errors.Is(err, ErrUnknownSandbox) || errors.Is(err, errWokeMeanwhile) ||
-		errors.Is(err, ErrNoEgressHibernate) || errors.Is(err, ErrQuota)
+		errors.Is(err, ErrNoEgressHibernate) || errors.Is(err, ErrQuota) || errors.Is(err, ErrLeaseLost)
 }
 
 func vmName(key types.PoolKey) string {

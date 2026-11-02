@@ -15,6 +15,7 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/archives"
 	"github.com/cocoonstack/sandbox/sandboxd/engine"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
+	"github.com/cocoonstack/sandbox/sandboxd/usage"
 	"github.com/cocoonstack/sandbox/sandboxd/utils"
 )
 
@@ -38,7 +39,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 
 	owned := map[string]bool{}
 	referenced := map[string]bool{}
-	var adopted []*types.Sandbox
+	var adopted, dropped, resumed []*types.Sandbox
 	m.mu.Lock()
 	for _, sb := range claims {
 		sb.SetEnv(sb.Env)
@@ -51,6 +52,9 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 		case ok && rec.State == vmStateRunning:
 			sb.VsockSocket = rec.VsockSocket
 			// running with either flag set means a crashed wake or an intent the engine never saw
+			if sb.HibernateSnap != "" {
+				resumed = append(resumed, sb)
+			}
 			sb.HibernateSnap, sb.PendingSnap = "", ""
 		case ok && sb.HibernateSnap != "":
 			// hibernated: the VM is stopped by design and wakes on demand.
@@ -63,6 +67,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 			// the VMM died with the host or on its own; the liveness pass restarts or fails it
 			sb.PendingSnap = ""
 		default:
+			dropped = append(dropped, sb)
 			continue
 		}
 		m.addClaimLocked(sb)
@@ -79,6 +84,10 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 	m.mu.Unlock()
 	for _, sb := range adopted {
 		m.recordHibernate(ctx, sb)
+	}
+	// A failed save keeps the records, so the next boot records them
+	if saveErr == nil {
+		m.recordReconciled(ctx, resumed, dropped, fenced)
 	}
 	logger := log.WithFunc("pool.Reconcile")
 	if err := m.ckpts.SweepStaging(); err != nil {
@@ -262,7 +271,23 @@ func (m *Manager) quarantineClaim(ctx context.Context, sb *types.Sandbox) bool {
 	td := m.quiesceVolumes(ctx, sb)
 	gone := m.removeOrRetry(ctx, sb.VMName, sb.ID, td)
 	m.forgetClaim(ctx, sb)
+	m.recordEnd(ctx, sb, "quarantined")
 	return gone
+}
+
+func (m *Manager) recordReconciled(ctx context.Context, resumed, dropped []*types.Sandbox, answered bool) {
+	for _, sb := range resumed {
+		m.recordUsage(ctx, usage.Event{Event: "wake", ID: sb.ID, VMName: sb.VMName, Tenant: sb.Tenant, Deadline: sb.Deadline})
+	}
+	for _, sb := range dropped {
+		if answered || !sb.HasReplica() {
+			m.recordEnd(ctx, sb, "vm_gone")
+		}
+	}
+}
+
+func (m *Manager) recordEnd(ctx context.Context, sb *types.Sandbox, reason string) {
+	m.recordUsage(ctx, usage.Event{Event: reapEvent, ID: sb.ID, VMName: sb.VMName, Tenant: sb.Tenant, Deadline: sb.Deadline, Reference: reason})
 }
 
 // readoptEgressTap records and returns a live egress claim's tap, "" when there is none.
