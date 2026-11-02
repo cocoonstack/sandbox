@@ -840,6 +840,8 @@ only; computing durations or prices stays with the consumer.
       id          text        NOT NULL,
       vm          text        NOT NULL DEFAULT '',
       key         text        NOT NULL DEFAULT '',
+      template    text        NOT NULL DEFAULT '',
+      size        text        NOT NULL DEFAULT '',
       tenant      text        NOT NULL DEFAULT '',
       volumes     text[],
       volumes_rw  text[],
