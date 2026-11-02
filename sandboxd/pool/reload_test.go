@@ -334,7 +334,7 @@ func TestAnInterruptedReloadStillDestroysTheRetiredWarmVMs(t *testing.T) {
 	}
 }
 
-func TestAReloadThatUnguardsTheNodeClosesThePreboundDoors(t *testing.T) {
+func TestAReloadThatUnguardsTheNodeClosesAWarmVMsDoorsAtItsClaim(t *testing.T) {
 	eng := newFakeEngine()
 	eng.sockRoot = outboundtest.SockRoot(t)
 	m := egressManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1, Egress: &egress.Policy{Allow: []egress.Rule{{Host: "example.com"}}}})
@@ -345,12 +345,25 @@ func TestAReloadThatUnguardsTheNodeClosesThePreboundDoors(t *testing.T) {
 	if _, err := m.ReloadConfig(t.Context(), &next); err != nil {
 		t.Fatalf("reload: %v", err)
 	}
+	conn, err := net.Dial("unix", pin)
+	if err != nil {
+		t.Fatalf("the unclaimed warm VM's door: %v, want it bound until the claim", err)
+	}
+	_ = conn.Close()
+
+	sb := mustClaim(t, m, testKey)
+	if sb.VMName != warm.VMName {
+		t.Fatalf("claim took %s, want the warm VM %s", sb.VMName, warm.VMName)
+	}
 	if conn, err := net.Dial("unix", pin); err == nil {
 		_ = conn.Close()
-		t.Error("a prebound door is left open on a node with no egress policy")
+		t.Error("a prebound door is left open on a claim of a node with no egress policy")
 	}
-	if _, err := net.Dial("unix", engine.EgressSocketPath(warm.VsockSocket)); err == nil {
-		t.Error("a door refill bound still accepts after the reload removed every policy")
+	if _, err := net.Dial("unix", engine.EgressSocketPath(sb.VsockSocket)); err == nil {
+		t.Error("a door refill bound still accepts on a claim of a node with no egress policy")
+	}
+	if route := m.NetRoute(sb); route != types.NetRouteNone {
+		t.Errorf("claim route %q, want none", route)
 	}
 }
 
