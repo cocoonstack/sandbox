@@ -180,6 +180,8 @@ func (f *fakeEngine) MarkLane(context.Context, string, types.NetRoute) error { r
 
 func (f *fakeEngine) Warmup(context.Context, string, []string) error { return nil }
 
+func (f *fakeEngine) SettleGuest(context.Context, string) error { return nil }
+
 func (f *fakeEngine) TrimCow(context.Context, string) error { return nil }
 
 func (f *fakeEngine) DiskAttach(_ context.Context, vmName string, spec engine.VolumeSpec) error {

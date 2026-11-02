@@ -136,6 +136,35 @@ func TestMountVolumeUsesSysfsAndRequestedMode(t *testing.T) {
 	}
 }
 
+func TestSettleGuestWaitsForInitAndTakesAnyExitAsFinished(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		prepare func(*fakeSilkd)
+		wantErr bool
+	}{
+		{"running", func(*fakeSilkd) {}, false},
+		{"degraded exits non-zero", func(f *fakeSilkd) { f.execCode = 1 }, false},
+		{"no systemctl to run", func(f *fakeSilkd) { f.execErr = "spawn failed" }, true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			path := sockPath(t)
+			fake := serveFakeSilkd(t, path)
+			fake.mu.Lock()
+			tt.prepare(fake)
+			fake.mu.Unlock()
+			err := New("cocoon", nil, nil, false, false, "").SettleGuest(t.Context(), path)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("SettleGuest: %v, want error %t", err, tt.wantErr)
+			}
+			fake.mu.Lock()
+			defer fake.mu.Unlock()
+			if want := []string{"systemctl", "is-system-running", "--wait"}; !slices.Equal(fake.execArgv, want) {
+				t.Errorf("argv %v, want %v", fake.execArgv, want)
+			}
+		})
+	}
+}
+
 func TestUmountVolumeExecsBoundedUmount(t *testing.T) {
 	if VolumeCallTimeout != 2*time.Second {
 		t.Fatalf("volume call timeout = %s, want 2s", VolumeCallTimeout)

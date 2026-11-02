@@ -147,6 +147,7 @@ type Engine interface {
 	InstallCACert(ctx context.Context, vsockSocket string, certPEM []byte) error
 	MarkLane(ctx context.Context, vsockSocket string, lane types.NetRoute) error
 	Warmup(ctx context.Context, vsockSocket string, argv []string) error
+	SettleGuest(ctx context.Context, vsockSocket string) error
 	TrimCow(ctx context.Context, vsockSocket string) error
 	CheckLiveVolumeSupport(ctx context.Context) error
 	DiskAttach(ctx context.Context, vmName string, spec engine.VolumeSpec) error
