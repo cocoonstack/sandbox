@@ -80,7 +80,7 @@ func (m *Manager) writeEnv(ctx context.Context, id, tenant, verb string, next fu
 		}
 		return ErrPaused
 	}
-	rowed, deliver := m.archiveRowed(sb), !paused
+	rowed, deliver := m.envRowed(sb), !paused
 	if env.Equal(prev) {
 		m.mu.Unlock()
 	} else {
@@ -115,12 +115,18 @@ func (m *Manager) rewriteArchiveRow(ctx context.Context, sb *types.Sandbox, lock
 	}
 	for range 2 {
 		m.mu.Lock()
-		ck, rowed := sb.ArchiveCk, m.claimed[sb.ID] == sb && m.archiveRowed(sb)
+		ck, replica, rowed := sb.ArchiveCk, sb.ReplicaCk, m.claimed[sb.ID] == sb && m.envRowed(sb)
 		m.mu.Unlock()
 		if !rowed {
 			return nil
 		}
-		epoch, err := m.replaceArchive(ctx, sb, ck)
+		var epoch int64
+		var err error
+		if ck != "" {
+			epoch, err = m.replaceArchive(ctx, sb, ck)
+		} else {
+			epoch, err = m.replaceReplica(ctx, sb, replica)
+		}
 		if err == nil {
 			_, _ = m.commitIfLive(ctx, sb, func() { sb.ArchiveEpoch = epoch })
 			return nil
@@ -133,6 +139,10 @@ func (m *Manager) rewriteArchiveRow(ctx context.Context, sb *types.Sandbox, lock
 		}
 	}
 	return nil
+}
+
+func (m *Manager) envRowed(sb *types.Sandbox) bool {
+	return m.archiveRowed(sb) || m.replicaRowed(sb) && sb.HibernateSnap != ""
 }
 
 func (m *Manager) deliverGuestEnv(ctx context.Context, verb, id, sock string, env types.Env, deliver bool) error {

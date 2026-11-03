@@ -362,8 +362,10 @@ guest's next connection; a tunnel the guest keeps open stays as it was.
 The placeholder is not a secret: it stays in the guest and in `GET /env`.
 The entry rides the claim request or any `/env` write, and rotation is the
 same `PATCH`, accepted on a hibernated or archived claim without waking it.
-With [`archive_failover`](deploy.md#configuration) the write also replaces an
-archived claim's row, so an adopter starts from the rotated value. While the
+With [`archive_failover`](deploy.md#configuration) the write also replaces the
+row of an archived claim, or of a hibernated claim with a replica, so an adopter
+starts from the rotated value; a running replicated claim's row takes it at the
+next replication round. While the
 meta store is down the write answers 503 with the claim's own record already
 changed: resend it, and the resend replaces the row.
 

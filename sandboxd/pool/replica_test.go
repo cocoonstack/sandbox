@@ -1261,6 +1261,55 @@ func TestReplicaArchiveWhoseJournalWriteFailsKeepsTheClaimAcrossARestart(t *test
 	}
 }
 
+func TestReplicaEnvRotationOfAHibernatedClaimReachesTheAdopter(t *testing.T) {
+	c := newReplicaCluster(t)
+	a, b := c.node(t, "a", t.TempDir(), keepAnHour), c.node(t, "b", t.TempDir(), keepAnHour)
+	sb := mustClaim(t, a, testKey)
+	patchHostOnly(t, a, sb, "old")
+	replicateNow(t, a, sb)
+	if err := a.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
+		t.Fatalf("hibernate: %v", err)
+	}
+	replica := sb.ReplicaCk
+
+	patchHostOnly(t, a, sb, "new")
+	if got := rowEnv(t, c, sb); got != "new" {
+		t.Errorf("row env %q after a rotation, want new", got)
+	}
+	rec, _, err := c.reg.Get(t.Context(), sb.ID)
+	if err != nil {
+		t.Fatalf("row: %v", err)
+	}
+	if rec.Epoch != a.epochOf(sb) || rec.Checkpoint != replica || !rec.Deadline.IsZero() {
+		t.Errorf("row %+v claim epoch %d, want it on the replica %s at the claim's epoch with no deadline", rec, a.epochOf(sb), replica)
+	}
+
+	c.expire("a")
+	if adopted, err := b.AdoptArchived(t.Context(), sb.ID, sb.Token); err != nil || !adopted {
+		t.Fatalf("adopt: %v %v", adopted, err)
+	}
+	held, ok := b.byID(sb.ID)
+	if !ok {
+		t.Fatal("adopter has no claim")
+	}
+	if got, _ := held.HiddenEnv("GH_TOKEN"); got != "new" {
+		t.Errorf("adopter holds %q, want the rotated value", got)
+	}
+}
+
+func TestReplicaEnvWriteOfARunningClaimLeavesTheRowToTheRound(t *testing.T) {
+	c := newReplicaCluster(t)
+	a := c.node(t, "a", t.TempDir(), keepAnHour)
+	sb := mustClaim(t, a, testKey)
+	replicateNow(t, a, sb)
+	reg := &replaceFailRegistry{Registry: c.reg, fail: true}
+	a.archives = reg
+	patchHostOnly(t, a, sb, "new")
+	if reg.calls != 0 {
+		t.Errorf("%d registry replaces for a running replicated claim, want 0", reg.calls)
+	}
+}
+
 func restartWithoutVM(t *testing.T, c *failoverCluster, a *Manager, sb *types.Sandbox, deleteAfter int) *Manager {
 	t.Helper()
 	if err := a.FlushClaims(); err != nil {

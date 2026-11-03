@@ -986,8 +986,8 @@ deliver it. The guest side is described in [silkd](silkd.md#claim-env).
 `PUT`/`PATCH` answer 204, `GET` 200; 400 a bad entry, an unknown body
 field or an `inject` outside the claim's intercepted hosts; 404 unknown id or another tenant's claim; 409 a guest change on a
 paused or failed sandbox; 503 the archive registry is down, for an archived
-claim with `archive_failover`: the node already holds the new env, and a resend
-replaces the row.
+claim or a hibernated claim with a replica under `archive_failover`: the node
+already holds the new env, and a resend replaces the row.
 
 ## PUT /v1/sandboxes/{id}/instance-metadata
 
