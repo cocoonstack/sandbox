@@ -410,12 +410,20 @@ class Sandbox:
         """Releases the sandbox; its VM is destroyed."""
         self._pool.drain()
         try:
-            self._client._request(
-                self.owner, "POST", f"/v1/sandboxes/{self.id}/release", None, "release", bearer=self.token
-            )
+            self._release_at(self.owner)
+            return
         except APIError as exc:
             if exc.status != 404:
                 raise
+        try:
+            moved = self._client.lookup(self.id, self.token)
+            self._release_at(moved.owner)
+        except APIError as exc:
+            if exc.status != 404:
+                raise
+
+    def _release_at(self, addr: str) -> None:
+        self._client._request(addr, "POST", f"/v1/sandboxes/{self.id}/release", None, "release", bearer=self.token)
 
     def _volumes_request(
         self, method: str, body: dict[str, Any] | None, verb: str, timeout: float | None

@@ -717,6 +717,35 @@ func TestDrainEndpoints(t *testing.T) {
 	}
 }
 
+func TestDrainEvacuateStartsAnEvacuationAndReportsIt(t *testing.T) {
+	mgr := &fakeManager{evacuateLeft: 2}
+	ts := newTestServer(t, "", mgr, nil)
+	statusOf(t, http.MethodPost, ts.URL+"/v1/drain", "", "")
+	if mgr.evacuated {
+		t.Fatal("a plain drain started an evacuation")
+	}
+	resp := doReq(t, http.MethodPost, ts.URL+"/v1/drain?evacuate=1", "", "")
+	info := decodeJSON[InfoResponse](t, resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || !mgr.evacuated || !info.Draining || info.Evacuating != 2 {
+		t.Fatalf("status=%d evacuated=%v info=%+v, want 200, an evacuation and 2 left", resp.StatusCode, mgr.evacuated, info)
+	}
+	body := scrapeMetrics(t, ts.URL)
+	if want := "sandboxd_evacuating 2\n"; !strings.Contains(body, want) {
+		t.Errorf("metrics miss %q:\n%s", want, body)
+	}
+}
+
+func TestAnEvacuatingSandboxAnswersRetry(t *testing.T) {
+	mgr := &fakeManager{socket: func(string, string) (string, error) { return "", pool.ErrEvacuating }}
+	ts := newTestServer(t, "", mgr, nil)
+	resp := doReq(t, http.MethodPost, ts.URL+"/v1/sandboxes/sb_1/exec", "tok", `{"argv":["true"]}`)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusServiceUnavailable || resp.Header.Get("Retry-After") == "" {
+		t.Errorf("exec on an evacuating sandbox: status %d Retry-After %q, want 503 with Retry-After", resp.StatusCode, resp.Header.Get("Retry-After"))
+	}
+}
+
 func TestPutPoolsUpdatesTargets(t *testing.T) {
 	var got []config.PoolSpec
 	mgr := &fakeManager{
@@ -2227,6 +2256,8 @@ type fakeManager struct {
 	sandboxIndex       func(tenant, claimRef string) []pool.SandboxSummary
 	sandboxByID        func(id string) (pool.SandboxSummary, bool)
 	draining           bool
+	evacuated          bool
+	evacuateLeft       int
 	reader             *fakeReader
 }
 
@@ -2550,7 +2581,7 @@ func (f *fakeManager) SetPools(_ context.Context, pools []config.PoolSpec) error
 }
 
 func (f *fakeManager) Info() ([]pool.PoolInfo, pool.Gauges) {
-	return f.infoPools, pool.Gauges{Draining: f.draining}
+	return f.infoPools, pool.Gauges{Draining: f.draining, Evacuating: f.evacuateLeft}
 }
 
 func (f *fakeManager) Templates() []pool.TemplateInfo { return f.infoTemplates }
@@ -2579,6 +2610,8 @@ func (f *fakeManager) Env(_, tenant string) (types.Env, error) {
 }
 
 func (f *fakeManager) Drain(context.Context) { f.draining = true }
+
+func (f *fakeManager) Evacuate(context.Context) { f.draining, f.evacuated = true, true }
 
 func (f *fakeManager) Uncordon(context.Context) { f.draining = false }
 

@@ -518,6 +518,7 @@ success, 404 unknown id or wrong token, 409 a failed egress-lane or volume
 sandbox, or one whose VM record is gone, 403 a removed tenant's archive,
 429 while the disk reserve is low or the node is at [`max_running`](deploy.md#configuration), 500 when the cold boot or a restore fails,
 503 `lease lost; retry` for a replicated claim while its node's lease is overdue,
+503 `sandbox moving to another node; retry` while an [evacuation](#post-v1drain) has yet to move it,
 503 `archive registry down; retry` for an archived claim under `archive_failover` while the meta store is down.
 
 ## POST /v1/sandboxes/{id}/renew
@@ -784,10 +785,35 @@ or TTL. Pool ownership is untouched — no pools.json write, no config change.
 Answers the fresh `GET /v1/info` payload; poll `claimed` to zero to know the
 node is empty. Deliberately not persisted: a restarted node serves again.
 
+`POST /v1/drain?evacuate=1` cordons the same way, then moves the claims to the
+peers with their state, so the node empties without waiting for the leases to
+run out (see [evacuating a node](cluster.md#evacuating-a-node)). It needs
+[`archive_failover`](cluster.md#archived-claims-across-node-loss). In the
+background, with bounded concurrency, each claim is hibernated if it runs,
+archived to the checkpoint store if it is not archived, its registry row is
+released, and a peer is asked to adopt it through `GET /v1/sandboxes/{id}/owner`,
+so the root listing on that peer shows it with its token. Open streams to a
+claim end when it hibernates. Until a peer holds it, a call that would wake the
+claim answers 503 `sandbox moving to another node; retry` with `Retry-After`;
+after that this node answers 404 and the client looks the claim up again. With
+no peer to adopt it, the node takes the row back and the claim stays. A claim
+that cannot move stays here
+and keeps serving: an egress-lane claim, one with volumes, a failed one, one
+whose tenant was removed, one archived before `archive_failover` was on, one
+whose step failed, and every claim of a node without `archive_failover`. The
+answer and `GET /v1/info` count the claims left in `evacuating`; once it is
+gone, `claimed` counts the ones that stayed, and the log names each and why. A
+claim of a pool without an archive tier, whose `on_expire` is not `archive`,
+keeps its lease deadline across the move; any other keeps the later of its
+lease and `archive_delete_after_seconds`, or no deadline when that is 0. A call
+while an evacuation runs changes nothing; a call after one finished starts a
+new one over the claims still here.
+
 ## DELETE /v1/drain
 
-Auth: root only (tenant tokens get 403). Lifts the drain and kicks an immediate refill. Answers the
-fresh info payload.
+Auth: root only (tenant tokens get 403). Lifts the drain, stops an evacuation, and kicks an immediate refill. Answers the
+fresh info payload. A claim an evacuation is archiving finishes its archive and
+stays here archived; the next call wakes it.
 
 ## POST /v1/sandboxes/{id}/preview
 
@@ -1010,7 +1036,7 @@ verb never wakes one) or its image serves no instance metadata.
 
 Auth: root only (tenant tokens get 403). Prometheus text format,
 hand-rendered: pool warm/target gauges, claimed/running/max_running/hibernated/archived/failed/draining
-gauges, a per-tenant live-claim gauge (`sandboxd_tenant_claims{tenant="…"}`,
+gauges, `sandboxd_evacuating` (the claims an evacuation has yet to move), a per-tenant live-claim gauge (`sandboxd_tenant_claims{tenant="…"}`,
 tenants holding live claims only, so the label set is bounded by the node's claims), `sandboxd_config_digest_mismatch` on a mesh, claims
 by tier (warm/clone/cold),
 wake/hibernate/fork/checkpoint/promote/release/reap counters plus
@@ -1224,8 +1250,9 @@ Auth: the sandbox's own token. Answers `{"owner_addr": "host:port"}` when
 this node owns the sandbox, 404 otherwise. With
 [`archive_failover`](cluster.md#archived-claims-across-node-loss), a node that
 does not hold the sandbox adopts it when its row names an owner whose node
-lease expired, and answers 200; 503 with `Retry-After` when the meta store is
-down. A row whose owner's lease is live is never adopted: 404. A draining or fenced
+lease expired, or whose owner released it in an
+[evacuation](#post-v1drain), and answers 200; 503 with `Retry-After` when the meta store is
+down. A row whose owner's lease is live is never adopted unless the owner released it: 404. A draining or fenced
 node, or one that lifted its fence less than 8 seconds ago, does not adopt: 404. A node whose
 lease is overdue answers 404 for the replicated claims it holds, so the
 `Lookup` scatter moves on. With `client_advertise` configured,
@@ -1267,7 +1294,8 @@ and was not restarted (omitted at zero); all are included in `claimed`.
 `running` counts claims that hold a VM, with a wake in flight counted, and
 `max_running` is the [cap](deploy.md#configuration) on it (omitted when off).
 A node cordoned via [`POST /v1/drain`](#post-v1drain) additionally reports
-`"draining": true`. When refill is parked because the node cannot start
+`"draining": true`, and during an evacuation `evacuating` (claims left to
+move, omitted at zero). When refill is parked because the node cannot start
 another VM, `"at_capacity": true` distinguishes a full node from one still
 filling its warm target, and `at_capacity_reason` carries the engine's capacity
 reason. Both capacity fields are omitted while refill is not capacity-blocked. Each VM holds a console pty, so a node stops at `kernel.pty.max` (4096 by default) with `no space left on device`; raise it past the VM count you plan to run.

@@ -78,6 +78,12 @@ func (r *Registry) Take(ctx context.Context, id string, expect int64, owner stri
 		RETURNING epoch`, r.cell, id, expect, owner)
 }
 
+func (r *Registry) Release(ctx context.Context, id string, expect int64, owner string) (int64, error) {
+	return r.advance(ctx, `UPDATE sandboxd_archives SET owner = '', epoch = nextval('sandboxd_archives_epoch'), updated_at = now()
+		WHERE cell = $1 AND id = $2 AND epoch = $3 AND owner = $4 AND NOT consumed
+		RETURNING epoch`, r.cell, id, expect, owner)
+}
+
 func (r *Registry) TakeOwned(ctx context.Context, owner string, expect map[string]int64) (map[string]int64, error) {
 	ids, epochs := make([]string, 0, len(expect)), make([]int64, 0, len(expect))
 	for id, epoch := range expect {

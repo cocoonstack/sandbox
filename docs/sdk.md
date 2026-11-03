@@ -227,8 +227,11 @@ are exported.
 `Sandbox.TemplateDigest` is the exact content identity when the claim cloned a
 promoted template; it is empty for other sources. `Owner()` names the owning
 node, and `Token()` returns the per-sandbox bearer to persist with `ID` for a
-later `Lookup`; `Close()` releases the sandbox (releasing one already gone is
-not an error, and `Close` is bounded internally so it stays defer-friendly).
+later `Lookup`; `Close()` releases the sandbox (it follows a sandbox that
+moved to another node with a `Lookup`, releasing one already gone is not an
+error, and `Close` is bounded internally so it stays defer-friendly). Any other
+call on a handle answers 404 once its sandbox has moved; run `Lookup` to tell
+that from a released sandbox.
 Volume sandboxes cannot hibernate, fork, checkpoint, or promote. Egress-lane
 sandboxes cannot either, nor take `WithArchiveOnExpire`; each answers 409. Passing
 `WithVolumes` or `WithClaimRef` to `Checkpoint.New` returns a local error:

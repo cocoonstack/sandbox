@@ -81,7 +81,7 @@ func (m *Manager) writeEnv(ctx context.Context, id, tenant, verb string, next fu
 		}
 		return ErrPaused
 	}
-	rowed, deliver := m.rowFollows(sb), !paused
+	rowed, deliver := m.rowFollows(sb) || sb.ArchivePending != "", !paused
 	if env.Equal(prev) {
 		m.mu.Unlock()
 	} else {
@@ -116,9 +116,12 @@ func (m *Manager) rewriteArchiveRow(ctx context.Context, sb *types.Sandbox, lock
 	}
 	for range 2 {
 		m.mu.Lock()
-		ck, replica, rowed := sb.ArchiveCk, sb.ReplicaCk, m.claimed[sb.ID] == sb && m.rowFollows(sb)
+		ck, replica, live, rowed := sb.ArchiveCk, sb.ReplicaCk, m.claimed[sb.ID] == sb, m.rowFollows(sb)
 		m.mu.Unlock()
-		if !rowed {
+		switch {
+		case !live:
+			return ErrUnknownSandbox
+		case !rowed:
 			return nil
 		}
 		epoch, err := m.putRow(ctx, sb, cmp.Or(ck, replica), ck == "", true)

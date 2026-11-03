@@ -34,6 +34,7 @@ func (s *Server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
 	scalar("archived", "claims archived to the checkpoint store", g.Archived)
 	scalar("failed", "claims whose VMM is down and not restarted", g.Failed)
 	scalar("draining", "1 while the node is cordoned for maintenance", draining)
+	scalar("evacuating", "claims an evacuation has yet to move to a peer", g.Evacuating)
 
 	if tenants := s.mgr.TenantClaims(); len(tenants) > 0 {
 		metric("tenant_claims", "gauge", "live claims per configured tenant")

@@ -217,10 +217,14 @@ func writeFile(target string, r io.Reader, mode os.FileMode) error {
 }
 
 func checkpointURL(addr, id, suffix string) string {
+	return peerURL(addr, "/v1/checkpoints/"+url.PathEscape(id)+suffix)
+}
+
+func peerURL(addr, path string) string {
 	if !strings.Contains(addr, "://") {
 		addr = "http://" + addr
 	}
-	return addr + "/v1/checkpoints/" + url.PathEscape(id) + suffix
+	return addr + path
 }
 
 // safeJoin resolves name under root, rejecting absolute paths and names that escape root.

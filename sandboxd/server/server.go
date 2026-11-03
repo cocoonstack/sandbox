@@ -60,6 +60,7 @@ var poolErrHTTP = []struct {
 	{pool.ErrArchiveStoreDown, http.StatusServiceUnavailable, "archive registry down; retry"},
 	{pool.ErrVolumeCatalogUnavailable, http.StatusServiceUnavailable, "volume catalog unavailable; retry"},
 	{pool.ErrLeaseLost, http.StatusServiceUnavailable, "lease lost; retry"},
+	{pool.ErrEvacuating, http.StatusServiceUnavailable, "sandbox moving to another node; retry"},
 	{pool.ErrNoEgress, http.StatusConflict, ""},
 	{pool.ErrNoEgressHibernate, http.StatusConflict, ""},
 	{pool.ErrNoEgressFork, http.StatusConflict, ""},
@@ -138,6 +139,7 @@ type Manager interface {
 	PutTenant(ctx context.Context, spec tenants.TenantSpec) error
 	DeleteTenant(ctx context.Context, name string) error
 	Drain(ctx context.Context)
+	Evacuate(ctx context.Context)
 	Uncordon(ctx context.Context)
 	Info() ([]pool.PoolInfo, pool.Gauges)
 	Templates() []pool.TemplateInfo
@@ -187,6 +189,7 @@ type InfoResponse struct {
 	Archived         int                 `json:"archived"`
 	Failed           int                 `json:"failed,omitzero"`
 	Draining         bool                `json:"draining,omitzero"`
+	Evacuating       int                 `json:"evacuating,omitzero"`
 	AdvertiseAddr    string              `json:"advertise_addr,omitempty"`
 	Peers            []string            `json:"peers,omitempty"`
 	AtCapacity       bool                `json:"at_capacity,omitzero"`
@@ -820,7 +823,11 @@ func (s *Server) handleDeleteTenant(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleDrain(w http.ResponseWriter, r *http.Request) {
-	s.mgr.Drain(r.Context())
+	if r.URL.Query().Get("evacuate") != "" {
+		s.mgr.Evacuate(r.Context())
+	} else {
+		s.mgr.Drain(r.Context())
+	}
 	s.handleInfo(w, r)
 }
 
@@ -841,7 +848,7 @@ func (s *Server) handleInfo(w http.ResponseWriter, _ *http.Request) {
 	pools, g := s.mgr.Info()
 	resp := InfoResponse{
 		Pools: pools, Templates: s.mgr.Templates(), Claimed: g.Claimed, Running: g.Running, MaxRunning: g.MaxRunning, Hibernated: g.Hibernated, Archived: g.Archived, Failed: g.Failed,
-		Draining: g.Draining, AtCapacity: g.AtCapacity, AtCapacityReason: g.AtCapacityReason,
+		Draining: g.Draining, Evacuating: g.Evacuating, AtCapacity: g.AtCapacity, AtCapacityReason: g.AtCapacityReason,
 		AdvertiseAddr: s.advertise,
 	}
 	if s.placer != nil {
