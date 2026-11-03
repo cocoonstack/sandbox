@@ -226,6 +226,7 @@ func (m *Manager) buildGolden(ctx context.Context, p *pool) {
 		return
 	}
 	logger.Infof(ctx, "golden ready for %s (%s)", hash, p.key.Template)
+	m.kickRefill()
 }
 
 func (m *Manager) buildGoldenSteps(ctx context.Context, v *configView, key types.PoolKey, name, snap, final, imageID string) error {
