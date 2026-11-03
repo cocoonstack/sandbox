@@ -75,6 +75,35 @@ func TestSleepingLoneInfoWakes(t *testing.T) {
 	}
 }
 
+func TestSleepingSecondInfoBeforeACallWakes(t *testing.T) {
+	env := newSleepingEnv(t)
+	conn, r := env.upgrade(t)
+
+	send(t, conn, infoFrame+infoFrame)
+	stop := make(chan struct{})
+	defer close(stop)
+	go func() {
+		tick := time.Tick(10 * time.Millisecond)
+		for {
+			select {
+			case <-stop:
+				return
+			case <-tick:
+				_, _ = io.WriteString(conn, infoFrame)
+			}
+		}
+	}()
+	_ = conn.SetReadDeadline(time.Now().Add(time.Second))
+	expectLine(t, r, "guest")
+	expectLine(t, r, "guest")
+	if wakes, dials := env.reader.counts(); wakes != 1 || dials != 0 {
+		t.Errorf("wakes=%d reader dials=%d, want a wake and no reader", wakes, dials)
+	}
+	if got := env.frames.all(); len(got) < 2 || !slices.Equal(got[:2], []string{"guest:" + infoFrame, "guest:" + infoFrame}) {
+		t.Errorf("frames %q, want both infos replayed to the guest first", got)
+	}
+}
+
 func TestSleepingFirstWriteWakesAsBefore(t *testing.T) {
 	for name, first := range map[string]string{"exec": execFrame, "write": line(wire.FsWrite{Path: "/x"}), "port": line(wire.PortForward{Port: 80})} {
 		t.Run(name, func(t *testing.T) {

@@ -75,6 +75,9 @@ func (r *router) run() (net.Conn, func(), bool) {
 				return nil, nil, false
 			}
 		case op == infoOp && r.reader == nil:
+			if len(r.pending) > 0 {
+				return r.handover(head)
+			}
 			r.pending = append(r.pending, head...)
 			followed, waitErr := r.infoFollowed()
 			if waitErr != nil {
