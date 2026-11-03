@@ -317,11 +317,14 @@ func (m *Manager) releaseRowed(ctx context.Context, id string, sb *types.Sandbox
 }
 
 func (m *Manager) consumeArchive(ctx context.Context, sb *types.Sandbox) (int64, error) {
-	if !m.archiveRowed(sb) && !m.replicaRowed(sb) {
+	m.mu.Lock()
+	rowed, epoch := m.archiveRowed(sb) || m.replicaRowed(sb), sb.ArchiveEpoch
+	m.mu.Unlock()
+	if !rowed {
 		return 0, nil
 	}
 	ctx = context.WithoutCancel(ctx)
-	consumed, err := m.consumeRow(ctx, sb, sb.ArchiveEpoch, "consume archive row")
+	consumed, err := m.consumeRow(ctx, sb, epoch, "consume archive row")
 	if err != nil {
 		return 0, err
 	}
