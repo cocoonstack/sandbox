@@ -741,6 +741,26 @@ func (m *Manager) sweepStoreGenerations(ctx context.Context) {
 	}
 }
 
+// runBounded fans f over n items on the refill semaphore, sharing the node-wide budget but never the share maintSem leaves to refill.
+func (m *Manager) runBounded(ctx context.Context, n int, f func(context.Context, int)) *sync.WaitGroup {
+	var wg sync.WaitGroup
+	for i := range n {
+		// Acquire inside the goroutine so a batch larger than the budget cannot block the caller
+		wg.Go(func() {
+			for _, sem := range [...]chan struct{}{m.maintSem, m.refillSem} {
+				select {
+				case sem <- struct{}{}:
+				case <-ctx.Done():
+					return
+				}
+				defer func() { <-sem }()
+			}
+			f(ctx, i)
+		})
+	}
+	return &wg
+}
+
 func (m *Manager) untrack(set map[string]struct{}, key string) {
 	m.mu.Lock()
 	delete(set, key)
