@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/cocoonstack/sandbox/sandboxd/usage"
@@ -114,6 +115,48 @@ func TestJournalKeepsTheFirstAppendAfterATornLine(t *testing.T) {
 	var ev usage.Event
 	if len(lines) != 3 || json.Unmarshal([]byte(lines[2]), &ev) != nil || ev.ID != "sb_b" {
 		t.Errorf("journal after a torn line %q, want the append on a line of its own", raw)
+	}
+	if st, _ := os.Stat(path); j.size != st.Size() {
+		t.Errorf("journal size %d, file %d", j.size, st.Size())
+	}
+}
+
+func TestJournalEndsALineAShortWriteTore(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "usage.jsonl")
+	j, err := newJournal(path)
+	if err != nil {
+		t.Fatalf("new journal: %v", err)
+	}
+	if err = j.append(usage.Event{Event: "claim", ID: "sb_a"}); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+	var limit syscall.Rlimit
+	if err = syscall.Getrlimit(syscall.RLIMIT_FSIZE, &limit); err != nil {
+		t.Fatalf("getrlimit: %v", err)
+	}
+	short := limit
+	short.Cur = uint64(j.size) + 5
+	if err = syscall.Setrlimit(syscall.RLIMIT_FSIZE, &short); err != nil {
+		t.Fatalf("setrlimit: %v", err)
+	}
+	tornErr := j.append(usage.Event{Event: "release", ID: "sb_a"})
+	if err = syscall.Setrlimit(syscall.RLIMIT_FSIZE, &limit); err != nil {
+		t.Fatalf("restore rlimit: %v", err)
+	}
+	if tornErr == nil {
+		t.Fatal("append past the file size limit succeeded, want a short write")
+	}
+	if err = j.append(usage.Event{Event: "claim", ID: "sb_b"}); err != nil {
+		t.Fatalf("append after the short write: %v", err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	lines := strings.Split(strings.TrimSuffix(string(raw), "\n"), "\n")
+	var ev usage.Event
+	if len(lines) != 3 || json.Unmarshal([]byte(lines[2]), &ev) != nil || ev.ID != "sb_b" {
+		t.Errorf("journal after a short write %q, want the next append on a line of its own", raw)
 	}
 	if st, _ := os.Stat(path); j.size != st.Size() {
 		t.Errorf("journal size %d, file %d", j.size, st.Size())

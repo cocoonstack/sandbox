@@ -25,6 +25,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"golang.org/x/time/rate"
+
 	"github.com/cocoonstack/sandbox/sandboxd/utils"
 )
 
@@ -34,6 +36,10 @@ const (
 	maxIdleConns  = 64
 	maxInjectBody = 64 << 10
 	scrubChunk    = 16 << 10
+	maxHostLen    = 253
+
+	refusalRate  = 10
+	refusalBurst = 100
 )
 
 var (
@@ -143,6 +149,7 @@ type Proxy struct {
 	router   Router
 	holder   Holder
 	pools    atomic.Pointer[connPools]
+	refusals *rate.Limiter
 
 	// leaves caches this sandbox's interception leaves; per-proxy, never shared.
 	leafMu sync.Mutex
@@ -162,13 +169,14 @@ func New(policy Evaluator, secrets Secrets, ca *CA, router Router, audit AuditFu
 		return router.Dial(ctx, "", network, addr)
 	}
 	p := &Proxy{
-		policy:  policy,
-		secrets: secrets,
-		ca:      ca,
-		audit:   audit,
-		router:  router,
-		holder:  holder,
-		conns:   map[net.Conn]struct{}{},
+		policy:   policy,
+		secrets:  secrets,
+		ca:       ca,
+		audit:    audit,
+		router:   router,
+		holder:   holder,
+		refusals: rate.NewLimiter(refusalRate, refusalBurst),
+		conns:    map[net.Conn]struct{}{},
 	}
 	// The stdlib default of 2 idle conns per host re-dials bursty same-host traffic.
 	pools := &connPools{tr: &http.Transport{DialContext: direct, MaxIdleConns: maxIdleConns, MaxIdleConnsPerHost: 8, IdleConnTimeout: idleConnTimeout}, routed: map[routeKey]*http.Transport{}}
@@ -461,9 +469,11 @@ func (p *Proxy) reportTransfer(ev Event, sent, received int64) {
 }
 
 func (p *Proxy) record(ev Event) {
-	if p.audit != nil {
-		p.audit(ev)
+	if p.audit == nil || ev.Decision != DecisionAllow && !p.refusals.Allow() {
+		return
 	}
+	ev.Host, ev.Method = ev.Host[:min(len(ev.Host), maxHostLen)], ev.Method[:min(len(ev.Method), maxHostLen)]
+	p.audit(ev)
 }
 
 // countingBody counts the request body bytes the transport reads, possibly after RoundTrip returns.
@@ -721,20 +731,20 @@ func denied(w http.ResponseWriter, host string) {
 	http.Error(w, fmt.Sprintf("egress denied: %s", host), http.StatusForbidden)
 }
 
-// hostPort splits an authority; a bare host takes def, a port outside 1-65535 or a malformed authority is refused rather than defaulted.
+// hostPort splits an authority; a bare host takes def, a port outside 1-65535, a host past 253 bytes or a malformed authority is refused rather than defaulted.
 func hostPort(authority string, def uint16) (host string, port uint16, ok bool) {
 	host, text, err := net.SplitHostPort(authority)
 	if err != nil {
 		literal, bracketed := strings.CutPrefix(authority, "[")
 		if !bracketed {
-			return authority, def, authority != "" && !strings.ContainsAny(authority, ":[]")
+			return authority, def, authority != "" && len(authority) <= maxHostLen && !strings.ContainsAny(authority, ":[]")
 		}
 		literal, closed := strings.CutSuffix(literal, "]")
 		addr, parseErr := netip.ParseAddr(literal)
-		return literal, def, closed && parseErr == nil && addr.Is6()
+		return literal, def, closed && parseErr == nil && addr.Is6() && len(literal) <= maxHostLen
 	}
 	n, err := strconv.ParseUint(text, 10, 16)
-	return host, uint16(n), err == nil && n != 0
+	return host, uint16(n), err == nil && n != 0 && len(host) <= maxHostLen
 }
 
 // replaceParam fills the first name=placeholder pair of a query or form string, leaving every other byte as sent.

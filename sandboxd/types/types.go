@@ -248,6 +248,8 @@ func (i *EnvInject) validate(name string) error {
 		return fmt.Errorf("env %s: inject needs exactly one of header and query", name)
 	case i.Header != "" && !httpguts.ValidHeaderFieldName(i.Header):
 		return fmt.Errorf("env %s: inject header %q is not a valid header name", name, i.Header)
+	case !httpguts.ValidHeaderFieldValue(i.Query):
+		return fmt.Errorf("env %s: inject query must not hold control characters other than tab", name)
 	case i.Query != "" && i.Placeholder == "":
 		return fmt.Errorf("env %s: inject query needs a placeholder, so a value is never added to a request", name)
 	case i.Body && i.Query == "":
@@ -801,6 +803,13 @@ func VolumeRWNames(volumes []Volume) []string {
 		}
 	}
 	return names
+}
+
+func ValidateClaimRef(field, ref string) error {
+	if len(ref) > maxMetadataValueBytes || !validMetadataValue(ref) {
+		return fmt.Errorf("%s must be at most %d bytes of printable UTF-8", field, maxMetadataValueBytes)
+	}
+	return nil
 }
 
 // ValidateVolumes returns detached entries with defaults filled and modes normalized.

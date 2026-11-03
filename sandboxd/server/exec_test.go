@@ -206,6 +206,36 @@ func TestExecGuestClosingEarlyIs502(t *testing.T) {
 	}
 }
 
+func TestExecGuestClosingAfterTheStartWakesOnce(t *testing.T) {
+	var wakes atomic.Int32
+	mgr := &execManager{
+		fakeManager: &fakeManager{},
+		wake: func(context.Context, string, string) (string, error) {
+			wakes.Add(1)
+			return "/v/sock", nil
+		},
+	}
+	dialer := &fakeDialer{dial: func(context.Context, string) (net.Conn, error) {
+		relayEnd, guestEnd := net.Pipe()
+		go func() {
+			defer guestEnd.Close()
+			r := bufio.NewReader(guestEnd)
+			_, _ = r.ReadBytes('\n')
+			_, _ = r.ReadBytes('\n')
+			_, _ = io.WriteString(guestEnd, `{"type":"started","pid":7}`+"\n")
+		}()
+		return relayEnd, nil
+	}}
+	ts := serveTestServer(t, New("", "node:7777", mgr, dialer, nil, nil, nil, nil))
+
+	if status, body := postExec(t, ts, `{"argv":["sleep","60"]}`); status != http.StatusBadGateway {
+		t.Fatalf("status %d, want 502: %s", status, body)
+	}
+	if n := wakes.Load(); n != 1 {
+		t.Errorf("%d wakes, want 1: a guest that hung up was stopped by its own node, not by this exec", n)
+	}
+}
+
 func TestExecTimeoutStartsAfterWake(t *testing.T) {
 	wakeHadCommandDeadline := make(chan bool, 1)
 	mgr := &execManager{
@@ -274,6 +304,45 @@ func TestExecOverTheNodeBudgetIs503AndKillsTheCommand(t *testing.T) {
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("no kill reached the guest after the budget refusal")
+	}
+}
+
+func TestExecOverTheOutputCapIs413AndKillsTheCommand(t *testing.T) {
+	var conns atomic.Int32
+	killed := make(chan uint32, 1)
+	chunk := `{"type":"stdout","data":"` + base64.StdEncoding.EncodeToString(bytes.Repeat([]byte("x"), 1<<20)) + `"}` + "\n"
+	ts, _ := newRelayServer(t, func(conn net.Conn) {
+		r := bufio.NewReader(conn)
+		if conns.Add(1) == 1 {
+			_, _ = r.ReadBytes('\n')
+			_, _ = io.WriteString(conn, `{"type":"started","pid":7}`+"\n")
+			for range execOutputCap>>20 + 1 {
+				if _, err := io.WriteString(conn, chunk); err != nil {
+					return
+				}
+			}
+			_, _ = io.Copy(io.Discard, r)
+			return
+		}
+		defer conn.Close()
+		line, _ := r.ReadBytes('\n')
+		if req, _ := wire.DecodeRequest(bytes.TrimSpace(line)); req != nil {
+			if kill, ok := req.(*wire.Kill); ok {
+				killed <- kill.PID
+			}
+		}
+		_, _ = io.WriteString(conn, `{"type":"done"}`+"\n")
+	})
+	if status, _ := postExec(t, ts, `{"argv":["yes"]}`); status != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status %d, want 413", status)
+	}
+	select {
+	case pid := <-killed:
+		if pid != 7 {
+			t.Errorf("killed pid %d, want 7", pid)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("no kill reached the guest after the output cap")
 	}
 }
 

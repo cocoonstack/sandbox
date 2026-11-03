@@ -34,6 +34,28 @@ func TestGuestPortConnFramesBothWays(t *testing.T) {
 	}
 }
 
+func TestGuestPortConnCutBeforeDoneIsUnexpectedEOF(t *testing.T) {
+	for name, tail := range map[string]string{"between frames": "", "mid frame": `{"type":"da`} {
+		t.Run(name, func(t *testing.T) {
+			silk, gc := newTestGuestPortConn(t)
+
+			go func() {
+				frame, _ := json.Marshal(map[string]string{"type": "data", "data": base64.StdEncoding.EncodeToString([]byte("partial"))}, json.Deterministic(true))
+				_, _ = silk.Write(append(frame, '\n'))
+				_, _ = silk.Write([]byte(tail))
+				_ = silk.Close()
+			}()
+			got := make([]byte, 64)
+			if n, err := gc.Read(got); err != nil || string(got[:n]) != "partial" {
+				t.Fatalf("read %q, %v", got[:n], err)
+			}
+			if _, err := gc.Read(got); !errors.Is(err, io.ErrUnexpectedEOF) {
+				t.Errorf("after a cut stream: %v, want io.ErrUnexpectedEOF", err)
+			}
+		})
+	}
+}
+
 func TestGuestPortConnWriteWrapsInDataFrame(t *testing.T) {
 	silk, gc := newTestGuestPortConn(t)
 

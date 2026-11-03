@@ -31,6 +31,9 @@ func newGuestPortConn(conn net.Conn, r *bufio.Reader) *guestPortConn {
 func (g *guestPortConn) Read(p []byte) (int, error) {
 	for len(g.pending) == 0 {
 		line, err := g.readFrame()
+		if errors.Is(err, io.EOF) {
+			return 0, io.ErrUnexpectedEOF
+		}
 		if err != nil {
 			return 0, err
 		}

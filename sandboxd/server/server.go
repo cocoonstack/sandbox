@@ -349,7 +349,7 @@ func (s *Server) Handler() http.Handler {
 
 func (s *Server) handleClaim(w http.ResponseWriter, r *http.Request) {
 	req, ok := decodeBody[ClaimRequest](w, r)
-	if !ok || !validRequest(w, req.Metadata.Validate(), req.OnExpire.Validate(), req.Env.Validate()) {
+	if !ok || !validRequest(w, types.ValidateClaimRef("claim_ref", req.ClaimRef), req.Metadata.Validate(), req.OnExpire.Validate(), req.Env.Validate()) {
 		return
 	}
 	key := req.Key()
@@ -605,7 +605,7 @@ func (s *Server) handleRenew(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleFork(w http.ResponseWriter, r *http.Request) {
 	req, ok := decodeBody[ForkRequest](w, r)
-	if !ok || !validRequest(w, req.OnExpire.Validate()) {
+	if !ok || !validRequest(w, types.ValidateClaimRef("claim_ref_prefix", req.ClaimRefPrefix), req.OnExpire.Validate()) {
 		return
 	}
 	id := r.PathValue("id")

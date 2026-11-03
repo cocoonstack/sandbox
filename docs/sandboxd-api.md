@@ -42,7 +42,8 @@ Auth: `Authorization: Bearer <api_token>` (when configured).
 - `ttl_seconds` 0 means the server default (5 minutes); capped at 24h. The
   owning node reaps the sandbox after the TTL even if the client vanishes
 - `claim_ref` is an optional opaque caller reference echoed by the scoped
-  sandbox index; the aggregated apiserver uses `<namespace>/<name>`
+  sandbox index, at most 512 bytes of printable UTF-8 like a metadata value;
+  the aggregated apiserver uses `<namespace>/<name>`
 - `metadata` is an optional map of caller labels, echoed and filterable by
   the [sandbox index](#get-v1sandboxes): at most 16 pairs, each key 1 to 128
   bytes of printable ASCII without `=` or `&` (list filters encode pairs as
@@ -67,8 +68,8 @@ Auth: `Authorization: Bearer <api_token>` (when configured).
   `no_redirect` retry so a target whose gossip view is stale refuses instead of
   cold-booting an image named like the template
 - `env` is the claim's own environment, at most 64 entries: each name a shell
-  identifier of at most 128 bytes, each value at most 8 KiB with no control
-  characters other than tab, and names, values and inject fields at most 64 KiB in total. An entry holds only `value`, `guest` and `inject`; any other
+  identifier of at most 128 bytes, each value at most 8 KiB, a value and an
+  inject `query` with no control characters other than tab, and names, values and inject fields at most 64 KiB in total. An entry holds only `value`, `guest` and `inject`; any other
   member, or `"guest": null`, answers 400, so a mistyped flag never lands a
   host-only value in the guest. `guest` (default `true`) delivers the entry into the guest; a
   `guest: false` entry never enters it and only feeds the node's egress
@@ -554,6 +555,7 @@ claim. The sandbox's own token rides in the body as the ownership proof:
 `claim_ref_prefix`, when set, records each child under `prefix + child id` as
 its `claim_ref`, so a control plane that names claims `<namespace>/<name>`
 addresses the children by name; without it children carry no `claim_ref`.
+The prefix is at most 512 bytes of printable UTF-8, as `claim_ref` is.
 Children inherit the parent's `metadata`, `on_expire` and `"egress": false`; an
 `on_expire` in the body overrides the inherited action.
 Clones the sandbox into `count` fresh claims (1 up to the node's
