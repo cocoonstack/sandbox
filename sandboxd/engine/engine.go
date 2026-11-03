@@ -302,7 +302,7 @@ func (e *Engine) DialGuestPort(ctx context.Context, vsockSocket string, port uin
 	}
 	// The forwarded stream's own reader takes the handshake reply, so an over-read stays buffered.
 	r := bufio.NewReaderSize(conn, portForwardMax)
-	line, readErr := readBufLine(r, portForwardMax)
+	line, readErr := readBufLine(r)
 	if readErr != nil {
 		_ = conn.Close()
 		if ctxErr := ctx.Err(); ctxErr != nil {
@@ -337,7 +337,7 @@ func (e *Engine) dialVsock(ctx context.Context, vsockSocket string, port int) (n
 		return nil, fmt.Errorf("write CONNECT: %w", err)
 	}
 	r := bufio.NewReaderSize(conn, connectMax)
-	reply, err := readBufLine(r, connectMax)
+	reply, err := readBufLine(r)
 	if err != nil {
 		_ = conn.Close()
 		if ctxErr := ctx.Err(); ctxErr != nil {
@@ -549,13 +549,10 @@ func belowFloor(v, floor string) (below, known bool) {
 	return semver.Compare(v, floor) < 0, true
 }
 
-func readBufLine(r *bufio.Reader, limit int) (string, error) {
+func readBufLine(r *bufio.Reader) (string, error) {
 	line, err := r.ReadSlice('\n')
 	if err != nil {
 		return "", err
-	}
-	if len(line) > limit {
-		return "", fmt.Errorf("reply exceeds %d bytes", limit)
 	}
 	return string(line[:len(line)-1]), nil
 }

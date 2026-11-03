@@ -116,8 +116,8 @@ func canonicalAddr(ip netip.Addr) netip.Addr {
 }
 
 func internalAddr(self []netip.Addr, ip netip.Addr) bool {
-	return !ip.IsGlobalUnicast() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
-		slices.Contains(self, ip) || slices.ContainsFunc(internalRanges, func(p netip.Prefix) bool { return p.Contains(ip) })
+	return !ip.IsGlobalUnicast() || ip.IsPrivate() || slices.Contains(self, ip) ||
+		slices.ContainsFunc(internalRanges, func(p netip.Prefix) bool { return p.Contains(ip) })
 }
 
 // parseInternalAllow turns the allow-list into entries; config validation already rejected bad ones.

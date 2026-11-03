@@ -29,7 +29,6 @@ type CA struct {
 	rootPEM   []byte
 	rootFP    string
 	interCert *x509.Certificate
-	interDER  []byte
 	interKey  *ecdsa.PrivateKey
 	leafKey   *ecdsa.PrivateKey
 }
@@ -74,7 +73,6 @@ func LoadCA(rootCertPEM, interCertPEM, interKeyPEM []byte) (*CA, error) {
 		rootPEM:   rootCertPEM,
 		rootFP:    hex.EncodeToString(sum[:]),
 		interCert: inter,
-		interDER:  inter.Raw,
 		interKey:  interKey,
 		leafKey:   leafKey,
 	}, nil
@@ -120,7 +118,7 @@ func (c *CA) SignLeaf(host string) (*tls.Certificate, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parse leaf %s: %w", host, err)
 	}
-	return &tls.Certificate{Certificate: [][]byte{der, c.interDER}, PrivateKey: c.leafKey, Leaf: leaf}, nil
+	return &tls.Certificate{Certificate: [][]byte{der, c.interCert.Raw}, PrivateKey: c.leafKey, Leaf: leaf}, nil
 }
 
 // parseCert returns the file's first certificate and rejects any block that is not a CA certificate: guests trust the whole file.
