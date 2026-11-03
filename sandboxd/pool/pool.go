@@ -453,10 +453,11 @@ type Manager struct {
 	diskLow        atomic.Bool
 	diskStatFailed atomic.Bool
 
-	refillSem  chan struct{}
-	maintSem   chan struct{}
-	probeSem   chan struct{}
-	refillKick chan struct{}
+	refillSem   chan struct{}
+	maintSem    chan struct{}
+	probeSem    chan struct{}
+	refillKick  chan struct{}
+	goldenDumps chan struct{}
 }
 
 // NewManager builds a manager from the node config over backends the caller selected from it.
@@ -493,6 +494,7 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 		healPending:     map[string]struct{}{},
 		healAbort:       map[string]struct{}{},
 		refillSem:       make(chan struct{}, refill),
+		goldenDumps:     make(chan struct{}, 1),
 		maintSem:        make(chan struct{}, max(1, refill-max(1, refill/4))),
 		probeSem:        make(chan struct{}, refill),
 		refillKick:      make(chan struct{}, 1),

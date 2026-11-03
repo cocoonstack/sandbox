@@ -795,6 +795,32 @@ func TestGoldenBuildExportsAndDestroysItsBuilder(t *testing.T) {
 	})
 }
 
+func TestGoldenBuildsDumpOneAtATime(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		eng := newFakeEngine()
+		eng.snapSaveGate = make(chan struct{})
+		specs := make([]config.PoolSpec, 0, 3)
+		for _, size := range []types.Size{types.SizeSmall, types.SizeMedium, types.SizeLarge} {
+			specs = append(specs, config.PoolSpec{Template: testKey.Template, Net: testKey.Net, Size: size, Warm: 1})
+		}
+		m := newTestManager(t, eng, specs...)
+
+		m.refillOnce(t.Context())
+		synctest.Wait()
+		eng.mu.Lock()
+		entered := eng.snapSavesEntered
+		eng.mu.Unlock()
+		if entered != 1 {
+			t.Errorf("memory dumps in flight = %d, want 1", entered)
+		}
+		close(eng.snapSaveGate)
+		waitFor(t, func() bool {
+			infos, _ := m.Info()
+			return !slices.ContainsFunc(infos, func(i PoolInfo) bool { return !i.Golden })
+		})
+	})
+}
+
 func TestGoldenBuildFailureBacksOff(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		eng := newFakeEngine()
@@ -1237,6 +1263,8 @@ type fakeEngine struct {
 	hibernateErr          error
 	restoreErr            error
 	restoreGate           chan struct{}
+	snapSaveGate          chan struct{}
+	snapSavesEntered      int
 	snapListErr           error
 	snapSaveErr           error
 	startErr              error
@@ -1402,6 +1430,12 @@ func (f *fakeEngine) ReconcileStaleCreate(ctx context.Context, name string) (eng
 }
 
 func (f *fakeEngine) SnapshotSave(_ context.Context, _, snapName string) error {
+	f.mu.Lock()
+	f.snapSavesEntered++
+	f.mu.Unlock()
+	if f.snapSaveGate != nil {
+		<-f.snapSaveGate
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.snapSaveErr != nil {
