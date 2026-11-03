@@ -143,6 +143,22 @@ async fn mkdir_rename_rm_lifecycle() {
 }
 
 #[tokio::test]
+async fn read_streams_files_around_the_first_chunk_bound() {
+    let dir = tempfile::tempdir().unwrap();
+    let chunk = silkd::proto::BULK_CHUNK;
+    for (len, frames) in [(0, 0), (chunk, 1), (chunk + 1, 2)] {
+        let path = dir.path().join(format!("f{len}"));
+        let body: Vec<u8> = (0..len).map(|i| (i % 251) as u8).collect();
+        std::fs::write(&path, &body).unwrap();
+        let read = exchange(&[json!({"op":"fs_read","path":path}).to_string()]).await;
+        let data = read.iter().filter(|f| type_of(f) == "data").count();
+        assert_eq!(data, frames, "len {len}");
+        assert!(payload(&read, "data") == body, "len {len}");
+        assert_eq!(type_of(read.last().unwrap()), "done", "len {len}");
+    }
+}
+
+#[tokio::test]
 async fn read_of_a_non_regular_file_is_bad_request() {
     let dir = tempfile::tempdir().unwrap();
     let fifo = dir.path().join("pipe");

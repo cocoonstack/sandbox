@@ -1,6 +1,6 @@
 //! Filesystem verbs: the vsock boundary is the trust boundary, so paths are taken as-is.
 
-use std::io;
+use std::io::{self, Read};
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
@@ -9,7 +9,9 @@ use tokio::fs;
 use tokio::io::{AsyncBufRead, AsyncWrite, AsyncWriteExt};
 use tokio::sync::mpsc;
 
-use crate::proto::{self, DirEntry, ErrorKind, FileInfo, FileKind, Response, err_frame};
+use crate::proto::{
+    self, BULK_CHUNK, DirEntry, ErrorKind, FileInfo, FileKind, Response, err_frame,
+};
 
 /// Entries per `entries` frame; a worst-case 1.6KiB entry keeps a full batch under MAX_FRAME.
 pub const LIST_BATCH: usize = 4096;
@@ -56,19 +58,32 @@ pub async fn read<W: AsyncWrite + Unpin>(w: &mut W, path: String) -> io::Result<
             .read(true)
             .custom_flags(libc::O_NONBLOCK)
             .open(&path)?;
-        let regular = file.metadata()?.is_file();
-        Ok::<_, io::Error>((file, regular))
+        if !file.metadata()?.is_file() {
+            return Ok(None);
+        }
+        let mut head = Vec::with_capacity(BULK_CHUNK);
+        let read = (&file)
+            .take(BULK_CHUNK as u64)
+            .read_to_end(&mut head)
+            .map(|_| head);
+        Ok::<_, io::Error>(Some((file, read)))
     })
     .await
     .map_err(io::Error::other)?;
-    let mut file = match opened {
-        Ok((file, true)) => fs::File::from_std(file),
-        Ok((_, false)) => {
+    let (file, head) = match opened {
+        Ok(Some((file, Ok(head)))) => (file, head),
+        Ok(Some((_, Err(e)))) => return err_frame(w, &e, "read").await,
+        Ok(None) => {
             return proto::error_frame(w, ErrorKind::BadRequest, "not a regular file").await;
         }
         Err(e) => return err_frame(w, &e, "open").await,
     };
-    if let Err(e) = proto::stream_data_frames(&mut file, w).await? {
+    if !head.is_empty() {
+        proto::write_chunk_frame(w, &mut Vec::new(), "data", &head).await?;
+    }
+    if head.len() == BULK_CHUNK
+        && let Err(e) = proto::stream_data_frames(&mut fs::File::from_std(file), w).await?
+    {
         return err_frame(w, &e, "read").await;
     }
     proto::write_frame(w, &Response::Done).await
