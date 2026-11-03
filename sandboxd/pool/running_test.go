@@ -2,6 +2,8 @@ package pool
 
 import (
 	"errors"
+	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -178,6 +180,65 @@ func TestARestartRecountsRunningClaims(t *testing.T) {
 	}
 	if _, g := restarted.Info(); g.Claimed != 2 || g.Running != 1 {
 		t.Errorf("gauges %+v after a restart, want 2 claimed and 1 running", g)
+	}
+}
+
+func TestAReloadAppliesTheClaimCapsWithoutStoppingAClaim(t *testing.T) {
+	m := newTestManager(t, newFakeEngine())
+	mustClaim(t, m, testKey)
+	mustClaim(t, m, testKey)
+	next := *m.cfg
+	next.MaxClaims, next.MaxRunning = 5, 1
+	res, err := m.ReloadConfig(t.Context(), &next)
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	if want := []string{"max_claims", "max_running"}; !slices.Equal(res.Changed, want) {
+		t.Errorf("changed %v, want %v", res.Changed, want)
+	}
+	if _, g := m.Info(); g.Running != 2 || g.MaxRunning != 1 {
+		t.Errorf("gauges %+v, want both claims running over the lowered cap of 1", g)
+	}
+	if _, err := claimAny(t.Context(), m, testKey, ClaimOptions{TTL: time.Hour}); !errors.Is(err, ErrQuota) {
+		t.Fatalf("claim over the reloaded cap: %v, want ErrQuota", err)
+	}
+	off := next
+	off.MaxClaims, off.MaxRunning = 2, 0
+	if _, err := m.ReloadConfig(t.Context(), &off); err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	if _, err := claimAny(t.Context(), m, testKey, ClaimOptions{TTL: time.Hour}); !errors.Is(err, ErrQuota) || !strings.Contains(err.Error(), "live claims") {
+		t.Fatalf("claim over the reloaded max_claims: %v, want ErrQuota naming live claims", err)
+	}
+}
+
+func TestAReloadAppliesTheNodeSettings(t *testing.T) {
+	m := newTestManager(t, newFakeEngine())
+	next := *m.cfg
+	next.MaxForkCount, next.ReleaseDelaySeconds, next.VMMRestart = 1, 5, types.VMMRestartNone
+	next.SyncClaims, next.CheckpointTTLHours = true, 24
+	next.IdleHibernateSeconds, next.ArchiveAfterSeconds, next.ArchiveDeleteAfterSeconds = 60, 120, 3600
+	res, err := m.ReloadConfig(t.Context(), &next)
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	if len(res.Changed) != 8 {
+		t.Errorf("changed %v, want 8 settings", res.Changed)
+	}
+	m.mu.Lock()
+	got := []time.Duration{m.releaseDelay, m.ckptTTL, m.idleDefault, m.archiveAfterDefault, m.archiveDeleteDefault}
+	maxFork, restart := m.maxFork, m.vmmRestart
+	m.mu.Unlock()
+	want := []time.Duration{5 * time.Second, 24 * time.Hour, time.Minute, 2 * time.Minute, time.Hour}
+	if !slices.Equal(got, want) || maxFork != 1 || restart != types.VMMRestartNone {
+		t.Errorf("durations %v max fork %d restart %q, want %v, 1 and none", got, maxFork, restart, want)
+	}
+	if !m.store.sync {
+		t.Error("sync_claims did not reach the store")
+	}
+	parent := mustClaim(t, m, testKey)
+	if _, err := m.Fork(t.Context(), parent.ID, Cred{Token: parent.Token}, 2, 0, "", ""); !errors.Is(err, ErrBadCount) {
+		t.Errorf("fork of 2 over a reloaded limit of 1: %v, want ErrBadCount", err)
 	}
 }
 

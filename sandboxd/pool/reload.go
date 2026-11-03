@@ -1,11 +1,13 @@
 package pool
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"maps"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/projecteru2/core/log"
 
@@ -49,6 +51,7 @@ func (m *Manager) ReloadConfig(ctx context.Context, next *config.Config) (Reload
 	var injecting []*types.Sandbox
 	m.mu.Lock()
 	m.view.Store(view)
+	m.applyNodeSettingsLocked(next)
 	for _, sb := range m.claimed {
 		if sb.Env.HasInject() {
 			injecting = append(injecting, sb)
@@ -61,6 +64,7 @@ func (m *Manager) ReloadConfig(ctx context.Context, next *config.Config) (Reload
 		}
 	}
 	m.mu.Unlock()
+	m.store.setSync(next.SyncClaims)
 	m.out.Reloaded()
 	m.destroyAll(context.WithoutCancel(ctx), trim).Wait()
 	m.cfg = next
@@ -70,6 +74,18 @@ func (m *Manager) ReloadConfig(ctx context.Context, next *config.Config) (Reload
 	m.warnLostInjects(ctx, view, injecting)
 	m.kickRefill()
 	return res, nil
+}
+
+// applyNodeSettingsLocked sets the node-wide caps and defaults a boot and a reload share; callers hold m.mu or own m alone.
+func (m *Manager) applyNodeSettingsLocked(cfg *config.Config) {
+	m.maxClaims, m.maxRunning = cfg.MaxClaims, cfg.MaxRunning
+	m.maxFork = cmp.Or(cfg.MaxForkCount, defaultMaxFork)
+	m.releaseDelay = time.Duration(cfg.ReleaseDelaySeconds) * time.Second
+	m.vmmRestart = cfg.VMMRestart
+	m.ckptTTL = time.Duration(cfg.CheckpointTTLHours) * time.Hour
+	m.idleDefault = time.Duration(cfg.IdleHibernateSeconds) * time.Second
+	m.archiveAfterDefault = time.Duration(cfg.ArchiveAfterSeconds) * time.Second
+	m.archiveDeleteDefault = time.Duration(cfg.ArchiveDeleteAfterSeconds) * time.Second
 }
 
 func (m *Manager) warnLostInjects(ctx context.Context, v *configView, sbs []*types.Sandbox) {

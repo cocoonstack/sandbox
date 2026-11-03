@@ -274,6 +274,12 @@ func (s *claimStore) recommit(ctx context.Context, snap claimSnapshot) {
 	}()
 }
 
+func (s *claimStore) setSync(sync bool) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	s.sync = sync
+}
+
 // replace swaps claims.json for raw through the fixed temp name, durably when sync is set.
 func (s *claimStore) replace(raw []byte) error {
 	tmp := s.path + ".tmp"

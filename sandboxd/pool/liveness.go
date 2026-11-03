@@ -175,7 +175,7 @@ func (m *Manager) recoverVMM(ctx context.Context, sb *types.Sandbox) {
 	now := time.Now()
 	m.mu.Lock()
 	live := m.claimed[sb.ID] == sb && runningShaped(sb) && !m.leaseLapsed(sb, now)
-	volumes := m.hasVolumeHolds(sb)
+	volumes, restart := m.hasVolumeHolds(sb), m.vmmRestart
 	m.mu.Unlock()
 	if !live {
 		return
@@ -195,7 +195,7 @@ func (m *Manager) recoverVMM(ctx context.Context, sb *types.Sandbox) {
 		m.recordUsage(ctx, usage.Event{Event: "vmm_exit", ID: sb.ID, VMName: sb.VMName, Tenant: sb.Tenant})
 	}
 	reason := coldBootBlocker(sb, found, volumes)
-	if reason == "" && m.vmmRestart == types.VMMRestartNone {
+	if reason == "" && restart == types.VMMRestartNone {
 		reason = "vmm exited"
 	}
 	sb.RestartLog = slices.DeleteFunc(sb.RestartLog, func(at time.Time) bool { return now.Sub(at) > vmmRestartWindow })

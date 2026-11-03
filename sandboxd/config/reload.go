@@ -18,6 +18,17 @@ var reloadableFields = map[string]bool{
 	"egress_usage_bytes":    true,
 	"egress_conn_rate":      true,
 	"disk_reserve":          true,
+
+	"max_claims":                   true,
+	"max_running":                  true,
+	"max_fork_count":               true,
+	"release_delay_seconds":        true,
+	"vmm_restart":                  true,
+	"sync_claims":                  true,
+	"checkpoint_ttl_hours":         true,
+	"idle_hibernate_seconds":       true,
+	"archive_after_seconds":        true,
+	"archive_delete_after_seconds": true,
 }
 
 type poolTargets struct {

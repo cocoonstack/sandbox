@@ -326,7 +326,10 @@ func (m *Manager) pinnedArchiveCks() map[string]struct{} {
 }
 
 func (m *Manager) sweepExpiredCheckpoints(ctx context.Context) {
-	if m.ckptTTL <= 0 || !m.ckptSweeping.CompareAndSwap(false, true) {
+	m.mu.Lock()
+	ttl := m.ckptTTL
+	m.mu.Unlock()
+	if ttl <= 0 || !m.ckptSweeping.CompareAndSwap(false, true) {
 		return
 	}
 	defer m.ckptSweeping.Store(false)
@@ -337,7 +340,7 @@ func (m *Manager) sweepExpiredCheckpoints(ctx context.Context) {
 		logger.Error(ctx, err, "list for retention")
 		return
 	}
-	cutoff := time.Now().Add(-m.ckptTTL)
+	cutoff := time.Now().Add(-ttl)
 	for _, ckpt := range ckpts {
 		if ckpt.CreatedAt.After(cutoff) {
 			continue

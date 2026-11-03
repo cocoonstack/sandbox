@@ -307,7 +307,7 @@ func (m *Manager) releaseResolved(ctx context.Context, id string, sb *types.Sand
 		m.mu.Lock()
 	}
 	volumeHolds := m.cancelVolumeRun(sb)
-	snap, ck, vmName := sb.HibernateSnap, sb.ArchiveCk, sb.VMName
+	snap, ck, vmName, releaseDelay := sb.HibernateSnap, sb.ArchiveCk, sb.VMName, m.releaseDelay
 	if ck != "" {
 		m.pendingCks[ck] = struct{}{}
 	}
@@ -344,8 +344,8 @@ func (m *Manager) releaseResolved(ctx context.Context, id string, sb *types.Sand
 	switch {
 	case removed:
 		m.finishVolumeTeardown(ctx, td)
-	case m.releaseDelay > 0:
-		m.queueRemoval(vmName, id, "", td, time.Now().Add(m.releaseDelay))
+	case releaseDelay > 0:
+		m.queueRemoval(vmName, id, "", td, time.Now().Add(releaseDelay))
 	default:
 		if removed = m.removeOrRetry(ctx, vmName, id, td); !removed {
 			err = fmt.Errorf("vm %s survived removal", vmName)

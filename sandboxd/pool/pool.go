@@ -467,10 +467,7 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 		eng:             eng,
 		dataDir:         cfg.DataDir,
 		egress:          cfg.HasEgress(),
-		releaseDelay:    time.Duration(cfg.ReleaseDelaySeconds) * time.Second,
-		vmmRestart:      cfg.VMMRestart,
 		cocoondSocket:   cfg.CocoondSocket,
-		maxFork:         cmp.Or(cfg.MaxForkCount, defaultMaxFork),
 		store:           newClaimStore(cfg.DataDir, cfg.SyncClaims),
 		catalog:         volumeCatalog{entries: make(map[string]*catalogVolume, len(cfg.Volumes)), roots: cfg.VolumeRoots, holders: map[string]volumeHolders{}},
 		volumeRuns:      map[*types.Sandbox]*volumeRun{},
@@ -513,7 +510,6 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 	if err := os.MkdirAll(m.goldensDir(), 0o750); err != nil {
 		return nil, fmt.Errorf("create goldens dir: %w", err)
 	}
-	m.ckptTTL = time.Duration(cfg.CheckpointTTLHours) * time.Hour
 	m.tplSet = map[string]TemplateInfo{}
 	metas, listErr := m.tpls.Metas(ctx)
 	if listErr != nil {
@@ -539,15 +535,12 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 		}
 		m.audit = audit
 	}
-	m.maxClaims, m.maxRunning = cfg.MaxClaims, cfg.MaxRunning
+	m.applyNodeSettingsLocked(cfg)
 	if cfg.APIToken != "" {
 		m.rootSum = tenants.TokenSHA256(cfg.APIToken)
 	}
 	m.cfg = cfg
 	m.view.Store(newConfigView(cfg, secrets))
-	m.idleDefault = time.Duration(cfg.IdleHibernateSeconds) * time.Second
-	m.archiveAfterDefault = time.Duration(cfg.ArchiveAfterSeconds) * time.Second
-	m.archiveDeleteDefault = time.Duration(cfg.ArchiveDeleteAfterSeconds) * time.Second
 	for _, spec := range cfg.Pools {
 		p := newPool(spec.PoolKey)
 		p.applySpec(spec)
