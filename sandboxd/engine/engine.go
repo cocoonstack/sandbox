@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"hash/fnv"
 	"io"
@@ -492,7 +493,7 @@ func SocksSocketPath(vsockSocket string) string {
 
 // CapacitySignature returns the node-capacity signature err carries, or "".
 func CapacitySignature(err error) string {
-	if err == nil {
+	if _, guest := errors.AsType[*guestExitError](err); err == nil || guest {
 		return ""
 	}
 	msg := strings.ToLower(err.Error())
