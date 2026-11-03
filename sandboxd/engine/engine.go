@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"hash/fnv"
 	"io"
@@ -295,7 +296,7 @@ func (e *Engine) DialGuestPort(ctx context.Context, vsockSocket string, port uin
 		return nil, fmt.Errorf("write port_forward: %w", err)
 	}
 	// The forwarded stream's own reader takes the handshake reply, so an over-read stays buffered.
-	r := bufio.NewReaderSize(conn, portReadBuf)
+	r := bufio.NewReaderSize(conn, portForwardMax)
 	line, readErr := readBufLine(r, portForwardMax)
 	if readErr != nil {
 		_ = conn.Close()
@@ -492,7 +493,7 @@ func SocksSocketPath(vsockSocket string) string {
 
 // CapacitySignature returns the node-capacity signature err carries, or "".
 func CapacitySignature(err error) string {
-	if err == nil {
+	if _, guest := errors.AsType[*guestExitError](err); err == nil || guest {
 		return ""
 	}
 	msg := strings.ToLower(err.Error())

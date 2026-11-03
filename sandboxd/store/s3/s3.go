@@ -41,6 +41,7 @@ import (
 
 const (
 	digestMetadataKey   = "content-digest"
+	cacheDir            = "cache"
 	manifestsDir        = "manifests"
 	manifestExt         = ".json"
 	chunksDir           = "chunks"
@@ -148,7 +149,7 @@ func (s *Store) Fetch(ctx context.Context, id string) (string, []byte, string, e
 	if err != nil {
 		return "", nil, "", err
 	}
-	gen := filepath.Join(s.staging, "cache", id, store.ExportGenHash(meta))
+	gen := filepath.Join(s.staging, cacheDir, id, store.ExportGenHash(meta))
 	export := filepath.Join(gen, store.ExportDir)
 	if _, statErr := os.Stat(export); statErr == nil {
 		now := time.Now()
@@ -246,7 +247,7 @@ func (s *Store) SetLabels(ctx context.Context, id string, labels []byte) error {
 }
 
 func (s *Store) Delete(ctx context.Context, id string) error {
-	_ = os.RemoveAll(filepath.Join(s.staging, "cache", id))
+	_ = os.RemoveAll(filepath.Join(s.staging, cacheDir, id))
 	objs, err := s.list(ctx, s.manifestPrefix(id))
 	if err != nil {
 		return err
@@ -268,7 +269,31 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 	return s.deleteKeys(ctx, []string{s.key(id, store.MetaFile)})
 }
 
-func (s *Store) SweepGenerations(context.Context) error { return nil }
+func (s *Store) SweepGenerations(ctx context.Context) error {
+	cache := filepath.Join(s.staging, cacheDir)
+	entries, err := os.ReadDir(cache)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		dir := filepath.Join(cache, e.Name())
+		if !s.idRe.MatchString(e.Name()) || usedWithinGrace(dir) {
+			continue
+		}
+		switch _, _, err := s.readMeta(ctx, e.Name()); {
+		case errors.Is(err, store.ErrNotFound):
+			if rmErr := os.RemoveAll(dir); rmErr != nil {
+				return rmErr
+			}
+		case err != nil:
+			return err
+		}
+	}
+	return nil
+}
 
 // SweepStaging clears local staging residue at startup.
 func (s *Store) SweepStaging() error {
@@ -713,6 +738,17 @@ func pruneIdleGenerations(dir, keep string) {
 			_ = os.RemoveAll(entryPath)
 		}
 	}
+}
+
+func usedWithinGrace(dir string) bool {
+	gens, err := os.ReadDir(dir)
+	if err != nil {
+		return true
+	}
+	return slices.ContainsFunc(gens, func(gen fs.DirEntry) bool {
+		info, err := gen.Info()
+		return err != nil || time.Since(info.ModTime()) < store.GenerationGrace
+	})
 }
 
 func getChunkBuf() []byte { return *chunkBufs.Get().(*[]byte) }

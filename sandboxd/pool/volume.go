@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-	"time"
 
 	"github.com/projecteru2/core/log"
 	"golang.org/x/sync/errgroup"
@@ -18,11 +17,8 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/utils"
 )
 
-const (
-	// Sidecar, not data_dir: the marker travels with the image and survives a data_dir wipe
-	volumeDirtySuffix = ".dirty"
-	volumeQuiesceMax  = 10 * time.Second
-)
+// Sidecar, not data_dir: the marker travels with the image and survives a data_dir wipe
+const volumeDirtySuffix = ".dirty"
 
 // volumeHolders is one name's live admission state: a writer excludes every other claim.
 type volumeHolders struct {
@@ -210,7 +206,7 @@ func (m *Manager) applyVolume(ctx context.Context, sb *types.Sandbox, volume res
 		}
 	}
 	if err := m.eng.DiskAttach(ctx, sb.VMName, volume.disk); err != nil {
-		return fmt.Errorf("attach volume %q: %w", volume.applied.Name, err)
+		return fmt.Errorf("attach volume %q: %w", volume.applied.Name, withCtxErr(ctx, err))
 	}
 	if attachOnly {
 		return nil
@@ -223,7 +219,7 @@ func (m *Manager) applyVolume(ctx context.Context, sb *types.Sandbox, volume res
 		mount = m.eng.MountLiveVolume
 	}
 	if err := mount(ctx, sb.VsockSocket, volume.applied.Name, volume.applied.Mount, volume.disk.RW); err != nil {
-		return fmt.Errorf("setup volume %q: %w", volume.applied.Name, err)
+		return fmt.Errorf("setup volume %q: %w", volume.applied.Name, withCtxErr(ctx, err))
 	}
 	return nil
 }
@@ -231,24 +227,28 @@ func (m *Manager) applyVolume(ctx context.Context, sb *types.Sandbox, volume res
 // quiesceVolumes unmounts a claim's writable mounts in reverse; an unclean unmount keeps the marker.
 func (m *Manager) quiesceVolumes(ctx context.Context, sb *types.Sandbox) volumeTeardown {
 	td := volumeTeardown{holds: heldVolumes(sb)}
-	mounts := writableMounts(sb.Volumes)
-	if mounts == 0 {
+	if writableMounts(sb.Volumes) == 0 {
 		return td
 	}
 	catalog := m.catalogSnapshot()
 	logger := log.WithFunc("pool.quiesceVolumes")
 	// Cancellation-immune like removal: a caller hanging up must not skip the flush.
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), quiesceBudget(mounts))
-	defer cancel()
+	ctx = context.WithoutCancel(ctx)
 	stuck := false
 	for _, volume := range slices.Backward(sb.Volumes) {
 		if !needsUnmount(volume) {
 			continue // attach-only: no mount to bring down, VM removal closes the device
 		}
-		clean, err := m.eng.UnmountVolume(ctx, sb.VsockSocket, volume.Mount)
+		unmountCtx, cancel := context.WithTimeout(ctx, engine.VolumeMutationTimeout)
+		clean, err := m.eng.UnmountVolume(unmountCtx, sb.VsockSocket, volume.Mount)
+		wedged := unmountCtx.Err() != nil
+		cancel()
 		if err != nil {
 			logger.Errorf(ctx, err, "unmount volume %s of %s", volume.Name, sb.ID)
 			stuck = true
+			if wedged {
+				break
+			}
 			continue
 		}
 		if entry, ok := catalog[volume.Name]; ok && clean {
@@ -256,10 +256,7 @@ func (m *Manager) quiesceVolumes(ctx context.Context, sb *types.Sandbox) volumeT
 		}
 	}
 	if stuck {
-		// The unmounts may have spent the whole budget; the fallback flush gets its own
-		syncCtx, cancelSync := context.WithTimeout(context.WithoutCancel(ctx), engine.VolumeCallTimeout)
-		defer cancelSync()
-		if err := m.eng.SyncGuest(syncCtx, sb.VsockSocket); err != nil {
+		if err := m.eng.SyncGuest(ctx, sb.VsockSocket); err != nil {
 			logger.Errorf(ctx, err, "sync guest of %s", sb.ID)
 		}
 	}
@@ -337,11 +334,6 @@ func (m *Manager) checkResolvedLocked(volumes []resolvedVolume) error {
 	return nil
 }
 
-// quiesceBudget bounds one quiesce: a slice per writable mount plus one for the sync fallback.
-func quiesceBudget(mounts int) time.Duration {
-	return min(time.Duration(mounts+1)*engine.VolumeCallTimeout, volumeQuiesceMax)
-}
-
 func writableMounts(volumes []types.Volume) int {
 	mounts := 0
 	for _, volume := range volumes {
@@ -391,4 +383,11 @@ func volumeDirty(path string) bool {
 
 func volumeDirtyPath(path string) string {
 	return path + volumeDirtySuffix
+}
+
+func withCtxErr(ctx context.Context, err error) error {
+	if ctxErr := ctx.Err(); ctxErr != nil && !errors.Is(err, ctxErr) {
+		return fmt.Errorf("%w: %w", ctxErr, err)
+	}
+	return err
 }

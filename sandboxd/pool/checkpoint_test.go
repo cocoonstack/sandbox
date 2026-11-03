@@ -166,6 +166,10 @@ func TestReconcileSweepsCheckpointStaging(t *testing.T) {
 	if err := os.MkdirAll(stale, 0o750); err != nil {
 		t.Fatalf("setup: %v", err)
 	}
+	old := time.Now().Add(-2 * store.GenerationGrace)
+	if err := os.Chtimes(stale, old, old); err != nil {
+		t.Fatalf("age staging: %v", err)
+	}
 	if err := m.Reconcile(t.Context()); err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
@@ -364,24 +368,16 @@ func TestRejectedCheckpointOpsLeakNoRecLock(t *testing.T) {
 	}
 }
 
-func TestSharedStoreSweepsOncePerTick(t *testing.T) {
-	for _, tc := range []struct {
-		name      string
-		shared    bool
-		wantCkpts int32
-		wantTpls  int32
-	}{
-		{"per-node store sweeps both views", false, 1, 1},
-		{"shared store sweeps its one prefix once", true, 1, 0},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
+func TestEveryTickSweepsBothStoreViewsWhetherTheStoreIsSharedOrNot(t *testing.T) {
+	for name, shared := range map[string]bool{"per-node store": false, "shared store": true} {
+		t.Run(name, func(t *testing.T) {
 			m := newTestManager(t, newFakeEngine(), config.PoolSpec{PoolKey: testKey})
 			ckpts := &sweepCountingStore{Store: m.ckpts}
 			tpls := &sweepCountingStore{Store: m.tpls}
-			m.ckpts, m.tpls, m.ckptsShared = ckpts, tpls, tc.shared
+			m.ckpts, m.tpls, m.ckptsShared = ckpts, tpls, shared
 			m.sweepStoreGenerations(t.Context())
-			if ckpts.sweeps.Load() != tc.wantCkpts || tpls.sweeps.Load() != tc.wantTpls {
-				t.Errorf("sweeps = checkpoints %d, templates %d, want %d, %d", ckpts.sweeps.Load(), tpls.sweeps.Load(), tc.wantCkpts, tc.wantTpls)
+			if ckpts.sweeps.Load() != 1 || tpls.sweeps.Load() != 1 {
+				t.Errorf("sweeps = checkpoints %d, templates %d, want 1 each: each view has its own fetch cache", ckpts.sweeps.Load(), tpls.sweeps.Load())
 			}
 		})
 	}

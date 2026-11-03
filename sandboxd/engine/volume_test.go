@@ -165,10 +165,7 @@ func TestSettleGuestWaitsForInitAndTakesAnyExitAsFinished(t *testing.T) {
 	}
 }
 
-func TestUmountVolumeExecsBoundedUmount(t *testing.T) {
-	if VolumeCallTimeout != 2*time.Second {
-		t.Fatalf("volume call timeout = %s, want 2s", VolumeCallTimeout)
-	}
+func TestUmountVolumeExecsUmount(t *testing.T) {
 	path := sockPath(t)
 	fake := serveFakeSilkd(t, path)
 	e := New("cocoon", nil, nil, false, false, "")
@@ -186,6 +183,19 @@ func TestUmountVolumeExecsBoundedUmount(t *testing.T) {
 	err := e.umountVolume(t.Context(), path, "/datasets/training")
 	if err == nil || !strings.Contains(err.Error(), "unmount volume /datasets/training") {
 		t.Errorf("got %v, want umount failure", err)
+	}
+}
+
+func TestUmountVolumeWaitsOutAFlushPastTheCallTimeout(t *testing.T) {
+	path := sockPath(t)
+	fake := serveFakeSilkd(t, path)
+	fake.execHook = func(argv []string) {
+		if argv[0] == "umount" {
+			time.Sleep(VolumeCallTimeout + 250*time.Millisecond)
+		}
+	}
+	if err := New("cocoon", nil, nil, false, false, "").umountVolume(t.Context(), path, "/data"); err != nil {
+		t.Errorf("umount whose flush outlasts %s: %v", VolumeCallTimeout, err)
 	}
 }
 

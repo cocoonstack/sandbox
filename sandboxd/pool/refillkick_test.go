@@ -1,6 +1,7 @@
 package pool
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"testing"
@@ -23,6 +24,31 @@ func TestKickRefillCoalescesAndNeverBlocks(t *testing.T) {
 	if len(m.refillKick) != 1 {
 		t.Fatal("kick after drain not delivered")
 	}
+}
+
+func TestAFreshGoldenStartsRefillWithoutWaitingForATick(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		eng := newFakeEngine()
+		m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1})
+		ctx, cancel := context.WithCancel(t.Context())
+		start := time.Now()
+
+		go m.Run(ctx)
+		synctest.Wait()
+
+		m.mu.Lock()
+		golden := m.pools[testKey].goldenDir
+		m.mu.Unlock()
+		clones, waited := eng.cloneCount(), time.Since(start)
+		cancel()
+		synctest.Wait()
+		if golden == "" {
+			t.Fatal("no golden built, so the test proves nothing")
+		}
+		if clones == 0 || waited >= refillInterval {
+			t.Errorf("%d warm clones %v after Run started, want the first one before the %v refill tick", clones, waited, refillInterval)
+		}
+	})
 }
 
 func TestNodeAtCapacityParksRefillInsteadOfRetrying(t *testing.T) {

@@ -5,10 +5,13 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"maps"
 	"os"
 	"path/filepath"
+	"runtime"
+	"slices"
 	"testing"
 	"time"
 
@@ -191,6 +194,77 @@ func TestDigestWorkersStoreChunksByOffset(t *testing.T) {
 	const want = "sha256:da8dd289e7d66408bd7d202642f180f2c22bc508cf0fe1d6e9f0e0b7967f6a5e"
 	if digest != want {
 		t.Errorf("digest = %q, want %q", digest, want)
+	}
+}
+
+func TestHoleyExportDigestEqualsTheReadEverythingDigest(t *testing.T) {
+	root := t.TempDir()
+	dataTail := writeSparse(t, filepath.Join(root, "disk.img"), 3*store.DigestChunkSize+7, map[int64][]byte{
+		store.DigestChunkSize + 5:   []byte("data"),
+		2 * store.DigestChunkSize:   make([]byte, 4096),
+		3*store.DigestChunkSize + 6: []byte("z"),
+	})
+	writeSparse(t, filepath.Join(root, "mem"), 2*store.DigestChunkSize+5, map[int64][]byte{0: []byte("head")})
+	f, err := os.Open(dataTail)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = f.Close() }()
+	if _, hole := store.HoleSum(f, store.DigestChunkSize, store.DigestChunkSize); hole {
+		t.Fatal("a chunk holding data reads as a hole")
+	}
+	if _, hole := store.HoleSum(f, 0, store.DigestChunkSize); !hole {
+		t.Fatal("an unwritten chunk does not read as a hole; the filesystem lacks SEEK_DATA")
+	}
+	if _, hole := store.HoleSum(f, 2*store.DigestChunkSize, store.DigestChunkSize); hole {
+		t.Fatal("a chunk of written zeros reads as a hole")
+	}
+
+	got, err := hashExport(t.Context(), root)
+	if err != nil {
+		t.Fatalf("hashExport: %v", err)
+	}
+	if want := readEverythingDigest(t, root); got != want {
+		t.Errorf("hole-skipping digest %q, want the read-everything digest %q", got, want)
+	}
+}
+
+func TestHoleSkippingDigestAB(t *testing.T) {
+	if os.Getenv("SANDBOX_DIGEST_AB") == "" {
+		t.Skip("set SANDBOX_DIGEST_AB=1 to run the 10 GiB interleaved A/B")
+	}
+	root := t.TempDir()
+	writes := map[int64][]byte{}
+	for i := range int64(4) {
+		block := make([]byte, 50<<20)
+		for j := range block {
+			block[j] = byte(j*7 + int(i))
+		}
+		writes[i*(10<<30)/4] = block
+	}
+	writeSparse(t, filepath.Join(root, "disk.img"), 10<<30, writes)
+	want := readEverythingDigest(t, root)
+	arms := map[string]func() string{
+		"read": func() string { return readEverythingDigest(t, root) },
+		"seek": func() string { got, _ := hashExport(t.Context(), root); return got },
+	}
+	times := map[string][]time.Duration{}
+	for round := range 8 {
+		order := []string{"read", "seek"}
+		if round%2 == 1 {
+			order = []string{"seek", "read"}
+		}
+		for _, arm := range order {
+			start := time.Now()
+			if got := arms[arm](); got != want {
+				t.Fatalf("%s arm digest %q, want %q", arm, got, want)
+			}
+			times[arm] = append(times[arm], time.Since(start))
+		}
+	}
+	for _, arm := range []string{"read", "seek"} {
+		slices.Sort(times[arm])
+		t.Logf("%s p50 %v over %v", arm, times[arm][len(times[arm])/2], times[arm])
 	}
 }
 
@@ -491,6 +565,66 @@ func TestSweepReclaimsOnlyAgedUncommittedGenerations(t *testing.T) {
 	}
 }
 
+func TestSweepStagingSparesAPeersFreshStaging(t *testing.T) {
+	root := t.TempDir()
+	peer, err := New(root, store.CheckpointIDRe)
+	if err != nil {
+		t.Fatalf("new peer: %v", err)
+	}
+	restarted, err := New(root, store.CheckpointIDRe)
+	if err != nil {
+		t.Fatalf("new restarted node: %v", err)
+	}
+	staging, err := peer.Stage("ck_00000000000000aa")
+	if err != nil {
+		t.Fatalf("stage: %v", err)
+	}
+	seedRecord(t, staging, "in-progress")
+
+	if sweepErr := restarted.SweepStaging(); sweepErr != nil {
+		t.Fatalf("sweep: %v", sweepErr)
+	}
+	if _, statErr := os.Stat(filepath.Join(staging, store.MetaFile)); statErr != nil {
+		t.Fatalf("a peer's in-progress staging was swept: %v", statErr)
+	}
+
+	backdate(t, staging)
+	if sweepErr := restarted.SweepStaging(); sweepErr != nil {
+		t.Fatalf("sweep aged: %v", sweepErr)
+	}
+	if _, statErr := os.Stat(staging); !errors.Is(statErr, fs.ErrNotExist) {
+		t.Errorf("aged staging survived: %v", statErr)
+	}
+}
+
+func TestSweepGenerationsRemovesOnlyAgedStaging(t *testing.T) {
+	st, err := New(t.TempDir(), store.CheckpointIDRe)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	aged, err := st.Stage("ck_00000000000000aa")
+	if err != nil {
+		t.Fatalf("stage: %v", err)
+	}
+	seedRecord(t, aged, "interrupted")
+	backdate(t, aged)
+	fresh, err := st.Stage("ck_00000000000000bb")
+	if err != nil {
+		t.Fatalf("stage: %v", err)
+	}
+
+	if err := st.SweepGenerations(t.Context()); err != nil {
+		t.Fatalf("SweepGenerations: %v", err)
+	}
+
+	if _, err := os.Stat(aged); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("staging aged past the grace survived the periodic sweep: %v", err)
+	}
+	if _, err := os.Stat(fresh); err != nil {
+		t.Errorf("fresh staging was swept: %v", err)
+	}
+}
+
 func TestSweepGenerationsToleratesConcurrentDelete(t *testing.T) {
 	const id = "ck_00000000000000aa"
 	st, err := New(t.TempDir(), store.CheckpointIDRe)
@@ -608,6 +742,58 @@ func BenchmarkMetas(b *testing.B) {
 			b.Fatalf("Metas: %d, %v", len(recs), err)
 		}
 	}
+}
+
+func writeSparse(t testing.TB, path string, size int64, writes map[int64][]byte) string {
+	t.Helper()
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatalf("create %s: %v", path, err)
+	}
+	defer func() { _ = f.Close() }()
+	if err = f.Truncate(size); err != nil {
+		t.Fatalf("size %s: %v", path, err)
+	}
+	for off, data := range writes {
+		if _, err = f.WriteAt(data, off); err != nil {
+			t.Fatalf("write %s: %v", path, err)
+		}
+	}
+	return path
+}
+
+func readEverythingDigest(t testing.TB, root string) string {
+	t.Helper()
+	sources, err := collectDigestSources(root)
+	if err != nil {
+		t.Fatalf("collect: %v", err)
+	}
+	readAll := func(source *digestSource, chunk int, buffer []byte) error {
+		f, openErr := os.Open(source.path)
+		if openErr != nil {
+			return openErr
+		}
+		defer func() { _ = f.Close() }()
+		offset := int64(chunk) * store.DigestChunkSize
+		hash := sha256.New()
+		if _, copyErr := io.CopyBuffer(hash, io.NewSectionReader(f, offset, min(store.DigestChunkSize, source.digest.Size-offset)), buffer); copyErr != nil {
+			return copyErr
+		}
+		copy(source.digest.Chunks[chunk][:], hash.Sum(nil))
+		return nil
+	}
+	if err = hashChunks(t.Context(), sources, min(runtime.GOMAXPROCS(0), digestWorkerLimit), readAll); err != nil {
+		t.Fatalf("read every chunk: %v", err)
+	}
+	files := make([]store.DigestFile, len(sources))
+	for i := range sources {
+		files[i] = sources[i].digest
+	}
+	digest, err := store.AssembleDigest(files)
+	if err != nil {
+		t.Fatalf("assemble: %v", err)
+	}
+	return digest
 }
 
 func metaJSON(metaID string) string {

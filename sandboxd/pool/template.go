@@ -335,6 +335,7 @@ type goldenResolution struct {
 	promoted       bool
 	guestEnv       bool
 	held           *pool
+	gen            uint64
 	unlock         func()
 }
 
@@ -351,14 +352,15 @@ func (g goldenResolution) release() {
 func (m *Manager) resolveGolden(ctx context.Context, key types.PoolKey, tenant string) (goldenResolution, error) {
 	m.mu.Lock()
 	var dir string
+	var gen uint64
 	p, ok := m.activePool(key)
 	if ok && p.goldenDir != "" {
-		dir = p.goldenDir
+		dir, gen = p.goldenDir, p.goldenGen
 		p.claimClones.Add(1)
 	}
 	m.mu.Unlock()
 	if dir != "" {
-		return goldenResolution{dir: dir, held: p}, nil
+		return goldenResolution{dir: dir, held: p, gen: gen}, nil
 	}
 	if key.Net == types.NetEgress {
 		return goldenResolution{}, nil // never resume a live-captured template on the egress lane; cold-boot instead

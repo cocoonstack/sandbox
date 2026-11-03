@@ -252,8 +252,10 @@ type pool struct {
 	claimClones atomic.Int32
 
 	// Without a streak gate a node-wide dead cause is retried every tick at full concurrency
-	refillFails int
-	nextRefill  time.Time
+	refillFails     int
+	nextRefill      time.Time
+	cloneFails      int
+	goldenRetiredAt time.Time
 }
 
 func newPool(key types.PoolKey) *pool {
@@ -283,6 +285,18 @@ func (p *pool) noteRefillResult(now time.Time, failed bool) bool {
 	backoff := refillBackoffBase << min(p.refillFails-refillFailStreak, 16)
 	p.nextRefill = now.Add(min(backoff, refillBackoffMax))
 	return first
+}
+
+func (p *pool) countClone(ctx context.Context, gen uint64, cloned bool, capReason string) bool {
+	if ctx.Err() != nil || capReason != "" || gen != p.goldenGen {
+		return false
+	}
+	if cloned {
+		p.cloneFails = 0
+	} else {
+		p.cloneFails++
+	}
+	return true
 }
 
 func (p *pool) applySpec(spec config.PoolSpec) {
@@ -723,9 +737,6 @@ func (m *Manager) sweepStoreGenerations(ctx context.Context) {
 	logger := log.WithFunc("pool.sweepStoreGenerations")
 	if err := m.ckpts.SweepGenerations(ctx); err != nil {
 		logger.Error(ctx, err, "sweep checkpoint generations")
-	}
-	if m.ckptsShared {
-		return
 	}
 	if err := m.tpls.SweepGenerations(ctx); err != nil {
 		logger.Error(ctx, err, "sweep template generations")

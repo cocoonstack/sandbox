@@ -89,6 +89,10 @@ func (g *guestPortConn) Write(p []byte) (int, error) {
 
 func (g *guestPortConn) readFrame() ([]byte, error) {
 	line, err := g.r.ReadSlice('\n')
+	if errors.Is(err, bufio.ErrBufferFull) && g.r.Size() < portReadBuf {
+		g.r = bufio.NewReaderSize(io.MultiReader(bytes.NewReader(line), g.Conn), portReadBuf)
+		line, err = g.r.ReadSlice('\n')
+	}
 	if !errors.Is(err, bufio.ErrBufferFull) {
 		return line, err
 	}

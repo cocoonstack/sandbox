@@ -725,6 +725,80 @@ func TestSweepGenerationsLeavesTheBucketAlone(t *testing.T) {
 	}
 }
 
+func TestSweepGenerationsDropsTheCacheOfARecordAPeerDeleted(t *testing.T) {
+	const deleted, live = "ck_00000000000000a9", "ck_00000000000000aa"
+	fake := &fakeS3{objects: map[string][]byte{}}
+	owner, fetcher := newTestStore(t, fake), newTestStore(t, fake)
+	for _, id := range []string{deleted, live} {
+		publishRecord(t, owner, id, []byte(`{"id":"`+id+`"}`), id)
+		if _, _, _, err := fetcher.Fetch(t.Context(), id); err != nil {
+			t.Fatalf("fetch %s: %v", id, err)
+		}
+		ageCache(t, filepath.Join(fetcher.staging, cacheDir, id))
+	}
+	if err := owner.Delete(t.Context(), deleted); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+
+	if err := fetcher.SweepGenerations(t.Context()); err != nil {
+		t.Fatalf("SweepGenerations: %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(fetcher.staging, cacheDir, deleted)); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the cache of a record a peer deleted survived the sweep: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(fetcher.staging, cacheDir, live)); err != nil {
+		t.Errorf("the cache of a live record was swept: %v", err)
+	}
+}
+
+func TestSweepGenerationsDropsACacheACanceledFetchInstalledAfterDelete(t *testing.T) {
+	const id = "ck_00000000000000ab"
+	fake := &fakeS3{objects: map[string][]byte{}, exportGate: make(chan struct{}), exportEntered: make(chan struct{}, 1), gateOn: "/chunks/"}
+	st := newTestStore(t, fake)
+	release := sync.OnceFunc(func() { close(fake.exportGate) })
+	t.Cleanup(release)
+	publishRecord(t, st, id, []byte(`{"id":"`+id+`"}`), "payload")
+	ctx, cancel := context.WithCancel(t.Context())
+	fetched := make(chan error, 1)
+	go func() {
+		_, _, _, err := st.Fetch(ctx, id)
+		fetched <- err
+	}()
+	<-fake.exportEntered
+	cancel()
+	if err := <-fetched; !errors.Is(err, context.Canceled) {
+		t.Fatalf("Fetch = %v, want its cancellation", err)
+	}
+	if err := st.Delete(t.Context(), id); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	release()
+	cached := filepath.Join(st.staging, cacheDir, id)
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(5 * time.Millisecond) {
+		if entries, _ := os.ReadDir(cached); len(entries) > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the detached download never installed its cache")
+		}
+	}
+
+	if err := st.SweepGenerations(t.Context()); err != nil {
+		t.Fatalf("SweepGenerations: %v", err)
+	}
+	if _, err := os.Stat(cached); err != nil {
+		t.Fatalf("a cache used within the grace was swept: %v", err)
+	}
+	ageCache(t, cached)
+	if err := st.SweepGenerations(t.Context()); err != nil {
+		t.Fatalf("SweepGenerations: %v", err)
+	}
+	if _, err := os.Stat(cached); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the cache a canceled fetch installed after the delete survived the sweep: %v", err)
+	}
+}
+
 func TestDeleteRemovesTheLineageMarker(t *testing.T) {
 	const lineage = "sbx_00000000000000a5"
 	fake := &fakeS3{objects: map[string][]byte{}}
@@ -836,6 +910,20 @@ func TestFetchFileKeepsHoles(t *testing.T) {
 	}
 	if blocks, limit := allocatedBytes(t, dst), 2*store.DigestChunkSize+1<<20; blocks > limit {
 		t.Errorf("fetched file allocates %d bytes, want at most %d for two data chunks", blocks, limit)
+	}
+}
+
+func ageCache(t *testing.T, dir string) {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read cache %s: %v", dir, err)
+	}
+	old := time.Now().Add(-2 * store.GenerationGrace)
+	for _, e := range entries {
+		if err := os.Chtimes(filepath.Join(dir, e.Name()), old, old); err != nil {
+			t.Fatalf("age cache: %v", err)
+		}
 	}
 }
 

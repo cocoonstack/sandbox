@@ -89,6 +89,15 @@ func WriteChunk(f *os.File, size, index int64, wantSHA256 string, r io.Reader) e
 	return nil
 }
 
+// HoleSum returns the sum of size zero bytes when f holds no data in [offset, offset+size), false when it does or the seek cannot tell.
+func HoleSum(f *os.File, offset, size int64) ([sha256.Size]byte, bool) {
+	start, end, err := dataExtent(f, offset)
+	if err != nil || end > start && start < offset+size {
+		return [sha256.Size]byte{}, false
+	}
+	return chunkZeroSum(size), true
+}
+
 func dataExtent(f *os.File, pos int64) (start, end int64, err error) {
 	start, err = f.Seek(pos, unix.SEEK_DATA)
 	if errors.Is(err, unix.ENXIO) {

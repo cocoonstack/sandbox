@@ -168,28 +168,29 @@ func (d *Store) Delete(_ context.Context, id string) error {
 }
 
 func (d *Store) SweepStaging() error {
-	// ReadDir + suffix, not Glob: the root path may hold glob metacharacters.
-	if err := utils.RemoveDirEntries(d.root, func(name string) bool { return strings.HasSuffix(name, ".tmp") }); err != nil {
-		return err
-	}
-	return d.sweepRecords()
+	return d.sweep()
 }
 
 func (d *Store) SweepGenerations(context.Context) error {
-	return d.sweepRecords()
+	return d.sweep()
 }
 
-func (d *Store) sweepRecords() error {
+func (d *Store) sweep() error {
 	entries, err := os.ReadDir(d.root)
 	if err != nil {
 		return err
 	}
 	for _, e := range entries {
-		if !e.IsDir() || !d.idRe.MatchString(e.Name()) {
-			continue
+		var sweepErr error
+		switch {
+		// ReadDir + suffix, not Glob: the root path may hold glob metacharacters.
+		case strings.HasSuffix(e.Name(), ".tmp"):
+			sweepErr = removeAgedEntry(d.root, e)
+		case e.IsDir() && d.idRe.MatchString(e.Name()):
+			sweepErr = d.sweepGenerations(e.Name())
 		}
-		if err := d.sweepGenerations(e.Name()); err != nil {
-			return err
+		if sweepErr != nil {
+			return sweepErr
 		}
 	}
 	return nil
@@ -265,11 +266,11 @@ func (d *Store) publish(_ context.Context, staging, id, digest string) error {
 	if err := touchCurrentGeneration(final, now); err != nil {
 		return err
 	}
-	tmp := filepath.Join(final, store.MetaFile+".tmp")
-	if err := os.WriteFile(tmp, metaRaw, 0o600); err != nil { //nolint:gosec // fixed path under our root
-		return err
+	tmp, openErr := os.OpenFile(filepath.Join(final, store.MetaFile+".tmp"), os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600) //nolint:gosec // fixed path under our root
+	if openErr != nil {
+		return openErr
 	}
-	if err := os.Rename(tmp, filepath.Join(final, store.MetaFile)); err != nil {
+	if err := utils.ReplaceFileSync(tmp, filepath.Join(final, store.MetaFile), metaRaw); err != nil {
 		return err
 	}
 	_ = d.sweepGenerations(id) // later publishes and startups retry a failed sweep
@@ -432,6 +433,13 @@ func hashChunk(source *digestSource, chunk int, buffer []byte) error {
 	}
 	offset := int64(chunk) * store.DigestChunkSize
 	size := min(store.DigestChunkSize, source.digest.Size-offset)
+	if sum, hole := store.HoleSum(f, offset, size); hole {
+		source.digest.Chunks[chunk] = sum
+		if err := f.Close(); err != nil {
+			return fmt.Errorf("close export entry %s: %w", source.digest.Path, err)
+		}
+		return nil
+	}
 	hash := sha256.New()
 	n, copyErr := io.CopyBuffer(hash, io.NewSectionReader(f, offset, size), buffer)
 	closeErr := f.Close()
