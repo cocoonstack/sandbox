@@ -40,7 +40,7 @@ func (m *Manager) livenessOnce(ctx context.Context) {
 		return
 	}
 	watched := m.watchedClaims("")
-	if len(watched) == 0 {
+	if len(watched) == 0 && !m.hasWarm() {
 		m.livenessSweep.Store(false)
 		return
 	}
@@ -56,7 +56,9 @@ func (m *Manager) livenessOnce(ctx context.Context) {
 		for _, vm := range vms {
 			up[vm.Config.Name] = vm.State == vmStateRunning
 		}
-		m.recoverDown(ctx, watched, up).Wait()
+		recovering := m.recoverDown(ctx, watched, up)
+		m.evictDeadWarm(ctx, up).Wait()
+		recovering.Wait()
 	}()
 }
 
@@ -95,6 +97,7 @@ func (m *Manager) onVMSync(ctx context.Context, vms []engine.VMStatus) {
 	m.vmmEvents.Store(true)
 	m.lastVMPoll.Store(time.Now().UnixNano())
 	m.recoverDown(ctx, m.watchedClaims(""), up)
+	m.evictDeadWarm(ctx, up)
 }
 
 func (m *Manager) onVMChange(ctx context.Context, change engine.VMChange) {
@@ -102,6 +105,7 @@ func (m *Manager) onVMChange(ctx context.Context, change engine.VMChange) {
 		return
 	}
 	m.recoverDown(ctx, m.watchedClaims(change.VM.Name), nil)
+	m.evictDeadWarm(ctx, map[string]bool{change.VM.Name: false})
 }
 
 func (m *Manager) recoverDown(ctx context.Context, watched []liveSuspect, up map[string]bool) *sync.WaitGroup {
@@ -124,6 +128,58 @@ func (m *Manager) watchedClaims(vmName string) []liveSuspect {
 		}
 	}
 	return out
+}
+
+func (m *Manager) hasWarm() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, p := range m.pools {
+		if len(p.warm) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func (m *Manager) evictDeadWarm(ctx context.Context, up map[string]bool) *sync.WaitGroup {
+	var suspects []*types.Sandbox
+	m.mu.Lock()
+	for _, p := range m.pools {
+		for _, sb := range p.warm {
+			if live, present := up[sb.VMName]; present && !live {
+				suspects = append(suspects, sb)
+			}
+		}
+	}
+	m.mu.Unlock()
+	return m.runBounded(ctx, len(suspects), func(ctx context.Context, i int) { m.evictWarm(ctx, suspects[i]) })
+}
+
+func (m *Manager) evictWarm(ctx context.Context, sb *types.Sandbox) {
+	logger := log.WithFunc("pool.evictWarm")
+	vm, found, err := m.eng.Inspect(ctx, sb.VMName)
+	switch {
+	case err != nil:
+		logger.Warnf(ctx, "list %s: %v", sb.VMName, err)
+		return
+	case found && vm.State == vmStateRunning:
+		return
+	}
+	m.mu.Lock()
+	evicted := false
+	if p := m.pools[sb.Key]; p != nil {
+		if i := slices.Index(p.warm, sb); i >= 0 {
+			p.warm = slices.Delete(p.warm, i, i+1)
+			evicted = true
+		}
+	}
+	m.mu.Unlock()
+	if !evicted {
+		return
+	}
+	logger.Warnf(ctx, "warm vm %s exited; replacing it", sb.VMName)
+	m.destroy(ctx, sb.VMName)
+	m.kickRefill()
 }
 
 // recoverVMM re-checks one suspect under its Transition lock, then restarts it or marks it failed.

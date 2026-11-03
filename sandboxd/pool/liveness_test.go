@@ -376,6 +376,66 @@ func TestPollBackstopsTheDaemonStream(t *testing.T) {
 	}
 }
 
+func TestLivenessReplacesADeadWarmVM(t *testing.T) {
+	eng := newFakeEngine()
+	m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1})
+	dead := fillOneWarm(t, m)
+	killVMM(eng, dead)
+
+	runLiveness(t, m)
+
+	if infos, _ := m.Info(); infos[0].Warm != 0 {
+		t.Fatalf("warm %d after its VMM exited, want 0", infos[0].Warm)
+	}
+	if removed := eng.removedNames(); !slices.Equal(removed, []string{dead}) {
+		t.Errorf("removed %v, want %s", removed, dead)
+	}
+	if len(m.refillKick) != 1 {
+		t.Errorf("pending kicks %d, want a refill kick", len(m.refillKick))
+	}
+	if next := fillOneWarm(t, m); next == dead {
+		t.Errorf("refill kept the dead VM %s", dead)
+	}
+	sb, err := m.ClaimWarm(t.Context(), testKey, ClaimOptions{})
+	if err != nil || sb.VMName == dead {
+		t.Errorf("claim got %v (err %v), want a live replacement", sb, err)
+	}
+}
+
+func TestDaemonExitEventReplacesADeadWarmVM(t *testing.T) {
+	eng := newFakeEngine()
+	eng.vmEvents = make(chan fakeVMEvent)
+	m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1})
+	dead := fillOneWarm(t, m)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	go m.watchVMMs(ctx)
+	eng.vmEvents <- fakeVMEvent{sync: []engine.VMStatus{{Name: dead, Live: true}}}
+	waitFor(t, m.vmmEvents.Load)
+
+	killVMM(eng, dead)
+	eng.vmEvents <- fakeVMEvent{change: engine.VMChange{Kind: "MODIFIED", VM: engine.VMStatus{Name: dead}}}
+
+	waitFor(t, func() bool { infos, _ := m.Info(); return infos[0].Warm == 0 })
+	waitFor(t, func() bool { return slices.Equal(eng.removedNames(), []string{dead}) })
+}
+
+func TestStaleReportsKeepALiveWarmVM(t *testing.T) {
+	eng := newFakeEngine()
+	m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1})
+	name := fillOneWarm(t, m)
+
+	m.evictDeadWarm(t.Context(), map[string]bool{}).Wait()
+	m.evictDeadWarm(t.Context(), map[string]bool{name: false}).Wait()
+
+	if infos, _ := m.Info(); infos[0].Warm != 1 {
+		t.Errorf("warm %d, want the running VM kept", infos[0].Warm)
+	}
+	if removed := eng.removedNames(); len(removed) != 0 {
+		t.Errorf("removed %v, want none", removed)
+	}
+}
+
 func TestRestartFailedRefusesAReleasedClaim(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
@@ -552,4 +612,20 @@ func killVMM(eng *fakeEngine, name string) {
 	eng.mu.Lock()
 	defer eng.mu.Unlock()
 	eng.stopped[name] = true
+}
+
+func fillOneWarm(t *testing.T, m *Manager) string {
+	t.Helper()
+	m.mu.Lock()
+	m.pools[testKey].goldenDir = "/goldens/x"
+	m.mu.Unlock()
+	m.refillOnce(t.Context())
+	waitFor(t, func() bool { infos, _ := m.Info(); return infos[0].Warm == 1 && infos[0].Refilling == 0 })
+	select {
+	case <-m.refillKick:
+	default:
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.pools[testKey].warm[0].VMName
 }
