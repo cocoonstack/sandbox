@@ -2,6 +2,7 @@ package pool
 
 import (
 	"errors"
+	"os"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -231,4 +232,26 @@ func TestAGoldenWhoseClonesSucceedIsNeverRetiredForFailedProbes(t *testing.T) {
 			t.Errorf("golden %q after %d builds, want %q kept: its clones succeed", golden, eng.coldCount(), g)
 		}
 	})
+}
+
+func TestRetiringAGoldenLeavesItsDirectoryForAClaimMidClone(t *testing.T) {
+	m := newTestManager(t, newFakeEngine(), config.PoolSpec{PoolKey: testKey, Warm: 1})
+	g := seedGolden(t, m, "")
+	m.mu.Lock()
+	p := m.pools[testKey]
+	p.goldenDir, p.goldenGen, p.cloneFails = g, 1, refillFailStreak
+	p.claimClones.Add(1)
+	retired := m.retireUnclonableLocked(p, 1, time.Now())
+	golden := p.goldenDir
+	m.mu.Unlock()
+
+	if !retired || golden != "" {
+		t.Fatalf("retired %v golden %q, want the golden retired", retired, golden)
+	}
+	if _, err := os.Stat(g); err != nil {
+		t.Errorf("golden directory under a claim clone: %v, want it left for the rebuild to replace", err)
+	}
+	if _, err := os.Stat(g + goldenStampSuffix); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("golden stamp after retirement: %v, want it removed so nothing adopts it", err)
+	}
 }

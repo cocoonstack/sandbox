@@ -135,7 +135,7 @@ func (m *Manager) refillOne(ctx context.Context, p *pool, golden string, gen uin
 	if backedOff {
 		fails, wait = p.refillFails, time.Until(p.nextRefill)
 	}
-	retired := m.retireUnclonableLocked(ctx, p, gen, now)
+	retired := m.retireUnclonableLocked(p, gen, now)
 	entered := capReason != "" && m.noteCapacityLocked(now, capReason)
 	parked := m.capacityReasonLocked(now) != ""
 	m.mu.Unlock()
@@ -300,25 +300,9 @@ func (m *Manager) adoptGolden(p *pool, imageID string) bool {
 	return true
 }
 
+// dropPool runs under m.mu: the rename hides the golden from adoptGolden, and the slow unlink runs off the lock.
 func (m *Manager) dropPool(ctx context.Context, p *pool) {
 	delete(m.pools, p.key)
-	m.discardGoldenLocked(ctx, p)
-}
-
-func (m *Manager) retireUnclonableLocked(ctx context.Context, p *pool, gen uint64, now time.Time) bool {
-	if p.cloneFails < refillFailStreak || p.goldenGen != gen || p.goldenDir == "" || now.Sub(p.goldenRetiredAt) < buildRetryDelay {
-		return false
-	}
-	p.goldenDir, p.imageID = "", ""
-	p.goldenGen++
-	p.nextBuild, p.goldenRetiredAt = time.Time{}, now
-	p.refillFails, p.nextRefill, p.cloneFails = 0, time.Time{}, 0
-	m.discardGoldenLocked(ctx, p)
-	return true
-}
-
-// discardGoldenLocked runs under m.mu: the rename hides the golden from adoptGolden, and the slow unlink runs off the lock.
-func (m *Manager) discardGoldenLocked(ctx context.Context, p *pool) {
 	g := filepath.Join(m.goldensDir(), p.hash)
 	_ = os.Remove(g + goldenStampSuffix)
 	doomed := g + "-" + randHex(4) + ".tmp"
@@ -327,9 +311,21 @@ func (m *Manager) discardGoldenLocked(ctx context.Context, p *pool) {
 	}
 	go func() {
 		if os.RemoveAll(doomed) == nil {
-			log.WithFunc("pool.discardGoldenLocked").Infof(ctx, "removed a retired golden of %s", p.key.Template)
+			log.WithFunc("pool.dropPool").Infof(ctx, "removed the golden of dropped pool %s", p.key.Template)
 		}
 	}()
+}
+
+func (m *Manager) retireUnclonableLocked(p *pool, gen uint64, now time.Time) bool {
+	if p.cloneFails < refillFailStreak || p.goldenGen != gen || p.goldenDir == "" || now.Sub(p.goldenRetiredAt) < buildRetryDelay {
+		return false
+	}
+	p.goldenDir, p.imageID = "", ""
+	p.goldenGen++
+	p.nextBuild, p.goldenRetiredAt = time.Time{}, now
+	p.refillFails, p.nextRefill, p.cloneFails = 0, time.Time{}, 0
+	_ = os.Remove(filepath.Join(m.goldensDir(), p.hash) + goldenStampSuffix)
+	return true
 }
 
 func (m *Manager) goldenStamp(v *configView, key types.PoolKey, imageID string) string {
