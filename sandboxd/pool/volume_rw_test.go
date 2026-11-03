@@ -1,6 +1,7 @@
 package pool
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -462,6 +463,37 @@ func TestQuiesceFailureSyncsOnceAndKeepsMarkers(t *testing.T) {
 	}
 }
 
+func TestReleaseGivesEveryUnmountItsOwnMutationBudget(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		first := writeVolumeImage(t, "first.img", "first")
+		second := writeVolumeImage(t, "second.img", "second")
+		base := newFakeEngine()
+		m := newVolumeManager(t, base, []config.VolumeSpec{
+			{Name: "first", Path: first, Writable: true},
+			{Name: "second", Path: second, Writable: true},
+		})
+		sb, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Volumes: []types.Volume{
+			{Name: "first", Mode: types.VolumeModeRW},
+			{Name: "second", Mode: types.VolumeModeRW},
+		}})
+		if err != nil {
+			t.Fatalf("ClaimProvision: %v", err)
+		}
+		eng := &wedgedUnmountEngine{fakeEngine: base}
+		m.eng = eng
+		start := time.Now()
+
+		if err := m.Release(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
+			t.Fatalf("Release: %v", err)
+		}
+
+		want := []time.Time{start.Add(engine.VolumeMutationTimeout), start.Add(2 * engine.VolumeMutationTimeout)}
+		if !slices.EqualFunc(eng.deadlines, want, time.Time.Equal) {
+			t.Errorf("unmount deadlines %v, want %v: each volume gets its own budget after a wedged one", eng.deadlines, want)
+		}
+	})
+}
+
 func TestPendingRemovalHoldsVolumesUntilDrained(t *testing.T) {
 	path := writeVolumeImage(t, "scratch.img", "data")
 	eng := newFakeEngine()
@@ -538,22 +570,6 @@ func TestRestartHoldsVolumesOfAStaleVMUntilItIsRemoved(t *testing.T) {
 				t.Fatalf("registry after the stale VM is gone=%+v, want empty", holders)
 			}
 		})
-	}
-}
-
-func TestQuiesceBudgetScalesWithMounts(t *testing.T) {
-	for _, tt := range []struct {
-		mounts int
-		want   time.Duration
-	}{
-		{1, 2 * engine.VolumeCallTimeout},
-		{2, 3 * engine.VolumeCallTimeout},
-		{4, volumeQuiesceMax},
-		{8, volumeQuiesceMax},
-	} {
-		if got := quiesceBudget(tt.mounts); got != tt.want {
-			t.Errorf("quiesceBudget(%d)=%s, want %s", tt.mounts, got, tt.want)
-		}
 	}
 }
 
@@ -640,6 +656,21 @@ func TestWritableDiscoveryAndUsageEvent(t *testing.T) {
 		return
 	}
 	t.Fatal("claim usage event not found")
+}
+
+type wedgedUnmountEngine struct {
+	*fakeEngine
+	deadlines []time.Time
+}
+
+func (e *wedgedUnmountEngine) UnmountVolume(ctx context.Context, sock, mount string) (bool, error) {
+	deadline, _ := ctx.Deadline()
+	e.deadlines = append(e.deadlines, deadline)
+	if len(e.deadlines) == 1 {
+		<-ctx.Done()
+		return false, errors.New("signal: killed")
+	}
+	return e.fakeEngine.UnmountVolume(ctx, sock, mount)
 }
 
 func newVolumeManagerAt(t *testing.T, eng *fakeEngine, dataDir string, volumes []config.VolumeSpec) *Manager {
