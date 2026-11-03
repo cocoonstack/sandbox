@@ -64,8 +64,7 @@ const (
 	refillBackoffBase = 250 * time.Millisecond
 	refillBackoffMax  = buildRetryDelay
 	// Fallbacks when a Manager is built from a Config that skipped config.Load's defaulting
-	defaultMaxFork = 16
-	defaultRefill  = 4
+	defaultRefill = 4
 
 	// A heal pulls a whole guest memory image, so a few saturate disk and NIC.
 	maxConcurrentHeals = 4

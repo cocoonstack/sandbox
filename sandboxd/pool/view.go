@@ -45,7 +45,7 @@ func newConfigView(cfg *config.Config, secrets *egress.SecretStore) *configView 
 
 		maxClaims:            cfg.MaxClaims,
 		maxRunning:           cfg.MaxRunning,
-		maxFork:              cmp.Or(cfg.MaxForkCount, defaultMaxFork),
+		maxFork:              cmp.Or(cfg.MaxForkCount, config.DefaultMaxForkCount),
 		releaseDelay:         time.Duration(cfg.ReleaseDelaySeconds) * time.Second,
 		vmmRestart:           cfg.VMMRestart,
 		ckptTTL:              time.Duration(cfg.CheckpointTTLHours) * time.Hour,

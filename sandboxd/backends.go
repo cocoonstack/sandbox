@@ -27,7 +27,7 @@ func openBackends(ctx context.Context, cfg *config.Config) (pool.Backends, error
 	if b.Checkpoints, err = newStoreView(ctx, cfg, "checkpoint-staging", store.CheckpointIDRe); err != nil {
 		return pool.Backends{}, err
 	}
-	b.SharedCheckpoints = cfg.CheckpointStore != nil && cfg.CheckpointStore.Kind == "s3"
+	b.SharedCheckpoints = cfg.S3Checkpoints()
 	if b.Templates, err = newStoreView(ctx, cfg, "template-staging", store.TemplateIDRe); err != nil {
 		return pool.Backends{}, err
 	}
@@ -64,8 +64,8 @@ func usageNode(cfg *config.Config) (string, error) {
 }
 
 func newStoreView(ctx context.Context, cfg *config.Config, staging string, idRe *regexp.Regexp) (store.Store, error) {
-	if cs := cfg.CheckpointStore; cs != nil && cs.Kind == "s3" {
-		return s3.New(ctx, *cs.S3, filepath.Join(cfg.DataDir, staging), idRe)
+	if cfg.S3Checkpoints() {
+		return s3.New(ctx, *cfg.CheckpointStore.S3, filepath.Join(cfg.DataDir, staging), idRe)
 	}
 	return dir.New(cmp.Or(cfg.CheckpointDir, filepath.Join(cfg.DataDir, "checkpoints")), idRe)
 }
