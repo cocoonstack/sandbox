@@ -15,10 +15,13 @@ the cocoon CLI and needs a template image with silkd baked in.
   reads. sandboxd logs a warning at startup when the detected cocoon is below
   v0.6.9 (a dev/`master-<sha>` build is assumed current); changing volumes on
   a running claim needs v0.7.2, and a pool's `reader` needs v0.7.3
-- A silkd-baked template image, e.g. `ghcr.io/cocoonstack/sandbox/base:24.04`
+- A silkd-baked template image, e.g. `ghcr.io/cocoonstack/sandbox/rt:24.04`
   (pull via cocoon, or `cocoon image import` a tar). The image carries the boot
   artifact (`/boot/vmlinuz-sandbox`, `/boot/initrd.img-sandbox`), so the host
-  needs neither file
+  needs neither file. A `template` is cocoon's image ref verbatim: after
+  `cocoon image pull ghcr.io/cocoonstack/sandbox/rt:24.04` it is that whole
+  ref. The short `rt:24.04` in later examples names an image imported with
+  `cocoon image import rt:24.04`
 
 Prebuilt static linux/amd64 and linux/arm64 binaries (`sandboxd`,
 `sandboxd.dbg`, `sandbox-mcp`, `silkd`, with `checksums.txt`) ship with every
@@ -97,11 +100,11 @@ sandboxd reads one JSON file (`-config`, default
     "node_id": "node-a",
     "bind": "10.0.0.5:7946",
     "join": ["10.0.0.6:7946"],
-    "cluster_key": "base64…"
+    "cluster_key": "MDEyMzQ1Njc4OWFiY2RlZg=="
   },
   "pools": [
-    {"template": "base:24.04", "net": "none",   "size": "small", "warm": 4},
-    {"template": "base:24.04", "net": "egress", "size": "small", "warm": 2}
+    {"template": "ghcr.io/cocoonstack/sandbox/rt:24.04", "net": "none",   "size": "small", "warm": 4},
+    {"template": "ghcr.io/cocoonstack/sandbox/rt:24.04", "net": "egress", "size": "small", "warm": 2}
   ]
 }
 ```
@@ -453,7 +456,9 @@ took 10,752 MiB as whole files stored about 912 MiB as chunks.
 
 ### A fuller config
 
-The block above is the minimum. A production node with guarded
+The block above shows the common fields; the
+[quick start](https://github.com/cocoonstack/sandbox#quick-start) config is the
+minimum. A production node with guarded
 egress + HTTPS interception, previews, an object-store checkpoint backend,
 the idle→hibernate→archive tiers, and a mesh looks like this — every field
 here validates on load:

@@ -201,6 +201,11 @@ file: a claim's own `guest: false` env first, the node's second
   "secrets": [
     { "name": "gh", "header": "Authorization", "value_env": "GH_TOKEN" }
   ],
+  "egress_ca": {                            // provisioned below
+    "root_cert": "/etc/sandboxd/egress-ca/root.crt",
+    "intermediate_cert": "/etc/sandboxd/egress-ca/node-a.crt",
+    "intermediate_key": "/etc/sandboxd/egress-ca/node-a.key"
+  },
   "pools": [
     { "template": "rt:24.04", "net": "none", "size": "small", "warm": 2,
       "egress": { "socks5": true, "allow": [
