@@ -90,6 +90,11 @@ pub fn claim_env() -> String {
     std::fs::read_to_string(CLAIM_ENV_PATH).unwrap_or_default()
 }
 
+pub fn apply_claim_env(cmd: &mut Command) {
+    let claim = claim_env();
+    cmd.envs(parse_env_file(&claim).iter().map(|(k, v)| (*k, &**v)));
+}
+
 /// Parses the subset the host writes: one `KEY="value"` per line, with systemd's double-quote escapes.
 pub fn parse_env_file(text: &str) -> Vec<(&str, Cow<'_, str>)> {
     text.lines()

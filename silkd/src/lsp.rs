@@ -9,7 +9,8 @@ use std::time::Duration;
 
 use tokio::io::{AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::mpsc;
+use tokio::task::JoinHandle;
 
 use crate::proto::{self, BULK_CHUNK, ErrorKind, Request, Response};
 use crate::sysutil;
@@ -120,9 +121,8 @@ impl Broker {
             return Err(e);
         }
 
-        let (gone_tx, gone_rx) = oneshot::channel();
-        let feed = tokio::spawn(feed_stdin(client, stdin, gone_tx));
-        let res = pump_stdout(stdout, w, gone_rx).await;
+        let mut feed = tokio::spawn(feed_stdin(client, stdin));
+        let res = pump_stdout(stdout, w, &mut feed).await;
         // aborting mid-write is safe: the child is killed next.
         feed.abort();
         self.reap(server_id).await;
@@ -180,31 +180,21 @@ async fn kill(mut server: Server) {
     let _ = server.child.wait().await;
 }
 
-async fn feed_stdin(
-    mut client: mpsc::Receiver<Request>,
-    stdin: ChildStdin,
-    gone: oneshot::Sender<()>,
-) {
-    let mut stdin = Some(stdin);
-    while let Some(req) = client.recv().await {
-        // a stray frame closes rather than errors: this task has no writer.
-        let fed = match (req, stdin.as_mut()) {
-            (Request::Data { data }, Some(sink)) => {
-                sink.write_all(&data).await.is_ok() && sink.flush().await.is_ok()
-            }
-            _ => false,
-        };
-        if !fed {
-            stdin = None;
+async fn feed_stdin(mut client: mpsc::Receiver<Request>, mut stdin: ChildStdin) {
+    // a stray frame closes rather than errors: this task has no writer.
+    while let Some(Request::Data { data }) = client.recv().await {
+        if stdin.write_all(&data).await.is_err() || stdin.flush().await.is_err() {
+            break;
         }
     }
-    let _ = gone.send(());
+    drop(stdin);
+    while client.recv().await.is_some() {}
 }
 
 async fn pump_stdout<W: AsyncWrite + Unpin>(
     mut stdout: ChildStdout,
     w: &mut W,
-    mut gone: oneshot::Receiver<()>,
+    client_gone: &mut JoinHandle<()>,
 ) -> std::io::Result<()> {
     let mut buf = vec![0u8; BULK_CHUNK];
     let mut frame = Vec::new();
@@ -215,7 +205,7 @@ async fn pump_stdout<W: AsyncWrite + Unpin>(
                 Ok(n) => proto::write_chunk_frame(w, &mut frame, "data", &buf[..n]).await?,
                 Err(e) => return proto::err_frame(w, &e, "read lsp stdout").await,
             },
-            _ = &mut gone => break,
+            _ = &mut *client_gone => break,
         }
     }
     proto::write_frame(w, &Response::Done).await
