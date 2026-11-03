@@ -119,6 +119,21 @@ func TestForgottenNodeStaysGoneUntilItRejoins(t *testing.T) {
 	}
 }
 
+func TestPoolPeersIncludeAColdPeerOfThePool(t *testing.T) {
+	m := newTestMesh(t, "a")
+	m.UpdateSelf(t.Context(), map[string]int{"pool": 0}, nil, nil)
+	mergeStates(t, m, []NodeState{
+		{NodeID: "b", Addr: "b:7777", Epoch: 1, Pools: map[string]int{"pool": 0}},
+		{NodeID: "c", Addr: "c:7777", Epoch: 1, Pools: map[string]int{"other": 3}},
+	})
+	if peers := m.PoolPeers("pool"); !slices.Equal(peers, []string{"b:7777"}) {
+		t.Errorf("pool peers = %v, want the cold peer and not self or another pool's", peers)
+	}
+	if peers := m.Candidates("pool"); len(peers) != 0 {
+		t.Errorf("warm candidates = %v, want none", peers)
+	}
+}
+
 func TestCandidatesPowerOfTwo(t *testing.T) {
 	m := newTestMesh(t, "a")
 	mergeStates(t, m, []NodeState{

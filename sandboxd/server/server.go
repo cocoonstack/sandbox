@@ -152,6 +152,7 @@ type Dialer interface {
 type Placer interface {
 	ClientAddr(addr string) string
 	Candidates(keyHash string) []string
+	PoolPeers(keyHash string) []string
 	VolumeCandidates(keyHash string, names []string) []string
 	TemplateOwners(keyHash string) []string
 	VolumeOwners(names []string) []string
@@ -375,7 +376,7 @@ func (s *Server) handleClaim(w http.ResponseWriter, r *http.Request) {
 		sb, err = s.mgr.ClaimProvision(r.Context(), key, o)
 	}
 	if errors.Is(err, pool.ErrQuota) && s.placer != nil && !req.NoRedirect && !req.RequirePromoted &&
-		s.writeRedirect(w, s.placer.Candidates(key.Hash())) {
+		s.writeRedirect(w, s.quotaPeers(key.Hash())) {
 		s.claimRedirects.Add(1)
 		return
 	}
@@ -483,6 +484,14 @@ func (s *Server) templateOwners(query func(string) []string, hash, tenant string
 		}
 	}
 	return owners
+}
+
+// quotaPeers prefers warm peers; a pool with no warm target gossips zero, so any peer serving it is next.
+func (s *Server) quotaPeers(hash string) []string {
+	if peers := s.placer.Candidates(hash); len(peers) > 0 {
+		return peers
+	}
+	return s.placer.PoolPeers(hash)
 }
 
 func (s *Server) redirectClaim(ctx context.Context, w http.ResponseWriter, req ClaimRequest, key types.PoolKey, hash, tenant string) bool {

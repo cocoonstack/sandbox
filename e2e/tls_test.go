@@ -201,6 +201,7 @@ func (p *edgePlacer) ClientAddr(addr string) string {
 }
 
 func (p *edgePlacer) Candidates(string) []string                     { return []string{p.internal} }
+func (p *edgePlacer) PoolPeers(string) []string                      { return nil }
 func (p *edgePlacer) VolumeCandidates(string, []string) []string     { return nil }
 func (p *edgePlacer) TemplateOwners(string) []string                 { return nil }
 func (p *edgePlacer) VolumeOwners([]string) []string                 { return nil }

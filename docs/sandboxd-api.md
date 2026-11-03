@@ -204,7 +204,7 @@ VM closes the devices.
 Redirects (mutually exclusive with the fields above) name peers to retry
 at — sent on a warm miss with warm peers, when the node lacks a golden for
 the key but gossip names a template owner, and when the node is at
-`max_claims` but a peer reports warm capacity:
+`max_claims` or `max_running` and a peer reports warm capacity or, failing that, serves the pool:
 
 ```json
 {"redirect": ["10.0.0.6:7777", "10.0.0.7:7777"],
@@ -777,8 +777,8 @@ A refused reload changes nothing.
 ## POST /v1/drain
 
 Auth: root only (tenant tokens get 403). Cordons the node for maintenance: claim/fork/branch answer
-429 `node draining` (on a cluster a non-volume claim tries a warm-peer redirect first, and
-gossip stops naming this node within a tick as its warm counts hit zero),
+429 `node draining` (on a cluster a non-volume claim tries a peer redirect first, and
+warm placement stops naming this node within a tick as its warm counts hit zero),
 unclaimed warm VMs are destroyed, and live claims keep serving until release
 or TTL. Pool ownership is untouched — no pools.json write, no config change.
 Answers the fresh `GET /v1/info` payload; poll `claimed` to zero to know the
