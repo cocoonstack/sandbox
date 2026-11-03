@@ -179,9 +179,10 @@ func (m *Manager) wakeOrRead(ctx context.Context, sb *types.Sandbox, readerOK bo
 	if readerOK && sb.ReaderSafe {
 		return "", ErrSleeping
 	}
-	if err := m.diskErr(); err != nil {
+	if err := m.beginWake(sb); err != nil {
 		return "", fmt.Errorf("wake %s: %w", sb.ID, err)
 	}
+	defer m.endWake(sb)
 	// A half-restored VM is worse than a wasted wake.
 	ctx = context.WithoutCancel(ctx)
 	if err := m.resolveIntent(ctx, sb); err != nil {
@@ -354,6 +355,7 @@ func (m *Manager) resolvePendingSnap(ctx context.Context, sb *types.Sandbox) (ad
 			sb.HibernateSnap = pending
 		}
 		sb.PendingSnap = ""
+		m.syncRunningLocked(sb)
 		js = m.store.set(sb)
 	}
 	m.mu.Unlock()

@@ -238,6 +238,10 @@ func (m *Manager) restartFailed(ctx context.Context, sb *types.Sandbox) error {
 	if reason := coldBootBlocker(sb, found, volumes); reason != "" {
 		return fmt.Errorf("%w: %s", ErrFailed, reason)
 	}
+	if err = m.beginWake(sb); err != nil {
+		return fmt.Errorf("wake %s: %w", sb.ID, err)
+	}
+	defer m.endWake(sb)
 	sb.RestartLog = nil
 	if err = m.restartLocked(ctx, sb); err != nil {
 		return fmt.Errorf("wake %s: %w", sb.ID, err)

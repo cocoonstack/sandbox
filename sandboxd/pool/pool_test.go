@@ -962,6 +962,7 @@ func TestRenewRefusesAnArchivedClaim(t *testing.T) {
 	sb := mustClaim(t, m, testKey)
 	m.mu.Lock()
 	sb.ArchiveCk, sb.Deadline = "ck_1", time.Time{}
+	m.syncRunningLocked(sb)
 	m.store.set(sb)
 	m.mu.Unlock()
 
@@ -1076,6 +1077,7 @@ func TestOperatorPortDialNeverWakesAPausedSandbox(t *testing.T) {
 	} {
 		m.mu.Lock()
 		running.PendingSnap, running.ArchiveCk = tt.pending, tt.archive
+		m.syncRunningLocked(running)
 		m.store.set(running)
 		m.mu.Unlock()
 		if _, err := m.DialPort(t.Context(), running.ID, operator, 49983); !errors.Is(err, ErrPaused) {
@@ -1234,6 +1236,7 @@ type fakeEngine struct {
 	probeErr              error
 	hibernateErr          error
 	restoreErr            error
+	restoreGate           chan struct{}
 	snapListErr           error
 	snapSaveErr           error
 	startErr              error
@@ -1514,6 +1517,9 @@ func (f *fakeEngine) Hibernate(_ context.Context, name, snapName string) error {
 }
 
 func (f *fakeEngine) Restore(_ context.Context, name, _ string) (string, error) {
+	if f.restoreGate != nil {
+		<-f.restoreGate
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.restores = append(f.restores, name)
@@ -2096,6 +2102,7 @@ func newTestManagerAt(t testing.TB, eng *fakeEngine, dataDir string, pools ...co
 	if err != nil {
 		t.Fatalf("setup manager: %v", err)
 	}
+	t.Cleanup(func() { assertRunningCount(t, m) })
 	t.Cleanup(func() {
 		m.mu.Lock()
 		defer m.mu.Unlock()
@@ -2108,6 +2115,21 @@ func newTestManagerAt(t testing.TB, eng *fakeEngine, dataDir string, pools ...co
 		}
 	})
 	return m
+}
+
+func assertRunningCount(t testing.TB, m *Manager) {
+	t.Helper()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	want := 0
+	for _, sb := range m.claimed {
+		if sb.Waking || sb.HibernateSnap == "" && sb.ArchiveCk == "" && sb.Failed == "" {
+			want++
+		}
+	}
+	if m.running != want {
+		t.Errorf("running count %d, want %d from the claims", m.running, want)
+	}
 }
 
 func testBackends(t testing.TB, cfg *config.Config) Backends {

@@ -207,6 +207,8 @@ type PoolInfo struct {
 // Gauges are the manager's point-in-time claim counts and drain state.
 type Gauges struct {
 	Claimed    int
+	Running    int
+	MaxRunning int
 	Hibernated int
 	Archived   int
 	Failed     int
@@ -395,6 +397,8 @@ type Manager struct {
 	reloadMu sync.Mutex
 
 	maxClaims    int
+	maxRunning   int
+	running      int // guarded by m.mu
 	releaseDelay time.Duration
 	draining     bool // guarded by m.mu; deliberately not persisted
 
@@ -533,7 +537,7 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 		}
 		m.audit = audit
 	}
-	m.maxClaims = cfg.MaxClaims
+	m.maxClaims, m.maxRunning = cfg.MaxClaims, cfg.MaxRunning
 	if cfg.APIToken != "" {
 		m.rootSum = tenants.TokenSHA256(cfg.APIToken)
 	}
@@ -664,7 +668,7 @@ func (m *Manager) Info() ([]PoolInfo, Gauges) {
 			Golden:    p.goldenDir != "",
 		})
 	}
-	g := Gauges{Claimed: len(m.claimed), Draining: m.draining}
+	g := Gauges{Claimed: len(m.claimed), Running: m.running, MaxRunning: m.maxRunning, Draining: m.draining}
 	g.AtCapacityReason = m.capacityReasonLocked(now)
 	g.AtCapacity = g.AtCapacityReason != ""
 	for _, sb := range m.claimed {

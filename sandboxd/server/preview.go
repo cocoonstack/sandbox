@@ -137,6 +137,10 @@ func (p *PreviewServer) proxyLocal(w http.ResponseWriter, r *http.Request, claim
 				http.Error(w, "lease lost; retry", http.StatusServiceUnavailable)
 				return
 			}
+			if errors.Is(err, pool.ErrQuota) {
+				http.Error(w, "node at capacity; retry", http.StatusTooManyRequests)
+				return
+			}
 			log.WithFunc("server.proxyLocal").Errorf(r.Context(), err, "proxy %s:%d", claims.ID, claims.Port)
 			http.Error(w, "preview target unreachable", http.StatusBadGateway)
 		},

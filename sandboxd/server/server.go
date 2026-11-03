@@ -180,6 +180,8 @@ type InfoResponse struct {
 	Pools            []pool.PoolInfo     `json:"pools"`
 	Templates        []pool.TemplateInfo `json:"templates"`
 	Claimed          int                 `json:"claimed"`
+	Running          int                 `json:"running"`
+	MaxRunning       int                 `json:"max_running,omitzero"`
 	Hibernated       int                 `json:"hibernated"`
 	Archived         int                 `json:"archived"`
 	Failed           int                 `json:"failed,omitzero"`
@@ -829,7 +831,7 @@ func (s *Server) handlePeers(w http.ResponseWriter, _ *http.Request) {
 func (s *Server) handleInfo(w http.ResponseWriter, _ *http.Request) {
 	pools, g := s.mgr.Info()
 	resp := InfoResponse{
-		Pools: pools, Templates: s.mgr.Templates(), Claimed: g.Claimed, Hibernated: g.Hibernated, Archived: g.Archived, Failed: g.Failed,
+		Pools: pools, Templates: s.mgr.Templates(), Claimed: g.Claimed, Running: g.Running, MaxRunning: g.MaxRunning, Hibernated: g.Hibernated, Archived: g.Archived, Failed: g.Failed,
 		Draining: g.Draining, AtCapacity: g.AtCapacity, AtCapacityReason: g.AtCapacityReason,
 		AdvertiseAddr: s.advertise,
 	}

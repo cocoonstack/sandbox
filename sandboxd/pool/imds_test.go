@@ -54,6 +54,7 @@ func TestSetInstanceMetadataRefusesAPausedSandboxWithoutWaking(t *testing.T) {
 	}
 	m.mu.Lock()
 	running.PendingSnap, running.ArchiveCk = "", "ck"
+	m.syncRunningLocked(running)
 	m.store.set(running)
 	m.mu.Unlock()
 	if err := m.SetInstanceMetadata(t.Context(), running.ID, doc); !errors.Is(err, ErrArchived) {
