@@ -17,6 +17,7 @@ from .frames import MAX_FRAME, decode_response, encode_request
 
 KEEP_ALIVE_CONNS = 8
 _FD_SETSIZE = 1024
+_TCP_KEEPALIVE = {"TCP_KEEPIDLE": 15, "TCP_KEEPINTVL": 15, "TCP_KEEPCNT": 9}
 
 _CloseableT = TypeVar("_CloseableT", bound="_Closeable")
 
@@ -194,6 +195,10 @@ def dial_agent(
     except OSError as exc:
         raise _handshake_error(f"dial {addr}", exc) from exc
     sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+    for opt, setting in _TCP_KEEPALIVE.items():
+        if hasattr(socket, opt):
+            sock.setsockopt(socket.IPPROTO_TCP, getattr(socket, opt), setting)
     request = (
         f"GET /v1/sandboxes/{sandbox_id}/agent HTTP/1.1\r\n"
         f"Host: {endpoint.netloc}\r\n"

@@ -37,6 +37,11 @@ def test_dial_agent_wraps_refused_connection(dead_addr):
         dial_agent(dead_addr, "sb_1", "tok", 0.5)
 
 
+def test_dial_agent_enables_tcp_keepalive(black_hole):
+    with dial_agent(black_hole, "sb_1", "tok", 0.5) as conn:
+        assert conn._sock.getsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE)
+
+
 def test_send_on_a_dead_socket_raises_a_typed_error():
     ours, theirs = socket.socketpair()
     theirs.close()
