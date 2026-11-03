@@ -25,14 +25,14 @@ func (m *Manager) archiveAfterFor(key types.PoolKey) time.Duration {
 	if p, ok := m.activePool(key); ok {
 		return p.archiveAfter
 	}
-	return m.archiveAfterDefault
+	return m.view.Load().archiveAfterDefault
 }
 
 func (m *Manager) archiveDeleteFor(key types.PoolKey) time.Duration {
 	if p, ok := m.activePool(key); ok {
 		return p.archiveDelete
 	}
-	return m.archiveDeleteDefault
+	return m.view.Load().archiveDeleteDefault
 }
 
 // retentionDeadline is zero for an archive kept forever; callers hold m.mu.

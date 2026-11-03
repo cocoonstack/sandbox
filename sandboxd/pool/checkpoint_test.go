@@ -179,7 +179,7 @@ func TestReconcileSweepsCheckpointStaging(t *testing.T) {
 func TestRetentionSweepsExpiredCheckpoints(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
-	m.ckptTTL = time.Hour
+	tuneView(m, func(v *configView) { v.ckptTTL = time.Hour })
 	plant := func(id string, age time.Duration) {
 		t.Helper()
 		dir := filepath.Join(m.dataDir, "checkpoints", id)
@@ -203,7 +203,7 @@ func TestRunRefillsWhileTheRetentionSweepBlocks(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1})
 	m.pools[testKey].goldenDir = "/goldens/x"
-	m.ckptTTL = time.Hour
+	tuneView(m, func(v *configView) { v.ckptTTL = time.Hour })
 	stall := &stallingMetasStore{Store: m.ckpts, entered: make(chan struct{}, 1), release: make(chan struct{})}
 	m.ckpts = stall
 

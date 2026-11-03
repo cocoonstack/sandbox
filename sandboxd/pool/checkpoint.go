@@ -326,9 +326,7 @@ func (m *Manager) pinnedArchiveCks() map[string]struct{} {
 }
 
 func (m *Manager) sweepExpiredCheckpoints(ctx context.Context) {
-	m.mu.Lock()
-	ttl := m.ckptTTL
-	m.mu.Unlock()
+	ttl := m.view.Load().ckptTTL
 	if ttl <= 0 || !m.ckptSweeping.CompareAndSwap(false, true) {
 		return
 	}

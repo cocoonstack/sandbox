@@ -245,7 +245,8 @@ func (m *Manager) idleOnce(ctx context.Context) {
 	type victim struct{ id, token string }
 	var victims []victim
 	m.mu.Lock()
-	idlePolicy := m.idleDefault > 0
+	idleDefault := m.view.Load().idleDefault
+	idlePolicy := idleDefault > 0
 	for _, p := range m.pools {
 		idlePolicy = idlePolicy || p.idle > 0
 	}
@@ -258,7 +259,7 @@ func (m *Manager) idleOnce(ctx context.Context) {
 		if skipIdle(sb) {
 			continue
 		}
-		idle := m.idleDefault
+		idle := idleDefault
 		if p, pooled := m.activePool(sb.Key); pooled {
 			idle = p.idle
 		}

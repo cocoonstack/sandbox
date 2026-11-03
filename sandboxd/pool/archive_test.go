@@ -131,7 +131,7 @@ func TestArchiveCkHiddenAcrossNodes(t *testing.T) {
 	if err := mB.DeleteCheckpoint(t.Context(), ck, "", DeleteFleet); !errors.Is(err, ErrUnknownCheckpoint) {
 		t.Errorf("peer delete: %v, want ErrUnknownCheckpoint", err)
 	}
-	mB.ckptTTL = time.Nanosecond
+	tuneView(mB, func(v *configView) { v.ckptTTL = time.Nanosecond })
 	mB.sweepExpiredCheckpoints(t.Context())
 	if !ckExists(t, mA, ck) {
 		t.Fatal("peer TTL sweep deleted the archive wake image")
@@ -278,7 +278,7 @@ func TestSweepExpiredCheckpointsIsANoopWithoutTTL(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Checkpoint: %v", err)
 	}
-	m.ckptTTL = 0
+	tuneView(m, func(v *configView) { v.ckptTTL = 0 })
 	m.sweepExpiredCheckpoints(t.Context())
 	if !ckExists(t, m, ck.ID) {
 		t.Fatal("a zero TTL sweep deleted a checkpoint")
@@ -288,7 +288,7 @@ func TestSweepExpiredCheckpointsIsANoopWithoutTTL(t *testing.T) {
 func TestArchiveTTLSweepSparesLiveCheckpoint(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng, archivePool(3600))
-	m.ckptTTL = time.Nanosecond
+	tuneView(m, func(v *configView) { v.ckptTTL = time.Nanosecond })
 	sb := mustClaim(t, m, testKey)
 	id, token := sb.ID, sb.Token
 	mustArchive(t, m, sb)

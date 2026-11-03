@@ -348,7 +348,6 @@ type Manager struct {
 	eng          Engine
 	dataDir      string
 	egress       bool
-	maxFork      int
 	store        *claimStore
 	catalog      volumeCatalog
 	volumeRuns   map[*types.Sandbox]*volumeRun
@@ -361,10 +360,8 @@ type Manager struct {
 	configSeedHash string // config pools' hash, to warn when a file edit is overridden
 
 	// idleDefault is the idle-hibernate threshold for unpooled keys; zero disables.
-	idleDefault time.Duration
 	idleSweep   atomic.Bool
 
-	vmmRestart    types.VMMRestart
 	livenessSweep atomic.Bool
 	cocoondSocket string
 	// vmmEvents is set while the cocoon daemon stream is live; the poll is then only a backstop.
@@ -372,8 +369,6 @@ type Manager struct {
 	lastVMPoll atomic.Int64
 
 	// archive*Default are the archive thresholds for unpooled keys.
-	archiveAfterDefault  time.Duration
-	archiveDeleteDefault time.Duration
 	archiveSweep         atomic.Bool
 	archiveDeleteSweep   atomic.Bool
 	// archiving holds ids with an export or a registry drop in flight; pendingCks pins ids mid-commit; both under m.mu.
@@ -396,9 +391,6 @@ type Manager struct {
 	cfg      *config.Config
 	reloadMu sync.Mutex
 
-	maxClaims    int
-	maxRunning   int
-	releaseDelay time.Duration
 	draining     bool // guarded by m.mu; deliberately not persisted
 
 	tenants    tenants.Source
@@ -420,7 +412,6 @@ type Manager struct {
 	healAbort    map[string]struct{}
 	peerDelete   PeerDeleteFunc
 	tpls         store.Store
-	ckptTTL      time.Duration
 	ckptSweeping atomic.Bool
 	genSweeping  atomic.Bool
 
@@ -534,7 +525,6 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 		}
 		m.audit = audit
 	}
-	m.applyNodeSettingsLocked(cfg)
 	if cfg.APIToken != "" {
 		m.rootSum = tenants.TokenSHA256(cfg.APIToken)
 	}
@@ -662,7 +652,7 @@ func (m *Manager) Info() ([]PoolInfo, Gauges) {
 			Golden:    p.goldenDir != "",
 		})
 	}
-	g := Gauges{Claimed: len(m.claimed), Running: m.store.runningCount(), MaxRunning: m.maxRunning, Draining: m.draining}
+	g := Gauges{Claimed: len(m.claimed), Running: m.store.runningCount(), MaxRunning: m.view.Load().maxRunning, Draining: m.draining}
 	g.AtCapacityReason = m.capacityReasonLocked(now)
 	g.AtCapacity = g.AtCapacityReason != ""
 	for _, sb := range m.claimed {

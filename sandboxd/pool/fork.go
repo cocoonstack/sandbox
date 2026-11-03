@@ -22,9 +22,7 @@ func (m *Manager) Fork(ctx context.Context, id string, cred Cred, count int, ttl
 			return nil, err
 		}
 	}
-	m.mu.Lock()
-	maxFork := m.maxFork
-	m.mu.Unlock()
+	maxFork := m.view.Load().maxFork
 	if count < 1 || count > maxFork {
 		return nil, fmt.Errorf("%w: %d not in 1..%d", ErrBadCount, count, maxFork)
 	}

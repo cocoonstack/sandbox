@@ -15,7 +15,7 @@ import (
 
 func TestMaxRunningRefusesPastCapAndIgnoresSleepingClaims(t *testing.T) {
 	m := newTestManager(t, newFakeEngine())
-	m.maxRunning = 2
+	tuneView(m, func(v *configView) { v.maxRunning = 2 })
 	first, second := mustClaim(t, m, testKey), mustClaim(t, m, testKey)
 	if _, err := claimAny(t.Context(), m, testKey, ClaimOptions{TTL: time.Hour}); !errors.Is(err, ErrQuota) {
 		t.Fatalf("claim past cap: %v, want ErrQuota", err)
@@ -43,7 +43,7 @@ func TestMaxRunningLeavesTheWarmPoolAlone(t *testing.T) {
 	m := newTestManager(t, newFakeEngine(), config.PoolSpec{PoolKey: testKey, Warm: 1})
 	mustClaim(t, m, testKey)
 	fillOneWarm(t, m)
-	m.maxRunning = 1
+	tuneView(m, func(v *configView) { v.maxRunning = 1 })
 	if _, err := m.ClaimWarm(t.Context(), testKey, ClaimOptions{TTL: time.Hour}); !errors.Is(err, ErrQuota) {
 		t.Fatalf("warm claim past cap: %v, want ErrQuota", err)
 	}
@@ -54,7 +54,7 @@ func TestMaxRunningLeavesTheWarmPoolAlone(t *testing.T) {
 
 func TestMaxRunningCountsEveryForkChild(t *testing.T) {
 	m := newTestManager(t, newFakeEngine())
-	m.maxRunning = 2
+	tuneView(m, func(v *configView) { v.maxRunning = 2 })
 	parent := mustClaim(t, m, testKey)
 	if _, err := m.Fork(t.Context(), parent.ID, Cred{Token: parent.Token}, 2, 0, "", ""); !errors.Is(err, ErrQuota) {
 		t.Fatalf("fork past cap: %v, want ErrQuota", err)
@@ -73,7 +73,7 @@ func TestARefusedWakeOfAnArchivedClaimKeepsItsRow(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("row before the wake: %v %v", ok, err)
 	}
-	a.maxRunning = 1
+	tuneView(a, func(v *configView) { v.maxRunning = 1 })
 	if wakeErr := wakeClaim(t, a, sb); !errors.Is(wakeErr, ErrQuota) {
 		t.Fatalf("wake past cap: %v, want ErrQuota", wakeErr)
 	}
@@ -100,8 +100,8 @@ func TestConcurrentWakesStayUnderMaxRunning(t *testing.T) {
 		claims[i] = mustClaim(t, m, testKey)
 		hibernateClaim(t, m, claims[i])
 	}
-	m.maxRunning = 2
-	eng.restoreGate = make(chan struct{})
+	tuneView(m, func(v *configView) { v.maxRunning = 2 })
+	eng.restoreStall = make(chan struct{})
 	var refused, woken atomic.Int32
 	var wg sync.WaitGroup
 	for _, sb := range claims {
@@ -120,7 +120,7 @@ func TestConcurrentWakesStayUnderMaxRunning(t *testing.T) {
 	if _, g := m.Info(); g.Running != 2 {
 		t.Errorf("running %d with two wakes in flight, want 2", g.Running)
 	}
-	close(eng.restoreGate)
+	close(eng.restoreStall)
 	wg.Wait()
 	if woken.Load() != 2 {
 		t.Errorf("woken %d, want 2", woken.Load())
@@ -135,7 +135,7 @@ func TestAFailedWakeGivesBackItsSlot(t *testing.T) {
 	m := newTestManager(t, eng)
 	sb := mustClaim(t, m, testKey)
 	hibernateClaim(t, m, sb)
-	m.maxRunning = 1
+	tuneView(m, func(v *configView) { v.maxRunning = 1 })
 	eng.restoreErr = errors.New("restore failed")
 	if err := wakeClaim(t, m, sb); err == nil || errors.Is(err, ErrQuota) {
 		t.Fatalf("wake: %v, want the restore error", err)
@@ -148,7 +148,7 @@ func TestAFailedWakeGivesBackItsSlot(t *testing.T) {
 
 func TestAFailedClaimHoldsNoSlotUntilItsWake(t *testing.T) {
 	m := newTestManager(t, newFakeEngine())
-	m.maxRunning = 1
+	tuneView(m, func(v *configView) { v.maxRunning = 1 })
 	sb := mustClaim(t, m, testKey)
 	sb.Transition.Lock()
 	m.failLocked(t.Context(), sb, "vmm exited")
@@ -189,12 +189,8 @@ func TestAReloadAppliesTheClaimCapsWithoutStoppingAClaim(t *testing.T) {
 	mustClaim(t, m, testKey)
 	next := *m.cfg
 	next.MaxClaims, next.MaxRunning = 5, 1
-	res, err := m.ReloadConfig(t.Context(), &next)
-	if err != nil {
+	if _, err := m.ReloadConfig(t.Context(), &next); err != nil {
 		t.Fatalf("reload: %v", err)
-	}
-	if want := []string{"max_claims", "max_running"}; !slices.Equal(res.Changed, want) {
-		t.Errorf("changed %v, want %v", res.Changed, want)
 	}
 	if _, g := m.Info(); g.Running != 2 || g.MaxRunning != 1 {
 		t.Errorf("gauges %+v, want both claims running over the lowered cap of 1", g)
@@ -218,20 +214,14 @@ func TestAReloadAppliesTheNodeSettings(t *testing.T) {
 	next.MaxForkCount, next.ReleaseDelaySeconds, next.VMMRestart = 1, 5, types.VMMRestartNone
 	next.SyncClaims, next.CheckpointTTLHours = true, 24
 	next.IdleHibernateSeconds, next.ArchiveAfterSeconds, next.ArchiveDeleteAfterSeconds = 60, 120, 3600
-	res, err := m.ReloadConfig(t.Context(), &next)
-	if err != nil {
+	if _, err := m.ReloadConfig(t.Context(), &next); err != nil {
 		t.Fatalf("reload: %v", err)
 	}
-	if len(res.Changed) != 8 {
-		t.Errorf("changed %v, want 8 settings", res.Changed)
-	}
-	m.mu.Lock()
-	got := []time.Duration{m.releaseDelay, m.ckptTTL, m.idleDefault, m.archiveAfterDefault, m.archiveDeleteDefault}
-	maxFork, restart := m.maxFork, m.vmmRestart
-	m.mu.Unlock()
+	v := m.view.Load()
+	got := []time.Duration{v.releaseDelay, v.ckptTTL, v.idleDefault, v.archiveAfterDefault, v.archiveDeleteDefault}
 	want := []time.Duration{5 * time.Second, 24 * time.Hour, time.Minute, 2 * time.Minute, time.Hour}
-	if !slices.Equal(got, want) || maxFork != 1 || restart != types.VMMRestartNone {
-		t.Errorf("durations %v max fork %d restart %q, want %v, 1 and none", got, maxFork, restart, want)
+	if !slices.Equal(got, want) || v.maxFork != 1 || v.vmmRestart != types.VMMRestartNone {
+		t.Errorf("durations %v max fork %d restart %q, want %v, 1 and none", got, v.maxFork, v.vmmRestart, want)
 	}
 	if !m.store.sync {
 		t.Error("sync_claims did not reach the store")

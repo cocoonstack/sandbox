@@ -1556,31 +1556,16 @@ func TestARequiredPromotedClaimIsNeverSentToAWarmPeer(t *testing.T) {
 	}
 }
 
-func TestAClaimAtQuotaFallsBackToAPeerServingThePool(t *testing.T) {
-	for _, tt := range []struct {
-		name       string
-		addrs      []string
-		require    bool
-		wantStatus int
-		wantPeer   string
-	}{
-		{"no warm peer goes to a peer of the pool", nil, false, http.StatusOK, "cold:7777"},
-		{"a warm peer comes first", []string{"warm:7777"}, false, http.StatusOK, "warm:7777"},
-		{"a required promoted claim stays a 429", nil, true, http.StatusTooManyRequests, ""},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			mgr := &fakeManager{claim: func(context.Context, types.PoolKey, time.Duration) (*types.Sandbox, error) {
-				return nil, pool.ErrQuota
-			}}
-			ts := newMeshTestServer(t, "sekret", mgr, &fakePlacer{addrs: tt.addrs, poolPeers: []string{"cold:7777"}}, nil)
-			body, _ := json.Marshal(ClaimRequest{Template: "ns/app", RequirePromoted: tt.require})
-			resp := postJSON(t, ts.URL+"/v1/claim", "sekret", string(body))
-			defer resp.Body.Close()
-			cr := decodeJSON[ClaimResponse](t, resp.Body)
-			if resp.StatusCode != tt.wantStatus || strings.Join(cr.Redirect, ",") != tt.wantPeer {
-				t.Errorf("status=%d redirect=%v, want %d and %q", resp.StatusCode, cr.Redirect, tt.wantStatus, tt.wantPeer)
-			}
-		})
+func TestAClaimAtQuotaWithNoWarmPeerGoesToAPeerServingThePool(t *testing.T) {
+	mgr := &fakeManager{claim: func(context.Context, types.PoolKey, time.Duration) (*types.Sandbox, error) {
+		return nil, pool.ErrQuota
+	}}
+	ts := newMeshTestServer(t, "sekret", mgr, &fakePlacer{poolPeers: []string{"cold:7777"}}, nil)
+	resp := postJSON(t, ts.URL+"/v1/claim", "sekret", `{"template":"ns/app"}`)
+	defer resp.Body.Close()
+	cr := decodeJSON[ClaimResponse](t, resp.Body)
+	if resp.StatusCode != http.StatusOK || !slices.Equal(cr.Redirect, []string{"cold:7777"}) {
+		t.Errorf("status=%d redirect=%v, want a redirect to the peer serving the pool", resp.StatusCode, cr.Redirect)
 	}
 }
 

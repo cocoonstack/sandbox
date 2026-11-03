@@ -307,7 +307,7 @@ func (m *Manager) releaseResolved(ctx context.Context, id string, sb *types.Sand
 		m.mu.Lock()
 	}
 	volumeHolds := m.cancelVolumeRun(sb)
-	snap, ck, vmName, releaseDelay := sb.HibernateSnap, sb.ArchiveCk, sb.VMName, m.releaseDelay
+	snap, ck, vmName := sb.HibernateSnap, sb.ArchiveCk, sb.VMName
 	if ck != "" {
 		m.pendingCks[ck] = struct{}{}
 	}
@@ -341,11 +341,12 @@ func (m *Manager) releaseResolved(ctx context.Context, id string, sb *types.Sand
 	td.holds = volumeHolds
 	var err error
 	removed := vmName == ""
+	delay := m.view.Load().releaseDelay
 	switch {
 	case removed:
 		m.finishVolumeTeardown(ctx, td)
-	case releaseDelay > 0:
-		m.queueRemoval(vmName, id, "", td, time.Now().Add(releaseDelay))
+	case delay > 0:
+		m.queueRemoval(vmName, id, "", td, time.Now().Add(delay))
 	default:
 		if removed = m.removeOrRetry(ctx, vmName, id, td); !removed {
 			err = fmt.Errorf("vm %s survived removal", vmName)
@@ -399,8 +400,8 @@ func (m *Manager) quotaErr(extra int, tenant string) error {
 	if err := m.diskErr(); err != nil {
 		return err
 	}
-	if m.maxClaims > 0 && len(m.claimed)+extra > m.maxClaims {
-		return fmt.Errorf("%w: %d live claims, cap %d", ErrQuota, len(m.claimed), m.maxClaims)
+	if limit := m.view.Load().maxClaims; limit > 0 && len(m.claimed)+extra > limit {
+		return fmt.Errorf("%w: %d live claims, cap %d", ErrQuota, len(m.claimed), limit)
 	}
 	if err := m.runningErr(extra); err != nil {
 		return err
@@ -421,11 +422,12 @@ func (m *Manager) quotaErr(extra int, tenant string) error {
 
 // Callers hold m.mu.
 func (m *Manager) runningErr(extra int) error {
-	if m.maxRunning == 0 {
+	limit := m.view.Load().maxRunning
+	if limit == 0 {
 		return nil
 	}
-	if running := m.store.runningCount(); running+extra > m.maxRunning {
-		return fmt.Errorf("%w: %d running claims, cap %d", ErrQuota, running, m.maxRunning)
+	if running := m.store.runningCount(); running+extra > limit {
+		return fmt.Errorf("%w: %d running claims, cap %d", ErrQuota, running, limit)
 	}
 	return nil
 }
