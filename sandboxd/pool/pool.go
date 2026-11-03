@@ -254,6 +254,7 @@ type pool struct {
 	// Without a streak gate a node-wide dead cause is retried every tick at full concurrency
 	refillFails     int
 	nextRefill      time.Time
+	cloneFails      int
 	goldenRetiredAt time.Time
 }
 

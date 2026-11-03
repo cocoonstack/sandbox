@@ -193,7 +193,7 @@ func TestALateFailureOfARetiredGoldensCloneDoesNotCount(t *testing.T) {
 	m.mu.Lock()
 	p := m.pools[testKey]
 	p.goldenDir, p.goldenGen = "/goldens/new", 2
-	p.refillFails = refillFailStreak - 1
+	p.refillFails, p.cloneFails = refillFailStreak-1, refillFailStreak-1
 	p.refilling++
 	m.mu.Unlock()
 	m.refillSem <- struct{}{}
@@ -202,7 +202,33 @@ func TestALateFailureOfARetiredGoldensCloneDoesNotCount(t *testing.T) {
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if p.refillFails != refillFailStreak-1 || p.goldenDir != "/goldens/new" {
-		t.Errorf("refill fails %d golden %q, want %d and the new golden kept", p.refillFails, p.goldenDir, refillFailStreak-1)
+	if p.refillFails != refillFailStreak-1 || p.cloneFails != refillFailStreak-1 || p.goldenDir != "/goldens/new" {
+		t.Errorf("refill fails %d clone fails %d golden %q, want %d each and the new golden kept", p.refillFails, p.cloneFails, p.goldenDir, refillFailStreak-1)
 	}
+}
+
+func TestAGoldenWhoseClonesSucceedIsNeverRetiredForFailedProbes(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		eng := newFakeEngine()
+		eng.probeErr = errors.New("silkd not ready")
+		m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 2})
+		g := seedGolden(t, m, "")
+		start := time.Now()
+
+		for time.Since(start) < 2*buildRetryDelay {
+			m.refillOnce(t.Context())
+			time.Sleep(100 * time.Millisecond)
+		}
+		waitPoolSettled(t, m, testKey)
+
+		m.mu.Lock()
+		golden := m.pools[testKey].goldenDir
+		m.mu.Unlock()
+		if n := eng.probeCount(); n < refillFailStreak {
+			t.Fatalf("%d failed probes, want at least %d so the streak is reached", n, refillFailStreak)
+		}
+		if golden != g || eng.coldCount() != 0 {
+			t.Errorf("golden %q after %d builds, want %q kept: its clones succeed", golden, eng.coldCount(), g)
+		}
+	})
 }

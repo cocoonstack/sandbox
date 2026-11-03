@@ -96,6 +96,7 @@ func (m *Manager) refillOne(ctx context.Context, p *pool, golden string, gen uin
 	sb, err := m.startVM(ctx, p.key, func(name string) (types.VMRecord, error) {
 		return m.eng.Clone(ctx, golden, name, p.key)
 	})
+	cloned := err == nil
 	<-m.refillSem
 	if err == nil {
 		if ctx.Err() == nil {
@@ -125,6 +126,11 @@ func (m *Manager) refillOne(ctx context.Context, p *pool, golden string, gen uin
 	backedOff := false
 	if ctx.Err() == nil && capReason == "" && gen == p.goldenGen {
 		backedOff = p.noteRefillResult(now, err != nil)
+		if cloned {
+			p.cloneFails = 0
+		} else {
+			p.cloneFails++
+		}
 	}
 	if backedOff {
 		fails, wait = p.refillFails, time.Until(p.nextRefill)
@@ -149,7 +155,7 @@ func (m *Manager) refillOne(ctx context.Context, p *pool, golden string, gen uin
 					hash, fails, wait.Round(time.Millisecond))
 			}
 			if retired {
-				logger.Warnf(ctx, "golden of %s failed %d refills running; rebuilding it", hash, refillFailStreak)
+				logger.Warnf(ctx, "golden of %s failed %d clones running; rebuilding it", hash, refillFailStreak)
 				m.kickRefill()
 			}
 		}
@@ -300,13 +306,13 @@ func (m *Manager) dropPool(ctx context.Context, p *pool) {
 }
 
 func (m *Manager) retireUnclonableLocked(ctx context.Context, p *pool, gen uint64, now time.Time) bool {
-	if p.refillFails < refillFailStreak || p.goldenGen != gen || p.goldenDir == "" || now.Sub(p.goldenRetiredAt) < buildRetryDelay {
+	if p.cloneFails < refillFailStreak || p.goldenGen != gen || p.goldenDir == "" || now.Sub(p.goldenRetiredAt) < buildRetryDelay {
 		return false
 	}
 	p.goldenDir, p.imageID = "", ""
 	p.goldenGen++
 	p.nextBuild, p.goldenRetiredAt = time.Time{}, now
-	p.refillFails, p.nextRefill = 0, time.Time{}
+	p.refillFails, p.nextRefill, p.cloneFails = 0, time.Time{}, 0
 	m.discardGoldenLocked(ctx, p)
 	return true
 }
