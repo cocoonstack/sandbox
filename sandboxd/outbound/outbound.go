@@ -102,6 +102,7 @@ func (h *Host) Arm(ctx context.Context, sb *types.Sandbox) error {
 func (h *Host) ArmProxy(ctx context.Context, sb *types.Sandbox) error {
 	v := h.o.View()
 	if !v.guarded || sb.VsockSocket == "" {
+		h.ClosePrebound(sb.VMName)
 		return nil
 	}
 	policy, ok := v.Resolve(sb, h.o.Pooled)
@@ -170,11 +171,6 @@ func (h *Host) Prebind(ctx context.Context, sb *types.Sandbox) {
 		return
 	}
 	h.mu.Lock()
-	if !h.o.View().guarded {
-		h.mu.Unlock()
-		d.close()
-		return
-	}
 	h.prebound[sb.VMName] = d
 	h.mu.Unlock()
 }
@@ -209,19 +205,11 @@ func (h *Host) Disarm(id string, removed bool) {
 	}
 }
 
-// Reloaded follows a view swap: doors pre-bound for a node that now guards nothing close, and live proxies drop their pooled connections.
-func (h *Host) Reloaded(v *View) {
+// Reloaded follows a view swap: live proxies drop their pooled connections.
+func (h *Host) Reloaded() {
 	h.mu.Lock()
 	live := slices.Collect(maps.Values(h.doors))
-	var stale []*doors
-	if !v.guarded {
-		stale = slices.Collect(maps.Values(h.prebound))
-		clear(h.prebound)
-	}
 	h.mu.Unlock()
-	for _, d := range stale {
-		d.close()
-	}
 	for _, d := range live {
 		d.proxy.ResetPools()
 	}

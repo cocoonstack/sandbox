@@ -61,7 +61,7 @@ func (m *Manager) ReloadConfig(ctx context.Context, next *config.Config) (Reload
 		}
 	}
 	m.mu.Unlock()
-	m.out.Reloaded(view.out)
+	m.out.Reloaded()
 	m.destroyAll(context.WithoutCancel(ctx), trim).Wait()
 	m.cfg = next
 	m.recordAudit(ctx, "", auditFrame{Op: "config_reload", Changed: changed})
