@@ -1,6 +1,4 @@
-// Package engine drives VM lifecycle through the cocoon CLI and dials the
-// in-guest silkd over hybrid vsock. The CLI is cocoon's only stable contract
-// (it exports no lifecycle library); no lifecycle call sits on the warm-claim path.
+// Package engine drives VM lifecycle through the cocoon CLI, its only stable contract, and dials the in-guest silkd over hybrid vsock.
 package engine
 
 import (

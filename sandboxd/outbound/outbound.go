@@ -68,7 +68,6 @@ type Host struct {
 	taps     map[string]string
 }
 
-// New builds a Host.
 func New(o Options) *Host {
 	h := &Host{o: o, doors: map[string]*doors{}, prebound: map[string]*doors{}, taps: map[string]string{}}
 	h.RefreshSelf()
