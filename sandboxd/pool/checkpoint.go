@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"sync"
 	"time"
 
 	"github.com/projecteru2/core/log"
@@ -120,7 +121,7 @@ func (m *Manager) DeleteCheckpoint(ctx context.Context, ckptID, tenant string, s
 	defer m.recs.lockRec(ckptID)()
 	ckpt, err := m.loadCheckpoint(ctx, ckptID)
 	if err != nil {
-		m.vetoIfHealPending(ckptID)
+		m.heals.veto(ckptID)
 		return err
 	}
 	if !tenantOwns(tenant, ckpt.Tenant) {
@@ -133,7 +134,7 @@ func (m *Manager) DeleteCheckpoint(ctx context.Context, ckptID, tenant string, s
 	if err := m.ckpts.Delete(ctx, ckptID); err != nil {
 		return fmt.Errorf("delete checkpoint: %w", err)
 	}
-	m.vetoIfHealPending(ckptID)
+	m.heals.veto(ckptID)
 	// A shared backend has no per-node replicas to chase.
 	if scope == DeleteFleet && m.peerDelete != nil && !m.ckptsShared {
 		m.peerDelete(context.WithoutCancel(ctx), ckptID)
@@ -263,16 +264,16 @@ func (m *Manager) runHeal(ctx context.Context, ckptID string) (types.Checkpoint,
 	default:
 		return types.Checkpoint{}, ErrHealBusy
 	}
-	m.markHealPending(ckptID)
+	m.heals.mark(ckptID)
 	staging, err := m.ckpts.Stage(ckptID)
 	if err != nil {
-		m.clearHealPending(ckptID)
+		m.heals.clear(ckptID)
 		return types.Checkpoint{}, fmt.Errorf("stage healed checkpoint: %w", err)
 	}
 	defer func() { _ = os.RemoveAll(staging) }()
 	validate := func(dir string) error { return validateHealedCheckpoint(dir, ckptID) }
 	if err := m.healer.Pull(ctx, ckptID, staging, validate); err != nil {
-		m.clearHealPending(ckptID)
+		m.heals.clear(ckptID)
 		if errors.Is(err, store.ErrNotFound) {
 			return types.Checkpoint{}, ErrUnknownCheckpoint
 		}
@@ -280,7 +281,7 @@ func (m *Manager) runHeal(ctx context.Context, ckptID string) (types.Checkpoint,
 	}
 
 	defer m.recs.lockRec(ckptID)()
-	if aborted := m.clearHealPending(ckptID); aborted {
+	if aborted := m.heals.clear(ckptID); aborted {
 		return types.Checkpoint{}, ErrUnknownCheckpoint // a concurrent delete vetoed this heal
 	}
 	if ckpt, err := m.loadCheckpoint(ctx, ckptID); err == nil {
@@ -290,33 +291,6 @@ func (m *Manager) runHeal(ctx context.Context, ckptID string) (types.Checkpoint,
 		return types.Checkpoint{}, fmt.Errorf("publish healed checkpoint: %w", err)
 	}
 	return m.loadCheckpoint(ctx, ckptID)
-}
-
-// markHealPending records ckptID as staging or pulling, so a delete can veto it.
-func (m *Manager) markHealPending(ckptID string) {
-	m.healMu.Lock()
-	defer m.healMu.Unlock()
-	m.healPending[ckptID] = struct{}{}
-}
-
-// clearHealPending un-marks ckptID and reports a veto.
-func (m *Manager) clearHealPending(ckptID string) (aborted bool) {
-	m.healMu.Lock()
-	defer m.healMu.Unlock()
-	delete(m.healPending, ckptID)
-	if _, aborted = m.healAbort[ckptID]; aborted {
-		delete(m.healAbort, ckptID)
-	}
-	return aborted
-}
-
-// vetoIfHealPending aborts a pending heal so its publish cannot resurrect a deleted checkpoint.
-func (m *Manager) vetoIfHealPending(ckptID string) {
-	m.healMu.Lock()
-	defer m.healMu.Unlock()
-	if _, pending := m.healPending[ckptID]; pending {
-		m.healAbort[ckptID] = struct{}{}
-	}
 }
 
 // pinnedArchiveCks is the set of wake-image ids the listing hides and delete/TTL must spare.
@@ -367,6 +341,39 @@ func (m *Manager) loadCheckpoint(ctx context.Context, ckptID string) (types.Chec
 		return types.Checkpoint{}, fmt.Errorf("read checkpoint: %w", err)
 	}
 	return parseCheckpoint(raw)
+}
+
+// healVetoes lets a delete veto a heal still staging.
+type healVetoes struct {
+	mu               sync.Mutex
+	pending, aborted map[string]struct{}
+}
+
+// mark records ckptID as staging or pulling, so a delete can veto it.
+func (h *healVetoes) mark(ckptID string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.pending[ckptID] = struct{}{}
+}
+
+// clear un-marks ckptID and reports a veto.
+func (h *healVetoes) clear(ckptID string) (aborted bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	delete(h.pending, ckptID)
+	if _, aborted = h.aborted[ckptID]; aborted {
+		delete(h.aborted, ckptID)
+	}
+	return aborted
+}
+
+// veto aborts a pending heal so its publish cannot resurrect a deleted checkpoint.
+func (h *healVetoes) veto(ckptID string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if _, pending := h.pending[ckptID]; pending {
+		h.aborted[ckptID] = struct{}{}
+	}
 }
 
 // validateHealedCheckpoint checks a staged pull's shape: a bad record suppresses later heals.

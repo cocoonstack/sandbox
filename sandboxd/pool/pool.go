@@ -303,10 +303,7 @@ type Manager struct {
 	healer      *peer.Healer
 	healSem     chan struct{}
 	healFlights singleflight.Group
-	// healPending/healAbort, guarded by healMu, let a delete veto a heal still staging.
-	healMu      sync.Mutex
-	healPending map[string]struct{}
-	healAbort   map[string]struct{}
+	heals       healVetoes
 	peerDelete  PeerDeleteFunc
 	peerAdopt   PeerAdoptFunc
 	tpls        store.Store
@@ -370,8 +367,7 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 		archiving:       map[string]struct{}{},
 		pendingCks:      map[string]struct{}{},
 		recs:            recordLocks{held: map[string]*sync.RWMutex{}, refs: map[string]int{}},
-		healPending:     map[string]struct{}{},
-		healAbort:       map[string]struct{}{},
+		heals:           healVetoes{pending: map[string]struct{}{}, aborted: map[string]struct{}{}},
 		refillSem:       make(chan struct{}, refill),
 		goldenDumps:     make(chan struct{}, 1),
 		maintSem:        make(chan struct{}, max(1, refill-max(1, refill/4))),
