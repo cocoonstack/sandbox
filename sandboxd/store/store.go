@@ -1,8 +1,4 @@
-// Package store persists captured sandbox states — checkpoints and promoted
-// templates — behind one interface: staging, an atomic publish, a local
-// directory cocoon can `clone --from-dir`, and listing/removal. The dir
-// backend covers local disk and any shared FUSE mount (every node sharing it
-// resolves every record); the s3 backend talks to object storage natively.
+// Package store defines the record backend interface and the digest, chunk and id helpers its dir and s3 backends share.
 package store
 
 import (

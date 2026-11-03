@@ -1,9 +1,4 @@
-// Package s3 is the object-store record backend for nodes without a
-// shared POSIX namespace: <prefix><id>/meta.json (live records only) plus
-// <prefix>manifests/<id>/<gen>.json and the content-addressed chunks the
-// manifests name, meta.json uploaded last as the commit marker (S3 has no
-// atomic multi-object rename). Exports are 16 MiB chunks keyed by SHA-256;
-// holes and all-zero chunks are absent. The aws dependency stays in this package.
+// Package s3 keeps records in an S3 bucket and keeps the aws dependency in this package.
 package s3
 
 import (
@@ -95,7 +90,7 @@ type Store struct {
 // New builds the backend; ctx bounds the credential-chain resolution.
 func New(ctx context.Context, cfg store.S3Config, stagingRoot string, idRe *regexp.Regexp) (*Store, error) {
 	if cfg.Bucket == "" {
-		return nil, fmt.Errorf("s3 checkpoint store needs a bucket")
+		return nil, errors.New("s3 checkpoint store needs a bucket")
 	}
 	// A prefix without its trailing slash hides every record from the delimiter listing.
 	if cfg.Prefix != "" && !strings.HasSuffix(cfg.Prefix, "/") {
@@ -295,7 +290,6 @@ func (s *Store) SweepGenerations(ctx context.Context) error {
 	return nil
 }
 
-// SweepStaging clears local staging residue at startup.
 func (s *Store) SweepStaging() error {
 	return utils.RemoveDirEntries(s.staging, nil)
 }

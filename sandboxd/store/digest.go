@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"slices"
 )
@@ -40,7 +41,7 @@ func AssembleDigest(files []DigestFile) (string, error) {
 	_, _ = h.Write([]byte(digestDomain))
 	for i, file := range files {
 		if file.Path == "" {
-			return "", fmt.Errorf("digest file path is empty")
+			return "", errors.New("digest file path is empty")
 		}
 		if i > 0 && files[i-1].Path == file.Path {
 			return "", fmt.Errorf("duplicate digest path %q", file.Path)

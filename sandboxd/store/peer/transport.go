@@ -1,6 +1,4 @@
-// Package peer adds cross-node reach to a node-local record store: a record
-// missing locally is pulled from a node that gossiped it, published locally,
-// and served from there.
+// Package peer pulls a record from the node that holds it and finds, heals and deletes records across peers.
 package peer
 
 import (
@@ -122,7 +120,7 @@ func Untar(r io.Reader, dst string) error {
 		hdr, err := tr.Next()
 		if errors.Is(err, io.EOF) {
 			if !complete {
-				return fmt.Errorf("untar: record incomplete, no completion marker (transfer cut short)")
+				return errors.New("untar: record incomplete, no completion marker (transfer cut short)")
 			}
 			return nil
 		}
