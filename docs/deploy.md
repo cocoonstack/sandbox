@@ -139,12 +139,12 @@ the intersection of the two.
 | `preview_listen` | (off) | address for a preview HTTP server that serves guest ports under signed URLs; needs `preview_secret` |
 | `preview_secret` | — | cluster-shared HMAC secret signing preview tokens (all nodes share one) |
 | `preview_advertise` | = `preview_listen` | the browser-facing preview base URL, minted into every preview URL, so it must name a routable host (a wildcard `preview_listen` needs it set explicitly); nodes behind one TLS proxy may share it, while signed tokens route internally through each owner's `advertise_addr` |
-| `checkpoint_dir` | `<data_dir>/checkpoints` | where checkpoints and promoted templates live. Point it at a shared FUSE mount (JuiceFS over object storage, NFS) and every node sharing the mount can branch every checkpoint — records are generation-addressed with `meta.json` as the atomic commit pointer, so no cross-node locking is required of the filesystem. A re-publish retains its superseded export generation for at least ~1h and until a following hourly sweep so an in-flight clone that resolved the old metadata can finish; budget the current generation plus every generation retained across that grace-and-sweep window. An explicit delete can make a concurrent clone fail visibly. One contract on any shared root (mount or bucket): a template key has a single writer — promotes go to the sandbox's owner node, and operators must not race promotes of one name from different nodes (checkpoint ids are node-generated and never collide) |
+| `checkpoint_dir` | `<data_dir>/checkpoints` | where checkpoints and promoted templates live. Point it at a shared FUSE mount (JuiceFS over object storage, NFS) and every node sharing the mount can branch every checkpoint — records are generation-addressed with `meta.json` as the atomic commit pointer, so no cross-node locking is required of the filesystem. A re-publish retains its superseded export generation for at least ~1h and until a following hourly sweep so an in-flight clone that resolved the old metadata can finish; budget the current generation plus every generation retained across that grace-and-sweep window. An explicit delete can make a concurrent clone fail visibly. One contract on any shared root (mount or bucket): a template key has a single writer — promotes go to the sandbox's owner node, and operators must not race promotes of one name from different nodes (checkpoint ids are node-generated and never collide). Abandoned staging (`*.tmp`) is removed only once it is older than an hour, at startup and on the hourly generation sweep, so a publish in flight on another node of a shared root survives; the `meta.json` commit pointer is fsynced with its directory |
 | `checkpoint_store` | dir | checkpoint AND promoted-template backend (both live in one store root, id-namespaced ck_/tp_): `{"kind": "s3", "s3": {"bucket": "…", "prefix": "ck/", "endpoint": "…", "region": "…", "force_path_style": true}}` stores checkpoints in object storage (any node claims any checkpoint, no shared mount needed). Credentials come from the standard AWS chain (env/IAM role), never this file. An export file is stored as 16 MiB chunks keyed by SHA-256 under `<prefix>chunks/<lineage>/`, with one `<prefix>manifests/<id>/<generation>.json` per published generation naming each file's size and present chunks, and `<prefix><id>/meta.json` uploaded last as the commit marker (the record prefix exists only while the record is live). Holes and all-zero chunks are never uploaded, and a fetch recreates the file at its full size and writes only the present chunks, so a mostly-empty disk costs its data, not its size, on the wire and on the fetching node. A lineage is the dedup scope: it defaults to the record id, and every checkpoint and archive of one claim shares the claim's sandbox id, so consecutive captures upload only the chunks that changed (the first capture after a wake uploads everything again when no other live record of that claim remains, because the wake deletes the record it restored from); a publish into a shared lineage writes a zero-byte marker `<prefix>lineages/<lineage>/<id>` after its manifest and before `meta.json`, and reads only the records those markers list; a crash between manifest and marker only costs a missed dedup, and Delete removes the record's marker right away. Re-publish retains the prior generation's manifest so an in-flight fetch that selected old metadata can finish. sandboxd never deletes a chunk or a manifest from the bucket: Delete removes `meta.json`, the labels and the lineage markers and re-stamps the manifests, so a fetch that already selected the record still completes, and reclaiming storage is the operator's job, see [Reclaiming S3 storage](#reclaiming-s3-storage). A publish or fetch is aborted after 30 minutes. Do not put an expiry lifecycle rule on the prefix: it would delete chunks a live record still names. Budget storage for every generation and chunk until your reclaim runs. When caching a new generation, each node prunes other cached generations of that record unused for at least an hour. The periodic generation sweep drops a node's cache of a record once the record is gone from the bucket and the cache is unused for at least an hour. Absent = the dir backend at `checkpoint_dir` |
 | `checkpoint_ttl_hours` | 0 (keep forever) | ages out checkpoints older than this; the sweep runs hourly and at startup. Explicit deletes never wait for it. Must be nonzero and match fleet-wide when `checkpoint_peer_heal` is on — it is the expiry eligibility point for a healed replica a delete broadcast missed, after which its next successful hourly sweep removes it; persistent sweep failure extends retention until one succeeds, so it is not a hard ceiling |
 | `checkpoint_peer_heal` | false | on a cluster, lets a node pull a checkpoint it lacks from a peer — found via a live probe, not gossip — rather than failing the branch; see [placement lifecycle](cluster.md#checkpoints-on-a-cluster). Three requirements, all enforced at config load: a nonempty `api_token` (the blob transfer between peers authenticates with it; without one the raw record stream would be open), `mesh.cluster_key` set (the pull presents the fleet `api_token` to an address learned from the peer probe, so the gossip layer carrying that address must itself be authenticated), and `checkpoint_ttl_hours` nonzero (a replica a delete broadcast missed becomes eligible for expiry after it, and its next successful hourly sweep removes it — so it is the finite eligibility point, not an exact ceiling). A shared checkpoint store (`checkpoint_store` kind `s3`) ignores this setting — every node already resolves every checkpoint directly, so there is nothing to heal |
 | `warm_max` (pool entry) | 0 (static) | turns on the demand-adaptive watermark for that pool: the warm target rises from `warm` toward `warm_max` while claims arrive faster than the measured provision lead covers, and decays back over ~a minute of silence. The pool follows the target down: warm VMs above it are destroyed once the count has stayed above it for a full decay period, so a burst does not leave the pool parked at its high-water mark |
-| `warmup` (pool entry) | unset | argv run in the golden VM after readiness and before its snapshot, so the files it touches are page-cache-resident in every clone, and again in every clone before it joins the warm pool, so those pages are already faulted into the restored VM when the first command runs — e.g. `["node", "-e", "0"]` on a Node flavor. It runs under the engine's 2-minute command timeout in silkd's base environment (`PATH`, `TERM`, and the guest image's proxy variables wherever nothing routes directly — the none lane and the locked bridge egress lane — with the proxy not yet serving, since a door pre-bound at refill only starts serving at claim); a non-zero exit or a timeout fails the golden build, so the pool stays unfilled until the config is fixed. Config-owned like `egress`: `PUT /v1/pools` rejects it, and a golden built with a different warmup is rebuilt The build then waits up to 30 s for the guest's systemd to finish starting, because a snapshot taken during boot makes every clone run the queued jobs before silkd answers. |
+| `warmup` (pool entry) | unset | argv run in the golden VM after readiness and before its snapshot, so the files it touches are page-cache-resident in every clone, and again in every clone before it joins the warm pool, so those pages are already faulted into the restored VM when the first command runs — e.g. `["node", "-e", "0"]` on a Node flavor. It runs under the engine's 2-minute command timeout in silkd's base environment (`PATH`, `TERM`, and the guest image's proxy variables wherever nothing routes directly — the none lane and the locked bridge egress lane — with the proxy not yet serving, since a door pre-bound at refill only starts serving at claim); a non-zero exit or a timeout fails the golden build, so the pool stays unfilled until the config is fixed. Config-owned like `egress`: `PUT /v1/pools` rejects it, and a golden built with a different warmup is rebuilt. The build then waits up to 30 s for the guest's systemd to finish starting, because a snapshot taken during boot makes every clone run the queued jobs before silkd answers. |
 | `capture_trim` (pool entry) | `false` | Trim the guest's copy-on-write disk before a promote or checkpoint of this pool's sandboxes (and of the clones of a template promoted from it), so the record carries only live data: blocks a build deleted — a `COPY` step's archive, a `RUN` step's caches — are no longer captured. sandboxd mounts the disk init resolved from `cocoon.cow` a second time at `/run/sandboxd-trim` through silkd as root, runs `fstrim` and unmounts, under the capture's transition lock (about 15 ms on a warm clone). A failed trim is logged and the capture proceeds, larger. A hibernated or archived sandbox is captured untrimmed. Config-owned like `egress`: `PUT /v1/pools` rejects it |
 | `reader` (pool entry) | `false` | Serve read-only file calls on this pool's hibernated or archived claims from a warm VM of the same pool instead of waking them; needs `warm` of at least 1 and a cocoon whose `vm disk attach` takes `--from-snapshot` and `--from-dir`. See [Reading sleeping claims](#reading-sleeping-claims-without-waking-them). Config-owned like `capture_trim`: `PUT /v1/pools` rejects it |
 | `egress_classes` | unset | named tenant egress layers: `[{"name": "desk", "egress": {…}, "egress_upstream_env": "DESK_UPSTREAM"}]`. A tenant names one with `egress_class` through the [tenant API](sandboxd-api.md#tenants-v1tenants) and its claims take that policy intersected with the pool's. `egress` is required; `intercept` stays a pool-rule flag. Reloadable: a class's policy reaches live claims on their next request. A class removed while tenants still name it leaves them with no egress and is logged at load and at reload |
@@ -152,7 +152,7 @@ the intersection of the two.
 | `replicate_seconds` (pool entry) | 0 (off) | snapshot every running claim of this pool to the checkpoint store this often and point the claim's registry row at the snapshot, so another node restores the claim, memory and processes included, when this node is lost (see [running claims across node loss](cluster.md#running-claims-across-node-loss)). Each round pauses the guest for the length of a memory and disk capture. A restore resumes from the last committed replica and loses everything after it: up to the longer of the interval and one replication pass, plus the 5-second tick, plus one more pass, since a claim can run first in one pass and last in the next. A pass covers all the node's due claims of the replicating pools with bounded concurrency, so it grows with claim count and guest memory; the first round of a claim after a wake or adoption uploads the whole claim, so that pass is the long pass. The claim's row carries no retention deadline while it runs. Requires `archive_failover` and a `none`-lane pool, both checked at config load; a claim with volumes is skipped. Config-owned like `egress`: `PUT /v1/pools` rejects it. Restart only: a claim is replicated by its pool's setting from the moment it is claimed, so a reload that changes it is refused (a pool restarted with 0 starts retiring its replicas while the registry remains enabled; see [Disabling archive failover](#disabling-archive-failover)) |
 | `storage` (pool entry) | unset (cocoon's default, 10G) | size of the copy-on-write disk the pool's golden is cold-booted with, in cocoon's own `--storage` spelling (`"40G"`, `"40GiB"`, `"40Gi"`: Docker/Kubernetes units, all binary) and passed to it verbatim; every clone, fork, checkpoint branch and promoted template of the pool inherits it. At least cocoon's default of 10G. Equal sizes spelled differently build the same golden; a changed size rebuilds the golden on the next build, and claims already out keep their disk. Config-owned like `egress`: `PUT /v1/pools` rejects it |
 | `max_claims` | 0 (unlimited) | node-wide cap on live claims; claim/fork/branch requests beyond it answer 429 with the pool state unharmed (on a cluster a non-volume claim tries a warm-peer redirect first; a volume claim answers the 429 with no redirect) |
-| `audit_log` | false | append every relayed frame that opens an RPC — its op + addressing fields, never payloads — to `<data_dir>/audit.jsonl`; continuation `data`, `data_end`, `stdin`, and `stdin_close` frames pass through unrecorded. The file is size-rotated with one `.1` backup. Records are `{t, id, op}` plus whichever addressing fields the op carries (`argv`, `path`, `dest`, `from`, `to`, `url`, `session`, `port`), plus `method` (`GET`, `CONNECT`, `SOCKS5`, …), `decision` (`allow`, `deny`, `rate_limited`), `secret` (the ref name, never its value), `upstream` (the [upstream proxy](egress.md#upstream-proxies)'s `host:port`, when one carried it), `tenant`, and on an allowed connection `src_addr` and `dst_addr` (the node-side and destination `ip:port` of the upstream TCP connection, the tunnel target through an upstream proxy) on `egress` records, which a relayed frame cannot set; preview accesses record as op `preview`, one per request; a tenant change records as op `tenants` with the `added`, `changed` and `removed` names, never a token. An opening frame whose first line exceeds 4 KiB records as op `oversized` with no addressing fields |
+| `audit_log` | false | append every relayed frame that opens an RPC — its op + addressing fields, never payloads — to `<data_dir>/audit.jsonl`; continuation `data`, `data_end`, `stdin`, and `stdin_close` frames pass through unrecorded. The file is size-rotated with one `.1` backup. Records are `{t, id, op}` plus whichever addressing fields the op carries (`argv`, `path`, `dest`, `from`, `to`, `url`, `session`, `port`), plus `method` (`GET`, `CONNECT`, `SOCKS5`, …), `decision` (`allow`, `deny`, `rate_limited`), `secret` (the ref name, never its value), `upstream` (the [upstream proxy](egress.md#upstream-proxies)'s `host:port`, when one carried it), `tenant`, and on an allowed connection `src_addr` and `dst_addr` (the node-side and destination `ip:port` of the upstream TCP connection, the tunnel target through an upstream proxy) on `egress` records, which a relayed frame cannot set; preview accesses record as op `preview`, one per request; a tenant change records as op `tenants` with the `added`, `changed` and `removed` names, never a token; a config reload records as op `config_reload` with `changed`, and a runtime volume change as op `volumes` with `added` or `removed`. An opening frame whose first line exceeds 4 KiB records as op `oversized` with no addressing fields |
 | `disk_reserve` | unset | `{"free": "100G", "dirs": ["/srv/sbx/run"]}`: while the filesystem of any listed directory (default `data_dir`) has less than `free` available, checked every 2 s, the node refuses new claims, forks, checkpoint claims, wakes of hibernated or archived sandboxes, hibernates, checkpoint captures and promotes with 429, and parks refill; the idle sweep and a lease-end archive leave their sandboxes running and retry on the next tick; `/v1/info` reports it as at capacity and the mesh sees no warm VMs on it. Running sandboxes keep running. On an XFS project quota the free space is the project's. List cocoon's `run_dir` when it sits on another filesystem, since the copy-on-write disks grow there. Size `free` to at least two sandboxes' worst-case growth (copy-on-write disk plus memory file each) and keep the refusal above your disk alert's warning level, so the warning comes first: on a 640G project with 40G disks and 8G memory files, `100G` refuses at 84% used |
 | `idle_hibernate_seconds` | 0 (off) | node-wide idle policy for unpooled claims (template/checkpoint claims): a none-lane claim is hibernated once it has had no open data-plane connection (relay, buffered exec, preview) and no egress request in flight for this long; the clock restarts when the last connection closes, so a long command is never cut short. The next call that reaches the guest wakes it transparently. Per-pool `idle_hibernate_seconds` does the same for that pool's claims; pooled keys ignore the node-wide value, and egress pools reject it because they cannot resume safely. Opt in deliberately: a wake costs latency and the snapshot, so callers with their own idle logic must not pay twice |
 | `archive_after_seconds` | 0 (off) | tier below hibernation: a hibernated claim idle this long is checkpointed to the store and its local VM dropped, freeing the node entirely; the next call that reaches the guest restores it transparently (a checkpoint restore's latency) with a fresh lease of the length the claim was granted (the server default of 5m when it asked for none); a lease moves only when a client calls [`/renew`](sandboxd-api.md#post-v1sandboxesidrenew). Keep `idle_hibernate_seconds` under the leases your claims use, or a woken sandbox that idles again is destroyed by the reap before it can hibernate, its archive already consumed by the wake; one still in use when its lease ends is destroyed the same way, unless it claimed `on_expire: archive`, which archives at the lease end whatever this setting. Requires `idle_hibernate_seconds > 0` and must exceed it. Node-wide for unpooled keys; per-pool overrides for that pool |
@@ -226,7 +226,7 @@ kernel does the parsing, as it does for the claim:
   symlinks resolve inside the claim's filesystem, and a write fails at the
   read-only overlay.
 
-The pool's image must offer `mount`, `chroot`, `env`, `mkdir` and `sync` and
+The pool's image must offer `mount`, `chroot`, `env`, `mkdir`, `test` and `sync` and
 boot a kernel that mounts erofs, ext4 and overlayfs, which the shipped images
 do. The claim's image must ship `silkd` at `/usr/local/bin/silkd`, as the
 shipped Linux images do; the android image does not, so its claims always wake.
@@ -259,24 +259,10 @@ read-only or writable mode through the
 and both SDKs. Changing a held entry's descriptor requires successful removal
 first. The [live volume contract](sandboxd-api.md#put-v1sandboxesidvolumes)
 defines admission policy and dirty-marker handling.
-The image must already exist on the owner node. Live changes
-require Cocoon v0.7.2 or newer for idempotent disk attach and detach. PUT and
-PATCH reject an older release, or a runtime whose version cannot be queried,
-with 503 before any intent, hold, or device change; a dev build is assumed
-current. sandboxd reads the version once, so restart it after upgrading cocoon.
-GET and release remain available.
-
-The claim journal stores confirmed applied `Volumes`, plus desired
-`VolumesWant` while it differs.
-Admission holds cover their union across daemon restart and teardown. Retry
-an interrupted operation with the same PUT target. Release cancels convergence
-and transfers holds to teardown. Capture is refused while either set is
-nonempty.
-
-A sandbox whose VMM exits while holding volumes is release-only. Release it and
-create a new sandbox. Daemon restart recovery assumes the original VMM remains
-alive and does not recreate guest processes. Unfinished changes report an
-interrupted diagnostic after restart and require a caller retry.
+The image must already exist on the owner node. Live changes need Cocoon v0.7.2
+or newer; the journal, hold and recovery rules are in
+[partial failure and recovery](sandboxd-api.md#partial-failure-and-recovery),
+and a VMM exit in [live volumes](live-volumes.md).
 
 `e2e/cmd/volumesmoke -live` (`VOLUME_LIVE=1` for `scripts/sandboxd-e2e.sh`)
 exercises GET, repeated full-set PUT, PATCH add and remove, and clearing a new
@@ -311,12 +297,9 @@ guest OS directories and cannot duplicate or nest within one claim. Volume
 mounts may shadow an existing populated guest directory for that claim's life.
 
 A volume claim may consume an ordinary warm Cloud Hypervisor VM. sandboxd
-attaches after the warm pop or provision, waits for the device settle — a
-serial match under `/sys/block`, then the `/dev/<name>` node itself, since the
-kernel publishes sysfs before devtmpfs creates it — up to 2 seconds, then
-mounts the device, retrying `not a valid block device` within the 10-second
-setup budget, before finalizing the claim: `mode: "ro"` (the default)
-attaches and mounts read-only; `mode: "rw"` requires the catalog entry's
+attaches after the warm pop or provision and mounts before finalizing the
+claim, on the [device settle and mount budget](sandboxd-api.md#post-v1claim):
+`mode: "ro"` (the default) attaches and mounts read-only; `mode: "rw"` requires the catalog entry's
 `writable: true` and attaches and mounts read-write. Setup failure destroys
 the VM without quiescing — the claim was never handed out, so no workload
 write happened — and a popped warm VM is refilled normally.
@@ -630,18 +613,20 @@ reclaimed through `vm reconcile-stale-create` (cocoon ≥ v0.5.8), which
 refuses while a clone is in flight instead of deleting the VM out from under
 it; older cocoons fall back to forced removal. Any golden no pool uses is
 deleted. Then the refill loop builds one golden snapshot per pool (a one-time
-cold boot + snapshot export, tens of seconds) and keeps each pool topped up
-with claim-ready clones.
+cold boot + snapshot export, seconds on bare metal, plus the pool's warmup and
+the wait for the guest's systemd to finish starting) and keeps each pool topped
+up with claim-ready clones.
 `GET /v1/info` shows `"golden": true` and `warm` at target when the node is
 ready to serve warm claims.
 A golden left on disk is adopted on start when its stamp matches the pool's
-image, lane, interception, `storage` and `warmup`. The stamp does not record
-the cocoon or Cloud Hypervisor version, so a golden from before an upgrade of
-either is adopted. If its clones then fail, sandboxd retires it once the pool's
-refills have failed 8 times running (a node-capacity failure does not count)
-and builds a new golden; until it is ready, claims for that pool that find no
-warm VM cold-boot. If failures continue with the new golden, it is retired again at most once every
-30 s.
+image, lane, interception, `storage`, `no_balloon` and `warmup`. The stamp does
+not record the cocoon or Cloud Hypervisor version, so a golden from before an
+upgrade of either is adopted. If its clones then fail, claims that clone from it
+fail too, until 8 clones running, a claim's or a refill's, have failed (a
+node-capacity failure, a claim its client canceled and a failed probe do not
+count): sandboxd then retires it and builds a new golden, and until that is
+ready, claims for that pool that find no warm VM cold-boot. If clones of the new
+golden fail the same way, it is retired again at most once every 30 s.
 
 A minimal systemd unit (shipped as
 [`packaging/sandboxd.service`](https://github.com/cocoonstack/sandbox/blob/main/packaging/sandboxd.service)):
@@ -688,7 +673,11 @@ never reads as a live VMM. The node then lists cocoon's VMs only every 60 s as
 a backstop for a dropped event, and every 10 s while the stream is down (it
 reconnects with backoff) or when no socket is configured. Each suspect is
 then checked with a single-VM `cocoon vm inspect` under its lock; a warm VM
-found down is destroyed and replaced. A claim
+found down is destroyed and replaced. A warm claim takes no liveness check, so
+one that lands before the eviction gets the dead VM: it answers 200, then 502
+until `vmm_restart` acts on it. Measured on one host, the eviction follows the
+VMM's exit by about 0.15 s with the stream and by up to 10 s without it, so set
+`cocoond_socket` in production. A claim
 whose VMM is gone — killed, crashed, or lost with the host — is handled per
 `vmm_restart`. A VMM that exits because the guest powered off is treated the
 same way. A claim whose lease has already lapsed is left to the reap, unless it
@@ -891,7 +880,8 @@ only; computing durations or prices stays with the consumer.
   (same nanosecond `t` and fields) land once. A line that does not decode is skipped with
   a warning, and a last line without its newline waits for it. A line a
   crash cut short stays a line of its own: the node ends it with a newline
-  when it opens the journal, so the first event after the restart is whole.
+  when it opens the journal, so the first event after the restart is whole,
+  and the next append ends a line a short write (a full disk) cut off.
 - **Order:** a cell's lands commit one at a time under a transaction-scoped
   advisory lock, so `cursor` grows in commit order and a reader that pages by
   cursor never skips a row that commits later. A node lands its lines in
@@ -1167,3 +1157,14 @@ working — images built here boot with an unmodified cocoon.
 The kernel's config in `boot/kernel/` is a fragment. On amd64 it merges over
 `x86_64_defconfig` + `kvm_guest.config`; on arm64 it merges over `defconfig`,
 then `sandbox-arm64.config`.
+
+## Development
+
+The parent workspace's `go.work` includes the repository's Go modules, which is
+why the Makefile forces `GOWORK=off`: CI has no workspace, and a workspace build
+resolves sibling checkouts instead of the pinned versions. silkd's integration
+tests spawn real processes; run them in a Linux container too (`docker run
+rust:1 … cargo test`) before touching platform-sensitive paths, since a macOS
+green alone has hidden Linux-only breakage before. `make boot` downloads the
+kernel tarball from kernel.org; set `KERNEL_MIRROR=…` when those tarball paths
+404 locally.

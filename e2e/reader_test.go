@@ -11,7 +11,7 @@ import (
 )
 
 func TestReaderServesAHibernatedClaimUntilAWriteWakesIt(t *testing.T) {
-	st := startConfigStack(t, "node-token", &config.Config{
+	st := startConfigStack(t, &config.Config{
 		Pools: []config.PoolSpec{{PoolKey: testKey, Warm: 2, Reader: true}},
 	})
 	root := t.TempDir()

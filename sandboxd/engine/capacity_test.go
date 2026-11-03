@@ -7,7 +7,7 @@ import (
 )
 
 func TestOnlyNodeWideFailuresCarryACapacitySignature(t *testing.T) {
-	for _, tc := range []struct {
+	for _, tt := range []struct {
 		name string
 		err  error
 		want bool
@@ -19,9 +19,9 @@ func TestOnlyNodeWideFailuresCarryACapacitySignature(t *testing.T) {
 		{"guest command out of disk", fmt.Errorf("warmup: %w", &guestExitError{code: 1, output: "dd: no space left on device"}), false},
 		{"no error", nil, false},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := CapacitySignature(tc.err) != ""; got != tc.want {
-				t.Errorf("CapacitySignature(%v) carries a signature: %v, want %v", tc.err, got, tc.want)
+		t.Run(tt.name, func(t *testing.T) {
+			if got := CapacitySignature(tt.err) != ""; got != tt.want {
+				t.Errorf("CapacitySignature(%v) carries a signature: %v, want %v", tt.err, got, tt.want)
 			}
 		})
 	}

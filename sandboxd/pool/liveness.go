@@ -145,7 +145,7 @@ func (m *Manager) evictWarm(ctx context.Context, suspect liveSuspect) {
 	vm, found, err := m.eng.Inspect(ctx, suspect.vmName)
 	switch {
 	case err != nil:
-		logger.Warnf(ctx, "list %s: %v", suspect.vmName, err)
+		logger.Warnf(ctx, "inspect %s: %v", suspect.vmName, err)
 		return
 	case found && vm.State == vmStateRunning:
 		return
@@ -185,7 +185,7 @@ func (m *Manager) recoverVMM(ctx context.Context, sb *types.Sandbox) {
 	vm, found, err := m.eng.Inspect(ctx, sb.VMName)
 	switch {
 	case err != nil:
-		logger.Warnf(ctx, "list %s: %v", sb.VMName, err)
+		logger.Warnf(ctx, "inspect %s: %v", sb.VMName, err)
 		return
 	case found && vm.State == vmStateRunning:
 		return

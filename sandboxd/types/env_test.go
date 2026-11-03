@@ -37,7 +37,7 @@ func TestEnvValidate(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			err := tt.env.Validate()
-			if (tt.want == "") != (err == nil) || (err != nil && !strings.Contains(err.Error(), tt.want)) {
+			if !errMatches(err, tt.want) {
 				t.Errorf("Validate() = %v, want %q", err, tt.want)
 			}
 			if err != nil && strings.Contains(err.Error(), "B=b") {
@@ -64,7 +64,7 @@ func TestEnvPatchAppliesAndValidates(t *testing.T) {
 		{EnvPatch{"A-B": nil}, "env name"},
 		{EnvPatch{"A": {Value: "a\nB=b"}}, "control characters"},
 	} {
-		if err := tt.patch.Validate(); (tt.want == "") != (err == nil) || (err != nil && !strings.Contains(err.Error(), tt.want)) {
+		if err := tt.patch.Validate(); !errMatches(err, tt.want) {
 			t.Errorf("Validate(%v) = %v, want %q", tt.patch, err, tt.want)
 		}
 	}
@@ -133,7 +133,7 @@ func TestEnvInjectValidates(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			err := tt.env.Validate()
-			if (tt.want == "") != (err == nil) || (err != nil && !strings.Contains(err.Error(), tt.want)) {
+			if !errMatches(err, tt.want) {
 				t.Errorf("Validate = %v, want %q", err, tt.want)
 			}
 		})
@@ -215,4 +215,11 @@ func TestEnvSplitsGuestAndHostOnlyEntries(t *testing.T) {
 	if got := string(env.GuestFile()); got != "G=\"g\"\nT=\"t\"\n" {
 		t.Errorf("GuestFile = %q", got)
 	}
+}
+
+func errMatches(err error, want string) bool {
+	if want == "" {
+		return err == nil
+	}
+	return err != nil && strings.Contains(err.Error(), want)
 }

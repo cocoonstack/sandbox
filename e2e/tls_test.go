@@ -31,11 +31,11 @@ func TestCaddyTLSCluster(t *testing.T) {
 	a, b := la.Addr().String(), lb.Addr().String()
 	owner := "https://" + b
 	entry := "https://" + a
-	st := startStack(t, "node-token")
+	st := startStack(t)
 	ownerServer := server.New(st.token, owner, st.mgr, st.eng.real, nil, nil, nil, nil)
 	backend := httptest.NewServer(ownerServer.Handler())
 	t.Cleanup(func() { backend.Close(); ownerServer.CloseRelays() })
-	origin := startStack(t, "node-token")
+	origin := startStack(t)
 	placer := &edgePlacer{internal: "owner.invalid:7777", public: owner}
 	entryServer := server.New(origin.token, entry, origin.mgr, origin.eng.real, placer, nil, nil, nil)
 	front := httptest.NewServer(entryServer.Handler())

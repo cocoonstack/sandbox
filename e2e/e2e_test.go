@@ -33,15 +33,17 @@ import (
 	sandbox "github.com/cocoonstack/sandbox/sdk/go"
 )
 
+const nodeToken = "node-token"
+
 var testKey = types.PoolKey{Template: "rt:24.04", Net: types.NetNone, Size: types.SizeSmall}
 
-func TestEndToEnd(t *testing.T) {
-	stack := startStack(t, "node-token", config.PoolSpec{PoolKey: testKey, Warm: 1})
+func TestClaimColdThenWarmThenCloseThroughTheWholeStack(t *testing.T) {
+	st := startStack(t, config.PoolSpec{PoolKey: testKey, Warm: 1})
 
 	var sb *sandbox.Sandbox
 	t.Run("cold claim before any refill", func(t *testing.T) {
 		var err error
-		sb, err = stack.client.New(t.Context(), "rt:24.04")
+		sb, err = st.client.New(t.Context(), "rt:24.04")
 		if err != nil {
 			t.Fatalf("New: %v", err)
 		}
@@ -55,11 +57,8 @@ func TestEndToEnd(t *testing.T) {
 	})
 
 	t.Run("refill then warm claim", func(t *testing.T) {
-		waitFor(t, func() bool {
-			infos, _ := stack.mgr.Info()
-			return len(infos) == 1 && infos[0].Warm >= 1
-		})
-		warm, err := stack.client.New(t.Context(), "rt:24.04")
+		waitFor(t, st.oneWarm)
+		warm, err := st.client.New(t.Context(), "rt:24.04")
 		if err != nil {
 			t.Fatalf("New: %v", err)
 		}
@@ -87,8 +86,8 @@ func TestEndToEnd(t *testing.T) {
 }
 
 func TestForkEndToEnd(t *testing.T) {
-	stack := startStack(t, "node-token")
-	parent, err := stack.client.New(t.Context(), "rt:24.04")
+	st := startStack(t)
+	parent, err := st.client.New(t.Context(), "rt:24.04")
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -120,8 +119,8 @@ func TestForkEndToEnd(t *testing.T) {
 }
 
 func TestPromoteEndToEnd(t *testing.T) {
-	stack := startStack(t, "node-token")
-	parent, err := stack.client.New(t.Context(), "rt:24.04")
+	st := startStack(t)
+	parent, err := st.client.New(t.Context(), "rt:24.04")
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -146,7 +145,7 @@ func TestPromoteEndToEnd(t *testing.T) {
 		t.Errorf("exec on promoted claim: %q, %v", out, err)
 	}
 	_ = child.Close()
-	byName, nameErr := stack.client.New(t.Context(), "e2e-tpl:1")
+	byName, nameErr := st.client.New(t.Context(), "e2e-tpl:1")
 	if nameErr != nil {
 		t.Fatalf("claim promoted template by name: %v", nameErr)
 	}
@@ -158,15 +157,15 @@ func TestPromoteEndToEnd(t *testing.T) {
 	if err := tpl.Delete(t.Context()); err != nil {
 		t.Fatalf("Template.Delete: %v", err)
 	}
-	if err := stack.client.DeleteTemplate(t.Context(), "e2e-tpl:1"); err == nil ||
+	if err := st.client.DeleteTemplate(t.Context(), "e2e-tpl:1"); err == nil ||
 		!strings.Contains(err.Error(), "unknown template") {
 		t.Errorf("second delete: %v, want unknown template", err)
 	}
 }
 
 func TestRenewEndToEnd(t *testing.T) {
-	stack := startStack(t, "node-token")
-	sb, err := stack.client.New(t.Context(), "rt:24.04")
+	st := startStack(t)
+	sb, err := st.client.New(t.Context(), "rt:24.04")
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -182,7 +181,7 @@ func TestRenewEndToEnd(t *testing.T) {
 	if !sb.Deadline.Equal(longer) {
 		t.Errorf("handle deadline %v, want the grant %v", sb.Deadline, longer)
 	}
-	code, raw := rawJSON(t, stack, http.MethodGet, "/v1/sandboxes/"+sb.ID, "")
+	code, raw := rawJSON(t, st, http.MethodGet, "/v1/sandboxes/"+sb.ID, "")
 	var held types.Sandbox
 	if code != http.StatusOK || json.Unmarshal(raw, &held) != nil || !held.Deadline.Equal(longer) {
 		t.Errorf("node holds %s (HTTP %d), want deadline %v", raw, code, longer)
@@ -198,8 +197,8 @@ func TestRenewEndToEnd(t *testing.T) {
 }
 
 func TestCheckpointEndToEnd(t *testing.T) {
-	stack := startStack(t, "node-token")
-	src, err := stack.client.New(t.Context(), "rt:24.04")
+	st := startStack(t)
+	src, err := st.client.New(t.Context(), "rt:24.04")
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -228,7 +227,7 @@ func TestCheckpointEndToEnd(t *testing.T) {
 	}
 	_ = branch.Close()
 
-	ckpts, err := stack.client.Checkpoints(t.Context())
+	ckpts, err := st.client.Checkpoints(t.Context())
 	if err != nil || len(ckpts) != 1 || ckpts[0].ID != ckpt.ID {
 		t.Fatalf("Checkpoints() = %+v, %v; want the one record", ckpts, err)
 	}
@@ -241,17 +240,17 @@ func TestCheckpointEndToEnd(t *testing.T) {
 	}
 }
 
-func TestTwoTenantFlow(t *testing.T) {
-	tenants := []tenants.TenantSpec{
+func TestTwoTenantsKeepTheirOwnCapsCheckpointsAndNoOperatorSurface(t *testing.T) {
+	specs := []tenants.TenantSpec{
 		{Name: "acme", Token: "acme-tok", MaxClaims: 1},
 		{Name: "beta", Token: "beta-tok"},
 	}
-	stack := startTenantStack(t, "node-token", tenants, nil)
-	acme, err := sandbox.Connect(stack.addr, sandbox.WithAPIToken("acme-tok"))
+	st := startTenantStack(t, specs, nil)
+	acme, err := sandbox.Connect(st.addr, sandbox.WithAPIToken("acme-tok"))
 	if err != nil {
 		t.Fatalf("connect acme: %v", err)
 	}
-	beta, err := sandbox.Connect(stack.addr, sandbox.WithAPIToken("beta-tok"))
+	beta, err := sandbox.Connect(st.addr, sandbox.WithAPIToken("beta-tok"))
 	if err != nil {
 		t.Fatalf("connect beta: %v", err)
 	}
@@ -283,7 +282,7 @@ func TestTwoTenantFlow(t *testing.T) {
 	}{
 		{acme, []string{"acme-step"}},
 		{beta, []string{"beta-step"}},
-		{stack.client, []string{"acme-step", "beta-step"}},
+		{st.client, []string{"acme-step", "beta-step"}},
 	} {
 		ckpts, err := tt.client.Checkpoints(t.Context())
 		if err != nil {
@@ -303,13 +302,13 @@ func TestTwoTenantFlow(t *testing.T) {
 		!strings.Contains(err.Error(), "403") {
 		t.Errorf("tenant on operator surface: %v, want 403", err)
 	}
-	if _, err := stack.client.Info(t.Context()); err != nil {
+	if _, err := st.client.Info(t.Context()); err != nil {
 		t.Errorf("root on operator surface: %v", err)
 	}
 }
 
 func TestRuntimeTenantEndToEnd(t *testing.T) {
-	st := startTenantStack(t, "node-token", nil, nil)
+	st := startStack(t)
 	if err := st.client.PutTenant(t.Context(), sandbox.TenantSpec{Name: "u:42", Token: "u42-tok", MaxClaims: 1}); err != nil {
 		t.Fatalf("PutTenant: %v", err)
 	}
@@ -352,9 +351,9 @@ func TestRuntimeTenantEndToEnd(t *testing.T) {
 }
 
 func TestWrongAPITokenRejected(t *testing.T) {
-	stack := startStack(t, "node-token")
+	st := startStack(t)
 
-	bad, err := sandbox.Connect(stack.addr, sandbox.WithAPIToken("wrong"))
+	bad, err := sandbox.Connect(st.addr, sandbox.WithAPIToken("wrong"))
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}
@@ -367,19 +366,16 @@ func TestWrongAPITokenRejected(t *testing.T) {
 func TestVolumesEndToEnd(t *testing.T) {
 	image := writeVolumeImage(t, "dataset.img", "dataset-bytes")
 	scratch := writeVolumeImage(t, "scratch.img", "scratch-bytes")
-	stack := startTenantStack(t, "node-token", nil,
+	st := startTenantStack(t, nil,
 		[]config.VolumeSpec{
 			{Name: "dataset", Path: image, DirectIO: "off"},
 			{Name: "scratch", Path: scratch, Writable: true},
 		},
 		config.PoolSpec{PoolKey: testKey, Warm: 1})
-	waitFor(t, func() bool {
-		infos, _ := stack.mgr.Info()
-		return len(infos) == 1 && infos[0].Warm >= 1
-	})
-	warmBefore := stack.mgr.Counters().ClaimsWarm
+	waitFor(t, st.oneWarm)
+	warmBefore := st.mgr.Counters().ClaimsWarm
 
-	sb, err := stack.client.New(t.Context(), "rt:24.04",
+	sb, err := st.client.New(t.Context(), "rt:24.04",
 		sandbox.WithVolumes(sandbox.Volume{Name: "dataset", Mount: "/datasets/e2e"}))
 	if err != nil {
 		t.Fatalf("volume claim: %v", err)
@@ -388,12 +384,12 @@ func TestVolumesEndToEnd(t *testing.T) {
 	if want := []sandbox.Volume{{Name: "dataset", Mount: "/datasets/e2e"}}; !slices.Equal(sb.Volumes, want) {
 		t.Errorf("claim volumes %+v, want %+v", sb.Volumes, want)
 	}
-	if counters := stack.mgr.Counters(); counters.ClaimsWarm != warmBefore+1 {
-		infos, _ := stack.mgr.Info()
+	if counters := st.mgr.Counters(); counters.ClaimsWarm != warmBefore+1 {
+		infos, _ := st.mgr.Info()
 		t.Errorf("counters=%+v pools=%+v, want warm claims %d", counters, infos, warmBefore+1)
 	}
 
-	infos, err := stack.client.Volumes(t.Context())
+	infos, err := st.client.Volumes(t.Context())
 	if err != nil {
 		t.Fatalf("Volumes: %v", err)
 	}
@@ -411,7 +407,7 @@ func TestVolumesEndToEnd(t *testing.T) {
 	var listed struct {
 		Volumes []map[string]any `json:"volumes"`
 	}
-	_, body := rawJSON(t, stack, http.MethodGet, "/v1/volumes", "")
+	_, body := rawJSON(t, st, http.MethodGet, "/v1/volumes", "")
 	if err := json.Unmarshal(body, &listed); err != nil {
 		t.Fatalf("decode catalog %s: %v", body, err)
 	}
@@ -431,10 +427,10 @@ func TestVolumesEndToEnd(t *testing.T) {
 
 func TestWritableVolumeEndToEnd(t *testing.T) {
 	scratch := writeVolumeImage(t, "scratch.img", "scratch-bytes")
-	stack := startTenantStack(t, "node-token", nil,
+	st := startTenantStack(t, nil,
 		[]config.VolumeSpec{{Name: "scratch", Path: scratch, Writable: true}})
 
-	sb, err := stack.client.New(t.Context(), "rt:24.04",
+	sb, err := st.client.New(t.Context(), "rt:24.04",
 		sandbox.WithVolumes(sandbox.Volume{Name: "scratch", Mount: "/datasets/rw", Mode: "rw"}))
 	if err != nil {
 		t.Fatalf("writable claim: %v", err)
@@ -443,11 +439,11 @@ func TestWritableVolumeEndToEnd(t *testing.T) {
 		t.Errorf("claim volumes %+v, want %+v", sb.Volumes, want)
 	}
 	applied := []string{"attach:scratch:rw", "mount:scratch:/datasets/rw:rw"}
-	if got := stack.eng.volumeOpsLog(); !slices.Equal(got, applied) {
+	if got := st.eng.volumeOpsLog(); !slices.Equal(got, applied) {
 		t.Errorf("engine ops %v, want %v", got, applied)
 	}
 	for _, requested := range []string{`{"name":"scratch"}`, `{"name":"scratch","mode":"rw"}`} {
-		if status, _ := rawClaim(t, stack, requested); status != http.StatusConflict {
+		if status, _ := rawClaim(t, st, requested); status != http.StatusConflict {
 			t.Errorf("claim %s under a live writer: %d, want 409", requested, status)
 		}
 	}
@@ -456,14 +452,14 @@ func TestWritableVolumeEndToEnd(t *testing.T) {
 		t.Fatalf("Close: %v", err)
 	}
 	want := slices.Concat(applied, []string{"umount:/datasets/rw", "remove"})
-	if got := stack.eng.volumeOpsLog(); !slices.Equal(got, want) {
+	if got := st.eng.volumeOpsLog(); !slices.Equal(got, want) {
 		t.Errorf("engine ops after release %v, want %v", got, want)
 	}
 }
 
 func TestVolumeModeWireShape(t *testing.T) {
 	scratch := writeVolumeImage(t, "scratch.img", "scratch-bytes")
-	stack := startTenantStack(t, "node-token", nil,
+	st := startTenantStack(t, nil,
 		[]config.VolumeSpec{{Name: "scratch", Path: scratch, Writable: true}})
 	for _, tt := range []struct {
 		name      string
@@ -482,14 +478,14 @@ func TestVolumeModeWireShape(t *testing.T) {
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			status, claimed := rawClaim(t, stack, tt.requested)
+			status, claimed := rawClaim(t, st, tt.requested)
 			if status != http.StatusOK {
 				t.Fatalf("claim: %d, want 200", status)
 			}
 			if len(claimed.Volumes) != 1 || !maps.Equal(claimed.Volumes[0], tt.want) {
 				t.Errorf("reply volumes %v, want [%v]", claimed.Volumes, tt.want)
 			}
-			if err := stack.client.Attach(stack.addr, claimed.ID, claimed.Token).Close(); err != nil {
+			if err := st.client.Attach(st.addr, claimed.ID, claimed.Token).Close(); err != nil {
 				t.Fatalf("release: %v", err)
 			}
 		})
@@ -497,14 +493,14 @@ func TestVolumeModeWireShape(t *testing.T) {
 }
 
 func TestClaimRefRoundTrip(t *testing.T) {
-	stack := startStack(t, "node-token")
-	sb, err := stack.client.New(t.Context(), "rt:24.04", sandbox.WithClaimRef("ns/workload"))
+	st := startStack(t)
+	sb, err := st.client.New(t.Context(), "rt:24.04", sandbox.WithClaimRef("ns/workload"))
 	if err != nil {
 		t.Fatalf("claim: %v", err)
 	}
 	defer sb.Close()
 
-	list, err := stack.client.Sandboxes(t.Context())
+	list, err := st.client.Sandboxes(t.Context())
 	if err != nil {
 		t.Fatalf("list sandboxes: %v", err)
 	}
@@ -518,7 +514,7 @@ func TestClaimRefRoundTrip(t *testing.T) {
 }
 
 func TestClaimMetadataRoundTrip(t *testing.T) {
-	st := startStack(t, "node-token")
+	st := startStack(t)
 	sb, err := st.client.New(t.Context(), "rt:24.04", sandbox.WithMetadata(map[string]string{"team": "a"}))
 	if err != nil {
 		t.Fatalf("claim: %v", err)
@@ -558,7 +554,7 @@ func TestClaimEnvEndToEnd(t *testing.T) {
 		_, _ = io.WriteString(w, r.Header.Get("Authorization"))
 	}))
 	t.Cleanup(origin.Close)
-	st := startConfigStack(t, "node-token", &config.Config{
+	st := startConfigStack(t, &config.Config{
 		Secrets:             []egress.SecretSpec{{Name: "GW_KEY", Header: "Authorization"}},
 		EgressInternalAllow: []string{"127.0.0.1/32"},
 		Pools:               []config.PoolSpec{{PoolKey: testKey, Warm: 2, Egress: &egress.Policy{Allow: []egress.Rule{{Host: "127.0.0.1", Secret: "GW_KEY"}}}}},
@@ -590,7 +586,10 @@ func TestClaimEnvEndToEnd(t *testing.T) {
 			t.Fatalf("egress: %v", err)
 		}
 		defer resp.Body.Close()
-		body, _ := io.ReadAll(resp.Body)
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatalf("egress body: %v", err)
+		}
 		return string(body)
 	}
 
@@ -600,10 +599,10 @@ func TestClaimEnvEndToEnd(t *testing.T) {
 		t.Fatalf("injected %q / %q, want each claim's own value", gotA, gotB)
 	}
 	st.eng.mu.Lock()
-	file := st.eng.guestEnvs[sockA]
+	guestEnv := st.eng.guestEnvs[sockA]
 	st.eng.mu.Unlock()
-	if file != "AGENT_MODE=\"on\"\n" {
-		t.Errorf("guest env file %q, want only the guest entry", file)
+	if guestEnv != "AGENT_MODE=\"on\"\n" {
+		t.Errorf("guest env file %q, want only the guest entry", guestEnv)
 	}
 	if status, body := rawJSON(t, st, http.MethodPut, "/v1/sandboxes/"+idA+"/env", `{"env":{"GW_KEY":{"value":"Bearer rotated","guest":false}}}`); status != http.StatusNoContent {
 		t.Fatalf("put env: %d %s", status, body)
@@ -616,8 +615,8 @@ func TestClaimEnvEndToEnd(t *testing.T) {
 		t.Errorf("read env: %d %s, want the host-only name without its value", status, body)
 	}
 	for _, route := range []string{"/v1/sandboxes/" + idA, "/v1/sandboxes"} {
-		if _, body := rawJSON(t, st, http.MethodGet, route, ""); strings.Contains(string(body), "Bearer") {
-			t.Errorf("GET %s serves a host-only value: %s", route, body)
+		if status, body := rawJSON(t, st, http.MethodGet, route, ""); status != http.StatusOK || strings.Contains(string(body), "Bearer") {
+			t.Errorf("GET %s: %d %s, want 200 without a host-only value", route, status, body)
 		}
 	}
 	if status, _ := rawJSON(t, st, http.MethodPut, "/v1/sandboxes/"+idA+"/env", `{"env":{"BAD NAME":{"value":"x"}}}`); status != http.StatusBadRequest {
@@ -626,7 +625,7 @@ func TestClaimEnvEndToEnd(t *testing.T) {
 }
 
 func TestClaimEnvThroughTheSDK(t *testing.T) {
-	st := startStack(t, "node-token", config.PoolSpec{PoolKey: testKey, Warm: 1})
+	st := startStack(t, config.PoolSpec{PoolKey: testKey, Warm: 1})
 	guestFile := func(sb *sandbox.Sandbox) string {
 		t.Helper()
 		sock, err := st.mgr.AgentSocket(sb.ID, sb.Token())
@@ -688,7 +687,7 @@ func TestClaimEnvThroughTheSDK(t *testing.T) {
 }
 
 func TestForkClaimRefPrefixWireShape(t *testing.T) {
-	st := startStack(t, "node-token")
+	st := startStack(t)
 	status, body := rawJSON(t, st, http.MethodPost, "/v1/claim", `{"template":"rt:24.04"}`)
 	if status != http.StatusOK {
 		t.Fatalf("claim: %d %s", status, body)
@@ -752,10 +751,10 @@ func TestForkClaimRefPrefixWireShape(t *testing.T) {
 
 func TestAttachOnlyVolumeEndToEnd(t *testing.T) {
 	scratch := writeVolumeImage(t, "scratch.img", "scratch-bytes")
-	stack := startTenantStack(t, "node-token", nil,
+	st := startTenantStack(t, nil,
 		[]config.VolumeSpec{{Name: "scratch", Path: scratch, Writable: true}})
 
-	sb, err := stack.client.New(t.Context(), "rt:24.04",
+	sb, err := st.client.New(t.Context(), "rt:24.04",
 		sandbox.WithVolumes(sandbox.Volume{Name: "scratch", Mode: "rw"}),
 		sandbox.WithVolumesAttachOnly())
 	if err != nil {
@@ -765,12 +764,12 @@ func TestAttachOnlyVolumeEndToEnd(t *testing.T) {
 		t.Errorf("claim volumes %+v, want %+v", sb.Volumes, want)
 	}
 	applied := []string{"attach:scratch:rw"}
-	if got := stack.eng.volumeOpsLog(); !slices.Equal(got, applied) {
+	if got := st.eng.volumeOpsLog(); !slices.Equal(got, applied) {
 		t.Errorf("engine ops %v, want %v", got, applied)
 	}
 	assertNoDirtyMarker(t, scratch, "apply")
 	for _, requested := range []string{`{"name":"scratch"}`, `{"name":"scratch","mode":"rw"}`} {
-		if status, _ := rawClaim(t, stack, requested); status != http.StatusConflict {
+		if status, _ := rawClaim(t, st, requested); status != http.StatusConflict {
 			t.Errorf("claim %s under a live attach-only writer: %d, want 409", requested, status)
 		}
 	}
@@ -779,7 +778,7 @@ func TestAttachOnlyVolumeEndToEnd(t *testing.T) {
 		t.Fatalf("Close: %v", err)
 	}
 	want := slices.Concat(applied, []string{"remove"})
-	if got := stack.eng.volumeOpsLog(); !slices.Equal(got, want) {
+	if got := st.eng.volumeOpsLog(); !slices.Equal(got, want) {
 		t.Errorf("engine ops after release %v, want %v", got, want)
 	}
 	assertNoDirtyMarker(t, scratch, "release")
@@ -787,7 +786,7 @@ func TestAttachOnlyVolumeEndToEnd(t *testing.T) {
 
 func TestAttachOnlyVolumeWireShape(t *testing.T) {
 	scratch := writeVolumeImage(t, "scratch.img", "scratch-bytes")
-	stack := startTenantStack(t, "node-token", nil,
+	st := startTenantStack(t, nil,
 		[]config.VolumeSpec{{Name: "scratch", Path: scratch, Writable: true}})
 	for _, tt := range []struct {
 		name    string
@@ -806,7 +805,7 @@ func TestAttachOnlyVolumeWireShape(t *testing.T) {
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			status, body := rawJSON(t, stack, http.MethodPost, "/v1/claim", tt.request)
+			status, body := rawJSON(t, st, http.MethodPost, "/v1/claim", tt.request)
 			if status != http.StatusOK {
 				t.Fatalf("claim: %d %s, want 200", status, body)
 			}
@@ -829,7 +828,7 @@ func TestAttachOnlyVolumeWireShape(t *testing.T) {
 			if err := json.Unmarshal(body, &claimed); err != nil {
 				t.Fatalf("decode claim %s: %v", body, err)
 			}
-			if err := stack.client.Attach(stack.addr, claimed.ID, claimed.Token).Close(); err != nil {
+			if err := st.client.Attach(st.addr, claimed.ID, claimed.Token).Close(); err != nil {
 				t.Fatalf("release: %v", err)
 			}
 		})
@@ -841,11 +840,17 @@ func TestDirtyVolumeRefusesReader(t *testing.T) {
 	if err := os.WriteFile(scratch+".dirty", nil, 0o600); err != nil {
 		t.Fatalf("write dirty marker: %v", err)
 	}
-	stack := startTenantStack(t, "node-token", nil,
+	st := startTenantStack(t, nil,
 		[]config.VolumeSpec{{Name: "scratch", Path: scratch, Writable: true}})
-	if status, _ := rawClaim(t, stack, `{"name":"scratch"}`); status != http.StatusConflict {
+	if status, _ := rawClaim(t, st, `{"name":"scratch"}`); status != http.StatusConflict {
 		t.Errorf("read-only claim on a dirty image: %d, want 409", status)
 	}
+}
+
+type rawClaimResponse struct {
+	ID      string           `json:"id"`
+	Token   string           `json:"token"`
+	Volumes []map[string]any `json:"volumes"`
 }
 
 type stack struct {
@@ -856,23 +861,28 @@ type stack struct {
 	token  string
 }
 
-func startStack(t *testing.T, apiToken string, pools ...config.PoolSpec) *stack {
-	t.Helper()
-	return startTenantStack(t, apiToken, nil, nil, pools...)
+func (s *stack) oneWarm() bool {
+	infos, _ := s.mgr.Info()
+	return len(infos) == 1 && infos[0].Warm >= 1
 }
 
-func startTenantStack(t *testing.T, apiToken string, tenants []tenants.TenantSpec, volumes []config.VolumeSpec, pools ...config.PoolSpec) *stack {
+func startStack(t *testing.T, pools ...config.PoolSpec) *stack {
 	t.Helper()
-	st := startConfigStack(t, apiToken, &config.Config{Pools: pools, Volumes: volumes})
-	if len(tenants) > 0 {
-		if err := st.mgr.SetTenants(t.Context(), tenants); err != nil {
+	return startTenantStack(t, nil, nil, pools...)
+}
+
+func startTenantStack(t *testing.T, specs []tenants.TenantSpec, volumes []config.VolumeSpec, pools ...config.PoolSpec) *stack {
+	t.Helper()
+	st := startConfigStack(t, &config.Config{Pools: pools, Volumes: volumes})
+	if len(specs) > 0 {
+		if err := st.mgr.SetTenants(t.Context(), specs); err != nil {
 			t.Fatalf("set tenants: %v", err)
 		}
 	}
 	return st
 }
 
-func startConfigStack(t *testing.T, apiToken string, cfg *config.Config) *stack {
+func startConfigStack(t *testing.T, cfg *config.Config) *stack {
 	t.Helper()
 
 	dir, err := os.MkdirTemp("", "sbx")
@@ -886,7 +896,7 @@ func startConfigStack(t *testing.T, apiToken string, cfg *config.Config) *stack 
 	if err != nil {
 		t.Fatalf("secrets: %v", err)
 	}
-	cfg.DataDir, cfg.APIToken = dir, apiToken
+	cfg.DataDir, cfg.APIToken = dir, nodeToken
 	ckpts, err := storedir.New(filepath.Join(dir, "checkpoints"), store.CheckpointIDRe)
 	if err != nil {
 		t.Fatalf("checkpoint store: %v", err)
@@ -895,11 +905,7 @@ func startConfigStack(t *testing.T, apiToken string, cfg *config.Config) *stack 
 	if err != nil {
 		t.Fatalf("template store: %v", err)
 	}
-	var rootSum string
-	if apiToken != "" {
-		rootSum = tenants.TokenSHA256(apiToken)
-	}
-	src, err := file.Open(t.Context(), dir, rootSum)
+	src, err := file.Open(t.Context(), dir, tenants.TokenSHA256(nodeToken))
 	if err != nil {
 		t.Fatalf("tenant set: %v", err)
 	}
@@ -909,14 +915,14 @@ func startConfigStack(t *testing.T, apiToken string, cfg *config.Config) *stack 
 	}
 	go mgr.Run(t.Context())
 
-	ts := httptest.NewServer(server.New(apiToken, "", mgr, eng.real, nil, nil, nil, nil).Handler())
+	ts := httptest.NewServer(server.New(nodeToken, "", mgr, eng.real, nil, nil, nil, nil).Handler())
 	t.Cleanup(ts.Close)
 	addr := strings.TrimPrefix(ts.URL, "http://")
-	client, err := sandbox.Connect(addr, sandbox.WithAPIToken(apiToken))
+	client, err := sandbox.Connect(addr, sandbox.WithAPIToken(nodeToken))
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}
-	return &stack{client: client, mgr: mgr, eng: eng, addr: addr, token: apiToken}
+	return &stack{client: client, mgr: mgr, eng: eng, addr: addr, token: nodeToken}
 }
 
 func waitFor(t *testing.T, cond func() bool) {
@@ -945,12 +951,6 @@ func assertNoDirtyMarker(t *testing.T, image, when string) {
 	if _, err := os.Stat(image + ".dirty"); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("dirty marker at %s: stat=%v, want no marker", when, err)
 	}
-}
-
-type rawClaimResponse struct {
-	ID      string           `json:"id"`
-	Token   string           `json:"token"`
-	Volumes []map[string]any `json:"volumes"`
 }
 
 func rawClaim(t *testing.T, st *stack, volume string) (int, rawClaimResponse) {

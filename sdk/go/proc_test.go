@@ -75,7 +75,7 @@ func TestProcVerbsUnknownPid(t *testing.T) {
 	}
 }
 
-func procServe(script map[string][]string) func(net.Conn) {
+func procServe(script map[string][]string) connHandler {
 	return func(conn net.Conn) {
 		defer func() { _ = conn.Close() }()
 		line, err := bufio.NewReader(conn).ReadString('\n')

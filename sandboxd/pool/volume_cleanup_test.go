@@ -13,11 +13,11 @@ func TestDispatchedCleanupRetainsCatalogReference(t *testing.T) {
 	base := newFakeEngine()
 	m := newVolumeManager(t, base, nil)
 	if err := m.RegisterVolume(t.Context(), "data", types.VolumeRegistration{Path: writeVolumeImage(t, "runtime", "bytes")}); err != nil {
-		t.Fatal(err)
+		t.Fatalf("RegisterVolume: %v", err)
 	}
 	sb, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Volumes: []types.Volume{{Name: "data"}}})
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("ClaimProvision: %v", err)
 	}
 	base.removeErrFor = sb.VMName
 	if err = m.Release(t.Context(), sb.ID, Cred{Token: sb.Token}); err == nil {
@@ -32,7 +32,7 @@ func TestDispatchedCleanupRetainsCatalogReference(t *testing.T) {
 	base.removeErrFor = ""
 	m.retryRemovals(t.Context()).Wait()
 	if err := m.UnregisterVolume(t.Context(), "data"); err != nil {
-		t.Fatal(err)
+		t.Fatalf("UnregisterVolume: %v", err)
 	}
 }
 
@@ -40,11 +40,11 @@ func TestOwnershipTransferReleasesRunningVolumeHoldAfterRemoval(t *testing.T) {
 	base := newFakeEngine()
 	m := newVolumeManager(t, base, nil)
 	if err := m.RegisterVolume(t.Context(), "data", types.VolumeRegistration{Path: writeVolumeImage(t, "runtime", "bytes"), Writable: true}); err != nil {
-		t.Fatal(err)
+		t.Fatalf("RegisterVolume: %v", err)
 	}
 	sb, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Volumes: []types.Volume{{Name: "data"}}})
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("ClaimProvision: %v", err)
 	}
 	writer := ClaimOptions{Volumes: []types.Volume{{Name: "data", Mode: types.VolumeModeRW}}}
 	base.removeErrFor = sb.VMName

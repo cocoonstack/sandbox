@@ -1,17 +1,18 @@
 package peer
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"testing/synctest"
 	"time"
 
 	"github.com/cocoonstack/sandbox/sandboxd/store"
+	"github.com/cocoonstack/sandbox/sandboxd/store/storetest"
 )
 
 const testID = "ck_00000000000000aa"
@@ -25,7 +26,7 @@ func TestInertWithoutOwnersOrPuller(t *testing.T) {
 
 func TestPullWritesStaging(t *testing.T) {
 	puller := &fakePuller{records: map[string]map[string]string{"peer-a:7777": record()}}
-	h := NewHealer(func(string) []string { return []string{"peer-a:7777"} }, puller)
+	h := healerOf(puller, "peer-a:7777")
 
 	dst := t.TempDir()
 	if err := h.Pull(t.Context(), testID, dst, nil); err != nil {
@@ -41,7 +42,7 @@ func TestHealTriesNextOwner(t *testing.T) {
 		records:  map[string]map[string]string{"peer-b:7777": record()},
 		failAddr: "peer-a:7777",
 	}
-	h := NewHealer(func(string) []string { return []string{"peer-a:7777", "peer-b:7777"} }, puller)
+	h := healerOf(puller, "peer-a:7777", "peer-b:7777")
 
 	if err := h.Pull(t.Context(), testID, t.TempDir(), nil); err != nil {
 		t.Fatalf("Pull: %v", err)
@@ -53,16 +54,16 @@ func TestHealTriesNextOwner(t *testing.T) {
 
 func TestHealAllOwnersMissStaysNotFound(t *testing.T) {
 	puller := &fakePuller{records: map[string]map[string]string{}}
-	h := NewHealer(func(string) []string { return []string{"peer-a:7777"} }, puller)
+	h := healerOf(puller, "peer-a:7777")
 
 	if err := h.Pull(t.Context(), testID, t.TempDir(), nil); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("Pull error = %v, want store.ErrNotFound", err)
 	}
 }
 
-func TestHealNoOwners(t *testing.T) {
+func TestHealWithNoOwnersIsNotFoundWithoutAPull(t *testing.T) {
 	puller := &fakePuller{}
-	h := NewHealer(func(string) []string { return nil }, puller)
+	h := healerOf(puller)
 
 	if err := h.Pull(t.Context(), testID, t.TempDir(), nil); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("Pull error = %v, want store.ErrNotFound", err)
@@ -74,20 +75,20 @@ func TestHealNoOwners(t *testing.T) {
 
 func TestHealErrorIsReported(t *testing.T) {
 	puller := &fakePuller{failAddr: "peer-a:7777"}
-	h := NewHealer(func(string) []string { return []string{"peer-a:7777"} }, puller)
+	h := healerOf(puller, "peer-a:7777")
 
 	err := h.Pull(t.Context(), testID, t.TempDir(), nil)
 	if err == nil || errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("Pull error = %v, want the peer failure surfaced", err)
 	}
-	if !bytes.Contains([]byte(err.Error()), []byte("peer exploded")) {
+	if !strings.Contains(err.Error(), "peer exploded") {
 		t.Errorf("error = %v, want the underlying peer failure named", err)
 	}
 }
 
 func TestPullDoesNotDedupConcurrentCalls(t *testing.T) {
 	puller := &fakePuller{records: map[string]map[string]string{"peer-a:7777": record()}}
-	h := NewHealer(func(string) []string { return []string{"peer-a:7777"} }, puller)
+	h := healerOf(puller, "peer-a:7777")
 
 	dst1, dst2 := t.TempDir(), t.TempDir()
 	var wg sync.WaitGroup
@@ -117,7 +118,7 @@ func TestPullValidateRejectionTriesNextOwner(t *testing.T) {
 		"peer-a:7777": record(),
 		"peer-b:7777": record(),
 	}}
-	h := NewHealer(func(string) []string { return []string{"peer-a:7777", "peer-b:7777"} }, puller)
+	h := healerOf(puller, "peer-a:7777", "peer-b:7777")
 
 	var calls int
 	validate := func(string) error {
@@ -137,7 +138,7 @@ func TestPullValidateRejectionTriesNextOwner(t *testing.T) {
 
 func TestPullValidateRejectsEveryOwner(t *testing.T) {
 	puller := &fakePuller{records: map[string]map[string]string{"peer-a:7777": record()}}
-	h := NewHealer(func(string) []string { return []string{"peer-a:7777"} }, puller)
+	h := healerOf(puller, "peer-a:7777")
 
 	err := h.Pull(t.Context(), testID, t.TempDir(), func(string) error { return errors.New("bad shape") })
 	if err == nil || errors.Is(err, store.ErrNotFound) {
@@ -147,7 +148,7 @@ func TestPullValidateRejectsEveryOwner(t *testing.T) {
 
 func TestPullBudgetBoundsSlowOwners(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		h := NewHealer(func(string) []string { return []string{"peer-a:7777", "peer-b:7777"} }, &sleepyPuller{sleep: 2 * healBudget})
+		h := healerOf(&sleepyPuller{sleep: 2 * healBudget}, "peer-a:7777", "peer-b:7777")
 		start := time.Now()
 		err := h.Pull(t.Context(), testID, t.TempDir(), nil)
 		if elapsed := time.Since(start); elapsed != healBudget {
@@ -204,7 +205,11 @@ func (p *sleepyPuller) Pull(ctx context.Context, _, _, _ string) error {
 
 func record() map[string]string {
 	return map[string]string{
-		store.MetaFile:                        `{"id":"` + testID + `"}`,
+		store.MetaFile:                        storetest.MetaJSON(testID),
 		filepath.Join(store.ExportDir, "mem"): "guest-pages",
 	}
+}
+
+func healerOf(puller Puller, owners ...string) *Healer {
+	return NewHealer(func(string) []string { return owners }, puller)
 }

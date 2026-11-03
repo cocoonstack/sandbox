@@ -25,10 +25,7 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
-var (
-	otherKey       = types.PoolKey{Template: "other:1", Net: types.NetNone, Size: types.SizeSmall}
-	interceptOnKey = types.PoolKey{Template: "mitm:1", Net: types.NetNone, Size: types.SizeSmall}
-)
+var interceptOnKey = types.PoolKey{Template: "mitm:1", Net: types.NetNone, Size: types.SizeSmall}
 
 func TestReloadGivesANewKeyItsSettingsBeforeItsGolden(t *testing.T) {
 	eng := newFakeEngine()
@@ -365,28 +362,4 @@ func TestAReloadThatUnguardsTheNodeClosesAWarmVMsDoorsAtItsClaim(t *testing.T) {
 	if route := m.NetRoute(sb); route != types.NetRouteNone {
 		t.Errorf("claim route %q, want none", route)
 	}
-}
-
-func refilledTo(t *testing.T, m *Manager, key types.PoolKey, n int) bool {
-	m.refillOnce(t.Context())
-	return warmLen(m, key) == n
-}
-
-func waitPoolSettled(t *testing.T, m *Manager, key types.PoolKey) {
-	t.Helper()
-	waitFor(t, func() bool {
-		m.mu.Lock()
-		defer m.mu.Unlock()
-		p := m.pools[key]
-		return p != nil && !p.building && p.refilling == 0
-	})
-}
-
-func warmLen(m *Manager, key types.PoolKey) int {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if p := m.pools[key]; p != nil {
-		return len(p.warm)
-	}
-	return 0
 }

@@ -25,7 +25,7 @@ func TestCheckpointCleanupWaitsForTheClaimWrite(t *testing.T) {
 			t.Fatalf("sweep erased an unacknowledged retirement: %t, %v", ok, err)
 		}
 	}
-	for _, tc := range []struct {
+	for _, tt := range []struct {
 		name  string
 		setup func(t *testing.T, m *Manager, c *failoverCluster, sb *types.Sandbox) string
 		act   func(t *testing.T, m *Manager, c *failoverCluster, sb *types.Sandbox)
@@ -60,7 +60,7 @@ func TestCheckpointCleanupWaitsForTheClaimWrite(t *testing.T) {
 			setup: func(t *testing.T, m *Manager, c *failoverCluster, sb *types.Sandbox) string {
 				m.archives = &hookRegistry{Registry: c.reg, failPut: true}
 				if err := m.replicate(t.Context(), sb); !errors.Is(err, ErrArchiveStoreDown) {
-					t.Fatal(err)
+					t.Fatalf("replicate with the registry down: %v", err)
 				}
 				m.archives = c.reg
 				return sb.ReplicaPending
@@ -79,7 +79,7 @@ func TestCheckpointCleanupWaitsForTheClaimWrite(t *testing.T) {
 				previous := sb.ReplicaCk
 				m.archives = &hookRegistry{Registry: c.reg, losePutReply: true}
 				if err := m.replicate(t.Context(), sb); !errors.Is(err, ErrArchiveStoreDown) {
-					t.Fatal(err)
+					t.Fatalf("replicate with the put reply lost: %v", err)
 				}
 				m.archives = c.reg
 				return previous
@@ -96,13 +96,13 @@ func TestCheckpointCleanupWaitsForTheClaimWrite(t *testing.T) {
 		},
 	} {
 		for _, restart := range []bool{false, true} {
-			t.Run(fmt.Sprintf("%s/restart=%t", tc.name, restart), func(t *testing.T) {
+			t.Run(fmt.Sprintf("%s/restart=%t", tt.name, restart), func(t *testing.T) {
 				c := newReplicaCluster(t)
 				m := c.node(t, "a", t.TempDir(), keepAnHour)
 				sb := mustClaim(t, m, testKey)
-				ck := tc.setup(t, m, c, sb)
+				ck := tt.setup(t, m, c, sb)
 				restoreWrites := failClaimWrites(t, m.store)
-				tc.act(t, m, c, sb)
+				tt.act(t, m, c, sb)
 				m.retryArchiveDeletes(t.Context())
 				if !ckExists(t, m, ck) || !m.deleteMarked(ck) {
 					t.Fatal("cleanup dropped the checkpoint or its delete marker before the claim write landed")
@@ -111,7 +111,7 @@ func TestCheckpointCleanupWaitsForTheClaimWrite(t *testing.T) {
 				if restart {
 					m = c.restart(t, m)
 					if err := m.Reconcile(t.Context()); err != nil {
-						t.Fatal(err)
+						t.Fatalf("reconcile: %v", err)
 					}
 					var ok bool
 					if sb, ok = m.byID(sb.ID); !ok {
@@ -119,7 +119,7 @@ func TestCheckpointCleanupWaitsForTheClaimWrite(t *testing.T) {
 					}
 					m.retireReplica(t.Context(), sb)
 				} else if err := m.store.commit(m.store.mark()); err != nil {
-					t.Fatal(err)
+					t.Fatalf("commit the journal: %v", err)
 				}
 				other := mustClaim(t, m, testKey)
 				m.mu.Lock()
@@ -160,17 +160,15 @@ func TestFailoverDisabledExitKeepsReplicaCheckpoint(t *testing.T) {
 		{"pending replica", func(t *testing.T, m *Manager, c *failoverCluster, sb *types.Sandbox) string {
 			m.archives = &hookRegistry{Registry: c.reg, failPut: true}
 			if err := m.replicate(t.Context(), sb); !errors.Is(err, ErrArchiveStoreDown) {
-				t.Fatal(err)
+				t.Fatalf("replicate with the registry down: %v", err)
 			}
 			return sb.ReplicaPending
 		}},
 		{"archive intent", func(t *testing.T, m *Manager, c *failoverCluster, sb *types.Sandbox) string {
-			if err := m.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
-				t.Fatal(err)
-			}
+			hibernateClaim(t, m, sb)
 			m.archives = &hookRegistry{Registry: c.reg, failPut: true}
 			if err := m.archive(t.Context(), sb); !errors.Is(err, ErrArchiveStoreDown) {
-				t.Fatal(err)
+				t.Fatalf("archive with the registry down: %v", err)
 			}
 			return sb.ArchivePending
 		}},
@@ -181,7 +179,7 @@ func TestFailoverDisabledExitKeepsReplicaCheckpoint(t *testing.T) {
 	}{
 		{"release", func(t *testing.T, m *Manager, sb *types.Sandbox) {
 			if err := m.Release(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
-				t.Fatal(err)
+				t.Fatalf("release: %v", err)
 			}
 		}},
 		{"expire", func(t *testing.T, m *Manager, sb *types.Sandbox) {
@@ -205,10 +203,10 @@ func TestFailoverDisabledExitKeepsReplicaCheckpoint(t *testing.T) {
 				}
 				m, err := NewManager(t.Context(), cfg, old.eng, testSecrets(t), testBackends(t, cfg))
 				if err != nil {
-					t.Fatal(err)
+					t.Fatalf("manager: %v", err)
 				}
 				if err = m.Reconcile(t.Context()); err != nil {
-					t.Fatal(err)
+					t.Fatalf("reconcile: %v", err)
 				}
 				restored, ok := m.byID(sb.ID)
 				if !ok || checkpointRefs(restored) != checkpointRefs(sb) {

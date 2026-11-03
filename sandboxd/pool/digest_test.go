@@ -10,7 +10,7 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
-func TestClusterDigest(t *testing.T) {
+func TestClusterDigestCoversSharedConfigAndOnlyKeyedSecrets(t *testing.T) {
 	acme := []tenants.TenantSpec{{Name: "acme", Token: "t1"}}
 	rotated := []tenants.TenantSpec{{Name: "acme", Token: "rotated"}}
 	base := &config.Config{APIToken: "tok", PreviewSecret: "ps"}
@@ -124,8 +124,8 @@ func TestClusterDigestCoversTheEgressLayerInAnyOrder(t *testing.T) {
 
 func tenantRecords(specs []tenants.TenantSpec) []tenants.TenantRecord {
 	out := make([]tenants.TenantRecord, len(specs))
-	for i, t := range specs {
-		out[i] = tenants.TenantRecord{Name: t.Name, TokenSHA256: tenants.TokenSHA256(t.Token), MaxClaims: t.MaxClaims}
+	for i, spec := range specs {
+		out[i] = tenants.TenantRecord{Name: spec.Name, TokenSHA256: tenants.TokenSHA256(spec.Token), MaxClaims: spec.MaxClaims}
 	}
 	return out
 }

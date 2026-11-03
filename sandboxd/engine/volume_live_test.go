@@ -25,27 +25,22 @@ func TestLiveVolumeConvergesMountAndDetach(t *testing.T) {
 		{name: "unresolvable path", mount: "/missing/data", kernelPath: "/missing/data", noRealpath: true, lookups: 1},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			sock := sockPath(t)
-			fake := serveFakeSilkd(t, sock)
-			configureVolumeDevices(fake)
-			spec := liveDiskCLI(t, "")
+			sock, fake, spec := newLiveFake(t, "", "")
 			if err := os.Remove(os.Getenv("COCOON_TEST_ATTACHED")); err != nil {
 				t.Fatal(err)
 			}
-			fake.mu.Lock()
-			fake.realpath, fake.noRealpath = tt.realpath, tt.noRealpath
-			fake.serial["/sys/block/vdc/dev"] = []byte("8:32\n")
-			fake.serial["/proc/self/mountinfo"] = []byte(rootMountInfo)
-			fake.execHook = func(argv []string) {
-				switch argv[0] {
-				case "mount":
-					fake.serial["/proc/self/mountinfo"] = []byte(rootMountInfo + "2 1 8:32 / " + tt.kernelPath + " ro - ext4 /dev/vdc ro\n")
-				case "umount":
-					fake.serial["/proc/self/mountinfo"] = []byte(rootMountInfo)
+			fake.set(func(f *fakeSilkd) {
+				f.realpath, f.noRealpath = tt.realpath, tt.noRealpath
+				f.execHook = func(argv []string) {
+					switch argv[0] {
+					case "mount":
+						f.serial["/proc/self/mountinfo"] = []byte(rootMountInfo + "2 1 8:32 / " + tt.kernelPath + " ro - ext4 /dev/vdc ro\n")
+					case "umount":
+						f.serial["/proc/self/mountinfo"] = []byte(rootMountInfo)
+					}
 				}
-			}
-			fake.mu.Unlock()
-			e := New("cocoon", nil, nil, false, false, "")
+			})
+			e := newTestEngine()
 			for range 2 {
 				if err := e.DiskAttach(t.Context(), "sbx-1", spec); err != nil {
 					t.Fatal(err)
@@ -75,16 +70,9 @@ func TestLiveVolumeConvergesMountAndDetach(t *testing.T) {
 }
 
 func TestLiveMountRefusesAnOccupiedPathBehindASymlink(t *testing.T) {
-	sock := sockPath(t)
-	fake := serveFakeSilkd(t, sock)
-	configureVolumeDevices(fake)
-	spec := liveDiskCLI(t, "")
-	fake.mu.Lock()
-	fake.serial["/sys/block/vdc/dev"] = []byte("8:32\n")
-	fake.serial["/proc/self/mountinfo"] = []byte(rootMountInfo + "2 1 8:48 / /home/u/ws/data ro - ext4 /dev/vdd ro\n")
-	fake.realpath = map[string]string{"/workspace/data": "/home/u/ws/data"}
-	fake.mu.Unlock()
-	e := New("cocoon", nil, nil, false, false, "")
+	sock, fake, spec := newLiveFake(t, "", "2 1 8:48 / /home/u/ws/data ro - ext4 /dev/vdd ro\n")
+	fake.set(func(f *fakeSilkd) { f.realpath = map[string]string{"/workspace/data": "/home/u/ws/data"} })
+	e := newTestEngine()
 	if err := e.DiskAttach(t.Context(), "sbx-1", spec); err != nil {
 		t.Fatal(err)
 	}
@@ -100,19 +88,12 @@ func TestLiveMountRefusesAnOccupiedPathBehindASymlink(t *testing.T) {
 }
 
 func TestLiveMountReadsMountinfoBeyondTheSysfsCap(t *testing.T) {
-	sock := sockPath(t)
-	fake := serveFakeSilkd(t, sock)
-	configureVolumeDevices(fake)
-	spec := liveDiskCLI(t, "")
 	overlays := strings.Repeat("9 1 0:99 / /var/lib/docker/overlay2/layer/merged rw - overlay overlay rw,lowerdir=/var/lib/docker/overlay2/l/ABCDEFGHIJKLMNOPQRSTUVWXYZ\n", 2000)
-	fake.mu.Lock()
-	fake.serial["/sys/block/vdc/dev"] = []byte("8:32\n")
-	fake.serial["/proc/self/mountinfo"] = []byte(rootMountInfo + overlays)
-	fake.mu.Unlock()
+	sock, _, spec := newLiveFake(t, "", overlays)
 	if len(rootMountInfo+overlays) <= silkdReadMax {
 		t.Fatalf("fixture of %d bytes does not exceed the sysfs cap", len(rootMountInfo+overlays))
 	}
-	e := New("cocoon", nil, nil, false, false, "")
+	e := newTestEngine()
 	if err := e.DiskAttach(t.Context(), "sbx-1", spec); err != nil {
 		t.Fatal(err)
 	}
@@ -129,15 +110,8 @@ func TestLiveAttachRejectsForeignMounts(t *testing.T) {
 		"malformed\n",
 	} {
 		t.Run(strings.TrimSpace(row), func(t *testing.T) {
-			sock := sockPath(t)
-			fake := serveFakeSilkd(t, sock)
-			configureVolumeDevices(fake)
-			spec := liveDiskCLI(t, "")
-			fake.mu.Lock()
-			fake.serial["/sys/block/vdc/dev"] = []byte("8:32\n")
-			fake.serial["/proc/self/mountinfo"] = []byte(rootMountInfo + row)
-			fake.mu.Unlock()
-			err := New("cocoon", nil, nil, false, false, "").MountLiveVolume(t.Context(), sock, spec.Name, "/data", false)
+			sock, fake, spec := newLiveFake(t, "", row)
+			err := newTestEngine().MountLiveVolume(t.Context(), sock, spec.Name, "/data", false)
 			if err == nil {
 				t.Fatal("accepted a foreign mount")
 			}
@@ -160,17 +134,12 @@ func TestLiveAttachRejectsForeignMounts(t *testing.T) {
 func TestLiveDetachKeepsBusyAndUnobservableDevices(t *testing.T) {
 	for _, mode := range []string{"busy", "second mount", "probe error", "guest error", "transport disconnect", "host error", "stacked mount", "stacked bind"} {
 		t.Run(mode, func(t *testing.T) {
-			sock := sockPath(t)
-			fake := serveFakeSilkd(t, sock)
-			configureVolumeDevices(fake)
 			hostErr := ""
 			if mode == "host error" {
 				hostErr = "device removal initiated but guest has not ejected it"
 			}
-			spec := liveDiskCLI(t, hostErr)
+			sock, fake, spec := newLiveFake(t, hostErr, "")
 			fake.mu.Lock()
-			fake.serial["/sys/block/vdc/dev"] = []byte("8:32\n")
-			fake.serial["/proc/self/mountinfo"] = []byte(rootMountInfo)
 			switch mode {
 			case "busy":
 				fake.serial["/proc/self/mountinfo"] = []byte(rootMountInfo + "2 1 8:32 / /data ro - ext4 /dev/vdc ro\n")
@@ -191,7 +160,7 @@ func TestLiveDetachKeepsBusyAndUnobservableDevices(t *testing.T) {
 				fake.serial["/proc/self/mountinfo"] = []byte(rootMountInfo + "2 1 8:32 / /data ro - ext4 /dev/vdc ro\n3 2 8:32 /sub /data ro - ext4 /dev/vdc ro\n")
 			}
 			fake.mu.Unlock()
-			_, err := New("cocoon", nil, nil, false, false, "").DetachVolume(t.Context(), "sbx-1", sock, spec.Name, "/data")
+			_, err := newTestEngine().DetachVolume(t.Context(), "sbx-1", sock, spec.Name, "/data")
 			if err == nil {
 				t.Fatal("detach must fail closed")
 			}
@@ -222,7 +191,7 @@ func TestLiveDetachMissingGuestStillChecksHost(t *testing.T) {
 			sock := sockPath(t)
 			serveFakeSilkd(t, sock)
 			spec := liveDiskCLI(t, hostErr)
-			_, err := New("cocoon", nil, nil, false, false, "").DetachVolume(t.Context(), "sbx-1", sock, spec.Name, "/data")
+			_, err := newTestEngine().DetachVolume(t.Context(), "sbx-1", sock, spec.Name, "/data")
 			wantErr := hostErr != ""
 			if (err != nil) != wantErr {
 				t.Fatalf("got %v, want error=%v", err, wantErr)
@@ -232,15 +201,8 @@ func TestLiveDetachMissingGuestStillChecksHost(t *testing.T) {
 }
 
 func TestLiveDetachIgnoresAnotherDeviceAtThePath(t *testing.T) {
-	sock := sockPath(t)
-	fake := serveFakeSilkd(t, sock)
-	configureVolumeDevices(fake)
-	spec := liveDiskCLI(t, "")
-	fake.mu.Lock()
-	fake.serial["/sys/block/vdc/dev"] = []byte("8:32\n")
-	fake.serial["/proc/self/mountinfo"] = []byte(rootMountInfo + "2 1 8:48 / /data ro - ext4 /dev/vdd ro\n")
-	fake.mu.Unlock()
-	if _, err := New("cocoon", nil, nil, false, false, "").DetachVolume(t.Context(), "sbx-1", sock, spec.Name, "/data"); err != nil {
+	sock, fake, spec := newLiveFake(t, "", "2 1 8:48 / /data ro - ext4 /dev/vdd ro\n")
+	if _, err := newTestEngine().DetachVolume(t.Context(), "sbx-1", sock, spec.Name, "/data"); err != nil {
 		t.Fatalf("detach of an unmounted device blocked by another device's mount: %v", err)
 	}
 	fake.mu.Lock()
@@ -251,7 +213,7 @@ func TestLiveDetachIgnoresAnotherDeviceAtThePath(t *testing.T) {
 }
 
 func TestLiveDetachCleanEvidenceRequiresWritableUnmountAndHostSuccess(t *testing.T) {
-	for _, tc := range []struct {
+	for _, tt := range []struct {
 		name, options, superOptions, mount, hostErr            string
 		missing, unmounted, busy, residual, wantClean, wantErr bool
 	}{
@@ -269,35 +231,35 @@ func TestLiveDetachCleanEvidenceRequiresWritableUnmountAndHostSuccess(t *testing
 		{name: "residual mount", options: "rw", superOptions: "rw", mount: "/data", residual: true, wantErr: true},
 		{name: "attach-only mounted", options: "rw", superOptions: "rw", wantErr: true},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
+		t.Run(tt.name, func(t *testing.T) {
 			sock := sockPath(t)
 			fake := serveFakeSilkd(t, sock)
-			if !tc.missing {
+			if !tt.missing {
 				configureVolumeDevices(fake)
 			}
-			spec := liveDiskCLI(t, tc.hostErr)
+			spec := liveDiskCLI(t, tt.hostErr)
 			fake.mu.Lock()
 			fake.serial["/sys/block/vdc/dev"] = []byte("8:32\n")
 			base := rootMountInfo + "501 84 0:62 / /empty-source rw,relatime - tmpfs  rw,size=1024k,inode64\n"
 			raw := base
-			if !tc.unmounted {
-				raw += "2 1 8:32 / /data " + tc.options + " shared:4 - ext4 /dev/vdc " + tc.superOptions + "\n"
+			if !tt.unmounted {
+				raw += "2 1 8:32 / /data " + tt.options + " shared:4 - ext4 /dev/vdc " + tt.superOptions + "\n"
 			}
 			fake.serial["/proc/self/mountinfo"] = []byte(raw)
-			if tc.busy {
+			if tt.busy {
 				fake.execCode = 32
 			}
 			fake.execHook = func(argv []string) {
-				if argv[0] == "umount" && !tc.residual && !tc.busy {
+				if argv[0] == "umount" && !tt.residual && !tt.busy {
 					fake.serial["/proc/self/mountinfo"] = []byte(base)
 				}
 			}
 			fake.mu.Unlock()
-			clean, err := New("cocoon", nil, nil, false, false, "").DetachVolume(t.Context(), "sbx-1", sock, spec.Name, tc.mount)
-			if (err != nil) != tc.wantErr || clean != tc.wantClean {
+			clean, err := newTestEngine().DetachVolume(t.Context(), "sbx-1", sock, spec.Name, tt.mount)
+			if (err != nil) != tt.wantErr || clean != tt.wantClean {
 				t.Fatalf("clean=%t err=%v", clean, err)
 			}
-			if tc.mount == "" {
+			if tt.mount == "" {
 				fake.mu.Lock()
 				defer fake.mu.Unlock()
 				if len(guestChanges(fake.execCalls)) != 0 {
@@ -310,7 +272,7 @@ func TestLiveDetachCleanEvidenceRequiresWritableUnmountAndHostSuccess(t *testing
 
 func TestUnmountVolumeReportsCleanWritableUnmount(t *testing.T) {
 	const entry = "2 1 8:32 / /data rw,relatime shared:4 - ext4 /dev/vdc "
-	for _, tc := range []struct {
+	for _, tt := range []struct {
 		name, mountinfo string
 		busy, wantClean bool
 		wantErr         bool
@@ -324,21 +286,34 @@ func TestUnmountVolumeReportsCleanWritableUnmount(t *testing.T) {
 		{name: "not mounted"},
 		{name: "busy", mountinfo: entry + "rw\n", busy: true, wantErr: true},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
+		t.Run(tt.name, func(t *testing.T) {
 			sock := sockPath(t)
 			fake := serveFakeSilkd(t, sock)
 			fake.mu.Lock()
-			fake.serial["/proc/self/mountinfo"] = []byte(rootMountInfo + tc.mountinfo)
-			if tc.busy {
+			fake.serial["/proc/self/mountinfo"] = []byte(rootMountInfo + tt.mountinfo)
+			if tt.busy {
 				fake.execCode = 32
 			}
 			fake.mu.Unlock()
-			clean, err := New("cocoon", nil, nil, false, false, "").UnmountVolume(t.Context(), sock, "/data")
-			if (err != nil) != tc.wantErr || clean != tc.wantClean {
+			clean, err := newTestEngine().UnmountVolume(t.Context(), sock, "/data")
+			if (err != nil) != tt.wantErr || clean != tt.wantClean {
 				t.Fatalf("clean=%t err=%v", clean, err)
 			}
 		})
 	}
+}
+
+func newLiveFake(t *testing.T, detachErr, mountinfo string) (string, *fakeSilkd, VolumeSpec) {
+	t.Helper()
+	sock := sockPath(t)
+	fake := serveFakeSilkd(t, sock)
+	configureVolumeDevices(fake)
+	spec := liveDiskCLI(t, detachErr)
+	fake.set(func(f *fakeSilkd) {
+		f.serial["/sys/block/vdc/dev"] = []byte("8:32\n")
+		f.serial["/proc/self/mountinfo"] = []byte(rootMountInfo + mountinfo)
+	})
+	return sock, fake, spec
 }
 
 func liveDiskCLI(t *testing.T, detachErr string) VolumeSpec {

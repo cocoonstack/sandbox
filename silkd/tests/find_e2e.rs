@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 use silkd::server::State;
 use tokio::io::AsyncWriteExt;
 
-use common::{connect, exchange, frames_until, send, type_of};
+use common::{assert_error, connect, frames_until, request, send, type_of};
 
 async fn find_frames(req: Value) -> Vec<Value> {
     let (mut cw, mut out, handle) = connect(&Arc::new(State::new()));
@@ -127,8 +127,7 @@ async fn find_rejects_bad_pattern() {
         "pattern": "("
     }))
     .await;
-    assert_eq!(type_of(&frames[0]), "error");
-    assert_eq!(frames[0]["kind"], "bad_request");
+    assert_error(&frames[0], "bad_request");
 }
 
 #[tokio::test]
@@ -139,13 +138,12 @@ async fn replace_rewrites_and_counts() {
     tokio::fs::write(&a, "foo foo bar\n").await.unwrap();
     tokio::fs::write(&b, "no match here\n").await.unwrap();
 
-    let frames = exchange(&[json!({
+    let frames = request(json!({
         "op": "fs_replace",
         "files": [a.to_str().unwrap(), b.to_str().unwrap()],
         "pattern": "foo",
         "replacement": "baz"
-    })
-    .to_string()])
+    }))
     .await;
 
     let replaced: Vec<_> = frames.iter().filter(|f| type_of(f) == "replaced").collect();
@@ -170,13 +168,12 @@ async fn replace_skips_a_file_over_the_size_bound() {
     let body = format!("foo\n{}", "x".repeat(silkd::find::FIND_MAX_FILE as usize));
     tokio::fs::write(&big, &body).await.unwrap();
 
-    let frames = exchange(&[json!({
+    let frames = request(json!({
         "op": "fs_replace",
         "files": [big.to_str().unwrap()],
         "pattern": "foo",
         "replacement": "bar"
-    })
-    .to_string()])
+    }))
     .await;
 
     let replaced: Vec<_> = frames.iter().filter(|f| type_of(f) == "replaced").collect();
@@ -219,13 +216,12 @@ async fn replace_preserves_exec_bit() {
         .await
         .unwrap();
 
-    exchange(&[json!({
+    request(json!({
         "op": "fs_replace",
         "files": [script.to_str().unwrap()],
         "pattern": "foo",
         "replacement": "bar"
-    })
-    .to_string()])
+    }))
     .await;
 
     let mode = tokio::fs::metadata(&script)
@@ -249,13 +245,12 @@ async fn replace_keeps_the_destination_owner_under_root() {
     std::fs::write(&file, "foo\n").unwrap();
     std::os::unix::fs::chown(&file, Some(1000), Some(1000)).unwrap();
 
-    exchange(&[json!({
+    request(json!({
         "op": "fs_replace",
         "files": [file.to_str().unwrap()],
         "pattern": "foo",
         "replacement": "bar"
-    })
-    .to_string()])
+    }))
     .await;
 
     let meta = std::fs::metadata(&file).unwrap();

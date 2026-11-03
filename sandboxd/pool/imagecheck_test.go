@@ -20,10 +20,7 @@ func TestGoldenStampCarriesImageID(t *testing.T) {
 	eng := newFakeEngine()
 	eng.imageIDs = map[string]string{testKey.Template: imageA}
 	m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1})
-	final := filepath.Join(m.goldensDir(), testKey.Hash())
-	if err := m.buildGoldenSteps(t.Context(), m.view.Load(), testKey, "sbx-gb", "snap", final, imageA); err != nil {
-		t.Fatalf("buildGoldenSteps: %v", err)
-	}
+	final := buildGoldenAt(t, m, testKey, imageA)
 	stamp, err := os.ReadFile(final + goldenStampSuffix)
 	if err != nil || string(stamp) != m.goldenStamp(m.view.Load(), testKey, imageA) {
 		t.Fatalf("stamp = %q (%v), want one carrying %s", stamp, err, imageA)
@@ -38,7 +35,7 @@ func TestBuildGoldenAdoptsMatchingStampWithoutBoot(t *testing.T) {
 		eng := newFakeEngine()
 		eng.imageIDs = map[string]string{testKey.Template: imageA}
 		m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1})
-		g := seedGolden(t, m, imageA)
+		g := seedGolden(t, m, testKey, imageA)
 
 		m.refillOnce(t.Context())
 		waitFor(t, func() bool {
@@ -61,12 +58,9 @@ func TestImageChangeDropsGoldenAndRebuildsOnce(t *testing.T) {
 		eng := newFakeEngine()
 		eng.imageIDs = map[string]string{testKey.Template: imageA}
 		m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 2})
-		seedGolden(t, m, imageA)
+		seedGolden(t, m, testKey, imageA)
 		m.refillOnce(t.Context())
-		waitFor(t, func() bool {
-			infos, _ := m.Info()
-			return infos[0].Warm == 2
-		})
+		waitWarm(t, m, 2)
 
 		eng.mu.Lock()
 		eng.imageIDs = map[string]string{testKey.Template: imageB}
@@ -86,10 +80,7 @@ func TestImageChangeDropsGoldenAndRebuildsOnce(t *testing.T) {
 			return infos[0].Golden
 		})
 		m.refillOnce(t.Context())
-		waitFor(t, func() bool {
-			infos, _ := m.Info()
-			return infos[0].Warm == 2
-		})
+		waitWarm(t, m, 2)
 		removedBefore := len(eng.removedNames())
 		m.checkImagesOnce(t.Context())
 		m.refillOnce(t.Context())
@@ -112,12 +103,9 @@ func TestImageListFailureChangesNothing(t *testing.T) {
 		eng := newFakeEngine()
 		eng.imageIDs = map[string]string{testKey.Template: imageA}
 		m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 2})
-		g := seedGolden(t, m, imageA)
+		g := seedGolden(t, m, testKey, imageA)
 		m.refillOnce(t.Context())
-		waitFor(t, func() bool {
-			infos, _ := m.Info()
-			return infos[0].Warm == 2
-		})
+		waitWarm(t, m, 2)
 
 		eng.mu.Lock()
 		eng.imageErr = errors.New("cocoon image list: exit status 1")

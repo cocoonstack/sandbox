@@ -15,16 +15,12 @@ import (
 func TestScanFileEmitsEachNonZeroChunkOnce(t *testing.T) {
 	size := 4*DigestChunkSize + 5
 	path := filepath.Join(t.TempDir(), "disk.img")
-	f, err := os.Create(path)
-	if err != nil {
-		t.Fatalf("create: %v", err)
-	}
-	defer func() { _ = f.Close() }()
-	if err = f.Truncate(size); err != nil {
+	f := createFile(t, path)
+	if err := f.Truncate(size); err != nil {
 		t.Fatalf("truncate: %v", err)
 	}
 	for off, data := range map[int64]string{DigestChunkSize - 2: "abcd", DigestChunkSize + 10: "zz", DigestChunkSize + 1<<20: "yy", 4*DigestChunkSize + 1: "t"} {
-		if _, err = f.WriteAt([]byte(data), off); err != nil {
+		if _, err := f.WriteAt([]byte(data), off); err != nil {
 			t.Fatalf("write at %d: %v", off, err)
 		}
 	}
@@ -56,12 +52,8 @@ func TestScanFileEmitsEachNonZeroChunkOnce(t *testing.T) {
 
 func TestScanFileDoesNotReadHoles(t *testing.T) {
 	size := 6 * DigestChunkSize
-	f, err := os.Create(filepath.Join(t.TempDir(), "holes.img"))
-	if err != nil {
-		t.Fatalf("create: %v", err)
-	}
-	defer func() { _ = f.Close() }()
-	if err = f.Truncate(size); err != nil {
+	f := createFile(t, filepath.Join(t.TempDir(), "holes.img"))
+	if err := f.Truncate(size); err != nil {
 		t.Fatalf("truncate: %v", err)
 	}
 	reads := 0
@@ -75,8 +67,13 @@ func TestScanFileDoesNotReadHoles(t *testing.T) {
 	if reads != 0 {
 		t.Errorf("a hole-only file asked for %d read buffers, want 0", reads)
 	}
-	if len(digest.Chunks) != 6 || digest.Chunks[0] != zeroSum(DigestChunkSize) {
-		t.Errorf("hole chunks do not carry the zero-chunk sum: %d chunks", len(digest.Chunks))
+	if len(digest.Chunks) != 6 {
+		t.Fatalf("%d chunks, want 6", len(digest.Chunks))
+	}
+	for i, sum := range digest.Chunks {
+		if sum != zeroSum(DigestChunkSize) {
+			t.Errorf("hole chunk %d does not carry the zero-chunk sum", i)
+		}
 	}
 }
 
@@ -84,7 +81,7 @@ func TestWriteChunkRejectsWrongLengthAndChecksum(t *testing.T) {
 	data := "payload"
 	sum := sha256.Sum256([]byte(data))
 	badSum := "0000000000000000000000000000000000000000000000000000000000000000"
-	for _, tc := range []struct {
+	for _, tt := range []struct {
 		name  string
 		size  int64
 		index int64
@@ -97,24 +94,26 @@ func TestWriteChunkRejectsWrongLengthAndChecksum(t *testing.T) {
 		{"wrong sum", int64(len(data)), 0, badSum, data, "checksum"},
 		{"index outside file", int64(len(data)), 1, hex.EncodeToString(sum[:]), data, "outside"},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			f, err := os.Create(filepath.Join(t.TempDir(), "chunk"))
-			if err != nil {
-				t.Fatalf("create: %v", err)
-			}
-			defer func() { _ = f.Close() }()
-			err = WriteChunk(f, tc.size, tc.index, tc.sha, strings.NewReader(tc.body))
-			if err == nil || !strings.Contains(err.Error(), tc.want) {
-				t.Errorf("WriteChunk = %v, want an error containing %q", err, tc.want)
+		t.Run(tt.name, func(t *testing.T) {
+			f := createFile(t, filepath.Join(t.TempDir(), "chunk"))
+			err := WriteChunk(f, tt.size, tt.index, tt.sha, strings.NewReader(tt.body))
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Errorf("WriteChunk = %v, want an error containing %q", err, tt.want)
 			}
 		})
 	}
-	f, err := os.Create(filepath.Join(t.TempDir(), "ok"))
+	f := createFile(t, filepath.Join(t.TempDir(), "ok"))
+	if err := WriteChunk(f, int64(len(data)), 0, hex.EncodeToString(sum[:]), strings.NewReader(data)); err != nil {
+		t.Errorf("WriteChunk of a matching chunk: %v", err)
+	}
+}
+
+func createFile(t *testing.T, path string) *os.File {
+	t.Helper()
+	f, err := os.Create(path)
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	defer func() { _ = f.Close() }()
-	if err = WriteChunk(f, int64(len(data)), 0, hex.EncodeToString(sum[:]), strings.NewReader(data)); err != nil {
-		t.Errorf("WriteChunk of a matching chunk: %v", err)
-	}
+	t.Cleanup(func() { _ = f.Close() })
+	return f
 }

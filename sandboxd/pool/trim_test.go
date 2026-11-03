@@ -12,7 +12,7 @@ import (
 
 func TestCaptureTrimRunsBeforeTheSnapOnlyForItsPool(t *testing.T) {
 	eng := newFakeEngine()
-	other := types.PoolKey{Template: "py:3.12", Net: testKey.Net, Size: testKey.Size}
+	other := tplKey("py:3.12")
 	m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1, CaptureTrim: true}, config.PoolSpec{PoolKey: other, Warm: 1})
 
 	trimmed := mustClaim(t, m, testKey)

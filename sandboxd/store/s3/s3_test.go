@@ -28,15 +28,14 @@ import (
 )
 
 func TestS3BackendContract(t *testing.T) {
-	fake := &fakeS3{objects: map[string][]byte{}}
-	st := newTestStore(t, fake)
+	_, st := newFakeStore(t)
 	storetest.RunContract(t, st)
 }
 
 func TestDeleteRetryConverges(t *testing.T) {
 	const id = "ck_00000000000000bb"
 	fake := &fakeS3{objects: map[string][]byte{
-		"ck/" + id + "/" + store.MetaFile:                            []byte(`{"id":"` + id + `"}`),
+		"ck/" + id + "/" + store.MetaFile:                            metaJSON(id),
 		"ck/manifests/" + id + "/" + store.ExportDir + "-first.json": []byte(`{"lineage":"` + id + `","files":[]}`),
 	}}
 	st := newTestStore(t, fake)
@@ -58,7 +57,7 @@ func TestDeleteRetainsMetaUntilManifestsAreRefreshed(t *testing.T) {
 		"ck/manifests/" + id + "/export-first.json",
 		"ck/manifests/" + id + "/export-second.json",
 	}
-	for _, tc := range []struct {
+	for _, tt := range []struct {
 		name       string
 		failList   bool
 		failDelete bool
@@ -66,15 +65,15 @@ func TestDeleteRetainsMetaUntilManifestsAreRefreshed(t *testing.T) {
 		{name: "list failure", failList: true},
 		{name: "delete failure", failDelete: true},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
+		t.Run(tt.name, func(t *testing.T) {
 			fake := &fakeS3{
 				objects: map[string][]byte{
-					metaKey:         []byte(`{"id":"` + id + `"}`),
+					metaKey:         metaJSON(id),
 					manifestKeys[0]: []byte(`{"lineage":"` + id + `","files":[]}`),
 					manifestKeys[1]: []byte(`{"lineage":"` + id + `","files":[]}`),
 				},
-				failList:   tc.failList,
-				failDelete: tc.failDelete,
+				failList:   tt.failList,
+				failDelete: tt.failDelete,
 			}
 			st := newTestStore(t, fake)
 
@@ -130,7 +129,7 @@ func TestDeleteRetainsMetaUntilManifestsAreRefreshed(t *testing.T) {
 func TestFetchReportsMetaWithoutExportAsNotFound(t *testing.T) {
 	const id = "ck_00000000000000cc"
 	fake := &fakeS3{objects: map[string][]byte{
-		"ck/" + id + "/" + store.MetaFile: []byte(`{"id":"` + id + `"}`),
+		"ck/" + id + "/" + store.MetaFile: metaJSON(id),
 	}}
 	st := newTestStore(t, fake)
 	if _, _, _, err := st.Fetch(t.Context(), id); !errors.Is(err, store.ErrNotFound) {
@@ -141,11 +140,8 @@ func TestFetchReportsMetaWithoutExportAsNotFound(t *testing.T) {
 func TestFetchOutlivesTheCallerThatStartedIt(t *testing.T) {
 	const id = "ck_00000000000000dd"
 	metaKey := "ck/" + id + "/" + store.MetaFile
-	fake := &fakeS3{objects: map[string][]byte{}, exportGate: make(chan struct{}), exportEntered: make(chan struct{}, 1)}
-	st := newTestStore(t, fake)
-	release := sync.OnceFunc(func() { close(fake.exportGate) })
-	t.Cleanup(release)
-	publishRecord(t, st, id, []byte(`{"id":"`+id+`"}`), "payload")
+	fake, st, release := newGatedStore(t, "")
+	publishRecord(t, st, id, metaJSON(id), "payload")
 	fake.resetRequests()
 
 	first, hangUp := context.WithCancel(t.Context())
@@ -182,8 +178,7 @@ func TestFetchOutlivesTheCallerThatStartedIt(t *testing.T) {
 
 func TestPublishDigestedRetryAndMetaRequestAccounting(t *testing.T) {
 	const id = "ck_00000000000000dd"
-	fake := &fakeS3{objects: map[string][]byte{}}
-	st := newTestStore(t, fake)
+	fake, st := newFakeStore(t)
 	meta := []byte(`{"id":"` + id + `","gen":1}`)
 	content := "retry-body"
 	chunk := sha256.Sum256([]byte(content))
@@ -250,8 +245,7 @@ func TestPublishDigestedRetryAndMetaRequestAccounting(t *testing.T) {
 
 func TestPublishDigestedFailurePreservesCommittedGeneration(t *testing.T) {
 	const id = "ck_00000000000000ee"
-	fake := &fakeS3{objects: map[string][]byte{}}
-	st := newTestStore(t, fake)
+	fake, st := newFakeStore(t)
 	oldMeta := []byte(`{"id":"` + id + `","gen":1}`)
 	oldStaging := stageRecord(t, st, id, oldMeta, "old")
 	oldDigest, err := storetest.PublishDigested(t.Context(), st, oldStaging, id)
@@ -322,7 +316,7 @@ func TestRepublishRetainsGenerationSelectedByAnotherStore(t *testing.T) {
 	if err = writer.Delete(t.Context(), id); err != nil {
 		t.Fatalf("delete the record: %v", err)
 	}
-	if _, ok := fake.get("ck/" + id + "/" + store.MetaFile); ok {
+	if fake.has("ck/" + id + "/" + store.MetaFile) {
 		t.Error("meta survived Delete")
 	}
 	gen := filepath.Join(reader.staging, "selected-first")
@@ -337,7 +331,7 @@ func TestRepublishRetainsGenerationSelectedByAnotherStore(t *testing.T) {
 
 func TestFetchPrunesSupersededGenerationsIdlePastTheGrace(t *testing.T) {
 	const id = "ck_00000000000000aa"
-	st := newTestStore(t, &fakeS3{objects: map[string][]byte{}})
+	_, st := newFakeStore(t)
 	fetchGen := func(gen int) string {
 		t.Helper()
 		publishRecord(t, st, id, fmt.Appendf(nil, `{"id":"%s","gen":%d}`, id, gen), fmt.Sprint(gen))
@@ -367,7 +361,7 @@ func TestFetchPrunesSupersededGenerationsIdlePastTheGrace(t *testing.T) {
 
 func TestFetchHitRefreshesTheGenerationsUse(t *testing.T) {
 	const id = "ck_00000000000000aa"
-	st := newTestStore(t, &fakeS3{objects: map[string][]byte{}})
+	_, st := newFakeStore(t)
 	publishRecord(t, st, id, []byte(`{"id":"`+id+`","gen":1}`), "first")
 	export, _, _, err := st.Fetch(t.Context(), id)
 	if err != nil {
@@ -439,11 +433,10 @@ func TestS3BackendContractRealEndpoint(t *testing.T) {
 
 func TestSparseExportStaysSparseThroughS3(t *testing.T) {
 	const id = "ck_00000000000000a1"
-	fake := &fakeS3{objects: map[string][]byte{}}
-	st := newTestStore(t, fake)
+	fake, st := newFakeStore(t)
 	size := 12*store.DigestChunkSize + 4096
-	meta := []byte(`{"id":"` + id + `"}`)
-	staging, src := stageSparseRecord(t, st, id, meta, size, map[int64]string{0: "head", 3*store.DigestChunkSize + 100: "mid", 11*store.DigestChunkSize + 10: "tail"})
+	meta := metaJSON(id)
+	staging, src := stageSparseRecord(t, st, id, meta, size, map[int64][]byte{0: []byte("head"), 3*store.DigestChunkSize + 100: []byte("mid"), 11*store.DigestChunkSize + 10: []byte("tail")})
 	srcSum := fileSum(t, src)
 	if err := st.Publish(t.Context(), staging, id, ""); err != nil {
 		t.Fatalf("Publish: %v", err)
@@ -472,9 +465,8 @@ func TestSparseExportStaysSparseThroughS3(t *testing.T) {
 
 func TestAllZeroDataChunkIsNotUploaded(t *testing.T) {
 	const id = "ck_00000000000000a2"
-	fake := &fakeS3{objects: map[string][]byte{}}
-	st := newTestStore(t, fake)
-	meta := []byte(`{"id":"` + id + `"}`)
+	fake, st := newFakeStore(t)
+	meta := metaJSON(id)
 	staging := stageRecord(t, st, id, meta, "")
 	src := filepath.Join(staging, store.ExportDir, "disk.img")
 	dense := make([]byte, 2*store.DigestChunkSize+10)
@@ -501,10 +493,10 @@ func TestAllZeroDataChunkIsNotUploaded(t *testing.T) {
 
 func TestFetchFailsOnDamagedChunks(t *testing.T) {
 	const id = "ck_00000000000000a3"
-	meta := []byte(`{"id":"` + id + `"}`)
+	meta := metaJSON(id)
 	sum := sha256.Sum256([]byte("payload"))
 	chunkKey := "ck/chunks/" + id + "/" + hex.EncodeToString(sum[:])
-	for _, tc := range []struct {
+	for _, tt := range []struct {
 		name   string
 		damage func(*fakeS3)
 		want   string
@@ -512,14 +504,13 @@ func TestFetchFailsOnDamagedChunks(t *testing.T) {
 		{"flipped byte", func(f *fakeS3) { f.objects[chunkKey][0] ^= 0xff }, "checksum"},
 		{"missing chunk", func(f *fakeS3) { delete(f.objects, chunkKey) }, "is missing"},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			fake := &fakeS3{objects: map[string][]byte{}}
-			st := newTestStore(t, fake)
+		t.Run(tt.name, func(t *testing.T) {
+			fake, st := newFakeStore(t)
 			publishRecord(t, st, id, meta, "payload")
-			tc.damage(fake)
+			tt.damage(fake)
 			_, _, _, err := st.Fetch(t.Context(), id)
-			if err == nil || !strings.Contains(err.Error(), tc.want) {
-				t.Fatalf("Fetch = %v, want an error containing %q", err, tc.want)
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("Fetch = %v, want an error containing %q", err, tt.want)
 			}
 			if errors.Is(err, store.ErrNotFound) {
 				t.Errorf("a damaged record must not read as absent: %v", err)
@@ -530,9 +521,9 @@ func TestFetchFailsOnDamagedChunks(t *testing.T) {
 
 func TestPublishDigestedHashesHolesLikeZeros(t *testing.T) {
 	const id = "ck_00000000000000a4"
-	st := newTestStore(t, &fakeS3{objects: map[string][]byte{}})
+	_, st := newFakeStore(t)
 	size := 3*store.DigestChunkSize + 7
-	staging, src := stageSparseRecord(t, st, id, []byte(`{"id":"`+id+`"}`), size, map[int64]string{store.DigestChunkSize + 5: "data", size - 1: "z"})
+	staging, src := stageSparseRecord(t, st, id, metaJSON(id), size, map[int64][]byte{store.DigestChunkSize + 5: []byte("data"), size - 1: []byte("z")})
 	sums := denseChunkSums(t, src)
 	digest, err := storetest.PublishDigested(t.Context(), st, staging, id)
 	if err != nil {
@@ -549,9 +540,9 @@ func TestPublishDigestedHashesHolesLikeZeros(t *testing.T) {
 
 func TestPublishDigestedSplitsChunksAtTheFixedBoundary(t *testing.T) {
 	const id = "ck_00000000000000a5"
-	st := newTestStore(t, &fakeS3{objects: map[string][]byte{}})
+	_, st := newFakeStore(t)
 	content := string(bytes.Repeat([]byte{'x'}, int(store.DigestChunkSize))) + "y"
-	staging := stageRecord(t, st, id, []byte(`{"id":"`+id+`"}`), content)
+	staging := stageRecord(t, st, id, metaJSON(id), content)
 	digest, err := storetest.PublishDigested(t.Context(), st, staging, id)
 	if err != nil {
 		t.Fatalf("PublishDigested: %v", err)
@@ -570,13 +561,12 @@ func TestPublishDigestedSplitsChunksAtTheFixedBoundary(t *testing.T) {
 
 func TestLineageDedupUploadsOnlyChangedChunks(t *testing.T) {
 	const lineage = "sbx_00000000000000a1"
-	fake := &fakeS3{objects: map[string][]byte{}}
-	st := newTestStore(t, fake)
+	fake, st := newFakeStore(t)
 	cs := store.DigestChunkSize
-	base := map[int64]string{0: "c0", 2 * cs: "c2", 4 * cs: "c4", 6 * cs: "c6"}
+	base := map[int64][]byte{0: []byte("c0"), 2 * cs: []byte("c2"), 4 * cs: []byte("c4"), 6 * cs: []byte("c6")}
 	changed := maps.Clone(base)
-	changed[4*cs] = "changed"
-	publish := func(id string, gen int, writes map[int64]string, scope string) (puts int, srcSum [sha256.Size]byte) {
+	changed[4*cs] = []byte("changed")
+	publish := func(id string, gen int, writes map[int64][]byte, scope string) (puts int, srcSum [sha256.Size]byte) {
 		t.Helper()
 		before, _ := fake.chunkPuts("ck/chunks/")
 		staging, src := stageSparseRecord(t, st, id, fmt.Appendf(nil, `{"id":"%s","gen":%d}`, id, gen), 8*cs, writes)
@@ -613,14 +603,13 @@ func TestLineageDedupUploadsOnlyChangedChunks(t *testing.T) {
 
 func TestPublishReadsOnlyItsLineage(t *testing.T) {
 	const lineage = "sbx_00000000000000a4"
-	fake := &fakeS3{objects: map[string][]byte{}}
-	st := newTestStore(t, fake)
+	fake, st := newFakeStore(t)
 	for _, id := range []string{"ck_00000000000000d1", "ck_00000000000000d2"} {
-		publishRecord(t, st, id, []byte(`{"id":"`+id+`"}`), "unrelated")
+		publishRecord(t, st, id, metaJSON(id), "unrelated")
 	}
 	publishIn := func(id string) {
 		t.Helper()
-		staging := stageRecord(t, st, id, []byte(`{"id":"`+id+`"}`), "claim")
+		staging := stageRecord(t, st, id, metaJSON(id), "claim")
 		if err := st.Publish(t.Context(), staging, id, lineage); err != nil {
 			t.Fatalf("Publish %s: %v", id, err)
 		}
@@ -641,12 +630,11 @@ func TestPublishReadsOnlyItsLineage(t *testing.T) {
 
 func TestPublishUploadsAnUnreferencedChunkAgain(t *testing.T) {
 	const lineage = "sbx_00000000000000a3"
-	fake := &fakeS3{objects: map[string][]byte{}}
-	st := newTestStore(t, fake)
+	fake, st := newFakeStore(t)
 	publishIn := func(id, content, scope string) int {
 		t.Helper()
 		before, _ := fake.chunkPuts("ck/chunks/")
-		staging := stageRecord(t, st, id, []byte(`{"id":"`+id+`"}`), content)
+		staging := stageRecord(t, st, id, metaJSON(id), content)
 		if err := st.Publish(t.Context(), staging, id, scope); err != nil {
 			t.Fatalf("Publish %s: %v", id, err)
 		}
@@ -678,10 +666,9 @@ func TestDeletedRecordLeavesNoPrefixToList(t *testing.T) {
 		gone = "ck_00000000000000b1"
 		live = "ck_00000000000000b2"
 	)
-	fake := &fakeS3{objects: map[string][]byte{}}
-	st := newTestStore(t, fake)
-	publishRecord(t, st, gone, []byte(`{"id":"`+gone+`"}`), "gone-payload")
-	publishRecord(t, st, live, []byte(`{"id":"`+live+`"}`), "live-payload")
+	fake, st := newFakeStore(t)
+	publishRecord(t, st, gone, metaJSON(gone), "gone-payload")
+	publishRecord(t, st, live, metaJSON(live), "live-payload")
 	if err := st.Delete(t.Context(), gone); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
@@ -701,21 +688,20 @@ func TestDeletedRecordLeavesNoPrefixToList(t *testing.T) {
 	}
 
 	sum := sha256.Sum256([]byte("gone-payload"))
-	if _, ok := fake.get("ck/chunks/" + gone + "/" + hex.EncodeToString(sum[:])); !ok {
+	if !fake.has("ck/chunks/" + gone + "/" + hex.EncodeToString(sum[:])) {
 		t.Error("Delete freed the chunk of the deleted record")
 	}
 }
 
 func TestSweepGenerationsLeavesTheBucketAlone(t *testing.T) {
 	const id = "ck_00000000000000a8"
-	fake := &fakeS3{objects: map[string][]byte{}}
-	st := newTestStore(t, fake)
+	fake, st := newFakeStore(t)
 	publishRecord(t, st, id, []byte(`{"id":"`+id+`","gen":1}`), "first")
 	publishRecord(t, st, id, []byte(`{"id":"`+id+`","gen":2}`), "second")
 	if err := st.Delete(t.Context(), id); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
-	fake.age("", 2*store.GenerationGrace)
+	fake.age(2 * store.GenerationGrace)
 	want := fake.keys()
 	if err := st.SweepGenerations(t.Context()); err != nil {
 		t.Fatalf("SweepGenerations: %v", err)
@@ -730,7 +716,7 @@ func TestSweepGenerationsDropsTheCacheOfARecordAPeerDeleted(t *testing.T) {
 	fake := &fakeS3{objects: map[string][]byte{}}
 	owner, fetcher := newTestStore(t, fake), newTestStore(t, fake)
 	for _, id := range []string{deleted, live} {
-		publishRecord(t, owner, id, []byte(`{"id":"`+id+`"}`), id)
+		publishRecord(t, owner, id, metaJSON(id), id)
 		if _, _, _, err := fetcher.Fetch(t.Context(), id); err != nil {
 			t.Fatalf("fetch %s: %v", id, err)
 		}
@@ -754,11 +740,8 @@ func TestSweepGenerationsDropsTheCacheOfARecordAPeerDeleted(t *testing.T) {
 
 func TestSweepGenerationsDropsACacheACanceledFetchInstalledAfterDelete(t *testing.T) {
 	const id = "ck_00000000000000ab"
-	fake := &fakeS3{objects: map[string][]byte{}, exportGate: make(chan struct{}), exportEntered: make(chan struct{}, 1), gateOn: "/chunks/"}
-	st := newTestStore(t, fake)
-	release := sync.OnceFunc(func() { close(fake.exportGate) })
-	t.Cleanup(release)
-	publishRecord(t, st, id, []byte(`{"id":"`+id+`"}`), "payload")
+	fake, st, release := newGatedStore(t, "/chunks/")
+	publishRecord(t, st, id, metaJSON(id), "payload")
 	ctx, cancel := context.WithCancel(t.Context())
 	fetched := make(chan error, 1)
 	go func() {
@@ -801,10 +784,9 @@ func TestSweepGenerationsDropsACacheACanceledFetchInstalledAfterDelete(t *testin
 
 func TestDeleteRemovesTheLineageMarker(t *testing.T) {
 	const lineage = "sbx_00000000000000a5"
-	fake := &fakeS3{objects: map[string][]byte{}}
-	st := newTestStore(t, fake)
+	fake, st := newFakeStore(t)
 	for _, id := range []string{"ck_00000000000000f1", "ck_00000000000000f2"} {
-		staging := stageRecord(t, st, id, []byte(`{"id":"`+id+`"}`), "claim")
+		staging := stageRecord(t, st, id, metaJSON(id), "claim")
 		if err := st.Publish(t.Context(), staging, id, lineage); err != nil {
 			t.Fatalf("Publish %s: %v", id, err)
 		}
@@ -812,10 +794,10 @@ func TestDeleteRemovesTheLineageMarker(t *testing.T) {
 	if err := st.Delete(t.Context(), "ck_00000000000000f1"); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
-	if _, ok := fake.get("ck/lineages/" + lineage + "/ck_00000000000000f1"); ok {
+	if fake.has("ck/lineages/" + lineage + "/ck_00000000000000f1") {
 		t.Error("Delete left the lineage marker of the deleted record")
 	}
-	if _, ok := fake.get("ck/lineages/" + lineage + "/ck_00000000000000f2"); !ok {
+	if !fake.has("ck/lineages/" + lineage + "/ck_00000000000000f2") {
 		t.Error("Delete removed the marker of another record")
 	}
 }
@@ -829,9 +811,8 @@ func TestTransferBudgetStaysBelowTheReuseWindow(t *testing.T) {
 
 func TestFetchFileDownloadsOnlyTheRequestedFile(t *testing.T) {
 	const id = "ck_00000000000000aa"
-	meta := []byte(`{"id":"` + id + `"}`)
-	fake := &fakeS3{objects: map[string][]byte{}}
-	st := newTestStore(t, fake)
+	meta := metaJSON(id)
+	fake, st := newFakeStore(t)
 	staging := stageRecord(t, st, id, meta, "disk-bytes")
 	if err := os.WriteFile(filepath.Join(staging, store.ExportDir, "memory.bin"), []byte("memory-bytes"), 0o600); err != nil {
 		t.Fatalf("write memory: %v", err)
@@ -860,11 +841,8 @@ func TestFetchFileDownloadsOnlyTheRequestedFile(t *testing.T) {
 
 func TestFetchFileInstallsOnlyACompleteDownload(t *testing.T) {
 	const id = "ck_00000000000000aa"
-	meta := []byte(`{"id":"` + id + `"}`)
-	fake := &fakeS3{objects: map[string][]byte{}, exportGate: make(chan struct{}), exportEntered: make(chan struct{}, 1), gateOn: "/chunks/"}
-	st := newTestStore(t, fake)
-	release := sync.OnceFunc(func() { close(fake.exportGate) })
-	t.Cleanup(release)
+	meta := metaJSON(id)
+	fake, st, release := newGatedStore(t, "/chunks/")
 	publishRecord(t, st, id, meta, "disk-bytes")
 	dst := filepath.Join(t.TempDir(), "disk.img")
 
@@ -890,9 +868,9 @@ func TestFetchFileInstallsOnlyACompleteDownload(t *testing.T) {
 
 func TestFetchFileKeepsHoles(t *testing.T) {
 	const id = "ck_00000000000000a2"
-	st := newTestStore(t, &fakeS3{objects: map[string][]byte{}})
+	_, st := newFakeStore(t)
 	size := 12*store.DigestChunkSize + 4096
-	staging, src := stageSparseRecord(t, st, id, []byte(`{"id":"`+id+`"}`), size, map[int64]string{0: "head", 11*store.DigestChunkSize + 10: "tail"})
+	staging, src := stageSparseRecord(t, st, id, metaJSON(id), size, map[int64][]byte{0: []byte("head"), 11*store.DigestChunkSize + 10: []byte("tail")})
 	srcSum := fileSum(t, src)
 	if err := st.Publish(t.Context(), staging, id, ""); err != nil {
 		t.Fatalf("Publish: %v", err)
@@ -910,144 +888,6 @@ func TestFetchFileKeepsHoles(t *testing.T) {
 	}
 	if blocks, limit := allocatedBytes(t, dst), 2*store.DigestChunkSize+1<<20; blocks > limit {
 		t.Errorf("fetched file allocates %d bytes, want at most %d for two data chunks", blocks, limit)
-	}
-}
-
-func ageCache(t *testing.T, dir string) {
-	t.Helper()
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		t.Fatalf("read cache %s: %v", dir, err)
-	}
-	old := time.Now().Add(-2 * store.GenerationGrace)
-	for _, e := range entries {
-		if err := os.Chtimes(filepath.Join(dir, e.Name()), old, old); err != nil {
-			t.Fatalf("age cache: %v", err)
-		}
-	}
-}
-
-func publishRecord(t *testing.T, st *Store, id string, meta []byte, content string) {
-	t.Helper()
-	staging := stageRecord(t, st, id, meta, content)
-	if err := st.Publish(t.Context(), staging, id, ""); err != nil {
-		t.Fatalf("publish record: %v", err)
-	}
-}
-
-func stageRecord(t *testing.T, st *Store, id string, meta []byte, content string) string {
-	t.Helper()
-	staging, err := st.Stage(id)
-	if err != nil {
-		t.Fatalf("stage record: %v", err)
-	}
-	export := filepath.Join(staging, store.ExportDir)
-	if err := os.MkdirAll(export, 0o750); err != nil {
-		t.Fatalf("mkdir export: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(export, "disk.img"), []byte(content), 0o600); err != nil {
-		t.Fatalf("write export: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(staging, store.MetaFile), meta, 0o600); err != nil {
-		t.Fatalf("write meta: %v", err)
-	}
-	return staging
-}
-
-func stageSparseRecord(t *testing.T, st *Store, id string, meta []byte, size int64, writes map[int64]string) (staging, path string) {
-	t.Helper()
-	staging = stageRecord(t, st, id, meta, "")
-	path = filepath.Join(staging, store.ExportDir, "disk.img")
-	f, err := os.OpenFile(path, os.O_WRONLY, 0)
-	if err != nil {
-		t.Fatalf("open export: %v", err)
-	}
-	defer func() { _ = f.Close() }()
-	if err = f.Truncate(size); err != nil {
-		t.Fatalf("truncate export: %v", err)
-	}
-	for off, data := range writes {
-		if _, err = f.WriteAt([]byte(data), off); err != nil {
-			t.Fatalf("write export at %d: %v", off, err)
-		}
-	}
-	return staging, path
-}
-
-func fileSum(t *testing.T, path string) [sha256.Size]byte {
-	t.Helper()
-	f, err := os.Open(path)
-	if err != nil {
-		t.Fatalf("open %s: %v", path, err)
-	}
-	defer func() { _ = f.Close() }()
-	h := sha256.New()
-	if _, err = io.Copy(h, f); err != nil {
-		t.Fatalf("hash %s: %v", path, err)
-	}
-	return [sha256.Size]byte(h.Sum(nil))
-}
-
-func allocatedBytes(t *testing.T, path string) int64 {
-	t.Helper()
-	info, err := os.Stat(path)
-	if err != nil {
-		t.Fatalf("stat %s: %v", path, err)
-	}
-	return info.Sys().(*syscall.Stat_t).Blocks * 512
-}
-
-func denseChunkSums(t *testing.T, path string) [][sha256.Size]byte {
-	t.Helper()
-	f, err := os.Open(path)
-	if err != nil {
-		t.Fatalf("open %s: %v", path, err)
-	}
-	defer func() { _ = f.Close() }()
-	var sums [][sha256.Size]byte
-	buf := make([]byte, store.DigestChunkSize)
-	for {
-		n, err := io.ReadFull(f, buf)
-		if n > 0 {
-			sums = append(sums, sha256.Sum256(buf[:n]))
-		}
-		if err != nil {
-			return sums
-		}
-	}
-}
-
-func newTestStore(t *testing.T, fake *fakeS3) *Store {
-	t.Helper()
-	return newTestStoreAt(t, fake, false)
-}
-
-func newTestStoreAt(t *testing.T, endpoint http.Handler, unsignedAcceptEncoding bool) *Store {
-	t.Helper()
-	ts := httptest.NewServer(endpoint)
-	t.Cleanup(ts.Close)
-	t.Setenv("AWS_ACCESS_KEY_ID", "test")
-	t.Setenv("AWS_SECRET_ACCESS_KEY", "test")
-
-	t.Setenv("AWS_REQUEST_CHECKSUM_CALCULATION", "when_required")
-	t.Setenv("AWS_RESPONSE_CHECKSUM_VALIDATION", "when_required")
-	st, err := New(t.Context(), store.S3Config{
-		Bucket: "testbucket", Prefix: "ck/", Endpoint: ts.URL,
-		Region: "us-east-1", ForcePathStyle: true, UnsignedAcceptEncoding: unsignedAcceptEncoding,
-	}, t.TempDir(), store.CheckpointIDRe)
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	return st
-}
-
-func assertSingleMetaGet(t *testing.T, fake *fakeS3, metaKey string) {
-	t.Helper()
-	if got := fake.requestCount(http.MethodGet, metaKey); got != 1 {
-		t.Errorf("meta GET requests = %d, want 1", got)
-	}
-	if got := fake.requestCount(http.MethodHead, metaKey); got != 0 {
-		t.Errorf("meta HEAD requests = %d, want 0", got)
 	}
 }
 
@@ -1095,12 +935,8 @@ func (f *fakeS3) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		f.handleDeleteObjects(w, r)
 	case r.Method == http.MethodPut:
 		f.handlePutObject(w, r, key)
-	case r.Method == http.MethodHead:
-		f.handleHeadObject(w, key)
 	case r.Method == http.MethodGet:
-		f.handleGetObject(w, r, key)
-	case r.Method == http.MethodDelete:
-		f.handleDeleteObject(w, key)
+		f.handleGetObject(w, key)
 	default:
 		http.Error(w, "unsupported", http.StatusNotImplemented)
 	}
@@ -1133,25 +969,25 @@ func (f *fakeS3) objectMetadata(key string) map[string]string {
 	return maps.Clone(f.metadata[key])
 }
 
-func (f *fakeS3) chunkPuts(prefix string) (count int, bytes int64) {
+func (f *fakeS3) chunkPuts(prefix string) (count int, size int64) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	for key, lengths := range f.putLengths {
 		if strings.HasPrefix(key, prefix) {
 			count += len(lengths)
 			for _, n := range lengths {
-				bytes += n
+				size += n
 			}
 		}
 	}
-	return count, bytes
+	return count, size
 }
 
-func (f *fakeS3) get(key string) ([]byte, bool) {
+func (f *fakeS3) has(key string) bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	body, ok := f.objects[key]
-	return body, ok
+	_, ok := f.objects[key]
+	return ok
 }
 
 func (f *fakeS3) keys() []string {
@@ -1160,13 +996,11 @@ func (f *fakeS3) keys() []string {
 	return slices.Sorted(maps.Keys(f.objects))
 }
 
-func (f *fakeS3) age(prefix string, by time.Duration) {
+func (f *fakeS3) age(by time.Duration) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	for key := range f.objects {
-		if strings.HasPrefix(key, prefix) {
-			f.modified[key] = time.Now().Add(-by)
-		}
+		f.modified[key] = time.Now().Add(-by)
 	}
 }
 
@@ -1188,7 +1022,9 @@ func (f *fakeS3) handlePutObject(w http.ResponseWriter, r *http.Request, key str
 	f.putLengths[key] = append(f.putLengths[key], r.ContentLength)
 	if f.failPuts[key] > 0 {
 		f.failPuts[key]--
-		writeFakeError(w, http.StatusInternalServerError, "InternalError", "injected put failure")
+		w.Header().Set("Content-Type", "application/xml")
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = io.WriteString(w, `<Error><Code>InternalError</Code><Message>injected put failure</Message></Error>`)
 		return
 	}
 	if f.objects == nil {
@@ -1257,17 +1093,7 @@ func (f *fakeS3) handleListObjects(w http.ResponseWriter, r *http.Request) {
 	_ = xml.NewEncoder(w).Encode(result)
 }
 
-func (f *fakeS3) handleHeadObject(w http.ResponseWriter, key string) {
-	body, ok := f.objects[key]
-	if !ok {
-		http.Error(w, "NoSuchKey", http.StatusNotFound)
-		return
-	}
-	writeMetadata(w.Header(), f.metadata[key])
-	w.Header().Set("Content-Length", strconv.Itoa(len(body)))
-}
-
-func (f *fakeS3) handleGetObject(w http.ResponseWriter, r *http.Request, key string) {
+func (f *fakeS3) handleGetObject(w http.ResponseWriter, key string) {
 	body, ok := f.objects[key]
 	if !ok {
 		w.WriteHeader(http.StatusNotFound)
@@ -1275,20 +1101,6 @@ func (f *fakeS3) handleGetObject(w http.ResponseWriter, r *http.Request, key str
 		return
 	}
 	writeMetadata(w.Header(), f.metadata[key])
-	if mod := f.modified[key]; !mod.IsZero() {
-		w.Header().Set("Last-Modified", mod.UTC().Format(http.TimeFormat))
-	}
-	if rng := r.Header.Get("Range"); rng != "" {
-		var start, end int
-		if _, err := fmt.Sscanf(rng, "bytes=%d-%d", &start, &end); err == nil && start < len(body) {
-			end = min(end, len(body)-1)
-			w.Header().Set("Content-Length", strconv.Itoa(end-start+1))
-			w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end, len(body)))
-			w.WriteHeader(http.StatusPartialContent)
-			_, _ = w.Write(body[start : end+1])
-			return
-		}
-	}
 	w.Header().Set("Content-Length", strconv.Itoa(len(body)))
 	_, _ = w.Write(body)
 }
@@ -1338,10 +1150,133 @@ func (f *fakeS3) handleDeleteObjects(w http.ResponseWriter, r *http.Request) {
 	_ = xml.NewEncoder(w).Encode(result)
 }
 
-func (f *fakeS3) handleDeleteObject(w http.ResponseWriter, key string) {
-	delete(f.objects, key)
-	delete(f.metadata, key)
-	w.WriteHeader(http.StatusNoContent)
+func ageCache(t *testing.T, dir string) {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read cache %s: %v", dir, err)
+	}
+	old := time.Now().Add(-2 * store.GenerationGrace)
+	for _, e := range entries {
+		if err := os.Chtimes(filepath.Join(dir, e.Name()), old, old); err != nil {
+			t.Fatalf("age cache: %v", err)
+		}
+	}
+}
+
+func publishRecord(t *testing.T, st *Store, id string, meta []byte, content string) {
+	t.Helper()
+	staging := stageRecord(t, st, id, meta, content)
+	if err := st.Publish(t.Context(), staging, id, ""); err != nil {
+		t.Fatalf("publish record: %v", err)
+	}
+}
+
+func stageRecord(t *testing.T, st *Store, id string, meta []byte, content string) string {
+	t.Helper()
+	return storetest.StageRecord(t, st, id, string(meta), "disk.img", content)
+}
+
+func stageSparseRecord(t *testing.T, st *Store, id string, meta []byte, size int64, writes map[int64][]byte) (staging, path string) {
+	t.Helper()
+	staging = stageRecord(t, st, id, meta, "")
+	return staging, storetest.WriteSparse(t, filepath.Join(staging, store.ExportDir, "disk.img"), size, writes)
+}
+
+func fileSum(t *testing.T, path string) [sha256.Size]byte {
+	t.Helper()
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatalf("open %s: %v", path, err)
+	}
+	defer func() { _ = f.Close() }()
+	h := sha256.New()
+	if _, err = io.Copy(h, f); err != nil {
+		t.Fatalf("hash %s: %v", path, err)
+	}
+	return [sha256.Size]byte(h.Sum(nil))
+}
+
+func allocatedBytes(t *testing.T, path string) int64 {
+	t.Helper()
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat %s: %v", path, err)
+	}
+	return info.Sys().(*syscall.Stat_t).Blocks * 512
+}
+
+func denseChunkSums(t *testing.T, path string) [][sha256.Size]byte {
+	t.Helper()
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatalf("open %s: %v", path, err)
+	}
+	defer func() { _ = f.Close() }()
+	var sums [][sha256.Size]byte
+	buf := make([]byte, store.DigestChunkSize)
+	for {
+		n, err := io.ReadFull(f, buf)
+		if n > 0 {
+			sums = append(sums, sha256.Sum256(buf[:n]))
+		}
+		if err != nil {
+			return sums
+		}
+	}
+}
+
+func newFakeStore(t *testing.T) (*fakeS3, *Store) {
+	t.Helper()
+	fake := &fakeS3{objects: map[string][]byte{}}
+	return fake, newTestStore(t, fake)
+}
+
+func newTestStore(t *testing.T, fake *fakeS3) *Store {
+	t.Helper()
+	return newTestStoreAt(t, fake, false)
+}
+
+func metaJSON(id string) []byte {
+	return []byte(storetest.MetaJSON(id))
+}
+
+func newGatedStore(t *testing.T, gateOn string) (*fakeS3, *Store, func()) {
+	t.Helper()
+	fake := &fakeS3{objects: map[string][]byte{}, exportGate: make(chan struct{}), exportEntered: make(chan struct{}, 1), gateOn: gateOn}
+	st := newTestStore(t, fake)
+	release := sync.OnceFunc(func() { close(fake.exportGate) })
+	t.Cleanup(release)
+	return fake, st, release
+}
+
+func newTestStoreAt(t *testing.T, endpoint http.Handler, unsignedAcceptEncoding bool) *Store {
+	t.Helper()
+	ts := httptest.NewServer(endpoint)
+	t.Cleanup(ts.Close)
+	t.Setenv("AWS_ACCESS_KEY_ID", "test")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "test")
+
+	t.Setenv("AWS_REQUEST_CHECKSUM_CALCULATION", "when_required")
+	t.Setenv("AWS_RESPONSE_CHECKSUM_VALIDATION", "when_required")
+	st, err := New(t.Context(), store.S3Config{
+		Bucket: "testbucket", Prefix: "ck/", Endpoint: ts.URL,
+		Region: "us-east-1", ForcePathStyle: true, UnsignedAcceptEncoding: unsignedAcceptEncoding,
+	}, t.TempDir(), store.CheckpointIDRe)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	return st
+}
+
+func assertSingleMetaGet(t *testing.T, fake *fakeS3, metaKey string) {
+	t.Helper()
+	if got := fake.requestCount(http.MethodGet, metaKey); got != 1 {
+		t.Errorf("meta GET requests = %d, want 1", got)
+	}
+	if got := fake.requestCount(http.MethodHead, metaKey); got != 0 {
+		t.Errorf("meta HEAD requests = %d, want 0", got)
+	}
 }
 
 func requestMetadata(header http.Header) map[string]string {
@@ -1359,10 +1294,4 @@ func writeMetadata(header http.Header, metadata map[string]string) {
 	for key, value := range metadata {
 		header.Set("x-amz-meta-"+key, value)
 	}
-}
-
-func writeFakeError(w http.ResponseWriter, status int, code, message string) {
-	w.Header().Set("Content-Type", "application/xml")
-	w.WriteHeader(status)
-	_, _ = fmt.Fprintf(w, `<Error><Code>%s</Code><Message>%s</Message></Error>`, code, message)
 }

@@ -29,19 +29,9 @@ func TestForwardAllowInjectsSecretAndOverwritesGuestHeader(t *testing.T) {
 	secrets := fakeSecrets{"gh": {"Authorization", "Bearer SECRET"}}
 	events := make(chan Event, 4)
 	p := New(policy, secrets, nil, fixedDial(upstream.Listener.Addr().String()), func(ev Event) { events <- ev }, nil)
-	front := httptest.NewServer(p)
-	defer front.Close()
+	front := serveFront(t, p)
 
-	client := proxyClient(t, front.URL)
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://api.internal/x", nil)
-	if err != nil {
-		t.Fatalf("build request: %v", err)
-	}
-	req.Header.Set("Authorization", "Bearer GUEST")
-	resp, err := client.Do(req)
-	if err != nil {
-		t.Fatalf("proxied GET: %v", err)
-	}
+	resp := proxiedGet(t, front.URL, "http://api.internal/x", func(r *http.Request) { r.Header.Set("Authorization", "Bearer GUEST") })
 	defer func() { _ = resp.Body.Close() }()
 	body, _ := io.ReadAll(resp.Body)
 
@@ -67,18 +57,9 @@ func TestForwardWithoutASecretValueInjectsNothing(t *testing.T) {
 	policy := Policy{Allow: []Rule{{Host: "api.internal", Secret: "gw"}}}
 	events := make(chan Event, 4)
 	p := New(policy, fakeSecrets{"gw": {"Authorization", ""}}, nil, fixedDial(upstream.Listener.Addr().String()), func(ev Event) { events <- ev }, nil)
-	front := httptest.NewServer(p)
-	defer front.Close()
+	front := serveFront(t, p)
 
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://api.internal/x", nil)
-	if err != nil {
-		t.Fatalf("build request: %v", err)
-	}
-	req.Header.Set("Authorization", "Bearer GUEST")
-	resp, err := proxyClient(t, front.URL).Do(req)
-	if err != nil {
-		t.Fatalf("proxied GET: %v", err)
-	}
+	resp := proxiedGet(t, front.URL, "http://api.internal/x", func(r *http.Request) { r.Header.Set("Authorization", "Bearer GUEST") })
 	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusOK || gotAuth != "Bearer GUEST" {
 		t.Errorf("got %d with Authorization %q, want 200 and the guest's own header", resp.StatusCode, gotAuth)
@@ -96,18 +77,9 @@ func TestRelayKeepsTheUpstreamConnForAClosingGuest(t *testing.T) {
 	}))
 	defer upstream.Close()
 	p := New(Policy{Allow: []Rule{{Host: "api.internal"}}}, nil, nil, fixedDial(upstream.Listener.Addr().String()), nil, nil)
-	front := httptest.NewServer(p)
-	defer front.Close()
+	front := serveFront(t, p)
 
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://api.internal/x", nil)
-	if err != nil {
-		t.Fatalf("build request: %v", err)
-	}
-	req.Close = true
-	resp, err := proxyClient(t, front.URL).Do(req)
-	if err != nil {
-		t.Fatalf("proxied GET: %v", err)
-	}
+	resp := proxiedGet(t, front.URL, "http://api.internal/x", func(r *http.Request) { r.Close = true })
 	_ = resp.Body.Close()
 	if <-closeSeen {
 		t.Error("the guest's Connection: close reached the upstream hop")
@@ -129,17 +101,9 @@ func TestCloseReleasesIdleUpstreamConns(t *testing.T) {
 
 	policy := Policy{Allow: []Rule{{Host: "api.internal"}}}
 	p := New(policy, nil, nil, fixedDial(upstream.Listener.Addr().String()), nil, nil)
-	front := httptest.NewServer(p)
-	defer front.Close()
+	front := serveFront(t, p)
 
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://api.internal/x", nil)
-	if err != nil {
-		t.Fatalf("build request: %v", err)
-	}
-	resp, err := proxyClient(t, front.URL).Do(req)
-	if err != nil {
-		t.Fatalf("proxied GET: %v", err)
-	}
+	resp := proxiedGet(t, front.URL, "http://api.internal/x")
 	_, _ = io.Copy(io.Discard, resp.Body)
 	_ = resp.Body.Close()
 
@@ -161,13 +125,9 @@ func TestForwardNeverInjectsInterceptSecret(t *testing.T) {
 	policy := Policy{Allow: []Rule{{Host: "api.internal", Secret: "gh", Intercept: InterceptAlways}}}
 	secrets := fakeSecrets{"gh": {"Authorization", "Bearer SECRET"}}
 	p := New(policy, secrets, nil, fixedDial(upstream.Listener.Addr().String()), nil, nil)
-	front := httptest.NewServer(p)
-	defer front.Close()
+	front := serveFront(t, p)
 
-	resp, err := proxyClient(t, front.URL).Get("http://api.internal/x")
-	if err != nil {
-		t.Fatalf("proxied GET: %v", err)
-	}
+	resp := proxiedGet(t, front.URL, "http://api.internal/x")
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("plaintext forward matching only an intercept rule got %d, want 403", resp.StatusCode)
@@ -186,18 +146,9 @@ func TestForwardNeverInjectsClaimCredentials(t *testing.T) {
 	events := make(chan Event, 1)
 	secrets := credSecrets{creds: map[string][]Credential{"api.internal": {{Name: "API", Header: "X-Api-Key", Value: "k1"}}}}
 	p := New(Policy{Allow: []Rule{{Host: "api.internal"}}}, secrets, nil, fixedDial(upstream.Listener.Addr().String()), func(ev Event) { events <- ev }, nil)
-	front := httptest.NewServer(p)
-	defer front.Close()
+	front := serveFront(t, p)
 
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://api.internal/x", nil)
-	if err != nil {
-		t.Fatalf("build request: %v", err)
-	}
-	req.Header.Set("X-Api-Key", "placeholder")
-	resp, err := proxyClient(t, front.URL).Do(req)
-	if err != nil {
-		t.Fatalf("proxied GET: %v", err)
-	}
+	resp := proxiedGet(t, front.URL, "http://api.internal/x", func(r *http.Request) { r.Header.Set("X-Api-Key", "placeholder") })
 	_ = resp.Body.Close()
 	if seen != "placeholder" {
 		t.Errorf("upstream saw X-Api-Key %q, want the guest's value: a claim credential never rides a cleartext forward", seen)
@@ -213,8 +164,7 @@ func TestForwardStreamsAnEventStreamAsItArrives(t *testing.T) {
 	defer upstream.Close()
 	defer close(release)
 	p := New(Policy{Allow: []Rule{{Host: "sse.internal"}}}, nil, nil, fixedDial(upstream.Listener.Addr().String()), nil, nil)
-	front := httptest.NewServer(p)
-	defer front.Close()
+	front := serveFront(t, p)
 
 	client := proxyClient(t, front.URL)
 	client.Timeout = 2 * time.Second
@@ -241,20 +191,12 @@ func TestForwardStripsHopHeaders(t *testing.T) {
 
 	policy := Policy{Allow: []Rule{{Host: "api.internal"}}}
 	p := New(policy, nil, nil, fixedDial(upstream.Listener.Addr().String()), nil, nil)
-	front := httptest.NewServer(p)
-	defer front.Close()
+	front := serveFront(t, p)
 
-	client := proxyClient(t, front.URL)
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://api.internal/x", nil)
-	if err != nil {
-		t.Fatalf("build request: %v", err)
-	}
-	req.Header.Set("Connection", "X-Guest-Hop")
-	req.Header.Set("X-Guest-Hop", "leak")
-	resp, err := client.Do(req)
-	if err != nil {
-		t.Fatalf("proxied GET: %v", err)
-	}
+	resp := proxiedGet(t, front.URL, "http://api.internal/x", func(r *http.Request) {
+		r.Header.Set("Connection", "X-Guest-Hop")
+		r.Header.Set("X-Guest-Hop", "leak")
+	})
 	defer func() { _ = resp.Body.Close() }()
 	if gotHop != "" || gotConn != "" {
 		t.Errorf("upstream saw hop headers: X-Guest-Hop=%q Connection=%q", gotHop, gotConn)
@@ -264,17 +206,13 @@ func TestForwardStripsHopHeaders(t *testing.T) {
 	}
 }
 
-func TestForwardDeniedIsTyped(t *testing.T) {
+func TestADeniedForwardIs403AndAuditedAsDeny(t *testing.T) {
 	policy := Policy{Allow: []Rule{{Host: "api.internal"}}}
 	events := make(chan Event, 4)
 	p := New(policy, nil, nil, fixedDial("127.0.0.1:1"), func(ev Event) { events <- ev }, nil)
-	front := httptest.NewServer(p)
-	defer front.Close()
+	front := serveFront(t, p)
 
-	resp, err := proxyClient(t, front.URL).Get("http://blocked.internal/")
-	if err != nil {
-		t.Fatalf("proxied GET: %v", err)
-	}
+	resp := proxiedGet(t, front.URL, "http://blocked.internal/")
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("denied request got %d, want 403", resp.StatusCode)
@@ -289,8 +227,7 @@ func TestConnectAllowTunnels(t *testing.T) {
 	policy := Policy{Allow: []Rule{{Host: "echo.internal"}}}
 	events := make(chan Event, 4)
 	p := New(policy, nil, nil, fixedDial(echo), func(ev Event) { events <- ev }, nil)
-	front := httptest.NewServer(p)
-	defer front.Close()
+	front := serveFront(t, p)
 
 	conn := dialConnect(t, front.Listener.Addr().String(), "echo.internal:443")
 	defer func() { _ = conn.Close() }()
@@ -318,18 +255,11 @@ func TestConnectForwardsBytesTheGuestSentBeforeThe200(t *testing.T) {
 	p := New(Policy{Allow: []Rule{{Host: "echo.internal"}}}, nil, nil, fixedDial(echo), nil, nil)
 	sent := make(chan int64, 1)
 	p.OnTransfer(func(_ Event, tx, _ int64) { sent <- tx })
-	front := httptest.NewServer(p)
-	defer front.Close()
+	front := serveFront(t, p)
 
-	conn, err := net.Dial("tcp", front.Listener.Addr().String())
-	if err != nil {
-		t.Fatalf("dial proxy: %v", err)
-	}
+	conn := dialProxy(t, front.Listener.Addr().String(), "CONNECT echo.internal:443 HTTP/1.1\r\nHost: echo.internal:443\r\n\r\nearly")
 	defer func() { _ = conn.Close() }()
 	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
-	if _, err := io.WriteString(conn, "CONNECT echo.internal:443 HTTP/1.1\r\nHost: echo.internal:443\r\n\r\nearly"); err != nil {
-		t.Fatalf("write CONNECT with early data: %v", err)
-	}
 	br := bufio.NewReader(conn)
 	if status := readStatus(t, br); status != "HTTP/1.1 200 Connection Established" {
 		t.Fatalf("CONNECT status = %q", status)
@@ -354,17 +284,10 @@ func TestConnectCountsTheEarlyBytesAShortWriteSent(t *testing.T) {
 	p := New(Policy{Allow: []Rule{{Host: "echo.internal"}}}, nil, nil, dial, nil, nil)
 	sent := make(chan int64, 1)
 	p.OnTransfer(func(_ Event, tx, _ int64) { sent <- tx })
-	front := httptest.NewServer(p)
-	defer front.Close()
+	front := serveFront(t, p)
 
-	conn, err := net.Dial("tcp", front.Listener.Addr().String())
-	if err != nil {
-		t.Fatalf("dial proxy: %v", err)
-	}
+	conn := dialProxy(t, front.Listener.Addr().String(), "CONNECT echo.internal:443 HTTP/1.1\r\nHost: echo.internal:443\r\n\r\nearly")
 	defer func() { _ = conn.Close() }()
-	if _, err := io.WriteString(conn, "CONNECT echo.internal:443 HTTP/1.1\r\nHost: echo.internal:443\r\n\r\nearly"); err != nil {
-		t.Fatalf("write CONNECT with early data: %v", err)
-	}
 	select {
 	case tx := <-sent:
 		if tx != 2 {
@@ -378,8 +301,7 @@ func TestConnectCountsTheEarlyBytesAShortWriteSent(t *testing.T) {
 func TestCloseEndsSplicedTunnel(t *testing.T) {
 	echo := echoServer(t)
 	p := New(Policy{Allow: []Rule{{Host: "echo.internal"}}}, nil, nil, fixedDial(echo), nil, nil)
-	front := httptest.NewServer(p)
-	defer front.Close()
+	front := serveFront(t, p)
 
 	conn := dialConnect(t, front.Listener.Addr().String(), "echo.internal:443")
 	defer func() { _ = conn.Close() }()
@@ -406,8 +328,7 @@ func TestCloseEndsSplicedTunnel(t *testing.T) {
 func TestCloseEndsTunnelWhoseUpstreamStaysSilent(t *testing.T) {
 	var held holdCounter
 	p := New(Policy{Allow: []Rule{{Host: "quiet.internal"}}}, nil, nil, fixedDial(silentServer(t)), nil, &held)
-	front := httptest.NewServer(p)
-	defer front.Close()
+	front := serveFront(t, p)
 
 	conn := dialConnect(t, front.Listener.Addr().String(), "quiet.internal:443")
 	defer func() { _ = conn.Close() }()
@@ -423,11 +344,10 @@ func TestCloseEndsTunnelWhoseUpstreamStaysSilent(t *testing.T) {
 	waitHolds(t, &held, 0)
 }
 
-func TestConnectDeniedIsTyped(t *testing.T) {
+func TestADeniedConnectIs403(t *testing.T) {
 	policy := Policy{Allow: []Rule{{Host: "echo.internal"}}}
 	p := New(policy, nil, nil, fixedDial("127.0.0.1:1"), nil, nil)
-	front := httptest.NewServer(p)
-	defer front.Close()
+	front := serveFront(t, p)
 
 	conn := dialConnect(t, front.Listener.Addr().String(), "blocked.internal:443")
 	defer func() { _ = conn.Close() }()
@@ -441,8 +361,7 @@ func TestPortRuleGatesConnectAndForward(t *testing.T) {
 	policy := Policy{Allow: []Rule{{Host: "echo.internal", Ports: []uint16{443}}}}
 	events := make(chan Event, 4)
 	p := New(policy, nil, nil, fixedDial(echo), func(ev Event) { events <- ev }, nil)
-	front := httptest.NewServer(p)
-	defer front.Close()
+	front := serveFront(t, p)
 
 	conn := dialConnect(t, front.Listener.Addr().String(), "echo.internal:8443")
 	defer func() { _ = conn.Close() }()
@@ -453,14 +372,7 @@ func TestPortRuleGatesConnectAndForward(t *testing.T) {
 		t.Errorf("audit event = %+v, want deny on port 8443", ev)
 	}
 
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://echo.internal/x", nil)
-	if err != nil {
-		t.Fatalf("build request: %v", err)
-	}
-	resp, err := proxyClient(t, front.URL).Do(req)
-	if err != nil {
-		t.Fatalf("proxied GET: %v", err)
-	}
+	resp := proxiedGet(t, front.URL, "http://echo.internal/x")
 	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusForbidden {
 		t.Errorf("forward GET on port 80 = %d, want 403 with a rule that lists 443 only", resp.StatusCode)
@@ -474,8 +386,7 @@ func TestUnparsablePortIsDeniedNotDefaulted(t *testing.T) {
 	policy := Policy{Allow: []Rule{{Host: "echo.internal", Ports: []uint16{443}}}}
 	events := make(chan Event, 4)
 	p := New(policy, nil, nil, fixedDial(echoServer(t)), func(ev Event) { events <- ev }, nil)
-	front := httptest.NewServer(p)
-	defer front.Close()
+	front := serveFront(t, p)
 
 	conn := dialConnect(t, front.Listener.Addr().String(), "echo.internal:99999")
 	defer func() { _ = conn.Close() }()
@@ -486,14 +397,7 @@ func TestUnparsablePortIsDeniedNotDefaulted(t *testing.T) {
 		t.Errorf("audit event = %+v, want deny with no port, not the 443 default", ev)
 	}
 
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://echo.internal:99999/x", nil)
-	if err != nil {
-		t.Fatalf("build request: %v", err)
-	}
-	resp, err := proxyClient(t, front.URL).Do(req)
-	if err != nil {
-		t.Fatalf("proxied GET: %v", err)
-	}
+	resp := proxiedGet(t, front.URL, "http://echo.internal:99999/x")
 	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusForbidden {
 		t.Errorf("forward GET with an out-of-range port = %d, want 403", resp.StatusCode)
@@ -502,14 +406,8 @@ func TestUnparsablePortIsDeniedNotDefaulted(t *testing.T) {
 		t.Errorf("audit event = %+v, want deny with no port", ev)
 	}
 
-	raw, err := net.Dial("tcp", front.Listener.Addr().String())
-	if err != nil {
-		t.Fatalf("dial proxy: %v", err)
-	}
+	raw := dialProxy(t, front.Listener.Addr().String(), "CONNECT /x HTTP/1.1\r\nHost: echo.internal:+8443\r\n\r\n")
 	defer func() { _ = raw.Close() }()
-	if _, err = io.WriteString(raw, "CONNECT /x HTTP/1.1\r\nHost: echo.internal:+8443\r\n\r\n"); err != nil {
-		t.Fatalf("write path-form CONNECT: %v", err)
-	}
 	if status := readStatus(t, bufio.NewReader(raw)); status != "HTTP/1.1 403 Forbidden" {
 		t.Errorf("path-form CONNECT with a signed port = %q, want 403 (the dialer would have accepted +8443)", status)
 	}
@@ -517,14 +415,8 @@ func TestUnparsablePortIsDeniedNotDefaulted(t *testing.T) {
 		t.Errorf("audit event = %+v, want deny with no port", ev)
 	}
 
-	malformed, err := net.Dial("tcp", front.Listener.Addr().String())
-	if err != nil {
-		t.Fatalf("dial proxy: %v", err)
-	}
+	malformed := dialProxy(t, front.Listener.Addr().String(), "CONNECT /x HTTP/1.1\r\nHost: echo.internal:443:8443\r\n\r\n")
 	defer func() { _ = malformed.Close() }()
-	if _, err = io.WriteString(malformed, "CONNECT /x HTTP/1.1\r\nHost: echo.internal:443:8443\r\n\r\n"); err != nil {
-		t.Fatalf("write malformed CONNECT: %v", err)
-	}
 	if status := readStatus(t, bufio.NewReader(malformed)); status != "HTTP/1.1 403 Forbidden" {
 		t.Errorf("path-form CONNECT with two ports = %q, want 403, not a bare-host default", status)
 	}
@@ -537,10 +429,9 @@ func TestBracketedIPv6AuthorityIsUnwrapped(t *testing.T) {
 	policy := Policy{Allow: []Rule{{Host: "*"}}}
 	events := make(chan Event, 4)
 	p := New(policy, nil, nil, fixedDial(echoServer(t)), func(ev Event) { events <- ev }, nil)
-	front := httptest.NewServer(p)
-	defer front.Close()
+	front := serveFront(t, p)
 
-	for _, tc := range []struct {
+	for _, tt := range []struct {
 		authority string
 		status    string
 		decision  Decision
@@ -552,22 +443,16 @@ func TestBracketedIPv6AuthorityIsUnwrapped(t *testing.T) {
 		{"echo.internal]", "HTTP/1.1 403 Forbidden", DecisionDeny},
 		{"", "HTTP/1.1 403 Forbidden", DecisionDeny},
 	} {
-		conn, err := net.Dial("tcp", front.Listener.Addr().String())
-		if err != nil {
-			t.Fatalf("dial proxy: %v", err)
-		}
-		if _, err = io.WriteString(conn, "CONNECT /x HTTP/1.1\r\nHost: "+tc.authority+"\r\n\r\n"); err != nil {
-			t.Fatalf("write CONNECT: %v", err)
-		}
-		if status := readStatus(t, bufio.NewReader(conn)); status != tc.status {
-			t.Errorf("CONNECT with Host %s = %q, want %q", tc.authority, status, tc.status)
+		conn := dialProxy(t, front.Listener.Addr().String(), "CONNECT /x HTTP/1.1\r\nHost: "+tt.authority+"\r\n\r\n")
+		if status := readStatus(t, bufio.NewReader(conn)); status != tt.status {
+			t.Errorf("CONNECT with Host %s = %q, want %q", tt.authority, status, tt.status)
 		}
 		_ = conn.Close()
 		ev := recvEvent(t, events)
 		allowed := ev.Decision == DecisionAllow && ev.Host == "2606:4700:4700::1111" && ev.Port == 443
-		denied := ev.Decision == DecisionDeny && ev.Port == 0
-		if (tc.decision == DecisionAllow) != allowed || (tc.decision == DecisionDeny) != denied {
-			t.Errorf("audit event for %s = %+v, want %v (allow on the bare address and 443, or deny with no port)", tc.authority, ev, tc.decision)
+		refused := ev.Decision == DecisionDeny && ev.Port == 0
+		if (tt.decision == DecisionAllow) != allowed || (tt.decision == DecisionDeny) != refused {
+			t.Errorf("audit event for %s = %+v, want %v (allow on the bare address and 443, or deny with no port)", tt.authority, ev, tt.decision)
 		}
 	}
 }
@@ -576,10 +461,9 @@ func TestAHostPastTheDNSLimitIsRefusedAndRecordedClipped(t *testing.T) {
 	policy := Policy{Allow: []Rule{{Host: "*"}}}
 	events := make(chan Event, 4)
 	p := New(policy, nil, nil, fixedDial(echoServer(t)), func(ev Event) { events <- ev }, nil)
-	front := httptest.NewServer(p)
-	defer front.Close()
+	front := serveFront(t, p)
 
-	for _, tc := range []struct {
+	for _, tt := range []struct {
 		host   string
 		status string
 	}{
@@ -587,9 +471,9 @@ func TestAHostPastTheDNSLimitIsRefusedAndRecordedClipped(t *testing.T) {
 		{strings.Repeat("b", 64<<10), "HTTP/1.1 403 Forbidden"},
 		{strings.Repeat("c", maxHostLen) + ":443", "HTTP/1.1 200 Connection Established"},
 	} {
-		conn := dialConnect(t, front.Listener.Addr().String(), tc.host)
-		if status := readStatus(t, bufio.NewReader(conn)); status != tc.status {
-			t.Errorf("CONNECT to a %d-byte authority = %q, want %q", len(tc.host), status, tc.status)
+		conn := dialConnect(t, front.Listener.Addr().String(), tt.host)
+		if status := readStatus(t, bufio.NewReader(conn)); status != tt.status {
+			t.Errorf("CONNECT to a %d-byte authority = %q, want %q", len(tt.host), status, tt.status)
 		}
 		_ = conn.Close()
 		if ev := recvEvent(t, events); len(ev.Host) > maxHostLen {
@@ -644,25 +528,17 @@ func TestAuditNamesTheConnectionEnds(t *testing.T) {
 		if recordEnds {
 			p.RecordEnds()
 		}
-		front := httptest.NewServer(p)
-		t.Cleanup(front.Close)
-		return front
+		return serveFront(t, p)
 	}
 
-	resp, err := proxyClient(t, serve(false).URL).Get("http://api.internal/x")
-	if err != nil {
-		t.Fatalf("proxied GET: %v", err)
-	}
+	resp := proxiedGet(t, serve(false).URL, "http://api.internal/x")
 	_ = resp.Body.Close()
 	if ev := recvEvent(t, events); ev.Local.IsValid() || ev.Remote.IsValid() {
 		t.Errorf("forward event %+v carries ends without RecordEnds", ev)
 	}
 
 	front := serve(true)
-	resp, err = proxyClient(t, front.URL).Get("http://api.internal/y")
-	if err != nil {
-		t.Fatalf("proxied GET: %v", err)
-	}
+	resp = proxiedGet(t, front.URL, "http://api.internal/y")
 	_ = resp.Body.Close()
 	if ev := recvEvent(t, events); ev.Remote.String() != upstream.Listener.Addr().String() || !ev.Local.IsValid() || ev.Local.Port() == 0 {
 		t.Errorf("forward audit ends %v -> %v, want a local port and %s", ev.Local, ev.Remote, upstream.Listener.Addr())
@@ -682,13 +558,9 @@ func TestARateLimitedConnectionAnswers429AndIsAudited(t *testing.T) {
 	events := make(chan Event, 4)
 	dial := DialFunc(func(context.Context, string, string) (net.Conn, error) { return nil, ErrRateLimited })
 	p := New(Policy{Allow: []Rule{{Host: "*"}}}, nil, nil, dial, func(ev Event) { events <- ev }, nil)
-	front := httptest.NewServer(p)
-	defer front.Close()
+	front := serveFront(t, p)
 
-	resp, err := proxyClient(t, front.URL).Get("http://api.internal/x")
-	if err != nil {
-		t.Fatalf("proxied GET: %v", err)
-	}
+	resp := proxiedGet(t, front.URL, "http://api.internal/x")
 	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusTooManyRequests {
 		t.Errorf("forward status %d, want 429", resp.StatusCode)
@@ -752,6 +624,13 @@ func (h *holdCounter) Hold() { h.Add(1) }
 
 func (h *holdCounter) Unhold() { h.Add(-1) }
 
+type shortWriteConn struct{ net.Conn }
+
+func (c shortWriteConn) Write(b []byte) (int, error) {
+	n, _ := c.Conn.Write(b[:min(2, len(b))])
+	return n, errors.New("connection reset")
+}
+
 func sseHandler(release <-chan struct{}) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
@@ -777,16 +656,44 @@ func proxyClient(t *testing.T, proxyURL string) *http.Client {
 	return &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(u)}}
 }
 
-func dialConnect(t *testing.T, proxyAddr, target string) net.Conn {
-	t.Helper()
+func dialConnect(tb testing.TB, proxyAddr, target string) net.Conn {
+	tb.Helper()
+	return dialProxy(tb, proxyAddr, "CONNECT "+target+" HTTP/1.1\r\nHost: "+target+"\r\n\r\n")
+}
+
+func dialProxy(tb testing.TB, proxyAddr, request string) net.Conn {
+	tb.Helper()
 	conn, err := net.Dial("tcp", proxyAddr)
 	if err != nil {
-		t.Fatalf("dial proxy: %v", err)
+		tb.Fatalf("dial proxy: %v", err)
 	}
-	if _, err := io.WriteString(conn, "CONNECT "+target+" HTTP/1.1\r\nHost: "+target+"\r\n\r\n"); err != nil {
-		t.Fatalf("write CONNECT: %v", err)
+	if _, err := io.WriteString(conn, request); err != nil {
+		tb.Fatalf("write CONNECT: %v", err)
 	}
 	return conn
+}
+
+func serveFront(tb testing.TB, p *Proxy) *httptest.Server {
+	tb.Helper()
+	front := httptest.NewServer(p)
+	tb.Cleanup(front.Close)
+	return front
+}
+
+func proxiedGet(t *testing.T, proxyURL, target string, edits ...func(*http.Request)) *http.Response {
+	t.Helper()
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, target, nil)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	for _, edit := range edits {
+		edit(req)
+	}
+	resp, err := proxyClient(t, proxyURL).Do(req)
+	if err != nil {
+		t.Fatalf("proxied GET: %v", err)
+	}
+	return resp
 }
 
 func readStatus(t *testing.T, br *bufio.Reader) string {
@@ -797,7 +704,10 @@ func readStatus(t *testing.T, br *bufio.Reader) string {
 	}
 	for {
 		next, err := br.ReadString('\n')
-		if err != nil || next == "\r\n" || next == "\n" {
+		if err != nil {
+			t.Fatalf("read status headers: %v", err)
+		}
+		if next == "\r\n" || next == "\n" {
 			break
 		}
 	}
@@ -868,11 +778,4 @@ func waitHolds(t *testing.T, held *holdCounter, want int32) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-}
-
-type shortWriteConn struct{ net.Conn }
-
-func (c shortWriteConn) Write(b []byte) (int, error) {
-	n, _ := c.Conn.Write(b[:min(2, len(b))])
-	return n, errors.New("connection reset")
 }

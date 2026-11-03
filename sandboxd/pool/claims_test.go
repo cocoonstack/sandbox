@@ -77,7 +77,7 @@ func TestRecommitDrainsAChangeItWasTooBusyToSee(t *testing.T) {
 	waitFor(t, func() bool { return !m.store.recommitting.Load() && !m.store.pending(m.store.mark()) })
 }
 
-func TestStoreRoundTrip(t *testing.T) {
+func TestClaimStoreRoundTripsWithoutLeavingATempFile(t *testing.T) {
 	dataset := []types.Volume{{Name: "dataset-a", Mount: "/datasets/a"}}
 	claims := map[string]*types.Sandbox{
 		"sb_a": {ID: "sb_a", VMName: "sbx-1", Key: testKey, Token: "t1", Deadline: time.Now().Add(time.Minute).UTC(), ClaimedAt: time.Now().Add(-time.Minute).UTC(), ClaimRef: "ns/workload", Metadata: types.Metadata{"team": "a"}, OnExpire: types.ExpireArchive, Volumes: dataset, VolumesWant: dataset, VsockSocket: "/v/1"},
@@ -138,7 +138,7 @@ func TestClaimRowOmitsUnsetFlags(t *testing.T) {
 	}
 }
 
-func TestStoreLoadMissingFile(t *testing.T) {
+func TestClaimStoreLoadsAMissingFileAsEmpty(t *testing.T) {
 	got, err := newClaimStore(t.TempDir(), false).load()
 	if err != nil {
 		t.Fatalf("load: %v", err)
@@ -148,7 +148,7 @@ func TestStoreLoadMissingFile(t *testing.T) {
 	}
 }
 
-func TestStoreLoadCorruptFile(t *testing.T) {
+func TestClaimStoreRefusesACorruptFile(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "claims.json"), []byte("{oops"), 0o600); err != nil {
 		t.Fatalf("setup: %v", err)

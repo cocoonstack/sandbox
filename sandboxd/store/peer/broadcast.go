@@ -12,10 +12,7 @@ import (
 	"github.com/projecteru2/core/log"
 )
 
-const (
-	deleteTimeout              = 5 * time.Second
-	defaultDeleteClientTimeout = 10 * time.Second
-)
+const deleteTimeout = 5 * time.Second
 
 // Broadcaster fans a checkpoint delete out to every peer so a healed copy does not outlive it.
 type Broadcaster struct {
@@ -29,12 +26,11 @@ func (b *Broadcaster) Delete(ctx context.Context, id string) {
 	if len(addrs) == 0 {
 		return
 	}
-	client := &http.Client{Timeout: defaultDeleteClientTimeout}
 	logger := log.WithFunc("peer.Broadcaster.Delete")
 	var wg sync.WaitGroup
 	for _, addr := range addrs {
 		wg.Go(func() {
-			if err := deleteOn(ctx, client, addr, id, b.Token); err != nil {
+			if err := deleteOn(ctx, addr, id, b.Token); err != nil {
 				logger.Warnf(ctx, "broadcast delete %s to %s: %v", id, addr, err)
 			}
 		})
@@ -42,7 +38,7 @@ func (b *Broadcaster) Delete(ctx context.Context, id string) {
 	wg.Wait()
 }
 
-func deleteOn(ctx context.Context, client *http.Client, addr, id, token string) error {
+func deleteOn(ctx context.Context, addr, id, token string) error {
 	ctx, cancel := context.WithTimeout(ctx, deleteTimeout)
 	defer cancel()
 
@@ -53,7 +49,7 @@ func deleteOn(ctx context.Context, client *http.Client, addr, id, token string) 
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
-	resp, err := client.Do(req)
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return err
 	}

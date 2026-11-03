@@ -12,6 +12,8 @@ import (
 	"testing"
 )
 
+const benchKey = "EAABsbCS1iHgBAKZBZCx9ZAZBe7ZAZCYqZBfZC0ZD"
+
 func BenchmarkSignLeaf(b *testing.B) {
 	ca := testCAOnly(b)
 	for b.Loop() {
@@ -99,21 +101,17 @@ func BenchmarkTunnelDecision(b *testing.B) {
 }
 
 func BenchmarkInjectAndScrubHeaders(b *testing.B) {
-	key := "EAABsbCS1iHgBAKZBZCx9ZAZBe7ZAZCYqZBfZC0ZD"
-	base, err := http.NewRequestWithContext(b.Context(), http.MethodPost, "https://example.com/v19.0/me", nil)
-	if err != nil {
-		b.Fatalf("build request: %v", err)
-	}
+	base := newRequest(b, http.MethodPost, "/v19.0/me", "")
 	for _, arm := range []struct {
 		name, query, ctype, body string
 		cred                     Credential
 	}{
 		{"no-credential", "a=1", "", "", Credential{}},
-		{"header", "a=1", "", "", Credential{Name: "K", Header: "X-Key", Value: key, Placeholder: "@K@"}},
-		{"query", "a=1&access_token=%40K%40", "", "", Credential{Name: "K", Query: "access_token", Value: key, Placeholder: "@K@"}},
-		{"form-body", "", "application/x-www-form-urlencoded", "m=hi&access_token=%40K%40", Credential{Name: "K", Query: "access_token", Body: true, Value: key, Placeholder: "@K@"}},
-		{"json-body", "", "application/json", `{"m":"hi","access_token":"@K@"}`, Credential{Name: "K", Query: "access_token", Body: true, Value: key, Placeholder: "@K@"}},
-		{"json-body-escaped-unnamed", "", "application/json", `{"message":"` + strings.Repeat(`hello\nworld `, 150) + `"}`, Credential{Name: "K", Query: "access_token", Body: true, Value: key, Placeholder: "@K@"}},
+		{"header", "a=1", "", "", Credential{Name: "K", Header: "X-Key", Value: benchKey, Placeholder: "@K@"}},
+		{"query", "a=1&access_token=%40K%40", "", "", Credential{Name: "K", Query: "access_token", Value: benchKey, Placeholder: "@K@"}},
+		{"form-body", "", "application/x-www-form-urlencoded", "m=hi&access_token=%40K%40", Credential{Name: "K", Query: "access_token", Body: true, Value: benchKey, Placeholder: "@K@"}},
+		{"json-body", "", "application/json", `{"m":"hi","access_token":"@K@"}`, Credential{Name: "K", Query: "access_token", Body: true, Value: benchKey, Placeholder: "@K@"}},
+		{"json-body-escaped-unnamed", "", "application/json", `{"message":"` + strings.Repeat(`hello\nworld `, 150) + `"}`, Credential{Name: "K", Query: "access_token", Body: true, Value: benchKey, Placeholder: "@K@"}},
 	} {
 		creds := map[string][]Credential{}
 		if arm.cred.Name != "" {
@@ -130,7 +128,7 @@ func BenchmarkInjectAndScrubHeaders(b *testing.B) {
 					out.Body, out.ContentLength = io.NopCloser(strings.NewReader(arm.body)), int64(len(arm.body))
 				}
 				if _, sc := p.inject(Rule{}, out, "example.com", true); sc != nil {
-					sc.header(http.Header{"Location": {"/next?access_token=" + key}, "Content-Type": {"application/json"}, "Date": {"x"}})
+					sc.header(http.Header{"Location": {"/next?access_token=" + benchKey}, "Content-Type": {"application/json"}, "Date": {"x"}})
 				}
 			}
 		})
@@ -138,10 +136,9 @@ func BenchmarkInjectAndScrubHeaders(b *testing.B) {
 }
 
 func BenchmarkScrubBody(b *testing.B) {
-	key := "EAABsbCS1iHgBAKZBZCx9ZAZBe7ZAZCYqZBfZC0ZD"
-	sc := newScrubber([]Credential{{Name: "K", Query: "access_token", Value: key, Placeholder: "@K@"}})
+	sc := newScrubber([]Credential{{Name: "K", Query: "access_token", Value: benchKey, Placeholder: "@K@"}})
 	page := bytes.Repeat([]byte(`{"id":"1234567890","message":"hello world","created_time":"2026-10-04T00:00:00+0000"},`), 64<<10/88)
-	page = append(page, `"paging":{"next":"https:\/\/graph.facebook.com\/v19.0\/me\/feed?access_token=`+key+`&after=x"}`...)
+	page = append(page, `"paging":{"next":"https:\/\/graph.facebook.com\/v19.0\/me\/feed?access_token=`+benchKey+`&after=x"}`...)
 	event := []byte("data: {\"choices\":[{\"delta\":{\"content\":\"hello there\"}}]}\n\n")
 	for _, arm := range []struct {
 		name string
@@ -194,18 +191,13 @@ func benchFront(b *testing.B, mode InterceptMode) (proxyAddr string, roots *x509
 	if ca != nil {
 		p.pools.Load().mitm.TLSClientConfig.RootCAs = trustUpstream(upstream)
 	}
-	front := httptest.NewServer(p)
-	b.Cleanup(front.Close)
-	return front.Listener.Addr().String(), roots
+	return serveFront(b, p).Listener.Addr().String(), roots
 }
 
 func benchRoundTrip(b *testing.B, tc *tls.Conn, br *bufio.Reader) {
 	b.Helper()
-	req, err := http.NewRequestWithContext(b.Context(), http.MethodGet, "https://example.com/x", nil)
-	if err != nil {
-		b.Fatalf("build request: %v", err)
-	}
-	if err = req.Write(tc); err != nil {
+	req := newRequest(b, http.MethodGet, "/x", "")
+	if err := req.Write(tc); err != nil {
 		b.Fatalf("write request: %v", err)
 	}
 	resp, err := http.ReadResponse(br, req)

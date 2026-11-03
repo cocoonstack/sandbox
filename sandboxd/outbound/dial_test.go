@@ -46,7 +46,7 @@ func TestEgressDialerAdmitsOnlyNamedInternalPrefixes(t *testing.T) {
 	check := func(addr string) error {
 		return d.Control("tcp", addr, nil)
 	}
-	for name, tc := range map[string]struct {
+	for name, tt := range map[string]struct {
 		addr    string
 		allowed bool
 	}{
@@ -63,12 +63,12 @@ func TestEgressDialerAdmitsOnlyNamedInternalPrefixes(t *testing.T) {
 		"CGNAT metadata":                {"100.100.100.200:80", false},
 	} {
 		t.Run(name, func(t *testing.T) {
-			err := check(tc.addr)
-			if tc.allowed && err != nil {
-				t.Errorf("%s was blocked: %v", tc.addr, err)
+			err := check(tt.addr)
+			if tt.allowed && err != nil {
+				t.Errorf("%s was blocked: %v", tt.addr, err)
 			}
-			if !tc.allowed && err == nil {
-				t.Errorf("%s was allowed; it must not be reachable from a guest", tc.addr)
+			if !tt.allowed && err == nil {
+				t.Errorf("%s was allowed; it must not be reachable from a guest", tt.addr)
 			}
 		})
 	}
@@ -92,7 +92,7 @@ func TestEgressDialerWildcardAllowsEverything(t *testing.T) {
 
 func TestEgressDialerScopesInternalAllowToPorts(t *testing.T) {
 	d := newDialer(verdictOf([]string{"10.8.0.1/32:18090,9000", "fdc8::/16:443", "10.9.0.0/16"}))
-	for name, tc := range map[string]struct {
+	for name, tt := range map[string]struct {
 		addr    string
 		allowed bool
 	}{
@@ -109,12 +109,12 @@ func TestEgressDialerScopesInternalAllowToPorts(t *testing.T) {
 		"outside the prefix": {"10.8.0.2:18090", false},
 	} {
 		t.Run(name, func(t *testing.T) {
-			err := d.Control("tcp", tc.addr, nil)
-			if tc.allowed && err != nil {
-				t.Errorf("%s was blocked: %v", tc.addr, err)
+			err := d.Control("tcp", tt.addr, nil)
+			if tt.allowed && err != nil {
+				t.Errorf("%s was blocked: %v", tt.addr, err)
 			}
-			if !tc.allowed && (err == nil || !strings.Contains(err.Error(), "blocked internal address")) {
-				t.Errorf("%s: %v, want blocked internal address", tc.addr, err)
+			if !tt.allowed && (err == nil || !strings.Contains(err.Error(), "blocked internal address")) {
+				t.Errorf("%s: %v, want blocked internal address", tt.addr, err)
 			}
 		})
 	}
@@ -122,7 +122,7 @@ func TestEgressDialerScopesInternalAllowToPorts(t *testing.T) {
 
 func TestEgressDialerBlocksTheNodesOwnAddresses(t *testing.T) {
 	d := newDialer(verdictOf([]string{"93.184.216.34/32:80,443"}, netip.MustParseAddr("93.184.216.34"), netip.MustParseAddr("2606:2800:220:1:248:1893:25c8:1946")))
-	for name, tc := range map[string]struct {
+	for name, tt := range map[string]struct {
 		addr    string
 		allowed bool
 	}{
@@ -136,12 +136,12 @@ func TestEgressDialerBlocksTheNodesOwnAddresses(t *testing.T) {
 		"another public host":       {"93.184.216.35:22", true},
 	} {
 		t.Run(name, func(t *testing.T) {
-			err := d.Control("tcp", tc.addr, nil)
-			if tc.allowed && err != nil {
-				t.Errorf("%s was blocked: %v", tc.addr, err)
+			err := d.Control("tcp", tt.addr, nil)
+			if tt.allowed && err != nil {
+				t.Errorf("%s was blocked: %v", tt.addr, err)
 			}
-			if !tc.allowed && (err == nil || !strings.Contains(err.Error(), "blocked internal address")) {
-				t.Errorf("%s: %v, want blocked internal address", tc.addr, err)
+			if !tt.allowed && (err == nil || !strings.Contains(err.Error(), "blocked internal address")) {
+				t.Errorf("%s: %v, want blocked internal address", tt.addr, err)
 			}
 		})
 	}

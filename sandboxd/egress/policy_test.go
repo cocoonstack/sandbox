@@ -207,7 +207,7 @@ func TestPolicyServesSocks(t *testing.T) {
 	}
 }
 
-func TestRulePorts(t *testing.T) {
+func TestARuleWithPortsAllowsOnlyThosePortsOnEveryPath(t *testing.T) {
 	policy := Policy{Allow: []Rule{
 		{Host: "db.internal", Ports: []uint16{5432}},
 		{Host: "mail.internal", Ports: []uint16{993, 465}, Intercept: InterceptAlways},

@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"slices"
 	"strings"
 	"sync"
@@ -66,7 +67,7 @@ func TestUpstreamAllow(t *testing.T) {
 func TestDialUpstreamThroughHTTPConnect(t *testing.T) {
 	const greeting = "SSH-2.0-test\r\n"
 	addr, seen := fakeConnectProxy(t, http.StatusOK, greeting)
-	u, _ := ParseUpstream("http://alice:pw@" + addr)
+	u := mustUpstream(t, "http://alice:pw@"+addr)
 	conn, err := DialUpstream(t.Context(), u, "203.0.113.9:443", plainDial)
 	if err != nil {
 		t.Fatalf("DialUpstream: %v", err)
@@ -77,7 +78,7 @@ func TestDialUpstreamThroughHTTPConnect(t *testing.T) {
 		t.Fatalf("greeting %q, %v", buf, err)
 	}
 	assertEcho(t, conn)
-	if err := conn.(interface{ CloseWrite() error }).CloseWrite(); err != nil {
+	if err := conn.(closeWriter).CloseWrite(); err != nil {
 		t.Fatalf("half-close: %v", err)
 	}
 	if tail, err := io.ReadAll(conn); err != nil || len(tail) != 0 {
@@ -93,7 +94,7 @@ func TestDialUpstreamThroughHTTPConnect(t *testing.T) {
 func TestUpstreamTunnelKeepsTheZeroCopyPathAndBufferedBytes(t *testing.T) {
 	const greeting = "220 ready\r\n"
 	addr, _ := fakeConnectProxy(t, http.StatusOK, greeting)
-	u, _ := ParseUpstream("http://" + addr)
+	u := mustUpstream(t, "http://"+addr)
 	conn, err := DialUpstream(t.Context(), u, "203.0.113.9:25", plainDial)
 	if err != nil {
 		t.Fatalf("DialUpstream: %v", err)
@@ -107,7 +108,7 @@ func TestUpstreamTunnelKeepsTheZeroCopyPathAndBufferedBytes(t *testing.T) {
 	if _, err := rf.ReadFrom(strings.NewReader("ping")); err != nil {
 		t.Fatalf("ReadFrom: %v", err)
 	}
-	if err := conn.(interface{ CloseWrite() error }).CloseWrite(); err != nil {
+	if err := conn.(closeWriter).CloseWrite(); err != nil {
 		t.Fatalf("half-close: %v", err)
 	}
 	var got strings.Builder
@@ -118,7 +119,7 @@ func TestUpstreamTunnelKeepsTheZeroCopyPathAndBufferedBytes(t *testing.T) {
 
 func TestDialUpstreamRefusedNamesNoCredentials(t *testing.T) {
 	addr, _ := fakeConnectProxy(t, http.StatusProxyAuthRequired, "")
-	u, _ := ParseUpstream("http://alice:pw-secret@" + addr)
+	u := mustUpstream(t, "http://alice:pw-secret@"+addr)
 	_, err := DialUpstream(t.Context(), u, "203.0.113.9:443", plainDial)
 	if err == nil || !strings.Contains(err.Error(), "407") || strings.Contains(err.Error(), "pw-secret") {
 		t.Fatalf("refused tunnel: %v, want a 407 error without the password", err)
@@ -127,7 +128,7 @@ func TestDialUpstreamRefusedNamesNoCredentials(t *testing.T) {
 
 func TestDialUpstreamThroughSOCKS5WithAuth(t *testing.T) {
 	addr, seen := fakeSOCKS5(t)
-	u, _ := ParseUpstream("socks5://bob:hunter2@" + addr)
+	u := mustUpstream(t, "socks5://bob:hunter2@"+addr)
 	conn, err := DialUpstream(t.Context(), u, "203.0.113.9:443", plainDial)
 	if err != nil {
 		t.Fatalf("DialUpstream: %v", err)
@@ -137,7 +138,7 @@ func TestDialUpstreamThroughSOCKS5WithAuth(t *testing.T) {
 	if got, want := <-seen, "bob:hunter2 203.0.113.9:443"; got != want {
 		t.Errorf("socks5 upstream saw %q, want %q", got, want)
 	}
-	if _, ok := conn.(interface{ CloseWrite() error }); !ok {
+	if _, ok := conn.(closeWriter); !ok {
 		t.Errorf("tunnel %T lost CloseWrite, so splice cannot half-close it", conn)
 	}
 }
@@ -146,7 +147,7 @@ func TestDialUpstreamTimesOutAndCloses(t *testing.T) {
 	for _, stage := range []string{"dial", "http", "socks5"} {
 		t.Run(stage, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
-				u, _ := ParseUpstream("http://proxy.example:80")
+				u := mustUpstream(t, "http://proxy.example:80")
 				if stage == "socks5" {
 					u.Scheme = stage
 				}
@@ -246,8 +247,7 @@ func TestTransferCountsTunnelAndRequestBytes(t *testing.T) {
 	p := New(Policy{Allow: []Rule{{Host: "*"}}}, nil, nil, router, nil, nil)
 	t.Cleanup(p.Close)
 	p.OnTransfer(func(_ Event, sent, received int64) { got <- transfer{sent, received} })
-	srv := httptest.NewServer(p)
-	t.Cleanup(srv.Close)
+	srv := serveFront(t, p)
 
 	conn := dialConnect(t, srv.Listener.Addr().String(), "tunnel.example:7")
 	br := bufio.NewReader(conn)
@@ -298,8 +298,7 @@ func TestADeadUpstreamIsNamedInTheAudit(t *testing.T) {
 	events := make(chan Event, 4)
 	p := New(Policy{Allow: []Rule{{Host: "*"}}}, nil, nil, upstreamRouter{route: "http://u:pw@" + dead}, func(ev Event) { events <- ev }, nil)
 	t.Cleanup(p.Close)
-	srv := httptest.NewServer(p)
-	t.Cleanup(srv.Close)
+	srv := serveFront(t, p)
 
 	conn := dialConnect(t, srv.Listener.Addr().String(), "203.0.113.9:443")
 	if status := readStatus(t, bufio.NewReader(conn)); !strings.Contains(status, "502") {
@@ -309,10 +308,7 @@ func TestADeadUpstreamIsNamedInTheAudit(t *testing.T) {
 	if ev := recvEvent(t, events); ev.Upstream != dead {
 		t.Errorf("CONNECT audit names upstream %q, want %q", ev.Upstream, dead)
 	}
-	resp, err := proxyClient(t, srv.URL).Get("http://203.0.113.9/")
-	if err != nil {
-		t.Fatalf("forward: %v", err)
-	}
+	resp := proxiedGet(t, srv.URL, "http://203.0.113.9/")
 	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusBadGateway {
 		t.Errorf("forward through a dead upstream: %d, want 502", resp.StatusCode)
@@ -371,6 +367,19 @@ func (r *switchRouter) dialed() []string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return slices.Clone(r.dials)
+}
+
+type closeWriter interface {
+	CloseWrite() error
+}
+
+func mustUpstream(t *testing.T, raw string) *url.URL {
+	t.Helper()
+	u, err := ParseUpstream(raw)
+	if err != nil {
+		t.Fatalf("ParseUpstream(%q): %v", raw, err)
+	}
+	return u
 }
 
 func plainDial(ctx context.Context, network, addr string) (net.Conn, error) {

@@ -18,7 +18,7 @@ func TestReplicaRecoveryDoesNotRepublishReadOnlyHold(t *testing.T) {
 		t.Fatalf("read-only live attachment: %+v, %v", view, err)
 	}
 	if _, err := c.reg.Consume(t.Context(), sb.ID, sb.ArchiveEpoch); err != nil {
-		t.Fatal(err)
+		t.Fatalf("consume: %v", err)
 	}
 	rec, ok, err := c.reg.Get(t.Context(), sb.ID)
 	if err != nil || !ok || !rec.Consumed {
@@ -66,7 +66,7 @@ func TestReplicaCaptureRefusesPendingLiveWriter(t *testing.T) {
 	m, c := newReplicaVolumeManager(t)
 	disableReplication(m)
 	sb := mustClaim(t, m, testKey)
-	eng := m.eng.(*fakeEngine)
+	eng := fakeOf(m)
 	entered, resume := make(chan struct{}), make(chan struct{})
 	release := sync.OnceFunc(func() { close(resume) })
 	eng.liveVolumeHook = func(verb string) error {

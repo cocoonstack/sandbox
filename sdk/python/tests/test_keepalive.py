@@ -74,87 +74,55 @@ class FakeAgent:
         return [{"type": "error", "kind": "unimplemented", "message": op}]
 
 
-def test_calls_share_one_connection(fd_floor):
-    agent = FakeAgent()
-    sb = sandbox_at(agent.addr)
-    try:
-        for _ in range(3):
-            assert sb.stat("/")["kind"] == "dir"
-        assert sb.exec("echo", "42") == "42\n"
-        assert sb._pool._parked[0][1]._sock.fileno() >= fd_floor
-    finally:
-        sb._pool.drain()
-        agent.stop()
+def test_calls_share_one_connection(fd_floor, relay):
+    agent, sb = relay()
+    for _ in range(3):
+        assert sb.stat("/")["kind"] == "dir"
+    assert sb.exec("echo", "42") == "42\n"
+    assert sb._pool._parked[0][1]._sock.fileno() >= fd_floor
     assert agent.upgrades == 1, agent.upgrades
 
 
-def test_a_refused_stream_open_keeps_its_connection():
-    agent = FakeAgent()
-    sb = sandbox_at(agent.addr)
-    try:
-        for _ in range(3):
-            with pytest.raises(SilkdError):
-                sb.watch("/missing")
-    finally:
-        sb._pool.drain()
-        agent.stop()
+def test_a_refused_stream_open_keeps_its_connection(relay):
+    agent, sb = relay()
+    for _ in range(3):
+        with pytest.raises(SilkdError):
+            sb.watch("/missing")
     assert agent.upgrades == 1
 
 
-def test_old_daemon_dials_per_call():
-    agent = FakeAgent(proto=1)
-    sb = sandbox_at(agent.addr)
-    try:
-        for _ in range(3):
-            assert sb.exec("echo", "42") == "42\n"
-    finally:
-        agent.stop()
+def test_old_daemon_dials_per_call(relay):
+    agent, sb = relay(proto=1)
+    for _ in range(3):
+        assert sb.exec("echo", "42") == "42\n"
     assert agent.upgrades == 4, "the proto probe plus one dial per call"
 
 
-def test_old_daemon_that_closes_after_info_gets_the_request_on_a_redial():
-    agent = FakeAgent(proto=1, slam=True)
-    sb = sandbox_at(agent.addr)
-    try:
-        for _ in range(2):
-            assert sb.stat("/")["kind"] == "dir"
-    finally:
-        agent.stop()
+def test_old_daemon_that_closes_after_info_gets_the_request_on_a_redial(relay):
+    agent, sb = relay(proto=1, slam=True)
+    for _ in range(2):
+        assert sb.stat("/")["kind"] == "dir"
     assert agent.upgrades == 3, "the proto probe plus one dial per call"
 
 
-def test_keep_alive_off_dials_per_call():
-    agent = FakeAgent()
-    sb = sandbox_at(agent.addr, keep_alive=0)
-    try:
-        for _ in range(3):
-            sb.stat("/")
-    finally:
-        agent.stop()
+def test_keep_alive_off_dials_per_call(relay):
+    agent, sb = relay(keep_alive=0)
+    for _ in range(3):
+        sb.stat("/")
     assert agent.upgrades == 3
 
 
-def test_idle_connection_closes():
-    agent = FakeAgent()
-    sb = sandbox_at(agent.addr, keep_alive=0.05)
-    try:
-        sb.stat("/")
-        wait_until(lambda: agent.closed == 1, "idle connection still open after the keep-alive window")
-    finally:
-        sb._pool.drain()
-        agent.stop()
+def test_idle_connection_closes(relay):
+    agent, sb = relay(keep_alive=0.05)
+    sb.stat("/")
+    wait_until(lambda: agent.closed == 1, "idle connection still open after the keep-alive window")
 
 
-def test_peer_hang_up_is_noticed_before_reuse(fd_floor):
-    agent = FakeAgent(hang_up_after=2)
-    sb = sandbox_at(agent.addr)
-    try:
-        sb.stat("/")
-        wait_until(lambda: agent.hangups == 1, "the fake never hung up")
-        assert sb.stat("/")["kind"] == "dir"
-    finally:
-        sb._pool.drain()
-        agent.stop()
+def test_peer_hang_up_is_noticed_before_reuse(fd_floor, relay):
+    agent, sb = relay(hang_up_after=2)
+    sb.stat("/")
+    wait_until(lambda: agent.hangups == 1, "the fake never hung up")
+    assert sb.stat("/")["kind"] == "dir"
     assert agent.upgrades == 2
 
 
@@ -181,23 +149,31 @@ def test_run_timeout_bounds_the_proto_probe():
         server.close()
 
 
-def test_close_drains_the_parked_connection(monkeypatch):
-    agent = FakeAgent()
-    sb = sandbox_at(agent.addr)
+def test_close_drains_the_parked_connection(monkeypatch, relay):
+    agent, sb = relay()
     monkeypatch.setattr(sb._client, "_request", lambda *args, **kwargs: {})
-    try:
-        sb.stat("/")
-        sb.close()
-        wait_until(lambda: agent.closed == 1, "parked connection survived close")
-    finally:
-        agent.stop()
+    sb.stat("/")
+    sb.close()
+    wait_until(lambda: agent.closed == 1, "parked connection survived close")
 
 
-def test_an_upload_an_old_daemon_rejects_raises_its_error_frame():
-    agent = FakeAgent(proto=1, slam=True)
-    sb = sandbox_at(agent.addr)
-    try:
-        with pytest.raises(SilkdError):
-            sb.write_file("/missing/f", bytes(64 << 20))
-    finally:
+def test_an_upload_an_old_daemon_rejects_raises_its_error_frame(relay):
+    _, sb = relay(proto=1, slam=True)
+    with pytest.raises(SilkdError):
+        sb.write_file("/missing/f", bytes(64 << 20))
+
+
+@pytest.fixture
+def relay():
+    started = []
+
+    def start(proto=KEEP_ALIVE_PROTO, hang_up_after=0, slam=False, **client_kwargs):
+        agent = FakeAgent(proto, hang_up_after, slam)
+        sb = sandbox_at(agent.addr, **client_kwargs)
+        started.append((agent, sb))
+        return agent, sb
+
+    yield start
+    for agent, sb in started:
+        sb._pool.drain()
         agent.stop()

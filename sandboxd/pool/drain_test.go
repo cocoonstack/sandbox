@@ -12,7 +12,7 @@ func TestDrainRefusesClaimsTrimsWarmAndUncordonRefills(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		eng := newFakeEngine()
 		m := newTestManager(t, eng)
-		seedGolden(t, m, "")
+		seedGolden(t, m, testKey, "")
 		if err := m.SetPools(t.Context(), []config.PoolSpec{{PoolKey: testKey, Warm: 2}}); err != nil {
 			t.Fatalf("SetPools: %v", err)
 		}
@@ -43,10 +43,10 @@ func TestDrainRefusesClaimsTrimsWarmAndUncordonRefills(t *testing.T) {
 
 		m.Uncordon(t.Context())
 		waitFor(t, func() bool {
-			infos, g := m.Info()
-			return !g.Draining && len(infos) == 1 && infos[0].Warm == 2
+			now, gauges := m.Info()
+			return !gauges.Draining && len(now) == 1 && now[0].Warm == 2
 		})
-		if _, err := claimAny(t.Context(), m, testKey, 0); err != nil {
+		if _, err := claimAny(t.Context(), m, testKey, ClaimOptions{}); err != nil {
 			t.Fatalf("claim after uncordon: %v", err)
 		}
 	})

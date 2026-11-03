@@ -104,7 +104,7 @@ func TestSleepingSecondInfoBeforeACallWakes(t *testing.T) {
 	}
 }
 
-func TestSleepingFirstWriteWakesAsBefore(t *testing.T) {
+func TestSleepingFirstWriteWakesTheSandboxWithoutAReader(t *testing.T) {
 	for name, first := range map[string]string{"exec": execFrame, "write": line(wire.FsWrite{Path: "/x"}), "port": line(wire.PortForward{Port: 80})} {
 		t.Run(name, func(t *testing.T) {
 			env := newSleepingEnv(t)
@@ -352,16 +352,6 @@ func TestSleepingCloseRelaysEndsReaderConnections(t *testing.T) {
 	}
 }
 
-func captureLogs(t *testing.T) *logSink {
-	t.Helper()
-	sink := &logSink{}
-	logger := log.GetGlobalLogger()
-	prev := *logger
-	*logger = zerolog.New(sink)
-	t.Cleanup(func() { *logger = prev })
-	return sink
-}
-
 type logSink struct {
 	mu  sync.Mutex
 	buf strings.Builder
@@ -395,72 +385,9 @@ type sleepingEnv struct {
 	readerClosed chan struct{}
 }
 
-func newSleepingEnv(t *testing.T) *sleepingEnv {
-	t.Helper()
-	env := &sleepingEnv{frames: &frameLog{}, guestDials: &atomic.Int32{}, readerClosed: make(chan struct{}, 4)}
-	env.reader = &fakeReader{src: "snap-1", serve: tagServer("reader", env.frames, env.readerClosed)}
-	env.manager = &fakeManager{reader: env.reader}
-	dialer := &fakeDialer{dial: func(context.Context, string) (net.Conn, error) {
-		env.guestDials.Add(1)
-		relayEnd, guestEnd := net.Pipe()
-		go tagServer("guest", env.frames, nil)(guestEnd)
-		return relayEnd, nil
-	}}
-	env.srv = New("", "node:7777", env.manager, dialer, nil, nil, nil, nil)
-	env.ts = httptest.NewServer(env.srv.Handler())
-	t.Cleanup(func() {
-		env.srv.CloseRelays()
-		env.ts.Close()
-	})
-	return env
-}
-
 func (e *sleepingEnv) upgrade(t *testing.T) (net.Conn, *bufio.Reader) {
 	t.Helper()
 	return upgradeConn(t, e.ts)
-}
-
-func send(t *testing.T, conn net.Conn, frame string) {
-	t.Helper()
-	if _, err := io.WriteString(conn, frame); err != nil {
-		t.Fatalf("write frame: %v", err)
-	}
-}
-
-func expectLine(t *testing.T, r *bufio.Reader, want string) {
-	t.Helper()
-	got, err := r.ReadString('\n')
-	if err != nil {
-		t.Fatalf("read reply (want %q): %v", want, err)
-	}
-	if strings.TrimSpace(got) != want {
-		t.Fatalf("reply %q, want %q", got, want)
-	}
-}
-
-func tagServer(tag string, frames *frameLog, closed chan<- struct{}) func(net.Conn) {
-	return func(c net.Conn) {
-		defer func() {
-			_ = c.Close()
-			if closed != nil {
-				select {
-				case closed <- struct{}{}:
-				default:
-				}
-			}
-		}()
-		r := bufio.NewReaderSize(c, 1<<20)
-		for {
-			got, err := r.ReadString('\n')
-			if err != nil {
-				return
-			}
-			frames.add(tag + ":" + got)
-			if _, err = io.WriteString(c, tag+"\n"); err != nil {
-				return
-			}
-		}
-	}
 }
 
 type frameLog struct {
@@ -486,7 +413,7 @@ type fakeReader struct {
 	wakes   int
 	dials   int
 	dialErr error
-	serve   func(net.Conn)
+	serve   guestFunc
 }
 
 func (f *fakeReader) source() string {
@@ -533,4 +460,77 @@ func (f *fakeReader) dial() (net.Conn, string, error) {
 	relayEnd, readerEnd := net.Pipe()
 	go f.serve(readerEnd)
 	return relayEnd, f.src, nil
+}
+
+func captureLogs(t *testing.T) *logSink {
+	t.Helper()
+	sink := &logSink{}
+	logger := log.GetGlobalLogger()
+	prev := *logger
+	*logger = zerolog.New(sink)
+	t.Cleanup(func() { *logger = prev })
+	return sink
+}
+
+func newSleepingEnv(t *testing.T) *sleepingEnv {
+	t.Helper()
+	env := &sleepingEnv{frames: &frameLog{}, guestDials: &atomic.Int32{}, readerClosed: make(chan struct{}, 4)}
+	env.reader = &fakeReader{src: "snap-1", serve: tagServer("reader", env.frames, env.readerClosed)}
+	env.manager = &fakeManager{reader: env.reader}
+	dialer := &fakeDialer{dial: func(context.Context, string) (net.Conn, error) {
+		env.guestDials.Add(1)
+		relayEnd, guestEnd := net.Pipe()
+		go tagServer("guest", env.frames, nil)(guestEnd)
+		return relayEnd, nil
+	}}
+	env.srv = New("", "node:7777", env.manager, dialer, nil, nil, nil, nil)
+	env.ts = httptest.NewServer(env.srv.Handler())
+	t.Cleanup(func() {
+		env.srv.CloseRelays()
+		env.ts.Close()
+	})
+	return env
+}
+
+func send(t *testing.T, conn net.Conn, frame string) {
+	t.Helper()
+	if _, err := io.WriteString(conn, frame); err != nil {
+		t.Fatalf("write frame: %v", err)
+	}
+}
+
+func expectLine(t *testing.T, r *bufio.Reader, want string) {
+	t.Helper()
+	got, err := r.ReadString('\n')
+	if err != nil {
+		t.Fatalf("read reply (want %q): %v", want, err)
+	}
+	if strings.TrimSpace(got) != want {
+		t.Fatalf("reply %q, want %q", got, want)
+	}
+}
+
+func tagServer(tag string, frames *frameLog, closed chan<- struct{}) guestFunc {
+	return func(c net.Conn) {
+		defer func() {
+			_ = c.Close()
+			if closed != nil {
+				select {
+				case closed <- struct{}{}:
+				default:
+				}
+			}
+		}()
+		r := bufio.NewReaderSize(c, 1<<20)
+		for {
+			got, err := r.ReadString('\n')
+			if err != nil {
+				return
+			}
+			frames.add(tag + ":" + got)
+			if _, err = io.WriteString(c, tag+"\n"); err != nil {
+				return
+			}
+		}
+	}
 }

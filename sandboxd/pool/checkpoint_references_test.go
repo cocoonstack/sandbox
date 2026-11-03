@@ -22,7 +22,7 @@ const (
 
 func TestClaimCheckpointReferencesOutliveUnacknowledgedWrites(t *testing.T) {
 	recreate := func(s *claimStore) { s.set(&types.Sandbox{ID: "owner", ReplicaCk: "recreated"}) }
-	for _, tc := range []struct {
+	for _, tt := range []struct {
 		name                            string
 		fault                           int
 		acked, next                     *types.Sandbox
@@ -86,31 +86,31 @@ func TestClaimCheckpointReferencesOutliveUnacknowledgedWrites(t *testing.T) {
 			afterCommit: []string{"other-replica"},
 		},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			if tc.fault == failAfterRename && os.Geteuid() == 0 {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.fault == failAfterRename && os.Geteuid() == 0 {
 				t.Skip("requires non-root: root can read the write-only directory")
 			}
 			dir := t.TempDir()
-			s := newClaimStore(dir, tc.fault == failAfterRename)
-			if tc.acked != nil {
-				if err := s.commit(s.set(tc.acked)); err != nil {
-					t.Fatal(err)
+			s := newClaimStore(dir, tt.fault == failAfterRename)
+			if tt.acked != nil {
+				if err := s.commit(s.set(tt.acked)); err != nil {
+					t.Fatalf("commit: %v", err)
 				}
 			}
 			var snap claimSnapshot
-			if tc.startup != nil {
+			if tt.startup != nil {
 				s = newClaimStore(dir, false)
 				claims, err := s.load()
 				if err != nil {
-					t.Fatal(err)
+					t.Fatalf("load: %v", err)
 				}
-				tc.startup(claims)
+				tt.startup(claims)
 				snap = s.reset(claims)
 			} else {
-				snap = s.set(tc.next)
+				snap = s.set(tt.next)
 			}
 			var finish func()
-			switch tc.fault {
+			switch tt.fault {
 			case failWrite:
 				finish = failClaimWrites(t, s)
 				if err := s.commit(snap); err == nil {
@@ -118,7 +118,7 @@ func TestClaimCheckpointReferencesOutliveUnacknowledgedWrites(t *testing.T) {
 				}
 			case failAfterRename:
 				if err := os.Chmod(dir, 0o300); err != nil {
-					t.Fatal(err)
+					t.Fatalf("Chmod: %v", err)
 				}
 				finish = func() { _ = os.Chmod(dir, 0o700) }
 				t.Cleanup(finish)
@@ -127,7 +127,7 @@ func TestClaimCheckpointReferencesOutliveUnacknowledgedWrites(t *testing.T) {
 				}
 			case captureWrite:
 				if err := syscall.Mkfifo(s.path+".tmp", 0o600); err != nil {
-					t.Fatal(err)
+					t.Fatalf("Mkfifo: %v", err)
 				}
 				done := make(chan error, 1)
 				go func() { done <- s.commit(snap) }()
@@ -139,42 +139,42 @@ func TestClaimCheckpointReferencesOutliveUnacknowledgedWrites(t *testing.T) {
 				finish = func() {
 					r, err := os.Open(s.path + ".tmp")
 					if err != nil {
-						t.Fatal(err)
+						t.Fatalf("open the blocked write: %v", err)
 					}
 					raw, err := io.ReadAll(r)
 					_ = r.Close()
 					if err = errors.Join(err, <-done); err != nil {
-						t.Fatal(err)
+						t.Fatalf("read the blocked write: %v", err)
 					}
 					if err = os.Remove(s.path); err != nil {
-						t.Fatal(err)
+						t.Fatalf("Remove: %v", err)
 					}
 					if err = os.WriteFile(s.path, raw, 0o600); err != nil {
-						t.Fatal(err)
+						t.Fatalf("WriteFile: %v", err)
 					}
 				}
 			}
-			if tc.mutate != nil {
-				tc.mutate(s)
+			if tt.mutate != nil {
+				tt.mutate(s)
 			}
 			finish()
 			loaded, err := newClaimStore(dir, false).load()
 			if err != nil {
-				t.Fatal(err)
+				t.Fatalf("load journal: %v", err)
 			}
 			var onDisk []string
 			for _, sb := range loaded {
 				onDisk = appendRefs(onDisk, checkpointRefs(sb))
 			}
 			slices.Sort(onDisk)
-			if pinned := slices.Sorted(maps.Keys(s.checkpointReferences())); !slices.Equal(onDisk, tc.onDisk) || !slices.Equal(pinned, tc.afterFault) {
-				t.Fatalf("after the fault: on disk %v, pinned %v; want %v, %v", onDisk, pinned, tc.onDisk, tc.afterFault)
+			if pinned := slices.Sorted(maps.Keys(s.checkpointReferences())); !slices.Equal(onDisk, tt.onDisk) || !slices.Equal(pinned, tt.afterFault) {
+				t.Fatalf("after the fault: on disk %v, pinned %v; want %v, %v", onDisk, pinned, tt.onDisk, tt.afterFault)
 			}
 			if err = s.commit(s.mark()); err != nil {
-				t.Fatal(err)
+				t.Fatalf("commit: %v", err)
 			}
-			if pinned := slices.Sorted(maps.Keys(s.checkpointReferences())); !slices.Equal(pinned, tc.afterCommit) {
-				t.Fatalf("after the next commit: pinned %v, want %v", pinned, tc.afterCommit)
+			if pinned := slices.Sorted(maps.Keys(s.checkpointReferences())); !slices.Equal(pinned, tt.afterCommit) {
+				t.Fatalf("after the next commit: pinned %v, want %v", pinned, tt.afterCommit)
 			}
 		})
 	}
@@ -183,7 +183,7 @@ func TestClaimCheckpointReferencesOutliveUnacknowledgedWrites(t *testing.T) {
 func TestClaimSharedCheckpointReferencesRetirePerOwner(t *testing.T) {
 	s := newClaimStore(t.TempDir(), false)
 	if err := s.commit(s.set(&types.Sandbox{ID: "first", ReplicaCk: "shared", ArchivePending: "shared"}, &types.Sandbox{ID: "second", ArchiveCk: "shared"})); err != nil {
-		t.Fatal(err)
+		t.Fatalf("commit: %v", err)
 	}
 	if err := s.commit(s.del("first")); err != nil || !s.referencesCheckpoint("shared") {
 		t.Fatalf("one owner's retirement released another owner's checkpoint: %v", err)
@@ -197,7 +197,7 @@ func failClaimWrites(t *testing.T, s *claimStore) func() {
 	t.Helper()
 	tmp := s.path + ".tmp"
 	if err := os.Mkdir(tmp, 0o700); err != nil {
-		t.Fatal(err)
+		t.Fatalf("Mkdir: %v", err)
 	}
 	s.recommitting.Store(true)
 	restore := sync.OnceFunc(func() {

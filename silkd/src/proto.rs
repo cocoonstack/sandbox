@@ -567,25 +567,21 @@ pub async fn write_feed_error<W: AsyncWrite + Unpin>(w: &mut W, err: FeedError) 
 
 #[inline]
 pub(crate) fn parse_request(frame: &[u8], buf: &mut Vec<u8>) -> serde_json::Result<Request> {
-    if let Some(n) = decode_bulk_frame(frame, DATA_FRAME_HEAD, buf) {
-        buf.truncate(n);
-        return Ok(Request::Data {
-            data: std::mem::take(buf),
-        });
+    if let Some(data) = decode_bulk_frame(frame, DATA_FRAME_HEAD, buf) {
+        return Ok(Request::Data { data });
     }
-    if let Some(n) = decode_bulk_frame(frame, STDIN_FRAME_HEAD, buf) {
-        buf.truncate(n);
-        return Ok(Request::Stdin {
-            data: std::mem::take(buf),
-        });
+    if let Some(data) = decode_bulk_frame(frame, STDIN_FRAME_HEAD, buf) {
+        return Ok(Request::Stdin { data });
     }
     serde_json::from_slice(frame)
 }
 
-fn decode_bulk_frame(frame: &[u8], head: &[u8], out: &mut Vec<u8>) -> Option<usize> {
+fn decode_bulk_frame(frame: &[u8], head: &[u8], out: &mut Vec<u8>) -> Option<Vec<u8>> {
     let b64 = frame.strip_prefix(head)?.strip_suffix(b"\"}")?;
     out.resize(base64::decoded_len_estimate(b64.len()), 0);
-    STANDARD.decode_slice(b64, out).ok()
+    let n = STANDARD.decode_slice(b64, out).ok()?;
+    out.truncate(n);
+    Some(std::mem::take(out))
 }
 
 fn cap_check(len: usize) -> io::Result<()> {

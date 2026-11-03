@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/cocoonstack/sandbox/sandboxd/store"
+	"github.com/cocoonstack/sandbox/sandboxd/store/storetest"
 )
 
 func TestTarUntarRoundTrip(t *testing.T) {
@@ -303,29 +304,18 @@ func TestTarRecordUntarRoundTripComplete(t *testing.T) {
 func TestTarRecordKeepsSparseFilesSparse(t *testing.T) {
 	size := 10*store.DigestChunkSize + 4096
 	exportDir := t.TempDir()
-	src := filepath.Join(exportDir, "cow.raw")
-	f, err := os.Create(src)
-	if err != nil {
-		t.Fatalf("create: %v", err)
-	}
-	if err = f.Truncate(size); err != nil {
-		t.Fatalf("truncate: %v", err)
-	}
-	for off, data := range map[int64]string{0: "sparse-head", 4*store.DigestChunkSize + 7: "sparse-mid", 8*store.DigestChunkSize + 5: "tail"} {
-		if _, err = f.WriteAt([]byte(data), off); err != nil {
-			t.Fatalf("write at %d: %v", off, err)
-		}
-	}
-	if err = f.Close(); err != nil {
-		t.Fatalf("close: %v", err)
-	}
-	if err = os.WriteFile(filepath.Join(exportDir, "snapshot.json"), []byte("{}"), 0o600); err != nil {
+	src := storetest.WriteSparse(t, filepath.Join(exportDir, "cow.raw"), size, map[int64][]byte{
+		0:                           []byte("sparse-head"),
+		4*store.DigestChunkSize + 7: []byte("sparse-mid"),
+		8*store.DigestChunkSize + 5: []byte("tail"),
+	})
+	if err := os.WriteFile(filepath.Join(exportDir, "snapshot.json"), []byte("{}"), 0o600); err != nil {
 		t.Fatalf("write snapshot: %v", err)
 	}
 	want := sha256OfFile(t, src)
 
 	var buf bytes.Buffer
-	if err = TarRecord(exportDir, []byte(`{"id":"ck_0000000000000001"}`), &buf); err != nil {
+	if err := TarRecord(exportDir, []byte(`{"id":"ck_0000000000000001"}`), &buf); err != nil {
 		t.Fatalf("TarRecord: %v", err)
 	}
 	sent := int64(buf.Len())
@@ -333,7 +323,7 @@ func TestTarRecordKeepsSparseFilesSparse(t *testing.T) {
 		t.Errorf("stream carries %d bytes for a %d-byte file with 3 data chunks, want at most %d", sent, size, limit)
 	}
 	dst := t.TempDir()
-	if err = Untar(&buf, dst); err != nil {
+	if err := Untar(&buf, dst); err != nil {
 		t.Fatalf("Untar: %v", err)
 	}
 	got := filepath.Join(dst, "export", "cow.raw")

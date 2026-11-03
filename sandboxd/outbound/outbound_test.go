@@ -185,7 +185,7 @@ func TestNetRouteFollowsTheLaneAndTheDoors(t *testing.T) {
 	h := newHost(t, &fakeEngine{}, &config.Config{}, nil)
 	armed := &types.Sandbox{ID: "sb_armed", Key: testKey}
 	h.doors[armed.ID] = &doors{}
-	for _, tc := range []struct {
+	for _, tt := range []struct {
 		lock bool
 		sb   *types.Sandbox
 		want types.NetRoute
@@ -195,9 +195,9 @@ func TestNetRouteFollowsTheLaneAndTheDoors(t *testing.T) {
 		{false, &types.Sandbox{ID: "sb_nic", Key: egKey}, types.NetRouteDirect},
 		{true, &types.Sandbox{ID: "sb_locked", Key: egKey}, types.NetRouteNone},
 	} {
-		h.o.LockNIC = tc.lock
-		if got := h.Route(tc.sb); got != tc.want {
-			t.Errorf("%s (lock %v): route %q, want %q", tc.sb.ID, tc.lock, got, tc.want)
+		h.o.LockNIC = tt.lock
+		if got := h.Route(tt.sb); got != tt.want {
+			t.Errorf("%s (lock %v): route %q, want %q", tt.sb.ID, tt.lock, got, tt.want)
 		}
 	}
 }

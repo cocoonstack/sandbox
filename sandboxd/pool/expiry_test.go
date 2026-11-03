@@ -50,9 +50,7 @@ func TestExpiryArchiveArchivesAHibernatedClaimWithoutPoolArchiving(t *testing.T)
 	if err != nil {
 		t.Fatalf("claim: %v", err)
 	}
-	if err := m.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
-		t.Fatalf("hibernate: %v", err)
-	}
+	hibernateClaim(t, m, sb)
 	expire(m, sb)
 	m.reapOnce(t.Context())
 	waitFor(t, func() bool { return archivedCount(m) == 1 })
@@ -172,9 +170,7 @@ func TestExpiryArchiveWakeBeforeTheExportGrantsAFreshLease(t *testing.T) {
 		t.Fatalf("claim: %v", err)
 	}
 	expire(m, sb)
-	if err := m.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
-		t.Fatalf("hibernate: %v", err)
-	}
+	hibernateClaim(t, m, sb)
 	if _, _, _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
 		t.Fatalf("wake: %v", err)
 	}
@@ -258,16 +254,15 @@ func TestCheckpointBranchTakesItsOwnExpireAction(t *testing.T) {
 }
 
 func TestArchivableRefusesClaimsThatCannotHibernate(t *testing.T) {
-	egress := types.PoolKey{Template: testKey.Template, Net: types.NetEgress, Size: types.SizeSmall}
 	for _, tt := range []struct {
 		key     types.PoolKey
 		volumes bool
 		action  types.ExpireAction
 		want    error
 	}{
-		{egress, false, types.ExpireArchive, ErrNoEgressHibernate},
+		{egKey, false, types.ExpireArchive, ErrNoEgressHibernate},
 		{testKey, true, types.ExpireArchive, ErrVolumeCapture},
-		{egress, true, types.ExpireDestroy, nil},
+		{egKey, true, types.ExpireDestroy, nil},
 		{testKey, false, types.ExpireArchive, nil},
 	} {
 		if err := archivable(tt.key, tt.volumes, tt.action); !errors.Is(err, tt.want) {
@@ -298,12 +293,6 @@ func TestArchiveOnExpireRefusesAVolumeClaimOnEveryPath(t *testing.T) {
 	if _, err := m.Renew(t.Context(), sb.ID, Cred{Token: sb.Token}, 0, types.ExpireArchive); !errors.Is(err, ErrVolumeCapture) {
 		t.Errorf("renew to archive: %v, want ErrVolumeCapture", err)
 	}
-}
-
-func expire(m *Manager, sb *types.Sandbox) {
-	m.mu.Lock()
-	sb.Deadline = time.Now().Add(-time.Second)
-	m.mu.Unlock()
 }
 
 type failingPublishStore struct {

@@ -23,7 +23,6 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/outbound"
 	"github.com/cocoonstack/sandbox/sandboxd/outbound/outboundtest"
 	"github.com/cocoonstack/sandbox/sandboxd/tenants"
-	"github.com/cocoonstack/sandbox/sandboxd/tenants/file"
 	tenantspg "github.com/cocoonstack/sandbox/sandboxd/tenants/pg"
 	"github.com/cocoonstack/sandbox/sandboxd/tenants/tenantstest"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
@@ -124,19 +123,9 @@ func TestRemovedTenantsClaimIsNeitherArchivedNorWokenNorForked(t *testing.T) {
 		t.Fatalf("setup manager: %v", err)
 	}
 	putTenants(t, m, tenants.TenantSpec{Name: "acme", Token: "acme-tok"})
-	claim := func() *types.Sandbox {
-		t.Helper()
-		sb, claimErr := m.ClaimProvision(t.Context(), testKey, ClaimOptions{TTL: time.Hour, Tenant: "acme"})
-		if claimErr != nil {
-			t.Fatalf("claim: %v", claimErr)
-		}
-		return sb
-	}
-	archived, idle, running := claim(), claim(), claim()
+	archived, idle, running := claimTenant(t, m, "acme"), claimTenant(t, m, "acme"), claimTenant(t, m, "acme")
 	mustArchive(t, m, archived)
-	if err = m.Hibernate(t.Context(), idle.ID, Cred{Token: idle.Token}); err != nil {
-		t.Fatalf("hibernate: %v", err)
-	}
+	hibernateClaim(t, m, idle)
 	if err = m.DeleteTenant(t.Context(), "acme"); err != nil {
 		t.Fatalf("DeleteTenant: %v", err)
 	}
@@ -272,7 +261,7 @@ func TestARuntimeTenantTakesItsEgressClassWithoutARestart(t *testing.T) {
 			t.Fatalf("PutTenant %s: %v", spec.Name, err)
 		}
 	}
-	unpooled := types.PoolKey{Template: "promoted-name", Net: types.NetNone, Size: types.SizeSmall}
+	unpooled := tplKey("promoted-name")
 	claimAs := func(token string) (*types.Sandbox, error) {
 		r, rerr := m.TenantByToken(t.Context(), token)
 		if rerr != nil {
@@ -386,7 +375,7 @@ func TestTwoNodesOnOneMetaStoreShareTheTenantSet(t *testing.T) {
 	if name, ok := tenantOf(t, b, "u1-tok"); !ok || name != "u-1" {
 		t.Errorf("b resolves a's tenant: %q %v, want u-1 without a fan-out", name, ok)
 	}
-	unpooled := types.PoolKey{Template: "promoted-name", Net: types.NetNone, Size: types.SizeSmall}
+	unpooled := tplKey("promoted-name")
 	sb, err := a.ClaimProvision(t.Context(), unpooled, ClaimOptions{TTL: time.Hour, Tenant: "u-1"})
 	if err != nil {
 		t.Fatalf("claim on a: %v", err)
@@ -411,8 +400,11 @@ func TestTwoNodesOnOneMetaStoreShareTheTenantSet(t *testing.T) {
 func tenantOf(t *testing.T, m *Manager, token string) (string, bool) {
 	t.Helper()
 	r, err := m.TenantByToken(t.Context(), token)
-	if err != nil {
+	if errors.Is(err, ErrUnknownTenant) {
 		return "", false
+	}
+	if err != nil {
+		t.Fatalf("tenant by token: %v", err)
 	}
 	return r.Name, true
 }
@@ -426,39 +418,13 @@ func listTenants(t *testing.T, m *Manager) []TenantInfo {
 	return page.Tenants
 }
 
-func tenantManager(t *testing.T, dir string, tenants ...tenants.TenantSpec) *Manager {
+func tenantManager(t *testing.T, dir string, specs ...tenants.TenantSpec) *Manager {
 	t.Helper()
 	cfg := &config.Config{DataDir: dir, APIToken: "root"}
 	m, err := NewManager(t.Context(), cfg, newFakeEngine(), testSecrets(t), testBackends(t, cfg))
 	if err != nil {
 		t.Fatalf("setup manager: %v", err)
 	}
-	putTenants(t, m, tenants...)
+	putTenants(t, m, specs...)
 	return m
-}
-
-func putTenants(t *testing.T, m *Manager, tenants ...tenants.TenantSpec) {
-	t.Helper()
-	if len(tenants) == 0 {
-		return
-	}
-	if err := m.SetTenants(t.Context(), tenants); err != nil {
-		t.Fatalf("set tenants: %v", err)
-	}
-}
-
-func setTenantCaps(t *testing.T, m *Manager, caps map[string]int) {
-	t.Helper()
-	records := make([]tenants.TenantRecord, 0, len(caps))
-	for name, limit := range caps {
-		records = append(records, tenants.TenantRecord{Name: name, TokenSHA256: tenants.TokenSHA256("tok-" + name), MaxClaims: limit})
-	}
-	src, err := file.Open(t.Context(), t.TempDir(), "")
-	if err != nil {
-		t.Fatalf("tenant set: %v", err)
-	}
-	if _, err = src.Replace(t.Context(), records); err != nil {
-		t.Fatalf("tenant records: %v", err)
-	}
-	m.tenants = src
 }

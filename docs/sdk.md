@@ -221,8 +221,9 @@ VM and returns only after every requested disk is mounted; the finalized
 name, effective mount, and (for `rw` entries) mode are available in
 `Sandbox.Volumes`. Custom mounts must be absolute and clean, stay outside the
 guest OS tree, and cannot duplicate or nest.
-`Sandbox.ID`, `Sandbox.Deadline`, and
-`Sandbox.FromCheckpoint` (the lineage edge when branched) are exported.
+`Sandbox.ID`, `Sandbox.Deadline`, `Sandbox.NetRoute` (how the guest reaches the
+network at claim) and `Sandbox.FromCheckpoint` (the lineage edge when branched)
+are exported.
 `Sandbox.TemplateDigest` is the exact content identity when the claim cloned a
 promoted template; it is empty for other sources. `Owner()` names the owning
 node, and `Token()` returns the per-sandbox bearer to persist with `ID` for a
@@ -483,14 +484,9 @@ heal a missing record locally; `Checkpoint.Delete` acts on the handle's bound
 node. Checkpoint creation is resource-creating and takes the api token, like
 fork.
 
-`Checkpoint.Delete` also asks every peer that node currently sees to drop any
-replica a heal pulled — best-effort eventual cleanup, not a fleet-wide
-revocation. A peer that misses the broadcast (offline, partitioned, or joined
-later) keeps serving branches from its replica until the node's
-`checkpoint_ttl_hours` ages it out; enabling peer heal requires that TTL to be
-set, so every healed replica has a cleanup bound while healing stays on. A node
-later run with healing off and that TTL back at 0 keeps such a replica until an
-explicit delete.
+`Checkpoint.Delete` also asks the peers that node sees to drop any healed
+replica, as best-effort cleanup rather than a fleet-wide revocation; see
+[delete is eventual](cluster.md#delete-is-eventual-not-a-fleet-wide-revocation).
 
 ## Language servers (LSP)
 

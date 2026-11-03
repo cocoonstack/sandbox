@@ -43,11 +43,11 @@ func TestReconcileJournalsAnAdoptedHibernate(t *testing.T) {
 
 func TestReconcileStaleCreateSweep(t *testing.T) {
 	tests := []staleCreateCase{
-		{"collected frees the record", engine.StaleCreateCollected, nil, false, false, false},
-		{"not-found treats the record as gone", engine.StaleCreateNotFound, nil, false, false, false},
-		{"busy leaves the in-flight clone", engine.StaleCreateBusy, nil, true, false, true},
-		{"not-creating removes normally", engine.StaleCreateNotCreating, nil, false, true, false},
-		{"verb failure falls back to remove", "", errors.New("unknown command"), false, true, false},
+		{name: "collected frees the record", outcome: engine.StaleCreateCollected},
+		{name: "not-found treats the record as gone", outcome: engine.StaleCreateNotFound},
+		{name: "busy leaves the in-flight clone", outcome: engine.StaleCreateBusy, wantPresent: true, wantPending: true},
+		{name: "not-creating removes normally", outcome: engine.StaleCreateNotCreating, wantRemove: true},
+		{name: "verb failure falls back to remove", err: errors.New("unknown command"), wantRemove: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -84,11 +84,11 @@ func TestReconcileStaleCreateSweep(t *testing.T) {
 
 func TestBusyStaleCreateRetryConverges(t *testing.T) {
 	tests := []staleCreateCase{
-		{"collected", engine.StaleCreateCollected, nil, false, false, false},
-		{"not-found", engine.StaleCreateNotFound, nil, false, false, false},
-		{"not-creating", engine.StaleCreateNotCreating, nil, false, true, false},
-		{"still busy", engine.StaleCreateBusy, nil, true, false, true},
-		{"verb failure", "", errors.New("temporary failure"), true, false, true},
+		{name: "collected", outcome: engine.StaleCreateCollected},
+		{name: "not-found", outcome: engine.StaleCreateNotFound},
+		{name: "not-creating", outcome: engine.StaleCreateNotCreating, wantRemove: true},
+		{name: "still busy", outcome: engine.StaleCreateBusy, wantPresent: true, wantPending: true},
+		{name: "verb failure", err: errors.New("temporary failure"), wantPresent: true, wantPending: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -206,7 +206,7 @@ func TestReconcileSweepsInterruptedForkExports(t *testing.T) {
 
 func TestReconcileSweepsGoldensNoPoolUses(t *testing.T) {
 	m := newTestManager(t, newFakeEngine(), config.PoolSpec{PoolKey: testKey, Warm: 1})
-	pooled := seedGolden(t, m, "")
+	pooled := seedGolden(t, m, testKey, "")
 	orphan := filepath.Join(m.goldensDir(), otherKey.Hash())
 	staging := filepath.Join(m.goldensDir(), "x.tmp")
 	for _, d := range []string{orphan, staging} {

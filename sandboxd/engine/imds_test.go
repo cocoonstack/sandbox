@@ -11,7 +11,7 @@ func TestWriteInstanceMetadataReplacesTheGuestDocument(t *testing.T) {
 	path := sockPath(t)
 	fake := serveFakeSilkd(t, path)
 	doc := []byte(`{"region":"local"}`)
-	if err := New("cocoon", nil, nil, false, false, "").WriteInstanceMetadata(t.Context(), path, doc); err != nil {
+	if err := newTestEngine().WriteInstanceMetadata(t.Context(), path, doc); err != nil {
 		t.Fatalf("WriteInstanceMetadata: %v", err)
 	}
 	fake.mu.Lock()
@@ -24,14 +24,12 @@ func TestWriteInstanceMetadataReplacesTheGuestDocument(t *testing.T) {
 func TestWriteInstanceMetadataReportsAGuestWithoutAResponder(t *testing.T) {
 	path := sockPath(t)
 	fake := serveFakeSilkd(t, path)
-	fake.writeErr, fake.writeKind = "create: No such file or directory", wire.KindNotFound
-	e := New("cocoon", nil, nil, false, false, "")
+	fake.set(func(f *fakeSilkd) { f.writeErr, f.writeKind = "create: No such file or directory", wire.KindNotFound })
+	e := newTestEngine()
 	if err := e.WriteInstanceMetadata(t.Context(), path, []byte("{}")); !errors.Is(err, ErrNoInstanceMetadata) {
 		t.Errorf("got %v, want ErrNoInstanceMetadata", err)
 	}
-	fake.mu.Lock()
-	fake.writeKind = wire.KindInternal
-	fake.mu.Unlock()
+	fake.set(func(f *fakeSilkd) { f.writeKind = wire.KindInternal })
 	if err := e.WriteInstanceMetadata(t.Context(), path, []byte("{}")); err == nil || errors.Is(err, ErrNoInstanceMetadata) {
 		t.Errorf("internal error: got %v, want a plain failure", err)
 	}

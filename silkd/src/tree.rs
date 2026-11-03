@@ -116,7 +116,7 @@ where
         return proto::write_feed_error(w, fail).await;
     }
     if !status.success() {
-        return proto::subprocess_result(w, status.success(), "tar extract", &msg).await;
+        return proto::subprocess_result(w, false, "tar extract", &msg).await;
     }
     // spawn_blocking: a big tree is thousands of local fs syscalls.
     let merged = tokio::task::spawn_blocking(move || merge_tree(&staging, &dest))

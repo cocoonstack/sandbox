@@ -5,7 +5,6 @@ import (
 	"encoding/binary"
 	"io"
 	"net"
-	"net/http/httptest"
 	"testing"
 	"time"
 )
@@ -55,8 +54,7 @@ func TestSocksDecisionMirrorsConnect(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			events := make(chan Event, 4)
 			p, socksAddr := socksProxy(t, tt.policy, tt.ca, fixedDial(echoServer(t)), events, nil)
-			front := httptest.NewServer(p)
-			defer front.Close()
+			front := serveFront(t, p)
 
 			_, reply := socksExchange(t, socksAddr, socksGreeting, socksNameRequest("echo.internal", 443))
 			socksOK := reply[1] == socksGranted
@@ -163,8 +161,7 @@ func TestSocksPortRuleGatesTheTunnel(t *testing.T) {
 	events := make(chan Event, 4)
 	_, addr := socksProxy(t, Policy{Allow: []Rule{{Host: "mail.internal", Ports: []uint16{993}}}}, nil, fixedDial(echoServer(t)), events, nil)
 
-	conn, reply := socksExchange(t, addr, socksGreeting, socksNameRequest("mail.internal", 993))
-	defer func() { _ = conn.Close() }()
+	_, reply := socksExchange(t, addr, socksGreeting, socksNameRequest("mail.internal", 993))
 	if reply[1] != socksGranted {
 		t.Fatalf("listed port reply = %#x, want granted", reply[1])
 	}
@@ -172,8 +169,7 @@ func TestSocksPortRuleGatesTheTunnel(t *testing.T) {
 		t.Errorf("audit event = %+v, want allow on port 993", ev)
 	}
 
-	denied, reply := socksExchange(t, addr, socksGreeting, socksNameRequest("mail.internal", 143))
-	defer func() { _ = denied.Close() }()
+	_, reply = socksExchange(t, addr, socksGreeting, socksNameRequest("mail.internal", 143))
 	if reply[1] != socksDenied {
 		t.Fatalf("unlisted port reply = %#x, want denied", reply[1])
 	}
@@ -185,8 +181,7 @@ func TestSocksPortRuleGatesTheTunnel(t *testing.T) {
 func TestSocksPortZeroIsDeniedEvenByABareRule(t *testing.T) {
 	events := make(chan Event, 4)
 	_, addr := socksProxy(t, Policy{Allow: []Rule{{Host: "mail.internal"}}}, nil, fixedDial(echoServer(t)), events, nil)
-	conn, reply := socksExchange(t, addr, socksGreeting, socksNameRequest("mail.internal", 0))
-	defer func() { _ = conn.Close() }()
+	_, reply := socksExchange(t, addr, socksGreeting, socksNameRequest("mail.internal", 0))
 	if reply[1] != socksDenied {
 		t.Fatalf("port 0 reply = %#x, want denied", reply[1])
 	}

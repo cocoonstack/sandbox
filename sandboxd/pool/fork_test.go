@@ -24,11 +24,7 @@ func TestForkRacingHibernateUsesPrivateSource(t *testing.T) {
 			t.Errorf("Hibernate: %v", err)
 		}
 	})
-	waitFor(t, func() bool {
-		eng.mu.Lock()
-		defer eng.mu.Unlock()
-		return len(eng.hibernates) == 1
-	})
+	waitFor(t, func() bool { return eng.hibernateCount() == 1 })
 	var children []string
 	wg.Go(func() {
 		sbs, err := m.Fork(t.Context(), parent.ID, Cred{Token: parent.Token}, 2, time.Hour, "", "")
@@ -57,7 +53,7 @@ func TestForkRacingHibernateUsesPrivateSource(t *testing.T) {
 	}
 }
 
-func TestForkFromRunning(t *testing.T) {
+func TestForkOfARunningClaimClonesOneTransientSnapshot(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
 	parent := mustClaim(t, m, testKey)
@@ -95,7 +91,7 @@ func TestForkFromRunning(t *testing.T) {
 			t.Errorf("child deadline off requested TTL by %v", d)
 		}
 	}
-	if got, _ := newClaimStore(m.dataDir, false).load(); len(got) != 4 {
+	if got := journaled(t, m); len(got) != 4 {
 		t.Errorf("persisted %d claims, want parent + 3 children", len(got))
 	}
 	leftovers, _ := filepath.Glob(filepath.Join(m.dataDir, "fork-*"))
@@ -108,9 +104,7 @@ func TestForkFromHibernatedUsesWakeImage(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
 	parent := mustClaim(t, m, testKey)
-	if err := m.Hibernate(t.Context(), parent.ID, Cred{Token: parent.Token}); err != nil {
-		t.Fatalf("Hibernate: %v", err)
-	}
+	hibernateClaim(t, m, parent)
 
 	children, err := m.Fork(t.Context(), parent.ID, Cred{Token: parent.Token}, 2, 0, "", "")
 	if err != nil {
@@ -135,7 +129,7 @@ func TestForkFromHibernatedUsesWakeImage(t *testing.T) {
 	}
 }
 
-func TestForkCountValidation(t *testing.T) {
+func TestForkRefusesAnInvalidCountBeforeASnapshot(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
 	parent := mustClaim(t, m, testKey)
@@ -149,7 +143,7 @@ func TestForkCountValidation(t *testing.T) {
 	}
 }
 
-func TestForkUnknownSandbox(t *testing.T) {
+func TestForkWithAWrongTokenIsAnUnknownSandbox(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
 	parent := mustClaim(t, m, testKey)
@@ -161,7 +155,7 @@ func TestForkUnknownSandbox(t *testing.T) {
 func TestForkAllOrNothing(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
-	parent, err := claimAny(t.Context(), m, testKey, 0)
+	parent, err := claimAny(t.Context(), m, testKey, ClaimOptions{})
 	if err != nil {
 		t.Fatalf("Claim: %v", err)
 	}
@@ -174,7 +168,7 @@ func TestForkAllOrNothing(t *testing.T) {
 	if _, g := m.Info(); g.Claimed != 1 {
 		t.Errorf("claimed=%d, want only the parent", g.Claimed)
 	}
-	if got, _ := newClaimStore(m.dataDir, false).load(); len(got) != 1 {
+	if got := journaled(t, m); len(got) != 1 {
 		t.Errorf("persisted %d claims, want only the parent", len(got))
 	}
 	eng.mu.Lock()
@@ -189,9 +183,7 @@ func TestReconcileSweepsOrphanSnapshots(t *testing.T) {
 	dataDir := t.TempDir()
 	m := newTestManagerAt(t, eng, dataDir)
 	parent := mustClaim(t, m, testKey)
-	if err := m.Hibernate(t.Context(), parent.ID, Cred{Token: parent.Token}); err != nil {
-		t.Fatalf("Hibernate: %v", err)
-	}
+	hibernateClaim(t, m, parent)
 	referenced := eng.hibernates[0]
 	eng.mu.Lock()
 	eng.snapshots = []string{
@@ -273,10 +265,7 @@ func TestForkChildrenInheritTenantAndQuota(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
 	setTenantCaps(t, m, map[string]int{"acme": 3})
-	parent, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{TTL: time.Hour, Tenant: "acme"})
-	if err != nil {
-		t.Fatalf("claim: %v", err)
-	}
+	parent := claimTenant(t, m, "acme")
 
 	children, err := m.Fork(t.Context(), parent.ID, Cred{Token: parent.Token}, 2, 0, "", "")
 	if err != nil {

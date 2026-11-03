@@ -1,6 +1,7 @@
 package pool
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -120,13 +121,7 @@ func (m *Manager) rewriteArchiveRow(ctx context.Context, sb *types.Sandbox, lock
 		if !rowed {
 			return nil
 		}
-		var epoch int64
-		var err error
-		if ck != "" {
-			epoch, err = m.replaceArchive(ctx, sb, ck)
-		} else {
-			epoch, err = m.replaceReplica(ctx, sb, replica)
-		}
+		epoch, err := m.putRow(ctx, sb, cmp.Or(ck, replica), ck == "", true)
 		if err == nil {
 			_, _ = m.commitIfLive(ctx, sb, func() { sb.ArchiveEpoch = epoch })
 			return nil

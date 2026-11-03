@@ -22,8 +22,6 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
-var hostOnly = new(false)
-
 func TestClaimEnvFeedsTheLiveProxysSecrets(t *testing.T) {
 	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.WriteString(w, r.Header.Get("Authorization"))
@@ -298,9 +296,7 @@ func TestAGuestEnvChangeNeedsARunningGuest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("claim: %v", err)
 	}
-	if err := m.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
-		t.Fatalf("Hibernate: %v", err)
-	}
+	hibernateClaim(t, m, sb)
 	if err := m.SetEnv(t.Context(), sb.ID, types.Env{"G": {Value: "2"}}, ""); !errors.Is(err, ErrPaused) {
 		t.Errorf("guest change while hibernated: %v, want ErrPaused", err)
 	}
@@ -443,9 +439,7 @@ func TestPatchEnvMergesAndRepairsTheGuest(t *testing.T) {
 		t.Errorf("another tenant's patch: %v, want ErrUnknownSandbox", err)
 	}
 
-	if err := m.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
-		t.Fatalf("Hibernate: %v", err)
-	}
+	hibernateClaim(t, m, sb)
 	if err := patch(types.EnvPatch{"MODE": {Value: "b"}}); !errors.Is(err, ErrPaused) {
 		t.Errorf("guest patch while hibernated: %v, want ErrPaused", err)
 	}
@@ -505,8 +499,7 @@ func TestAClaimWithAnUninterceptedInjectIsRefused(t *testing.T) {
 	eng := newFakeEngine()
 	eng.sockRoot = outboundtest.SockRoot(t)
 	m := egressManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1, Egress: interceptPolicy()})
-	env := types.Env{"KEY": {Value: "k", Guest: hostOnly, Inject: &types.EnvInject{Hosts: []string{"other.test"}, Header: "X-Api-Key"}}}
-	if _, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Env: env}); !errors.Is(err, ErrBadEnv) {
+	if _, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Env: injectEnv("k", "other.test")}); !errors.Is(err, ErrBadEnv) {
 		t.Fatalf("claim: %v, want ErrBadEnv", err)
 	}
 	m.mu.Lock()
@@ -523,8 +516,7 @@ func TestEachClaimInjectsItsOwnCredentialAndAHostOnlyChangeNeedsNoGuest(t *testi
 	m := egressManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1, Egress: interceptPolicy()})
 	claim := func(value string) *types.Sandbox {
 		t.Helper()
-		env := types.Env{"KEY": {Value: value, Guest: hostOnly, Inject: &types.EnvInject{Hosts: []string{"api.github.com"}, Header: "X-Api-Key"}}}
-		sb, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Env: env})
+		sb, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Env: injectEnv(value, "api.github.com")})
 		if err != nil {
 			t.Fatalf("claim: %v", err)
 		}
@@ -552,14 +544,14 @@ func TestInjectsSurviveARestartAndAReloadThatDropsTheInterceptStopsThem(t *testi
 	eng := newFakeEngine()
 	eng.sockRoot = outboundtest.SockRoot(t)
 	dataDir := t.TempDir()
-	pool := config.PoolSpec{PoolKey: testKey, Warm: 1, Egress: &egress.Policy{Allow: []egress.Rule{{Host: "api.github.com", Intercept: egress.InterceptAlways}}}}
-	m := egressManagerAt(t, eng, dataDir, pool)
-	env := types.Env{"KEY": {Value: "k", Guest: hostOnly, Inject: &types.EnvInject{Hosts: []string{"api.github.com"}, Header: "X-Api-Key"}}}
+	spec := config.PoolSpec{PoolKey: testKey, Warm: 1, Egress: &egress.Policy{Allow: []egress.Rule{{Host: "api.github.com", Intercept: egress.InterceptAlways}}}}
+	m := egressManagerAt(t, eng, dataDir, spec)
+	env := injectEnv("k", "api.github.com")
 	sb, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Env: env})
 	if err != nil {
 		t.Fatalf("claim: %v", err)
 	}
-	m2 := egressManagerAt(t, eng, dataDir, pool)
+	m2 := egressManagerAt(t, eng, dataDir, spec)
 	if err = m2.Reconcile(t.Context()); err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
@@ -629,6 +621,10 @@ func TestALostInterceptRefusesOnlyAChangedInject(t *testing.T) {
 	if err := m.PatchEnv(t.Context(), sb.ID, injectPatch("X-Other", "api.github.com"), ""); !errors.Is(err, ErrBadEnv) {
 		t.Errorf("a changed inject after the intercept went: %v, want ErrBadEnv", err)
 	}
+}
+
+func injectEnv(value string, hosts ...string) types.Env {
+	return types.Env{"KEY": {Value: value, Guest: hostOnly, Inject: &types.EnvInject{Hosts: hosts, Header: "X-Api-Key"}}}
 }
 
 func injectPatch(header string, hosts ...string) types.EnvPatch {

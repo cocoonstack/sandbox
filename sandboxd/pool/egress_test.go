@@ -20,11 +20,6 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/usage"
 )
 
-var (
-	egKey    = types.PoolKey{Template: "rt:24.04", Net: types.NetEgress, Size: types.SizeSmall}
-	egPolicy = &egress.Policy{Allow: []egress.Rule{{Host: "example.com", Secret: "gh"}}}
-)
-
 func TestLaneVerdictReachesGuestOnColdBoots(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -75,9 +70,7 @@ func TestGoldenStampGatesAdoptionOnLane(t *testing.T) {
 	if p.goldenDir != "" {
 		t.Error("adopted an egress-lane golden that never marked its guest; want rebuild")
 	}
-	if err := os.WriteFile(g+goldenStampSuffix, []byte(m.goldenStamp(m.view.Load(), egKey, "")), 0o644); err != nil {
-		t.Fatalf("write stamp: %v", err)
-	}
+	seedGolden(t, m, egKey, "")
 	m.adoptGolden(p, "")
 	if p.goldenDir != g {
 		t.Error("rejected an egress-lane golden whose stamp says the guest was marked")
@@ -104,9 +97,9 @@ func TestEgressLaneWakeFailsClosed(t *testing.T) {
 		{"hibernated", &types.Sandbox{ID: "sb_h", Key: egKey, VMName: "sbx-h", HibernateSnap: "sbx-hib-x"}},
 		{"archived", &types.Sandbox{ID: "sb_a", Key: egKey, ArchiveCk: "ck_x"}},
 	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			if _, err := m.wakeResolved(t.Context(), tc.sb); err == nil {
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, err := m.wakeResolved(t.Context(), tt.sb); err == nil {
 				t.Fatal("egress-lane wake must fail closed, not resume unguarded")
 			}
 		})
@@ -134,7 +127,7 @@ func TestClaimRecordsItsPolicyLayer(t *testing.T) {
 	if sb := mustClaim(t, m, testKey); sb.Layer != types.LayerPooled {
 		t.Errorf("pooled claim layer %q, want %q", sb.Layer, types.LayerPooled)
 	}
-	unpooled := types.PoolKey{Template: "promoted-name", Net: types.NetNone, Size: types.SizeSmall}
+	unpooled := tplKey("promoted-name")
 	sb, err := m.ClaimProvision(t.Context(), unpooled, ClaimOptions{TTL: time.Hour, Tenant: "acme"})
 	if err != nil {
 		t.Fatalf("claim: %v", err)
@@ -144,7 +137,7 @@ func TestClaimRecordsItsPolicyLayer(t *testing.T) {
 	}
 }
 
-func TestEffectivePolicyComposition(t *testing.T) {
+func TestEffectivePolicyIntersectsPoolAndTenantPolicies(t *testing.T) {
 	m := newTestManager(t, newFakeEngine())
 	both := &egress.Policy{Allow: []egress.Rule{{Host: "a.test"}, {Host: "b.test"}}}
 	tenantOnly := &egress.Policy{Allow: []egress.Rule{{Host: "b.test"}, {Host: "c.test"}}}
@@ -168,35 +161,35 @@ func TestEffectivePolicyComposition(t *testing.T) {
 		{"root on a promoted template", "", false, false, nil, nil, "", "", false},
 		{"neither", "acme", false, false, nil, nil, "", "", false},
 	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
 			m.pools = map[types.PoolKey]*pool{}
-			if tc.pooled {
+			if tt.pooled {
 				m.pools[testKey] = newPool(testKey)
-				m.pools[testKey].removed = tc.removed
+				m.pools[testKey].removed = tt.removed
 			}
 			editEgress(t, m, func(cfg *config.Config) {
-				cfg.Pools = []config.PoolSpec{{PoolKey: testKey, Egress: tc.pool}}
-				if tc.tnPol != nil {
-					cfg.EgressClasses = []config.EgressClass{{Name: "desk", Egress: tc.tnPol}}
+				cfg.Pools = []config.PoolSpec{{PoolKey: testKey, Egress: tt.pool}}
+				if tt.tnPol != nil {
+					cfg.EgressClasses = []config.EgressClass{{Name: "desk", Egress: tt.tnPol}}
 				}
 			})
-			sb := &types.Sandbox{Key: testKey, Tenant: tc.tenant}
-			if tc.tenant != "" {
+			sb := &types.Sandbox{Key: testKey, Tenant: tt.tenant}
+			if tt.tenant != "" {
 				sb.EgressClass = "desk"
 			}
 			eval, ok := m.view.Load().out.Resolve(sb, m.claimPooled)
-			if ok != tc.wantArmed {
-				t.Fatalf("armed=%v, want %v", ok, tc.wantArmed)
+			if ok != tt.wantArmed {
+				t.Fatalf("armed=%v, want %v", ok, tt.wantArmed)
 			}
 			if !ok {
 				return
 			}
-			if _, d := eval.Eval(tc.allow, "GET", 443); d != egress.DecisionAllow {
-				t.Errorf("%s should allow", tc.allow)
+			if _, d := eval.Eval(tt.allow, "GET", 443); d != egress.DecisionAllow {
+				t.Errorf("%s should allow", tt.allow)
 			}
-			if _, d := eval.Eval(tc.deny, "GET", 443); d != egress.DecisionDeny {
-				t.Errorf("%s should deny", tc.deny)
+			if _, d := eval.Eval(tt.deny, "GET", 443); d != egress.DecisionDeny {
+				t.Errorf("%s should deny", tt.deny)
 			}
 		})
 	}
@@ -337,13 +330,7 @@ func TestQuarantineFailedRemoveStaysUnswept(t *testing.T) {
 
 func TestSetPoolsPreservesEgressPolicy(t *testing.T) {
 	m := egressManager(t, newFakeEngine(), config.PoolSpec{PoolKey: egKey, Egress: egPolicy})
-	gd := filepath.Join(m.goldensDir(), egKey.Hash())
-	if err := os.MkdirAll(gd, 0o750); err != nil {
-		t.Fatalf("golden dir: %v", err)
-	}
-	if err := os.WriteFile(gd+goldenStampSuffix, []byte(m.goldenStamp(m.view.Load(), egKey, "")), 0o644); err != nil {
-		t.Fatalf("golden stamp: %v", err)
-	}
+	gd := seedGolden(t, m, egKey, "")
 	m.mu.Lock()
 	m.pools[egKey].goldenDir = gd
 	m.mu.Unlock()
@@ -519,11 +506,11 @@ func TestAPromotedTemplatesCloneInterceptsAsItsSourcePool(t *testing.T) {
 		t.Fatalf("claim the template: %v", err)
 	}
 	conn, _ := outboundtest.ConnectDoor(t, engine.EgressSocketPath(clone.VsockSocket), "api.github.com:443")
-	tc := tls.Client(conn, &tls.Config{ServerName: "api.github.com", InsecureSkipVerify: true})
-	if err = tc.Handshake(); err != nil {
+	tlsConn := tls.Client(conn, &tls.Config{ServerName: "api.github.com", InsecureSkipVerify: true})
+	if err = tlsConn.Handshake(); err != nil {
 		t.Fatalf("handshake through the door: %v", err)
 	}
-	if issuer := tc.ConnectionState().PeerCertificates[0].Issuer.CommonName; !strings.HasSuffix(issuer, "node-test") {
+	if issuer := tlsConn.ConnectionState().PeerCertificates[0].Issuer.CommonName; !strings.HasSuffix(issuer, "node-test") {
 		t.Errorf("leaf issued by %q, want the node intermediate: the clone must intercept as its source pool does", issuer)
 	}
 }
@@ -565,7 +552,7 @@ func TestAClaimWithoutEgressGetsNoDoorsWhateverItsPolicy(t *testing.T) {
 func TestARepromoteCarriesItsNewSourcePool(t *testing.T) {
 	eng := newFakeEngine()
 	eng.sockRoot = outboundtest.SockRoot(t)
-	other := types.PoolKey{Template: "py:3.12", Net: testKey.Net, Size: testKey.Size}
+	other := tplKey("py:3.12")
 	m := egressManager(t, eng,
 		config.PoolSpec{PoolKey: testKey, Warm: 1, Egress: &egress.Policy{Allow: []egress.Rule{{Host: "a.test"}}}},
 		config.PoolSpec{PoolKey: other, Warm: 1, Egress: &egress.Policy{Allow: []egress.Rule{{Host: "b.test"}}}})
@@ -637,30 +624,6 @@ func servesPinned(t *testing.T, sb *types.Sandbox, pins []string) bool {
 	return true
 }
 
-func refillWarmVM(t *testing.T, m *Manager) *types.Sandbox {
-	t.Helper()
-	seedGolden(t, m, "")
-	m.mu.Lock()
-	m.adoptGolden(m.pools[testKey], "")
-	m.mu.Unlock()
-	m.refillOnce(t.Context())
-	var warm *types.Sandbox
-	waitFor(t, func() bool {
-		m.mu.Lock()
-		defer m.mu.Unlock()
-		if p := m.pools[testKey]; p != nil && len(p.warm) > 0 {
-			warm = p.warm[0]
-		}
-		return warm != nil
-	})
-	return warm
-}
-
-func egressManager(t testing.TB, eng *fakeEngine, pools ...config.PoolSpec) *Manager {
-	t.Helper()
-	return egressManagerAt(t, eng, t.TempDir(), pools...)
-}
-
 func egressManagerAt(t testing.TB, eng *fakeEngine, dataDir string, pools ...config.PoolSpec) *Manager {
 	t.Helper()
 	t.Setenv("GH_TOKEN", "s3cr3t")
@@ -695,15 +658,4 @@ func writeTestEgressCA(t testing.TB) *config.EgressCAConfig {
 		}
 	}
 	return ca
-}
-
-func withOutbound(t *testing.T, m *Manager, edit func(*outbound.Options)) {
-	t.Helper()
-	ca, err := outbound.LoadCA(m.cfg)
-	if err != nil {
-		t.Fatalf("load egress ca: %v", err)
-	}
-	o := m.outboundOptions(ca)
-	edit(&o)
-	m.out = outbound.New(o)
 }

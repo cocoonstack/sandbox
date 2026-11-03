@@ -29,7 +29,7 @@ func TestRouteTakesTheClaimThenClassThenPoolUpstream(t *testing.T) {
 		Pools:         []config.PoolSpec{{PoolKey: testKey, EgressUpstreamEnv: "POOL_UPSTREAM"}},
 		EgressClasses: []config.EgressClass{{Name: "desk", EgressUpstreamEnv: "CLASS_UPSTREAM"}},
 	}, nil)
-	for _, tc := range []struct {
+	for _, tt := range []struct {
 		name, class string
 		env         types.Env
 		want        string
@@ -39,10 +39,10 @@ func TestRouteTakesTheClaimThenClassThenPoolUpstream(t *testing.T) {
 		{"claim value", "desk", types.Env{"EGRESS_UPSTREAM": {Value: "socks5://127.0.0.1:3003", Guest: hostOnly}}, "socks5://127.0.0.1:3003"},
 		{"claim direct", "desk", types.Env{"EGRESS_UPSTREAM": {Value: "direct", Guest: hostOnly}}, ""},
 	} {
-		sb := &types.Sandbox{ID: "sb_route", Key: testKey, Tenant: "acme", EgressClass: tc.class}
-		sb.SetEnv(tc.env)
-		if got := newClaim(h, sb, nil, nil).Route(); got != tc.want {
-			t.Errorf("%s: route %q, want %q", tc.name, got, tc.want)
+		sb := &types.Sandbox{ID: "sb_route", Key: testKey, Tenant: "acme", EgressClass: tt.class}
+		sb.SetEnv(tt.env)
+		if got := newClaim(h, sb, nil, nil).Route(); got != tt.want {
+			t.Errorf("%s: route %q, want %q", tt.name, got, tt.want)
 		}
 	}
 }

@@ -21,8 +21,6 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
-const keepAnHour = 3600
-
 func TestFailoverArchiveWritesTheRow(t *testing.T) {
 	c := newFailoverCluster(t)
 	a := c.node(t, "a", t.TempDir(), keepAnHour)
@@ -50,9 +48,7 @@ func TestFailoverRowWriteFailureKeepsTheClaimHibernated(t *testing.T) {
 	c := newFailoverCluster(t)
 	a := c.node(t, "a", t.TempDir(), keepAnHour)
 	sb := mustClaim(t, a, testKey)
-	if err := a.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
-		t.Fatalf("hibernate: %v", err)
-	}
+	hibernateClaim(t, a, sb)
 	c.reg.SetDown(true)
 	if err := a.archive(t.Context(), sb); !errors.Is(err, ErrArchiveStoreDown) {
 		t.Fatalf("archive with the registry down: %v, want ErrArchiveStoreDown", err)
@@ -75,9 +71,7 @@ func TestFailoverRowWriteFailureKeepsTheClaimHibernated(t *testing.T) {
 func TestFailoverEnvRotationReachesTheAdopter(t *testing.T) {
 	c := newFailoverCluster(t)
 	a, b := c.node(t, "a", t.TempDir(), keepAnHour), c.node(t, "b", t.TempDir(), keepAnHour)
-	sb := mustClaim(t, a, testKey)
-	patchHostOnly(t, a, sb, "old")
-	mustArchive(t, a, sb)
+	sb := archivedWithEnv(t, a)
 	if rowEnv(t, c, sb) != "old" {
 		t.Fatalf("archive row env %q, want old", rowEnv(t, c, sb))
 	}
@@ -95,10 +89,7 @@ func TestFailoverEnvRotationReachesTheAdopter(t *testing.T) {
 	}
 
 	c.expire("a")
-	adopted, err := b.AdoptArchived(t.Context(), sb.ID, sb.Token)
-	if err != nil || !adopted {
-		t.Fatalf("adopt: %v %v", adopted, err)
-	}
+	mustAdopt(t, b, sb, "adopt")
 	held, ok := b.byID(sb.ID)
 	if !ok {
 		t.Fatal("adopter has no claim")
@@ -111,11 +102,9 @@ func TestFailoverEnvRotationReachesTheAdopter(t *testing.T) {
 func TestFailoverEnvRotationWithTheRegistryDownIsLoudAndARetryRepairs(t *testing.T) {
 	c := newFailoverCluster(t)
 	a := c.node(t, "a", t.TempDir(), keepAnHour)
-	sb := mustClaim(t, a, testKey)
-	patchHostOnly(t, a, sb, "old")
-	mustArchive(t, a, sb)
+	sb := archivedWithEnv(t, a)
 
-	reg := &replaceFailRegistry{Registry: c.reg, fail: true}
+	reg := &hookRegistry{Registry: c.reg, failPut: true}
 	a.archives = reg
 	patch := types.EnvPatch{"GH_TOKEN": {Value: "new", Guest: hostOnly}}
 	if err := a.PatchEnv(t.Context(), sb.ID, patch, ""); !errors.Is(err, archives.ErrUnavailable) {
@@ -124,7 +113,7 @@ func TestFailoverEnvRotationWithTheRegistryDownIsLoudAndARetryRepairs(t *testing
 	if got := rowEnv(t, c, sb); got != "old" {
 		t.Errorf("row env %q, want old until the write lands", got)
 	}
-	reg.fail = false
+	reg.failPut = false
 	if err := a.PatchEnv(t.Context(), sb.ID, patch, ""); err != nil {
 		t.Fatalf("resend: %v", err)
 	}
@@ -136,11 +125,9 @@ func TestFailoverEnvRotationWithTheRegistryDownIsLoudAndARetryRepairs(t *testing
 func TestFailoverEnvRotationSurvivesALostReply(t *testing.T) {
 	c := newFailoverCluster(t)
 	a := c.node(t, "a", t.TempDir(), keepAnHour)
-	sb := mustClaim(t, a, testKey)
-	patchHostOnly(t, a, sb, "old")
-	mustArchive(t, a, sb)
+	sb := archivedWithEnv(t, a)
 
-	reg := &replaceFailRegistry{Registry: c.reg, loseReply: true}
+	reg := &hookRegistry{Registry: c.reg, losePutReply: true}
 	a.archives = reg
 	patch := types.EnvPatch{"GH_TOKEN": {Value: "new", Guest: hostOnly}}
 	if err := a.PatchEnv(t.Context(), sb.ID, patch, ""); !errors.Is(err, archives.ErrUnavailable) {
@@ -162,13 +149,9 @@ func TestFailoverEnvRotationSurvivesALostReply(t *testing.T) {
 func TestFailoverEnvRotationOfAClaimAdoptedElsewhereDropsIt(t *testing.T) {
 	c := newFailoverCluster(t)
 	a, b := c.node(t, "a", t.TempDir(), keepAnHour), c.node(t, "b", t.TempDir(), keepAnHour)
-	sb := mustClaim(t, a, testKey)
-	patchHostOnly(t, a, sb, "old")
-	mustArchive(t, a, sb)
+	sb := archivedWithEnv(t, a)
 	c.expire("a")
-	if adopted, err := b.AdoptArchived(t.Context(), sb.ID, sb.Token); err != nil || !adopted {
-		t.Fatalf("adopt: %v %v", adopted, err)
-	}
+	mustAdopt(t, b, sb, "adopt")
 
 	patch := types.EnvPatch{"GH_TOKEN": {Value: "new", Guest: hostOnly}}
 	if err := a.PatchEnv(t.Context(), sb.ID, patch, ""); !errors.Is(err, ErrUnknownSandbox) {
@@ -185,9 +168,7 @@ func TestFailoverEnvRotationOfAClaimAdoptedElsewhereDropsIt(t *testing.T) {
 func TestFailoverEnvRotationWaitsForATransitionInFlight(t *testing.T) {
 	c := newFailoverCluster(t)
 	a := c.node(t, "a", t.TempDir(), keepAnHour)
-	sb := mustClaim(t, a, testKey)
-	patchHostOnly(t, a, sb, "old")
-	mustArchive(t, a, sb)
+	sb := archivedWithEnv(t, a)
 
 	sb.Transition.Lock()
 	done := make(chan error, 1)
@@ -211,11 +192,11 @@ func TestFailoverEnvWriteOfARunningClaimLeavesTheRegistryAlone(t *testing.T) {
 	c := newFailoverCluster(t)
 	a := c.node(t, "a", t.TempDir(), keepAnHour)
 	sb := mustClaim(t, a, testKey)
-	reg := &replaceFailRegistry{Registry: c.reg, fail: true}
+	reg := &hookRegistry{Registry: c.reg, failPut: true}
 	a.archives = reg
 	patchHostOnly(t, a, sb, "new")
-	if reg.calls != 0 {
-		t.Errorf("%d registry replaces for a claim with no row, want 0", reg.calls)
+	if reg.replaces != 0 {
+		t.Errorf("%d registry replaces for a claim with no row, want 0", reg.replaces)
 	}
 }
 
@@ -266,9 +247,7 @@ func TestFailoverAdoptionMovesTheClaimAndTheOldOwnerLetsGo(t *testing.T) {
 	ck := sb.ArchiveCk
 	c.expire("a")
 
-	if adopted, err := b.AdoptArchived(t.Context(), sb.ID, sb.Token); err != nil || !adopted {
-		t.Fatalf("adopt: %v %v, want adopted", adopted, err)
-	}
+	mustAdopt(t, b, sb, "adopt")
 	if rec, _, _ := c.reg.Get(t.Context(), sb.ID); rec.Owner != "b" || rec.Epoch != 2 {
 		t.Errorf("row %s@%d, want b@2", rec.Owner, rec.Epoch)
 	}
@@ -296,9 +275,7 @@ func TestFailoverNoAdoptionWhileTheOwnerIsAlive(t *testing.T) {
 	sb := mustClaim(t, a, testKey)
 	mustArchive(t, a, sb)
 
-	if adopted, err := b.AdoptArchived(t.Context(), sb.ID, sb.Token); err != nil || adopted {
-		t.Errorf("adopt from a live owner: %v %v, want refused", adopted, err)
-	}
+	assertNotAdopted(t, b, sb, "adopt from a live owner")
 	if rec, _, _ := c.reg.Get(t.Context(), sb.ID); rec.Owner != "a" || rec.Epoch != 1 {
 		t.Errorf("row %s@%d, want a@1", rec.Owner, rec.Epoch)
 	}
@@ -312,18 +289,14 @@ func TestFailoverADrainingNodeDoesNotAdopt(t *testing.T) {
 	c.expire("a")
 	b.Drain(t.Context())
 
-	if adopted, err := b.AdoptArchived(t.Context(), sb.ID, sb.Token); err != nil || adopted {
-		t.Errorf("adopt on a draining node: %v %v, want refused", adopted, err)
-	}
+	assertNotAdopted(t, b, sb, "adopt on a draining node")
 	if rec, _, _ := c.reg.Get(t.Context(), sb.ID); rec.Owner != "a" || rec.Epoch != 1 {
 		t.Errorf("row %s@%d, want a@1 left for another node", rec.Owner, rec.Epoch)
 	}
 	b.mu.Lock()
 	b.draining = false
 	b.mu.Unlock()
-	if adopted, err := b.AdoptArchived(t.Context(), sb.ID, sb.Token); err != nil || !adopted {
-		t.Errorf("adopt once the drain lifts: %v %v, want adopted", adopted, err)
-	}
+	mustAdopt(t, b, sb, "adopt once the drain lifts")
 }
 
 func TestFailoverAdoptionNeedsTheToken(t *testing.T) {
@@ -387,9 +360,7 @@ func TestFailoverRestartDropsAClaimAdoptedElsewhere(t *testing.T) {
 	sb := mustClaim(t, a, testKey)
 	mustArchive(t, a, sb)
 	c.expire("a")
-	if adopted, err := b.AdoptArchived(t.Context(), sb.ID, sb.Token); err != nil || !adopted {
-		t.Fatalf("adopt: %v %v", adopted, err)
-	}
+	mustAdopt(t, b, sb, "adopt")
 	if _, _, _, err := b.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
 		t.Fatalf("adopter's wake: %v", err)
 	}
@@ -419,9 +390,7 @@ func TestFailoverRestartReclaimsAnInterruptedArchive(t *testing.T) {
 	claims := map[string]*types.Sandbox{
 		"sb_x": {ID: "sb_x", VMName: "sbx-gone-1", Key: testKey, Token: "tok", HibernateSnap: "sbx-hib-x"},
 	}
-	if err := newClaimStore(dirA, false).save(claims); err != nil {
-		t.Fatalf("setup: %v", err)
-	}
+	seedClaims(t, dirA, claims)
 	a := c.node(t, "a", dirA, keepAnHour)
 	const ck = "ck_00000000000000aa"
 	seedArchiveCk(t, a, ck, "sb_x")
@@ -442,9 +411,7 @@ func TestFailoverRestartReclaimSparesACheckpointAdoptedMidReconcile(t *testing.T
 	claims := map[string]*types.Sandbox{
 		"sb_x": {ID: "sb_x", VMName: "sbx-gone-1", Key: testKey, Token: "tok", HibernateSnap: "sbx-hib-x"},
 	}
-	if err := newClaimStore(dirA, false).save(claims); err != nil {
-		t.Fatalf("setup: %v", err)
-	}
+	seedClaims(t, dirA, claims)
 	a := c.node(t, "a", dirA, keepAnHour)
 	const ck = "ck_00000000000000cc"
 	seedArchiveCk(t, a, ck, "sb_x")
@@ -467,9 +434,7 @@ func TestFailoverRestartReclaimsOnlyTheCheckpointsItPublished(t *testing.T) {
 	claims := map[string]*types.Sandbox{
 		"sb_x": {ID: "sb_x", VMName: "sbx-gone-1", Key: testKey, Token: "tok", HibernateSnap: "sbx-hib-x"},
 	}
-	if err := newClaimStore(dirA, false).save(claims); err != nil {
-		t.Fatalf("setup: %v", err)
-	}
+	seedClaims(t, dirA, claims)
 	a := c.node(t, "a", dirA, keepAnHour)
 	const own, foreign = "ck_00000000000000e1", "ck_00000000000000e2"
 	seedArchiveCkBy(t, a, "a", own, "sb_x")
@@ -489,9 +454,7 @@ func TestFailoverRestartDropsAClaimWhoseInterruptedArchiveWasAdopted(t *testing.
 	c := newFailoverCluster(t)
 	a := c.node(t, "a", t.TempDir(), keepAnHour)
 	sb := mustClaim(t, a, testKey)
-	if err := a.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
-		t.Fatalf("hibernate: %v", err)
-	}
+	hibernateClaim(t, a, sb)
 	if err := a.FlushClaims(); err != nil {
 		t.Fatalf("flush: %v", err)
 	}
@@ -511,7 +474,7 @@ func TestFailoverRestartDropsAClaimWhoseInterruptedArchiveWasAdopted(t *testing.
 	if _, held := restarted.byID(sb.ID); held {
 		t.Error("the restarted node kept a claim whose archive another node adopted")
 	}
-	eng := a.eng.(*fakeEngine)
+	eng := fakeOf(a)
 	eng.mu.Lock()
 	snapDropped := slices.Contains(eng.snapRemoves, snap)
 	eng.mu.Unlock()
@@ -572,9 +535,7 @@ func TestFailoverReleaseAfterAdoptionKeepsTheCheckpoint(t *testing.T) {
 	sb := mustClaim(t, a, testKey)
 	mustArchive(t, a, sb)
 	c.expire("a")
-	if adopted, err := b.AdoptArchived(t.Context(), sb.ID, sb.Token); err != nil || !adopted {
-		t.Fatalf("adopt: %v %v", adopted, err)
-	}
+	mustAdopt(t, b, sb, "adopt")
 	if err := a.Release(t.Context(), sb.ID, Cred{Token: sb.Token}); !errors.Is(err, ErrUnknownSandbox) {
 		t.Errorf("old owner's release: %v, want ErrUnknownSandbox", err)
 	}
@@ -658,7 +619,7 @@ func TestFailoverAdoptionMidWakeFencesTheOwnerOut(t *testing.T) {
 	if _, _, _, err := a.WakeAgentSocket(t.Context(), sb.ID, sb.Token); !errors.Is(err, ErrUnknownSandbox) {
 		t.Fatalf("owner's wake after a mid-wake adoption: %v, want ErrUnknownSandbox", err)
 	}
-	eng := a.eng.(*fakeEngine)
+	eng := fakeOf(a)
 	eng.mu.Lock()
 	built := eng.clones[len(eng.clones)-1]
 	eng.mu.Unlock()
@@ -763,9 +724,7 @@ func TestFailoverArchivePutsTheRowUnderTransition(t *testing.T) {
 	c := newFailoverCluster(t)
 	a := c.node(t, "a", t.TempDir(), keepAnHour)
 	sb := mustClaim(t, a, testKey)
-	if err := a.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
-		t.Fatalf("hibernate: %v", err)
-	}
+	hibernateClaim(t, a, sb)
 	wakeable := false
 	a.archives = &hookRegistry{Registry: c.reg, beforePut: func() {
 		if sb.Transition.TryLock() {
@@ -808,27 +767,22 @@ func TestFailoverRestartAfterAConsumeWithoutCommitKeepsTheClaim(t *testing.T) {
 	a := c.node(t, "a", t.TempDir(), keepAnHour)
 	sb := mustClaim(t, a, testKey)
 	mustArchive(t, a, sb)
-	epoch, err := c.reg.Take(t.Context(), sb.ID, 1, "a")
-	if err != nil {
-		t.Fatalf("take: %v", err)
-	}
+	epoch := c.take(t, sb.ID, "a")
 	_, _ = a.commitIfLive(t.Context(), sb, func() { sb.ArchiveEpoch = epoch })
-	if _, err = c.reg.Consume(t.Context(), sb.ID, epoch); err != nil {
-		t.Fatalf("consume: %v", err)
-	}
-	if err = a.FlushClaims(); err != nil {
+	c.consume(t, sb.ID, epoch)
+	if err := a.FlushClaims(); err != nil {
 		t.Fatalf("flush: %v", err)
 	}
 
 	restarted := c.restart(t, a)
-	if err = restarted.Reconcile(t.Context()); err != nil {
+	if err := restarted.Reconcile(t.Context()); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
 	held, _ := restarted.byID(sb.ID)
 	if rec, ok, _ := c.reg.Get(t.Context(), sb.ID); !ok || rec.Owner != "a" || rec.Consumed || held == nil || held.ArchiveEpoch != rec.Epoch {
 		t.Fatalf("row %+v present %v, held %v, want the tombstone re-armed at the claim's epoch", rec, ok, held != nil)
 	}
-	if _, _, _, err = restarted.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
+	if _, _, _, err := restarted.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
 		t.Errorf("wake after the restart: %v", err)
 	}
 }
@@ -843,9 +797,7 @@ func TestFailoverAnArchiveWokenElsewhereIsDropped(t *testing.T) {
 		t.Fatalf("flush: %v", err)
 	}
 	c.expire("a")
-	if adopted, err := b.AdoptArchived(t.Context(), sb.ID, sb.Token); err != nil || !adopted {
-		t.Fatalf("adopt: %v %v", adopted, err)
-	}
+	mustAdopt(t, b, sb, "adopt")
 	if _, _, _, err := b.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
 		t.Fatalf("adopter's wake: %v", err)
 	}
@@ -876,9 +828,7 @@ func TestFailoverALeftoverDeleteMarkerSparesTheAdoptersCheckpoint(t *testing.T) 
 		t.Fatalf("mark: %v", err)
 	}
 	c.expire("a")
-	if adopted, err := b.AdoptArchived(t.Context(), sb.ID, sb.Token); err != nil || !adopted {
-		t.Fatalf("adopt: %v %v", adopted, err)
-	}
+	mustAdopt(t, b, sb, "adopt")
 	c.renew(t, "a")
 	if _, _, _, err := a.WakeAgentSocket(t.Context(), sb.ID, sb.Token); !errors.Is(err, ErrUnknownSandbox) {
 		t.Fatalf("old owner's wake: %v, want ErrUnknownSandbox", err)
@@ -902,9 +852,7 @@ func TestFailoverRestartClearsTheMarkerOfAnAdoptedClaim(t *testing.T) {
 		t.Fatalf("flush: %v", err)
 	}
 	c.expire("a")
-	if adopted, err := b.AdoptArchived(t.Context(), sb.ID, sb.Token); err != nil || !adopted {
-		t.Fatalf("adopt: %v %v", adopted, err)
-	}
+	mustAdopt(t, b, sb, "adopt")
 	c.renew(t, "a")
 
 	restarted := c.restart(t, a)
@@ -924,7 +872,7 @@ func TestFailoverARepeatedAdoptionOnOneNodeKeepsOneClaim(t *testing.T) {
 			t.Fatalf("put tenant: %v", err)
 		}
 	}
-	sb, err := claimAnyAs(t, a, "acme")
+	sb, err := claimAny(t.Context(), a, testKey, ClaimOptions{Tenant: "acme"})
 	if err != nil {
 		t.Fatalf("claim: %v", err)
 	}
@@ -940,9 +888,7 @@ func TestFailoverARepeatedAdoptionOnOneNodeKeepsOneClaim(t *testing.T) {
 		})
 	}
 	wg.Wait()
-	if adopted, err := b.AdoptArchived(t.Context(), sb.ID, sb.Token); err != nil || !adopted {
-		t.Fatalf("repeated adopt: %v %v, want adopted", adopted, err)
-	}
+	mustAdopt(t, b, sb, "repeated adopt")
 	if n := b.TenantClaims()["acme"]; n != 1 {
 		t.Errorf("tenant acme counts %d claims on b, want 1", n)
 	}
@@ -969,9 +915,7 @@ func TestFailoverRestartInsideAnAdoptersWakeDropsTheClaim(t *testing.T) {
 	}
 	ck := sb.ArchiveCk
 	c.expire("a")
-	if adopted, err := b.AdoptArchived(t.Context(), sb.ID, sb.Token); err != nil || !adopted {
-		t.Fatalf("adopt: %v %v", adopted, err)
-	}
+	mustAdopt(t, b, sb, "adopt")
 	b.ckpts = &failingDeleteStore{Store: b.ckpts, attempts: make(chan string, 8)}
 	if _, _, _, err := b.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
 		t.Fatalf("adopter's wake: %v", err)
@@ -1007,9 +951,7 @@ func TestFailoverRestartAfterAnAdopterReleasedDropsTheClaim(t *testing.T) {
 		t.Fatalf("flush: %v", err)
 	}
 	c.expire("a")
-	if adopted, err := b.AdoptArchived(t.Context(), sb.ID, sb.Token); err != nil || !adopted {
-		t.Fatalf("adopt: %v %v", adopted, err)
-	}
+	mustAdopt(t, b, sb, "adopt")
 	b.ckpts = &failingDeleteStore{Store: b.ckpts, attempts: make(chan string, 8)}
 	if err := b.Release(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
 		t.Fatalf("adopter's release: %v", err)
@@ -1035,9 +977,7 @@ func TestFailoverReleaseDuringAnArchiveLeavesNoRow(t *testing.T) {
 	c := newFailoverCluster(t)
 	a := c.node(t, "a", t.TempDir(), keepAnHour)
 	sb := mustClaim(t, a, testKey)
-	if err := a.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
-		t.Fatalf("hibernate: %v", err)
-	}
+	hibernateClaim(t, a, sb)
 	released := make(chan error, 1)
 	a.archives = &hookRegistry{Registry: c.reg, beforePut: func() {
 		go func() { released <- a.Release(t.Context(), sb.ID, Cred{Token: sb.Token}) }()
@@ -1068,9 +1008,7 @@ func TestFailoverRestartDropsAClaimAdoptedWhileItsInterruptedArchiveSettles(t *t
 	c := newFailoverCluster(t)
 	a, b := c.node(t, "a", t.TempDir(), keepAnHour), c.node(t, "b", t.TempDir(), keepAnHour)
 	sb := mustClaim(t, a, testKey)
-	if err := a.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
-		t.Fatalf("hibernate: %v", err)
-	}
+	hibernateClaim(t, a, sb)
 	if err := a.FlushClaims(); err != nil {
 		t.Fatalf("flush: %v", err)
 	}
@@ -1102,9 +1040,7 @@ func TestFailoverRestartKeepsAClaimWhoseInterruptedArchiveRowVanished(t *testing
 	c := newFailoverCluster(t)
 	a := c.node(t, "a", t.TempDir(), keepAnHour)
 	sb := mustClaim(t, a, testKey)
-	if err := a.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
-		t.Fatalf("hibernate: %v", err)
-	}
+	hibernateClaim(t, a, sb)
 	if err := a.FlushClaims(); err != nil {
 		t.Fatalf("flush: %v", err)
 	}
@@ -1166,9 +1102,7 @@ func TestFailoverSweepLeavesADepartedOwnersTombstoneUntilItReturns(t *testing.T)
 	mustArchive(t, a, sb)
 	ck := sb.ArchiveCk
 	c.expire("a")
-	if adopted, err := b.AdoptArchived(t.Context(), sb.ID, sb.Token); err != nil || !adopted {
-		t.Fatalf("adopt: %v %v", adopted, err)
-	}
+	mustAdopt(t, b, sb, "adopt")
 	healthy := b.ckpts
 	b.ckpts = &failingDeleteStore{Store: healthy, attempts: make(chan string, 8)}
 	if _, _, _, err := b.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
@@ -1260,9 +1194,7 @@ func TestFailoverATombstoneIsNotAdopted(t *testing.T) {
 	counted := &countingRegistry{Registry: c.reg}
 	d.archives = counted
 
-	if adopted, err := d.AdoptArchived(t.Context(), sb.ID, sb.Token); err != nil || adopted {
-		t.Errorf("adopt of a tombstone: %v %v, want refused", adopted, err)
-	}
+	assertNotAdopted(t, d, sb, "adopt of a tombstone")
 	if n := counted.takes.Load(); n != 0 {
 		t.Errorf("adoption tried %d takes on a tombstone, want none", n)
 	}
@@ -1279,9 +1211,7 @@ func TestFailoverADropClearsTheMarkerBeforeTheCheckpointIsUnpinned(t *testing.T)
 			t.Fatalf("mark: %v", err)
 		}
 		c.expire("a")
-		if adopted, err := b.AdoptArchived(t.Context(), sb.ID, sb.Token); err != nil || !adopted {
-			t.Fatalf("adopt: %v %v", adopted, err)
-		}
+		mustAdopt(t, b, sb, "adopt")
 		done := make(chan struct{})
 		var wg sync.WaitGroup
 		wg.Go(func() {
@@ -1349,18 +1279,14 @@ func TestFailoverARepeatedAdoptionOfAReleasedClaimIsRefused(t *testing.T) {
 	sb := mustClaim(t, a, testKey)
 	mustArchive(t, a, sb)
 	c.expire("a")
-	if adopted, err := b.AdoptArchived(t.Context(), sb.ID, sb.Token); err != nil || !adopted {
-		t.Fatalf("adopt: %v %v", adopted, err)
-	}
+	mustAdopt(t, b, sb, "adopt")
 	cur, _ := b.byID(sb.ID)
 	ck := cur.ArchiveCk
 	if err := b.Release(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
 		t.Fatalf("release: %v", err)
 	}
 
-	if adopted, err := b.AdoptArchived(t.Context(), sb.ID, sb.Token); err != nil || adopted {
-		t.Errorf("repeated adopt of a released claim: %v %v, want refused", adopted, err)
-	}
+	assertNotAdopted(t, b, sb, "repeated adopt of a released claim")
 	if rec, ok, _ := c.reg.Get(t.Context(), sb.ID); ok {
 		t.Errorf("row %+v outlived the released claim", rec)
 	}
@@ -1373,13 +1299,8 @@ func TestFailoverSweepDropsTheRowOfAnArchiveThatNeverCommitted(t *testing.T) {
 	c := newFailoverCluster(t)
 	a := c.node(t, "a", t.TempDir(), keepAnHour)
 	sb := mustClaim(t, a, testKey)
-	if err := a.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
-		t.Fatalf("hibernate: %v", err)
-	}
-	a.archives = &hookRegistry{Registry: c.reg, losePutReply: true}
-	if err := a.archive(t.Context(), sb); !errors.Is(err, ErrArchiveStoreDown) {
-		t.Fatalf("archive whose put reply was lost: %v, want ErrArchiveStoreDown", err)
-	}
+	hibernateClaim(t, a, sb)
+	c.archiveLosingPutReply(t, a, sb)
 	stale, _, _ := c.reg.Get(t.Context(), sb.ID)
 
 	a.sweepOrphanArchives(t.Context())
@@ -1413,9 +1334,7 @@ func TestFailoverSweepRearmsATombstoneItsArchivedClaimHolds(t *testing.T) {
 		t.Fatalf("row %+v, local epoch %d, want the tombstone re-armed at the claim's epoch", rec, epoch)
 	}
 	c.expire("a")
-	if adopted, err := b.AdoptArchived(t.Context(), sb.ID, sb.Token); err != nil || !adopted {
-		t.Errorf("adopt of the re-armed archive: %v %v, want adopted", adopted, err)
-	}
+	mustAdopt(t, b, sb, "adopt of the re-armed archive")
 }
 
 func TestFailoverSweepLeavesADepartedOwnersWakeTombstone(t *testing.T) {
@@ -1423,13 +1342,8 @@ func TestFailoverSweepLeavesADepartedOwnersWakeTombstone(t *testing.T) {
 	a, b := c.node(t, "a", t.TempDir(), keepAnHour), c.node(t, "b", t.TempDir(), keepAnHour)
 	sb := mustClaim(t, a, testKey)
 	mustArchive(t, a, sb)
-	epoch, err := c.reg.Take(t.Context(), sb.ID, 1, "a")
-	if err != nil {
-		t.Fatalf("take: %v", err)
-	}
-	if _, err = c.reg.Consume(t.Context(), sb.ID, epoch); err != nil {
-		t.Fatalf("consume: %v", err)
-	}
+	epoch := c.take(t, sb.ID, "a")
+	c.consume(t, sb.ID, epoch)
 	c.expire("a")
 
 	b.sweepOrphanArchives(t.Context())
@@ -1443,15 +1357,10 @@ func TestFailoverRestartAfterAConsumeWhileAPeerSweptKeepsTheClaim(t *testing.T) 
 	a, b := c.node(t, "a", t.TempDir(), keepAnHour), c.node(t, "b", t.TempDir(), keepAnHour)
 	sb := mustClaim(t, a, testKey)
 	mustArchive(t, a, sb)
-	epoch, err := c.reg.Take(t.Context(), sb.ID, 1, "a")
-	if err != nil {
-		t.Fatalf("take: %v", err)
-	}
+	epoch := c.take(t, sb.ID, "a")
 	_, _ = a.commitIfLive(t.Context(), sb, func() { sb.ArchiveEpoch = epoch })
-	if _, err = c.reg.Consume(t.Context(), sb.ID, epoch); err != nil {
-		t.Fatalf("consume: %v", err)
-	}
-	if err = a.FlushClaims(); err != nil {
+	c.consume(t, sb.ID, epoch)
+	if err := a.FlushClaims(); err != nil {
 		t.Fatalf("flush: %v", err)
 	}
 	c.expire("a")
@@ -1459,13 +1368,13 @@ func TestFailoverRestartAfterAConsumeWhileAPeerSweptKeepsTheClaim(t *testing.T) 
 	c.renew(t, "a")
 
 	restarted := c.restart(t, a)
-	if err = restarted.Reconcile(t.Context()); err != nil {
+	if err := restarted.Reconcile(t.Context()); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
 	if _, held := restarted.byID(sb.ID); !held {
 		t.Fatal("the restart dropped a claim whose only copy a peer swept")
 	}
-	if _, _, _, err = restarted.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
+	if _, _, _, err := restarted.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
 		t.Errorf("wake after the restart: %v", err)
 	}
 }
@@ -1474,9 +1383,7 @@ func TestFailoverArchiveSweepExportsNothingWhileTheRegistryIsDown(t *testing.T) 
 	c := newFailoverCluster(t)
 	a := c.node(t, "a", t.TempDir(), keepAnHour)
 	sb := mustClaim(t, a, testKey)
-	if err := a.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
-		t.Fatalf("hibernate: %v", err)
-	}
+	hibernateClaim(t, a, sb)
 	c.reg.SetDown(true)
 	for range 3 {
 		backdate(a, sb, time.Minute)
@@ -1495,9 +1402,7 @@ func TestFailoverArchiveExportsNothingForARowAnotherNodeHolds(t *testing.T) {
 	c := newFailoverCluster(t)
 	a := c.node(t, "a", t.TempDir(), keepAnHour)
 	sb := mustClaim(t, a, testKey)
-	if err := a.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
-		t.Fatalf("hibernate: %v", err)
-	}
+	hibernateClaim(t, a, sb)
 	if _, err := c.reg.Put(t.Context(), archives.Record{ID: sb.ID, Owner: "b", Checkpoint: "ck_00000000000000ee", Claim: []byte(`{}`)}); err != nil {
 		t.Fatalf("put: %v", err)
 	}
@@ -1518,9 +1423,7 @@ func TestFailoverAWakeKeepsItsFenceAgainstThisNodesOwnAdoption(t *testing.T) {
 	mustArchive(t, a, sb)
 	ck := sb.ArchiveCk
 	c.expire("a")
-	if adopted, err := b.AdoptArchived(t.Context(), sb.ID, sb.Token); err != nil || !adopted {
-		t.Fatalf("adopt: %v %v", adopted, err)
-	}
+	mustAdopt(t, b, sb, "adopt")
 	b.archives = &hookRegistry{Registry: c.reg, beforeConsume: func() {
 		taken, _, _ := c.reg.Get(t.Context(), sb.ID)
 		if adopted, err := b.AdoptArchived(t.Context(), sb.ID, sb.Token); err != nil || !adopted {
@@ -1554,7 +1457,7 @@ func TestFailoverConcurrentAdoptionsOnOneNodeAllAnswerForIt(t *testing.T) {
 			t.Fatalf("put tenant: %v", err)
 		}
 	}
-	sb, err := claimAnyAs(t, a, "acme")
+	sb, err := claimAny(t.Context(), a, testKey, ClaimOptions{Tenant: "acme"})
 	if err != nil {
 		t.Fatalf("claim: %v", err)
 	}
@@ -1588,38 +1491,36 @@ func TestFailoverConcurrentAdoptionsOnOneNodeAllAnswerForIt(t *testing.T) {
 }
 
 func TestFailoverACoalescedAdoptionStillNeedsTheToken(t *testing.T) {
-	c := newFailoverCluster(t)
-	a, b := c.node(t, "a", t.TempDir(), keepAnHour), c.node(t, "b", t.TempDir(), keepAnHour)
-	sb := mustClaim(t, a, testKey)
-	mustArchive(t, a, sb)
-	c.expire("a")
-	wrong := make(chan bool, 1)
-	b.archives = &hookRegistry{Registry: c.reg, beforeTake: func() {
-		go func() {
-			ok, _ := b.AdoptArchived(t.Context(), sb.ID, "wrong")
-			wrong <- ok
-		}()
-		select {
-		case ok := <-wrong:
-			wrong <- ok
-		case <-time.After(200 * time.Millisecond):
+	synctest.Test(t, func(t *testing.T) {
+		c := newFailoverCluster(t)
+		a, b := c.node(t, "a", t.TempDir(), keepAnHour), c.node(t, "b", t.TempDir(), keepAnHour)
+		sb := mustClaim(t, a, testKey)
+		mustArchive(t, a, sb)
+		c.expire("a")
+		wrong := make(chan bool, 1)
+		b.archives = &hookRegistry{Registry: c.reg, beforeTake: func() {
+			go func() {
+				ok, _ := b.AdoptArchived(t.Context(), sb.ID, "wrong")
+				wrong <- ok
+			}()
+			select {
+			case ok := <-wrong:
+				wrong <- ok
+			case <-time.After(200 * time.Millisecond):
+			}
+		}}
+		mustAdopt(t, b, sb, "adopt")
+		if <-wrong {
+			t.Error("an adoption with a wrong token answered for the claim")
 		}
-	}}
-	if adopted, err := b.AdoptArchived(t.Context(), sb.ID, sb.Token); err != nil || !adopted {
-		t.Fatalf("adopt: %v %v", adopted, err)
-	}
-	if <-wrong {
-		t.Error("an adoption with a wrong token answered for the claim")
-	}
+	})
 }
 
 func TestFailoverArchivePersistsItsIntentBeforeThePut(t *testing.T) {
 	c := newFailoverCluster(t)
 	a := c.node(t, "a", t.TempDir(), keepAnHour)
 	sb := mustClaim(t, a, testKey)
-	if err := a.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
-		t.Fatalf("hibernate: %v", err)
-	}
+	hibernateClaim(t, a, sb)
 	var intent string
 	a.archives = &hookRegistry{Registry: c.reg, beforePut: func() {
 		stored, err := newClaimStore(a.dataDir, false).load()
@@ -1645,17 +1546,13 @@ func TestFailoverRestartDropsAClaimWhoseInterruptedArchiveWasConsumedElsewhere(t
 	c := newFailoverCluster(t)
 	a, b := c.node(t, "a", t.TempDir(), keepAnHour), c.node(t, "b", t.TempDir(), keepAnHour)
 	sb := mustClaim(t, a, testKey)
-	if err := a.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
-		t.Fatalf("hibernate: %v", err)
-	}
+	hibernateClaim(t, a, sb)
 	a.mu.Lock()
 	vm := sb.VMName
 	a.mu.Unlock()
 	ck := interruptArchive(t, a, sb, true)
 	c.expire("a")
-	if adopted, err := b.AdoptArchived(t.Context(), sb.ID, sb.Token); err != nil || !adopted {
-		t.Fatalf("adopt: %v %v", adopted, err)
-	}
+	mustAdopt(t, b, sb, "adopt")
 	if _, _, _, err := b.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
 		t.Fatalf("adopter's wake: %v", err)
 	}
@@ -1671,7 +1568,7 @@ func TestFailoverRestartDropsAClaimWhoseInterruptedArchiveWasConsumedElsewhere(t
 	if _, held := restarted.byID(sb.ID); held {
 		t.Error("the restarted node kept a claim another node adopted and woke")
 	}
-	if eng := a.eng.(*fakeEngine); !eng.removed(vm) {
+	if eng := fakeOf(a); !eng.removed(vm) {
 		t.Errorf("the dropped claim's VM %s was not swept", vm)
 	}
 }
@@ -1680,9 +1577,7 @@ func TestFailoverRestartKeepsAClaimWhoseArchivePutNeverCommitted(t *testing.T) {
 	c := newFailoverCluster(t)
 	a := c.node(t, "a", t.TempDir(), keepAnHour)
 	sb := mustClaim(t, a, testKey)
-	if err := a.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
-		t.Fatalf("hibernate: %v", err)
-	}
+	hibernateClaim(t, a, sb)
 	ck := interruptArchive(t, a, sb, false)
 
 	restarted := c.restart(t, a)
@@ -1702,9 +1597,7 @@ func TestFailoverRestartKeepsAnIntentWhoseCheckpointItCannotRead(t *testing.T) {
 	c := newFailoverCluster(t)
 	a := c.node(t, "a", t.TempDir(), keepAnHour)
 	sb := mustClaim(t, a, testKey)
-	if err := a.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
-		t.Fatalf("hibernate: %v", err)
-	}
+	hibernateClaim(t, a, sb)
 	ck := interruptArchive(t, a, sb, false)
 
 	restarted := c.restart(t, a)
@@ -1725,9 +1618,7 @@ func TestFailoverRestartAfterAnAbandonClearedItsIntentReclaimsTheExport(t *testi
 	c := newFailoverCluster(t)
 	a := c.node(t, "a", t.TempDir(), keepAnHour)
 	sb := mustClaim(t, a, testKey)
-	if err := a.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
-		t.Fatalf("hibernate: %v", err)
-	}
+	hibernateClaim(t, a, sb)
 	ck := interruptArchive(t, a, sb, false)
 	if !a.clearArchiveIntent(t.Context(), sb, ck) {
 		t.Fatal("setup: clear intent")
@@ -1746,9 +1637,7 @@ func TestFailoverAnAbandonKeepsTheExportWhileItsIntentIsDurable(t *testing.T) {
 	c := newFailoverCluster(t)
 	a := c.node(t, "a", t.TempDir(), keepAnHour)
 	sb := mustClaim(t, a, testKey)
-	if err := a.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
-		t.Fatalf("hibernate: %v", err)
-	}
+	hibernateClaim(t, a, sb)
 	ck := interruptArchive(t, a, sb, true)
 	rec, _, _ := c.reg.Get(t.Context(), sb.ID)
 	breakStore(t, a)
@@ -1796,9 +1685,7 @@ func TestFailoverRestartDropsAClaimConsumedWhileItSettlesItsInterruptedArchive(t
 	c := newFailoverCluster(t)
 	a, b := c.node(t, "a", t.TempDir(), keepAnHour), c.node(t, "b", t.TempDir(), keepAnHour)
 	sb := mustClaim(t, a, testKey)
-	if err := a.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
-		t.Fatalf("hibernate: %v", err)
-	}
+	hibernateClaim(t, a, sb)
 	ck := interruptArchive(t, a, sb, true)
 
 	restarted := c.restart(t, a)
@@ -1829,9 +1716,7 @@ func TestFailoverRestartUndoesItsOwnInterruptedArchiveAndItsIntent(t *testing.T)
 	c := newFailoverCluster(t)
 	a := c.node(t, "a", t.TempDir(), keepAnHour)
 	sb := mustClaim(t, a, testKey)
-	if err := a.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
-		t.Fatalf("hibernate: %v", err)
-	}
+	hibernateClaim(t, a, sb)
 	ck := interruptArchive(t, a, sb, true)
 
 	restarted := c.restart(t, a)
@@ -1851,13 +1736,8 @@ func TestFailoverReleaseAfterALostArchivePutReplyLeavesNothingAdoptable(t *testi
 	c := newFailoverCluster(t)
 	a, b := c.node(t, "a", t.TempDir(), keepAnHour), c.node(t, "b", t.TempDir(), keepAnHour)
 	sb := mustClaim(t, a, testKey)
-	if err := a.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
-		t.Fatalf("hibernate: %v", err)
-	}
-	a.archives = &hookRegistry{Registry: c.reg, losePutReply: true}
-	if err := a.archive(t.Context(), sb); !errors.Is(err, ErrArchiveStoreDown) {
-		t.Fatalf("archive whose put reply was lost: %v, want ErrArchiveStoreDown", err)
-	}
+	hibernateClaim(t, a, sb)
+	c.archiveLosingPutReply(t, a, sb)
 	if err := a.Release(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
 		t.Fatalf("release: %v", err)
 	}
@@ -1871,13 +1751,8 @@ func TestFailoverTheNextArchiveSettlesALostPutReplyFirst(t *testing.T) {
 	c := newFailoverCluster(t)
 	a := c.node(t, "a", t.TempDir(), keepAnHour)
 	sb := mustClaim(t, a, testKey)
-	if err := a.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
-		t.Fatalf("hibernate: %v", err)
-	}
-	a.archives = &hookRegistry{Registry: c.reg, losePutReply: true}
-	if err := a.archive(t.Context(), sb); !errors.Is(err, ErrArchiveStoreDown) {
-		t.Fatalf("archive whose put reply was lost: %v, want ErrArchiveStoreDown", err)
-	}
+	hibernateClaim(t, a, sb)
+	c.archiveLosingPutReply(t, a, sb)
 	a.archives = c.reg
 	if err := a.archive(t.Context(), sb); err != nil {
 		t.Fatalf("next archive: %v", err)
@@ -1893,13 +1768,8 @@ func TestFailoverSweepSettlesALostArchivePutReply(t *testing.T) {
 	c := newFailoverCluster(t)
 	a := c.node(t, "a", t.TempDir(), keepAnHour)
 	sb := mustClaim(t, a, testKey)
-	if err := a.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
-		t.Fatalf("hibernate: %v", err)
-	}
-	a.archives = &hookRegistry{Registry: c.reg, losePutReply: true}
-	if err := a.archive(t.Context(), sb); !errors.Is(err, ErrArchiveStoreDown) {
-		t.Fatalf("archive whose put reply was lost: %v, want ErrArchiveStoreDown", err)
-	}
+	hibernateClaim(t, a, sb)
+	c.archiveLosingPutReply(t, a, sb)
 	a.mu.Lock()
 	pending := sb.ArchivePending
 	a.mu.Unlock()
@@ -1925,13 +1795,8 @@ func TestFailoverAWakeSettlesALostArchivePutReplyFirst(t *testing.T) {
 	c := newFailoverCluster(t)
 	a := c.node(t, "a", t.TempDir(), keepAnHour)
 	sb := mustClaim(t, a, testKey)
-	if err := a.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
-		t.Fatalf("hibernate: %v", err)
-	}
-	a.archives = &hookRegistry{Registry: c.reg, losePutReply: true}
-	if err := a.archive(t.Context(), sb); !errors.Is(err, ErrArchiveStoreDown) {
-		t.Fatalf("archive whose put reply was lost: %v, want ErrArchiveStoreDown", err)
-	}
+	hibernateClaim(t, a, sb)
+	c.archiveLosingPutReply(t, a, sb)
 	a.archives = c.reg
 	if _, _, _, err := a.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
 		t.Fatalf("wake: %v", err)
@@ -1954,13 +1819,8 @@ func TestFailoverAWakeWithoutARegistryKeepsItsPendingIntent(t *testing.T) {
 	c := newFailoverCluster(t)
 	a := c.node(t, "a", t.TempDir(), keepAnHour)
 	sb := mustClaim(t, a, testKey)
-	if err := a.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
-		t.Fatalf("hibernate: %v", err)
-	}
-	a.archives = &hookRegistry{Registry: c.reg, losePutReply: true}
-	if err := a.archive(t.Context(), sb); !errors.Is(err, ErrArchiveStoreDown) {
-		t.Fatalf("archive whose put reply was lost: %v, want ErrArchiveStoreDown", err)
-	}
+	hibernateClaim(t, a, sb)
+	c.archiveLosingPutReply(t, a, sb)
 	a.archives = nil
 	if _, _, _, err := a.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
 		t.Fatalf("wake with failover off: %v", err)
@@ -1974,20 +1834,13 @@ func TestFailoverAReleaseFindsItsUnsettledArchiveTakenElsewhere(t *testing.T) {
 	c := newFailoverCluster(t)
 	a, b := c.node(t, "a", t.TempDir(), keepAnHour), c.node(t, "b", t.TempDir(), keepAnHour)
 	sb := mustClaim(t, a, testKey)
-	if err := a.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
-		t.Fatalf("hibernate: %v", err)
-	}
+	hibernateClaim(t, a, sb)
 	a.mu.Lock()
 	vm := sb.VMName
 	a.mu.Unlock()
-	a.archives = &hookRegistry{Registry: c.reg, losePutReply: true}
-	if err := a.archive(t.Context(), sb); !errors.Is(err, ErrArchiveStoreDown) {
-		t.Fatalf("archive whose put reply was lost: %v, want ErrArchiveStoreDown", err)
-	}
+	c.archiveLosingPutReply(t, a, sb)
 	c.expire("a")
-	if adopted, err := b.AdoptArchived(t.Context(), sb.ID, sb.Token); err != nil || !adopted {
-		t.Fatalf("adopt: %v %v", adopted, err)
-	}
+	mustAdopt(t, b, sb, "adopt")
 	if _, _, _, err := b.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
 		t.Fatalf("adopter's wake: %v", err)
 	}
@@ -1996,7 +1849,7 @@ func TestFailoverAReleaseFindsItsUnsettledArchiveTakenElsewhere(t *testing.T) {
 	if err := a.Release(t.Context(), sb.ID, Cred{Token: sb.Token}); !errors.Is(err, ErrUnknownSandbox) {
 		t.Fatalf("old owner's release: %v, want ErrUnknownSandbox", err)
 	}
-	if _, held := a.byID(sb.ID); held || !a.eng.(*fakeEngine).removed(vm) {
+	if _, held := a.byID(sb.ID); held || !fakeOf(a).removed(vm) {
 		t.Error("the old owner kept the claim or its VM")
 	}
 	if held, ok := b.byID(sb.ID); !ok || held.ArchiveCk != "" {
@@ -2026,6 +1879,30 @@ func (c *failoverCluster) renew(t *testing.T, node string) {
 	}
 }
 
+func (c *failoverCluster) take(t *testing.T, id, owner string) int64 {
+	t.Helper()
+	epoch, err := c.reg.Take(t.Context(), id, 1, owner)
+	if err != nil {
+		t.Fatalf("take: %v", err)
+	}
+	return epoch
+}
+
+func (c *failoverCluster) consume(t *testing.T, id string, epoch int64) {
+	t.Helper()
+	if _, err := c.reg.Consume(t.Context(), id, epoch); err != nil {
+		t.Fatalf("consume: %v", err)
+	}
+}
+
+func (c *failoverCluster) archiveLosingPutReply(t *testing.T, m *Manager, sb *types.Sandbox) {
+	t.Helper()
+	m.archives = &hookRegistry{Registry: c.reg, losePutReply: true}
+	if err := m.archive(t.Context(), sb); !errors.Is(err, ErrArchiveStoreDown) {
+		t.Fatalf("archive whose put reply was lost: %v, want ErrArchiveStoreDown", err)
+	}
+}
+
 func (c *failoverCluster) node(t *testing.T, name, dataDir string, deleteAfter int) *Manager {
 	t.Helper()
 	m := c.nodeOn(t, newFakeEngine(), name, dataDir, deleteAfter)
@@ -2035,7 +1912,7 @@ func (c *failoverCluster) node(t *testing.T, name, dataDir string, deleteAfter i
 
 func (c *failoverCluster) restart(t *testing.T, old *Manager) *Manager {
 	t.Helper()
-	return c.nodeOn(t, old.eng.(*fakeEngine), old.nodeID, old.dataDir, keepAnHour)
+	return c.nodeOn(t, fakeOf(old), old.nodeID, old.dataDir, keepAnHour)
 }
 
 func (c *failoverCluster) nodeOn(t *testing.T, eng *fakeEngine, name, dataDir string, deleteAfter int) *Manager {
@@ -2056,116 +1933,6 @@ func (c *failoverCluster) nodeOn(t *testing.T, eng *fakeEngine, name, dataDir st
 	return m
 }
 
-func assertReleasedForGood(t *testing.T, c *failoverCluster, sb *types.Sandbox, nodes ...*Manager) {
-	t.Helper()
-	if rec, ok, _ := c.reg.Get(t.Context(), sb.ID); ok && !rec.Consumed {
-		t.Errorf("a live row %+v outlived the release", rec)
-	}
-	c.expire("a")
-	for _, m := range nodes {
-		if adopted, err := m.AdoptArchived(t.Context(), sb.ID, sb.Token); err != nil || adopted {
-			t.Errorf("node %s adopts the released claim: %v %v, want a 404", m.nodeID, adopted, err)
-		}
-	}
-}
-
-func claimAnyAs(t *testing.T, m *Manager, tenant string) (*types.Sandbox, error) {
-	t.Helper()
-	sb, err := m.ClaimWarm(t.Context(), testKey, ClaimOptions{Tenant: tenant})
-	if errors.Is(err, ErrNoWarm) {
-		return m.ClaimProvision(t.Context(), testKey, ClaimOptions{Tenant: tenant})
-	}
-	return sb, err
-}
-
-func interruptArchive(t *testing.T, m *Manager, sb *types.Sandbox, putCommitted bool) string {
-	t.Helper()
-	ck, _, err := m.publishCheckpoint(t.Context(), sb, store.CheckpointID(randHex(8)), "archive", sb.Tenant, true)
-	if err != nil {
-		t.Fatalf("publish: %v", err)
-	}
-	m.mu.Lock()
-	sb.ArchivePending = ck.ID
-	js := m.store.set(sb)
-	m.mu.Unlock()
-	if err = m.store.commit(js); err != nil {
-		t.Fatalf("commit intent: %v", err)
-	}
-	if putCommitted {
-		if _, err = m.putArchive(t.Context(), sb, ck.ID); err != nil {
-			t.Fatalf("put: %v", err)
-		}
-	}
-	return ck.ID
-}
-
-func seedArchiveCk(t *testing.T, m *Manager, id, sandboxID string) {
-	t.Helper()
-	seedArchiveCkBy(t, m, m.nodeID, id, sandboxID)
-}
-
-func seedArchiveCkBy(t *testing.T, m *Manager, node, id, sandboxID string) {
-	t.Helper()
-	staging, err := m.ckpts.Stage(id)
-	if err != nil {
-		t.Fatalf("stage: %v", err)
-	}
-	if err := os.MkdirAll(filepath.Join(staging, store.ExportDir), 0o750); err != nil {
-		t.Fatalf("mkdir: %v", err)
-	}
-	meta := `{"id":"` + id + `","sandbox_id":"` + sandboxID + `","node":"` + node + `","archive":true}`
-	if err := os.WriteFile(filepath.Join(staging, store.MetaFile), []byte(meta), 0o600); err != nil {
-		t.Fatalf("meta: %v", err)
-	}
-	if err := m.ckpts.Publish(t.Context(), staging, id, ""); err != nil {
-		t.Fatalf("publish: %v", err)
-	}
-}
-
-func patchHostOnly(t *testing.T, m *Manager, sb *types.Sandbox, value string) {
-	t.Helper()
-	if err := m.PatchEnv(t.Context(), sb.ID, types.EnvPatch{"GH_TOKEN": {Value: value, Guest: hostOnly}}, ""); err != nil {
-		t.Fatalf("patch env: %v", err)
-	}
-}
-
-func rowEnv(t *testing.T, c *failoverCluster, sb *types.Sandbox) string {
-	t.Helper()
-	return rowClaim(t, c, sb).Env["GH_TOKEN"].Value
-}
-
-func rowClaim(t *testing.T, c *failoverCluster, sb *types.Sandbox) *types.Sandbox {
-	t.Helper()
-	rec, ok, err := c.reg.Get(t.Context(), sb.ID)
-	if err != nil || !ok {
-		t.Fatalf("row: %v %v", ok, err)
-	}
-	claim := &types.Sandbox{}
-	if err = json.Unmarshal(rec.Claim, claim); err != nil {
-		t.Fatalf("decode row claim: %v", err)
-	}
-	return claim
-}
-
-type replaceFailRegistry struct {
-	archives.Registry
-	fail, loseReply bool
-	calls           int
-}
-
-func (r *replaceFailRegistry) Replace(ctx context.Context, rec archives.Record, expect int64) (int64, error) {
-	r.calls++
-	if r.fail {
-		return 0, archives.ErrUnavailable
-	}
-	epoch, err := r.Registry.Replace(ctx, rec, expect)
-	if r.loseReply && err == nil {
-		r.loseReply = false
-		return 0, archives.ErrUnavailable
-	}
-	return epoch, err
-}
-
 type hookRegistry struct {
 	archives.Registry
 	beforePut        func()
@@ -2177,6 +1944,7 @@ type hookRegistry struct {
 	loseTakeReply    bool
 	losePutReply     bool
 	failPut          bool
+	replaces         int
 }
 
 func (r *hookRegistry) Put(ctx context.Context, rec archives.Record) (int64, error) {
@@ -2196,6 +1964,7 @@ func (r *hookRegistry) Put(ctx context.Context, rec archives.Record) (int64, err
 }
 
 func (r *hookRegistry) Replace(ctx context.Context, rec archives.Record, expect int64) (int64, error) {
+	r.replaces++
 	if r.failPut {
 		return 0, archives.ErrUnavailable
 	}
@@ -2298,4 +2067,94 @@ func (r *countingRegistry) Rows(ctx context.Context, ids []string) (map[string]a
 func (r *countingRegistry) Sweepable(ctx context.Context, now time.Time, owner string) ([]archives.Record, error) {
 	r.sweepable.Add(1)
 	return r.Registry.Sweepable(ctx, now, owner)
+}
+
+func assertReleasedForGood(t *testing.T, c *failoverCluster, sb *types.Sandbox, nodes ...*Manager) {
+	t.Helper()
+	if rec, ok, _ := c.reg.Get(t.Context(), sb.ID); ok && !rec.Consumed {
+		t.Errorf("a live row %+v outlived the release", rec)
+	}
+	c.expire("a")
+	for _, m := range nodes {
+		if adopted, err := m.AdoptArchived(t.Context(), sb.ID, sb.Token); err != nil || adopted {
+			t.Errorf("node %s adopts the released claim: %v %v, want a 404", m.nodeID, adopted, err)
+		}
+	}
+}
+
+func interruptArchive(t *testing.T, m *Manager, sb *types.Sandbox, putCommitted bool) string {
+	t.Helper()
+	ck, _, err := m.publishCheckpoint(t.Context(), sb, store.CheckpointID(randHex(8)), "archive", sb.Tenant, true)
+	if err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+	m.mu.Lock()
+	sb.ArchivePending = ck.ID
+	js := m.store.set(sb)
+	m.mu.Unlock()
+	if err = m.store.commit(js); err != nil {
+		t.Fatalf("commit intent: %v", err)
+	}
+	if putCommitted {
+		if _, err = m.putArchive(t.Context(), sb, ck.ID); err != nil {
+			t.Fatalf("put: %v", err)
+		}
+	}
+	return ck.ID
+}
+
+func seedArchiveCk(t *testing.T, m *Manager, id, sandboxID string) {
+	t.Helper()
+	seedArchiveCkBy(t, m, m.nodeID, id, sandboxID)
+}
+
+func seedArchiveCkBy(t *testing.T, m *Manager, node, id, sandboxID string) {
+	t.Helper()
+	staging, err := m.ckpts.Stage(id)
+	if err != nil {
+		t.Fatalf("stage: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(staging, store.ExportDir), 0o750); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	meta := `{"id":"` + id + `","sandbox_id":"` + sandboxID + `","node":"` + node + `","archive":true}`
+	if err := os.WriteFile(filepath.Join(staging, store.MetaFile), []byte(meta), 0o600); err != nil {
+		t.Fatalf("meta: %v", err)
+	}
+	if err := m.ckpts.Publish(t.Context(), staging, id, ""); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+}
+
+func archivedWithEnv(t *testing.T, m *Manager) *types.Sandbox {
+	t.Helper()
+	sb := mustClaim(t, m, testKey)
+	patchHostOnly(t, m, sb, "old")
+	mustArchive(t, m, sb)
+	return sb
+}
+
+func patchHostOnly(t *testing.T, m *Manager, sb *types.Sandbox, value string) {
+	t.Helper()
+	if err := m.PatchEnv(t.Context(), sb.ID, types.EnvPatch{"GH_TOKEN": {Value: value, Guest: hostOnly}}, ""); err != nil {
+		t.Fatalf("patch env: %v", err)
+	}
+}
+
+func rowEnv(t *testing.T, c *failoverCluster, sb *types.Sandbox) string {
+	t.Helper()
+	return rowClaim(t, c, sb).Env["GH_TOKEN"].Value
+}
+
+func rowClaim(t *testing.T, c *failoverCluster, sb *types.Sandbox) *types.Sandbox {
+	t.Helper()
+	rec, ok, err := c.reg.Get(t.Context(), sb.ID)
+	if err != nil || !ok {
+		t.Fatalf("row: %v %v", ok, err)
+	}
+	claim := &types.Sandbox{}
+	if err = json.Unmarshal(rec.Claim, claim); err != nil {
+		t.Fatalf("decode row claim: %v", err)
+	}
+	return claim
 }

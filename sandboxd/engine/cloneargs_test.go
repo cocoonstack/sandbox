@@ -21,20 +21,20 @@ func TestCloneArgsRestoreMode(t *testing.T) {
 		{"egress lane carries the flag", types.RestoreMmap, egressKey, true},
 		{"unset mode adds nothing", "", noneKey, false},
 	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			e := New("cocoon", []string{"br0"}, nil, false, false, tc.mode)
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			e := New("cocoon", []string{"br0"}, nil, false, false, tt.mode)
 			for _, args := range [][]string{
-				e.cloneArgs("/goldens/g1", "sbx-1", tc.key),
-				e.cloneSnapArgs("ck_1", "sbx-1", tc.key),
+				e.cloneArgs("/goldens/g1", "sbx-1", tt.key),
+				e.cloneSnapArgs("ck_1", "sbx-1", tt.key),
 				e.restoreCmdArgs("sbx-1", "sbx-hib-1"),
 			} {
 				i := slices.Index(args, "--restore-mode")
-				if got := i >= 0; got != tc.want {
-					t.Fatalf("args %v: restore-mode present=%v, want %v", args, got, tc.want)
+				if got := i >= 0; got != tt.want {
+					t.Fatalf("args %v: restore-mode present=%v, want %v", args, got, tt.want)
 				}
-				if tc.want && args[i+1] != string(tc.mode) {
-					t.Fatalf("args %v: mode %q, want %q", args, args[i+1], tc.mode)
+				if tt.want && args[i+1] != string(tt.mode) {
+					t.Fatalf("args %v: mode %q, want %q", args, args[i+1], tt.mode)
 				}
 			}
 		})
@@ -57,7 +57,7 @@ func TestLifecycleArgsApplyDirectIOPolicy(t *testing.T) {
 					t.Errorf("args %v missing %q", args, want)
 				}
 			}
-			if !slices.Contains(cold, "--nics") || !slices.Contains(cold, "0") {
+			if i := slices.Index(cold, "--nics"); i < 0 || i+1 == len(cold) || cold[i+1] != "0" {
 				t.Errorf("none-lane cold args %v missing --nics 0", cold)
 			}
 		})
@@ -67,7 +67,7 @@ func TestLifecycleArgsApplyDirectIOPolicy(t *testing.T) {
 func TestEgressVMsSpreadOverEveryConfiguredShard(t *testing.T) {
 	shards := []string{"sbx0", "sbx1", "sbx2", "sbx3"}
 	key := types.PoolKey{Template: "rt:24.04", Net: types.NetEgress, Size: types.SizeMedium}
-	for name, tc := range map[string]struct {
+	for name, tt := range map[string]struct {
 		e    *Engine
 		flag string
 	}{
@@ -77,10 +77,10 @@ func TestEgressVMsSpreadOverEveryConfiguredShard(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			counts := map[string]int{}
 			for i := range 4000 {
-				args := tc.e.cloneArgs("/goldens/g1", "sbx-pool1-"+strconv.Itoa(i), key)
-				j := slices.Index(args, tc.flag)
+				args := tt.e.cloneArgs("/goldens/g1", "sbx-pool1-"+strconv.Itoa(i), key)
+				j := slices.Index(args, tt.flag)
 				if j < 0 {
-					t.Fatalf("args %v carry no %s", args, tc.flag)
+					t.Fatalf("args %v carry no %s", args, tt.flag)
 				}
 				counts[args[j+1]]++
 			}
@@ -135,7 +135,7 @@ func TestNoBalloonReachesColdBootsOnly(t *testing.T) {
 
 func TestColdArgsSizeTheDiskOnlyWhenAsked(t *testing.T) {
 	key := types.PoolKey{Template: "rt:24.04", Net: types.NetNone, Size: types.SizeSmall}
-	e := New("cocoon", nil, nil, false, false, "")
+	e := newTestEngine()
 	if args := e.runColdArgs("sbx-1", key, ""); slices.Contains(args, "--storage") {
 		t.Errorf("unsized cold args %v carry --storage, want cocoon's default disk", args)
 	}

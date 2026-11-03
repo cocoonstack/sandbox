@@ -65,10 +65,8 @@ func TestPortRelayRejectsNonUpgradeWithoutDialing(t *testing.T) {
 		return nil, pool.ErrUnknownSandbox
 	}}
 	ts := newTestServer(t, "", mgr, nil)
-	resp := getPort(t, ts, "/v1/sandboxes/sb_1/ports/49983", "tok", false)
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusUpgradeRequired {
-		t.Errorf("status %d, want 426", resp.StatusCode)
+	if code := portStatus(t, ts, "/v1/sandboxes/sb_1/ports/49983", "tok", false); code != http.StatusUpgradeRequired {
+		t.Errorf("status %d, want 426", code)
 	}
 	if dialed {
 		t.Error("a non-upgrade GET dialed the guest; it must not wake a hibernated sandbox")
@@ -77,10 +75,8 @@ func TestPortRelayRejectsNonUpgradeWithoutDialing(t *testing.T) {
 
 func TestPortRelayRequiresToken(t *testing.T) {
 	ts := newTestServer(t, "", &fakeManager{}, nil)
-	resp := getPort(t, ts, "/v1/sandboxes/sb_1/ports/49983", "", true)
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusUnauthorized {
-		t.Errorf("status %d, want 401", resp.StatusCode)
+	if code := portStatus(t, ts, "/v1/sandboxes/sb_1/ports/49983", "", true); code != http.StatusUnauthorized {
+		t.Errorf("status %d, want 401", code)
 	}
 }
 
@@ -88,10 +84,8 @@ func TestPortRelayRejectsBadPort(t *testing.T) {
 	ts := newTestServer(t, "", &fakeManager{}, nil)
 	for _, port := range []string{"0", "65536", "http", "-1", "+22"} {
 		t.Run(port, func(t *testing.T) {
-			resp := getPort(t, ts, "/v1/sandboxes/sb_1/ports/"+port, "tok", true)
-			defer resp.Body.Close()
-			if resp.StatusCode != http.StatusBadRequest {
-				t.Errorf("status %d, want 400", resp.StatusCode)
+			if code := portStatus(t, ts, "/v1/sandboxes/sb_1/ports/"+port, "tok", true); code != http.StatusBadRequest {
+				t.Errorf("status %d, want 400", code)
 			}
 		})
 	}
@@ -111,10 +105,8 @@ func TestPortRelayMapsDialErrors(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			mgr := &fakeManager{dialPort: func(string, string, uint16) (net.Conn, error) { return nil, tt.err }}
 			ts := newTestServer(t, "", mgr, nil)
-			resp := getPort(t, ts, "/v1/sandboxes/sb_1/ports/49983", "tok", true)
-			defer resp.Body.Close()
-			if resp.StatusCode != tt.want {
-				t.Errorf("status %d, want %d", resp.StatusCode, tt.want)
+			if code := portStatus(t, ts, "/v1/sandboxes/sb_1/ports/49983", "tok", true); code != tt.want {
+				t.Errorf("status %d, want %d", code, tt.want)
 			}
 		})
 	}
@@ -128,10 +120,8 @@ func TestPortRelayTakesTheRootTokenAsTheOperator(t *testing.T) {
 	}}
 	ts := newTestServer(t, "root-secret", mgr, nil)
 	for _, token := range []string{"root-secret", "sandbox-token"} {
-		resp := getPort(t, ts, "/v1/sandboxes/sb_1/ports/49983", token, true)
-		_ = resp.Body.Close()
-		if resp.StatusCode != http.StatusConflict {
-			t.Errorf("%s: status %d, want 409 for a paused sandbox", token, resp.StatusCode)
+		if code := portStatus(t, ts, "/v1/sandboxes/sb_1/ports/49983", token, true); code != http.StatusConflict {
+			t.Errorf("%s: status %d, want 409 for a paused sandbox", token, code)
 		}
 	}
 	if len(got) != 2 || got[0] != "" || got[1] != "sandbox-token" {
@@ -219,17 +209,15 @@ func TestSpliceTearsDownWhenTheGuestFails(t *testing.T) {
 	})
 }
 
-func TestPortRelayRefusedAfterCloseRelays(t *testing.T) {
-	ts, srv := newPortServer(t, func(c net.Conn) { _, _ = io.Copy(io.Discard, c) })
-	srv.CloseRelays()
-
-	conn := dialPortConn(t, ts, portRequest)
-	if _, err := io.Copy(io.Discard, conn); err != nil {
-		t.Errorf("late relay not refused promptly: %v", err)
-	}
+type failedGuestConn struct {
+	net.Conn
 }
 
-func newPortServer(t *testing.T, guest func(net.Conn)) (*httptest.Server, *Server) {
+func (c *failedGuestConn) Read([]byte) (int, error) {
+	return 0, errors.New("guest connection reset")
+}
+
+func newPortServer(t *testing.T, guest guestFunc) (*httptest.Server, *Server) {
 	t.Helper()
 	mgr := &fakeManager{dialPort: func(string, string, uint16) (net.Conn, error) {
 		relayEnd, guestEnd := net.Pipe()
@@ -254,7 +242,7 @@ func dialPortConn(t *testing.T, ts *httptest.Server, req string) net.Conn {
 	return conn
 }
 
-func getPort(t *testing.T, ts *httptest.Server, path, token string, upgrade bool) *http.Response {
+func portStatus(t *testing.T, ts *httptest.Server, path, token string, upgrade bool) int {
 	t.Helper()
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, ts.URL+path, nil)
 	if err != nil {
@@ -271,13 +259,6 @@ func getPort(t *testing.T, ts *httptest.Server, path, token string, upgrade bool
 	if err != nil {
 		t.Fatalf("do: %v", err)
 	}
-	return resp
-}
-
-type failedGuestConn struct {
-	net.Conn
-}
-
-func (c *failedGuestConn) Read([]byte) (int, error) {
-	return 0, errors.New("guest connection reset")
+	_ = resp.Body.Close()
+	return resp.StatusCode
 }

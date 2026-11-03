@@ -23,18 +23,18 @@ func TestExecReturnsBufferedOutput(t *testing.T) {
 	ts, _ := newRelayServer(t, func(conn net.Conn) {
 		defer conn.Close()
 		r := bufio.NewReader(conn)
-		line, err := r.ReadBytes('\n')
+		frame, err := r.ReadBytes('\n')
 		if err != nil {
 			return
 		}
-		gotExec, _ = wire.DecodeRequest(bytes.TrimSpace(line))
-		line, err = r.ReadBytes('\n')
+		gotExec, _ = wire.DecodeRequest(bytes.TrimSpace(frame))
+		frame, err = r.ReadBytes('\n')
 		if err != nil {
 			return
 		}
-		gotStdinClose, _ = wire.DecodeRequest(bytes.TrimSpace(line))
+		gotStdinClose, _ = wire.DecodeRequest(bytes.TrimSpace(frame))
 		_, _ = io.WriteString(conn, `{"type":"started","pid":7}`+"\n")
-		_, _ = io.WriteString(conn, `{"type":"stdout","data":"`+base64.StdEncoding.EncodeToString([]byte("v22\n"))+`"}`+"\n")
+		_, _ = io.WriteString(conn, stdoutFrame("v22\n"))
 		_, _ = io.WriteString(conn, `{"type":"stderr","data":"`+base64.StdEncoding.EncodeToString([]byte("warn\n"))+`"}`+"\n")
 		_, _ = io.WriteString(conn, `{"type":"exit","code":3}`+"\n")
 	})
@@ -65,7 +65,7 @@ func TestExecKeepsInvalidUTF8OutputAsReplacementCharacters(t *testing.T) {
 		_, _ = r.ReadBytes('\n')
 		_, _ = r.ReadBytes('\n')
 		_, _ = io.WriteString(conn, `{"type":"started","pid":7}`+"\n")
-		_, _ = io.WriteString(conn, `{"type":"stdout","data":"`+base64.StdEncoding.EncodeToString([]byte("ok\xff\n"))+`"}`+"\n")
+		_, _ = io.WriteString(conn, stdoutFrame("ok\xff\n"))
 		_, _ = io.WriteString(conn, `{"type":"exit","code":0}`+"\n")
 	})
 	status, body := postExec(t, ts, `{"argv":["cat","blob"],"timeout_seconds":5}`)
@@ -93,7 +93,7 @@ func TestExecAuditsTheFrameWithoutItsDelimiter(t *testing.T) {
 		_, _ = io.WriteString(conn, `{"type":"started","pid":7}`+"\n"+`{"type":"exit","code":0}`+"\n")
 	})
 	audited := make(chan []byte, 1)
-	srv.mgr.(*fakeManager).audited = func(_ string, line []byte) { audited <- bytes.Clone(line) }
+	srv.mgr.(*fakeManager).audited = func(_ string, frame []byte) { audited <- bytes.Clone(frame) }
 	if status, body := postExec(t, ts, `{"argv":["true"]}`); status != http.StatusOK {
 		t.Fatalf("status %d, want 200: %s", status, body)
 	}
@@ -142,28 +142,15 @@ func TestExecMapsSilkdErrors(t *testing.T) {
 }
 
 func TestExecTimeoutKillsTheCommand(t *testing.T) {
-	var conns atomic.Int32
 	killed := make(chan uint32, 1)
 	closed := make(chan struct{})
-	ts, _ := newRelayServer(t, func(conn net.Conn) {
-		r := bufio.NewReader(conn)
-		if conns.Add(1) == 1 {
-			defer close(closed)
-			_, _ = r.ReadBytes('\n')
-			_, _ = io.WriteString(conn, `{"type":"started","pid":7}`+"\n")
-			_, _ = r.ReadBytes('\n')
-			_, _ = r.ReadBytes('\n')
-			return
-		}
-		defer conn.Close()
-		line, _ := r.ReadBytes('\n')
-		if req, _ := wire.DecodeRequest(bytes.TrimSpace(line)); req != nil {
-			if kill, ok := req.(*wire.Kill); ok {
-				killed <- kill.PID
-			}
-		}
-		_, _ = io.WriteString(conn, `{"type":"done"}`+"\n")
-	})
+	ts, _ := newRelayServer(t, killWatchGuest(killed, func(conn net.Conn, r *bufio.Reader) {
+		defer close(closed)
+		_, _ = r.ReadBytes('\n')
+		_, _ = io.WriteString(conn, `{"type":"started","pid":7}`+"\n")
+		_, _ = r.ReadBytes('\n')
+		_, _ = r.ReadBytes('\n')
+	}))
 	if status, _ := postExec(t, ts, `{"argv":["sleep","60"],"timeout_seconds":1}`); status != http.StatusGatewayTimeout {
 		t.Fatalf("status %d, want 504", status)
 	}
@@ -172,14 +159,7 @@ func TestExecTimeoutKillsTheCommand(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("guest conn still open after the timeout")
 	}
-	select {
-	case pid := <-killed:
-		if pid != 7 {
-			t.Errorf("killed pid %d, want 7", pid)
-		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("no kill reached the guest after the timeout")
-	}
+	expectKill(t, killed, "timeout")
 }
 
 func TestExecRejectsUnknownFields(t *testing.T) {
@@ -215,18 +195,13 @@ func TestExecGuestClosingAfterTheStartWakesOnce(t *testing.T) {
 			return "/v/sock", nil
 		},
 	}
-	dialer := &fakeDialer{dial: func(context.Context, string) (net.Conn, error) {
-		relayEnd, guestEnd := net.Pipe()
-		go func() {
-			defer guestEnd.Close()
-			r := bufio.NewReader(guestEnd)
-			_, _ = r.ReadBytes('\n')
-			_, _ = r.ReadBytes('\n')
-			_, _ = io.WriteString(guestEnd, `{"type":"started","pid":7}`+"\n")
-		}()
-		return relayEnd, nil
-	}}
-	ts := serveTestServer(t, New("", "node:7777", mgr, dialer, nil, nil, nil, nil))
+	ts := newTestServer(t, "", mgr, pipeDialer(func(guestEnd net.Conn) {
+		defer guestEnd.Close()
+		r := bufio.NewReader(guestEnd)
+		_, _ = r.ReadBytes('\n')
+		_, _ = r.ReadBytes('\n')
+		_, _ = io.WriteString(guestEnd, `{"type":"started","pid":7}`+"\n")
+	}))
 
 	if status, body := postExec(t, ts, `{"argv":["sleep","60"]}`); status != http.StatusBadGateway {
 		t.Fatalf("status %d, want 502: %s", status, body)
@@ -246,19 +221,13 @@ func TestExecTimeoutStartsAfterWake(t *testing.T) {
 			return "/v/sock", nil
 		},
 	}
-	dialer := &fakeDialer{dial: func(context.Context, string) (net.Conn, error) {
-		relayEnd, guestEnd := net.Pipe()
-		go func() {
-			defer guestEnd.Close()
-			r := bufio.NewReader(guestEnd)
-			_, _ = r.ReadBytes('\n')
-			_, _ = r.ReadBytes('\n')
-			_, _ = io.WriteString(guestEnd, `{"type":"exit","code":0}`+"\n")
-		}()
-		return relayEnd, nil
-	}}
-	srv := New("", "node:7777", mgr, dialer, nil, nil, nil, nil)
-	ts := serveTestServer(t, srv)
+	ts := newTestServer(t, "", mgr, pipeDialer(func(guestEnd net.Conn) {
+		defer guestEnd.Close()
+		r := bufio.NewReader(guestEnd)
+		_, _ = r.ReadBytes('\n')
+		_, _ = r.ReadBytes('\n')
+		_, _ = io.WriteString(guestEnd, `{"type":"exit","code":0}`+"\n")
+	}))
 
 	if status, body := postExec(t, ts, `{"argv":["true"],"timeout_seconds":1}`); status != http.StatusOK {
 		t.Fatalf("status %d, want 200: %s", status, body)
@@ -269,26 +238,13 @@ func TestExecTimeoutStartsAfterWake(t *testing.T) {
 }
 
 func TestExecOverTheNodeBudgetIs503AndKillsTheCommand(t *testing.T) {
-	var conns atomic.Int32
 	killed := make(chan uint32, 1)
-	ts, srv := newRelayServer(t, func(conn net.Conn) {
-		r := bufio.NewReader(conn)
-		if conns.Add(1) == 1 {
-			_, _ = r.ReadBytes('\n')
-			_, _ = io.WriteString(conn, `{"type":"started","pid":7}`+"\n")
-			_, _ = io.WriteString(conn, `{"type":"stdout","data":"`+base64.StdEncoding.EncodeToString([]byte("x"))+`"}`+"\n")
-			_, _ = io.Copy(io.Discard, r)
-			return
-		}
-		defer conn.Close()
-		line, _ := r.ReadBytes('\n')
-		if req, _ := wire.DecodeRequest(bytes.TrimSpace(line)); req != nil {
-			if kill, ok := req.(*wire.Kill); ok {
-				killed <- kill.PID
-			}
-		}
-		_, _ = io.WriteString(conn, `{"type":"done"}`+"\n")
-	})
+	ts, srv := newRelayServer(t, killWatchGuest(killed, func(conn net.Conn, r *bufio.Reader) {
+		_, _ = r.ReadBytes('\n')
+		_, _ = io.WriteString(conn, `{"type":"started","pid":7}`+"\n")
+		_, _ = io.WriteString(conn, stdoutFrame("x"))
+		_, _ = io.Copy(io.Discard, r)
+	}))
 	if !srv.execBudget.TryAcquire(execBufferBudget) {
 		t.Fatal("budget not empty at start")
 	}
@@ -297,53 +253,26 @@ func TestExecOverTheNodeBudgetIs503AndKillsTheCommand(t *testing.T) {
 	if resp.StatusCode != http.StatusServiceUnavailable || resp.Header.Get("Retry-After") != "1" {
 		t.Fatalf("status %d Retry-After %q, want 503 and 1", resp.StatusCode, resp.Header.Get("Retry-After"))
 	}
-	select {
-	case pid := <-killed:
-		if pid != 7 {
-			t.Errorf("killed pid %d, want 7", pid)
-		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("no kill reached the guest after the budget refusal")
-	}
+	expectKill(t, killed, "budget refusal")
 }
 
 func TestExecOverTheOutputCapIs413AndKillsTheCommand(t *testing.T) {
-	var conns atomic.Int32
 	killed := make(chan uint32, 1)
-	chunk := `{"type":"stdout","data":"` + base64.StdEncoding.EncodeToString(bytes.Repeat([]byte("x"), 1<<20)) + `"}` + "\n"
-	ts, _ := newRelayServer(t, func(conn net.Conn) {
-		r := bufio.NewReader(conn)
-		if conns.Add(1) == 1 {
-			_, _ = r.ReadBytes('\n')
-			_, _ = io.WriteString(conn, `{"type":"started","pid":7}`+"\n")
-			for range execOutputCap>>20 + 1 {
-				if _, err := io.WriteString(conn, chunk); err != nil {
-					return
-				}
-			}
-			_, _ = io.Copy(io.Discard, r)
-			return
-		}
-		defer conn.Close()
-		line, _ := r.ReadBytes('\n')
-		if req, _ := wire.DecodeRequest(bytes.TrimSpace(line)); req != nil {
-			if kill, ok := req.(*wire.Kill); ok {
-				killed <- kill.PID
+	chunk := stdoutFrame(strings.Repeat("x", 1<<20))
+	ts, _ := newRelayServer(t, killWatchGuest(killed, func(conn net.Conn, r *bufio.Reader) {
+		_, _ = r.ReadBytes('\n')
+		_, _ = io.WriteString(conn, `{"type":"started","pid":7}`+"\n")
+		for range execOutputCap>>20 + 1 {
+			if _, err := io.WriteString(conn, chunk); err != nil {
+				return
 			}
 		}
-		_, _ = io.WriteString(conn, `{"type":"done"}`+"\n")
-	})
+		_, _ = io.Copy(io.Discard, r)
+	}))
 	if status, _ := postExec(t, ts, `{"argv":["yes"]}`); status != http.StatusRequestEntityTooLarge {
 		t.Fatalf("status %d, want 413", status)
 	}
-	select {
-	case pid := <-killed:
-		if pid != 7 {
-			t.Errorf("killed pid %d, want 7", pid)
-		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("no kill reached the guest after the output cap")
-	}
+	expectKill(t, killed, "output cap")
 }
 
 func TestExecReturnsItsBudgetAfterAnswering(t *testing.T) {
@@ -352,7 +281,7 @@ func TestExecReturnsItsBudgetAfterAnswering(t *testing.T) {
 		r := bufio.NewReader(conn)
 		_, _ = r.ReadBytes('\n')
 		_, _ = io.WriteString(conn, `{"type":"started","pid":7}`+"\n")
-		_, _ = io.WriteString(conn, `{"type":"stdout","data":"`+base64.StdEncoding.EncodeToString([]byte("v22\n"))+`"}`+"\n")
+		_, _ = io.WriteString(conn, stdoutFrame("v22\n"))
 		_, _ = io.WriteString(conn, `{"type":"exit","code":0}`+"\n")
 	})
 	if status, body := postExec(t, ts, `{"argv":["node","-v"]}`); status != http.StatusOK {
@@ -375,11 +304,40 @@ func (m *execManager) WakeAgentSocket(ctx context.Context, id, token string) (st
 
 func postExec(t *testing.T, ts *httptest.Server, body string) (int, []byte) {
 	t.Helper()
-	resp := postJSON(t, ts.URL+"/v1/sandboxes/sb_1/exec", "tok", body)
-	defer resp.Body.Close()
-	out, err := io.ReadAll(resp.Body)
-	if err != nil {
-		t.Fatalf("read response: %v", err)
+	return bodyOf(t, http.MethodPost, ts.URL+"/v1/sandboxes/sb_1/exec", "tok", body)
+}
+
+func killWatchGuest(killed chan<- uint32, first func(net.Conn, *bufio.Reader)) guestFunc {
+	var conns atomic.Int32
+	return func(conn net.Conn) {
+		r := bufio.NewReader(conn)
+		if conns.Add(1) == 1 {
+			first(conn, r)
+			return
+		}
+		defer conn.Close()
+		frame, _ := r.ReadBytes('\n')
+		if req, _ := wire.DecodeRequest(bytes.TrimSpace(frame)); req != nil {
+			if kill, ok := req.(*wire.Kill); ok {
+				killed <- kill.PID
+			}
+		}
+		_, _ = io.WriteString(conn, `{"type":"done"}`+"\n")
 	}
-	return resp.StatusCode, out
+}
+
+func expectKill(t *testing.T, killed <-chan uint32, after string) {
+	t.Helper()
+	select {
+	case pid := <-killed:
+		if pid != 7 {
+			t.Errorf("killed pid %d, want 7", pid)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatalf("no kill reached the guest after the %s", after)
+	}
+}
+
+func stdoutFrame(data string) string {
+	return `{"type":"stdout","data":"` + base64.StdEncoding.EncodeToString([]byte(data)) + `"}` + "\n"
 }

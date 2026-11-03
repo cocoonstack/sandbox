@@ -13,7 +13,7 @@ import (
 )
 
 func TestRuntimeVolumeRegistrationThroughHTTP(t *testing.T) {
-	st := startTenantStack(t, "node-token", []tenants.TenantSpec{
+	st := startTenantStack(t, []tenants.TenantSpec{
 		{Name: "acme", Token: "acme-token"}, {Name: "beta", Token: "beta-token"},
 	}, []config.VolumeSpec{{Name: "public", Path: writeVolumeImage(t, "public.img", "shared")}})
 	for name, body := range map[string]map[string]any{
@@ -29,12 +29,12 @@ func TestRuntimeVolumeRegistrationThroughHTTP(t *testing.T) {
 		}
 	}
 	home := sandbox.Volume{Name: "home", Mount: "/mnt/home"}
-	for _, tc := range []struct {
+	for _, tt := range []struct {
 		token   string
 		want    []string
 		private bool
 	}{{"acme-token", []string{"home", "private", "public"}, true}, {"beta-token", []string{"home", "public"}, false}} {
-		client, err := sandbox.Connect(st.addr, sandbox.WithAPIToken(tc.token))
+		client, err := sandbox.Connect(st.addr, sandbox.WithAPIToken(tt.token))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -43,8 +43,8 @@ func TestRuntimeVolumeRegistrationThroughHTTP(t *testing.T) {
 		for _, volume := range volumes {
 			names = append(names, volume.Name)
 		}
-		if err != nil || !slices.Equal(names, tc.want) {
-			t.Fatalf("catalog for %s: names=%v want=%v err=%v", tc.token, names, tc.want, err)
+		if err != nil || !slices.Equal(names, tt.want) {
+			t.Fatalf("catalog for %s: names=%v want=%v err=%v", tt.token, names, tt.want, err)
 		}
 		claim, err := client.New(t.Context(), "rt:24.04", sandbox.WithVolumes(home))
 		if err != nil || !slices.Equal(claim.Volumes, []sandbox.Volume{home}) {
@@ -55,8 +55,8 @@ func TestRuntimeVolumeRegistrationThroughHTTP(t *testing.T) {
 			t.Fatal(err)
 		}
 		view, err := claim.PatchVolumes(t.Context(), sandbox.VolumePatch{Add: []sandbox.Volume{home, {Name: "private"}}})
-		if (err == nil) != tc.private || tc.private && !slices.Contains(view.Volumes, home) {
-			t.Fatalf("live attach for %s: view=%+v err=%v", tc.token, view, err)
+		if (err == nil) != tt.private || tt.private && !slices.Contains(view.Volumes, home) {
+			t.Fatalf("live attach for %s: view=%+v err=%v", tt.token, view, err)
 		}
 	}
 	caller := *st
@@ -75,7 +75,7 @@ func TestRuntimeVolumeRegistrationThroughHTTP(t *testing.T) {
 }
 
 func TestRuntimeVolumeDetachHibernateWakeThroughHTTP(t *testing.T) {
-	st := startTenantStack(t, "node-token", []tenants.TenantSpec{{Name: "acme", Token: "acme-token"}}, nil)
+	st := startTenantStack(t, []tenants.TenantSpec{{Name: "acme", Token: "acme-token"}}, nil)
 	request, err := json.Marshal(map[string]any{"path": writeVolumeImage(t, "home.img", "external bytes"), "writable": true, "tenants": []string{"acme"}})
 	if err != nil {
 		t.Fatal(err)

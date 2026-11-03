@@ -23,25 +23,9 @@ type fenceState struct {
 	lifted time.Time
 }
 
-// CloseOnFence closes c when fenced closes; stop ends the watch.
-func CloseOnFence(fenced <-chan struct{}, c io.Closer) (stop func()) {
-	if fenced == nil {
-		return func() {}
-	}
-	stopped := make(chan struct{})
-	go func() {
-		select {
-		case <-fenced:
-			_ = c.Close()
-		case <-stopped:
-		}
-	}()
-	return sync.OnceFunc(func() { close(stopped) })
-}
-
 // keepLease renews this node's lease until ctx ends and fences its replicated claims when a renewal is overdue.
 func (m *Manager) keepLease(ctx context.Context) {
-	fence := time.AfterFunc(leaseTTL-leaseMargin, func() { m.trip(ctx) })
+	fence := time.AfterFunc(leaseWindow, func() { m.trip(ctx) })
 	defer fence.Stop()
 	tick := time.Tick(leaseRenew)
 	for {
@@ -60,7 +44,7 @@ func (m *Manager) renewLease(ctx context.Context, fence *time.Timer) {
 		log.WithFunc("pool.renewLease").Warnf(ctx, "renew node lease: %v", err)
 		return
 	}
-	fence.Reset(leaseTTL - leaseMargin - time.Since(start))
+	fence.Reset(leaseWindow - time.Since(start))
 	if m.isFenced() && m.unfencing.CompareAndSwap(false, true) {
 		go func() {
 			defer m.unfencing.Store(false)
@@ -88,7 +72,7 @@ func (m *Manager) trip(ctx context.Context) {
 			continue
 		}
 		close(old.ch)
-		log.WithFunc("pool.fence").Warnf(ctx, "node lease not renewed for %s; replicated claims answer 503 until it is", leaseTTL-leaseMargin)
+		log.WithFunc("pool.trip").Warnf(ctx, "node lease not renewed for %s; replicated claims answer 503 until it is", leaseWindow)
 		return
 	}
 }
@@ -146,7 +130,7 @@ func (m *Manager) lift(ctx context.Context, fenced *fenceState, start time.Time)
 	if !m.fence.CompareAndSwap(fenced, &fenceState{ch: make(chan struct{}), lifted: time.Now()}) {
 		return
 	}
-	if time.Since(start) > leaseTTL-leaseMargin {
+	if time.Since(start) > leaseWindow {
 		log.WithFunc("pool.unfence").Warn(ctx, "replicated claims stay fenced: confirming ownership outlasted the lease window")
 		m.trip(ctx)
 		return
@@ -228,4 +212,20 @@ func (m *Manager) fenceWatch(sb *types.Sandbox) (<-chan struct{}, error) {
 		return nil, ErrLeaseLost
 	}
 	return st.ch, nil
+}
+
+// CloseOnFence closes c when fenced closes; stop ends the watch.
+func CloseOnFence(fenced <-chan struct{}, c io.Closer) (stop func()) {
+	if fenced == nil {
+		return func() {}
+	}
+	stopped := make(chan struct{})
+	go func() {
+		select {
+		case <-fenced:
+			_ = c.Close()
+		case <-stopped:
+		}
+	}()
+	return sync.OnceFunc(func() { close(stopped) })
 }

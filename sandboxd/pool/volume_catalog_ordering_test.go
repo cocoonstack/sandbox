@@ -17,11 +17,11 @@ func TestRuntimeCatalogFailedDeleteRetriesAbsence(t *testing.T) {
 			m := newVolumeManager(t, eng, nil)
 			spec := types.VolumeRegistration{Path: writeVolumeImage(t, "old", "bytes")}
 			if err := m.RegisterVolume(t.Context(), "data", spec); err != nil {
-				t.Fatal(err)
+				t.Fatalf("RegisterVolume: %v", err)
 			}
 			restore := blockCatalogRename(t, m)
 			if err := m.UnregisterVolume(t.Context(), "data"); !errors.Is(err, ErrVolumeCatalogUnavailable) {
-				t.Fatal(err)
+				t.Fatalf("UnregisterVolume: %v, want ErrVolumeCatalogUnavailable", err)
 			}
 			if got := m.VolumeNames(); len(got) != 0 {
 				t.Fatalf("failed delete remained published: %v", got)
@@ -35,7 +35,7 @@ func TestRuntimeCatalogFailedDeleteRetriesAbsence(t *testing.T) {
 			}
 			if !replace {
 				if err := m.UnregisterVolume(t.Context(), "data"); err != nil {
-					t.Fatal(err)
+					t.Fatalf("UnregisterVolume: %v", err)
 				}
 				if got := newVolumeManagerAt(t, eng, m.dataDir, nil).VolumeNames(); len(got) != 0 {
 					t.Fatalf("retry did not persist absence: %v", got)
@@ -44,7 +44,7 @@ func TestRuntimeCatalogFailedDeleteRetriesAbsence(t *testing.T) {
 			}
 			spec.Path = writeVolumeImage(t, "new", "replacement")
 			if err := m.RegisterVolume(t.Context(), "data", spec); err != nil {
-				t.Fatal(err)
+				t.Fatalf("RegisterVolume: %v", err)
 			}
 			restarted := newVolumeManagerAt(t, eng, m.dataDir, nil)
 			resolved, err := restarted.resolveVolumes(t.Context(), "", []types.Volume{{Name: "data"}})
@@ -60,11 +60,11 @@ func TestRuntimeCatalogFailedPutIsNotReplayed(t *testing.T) {
 	spec := types.VolumeRegistration{Path: writeVolumeImage(t, "data", "bytes")}
 	restore := blockCatalogRename(t, m)
 	if err := m.RegisterVolume(t.Context(), "data", spec); !errors.Is(err, ErrVolumeCatalogUnavailable) {
-		t.Fatal(err)
+		t.Fatalf("RegisterVolume: %v, want ErrVolumeCatalogUnavailable", err)
 	}
 	restore()
 	if err := m.RegisterVolume(t.Context(), "replacement", spec); err != nil {
-		t.Fatal(err)
+		t.Fatalf("RegisterVolume: %v", err)
 	}
 	if got := newVolumeManagerAt(t, newFakeEngine(), m.dataDir, nil).VolumeNames(); !slices.Equal(got, []string{"replacement"}) {
 		t.Fatalf("failed put was replayed: %v", got)
@@ -79,15 +79,15 @@ func TestRuntimeCatalogRenameSucceededBeforeDirectoryOpenFailed(t *testing.T) {
 			spec := types.VolumeRegistration{Path: writeVolumeImage(t, "data", "bytes")}
 			if remove {
 				if err := m.RegisterVolume(t.Context(), "data", spec); err != nil {
-					t.Fatal(err)
+					t.Fatalf("RegisterVolume: %v", err)
 				}
 			}
 			if err := os.Chmod(m.dataDir, 0o300); err != nil {
-				t.Fatal(err)
+				t.Fatalf("Chmod: %v", err)
 			}
 			restore := func() {
 				if err := os.Chmod(m.dataDir, 0o700); err != nil {
-					t.Fatal(err)
+					t.Fatalf("Chmod: %v", err)
 				}
 			}
 			t.Cleanup(restore)

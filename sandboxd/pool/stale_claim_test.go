@@ -31,7 +31,7 @@ func TestStaleClaimOperationsPreserveTheCurrentClaim(t *testing.T) {
 			restore()
 		}
 	}
-	for _, tc := range []struct {
+	for _, tt := range []struct {
 		name       string
 		newManager func(t *testing.T) *Manager
 		prepare    func(t *testing.T, m *Manager, sb *types.Sandbox)
@@ -48,7 +48,7 @@ func TestStaleClaimOperationsPreserveTheCurrentClaim(t *testing.T) {
 				if !errors.Is(err, ErrUnknownSandbox) {
 					t.Errorf("stale Hibernate: %v, want ErrUnknownSandbox", err)
 				}
-				if m.eng.(*fakeEngine).hibernateCount() != 0 {
+				if fakeOf(m).hibernateCount() != 0 {
 					t.Error("stale Hibernate reached the engine")
 				}
 			},
@@ -63,24 +63,24 @@ func TestStaleClaimOperationsPreserveTheCurrentClaim(t *testing.T) {
 			newManager: func(t *testing.T) *Manager { return newFailoverCluster(t).node(t, "a", t.TempDir(), keepAnHour) },
 			prepare: func(t *testing.T, m *Manager, sb *types.Sandbox) {
 				if err := hibernate(t, m, sb); err != nil {
-					t.Fatal(err)
+					t.Fatalf("hibernate: %v", err)
 				}
 			},
 			run: rollback(func(t *testing.T, m *Manager, sb *types.Sandbox) error { return m.archive(t.Context(), sb) }),
 		},
 	} {
 		for _, replace := range []bool{false, true} {
-			t.Run(fmt.Sprintf("%s/replace=%t", tc.name, replace), func(t *testing.T) {
-				m := tc.newManager(t)
+			t.Run(fmt.Sprintf("%s/replace=%t", tt.name, replace), func(t *testing.T) {
+				m := tt.newManager(t)
 				sb := mustClaim(t, m, testKey)
 				ck, err := m.Checkpoint(t.Context(), sb.ID, Cred{Token: sb.Token}, "", "")
 				if err != nil {
-					t.Fatal(err)
+					t.Fatalf("checkpoint: %v", err)
 				}
-				if tc.prepare != nil {
-					tc.prepare(t, m, sb)
+				if tt.prepare != nil {
+					tt.prepare(t, m, sb)
 				}
-				tc.run(t, m, sb, func() {
+				tt.run(t, m, sb, func() {
 					m.mu.Lock()
 					defer m.mu.Unlock()
 					m.dropClaimLocked(sb)
@@ -92,11 +92,11 @@ func TestStaleClaimOperationsPreserveTheCurrentClaim(t *testing.T) {
 					}
 				})
 				if err = m.store.commit(m.store.mark()); err != nil {
-					t.Fatal(err)
+					t.Fatalf("commit the journal: %v", err)
 				}
 				loaded, err := newClaimStore(m.dataDir, false).load()
 				if err != nil {
-					t.Fatal(err)
+					t.Fatalf("load journal: %v", err)
 				}
 				if replace {
 					if loaded[sb.ID] == nil || loaded[sb.ID].ReplicaCk != ck.ID || loaded[sb.ID].PendingSnap != "" {
@@ -106,7 +106,7 @@ func TestStaleClaimOperationsPreserveTheCurrentClaim(t *testing.T) {
 					t.Errorf("stale operation resurrected released claim on disk: %+v", loaded[sb.ID])
 				}
 				if err = m.markArchiveCk(ck.ID); err != nil {
-					t.Fatal(err)
+					t.Fatalf("mark the archive checkpoint: %v", err)
 				}
 				m.retryArchiveDeletes(t.Context())
 				if exists := ckExists(t, m, ck.ID); exists != replace {

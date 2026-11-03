@@ -56,6 +56,7 @@ type S3Config struct {
 	UnsignedAcceptEncoding bool   `json:"unsigned_accept_encoding,omitzero"`
 }
 
+// CommitFunc makes a prepared generation the record's current one.
 type CommitFunc func(ctx context.Context) error
 
 // Store is one record backend.
@@ -72,6 +73,7 @@ type Store interface {
 	FetchFile(ctx context.Context, id, rel, dst string) error
 	// ReadMeta returns a record's metadata, or an error when the record does not exist.
 	ReadMeta(ctx context.Context, id string) ([]byte, error)
+	// ReadDigest returns a record's export digest, empty when it was published undigested.
 	ReadDigest(ctx context.Context, id string) (string, error)
 	// Metas lists the metadata and digest of every record in this instance's id namespace.
 	Metas(ctx context.Context) ([]Record, error)
