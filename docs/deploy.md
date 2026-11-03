@@ -677,9 +677,9 @@ With `cocoond_socket` set, the node follows `cocoon daemon`'s event stream
 pidfd, so an exit reaches sandboxd within a daemon pass and a recycled PID
 never reads as a live VMM. The node then lists cocoon's VMs only every 60 s as
 a backstop for a dropped event, and every 10 s while the stream is down (it
-reconnects with backoff) or when no socket is configured. Each list runs only
-while the node holds a running claim; each suspect is then checked with a
-single-VM `cocoon vm inspect` under its lock. A claim
+reconnects with backoff) or when no socket is configured. Each suspect is
+then checked with a single-VM `cocoon vm inspect` under its lock; a warm VM
+found down is destroyed and replaced. A claim
 whose VMM is gone — killed, crashed, or lost with the host — is handled per
 `vmm_restart`. A VMM that exits because the guest powered off is treated the
 same way. A claim whose lease has already lapsed is left to the reap, unless it

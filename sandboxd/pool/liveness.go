@@ -40,10 +40,6 @@ func (m *Manager) livenessOnce(ctx context.Context) {
 		return
 	}
 	watched := m.watchedClaims("")
-	if len(watched) == 0 && !m.hasWarm() {
-		m.livenessSweep.Store(false)
-		return
-	}
 	go func() {
 		defer m.livenessSweep.Store(false)
 		vms, err := m.eng.List(ctx)
@@ -128,17 +124,6 @@ func (m *Manager) watchedClaims(vmName string) []liveSuspect {
 		}
 	}
 	return out
-}
-
-func (m *Manager) hasWarm() bool {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	for _, p := range m.pools {
-		if len(p.warm) > 0 {
-			return true
-		}
-	}
-	return false
 }
 
 func (m *Manager) evictDeadWarm(ctx context.Context, up map[string]bool) *sync.WaitGroup {
