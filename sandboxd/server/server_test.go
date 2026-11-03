@@ -2298,7 +2298,7 @@ func TestCheckpointClaimProbesRealPeerAndRedirects(t *testing.T) {
 	}
 }
 
-func TestClaimRejectsMetadataOverABound(t *testing.T) {
+func TestClaimRejectsMetadataOrClaimRefOverABound(t *testing.T) {
 	pairs := make([]string, 17)
 	for i := range pairs {
 		pairs[i] = fmt.Sprintf(`"k%d":"v"`, i)
@@ -2310,6 +2310,9 @@ func TestClaimRejectsMetadataOverABound(t *testing.T) {
 		{"/v1/claim", `{"template":"rt:24.04","metadata":{` + strings.Join(pairs, ",") + `}}`, "at most 16 pairs"},
 		{"/v1/claim", `{"template":"rt:24.04","volumes":[{"name":"data"}],"metadata":{"k":"` + strings.Repeat("v", 513) + `"}}`, "metadata value"},
 		{"/v1/checkpoints/ck_00000000000000aa/claim", `{"metadata":{"":"v"}}`, "metadata key"},
+		{"/v1/claim", `{"template":"rt:24.04","claim_ref":"ns/a\u0000b"}`, "claim_ref must"},
+		{"/v1/claim", `{"template":"rt:24.04","volumes":[{"name":"data"}],"claim_ref":"` + strings.Repeat("r", 513) + `"}`, "claim_ref must"},
+		{"/v1/sandboxes/sb_1/fork", `{"token":"tok","count":1,"claim_ref_prefix":"ns/\u0007"}`, "claim_ref_prefix must"},
 	} {
 		mgr := &fakeManager{}
 		ts := newTestServer(t, "sekret", mgr, nil)

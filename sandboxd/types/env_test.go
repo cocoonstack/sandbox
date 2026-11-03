@@ -124,6 +124,7 @@ func TestEnvInjectValidates(t *testing.T) {
 		{"placeholder too long", placeholder(strings.Repeat("p", 257)), "inject placeholder"},
 		{"query", shaped(EnvInject{Query: "api_key", Placeholder: "@K@"}), ""},
 		{"query with body", shaped(EnvInject{Query: "access_token", Body: true, Placeholder: "@K@"}), ""},
+		{"query with a NUL", shaped(EnvInject{Query: "api\x00key", Placeholder: "@K@"}), "inject query"},
 		{"neither header nor query", shaped(EnvInject{Placeholder: "@K@"}), "exactly one of header and query"},
 		{"header and query", shaped(EnvInject{Header: "X-Key", Query: "key", Placeholder: "@K@"}), "exactly one of header and query"},
 		{"query without a placeholder", shaped(EnvInject{Query: "key"}), "query needs a placeholder"},
