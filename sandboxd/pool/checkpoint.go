@@ -18,9 +18,6 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/usage"
 )
 
-// DeleteScope selects how far a checkpoint delete reaches; fleet-wide is the zero value.
-type DeleteScope int
-
 const (
 	DeleteFleet DeleteScope = iota
 	DeleteLocal
@@ -31,6 +28,9 @@ var (
 	ErrUnknownCheckpoint = errors.New("unknown checkpoint")
 	ErrHealBusy          = errors.New("too many checkpoint heals in flight")
 )
+
+// DeleteScope selects how far a checkpoint delete reaches; fleet-wide is the zero value.
+type DeleteScope int
 
 // Checkpoint captures a claimed sandbox's state under a fresh id; the source keeps running.
 func (m *Manager) Checkpoint(ctx context.Context, id string, cred Cred, name, tenant string) (types.Checkpoint, error) {
