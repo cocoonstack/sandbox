@@ -7,13 +7,16 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
 
+	"github.com/cocoonstack/sandbox/sandboxd/config"
 	"github.com/cocoonstack/sandbox/sandboxd/egress"
 	"github.com/cocoonstack/sandbox/sandboxd/engine"
 	"github.com/cocoonstack/sandbox/sandboxd/outbound/outboundtest"
+	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
 func TestEgressDoorHalfCloseReachesTheGuest(t *testing.T) {
@@ -142,6 +145,45 @@ func TestReachedSeesAGuestInTheBacklog(t *testing.T) {
 	_ = conn.Close()
 	if !reached(door) {
 		t.Error("a door whose guest hung up reads as unreached")
+	}
+}
+
+func TestARearmedClaimKeepsADoorItsGuestCanDial(t *testing.T) {
+	pol := &egress.Policy{Socks5: true, Allow: []egress.Rule{{Host: "example.com"}}}
+	h := newHost(t, &fakeEngine{}, poolConfig(testKey, pol), nil)
+	sb := outboundtest.VsockSandbox(t, "sb_rearm", testKey)
+	t.Cleanup(func() { h.Disarm(sb.ID, true) })
+	for range 2 {
+		if err := h.ArmProxy(t.Context(), sb); err != nil {
+			t.Fatalf("arm proxy: %v", err)
+		}
+	}
+	for _, path := range []string{engine.EgressSocketPath(sb.VsockSocket), engine.SocksSocketPath(sb.VsockSocket)} {
+		conn, err := net.Dial("unix", path)
+		if err != nil {
+			t.Fatalf("dial after the second arm: %v", err)
+		}
+		_ = conn.Close()
+	}
+}
+
+func TestARearmWithNoPolicyLeftClosesTheDoor(t *testing.T) {
+	var cur atomic.Pointer[View]
+	cur.Store(NewView(poolConfig(testKey, &egress.Policy{Allow: []egress.Rule{{Host: "example.com"}}}), nil))
+	h := newHost(t, &fakeEngine{}, &config.Config{}, func(o *Options) { o.View = cur.Load })
+	sb := outboundtest.VsockSandbox(t, "sb_rearm_none", testKey)
+	if err := h.ArmProxy(t.Context(), sb); err != nil {
+		t.Fatalf("arm proxy: %v", err)
+	}
+	cur.Store(NewView(&config.Config{}, nil))
+	if err := h.ArmProxy(t.Context(), sb); err != nil {
+		t.Fatalf("second arm: %v", err)
+	}
+	if route := h.Route(sb); route != types.NetRouteNone {
+		t.Errorf("route %q, want none", route)
+	}
+	if _, err := net.Dial("unix", engine.EgressSocketPath(sb.VsockSocket)); err == nil {
+		t.Error("the door still accepts with no policy left")
 	}
 }
 

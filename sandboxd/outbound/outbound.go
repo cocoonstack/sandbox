@@ -100,22 +100,24 @@ func (h *Host) Arm(ctx context.Context, sb *types.Sandbox) error {
 
 // ArmProxy serves the proxy on the pre-bound doors, binding them when refill could not, once the effective policy permits anything.
 func (h *Host) ArmProxy(ctx context.Context, sb *types.Sandbox) error {
-	v := h.o.View()
-	if !v.guarded || sb.VsockSocket == "" {
-		h.ClosePrebound(sb.VMName)
-		return nil
+	h.mu.Lock()
+	d, displaced := h.prebound[sb.VMName], h.doors[sb.ID]
+	delete(h.prebound, sb.VMName)
+	delete(h.doors, sb.ID)
+	h.mu.Unlock()
+	if displaced != nil {
+		displaced.close()
 	}
+	v := h.o.View()
 	policy, ok := v.Resolve(sb, h.o.Pooled)
-	if !ok {
-		h.ClosePrebound(sb.VMName)
+	if !ok || sb.VsockSocket == "" {
+		if d != nil {
+			d.close()
+		}
 		return nil
 	}
 	id, tenant := sb.ID, sb.Tenant
 	evCtx := context.WithoutCancel(ctx)
-	h.mu.Lock()
-	d := h.prebound[sb.VMName]
-	delete(h.prebound, sb.VMName)
-	h.mu.Unlock()
 	// Only an intercepting pool pays for the TLS transport and leaf cache
 	ca := h.o.CA
 	if !v.Intercepts(sb.PolicyKey()) {
@@ -145,12 +147,8 @@ func (h *Host) ArmProxy(ctx context.Context, sb *types.Sandbox) error {
 	d.srv = &http.Server{Handler: proxy, ReadHeaderTimeout: 30 * time.Second}
 	d.proxy = proxy
 	h.mu.Lock()
-	displaced := h.doors[id]
 	h.doors[id] = d
 	h.mu.Unlock()
-	if displaced != nil {
-		displaced.close()
-	}
 	go func() { _ = d.srv.Serve(d.ln) }()
 	if d.socks != nil {
 		go proxy.ServeSOCKS(evCtx, d.socks)

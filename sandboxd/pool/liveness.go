@@ -265,8 +265,6 @@ func (m *Manager) restartLocked(ctx context.Context, sb *types.Sandbox) error {
 	m.mu.Lock()
 	sb.VsockSocket = sock
 	m.mu.Unlock()
-	// A displaced door's close unlinks the rebound path, so the old door goes first
-	m.out.Disarm(sb.ID, false)
 	err = m.out.ArmProxy(ctx, sb)
 	if err == nil {
 		err = m.deliverEnv(ctx, []*types.Sandbox{sb}, false)
