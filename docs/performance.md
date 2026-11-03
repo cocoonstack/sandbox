@@ -7,10 +7,8 @@ Reproduce with `make bench` (tier definitions and the dated results log:
 latencies print per run), and `scripts/boot-bench.sh` (boot phases).
 
 **Bare metal** = a 16-core AMD (SVM) node, Ubuntu 24.04, kernel 6.x, local
-NVMe, KVM. **Nested** = a cloud VM with nested virtualization; nested
-inflates VM-lifecycle latencies ~2.4× and punishes restore harder than cold
-boot — do not compare nested numbers against other systems' bare-metal
-claims.
+NVMe, KVM. **Nested** = a cloud VM with nested virtualization, never comparable
+with bare-metal claims ([why](benchmarks.md#the-three-claim-tiers)).
 
 ## Claim latency (what the SDK sees)
 
@@ -190,10 +188,9 @@ Reconcile uses) stays as a regression sentinel.
 RPCs): dial-per-RPC measured p50 1.23ms / p90 4.69ms / p99 10.51ms; one
 connection pre-dialed ahead measured p50 1.05ms / p90 4.47ms / p99 15.49ms.
 That experiment rejected the background pre-dialer because its ~0.2ms p50 win
-did not survive the tail. Current main instead implements protocol-level
-sequential reuse: silkd proto 2 serves RPCs back to back and each SDK handle
-parks completed relay connections for its next call. This is neither the
-pre-dialer nor concurrent multiplexing. `e2e/cmd/rpcbench` reports A (dial
+did not survive the tail. Current main instead implements
+[sequential reuse](#relay-connection-reuse), neither the pre-dialer nor
+concurrent multiplexing. `e2e/cmd/rpcbench` reports A (dial
 per RPC) and C (SDK keep-alive); the numbers in Relay connection reuse above,
 the pre-dialed spare row included, keep the pre-dialer declined — behind a TLS
 edge it tracks the dial arm, because it hides a handshake only while RPCs
