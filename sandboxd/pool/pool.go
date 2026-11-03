@@ -252,8 +252,9 @@ type pool struct {
 	claimClones atomic.Int32
 
 	// Without a streak gate a node-wide dead cause is retried every tick at full concurrency
-	refillFails int
-	nextRefill  time.Time
+	refillFails     int
+	nextRefill      time.Time
+	goldenRetiredAt time.Time
 }
 
 func newPool(key types.PoolKey) *pool {

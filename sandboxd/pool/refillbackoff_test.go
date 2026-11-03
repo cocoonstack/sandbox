@@ -68,6 +68,7 @@ func TestRefillOnceHonorsTheBackoff(t *testing.T) {
 		eng.cloneErr = errors.New("clone: guest kernel panicked before vsock came up")
 		m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 50})
 		m.pools[testKey].goldenDir = "/goldens/x"
+		m.pools[testKey].goldenRetiredAt = time.Now()
 
 		backedOff := false
 		for range 50 {
@@ -107,5 +108,47 @@ func TestRefillOnceHonorsTheBackoff(t *testing.T) {
 			infos, _ := m.Info()
 			return infos[0].Warm == 50
 		})
+	})
+}
+
+func TestAGoldenThatCannotBeClonedIsRebuiltOnce(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		eng := newFakeEngine()
+		eng.cloneErr = errors.New(`vm.restore -> 500 "Memory manager error","Failed to allocate a memory range"`)
+		m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 2})
+		seedGolden(t, m, "")
+
+		waitFor(t, func() bool {
+			m.refillOnce(t.Context())
+			return eng.coldCount() == 1
+		})
+		eng.mu.Lock()
+		eng.cloneErr = nil
+		eng.mu.Unlock()
+		waitFor(t, func() bool { return refilledTo(t, m, testKey, 2) })
+
+		if n := eng.coldCount(); n != 1 {
+			t.Errorf("golden builds %d, want one rebuild of the unclonable golden", n)
+		}
+	})
+}
+
+func TestAGoldenThatStaysUnclonableIsRebuiltAtMostOncePerRetryDelay(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		eng := newFakeEngine()
+		eng.cloneErr = errors.New(`vm.restore -> 500 "Memory manager error"`)
+		m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 2})
+		seedGolden(t, m, "")
+		start := time.Now()
+
+		for time.Since(start) < 3*buildRetryDelay+buildRetryDelay/2 {
+			m.refillOnce(t.Context())
+			time.Sleep(100 * time.Millisecond)
+		}
+		waitPoolSettled(t, m, testKey)
+
+		if n, limit := eng.coldCount(), 1+int(time.Since(start)/buildRetryDelay); n < 2 || n > limit {
+			t.Errorf("golden builds %d over %v, want between 2 and %d", n, time.Since(start), limit)
+		}
 	})
 }
