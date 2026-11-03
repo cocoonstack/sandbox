@@ -2139,6 +2139,7 @@ func newTestManagerAt(t testing.TB, eng *fakeEngine, dataDir string, pools ...co
 		t.Fatalf("setup manager: %v", err)
 	}
 	t.Cleanup(func() { assertRunningCount(t, m) })
+	t.Cleanup(func() { settleGoldenBuilds(m) })
 	t.Cleanup(func() {
 		m.mu.Lock()
 		defer m.mu.Unlock()
@@ -2151,6 +2152,17 @@ func newTestManagerAt(t testing.TB, eng *fakeEngine, dataDir string, pools ...co
 		}
 	})
 	return m
+}
+
+func settleGoldenBuilds(m *Manager) {
+	for deadline := time.Now().Add(3 * time.Second); time.Now().Before(deadline); time.Sleep(5 * time.Millisecond) {
+		m.mu.Lock()
+		building := slices.ContainsFunc(slices.Collect(maps.Values(m.pools)), func(p *pool) bool { return p.building })
+		m.mu.Unlock()
+		if !building {
+			return
+		}
+	}
 }
 
 func tuneView(m *Manager, change func(*configView)) {
