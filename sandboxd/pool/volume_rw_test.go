@@ -450,6 +450,9 @@ func TestQuiesceFailureSyncsOnceAndKeepsMarkers(t *testing.T) {
 	if got := eng.syncCount(); got != 1 {
 		t.Errorf("guest syncs=%d, want exactly one fallback for the whole quiesce", got)
 	}
+	if got := eng.unmountCount(); got != 2 {
+		t.Errorf("unmounts=%d, want both tried past a busy mount", got)
+	}
 	if !volumeDirty(first) || !volumeDirty(second) {
 		t.Error("failed unmounts cleared a dirty marker")
 	}
@@ -463,23 +466,10 @@ func TestQuiesceFailureSyncsOnceAndKeepsMarkers(t *testing.T) {
 	}
 }
 
-func TestReleaseGivesEveryUnmountItsOwnMutationBudget(t *testing.T) {
+func TestReleaseSkipsTheRemainingUnmountsOfAWedgedGuest(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		first := writeVolumeImage(t, "first.img", "first")
-		second := writeVolumeImage(t, "second.img", "second")
-		base := newFakeEngine()
-		m := newVolumeManager(t, base, []config.VolumeSpec{
-			{Name: "first", Path: first, Writable: true},
-			{Name: "second", Path: second, Writable: true},
-		})
-		sb, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Volumes: []types.Volume{
-			{Name: "first", Mode: types.VolumeModeRW},
-			{Name: "second", Mode: types.VolumeModeRW},
-		}})
-		if err != nil {
-			t.Fatalf("ClaimProvision: %v", err)
-		}
-		eng := &wedgedUnmountEngine{fakeEngine: base}
+		m, base, sb, paths := claimTwoWritableVolumes(t)
+		eng := &stallingUnmountEngine{fakeEngine: base, firstStall: 2 * engine.VolumeMutationTimeout}
 		m.eng = eng
 		start := time.Now()
 
@@ -487,9 +477,38 @@ func TestReleaseGivesEveryUnmountItsOwnMutationBudget(t *testing.T) {
 			t.Fatalf("Release: %v", err)
 		}
 
-		want := []time.Time{start.Add(engine.VolumeMutationTimeout), start.Add(2 * engine.VolumeMutationTimeout)}
+		if len(eng.deadlines) != 1 {
+			t.Errorf("unmount calls %d, want 1: a wedged guest skips the rest", len(eng.deadlines))
+		}
+		if wall := time.Since(start); wall != engine.VolumeMutationTimeout {
+			t.Errorf("release waited %v, want %v", wall, engine.VolumeMutationTimeout)
+		}
+		if got := base.syncCount(); got != 1 {
+			t.Errorf("guest syncs %d, want the fallback once", got)
+		}
+		for _, path := range paths {
+			if !volumeDirty(path) {
+				t.Errorf("marker of %s cleared without a clean unmount", path)
+			}
+		}
+	})
+}
+
+func TestReleaseGivesASlowFlushItsOwnMutationBudget(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m, base, sb, _ := claimTwoWritableVolumes(t)
+		stall := engine.VolumeMutationTimeout * 2 / 3
+		eng := &stallingUnmountEngine{fakeEngine: base, firstStall: stall}
+		m.eng = eng
+		start := time.Now()
+
+		if err := m.Release(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
+			t.Fatalf("Release: %v", err)
+		}
+
+		want := []time.Time{start.Add(engine.VolumeMutationTimeout), start.Add(stall + engine.VolumeMutationTimeout)}
 		if !slices.EqualFunc(eng.deadlines, want, time.Time.Equal) {
-			t.Errorf("unmount deadlines %v, want %v: each volume gets its own budget after a wedged one", eng.deadlines, want)
+			t.Errorf("unmount deadlines %v, want %v: each volume gets its own budget", eng.deadlines, want)
 		}
 	})
 }
@@ -658,19 +677,41 @@ func TestWritableDiscoveryAndUsageEvent(t *testing.T) {
 	t.Fatal("claim usage event not found")
 }
 
-type wedgedUnmountEngine struct {
+type stallingUnmountEngine struct {
 	*fakeEngine
-	deadlines []time.Time
+	firstStall time.Duration
+	deadlines  []time.Time
 }
 
-func (e *wedgedUnmountEngine) UnmountVolume(ctx context.Context, sock, mount string) (bool, error) {
+func (e *stallingUnmountEngine) UnmountVolume(ctx context.Context, sock, mount string) (bool, error) {
 	deadline, _ := ctx.Deadline()
 	e.deadlines = append(e.deadlines, deadline)
 	if len(e.deadlines) == 1 {
-		<-ctx.Done()
-		return false, errors.New("signal: killed")
+		select {
+		case <-time.After(e.firstStall):
+		case <-ctx.Done():
+			return false, errors.New("read silkd frame: use of closed network connection")
+		}
 	}
 	return e.fakeEngine.UnmountVolume(ctx, sock, mount)
+}
+
+func claimTwoWritableVolumes(t *testing.T) (*Manager, *fakeEngine, *types.Sandbox, []string) {
+	t.Helper()
+	paths := []string{writeVolumeImage(t, "first.img", "first"), writeVolumeImage(t, "second.img", "second")}
+	base := newFakeEngine()
+	m := newVolumeManager(t, base, []config.VolumeSpec{
+		{Name: "first", Path: paths[0], Writable: true},
+		{Name: "second", Path: paths[1], Writable: true},
+	})
+	sb, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Volumes: []types.Volume{
+		{Name: "first", Mode: types.VolumeModeRW},
+		{Name: "second", Mode: types.VolumeModeRW},
+	}})
+	if err != nil {
+		t.Fatalf("ClaimProvision: %v", err)
+	}
+	return m, base, sb, paths
 }
 
 func newVolumeManagerAt(t *testing.T, eng *fakeEngine, dataDir string, volumes []config.VolumeSpec) *Manager {

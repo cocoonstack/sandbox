@@ -413,7 +413,9 @@ residual device mounts. Live removal also needs a confirmed host detach. Both
 mount and superblock options must be writable; ext4's `emergency_ro` after a
 filesystem error counts as read-only. A missing device or pre-unmounted
 filesystem does not prove clean unmount. The marker remains on uncertainty and
-blocks subsequent readers. Attach-only writers have no automatic dirty-marker
+blocks subsequent readers. Release waits up to 30 seconds for each writable
+volume's unmount, and a guest that does not answer within that keeps every
+remaining marker. Attach-only writers have no automatic dirty-marker
 protection. The caller owns mounting, flushing, unmounting, recovery, and
 fencing before reuse.
 

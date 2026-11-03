@@ -1862,6 +1862,12 @@ func (f *fakeEngine) syncCount() int {
 	return len(f.syncs)
 }
 
+func (f *fakeEngine) unmountCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(slices.DeleteFunc(slices.Clone(f.volumeOps), func(op string) bool { return !strings.HasPrefix(op, "umount:") }))
+}
+
 func (f *fakeEngine) volumeOpsLog() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()

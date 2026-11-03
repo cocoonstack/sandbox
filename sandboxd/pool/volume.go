@@ -241,10 +241,14 @@ func (m *Manager) quiesceVolumes(ctx context.Context, sb *types.Sandbox) volumeT
 		}
 		unmountCtx, cancel := context.WithTimeout(ctx, engine.VolumeMutationTimeout)
 		clean, err := m.eng.UnmountVolume(unmountCtx, sb.VsockSocket, volume.Mount)
+		wedged := unmountCtx.Err() != nil
 		cancel()
 		if err != nil {
 			logger.Errorf(ctx, err, "unmount volume %s of %s", volume.Name, sb.ID)
 			stuck = true
+			if wedged {
+				break
+			}
 			continue
 		}
 		if entry, ok := catalog[volume.Name]; ok && clean {
