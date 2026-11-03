@@ -34,7 +34,9 @@ exposing any part of a deployment beyond a single trusted host.
   loopback, private, link-local (cloud metadata), CGN, the
   IPv4-embedding IPv6 ranges and the node's own interface addresses, so an
   allow-listed name that resolves or rebinds to an internal address cannot
-  reach the host or a sibling.
+  reach the host or a sibling. A prefix the operator re-admits with
+  `egress_internal_allow` is the exception: scope it with ports
+  ([egress](egress.md)).
 - **What never enters the guest.** Egress credentials: the proxy injects
   the secret host-side, so prompt injection can exfiltrate at most the
   proxy's answers, and every credentialed call is journaled. Git auth
@@ -55,12 +57,12 @@ all of them.
    serves plain HTTP; `api_token`, tenant tokens, and per-sandbox tokens
    are cleartext bearers on the wire, and on a cluster the SDK dials every
    node it is redirected to. Keep nodes and clients inside a VPC, WireGuard
-   mesh, or equivalent. The only surface designed to face a browser is the
-   preview listener, and it belongs behind a TLS-terminating proxy
-   ([deploy](deploy.md#preview-urls)). Never expose `listen` publicly.
-2. **One sandboxd per host.** The restart sweep owns the whole
-   `sandbox_egress_*` nftables namespace; a second daemon would clear the
-   first's locks.
+   mesh, or equivalent, or put a TLS edge in front of every node
+   ([TLS for SDK clients](deploy.md#tls-for-sdk-clients)). The only surface
+   designed to face a browser is the preview listener, and it belongs behind a
+   TLS-terminating proxy ([deploy](deploy.md#preview-urls)). Never expose
+   `listen` itself publicly.
+2. **One sandboxd per host** ([why](egress.md#deployment-constraints)).
 3. **Set `mesh.cluster_key` unless the gossip network is itself trusted**,
    and open the memberlist port node-to-node only.
 4. **Treat the checkpoint store like backups.** A checkpoint, an archive and
@@ -156,9 +158,12 @@ Facts to plan around, stated so the boundary is honest:
   ([egress](egress.md#https-interception)).
 - **The audit and usage journals are local JSONL** with size rotation —
   no tamper-evidence. Ship them off-node if integrity against a host
-  compromise matters (at which point the journals are the least of it).
-- **Rate limiting is capacity-based only** (`max_claims`, per-tenant
-  caps answer 429). The API assumes callers inside the trust boundary;
+  compromise matters (at which point the journals are the least of it). With
+  `meta_store.usage` the usage journal also lands in the
+  [shared usage table](deploy.md#shared-usage-table); the audit journal stays
+  local.
+- **Rate limiting is capacity-based only** (`max_claims`, `max_running`,
+  `disk_reserve` and per-tenant caps answer 429). The API assumes callers inside the trust boundary;
   front it with your own limiter if semi-trusted automation can reach it.
 - **A dead node's running sandboxes die with it** unless their pool
   replicates them (`replicate_seconds`): another node then restores the last
