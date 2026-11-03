@@ -21,6 +21,8 @@ const MATCH_QUEUE: usize = 256;
 /// Bytes of match content in flight: above one size-bound match, so a reserve never blocks forever, far below 256 of them.
 const MATCH_QUEUE_BYTES: usize = 2 * FIND_MAX_FILE as usize;
 
+const LINE_ANCHORS: [&str; 4] = ["^", "$", "\\A", "\\z"];
+
 struct MatchBudget {
     bytes: Semaphore,
     rt: Handle,
@@ -61,6 +63,7 @@ struct Walk<'a> {
     name_re: Option<&'a Regex>,
     tx: &'a mpsc::Sender<Response>,
     budget: &'a MatchBudget,
+    prefilter: bool,
 }
 
 impl Walk<'_> {
@@ -104,7 +107,9 @@ impl Walk<'_> {
 
     /// Scans one file; an unreadable or oversized file is skipped, not an error.
     fn scan_file(&self, path: &Path, body: &mut String) -> bool {
-        if !matches!(read_bounded(path, body), Ok(true)) {
+        if !matches!(read_bounded(path, body), Ok(true))
+            || (self.prefilter && !self.re.is_match(body))
+        {
             return true;
         }
         let mut name: Option<Arc<str>> = None;
@@ -223,6 +228,7 @@ where
         Some(Ok(re)) => Some(re),
         Some(Err(e)) => return proto::error_frame(w, ErrorKind::BadRequest, e.to_string()).await,
     };
+    let prefilter = !LINE_ANCHORS.iter().any(|a| pattern.contains(a));
     // one blocking-pool dispatch for the whole tree, not three per file.
     let (tx, mut rx) = mpsc::channel::<Response>(MATCH_QUEUE);
     let budget = Arc::new(MatchBudget::new(budget_bytes, Handle::current()));
@@ -233,6 +239,7 @@ where
             name_re: name_re.as_ref(),
             tx: &tx,
             budget: &walker_budget,
+            prefilter,
         }
         .run(PathBuf::from(path))
     });
@@ -427,6 +434,7 @@ mod tests {
             name_re: None,
             tx: &tx,
             budget: &budget,
+            prefilter: true,
         };
         let completed =
             tokio::task::block_in_place(|| walk.run(dir.path().to_path_buf())).expect("walk");
@@ -451,6 +459,30 @@ mod tests {
             .recv_timeout(Duration::from_secs(5))
             .expect("read_bounded must not wait for data");
         assert!(failed);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_anchored_pattern_matches_a_line_start_inside_the_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        tokio::fs::write(dir.path().join("a.txt"), "bar\nfoo here\nbaz foo\n")
+            .await
+            .expect("write");
+        let (mut w, reader) = sink();
+        let (_peer, mut client) = silent_client();
+        find_bounded(
+            &mut client,
+            &mut w,
+            dir.path().display().to_string(),
+            "^foo".into(),
+            None,
+            MATCH_QUEUE_BYTES,
+        )
+        .await
+        .expect("find");
+        drop(w);
+        let out = reader.await.expect("join");
+        assert_eq!(out.matches("\"type\":\"match\"").count(), 1, "{out}");
+        assert!(out.contains("\"line\":2"), "{out}");
     }
 
     #[tokio::test(flavor = "multi_thread")]
