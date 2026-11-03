@@ -15,11 +15,10 @@ the cocoon CLI and needs a template image with silkd baked in.
   reads. sandboxd logs a warning at startup when the detected cocoon is below
   v0.6.9 (a dev/`master-<sha>` build is assumed current); changing volumes on
   a running claim needs v0.7.2, and a pool's `reader` needs v0.7.3
-- The sandbox boot artifact installed where cocoon finds it
-  (`/boot/vmlinuz-sandbox`, `/boot/initrd.img-sandbox` — from
-  `ghcr.io/cocoonstack/sandbox/boot:<kernel-ver>`)
 - A silkd-baked template image, e.g. `ghcr.io/cocoonstack/sandbox/base:24.04`
-  (pull via cocoon, or `cocoon image import` a tar)
+  (pull via cocoon, or `cocoon image import` a tar). The image carries the boot
+  artifact (`/boot/vmlinuz-sandbox`, `/boot/initrd.img-sandbox`), so the host
+  needs neither file
 
 Prebuilt static linux/amd64 and linux/arm64 binaries (`sandboxd`,
 `sandboxd.dbg`, `sandbox-mcp`, `silkd`, with `checksums.txt`) ship with every
@@ -28,6 +27,10 @@ artifact and the `base`/`rt`/`python`/`python-rt`/`node`/`node-rt` images are
 multi-arch manifests (`browser`, `android`, `e2b-rt` and `e2b-ci` remain
 amd64-only). Build from source with `make sandboxd` (produces
 `dist/sandboxd`); either way `sandboxd -version` reports what you are running.
+
+`base` is layered, for builds. `rt` is `base` squashed to one layer and is the
+default template in the examples; `python-rt` and `node-rt` are the squashed
+flavors.
 
 ## Upgrading
 
@@ -967,20 +970,56 @@ curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:7777/v1/info | jq .
 ```
 
 The repository's `scripts/sandboxd-e2e.sh` runs the full loop on a real node
-(golden build → warm pool → claim tiers → the complete verb smoke → reap →
-restart reconcile); set `BRIDGE=<dev>` to include the egress lane.
+with cocoon and a silkd-baked template image (golden build → warm pool → claim
+tiers → the complete verb smoke, files/session/find/replace/watch/git/pty →
+reap → restart reconcile):
+
+```bash
+TEMPLATE=rt:24.04 scripts/sandboxd-e2e.sh
+```
+
+Set `BRIDGE=<dev>` to include the egress lane: it adds an egress pool and the
+lane-detect check. A plain `ip link add br0 type bridge` with no uplink is
+enough, since the check needs a NIC, not a network. On a node without a Go
+toolchain, point `SANDBOXD_BIN`, `DEMO_BIN`, and `SMOKE_BIN` at prebuilt
+binaries.
 
 To include the read-only volume proof, put a nonempty `volume-e2e.txt` in the
 filesystem image and run `VOLUME_IMAGE=/srv/datasets/imagenet.img
-scripts/sandboxd-e2e.sh`. The script verifies two concurrent mounts, read-only
-enforcement, warm-pool consumption, and an unchanged source checksum. On a node
-using prebuilt binaries, also set `VOLUME_SMOKE_BIN` beside `SANDBOXD_BIN`,
-`DEMO_BIN`, and `SMOKE_BIN`.
+scripts/sandboxd-e2e.sh` (the path must be absolute). The script verifies two
+concurrent mounts, read-only enforcement, warm-pool consumption, and an
+unchanged source checksum. On a node using prebuilt binaries, also set
+`VOLUME_SMOKE_BIN` beside `SANDBOXD_BIN`, `DEMO_BIN`, and `SMOKE_BIN`.
 
 Add `VOLUME_RW_IMAGE=/srv/datasets/scratch.img` (a second, writable image) to
 also run the writable leg: a durable write across release, second-writer
 exclusion, and a clean read-only claim afterward. `VOLUME_LIVE=1` adds the live
 volume leg on cocoon v0.7.2 or newer.
+
+### Acceptance drivers
+
+The bare-metal drivers live under `e2e/cmd/`, and a script in `scripts/` runs
+some of them on a node:
+
+| driver | proves | script |
+|---|---|---|
+| `demo`, `smoke` | claim tiers and the verb surface | `sandboxd-e2e.sh` |
+| `volumesmoke` | shared read-only, writable, and live volumes | `sandboxd-e2e.sh` |
+| `meshsmoke` | template routing on a two-node mesh | |
+| `crossnode` | a checkpoint claimed on another node through the shared store | |
+| `coldproof` | a cold claim, by the guest's own clock | |
+| `lifecycle` | idle → hibernate → archive → wake | `archive-e2e.sh` |
+| `egresssmoke` | guarded egress on either lane | `egress-e2e.sh` |
+| `interceptsmoke` | HTTPS interception | `intercept-e2e.sh` |
+| `sockssmoke` | the SOCKS5 door | `socks-e2e.sh` |
+| `credsmoke` | claim credential injection | `credentials-e2e.sh` |
+| `portsmoke`, `guestserver` | the guest-port relay; `guestserver` is its guest listener | `port-e2e.sh` |
+| `ringsmoke` | the output ring cap and exec as a user | |
+| `androidsmoke`, `browsersmoke` | the android and browser flavors | |
+| `pullbench`, `pushbench`, `rpcbench`, `qaab` | performance measurements | |
+
+`scripts/bench.sh` is the published [benchmark](benchmarks.md#reproduce)
+procedure and `scripts/boot-bench.sh` times the boot phases.
 
 ## TLS for SDK clients
 
@@ -1091,3 +1130,31 @@ sandboxd:
   a preview URL.
 - **Health**: `GET /healthz` on `preview_listen` answers 200 `ok`, for the load
   balancer's check.
+
+## Boot contract
+
+`sandbox-init` is `/init` in the boot artifact's initramfs. cocoon builds the
+kernel cmdline, and `sandbox-init` consumes these keys:
+
+| cmdline key | meaning |
+|---|---|
+| `cocoon.layers=a,b,…` | EROFS layer disks resolved from virtio-blk serials (or `/dev/vdX` paths, as the Firecracker lane passes them), lowerdir order |
+| `cocoon.cow=x` | writable ext4 COW disk (same resolution rules) |
+| `cocoon.timeout=10` | wait budget for the whole disk set, seconds (NIC MACs get a fixed 200 ms) |
+| `cocoon.hostname=h` | set via `sethostname(2)` before handoff |
+| `ip=addr::gw:mask:host:ethN:off[:dns0[:dns1]]` | cocoon CNI static config: persisted as a MAC-matched networkd unit in the new root (not applied in the initramfs); absent → the image's DHCP fallback covers the NIC |
+| `sandbox.init=/path` | handoff target, default `/sbin/init` |
+| `sandbox.debug=1` | fatal errors drop to `/bin/sh` (debug initramfs) instead of poweroff |
+| `sandbox.trace=1` | emit one pre-handoff line with per-phase µs timings |
+
+The pinned kernel builds no 8250 UART, so on cocoon's Firecracker lane
+(`console=ttyS0`) the trace line, the debug shell and the fatal-error
+message all go nowhere; they are visible on the Cloud Hypervisor lane's
+virtio console.
+
+`boot=cocoon-overlay` is ignored. Everything cocoon passes today keeps
+working — images built here boot with an unmodified cocoon.
+
+The kernel's config in `boot/kernel/` is a fragment. On amd64 it merges over
+`x86_64_defconfig` + `kvm_guest.config`; on arm64 it merges over `defconfig`,
+then `sandbox-arm64.config`.
