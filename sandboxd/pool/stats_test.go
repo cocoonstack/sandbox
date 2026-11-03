@@ -26,8 +26,14 @@ func TestOperatorReadsRaceFreeUnderHibernate(t *testing.T) {
 	wg.Go(func() {
 		defer close(done)
 		for range 100 {
-			_ = m.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token})
-			_ = m.Wake(t.Context(), sb.ID, Cred{Token: sb.Token})
+			if err := m.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
+				t.Errorf("hibernate: %v", err)
+				return
+			}
+			if err := m.Wake(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
+				t.Errorf("wake: %v", err)
+				return
+			}
 		}
 	})
 

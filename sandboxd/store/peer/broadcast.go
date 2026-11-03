@@ -1,11 +1,11 @@
 package peer
 
 import (
-	"cmp"
 	"context"
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"sync"
 	"time"
 
@@ -19,19 +19,17 @@ const (
 
 // Broadcaster fans a checkpoint delete out to every peer so a healed copy does not outlive it.
 type Broadcaster struct {
-	// a nil Client uses a default with a short timeout: one wedged peer must not hold up the fan-out.
-	Client *http.Client
-	Peers  func() []string
-	Token  string
+	Peers func() []string
+	Token string
 }
 
 // Delete sends DELETE ?no_forward=1 to every peer in parallel; failures are logged, not returned.
 func (b *Broadcaster) Delete(ctx context.Context, id string) {
-	addrs := dedupAddrs(b.Peers())
+	addrs := slices.Compact(slices.Sorted(slices.Values(b.Peers())))
 	if len(addrs) == 0 {
 		return
 	}
-	client := cmp.Or(b.Client, &http.Client{Timeout: defaultDeleteClientTimeout})
+	client := &http.Client{Timeout: defaultDeleteClientTimeout}
 	logger := log.WithFunc("peer.Broadcaster.Delete")
 	var wg sync.WaitGroup
 	for _, addr := range addrs {

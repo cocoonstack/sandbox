@@ -62,8 +62,9 @@ branch from.
 
 - Everything from the Ubuntu flavors (exec, files, sessions, git, pty)
   plus the running Chromium.
-- **Preview URLs are not raw CDP**: the preview proxy rewrites `Host` to
-  `sandbox-id:port`, which Chrome's DevTools allowlist rejects. Use
+- **Preview URLs are not raw CDP**: the preview proxy forwards the browser's
+  `Host`, which Chrome's DevTools allowlist rejects unless it is localhost or an
+  IP. Use
   `ProxyPort`/`DialPort` for CDP; preview URLs serve human-facing HTTP the
   workload chooses to expose (a live-view page, a screenshot server).
 - Guest env knobs read by `/usr/local/bin/chromium-cdp`: `CDP_PORT` (default

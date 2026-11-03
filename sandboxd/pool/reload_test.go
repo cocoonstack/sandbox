@@ -13,6 +13,7 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -229,6 +230,8 @@ func TestAReloadDropsTheLiveProxiesPooledConnections(t *testing.T) {
 	}
 	origin.Start()
 	t.Cleanup(origin.Close)
+	releaseOrigin := sync.OnceFunc(func() { close(release) })
+	t.Cleanup(releaseOrigin)
 	host := outboundtest.Hostname(t, origin.URL)
 	m := egressManager(t, newFakeEngine(), config.PoolSpec{PoolKey: testKey, Warm: 1, Egress: &egress.Policy{Allow: []egress.Rule{{Host: host}}}})
 	withOutbound(t, m, func(o *outbound.Options) { o.Dial = (&net.Dialer{}).DialContext })
@@ -256,7 +259,7 @@ func TestAReloadDropsTheLiveProxiesPooledConnections(t *testing.T) {
 	if err := get("/"); err != nil {
 		t.Fatalf("get after the reload: %v", err)
 	}
-	close(release)
+	releaseOrigin()
 	if err := <-inflight; err != nil {
 		t.Fatalf("in-flight get: %v", err)
 	}

@@ -5,7 +5,7 @@ A cluster is a set of sandboxd nodes joined through a
 Gossip carries only placement hints — per-pool warm counts, promoted-template
 hashes, available volume names, each node's data-plane address, and a digest
 of the cluster-invariant config.
-Per-sandbox state never leaves its owning node, so a stale view costs at most
+Gossip carries no per-sandbox state, so a stale view costs at most
 one extra redirect, never correctness. A single node with no seeds is a valid
 mesh of one.
 
@@ -63,7 +63,9 @@ probes, and preview forwarding retain the internal `advertise_addr`. See
 [TLS termination](deploy.md#tls-for-sdk-clients) for the edge setup.
 
 Node death is honest: a dead node's sandboxes die with it (memory state is
-node-local by design). SWIM detects the death and peers stop redirecting to
+node-local by design), except
+[archived](#archived-claims-across-node-loss) and
+[replicated](#running-claims-across-node-loss) claims. SWIM detects the death and peers stop redirecting to
 it.
 
 ### Volumes and placement
@@ -564,8 +566,8 @@ one PostgreSQL table that every node reads, so one tenant per end user works:
     listener's next retry. Keepalive finds a dead connection in about 25 s and
     retries back off to 30 s, so the change lands within about a minute of the
     database returning;
-  - renew, fork and wake ask the database whenever the cache lacks the
-    tenant, so they never outlive a removal. While the database is down, they
+  - renew, fork and wake from the archive ask the database whenever the cache
+    lacks the tenant, so they never outlive a removal. While the database is down, they
     answer 503 for a tenant the node has not cached.
 
 ### Cluster-invariant config
@@ -630,10 +632,10 @@ with every claim.
 - the same engine root path (cocoon's `root_dir`) on every node; it is not in
   the digest, so a mismatch shows only at the first cross-node branch
 - same `api_token`, tenant set, `preview_secret`, and `egress_ca` root everywhere
+  (a mismatch warns and shows in `sandboxd_config_digest_mismatch`)
 - with `meta_store`, every node's DSN points at the same database: the tenant
   set is not in the gossiped digest, so nodes on different databases serve
   diverging tenants without a warning
-  (a mismatch warns and shows in `sandboxd_config_digest_mismatch`)
 - `cluster_key` set if the gossip network is not otherwise trusted
 - one mesh sized in the hundreds of nodes, and promoted templates per pool or
   tenant rather than per end user (see [scale](#scale))

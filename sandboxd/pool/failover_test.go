@@ -1878,6 +1878,7 @@ type failoverCluster struct {
 	reg       *archivestest.Mem
 	ckDir     string
 	replicate int
+	volumes   []config.VolumeSpec
 }
 
 func newFailoverCluster(t *testing.T) *failoverCluster {
@@ -1913,7 +1914,7 @@ func (c *failoverCluster) nodeOn(t *testing.T, eng *fakeEngine, name, dataDir st
 	spec.ReplicateSeconds = c.replicate
 	cfg := &config.Config{
 		APIToken: "root", DataDir: dataDir, CheckpointDir: c.ckDir, Pools: []config.PoolSpec{spec, {PoolKey: plainKey, Warm: 1}},
-		Mesh: &config.MeshConfig{NodeID: name},
+		Mesh: &config.MeshConfig{NodeID: name}, Volumes: c.volumes,
 	}
 	b := testBackends(t, cfg)
 	b.Archives = c.reg

@@ -6,7 +6,6 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"path/filepath"
 	"syscall"
 	"testing"
@@ -50,12 +49,7 @@ func TestEgressDoorHalfCloseReachesTheGuest(t *testing.T) {
 }
 
 func TestDoorConnHandsSpliceItsUnixConn(t *testing.T) {
-	dir, err := os.MkdirTemp("/tmp", "door")
-	if err != nil {
-		t.Fatalf("temp dir: %v", err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(dir) })
-	ln, err := listenUnix(filepath.Join(dir, "d"))
+	ln, err := listenUnix(filepath.Join(outboundtest.SockRoot(t), "d"))
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
@@ -94,12 +88,13 @@ func TestEgressDoorCapsConcurrentConnections(t *testing.T) {
 	if err := h.Arm(t.Context(), sb); err != nil {
 		t.Fatalf("arm egress: %v", err)
 	}
+	t.Cleanup(func() { h.Disarm(sb.ID, true) })
 	path := engine.EgressSocketPath(sb.VsockSocket)
 
 	idle := make([]net.Conn, 0, doorConns)
 	for len(idle) < doorConns {
 		conn, err := net.Dial("unix", path)
-		if errors.Is(err, syscall.ECONNREFUSED) {
+		if errors.Is(err, syscall.ECONNREFUSED) || errors.Is(err, syscall.EAGAIN) {
 			time.Sleep(10 * time.Millisecond)
 			continue
 		}
@@ -114,16 +109,22 @@ func TestEgressDoorCapsConcurrentConnections(t *testing.T) {
 		}
 	})
 
+	waitHeld(t, h, sb.ID, doorConns)
+
 	client := outboundtest.EgressClient(path)
 	client.Timeout = 500 * time.Millisecond
-	if resp, err := client.Get(origin.URL + "/"); err == nil {
+	resp, err := client.Get(origin.URL + "/")
+	if err == nil {
 		resp.Body.Close()
 		t.Fatal("a request past the door cap was served")
+	}
+	if netErr, ok := errors.AsType[net.Error](err); !ok || !netErr.Timeout() {
+		t.Fatalf("request past the door cap: %v, want it to wait out the client timeout", err)
 	}
 
 	_ = idle[0].Close()
 	client.Timeout = 5 * time.Second
-	resp, err := client.Get(origin.URL + "/")
+	resp, err = client.Get(origin.URL + "/")
 	if err != nil {
 		t.Fatalf("request after a slot freed: %v", err)
 	}
@@ -131,16 +132,10 @@ func TestEgressDoorCapsConcurrentConnections(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("status %d after a slot freed, want 200", resp.StatusCode)
 	}
-	h.Disarm(sb.ID, true)
 }
 
 func TestReachedSeesAGuestInTheBacklog(t *testing.T) {
-	dir, err := os.MkdirTemp("/tmp", "door")
-	if err != nil {
-		t.Fatalf("temp dir: %v", err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(dir) })
-	path := filepath.Join(dir, "d.sock")
+	path := filepath.Join(outboundtest.SockRoot(t), "d.sock")
 	ln, err := listenUnix(path)
 	if err != nil {
 		t.Fatalf("listen: %v", err)
@@ -161,4 +156,18 @@ func TestReachedSeesAGuestInTheBacklog(t *testing.T) {
 	if !reached(door) {
 		t.Error("a door whose guest hung up reads as unreached")
 	}
+}
+
+func waitHeld(t *testing.T, h *Host, id string, want int) {
+	t.Helper()
+	h.mu.Lock()
+	door := h.doors[id].ln.(*doorListener)
+	h.mu.Unlock()
+	for range 500 {
+		if len(door.slots) >= want {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("door holds %d connections, want %d", len(door.slots), want)
 }

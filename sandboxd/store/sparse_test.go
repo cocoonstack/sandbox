@@ -50,7 +50,7 @@ func TestScanFileEmitsEachNonZeroChunkOnce(t *testing.T) {
 		want = append(want, sha256.Sum256(buf[:n]))
 	}
 	if !slices.Equal(digest.Chunks, want) {
-		t.Errorf("chunk sums differ from a dense read")
+		t.Error("chunk sums differ from a dense read")
 	}
 }
 

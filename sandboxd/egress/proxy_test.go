@@ -585,11 +585,17 @@ func TestAuditNamesTheConnectionEnds(t *testing.T) {
 		var d net.Dialer
 		return d.DialContext(ctx, network, target)
 	}
-	p := New(Policy{Allow: []Rule{{Host: "*"}}}, nil, nil, DialFunc(dial), func(ev Event) { events <- ev }, nil)
-	front := httptest.NewServer(p)
-	defer front.Close()
+	serve := func(recordEnds bool) *httptest.Server {
+		p := New(Policy{Allow: []Rule{{Host: "*"}}}, nil, nil, DialFunc(dial), func(ev Event) { events <- ev }, nil)
+		if recordEnds {
+			p.RecordEnds()
+		}
+		front := httptest.NewServer(p)
+		t.Cleanup(front.Close)
+		return front
+	}
 
-	resp, err := proxyClient(t, front.URL).Get("http://api.internal/x")
+	resp, err := proxyClient(t, serve(false).URL).Get("http://api.internal/x")
 	if err != nil {
 		t.Fatalf("proxied GET: %v", err)
 	}
@@ -597,8 +603,8 @@ func TestAuditNamesTheConnectionEnds(t *testing.T) {
 	if ev := recvEvent(t, events); ev.Local.IsValid() || ev.Remote.IsValid() {
 		t.Errorf("forward event %+v carries ends without RecordEnds", ev)
 	}
-	p.RecordEnds()
 
+	front := serve(true)
 	resp, err = proxyClient(t, front.URL).Get("http://api.internal/y")
 	if err != nil {
 		t.Fatalf("proxied GET: %v", err)

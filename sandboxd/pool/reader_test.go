@@ -603,9 +603,11 @@ func TestWakeAgentSocketStampsActivityOnlyWhenItServesTheGuest(t *testing.T) {
 	for _, on := range []bool{false, true} {
 		t.Run(fmt.Sprintf("reader=%t", on), func(t *testing.T) {
 			eng := newFakeEngine()
-			m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1})
+			var m *Manager
 			if on {
 				m = newReaderManager(t, eng)
+			} else {
+				m = newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1})
 			}
 			sb := mustClaim(t, m, testKey)
 			backdate(m, sb, time.Hour)
@@ -765,8 +767,8 @@ func TestHibernateSyncsTheGuestOnlyWithTheReaderOn(t *testing.T) {
 			eng.hibernateStall = make(chan struct{})
 			hibernated := make(chan struct{})
 			go func() {
+				defer close(hibernated)
 				hibernateClaim(t, m, sb)
-				close(hibernated)
 			}()
 			waitFor(t, func() bool { eng.mu.Lock(); defer eng.mu.Unlock(); return len(eng.hibernates) == 1 })
 			eng.mu.Lock()

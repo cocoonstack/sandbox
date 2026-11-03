@@ -158,7 +158,7 @@ func (m *Manager) TenantClaims() map[string]int {
 // Audit records one relayed request frame against a sandbox: the op and addressing fields only.
 func (m *Manager) Audit(ctx context.Context, id string, line []byte) {
 	if len(line) > AuditLineCap {
-		// the addressing fields stay unread at this size, but a padded frame must not escape the journal
+		// The addressing fields stay unread at this size, but a padded frame must not escape the journal
 		m.recordAudit(ctx, id, auditFrame{Op: "oversized"})
 		return
 	}
@@ -194,7 +194,6 @@ func (m *Manager) appendAudit(ctx context.Context, event any) {
 	}
 }
 
-// recordEgress logs one guarded-egress decision and meters it as a usage event.
 func (m *Manager) recordEgress(ctx context.Context, id, tenant string, ev egress.Event) {
 	decision := "deny"
 	switch ev.Decision {
@@ -217,7 +216,6 @@ func (m *Manager) recordEgress(ctx context.Context, id, tenant string, ev egress
 	m.recordUsage(ctx, usage.Event{Event: egressEvent, ID: id, Tenant: tenant, Reference: ev.Host, Upstream: ev.Upstream, Secret: ev.Injected})
 }
 
-// recordUsage appends one billing event; failures are logged, never propagated.
 func (m *Manager) recordUsage(ctx context.Context, ev usage.Event) {
 	ev.Time = time.Now()
 	if err := m.usage.append(ev); err != nil {

@@ -214,4 +214,7 @@ func benchRoundTrip(b *testing.B, tc *tls.Conn, br *bufio.Reader) {
 	}
 	_, _ = io.Copy(io.Discard, resp.Body)
 	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		b.Fatalf("status %d, want 200", resp.StatusCode)
+	}
 }

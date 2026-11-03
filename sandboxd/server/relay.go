@@ -21,7 +21,7 @@ const (
 	// drainGrace bounds how long a finished silkd relay waits for the client to close.
 	drainGrace = 30 * time.Second
 
-	// the keepAlive trio fails a relay whose client vanished without a FIN in about two minutes.
+	// The keepAlive trio fails a relay whose client vanished without a FIN in about two minutes.
 	keepAliveIdle     = 60 * time.Second
 	keepAliveInterval = 15 * time.Second
 	keepAliveCount    = 4
@@ -123,7 +123,7 @@ func (s *Server) splice(client net.Conn, clientR io.Reader, guest net.Conn, hell
 	}
 	defer release()
 
-	// the http server may have armed a header-read deadline on this conn
+	// The http server may have armed a header-read deadline on this conn
 	_ = client.SetDeadline(time.Time{})
 	keepAlive(client)
 	if _, err := client.Write(hello); err != nil {
@@ -221,7 +221,7 @@ func copyBoth(client net.Conn, clientR io.Reader, guest net.Conn, ends relayEnds
 		defer close(done)
 		_, err := utils.CopyIn(guest, clientR, noSplice)
 		if err != nil {
-			// the client died rather than half-closing, so nothing is left to answer it
+			// The client died rather than half-closing, so nothing is left to answer it
 			_ = guest.Close()
 			return
 		}

@@ -139,6 +139,43 @@ func TestPromoteValidations(t *testing.T) {
 	}
 }
 
+func TestTemplateDigestGuardReadsTheSharedRecord(t *testing.T) {
+	eng := newFakeEngine()
+	eng.exportContent = []byte("generation one")
+	m := newTestManager(t, eng)
+	parent := mustClaim(t, m, testKey)
+	key, stale, err := m.Promote(t.Context(), parent.ID, Cred{Token: parent.Token}, "tpl:shared", "")
+	if err != nil {
+		t.Fatalf("Promote: %v", err)
+	}
+	peer := newTestManager(t, newFakeEngine())
+	peer.tpls = m.tpls
+	id := store.TemplateID(key.Hash())
+	peer.tplSet[id] = TemplateInfo{Key: key, ContentDigest: stale}
+
+	eng.exportContent = []byte("generation two")
+	_, latest, err := m.Promote(t.Context(), parent.ID, Cred{Token: parent.Token}, "tpl:shared", "")
+	if err != nil {
+		t.Fatalf("re-Promote: %v", err)
+	}
+	if err := peer.SetTemplateLabels(t.Context(), key, types.Metadata{"a": "b"}, "", stale); !errors.Is(err, ErrTemplateReplaced) {
+		t.Errorf("labels with the replaced digest: %v, want ErrTemplateReplaced", err)
+	}
+	if err := peer.DeleteTemplate(t.Context(), key, "", stale); !errors.Is(err, ErrTemplateReplaced) {
+		t.Errorf("delete with the replaced digest: %v, want ErrTemplateReplaced", err)
+	}
+	if _, err := m.tpls.ReadMeta(t.Context(), id); err != nil {
+		t.Fatalf("the newer build is gone: %v", err)
+	}
+	delete(peer.tplSet, id)
+	if err := peer.SetTemplateLabels(t.Context(), key, types.Metadata{"a": "b"}, "", latest); err != nil {
+		t.Errorf("labels with the current digest on a node that has not cached it: %v", err)
+	}
+	if err := peer.DeleteTemplate(t.Context(), key, "", latest); err != nil {
+		t.Errorf("delete with the current digest on a node that has not cached it: %v", err)
+	}
+}
+
 func TestDeleteTemplate(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 0})

@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -123,6 +124,8 @@ func TestEgressRequestInFlightBlocksIdleSweep(t *testing.T) {
 		_, _ = io.WriteString(w, "ok")
 	}))
 	t.Cleanup(origin.Close)
+	releaseOrigin := sync.OnceFunc(func() { close(release) })
+	t.Cleanup(releaseOrigin)
 	pol := &egress.Policy{Allow: []egress.Rule{{Host: outboundtest.Hostname(t, origin.URL)}}}
 	m := egressManager(t, newFakeEngine(), config.PoolSpec{PoolKey: testKey, IdleHibernateSeconds: 1, Egress: pol})
 	withOutbound(t, m, func(o *outbound.Options) { o.Dial = (&net.Dialer{}).DialContext })
@@ -149,7 +152,7 @@ func TestEgressRequestInFlightBlocksIdleSweep(t *testing.T) {
 		t.Fatal("claim with an egress request in flight was idle-hibernated")
 	}
 
-	close(release)
+	releaseOrigin()
 	if err := <-result; err != nil {
 		t.Fatalf("request through the proxy: %v", err)
 	}

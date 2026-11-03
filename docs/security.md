@@ -40,7 +40,9 @@ exposing any part of a deployment beyond a single trusted host.
   proxy's answers, and every credentialed call is journaled. Git auth
   tokens travel as in-memory headers, never guest disk. Secrets come from
   the host environment or a claim's `guest: false` env, never the config
-  file; that env stays in the node-local claim record.
+  file. That env stays in the node-local claim record; with
+  `archive_failover`, the row of an archived or replicated claim also carries
+  it, `guest: false` values included, in plaintext in the shared PostgreSQL.
 - **Sandbox identity.** Every clone is reseeded (entropy, machine-id), so
   branches and forks never share an identity with their source.
 
@@ -64,7 +66,9 @@ all of them.
 4. **Treat the checkpoint store like backups.** A checkpoint, an archive and
    a replica each embed full guest memory, including any secret the workload
    held at capture. Restrict store access; use S3 server-side encryption or
-   an encrypted mount where that matters.
+   an encrypted mount where that matters. With `archive_failover`, treat the
+   shared PostgreSQL the same way: its rows hold claim env in plaintext,
+   `guest: false` values included.
 5. **No custom NAT64 prefix routed on a sandboxd host** — the SSRF guard
    cannot see through an operator-specific translator prefix
    ([egress](egress.md#deployment-constraints)).

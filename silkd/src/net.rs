@@ -39,7 +39,7 @@ pub fn routes_directly() -> bool {
     if !has_egress() {
         return false;
     }
-    // the host writes the file once per claim, so a present verdict latches; only absence re-reads.
+    // the host writes the verdict before the golden snapshot or on a cold boot, so a present verdict latches; only absence re-reads.
     let relay = match LANE.load(Ordering::Relaxed) {
         -1 => lane_verdict(LANE_FILE)
             .inspect(|&r| LANE.store(i8::from(r), Ordering::Relaxed))

@@ -11,7 +11,7 @@ use silkd::server::State;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 
 use common::{
-    b64, connect, decode, exchange, next_frame, one, roundtrip, send, stdout_body, type_of,
+    b64, connect, exchange, frames_until, next_frame, one, roundtrip, send, stdout_body, type_of,
 };
 
 async fn detached_pid(state: &Arc<State>, script: &str) -> u64 {
@@ -135,10 +135,7 @@ async fn daemonizer_exit_is_the_last_frame() {
         "exit must be last: {frames:?}"
     );
     assert!(
-        !frames
-            .iter()
-            .filter(|f| type_of(f) == "stdout")
-            .any(|f| String::from_utf8_lossy(&decode(f)).contains("late")),
+        !stdout_body(&frames).contains("late"),
         "grandchild output must not leak after exit"
     );
 }
@@ -336,4 +333,74 @@ async fn disconnect_during_drain_publishes_real_exit_code() {
         "attach must end with exit: {frames:?}"
     );
     assert_eq!(last["code"], 7, "real exit code, not a fabricated -1");
+}
+
+#[tokio::test]
+async fn stdin_held_by_a_forked_child_does_not_wedge_the_next_rpc() {
+    let state = Arc::new(State::new());
+    let (mut cw, mut lines, handle) = connect(&state);
+    send(
+        &mut cw,
+        json!({
+            "op": "exec",
+            "argv": ["/bin/sh", "-c", "exec 3<&0; sleep 8 <&3 3<&- & exit 0"]
+        }),
+    )
+    .await;
+    let chunk = b64(&[b'x'; 32 * 1024]);
+    for _ in 0..30 {
+        send(&mut cw, json!({"op":"stdin","data":chunk})).await;
+    }
+    let frames = frames_until(&mut lines, |f| type_of(f) == "exit").await;
+    assert_eq!(frames.last().unwrap()["code"], 0, "{frames:?}");
+
+    send(&mut cw, json!({"op":"info"})).await;
+    let info = tokio::time::timeout(Duration::from_secs(3), next_frame(&mut lines))
+        .await
+        .expect("the next RPC is wedged on a stdin nobody reads");
+    assert_eq!(type_of(&info), "info");
+    cw.shutdown().await.unwrap();
+    handle.await.unwrap().unwrap();
+}
+
+#[tokio::test]
+async fn a_client_gone_mid_output_releases_the_stdin_a_forked_child_holds() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("count");
+    let state = Arc::new(State::new());
+    let (mut cw, mut lines, _) = connect(&state);
+    send(
+        &mut cw,
+        json!({
+            "op": "exec",
+            "argv": ["/bin/sh", "-c", "exec 3<&0; (sleep 1; wc -c <&3 >\"$OUT.tmp\"; mv \"$OUT.tmp\" \"$OUT\") >/dev/null 2>&1 & while :; do echo x; sleep 0.05; done"],
+            "env": {"OUT": out.to_str().unwrap()}
+        }),
+    )
+    .await;
+    let chunk = b64(&[b'x'; 32 * 1024]);
+    for _ in 0..30 {
+        send(&mut cw, json!({"op":"stdin","data":chunk})).await;
+    }
+    frames_until(&mut lines, |f| type_of(f) == "stdout").await;
+    drop(lines);
+    drop(cw);
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(8);
+    while !out.exists() {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the forked child never saw stdin end"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let read: usize = std::fs::read_to_string(&out)
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    assert!(
+        read < 256 * 1024,
+        "the forked child read {read} bytes: stdin kept flowing after its client left"
+    );
 }

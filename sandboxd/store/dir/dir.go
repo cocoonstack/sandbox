@@ -102,6 +102,14 @@ func (d *Store) FetchFile(ctx context.Context, id, rel, dst string) error {
 	return err
 }
 
+func (d *Store) ReadDigest(ctx context.Context, id string) (string, error) {
+	meta, err := d.ReadMeta(ctx, id)
+	if err != nil {
+		return "", err
+	}
+	return d.readDigest(id, meta)
+}
+
 func (d *Store) ReadMeta(_ context.Context, id string) ([]byte, error) {
 	raw, err := os.ReadFile(filepath.Join(d.root, id, store.MetaFile)) //nolint:gosec // id pinned by the instance idRe before any call
 	if errors.Is(err, fs.ErrNotExist) {
@@ -226,7 +234,7 @@ func (d *Store) publish(_ context.Context, staging, id, digest string) error {
 	switch {
 	case errors.Is(statErr, fs.ErrNotExist):
 		stagedExport := filepath.Join(staging, store.ExportDir)
-		// make the generation fresh before a peer can observe it without committed meta.
+		// Make the generation fresh before a peer can observe it without committed meta.
 		if err := os.Chtimes(stagedExport, now, now); err != nil {
 			return err
 		}
@@ -244,7 +252,7 @@ func (d *Store) publish(_ context.Context, staging, id, digest string) error {
 		if readErr != nil && !errors.Is(readErr, fs.ErrNotExist) {
 			return readErr
 		}
-		// a sweep may already have selected an expired path for removal.
+		// A sweep may already have selected an expired path for removal.
 		if time.Since(genInfo.ModTime()) >= store.GenerationGrace {
 			return fmt.Errorf("generation %s expired before commit; retry after sweep", filepath.Base(genDir))
 		}
@@ -256,7 +264,7 @@ func (d *Store) publish(_ context.Context, staging, id, digest string) error {
 		_ = d.sweepGenerations(id)
 		return os.RemoveAll(staging)
 	}
-	// age the previous current generation from supersession, not publication.
+	// Age the previous current generation from supersession, not publication.
 	if err := touchCurrentGeneration(final, now); err != nil {
 		return err
 	}
@@ -282,7 +290,7 @@ func (d *Store) sweepGenerations(id string) (err error) {
 		return err
 	default:
 		defer func() { err = errors.Join(err, metaFile.Close()) }()
-		// the open file pins one inode across a concurrent meta rename.
+		// The open file pins one inode across a concurrent meta rename.
 		meta, readErr := io.ReadAll(metaFile)
 		if readErr != nil {
 			return readErr

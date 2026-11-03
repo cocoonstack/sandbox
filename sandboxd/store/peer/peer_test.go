@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/cocoonstack/sandbox/sandboxd/store"
@@ -145,18 +146,17 @@ func TestPullValidateRejectsEveryOwner(t *testing.T) {
 }
 
 func TestPullBudgetBoundsSlowOwners(t *testing.T) {
-	puller := &sleepyPuller{sleep: 300 * time.Millisecond}
-	h := NewHealer(func(string) []string { return []string{"peer-a:7777", "peer-b:7777"} }, puller)
-	h.budget = 200 * time.Millisecond
-
-	start := time.Now()
-	err := h.Pull(t.Context(), testID, t.TempDir(), nil)
-	if elapsed := time.Since(start); elapsed > 500*time.Millisecond {
-		t.Errorf("Pull took %v, want bounded near the %v budget", elapsed, h.budget)
-	}
-	if err == nil {
-		t.Error("Pull with two owners that never finish in time should fail, not silently succeed")
-	}
+	synctest.Test(t, func(t *testing.T) {
+		h := NewHealer(func(string) []string { return []string{"peer-a:7777", "peer-b:7777"} }, &sleepyPuller{sleep: 2 * healBudget})
+		start := time.Now()
+		err := h.Pull(t.Context(), testID, t.TempDir(), nil)
+		if elapsed := time.Since(start); elapsed != healBudget {
+			t.Errorf("Pull took %v, want exactly the %v budget", elapsed, healBudget)
+		}
+		if err == nil {
+			t.Error("Pull with two owners that never finish in time should fail, not silently succeed")
+		}
+	})
 }
 
 type fakePuller struct {

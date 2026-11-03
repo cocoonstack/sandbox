@@ -1,7 +1,7 @@
 //! Filesystem verbs: the vsock boundary is the trust boundary, so paths are taken as-is.
 
 use std::io;
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
@@ -212,24 +212,20 @@ fn tmp_name(path: &Path) -> PathBuf {
     PathBuf::from(tmp)
 }
 
-/// Creates the temp file exclusively under its final mode; without an explicit mode an overwrite inherits the destination's bits.
+/// Creates the temp file exclusively under its final mode; without an explicit mode an overwrite inherits the destination's bits, and under root always its owner.
 async fn create_tmp(path: &Path, mode: Option<u32>) -> io::Result<(PathBuf, fs::File)> {
     let path = path.to_path_buf();
     let (tmp, file) = tokio::task::spawn_blocking(move || {
-        let effective = mode.or_else(|| {
-            std::fs::metadata(&path)
-                .ok()
-                .map(|meta| meta.permissions().mode() & 0o7777)
-        });
+        let dest = std::fs::metadata(&path).ok();
+        let effective =
+            mode.or_else(|| dest.as_ref().map(|meta| meta.permissions().mode() & 0o7777));
         let tmp = tmp_name(&path);
         let file = std::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
             .mode(effective.unwrap_or(0o666))
             .open(&tmp)?;
-        if let Some(m) = effective
-            && let Err(e) = file.set_permissions(std::fs::Permissions::from_mode(m))
-        {
+        if let Err(e) = apply_dest_attrs(&file, dest.as_ref(), effective) {
             let _ = std::fs::remove_file(&tmp);
             return Err(e);
         }
@@ -238,6 +234,25 @@ async fn create_tmp(path: &Path, mode: Option<u32>) -> io::Result<(PathBuf, fs::
     .await
     .map_err(io::Error::other)??;
     Ok((tmp, fs::File::from_std(file)))
+}
+
+fn apply_dest_attrs(
+    file: &std::fs::File,
+    dest: Option<&std::fs::Metadata>,
+    mode: Option<u32>,
+) -> io::Result<()> {
+    if let Some(dest) = dest
+        && nix::unistd::geteuid().is_root()
+    {
+        let tmp = file.metadata()?;
+        if (tmp.uid(), tmp.gid()) != (dest.uid(), dest.gid()) {
+            std::os::unix::fs::fchown(file, Some(dest.uid()), Some(dest.gid()))?;
+        }
+    }
+    if let Some(m) = mode {
+        file.set_permissions(std::fs::Permissions::from_mode(m))?;
+    }
+    Ok(())
 }
 
 async fn commit_tmp(tmp: &Path, path: &Path) -> io::Result<()> {

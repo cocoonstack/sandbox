@@ -89,6 +89,7 @@ type fakeSilkd struct {
 	block      []wire.DirEntry
 	serial     map[string][]byte
 	readMisses map[string]int
+	blankReads map[string]int
 	listErr    string
 	readErr    map[string]string
 	listCalls  int
@@ -113,6 +114,7 @@ func serveFakeSilkd(t *testing.T, path string) *fakeSilkd {
 	f := &fakeSilkd{
 		serial:     make(map[string][]byte),
 		readMisses: make(map[string]int),
+		blankReads: make(map[string]int),
 		readErr:    make(map[string]string),
 		stat:       make(map[string]bool),
 		statMisses: make(map[string]int),
@@ -276,6 +278,10 @@ func (f *fakeSilkd) handleRead(conn net.Conn, path string) {
 	if f.readMisses[path] > 0 {
 		f.readMisses[path]--
 		ok = false
+	}
+	if f.blankReads[path] > 0 {
+		f.blankReads[path]--
+		data = []byte("\n")
 	}
 	data = bytes.Clone(data)
 	f.mu.Unlock()

@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -113,8 +112,7 @@ func TestRootFindsARemovedTenantsRemoteTemplate(t *testing.T) {
 		types.TemplateGossipHash(hash, types.TemplateRootScope): {"peer:7777"},
 	}}
 	srv := New("root", "node:7777", &fakeManager{}, &fakeDialer{}, placer, nil, nil, nil)
-	ts := httptest.NewServer(srv.Handler())
-	t.Cleanup(ts.Close)
+	ts := serveTestServer(t, srv)
 	for _, tt := range []struct{ method, path, body string }{
 		{http.MethodPost, "/v1/claim", `{"template":"tpl"}`},
 		{http.MethodPost, "/v1/claim", `{"template":"tpl","volumes":[{"name":"imagenet"}]}`},
@@ -145,8 +143,7 @@ func TestConfigReloadIsRootOnlyAndNamesWhatChanged(t *testing.T) {
 	mgr := &fakeManager{tenants: []tenants.TenantSpec{{Name: "acme", Token: "acme-tok"}}}
 	srv := New("root", "node:7777", mgr, &fakeDialer{}, nil, nil, nil, nil)
 	srv.SetConfigReload(reload)
-	ts := httptest.NewServer(srv.Handler())
-	t.Cleanup(ts.Close)
+	ts := serveTestServer(t, srv)
 
 	resp := doReq(t, http.MethodPost, ts.URL+"/v1/config/reload", "acme-tok", "")
 	_ = resp.Body.Close()

@@ -128,9 +128,6 @@ func (m *Manager) replaceReplica(ctx context.Context, sb *types.Sandbox, ck stri
 }
 
 func (m *Manager) putRow(ctx context.Context, sb *types.Sandbox, ck string, replica, replace bool) (int64, error) {
-	if m.archives == nil {
-		return 0, nil
-	}
 	m.mu.Lock()
 	if replica && m.hasVolumeHolds(sb) {
 		m.mu.Unlock()

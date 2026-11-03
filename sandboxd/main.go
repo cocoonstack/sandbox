@@ -239,13 +239,12 @@ func startMesh(ctx context.Context, cfg *config.Config, mgr *pool.Manager) (*mes
 }
 
 func gossipNodeState(ctx context.Context, msh *mesh.Mesh, mgr *pool.Manager) {
-	t := time.NewTicker(gossipInterval)
-	defer t.Stop()
+	tick := time.Tick(gossipInterval)
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-t.C:
+		case <-tick:
 			msh.UpdateSelf(ctx, mgr.WarmCounts(), mgr.TemplateHashes(), mgr.VolumeNames())
 		}
 	}

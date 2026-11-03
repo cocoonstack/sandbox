@@ -60,7 +60,7 @@ func (m *Manager) Checkpoint(ctx context.Context, id string, cred Cred, name, te
 
 // ClaimCheckpoint provisions a fresh claim cloned from a checkpoint, attributed to tenant.
 func (m *Manager) ClaimCheckpoint(ctx context.Context, ckptID string, o ClaimOptions) (*types.Sandbox, error) {
-	// a rejected id must not leave a lock-map entry, so resolve before recLock and quota
+	// A rejected id must not leave a lock-map entry, so resolve before recLock and quota
 	ckpt, err := m.loadCheckpoint(ctx, ckptID)
 	if err != nil {
 		return nil, err
@@ -76,7 +76,7 @@ func (m *Manager) ClaimCheckpointHeal(ctx context.Context, ckptID string, o Clai
 	if m.healer == nil || !store.CheckpointIDRe.MatchString(ckptID) {
 		return nil, ErrUnknownCheckpoint
 	}
-	// resolving moves a guest memory image, so quota rejects a full node before that cost
+	// Resolving moves a guest memory image, so quota rejects a full node before that cost
 	if err := m.overQuota(1, o.Tenant); err != nil {
 		return nil, err
 	}
@@ -130,7 +130,7 @@ func (m *Manager) DeleteCheckpoint(ctx context.Context, ckptID, tenant string, s
 	if err := m.ckpts.Delete(ctx, ckptID); err != nil {
 		return fmt.Errorf("delete checkpoint: %w", err)
 	}
-	// a shared backend has no per-node replicas to chase.
+	// A shared backend has no per-node replicas to chase.
 	if scope == DeleteFleet && m.peerDelete != nil && !m.ckptsShared {
 		m.peerDelete(context.WithoutCancel(ctx), ckptID)
 	}
@@ -157,7 +157,7 @@ func (m *Manager) FetchCheckpoint(ctx context.Context, ckptID string) (string, [
 		}
 		return "", nil, nil, fmt.Errorf("fetch checkpoint: %w", err)
 	}
-	// the read lock spans the transfer so a delete cannot pull the export from under it
+	// The read lock spans the transfer so a delete cannot pull the export from under it
 	return dir, meta, unlock, nil
 }
 
@@ -384,14 +384,14 @@ func validateHealedCheckpoint(staging, wantID string) error {
 		return fmt.Errorf("healed record %s has an invalid key: %w", wantID, keyErr)
 	}
 	if !ckpt.Key.Capturable() {
-		// publishing a non-branchable key would poison the id and suppress a good owner
+		// Publishing a non-branchable key would poison the id and suppress a good owner
 		return fmt.Errorf("healed record %s has a non-branchable (egress) key", wantID)
 	}
 	export, err := os.ReadDir(filepath.Join(staging, store.ExportDir))
 	if err != nil {
 		return fmt.Errorf("healed record %s missing export dir: %w", wantID, err)
 	}
-	// an export with no regular file clones to nothing; deeper content is cocoon's own format
+	// An export with no regular file clones to nothing; deeper content is cocoon's own format
 	if !hasRegularFile(export) {
 		return fmt.Errorf("healed record %s has no export content", wantID)
 	}

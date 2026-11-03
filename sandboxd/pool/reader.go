@@ -49,8 +49,7 @@ func (m *Manager) DialReader(ctx context.Context, id, token string) (conn net.Co
 		m.dropReader(ctx, r, true)
 		return nil, "", fmt.Errorf("%w: %w", ErrNoReader, err)
 	}
-	stop := CloseOnFence(fenced, conn)
-	return &heldConn{Conn: conn, release: sync.OnceFunc(func() { stop(); m.releaseReader(r) })}, r.source, nil
+	return newHeldConn(conn, fenced, func() { m.releaseReader(r) }), r.source, nil
 }
 
 // SleepingSource names the hibernate snapshot or archive record a reader would serve, or "" when the claim is awake, failed or mid-transition.

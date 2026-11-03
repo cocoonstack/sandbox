@@ -5,7 +5,7 @@ import time
 from http.server import HTTPServer, ThreadingHTTPServer
 
 import pytest
-from conftest import FakeNode, sandbox_at
+from conftest import FakeNode, sandbox_at, wait_until
 
 from cocoonsandbox import APIError, Client, Template
 
@@ -14,10 +14,16 @@ class KeptNode(FakeNode):
     protocol_version = "HTTP/1.1"
     conns = 0
     drop_after_reply = False
+    closed = 0
 
     def setup(self):
         super().setup()
         KeptNode.conns += 1
+
+    def finish(self):
+        super().finish()
+        self.connection.close()
+        KeptNode.closed += 1
 
     def _reply(self, code, payload):
         super()._reply(code, payload)
@@ -374,7 +380,7 @@ def test_a_parked_connection_the_node_closed_is_not_reused(kept_node, fd_floor):
     KeptNode.drop_after_reply = True
     client = Client(kept_node)
     client.new("rt:24.04")
-    time.sleep(0.1)
+    wait_until(lambda: KeptNode.closed == 1, "the node never closed the connection")
     assert client.new("rt:24.04").id == "sb_1"
     assert KeptNode.conns == 2
 
@@ -382,7 +388,7 @@ def test_a_parked_connection_the_node_closed_is_not_reused(kept_node, fd_floor):
 @pytest.fixture
 def kept_node():
     server = ThreadingHTTPServer(("127.0.0.1", 0), KeptNode)
-    KeptNode.routes, KeptNode.conns, KeptNode.drop_after_reply = {}, 0, False
+    KeptNode.routes, KeptNode.conns, KeptNode.closed, KeptNode.drop_after_reply = {}, 0, 0, False
     threading.Thread(target=server.serve_forever, daemon=True).start()
     yield f"127.0.0.1:{server.server_port}"
     server.shutdown()

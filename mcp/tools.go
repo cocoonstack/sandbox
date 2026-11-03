@@ -54,11 +54,11 @@ var (
 			schema(props{"sandbox_id": str("id returned by create_sandbox, fork, or branch_checkpoint"), "path": str("absolute path of the directory")}, "sandbox_id", "path"), toolListDir,
 		},
 		{
-			"fork", "Clone a sandbox into N independent children that start from its exact memory and disk state, including running processes; each child gets its own id and lives one hour. N is capped by the node's max_fork_count (default 16). All-or-nothing: on failure no child survives. The parent keeps running.",
+			"fork", "Clone a sandbox into N independent children that start from its exact memory and disk state, including running processes; each child gets its own id and lives one hour. N is capped by the node's max_fork_count (default 16). All-or-nothing: on failure no child survives. The parent keeps running. An egress-lane sandbox cannot fork.",
 			schema(props{"sandbox_id": str("id returned by create_sandbox, fork, or branch_checkpoint"), "count": integer("number of children, 1 to the node's max_fork_count (default 16)")}, "sandbox_id", "count"), toolFork,
 		},
 		{
-			"checkpoint", "Capture a sandbox's full state (memory, disk, running processes) without stopping it and return a checkpoint id. branch_checkpoint claims new sandboxes from that moment any number of times; a checkpoint outlives this session until it is deleted or expires under the node's checkpoint TTL.",
+			"checkpoint", "Capture a sandbox's full state (memory, disk, running processes) without stopping it and return a checkpoint id. branch_checkpoint claims new sandboxes from that moment any number of times; a checkpoint outlives this session until it is deleted or expires under the node's checkpoint TTL. An egress-lane sandbox cannot checkpoint.",
 			schema(props{"sandbox_id": str("id returned by create_sandbox, fork, or branch_checkpoint"), "name": str("optional human label")}, "sandbox_id"), toolCheckpoint,
 		},
 		{
@@ -68,11 +68,11 @@ var (
 		{"list_checkpoints", "List the node's checkpoints newest first: checkpoint_id, name, source sandbox_id, created_at.", schema(props{}), toolListCheckpoints},
 		{"delete_checkpoint", "Delete the node's copy of a checkpoint and tell peers to drop theirs; a peer replica that misses that broadcast stays branchable until its own TTL sweep. Sandboxes already branched from it are unaffected.", schema(props{"checkpoint_id": str("id returned by checkpoint or list_checkpoints")}, "checkpoint_id"), toolDeleteCheckpoint},
 		{
-			"hibernate", "Snapshot a sandbox and stop its VM, freeing memory while keeping its id, files, processes, and shell state. The next call that reaches the guest (exec, spawn, ps, kill, logs, the file tools) wakes it transparently in tens of milliseconds; fork, checkpoint, promote and release act on the snapshot without waking it.",
+			"hibernate", "Snapshot a sandbox and stop its VM, freeing memory while keeping its id, files, processes, and shell state. The next call that reaches the guest (exec, spawn, ps, kill, logs, the file tools) wakes it transparently in tens of milliseconds; fork, checkpoint, promote and release act on the snapshot without waking it. An egress-lane sandbox cannot hibernate.",
 			schema(props{"sandbox_id": str("id returned by create_sandbox, fork, or branch_checkpoint")}, "sandbox_id"), toolHibernate,
 		},
 		{
-			"promote", "Publish the sandbox's current state as a named template on its node; later create_sandbox calls with that name (and the same net and size) start from it. Re-promoting to the same name replaces the template.",
+			"promote", "Publish the sandbox's current state as a named template on its node; later create_sandbox calls with that name (and the same net and size) start from it. Re-promoting to the same name replaces the template. An egress-lane sandbox cannot promote.",
 			schema(props{"sandbox_id": str("id returned by create_sandbox, fork, or branch_checkpoint"), "template_name": str("template name to publish as")}, "sandbox_id", "template_name"), toolPromote,
 		},
 		{"release", "Destroy a sandbox and free its resources; files and processes inside it are lost. This session forgets the id, so a second release of it is rejected as unknown.", schema(props{"sandbox_id": str("id returned by create_sandbox, fork, or branch_checkpoint")}, "sandbox_id"), toolRelease},
@@ -109,7 +109,7 @@ func toolCreateSandbox(ctx context.Context, s *server, raw jsontext.Value) (stri
 	if args.TTLSeconds < 0 {
 		return "", fmt.Errorf("ttl_seconds must not be negative, got %d", args.TTLSeconds)
 	}
-	// an agent session outlives the node's 5-minute default, and nothing renews a lease
+	// An agent session outlives the node's 5-minute default, and nothing renews a lease
 	ttl := cmp.Or(time.Duration(args.TTLSeconds)*time.Second, defaultToolTTL)
 	opts := []sandbox.Option{sandbox.WithTimeout(ttl)}
 	if args.Net != "" {

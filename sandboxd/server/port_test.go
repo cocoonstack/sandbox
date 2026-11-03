@@ -237,12 +237,7 @@ func newPortServer(t *testing.T, guest func(net.Conn)) (*httptest.Server, *Serve
 		return relayEnd, nil
 	}}
 	srv := New("", "node:7777", mgr, &fakeDialer{}, nil, nil, nil, nil)
-	ts := httptest.NewServer(srv.Handler())
-	t.Cleanup(func() {
-		srv.CloseRelays()
-		ts.Close()
-	})
-	return ts, srv
+	return serveTestServer(t, srv), srv
 }
 
 func dialPortConn(t *testing.T, ts *httptest.Server, req string) net.Conn {

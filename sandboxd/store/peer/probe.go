@@ -9,6 +9,7 @@ import (
 	"encoding/binary"
 	"maps"
 	"net/http"
+	"slices"
 	"sync"
 	"time"
 
@@ -40,9 +41,7 @@ type redirectCacheEntry struct {
 
 // HTTPProber finds which peers hold a checkpoint by probing them on a cross-node miss.
 type HTTPProber struct {
-	// a nil Client uses a default 2-second timeout: a probe must never hang on a wedged peer.
-	Client *http.Client
-	Peers  func() []string
+	Peers func() []string
 
 	// ProbeKey signs and verifies HEAD probes; empty means an unencrypted mesh.
 	ProbeKey []byte
@@ -75,7 +74,7 @@ func (p *HTTPProber) Owners(ctx context.Context, id string) []string {
 // HealOwners is Owners' wide twin: a heal wants the largest source list, uncached.
 func (p *HTTPProber) HealOwners(ctx context.Context, id string) []string {
 	v, _, _ := p.healFlight.Do(id, func() (any, error) {
-		// no grace: a heal must not stop early on a fast owner and hide a slower valid source.
+		// No grace: a heal must not stop early on a fast owner and hide a slower valid source.
 		return p.fanOut(ctx, id, maxHealOwners, 0), nil
 	})
 	return v.([]string)
@@ -90,11 +89,11 @@ func (p *HTTPProber) Forget(id string) {
 
 // fanOut probes every peer concurrently, canceling stragglers once maxOwners have answered 200.
 func (p *HTTPProber) fanOut(ctx context.Context, id string, maxOwners int, grace time.Duration) []string {
-	addrs := dedupAddrs(p.Peers())
+	addrs := slices.Compact(slices.Sorted(slices.Values(p.Peers())))
 	if len(addrs) == 0 {
 		return nil
 	}
-	client := cmp.Or(p.Client, &http.Client{Timeout: defaultProbeClientTimeout})
+	client := &http.Client{Timeout: defaultProbeClientTimeout}
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), defaultProbeClientTimeout)
 	defer cancel()
 
@@ -109,7 +108,7 @@ func (p *HTTPProber) fanOut(ctx context.Context, id string, maxOwners int, grace
 	}
 	go func() { wg.Wait(); close(wins) }()
 
-	// grace opens only after the first win: a genuine miss must hear from every peer.
+	// Grace opens only after the first win: a genuine miss must hear from every peer.
 	var owners []string
 	var graceCh <-chan time.Time
 	for {
@@ -199,20 +198,6 @@ func probeMAC(key []byte, id string, bucket int64) string {
 
 func currentBucket() int64 {
 	return time.Now().Unix() / probeBucketSeconds
-}
-
-// dedupAddrs drops repeated addresses so a stale peer list never probes the same node twice.
-func dedupAddrs(addrs []string) []string {
-	seen := make(map[string]struct{}, len(addrs))
-	out := make([]string, 0, len(addrs))
-	for _, a := range addrs {
-		if _, ok := seen[a]; ok {
-			continue
-		}
-		seen[a] = struct{}{}
-		out = append(out, a)
-	}
-	return out
 }
 
 // probeOwner sends a probe MAC when probeKey is set; an empty key falls back to capability-only.

@@ -144,7 +144,7 @@ func (s *Sandbox) openStream(ctx context.Context, req wire.Request) (*PortConn, 
 
 func (s *Sandbox) proxyConn(ctx context.Context, local net.Conn, port uint16) {
 	defer func() { _ = local.Close() }()
-	// the copy can sit in local.Read forever; only closing the conn unblocks it, so ctx teardown reaches local too
+	// The copy can sit in local.Read forever; only closing the conn unblocks it, so ctx teardown reaches local too
 	unarm := context.AfterFunc(ctx, func() { _ = local.Close() })
 	defer unarm()
 	guest, err := s.DialPort(ctx, port)

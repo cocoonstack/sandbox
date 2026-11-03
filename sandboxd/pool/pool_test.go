@@ -998,23 +998,20 @@ func TestRenewRefusesAClaimBeingArchived(t *testing.T) {
 }
 
 func TestRenewRollsBackOnPersistFailure(t *testing.T) {
-	dir := t.TempDir()
-	m := newTestManagerAt(t, newFakeEngine(), dir)
+	m := newTestManager(t, newFakeEngine())
 	sb := mustClaim(t, m, testKey)
 	before, beforeLease := sb.Deadline, sb.LeaseSeconds
+	broken := filepath.Join(t.TempDir(), "gone", "claims.json")
+	m.store.path = broken
 
-	if err := os.Chmod(dir, 0o500); err != nil {
-		t.Fatalf("chmod: %v", err)
-	}
-	_, err := m.Renew(t.Context(), sb.ID, Cred{Token: sb.Token}, time.Hour, "")
-	if chmodErr := os.Chmod(dir, 0o700); chmodErr != nil {
-		t.Fatalf("restore mode: %v", chmodErr)
-	}
-	if err == nil {
+	if _, err := m.Renew(t.Context(), sb.ID, Cred{Token: sb.Token}, time.Hour, ""); err == nil {
 		t.Fatal("renew reported success while the claim store was unwritable")
 	}
 	if !sb.Deadline.Equal(before) || sb.LeaseSeconds != beforeLease {
 		t.Errorf("deadline %v lease %ds after a failed persist, want %v / %ds", sb.Deadline, sb.LeaseSeconds, before, beforeLease)
+	}
+	if err := os.MkdirAll(filepath.Dir(broken), 0o750); err != nil {
+		t.Fatalf("heal store dir: %v", err)
 	}
 	granted, err := m.Renew(t.Context(), sb.ID, Cred{Token: sb.Token}, time.Hour, "")
 	if err != nil {

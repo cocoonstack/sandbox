@@ -350,6 +350,12 @@ func (l *logSink) String() string {
 	return l.buf.String()
 }
 
+func (l *logSink) Reset() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.buf.Reset()
+}
+
 type sleepingEnv struct {
 	ts           *httptest.Server
 	srv          *Server

@@ -55,7 +55,8 @@ func (e *Engine) StartReader(ctx context.Context, vsockSocket, cowDisk string) e
 	if err = e.silkdExec(ctx, vsockSocket, "test", "-x", readerView+readerSilkd); err != nil {
 		return fmt.Errorf("claim image has no silkd at %s: %w", readerSilkd, err)
 	}
-	if err = e.silkdSpawn(ctx, vsockSocket, "env", fmt.Sprintf("SILKD_PORT=%d", readerPort), "chroot", readerView, readerSilkd); err != nil {
+	argv := []string{"env", fmt.Sprintf("SILKD_PORT=%d", readerPort), "chroot", readerView, readerSilkd}
+	if err = e.silkdOnce[*wire.Started](ctx, vsockSocket, wire.Exec{Argv: argv, Env: map[string]string{"PATH": guestExecPATH}, Detach: true}); err != nil {
 		return fmt.Errorf("start view silkd: %w", err)
 	}
 	return e.probe(ctx, vsockSocket, readerPort, readerProbeTimeout)
@@ -64,29 +65,6 @@ func (e *Engine) StartReader(ctx context.Context, vsockSocket, cowDisk string) e
 // DialReader connects to the silkd StartReader started.
 func (e *Engine) DialReader(ctx context.Context, vsockSocket string) (net.Conn, error) {
 	return e.dialVsock(ctx, vsockSocket, readerPort)
-}
-
-func (e *Engine) silkdSpawn(ctx context.Context, vsockSocket string, argv ...string) error {
-	s, err := e.dialSilkdSession(ctx, vsockSocket)
-	if err != nil {
-		return err
-	}
-	defer s.close()
-	if err = s.send(wire.Exec{Argv: argv, Env: map[string]string{"PATH": guestExecPATH}, Detach: true}); err != nil {
-		return err
-	}
-	frame, err := s.recv()
-	if err != nil {
-		return err
-	}
-	switch resp := frame.(type) {
-	case *wire.Started:
-		return nil
-	case *wire.ErrorResp:
-		return fmt.Errorf("silkd %w", resp)
-	default:
-		return fmt.Errorf("unexpected silkd frame %q", frame.RespType())
-	}
 }
 
 func cmdlineLayers(cmdline string) []string {

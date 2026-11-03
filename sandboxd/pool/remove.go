@@ -15,7 +15,7 @@ import (
 
 func (m *Manager) removeVM(ctx context.Context, name string) bool {
 	m.out.ClosePrebound(name)
-	// cancellation-immune: on a canceled ctx `cocoon vm rm` no-ops and orphans.
+	// Cancellation-immune: on a canceled ctx `cocoon vm rm` no-ops and orphans.
 	ctx = context.WithoutCancel(ctx)
 	err := m.eng.Remove(ctx, name)
 	if err == nil {
@@ -31,7 +31,7 @@ func (m *Manager) confirmGone(ctx context.Context, name string) bool {
 	logger := log.WithFunc("pool.confirmGone")
 	_, present, err := m.eng.Inspect(ctx, name)
 	if err != nil {
-		// cannot tell: a false "gone" leaks a running VM, a retry only costs a sweep
+		// Cannot tell: a false "gone" leaks a running VM, a retry only costs a sweep
 		logger.Warnf(ctx, "verify remove of %s: %v", name, err)
 		return false
 	}

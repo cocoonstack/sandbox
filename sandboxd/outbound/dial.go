@@ -96,7 +96,7 @@ func newDialer(verdict VerdictFunc) *net.Dialer {
 // destVerdict reports whether ip is an internal address allow re-admits; any other internal address, self included, is an error.
 func destVerdict(allow []egress.InternalAllow, self []netip.Addr, ip netip.Addr, port uint16) (bool, error) {
 	ip = canonicalAddr(ip)
-	// after the NAT64 unwrap and before the block, so a named prefix wins
+	// After the NAT64 unwrap and before the block, so a named prefix wins
 	if slices.ContainsFunc(allow, func(a egress.InternalAllow) bool { return a.Admits(ip, port) }) {
 		return true, nil
 	}

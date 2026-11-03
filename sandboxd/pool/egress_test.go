@@ -17,6 +17,7 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/outbound"
 	"github.com/cocoonstack/sandbox/sandboxd/outbound/outboundtest"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
+	"github.com/cocoonstack/sandbox/sandboxd/usage"
 )
 
 var (
@@ -246,7 +247,10 @@ func TestBatchArmFailureRecordsNoUsage(t *testing.T) {
 	if claimed != 0 {
 		t.Errorf("rollback left %d claims", claimed)
 	}
-	raw, _ := os.ReadFile(filepath.Join(m.dataDir, "usage.jsonl"))
+	raw, err := os.ReadFile(filepath.Join(m.dataDir, usage.JournalFile))
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("read usage journal: %v", err)
+	}
 	if strings.Contains(string(raw), `"ev":"claim"`) {
 		t.Errorf("rolled-back batch left claim usage events:\n%s", raw)
 	}

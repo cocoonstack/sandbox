@@ -73,7 +73,7 @@ func (g *guestPortConn) Write(p []byte) (int, error) {
 	written := 0
 	for len(p) > 0 {
 		n := min(len(p), wire.PortWriteChunk)
-		// the hot relay path reuses one buffer instead of allocating per chunk.
+		// The hot relay path reuses one buffer instead of allocating per chunk.
 		g.wbuf = wire.AppendBulkRequest(g.wbuf, "data", p[:n])
 		if _, err := g.Conn.Write(g.wbuf); err != nil {
 			return written, err

@@ -94,7 +94,7 @@ func (s *Server) handleExec(w http.ResponseWriter, r *http.Request) {
 		return true
 	})
 	if err != nil && pid != 0 {
-		// a dropped connection only reaches a child that writes; a silent one needs the kill
+		// A dropped connection only reaches a child that writes; a silent one needs the kill
 		if killErr := s.killExec(ctx, id, token, pid); killErr != nil {
 			log.WithFunc("server.handleExec").Errorf(ctx, killErr, "kill exec pid %d in %s", pid, id)
 		}

@@ -5,7 +5,6 @@ import contextlib
 import json
 import socket
 import threading
-import time
 
 import pytest
 from conftest import accept_upgrade, sandbox_at, wait_until
@@ -161,22 +160,25 @@ def test_peer_hang_up_is_noticed_before_reuse(fd_floor):
 
 def test_run_timeout_bounds_the_proto_probe():
     server = socket.create_server(("127.0.0.1", 0))
+    cut = threading.Event()
 
     def serve():
         conn, _ = server.accept()
-        accept_upgrade(conn)
-        time.sleep(3)
-        conn.close()
+        conn.settimeout(3)
+        with conn, contextlib.suppress(OSError):
+            reader = accept_upgrade(conn)
+            while reader.readline():
+                pass
+            cut.set()
 
     threading.Thread(target=serve, daemon=True).start()
     sb = sandbox_at(f"127.0.0.1:{server.getsockname()[1]}")
-    started = time.monotonic()
     try:
         with pytest.raises(TimeoutError):
             sb.run(["true"], timeout=0.5)
+        assert cut.wait(1), "the unanswered info probe outlived the run timeout"
     finally:
         server.close()
-    assert time.monotonic() - started < 2, "the unanswered info probe outlived the run timeout"
 
 
 def test_close_drains_the_parked_connection(monkeypatch):

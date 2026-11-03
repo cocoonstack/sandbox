@@ -49,11 +49,10 @@ type server struct {
 	client   *sandbox.Client
 	template string
 
-	mu       sync.Mutex
-	boxes    map[string]*sandbox.Sandbox
-	ckpts    map[string]*sandbox.Checkpoint
-	release  sync.Once
-	released chan struct{}
+	mu      sync.Mutex
+	boxes   map[string]*sandbox.Sandbox
+	ckpts   map[string]*sandbox.Checkpoint
+	release sync.Once
 }
 
 func newServer(addr, token, template string) (*server, error) {
@@ -70,7 +69,6 @@ func newServer(addr, token, template string) (*server, error) {
 		template: template,
 		boxes:    map[string]*sandbox.Sandbox{},
 		ckpts:    map[string]*sandbox.Checkpoint{},
-		released: make(chan struct{}),
 	}, nil
 }
 
@@ -170,9 +168,7 @@ func (s *server) closeBoxes() {
 			wg.Go(func() { _ = sb.Close() })
 		}
 		wg.Wait()
-		close(s.released)
 	})
-	<-s.released
 }
 
 func (s *server) trackBox(sb *sandbox.Sandbox) {

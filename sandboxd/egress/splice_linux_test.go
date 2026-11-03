@@ -33,12 +33,13 @@ func testSpliceThroughDoor(t *testing.T, noSplice bool) {
 		t.Fatalf("listen tcp: %v", err)
 	}
 	t.Cleanup(func() { _ = tln.Close() })
+	buffered := make(chan struct{}, 2)
 	go func() {
 		c, acceptErr := tln.Accept()
 		if acceptErr != nil {
 			return
 		}
-		pump(c, total)
+		pump(c, total, buffered)
 		_ = c.(*net.TCPConn).CloseWrite()
 	}()
 	guestDone := make(chan struct{})
@@ -50,6 +51,7 @@ func testSpliceThroughDoor(t *testing.T, noSplice bool) {
 		}
 		defer func() { _ = c.Close() }()
 		buf := make([]byte, 64<<10)
+		buffered <- struct{}{}
 		for n := 0; n < total; n += len(buf) {
 			_, _ = c.Write(buf)
 		}
@@ -71,6 +73,8 @@ func testSpliceThroughDoor(t *testing.T, noSplice bool) {
 	door := doorShaped{guest.(*net.UnixConn)}
 	defer func() { _ = door.Close(); _ = upstream.Close() }()
 
+	<-buffered
+	<-buffered
 	runtime.GC()
 	var before, after runtime.MemStats
 	runtime.ReadMemStats(&before)
@@ -89,8 +93,9 @@ type doorShaped struct{ *net.UnixConn }
 
 func (c doorShaped) NetConn() net.Conn { return c.UnixConn }
 
-func pump(c net.Conn, total int) {
+func pump(c net.Conn, total int, buffered chan<- struct{}) {
 	buf := make([]byte, 64<<10)
+	buffered <- struct{}{}
 	for n := 0; n < total; {
 		m, err := c.Read(buf)
 		n += m

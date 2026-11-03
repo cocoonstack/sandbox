@@ -104,22 +104,8 @@ func TestReplicaCaptureRefusesPendingLiveWriter(t *testing.T) {
 func newReplicaVolumeManager(t *testing.T) (*Manager, *failoverCluster) {
 	t.Helper()
 	c := newReplicaCluster(t)
-	spec := archivePool(keepAnHour)
-	spec.ReplicateSeconds = c.replicate
-	cfg := &config.Config{
-		APIToken: "root", DataDir: t.TempDir(), CheckpointDir: c.ckDir,
-		Pools: []config.PoolSpec{spec}, Mesh: &config.MeshConfig{NodeID: "a"},
-		Volumes: []config.VolumeSpec{{Name: "data", Path: writeVolumeImage(t, "data", "original"), Writable: true}},
-	}
-	backends := testBackends(t, cfg)
-	backends.Archives = c.reg
-	m, err := NewManager(t.Context(), cfg, newFakeEngine(), testSecrets(t), backends)
-	if err != nil {
-		t.Fatal(err)
-	}
-	c.renew(t, "a")
-	m.liftFence()
-	return m, c
+	c.volumes = []config.VolumeSpec{{Name: "data", Path: writeVolumeImage(t, "data", "original"), Writable: true}}
+	return c.node(t, "a", t.TempDir(), keepAnHour), c
 }
 
 func disableReplication(m *Manager) {

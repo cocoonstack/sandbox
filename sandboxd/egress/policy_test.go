@@ -22,7 +22,7 @@ func TestPolicyEval(t *testing.T) {
 		{"exact host case-insensitive", "API.GitHub.com", "POST", DecisionAllow, "gh"},
 		{"exact host wrong method falls through to catch-all deny", "api.github.com", "DELETE", DecisionDeny, ""},
 		{"wildcard subdomain", "storage.googleapis.com", "PUT", DecisionAllow, ""},
-		{"wildcard does not match apex", "googleapis.com", "GET", DecisionAllow, ""},
+		{"wildcard does not match apex", "googleapis.com", "PUT", DecisionDeny, ""},
 		{"catch-all get", "example.com", "GET", DecisionAllow, ""},
 		{"catch-all denies non-get", "example.com", "POST", DecisionDeny, ""},
 	}

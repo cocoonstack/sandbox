@@ -17,9 +17,9 @@ import (
 )
 
 const (
-	reapDestroy reapAction = iota // engine teardown + drop snapshot
-	reapArchive                   // hibernated with archive enabled or on_expire archive: archive, keep the claim
-	reapPurge                     // archived past retention: delete the store checkpoint
+	reapDestroy reapAction = iota
+	reapArchive
+	reapPurge
 	reapPause
 )
 
@@ -53,7 +53,7 @@ func (m *Manager) ClaimWarm(ctx context.Context, key types.PoolKey, o ClaimOptio
 	if err != nil {
 		return nil, err
 	}
-	// holds belong to this path until finalize; past it the sandbox carries them.
+	// Holds belong to this path until finalize; past it the sandbox carries them.
 	reserved := applied
 	defer func() { m.unreserveVolumes(reserved) }()
 	m.mu.Lock()
@@ -176,7 +176,7 @@ func (m *Manager) Renew(ctx context.Context, id string, cred Cred, ttl time.Dura
 		m.mu.Unlock()
 		return time.Time{}, ErrUnknownSandbox
 	}
-	// an archived claim's Deadline is a retention window, not a lease: a TTL over it schedules a purge
+	// An archived claim's Deadline is a retention window, not a lease: a TTL over it schedules a purge
 	if _, archiving := m.archiving[id]; sb.ArchiveCk != "" || archiving {
 		m.mu.Unlock()
 		return time.Time{}, ErrArchived
@@ -188,7 +188,7 @@ func (m *Manager) Renew(ctx context.Context, id string, cred Cred, ttl time.Dura
 	if err := m.store.commit(js); err != nil {
 		m.mu.Lock()
 		var rb claimSnapshot
-		// a concurrent renew that landed keeps its grant: roll back only what this call wrote
+		// A concurrent renew that landed keeps its grant: roll back only what this call wrote
 		if m.claimed[id] == sb && sb.Deadline.Equal(deadline) {
 			sb.Deadline, sb.LeaseSeconds, sb.OnExpire = prev, prevLease, prevExpire
 			rb = m.store.set(sb)
@@ -218,7 +218,7 @@ func (m *Manager) AgentSocket(id, token string) (string, error) {
 	if sb.Replicated() && m.fence.Load().fenced {
 		return "", ErrLeaseLost
 	}
-	// no activity stamp: a control-plane poll must not keep an idle sandbox awake
+	// No activity stamp: a control-plane poll must not keep an idle sandbox awake
 	return sb.VsockSocket, nil
 }
 
@@ -245,12 +245,7 @@ func (m *Manager) dialPort(ctx context.Context, id string, cred Cred, port uint1
 		sb.Unhold()
 		return nil, err
 	}
-	release := sb.Unhold
-	if fenced != nil {
-		stop := CloseOnFence(fenced, conn)
-		release = func() { stop(); sb.Unhold() }
-	}
-	return &heldConn{Conn: conn, release: sync.OnceFunc(release)}, nil
+	return newHeldConn(conn, fenced, sb.Unhold), nil
 }
 
 func (m *Manager) dialPassive(ctx context.Context, id string, port uint16) (net.Conn, error) {
@@ -283,12 +278,7 @@ func (m *Manager) dialPassive(ctx context.Context, id string, port uint16) (net.
 		sb.UnholdIdle()
 		return nil, err
 	}
-	release := sb.UnholdIdle
-	if fenced != nil {
-		stop := CloseOnFence(fenced, conn)
-		release = func() { stop(); sb.UnholdIdle() }
-	}
-	return &heldConn{Conn: conn, release: sync.OnceFunc(release)}, nil
+	return newHeldConn(conn, fenced, sb.UnholdIdle), nil
 }
 
 // releaseResolved re-checks under m.mu that sb is still the live claim: no double teardown.
@@ -336,7 +326,7 @@ func (m *Manager) releaseResolved(ctx context.Context, id string, sb *types.Sand
 		logger.Errorf(ctx, saveErr, "persist release of %s", id)
 		return fmt.Errorf("release %s: %w", id, saveErr)
 	}
-	// cleanup must survive the caller hanging up; the claim is already dropped.
+	// Cleanup must survive the caller hanging up; the claim is already dropped.
 	ctx = context.WithoutCancel(ctx)
 	if ck != "" {
 		m.purgeArchiveCk(ctx, id, ck, sb.Tenant) // archived: no local VM
@@ -396,7 +386,7 @@ func (m *Manager) admitClaim(tenant string, volumes []resolvedVolume, applied []
 	return nil
 }
 
-// quotaErr answers ErrQuota when the node takes no more claims; callers hold m.mu.
+// Callers hold m.mu.
 func (m *Manager) quotaErr(extra int, tenant string) error {
 	if m.draining {
 		return fmt.Errorf("%w: node draining", ErrQuota)
@@ -421,7 +411,7 @@ func (m *Manager) quotaErr(extra int, tenant string) error {
 	return nil
 }
 
-// tenantDelta tracks tenantLive as m.claimed changes; callers hold m.mu.
+// Callers hold m.mu.
 func (m *Manager) tenantDelta(tenant string, delta int) {
 	if tenant == "" {
 		return
@@ -476,7 +466,7 @@ func (m *Manager) finalizeBatch(ctx context.Context, sbs []*types.Sandbox, ttl t
 	if err != nil {
 		m.mu.Unlock()
 		for _, sb := range sbs {
-			// the rw mount dirtied the journal, so the clean umount is still owed
+			// The rw mount dirtied the journal, so the clean umount is still owed
 			td := m.quiesceVolumes(ctx, sb)
 			m.removeOrRetry(ctx, sb.VMName, "", td)
 		}
@@ -501,7 +491,7 @@ func (m *Manager) finalizeBatch(ctx context.Context, sbs []*types.Sandbox, ttl t
 			return fmt.Errorf("arm egress %s: %w", sb.ID, armErr)
 		}
 	}
-	// usage lands only after the batch armed, so a rollback leaves no unterminated claim event
+	// Usage lands only after the batch armed, so a rollback leaves no unterminated claim event
 	for _, sb := range sbs {
 		m.recordUsage(ctx, usage.Event{
 			Event: "claim",
@@ -534,7 +524,6 @@ func (m *Manager) rollbackClaim(ctx context.Context, sbs []*types.Sandbox) {
 	}
 }
 
-// abortVolumeClaim removes a failed claim's VM and clears reserved against a double release.
 func (m *Manager) abortVolumeClaim(ctx context.Context, vmName string, reserved *[]types.Volume) {
 	m.removeOrRetry(ctx, vmName, "", volumeTeardown{holds: *reserved})
 	*reserved = nil
@@ -554,7 +543,7 @@ func (m *Manager) reapOnce(ctx context.Context) {
 	var dropped, purges []string
 	var unrows []*types.Sandbox
 	for id, sb := range m.claimed {
-		// a zero deadline means no expiry (an archived claim kept forever).
+		// A zero deadline means no expiry (an archived claim kept forever).
 		if sb.Deadline.IsZero() || !now.After(sb.Deadline) {
 			continue
 		}
@@ -568,7 +557,7 @@ func (m *Manager) reapOnce(ctx context.Context) {
 			expired = append(expired, victim{action: reapPurge, id: id, ck: sb.ArchiveCk, tenant: sb.Tenant, deadline: sb.Deadline, sb: sb})
 			purges = append(purges, sb.ArchiveCk)
 		case m.archivesAtDeadline(sb):
-			// archive instead of destroy, kept in m.claimed for archive() to move
+			// Archive instead of destroy, kept in m.claimed for archive() to move
 			if _, busy := m.archiving[id]; busy {
 				continue
 			}
@@ -653,7 +642,7 @@ func (m *Manager) reapOnce(ctx context.Context) {
 		logger.Error(ctx, saveErr, "persist reap; rolled back")
 		return
 	}
-	// engine teardown can take minutes, so fan out bounded and never stall the ticker loop
+	// Engine teardown can take minutes, so fan out bounded and never stall the ticker loop
 	m.runBounded(ctx, len(expired), func(ctx context.Context, i int) {
 		v := expired[i]
 		switch v.action {
@@ -776,6 +765,11 @@ func (m *Manager) admitOptions(ctx context.Context, key types.PoolKey, o ClaimOp
 type heldConn struct {
 	net.Conn
 	release func()
+}
+
+func newHeldConn(conn net.Conn, fenced <-chan struct{}, release func()) *heldConn {
+	stop := CloseOnFence(fenced, conn)
+	return &heldConn{Conn: conn, release: sync.OnceFunc(func() { stop(); release() })}
 }
 
 func (c *heldConn) Close() error {

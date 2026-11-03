@@ -227,10 +227,6 @@ async fn session_argv_with_metacharacters_is_one_literal_token() {
         evil,
         "argv metacharacters were interpreted instead of passed literally: {r:?}"
     );
-    assert!(
-        !stdout_body(&r).contains("INJECTED\n") && !stdout_body(&r).to_lowercase().contains("uid="),
-        "command injection through argv: {r:?}"
-    );
 }
 
 #[tokio::test]

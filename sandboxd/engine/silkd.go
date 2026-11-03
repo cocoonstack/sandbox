@@ -127,26 +127,25 @@ func (e *Engine) silkdReadFile(ctx context.Context, vsockSocket, path string, li
 	return data, nil
 }
 
-// silkdStat answers with a single Stat frame and no Done, so it cannot ride silkdStream.
-func (e *Engine) silkdStat(ctx context.Context, vsockSocket, path string) error {
+// silkdOnce sends a request answered by a single T frame and no Done, so it cannot ride silkdStream.
+func (e *Engine) silkdOnce[T wire.Response](ctx context.Context, vsockSocket string, req wire.Request) error {
 	s, err := e.dialSilkdSession(ctx, vsockSocket)
 	if err != nil {
 		return err
 	}
 	defer s.close()
-	if err = s.send(wire.FsStat{Path: path}); err != nil {
+	if err = s.send(req); err != nil {
 		return err
 	}
 	frame, err := s.recv()
 	if err != nil {
 		return err
 	}
-	switch resp := frame.(type) {
-	case *wire.Stat:
+	if _, ok := frame.(T); ok {
 		return nil
-	case *wire.ErrorResp:
-		return fmt.Errorf("silkd %w", resp)
-	default:
-		return fmt.Errorf("unexpected silkd frame %q", frame.RespType())
 	}
+	if resp, ok := frame.(*wire.ErrorResp); ok {
+		return fmt.Errorf("silkd %w", resp)
+	}
+	return fmt.Errorf("unexpected silkd frame %q", frame.RespType())
 }

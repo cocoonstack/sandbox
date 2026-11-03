@@ -64,6 +64,9 @@ func TestPatchSwitchesTheUpstreamForNewConnections(t *testing.T) {
 	if got := upstream(); got != "http://127.0.0.1:3001" {
 		t.Fatalf("upstream %q after the first patch", got)
 	}
+	if got := sb.Env.Redacted()["EGRESS_UPSTREAM"].Value; got != "" {
+		t.Errorf("GET env would show %q", got)
+	}
 	if err := m.PatchEnv(t.Context(), sb.ID, types.EnvPatch{"EGRESS_UPSTREAM": nil}, ""); err != nil {
 		t.Fatalf("clear: %v", err)
 	}
@@ -72,9 +75,6 @@ func TestPatchSwitchesTheUpstreamForNewConnections(t *testing.T) {
 	}
 	if err := m.PatchEnv(t.Context(), sb.ID, types.EnvPatch{"EGRESS_UPSTREAM": {Value: "http://10.9.9.9:1", Guest: hostOnly}}, ""); !errors.Is(err, ErrBadEnv) {
 		t.Errorf("patch to an unlisted upstream: %v, want ErrBadEnv", err)
-	}
-	if got := sb.Env.Redacted()["EGRESS_UPSTREAM"].Value; got != "" {
-		t.Errorf("GET env would show %q", got)
 	}
 }
 

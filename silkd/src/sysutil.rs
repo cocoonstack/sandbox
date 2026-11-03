@@ -9,6 +9,7 @@ use std::process::ExitStatus;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{LazyLock, Mutex};
 
+use nix::fcntl::{FcntlArg, OFlag, fcntl};
 use tokio::io::unix::AsyncFd;
 use tokio::process::Command;
 
@@ -52,7 +53,7 @@ pub fn rand_token() -> std::io::Result<String> {
         .collect())
 }
 
-/// SIGKILLs the group led by `pgid`, so a session's external command dies with its shell; a synthetic id misses with ESRCH.
+/// SIGKILLs the group led by `pgid`, so a session's external command dies with its shell.
 pub fn kill_group(pgid: u32) {
     if is_valid_pid(pgid) {
         send_signal(-(pgid as libc::pid_t), libc::SIGKILL);
@@ -133,7 +134,8 @@ pub fn openpty(cols: u16, rows: u16) -> std::io::Result<(OwnedFd, OwnedFd)> {
         ws_ypixel: 0,
     };
     let pty = nix::pty::openpty(&ws, None)?;
-    set_nonblocking(pty.master.as_raw_fd())?;
+    let flags = OFlag::from_bits_retain(fcntl(&pty.master, FcntlArg::F_GETFL)?);
+    fcntl(&pty.master, FcntlArg::F_SETFL(flags | OFlag::O_NONBLOCK))?;
     Ok((pty.master, pty.slave))
 }
 
@@ -165,26 +167,6 @@ pub fn adopt_controlling_tty(cmd: &mut Command) {
     unsafe {
         cmd.pre_exec(|| make_controlling_tty());
     }
-}
-
-/// Reads from a raw fd, surfacing WouldBlock to the caller's readiness loop.
-pub fn read_fd(fd: RawFd, buf: &mut [u8]) -> std::io::Result<usize> {
-    // SAFETY: fd is a live open fd; buf is a valid mutable slice of buf.len().
-    let n = unsafe { libc::read(fd, buf.as_mut_ptr().cast(), buf.len()) };
-    if n < 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-    Ok(n as usize)
-}
-
-/// Writes to a raw fd (the pty master), returning bytes written.
-pub fn write_fd(fd: RawFd, buf: &[u8]) -> std::io::Result<usize> {
-    // SAFETY: fd is a live open fd; buf is a valid slice of buf.len().
-    let n = unsafe { libc::write(fd, buf.as_ptr().cast(), buf.len()) };
-    if n < 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-    Ok(n as usize)
 }
 
 /// Locks a std mutex, panicking on poisoning: silkd's critical sections never panic.
@@ -329,19 +311,6 @@ fn lookup_user(user: &str) -> Result<(u32, u32, PathBuf), String> {
         Ok(None) => Err(format!("unknown user {user:?}")),
         Err(e) => Err(format!("look up user {user:?}: {e}")),
     }
-}
-
-fn set_nonblocking(fd: RawFd) -> std::io::Result<()> {
-    // SAFETY: fd is open; F_GETFL/F_SETFL only read and set its flags.
-    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
-    if flags < 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-    // SAFETY: same fd; F_SETFL only sets the just-read flags plus O_NONBLOCK.
-    if unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-    Ok(())
 }
 
 #[cfg(test)]

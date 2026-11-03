@@ -129,7 +129,7 @@ func TestInterceptBindsInnerRequestToInterceptRule(t *testing.T) {
 
 	tc := connectTLS(t, front.Listener.Addr().String(), "api.example.com:443", "api.example.com", guestRoots)
 	defer func() { _ = tc.Close() }()
-	resp := roundTripTLSTo(t, tc, http.MethodGet, "api.example.com")
+	resp := roundTripTLSHost(t, tc, http.MethodGet, "api.example.com")
 	defer func() { _ = resp.Body.Close() }()
 
 	if seen := resp.Header.Get("X-Auth-Seen"); seen != "Bearer SECRET" {
@@ -137,43 +137,41 @@ func TestInterceptBindsInnerRequestToInterceptRule(t *testing.T) {
 	}
 }
 
-func TestInterceptCaptureEnforcesRuleMethod(t *testing.T) {
-	policy := Policy{Allow: []Rule{
-		{Host: "*.example.com"},
-		{Host: "api.example.com", Methods: []string{"GET"}, Intercept: InterceptAlways},
-	}}
-	p, guestRoots, upstream := interceptProxyPolicy(t, policy, nil)
-	p.pools.Load().mitm.TLSClientConfig.RootCAs = trustUpstream(upstream)
-	front := httptest.NewServer(p)
-	defer front.Close()
+func TestInterceptEnforcesRuleMethods(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		policy Policy
+		host   string
+		method string
+		want   int
+	}{
+		{"a capture rule keeps its method filter", Policy{Allow: []Rule{
+			{Host: "*.example.com"},
+			{Host: "api.example.com", Methods: []string{"GET"}, Intercept: InterceptAlways},
+		}}, "api.example.com", http.MethodPost, http.StatusForbidden},
+		{"a later intercept rule is reached by its method", Policy{Allow: []Rule{
+			{Host: "*.example.com", Methods: []string{"GET"}, Intercept: InterceptAlways},
+			{Host: "api.example.com", Methods: []string{"POST"}, Intercept: InterceptAlways},
+		}}, "api.example.com", http.MethodPost, http.StatusOK},
+		{"a method outside the rule is filtered", Policy{Allow: []Rule{
+			{Host: "example.com", Methods: []string{"GET"}, Intercept: InterceptAlways},
+		}}, "example.com", http.MethodPost, http.StatusForbidden},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			p, guestRoots, upstream := interceptProxyPolicy(t, tt.policy, nil)
+			p.pools.Load().mitm.TLSClientConfig.RootCAs = trustUpstream(upstream)
+			front := httptest.NewServer(p)
+			defer front.Close()
 
-	tc := connectTLS(t, front.Listener.Addr().String(), "api.example.com:443", "api.example.com", guestRoots)
-	defer func() { _ = tc.Close() }()
-	resp := roundTripTLSTo(t, tc, http.MethodPost, "api.example.com")
-	defer func() { _ = resp.Body.Close() }()
+			tc := connectTLS(t, front.Listener.Addr().String(), tt.host+":443", tt.host, guestRoots)
+			defer func() { _ = tc.Close() }()
+			resp := roundTripTLSHost(t, tc, tt.method, tt.host)
+			defer func() { _ = resp.Body.Close() }()
 
-	if resp.StatusCode != http.StatusForbidden {
-		t.Errorf("POST over the intercepted tunnel got %d, want 403 (intercept rule is GET-only)", resp.StatusCode)
-	}
-}
-
-func TestInterceptReachesLaterInterceptRuleByMethod(t *testing.T) {
-	policy := Policy{Allow: []Rule{
-		{Host: "*.example.com", Methods: []string{"GET"}, Intercept: InterceptAlways},
-		{Host: "api.example.com", Methods: []string{"POST"}, Intercept: InterceptAlways},
-	}}
-	p, guestRoots, upstream := interceptProxyPolicy(t, policy, nil)
-	p.pools.Load().mitm.TLSClientConfig.RootCAs = trustUpstream(upstream)
-	front := httptest.NewServer(p)
-	defer front.Close()
-
-	tc := connectTLS(t, front.Listener.Addr().String(), "api.example.com:443", "api.example.com", guestRoots)
-	defer func() { _ = tc.Close() }()
-	resp := roundTripTLSTo(t, tc, http.MethodPost, "api.example.com")
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode != http.StatusOK {
-		t.Errorf("POST got %d, want 200 (the POST-only intercept rule must be reachable)", resp.StatusCode)
+			if resp.StatusCode != tt.want {
+				t.Errorf("%s over the intercepted tunnel got %d, want %d", tt.method, resp.StatusCode, tt.want)
+			}
+		})
 	}
 }
 
@@ -216,22 +214,6 @@ func TestCloseRevokesInterceptedSession(t *testing.T) {
 			_ = revived.Body.Close()
 			t.Error("established intercepted session survived proxy Close")
 		}
-	}
-}
-
-func TestInterceptFiltersByMethod(t *testing.T) {
-	p, guestRoots, upstream := interceptProxy(t, Rule{Host: "example.com", Methods: []string{"GET"}, Intercept: InterceptAlways}, nil)
-	p.pools.Load().mitm.TLSClientConfig.RootCAs = trustUpstream(upstream)
-	front := httptest.NewServer(p)
-	defer front.Close()
-
-	tc := connectTLS(t, front.Listener.Addr().String(), "example.com:443", "example.com", guestRoots)
-	defer func() { _ = tc.Close() }()
-	resp := roundTripTLS(t, tc, http.MethodPost)
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode != http.StatusForbidden {
-		t.Errorf("POST over intercepted TLS got %d, want 403 (method filtered)", resp.StatusCode)
 	}
 }
 
@@ -700,22 +682,6 @@ func connectTLSCached(tb testing.TB, proxyAddr, target, serverName string, roots
 func roundTripTLS(t *testing.T, tc *tls.Conn, method string) *http.Response {
 	t.Helper()
 	return roundTripTLSHost(t, tc, method, "")
-}
-
-func roundTripTLSTo(t *testing.T, tc *tls.Conn, method, host string) *http.Response {
-	t.Helper()
-	req, err := http.NewRequestWithContext(t.Context(), method, "https://"+host+"/x", nil)
-	if err != nil {
-		t.Fatalf("build request: %v", err)
-	}
-	if err = req.Write(tc); err != nil {
-		t.Fatalf("write request: %v", err)
-	}
-	resp, err := http.ReadResponse(bufio.NewReader(tc), req)
-	if err != nil {
-		t.Fatalf("read response: %v", err)
-	}
-	return resp
 }
 
 func roundTripTLSHost(t *testing.T, tc *tls.Conn, method, host string) *http.Response {

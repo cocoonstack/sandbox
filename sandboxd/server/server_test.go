@@ -1047,7 +1047,7 @@ func TestForkFlow(t *testing.T) {
 
 	ts := newTestServer(t, "sekret", mgr, nil)
 
-	post := func(auth, body string) *http.Response {
+	post := func(t *testing.T, auth, body string) *http.Response {
 		req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, ts.URL+"/v1/sandboxes/sb_1/fork", strings.NewReader(body))
 		if err != nil {
 			t.Fatalf("request: %v", err)
@@ -1062,7 +1062,7 @@ func TestForkFlow(t *testing.T) {
 		return resp
 	}
 
-	resp := post("Bearer sekret", `{"token":"tok","count":2,"ttl_seconds":60}`)
+	resp := post(t, "Bearer sekret", `{"token":"tok","count":2,"ttl_seconds":60}`)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status %d, want 200", resp.StatusCode)
@@ -1086,7 +1086,7 @@ func TestForkFlow(t *testing.T) {
 		{"sandbox token is no api token", "Bearer tok", `{"token":"tok","count":1}`, http.StatusUnauthorized},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			resp := post(tt.auth, tt.body)
+			resp := post(t, tt.auth, tt.body)
 			defer resp.Body.Close()
 			if resp.StatusCode != tt.want {
 				t.Errorf("status %d, want %d", resp.StatusCode, tt.want)
@@ -1120,7 +1120,7 @@ func TestPromoteAndDeleteTemplateFlow(t *testing.T) {
 	}
 	ts := newTestServer(t, "sekret", mgr, nil)
 
-	promote := func(auth, body string) (int, PromoteResponse) {
+	promote := func(t *testing.T, auth, body string) (int, PromoteResponse) {
 		req, _ := http.NewRequestWithContext(t.Context(), http.MethodPost, ts.URL+"/v1/sandboxes/sb_1/promote", strings.NewReader(body))
 		if auth != "" {
 			req.Header.Set("Authorization", auth)
@@ -1149,7 +1149,7 @@ func TestPromoteAndDeleteTemplateFlow(t *testing.T) {
 		{"missing api token", "", `{"token":"tok","template":"tpl:x"}`, http.StatusUnauthorized},
 	} {
 		t.Run("promote/"+tt.name, func(t *testing.T) {
-			got, result := promote(tt.auth, tt.body)
+			got, result := promote(t, tt.auth, tt.body)
 			if got != tt.want {
 				t.Errorf("status %d, want %d", got, tt.want)
 			}
@@ -2064,6 +2064,9 @@ func TestCheckpointClaimRedirectsToOwner(t *testing.T) {
 	if got.ID != "" {
 		t.Errorf("id = %q, want empty: a redirect and a delivered sandbox are mutually exclusive", got.ID)
 	}
+	if mgr.healCalls != 0 {
+		t.Errorf("heal called %d times, want 0: a known owner must redirect, not heal", mgr.healCalls)
+	}
 }
 
 func TestCheckpointClaimNoRedirectResolvesLocally(t *testing.T) {
@@ -2090,29 +2093,6 @@ func TestCheckpointClaimNoOwnersIs404(t *testing.T) {
 	}
 	if mgr.healCalls != 1 {
 		t.Errorf("heal called %d times, want 1: a miss with no owner must still try heal", mgr.healCalls)
-	}
-}
-
-func TestCheckpointClaimRedirectBeatsHeal(t *testing.T) {
-	mgr := &fakeManager{}
-	prober := &fakeProber{owners: []string{"owner-a:7777"}}
-	ts := newProberTestServer(t, "sekret", mgr, prober)
-
-	resp := postJSON(t, ts.URL+"/v1/checkpoints/ck_00000000000000aa/claim", "sekret", `{}`)
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("status = %d, want 200 carrying a redirect", resp.StatusCode)
-	}
-	var got ClaimResponse
-	if err := json.UnmarshalRead(resp.Body, &got); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	if len(got.Redirect) != 1 || got.Redirect[0] != "owner-a:7777" {
-		t.Errorf("redirect = %v, want [owner-a:7777]", got.Redirect)
-	}
-	if mgr.healCalls != 0 {
-		t.Errorf("heal called %d times, want 0: a known owner must redirect, not heal", mgr.healCalls)
 	}
 }
 

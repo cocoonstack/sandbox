@@ -96,7 +96,7 @@ func New(ctx context.Context, cfg store.S3Config, stagingRoot string, idRe *rege
 	if cfg.Bucket == "" {
 		return nil, fmt.Errorf("s3 checkpoint store needs a bucket")
 	}
-	// a prefix without its trailing slash hides every record from the delimiter listing.
+	// A prefix without its trailing slash hides every record from the delimiter listing.
 	if cfg.Prefix != "" && !strings.HasSuffix(cfg.Prefix, "/") {
 		cfg.Prefix += "/"
 	}
@@ -196,6 +196,11 @@ func (s *Store) FetchFile(ctx context.Context, id, rel, dst string) error {
 func (s *Store) ReadMeta(ctx context.Context, id string) ([]byte, error) {
 	meta, _, err := s.readMeta(ctx, id)
 	return meta, err
+}
+
+func (s *Store) ReadDigest(ctx context.Context, id string) (string, error) {
+	_, digest, err := s.readMeta(ctx, id)
+	return digest, err
 }
 
 func (s *Store) Metas(ctx context.Context) ([]store.Record, error) {
@@ -381,7 +386,7 @@ func (s *Store) publish(ctx context.Context, staging, id, lineage string, digest
 	if err = s.putObject(ctx, s.key(id, store.MetaFile), metaRaw, metadata); err != nil {
 		return "", err
 	}
-	// keep old generations: another node may have selected the previous meta.
+	// Keep old generations: another node may have selected the previous meta.
 	if err := os.RemoveAll(staging); err != nil {
 		return "", err
 	}
@@ -468,11 +473,8 @@ func (s *Store) fetchChunk(ctx context.Context, key string, f *os.File, size int
 	return nil
 }
 
-func (s *Store) key(id, rest string) string {
-	if rest == "" {
-		return s.prefix + id
-	}
-	return s.prefix + id + "/" + filepath.ToSlash(rest)
+func (s *Store) key(id, file string) string {
+	return s.prefix + id + "/" + file
 }
 
 func (s *Store) manifestPrefix(id string) string {
@@ -492,7 +494,7 @@ func (s *Store) chunkKey(lineage, sha string) string {
 }
 
 func (s *Store) recordIDs(ctx context.Context) ([]string, error) {
-	// delimiter listing yields one CommonPrefix per record instead of every export object.
+	// Delimiter listing yields one CommonPrefix per record instead of every export object.
 	var ids []string
 	p := awss3.NewListObjectsV2Paginator(s.client, &awss3.ListObjectsV2Input{
 		Bucket: &s.bucket, Prefix: &s.prefix, Delimiter: new("/"),
@@ -598,7 +600,7 @@ func (s *Store) deleteKeys(ctx context.Context, keys []string) error {
 			return fmt.Errorf("delete %d objects: %w", len(chunk), err)
 		}
 		for _, e := range out.Errors {
-			// strict backends error on deleting an absent key where AWS succeeds silently.
+			// Strict backends error on deleting an absent key where AWS succeeds silently.
 			if code := aws.ToString(e.Code); code == "NoSuchKey" || code == "NoSuchVersion" {
 				continue
 			}

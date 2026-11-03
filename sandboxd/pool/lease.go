@@ -16,10 +16,6 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
-type leaseTiming struct {
-	ttl, every, margin time.Duration
-}
-
 // fenceState is the whole fence: while fenced no replicated claim is served, and ch closes when it trips.
 type fenceState struct {
 	ch     chan struct{}
@@ -44,27 +40,26 @@ func CloseOnFence(fenced <-chan struct{}, c io.Closer) (stop func()) {
 
 // keepLease renews this node's lease until ctx ends and fences its replicated claims when a renewal is overdue.
 func (m *Manager) keepLease(ctx context.Context) {
-	fence := time.AfterFunc(m.lease.ttl-m.lease.margin, func() { m.trip(ctx) })
+	fence := time.AfterFunc(leaseTTL-leaseMargin, func() { m.trip(ctx) })
 	defer fence.Stop()
-	tick := time.NewTicker(m.lease.every)
-	defer tick.Stop()
+	tick := time.Tick(leaseRenew)
 	for {
 		m.renewLease(ctx, fence)
 		select {
 		case <-ctx.Done():
 			return
-		case <-tick.C:
+		case <-tick:
 		}
 	}
 }
 
 func (m *Manager) renewLease(ctx context.Context, fence *time.Timer) {
 	start := time.Now()
-	if err := m.archives.Renew(ctx, m.nodeID, m.lease.ttl); err != nil {
+	if err := m.archives.Renew(ctx, m.nodeID, leaseTTL); err != nil {
 		log.WithFunc("pool.renewLease").Warnf(ctx, "renew node lease: %v", err)
 		return
 	}
-	fence.Reset(m.lease.ttl - m.lease.margin - time.Since(start))
+	fence.Reset(leaseTTL - leaseMargin - time.Since(start))
 	if m.isFenced() && m.unfencing.CompareAndSwap(false, true) {
 		go func() {
 			defer m.unfencing.Store(false)
@@ -87,7 +82,7 @@ func (m *Manager) trip(ctx context.Context) {
 			continue
 		}
 		close(old.ch)
-		log.WithFunc("pool.fence").Warnf(ctx, "node lease not renewed for %s; replicated claims answer 503 until it is", m.lease.ttl-m.lease.margin)
+		log.WithFunc("pool.fence").Warnf(ctx, "node lease not renewed for %s; replicated claims answer 503 until it is", leaseTTL-leaseMargin)
 		return
 	}
 }
@@ -137,7 +132,7 @@ func (m *Manager) lift(ctx context.Context, fenced *fenceState, start time.Time)
 	if !m.fence.CompareAndSwap(fenced, &fenceState{ch: make(chan struct{})}) {
 		return
 	}
-	if time.Since(start) > m.lease.ttl-m.lease.margin {
+	if time.Since(start) > leaseTTL-leaseMargin {
 		log.WithFunc("pool.unfence").Warn(ctx, "replicated claims stay fenced: confirming ownership outlasted the lease window")
 		m.trip(ctx)
 		return
