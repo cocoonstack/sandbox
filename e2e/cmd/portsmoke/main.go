@@ -182,11 +182,7 @@ func stepHalfClose(ctx context.Context, rt *harness.PortRelay, _ *sandbox.Sandbo
 	if _, writeErr := io.WriteString(conn, "GET /half HTTP/1.1\r\nHost: guest\r\n\r\n"); writeErr != nil {
 		return writeErr
 	}
-	cw, ok := conn.(interface{ CloseWrite() error })
-	if !ok {
-		return errors.New("relay conn does not support CloseWrite")
-	}
-	if closeErr := cw.CloseWrite(); closeErr != nil {
+	if closeErr := conn.CloseWrite(); closeErr != nil {
 		return fmt.Errorf("close write: %w", closeErr)
 	}
 	out, err := io.ReadAll(conn)
@@ -213,11 +209,7 @@ func stepGuestHalfClose(ctx context.Context, rt *harness.PortRelay, _ *sandbox.S
 	if _, err := io.WriteString(conn, "after-done"); err != nil {
 		return fmt.Errorf("write after the guest half close: %w", err)
 	}
-	cw, ok := conn.(interface{ CloseWrite() error })
-	if !ok {
-		return errors.New("relay conn does not support CloseWrite")
-	}
-	if err := cw.CloseWrite(); err != nil {
+	if err := conn.CloseWrite(); err != nil {
 		return err
 	}
 	deadline := time.Now().Add(listenerReadyWait)
@@ -235,17 +227,17 @@ func stepGuestHalfClose(ctx context.Context, rt *harness.PortRelay, _ *sandbox.S
 }
 
 func stepWrongToken(ctx context.Context, rt *harness.PortRelay, _ *sandbox.Sandbox) error {
-	return relayWantStatus(ctx, rt, rt.URL(guestPort), "wrong-token", true, http.StatusNotFound)
+	return relayWantStatus(ctx, rt.URL(guestPort), "wrong-token", true, http.StatusNotFound)
 }
 
 func stepNoToken(ctx context.Context, rt *harness.PortRelay, _ *sandbox.Sandbox) error {
-	return relayWantStatus(ctx, rt, rt.URL(guestPort), "", true, http.StatusUnauthorized)
+	return relayWantStatus(ctx, rt.URL(guestPort), "", true, http.StatusUnauthorized)
 }
 
 func stepBadPort(ctx context.Context, rt *harness.PortRelay, _ *sandbox.Sandbox) error {
 	for _, port := range []string{"0", "65536", "+22", "http"} {
 		url := fmt.Sprintf("http://%s/v1/sandboxes/%s/ports/%s", rt.Owner, rt.ID, port)
-		if err := relayWantStatus(ctx, rt, url, rt.Token, true, http.StatusBadRequest); err != nil {
+		if err := relayWantStatus(ctx, url, rt.Token, true, http.StatusBadRequest); err != nil {
 			return fmt.Errorf("port %q: %w", port, err)
 		}
 	}
@@ -253,11 +245,11 @@ func stepBadPort(ctx context.Context, rt *harness.PortRelay, _ *sandbox.Sandbox)
 }
 
 func stepNoUpgrade(ctx context.Context, rt *harness.PortRelay, _ *sandbox.Sandbox) error {
-	return relayWantStatus(ctx, rt, rt.URL(guestPort), rt.Token, false, http.StatusUpgradeRequired)
+	return relayWantStatus(ctx, rt.URL(guestPort), rt.Token, false, http.StatusUpgradeRequired)
 }
 
 func stepDeadPort(ctx context.Context, rt *harness.PortRelay, _ *sandbox.Sandbox) error {
-	return relayWantStatus(ctx, rt, rt.URL(deadPort), rt.Token, true, http.StatusBadGateway)
+	return relayWantStatus(ctx, rt.URL(deadPort), rt.Token, true, http.StatusBadGateway)
 }
 
 // stepHibernate proves the relay wakes a hibernated sandbox; the listener survives in the snapshot.
@@ -294,8 +286,8 @@ func relayGet(ctx context.Context, r *harness.PortRelay, port uint16, path strin
 }
 
 // relayWantStatus asserts a refusal is answered as HTTP, never by opening a relay.
-func relayWantStatus(ctx context.Context, r *harness.PortRelay, url, token string, upgrade bool, want int) error {
-	req, err := r.Request(ctx, url, token, upgrade)
+func relayWantStatus(ctx context.Context, url, token string, upgrade bool, want int) error {
+	req, err := harness.Request(ctx, url, token, upgrade)
 	if err != nil {
 		return err
 	}

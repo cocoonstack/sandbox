@@ -21,7 +21,6 @@ import (
 
 const (
 	socksProxy = "127.0.0.1:1080"
-	httpProxy  = "http://127.0.0.1:3128"
 
 	curlLoginDenied  = "exit=67"
 	curlProxyRefused = "exit=97"
@@ -59,7 +58,7 @@ func run(addr, token, template, echo, getOnly, imap string) error {
 	}
 	fmt.Println("  allowed host tunnels over SOCKS5")
 
-	if code := curl(ctx, sb, "-x", httpProxy, "http://"+getOnly+"/"); code != "200" {
+	if code := curl(ctx, sb, "-x", harness.GuestProxy, "http://"+getOnly+"/"); code != "200" {
 		return fmt.Errorf("GET-only host over the HTTP proxy returned %q, want 200", code)
 	}
 	if code := curl(ctx, sb, "--socks5-hostname", socksProxy, "http://"+getOnly+"/"); code != "000" {
@@ -87,10 +86,10 @@ func run(addr, token, template, echo, getOnly, imap string) error {
 		fmt.Println("  IMAP on the unlisted port refused on 1080")
 	}
 
-	if code := curl(ctx, sb, "-x", httpProxy, "https://"+echo+"/get"); code != "000" {
+	if code := curl(ctx, sb, "-x", harness.GuestProxy, "https://"+echo+"/get"); code != "000" {
 		return fmt.Errorf("CONNECT to the unlisted port 443 returned %q, want a refused tunnel", code)
 	}
-	if code := curl(ctx, sb, "-x", httpProxy, "http://"+echo+":8080/get"); code != "403" {
+	if code := curl(ctx, sb, "-x", harness.GuestProxy, "http://"+echo+":8080/get"); code != "403" {
 		return fmt.Errorf("forward request to the unlisted port 8080 returned %q, want 403", code)
 	}
 	fmt.Println("  unlisted ports refused on 3128 for CONNECT and forward requests")
@@ -113,7 +112,7 @@ func run(addr, token, template, echo, getOnly, imap string) error {
 	if code := curl(ctx, silent, "--socks5-hostname", socksProxy, "http://"+echo+"/get"); code != "000" {
 		return fmt.Errorf("pool that did not opt in opened a SOCKS5 tunnel with %q, want none", code)
 	}
-	if code := curl(ctx, silent, "-x", httpProxy, "http://"+echo+"/get"); code != "200" {
+	if code := curl(ctx, silent, "-x", harness.GuestProxy, "http://"+echo+"/get"); code != "200" {
 		return fmt.Errorf("pool that did not opt in returned %q on the HTTP proxy, want 200", code)
 	}
 	fmt.Println("  pool that did not opt in: HTTP door open, no SOCKS5 tunnel")
