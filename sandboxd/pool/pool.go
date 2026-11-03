@@ -726,9 +726,6 @@ func (m *Manager) sweepStoreGenerations(ctx context.Context) {
 	if err := m.ckpts.SweepGenerations(ctx); err != nil {
 		logger.Error(ctx, err, "sweep checkpoint generations")
 	}
-	if m.ckptsShared {
-		return
-	}
 	if err := m.tpls.SweepGenerations(ctx); err != nil {
 		logger.Error(ctx, err, "sweep template generations")
 	}
