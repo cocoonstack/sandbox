@@ -124,13 +124,8 @@ func (m *Manager) refillOne(ctx context.Context, p *pool, golden string, gen uin
 	}
 	// A canceled context or a capacity failure says nothing about this pool's health
 	backedOff := false
-	if ctx.Err() == nil && capReason == "" && gen == p.goldenGen {
+	if p.countClone(ctx, gen, cloned, capReason) {
 		backedOff = p.noteRefillResult(now, err != nil)
-		if cloned {
-			p.cloneFails = 0
-		} else {
-			p.cloneFails++
-		}
 	}
 	if backedOff {
 		fails, wait = p.refillFails, time.Until(p.nextRefill)
@@ -155,8 +150,7 @@ func (m *Manager) refillOne(ctx context.Context, p *pool, golden string, gen uin
 					hash, fails, wait.Round(time.Millisecond))
 			}
 			if retired {
-				logger.Warnf(ctx, "golden of %s failed %d clones running; rebuilding it", hash, refillFailStreak)
-				m.kickRefill()
+				m.rebuildRetiredGolden(ctx, hash)
 			}
 		}
 		return
@@ -328,6 +322,11 @@ func (m *Manager) retireUnclonableLocked(p *pool, gen uint64, now time.Time) boo
 	return true
 }
 
+func (m *Manager) rebuildRetiredGolden(ctx context.Context, hash string) {
+	log.WithFunc("pool.rebuildRetiredGolden").Warnf(ctx, "golden of %s failed %d clones running; rebuilding it", hash, refillFailStreak)
+	m.kickRefill()
+}
+
 func (m *Manager) goldenStamp(v *configView, key types.PoolKey, imageID string) string {
 	var fp string
 	if v.out.Intercepts(key) {
@@ -402,6 +401,28 @@ func (m *Manager) provision(ctx context.Context, key types.PoolKey, golden strin
 	return m.provisionVM(ctx, key, claimProbeTimeout, func(name string) (types.VMRecord, error) {
 		return m.eng.Clone(ctx, golden, name, key)
 	})
+}
+
+func (m *Manager) provisionResolved(ctx context.Context, key types.PoolKey, g goldenResolution) (*types.Sandbox, error) {
+	if g.held == nil {
+		return m.provision(ctx, key, g.dir)
+	}
+	return m.provisionVM(ctx, key, claimProbeTimeout, func(name string) (types.VMRecord, error) {
+		rec, err := m.eng.Clone(ctx, g.dir, name, key)
+		m.noteClaimClone(ctx, g, err)
+		return rec, err
+	})
+}
+
+func (m *Manager) noteClaimClone(ctx context.Context, g goldenResolution, err error) {
+	capReason := engine.CapacitySignature(err)
+	m.mu.Lock()
+	g.held.countClone(ctx, g.gen, err == nil, capReason)
+	retired := m.retireUnclonableLocked(g.held, g.gen, time.Now())
+	m.mu.Unlock()
+	if retired {
+		m.rebuildRetiredGolden(ctx, g.held.hash)
+	}
 }
 
 func (m *Manager) provisionCold(ctx context.Context, key types.PoolKey) (*types.Sandbox, error) {

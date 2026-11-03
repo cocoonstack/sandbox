@@ -1,6 +1,7 @@
 package pool
 
 import (
+	"context"
 	"errors"
 	"os"
 	"testing"
@@ -254,4 +255,214 @@ func TestRetiringAGoldenLeavesItsDirectoryForAClaimMidClone(t *testing.T) {
 	if _, err := os.Stat(g + goldenStampSuffix); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("golden stamp after retirement: %v, want it removed so nothing adopts it", err)
 	}
+}
+
+func TestClaimClonesThatFailRetireTheGoldenOfAPoolWithNoRefill(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		eng := newFakeEngine()
+		eng.cloneErr = errors.New(`vm.restore -> 500 "Memory manager error"`)
+		m, p, g := adoptedGoldenNoWarm(t, eng)
+
+		for i := range refillFailStreak {
+			if _, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{}); err == nil {
+				t.Fatalf("claim %d on an unclonable golden succeeded", i)
+			}
+			if i < refillFailStreak-1 && goldenOf(m, p) != g {
+				t.Fatalf("golden retired after %d failed claims, want %d", i+1, refillFailStreak)
+			}
+		}
+		if goldenOf(m, p) != "" {
+			t.Fatalf("golden %q after %d failed claims, want it retired", goldenOf(m, p), refillFailStreak)
+		}
+		if n := p.claimClones.Load(); n != 0 {
+			t.Errorf("claim clones %d after the failed claims, want 0", n)
+		}
+		if _, err := os.Stat(g); err != nil {
+			t.Errorf("golden directory after retirement: %v, want it left for the rebuild", err)
+		}
+		select {
+		case <-m.refillKick:
+		default:
+			t.Error("retirement did not kick refill, so the rebuild waits for the next tick")
+		}
+
+		eng.mu.Lock()
+		eng.cloneErr = nil
+		eng.mu.Unlock()
+		clones := eng.cloneCount()
+		if _, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{}); err != nil {
+			t.Fatalf("claim while no golden exists: %v", err)
+		}
+		if n := eng.coldCount(); n != 1 || eng.cloneCount() != clones {
+			t.Errorf("cold boots %d clones %d, want the claim between golden builds to cold-boot once and clone nothing", n, eng.cloneCount()-clones)
+		}
+
+		m.refillOnce(t.Context())
+		waitPoolSettled(t, m, testKey)
+		if goldenOf(m, p) != g || eng.coldCount() != 2 {
+			t.Fatalf("golden %q after %d cold boots, want %q rebuilt by a second one", goldenOf(m, p), eng.coldCount(), g)
+		}
+		clones = eng.cloneCount()
+		if _, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{}); err != nil {
+			t.Fatalf("claim on the rebuilt golden: %v", err)
+		}
+		if eng.cloneCount() != clones+1 {
+			t.Errorf("clones %d, want the claim to clone the rebuilt golden", eng.cloneCount()-clones)
+		}
+	})
+}
+
+func TestClaimResultsThatSayNothingAboutTheGoldenDoNotCount(t *testing.T) {
+	canceled := func(t *testing.T) context.Context {
+		ctx, cancel := context.WithCancel(t.Context())
+		cancel()
+		return ctx
+	}
+	for _, tt := range []struct {
+		name string
+		ctx  func(*testing.T) context.Context
+		err  error
+	}{
+		{"canceled by its client", canceled, errors.New(`vm.restore -> 500 "Memory manager error"`)},
+		{"capacity failure", (*testing.T).Context, errors.New("create tap: no space left on device")},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			eng := newFakeEngine()
+			eng.cloneErr = tt.err
+			m, p, g := adoptedGoldenNoWarm(t, eng)
+			clones := eng.cloneCount()
+			for range refillFailStreak + 1 {
+				if _, err := m.ClaimProvision(tt.ctx(t), testKey, ClaimOptions{}); err == nil {
+					t.Fatal("claim under the fault succeeded")
+				}
+			}
+			if n := eng.cloneCount() - clones; n != refillFailStreak+1 {
+				t.Fatalf("clones %d, want each claim to reach the clone", n)
+			}
+			if fails := cloneFailsOf(m, p); fails != 0 || goldenOf(m, p) != g {
+				t.Errorf("clone fails %d golden %q, want 0 and %q kept", fails, goldenOf(m, p), g)
+			}
+		})
+	}
+}
+
+func TestAClaimWhoseProbeFailsCountsItsCloneAsASuccess(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		eng := newFakeEngine()
+		eng.probeErr = errors.New("silkd not ready")
+		m, p, g := adoptedGoldenNoWarm(t, eng)
+		setCloneFails(m, p, refillFailStreak-1)
+
+		for range 2 {
+			if _, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{}); err == nil {
+				t.Fatal("claim with a failing probe succeeded")
+			}
+		}
+		if fails := cloneFailsOf(m, p); fails != 0 || goldenOf(m, p) != g {
+			t.Errorf("clone fails %d golden %q, want 0 and %q kept: the clones succeeded", fails, goldenOf(m, p), g)
+		}
+	})
+}
+
+func TestAClaimCloneSuccessResetsTheStreak(t *testing.T) {
+	m, p, g := adoptedGoldenNoWarm(t, newFakeEngine())
+	setCloneFails(m, p, refillFailStreak-2)
+
+	if _, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{}); err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	if fails := cloneFailsOf(m, p); fails != 0 || goldenOf(m, p) != g {
+		t.Errorf("clone fails %d golden %q, want the streak reset and %q kept", fails, goldenOf(m, p), g)
+	}
+}
+
+func TestALateClaimCloneResultOfARetiredGoldenDoesNotCount(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		err  error
+	}{
+		{"failure", errors.New(`vm.restore -> 500 "Memory manager error"`)},
+		{"success", nil},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			m := newTestManager(t, newFakeEngine(), config.PoolSpec{PoolKey: testKey})
+			m.mu.Lock()
+			p := m.pools[testKey]
+			p.goldenDir, p.goldenGen, p.cloneFails = "/goldens/new", 2, refillFailStreak-1
+			m.mu.Unlock()
+
+			m.noteClaimClone(t.Context(), goldenResolution{dir: "/goldens/old", held: p, gen: 1}, tt.err)
+
+			if fails := cloneFailsOf(m, p); fails != refillFailStreak-1 || goldenOf(m, p) != "/goldens/new" {
+				t.Errorf("clone fails %d golden %q, want %d and the new golden kept", fails, goldenOf(m, p), refillFailStreak-1)
+			}
+		})
+	}
+}
+
+func TestAFailingCloneOfAPromotedTemplateDoesNotCount(t *testing.T) {
+	eng := newFakeEngine()
+	m := envManager(t, eng, t.TempDir())
+	src, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{})
+	if err != nil {
+		t.Fatalf("source claim: %v", err)
+	}
+	key, _, err := m.Promote(t.Context(), src.ID, Cred{Token: src.Token}, "tpl:broken", "")
+	if err != nil {
+		t.Fatalf("promote: %v", err)
+	}
+	m.mu.Lock()
+	p := newPool(key)
+	m.pools[key] = p
+	m.mu.Unlock()
+	eng.mu.Lock()
+	eng.cloneErr = errors.New(`vm.restore -> 500 "Memory manager error"`)
+	eng.mu.Unlock()
+	clones := eng.cloneCount()
+
+	for range refillFailStreak {
+		if _, err := m.ClaimProvision(t.Context(), key, ClaimOptions{}); err == nil {
+			t.Fatal("claim on a failing template clone succeeded")
+		}
+	}
+	if n := eng.cloneCount() - clones; n != refillFailStreak {
+		t.Fatalf("clones %d, want each claim to clone the template", n)
+	}
+	if fails := cloneFailsOf(m, p); fails != 0 {
+		t.Errorf("clone fails %d on the template's pool, want 0: no pool golden was cloned", fails)
+	}
+}
+
+func adoptedGoldenNoWarm(t *testing.T, eng *fakeEngine) (*Manager, *pool, string) {
+	t.Helper()
+	m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey})
+	g := seedGolden(t, m, "")
+	m.refillOnce(t.Context())
+	waitPoolSettled(t, m, testKey)
+	m.mu.Lock()
+	p := m.pools[testKey]
+	got := p.goldenDir
+	m.mu.Unlock()
+	if got != g {
+		t.Fatalf("adopted golden %q, want %q", got, g)
+	}
+	return m, p, g
+}
+
+func goldenOf(m *Manager, p *pool) string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return p.goldenDir
+}
+
+func cloneFailsOf(m *Manager, p *pool) int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return p.cloneFails
+}
+
+func setCloneFails(m *Manager, p *pool, n int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	p.cloneFails = n
 }

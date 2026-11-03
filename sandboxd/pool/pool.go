@@ -287,6 +287,18 @@ func (p *pool) noteRefillResult(now time.Time, failed bool) bool {
 	return first
 }
 
+func (p *pool) countClone(ctx context.Context, gen uint64, cloned bool, capReason string) bool {
+	if ctx.Err() != nil || capReason != "" || gen != p.goldenGen {
+		return false
+	}
+	if cloned {
+		p.cloneFails = 0
+	} else {
+		p.cloneFails++
+	}
+	return true
+}
+
 func (p *pool) applySpec(spec config.PoolSpec) {
 	p.floor = spec.Warm
 	p.warmMax = spec.WarmMax

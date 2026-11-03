@@ -98,7 +98,7 @@ func (m *Manager) ClaimProvision(ctx context.Context, key types.PoolKey, o Claim
 		golden.release()
 		return nil, ErrUnknownTemplate
 	}
-	sb, err := m.provision(ctx, key, golden.dir)
+	sb, err := m.provisionResolved(ctx, key, golden)
 	golden.release()
 	if err != nil {
 		return nil, err
