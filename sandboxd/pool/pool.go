@@ -368,7 +368,6 @@ type Manager struct {
 	poolVersion    int64
 	configSeedHash string // config pools' hash, to warn when a file edit is overridden
 
-	// idleDefault is the idle-hibernate threshold for unpooled keys; zero disables.
 	idleSweep atomic.Bool
 
 	livenessSweep atomic.Bool
@@ -377,7 +376,6 @@ type Manager struct {
 	vmmEvents  atomic.Bool
 	lastVMPoll atomic.Int64
 
-	// archive*Default are the archive thresholds for unpooled keys.
 	archiveSweep       atomic.Bool
 	archiveDeleteSweep atomic.Bool
 	// archiving holds ids with an export or a registry drop in flight; pendingCks pins ids mid-commit; both under m.mu.

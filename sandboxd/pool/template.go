@@ -191,7 +191,7 @@ func (m *Manager) HasPoolGolden(key types.PoolKey) bool {
 	return ok && p.goldenDir != ""
 }
 
-// HasPromotedTemplate is resolveGolden's test exactly, so routing never promises a refused golden.
+// HasPromotedTemplate applies resolveGolden's owner test, so routing does not promise another tenant's template.
 func (m *Manager) HasPromotedTemplate(ctx context.Context, key types.PoolKey, tenant string) bool {
 	if m.pooled(key) {
 		return false
@@ -279,7 +279,7 @@ func (m *Manager) pooled(key types.PoolKey) bool {
 	return ok
 }
 
-// checkTemplateOwner rejects publishing or deleting over another tenant's record.
+// checkTemplateOwner rejects publishing over another tenant's record.
 func (m *Manager) checkTemplateOwner(ctx context.Context, id, tenant string) error {
 	if tenant == "" {
 		return nil
