@@ -169,3 +169,42 @@ async fn lsp_data_end_half_closes_stdin() {
     cw.shutdown().await.unwrap();
     handle.await.unwrap().unwrap();
 }
+
+#[tokio::test]
+async fn lsp_client_hang_up_reaps_a_silent_server() {
+    let _env_lock = ENV_LOCK.lock().await;
+    for half_closed_first in [false, true] {
+        let (_env, state, server_id) =
+            started_server("silenttest", "#!/bin/sh\nexec sleep 60\n").await;
+
+        let (mut cw, mut out, handle) = connect(&state);
+        send(&mut cw, json!({"op":"lsp_request","server_id":server_id})).await;
+        assert_eq!(type_of(&next_frame(&mut out).await), "ready");
+        if half_closed_first {
+            send(&mut cw, json!({"op":"data_end"})).await;
+        }
+        drop(cw);
+        drop(out);
+
+        let _ = timeout(DEADLINE, handle)
+            .await
+            .expect("a client hang-up must end the stream")
+            .unwrap();
+        assert_stopped(&state, &server_id).await;
+    }
+}
+
+#[tokio::test]
+async fn lsp_request_during_a_stream_ends_it_and_runs_after_it() {
+    let _env_lock = ENV_LOCK.lock().await;
+    let (_env, state, server_id) =
+        started_server("pipelinetest", "#!/bin/sh\nexec sleep 60\n").await;
+
+    let (mut cw, mut out, _) = connect(&state);
+    send(&mut cw, json!({"op":"lsp_request","server_id":server_id})).await;
+    assert_eq!(type_of(&next_frame(&mut out).await), "ready");
+    send(&mut cw, json!({"op":"info"})).await;
+    assert_eq!(type_of(&next_frame(&mut out).await), "done");
+    assert_eq!(type_of(&next_frame(&mut out).await), "info");
+    assert_stopped(&state, &server_id).await;
+}

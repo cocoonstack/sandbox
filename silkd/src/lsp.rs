@@ -11,9 +11,9 @@ use std::time::Duration;
 
 use tokio::io::{AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 
-use crate::proto::{self, ErrorKind, Request, Response};
+use crate::proto::{self, BULK_CHUNK, ErrorKind, Request, Response};
 use crate::sysutil;
 
 const MANIFEST_DIR: &str = "/etc/silkd/lsp.d";
@@ -124,8 +124,9 @@ impl Broker {
             return Err(e);
         }
 
-        let feed = tokio::spawn(feed_stdin(client, stdin));
-        let res = pump_stdout(stdout, w).await;
+        let (gone_tx, gone_rx) = oneshot::channel();
+        let feed = tokio::spawn(feed_stdin(client, stdin, gone_tx));
+        let res = pump_stdout(stdout, w, gone_rx).await;
         // aborting mid-write is safe: the child is killed next.
         feed.abort();
         self.reap(server_id).await;
@@ -183,22 +184,43 @@ async fn kill(mut server: Server) {
     let _ = server.child.wait().await;
 }
 
-async fn feed_stdin(mut client: mpsc::Receiver<Request>, mut stdin: ChildStdin) {
+async fn feed_stdin(
+    mut client: mpsc::Receiver<Request>,
+    stdin: ChildStdin,
+    gone: oneshot::Sender<()>,
+) {
+    let mut stdin = Some(stdin);
     while let Some(req) = client.recv().await {
         // a stray frame closes rather than errors: this task has no writer.
-        let Request::Data { data } = req else { return };
-        if stdin.write_all(&data).await.is_err() || stdin.flush().await.is_err() {
-            return;
+        let fed = match (req, stdin.as_mut()) {
+            (Request::Data { data }, Some(sink)) => {
+                sink.write_all(&data).await.is_ok() && sink.flush().await.is_ok()
+            }
+            _ => false,
+        };
+        if !fed {
+            stdin = None;
         }
     }
+    let _ = gone.send(());
 }
 
 async fn pump_stdout<W: AsyncWrite + Unpin>(
     mut stdout: ChildStdout,
     w: &mut W,
+    mut gone: oneshot::Receiver<()>,
 ) -> std::io::Result<()> {
-    if let Err(e) = proto::stream_data_frames(&mut stdout, w).await? {
-        return proto::err_frame(w, &e, "read lsp stdout").await;
+    let mut buf = vec![0u8; BULK_CHUNK];
+    let mut frame = Vec::new();
+    loop {
+        tokio::select! {
+            r = stdout.read(&mut buf) => match r {
+                Ok(0) => break,
+                Ok(n) => proto::write_chunk_frame(w, &mut frame, "data", &buf[..n]).await?,
+                Err(e) => return proto::err_frame(w, &e, "read lsp stdout").await,
+            },
+            _ = &mut gone => break,
+        }
     }
     proto::write_frame(w, &Response::Done).await
 }
