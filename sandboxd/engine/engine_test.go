@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -174,6 +175,40 @@ func TestImageIDsMapsNameToID(t *testing.T) {
 	ids, err := New("cocoon", nil, nil, false, false, "").ImageIDs(t.Context())
 	if err != nil || len(ids) != 1 || ids["ghcr.io/cocoonstack/sandbox/rt:24.04"] != "sha256:afe6" {
 		t.Fatalf("ImageIDs = %v, %v; want the one image cocoon printed", ids, err)
+	}
+}
+
+func TestRemoveStopsAVMThatRefusesDeletionThenRemovesItAgain(t *testing.T) {
+	fakeCocoon(t, "#!/bin/sh\necho \"$*\" >> \"$COCOON_TEST_TRACE\"\n"+
+		"case \"$1 $2\" in\n"+
+		"\"vm rm\") [ -z \"$COCOON_TEST_MISSING\" ] || { echo 'Error: vm not found' >&2; exit 1; }\n"+
+		"  [ -z \"$COCOON_TEST_STUCK\" ] && [ -e \"$COCOON_TEST_TRACE.stopped\" ] || { echo 'refuse delete: api socket still responsive' >&2; exit 1; } ;;\n"+
+		"\"vm stop\") : > \"$COCOON_TEST_TRACE.stopped\" ;;\n"+
+		"esac\n")
+	const rm, stop = "vm rm --force sbx-1", "vm stop --force sbx-1"
+	for _, tt := range []struct {
+		name, env string
+		calls     []string
+		fails     bool
+	}{
+		{"refused then removed", "", []string{rm, stop, rm}, false},
+		{"still refused after the stop", "COCOON_TEST_STUCK", []string{rm, stop, rm}, true},
+		{"already gone", "COCOON_TEST_MISSING", []string{rm}, true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			trace := filepath.Join(t.TempDir(), "trace")
+			t.Setenv("COCOON_TEST_TRACE", trace)
+			t.Setenv("COCOON_TEST_STUCK", "")
+			t.Setenv("COCOON_TEST_MISSING", "")
+			if tt.env != "" {
+				t.Setenv(tt.env, "1")
+			}
+			err := New("cocoon", nil, nil, false, false, "").Remove(t.Context(), "sbx-1")
+			data, _ := os.ReadFile(trace)
+			if calls := strings.Split(strings.TrimSpace(string(data)), "\n"); !slices.Equal(calls, tt.calls) || (err != nil) != tt.fails {
+				t.Errorf("Remove = %v with cocoon calls %q, want %q and failure %v", err, calls, tt.calls, tt.fails)
+			}
+		})
 	}
 }
 

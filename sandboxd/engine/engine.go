@@ -136,9 +136,14 @@ func (e *Engine) RunCold(ctx context.Context, name string, key types.PoolKey, st
 	return e.runRecord(ctx, e.runColdArgs(name, key, storage)...)
 }
 
-// Remove force-deletes a VM.
+// Remove force-deletes a VM; a refused delete gets a force stop and one more delete.
 func (e *Engine) Remove(ctx context.Context, name string) error {
 	_, err := e.run(ctx, "vm", "rm", "--force", name)
+	if err == nil || strings.Contains(err.Error(), vmNotFound) {
+		return err
+	}
+	_ = e.Stop(ctx, name)
+	_, err = e.run(ctx, "vm", "rm", "--force", name)
 	return err
 }
 
