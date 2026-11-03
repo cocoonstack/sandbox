@@ -58,8 +58,7 @@ func run(addr, peer, token, template string) error {
 	}
 	fmt.Printf("  promote: mesh-tpl published on %s\n", sb.Owner())
 
-	// Gossip carries the new template to the entry node within about a tick;
-	// poll rather than guess the delay (a premature claim cold-fails at A).
+	// Poll for gossip to reach the entry node; a premature claim cold-fails at A.
 	var clone *sandbox.Sandbox
 	deadline := time.Now().Add(15 * time.Second)
 	for {

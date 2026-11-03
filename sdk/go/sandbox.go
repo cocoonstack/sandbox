@@ -296,8 +296,7 @@ func (s *Sandbox) dial(ctx context.Context) (*agentConn, error) {
 	return newAgentConn(raw), nil
 }
 
-// pumpStdin chunks the reader into stdin frames; Send's own locking keeps
-// the pump safe against the caller's concurrent frames.
+// pumpStdin chunks the reader into stdin frames.
 func pumpStdin(conn *silkd.Conn, r io.Reader) {
 	buf := make([]byte, stdinChunk)
 	for {

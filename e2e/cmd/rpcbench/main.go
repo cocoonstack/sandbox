@@ -67,7 +67,7 @@ func run(addr, token, template, caCert string, n int) error {
 
 	dial := func() (net.Conn, error) { return dialAgent(ctx, sb.Owner(), sb.ID, sb.Token(), tlsCfg) }
 
-	// warm the path (wake resolution, page cache) before either mode.
+	// Warm the path (wake resolution, page cache) before either mode.
 	for range 5 {
 		conn, err := dial()
 		if err != nil {

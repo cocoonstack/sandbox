@@ -93,7 +93,7 @@ func run(addr, token, template, listener string, hold time.Duration) error {
 		fmt.Printf("  ok  %-24s %5.1fs\n", step.name, time.Since(t0).Seconds())
 	}
 	if hold > 0 {
-		// the listener is live now, for the operator's edge smoke to drive
+		// The listener is live now, for the operator's edge smoke to drive
 		fmt.Printf("SANDBOX %s %s %s %d\n", sb.ID, sb.Token(), sb.Owner(), guestPort)
 		select {
 		case <-time.After(hold):
