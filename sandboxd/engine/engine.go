@@ -127,12 +127,12 @@ func (e *Engine) VersionWarning(ctx context.Context) (version, warning string) {
 
 // Clone restores a VM from an exported golden directory.
 func (e *Engine) Clone(ctx context.Context, fromDir, name string, key types.PoolKey) (types.VMRecord, error) {
-	return e.runRecord(ctx, cmdTimeout, cmdTermGrace, e.cloneArgs(fromDir, name, key)...)
+	return e.runRecord(ctx, dumpTimeout, dumpTermGrace, e.cloneArgs(fromDir, name, key)...)
 }
 
 // CloneSnap clones from a local-store snapshot by name — fork's fast path.
 func (e *Engine) CloneSnap(ctx context.Context, snap, name string, key types.PoolKey) (types.VMRecord, error) {
-	return e.runRecord(ctx, cmdTimeout, cmdTermGrace, e.cloneSnapArgs(snap, name, key)...)
+	return e.runRecord(ctx, dumpTimeout, dumpTermGrace, e.cloneSnapArgs(snap, name, key)...)
 }
 
 // RunCold boots a VM from the template image with a storage-sized disk (empty = cocoon's default), returning its lifecycle record.
