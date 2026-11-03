@@ -627,6 +627,12 @@ func TestAChunkedResponseEndsCleanlyThroughTheProxy(t *testing.T) {
 	}
 }
 
+func (d DialFunc) Route() string { return "" }
+
+func (d DialFunc) Dial(ctx context.Context, _, network, addr string) (net.Conn, error) {
+	return d(ctx, network, addr)
+}
+
 type fakeSecrets map[string][2]string
 
 func (f fakeSecrets) Header(name string) (string, string, bool) {
