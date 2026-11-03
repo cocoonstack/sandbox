@@ -21,10 +21,10 @@ func BenchmarkVolumeAdmission(b *testing.B) {
 		}
 		applied := appliedVolumes(resolved)
 		m.mu.Lock()
-		err = m.checkResolvedLocked(resolved)
+		err = m.catalog.checkResolvedLocked(resolved)
 		if err == nil {
-			m.adoptVolumes(applied)
-			m.releaseVolumes(applied)
+			m.catalog.adoptVolumes(applied)
+			m.catalog.releaseVolumes(applied)
 		}
 		m.mu.Unlock()
 		if err != nil {

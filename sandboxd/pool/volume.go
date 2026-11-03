@@ -38,17 +38,6 @@ type volumeTeardown struct {
 	clears []string
 }
 
-type catalogVolume struct {
-	runtime  bool
-	disk     engine.VolumeSpec
-	tenants  []string
-	writable bool
-}
-
-func (v *catalogVolume) allowed(tenant string) bool {
-	return tenant == "" || len(v.tenants) == 0 || slices.Contains(v.tenants, tenant)
-}
-
 // Volumes reports the caller-visible fleet catalog; an empty tenant means root.
 func (m *Manager) Volumes(tenant string, holders map[string]int) []types.VolumeInfo {
 	catalog := m.catalogSnapshot()
@@ -277,61 +266,13 @@ func (m *Manager) finishVolumeTeardown(ctx context.Context, td volumeTeardown) {
 	m.unreserveVolumes(td.holds)
 }
 
-func (m *Manager) adoptVolumes(volumes []types.Volume) {
-	for _, volume := range volumes {
-		holders := m.catalog.holders[volume.Name]
-		if volume.RW() {
-			holders.writers++
-		} else {
-			holders.readers++
-		}
-		m.catalog.holders[volume.Name] = holders
-	}
-}
-
-func (m *Manager) releaseVolumes(volumes []types.Volume) {
-	for _, volume := range volumes {
-		holders := m.catalog.holders[volume.Name]
-		if volume.RW() {
-			holders.writers--
-		} else {
-			holders.readers--
-		}
-		if holders.writers < 1 && holders.readers < 1 {
-			delete(m.catalog.holders, volume.Name)
-			continue
-		}
-		m.catalog.holders[volume.Name] = holders
-	}
-}
-
 func (m *Manager) unreserveVolumes(volumes []types.Volume) {
 	if len(volumes) == 0 {
 		return
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.releaseVolumes(volumes)
-}
-
-func (m *Manager) catalogSnapshot() map[string]*catalogVolume {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.catalog.entries
-}
-
-func (m *Manager) checkResolvedLocked(volumes []resolvedVolume) error {
-	for _, resolved := range volumes {
-		volume := resolved.applied
-		if m.catalog.entries[volume.Name] != resolved.entry {
-			return ErrVolumeUnavailable
-		}
-		holders := m.catalog.holders[volume.Name]
-		if holders.writers > 0 || (volume.RW() && holders.readers > 0) {
-			return fmt.Errorf("%w: volume %q", ErrVolumeBusy, volume.Name)
-		}
-	}
-	return nil
+	m.catalog.releaseVolumes(volumes)
 }
 
 func needsUnmount(volume types.Volume) bool {
