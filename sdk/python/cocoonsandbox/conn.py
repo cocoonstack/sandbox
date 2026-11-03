@@ -18,7 +18,7 @@ from .frames import MAX_FRAME, decode_response, encode_request
 KEEP_ALIVE_CONNS = 8
 _FD_SETSIZE = 1024
 _READ_BUFFER = 64 * 1024
-_TCP_KEEPALIVE = {"TCP_KEEPIDLE": 15, "TCP_KEEPINTVL": 15, "TCP_KEEPCNT": 9}
+_TCP_KEEPALIVE = {"TCP_KEEPIDLE": 15, "TCP_KEEPALIVE": 15, "TCP_KEEPINTVL": 15, "TCP_KEEPCNT": 9}
 
 _CloseableT = TypeVar("_CloseableT", bound="_Closeable")
 
