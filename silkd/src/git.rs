@@ -137,8 +137,11 @@ async fn list_branches<W: AsyncWrite + Unpin>(w: &mut W, path: &str) -> std::io:
         .lines()
         .map(str::to_string)
         .collect();
-    let cur = git(path, None, &["rev-parse", "--abbrev-ref", "HEAD"]).await?;
-    let current = String::from_utf8_lossy(&cur.stdout).trim().to_string();
+    let cur = git(path, None, &["symbolic-ref", "--short", "-q", "HEAD"]).await?;
+    let current = match String::from_utf8_lossy(&cur.stdout).trim() {
+        "" => "HEAD".to_string(),
+        name => name.to_string(),
+    };
     proto::write_frame(w, &Response::GitBranches { current, branches }).await
 }
 

@@ -109,6 +109,24 @@ async fn branch_create_list_checkout() {
 }
 
 #[tokio::test]
+async fn branch_list_names_an_unborn_branch_and_a_detached_head() {
+    let repo = init_repo();
+    let p = repo.path().to_str().unwrap();
+
+    let unborn = request(json!({"op":"git_branch","path":p,"action":"list"})).await;
+    assert_eq!(type_of(&unborn[0]), "git_branches", "{unborn:?}");
+    assert_eq!(unborn[0]["current"], "main", "{unborn:?}");
+
+    std::fs::write(repo.path().join("f"), "x").unwrap();
+    git(repo.path(), &["add", "f"]);
+    git(repo.path(), &["commit", "-qm", "c"]);
+    git(repo.path(), &["checkout", "-q", "--detach"]);
+
+    let detached = request(json!({"op":"git_branch","path":p,"action":"list"})).await;
+    assert_eq!(detached[0]["current"], "HEAD", "{detached:?}");
+}
+
+#[tokio::test]
 async fn commit_failure_surfaces_git_error() {
     let repo = init_repo();
     let p = repo.path().to_str().unwrap();
