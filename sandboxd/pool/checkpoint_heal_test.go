@@ -127,6 +127,42 @@ func TestDeleteVetoesInFlightHeal(t *testing.T) {
 	})
 }
 
+func TestDeleteOfAPublishedRecordVetoesInFlightHeal(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		id := "ck_00000000000000bb"
+		ckpt := types.Checkpoint{ID: id, Key: testKey, CreatedAt: time.Now()}
+		m, puller := newHealManager(t, ckpt, []string{"peer-a:7777"})
+		puller.release = make(chan struct{})
+
+		healDone := make(chan error, 1)
+		go func() {
+			_, err := m.ClaimCheckpointHeal(t.Context(), id, ClaimOptions{TTL: time.Hour})
+			healDone <- err
+		}()
+		waitFor(t, func() bool { return puller.count() >= 1 })
+		staging, err := m.ckpts.Stage(id)
+		if err != nil {
+			t.Fatalf("stage: %v", err)
+		}
+		plantHealedRecord(t, staging, ckpt)
+		if err := m.ckpts.Publish(t.Context(), staging, id, ""); err != nil {
+			t.Fatalf("publish: %v", err)
+		}
+
+		if err := m.DeleteCheckpoint(t.Context(), id, "", DeleteLocal); err != nil {
+			t.Fatalf("delete a published record while a heal is staging: %v", err)
+		}
+
+		close(puller.release)
+		if err := <-healDone; !errors.Is(err, ErrUnknownCheckpoint) {
+			t.Errorf("heal after a delete: %v, want ErrUnknownCheckpoint", err)
+		}
+		if m.HasCheckpoint(t.Context(), id) {
+			t.Error("a heal republished a checkpoint deleted with 204")
+		}
+	})
+}
+
 func TestClaimCheckpointHealCtxCancelReturnsPromptly(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		id := "ck_00000000000000bb"
