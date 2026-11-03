@@ -1097,7 +1097,9 @@ node of the cell from the [shared usage table](deploy.md#shared-usage-table).
   `vmm_*`; join its other events on `id` to the `claim`.
 - **Order and paging:**
   - events come in `cursor` order, the order they landed, which is not `t`
-    order: a node that was cut off from the database lands its backlog later;
+    order: a node that was cut off from the database lands its backlog later,
+    and a `renew` carries the time its lease changed, so its `t` can precede
+    that of an earlier line of the same journal;
   - `after` returns only events with a larger cursor (default 0);
   - `limit` defaults to 1000, at most 10000;
   - `next` is the last event's cursor when the page is full, absent otherwise;

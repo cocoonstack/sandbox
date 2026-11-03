@@ -1,6 +1,7 @@
 package pool
 
 import (
+	"cmp"
 	"context"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
@@ -217,9 +218,7 @@ func (m *Manager) recordEgress(ctx context.Context, id, tenant string, ev egress
 }
 
 func (m *Manager) recordUsage(ctx context.Context, ev usage.Event) {
-	if ev.Time.IsZero() {
-		ev.Time = time.Now()
-	}
+	ev.Time = cmp.Or(ev.Time, time.Now())
 	if err := m.usage.append(ev); err != nil {
 		log.WithFunc("pool.recordUsage").Errorf(ctx, err, "append usage event %s %s", ev.Event, ev.ID)
 	}
