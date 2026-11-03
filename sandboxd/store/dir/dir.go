@@ -274,11 +274,11 @@ func (d *Store) publish(_ context.Context, staging, id, digest string) error {
 	if err := touchCurrentGeneration(final, now); err != nil {
 		return err
 	}
-	tmp := filepath.Join(final, store.MetaFile+".tmp")
-	if err := os.WriteFile(tmp, metaRaw, 0o600); err != nil { //nolint:gosec // fixed path under our root
+	tmp, err := os.OpenFile(filepath.Join(final, store.MetaFile+".tmp"), os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600) //nolint:gosec // fixed path under our root
+	if err != nil {
 		return err
 	}
-	if err := os.Rename(tmp, filepath.Join(final, store.MetaFile)); err != nil {
+	if err := utils.ReplaceFileSync(tmp, filepath.Join(final, store.MetaFile), metaRaw); err != nil {
 		return err
 	}
 	_ = d.sweepGenerations(id) // later publishes and startups retry a failed sweep
