@@ -18,7 +18,8 @@ connection to sandboxd over vsock (`CID2:2049` → the host UDS
 `<vsock_socket>_2049`). sandboxd serves a per-sandbox forward proxy there,
 bound to that sandbox's identity by the socket path — no in-band token. The
 proxy evaluates the policy, injects the matched rule's secret host-side, dials
-the origin, and relays the response.
+the origin, and relays the response. An origin that dies mid-response has the
+guest's connection cut, so the client sees a truncated body, never a clean end.
 
 The base image sets `http_proxy`/`https_proxy`/`no_proxy` on silkd's unit, and
 silkd forwards exactly those variables into every exec — whenever nothing

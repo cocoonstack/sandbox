@@ -606,7 +606,7 @@ an unknown `on_expire`; 401 bad api token; 403 the parent's tenant was removed
 parent (neither forks, checkpoints, or promotes; see [egress](egress.md)), a
 failed parent, or an archived parent (`POST /wake` or an exec wakes it first);
 429 node or the parent's tenant at `max_claims`, the node at `max_running`, the node draining, or the disk
-under `disk_reserve`.
+under `disk_reserve`; 503 `lease lost; retry` for a replicated parent while its node's lease is overdue.
 
 ## POST /v1/sandboxes/{id}/promote
 
@@ -648,7 +648,8 @@ the export they were set on, which the new one replaces.
 configured pool, the template is owned by another tenant, or the sandbox is
 on the egress lane, has volumes attached (see [egress](egress.md)), or is
 archived (`POST /wake` or an exec wakes it first), 404 unknown id or wrong
-sandbox token, 429 while the disk is under [`disk_reserve`](deploy.md).
+sandbox token, 429 while the disk is under [`disk_reserve`](deploy.md), 503
+`lease lost; retry` for a replicated sandbox while its node's lease is overdue.
 
 ## DELETE /v1/templates?template=…&net=…&size=…
 
@@ -866,7 +867,8 @@ created_at}}` — `tenant` records the calling tenant, absent for root.
 400 bad body or name, 401 bad api token, 404 unknown id or wrong sandbox
 token, 409 egress-lane sandbox, one with volumes attached (see
 [egress](egress.md)), or an archived one (`POST /wake` or an exec wakes it
-first), 429 while the disk is under [`disk_reserve`](deploy.md).
+first), 429 while the disk is under [`disk_reserve`](deploy.md), 503 `lease lost; retry`
+for a replicated sandbox while its node's lease is overdue.
 
 ## POST /v1/checkpoints/{id}/claim
 

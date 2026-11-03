@@ -676,7 +676,7 @@ VMM that cocoon could not move into its own scope, and any `cocoon` call still
 in flight, outlive the stop instead of dying with the service's cgroup. Claimed
 sandboxes are reaped when their TTL expires (default 5m, capped at 24h).
 
-A snapshot save, hibernate or export has 15 minutes, plus 3 to exit once
+A snapshot save, hibernate, export or restore has 15 minutes, plus 3 to exit once
 canceled, and at most 8 saves and hibernates run at once on a node. A call that
 dials a guest gives up after 10 s, since a paused or wedged guest never answers,
 and gets `502`.
@@ -1170,8 +1170,8 @@ returned endpoint is deliberately mapped through a local bridge.
 ## Preview URLs
 
 `preview_listen` starts a second HTTP server that serves a sandbox's guest
-HTTP port under a signed, expiring shareable URL. The whole mechanism is in
-sandboxd:
+HTTP port under a signed, expiring shareable URL; a node that cannot bind it
+exits. The whole mechanism is in sandboxd:
 
 - **Minting** (`sb.PreviewURL(ctx, port, ttl)`): the owner node signs a token
   embedding `{sandbox, port, owner, exp}` with `preview_secret`; the URL's
