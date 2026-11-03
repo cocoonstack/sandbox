@@ -124,6 +124,7 @@ where
         // client gone: publish the terminal state the abort pre-empts, else an attacher waits forever.
         supervise.abort();
         pump_abort.abort();
+        stdin_task.abort();
         let _ = supervise.await;
         if proc.exit_code().is_none() {
             proc.finish(reaped.get().copied().unwrap_or(-1));
