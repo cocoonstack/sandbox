@@ -257,7 +257,10 @@ Each decision is metered as an `egress` usage event, which names the injected
 secrets in `secret` as the audit line does, and, when `audit_log` is
 on, written to `audit.jsonl` (`op:"egress"`, `dest`, `port`, `method`,
 `decision`, and the secret **name** in `secret`); an intercepted `CONNECT` is
-recorded as a decision of its own before its inner requests.
+recorded as a decision of its own before its inner requests. A host longer
+than 253 bytes (the DNS limit) is denied, and a sandbox records at most 10
+`deny` and `rate_limited` decisions per second after a burst of 100, dropping
+the rest, so a guest cannot flood the journals.
 
 ## Claim env and secrets
 

@@ -10,8 +10,10 @@ import (
 	"net/http/httptest"
 	"net/netip"
 	"net/url"
+	"strings"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 )
 
@@ -568,6 +570,58 @@ func TestBracketedIPv6AuthorityIsUnwrapped(t *testing.T) {
 			t.Errorf("audit event for %s = %+v, want %v (allow on the bare address and 443, or deny with no port)", tc.authority, ev, tc.decision)
 		}
 	}
+}
+
+func TestAHostPastTheDNSLimitIsRefusedAndRecordedClipped(t *testing.T) {
+	policy := Policy{Allow: []Rule{{Host: "*"}}}
+	events := make(chan Event, 4)
+	p := New(policy, nil, nil, fixedDial(echoServer(t)), func(ev Event) { events <- ev }, nil)
+	front := httptest.NewServer(p)
+	defer front.Close()
+
+	for _, tc := range []struct {
+		host   string
+		status string
+	}{
+		{strings.Repeat("a", maxHostLen+1) + ":443", "HTTP/1.1 403 Forbidden"},
+		{strings.Repeat("b", 64<<10), "HTTP/1.1 403 Forbidden"},
+		{strings.Repeat("c", maxHostLen) + ":443", "HTTP/1.1 200 Connection Established"},
+	} {
+		conn := dialConnect(t, front.Listener.Addr().String(), tc.host)
+		if status := readStatus(t, bufio.NewReader(conn)); status != tc.status {
+			t.Errorf("CONNECT to a %d-byte authority = %q, want %q", len(tc.host), status, tc.status)
+		}
+		_ = conn.Close()
+		if ev := recvEvent(t, events); len(ev.Host) > maxHostLen {
+			t.Errorf("audit event host is %d bytes, want at most %d", len(ev.Host), maxHostLen)
+		}
+	}
+}
+
+func TestRefusalRecordsPastTheBurstAreDropped(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var allowed, refused int
+		p := New(Policy{}, nil, nil, fixedDial("127.0.0.1:1"), func(ev Event) {
+			if ev.Decision == DecisionAllow {
+				allowed++
+				return
+			}
+			refused++
+		}, nil)
+		for range 2 * refusalBurst {
+			p.record(Event{Decision: DecisionDeny})
+			p.record(Event{Decision: DecisionRateLimited})
+			p.record(Event{Decision: DecisionAllow})
+		}
+		if refused != refusalBurst || allowed != 2*refusalBurst {
+			t.Fatalf("recorded %d refusals and %d allows, want %d and %d", refused, allowed, refusalBurst, 2*refusalBurst)
+		}
+		time.Sleep(time.Second)
+		p.record(Event{Decision: DecisionDeny})
+		if refused != refusalBurst+1 {
+			t.Errorf("a refusal after a second recorded %d, want %d", refused, refusalBurst+1)
+		}
+	})
 }
 
 func TestAuditNamesTheConnectionEnds(t *testing.T) {
