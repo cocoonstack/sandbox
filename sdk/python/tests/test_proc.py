@@ -3,7 +3,7 @@
 import threading
 
 import pytest
-from conftest import sandbox_at
+from conftest import FakeConn, sandbox_at
 
 from cocoonsandbox import ProtocolError
 from cocoonsandbox.frames import FS_CHUNK
@@ -73,36 +73,6 @@ def test_a_text_stdin_is_refused_before_dialing(monkeypatch, call):
     with pytest.raises(TypeError, match="stdin must be bytes"):
         call(sb)
     assert dials == []
-
-
-class FakeConn:
-    """Answers one RPC with a canned frame list."""
-
-    def __init__(self, frames):
-        self._frames = list(frames)
-        self.sent = []
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *exc):
-        pass
-
-    def send(self, op, **fields):
-        self.sent.append((op, fields))
-
-    def recv(self):
-        return self._frames.pop(0)
-
-    def recv_until(self, *terminal):
-        while True:
-            frame = self.recv()
-            yield frame
-            if frame["type"] in terminal:
-                return
-
-    def close(self):
-        pass
 
 
 class BlockingStdinConn(FakeConn):

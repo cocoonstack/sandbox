@@ -198,20 +198,6 @@ def test_template_volume_claim_follows_redirect(node):
     assert sb.volumes == seen[1]["volumes"]
 
 
-def test_volume_catalog(node):
-    want = [
-        {
-            "name": "imagenet",
-            "default_mount": "/volumes/imagenet",
-            "size_bytes": 42,
-            "available": True,
-            "nodes": 3,
-        }
-    ]
-    FakeNode.routes[("GET", "/v1/volumes")] = lambda body, path: (200, {"volumes": want})
-    assert Client(node).volumes() == want
-
-
 def test_volume_catalog_surfaces_writable(node):
     want = [
         {

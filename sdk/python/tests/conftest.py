@@ -56,6 +56,36 @@ class FakeNode(BaseHTTPRequestHandler):
         self.wfile.write(raw)
 
 
+class FakeConn:
+    """Answers one RPC with a canned frame list."""
+
+    def __init__(self, frames):
+        self._frames = list(frames)
+        self.sent = []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        pass
+
+    def send(self, op, **fields):
+        self.sent.append((op, fields))
+
+    def recv(self):
+        return self._frames.pop(0)
+
+    def recv_until(self, *terminal):
+        while True:
+            frame = self.recv()
+            yield frame
+            if frame["type"] in terminal:
+                return
+
+    def close(self):
+        pass
+
+
 def sandbox_at(addr: str, **client_kwargs) -> Sandbox:
     return Sandbox(client=Client(addr, **client_kwargs), id="sb_1", token="tok", owner=addr)
 

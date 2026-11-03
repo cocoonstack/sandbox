@@ -7,7 +7,7 @@ import socket
 import threading
 
 import pytest
-from conftest import sandbox_at
+from conftest import FakeConn, sandbox_at
 
 from cocoonsandbox import Lsp, Pty, Session
 from cocoonsandbox.conn import Conn
@@ -122,18 +122,13 @@ def test_git_branch_actions_come_from_the_corpus(monkeypatch):
     assert set(sent) == set(enums["git_branch_action"])
 
 
-class BranchActionConn:
+class BranchActionConn(FakeConn):
     """Records the action each git_branch verb puts on the wire."""
 
     def __init__(self, sent):
+        super().__init__([])
         self.sent = sent
         self.action = ""
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *exc):
-        pass
 
     def send(self, op, **fields):
         self.action = fields.get("action")
@@ -146,9 +141,6 @@ class BranchActionConn:
 
     def recv_until(self, *terminal):
         yield self.recv()
-
-    def close(self):
-        pass
 
 
 def fake_sandbox(monkeypatch, replies):

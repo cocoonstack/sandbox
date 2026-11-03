@@ -1,20 +1,10 @@
 """Fault matrix for the cluster redirect follow and the lookup scatter."""
 
-import socket
 import time
 
 import pytest
 
 from cocoonsandbox import APIError, Client
-
-
-@pytest.fixture
-def hung_addr():
-    sock = socket.socket()
-    sock.bind(("127.0.0.1", 0))
-    sock.listen(1)
-    yield f"127.0.0.1:{sock.getsockname()[1]}"
-    sock.close()
 
 
 def test_claim_redirect_skips_dead_candidate(spawn_node, dead_addr):
@@ -180,12 +170,12 @@ def test_lookup_dead_peer_resolves_fast(spawn_node, dead_addr):
     assert elapsed < 2.0, elapsed
 
 
-def test_lookup_hung_peer_resolves_fast(spawn_node, hung_addr):
+def test_lookup_hung_peer_resolves_fast(spawn_node, black_hole):
     owner = spawn_node({("GET", "/v1/sandboxes/sb_1/owner"): lambda body, path: (200, {"owner_addr": "10.0.0.9:7777"})})
     entry = spawn_node(
         {
             ("GET", "/v1/sandboxes/sb_1/owner"): lambda body, path: (404, {"error": "not here"}),
-            ("GET", "/v1/peers"): lambda body, path: (200, {"peers": [hung_addr, owner]}),
+            ("GET", "/v1/peers"): lambda body, path: (200, {"peers": [black_hole, owner]}),
         }
     )
     start = time.monotonic()
