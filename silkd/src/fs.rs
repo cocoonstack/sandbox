@@ -58,10 +58,11 @@ pub async fn read<W: AsyncWrite + Unpin>(w: &mut W, path: String) -> io::Result<
             .read(true)
             .custom_flags(libc::O_NONBLOCK)
             .open(&path)?;
-        if !file.metadata()?.is_file() {
+        let meta = file.metadata()?;
+        if !meta.is_file() {
             return Ok(None);
         }
-        let mut head = Vec::with_capacity(BULK_CHUNK);
+        let mut head = Vec::with_capacity(meta.len().min(BULK_CHUNK as u64) as usize);
         let read = (&file)
             .take(BULK_CHUNK as u64)
             .read_to_end(&mut head)

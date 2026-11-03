@@ -158,6 +158,19 @@ async fn read_streams_files_around_the_first_chunk_bound() {
     }
 }
 
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn read_returns_a_proc_file_that_reports_zero_length() {
+    let read = exchange(&[json!({"op":"fs_read","path":"/proc/self/status"}).to_string()]).await;
+    assert!(
+        String::from_utf8(payload(&read, "data"))
+            .unwrap()
+            .contains("Name:"),
+        "{read:?}"
+    );
+    assert_eq!(type_of(read.last().unwrap()), "done");
+}
+
 #[tokio::test]
 async fn read_of_a_non_regular_file_is_bad_request() {
     let dir = tempfile::tempdir().unwrap();
