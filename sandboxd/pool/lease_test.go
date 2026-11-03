@@ -15,8 +15,6 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
-var plainKey = types.PoolKey{Template: "plain:24.04", Net: types.NetNone, Size: testKey.Size}
-
 func TestLeaseRenewLoopKeepsTheNodeLeasedUntilItStops(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		c := newReplicaCluster(t)
@@ -50,17 +48,14 @@ func TestLeaseOverdueRenewalFencesReplicatedClaimsOnly(t *testing.T) {
 		a.archives = cut
 		replicated, plain := mustClaim(t, a, testKey), mustClaim(t, a, plainKey)
 		replicateNow(t, a, replicated)
-		ctx, cancel := context.WithCancel(t.Context())
-		defer cancel()
-
-		go a.keepLease(ctx)
+		ctx := startLease(t, a)
 		synctest.Wait()
 		time.Sleep(4*leaseRenew + 2*time.Second)
 		synctest.Wait()
 		assertServed(t, a, replicated.ID, replicated.Token)
 
 		cut.cut.Store(true)
-		time.Sleep(leaseTTL - leaseMargin - 3*time.Second)
+		time.Sleep(leaseWindow - 3*time.Second)
 		synctest.Wait()
 		assertServed(t, a, replicated.ID, replicated.Token)
 		time.Sleep(2 * time.Second)
@@ -75,7 +70,7 @@ func TestLeaseOverdueRenewalFencesReplicatedClaimsOnly(t *testing.T) {
 			t.Errorf("preview dial past the fence: %v, want ErrLeaseLost", err)
 		}
 		assertServed(t, a, plain.ID, plain.Token)
-		if _, held := a.byID(replicated.ID); !held || a.eng.(*fakeEngine).removed(lockedVMName(replicated)) {
+		if _, held := a.byID(replicated.ID); !held || fakeOf(a).removed(lockedVMName(replicated)) {
 			t.Error("the fence dropped the claim or removed its VM")
 		}
 
@@ -94,13 +89,11 @@ func TestLeaseFenceClosesOpenStreamsOfReplicatedClaimsOnly(t *testing.T) {
 		a.archives = cut
 		replicated, plain, early := mustClaim(t, a, testKey), mustClaim(t, a, plainKey), mustClaim(t, a, testKey)
 		replicateNow(t, a, replicated)
-		ctx, cancel := context.WithCancel(t.Context())
-		defer cancel()
-		go a.keepLease(ctx)
+		ctx := startLease(t, a)
 		synctest.Wait()
 
 		replicatedCred, plainCred := Cred{Token: replicated.Token}, Cred{Token: plain.Token}
-		a.eng.(*fakeEngine).guestDial = func() (net.Conn, error) {
+		fakeOf(a).guestDial = func() (net.Conn, error) {
 			host, _ := net.Pipe()
 			return host, nil
 		}
@@ -135,7 +128,7 @@ func TestLeaseFenceClosesOpenStreamsOfReplicatedClaimsOnly(t *testing.T) {
 		defer plainDone()
 
 		cut.cut.Store(true)
-		time.Sleep(leaseTTL - leaseMargin + time.Second)
+		time.Sleep(leaseWindow + time.Second)
 		synctest.Wait()
 		select {
 		case <-relayFenced:
@@ -184,9 +177,7 @@ func TestLeaseSlowUnfenceStaysFencedAndKeepsRenewing(t *testing.T) {
 		a.archives = cut
 		sb := mustClaim(t, a, testKey)
 		replicateNow(t, a, sb)
-		ctx, cancel := context.WithCancel(t.Context())
-		defer cancel()
-		go a.keepLease(ctx)
+		ctx := startLease(t, a)
 		synctest.Wait()
 
 		cut.cut.Store(true)
@@ -233,22 +224,18 @@ func TestLeaseFailedConfirmKeepsTheTeardownOfAForgottenClaim(t *testing.T) {
 			a.archives = cut
 			replicateNow(t, a, moved)
 			replicateNow(t, a, kept)
-			ctx, cancel := context.WithCancel(t.Context())
-			defer cancel()
-			go a.keepLease(ctx)
+			startLease(t, a)
 			synctest.Wait()
 
 			cut.cut.Store(true)
 			time.Sleep(leaseTTL)
 			synctest.Wait()
 			c.expire("a")
-			if adopted, err := b.AdoptArchived(ctx, moved.ID, moved.Token); err != nil || !adopted {
-				t.Fatalf("adopt while the owner is fenced: %v %v", adopted, err)
-			}
+			mustAdopt(t, b, moved, "adopt while the owner is fenced")
 			cut.cut.Store(false)
 			time.Sleep(leaseRenew)
 			synctest.Wait()
-			if exercised && !a.eng.(*fakeEngine).removed(vm) {
+			if exercised && !fakeOf(a).removed(vm) {
 				t.Error("a failed confirmation dropped the teardown of a claim the owner had already forgotten")
 			}
 		})
@@ -268,9 +255,7 @@ func TestLeaseAdoptionDuringUnfenceDropsTheClaimWithoutServingIt(t *testing.T) {
 		sb := mustClaim(t, a, testKey)
 		vm := lockedVMName(sb)
 		replicateNow(t, a, sb)
-		ctx, cancel := context.WithCancel(t.Context())
-		defer cancel()
-		go a.keepLease(ctx)
+		ctx := startLease(t, a)
 		synctest.Wait()
 
 		cut.cut.Store(true)
@@ -294,7 +279,7 @@ func TestLeaseAdoptionDuringUnfenceDropsTheClaimWithoutServingIt(t *testing.T) {
 		if _, _, _, err := a.WakeAgentSocket(ctx, sb.ID, sb.Token); !errors.Is(err, ErrUnknownSandbox) {
 			t.Errorf("the owner after losing the row: %v, want ErrUnknownSandbox", err)
 		}
-		if !a.eng.(*fakeEngine).removed(vm) {
+		if !fakeOf(a).removed(vm) {
 			t.Error("the owner kept its VM of the adopted claim")
 		}
 		if _, _, _, err := b.WakeAgentSocket(ctx, sb.ID, sb.Token); err != nil {
@@ -315,33 +300,25 @@ func TestLeaseANodeLiftedAfterAnOutageAdoptsOnlyOnceEveryOwnerCouldRenew(t *test
 		c.expire("a")
 		c.expire("b")
 
-		if adopted, err := b.AdoptArchived(t.Context(), sb.ID, sb.Token); err != nil || adopted {
-			t.Fatalf("adoption by a fenced node: %v %v, want refused", adopted, err)
-		}
+		mustNotAdopt(t, b, sb, "adoption by a fenced node")
 		c.renew(t, "b")
 		b.unfence(t.Context(), time.Now())
 		if b.isFenced() {
 			t.Fatal("the node stayed fenced after its renewal")
 		}
-		if adopted, err := b.AdoptArchived(t.Context(), sb.ID, sb.Token); err != nil || adopted {
-			t.Fatalf("adoption right after the lift: %v %v, want refused", adopted, err)
-		}
+		mustNotAdopt(t, b, sb, "adoption right after the lift")
 		c.renew(t, "a")
 		a.unfence(t.Context(), time.Now())
 		synctest.Wait()
-		if _, held := a.byID(sb.ID); !held || a.eng.(*fakeEngine).removed(vm) {
-			t.Fatalf("the healthy owner lost its claim: held=%v VM removed=%v", held, a.eng.(*fakeEngine).removed(vm))
+		if _, held := a.byID(sb.ID); !held || fakeOf(a).removed(vm) {
+			t.Fatalf("the healthy owner lost its claim: held=%v VM removed=%v", held, fakeOf(a).removed(vm))
 		}
 
 		c.expire("a")
 		time.Sleep(adoptGrace - time.Millisecond)
-		if adopted, err := b.AdoptArchived(t.Context(), sb.ID, sb.Token); err != nil || adopted {
-			t.Fatalf("adoption inside the grace: %v %v, want refused", adopted, err)
-		}
+		mustNotAdopt(t, b, sb, "adoption inside the grace")
 		time.Sleep(time.Millisecond)
-		if adopted, err := b.AdoptArchived(t.Context(), sb.ID, sb.Token); err != nil || !adopted {
-			t.Errorf("adoption once the grace passed: %v %v, want adopted", adopted, err)
-		}
+		mustAdopt(t, b, sb, "adoption once the grace passed")
 	})
 }
 
@@ -368,7 +345,7 @@ func TestLeaseLiftAfterTheWindowClosedFencesAgain(t *testing.T) {
 	c := newReplicaCluster(t)
 	a := c.node(t, "a", t.TempDir(), keepAnHour)
 	a.tripFence()
-	late := time.Now().Add(-(leaseTTL - leaseMargin + time.Second))
+	late := time.Now().Add(-(leaseWindow + time.Second))
 
 	a.lift(t.Context(), a.fence.Load(), late)
 	if !a.isFenced() {
@@ -412,8 +389,8 @@ func TestLeaseConfirmThatKeepsLosingOnItsOwnRowStaysFencedAndKeepsTheClaim(t *te
 	if !a.isFenced() {
 		t.Error("the node lifted its fence without confirming a claim it owns")
 	}
-	if _, held := a.byID(sb.ID); !held || a.eng.(*fakeEngine).removed(vm) {
-		t.Errorf("claim held %v, VM removed %v, want the claim and VM kept: its row is still this node's", held, a.eng.(*fakeEngine).removed(vm))
+	if _, held := a.byID(sb.ID); !held || fakeOf(a).removed(vm) {
+		t.Errorf("claim held %v, VM removed %v, want the claim and VM kept: its row is still this node's", held, fakeOf(a).removed(vm))
 	}
 }
 
@@ -451,25 +428,19 @@ func TestLeaseAdoptionWaitsOutTheFenceAndTheOldOwnerDropsItsCopy(t *testing.T) {
 				sb := mustClaim(t, a, testKey)
 				vm := lockedVMName(sb)
 				replicateNow(t, a, sb)
-				ctx, cancel := context.WithCancel(t.Context())
-				defer cancel()
-				go a.keepLease(ctx)
+				ctx := startLease(t, a)
 				synctest.Wait()
 
 				cut.cut.Store(true)
-				time.Sleep(leaseTTL - leaseMargin + time.Second)
+				time.Sleep(leaseWindow + time.Second)
 				synctest.Wait()
 				if _, _, _, err := a.WakeAgentSocket(ctx, sb.ID, sb.Token); !errors.Is(err, ErrLeaseLost) {
 					t.Fatalf("the cut-off owner past its fence: %v, want ErrLeaseLost", err)
 				}
-				if adopted, err := b.AdoptArchived(ctx, sb.ID, sb.Token); err != nil || adopted {
-					t.Fatalf("adoption while the fenced owner's lease is still live: %v %v, want refused", adopted, err)
-				}
+				mustNotAdopt(t, b, sb, "adoption while the fenced owner's lease is still live")
 
 				time.Sleep(leaseMargin)
-				if adopted, err := b.AdoptArchived(ctx, sb.ID, sb.Token); err != nil || !adopted {
-					t.Fatalf("adoption after the lease expired: %v %v, want adopted", adopted, err)
-				}
+				mustAdopt(t, b, sb, "adoption after the lease expired")
 				if tt.wakeBefore {
 					if _, _, _, err := b.WakeAgentSocket(ctx, sb.ID, sb.Token); err != nil {
 						t.Fatalf("adopter's wake: %v", err)
@@ -479,8 +450,8 @@ func TestLeaseAdoptionWaitsOutTheFenceAndTheOldOwnerDropsItsCopy(t *testing.T) {
 				cut.cut.Store(false)
 				time.Sleep(leaseRenew)
 				synctest.Wait()
-				if _, held := a.byID(sb.ID); held || !a.eng.(*fakeEngine).removed(vm) {
-					t.Errorf("old owner holds the claim %v, VM removed %v, want its copy dropped and its VM removed", held, a.eng.(*fakeEngine).removed(vm))
+				if _, held := a.byID(sb.ID); held || !fakeOf(a).removed(vm) {
+					t.Errorf("old owner holds the claim %v, VM removed %v, want its copy dropped and its VM removed", held, fakeOf(a).removed(vm))
 				}
 				if a.isFenced() {
 					t.Error("the old owner stays fenced after its lease renewed")
@@ -515,7 +486,7 @@ func TestLeaseUnfenceOfManyClaimsLiftsInsideTheWindowOverASlowRegistry(t *testin
 
 		a.unfence(t.Context(), time.Now())
 		if a.isFenced() {
-			t.Fatalf("%d claims at a 100 ms round trip outlasted the %s window", len(sbs), leaseTTL-leaseMargin)
+			t.Fatalf("%d claims at a 100 ms round trip outlasted the %s window", len(sbs), leaseWindow)
 		}
 		for _, sb := range sbs {
 			if rec, _, _ := c.reg.Get(t.Context(), sb.ID); rec.Owner != "a" || rec.Epoch != a.epochOf(sb) {
@@ -597,22 +568,6 @@ func (r *cutRegistry) Rows(ctx context.Context, ids []string) (map[string]archiv
 	}
 	time.Sleep(time.Duration(r.rowsDelay.Load()))
 	return r.Registry.Rows(ctx, ids)
-}
-
-func (m *Manager) epochOf(sb *types.Sandbox) int64 {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return sb.ArchiveEpoch
-}
-
-func (m *Manager) tripFence() {
-	ch := make(chan struct{})
-	close(ch)
-	m.fence.Store(&fenceState{ch: ch, fenced: true})
-}
-
-func (m *Manager) liftFence() {
-	m.fence.Store(&fenceState{ch: make(chan struct{})})
 }
 
 func assertServed(t *testing.T, m *Manager, id, token string) {

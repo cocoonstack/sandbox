@@ -26,9 +26,7 @@ func TestArchivePublishWindowPinsCheckpoint(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng, archivePool(3600))
 	sb := mustClaim(t, m, testKey)
-	if err := m.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
-		t.Fatalf("hibernate: %v", err)
-	}
+	hibernateClaim(t, m, sb)
 	stall := &stallingStore{Store: m.ckpts, published: make(chan string, 1), release: make(chan struct{})}
 	m.ckpts = stall
 
@@ -55,9 +53,7 @@ func TestArchivePublishesUnderTheSandboxLineage(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng, archivePool(3600))
 	sb := mustClaim(t, m, testKey)
-	if err := m.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
-		t.Fatalf("hibernate: %v", err)
-	}
+	hibernateClaim(t, m, sb)
 	rec := &lineageStore{Store: m.ckpts}
 	m.ckpts = rec
 	if err := m.archive(t.Context(), sb); err != nil {
@@ -72,9 +68,7 @@ func TestArchiveWakeRehibernateWindowAborts(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng, archivePool(3600))
 	sb := mustClaim(t, m, testKey)
-	if err := m.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
-		t.Fatalf("hibernate: %v", err)
-	}
+	hibernateClaim(t, m, sb)
 	stall := &stallingStore{Store: m.ckpts, published: make(chan string, 1), release: make(chan struct{})}
 	m.ckpts = stall
 
@@ -85,9 +79,7 @@ func TestArchiveWakeRehibernateWindowAborts(t *testing.T) {
 	if _, _, _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
 		t.Fatalf("wake mid-publish: %v", err)
 	}
-	if err := m.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
-		t.Fatalf("re-hibernate mid-publish: %v", err)
-	}
+	hibernateClaim(t, m, sb)
 	m.mu.Lock()
 	newSnap := sb.HibernateSnap
 	m.mu.Unlock()
@@ -155,9 +147,7 @@ func TestReconcileReclaimsOrphanArchiveCk(t *testing.T) {
 	claims := map[string]*types.Sandbox{
 		"sb_mine": {ID: "sb_mine", VMName: "sbx-gone-1", Key: testKey, Token: "tok"},
 	}
-	if err := newClaimStore(dataDir, false).save(claims); err != nil {
-		t.Fatalf("setup: %v", err)
-	}
+	seedClaims(t, dataDir, claims)
 	m := newTestManagerAt(t, eng, dataDir)
 	seedCk := func(id, sandboxID string) {
 		t.Helper()
@@ -341,10 +331,7 @@ func TestArchiveRetentionPurge(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		eng := newFakeEngine()
 		m := newTestManager(t, eng, archivePool(3600))
-		sb, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{TTL: time.Hour, Tenant: "acme"})
-		if err != nil {
-			t.Fatalf("claim: %v", err)
-		}
+		sb := claimTenant(t, m, "acme")
 		mustArchive(t, m, sb)
 		ck := sb.ArchiveCk
 
@@ -755,9 +742,7 @@ func TestArchivePersistFailureRollsBack(t *testing.T) {
 		eng := newFakeEngine()
 		m := newTestManager(t, eng, archivePool(3600))
 		sb := mustClaim(t, m, testKey)
-		if err := m.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
-			t.Fatalf("hibernate: %v", err)
-		}
+		hibernateClaim(t, m, sb)
 		snap, vm := sb.HibernateSnap, sb.VMName
 		breakStore(t, m)
 
@@ -859,9 +844,7 @@ func TestArchiveOnceSkipsInFlight(t *testing.T) {
 		eng := newFakeEngine()
 		m := newTestManager(t, eng, archivePool(3600))
 		sb := mustClaim(t, m, testKey)
-		if err := m.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
-			t.Fatalf("hibernate: %v", err)
-		}
+		hibernateClaim(t, m, sb)
 		backdate(m, sb, time.Hour)
 
 		m.mu.Lock()
@@ -884,9 +867,7 @@ func TestArchiveWakeEvictsRecLock(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng, archivePool(3600))
 	sb := mustClaim(t, m, testKey)
-	if err := m.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
-		t.Fatalf("hibernate: %v", err)
-	}
+	hibernateClaim(t, m, sb)
 	base := lockCount(m)
 	if err := m.archive(t.Context(), sb); err != nil {
 		t.Fatalf("archive: %v", err)
@@ -971,48 +952,9 @@ func (s *failingDeleteStore) Delete(_ context.Context, id string) error {
 	return errors.New("delete failed")
 }
 
-func breakStore(t *testing.T, m *Manager) {
-	t.Helper()
-	m.store.path = filepath.Join(t.TempDir(), "gone", "claims.json")
-}
-
-func healStore(t *testing.T, m *Manager) {
-	t.Helper()
-	if err := os.MkdirAll(filepath.Dir(m.store.path), 0o750); err != nil {
-		t.Fatalf("heal store: %v", err)
-	}
-	waitFor(t, m.store.synced)
-}
-
 func archivedCount(m *Manager) int {
 	_, g := m.Info()
 	return g.Archived
-}
-
-func archivePool(deleteAfter int) config.PoolSpec {
-	return config.PoolSpec{
-		PoolKey:                   testKey,
-		Warm:                      1,
-		IdleHibernateSeconds:      1,
-		ArchiveAfterSeconds:       2,
-		ArchiveDeleteAfterSeconds: deleteAfter,
-	}
-}
-
-func mustArchive(t *testing.T, m *Manager, sb *types.Sandbox) {
-	t.Helper()
-	if err := m.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
-		t.Fatalf("hibernate: %v", err)
-	}
-	if err := m.archive(t.Context(), sb); err != nil {
-		t.Fatalf("archive: %v", err)
-	}
-}
-
-func ckExists(t *testing.T, m *Manager, ck string) bool {
-	t.Helper()
-	_, _, _, err := m.ckpts.Fetch(t.Context(), ck) //nolint:dogsled
-	return err == nil
 }
 
 func archiveCkMarked(m *Manager, ck string) bool {

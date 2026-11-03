@@ -15,18 +15,9 @@ import (
 
 func TestJournalRotateFailureDegradesAndRecovers(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "usage.jsonl")
-	if err := os.WriteFile(path, nil, 0o600); err != nil {
-		t.Fatalf("setup: %v", err)
-	}
-	if err := os.Truncate(path, journalMaxBytes); err != nil {
-		t.Fatalf("setup: %v", err)
-	}
-	j, err := newJournal(path)
+	j := fullJournal(t, path)
+	err := os.Mkdir(path+".1", 0o750)
 	if err != nil {
-		t.Fatalf("new journal: %v", err)
-	}
-
-	if err = os.Mkdir(path+".1", 0o750); err != nil {
 		t.Fatalf("setup: %v", err)
 	}
 	if err = j.append(map[string]string{"ev": "a"}); err == nil {
@@ -73,21 +64,12 @@ func TestJournalKeepsAnEventWithInvalidUTF8(t *testing.T) {
 func TestJournalRotateReopenFailureKeepsWriting(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "usage.jsonl")
-	if err := os.WriteFile(path, nil, 0o600); err != nil {
-		t.Fatalf("setup: %v", err)
-	}
-	if err := os.Truncate(path, journalMaxBytes); err != nil {
-		t.Fatalf("setup: %v", err)
-	}
-	j, err := newJournal(path)
-	if err != nil {
-		t.Fatalf("new journal: %v", err)
-	}
+	j := fullJournal(t, path)
 	j.path = filepath.Join(dir, "gone", "usage.jsonl")
-	if err = j.append(map[string]string{"ev": "a"}); err == nil {
+	if err := j.append(map[string]string{"ev": "a"}); err == nil {
 		t.Fatal("append across a failed reopen must surface the error")
 	}
-	if err = j.append(map[string]string{"ev": "b"}); err == nil {
+	if err := j.append(map[string]string{"ev": "b"}); err == nil {
 		t.Fatal("append while the reopen stays blocked must keep surfacing the error")
 	}
 	if got := tail(t, path); !strings.Contains(got, `"ev":"a"`) || !strings.Contains(got, `"ev":"b"`) {
@@ -107,18 +89,7 @@ func TestJournalKeepsTheFirstAppendAfterATornLine(t *testing.T) {
 	if err = j.append(usage.Event{Event: "claim", ID: "sb_b"}); err != nil {
 		t.Fatalf("append: %v", err)
 	}
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read: %v", err)
-	}
-	lines := strings.Split(strings.TrimSuffix(string(raw), "\n"), "\n")
-	var ev usage.Event
-	if len(lines) != 3 || json.Unmarshal([]byte(lines[2]), &ev) != nil || ev.ID != "sb_b" {
-		t.Errorf("journal after a torn line %q, want the append on a line of its own", raw)
-	}
-	if st, _ := os.Stat(path); j.size != st.Size() {
-		t.Errorf("journal size %d, file %d", j.size, st.Size())
-	}
+	assertLastAppendOnItsOwnLine(t, j, path, "a torn line")
 }
 
 func TestJournalEndsALineAShortWriteTore(t *testing.T) {
@@ -149,18 +120,7 @@ func TestJournalEndsALineAShortWriteTore(t *testing.T) {
 	if err = j.append(usage.Event{Event: "claim", ID: "sb_b"}); err != nil {
 		t.Fatalf("append after the short write: %v", err)
 	}
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read: %v", err)
-	}
-	lines := strings.Split(strings.TrimSuffix(string(raw), "\n"), "\n")
-	var ev usage.Event
-	if len(lines) != 3 || json.Unmarshal([]byte(lines[2]), &ev) != nil || ev.ID != "sb_b" {
-		t.Errorf("journal after a short write %q, want the next append on a line of its own", raw)
-	}
-	if st, _ := os.Stat(path); j.size != st.Size() {
-		t.Errorf("journal size %d, file %d", j.size, st.Size())
-	}
+	assertLastAppendOnItsOwnLine(t, j, path, "a short write")
 }
 
 func TestJournalLeavesAWholeLastLine(t *testing.T) {
@@ -174,6 +134,37 @@ func TestJournalLeavesAWholeLastLine(t *testing.T) {
 	}
 	if j.size != 15 {
 		t.Errorf("journal size %d after opening a whole file, want 15", j.size)
+	}
+}
+
+func fullJournal(t *testing.T, path string) *journal {
+	t.Helper()
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	if err := os.Truncate(path, journalMaxBytes); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	j, err := newJournal(path)
+	if err != nil {
+		t.Fatalf("new journal: %v", err)
+	}
+	return j
+}
+
+func assertLastAppendOnItsOwnLine(t *testing.T, j *journal, path, after string) {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	lines := strings.Split(strings.TrimSuffix(string(raw), "\n"), "\n")
+	var ev usage.Event
+	if len(lines) != 3 || json.Unmarshal([]byte(lines[2]), &ev) != nil || ev.ID != "sb_b" {
+		t.Errorf("journal after %s %q, want the append sb_b on a line of its own", after, raw)
+	}
+	if st, _ := os.Stat(path); j.size != st.Size() {
+		t.Errorf("journal size %d, file %d", j.size, st.Size())
 	}
 }
 

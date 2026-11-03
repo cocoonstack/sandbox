@@ -9,7 +9,7 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/config"
 )
 
-func TestStatsUnknownSandbox(t *testing.T) {
+func TestStatsOfAnUnknownIDIsNotOK(t *testing.T) {
 	m := newTestManager(t, newFakeEngine())
 	if _, ok := m.Stats(t.Context(), "sb_missing"); ok {
 		t.Error("Stats on an unknown id, want ok=false")
@@ -55,9 +55,7 @@ func TestStatsHibernatedIsUnmeasured(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1})
 	sb := mustClaim(t, m, testKey)
-	if err := m.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
-		t.Fatalf("hibernate: %v", err)
-	}
+	hibernateClaim(t, m, sb)
 	before := eng.listCalls()
 
 	st, ok := m.Stats(t.Context(), sb.ID)

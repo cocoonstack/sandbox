@@ -15,7 +15,6 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/engine"
 	"github.com/cocoonstack/sandbox/sandboxd/outbound"
 	"github.com/cocoonstack/sandbox/sandboxd/outbound/outboundtest"
-	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
 func TestIdleOnceHibernatesPastThreshold(t *testing.T) {
@@ -42,7 +41,7 @@ func TestIdleOnceHibernatesPastThreshold(t *testing.T) {
 	})
 }
 
-func TestIdleOncePolicyScope(t *testing.T) {
+func TestIdleHibernateDefaultAppliesOnlyToUnpooledKeys(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		eng := newFakeEngine()
 		m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1})
@@ -55,7 +54,7 @@ func TestIdleOncePolicyScope(t *testing.T) {
 			t.Fatal("pooled key without the policy was idle-hibernated by the node default")
 		}
 
-		unpooled := types.PoolKey{Template: "tpl:v1", Net: types.NetNone, Size: types.SizeSmall}
+		unpooled := tplKey("tpl:v1")
 		sb2, err := m.ClaimProvision(t.Context(), unpooled, ClaimOptions{TTL: time.Hour})
 		if err != nil {
 			t.Fatalf("provision: %v", err)
@@ -183,21 +182,4 @@ func TestEgressRequestInFlightBlocksIdleSweep(t *testing.T) {
 	if hibernated(m) != 1 {
 		t.Fatal("idle claim was not hibernated")
 	}
-}
-
-func sweepIdle(t *testing.T, m *Manager) {
-	t.Helper()
-	m.idleOnce(t.Context())
-	waitFor(t, func() bool { return !m.idleSweep.Load() })
-}
-
-func backdate(m *Manager, sb *types.Sandbox, by time.Duration) {
-	m.mu.Lock()
-	sb.TouchAt(time.Now().Add(-by))
-	m.mu.Unlock()
-}
-
-func hibernated(m *Manager) int {
-	_, g := m.Info()
-	return g.Hibernated
 }

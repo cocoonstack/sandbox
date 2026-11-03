@@ -42,7 +42,7 @@ func TestCellsKeepTheirOwnRows(t *testing.T) {
 	if recs, listErr := c2.Sweepable(ctx, time.Now(), "n2"); listErr != nil || len(recs) != 0 {
 		t.Errorf("c2 lists c1's expired row: %+v %v", recs, listErr)
 	}
-	if _, err = c2.Put(ctx, archives.Record{ID: "sb_1", TokenSHA256: "cd", Owner: "n2", Checkpoint: "ck_2", Claim: []byte(`{}`)}); err != nil {
+	if _, err = c2.Put(ctx, sb1Record("cd", "n2", "ck_2")); err != nil {
 		t.Errorf("put of the same id in c2 by another owner: %v, want its own row", err)
 	}
 	if rec, _, _ := c1.Get(ctx, "sb_1"); rec.Checkpoint != "ck_1" {
@@ -63,7 +63,7 @@ func TestTwoNodesShareTheTable(t *testing.T) {
 	dsn := metastoretest.PGSchema(t)
 	a, b := open(t, dsn, "c1"), open(t, dsn, "c1")
 	ctx := t.Context()
-	epoch, err := a.Put(ctx, archives.Record{ID: "sb_1", TokenSHA256: "ab", Owner: "a", Checkpoint: "ck_1", Claim: []byte(`{}`)})
+	epoch, err := a.Put(ctx, sb1Record("ab", "a", "ck_1"))
 	if err != nil {
 		t.Fatalf("put on a: %v", err)
 	}
@@ -73,7 +73,7 @@ func TestTwoNodesShareTheTable(t *testing.T) {
 	if _, err = a.Take(ctx, "sb_1", epoch, "a"); !errors.Is(err, archives.ErrLost) {
 		t.Errorf("a's take at its old epoch: %v, want ErrLost", err)
 	}
-	if _, err = a.Put(ctx, archives.Record{ID: "sb_1", TokenSHA256: "ab", Owner: "a", Checkpoint: "ck_2", Claim: []byte(`{}`)}); !errors.Is(err, archives.ErrLost) {
+	if _, err = a.Put(ctx, sb1Record("ab", "a", "ck_2")); !errors.Is(err, archives.ErrLost) {
 		t.Errorf("a's put over b's row: %v, want ErrLost", err)
 	}
 }
@@ -118,7 +118,7 @@ func TestLeasesAreScopedToTheirCell(t *testing.T) {
 	if err := c1.Renew(ctx, "a", time.Hour); err != nil {
 		t.Fatalf("renew in c1: %v", err)
 	}
-	epoch, err := c2.Put(ctx, archives.Record{ID: "sb_1", TokenSHA256: "ab", Owner: "a", Checkpoint: "ck_1", Claim: []byte(`{}`)})
+	epoch, err := c2.Put(ctx, sb1Record("ab", "a", "ck_1"))
 	if err != nil {
 		t.Fatalf("put in c2: %v", err)
 	}
@@ -154,4 +154,8 @@ func open(t *testing.T, dsn, cell string) *Registry {
 	}
 	t.Cleanup(r.Close)
 	return r
+}
+
+func sb1Record(token, owner, checkpoint string) archives.Record {
+	return archives.Record{ID: "sb_1", TokenSHA256: token, Owner: owner, Checkpoint: checkpoint, Claim: []byte(`{}`)}
 }

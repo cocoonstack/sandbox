@@ -30,15 +30,8 @@ func TestEgressDoorHalfCloseReachesTheGuest(t *testing.T) {
 		_, _ = io.WriteString(conn, "hello")
 		_ = conn.Close()
 	}()
-	pol := &egress.Policy{Allow: []egress.Rule{{Host: "127.0.0.1"}}}
-	h := newHost(t, &fakeEngine{}, poolConfig(testKey, pol), func(o *Options) { o.Dial = (&net.Dialer{}).DialContext })
-	sb := outboundtest.VsockSandbox(t, "sb_halfclose", testKey)
-	if err := h.Arm(t.Context(), sb); err != nil {
-		t.Fatalf("arm egress: %v", err)
-	}
-	t.Cleanup(func() { h.Disarm(sb.ID, true) })
-
-	_, tunnel := outboundtest.ConnectDoor(t, engine.EgressSocketPath(sb.VsockSocket), origin.Addr().String())
+	_, path := armDialingDoor(t, "sb_halfclose", &egress.Policy{Allow: []egress.Rule{{Host: "127.0.0.1"}}})
+	_, tunnel := outboundtest.ConnectDoor(t, path, origin.Addr().String())
 	body, bodyErr := io.ReadAll(tunnel)
 	if bodyErr != nil {
 		t.Fatalf("tunnel did not end with EOF after the origin closed: %v", bodyErr)
@@ -82,19 +75,13 @@ func TestEgressDoorCapsConcurrentConnections(t *testing.T) {
 		_, _ = io.WriteString(w, "ok")
 	}))
 	t.Cleanup(origin.Close)
-	pol := &egress.Policy{Allow: []egress.Rule{{Host: outboundtest.Hostname(t, origin.URL)}}}
-	h := newHost(t, &fakeEngine{}, poolConfig(testKey, pol), func(o *Options) { o.Dial = (&net.Dialer{}).DialContext })
-	sb := outboundtest.VsockSandbox(t, "sb_cap", testKey)
-	if err := h.Arm(t.Context(), sb); err != nil {
-		t.Fatalf("arm egress: %v", err)
-	}
-	t.Cleanup(func() { h.Disarm(sb.ID, true) })
-	path := engine.EgressSocketPath(sb.VsockSocket)
+	h, path := armDialingDoor(t, "sb_cap", &egress.Policy{Allow: []egress.Rule{{Host: outboundtest.Hostname(t, origin.URL)}}})
 
 	idle := make([]net.Conn, 0, doorConns)
+	deadline := time.Now().Add(10 * time.Second)
 	for len(idle) < doorConns {
 		conn, err := net.Dial("unix", path)
-		if errors.Is(err, syscall.ECONNREFUSED) || errors.Is(err, syscall.EAGAIN) {
+		if (errors.Is(err, syscall.ECONNREFUSED) || errors.Is(err, syscall.EAGAIN)) && time.Now().Before(deadline) {
 			time.Sleep(10 * time.Millisecond)
 			continue
 		}
@@ -109,7 +96,7 @@ func TestEgressDoorCapsConcurrentConnections(t *testing.T) {
 		}
 	})
 
-	waitHeld(t, h, sb.ID, doorConns)
+	waitHeld(t, h, "sb_cap", doorConns)
 
 	client := outboundtest.EgressClient(path)
 	client.Timeout = 500 * time.Millisecond
@@ -156,6 +143,17 @@ func TestReachedSeesAGuestInTheBacklog(t *testing.T) {
 	if !reached(door) {
 		t.Error("a door whose guest hung up reads as unreached")
 	}
+}
+
+func armDialingDoor(t *testing.T, id string, pol *egress.Policy) (*Host, string) {
+	t.Helper()
+	h := newHost(t, &fakeEngine{}, poolConfig(testKey, pol), func(o *Options) { o.Dial = (&net.Dialer{}).DialContext })
+	sb := outboundtest.VsockSandbox(t, id, testKey)
+	if err := h.Arm(t.Context(), sb); err != nil {
+		t.Fatalf("arm egress: %v", err)
+	}
+	t.Cleanup(func() { h.Disarm(sb.ID, true) })
+	return h, engine.EgressSocketPath(sb.VsockSocket)
 }
 
 func waitHeld(t *testing.T, h *Host, id string, want int) {

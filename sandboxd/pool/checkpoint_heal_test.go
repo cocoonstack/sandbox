@@ -16,9 +16,10 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
+const healID = "ck_00000000000000bb"
+
 func TestClaimCheckpointNeverPullsOnMiss(t *testing.T) {
-	ckpt := types.Checkpoint{ID: "ck_00000000000000bb", Key: testKey, CreatedAt: time.Now()}
-	m, puller := newHealManager(t, ckpt, []string{"peer-a:7777"})
+	m, puller := newHealManager(t)
 
 	if _, err := m.ClaimCheckpoint(t.Context(), "ck_00000000000000cc", ClaimOptions{TTL: time.Hour}); !errors.Is(err, ErrUnknownCheckpoint) {
 		t.Errorf("claim: %v, want ErrUnknownCheckpoint", err)
@@ -29,34 +30,30 @@ func TestClaimCheckpointNeverPullsOnMiss(t *testing.T) {
 }
 
 func TestClaimCheckpointHealPullsOnce(t *testing.T) {
-	id := "ck_00000000000000bb"
-	ckpt := types.Checkpoint{ID: id, Key: testKey, CreatedAt: time.Now()}
-	m, puller := newHealManager(t, ckpt, []string{"peer-a:7777"})
+	m, puller := newHealManager(t)
 
-	sb, err := m.ClaimCheckpointHeal(t.Context(), id, ClaimOptions{TTL: time.Hour, Metadata: types.Metadata{"role": "branch"}})
+	sb, err := m.ClaimCheckpointHeal(t.Context(), healID, ClaimOptions{TTL: time.Hour, Metadata: types.Metadata{"role": "branch"}})
 	if err != nil {
 		t.Fatalf("ClaimCheckpointHeal: %v", err)
 	}
-	if sb.FromCheckpoint != id || sb.Metadata["role"] != "branch" {
-		t.Errorf("FromCheckpoint = %q, metadata %v, want %q and role=branch", sb.FromCheckpoint, sb.Metadata, id)
+	if sb.FromCheckpoint != healID || sb.Metadata["role"] != "branch" {
+		t.Errorf("FromCheckpoint = %q, metadata %v, want %q and role=branch", sb.FromCheckpoint, sb.Metadata, healID)
 	}
 	if got := puller.count(); got != 1 {
 		t.Errorf("puller called %d times, want 1", got)
 	}
-	if !m.HasCheckpoint(t.Context(), id) {
-		t.Errorf("HasCheckpoint(%s) = false, want true after heal", id)
+	if !m.HasCheckpoint(t.Context(), healID) {
+		t.Errorf("HasCheckpoint(%s) = false, want true after heal", healID)
 	}
 }
 
 func TestClaimCheckpointAfterHealStaysLocal(t *testing.T) {
-	id := "ck_00000000000000bb"
-	ckpt := types.Checkpoint{ID: id, Key: testKey, CreatedAt: time.Now()}
-	m, puller := newHealManager(t, ckpt, []string{"peer-a:7777"})
+	m, puller := newHealManager(t)
 
-	if _, err := m.ClaimCheckpointHeal(t.Context(), id, ClaimOptions{TTL: time.Hour}); err != nil {
+	if _, err := m.ClaimCheckpointHeal(t.Context(), healID, ClaimOptions{TTL: time.Hour}); err != nil {
 		t.Fatalf("ClaimCheckpointHeal: %v", err)
 	}
-	if _, err := m.ClaimCheckpoint(t.Context(), id, ClaimOptions{TTL: time.Hour}); err != nil {
+	if _, err := m.ClaimCheckpoint(t.Context(), healID, ClaimOptions{TTL: time.Hour}); err != nil {
 		t.Fatalf("ClaimCheckpoint after heal: %v", err)
 	}
 	if got := puller.count(); got != 1 {
@@ -66,9 +63,7 @@ func TestClaimCheckpointAfterHealStaysLocal(t *testing.T) {
 
 func TestClaimCheckpointHealDedupsConcurrentPulls(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		id := "ck_00000000000000bb"
-		ckpt := types.Checkpoint{ID: id, Key: testKey, CreatedAt: time.Now()}
-		m, puller := newHealManager(t, ckpt, []string{"peer-a:7777"})
+		m, puller := newHealManager(t)
 		puller.release = make(chan struct{})
 
 		var wg sync.WaitGroup
@@ -76,7 +71,7 @@ func TestClaimCheckpointHealDedupsConcurrentPulls(t *testing.T) {
 		errs := make([]error, 2)
 		for i := range 2 {
 			wg.Go(func() {
-				sbs[i], errs[i] = m.ClaimCheckpointHeal(t.Context(), id, ClaimOptions{TTL: time.Hour})
+				sbs[i], errs[i] = m.ClaimCheckpointHeal(t.Context(), healID, ClaimOptions{TTL: time.Hour})
 			})
 		}
 		waitFor(t, func() bool { return puller.count() >= 1 })
@@ -89,8 +84,8 @@ func TestClaimCheckpointHealDedupsConcurrentPulls(t *testing.T) {
 				t.Errorf("goroutine %d: %v", i, err)
 				continue
 			}
-			if sbs[i] == nil || sbs[i].FromCheckpoint != id {
-				t.Errorf("goroutine %d: sandbox = %+v, want a valid branch of %s", i, sbs[i], id)
+			if sbs[i] == nil || sbs[i].FromCheckpoint != healID {
+				t.Errorf("goroutine %d: sandbox = %+v, want a valid branch of %s", i, sbs[i], healID)
 			}
 		}
 		if got := puller.count(); got != 1 {
@@ -101,19 +96,17 @@ func TestClaimCheckpointHealDedupsConcurrentPulls(t *testing.T) {
 
 func TestDeleteVetoesInFlightHeal(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		id := "ck_00000000000000bb"
-		ckpt := types.Checkpoint{ID: id, Key: testKey, CreatedAt: time.Now()}
-		m, puller := newHealManager(t, ckpt, []string{"peer-a:7777"})
+		m, puller := newHealManager(t)
 		puller.release = make(chan struct{})
 
 		healDone := make(chan error, 1)
 		go func() {
-			_, err := m.ClaimCheckpointHeal(t.Context(), id, ClaimOptions{TTL: time.Hour})
+			_, err := m.ClaimCheckpointHeal(t.Context(), healID, ClaimOptions{TTL: time.Hour})
 			healDone <- err
 		}()
 		waitFor(t, func() bool { return puller.count() >= 1 })
 
-		if err := m.DeleteCheckpoint(t.Context(), id, "", DeleteLocal); !errors.Is(err, ErrUnknownCheckpoint) {
+		if err := m.DeleteCheckpoint(t.Context(), healID, "", DeleteLocal); !errors.Is(err, ErrUnknownCheckpoint) {
 			t.Fatalf("delete while heal is staging: %v, want ErrUnknownCheckpoint (nothing local yet, and it must not block)", err)
 		}
 
@@ -121,7 +114,7 @@ func TestDeleteVetoesInFlightHeal(t *testing.T) {
 		if err := <-healDone; !errors.Is(err, ErrUnknownCheckpoint) {
 			t.Errorf("heal after a concurrent delete: %v, want ErrUnknownCheckpoint (vetoed, must not publish)", err)
 		}
-		if m.HasCheckpoint(t.Context(), id) {
+		if m.HasCheckpoint(t.Context(), healID) {
 			t.Error("checkpoint present after a delete vetoed the pending heal — resurrection")
 		}
 	})
@@ -129,27 +122,25 @@ func TestDeleteVetoesInFlightHeal(t *testing.T) {
 
 func TestDeleteOfAPublishedRecordVetoesInFlightHeal(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		id := "ck_00000000000000bb"
-		ckpt := types.Checkpoint{ID: id, Key: testKey, CreatedAt: time.Now()}
-		m, puller := newHealManager(t, ckpt, []string{"peer-a:7777"})
+		m, puller := newHealManager(t)
 		puller.release = make(chan struct{})
 
 		healDone := make(chan error, 1)
 		go func() {
-			_, err := m.ClaimCheckpointHeal(t.Context(), id, ClaimOptions{TTL: time.Hour})
+			_, err := m.ClaimCheckpointHeal(t.Context(), healID, ClaimOptions{TTL: time.Hour})
 			healDone <- err
 		}()
 		waitFor(t, func() bool { return puller.count() >= 1 })
-		staging, err := m.ckpts.Stage(id)
+		staging, err := m.ckpts.Stage(healID)
 		if err != nil {
 			t.Fatalf("stage: %v", err)
 		}
-		plantHealedRecord(t, staging, ckpt)
-		if err := m.ckpts.Publish(t.Context(), staging, id, ""); err != nil {
+		plantHealedRecord(t, staging, puller.ckpt)
+		if err := m.ckpts.Publish(t.Context(), staging, healID, ""); err != nil {
 			t.Fatalf("publish: %v", err)
 		}
 
-		if err := m.DeleteCheckpoint(t.Context(), id, "", DeleteLocal); err != nil {
+		if err := m.DeleteCheckpoint(t.Context(), healID, "", DeleteLocal); err != nil {
 			t.Fatalf("delete a published record while a heal is staging: %v", err)
 		}
 
@@ -157,7 +148,7 @@ func TestDeleteOfAPublishedRecordVetoesInFlightHeal(t *testing.T) {
 		if err := <-healDone; !errors.Is(err, ErrUnknownCheckpoint) {
 			t.Errorf("heal after a delete: %v, want ErrUnknownCheckpoint", err)
 		}
-		if m.HasCheckpoint(t.Context(), id) {
+		if m.HasCheckpoint(t.Context(), healID) {
 			t.Error("a heal republished a checkpoint deleted with 204")
 		}
 	})
@@ -165,15 +156,13 @@ func TestDeleteOfAPublishedRecordVetoesInFlightHeal(t *testing.T) {
 
 func TestClaimCheckpointHealCtxCancelReturnsPromptly(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		id := "ck_00000000000000bb"
-		ckpt := types.Checkpoint{ID: id, Key: testKey, CreatedAt: time.Now()}
-		m, puller := newHealManager(t, ckpt, []string{"peer-a:7777"})
+		m, puller := newHealManager(t)
 		puller.release = make(chan struct{})
 
 		ctx, cancel := context.WithCancel(t.Context())
 		done := make(chan error, 1)
 		go func() {
-			_, err := m.ClaimCheckpointHeal(ctx, id, ClaimOptions{TTL: time.Hour})
+			_, err := m.ClaimCheckpointHeal(ctx, healID, ClaimOptions{TTL: time.Hour})
 			done <- err
 		}()
 		waitFor(t, func() bool { return puller.count() >= 1 })
@@ -189,7 +178,7 @@ func TestClaimCheckpointHealCtxCancelReturnsPromptly(t *testing.T) {
 		}
 
 		close(puller.release)
-		waitFor(t, func() bool { return m.HasCheckpoint(t.Context(), id) })
+		waitFor(t, func() bool { return m.HasCheckpoint(t.Context(), healID) })
 	})
 }
 
@@ -221,31 +210,10 @@ func TestRecLockEvictionWaitsForAllHolders(t *testing.T) {
 	}
 }
 
-func TestRecLockEvictDeferredToLastHolder(t *testing.T) {
-	m := newTestManager(t, newFakeEngine())
-	const id = "ck_00000000000000aa"
-
-	l1 := m.recLock(id)
-	l2 := m.recLock(id)
-	if l2 != l1 {
-		t.Fatal("recLock diverged for the same id")
-	}
-	m.recDone(id)
-	if !hasRecLock(m, id) {
-		t.Fatal("entry evicted while an ordinary holder still references it")
-	}
-	m.recDone(id)
-	if hasRecLock(m, id) {
-		t.Error("recLocks entry leaked: a delete's deferred eviction was lost when a plain recDone dropped the last reference")
-	}
-}
-
 func TestFetchCheckpointNeverPulls(t *testing.T) {
-	id := "ck_00000000000000bb"
-	ckpt := types.Checkpoint{ID: id, Key: testKey, CreatedAt: time.Now()}
-	m, puller := newHealManager(t, ckpt, []string{"peer-a:7777"})
+	m, puller := newHealManager(t)
 
-	if _, _, _, err := m.FetchCheckpoint(t.Context(), id); !errors.Is(err, ErrUnknownCheckpoint) {
+	if _, _, _, err := m.FetchCheckpoint(t.Context(), healID); !errors.Is(err, ErrUnknownCheckpoint) {
 		t.Errorf("FetchCheckpoint: %v, want ErrUnknownCheckpoint", err)
 	}
 	if got := puller.count(); got != 0 {
@@ -253,7 +221,7 @@ func TestFetchCheckpointNeverPulls(t *testing.T) {
 	}
 }
 
-func TestHasCheckpoint(t *testing.T) {
+func TestHasCheckpointAnswersOnlyForABranchableRecord(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng, archivePool(3600))
 	src := mustClaim(t, m, testKey)
@@ -295,12 +263,10 @@ func TestClaimCheckpointQuotaDoesNotMaskMiss(t *testing.T) {
 }
 
 func TestClaimCheckpointHealQuotaBeforePull(t *testing.T) {
-	id := "ck_00000000000000bb"
-	ckpt := types.Checkpoint{ID: id, Key: testKey, CreatedAt: time.Now()}
-	m, puller := newHealManager(t, ckpt, []string{"peer-a:7777"})
+	m, puller := newHealManager(t)
 	m.draining = true
 
-	if _, err := m.ClaimCheckpointHeal(t.Context(), id, ClaimOptions{TTL: time.Hour}); !errors.Is(err, ErrQuota) {
+	if _, err := m.ClaimCheckpointHeal(t.Context(), healID, ClaimOptions{TTL: time.Hour}); !errors.Is(err, ErrQuota) {
 		t.Errorf("heal while draining: %v, want ErrQuota", err)
 	}
 	if got := puller.count(); got != 0 {
@@ -311,7 +277,8 @@ func TestClaimCheckpointHealQuotaBeforePull(t *testing.T) {
 func TestClaimCheckpointHealConcurrencyCapRejectsExtra(t *testing.T) {
 	m := newTestManager(t, newFakeEngine())
 	m.healSem = make(chan struct{}, 1)
-	puller := &blockingPuller{started: make(chan struct{}), release: make(chan struct{})}
+	started := make(chan struct{})
+	puller := &blockingPuller{markStarted: sync.OnceFunc(func() { close(started) }), release: make(chan struct{})}
 	m.healer = peer.NewHealer(func(string) []string { return []string{"peer-a:7777"} }, puller)
 
 	done := make(chan error, 1)
@@ -319,7 +286,7 @@ func TestClaimCheckpointHealConcurrencyCapRejectsExtra(t *testing.T) {
 		_, err := m.ClaimCheckpointHeal(t.Context(), "ck_00000000000000aa", ClaimOptions{TTL: time.Hour})
 		done <- err
 	}()
-	<-puller.started
+	<-started
 
 	if _, err := m.ClaimCheckpointHeal(t.Context(), "ck_00000000000000bb", ClaimOptions{TTL: time.Hour}); !errors.Is(err, ErrHealBusy) {
 		t.Errorf("second heal while one is in flight: %v, want ErrHealBusy", err)
@@ -333,8 +300,6 @@ func TestClaimCheckpointHealConcurrencyCapRejectsExtra(t *testing.T) {
 func TestValidateHealedCheckpoint(t *testing.T) {
 	const id = "ck_00000000000000aa"
 	valid := types.Checkpoint{ID: id, Key: testKey}
-	egress := testKey
-	egress.Net = types.NetEgress
 	tests := []struct {
 		name  string
 		plant func(t *testing.T, dir string)
@@ -349,7 +314,7 @@ func TestValidateHealedCheckpoint(t *testing.T) {
 		{"rejects an invalid key", func(t *testing.T, dir string) {
 			plantHealedRecord(t, dir, types.Checkpoint{ID: id, Key: types.PoolKey{Net: "bogus"}})
 		}, false},
-		{"rejects an egress key", func(t *testing.T, dir string) { plantHealedRecord(t, dir, types.Checkpoint{ID: id, Key: egress}) }, false},
+		{"rejects an egress key", func(t *testing.T, dir string) { plantHealedRecord(t, dir, types.Checkpoint{ID: id, Key: egKey}) }, false},
 		{"rejects a contentless export", func(t *testing.T, dir string) { plantExportDir(t, dir, "sub"); plantMeta(t, dir, valid) }, false},
 	}
 	for _, tt := range tests {
@@ -422,14 +387,6 @@ func TestDeleteCheckpointSharedStoreSkipsBroadcast(t *testing.T) {
 	}
 }
 
-func newHealManager(t *testing.T, ckpt types.Checkpoint, addrs []string) (*Manager, *healPuller) {
-	t.Helper()
-	m := newTestManager(t, newFakeEngine())
-	puller := &healPuller{ckpt: ckpt}
-	m.healer = peer.NewHealer(func(string) []string { return addrs }, puller)
-	return m, puller
-}
-
 type healPuller struct {
 	mu      sync.Mutex
 	calls   int
@@ -454,15 +411,22 @@ func (p *healPuller) count() int {
 }
 
 type blockingPuller struct {
-	started chan struct{}
-	release chan struct{}
-	once    sync.Once
+	markStarted func()
+	release     chan struct{}
 }
 
 func (p *blockingPuller) Pull(_ context.Context, _, id, dst string) error {
-	p.once.Do(func() { close(p.started) })
+	p.markStarted()
 	<-p.release
 	return writeHealedRecord(dst, types.Checkpoint{ID: id, Key: testKey, CreatedAt: time.Now()})
+}
+
+func newHealManager(t *testing.T) (*Manager, *healPuller) {
+	t.Helper()
+	m := newTestManager(t, newFakeEngine())
+	puller := &healPuller{ckpt: types.Checkpoint{ID: healID, Key: testKey, CreatedAt: time.Now()}}
+	m.healer = peer.NewHealer(func(string) []string { return []string{"peer-a:7777"} }, puller)
+	return m, puller
 }
 
 func plantHealedRecord(t *testing.T, dir string, ckpt types.Checkpoint) {

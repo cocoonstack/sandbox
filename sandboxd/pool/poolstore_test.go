@@ -242,7 +242,7 @@ func TestAPutTheCellCannotStoreChangesNothing(t *testing.T) {
 func TestBootPrefersTheCellSetOverPoolsJSON(t *testing.T) {
 	cached := poolset.Set{Pools: []config.PoolSpec{{PoolKey: apiKey, Warm: 3}}}
 	unfit := poolset.Set{Pools: []config.PoolSpec{{Template: "eg:24.04", Net: types.NetEgress, Size: types.SizeSmall, Warm: 1}}}
-	for name, tc := range map[string]struct {
+	for name, tt := range map[string]struct {
 		shared   *fakeShared
 		wantAPI  bool
 		version  int64
@@ -258,18 +258,18 @@ func TestBootPrefersTheCellSetOverPoolsJSON(t *testing.T) {
 			if err := m.poolStore.commit(m.poolStore.seq.Add(1), cached); err != nil {
 				t.Fatalf("seed pools.json: %v", err)
 			}
-			m.poolShared = tc.shared
+			m.poolShared = tt.shared
 			if err := m.adoptPools(t.Context()); err != nil {
 				t.Fatalf("adoptPools: %v", err)
 			}
-			if got := hasAPISet(m); got != tc.wantAPI {
-				t.Errorf("API set adopted = %v, want %v", got, tc.wantAPI)
+			if got := hasAPISet(m); got != tt.wantAPI {
+				t.Errorf("API set adopted = %v, want %v", got, tt.wantAPI)
 			}
-			if m.poolVersion != tc.version {
-				t.Errorf("applied version %d, want %d", m.poolVersion, tc.version)
+			if m.poolVersion != tt.version {
+				t.Errorf("applied version %d, want %d", m.poolVersion, tt.version)
 			}
-			if set, err := m.poolStore.load(); err != nil || (set.ConfigSeed == m.configSeedHash) != tc.recached {
-				t.Errorf("pools.json %+v %v, want recached=%v", set, err, tc.recached)
+			if set, err := m.poolStore.load(); err != nil || (set.ConfigSeed == m.configSeedHash) != tt.recached {
+				t.Errorf("pools.json %+v %v, want recached=%v", set, err, tt.recached)
 			}
 		})
 	}

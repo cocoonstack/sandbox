@@ -69,7 +69,7 @@ func TestRunStreamsStdin(t *testing.T) {
 	}
 }
 
-func TestRunContextCancel(t *testing.T) {
+func TestRunReturnsAtItsContextDeadline(t *testing.T) {
 	sb := testSandbox(t, newAgentServer(t, silkdtest.ServeConn))
 
 	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
@@ -213,8 +213,8 @@ func TestDialAgentRejectsControlChars(t *testing.T) {
 		{"sb\r\nInjected: 1", "tok"},
 		{"sb_1", "tok\r\nInjected: 1"},
 	} {
-		if _, err := c.dialAgent(t.Context(), c.addr, bad.id, bad.token); err == nil {
-			t.Errorf("dialAgent(%q, %q) succeeded, want control-character error", bad.id, bad.token)
+		if _, err := c.dialAgent(t.Context(), c.addr, bad.id, bad.token); err == nil || !strings.Contains(err.Error(), "control character") {
+			t.Errorf("dialAgent(%q, %q) = %v, want control-character error", bad.id, bad.token, err)
 		}
 	}
 }
@@ -277,7 +277,16 @@ func TestRenewRefusalLeavesTheDeadline(t *testing.T) {
 	}
 }
 
-func newAgentServer(t testing.TB, serve func(net.Conn)) *httptest.Server {
+type connHandler func(net.Conn)
+
+type onWrite func()
+
+func (f onWrite) Write(p []byte) (int, error) {
+	f()
+	return len(p), nil
+}
+
+func newAgentServer(t testing.TB, serve connHandler) *httptest.Server {
 	t.Helper()
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /v1/sandboxes/{id}/agent", func(w http.ResponseWriter, r *http.Request) {
@@ -310,11 +319,4 @@ func legacySandbox(t *testing.T, ts *httptest.Server) *Sandbox {
 	sb := testSandbox(t, ts)
 	sb.proto.Store(1)
 	return sb
-}
-
-type onWrite func()
-
-func (f onWrite) Write(p []byte) (int, error) {
-	f()
-	return len(p), nil
 }

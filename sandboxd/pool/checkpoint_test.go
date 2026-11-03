@@ -2,7 +2,6 @@ package pool
 
 import (
 	"context"
-	"encoding/json/v2"
 	"errors"
 	"os"
 	"path/filepath"
@@ -68,11 +67,7 @@ func TestCheckpointExportLetsADialReachTheRunningSource(t *testing.T) {
 		_, err := m.Checkpoint(context.WithoutCancel(t.Context()), src.ID, Cred{Token: src.Token}, "", "")
 		done <- err
 	}()
-	waitFor(t, func() bool {
-		eng.mu.Lock()
-		defer eng.mu.Unlock()
-		return len(eng.exports) == 1
-	})
+	waitFor(t, func() bool { return eng.exportCount() == 1 })
 	dialed := make(chan error, 1)
 	go func() {
 		_, _, release, err := m.WakeAgentSocket(t.Context(), src.ID, src.Token)
@@ -138,7 +133,7 @@ func TestCheckpointBranchTakesItsOwnMetadata(t *testing.T) {
 	}
 }
 
-func TestCheckpointValidation(t *testing.T) {
+func TestCheckpointRejectsABadTokenNameOrUnknownID(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
 	src := mustClaim(t, m, testKey)
@@ -191,10 +186,7 @@ func TestRetentionSweepsExpiredCheckpoints(t *testing.T) {
 		if err := os.MkdirAll(dir, 0o750); err != nil {
 			t.Fatalf("setup: %v", err)
 		}
-		meta, _ := json.Marshal(types.Checkpoint{ID: id, CreatedAt: time.Now().Add(-age)})
-		if err := os.WriteFile(filepath.Join(dir, "meta.json"), meta, 0o600); err != nil {
-			t.Fatalf("setup: %v", err)
-		}
+		plantMeta(t, dir, types.Checkpoint{ID: id, CreatedAt: time.Now().Add(-age)})
 	}
 	plant("ck_000000000000000a", 2*time.Hour)
 	plant("ck_000000000000000b", time.Minute)
@@ -228,11 +220,7 @@ func TestRunRefillsWhileTheRetentionSweepBlocks(t *testing.T) {
 	}()
 	<-stall.entered
 
-	waitFor(t, func() bool {
-		m.mu.Lock()
-		defer m.mu.Unlock()
-		return len(m.pools[testKey].warm) > 0
-	})
+	waitFor(t, func() bool { return warmLen(m, testKey) > 0 })
 	if got := eng.cloneCount(); got != 1 {
 		t.Errorf("clones=%d, want one warm VM spawned while the store listing is stuck", got)
 	}
@@ -261,25 +249,15 @@ func TestRunRefillsWhileTheGenerationSweepBlocks(t *testing.T) {
 		<-stall.entered
 
 		mustClaim(t, m, testKey)
-		waitFor(t, func() bool {
-			m.mu.Lock()
-			defer m.mu.Unlock()
-			return len(m.pools[testKey].warm) > 0
-		})
+		waitFor(t, func() bool { return warmLen(m, testKey) > 0 })
 	})
 }
 
 func TestCheckpointTenantIsolation(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
-	srcA, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{TTL: time.Hour, Tenant: "acme"})
-	if err != nil {
-		t.Fatalf("acme claim: %v", err)
-	}
-	srcB, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{TTL: time.Hour, Tenant: "beta"})
-	if err != nil {
-		t.Fatalf("beta claim: %v", err)
-	}
+	srcA := claimTenant(t, m, "acme")
+	srcB := claimTenant(t, m, "beta")
 	ckA, err := m.Checkpoint(t.Context(), srcA.ID, Cred{Token: srcA.Token}, "a-step", "acme")
 	if err != nil {
 		t.Fatalf("acme checkpoint: %v", err)

@@ -344,8 +344,8 @@ func testTakeOwned(t *testing.T, r archives.Registry) {
 			t.Errorf("%s moved to epoch %d, want it left at %d", id, got.Epoch, want)
 		}
 	}
-	if _, ok, _ := r.Get(ctx, "sb_none"); ok {
-		t.Error("take owned inserted a row")
+	if _, ok, getErr := r.Get(ctx, "sb_none"); ok || getErr != nil {
+		t.Errorf("take owned inserted a row: %v %v", ok, getErr)
 	}
 	if taken, err = r.TakeOwned(ctx, "a", nil); err != nil || len(taken) != 0 {
 		t.Errorf("take owned of no ids: %v %v, want none", taken, err)
@@ -466,8 +466,8 @@ func testReplace(t *testing.T, r archives.Registry) {
 	if _, err := r.Replace(ctx, absent, 7); !errors.Is(err, archives.ErrLost) {
 		t.Errorf("replace of an absent row at a held epoch: %v, want ErrLost", err)
 	}
-	if _, ok, _ := r.Get(ctx, "sb_none"); ok {
-		t.Error("a refused replace inserted a row")
+	if _, ok, err := r.Get(ctx, "sb_none"); ok || err != nil {
+		t.Errorf("a refused replace inserted a row: %v %v", ok, err)
 	}
 	first, err := r.Replace(ctx, record("sb_1", "a", time.Time{}), 0)
 	if err != nil || first <= 0 {

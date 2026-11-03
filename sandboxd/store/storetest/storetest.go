@@ -1,6 +1,4 @@
-// Package storetest is the backend contract: every store.Store
-// implementation must pass RunContract, so the pool sees identical
-// semantics regardless of what sits underneath.
+// Package storetest is the backend contract every store.Store implementation must pass.
 package storetest
 
 import (
@@ -20,10 +18,10 @@ func RunContract(t *testing.T, st store.Store) {
 	ctx := t.Context()
 	const id = "ck_00000000000000aa"
 
-	publishRecord(t, st, id, `{"id":"`+id+`"}`, "disk.img", "snapshot-bytes")
+	publishRecord(t, st, id, MetaJSON(id), "disk.img", "snapshot-bytes")
 
 	raw, err := st.ReadMeta(ctx, id)
-	if err != nil || string(raw) != `{"id":"`+id+`"}` {
+	if err != nil || string(raw) != MetaJSON(id) {
 		t.Fatalf("ReadMeta: %q, %v", raw, err)
 	}
 
@@ -31,7 +29,7 @@ func RunContract(t *testing.T, st store.Store) {
 	if err != nil {
 		t.Fatalf("Fetch: %v", err)
 	}
-	if string(meta) != `{"id":"`+id+`"}` {
+	if string(meta) != MetaJSON(id) {
 		t.Fatalf("Fetch meta: %q, want the published record", meta)
 	}
 	if digest != "" {
@@ -52,7 +50,7 @@ func RunContract(t *testing.T, st store.Store) {
 	if err != nil {
 		t.Fatalf("Metas: %v", err)
 	}
-	if !slices.ContainsFunc(metas, func(r store.Record) bool { return string(r.Meta) == `{"id":"`+id+`"}` }) || len(metas) != 1 {
+	if !slices.ContainsFunc(metas, func(r store.Record) bool { return string(r.Meta) == MetaJSON(id) }) || len(metas) != 1 {
 		t.Fatalf("Metas: %d records %q, want exactly the published one", len(metas), metas)
 	}
 
@@ -99,6 +97,7 @@ func RunContract(t *testing.T, st store.Store) {
 	runLabelsContract(t, st)
 }
 
+// PublishDigested prepares and commits a digested record in one call.
 func PublishDigested(ctx context.Context, st store.Store, staging, id string) (string, error) {
 	digest, commit, err := st.PrepareDigested(ctx, staging, id, "")
 	if err != nil {
@@ -108,6 +107,44 @@ func PublishDigested(ctx context.Context, st store.Store, staging, id string) (s
 		return "", err
 	}
 	return digest, nil
+}
+
+// MetaJSON is the bare record meta the contract and its callers publish.
+func MetaJSON(id string) string {
+	return `{"id":"` + id + `"}`
+}
+
+// StageRecord stages one export file and its meta, ready to publish.
+func StageRecord(t *testing.T, st store.Store, id, meta, file, content string) string {
+	t.Helper()
+	staging, err := st.Stage(id)
+	if err != nil {
+		t.Fatalf("Stage %s: %v", id, err)
+	}
+	writeExport(t, staging, file, content)
+	if err = os.WriteFile(filepath.Join(staging, store.MetaFile), []byte(meta), 0o600); err != nil {
+		t.Fatalf("write meta: %v", err)
+	}
+	return staging
+}
+
+// WriteSparse creates path at size with only writes allocated.
+func WriteSparse(t testing.TB, path string, size int64, writes map[int64][]byte) string {
+	t.Helper()
+	f, err := os.Create(path) //nolint:gosec // test path
+	if err != nil {
+		t.Fatalf("create %s: %v", path, err)
+	}
+	defer func() { _ = f.Close() }()
+	if err = f.Truncate(size); err != nil {
+		t.Fatalf("size %s: %v", path, err)
+	}
+	for off, data := range writes {
+		if _, err = f.WriteAt(data, off); err != nil {
+			t.Fatalf("write %s: %v", path, err)
+		}
+	}
+	return path
 }
 
 func runFetchFileContract(t *testing.T, st store.Store, id string) {
@@ -141,7 +178,7 @@ func runDigestContract(t *testing.T, st store.Store) {
 	}
 	writeExport(t, staging, "z.bin", "z")
 	writeExport(t, staging, "nested/a.bin", "a")
-	if err = os.WriteFile(filepath.Join(staging, store.MetaFile), []byte(`{"id":"`+id+`"}`), 0o600); err != nil {
+	if err = os.WriteFile(filepath.Join(staging, store.MetaFile), []byte(MetaJSON(id)), 0o600); err != nil {
 		t.Fatalf("write digested meta: %v", err)
 	}
 	digest, commit, err := st.PrepareDigested(ctx, staging, id, "")
@@ -200,7 +237,7 @@ func runLabelsContract(t *testing.T, st store.Store) {
 	t.Helper()
 	ctx := t.Context()
 	const id = "ck_00000000000000dd"
-	publishRecord(t, st, id, `{"id":"`+id+`"}`, "disk.img", "labeled")
+	publishRecord(t, st, id, MetaJSON(id), "disk.img", "labeled")
 	labelsOf := func() []byte {
 		t.Helper()
 		recs, metasErr := st.Metas(ctx)
@@ -271,7 +308,7 @@ func rejectNonRegularReplacement(t *testing.T, st store.Store, id, wantDigest st
 	if err != nil {
 		t.Fatalf("Fetch after rejected replacement: %v", err)
 	}
-	if string(meta) != `{"id":"`+id+`"}` || digest != wantDigest {
+	if string(meta) != MetaJSON(id) || digest != wantDigest {
 		t.Errorf("committed meta/digest after rejection = %q/%q, want original/%q", meta, digest, wantDigest)
 	}
 	content, err := os.ReadFile(filepath.Join(dir, "nested", "a.bin")) //nolint:gosec // test path
@@ -282,15 +319,8 @@ func rejectNonRegularReplacement(t *testing.T, st store.Store, id, wantDigest st
 
 func publishRecord(t *testing.T, st store.Store, id, meta, file, content string) {
 	t.Helper()
-	staging, err := st.Stage(id)
-	if err != nil {
-		t.Fatalf("Stage %s: %v", id, err)
-	}
-	writeExport(t, staging, file, content)
-	if err = os.WriteFile(filepath.Join(staging, store.MetaFile), []byte(meta), 0o600); err != nil {
-		t.Fatalf("write meta: %v", err)
-	}
-	if err = st.Publish(t.Context(), staging, id, ""); err != nil {
+	staging := StageRecord(t, st, id, meta, file, content)
+	if err := st.Publish(t.Context(), staging, id, ""); err != nil {
 		t.Fatalf("Publish %s: %v", id, err)
 	}
 }

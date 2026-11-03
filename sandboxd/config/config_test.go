@@ -14,10 +14,7 @@ import (
 
 func TestLoadAppliesDefaults(t *testing.T) {
 	path := writeConfig(t, `{"pools":[{"template":"rt:24.04","net":"none","size":"small"}]}`)
-	cfg, err := Load(path)
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
+	cfg := mustLoad(t, path)
 	if cfg.Listen == "" || cfg.DataDir == "" || cfg.CocoonBin == "" {
 		t.Errorf("defaults not applied: %+v", cfg)
 	}
@@ -42,10 +39,7 @@ func TestLoadAppliesDefaults(t *testing.T) {
 }
 
 func TestLoadReadsCaptureTrim(t *testing.T) {
-	cfg, err := Load(writeConfig(t, `{"pools":[{"template":"rt:24.04","capture_trim":true},{"template":"py:3.12"}]}`))
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
+	cfg := mustLoad(t, writeConfig(t, `{"pools":[{"template":"rt:24.04","capture_trim":true},{"template":"py:3.12"}]}`))
 	if !cfg.Pools[0].CaptureTrim || cfg.Pools[1].CaptureTrim {
 		t.Errorf("capture_trim %v/%v, want on for the pool that names it and off by default", cfg.Pools[0].CaptureTrim, cfg.Pools[1].CaptureTrim)
 	}
@@ -184,9 +178,9 @@ func TestLoadRejectsInvalid(t *testing.T) {
 func TestLoadMetaStore(t *testing.T) {
 	t.Setenv("SANDBOX_TEST_DSN", "postgres://sandboxd@db/sandboxd")
 	ms := `"meta_store":{"kind":"pg","dsn_env":"SANDBOX_TEST_DSN"}`
-	cfg, err := Load(writeConfig(t, `{"api_token":"r","pools":[],`+ms+`}`))
-	if err != nil || cfg.MetaStore.DSNEnv != "SANDBOX_TEST_DSN" || cfg.MetaStore.Cell != "" {
-		t.Fatalf("Load: %+v %v, want no cell unless one is set", cfg, err)
+	cfg := mustLoad(t, writeConfig(t, `{"api_token":"r","pools":[],`+ms+`}`))
+	if cfg.MetaStore.DSNEnv != "SANDBOX_TEST_DSN" || cfg.MetaStore.Cell != "" {
+		t.Fatalf("Load: %+v, want no cell unless one is set", cfg)
 	}
 	if _, err := Load(writeConfig(t, `{"pools":[],`+ms+`}`)); err == nil || !strings.Contains(err.Error(), "needs api_token") {
 		t.Errorf("meta_store without api_token: %v, want a refusal", err)
@@ -221,9 +215,9 @@ func TestLoadArchiveFailover(t *testing.T) {
 		}
 		return b + "}"
 	}
-	cfg, err := Load(writeConfig(t, body("")))
-	if err != nil || !cfg.ArchiveFailover || cfg.Mesh.ID() != "node1:7946" {
-		t.Fatalf("Load: %+v %v, want failover on with the bind as node id", cfg, err)
+	cfg := mustLoad(t, writeConfig(t, body("")))
+	if !cfg.ArchiveFailover || cfg.Mesh.ID() != "node1:7946" {
+		t.Fatalf("Load: %+v, want failover on with the bind as node id", cfg)
 	}
 	for name := range parts {
 		if _, err := Load(writeConfig(t, body(name))); err == nil || !strings.Contains(err.Error(), "archive_failover requires") {
@@ -244,9 +238,9 @@ func TestLoadReplicateSeconds(t *testing.T) {
 	body := func(on, pool string) string {
 		return `{"api_token":"r","advertise_addr":"node1:7777",` + on + `"pools":[` + pool + `]}`
 	}
-	cfg, err := Load(writeConfig(t, body(failover, `{"template":"rt:24.04","replicate_seconds":60}`)))
-	if err != nil || cfg.Pools[0].ReplicateSeconds != 60 {
-		t.Fatalf("Load: %+v %v, want replicate_seconds 60", cfg, err)
+	cfg := mustLoad(t, writeConfig(t, body(failover, `{"template":"rt:24.04","replicate_seconds":60}`)))
+	if cfg.Pools[0].ReplicateSeconds != 60 {
+		t.Fatalf("Load: %+v, want replicate_seconds 60", cfg)
 	}
 	for name, tt := range map[string]struct{ on, pool, want string }{
 		"no failover":  {"", `{"template":"rt:24.04","replicate_seconds":60}`, "requires archive_failover"},
@@ -267,10 +261,7 @@ func TestLoadEgressUpstream(t *testing.T) {
 	body := `{"egress_upstream":{"claim_env":"EGRESS_UPSTREAM","allow":["res.example","10.1.0.0/16"]},"egress_usage_bytes":true,
 		"api_token":"r","egress_classes":[{"name":"desk","egress":{},"egress_upstream_env":"SANDBOX_TEST_DC"}],
 		"pools":[{"template":"rt:24.04","egress_upstream_env":"SANDBOX_TEST_RES"}]}`
-	cfg, err := Load(writeConfig(t, body))
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
+	cfg := mustLoad(t, writeConfig(t, body))
 	if cfg.EgressUpstream.ClaimEnv != "EGRESS_UPSTREAM" || !cfg.EgressUsageBytes || cfg.Pools[0].EgressUpstreamEnv != "SANDBOX_TEST_RES" {
 		t.Errorf("loaded %+v / %+v", cfg.EgressUpstream, cfg.Pools[0])
 	}
@@ -292,10 +283,7 @@ func TestLoadAcceptsPreviewAdvertiseShapes(t *testing.T) {
 }
 
 func TestLoadReadsReader(t *testing.T) {
-	cfg, err := Load(writeConfig(t, `{"pools":[{"template":"rt:24.04","reader":true},{"template":"py:3.12"}]}`))
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
+	cfg := mustLoad(t, writeConfig(t, `{"pools":[{"template":"rt:24.04","reader":true},{"template":"py:3.12"}]}`))
 	if !cfg.Pools[0].Reader || cfg.Pools[1].Reader {
 		t.Errorf("reader %v/%v, want on for the pool that names it and off by default", cfg.Pools[0].Reader, cfg.Pools[1].Reader)
 	}
@@ -305,10 +293,7 @@ func TestLoadAcceptsVolumes(t *testing.T) {
 	path := writeConfig(t, `{"pools":[],"volume_roots":["/srv/models/"],"volumes":[
 		{"name":"imagenet","path":"/srv/datasets/imagenet.img"},
 		{"name":"weights-llama","path":"/srv/datasets/llama.img","directio":"on"}]}`)
-	cfg, err := Load(path)
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
+	cfg := mustLoad(t, path)
 	if len(cfg.Volumes) != 2 || cfg.Volumes[0].DirectIO != types.DirectIOOff ||
 		cfg.Volumes[1].DirectIO != types.DirectIOOn {
 		t.Errorf("volumes = %+v", cfg.Volumes)
@@ -321,10 +306,7 @@ func TestLoadAcceptsVolumes(t *testing.T) {
 func TestLoadAcceptsVolumeTenantAccessList(t *testing.T) {
 	path := writeConfig(t, `{"api_token":"root","pools":[],
 		"volumes":[{"name":"corpus","path":"/srv/datasets/corpus.img","tenants":["acme"]}]}`)
-	cfg, err := Load(path)
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
+	cfg := mustLoad(t, path)
 	if got := cfg.Volumes[0].Tenants; !slices.Equal(got, []string{"acme"}) {
 		t.Errorf("volume tenants = %v, want [acme]", got)
 	}
@@ -334,10 +316,7 @@ func TestLoadAcceptsEgressPolicy(t *testing.T) {
 	path := writeConfig(t, `{"secrets":[{"name":"gh","header":"Authorization","value_env":"GH_TOKEN"},{"name":"gw","header":"Authorization"}],
 		"pools":[{"template":"rt:24.04","net":"none","size":"small",
 			"egress":{"allow":[{"host":"api.github.com","methods":["GET"],"secret":"gh"},{"host":"*.googleapis.com","secret":"gw"}]}}]}`)
-	cfg, err := Load(path)
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
+	cfg := mustLoad(t, path)
 	pol := cfg.Pools[0].Egress
 	if pol == nil || len(pol.Allow) != 2 || pol.Allow[0].Secret != "gh" {
 		t.Errorf("egress policy %+v", pol)
@@ -411,10 +390,7 @@ func TestLoadDefaultsWarmOnlyWhenOmitted(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cfg, err := Load(writeConfig(t, `{"pools":[`+tt.pool+`]}`))
-			if err != nil {
-				t.Fatalf("Load: %v", err)
-			}
+			cfg := mustLoad(t, writeConfig(t, `{"pools":[`+tt.pool+`]}`))
 			if cfg.Pools[0].Warm != tt.want {
 				t.Errorf("warm %d, want %d", cfg.Pools[0].Warm, tt.want)
 			}
@@ -428,10 +404,7 @@ func TestLoadDefaultsWarmOnlyWhenOmitted(t *testing.T) {
 func TestLoadKeepsExplicitValues(t *testing.T) {
 	path := writeConfig(t, `{"listen":"0.0.0.0:9999","advertise_addr":"10.0.0.5:9999","max_fork_count":4,
 		"refill_concurrency":8,"no_direct_io":true,"bridges":["br0"],"pools":[{"template":"rt:24.04","net":"egress","size":"small","warm":3}]}`)
-	cfg, err := Load(path)
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
+	cfg := mustLoad(t, path)
 	if cfg.AdvertiseAddr != "10.0.0.5:9999" || cfg.MaxForkCount != 4 || cfg.RefillConcurrency != 8 || !cfg.NoDirectIO || cfg.Pools[0].Warm != 3 {
 		t.Errorf("explicit values overridden: %+v", cfg)
 	}
@@ -467,10 +440,7 @@ func TestLoadAcceptsGuardedEgressOnABridgesList(t *testing.T) {
 
 func TestLoadAcceptsAShardedNetworkList(t *testing.T) {
 	path := writeConfig(t, `{"networks":["cocoon-sbx0","cocoon-sbx1","cocoon-sbx2","cocoon-sbx3"],"pools":[]}`)
-	cfg, err := Load(path)
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
+	cfg := mustLoad(t, path)
 	if len(cfg.Networks) != 4 || !cfg.HasEgress() {
 		t.Errorf("Networks = %v, HasEgress = %v", cfg.Networks, cfg.HasEgress())
 	}
@@ -483,4 +453,13 @@ func writeConfig(t *testing.T, body string) string {
 		t.Fatalf("setup: %v", err)
 	}
 	return path
+}
+
+func mustLoad(t *testing.T, path string) *Config {
+	t.Helper()
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	return cfg
 }

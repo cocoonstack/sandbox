@@ -16,7 +16,7 @@ import (
 	"github.com/cocoonstack/sandbox/protocol/wire"
 )
 
-func TestGuestPortConnFramesBothWays(t *testing.T) {
+func TestGuestPortConnReadsDataUntilDone(t *testing.T) {
 	silk, gc := newTestGuestPortConn(t)
 
 	go func() {
@@ -35,14 +35,14 @@ func TestGuestPortConnFramesBothWays(t *testing.T) {
 }
 
 func TestGuestPortConnCutBeforeDoneIsUnexpectedEOF(t *testing.T) {
-	for name, tail := range map[string]string{"between frames": "", "mid frame": `{"type":"da`} {
+	for name, trailer := range map[string]string{"between frames": "", "mid frame": `{"type":"da`} {
 		t.Run(name, func(t *testing.T) {
 			silk, gc := newTestGuestPortConn(t)
 
 			go func() {
 				frame, _ := json.Marshal(map[string]string{"type": "data", "data": base64.StdEncoding.EncodeToString([]byte("partial"))}, json.Deterministic(true))
 				_, _ = silk.Write(append(frame, '\n'))
-				_, _ = silk.Write([]byte(tail))
+				_, _ = silk.Write([]byte(trailer))
 				_ = silk.Close()
 			}()
 			got := make([]byte, 64)
@@ -107,9 +107,10 @@ func TestGuestPortConnRoundTripsFixtures(t *testing.T) {
 
 	silk, gc := newTestGuestPortConn(t)
 
+	respData, respDone := fixture("resp_data.json"), fixture("resp_done.json")
 	go func() {
-		_, _ = silk.Write(fixture("resp_data.json"))
-		_, _ = silk.Write(fixture("resp_done.json"))
+		_, _ = silk.Write(respData)
+		_, _ = silk.Write(respDone)
 	}()
 	buf := make([]byte, 64)
 	n, err := gc.Read(buf)
@@ -123,7 +124,8 @@ func TestGuestPortConnRoundTripsFixtures(t *testing.T) {
 	client2, silk2 := net.Pipe()
 	t.Cleanup(func() { _ = client2.Close(); _ = silk2.Close() })
 	gc2 := newGuestPortConn(client2, bufio.NewReaderSize(client2, portReadBuf))
-	go func() { _, _ = silk2.Write(fixture("resp_error.json")) }()
+	respError := fixture("resp_error.json")
+	go func() { _, _ = silk2.Write(respError) }()
 	if _, err := gc2.Read(buf); err == nil || errors.Is(err, io.EOF) {
 		t.Errorf("fixture error frame: %v, want a typed error", err)
 	}
@@ -175,12 +177,12 @@ func TestGuestPortConnReadsSmallFramesThenBulkFrames(t *testing.T) {
 }
 
 func TestGuestPortConnRefusesAFrameOverMaxFrame(t *testing.T) {
-	for name, tail := range map[string]string{"unterminated": "", "terminated": "\n"} {
+	for name, trailer := range map[string]string{"unterminated": "", "terminated": "\n"} {
 		t.Run(name, func(t *testing.T) {
 			silk, gc := newTestGuestPortConn(t)
 
 			go func() {
-				_, _ = silk.Write(append(bytes.Repeat([]byte("a"), wire.MaxFrame+1), tail...))
+				_, _ = silk.Write(append(bytes.Repeat([]byte("a"), wire.MaxFrame+1), trailer...))
 				_ = silk.Close()
 			}()
 			if _, err := gc.Read(make([]byte, 64)); err == nil || !strings.Contains(err.Error(), "exceeds") {
@@ -198,6 +200,7 @@ func newTestGuestPortConn(t *testing.T) (net.Conn, *guestPortConn) {
 }
 
 func writeDataFrames(t *testing.T, silk net.Conn, chunks ...[]byte) {
+	t.Helper()
 	var stream []byte
 	for _, chunk := range chunks {
 		frame, err := wire.EncodeResponse(wire.DataResp{Data: chunk})

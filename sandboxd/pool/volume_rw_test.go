@@ -17,34 +17,34 @@ import (
 )
 
 func TestLiveWritableDetachRequiresCleanEvidence(t *testing.T) {
-	for _, tc := range []struct {
+	for _, tt := range []struct {
 		name    string
 		unclean bool
 	}{
 		{"clean unmount", false},
 		{"unclean unmount", true},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
+		t.Run(tt.name, func(t *testing.T) {
 			base := newFakeEngine()
 			catalog := liveCatalog(t)
 			m := newVolumeManager(t, base, catalog)
-			base.detachUnclean = tc.unclean
+			base.detachUnclean = tt.unclean
 			sb := mustClaim(t, m, testKey)
 			if _, err := m.SetVolumes(t.Context(), sb.ID, "", []types.Volume{{Name: "data", Mode: types.VolumeModeRW}}); err != nil {
-				t.Fatal(err)
+				t.Fatalf("SetVolumes: %v", err)
 			}
 			path := catalog[0].Path
 			if !volumeDirty(path) || !base.attachDirty["data"] {
 				t.Fatal("writer was attached before dirty marker")
 			}
 			if _, err := m.SetVolumes(t.Context(), sb.ID, "", []types.Volume{}); err != nil {
-				t.Fatal(err)
+				t.Fatalf("SetVolumes: %v", err)
 			}
-			if volumeDirty(path) != tc.unclean {
-				t.Fatalf("marker disagrees with clean evidence: unclean=%t dirty=%t", tc.unclean, volumeDirty(path))
+			if volumeDirty(path) != tt.unclean {
+				t.Fatalf("marker disagrees with clean evidence: unclean=%t dirty=%t", tt.unclean, volumeDirty(path))
 			}
 			_, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Volumes: []types.Volume{{Name: "data"}}})
-			if !tc.unclean && err != nil || tc.unclean && !errors.Is(err, ErrVolumeNeedsRecovery) {
+			if !tt.unclean && err != nil || tt.unclean && !errors.Is(err, ErrVolumeNeedsRecovery) {
 				t.Fatalf("reader admission after detach: %v", err)
 			}
 		})
@@ -57,7 +57,7 @@ func TestLiveWritableFailedHostDetachKeepsMarkerAndHold(t *testing.T) {
 	m := newVolumeManager(t, eng, catalog)
 	sb := mustClaim(t, m, testKey)
 	if _, err := m.SetVolumes(t.Context(), sb.ID, "", []types.Volume{{Name: "data", Mode: types.VolumeModeRW}}); err != nil {
-		t.Fatal(err)
+		t.Fatalf("SetVolumes: %v", err)
 	}
 	eng.detachVolumeErr = errors.New("host removal uncertain")
 	if _, err := m.SetVolumes(t.Context(), sb.ID, "", []types.Volume{}); err == nil {
@@ -72,7 +72,7 @@ func TestLiveWritableFailedHostDetachKeepsMarkerAndHold(t *testing.T) {
 	eng.detachVolumeErr = nil
 	eng.detachUnclean = true
 	if _, err := m.SetVolumes(t.Context(), sb.ID, "", []types.Volume{}); err != nil {
-		t.Fatal(err)
+		t.Fatalf("SetVolumes: %v", err)
 	}
 	if !volumeDirty(catalog[0].Path) {
 		t.Fatal("absent-device retry invented clean evidence")
@@ -93,7 +93,7 @@ func TestLiveWritableUncertainAdditionClearsOnlyAfterDetach(t *testing.T) {
 	}
 	eng.mountVolumeErr = nil
 	if _, err := m.SetVolumes(t.Context(), sb.ID, "", []types.Volume{}); err != nil {
-		t.Fatal(err)
+		t.Fatalf("SetVolumes: %v", err)
 	}
 	if volumeDirty(catalog[0].Path) || volumeHoldersOf(m, "data") != (volumeHolders{}) {
 		t.Fatal("uncertain addition cleanup retained marker or hold")
@@ -153,11 +153,11 @@ func TestReleaseKeepsMarkerAfterUncleanUnmount(t *testing.T) {
 	m := newVolumeManager(t, eng, []config.VolumeSpec{{Name: "scratch", Path: path, Writable: true}})
 	sb, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Volumes: []types.Volume{{Name: "scratch", Mode: types.VolumeModeRW}}})
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("ClaimProvision: %v", err)
 	}
 	eng.detachUnclean = true
 	if err := m.Release(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
-		t.Fatal(err)
+		t.Fatalf("Release: %v", err)
 	}
 	if !volumeDirty(path) {
 		t.Error("release cleared the marker after an unclean unmount")
@@ -712,20 +712,4 @@ func claimTwoWritableVolumes(t *testing.T) (*Manager, *fakeEngine, *types.Sandbo
 		t.Fatalf("ClaimProvision: %v", err)
 	}
 	return m, base, sb, paths
-}
-
-func newVolumeManagerAt(t *testing.T, eng *fakeEngine, dataDir string, volumes []config.VolumeSpec) *Manager {
-	t.Helper()
-	cfg := &config.Config{DataDir: dataDir, Volumes: volumes}
-	m, err := NewManager(t.Context(), cfg, eng, testSecrets(t), testBackends(t, cfg))
-	if err != nil {
-		t.Fatalf("setup manager: %v", err)
-	}
-	return m
-}
-
-func volumeHoldersOf(m *Manager, name string) volumeHolders {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.catalog.holders[name]
 }

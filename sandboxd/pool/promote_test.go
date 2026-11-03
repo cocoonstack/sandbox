@@ -30,7 +30,7 @@ func TestPromoteThenClaimClonesFromTemplate(t *testing.T) {
 	if len(eng.snapSaves) != 1 || !slices.Contains(eng.snapRemoves, eng.snapSaves[0]) {
 		t.Errorf("snapSaves=%v snapRemoves=%v, want one transient snapshot dropped", eng.snapSaves, eng.snapRemoves)
 	}
-	key := types.PoolKey{Template: "tpl:x", Net: parent.Key.Net, Size: parent.Key.Size}
+	key := tplKey("tpl:x")
 	if gotKey != key {
 		t.Errorf("returned key %+v, want %+v (the parent's axes)", gotKey, key)
 	}
@@ -42,7 +42,7 @@ func TestPromoteThenClaimClonesFromTemplate(t *testing.T) {
 		t.Fatalf("template export missing: %v", err)
 	}
 
-	child, err := claimAny(t.Context(), m, key, 0)
+	child, err := claimAny(t.Context(), m, key, ClaimOptions{})
 	if err != nil {
 		t.Fatalf("Claim promoted template: %v", err)
 	}
@@ -90,7 +90,7 @@ func TestRepromoteContentDigestTracksExportBytes(t *testing.T) {
 	if thirdDigest == firstDigest {
 		t.Errorf("changed export bytes kept digest %q", thirdDigest)
 	}
-	child, err := claimAny(t.Context(), m, thirdKey, 0)
+	child, err := claimAny(t.Context(), m, thirdKey, ClaimOptions{})
 	if err != nil {
 		t.Fatalf("claim latest generation: %v", err)
 	}
@@ -103,9 +103,7 @@ func TestPromoteHibernatedUsesWakeImage(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
 	parent := mustClaim(t, m, testKey)
-	if err := m.Hibernate(t.Context(), parent.ID, Cred{Token: parent.Token}); err != nil {
-		t.Fatalf("Hibernate: %v", err)
-	}
+	hibernateClaim(t, m, parent)
 
 	if _, _, err := m.Promote(t.Context(), parent.ID, Cred{Token: parent.Token}, "tpl:hib", ""); err != nil {
 		t.Fatalf("Promote: %v", err)
@@ -121,7 +119,7 @@ func TestPromoteHibernatedUsesWakeImage(t *testing.T) {
 	}
 }
 
-func TestPromoteValidations(t *testing.T) {
+func TestPromoteRejectsABadNameTokenOrPooledKeyBeforeASnapshot(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 0})
 	parent := mustClaim(t, m, testKey)
@@ -178,7 +176,7 @@ func TestTemplateDigestGuardReadsTheSharedRecord(t *testing.T) {
 	}
 }
 
-func TestDeleteTemplate(t *testing.T) {
+func TestDeleteTemplateRefusesPooledUnknownAndReplacedTemplates(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 0})
 	parent := mustClaim(t, m, testKey)
@@ -186,12 +184,12 @@ func TestDeleteTemplate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Promote: %v", err)
 	}
-	key := types.PoolKey{Template: "tpl:del", Net: testKey.Net, Size: testKey.Size}
+	key := tplKey("tpl:del")
 
 	if err := m.DeleteTemplate(t.Context(), testKey, "", ""); !errors.Is(err, ErrPooledTemplate) {
 		t.Errorf("pooled delete: %v, want ErrPooledTemplate", err)
 	}
-	if err := m.DeleteTemplate(t.Context(), types.PoolKey{Template: "nope", Net: testKey.Net, Size: testKey.Size}, "", ""); !errors.Is(err, ErrUnknownTemplate) {
+	if err := m.DeleteTemplate(t.Context(), tplKey("nope"), "", ""); !errors.Is(err, ErrUnknownTemplate) {
 		t.Errorf("unknown delete: %v, want ErrUnknownTemplate", err)
 	}
 	if err := m.DeleteTemplate(t.Context(), key, "", "sha256:observed-elsewhere"); !errors.Is(err, ErrTemplateReplaced) || !m.HasGolden(t.Context(), key, "") {
@@ -205,7 +203,7 @@ func TestDeleteTemplate(t *testing.T) {
 	}
 
 	before := len(eng.colds)
-	if _, err := claimAny(t.Context(), m, key, 0); err != nil {
+	if _, err := claimAny(t.Context(), m, key, ClaimOptions{}); err != nil {
 		t.Fatalf("Claim after delete: %v", err)
 	}
 	if len(eng.colds) != before+1 {
@@ -216,11 +214,11 @@ func TestDeleteTemplate(t *testing.T) {
 func TestTemplateRecordLockEvictsWithTheRecord(t *testing.T) {
 	m := newTestManager(t, newFakeEngine(), config.PoolSpec{PoolKey: testKey, Warm: 0})
 	parent := mustClaim(t, m, testKey)
-	key := types.PoolKey{Template: "tpl:evict", Net: testKey.Net, Size: testKey.Size}
+	key := tplKey("tpl:evict")
 	id := store.TemplateID(key.Hash())
 	base := lockCount(m)
 
-	if _, err := claimAny(t.Context(), m, key, 0); err != nil {
+	if _, err := claimAny(t.Context(), m, key, ClaimOptions{}); err != nil {
 		t.Fatalf("Claim of an unpromoted key: %v", err)
 	}
 	if hasRecLock(m, id) {
@@ -274,10 +272,7 @@ func TestResolveGoldenSkipsPromotedEgressTemplate(t *testing.T) {
 func TestTemplateTenantScopedDelete(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
-	parent, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{TTL: time.Hour, Tenant: "acme"})
-	if err != nil {
-		t.Fatalf("claim: %v", err)
-	}
+	parent := claimTenant(t, m, "acme")
 	key, _, err := m.Promote(t.Context(), parent.ID, Cred{Token: parent.Token}, "tpl:tenant", "acme")
 	if err != nil {
 		t.Fatalf("Promote: %v", err)
@@ -314,14 +309,11 @@ func TestPromoteFailsClosedOnMetaError(t *testing.T) {
 	}
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
-	a, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{TTL: time.Hour, Tenant: "acme"})
-	if err != nil {
-		t.Fatalf("claim: %v", err)
-	}
+	a := claimTenant(t, m, "acme")
 	if _, _, err := m.Promote(t.Context(), a.ID, Cred{Token: a.Token}, "shared:v1", "acme"); err != nil {
 		t.Fatalf("promote: %v", err)
 	}
-	key := types.PoolKey{Template: "shared:v1", Net: testKey.Net, Size: testKey.Size}
+	key := tplKey("shared:v1")
 	meta := filepath.Join(m.dataDir, "checkpoints", store.TemplateID(key.Hash()), store.MetaFile)
 	if err := os.Chmod(meta, 0o000); err != nil {
 		t.Fatalf("chmod: %v", err)
@@ -335,16 +327,15 @@ func TestPromoteFailsClosedOnMetaError(t *testing.T) {
 func TestPromoteRefusesCrossTenantOverwrite(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
-	claim := func(tenant string) *types.Sandbox { return claimTenant(t, m, tenant) }
-	a := claim("acme")
+	a := claimTenant(t, m, "acme")
 	if _, _, err := m.Promote(t.Context(), a.ID, Cred{Token: a.Token}, "shared:v1", "acme"); err != nil {
 		t.Fatalf("acme promote: %v", err)
 	}
-	b := claim("beta")
+	b := claimTenant(t, m, "beta")
 	if _, _, err := m.Promote(t.Context(), b.ID, Cred{Token: b.Token}, "shared:v1", "beta"); !errors.Is(err, ErrTemplateOwned) {
 		t.Errorf("beta overwrite: %v, want ErrTemplateOwned", err)
 	}
-	r := claim("")
+	r := claimTenant(t, m, "")
 	if _, _, err := m.Promote(t.Context(), r.ID, Cred{Token: r.Token}, "shared:v1", ""); err != nil {
 		t.Errorf("root replace: %v, want ok", err)
 	}
@@ -353,14 +344,13 @@ func TestPromoteRefusesCrossTenantOverwrite(t *testing.T) {
 func TestTemplateClaimIsTenantScoped(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
-	claim := func(tenant string) *types.Sandbox { return claimTenant(t, m, tenant) }
 
-	a := claim("acme")
+	a := claimTenant(t, m, "acme")
 	private, _, err := m.Promote(t.Context(), a.ID, Cred{Token: a.Token}, "acme-private", "acme")
 	if err != nil {
 		t.Fatalf("acme promote: %v", err)
 	}
-	r := claim("")
+	r := claimTenant(t, m, "")
 	shared, _, err := m.Promote(t.Context(), r.ID, Cred{Token: r.Token}, "ops-shared", "")
 	if err != nil {
 		t.Fatalf("root promote: %v", err)
@@ -369,7 +359,7 @@ func TestTemplateClaimIsTenantScoped(t *testing.T) {
 	if _, err := m.ClaimProvision(t.Context(), private, ClaimOptions{RequirePromoted: true, TTL: time.Hour, Tenant: "beta"}); !errors.Is(err, ErrUnknownTemplate) {
 		t.Errorf("beta claiming acme's template: %v, want ErrUnknownTemplate", err)
 	}
-	for _, tc := range []struct {
+	for _, tt := range []struct {
 		name   string
 		key    types.PoolKey
 		tenant string
@@ -378,8 +368,8 @@ func TestTemplateClaimIsTenantScoped(t *testing.T) {
 		{"root claims a tenant's", private, ""},
 		{"tenant claims a root template", shared, "beta"},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			sb, err := m.ClaimProvision(t.Context(), tc.key, ClaimOptions{RequirePromoted: true, TTL: time.Hour, Tenant: tc.tenant})
+		t.Run(tt.name, func(t *testing.T) {
+			sb, err := m.ClaimProvision(t.Context(), tt.key, ClaimOptions{RequirePromoted: true, TTL: time.Hour, Tenant: tt.tenant})
 			if err != nil {
 				t.Fatalf("claim: %v", err)
 			}
@@ -392,10 +382,7 @@ func TestTemplateClaimIsTenantScoped(t *testing.T) {
 
 func TestHasPromotedTemplateIsTenantScoped(t *testing.T) {
 	m := newTestManager(t, newFakeEngine())
-	a, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{TTL: time.Hour, Tenant: "acme"})
-	if err != nil {
-		t.Fatalf("claim: %v", err)
-	}
+	a := claimTenant(t, m, "acme")
 	key, _, err := m.Promote(t.Context(), a.ID, Cred{Token: a.Token}, "acme-private", "acme")
 	if err != nil {
 		t.Fatalf("promote: %v", err)
@@ -413,10 +400,7 @@ func TestHasPromotedTemplateIsTenantScoped(t *testing.T) {
 
 func TestTemplateHashesAreTenantScoped(t *testing.T) {
 	m := tenantManager(t, t.TempDir(), tenants.TenantSpec{Name: "acme", Token: "acme-tok"})
-	a, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{TTL: time.Hour, Tenant: "acme"})
-	if err != nil {
-		t.Fatalf("claim: %v", err)
-	}
+	a := claimTenant(t, m, "acme")
 	key, _, err := m.Promote(t.Context(), a.ID, Cred{Token: a.Token}, "acme-private", "acme")
 	if err != nil {
 		t.Fatalf("promote: %v", err)
@@ -475,7 +459,7 @@ func TestTemplatesListWhatTheNodeHoldsAcrossARestart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Promote tpl:b: %v", err)
 	}
-	oldID := store.TemplateID(types.PoolKey{Template: "tpl:old", Net: testKey.Net, Size: testKey.Size}.Hash())
+	oldID := store.TemplateID(tplKey("tpl:old").Hash())
 	staging := stageTemplate(t, m, oldID)
 	if err = os.WriteFile(filepath.Join(staging, store.MetaFile), []byte(`{"id":"`+oldID+`","created_at":"2026-01-01T00:00:00Z"}`), 0o600); err != nil {
 		t.Fatalf("write keyless meta: %v", err)
@@ -492,8 +476,8 @@ func TestTemplatesListWhatTheNodeHoldsAcrossARestart(t *testing.T) {
 		t.Fatalf("Templates before %+v, after restart %+v, want tpl:a and tpl:b", before, got)
 	}
 	for _, want := range []TemplateInfo{{Key: keyA, ContentDigest: digestA}, {Key: keyB, ContentDigest: digestB, Tenant: "acme"}} {
-		i := slices.IndexFunc(got, func(t TemplateInfo) bool { return t.Key == want.Key })
-		j := slices.IndexFunc(before, func(t TemplateInfo) bool { return t.Key == want.Key })
+		i := slices.IndexFunc(got, func(ti TemplateInfo) bool { return ti.Key == want.Key })
+		j := slices.IndexFunc(before, func(ti TemplateInfo) bool { return ti.Key == want.Key })
 		if i < 0 || j < 0 || got[i].ContentDigest != want.ContentDigest || got[i].Tenant != want.Tenant ||
 			got[i].CreatedAt.IsZero() || !got[i].CreatedAt.Equal(before[j].CreatedAt) ||
 			got[i].CPUCount != spec.CPU || got[i].MemTotalBytes != spec.MemoryBytes {
@@ -526,7 +510,7 @@ func TestTemplateLabelsPersistUntilTheTemplateIsRepromotedOrDeleted(t *testing.T
 	}
 	labelsOf := func(m *Manager) types.Metadata {
 		t.Helper()
-		i := slices.IndexFunc(m.Templates(), func(t TemplateInfo) bool { return t.Key == key })
+		i := slices.IndexFunc(m.Templates(), func(ti TemplateInfo) bool { return ti.Key == key })
 		if i < 0 {
 			t.Fatalf("tpl:l not listed")
 		}
@@ -549,7 +533,7 @@ func TestTemplateLabelsPersistUntilTheTemplateIsRepromotedOrDeleted(t *testing.T
 	if err = m.SetTemplateLabels(t.Context(), key, types.Metadata{"x": "y"}, "acme", ""); !errors.Is(err, ErrUnknownTemplate) {
 		t.Errorf("a tenant labeling the operator's template: %v, want ErrUnknownTemplate", err)
 	}
-	if err = m.SetTemplateLabels(t.Context(), types.PoolKey{Template: "tpl:none", Net: testKey.Net, Size: testKey.Size}, want, "", ""); !errors.Is(err, ErrUnknownTemplate) {
+	if err = m.SetTemplateLabels(t.Context(), tplKey("tpl:none"), want, "", ""); !errors.Is(err, ErrUnknownTemplate) {
 		t.Errorf("an unknown template: %v, want ErrUnknownTemplate", err)
 	}
 	if _, _, err = m.Promote(t.Context(), parent.ID, Cred{Token: parent.Token}, "tpl:l", ""); err != nil {
@@ -586,7 +570,7 @@ func TestRejectedLabelWritesLeakNoRecLock(t *testing.T) {
 	m := newTestManager(t, newFakeEngine())
 	base := lockCount(m)
 	for _, name := range []string{"tpl:absent", "tpl:gone", "tpl:never"} {
-		key := types.PoolKey{Template: name, Net: testKey.Net, Size: testKey.Size}
+		key := tplKey(name)
 		if err := m.SetTemplateLabels(t.Context(), key, types.Metadata{"a": "1"}, "", ""); !errors.Is(err, ErrUnknownTemplate) {
 			t.Errorf("labels on %q: %v, want ErrUnknownTemplate", name, err)
 		}
@@ -616,7 +600,7 @@ func TestClaimFromATemplateRunsBesideItsRepromote(t *testing.T) {
 	defer cancel()
 	claimed := make(chan error, 1)
 	go func() {
-		_, claimErr := claimAny(ctx, m, key, 0)
+		_, claimErr := claimAny(ctx, m, key, ClaimOptions{})
 		claimed <- claimErr
 	}()
 	select {
@@ -633,13 +617,16 @@ func TestClaimFromATemplateRunsBesideItsRepromote(t *testing.T) {
 	}
 }
 
-func claimTenant(t *testing.T, m *Manager, tenant string) *types.Sandbox {
-	t.Helper()
-	sb, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{TTL: time.Hour, Tenant: tenant})
-	if err != nil {
-		t.Fatalf("claim %q: %v", tenant, err)
-	}
-	return sb
+type slowPrepareStore struct {
+	store.Store
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (s *slowPrepareStore) PrepareDigested(ctx context.Context, staging, id, lineage string) (string, store.CommitFunc, error) {
+	close(s.entered)
+	<-s.release
+	return s.Store.PrepareDigested(ctx, staging, id, lineage)
 }
 
 func stageTemplate(t *testing.T, m *Manager, id string) string {
@@ -652,16 +639,4 @@ func stageTemplate(t *testing.T, m *Manager, id string) string {
 		t.Fatalf("mkdir export: %v", err)
 	}
 	return staging
-}
-
-type slowPrepareStore struct {
-	store.Store
-	entered chan struct{}
-	release chan struct{}
-}
-
-func (s *slowPrepareStore) PrepareDigested(ctx context.Context, staging, id, lineage string) (string, store.CommitFunc, error) {
-	close(s.entered)
-	<-s.release
-	return s.Store.PrepareDigested(ctx, staging, id, lineage)
 }

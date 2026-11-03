@@ -39,14 +39,21 @@ var (
 )
 
 func TestCloseRelaysRefusesLateRelays(t *testing.T) {
-	ts, srv := newRelayServer(t, func(c net.Conn) {
-		_, _ = io.Copy(io.Discard, c)
-	})
-	srv.CloseRelays()
-
-	conn := dialPortConn(t, ts, agentRequest)
-	if _, err := io.Copy(io.Discard, conn); err != nil {
-		t.Errorf("late relay not refused promptly: %v", err)
+	for _, tt := range []struct {
+		name    string
+		serve   func(*testing.T, guestFunc) (*httptest.Server, *Server)
+		request string
+	}{
+		{"agent", newRelayServer, agentRequest},
+		{"port", newPortServer, portRequest},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			ts, srv := tt.serve(t, func(c net.Conn) { _, _ = io.Copy(io.Discard, c) })
+			srv.CloseRelays()
+			if _, err := io.Copy(io.Discard, dialPortConn(t, ts, tt.request)); err != nil {
+				t.Errorf("late relay not refused promptly: %v", err)
+			}
+		})
 	}
 }
 
@@ -91,11 +98,11 @@ func TestRelayDeliversPipelinedBytes(t *testing.T) {
 	ts, _ := newRelayServer(t, func(c net.Conn) {
 		defer c.Close()
 		r := bufio.NewReader(c)
-		line, err := r.ReadString('\n')
+		frame, err := r.ReadString('\n')
 		if err != nil {
 			return
 		}
-		_, _ = io.WriteString(c, line)
+		_, _ = io.WriteString(c, frame)
 	})
 
 	r := bufio.NewReader(dialPortConn(t, ts, agentRequest+execFrame))
@@ -127,13 +134,8 @@ func TestRelayClientDisconnectClosesGuest(t *testing.T) {
 
 func TestRelayEndsWhenItsClaimIsFenced(t *testing.T) {
 	relayWithFence := func(fenced <-chan struct{}) (net.Conn, *bufio.Reader) {
-		dialer := &fakeDialer{dial: func(context.Context, string) (net.Conn, error) {
-			relayEnd, guestEnd := net.Pipe()
-			go func() { _, _ = io.Copy(io.Discard, guestEnd) }()
-			return relayEnd, nil
-		}}
-		srv := New("", "node:7777", &fakeManager{fenced: fenced}, dialer, nil, nil, nil, nil)
-		return upgradeConn(t, serveTestServer(t, srv))
+		guest := pipeDialer(func(c net.Conn) { _, _ = io.Copy(io.Discard, c) })
+		return upgradeConn(t, newTestServer(t, "", &fakeManager{fenced: fenced}, guest))
 	}
 	fenced := make(chan struct{})
 	conn, r := relayWithFence(fenced)
@@ -209,12 +211,12 @@ func TestAuditTeeRecordsRequestLines(t *testing.T) {
 		} {
 			t.Run(tt.name+"/"+rd.name, func(t *testing.T) {
 				var got []string
-				tee := &auditTee{r: rd.wrap(strings.NewReader(tt.in)), record: func(line []byte) {
-					if len(line) > pool.AuditLineCap {
+				tee := &auditTee{r: rd.wrap(strings.NewReader(tt.in)), record: func(frame []byte) {
+					if len(frame) > pool.AuditLineCap {
 						got = append(got, "oversized")
 						return
 					}
-					got = append(got, string(line))
+					got = append(got, string(frame))
 				}}
 				var out bytes.Buffer
 				if _, err := io.Copy(&out, tee); err != nil || out.String() != tt.in {
@@ -228,33 +230,22 @@ func TestAuditTeeRecordsRequestLines(t *testing.T) {
 	}
 }
 
-func TestCloseRelaysDrains(t *testing.T) {
+func TestCloseRelaysClosesAnOpenClientConn(t *testing.T) {
 	ts, srv := newRelayServer(t, func(c net.Conn) {
 		_, _ = io.Copy(io.Discard, c)
 	})
 
-	_, r := upgradeConn(t, ts)
-	closed := make(chan struct{})
-	go func() {
-		defer close(closed)
-		_, _ = io.Copy(io.Discard, r)
-	}()
+	conn, r := upgradeConn(t, ts)
 	srv.CloseRelays()
-	select {
-	case <-closed:
-	case <-time.After(3 * time.Second):
-		t.Fatal("client conn still open after CloseRelays")
+	_ = conn.SetReadDeadline(time.Now().Add(time.Second))
+	if _, err := io.Copy(io.Discard, r); err != nil {
+		t.Errorf("client after CloseRelays: %v, want EOF", err)
 	}
 }
 
-func newRelayServer(t *testing.T, guest func(net.Conn)) (*httptest.Server, *Server) {
+func newRelayServer(t *testing.T, guest guestFunc) (*httptest.Server, *Server) {
 	t.Helper()
-	dialer := &fakeDialer{dial: func(context.Context, string) (net.Conn, error) {
-		relayEnd, guestEnd := net.Pipe()
-		go guest(guestEnd)
-		return relayEnd, nil
-	}}
-	srv := New("", "node:7777", &fakeManager{}, dialer, nil, nil, nil, nil)
+	srv := New("", "node:7777", &fakeManager{}, pipeDialer(guest), nil, nil, nil, nil)
 	return serveTestServer(t, srv), srv
 }
 

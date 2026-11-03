@@ -10,20 +10,12 @@ import (
 )
 
 func TestDiskUnderReserveRefusesClaimsAndWakesUntilItRecovers(t *testing.T) {
-	eng := newFakeEngine()
-	dir := t.TempDir()
-	cfg := &config.Config{DataDir: dir, DiskReserve: &config.DiskReserve{Free: "1000P"}, Pools: []config.PoolSpec{{PoolKey: testKey}}}
-	m, err := NewManager(t.Context(), cfg, eng, testSecrets(t), testBackends(t, cfg))
-	if err != nil {
-		t.Fatalf("setup manager: %v", err)
-	}
+	m := diskReserveManager(t, "1000P")
 	sb := mustClaim(t, m, testKey)
-	if err := m.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
-		t.Fatalf("Hibernate: %v", err)
-	}
+	hibernateClaim(t, m, sb)
 
 	m.checkDisk(t.Context())
-	if _, err := claimAny(t.Context(), m, testKey, time.Hour); !errors.Is(err, ErrQuota) {
+	if _, err := claimAny(t.Context(), m, testKey, ClaimOptions{TTL: time.Hour}); !errors.Is(err, ErrQuota) {
 		t.Errorf("claim under the reserve: %v, want ErrQuota", err)
 	}
 	if err := m.Wake(t.Context(), sb.ID, Cred{Token: sb.Token}); !errors.Is(err, ErrQuota) {
@@ -33,23 +25,19 @@ func TestDiskUnderReserveRefusesClaimsAndWakesUntilItRecovers(t *testing.T) {
 		t.Errorf("gauges %+v, want at capacity for the disk", g)
 	}
 
-	next := &config.Config{DataDir: dir, DiskReserve: &config.DiskReserve{Free: "1K"}, Pools: []config.PoolSpec{{PoolKey: testKey}}}
+	next := &config.Config{DataDir: m.dataDir, DiskReserve: &config.DiskReserve{Free: "1K"}, Pools: []config.PoolSpec{{PoolKey: testKey}}}
 	m.view.Store(newConfigView(next, testSecrets(t)))
 	m.checkDisk(t.Context())
 	if err := m.Wake(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
 		t.Errorf("wake above the reserve: %v", err)
 	}
-	if _, err := claimAny(t.Context(), m, testKey, time.Hour); err != nil {
+	if _, err := claimAny(t.Context(), m, testKey, ClaimOptions{TTL: time.Hour}); err != nil {
 		t.Errorf("claim above the reserve: %v", err)
 	}
 }
 
 func TestDiskUnderReserveAdvertisesNoWarm(t *testing.T) {
-	cfg := &config.Config{DataDir: t.TempDir(), DiskReserve: &config.DiskReserve{Free: "1000P"}, Pools: []config.PoolSpec{{PoolKey: testKey}}}
-	m, err := NewManager(t.Context(), cfg, newFakeEngine(), testSecrets(t), testBackends(t, cfg))
-	if err != nil {
-		t.Fatalf("setup manager: %v", err)
-	}
+	m := diskReserveManager(t, "1000P")
 	p := m.pools[testKey]
 	p.warm = append(p.warm, &types.Sandbox{VMName: "sbx-warm", Key: testKey, VsockSocket: "/vsock/warm"})
 	if n := m.WarmCounts()[p.hash]; n != 1 {
@@ -62,12 +50,7 @@ func TestDiskUnderReserveAdvertisesNoWarm(t *testing.T) {
 }
 
 func TestDiskUnderReserveHoldsHibernatesAndCaptures(t *testing.T) {
-	dir := t.TempDir()
-	cfg := &config.Config{DataDir: dir, DiskReserve: &config.DiskReserve{Free: "1000P"}, Pools: []config.PoolSpec{{PoolKey: testKey}}}
-	m, err := NewManager(t.Context(), cfg, newFakeEngine(), testSecrets(t), testBackends(t, cfg))
-	if err != nil {
-		t.Fatalf("setup manager: %v", err)
-	}
+	m := diskReserveManager(t, "1000P")
 	sb := mustClaim(t, m, testKey)
 	cred := Cred{Token: sb.Token}
 	m.checkDisk(t.Context())
@@ -85,7 +68,7 @@ func TestDiskUnderReserveHoldsHibernatesAndCaptures(t *testing.T) {
 		t.Errorf("promote under the reserve: %v, want ErrQuota", err)
 	}
 
-	m.view.Store(newConfigView(&config.Config{DataDir: dir, DiskReserve: &config.DiskReserve{Free: "1K"}, Pools: []config.PoolSpec{{PoolKey: testKey}}}, testSecrets(t)))
+	m.view.Store(newConfigView(&config.Config{DataDir: m.dataDir, DiskReserve: &config.DiskReserve{Free: "1K"}, Pools: []config.PoolSpec{{PoolKey: testKey}}}, testSecrets(t)))
 	m.checkDisk(t.Context())
 	if err := m.Hibernate(t.Context(), sb.ID, cred); err != nil {
 		t.Errorf("hibernate above the reserve: %v", err)
@@ -93,17 +76,22 @@ func TestDiskUnderReserveHoldsHibernatesAndCaptures(t *testing.T) {
 }
 
 func TestAFailedStatfsKeepsTheDiskLowState(t *testing.T) {
-	dir := t.TempDir()
-	cfg := &config.Config{DataDir: dir, DiskReserve: &config.DiskReserve{Free: "1000P"}, Pools: []config.PoolSpec{{PoolKey: testKey}}}
+	m := diskReserveManager(t, "1000P")
+	m.checkDisk(t.Context())
+	unreadable := &config.Config{DataDir: m.dataDir, DiskReserve: &config.DiskReserve{Free: "1K", Dirs: []string{m.dataDir + "/missing"}}, Pools: []config.PoolSpec{{PoolKey: testKey}}}
+	m.view.Store(newConfigView(unreadable, testSecrets(t)))
+	m.checkDisk(t.Context())
+	if _, err := claimAny(t.Context(), m, testKey, ClaimOptions{TTL: time.Hour}); !errors.Is(err, ErrQuota) {
+		t.Errorf("claim after a failed statfs: %v, want ErrQuota while the disk was last seen low", err)
+	}
+}
+
+func diskReserveManager(t *testing.T, free string) *Manager {
+	t.Helper()
+	cfg := &config.Config{DataDir: t.TempDir(), DiskReserve: &config.DiskReserve{Free: free}, Pools: []config.PoolSpec{{PoolKey: testKey}}}
 	m, err := NewManager(t.Context(), cfg, newFakeEngine(), testSecrets(t), testBackends(t, cfg))
 	if err != nil {
 		t.Fatalf("setup manager: %v", err)
 	}
-	m.checkDisk(t.Context())
-	unreadable := &config.Config{DataDir: dir, DiskReserve: &config.DiskReserve{Free: "1K", Dirs: []string{dir + "/missing"}}, Pools: []config.PoolSpec{{PoolKey: testKey}}}
-	m.view.Store(newConfigView(unreadable, testSecrets(t)))
-	m.checkDisk(t.Context())
-	if _, err := claimAny(t.Context(), m, testKey, time.Hour); !errors.Is(err, ErrQuota) {
-		t.Errorf("claim after a failed statfs: %v, want ErrQuota while the disk was last seen low", err)
-	}
+	return m
 }

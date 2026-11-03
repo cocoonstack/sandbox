@@ -1,7 +1,6 @@
 package server
 
 import (
-	"bytes"
 	"context"
 	"encoding/json/v2"
 	"errors"
@@ -35,7 +34,7 @@ func TestOwnerAddrOmitsAnUnspecifiedHost(t *testing.T) {
 	}
 }
 
-func TestClaimHappyPath(t *testing.T) {
+func TestClaimFillsTheDefaultKeyAndTTL(t *testing.T) {
 	var gotKey types.PoolKey
 	var gotTTL time.Duration
 	mgr := &fakeManager{
@@ -49,19 +48,12 @@ func TestClaimHappyPath(t *testing.T) {
 	}
 	ts := newTestServer(t, "", mgr, nil)
 
-	resp, err := http.Post(ts.URL+"/v1/claim", "application/json",
-		strings.NewReader(`{"template":"rt:24.04","ttl_seconds":60}`))
-	if err != nil {
-		t.Fatalf("claim: %v", err)
-	}
+	resp := postJSON(t, ts.URL+"/v1/claim", "", `{"template":"rt:24.04","ttl_seconds":60}`)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status %d, want 200", resp.StatusCode)
 	}
-	var cr ClaimResponse
-	if err := json.UnmarshalRead(resp.Body, &cr); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
+	cr := decodeJSON[ClaimResponse](t, resp.Body)
 	if cr.ID != "sb_1" || cr.Token != "tok" || !cr.Deadline.Equal(time.Unix(42, 0)) {
 		t.Errorf("got %+v", cr)
 	}
@@ -85,10 +77,7 @@ func TestClaimCarriesAnEgressOptOut(t *testing.T) {
 	} {
 		mgr := &fakeManager{netRoute: types.NetRouteRelay}
 		ts := newTestServer(t, "", mgr, nil)
-		resp, err := http.Post(ts.URL+"/v1/claim", "application/json", strings.NewReader(body))
-		if err != nil {
-			t.Fatalf("claim: %v", err)
-		}
+		resp := postJSON(t, ts.URL+"/v1/claim", "", body)
 		var cr ClaimResponse
 		decodeErr := json.UnmarshalRead(resp.Body, &cr)
 		_ = resp.Body.Close()
@@ -121,13 +110,8 @@ func TestClaimErrorMapping(t *testing.T) {
 				},
 			}
 			ts := newTestServer(t, "", mgr, nil)
-			resp, err := http.Post(ts.URL+"/v1/claim", "application/json", strings.NewReader(tt.body))
-			if err != nil {
-				t.Fatalf("claim: %v", err)
-			}
-			defer resp.Body.Close()
-			if resp.StatusCode != tt.want {
-				t.Errorf("status %d, want %d", resp.StatusCode, tt.want)
+			if code := statusOf(t, http.MethodPost, ts.URL+"/v1/claim", "", tt.body); code != tt.want {
+				t.Errorf("status %d, want %d", code, tt.want)
 			}
 		})
 	}
@@ -136,10 +120,8 @@ func TestClaimErrorMapping(t *testing.T) {
 func TestHibernateVolumeCaptureMapsConflict(t *testing.T) {
 	mgr := &fakeManager{hibernate: func(string, string) error { return pool.ErrVolumeCapture }}
 	ts := newTestServer(t, "", mgr, nil)
-	resp := doReq(t, http.MethodPost, ts.URL+"/v1/sandboxes/sb_1/hibernate", "tok", "")
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusConflict {
-		t.Errorf("status %d, want 409", resp.StatusCode)
+	if code := statusOf(t, http.MethodPost, ts.URL+"/v1/sandboxes/sb_1/hibernate", "tok", ""); code != http.StatusConflict {
+		t.Errorf("status %d, want 409", code)
 	}
 }
 
@@ -160,10 +142,7 @@ func TestRenewGrantsAndReportsTheDeadline(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status %d, want 200", resp.StatusCode)
 	}
-	var got RenewResponse
-	if err := json.UnmarshalRead(resp.Body, &got); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
+	got := decodeJSON[RenewResponse](t, resp.Body)
 	if !got.Deadline.Equal(want) {
 		t.Errorf("deadline %v, want %v", got.Deadline, want)
 	}
@@ -181,10 +160,8 @@ func TestRenewWithoutABodyTakesTheNodeDefault(t *testing.T) {
 	}}
 	ts := newTestServer(t, "", mgr, nil)
 
-	resp := postJSON(t, ts.URL+"/v1/sandboxes/sb_1/renew", "tok", "")
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("status %d, want 200: an absent body is the documented way to ask for the default", resp.StatusCode)
+	if code := statusOf(t, http.MethodPost, ts.URL+"/v1/sandboxes/sb_1/renew", "tok", ""); code != http.StatusOK {
+		t.Fatalf("status %d, want 200: an absent body is the documented way to ask for the default", code)
 	}
 	if !called || gotTTL != 0 {
 		t.Errorf("manager saw ttl %v (called=%v), want the zero that means the node default", gotTTL, called)
@@ -199,10 +176,8 @@ func TestRenewMatchesBodyKeysCaseInsensitively(t *testing.T) {
 	}}
 	ts := newTestServer(t, "", mgr, nil)
 
-	resp := postJSON(t, ts.URL+"/v1/sandboxes/sb_1/renew", "tok", `{"TTL_Seconds":3600}`)
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK || gotTTL != time.Hour {
-		t.Errorf("status %d ttl %v, want 200 and 1h", resp.StatusCode, gotTTL)
+	if code := statusOf(t, http.MethodPost, ts.URL+"/v1/sandboxes/sb_1/renew", "tok", `{"TTL_Seconds":3600}`); code != http.StatusOK || gotTTL != time.Hour {
+		t.Errorf("status %d ttl %v, want 200 and 1h", code, gotTTL)
 	}
 }
 
@@ -214,10 +189,8 @@ func TestClaimMatchesBodyKeysCaseInsensitively(t *testing.T) {
 	}}
 	ts := newTestServer(t, "", mgr, nil)
 
-	resp := postJSON(t, ts.URL+"/v1/claim", "", `{"Template":"rt:24.04"}`)
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK || gotKey.Template != "rt:24.04" {
-		t.Errorf("status %d template %q, want 200 and rt:24.04", resp.StatusCode, gotKey.Template)
+	if code := statusOf(t, http.MethodPost, ts.URL+"/v1/claim", "", `{"Template":"rt:24.04"}`); code != http.StatusOK || gotKey.Template != "rt:24.04" {
+		t.Errorf("status %d template %q, want 200 and rt:24.04", code, gotKey.Template)
 	}
 }
 
@@ -227,10 +200,8 @@ func TestRenewRejectsWrongToken(t *testing.T) {
 	}}
 	ts := newTestServer(t, "", mgr, nil)
 
-	resp := postJSON(t, ts.URL+"/v1/sandboxes/sb_1/renew", "wrong", `{"ttl_seconds":60}`)
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusNotFound {
-		t.Errorf("status %d, want 404", resp.StatusCode)
+	if code := statusOf(t, http.MethodPost, ts.URL+"/v1/sandboxes/sb_1/renew", "wrong", `{"ttl_seconds":60}`); code != http.StatusNotFound {
+		t.Errorf("status %d, want 404", code)
 	}
 }
 
@@ -239,10 +210,7 @@ func TestInfoReportsTheNodeAdvertiseAddr(t *testing.T) {
 
 	resp := doReq(t, http.MethodGet, ts.URL+"/v1/info", "sekret", "")
 	defer resp.Body.Close()
-	var info InfoResponse
-	if err := json.UnmarshalRead(resp.Body, &info); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
+	info := decodeJSON[InfoResponse](t, resp.Body)
 	if info.AdvertiseAddr != "node:7777" {
 		t.Errorf("advertise_addr = %q, want node:7777", info.AdvertiseAddr)
 	}
@@ -274,9 +242,7 @@ func TestSetTemplateLabelsReplacesTheMapForRootOrTheTenant(t *testing.T) {
 	ts := newTenantTestServer(t, "root", []tenants.TenantSpec{{Name: "acme", Token: "acme-tok"}}, mgr, nil)
 	put := func(t *testing.T, query, token, body string) int {
 		t.Helper()
-		resp := doReq(t, http.MethodPut, ts.URL+"/v1/templates/labels?"+query, token, body)
-		_ = resp.Body.Close()
-		return resp.StatusCode
+		return statusOf(t, http.MethodPut, ts.URL+"/v1/templates/labels?"+query, token, body)
 	}
 
 	if code := put(t, "template=app:v1&size=medium", "root", `{"labels":{"v1":"sha256:aa"}}`); code != http.StatusNoContent {
@@ -358,9 +324,7 @@ func TestEnvPatchVerb(t *testing.T) {
 	ts := newTenantTestServer(t, "root", []tenants.TenantSpec{{Name: "acme", Token: "acme-tok"}}, mgr, nil)
 	call := func(t *testing.T, token, body string) int {
 		t.Helper()
-		resp := doReq(t, http.MethodPatch, ts.URL+"/v1/sandboxes/sb_1/env", token, body)
-		resp.Body.Close()
-		return resp.StatusCode
+		return statusOf(t, http.MethodPatch, ts.URL+"/v1/sandboxes/sb_1/env", token, body)
 	}
 
 	if code := call(t, "root", `{"env":{"GW":{"value":"Bearer a","guest":false},"OLD":null}}`); code != http.StatusNoContent {
@@ -405,10 +369,8 @@ func TestClaimRefusesAnAmbiguousHostOnlyFlag(t *testing.T) {
 		for _, path := range []string{"/v1/claim", "/v1/checkpoints/ck_00000000000000aa/claim"} {
 			mgr := &fakeManager{claimCheckpoint: func(string) (*types.Sandbox, error) { return &types.Sandbox{ID: "sb_1"}, nil }}
 			ts := newTestServer(t, "sekret", mgr, nil)
-			resp := postJSON(t, ts.URL+path, "sekret", `{"template":"rt:24.04","env":{"KEY":`+entry+`}}`)
-			resp.Body.Close()
-			if resp.StatusCode != http.StatusBadRequest || mgr.warmCalls+mgr.provisionCalls != 0 || mgr.gotEnv != nil {
-				t.Errorf("%s %s: %d, manager called %d times, want 400 and none", path, entry, resp.StatusCode, mgr.warmCalls+mgr.provisionCalls)
+			if code := statusOf(t, http.MethodPost, ts.URL+path, "sekret", `{"template":"rt:24.04","env":{"KEY":`+entry+`}}`); code != http.StatusBadRequest || mgr.warmCalls+mgr.provisionCalls != 0 || mgr.gotEnv != nil {
+				t.Errorf("%s %s: %d, manager called %d times, want 400 and none", path, entry, code, mgr.warmCalls+mgr.provisionCalls)
 			}
 		}
 	}
@@ -425,41 +387,29 @@ func TestAPITokenGuard(t *testing.T) {
 		want   int
 	}{
 		{"claim no token", "/v1/claim", http.MethodPost, "", http.StatusUnauthorized},
-		{"claim wrong token", "/v1/claim", http.MethodPost, "Bearer nope", http.StatusUnauthorized},
-		{"claim right token", "/v1/claim", http.MethodPost, "Bearer sekret", http.StatusOK},
+		{"claim wrong token", "/v1/claim", http.MethodPost, "nope", http.StatusUnauthorized},
+		{"claim right token", "/v1/claim", http.MethodPost, "sekret", http.StatusOK},
 		{"volumes no token", "/v1/volumes", http.MethodGet, "", http.StatusUnauthorized},
-		{"volumes right token", "/v1/volumes", http.MethodGet, "Bearer sekret", http.StatusOK},
+		{"volumes right token", "/v1/volumes", http.MethodGet, "sekret", http.StatusOK},
 		{"sandboxes no token", "/v1/sandboxes", http.MethodGet, "", http.StatusUnauthorized},
-		{"sandboxes right token", "/v1/sandboxes", http.MethodGet, "Bearer sekret", http.StatusOK},
+		{"sandboxes right token", "/v1/sandboxes", http.MethodGet, "sekret", http.StatusOK},
 		{"info no token", "/v1/info", http.MethodGet, "", http.StatusUnauthorized},
-		{"info right token", "/v1/info", http.MethodGet, "Bearer sekret", http.StatusOK},
+		{"info right token", "/v1/info", http.MethodGet, "sekret", http.StatusOK},
 		{"put pools no token", "/v1/pools", http.MethodPut, "", http.StatusUnauthorized},
-		{"put pools right token", "/v1/pools", http.MethodPut, "Bearer sekret", http.StatusOK},
+		{"put pools right token", "/v1/pools", http.MethodPut, "sekret", http.StatusOK},
 		{"healthz open", "/healthz", http.MethodGet, "", http.StatusOK},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var body io.Reader
+			var body string
 			switch tt.method {
 			case http.MethodPost:
-				body = strings.NewReader(`{"template":"rt:24.04"}`)
+				body = `{"template":"rt:24.04"}`
 			case http.MethodPut:
-				body = strings.NewReader(`{"pools":[{"template":"rt:24.04","net":"none","size":"small","warm":1}]}`)
+				body = `{"pools":[{"template":"rt:24.04","net":"none","size":"small","warm":1}]}`
 			}
-			req, err := http.NewRequestWithContext(t.Context(), tt.method, ts.URL+tt.path, body)
-			if err != nil {
-				t.Fatalf("request: %v", err)
-			}
-			if tt.auth != "" {
-				req.Header.Set("Authorization", tt.auth)
-			}
-			resp, err := http.DefaultClient.Do(req)
-			if err != nil {
-				t.Fatalf("do: %v", err)
-			}
-			defer resp.Body.Close()
-			if resp.StatusCode != tt.want {
-				t.Errorf("status %d, want %d", resp.StatusCode, tt.want)
+			if got := statusOf(t, tt.method, ts.URL+tt.path, tt.auth, body); got != tt.want {
+				t.Errorf("status %d, want %d", got, tt.want)
 			}
 		})
 	}
@@ -482,10 +432,7 @@ func TestVolumeCatalogReturnsScopedFleetProjection(t *testing.T) {
 	ts := newMeshTestServer(t, "root", mgr, placer, nil)
 	resp := doReq(t, http.MethodGet, ts.URL+"/v1/volumes", "acme-tok", "")
 	defer resp.Body.Close()
-	var got VolumeListResponse
-	if err := json.UnmarshalRead(resp.Body, &got); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
+	got := decodeJSON[VolumeListResponse](t, resp.Body)
 	want := []types.VolumeInfo{{
 		Name: "imagenet", DefaultMount: "/volumes/imagenet", SizeBytes: 42, Available: true, Nodes: 3,
 	}}
@@ -506,10 +453,7 @@ func TestSandboxIndexReturnsScopedAppliedVolumes(t *testing.T) {
 	ts := newTenantTestServer(t, "root", []tenants.TenantSpec{{Name: "acme", Token: "acme-tok"}}, mgr, nil)
 	resp := doReq(t, http.MethodGet, ts.URL+"/v1/sandboxes", "acme-tok", "")
 	defer resp.Body.Close()
-	var got SandboxListResponse
-	if err := json.UnmarshalRead(resp.Body, &got); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
+	got := decodeJSON[SandboxListResponse](t, resp.Body)
 	want := []types.Volume{{Name: "imagenet", Mount: "/datasets/imagenet"}}
 	if len(got.Sandboxes) != 1 || got.Sandboxes[0].ID != "sb_1" || !slices.Equal(got.Sandboxes[0].Volumes, want) {
 		t.Errorf("sandboxes = %+v, want sb_1 with %+v", got.Sandboxes, want)
@@ -524,10 +468,7 @@ func TestSandboxesReportClaimedAt(t *testing.T) {
 	ts := newTenantTestServer(t, "root", nil, mgr, nil)
 	resp := doReq(t, http.MethodGet, ts.URL+"/v1/sandboxes", "root", "")
 	defer resp.Body.Close()
-	var got SandboxListResponse
-	if err := json.UnmarshalRead(resp.Body, &got); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
+	got := decodeJSON[SandboxListResponse](t, resp.Body)
 	if len(got.Sandboxes) != 1 || !got.Sandboxes[0].ClaimedAt.Equal(claimed) {
 		t.Errorf("sandboxes = %+v, want claimed_at %v", got.Sandboxes, claimed)
 	}
@@ -545,22 +486,9 @@ func TestSandboxByIDCarriesTheTokenOnlyForTheRootCredential(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			ts := newTestServer(t, tt.apiToken, mgr, nil)
-			req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, ts.URL+"/v1/sandboxes/sb_1", nil)
-			if err != nil {
-				t.Fatalf("request: %v", err)
-			}
-			if tt.bearer != "" {
-				req.Header.Set("Authorization", "Bearer "+tt.bearer)
-			}
-			resp, err := http.DefaultClient.Do(req)
-			if err != nil {
-				t.Fatalf("sandbox: %v", err)
-			}
+			resp := doReq(t, http.MethodGet, ts.URL+"/v1/sandboxes/sb_1", tt.bearer, "")
 			defer resp.Body.Close()
-			var got pool.SandboxSummary
-			if err := json.UnmarshalRead(resp.Body, &got); err != nil {
-				t.Fatalf("decode: %v", err)
-			}
+			got := decodeJSON[pool.SandboxSummary](t, resp.Body)
 			if resp.StatusCode != http.StatusOK || got.Token != tt.want {
 				t.Errorf("status %d token %q, want 200 and %q", resp.StatusCode, got.Token, tt.want)
 			}
@@ -582,40 +510,27 @@ func TestSandboxesNarrowToAClaimRef(t *testing.T) {
 			return nil
 		}}
 		ts := newTenantTestServer(t, "root", nil, mgr, nil)
-		resp := doReq(t, http.MethodGet, ts.URL+tt.path, "root", "")
-		resp.Body.Close()
-		if resp.StatusCode != http.StatusOK || got != tt.want {
-			t.Errorf("%s: status %d, manager saw claim_ref %q, want %q", tt.path, resp.StatusCode, got, tt.want)
+		if code := statusOf(t, http.MethodGet, ts.URL+tt.path, "root", ""); code != http.StatusOK || got != tt.want {
+			t.Errorf("%s: status %d, manager saw claim_ref %q, want %q", tt.path, code, got, tt.want)
 		}
 	}
 }
 
 func TestTenantAuthMatrix(t *testing.T) {
 	mgr := &fakeManager{tenantClaims: map[string]int{"acme": 2}}
-	tenants := []tenants.TenantSpec{{Name: "acme", Token: "acme-tok"}, {Name: "beta", Token: "beta-tok"}}
-	ts := newTenantTestServer(t, "sekret", tenants, mgr, nil)
+	specs := []tenants.TenantSpec{{Name: "acme", Token: "acme-tok"}, {Name: "beta", Token: "beta-tok"}}
+	ts := newTenantTestServer(t, "sekret", specs, mgr, nil)
 
 	do := func(t *testing.T, method, path, auth string) *http.Response {
 		t.Helper()
-		var body io.Reader
+		var body string
 		switch {
 		case path == "/v1/claim":
-			body = strings.NewReader(`{"template":"rt:24.04"}`)
+			body = `{"template":"rt:24.04"}`
 		case method == http.MethodPut:
-			body = strings.NewReader(`{"pools":[]}`)
+			body = `{"pools":[]}`
 		}
-		req, err := http.NewRequestWithContext(t.Context(), method, ts.URL+path, body)
-		if err != nil {
-			t.Fatalf("request: %v", err)
-		}
-		if auth != "" {
-			req.Header.Set("Authorization", "Bearer "+auth)
-		}
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			t.Fatalf("do: %v", err)
-		}
-		return resp
+		return doReq(t, method, ts.URL+path, auth, body)
 	}
 
 	for _, tt := range []struct {
@@ -661,13 +576,7 @@ func TestMetricsTenantGauge(t *testing.T) {
 	mgr := &fakeManager{tenantClaims: map[string]int{"acme": 2, "beta": 0}}
 	ts := newTestServer(t, "", mgr, nil)
 
-	resp, err := http.Get(ts.URL + "/metrics")
-	if err != nil {
-		t.Fatalf("metrics: %v", err)
-	}
-	defer resp.Body.Close()
-	raw, _ := io.ReadAll(resp.Body)
-	body := string(raw)
+	body := scrapeMetrics(t, ts.URL)
 	if !strings.Contains(body, `sandboxd_tenant_claims{tenant="acme"} 2`) ||
 		!strings.Contains(body, `sandboxd_tenant_claims{tenant="beta"} 0`) {
 		t.Errorf("tenant gauge missing:\n%s", body)
@@ -680,13 +589,7 @@ func TestMetricsClaimHistogramIsCumulative(t *testing.T) {
 	latency.Nanos = 1_500_000
 	ts := newTestServer(t, "", &fakeManager{counters: pool.Counters{ClaimCloneLatency: latency}}, nil)
 
-	resp, err := http.Get(ts.URL + "/metrics")
-	if err != nil {
-		t.Fatalf("metrics: %v", err)
-	}
-	defer resp.Body.Close()
-	raw, _ := io.ReadAll(resp.Body)
-	body := string(raw)
+	body := scrapeMetrics(t, ts.URL)
 	for _, want := range []string{
 		"# TYPE sandboxd_claim_duration_seconds histogram\n",
 		`sandboxd_claim_duration_seconds_bucket{tier="clone",le="0.0005"} 2` + "\n",
@@ -733,18 +636,10 @@ func TestClaimRedirectsAreCounted(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			ts := newMeshTestServer(t, "", tt.mgr, tt.placer, nil)
-			resp, err := http.Post(ts.URL+"/v1/claim", "application/json", strings.NewReader(tt.body))
-			if err != nil {
-				t.Fatalf("claim: %v", err)
+			if code := statusOf(t, http.MethodPost, ts.URL+"/v1/claim", "", tt.body); code != http.StatusOK {
+				t.Fatalf("claim status %d, want 200", code)
 			}
-			_ = resp.Body.Close()
-			metrics, err := http.Get(ts.URL + "/metrics")
-			if err != nil {
-				t.Fatalf("metrics: %v", err)
-			}
-			defer metrics.Body.Close()
-			raw, _ := io.ReadAll(metrics.Body)
-			if want := "sandboxd_claim_redirects_total " + tt.want + "\n"; !strings.Contains(string(raw), want) {
+			if want, raw := "sandboxd_claim_redirects_total "+tt.want+"\n", scrapeMetrics(t, ts.URL); !strings.Contains(raw, want) {
 				t.Errorf("missing %q in:\n%s", want, raw)
 			}
 		})
@@ -753,10 +648,8 @@ func TestClaimRedirectsAreCounted(t *testing.T) {
 
 func TestPutPoolsRejectsUnknownFields(t *testing.T) {
 	ts := newTestServer(t, "sekret", &fakeManager{}, nil)
-	resp := doReq(t, http.MethodPut, ts.URL+"/v1/pools", "sekret", `{"pools":[{"template":"rt:24.04","net":"none","size":"small","egres":{"allow":[]}}]}`)
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusBadRequest {
-		t.Fatalf("status %d, want 400", resp.StatusCode)
+	if code := statusOf(t, http.MethodPut, ts.URL+"/v1/pools", "sekret", `{"pools":[{"template":"rt:24.04","net":"none","size":"small","egres":{"allow":[]}}]}`); code != http.StatusBadRequest {
+		t.Fatalf("status %d, want 400", code)
 	}
 }
 
@@ -773,9 +666,7 @@ func TestInstanceMetadataVerb(t *testing.T) {
 	ts := newTenantTestServer(t, "sekret", []tenants.TenantSpec{{Name: "acme", Token: "acme-tok"}}, mgr, nil)
 	put := func(token, id, body string) int {
 		t.Helper()
-		resp := doReq(t, http.MethodPut, ts.URL+"/v1/sandboxes/"+id+"/instance-metadata", token, body)
-		resp.Body.Close()
-		return resp.StatusCode
+		return statusOf(t, http.MethodPut, ts.URL+"/v1/sandboxes/"+id+"/instance-metadata", token, body)
 	}
 	valid := `{"region": "local", "tags": ["a", "b"]}`
 	if code := put("sekret", "sb_1", valid); code != http.StatusNoContent {
@@ -818,10 +709,7 @@ func TestDrainEndpoints(t *testing.T) {
 		{http.MethodDelete, false},
 	} {
 		resp := doReq(t, tt.method, ts.URL+"/v1/drain", "sekret", "")
-		var info InfoResponse
-		if err := json.UnmarshalRead(resp.Body, &info); err != nil {
-			t.Fatalf("decode: %v", err)
-		}
+		info := decodeJSON[InfoResponse](t, resp.Body)
 		resp.Body.Close()
 		if resp.StatusCode != http.StatusOK || info.Draining != tt.draining || mgr.draining != tt.draining {
 			t.Fatalf("%s: status=%d draining=%v mgr=%v, want 200/%v", tt.method, resp.StatusCode, info.Draining, mgr.draining, tt.draining)
@@ -853,16 +741,13 @@ func TestPutPoolsUpdatesTargets(t *testing.T) {
 	if len(got) != 1 || got[0].Template != "rt:24.04" || got[0].Warm != 2 {
 		t.Fatalf("SetPools got %+v", got)
 	}
-	var out InfoResponse
-	if err := json.UnmarshalRead(resp.Body, &out); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
+	out := decodeJSON[InfoResponse](t, resp.Body)
 	if len(out.Pools) != 1 || out.Pools[0].Target != 2 || !out.Pools[0].Golden {
 		t.Fatalf("info response %+v, want updated pool", out)
 	}
 }
 
-func TestSandboxVerbFlows(t *testing.T) {
+func TestReleaseAndHibernateMapEachOutcomeToItsStatus(t *testing.T) {
 	verbs := []struct {
 		name string
 		hook func(f *fakeManager, h sandboxVerbFunc)
@@ -876,10 +761,10 @@ func TestSandboxVerbFlows(t *testing.T) {
 		err  error
 		want int
 	}{
-		{"ok", "Bearer tok", nil, http.StatusNoContent},
-		{"unknown or bad token", "Bearer bad", pool.ErrUnknownSandbox, http.StatusNotFound},
+		{"ok", "tok", nil, http.StatusNoContent},
+		{"unknown or bad token", "bad", pool.ErrUnknownSandbox, http.StatusNotFound},
 		{"missing bearer", "", nil, http.StatusUnauthorized},
-		{"engine failure", "Bearer tok", errors.New("engine failed"), http.StatusInternalServerError},
+		{"engine failure", "tok", errors.New("engine failed"), http.StatusInternalServerError},
 	}
 	for _, v := range verbs {
 		for _, tt := range tests {
@@ -891,24 +776,11 @@ func TestSandboxVerbFlows(t *testing.T) {
 					return tt.err
 				})
 				ts := newTestServer(t, "", mgr, nil)
-				req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, ts.URL+"/v1/sandboxes/sb_1/"+v.name, nil)
-				if err != nil {
-					t.Fatalf("request: %v", err)
+				if got := statusOf(t, http.MethodPost, ts.URL+"/v1/sandboxes/sb_1/"+v.name, tt.auth, ""); got != tt.want {
+					t.Errorf("status %d, want %d", got, tt.want)
 				}
-				if tt.auth != "" {
-					req.Header.Set("Authorization", tt.auth)
-				}
-				resp, err := http.DefaultClient.Do(req)
-				if err != nil {
-					t.Fatalf("do: %v", err)
-				}
-				defer resp.Body.Close()
-				if resp.StatusCode != tt.want {
-					t.Errorf("status %d, want %d", resp.StatusCode, tt.want)
-				}
-				wantToken := strings.TrimPrefix(tt.auth, "Bearer ")
-				if tt.auth != "" && (gotID != "sb_1" || gotToken != wantToken) {
-					t.Errorf("%s called with (%q, %q), want (sb_1, %q)", v.name, gotID, gotToken, wantToken)
+				if tt.auth != "" && (gotID != "sb_1" || gotToken != tt.auth) {
+					t.Errorf("%s called with (%q, %q), want (sb_1, %q)", v.name, gotID, gotToken, tt.auth)
 				}
 			})
 		}
@@ -917,7 +789,7 @@ func TestSandboxVerbFlows(t *testing.T) {
 
 func TestReleaseOperatorToken(t *testing.T) {
 	const rootTok, sbTok = "sekret", "sb-secret"
-	tenants := []tenants.TenantSpec{{Name: "acme", Token: "acme-tok"}}
+	specs := []tenants.TenantSpec{{Name: "acme", Token: "acme-tok"}}
 	tests := []struct {
 		name        string
 		auth        string
@@ -927,10 +799,10 @@ func TestReleaseOperatorToken(t *testing.T) {
 		releaseErr  error
 		want        int
 	}{
-		{"root token releases by id", "Bearer " + rootTok, true, false, "", nil, http.StatusNoContent},
-		{"sandbox token releases self", "Bearer " + sbTok, false, true, sbTok, nil, http.StatusNoContent},
-		{"tenant token gets no operator release", "Bearer acme-tok", false, true, "acme-tok", pool.ErrUnknownSandbox, http.StatusNotFound},
-		{"wrong token 404s", "Bearer nope", false, true, "nope", pool.ErrUnknownSandbox, http.StatusNotFound},
+		{"root token releases by id", rootTok, true, false, "", nil, http.StatusNoContent},
+		{"sandbox token releases self", sbTok, false, true, sbTok, nil, http.StatusNoContent},
+		{"tenant token gets no operator release", "acme-tok", false, true, "acme-tok", pool.ErrUnknownSandbox, http.StatusNotFound},
+		{"wrong token 404s", "nope", false, true, "nope", pool.ErrUnknownSandbox, http.StatusNotFound},
 		{"missing bearer", "", false, false, "", nil, http.StatusUnauthorized},
 	}
 	for _, tt := range tests {
@@ -947,21 +819,9 @@ func TestReleaseOperatorToken(t *testing.T) {
 					return tt.releaseErr
 				},
 			}
-			ts := newTenantTestServer(t, rootTok, tenants, mgr, nil)
-			req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, ts.URL+"/v1/sandboxes/sb_1/release", nil)
-			if err != nil {
-				t.Fatalf("request: %v", err)
-			}
-			if tt.auth != "" {
-				req.Header.Set("Authorization", tt.auth)
-			}
-			resp, err := http.DefaultClient.Do(req)
-			if err != nil {
-				t.Fatalf("do: %v", err)
-			}
-			defer resp.Body.Close()
-			if resp.StatusCode != tt.want {
-				t.Errorf("status %d, want %d", resp.StatusCode, tt.want)
+			ts := newTenantTestServer(t, rootTok, specs, mgr, nil)
+			if got := statusOf(t, http.MethodPost, ts.URL+"/v1/sandboxes/sb_1/release", tt.auth, ""); got != tt.want {
+				t.Errorf("status %d, want %d", got, tt.want)
 			}
 			if opCalled != tt.wantOp {
 				t.Errorf("operator release called=%v, want %v", opCalled, tt.wantOp)
@@ -1027,7 +887,7 @@ func TestAgentErrorPaths(t *testing.T) {
 	}
 }
 
-func TestForkFlow(t *testing.T) {
+func TestForkAnswersOwnedChildrenAndMapsBadRequests(t *testing.T) {
 	mgr := &fakeManager{fork: func(_, token string, count int, ttl time.Duration) ([]*types.Sandbox, error) {
 		switch {
 		case token != "tok":
@@ -1048,29 +908,16 @@ func TestForkFlow(t *testing.T) {
 	ts := newTestServer(t, "sekret", mgr, nil)
 
 	post := func(t *testing.T, auth, body string) *http.Response {
-		req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, ts.URL+"/v1/sandboxes/sb_1/fork", strings.NewReader(body))
-		if err != nil {
-			t.Fatalf("request: %v", err)
-		}
-		if auth != "" {
-			req.Header.Set("Authorization", auth)
-		}
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			t.Fatalf("do: %v", err)
-		}
-		return resp
+		t.Helper()
+		return postJSON(t, ts.URL+"/v1/sandboxes/sb_1/fork", auth, body)
 	}
 
-	resp := post(t, "Bearer sekret", `{"token":"tok","count":2,"ttl_seconds":60}`)
+	resp := post(t, "sekret", `{"token":"tok","count":2,"ttl_seconds":60}`)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status %d, want 200", resp.StatusCode)
 	}
-	var fr ForkResponse
-	if err := json.UnmarshalRead(resp.Body, &fr); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
+	fr := decodeJSON[ForkResponse](t, resp.Body)
 	if len(fr.Children) != 2 || fr.Children[0].ID != "sb_c0" || fr.Children[0].OwnerAddr != "node:7777" {
 		t.Errorf("children %+v, want two with this node as owner", fr.Children)
 	}
@@ -1079,11 +926,11 @@ func TestForkFlow(t *testing.T) {
 		name, auth, body string
 		want             int
 	}{
-		{"bad count", "Bearer sekret", `{"token":"tok","count":17,"ttl_seconds":60}`, http.StatusBadRequest},
-		{"bad body", "Bearer sekret", `{oops`, http.StatusBadRequest},
-		{"unknown or bad sandbox token", "Bearer sekret", `{"token":"bad","count":1}`, http.StatusNotFound},
+		{"bad count", "sekret", `{"token":"tok","count":17,"ttl_seconds":60}`, http.StatusBadRequest},
+		{"bad body", "sekret", `{oops`, http.StatusBadRequest},
+		{"unknown or bad sandbox token", "sekret", `{"token":"bad","count":1}`, http.StatusNotFound},
 		{"missing api token", "", `{"token":"tok","count":1}`, http.StatusUnauthorized},
-		{"sandbox token is no api token", "Bearer tok", `{"token":"tok","count":1}`, http.StatusUnauthorized},
+		{"sandbox token is no api token", "tok", `{"token":"tok","count":1}`, http.StatusUnauthorized},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			resp := post(t, tt.auth, tt.body)
@@ -1095,7 +942,7 @@ func TestForkFlow(t *testing.T) {
 	}
 }
 
-func TestPromoteAndDeleteTemplateFlow(t *testing.T) {
+func TestPromoteAndDeleteTemplateMapEachOutcomeToItsStatus(t *testing.T) {
 	var gotKey types.PoolKey
 	mgr := &fakeManager{
 		promoteContentDigest: "sha256:promoted-digest",
@@ -1121,20 +968,12 @@ func TestPromoteAndDeleteTemplateFlow(t *testing.T) {
 	ts := newTestServer(t, "sekret", mgr, nil)
 
 	promote := func(t *testing.T, auth, body string) (int, PromoteResponse) {
-		req, _ := http.NewRequestWithContext(t.Context(), http.MethodPost, ts.URL+"/v1/sandboxes/sb_1/promote", strings.NewReader(body))
-		if auth != "" {
-			req.Header.Set("Authorization", auth)
-		}
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			t.Fatalf("do: %v", err)
-		}
+		t.Helper()
+		resp := postJSON(t, ts.URL+"/v1/sandboxes/sb_1/promote", auth, body)
 		defer resp.Body.Close()
 		var result PromoteResponse
 		if resp.StatusCode == http.StatusOK {
-			if err := json.UnmarshalRead(resp.Body, &result); err != nil {
-				t.Fatalf("decode promote response: %v", err)
-			}
+			result = decodeJSON[PromoteResponse](t, resp.Body)
 		}
 		return resp.StatusCode, result
 	}
@@ -1142,10 +981,10 @@ func TestPromoteAndDeleteTemplateFlow(t *testing.T) {
 		name, auth, body string
 		want             int
 	}{
-		{"ok", "Bearer sekret", `{"token":"tok","template":"tpl:x"}`, http.StatusOK},
-		{"bad name", "Bearer sekret", `{"token":"tok","template":"_bad"}`, http.StatusBadRequest},
-		{"pooled", "Bearer sekret", `{"token":"tok","template":"pooled"}`, http.StatusConflict},
-		{"bad sandbox token", "Bearer sekret", `{"token":"bad","template":"tpl:x"}`, http.StatusNotFound},
+		{"ok", "sekret", `{"token":"tok","template":"tpl:x"}`, http.StatusOK},
+		{"bad name", "sekret", `{"token":"tok","template":"_bad"}`, http.StatusBadRequest},
+		{"pooled", "sekret", `{"token":"tok","template":"pooled"}`, http.StatusConflict},
+		{"bad sandbox token", "sekret", `{"token":"bad","template":"tpl:x"}`, http.StatusNotFound},
 		{"missing api token", "", `{"token":"tok","template":"tpl:x"}`, http.StatusUnauthorized},
 	} {
 		t.Run("promote/"+tt.name, func(t *testing.T) {
@@ -1160,25 +999,16 @@ func TestPromoteAndDeleteTemplateFlow(t *testing.T) {
 	}
 
 	del := func(auth, query string) int {
-		req, _ := http.NewRequestWithContext(t.Context(), http.MethodDelete, ts.URL+"/v1/templates?"+query, nil)
-		if auth != "" {
-			req.Header.Set("Authorization", auth)
-		}
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			t.Fatalf("do: %v", err)
-		}
-		defer resp.Body.Close()
-		return resp.StatusCode
+		return statusOf(t, http.MethodDelete, ts.URL+"/v1/templates?"+query, auth, "")
 	}
-	if got := del("Bearer sekret", "template=tpl:x&net=none&size=small"); got != http.StatusNoContent {
+	if got := del("sekret", "template=tpl:x&net=none&size=small"); got != http.StatusNoContent {
 		t.Errorf("delete status %d, want 204", got)
 	}
 	want := types.PoolKey{Template: "tpl:x", Net: types.NetNone, Size: types.SizeSmall}
 	if gotKey != want {
 		t.Errorf("delete key %+v, want %+v (claim defaults applied)", gotKey, want)
 	}
-	if got := del("Bearer sekret", "template=nope"); got != http.StatusNotFound {
+	if got := del("sekret", "template=nope"); got != http.StatusNotFound {
 		t.Errorf("unknown delete status %d, want 404", got)
 	}
 
@@ -1187,7 +1017,7 @@ func TestPromoteAndDeleteTemplateFlow(t *testing.T) {
 	}
 }
 
-func TestCheckpointFlow(t *testing.T) {
+func TestCheckpointCanBeTakenClaimedAndDeleted(t *testing.T) {
 	mgr := &fakeManager{
 		checkpoint: func(id, token, name string) (types.Checkpoint, error) {
 			if id != "sb_1" || token != "tok" {
@@ -1245,9 +1075,7 @@ func TestDeleteCheckpointNoForwardQueryParam(t *testing.T) {
 	ts := newTestServer(t, "api", mgr, &fakeDialer{})
 
 	del := func(path string) int {
-		resp := doReq(t, http.MethodDelete, ts.URL+path, "api", "")
-		defer resp.Body.Close()
-		return resp.StatusCode
+		return statusOf(t, http.MethodDelete, ts.URL+path, "api", "")
 	}
 
 	if got := del("/v1/checkpoints/ck_0011223344556677"); got != http.StatusNoContent {
@@ -1298,16 +1126,10 @@ func TestClaimRedirectsOnWarmMiss(t *testing.T) {
 	}}
 	ts := newMeshTestServer(t, "", mgr, &fakePlacer{addrs: []string{"node-b:7777", "node-c:7777"}}, nil)
 
-	resp, err := http.Post(ts.URL+"/v1/claim", "application/json", strings.NewReader(`{"template":"rt:24.04"}`))
-	if err != nil {
-		t.Fatalf("claim: %v", err)
-	}
+	resp := postJSON(t, ts.URL+"/v1/claim", "", `{"template":"rt:24.04"}`)
 	defer resp.Body.Close()
-	var cr ClaimResponse
-	if err := json.UnmarshalRead(resp.Body, &cr); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	if len(cr.Redirect) != 2 || cr.Redirect[0] != "node-b:7777" {
+	cr := decodeJSON[ClaimResponse](t, resp.Body)
+	if !slices.Equal(cr.Redirect, []string{"node-b:7777", "node-c:7777"}) {
 		t.Errorf("redirect %v, want [node-b:7777 node-c:7777]", cr.Redirect)
 	}
 	if cr.ID != "" {
@@ -1338,15 +1160,9 @@ func TestClaimRedirectsToTemplateOwner(t *testing.T) {
 			}
 			ts := newMeshTestServer(t, "", mgr, &fakePlacer{owners: []string{"node-b:7777"}}, nil)
 
-			resp, err := http.Post(ts.URL+"/v1/claim", "application/json", strings.NewReader(`{"template":"tpl"}`))
-			if err != nil {
-				t.Fatalf("claim: %v", err)
-			}
+			resp := postJSON(t, ts.URL+"/v1/claim", "", `{"template":"tpl"}`)
 			defer resp.Body.Close()
-			var cr ClaimResponse
-			if err := json.UnmarshalRead(resp.Body, &cr); err != nil {
-				t.Fatalf("decode: %v", err)
-			}
+			cr := decodeJSON[ClaimResponse](t, resp.Body)
 			gotRedirect := len(cr.Redirect) > 0
 			if gotRedirect != tt.wantRedirect {
 				t.Errorf("redirect %v, want redirect=%v", cr.Redirect, tt.wantRedirect)
@@ -1362,17 +1178,13 @@ func TestATemplateDigestGatesDeleteAndLabelWrites(t *testing.T) {
 	mgr := &fakeManager{deleteGolden: func(types.PoolKey) error { return pool.ErrTemplateReplaced }}
 	ts := newTestServer(t, "sekret", mgr, nil)
 
-	resp := doReq(t, http.MethodDelete, ts.URL+"/v1/templates?template=ns%2Fapp&digest=sha256%3Aold", "sekret", "")
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusPreconditionFailed || mgr.gotDigest != "sha256:old" {
-		t.Errorf("status=%d digest=%q, want 412 for a replaced generation and the digest passed through", resp.StatusCode, mgr.gotDigest)
+	if code := statusOf(t, http.MethodDelete, ts.URL+"/v1/templates?template=ns%2Fapp&digest=sha256%3Aold", "sekret", ""); code != http.StatusPreconditionFailed || mgr.gotDigest != "sha256:old" {
+		t.Errorf("status=%d digest=%q, want 412 for a replaced generation and the digest passed through", code, mgr.gotDigest)
 	}
 
 	mgr.labelErr, mgr.gotDigest = pool.ErrTemplateReplaced, ""
-	resp = doReq(t, http.MethodPut, ts.URL+"/v1/templates/labels?template=ns%2Fapp&digest=sha256%3Aold", "sekret", `{"labels":{"v1":"sha256:new"}}`)
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusPreconditionFailed || mgr.gotDigest != "sha256:old" {
-		t.Errorf("labels: status=%d digest=%q, want 412 for a replaced generation and the digest passed through", resp.StatusCode, mgr.gotDigest)
+	if code := statusOf(t, http.MethodPut, ts.URL+"/v1/templates/labels?template=ns%2Fapp&digest=sha256%3Aold", "sekret", `{"labels":{"v1":"sha256:new"}}`); code != http.StatusPreconditionFailed || mgr.gotDigest != "sha256:old" {
+		t.Errorf("labels: status=%d digest=%q, want 412 for a replaced generation and the digest passed through", code, mgr.gotDigest)
 	}
 }
 
@@ -1380,51 +1192,23 @@ func TestDeleteTemplateRedirectsToOwner(t *testing.T) {
 	mgr := &fakeManager{}
 	ts := newMeshTestServer(t, "", mgr, &fakePlacer{owners: []string{"node-b:7777"}}, nil)
 
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodDelete, ts.URL+"/v1/templates?template=tpl", nil)
-	if err != nil {
-		t.Fatalf("request: %v", err)
-	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatalf("delete: %v", err)
-	}
+	resp := doReq(t, http.MethodDelete, ts.URL+"/v1/templates?template=tpl", "", "")
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status %d, want 200 redirect", resp.StatusCode)
 	}
-	var cr ClaimResponse
-	if decodeErr := json.UnmarshalRead(resp.Body, &cr); decodeErr != nil {
-		t.Fatalf("decode: %v", decodeErr)
-	}
+	cr := decodeJSON[ClaimResponse](t, resp.Body)
 	if len(cr.Redirect) != 1 || cr.Redirect[0] != "node-b:7777" {
 		t.Errorf("redirect %v, want [node-b:7777]", cr.Redirect)
 	}
 
-	req2, err := http.NewRequestWithContext(t.Context(), http.MethodDelete, ts.URL+"/v1/templates?template=tpl&no_redirect=1", nil)
-	if err != nil {
-		t.Fatalf("request: %v", err)
-	}
-	resp2, err := http.DefaultClient.Do(req2)
-	if err != nil {
-		t.Fatalf("delete: %v", err)
-	}
-	defer resp2.Body.Close()
-	if resp2.StatusCode != http.StatusNotFound {
-		t.Errorf("status %d, want 404 with no_redirect despite known owners", resp2.StatusCode)
+	if got := statusOf(t, http.MethodDelete, ts.URL+"/v1/templates?template=tpl&no_redirect=1", "", ""); got != http.StatusNotFound {
+		t.Errorf("status %d, want 404 with no_redirect despite known owners", got)
 	}
 
 	ts2 := newMeshTestServer(t, "", mgr, &fakePlacer{}, nil)
-	req3, err := http.NewRequestWithContext(t.Context(), http.MethodDelete, ts2.URL+"/v1/templates?template=tpl", nil)
-	if err != nil {
-		t.Fatalf("request: %v", err)
-	}
-	resp3, err := http.DefaultClient.Do(req3)
-	if err != nil {
-		t.Fatalf("delete: %v", err)
-	}
-	defer resp3.Body.Close()
-	if resp3.StatusCode != http.StatusNotFound {
-		t.Errorf("status %d, want 404 when no owner known", resp3.StatusCode)
+	if got := statusOf(t, http.MethodDelete, ts2.URL+"/v1/templates?template=tpl", "", ""); got != http.StatusNotFound {
+		t.Errorf("status %d, want 404 when no owner known", got)
 	}
 }
 
@@ -1434,13 +1218,9 @@ func TestClaimProvisionsWhenNoCandidate(t *testing.T) {
 	}}
 	ts := newMeshTestServer(t, "", mgr, &fakePlacer{addrs: nil}, nil)
 
-	resp, err := http.Post(ts.URL+"/v1/claim", "application/json", strings.NewReader(`{"template":"rt:24.04","claim_ref":"ns1/w1"}`))
-	if err != nil {
-		t.Fatalf("claim: %v", err)
-	}
+	resp := postJSON(t, ts.URL+"/v1/claim", "", `{"template":"rt:24.04","claim_ref":"ns1/w1"}`)
 	defer resp.Body.Close()
-	var cr ClaimResponse
-	_ = json.UnmarshalRead(resp.Body, &cr)
+	cr := decodeJSON[ClaimResponse](t, resp.Body)
 	if cr.ID != "sb_local" || len(cr.Redirect) != 0 {
 		t.Errorf("got %+v, want local sandbox", cr)
 	}
@@ -1486,15 +1266,9 @@ func TestVolumeClaimUsesWarmBeforeRedirectOrProvision(t *testing.T) {
 			}
 			ts := newMeshTestServer(t, "", mgr, placer, nil)
 
-			resp, err := http.Post(ts.URL+"/v1/claim", "application/json", strings.NewReader(`{"template":"rt:24.04","volumes":[{"name":"imagenet"}]}`))
-			if err != nil {
-				t.Fatalf("claim: %v", err)
-			}
+			resp := postJSON(t, ts.URL+"/v1/claim", "", `{"template":"rt:24.04","volumes":[{"name":"imagenet"}]}`)
 			defer resp.Body.Close()
-			var got ClaimResponse
-			if err := json.UnmarshalRead(resp.Body, &got); err != nil {
-				t.Fatalf("decode: %v", err)
-			}
+			got := decodeJSON[ClaimResponse](t, resp.Body)
 			if resp.StatusCode != http.StatusOK || got.ID != tt.wantID || !slices.Equal(got.Redirect, tt.wantRedirect) {
 				t.Errorf("status=%d response=%+v", resp.StatusCode, got)
 			}
@@ -1603,10 +1377,7 @@ func TestVolumeClaimUsesVolumeAndTemplateIntersections(t *testing.T) {
 			if err != nil {
 				t.Fatalf("encode request: %v", err)
 			}
-			resp, err := http.Post(ts.URL+"/v1/claim", "application/json", bytes.NewReader(body))
-			if err != nil {
-				t.Fatalf("claim: %v", err)
-			}
+			resp := postJSON(t, ts.URL+"/v1/claim", "", string(body))
 			defer resp.Body.Close()
 			if resp.StatusCode != tt.wantStatus {
 				t.Fatalf("status=%d, want %d", resp.StatusCode, tt.wantStatus)
@@ -1683,10 +1454,7 @@ func TestVolumeClaimKeepsPoolContentAgainstPeerTemplates(t *testing.T) {
 			if err != nil {
 				t.Fatalf("encode request: %v", err)
 			}
-			resp, err := http.Post(ts.URL+"/v1/claim", "application/json", bytes.NewReader(body))
-			if err != nil {
-				t.Fatalf("claim: %v", err)
-			}
+			resp := postJSON(t, ts.URL+"/v1/claim", "", string(body))
 			defer resp.Body.Close()
 
 			if resp.StatusCode != tt.wantStatus {
@@ -1712,7 +1480,7 @@ func TestVolumeClaimKeepsPoolContentAgainstPeerTemplates(t *testing.T) {
 
 func TestForeignTemplateGossipNeverEscalates(t *testing.T) {
 	hash := ClaimRequest{Template: "tpl"}.Key().Hash()
-	tenants := []tenants.TenantSpec{{Name: "acme", Token: "acme-tok"}, {Name: "beta", Token: "beta-tok"}}
+	specs := []tenants.TenantSpec{{Name: "acme", Token: "acme-tok"}, {Name: "beta", Token: "beta-tok"}}
 	for _, tt := range []struct {
 		name, token   string
 		volumes       []types.Volume
@@ -1732,7 +1500,7 @@ func TestForeignTemplateGossipNeverEscalates(t *testing.T) {
 				types.TemplateGossipHash(hash, "acme"):                  {"peer:7777"},
 				types.TemplateGossipHash(hash, types.TemplateRootScope): {"peer:7777"},
 			}}
-			mgr.tenants = tenants
+			mgr.tenants = specs
 			ts := newMeshTestServer(t, "root-tok", mgr, placer, nil)
 
 			body, _ := json.Marshal(ClaimRequest{Template: "tpl", Volumes: tt.volumes})
@@ -1741,10 +1509,7 @@ func TestForeignTemplateGossipNeverEscalates(t *testing.T) {
 			if resp.StatusCode != http.StatusOK {
 				t.Fatalf("status=%d, want 200", resp.StatusCode)
 			}
-			var cr ClaimResponse
-			if err := json.UnmarshalRead(resp.Body, &cr); err != nil {
-				t.Fatalf("decode: %v", err)
-			}
+			cr := decodeJSON[ClaimResponse](t, resp.Body)
 			if got := len(cr.Redirect) > 0; got != tt.wantRedirect {
 				t.Errorf("redirect=%v (%v), want %v", got, cr.Redirect, tt.wantRedirect)
 			}
@@ -1783,8 +1548,7 @@ func TestARequiredPromotedClaimIsNeverSentToAWarmPeer(t *testing.T) {
 			body, _ := json.Marshal(ClaimRequest{Template: "ns/app", RequirePromoted: tt.require})
 			resp := postJSON(t, ts.URL+"/v1/claim", "sekret", string(body))
 			defer resp.Body.Close()
-			var cr ClaimResponse
-			_ = json.UnmarshalRead(resp.Body, &cr)
+			cr := decodeJSON[ClaimResponse](t, resp.Body)
 			if resp.StatusCode != tt.wantStatus || (len(cr.Redirect) > 0) != tt.wantWarm {
 				t.Errorf("status=%d redirect=%v, want %d and warm redirect %v", resp.StatusCode, cr.Redirect, tt.wantStatus, tt.wantWarm)
 			}
@@ -1823,10 +1587,8 @@ func TestAPlainClaimRequiringAPromotedTemplateNeverColdBoots(t *testing.T) {
 			ts := newTestServer(t, "sekret", mgr, nil)
 
 			body, _ := json.Marshal(ClaimRequest{Template: "ns/app", RequirePromoted: tt.require})
-			resp := postJSON(t, ts.URL+"/v1/claim", "sekret", string(body))
-			defer resp.Body.Close()
-			if resp.StatusCode != tt.wantStatus || mgr.provisionCalls != 1 || mgr.gotRequirePromoted != tt.wantPromoted {
-				t.Errorf("status=%d provisions=%d promoted=%v, want %d 1 %v", resp.StatusCode, mgr.provisionCalls, mgr.gotRequirePromoted, tt.wantStatus, tt.wantPromoted)
+			if code := statusOf(t, http.MethodPost, ts.URL+"/v1/claim", "sekret", string(body)); code != tt.wantStatus || mgr.provisionCalls != 1 || mgr.gotRequirePromoted != tt.wantPromoted {
+				t.Errorf("status=%d provisions=%d promoted=%v, want %d 1 %v", code, mgr.provisionCalls, mgr.gotRequirePromoted, tt.wantStatus, tt.wantPromoted)
 			}
 			if tt.require && mgr.warmCalls != 0 {
 				t.Errorf("a claim requiring the promoted template asked the warm pool %d times", mgr.warmCalls)
@@ -1844,14 +1606,8 @@ func TestVolumeClaimValidatesKeyBeforePlacement(t *testing.T) {
 	placer := &fakePlacer{volumeOwners: []string{"volume:7777"}}
 	ts := newMeshTestServer(t, "", mgr, placer, nil)
 
-	resp, err := http.Post(ts.URL+"/v1/claim", "application/json", strings.NewReader(
-		`{"template":"rt:24.04","net":"egress","volumes":[{"name":"imagenet"}]}`))
-	if err != nil {
-		t.Fatalf("claim: %v", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusConflict {
-		t.Errorf("status=%d, want 409", resp.StatusCode)
+	if code := statusOf(t, http.MethodPost, ts.URL+"/v1/claim", "", `{"template":"rt:24.04","net":"egress","volumes":[{"name":"imagenet"}]}`); code != http.StatusConflict {
+		t.Errorf("status=%d, want 409", code)
 	}
 	if mgr.provisionCalls != 0 || placer.volumeOwnerCalls != 0 || placer.templateVolumeCalls != 0 {
 		t.Errorf("provision=%d volume owners=%d template-volume owners=%d",
@@ -1868,13 +1624,8 @@ func TestVolumeClaimQuotaDoesNotRedirect(t *testing.T) {
 	}
 	ts := newMeshTestServer(t, "", mgr, placer, nil)
 
-	resp, err := http.Post(ts.URL+"/v1/claim", "application/json", strings.NewReader(`{"template":"rt:24.04","volumes":[{"name":"imagenet"}]}`))
-	if err != nil {
-		t.Fatalf("claim: %v", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusTooManyRequests {
-		t.Errorf("status=%d, want 429", resp.StatusCode)
+	if code := statusOf(t, http.MethodPost, ts.URL+"/v1/claim", "", `{"template":"rt:24.04","volumes":[{"name":"imagenet"}]}`); code != http.StatusTooManyRequests {
+		t.Errorf("status=%d, want 429", code)
 	}
 	if mgr.warmCalls != 1 || mgr.provisionCalls != 0 ||
 		placer.candidateCalls != 0 || placer.volumeCandidateCalls != 0 {
@@ -1899,13 +1650,8 @@ func TestVolumeClaimRejectsShapeBeforePlacement(t *testing.T) {
 		placer := &fakePlacer{addrs: []string{"warm-peer:7777"}, owners: []string{"owner:7777"}}
 		ts := newMeshTestServer(t, "", mgr, placer, nil)
 
-		resp, err := http.Post(ts.URL+"/v1/claim", "application/json", strings.NewReader(body))
-		if err != nil {
-			t.Fatalf("claim: %v", err)
-		}
-		resp.Body.Close()
-		if resp.StatusCode != http.StatusBadRequest {
-			t.Errorf("body=%s status=%d, want 400", body, resp.StatusCode)
+		if code := statusOf(t, http.MethodPost, ts.URL+"/v1/claim", "", body); code != http.StatusBadRequest {
+			t.Errorf("body=%s status=%d, want 400", body, code)
 		}
 		if mgr.provisionCalls != 0 || placer.candidateCalls != 0 {
 			t.Errorf("body=%s provision=%d candidates=%d", body, mgr.provisionCalls, placer.candidateCalls)
@@ -1913,7 +1659,7 @@ func TestVolumeClaimRejectsShapeBeforePlacement(t *testing.T) {
 	}
 }
 
-func TestOwnerEndpoint(t *testing.T) {
+func TestOwnerEndpointNamesThisNodeForAGoodTokenAnd404sABadOne(t *testing.T) {
 	mgr := &fakeManager{socket: func(_, token string) (string, error) {
 		if token == "good" {
 			return "/v/sock", nil
@@ -1927,10 +1673,7 @@ func TestOwnerEndpoint(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status %d, want 200", resp.StatusCode)
 	}
-	var body struct {
-		OwnerAddr string `json:"owner_addr"`
-	}
-	_ = json.UnmarshalRead(resp.Body, &body)
+	body := decodeJSON[ownerReply](t, resp.Body)
 	if body.OwnerAddr != "node-a:7777" {
 		t.Errorf("owner %q, want node-a:7777", body.OwnerAddr)
 	}
@@ -1953,10 +1696,8 @@ func TestOwnerEndpointAnswers404ForAClaimItsFencedNodeCannotServe(t *testing.T) 
 	}
 	ts := newMeshTestServer(t, "", mgr, nil, nil)
 
-	resp := doReq(t, http.MethodGet, ts.URL+"/v1/sandboxes/sb_1/owner", "good", "")
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusNotFound || adopted {
-		t.Errorf("fenced owner: status %d adopt tried %v, want 404 without an adoption", resp.StatusCode, adopted)
+	if code := statusOf(t, http.MethodGet, ts.URL+"/v1/sandboxes/sb_1/owner", "good", ""); code != http.StatusNotFound || adopted {
+		t.Errorf("fenced owner: status %d adopt tried %v, want 404 without an adoption", code, adopted)
 	}
 }
 
@@ -1972,10 +1713,7 @@ func TestOwnerEndpointAdoptsAnArchivedClaimItDoesNotHold(t *testing.T) {
 
 	resp := doReq(t, http.MethodGet, ts.URL+"/v1/sandboxes/sb_1/owner", "good", "")
 	defer resp.Body.Close()
-	var body struct {
-		OwnerAddr string `json:"owner_addr"`
-	}
-	_ = json.UnmarshalRead(resp.Body, &body)
+	body := decodeJSON[ownerReply](t, resp.Body)
 	if resp.StatusCode != http.StatusOK || body.OwnerAddr != "node-a:7777" {
 		t.Errorf("adopted: status %d owner %q, want 200 node-a:7777", resp.StatusCode, body.OwnerAddr)
 	}
@@ -2001,19 +1739,12 @@ func TestPreviewHandlerZeroDeadlineMintsLiveToken(t *testing.T) {
 	ps := NewPreviewServer("secret", "node:7777", "node:7777", &fakePreviewMgr{})
 	ts := serveTestServer(t, New("", "node:7777", mgr, &fakeDialer{}, nil, nil, nil, ps))
 
-	resp, err := http.Post(ts.URL+"/v1/sandboxes/sb_1/preview", "application/json",
-		strings.NewReader(`{"token":"tok","port":8080,"ttl_seconds":300}`))
-	if err != nil {
-		t.Fatalf("preview: %v", err)
-	}
+	resp := postJSON(t, ts.URL+"/v1/sandboxes/sb_1/preview", "", `{"token":"tok","port":8080,"ttl_seconds":300}`)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status %d, want 200", resp.StatusCode)
 	}
-	var out PreviewResponse
-	if err := json.UnmarshalRead(resp.Body, &out); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
+	out := decodeJSON[PreviewResponse](t, resp.Body)
 	_, token, _ := strings.Cut(out.URL, "/p/")
 	token = strings.TrimSuffix(token, "/")
 	claims, ok := ps.verify(token)
@@ -2032,14 +1763,8 @@ func TestPreviewHandlerRejectsPortZero(t *testing.T) {
 	ps := NewPreviewServer("secret", "node:7777", "node:7777", &fakePreviewMgr{})
 	ts := serveTestServer(t, New("", "node:7777", mgr, &fakeDialer{}, nil, nil, nil, ps))
 
-	resp, err := http.Post(ts.URL+"/v1/sandboxes/sb_1/preview", "application/json",
-		strings.NewReader(`{"token":"tok","port":0}`))
-	if err != nil {
-		t.Fatalf("preview: %v", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusBadRequest {
-		t.Errorf("status %d, want 400 for port 0", resp.StatusCode)
+	if code := statusOf(t, http.MethodPost, ts.URL+"/v1/sandboxes/sb_1/preview", "", `{"token":"tok","port":0}`); code != http.StatusBadRequest {
+		t.Errorf("status %d, want 400 for port 0", code)
 	}
 }
 
@@ -2054,10 +1779,7 @@ func TestCheckpointClaimRedirectsToOwner(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200 carrying a redirect (the mesh redirect is a 200, not a 3xx)", resp.StatusCode)
 	}
-	var got ClaimResponse
-	if err := json.UnmarshalRead(resp.Body, &got); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
+	got := decodeJSON[ClaimResponse](t, resp.Body)
 	if len(got.Redirect) != 1 || got.Redirect[0] != "owner-a:7777" {
 		t.Errorf("redirect = %v, want [owner-a:7777]", got.Redirect)
 	}
@@ -2110,10 +1832,7 @@ func TestCheckpointClaimFallsBackToHealWhenNoOwner(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200", resp.StatusCode)
 	}
-	var got ClaimResponse
-	if err := json.UnmarshalRead(resp.Body, &got); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
+	got := decodeJSON[ClaimResponse](t, resp.Body)
 	if got.ID != "sb_healed" {
 		t.Errorf("id = %q, want the healed claim", got.ID)
 	}
@@ -2137,10 +1856,7 @@ func TestCheckpointClaimNoRedirectGoesStraightToHeal(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200", resp.StatusCode)
 	}
-	var got ClaimResponse
-	if err := json.UnmarshalRead(resp.Body, &got); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
+	got := decodeJSON[ClaimResponse](t, resp.Body)
 	if len(got.Redirect) != 0 {
 		t.Errorf("redirect = %v, want none: no_redirect must not bounce", got.Redirect)
 	}
@@ -2215,12 +1931,7 @@ func TestCheckpointBlobHeadUnauthenticated(t *testing.T) {
 	ts := newTestServer(t, "sekret", mgr, nil)
 
 	head := func(id string) int {
-		resp, err := http.Head(ts.URL + "/v1/checkpoints/" + id + "/blob")
-		if err != nil {
-			t.Fatalf("head: %v", err)
-		}
-		defer resp.Body.Close()
-		return resp.StatusCode
+		return statusOf(t, http.MethodHead, ts.URL+"/v1/checkpoints/"+id+"/blob", "", "")
 	}
 	if got := head(ckptID); got != http.StatusOK {
 		t.Errorf("HEAD present, no token: status = %d, want 200", got)
@@ -2229,13 +1940,8 @@ func TestCheckpointBlobHeadUnauthenticated(t *testing.T) {
 		t.Errorf("HEAD missing, no token: status = %d, want 404", got)
 	}
 
-	resp, err := http.Get(ts.URL + "/v1/checkpoints/" + ckptID + "/blob")
-	if err != nil {
-		t.Fatalf("get: %v", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusUnauthorized {
-		t.Errorf("GET no token: status = %d, want 401", resp.StatusCode)
+	if got := statusOf(t, http.MethodGet, ts.URL+"/v1/checkpoints/"+ckptID+"/blob", "", ""); got != http.StatusUnauthorized {
+		t.Errorf("GET no token: status = %d, want 401", got)
 	}
 }
 
@@ -2289,10 +1995,7 @@ func TestCheckpointClaimProbesRealPeerAndRedirects(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200 carrying a redirect", resp.StatusCode)
 	}
-	var got ClaimResponse
-	if err := json.UnmarshalRead(resp.Body, &got); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
+	got := decodeJSON[ClaimResponse](t, resp.Body)
 	if len(got.Redirect) != 1 || got.Redirect[0] != tsB.URL {
 		t.Errorf("redirect = %v, want [%s]", got.Redirect, tsB.URL)
 	}
@@ -2317,10 +2020,7 @@ func TestClaimRejectsMetadataOrClaimRefOverABound(t *testing.T) {
 		mgr := &fakeManager{}
 		ts := newTestServer(t, "sekret", mgr, nil)
 		resp := postJSON(t, ts.URL+tt.path, "sekret", tt.body)
-		var got struct {
-			Error string `json:"error"`
-		}
-		_ = json.UnmarshalRead(resp.Body, &got)
+		got := decodeJSON[errorReply](t, resp.Body)
 		resp.Body.Close()
 		if resp.StatusCode != http.StatusBadRequest || !strings.Contains(got.Error, tt.want) {
 			t.Errorf("%s: status %d error %q, want 400 naming %q", tt.path, resp.StatusCode, got.Error, tt.want)
@@ -2355,10 +2055,8 @@ func TestClaimThreadsMetadataAndEnv(t *testing.T) {
 		mgr := &fakeManager{}
 		tt.setup(mgr)
 		ts := newTestServer(t, "sekret", mgr, nil)
-		resp := postJSON(t, ts.URL+tt.path, "sekret", tt.body)
-		resp.Body.Close()
-		if resp.StatusCode != http.StatusOK || !maps.Equal(mgr.gotMetadata, want) || !mgr.gotEnv.Equal(wantEnv) {
-			t.Errorf("%s: status %d, manager saw metadata %v env %v, want 200 and %v %v", tt.name, resp.StatusCode, mgr.gotMetadata, mgr.gotEnv, want, wantEnv)
+		if code := statusOf(t, http.MethodPost, ts.URL+tt.path, "sekret", tt.body); code != http.StatusOK || !maps.Equal(mgr.gotMetadata, want) || !mgr.gotEnv.Equal(wantEnv) {
+			t.Errorf("%s: status %d, manager saw metadata %v env %v, want 200 and %v %v", tt.name, code, mgr.gotMetadata, mgr.gotEnv, want, wantEnv)
 		}
 	}
 }
@@ -2380,10 +2078,8 @@ func TestSandboxesFilterByMetadata(t *testing.T) {
 	} {
 		mgr := &fakeManager{}
 		ts := newTestServer(t, "root", mgr, nil)
-		resp := doReq(t, http.MethodGet, ts.URL+"/v1/sandboxes"+tt.query, "root", "")
-		resp.Body.Close()
-		if resp.StatusCode != tt.code || !maps.Equal(mgr.gotMetadata, tt.want) {
-			t.Errorf("%q: status %d, manager saw %v, want %d and %v", tt.query, resp.StatusCode, mgr.gotMetadata, tt.code, tt.want)
+		if code := statusOf(t, http.MethodGet, ts.URL+"/v1/sandboxes"+tt.query, "root", ""); code != tt.code || !maps.Equal(mgr.gotMetadata, tt.want) {
+			t.Errorf("%q: status %d, manager saw %v, want %d and %v", tt.query, code, mgr.gotMetadata, tt.code, tt.want)
 		}
 	}
 }
@@ -2410,20 +2106,15 @@ func TestExpireActionThreadsThroughEveryDecoder(t *testing.T) {
 		mgr := &fakeManager{}
 		tt.setup(mgr)
 		ts := newTestServer(t, "sekret", mgr, nil)
-		resp := postJSON(t, ts.URL+tt.path, "sekret", tt.body)
-		resp.Body.Close()
-		if resp.StatusCode != http.StatusOK || mgr.gotOnExpire != types.ExpireArchive {
-			t.Errorf("%s: status %d, manager saw on_expire %q, want 200 and archive", tt.name, resp.StatusCode, mgr.gotOnExpire)
+		if code := statusOf(t, http.MethodPost, ts.URL+tt.path, "sekret", tt.body); code != http.StatusOK || mgr.gotOnExpire != types.ExpireArchive {
+			t.Errorf("%s: status %d, manager saw on_expire %q, want 200 and archive", tt.name, code, mgr.gotOnExpire)
 		}
 
 		mgr = &fakeManager{}
 		tt.setup(mgr)
 		ts = newTestServer(t, "sekret", mgr, nil)
-		resp = postJSON(t, ts.URL+tt.path, "sekret", strings.Replace(tt.body, `"archive"`, `"pause"`, 1))
-		var got struct {
-			Error string `json:"error"`
-		}
-		_ = json.UnmarshalRead(resp.Body, &got)
+		resp := postJSON(t, ts.URL+tt.path, "sekret", strings.Replace(tt.body, `"archive"`, `"pause"`, 1))
+		got := decodeJSON[errorReply](t, resp.Body)
 		resp.Body.Close()
 		if resp.StatusCode != http.StatusBadRequest || !strings.Contains(got.Error, "on_expire") {
 			t.Errorf("%s with on_expire pause: status %d error %q, want 400 naming on_expire", tt.name, resp.StatusCode, got.Error)
@@ -2431,106 +2122,12 @@ func TestExpireActionThreadsThroughEveryDecoder(t *testing.T) {
 	}
 }
 
-func assertVolumeClaimResponse(t *testing.T, body io.Reader, wantRedirect string, wantRequirePromoted bool) {
-	t.Helper()
-	var got ClaimResponse
-	if err := json.UnmarshalRead(body, &got); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	if wantRedirect != "" {
-		if !slices.Equal(got.Redirect, []string{wantRedirect}) {
-			t.Errorf("redirect=%v, want [%s]", got.Redirect, wantRedirect)
-		}
-		if got.RequirePromoted != wantRequirePromoted {
-			t.Errorf("require_promoted=%v, want %v", got.RequirePromoted, wantRequirePromoted)
-		}
-		return
-	}
-	if got.ID == "" || len(got.Redirect) != 0 {
-		t.Errorf("response=%+v, want local claim", got)
-	}
+type ownerReply struct {
+	OwnerAddr string `json:"owner_addr"`
 }
 
-func newTestServer(t *testing.T, apiToken string, mgr Manager, dialer Dialer) *httptest.Server {
-	t.Helper()
-	return newTenantTestServer(t, apiToken, nil, mgr, dialer)
-}
-
-func newTenantTestServer(t *testing.T, apiToken string, tenants []tenants.TenantSpec, mgr Manager, dialer Dialer) *httptest.Server {
-	t.Helper()
-	if dialer == nil {
-		dialer = &fakeDialer{}
-	}
-	if fm, ok := mgr.(*fakeManager); ok {
-		fm.tenants = tenants
-	}
-	return serveTestServer(t, New(apiToken, "node:7777", mgr, dialer, nil, nil, nil, nil))
-}
-
-func newProbeAuthTestServer(t *testing.T, mgr Manager, probeKey []byte) *httptest.Server {
-	t.Helper()
-	return serveTestServer(t, New("", "node:7777", mgr, &fakeDialer{}, nil, nil, probeKey, nil))
-}
-
-func newMeshTestServer(t *testing.T, apiToken string, mgr Manager, placer Placer, prober CheckpointProber) *httptest.Server {
-	t.Helper()
-	return serveTestServer(t, New(apiToken, "node-a:7777", mgr, &fakeDialer{}, placer, prober, nil, nil))
-}
-
-func newProberTestServer(t *testing.T, apiToken string, mgr Manager, prober CheckpointProber) *httptest.Server {
-	t.Helper()
-	return newMeshTestServer(t, apiToken, mgr, nil, prober)
-}
-
-func serveTestServer(t *testing.T, srv *Server) *httptest.Server {
-	t.Helper()
-	ts := httptest.NewServer(srv.Handler())
-	t.Cleanup(func() {
-		ts.Close()
-		srv.CloseRelays()
-	})
-	return ts
-}
-
-func doReq(t *testing.T, method, url, token, body string) *http.Response {
-	t.Helper()
-	req, err := http.NewRequestWithContext(t.Context(), method, url, strings.NewReader(body))
-	if err != nil {
-		t.Fatalf("request: %v", err)
-	}
-	req.Header.Set("Authorization", "Bearer "+token)
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatalf("do: %v", err)
-	}
-	return resp
-}
-
-func postJSON(t *testing.T, url, token, body string) *http.Response {
-	t.Helper()
-	return doReq(t, http.MethodPost, url, token, body)
-}
-
-func credToken(cred pool.Cred) string {
-	if cred.Operator {
-		return ""
-	}
-	return cred.Token
-}
-
-func fakeClaimProvision(ctx context.Context, f *fakeManager, key types.PoolKey, o pool.ClaimOptions) (*types.Sandbox, error) {
-	f.provisionCalls++
-	f.gotTenant = o.Tenant
-	f.gotClaimRef = o.ClaimRef
-	f.gotMetadata = o.Metadata
-	f.gotEnv = o.Env
-	f.gotOnExpire = o.OnExpire
-	f.gotRequirePromoted = o.RequirePromoted
-	f.gotNoEgress = o.NoEgress
-	if f.claim == nil {
-		return &types.Sandbox{ID: "sb_1", Token: "tok", Volumes: slices.Clone(o.Volumes)}, nil
-	}
-	return f.claim(ctx, key, o.TTL)
+type errorReply struct {
+	Error string `json:"error"`
 }
 
 type claimFunc func(context.Context, types.PoolKey, time.Duration) (*types.Sandbox, error)
@@ -2642,13 +2239,9 @@ func (f *fakeManager) PatchVolumes(_ context.Context, id, tenant string, p types
 
 func (f *fakeManager) ClaimWarm(ctx context.Context, key types.PoolKey, o pool.ClaimOptions) (*types.Sandbox, error) {
 	f.warmCalls++
-	f.gotTenant, f.gotEgressClass = o.Tenant, o.EgressClass
-	f.gotClaimRef = o.ClaimRef
-	f.gotMetadata = o.Metadata
-	f.gotEnv = o.Env
-	f.gotOnExpire = o.OnExpire
+	f.record(o)
+	f.gotEgressClass = o.EgressClass
 	f.gotWarmVolumes = slices.Clone(o.Volumes)
-	f.gotNoEgress = o.NoEgress
 	if f.warmClaim == nil {
 		return nil, pool.ErrNoWarm
 	}
@@ -2658,7 +2251,13 @@ func (f *fakeManager) ClaimWarm(ctx context.Context, key types.PoolKey, o pool.C
 func (f *fakeManager) NetRoute(*types.Sandbox) types.NetRoute { return f.netRoute }
 
 func (f *fakeManager) ClaimProvision(ctx context.Context, key types.PoolKey, o pool.ClaimOptions) (*types.Sandbox, error) {
-	return fakeClaimProvision(ctx, f, key, o)
+	f.provisionCalls++
+	f.record(o)
+	f.gotRequirePromoted = o.RequirePromoted
+	if f.claim == nil {
+		return &types.Sandbox{ID: "sb_1", Token: "tok", Volumes: slices.Clone(o.Volumes)}, nil
+	}
+	return f.claim(ctx, key, o.TTL)
 }
 
 func (f *fakeManager) Release(_ context.Context, id string, cred pool.Cred) error {
@@ -2900,11 +2499,7 @@ func (f *fakeManager) Checkpoint(_ context.Context, id string, cred pool.Cred, n
 }
 
 func (f *fakeManager) ClaimCheckpoint(_ context.Context, ckptID string, o pool.ClaimOptions) (*types.Sandbox, error) {
-	onExpire, tenant, metadata := o.OnExpire, o.Tenant, o.Metadata
-	f.gotTenant = tenant
-	f.gotMetadata = metadata
-	f.gotEnv = o.Env
-	f.gotOnExpire = onExpire
+	f.record(o)
 	if f.claimCheckpoint == nil {
 		return nil, pool.ErrUnknownCheckpoint
 	}
@@ -2912,11 +2507,7 @@ func (f *fakeManager) ClaimCheckpoint(_ context.Context, ckptID string, o pool.C
 }
 
 func (f *fakeManager) ClaimCheckpointHeal(_ context.Context, ckptID string, o pool.ClaimOptions) (*types.Sandbox, error) {
-	onExpire, tenant, metadata := o.OnExpire, o.Tenant, o.Metadata
-	f.gotTenant = tenant
-	f.gotMetadata = metadata
-	f.gotEnv = o.Env
-	f.gotOnExpire = onExpire
+	f.record(o)
 	f.healCalls++
 	if f.healCheckpoint == nil {
 		return nil, pool.ErrUnknownCheckpoint
@@ -2989,6 +2580,17 @@ func (f *fakeManager) HasCheckpoint(_ context.Context, ckptID string) bool {
 	return f.hasCheckpoint[ckptID]
 }
 
+func (f *fakeManager) record(o pool.ClaimOptions) {
+	f.gotTenant = o.Tenant
+	f.gotClaimRef = o.ClaimRef
+	f.gotMetadata = o.Metadata
+	f.gotEnv = o.Env
+	f.gotOnExpire = o.OnExpire
+	f.gotNoEgress = o.NoEgress
+}
+
+type guestFunc func(net.Conn)
+
 type fakeDialer struct {
 	dial func(ctx context.Context, sock string) (net.Conn, error)
 }
@@ -3060,3 +2662,135 @@ type fakeProber struct {
 
 func (f *fakeProber) Owners(context.Context, string) []string { return f.owners }
 func (f *fakeProber) Forget(id string)                        { f.forgotten = append(f.forgotten, id) }
+
+func assertVolumeClaimResponse(t *testing.T, body io.Reader, wantRedirect string, wantRequirePromoted bool) {
+	t.Helper()
+	got := decodeJSON[ClaimResponse](t, body)
+	if wantRedirect != "" {
+		if !slices.Equal(got.Redirect, []string{wantRedirect}) {
+			t.Errorf("redirect=%v, want [%s]", got.Redirect, wantRedirect)
+		}
+		if got.RequirePromoted != wantRequirePromoted {
+			t.Errorf("require_promoted=%v, want %v", got.RequirePromoted, wantRequirePromoted)
+		}
+		return
+	}
+	if got.ID == "" || len(got.Redirect) != 0 {
+		t.Errorf("response=%+v, want local claim", got)
+	}
+}
+
+func newTestServer(t *testing.T, apiToken string, mgr Manager, dialer Dialer) *httptest.Server {
+	t.Helper()
+	return newTenantTestServer(t, apiToken, nil, mgr, dialer)
+}
+
+func newTenantTestServer(t *testing.T, apiToken string, specs []tenants.TenantSpec, mgr Manager, dialer Dialer) *httptest.Server {
+	t.Helper()
+	if dialer == nil {
+		dialer = &fakeDialer{}
+	}
+	if fm, ok := mgr.(*fakeManager); ok {
+		fm.tenants = specs
+	}
+	return serveTestServer(t, New(apiToken, "node:7777", mgr, dialer, nil, nil, nil, nil))
+}
+
+func pipeDialer(guest guestFunc) *fakeDialer {
+	return &fakeDialer{dial: func(context.Context, string) (net.Conn, error) {
+		relayEnd, guestEnd := net.Pipe()
+		go guest(guestEnd)
+		return relayEnd, nil
+	}}
+}
+
+func newProbeAuthTestServer(t *testing.T, mgr Manager, probeKey []byte) *httptest.Server {
+	t.Helper()
+	return serveTestServer(t, New("", "node:7777", mgr, &fakeDialer{}, nil, nil, probeKey, nil))
+}
+
+func newMeshTestServer(t *testing.T, apiToken string, mgr Manager, placer Placer, prober CheckpointProber) *httptest.Server {
+	t.Helper()
+	return serveTestServer(t, New(apiToken, "node-a:7777", mgr, &fakeDialer{}, placer, prober, nil, nil))
+}
+
+func newProberTestServer(t *testing.T, apiToken string, mgr Manager, prober CheckpointProber) *httptest.Server {
+	t.Helper()
+	return newMeshTestServer(t, apiToken, mgr, nil, prober)
+}
+
+func serveTestServer(t *testing.T, srv *Server) *httptest.Server {
+	t.Helper()
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(func() {
+		ts.Close()
+		srv.CloseRelays()
+	})
+	return ts
+}
+
+func doReq(t *testing.T, method, url, token, body string) *http.Response {
+	t.Helper()
+	req, err := http.NewRequestWithContext(t.Context(), method, url, strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("do: %v", err)
+	}
+	return resp
+}
+
+func postJSON(t *testing.T, url, token, body string) *http.Response {
+	t.Helper()
+	return doReq(t, http.MethodPost, url, token, body)
+}
+
+func scrapeMetrics(t *testing.T, base string) string {
+	t.Helper()
+	resp, err := http.Get(base + "/metrics")
+	if err != nil {
+		t.Fatalf("metrics: %v", err)
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	return string(raw)
+}
+
+func statusOf(t *testing.T, method, url, token, body string) int {
+	t.Helper()
+	resp := doReq(t, method, url, token, body)
+	_ = resp.Body.Close()
+	return resp.StatusCode
+}
+
+func bodyOf(t *testing.T, method, url, token, body string) (int, []byte) {
+	t.Helper()
+	resp := doReq(t, method, url, token, body)
+	defer resp.Body.Close()
+	out, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read response: %v", err)
+	}
+	return resp.StatusCode, out
+}
+
+func decodeJSON[T any](t *testing.T, r io.Reader) T {
+	t.Helper()
+	var v T
+	if err := json.UnmarshalRead(r, &v); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	return v
+}
+
+func credToken(cred pool.Cred) string {
+	if cred.Operator {
+		return ""
+	}
+	return cred.Token
+}

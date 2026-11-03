@@ -15,7 +15,7 @@ func TestRuntimeCatalogEmptyACLIsPublic(t *testing.T) {
 	m := newVolumeManager(t, eng, nil)
 	spec := types.VolumeRegistration{Path: writeVolumeImage(t, "home.img", "private"), Writable: true, Tenants: []string{}}
 	if err := m.RegisterVolume(t.Context(), "home", spec); err != nil {
-		t.Fatal(err)
+		t.Fatalf("RegisterVolume: %v", err)
 	}
 	for _, current := range []*Manager{m, newVolumeManagerAt(t, eng, m.dataDir, nil)} {
 		if got := current.Volumes("acme", nil); len(got) != 1 || got[0].Name != "home" {
@@ -29,7 +29,7 @@ func TestRuntimeCatalogEmptyACLIsPublic(t *testing.T) {
 			t.Fatalf("tenant attachment: %v", err)
 		}
 		if err = current.Release(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
-			t.Fatal(err)
+			t.Fatalf("Release: %v", err)
 		}
 	}
 }
@@ -39,7 +39,7 @@ func TestInvalidStaticTenantListNeverBecomesPublic(t *testing.T) {
 	file := filepath.Join(t.TempDir(), "config.json")
 	raw := fmt.Sprintf(`{"pools":[],"volumes":[{"name":"data","path":%q,"tenants":["has space"]}]}`, path)
 	if err := os.WriteFile(file, []byte(raw), 0o600); err != nil {
-		t.Fatal(err)
+		t.Fatalf("WriteFile: %v", err)
 	}
 	cfg, err := config.Load(file)
 	if err != nil {

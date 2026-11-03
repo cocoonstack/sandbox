@@ -26,7 +26,7 @@ func TestDiskAttachArgsModeAndDirectIO(t *testing.T) {
 		{"writable", "", true, "off"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			e := New("cocoon", nil, nil, false, false, "")
+			e := newTestEngine()
 			args, err := e.diskAttachArgs("sbx-1", VolumeSpec{
 				Name: "imagenet", Path: "/srv/datasets/imagenet.img", DirectIO: tt.directIO, RW: tt.rw,
 			})
@@ -50,7 +50,7 @@ func TestDiskAttachArgsModeAndDirectIO(t *testing.T) {
 }
 
 func TestDiskAttachArgsRejectBadOptions(t *testing.T) {
-	_, err := New("cocoon", nil, nil, false, false, "").diskAttachArgs("sbx-1", VolumeSpec{DirectIO: "maybe"})
+	_, err := newTestEngine().diskAttachArgs("sbx-1", VolumeSpec{DirectIO: "maybe"})
 	if err == nil || !strings.Contains(err.Error(), "on, off, or auto") {
 		t.Errorf("got %v, want directio validation error", err)
 	}
@@ -73,7 +73,7 @@ func TestDiskAttachCopyPassesTheSourceAndReturnsTheGuestSerial(t *testing.T) {
 			args := filepath.Join(t.TempDir(), "args")
 			t.Setenv("COCOON_TEST_ARGS", args)
 			fakeCocoon(t, "#!/bin/sh\necho \"$*\" > \"$COCOON_TEST_ARGS\"\necho '{\"vm\":\"sbx-1\",\"name\":\"snap-ab12cd34\",\"id\":\"d1\",\"format\":\"raw\"}'\n")
-			name, err := tt.attach(New("cocoon", nil, nil, false, false, ""))
+			name, err := tt.attach(newTestEngine())
 			if err != nil || name != "snap-ab12cd34" {
 				t.Fatalf("attach = %q, %v, want the serial cocoon reported", name, err)
 			}
@@ -87,7 +87,7 @@ func TestDiskAttachCopyPassesTheSourceAndReturnsTheGuestSerial(t *testing.T) {
 func TestDiskAttachCopyRejectsAnUnnamedResult(t *testing.T) {
 	for _, body := range []string{"not json", `{"vm":"sbx-1"}`} {
 		fakeCocoon(t, "#!/bin/sh\necho '"+body+"'\n")
-		if name, err := New("cocoon", nil, nil, false, false, "").DiskAttachSnapshot(t.Context(), "sbx-1", "snap-1"); err == nil {
+		if name, err := newTestEngine().DiskAttachSnapshot(t.Context(), "sbx-1", "snap-1"); err == nil {
 			t.Errorf("DiskAttachSnapshot over %q = %q, want an error", body, name)
 		}
 	}
@@ -106,9 +106,7 @@ func TestMountVolumeUsesSysfsAndRequestedMode(t *testing.T) {
 			path := sockPath(t)
 			fake := serveFakeSilkd(t, path)
 			configureVolumeDevices(fake)
-			if err := New("cocoon", nil, nil, false, false, "").MountVolume(
-				t.Context(), path, "imagenet", "/datasets/training", tt.rw,
-			); err != nil {
+			if err := newTestEngine().MountVolume(t.Context(), path, "imagenet", "/datasets/training", tt.rw); err != nil {
 				t.Fatalf("MountVolume: %v", err)
 			}
 
@@ -139,7 +137,7 @@ func TestMountVolumeUsesSysfsAndRequestedMode(t *testing.T) {
 func TestSettleGuestWaitsForInitAndTakesAnyExitAsFinished(t *testing.T) {
 	for _, tt := range []struct {
 		name    string
-		prepare func(*fakeSilkd)
+		prepare fakeEdit
 		wantErr bool
 	}{
 		{"running", func(*fakeSilkd) {}, false},
@@ -149,10 +147,8 @@ func TestSettleGuestWaitsForInitAndTakesAnyExitAsFinished(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			path := sockPath(t)
 			fake := serveFakeSilkd(t, path)
-			fake.mu.Lock()
-			tt.prepare(fake)
-			fake.mu.Unlock()
-			err := New("cocoon", nil, nil, false, false, "").SettleGuest(t.Context(), path)
+			fake.set(tt.prepare)
+			err := newTestEngine().SettleGuest(t.Context(), path)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("SettleGuest: %v, want error %t", err, tt.wantErr)
 			}
@@ -168,7 +164,7 @@ func TestSettleGuestWaitsForInitAndTakesAnyExitAsFinished(t *testing.T) {
 func TestUmountVolumeExecsUmount(t *testing.T) {
 	path := sockPath(t)
 	fake := serveFakeSilkd(t, path)
-	e := New("cocoon", nil, nil, false, false, "")
+	e := newTestEngine()
 	if err := e.umountVolume(t.Context(), path, "/datasets/training"); err != nil {
 		t.Fatalf("umountVolume: %v", err)
 	}
@@ -191,18 +187,18 @@ func TestUmountVolumeWaitsOutAFlushPastTheCallTimeout(t *testing.T) {
 	fake := serveFakeSilkd(t, path)
 	fake.execHook = func(argv []string) {
 		if argv[0] == "umount" {
-			time.Sleep(VolumeCallTimeout + 250*time.Millisecond)
+			time.Sleep(syncTimeout + 250*time.Millisecond)
 		}
 	}
-	if err := New("cocoon", nil, nil, false, false, "").umountVolume(t.Context(), path, "/data"); err != nil {
-		t.Errorf("umount whose flush outlasts %s: %v", VolumeCallTimeout, err)
+	if err := newTestEngine().umountVolume(t.Context(), path, "/data"); err != nil {
+		t.Errorf("umount whose flush outlasts %s: %v", syncTimeout, err)
 	}
 }
 
 func TestSyncGuestExecsPlainSync(t *testing.T) {
 	path := sockPath(t)
 	fake := serveFakeSilkd(t, path)
-	e := New("cocoon", nil, nil, false, false, "")
+	e := newTestEngine()
 	if err := e.SyncGuest(t.Context(), path); err != nil {
 		t.Fatalf("SyncGuest: %v", err)
 	}
@@ -223,12 +219,8 @@ func TestMountVolumeWaitsForDelayedSysfsSerial(t *testing.T) {
 	path := sockPath(t)
 	fake := serveFakeSilkd(t, path)
 	configureVolumeDevices(fake)
-	fake.mu.Lock()
-	fake.readMisses["/sys/block/vdc/serial"] = 1
-	fake.mu.Unlock()
-	if err := New("cocoon", nil, nil, false, false, "").MountVolume(
-		t.Context(), path, "imagenet", "/datasets/training", false,
-	); err != nil {
+	fake.set(func(f *fakeSilkd) { f.readMisses["/sys/block/vdc/serial"] = 1 })
+	if err := newTestEngine().MountVolume(t.Context(), path, "imagenet", "/datasets/training", false); err != nil {
 		t.Fatalf("MountVolume: %v", err)
 	}
 
@@ -246,12 +238,8 @@ func TestMountVolumeWaitsForDelayedDevNode(t *testing.T) {
 	path := sockPath(t)
 	fake := serveFakeSilkd(t, path)
 	configureVolumeDevices(fake)
-	fake.mu.Lock()
-	fake.statMisses["/dev/vdc"] = 3
-	fake.mu.Unlock()
-	if err := New("cocoon", nil, nil, false, false, "").MountVolume(
-		t.Context(), path, "imagenet", "/datasets/training", false,
-	); err != nil {
+	fake.set(func(f *fakeSilkd) { f.statMisses["/dev/vdc"] = 3 })
+	if err := newTestEngine().MountVolume(t.Context(), path, "imagenet", "/datasets/training", false); err != nil {
 		t.Fatalf("MountVolume: %v", err)
 	}
 
@@ -269,10 +257,8 @@ func TestMountVolumeFallsBackToTheProbeForAnotherFilesystem(t *testing.T) {
 	path := sockPath(t)
 	fake := serveFakeSilkd(t, path)
 	configureVolumeDevices(fake)
-	fake.mu.Lock()
-	fake.execCode, fake.execFailAt = 32, 2
-	fake.mu.Unlock()
-	if err := New("cocoon", nil, nil, false, false, "").MountVolume(t.Context(), path, "imagenet", "/datasets/training", false); err != nil {
+	fake.set(func(f *fakeSilkd) { f.execCode, f.execFailAt = 32, 2 })
+	if err := newTestEngine().MountVolume(t.Context(), path, "imagenet", "/datasets/training", false); err != nil {
 		t.Fatalf("MountVolume: %v", err)
 	}
 	fake.mu.Lock()
@@ -291,10 +277,8 @@ func TestMountVolumeReadsEachOtherSerialOnce(t *testing.T) {
 	path := sockPath(t)
 	fake := serveFakeSilkd(t, path)
 	configureVolumeDevices(fake)
-	fake.mu.Lock()
-	fake.blankReads["/sys/block/vdc/serial"] = 3
-	fake.mu.Unlock()
-	if err := New("cocoon", nil, nil, false, false, "").MountVolume(t.Context(), path, "imagenet", "/datasets/training", false); err != nil {
+	fake.set(func(f *fakeSilkd) { f.blankReads["/sys/block/vdc/serial"] = 3 })
+	if err := newTestEngine().MountVolume(t.Context(), path, "imagenet", "/datasets/training", false); err != nil {
 		t.Fatalf("MountVolume: %v", err)
 	}
 	fake.mu.Lock()
@@ -314,10 +298,8 @@ func TestMountVolumeRetriesUntilTheDeviceOpens(t *testing.T) {
 	path := sockPath(t)
 	fake := serveFakeSilkd(t, path)
 	configureVolumeDevices(fake)
-	fake.mu.Lock()
-	fake.notReady = 2
-	fake.mu.Unlock()
-	if err := New("cocoon", nil, nil, false, false, "").MountVolume(t.Context(), path, "imagenet", "/datasets/training", false); err != nil {
+	fake.set(func(f *fakeSilkd) { f.notReady = 2 })
+	if err := newTestEngine().MountVolume(t.Context(), path, "imagenet", "/datasets/training", false); err != nil {
 		t.Fatalf("MountVolume: %v", err)
 	}
 	fake.mu.Lock()
@@ -334,12 +316,10 @@ func TestMountVolumeNotReadyUntilDeadlineReportsTheTimeout(t *testing.T) {
 	path := sockPath(t)
 	fake := serveFakeSilkd(t, path)
 	configureVolumeDevices(fake)
-	fake.mu.Lock()
-	fake.notReady = 1 << 20
-	fake.mu.Unlock()
+	fake.set(func(f *fakeSilkd) { f.notReady = 1 << 20 })
 	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
 	defer cancel()
-	err := New("cocoon", nil, nil, false, false, "").MountVolume(ctx, path, "imagenet", "/datasets/training", false)
+	err := newTestEngine().MountVolume(ctx, path, "imagenet", "/datasets/training", false)
 	if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "mount volume imagenet") {
 		t.Fatalf("got %v, want the mount deadline", err)
 	}
@@ -348,7 +328,7 @@ func TestMountVolumeNotReadyUntilDeadlineReportsTheTimeout(t *testing.T) {
 func TestMountVolumeStopsAtFailedStage(t *testing.T) {
 	for _, tt := range []struct {
 		name     string
-		prepare  func(*fakeSilkd)
+		prepare  fakeEdit
 		wantErr  string
 		wantExec int
 	}{
@@ -362,12 +342,8 @@ func TestMountVolumeStopsAtFailedStage(t *testing.T) {
 			path := sockPath(t)
 			fake := serveFakeSilkd(t, path)
 			configureVolumeDevices(fake)
-			fake.mu.Lock()
-			tt.prepare(fake)
-			fake.mu.Unlock()
-			err := New("cocoon", nil, nil, false, false, "").MountVolume(
-				t.Context(), path, "imagenet", "/datasets/training", false,
-			)
+			fake.set(tt.prepare)
+			err := newTestEngine().MountVolume(t.Context(), path, "imagenet", "/datasets/training", false)
 			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
 				t.Errorf("got %v, want %q failure", err, tt.wantErr)
 			}
@@ -389,9 +365,7 @@ func TestMountVolumeDeviceProbeIsBoundedAndCancelable(t *testing.T) {
 	configureVolumeDevices(fake)
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	err := New("cocoon", nil, nil, false, false, "").MountVolume(
-		ctx, path, "missing", "/datasets/training", false,
-	)
+	err := newTestEngine().MountVolume(ctx, path, "missing", "/datasets/training", false)
 	if !errors.Is(err, context.Canceled) {
 		t.Errorf("error = %v, want context cancellation", err)
 	}
@@ -401,12 +375,8 @@ func TestMountVolumeDevNodeNeverAppearsTimesOut(t *testing.T) {
 	path := sockPath(t)
 	fake := serveFakeSilkd(t, path)
 	configureVolumeDevices(fake)
-	fake.mu.Lock()
-	delete(fake.stat, "/dev/vdc")
-	fake.mu.Unlock()
-	err := New("cocoon", nil, nil, false, false, "").MountVolume(
-		t.Context(), path, "imagenet", "/datasets/training", false,
-	)
+	fake.set(func(f *fakeSilkd) { delete(f.stat, "/dev/vdc") })
+	err := newTestEngine().MountVolume(t.Context(), path, "imagenet", "/datasets/training", false)
 	if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "wait for volume device imagenet") {
 		t.Errorf("got %v, want a bounded wait-for-device timeout", err)
 	}
@@ -415,11 +385,11 @@ func TestMountVolumeDevNodeNeverAppearsTimesOut(t *testing.T) {
 func TestSilkdListAndReadAreBounded(t *testing.T) {
 	path := sockPath(t)
 	fake := serveFakeSilkd(t, path)
-	fake.mu.Lock()
-	fake.block = make([]wire.DirEntry, silkdListMax+1)
-	fake.serial["/sys/block/vda/serial"] = make([]byte, silkdReadMax+1)
-	fake.mu.Unlock()
-	e := New("cocoon", nil, nil, false, false, "")
+	fake.set(func(f *fakeSilkd) {
+		f.block = make([]wire.DirEntry, silkdListMax+1)
+		f.serial["/sys/block/vda/serial"] = make([]byte, silkdReadMax+1)
+	})
+	e := newTestEngine()
 	if _, err := e.silkdList(t.Context(), path, "/sys/block"); err == nil || !strings.Contains(err.Error(), "exceeds") {
 		t.Errorf("list of %d entries: %v, want a bound error", silkdListMax+1, err)
 	}

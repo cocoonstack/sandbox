@@ -16,10 +16,7 @@ func TestGoldenBuildRunsWarmupBeforeSnapshot(t *testing.T) {
 	eng := newFakeEngine()
 	argv := []string{"node", "-e", "0"}
 	m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1, Warmup: argv})
-	final := filepath.Join(m.goldensDir(), testKey.Hash())
-	if err := m.buildGoldenSteps(t.Context(), m.view.Load(), testKey, "sbx-gb", "snap", final, ""); err != nil {
-		t.Fatalf("buildGoldenSteps: %v", err)
-	}
+	final := buildGoldenAt(t, m, testKey, "")
 	if len(eng.warmups) != 1 || !slices.Equal(eng.warmups[0], argv) {
 		t.Fatalf("warmups = %v, want [%v]", eng.warmups, argv)
 	}
@@ -47,10 +44,7 @@ func TestGoldenBuildSettlesTheGuestBetweenWarmupAndSnapshot(t *testing.T) {
 			eng := newFakeEngine()
 			eng.settleErr = tt.err
 			m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1, Warmup: []string{"true"}})
-			final := filepath.Join(m.goldensDir(), testKey.Hash())
-			if err := m.buildGoldenSteps(t.Context(), m.view.Load(), testKey, "sbx-gb", "snap", final, ""); err != nil {
-				t.Fatalf("buildGoldenSteps: %v", err)
-			}
+			buildGoldenAt(t, m, testKey, "")
 			if eng.settles != 1 || eng.settleAfterSnap || !eng.settleAfterWarmup || len(eng.snapSaves) != 1 {
 				t.Errorf("settles %d, after snapshot %t, after warmup %t, snapshots %d", eng.settles, eng.settleAfterSnap, eng.settleAfterWarmup, len(eng.snapSaves))
 			}
@@ -61,10 +55,7 @@ func TestGoldenBuildSettlesTheGuestBetweenWarmupAndSnapshot(t *testing.T) {
 func TestGoldenBuildSkipsWarmupWhenUnset(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1})
-	final := filepath.Join(m.goldensDir(), testKey.Hash())
-	if err := m.buildGoldenSteps(t.Context(), m.view.Load(), testKey, "sbx-gb", "snap", final, ""); err != nil {
-		t.Fatalf("buildGoldenSteps: %v", err)
-	}
+	final := buildGoldenAt(t, m, testKey, "")
 	if len(eng.warmups) != 0 {
 		t.Errorf("Warmup called %d times for a pool without one", len(eng.warmups))
 	}
@@ -118,10 +109,7 @@ func TestRefillWarmsEveryClone(t *testing.T) {
 		m.pools[testKey].goldenDir = "/goldens/x"
 
 		m.refillOnce(t.Context())
-		waitFor(t, func() bool {
-			infos, _ := m.Info()
-			return infos[0].Warm == 2 && infos[0].Refilling == 0
-		})
+		waitWarm(t, m, 2)
 		eng.mu.Lock()
 		warmups, socks := slices.Clone(eng.warmups), slices.Clone(eng.warmupSocks)
 		eng.mu.Unlock()
@@ -150,9 +138,6 @@ func TestRefillCloneWarmupFailureCleansUp(t *testing.T) {
 		eng.warmupErr = nil
 		eng.mu.Unlock()
 		m.refillOnce(t.Context())
-		waitFor(t, func() bool {
-			infos, _ := m.Info()
-			return infos[0].Warm == 1 && infos[0].Refilling == 0
-		})
+		waitWarm(t, m, 1)
 	})
 }

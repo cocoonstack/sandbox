@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-func TestBelowFloor(t *testing.T) {
+func TestBelowFloorComparesReleasesAndLeavesOthersUnknown(t *testing.T) {
 	tests := []struct {
 		v     string
 		below bool
@@ -35,7 +35,7 @@ func TestBelowFloor(t *testing.T) {
 	}
 }
 
-func TestCheckLiveVolumeSupport(t *testing.T) {
+func TestLiveVolumeSupportFollowsTheCocoonVersion(t *testing.T) {
 	for _, tt := range []struct {
 		version       string
 		fail, allowed bool
@@ -58,7 +58,7 @@ if [ "$#" != 1 ] || [ "$1" != version ]; then exit 2; fi
 if [ -n "$COCOON_TEST_VERSION_FAIL" ]; then echo /private/cocoon >&2; exit 1; fi
 printf 'Version: %s\n' "$COCOON_TEST_VERSION"
 `)
-			err := New("cocoon", nil, nil, false, false, "").CheckLiveVolumeSupport(t.Context())
+			err := newTestEngine().CheckLiveVolumeSupport(t.Context())
 			if tt.allowed {
 				if err != nil {
 					t.Fatal(err)
@@ -78,7 +78,7 @@ func TestVersionQueriesCocoonOnce(t *testing.T) {
 if [ -n "$COCOON_TEST_VERSION_FAIL" ]; then exit 1; fi
 printf 'Version: v0.7.2\n'
 `)
-	eng := New("cocoon", nil, nil, false, false, "")
+	eng := newTestEngine()
 	if _, err := eng.Version(t.Context()); err != nil {
 		t.Fatal(err)
 	}

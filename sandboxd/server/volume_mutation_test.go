@@ -142,10 +142,8 @@ func TestLiveVolumeRoutesHideOtherTenants(t *testing.T) {
 			if method == http.MethodPatch {
 				body = `{}`
 			}
-			resp := doReq(t, method, ts.URL+"/v1/sandboxes/sb_1/volumes", "other-token", body)
-			defer resp.Body.Close()
-			if resp.StatusCode != http.StatusNotFound || !called {
-				t.Fatalf("status=%d called=%v", resp.StatusCode, called)
+			if code := statusOf(t, method, ts.URL+"/v1/sandboxes/sb_1/volumes", "other-token", body); code != http.StatusNotFound || !called {
+				t.Fatalf("status=%d called=%v", code, called)
 			}
 		})
 	}

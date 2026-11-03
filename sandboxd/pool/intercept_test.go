@@ -18,10 +18,7 @@ func TestGoldenBuildInstallsCAForInterceptPool(t *testing.T) {
 	if m.out.CAFingerprint() == "" {
 		t.Fatal("egress CA not loaded for an intercept pool")
 	}
-	final := filepath.Join(m.goldensDir(), testKey.Hash())
-	if err := m.buildGoldenSteps(t.Context(), m.view.Load(), testKey, "sbx-gb", "snap", final, ""); err != nil {
-		t.Fatalf("buildGoldenSteps: %v", err)
-	}
+	final := buildGoldenAt(t, m, testKey, "")
 	if len(eng.caInstalls) != 1 {
 		t.Fatalf("InstallCACert calls = %d, want 1", len(eng.caInstalls))
 	}
@@ -41,10 +38,7 @@ func TestGoldenBuildSkipsCAForPlainPool(t *testing.T) {
 	if m.out.CAFingerprint() != "" {
 		t.Error("egress CA loaded though no pool intercepts")
 	}
-	final := filepath.Join(m.goldensDir(), testKey.Hash())
-	if err := m.buildGoldenSteps(t.Context(), m.view.Load(), testKey, "sbx-gb", "snap", final, ""); err != nil {
-		t.Fatalf("buildGoldenSteps: %v", err)
-	}
+	final := buildGoldenAt(t, m, testKey, "")
 	if len(eng.caInstalls) != 0 {
 		t.Errorf("InstallCACert called %d times for a plain pool", len(eng.caInstalls))
 	}

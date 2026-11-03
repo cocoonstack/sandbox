@@ -12,7 +12,7 @@ import (
 
 func TestUpstreamEnvIsAdmittedHostOnlyAndAllowed(t *testing.T) {
 	m := upstreamManager(t, "127.0.0.1")
-	for name, tc := range map[string]struct {
+	for name, tt := range map[string]struct {
 		v  types.EnvVar
 		ok bool
 	}{
@@ -22,9 +22,9 @@ func TestUpstreamEnvIsAdmittedHostOnlyAndAllowed(t *testing.T) {
 		"unlisted":    {types.EnvVar{Value: "http://10.0.0.1:3128", Guest: hostOnly}, false},
 		"malformed":   {types.EnvVar{Value: "ftp://127.0.0.1:21", Guest: hostOnly}, false},
 	} {
-		err := m.checkEnv(types.Env{"EGRESS_UPSTREAM": tc.v})
-		if tc.ok != (err == nil) || (err != nil && !errors.Is(err, ErrBadEnv)) {
-			t.Errorf("%s: %v, want ok=%v", name, err, tc.ok)
+		err := m.checkEnv(types.Env{"EGRESS_UPSTREAM": tt.v})
+		if tt.ok != (err == nil) || (err != nil && !errors.Is(err, ErrBadEnv)) {
+			t.Errorf("%s: %v, want ok=%v", name, err, tt.ok)
 		}
 	}
 	editEgress(t, m, func(cfg *config.Config) { cfg.EgressUpstream = nil })

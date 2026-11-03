@@ -25,7 +25,7 @@ func TestDialSilkdConsumesOnlyHandshake(t *testing.T) {
 
 	listenMuxer(t, path, "OK 2048\nX")
 
-	conn, err := New("cocoon", nil, nil, false, false, "").DialSilkd(t.Context(), path)
+	conn, err := newTestEngine().DialSilkd(t.Context(), path)
 	if err != nil {
 		t.Fatalf("DialSilkd: %v", err)
 	}
@@ -43,7 +43,7 @@ func TestDialSilkdRejectedHandshake(t *testing.T) {
 	path := sockPath(t)
 	listenMuxer(t, path, "ERR no guest listener\n")
 
-	_, err := New("cocoon", nil, nil, false, false, "").DialSilkd(t.Context(), path)
+	_, err := newTestEngine().DialSilkd(t.Context(), path)
 	if err == nil || !strings.Contains(err.Error(), "no guest listener") {
 		t.Errorf("got %v, want handshake rejection", err)
 	}
@@ -53,7 +53,7 @@ func TestDialSilkdReturnsRawConnWithoutOverRead(t *testing.T) {
 	path := sockPath(t)
 	listenMuxer(t, path, "OK 2048\n")
 
-	conn, err := New("cocoon", nil, nil, false, false, "").DialSilkd(t.Context(), path)
+	conn, err := newTestEngine().DialSilkd(t.Context(), path)
 	if err != nil {
 		t.Fatalf("DialSilkd: %v", err)
 	}
@@ -67,16 +67,16 @@ func TestDialSilkdRejectsOverlongReply(t *testing.T) {
 	path := sockPath(t)
 	listenMuxer(t, path, "OK "+strings.Repeat("0", connectMax)+"\n")
 
-	if _, err := New("cocoon", nil, nil, false, false, "").DialSilkd(t.Context(), path); !errors.Is(err, bufio.ErrBufferFull) {
+	if _, err := newTestEngine().DialSilkd(t.Context(), path); !errors.Is(err, bufio.ErrBufferFull) {
 		t.Errorf("got %v, want bufio.ErrBufferFull", err)
 	}
 }
 
-func TestProbeSucceeds(t *testing.T) {
+func TestProbeSucceedsOnAnInfoFrame(t *testing.T) {
 	path := sockPath(t)
 	listenMuxer(t, path, "OK 2048\n", infoFrame)
 
-	if err := New("cocoon", nil, nil, false, false, "").Probe(t.Context(), path, 2*time.Second); err != nil {
+	if err := newTestEngine().Probe(t.Context(), path, 2*time.Second); err != nil {
 		t.Errorf("Probe: %v", err)
 	}
 }
@@ -85,7 +85,7 @@ func TestInfoRoundTripRejectsErrorFrame(t *testing.T) {
 	path := sockPath(t)
 	listenMuxer(t, path, "OK 2048\n", errFrame)
 
-	err := New("cocoon", nil, nil, false, false, "").infoRoundTrip(t.Context(), path, silkdPort)
+	err := newTestEngine().infoRoundTrip(t.Context(), path, silkdPort)
 	if err == nil || !strings.Contains(err.Error(), `info reply type "error"`) {
 		t.Errorf("got %v, want error-frame rejection", err)
 	}
@@ -95,7 +95,7 @@ func TestProbeRetriesPastFailures(t *testing.T) {
 	path := sockPath(t)
 	listenMuxer(t, path, "OK 2048\n", errFrame, errFrame, infoFrame)
 
-	if err := New("cocoon", nil, nil, false, false, "").Probe(t.Context(), path, 2*time.Second); err != nil {
+	if err := newTestEngine().Probe(t.Context(), path, 2*time.Second); err != nil {
 		t.Errorf("Probe: %v", err)
 	}
 }
@@ -104,7 +104,7 @@ func TestProbeRetriesUntilListenerAppears(t *testing.T) {
 	path := sockPath(t)
 	done := make(chan error, 1)
 	go func() {
-		done <- New("cocoon", nil, nil, false, false, "").Probe(t.Context(), path, 2*time.Second)
+		done <- newTestEngine().Probe(t.Context(), path, 2*time.Second)
 	}()
 
 	time.Sleep(60 * time.Millisecond)
@@ -142,14 +142,14 @@ func TestDialGuestPortCtxCancel(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(t.Context(), 150*time.Millisecond)
 	defer cancel()
-	if _, err := New("cocoon", nil, nil, false, false, "").DialGuestPort(ctx, path, 8080); !errors.Is(err, context.DeadlineExceeded) {
+	if _, err := newTestEngine().DialGuestPort(ctx, path, 8080); !errors.Is(err, context.DeadlineExceeded) {
 		t.Errorf("got %v, want context.DeadlineExceeded", err)
 	}
 }
 
 func TestSnapshotListReadsAnEmptyStoreAndRejectsProse(t *testing.T) {
 	fakeCocoon(t, "#!/bin/sh\nif [ \"$COCOON_TEST_PROSE\" = 1 ]; then echo 'No snapshots found.'; else echo '[]'; fi\n")
-	e := New("cocoon", nil, nil, false, false, "")
+	e := newTestEngine()
 
 	t.Setenv("COCOON_TEST_PROSE", "0")
 	if snaps, err := e.SnapshotList(t.Context()); err != nil || len(snaps) != 0 {
@@ -163,7 +163,7 @@ func TestSnapshotListReadsAnEmptyStoreAndRejectsProse(t *testing.T) {
 
 func TestListPassesNoPositionalArgsToCocoon(t *testing.T) {
 	fakeCocoon(t, "#!/bin/sh\n[ \"$#\" = 4 ] || { echo \"unknown command $4 for cocoon vm list\" >&2; exit 1; }\necho '[{\"config\":{\"name\":\"sbx-1\"},\"state\":\"running\"}]'\n")
-	vms, err := New("cocoon", nil, nil, false, false, "").List(t.Context())
+	vms, err := newTestEngine().List(t.Context())
 	if err != nil || len(vms) != 1 || vms[0].Config.Name != "sbx-1" {
 		t.Fatalf("List = %+v, %v; want the one VM cocoon printed", vms, err)
 	}
@@ -172,7 +172,7 @@ func TestListPassesNoPositionalArgsToCocoon(t *testing.T) {
 func TestImageIDsMapsNameToID(t *testing.T) {
 	fakeCocoon(t, "#!/bin/sh\n[ \"$*\" = \"image list --format json\" ] || { echo \"unexpected args $*\" >&2; exit 1; }\n"+
 		"echo '[{\"id\":\"sha256:afe6\",\"name\":\"ghcr.io/cocoonstack/sandbox/rt:24.04\",\"type\":\"oci\",\"size\":1}]'\n")
-	ids, err := New("cocoon", nil, nil, false, false, "").ImageIDs(t.Context())
+	ids, err := newTestEngine().ImageIDs(t.Context())
 	if err != nil || len(ids) != 1 || ids["ghcr.io/cocoonstack/sandbox/rt:24.04"] != "sha256:afe6" {
 		t.Fatalf("ImageIDs = %v, %v; want the one image cocoon printed", ids, err)
 	}
@@ -203,7 +203,7 @@ func TestRemoveStopsAVMThatRefusesDeletionThenRemovesItAgain(t *testing.T) {
 			if tt.env != "" {
 				t.Setenv(tt.env, "1")
 			}
-			err := New("cocoon", nil, nil, false, false, "").Remove(t.Context(), "sbx-1")
+			err := newTestEngine().Remove(t.Context(), "sbx-1")
 			data, _ := os.ReadFile(trace)
 			if calls := strings.Split(strings.TrimSpace(string(data)), "\n"); !slices.Equal(calls, tt.calls) || (err != nil) != tt.fails {
 				t.Errorf("Remove = %v with cocoon calls %q, want %q and failure %v", err, calls, tt.calls, tt.fails)
@@ -216,7 +216,7 @@ func TestMemoryDumpsRunAtMostEightAtOnce(t *testing.T) {
 	trace := filepath.Join(t.TempDir(), "trace")
 	t.Setenv("COCOON_TEST_TRACE", trace)
 	fakeCocoon(t, "#!/bin/sh\necho + >> \"$COCOON_TEST_TRACE\"\nsleep 0.1\necho - >> \"$COCOON_TEST_TRACE\"\n")
-	e := New("cocoon", nil, nil, false, false, "")
+	e := newTestEngine()
 	var wg sync.WaitGroup
 	for i := range 40 {
 		wg.Go(func() {
@@ -246,10 +246,10 @@ func TestMemoryDumpsRunAtMostEightAtOnce(t *testing.T) {
 	}
 }
 
-func TestProbeTimeout(t *testing.T) {
+func TestProbeOfAMissingSocketTimesOut(t *testing.T) {
 	path := sockPath(t)
 
-	err := New("cocoon", nil, nil, false, false, "").Probe(t.Context(), path, 150*time.Millisecond)
+	err := newTestEngine().Probe(t.Context(), path, 150*time.Millisecond)
 	if err == nil || !strings.Contains(err.Error(), "silkd probe") {
 		t.Errorf("got %v, want probe timeout", err)
 	}
@@ -290,6 +290,10 @@ func serveConn(conn net.Conn, handshake, frame string) {
 		return
 	}
 	_, _ = io.WriteString(conn, frame)
+}
+
+func newTestEngine() *Engine {
+	return New("cocoon", nil, nil, false, false, "")
 }
 
 func sockPath(t *testing.T) string {

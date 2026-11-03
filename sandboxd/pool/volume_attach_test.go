@@ -112,12 +112,8 @@ func TestClaimProvisionAttachFailureKeepsHoldsUntilRemoval(t *testing.T) {
 		claimErr <- err
 	}()
 	attaches.Wait()
+	vmName, vmCount := soleVM(eng)
 	eng.mu.Lock()
-	vmCount := len(eng.vms)
-	var vmName string
-	for name := range eng.vms {
-		vmName = name
-	}
 	eng.removeErrFor = vmName
 	eng.attachRendezvous = nil
 	eng.mu.Unlock()
@@ -213,13 +209,7 @@ func TestFinalizeQuotaFailureKeepsHoldsUntilRemoval(t *testing.T) {
 		claimErr <- err
 	}()
 	waitFor(t, func() bool { return slices.Contains(eng.volumeOpsLog(), "attach:scratch") })
-	eng.mu.Lock()
-	vmCount := len(eng.vms)
-	var vmName string
-	for name := range eng.vms {
-		vmName = name
-	}
-	eng.mu.Unlock()
+	vmName, vmCount := soleVM(eng)
 	filler, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{})
 	if err != nil {
 		t.Fatalf("volume-less claim: %v", err)
@@ -286,12 +276,7 @@ func TestFinalizeTenantQuotaFailureQuiescesAndUncountsTenant(t *testing.T) {
 		claimErr <- err
 	}()
 	waitFor(t, func() bool { return slices.Contains(eng.volumeOpsLog(), "attach:scratch") })
-	eng.mu.Lock()
-	var vmName string
-	for name := range eng.vms {
-		vmName = name
-	}
-	eng.mu.Unlock()
+	vmName, _ := soleVM(eng)
 	if _, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Tenant: "acme"}); err != nil {
 		t.Fatalf("volume-less tenant claim: %v", err)
 	}
@@ -394,26 +379,11 @@ func TestQuiesceVolumesSkipsAttachOnlyEntries(t *testing.T) {
 	}
 }
 
-func TestWritableMountsCountsOnlyQuiescableEntries(t *testing.T) {
-	for _, tt := range []struct {
-		name    string
-		volumes []types.Volume
-		want    int
-	}{
-		{"none", nil, 0},
-		{"read-only mount", []types.Volume{{Name: "a", Mount: "/a"}}, 0},
-		{"attach-only writer", []types.Volume{{Name: "a", Mode: types.VolumeModeRW, AttachOnly: true}}, 0},
-		{"writable mount", []types.Volume{{Name: "a", Mount: "/a", Mode: types.VolumeModeRW}}, 1},
-		{"mixed", []types.Volume{
-			{Name: "a", Mount: "/a", Mode: types.VolumeModeRW},
-			{Name: "b", Mode: types.VolumeModeRW, AttachOnly: true},
-			{Name: "c", Mount: "/c"},
-		}, 1},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := writableMounts(tt.volumes); got != tt.want {
-				t.Errorf("writableMounts(%v)=%d, want %d", tt.volumes, got, tt.want)
-			}
-		})
+func soleVM(eng *fakeEngine) (name string, count int) {
+	eng.mu.Lock()
+	defer eng.mu.Unlock()
+	for vm := range eng.vms {
+		name = vm
 	}
+	return name, len(eng.vms)
 }

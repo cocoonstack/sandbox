@@ -30,7 +30,7 @@ func TestLiveVolumeFourModesAndMixedRoundtrip(t *testing.T) {
 	sb := mustClaim(t, m, testKey)
 	view, err := m.PatchVolumes(t.Context(), sb.ID, "", types.VolumePatch{Add: request})
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("PatchVolumes: %v", err)
 	}
 	if len(view.Volumes) != 4 || len(eng.volumeMounts) != 2 {
 		t.Fatalf("mixed modes: view=%+v mounts=%+v", view, eng.volumeMounts)
@@ -42,7 +42,7 @@ func TestLiveVolumeFourModesAndMixedRoundtrip(t *testing.T) {
 	}
 	before := slices.Clone(eng.volumeOpsLog())
 	if _, err = m.SetVolumes(t.Context(), sb.ID, "", view.VolumesWant); err != nil {
-		t.Fatal(err)
+		t.Fatalf("SetVolumes: %v", err)
 	}
 	if !slices.Equal(before, eng.volumeOpsLog()) {
 		t.Fatal("GET-to-PUT roundtrip changed devices")
@@ -62,14 +62,14 @@ func TestLiveVolumeFourModesAndMixedRoundtrip(t *testing.T) {
 	assertLiveJournal(t, m, sb)
 	raw, err := os.ReadFile(m.store.path)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("ReadFile: %v", err)
 	}
 	if err = os.WriteFile(m.store.path, bytes.ReplaceAll(raw, []byte(`,"attach_only":true`), nil), 0o600); err != nil {
-		t.Fatal(err)
+		t.Fatalf("WriteFile: %v", err)
 	}
 	restarted := newVolumeManagerAt(t, eng, m.dataDir, catalog)
 	if err = restarted.Reconcile(t.Context()); err != nil {
-		t.Fatal(err)
+		t.Fatalf("Reconcile: %v", err)
 	}
 	recovered, err := restarted.GetVolumes(sb.ID, "")
 	if err != nil || !slices.Equal(recovered.Volumes, view.Volumes) {
@@ -79,7 +79,7 @@ func TestLiveVolumeFourModesAndMixedRoundtrip(t *testing.T) {
 		t.Fatalf("restart lost writer exclusion: %v", err)
 	}
 	if _, err = restarted.SetVolumes(t.Context(), sb.ID, "", []types.Volume{}); err != nil {
-		t.Fatal(err)
+		t.Fatalf("SetVolumes: %v", err)
 	}
 	for _, spec := range catalog {
 		if volumeDirty(spec.Path) || volumeHoldersOf(restarted, spec.Name) != (volumeHolders{}) {
@@ -161,7 +161,7 @@ func TestLiveAttachFailureSurvivesRestartAndCanBeDetached(t *testing.T) {
 	}
 	m2 := newVolumeManagerAt(t, eng, m.dataDir, catalog)
 	if reconcileErr := m2.Reconcile(t.Context()); reconcileErr != nil {
-		t.Fatal(reconcileErr)
+		t.Fatalf("Reconcile: %v", reconcileErr)
 	}
 	if volumeHoldersOf(m2, "data").readers != 1 {
 		t.Fatal("restart lost pending hold")
@@ -175,7 +175,7 @@ func TestLiveAttachFailureSurvivesRestartAndCanBeDetached(t *testing.T) {
 	}
 	eng.detachVolumeErr = nil
 	if _, err := m2.PatchVolumes(t.Context(), sb.ID, sb.Tenant, types.VolumePatch{Remove: []string{"data"}}); err != nil {
-		t.Fatal(err)
+		t.Fatalf("PatchVolumes: %v", err)
 	}
 	if volumeHoldersOf(m2, "data") != (volumeHolders{}) {
 		t.Fatal("successful cleanup leaked hold")
@@ -210,7 +210,7 @@ func TestLiveVolumePersistenceFailureRetainsRecoverableState(t *testing.T) {
 			}
 			view, err := m.SetVolumes(t.Context(), sb.ID, sb.Tenant, request)
 			if err != nil {
-				t.Fatal(err)
+				t.Fatalf("SetVolumes: %v", err)
 			}
 			if slices.ContainsFunc(view.States, func(s types.VolumeState) bool { return s.Error != "" }) {
 				t.Fatalf("converged view kept a stale error: %+v", view.States)
@@ -226,15 +226,7 @@ func TestLiveDetachResultWriteFailureSurvivesTwoRestarts(t *testing.T) {
 	m := newVolumeManager(t, eng, catalog)
 	a := mustClaim(t, m, testKey)
 	if _, err := m.SetVolumes(t.Context(), a.ID, a.Tenant, []types.Volume{{Name: "data"}}); err != nil {
-		t.Fatal(err)
-	}
-	loadClaims := func() map[string]*types.Sandbox {
-		t.Helper()
-		claims, err := newClaimStore(m.dataDir, false).load()
-		if err != nil {
-			t.Fatal(err)
-		}
-		return claims
+		t.Fatalf("SetVolumes: %v", err)
 	}
 	journalPath := m.store.path
 	m.store.recommitting.Store(true)
@@ -262,7 +254,7 @@ func TestLiveDetachResultWriteFailureSurvivesTwoRestarts(t *testing.T) {
 	if got := volumeHoldersOf(m, "data"); got != (volumeHolders{}) {
 		t.Fatalf("successful detach retained live holders: %+v", got)
 	}
-	stale := loadClaims()[a.ID]
+	stale := journaled(t, m)[a.ID]
 	wantReader := []types.Volume{{Name: "data", Mount: "/volumes/data"}}
 	if stale == nil || !slices.Equal(stale.Volumes, wantReader) || stale.VolumesWant == nil || len(stale.VolumesWant) != 0 {
 		t.Fatalf("journal lost stale applied reader or empty target: %+v", stale)
@@ -270,7 +262,7 @@ func TestLiveDetachResultWriteFailureSurvivesTwoRestarts(t *testing.T) {
 
 	m2 := newVolumeManagerAt(t, eng, m.dataDir, catalog)
 	if reconcileErr := m2.Reconcile(t.Context()); reconcileErr != nil {
-		t.Fatal(reconcileErr)
+		t.Fatalf("Reconcile: %v", reconcileErr)
 	}
 	writer := ClaimOptions{Volumes: []types.Volume{{Name: "data", Mode: types.VolumeModeRW}}}
 	if _, claimErr := m2.ClaimProvision(t.Context(), testKey, writer); !errors.Is(claimErr, ErrVolumeBusy) {
@@ -288,7 +280,7 @@ func TestLiveDetachResultWriteFailureSurvivesTwoRestarts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("writer after recovered detach: %v", err)
 	}
-	claims := loadClaims()
+	claims := journaled(t, m)
 	wantWriter := []types.Volume{{Name: "data", Mount: "/volumes/data", Mode: types.VolumeModeRW}}
 	if savedA, savedB := claims[a.ID], claims[b.ID]; savedA == nil || savedB == nil || len(savedA.Volumes) != 0 || len(savedA.VolumesWant) != 0 || !slices.Equal(savedB.Volumes, wantWriter) {
 		t.Fatalf("successful writer kept obsolete reader journal: A=%+v B=%+v", savedA, savedB)
@@ -296,7 +288,7 @@ func TestLiveDetachResultWriteFailureSurvivesTwoRestarts(t *testing.T) {
 
 	m3 := newVolumeManagerAt(t, eng, m.dataDir, catalog)
 	if reconcileErr := m3.Reconcile(t.Context()); reconcileErr != nil {
-		t.Fatal(reconcileErr)
+		t.Fatalf("Reconcile: %v", reconcileErr)
 	}
 	if _, claimErr := m3.ClaimProvision(t.Context(), testKey, writer); !errors.Is(claimErr, ErrVolumeBusy) {
 		t.Fatalf("second restart admitted competing writer: %v", claimErr)
@@ -329,7 +321,7 @@ func TestLiveBatchPartialFailureRetriesWithoutDoubleHolds(t *testing.T) {
 	}
 	eng.diskAttachErrFor = ""
 	if _, err := m.SetVolumes(t.Context(), sb.ID, sb.Tenant, request); err != nil {
-		t.Fatal(err)
+		t.Fatalf("SetVolumes: %v", err)
 	}
 	for _, name := range []string{"data", "other"} {
 		if volumeHoldersOf(m, name).readers != 1 {
@@ -417,7 +409,7 @@ func TestLiveVolumeDoesNotBlockLifecycle(t *testing.T) {
 					t.Fatal("teardown leaked holds")
 				}
 			} else if attachErr != nil {
-				t.Fatal(attachErr)
+				t.Fatalf("attach: %v", attachErr)
 			}
 		})
 	}
@@ -487,12 +479,12 @@ func TestLiveVolumeAdmissionAndState(t *testing.T) {
 				sb.OnExpire, want = types.ExpireArchive, ErrVolumeCapture
 			case "dirty":
 				if err := markVolumeDirty(catalog[0].Path); err != nil {
-					t.Fatal(err)
+					t.Fatalf("markVolumeDirty: %v", err)
 				}
 				want = ErrVolumeNeedsRecovery
 			case "writer":
 				if _, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Volumes: []types.Volume{{Name: "data", Mode: "rw"}}}); err != nil {
-					t.Fatal(err)
+					t.Fatalf("ClaimProvision: %v", err)
 				}
 				want = ErrVolumeBusy
 			}
@@ -516,10 +508,10 @@ func TestLiveVolumesRespectOwningTenantAndRemoval(t *testing.T) {
 		}
 	}
 	if _, err := m.SetVolumes(t.Context(), sb.ID, sb.Tenant, []types.Volume{{Name: "data"}}); err != nil {
-		t.Fatal(err)
+		t.Fatalf("SetVolumes: %v", err)
 	}
 	if err := m.DeleteTenant(t.Context(), "acme"); err != nil {
-		t.Fatal(err)
+		t.Fatalf("DeleteTenant: %v", err)
 	}
 	if _, err := m.SetVolumes(t.Context(), sb.ID, "", []types.Volume{{Name: "data"}}); err != nil {
 		t.Fatalf("held volume after tenant removal: %v", err)
@@ -543,21 +535,21 @@ func TestDesiredVolumesJournalMigration(t *testing.T) {
 			store := newClaimStore(t.TempDir(), false)
 			raw := `{"sb_1":{"id":"sb_1","volumes":[{"name":"data","mount":"/data"}]` + tt.field + `}}`
 			if err := os.WriteFile(store.path, []byte(raw), 0o600); err != nil {
-				t.Fatal(err)
+				t.Fatalf("WriteFile: %v", err)
 			}
 			claims, err := store.load()
 			if err != nil {
-				t.Fatal(err)
+				t.Fatalf("load: %v", err)
 			}
 			if got := claims["sb_1"].VolumesWant; !slices.Equal(got, tt.want) {
 				t.Fatalf("loaded target %v, want %v", got, tt.want)
 			}
 			if err = store.save(claims); err != nil {
-				t.Fatal(err)
+				t.Fatalf("save: %v", err)
 			}
 			rawBytes, err := os.ReadFile(store.path)
 			if err != nil {
-				t.Fatal(err)
+				t.Fatalf("ReadFile: %v", err)
 			}
 			if strings.Contains(string(rawBytes), `"volumes_want":`) != (tt.field != "") {
 				t.Fatalf("persisted target %s, want field only when it differs", rawBytes)
@@ -573,7 +565,7 @@ func TestFailedDetachReaddRepairsAppliedMountAfterRestart(t *testing.T) {
 	sb := mustClaim(t, m, testKey)
 	target := []types.Volume{{Name: "data"}}
 	if _, err := m.SetVolumes(t.Context(), sb.ID, sb.Tenant, target); err != nil {
-		t.Fatal(err)
+		t.Fatalf("SetVolumes: %v", err)
 	}
 	eng.detachVolumeErr = errors.New("eject did not complete")
 	view, err := m.SetVolumes(t.Context(), sb.ID, sb.Tenant, nil)
@@ -582,7 +574,7 @@ func TestFailedDetachReaddRepairsAppliedMountAfterRestart(t *testing.T) {
 	}
 	m2 := newVolumeManagerAt(t, eng, m.dataDir, catalog)
 	if reconcileErr := m2.Reconcile(t.Context()); reconcileErr != nil {
-		t.Fatal(reconcileErr)
+		t.Fatalf("Reconcile: %v", reconcileErr)
 	}
 	before := len(eng.volumeMounts)
 	eng.detachVolumeErr = nil
@@ -625,7 +617,7 @@ func TestSupersedingTargetPrecleansUncertainAddBeforeJournaling(t *testing.T) {
 	assertLiveJournal(t, m, sb)
 	close(resume)
 	if err := <-done; err != nil {
-		t.Fatal(err)
+		t.Fatalf("SetVolumes: %v", err)
 	}
 	if volumeHoldersOf(m, "data") != (volumeHolders{}) || volumeHoldersOf(m, "other").readers != 1 {
 		t.Fatal("superseding target leaked or lost holds")
@@ -735,10 +727,10 @@ func TestConcurrentVolumePatchesUseLatestDesiredSet(t *testing.T) {
 		}
 		close(eng.resume)
 		if err := <-first; err != nil {
-			t.Fatal(err)
+			t.Fatalf("first patch: %v", err)
 		}
 		if err := <-second; err != nil {
-			t.Fatal(err)
+			t.Fatalf("second patch: %v", err)
 		}
 		view, err := m.GetVolumes(sb.ID, sb.Tenant)
 		if err != nil || len(view.Volumes) != 2 || len(view.VolumesWant) != 2 {
@@ -764,7 +756,7 @@ func TestSyncIntentFailureRetainsConservativeDesiredHold(t *testing.T) {
 	}
 	restore()
 	if _, err := m.SetVolumes(t.Context(), sb.ID, sb.Tenant, nil); err != nil {
-		t.Fatal(err)
+		t.Fatalf("SetVolumes: %v", err)
 	}
 	if volumeHoldersOf(m, "data") != (volumeHolders{}) {
 		t.Fatal("cleanup leaked conservative hold")
@@ -818,7 +810,7 @@ func TestFailedReleaseRestoresVolumeHoldOwnership(t *testing.T) {
 				}
 				restore()
 				if _, err := m.SetVolumes(t.Context(), sb.ID, sb.Tenant, []types.Volume{{Name: "data"}}); err != nil {
-					t.Fatal(err)
+					t.Fatalf("SetVolumes: %v", err)
 				}
 				if volumeHoldersOf(m, "data").readers != 1 {
 					t.Fatal("retry duplicated admission hold")
@@ -858,7 +850,7 @@ func TestRetriedTargetPersistsIntentBeforeDeviceCalls(t *testing.T) {
 	}
 	restore()
 	if _, err := m.SetVolumes(t.Context(), sb.ID, sb.Tenant, request); err != nil {
-		t.Fatal(err)
+		t.Fatalf("SetVolumes: %v", err)
 	}
 	assertLiveJournal(t, m, sb)
 }
@@ -885,7 +877,7 @@ func TestLiveAttachBoundsWholeDeviceOperation(t *testing.T) {
 		m.eng = eng
 		start := time.Now()
 		if _, err := m.SetVolumes(t.Context(), sb.ID, sb.Tenant, []types.Volume{{Name: "data"}}); err != nil {
-			t.Fatal(err)
+			t.Fatalf("SetVolumes: %v", err)
 		}
 		if deadline := <-eng.deadlines; !deadline.Equal(start.Add(engine.VolumeMutationTimeout)) {
 			t.Fatalf("live attach deadline=%v, want %v", deadline, start.Add(engine.VolumeMutationTimeout))
@@ -933,10 +925,10 @@ func TestRemovedTenantCanRemoveReadOnlyVolumeBesideWritableVolume(t *testing.T) 
 	eng := newFakeEngine()
 	m, sb := newTenantVolumeManager(t, eng, liveCatalog(t), types.Volume{Name: "other", Mode: "rw"})
 	if _, err := m.PatchVolumes(t.Context(), sb.ID, sb.Tenant, types.VolumePatch{Add: []types.Volume{{Name: "data"}}}); err != nil {
-		t.Fatal(err)
+		t.Fatalf("PatchVolumes: %v", err)
 	}
 	if err := m.DeleteTenant(t.Context(), "acme"); err != nil {
-		t.Fatal(err)
+		t.Fatalf("DeleteTenant: %v", err)
 	}
 	view, err := m.PatchVolumes(t.Context(), sb.ID, sb.Tenant, types.VolumePatch{Remove: []string{"data"}})
 	if err != nil || len(view.Volumes) != 1 || view.Volumes[0].Name != "other" || !view.Volumes[0].RW() {
@@ -990,25 +982,17 @@ func (e *stalledDetachEngine) DetachVolume(ctx context.Context, _, _, _, _ strin
 	return false, errors.New("signal: killed")
 }
 
-func liveCatalog(t *testing.T) []config.VolumeSpec {
-	t.Helper()
-	return []config.VolumeSpec{
-		{Name: "data", Path: writeVolumeImage(t, "data.img", "data"), Writable: true},
-		{Name: "other", Path: writeVolumeImage(t, "other.img", "other"), Writable: true},
-	}
-}
-
 func newTenantVolumeManager(t *testing.T, eng *fakeEngine, catalog []config.VolumeSpec, volumes ...types.Volume) (*Manager, *types.Sandbox) {
 	t.Helper()
 	cfg := &config.Config{DataDir: t.TempDir(), APIToken: "root", Volumes: catalog}
 	m, err := NewManager(t.Context(), cfg, eng, testSecrets(t), testBackends(t, cfg))
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("NewManager: %v", err)
 	}
 	putTenants(t, m, tenants.TenantSpec{Name: "acme", Token: "acme-token"})
 	sb, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Tenant: "acme", Volumes: volumes})
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("ClaimProvision: %v", err)
 	}
 	return m, sb
 }
@@ -1017,7 +1001,7 @@ func assertLiveJournal(t *testing.T, m *Manager, sb *types.Sandbox) {
 	t.Helper()
 	claims, err := newClaimStore(m.dataDir, false).load()
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("load journal: %v", err)
 	}
 	got := claims[sb.ID]
 	if got == nil || !slices.Equal(got.Volumes, sb.Volumes) {
@@ -1027,7 +1011,7 @@ func assertLiveJournal(t *testing.T, m *Manager, sb *types.Sandbox) {
 		t.Fatalf("journal target: %+v, want %+v", got.VolumesWant, sb.VolumesWant)
 	}
 	if _, err := os.Stat(m.store.path); err != nil {
-		t.Fatal(err)
+		t.Fatalf("Stat: %v", err)
 	}
 }
 
@@ -1035,7 +1019,7 @@ func beginAdmittedVolumeRun(t *testing.T, m *Manager, sb *types.Sandbox) *volume
 	t.Helper()
 	_, run, err := m.beginVolumeRun(t.Context(), sb)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("beginVolumeRun: %v", err)
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -1052,7 +1036,7 @@ func breakClaimStore(t *testing.T, m *Manager) (restore func()) {
 	err := os.Mkdir(tmp, 0o700)
 	m.store.writeMu.Unlock()
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("break journal: %v", err)
 	}
 	return func() {
 		t.Helper()
@@ -1060,7 +1044,7 @@ func breakClaimStore(t *testing.T, m *Manager) (restore func()) {
 		err := os.Remove(tmp)
 		m.store.writeMu.Unlock()
 		if err != nil {
-			t.Fatal(err)
+			t.Fatalf("restore journal: %v", err)
 		}
 		waitFor(t, func() bool { return !m.store.recommitting.Load() })
 	}

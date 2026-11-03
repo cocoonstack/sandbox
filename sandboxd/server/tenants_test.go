@@ -3,7 +3,6 @@ package server
 import (
 	"context"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 	"testing"
@@ -35,47 +34,33 @@ func TestTenantRoutesAreRootOnlyAndNeverServeATokenBack(t *testing.T) {
 		{http.MethodPut, "/v1/tenants/beta", `{"token":"b"}`},
 		{http.MethodDelete, "/v1/tenants/acme", ""},
 	} {
-		resp := doReq(t, route.method, ts.URL+route.path, "acme-tok", route.body)
-		_ = resp.Body.Close()
-		if resp.StatusCode != http.StatusForbidden {
-			t.Errorf("%s %s with a tenant token: %d, want 403", route.method, route.path, resp.StatusCode)
+		if code := statusOf(t, route.method, ts.URL+route.path, "acme-tok", route.body); code != http.StatusForbidden {
+			t.Errorf("%s %s with a tenant token: %d, want 403", route.method, route.path, code)
 		}
 	}
 
-	resp := doReq(t, http.MethodGet, ts.URL+"/v1/tenants", "root", "")
-	body, _ := io.ReadAll(resp.Body)
-	_ = resp.Body.Close()
-	if resp.StatusCode != http.StatusOK || string(body) != `{"tenants":[{"name":"acme","max_claims":2,"claims":1}],"digest":"set-digest"}` {
-		t.Errorf("GET /v1/tenants: %d %s", resp.StatusCode, body)
+	status, body := bodyOf(t, http.MethodGet, ts.URL+"/v1/tenants", "root", "")
+	if status != http.StatusOK || string(body) != `{"tenants":[{"name":"acme","max_claims":2,"claims":1}],"digest":"set-digest"}` {
+		t.Errorf("GET /v1/tenants: %d %s", status, body)
 	}
 
-	resp = doReq(t, http.MethodPut, ts.URL+"/v1/tenants/beta", "root", `{"token":"beta-tok","max_claims":3,"egress_class":"desk"}`)
-	_ = resp.Body.Close()
-	if resp.StatusCode != http.StatusNoContent || put != (tenants.TenantSpec{Name: "beta", Token: "beta-tok", MaxClaims: 3, EgressClass: "desk"}) {
-		t.Errorf("PUT /v1/tenants/beta: %d, manager got %+v", resp.StatusCode, put)
+	if code := statusOf(t, http.MethodPut, ts.URL+"/v1/tenants/beta", "root", `{"token":"beta-tok","max_claims":3,"egress_class":"desk"}`); code != http.StatusNoContent || put != (tenants.TenantSpec{Name: "beta", Token: "beta-tok", MaxClaims: 3, EgressClass: "desk"}) {
+		t.Errorf("PUT /v1/tenants/beta: %d, manager got %+v", code, put)
 	}
-	resp = doReq(t, http.MethodPut, ts.URL+"/v1/tenants/u:42%2Fwest", "root", `{"token":"w"}`)
-	_ = resp.Body.Close()
-	if resp.StatusCode != http.StatusNoContent || put.Name != "u:42/west" {
-		t.Errorf("PUT an escaped name: %d, manager got %q", resp.StatusCode, put.Name)
+	if code := statusOf(t, http.MethodPut, ts.URL+"/v1/tenants/u:42%2Fwest", "root", `{"token":"w"}`); code != http.StatusNoContent || put.Name != "u:42/west" {
+		t.Errorf("PUT an escaped name: %d, manager got %q", code, put.Name)
 	}
-	resp = doReq(t, http.MethodPut, ts.URL+"/v1/tenants", "root", `{"tenants":[{"name":"acme","max_claims":1}]}`)
-	body, _ = io.ReadAll(resp.Body)
-	_ = resp.Body.Close()
-	if resp.StatusCode != http.StatusOK || len(set) != 1 || set[0].Name != "acme" || strings.Contains(string(body), "tok") {
-		t.Errorf("PUT /v1/tenants: %d %s, manager got %+v", resp.StatusCode, body, set)
+	status, body = bodyOf(t, http.MethodPut, ts.URL+"/v1/tenants", "root", `{"tenants":[{"name":"acme","max_claims":1}]}`)
+	if status != http.StatusOK || len(set) != 1 || set[0].Name != "acme" || strings.Contains(string(body), "tok") {
+		t.Errorf("PUT /v1/tenants: %d %s, manager got %+v", status, body, set)
 	}
 	for path, want := range map[string]int{"/v1/tenants/acme": http.StatusNoContent, "/v1/tenants/nobody": http.StatusNotFound} {
-		resp = doReq(t, http.MethodDelete, ts.URL+path, "root", "")
-		_ = resp.Body.Close()
-		if resp.StatusCode != want {
-			t.Errorf("DELETE %s: %d, want %d", path, resp.StatusCode, want)
+		if code := statusOf(t, http.MethodDelete, ts.URL+path, "root", ""); code != want {
+			t.Errorf("DELETE %s: %d, want %d", path, code, want)
 		}
 	}
-	resp = doReq(t, http.MethodPut, ts.URL+"/v1/tenants/beta", "root", `{"token":"b","egress":{}}`)
-	_ = resp.Body.Close()
-	if resp.StatusCode != http.StatusBadRequest {
-		t.Errorf("PUT a tenant with an unknown field: %d, want 400", resp.StatusCode)
+	if code := statusOf(t, http.MethodPut, ts.URL+"/v1/tenants/beta", "root", `{"token":"b","egress":{}}`); code != http.StatusBadRequest {
+		t.Errorf("PUT a tenant with an unknown field: %d, want 400", code)
 	}
 }
 
@@ -87,10 +72,8 @@ func TestRootListsOneTenantsClaimsAndATenantCannotWiden(t *testing.T) {
 		{"root", "?tenant=gone", "gone"},
 		{"acme-tok", "?tenant=gone", "acme"},
 	} {
-		resp := doReq(t, http.MethodGet, ts.URL+"/v1/sandboxes"+tt.query, tt.token, "")
-		_ = resp.Body.Close()
-		if resp.StatusCode != http.StatusOK || mgr.gotTenant != tt.want {
-			t.Errorf("%s %s: %d scope %q, want %q", tt.token, tt.query, resp.StatusCode, mgr.gotTenant, tt.want)
+		if code := statusOf(t, http.MethodGet, ts.URL+"/v1/sandboxes"+tt.query, tt.token, ""); code != http.StatusOK || mgr.gotTenant != tt.want {
+			t.Errorf("%s %s: %d scope %q, want %q", tt.token, tt.query, code, mgr.gotTenant, tt.want)
 		}
 	}
 }
@@ -98,10 +81,8 @@ func TestRootListsOneTenantsClaimsAndATenantCannotWiden(t *testing.T) {
 func TestRenewOfARemovedTenantsClaimIsForbidden(t *testing.T) {
 	mgr := &fakeManager{renew: func(string, string, time.Duration) (time.Time, error) { return time.Time{}, pool.ErrTenantRemoved }}
 	ts := newTestServer(t, "root", mgr, nil)
-	resp := doReq(t, http.MethodPost, ts.URL+"/v1/sandboxes/sb_1/renew", "sandbox-tok", "")
-	_ = resp.Body.Close()
-	if resp.StatusCode != http.StatusForbidden {
-		t.Errorf("renew of a removed tenant's claim: %d, want 403", resp.StatusCode)
+	if code := statusOf(t, http.MethodPost, ts.URL+"/v1/sandboxes/sb_1/renew", "sandbox-tok", ""); code != http.StatusForbidden {
+		t.Errorf("renew of a removed tenant's claim: %d, want 403", code)
 	}
 }
 
@@ -111,18 +92,15 @@ func TestRootFindsARemovedTenantsRemoteTemplate(t *testing.T) {
 		types.TemplateGossipHash(hash, "gone"):                  {"peer:7777"},
 		types.TemplateGossipHash(hash, types.TemplateRootScope): {"peer:7777"},
 	}}
-	srv := New("root", "node:7777", &fakeManager{}, &fakeDialer{}, placer, nil, nil, nil)
-	ts := serveTestServer(t, srv)
+	ts := newMeshTestServer(t, "root", &fakeManager{}, placer, nil)
 	for _, tt := range []struct{ method, path, body string }{
 		{http.MethodPost, "/v1/claim", `{"template":"tpl"}`},
 		{http.MethodPost, "/v1/claim", `{"template":"tpl","volumes":[{"name":"imagenet"}]}`},
 		{http.MethodDelete, "/v1/templates?template=tpl", ""},
 	} {
-		resp := doReq(t, tt.method, ts.URL+tt.path, "root", tt.body)
-		body, _ := io.ReadAll(resp.Body)
-		_ = resp.Body.Close()
-		if resp.StatusCode != http.StatusOK || !strings.Contains(string(body), `"redirect":["peer:7777"]`) {
-			t.Errorf("%s %s: %d %s, want the retained template's owner", tt.method, tt.path, resp.StatusCode, body)
+		code, body := bodyOf(t, tt.method, ts.URL+tt.path, "root", tt.body)
+		if code != http.StatusOK || !strings.Contains(string(body), `"redirect":["peer:7777"]`) {
+			t.Errorf("%s %s: %d %s, want the retained template's owner", tt.method, tt.path, code, body)
 		}
 	}
 }
@@ -145,10 +123,8 @@ func TestConfigReloadIsRootOnlyAndNamesWhatChanged(t *testing.T) {
 	srv.SetConfigReload(reload)
 	ts := serveTestServer(t, srv)
 
-	resp := doReq(t, http.MethodPost, ts.URL+"/v1/config/reload", "acme-tok", "")
-	_ = resp.Body.Close()
-	if resp.StatusCode != http.StatusForbidden || calls != 0 {
-		t.Errorf("tenant token: %d after %d reloads, want 403 and none", resp.StatusCode, calls)
+	if code := statusOf(t, http.MethodPost, ts.URL+"/v1/config/reload", "acme-tok", ""); code != http.StatusForbidden || calls != 0 {
+		t.Errorf("tenant token: %d after %d reloads, want 403 and none", code, calls)
 	}
 	for _, want := range []struct {
 		code int
@@ -158,11 +134,9 @@ func TestConfigReloadIsRootOnlyAndNamesWhatChanged(t *testing.T) {
 		{http.StatusConflict, "listen change only at a restart"},
 		{http.StatusBadRequest, "parse config"},
 	} {
-		resp = doReq(t, http.MethodPost, ts.URL+"/v1/config/reload", "root", "")
-		body, _ := io.ReadAll(resp.Body)
-		_ = resp.Body.Close()
-		if resp.StatusCode != want.code || !strings.Contains(string(body), want.body) {
-			t.Errorf("reload: %d %s, want %d with %q", resp.StatusCode, body, want.code, want.body)
+		code, body := bodyOf(t, http.MethodPost, ts.URL+"/v1/config/reload", "root", "")
+		if code != want.code || !strings.Contains(string(body), want.body) {
+			t.Errorf("reload: %d %s, want %d with %q", code, body, want.code, want.body)
 		}
 	}
 }
@@ -173,48 +147,35 @@ func TestATenantClaimCarriesItsTokensEgressClassAndADownSourceIs503(t *testing.T
 	}}
 	ts := newTenantTestServer(t, "root", []tenants.TenantSpec{{Name: "acme", Token: "acme-tok", EgressClass: "desk"}}, mgr, nil)
 	claim := `{"template":"rt:24.04"}`
-	resp := doReq(t, http.MethodPost, ts.URL+"/v1/claim", "acme-tok", claim)
-	_ = resp.Body.Close()
-	if resp.StatusCode != http.StatusOK || mgr.gotTenant != "acme" || mgr.gotEgressClass != "desk" {
-		t.Errorf("tenant claim: %d tenant %q class %q, want acme under desk", resp.StatusCode, mgr.gotTenant, mgr.gotEgressClass)
+	if code := statusOf(t, http.MethodPost, ts.URL+"/v1/claim", "acme-tok", claim); code != http.StatusOK || mgr.gotTenant != "acme" || mgr.gotEgressClass != "desk" {
+		t.Errorf("tenant claim: %d tenant %q class %q, want acme under desk", code, mgr.gotTenant, mgr.gotEgressClass)
 	}
-	resp = doReq(t, http.MethodPost, ts.URL+"/v1/claim", "root", claim)
-	_ = resp.Body.Close()
-	if resp.StatusCode != http.StatusOK || mgr.gotEgressClass != "" {
-		t.Errorf("root claim: %d class %q, want none", resp.StatusCode, mgr.gotEgressClass)
+	if code := statusOf(t, http.MethodPost, ts.URL+"/v1/claim", "root", claim); code != http.StatusOK || mgr.gotEgressClass != "" {
+		t.Errorf("root claim: %d class %q, want none", code, mgr.gotEgressClass)
 	}
 	mgr.tenantErr = fmt.Errorf("%w: connection refused", pool.ErrTenantStoreDown)
-	resp = doReq(t, http.MethodPost, ts.URL+"/v1/claim", "acme-tok", claim)
-	_ = resp.Body.Close()
-	if resp.StatusCode != http.StatusServiceUnavailable {
-		t.Errorf("claim with the tenant source down: %d, want 503", resp.StatusCode)
+	if code := statusOf(t, http.MethodPost, ts.URL+"/v1/claim", "acme-tok", claim); code != http.StatusServiceUnavailable {
+		t.Errorf("claim with the tenant source down: %d, want 503", code)
 	}
 	mgr.tenantErr = pool.ErrUnknownTenant
-	resp = doReq(t, http.MethodPost, ts.URL+"/v1/claim", "acme-tok", claim)
-	_ = resp.Body.Close()
-	if resp.StatusCode != http.StatusUnauthorized {
-		t.Errorf("claim with an unknown token: %d, want 401", resp.StatusCode)
+	if code := statusOf(t, http.MethodPost, ts.URL+"/v1/claim", "acme-tok", claim); code != http.StatusUnauthorized {
+		t.Errorf("claim with an unknown token: %d, want 401", code)
 	}
 }
 
 func TestTenantListPagesByCursor(t *testing.T) {
 	mgr := &fakeManager{tenantList: []pool.TenantInfo{{Name: "u-2"}}}
 	ts := newTenantTestServer(t, "root", nil, mgr, nil)
-	resp := doReq(t, http.MethodGet, ts.URL+"/v1/tenants?after=u-1&limit=2", "root", "")
-	_ = resp.Body.Close()
-	if resp.StatusCode != http.StatusOK || mgr.gotTenantPage != [2]string{"u-1", "2"} {
-		t.Errorf("paged list: %d, manager got %v", resp.StatusCode, mgr.gotTenantPage)
+	if code := statusOf(t, http.MethodGet, ts.URL+"/v1/tenants?after=u-1&limit=2", "root", ""); code != http.StatusOK || mgr.gotTenantPage != [2]string{"u-1", "2"} {
+		t.Errorf("paged list: %d, manager got %v", code, mgr.gotTenantPage)
 	}
-	resp = doReq(t, http.MethodGet, ts.URL+"/v1/tenants", "root", "")
-	_ = resp.Body.Close()
+	statusOf(t, http.MethodGet, ts.URL+"/v1/tenants", "root", "")
 	if mgr.gotTenantPage != [2]string{"", "1000"} {
 		t.Errorf("default page: manager got %v, want the first 1000", mgr.gotTenantPage)
 	}
 	for _, q := range []string{"limit=0", "limit=10001", "limit=x"} {
-		resp = doReq(t, http.MethodGet, ts.URL+"/v1/tenants?"+q, "root", "")
-		_ = resp.Body.Close()
-		if resp.StatusCode != http.StatusBadRequest {
-			t.Errorf("%s: %d, want 400", q, resp.StatusCode)
+		if code := statusOf(t, http.MethodGet, ts.URL+"/v1/tenants?"+q, "root", ""); code != http.StatusBadRequest {
+			t.Errorf("%s: %d, want 400", q, code)
 		}
 	}
 }

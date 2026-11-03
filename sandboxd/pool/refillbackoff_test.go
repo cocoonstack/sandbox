@@ -106,10 +106,7 @@ func TestRefillOnceHonorsTheBackoff(t *testing.T) {
 		m.mu.Unlock()
 		eng.cloneErr = nil
 		m.refillOnce(t.Context())
-		waitFor(t, func() bool {
-			infos, _ := m.Info()
-			return infos[0].Warm == 50
-		})
+		waitWarm(t, m, 50)
 	})
 }
 
@@ -118,7 +115,7 @@ func TestAGoldenThatCannotBeClonedIsRebuiltOnce(t *testing.T) {
 		eng := newFakeEngine()
 		eng.cloneErr = errors.New(`vm.restore -> 500 "Memory manager error","Failed to allocate a memory range"`)
 		m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 2})
-		seedGolden(t, m, "")
+		seedGolden(t, m, testKey, "")
 
 		waitFor(t, func() bool {
 			m.refillOnce(t.Context())
@@ -140,7 +137,7 @@ func TestAGoldenThatStaysUnclonableIsRebuiltAtMostOncePerRetryDelay(t *testing.T
 		eng := newFakeEngine()
 		eng.cloneErr = errors.New(`vm.restore -> 500 "Memory manager error"`)
 		m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 2})
-		seedGolden(t, m, "")
+		seedGolden(t, m, testKey, "")
 		start := time.Now()
 
 		for time.Since(start) < 3*buildRetryDelay+buildRetryDelay/2 {
@@ -160,7 +157,7 @@ func TestARebuiltGoldenSurvivesOneFailedRefill(t *testing.T) {
 		eng := newFakeEngine()
 		eng.cloneErr = errors.New(`vm.restore -> 500 "Memory manager error"`)
 		m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1})
-		seedGolden(t, m, "")
+		seedGolden(t, m, testKey, "")
 		waitFor(t, func() bool {
 			m.refillOnce(t.Context())
 			return eng.coldCount() == 1
@@ -214,7 +211,7 @@ func TestAGoldenWhoseClonesSucceedIsNeverRetiredForFailedProbes(t *testing.T) {
 		eng := newFakeEngine()
 		eng.probeErr = errors.New("silkd not ready")
 		m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 2})
-		g := seedGolden(t, m, "")
+		g := seedGolden(t, m, testKey, "")
 		start := time.Now()
 
 		for time.Since(start) < 2*buildRetryDelay {
@@ -237,7 +234,7 @@ func TestAGoldenWhoseClonesSucceedIsNeverRetiredForFailedProbes(t *testing.T) {
 
 func TestRetiringAGoldenLeavesItsDirectoryForAClaimMidClone(t *testing.T) {
 	m := newTestManager(t, newFakeEngine(), config.PoolSpec{PoolKey: testKey, Warm: 1})
-	g := seedGolden(t, m, "")
+	g := seedGolden(t, m, testKey, "")
 	m.mu.Lock()
 	p := m.pools[testKey]
 	p.goldenDir, p.goldenGen, p.cloneFails = g, 1, refillFailStreak
@@ -436,7 +433,7 @@ func TestAFailingCloneOfAPromotedTemplateDoesNotCount(t *testing.T) {
 func adoptedGoldenNoWarm(t *testing.T, eng *fakeEngine) (*Manager, *pool, string) {
 	t.Helper()
 	m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey})
-	g := seedGolden(t, m, "")
+	g := seedGolden(t, m, testKey, "")
 	m.refillOnce(t.Context())
 	waitPoolSettled(t, m, testKey)
 	m.mu.Lock()

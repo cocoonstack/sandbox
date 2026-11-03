@@ -32,15 +32,13 @@ func TestSetInstanceMetadataRefusesAPausedSandboxWithoutWaking(t *testing.T) {
 	m := newTestManager(t, eng)
 	doc := []byte(`{}`)
 
-	hibernated := mustClaim(t, m, testKey)
-	if err := m.Hibernate(t.Context(), hibernated.ID, Cred{Token: hibernated.Token}); err != nil {
-		t.Fatalf("Hibernate: %v", err)
-	}
+	paused := mustClaim(t, m, testKey)
+	hibernateClaim(t, m, paused)
 	restores := len(eng.restores)
-	if err := m.SetInstanceMetadata(t.Context(), hibernated.ID, doc); !errors.Is(err, ErrPaused) {
+	if err := m.SetInstanceMetadata(t.Context(), paused.ID, doc); !errors.Is(err, ErrPaused) {
 		t.Errorf("hibernated: %v, want ErrPaused", err)
 	}
-	if len(eng.restores) != restores || hibernated.HibernateSnap == "" {
+	if len(eng.restores) != restores || paused.HibernateSnap == "" {
 		t.Error("SetInstanceMetadata restored a hibernated sandbox")
 	}
 

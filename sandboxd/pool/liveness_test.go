@@ -1,7 +1,6 @@
 package pool
 
 import (
-	"context"
 	"errors"
 	"net"
 	"os"
@@ -140,9 +139,7 @@ func TestLivenessLeavesLiveAndPausedClaims(t *testing.T) {
 	m := newTestManager(t, eng)
 	live := mustClaim(t, m, testKey)
 	paused := mustClaim(t, m, testKey)
-	if err := m.Hibernate(t.Context(), paused.ID, Cred{Token: paused.Token}); err != nil {
-		t.Fatalf("Hibernate: %v", err)
-	}
+	hibernateClaim(t, m, paused)
 
 	runLiveness(t, m)
 	m.recoverVMM(t.Context(), live)
@@ -315,9 +312,7 @@ func TestDaemonExitEventRecoversWithoutAList(t *testing.T) {
 	eng.vmEvents = make(chan fakeVMEvent)
 	m := newTestManager(t, eng)
 	sb, other := mustClaim(t, m, testKey), mustClaim(t, m, testKey)
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	go m.watchVMMs(ctx)
+	startWatch(t, m)
 	eng.vmEvents <- fakeVMEvent{sync: []engine.VMStatus{{Name: sb.VMName, Live: true}, {Name: other.VMName, Live: true}}}
 	waitFor(t, m.vmmEvents.Load)
 	lists := eng.listCalls()
@@ -342,9 +337,7 @@ func TestDaemonSyncRecoversAClaimTheSnapshotShowsDown(t *testing.T) {
 	m := newTestManager(t, eng)
 	sb := mustClaim(t, m, testKey)
 	killVMM(eng, sb.VMName)
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	go m.watchVMMs(ctx)
+	startWatch(t, m)
 
 	eng.vmEvents <- fakeVMEvent{sync: []engine.VMStatus{{Name: sb.VMName}}}
 
@@ -356,9 +349,7 @@ func TestPollBackstopsTheDaemonStream(t *testing.T) {
 	eng.vmEvents = make(chan fakeVMEvent)
 	m := newTestManager(t, eng)
 	mustClaim(t, m, testKey)
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	go m.watchVMMs(ctx)
+	startWatch(t, m)
 	eng.vmEvents <- fakeVMEvent{sync: []engine.VMStatus{}}
 	waitFor(t, m.vmmEvents.Load)
 	lists := eng.listCalls()
@@ -384,8 +375,8 @@ func TestLivenessReplacesADeadWarmVM(t *testing.T) {
 
 	runLiveness(t, m)
 
-	if infos, _ := m.Info(); infos[0].Warm != 0 {
-		t.Fatalf("warm %d after its VMM exited, want 0", infos[0].Warm)
+	if n := warmLen(m, testKey); n != 0 {
+		t.Fatalf("warm %d after its VMM exited, want 0", n)
 	}
 	if removed := eng.removedNames(); !slices.Equal(removed, []string{dead}) {
 		t.Errorf("removed %v, want %s", removed, dead)
@@ -407,16 +398,14 @@ func TestDaemonExitEventReplacesADeadWarmVM(t *testing.T) {
 	eng.vmEvents = make(chan fakeVMEvent)
 	m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1})
 	dead := fillOneWarm(t, m)
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	go m.watchVMMs(ctx)
+	startWatch(t, m)
 	eng.vmEvents <- fakeVMEvent{sync: []engine.VMStatus{{Name: dead, Live: true}}}
 	waitFor(t, m.vmmEvents.Load)
 
 	killVMM(eng, dead)
 	eng.vmEvents <- fakeVMEvent{change: engine.VMChange{Kind: "MODIFIED", VM: engine.VMStatus{Name: dead}}}
 
-	waitFor(t, func() bool { infos, _ := m.Info(); return infos[0].Warm == 0 })
+	waitFor(t, func() bool { return warmLen(m, testKey) == 0 })
 	waitFor(t, func() bool { return slices.Equal(eng.removedNames(), []string{dead}) })
 }
 
@@ -425,9 +414,7 @@ func TestAWarmVMClaimedDuringItsEvictionIsRecoveredWithoutAPoll(t *testing.T) {
 	eng.vmEvents = make(chan fakeVMEvent)
 	m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1})
 	dead := fillOneWarm(t, m)
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	go m.watchVMMs(ctx)
+	startWatch(t, m)
 	eng.vmEvents <- fakeVMEvent{sync: []engine.VMStatus{{Name: dead, Live: true}}}
 	waitFor(t, m.vmmEvents.Load)
 	lists := eng.listCalls()
@@ -445,7 +432,12 @@ func TestAWarmVMClaimedDuringItsEvictionIsRecoveredWithoutAPoll(t *testing.T) {
 
 	eng.vmEvents <- fakeVMEvent{change: engine.VMChange{Kind: "MODIFIED", VM: engine.VMStatus{Name: dead}}}
 
-	sb := <-claimed
+	var sb *types.Sandbox
+	select {
+	case sb = <-claimed:
+	case <-time.After(3 * time.Second):
+		t.Fatal("evictWarm's Inspect never ran, so the claim never landed")
+	}
 	if sb == nil {
 		t.Fatal("no claim during the eviction")
 	}
@@ -469,8 +461,8 @@ func TestStaleReportsKeepALiveWarmVM(t *testing.T) {
 	m.evictDeadWarm(t.Context(), map[string]bool{}).Wait()
 	m.evictDeadWarm(t.Context(), map[string]bool{name: false}).Wait()
 
-	if infos, _ := m.Info(); infos[0].Warm != 1 {
-		t.Errorf("warm %d, want the running VM kept", infos[0].Warm)
+	if n := warmLen(m, testKey); n != 1 {
+		t.Errorf("warm %d, want the running VM kept", n)
 	}
 	if removed := eng.removedNames(); len(removed) != 0 {
 		t.Errorf("removed %v, want none", removed)
@@ -527,9 +519,7 @@ func TestResyncRecordsADownEgressLaneTap(t *testing.T) {
 	}
 }
 
-func TestColdBootBlocker(t *testing.T) {
-	egressKey := testKey
-	egressKey.Net = types.NetEgress
+func TestColdBootBlockerNamesWhyAVMCannotColdBoot(t *testing.T) {
 	tests := []struct {
 		name  string
 		sb    *types.Sandbox
@@ -538,7 +528,7 @@ func TestColdBootBlocker(t *testing.T) {
 	}{
 		{"plain", &types.Sandbox{Key: testKey}, true, ""},
 		{"no record", &types.Sandbox{Key: testKey}, false, "vm record gone"},
-		{"egress lane", &types.Sandbox{Key: egressKey}, true, "cannot cold-boot"},
+		{"egress lane", &types.Sandbox{Key: egKey}, true, "cannot cold-boot"},
 		{"volumes", &types.Sandbox{Key: testKey, Volumes: []types.Volume{{Name: "data"}}}, true, "volume mounts"},
 	}
 	for _, tt := range tests {
@@ -590,9 +580,7 @@ func TestReconcileKeepsRunningClaimsTheHostLost(t *testing.T) {
 			claims := map[string]*types.Sandbox{
 				"sb_lost": {ID: "sb_lost", VMName: "sbx-lost-1", Key: testKey, Token: "tok", VsockSocket: "/vsock/lost"},
 			}
-			if err := newClaimStore(dataDir, false).save(claims); err != nil {
-				t.Fatalf("setup: %v", err)
-			}
+			seedClaims(t, dataDir, claims)
 			cfg := &config.Config{DataDir: dataDir, VMMRestart: tt.policy}
 			m, err := NewManager(t.Context(), cfg, eng, testSecrets(t), testBackends(t, cfg))
 			if err != nil {
@@ -613,11 +601,6 @@ func TestReconcileKeepsRunningClaimsTheHostLost(t *testing.T) {
 			}
 		})
 	}
-}
-
-type fakeVMEvent struct {
-	sync   []engine.VMStatus
-	change engine.VMChange
 }
 
 func assertRestartFailsUntilBudget(t *testing.T, m *Manager, eng *fakeEngine, sb *types.Sandbox) {
@@ -661,7 +644,7 @@ func fillOneWarm(t *testing.T, m *Manager) string {
 	m.pools[testKey].goldenDir = "/goldens/x"
 	m.mu.Unlock()
 	m.refillOnce(t.Context())
-	waitFor(t, func() bool { infos, _ := m.Info(); return infos[0].Warm == 1 && infos[0].Refilling == 0 })
+	waitWarm(t, m, 1)
 	select {
 	case <-m.refillKick:
 	default:

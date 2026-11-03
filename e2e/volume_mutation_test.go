@@ -13,8 +13,8 @@ import (
 
 func TestLiveVolumesEndToEnd(t *testing.T) {
 	image := writeVolumeImage(t, "dataset.img", "dataset-bytes")
-	stack := startTenantStack(t, "node-token", nil, []config.VolumeSpec{{Name: "dataset", Path: image}})
-	sb, err := stack.client.New(t.Context(), "rt:24.04")
+	st := startTenantStack(t, nil, []config.VolumeSpec{{Name: "dataset", Path: image}})
+	sb, err := st.client.New(t.Context(), "rt:24.04")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -35,15 +35,15 @@ func TestLiveVolumesEndToEnd(t *testing.T) {
 		}
 	}
 	want := []string{"attach:dataset:ro", "mount:dataset:/volumes/dataset:ro", "umount:/volumes/dataset", "detach:dataset"}
-	if ops := stack.eng.volumeOpsLog(); !slices.Equal(ops, want) {
+	if ops := st.eng.volumeOpsLog(); !slices.Equal(ops, want) {
 		t.Fatalf("device operations=%v want=%v", ops, want)
 	}
 }
 
 func TestRejectedVolumeTargetExplainsRefusalWithoutChangingState(t *testing.T) {
 	image := writeVolumeImage(t, "dataset.img", "dataset-bytes")
-	stack := startTenantStack(t, "node-token", nil, []config.VolumeSpec{{Name: "dataset", Path: image}})
-	sb, err := stack.client.New(t.Context(), "rt:24.04")
+	st := startTenantStack(t, nil, []config.VolumeSpec{{Name: "dataset", Path: image}})
+	sb, err := st.client.New(t.Context(), "rt:24.04")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,8 +63,8 @@ func TestRejectedVolumeTargetExplainsRefusalWithoutChangingState(t *testing.T) {
 
 func TestEmptyVolumePatchChangesNothing(t *testing.T) {
 	image := writeVolumeImage(t, "dataset.img", "dataset-bytes")
-	stack := startTenantStack(t, "node-token", nil, []config.VolumeSpec{{Name: "dataset", Path: image}})
-	sb, err := stack.client.New(t.Context(), "rt:24.04")
+	st := startTenantStack(t, nil, []config.VolumeSpec{{Name: "dataset", Path: image}})
+	sb, err := st.client.New(t.Context(), "rt:24.04")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,8 +91,8 @@ func TestMixedLiveVolumeModesThroughSDK(t *testing.T) {
 			Name: volume.Name, Path: writeVolumeImage(t, volume.Name+".img", "seed"), Writable: volume.Mode == "rw",
 		})
 	}
-	stack := startTenantStack(t, "node-token", nil, catalog)
-	sb, err := stack.client.New(t.Context(), "rt:24.04")
+	st := startTenantStack(t, nil, catalog)
+	sb, err := st.client.New(t.Context(), "rt:24.04")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,7 +106,7 @@ func TestMixedLiveVolumeModesThroughSDK(t *testing.T) {
 	if !slices.Equal(view.Volumes, want) || !slices.Equal(sb.Volumes, want) {
 		t.Fatalf("mixed SDK attachment = %+v, handle=%+v, want %+v", view, sb.Volumes, want)
 	}
-	status, body := rawJSON(t, stack, http.MethodGet, "/v1/sandboxes/"+sb.ID+"/volumes", "")
+	status, body := rawJSON(t, st, http.MethodGet, "/v1/sandboxes/"+sb.ID+"/volumes", "")
 	if status != http.StatusOK || strings.Count(string(body), `"attach_only":true`) != 4 {
 		t.Fatalf("mixed HTTP view lost explicit attach_only in desired or applied entries: status=%d body=%s", status, body)
 	}
@@ -122,7 +122,7 @@ func TestMixedLiveVolumeModesThroughSDK(t *testing.T) {
 	if err != nil || len(view.Volumes) != 0 || len(view.VolumesWant) != 0 || view.Converging {
 		t.Fatalf("mixed removal = %+v, err=%v", view, err)
 	}
-	initial, err := stack.client.New(t.Context(), "rt:24.04", sandbox.WithVolumes(volumes...))
+	initial, err := st.client.New(t.Context(), "rt:24.04", sandbox.WithVolumes(volumes...))
 	if err != nil {
 		t.Fatalf("mixed initial claim: %v", err)
 	}

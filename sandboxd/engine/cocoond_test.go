@@ -18,7 +18,7 @@ func TestVMEventsDeliversTheSnapshotThenChanges(t *testing.T) {
 		"event: change\ndata: {\"type\":\"MODIFIED\",\"vm\":{\"name\":\"sbx-1\",\"state\":\"stopped\",\"live\":false,\"last_transition_reason\":\"unexpected-exit\"}}\n\n")
 	var synced []VMStatus
 	var changes []VMChange
-	err := New("cocoon", nil, nil, false, false, "").VMEvents(t.Context(), socket,
+	err := newTestEngine().VMEvents(t.Context(), socket,
 		func(vms []VMStatus) { synced = vms },
 		func(c VMChange) { changes = append(changes, c) })
 	if err == nil {
@@ -35,7 +35,7 @@ func TestVMEventsDeliversTheSnapshotThenChanges(t *testing.T) {
 func TestVMEventsFailsWithoutADaemon(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
-	err := New("cocoon", nil, nil, false, false, "").VMEvents(ctx, sockPath(t), func([]VMStatus) {}, func(VMChange) {})
+	err := newTestEngine().VMEvents(ctx, sockPath(t), func([]VMStatus) {}, func(VMChange) {})
 	if err == nil {
 		t.Fatal("VMEvents succeeded with no socket")
 	}
@@ -46,7 +46,7 @@ func TestInspectReadsOneVMAndReportsAMissingOne(t *testing.T) {
 		"if [ \"$3\" = sbx-1 ]; then echo '{\"config\":{\"name\":\"sbx-1\"},\"state\":\"running\","+
 		"\"attached_devices\":{\"disks\":[{\"id\":\"disk-a\",\"name\":\"imagenet\",\"path\":\"/v/a.img\",\"readonly\":true},{\"id\":\"disk-b\",\"name\":\"scratch\",\"path\":\"/v/b.img\"}]}}'; exit 0; fi\n"+
 		"echo \"Error: inspect: vm $3: vm not found\" >&2; exit 1\n")
-	e := New("cocoon", nil, nil, false, false, "")
+	e := newTestEngine()
 	rec, ok, err := e.Inspect(t.Context(), "sbx-1")
 	wantDisks := []types.VMDisk{{Name: "imagenet", ReadOnly: true}, {Name: "scratch"}}
 	if err != nil || !ok || rec.State != "running" || rec.Config.Name != "sbx-1" || !slices.Equal(rec.AttachedDevices.Disks, wantDisks) {

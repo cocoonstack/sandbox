@@ -467,18 +467,15 @@ func TestReaderRefusesAnArchiveWithoutUsableAttachFiles(t *testing.T) {
 func TestReaderRefusesWhatAWakeRefuses(t *testing.T) {
 	eng := newFakeEngine()
 	readerExport(eng)
-	pool := archivePool(0)
-	pool.Reader = true
-	cfg := &config.Config{DataDir: t.TempDir(), APIToken: "root", Pools: []config.PoolSpec{pool}}
+	spec := archivePool(0)
+	spec.Reader = true
+	cfg := &config.Config{DataDir: t.TempDir(), APIToken: "root", Pools: []config.PoolSpec{spec}}
 	m, err := NewManager(t.Context(), cfg, eng, testSecrets(t), testBackends(t, cfg))
 	if err != nil {
 		t.Fatalf("setup manager: %v", err)
 	}
 	putTenants(t, m, tenants.TenantSpec{Name: "acme", Token: "acme-tok"})
-	sb, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{TTL: time.Hour, Tenant: "acme"})
-	if err != nil {
-		t.Fatalf("claim: %v", err)
-	}
+	sb := claimTenant(t, m, "acme")
 	mustArchive(t, m, sb)
 	seedReaderVMs(m, testKey, "sbx-reader-1")
 	if err = m.DeleteTenant(t.Context(), "acme"); err != nil {
@@ -603,12 +600,7 @@ func TestWakeAgentSocketStampsActivityOnlyWhenItServesTheGuest(t *testing.T) {
 	for _, on := range []bool{false, true} {
 		t.Run(fmt.Sprintf("reader=%t", on), func(t *testing.T) {
 			eng := newFakeEngine()
-			var m *Manager
-			if on {
-				m = newReaderManager(t, eng)
-			} else {
-				m = newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1})
-			}
+			m := readerManagerIf(t, eng, on)
 			sb := mustClaim(t, m, testKey)
 			backdate(m, sb, time.Hour)
 			_, _, done, err := m.WakeAgentSocketOrRead(t.Context(), sb.ID, sb.Token)
@@ -674,7 +666,7 @@ func TestFailedPreHibernateSyncSendsReadsToTheWakePath(t *testing.T) {
 			hibernateClaim(t, m, sb)
 			seedReaderVMs(m, testKey, "sbx-reader-1")
 
-			if got, _ := newClaimStore(m.dataDir, false).load(); got[sb.ID] == nil || got[sb.ID].ReaderSafe != tt.safe {
+			if got := journaled(t, m); got[sb.ID] == nil || got[sb.ID].ReaderSafe != tt.safe {
 				t.Errorf("persisted reader_safe = %+v, want %t", got[sb.ID], tt.safe)
 			}
 			if got := m.SleepingSource(sb.ID, sb.Token); (got != "") != tt.safe {
@@ -711,12 +703,12 @@ func TestWakeClearsReaderSafe(t *testing.T) {
 	} else {
 		done()
 	}
-	if got, _ := newClaimStore(m.dataDir, false).load(); got[sb.ID] == nil || got[sb.ID].ReaderSafe {
+	if got := journaled(t, m); got[sb.ID] == nil || got[sb.ID].ReaderSafe {
 		t.Errorf("persisted claim after a wake = %+v, want reader_safe cleared", got[sb.ID])
 	}
 }
 
-func TestReaderOffWakesAsBefore(t *testing.T) {
+func TestReaderOffRefusesADialAndWakesTheClaim(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
 	sb := mustClaim(t, m, testKey)
@@ -757,25 +749,22 @@ func TestHibernateSyncsTheGuestOnlyWithTheReaderOn(t *testing.T) {
 	for _, on := range []bool{true, false} {
 		t.Run(fmt.Sprintf("reader=%t", on), func(t *testing.T) {
 			eng := newFakeEngine()
-			var m *Manager
-			if on {
-				m = newReaderManager(t, eng)
-			} else {
-				m = newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1})
-			}
+			m := readerManagerIf(t, eng, on)
 			sb := mustClaim(t, m, testKey)
 			eng.hibernateStall = make(chan struct{})
-			hibernated := make(chan struct{})
+			captured := make(chan struct{})
 			go func() {
-				defer close(hibernated)
-				hibernateClaim(t, m, sb)
+				defer close(captured)
+				if err := m.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
+					t.Errorf("hibernate: %v", err)
+				}
 			}()
-			waitFor(t, func() bool { eng.mu.Lock(); defer eng.mu.Unlock(); return len(eng.hibernates) == 1 })
+			waitFor(t, func() bool { return eng.hibernateCount() == 1 })
 			eng.mu.Lock()
 			syncedBeforeCapture := slices.Clone(eng.syncs)
 			eng.mu.Unlock()
 			close(eng.hibernateStall)
-			<-hibernated
+			<-captured
 
 			want := []string(nil)
 			if on {
@@ -801,44 +790,6 @@ func TestReconcileClearsReaderLeftovers(t *testing.T) {
 	if _, err := os.Stat(stale); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("a reader dir from a previous run survived the restart: %v", err)
 	}
-}
-
-func newReaderManager(t *testing.T, eng *fakeEngine, extra ...config.PoolSpec) *Manager {
-	t.Helper()
-	cfg := &config.Config{DataDir: t.TempDir(), Pools: append([]config.PoolSpec{{PoolKey: testKey, Warm: 1, Reader: true}}, extra...)}
-	m, err := NewManager(t.Context(), cfg, eng, testSecrets(t), testBackends(t, cfg))
-	if err != nil {
-		t.Fatalf("setup manager: %v", err)
-	}
-	return m
-}
-
-func seedReaderVMs(m *Manager, key types.PoolKey, names ...string) {
-	for _, name := range names {
-		m.pools[key].warm = append(m.pools[key].warm, &types.Sandbox{VMName: name, Key: key, VsockSocket: "/vsock/" + name})
-	}
-}
-
-func hibernateClaim(t *testing.T, m *Manager, sb *types.Sandbox) {
-	t.Helper()
-	if err := m.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
-		t.Fatalf("hibernate: %v", err)
-	}
-}
-
-// readerExport makes every snapshot export carry an envelope that lists one disk file for a reader to attach, and a memory image it must not fetch.
-func readerExport(eng *fakeEngine) {
-	eng.exportFiles = map[string]string{
-		envelopeFile:    `{"version":1,"disk_attach_files":["disk.img"]}`,
-		"disk.img":      "disk-bytes",
-		"memory-ranges": "guest-memory",
-	}
-}
-
-func readerLifecycle(eng *fakeEngine) (removes []string, setups int) {
-	eng.mu.Lock()
-	defer eng.mu.Unlock()
-	return slices.Clone(eng.removes), len(eng.startedReaders)
 }
 
 type fetchCountingStore struct {
@@ -868,4 +819,43 @@ func (s *fetchCountingStore) files() []string {
 	out := slices.Clone(s.fetched)
 	slices.Sort(out)
 	return out
+}
+
+func newReaderManager(t *testing.T, eng *fakeEngine, extra ...config.PoolSpec) *Manager {
+	t.Helper()
+	cfg := &config.Config{DataDir: t.TempDir(), Pools: append([]config.PoolSpec{{PoolKey: testKey, Warm: 1, Reader: true}}, extra...)}
+	m, err := NewManager(t.Context(), cfg, eng, testSecrets(t), testBackends(t, cfg))
+	if err != nil {
+		t.Fatalf("setup manager: %v", err)
+	}
+	return m
+}
+
+func readerManagerIf(t *testing.T, eng *fakeEngine, on bool) *Manager {
+	t.Helper()
+	if on {
+		return newReaderManager(t, eng)
+	}
+	return newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1})
+}
+
+func seedReaderVMs(m *Manager, key types.PoolKey, names ...string) {
+	for _, name := range names {
+		m.pools[key].warm = append(m.pools[key].warm, &types.Sandbox{VMName: name, Key: key, VsockSocket: "/vsock/" + name})
+	}
+}
+
+// readerExport makes every snapshot export carry an envelope that lists one disk file for a reader to attach, and a memory image it must not fetch.
+func readerExport(eng *fakeEngine) {
+	eng.exportFiles = map[string]string{
+		envelopeFile:    `{"version":1,"disk_attach_files":["disk.img"]}`,
+		"disk.img":      "disk-bytes",
+		"memory-ranges": "guest-memory",
+	}
+}
+
+func readerLifecycle(eng *fakeEngine) (removes []string, setups int) {
+	eng.mu.Lock()
+	defer eng.mu.Unlock()
+	return slices.Clone(eng.removes), len(eng.startedReaders)
 }

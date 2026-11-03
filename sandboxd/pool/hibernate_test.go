@@ -17,8 +17,7 @@ func TestHibernatePersistFailureSurfacesAndConverges(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
 	sb := mustClaim(t, m, testKey)
-	broken := filepath.Join(t.TempDir(), "gone", "claims.json")
-	m.store.path = broken
+	breakStore(t, m)
 
 	if err := m.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err == nil {
 		t.Fatal("Hibernate reported success despite a persist failure")
@@ -29,13 +28,13 @@ func TestHibernatePersistFailureSurfacesAndConverges(t *testing.T) {
 	if len(eng.hibernates) != 0 {
 		t.Fatalf("engine hibernated %d times before the intent could persist, want 0", len(eng.hibernates))
 	}
-	if err := os.MkdirAll(filepath.Dir(broken), 0o750); err != nil {
+	if err := os.MkdirAll(filepath.Dir(m.store.path), 0o750); err != nil {
 		t.Fatalf("heal store dir: %v", err)
 	}
 	if err := m.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
 		t.Fatalf("Hibernate retry after heal: %v", err)
 	}
-	got, err := newClaimStore(filepath.Dir(broken), false).load()
+	got, err := newClaimStore(filepath.Dir(m.store.path), false).load()
 	if err != nil || got[sb.ID] == nil || got[sb.ID].HibernateSnap == "" || got[sb.ID].PendingSnap != "" {
 		t.Fatalf("journal after healed retry: %+v, %v", got[sb.ID], err)
 	}
@@ -46,12 +45,9 @@ func TestWakePersistFailureSurfaces(t *testing.T) {
 		eng := newFakeEngine()
 		m := newTestManager(t, eng)
 		sb := mustClaim(t, m, testKey)
-		if err := m.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
-			t.Fatalf("Hibernate: %v", err)
-		}
+		hibernateClaim(t, m, sb)
 		snap := eng.hibernates[0]
-		broken := filepath.Join(t.TempDir(), "gone", "claims.json")
-		m.store.path = broken
+		breakStore(t, m)
 
 		if _, _, _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err == nil {
 			t.Fatal("wake reported success despite a persist failure")
@@ -65,7 +61,7 @@ func TestWakePersistFailureSurfaces(t *testing.T) {
 		if eng.snapRemoved(snap) {
 			t.Error("fast path dropped the snapshot while the journal still lags")
 		}
-		if err := os.MkdirAll(filepath.Dir(broken), 0o750); err != nil {
+		if err := os.MkdirAll(filepath.Dir(m.store.path), 0o750); err != nil {
 			t.Fatalf("heal store dir: %v", err)
 		}
 
@@ -75,7 +71,7 @@ func TestWakePersistFailureSurfaces(t *testing.T) {
 			}
 			return eng.snapRemoved(snap)
 		})
-		got, loadErr := newClaimStore(filepath.Dir(broken), false).load()
+		got, loadErr := newClaimStore(filepath.Dir(m.store.path), false).load()
 		if loadErr != nil || got[sb.ID] == nil || got[sb.ID].HibernateSnap != "" {
 			t.Fatalf("journal after converge: %+v, %v", got[sb.ID], loadErr)
 		}
@@ -95,7 +91,7 @@ func TestHibernateAmbiguousErrorTreatedAsDone(t *testing.T) {
 	if _, g := m.Info(); g.Hibernated != 1 {
 		t.Errorf("hibernated %d, want 1", g.Hibernated)
 	}
-	got, _ := newClaimStore(m.dataDir, false).load()
+	got := journaled(t, m)
 	if got[sb.ID] == nil || got[sb.ID].HibernateSnap == "" || got[sb.ID].PendingSnap != "" {
 		t.Fatalf("journal %+v, want HibernateSnap set + PendingSnap clear", got[sb.ID])
 	}
@@ -113,7 +109,7 @@ func TestHibernateVerifiedFailureClearsIntent(t *testing.T) {
 	if _, g := m.Info(); g.Hibernated != 0 {
 		t.Errorf("hibernated %d, want 0 (still running)", g.Hibernated)
 	}
-	got, _ := newClaimStore(m.dataDir, false).load()
+	got := journaled(t, m)
 	if got[sb.ID] == nil || got[sb.ID].HibernateSnap != "" || got[sb.ID].PendingSnap != "" {
 		t.Fatalf("journal %+v, want running (no snaps)", got[sb.ID])
 	}
@@ -136,44 +132,52 @@ func TestHibernateUnverifiableErrorKeepsIntent(t *testing.T) {
 	if _, g := m.Info(); g.Hibernated != 0 {
 		t.Errorf("hibernated %d, want 0 (unconfirmed, not committed)", g.Hibernated)
 	}
-	got, _ := newClaimStore(m.dataDir, false).load()
+	got := journaled(t, m)
 	if got[sb.ID] == nil || got[sb.ID].HibernateSnap != "" || got[sb.ID].PendingSnap == "" {
 		t.Fatalf("journal %+v, want the intent kept for Reconcile", got[sb.ID])
 	}
 }
 
-func TestWakeRestoreErrorStopsAndRetries(t *testing.T) {
-	eng := newFakeEngine()
-	m := newTestManager(t, eng)
-	sb := mustClaim(t, m, testKey)
-	if err := m.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
-		t.Fatalf("Hibernate: %v", err)
-	}
-	snap := eng.hibernates[0]
-	eng.restoreErr = errors.New("restore timeout")
+func TestWakeFailureStopsTheVMAndRetries(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		knob func(*fakeEngine) *error
+	}{
+		{"restore error", func(eng *fakeEngine) *error { return &eng.restoreErr }},
+		{"probe timeout", func(eng *fakeEngine) *error { return &eng.probeErr }},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			eng := newFakeEngine()
+			m := newTestManager(t, eng)
+			sb := mustClaim(t, m, testKey)
+			hibernateClaim(t, m, sb)
+			snap := eng.hibernates[0]
+			*tt.knob(eng) = errors.New(tt.name)
 
-	if _, _, _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err == nil {
-		t.Fatal("wake reported success despite a restore error")
-	}
-	if !slices.Contains(eng.stops, sb.VMName) || !eng.stopped[sb.VMName] {
-		t.Errorf("stops=%v, want the possibly-booted VM stopped", eng.stops)
-	}
-	if eng.removed(sb.VMName) {
-		t.Error("restore error removed the VM the retry restores into")
-	}
-	if eng.snapRemoved(snap) {
-		t.Error("restore error dropped the snapshot needed to retry")
-	}
-	if got, _ := newClaimStore(m.dataDir, false).load(); got[sb.ID] == nil || got[sb.ID].HibernateSnap != snap {
-		t.Fatalf("journal %+v, want HibernateSnap=%q kept for the retry", got[sb.ID], snap)
-	}
-	eng.restoreErr = nil
-	sock, _, _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token)
-	if err != nil || sock == "" {
-		t.Fatalf("wake retry after restore recovered: %q, %v", sock, err)
-	}
-	if len(eng.restores) != 2 {
-		t.Errorf("restores=%d, want 2 (failed attempt + retry)", len(eng.restores))
+			if _, _, _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err == nil {
+				t.Fatal("wake reported success despite the failure")
+			}
+			if !slices.Contains(eng.stops, sb.VMName) || !eng.stopped[sb.VMName] {
+				t.Errorf("stops=%v, want the VM stopped", eng.stops)
+			}
+			if eng.removed(sb.VMName) {
+				t.Error("the failure removed the VM the retry restores into")
+			}
+			if eng.snapRemoved(snap) {
+				t.Error("the failure dropped the snapshot needed to retry")
+			}
+			if got := journaled(t, m); got[sb.ID] == nil || got[sb.ID].HibernateSnap != snap {
+				t.Fatalf("journal %+v, want HibernateSnap=%q kept for the retry", got[sb.ID], snap)
+			}
+			*tt.knob(eng) = nil
+			sock, _, _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token)
+			if err != nil || sock == "" {
+				t.Fatalf("wake retry after recovery: %q, %v", sock, err)
+			}
+			if len(eng.restores) != 2 {
+				t.Errorf("restores=%d, want 2 (failed attempt + retry)", len(eng.restores))
+			}
+		})
 	}
 }
 
@@ -182,14 +186,9 @@ func TestRetryResolvesDanglingIntent(t *testing.T) {
 	m := newTestManager(t, eng)
 	sb := mustClaim(t, m, testKey)
 
-	eng.hibernateErr = errors.New("cli timeout")
-	eng.hibernateErrCompletes = true
-	eng.snapListErr = errors.New("cocoon unreachable")
-	if err := m.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err == nil {
-		t.Fatal("Hibernate reported success on an unconfirmed transition")
-	}
+	leaveDanglingIntent(t, m, eng, sb)
 	realSnap := eng.hibernates[0]
-	if got, _ := newClaimStore(m.dataDir, false).load(); got[sb.ID].PendingSnap != realSnap {
+	if got := journaled(t, m); got[sb.ID].PendingSnap != realSnap {
 		t.Fatalf("intent %q, want the real snapshot %q kept", got[sb.ID].PendingSnap, realSnap)
 	}
 
@@ -201,7 +200,7 @@ func TestRetryResolvesDanglingIntent(t *testing.T) {
 	if len(eng.hibernates) != 1 {
 		t.Errorf("engine hibernated %d times, want 1 (retry adopted the existing snapshot)", len(eng.hibernates))
 	}
-	got, _ := newClaimStore(m.dataDir, false).load()
+	got := journaled(t, m)
 	if got[sb.ID].HibernateSnap != realSnap || got[sb.ID].PendingSnap != "" {
 		t.Fatalf("journal %+v, want HibernateSnap=%q + no pending", got[sb.ID], realSnap)
 	}
@@ -220,12 +219,7 @@ func TestWakeResolvesDanglingIntent(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
 	sb := mustClaim(t, m, testKey)
-	eng.hibernateErr = errors.New("cli timeout")
-	eng.hibernateErrCompletes = true
-	eng.snapListErr = errors.New("cocoon unreachable")
-	if err := m.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err == nil {
-		t.Fatal("Hibernate reported success on an unconfirmed transition")
-	}
+	leaveDanglingIntent(t, m, eng, sb)
 
 	eng.hibernateErr = nil
 	eng.snapListErr = nil
@@ -250,12 +244,7 @@ func TestResolvePendingSnapReleaseRaceDropsOrphan(t *testing.T) {
 		m := newTestManager(t, eng)
 		sb := mustClaim(t, m, testKey)
 
-		eng.hibernateErr = errors.New("cli timeout")
-		eng.hibernateErrCompletes = true
-		eng.snapListErr = errors.New("cocoon unreachable")
-		if err := m.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err == nil {
-			t.Fatal("Hibernate reported success on an unconfirmed transition")
-		}
+		leaveDanglingIntent(t, m, eng, sb)
 		realSnap := eng.hibernates[0]
 
 		eng.snapListErr = nil
@@ -284,16 +273,10 @@ func TestResolveAdoptBillsWhenPersistFails(t *testing.T) {
 		eng := newFakeEngine()
 		m := newTestManager(t, eng)
 		sb := mustClaim(t, m, testKey)
-		eng.hibernateErr = errors.New("cli timeout")
-		eng.hibernateErrCompletes = true
-		eng.snapListErr = errors.New("cocoon unreachable")
-		if err := m.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err == nil {
-			t.Fatal("Hibernate reported success on an unconfirmed transition")
-		}
+		leaveDanglingIntent(t, m, eng, sb)
 
 		eng.snapListErr = nil
-		broken := filepath.Join(t.TempDir(), "gone", "claims.json")
-		m.store.path = broken
+		breakStore(t, m)
 		if err := m.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err == nil {
 			t.Fatal("Hibernate reported success despite a persist failure")
 		}
@@ -301,85 +284,45 @@ func TestResolveAdoptBillsWhenPersistFails(t *testing.T) {
 			t.Errorf("hibernates billed=%d, want 1 (billed even while the persist lags)", n)
 		}
 
-		if err := os.MkdirAll(filepath.Dir(broken), 0o750); err != nil {
+		if err := os.MkdirAll(filepath.Dir(m.store.path), 0o750); err != nil {
 			t.Fatalf("heal store dir: %v", err)
 		}
 		waitFor(t, func() bool {
-			got, err := newClaimStore(filepath.Dir(broken), false).load()
+			got, err := newClaimStore(filepath.Dir(m.store.path), false).load()
 			return err == nil && got[sb.ID] != nil && got[sb.ID].HibernateSnap != ""
 		})
 	})
-}
-
-func TestWakeProbeFailureStopsAndRetries(t *testing.T) {
-	eng := newFakeEngine()
-	m := newTestManager(t, eng)
-	sb := mustClaim(t, m, testKey)
-	if err := m.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
-		t.Fatalf("Hibernate: %v", err)
-	}
-	snap := eng.hibernates[0]
-	eng.probeErr = errors.New("probe timeout")
-
-	if _, _, _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err == nil {
-		t.Fatal("wake reported success despite a probe timeout")
-	}
-	if !slices.Contains(eng.stops, sb.VMName) || !eng.stopped[sb.VMName] {
-		t.Errorf("stops=%v, want the restored VM stopped", eng.stops)
-	}
-	if eng.removed(sb.VMName) {
-		t.Error("probe failure removed the VM the retry restores into")
-	}
-	if eng.snapRemoved(snap) {
-		t.Error("probe failure dropped the snapshot needed to retry")
-	}
-	if got, _ := newClaimStore(m.dataDir, false).load(); got[sb.ID] == nil || got[sb.ID].HibernateSnap != snap {
-		t.Fatalf("journal %+v, want HibernateSnap=%q kept for the retry", got[sb.ID], snap)
-	}
-	eng.probeErr = nil
-	sock, _, _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token)
-	if err != nil || sock == "" {
-		t.Fatalf("wake retry after the probe recovered: %q, %v", sock, err)
-	}
-	if len(eng.restores) != 2 {
-		t.Errorf("restores=%d, want 2 (failed attempt + retry)", len(eng.restores))
-	}
 }
 
 func TestFlushClaimsClosesShutdownWindow(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
 	sb := mustClaim(t, m, testKey)
-	if err := m.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
-		t.Fatalf("Hibernate: %v", err)
-	}
-	broken := filepath.Join(t.TempDir(), "gone", "claims.json")
-	m.store.path = broken
+	hibernateClaim(t, m, sb)
+	breakStore(t, m)
 
 	if _, _, _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err == nil {
 		t.Fatal("wake reported success despite a persist failure")
 	}
-	if err := os.MkdirAll(filepath.Dir(broken), 0o750); err != nil {
+	if err := os.MkdirAll(filepath.Dir(m.store.path), 0o750); err != nil {
 		t.Fatalf("heal store dir: %v", err)
 	}
 	if err := m.FlushClaims(); err != nil {
 		t.Fatalf("FlushClaims: %v", err)
 	}
-	got, err := newClaimStore(filepath.Dir(broken), false).load()
+	got, err := newClaimStore(filepath.Dir(m.store.path), false).load()
 	if err != nil || got[sb.ID] == nil || got[sb.ID].HibernateSnap != "" {
 		t.Fatalf("journal after flush: %+v, %v", got[sb.ID], err)
 	}
 }
 
-func TestHibernateWakeCycle(t *testing.T) {
+func TestHibernateIsIdempotentAndAWakeRestoresOnce(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		eng := newFakeEngine()
 		m := newTestManager(t, eng)
 		sb := mustClaim(t, m, testKey)
 
-		if err := m.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
-			t.Fatalf("Hibernate: %v", err)
-		}
+		hibernateClaim(t, m, sb)
 		if err := m.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
 			t.Fatalf("repeat Hibernate: %v", err)
 		}
@@ -389,7 +332,7 @@ func TestHibernateWakeCycle(t *testing.T) {
 		if _, g := m.Info(); g.Hibernated != 1 {
 			t.Errorf("hibernated count %d, want 1", g.Hibernated)
 		}
-		if got, _ := newClaimStore(m.dataDir, false).load(); got[sb.ID] == nil || got[sb.ID].HibernateSnap == "" {
+		if got := journaled(t, m); got[sb.ID] == nil || got[sb.ID].HibernateSnap == "" {
 			t.Error("hibernation flag not persisted")
 		}
 		hibSnap := eng.hibernates[0]
@@ -426,9 +369,7 @@ func TestWakeDropsSnapshotOffReturnPath(t *testing.T) {
 		eng := newFakeEngine()
 		m := newTestManager(t, eng)
 		sb := mustClaim(t, m, testKey)
-		if err := m.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
-			t.Fatalf("hibernate: %v", err)
-		}
+		hibernateClaim(t, m, sb)
 		eng.snapRemoveStall = make(chan struct{})
 
 		sock, _, _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token)
@@ -450,9 +391,7 @@ func TestWakeFailureKeepsHibernated(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
 	sb := mustClaim(t, m, testKey)
-	if err := m.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
-		t.Fatalf("Hibernate: %v", err)
-	}
+	hibernateClaim(t, m, sb)
 
 	eng.restoreErr = errors.New("restore boom")
 	if _, _, _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err == nil {
@@ -470,9 +409,7 @@ func TestReleaseHibernatedDropsSnapshot(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
 	sb := mustClaim(t, m, testKey)
-	if err := m.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
-		t.Fatalf("Hibernate: %v", err)
-	}
+	hibernateClaim(t, m, sb)
 
 	if err := m.Release(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
 		t.Fatalf("Release: %v", err)
@@ -494,11 +431,7 @@ func TestReleaseMidHibernateDropsOrphanSnapshot(t *testing.T) {
 
 		hibErr := make(chan error, 1)
 		go func() { hibErr <- m.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}) }()
-		waitFor(t, func() bool {
-			eng.mu.Lock()
-			defer eng.mu.Unlock()
-			return len(eng.hibernates) == 1
-		})
+		waitFor(t, func() bool { return eng.hibernateCount() == 1 })
 
 		if err := m.Release(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
 			t.Fatalf("Release: %v", err)
@@ -528,9 +461,7 @@ func TestReconcileAdoptsJournaledIntent(t *testing.T) {
 			VsockSocket: "/vsock/lagged", PendingSnap: hibernatePrefix + "lagged-1-abc123",
 		},
 	}
-	if err := newClaimStore(dataDir, false).save(claims); err != nil {
-		t.Fatalf("setup: %v", err)
-	}
+	seedClaims(t, dataDir, claims)
 	m := newTestManagerAt(t, eng, dataDir)
 
 	if err := m.Reconcile(t.Context()); err != nil {
@@ -557,9 +488,7 @@ func TestReconcileIgnoresStaleOrphanSnapshot(t *testing.T) {
 		claims := map[string]*types.Sandbox{
 			"sb_orp": {ID: "sb_orp", VMName: "sbx-orphan-1", Key: testKey, Token: "tok", VsockSocket: "/vsock/orphan"},
 		}
-		if err := newClaimStore(dataDir, false).save(claims); err != nil {
-			t.Fatalf("setup: %v", err)
-		}
+		seedClaims(t, dataDir, claims)
 		m := newTestManagerAt(t, eng, dataDir)
 
 		if err := m.Reconcile(t.Context()); err != nil {
@@ -583,9 +512,7 @@ func TestReconcileKeepsIntentWithoutImageAsRunning(t *testing.T) {
 			VsockSocket: "/vsock/noimg", PendingSnap: hibernatePrefix + "noimg-1-abc123",
 		},
 	}
-	if err := newClaimStore(dataDir, false).save(claims); err != nil {
-		t.Fatalf("setup: %v", err)
-	}
+	seedClaims(t, dataDir, claims)
 	m := newTestManagerAt(t, eng, dataDir)
 
 	if err := m.Reconcile(t.Context()); err != nil {
@@ -613,9 +540,7 @@ func TestReconcileAdoptsHibernated(t *testing.T) {
 			HibernateSnap: hibernatePrefix + "hibernated-1",
 		},
 	}
-	if err := newClaimStore(dataDir, false).save(claims); err != nil {
-		t.Fatalf("setup: %v", err)
-	}
+	seedClaims(t, dataDir, claims)
 	m := newTestManagerAt(t, eng, dataDir, config.PoolSpec{PoolKey: testKey, Warm: 1})
 
 	if err := m.Reconcile(t.Context()); err != nil {
@@ -632,5 +557,15 @@ func TestReconcileAdoptsHibernated(t *testing.T) {
 	}
 	if len(eng.restores) != 1 {
 		t.Errorf("restores=%v, want the adopted claim woken", eng.restores)
+	}
+}
+
+func leaveDanglingIntent(t *testing.T, m *Manager, eng *fakeEngine, sb *types.Sandbox) {
+	t.Helper()
+	eng.hibernateErr = errors.New("cli timeout")
+	eng.hibernateErrCompletes = true
+	eng.snapListErr = errors.New("cocoon unreachable")
+	if err := m.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err == nil {
+		t.Fatal("Hibernate reported success on an unconfirmed transition")
 	}
 }

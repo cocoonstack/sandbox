@@ -12,7 +12,7 @@ func TestStartReaderOverlaysTheAttachedDiskOnTheGuestsOwnLayers(t *testing.T) {
 	sock := sockPath(t)
 	fake := serveFakeSilkd(t, sock)
 	configureReaderDevices(fake)
-	e := New("cocoon", nil, nil, false, false, "")
+	e := newTestEngine()
 
 	if err := e.StartReader(t.Context(), sock, "snap-ab12cd34"); err != nil {
 		t.Fatalf("StartReader: %v", err)
@@ -53,11 +53,9 @@ func TestStartReaderFailsFastWhenTheClaimImageHasNoSilkd(t *testing.T) {
 	sock := sockPath(t)
 	fake := serveFakeSilkd(t, sock)
 	configureReaderDevices(fake)
-	fake.mu.Lock()
-	fake.execFailAt, fake.execCode = 9, 1
-	fake.mu.Unlock()
+	fake.set(func(f *fakeSilkd) { f.execFailAt, f.execCode = 9, 1 })
 
-	err := New("cocoon", nil, nil, false, false, "").StartReader(t.Context(), sock, "snap-ab12cd34")
+	err := newTestEngine().StartReader(t.Context(), sock, "snap-ab12cd34")
 	if err == nil || !strings.Contains(err.Error(), "no silkd") {
 		t.Fatalf("StartReader = %v, want the missing silkd reported", err)
 	}
@@ -72,11 +70,9 @@ func TestStartReaderStopsAtTheFirstFailedMount(t *testing.T) {
 	sock := sockPath(t)
 	fake := serveFakeSilkd(t, sock)
 	configureReaderDevices(fake)
-	fake.mu.Lock()
-	fake.execFailFrom, fake.execCode = 6, 32
-	fake.mu.Unlock()
+	fake.set(func(f *fakeSilkd) { f.execFailFrom, f.execCode = 6, 32 })
 
-	err := New("cocoon", nil, nil, false, false, "").StartReader(t.Context(), sock, "snap-ab12cd34")
+	err := newTestEngine().StartReader(t.Context(), sock, "snap-ab12cd34")
 	if err == nil || !strings.Contains(err.Error(), "mount layer 1") {
 		t.Fatalf("StartReader = %v, want the layer 1 mount failure", err)
 	}
@@ -91,11 +87,9 @@ func TestStartReaderRefusesAGuestWithoutLayers(t *testing.T) {
 	sock := sockPath(t)
 	fake := serveFakeSilkd(t, sock)
 	configureReaderDevices(fake)
-	fake.mu.Lock()
-	fake.serial["/proc/cmdline"] = []byte("console=hvc0 cocoon.cow=cow\n")
-	fake.mu.Unlock()
+	fake.set(func(f *fakeSilkd) { f.serial["/proc/cmdline"] = []byte("console=hvc0 cocoon.cow=cow\n") })
 
-	err := New("cocoon", nil, nil, false, false, "").StartReader(t.Context(), sock, "snap-ab12cd34")
+	err := newTestEngine().StartReader(t.Context(), sock, "snap-ab12cd34")
 	if err == nil || !strings.Contains(err.Error(), "cocoon.layers=") {
 		t.Fatalf("StartReader = %v, want the missing layers reported", err)
 	}
@@ -128,7 +122,7 @@ func TestCmdlineLayersReadsTheLastParamInOrder(t *testing.T) {
 func TestDialReaderConnectsToTheViewPort(t *testing.T) {
 	sock := sockPath(t)
 	fake := serveFakeSilkd(t, sock)
-	conn, err := New("cocoon", nil, nil, false, false, "").DialReader(t.Context(), sock)
+	conn, err := newTestEngine().DialReader(t.Context(), sock)
 	if err != nil {
 		t.Fatalf("DialReader: %v", err)
 	}

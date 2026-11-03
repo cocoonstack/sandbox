@@ -25,9 +25,7 @@ func TestUsageJournalRecordsLifecycle(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
 	sb := mustClaim(t, m, testKey)
-	if err := m.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
-		t.Fatalf("Hibernate: %v", err)
-	}
+	hibernateClaim(t, m, sb)
 	if _, _, _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
 		t.Fatalf("Wake: %v", err)
 	}
@@ -93,9 +91,7 @@ func TestClaimLatencyCountsPoolClaimsByTierOnly(t *testing.T) {
 	if _, err = m.ClaimCheckpoint(t.Context(), ckpt.ID, ClaimOptions{TTL: time.Hour}); err != nil {
 		t.Fatalf("claim checkpoint: %v", err)
 	}
-	cold := testKey
-	cold.Template = "cold:1"
-	if _, err = m.ClaimProvision(t.Context(), cold, ClaimOptions{TTL: time.Hour}); err != nil {
+	if _, err = m.ClaimProvision(t.Context(), tplKey("cold:1"), ClaimOptions{TTL: time.Hour}); err != nil {
 		t.Fatalf("cold claim: %v", err)
 	}
 
@@ -151,14 +147,14 @@ func TestQuotaRefusesClaimsPastCap(t *testing.T) {
 	m.maxClaims = 1
 
 	first := mustClaim(t, m, testKey)
-	if _, err := claimAny(t.Context(), m, testKey, time.Hour); !errors.Is(err, ErrQuota) {
+	if _, err := claimAny(t.Context(), m, testKey, ClaimOptions{TTL: time.Hour}); !errors.Is(err, ErrQuota) {
 		t.Fatalf("claim past cap: %v, want ErrQuota", err)
 	}
 
 	if err := m.Release(t.Context(), first.ID, Cred{Token: first.Token}); err != nil {
 		t.Fatalf("Release: %v", err)
 	}
-	if _, err := claimAny(t.Context(), m, testKey, time.Hour); err != nil {
+	if _, err := claimAny(t.Context(), m, testKey, ClaimOptions{TTL: time.Hour}); err != nil {
 		t.Errorf("claim after release: %v", err)
 	}
 }
@@ -168,10 +164,7 @@ func TestTenantQuotaBindsPerTenant(t *testing.T) {
 	m := newTestManager(t, eng)
 	setTenantCaps(t, m, map[string]int{"acme": 1, "beta": 2})
 
-	first, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{TTL: time.Hour, Tenant: "acme"})
-	if err != nil {
-		t.Fatalf("acme claim: %v", err)
-	}
+	first := claimTenant(t, m, "acme")
 	if first.Tenant != "acme" {
 		t.Errorf("tenant %q, want acme", first.Tenant)
 	}
@@ -192,18 +185,13 @@ func TestTenantQuotaBindsPerTenant(t *testing.T) {
 	if err := m.Release(t.Context(), first.ID, Cred{Token: first.Token}); err != nil {
 		t.Fatalf("Release: %v", err)
 	}
-	if _, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{TTL: time.Hour, Tenant: "acme"}); err != nil {
-		t.Errorf("acme claim after release: %v", err)
-	}
+	claimTenant(t, m, "acme")
 }
 
 func TestTenantStampedInJournals(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
-	sb, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{TTL: time.Hour, Tenant: "acme"})
-	if err != nil {
-		t.Fatalf("claim: %v", err)
-	}
+	sb := claimTenant(t, m, "acme")
 
 	raw, err := os.ReadFile(filepath.Join(m.dataDir, "claims.json"))
 	if err != nil {
@@ -243,18 +231,13 @@ func TestEveryClaimScopedUsageEventCarriesTheTenant(t *testing.T) {
 	if err := m.PutTenant(ctx, tenants.TenantSpec{Name: "acme", Token: "acme-tok"}); err != nil {
 		t.Fatalf("put tenant: %v", err)
 	}
-	sb, err := m.ClaimProvision(ctx, testKey, ClaimOptions{TTL: time.Hour, Tenant: "acme"})
-	if err != nil {
-		t.Fatalf("claim: %v", err)
-	}
+	sb := claimTenant(t, m, "acme")
 	cred := Cred{Token: sb.Token}
-	if _, err = m.Renew(ctx, sb.ID, cred, time.Hour, ""); err != nil {
+	if _, err := m.Renew(ctx, sb.ID, cred, time.Hour, ""); err != nil {
 		t.Fatalf("renew: %v", err)
 	}
-	if err = m.Hibernate(ctx, sb.ID, cred); err != nil {
-		t.Fatalf("hibernate: %v", err)
-	}
-	if _, _, _, err = m.WakeAgentSocket(ctx, sb.ID, sb.Token); err != nil {
+	hibernateClaim(t, m, sb)
+	if _, _, _, err := m.WakeAgentSocket(ctx, sb.ID, sb.Token); err != nil {
 		t.Fatalf("wake: %v", err)
 	}
 	children, err := m.Fork(ctx, sb.ID, cred, 1, time.Hour, "", "")
@@ -310,9 +293,7 @@ func TestEveryEventThatMovesTheDeadlineStatesIt(t *testing.T) {
 		t.Fatalf("renew: %v", err)
 	}
 	assertDeadline("renew")
-	if err := m.Hibernate(ctx, sb.ID, cred); err != nil {
-		t.Fatalf("hibernate: %v", err)
-	}
+	hibernateClaim(t, m, sb)
 	if _, _, _, err := m.WakeAgentSocket(ctx, sb.ID, sb.Token); err != nil {
 		t.Fatalf("wake: %v", err)
 	}
@@ -355,9 +336,7 @@ func TestArchiveEventPrecedesAWakeDuringItsTeardown(t *testing.T) {
 		m := newTestManager(t, eng, archivePool(3600))
 		ctx := t.Context()
 		sb := mustClaim(t, m, testKey)
-		if err := m.Hibernate(ctx, sb.ID, Cred{Token: sb.Token}); err != nil {
-			t.Fatalf("hibernate: %v", err)
-		}
+		hibernateClaim(t, m, sb)
 		stall := make(chan struct{})
 		eng.mu.Lock()
 		eng.removeStall = stall
@@ -382,15 +361,12 @@ func TestReconcileRecordsTheEndOfTheClaimsItDrops(t *testing.T) {
 	eng := newFakeEngine()
 	dir := t.TempDir()
 	m := newTestManagerAt(t, eng, dir)
-	lost, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{TTL: time.Hour, Tenant: "acme"})
-	if err != nil {
-		t.Fatalf("claim: %v", err)
-	}
+	lost := claimTenant(t, m, "acme")
 	kept := mustClaim(t, m, testKey)
 	delete(eng.vms, lost.VMName)
 
 	m2 := newTestManagerAt(t, eng, dir)
-	if err = m2.Reconcile(t.Context()); err != nil {
+	if err := m2.Reconcile(t.Context()); err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
 	if got, want := usageEventsOf(t, m2, lost.ID), "claim,reap"; got != want {
@@ -410,9 +386,7 @@ func TestReconcileRecordsTheWakeACrashLost(t *testing.T) {
 	dir := t.TempDir()
 	m := newTestManagerAt(t, eng, dir)
 	sb := mustClaim(t, m, testKey)
-	if err := m.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
-		t.Fatalf("hibernate: %v", err)
-	}
+	hibernateClaim(t, m, sb)
 	delete(eng.stopped, sb.VMName)
 
 	m2 := newTestManagerAt(t, eng, dir)
@@ -699,32 +673,4 @@ func TestARelayedFrameCannotForgeOrDropItsAuditLine(t *testing.T) {
 			}
 		}
 	}
-}
-
-func usageJournal(t *testing.T, m *Manager) []usage.Event {
-	t.Helper()
-	raw, err := os.ReadFile(filepath.Join(m.dataDir, usage.JournalFile))
-	if err != nil {
-		t.Fatalf("read usage journal: %v", err)
-	}
-	var events []usage.Event
-	for line := range strings.SplitSeq(strings.TrimSpace(string(raw)), "\n") {
-		var ev usage.Event
-		if err := json.Unmarshal([]byte(line), &ev); err != nil {
-			t.Fatalf("bad journal line %q: %v", line, err)
-		}
-		events = append(events, ev)
-	}
-	return events
-}
-
-func usageEventsOf(t *testing.T, m *Manager, id string) string {
-	t.Helper()
-	var events []string
-	for _, ev := range usageJournal(t, m) {
-		if ev.ID == id {
-			events = append(events, ev.Event)
-		}
-	}
-	return strings.Join(events, ",")
 }

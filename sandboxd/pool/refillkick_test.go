@@ -86,10 +86,7 @@ func TestNodeAtCapacityParksRefillInsteadOfRetrying(t *testing.T) {
 		m.mu.Unlock()
 		eng.cloneErr = nil
 		m.refillOnce(t.Context())
-		waitFor(t, func() bool {
-			infos, _ := m.Info()
-			return infos[0].Warm == 4
-		})
+		waitWarm(t, m, 4)
 	})
 }
 
@@ -110,8 +107,5 @@ func TestRefillKeepsItsShareWhileTeardownsQueue(t *testing.T) {
 	waitFor(t, func() bool { return len(m.maintSem) == cap(m.maintSem) })
 
 	m.refillOnce(t.Context())
-	waitFor(t, func() bool {
-		infos, _ := m.Info()
-		return infos[0].Warm == 1
-	})
+	waitWarm(t, m, 1)
 }
