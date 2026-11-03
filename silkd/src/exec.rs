@@ -13,7 +13,7 @@ use tokio::process::Command;
 use tokio::sync::mpsc;
 use tokio::time::timeout;
 
-use crate::proc::{Chunk, Proc, Table, synth_pid, write_chunk};
+use crate::proc::{Chunk, Proc, Table, write_chunk};
 use crate::proto::{self, ErrorKind, ExecReq, Request, Response};
 use crate::sysutil;
 
@@ -49,14 +49,14 @@ where
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(!req.detach);
-    if let Some(ref cwd) = req.cwd {
+    if let Some(cwd) = &req.cwd {
         cmd.current_dir(cwd);
     }
     cmd.env_clear();
     cmd.envs(sysutil::base_env().iter().copied());
     cmd.envs(claim.iter().map(|(k, v)| (*k, &**v)));
     cmd.envs(&req.env);
-    if let Some(ref user) = req.user
+    if let Some(user) = &req.user
         && let Err(e) = sysutil::apply_user(&mut cmd, user)
     {
         return proto::error_frame(out, ErrorKind::BadRequest, e).await;
@@ -69,7 +69,7 @@ where
         }
     };
 
-    let pid = child.id().unwrap_or_else(synth_pid);
+    let pid = child.id().unwrap_or(0);
     let proc = table.register(pid, req.argv, req.detach, now_secs);
     if let Err(e) = proto::write_frame(out, &Response::Started { pid }).await {
         // the client never learned this pid, so nothing else will ever reap the child.
@@ -83,10 +83,10 @@ where
     let stderr = child.stderr.take();
 
     // a backpressured mpsc paces the child to the foreground client; attachers ride the lossy broadcast.
-    let (fg_tx, fg_rx) = mpsc::channel::<Chunk>(FG_CAP);
+    let (fg_tx, mut fg_rx) = mpsc::channel::<Chunk>(FG_CAP);
     let (pump_fg, sup_fg) = (!req.detach).then(|| (fg_tx.clone(), fg_tx)).unzip();
 
-    let pump = tokio::spawn(pump_out(Arc::clone(&proc), stdout, stderr, pump_fg));
+    let mut pump = tokio::spawn(pump_out(Arc::clone(&proc), stdout, stderr, pump_fg));
     let pump_abort = pump.abort_handle();
     // stdin rides its own task so a slow write cannot stall output or reaping.
     let stdin_task = tokio::spawn(pump_stdin(stdin, client, req.detach));
@@ -98,7 +98,6 @@ where
     let supervise = tokio::spawn(async move {
         let code = sysutil::wait_code(&mut child).await;
         let _ = sup_reaped.set(code);
-        let mut pump = pump;
         if timeout(POST_EXIT_DRAIN, &mut pump).await.is_err() {
             pump.abort();
         }
@@ -110,7 +109,6 @@ where
     });
 
     if req.detach {
-        drop(fg_rx);
         let table = table.clone();
         let proc = Arc::clone(&proc);
         tokio::spawn(async move {
@@ -121,8 +119,7 @@ where
         return Ok(());
     }
 
-    let mut rx = fg_rx;
-    if let Err(e) = stream_to_client(&mut rx, out).await {
+    if let Err(e) = stream_to_client(&mut fg_rx, out).await {
         // client gone: publish the terminal state the abort pre-empts, else an attacher waits forever.
         supervise.abort();
         pump_abort.abort();

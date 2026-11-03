@@ -3,7 +3,7 @@
 use std::fmt::Write as _;
 use std::time::Duration;
 
-pub const DEFAULT_INIT: &str = "/sbin/init";
+const DEFAULT_INIT: &str = "/sbin/init";
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
 // cap the timeout: `Instant + Duration` panics on overflow, and a PID 1 panic is a kernel panic.
 const MAX_TIMEOUT_SECS: u64 = 86_400;

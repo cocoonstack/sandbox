@@ -18,7 +18,6 @@ use tokio::io::{
 
 /// Mirrors cocoon-agent's frame cap so a malformed peer can't OOM us.
 pub const MAX_FRAME: usize = 8 * 1024 * 1024;
-pub const PROTO_VERSION: u32 = 1;
 /// 2 serves RPCs back to back on one connection; 1 closed after one.
 pub const KEEP_ALIVE_PROTO: u32 = 2;
 
@@ -636,6 +635,7 @@ mod tests {
     use super::*;
 
     const FIXTURES_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../protocol/wire/fixtures/v1");
+    const PROTO_VERSION: u32 = 1;
 
     #[test]
     fn request_roundtrip_and_unknown_fields_ignored() {
@@ -704,32 +704,6 @@ mod tests {
         let got: serde_json::Value = serde_json::from_slice(&rendered).expect("parse rendered");
         let want: serde_json::Value = serde_json::from_slice(&raw).expect("parse fixture json");
         assert_eq!(got, want);
-    }
-
-    #[tokio::test]
-    #[ignore]
-    async fn bench_chunk_render_old_vs_new() {
-        const CHUNKS: usize = 32 * 1024;
-        let data = vec![0xa5u8; BULK_CHUNK];
-        let mut sink = tokio::io::sink();
-
-        let start = std::time::Instant::now();
-        for _ in 0..CHUNKS {
-            write_frame(&mut sink, &Response::Data { data: data.clone() })
-                .await
-                .expect("serde render");
-        }
-        let serde_dt = start.elapsed();
-
-        let mut frame = Vec::new();
-        let start = std::time::Instant::now();
-        for _ in 0..CHUNKS {
-            write_chunk_frame(&mut sink, &mut frame, "data", &data)
-                .await
-                .expect("hand render");
-        }
-        let hand_dt = start.elapsed();
-        println!("{CHUNKS} x {BULK_CHUNK} B chunks: serde {serde_dt:?}, hand-rendered {hand_dt:?}");
     }
 
     #[tokio::test]

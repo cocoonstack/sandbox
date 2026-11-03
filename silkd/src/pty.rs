@@ -11,7 +11,7 @@ use tokio::process::Command;
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::timeout;
 
-use crate::proc::{Proc, Table, synth_pid};
+use crate::proc::{Proc, Table};
 use crate::proto::{self, ErrorKind, PtyReq, READ_CHUNK, Request, Response};
 use crate::sysutil;
 
@@ -77,7 +77,7 @@ pub async fn open<W: AsyncWrite + Unpin>(
     // drop cmd so its slave dups close, else the master never sees the shell's exit and the pump hangs.
     drop(cmd);
 
-    let pid = child.id().unwrap_or_else(synth_pid);
+    let pid = child.id().unwrap_or(0);
     let proc = table.register(pid, vec![shell, "-i".to_string()], false, now);
     proc.set_pty_master(resize_fd);
 

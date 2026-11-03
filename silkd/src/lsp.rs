@@ -30,10 +30,6 @@ pub struct Broker {
 }
 
 impl Broker {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     /// Spawns the manifested language server for `language` and returns its id.
     pub async fn start<W: AsyncWrite + Unpin>(
         &self,

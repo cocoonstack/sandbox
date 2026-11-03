@@ -46,7 +46,7 @@ where
 pub async fn pull<W: AsyncWrite + Unpin>(w: &mut W, path: String) -> io::Result<()> {
     let p = Path::new(&path);
     let (parent, name) = match (p.parent(), p.file_name()) {
-        (Some(par), Some(n)) if !n.is_empty() => (par, n),
+        (Some(par), Some(n)) => (par, n),
         _ => return proto::error_frame(w, ErrorKind::BadRequest, "invalid path").await,
     };
     // symlink_metadata: a dangling symlink is still a valid tar source.

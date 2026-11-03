@@ -149,7 +149,7 @@ async fn pty_disconnect_tears_down_without_spin() {
 
 #[tokio::test]
 async fn pty_started_write_failure_kills_the_shell_and_unregisters_it() {
-    let table = Table::new();
+    let table = Table::default();
     let (_client, client_rx) = mpsc::channel(1);
     let req = PtyReq {
         cols: 80,

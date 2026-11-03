@@ -12,6 +12,8 @@ use crate::sysutil;
 const STATUS_FILES_BYTES: usize = proto::MAX_FRAME / 8;
 const STATUS_ENTRY_OVERHEAD: usize = 40;
 
+const NO_EGRESS: &str = "no network on this sandbox; use fs.push to move a repository in";
+
 /// Clones `url` into `path` (optionally a branch, shallow depth), then Done.
 pub async fn clone<W: AsyncWrite + Unpin>(
     w: &mut W,
@@ -22,7 +24,7 @@ pub async fn clone<W: AsyncWrite + Unpin>(
     auth: Option<String>,
 ) -> std::io::Result<()> {
     if !crate::net::has_egress() {
-        return proto::write_frame(w, &no_egress()).await;
+        return proto::error_frame(w, ErrorKind::Unimplemented, NO_EGRESS).await;
     }
     let depth_arg;
     let mut args: Vec<&str> = vec!["clone"];
@@ -96,7 +98,7 @@ pub async fn net_verb<W: AsyncWrite + Unpin>(
     verb: &str,
 ) -> std::io::Result<()> {
     if !crate::net::has_egress() {
-        return proto::write_frame(w, &no_egress()).await;
+        return proto::error_frame(w, ErrorKind::Unimplemented, NO_EGRESS).await;
     }
     let out = git(&path, auth.as_deref(), &[verb]).await?;
     terminal(w, verb, &out).await
@@ -112,11 +114,7 @@ pub async fn branch<W: AsyncWrite + Unpin>(
     let args: Vec<&str> = match (op, &name) {
         (GitBranchOp::List, _) => return list_branches(w, &path).await,
         (_, None) => {
-            return proto::write_frame(
-                w,
-                &Response::error(ErrorKind::BadRequest, "branch op needs a name"),
-            )
-            .await;
+            return proto::error_frame(w, ErrorKind::BadRequest, "branch op needs a name").await;
         }
         (GitBranchOp::Create, Some(name)) => vec!["branch", name],
         (GitBranchOp::Delete, Some(name)) => vec!["branch", "-D", name],
@@ -177,13 +175,6 @@ fn apply_config(cmd: &mut Command, auth: Option<&str>) {
             format!("Authorization: Bearer {token}"),
         );
     }
-}
-
-fn no_egress() -> Response {
-    Response::error(
-        ErrorKind::Unimplemented,
-        "no network on this sandbox; use fs.push to move a repository in",
-    )
 }
 
 /// Writes Done on success, else the git stderr as an error frame.
