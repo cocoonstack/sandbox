@@ -37,6 +37,8 @@ type Registry interface {
 	Replace(ctx context.Context, rec Record, expect int64) (int64, error)
 	// Take moves the live row at epoch expect to owner at a new epoch and returns it; another node's row moves only once its owner's lease expired.
 	Take(ctx context.Context, id string, expect int64, owner string) (int64, error)
+	// TakeOwned moves each live row owner holds at its epoch in expect to a new epoch in one call and returns the new epochs of the rows it moved.
+	TakeOwned(ctx context.Context, owner string, expect map[string]int64) (map[string]int64, error)
 	// Consume turns the live row at epoch expect into a tombstone at a new epoch and returns it.
 	Consume(ctx context.Context, id string, expect int64) (int64, error)
 	// Delete removes the row only while it is at epoch.

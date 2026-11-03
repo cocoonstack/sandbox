@@ -30,6 +30,9 @@ func TestCellsKeepTheirOwnRows(t *testing.T) {
 	if _, err = c2.Take(ctx, "sb_1", epoch, "n2"); !errors.Is(err, archives.ErrLost) {
 		t.Errorf("c2 takes c1's row: %v, want ErrLost", err)
 	}
+	if taken, takeErr := c2.TakeOwned(ctx, "n1", map[string]int64{"sb_1": epoch}); takeErr != nil || len(taken) != 0 {
+		t.Errorf("c2 takes c1's row as its owner: %v %v", taken, takeErr)
+	}
 	if _, err = c2.Consume(ctx, "sb_1", epoch); !errors.Is(err, archives.ErrLost) {
 		t.Errorf("c2 consumes c1's row: %v, want ErrLost", err)
 	}

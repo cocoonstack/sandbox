@@ -3,6 +3,7 @@ package pool
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"os"
 	"sync/atomic"
@@ -302,6 +303,48 @@ func TestLeaseAdoptionDuringUnfenceDropsTheClaimWithoutServingIt(t *testing.T) {
 	})
 }
 
+func TestLeaseANodeLiftedAfterAnOutageAdoptsOnlyOnceEveryOwnerCouldRenew(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		c := newReplicaCluster(t)
+		a, b := c.node(t, "a", t.TempDir(), keepAnHour), c.node(t, "b", t.TempDir(), keepAnHour)
+		sb := mustClaim(t, a, testKey)
+		vm := lockedVMName(sb)
+		replicateNow(t, a, sb)
+		a.tripFence()
+		b.tripFence()
+		c.expire("a")
+		c.expire("b")
+
+		if adopted, err := b.AdoptArchived(t.Context(), sb.ID, sb.Token); err != nil || adopted {
+			t.Fatalf("adoption by a fenced node: %v %v, want refused", adopted, err)
+		}
+		c.renew(t, "b")
+		b.unfence(t.Context(), time.Now())
+		if b.isFenced() {
+			t.Fatal("the node stayed fenced after its renewal")
+		}
+		if adopted, err := b.AdoptArchived(t.Context(), sb.ID, sb.Token); err != nil || adopted {
+			t.Fatalf("adoption right after the lift: %v %v, want refused", adopted, err)
+		}
+		c.renew(t, "a")
+		a.unfence(t.Context(), time.Now())
+		synctest.Wait()
+		if _, held := a.byID(sb.ID); !held || a.eng.(*fakeEngine).removed(vm) {
+			t.Fatalf("the healthy owner lost its claim: held=%v VM removed=%v", held, a.eng.(*fakeEngine).removed(vm))
+		}
+
+		c.expire("a")
+		time.Sleep(adoptGrace - time.Millisecond)
+		if adopted, err := b.AdoptArchived(t.Context(), sb.ID, sb.Token); err != nil || adopted {
+			t.Fatalf("adoption inside the grace: %v %v, want refused", adopted, err)
+		}
+		time.Sleep(time.Millisecond)
+		if adopted, err := b.AdoptArchived(t.Context(), sb.ID, sb.Token); err != nil || !adopted {
+			t.Errorf("adoption once the grace passed: %v %v, want adopted", adopted, err)
+		}
+	})
+}
+
 func TestLeaseFencedNodeDoesNotAnswerAsOwnerOfReplicatedClaims(t *testing.T) {
 	c := newReplicaCluster(t)
 	a := c.node(t, "a", t.TempDir(), keepAnHour)
@@ -450,12 +493,63 @@ func TestLeaseAdoptionWaitsOutTheFenceAndTheOldOwnerDropsItsCopy(t *testing.T) {
 	}
 }
 
+func TestLeaseUnfenceOfManyClaimsLiftsInsideTheWindowOverASlowRegistry(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		c := newReplicaCluster(t)
+		a := c.node(t, "a", t.TempDir(), keepAnHour)
+		sbs := make([]*types.Sandbox, 200)
+		for i := range sbs {
+			sb := &types.Sandbox{ID: fmt.Sprintf("sb_%016x", i), Token: fmt.Sprintf("%032x", i), Key: testKey, Tenant: "t", ReplicaCk: fmt.Sprintf("ck_%016x", i)}
+			epoch, err := c.reg.Put(t.Context(), archives.Record{ID: sb.ID, Owner: "a", TokenSHA256: "x", Checkpoint: sb.ReplicaCk, Claim: []byte(`{}`)})
+			if err != nil {
+				t.Fatalf("put: %v", err)
+			}
+			sb.ArchiveEpoch = epoch
+			a.mu.Lock()
+			a.addClaimLocked(sb)
+			a.mu.Unlock()
+			sbs[i] = sb
+		}
+		a.archives = &slowRegistry{Registry: c.reg, rtt: 100 * time.Millisecond}
+		a.tripFence()
+
+		a.unfence(t.Context(), time.Now())
+		if a.isFenced() {
+			t.Fatalf("%d claims at a 100 ms round trip outlasted the %s window", len(sbs), leaseTTL-leaseMargin)
+		}
+		for _, sb := range sbs {
+			if rec, _, _ := c.reg.Get(t.Context(), sb.ID); rec.Owner != "a" || rec.Epoch != a.epochOf(sb) {
+				t.Fatalf("row %s at %s@%d, claim epoch %d, want this node's row at the claim's epoch", sb.ID, rec.Owner, rec.Epoch, a.epochOf(sb))
+			}
+		}
+	})
+}
+
 type lostTakeRegistry struct {
 	archives.Registry
 }
 
 func (r *lostTakeRegistry) Take(context.Context, string, int64, string) (int64, error) {
 	return 0, archives.ErrLost
+}
+
+func (r *lostTakeRegistry) TakeOwned(context.Context, string, map[string]int64) (map[string]int64, error) {
+	return nil, nil
+}
+
+type slowRegistry struct {
+	archives.Registry
+	rtt time.Duration
+}
+
+func (r *slowRegistry) Take(ctx context.Context, id string, expect int64, owner string) (int64, error) {
+	time.Sleep(r.rtt)
+	return r.Registry.Take(ctx, id, expect, owner)
+}
+
+func (r *slowRegistry) TakeOwned(ctx context.Context, owner string, expect map[string]int64) (map[string]int64, error) {
+	time.Sleep(r.rtt)
+	return r.Registry.TakeOwned(ctx, owner, expect)
 }
 
 type cutRegistry struct {
@@ -477,6 +571,17 @@ func (r *cutRegistry) Take(ctx context.Context, id string, expect int64, owner s
 		}
 	}
 	return r.Registry.Take(ctx, id, expect, owner)
+}
+
+func (r *cutRegistry) TakeOwned(ctx context.Context, owner string, expect map[string]int64) (map[string]int64, error) {
+	if hook := r.beforeTake; hook != nil {
+		r.beforeTake = nil
+		hook()
+	}
+	if r.takeErr != nil {
+		return nil, nil
+	}
+	return r.Registry.TakeOwned(ctx, owner, expect)
 }
 
 func (r *cutRegistry) Renew(ctx context.Context, node string, ttl time.Duration) error {

@@ -83,6 +83,20 @@ func (m *Mem) Take(_ context.Context, id string, expect int64, owner string) (in
 	})
 }
 
+func (m *Mem) TakeOwned(_ context.Context, owner string, expect map[string]int64) (map[string]int64, error) {
+	taken := map[string]int64{}
+	for id, epoch := range expect {
+		next, err := m.advance(id, epoch, func(rec *archives.Record) bool { return rec.Owner == owner })
+		switch {
+		case err == nil:
+			taken[id] = next
+		case !errors.Is(err, archives.ErrLost):
+			return nil, err
+		}
+	}
+	return taken, nil
+}
+
 func (m *Mem) Consume(_ context.Context, id string, expect int64) (int64, error) {
 	return m.advance(id, expect, func(rec *archives.Record) bool {
 		rec.Consumed = true
@@ -206,6 +220,7 @@ func Run(t *testing.T, open Opener) {
 	t.Run("put fences other owners", func(t *testing.T) { testPutFences(t, open(t)) })
 	t.Run("take is a compare-and-set", func(t *testing.T) { testTake(t, open(t)) })
 	t.Run("one of concurrent takes wins", func(t *testing.T) { testTakeRace(t, open(t)) })
+	t.Run("take owned moves only the owner's live rows at their epochs", func(t *testing.T) { testTakeOwned(t, open(t)) })
 	t.Run("consume leaves a tombstone", func(t *testing.T) { testConsume(t, open(t)) })
 	t.Run("delete only at its epoch", func(t *testing.T) { testDelete(t, open(t)) })
 	t.Run("epochs are never reused", func(t *testing.T) { testEpochsNeverRepeat(t, open(t)) })
@@ -303,6 +318,37 @@ func testTakeRace(t *testing.T, r archives.Registry) {
 	}
 	if got, _, _ := r.Get(ctx, "sb_1"); got.Epoch != won[0] {
 		t.Errorf("epoch after the race %d, want the winner's %d", got.Epoch, won[0])
+	}
+}
+
+func testTakeOwned(t *testing.T, r archives.Registry) {
+	ctx := t.Context()
+	mine := mustPut(t, r, record("sb_mine", "a", time.Time{}))
+	stale := mustPut(t, r, record("sb_moved", "a", time.Time{}))
+	moved := mustPut(t, r, record("sb_moved", "a", time.Time{}))
+	other := mustPut(t, r, record("sb_other", "b", time.Time{}))
+	spent, err := r.Consume(ctx, "sb_spent", mustPut(t, r, record("sb_spent", "a", time.Time{})))
+	if err != nil {
+		t.Fatalf("consume: %v", err)
+	}
+	taken, err := r.TakeOwned(ctx, "a", map[string]int64{"sb_mine": mine, "sb_moved": stale, "sb_other": other, "sb_spent": spent, "sb_none": 1})
+	if err != nil || len(taken) != 1 || taken["sb_mine"] <= spent {
+		t.Fatalf("take owned: %v %v, want only sb_mine at a new epoch", taken, err)
+	}
+	put := record("sb_mine", "a", time.Time{})
+	if got, _, _ := r.Get(ctx, "sb_mine"); got.Owner != "a" || got.Epoch != taken["sb_mine"] || got.Consumed || got.Checkpoint != put.Checkpoint || string(got.Claim) != string(put.Claim) {
+		t.Errorf("row after take owned: %+v, want a@%d with the row", got, taken["sb_mine"])
+	}
+	for id, want := range map[string]int64{"sb_moved": moved, "sb_other": other, "sb_spent": spent} {
+		if got, _, _ := r.Get(ctx, id); got.Epoch != want {
+			t.Errorf("%s moved to epoch %d, want it left at %d", id, got.Epoch, want)
+		}
+	}
+	if _, ok, _ := r.Get(ctx, "sb_none"); ok {
+		t.Error("take owned inserted a row")
+	}
+	if taken, err = r.TakeOwned(ctx, "a", nil); err != nil || len(taken) != 0 {
+		t.Errorf("take owned of no ids: %v %v, want none", taken, err)
 	}
 }
 

@@ -153,8 +153,12 @@ func (m *Manager) archive(ctx context.Context, sb *types.Sandbox) error {
 		m.mu.Lock()
 		var rb claimSnapshot
 		// A Release that landed meanwhile already deleted the claim; re-setting it would resurrect it
-		if m.claimed[sb.ID] == sb {
+		live := m.claimed[sb.ID] == sb
+		if live {
 			sb.ArchiveCk, sb.ArchiveEpoch, sb.ArchivePending, sb.ReplicaCk = "", 0, prevPending, replica
+			if replica != "" {
+				sb.ArchiveEpoch = epoch
+			}
 			sb.HibernateSnap, sb.VsockSocket, sb.VMName = snap, sock, vmName
 			sb.Deadline = prevDeadline
 			rb = m.store.set(sb)
@@ -162,7 +166,9 @@ func (m *Manager) archive(ctx context.Context, sb *types.Sandbox) error {
 		m.mu.Unlock()
 		sb.Transition.Unlock()
 		m.store.recommit(ctx, rb)
-		m.abandonArchive(ctx, sb, epoch, ck.ID)
+		if !live || replica == "" {
+			m.abandonArchive(ctx, sb, epoch, ck.ID)
+		}
 		return fmt.Errorf("archive %s: persist claims: %w", sb.ID, saveErr)
 	}
 	m.counters.archives.Add(1)

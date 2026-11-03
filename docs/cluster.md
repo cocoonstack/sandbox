@@ -187,7 +187,10 @@ replication rounds write it, so the claim path is unchanged.
   answers 404. A tombstone is never adopted. The next exec or file call wakes
   the claim from the store as usual. An owner with a live lease answers for
   itself, and a node that tries to take its row is refused with a 404.
-  A draining node never adopts. Adoption checks no tenant `max_claims` or node
+  A draining node never adopts, nor does a fenced node or one that lifted its
+  fence less than 8 seconds ago (one renewal interval plus one registry query),
+  so after a registry outage every healthy owner renews before a peer can take
+  its rows. Adoption checks no tenant `max_claims` or node
   `max_claims`: the claim already exists, and a refusal could strand it.
 - **Fencing.** Take, consume and delete are compare-and-sets on the row's
   epoch, and so is the write of a replica round and of the archive of a claim
@@ -217,7 +220,8 @@ replication rounds write it, so the claim path is unchanged.
   restart that finds the intent and no row keeps the claim while that
   checkpoint is still in the store, since the row never committed, and drops it
   once the checkpoint is gone, since only a node that consumed the row deletes
-  it.
+  it. A replicated claim's row stays: one the archive moved goes back to the
+  replica, so the row is never absent while the claim is held.
   A put whose outcome is unknown leaves the intent in place, and a release,
   the next archive and the hourly sweep settle it by the same rule before
   they act on the claim.
@@ -359,9 +363,11 @@ checkpoint store and keeps each claim's registry row on the latest snapshot:
   the node, and the node destroys nothing. Claims of pools that do not
   replicate stay served. A node starts fenced and lifts the fence after its
   first renewal that is followed by a confirmation. The confirmation runs beside the renew loop, which keeps
-  renewing: for each replicated claim the node takes the row back for itself in
-  one compare-and-set, which the row lock serializes against adopters, and
-  retries once on a stale epoch. A claim whose row another node took, or took
+  renewing: the node takes back every live row it holds in one statement, a
+  compare-and-set on each row's epoch that the row locks serialize against
+  adopters, and records the new epochs in one journal write; a claim whose row
+  that statement did not move takes it in its own compare-and-set and retries
+  once on a stale epoch. A claim whose row another node took, or took
   and finished, is forgotten at once and its VM removed in the background; a
   claim whose row is still this node's but keeps refusing the write leaves the
   node fenced and is retried at the next renewal. The lift replaces the fenced
