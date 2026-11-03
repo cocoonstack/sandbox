@@ -363,9 +363,11 @@ checkpoint store and keeps each claim's registry row on the latest snapshot:
   the node, and the node destroys nothing. Claims of pools that do not
   replicate stay served. A node starts fenced and lifts the fence after its
   first renewal that is followed by a confirmation. The confirmation runs beside the renew loop, which keeps
-  renewing: for each replicated claim the node takes the row back for itself in
-  one compare-and-set, which the row lock serializes against adopters, and
-  retries once on a stale epoch. A claim whose row another node took, or took
+  renewing: the node takes back every live row it holds in one statement, a
+  compare-and-set on each row's epoch that the row locks serialize against
+  adopters, and records the new epochs in one journal write; a claim whose row
+  that statement did not move takes it in its own compare-and-set and retries
+  once on a stale epoch. A claim whose row another node took, or took
   and finished, is forgotten at once and its VM removed in the background; a
   claim whose row is still this node's but keeps refusing the write leaves the
   node fenced and is retried at the next renewal. The lift replaces the fenced

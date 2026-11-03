@@ -113,7 +113,15 @@ func (m *Manager) unfence(ctx context.Context, start time.Time) {
 			return
 		}
 	}
+	taken, err := m.takeOwnRows(ctx, held, rows)
+	if err != nil {
+		logger.Warnf(ctx, "replicated claims stay fenced: %v", err)
+		return
+	}
 	for id, sb := range held {
+		if _, ok := taken[id]; ok {
+			continue
+		}
 		keep, err := m.confirmOwnership(ctx, sb, rows[id])
 		if err != nil {
 			logger.Warnf(ctx, "replicated claims stay fenced: %v", err)
@@ -144,6 +152,36 @@ func (m *Manager) lift(ctx context.Context, fenced *fenceState, start time.Time)
 		return
 	}
 	log.WithFunc("pool.unfence").Info(ctx, "node lease renewed; replicated claims are served again")
+}
+
+func (m *Manager) takeOwnRows(ctx context.Context, held map[string]*types.Sandbox, rows map[string]archives.Record) (map[string]int64, error) {
+	expect := make(map[string]int64, len(rows))
+	for id, rec := range rows {
+		if rec.Owner == m.nodeID && !rec.Consumed {
+			expect[id] = rec.Epoch
+		}
+	}
+	if len(expect) == 0 {
+		return nil, nil
+	}
+	taken, err := m.archives.TakeOwned(ctx, m.nodeID, expect)
+	if err != nil {
+		return nil, err
+	}
+	live := make([]*types.Sandbox, 0, len(taken))
+	m.mu.Lock()
+	for id, epoch := range taken {
+		if sb := held[id]; m.claimed[id] == sb {
+			sb.ArchiveEpoch = max(sb.ArchiveEpoch, epoch)
+			live = append(live, sb)
+		}
+	}
+	js := m.store.set(live...)
+	m.mu.Unlock()
+	if err = m.store.commit(js); err != nil {
+		m.store.recommit(ctx, js)
+	}
+	return taken, nil
 }
 
 // confirmOwnership takes sb's row for this node in one compare-and-set; false means another node holds the claim.
