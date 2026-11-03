@@ -451,8 +451,8 @@ stay in the store until the operator's
 [offline reclamation](deploy.md#reclaiming-s3-storage) removes them. With replication this
 is the fastest-growing part of the store: roughly the per-round churn times the
 rounds since the last reclamation, per replicated claim, on top of the live replica.
-The first round after a wake or adoption uploads the whole claim again, because
-the wake deletes the record it restored from; later rounds dedup. Resolving a
+Later rounds dedup; the first after a wake or adoption does not, because the
+wake deletes the record it restored from. Resolving a
 claim for a stream of a pool that does not replicate reads one plain field and
 no atomic; a replicated claim adds one atomic load of the fence state and its
 stream one watcher goroutine. Adding a claim to a failover node gains one map
@@ -543,6 +543,7 @@ fully from it:
 | operator config (`volumes`, `secrets`, egress policies, `bridges`/`networks`, `mesh`, `preview_secret`, `egress_ca`) | `config.json` (human/deploy-tool owned) | re-read at boot; its reloadable part on a per-node [reload](deploy.md#reloading-the-config) |
 | API-applied pool targets (`PUT /v1/pools`) | `<data_dir>/pools.json` (machine owned), or the cell's row in the shared `meta_store` when the node sets `meta_store.cell` | yes |
 | API-applied tenants (`/v1/tenants`) | `<data_dir>/tenants.json` (machine owned), or the shared `meta_store` table | yes |
+| API-registered volumes (`PUT /v1/volumes/{name}`) | `<data_dir>/runtime-volumes.json` (machine owned, per node) | yes |
 | claims | the claims journal + `Reconcile` | yes |
 | placement hints (warm counts, template and volume sets) | gossip | rebuilt |
 | checkpoint ownership | a live per-request probe (no gossip); a healed replica is this node's own persisted copy, aged out by `checkpoint_ttl_hours` | yes |
@@ -636,6 +637,7 @@ Some config must match on every node or the cluster fails in confusing ways:
 | `mesh.cluster_key` | nodes cannot join / decrypt gossip at all |
 | `egress_ca` cluster root | a guest checkpointed/redirected across nodes trusts the root; a divergent root fails interception |
 | egress: `egress_classes`, each pool's `egress` and `egress_upstream_env`, `secrets` names, headers and `value_env`, `egress_internal_allow`, `egress_upstream` | a claim or tenant redirected to a divergent node reaches different hosts, and its [claim credentials](egress.md#claim-credentials) are refused or not injected there |
+| `checkpoint_ttl_hours` | a healed replica a delete broadcast missed ages out at a different time on each node, and nodes report a digest mismatch until every node has reloaded the same value |
 | the engine root path (cocoon's `root_dir`) | a checkpoint or template export pins the base image blobs' absolute path under the root that captured it; a node whose root sits at another path refuses to clone a record it healed or pulled (`untrusted storage path in snapshot metadata`) — the heal succeeds, the branch fails. Not part of the gossiped digest below |
 
 Each node gossips a digest of these over its live tenant set and quotas (HMAC-keyed by
@@ -687,7 +689,9 @@ with every claim.
 - the same engine root path (cocoon's `root_dir`) on every node; it is not in
   the digest, so a mismatch shows only at the first cross-node branch
 - same `api_token`, tenant set, `preview_secret`, and `egress_ca` root everywhere
-  (a mismatch warns and shows in `sandboxd_config_digest_mismatch`)
+  (a mismatch warns and shows in `sandboxd_config_digest_mismatch`; only with
+  `cluster_key` set does that cover `api_token`, `preview_secret` and tenant
+  tokens)
 - with `meta_store`, every node's DSN points at the same database: the tenant
   set is not in the gossiped digest, so nodes on different databases serve
   diverging tenants without a warning
