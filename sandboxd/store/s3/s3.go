@@ -285,8 +285,8 @@ func (s *Store) SweepGenerations(ctx context.Context) error {
 		}
 		switch _, _, err := s.readMeta(ctx, e.Name()); {
 		case errors.Is(err, store.ErrNotFound):
-			if err := os.RemoveAll(dir); err != nil {
-				return err
+			if rmErr := os.RemoveAll(dir); rmErr != nil {
+				return rmErr
 			}
 		case err != nil:
 			return err
