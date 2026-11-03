@@ -166,6 +166,10 @@ func TestReconcileSweepsCheckpointStaging(t *testing.T) {
 	if err := os.MkdirAll(stale, 0o750); err != nil {
 		t.Fatalf("setup: %v", err)
 	}
+	old := time.Now().Add(-2 * store.GenerationGrace)
+	if err := os.Chtimes(stale, old, old); err != nil {
+		t.Fatalf("age staging: %v", err)
+	}
 	if err := m.Reconcile(t.Context()); err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}

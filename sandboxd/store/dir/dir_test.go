@@ -491,6 +491,38 @@ func TestSweepReclaimsOnlyAgedUncommittedGenerations(t *testing.T) {
 	}
 }
 
+func TestSweepStagingSparesAPeersFreshStaging(t *testing.T) {
+	root := t.TempDir()
+	peer, err := New(root, store.CheckpointIDRe)
+	if err != nil {
+		t.Fatalf("new peer: %v", err)
+	}
+	restarted, err := New(root, store.CheckpointIDRe)
+	if err != nil {
+		t.Fatalf("new restarted node: %v", err)
+	}
+	staging, err := peer.Stage("ck_00000000000000aa")
+	if err != nil {
+		t.Fatalf("stage: %v", err)
+	}
+	seedRecord(t, staging, "in-progress")
+
+	if sweepErr := restarted.SweepStaging(); sweepErr != nil {
+		t.Fatalf("sweep: %v", sweepErr)
+	}
+	if _, statErr := os.Stat(filepath.Join(staging, store.MetaFile)); statErr != nil {
+		t.Fatalf("a peer's in-progress staging was swept: %v", statErr)
+	}
+
+	backdate(t, staging)
+	if sweepErr := restarted.SweepStaging(); sweepErr != nil {
+		t.Fatalf("sweep aged: %v", sweepErr)
+	}
+	if _, statErr := os.Stat(staging); !errors.Is(statErr, fs.ErrNotExist) {
+		t.Errorf("aged staging survived: %v", statErr)
+	}
+}
+
 func TestSweepGenerationsToleratesConcurrentDelete(t *testing.T) {
 	const id = "ck_00000000000000aa"
 	st, err := New(t.TempDir(), store.CheckpointIDRe)

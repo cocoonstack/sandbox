@@ -169,8 +169,17 @@ func (d *Store) Delete(_ context.Context, id string) error {
 
 func (d *Store) SweepStaging() error {
 	// ReadDir + suffix, not Glob: the root path may hold glob metacharacters.
-	if err := utils.RemoveDirEntries(d.root, func(name string) bool { return strings.HasSuffix(name, ".tmp") }); err != nil {
+	entries, err := os.ReadDir(d.root)
+	if err != nil {
 		return err
+	}
+	for _, e := range entries {
+		if !strings.HasSuffix(e.Name(), ".tmp") {
+			continue
+		}
+		if err := removeAgedEntry(d.root, e); err != nil {
+			return err
+		}
 	}
 	return d.sweepRecords()
 }
