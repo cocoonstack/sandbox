@@ -1253,6 +1253,7 @@ type fakeEngine struct {
 	detachUnclean                     bool
 	liveVolumeSupportErr              error
 	liveVolumeHook                    func(string) error
+	inspectHook                       func()
 	stopped                           map[string]bool
 	disks                             map[string][]types.VMDisk
 	creating                          map[string]bool
@@ -1529,7 +1530,12 @@ func (f *fakeEngine) List(ctx context.Context) ([]types.VMRecord, error) {
 func (f *fakeEngine) Inspect(ctx context.Context, name string) (types.VMRecord, bool, error) {
 	f.mu.Lock()
 	f.inspects++
+	hook := f.inspectHook
+	f.inspectHook = nil
 	f.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
 	vms, _ := f.list(ctx)
 	i := slices.IndexFunc(vms, func(vm types.VMRecord) bool { return vm.Config.Name == name })
 	if i < 0 {

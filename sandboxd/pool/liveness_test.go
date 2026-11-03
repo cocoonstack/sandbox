@@ -420,6 +420,47 @@ func TestDaemonExitEventReplacesADeadWarmVM(t *testing.T) {
 	waitFor(t, func() bool { return slices.Equal(eng.removedNames(), []string{dead}) })
 }
 
+func TestAWarmVMClaimedDuringItsEvictionIsRecoveredWithoutAPoll(t *testing.T) {
+	eng := newFakeEngine()
+	eng.vmEvents = make(chan fakeVMEvent)
+	m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1})
+	dead := fillOneWarm(t, m)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	go m.watchVMMs(ctx)
+	eng.vmEvents <- fakeVMEvent{sync: []engine.VMStatus{{Name: dead, Live: true}}}
+	waitFor(t, m.vmmEvents.Load)
+	lists := eng.listCalls()
+	killVMM(eng, dead)
+	claimed := make(chan *types.Sandbox, 1)
+	eng.mu.Lock()
+	eng.inspectHook = func() {
+		sb, err := m.ClaimWarm(t.Context(), testKey, ClaimOptions{})
+		if err != nil {
+			t.Errorf("claim during the eviction: %v", err)
+		}
+		claimed <- sb
+	}
+	eng.mu.Unlock()
+
+	eng.vmEvents <- fakeVMEvent{change: engine.VMChange{Kind: "MODIFIED", VM: engine.VMStatus{Name: dead}}}
+
+	sb := <-claimed
+	if sb == nil {
+		t.Fatal("no claim during the eviction")
+	}
+	if got := lockedVMName(sb); got != dead {
+		t.Fatalf("claim got VM %s, want the warm VM %s", got, dead)
+	}
+	waitFor(t, func() bool { got, _ := m.Sandbox(sb.ID); return got.Restarts == 1 })
+	if got := eng.listCalls(); got != lists {
+		t.Errorf("vm list ran %d times, want the recovery without a poll", got-lists)
+	}
+	if removed := eng.removedNames(); len(removed) != 0 {
+		t.Errorf("removed %v, want the claimed VM kept", removed)
+	}
+}
+
 func TestStaleReportsKeepALiveWarmVM(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1})

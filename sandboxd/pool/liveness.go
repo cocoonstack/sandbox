@@ -100,8 +100,8 @@ func (m *Manager) onVMChange(ctx context.Context, change engine.VMChange) {
 	if change.VM.Live && change.Kind != engine.VMDeleted {
 		return
 	}
-	m.recoverDown(ctx, m.watchedClaims(change.VM.Name), nil)
 	m.evictDeadWarm(ctx, map[string]bool{change.VM.Name: false})
+	m.recoverDown(ctx, m.watchedClaims(change.VM.Name), nil)
 }
 
 func (m *Manager) recoverDown(ctx context.Context, watched []liveSuspect, up map[string]bool) *sync.WaitGroup {
@@ -127,12 +127,12 @@ func (m *Manager) watchedClaims(vmName string) []liveSuspect {
 }
 
 func (m *Manager) evictDeadWarm(ctx context.Context, up map[string]bool) *sync.WaitGroup {
-	var suspects []*types.Sandbox
+	var suspects []liveSuspect
 	m.mu.Lock()
 	for _, p := range m.pools {
 		for _, sb := range p.warm {
 			if live, present := up[sb.VMName]; present && !live {
-				suspects = append(suspects, sb)
+				suspects = append(suspects, liveSuspect{sb, sb.VMName})
 			}
 		}
 	}
@@ -140,30 +140,31 @@ func (m *Manager) evictDeadWarm(ctx context.Context, up map[string]bool) *sync.W
 	return m.runBounded(ctx, len(suspects), func(ctx context.Context, i int) { m.evictWarm(ctx, suspects[i]) })
 }
 
-func (m *Manager) evictWarm(ctx context.Context, sb *types.Sandbox) {
+func (m *Manager) evictWarm(ctx context.Context, suspect liveSuspect) {
 	logger := log.WithFunc("pool.evictWarm")
-	vm, found, err := m.eng.Inspect(ctx, sb.VMName)
+	vm, found, err := m.eng.Inspect(ctx, suspect.vmName)
 	switch {
 	case err != nil:
-		logger.Warnf(ctx, "list %s: %v", sb.VMName, err)
+		logger.Warnf(ctx, "list %s: %v", suspect.vmName, err)
 		return
 	case found && vm.State == vmStateRunning:
 		return
 	}
 	m.mu.Lock()
 	evicted := false
-	if p := m.pools[sb.Key]; p != nil {
-		if i := slices.Index(p.warm, sb); i >= 0 {
+	if p := m.pools[suspect.sb.Key]; p != nil {
+		if i := slices.Index(p.warm, suspect.sb); i >= 0 {
 			p.warm = slices.Delete(p.warm, i, i+1)
 			evicted = true
 		}
 	}
 	m.mu.Unlock()
 	if !evicted {
+		m.recoverDown(ctx, m.watchedClaims(suspect.vmName), nil)
 		return
 	}
-	logger.Warnf(ctx, "warm vm %s exited; replacing it", sb.VMName)
-	m.destroy(ctx, sb.VMName)
+	logger.Warnf(ctx, "warm vm %s exited; replacing it", suspect.vmName)
+	m.destroy(ctx, suspect.vmName)
 	m.kickRefill()
 }
 
