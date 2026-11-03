@@ -52,6 +52,7 @@ const (
 	cmdTimeout     = 2 * time.Minute
 	dumpTimeout    = 15 * time.Minute
 	cmdTermGrace   = 30 * time.Second
+	dumpTermGrace  = 3 * time.Minute
 	trimTimeout    = 10 * time.Second
 	probeInterval  = 20 * time.Millisecond
 	connectMax     = 64   // "OK <port>" handshake reply cap
@@ -196,7 +197,7 @@ func (e *Engine) Restore(ctx context.Context, vmName, snapRef string) (string, e
 
 // SnapshotExport exports a snapshot into toDir, which cocoon requires absent or empty.
 func (e *Engine) SnapshotExport(ctx context.Context, snapName, toDir string) error {
-	_, err := e.runFor(ctx, dumpTimeout, "snapshot", "export", snapName, "--to-dir", toDir)
+	_, err := e.runFor(ctx, dumpTimeout, dumpTermGrace, "snapshot", "export", snapName, "--to-dir", toDir)
 	return err
 }
 
@@ -420,16 +421,16 @@ func (e *Engine) netArgs(name string, key types.PoolKey, cold bool) []string {
 }
 
 func (e *Engine) run(ctx context.Context, args ...string) ([]byte, error) {
-	return e.runFor(ctx, cmdTimeout, args...)
+	return e.runFor(ctx, cmdTimeout, cmdTermGrace, args...)
 }
 
-func (e *Engine) runFor(ctx context.Context, timeout time.Duration, args ...string) ([]byte, error) {
+func (e *Engine) runFor(ctx context.Context, timeout, termGrace time.Duration, args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	log.WithFunc("engine.runFor").Debugf(ctx, "cocoon %s", strings.Join(args, " "))
 	cmd := exec.CommandContext(ctx, e.bin, args...) //nolint:gosec // bin comes from node config, args are built internally
 	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
-	cmd.WaitDelay = cmdTermGrace
+	cmd.WaitDelay = termGrace
 	cmd.Env = append(os.Environ(), "GOMAXPROCS="+strconv.Itoa(min(cocoonMaxProcs, runtime.GOMAXPROCS(0))))
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
@@ -446,7 +447,7 @@ func (e *Engine) runDump(ctx context.Context, args ...string) error {
 		return ctx.Err()
 	}
 	defer func() { <-e.dumps }()
-	_, err := e.runFor(ctx, dumpTimeout, args...)
+	_, err := e.runFor(ctx, dumpTimeout, dumpTermGrace, args...)
 	return err
 }
 
