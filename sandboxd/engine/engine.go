@@ -53,6 +53,7 @@ const (
 	dumpTimeout    = 15 * time.Minute
 	cmdTermGrace   = 30 * time.Second
 	dumpTermGrace  = 3 * time.Minute
+	connectTimeout = 10 * time.Second
 	trimTimeout    = 10 * time.Second
 	probeInterval  = 20 * time.Millisecond
 	connectMax     = 64   // "OK <port>" handshake reply cap
@@ -322,6 +323,8 @@ func (e *Engine) DialGuestPort(ctx context.Context, vsockSocket string, port uin
 }
 
 func (e *Engine) dialVsock(ctx context.Context, vsockSocket string, port int) (net.Conn, error) {
+	ctx, cancel := context.WithTimeout(ctx, connectTimeout)
+	defer cancel()
 	var d net.Dialer
 	conn, err := d.DialContext(ctx, "unix", vsockSocket)
 	if err != nil {

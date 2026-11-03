@@ -235,6 +235,23 @@ func TestACanceledCommandGetsSIGTERMSoCocoonCanResumeTheVM(t *testing.T) {
 	}
 }
 
+func TestADialOfAGuestThatNeverAnswersFails(t *testing.T) {
+	t.Parallel()
+	path := sockPath(t)
+	ln, err := net.Listen("unix", path)
+	if err != nil {
+		t.Fatalf("setup listener: %v", err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	start := time.Now()
+	if _, err := newTestEngine().DialSilkd(t.Context(), path); !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("dial: %v, want a deadline error", err)
+	}
+	if elapsed := time.Since(start); elapsed > 2*connectTimeout {
+		t.Errorf("dial took %v, want about %v", elapsed, connectTimeout)
+	}
+}
+
 func TestMemoryDumpsRunAtMostEightAtOnce(t *testing.T) {
 	trace := filepath.Join(t.TempDir(), "trace")
 	t.Setenv("COCOON_TEST_TRACE", trace)
