@@ -398,7 +398,6 @@ type Manager struct {
 
 	maxClaims    int
 	maxRunning   int
-	running      int // guarded by m.mu
 	releaseDelay time.Duration
 	draining     bool // guarded by m.mu; deliberately not persisted
 
@@ -663,7 +662,7 @@ func (m *Manager) Info() ([]PoolInfo, Gauges) {
 			Golden:    p.goldenDir != "",
 		})
 	}
-	g := Gauges{Claimed: len(m.claimed), Running: m.running, MaxRunning: m.maxRunning, Draining: m.draining}
+	g := Gauges{Claimed: len(m.claimed), Running: m.store.runningCount(), MaxRunning: m.maxRunning, Draining: m.draining}
 	g.AtCapacityReason = m.capacityReasonLocked(now)
 	g.AtCapacity = g.AtCapacityReason != ""
 	for _, sb := range m.claimed {

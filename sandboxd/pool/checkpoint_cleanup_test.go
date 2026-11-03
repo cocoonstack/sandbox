@@ -49,7 +49,7 @@ func TestCheckpointCleanupWaitsForTheClaimWrite(t *testing.T) {
 			act: func(t *testing.T, m *Manager, c *failoverCluster, sb *types.Sandbox) {
 				m.retireReplica(t.Context(), sb)
 				m.mu.Lock()
-				m.dropClaimLocked(sb)
+				delete(m.claimed, sb.ID)
 				m.store.del(sb.ID)
 				m.mu.Unlock()
 				keepsTombstone(t, m, c, sb)

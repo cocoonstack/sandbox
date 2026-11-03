@@ -355,7 +355,6 @@ func (m *Manager) resolvePendingSnap(ctx context.Context, sb *types.Sandbox) (ad
 			sb.HibernateSnap = pending
 		}
 		sb.PendingSnap = ""
-		m.syncRunningLocked(sb)
 		js = m.store.set(sb)
 	}
 	m.mu.Unlock()

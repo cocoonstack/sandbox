@@ -147,7 +147,6 @@ func (m *Manager) archive(ctx context.Context, sb *types.Sandbox) error {
 	sb.ArchiveCk, sb.ArchiveEpoch, sb.ArchivePending, sb.ReplicaCk = ck.ID, epoch, "", ""
 	sb.HibernateSnap, sb.VsockSocket, sb.VMName = "", "", ""
 	sb.Deadline = m.retentionDeadline(sb.Key)
-	m.syncRunningLocked(sb)
 	js := m.store.set(sb)
 	m.mu.Unlock()
 	if saveErr := m.store.commit(js); saveErr != nil {
@@ -162,7 +161,6 @@ func (m *Manager) archive(ctx context.Context, sb *types.Sandbox) error {
 			}
 			sb.HibernateSnap, sb.VsockSocket, sb.VMName = snap, sock, vmName
 			sb.Deadline = prevDeadline
-			m.syncRunningLocked(sb)
 			rb = m.store.set(sb)
 		}
 		m.mu.Unlock()
@@ -267,7 +265,6 @@ func (m *Manager) commitWake(ctx context.Context, sb *types.Sandbox, vmName, soc
 	ck, deadline, epoch, safe := sb.ArchiveCk, sb.Deadline, sb.ArchiveEpoch, sb.ReaderSafe
 	sb.VMName, sb.VsockSocket, sb.ArchiveCk, sb.ArchiveEpoch, sb.ReaderSafe = vmName, sock, "", 0, false
 	sb.Deadline = time.Now().Add(clampTTL(types.Seconds(sb.LeaseSeconds))) // a woken sandbox is a fresh lease
-	m.syncRunningLocked(sb)
 	js := m.store.set(sb)
 	m.mu.Unlock()
 	if err := m.store.commit(js); err != nil {
@@ -275,7 +272,6 @@ func (m *Manager) commitWake(ctx context.Context, sb *types.Sandbox, vmName, soc
 		var rb claimSnapshot
 		if m.claimed[sb.ID] == sb {
 			sb.VMName, sb.VsockSocket, sb.ArchiveCk, sb.ArchiveEpoch, sb.Deadline, sb.ReaderSafe = "", "", ck, epoch, deadline, safe
-			m.syncRunningLocked(sb)
 			rb = m.store.set(sb)
 		}
 		m.mu.Unlock()

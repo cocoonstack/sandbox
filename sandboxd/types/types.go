@@ -604,8 +604,6 @@ type Sandbox struct {
 
 	// Waking marks a wake in flight, which counts as running; guarded by the manager mutex.
 	Waking bool `json:"-"`
-	// CountedRunning records that the manager's running count holds this claim; guarded by the manager mutex.
-	CountedRunning bool `json:"-"`
 
 	// lastActivity is unix-nanos of the last data-plane connection, stamped lock-free.
 	lastActivity atomic.Int64

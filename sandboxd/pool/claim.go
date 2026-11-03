@@ -421,24 +421,13 @@ func (m *Manager) quotaErr(extra int, tenant string) error {
 
 // Callers hold m.mu.
 func (m *Manager) runningErr(extra int) error {
-	if m.maxRunning > 0 && m.running+extra > m.maxRunning {
-		return fmt.Errorf("%w: %d running claims, cap %d", ErrQuota, m.running, m.maxRunning)
+	if m.maxRunning == 0 {
+		return nil
+	}
+	if running := m.store.runningCount(); running+extra > m.maxRunning {
+		return fmt.Errorf("%w: %d running claims, cap %d", ErrQuota, running, m.maxRunning)
 	}
 	return nil
-}
-
-// syncRunningLocked settles the running count after any change to a claim's sleep state; callers hold m.mu.
-func (m *Manager) syncRunningLocked(sb *types.Sandbox) {
-	running := m.claimed[sb.ID] == sb && (sb.Waking || sb.HibernateSnap == "" && sb.ArchiveCk == "" && sb.Failed == "")
-	if running == sb.CountedRunning {
-		return
-	}
-	sb.CountedRunning = running
-	if running {
-		m.running++
-	} else {
-		m.running--
-	}
 }
 
 // beginWake admits a wake and counts it as running until endWake; the caller holds sb.Transition.
@@ -452,7 +441,7 @@ func (m *Manager) beginWake(sb *types.Sandbox) error {
 		return err
 	}
 	sb.Waking = true
-	m.syncRunningLocked(sb)
+	m.store.recount(sb)
 	return nil
 }
 
@@ -460,7 +449,7 @@ func (m *Manager) endWake(sb *types.Sandbox) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	sb.Waking = false
-	m.syncRunningLocked(sb)
+	m.store.recount(sb)
 }
 
 // Callers hold m.mu.
@@ -481,13 +470,11 @@ func (m *Manager) addClaimLocked(sb *types.Sandbox) {
 		sb.SetReplicated(replicating || sb.HasReplica())
 	}
 	m.claimed[sb.ID] = sb
-	m.syncRunningLocked(sb)
 	m.tenantDelta(sb.Tenant, 1)
 }
 
 func (m *Manager) dropClaimLocked(sb *types.Sandbox) {
 	delete(m.claimed, sb.ID)
-	m.syncRunningLocked(sb)
 	m.tenantDelta(sb.Tenant, -1)
 }
 
@@ -760,7 +747,6 @@ func (m *Manager) setIfLive(sb *types.Sandbox, mutate func()) (claimSnapshot, bo
 		return claimSnapshot{}, false
 	}
 	mutate()
-	m.syncRunningLocked(sb)
 	return m.store.set(sb), true
 }
 

@@ -988,7 +988,6 @@ func TestRenewRefusesAnArchivedClaim(t *testing.T) {
 	sb := mustClaim(t, m, testKey)
 	m.mu.Lock()
 	sb.ArchiveCk, sb.Deadline = "ck_1", time.Time{}
-	m.syncRunningLocked(sb)
 	m.store.set(sb)
 	m.mu.Unlock()
 
@@ -1103,7 +1102,6 @@ func TestOperatorPortDialNeverWakesAPausedSandbox(t *testing.T) {
 	} {
 		m.mu.Lock()
 		running.PendingSnap, running.ArchiveCk = tt.pending, tt.archive
-		m.syncRunningLocked(running)
 		m.store.set(running)
 		m.mu.Unlock()
 		if _, err := m.DialPort(t.Context(), running.ID, operator, 49983); !errors.Is(err, ErrPaused) {
@@ -2161,8 +2159,8 @@ func assertRunningCount(t testing.TB, m *Manager) {
 			want++
 		}
 	}
-	if m.running != want {
-		t.Errorf("running count %d, want %d from the claims", m.running, want)
+	if got := m.store.runningCount(); got != want {
+		t.Errorf("running count %d, want %d from the claims", got, want)
 	}
 }
 

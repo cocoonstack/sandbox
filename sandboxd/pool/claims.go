@@ -68,8 +68,9 @@ type claimDTO struct {
 
 // claimRow keeps its encoded member until set replaces the row; set never edits one.
 type claimRow struct {
-	dto claimDTO
-	raw []byte
+	dto     claimDTO
+	raw     []byte
+	running bool
 }
 
 // claimStore persists claimed sandboxes across daemon restarts; warm VMs are not persisted.
@@ -89,6 +90,7 @@ type claimStore struct {
 	retained    map[string][]string
 	changed     map[string]struct{}
 	checkpoints map[string]int
+	running     int
 
 	recommitting atomic.Bool
 }
@@ -155,12 +157,19 @@ func (s *claimStore) del(ids ...string) claimSnapshot {
 }
 
 func (s *claimStore) put(id string, sb *types.Sandbox) {
+	if old := s.rows[id]; old != nil && old.running {
+		s.running--
+	}
 	var refs [4]string
 	if sb == nil {
 		delete(s.rows, id)
 	} else {
 		refs = checkpointRefs(sb)
-		s.rows[id] = &claimRow{dto: dtoOf(sb)}
+		row := &claimRow{dto: dtoOf(sb), running: holdsVM(sb)}
+		if row.running {
+			s.running++
+		}
+		s.rows[id] = row
 	}
 	before := s.refs[id]
 	if before == refs {
@@ -174,6 +183,28 @@ func (s *claimStore) put(id string, sb *types.Sandbox) {
 		s.refs[id] = refs
 	}
 	s.changed[id] = struct{}{}
+}
+
+// recount follows a change no row persists: a wake starting or ending.
+func (s *claimStore) recount(sb *types.Sandbox) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	row := s.rows[sb.ID]
+	if row == nil || row.running == holdsVM(sb) {
+		return
+	}
+	row.running = !row.running
+	if row.running {
+		s.running++
+	} else {
+		s.running--
+	}
+}
+
+func (s *claimStore) runningCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.running
 }
 
 // mark sequences a persist of the projection as it already stands.
@@ -391,4 +422,9 @@ func appendRefs(list []string, refs [4]string) []string {
 		}
 	}
 	return list
+}
+
+// holdsVM reports whether a claim counts as running; a hibernate holds its VM until its commit.
+func holdsVM(sb *types.Sandbox) bool {
+	return sb.Waking || sb.HibernateSnap == "" && sb.ArchiveCk == "" && sb.Failed == ""
 }
