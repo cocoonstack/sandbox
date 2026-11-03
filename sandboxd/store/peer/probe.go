@@ -17,11 +17,11 @@ import (
 )
 
 const (
-	probeTimeout              = time.Second
-	defaultProbeClientTimeout = 2 * time.Second
-	maxRedirectOwners         = 3 // a redirect decision needs a couple of candidates, not the whole fleet
-	maxHealOwners             = 8 // a heal wants the widest source list a few full/corrupt owners can't hide behind
-	redirectCacheTTL          = 5 * time.Second
+	probeTimeout      = time.Second
+	fanOutTimeout     = 2 * time.Second
+	maxRedirectOwners = 3 // a redirect decision needs a couple of candidates, not the whole fleet
+	maxHealOwners     = 8 // a heal wants the widest source list a few full/corrupt owners can't hide behind
+	redirectCacheTTL  = 5 * time.Second
 
 	// probeGrace bounds how long a fan-out waits for more owners once it has its first.
 	probeGrace = 150 * time.Millisecond
@@ -93,15 +93,14 @@ func (p *HTTPProber) fanOut(ctx context.Context, id string, maxOwners int, grace
 	if len(addrs) == 0 {
 		return nil
 	}
-	client := &http.Client{Timeout: defaultProbeClientTimeout}
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), defaultProbeClientTimeout)
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), fanOutTimeout)
 	defer cancel()
 
 	wins := make(chan string, len(addrs))
 	var wg sync.WaitGroup
 	for _, addr := range addrs {
 		wg.Go(func() {
-			if probeOwner(ctx, client, p.ProbeKey, addr, id) {
+			if probeOwner(ctx, p.ProbeKey, addr, id) {
 				wins <- addr
 			}
 		})
@@ -201,7 +200,7 @@ func currentBucket() int64 {
 }
 
 // probeOwner sends a probe MAC when probeKey is set; an empty key falls back to capability-only.
-func probeOwner(ctx context.Context, client *http.Client, probeKey []byte, addr, id string) bool {
+func probeOwner(ctx context.Context, probeKey []byte, addr, id string) bool {
 	ctx, cancel := context.WithTimeout(ctx, probeTimeout)
 	defer cancel()
 
@@ -212,7 +211,7 @@ func probeOwner(ctx context.Context, client *http.Client, probeKey []byte, addr,
 	if len(probeKey) > 0 {
 		req.Header.Set(ProbeHeader, SignProbe(probeKey, id))
 	}
-	resp, err := client.Do(req)
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return false
 	}

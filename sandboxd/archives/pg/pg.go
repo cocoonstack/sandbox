@@ -83,25 +83,16 @@ func (r *Registry) TakeOwned(ctx context.Context, owner string, expect map[strin
 	for id, epoch := range expect {
 		ids, epochs = append(ids, id), append(epochs, epoch)
 	}
-	qctx, cancel := context.WithTimeout(ctx, metastore.QueryTimeout)
-	defer cancel()
-	rows, err := r.pool.Query(qctx, `UPDATE sandboxd_archives a SET epoch = nextval('sandboxd_archives_epoch'), updated_at = now()
+	recs, err := r.collect(ctx, `UPDATE sandboxd_archives a SET epoch = nextval('sandboxd_archives_epoch'), updated_at = now()
 		FROM unnest($2::text[], $3::bigint[]) AS t(id, epoch)
 		WHERE a.cell = $1 AND a.id = t.id AND a.epoch = t.epoch AND a.owner = $4 AND NOT a.consumed
-		RETURNING a.id, a.epoch`, r.cell, ids, epochs, owner)
+		RETURNING a.id, a.tenant, a.token_sha256, a.owner, a.epoch, a.consumed, a.checkpoint, a.deadline, NULL::jsonb`, r.cell, ids, epochs, owner)
 	if err != nil {
-		return nil, unavailable(err)
+		return nil, err
 	}
-	taken := make(map[string]int64, len(expect))
-	var (
-		id    string
-		epoch int64
-	)
-	if _, err = pgx.ForEachRow(rows, []any{&id, &epoch}, func() error {
-		taken[id] = epoch
-		return nil
-	}); err != nil {
-		return nil, unavailable(err)
+	taken := make(map[string]int64, len(recs))
+	for _, rec := range recs {
+		taken[rec.ID] = rec.Epoch
 	}
 	return taken, nil
 }

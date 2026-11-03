@@ -57,6 +57,7 @@ const (
 	leaseTTL    = 15 * time.Second
 	leaseRenew  = 5 * time.Second
 	leaseMargin = 3 * time.Second
+	leaseWindow = leaseTTL - leaseMargin
 	adoptGrace  = leaseRenew + leaseMargin
 	// One failed boot is ordinary; only an unbroken run predicts the next failure
 	refillFailStreak  = 8
@@ -110,7 +111,7 @@ var (
 
 	// Replaying a journal takes a writable mount, so readers stay out.
 	ErrVolumeNeedsRecovery = errors.New("volume needs recovery by a writable claim")
-	ErrArchived            = errors.New("sandbox is archived; an exec or file call wakes it first")
+	ErrArchived            = errors.New("sandbox is archived; a wake or an exec wakes it first")
 	ErrLeaseLost           = errors.New("node lease lost; retry")
 	ErrPaused              = errors.New("sandbox is paused; an operator call does not wake it")
 	ErrFailed              = errors.New("sandbox failed: its VMM is down; release it, or wake it to cold-boot its disk")
@@ -214,6 +215,18 @@ type Gauges struct {
 	AtCapacity       bool
 	AtCapacityReason string
 }
+
+type Backends struct {
+	Checkpoints       store.Store
+	Templates         store.Store
+	SharedCheckpoints bool
+	Tenants           tenants.Source
+	CellPools         poolset.Shared
+	Archives          archives.Registry
+}
+
+// PeerDeleteFunc broadcasts a checkpoint delete to every peer.
+type PeerDeleteFunc func(ctx context.Context, id string)
 
 type pendingRemoval struct {
 	sandboxID   string
@@ -327,18 +340,6 @@ func (p *pool) trimWarm(target int) []string {
 	}
 	return trim
 }
-
-type Backends struct {
-	Checkpoints       store.Store
-	Templates         store.Store
-	SharedCheckpoints bool
-	Tenants           tenants.Source
-	CellPools         poolset.Shared
-	Archives          archives.Registry
-}
-
-// PeerDeleteFunc broadcasts a checkpoint delete to every peer.
-type PeerDeleteFunc func(ctx context.Context, id string)
 
 // Manager owns the node's pools, claims, and their persistence.
 type Manager struct {

@@ -29,7 +29,7 @@ func (m *Manager) ReloadConfig(ctx context.Context, next *config.Config) (Reload
 	if err != nil {
 		return ReloadResult{}, fmt.Errorf("%w: %w", ErrReloadRefused, err)
 	}
-	res := ReloadResult{Changed: append([]string{}, changed...), Ignored: ignored}
+	res := ReloadResult{Changed: changed, Ignored: ignored}
 	if len(changed) == 0 {
 		m.cfg = next
 		return res, nil

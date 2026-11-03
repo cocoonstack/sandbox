@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -183,7 +182,7 @@ func (m *Manager) wakeOrRead(ctx context.Context, sb *types.Sandbox, readerOK bo
 	if err := m.diskErr(); err != nil {
 		return "", fmt.Errorf("wake %s: %w", sb.ID, err)
 	}
-	// See Hibernate: a half-restored VM is worse than a wasted wake.
+	// A half-restored VM is worse than a wasted wake.
 	ctx = context.WithoutCancel(ctx)
 	if err := m.resolveIntent(ctx, sb); err != nil {
 		return "", fmt.Errorf("wake %s: %w", sb.ID, err)
@@ -245,7 +244,11 @@ func (m *Manager) idleOnce(ctx context.Context) {
 	type victim struct{ id, token string }
 	var victims []victim
 	m.mu.Lock()
-	if m.idleDefault <= 0 && !slices.ContainsFunc(slices.Collect(maps.Values(m.pools)), func(p *pool) bool { return p.idle > 0 }) {
+	idlePolicy := m.idleDefault > 0
+	for _, p := range m.pools {
+		idlePolicy = idlePolicy || p.idle > 0
+	}
+	if !idlePolicy {
 		m.mu.Unlock()
 		m.idleSweep.Store(false)
 		return

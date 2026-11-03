@@ -805,6 +805,7 @@ func VolumeRWNames(volumes []Volume) []string {
 	return names
 }
 
+// ValidateClaimRef bounds a caller reference named field like a metadata value.
 func ValidateClaimRef(field, ref string) error {
 	if len(ref) > maxMetadataValueBytes || !validMetadataValue(ref) {
 		return fmt.Errorf("%s must be at most %d bytes of printable UTF-8", field, maxMetadataValueBytes)

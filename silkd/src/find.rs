@@ -21,7 +21,7 @@ const MATCH_QUEUE: usize = 256;
 /// Bytes of match content in flight: above one size-bound match, so a reserve never blocks forever, far below 256 of them.
 const MATCH_QUEUE_BYTES: usize = 2 * FIND_MAX_FILE as usize;
 
-const LINE_ANCHORS: [&str; 4] = ["^", "$", "\\A", "\\z"];
+const ANCHORS: [&str; 4] = ["^", "$", "\\A", "\\z"];
 
 struct MatchBudget {
     bytes: Semaphore,
@@ -228,7 +228,7 @@ where
         Some(Ok(re)) => Some(re),
         Some(Err(e)) => return proto::error_frame(w, ErrorKind::BadRequest, e.to_string()).await,
     };
-    let prefilter = !LINE_ANCHORS.iter().any(|a| pattern.contains(a));
+    let prefilter = !ANCHORS.iter().any(|a| pattern.contains(a));
     // one blocking-pool dispatch for the whole tree, not three per file.
     let (tx, mut rx) = mpsc::channel::<Response>(MATCH_QUEUE);
     let budget = Arc::new(MatchBudget::new(budget_bytes, Handle::current()));

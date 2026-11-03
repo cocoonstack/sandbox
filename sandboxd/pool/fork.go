@@ -31,7 +31,7 @@ func (m *Manager) Fork(ctx context.Context, id string, cred Cred, count int, ttl
 	if err := m.overQuota(count, sb.Tenant); err != nil {
 		return nil, err
 	}
-	// See Hibernate: a started fork must finish even if the caller hangs up.
+	// A started fork must finish even if the caller hangs up.
 	ctx = context.WithoutCancel(ctx)
 
 	children, inherited, err := m.forkClones(ctx, sb, count)

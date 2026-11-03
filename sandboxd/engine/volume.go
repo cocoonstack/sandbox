@@ -14,11 +14,10 @@ import (
 )
 
 const (
-	// VolumeCallTimeout bounds one guest teardown exec.
-	VolumeCallTimeout = 2 * time.Second
 	// VolumeMutationTimeout bounds one live attach or detach, guest steps included.
 	VolumeMutationTimeout = 30 * time.Second
 
+	syncTimeout        = 2 * time.Second
 	volumePollInterval = 10 * time.Millisecond
 	volumeProbeTimeout = 2 * time.Second
 	volumeSetupTimeout = 10 * time.Second
@@ -73,7 +72,7 @@ func (e *Engine) MountVolume(ctx context.Context, vsockSocket, name, mount strin
 
 // SyncGuest flushes the guest page cache, the only flush left for a failed unmount.
 func (e *Engine) SyncGuest(ctx context.Context, vsockSocket string) error {
-	ctx, cancel := context.WithTimeout(ctx, VolumeCallTimeout)
+	ctx, cancel := context.WithTimeout(ctx, syncTimeout)
 	defer cancel()
 	if err := e.silkdExec(ctx, vsockSocket, "sync"); err != nil {
 		return fmt.Errorf("sync guest: %w", err)

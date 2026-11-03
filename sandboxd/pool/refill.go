@@ -43,7 +43,7 @@ func (m *Manager) refillOnce(ctx context.Context) {
 		// SetPools leaves a removed pool in place while a build, refill or claim clone is in flight
 		if p.removed {
 			if p.settled() {
-				m.dropPool(ctx, p)
+				m.dropPoolLocked(ctx, p)
 			}
 			continue
 		}
@@ -294,8 +294,8 @@ func (m *Manager) adoptGolden(p *pool, imageID string) bool {
 	return true
 }
 
-// dropPool runs under m.mu: the rename hides the golden from adoptGolden, and the slow unlink runs off the lock.
-func (m *Manager) dropPool(ctx context.Context, p *pool) {
+// dropPoolLocked's rename hides the golden from adoptGolden, and the slow unlink runs off the lock.
+func (m *Manager) dropPoolLocked(ctx context.Context, p *pool) {
 	delete(m.pools, p.key)
 	g := filepath.Join(m.goldensDir(), p.hash)
 	_ = os.Remove(g + goldenStampSuffix)
@@ -305,7 +305,7 @@ func (m *Manager) dropPool(ctx context.Context, p *pool) {
 	}
 	go func() {
 		if os.RemoveAll(doomed) == nil {
-			log.WithFunc("pool.dropPool").Infof(ctx, "removed the golden of dropped pool %s", p.key.Template)
+			log.WithFunc("pool.dropPoolLocked").Infof(ctx, "removed the golden of dropped pool %s", p.key.Template)
 		}
 	}()
 }

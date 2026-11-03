@@ -227,7 +227,7 @@ func (m *Manager) applyVolume(ctx context.Context, sb *types.Sandbox, volume res
 // quiesceVolumes unmounts a claim's writable mounts in reverse; an unclean unmount keeps the marker.
 func (m *Manager) quiesceVolumes(ctx context.Context, sb *types.Sandbox) volumeTeardown {
 	td := volumeTeardown{holds: heldVolumes(sb)}
-	if writableMounts(sb.Volumes) == 0 {
+	if !slices.ContainsFunc(sb.Volumes, needsUnmount) {
 		return td
 	}
 	catalog := m.catalogSnapshot()
@@ -332,16 +332,6 @@ func (m *Manager) checkResolvedLocked(volumes []resolvedVolume) error {
 		}
 	}
 	return nil
-}
-
-func writableMounts(volumes []types.Volume) int {
-	mounts := 0
-	for _, volume := range volumes {
-		if needsUnmount(volume) {
-			mounts++
-		}
-	}
-	return mounts
 }
 
 func needsUnmount(volume types.Volume) bool {

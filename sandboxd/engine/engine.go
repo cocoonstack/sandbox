@@ -140,7 +140,7 @@ func (e *Engine) RunCold(ctx context.Context, name string, key types.PoolKey, st
 // Remove force-deletes a VM; a refused delete gets a force stop and one more delete.
 func (e *Engine) Remove(ctx context.Context, name string) error {
 	_, err := e.run(ctx, "vm", "rm", "--force", name)
-	if err == nil || strings.Contains(err.Error(), vmNotFound) {
+	if err == nil || isVMNotFound(err) {
 		return err
 	}
 	_ = e.Stop(ctx, name)
@@ -261,7 +261,7 @@ func (e *Engine) List(ctx context.Context) ([]types.VMRecord, error) {
 func (e *Engine) Inspect(ctx context.Context, name string) (rec types.VMRecord, ok bool, err error) {
 	out, err := e.run(ctx, "vm", "inspect", name)
 	if err != nil {
-		if strings.Contains(err.Error(), vmNotFound) {
+		if isVMNotFound(err) {
 			return types.VMRecord{}, false, nil
 		}
 		return types.VMRecord{}, false, err
@@ -514,6 +514,10 @@ func shardOf(shards []string, name string) string {
 	_, _ = h.Write([]byte(name))
 	// >>1 keeps the index conversion positive even where int is 32-bit.
 	return shards[int(h.Sum32()>>1)%len(shards)]
+}
+
+func isVMNotFound(err error) bool {
+	return strings.Contains(err.Error(), vmNotFound)
 }
 
 func respFail(resp wire.Response) string {
