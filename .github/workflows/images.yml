@@ -32,6 +32,7 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
+  actions: read
   contents: read
   packages: write
 
@@ -42,6 +43,7 @@ jobs:
       boot: ${{ steps.diff.outputs.boot }}
       silkd: ${{ steps.diff.outputs.silkd }}
       osimage: ${{ steps.diff.outputs.osimage }}
+      base: ${{ steps.diff.outputs.base }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7.0.1
@@ -52,14 +54,20 @@ jobs:
         id: diff
         env:
           EVT: ${{ github.event_name }}
-          BEFORE: ${{ github.event.before }}
           SHA: ${{ github.sha }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          BRANCH: ${{ github.ref_name }}
         run: |
-          # Manual run or a first/force push with no base: build everything.
-          if [[ "$EVT" == "workflow_dispatch" || -z "$BEFORE" || "$BEFORE" == "0000000000000000000000000000000000000000" ]]; then
-            boot=true; silkd=true; osimage=true
+          # The base is the last green run's commit, not event.before: the queue cancels a pending push unbuilt.
+          base=""
+          if [[ "$EVT" != "workflow_dispatch" ]]; then
+            base=$(gh run list --workflow images.yml --branch "$BRANCH" --status success --limit 1 --json headSha --jq '.[0].headSha // ""')
+          fi
+          if [[ -z "$base" ]] || ! git cat-file -e "$base^{commit}" 2>/dev/null; then
+            base=""; boot=true; silkd=true; osimage=true
           else
-            changed() { git diff --name-only "$BEFORE" "$SHA" -- "$@" ':!*.md' | grep -q .; }
+            changed() { git diff --name-only "$base" "$SHA" -- "$@" ':!*.md' | grep -q .; }
             # Each area carries its own build workflow: changing how an image is
             # built must rebuild it, or the run goes green having built nothing.
             wf=.github/workflows
@@ -71,8 +79,9 @@ jobs:
             echo "boot=$boot"
             echo "silkd=$silkd"
             echo "osimage=$osimage"
+            echo "base=$base"
           } >> "$GITHUB_OUTPUT"
-          echo "Detected: boot=$boot silkd=$silkd osimage=$osimage"
+          echo "Detected: base=${base:-none} boot=$boot silkd=$silkd osimage=$osimage"
 
   boot:
     needs: detect
@@ -102,5 +111,6 @@ jobs:
       silkd_changed: ${{ needs.detect.outputs.silkd == 'true' }}
       boot_image: ${{ needs.boot.outputs.image }}
       silkd_image: ${{ needs.silkd.outputs.image }}
+      base: ${{ needs.detect.outputs.base }}
       no_cache: ${{ github.event.inputs.no-cache == 'true' }}
     secrets: inherit

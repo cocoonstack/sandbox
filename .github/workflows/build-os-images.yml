@@ -27,6 +27,10 @@ on:
         description: sha-pinned silkd carrier ref (empty = unchanged)
         type: string
         default: ""
+      base:
+        description: commit the last green images run built (empty = build all)
+        type: string
+        default: ""
       no_cache:
         type: boolean
         default: false
@@ -63,7 +67,7 @@ jobs:
           CARRIER_CHANGED: ${{ inputs.boot_changed || inputs.silkd_changed }}
           MANUAL: ${{ github.event_name == 'workflow_dispatch' }}
           MANUAL_NO_CACHE: ${{ github.event.inputs.no-cache || inputs.no_cache }}
-          BEFORE: ${{ github.event.before }}
+          BASE: ${{ inputs.base }}
           SHA: ${{ github.sha }}
         run: |
           all_names() {
@@ -76,16 +80,16 @@ jobs:
           }
 
           # A changed carrier (boot/silkd) refolds into every image; a manual
-          # run, a first push (no BEFORE), or a change to how the images are
+          # run, no known base, or a change to how the images are
           # built rebuilds all. Otherwise only the git-changed image dirs
           # rebuild. The workflow diff is last so a manual run never runs git.
           wf=.github/workflows
-          if [[ "$CARRIER_CHANGED" == "true" || "$MANUAL" == "true" || "$BEFORE" == "0000000000000000000000000000000000000000" ]] ||
-             git diff --name-only "$BEFORE" "$SHA" -- "$wf/build-os-images.yml" "$wf/images.yml" | grep -q .; then
+          if [[ "$CARRIER_CHANGED" == "true" || "$MANUAL" == "true" || -z "$BASE" ]] ||
+             git diff --name-only "$BASE" "$SHA" -- "$wf/build-os-images.yml" "$wf/images.yml" | grep -q .; then
             all_names
             all_changed=""
           else
-            all_changed=$(git diff --name-only "$BEFORE" "$SHA" -- 'os-image/' ':!*.md' | sort -u)
+            all_changed=$(git diff --name-only "$BASE" "$SHA" -- 'os-image/' ':!*.md' | sort -u)
             declare -A names
             for f in $all_changed; do
               name=$(echo "$f" | cut -d'/' -f2)
