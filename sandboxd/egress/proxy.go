@@ -752,6 +752,12 @@ func hostPort(authority string, def uint16) (host string, port uint16, ok bool) 
 	return host, uint16(n), err == nil && n != 0 && len(host) <= maxHostLen
 }
 
+func tcpAddrPort(a net.Addr) netip.AddrPort {
+	ta, _ := a.(*net.TCPAddr)
+	ap := ta.AddrPort()
+	return netip.AddrPortFrom(ap.Addr().Unmap(), ap.Port())
+}
+
 // replaceParam fills the first name=placeholder pair of a query or form string, leaving every other byte as sent.
 func replaceParam(raw, name, placeholder, value string) string {
 	for rest, at := raw, 0; rest != ""; {

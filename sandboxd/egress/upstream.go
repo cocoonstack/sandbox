@@ -154,12 +154,6 @@ func DialUpstream(ctx context.Context, u *url.URL, target string, dial DialFunc)
 	return &upstreamConn{Conn: conn, reader: reader, host: u.Host, target: dest}, nil
 }
 
-func tcpAddrPort(a net.Addr) netip.AddrPort {
-	ta, _ := a.(*net.TCPAddr)
-	ap := ta.AddrPort()
-	return netip.AddrPortFrom(ap.Addr().Unmap(), ap.Port())
-}
-
 // socksTunnel handshakes on conn itself, so the tunnel keeps the TCP conn's CloseWrite.
 func socksTunnel(ctx context.Context, conn net.Conn, u *url.URL, target string) error {
 	var auth *proxy.Auth
