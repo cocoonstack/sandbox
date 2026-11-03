@@ -168,37 +168,29 @@ func (d *Store) Delete(_ context.Context, id string) error {
 }
 
 func (d *Store) SweepStaging() error {
-	// ReadDir + suffix, not Glob: the root path may hold glob metacharacters.
-	entries, err := os.ReadDir(d.root)
-	if err != nil {
-		return err
-	}
-	for _, e := range entries {
-		if !strings.HasSuffix(e.Name(), ".tmp") {
-			continue
-		}
-		if err := removeAgedEntry(d.root, e); err != nil {
-			return err
-		}
-	}
-	return d.sweepRecords()
+	return d.sweep()
 }
 
 func (d *Store) SweepGenerations(context.Context) error {
-	return d.sweepRecords()
+	return d.sweep()
 }
 
-func (d *Store) sweepRecords() error {
+func (d *Store) sweep() error {
 	entries, err := os.ReadDir(d.root)
 	if err != nil {
 		return err
 	}
 	for _, e := range entries {
-		if !e.IsDir() || !d.idRe.MatchString(e.Name()) {
-			continue
+		var sweepErr error
+		switch {
+		// ReadDir + suffix, not Glob: the root path may hold glob metacharacters.
+		case strings.HasSuffix(e.Name(), ".tmp"):
+			sweepErr = removeAgedEntry(d.root, e)
+		case e.IsDir() && d.idRe.MatchString(e.Name()):
+			sweepErr = d.sweepGenerations(e.Name())
 		}
-		if err := d.sweepGenerations(e.Name()); err != nil {
-			return err
+		if sweepErr != nil {
+			return sweepErr
 		}
 	}
 	return nil

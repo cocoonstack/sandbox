@@ -597,6 +597,34 @@ func TestSweepStagingSparesAPeersFreshStaging(t *testing.T) {
 	}
 }
 
+func TestSweepGenerationsRemovesOnlyAgedStaging(t *testing.T) {
+	st, err := New(t.TempDir(), store.CheckpointIDRe)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	aged, err := st.Stage("ck_00000000000000aa")
+	if err != nil {
+		t.Fatalf("stage: %v", err)
+	}
+	seedRecord(t, aged, "interrupted")
+	backdate(t, aged)
+	fresh, err := st.Stage("ck_00000000000000bb")
+	if err != nil {
+		t.Fatalf("stage: %v", err)
+	}
+
+	if err := st.SweepGenerations(t.Context()); err != nil {
+		t.Fatalf("SweepGenerations: %v", err)
+	}
+
+	if _, err := os.Stat(aged); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("staging aged past the grace survived the periodic sweep: %v", err)
+	}
+	if _, err := os.Stat(fresh); err != nil {
+		t.Errorf("fresh staging was swept: %v", err)
+	}
+}
+
 func TestSweepGenerationsToleratesConcurrentDelete(t *testing.T) {
 	const id = "ck_00000000000000aa"
 	st, err := New(t.TempDir(), store.CheckpointIDRe)
