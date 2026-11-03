@@ -10,13 +10,14 @@ import threading
 import time
 import urllib.parse
 from collections.abc import Callable, Iterator
-from typing import Any, BinaryIO, Protocol, TypeVar
+from typing import Any, BinaryIO, Protocol, TypeVar, cast
 
 from .errors import APIError, ProtocolError, SandboxError, SandboxTimeout, SilkdError
 from .frames import MAX_FRAME, decode_response, encode_request
 
 KEEP_ALIVE_CONNS = 8
 _FD_SETSIZE = 1024
+_READ_BUFFER = 64 * 1024
 _TCP_KEEPALIVE = {"TCP_KEEPIDLE": 15, "TCP_KEEPINTVL": 15, "TCP_KEEPCNT": 9}
 
 _CloseableT = TypeVar("_CloseableT", bound="_Closeable")
@@ -211,7 +212,7 @@ def dial_agent(
     try:
         if endpoint.scheme != "https":
             sock.settimeout(None)
-            return Conn(sock, sock.makefile("rb"), request, timeout)
+            return Conn(sock, _buffered_reader(sock), request, timeout)
         context = ssl_context or ssl.create_default_context()
         sock = context.wrap_socket(sock, server_hostname=host, do_handshake_on_connect=False)
         sock.settimeout(remaining_timeout(timeout, deadline))
@@ -222,7 +223,7 @@ def dial_agent(
         # a TLS edge may be a proxy that drops bytes sent ahead of the 101
         sock.settimeout(remaining_timeout(timeout, deadline))
         sock.sendall(request)
-        reader = sock.makefile("rb")
+        reader = _buffered_reader(sock)
         _read_upgrade(reader, lambda: sock.settimeout(remaining_timeout(timeout, deadline)))
         remaining_timeout(timeout, deadline)
         sock.settimeout(None)
@@ -258,6 +259,10 @@ def is_quiet(sock: socket.socket | None) -> bool:
         return not poller.poll(0)
     except (OSError, ValueError):
         return False
+
+
+def _buffered_reader(sock: socket.socket) -> BinaryIO:
+    return cast(BinaryIO, sock.makefile("rb", buffering=_READ_BUFFER))
 
 
 def _handshake_error(what: str, exc: OSError) -> SandboxError:
