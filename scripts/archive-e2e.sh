@@ -2,8 +2,8 @@
 # Bare-metal acceptance for lifecycle auto-archive: a claim idles into
 # hibernation, then to a store checkpoint (its local VM dropped), and the next
 # access wakes it from the store with the same id and guest state intact.
-# Runs a dedicated sandboxd on port 7778 so it never collides with
-# sandboxd-e2e.sh (7777).
+# Runs a dedicated sandboxd on port 7778 (7777=e2e), but cleanup removes every
+# sbx-* VM on the cocoon root, so it cannot run beside another e2e or sandboxd.
 set -euo pipefail
 
 TEMPLATE=${TEMPLATE:-rt:24.04}

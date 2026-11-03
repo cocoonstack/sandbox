@@ -70,6 +70,8 @@ unpooled template, then measures the data plane (`fs_stat` round-trips via
 in its table so new runs remain comparable with the dated log below. It
 prints a markdown table stamped with the host evidence: virtualization
 (`systemd-detect-virt`), CPU, kernel, cocoon version, image digest.
+On exit it removes every `sbx-*` VM on the cocoon root, a serving
+sandboxd's claims included, so run it only on a node that serves no claims.
 
 Knobs (environment variables): `WARM`/`WARM_N` (warm-pool depth and burst
 size — the burst must stay within the depth, or refill loses the race and

@@ -23,7 +23,9 @@ frames tagged `"type"` until a terminal one (`exit`, `done`, or `error`),
 then reads the next request on the same connection. `stdin`, `stdin_close`,
 `data` and `data_end` frames are input for the RPC in flight: after its
 terminal frame they are dropped, and a request frame sent while a streaming
-RPC still runs ends that RPC's input and is served after it. A client that
+RPC still runs ends that RPC's input and is served after it, except in the
+upload of `fs_write` or `fs_push`: there a request frame before `data_end`
+fails the upload with `bad_request` and is dropped. A client that
 closes after one RPC is served exactly as before; `info` reports `proto: 2`
 on a daemon that keeps the connection. Binary payloads ride base64 in `data`
 fields. Frames are capped at 8 MiB; requests carry `"v": 1` and unknown

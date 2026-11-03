@@ -409,7 +409,9 @@ timeouts return 504 and cancellation returns 408.
 A mounted writable attachment marks the image dirty before the guest can write.
 Live removal and release clear the marker only when the unmount observes and
 normally unmounts the exact writable whole-device filesystem and finds no
-residual device mounts. Live removal also needs a confirmed host detach. Both
+residual device mounts. These checks read silkd's own mount namespace, so a
+mount of the device in another namespace, or one moved there, is not seen.
+Live removal also needs a confirmed host detach. Both
 mount and superblock options must be writable; ext4's `emergency_ro` after a
 filesystem error counts as read-only. A missing device or pre-unmounted
 filesystem does not prove clean unmount. The marker remains on uncertainty and
@@ -1146,7 +1148,9 @@ connection to its silkd with the unread bytes replayed, so a client sees one
 silkd and no close. When the sandbox sleeps again meanwhile (a new hibernate or
 an archive), the connection's next read moves to a fresh reader of the new sleep;
 when it wakes, the connection moves to the woken sandbox, so reads never come
-from a stale sleep. Files
+from a stale sleep. Pipelining a request behind a read that has not yet sent
+its terminal frame is unsupported: when that request moves the connection, the
+reader closes and the rest of the read's reply is lost. Files
 and symlinks resolve inside the sandbox's own filesystem as of the guest `sync`
 that runs right before the last hibernate's pause; a write the guest made in
 the instant between that `sync` and the pause is visible only after a wake. A

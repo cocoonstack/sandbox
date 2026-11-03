@@ -60,7 +60,7 @@ sandboxd: ## build dist/sandboxd
 go-test: ## go test -race across the Go modules
 	for m in $(GO_MODULES); do (cd $$m && GOWORK=off go test -race ./...) || exit 1; done
 
-bench: ## claim-tier + data-plane benchmarks on this node (see docs/benchmarks.md)
+bench: ## claim-tier + data-plane benchmarks on this node; removes every sbx-* VM (see docs/benchmarks.md)
 	bash scripts/bench.sh
 
 go-lint: golangci-lint ## golangci-lint (run + fmt --diff) across the Go modules, GOOS linux+darwin

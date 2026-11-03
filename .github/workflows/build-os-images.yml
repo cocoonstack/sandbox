@@ -323,8 +323,8 @@ jobs:
         id: epoch
         run: echo "epoch=$(git log -1 --format=%ct)" >> "$GITHUB_OUTPUT"
 
-      # SOURCE_DATE_EPOCH plus rewrite-timestamp clamp every file's mtime, so a
-      # rebuild of one commit writes the same layer.
+      # SOURCE_DATE_EPOCH plus rewrite-timestamp clamp every file's mtime; a rebuild writes
+      # the same layer only when the packages it installs (apt, unpinned pip) are unchanged.
       - name: Build and push
         uses: docker/build-push-action@v7.4.0
         env:
