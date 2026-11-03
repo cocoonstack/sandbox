@@ -300,10 +300,6 @@ func (m *Manager) checkTemplateOwner(ctx context.Context, id, tenant string) err
 
 func (m *Manager) commitTemplate(ctx context.Context, staging string, rec templateRecord) (string, error) {
 	id := store.TemplateID(rec.Key.Hash())
-	defer m.lockRec(id)()
-	if ownerErr := m.checkTemplateOwner(ctx, id, rec.Tenant); ownerErr != nil {
-		return "", ownerErr
-	}
 	rec.ID, rec.CreatedAt = id, time.Now()
 	meta, err := json.Marshal(rec)
 	if err != nil {
@@ -312,8 +308,15 @@ func (m *Manager) commitTemplate(ctx context.Context, staging string, rec templa
 	if err = os.WriteFile(filepath.Join(staging, store.MetaFile), meta, 0o600); err != nil {
 		return "", err
 	}
-	digest, err := m.tpls.PublishDigested(ctx, staging, id, "")
+	digest, commit, err := m.tpls.PrepareDigested(ctx, staging, id, "")
 	if err != nil {
+		return "", fmt.Errorf("publish template: %w", err)
+	}
+	defer m.lockRec(id)()
+	if ownerErr := m.checkTemplateOwner(ctx, id, rec.Tenant); ownerErr != nil {
+		return "", ownerErr
+	}
+	if err = commit(ctx); err != nil {
 		return "", fmt.Errorf("publish template: %w", err)
 	}
 	if err = m.tpls.SetLabels(ctx, id, nil); err != nil {

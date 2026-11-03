@@ -192,7 +192,7 @@ func TestPublishDigestedRetryAndMetaRequestAccounting(t *testing.T) {
 	fake.setPutFailures(exportKey, 1)
 
 	staging := stageRecord(t, st, id, meta, content)
-	digest, err := st.PublishDigested(t.Context(), staging, id, "")
+	digest, err := storetest.PublishDigested(t.Context(), st, staging, id)
 	if err != nil {
 		t.Fatalf("PublishDigested: %v", err)
 	}
@@ -254,7 +254,7 @@ func TestPublishDigestedFailurePreservesCommittedGeneration(t *testing.T) {
 	st := newTestStore(t, fake)
 	oldMeta := []byte(`{"id":"` + id + `","gen":1}`)
 	oldStaging := stageRecord(t, st, id, oldMeta, "old")
-	oldDigest, err := st.PublishDigested(t.Context(), oldStaging, id, "")
+	oldDigest, err := storetest.PublishDigested(t.Context(), st, oldStaging, id)
 	if err != nil {
 		t.Fatalf("publish old generation: %v", err)
 	}
@@ -266,7 +266,7 @@ func TestPublishDigestedFailurePreservesCommittedGeneration(t *testing.T) {
 	metaKey := "ck/" + id + "/" + store.MetaFile
 	markerPuts := fake.requestCount(http.MethodPut, metaKey)
 	fake.setPutFailures(newExportKey, 100)
-	digest, err := st.PublishDigested(t.Context(), newStaging, id, "")
+	digest, err := storetest.PublishDigested(t.Context(), st, newStaging, id)
 	if err == nil {
 		t.Fatal("PublishDigested succeeded with injected export failure")
 	}
@@ -290,7 +290,7 @@ func TestPublishDigestedFailurePreservesCommittedGeneration(t *testing.T) {
 	}
 
 	fake.setPutFailures(newExportKey, 0)
-	newDigest, err := st.PublishDigested(t.Context(), newStaging, id, "")
+	newDigest, err := storetest.PublishDigested(t.Context(), st, newStaging, id)
 	if err != nil {
 		t.Fatalf("retry PublishDigested: %v", err)
 	}
@@ -534,7 +534,7 @@ func TestPublishDigestedHashesHolesLikeZeros(t *testing.T) {
 	size := 3*store.DigestChunkSize + 7
 	staging, src := stageSparseRecord(t, st, id, []byte(`{"id":"`+id+`"}`), size, map[int64]string{store.DigestChunkSize + 5: "data", size - 1: "z"})
 	sums := denseChunkSums(t, src)
-	digest, err := st.PublishDigested(t.Context(), staging, id, "")
+	digest, err := storetest.PublishDigested(t.Context(), st, staging, id)
 	if err != nil {
 		t.Fatalf("PublishDigested: %v", err)
 	}
@@ -552,7 +552,7 @@ func TestPublishDigestedSplitsChunksAtTheFixedBoundary(t *testing.T) {
 	st := newTestStore(t, &fakeS3{objects: map[string][]byte{}})
 	content := string(bytes.Repeat([]byte{'x'}, int(store.DigestChunkSize))) + "y"
 	staging := stageRecord(t, st, id, []byte(`{"id":"`+id+`"}`), content)
-	digest, err := st.PublishDigested(t.Context(), staging, id, "")
+	digest, err := storetest.PublishDigested(t.Context(), st, staging, id)
 	if err != nil {
 		t.Fatalf("PublishDigested: %v", err)
 	}

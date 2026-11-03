@@ -2,6 +2,7 @@ package pool
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"maps"
 	"os"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/cocoonstack/sandbox/sandboxd/config"
 	"github.com/cocoonstack/sandbox/sandboxd/store"
+	"github.com/cocoonstack/sandbox/sandboxd/store/storetest"
 	"github.com/cocoonstack/sandbox/sandboxd/tenants"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
@@ -478,7 +480,7 @@ func TestTemplatesListWhatTheNodeHoldsAcrossARestart(t *testing.T) {
 	if err = os.WriteFile(filepath.Join(staging, store.MetaFile), []byte(`{"id":"`+oldID+`","created_at":"2026-01-01T00:00:00Z"}`), 0o600); err != nil {
 		t.Fatalf("write keyless meta: %v", err)
 	}
-	if _, err = m.tpls.PublishDigested(t.Context(), staging, oldID, ""); err != nil {
+	if _, err = storetest.PublishDigested(t.Context(), m.tpls, staging, oldID); err != nil {
 		t.Fatalf("publish keyless record: %v", err)
 	}
 
@@ -594,6 +596,43 @@ func TestRejectedLabelWritesLeakNoRecLock(t *testing.T) {
 	}
 }
 
+func TestClaimFromATemplateRunsBesideItsRepromote(t *testing.T) {
+	m := newTestManager(t, newFakeEngine())
+	parent := mustClaim(t, m, testKey)
+	key, _, err := m.Promote(t.Context(), parent.ID, Cred{Token: parent.Token}, "tpl:x", "")
+	if err != nil {
+		t.Fatalf("Promote: %v", err)
+	}
+	slow := &slowPrepareStore{Store: m.tpls, entered: make(chan struct{}), release: make(chan struct{})}
+	m.tpls = slow
+	repromoted := make(chan error, 1)
+	go func() {
+		_, _, err := m.Promote(t.Context(), parent.ID, Cred{Token: parent.Token}, "tpl:x", "")
+		repromoted <- err
+	}()
+	<-slow.entered
+
+	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+	defer cancel()
+	claimed := make(chan error, 1)
+	go func() {
+		_, err := claimAny(ctx, m, key, 0)
+		claimed <- err
+	}()
+	select {
+	case err = <-claimed:
+		if err != nil {
+			t.Errorf("claim during a re-promote: %v, want a clone of the committed template", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Error("a claim with a 100 ms context was still blocked 2 s into a re-promote")
+	}
+	close(slow.release)
+	if err = <-repromoted; err != nil {
+		t.Fatalf("re-promote: %v", err)
+	}
+}
+
 func claimTenant(t *testing.T, m *Manager, tenant string) *types.Sandbox {
 	t.Helper()
 	sb, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{TTL: time.Hour, Tenant: tenant})
@@ -613,4 +652,16 @@ func stageTemplate(t *testing.T, m *Manager, id string) string {
 		t.Fatalf("mkdir export: %v", err)
 	}
 	return staging
+}
+
+type slowPrepareStore struct {
+	store.Store
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (s *slowPrepareStore) PrepareDigested(ctx context.Context, staging, id, lineage string) (string, store.CommitFunc, error) {
+	close(s.entered)
+	<-s.release
+	return s.Store.PrepareDigested(ctx, staging, id, lineage)
 }
