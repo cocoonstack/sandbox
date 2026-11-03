@@ -40,8 +40,9 @@ ln, err := sb.ProxyPort(ctx, "127.0.0.1:6555", 5555)
 
 ## What works, what differs
 
-- `sb.Exec` runs `/system/bin/sh` — there is no bash and no glibc, so the
-  session verbs (persistent bash) are unavailable; prefix commands with
+- There is no bash and no glibc, so pass `/system/bin/sh` as argv[0]
+  (`sb.Exec(ctx, "/system/bin/sh", "-c", ...)`), and the session verbs
+  (persistent bash) are unavailable; prefix commands with
   `PATH=/system/bin:/system/xbin:$PATH` when calling tools directly.
 - Files, port relay, and watch verbs work as on the Ubuntu flavors.
 - Checkpoint/branch of a booted Android works: a branch answers `ps` and

@@ -234,8 +234,10 @@ call on a handle answers 404 once its sandbox has moved; run `Lookup` to tell
 that from a released sandbox.
 Volume sandboxes cannot hibernate, fork, checkpoint, or promote. Egress-lane
 sandboxes cannot either, nor take `WithArchiveOnExpire`; each answers 409. Passing
-`WithVolumes` or `WithClaimRef` to `Checkpoint.New` returns a local error:
+`WithVolumes`, `WithVolumesAttachOnly` or `WithClaimRef` to `Checkpoint.New` returns a local error:
 checkpoint branches support neither volumes nor a claim reference in this version.
+`WithNetwork` or `WithSize` to `Checkpoint.New` or `Template.New` does too: the
+snapshot pins the lane and size.
 `WithMetadata`, `WithArchiveOnExpire` and `WithEnv` apply to `New`, `Template.New`, and
 `Checkpoint.New`: the labels follow the [claim bounds](sandboxd-api.md#post-v1claim),
 and a branch never inherits its source's labels or expiry action.
@@ -761,6 +763,10 @@ tenant.
 ## Error handling
 
 - `*sandbox.ExitError` — non-zero exit from `Exec` (`Code`, `Stderr`)
+- `*sandbox.APIError` — a non-2xx control-plane reply (`Verb`, `Status`,
+  `Message`); claim, fork, checkpoint, renew, env and tenant verbs return it, and
+  a 404/429/409 is matched on `Status`. Volume calls wrap it in
+  `*sandbox.VolumeError`
 - `*wire.ErrorResp` — a typed guest-side failure; `Kind` is one of
   `wire.KindBadRequest` (including a spawn the guest cannot start: missing
   binary, a cwd that is not a directory, no exec bit, a `User` the guest
