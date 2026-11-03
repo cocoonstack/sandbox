@@ -217,6 +217,22 @@ func (m *Manager) HasPromotedTemplate(ctx context.Context, key types.PoolKey, te
 	return owner == "" || tenantOwns(tenant, owner)
 }
 
+func (m *Manager) loadTemplates(ctx context.Context) {
+	m.tplSet = map[string]TemplateInfo{}
+	metas, listErr := m.tpls.Metas(ctx)
+	if listErr != nil {
+		log.WithFunc("pool.loadTemplates").Warnf(ctx, "list templates skipped: %v", listErr)
+	}
+	for _, r := range metas {
+		var rec templateRecord
+		if json.Unmarshal(r.Meta, &rec) == nil && rec.ID != "" {
+			info := TemplateInfo{Key: rec.Key, ContentDigest: r.Digest, Tenant: rec.Tenant, CreatedAt: rec.CreatedAt}
+			_ = json.Unmarshal(r.Labels, &info.Labels)
+			m.tplSet[rec.ID] = info
+		}
+	}
+}
+
 // ownedTemplate is ErrUnknownTemplate for a record that is absent or that tenant does not own; root owns every record.
 func (m *Manager) ownedTemplate(ctx context.Context, id, tenant string) error {
 	raw, err := m.tpls.ReadMeta(ctx, id)

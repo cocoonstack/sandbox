@@ -6,7 +6,6 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"maps"
@@ -390,32 +389,14 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 		refillKick:      make(chan struct{}, 1),
 		healSem:         make(chan struct{}, maxConcurrentHeals),
 	}
-	for _, volume := range cfg.Volumes {
-		m.catalog.entries[volume.Name] = &catalogVolume{
-			disk:     engine.VolumeSpec{Name: volume.Name, Path: volume.Path, DirectIO: volume.DirectIO},
-			tenants:  slices.Clone(volume.Tenants),
-			writable: volume.Writable,
-		}
-	}
+	m.seedVolumes(cfg.Volumes)
 	if err := m.loadRuntimeVolumes(); err != nil {
 		return nil, err
 	}
 	if err := os.MkdirAll(m.goldensDir(), 0o750); err != nil {
 		return nil, fmt.Errorf("create goldens dir: %w", err)
 	}
-	m.tplSet = map[string]TemplateInfo{}
-	metas, listErr := m.tpls.Metas(ctx)
-	if listErr != nil {
-		log.WithFunc("pool.NewManager").Warnf(ctx, "list templates skipped: %v", listErr)
-	}
-	for _, r := range metas {
-		var rec templateRecord
-		if json.Unmarshal(r.Meta, &rec) == nil && rec.ID != "" {
-			info := TemplateInfo{Key: rec.Key, ContentDigest: r.Digest, Tenant: rec.Tenant, CreatedAt: rec.CreatedAt}
-			_ = json.Unmarshal(r.Labels, &info.Labels)
-			m.tplSet[rec.ID] = info
-		}
-	}
+	m.loadTemplates(ctx)
 	usageJournal, err := newJournal(filepath.Join(cfg.DataDir, usage.JournalFile))
 	if err != nil {
 		return nil, fmt.Errorf("open usage journal: %w", err)

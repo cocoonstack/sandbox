@@ -119,6 +119,16 @@ func (m *Manager) UnregisterVolume(ctx context.Context, name string) error {
 	return nil
 }
 
+func (m *Manager) seedVolumes(volumes []config.VolumeSpec) {
+	for _, volume := range volumes {
+		m.catalog.entries[volume.Name] = &catalogVolume{
+			disk:     engine.VolumeSpec{Name: volume.Name, Path: volume.Path, DirectIO: volume.DirectIO},
+			tenants:  slices.Clone(volume.Tenants),
+			writable: volume.Writable,
+		}
+	}
+}
+
 func (m *Manager) loadRuntimeVolumes() error {
 	raw, err := os.ReadFile(filepath.Join(m.dataDir, runtimeVolumesFile))
 	if errors.Is(err, os.ErrNotExist) {
