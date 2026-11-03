@@ -257,8 +257,9 @@ Each decision is metered as an `egress` usage event, which names the injected
 secrets in `secret` as the audit line does, and, when `audit_log` is
 on, written to `audit.jsonl` (`op:"egress"`, `dest`, `port`, `method`,
 `decision`, and the secret **name** in `secret`); an intercepted `CONNECT` is
-recorded as a decision of its own before its inner requests. A host longer
-than 253 bytes (the DNS limit) is denied, and a sandbox records at most 10
+recorded as a decision of its own before its inner requests. The HTTP and
+CONNECT doors deny a host longer than 253 bytes (the DNS limit); the audit
+record clips it. A sandbox records at most 10
 `deny` and `rate_limited` decisions per second after a burst of 100, dropping
 the rest, so a guest cannot flood the journals.
 
@@ -539,7 +540,8 @@ install is off the claim path). It is
 **not** re-installed on re-claim: a clone, checkpoint restore, archive wake, or
 reconcile adopts the guest with whatever root it was born with. Each golden's
 `.stamp` file records what it baked (the root fingerprint, the lane verdict,
-the image id, a sized pool's disk size, and the warmup argv), and a golden is
+the image id, a sized pool's disk size, `no_balloon` when set, and the warmup
+argv), and a golden is
 adopted only when its stamp exists and
 matches, so a changed root rebuilds goldens; a golden from before the stamp
 has none and is rebuilt once. Nothing rebuilds an existing checkpoint,

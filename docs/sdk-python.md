@@ -234,7 +234,11 @@ When to hibernate is your policy, unless the deployment opts into
 hibernates idle claims automatically with the same transparent wake. A claim
 with a connection live when the sweep checks it (a relay stream, a buffered
 exec, a preview dial, an egress request) is not swept; the idle clock
-restarts when that connection ends.
+restarts when that connection ends. When the sandbox's pool sets
+[`reader`](deploy.md#reading-sleeping-claims-without-waking-them), `stat`,
+`read_file`, `list_dir` and `pull` on a hibernated or archived handle are served
+without waking it, as of the guest `sync` just before the last hibernate, and the
+handle's next call that is anything else wakes the sandbox on the same connection.
 
 Data-plane calls share a handle's relay connection: after a call the SDK
 keeps the connection for 30 seconds (`Client(..., keep_alive=...)` tunes the
@@ -320,13 +324,9 @@ records, while `client.checkpoint(id)` creates an entry-node-bound handle for
 an already known id without listing. `new()` follows an owner redirect and may
 heal a missing record locally; `delete()` acts on the handle's bound node.
 
-`delete()` also asks every peer that node currently sees to drop any replica a
-heal pulled — best-effort eventual cleanup, not a fleet-wide revocation. A peer
-that misses the broadcast (offline, partitioned, or joined later) keeps serving
-branches from its replica until the node's `checkpoint_ttl_hours` ages it out;
-enabling peer heal requires that TTL to be set, so every healed replica has a
-cleanup bound while healing stays on. A node later run with healing off and
-that TTL back at 0 keeps such a replica until an explicit delete.
+`delete()` also asks the peers that node sees to drop any healed replica, as
+best-effort cleanup rather than a fleet-wide revocation; see
+[delete is eventual](cluster.md#delete-is-eventual-not-a-fleet-wide-revocation).
 
 ## Language servers (LSP)
 
@@ -388,6 +388,9 @@ code = sb.run(["bash", "-c", "make test"],
               on_stderr=lambda b: sys.stderr.buffer.write(b),
               timeout=600)                          # seconds; TimeoutError past it
 ```
+
+`stdin` takes `bytes`, `bytearray` or `memoryview`; a non-empty `str` raises
+`TypeError`.
 
 `timeout` on `exec` and `run` is a wall clock over the dial and the run: at
 its end the SDK cuts the connection and kills the reported pid, and

@@ -69,7 +69,7 @@ Auth: `Authorization: Bearer <api_token>` (when configured).
   cold-booting an image named like the template
 - `env` is the claim's own environment, at most 64 entries: each name a shell
   identifier of at most 128 bytes, each value at most 8 KiB, a value and an
-  inject `query` with no control characters other than tab, and names, values and inject fields at most 64 KiB in total. An entry holds only `value`, `guest` and `inject`; any other
+  inject `query` or `placeholder` with no control characters other than tab, and names, values and inject fields at most 64 KiB in total. An entry holds only `value`, `guest` and `inject`; any other
   member, or `"guest": null`, answers 400, so a mistyped flag never lands a
   host-only value in the guest. `guest` (default `true`) delivers the entry into the guest; a
   `guest: false` entry never enters it and only feeds the node's egress
@@ -225,8 +225,8 @@ name (attributed in the usage journal and counted against the tenant's
 `max_claims`). A catalog access list may restrict an entry to named tenants;
 an unknown and a forbidden volume return the same error text.
 
-Errors: 400 unknown template axis, metadata over a bound (the message names
-it), an unknown `on_expire`, invalid/duplicate volumes,
+Errors: 400 unknown template axis, `claim_ref` or metadata over a bound (the
+message names it), a bad `env` entry, an unknown `on_expire`, invalid/duplicate volumes,
 `volumes_attach_only` with no volumes, or an attach-only entry with a nonempty `mount`,
 `mode: "rw"`
 against a non-writable entry, or a volume that is unknown or forbidden (the
@@ -238,8 +238,8 @@ exclude a writer), or a `ro` claim against a writable image left dirty by an
 unclean `rw` release (needs recovery — one `rw` claim must replay and cleanly
 release before `ro` claims resume; see
 [deploy](deploy.md#writable-dataset-volumes)); 429 node at `max_claims`, the
-calling tenant at its own `max_claims`, or the node draining; 500
-provisioning failed.
+calling tenant at its own `max_claims`, the node draining, or the disk under
+`disk_reserve`; 500 provisioning failed.
 
 ## GET /v1/volumes
 
@@ -298,9 +298,9 @@ The node stores metadata in `data_dir/runtime-volumes.json` independently of
 Malformed or conflicting metadata, including a saved path outside `volume_roots`,
 prevents startup. The catalog is node-local with one sandboxd writer.
 
-Sandboxd does not create, check, or delete backings. Keep them outside its
-cleanup directories: `<data_dir>/readers`, `<data_dir>/goldens`, and
-`<data_dir>/fork-*`.
+Sandboxd does not create, check, or delete backings. Keep them outside
+`data_dir`: sandboxd clears its `readers`, `goldens`, `fork-*`,
+`checkpoint-staging` and `template-staging` entries.
 
 ### Volume access lists
 
@@ -482,7 +482,8 @@ independent guest processes and sessions continue. See the
 Auth: the sandbox's own token, or the root token for operator cleanup by id.
 Destroys the VM. 204 on success, 404 for an unknown id or wrong token, 500 when
 the VM survives removal: the claim is already gone and the node retries the
-removal.
+removal, 503 `archive registry down; retry` for a claim that holds a registry
+row while the meta store is down; resend it.
 Releasing an already-gone sandbox is 404 — the SDK treats it as success.
 
 ## POST /v1/sandboxes/{id}/hibernate
@@ -498,7 +499,7 @@ snapshot) at its deadline, unless it claimed `on_expire: archive` or its pool
 archives. When to hibernate is the caller's policy — the
 node only provides the transition. 204 on success, 404 unknown id or wrong
 token, 409 on the egress lane or when volumes are attached (neither kind of
-sandbox hibernates; see [egress](egress.md)), 429 while the disk is under
+sandbox hibernates; see [egress](egress.md)) or on a failed sandbox, 429 while the disk is under
 [`disk_reserve`](deploy.md), 503 `lease lost; retry` for a replicated claim that
 is not archived while its node's lease is overdue, even one already hibernated.
 
@@ -516,7 +517,8 @@ its own disk (memory is lost) and its restart budget resets. 204 on
 success, 404 unknown id or wrong token, 409 a failed egress-lane or volume
 sandbox, or one whose VM record is gone, 403 a removed tenant's archive,
 429 while the disk reserve is low, 500 when the cold boot or a restore fails,
-503 `lease lost; retry` for a replicated claim while its node's lease is overdue.
+503 `lease lost; retry` for a replicated claim while its node's lease is overdue,
+503 `archive registry down; retry` for an archived claim under `archive_failover` while the meta store is down.
 
 ## POST /v1/sandboxes/{id}/renew
 
@@ -535,7 +537,8 @@ body means the same as `ttl_seconds` 0. The new lease also becomes the one a
 wake from the archive grants again. A renew can shorten a lease as well as
 extend it. `on_expire` switches the expiry action to `archive` or back to
 `destroy`; absent keeps the current one. It is refused as on a claim for a
-sandbox that cannot hibernate.
+sandbox that cannot hibernate. A renew stamps no activity, so it neither restarts
+the idle clock nor stops an idle hibernate.
 
 An archived sandbox is refused: off-node, its deadline is the store's retention
 window rather than a lease, and a TTL written over it would schedule the
@@ -576,11 +579,13 @@ All-or-nothing: on error no child survived. 200 with one claim per child:
 ```
 
 Children inherit the parent's tenant and count against its `max_claims`,
-whoever calls. 400 invalid count or body, 401 bad api token, 404 unknown id
-or wrong sandbox token, 409 egress-lane or volume parent (neither forks,
-checkpoints, or promotes; see [egress](egress.md)) or an archived parent (an
-exec or file call wakes it first), 429 node or the parent's
-tenant at `max_claims`, or the node draining.
+whoever calls. 400 invalid count or body, a `claim_ref_prefix` over its bound or
+an unknown `on_expire`; 401 bad api token; 403 the parent's tenant was removed
+(sandbox token); 404 unknown id or wrong sandbox token; 409 egress-lane or volume
+parent (neither forks, checkpoints, or promotes; see [egress](egress.md)), a
+failed parent, or an archived parent (`POST /wake` or an exec wakes it first);
+429 node or the parent's tenant at `max_claims`, the node draining, or the disk
+under `disk_reserve`.
 
 ## POST /v1/sandboxes/{id}/promote
 
@@ -620,7 +625,7 @@ the export they were set on, which the new one replaces.
 400 invalid name, 401 bad api token, 409 when the name collides with a
 configured pool, the template is owned by another tenant, or the sandbox is
 on the egress lane, has volumes attached (see [egress](egress.md)), or is
-archived (an exec or file call wakes it first), 404 unknown id or wrong
+archived (`POST /wake` or an exec wakes it first), 404 unknown id or wrong
 sandbox token, 429 while the disk is under [`disk_reserve`](deploy.md).
 
 ## DELETE /v1/templates?template=…&net=…&size=…
@@ -744,7 +749,7 @@ kept only as its SHA-256) before it serves, and loads that file at boot. Each
 change is an `op:"tenants"` audit record naming the
 tenants added, changed and removed. On a cluster every node needs the change
 (see [cluster](cluster.md#tenants)). 400 a bad entry, a duplicate name or token,
-a token equal to `api_token`, or a config-owned field.
+a token equal to `api_token`, an unknown field, or an unknown `egress_class`.
 
 ## POST /v1/config/reload
 
@@ -758,7 +763,7 @@ reload and logs the result. →
 ```
 
 `changed` lists the settings that now apply. `ignored` lists differences the
-file holds for parts another API owns: pool targets and tenant identities.
+file holds for pool targets, which `PUT /v1/pools` owns.
 Which fields reload, and what happens to live claims and goldens, is described
 in [deploy](deploy.md#reloading-the-config). The status codes:
 
@@ -796,7 +801,7 @@ The URL's life is clamped to the claim's remaining lease; an archived claim
 kept forever (`archive_delete_after_seconds: 0`) has no lease, so there the
 requested `ttl_seconds` stands unclamped and `ttl_seconds: 0` mints a one-hour
 URL; releasing the sandbox ends it early either way.
-400 a port of 0, 501 when the node
+400 a port of 0, 404 unknown id or wrong sandbox token, 501 when the node
 has no `preview_listen`. The signed token embeds the sandbox id, port, and
 owner `advertise_addr`, so any node's preview listener can serve it (forwarding
 to the owner's main listener) and a released sandbox's URL simply stops
@@ -811,7 +816,7 @@ answers `200 {"checkpoint": {id, name, sandbox_id, key, tenant?,
 created_at}}` — `tenant` records the calling tenant, absent for root.
 400 bad body or name, 401 bad api token, 404 unknown id or wrong sandbox
 token, 409 egress-lane sandbox, one with volumes attached (see
-[egress](egress.md)), or an archived one (an exec or file call wakes it
+[egress](egress.md)), or an archived one (`POST /wake` or an exec wakes it
 first), 429 while the disk is under [`disk_reserve`](deploy.md).
 
 ## POST /v1/checkpoints/{id}/claim
@@ -825,29 +830,17 @@ never the source sandbox's. 400 metadata over a bound, an unknown
 `on_expire`, or a bad `env` entry.
 
 Checkpoints are node-local (unless the store is shared — see
-[Configuration](deploy.md#configuration)), so a miss here runs a tier order:
-
-1. This node checks its own store first.
-2. On a miss, it probes every mesh peer directly — a parallel `HEAD` to each
-   (authenticated on an encrypted mesh, see below) — and answers exactly like
-   a warm-miss
-   [`POST /v1/claim`](#post-v1claim): `200 {"redirect": ["10.0.0.6:7777",
-   "10.0.0.7:7777"]}`, retry the same body (+`no_redirect: true`) at each
-   candidate until one answers. The answer is capped at 3 addresses: a hint,
-   not an exhaustive list of every owner. The probe and the follow-up claim
-   are not atomic: a peer can answer the probe, then lose the record — a
-   delete's broadcast lands, or its own TTL sweep runs (below) — before the
-   retry reaches it, so a redirect can go stale between the two calls.
-3. If nothing answers the probe (or `no_redirect` is set), and the node has
-   `checkpoint_peer_heal` enabled, it pulls the record from a probed peer
-   itself, validates it, publishes it locally, and serves the claim from
-   there — paid once per node. See the full
-   [placement lifecycle](cluster.md#checkpoints-on-a-cluster) for how the
-   three tiers fit together.
+[Configuration](deploy.md#configuration)). On a miss the node probes its peers
+and answers with a redirect shaped like a warm-miss
+[`POST /v1/claim`](#post-v1claim), at most 3 addresses; retry the same body
+(+`no_redirect: true`) at each candidate. With nothing to redirect to (or
+`no_redirect` set) and `checkpoint_peer_heal` on, it pulls the record and serves
+the claim. See the [placement lifecycle](cluster.md#checkpoints-on-a-cluster).
 
 404 for an unknown checkpoint (locally, and after redirect and heal both
 miss), 409 for an egress-lane checkpoint (see [egress](egress.md)), 429 node
-or calling tenant at `max_claims` or the node draining, 503 when the node's
+or calling tenant at `max_claims`, the node draining, or the disk under
+`disk_reserve`, 503 when the node's
 concurrent-heal cap is already full — retryable, and the response carries a
 `Retry-After` hint.
 
@@ -1048,7 +1041,7 @@ tenant's claim), `children` (fork) and `ref` (the promoted template / checkpoint
 id, the egress host, a `vmm_failed` reason, or why reconcile ended a claim). An egress event that injected credentials names
 them in `secret` (`gh,claim:<entry>`, never a value). An egress event routed through an
 [upstream proxy](egress.md#upstream-proxies) carries `upstream` (its `host:port`), and with
-`egress_usage_bytes` on, `egress_bytes` events add the connection's payload `tx`/`rx` bytes. A volume claim also carries
+`egress_usage_bytes` on, `egress_bytes` events add the connection's payload `tx`/`rx` bytes. A sandbox records at most 10 denied or rate-limited egress decisions per second after a burst of 100, so `egress` events do not count every refusal. A volume claim also carries
 `volumes`, the applied catalog names, and — omitted when empty — `volumes_rw`,
 the subset of those names claimed `rw`, so billing can discriminate write
 access (mounts and host paths are not billing dimensions). The file rotates at
@@ -1122,7 +1115,8 @@ Auth: the sandbox's own token. Requires `Upgrade: silkd` +
 the connection is a byte-for-byte relay to the guest's silkd, carrying RPCs
 back to back (see [silkd](silkd.md)). An open relay holds the sandbox's idle
 clock, so a client that keeps a connection warm must close it when idle for
-`idle_hibernate_seconds` to apply. Frames sent right behind the request,
+`idle_hibernate_seconds` to apply. A relay whose client vanished without a FIN
+ends after about two minutes of failed TCP keepalives. Frames sent right behind the request,
 before the 101, reach silkd in order; the Go and Python SDKs send their first
 frames that way over plain HTTP, so a proxy in front of a plain-HTTP endpoint
 must forward them too (Go's `httputil.ReverseProxy` drops them; Caddy forwards
@@ -1130,7 +1124,7 @@ them). 426 without the upgrade header, 403 a removed tenant's archive, 404
 unknown sandbox, 409 a failed sandbox, 429 while the disk reserve is low, 500 a
 failed restore, 502 guest unreachable, 503 `lease lost; retry` for a replicated claim
 while its node's lease is overdue (see
-[running claims](cluster.md#running-claims-across-node-loss)). A relay of a
+[running claims](cluster.md#running-claims-across-node-loss)), 503 `archive registry down; retry` for an archived claim under `archive_failover` while the meta store is down. A relay of a
 claim of a replicating pool that is already open when the lease turns overdue
 is closed, whether or not it has a replica yet.
 
@@ -1142,7 +1136,7 @@ reader VM, a warm VM of the sandbox's pool that mounts a copy of the sandbox's d
 hibernated or archived, no `wake` usage event is recorded, and the read stamps
 neither the idle nor the archive clock. An `info` frame pipelined ahead of the
 call (the SDKs' first frames) rides along to the reader; one alone, with no call
-behind it for 100 ms, wakes the sandbox. The first frame on the connection that
+behind it for 100 ms, wakes the sandbox. A second `info` frame before any call wakes it too. The first frame on the connection that
 is anything else, or any later one, wakes the sandbox and hands the same
 connection to its silkd with the unread bytes replayed, so a client sees one
 silkd and no close. When the sandbox sleeps again meanwhile (a new hibernate or
@@ -1193,7 +1187,7 @@ wrong token; 409 a failed sandbox or a passive relay to a paused one; 426 withou
 header; 502 when the guest cannot be reached on that port — no listener, or a
 hibernated sandbox whose restore failed. The node log carries which; 403 a
 removed tenant's archive; 429 while the disk reserve is low; 503
-`lease lost; retry` for a replicated claim while its node's lease is overdue.
+`lease lost; retry` for a replicated claim while its node's lease is overdue; 503 `archive registry down; retry` for an archived claim under `archive_failover` while the meta store is down.
 
 ## POST /v1/sandboxes/{id}/exec
 
@@ -1208,9 +1202,9 @@ HTTP/2 through a TLS proxy:
 → `200 {"exit_code": 0, "stdout": "v22.23.2\n", "stderr": ""}`. The command
 runs to completion (no stdin, no streaming, no detach — use the relay for
 those); `timeout_seconds` 0 means no limit beyond the request itself. When
-the node gives up on a started command — timeout, client gone, output cap —
-it kills the child through silkd before answering, so nothing keeps running
-behind a 504. Output comes back as JSON strings: bytes that are not valid
+the node gives up on a started command (timeout, client gone, output cap,
+buffer budget) it sends the child a `kill` through silkd, bounded to 5 s, before
+answering. Output comes back as JSON strings: bytes that are not valid
 UTF-8 are replaced with U+FFFD, so binary output belongs on the relay. 400
 empty `argv`, negative `timeout_seconds`, an unknown field, or a silkd
 `bad_request` — a command that is missing or not executable and a `cwd` that
@@ -1220,7 +1214,7 @@ node's buffered-exec memory is exhausted (64 MiB of output across every
 buffered exec in flight; the command is killed); 502 guest unreachable or any other
 silkd error; 403 a removed tenant's archive; 409 a failed sandbox; 429 while the
 disk reserve is low; 500 a failed restore; 503 `lease lost; retry` for a replicated claim
-while its node's lease is overdue; 504 when the command outlives `timeout_seconds`. A client that hangs up first gets no reply and the command is killed. A hibernated sandbox wakes transparently like on the relay.
+while its node's lease is overdue; 503 `archive registry down; retry` for an archived claim under `archive_failover` while the meta store is down; 504 when the command outlives `timeout_seconds`. A client that hangs up first gets no reply and the command is killed. A hibernated sandbox wakes transparently like on the relay.
 
 ## GET /v1/sandboxes/{id}/owner
 
@@ -1229,7 +1223,8 @@ this node owns the sandbox, 404 otherwise. With
 [`archive_failover`](cluster.md#archived-claims-across-node-loss), a node that
 does not hold the sandbox adopts it when its row names an owner whose node
 lease expired, and answers 200; 503 with `Retry-After` when the meta store is
-down. A row whose owner's lease is live is never adopted: 404. A node whose
+down. A row whose owner's lease is live is never adopted: 404. A draining or fenced
+node, or one that lifted its fence less than 8 seconds ago, does not adopt: 404. A node whose
 lease is overdue answers 404 for the replicated claims it holds, so the
 `Lookup` scatter moves on. With `client_advertise` configured,
 `owner_addr` is that node's full HTTP(S) origin instead; the same contract applies
@@ -1269,7 +1264,7 @@ A node cordoned via [`POST /v1/drain`](#post-v1drain) additionally reports
 `"draining": true`. When refill is parked because the node cannot start
 another VM, `"at_capacity": true` distinguishes a full node from one still
 filling its warm target, and `at_capacity_reason` carries the engine's capacity
-reason. Both capacity fields are omitted while refill is not capacity-blocked.
+reason. Both capacity fields are omitted while refill is not capacity-blocked. Each VM holds a console pty, so a node stops at `kernel.pty.max` (4096 by default) with `no space left on device`; raise it past the VM count you plan to run.
 
 `golden` reports whether the pool's snapshot exists (refill can clone);
 `warm` at `target` with `golden: true` means warm claims are served in

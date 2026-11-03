@@ -77,8 +77,8 @@ sandboxd](docs/deploy.md) covers release binaries, the full config and systemd.
   newline-JSON frames over vsock 2048 ([reference](docs/silkd.md))
 - `sandboxd/` — per-node control plane (Go): warm pools, the claim API and the
   relays to silkd ([deploy](docs/deploy.md), [API](docs/sandboxd-api.md))
-- `sdk/go/` — [Go SDK](docs/sdk.md); `silkd/` is its connection layer and
-  `silkd/silkdtest/` a test fake
+- `sdk/go/` — [Go SDK](docs/sdk.md); `sdk/go/silkd/` is its connection layer
+  and `sdk/go/silkd/silkdtest/` a test fake
 - `sdk/python/` — [Python SDK](docs/sdk-python.md), stdlib-only and synchronous
 - `mcp/` — `sandbox-mcp`, an [MCP](docs/mcp.md) stdio server
 - `sdk/openai/` — `cocoonstack-sandbox-openai`, a sandbox provider for the
@@ -112,7 +112,8 @@ sandboxd](docs/deploy.md) covers release binaries, the full config and systemd.
   changed carriers (via `build-boot.yml` / `build-silkd.yml`,
   `workflow_call`) then os-images, in order, so the chain is deterministic
 - `build-os-images.yml` — bakes base + flavors FROM the sha-pinned carriers
-- `release.yml` — on a version tag, builds the release binaries and archives
+- `release.yml` — on a version tag, checks the tag against silkd's version,
+  then builds the release binaries and archives
 - `publish-pypi.yml` — on an `sdk-*-v*` tag, builds and publishes the
   matching package via PyPI Trusted Publishing (OIDC, per-package
   environment)
@@ -142,19 +143,11 @@ make go-lint       # Go: protocol/wire + sandboxd + sdk/go + e2e + mcp, GOOS lin
 make go-test       # Go: go test -race across the Go modules
 make sh-lint       # shellcheck every tracked shell script
 make sandboxd      # build dist/sandboxd
-make bench         # claim-tier + data-plane benchmarks on this node
+make bench         # claim-tier + data-plane benchmarks; removes every sbx-* VM
 make boot          # kernel + initramfs artifact image (docker)
-                   #   KERNEL_MIRROR=… if kernel.org tarball paths 404 locally
 make silkd-image   # silkd release binary in a scratch carrier image
 make images        # base + python images against the local boot + silkd images
 ```
-
-The parent workspace's `go.work` includes these modules, which is why the
-Makefile forces `GOWORK=off`: CI has no workspace, and a workspace build
-resolves sibling checkouts instead of the pinned versions. silkd's integration
-tests spawn real processes — run them in a Linux container too (`docker run
-rust:1 … cargo test`) before touching platform-sensitive paths; macOS green
-alone has hidden Linux-only breakage before.
 
 ## License
 

@@ -175,8 +175,9 @@ An archived claim keeps only a pointer on the node; with
 `meta_store` with a `cell`, an `s3` `checkpoint_store` and a `mesh`), the
 archive also writes one row to the shared PostgreSQL, scoped by the cell: id,
 tenant, token SHA-256, owner node, epoch, a consumed flag, checkpoint id,
-retention deadline and the claim record without its token. Only archives and
-replication rounds write it, so the claim path is unchanged.
+retention deadline and the claim record without its token. Archives,
+replication rounds, and env writes and renews of a claim whose row must follow
+it while it sleeps write it, so the claim path is unchanged.
 
 - **Adoption.** `Lookup` asks the entry node, then every peer. A node that does
   not hold the claim reads the row; when the token hash matches, it takes the
@@ -184,8 +185,8 @@ replication rounds write it, so the claim path is unchanged.
   owner's [node lease](#node-lease) to be expired, unless the owner is this
   node (with its record gone). The node records the claim as archived and
   answers as the owner. Two nodes adopting at once leave one owner; the other
-  answers 404. A tombstone is never adopted. The next exec or file call wakes
-  the claim from the store as usual. An owner with a live lease answers for
+  answers 404. A tombstone is never adopted. The next call that reaches the
+  guest wakes the claim from the store as usual. An owner with a live lease answers for
   itself, and a node that tries to take its row is refused with a 404.
   A draining node never adopts, nor does a fenced node or one that lifted its
   fence less than 8 seconds ago (one renewal interval plus one registry query),
@@ -470,8 +471,8 @@ at a node that does not hold the record runs a tier order:
 `Checkpoint.Delete` (`DELETE /v1/checkpoints/{id}`) removes the local
 record, then best-effort broadcasts the delete to every peer this node
 currently sees, so a replica a heal pulled earlier is cleaned up too, not
-just the original. A peer that is offline or partitioned during that
-broadcast keeps its copy until the checkpoint TTL ages it out. A healed
+just the original. A peer that is offline, partitioned or not yet joined during
+that broadcast keeps its copy until the checkpoint TTL ages it out. A healed
 replica carries the source checkpoint's original `CreatedAt`, so it becomes
 eligible for expiry at the same instant everywhere; each node then removes
 it on its own hourly sweep, which is independently phased and retries on
@@ -482,7 +483,8 @@ sweep failure extends retention until one succeeds — the TTL is the eligibilit
 point, not a hard ceiling. This is why heal *requires* a nonzero, fleet-matching
 TTL (see [cluster-invariant config](#cluster-invariant-config)).
 With TTL disabled it could never close at all, so that combination is
-rejected at config load.
+rejected at config load. A node later run with healing off and that TTL back at
+0 keeps such a replica until an explicit delete.
 
 ## State ownership
 
