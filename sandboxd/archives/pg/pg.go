@@ -78,6 +78,34 @@ func (r *Registry) Take(ctx context.Context, id string, expect int64, owner stri
 		RETURNING epoch`, r.cell, id, expect, owner)
 }
 
+func (r *Registry) TakeOwned(ctx context.Context, owner string, expect map[string]int64) (map[string]int64, error) {
+	ids, epochs := make([]string, 0, len(expect)), make([]int64, 0, len(expect))
+	for id, epoch := range expect {
+		ids, epochs = append(ids, id), append(epochs, epoch)
+	}
+	qctx, cancel := context.WithTimeout(ctx, metastore.QueryTimeout)
+	defer cancel()
+	rows, err := r.pool.Query(qctx, `UPDATE sandboxd_archives a SET epoch = nextval('sandboxd_archives_epoch'), updated_at = now()
+		FROM unnest($2::text[], $3::bigint[]) AS t(id, epoch)
+		WHERE a.cell = $1 AND a.id = t.id AND a.epoch = t.epoch AND a.owner = $4 AND NOT a.consumed
+		RETURNING a.id, a.epoch`, r.cell, ids, epochs, owner)
+	if err != nil {
+		return nil, unavailable(err)
+	}
+	taken := make(map[string]int64, len(expect))
+	var (
+		id    string
+		epoch int64
+	)
+	if _, err = pgx.ForEachRow(rows, []any{&id, &epoch}, func() error {
+		taken[id] = epoch
+		return nil
+	}); err != nil {
+		return nil, unavailable(err)
+	}
+	return taken, nil
+}
+
 func (r *Registry) Consume(ctx context.Context, id string, expect int64) (int64, error) {
 	return r.advance(ctx, `UPDATE sandboxd_archives SET consumed = true, epoch = nextval('sandboxd_archives_epoch'), updated_at = now()
 		WHERE cell = $1 AND id = $2 AND epoch = $3 AND NOT consumed
