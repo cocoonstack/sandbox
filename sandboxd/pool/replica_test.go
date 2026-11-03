@@ -4,6 +4,7 @@ import (
 	"encoding/json/v2"
 	"errors"
 	"net"
+	"path/filepath"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -1220,6 +1221,42 @@ func TestReplicaRestartMidArchiveKeepsTheClaim(t *testing.T) {
 				t.Errorf("row %+v ok=%v err=%v, want it on %s", rec, ok, err, held.ArchiveCk)
 			}
 		})
+	}
+}
+
+func TestReplicaArchiveWhoseJournalWriteFailsKeepsTheClaimAcrossARestart(t *testing.T) {
+	c := newReplicaCluster(t)
+	dir := t.TempDir()
+	a := c.node(t, "a", dir, keepAnHour)
+	sb := mustClaim(t, a, testKey)
+	vm := lockedVMName(sb)
+	replicateNow(t, a, sb)
+	replica := sb.ReplicaCk
+	if err := a.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
+		t.Fatalf("hibernate: %v", err)
+	}
+	broken := filepath.Join(t.TempDir(), "gone", "claims.json")
+	a.archives = &hookRegistry{Registry: c.reg, beforePut: func() { a.store.path = broken }}
+	if err := a.archive(t.Context(), sb); err == nil {
+		t.Fatal("archive with an unwritable journal succeeded")
+	}
+	if rec, ok, err := c.reg.Get(t.Context(), sb.ID); err != nil || !ok || rec.Consumed || rec.Owner != "a" {
+		t.Errorf("row %+v ok=%v err=%v, want this node's live row", rec, ok, err)
+	}
+	eng := a.eng.(*fakeEngine)
+
+	restarted := c.nodeOn(t, eng, "a", dir, keepAnHour)
+	if err := restarted.Reconcile(t.Context()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	rec, ok, err := c.reg.Get(t.Context(), sb.ID)
+	if err != nil || !ok || rec.Consumed || rec.Checkpoint != replica {
+		t.Errorf("row %+v ok=%v err=%v, want it live on the replica %s", rec, ok, err, replica)
+	}
+	c.renew(t, "a")
+	restarted.unfence(t.Context(), time.Now())
+	if _, kept := restarted.byID(sb.ID); !kept || eng.removed(vm) {
+		t.Fatalf("restart dropped a claim nobody adopted: held=%v VM removed=%v", kept, eng.removed(vm))
 	}
 }
 
