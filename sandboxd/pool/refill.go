@@ -123,13 +123,13 @@ func (m *Manager) refillOne(ctx context.Context, p *pool, golden string, gen uin
 	}
 	// A canceled context or a capacity failure says nothing about this pool's health
 	backedOff := false
-	if ctx.Err() == nil && capReason == "" {
+	if ctx.Err() == nil && capReason == "" && gen == p.goldenGen {
 		backedOff = p.noteRefillResult(now, err != nil)
 	}
-	retired := m.retireUnclonableLocked(ctx, p, gen, now)
 	if backedOff {
 		fails, wait = p.refillFails, time.Until(p.nextRefill)
 	}
+	retired := m.retireUnclonableLocked(ctx, p, gen, now)
 	entered := capReason != "" && m.noteCapacityLocked(now, capReason)
 	parked := m.capacityReasonLocked(now) != ""
 	m.mu.Unlock()
@@ -306,6 +306,7 @@ func (m *Manager) retireUnclonableLocked(ctx context.Context, p *pool, gen uint6
 	p.goldenDir, p.imageID = "", ""
 	p.goldenGen++
 	p.nextBuild, p.goldenRetiredAt = time.Time{}, now
+	p.refillFails, p.nextRefill = 0, time.Time{}
 	m.discardGoldenLocked(ctx, p)
 	return true
 }

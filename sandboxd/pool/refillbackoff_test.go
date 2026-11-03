@@ -152,3 +152,57 @@ func TestAGoldenThatStaysUnclonableIsRebuiltAtMostOncePerRetryDelay(t *testing.T
 		}
 	})
 }
+
+func TestARebuiltGoldenSurvivesOneFailedRefill(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		eng := newFakeEngine()
+		eng.cloneErr = errors.New(`vm.restore -> 500 "Memory manager error"`)
+		m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1})
+		seedGolden(t, m, "")
+		waitFor(t, func() bool {
+			m.refillOnce(t.Context())
+			return eng.coldCount() == 1
+		})
+		waitFor(t, func() bool {
+			m.mu.Lock()
+			defer m.mu.Unlock()
+			p := m.pools[testKey]
+			return p.goldenDir != "" && !p.building && p.refilling == 0
+		})
+		time.Sleep(buildRetryDelay)
+
+		m.refillOnce(t.Context())
+		waitPoolSettled(t, m, testKey)
+
+		m.mu.Lock()
+		golden, fails := m.pools[testKey].goldenDir, m.pools[testKey].refillFails
+		m.mu.Unlock()
+		if golden == "" || eng.coldCount() != 1 {
+			t.Errorf("golden %q after %d builds: one failed refill of a rebuilt golden retired it again", golden, eng.coldCount())
+		}
+		if fails >= refillFailStreak {
+			t.Errorf("refill fails %d, want the rebuilt golden's own streak, not the retired one's", fails)
+		}
+	})
+}
+
+func TestALateFailureOfARetiredGoldensCloneDoesNotCount(t *testing.T) {
+	eng := newFakeEngine()
+	eng.cloneErr = errors.New(`vm.restore -> 500 "Memory manager error"`)
+	m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1})
+	m.mu.Lock()
+	p := m.pools[testKey]
+	p.goldenDir, p.goldenGen = "/goldens/new", 2
+	p.refillFails = refillFailStreak - 1
+	p.refilling++
+	m.mu.Unlock()
+	m.refillSem <- struct{}{}
+
+	m.refillOne(t.Context(), p, "/goldens/old", 1)
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if p.refillFails != refillFailStreak-1 || p.goldenDir != "/goldens/new" {
+		t.Errorf("refill fails %d golden %q, want %d and the new golden kept", p.refillFails, p.goldenDir, refillFailStreak-1)
+	}
+}
