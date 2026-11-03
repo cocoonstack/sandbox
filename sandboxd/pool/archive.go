@@ -232,13 +232,9 @@ func (m *Manager) wakeArchived(ctx context.Context, sb *types.Sandbox) (string, 
 		m.destroy(ctx, built.VMName)
 		return "", fmt.Errorf("wake %s: track archive checkpoint: %w", sb.ID, markErr)
 	}
-	live, saved := m.commitWake(ctx, sb, built.VMName, built.VsockSocket)
-	if !live || !saved {
+	if err = m.commitWake(ctx, sb, built.VMName, built.VsockSocket); err != nil {
 		m.destroy(ctx, built.VMName)
-		if !live {
-			return "", ErrUnknownSandbox
-		}
-		return "", fmt.Errorf("wake %s: persist claims", sb.ID)
+		return "", err
 	}
 	logger := log.WithFunc("pool.wakeArchived")
 	// The pre-commit marker keeps a failed delete retryable after the journal update.
@@ -262,12 +258,11 @@ func (m *Manager) wakeArchived(ctx context.Context, sb *types.Sandbox) (string, 
 	return built.VsockSocket, nil
 }
 
-func (m *Manager) commitWake(ctx context.Context, sb *types.Sandbox, vmName, sock string) (live, saved bool) {
+func (m *Manager) commitWake(ctx context.Context, sb *types.Sandbox, vmName, sock string) error {
 	m.mu.Lock()
-	live = m.claimed[sb.ID] == sb
-	if !live {
+	if m.claimed[sb.ID] != sb {
 		m.mu.Unlock()
-		return false, false
+		return ErrUnknownSandbox
 	}
 	ck, deadline, epoch, safe := sb.ArchiveCk, sb.Deadline, sb.ArchiveEpoch, sb.ReaderSafe
 	sb.VMName, sb.VsockSocket, sb.ArchiveCk, sb.ArchiveEpoch, sb.ReaderSafe = vmName, sock, "", 0, false
@@ -283,11 +278,10 @@ func (m *Manager) commitWake(ctx context.Context, sb *types.Sandbox, vmName, soc
 		}
 		m.mu.Unlock()
 		m.store.recommit(ctx, rb)
-		log.WithFunc("pool.commitWake").Warnf(ctx, "persist claims: %v", err)
-		return true, false
+		return fmt.Errorf("wake %s: persist claims: %w", sb.ID, err)
 	}
 	sb.Touch() // restart the idle→hibernate→archive clock
-	return true, true
+	return nil
 }
 
 func (m *Manager) deleteOrphanArchiveCk(ctx context.Context, ckID string) {

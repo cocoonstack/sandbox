@@ -242,8 +242,7 @@ func (m *Manager) idleOnce(ctx context.Context) {
 		return // the previous sweep's hibernates are still draining
 	}
 	now := time.Now()
-	type victim struct{ id, token string }
-	var victims []victim
+	var victims []*types.Sandbox
 	m.mu.Lock()
 	idleDefault := m.view.Load().idleDefault
 	idlePolicy := idleDefault > 0
@@ -266,7 +265,7 @@ func (m *Manager) idleOnce(ctx context.Context) {
 		if idle <= 0 || now.Sub(sb.LastSeen()) < idle {
 			continue
 		}
-		victims = append(victims, victim{sb.ID, sb.Token})
+		victims = append(victims, sb)
 	}
 	m.mu.Unlock()
 	if len(victims) == 0 {
@@ -277,17 +276,13 @@ func (m *Manager) idleOnce(ctx context.Context) {
 	go func() {
 		defer m.idleSweep.Store(false)
 		m.runBounded(ctx, len(victims), func(ctx context.Context, i int) {
-			v := victims[i]
-			logSweepResult(ctx, log.WithFunc("pool.idleOnce"), m.idleHibernate(ctx, v.id, v.token, now), "idle-hibernated "+v.id, "idle-hibernate "+v.id)
+			sb := victims[i]
+			logSweepResult(ctx, log.WithFunc("pool.idleOnce"), m.idleHibernate(ctx, sb, now), "idle-hibernated "+sb.ID, "idle-hibernate "+sb.ID)
 		}).Wait()
 	}()
 }
 
-func (m *Manager) idleHibernate(ctx context.Context, id, token string, sweepStart time.Time) error {
-	sb, ok := m.claim(id, token)
-	if !ok {
-		return ErrUnknownSandbox
-	}
+func (m *Manager) idleHibernate(ctx context.Context, sb *types.Sandbox, sweepStart time.Time) error {
 	sb.Transition.Lock()
 	defer sb.Transition.Unlock()
 	m.mu.Lock()

@@ -2011,6 +2011,12 @@ func (m *Manager) liftFence() {
 	m.fence.Store(&fenceState{ch: make(chan struct{})})
 }
 
+func lockedVMName(sb *types.Sandbox) string {
+	sb.Transition.Lock()
+	defer sb.Transition.Unlock()
+	return sb.VMName
+}
+
 func newTestManager(t testing.TB, eng *fakeEngine, pools ...config.PoolSpec) *Manager {
 	t.Helper()
 	return newTestManagerAt(t, eng, t.TempDir(), pools...)

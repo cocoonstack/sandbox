@@ -54,7 +54,10 @@ func (m *Manager) Checkpoint(ctx context.Context, id string, cred Cred, name, te
 		return types.Checkpoint{}, err
 	}
 	m.counters.checkpoints.Add(1)
-	m.recordUsage(ctx, usage.Event{Event: "checkpoint", ID: sb.ID, VMName: lockedVMName(sb), Tenant: sb.Tenant, Reference: ckpt.ID})
+	m.mu.Lock()
+	vmName := sb.VMName
+	m.mu.Unlock()
+	m.recordUsage(ctx, usage.Event{Event: "checkpoint", ID: sb.ID, VMName: vmName, Tenant: sb.Tenant, Reference: ckpt.ID})
 	return ckpt, nil
 }
 
