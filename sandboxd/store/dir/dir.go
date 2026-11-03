@@ -441,6 +441,13 @@ func hashChunk(source *digestSource, chunk int, buffer []byte) error {
 	}
 	offset := int64(chunk) * store.DigestChunkSize
 	size := min(store.DigestChunkSize, source.digest.Size-offset)
+	if sum, hole := store.HoleSum(f, offset, size); hole {
+		source.digest.Chunks[chunk] = sum
+		if err := f.Close(); err != nil {
+			return fmt.Errorf("close export entry %s: %w", source.digest.Path, err)
+		}
+		return nil
+	}
 	hash := sha256.New()
 	n, copyErr := io.CopyBuffer(hash, io.NewSectionReader(f, offset, size), buffer)
 	closeErr := f.Close()
