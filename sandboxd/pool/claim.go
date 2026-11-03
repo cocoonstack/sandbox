@@ -182,7 +182,8 @@ func (m *Manager) Renew(ctx context.Context, id string, cred Cred, ttl time.Dura
 		return time.Time{}, ErrArchived
 	}
 	prev, prevLease, prevExpire := sb.Deadline, sb.LeaseSeconds, sb.OnExpire
-	sb.Deadline, sb.LeaseSeconds, sb.OnExpire = time.Now().Add(lease), int(lease/time.Second), onExpire.Or(sb.OnExpire)
+	renewedAt := time.Now()
+	sb.Deadline, sb.LeaseSeconds, sb.OnExpire = renewedAt.Add(lease), int(lease/time.Second), onExpire.Or(sb.OnExpire)
 	deadline, js, rowed := sb.Deadline, m.store.set(sb), m.rowFollows(sb)
 	m.mu.Unlock()
 	if err := m.store.commit(js); err != nil {
@@ -197,7 +198,7 @@ func (m *Manager) Renew(ctx context.Context, id string, cred Cred, ttl time.Dura
 		m.store.recommit(ctx, rb)
 		return time.Time{}, fmt.Errorf("renew %s: persist claims: %w", id, err)
 	}
-	m.recordUsage(ctx, usage.Event{Event: "renew", ID: id, Tenant: sb.Tenant, Deadline: deadline})
+	m.recordUsage(ctx, usage.Event{Time: renewedAt, Event: "renew", ID: id, Tenant: sb.Tenant, Deadline: deadline})
 	if rowed {
 		if err := m.rewriteArchiveRow(ctx, sb, false); err != nil {
 			return time.Time{}, fmt.Errorf("renew %s: %w", id, err)

@@ -217,7 +217,9 @@ func (m *Manager) recordEgress(ctx context.Context, id, tenant string, ev egress
 }
 
 func (m *Manager) recordUsage(ctx context.Context, ev usage.Event) {
-	ev.Time = time.Now()
+	if ev.Time.IsZero() {
+		ev.Time = time.Now()
+	}
 	if err := m.usage.append(ev); err != nil {
 		log.WithFunc("pool.recordUsage").Errorf(ctx, err, "append usage event %s %s", ev.Event, ev.ID)
 	}
