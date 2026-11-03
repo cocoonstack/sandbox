@@ -4,6 +4,7 @@
 package storetest
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -98,6 +99,17 @@ func RunContract(t *testing.T, st store.Store) {
 	runLabelsContract(t, st)
 }
 
+func PublishDigested(ctx context.Context, st store.Store, staging, id string) (string, error) {
+	digest, commit, err := st.PrepareDigested(ctx, staging, id, "")
+	if err != nil {
+		return "", err
+	}
+	if err = commit(ctx); err != nil {
+		return "", err
+	}
+	return digest, nil
+}
+
 func runFetchFileContract(t *testing.T, st store.Store, id string) {
 	t.Helper()
 	ctx := t.Context()
@@ -132,13 +144,19 @@ func runDigestContract(t *testing.T, st store.Store) {
 	if err = os.WriteFile(filepath.Join(staging, store.MetaFile), []byte(`{"id":"`+id+`"}`), 0o600); err != nil {
 		t.Fatalf("write digested meta: %v", err)
 	}
-	digest, err := st.PublishDigested(ctx, staging, id, "")
+	digest, commit, err := st.PrepareDigested(ctx, staging, id, "")
 	if err != nil {
-		t.Fatalf("PublishDigested: %v", err)
+		t.Fatalf("PrepareDigested: %v", err)
 	}
 	const want = "sha256:ad65b315de70e494c767969e65fc5de65c73846c4ebcdc7051abe08b056637ad"
 	if digest != want {
-		t.Fatalf("PublishDigested digest %q, want %q", digest, want)
+		t.Fatalf("PrepareDigested digest %q, want %q", digest, want)
+	}
+	if _, err = st.ReadMeta(ctx, id); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("ReadMeta of a prepared record: %v, want store.ErrNotFound until its commit", err)
+	}
+	if err = commit(ctx); err != nil {
+		t.Fatalf("commit: %v", err)
 	}
 	_, _, fetchedDigest, err := st.Fetch(ctx, id)
 	if err != nil {
@@ -152,6 +170,27 @@ func runDigestContract(t *testing.T, st store.Store) {
 		t.Errorf("Metas %+v, %v; want the one record with digest %q", recs, err, want)
 	}
 	rejectNonRegularReplacement(t, st, id, want)
+	staging, err = st.Stage(id)
+	if err != nil {
+		t.Fatalf("Stage replacement: %v", err)
+	}
+	writeExport(t, staging, "z.bin", "zz")
+	if err = os.WriteFile(filepath.Join(staging, store.MetaFile), []byte(`{"id":"`+id+`","gen":3}`), 0o600); err != nil {
+		t.Fatalf("write replacement meta: %v", err)
+	}
+	next, commit, err := st.PrepareDigested(ctx, staging, id, "")
+	if err != nil {
+		t.Fatalf("PrepareDigested replacement: %v", err)
+	}
+	if held, readErr := st.ReadDigest(ctx, id); readErr != nil || held != want {
+		t.Fatalf("ReadDigest while a replacement is prepared: %q, %v, want the committed %q", held, readErr, want)
+	}
+	if err = commit(ctx); err != nil {
+		t.Fatalf("commit replacement: %v", err)
+	}
+	if held, readErr := st.ReadDigest(ctx, id); readErr != nil || held != next {
+		t.Fatalf("ReadDigest after the replacement commit: %q, %v, want %q", held, readErr, next)
+	}
 	if err = st.Delete(ctx, id); err != nil {
 		t.Fatalf("Delete digested: %v", err)
 	}
@@ -225,8 +264,8 @@ func rejectNonRegularReplacement(t *testing.T, st store.Store, id, wantDigest st
 	if err = os.WriteFile(filepath.Join(staging, store.MetaFile), []byte(`{"id":"`+id+`","gen":2}`), 0o600); err != nil {
 		t.Fatalf("write non-regular meta: %v", err)
 	}
-	if _, err = st.PublishDigested(t.Context(), staging, id, ""); err == nil {
-		t.Fatal("PublishDigested accepted a non-regular export entry")
+	if _, _, err = st.PrepareDigested(t.Context(), staging, id, ""); err == nil {
+		t.Fatal("PrepareDigested accepted a non-regular export entry")
 	}
 	dir, meta, digest, err := st.Fetch(t.Context(), id)
 	if err != nil {

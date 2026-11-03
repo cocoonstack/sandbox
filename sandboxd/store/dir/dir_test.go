@@ -134,7 +134,7 @@ func TestPublishDigestedChunkBoundaries(t *testing.T) {
 			if err = os.WriteFile(filepath.Join(staging, store.MetaFile), []byte(metaJSON(tt.name)), 0o600); err != nil {
 				t.Fatalf("write meta: %v", err)
 			}
-			digest, err := st.PublishDigested(t.Context(), staging, id, "")
+			digest, err := storetest.PublishDigested(t.Context(), st, staging, id)
 			if err != nil {
 				t.Fatalf("PublishDigested: %v", err)
 			}
@@ -216,7 +216,7 @@ func TestPublishDigestedFailureAndFreshRetry(t *testing.T) {
 	if err = os.Mkdir(blocker, 0o750); err != nil {
 		t.Fatalf("block digest commit: %v", err)
 	}
-	if digest, publishErr := st.PublishDigested(t.Context(), failed, id, ""); publishErr == nil || digest != "" {
+	if digest, publishErr := storetest.PublishDigested(t.Context(), st, failed, id); publishErr == nil || digest != "" {
 		t.Fatalf("PublishDigested with blocked sidecar = %q, %v, want empty/error", digest, publishErr)
 	}
 	dir, meta, digest, err := st.Fetch(t.Context(), id)
@@ -658,7 +658,7 @@ func mustPublishDigested(t *testing.T, st *Store, id, metaID string) string {
 		t.Fatalf("stage %s: %v", metaID, err)
 	}
 	seedRecord(t, staging, metaID)
-	digest, err := st.PublishDigested(t.Context(), staging, id, "")
+	digest, err := storetest.PublishDigested(t.Context(), st, staging, id)
 	if err != nil {
 		t.Fatalf("publish digested %s: %v", metaID, err)
 	}

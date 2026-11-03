@@ -60,15 +60,12 @@ func (d *Store) Publish(ctx context.Context, staging, id, _ string) error {
 	return d.publish(ctx, staging, id, "")
 }
 
-func (d *Store) PublishDigested(ctx context.Context, staging, id, _ string) (string, error) {
+func (d *Store) PrepareDigested(ctx context.Context, staging, id, _ string) (string, store.CommitFunc, error) {
 	digest, err := hashExport(ctx, filepath.Join(staging, store.ExportDir))
 	if err != nil {
-		return "", fmt.Errorf("digest export: %w", err)
+		return "", nil, fmt.Errorf("digest export: %w", err)
 	}
-	if err := d.publish(ctx, staging, id, digest); err != nil {
-		return "", fmt.Errorf("publish digested record: %w", err)
-	}
-	return digest, nil
+	return digest, func(ctx context.Context) error { return d.publish(ctx, staging, id, digest) }, nil
 }
 
 func (d *Store) Fetch(ctx context.Context, id string) (string, []byte, string, error) {

@@ -56,14 +56,16 @@ type S3Config struct {
 	UnsignedAcceptEncoding bool   `json:"unsigned_accept_encoding,omitzero"`
 }
 
+type CommitFunc func(ctx context.Context) error
+
 // Store is one record backend.
 type Store interface {
 	// Stage returns a writable staging directory whose Publish is atomic.
 	Stage(id string) (string, error)
 	// Publish atomically replaces the record's previous generation with the staged directory; lineage scopes chunk dedup in a content-addressed backend and "" means the record id.
 	Publish(ctx context.Context, staging, id, lineage string) error
-	// PublishDigested applies Publish semantics and returns the export digest.
-	PublishDigested(ctx context.Context, staging, id, lineage string) (string, error)
+	// PrepareDigested runs a Publish up to the step that makes the generation current, and returns the export digest and that step.
+	PrepareDigested(ctx context.Context, staging, id, lineage string) (string, CommitFunc, error)
 	// Fetch materializes a record's export locally; the caller holds the record lock until the clone ends.
 	Fetch(ctx context.Context, id string) (dir string, meta []byte, digest string, err error)
 	// FetchFile writes one file of a record's export to dst, without fetching the rest of the record; dst is the caller's to delete.

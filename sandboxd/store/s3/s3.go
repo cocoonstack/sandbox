@@ -132,12 +132,15 @@ func (s *Store) Stage(id string) (string, error) {
 }
 
 func (s *Store) Publish(ctx context.Context, staging, id, lineage string) error {
-	_, err := s.publish(ctx, staging, id, lineage, false)
-	return err
+	_, commit, err := s.prepare(ctx, staging, id, lineage, false)
+	if err != nil {
+		return err
+	}
+	return commit(ctx)
 }
 
-func (s *Store) PublishDigested(ctx context.Context, staging, id, lineage string) (string, error) {
-	return s.publish(ctx, staging, id, lineage, true)
+func (s *Store) PrepareDigested(ctx context.Context, staging, id, lineage string) (string, store.CommitFunc, error) {
+	return s.prepare(ctx, staging, id, lineage, true)
 }
 
 func (s *Store) Fetch(ctx context.Context, id string) (string, []byte, string, error) {
@@ -325,22 +328,22 @@ func (s *Store) get(ctx context.Context, key string) (*awss3.GetObjectOutput, er
 	return out, nil
 }
 
-func (s *Store) publish(ctx context.Context, staging, id, lineage string, digested bool) (string, error) {
+func (s *Store) prepare(ctx context.Context, staging, id, lineage string, digested bool) (string, store.CommitFunc, error) {
 	ctx, cancel := context.WithTimeout(ctx, transferBudget)
 	defer cancel()
 	lineage = cmp.Or(lineage, id)
 	metaRaw, err := os.ReadFile(filepath.Join(staging, store.MetaFile)) //nolint:gosec // our own staging dir
 	if err != nil {
-		return "", fmt.Errorf("staging has no %s: %w", store.MetaFile, err)
+		return "", nil, fmt.Errorf("staging has no %s: %w", store.MetaFile, err)
 	}
 	gen := store.ExportGen(metaRaw)
 	files, err := publishFiles(staging)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	have, err := s.referencedChunks(ctx, id, lineage)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	man := manifest{Lineage: lineage, Files: make([]manifestFile, len(files))}
 	digestFiles := make([]store.DigestFile, len(files))
@@ -360,18 +363,18 @@ func (s *Store) publish(ctx context.Context, staging, id, lineage string, digest
 		err = fileErr
 	}
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	manifestRaw, err := json.Marshal(man)
 	if err != nil {
-		return "", fmt.Errorf("encode manifest: %w", err)
+		return "", nil, fmt.Errorf("encode manifest: %w", err)
 	}
 	if err = s.putObject(ctx, s.manifestKey(id, gen), manifestRaw, nil); err != nil {
-		return "", err
+		return "", nil, err
 	}
 	if lineage != id {
 		if err = s.putObject(ctx, s.lineageKey(lineage, id), nil, nil); err != nil {
-			return "", err
+			return "", nil, err
 		}
 	}
 	digest := ""
@@ -379,18 +382,19 @@ func (s *Store) publish(ctx context.Context, staging, id, lineage string, digest
 	if digested {
 		digest, err = store.AssembleDigest(digestFiles)
 		if err != nil {
-			return "", err
+			return "", nil, err
 		}
 		metadata = map[string]string{digestMetadataKey: digest}
 	}
-	if err = s.putObject(ctx, s.key(id, store.MetaFile), metaRaw, metadata); err != nil {
-		return "", err
-	}
-	// Keep old generations: another node may have selected the previous meta.
-	if err := os.RemoveAll(staging); err != nil {
-		return "", err
-	}
-	return digest, nil
+	return digest, func(ctx context.Context) error {
+		ctx, cancel := context.WithTimeout(ctx, transferBudget)
+		defer cancel()
+		if err := s.putObject(ctx, s.key(id, store.MetaFile), metaRaw, metadata); err != nil {
+			return err
+		}
+		// Keep old generations: another node may have selected the previous meta.
+		return os.RemoveAll(staging)
+	}, nil
 }
 
 // populate downloads one cache generation and installs it atomically.
