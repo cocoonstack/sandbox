@@ -72,6 +72,153 @@ func TestFailoverRowWriteFailureKeepsTheClaimHibernated(t *testing.T) {
 	}
 }
 
+func TestFailoverEnvRotationReachesTheAdopter(t *testing.T) {
+	c := newFailoverCluster(t)
+	a, b := c.node(t, "a", t.TempDir(), keepAnHour), c.node(t, "b", t.TempDir(), keepAnHour)
+	sb := mustClaim(t, a, testKey)
+	patchHostOnly(t, a, sb, "old")
+	mustArchive(t, a, sb)
+	if rowEnv(t, c, sb) != "old" {
+		t.Fatalf("archive row env %q, want old", rowEnv(t, c, sb))
+	}
+
+	patchHostOnly(t, a, sb, "new")
+	if got := rowEnv(t, c, sb); got != "new" {
+		t.Errorf("row env %q after a rotation, want new", got)
+	}
+	rec, _, err := c.reg.Get(t.Context(), sb.ID)
+	if err != nil {
+		t.Fatalf("row: %v", err)
+	}
+	if rec.Epoch != sb.ArchiveEpoch || rec.Checkpoint != sb.ArchiveCk || rec.Deadline.IsZero() {
+		t.Errorf("row %+v claim epoch %d ck %s, want the same epoch and checkpoint and a kept deadline", rec, sb.ArchiveEpoch, sb.ArchiveCk)
+	}
+
+	c.expire("a")
+	adopted, err := b.AdoptArchived(t.Context(), sb.ID, sb.Token)
+	if err != nil || !adopted {
+		t.Fatalf("adopt: %v %v", adopted, err)
+	}
+	held, ok := b.byID(sb.ID)
+	if !ok {
+		t.Fatal("adopter has no claim")
+	}
+	if got, _ := held.HiddenEnv("GH_TOKEN"); got != "new" {
+		t.Errorf("adopter holds %q, want the rotated value", got)
+	}
+}
+
+func TestFailoverEnvRotationWithTheRegistryDownIsLoudAndARetryRepairs(t *testing.T) {
+	c := newFailoverCluster(t)
+	a := c.node(t, "a", t.TempDir(), keepAnHour)
+	sb := mustClaim(t, a, testKey)
+	patchHostOnly(t, a, sb, "old")
+	mustArchive(t, a, sb)
+
+	reg := &replaceFailRegistry{Registry: c.reg, fail: true}
+	a.archives = reg
+	patch := types.EnvPatch{"GH_TOKEN": {Value: "new", Guest: hostOnly}}
+	if err := a.PatchEnv(t.Context(), sb.ID, patch, ""); !errors.Is(err, archives.ErrUnavailable) {
+		t.Fatalf("rotation with the registry down: %v, want ErrUnavailable", err)
+	}
+	if got := rowEnv(t, c, sb); got != "old" {
+		t.Errorf("row env %q, want old until the write lands", got)
+	}
+	reg.fail = false
+	if err := a.PatchEnv(t.Context(), sb.ID, patch, ""); err != nil {
+		t.Fatalf("resend: %v", err)
+	}
+	if got := rowEnv(t, c, sb); got != "new" {
+		t.Errorf("row env %q after the resend, want new", got)
+	}
+}
+
+func TestFailoverEnvRotationSurvivesALostReply(t *testing.T) {
+	c := newFailoverCluster(t)
+	a := c.node(t, "a", t.TempDir(), keepAnHour)
+	sb := mustClaim(t, a, testKey)
+	patchHostOnly(t, a, sb, "old")
+	mustArchive(t, a, sb)
+
+	reg := &replaceFailRegistry{Registry: c.reg, loseReply: true}
+	a.archives = reg
+	patch := types.EnvPatch{"GH_TOKEN": {Value: "new", Guest: hostOnly}}
+	if err := a.PatchEnv(t.Context(), sb.ID, patch, ""); !errors.Is(err, archives.ErrUnavailable) {
+		t.Fatalf("rotation with a lost reply: %v, want ErrUnavailable", err)
+	}
+	patch["GH_TOKEN"] = &types.EnvVar{Value: "newer", Guest: hostOnly}
+	if err := a.PatchEnv(t.Context(), sb.ID, patch, ""); err != nil {
+		t.Fatalf("resend at a stale epoch: %v", err)
+	}
+	if got := rowEnv(t, c, sb); got != "newer" {
+		t.Errorf("row env %q, want newer", got)
+	}
+	rec, _, _ := c.reg.Get(t.Context(), sb.ID)
+	if rec.Epoch != sb.ArchiveEpoch {
+		t.Errorf("row epoch %d, claim holds %d", rec.Epoch, sb.ArchiveEpoch)
+	}
+}
+
+func TestFailoverEnvRotationOfAClaimAdoptedElsewhereDropsIt(t *testing.T) {
+	c := newFailoverCluster(t)
+	a, b := c.node(t, "a", t.TempDir(), keepAnHour), c.node(t, "b", t.TempDir(), keepAnHour)
+	sb := mustClaim(t, a, testKey)
+	patchHostOnly(t, a, sb, "old")
+	mustArchive(t, a, sb)
+	c.expire("a")
+	if adopted, err := b.AdoptArchived(t.Context(), sb.ID, sb.Token); err != nil || !adopted {
+		t.Fatalf("adopt: %v %v", adopted, err)
+	}
+
+	patch := types.EnvPatch{"GH_TOKEN": {Value: "new", Guest: hostOnly}}
+	if err := a.PatchEnv(t.Context(), sb.ID, patch, ""); !errors.Is(err, ErrUnknownSandbox) {
+		t.Errorf("rotation on the old owner: %v, want ErrUnknownSandbox", err)
+	}
+	if _, ok := a.byID(sb.ID); ok {
+		t.Error("the old owner kept a claim another node adopted")
+	}
+	if got := rowEnv(t, c, sb); got != "old" {
+		t.Errorf("row env %q, the old owner must not overwrite the adopter's row", got)
+	}
+}
+
+func TestFailoverEnvRotationWaitsForATransitionInFlight(t *testing.T) {
+	c := newFailoverCluster(t)
+	a := c.node(t, "a", t.TempDir(), keepAnHour)
+	sb := mustClaim(t, a, testKey)
+	patchHostOnly(t, a, sb, "old")
+	mustArchive(t, a, sb)
+
+	sb.Transition.Lock()
+	done := make(chan error, 1)
+	go func() {
+		done <- a.PatchEnv(t.Context(), sb.ID, types.EnvPatch{"GH_TOKEN": {Value: "new", Guest: hostOnly}}, "")
+	}()
+	waitFor(t, func() bool { got, _ := sb.HiddenEnv("GH_TOKEN"); return got == "new" })
+	if got := rowEnv(t, c, sb); got != "old" {
+		t.Errorf("row env %q while another transition holds the claim, want old", got)
+	}
+	sb.Transition.Unlock()
+	if err := <-done; err != nil {
+		t.Fatalf("rotation: %v", err)
+	}
+	if got := rowEnv(t, c, sb); got != "new" {
+		t.Errorf("row env %q after the transition, want new", got)
+	}
+}
+
+func TestFailoverEnvWriteOfARunningClaimLeavesTheRegistryAlone(t *testing.T) {
+	c := newFailoverCluster(t)
+	a := c.node(t, "a", t.TempDir(), keepAnHour)
+	sb := mustClaim(t, a, testKey)
+	reg := &replaceFailRegistry{Registry: c.reg, fail: true}
+	a.archives = reg
+	patchHostOnly(t, a, sb, "new")
+	if reg.calls != 0 {
+		t.Errorf("%d registry replaces for a claim with no row, want 0", reg.calls)
+	}
+}
+
 func TestFailoverOwnerWakeTakesThenDeletesTheRow(t *testing.T) {
 	c := newFailoverCluster(t)
 	a := c.node(t, "a", t.TempDir(), keepAnHour)
@@ -1973,6 +2120,50 @@ func seedArchiveCkBy(t *testing.T, m *Manager, node, id, sandboxID string) {
 	if err := m.ckpts.Publish(t.Context(), staging, id, ""); err != nil {
 		t.Fatalf("publish: %v", err)
 	}
+}
+
+func patchHostOnly(t *testing.T, m *Manager, sb *types.Sandbox, value string) {
+	t.Helper()
+	if err := m.PatchEnv(t.Context(), sb.ID, types.EnvPatch{"GH_TOKEN": {Value: value, Guest: hostOnly}}, ""); err != nil {
+		t.Fatalf("patch env: %v", err)
+	}
+}
+
+func rowEnv(t *testing.T, c *failoverCluster, sb *types.Sandbox) string {
+	t.Helper()
+	return rowClaim(t, c, sb).Env["GH_TOKEN"].Value
+}
+
+func rowClaim(t *testing.T, c *failoverCluster, sb *types.Sandbox) *types.Sandbox {
+	t.Helper()
+	rec, ok, err := c.reg.Get(t.Context(), sb.ID)
+	if err != nil || !ok {
+		t.Fatalf("row: %v %v", ok, err)
+	}
+	claim := &types.Sandbox{}
+	if err = json.Unmarshal(rec.Claim, claim); err != nil {
+		t.Fatalf("decode row claim: %v", err)
+	}
+	return claim
+}
+
+type replaceFailRegistry struct {
+	archives.Registry
+	fail, loseReply bool
+	calls           int
+}
+
+func (r *replaceFailRegistry) Replace(ctx context.Context, rec archives.Record, expect int64) (int64, error) {
+	r.calls++
+	if r.fail {
+		return 0, archives.ErrUnavailable
+	}
+	epoch, err := r.Registry.Replace(ctx, rec, expect)
+	if r.loseReply && err == nil {
+		r.loseReply = false
+		return 0, archives.ErrUnavailable
+	}
+	return epoch, err
 }
 
 type hookRegistry struct {

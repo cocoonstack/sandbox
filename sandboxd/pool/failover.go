@@ -688,6 +688,10 @@ func (m *Manager) archiveRowed(sb *types.Sandbox) bool {
 	return m.archives != nil && sb.ArchiveCk != "" && sb.ArchiveEpoch != 0
 }
 
+func (m *Manager) rowFollows(sb *types.Sandbox) bool {
+	return m.archiveRowed(sb) || m.replicaRowed(sb) && sb.HibernateSnap != ""
+}
+
 func (m *Manager) expiryDropsRow(sb *types.Sandbox) bool {
 	return m.archiveRowed(sb) || m.archives != nil && sb.HasReplica() && !m.archivesAtDeadline(sb)
 }

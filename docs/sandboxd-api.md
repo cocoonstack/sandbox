@@ -538,7 +538,9 @@ checkpoint for deletion. Wake it first. A claim whose [tenant was
 removed](#tenants-v1tenants) runs to its deadline but cannot extend it: its own
 token gets 403, the root token still renews. 400 a malformed body; 401 missing
 bearer token; 403 the claim's tenant was removed; 404 unknown id or wrong
-token; 409 archived, or being archived right now.
+token; 409 archived, or being archived right now; 503 the archive registry is
+down, for a hibernated claim with a replica under `archive_failover`: the node
+already holds the new lease, and a resend replaces the row.
 
 ## POST /v1/sandboxes/{id}/fork
 
@@ -985,7 +987,9 @@ are already live, but the guest write failed; resend the same request to
 deliver it. The guest side is described in [silkd](silkd.md#claim-env).
 `PUT`/`PATCH` answer 204, `GET` 200; 400 a bad entry, an unknown body
 field or an `inject` outside the claim's intercepted hosts; 404 unknown id or another tenant's claim; 409 a guest change on a
-paused or failed sandbox.
+paused or failed sandbox; 503 the archive registry is down, for an archived
+claim or a hibernated claim with a replica under `archive_failover`: the node
+already holds the new env, and a resend replaces the row.
 
 ## PUT /v1/sandboxes/{id}/instance-metadata
 
