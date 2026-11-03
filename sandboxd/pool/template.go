@@ -120,7 +120,8 @@ func (m *Manager) DeleteTemplate(ctx context.Context, key types.PoolKey, tenant,
 
 // Templates lists the promoted templates this node holds and no pool owns, in key-hash order like Info's pools; one published before keys were recorded is listed once re-promoted.
 func (m *Manager) Templates() []TemplateInfo {
-	held := m.unpooledTemplates()
+	held := map[string]TemplateInfo{}
+	m.eachUnpooledTemplate(func(id string, t TemplateInfo) { held[id] = t })
 	out := make([]TemplateInfo, 0, len(held))
 	for _, id := range slices.Sorted(maps.Keys(held)) {
 		if t := held[id]; t.Key.Template != "" {
@@ -246,13 +247,6 @@ func (m *Manager) checkTemplateDigest(ctx context.Context, id, digest string) er
 		return ErrTemplateReplaced
 	}
 	return nil
-}
-
-// unpooledTemplates copies the held templates by id, less any key a pool now owns.
-func (m *Manager) unpooledTemplates() map[string]TemplateInfo {
-	held := map[string]TemplateInfo{}
-	m.eachUnpooledTemplate(func(id string, t TemplateInfo) { held[id] = t })
-	return held
 }
 
 // eachUnpooledTemplate visits the held templates a pool does not own, under the template lock.

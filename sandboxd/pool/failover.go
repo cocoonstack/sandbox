@@ -274,10 +274,7 @@ func (m *Manager) dropTombstone(ctx context.Context, id string, epoch int64) {
 	}
 }
 
-func (m *Manager) reputArchive(ctx context.Context, sb *types.Sandbox, held int64) {
-	if held == 0 {
-		return
-	}
+func (m *Manager) reputArchive(ctx context.Context, sb *types.Sandbox) {
 	var epoch int64
 	var err error
 	if sb.ArchiveCk != "" {
@@ -459,12 +456,12 @@ func (m *Manager) reconcileOwnRow(ctx context.Context, rec archives.Record, now 
 	switch {
 	case !held:
 	case refs && rec.Consumed && epoch != 0:
-		m.reputArchive(ctx, sb, epoch)
+		m.reputArchive(ctx, sb)
 	case refs:
 	case rec.Consumed:
 		m.purgeArchiveRow(ctx, rec)
-	default:
-		m.dropStaleRow(ctx, sb, rec)
+	case !m.archiveCkPinned(rec.Checkpoint):
+		m.abandonArchive(ctx, sb, rec.Epoch, rec.Checkpoint)
 	}
 }
 
@@ -485,12 +482,6 @@ func (m *Manager) startRowRetention(ctx context.Context, id string, epoch int64)
 	}
 	_, err = m.archives.Replace(ctx, rec, epoch)
 	return err
-}
-
-func (m *Manager) dropStaleRow(ctx context.Context, sb *types.Sandbox, rec archives.Record) {
-	if !m.archiveCkPinned(rec.Checkpoint) {
-		m.abandonArchive(ctx, sb, rec.Epoch, rec.Checkpoint)
-	}
 }
 
 func (m *Manager) purgeArchiveRow(ctx context.Context, rec archives.Record) {

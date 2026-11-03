@@ -106,7 +106,13 @@ func (m *Manager) writeEnv(ctx context.Context, id, tenant, verb string, next fu
 			return fmt.Errorf("%s env %s: %w", verb, id, err)
 		}
 	}
-	return m.deliverGuestEnv(ctx, verb, id, sock, env, deliver)
+	if !deliver {
+		return nil
+	}
+	if err := m.eng.WriteGuestEnv(ctx, sock, env.GuestFile()); err != nil {
+		return fmt.Errorf("%s env %s: write to the guest: %w", verb, id, err)
+	}
+	return nil
 }
 
 func (m *Manager) rewriteArchiveRow(ctx context.Context, sb *types.Sandbox, locked bool) error {
@@ -135,16 +141,6 @@ func (m *Manager) rewriteArchiveRow(ctx context.Context, sb *types.Sandbox, lock
 		if err = m.refusedReplace(ctx, sb); err != nil {
 			return err
 		}
-	}
-	return nil
-}
-
-func (m *Manager) deliverGuestEnv(ctx context.Context, verb, id, sock string, env types.Env, deliver bool) error {
-	if !deliver {
-		return nil
-	}
-	if err := m.eng.WriteGuestEnv(ctx, sock, env.GuestFile()); err != nil {
-		return fmt.Errorf("%s env %s: write to the guest: %w", verb, id, err)
 	}
 	return nil
 }

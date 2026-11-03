@@ -575,7 +575,7 @@ func (m *Manager) ClusterDigest() string {
 	m.reloadMu.Lock()
 	cfg := m.cfg
 	m.reloadMu.Unlock()
-	return clusterDigest(cfg, m.out.CAFingerprint(), m.TenantRecords())
+	return clusterDigest(cfg, m.out.CAFingerprint(), m.tenants.Records())
 }
 
 // Run drives the refill and reap loops until ctx is canceled.

@@ -20,7 +20,7 @@ import (
 
 const archiveDeleteDir = "archive-deletes"
 
-// archive*For resolve a key's thresholds (pool's, else node default); callers hold m.mu.
+// archiveAfterFor resolves a key's threshold (pool's, else node default); callers hold m.mu.
 func (m *Manager) archiveAfterFor(key types.PoolKey) time.Duration {
 	if p, ok := m.activePool(key); ok {
 		return p.archiveAfter
@@ -28,16 +28,13 @@ func (m *Manager) archiveAfterFor(key types.PoolKey) time.Duration {
 	return m.view.Load().archiveAfterDefault
 }
 
-func (m *Manager) archiveDeleteFor(key types.PoolKey) time.Duration {
-	if p, ok := m.activePool(key); ok {
-		return p.archiveDelete
-	}
-	return m.view.Load().archiveDeleteDefault
-}
-
 // retentionDeadline is zero for an archive kept forever; callers hold m.mu.
 func (m *Manager) retentionDeadline(key types.PoolKey) time.Time {
-	if d := m.archiveDeleteFor(key); d > 0 {
+	d := m.view.Load().archiveDeleteDefault
+	if p, ok := m.activePool(key); ok {
+		d = p.archiveDelete
+	}
+	if d > 0 {
 		return time.Now().Add(d)
 	}
 	return time.Time{}

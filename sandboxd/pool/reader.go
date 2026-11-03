@@ -228,8 +228,12 @@ func (m *Manager) fetchReaderArchive(ctx context.Context, r *reader) error {
 }
 
 func (m *Manager) fetchReaderFile(ctx context.Context, r *reader, name string) error {
-	if err := m.ckpts.FetchFile(ctx, r.source, name, filepath.Join(r.dir, name)); err != nil {
-		return archiveFetchErr(err)
+	err := m.ckpts.FetchFile(ctx, r.source, name, filepath.Join(r.dir, name))
+	if errors.Is(err, store.ErrNotFound) {
+		return errNotSleeping
+	}
+	if err != nil {
+		return fmt.Errorf("fetch archive: %w", err)
 	}
 	return nil
 }
@@ -282,13 +286,6 @@ func sleepSource(sb *types.Sandbox) string {
 		return ""
 	}
 	return cmp.Or(sb.HibernateSnap, sb.ArchiveCk)
-}
-
-func archiveFetchErr(err error) error {
-	if errors.Is(err, store.ErrNotFound) {
-		return errNotSleeping
-	}
-	return fmt.Errorf("fetch archive: %w", err)
 }
 
 func diskAttachFiles(envelope string) ([]string, error) {

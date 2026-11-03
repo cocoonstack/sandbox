@@ -394,7 +394,7 @@ func validateHealedCheckpoint(staging, wantID string) error {
 		return fmt.Errorf("healed record %s missing export dir: %w", wantID, err)
 	}
 	// An export with no regular file clones to nothing; deeper content is cocoon's own format
-	if !hasRegularFile(export) {
+	if !slices.ContainsFunc(export, func(e os.DirEntry) bool { return e.Type().IsRegular() }) {
 		return fmt.Errorf("healed record %s has no export content", wantID)
 	}
 	entries, err := os.ReadDir(staging)
@@ -407,10 +407,6 @@ func validateHealedCheckpoint(staging, wantID string) error {
 		}
 	}
 	return nil
-}
-
-func hasRegularFile(entries []os.DirEntry) bool {
-	return slices.ContainsFunc(entries, func(e os.DirEntry) bool { return e.Type().IsRegular() })
 }
 
 func parseCheckpoint(raw []byte) (types.Checkpoint, error) {
