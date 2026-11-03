@@ -80,7 +80,7 @@ func (m *Manager) writeEnv(ctx context.Context, id, tenant, verb string, next fu
 		}
 		return ErrPaused
 	}
-	rowed, deliver := m.envRowed(sb), !paused
+	rowed, deliver := m.rowFollows(sb), !paused
 	if env.Equal(prev) {
 		m.mu.Unlock()
 	} else {
@@ -115,7 +115,7 @@ func (m *Manager) rewriteArchiveRow(ctx context.Context, sb *types.Sandbox, lock
 	}
 	for range 2 {
 		m.mu.Lock()
-		ck, replica, rowed := sb.ArchiveCk, sb.ReplicaCk, m.claimed[sb.ID] == sb && m.envRowed(sb)
+		ck, replica, rowed := sb.ArchiveCk, sb.ReplicaCk, m.claimed[sb.ID] == sb && m.rowFollows(sb)
 		m.mu.Unlock()
 		if !rowed {
 			return nil
@@ -139,10 +139,6 @@ func (m *Manager) rewriteArchiveRow(ctx context.Context, sb *types.Sandbox, lock
 		}
 	}
 	return nil
-}
-
-func (m *Manager) envRowed(sb *types.Sandbox) bool {
-	return m.archiveRowed(sb) || m.replicaRowed(sb) && sb.HibernateSnap != ""
 }
 
 func (m *Manager) deliverGuestEnv(ctx context.Context, verb, id, sock string, env types.Env, deliver bool) error {

@@ -183,7 +183,7 @@ func (m *Manager) Renew(ctx context.Context, id string, cred Cred, ttl time.Dura
 	}
 	prev, prevLease, prevExpire := sb.Deadline, sb.LeaseSeconds, sb.OnExpire
 	sb.Deadline, sb.LeaseSeconds, sb.OnExpire = time.Now().Add(lease), int(lease/time.Second), onExpire.Or(sb.OnExpire)
-	deadline, js := sb.Deadline, m.store.set(sb)
+	deadline, js, rowed := sb.Deadline, m.store.set(sb), m.rowFollows(sb)
 	m.mu.Unlock()
 	if err := m.store.commit(js); err != nil {
 		m.mu.Lock()
@@ -199,6 +199,11 @@ func (m *Manager) Renew(ctx context.Context, id string, cred Cred, ttl time.Dura
 	}
 	sb.Touch()
 	m.recordUsage(ctx, usage.Event{Event: "renew", ID: id, Tenant: sb.Tenant, Deadline: deadline})
+	if rowed {
+		if err := m.rewriteArchiveRow(ctx, sb, false); err != nil {
+			return time.Time{}, fmt.Errorf("renew %s: %w", id, err)
+		}
+	}
 	return deadline, nil
 }
 

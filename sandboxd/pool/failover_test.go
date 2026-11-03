@@ -2131,6 +2131,11 @@ func patchHostOnly(t *testing.T, m *Manager, sb *types.Sandbox, value string) {
 
 func rowEnv(t *testing.T, c *failoverCluster, sb *types.Sandbox) string {
 	t.Helper()
+	return rowClaim(t, c, sb).Env["GH_TOKEN"].Value
+}
+
+func rowClaim(t *testing.T, c *failoverCluster, sb *types.Sandbox) *types.Sandbox {
+	t.Helper()
 	rec, ok, err := c.reg.Get(t.Context(), sb.ID)
 	if err != nil || !ok {
 		t.Fatalf("row: %v %v", ok, err)
@@ -2139,7 +2144,7 @@ func rowEnv(t *testing.T, c *failoverCluster, sb *types.Sandbox) string {
 	if err = json.Unmarshal(rec.Claim, claim); err != nil {
 		t.Fatalf("decode row claim: %v", err)
 	}
-	return claim.Env["GH_TOKEN"].Value
+	return claim
 }
 
 type replaceFailRegistry struct {

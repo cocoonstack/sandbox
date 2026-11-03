@@ -538,7 +538,9 @@ checkpoint for deletion. Wake it first. A claim whose [tenant was
 removed](#tenants-v1tenants) runs to its deadline but cannot extend it: its own
 token gets 403, the root token still renews. 400 a malformed body; 401 missing
 bearer token; 403 the claim's tenant was removed; 404 unknown id or wrong
-token; 409 archived, or being archived right now.
+token; 409 archived, or being archived right now; 503 the archive registry is
+down, for a hibernated claim with a replica under `archive_failover`: the node
+already holds the new lease, and a resend replaces the row.
 
 ## POST /v1/sandboxes/{id}/fork
 
