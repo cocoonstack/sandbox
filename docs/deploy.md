@@ -637,10 +637,11 @@ ready to serve warm claims.
 A golden left on disk is adopted on start when its stamp matches the pool's
 image, lane, interception, `storage` and `warmup`. The stamp does not record
 the cocoon or Cloud Hypervisor version, so a golden from before an upgrade of
-either stays in use. If clones fail after such an upgrade, stop sandboxd,
-remove the golden (`<data_dir>/goldens/<hash>` and `<hash>.stamp`, with the
-`<hash>` the `refill` error names, or all of `<data_dir>/goldens/`), and start
-sandboxd: the pool builds a new golden.
+either is adopted. If its clones then fail, sandboxd retires it once the pool's
+refills have failed 8 times running (a node-capacity failure does not count)
+and builds a new golden; until it is ready, claims for that pool fail. If
+failures continue with the new golden, it is retired again at most once every
+30 s.
 
 A minimal systemd unit (shipped as
 [`packaging/sandboxd.service`](https://github.com/cocoonstack/sandbox/blob/main/packaging/sandboxd.service)):
