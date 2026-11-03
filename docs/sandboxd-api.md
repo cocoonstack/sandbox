@@ -778,7 +778,7 @@ A refused reload changes nothing.
 
 Auth: root only (tenant tokens get 403). Cordons the node for maintenance: claim/fork/branch answer
 429 `node draining` (on a cluster a non-volume claim tries a peer redirect first, and
-warm placement stops naming this node within a tick as its warm counts hit zero),
+peers stop redirecting here within a tick, because this node gossips no pools),
 unclaimed warm VMs are destroyed, and live claims keep serving until release
 or TTL. Pool ownership is untouched — no pools.json write, no config change.
 Answers the fresh `GET /v1/info` payload; poll `claimed` to zero to know the
