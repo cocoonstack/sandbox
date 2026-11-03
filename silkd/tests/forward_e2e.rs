@@ -46,26 +46,6 @@ async fn forwarded(state: &Arc<State>, port: u16) -> (FrameWriter, FrameLines) {
     (cw, lines)
 }
 
-#[tokio::test]
-async fn forward_round_trips_and_done_on_server_close() {
-    timeout(DEADLINE, async {
-        let port = echo_listener().await;
-        let state = Arc::new(State::new());
-        let (mut cw, mut lines) = forwarded(&state, port).await;
-
-        send(&mut cw, json!({"v":1,"op":"data","data":b64(b"hi")})).await;
-        let echoed = next_frame(&mut lines).await;
-        assert_eq!(type_of(&echoed), "data", "got {echoed}");
-        assert_eq!(decode(&echoed), b"hi");
-
-        send(&mut cw, json!({"v":1,"op":"data_end"})).await;
-        let done = next_frame(&mut lines).await;
-        assert_eq!(type_of(&done), "done", "got {done}");
-    })
-    .await
-    .expect("test deadline");
-}
-
 async fn request_listener(request: usize) -> u16 {
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let port = listener.local_addr().expect("addr").port();
@@ -95,6 +75,26 @@ async fn half_close_listener() -> (u16, oneshot::Receiver<Vec<u8>>) {
         let _ = tx.send(got);
     });
     (port, rx)
+}
+
+#[tokio::test]
+async fn forward_round_trips_and_done_on_server_close() {
+    timeout(DEADLINE, async {
+        let port = echo_listener().await;
+        let state = Arc::new(State::new());
+        let (mut cw, mut lines) = forwarded(&state, port).await;
+
+        send(&mut cw, json!({"v":1,"op":"data","data":b64(b"hi")})).await;
+        let echoed = next_frame(&mut lines).await;
+        assert_eq!(type_of(&echoed), "data", "got {echoed}");
+        assert_eq!(decode(&echoed), b"hi");
+
+        send(&mut cw, json!({"v":1,"op":"data_end"})).await;
+        let done = next_frame(&mut lines).await;
+        assert_eq!(type_of(&done), "done", "got {done}");
+    })
+    .await
+    .expect("test deadline");
 }
 
 #[tokio::test]

@@ -16,6 +16,14 @@ use tokio::process::Command;
 
 static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
 
+/// The FORWARDED values in silkd's own environment, read once: the unit environment is fixed.
+static PROXY_VARS: LazyLock<Vec<(&'static str, String)>> =
+    LazyLock::new(|| snapshot_proxy(|key| std::env::var(key).ok()));
+static DIRECT: LazyLock<Vec<(&'static str, &'static str)>> =
+    LazyLock::new(|| compose_env(true, &PROXY_VARS));
+static RELAYED: LazyLock<Vec<(&'static str, &'static str)>> =
+    LazyLock::new(|| compose_env(false, &PROXY_VARS));
+
 /// Forwarded into every exec that has no direct route: the loopback proxy relay is its only way out.
 const FORWARDED: [&str; 6] = [
     "http_proxy",
@@ -70,10 +78,6 @@ pub fn signal_pid(pid: u32, sig: i32) {
 
 /// The environment every exec starts from; the proxy snapshot rides only where nothing routes directly.
 pub fn base_env() -> &'static [(&'static str, &'static str)] {
-    static DIRECT: LazyLock<Vec<(&'static str, &'static str)>> =
-        LazyLock::new(|| compose_env(true, proxy_vars()));
-    static RELAYED: LazyLock<Vec<(&'static str, &'static str)>> =
-        LazyLock::new(|| compose_env(false, proxy_vars()));
     if crate::net::routes_directly() {
         &DIRECT
     } else {
@@ -262,13 +266,6 @@ fn compose_env<'a>(
         env.extend(proxy.iter().map(|(k, v)| (*k, v.as_str())));
     }
     env
-}
-
-/// The FORWARDED values in silkd's own environment, read once: the unit environment is fixed.
-fn proxy_vars() -> &'static [(&'static str, String)] {
-    static PROXY_VARS: LazyLock<Vec<(&'static str, String)>> =
-        LazyLock::new(|| snapshot_proxy(|key| std::env::var(key).ok()));
-    &PROXY_VARS
 }
 
 fn snapshot_proxy(get: impl Fn(&str) -> Option<String>) -> Vec<(&'static str, String)> {

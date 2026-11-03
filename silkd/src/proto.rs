@@ -28,6 +28,9 @@ pub const BULK_CHUNK: usize = 256 * 1024;
 
 const DATA_FRAME_HEAD: &[u8] = b"{\"v\":1,\"op\":\"data\",\"data\":\"";
 const STDIN_FRAME_HEAD: &[u8] = b"{\"v\":1,\"op\":\"stdin\",\"data\":\"";
+const CHUNK_FRAME_PRE: &[u8] = b"{\"type\":\"";
+const CHUNK_FRAME_MID: &[u8] = b"\",\"data\":\"";
+const CHUNK_FRAME_END: &[u8] = b"\"}\n";
 
 /// Client → server frames; unknown JSON fields are ignored, which is forward compatibility.
 #[derive(Debug, Deserialize)]
@@ -447,18 +450,19 @@ pub async fn write_chunk_frame<W: AsyncWrite + Unpin>(
     kind: &str,
     data: &[u8],
 ) -> io::Result<()> {
-    const PRE: &[u8] = b"{\"type\":\"";
-    const MID: &[u8] = b"\",\"data\":\"";
-    const END: &[u8] = b"\"}\n";
     let b64_len = base64::encoded_len(data.len(), true)
         .ok_or_else(|| io::Error::other("chunk too large to encode"))?;
-    let total = PRE.len() + kind.len() + MID.len() + b64_len + END.len();
+    let total = CHUNK_FRAME_PRE.len()
+        + kind.len()
+        + CHUNK_FRAME_MID.len()
+        + b64_len
+        + CHUNK_FRAME_END.len();
     // grow-only: buf[..total] is fully overwritten, so the zero-fill runs once at high-water.
     if buf.len() < total {
         buf.resize(total, 0);
     }
     let mut at = 0;
-    for part in [PRE, kind.as_bytes(), MID] {
+    for part in [CHUNK_FRAME_PRE, kind.as_bytes(), CHUNK_FRAME_MID] {
         buf[at..at + part.len()].copy_from_slice(part);
         at += part.len();
     }
@@ -466,7 +470,7 @@ pub async fn write_chunk_frame<W: AsyncWrite + Unpin>(
         .encode_slice(data, &mut buf[at..at + b64_len])
         .map_err(io::Error::other)?;
     at += b64_len;
-    buf[at..at + END.len()].copy_from_slice(END);
+    buf[at..at + CHUNK_FRAME_END.len()].copy_from_slice(CHUNK_FRAME_END);
     w.write_all(&buf[..total]).await?;
     w.flush().await
 }

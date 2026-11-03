@@ -59,22 +59,6 @@ pub async fn roundtrip(request_line: &str) -> Vec<Value> {
     request_on(&Arc::new(State::new()), &[request_line.to_string()]).await
 }
 
-async fn request_on(state: &Arc<State>, lines: &[String]) -> Vec<Value> {
-    let (mut cw, mut out, handle) = connect(state);
-    for line in lines {
-        cw.write_all(line.as_bytes()).await.unwrap();
-        cw.write_all(b"\n").await.unwrap();
-    }
-    cw.shutdown().await.unwrap();
-
-    let mut frames = Vec::new();
-    while let Some(l) = out.next_line().await.unwrap() {
-        frames.push(serde_json::from_str(&l).unwrap());
-    }
-    handle.await.unwrap().unwrap();
-    frames
-}
-
 pub async fn request(frame: Value) -> Vec<Value> {
     roundtrip(&frame.to_string()).await
 }
@@ -126,4 +110,20 @@ pub fn data_frames(bytes: &[u8]) -> Vec<String> {
         .collect();
     lines.push(r#"{"op":"data_end"}"#.to_string());
     lines
+}
+
+async fn request_on(state: &Arc<State>, lines: &[String]) -> Vec<Value> {
+    let (mut cw, mut out, handle) = connect(state);
+    for line in lines {
+        cw.write_all(line.as_bytes()).await.unwrap();
+        cw.write_all(b"\n").await.unwrap();
+    }
+    cw.shutdown().await.unwrap();
+
+    let mut frames = Vec::new();
+    while let Some(l) = out.next_line().await.unwrap() {
+        frames.push(serde_json::from_str(&l).unwrap());
+    }
+    handle.await.unwrap().unwrap();
+    frames
 }
