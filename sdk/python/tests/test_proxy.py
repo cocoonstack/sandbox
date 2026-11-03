@@ -1,6 +1,4 @@
-"""proxy_port end-to-end with a fake guest PortConn: catches the class of bug
-where proxy_port references a helper that does not exist — a static import
-can't see it, only running the accept loop does."""
+"""proxy_port end to end with a fake guest PortConn."""
 
 import socket
 import threading

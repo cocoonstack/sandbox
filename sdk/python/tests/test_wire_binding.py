@@ -1,13 +1,4 @@
-"""Binds the SDK's real call sites to the golden corpus: each case drives an
-actual Sandbox method with the fixture's own field values through a real
-Conn over a socketpair, then asserts the emitted frame carries exactly the
-fixture's fields with the same values — both directions, so a misspelled
-field name AND a silently dropped field fail here; the generic encode
-round-trip alone cannot see either.
-
-Each CASES entry is (fixture stem, scripted guest replies, invoke(sb, fixture));
-UNSENT lists the fields no SDK call site emits by design, which silkd defaults
-and the Go SDK omits too."""
+"""Drives each real Sandbox call site and asserts its frame carries exactly the golden fixture's fields."""
 
 import contextlib
 import json
@@ -161,8 +152,7 @@ class BranchActionConn:
 
 
 def fake_sandbox(monkeypatch, replies):
-    """A Sandbox whose _dial yields a real Conn over a socketpair; a guest
-    thread records inbound frames and answers the scripted replies."""
+    """A Sandbox whose _dial yields a real Conn over a socketpair to a scripted guest thread."""
     sent = []
     client_sock, guest_sock = socket.socketpair()
 

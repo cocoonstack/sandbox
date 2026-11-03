@@ -1,8 +1,4 @@
-"""Fault matrix for the cluster redirect follow and the lookup scatter:
-dead first candidate (connection refused), 404 first candidate, a definitive
-candidate error that still tries the next one, every candidate exhausted
-(then the origin fallback heals, fails, or is skipped for a definitive
-error) — and lookup must not pay a hung or dead peer's full timeout."""
+"""Fault matrix for the cluster redirect follow and the lookup scatter."""
 
 import socket
 import time

@@ -1,5 +1,4 @@
-"""Toolkit wiring against a fake sandbox: tool names/schemas, exec output
-shaping, lazy claim, and double-close safety — no real node."""
+"""Toolkit wiring against a fake sandbox, with no real node."""
 
 import asyncio
 import socket
