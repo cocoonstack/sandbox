@@ -28,6 +28,7 @@ pub const READ_CHUNK: usize = 32 * 1024;
 pub const BULK_CHUNK: usize = 256 * 1024;
 
 const DATA_FRAME_HEAD: &[u8] = b"{\"v\":1,\"op\":\"data\",\"data\":\"";
+const STDIN_FRAME_HEAD: &[u8] = b"{\"v\":1,\"op\":\"stdin\",\"data\":\"";
 
 /// Client → server frames; unknown JSON fields are ignored, which is forward compatibility.
 #[derive(Debug, Deserialize)]
@@ -566,17 +567,23 @@ pub async fn write_feed_error<W: AsyncWrite + Unpin>(w: &mut W, err: FeedError) 
 
 #[inline]
 pub(crate) fn parse_request(frame: &[u8], buf: &mut Vec<u8>) -> serde_json::Result<Request> {
-    if let Some(n) = decode_data_frame(frame, buf) {
+    if let Some(n) = decode_bulk_frame(frame, DATA_FRAME_HEAD, buf) {
         buf.truncate(n);
         return Ok(Request::Data {
+            data: std::mem::take(buf),
+        });
+    }
+    if let Some(n) = decode_bulk_frame(frame, STDIN_FRAME_HEAD, buf) {
+        buf.truncate(n);
+        return Ok(Request::Stdin {
             data: std::mem::take(buf),
         });
     }
     serde_json::from_slice(frame)
 }
 
-fn decode_data_frame(frame: &[u8], out: &mut Vec<u8>) -> Option<usize> {
-    let b64 = frame.strip_prefix(DATA_FRAME_HEAD)?.strip_suffix(b"\"}")?;
+fn decode_bulk_frame(frame: &[u8], head: &[u8], out: &mut Vec<u8>) -> Option<usize> {
+    let b64 = frame.strip_prefix(head)?.strip_suffix(b"\"}")?;
     out.resize(base64::decoded_len_estimate(b64.len()), 0);
     STANDARD.decode_slice(b64, out).ok()
 }
@@ -860,9 +867,44 @@ mod tests {
     }
 
     #[test]
-    fn data_frame_head_carries_the_proto_version() {
+    fn bulk_frame_heads_carry_the_proto_version() {
         let head = format!("{{\"v\":{PROTO_VERSION},");
-        assert!(DATA_FRAME_HEAD.starts_with(head.as_bytes()));
+        for frame_head in [DATA_FRAME_HEAD, STDIN_FRAME_HEAD] {
+            assert!(frame_head.starts_with(head.as_bytes()));
+        }
+    }
+
+    #[test]
+    fn bulk_frame_heads_match_the_fixture_shape() {
+        for (head, fixture) in [
+            (DATA_FRAME_HEAD, "req_data.json"),
+            (STDIN_FRAME_HEAD, "req_stdin.json"),
+        ] {
+            let raw = std::fs::read(format!("{FIXTURES_DIR}/{fixture}")).expect("read fixture");
+            assert!(raw.starts_with(head), "{fixture}");
+        }
+    }
+
+    #[test]
+    fn fast_and_serde_stdin_frames_decode_the_same_bytes() {
+        let payloads: [&[u8]; 4] = [b"", b"a", b"\xff\xff\xfe", &[0x5a; 1000]];
+        let mut buf = Vec::new();
+        for payload in payloads {
+            let b64 = STANDARD.encode(payload);
+            for line in [
+                format!("{{\"v\":1,\"op\":\"stdin\",\"data\":\"{b64}\"}}"),
+                format!(
+                    "{{\"v\":1,\"op\":\"stdin\",\"data\":\"{}\"}}",
+                    b64.replace('/', "\\/")
+                ),
+                format!("{{\"op\":\"stdin\",\"data\":\"{b64}\",\"future\":1}}"),
+            ] {
+                match parse_request(line.as_bytes(), &mut buf) {
+                    Ok(Request::Stdin { data }) => assert_eq!(data, payload, "{line}"),
+                    other => panic!("{line}: {other:?}"),
+                }
+            }
+        }
     }
 
     #[tokio::test]

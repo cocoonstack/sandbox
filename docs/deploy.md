@@ -634,6 +634,14 @@ cold boot + snapshot export, tens of seconds) and keeps each pool topped up
 with claim-ready clones.
 `GET /v1/info` shows `"golden": true` and `warm` at target when the node is
 ready to serve warm claims.
+A golden left on disk is adopted on start when its stamp matches the pool's
+image, lane, interception, `storage` and `warmup`. The stamp does not record
+the cocoon or Cloud Hypervisor version, so a golden from before an upgrade of
+either is adopted. If its clones then fail, sandboxd retires it once the pool's
+refills have failed 8 times running (a node-capacity failure does not count)
+and builds a new golden; until it is ready, claims for that pool that find no
+warm VM cold-boot. If failures continue with the new golden, it is retired again at most once every
+30 s.
 
 A minimal systemd unit (shipped as
 [`packaging/sandboxd.service`](https://github.com/cocoonstack/sandbox/blob/main/packaging/sandboxd.service)):
@@ -647,6 +655,7 @@ After=network-online.target
 [Service]
 ExecStart=/usr/local/bin/sandboxd -config /etc/sandboxd/config.json
 Restart=on-failure
+RestartSec=5s
 KillMode=process
 Environment=SANDBOXD_LOG_LEVEL=info
 

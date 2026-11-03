@@ -17,6 +17,10 @@ jobs:
         uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 0
+      - name: Check tag matches silkd version
+        run: |
+          crate_ver=$(sed -n 's/^version = "\(.*\)"/\1/p' silkd/Cargo.toml | head -1)
+          [ "$crate_ver" = "${GITHUB_REF_NAME#v}" ] || { echo "tag ${GITHUB_REF_NAME#v} != silkd/Cargo.toml $crate_ver" >&2; exit 1; }
       - name: Set up Go
         uses: actions/setup-go@v7.0.0
         with:
