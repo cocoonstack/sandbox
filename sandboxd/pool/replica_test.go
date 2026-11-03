@@ -583,6 +583,34 @@ func TestAFencedNodeNeitherHibernatesNorWakesAReplicatedClaim(t *testing.T) {
 	}
 }
 
+func TestAFencedNodeCapturesNoReplicatedClaim(t *testing.T) {
+	c := newReplicaCluster(t)
+	a := c.node(t, "a", t.TempDir(), keepAnHour)
+	sb, plain := mustClaim(t, a, testKey), mustClaim(t, a, plainKey)
+	replicateNow(t, a, sb)
+	a.tripFence()
+	cred := Cred{Token: sb.Token}
+	if _, err := a.Fork(t.Context(), sb.ID, cred, 1, time.Hour, "", ""); !errors.Is(err, ErrLeaseLost) {
+		t.Errorf("fork while fenced: %v, want ErrLeaseLost", err)
+	}
+	if _, err := a.Checkpoint(t.Context(), sb.ID, cred, "", ""); !errors.Is(err, ErrLeaseLost) {
+		t.Errorf("checkpoint while fenced: %v, want ErrLeaseLost", err)
+	}
+	if _, _, err := a.Promote(t.Context(), sb.ID, cred, "tpl", ""); !errors.Is(err, ErrLeaseLost) {
+		t.Errorf("promote while fenced: %v, want ErrLeaseLost", err)
+	}
+	if err := a.replicate(t.Context(), sb); !errors.Is(err, ErrLeaseLost) || !benignSweepErr(err) {
+		t.Errorf("replicate while fenced: %v, want a benign ErrLeaseLost", err)
+	}
+	if _, err := a.Checkpoint(t.Context(), plain.ID, Cred{Token: plain.Token}, "", ""); err != nil {
+		t.Errorf("checkpoint of an unreplicated claim while fenced: %v", err)
+	}
+	a.liftFence()
+	if _, err := a.Fork(t.Context(), sb.ID, cred, 1, time.Hour, "", ""); err != nil {
+		t.Errorf("fork after the fence lifted: %v", err)
+	}
+}
+
 func TestTheSweepsLeaveAReplicatedClaimAloneWhileFenced(t *testing.T) {
 	c := newReplicaCluster(t)
 	a := c.node(t, "a", t.TempDir(), keepAnHour)
