@@ -1,16 +1,13 @@
 package pool
 
 import (
-	"cmp"
 	"context"
-	"errors"
 	"fmt"
 	"slices"
 	"strings"
 
 	"golang.org/x/sync/errgroup"
 
-	"github.com/cocoonstack/sandbox/sandboxd/archives"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
@@ -111,36 +108,6 @@ func (m *Manager) writeEnv(ctx context.Context, id, tenant, verb string, next fu
 	}
 	if err := m.eng.WriteGuestEnv(ctx, sock, env.GuestFile()); err != nil {
 		return fmt.Errorf("%s env %s: write to the guest: %w", verb, id, err)
-	}
-	return nil
-}
-
-func (m *Manager) rewriteArchiveRow(ctx context.Context, sb *types.Sandbox, locked bool) error {
-	if !locked {
-		sb.Transition.Lock()
-		defer sb.Transition.Unlock()
-	}
-	for range 2 {
-		m.mu.Lock()
-		ck, replica, live, rowed := sb.ArchiveCk, sb.ReplicaCk, m.claimed[sb.ID] == sb, m.rowFollows(sb)
-		m.mu.Unlock()
-		switch {
-		case !live:
-			return ErrUnknownSandbox
-		case !rowed:
-			return nil
-		}
-		epoch, err := m.putRow(ctx, sb, cmp.Or(ck, replica), ck == "", true)
-		if err == nil {
-			_, _ = m.commitIfLive(ctx, sb, func() { sb.ArchiveEpoch = epoch })
-			return nil
-		}
-		if !errors.Is(err, archives.ErrLost) {
-			return err
-		}
-		if err = m.refusedReplace(ctx, sb); err != nil {
-			return err
-		}
 	}
 	return nil
 }

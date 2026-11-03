@@ -1,6 +1,7 @@
 package pool
 
 import (
+	"cmp"
 	"context"
 	"crypto/subtle"
 	"encoding/json/v2"
@@ -140,6 +141,36 @@ func (m *Manager) putRow(ctx context.Context, sb *types.Sandbox, ck string, repl
 		return m.archives.Replace(ctx, rec, held)
 	}
 	return m.archives.Put(ctx, rec)
+}
+
+func (m *Manager) rewriteArchiveRow(ctx context.Context, sb *types.Sandbox, locked bool) error {
+	if !locked {
+		sb.Transition.Lock()
+		defer sb.Transition.Unlock()
+	}
+	for range 2 {
+		m.mu.Lock()
+		ck, replica, live, rowed := sb.ArchiveCk, sb.ReplicaCk, m.claimed[sb.ID] == sb, m.rowFollows(sb)
+		m.mu.Unlock()
+		switch {
+		case !live:
+			return ErrUnknownSandbox
+		case !rowed:
+			return nil
+		}
+		epoch, err := m.putRow(ctx, sb, cmp.Or(ck, replica), ck == "", true)
+		if err == nil {
+			_, _ = m.commitIfLive(ctx, sb, func() { sb.ArchiveEpoch = epoch })
+			return nil
+		}
+		if !errors.Is(err, archives.ErrLost) {
+			return err
+		}
+		if err = m.refusedReplace(ctx, sb); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // refusedReplace settles a refused replace: a row this node still owns only had a stale epoch, anything else means the claim moved.
