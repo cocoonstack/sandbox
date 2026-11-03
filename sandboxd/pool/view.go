@@ -19,6 +19,7 @@ type configView struct {
 	poolReaders   map[types.PoolKey]bool
 	diskReserve   int64
 	diskDirs      []string
+	noBalloon     bool
 }
 
 func newConfigView(cfg *config.Config, secrets *egress.SecretStore) *configView {
@@ -29,6 +30,7 @@ func newConfigView(cfg *config.Config, secrets *egress.SecretStore) *configView 
 		poolStorage:   map[types.PoolKey]string{},
 		poolReplicate: map[types.PoolKey]time.Duration{},
 		poolReaders:   map[types.PoolKey]bool{},
+		noBalloon:     cfg.NoBalloon,
 	}
 	if r := cfg.DiskReserve; r != nil {
 		v.diskReserve, _ = config.StorageBytes(r.Free)

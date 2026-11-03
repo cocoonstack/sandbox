@@ -60,3 +60,18 @@ func TestSizedPoolRebuildsAnUnsizedGolden(t *testing.T) {
 		t.Error("a pool sized to 40 GiB adopted a golden built at cocoon's default disk")
 	}
 }
+
+func TestNoBalloonRebuildsABalloonGolden(t *testing.T) {
+	spec := config.PoolSpec{PoolKey: testKey, Warm: 1}
+	m := newTestManager(t, newFakeEngine(), spec)
+	seedGolden(t, m, "")
+	m.view.Store(newConfigView(&config.Config{NoBalloon: true, Pools: []config.PoolSpec{spec}}, testSecrets(t)))
+
+	m.mu.Lock()
+	adopted := m.adoptGolden(m.pools[testKey], "")
+	m.mu.Unlock()
+
+	if adopted {
+		t.Error("a no_balloon node adopted a golden booted with a balloon")
+	}
+}

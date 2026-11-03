@@ -315,6 +315,9 @@ func (m *Manager) goldenStamp(v *configView, key types.PoolKey, imageID string) 
 		n, _ := config.StorageBytes(storage)
 		fields = append(fields, "storage="+strconv.FormatInt(n, 10))
 	}
+	if v.noBalloon {
+		fields = append(fields, "no_balloon")
+	}
 	return strings.Join(append(fields, v.poolWarmups[key]...), "\x00")
 }
 
