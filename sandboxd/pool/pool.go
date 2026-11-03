@@ -386,12 +386,11 @@ type Manager struct {
 	nodeID       string
 	orphanSweep  atomic.Bool
 	adoptFlights singleflight.Group
-	// fence gates replicated claims while the lease is overdue; replicaPools is fixed at start; replicas belongs to the pass holding replicating.
-	fence        atomic.Pointer[fenceState]
-	unfencing    atomic.Bool
-	replicaPools map[types.PoolKey]struct{}
-	replicating  atomic.Bool
-	replicas     map[string]time.Time
+	// fence gates replicated claims while the lease is overdue; replicas belongs to the pass holding replicating.
+	fence       atomic.Pointer[fenceState]
+	unfencing   atomic.Bool
+	replicating atomic.Bool
+	replicas    map[string]time.Time
 
 	view atomic.Pointer[configView]
 	// cfg is the config the view was built from; reloadMu orders reloads, the only writers of cfg and view.
@@ -554,12 +553,6 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 	if m.archives != nil {
 		m.nodeID = cfg.Mesh.ID()
 		close(start.ch)
-		m.replicaPools = map[types.PoolKey]struct{}{}
-		for _, spec := range cfg.Pools {
-			if spec.ReplicateSeconds > 0 {
-				m.replicaPools[spec.PoolKey] = struct{}{}
-			}
-		}
 	}
 	m.fence.Store(start)
 	if err := m.adoptPools(ctx); err != nil {

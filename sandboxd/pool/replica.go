@@ -67,7 +67,7 @@ func (m *Manager) replicateOnce(ctx context.Context) {
 // replicable excludes a claim that is paused, archived or archiving, failed, or whose tenant was removed; callers hold m.mu.
 func (m *Manager) replicable(sb *types.Sandbox) bool {
 	_, archiving := m.archiving[sb.ID]
-	return !archiving && sb.HibernateSnap == "" && sb.PendingSnap == "" && sb.ArchiveCk == "" && sb.ArchivePending == "" && sb.Failed == "" && !m.tenantGone(sb.Tenant)
+	return !archiving && runningShaped(sb) && sb.ArchivePending == "" && !m.tenantGone(sb.Tenant)
 }
 
 func (m *Manager) replicate(ctx context.Context, sb *types.Sandbox) error {

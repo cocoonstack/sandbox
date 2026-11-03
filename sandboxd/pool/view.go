@@ -62,21 +62,8 @@ func newConfigView(cfg *config.Config, secrets *egress.SecretStore) *configView 
 	}
 	for _, spec := range cfg.Pools {
 		key := spec.PoolKey
-		if len(spec.Warmup) > 0 {
-			v.poolWarmups[key] = spec.Warmup
-		}
-		if spec.CaptureTrim {
-			v.poolTrims[key] = true
-		}
-		if spec.Storage != "" {
-			v.poolStorage[key] = spec.Storage
-		}
-		if spec.ReplicateSeconds > 0 {
-			v.poolReplicate[key] = time.Duration(spec.ReplicateSeconds) * time.Second
-		}
-		if spec.Reader {
-			v.poolReaders[key] = true
-		}
+		v.poolWarmups[key], v.poolTrims[key], v.poolStorage[key] = spec.Warmup, spec.CaptureTrim, spec.Storage
+		v.poolReplicate[key], v.poolReaders[key] = time.Duration(spec.ReplicateSeconds)*time.Second, spec.Reader
 	}
 	return v
 }

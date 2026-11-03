@@ -133,7 +133,7 @@ func (m *Manager) dropReader(ctx context.Context, r *reader, force bool) {
 	}
 	delete(rs.live, r.claim)
 	rs.mu.Unlock()
-	m.destroyReader(context.WithoutCancel(ctx), r)
+	m.destroyReader(ctx, r)
 }
 
 func (m *Manager) ensureReader(ctx context.Context, sb *types.Sandbox) error {
@@ -175,7 +175,7 @@ func (m *Manager) openReader(ctx context.Context, sb *types.Sandbox) error {
 	r.idle = time.AfterFunc(readerIdle, func() { m.dropReader(context.Background(), r, false) })
 	rs.mu.Unlock()
 	if old != nil {
-		m.destroyReader(context.WithoutCancel(ctx), old)
+		m.destroyReader(ctx, old)
 	}
 	log.WithFunc("pool.openReader").Infof(ctx, "reader %s for sleeping claim %s ready in %s", r.vm, sb.ID, time.Since(start).Round(time.Millisecond))
 	return nil

@@ -220,7 +220,7 @@ func (m *Manager) AgentSocket(id, token string) (string, error) {
 	if !ok {
 		return "", ErrUnknownSandbox
 	}
-	if sb.Replicated() && m.fence.Load().fenced {
+	if sb.Replicated() && m.isFenced() {
 		return "", ErrLeaseLost
 	}
 	// No activity stamp: a control-plane poll must not keep an idle sandbox awake
@@ -471,8 +471,7 @@ func (m *Manager) tenantDelta(tenant string, delta int) {
 
 func (m *Manager) addClaimLocked(sb *types.Sandbox) {
 	if m.archives != nil {
-		_, replicating := m.replicaPools[sb.PolicyKey()]
-		sb.SetReplicated(replicating || sb.HasReplica())
+		sb.SetReplicated(m.view.Load().poolReplicate[sb.PolicyKey()] > 0 || sb.HasReplica())
 	}
 	m.claimed[sb.ID] = sb
 	m.tenantDelta(sb.Tenant, 1)
