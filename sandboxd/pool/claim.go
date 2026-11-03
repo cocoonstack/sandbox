@@ -2,7 +2,6 @@ package pool
 
 import (
 	"context"
-	"crypto/subtle"
 	"fmt"
 	"net"
 	"sync"
@@ -585,25 +584,10 @@ func (m *Manager) commitIfLive(ctx context.Context, sb *types.Sandbox, mutate fu
 	return true, nil
 }
 
-func (m *Manager) claim(id, token string) (*types.Sandbox, bool) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.authed(id, token)
-}
-
 func (m *Manager) deadlineOf(sb *types.Sandbox) time.Time {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return sb.Deadline
-}
-
-// Callers hold m.mu.
-func (m *Manager) authed(id, token string) (*types.Sandbox, bool) {
-	sb := m.claimed[id]
-	if sb == nil || subtle.ConstantTimeCompare([]byte(sb.Token), []byte(token)) != 1 {
-		return nil, false
-	}
-	return sb, true
 }
 
 // admitOptions validates the key and options and admits the claim's volumes, which the caller unreserves until finalize.
