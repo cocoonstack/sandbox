@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -38,7 +39,7 @@ func run(addr, token, template, volume, rwVolume, probe string, live bool) error
 	if volume == "" {
 		return errors.New("volume is required")
 	}
-	if probe == "" || probe == "." || path.IsAbs(probe) || path.Clean(probe) != probe || probe == ".." || strings.HasPrefix(probe, "../") {
+	if !filepath.IsLocal(probe) || probe == "." || path.Clean(probe) != probe {
 		return fmt.Errorf("probe %q must be a clean relative file path", probe)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
