@@ -48,10 +48,15 @@ impl Table {
                 format!("environment name {name:?} is not a shell identifier"),
             ));
         }
+        let claim = sysutil::claim_env();
         let mut child = Command::new("bash")
             .env_clear()
             .envs(sysutil::base_env().iter().copied())
-            .envs(sysutil::claim_env())
+            .envs(
+                sysutil::parse_env_file(&claim)
+                    .iter()
+                    .map(|(k, v)| (*k, &**v)),
+            )
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             // null, not piped: the init line `exec 2>&1` repoints fd 2 at the stdout pipe.

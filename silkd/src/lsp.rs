@@ -41,20 +41,22 @@ impl Broker {
         language: &str,
         root: Option<&str>,
     ) -> std::io::Result<()> {
-        let argv = match read_manifest(language).await {
-            Some(argv) if !argv.is_empty() => argv,
-            _ => {
-                return proto::error_frame(
-                    w,
-                    ErrorKind::NotFound,
-                    format!("no language server for {language:?}; a flavor image provides {}/{language}", manifest_dir()),
-                )
-                .await;
-            }
+        let raw = read_manifest(language).await.unwrap_or_default();
+        let mut argv = raw.split_whitespace();
+        let Some(program) = argv.next() else {
+            return proto::error_frame(
+                w,
+                ErrorKind::NotFound,
+                format!(
+                    "no language server for {language:?}; a flavor image provides {}/{language}",
+                    manifest_dir()
+                ),
+            )
+            .await;
         };
-        let mut cmd = Command::new(&argv[0]);
+        let mut cmd = Command::new(program);
         sysutil::align_proxy_env(&mut cmd);
-        cmd.args(&argv[1..])
+        cmd.args(argv)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -230,7 +232,7 @@ fn manifest_dir() -> Cow<'static, str> {
     std::env::var("SILKD_LSP_DIR").map_or(Cow::Borrowed(MANIFEST_DIR), Cow::Owned)
 }
 
-async fn read_manifest(language: &str) -> Option<Vec<String>> {
+async fn read_manifest(language: &str) -> Option<String> {
     if language.is_empty() || language.contains(['/', '\\', '\0']) || language.contains("..") {
         return None; // never let a language name escape the manifest dir
     }
@@ -243,5 +245,5 @@ async fn read_manifest(language: &str) -> Option<Vec<String>> {
         .ok()?;
     let mut raw = String::new();
     f.read_to_string(&mut raw).await.ok()?;
-    Some(raw.split_whitespace().map(str::to_string).collect())
+    Some(raw)
 }

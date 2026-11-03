@@ -1,6 +1,5 @@
 //! git verbs wrap the guest git binary into structured results; the none lane fails clone/push/pull with a typed error.
 
-use std::borrow::Cow;
 use std::process::Stdio;
 
 use tokio::io::AsyncWrite;
@@ -169,18 +168,14 @@ async fn git(
 
 /// Injects git config as GIT_CONFIG_COUNT/KEY_n/VALUE_n env pairs.
 fn apply_config(cmd: &mut Command, auth: Option<&str>) {
-    let mut pairs: Vec<(&str, Cow<'static, str>)> =
-        vec![("core.quotePath", Cow::Borrowed("false"))];
+    cmd.env("GIT_CONFIG_COUNT", if auth.is_some() { "2" } else { "1" })
+        .env("GIT_CONFIG_KEY_0", "core.quotePath")
+        .env("GIT_CONFIG_VALUE_0", "false");
     if let Some(token) = auth {
-        pairs.push((
-            "http.extraHeader",
-            Cow::Owned(format!("Authorization: Bearer {token}")),
-        ));
-    }
-    cmd.env("GIT_CONFIG_COUNT", pairs.len().to_string());
-    for (i, (key, value)) in pairs.iter().enumerate() {
-        cmd.env(format!("GIT_CONFIG_KEY_{i}"), key);
-        cmd.env(format!("GIT_CONFIG_VALUE_{i}"), value.as_ref());
+        cmd.env("GIT_CONFIG_KEY_1", "http.extraHeader").env(
+            "GIT_CONFIG_VALUE_1",
+            format!("Authorization: Bearer {token}"),
+        );
     }
 }
 

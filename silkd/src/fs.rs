@@ -18,7 +18,7 @@ pub const LIST_BATCH: usize = 4096;
 
 /// Streams client `data` frames into `path` via a temp file renamed only on clean completion.
 pub async fn write<R, W>(
-    mut reader: R,
+    reader: &mut R,
     w: &mut W,
     path: String,
     mode: Option<u32>,
@@ -33,7 +33,7 @@ where
         Err(e) => return err_frame(w, &e, "create").await,
     };
 
-    let outcome = proto::feed_data_frames(&mut reader, &mut file).await.and(
+    let outcome = proto::feed_data_frames(reader, &mut file).await.and(
         file.flush()
             .await
             .map_err(|e| proto::FeedError::Io(e, "flush")),

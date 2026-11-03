@@ -38,6 +38,7 @@ pub async fn open<W: AsyncWrite + Unpin>(
     };
 
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string());
+    let claim = sysutil::claim_env();
     let mut cmd = Command::new(&shell);
     cmd.arg("-i");
     if let Some(dir) = &req.cwd {
@@ -45,7 +46,11 @@ pub async fn open<W: AsyncWrite + Unpin>(
     }
     cmd.env_clear()
         .envs(sysutil::base_env().iter().copied())
-        .envs(sysutil::claim_env())
+        .envs(
+            sysutil::parse_env_file(&claim)
+                .iter()
+                .map(|(k, v)| (*k, &**v)),
+        )
         .envs(&req.env);
     if let Some(user) = &req.user
         && let Err(e) = sysutil::apply_user(&mut cmd, user)
@@ -117,7 +122,7 @@ pub async fn resize<W: AsyncWrite + Unpin>(
 /// Pumps master output to the client and client stdin to the master; the caller writes the exit frame.
 async fn pump<W: AsyncWrite + Unpin>(
     master: &Master,
-    proc: &Arc<Proc>,
+    proc: &Proc,
     client: mpsc::Receiver<Request>,
     out: &mut W,
     child: &mut tokio::process::Child,
@@ -188,8 +193,8 @@ async fn pump_stdin(
 
 /// Reads the master's buffered tail after the shell exits, bounded by POST_EXIT_DRAIN.
 async fn drain<W: AsyncWrite + Unpin>(
-    master: &Master,
-    proc: &Arc<Proc>,
+    master: &AsyncFd<OwnedFd>,
+    proc: &Proc,
     out: &mut W,
     buf: &mut [u8],
     frame: &mut Vec<u8>,
@@ -217,7 +222,7 @@ async fn drain<W: AsyncWrite + Unpin>(
     .await;
 }
 
-async fn write_all(master: &Master, mut data: &[u8]) -> std::io::Result<()> {
+async fn write_all(master: &AsyncFd<OwnedFd>, mut data: &[u8]) -> std::io::Result<()> {
     while !data.is_empty() {
         let mut guard = master.writable().await?;
         match guard.try_io(|fd| nix::unistd::write(fd.get_ref(), data).map_err(Into::into)) {

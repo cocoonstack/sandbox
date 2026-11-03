@@ -23,7 +23,7 @@ const DIR_FLAGS: OFlag = OFlag::O_DIRECTORY
     .union(OFlag::O_CLOEXEC);
 
 /// Extracts a client tar stream into `dest`, creating it; a stream failure leaves `dest` unchanged.
-pub async fn push<R, W>(mut reader: R, w: &mut W, dest: String) -> io::Result<()>
+pub async fn push<R, W>(reader: &mut R, w: &mut W, dest: String) -> io::Result<()>
 where
     R: AsyncBufRead + Unpin,
     W: AsyncWrite + Unpin,
@@ -36,7 +36,7 @@ where
         Ok(fds) => fds,
         Err(e) => return err_frame(w, &e, "stage push").await,
     };
-    let res = push_staged(&mut reader, w, staging, dest_fd).await;
+    let res = push_staged(reader, w, staging, dest_fd).await;
     // a failed push can leave a large partial tree, so cleanup runs on every exit path.
     let _ = tokio::fs::remove_dir_all(Path::new(&dest).join(&name)).await;
     res

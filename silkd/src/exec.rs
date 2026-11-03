@@ -1,5 +1,6 @@
 //! exec handler: a detached exec returns after `started` and stays in the table for attach/logs.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -34,7 +35,8 @@ pub async fn run<W>(
 where
     W: AsyncWrite + Unpin,
 {
-    let claim = sysutil::claim_env();
+    let claim_text = sysutil::claim_env();
+    let claim = sysutil::parse_env_file(&claim_text);
     let program = if req.user.is_none() {
         resolve_program(&req.argv[0], effective_path(&req.env, &claim))
     } else {
@@ -52,7 +54,7 @@ where
     }
     cmd.env_clear();
     cmd.envs(sysutil::base_env().iter().copied());
-    cmd.envs(claim);
+    cmd.envs(claim.iter().map(|(k, v)| (*k, &**v)));
     cmd.envs(&req.env);
     if let Some(ref user) = req.user
         && let Err(e) = sysutil::apply_user(&mut cmd, user)
@@ -232,7 +234,7 @@ async fn pump_stdin(
 /// The PATH the child sees: the request's, else the claim's, else the base environment's.
 fn effective_path<'a>(
     req: &'a HashMap<String, String>,
-    claim: &'a [(String, String)],
+    claim: &'a [(&str, Cow<'_, str>)],
 ) -> Option<&'a str> {
     req.get("PATH")
         .map(String::as_str)
@@ -240,8 +242,8 @@ fn effective_path<'a>(
             claim
                 .iter()
                 .rev()
-                .find(|(k, _)| k == "PATH")
-                .map(|(_, v)| v.as_str())
+                .find(|(k, _)| *k == "PATH")
+                .map(|(_, v)| &**v)
         })
         .or_else(|| {
             sysutil::base_env()
@@ -309,7 +311,7 @@ mod tests {
     #[test]
     fn effective_path_prefers_the_request_then_the_claim() {
         let req = HashMap::from([("PATH".to_string(), "/req".to_string())]);
-        let claim = vec![("PATH".to_string(), "/claim".to_string())];
+        let claim = vec![("PATH", Cow::from("/claim"))];
         assert_eq!(effective_path(&req, &claim), Some("/req"));
         assert_eq!(effective_path(&HashMap::new(), &claim), Some("/claim"));
         assert!(effective_path(&HashMap::new(), &[]).is_some_and(|p| p.contains("/usr/bin")));
