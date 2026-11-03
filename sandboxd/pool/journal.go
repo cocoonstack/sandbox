@@ -5,6 +5,7 @@ import (
 	"encoding/json/v2"
 	"errors"
 	"os"
+	"slices"
 	"sync"
 )
 
@@ -17,6 +18,7 @@ type journal struct {
 	path string
 	f    *os.File
 	size int64
+	torn bool
 }
 
 func newJournal(path string) (*journal, error) {
@@ -49,8 +51,14 @@ func (j *journal) append(v any) error {
 	if j.size+int64(len(line)) > journalMaxBytes {
 		rotateErr = j.rotate()
 	}
+	if j.torn && j.size > 0 {
+		line = slices.Insert(line, 0, '\n')
+	}
 	n, err := j.f.Write(line)
 	j.size += int64(n)
+	if n > 0 {
+		j.torn = line[n-1] != '\n'
+	}
 	return errors.Join(rotateErr, err)
 }
 
