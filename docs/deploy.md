@@ -647,6 +647,7 @@ After=network-online.target
 [Service]
 ExecStart=/usr/local/bin/sandboxd -config /etc/sandboxd/config.json
 Restart=on-failure
+RestartSec=5s
 KillMode=process
 Environment=SANDBOXD_LOG_LEVEL=info
 
