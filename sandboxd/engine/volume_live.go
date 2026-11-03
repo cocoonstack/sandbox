@@ -64,8 +64,6 @@ func (e *Engine) MountLiveVolume(ctx context.Context, vsockSocket, name, mount s
 
 // DetachVolume unmounts and detaches a guest volume; true means a writable mount closed cleanly.
 func (e *Engine) DetachVolume(ctx context.Context, vmName, vsockSocket, name, mount string) (bool, error) {
-	ctx, cancel := context.WithTimeout(ctx, VolumeMutationTimeout)
-	defer cancel()
 	device, found, err := e.findVolumeDevice(ctx, vsockSocket, name, map[string]bool{})
 	if err != nil {
 		return false, err

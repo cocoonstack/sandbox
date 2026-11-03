@@ -304,9 +304,11 @@ func (m *Manager) detachVolumeRun(ctx context.Context, sb *types.Sandbox, run *v
 	if err != nil {
 		return err
 	}
-	cleanRW, err := m.eng.DetachVolume(ctx, sb.VMName, sb.VsockSocket, v.Name, v.Mount)
+	detachCtx, cancel := context.WithTimeout(ctx, engine.VolumeMutationTimeout)
+	defer cancel()
+	cleanRW, err := m.eng.DetachVolume(detachCtx, sb.VMName, sb.VsockSocket, v.Name, v.Mount)
 	if err != nil {
-		return fmt.Errorf("detach volume %q: %w", v.Name, err)
+		return fmt.Errorf("detach volume %q: %w", v.Name, withCtxErr(detachCtx, err))
 	}
 	if err = m.checkVolumeRun(ctx, sb, run); err != nil {
 		return err

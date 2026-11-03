@@ -210,7 +210,7 @@ func (m *Manager) applyVolume(ctx context.Context, sb *types.Sandbox, volume res
 		}
 	}
 	if err := m.eng.DiskAttach(ctx, sb.VMName, volume.disk); err != nil {
-		return fmt.Errorf("attach volume %q: %w", volume.applied.Name, err)
+		return fmt.Errorf("attach volume %q: %w", volume.applied.Name, withCtxErr(ctx, err))
 	}
 	if attachOnly {
 		return nil
@@ -223,7 +223,7 @@ func (m *Manager) applyVolume(ctx context.Context, sb *types.Sandbox, volume res
 		mount = m.eng.MountLiveVolume
 	}
 	if err := mount(ctx, sb.VsockSocket, volume.applied.Name, volume.applied.Mount, volume.disk.RW); err != nil {
-		return fmt.Errorf("setup volume %q: %w", volume.applied.Name, err)
+		return fmt.Errorf("setup volume %q: %w", volume.applied.Name, withCtxErr(ctx, err))
 	}
 	return nil
 }
@@ -391,4 +391,11 @@ func volumeDirty(path string) bool {
 
 func volumeDirtyPath(path string) string {
 	return path + volumeDirtySuffix
+}
+
+func withCtxErr(ctx context.Context, err error) error {
+	if ctxErr := ctx.Err(); ctxErr != nil && !errors.Is(err, ctxErr) {
+		return fmt.Errorf("%w: %w", ctxErr, err)
+	}
+	return err
 }

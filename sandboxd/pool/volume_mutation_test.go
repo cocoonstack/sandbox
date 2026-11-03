@@ -439,6 +439,35 @@ func TestLiveVolumeCanceledRequestRetainsIntent(t *testing.T) {
 	}
 }
 
+func TestLiveVolumeCancelHiddenByTheEngineStillReadsAsCanceled(t *testing.T) {
+	eng := newFakeEngine()
+	m := newVolumeManager(t, eng, liveCatalog(t))
+	sb := mustClaim(t, m, testKey)
+	killed := errors.New("signal: killed")
+	cancelOn := func(op string) context.Context {
+		ctx, cancel := context.WithCancel(t.Context())
+		eng.liveVolumeHook = func(got string) error {
+			if got != op {
+				return nil
+			}
+			cancel()
+			return killed
+		}
+		return ctx
+	}
+
+	if _, err := m.SetVolumes(cancelOn("attach"), sb.ID, sb.Tenant, []types.Volume{{Name: "data"}}); !errors.Is(err, context.Canceled) {
+		t.Errorf("attach the engine killed on cancel: %v, want context.Canceled", err)
+	}
+	eng.liveVolumeHook = nil
+	if _, err := m.SetVolumes(t.Context(), sb.ID, sb.Tenant, []types.Volume{{Name: "data"}}); err != nil {
+		t.Fatalf("attach: %v", err)
+	}
+	if _, err := m.SetVolumes(cancelOn("detach"), sb.ID, sb.Tenant, nil); !errors.Is(err, context.Canceled) {
+		t.Errorf("detach the engine killed on cancel: %v, want context.Canceled", err)
+	}
+}
+
 func TestLiveVolumeAdmissionAndState(t *testing.T) {
 	for _, state := range []string{"paused", "failed", "archived", "archive policy", "dirty", "writer"} {
 		t.Run(state, func(t *testing.T) {
@@ -864,6 +893,29 @@ func TestLiveAttachBoundsWholeDeviceOperation(t *testing.T) {
 	})
 }
 
+func TestLiveDetachTimeoutHiddenByTheEngineReadsAsDeadline(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		base := newFakeEngine()
+		m := newVolumeManager(t, base, liveCatalog(t))
+		sb := mustClaim(t, m, testKey)
+		if _, err := m.SetVolumes(t.Context(), sb.ID, sb.Tenant, []types.Volume{{Name: "data"}}); err != nil {
+			t.Fatalf("attach: %v", err)
+		}
+		eng := &stalledDetachEngine{fakeEngine: base, deadlines: make(chan time.Time, 1)}
+		m.eng = eng
+		start := time.Now()
+
+		_, err := m.SetVolumes(t.Context(), sb.ID, sb.Tenant, nil)
+
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Errorf("detach past its budget: %v, want context.DeadlineExceeded", err)
+		}
+		if deadline := <-eng.deadlines; !deadline.Equal(start.Add(engine.VolumeMutationTimeout)) {
+			t.Errorf("live detach deadline=%v, want %v", deadline, start.Add(engine.VolumeMutationTimeout))
+		}
+	})
+}
+
 func TestLivenessRefusesAdmittedVolumeRun(t *testing.T) {
 	eng := newFakeEngine()
 	m := newVolumeManager(t, eng, liveCatalog(t))
@@ -924,6 +976,18 @@ func (e *deadlineVolumeEngine) DiskAttach(ctx context.Context, vmName string, sp
 	deadline, _ := ctx.Deadline()
 	e.deadlines <- deadline
 	return e.fakeEngine.DiskAttach(ctx, vmName, spec)
+}
+
+type stalledDetachEngine struct {
+	*fakeEngine
+	deadlines chan time.Time
+}
+
+func (e *stalledDetachEngine) DetachVolume(ctx context.Context, _, _, _, _ string) (bool, error) {
+	deadline, _ := ctx.Deadline()
+	e.deadlines <- deadline
+	<-ctx.Done()
+	return false, errors.New("signal: killed")
 }
 
 func liveCatalog(t *testing.T) []config.VolumeSpec {
