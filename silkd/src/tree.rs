@@ -1,6 +1,4 @@
-//! Whole-tree transfer through the guest tar binary: `fs.push` extracts a client
-//! tar stream into a directory, `fs.pull` streams a path back as a tar. Push is
-//! network-failure atomic: it stages inside `dest`, then merges by rename.
+//! Whole-tree transfer through the guest tar; `fs.push` stages inside `dest` and merges by rename, so a stream failure leaves `dest` unchanged.
 
 use std::io;
 use std::os::fd::OwnedFd;

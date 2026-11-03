@@ -176,7 +176,7 @@ pub fn set_winsize(fd: RawFd, cols: u16, rows: u16) -> std::io::Result<()> {
 pub fn adopt_controlling_tty(cmd: &mut Command) {
     // SAFETY: make_controlling_tty runs only async-signal-safe syscalls, the contract for a post-fork pre_exec hook.
     unsafe {
-        cmd.pre_exec(|| make_controlling_tty());
+        cmd.pre_exec(make_controlling_tty);
     }
 }
 
@@ -200,12 +200,8 @@ pub async fn wait_code(child: &mut tokio::process::Child) -> i32 {
 }
 
 /// Makes the calling process a session leader and adopts fd 0 as its controlling terminal.
-///
-/// # Safety
-/// Only async-signal-safe syscalls; valid in a post-fork child.
-unsafe fn make_controlling_tty() -> std::io::Result<()> {
-    // SAFETY: setsid and ioctl are async-signal-safe and take no pointers; the
-    // caller guarantees a post-fork child (see # Safety).
+fn make_controlling_tty() -> std::io::Result<()> {
+    // SAFETY: setsid and ioctl take no pointers, so no memory precondition applies.
     unsafe {
         if libc::setsid() < 0 {
             return Err(std::io::Error::last_os_error());

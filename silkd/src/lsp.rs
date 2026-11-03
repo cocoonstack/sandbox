@@ -1,6 +1,4 @@
-//! LSP broker: silkd spawns the language server named by
-//! `/etc/silkd/lsp.d/<language>` and pipes JSON-RPC bytes, never parsing LSP
-//! semantics. A session is single-shot: the stream ending reaps the server.
+//! LSP broker: spawns the server `/etc/silkd/lsp.d/<language>` names and pipes JSON-RPC bytes; the stream ending reaps it.
 
 use std::borrow::Cow;
 use std::collections::HashMap;

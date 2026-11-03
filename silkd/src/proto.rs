@@ -1,8 +1,4 @@
-//! Wire protocol: newline-delimited JSON frames, RPCs back to back on one
-//! connection. A request frame opens an RPC; stdin/data frames from the
-//! client carry its input. Server frames stream until a terminal one
-//! (exit / done / error). Binary payloads ride as base64 (`data` fields),
-//! matching Go's default []byte JSON encoding for the SDK side.
+//! Wire protocol: newline-delimited JSON frames, RPCs back to back on one connection, binary payloads as base64.
 
 use std::borrow::Cow;
 use std::collections::HashMap;

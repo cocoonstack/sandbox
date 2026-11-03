@@ -55,7 +55,6 @@ pub fn parse(cmdline: &str) -> Result<BootCfg<'_>, String> {
                 cfg.layers = val.split(',').filter(|s| !s.is_empty()).collect();
             }
             "cocoon.cow" => cfg.cow = val,
-            // a junk value keeps the default, matching the old initramfs hook.
             "cocoon.timeout" => {
                 if let Ok(secs) = val.parse::<u64>() {
                     cfg.timeout = Duration::from_secs(secs.min(MAX_TIMEOUT_SECS));
