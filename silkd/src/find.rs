@@ -1,6 +1,7 @@
 //! Search verbs: a pattern travels as data, never shell-quoted through exec.
 
 use std::io::Read;
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -286,7 +287,10 @@ where
 
 /// Reads a file into `body` through one handle, stopping at FIND_MAX_FILE; `Ok(false)` when the file is above the bound.
 fn read_bounded(path: &Path, body: &mut String) -> std::io::Result<bool> {
-    let file = std::fs::File::open(path)?;
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NONBLOCK)
+        .open(path)?;
     let len = file.metadata()?.len();
     if len > FIND_MAX_FILE {
         return Ok(false);
@@ -427,6 +431,26 @@ mod tests {
         let completed =
             tokio::task::block_in_place(|| walk.run(dir.path().to_path_buf())).expect("walk");
         assert!(!completed);
+    }
+
+    #[test]
+    fn read_bounded_does_not_wait_on_a_fifo_with_an_idle_writer() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let fifo = dir.path().join("fifo");
+        nix::unistd::mkfifo(&fifo, nix::sys::stat::Mode::S_IRWXU).expect("mkfifo");
+        let _writer = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&fifo)
+            .expect("open writer");
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(read_bounded(&fifo, &mut String::new()).is_err());
+        });
+        let failed = rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("read_bounded must not wait for data");
+        assert!(failed);
     }
 
     #[tokio::test(flavor = "multi_thread")]
