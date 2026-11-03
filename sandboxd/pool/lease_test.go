@@ -302,6 +302,48 @@ func TestLeaseAdoptionDuringUnfenceDropsTheClaimWithoutServingIt(t *testing.T) {
 	})
 }
 
+func TestLeaseANodeLiftedAfterAnOutageAdoptsOnlyOnceEveryOwnerCouldRenew(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		c := newReplicaCluster(t)
+		a, b := c.node(t, "a", t.TempDir(), keepAnHour), c.node(t, "b", t.TempDir(), keepAnHour)
+		sb := mustClaim(t, a, testKey)
+		vm := lockedVMName(sb)
+		replicateNow(t, a, sb)
+		a.tripFence()
+		b.tripFence()
+		c.expire("a")
+		c.expire("b")
+
+		if adopted, err := b.AdoptArchived(t.Context(), sb.ID, sb.Token); err != nil || adopted {
+			t.Fatalf("adoption by a fenced node: %v %v, want refused", adopted, err)
+		}
+		c.renew(t, "b")
+		b.unfence(t.Context(), time.Now())
+		if b.isFenced() {
+			t.Fatal("the node stayed fenced after its renewal")
+		}
+		if adopted, err := b.AdoptArchived(t.Context(), sb.ID, sb.Token); err != nil || adopted {
+			t.Fatalf("adoption right after the lift: %v %v, want refused", adopted, err)
+		}
+		c.renew(t, "a")
+		a.unfence(t.Context(), time.Now())
+		synctest.Wait()
+		if _, held := a.byID(sb.ID); !held || a.eng.(*fakeEngine).removed(vm) {
+			t.Fatalf("the healthy owner lost its claim: held=%v VM removed=%v", held, a.eng.(*fakeEngine).removed(vm))
+		}
+
+		c.expire("a")
+		time.Sleep(adoptGrace - time.Millisecond)
+		if adopted, err := b.AdoptArchived(t.Context(), sb.ID, sb.Token); err != nil || adopted {
+			t.Fatalf("adoption inside the grace: %v %v, want refused", adopted, err)
+		}
+		time.Sleep(time.Millisecond)
+		if adopted, err := b.AdoptArchived(t.Context(), sb.ID, sb.Token); err != nil || !adopted {
+			t.Errorf("adoption once the grace passed: %v %v, want adopted", adopted, err)
+		}
+	})
+}
+
 func TestLeaseFencedNodeDoesNotAnswerAsOwnerOfReplicatedClaims(t *testing.T) {
 	c := newReplicaCluster(t)
 	a := c.node(t, "a", t.TempDir(), keepAnHour)

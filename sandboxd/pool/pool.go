@@ -57,6 +57,7 @@ const (
 	leaseTTL    = 15 * time.Second
 	leaseRenew  = 5 * time.Second
 	leaseMargin = 3 * time.Second
+	adoptGrace  = leaseRenew + leaseMargin
 	// One failed boot is ordinary; only an unbroken run predicts the next failure
 	refillFailStreak  = 8
 	refillBackoffBase = 250 * time.Millisecond

@@ -860,6 +860,7 @@ func TestAReplicaRowWithNoClaimLeftStaysAdoptable(t *testing.T) {
 	sb := mustClaim(t, a, testKey)
 	replicateNow(t, a, sb)
 	restarted := restartWithoutVM(t, c, a, sb, keepAnHour)
+	restarted.liftFence()
 	restarted.sweepOrphanArchives(t.Context())
 	if adopted, err := restarted.AdoptArchived(t.Context(), sb.ID, sb.Token); err != nil || !adopted {
 		t.Errorf("adopt inside retention: %t %v", adopted, err)

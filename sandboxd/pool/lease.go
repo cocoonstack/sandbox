@@ -20,6 +20,7 @@ import (
 type fenceState struct {
 	ch     chan struct{}
 	fenced bool
+	lifted time.Time
 }
 
 // CloseOnFence closes c when fenced closes; stop ends the watch.
@@ -70,6 +71,11 @@ func (m *Manager) renewLease(ctx context.Context, fence *time.Timer) {
 
 func (m *Manager) isFenced() bool {
 	return m.fence.Load().fenced
+}
+
+func (m *Manager) adoptFenced() bool {
+	st := m.fence.Load()
+	return st.fenced || time.Since(st.lifted) < adoptGrace
 }
 
 func (m *Manager) trip(ctx context.Context) {
@@ -129,7 +135,7 @@ func (m *Manager) unfence(ctx context.Context, start time.Time) {
 
 // lift replaces the fenced state this renewal saw, and trips again when the window closed before the lift landed.
 func (m *Manager) lift(ctx context.Context, fenced *fenceState, start time.Time) {
-	if !m.fence.CompareAndSwap(fenced, &fenceState{ch: make(chan struct{})}) {
+	if !m.fence.CompareAndSwap(fenced, &fenceState{ch: make(chan struct{}), lifted: time.Now()}) {
 		return
 	}
 	if time.Since(start) > leaseTTL-leaseMargin {

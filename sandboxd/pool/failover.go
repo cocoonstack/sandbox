@@ -32,12 +32,15 @@ func (m *Manager) adoptArchived(ctx context.Context, id, token string) (bool, er
 	m.mu.Lock()
 	draining := m.draining
 	_, held := m.authed(id, token)
+	fenced := m.adoptFenced()
 	m.mu.Unlock()
 	switch {
 	case draining:
 		return false, nil
 	case held:
 		return true, nil
+	case fenced:
+		return false, nil
 	}
 	ctx = context.WithoutCancel(ctx)
 	rec, ok, err := m.archives.Get(ctx, id)

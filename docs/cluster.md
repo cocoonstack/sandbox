@@ -187,7 +187,10 @@ replication rounds write it, so the claim path is unchanged.
   answers 404. A tombstone is never adopted. The next exec or file call wakes
   the claim from the store as usual. An owner with a live lease answers for
   itself, and a node that tries to take its row is refused with a 404.
-  A draining node never adopts. Adoption checks no tenant `max_claims` or node
+  A draining node never adopts, nor does a fenced node or one that lifted its
+  fence less than 8 seconds ago (one renewal interval plus one registry query),
+  so after a registry outage every healthy owner renews before a peer can take
+  its rows. Adoption checks no tenant `max_claims` or node
   `max_claims`: the claim already exists, and a refusal could strand it.
 - **Fencing.** Take, consume and delete are compare-and-sets on the row's
   epoch, and so is the write of a replica round and of the archive of a claim
