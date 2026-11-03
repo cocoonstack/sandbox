@@ -167,7 +167,7 @@ the intersection of the two.
 | `archive_delete_after_seconds` | 0 (keep) | purge an archived claim's store checkpoint this long after it was archived; the claim is then gone for good. On S3, chunks and manifests remain until [offline reclamation](#reclaiming-s3-storage). On archive this retention window replaces the live claim deadline; 0 clears the deadline so the archive is kept forever. An [evacuation](cluster.md#evacuating-a-node) keeps a longer live deadline, and a claim of a pool without an archive tier, whose `on_expire` is not `archive`, keeps its deadline. Same node-wide/per-pool split |
 | `archive_failover` | false | let another node adopt this node's archived claims once its node lease expires, and the running claims of pools with `replicate_seconds`: each archive and replication round also writes a row (token SHA-256, owner, epoch, checkpoint id, retention deadline, and the claim record with its env, `guest: false` values included, in plaintext) to the shared PostgreSQL, and a `Lookup` that reaches any node takes the claim over there (see [archived claims across node loss](cluster.md#archived-claims-across-node-loss)). Requires `meta_store` with a `cell` (rows are scoped by it, so meshes sharing one database never adopt from each other), a `checkpoint_store` of kind `s3` and a `mesh`, all checked at config load. The node also renews a lease row every 5 s (see [node lease](cluster.md#node-lease)). With the meta store down, archives, wakes, releases and env writes of archived claims, and env writes and renews of hibernated replicated claims, fail and retry, and replicated claims stop being served once the lease is overdue (see [running claims](cluster.md#running-claims-across-node-loss)); other running claims never touch it. Restart only |
 | `mesh` | unset | join a cluster ([Clusters](cluster.md)); unset = single node |
-| `pools[]` | — | warm pools, keyed by `(template, net, size)`. `warm` defaults to 4 only when both `warm` and `warm_max` are omitted; an explicit `warm: 0` is kept, so `warm: 0` under a `warm_max` starts the pool empty and grows it on demand, and `warm: 0` alone registers the key with no warm VMs (`PUT /v1/pools` never defaults `warm`); `net` is `none` or `egress`; `size` is a tier, below. Retune online without a restart via [`PUT /v1/pools`](sandboxd-api.md#put-v1pools) — omitted pools drain, and their goldens are deleted once they are idle (`warm: 0` keeps the golden). This is the **first-boot seed**: once a node takes a `PUT /v1/pools`, the applied set persists to `<data_dir>/pools.json` and overrides this section on every later boot (a startup log notes it); delete `pools.json` to return to config-owned pools. With a `meta_store` `cell`, the cell's set overrides it instead (see [shared pool set](#shared-pool-set)). Egress stays config-owned either way. A template re-pulled or re-imported under the same ref is picked up within a minute: the pool rebuilds its golden and replaces its warm VMs. See [state ownership](cluster.md#state-ownership) |
+| `pools[]` | — | warm pools, keyed by `(template, net, size)`. `warm` defaults to 4 only when both `warm` and `warm_max` are omitted; an explicit `warm: 0` is kept, so `warm: 0` under a `warm_max` starts the pool empty and grows it on demand, and `warm: 0` alone registers the key with no warm VMs (`PUT /v1/pools` never defaults `warm`); `net` is `none` (the default) or `egress`; `size` is a tier, below (default `small`). Retune online without a restart via [`PUT /v1/pools`](sandboxd-api.md#put-v1pools) — omitted pools drain, and their goldens are deleted once they are idle (`warm: 0` keeps the golden). This is the **first-boot seed**: once a node takes a `PUT /v1/pools`, the applied set persists to `<data_dir>/pools.json` and overrides this section on every later boot (a startup log notes it); delete `pools.json` to return to config-owned pools. With a `meta_store` `cell`, the cell's set overrides it instead (see [shared pool set](#shared-pool-set)). Egress stays config-owned either way. A template re-pulled or re-imported under the same ref is picked up within a minute: the pool rebuilds its golden and replaces its warm VMs. See [state ownership](cluster.md#state-ownership) |
 
 Size tiers (free-form CPU/memory is deliberately not accepted — it would
 fragment the warm pools):
@@ -257,7 +257,7 @@ hibernate of its claims runs a guest `sync` right before the pause, and a reader
 shows the disk as of that `sync`: a write the guest makes in the instant between
 the `sync` and the pause is visible only after a wake. A hibernate whose `sync`
 fails or times out is marked not reader-safe, as is any sleep that began before
-the pool had `reader`, and its reads wake the claim as without the feature.
+the pool had `reader`, as is a claim adopted from a replica, and its reads wake the claim as without the feature.
 
 ### Dataset volumes
 
@@ -596,6 +596,7 @@ promoted templates, and preview URLs are stamped with the tenant name;
 sandbox and checkpoint listings filter to the caller's tenant, and a tenant
 can delete only its own checkpoints and templates (root sees everything).
 Operator surfaces stay root-only — per-id sandbox reads and stats,
+`PUT/DELETE /v1/volumes/{name}`, `PUT /v1/sandboxes/{id}/instance-metadata`,
 `GET /v1/checkpoints/{id}/blob`, `GET /v1/info`, `PUT /v1/pools`,
 `/v1/tenants`, `/v1/config/reload`, `POST/DELETE /v1/drain`, `/metrics`, `GET /v1/usage`; a
 tenant token there is authenticated but not authorized, so it answers 403 (a
@@ -625,7 +626,8 @@ it; older cocoons fall back to forced removal. Any golden no pool uses is
 deleted. Then the refill loop builds one golden snapshot per pool (a one-time
 cold boot + snapshot export, seconds on bare metal, plus the pool's warmup and
 the wait for the guest's systemd to finish starting) and keeps each pool topped
-up with claim-ready clones.
+up with claim-ready clones. Each golden's save and export run one at a time, so
+a node with many or large pools takes the sum of their memory writes to come up.
 `GET /v1/info` shows `"golden": true` and `warm` at target when the node is
 ready to serve warm claims.
 A golden left on disk is adopted on start when its stamp matches the pool's
@@ -674,6 +676,11 @@ VMM that cocoon could not move into its own scope, and any `cocoon` call still
 in flight, outlive the stop instead of dying with the service's cgroup. Claimed
 sandboxes are reaped when their TTL expires (default 5m, capped at 24h).
 
+A snapshot save, hibernate or export has 15 minutes, plus 3 to exit once
+canceled, and at most 8 saves and hibernates run at once on a node. A call that
+dials a guest gives up after 10 s, since a paused or wedged guest never answers,
+and gets `502`.
+
 ### Dead VMMs and host restarts
 
 With `cocoond_socket` set, the node follows `cocoon daemon`'s event stream
@@ -703,8 +710,10 @@ synced survive, memory and processes do not. The claim's guest env entries
 are written again and its egress proxy is re-armed; the instance-metadata
 document is not kept, so re-send it when `restarts` moves. A failed claim keeps its VM and
 disk until release or lease end (it is destroyed at expiry even with
-`on_expire: archive`); `POST /v1/sandboxes/{id}/wake` cold-boots it and resets
-the restart budget. After a host restart the same rule applies to every
+`on_expire: archive`). `POST /v1/sandboxes/{id}/wake` cold-boots it and resets
+the restart budget, except an egress-lane claim, a claim holding volumes or one
+whose VM record is gone: those answer 409 and stay failed until release or lease
+end. After a host restart the same rule applies to every
 running claim whose VM record survived, so hibernated, archived and running
 claims all come back; with `sync_claims` off a power loss can still lose the
 journal itself. Cocoon keeps each VM's copy-on-write disk under its `run_dir`,
@@ -964,6 +973,9 @@ Effects on what already runs:
   exit and `sync_claims` to the next commit. A new `archive_delete_after_seconds`
   sets the deadline of claims archived after the reload; a deadline already set
   stays.
+- **Idle defaults**: a new `idle_hibernate_seconds` or `archive_after_seconds`
+  applies to the node's unpooled claims at the next 5 s sweep, those already
+  running included, so a lower value can hibernate many at once.
 - **Checkpoint TTL**: `checkpoint_ttl_hours` applies at the next hourly sweep, so
   a lower value deletes what is now past it. It is part of the cluster digest:
   nodes report a config mismatch until every node has reloaded the same value.
