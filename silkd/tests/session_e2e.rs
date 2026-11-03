@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 use silkd::server::State;
 use tokio::task::JoinHandle;
 
-use common::{one, stdout_body, type_of};
+use common::{assert_error, one, stdout_body, type_of};
 
 async fn create(state: &Arc<State>) -> String {
     create_with(state, json!({"op":"session_create"})).await
@@ -141,8 +141,7 @@ async fn session_list_and_rm() {
     assert_eq!(type_of(&rm[0]), "done");
 
     let gone = sh(&state, &id, &["true"]).await;
-    assert_eq!(type_of(&gone[0]), "error");
-    assert_eq!(gone[0]["kind"], "not_found");
+    assert_error(&gone[0], "not_found");
 }
 
 #[tokio::test]
@@ -253,8 +252,7 @@ async fn empty_argv_in_session_is_a_bad_request() {
         &json!({"op":"exec","argv":[],"session":id}).to_string(),
     )
     .await;
-    assert_eq!(type_of(&f[0]), "error");
-    assert_eq!(f[0]["kind"], "bad_request");
+    assert_error(&f[0], "bad_request");
 }
 
 #[tokio::test]
@@ -266,16 +264,14 @@ async fn detach_with_session_is_a_bad_request() {
         &json!({"op":"exec","argv":["true"],"session":id,"detach":true}).to_string(),
     )
     .await;
-    assert_eq!(type_of(&f[0]), "error");
-    assert_eq!(f[0]["kind"], "bad_request");
+    assert_error(&f[0], "bad_request");
 }
 
 #[tokio::test]
 async fn exec_in_unknown_session_is_not_found() {
     let state = Arc::new(State::new());
     let f = one(&state, r#"{"op":"exec","argv":["true"],"session":"nope"}"#).await;
-    assert_eq!(type_of(&f[0]), "error");
-    assert_eq!(f[0]["kind"], "not_found");
+    assert_error(&f[0], "not_found");
 }
 
 #[tokio::test]

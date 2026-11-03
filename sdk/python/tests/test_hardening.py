@@ -56,21 +56,21 @@ def test_send_on_a_dead_socket_raises_a_typed_error():
         conn.close()
 
 
-def test_watcher_propagates_silkd_error():
-    client_sock, guest_sock = socket.socketpair()
+def test_watcher_propagates_silkd_error(conn_pair):
+    conn, guest_sock = conn_pair
     guest_sock.sendall(json.dumps({"type": "error", "kind": "not_found", "message": "gone"}).encode() + b"\n")
     guest_sock.close()
-    watcher = Watcher(Conn(client_sock, client_sock.makefile("rb")))
+    watcher = Watcher(conn)
     with pytest.raises(SilkdError):
         for _ in watcher:
             pass
 
 
-def test_watcher_ends_cleanly_on_garbage_frame():
-    client_sock, guest_sock = socket.socketpair()
+def test_watcher_ends_cleanly_on_garbage_frame(conn_pair):
+    conn, guest_sock = conn_pair
     guest_sock.sendall(b"not json at all\n")
     guest_sock.close()
-    watcher = Watcher(Conn(client_sock, client_sock.makefile("rb")))
+    watcher = Watcher(conn)
     assert list(watcher) == []
 
 
@@ -103,19 +103,19 @@ def test_empty_claim_reply_is_an_api_error(spawn_node):
         Client(addr).new("rt:24.04")
 
 
-def test_pty_read_returns_empty_after_the_exit_frame():
-    client_sock, guest_sock = socket.socketpair()
+def test_pty_read_returns_empty_after_the_exit_frame(conn_pair):
+    conn, guest_sock = conn_pair
     guest_sock.sendall(json.dumps({"type": "exit", "code": 3}).encode() + b"\n")
     guest_sock.close()
-    pty = Pty(sandbox_at("127.0.0.1:1"), Conn(client_sock, client_sock.makefile("rb")), 1)
+    pty = Pty(sandbox_at("127.0.0.1:1"), conn, 1)
     assert pty.read() == b""
     assert pty.exit_code == 3
     assert pty.read() == b""
 
 
-def test_pty_write_chunks_a_large_buffer():
-    client_sock, guest_sock = socket.socketpair()
-    pty = Pty(sandbox_at("127.0.0.1:1"), Conn(client_sock, client_sock.makefile("rb")), 1)
+def test_pty_write_chunks_a_large_buffer(conn_pair):
+    conn, guest_sock = conn_pair
+    pty = Pty(sandbox_at("127.0.0.1:1"), conn, 1)
     frames = []
 
     def drain():
@@ -153,10 +153,10 @@ def test_session_and_lsp_close_twice(monkeypatch):
         Session(sb, "s1").close()
 
 
-def test_watcher_error_stays_none_after_close():
-    client_sock, guest_sock = socket.socketpair()
+def test_watcher_error_stays_none_after_close(conn_pair):
+    conn, guest_sock = conn_pair
     guest_sock.sendall(json.dumps({"type": "ready"}).encode() + b"\n")
-    watcher = Watcher(Conn(client_sock, client_sock.makefile("rb")))
+    watcher = Watcher(conn)
     events = []
     consumer = threading.Thread(target=lambda: events.extend(watcher), daemon=True)
     consumer.start()
@@ -202,10 +202,18 @@ def test_dial_timeout_bounds_the_whole_upgrade() -> None:
     threading.Thread(target=slow_headers, daemon=True).start()
     addr = f"127.0.0.1:{server.getsockname()[1]}"
     started = time.monotonic()
-    with pytest.raises(SandboxTimeout), dial_agent(addr, "sb_x", "tok", timeout=0.2) as conn:
+    with server, pytest.raises(SandboxTimeout), dial_agent(addr, "sb_x", "tok", timeout=0.2) as conn:
         conn.send("info")
         conn.recv()
     assert time.monotonic() - started < 0.6, (
         "each header arrived under the per-read timeout; only a whole-dial budget stops this"
     )
-    server.close()
+
+
+@pytest.fixture
+def conn_pair():
+    client_sock, guest_sock = socket.socketpair()
+    conn = Conn(client_sock, client_sock.makefile("rb"))
+    yield conn, guest_sock
+    conn.close()
+    guest_sock.close()

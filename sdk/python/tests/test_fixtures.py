@@ -1,7 +1,4 @@
-"""Round-trips the shared protocol fixture corpus, the same drift guard the
-Rust and Go implementations run: every request fixture must re-encode
-byte-for-byte (up to key order) through frames.encode_request, and every
-response fixture must decode."""
+"""Round-trips the protocol fixture corpus, the same drift guard the Rust and Go implementations run."""
 
 import base64
 import json

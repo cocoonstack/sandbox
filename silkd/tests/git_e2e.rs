@@ -5,9 +5,9 @@ mod common;
 
 use serde_json::json;
 
-use common::{exchange, type_of};
+use common::{assert_error, exchange, request, type_of};
 
-fn git(dir: &std::path::Path, args: &[&str]) {
+fn git(dir: &std::path::Path, args: &[&str]) -> String {
     let out = std::process::Command::new("git")
         .arg("-C")
         .arg(dir)
@@ -23,6 +23,7 @@ fn git(dir: &std::path::Path, args: &[&str]) {
         "git {args:?} failed: {}",
         String::from_utf8_lossy(&out.stderr)
     );
+    String::from_utf8_lossy(&out.stdout).into_owned()
 }
 
 fn init_repo() -> tempfile::TempDir {
@@ -49,7 +50,7 @@ async fn add_commit_status_reports_structured_state() {
     let p = repo.path().to_str().unwrap();
     std::fs::write(repo.path().join("a.txt"), "hello\n").unwrap();
 
-    let st = exchange(&[json!({"op":"git_status","path":p}).to_string()]).await;
+    let st = request(json!({"op":"git_status","path":p})).await;
     assert_eq!(type_of(&st[0]), "git_status_result");
     assert_eq!(st[0]["branch"], "main");
     let files = st[0]["files"].as_array().unwrap();
@@ -59,17 +60,16 @@ async fn add_commit_status_reports_structured_state() {
             .any(|f| f["path"] == "a.txt" && f["staged"] == "?")
     );
 
-    let add = exchange(&[json!({"op":"git_add","path":p,"files":["a.txt"]}).to_string()]).await;
+    let add = request(json!({"op":"git_add","path":p,"files":["a.txt"]})).await;
     assert_eq!(type_of(add.last().unwrap()), "done");
-    let commit = exchange(&[json!({
+    let commit = request(json!({
         "op":"git_commit","path":p,"message":"first","author":"Dev <dev@example.com>"
-    })
-    .to_string()])
+    }))
     .await;
     assert_eq!(type_of(&commit[0]), "git_commit_result");
     assert_eq!(commit[0]["hash"].as_str().unwrap().len(), 40);
 
-    let st2 = exchange(&[json!({"op":"git_status","path":p}).to_string()]).await;
+    let st2 = request(json!({"op":"git_status","path":p})).await;
     assert!(
         st2[0]["files"].as_array().unwrap().is_empty(),
         "expected clean: {st2:?}"
@@ -90,7 +90,7 @@ async fn branch_create_list_checkout() {
     .await;
     assert_eq!(type_of(created.last().unwrap()), "done");
 
-    let list = exchange(&[json!({"op":"git_branch","path":p,"action":"list"}).to_string()]).await;
+    let list = request(json!({"op":"git_branch","path":p,"action":"list"})).await;
     assert_eq!(type_of(&list[0]), "git_branches");
     assert_eq!(list[0]["current"], "main");
     let branches: Vec<&str> = list[0]["branches"]
@@ -112,10 +112,9 @@ async fn branch_create_list_checkout() {
 async fn commit_failure_surfaces_git_error() {
     let repo = init_repo();
     let p = repo.path().to_str().unwrap();
-    let frames = exchange(&[json!({
+    let frames = request(json!({
         "op":"git_commit","path":p,"message":"empty","author":"Dev <dev@example.com>"
-    })
-    .to_string()])
+    }))
     .await;
     assert_eq!(type_of(&frames[0]), "error");
     assert_eq!(frames[0]["kind"], "internal", "{frames:?}");
@@ -124,13 +123,11 @@ async fn commit_failure_surfaces_git_error() {
 #[tokio::test]
 async fn clone_lane_behavior() {
     silkd::net::override_egress_for_tests(Some(false));
-    let none = exchange(&[json!({
+    let none = request(json!({
         "op":"git_clone","url":"https://example.com/x.git","path":"/tmp/silkd-x"
-    })
-    .to_string()])
+    }))
     .await;
-    assert_eq!(type_of(&none[0]), "error");
-    assert_eq!(none[0]["kind"], "unimplemented");
+    assert_error(&none[0], "unimplemented");
     assert!(none[0]["message"].as_str().unwrap().contains("fs.push"));
 
     let src = init_repo();
@@ -140,10 +137,9 @@ async fn clone_lane_behavior() {
     let dst = tempfile::tempdir().unwrap();
     let target = dst.path().join("clone");
     silkd::net::override_egress_for_tests(Some(true));
-    let ok = exchange(&[json!({
+    let ok = request(json!({
         "op":"git_clone", "url": src.path().to_str().unwrap(), "path": target.to_str().unwrap()
-    })
-    .to_string()])
+    }))
     .await;
     silkd::net::override_egress_for_tests(None);
     assert_eq!(type_of(ok.last().unwrap()), "done", "clone failed: {ok:?}");
@@ -164,7 +160,7 @@ async fn status_handles_rename_and_spaces() {
     .unwrap();
     git(repo.path(), &["add", "-A"]);
 
-    let st = exchange(&[json!({"op":"git_status","path":p}).to_string()]).await;
+    let st = request(json!({"op":"git_status","path":p})).await;
     let files = st[0]["files"].as_array().unwrap();
     let paths: Vec<&str> = files.iter().map(|f| f["path"].as_str().unwrap()).collect();
     assert!(
@@ -172,7 +168,7 @@ async fn status_handles_rename_and_spaces() {
         "rename path with spaces mangled: {paths:?}"
     );
     assert!(
-        !paths.iter().any(|p| p.contains("R100")),
+        !paths.iter().any(|path| path.contains("R100")),
         "score leaked: {paths:?}"
     );
 }
@@ -182,26 +178,19 @@ async fn commit_works_without_preconfigured_identity() {
     let dir = init_repo();
     std::fs::write(dir.path().join("f"), "x").unwrap();
     let p = dir.path().to_str().unwrap();
-    let add = exchange(&[json!({"op":"git_add","path":p,"files":["f"]}).to_string()]).await;
+    let add = request(json!({"op":"git_add","path":p,"files":["f"]})).await;
     assert_eq!(type_of(add.last().unwrap()), "done");
-    let commit = exchange(&[json!({
+    let commit = request(json!({
         "op":"git_commit","path":p,"message":"m","author":"Dev <dev@example.com>"
-    })
-    .to_string()])
+    }))
     .await;
     assert_eq!(
         type_of(&commit[0]),
         "git_commit_result",
         "commit failed: {commit:?}"
     );
-    let log = std::process::Command::new("git")
-        .arg("-C")
-        .arg(dir.path())
-        .args(["log", "-1", "--format=%cn <%ce>"])
-        .output()
-        .unwrap();
     assert_eq!(
-        String::from_utf8_lossy(&log.stdout).trim(),
+        git(dir.path(), &["log", "-1", "--format=%cn <%ce>"]).trim(),
         "Dev <dev@example.com>",
         "the committer must come from the author, not the host's git config"
     );
@@ -215,9 +204,9 @@ async fn git_runs_as_the_repo_owner_under_root() {
     std::fs::write(repo.path().join("a.txt"), "hello\n").unwrap();
     chown_tree(repo.path(), 65534);
 
-    let st = exchange(&[json!({"op":"git_status","path":p}).to_string()]).await;
+    let st = request(json!({"op":"git_status","path":p})).await;
     assert_eq!(type_of(&st[0]), "git_status_result", "{st:?}");
-    let add = exchange(&[json!({"op":"git_add","path":p,"files":["a.txt"]}).to_string()]).await;
+    let add = request(json!({"op":"git_add","path":p,"files":["a.txt"]})).await;
     assert_eq!(type_of(add.last().unwrap()), "done", "{add:?}");
     let index = std::fs::metadata(repo.path().join(".git/index")).unwrap();
     assert_eq!(std::os::unix::fs::MetadataExt::uid(&index), 65534);

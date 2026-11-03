@@ -10,7 +10,7 @@ use std::process::Command;
 
 use serde_json::json;
 
-use common::{b64, data_frames, exchange, payload, type_of};
+use common::{assert_error, b64, data_frames, exchange, payload, request, type_of};
 
 fn sys_tar_create(dir: &Path) -> Vec<u8> {
     let out = Command::new("tar")
@@ -66,8 +66,7 @@ async fn pull_streams_a_tar_of_the_path() {
     std::fs::create_dir(&proj).unwrap();
     std::fs::write(proj.join("x.txt"), b"hello-pull").unwrap();
 
-    let frames =
-        exchange(&[json!({"op":"fs_pull","path":proj.to_str().unwrap()}).to_string()]).await;
+    let frames = request(json!({"op":"fs_pull","path":proj.to_str().unwrap()})).await;
     assert_eq!(
         type_of(frames.last().unwrap()),
         "done",
@@ -97,8 +96,7 @@ async fn push_then_pull_roundtrips_a_tree() {
     lines.extend(data_frames(&archive));
     assert_eq!(type_of(&exchange(&lines).await[0]), "done");
 
-    let pulled =
-        exchange(&[json!({"op":"fs_pull","path":dest.to_str().unwrap()}).to_string()]).await;
+    let pulled = request(json!({"op":"fs_pull","path":dest.to_str().unwrap()})).await;
     let out_archive = payload(&pulled, "data");
     let out = tempfile::tempdir().unwrap();
     sys_tar_extract(&out_archive, out.path());
@@ -130,8 +128,7 @@ async fn push_bad_archive_reports_tar_failure() {
         json!({"op":"data_end"}).to_string(),
     ])
     .await;
-    assert_eq!(type_of(frames.last().unwrap()), "error");
-    assert_eq!(frames.last().unwrap()["kind"], "internal");
+    assert_error(frames.last().unwrap(), "internal");
 }
 
 #[tokio::test]
@@ -159,8 +156,7 @@ async fn push_large_bad_archive_reports_tar_not_the_pipe() {
 async fn pull_missing_path_errors() {
     let dir = tempfile::tempdir().unwrap();
     let missing = dir.path().join("xyz");
-    let frames =
-        exchange(&[json!({"op":"fs_pull","path":missing.to_str().unwrap()}).to_string()]).await;
+    let frames = request(json!({"op":"fs_pull","path":missing.to_str().unwrap()})).await;
     assert_eq!(
         type_of(frames.last().unwrap()),
         "error",
@@ -171,7 +167,7 @@ async fn pull_missing_path_errors() {
 
 #[tokio::test]
 async fn pull_missing_parent_errors_not_found() {
-    let frames = exchange(&[json!({"op":"fs_pull","path":"/no/such/dir/xyz"}).to_string()]).await;
+    let frames = request(json!({"op":"fs_pull","path":"/no/such/dir/xyz"})).await;
     assert_eq!(
         type_of(frames.last().unwrap()),
         "error",
@@ -186,8 +182,7 @@ async fn pull_dangling_symlink_archives_the_link() {
     let link = src.path().join("dangling");
     symlink("/no/such/target", &link).unwrap();
 
-    let frames =
-        exchange(&[json!({"op":"fs_pull","path":link.to_str().unwrap()}).to_string()]).await;
+    let frames = request(json!({"op":"fs_pull","path":link.to_str().unwrap()})).await;
     assert_eq!(
         type_of(frames.last().unwrap()),
         "done",

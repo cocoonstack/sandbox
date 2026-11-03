@@ -2,7 +2,7 @@
 
 import threading
 import time
-from http.server import HTTPServer, ThreadingHTTPServer
+from http.server import ThreadingHTTPServer
 
 import pytest
 from conftest import FakeNode, sandbox_at, wait_until
@@ -31,16 +31,12 @@ class KeptNode(FakeNode):
 
 
 @pytest.fixture
-def node():
-    server = HTTPServer(("127.0.0.1", 0), FakeNode)
+def node(spawn_node):
     FakeNode.routes = {}
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    yield f"127.0.0.1:{server.server_port}"
-    server.shutdown()
+    return spawn_node(FakeNode.routes)
 
 
-def test_claim_happy_path(node):
+def test_claim_returns_the_sandbox_with_its_owner_and_digest(node):
     FakeNode.routes[("POST", "/v1/claim")] = lambda body, path: (
         200,
         {"id": "sb_1", "token": "tok", "owner_addr": node, "template_digest": "sha256:task"},
@@ -351,8 +347,11 @@ def test_claim_deadline_bounds_the_redirect_walk(node, black_hole):
 
 def test_claim_deadline_bounds_the_entry_node(black_hole):
     client = Client(black_hole, timeout=2.0)
+    started = time.monotonic()
     with pytest.raises(TimeoutError):
-        client.new("rt:24.04", deadline=time.monotonic() + 0.3)
+        client.new("rt:24.04", deadline=started + 0.3)
+    elapsed = time.monotonic() - started
+    assert elapsed < 1.5, elapsed
 
 
 def recording_claim(reply):

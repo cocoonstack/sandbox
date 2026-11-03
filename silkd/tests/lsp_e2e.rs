@@ -7,13 +7,13 @@ use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
 use std::sync::Arc;
 
-use serde_json::json;
+use serde_json::{Value, json};
 use silkd::server::State;
 use tempfile::TempDir;
 use tokio::io::AsyncWriteExt;
 use tokio::time::timeout;
 
-use common::{DEADLINE, b64, connect, decode, next_frame, one, send, type_of};
+use common::{DEADLINE, assert_error, b64, connect, decode, next_frame, one, send, type_of};
 
 const FAKE_SERVER: &str = r#"#!/bin/sh
 IFS= read -r line
@@ -28,8 +28,7 @@ fn manifest_env(server_body: &str) -> TempDir {
     let mut f = std::fs::File::create(&bin).unwrap();
     f.write_all(server_body.as_bytes()).unwrap();
     std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
-    // SAFETY: ENV_LOCK, held by the caller for its whole test, serializes every
-    // writer and reader of SILKD_LSP_DIR in this binary.
+    // SAFETY: ENV_LOCK, held by the caller for its whole test, serializes all access to SILKD_LSP_DIR.
     unsafe { std::env::set_var("SILKD_LSP_DIR", dir.path()) };
     dir
 }
@@ -55,12 +54,16 @@ async fn started_server(lang: &str, server_body: &str) -> (TempDir, Arc<State>, 
 }
 
 async fn assert_stopped(state: &Arc<State>, server_id: &str) {
-    let gone = one(
+    let gone = lsp_stop(state, server_id).await;
+    assert_eq!(gone.last().unwrap()["kind"], "not_found", "{gone:?}");
+}
+
+async fn lsp_stop(state: &Arc<State>, server_id: &str) -> Vec<Value> {
+    one(
         state,
         &json!({"op":"lsp_stop","server_id":server_id}).to_string(),
     )
-    .await;
-    assert_eq!(gone.last().unwrap()["kind"], "not_found", "{gone:?}");
+    .await
 }
 
 #[tokio::test]
@@ -76,8 +79,7 @@ async fn lsp_start_missing_manifest_is_not_found() {
     .await
     .expect("deadline");
     let last = frames.last().unwrap();
-    assert_eq!(type_of(last), "error");
-    assert_eq!(last["kind"], "not_found");
+    assert_error(last, "not_found");
 }
 
 #[tokio::test]
@@ -97,11 +99,7 @@ async fn lsp_start_language_name_cannot_escape() {
         assert_eq!(type_of(last), "error", "{bad} should be rejected");
         assert_eq!(last["kind"], "not_found", "{bad}");
     }
-    one(
-        &state,
-        &json!({"op":"lsp_stop","server_id":server_id}).to_string(),
-    )
-    .await;
+    lsp_stop(&state, &server_id).await;
 }
 
 #[tokio::test]
@@ -119,7 +117,7 @@ async fn lsp_broker_relays_to_the_server() {
     assert_eq!(decode(&frame), b"reply:ping\n");
     assert_eq!(type_of(&next_frame(&mut out).await), "done");
     cw.shutdown().await.unwrap();
-    let _ = handle.await;
+    handle.await.unwrap().unwrap();
 
     assert_stopped(&state, &server_id).await;
 }
@@ -128,11 +126,7 @@ async fn lsp_broker_relays_to_the_server() {
 async fn lsp_stop_kills_an_idle_server() {
     let _env_lock = ENV_LOCK.lock().await;
     let (_env, state, server_id) = started_server("idletest", "#!/bin/sh\nsleep 60\n").await;
-    let stop = one(
-        &state,
-        &json!({"op":"lsp_stop","server_id":server_id}).to_string(),
-    )
-    .await;
+    let stop = lsp_stop(&state, &server_id).await;
     assert_eq!(type_of(stop.last().unwrap()), "done");
     assert_stopped(&state, &server_id).await;
 }
@@ -173,5 +167,5 @@ async fn lsp_data_end_half_closes_stdin() {
     assert_eq!(decode(&frame), b"ate:5\n");
     assert_eq!(type_of(&next_frame(&mut out).await), "done");
     cw.shutdown().await.unwrap();
-    let _ = handle.await;
+    handle.await.unwrap().unwrap();
 }

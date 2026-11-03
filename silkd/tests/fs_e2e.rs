@@ -8,7 +8,7 @@ use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use nix::sys::stat::Mode;
 use serde_json::{Value, json};
 
-use common::{b64, data_frames, exchange, payload, type_of};
+use common::{assert_error, b64, data_frames, exchange, payload, request, type_of};
 
 async fn fs_write(req: Value, body: &[u8]) -> Vec<Value> {
     let mut lines = vec![req.to_string()];
@@ -33,7 +33,7 @@ async fn write_then_read_roundtrips_bytes() {
         "write should succeed: {wrote:?}"
     );
 
-    let read = exchange(&[json!({"op":"fs_read","path":path}).to_string()]).await;
+    let read = request(json!({"op":"fs_read","path":path})).await;
     assert_eq!(payload(&read, "data"), b"silk file body");
     assert_eq!(type_of(read.last().unwrap()), "done");
 }
@@ -48,8 +48,7 @@ async fn list_reports_written_entry() {
     )
     .await;
 
-    let listed =
-        exchange(&[json!({"op":"fs_list","path":dir.path().to_str().unwrap()}).to_string()]).await;
+    let listed = request(json!({"op":"fs_list","path":dir.path().to_str().unwrap()})).await;
     assert_eq!(type_of(listed.last().unwrap()), "done");
     let a = listed
         .iter()
@@ -69,8 +68,7 @@ async fn list_batches_large_directories() {
         std::fs::write(dir.path().join(format!("f{i}")), b"").unwrap();
     }
 
-    let listed =
-        exchange(&[json!({"op":"fs_list","path":dir.path().to_str().unwrap()}).to_string()]).await;
+    let listed = request(json!({"op":"fs_list","path":dir.path().to_str().unwrap()})).await;
     let frames: Vec<_> = listed.iter().filter(|f| type_of(f) == "entries").collect();
     assert_eq!(frames.len(), 2, "one full batch + the remainder");
     assert_eq!(
@@ -95,7 +93,7 @@ async fn stat_reports_kind_and_size() {
     )
     .await;
 
-    let st = exchange(&[json!({"op":"fs_stat","path":path.to_str().unwrap()}).to_string()]).await;
+    let st = request(json!({"op":"fs_stat","path":path.to_str().unwrap()})).await;
     assert_eq!(type_of(&st[0]), "stat");
     assert_eq!(st[0]["info"]["kind"], "file");
     assert_eq!(st[0]["info"]["size"], 10);
@@ -110,7 +108,7 @@ async fn stat_mode_excludes_type_bits() {
         b"x",
     )
     .await;
-    let st = exchange(&[json!({"op":"fs_stat","path":path.to_str().unwrap()}).to_string()]).await;
+    let st = request(json!({"op":"fs_stat","path":path.to_str().unwrap()})).await;
     assert_eq!(
         st[0]["info"]["mode"], 0o640,
         "mode must be masked to permission bits"
@@ -123,7 +121,7 @@ async fn mkdir_rename_rm_lifecycle() {
     let sub = dir.path().join("d1");
     let moved = dir.path().join("d2");
 
-    let mk = exchange(&[json!({"op":"fs_mkdir","path":sub.to_str().unwrap()}).to_string()]).await;
+    let mk = request(json!({"op":"fs_mkdir","path":sub.to_str().unwrap()})).await;
     assert_eq!(type_of(&mk[0]), "done");
 
     let mv = exchange(&[
@@ -150,7 +148,7 @@ async fn read_streams_files_around_the_first_chunk_bound() {
         let path = dir.path().join(format!("f{len}"));
         let body: Vec<u8> = (0..len).map(|i| (i % 251) as u8).collect();
         std::fs::write(&path, &body).unwrap();
-        let read = exchange(&[json!({"op":"fs_read","path":path}).to_string()]).await;
+        let read = request(json!({"op":"fs_read","path":path})).await;
         let data = read.iter().filter(|f| type_of(f) == "data").count();
         assert_eq!(data, frames, "len {len}");
         assert!(payload(&read, "data") == body, "len {len}");
@@ -161,7 +159,7 @@ async fn read_streams_files_around_the_first_chunk_bound() {
 #[cfg(target_os = "linux")]
 #[tokio::test]
 async fn read_returns_a_proc_file_that_reports_zero_length() {
-    let read = exchange(&[json!({"op":"fs_read","path":"/proc/self/status"}).to_string()]).await;
+    let read = request(json!({"op":"fs_read","path":"/proc/self/status"})).await;
     assert!(
         String::from_utf8(payload(&read, "data"))
             .unwrap()
@@ -181,7 +179,7 @@ async fn read_of_a_non_regular_file_is_bad_request() {
         "/dev/null",
         fifo.to_str().unwrap(),
     ] {
-        let frames = exchange(&[json!({"op":"fs_read","path":path}).to_string()]).await;
+        let frames = request(json!({"op":"fs_read","path":path})).await;
         assert_eq!(type_of(&frames[0]), "error", "{path}: {frames:?}");
         assert_eq!(frames[0]["kind"], "bad_request", "{path}");
     }
@@ -189,9 +187,8 @@ async fn read_of_a_non_regular_file_is_bad_request() {
 
 #[tokio::test]
 async fn read_missing_path_is_not_found() {
-    let frames = exchange(&[json!({"op":"fs_read","path":"/no/such/file/xyz"}).to_string()]).await;
-    assert_eq!(type_of(&frames[0]), "error");
-    assert_eq!(frames[0]["kind"], "not_found");
+    let frames = request(json!({"op":"fs_read","path":"/no/such/file/xyz"})).await;
+    assert_error(&frames[0], "not_found");
 }
 
 #[tokio::test]
@@ -264,16 +261,15 @@ async fn rm_plain_file_and_missing_and_nonempty_dir() {
     let dir = tempfile::tempdir().unwrap();
     let f = dir.path().join("f");
     std::fs::write(&f, b"x").unwrap();
-    let r = exchange(&[json!({"op":"fs_rm","path":f.to_str().unwrap()}).to_string()]).await;
+    let r = request(json!({"op":"fs_rm","path":f.to_str().unwrap()})).await;
     assert_eq!(type_of(&r[0]), "done");
     assert!(!f.exists());
-    let m = exchange(&[json!({"op":"fs_rm","path":"/no/such/xyz"}).to_string()]).await;
-    assert_eq!(type_of(&m[0]), "error");
-    assert_eq!(m[0]["kind"], "not_found");
+    let m = request(json!({"op":"fs_rm","path":"/no/such/xyz"})).await;
+    assert_error(&m[0], "not_found");
     let sub = dir.path().join("d");
     std::fs::create_dir(&sub).unwrap();
     std::fs::write(sub.join("inner"), b"y").unwrap();
-    let ne = exchange(&[json!({"op":"fs_rm","path":sub.to_str().unwrap()}).to_string()]).await;
+    let ne = request(json!({"op":"fs_rm","path":sub.to_str().unwrap()})).await;
     assert_eq!(type_of(&ne[0]), "error");
     assert!(
         sub.exists(),

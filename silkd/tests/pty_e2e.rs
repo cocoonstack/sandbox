@@ -17,7 +17,9 @@ use silkd::server::State;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio::sync::mpsc;
 
-use common::{FrameLines, b64, connect, decode, exchange, frames_until, one, send, type_of};
+use common::{
+    FrameLines, assert_error, b64, connect, decode, frames_until, one, request, send, type_of,
+};
 
 struct FailingSink(Vec<u8>);
 
@@ -114,10 +116,8 @@ async fn pty_appears_in_ps_and_resizes() {
 
 #[tokio::test]
 async fn resize_unknown_pid_is_not_found() {
-    let frames =
-        exchange(&[json!({"op":"pty_resize","pid":999999,"cols":80,"rows":24}).to_string()]).await;
-    assert_eq!(type_of(&frames[0]), "error");
-    assert_eq!(frames[0]["kind"], "not_found");
+    let frames = request(json!({"op":"pty_resize","pid":999999,"cols":80,"rows":24})).await;
+    assert_error(&frames[0], "not_found");
 }
 
 #[tokio::test]

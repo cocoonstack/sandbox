@@ -75,6 +75,16 @@ async fn request_on(state: &Arc<State>, lines: &[String]) -> Vec<Value> {
     frames
 }
 
+pub async fn request(frame: Value) -> Vec<Value> {
+    roundtrip(&frame.to_string()).await
+}
+
+#[track_caller]
+pub fn assert_error(frame: &Value, kind: &str) {
+    assert_eq!(type_of(frame), "error", "{frame}");
+    assert_eq!(frame["kind"], kind, "{frame}");
+}
+
 pub async fn one(state: &Arc<State>, request_line: &str) -> Vec<Value> {
     request_on(state, &[request_line.to_string()]).await
 }

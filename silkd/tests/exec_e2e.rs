@@ -11,7 +11,8 @@ use silkd::server::State;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 
 use common::{
-    b64, connect, exchange, frames_until, next_frame, one, roundtrip, send, stdout_body, type_of,
+    assert_error, b64, connect, exchange, frames_until, next_frame, one, roundtrip, send,
+    stdout_body, type_of,
 };
 
 async fn detached_pid(state: &Arc<State>, script: &str) -> u64 {
@@ -89,8 +90,7 @@ async fn nonzero_exit_is_reported() {
 #[tokio::test]
 async fn empty_argv_is_a_bad_request() {
     let frames = roundtrip(r#"{"op":"exec","argv":[]}"#).await;
-    assert_eq!(type_of(&frames[0]), "error");
-    assert_eq!(frames[0]["kind"], "bad_request");
+    assert_error(&frames[0], "bad_request");
 }
 
 #[tokio::test]
@@ -104,8 +104,7 @@ async fn info_reports_version_and_proto() {
 #[tokio::test]
 async fn kill_unknown_pid_is_not_found() {
     let frames = roundtrip(r#"{"op":"kill","pid":999999}"#).await;
-    assert_eq!(type_of(&frames[0]), "error");
-    assert_eq!(frames[0]["kind"], "not_found");
+    assert_error(&frames[0], "not_found");
 }
 
 #[tokio::test]
@@ -212,8 +211,7 @@ async fn attach_keeps_a_tail_emitted_during_the_replay() {
 #[tokio::test]
 async fn attach_unknown_pid_is_not_found() {
     let frames = roundtrip(r#"{"op":"attach","pid":999999}"#).await;
-    assert_eq!(type_of(&frames[0]), "error");
-    assert_eq!(frames[0]["kind"], "not_found");
+    assert_error(&frames[0], "not_found");
 }
 
 #[tokio::test]
@@ -230,23 +228,20 @@ async fn kill_actually_terminates_a_live_process() {
 async fn exec_unknown_user_is_rejected() {
     let frames =
         roundtrip(r#"{"op":"exec","argv":["true"],"user":"definitely-not-a-user-xyz"}"#).await;
-    assert_eq!(type_of(&frames[0]), "error");
-    assert_eq!(frames[0]["kind"], "bad_request");
+    assert_error(&frames[0], "bad_request");
 }
 
 #[tokio::test]
 async fn exec_missing_binary_is_a_bad_request() {
     let frames = roundtrip(r#"{"op":"exec","argv":["/no/such/binary-xyz"]}"#).await;
-    assert_eq!(type_of(&frames[0]), "error");
-    assert_eq!(frames[0]["kind"], "bad_request");
+    assert_error(&frames[0], "bad_request");
     assert!(frames[0]["message"].as_str().unwrap().contains("spawn"));
 }
 
 #[tokio::test]
 async fn exec_missing_cwd_is_a_bad_request() {
     let frames = roundtrip(r#"{"op":"exec","argv":["true"],"cwd":"/no/such/dir-xyz"}"#).await;
-    assert_eq!(type_of(&frames[0]), "error");
-    assert_eq!(frames[0]["kind"], "bad_request");
+    assert_error(&frames[0], "bad_request");
 }
 
 #[tokio::test]
@@ -258,8 +253,7 @@ async fn exec_non_executable_file_is_a_bad_request() {
         &json!({"op":"exec","argv":[file.path()]}).to_string(),
     )
     .await;
-    assert_eq!(type_of(&frames[0]), "error");
-    assert_eq!(frames[0]["kind"], "bad_request");
+    assert_error(&frames[0], "bad_request");
     assert!(frames[0]["message"].as_str().unwrap().contains("spawn"));
 }
 

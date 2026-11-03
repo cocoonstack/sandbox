@@ -9,7 +9,7 @@ use std::time::Duration;
 use serde_json::json;
 use silkd::server::State;
 
-use common::{connect, exchange, next_frame, send, type_of};
+use common::{connect, next_frame, request, send, type_of};
 
 #[tokio::test]
 async fn watch_streams_events_until_disconnect() {
@@ -45,9 +45,7 @@ async fn watch_streams_events_until_disconnect() {
 
 #[tokio::test]
 async fn watch_missing_path_is_error() {
-    let frames =
-        exchange(&[json!({"op": "fs_watch", "path": "/no/such/dir/silkd-watch"}).to_string()])
-            .await;
+    let frames = request(json!({"op": "fs_watch", "path": "/no/such/dir/silkd-watch"})).await;
     assert_eq!(type_of(&frames[0]), "error");
     assert_eq!(frames[0]["kind"], "not_found", "{frames:?}");
 }
