@@ -7,6 +7,7 @@ import (
 	"crypto/x509"
 	"encoding/hex"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -550,6 +551,40 @@ func TestInterceptStreamsAnEventStreamAsItArrives(t *testing.T) {
 	defer func() { _ = resp.Body.Close() }()
 	if line, err := bufio.NewReader(resp.Body).ReadString('\n'); err != nil || line != "data: one\n" {
 		t.Errorf("first event %q, %v; want it before the origin ends the stream", line, err)
+	}
+}
+
+func TestAnUpstreamDyingMidBodyTruncatesTheInterceptedResponse(t *testing.T) {
+	scrub := credSecrets{creds: map[string][]Credential{"example.com": {{Name: "SERP", Query: "api_key", Value: "real", Placeholder: "@SERP@"}}}}
+	for _, tt := range []struct {
+		name, length, target string
+		secrets              Secrets
+	}{
+		{"streamed", "", "/x", nil},
+		{"scrubbed with a declared length", "100", "/x?api_key=@SERP@", scrub},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			upstream := httptest.NewTLSServer(dyingMidBody(tt.length))
+			defer upstream.Close()
+			ca, _ := testCA(t)
+			p := New(Policy{Allow: []Rule{{Host: "example.com", Intercept: InterceptAlways}}}, tt.secrets, ca, fixedDial(upstream.Listener.Addr().String()), nil, nil)
+			guestRoots := x509.NewCertPool()
+			guestRoots.AppendCertsFromPEM(ca.CertPEM())
+			tc := connectTLS(t, serveTrusting(t, p, upstream).Listener.Addr().String(), "example.com:443", "example.com", guestRoots)
+			defer func() { _ = tc.Close() }()
+			req := newRequest(t, http.MethodGet, tt.target, "")
+			if err := req.Write(tc); err != nil {
+				t.Fatalf("write request: %v", err)
+			}
+			resp, err := http.ReadResponse(bufio.NewReader(tc), req)
+			if err != nil {
+				t.Fatalf("read response: %v", err)
+			}
+			defer func() { _ = resp.Body.Close() }()
+			if _, err = io.ReadAll(resp.Body); !errors.Is(err, io.ErrUnexpectedEOF) {
+				t.Errorf("read body: %v, want io.ErrUnexpectedEOF", err)
+			}
+		})
 	}
 }
 
