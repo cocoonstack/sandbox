@@ -2224,15 +2224,15 @@ func testSecrets(t testing.TB, specs ...egress.SecretSpec) *egress.SecretStore {
 }
 
 func lockCount(m *Manager) int {
-	m.recLocksMu.Lock()
-	defer m.recLocksMu.Unlock()
-	return len(m.recLocks)
+	m.recs.mu.Lock()
+	defer m.recs.mu.Unlock()
+	return len(m.recs.held)
 }
 
 func hasRecLock(m *Manager, id string) bool {
-	m.recLocksMu.Lock()
-	defer m.recLocksMu.Unlock()
-	_, ok := m.recLocks[id]
+	m.recs.mu.Lock()
+	defer m.recs.mu.Unlock()
+	_, ok := m.recs.held[id]
 	return ok
 }
 

@@ -211,7 +211,7 @@ func (m *Manager) wakeArchived(ctx context.Context, sb *types.Sandbox) (string, 
 		return "", err
 	}
 	ck := sb.ArchiveCk
-	defer m.lockRec(ck)()
+	defer m.recs.lockRec(ck)()
 	dir, _, _, err := m.ckpts.Fetch(ctx, ck)
 	if errors.Is(err, store.ErrNotFound) {
 		return "", ErrUnknownSandbox // record disagrees with the store
@@ -364,7 +364,7 @@ func (m *Manager) deleteArchiveCk(ctx context.Context, ckID string) (bool, error
 }
 
 func (m *Manager) finishArchiveCkDelete(ctx context.Context, ckID string) (bool, error) {
-	unlock := m.lockRec(ckID)
+	unlock := m.recs.lockRec(ckID)
 	if m.store.referencesCheckpoint(ckID) {
 		unlock()
 		return false, nil
@@ -401,7 +401,7 @@ func (m *Manager) retryArchiveDeletes(ctx context.Context) {
 }
 
 func (m *Manager) retryArchiveDelete(ctx context.Context, ckID string) {
-	unlock := m.lockRec(ckID)
+	unlock := m.recs.lockRec(ckID)
 	if m.archiveCkPinned(ckID) || !m.deleteMarked(ckID) {
 		unlock()
 		return

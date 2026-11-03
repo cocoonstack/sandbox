@@ -117,7 +117,7 @@ func (m *Manager) DeleteCheckpoint(ctx context.Context, ckptID, tenant string, s
 	if !store.CheckpointIDRe.MatchString(ckptID) {
 		return ErrUnknownCheckpoint
 	}
-	defer m.lockRec(ckptID)()
+	defer m.recs.lockRec(ckptID)()
 	ckpt, err := m.loadCheckpoint(ctx, ckptID)
 	if err != nil {
 		m.vetoIfHealPending(ckptID)
@@ -152,7 +152,7 @@ func (m *Manager) FetchCheckpoint(ctx context.Context, ckptID string) (string, [
 	if _, err := m.loadCheckpoint(ctx, ckptID); err != nil {
 		return "", nil, nil, err
 	}
-	unlock := m.rlockRec(ckptID)
+	unlock := m.recs.rlockRec(ckptID)
 	dir, meta, _, err := m.ckpts.Fetch(ctx, ckptID)
 	if err != nil {
 		unlock()
@@ -208,7 +208,7 @@ func (m *Manager) claimLoaded(ctx context.Context, ckpt types.Checkpoint, o Clai
 	if err := m.checkEnv(o.Env); err != nil {
 		return nil, err
 	}
-	defer m.rlockRec(ckpt.ID)()
+	defer m.recs.rlockRec(ckpt.ID)()
 	if ckpt.Archive {
 		return nil, ErrUnknownCheckpoint // a wake image, not a branchable checkpoint
 	}
@@ -279,7 +279,7 @@ func (m *Manager) runHeal(ctx context.Context, ckptID string) (types.Checkpoint,
 		return types.Checkpoint{}, fmt.Errorf("heal checkpoint: %w", err)
 	}
 
-	defer m.lockRec(ckptID)()
+	defer m.recs.lockRec(ckptID)()
 	if aborted := m.clearHealPending(ckptID); aborted {
 		return types.Checkpoint{}, ErrUnknownCheckpoint // a concurrent delete vetoed this heal
 	}
@@ -346,7 +346,7 @@ func (m *Manager) sweepExpiredCheckpoints(ctx context.Context) {
 		if ckpt.CreatedAt.After(cutoff) {
 			continue
 		}
-		unlock := m.lockRec(ckpt.ID)
+		unlock := m.recs.lockRec(ckpt.ID)
 		err := m.ckpts.Delete(ctx, ckpt.ID)
 		unlock()
 		if err != nil {

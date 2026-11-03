@@ -2,38 +2,45 @@ package pool
 
 import "sync"
 
-// recLock takes the per-record lock and a live reference; pair with recDone.
-func (m *Manager) recLock(id string) *sync.RWMutex {
-	m.recLocksMu.Lock()
-	defer m.recLocksMu.Unlock()
-	m.recRefs[id]++
-	l := m.recLocks[id]
+// recordLocks serializes same-id record mutations; an entry lives exactly as long as a recLock reference to it.
+type recordLocks struct {
+	mu   sync.Mutex
+	held map[string]*sync.RWMutex
+	refs map[string]int
+}
+
+// recLock returns the per-record lock and takes a live reference; pair with recDone.
+func (r *recordLocks) recLock(id string) *sync.RWMutex {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.refs[id]++
+	l := r.held[id]
 	if l == nil {
 		l = &sync.RWMutex{}
-		m.recLocks[id] = l
+		r.held[id] = l
 	}
 	return l
 }
 
-func (m *Manager) lockRec(id string) func() {
-	l := m.recLock(id)
+func (r *recordLocks) lockRec(id string) func() {
+	l := r.recLock(id)
 	l.Lock()
-	return func() { l.Unlock(); m.recDone(id) }
+	return func() { l.Unlock(); r.recDone(id) }
 }
 
-func (m *Manager) rlockRec(id string) func() {
-	l := m.recLock(id)
+func (r *recordLocks) rlockRec(id string) func() {
+	l := r.recLock(id)
 	l.RLock()
-	return func() { l.RUnlock(); m.recDone(id) }
+	return func() { l.RUnlock(); r.recDone(id) }
 }
 
 // recDone releases a reference taken by recLock; call after Unlock/RUnlock, never before.
-func (m *Manager) recDone(id string) {
-	m.recLocksMu.Lock()
-	defer m.recLocksMu.Unlock()
-	m.recRefs[id]--
-	if m.recRefs[id] <= 0 {
-		delete(m.recRefs, id)
-		delete(m.recLocks, id)
+func (r *recordLocks) recDone(id string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.refs[id]--
+	if r.refs[id] <= 0 {
+		delete(r.refs, id)
+		delete(r.held, id)
 	}
 }

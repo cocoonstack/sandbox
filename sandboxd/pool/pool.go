@@ -315,10 +315,7 @@ type Manager struct {
 	tplMu  sync.Mutex
 	tplSet map[string]TemplateInfo
 
-	// recLocks serializes same-id record mutations; an entry lives exactly as long as a recLock reference to it.
-	recLocks   map[string]*sync.RWMutex
-	recLocksMu sync.Mutex
-	recRefs    map[string]int
+	recs recordLocks
 
 	// notifyTemplates is set before serving starts and fires after a promote or template delete.
 	notifyTemplates func()
@@ -372,8 +369,7 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 		readers:         &readerSet{live: map[string]*reader{}},
 		archiving:       map[string]struct{}{},
 		pendingCks:      map[string]struct{}{},
-		recLocks:        map[string]*sync.RWMutex{},
-		recRefs:         map[string]int{},
+		recs:            recordLocks{held: map[string]*sync.RWMutex{}, refs: map[string]int{}},
 		healPending:     map[string]struct{}{},
 		healAbort:       map[string]struct{}{},
 		refillSem:       make(chan struct{}, refill),
