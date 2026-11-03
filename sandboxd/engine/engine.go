@@ -19,6 +19,7 @@ import (
 	"strconv"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/projecteru2/core/log"
@@ -49,6 +50,8 @@ const (
 	egressPort     = 2049 // guest→host egress port; VMM maps it to <vsock_socket>_2049
 	socksPort      = 2050
 	cmdTimeout     = 2 * time.Minute
+	dumpTimeout    = 15 * time.Minute
+	cmdTermGrace   = 30 * time.Second
 	trimTimeout    = 10 * time.Second
 	probeInterval  = 20 * time.Millisecond
 	connectMax     = 64   // "OK <port>" handshake reply cap
@@ -193,7 +196,7 @@ func (e *Engine) Restore(ctx context.Context, vmName, snapRef string) (string, e
 
 // SnapshotExport exports a snapshot into toDir, which cocoon requires absent or empty.
 func (e *Engine) SnapshotExport(ctx context.Context, snapName, toDir string) error {
-	_, err := e.run(ctx, "snapshot", "export", snapName, "--to-dir", toDir)
+	_, err := e.runFor(ctx, dumpTimeout, "snapshot", "export", snapName, "--to-dir", toDir)
 	return err
 }
 
@@ -417,10 +420,16 @@ func (e *Engine) netArgs(name string, key types.PoolKey, cold bool) []string {
 }
 
 func (e *Engine) run(ctx context.Context, args ...string) ([]byte, error) {
-	ctx, cancel := context.WithTimeout(ctx, cmdTimeout)
+	return e.runFor(ctx, cmdTimeout, args...)
+}
+
+func (e *Engine) runFor(ctx context.Context, timeout time.Duration, args ...string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	log.WithFunc("engine.run").Debugf(ctx, "cocoon %s", strings.Join(args, " "))
+	log.WithFunc("engine.runFor").Debugf(ctx, "cocoon %s", strings.Join(args, " "))
 	cmd := exec.CommandContext(ctx, e.bin, args...) //nolint:gosec // bin comes from node config, args are built internally
+	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
+	cmd.WaitDelay = cmdTermGrace
 	cmd.Env = append(os.Environ(), "GOMAXPROCS="+strconv.Itoa(min(cocoonMaxProcs, runtime.GOMAXPROCS(0))))
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
@@ -437,7 +446,7 @@ func (e *Engine) runDump(ctx context.Context, args ...string) error {
 		return ctx.Err()
 	}
 	defer func() { <-e.dumps }()
-	_, err := e.run(ctx, args...)
+	_, err := e.runFor(ctx, dumpTimeout, args...)
 	return err
 }
 

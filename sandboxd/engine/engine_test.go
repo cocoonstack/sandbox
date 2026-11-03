@@ -212,6 +212,29 @@ func TestRemoveStopsAVMThatRefusesDeletionThenRemovesItAgain(t *testing.T) {
 	}
 }
 
+func TestACanceledCommandGetsSIGTERMSoCocoonCanResumeTheVM(t *testing.T) {
+	trace := filepath.Join(t.TempDir(), "trace")
+	t.Setenv("COCOON_TEST_TRACE", trace)
+	fakeCocoon(t, "#!/bin/sh\ntrap 'echo term >> \"$COCOON_TEST_TRACE\"; kill $!; exit 3' TERM\n"+
+		"sleep 30 >/dev/null 2>&1 &\necho ready >> \"$COCOON_TEST_TRACE\"\nwait\n")
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- newTestEngine().Hibernate(ctx, "vm", "snap") }()
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+		if data, _ := os.ReadFile(trace); strings.Contains(string(data), "ready") {
+			break
+		}
+	}
+	cancel()
+	if err := <-done; err == nil {
+		t.Fatal("a canceled hibernate reported success")
+	}
+	if data, _ := os.ReadFile(trace); !strings.Contains(string(data), "term") {
+		t.Errorf("trace %q, want the command to have received SIGTERM", data)
+	}
+}
+
 func TestMemoryDumpsRunAtMostEightAtOnce(t *testing.T) {
 	trace := filepath.Join(t.TempDir(), "trace")
 	t.Setenv("COCOON_TEST_TRACE", trace)
