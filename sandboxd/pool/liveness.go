@@ -36,12 +36,12 @@ func (m *Manager) livenessOnce(ctx context.Context) {
 	if m.vmmEvents.Load() && time.Since(time.Unix(0, m.lastVMPoll.Load())) < livenessBackstop {
 		return
 	}
-	if !m.livenessSweep.CompareAndSwap(false, true) {
+	if !m.sweeps.liveness.CompareAndSwap(false, true) {
 		return
 	}
 	watched := m.watchedClaims("")
 	go func() {
-		defer m.livenessSweep.Store(false)
+		defer m.sweeps.liveness.Store(false)
 		vms, err := m.eng.List(ctx)
 		if err != nil {
 			log.WithFunc("pool.livenessOnce").Warnf(ctx, "list vms: %v", err)

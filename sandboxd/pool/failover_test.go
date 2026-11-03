@@ -1388,7 +1388,7 @@ func TestFailoverArchiveSweepExportsNothingWhileTheRegistryIsDown(t *testing.T) 
 	for range 3 {
 		backdate(a, sb, time.Minute)
 		a.archiveOnce(t.Context())
-		waitFor(t, func() bool { return !a.archiveSweep.Load() })
+		waitFor(t, func() bool { return !a.sweeps.archive.Load() })
 	}
 	if metas, err := a.ckpts.Metas(t.Context()); err != nil || len(metas) != 0 {
 		t.Errorf("three archive ticks with the registry down left %d exports %v, want none", len(metas), err)

@@ -51,7 +51,7 @@ func (m *Manager) archiveDeadline(sb *types.Sandbox) time.Time {
 }
 
 func (m *Manager) archiveOnce(ctx context.Context) {
-	if !m.archiveSweep.CompareAndSwap(false, true) {
+	if !m.sweeps.archive.CompareAndSwap(false, true) {
 		return // the previous sweep's archives are still draining
 	}
 	now := time.Now()
@@ -73,11 +73,11 @@ func (m *Manager) archiveOnce(ctx context.Context) {
 	}
 	m.mu.Unlock()
 	if len(victims) == 0 {
-		m.archiveSweep.Store(false)
+		m.sweeps.archive.Store(false)
 		return
 	}
 	go func() {
-		defer m.archiveSweep.Store(false)
+		defer m.sweeps.archive.Store(false)
 		logger := log.WithFunc("pool.archiveOnce")
 		m.runBounded(ctx, len(victims), func(ctx context.Context, i int) {
 			sb := victims[i]
@@ -381,10 +381,10 @@ func (m *Manager) finishArchiveCkDelete(ctx context.Context, ckID string) (bool,
 }
 
 func (m *Manager) retryArchiveDeletes(ctx context.Context) {
-	if !m.archiveDeleteSweep.CompareAndSwap(false, true) {
+	if !m.sweeps.archiveDelete.CompareAndSwap(false, true) {
 		return
 	}
-	defer m.archiveDeleteSweep.Store(false)
+	defer m.sweeps.archiveDelete.Store(false)
 	ids, err := m.archiveDeleteMarkers()
 	if err != nil {
 		log.WithFunc("pool.retryArchiveDeletes").Warnf(ctx, "list: %v", err)

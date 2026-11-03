@@ -2333,7 +2333,7 @@ func hibernated(m *Manager) int {
 func sweepIdle(t *testing.T, m *Manager) {
 	t.Helper()
 	m.idleOnce(t.Context())
-	waitFor(t, func() bool { return !m.idleSweep.Load() })
+	waitFor(t, func() bool { return !m.sweeps.idle.Load() })
 }
 
 func expire(m *Manager, sb *types.Sandbox) {

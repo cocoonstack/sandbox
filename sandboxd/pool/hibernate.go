@@ -238,7 +238,7 @@ func (m *Manager) stopVM(ctx context.Context, name string) {
 }
 
 func (m *Manager) idleOnce(ctx context.Context) {
-	if !m.idleSweep.CompareAndSwap(false, true) {
+	if !m.sweeps.idle.CompareAndSwap(false, true) {
 		return // the previous sweep's hibernates are still draining
 	}
 	now := time.Now()
@@ -251,7 +251,7 @@ func (m *Manager) idleOnce(ctx context.Context) {
 	}
 	if !idlePolicy {
 		m.mu.Unlock()
-		m.idleSweep.Store(false)
+		m.sweeps.idle.Store(false)
 		return
 	}
 	for _, sb := range m.claimed {
@@ -269,12 +269,12 @@ func (m *Manager) idleOnce(ctx context.Context) {
 	}
 	m.mu.Unlock()
 	if len(victims) == 0 {
-		m.idleSweep.Store(false)
+		m.sweeps.idle.Store(false)
 		return
 	}
 	// Hibernates are seconds-long engine snapshots, so fan out off the housekeeping loop
 	go func() {
-		defer m.idleSweep.Store(false)
+		defer m.sweeps.idle.Store(false)
 		m.runBounded(ctx, len(victims), func(ctx context.Context, i int) {
 			sb := victims[i]
 			logSweepResult(ctx, log.WithFunc("pool.idleOnce"), m.idleHibernate(ctx, sb, now), "idle-hibernated "+sb.ID, "idle-hibernate "+sb.ID)

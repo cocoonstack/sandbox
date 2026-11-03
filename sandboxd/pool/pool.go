@@ -262,23 +262,19 @@ type Manager struct {
 	poolVersion    int64
 	configSeedHash string // config pools' hash, to warn when a file edit is overridden
 
-	idleSweep atomic.Bool
+	sweeps struct{ idle, liveness, archive, archiveDelete, orphan, ckpt, gen atomic.Bool }
 
-	livenessSweep atomic.Bool
 	cocoondSocket string
 	// vmmEvents is set while the cocoon daemon stream is live; the poll is then only a backstop.
 	vmmEvents  atomic.Bool
 	lastVMPoll atomic.Int64
 
-	archiveSweep       atomic.Bool
-	archiveDeleteSweep atomic.Bool
 	// archiving holds ids with an export or a registry drop in flight; pendingCks pins ids mid-commit; both under m.mu.
 	archiving  map[string]struct{}
 	pendingCks map[string]struct{}
 	// archives is the cluster archive registry, nil unless archive_failover is set.
 	archives     archives.Registry
 	nodeID       string
-	orphanSweep  atomic.Bool
 	adoptFlights singleflight.Group
 	// fence gates replicated claims while the lease is overdue; replicas belongs to the pass holding replicating.
 	fence       atomic.Pointer[fenceState]
@@ -308,14 +304,12 @@ type Manager struct {
 	healSem     chan struct{}
 	healFlights singleflight.Group
 	// healPending/healAbort, guarded by healMu, let a delete veto a heal still staging.
-	healMu       sync.Mutex
-	healPending  map[string]struct{}
-	healAbort    map[string]struct{}
-	peerDelete   PeerDeleteFunc
-	peerAdopt    PeerAdoptFunc
-	tpls         store.Store
-	ckptSweeping atomic.Bool
-	genSweeping  atomic.Bool
+	healMu      sync.Mutex
+	healPending map[string]struct{}
+	healAbort   map[string]struct{}
+	peerDelete  PeerDeleteFunc
+	peerAdopt   PeerAdoptFunc
+	tpls        store.Store
 
 	// tplSet caches each template id's key, digest and owning tenant ("" = operator).
 	tplMu  sync.Mutex
@@ -604,10 +598,10 @@ func (m *Manager) WithPeerAdopt(fn PeerAdoptFunc) {
 }
 
 func (m *Manager) sweepStoreGenerations(ctx context.Context) {
-	if !m.genSweeping.CompareAndSwap(false, true) {
+	if !m.sweeps.gen.CompareAndSwap(false, true) {
 		return
 	}
-	defer m.genSweeping.Store(false)
+	defer m.sweeps.gen.Store(false)
 	logger := log.WithFunc("pool.sweepStoreGenerations")
 	if err := m.ckpts.SweepGenerations(ctx); err != nil {
 		logger.Error(ctx, err, "sweep checkpoint generations")

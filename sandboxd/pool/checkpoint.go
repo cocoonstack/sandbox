@@ -330,10 +330,10 @@ func (m *Manager) pinnedArchiveCks() map[string]struct{} {
 
 func (m *Manager) sweepExpiredCheckpoints(ctx context.Context) {
 	ttl := m.view.Load().ckptTTL
-	if ttl <= 0 || !m.ckptSweeping.CompareAndSwap(false, true) {
+	if ttl <= 0 || !m.sweeps.ckpt.CompareAndSwap(false, true) {
 		return
 	}
-	defer m.ckptSweeping.Store(false)
+	defer m.sweeps.ckpt.Store(false)
 	logger := log.WithFunc("pool.sweepExpiredCheckpoints")
 	// Checkpoints hides archive images, so the TTL never reaches one; reapPurge retires them
 	ckpts, err := m.Checkpoints(ctx, "")

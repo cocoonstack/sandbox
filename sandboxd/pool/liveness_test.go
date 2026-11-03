@@ -629,7 +629,7 @@ func assertRestartFailsUntilBudget(t *testing.T, m *Manager, eng *fakeEngine, sb
 func runLiveness(t *testing.T, m *Manager) {
 	t.Helper()
 	m.livenessOnce(t.Context())
-	waitFor(t, func() bool { return !m.livenessSweep.Load() })
+	waitFor(t, func() bool { return !m.sweeps.liveness.Load() })
 }
 
 func killVMM(eng *fakeEngine, name string) {

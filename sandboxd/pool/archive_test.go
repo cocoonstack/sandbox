@@ -853,7 +853,7 @@ func TestArchiveOnceSkipsInFlight(t *testing.T) {
 		exportsBefore := eng.exportCount()
 
 		m.archiveOnce(t.Context())
-		waitFor(t, func() bool { return !m.archiveSweep.Load() })
+		waitFor(t, func() bool { return !m.sweeps.archive.Load() })
 		if got := eng.exportCount(); got != exportsBefore {
 			t.Errorf("archiveOnce double-exported an in-flight sandbox: %d→%d", exportsBefore, got)
 		}

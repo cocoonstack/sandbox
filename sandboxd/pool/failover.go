@@ -443,10 +443,10 @@ func (m *Manager) forgetClaim(ctx context.Context, sb *types.Sandbox) ([]types.V
 }
 
 func (m *Manager) sweepOrphanArchives(ctx context.Context) {
-	if !m.orphanSweep.CompareAndSwap(false, true) {
+	if !m.sweeps.orphan.CompareAndSwap(false, true) {
 		return
 	}
-	defer m.orphanSweep.Store(false)
+	defer m.sweeps.orphan.Store(false)
 	m.settleIntents(ctx)
 	now := time.Now()
 	recs, err := m.archives.Sweepable(ctx, now, m.nodeID)
