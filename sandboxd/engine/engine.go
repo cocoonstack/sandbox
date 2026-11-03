@@ -296,7 +296,7 @@ func (e *Engine) DialGuestPort(ctx context.Context, vsockSocket string, port uin
 		return nil, fmt.Errorf("write port_forward: %w", err)
 	}
 	// The forwarded stream's own reader takes the handshake reply, so an over-read stays buffered.
-	r := bufio.NewReaderSize(conn, portReadBuf)
+	r := bufio.NewReaderSize(conn, portForwardMax)
 	line, readErr := readBufLine(r, portForwardMax)
 	if readErr != nil {
 		_ = conn.Close()

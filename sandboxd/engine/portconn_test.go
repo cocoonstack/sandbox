@@ -149,6 +149,31 @@ func TestPortReadBufHoldsOneBulkFrame(t *testing.T) {
 	}
 }
 
+func TestGuestPortConnReadsAFirstFrameThatIsAFullBulkFrame(t *testing.T) {
+	silk, gc := newTestGuestPortConn(t)
+	payload := patterned(wire.BulkChunk)
+
+	go writeDataFrames(t, silk, payload)
+
+	if got, err := io.ReadAll(gc); err != nil || !bytes.Equal(got, payload) {
+		t.Fatalf("read %d bytes (err %v), want the %d-byte bulk payload", len(got), err, len(payload))
+	}
+}
+
+func TestGuestPortConnReadsSmallFramesThenBulkFrames(t *testing.T) {
+	silk, gc := newTestGuestPortConn(t)
+	chunks := [][]byte{[]byte("HTTP/1.1 200 OK\r\n"), patterned(100), patterned(3000), patterned(wire.BulkChunk), patterned(wire.BulkChunk - 1), []byte("tail")}
+
+	go writeDataFrames(t, silk, chunks...)
+
+	if got, err := io.ReadAll(gc); err != nil || !bytes.Equal(got, bytes.Join(chunks, nil)) {
+		t.Fatalf("read %d bytes (err %v), want %d", len(got), err, len(bytes.Join(chunks, nil)))
+	}
+	if size := gc.r.Size(); size != portReadBuf {
+		t.Errorf("reader size %d after a bulk frame, want %d", size, portReadBuf)
+	}
+}
+
 func TestGuestPortConnRefusesAFrameOverMaxFrame(t *testing.T) {
 	for name, tail := range map[string]string{"unterminated": "", "terminated": "\n"} {
 		t.Run(name, func(t *testing.T) {
@@ -169,5 +194,26 @@ func newTestGuestPortConn(t *testing.T) (net.Conn, *guestPortConn) {
 	t.Helper()
 	client, silk := net.Pipe()
 	t.Cleanup(func() { _ = client.Close(); _ = silk.Close() })
-	return silk, newGuestPortConn(client, bufio.NewReaderSize(client, portReadBuf))
+	return silk, newGuestPortConn(client, bufio.NewReaderSize(client, portForwardMax))
+}
+
+func writeDataFrames(t *testing.T, silk net.Conn, chunks ...[]byte) {
+	var stream []byte
+	for _, chunk := range chunks {
+		frame, err := wire.EncodeResponse(wire.DataResp{Data: chunk})
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		stream = append(append(stream, frame...), '\n')
+	}
+	_, _ = silk.Write(append(stream, `{"type":"done"}`+"\n"...))
+}
+
+func patterned(n int) []byte {
+	out := make([]byte, n)
+	for i := range out {
+		out[i] = byte(i*31 + n)
+	}
+	return out
 }
