@@ -219,7 +219,7 @@ func connectTunnel(ctx context.Context, conn net.Conn, u *url.URL, target string
 }
 
 func validHostName(s string) bool {
-	if s == "" || len(s) > 253 {
+	if s == "" || len(s) > maxHostLen {
 		return false
 	}
 	return !strings.ContainsFunc(s, func(r rune) bool {

@@ -51,7 +51,7 @@ func LoadCA(rootCertPEM, interCertPEM, interKeyPEM []byte) (*CA, error) {
 	}
 	interKey, err := parseECKey(interKeyPEM)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("intermediate key: %w", err)
 	}
 	if err = inter.CheckSignatureFrom(root); err != nil {
 		return nil, fmt.Errorf("intermediate not signed by root: %w", err)
@@ -161,15 +161,15 @@ func checkValidity(cert *x509.Certificate, what string) error {
 func parseECKey(pemBytes []byte) (*ecdsa.PrivateKey, error) {
 	block, _ := pem.Decode(pemBytes)
 	if block == nil {
-		return nil, fmt.Errorf("intermediate key: no pem block")
+		return nil, fmt.Errorf("no pem block")
 	}
 	parsed, err := x509.ParsePKCS8PrivateKey(block.Bytes)
 	if err != nil {
-		return nil, fmt.Errorf("parse intermediate key: %w", err)
+		return nil, fmt.Errorf("parse: %w", err)
 	}
 	key, ok := parsed.(*ecdsa.PrivateKey)
 	if !ok {
-		return nil, fmt.Errorf("intermediate key: want ecdsa, got %T", parsed)
+		return nil, fmt.Errorf("want ecdsa, got %T", parsed)
 	}
 	return key, nil
 }
