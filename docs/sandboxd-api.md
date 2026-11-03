@@ -20,7 +20,7 @@ All bodies are JSON. Three token kinds:
 Endpoints below that say "node API token" accept root or tenant unless
 marked root-only. Errors are `{"error": "message"}` with the status codes
 listed per endpoint. Request bodies are capped at 1 MiB; a larger one is
-rejected with `400 {"error": "invalid request body"}`.
+rejected with `400` and an error beginning `invalid request body`.
 
 ## POST /v1/claim
 
@@ -58,7 +58,9 @@ Auth: `Authorization: Bearer <api_token>` (when configured).
   of the claim's length, so its next expiry archives it again; a call that
   wakes it between the hibernate and the export grants that fresh lease too.
   A failed hibernate or export at expiry keeps the claim and retries on every
-  reap tick (5 s); it never falls back to destroy. A volume claim or an egress-lane claim
+  reap tick (5 s); it never falls back to destroy. A failed claim (`failed` set, see
+  [dead VMMs](deploy.md#dead-vmms-and-host-restarts)) is destroyed at expiry even
+  under `archive`. A volume claim or an egress-lane claim
   cannot hibernate, so `archive` on one answers 409 with the same error as a
   hibernate
 - `no_redirect` is set by the SDK when retrying at a redirect target
@@ -203,8 +205,10 @@ VM closes the devices.
 
 Redirects (mutually exclusive with the fields above) name peers to retry
 at — sent on a warm miss with warm peers, when the node lacks a golden for
-the key but gossip names a template owner, and when the node is at
-`max_claims` or `max_running` and a peer reports warm capacity or, failing that, serves the pool:
+the key but gossip names a template owner, and when a claim without `volumes`,
+`no_redirect` or `require_promoted` meets a 429 (the node at `max_claims` or
+`max_running`, the calling tenant at its cap, the node draining, or the disk under
+`disk_reserve`) and a peer reports warm capacity or, failing that, serves the pool:
 
 ```json
 {"redirect": ["10.0.0.6:7777", "10.0.0.7:7777"],
@@ -554,7 +558,8 @@ already holds the new lease, and a resend replaces the row.
 ## POST /v1/sandboxes/{id}/fork
 
 Auth: the node `api_token` (Bearer) — forking creates node resources, like a
-claim. The sandbox's own token rides in the body as the ownership proof:
+claim. The sandbox's own token rides in the body as the ownership proof; the
+root `api_token` with an empty body `token` acts by id as the operator:
 
 ```json
 {"token": "…", "count": 2, "ttl_seconds": 300, "claim_ref_prefix": "team-a/"}
@@ -566,6 +571,9 @@ addresses the children by name; without it children carry no `claim_ref`.
 The prefix is at most 512 bytes of printable UTF-8, as `claim_ref` is.
 Children inherit the parent's `metadata`, `on_expire` and `"egress": false`; an
 `on_expire` in the body overrides the inherited action.
+Children do not inherit the claim env: a guest env file captured from the parent
+is rewritten empty in each child, and the parent's host-only entries are not
+copied; set one with `PUT /v1/sandboxes/{id}/env`.
 Clones the sandbox into `count` fresh claims (1 up to the node's
 `max_fork_count`, default 16). Memory, disk, and guest
 state (sessions, processes, tmpfs) duplicate at the fork point; cocoon's
@@ -591,7 +599,8 @@ under `disk_reserve`.
 ## POST /v1/sandboxes/{id}/promote
 
 Auth: like fork — node `api_token` in the header, the sandbox's own token in
-the body:
+the body; the root `api_token` with an empty body `token` acts by id as the
+operator:
 
 ```json
 {"token": "…", "template": "myproj:v1"}
@@ -822,7 +831,8 @@ Unlike fork, promote and checkpoint — where the root token with an empty body
 token acts by id as the operator — preview has no operator path: the body
 token is required. Mints a signed URL serving a
 guest HTTP port from a browser: body `{"token": "...", "port": 8080,
-"ttl_seconds": 0}` → `{"url": "http://<preview_advertise>/p/<token>/"}`.
+"ttl_seconds": 0}` → `{"url": "<preview_advertise>/p/<token>/"}` (`http://` is
+prefixed when `preview_advertise` names no scheme).
 The URL's life is clamped to the claim's remaining lease; an archived claim
 kept forever (`archive_delete_after_seconds: 0`) has no lease, so there the
 requested `ttl_seconds` stands unclamped and `ttl_seconds: 0` mints a one-hour
@@ -831,13 +841,14 @@ URL; releasing the sandbox ends it early either way.
 has no `preview_listen`. The signed token embeds the sandbox id, port, and
 owner `advertise_addr`, so any node's preview listener can serve it (forwarding
 to the owner's main listener) and a released sandbox's URL simply stops
-resolving — no revocation list. A request for a replicated claim answers 503
-`lease lost; retry` while its node's lease is overdue, and a request that has to wake a sandbox answers 429 while the disk reserve is low or the node is at `max_running`. See [deploy](deploy.md#preview-urls).
+resolving — no revocation list. A browser request to the minted URL answers 503
+`lease lost; retry` for a replicated claim while its node's lease is overdue, and 429 when it has to wake a sandbox while the disk reserve is low or the node is at `max_running`. See [deploy](deploy.md#preview-urls).
 
 ## POST /v1/sandboxes/{id}/checkpoint
 
 Auth: node API token; body `{"token": "<sandbox token>", "name": "..."}`
-(name optional). Captures the sandbox's full state without stopping it and
+(name optional); the root `api_token` with an empty body `token` acts by id as
+the operator. Captures the sandbox's full state without stopping it and
 answers `200 {"checkpoint": {id, name, sandbox_id, key, tenant?,
 created_at}}` — `tenant` records the calling tenant, absent for root.
 400 bad body or name, 401 bad api token, 404 unknown id or wrong sandbox
@@ -897,7 +908,9 @@ part of the public API; an SDK caller has no reason to call it directly.
 
 Auth: node API token. Lists this node's checkpoints, newest first. A tenant
 sees only its own records; root sees everything. A checkpoint backing an
-archived claim is that claim's wake image, not a listable record.
+archived claim is that claim's wake image, not a listable record. Answers
+`200 {"checkpoints": [{id, name, sandbox_id, key, tenant?, created_at}]}`, the
+record shape `POST /v1/sandboxes/{id}/checkpoint` returns.
 
 ## DELETE /v1/checkpoints/{id}
 
@@ -1311,7 +1324,8 @@ size tier, its [`labels`](#put-v1templateslabelstemplatenetsize) when any are
 set, and `tenant` when a tenant promoted it (omitted for the operator). A key
 a configured pool now owns is left out, since claims of it clone the pool's
 golden. On a shared checkpoint store a node lists what it promoted plus what
-was in the store when it started. A template published by an older sandboxd is
+was in the store when it started, and a template another node deletes later
+stays listed, and may redirect a claim to a 404, until this node restarts. A template published by an older sandboxd is
 listed once it is re-promoted.
 
 ## GET /v1/peers

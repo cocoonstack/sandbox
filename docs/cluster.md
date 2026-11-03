@@ -465,7 +465,8 @@ lives in its node's checkpoint store. On the default local-disk backend
 that means **only on its owner node**, and the mesh gossips each node's
 template set alongside its warm counts; on a shared store (a FUSE-mounted
 `checkpoint_dir` or the s3 backend) every node resolves every template
-directly, so the gossip routing simply never fires. An export carries only
+directly, so the gossip routing fires only for a template another node deleted
+after this one started, which stays listed until this node restarts. An export carries only
 the sandbox's writable state — the base image blobs resolve from the
 claiming node's local store, pulled by digest when missing (`vm clone
 --pull`). Name-based calls route cluster-wide:
