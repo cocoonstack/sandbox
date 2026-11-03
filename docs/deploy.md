@@ -34,30 +34,34 @@ flavors.
 
 ## Upgrading
 
-This release does not convert VM or snapshot state from older releases. Drain old
+Each note names the release it starts from; a note for a release you already
+run does not apply.
+
+Upgrading from before v0.1.6 does not convert VM or snapshot state. Drain old
 claims and use fresh `data_dir` and `checkpoint_dir` locations when upgrading;
 older checkpoints and promoted templates must not be reused.
 
-The S3 `checkpoint_store` changed its object layout (chunk manifests instead of
-whole export files). Records written by an earlier release are not readable and
+An S3 `checkpoint_store` written before v0.1.18 used another object layout
+(whole export files, now chunk manifests). Those records are not readable and
 there is no fallback reader: before starting the new binary, wake or release
 every archived claim and delete the checkpoints, then re-promote templates, or
 point `prefix` at an empty location. Objects of the old layout under a reused
 prefix stay in the bucket until you delete them.
 
-The scalar egress-attachment keys are retired: rename `"bridge": "br0"` to
+Since v0.1.5 the scalar egress-attachment keys are retired: rename `"bridge": "br0"` to
 `"bridges": ["br0"]` and `"network": "cni"` to `"networks": ["cni"]` before
 starting the new binary — config loading rejects the old spellings loudly
 rather than silently dropping the egress lane.
 
-Dataset volumes require a lockstep rollout. Upgrade every sandboxd
+Dataset volumes, read-only since v0.1.5 and writable since v0.1.6, require a
+lockstep rollout. Upgrade every sandboxd
 node and cocoon to the required version before enabling the catalog or shipping
 an SDK that requests volumes. Mixed-version serving is unsupported. Once a
 volume claim has finalized, do not roll a node back to an older sandboxd until
 all volume claims are gone; the older daemon cannot preserve the volume
 claims' admission holds and marker bookkeeping recorded in `claims.json`.
 
-The guest images and sandboxd move together on the egress lane: sandboxd tells
+Since v0.1.11 the guest images and sandboxd move together on the egress lane: sandboxd tells
 a NIC-bearing guest how its traffic leaves through `/etc/silkd-lane`, and a
 guest image from another release reads a different file or none, which on a
 locked bridge lane leaves its execs routing into the lock. Roll the images
