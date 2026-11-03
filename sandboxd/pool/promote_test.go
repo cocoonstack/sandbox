@@ -607,8 +607,8 @@ func TestClaimFromATemplateRunsBesideItsRepromote(t *testing.T) {
 	m.tpls = slow
 	repromoted := make(chan error, 1)
 	go func() {
-		_, _, err := m.Promote(t.Context(), parent.ID, Cred{Token: parent.Token}, "tpl:x", "")
-		repromoted <- err
+		_, _, promoteErr := m.Promote(t.Context(), parent.ID, Cred{Token: parent.Token}, "tpl:x", "")
+		repromoted <- promoteErr
 	}()
 	<-slow.entered
 
@@ -616,8 +616,8 @@ func TestClaimFromATemplateRunsBesideItsRepromote(t *testing.T) {
 	defer cancel()
 	claimed := make(chan error, 1)
 	go func() {
-		_, err := claimAny(ctx, m, key, 0)
-		claimed <- err
+		_, claimErr := claimAny(ctx, m, key, 0)
+		claimed <- claimErr
 	}()
 	select {
 	case err = <-claimed:
