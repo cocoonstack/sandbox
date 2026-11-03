@@ -22,6 +22,21 @@ marked root-only. Errors are `{"error": "message"}` with the status codes
 listed per endpoint. Request bodies are capped at 1 MiB; a larger one is
 rejected with `400` and an error beginning `invalid request body`.
 
+## Guest errors
+
+Wake, the agent relay, the port relay and exec restore a sleeping sandbox before
+they reach its guest, so they share these answers:
+
+- 403 a removed tenant's archive
+- 429 while the disk reserve is low or the node is at
+  [`max_running`](deploy.md#configuration)
+- 503 `lease lost; retry` for a replicated claim while its node's lease is
+  overdue ([running claims](cluster.md#running-claims-across-node-loss))
+- 503 `sandbox moving to another node; retry` while an
+  [evacuation](#post-v1drain) has yet to move it
+- 503 `archive registry down; retry` for an archived claim under
+  `archive_failover` while the meta store is down
+
 ## POST /v1/claim
 
 Auth: `Authorization: Bearer <api_token>` (when configured).
@@ -519,11 +534,8 @@ while stored, and waking it starts a fresh lease of the length the claim was gra
 [failed](deploy.md#dead-vmms-and-host-restarts) sandbox is cold-booted from
 its own disk (memory is lost) and its restart budget resets. 204 on
 success, 404 unknown id or wrong token, 409 a failed egress-lane or volume
-sandbox, or one whose VM record is gone, 403 a removed tenant's archive,
-429 while the disk reserve is low or the node is at [`max_running`](deploy.md#configuration), 500 when the cold boot or a restore fails,
-503 `lease lost; retry` for a replicated claim while its node's lease is overdue,
-503 `sandbox moving to another node; retry` while an [evacuation](#post-v1drain) has yet to move it,
-503 `archive registry down; retry` for an archived claim under `archive_failover` while the meta store is down.
+sandbox, or one whose VM record is gone, 500 when the cold boot or a restore
+fails, and the [guest errors](#guest-errors).
 
 ## POST /v1/sandboxes/{id}/renew
 
@@ -1161,11 +1173,9 @@ ends after about two minutes of failed TCP keepalives. Frames sent right behind 
 before the 101, reach silkd in order; the Go and Python SDKs send their first
 frames that way over plain HTTP, so a proxy in front of a plain-HTTP endpoint
 must forward them too (Go's `httputil.ReverseProxy` drops them; Caddy forwards
-them). 426 without the upgrade header, 403 a removed tenant's archive, 404
-unknown sandbox, 409 a failed sandbox, 429 while the disk reserve is low or the node is at `max_running`, 500 a
-failed restore, 502 guest unreachable, 503 `lease lost; retry` for a replicated claim
-while its node's lease is overdue (see
-[running claims](cluster.md#running-claims-across-node-loss)), 503 `archive registry down; retry` for an archived claim under `archive_failover` while the meta store is down. A relay of a
+them). 426 without the upgrade header, 404 unknown sandbox, 409 a failed sandbox,
+500 a failed restore, 502 guest unreachable, and the
+[guest errors](#guest-errors). A relay of a
 claim of a replicating pool that is already open when the lease turns overdue
 is closed, whether or not it has a replica yet.
 
@@ -1226,9 +1236,8 @@ fork in flight, answers `409` at once; an open passive relay still holds the san
 400 a port outside 1-65535; 401 missing bearer token; 404 unknown sandbox or
 wrong token; 409 a failed sandbox or a passive relay to a paused one; 426 without the upgrade
 header; 502 when the guest cannot be reached on that port — no listener, or a
-hibernated sandbox whose restore failed. The node log carries which; 403 a
-removed tenant's archive; 429 while the disk reserve is low or the node is at `max_running`; 503
-`lease lost; retry` for a replicated claim while its node's lease is overdue; 503 `archive registry down; retry` for an archived claim under `archive_failover` while the meta store is down.
+hibernated sandbox whose restore failed. The node log carries which; and the
+[guest errors](#guest-errors).
 
 ## POST /v1/sandboxes/{id}/exec
 
@@ -1253,9 +1262,8 @@ does not exist are the caller's, not 502s; 401 missing bearer token; 404 unknown
 413 when stdout+stderr exceed 8 MiB; 503 with `Retry-After: 1` when the
 node's buffered-exec memory is exhausted (64 MiB of output across every
 buffered exec in flight; the command is killed); 502 guest unreachable or any other
-silkd error; 403 a removed tenant's archive; 409 a failed sandbox; 429 while the
-disk reserve is low or the node is at `max_running`; 500 a failed restore; 503 `lease lost; retry` for a replicated claim
-while its node's lease is overdue; 503 `archive registry down; retry` for an archived claim under `archive_failover` while the meta store is down; 504 when the command outlives `timeout_seconds`. A client that hangs up first gets no reply and the command is killed. A hibernated sandbox wakes transparently like on the relay.
+silkd error; 409 a failed sandbox; 500 a failed restore; the
+[guest errors](#guest-errors); 504 when the command outlives `timeout_seconds`. A client that hangs up first gets no reply and the command is killed. A hibernated sandbox wakes transparently like on the relay.
 
 ## GET /v1/sandboxes/{id}/owner
 
