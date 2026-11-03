@@ -52,6 +52,18 @@ func TestMaxRunningLeavesTheWarmPoolAlone(t *testing.T) {
 	}
 }
 
+func TestANodeAtACapGossipsNoPools(t *testing.T) {
+	m := newTestManager(t, newFakeEngine(), config.PoolSpec{PoolKey: testKey, Warm: 1})
+	if _, served := m.WarmCounts()[testKey.Hash()]; !served {
+		t.Fatal("a node under its caps names no pool")
+	}
+	tuneView(m, func(v *configView) { v.maxRunning = 1 })
+	mustClaim(t, m, testKey)
+	if counts := m.WarmCounts(); len(counts) != 0 {
+		t.Errorf("counts %v at the cap, want none", counts)
+	}
+}
+
 func TestMaxRunningCountsEveryForkChild(t *testing.T) {
 	m := newTestManager(t, newFakeEngine())
 	tuneView(m, func(v *configView) { v.maxRunning = 2 })

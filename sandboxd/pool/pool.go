@@ -360,7 +360,7 @@ type Manager struct {
 	configSeedHash string // config pools' hash, to warn when a file edit is overridden
 
 	// idleDefault is the idle-hibernate threshold for unpooled keys; zero disables.
-	idleSweep   atomic.Bool
+	idleSweep atomic.Bool
 
 	livenessSweep atomic.Bool
 	cocoondSocket string
@@ -369,8 +369,8 @@ type Manager struct {
 	lastVMPoll atomic.Int64
 
 	// archive*Default are the archive thresholds for unpooled keys.
-	archiveSweep         atomic.Bool
-	archiveDeleteSweep   atomic.Bool
+	archiveSweep       atomic.Bool
+	archiveDeleteSweep atomic.Bool
 	// archiving holds ids with an export or a registry drop in flight; pendingCks pins ids mid-commit; both under m.mu.
 	archiving  map[string]struct{}
 	pendingCks map[string]struct{}
@@ -391,7 +391,7 @@ type Manager struct {
 	cfg      *config.Config
 	reloadMu sync.Mutex
 
-	draining     bool // guarded by m.mu; deliberately not persisted
+	draining bool // guarded by m.mu; deliberately not persisted
 
 	tenants    tenants.Source
 	rootSum    string
@@ -688,18 +688,17 @@ func (m *Manager) Sandboxes(tenant, claimRef string, metadata types.Metadata) []
 	return out
 }
 
-// WarmCounts is the per-pool-key-hash warm count, for gossiping placement.
+// WarmCounts is the per-pool-key-hash warm count, for gossiping placement; a node that would refuse a claim names no pool.
 func (m *Manager) WarmCounts() map[string]int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	counts := make(map[string]int, len(m.pools))
-	low := m.diskLow.Load()
+	if m.quotaErr(1, "") != nil {
+		return counts
+	}
 	for _, p := range m.pools {
 		if !p.removed {
 			counts[p.hash] = len(p.warm)
-			if low {
-				counts[p.hash] = 0
-			}
 		}
 	}
 	return counts

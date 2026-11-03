@@ -52,8 +52,9 @@ A claim always enters at whatever node the client dialed:
    view can never ping-pong. The same redirect fires when the node lacks a
    golden for the key but gossip names a template owner, and when the node
    sits at `max_claims` or `max_running`: a warm peer first, else a peer that
-   serves the pool. Gossip does not carry a peer's free slots, so that peer can
-   answer 429 too; the SDK then tries the next one and the origin.
+   serves the pool. A node that would refuse a claim stops gossiping its pools
+   within a tick. A stale view can still name one; it answers 429, and the SDK
+   then tries the next one and the origin.
 3. **No candidates** — the node provisions locally: a golden clone (tens of
    ms) or a cold boot for an unpooled key.
 
