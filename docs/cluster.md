@@ -312,7 +312,7 @@ With `archive_failover` every node renews one row of `sandboxd_nodes (cell,
 node, lease_until)` every 5 seconds, with a single upsert on the database clock
 that covers the whole node: `lease_until = now() + 15 s`. A renewal that fails
 once does not lose the lease or trip the fence, as long as the next one
-answers within 2 seconds of its start. The table is created at start when it is missing, and a node
+answers within 2 seconds of its start. The table is [created at start](deploy.md#shared-archive-registry) when it is missing, and a node
 with no row counts as expired. Adoption and the departed-owner sweep consult the
 lease, never mesh membership, so a node the mesh lost but the database still
 hears keeps its claims, and a node the mesh still lists but the database no

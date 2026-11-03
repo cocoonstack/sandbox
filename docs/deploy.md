@@ -774,7 +774,7 @@ through `/v1/tenants` on any node.
     the DSN (4 suffices) so a fleet stays within the database's
     `max_connections`.
   - Every other shared table a node opens adds a query pool of the same size:
-    the pool set with a `cell`, the archive registry with `archive_failover`,
+    the pool set with a `cell`, the [archive registry](#shared-archive-registry) with `archive_failover`,
     and the usage table with `usage`. Count each in `max_connections`.
   - LISTEN needs a session-mode connection, so a connection pooler in front
     of the database must not run in transaction mode for that DSN.
@@ -933,6 +933,41 @@ only; computing durations or prices stays with the consumer.
   ```
 - **Renaming** a node, or moving it to another cell, starts it with no rows:
   the node lands what its journal still holds again under the new name.
+
+### Shared archive registry
+
+With `archive_failover`, each node keeps its archive and replica rows in
+`sandboxd_archives` and its [node lease](cluster.md#node-lease) in
+`sandboxd_nodes`, scoped by `meta_store.cell`.
+
+- **Schema:** sandboxd creates the tables at boot when they are missing; create
+  them ahead with the same DDL when the node's role has no `CREATE` right:
+
+  ```sql
+  CREATE SEQUENCE IF NOT EXISTS sandboxd_archives_epoch;
+  CREATE TABLE IF NOT EXISTS sandboxd_archives (
+      cell         text        NOT NULL,
+      id           text        NOT NULL,
+      tenant       text        NOT NULL DEFAULT '',
+      token_sha256 text        NOT NULL,
+      owner        text        NOT NULL,
+      epoch        bigint      NOT NULL CHECK (epoch > 0),
+      consumed     boolean     NOT NULL DEFAULT false,
+      checkpoint   text        NOT NULL,
+      deadline     timestamptz,
+      claim        jsonb       NOT NULL,
+      updated_at   timestamptz NOT NULL DEFAULT now(),
+      PRIMARY KEY (cell, id)
+  );
+  CREATE INDEX IF NOT EXISTS sandboxd_archives_deadline ON sandboxd_archives (cell, deadline) WHERE deadline IS NOT NULL;
+  CREATE INDEX IF NOT EXISTS sandboxd_archives_consumed ON sandboxd_archives (cell) WHERE consumed;
+  CREATE TABLE IF NOT EXISTS sandboxd_nodes (
+      cell        text        NOT NULL,
+      node        text        NOT NULL,
+      lease_until timestamptz NOT NULL,
+      PRIMARY KEY (cell, node)
+  );
+  ```
 
 ### Reloading the config
 
