@@ -10,7 +10,9 @@ use silkd::server::State;
 use tokio::io::AsyncWriteExt;
 use tokio::time::timeout;
 
-use common::{DEADLINE, FrameLines, b64, connect, frames_until, next_frame, send, type_of};
+use common::{
+    DEADLINE, FrameLines, assert_error, b64, connect, frames_until, next_frame, send, type_of,
+};
 
 async fn types_until(lines: &mut FrameLines, terminal: &str) -> Vec<String> {
     frames_until(lines, |f| type_of(f) == terminal)
@@ -125,8 +127,7 @@ async fn a_leading_input_frame_is_bad_request_and_the_connection_stays() {
 
     send(&mut cw, json!({"v":1,"op":"stdin_close"})).await;
     let err = next_frame(&mut lines).await;
-    assert_eq!(type_of(&err), "error", "got {err}");
-    assert_eq!(err["kind"], "bad_request", "got {err}");
+    assert_error(&err, "bad_request");
 
     send(&mut cw, json!({"v":1,"op":"info"})).await;
     assert_eq!(type_of(&next_frame(&mut lines).await), "info");

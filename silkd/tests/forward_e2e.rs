@@ -13,7 +13,10 @@ use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 use tokio::time::timeout;
 
-use common::{DEADLINE, FrameLines, FrameWriter, b64, connect, decode, next_frame, send, type_of};
+use common::{
+    DEADLINE, FrameLines, FrameWriter, assert_error, b64, connect, decode, next_frame, send,
+    type_of,
+};
 
 async fn echo_listener() -> u16 {
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
@@ -168,8 +171,7 @@ async fn forward_refused_port_is_not_found() {
 
         send(&mut cw, json!({"v":1,"op":"port_forward","port":1})).await;
         let err = next_frame(&mut lines).await;
-        assert_eq!(type_of(&err), "error", "got {err}");
-        assert_eq!(err["kind"], "not_found", "got {err}");
+        assert_error(&err, "not_found");
     })
     .await
     .expect("test deadline");

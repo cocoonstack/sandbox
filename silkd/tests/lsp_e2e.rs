@@ -3,7 +3,6 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 mod common;
 
-use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
 use std::sync::Arc;
 
@@ -25,8 +24,7 @@ static ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 fn manifest_env(server_body: &str) -> TempDir {
     let dir = tempfile::tempdir().unwrap();
     let bin = dir.path().join("fake-lsp");
-    let mut f = std::fs::File::create(&bin).unwrap();
-    f.write_all(server_body.as_bytes()).unwrap();
+    std::fs::write(&bin, server_body).unwrap();
     std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
     // SAFETY: ENV_LOCK, held by the caller for its whole test, serializes all access to SILKD_LSP_DIR.
     unsafe { std::env::set_var("SILKD_LSP_DIR", dir.path()) };

@@ -124,18 +124,14 @@ async fn mkdir_rename_rm_lifecycle() {
     let mk = request(json!({"op":"fs_mkdir","path":sub.to_str().unwrap()})).await;
     assert_eq!(type_of(&mk[0]), "done");
 
-    let mv = exchange(&[
-        json!({"op":"fs_rename","from":sub.to_str().unwrap(),"to":moved.to_str().unwrap()})
-            .to_string(),
-    ])
+    let mv = request(
+        json!({"op":"fs_rename","from":sub.to_str().unwrap(),"to":moved.to_str().unwrap()}),
+    )
     .await;
     assert_eq!(type_of(&mv[0]), "done");
     assert!(moved.exists() && !sub.exists());
 
-    let rm = exchange(&[
-        json!({"op":"fs_rm","path":moved.to_str().unwrap(),"recursive":true}).to_string(),
-    ])
-    .await;
+    let rm = request(json!({"op":"fs_rm","path":moved.to_str().unwrap(),"recursive":true})).await;
     assert_eq!(type_of(&rm[0]), "done");
     assert!(!moved.exists());
 }

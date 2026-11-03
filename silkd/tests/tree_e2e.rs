@@ -157,23 +157,13 @@ async fn pull_missing_path_errors() {
     let dir = tempfile::tempdir().unwrap();
     let missing = dir.path().join("xyz");
     let frames = request(json!({"op":"fs_pull","path":missing.to_str().unwrap()})).await;
-    assert_eq!(
-        type_of(frames.last().unwrap()),
-        "error",
-        "missing leaf: {frames:?}"
-    );
-    assert_eq!(frames.last().unwrap()["kind"], "not_found");
+    assert_error(frames.last().unwrap(), "not_found");
 }
 
 #[tokio::test]
 async fn pull_missing_parent_errors_not_found() {
     let frames = request(json!({"op":"fs_pull","path":"/no/such/dir/xyz"})).await;
-    assert_eq!(
-        type_of(frames.last().unwrap()),
-        "error",
-        "missing parent: {frames:?}"
-    );
-    assert_eq!(frames.last().unwrap()["kind"], "not_found");
+    assert_error(frames.last().unwrap(), "not_found");
 }
 
 #[tokio::test]
