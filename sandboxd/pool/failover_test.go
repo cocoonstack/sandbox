@@ -824,7 +824,7 @@ func TestFailoverALeftoverDeleteMarkerSparesTheAdoptersCheckpoint(t *testing.T) 
 	sb := mustClaim(t, a, testKey)
 	mustArchive(t, a, sb)
 	ck := sb.ArchiveCk
-	if err := a.markArchiveCk(ck); err != nil {
+	if err := a.ckMarks.mark(ck); err != nil {
 		t.Fatalf("mark: %v", err)
 	}
 	c.expire("a")
@@ -845,7 +845,7 @@ func TestFailoverRestartClearsTheMarkerOfAnAdoptedClaim(t *testing.T) {
 	sb := mustClaim(t, a, testKey)
 	mustArchive(t, a, sb)
 	ck := sb.ArchiveCk
-	if err := a.markArchiveCk(ck); err != nil {
+	if err := a.ckMarks.mark(ck); err != nil {
 		t.Fatalf("mark: %v", err)
 	}
 	if err := a.FlushClaims(); err != nil {
@@ -1207,7 +1207,7 @@ func TestFailoverADropClearsTheMarkerBeforeTheCheckpointIsUnpinned(t *testing.T)
 		sb := mustClaim(t, a, testKey)
 		mustArchive(t, a, sb)
 		ck := sb.ArchiveCk
-		if err := a.markArchiveCk(ck); err != nil {
+		if err := a.ckMarks.mark(ck); err != nil {
 			t.Fatalf("mark: %v", err)
 		}
 		c.expire("a")

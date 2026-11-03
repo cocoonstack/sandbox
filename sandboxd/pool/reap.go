@@ -77,7 +77,7 @@ func (m *Manager) reapOnce(ctx context.Context) {
 	}
 
 	logger := log.WithFunc("pool.reapOnce")
-	failed := m.markArchiveCks(purges)
+	failed := m.ckMarks.markAll(purges)
 	expired = slices.DeleteFunc(expired, func(v victim) bool {
 		markErr, bad := failed[v.ck]
 		if bad {
@@ -126,7 +126,7 @@ func (m *Manager) reapOnce(ctx context.Context) {
 		rb := m.store.set(restored...)
 		m.mu.Unlock()
 		for _, ck := range purgeCks {
-			if clearErr := m.clearArchiveCk(ck); clearErr != nil {
+			if clearErr := m.ckMarks.clear(ck); clearErr != nil {
 				logger.Warnf(ctx, "clear archive ck %s: %v", ck, clearErr)
 			}
 		}

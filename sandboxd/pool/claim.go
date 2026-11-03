@@ -288,7 +288,7 @@ func (m *Manager) releaseResolved(ctx context.Context, id string, sb *types.Sand
 			break
 		}
 		m.mu.Unlock()
-		if markErr := m.markArchiveCk(ck); markErr != nil {
+		if markErr := m.ckMarks.mark(ck); markErr != nil {
 			return fmt.Errorf("release %s: track archive checkpoint: %w", id, markErr)
 		}
 		marked = ck
@@ -311,7 +311,7 @@ func (m *Manager) releaseResolved(ctx context.Context, id string, sb *types.Sand
 		m.mu.Unlock()
 		logger := log.WithFunc("pool.releaseResolved")
 		if ck != "" {
-			if clearErr := m.clearArchiveCk(ck); clearErr != nil {
+			if clearErr := m.ckMarks.clear(ck); clearErr != nil {
 				logger.Warnf(ctx, "clear archive ck %s: %v", ck, clearErr)
 			}
 		}

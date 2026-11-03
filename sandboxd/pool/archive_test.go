@@ -883,7 +883,7 @@ func TestArchiveWakeEvictsRecLock(t *testing.T) {
 func TestMarkArchiveCksKeepsOnlyTheIDsItCouldNotMark(t *testing.T) {
 	m := newTestManager(t, newFakeEngine())
 	good := []string{"ck_00000000000000a1", "ck_00000000000000a2"}
-	failed := m.markArchiveCks([]string{good[0], "not-a-ck", good[1]})
+	failed := m.ckMarks.markAll([]string{good[0], "not-a-ck", good[1]})
 	if len(failed) != 1 || failed["not-a-ck"] == nil {
 		t.Fatalf("failed %v, want only the invalid id", failed)
 	}
@@ -892,7 +892,7 @@ func TestMarkArchiveCksKeepsOnlyTheIDsItCouldNotMark(t *testing.T) {
 			t.Errorf("%s not marked: an invalid id beside it blocked the batch", ck)
 		}
 	}
-	if failed := m.markArchiveCks(nil); failed != nil {
+	if failed := m.ckMarks.markAll(nil); failed != nil {
 		t.Errorf("an empty batch reported %v", failed)
 	}
 }

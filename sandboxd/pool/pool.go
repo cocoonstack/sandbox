@@ -314,6 +314,8 @@ type Manager struct {
 
 	recs recordLocks
 
+	ckMarks ckMarkers
+
 	// notifyTemplates is set before serving starts and fires after a promote or template delete.
 	notifyTemplates func()
 
@@ -366,6 +368,7 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 		readers:         &readerSet{live: map[string]*reader{}},
 		archiving:       map[string]struct{}{},
 		pendingCks:      map[string]struct{}{},
+		ckMarks:         ckMarkers{dir: filepath.Join(cfg.DataDir, archiveDeleteDir)},
 		recs:            recordLocks{held: map[string]*sync.RWMutex{}, refs: map[string]int{}},
 		heals:           healVetoes{pending: map[string]struct{}{}, aborted: map[string]struct{}{}},
 		refillSem:       make(chan struct{}, refill),

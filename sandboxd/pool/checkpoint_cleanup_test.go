@@ -104,7 +104,7 @@ func TestCheckpointCleanupWaitsForTheClaimWrite(t *testing.T) {
 				restoreWrites := failClaimWrites(t, m.store)
 				tt.act(t, m, c, sb)
 				m.retryArchiveDeletes(t.Context())
-				if !ckExists(t, m, ck) || !m.deleteMarked(ck) {
+				if !ckExists(t, m, ck) || !m.ckMarks.marked(ck) {
 					t.Fatal("cleanup dropped the checkpoint or its delete marker before the claim write landed")
 				}
 				restoreWrites()
@@ -127,7 +127,7 @@ func TestCheckpointCleanupWaitsForTheClaimWrite(t *testing.T) {
 				m.store.set(other)
 				m.mu.Unlock()
 				m.retryArchiveDeletes(t.Context())
-				if ckExists(t, m, ck) || m.deleteMarked(ck) {
+				if ckExists(t, m, ck) || m.ckMarks.marked(ck) {
 					t.Fatal("cleanup did not finish once the claim write landed")
 				}
 				for _, live := range checkpointRefs(sb) {
@@ -212,7 +212,7 @@ func TestFailoverDisabledExitKeepsReplicaCheckpoint(t *testing.T) {
 				if !ok || checkpointRefs(restored) != checkpointRefs(sb) {
 					t.Fatalf("startup without a registry changed the claim: %+v", restored)
 				}
-				if !ckExists(t, m, ck) || m.deleteMarked(ck) {
+				if !ckExists(t, m, ck) || m.ckMarks.marked(ck) {
 					t.Fatalf("startup without a registry queued or deleted checkpoint %s", ck)
 				}
 				exit.run(t, m, restored)

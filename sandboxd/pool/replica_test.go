@@ -1093,7 +1093,7 @@ func TestReplicaALeftoverDeleteMarkerSparesTheLiveReplica(t *testing.T) {
 	sb := mustClaim(t, a, testKey)
 	replicateNow(t, a, sb)
 	ck := a.replicaOf(sb)
-	if err := a.markArchiveCk(ck); err != nil {
+	if err := a.ckMarks.mark(ck); err != nil {
 		t.Fatalf("mark: %v", err)
 	}
 
