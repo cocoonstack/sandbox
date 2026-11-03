@@ -87,6 +87,23 @@ func TestActivityStampsBlockIdleSweep(t *testing.T) {
 	})
 }
 
+func TestRenewKeepsAnIdleClaimIdle(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		eng := newFakeEngine()
+		m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1, IdleHibernateSeconds: 1})
+		sb := mustClaim(t, m, testKey)
+		backdate(m, sb, 2*time.Second)
+
+		if _, err := m.Renew(t.Context(), sb.ID, Cred{Token: sb.Token}, time.Hour, ""); err != nil {
+			t.Fatalf("Renew: %v", err)
+		}
+		sweepIdle(t, m)
+		if hibernated(m) != 1 {
+			t.Fatal("a renewed claim with no data-plane activity was not hibernated")
+		}
+	})
+}
+
 func TestHeldConnectionBlocksIdleSweep(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		eng := newFakeEngine()

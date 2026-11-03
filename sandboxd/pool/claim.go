@@ -197,7 +197,6 @@ func (m *Manager) Renew(ctx context.Context, id string, cred Cred, ttl time.Dura
 		m.store.recommit(ctx, rb)
 		return time.Time{}, fmt.Errorf("renew %s: persist claims: %w", id, err)
 	}
-	sb.Touch()
 	m.recordUsage(ctx, usage.Event{Event: "renew", ID: id, Tenant: sb.Tenant, Deadline: deadline})
 	if rowed {
 		if err := m.rewriteArchiveRow(ctx, sb, false); err != nil {
