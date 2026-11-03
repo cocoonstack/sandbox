@@ -1004,7 +1004,7 @@ some of them on a node:
 |---|---|---|
 | `demo`, `smoke` | claim tiers and the verb surface | `sandboxd-e2e.sh` |
 | `volumesmoke` | shared read-only, writable, and live volumes | `sandboxd-e2e.sh` |
-| `meshsmoke` | template routing on a two-node mesh | |
+| `meshsmoke` | template routing on a two-node mesh without a shared checkpoint store, because [a shared store never routes](cluster.md#templates-on-a-cluster) | |
 | `crossnode` | a checkpoint claimed on another node through the shared store | |
 | `coldproof` | a cold claim, by the guest's own clock | |
 | `lifecycle` | idle → hibernate → archive → wake | `archive-e2e.sh` |
