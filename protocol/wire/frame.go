@@ -123,9 +123,9 @@ var (
 
 	// bulkResponses decode their canonical shape without json.Unmarshal; any other shape takes responseDecoders.
 	bulkResponses = map[string]bulkResponse{
-		"stdout": {[]byte(`{"type":"stdout","data":"`), func(d []byte) Response { return &Stdout{Data: d} }},
-		"stderr": {[]byte(`{"type":"stderr","data":"`), func(d []byte) Response { return &Stderr{Data: d} }},
-		"data":   {[]byte(`{"type":"data","data":"`), func(d []byte) Response { return &DataResp{Data: d} }},
+		Stdout{}.RespType():   {[]byte(`{"type":"stdout","data":"`), func(d []byte) Response { return &Stdout{Data: d} }},
+		Stderr{}.RespType():   {[]byte(`{"type":"stderr","data":"`), func(d []byte) Response { return &Stderr{Data: d} }},
+		DataResp{}.RespType(): {[]byte(`{"type":"data","data":"`), func(d []byte) Response { return &DataResp{Data: d} }},
 	}
 
 	dataRespHead = bulkResponses["data"].head
