@@ -728,7 +728,9 @@ func TestMoveReceivedClaimWaitingOutAnOutageIsNotHibernatedOrServed(t *testing.T
 	})
 	cred := Cred{Token: sb.Token}
 	backdate(mc.t, received, time.Hour)
+	received.Transition.Lock()
 	sweepIdle(t, mc.t)
+	received.Transition.Unlock()
 	expire(mc.t, received)
 	mc.t.reapOnce(ctx)
 	if _, held := mc.t.byID(sb.ID); !held {
