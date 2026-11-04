@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"runtime"
+	"syscall"
 	"testing"
 )
 
@@ -54,6 +56,13 @@ func TestCopyDataCopiesDataRangesOnly(t *testing.T) {
 		t.Fatalf("copyData: %v", err)
 	}
 	assertSameFile(t, srcPath, dstPath)
+	info, err := dst.Stat()
+	if err != nil {
+		t.Fatalf("stat dst: %v", err)
+	}
+	if allocated := info.Sys().(*syscall.Stat_t).Blocks * 512; runtime.GOOS == "linux" && allocated >= info.Size()/2 {
+		t.Errorf("copy allocates %d of %d bytes, want the holes kept", allocated, info.Size())
+	}
 }
 
 func writeSparse(t *testing.T) (src, dst string) {

@@ -99,8 +99,8 @@ func TestEgressLaneWakeFailsClosed(t *testing.T) {
 	}
 	for _, tt := range cases {
 		t.Run(tt.name, func(t *testing.T) {
-			if _, err := m.wakeResolved(t.Context(), tt.sb); err == nil {
-				t.Fatal("egress-lane wake must fail closed, not resume unguarded")
+			if _, err := m.wakeResolved(t.Context(), tt.sb); err == nil || !strings.Contains(err.Error(), "egress lane cannot resume") {
+				t.Fatalf("wake = %v, want the egress lane to fail closed before it resumes", err)
 			}
 		})
 	}

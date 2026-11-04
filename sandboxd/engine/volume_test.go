@@ -356,10 +356,7 @@ func TestMountVolumeStopsAtFailedStage(t *testing.T) {
 	}
 }
 
-func TestMountVolumeDeviceProbeIsBoundedAndCancelable(t *testing.T) {
-	if volumeProbeTimeout != 2*time.Second {
-		t.Fatalf("volume probe timeout = %s, want 2s", volumeProbeTimeout)
-	}
+func TestMountVolumeDeviceProbeIsCancelable(t *testing.T) {
 	path := sockPath(t)
 	fake := serveFakeSilkd(t, path)
 	configureVolumeDevices(fake)
@@ -376,9 +373,13 @@ func TestMountVolumeDevNodeNeverAppearsTimesOut(t *testing.T) {
 	fake := serveFakeSilkd(t, path)
 	configureVolumeDevices(fake)
 	fake.set(func(f *fakeSilkd) { delete(f.stat, "/dev/vdc") })
+	start := time.Now()
 	err := newTestEngine().MountVolume(t.Context(), path, "imagenet", "/datasets/training", false)
 	if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "wait for volume device imagenet") {
 		t.Errorf("got %v, want a bounded wait-for-device timeout", err)
+	}
+	if elapsed := time.Since(start); elapsed >= volumeSetupTimeout {
+		t.Errorf("the probe took %v, want it to end before the %v setup budget", elapsed, volumeSetupTimeout)
 	}
 }
 

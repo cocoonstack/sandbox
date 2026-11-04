@@ -37,11 +37,11 @@ const nodeToken = "node-token"
 
 var testKey = types.PoolKey{Template: "rt:24.04", Net: types.NetNone, Size: types.SizeSmall}
 
-func TestClaimColdThenWarmThenCloseThroughTheWholeStack(t *testing.T) {
+func TestClaimThenWarmClaimThenCloseThroughTheWholeStack(t *testing.T) {
 	st := startStack(t, config.PoolSpec{PoolKey: testKey, Warm: 1})
 
 	var sb *sandbox.Sandbox
-	t.Run("cold claim before any refill", func(t *testing.T) {
+	t.Run("first claim", func(t *testing.T) {
 		var err error
 		sb, err = st.client.New(t.Context(), "rt:24.04")
 		if err != nil {
@@ -58,11 +58,15 @@ func TestClaimColdThenWarmThenCloseThroughTheWholeStack(t *testing.T) {
 
 	t.Run("refill then warm claim", func(t *testing.T) {
 		waitFor(t, st.oneWarm)
+		warmBefore := st.mgr.Counters().ClaimsWarm
 		warm, err := st.client.New(t.Context(), "rt:24.04")
 		if err != nil {
 			t.Fatalf("New: %v", err)
 		}
 		defer warm.Close()
+		if got := st.mgr.Counters().ClaimsWarm; got != warmBefore+1 {
+			t.Errorf("warm claims %d, want %d", got, warmBefore+1)
+		}
 		if out, err := warm.Exec(t.Context(), "echo", "warm"); err != nil || out != "warm\n" {
 			t.Errorf("exec on warm claim: %q, %v", out, err)
 		}
@@ -70,7 +74,7 @@ func TestClaimColdThenWarmThenCloseThroughTheWholeStack(t *testing.T) {
 
 	t.Run("close releases and revokes access", func(t *testing.T) {
 		if sb == nil {
-			t.Skip("cold claim subtest failed")
+			t.Skip("first claim subtest failed")
 		}
 		if err := sb.Close(); err != nil {
 			t.Fatalf("Close: %v", err)

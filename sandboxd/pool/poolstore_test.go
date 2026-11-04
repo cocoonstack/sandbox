@@ -152,15 +152,15 @@ func TestNodesOfACellShareThePoolSet(t *testing.T) {
 	if !tenantstest.Eventually(t, func() bool { return hasAPISet(b) }) {
 		t.Fatal("b never applied the pool set put on a")
 	}
-	if hasAPISet(other) {
-		t.Error("a node of another cell applied the pool set")
-	}
 	cached := func(m *Manager) bool {
 		set, err := m.poolStore.load()
 		return err == nil && set != nil && len(set.Pools) == 1 && set.Pools[0].PoolKey == apiKey
 	}
 	if !tenantstest.Eventually(t, func() bool { return cached(b) }) {
 		t.Error("b never cached the cell set in pools.json")
+	}
+	if hasAPISet(other) {
+		t.Error("a node of another cell applied the pool set")
 	}
 	if joiner := metaStoreNode(t, "c1"); !hasAPISet(joiner) || !cached(joiner) {
 		t.Error("a node joining the cell did not boot with its pool set and cache it")

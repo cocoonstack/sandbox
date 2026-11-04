@@ -228,7 +228,7 @@ func TestReleaseAfterResolveTearsDownOnce(t *testing.T) {
 	if err := m.releaseResolved(t.Context(), sb.ID, second); !errors.Is(err, ErrUnknownSandbox) {
 		t.Errorf("second release: %v, want ErrUnknownSandbox", err)
 	}
-	if got := slices.Compact(slices.Clone(eng.removes)); len(got) != 1 || got[0] != sb.VMName {
+	if !slices.Equal(eng.removes, []string{sb.VMName}) {
 		t.Errorf("removes=%v, want %s torn down exactly once", eng.removes, sb.VMName)
 	}
 }
@@ -965,6 +965,9 @@ func TestRenewClampsAndDefaults(t *testing.T) {
 	m := newTestManager(t, newFakeEngine())
 	sb := mustClaim(t, m, testKey)
 
+	if _, err := m.Renew(t.Context(), sb.ID, Cred{Token: sb.Token}, time.Hour, ""); err != nil {
+		t.Fatalf("renew: %v", err)
+	}
 	if _, err := m.Renew(t.Context(), sb.ID, Cred{Token: sb.Token}, 0, ""); err != nil {
 		t.Fatalf("renew: %v", err)
 	}
