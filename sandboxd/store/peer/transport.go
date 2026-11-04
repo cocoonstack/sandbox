@@ -202,10 +202,10 @@ func writeFile(target string, r io.Reader, mode os.FileMode) error {
 }
 
 func checkpointURL(addr, id, suffix string) string {
-	return peerURL(addr, "/v1/checkpoints/"+url.PathEscape(id)+suffix)
+	return URL(addr, "/v1/checkpoints/"+url.PathEscape(id)+suffix)
 }
 
-func peerURL(addr, path string) string {
+func URL(addr, path string) string {
 	if !strings.Contains(addr, "://") {
 		addr = "http://" + addr
 	}

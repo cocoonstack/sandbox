@@ -77,6 +77,28 @@ func TestMoveRouteRefusesABudgetTheStartAllowanceAloneExceedsBeforeAnyMoveStarts
 	}
 }
 
+func TestMoveClientReachesATargetAdvertisedByHostname(t *testing.T) {
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/commit") || r.Method == http.MethodDelete {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		writeJSON(w, http.StatusOK, moveAdmitResponse{Node: "b"})
+	}))
+	defer target.Close()
+	hostname := strings.Replace(strings.TrimPrefix(target.URL, "http://"), "127.0.0.1", "localhost", 1)
+	c := &MoveClient{Token: "root"}
+	if node, err := c.Admit(t.Context(), hostname, "sb_1", pool.MoveAdmission{From: "a"}); err != nil || node != "b" {
+		t.Errorf("admit at %s: %q %v, want node b", hostname, node, err)
+	}
+	if err := c.Commit(t.Context(), hostname, "sb_1", []byte("{}"), 1); err != nil {
+		t.Errorf("commit at %s: %v", hostname, err)
+	}
+	if err := c.Drop(t.Context(), hostname, "sb_1"); err != nil {
+		t.Errorf("drop at %s: %v", hostname, err)
+	}
+}
+
 func TestMoveClientPassesTheTargetsRefusalThrough(t *testing.T) {
 	status, reason := http.StatusOK, ""
 	var gotAuth, gotPath string

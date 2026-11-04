@@ -60,11 +60,7 @@ func (c *MoveClient) call(ctx context.Context, method, addr, path string, in, ou
 		}
 		body = bytes.NewReader(raw)
 	}
-	target := addr + path
-	if u, err := url.Parse(addr); err != nil || u.Scheme == "" {
-		target = "http://" + target
-	}
-	req, err := http.NewRequestWithContext(ctx, method, target, body)
+	req, err := http.NewRequestWithContext(ctx, method, peer.URL(addr, path), body)
 	if err != nil {
 		return err
 	}

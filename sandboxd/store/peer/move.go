@@ -25,7 +25,7 @@ func SendRound(ctx context.Context, addr, token, path, dir string, names []strin
 		_ = pw.CloseWithError(err)
 		written <- err
 	}()
-	err := putRound(ctx, peerURL(addr, path), token, pr)
+	err := putRound(ctx, URL(addr, path), token, pr)
 	_ = pr.Close()
 	if writeErr := <-written; writeErr != nil && !errors.Is(writeErr, io.ErrClosedPipe) {
 		return fmt.Errorf("send round to %s: %w", addr, writeErr)
