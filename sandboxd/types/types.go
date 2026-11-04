@@ -304,6 +304,10 @@ type Sandbox struct {
 	RestartedAt time.Time `json:"restarted_at,omitzero"`
 	// Failed names why the VMM is down and not restarted; empty means the claim is serviceable.
 	Failed string `json:"failed,omitempty"`
+	// MoveOut journals a live move this node runs as the source; nil when none.
+	MoveOut *MoveOut `json:"move_out,omitempty"`
+	// MoveIn marks a claim a live move delivered here and this node has not started yet.
+	MoveIn *MoveIn `json:"move_in,omitempty"`
 	// RestartLog holds the recent restart attempts that the loop budget counts; guarded by Transition.
 	RestartLog []time.Time `json:"-"`
 	// ExitRecorded marks a VMM exit already journaled as vmm_exit; guarded by Transition.
@@ -452,6 +456,19 @@ func (r VMRecord) TapDevice() string {
 		return ""
 	}
 	return r.NetworkConfigs[0].TAP
+}
+
+// MoveOut is the source's journal of a live move: the target node, the record's first epoch and cocoon's series.
+type MoveOut struct {
+	To     string `json:"to"`
+	Epoch  int64  `json:"epoch"`
+	Series string `json:"series,omitempty"`
+}
+
+// MoveIn is the target's journal of a received claim: the source node and the epoch its commit wrote.
+type MoveIn struct {
+	From  string `json:"from"`
+	Epoch int64  `json:"epoch"`
 }
 
 // MigrateFile is one file a migrate round wrote, named relative to the round's Dir.

@@ -120,6 +120,10 @@ var (
 	ErrQuota               = errors.New("node claim quota reached")
 	ErrSleeping            = errors.New("sandbox is hibernated or archived and a reader may serve it")
 	ErrNoReader            = errors.New("no reader for the sandbox")
+	ErrNotMovable          = errors.New("sandbox cannot move")
+	ErrMoveTarget          = errors.New("move target failed")
+	ErrMoveDowntime        = errors.New("the final round would exceed max_downtime_ms")
+	ErrMoveStoreDown       = moves.ErrUnavailable
 
 	errNotSleeping   = errors.New("sandbox is no longer hibernated or archived")
 	errWokeMeanwhile = errors.New("woke between sweep and hibernate")
@@ -128,6 +132,7 @@ var (
 	errNoArchiveRow  = errors.New("archived before archive_failover was on, so no registry row names it")
 	errArchiveBusy   = errors.New("an archive of the claim is in flight")
 	errNoAdopter     = errors.New("no peer adopted the claim")
+	errMovesOff      = fmt.Errorf("%w: live moves need archive_failover and an encrypted mesh", ErrNotMovable)
 )
 
 // Engine is the slice of the cocoon driver the manager consumes.
@@ -169,6 +174,10 @@ type Engine interface {
 	DialReader(ctx context.Context, vsockSocket string) (net.Conn, error)
 	WriteInstanceMetadata(ctx context.Context, vsockSocket string, doc []byte) error
 	WriteGuestEnv(ctx context.Context, vsockSocket string, doc []byte) error
+	CheckMigrateSupport(ctx context.Context) error
+	MigrateCapture(ctx context.Context, vmName, series string, final bool) (types.MigrateRound, error)
+	MigrateReceive(ctx context.Context, fromDir, name string, key types.PoolKey) (types.VMRecord, error)
+	MigrateAbort(ctx context.Context, vmName, series string) error
 }
 
 type VolumeMountConflict = engine.VolumeMountConflict
@@ -287,7 +296,8 @@ type Manager struct {
 	replicating atomic.Bool
 	replicas    map[string]time.Time
 	// moves is the cluster move registry, nil unless the node can run live moves.
-	moves moves.Registry
+	moves    moves.Registry
+	movePeer MovePeer
 
 	view atomic.Pointer[configView]
 	// cfg is the config the view was built from; reloadMu orders reloads, the only writers of cfg and view.
@@ -334,6 +344,9 @@ type Manager struct {
 	pools           map[types.PoolKey]*pool
 	claimed         map[string]*types.Sandbox
 	pendingRemovals map[string]pendingRemoval
+	// moving holds this node's outgoing moves, incoming its reservations for moves to it; neither enters claimed.
+	moving   map[string]*outMove
+	incoming map[string]*inMove
 
 	// Node-wide, unlike the per-pool streak backoff: the exhausted resource is shared
 	atCapacityUntil  time.Time
@@ -378,6 +391,8 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 		pools:           make(map[types.PoolKey]*pool, len(cfg.Pools)),
 		claimed:         map[string]*types.Sandbox{},
 		pendingRemovals: map[string]pendingRemoval{},
+		moving:          map[string]*outMove{},
+		incoming:        map[string]*inMove{},
 		tenantLive:      map[string]int{},
 		readers:         &readerSet{live: map[string]*reader{}},
 		archiving:       map[string]struct{}{},
@@ -486,6 +501,7 @@ func (m *Manager) Run(ctx context.Context) {
 		case <-m.refillKick:
 			m.refillOnce(ctx)
 		case <-reap:
+			m.dropIdleReservations()
 			m.retryRemovals(ctx)
 			m.reapOnce(ctx)
 			m.idleOnce(ctx)
@@ -502,6 +518,9 @@ func (m *Manager) Run(ctx context.Context) {
 			go m.sweepExpiredCheckpoints(ctx)
 			if m.archives != nil {
 				go m.sweepOrphanArchives(ctx)
+			}
+			if m.moves != nil {
+				go m.sweepStaleMoves(ctx)
 			}
 		}
 	}
@@ -709,7 +728,7 @@ func logSweepResult(ctx context.Context, logger *log.Fields, err error, okMsg, f
 
 func benignSweepErr(err error) bool {
 	return errors.Is(err, ErrUnknownSandbox) || errors.Is(err, errWokeMeanwhile) ||
-		errors.Is(err, ErrNoEgressHibernate) || errors.Is(err, ErrQuota) || errors.Is(err, ErrLeaseLost)
+		errors.Is(err, ErrNoEgressHibernate) || errors.Is(err, ErrQuota) || errors.Is(err, ErrLeaseLost) || errors.Is(err, ErrEvacuating)
 }
 
 func vmName(key types.PoolKey) string {

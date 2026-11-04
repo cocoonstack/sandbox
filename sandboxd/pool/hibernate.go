@@ -62,6 +62,9 @@ func (m *Manager) hibernateLocked(ctx context.Context, sb *types.Sandbox) error 
 	if sb.ArchiveCk != "" {
 		return nil // already off the node
 	}
+	if m.movingNow(sb.ID) {
+		return ErrEvacuating
+	}
 	if _, err := m.fenceWatch(sb); err != nil {
 		return err
 	}
@@ -151,6 +154,9 @@ func (m *Manager) wakeResolved(ctx context.Context, sb *types.Sandbox) (string, 
 }
 
 func (m *Manager) wakeOrRead(ctx context.Context, sb *types.Sandbox, readerOK bool) (string, error) {
+	if m.movingFinal(sb.ID) {
+		return "", ErrEvacuating
+	}
 	sb.Transition.Lock()
 	defer sb.Transition.Unlock()
 	if sb.ArchiveCk != "" {

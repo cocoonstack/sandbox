@@ -17,6 +17,7 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/archives/archivestest"
 	"github.com/cocoonstack/sandbox/sandboxd/config"
 	"github.com/cocoonstack/sandbox/sandboxd/egress"
+	"github.com/cocoonstack/sandbox/sandboxd/moves"
 	"github.com/cocoonstack/sandbox/sandboxd/store"
 	"github.com/cocoonstack/sandbox/sandboxd/tenants"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
@@ -1869,6 +1870,7 @@ func TestFailoverAReleaseFindsItsUnsettledArchiveTakenElsewhere(t *testing.T) {
 
 type failoverCluster struct {
 	reg       *archivestest.Mem
+	moves     moves.Registry
 	ckDir     string
 	replicate int
 	volumes   []config.VolumeSpec
@@ -1940,7 +1942,7 @@ func (c *failoverCluster) nodeOn(t *testing.T, eng *fakeEngine, name, dataDir st
 		cfg.EgressCA = writeTestEgressCA(t)
 	}
 	b := testBackends(t, cfg)
-	b.Archives = c.reg
+	b.Archives, b.Moves = c.reg, c.moves
 	m, err := NewManager(t.Context(), cfg, eng, testSecrets(t), b)
 	if err != nil {
 		t.Fatalf("manager %s: %v", name, err)

@@ -102,7 +102,9 @@ func (m *Manager) evacuateClaim(ctx context.Context, sb *types.Sandbox) error {
 		return errNoFailover
 	}
 	m.mu.Lock()
-	_, busy := m.archiving[sb.ID]
+	_, archiving := m.archiving[sb.ID]
+	_, moving := m.moving[sb.ID]
+	busy := archiving || moving
 	gone := m.claimed[sb.ID] != sb || !m.evacuatingLocked(sb.ID)
 	archived, tenantGone := sb.ArchiveCk != "", m.tenantGone(sb.Tenant)
 	pause := !gone && !tenantGone && !busy && !archived

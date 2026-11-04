@@ -118,6 +118,9 @@ func (m *Manager) Release(ctx context.Context, id string, cred Cred) error {
 	if !ok {
 		return ErrUnknownSandbox
 	}
+	if m.movingNow(id) {
+		return ErrEvacuating
+	}
 	if m.archives != nil {
 		return m.releaseRowed(ctx, id, sb)
 	}
@@ -391,8 +394,8 @@ func (m *Manager) quotaErr(extra int, tenant string) error {
 	if m.memoryLow.Load() {
 		return fmt.Errorf("%w: %s", ErrQuota, memoryLowReason)
 	}
-	if limit := m.view.Load().maxClaims; limit > 0 && len(m.claimed)+extra > limit {
-		return fmt.Errorf("%w: %d live claims, cap %d", ErrQuota, len(m.claimed), limit)
+	if limit, live := m.view.Load().maxClaims, len(m.claimed)+len(m.incoming); limit > 0 && live+extra > limit {
+		return fmt.Errorf("%w: %d live claims, cap %d", ErrQuota, live, limit)
 	}
 	if err := m.runningErr(extra); err != nil {
 		return err
@@ -405,7 +408,11 @@ func (m *Manager) quotaErr(extra int, tenant string) error {
 	if limit <= 0 {
 		return nil
 	}
-	if live := m.tenantLive[tenant]; live+extra > limit {
+	live := m.tenantLive[tenant]
+	if len(m.incoming) > 0 {
+		live += m.incomingOf(tenant)
+	}
+	if live+extra > limit {
 		return fmt.Errorf("%w: tenant %s at %d live claims, cap %d", ErrQuota, tenant, live, limit)
 	}
 	return nil
@@ -417,7 +424,7 @@ func (m *Manager) runningErr(extra int) error {
 	if limit == 0 {
 		return nil
 	}
-	if running := m.store.runningCount(); running+extra > limit {
+	if running := m.store.runningCount() + len(m.incoming); running+extra > limit {
 		return fmt.Errorf("%w: %d running claims, cap %d", ErrQuota, running, limit)
 	}
 	return nil

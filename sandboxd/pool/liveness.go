@@ -310,7 +310,7 @@ func (m *Manager) leaseLapsed(sb *types.Sandbox, now time.Time) bool {
 
 // runningShaped reports whether sb's VM should be up; callers hold m.mu.
 func runningShaped(sb *types.Sandbox) bool {
-	return sb.HibernateSnap == "" && sb.PendingSnap == "" && sb.ArchiveCk == "" && sb.Failed == ""
+	return sb.HibernateSnap == "" && sb.PendingSnap == "" && sb.ArchiveCk == "" && sb.Failed == "" && sb.MoveIn == nil
 }
 
 // coldBootBlocker names why sb's VM cannot be cold-booted, "" when it can.

@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1334,6 +1335,20 @@ type fakeEngine struct {
 	metadataErr  error
 	guestEnvs    map[string]string
 	guestEnvErr  error
+
+	migrateDir        string
+	migrateSeries     map[string]string
+	migrateRound      map[string]int
+	migrateSizes      []int64
+	paused            map[string]bool
+	captures          []string
+	receives          []string
+	aborts            []string
+	migrateSupportErr error
+	captureErr        error
+	finalCaptureErr   error
+	receiveErr        error
+	abortErr          error
 }
 
 func newFakeEngine() *fakeEngine {
@@ -1341,6 +1356,7 @@ func newFakeEngine() *fakeEngine {
 		vms: map[string]string{}, stopped: map[string]bool{}, creating: map[string]bool{}, pids: map[string]int{},
 		attachDirty: map[string]bool{}, removeSeenOps: map[string][]string{}, removeSeenDirty: map[string][]string{},
 		metadataDocs: map[string]string{}, guestEnvs: map[string]string{}, sockRoot: "/vsock",
+		migrateSeries: map[string]string{}, migrateRound: map[string]int{}, paused: map[string]bool{},
 	}
 }
 
@@ -1827,6 +1843,70 @@ func (f *fakeEngine) DialReader(_ context.Context, vsockSocket string) (net.Conn
 		peers <- peer
 	}
 	return conn, nil
+}
+
+func (f *fakeEngine) CheckMigrateSupport(context.Context) error { return f.migrateSupportErr }
+
+func (f *fakeEngine) MigrateCapture(_ context.Context, vmName, series string, final bool) (types.MigrateRound, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.captures = append(f.captures, fmt.Sprintf("%s:%s:%v", vmName, series, final))
+	switch {
+	case f.captureErr != nil:
+		return types.MigrateRound{}, f.captureErr
+	case final && f.finalCaptureErr != nil:
+		f.paused[vmName] = true
+		return types.MigrateRound{}, f.finalCaptureErr
+	case series == "":
+		series = "s-" + vmName + "-" + strconv.Itoa(len(f.captures))
+		f.migrateSeries[vmName], f.migrateRound[vmName] = series, 0
+	case f.migrateSeries[vmName] != series:
+		return types.MigrateRound{}, fmt.Errorf("series %s is not live on %s", series, vmName)
+	}
+	round := f.migrateRound[vmName]
+	f.migrateRound[vmName]++
+	dir := filepath.Join(f.migrateDir, series, strconv.Itoa(round))
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		return types.MigrateRound{}, err
+	}
+	if err := os.WriteFile(filepath.Join(dir, "state.json"), []byte(vmName+" round "+strconv.Itoa(round)), 0o600); err != nil {
+		return types.MigrateRound{}, err
+	}
+	size := int64(1)
+	if len(f.migrateSizes) > 0 {
+		size, f.migrateSizes = f.migrateSizes[0], f.migrateSizes[1:]
+	}
+	f.paused[vmName] = final
+	return types.MigrateRound{Series: series, Dir: dir, Round: round, Paused: final, Files: []types.MigrateFile{{Name: "state.json", Size: size}}}, nil
+}
+
+func (f *fakeEngine) MigrateReceive(_ context.Context, fromDir, name string, _ types.PoolKey) (types.VMRecord, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.receives = append(f.receives, name)
+	if f.receiveErr != nil {
+		f.vms[name], f.creating[name] = f.sockRoot+"/"+name, true
+		return types.VMRecord{}, f.receiveErr
+	}
+	if _, err := os.Stat(filepath.Join(fromDir, "state.json")); err != nil {
+		return types.VMRecord{}, err
+	}
+	f.vms[name], f.stopped[name] = f.sockRoot+"/"+name, true
+	return f.record(name), nil
+}
+
+func (f *fakeEngine) MigrateAbort(_ context.Context, vmName, series string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.aborts = append(f.aborts, vmName+":"+series)
+	if f.abortErr != nil {
+		return f.abortErr
+	}
+	if f.migrateSeries[vmName] == series {
+		delete(f.migrateSeries, vmName)
+		f.paused[vmName] = false
+	}
+	return nil
 }
 
 func (f *fakeEngine) list(_ context.Context) ([]types.VMRecord, error) {

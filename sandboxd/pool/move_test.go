@@ -1,0 +1,542 @@
+package pool
+
+import (
+	"cmp"
+	"context"
+	"errors"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"slices"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/cocoonstack/sandbox/sandboxd/egress"
+	"github.com/cocoonstack/sandbox/sandboxd/engine"
+	"github.com/cocoonstack/sandbox/sandboxd/moves"
+	"github.com/cocoonstack/sandbox/sandboxd/moves/movestest"
+	"github.com/cocoonstack/sandbox/sandboxd/outbound/outboundtest"
+	"github.com/cocoonstack/sandbox/sandboxd/store/peer"
+	"github.com/cocoonstack/sandbox/sandboxd/types"
+)
+
+func TestMoveHandsARunningClaimToThePeerWithBothNodesCountingIt(t *testing.T) {
+	mc := newMoveCluster(t)
+	sb := claimTenant(t, mc.s, "acme")
+	vm := sb.VMName
+	var during [][2][3]int
+	mc.p.roundHook = func(int) error {
+		during = append(during, [2][3]int{moveCounts(mc.s, "acme"), moveCounts(mc.t, "acme")})
+		return nil
+	}
+	mc.p.commitHook = mc.p.roundHook
+
+	res, err := mc.s.Move(t.Context(), sb.ID, "b", time.Minute)
+	if err != nil {
+		t.Fatalf("move: %v", err)
+	}
+	if res.Rounds != 3 || res.Downtime <= 0 {
+		t.Errorf("result %+v, want a baseline, one delta and the final round with a downtime", res)
+	}
+	for i, counts := range during {
+		if counts != [2][3]int{{1, 1, 1}, {1, 1, 1}} {
+			t.Errorf("step %d counts source/target %v, want 1/1/1 on both", i, counts)
+		}
+	}
+	if got := [2][3]int{moveCounts(mc.s, "acme"), moveCounts(mc.t, "acme")}; got != [2][3]int{{0, 0, 0}, {1, 1, 1}} {
+		t.Errorf("counts after the move %v, want 0/0/0 on the source and 1/1/1 on the target", got)
+	}
+	moved, ok := mc.t.byID(sb.ID)
+	if !ok || moved.Token != sb.Token || moved.Tenant != "acme" || moved.MoveIn != nil || !moved.Deadline.Equal(sb.Deadline) {
+		t.Fatalf("target claim %+v %v, want the source's record started", moved, ok)
+	}
+	if _, held := mc.s.byID(sb.ID); held || !fakeOf(mc.s).removed(vm) {
+		t.Errorf("source still holds %s or its VM %s", sb.ID, vm)
+	}
+	if fakeOf(mc.t).paused[moved.VMName] || !slices.Contains(fakeOf(mc.t).starts, moved.VMName) {
+		t.Errorf("target VM %s not started", moved.VMName)
+	}
+	if _, ok, _ := mc.moveReg.Get(t.Context(), sb.ID); ok {
+		t.Error("the committed move record outlived the move")
+	}
+	if got := usageEventsOf(t, mc.s, sb.ID); got != "claim,move_out" {
+		t.Errorf("source usage %s, want claim,move_out", got)
+	}
+	if got := usageEventsOf(t, mc.t, sb.ID); got != "move_in" {
+		t.Errorf("target usage %s, want move_in", got)
+	}
+	assertNoMoveResidue(t, mc.t, sb.ID)
+}
+
+func TestMoveDisarmsTheSourceDoorsAndArmsTheTarget(t *testing.T) {
+	mc := newMoveCluster(t)
+	sb := mustClaim(t, mc.s, testKey)
+	dialEgress(t, sb.VsockSocket)
+	if _, err := mc.s.Move(t.Context(), sb.ID, "b", time.Minute); err != nil {
+		t.Fatalf("move: %v", err)
+	}
+	if _, err := net.Dial("unix", engine.EgressSocketPath(sb.VsockSocket)); err == nil {
+		t.Error("the source still serves the moved claim's egress door")
+	}
+	moved, _ := mc.t.byID(sb.ID)
+	dialEgress(t, moved.VsockSocket)
+}
+
+func TestMoveRefusedByTheTargetLeavesTheClaimRunningOnTheSource(t *testing.T) {
+	for name, refuse := range map[string]func(t *testing.T, mc *moveCluster){
+		"max_claims": func(t *testing.T, mc *moveCluster) {
+			tuneView(mc.t, func(v *configView) { v.maxClaims = 1 })
+			mustClaim(t, mc.t, testKey)
+		},
+		"max_running": func(t *testing.T, mc *moveCluster) {
+			tuneView(mc.t, func(v *configView) { v.maxRunning = 1 })
+			mustClaim(t, mc.t, testKey)
+		},
+		"tenant cap": func(t *testing.T, mc *moveCluster) {
+			setTenantCaps(t, mc.t, map[string]int{"acme": 1})
+			claimTenant(t, mc.t, "acme")
+		},
+		"memory":      func(_ *testing.T, mc *moveCluster) { mc.t.memoryLow.Store(true) },
+		"move budget": func(t *testing.T, mc *moveCluster) { reserveMove(t, mc.t, "sb_other", "zed") },
+	} {
+		t.Run(name, func(t *testing.T) {
+			mc := newMoveCluster(t)
+			tuneView(mc.t, func(v *configView) { v.moveConcurrency = 1 })
+			sb := claimTenant(t, mc.s, "acme")
+			refuse(t, mc)
+			before := moveCounts(mc.t, "acme")
+			if _, err := mc.s.Move(t.Context(), sb.ID, "b", time.Minute); !errors.Is(err, ErrQuota) {
+				t.Fatalf("move: %v, want ErrQuota", err)
+			}
+			assertStillOnSource(t, mc, sb)
+			if got := moveCounts(mc.t, "acme"); got != before {
+				t.Errorf("target counts %v after the refusal, want %v", got, before)
+			}
+			assertNoMoveResidue(t, mc.t, sb.ID)
+		})
+	}
+}
+
+func TestMoveFailingAtAnyStepKeepsOneOwner(t *testing.T) {
+	for name, tt := range map[string]struct {
+		budget time.Duration
+		fail   func(mc *moveCluster)
+		want   error
+	}{
+		"admission":       {fail: func(mc *moveCluster) { mc.p.admitErr = ErrMoveTarget }, want: ErrMoveTarget},
+		"move record":     {fail: func(mc *moveCluster) { mc.moveReg.SetDown(true) }, want: ErrMoveStoreDown},
+		"baseline":        {fail: func(mc *moveCluster) { fakeOf(mc.s).captureErr = errors.New("no reflink") }, want: ErrNotMovable},
+		"round transfer":  {fail: func(mc *moveCluster) { mc.p.roundHook = failRound(2) }, want: ErrMoveTarget},
+		"downtime budget": {budget: time.Millisecond, want: ErrMoveDowntime},
+		"final capture":   {fail: func(mc *moveCluster) { fakeOf(mc.s).finalCaptureErr = errors.New("pause failed") }},
+		"final transfer":  {fail: func(mc *moveCluster) { mc.p.roundHook = failRound(3) }, want: ErrMoveTarget},
+		"receive":         {fail: func(mc *moveCluster) { fakeOf(mc.t).receiveErr = errors.New("restore failed") }},
+		"target memory":   {fail: func(mc *moveCluster) { mc.p.commitHook = func(int) error { mc.t.memoryLow.Store(true); return nil } }, want: ErrQuota},
+		"source aborted first": {fail: func(mc *moveCluster) {
+			mc.p.commitHook = func(int) error { abortRecord(mc); return nil }
+		}, want: ErrNotMovable},
+	} {
+		t.Run(name, func(t *testing.T) {
+			mc := newMoveCluster(t)
+			sb := claimTenant(t, mc.s, "acme")
+			if tt.fail != nil {
+				tt.fail(mc)
+			}
+			_, err := mc.s.Move(t.Context(), sb.ID, "b", cmp.Or(tt.budget, time.Minute))
+			if err == nil || tt.want != nil && !errors.Is(err, tt.want) {
+				t.Fatalf("move: %v, want %v", err, tt.want)
+			}
+			mc.moveReg.SetDown(false)
+			assertStillOnSource(t, mc, sb)
+			if got := moveCounts(mc.t, "acme"); got != [3]int{} {
+				t.Errorf("target counts %v, want none", got)
+			}
+			assertNoMoveResidue(t, mc.t, sb.ID)
+			if _, ok, _ := mc.moveReg.Get(t.Context(), sb.ID); ok {
+				t.Error("a move record outlived the failed move")
+			}
+		})
+	}
+}
+
+func TestMoveWhoseCommitAnswerIsLostResolvesThroughTheRecord(t *testing.T) {
+	mc := newMoveCluster(t)
+	sb := claimTenant(t, mc.s, "acme")
+	mc.p.loseCommitReply = true
+	if _, err := mc.s.Move(t.Context(), sb.ID, "b", time.Minute); err != nil {
+		t.Fatalf("move whose commit answer was lost: %v, want the committed move", err)
+	}
+	if _, held := mc.s.byID(sb.ID); held {
+		t.Error("the source kept a claim the target committed")
+	}
+	if moved, ok := mc.t.byID(sb.ID); !ok || moved.MoveIn != nil {
+		t.Errorf("target claim %+v %v, want it started", moved, ok)
+	}
+	if got := [2][3]int{moveCounts(mc.s, "acme"), moveCounts(mc.t, "acme")}; got != [2][3]int{{0, 0, 0}, {1, 1, 1}} {
+		t.Errorf("counts %v, want the claim on the target only", got)
+	}
+}
+
+func TestMoveKeepsThePausedGuestUntilItsAbortLands(t *testing.T) {
+	mc := newMoveCluster(t)
+	sb := claimTenant(t, mc.s, "acme")
+	mc.p.commitHook = func(int) error {
+		mc.moveReg.SetDown(true)
+		return ErrMoveTarget
+	}
+	if _, err := mc.s.Move(t.Context(), sb.ID, "b", time.Minute); !errors.Is(err, ErrMoveStoreDown) {
+		t.Fatalf("move with the registry down after the final round: %v, want ErrMoveStoreDown", err)
+	}
+	if !pausedOn(mc.s, sb.VMName) {
+		t.Fatal("the source resumed its guest before the abort landed")
+	}
+	if _, _, _, err := mc.s.WakeAgentSocket(t.Context(), sb.ID, sb.Token); !errors.Is(err, ErrEvacuating) {
+		t.Errorf("dial during the unresolved final round: %v, want ErrEvacuating", err)
+	}
+	time.Sleep(2 * moveRetryInterval)
+	if !pausedOn(mc.s, sb.VMName) {
+		t.Fatal("the source resumed its guest while the registry was down")
+	}
+	mc.moveReg.SetDown(false)
+	waitFor(t, func() bool { return !pausedOn(mc.s, sb.VMName) && !mc.s.movingNow(sb.ID) })
+	assertStillOnSource(t, mc, sb)
+	if rec, ok, _ := mc.moveReg.Get(t.Context(), sb.ID); ok {
+		t.Errorf("record %+v after the abort, want it deleted", rec)
+	}
+}
+
+func TestMoveTargetCountsAReservationLikeAClaim(t *testing.T) {
+	mc := newMoveCluster(t)
+	tuneView(mc.t, func(v *configView) { v.maxClaims = 1 })
+	reserveMove(t, mc.t, "sb_r", "acme")
+	if _, err := claimAny(t.Context(), mc.t, testKey, ClaimOptions{}); !errors.Is(err, ErrQuota) {
+		t.Fatalf("claim beside a reservation at max_claims 1: %v, want ErrQuota", err)
+	}
+	if got := mc.t.Sandboxes("", "", nil); len(got) != 0 {
+		t.Errorf("listing shows %d claims, want the reservation invisible", len(got))
+	}
+	mc.t.DropMove("sb_r")
+	mustClaim(t, mc.t, testKey)
+}
+
+func TestMoveTargetDropsAReservationItsSourceAbandoned(t *testing.T) {
+	mc := newMoveCluster(t)
+	reserveMove(t, mc.t, "sb_r", "acme")
+	mc.t.mu.Lock()
+	mc.t.incoming["sb_r"].touched = time.Now().Add(-2 * moveReservationIdle)
+	mc.t.mu.Unlock()
+	mc.t.dropIdleReservations()
+	assertNoMoveResidue(t, mc.t, "sb_r")
+}
+
+func TestMoveOfAReplicatedClaimDropsItsRowBeforeTheFinalRound(t *testing.T) {
+	mc := newMoveClusterWith(t, func(c *failoverCluster) { c.replicate = replicateEvery })
+	third := mc.moveNode(t, "c")
+	sb := mustClaim(t, mc.s, testKey)
+	replicateNow(t, mc.s, sb)
+	mc.s.mu.Lock()
+	replica := sb.ReplicaCk
+	mc.s.mu.Unlock()
+	if _, ok, _ := mc.failoverCluster.reg.Get(t.Context(), sb.ID); !ok || replica == "" {
+		t.Fatal("setup: the claim has no replica row")
+	}
+	mc.p.commitHook = func(int) error {
+		if _, ok, _ := mc.failoverCluster.reg.Get(t.Context(), sb.ID); ok {
+			t.Error("the replica row is still adoptable at the commit")
+		}
+		mc.failoverCluster.reg.Expire("a")
+		if adopted, err := third.AdoptArchived(t.Context(), sb.ID, sb.Token); adopted || err != nil {
+			t.Errorf("a third node adopts the moving claim: %v %v", adopted, err)
+		}
+		_ = mc.failoverCluster.reg.Renew(t.Context(), "a", time.Hour)
+		return nil
+	}
+	if _, err := mc.s.Move(t.Context(), sb.ID, "b", time.Minute); err != nil {
+		t.Fatalf("move: %v", err)
+	}
+	if ckExists(t, mc.s, replica) {
+		t.Error("the stale replica outlived the move")
+	}
+}
+
+func TestMoveHoldsOffCapturesReleasesAndEvacuationWhileItRuns(t *testing.T) {
+	mc := newMoveCluster(t)
+	sb := mustClaim(t, mc.s, testKey)
+	other := mustClaim(t, mc.s, testKey)
+	cred := Cred{Token: sb.Token}
+	mc.p.roundHook = func(round int) error {
+		if round != 2 {
+			return nil
+		}
+		_, forkErr := mc.s.Fork(t.Context(), sb.ID, cred, 1, time.Minute, "", "")
+		_, ckErr := mc.s.Checkpoint(t.Context(), sb.ID, cred, "ck", "")
+		_, _, promoteErr := mc.s.Promote(t.Context(), sb.ID, cred, "tpl", "")
+		for op, err := range map[string]error{
+			"fork": forkErr, "checkpoint": ckErr, "promote": promoteErr,
+			"hibernate": mc.s.Hibernate(t.Context(), sb.ID, cred),
+			"release":   mc.s.Release(t.Context(), sb.ID, cred),
+		} {
+			if !errors.Is(err, ErrEvacuating) {
+				t.Errorf("%s during a move: %v, want ErrEvacuating", op, err)
+			}
+		}
+		mc.s.mu.Lock()
+		replicable := mc.s.replicable(sb)
+		mc.s.mu.Unlock()
+		if replicable {
+			t.Error("a replica round may capture the moving claim")
+		}
+		expire(mc.s, sb)
+		mc.s.reapOnce(t.Context())
+		if _, held := mc.s.byID(sb.ID); !held {
+			t.Error("the reap took the moving claim")
+		}
+		tuneView(mc.s, func(v *configView) { v.moveConcurrency = 1 })
+		if _, err := mc.s.Move(t.Context(), other.ID, "b", time.Minute); !errors.Is(err, ErrQuota) {
+			t.Errorf("a second move past a lowered move_concurrency: %v, want ErrQuota", err)
+		}
+		return nil
+	}
+	if _, err := mc.s.Move(t.Context(), sb.ID, "b", time.Minute); err != nil {
+		t.Fatalf("the move the lowered budget did not stop: %v", err)
+	}
+	if _, held := mc.t.byID(sb.ID); !held {
+		t.Error("the target does not hold the moved claim")
+	}
+}
+
+func TestMoveRefusesClaimsThatCannotMove(t *testing.T) {
+	mc := newMoveCluster(t)
+	hibernatedSb := mustClaim(t, mc.s, testKey)
+	hibernateClaim(t, mc.s, hibernatedSb)
+	if _, err := mc.s.Move(t.Context(), hibernatedSb.ID, "b", time.Minute); !errors.Is(err, ErrNotMovable) {
+		t.Errorf("move of a hibernated claim: %v, want ErrNotMovable", err)
+	}
+	fakeOf(mc.s).migrateSupportErr = errors.New("cocoon too old")
+	sb := mustClaim(t, mc.s, testKey)
+	if _, err := mc.s.Move(t.Context(), sb.ID, "b", time.Minute); !errors.Is(err, ErrNotMovable) {
+		t.Errorf("move on a cocoon without migration: %v, want ErrNotMovable", err)
+	}
+	if _, err := mc.s.Move(t.Context(), "sb_none", "b", time.Minute); !errors.Is(err, ErrUnknownSandbox) {
+		t.Errorf("move of an unknown claim: %v, want ErrUnknownSandbox", err)
+	}
+	if len(fakeOf(mc.s).captures) != 0 {
+		t.Errorf("a refused move captured %v", fakeOf(mc.s).captures)
+	}
+}
+
+func BenchmarkQuotaErr(b *testing.B) {
+	for _, incoming := range []int{0, 2} {
+		b.Run(map[int]string{0: "no reservations", 2: "two reservations"}[incoming], func(b *testing.B) {
+			m := newTestManager(b, newFakeEngine())
+			for i := range incoming {
+				m.incoming["sb_"+string(rune('a'+i))] = &inMove{tenant: "acme", touched: time.Now()}
+			}
+			tuneView(m, func(v *configView) { v.maxClaims, v.maxRunning = 1000, 1000 })
+			for b.Loop() {
+				m.mu.Lock()
+				_ = m.quotaErr(1, "")
+				m.mu.Unlock()
+			}
+		})
+	}
+}
+
+type moveCluster struct {
+	*failoverCluster
+	moveReg *movestest.Mem
+	p       *fakeMovePeer
+	s, t    *Manager
+}
+
+func newMoveCluster(t *testing.T) *moveCluster {
+	t.Helper()
+	return newMoveClusterWith(t, func(*failoverCluster) {})
+}
+
+func newMoveClusterWith(t *testing.T, edit func(*failoverCluster)) *moveCluster {
+	t.Helper()
+	c := newFailoverCluster(t)
+	c.egressPol = &egress.Policy{Allow: []egress.Rule{{Host: "example.com"}}}
+	edit(c)
+	reg := movestest.NewMem()
+	c.moves = reg
+	mc := &moveCluster{failoverCluster: c, moveReg: reg, p: newFakeMovePeer(t, c)}
+	mc.s, mc.t = mc.moveNode(t, "a"), mc.moveNode(t, "b")
+	return mc
+}
+
+func (mc *moveCluster) moveNode(t *testing.T, name string) *Manager {
+	t.Helper()
+	eng := newFakeEngine()
+	eng.sockRoot, eng.migrateDir = outboundtest.SockRoot(t), t.TempDir()
+	m := mc.nodeOn(t, eng, name, t.TempDir(), keepAnHour)
+	m.liftFence()
+	m.WithMovePeer(mc.p)
+	setTenantCaps(t, m, map[string]int{"acme": 0})
+	return m
+}
+
+type fakeMovePeer struct {
+	c   *failoverCluster
+	srv *httptest.Server
+
+	mu              sync.Mutex
+	admitErr        error
+	roundHook       func(round int) error
+	commitHook      func(round int) error
+	loseCommitReply bool
+}
+
+func newFakeMovePeer(t *testing.T, c *failoverCluster) *fakeMovePeer {
+	t.Helper()
+	p := &fakeMovePeer{c: c}
+	p.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		node, id, _ := strings.Cut(strings.TrimPrefix(r.URL.Path, "/"), "/")
+		if err := p.target(node).ReceiveMoveRound(id, r.Body); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	t.Cleanup(p.srv.Close)
+	return p
+}
+
+func (p *fakeMovePeer) Admit(_ context.Context, addr, id string, a MoveAdmission) (string, error) {
+	if p.admitErr != nil {
+		return "", p.admitErr
+	}
+	return p.target(addr).AdmitMove(id, a)
+}
+
+func (p *fakeMovePeer) SendRound(ctx context.Context, addr, id string, round int, dir string, files []string) error {
+	if hook := p.roundHook; hook != nil {
+		if err := hook(round); err != nil {
+			return err
+		}
+	}
+	if err := peer.SendRound(ctx, p.srv.URL, "", "/"+addr+"/"+id, dir, files); err != nil {
+		return errors.Join(ErrMoveTarget, err)
+	}
+	return nil
+}
+
+func (p *fakeMovePeer) Commit(ctx context.Context, addr, id string, claim []byte, epoch int64) (int64, error) {
+	if hook := p.commitHook; hook != nil {
+		if err := hook(0); err != nil {
+			return 0, err
+		}
+	}
+	committed, err := p.target(addr).CommitMove(ctx, id, claim, epoch)
+	if err == nil && p.loseCommitReply {
+		return 0, ErrMoveTarget
+	}
+	return committed, err
+}
+
+func (p *fakeMovePeer) Drop(_ context.Context, addr, id string) error {
+	p.target(addr).DropMove(id)
+	return nil
+}
+
+func (p *fakeMovePeer) target(addr string) *Manager {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	i := slices.IndexFunc(p.c.nodes, func(m *Manager) bool { return m.nodeID == addr })
+	return p.c.nodes[i]
+}
+
+func moveCounts(m *Manager, tenant string) [3]int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return [3]int{len(m.claimed) + len(m.incoming), m.store.runningCount() + len(m.incoming), m.tenantLive[tenant] + m.incomingOf(tenant)}
+}
+
+func reserveMove(t *testing.T, m *Manager, id, tenant string) {
+	t.Helper()
+	if _, err := m.AdmitMove(id, MoveAdmission{Tenant: tenant, Key: testKey, From: "zz"}); err != nil {
+		t.Fatalf("reserve %s: %v", id, err)
+	}
+}
+
+func assertStillOnSource(t *testing.T, mc *moveCluster, sb *types.Sandbox) {
+	t.Helper()
+	held, ok := mc.s.byID(sb.ID)
+	if !ok || held != sb {
+		t.Fatalf("the source lost %s", sb.ID)
+	}
+	mc.s.mu.Lock()
+	journal, moving, vm := sb.MoveOut, mc.s.moving[sb.ID], sb.VMName
+	mc.s.mu.Unlock()
+	if journal != nil || moving != nil || pausedOn(mc.s, vm) || fakeOf(mc.s).removed(vm) {
+		t.Errorf("source claim journal %+v moving %v paused %v, want running and unmarked", journal, moving, pausedOn(mc.s, vm))
+	}
+	if _, held := mc.t.byID(sb.ID); held {
+		t.Error("the target holds the claim too")
+	}
+}
+
+func assertNoMoveResidue(t *testing.T, m *Manager, id string) {
+	t.Helper()
+	m.mu.Lock()
+	_, reserved := m.incoming[id]
+	m.mu.Unlock()
+	if reserved {
+		t.Errorf("node %s keeps a reservation for %s", m.nodeID, id)
+	}
+	if _, err := os.Stat(m.moveDir(id)); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("node %s keeps the staging dir of %s: %v", m.nodeID, id, err)
+	}
+	if _, claimed := m.byID(id); claimed {
+		return
+	}
+	eng := fakeOf(m)
+	eng.mu.Lock()
+	defer eng.mu.Unlock()
+	for _, name := range eng.receives {
+		if _, live := eng.vms[name]; live {
+			t.Errorf("node %s keeps the received VM %s", m.nodeID, name)
+		}
+	}
+}
+
+func dialEgress(t *testing.T, sock string) {
+	t.Helper()
+	conn, err := net.Dial("unix", engine.EgressSocketPath(sock))
+	if err != nil {
+		t.Fatalf("no egress door at %s: %v", sock, err)
+	}
+	_ = conn.Close()
+}
+
+func pausedOn(m *Manager, vm string) bool {
+	eng := fakeOf(m)
+	eng.mu.Lock()
+	defer eng.mu.Unlock()
+	return eng.paused[vm]
+}
+
+func failRound(n int) func(int) error {
+	return func(round int) error {
+		if round == n {
+			return ErrMoveTarget
+		}
+		return nil
+	}
+}
+
+func abortRecord(mc *moveCluster) {
+	ctx := context.Background()
+	for _, rec := range mustStale(mc) {
+		_, _ = mc.moveReg.Advance(ctx, rec.ID, rec.Epoch, rec.State, moves.Aborted)
+	}
+}
+
+func mustStale(mc *moveCluster) []moves.Record {
+	recs, _ := mc.moveReg.Stale(context.Background(), time.Now().Add(time.Hour))
+	return recs
+}
