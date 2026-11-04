@@ -74,10 +74,9 @@ func (m *Manager) moveOut(ctx context.Context, sb *types.Sandbox, mv *outMove, b
 	if err = m.journalMoveOut(ctx, sb, mv); err != nil {
 		return err
 	}
-	var sent int64
+	var sent, previous int64
 	var sending time.Duration
-	fits := false
-	for i := 0; ; i++ {
+	for delta := 0; ; delta++ {
 		start := time.Now()
 		if err = m.sendRound(ctx, sb.ID, mv, round); err != nil {
 			return err
@@ -85,18 +84,18 @@ func (m *Manager) moveOut(ctx context.Context, sb *types.Sandbox, mv *outMove, b
 		sending += time.Since(start)
 		size := roundBytes(round)
 		sent += size
-		if i > 0 && finalPause(size, sent, sending) <= budget {
-			fits = true
+		if delta > 0 {
+			if finalPause(size, sent, sending) <= budget {
+				break
+			}
+			if delta == moveDeltaLimit || delta > 1 && size >= previous {
+				return fmt.Errorf("%w: delta %d of %d bytes does not fit %s", ErrMoveDowntime, delta, size, budget)
+			}
 		}
-		if fits || i == moveDeltaLimit {
-			break
-		}
+		previous = size
 		if round, err = m.eng.MigrateCapture(ctx, vm, mv.series, false); err != nil {
 			return fmt.Errorf("delta capture: %w", err)
 		}
-	}
-	if !fits {
-		return fmt.Errorf("%w: %d deltas did not shrink under %s", ErrMoveDowntime, moveDeltaLimit, budget)
 	}
 	m.mu.Lock()
 	mv.final = true

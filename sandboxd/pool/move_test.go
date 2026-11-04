@@ -581,6 +581,34 @@ func TestMoveHoldsOffVolumeChanges(t *testing.T) {
 	})
 }
 
+func TestMoveGivesUpOnDeltasThatStopShrinking(t *testing.T) {
+	for name, tt := range map[string]struct {
+		sizes    []int64
+		captures int
+	}{
+		"second delta as large as the first": {sizes: []int64{1000, 500, 500}, captures: 3},
+		"second delta larger than the first": {sizes: []int64{1000, 500, 600}, captures: 3},
+		"shrinking but never fitting":        {sizes: []int64{1000, 900, 800, 700, 600}, captures: 5},
+	} {
+		t.Run(name, func(t *testing.T) {
+			mc := newMoveCluster(t)
+			sb := mustClaim(t, mc.s, testKey)
+			eng := fakeOf(mc.s)
+			eng.migrateSizes = tt.sizes
+			if _, err := mc.s.Move(t.Context(), sb.ID, "b", time.Millisecond); !errors.Is(err, ErrMoveDowntime) {
+				t.Fatalf("move: %v, want ErrMoveDowntime", err)
+			}
+			eng.mu.Lock()
+			captures := len(eng.captures)
+			eng.mu.Unlock()
+			if captures != tt.captures {
+				t.Errorf("%d captures, want %d", captures, tt.captures)
+			}
+			assertStillOnSource(t, mc, sb)
+		})
+	}
+}
+
 func TestMoveLeavesAnExitedVMMToLivenessUntilItEnds(t *testing.T) {
 	mc := newMoveCluster(t)
 	sb := mustClaim(t, mc.s, testKey)
