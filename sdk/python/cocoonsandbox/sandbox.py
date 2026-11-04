@@ -160,7 +160,8 @@ class Sandbox:
             if deadline is not None and time.monotonic() >= deadline:
                 raise SandboxTimeout(f"command did not finish within {timeout}s") from None
             raise
-        with self._lease(conn):
+        stalled = False
+        try:
             watchdog = None if deadline is None else _arm_watchdog(conn, deadline, expired)
             pump = threading.Thread(target=_feed_stdin, args=(conn, stdin), daemon=True) if stdin else None
             try:
@@ -184,9 +185,22 @@ class Sandbox:
                 if watchdog is not None:
                     watchdog.cancel()
             if pump is not None:
+                stalled = pump.is_alive()
+                if stalled:
+                    conn.abort()
                 pump.join()  # the pump's frames must not land on the next RPC
             if code is None:
                 raise ProtocolError("exec stream ended without an exit frame")
+        except SilkdError:
+            self._park(conn)
+            raise
+        except BaseException:
+            conn.close()
+            raise
+        if stalled:
+            conn.close()
+        else:
+            self._park(conn)
         return code
 
     def spawn(self, *argv: str, cwd: str = "", env: dict[str, str] | None = None, user: str = "") -> int:

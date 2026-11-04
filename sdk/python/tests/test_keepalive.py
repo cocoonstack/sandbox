@@ -149,6 +149,40 @@ def test_run_timeout_bounds_the_proto_probe():
         server.close()
 
 
+def test_run_stops_feeding_stdin_once_the_command_exits():
+    server = socket.create_server(("127.0.0.1", 0))
+    release = threading.Event()
+
+    def serve():
+        conn, _ = server.accept()
+        with conn, contextlib.suppress(OSError):
+            reader = accept_upgrade(conn)
+            for line in iter(reader.readline, b""):
+                op = json.loads(line)["op"]
+                if op == "info":
+                    info = {"type": "info", "version": "fake", "proto": KEEP_ALIVE_PROTO, "uptime_secs": 0}
+                    conn.sendall(json.dumps(info).encode() + b"\n")
+                elif op == "exec":
+                    conn.sendall(b'{"type":"started","pid":1}\n{"type":"exit","code":0}\n')
+                    release.wait(10)
+                    return
+
+    threading.Thread(target=serve, daemon=True).start()
+    sb = sandbox_at(f"127.0.0.1:{server.getsockname()[1]}")
+    codes = []
+    call = threading.Thread(
+        target=lambda: codes.append(sb.run(["head", "-c", "10"], stdin=bytes(64 << 20), timeout=0.5)), daemon=True
+    )
+    try:
+        call.start()
+        call.join(2)
+        assert codes == [0], "run outlived its timeout behind a stdin the guest stopped reading"
+        assert sb._pool._parked == []
+    finally:
+        release.set()
+        server.close()
+
+
 def test_close_drains_the_parked_connection(monkeypatch, relay):
     agent, sb = relay()
     monkeypatch.setattr(sb._client, "_request", lambda *args, **kwargs: {})
