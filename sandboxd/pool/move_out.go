@@ -252,7 +252,7 @@ func (m *Manager) finishMoveOut(ctx context.Context, sb *types.Sandbox, mv *outM
 // failMoveOut resolves a failed move through its record: committed finishes it, anything else aborts and resumes the guest.
 func (m *Manager) failMoveOut(ctx context.Context, sb *types.Sandbox, mv *outMove, cause error) (MoveResult, error) {
 	if mv.epoch == 0 {
-		m.abortMoveOut(ctx, sb, mv)
+		_ = m.abortMoveOut(ctx, sb, mv)
 		return MoveResult{}, cause
 	}
 	committed, err := m.settleMoveOut(ctx, sb, mv)
@@ -291,7 +291,8 @@ func (m *Manager) settleMoveOut(ctx context.Context, sb *types.Sandbox, mv *outM
 			m.finishMoveOut(ctx, sb, mv, rec.Epoch)
 			return true, nil
 		case ours && (rec.State == moves.Pending || rec.State == moves.Final):
-			aborted, err := m.moves.Advance(ctx, sb.ID, rec.Epoch, rec.State, moves.Aborted)
+			var aborted int64
+			aborted, err = m.moves.Advance(ctx, sb.ID, rec.Epoch, rec.State, moves.Aborted)
 			if errors.Is(err, moves.ErrLost) {
 				continue
 			}

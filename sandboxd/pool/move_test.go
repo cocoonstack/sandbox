@@ -241,18 +241,18 @@ func TestMoveOfAReplicatedClaimDropsItsRowBeforeTheFinalRound(t *testing.T) {
 	mc.s.mu.Lock()
 	replica := sb.ReplicaCk
 	mc.s.mu.Unlock()
-	if _, ok, _ := mc.failoverCluster.reg.Get(t.Context(), sb.ID); !ok || replica == "" {
+	if _, ok, _ := mc.reg.Get(t.Context(), sb.ID); !ok || replica == "" {
 		t.Fatal("setup: the claim has no replica row")
 	}
 	mc.p.commitHook = func(int) error {
-		if _, ok, _ := mc.failoverCluster.reg.Get(t.Context(), sb.ID); ok {
+		if _, ok, _ := mc.reg.Get(t.Context(), sb.ID); ok {
 			t.Error("the replica row is still adoptable at the commit")
 		}
-		mc.failoverCluster.reg.Expire("a")
+		mc.reg.Expire("a")
 		if adopted, err := third.AdoptArchived(t.Context(), sb.ID, sb.Token); adopted || err != nil {
 			t.Errorf("a third node adopts the moving claim: %v %v", adopted, err)
 		}
-		_ = mc.failoverCluster.reg.Renew(t.Context(), "a", time.Hour)
+		_ = mc.reg.Renew(t.Context(), "a", time.Hour)
 		return nil
 	}
 	if _, err := mc.s.Move(t.Context(), sb.ID, "b", time.Minute); err != nil {

@@ -24,6 +24,7 @@ func TestMoveRouteResolvesThePeerAndMapsTheOutcome(t *testing.T) {
 	srv := newMeshTestServer(t, "root", mgr, &fakePlacer{addrs: []string{"10.0.0.2:7777"}}, nil)
 
 	resp := doReq(t, http.MethodPost, srv.URL+"/v1/sandboxes/sb_1/move", "root", `{"to":"10.0.0.2:7777","max_downtime_ms":1500}`)
+	defer func() { _ = resp.Body.Close() }()
 	var body MoveResponse
 	if err := json.UnmarshalRead(resp.Body, &body); err != nil || resp.StatusCode != http.StatusOK {
 		t.Fatalf("move: %d %v", resp.StatusCode, err)
@@ -48,6 +49,7 @@ func TestMoveRouteResolvesThePeerAndMapsTheOutcome(t *testing.T) {
 	} {
 		outcome = tt.err
 		resp := doReq(t, http.MethodPost, srv.URL+"/v1/sandboxes/sb_1/move", tt.token, tt.body)
+		_ = resp.Body.Close()
 		if resp.StatusCode != tt.want {
 			t.Errorf("move %s with %v: %d, want %d", tt.body, tt.err, resp.StatusCode, tt.want)
 		}

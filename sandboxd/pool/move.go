@@ -26,17 +26,6 @@ const (
 	moveStaleAge       = time.Hour
 )
 
-// outMove is a source's move in flight; final is guarded by m.mu, the rest belongs to the goroutine driving the move.
-type outMove struct {
-	addr   string
-	to     string
-	epoch  int64
-	series string
-	rounds int
-	final  bool
-	locked bool
-}
-
 // MoveAdmission is what a source asks a target to reserve for a live move.
 type MoveAdmission struct {
 	Tenant string
@@ -58,6 +47,17 @@ type MovePeer interface {
 	// Commit hands the target the claim record and the final epoch and returns the committed epoch.
 	Commit(ctx context.Context, addr, id string, claim []byte, epoch int64) (int64, error)
 	Drop(ctx context.Context, addr, id string) error
+}
+
+// outMove is a source's move in flight; final is guarded by m.mu, the rest belongs to the goroutine driving the move.
+type outMove struct {
+	addr   string
+	to     string
+	epoch  int64
+	series string
+	rounds int
+	final  bool
+	locked bool
 }
 
 // WithMovePeer wires the transport a move uses to reach its target; set it before serving.
