@@ -14,7 +14,7 @@ import (
 
 const racers = 8
 
-var states = []moves.State{moves.Pending, moves.Final, moves.Committed, moves.Aborted}
+var states = []moves.State{moves.Pending, moves.Final, moves.Committed, moves.Started, moves.Aborted}
 
 // Opener returns an empty registry; each call is a fresh table.
 type Opener func(t *testing.T) moves.Registry
@@ -40,7 +40,7 @@ func (m *Mem) Begin(_ context.Context, id, from, to string) (int64, error) {
 	if m.down {
 		return 0, moves.ErrUnavailable
 	}
-	if old, ok := m.recs[id]; ok && old.State != moves.Committed && old.State != moves.Aborted {
+	if old, ok := m.recs[id]; ok && old.State != moves.Started && old.State != moves.Aborted {
 		return 0, moves.ErrLost
 	}
 	return m.write(moves.Record{ID: id, From: from, To: to, State: moves.Pending}), nil
@@ -147,7 +147,7 @@ func testBeginGet(t *testing.T, r moves.Registry) {
 func testAdvance(t *testing.T, r moves.Registry) {
 	ctx := t.Context()
 	for i, path := range [][]moves.State{
-		{moves.Final, moves.Committed},
+		{moves.Final, moves.Committed, moves.Started},
 		{moves.Aborted},
 		{moves.Final, moves.Aborted},
 	} {
@@ -255,7 +255,7 @@ func testAdvanceRace(t *testing.T, r moves.Registry) {
 
 func testBeginOverEnded(t *testing.T, r moves.Registry) {
 	ctx := t.Context()
-	for _, end := range []moves.State{moves.Committed, moves.Aborted} {
+	for _, end := range []moves.State{moves.Started, moves.Aborted} {
 		id := "sb_" + string(end)
 		ended := mustReach(t, r, id, end)
 		again, err := r.Begin(ctx, id, "t", "u")
@@ -270,7 +270,7 @@ func testBeginOverEnded(t *testing.T, r moves.Registry) {
 
 func testBeginOverLive(t *testing.T, r moves.Registry) {
 	ctx := t.Context()
-	for _, live := range []moves.State{moves.Pending, moves.Final} {
+	for _, live := range []moves.State{moves.Pending, moves.Final, moves.Committed} {
 		id := "sb_" + string(live)
 		epoch := mustReach(t, r, id, live)
 		if _, err := r.Begin(ctx, id, "t", "u"); !errors.Is(err, moves.ErrLost) {
@@ -355,6 +355,7 @@ func mustReach(t *testing.T, r moves.Registry, id string, state moves.State) int
 	path := map[moves.State][]moves.State{
 		moves.Final:     {moves.Final},
 		moves.Committed: {moves.Final, moves.Committed},
+		moves.Started:   {moves.Final, moves.Committed, moves.Started},
 		moves.Aborted:   {moves.Aborted},
 	}[state]
 	from := moves.Pending

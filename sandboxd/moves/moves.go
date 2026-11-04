@@ -12,6 +12,7 @@ const (
 	Pending   State = "pending"
 	Final     State = "final"
 	Committed State = "committed"
+	Started   State = "started"
 	Aborted   State = "aborted"
 )
 
@@ -22,14 +23,15 @@ var (
 	ErrLost = errors.New("move record moved on")
 
 	advances = map[[2]State]bool{
-		{Pending, Final}:   true,
-		{Final, Committed}: true,
-		{Pending, Aborted}: true,
-		{Final, Aborted}:   true,
+		{Pending, Final}:     true,
+		{Final, Committed}:   true,
+		{Committed, Started}: true,
+		{Pending, Aborted}:   true,
+		{Final, Aborted}:     true,
 	}
 )
 
-// State is where a move stands; Committed and Aborted end it.
+// State is where a move stands; Started and Aborted end it.
 type State string
 
 // Record is one claim's move.
@@ -44,7 +46,7 @@ type Record struct {
 
 // Registry keeps the records; every write is a compare-and-set, and every epoch it hands out is new.
 type Registry interface {
-	// Begin writes a Pending record for id at a new epoch and returns it; ErrLost when a Pending or Final record holds id.
+	// Begin writes a Pending record for id at a new epoch and returns it; ErrLost when a Pending, Final or Committed record holds id.
 	Begin(ctx context.Context, id, from, to string) (int64, error)
 	// Advance moves the record at epoch expect in state from to state to at a new epoch and returns it.
 	Advance(ctx context.Context, id string, expect int64, from, to State) (int64, error)

@@ -45,7 +45,7 @@ func (r *Registry) Begin(ctx context.Context, id, from, to string) (int64, error
 		VALUES ($1, $2, $3, $4, 'pending', nextval('sandboxd_moves_epoch'))
 		ON CONFLICT (cell, id) DO UPDATE SET from_node = EXCLUDED.from_node, to_node = EXCLUDED.to_node,
 			state = EXCLUDED.state, epoch = EXCLUDED.epoch, updated_at = now()
-		WHERE sandboxd_moves.state IN ('committed', 'aborted')
+		WHERE sandboxd_moves.state IN ('started', 'aborted')
 		RETURNING epoch`, r.cell, id, from, to)
 }
 
