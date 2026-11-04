@@ -227,10 +227,7 @@ func tarInto(src, prefix string, tw *tar.Writer) error {
 		if err != nil {
 			return err
 		}
-		rel, err := filepath.Rel(src, path)
-		if err != nil {
-			return err
-		}
+		rel, _ := filepath.Rel(src, path)
 		if rel == "." {
 			return nil
 		}

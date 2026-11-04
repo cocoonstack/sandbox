@@ -103,7 +103,7 @@ func (e *Engine) silkdStream(ctx context.Context, vsockSocket string, req wire.R
 	}
 }
 
-func (e *Engine) silkdCollect[F wire.Response, E any](ctx context.Context, vsockSocket string, req wire.Request, what string, limit int, unit string, items func(F) []E) ([]E, error) {
+func (e *Engine) silkdCollect[F wire.Response, E any](ctx context.Context, vsockSocket string, req wire.Request, limit int, over error, items func(F) []E) ([]E, error) {
 	var out []E
 	err := e.silkdStream(ctx, vsockSocket, req, func(frame wire.Response) error {
 		resp, ok := frame.(F)
@@ -112,7 +112,7 @@ func (e *Engine) silkdCollect[F wire.Response, E any](ctx context.Context, vsock
 		}
 		out = append(out, items(resp)...)
 		if len(out) > limit {
-			return fmt.Errorf("silkd %s exceeds %d %s", what, limit, unit)
+			return over
 		}
 		return nil
 	})
@@ -123,11 +123,11 @@ func (e *Engine) silkdCollect[F wire.Response, E any](ctx context.Context, vsock
 }
 
 func (e *Engine) silkdList(ctx context.Context, vsockSocket, path string) ([]wire.DirEntry, error) {
-	return e.silkdCollect(ctx, vsockSocket, wire.FsList{Path: path}, "list of "+path, silkdListMax, "entries", func(r *wire.Entries) []wire.DirEntry { return r.Entries })
+	return e.silkdCollect(ctx, vsockSocket, wire.FsList{Path: path}, silkdListMax, fmt.Errorf("silkd list of %s exceeds %d entries", path, silkdListMax), func(r *wire.Entries) []wire.DirEntry { return r.Entries })
 }
 
 func (e *Engine) silkdReadFile(ctx context.Context, vsockSocket, path string, limit int) ([]byte, error) {
-	return e.silkdCollect(ctx, vsockSocket, wire.FsRead{Path: path}, "read of "+path, limit, "bytes", func(r *wire.DataResp) []byte { return r.Data })
+	return e.silkdCollect(ctx, vsockSocket, wire.FsRead{Path: path}, limit, fmt.Errorf("silkd read of %s exceeds %d bytes", path, limit), func(r *wire.DataResp) []byte { return r.Data })
 }
 
 // silkdOnce sends a request answered by a single T frame and no Done, so it cannot ride silkdStream.

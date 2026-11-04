@@ -65,7 +65,7 @@ var (
 	}
 )
 
-// NetShape selects whether the Cloud Hypervisor guest has a NIC.
+// NetShape selects whether the guest has a NIC.
 type NetShape string
 
 // PolicyLayer pins, at claim time, whether the key had a pool layer in its egress policy.
