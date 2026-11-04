@@ -522,7 +522,7 @@ info, err := client.Info(ctx)   // pools, promoted templates, claims, drain, cap
 `ContentDigest` and `Labels`.
 
 `NodeInfo.AtCapacity` distinguishes a refill parked by node capacity from one
-still filling its target; `AtCapacityReason` carries the engine's reason. Both
+still filling its target; `AtCapacityReason` carries the reason. Both
 decode to their zero values when the server omits them.
 
 ## Running commands

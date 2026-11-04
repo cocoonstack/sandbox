@@ -40,8 +40,7 @@ func (s *Server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
 		memoryLow = 1
 	}
 	scalar("memory_low", "1 while memory_limit refuses claims and refills", memoryLow)
-	metric("anon_bytes", "gauge", "node anon memory, 0 when memory_limit has no anon limit")
-	_, _ = fmt.Fprintf(w, "sandboxd_anon_bytes %d\n", g.AnonBytes)
+	scalar("anon_bytes", "node anon memory, 0 when memory_limit has no anon limit", g.AnonBytes)
 
 	if tenants := s.mgr.TenantClaims(); len(tenants) > 0 {
 		metric("tenant_claims", "gauge", "live claims per configured tenant")

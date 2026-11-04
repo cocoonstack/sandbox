@@ -7,17 +7,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
 
 	"github.com/docker/go-units"
 	"github.com/projecteru2/core/log"
 )
 
-const (
-	memoryLowReason = "memory above limit"
-
-	procRoot = "/proc"
-)
+const memoryLowReason = "memory above limit"
 
 // Page cache and clean guest pages are reclaimable, so only anon and stall time show a squeezed node.
 func (m *Manager) checkMemory(ctx context.Context) {
@@ -52,25 +47,14 @@ func (m *Manager) checkMemory(ctx context.Context) {
 	}
 }
 
-func (m *Manager) memoryErr() error {
-	if m.memoryLow.Load() {
-		return fmt.Errorf("%w: %s", ErrQuota, memoryLowReason)
-	}
-	return nil
-}
-
 func readAnonBytes(proc string) (int64, error) {
 	raw, err := os.ReadFile(filepath.Join(proc, "meminfo")) //nolint:gosec // a fixed proc file
 	if err != nil {
 		return 0, err
 	}
-	_, rest, found := bytes.Cut(raw, []byte("AnonPages:"))
-	fields := bytes.Fields(rest)
-	if !found || len(fields) == 0 {
-		return 0, errors.New("meminfo has no AnonPages")
-	}
-	kb, err := strconv.ParseInt(string(fields[0]), 10, 64)
-	if err != nil {
+	_, rest, _ := bytes.Cut(raw, []byte("AnonPages:"))
+	var kb int64
+	if _, err := fmt.Sscan(string(rest), &kb); err != nil {
 		return 0, fmt.Errorf("parse AnonPages: %w", err)
 	}
 	return kb * units.KiB, nil

@@ -222,7 +222,7 @@ type Gauges struct {
 	AtCapacity       bool
 	AtCapacityReason string
 	MemoryLow        bool
-	AnonBytes        int64
+	AnonBytes        int
 }
 
 type Backends struct {
@@ -355,7 +355,7 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 	m := &Manager{
 		eng:             eng,
 		dataDir:         cfg.DataDir,
-		procDir:         procRoot,
+		procDir:         "/proc",
 		egress:          cfg.HasEgress(),
 		cocoondSocket:   cfg.CocoondSocket,
 		store:           newClaimStore(cfg.DataDir, cfg.SyncClaims),
@@ -531,7 +531,7 @@ func (m *Manager) Info() ([]PoolInfo, Gauges) {
 	}
 	g := Gauges{
 		Claimed: len(m.claimed), Running: m.store.runningCount(), MaxRunning: m.view.Load().maxRunning, Draining: m.draining,
-		MemoryLow: m.memoryLow.Load(), AnonBytes: m.anonBytes.Load(),
+		MemoryLow: m.memoryLow.Load(), AnonBytes: int(m.anonBytes.Load()),
 	}
 	if m.evac != nil {
 		g.Evacuating = len(m.evac.pending)
