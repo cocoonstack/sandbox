@@ -221,6 +221,8 @@ type Gauges struct {
 	// AtCapacity marks refill parked because the node refused another VM.
 	AtCapacity       bool
 	AtCapacityReason string
+	MemoryLow        bool
+	AnonBytes        int64
 }
 
 type Backends struct {
@@ -335,6 +337,11 @@ type Manager struct {
 	diskLow        atomic.Bool
 	diskStatFailed atomic.Bool
 
+	procDir          string
+	memoryLow        atomic.Bool
+	memoryReadFailed atomic.Bool
+	anonBytes        atomic.Int64
+
 	refillSem   chan struct{}
 	maintSem    chan struct{}
 	probeSem    chan struct{}
@@ -348,6 +355,7 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 	m := &Manager{
 		eng:             eng,
 		dataDir:         cfg.DataDir,
+		procDir:         procRoot,
 		egress:          cfg.HasEgress(),
 		cocoondSocket:   cfg.CocoondSocket,
 		store:           newClaimStore(cfg.DataDir, cfg.SyncClaims),
@@ -456,6 +464,7 @@ func (m *Manager) Run(ctx context.Context) {
 	}
 	m.livenessOnce(ctx)
 	m.checkDisk(ctx)
+	m.checkMemory(ctx)
 	m.refillOnce(ctx)
 	for {
 		select {
@@ -466,6 +475,7 @@ func (m *Manager) Run(ctx context.Context) {
 				m.out.RefreshSelf()
 			}
 			m.checkDisk(ctx)
+			m.checkMemory(ctx)
 			m.refillOnce(ctx)
 		case <-m.refillKick:
 			m.refillOnce(ctx)
@@ -519,7 +529,10 @@ func (m *Manager) Info() ([]PoolInfo, Gauges) {
 			Golden:    p.goldenDir != "",
 		})
 	}
-	g := Gauges{Claimed: len(m.claimed), Running: m.store.runningCount(), MaxRunning: m.view.Load().maxRunning, Draining: m.draining}
+	g := Gauges{
+		Claimed: len(m.claimed), Running: m.store.runningCount(), MaxRunning: m.view.Load().maxRunning, Draining: m.draining,
+		MemoryLow: m.memoryLow.Load(), AnonBytes: m.anonBytes.Load(),
+	}
 	if m.evac != nil {
 		g.Evacuating = len(m.evac.pending)
 	}
