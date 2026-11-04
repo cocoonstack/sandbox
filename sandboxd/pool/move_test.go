@@ -785,6 +785,83 @@ func TestMoveReceivedClaimWaitingOutAnOutageIsNotHibernatedOrServed(t *testing.T
 	}
 }
 
+func TestMoveFromTheHolderOfACommittedRecordMarksItStartedAndProceeds(t *testing.T) {
+	t.Run("target whose started write was lost", func(t *testing.T) {
+		mc := newMoveCluster(t)
+		third := mc.moveNode(t, "c")
+		mc.t.moves = &lossyMoves{Registry: mc.moveReg, loseStarted: true}
+		sb := mustClaim(t, mc.s, testKey)
+		if _, err := mc.s.Move(t.Context(), sb.ID, "b", time.Minute); err != nil {
+			t.Fatalf("move: %v", err)
+		}
+		if rec, _, _ := mc.moveReg.Get(t.Context(), sb.ID); rec.State != moves.Committed {
+			t.Fatalf("record %+v, want it committed since the started write was lost", rec)
+		}
+		if _, err := mc.t.Move(t.Context(), sb.ID, "c", time.Minute); err != nil {
+			t.Fatalf("move on from the target: %v", err)
+		}
+		if _, held := third.byID(sb.ID); !held {
+			t.Error("the third node does not hold the claim")
+		}
+	})
+	t.Run("adopter", func(t *testing.T) {
+		mc := newMoveCluster(t)
+		adopter := mc.moveNode(t, "c")
+		sb := mustClaim(t, adopter, testKey)
+		seedMoveRecord(t, mc.moveReg, sb.ID, "a", "lost", moves.Committed)
+		if _, err := adopter.Move(t.Context(), sb.ID, "b", time.Minute); err != nil {
+			t.Fatalf("move from the adopter: %v", err)
+		}
+		if _, held := mc.t.byID(sb.ID); !held {
+			t.Error("the target does not hold the claim")
+		}
+	})
+}
+
+func TestMoveBeginLeavesARecordOnlyItsHolderMaySettle(t *testing.T) {
+	for name, tt := range map[string]struct {
+		reach moves.State
+		edit  func(sb *types.Sandbox)
+	}{
+		"a move in flight":         {reach: moves.Pending},
+		"final":                    {reach: moves.Final},
+		"held under a journal":     {reach: moves.Committed, edit: func(sb *types.Sandbox) { sb.MoveOut = &types.MoveOut{To: "b", Epoch: 1} }},
+		"received and not started": {reach: moves.Committed, edit: func(sb *types.Sandbox) { sb.MoveIn = &types.MoveIn{From: "a", Epoch: 1} }},
+	} {
+		t.Run(name, func(t *testing.T) {
+			mc := newMoveCluster(t)
+			sb := mustClaim(t, mc.s, testKey)
+			seedMoveRecord(t, mc.moveReg, sb.ID, "z", "y", tt.reach)
+			if tt.edit != nil {
+				mc.s.mu.Lock()
+				tt.edit(sb)
+				mc.s.mu.Unlock()
+			}
+			if _, err := mc.s.beginMove(t.Context(), sb, "b"); !errors.Is(err, moves.ErrLost) {
+				t.Errorf("begin: %v, want ErrLost", err)
+			}
+			if rec, _, _ := mc.moveReg.Get(t.Context(), sb.ID); rec.State != tt.reach || rec.From != "z" {
+				t.Errorf("record %+v, want %s untouched", rec, tt.reach)
+			}
+			mc.s.mu.Lock()
+			sb.MoveOut, sb.MoveIn = nil, nil
+			mc.s.mu.Unlock()
+		})
+	}
+	t.Run("a claim this node no longer holds", func(t *testing.T) {
+		mc := newMoveCluster(t)
+		sb := mustClaim(t, mc.s, testKey)
+		seedMoveRecord(t, mc.moveReg, sb.ID, "z", "y", moves.Committed)
+		mc.s.forgetClaim(t.Context(), sb)
+		if _, err := mc.s.beginMove(t.Context(), sb, "b"); !errors.Is(err, moves.ErrLost) {
+			t.Errorf("begin: %v, want ErrLost", err)
+		}
+		if rec, _, _ := mc.moveReg.Get(t.Context(), sb.ID); rec.State != moves.Committed {
+			t.Errorf("record %+v, want it committed", rec)
+		}
+	})
+}
+
 func TestMoveCommitWhoseRegistryReplyIsLostKeepsTheOnlyGuest(t *testing.T) {
 	mc := newMoveCluster(t)
 	mc.t.moves = &lossyMoves{Registry: mc.moveReg, loseCommit: true}
@@ -1065,6 +1142,7 @@ func (p *fakeMovePeer) target(addr string) *Manager {
 type lossyMoves struct {
 	moves.Registry
 	downAfterCommit bool
+	loseStarted     bool
 	loseCommit      bool
 	down            atomic.Bool
 	killAfterCommit chan struct{}
@@ -1080,6 +1158,10 @@ func (r *lossyMoves) Begin(ctx context.Context, id, from, to string) (int64, err
 
 func (r *lossyMoves) Advance(ctx context.Context, id string, expect int64, from, to moves.State) (int64, error) {
 	if r.down.Load() {
+		return 0, moves.ErrUnavailable
+	}
+	if to == moves.Started && r.loseStarted {
+		r.loseStarted = false
 		return 0, moves.ErrUnavailable
 	}
 	epoch, err := r.Registry.Advance(ctx, id, expect, from, to)

@@ -55,7 +55,7 @@ func (m *Manager) moveOut(ctx context.Context, sb *types.Sandbox, mv *outMove, b
 		return err
 	}
 	mv.to = to
-	epoch, err := m.moves.Begin(ctx, sb.ID, m.nodeID, to)
+	epoch, err := m.beginMove(ctx, sb, to)
 	if errors.Is(err, moves.ErrLost) {
 		return fmt.Errorf("%w: another move of %s is on record", ErrNotMovable, sb.ID)
 	}
@@ -128,6 +128,27 @@ func (m *Manager) moveOut(ctx context.Context, sb *types.Sandbox, mv *outMove, b
 		return fmt.Errorf("encode claim: %w", err)
 	}
 	return m.movePeer.Commit(ctx, mv.addr, sb.ID, claim, final)
+}
+
+func (m *Manager) beginMove(ctx context.Context, sb *types.Sandbox, to string) (int64, error) {
+	epoch, err := m.moves.Begin(ctx, sb.ID, m.nodeID, to)
+	if !errors.Is(err, moves.ErrLost) {
+		return epoch, err
+	}
+	rec, ok, err := m.moves.Get(ctx, sb.ID)
+	if err != nil {
+		return 0, err
+	}
+	m.mu.Lock()
+	settled := m.claimed[sb.ID] == sb && sb.MoveIn == nil && sb.MoveOut == nil
+	m.mu.Unlock()
+	if !ok || rec.State != moves.Committed || !settled {
+		return 0, moves.ErrLost
+	}
+	if _, err = m.moves.Advance(ctx, sb.ID, rec.Epoch, moves.Committed, moves.Started); err != nil && !errors.Is(err, moves.ErrLost) {
+		return 0, err
+	}
+	return m.moves.Begin(ctx, sb.ID, m.nodeID, to)
 }
 
 func (m *Manager) sendRound(ctx context.Context, id string, mv *outMove, round types.MigrateRound) error {
