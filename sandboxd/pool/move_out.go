@@ -311,10 +311,10 @@ func (m *Manager) settleMoveOut(ctx context.Context, sb *types.Sandbox, mv *outM
 // abortMoveOut ends the series, which resumes a paused guest, releases the target and the budget slot, and deletes the aborted record only once the journal no longer needs it.
 func (m *Manager) abortMoveOut(ctx context.Context, sb *types.Sandbox, mv *outMove, aborted int64) error {
 	logger := log.WithFunc("pool.abortMoveOut")
-	if mv.series != "" {
-		m.mu.Lock()
-		vm := sb.VMName
-		m.mu.Unlock()
+	m.mu.Lock()
+	vm, live := sb.VMName, m.claimed[sb.ID] == sb
+	m.mu.Unlock()
+	if live && mv.series != "" {
 		if err := m.eng.MigrateAbort(ctx, vm, mv.series); err != nil {
 			return fmt.Errorf("abort series %s: %w", mv.series, err)
 		}

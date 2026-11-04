@@ -373,6 +373,31 @@ func TestMoveHoldsOffCapturesReleasesAndEvacuationWhileItRuns(t *testing.T) {
 	}
 }
 
+func TestMoveEndsWhenAFailoverTookTheClaimFromTheSource(t *testing.T) {
+	mc := newMoveCluster(t)
+	sb := mustClaim(t, mc.s, testKey)
+	mc.p.commitHook = func(int) error {
+		mc.s.dropAdopted(t.Context(), sb)
+		return ErrMoveTarget
+	}
+	if _, err := mc.s.Move(t.Context(), sb.ID, "b", time.Minute); !errors.Is(err, ErrMoveTarget) {
+		t.Fatalf("move of a claim another node took: %v, want ErrMoveTarget", err)
+	}
+	if mc.s.movingNow(sb.ID) {
+		t.Fatal("the move still holds its slot")
+	}
+	if !sb.Transition.TryLock() {
+		t.Fatal("the move still holds Transition")
+	}
+	sb.Transition.Unlock()
+	eng := fakeOf(mc.s)
+	eng.mu.Lock()
+	defer eng.mu.Unlock()
+	if len(eng.aborts) != 0 {
+		t.Errorf("aborts %v on a removed VM", eng.aborts)
+	}
+}
+
 func TestMoveRefusesWritesThatWouldMissTheRecordTheTargetReceives(t *testing.T) {
 	mc := newMoveCluster(t)
 	sb := mustClaim(t, mc.s, testKey)

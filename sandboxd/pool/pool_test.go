@@ -1907,6 +1907,9 @@ func (f *fakeEngine) MigrateAbort(_ context.Context, vmName, series string) erro
 	if f.abortErr != nil {
 		return f.abortErr
 	}
+	if _, ok := f.vms[vmName]; !ok {
+		return fmt.Errorf("vm %s not found", vmName)
+	}
 	if f.migrateSeries[vmName] == series {
 		delete(f.migrateSeries, vmName)
 		f.paused[vmName] = false
