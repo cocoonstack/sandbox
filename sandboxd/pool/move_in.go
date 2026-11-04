@@ -154,7 +154,9 @@ func (m *Manager) startMoveIn(ctx context.Context, sb *types.Sandbox, committed 
 		m.recordUsage(ctx, usage.Event{Event: "vmm_exit", ID: sb.ID, VMName: sb.VMName, Tenant: sb.Tenant})
 		m.failLocked(ctx, sb, reasonMoveStartFailed)
 		_ = os.RemoveAll(m.moveDir(sb.ID))
-		m.markMoveStarted(ctx, sb.ID, committed, persistErr)
+		if committed != 0 && persistErr == nil {
+			m.markMoveStarted(ctx, sb.ID, committed)
+		}
 		return
 	}
 	if sock, probeErr := m.probeReady(ctx, sb.VMName, sb.VsockSocket, claimProbeTimeout); probeErr != nil {
@@ -178,15 +180,14 @@ func (m *Manager) startMoveIn(ctx context.Context, sb *types.Sandbox, committed 
 	sb.Touch()
 	m.recordUsage(ctx, usage.Event{Event: "move_in", ID: sb.ID, VMName: sb.VMName, Tenant: sb.Tenant, Deadline: m.deadlineOf(sb)})
 	_ = os.RemoveAll(m.moveDir(sb.ID))
-	m.markMoveStarted(ctx, sb.ID, committed, err)
+	if committed != 0 && err == nil {
+		m.markMoveStarted(ctx, sb.ID, committed)
+	}
 	logger.Infof(ctx, "sandbox %s moved here from %s", sb.ID, from)
 }
 
-func (m *Manager) markMoveStarted(ctx context.Context, id string, committed int64, persistErr error) {
-	if committed == 0 || persistErr != nil {
-		return
-	}
-	if _, err := m.moves.Advance(ctx, id, committed, moves.Committed, moves.Started); err != nil {
+func (m *Manager) markMoveStarted(ctx context.Context, id string, epoch int64) {
+	if _, err := m.moves.Advance(ctx, id, epoch, moves.Committed, moves.Started); err != nil {
 		log.WithFunc("pool.markMoveStarted").Warnf(ctx, "mark the move of %s started, leaving it to the sweep: %v", id, err)
 	}
 }

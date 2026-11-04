@@ -257,9 +257,8 @@ func (m *Manager) dialPassive(ctx context.Context, id string, port uint16) (net.
 	if !sb.Transition.TryLock() {
 		return nil, ErrPaused
 	}
-	failed := sb.Failed != ""
-	paused, sock := sb.HibernateSnap != "" || sb.PendingSnap != "" || sb.ArchiveCk != "" || sb.MoveIn != nil, sb.VsockSocket
-	if !paused && !failed {
+	failed, paused, sock := sb.Failed != "", !runningShaped(sb), sb.VsockSocket
+	if !paused {
 		sb.Hold()
 	}
 	sb.Transition.Unlock()

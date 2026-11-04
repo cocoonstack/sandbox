@@ -50,7 +50,7 @@ func (m *Manager) writeEnv(ctx context.Context, id, tenant, verb string, next fu
 		m.mu.Unlock()
 		return ErrUnknownSandbox
 	}
-	if sb.MoveIn != nil || !locked && m.movingFinalLocked(id) {
+	if m.pausedForMoveLocked(sb) {
 		m.mu.Unlock()
 		return ErrEvacuating
 	}

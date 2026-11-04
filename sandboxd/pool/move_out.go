@@ -189,7 +189,6 @@ func (m *Manager) markMoving(sb *types.Sandbox, mv *outMove) error {
 // moveBlocker names why sb cannot move, "" when it can; callers hold m.mu.
 func (m *Manager) moveBlocker(sb *types.Sandbox) string {
 	_, archiving := m.archiving[sb.ID]
-	_, moving := m.moving[sb.ID]
 	switch {
 	case sb.ArchiveCk != "" || archiving:
 		return "it is archived or archiving"
@@ -199,7 +198,7 @@ func (m *Manager) moveBlocker(sb *types.Sandbox) string {
 		return "it failed"
 	case sb.Waking:
 		return "it is waking"
-	case sb.MoveIn != nil || moving:
+	case m.midMoveLocked(sb):
 		return "a move of it is already running"
 	case hasVolumes(sb) || m.hasVolumeHolds(sb):
 		return "it has volumes"
@@ -266,7 +265,7 @@ func (m *Manager) finishMoveOut(ctx context.Context, sb *types.Sandbox, mv *outM
 		logger.Warnf(ctx, "read the move of %s, leaving it to the sweep: %v", sb.ID, err)
 		return
 	}
-	if ok && rec.From == m.nodeID && rec.Epoch >= mv.epoch && rec.State == moves.Started {
+	if ok && mv.owns(rec, m.nodeID) && rec.State == moves.Started {
 		if err = m.moves.Delete(ctx, sb.ID, rec.Epoch); err != nil {
 			logger.Warnf(ctx, "delete the move of %s, leaving it to the sweep: %v", sb.ID, err)
 		}
@@ -294,12 +293,12 @@ func (m *Manager) failMoveOut(ctx context.Context, sb *types.Sandbox, mv *outMov
 
 func (m *Manager) retryMoveOut(ctx context.Context, sb *types.Sandbox, mv *outMove) {
 	for {
-		time.Sleep(moveRetryInterval)
 		_, err := m.settleMoveOut(ctx, sb, mv)
 		if err == nil {
 			return
 		}
 		log.WithFunc("pool.retryMoveOut").Warnf(ctx, "abort the move of %s, retrying: %v", sb.ID, err)
+		time.Sleep(moveRetryInterval)
 	}
 }
 
@@ -310,7 +309,7 @@ func (m *Manager) settleMoveOut(ctx context.Context, sb *types.Sandbox, mv *outM
 		if err != nil {
 			return false, err
 		}
-		ours := ok && rec.From == m.nodeID && rec.Epoch >= mv.epoch
+		ours := ok && mv.owns(rec, m.nodeID)
 		switch {
 		case !ours || rec.State == moves.Committed || rec.State == moves.Started:
 			m.finishMoveOut(ctx, sb, mv)
@@ -379,12 +378,8 @@ func (m *Manager) pausedForMove(sb *types.Sandbox) bool {
 }
 
 func (m *Manager) pausedForMoveLocked(sb *types.Sandbox) bool {
-	return sb.MoveIn != nil || m.movingFinalLocked(sb.ID)
-}
-
-func (m *Manager) movingFinalLocked(id string) bool {
-	mv := m.moving[id]
-	return mv != nil && mv.final
+	mv := m.moving[sb.ID]
+	return sb.MoveIn != nil || mv != nil && mv.final
 }
 
 func (m *Manager) lockTransition(sb *types.Sandbox) error {

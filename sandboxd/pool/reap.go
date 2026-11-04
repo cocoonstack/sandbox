@@ -36,7 +36,7 @@ func (m *Manager) reapOnce(ctx context.Context) {
 	var unrows []*types.Sandbox
 	for id, sb := range m.claimed {
 		// A zero deadline means no expiry (an archived claim kept forever).
-		if m.midMoveLocked(sb) || sb.Deadline.IsZero() || !now.After(sb.Deadline) {
+		if sb.Deadline.IsZero() || !now.After(sb.Deadline) || m.midMoveLocked(sb) {
 			continue
 		}
 		switch {

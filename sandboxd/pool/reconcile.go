@@ -166,12 +166,7 @@ func (m *Manager) resumeMoves(ctx context.Context, outs map[*types.Sandbox]*outM
 		go func() {
 			sb.Transition.Lock()
 			mv.locked = true
-			for {
-				if _, err := m.settleMoveOut(ctx, sb, mv); err == nil {
-					return
-				}
-				time.Sleep(moveRetryInterval)
-			}
+			m.retryMoveOut(ctx, sb, mv)
 		}()
 	}
 	for _, sb := range ins {

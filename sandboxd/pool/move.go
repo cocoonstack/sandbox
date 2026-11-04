@@ -64,6 +64,10 @@ type outMove struct {
 	pausedAt time.Time
 }
 
+func (mv *outMove) owns(rec moves.Record, node string) bool {
+	return rec.From == node && rec.Epoch >= mv.epoch
+}
+
 func (mv *outMove) result() MoveResult {
 	res := MoveResult{Rounds: mv.rounds}
 	if !mv.pausedAt.IsZero() {
@@ -106,7 +110,7 @@ func (m *Manager) sweepStaleMoves(ctx context.Context, now time.Time) {
 		switch rec.State {
 		case moves.Committed:
 			if rec.To == m.nodeID {
-				m.markMoveStarted(ctx, rec.ID, rec.Epoch, nil)
+				m.markMoveStarted(ctx, rec.ID, rec.Epoch)
 			}
 			continue
 		case moves.Pending, moves.Final:
