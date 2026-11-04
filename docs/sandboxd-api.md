@@ -853,7 +853,8 @@ its guest's processes and memory (see
 [moving a running claim](cluster.md#moving-a-running-claim)). Body:
 `{"to": "<peer>", "max_downtime_ms": 2000}`, `to` as `GET /v1/peers` lists it
 and never this node (else 400), `max_downtime_ms` optional with a default of
-2000. Answers `{"owner_addr": "<peer>", "rounds": n, "downtime_ms": d}` once the
+2000 and a floor: 400 or less answers 400 at once, because the target's receive
+and start alone are allowed that long. Answers `{"owner_addr": "<peer>", "rounds": n, "downtime_ms": d}` once the
 peer runs the guest and this node dropped the claim; `downtime_ms` is the pause
 from the final capture to the peer's commit. While the move runs, release of
 the claim answers 503 `sandbox moving to another node; retry`, and fork,

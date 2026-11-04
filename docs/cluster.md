@@ -366,7 +366,8 @@ ended ones.
 **Rounds.** The source sends a baseline round, then up to 4 deltas, each over
 the control port with the root token. Once the last delta's size at the rate
 the rounds reached, plus 400 ms for the receive and the start, fits
-`max_downtime_ms` (default 2000), the source pauses the guest for the final
+`max_downtime_ms` (default 2000, and above 400 since those 400 ms alone would
+never fit), the source pauses the guest for the final
 round and the target receives the series and starts the guest. A move whose
 deltas never fit answers 503 and the guest runs on. `downtime_ms` in the answer
 is the pause the source measured, from the final capture to the target's
@@ -383,8 +384,19 @@ never see it. At the commit the reservation becomes the claim under one lock,
 so the target never counts it twice. The source counts the claim until it drops
 it after the commit, so the cluster counts a moving claim twice, which can make
 a node refuse earlier but never over-admit. `memory_limit` is checked again
-before the receive. A reservation with no round arriving and none finished or
+before the receive. A new admission from the source that holds the reservation
+replaces it and resets its staged files, so a move retried after a source crash
+does not wait out the idle drop; one from another source answers 409. A
+reservation with no round arriving and none finished or
 commit asked for 2 minutes is dropped with its staged files.
+
+**Same paths.** Both nodes need the same path strings in cocoon's `root_dir` and
+`run_dir`. The requirement is on the string, not the real directory: a symlink
+of one name can lead to different disks on each node, and `data_dir` may differ.
+The string has to be set before the VM starts, because the VM's record keeps it.
+A move between nodes with different strings fails at the receive, after the
+guest paused: cocoon refuses the series with `untrusted storage path in snapshot
+metadata`, the call answers 502 and the guest resumes on the source.
 
 **Replicated claims.** Before the final round the source deletes the claim's
 registry row and its replica, so no third node can adopt a stale replica while
