@@ -581,6 +581,40 @@ func TestMoveHoldsOffVolumeChanges(t *testing.T) {
 	})
 }
 
+func TestMoveLeavesAnExitedVMMToLivenessUntilItEnds(t *testing.T) {
+	mc := newMoveCluster(t)
+	sb := mustClaim(t, mc.s, testKey)
+	vm, eng := sb.VMName, fakeOf(mc.s)
+	mc.p.roundHook = func(round int) error {
+		if round != 1 {
+			return nil
+		}
+		killVMM(eng, vm)
+		if watched := mc.s.watchedClaims(""); slices.ContainsFunc(watched, func(s liveSuspect) bool { return s.sb == sb }) {
+			t.Error("liveness watches the moving claim")
+		}
+		mc.s.recoverVMM(t.Context(), sb)
+		if got := startsOf(mc.s); len(got) != 0 {
+			t.Errorf("liveness started %v during the move", got)
+		}
+		return nil
+	}
+	if _, err := mc.s.Move(t.Context(), sb.ID, "b", time.Minute); err == nil {
+		t.Fatal("a move whose VMM exited succeeded")
+	}
+	if _, held := mc.t.byID(sb.ID); held {
+		t.Error("the target holds a claim whose VMM exited mid-move")
+	}
+	assertNoMoveResidue(t, mc.t, sb.ID)
+	if got := startsOf(mc.s); len(got) != 0 {
+		t.Fatalf("liveness started %v before the move ended", got)
+	}
+	mc.s.recoverVMM(t.Context(), sb)
+	if got := startsOf(mc.s); !slices.Contains(got, vm) {
+		t.Errorf("starts %v after the move ended, want liveness to restart the VM", got)
+	}
+}
+
 func TestMoveRefusesClaimsThatCannotMove(t *testing.T) {
 	mc := newMoveCluster(t)
 	hibernatedSb := mustClaim(t, mc.s, testKey)

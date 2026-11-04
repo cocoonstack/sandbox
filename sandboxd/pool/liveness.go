@@ -116,10 +116,10 @@ func (m *Manager) watchedClaims(vmName string) []liveSuspect {
 	defer m.mu.Unlock()
 	var out []liveSuspect
 	for _, sb := range m.claimed {
-		if vmName != "" && sb.VMName != vmName || !runningShaped(sb) {
+		if vmName != "" && sb.VMName != vmName {
 			continue
 		}
-		if _, archiving := m.archiving[sb.ID]; !archiving && !m.leaseLapsed(sb, now) {
+		if m.vmSettledLocked(sb) && !m.leaseLapsed(sb, now) {
 			out = append(out, liveSuspect{sb, sb.VMName})
 		}
 	}
@@ -174,7 +174,7 @@ func (m *Manager) recoverVMM(ctx context.Context, sb *types.Sandbox) {
 	defer sb.Transition.Unlock()
 	now := time.Now()
 	m.mu.Lock()
-	live := m.claimed[sb.ID] == sb && runningShaped(sb) && !m.leaseLapsed(sb, now)
+	live := m.claimed[sb.ID] == sb && m.vmSettledLocked(sb) && !m.leaseLapsed(sb, now)
 	volumes := m.hasVolumeHolds(sb)
 	m.mu.Unlock()
 	if !live {
@@ -306,6 +306,12 @@ func (m *Manager) failLocked(ctx context.Context, sb *types.Sandbox, reason stri
 // leaseLapsed reports whether reap destroys sb instead of archiving it; callers hold m.mu.
 func (m *Manager) leaseLapsed(sb *types.Sandbox, now time.Time) bool {
 	return (sb.OnExpire != types.ExpireArchive || m.tenantGone(sb.Tenant)) && !sb.Deadline.IsZero() && now.After(sb.Deadline)
+}
+
+func (m *Manager) vmSettledLocked(sb *types.Sandbox) bool {
+	_, archiving := m.archiving[sb.ID]
+	_, moving := m.moving[sb.ID]
+	return runningShaped(sb) && !archiving && !moving
 }
 
 // runningShaped reports whether sb's VM should be up; callers hold m.mu.

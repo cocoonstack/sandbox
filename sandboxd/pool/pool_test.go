@@ -1861,6 +1861,8 @@ func (f *fakeEngine) MigrateCapture(_ context.Context, vmName, series string, fi
 	switch {
 	case f.captureErr != nil:
 		return types.MigrateRound{}, f.captureErr
+	case f.stopped[vmName]:
+		return types.MigrateRound{}, fmt.Errorf("vm %s is not running", vmName)
 	case final && f.finalCaptureErr != nil:
 		f.paused[vmName] = true
 		return types.MigrateRound{}, f.finalCaptureErr
