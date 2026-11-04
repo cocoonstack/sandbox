@@ -19,12 +19,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cocoonstack/sandbox/sandboxd/archives"
 	"github.com/cocoonstack/sandbox/sandboxd/egress"
 	"github.com/cocoonstack/sandbox/sandboxd/engine"
 	"github.com/cocoonstack/sandbox/sandboxd/moves"
 	"github.com/cocoonstack/sandbox/sandboxd/moves/movestest"
 	"github.com/cocoonstack/sandbox/sandboxd/outbound/outboundtest"
 	"github.com/cocoonstack/sandbox/sandboxd/store/peer"
+	"github.com/cocoonstack/sandbox/sandboxd/tenants"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
@@ -450,6 +452,60 @@ func TestMoveAbortedAfterDroppingTheRowPutsItBackOnTheNextRound(t *testing.T) {
 	replicateNow(t, mc.s, sb)
 	if _, ok, _ := mc.reg.Get(t.Context(), sb.ID); !ok {
 		t.Error("the next round did not put the row back")
+	}
+}
+
+func TestMoveWhoseRowDeleteReplyIsLostKeepsTheOnlyGuest(t *testing.T) {
+	mc := newMoveClusterWith(t, func(c *failoverCluster) { c.replicate = replicateEvery })
+	sb := mustClaim(t, mc.s, testKey)
+	replicateNow(t, mc.s, sb)
+	mc.s.archives = &hookRegistry{Registry: mc.reg, loseDeleteReply: true}
+	if _, err := mc.s.Move(t.Context(), sb.ID, "b", time.Minute); !errors.Is(err, archives.ErrUnavailable) {
+		t.Fatalf("move: %v, want the lost reply's error", err)
+	}
+	assertStillOnSource(t, mc, sb)
+	if _, ok, _ := mc.reg.Get(t.Context(), sb.ID); ok {
+		t.Fatal("the delete did not land under its lost reply")
+	}
+	replicateNow(t, mc.s, sb)
+	if _, held := mc.s.byID(sb.ID); !held {
+		t.Fatal("the next replica round dropped the claim as adopted")
+	}
+	if rec, ok, _ := mc.reg.Get(t.Context(), sb.ID); !ok || rec.Owner != "a" {
+		t.Errorf("row %+v %v after the next round, want this node's", rec, ok)
+	}
+}
+
+func TestMoveRestartBeforeTheRowDeleteKeepsTheClaim(t *testing.T) {
+	c := newFailoverCluster(t)
+	reg := movestest.NewMem()
+	c.moves = reg
+	ctx := t.Context()
+	epoch, _ := reg.Begin(ctx, "sb_moved", "a", "b")
+	if _, err := c.reg.Put(ctx, archives.Record{ID: "sb_moved", TokenSHA256: tenants.TokenSHA256("tok"), Owner: "a", Checkpoint: "ck_00000000000000aa", Claim: []byte("{}")}); err != nil {
+		t.Fatalf("seed row: %v", err)
+	}
+	sb := &types.Sandbox{ID: "sb_moved", VMName: "sbx-moved", Key: testKey, Token: "tok", Deadline: time.Now().Add(time.Hour), MoveOut: &types.MoveOut{Epoch: epoch, Series: "s1"}}
+	dataDir := t.TempDir()
+	seedClaims(t, dataDir, map[string]*types.Sandbox{sb.ID: sb})
+	eng := newFakeEngine()
+	eng.vms["sbx-moved"] = "/vsock/sbx-moved"
+	m := c.nodeOn(t, eng, "a", dataDir, keepAnHour)
+	m.liftFence()
+	if err := m.Reconcile(ctx); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	waitFor(t, func() bool { return !m.moveHeld(sb.ID) })
+	if _, held := m.byID(sb.ID); !held {
+		t.Fatal("the restart dropped a claim whose move had not committed")
+	}
+	if _, ok, _ := c.reg.Get(ctx, sb.ID); ok {
+		t.Error("the row the journal no longer names survived the restart")
+	}
+	eng.mu.Lock()
+	defer eng.mu.Unlock()
+	if !slices.Contains(eng.aborts, "sbx-moved:s1") || slices.Contains(eng.removes, "sbx-moved") {
+		t.Errorf("aborts %v removes %v, want the series aborted and the VM kept", eng.aborts, eng.removes)
 	}
 }
 

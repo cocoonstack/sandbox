@@ -232,17 +232,20 @@ func (m *Manager) unrowForMove(ctx context.Context, sb *types.Sandbox, mv *outMo
 	if epoch == 0 {
 		return nil
 	}
-	if err := m.archives.Delete(ctx, sb.ID, epoch); errors.Is(err, archives.ErrLost) {
+	live, err := m.commitIfLive(ctx, sb, func() { sb.ReplicaCk, sb.ArchiveEpoch = "", 0 })
+	if !live {
+		return ErrUnknownSandbox
+	}
+	if err != nil {
+		return err
+	}
+	if err = m.archives.Delete(ctx, sb.ID, epoch); errors.Is(err, archives.ErrLost) {
 		return fmt.Errorf("%w: its replica row moved under it", ErrNotMovable)
 	} else if err != nil {
 		return err
 	}
 	mv.replica = replica
-	live, err := m.commitIfLive(ctx, sb, func() { sb.ReplicaCk, sb.ArchiveEpoch = "", 0 })
-	if !live {
-		return ErrUnknownSandbox
-	}
-	return err
+	return nil
 }
 
 // Deletes the record only once the target marked it started.

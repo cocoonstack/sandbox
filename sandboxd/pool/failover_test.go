@@ -1974,6 +1974,7 @@ type hookRegistry struct {
 	loseConsumeReply bool
 	loseTakeReply    bool
 	loseReleaseReply bool
+	loseDeleteReply  bool
 	losePutReply     bool
 	failPut          bool
 	replaces         int
@@ -2043,7 +2044,12 @@ func (r *hookRegistry) Delete(ctx context.Context, id string, epoch int64) error
 		r.beforeDelete = nil
 		hook()
 	}
-	return r.Registry.Delete(ctx, id, epoch)
+	err := r.Registry.Delete(ctx, id, epoch)
+	if err == nil && r.loseDeleteReply {
+		r.loseDeleteReply = false
+		return archives.ErrUnavailable
+	}
+	return err
 }
 
 func (r *hookRegistry) Rows(ctx context.Context, ids []string) (map[string]archives.Record, error) {
