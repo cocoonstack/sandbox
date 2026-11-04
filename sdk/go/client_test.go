@@ -4,6 +4,7 @@ import (
 	"encoding/json/v2"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -156,6 +157,41 @@ func TestCloseReleasesASandboxThatMoved(t *testing.T) {
 	}
 	if !released.Load() {
 		t.Error("Close reported success without releasing at the adopter")
+	}
+}
+
+func TestCloseFollowsAMoveOffARetiredNode(t *testing.T) {
+	var released atomic.Bool
+	var adopter *httptest.Server
+	adopter = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/sandboxes/sb_9/owner":
+			_ = json.MarshalWrite(w, map[string]string{"owner_addr": strings.TrimPrefix(adopter.URL, "http://")})
+		case "/v1/sandboxes/sb_9/release":
+			released.Store(true)
+			w.WriteHeader(http.StatusNoContent)
+		}
+	}))
+	t.Cleanup(adopter.Close)
+
+	sb := &Sandbox{ID: "sb_9", c: testClient(t, adopter), token: "tok9", owner: retiredAddr(t)}
+	if err := sb.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if !released.Load() {
+		t.Error("Close did not follow the move off a retired node")
+	}
+}
+
+func TestCloseReportsARetiredNodeWhenNoNodeHoldsTheSandbox(t *testing.T) {
+	entry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	t.Cleanup(entry.Close)
+
+	sb := &Sandbox{ID: "sb_9", c: testClient(t, entry), token: "tok9", owner: retiredAddr(t)}
+	if err := sb.Close(); err == nil {
+		t.Error("Close hid the transport error with no owner found")
 	}
 }
 
@@ -562,6 +598,17 @@ func TestAPIErrorDrainsOversizedBody(t *testing.T) {
 	if body.Len() != 0 {
 		t.Errorf("apiError left %d bytes unread; the transport cannot reuse the connection", body.Len())
 	}
+}
+
+func retiredAddr(t *testing.T) string {
+	t.Helper()
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := l.Addr().String()
+	_ = l.Close()
+	return addr
 }
 
 func testClient(t testing.TB, ts *httptest.Server, opts ...ClientOption) *Client {

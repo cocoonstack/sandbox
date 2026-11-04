@@ -413,10 +413,18 @@ class Sandbox:
             self._release_at(self.owner)
             return
         except APIError as exc:
-            if exc.status != 404:
+            if exc.status not in (0, 404):
                 raise
+            unreachable = exc if exc.status == 0 else None
         try:
             moved = self._client.lookup(self.id, self.token)
+        except APIError as exc:
+            if unreachable is not None:
+                raise unreachable from None
+            if exc.status != 404:
+                raise
+            return
+        try:
             self._release_at(moved.owner)
         except APIError as exc:
             if exc.status != 404:

@@ -121,8 +121,11 @@ exposes `sb.id`, `sb.token`,
 `sb.owner`, `sb.deadline`, and `sb.from_checkpoint` (the lineage edge when
 branched). `sb.template_digest` is the exact content identity when the claim
 cloned a promoted template; it is empty for other sources. `Sandbox` is a
-context manager; `sb.close()` releases it (releasing one already gone is not
-an error — double-release and reap races stay silent).
+context manager; `sb.close()` releases it (it follows a sandbox that moved to
+another node with a lookup, also when that node is gone; releasing one already
+gone is not an error — double-release and reap races stay silent). Any other
+call on a handle raises a 404 `APIError` once its sandbox has moved; run
+`client.lookup` to tell that from a released sandbox.
 Volume sandboxes cannot hibernate, fork, checkpoint, or promote. Egress-lane
 sandboxes cannot either; each answers 409. Checkpoint
 branches do not accept volumes of either mode in this version.

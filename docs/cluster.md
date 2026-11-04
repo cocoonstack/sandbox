@@ -300,10 +300,12 @@ An archive the sweeps already run for a claim is waited out and the claim
 retried every 5 seconds. Claims that cannot move are skipped and keep serving
 here; once `evacuating` is gone `claimed` counts them, and the log names each
 one with its reason. A client that holds a handle gets 404 from this node after
-the move, the same answer as for a released claim, and only a `Lookup` tells
-the two apart: the SDKs' `Close` does this itself. A reader-served connection
+the move, the same answer as for a released claim, or a connection error once
+the node is retired, and only a `Lookup` tells these apart: the SDKs' `Close`
+does this itself. A reader-served connection
 gets the retry as an error frame, not a 503, and a preview URL minted before
-the move stops working until it is minted again. `DELETE /v1/drain` stops the evacuation: claims not yet started
+the move stops working until it is minted again, except behind a shared
+`preview_advertise`, where it answers when it reaches the new owner. `DELETE /v1/drain` stops the evacuation: claims not yet started
 stay as they are, and one mid-archive finishes its archive but keeps its row.
 
 ### Node lease

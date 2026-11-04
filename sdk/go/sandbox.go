@@ -3,6 +3,7 @@ package sandbox
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -225,12 +226,12 @@ func (s *Sandbox) Close() error {
 	ctx, cancel := context.WithTimeout(context.Background(), releaseTimeout)
 	defer cancel()
 	found, err := s.releaseAt(ctx, s.owner)
-	if err != nil || found {
+	if _, refused := errors.AsType[*APIError](err); refused || found {
 		return err
 	}
-	moved, err := s.c.Lookup(ctx, s.ID, s.token)
-	if err != nil {
-		return nil
+	moved, lookupErr := s.c.Lookup(ctx, s.ID, s.token)
+	if lookupErr != nil {
+		return err
 	}
 	_, err = s.releaseAt(ctx, moved.owner)
 	return err
