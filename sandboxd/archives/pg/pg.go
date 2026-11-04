@@ -5,7 +5,6 @@ import (
 	"context"
 	_ "embed"
 	"errors"
-	"fmt"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -29,6 +28,8 @@ var (
 
 	//go:embed nodes.sql
 	nodesSchema string
+
+	cas = metastore.CAS{Lost: archives.ErrLost, Unavailable: archives.ErrUnavailable}
 )
 
 var _ archives.Registry = (*Registry)(nil)
@@ -53,7 +54,7 @@ func Open(ctx context.Context, dsn, cell string) (*Registry, error) {
 }
 
 func (r *Registry) Put(ctx context.Context, rec archives.Record) (int64, error) {
-	return r.advance(ctx, `INSERT INTO sandboxd_archives (id, tenant, token_sha256, owner, epoch, checkpoint, deadline, claim, cell)
+	return cas.Advance(ctx, r.pool, `INSERT INTO sandboxd_archives (id, tenant, token_sha256, owner, epoch, checkpoint, deadline, claim, cell)
 		VALUES ($1, $2, $3, $4, nextval('sandboxd_archives_epoch'), $5, $6, $7, $8)
 		ON CONFLICT (cell, id) DO UPDATE SET tenant = EXCLUDED.tenant, token_sha256 = EXCLUDED.token_sha256,
 			epoch = EXCLUDED.epoch, consumed = false, checkpoint = EXCLUDED.checkpoint,
@@ -67,20 +68,20 @@ func (r *Registry) Replace(ctx context.Context, rec archives.Record, expect int6
 	if expect == 0 {
 		return r.Put(ctx, rec)
 	}
-	return r.advance(ctx, `UPDATE sandboxd_archives SET tenant = $5, token_sha256 = $6, epoch = nextval('sandboxd_archives_epoch'),
+	return cas.Advance(ctx, r.pool, `UPDATE sandboxd_archives SET tenant = $5, token_sha256 = $6, epoch = nextval('sandboxd_archives_epoch'),
 			checkpoint = $7, deadline = $8, claim = $9, updated_at = now()
 		WHERE cell = $1 AND id = $2 AND epoch = $3 AND owner = $4 AND NOT consumed
 		RETURNING epoch`, r.cell, rec.ID, expect, rec.Owner, rec.Tenant, rec.TokenSHA256, rec.Checkpoint, pgtype.Timestamptz{Time: rec.Deadline, Valid: !rec.Deadline.IsZero()}, []byte(rec.Claim))
 }
 
 func (r *Registry) Take(ctx context.Context, id string, expect int64, owner string) (int64, error) {
-	return r.advance(ctx, `UPDATE sandboxd_archives SET owner = $4, epoch = nextval('sandboxd_archives_epoch'), updated_at = now()
+	return cas.Advance(ctx, r.pool, `UPDATE sandboxd_archives SET owner = $4, epoch = nextval('sandboxd_archives_epoch'), updated_at = now()
 		WHERE cell = $1 AND id = $2 AND epoch = $3 AND NOT consumed AND (owner = $4 OR `+leaseExpired+`)
 		RETURNING epoch`, r.cell, id, expect, owner)
 }
 
 func (r *Registry) Release(ctx context.Context, id string, expect int64, owner string) (int64, error) {
-	return r.advance(ctx, `UPDATE sandboxd_archives SET owner = '', epoch = nextval('sandboxd_archives_epoch'), updated_at = now()
+	return cas.Advance(ctx, r.pool, `UPDATE sandboxd_archives SET owner = '', epoch = nextval('sandboxd_archives_epoch'), updated_at = now()
 		WHERE cell = $1 AND id = $2 AND epoch = $3 AND owner = $4 AND NOT consumed
 		RETURNING epoch`, r.cell, id, expect, owner)
 }
@@ -105,22 +106,13 @@ func (r *Registry) TakeOwned(ctx context.Context, owner string, expect map[strin
 }
 
 func (r *Registry) Consume(ctx context.Context, id string, expect int64) (int64, error) {
-	return r.advance(ctx, `UPDATE sandboxd_archives SET consumed = true, epoch = nextval('sandboxd_archives_epoch'), updated_at = now()
+	return cas.Advance(ctx, r.pool, `UPDATE sandboxd_archives SET consumed = true, epoch = nextval('sandboxd_archives_epoch'), updated_at = now()
 		WHERE cell = $1 AND id = $2 AND epoch = $3 AND NOT consumed
 		RETURNING epoch`, r.cell, id, expect)
 }
 
 func (r *Registry) Delete(ctx context.Context, id string, epoch int64) error {
-	qctx, cancel := context.WithTimeout(ctx, metastore.QueryTimeout)
-	defer cancel()
-	tag, err := r.pool.Exec(qctx, `DELETE FROM sandboxd_archives WHERE cell = $3 AND id = $1 AND epoch = $2`, id, epoch, r.cell)
-	switch {
-	case err != nil:
-		return unavailable(err)
-	case tag.RowsAffected() == 0:
-		return archives.ErrLost
-	}
-	return nil
+	return cas.Delete(ctx, r.pool, `DELETE FROM sandboxd_archives WHERE cell = $3 AND id = $1 AND epoch = $2`, id, epoch, r.cell)
 }
 
 func (r *Registry) Get(ctx context.Context, id string) (archives.Record, bool, error) {
@@ -132,7 +124,7 @@ func (r *Registry) Get(ctx context.Context, id string) (archives.Record, bool, e
 	case errors.Is(err, pgx.ErrNoRows):
 		return archives.Record{}, false, nil
 	case err != nil:
-		return archives.Record{}, false, unavailable(err)
+		return archives.Record{}, false, cas.Down(err)
 	}
 	return rec, true, nil
 }
@@ -162,7 +154,7 @@ func (r *Registry) Renew(ctx context.Context, node string, ttl time.Duration) er
 		VALUES ($1, $2, now() + $3::float8 * interval '1 second')
 		ON CONFLICT (cell, node) DO UPDATE SET lease_until = EXCLUDED.lease_until`, r.cell, node, ttl.Seconds())
 	if err != nil {
-		return unavailable(err)
+		return cas.Down(err)
 	}
 	return nil
 }
@@ -172,30 +164,16 @@ func (r *Registry) Close() {
 	r.pool.Close()
 }
 
-func (r *Registry) advance(ctx context.Context, sql string, args ...any) (int64, error) {
-	qctx, cancel := context.WithTimeout(ctx, metastore.QueryTimeout)
-	defer cancel()
-	var epoch int64
-	err := r.pool.QueryRow(qctx, sql, args...).Scan(&epoch)
-	switch {
-	case errors.Is(err, pgx.ErrNoRows):
-		return 0, archives.ErrLost
-	case err != nil:
-		return 0, unavailable(err)
-	}
-	return epoch, nil
-}
-
 func (r *Registry) collect(ctx context.Context, sql string, args ...any) ([]archives.Record, error) {
 	qctx, cancel := context.WithTimeout(ctx, metastore.QueryTimeout)
 	defer cancel()
 	rows, err := r.pool.Query(qctx, sql, args...)
 	if err != nil {
-		return nil, unavailable(err)
+		return nil, cas.Down(err)
 	}
 	recs, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (archives.Record, error) { return scan(row) })
 	if err != nil {
-		return nil, unavailable(err)
+		return nil, cas.Down(err)
 	}
 	return recs, nil
 }
@@ -211,8 +189,4 @@ func scan(row pgx.Row) (archives.Record, error) {
 	}
 	rec.Deadline, rec.Claim = deadline.Time, claim
 	return rec, nil
-}
-
-func unavailable(err error) error {
-	return fmt.Errorf("%w: %w", archives.ErrUnavailable, err)
 }
