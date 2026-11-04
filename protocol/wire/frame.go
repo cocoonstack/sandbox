@@ -1,9 +1,4 @@
-// Package wire is the Go binding of the silkd wire protocol, shared by the
-// SDK and sandboxd: newline-delimited JSON frames, RPCs back to back on one
-// connection, requests tagged by "op", responses by "type", binary payloads
-// base64 in data fields. The authoritative contract is the shared corpus in
-// protocol/wire/fixtures/v1 — silkd's Rust tests and this package's tests
-// round-trip the same files.
+// Package wire is the Go binding of the silkd wire protocol; the corpus in protocol/wire/fixtures/v1 is the authoritative contract.
 package wire
 
 import (
@@ -18,8 +13,7 @@ import (
 )
 
 const (
-	// ProtoVersion is stamped into every request as "v"; silkd ignores
-	// unknown fields, which is the forward-compatibility story.
+	// ProtoVersion is stamped into every request as "v"; silkd ignores unknown fields.
 	ProtoVersion = 1
 	// KeepAliveProto is the InfoResp.Proto from which silkd serves RPCs back to back on one connection.
 	KeepAliveProto = 2
@@ -128,11 +122,11 @@ var (
 	}
 
 	// bulkResponses decode their canonical shape without json.Unmarshal; any other shape takes responseDecoders.
-	bulkResponses = bulkDecoders(
-		func(d []byte) Response { return &Stdout{Data: d} },
-		func(d []byte) Response { return &Stderr{Data: d} },
-		func(d []byte) Response { return &DataResp{Data: d} },
-	)
+	bulkResponses = map[string]bulkResponse{
+		"stdout": {[]byte(`{"type":"stdout","data":"`), func(d []byte) Response { return &Stdout{Data: d} }},
+		"stderr": {[]byte(`{"type":"stderr","data":"`), func(d []byte) Response { return &Stderr{Data: d} }},
+		"data":   {[]byte(`{"type":"data","data":"`), func(d []byte) Response { return &DataResp{Data: d} }},
+	}
 
 	dataRespHead = bulkResponses["data"].head
 )
@@ -145,11 +139,9 @@ type Response interface{ RespType() string }
 
 type respDecoder func([]byte) (Response, error)
 
-type bulkMaker func([]byte) Response
-
 type bulkResponse struct {
 	head []byte
-	mk   bulkMaker
+	mk   func([]byte) Response
 }
 
 // reqPtr and respPtr turn a mistyped decoder table entry into a compile error.
@@ -240,8 +232,7 @@ type StdinClose struct{}
 
 func (StdinClose) Op() string { return "stdin_close" }
 
-// FsWrite streams Data frames into a file, atomically; nil Mode inherits or
-// defaults.
+// FsWrite streams Data frames into a file, atomically; nil Mode inherits or defaults.
 type FsWrite struct {
 	Path string  `json:"path"`
 	Mode *uint32 `json:"mode,omitzero"`
@@ -308,8 +299,7 @@ type FsPull struct {
 
 func (FsPull) Op() string { return "fs_pull" }
 
-// FsFind streams Match frames for lines under Path matching Pattern; Glob
-// narrows the walk to file names matching it (`*` and `?` wildcards).
+// FsFind streams Match frames for lines under Path matching Pattern; Glob narrows the walk to file names matching it (`*` and `?` wildcards).
 type FsFind struct {
 	Path    string `json:"path"`
 	Pattern string `json:"pattern"`
@@ -318,8 +308,7 @@ type FsFind struct {
 
 func (FsFind) Op() string { return "fs_find" }
 
-// FsReplace rewrites Pattern to Replacement in each file, streaming one
-// Replaced frame per file then Done.
+// FsReplace rewrites Pattern to Replacement in each file, streaming one Replaced frame per file then Done.
 type FsReplace struct {
 	Files       []string `json:"files"`
 	Pattern     string   `json:"pattern"`
@@ -336,8 +325,7 @@ type FsWatch struct {
 
 func (FsWatch) Op() string { return "fs_watch" }
 
-// PtyOpen runs the guest shell under a pseudo-terminal: Started, then Stdout
-// frames out and Stdin frames in, until the shell exits (Exit).
+// PtyOpen runs the guest shell under a pseudo-terminal: Started, then Stdout frames out and Stdin frames in, until the shell exits (Exit).
 type PtyOpen struct {
 	Cols uint16            `json:"cols"`
 	Rows uint16            `json:"rows"`
@@ -427,8 +415,7 @@ type GitBranch struct {
 
 func (GitBranch) Op() string { return "git_branch" }
 
-// LspStart spawns the flavor image's language server for Language,
-// rooted at Root.
+// LspStart spawns the flavor image's language server for Language, rooted at Root.
 type LspStart struct {
 	Language string `json:"language"`
 	Root     string `json:"root,omitempty"`
@@ -483,8 +470,7 @@ type Stderr struct {
 
 func (Stderr) RespType() string { return "stderr" }
 
-// Exit is the terminal frame of a foreground exec; -1 means killed or
-// unknown.
+// Exit is the terminal frame of a foreground exec; -1 means killed or unknown.
 type Exit struct {
 	Code int32 `json:"code"`
 }
@@ -496,8 +482,7 @@ type Done struct{}
 
 func (Done) RespType() string { return "done" }
 
-// Ready acknowledges an armed watch (events after it are guaranteed
-// captured) or a connected port_forward.
+// Ready acknowledges an armed watch (events after it are guaranteed captured) or a connected port_forward.
 type Ready struct{}
 
 func (Ready) RespType() string { return "ready" }
@@ -678,8 +663,7 @@ func DecodeRequest(line []byte) (Request, error) {
 	return dec(line)
 }
 
-// DecodeResponse parses one frame into its type's concrete Go type. Byte
-// fields are freshly allocated per frame, so callers may retain them.
+// DecodeResponse parses one frame into its type's concrete Go type; byte fields are freshly allocated per frame, so callers may retain them.
 func DecodeResponse(line []byte) (Response, error) {
 	return DecodeResponseInto(line, nil)
 }
@@ -734,24 +718,11 @@ func RequestOp(line []byte) string {
 
 // IsContinuation reports whether a request line feeds the RPC in flight instead of opening one.
 func IsContinuation(line []byte) bool {
-	op, err := frameTag(line, reqTagHead, "op")
-	if err != nil {
-		return false
-	}
-	switch string(op) {
+	switch RequestOp(line) {
 	case Data{}.Op(), DataEnd{}.Op(), Stdin{}.Op(), StdinClose{}.Op():
 		return true
 	}
 	return false
-}
-
-func bulkDecoders(mks ...bulkMaker) map[string]bulkResponse {
-	out := make(map[string]bulkResponse, len(mks))
-	for _, mk := range mks {
-		tag := mk(nil).RespType()
-		out[tag] = bulkResponse{head: []byte(`{"type":"` + tag + `","data":"`), mk: mk}
-	}
-	return out
 }
 
 // decodeBulk decodes a canonical bulk frame's payload into scratch, or a fresh buffer when scratch is nil; ok is false for any other shape.
