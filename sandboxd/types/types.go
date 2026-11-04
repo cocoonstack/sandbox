@@ -454,6 +454,21 @@ func (r VMRecord) TapDevice() string {
 	return r.NetworkConfigs[0].TAP
 }
 
+// MigrateFile is one file a migrate round wrote, named relative to the round's Dir.
+type MigrateFile struct {
+	Name string `json:"name"`
+	Size int64  `json:"size"`
+}
+
+// MigrateRound is what `cocoon vm migrate capture` prints for one round; round 0 is the baseline.
+type MigrateRound struct {
+	Series string        `json:"series"`
+	Dir    string        `json:"dir"`
+	Round  int           `json:"round"`
+	Paused bool          `json:"paused"`
+	Files  []MigrateFile `json:"files"`
+}
+
 // TemplateGossipHash scopes a key hash to its owner; TemplateRootScope covers every tenant.
 func TemplateGossipHash(keyHash, tenant string) string {
 	sum := sha256.Sum256([]byte(keyHash + "|" + tenant))

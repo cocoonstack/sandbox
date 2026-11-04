@@ -34,6 +34,8 @@ const (
 	RequiredCocoon = "v0.6.9"
 	// LiveVolumeCocoon adds idempotent disk attach and detach for live volume changes.
 	LiveVolumeCocoon = "v0.7.2"
+	// MigrateCocoon adds live migration: capture rounds, receive and abort.
+	MigrateCocoon = "v0.7.7"
 
 	StaleCreateCollected   StaleCreateOutcome = "collected"
 	StaleCreateBusy        StaleCreateOutcome = "busy"
@@ -167,7 +169,7 @@ func (e *Engine) Remove(ctx context.Context, name string) error {
 	return err
 }
 
-// Start cold-boots a stopped VM from its own disk; guest memory starts empty.
+// Start cold-boots a stopped VM from its own disk, or resumes the paused guest of a received VM.
 func (e *Engine) Start(ctx context.Context, name string) error {
 	_, err := e.run(ctx, "vm", "start", name)
 	return err
@@ -196,12 +198,14 @@ func (e *Engine) ReconcileStaleCreate(ctx context.Context, name string) (StaleCr
 
 // SnapshotSave snapshots a running VM under snapName.
 func (e *Engine) SnapshotSave(ctx context.Context, vmName, snapName string) error {
-	return e.runDump(ctx, "snapshot", "save", argName, snapName, vmName)
+	_, err := e.runDump(ctx, "snapshot", "save", argName, snapName, vmName)
+	return err
 }
 
 // Hibernate atomically snapshots a running VM under snapName and stops it.
 func (e *Engine) Hibernate(ctx context.Context, vmName, snapName string) error {
-	return e.runDump(ctx, "vm", "hibernate", argName, snapName, vmName)
+	_, err := e.runDump(ctx, "vm", "hibernate", argName, snapName, vmName)
+	return err
 }
 
 // Restore resumes a VM from a snapshot, returning its vsock UDS.
@@ -383,9 +387,12 @@ func (e *Engine) probe(ctx context.Context, vsockSocket string, port int, timeou
 }
 
 func (e *Engine) cloneArgs(name string, key types.PoolKey, source ...string) []string {
-	args := append([]string{"vm", "clone"}, source...)
+	return append(append([]string{"vm", "clone"}, source...), e.cloneFlags(name, key)...)
+}
+
+func (e *Engine) cloneFlags(name string, key types.PoolKey) []string {
 	// --pull: a checkpoint/template export carries only COW + memory, not the base image.
-	args = append(args, argName, name, "--pull", argOutput, formatJSON, e.directIOArg())
+	args := []string{argName, name, "--pull", argOutput, formatJSON, e.directIOArg()}
 	args = append(args, e.restoreArgs()...)
 	return append(args, e.netArgs(name, key, false)...)
 }
@@ -465,15 +472,14 @@ func (e *Engine) begin() bool {
 	return !e.closed
 }
 
-func (e *Engine) runDump(ctx context.Context, args ...string) error {
+func (e *Engine) runDump(ctx context.Context, args ...string) ([]byte, error) {
 	select {
 	case e.dumps <- struct{}{}:
 	case <-ctx.Done():
-		return ctx.Err()
+		return nil, ctx.Err()
 	}
 	defer func() { <-e.dumps }()
-	_, err := e.runFor(ctx, dumpTimeout, saveTermGrace, args...)
-	return err
+	return e.runFor(ctx, dumpTimeout, saveTermGrace, args...)
 }
 
 func (e *Engine) runRecord(ctx context.Context, timeout, termGrace time.Duration, args ...string) (types.VMRecord, error) {
@@ -514,6 +520,16 @@ func (e *Engine) infoRoundTrip(ctx context.Context, vsockSocket string, port int
 		return fmt.Errorf("info reply type %q", resp.RespType())
 	}
 	return nil
+}
+
+func (e *Engine) missesFloor(ctx context.Context, floor string) (string, bool) {
+	version, err := e.Version(ctx)
+	if err != nil {
+		log.WithFunc("engine.missesFloor").Warnf(ctx, "query cocoon version: %v", err)
+		return "", true
+	}
+	below, known := belowFloor(version, floor)
+	return version, known && below
 }
 
 // EgressSocketPath is the host UDS the VMM connects when the guest dials CID2:egressPort.
