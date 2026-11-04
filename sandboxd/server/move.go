@@ -40,10 +40,8 @@ func (c *MoveClient) SendRound(ctx context.Context, addr, id string, round int, 
 	return nil
 }
 
-func (c *MoveClient) Commit(ctx context.Context, addr, id string, claim []byte, epoch int64) (int64, error) {
-	var out moveCommitResponse
-	err := c.call(ctx, http.MethodPost, addr, movePath(id, "/commit"), moveCommitRequest{Claim: claim, Epoch: epoch}, &out)
-	return out.Epoch, err
+func (c *MoveClient) Commit(ctx context.Context, addr, id string, claim []byte, epoch int64) error {
+	return c.call(ctx, http.MethodPost, addr, movePath(id, "/commit"), moveCommitRequest{Claim: claim, Epoch: epoch}, nil)
 }
 
 func (c *MoveClient) Drop(ctx context.Context, addr, id string) error {
@@ -119,10 +117,6 @@ type moveCommitRequest struct {
 	Epoch int64          `json:"epoch"`
 }
 
-type moveCommitResponse struct {
-	Epoch int64 `json:"epoch"`
-}
-
 func (s *Server) handleMove(w http.ResponseWriter, r *http.Request) {
 	req, ok := decodeBodyStrict[MoveRequest](w, r)
 	if !ok {
@@ -169,10 +163,8 @@ func (s *Server) handleCommitMove(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := r.PathValue("id")
-	epoch, err := s.mgr.CommitMove(r.Context(), id, req.Claim, req.Epoch)
-	writeResult(w, r, "commit move", id, "commit move failed", err, func() {
-		writeJSON(w, http.StatusOK, moveCommitResponse{Epoch: epoch})
-	})
+	err := s.mgr.CommitMove(r.Context(), id, req.Claim, req.Epoch)
+	writeResult(w, r, "commit move", id, "commit move failed", err, noContent(w))
 }
 
 func (s *Server) handleDropMove(w http.ResponseWriter, r *http.Request) {

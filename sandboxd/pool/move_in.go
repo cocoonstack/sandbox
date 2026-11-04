@@ -63,24 +63,24 @@ func (m *Manager) ReceiveMoveRound(id string, body io.Reader) error {
 	return nil
 }
 
-// CommitMove receives the staged series as the claim, commits the move record and starts the guest; it returns the committed epoch.
-func (m *Manager) CommitMove(ctx context.Context, id string, claim []byte, epoch int64) (int64, error) {
+// CommitMove receives the staged series as the claim, commits the move record and starts the guest.
+func (m *Manager) CommitMove(ctx context.Context, id string, claim []byte, epoch int64) error {
 	ctx = context.WithoutCancel(ctx)
 	if !m.touchReservation(id) {
-		return 0, fmt.Errorf("%w: no reservation for the move of %s", ErrNotMovable, id)
+		return fmt.Errorf("%w: no reservation for the move of %s", ErrNotMovable, id)
 	}
 	if m.memoryLow.Load() {
-		return 0, fmt.Errorf("%w: %s", ErrQuota, memoryLowReason)
+		return fmt.Errorf("%w: %s", ErrQuota, memoryLowReason)
 	}
 	sb := &types.Sandbox{}
 	if err := json.Unmarshal(claim, sb); err != nil || sb.ID != id {
-		return 0, fmt.Errorf("%w: the claim record does not decode as %s", ErrNotMovable, id)
+		return fmt.Errorf("%w: the claim record does not decode as %s", ErrNotMovable, id)
 	}
 	name := vmName(sb.Key)
 	rec, err := m.eng.MigrateReceive(ctx, m.moveDir(id), name, sb.Key)
 	if err != nil {
 		m.removeStaleVM(ctx, name, types.VMRecord{State: vmStateCreating})
-		return 0, fmt.Errorf("move %s: receive: %w", id, err)
+		return fmt.Errorf("move %s: receive: %w", id, err)
 	}
 	sb.VMName, sb.VsockSocket, sb.TAP, sb.HibernateSnap, sb.PendingSnap = name, rec.VsockSocket, "", "", ""
 	sb.ArchiveCk, sb.ArchiveEpoch, sb.ArchivePending, sb.ReplicaCk, sb.ReplicaPending = "", 0, "", "", ""
@@ -93,7 +93,7 @@ func (m *Manager) CommitMove(ctx context.Context, id string, claim []byte, epoch
 	if in == nil || m.claimed[id] != nil {
 		m.mu.Unlock()
 		m.destroy(ctx, name)
-		return 0, fmt.Errorf("%w: the reservation for %s ended", ErrNotMovable, id)
+		return fmt.Errorf("%w: the reservation for %s ended", ErrNotMovable, id)
 	}
 	sb.MoveIn = &types.MoveIn{From: in.from, Epoch: epoch}
 	delete(m.incoming, id)
@@ -102,19 +102,19 @@ func (m *Manager) CommitMove(ctx context.Context, id string, claim []byte, epoch
 	m.mu.Unlock()
 	if err = m.store.commit(js); err != nil {
 		m.dropMoveIn(ctx, sb)
-		return 0, fmt.Errorf("move %s: persist claims: %w", id, err)
+		return fmt.Errorf("move %s: persist claims: %w", id, err)
 	}
 	committed, err := m.moves.Advance(ctx, id, epoch, moves.Final, moves.Committed)
 	switch {
 	case errors.Is(err, moves.ErrLost):
 		m.dropMoveIn(ctx, sb)
-		return 0, fmt.Errorf("%w: the source ended the move of %s", ErrNotMovable, id)
+		return fmt.Errorf("%w: the source ended the move of %s", ErrNotMovable, id)
 	case err != nil:
 		go m.settleMoveIn(ctx, sb)
-		return 0, fmt.Errorf("move %s: %w", id, err)
+		return fmt.Errorf("move %s: %w", id, err)
 	}
-	m.startMoveIn(ctx, sb)
-	return committed, nil
+	m.startMoveIn(ctx, sb, committed)
+	return nil
 }
 
 // DropMove ends a reservation and its staging dir; a claim a commit already journaled is left to its record.
@@ -128,8 +128,8 @@ func (m *Manager) DropMove(id string) {
 	}
 }
 
-// startMoveIn starts a committed claim's guest and serves it; a guest that cannot start fails the claim here, never back to the source. The caller holds sb.Transition.
-func (m *Manager) startMoveIn(ctx context.Context, sb *types.Sandbox) {
+// startMoveIn starts a committed claim's guest and serves it, then marks the record started at committed when that is its epoch; a guest that cannot start fails the claim here, never back to the source. The caller holds sb.Transition.
+func (m *Manager) startMoveIn(ctx context.Context, sb *types.Sandbox, committed int64) {
 	logger := log.WithFunc("pool.startMoveIn")
 	from := sb.MoveIn.From
 	var err error
@@ -140,11 +140,12 @@ func (m *Manager) startMoveIn(ctx context.Context, sb *types.Sandbox) {
 		logger.Warnf(ctx, "start moved claim %s: %v", sb.ID, err)
 	}
 	if err != nil {
-		_, _ = m.commitIfLive(ctx, sb, func() { sb.MoveIn = nil })
+		_, persistErr := m.commitIfLive(ctx, sb, func() { sb.MoveIn = nil })
 		sb.ExitRecorded = true
 		m.recordUsage(ctx, usage.Event{Event: "vmm_exit", ID: sb.ID, VMName: sb.VMName, Tenant: sb.Tenant})
 		m.failLocked(ctx, sb, reasonMoveStartFailed)
 		_ = os.RemoveAll(m.moveDir(sb.ID))
+		m.markMoveStarted(ctx, sb.ID, committed, persistErr)
 		return
 	}
 	if sock, probeErr := m.probeReady(ctx, sb.VMName, sb.VsockSocket, claimProbeTimeout); probeErr != nil {
@@ -168,7 +169,17 @@ func (m *Manager) startMoveIn(ctx context.Context, sb *types.Sandbox) {
 	sb.Touch()
 	m.recordUsage(ctx, usage.Event{Event: "move_in", ID: sb.ID, VMName: sb.VMName, Tenant: sb.Tenant, Deadline: m.deadlineOf(sb)})
 	_ = os.RemoveAll(m.moveDir(sb.ID))
+	m.markMoveStarted(ctx, sb.ID, committed, err)
 	logger.Infof(ctx, "sandbox %s moved here from %s", sb.ID, from)
+}
+
+func (m *Manager) markMoveStarted(ctx context.Context, id string, committed int64, persistErr error) {
+	if committed == 0 || persistErr != nil {
+		return
+	}
+	if _, err := m.moves.Advance(ctx, id, committed, moves.Committed, moves.Started); err != nil {
+		log.WithFunc("pool.markMoveStarted").Warnf(ctx, "mark the move of %s started, leaving it to the sweep: %v", id, err)
+	}
 }
 
 // dropMoveIn forgets a received claim whose move did not commit and removes its VM.
@@ -187,7 +198,7 @@ func (m *Manager) settleMoveIn(ctx context.Context, sb *types.Sandbox) {
 	}
 }
 
-// resolveMoveIn starts a received claim whose record committed to this node and drops any other; false while the registry is down.
+// resolveMoveIn starts a received claim whose record committed to this node, ends a move its source left open and drops any other; false while the registry is down.
 func (m *Manager) resolveMoveIn(ctx context.Context, sb *types.Sandbox) bool {
 	sb.Transition.Lock()
 	defer sb.Transition.Unlock()
@@ -202,9 +213,19 @@ func (m *Manager) resolveMoveIn(ctx context.Context, sb *types.Sandbox) bool {
 		log.WithFunc("pool.resolveMoveIn").Warnf(ctx, "resolve moved claim %s, retrying: %v", sb.ID, err)
 		return false
 	}
-	if ok && rec.State == moves.Committed && rec.To == m.nodeID {
-		m.startMoveIn(ctx, sb)
+	toHere := ok && rec.To == m.nodeID
+	switch {
+	case toHere && rec.State == moves.Committed:
+		m.startMoveIn(ctx, sb, rec.Epoch)
 		return true
+	case toHere && rec.State == moves.Started:
+		m.startMoveIn(ctx, sb, 0)
+		return true
+	case toHere && (rec.State == moves.Pending || rec.State == moves.Final):
+		if _, err = m.moves.Advance(ctx, sb.ID, rec.Epoch, rec.State, moves.Aborted); err != nil {
+			log.WithFunc("pool.resolveMoveIn").Warnf(ctx, "abort the move of %s, retrying: %v", sb.ID, err)
+			return false
+		}
 	}
 	m.dropMoveIn(ctx, sb)
 	return true

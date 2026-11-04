@@ -45,8 +45,8 @@ type MovePeer interface {
 	// Admit reserves a claim slot on the target and returns its node id.
 	Admit(ctx context.Context, addr, id string, a MoveAdmission) (string, error)
 	SendRound(ctx context.Context, addr, id string, round int, dir string, files []string) error
-	// Commit hands the target the claim record and the final epoch and returns the committed epoch.
-	Commit(ctx context.Context, addr, id string, claim []byte, epoch int64) (int64, error)
+	// Commit hands the target the claim record and the final epoch.
+	Commit(ctx context.Context, addr, id string, claim []byte, epoch int64) error
 	Drop(ctx context.Context, addr, id string) error
 }
 
@@ -79,7 +79,7 @@ func (m *Manager) moveDir(id string) string {
 	return filepath.Join(m.dataDir, movesDir, id)
 }
 
-// sweepStaleMoves aborts this node's stale moves and deletes only those it sourced, since a source reads a missing record as aborted.
+// sweepStaleMoves ends this node's stale moves no move in flight holds: a target marks a committed one started, either side aborts an open one, and only the source deletes an ended one.
 func (m *Manager) sweepStaleMoves(ctx context.Context, now time.Time) {
 	logger := log.WithFunc("pool.sweepStaleMoves")
 	recs, err := m.moves.Stale(ctx, now.Add(-moveStaleAge))
@@ -92,7 +92,13 @@ func (m *Manager) sweepStaleMoves(ctx context.Context, now time.Time) {
 			continue
 		}
 		epoch := rec.Epoch
-		if rec.State == moves.Pending || rec.State == moves.Final {
+		switch rec.State {
+		case moves.Committed:
+			if rec.To == m.nodeID {
+				m.markMoveStarted(ctx, rec.ID, rec.Epoch, nil)
+			}
+			continue
+		case moves.Pending, moves.Final:
 			if epoch, err = m.moves.Advance(ctx, rec.ID, rec.Epoch, rec.State, moves.Aborted); err != nil {
 				logger.Warnf(ctx, "abort stale move %s: %v", rec.ID, err)
 				continue

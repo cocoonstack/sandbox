@@ -149,7 +149,7 @@ type Manager interface {
 	Move(ctx context.Context, id, addr string, maxDowntime time.Duration) (pool.MoveResult, error)
 	AdmitMove(id string, a pool.MoveAdmission) (string, error)
 	ReceiveMoveRound(id string, body io.Reader) error
-	CommitMove(ctx context.Context, id string, claim []byte, epoch int64) (int64, error)
+	CommitMove(ctx context.Context, id string, claim []byte, epoch int64) error
 	DropMove(id string)
 }
 

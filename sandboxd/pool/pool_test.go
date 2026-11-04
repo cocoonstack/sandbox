@@ -1270,6 +1270,7 @@ type fakeEngine struct {
 	snapListErr           error
 	snapSaveErr           error
 	startErr              error
+	startHook             func()
 	syncErr               error
 	trimErr               error
 	installCAErr          error
@@ -1410,6 +1411,10 @@ func (f *fakeEngine) Remove(ctx context.Context, name string) error {
 func (f *fakeEngine) Start(_ context.Context, name string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if hook := f.startHook; hook != nil {
+		f.startHook = nil
+		hook()
+	}
 	f.starts = append(f.starts, name)
 	if f.startErr != nil {
 		return f.startErr

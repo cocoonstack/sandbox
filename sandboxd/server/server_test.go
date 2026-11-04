@@ -2607,9 +2607,7 @@ func (f *fakeManager) AdmitMove(string, pool.MoveAdmission) (string, error) { re
 
 func (f *fakeManager) ReceiveMoveRound(string, io.Reader) error { return nil }
 
-func (f *fakeManager) CommitMove(context.Context, string, []byte, int64) (int64, error) {
-	return 0, nil
-}
+func (f *fakeManager) CommitMove(context.Context, string, []byte, int64) error { return nil }
 
 func (f *fakeManager) DropMove(string) {}
 

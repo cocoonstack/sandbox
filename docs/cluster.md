@@ -336,17 +336,32 @@ and `epoch`, each change a compare-and-set at a new epoch.
 | (none) | `pending` | source | after the target admitted the move, before the baseline round |
 | `pending` | `final` | source | the final round paused the guest |
 | `final` | `committed` | target | after the receive; the point of no return |
-| `pending` or `final` | `aborted` | source | before it resumes the guest |
+| `committed` | `started` | target | after it journaled that it runs the claim |
+| `pending` or `final` | `aborted` | source, or a target that holds a received claim or finds the record stale | before the guest resumes |
+
+A new move of the claim overwrites only a `started` or `aborted` record; a
+`committed` one refuses it with 409 until its target marks it `started`.
 
 The target commits only from `final`, so it never starts a guest restored from
-a round the source kept running after. The source resumes its guest only after
-its `aborted` write lands; a write that finds `committed` means the claim moved,
-and the source drops it. While the meta store is down, a guest paused in the
-final round stays paused and the call answers 503; the abort is retried every 2
-seconds. The source deletes the record when the move ends. Each node's hourly
-sweep aborts its records older than an hour that no move in flight holds, and
-deletes only those it sourced: a source reads a missing record as an aborted
-move, so a target never deletes one.
+a round the source kept running after. The source resumes its guest only on
+proof the move stayed here: a record it wrote, at or past the epoch in its
+journal, in `pending` or `final` (it writes `aborted` first) or `aborted`. A
+`committed` or `started` record, a missing one, or another node's means the
+claim moved on, and the source drops it and its VM. While the meta store is
+down, a guest paused in the final round stays paused and the call answers 503;
+the abort is retried every 2 seconds.
+
+The record outlives each side's need for it. A target with a received claim
+starts it on `committed` or `started` and drops it on `aborted` or a missing
+record, which is safe because no record is deleted while the target still
+journals that claim: it clears its journal first and only then writes `started`.
+An abort runs in the order `aborted`, resume, target drop, journal clear, record
+delete, so a source holding a journal never finds its own abort missing. The
+source deletes a record only in `started` or `aborted`, never `committed`. Each
+node's hourly sweep handles its records older than an hour that no move in
+flight holds: a target writes `started` over a `committed` record, either side
+writes `aborted` over a `pending` or `final` one, and the source deletes the
+ended ones.
 
 **Rounds.** The source sends a baseline round, then up to 4 deltas, each over
 the control port with the root token. Once the last delta's size at the rate
@@ -379,10 +394,10 @@ it again.
 **Failures.** Any failure before the commit aborts: the source resumes the
 guest, the target drops its reservation, files and any received VM, and the
 call answers the error. A target answer lost after its commit is resolved
-through the record, and the call answers 200. A source restarted with a move
-in its journal reads the record: `committed` drops the claim, anything else is
-aborted and the guest resumes. A target restarted with a received claim not yet
-started starts it when the record committed to it and removes it otherwise. A
+through the record, and the call answers 200. A restarted node resolves a move
+in its journal by the same rules, so a source back from an outage never resumes
+a claim that moved on, and a target that crashed after its commit starts the
+guest. A
 guest the target cannot start fails there through the
 [failed path](#running-claims-across-node-loss); it never goes back.
 

@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -330,77 +331,80 @@ func TestMoveRefusesClaimsThatCannotMove(t *testing.T) {
 }
 
 func TestMoveRestartResolvesAJournaledMoveThroughItsRecord(t *testing.T) {
+	const vm, series = "sbx-moved", "s1"
+	aborted := func(t *testing.T, eng *fakeEngine) {
+		if !slices.Contains(eng.aborts, vm+":"+series) || slices.Contains(eng.removes, vm) {
+			t.Errorf("aborts %v removes %v, want the series aborted and the VM kept", eng.aborts, eng.removes)
+		}
+	}
+	movedOn := func(t *testing.T, eng *fakeEngine) {
+		if len(eng.aborts) != 0 || !slices.Contains(eng.removes, vm) {
+			t.Errorf("aborts %v removes %v, want the VM removed and never resumed", eng.aborts, eng.removes)
+		}
+	}
+	started := func(t *testing.T, eng *fakeEngine) {
+		if !slices.Contains(eng.starts, vm) || slices.Contains(eng.removes, vm) {
+			t.Errorf("starts %v removes %v, want the received VM started", eng.starts, eng.removes)
+		}
+	}
+	unstarted := func(t *testing.T, eng *fakeEngine) {
+		if slices.Contains(eng.starts, vm) || !slices.Contains(eng.removes, vm) {
+			t.Errorf("starts %v removes %v, want the received VM removed unstarted", eng.starts, eng.removes)
+		}
+	}
 	for name, tt := range map[string]struct {
-		node      string
-		reach     moves.State
-		journal   func(epoch int64) *types.Sandbox
-		wantClaim bool
-		check     func(t *testing.T, eng *fakeEngine)
+		node       string
+		from, to   string
+		reach      moves.State
+		wantClaim  bool
+		wantRecord moves.State
+		check      func(t *testing.T, eng *fakeEngine)
 	}{
-		"source at pending": {node: "a", reach: moves.Pending, wantClaim: true, journal: func(epoch int64) *types.Sandbox {
-			return &types.Sandbox{MoveOut: &types.MoveOut{To: "b", Epoch: epoch, Series: "s1"}}
-		}, check: func(t *testing.T, eng *fakeEngine) {
-			if !slices.Contains(eng.aborts, "sbx-moved:s1") {
-				t.Errorf("aborts %v, want the series aborted", eng.aborts)
-			}
-		}},
-		"source at final": {node: "a", reach: moves.Final, wantClaim: true, journal: func(epoch int64) *types.Sandbox {
-			return &types.Sandbox{MoveOut: &types.MoveOut{To: "b", Epoch: epoch, Series: "s1"}}
-		}, check: func(t *testing.T, eng *fakeEngine) {
-			if !slices.Contains(eng.aborts, "sbx-moved:s1") {
-				t.Errorf("aborts %v, want the series aborted", eng.aborts)
-			}
-		}},
-		"source at committed": {node: "a", reach: moves.Committed, journal: func(epoch int64) *types.Sandbox {
-			return &types.Sandbox{MoveOut: &types.MoveOut{To: "b", Epoch: epoch, Series: "s1"}}
-		}, check: func(t *testing.T, eng *fakeEngine) {
-			if !slices.Contains(eng.removes, "sbx-moved") {
-				t.Errorf("removes %v, want the moved-away VM removed", eng.removes)
-			}
-		}},
-		"target at committed": {node: "b", reach: moves.Committed, wantClaim: true, journal: func(epoch int64) *types.Sandbox {
-			return &types.Sandbox{MoveIn: &types.MoveIn{From: "a", Epoch: epoch}}
-		}, check: func(t *testing.T, eng *fakeEngine) {
-			if !slices.Contains(eng.starts, "sbx-moved") {
-				t.Errorf("starts %v, want the received VM started", eng.starts)
-			}
-		}},
-		"target at aborted": {node: "b", reach: moves.Aborted, journal: func(epoch int64) *types.Sandbox {
-			return &types.Sandbox{MoveIn: &types.MoveIn{From: "a", Epoch: epoch}}
-		}, check: func(t *testing.T, eng *fakeEngine) {
-			if !slices.Contains(eng.removes, "sbx-moved") || slices.Contains(eng.starts, "sbx-moved") {
-				t.Errorf("removes %v starts %v, want the received VM removed unstarted", eng.removes, eng.starts)
-			}
-		}},
+		"source at pending":          {node: "a", from: "a", to: "b", reach: moves.Pending, wantClaim: true, check: aborted},
+		"source at final":            {node: "a", from: "a", to: "b", reach: moves.Final, wantClaim: true, check: aborted},
+		"source at aborted":          {node: "a", from: "a", to: "b", reach: moves.Aborted, wantClaim: true, check: aborted},
+		"source at committed":        {node: "a", from: "a", to: "b", reach: moves.Committed, wantRecord: moves.Committed, check: movedOn},
+		"source at started":          {node: "a", from: "a", to: "b", reach: moves.Started, check: movedOn},
+		"source, record missing":     {node: "a", check: movedOn},
+		"source, another node moved": {node: "a", from: "b", to: "c", reach: moves.Pending, wantRecord: moves.Pending, check: movedOn},
+		"target at final":            {node: "b", from: "a", to: "b", reach: moves.Final, wantRecord: moves.Aborted, check: unstarted},
+		"target at committed":        {node: "b", from: "a", to: "b", reach: moves.Committed, wantClaim: true, wantRecord: moves.Started, check: started},
+		"target at started":          {node: "b", from: "a", to: "b", reach: moves.Started, wantClaim: true, wantRecord: moves.Started, check: started},
+		"target at aborted":          {node: "b", from: "a", to: "b", reach: moves.Aborted, wantRecord: moves.Aborted, check: unstarted},
+		"target, record missing":     {node: "b", check: unstarted},
 	} {
 		t.Run(name, func(t *testing.T) {
 			c := newFailoverCluster(t)
 			reg := movestest.NewMem()
 			c.moves = reg
 			ctx := t.Context()
-			epoch, _ := reg.Begin(ctx, "sb_moved", "a", "b")
-			path := map[moves.State][]moves.State{moves.Final: {moves.Final}, moves.Committed: {moves.Final, moves.Committed}, moves.Aborted: {moves.Aborted}}[tt.reach]
-			from, at := moves.Pending, epoch
-			for _, to := range path {
-				at, _ = reg.Advance(ctx, "sb_moved", at, from, to)
-				from = to
+			journalEpoch := int64(1)
+			if tt.from != "" {
+				journalEpoch = seedMoveRecord(t, reg, "sb_moved", tt.from, tt.to, tt.reach)
 			}
-			sb := tt.journal(epoch)
-			sb.ID, sb.VMName, sb.Key, sb.Token, sb.Deadline = "sb_moved", "sbx-moved", testKey, "tok", time.Now().Add(time.Hour)
+			sb := &types.Sandbox{ID: "sb_moved", VMName: vm, Key: testKey, Token: "tok", Deadline: time.Now().Add(time.Hour)}
+			if tt.node == "a" {
+				sb.MoveOut = &types.MoveOut{To: "b", Epoch: journalEpoch, Series: series}
+			} else {
+				sb.MoveIn = &types.MoveIn{From: "a", Epoch: journalEpoch}
+			}
 			dataDir := t.TempDir()
 			seedClaims(t, dataDir, map[string]*types.Sandbox{sb.ID: sb})
 			if err := os.MkdirAll(filepath.Join(dataDir, movesDir, sb.ID), 0o700); err != nil {
 				t.Fatal(err)
 			}
 			eng := newFakeEngine()
-			eng.vms["sbx-moved"], eng.stopped["sbx-moved"] = "/vsock/sbx-moved", sb.MoveIn != nil
+			eng.vms[vm], eng.stopped[vm] = "/vsock/"+vm, sb.MoveIn != nil
+			eng.migrateSeries[vm] = series
 			m := c.nodeOn(t, eng, tt.node, dataDir, keepAnHour)
 			m.liftFence()
 			if err := m.Reconcile(ctx); err != nil {
 				t.Fatalf("reconcile: %v", err)
 			}
-			waitFor(t, func() bool { return !m.moveHeld(sb.ID) })
-			waitFor(t, func() bool { _, ok, _ := reg.Get(ctx, sb.ID); return !ok || tt.node == "b" })
+			waitFor(t, func() bool {
+				rec, ok, _ := reg.Get(ctx, sb.ID)
+				return !m.moveHeld(sb.ID) && (ok && rec.State == tt.wantRecord || !ok && tt.wantRecord == "")
+			})
 			held, ok := m.byID(sb.ID)
 			if ok != tt.wantClaim {
 				t.Fatalf("claim held %v, want %v", ok, tt.wantClaim)
@@ -418,29 +422,153 @@ func TestMoveRestartResolvesAJournaledMoveThroughItsRecord(t *testing.T) {
 func TestStaleMoveRecordsAreDeletedOnlyByTheirSource(t *testing.T) {
 	mc := newMoveCluster(t)
 	ctx, reg := t.Context(), mc.moveReg
-	done, _ := reg.Begin(ctx, "sb_done", "a", "b")
-	done, _ = reg.Advance(ctx, "sb_done", done, moves.Pending, moves.Final)
-	if _, err := reg.Advance(ctx, "sb_done", done, moves.Final, moves.Committed); err != nil {
-		t.Fatalf("commit: %v", err)
-	}
-	if _, err := reg.Begin(ctx, "sb_open", "a", "b"); err != nil {
-		t.Fatalf("begin: %v", err)
-	}
+	seedMoveRecord(t, reg, "sb_done", "a", "b", moves.Committed)
+	seedMoveRecord(t, reg, "sb_open", "a", "b", moves.Pending)
 	later := time.Now().Add(2 * moveStaleAge)
-
-	mc.t.sweepStaleMoves(ctx, later)
-	if rec, ok, _ := reg.Get(ctx, "sb_done"); !ok || rec.State != moves.Committed {
-		t.Errorf("committed record after the target's sweep: %+v %v, want it kept for its source", rec, ok)
+	stateOf := func(id string) moves.State {
+		rec, _, _ := reg.Get(ctx, id)
+		return rec.State
 	}
-	if rec, ok, _ := reg.Get(ctx, "sb_open"); !ok || rec.State != moves.Aborted {
-		t.Errorf("open record after the target's sweep: %+v %v, want it aborted and kept", rec, ok)
+
+	mc.s.sweepStaleMoves(ctx, later)
+	if got := stateOf("sb_done"); got != moves.Committed {
+		t.Errorf("committed record after the source's sweep: %q, want it kept until the target advances it", got)
+	}
+	if got := stateOf("sb_open"); got != "" {
+		t.Errorf("open record after the source's sweep: %q, want it aborted and deleted", got)
+	}
+
+	seedMoveRecord(t, reg, "sb_open", "a", "b", moves.Pending)
+	mc.t.sweepStaleMoves(ctx, later)
+	if got := stateOf("sb_done"); got != moves.Started {
+		t.Errorf("committed record after the target's sweep: %q, want it started and kept", got)
+	}
+	if got := stateOf("sb_open"); got != moves.Aborted {
+		t.Errorf("open record after the target's sweep: %q, want it aborted and kept", got)
 	}
 
 	mc.s.sweepStaleMoves(ctx, later)
 	for _, id := range []string{"sb_done", "sb_open"} {
-		if rec, ok, _ := reg.Get(ctx, id); ok {
-			t.Errorf("record %s after the source's sweep: %+v, want it deleted", id, rec)
+		if got := stateOf(id); got != "" {
+			t.Errorf("record %s after the source's second sweep: %q, want it deleted", id, got)
 		}
+	}
+}
+
+func TestMoveStaleSweepLeavesACommittedRecordItsTargetStillHoldsMoveInFor(t *testing.T) {
+	mc := newMoveCluster(t)
+	ctx, reg := t.Context(), mc.moveReg
+	epoch := seedMoveRecord(t, reg, "sb_held", "a", "b", moves.Committed)
+	sb := &types.Sandbox{ID: "sb_held", VMName: "sbx-held", Key: testKey, Deadline: time.Now().Add(time.Hour), MoveIn: &types.MoveIn{From: "a", Epoch: epoch}}
+	mc.t.mu.Lock()
+	mc.t.addClaimLocked(sb)
+	mc.t.store.set(sb)
+	mc.t.mu.Unlock()
+	mc.t.sweepStaleMoves(ctx, time.Now().Add(2*moveStaleAge))
+	if rec, _, _ := reg.Get(ctx, "sb_held"); rec.State != moves.Committed {
+		t.Errorf("record %+v, want committed until the target persists its journal", rec)
+	}
+}
+
+func TestMoveCommitWhoseRegistryReplyIsLostKeepsTheOnlyGuest(t *testing.T) {
+	mc := newMoveCluster(t)
+	mc.t.moves = &lossyMoves{Registry: mc.moveReg, loseCommit: true}
+	sb := mustClaim(t, mc.s, testKey)
+	vm := sb.VMName
+	if _, err := mc.s.Move(t.Context(), sb.ID, "b", time.Minute); err != nil {
+		t.Fatalf("move: %v, want it resolved through the committed record", err)
+	}
+	if _, held := mc.s.byID(sb.ID); held || !fakeOf(mc.s).removed(vm) {
+		t.Fatal("the source kept a claim the target committed")
+	}
+	waitFor(t, func() bool {
+		moved, ok := mc.t.byID(sb.ID)
+		return ok && !mc.t.moveHeld(sb.ID) && slices.Contains(startsOf(mc.t), moved.VMName)
+	})
+	waitFor(t, func() bool {
+		rec, ok, _ := mc.moveReg.Get(t.Context(), sb.ID)
+		return !ok || rec.State == moves.Started
+	})
+}
+
+func TestMoveTargetMarksTheRecordStartedOnlyAfterItsJournalPersists(t *testing.T) {
+	mc := newMoveCluster(t)
+	sb := mustClaim(t, mc.s, testKey)
+	ctx := t.Context()
+	fakeOf(mc.t).startHook = func() { breakStore(t, mc.t) }
+	if _, err := mc.s.Move(ctx, sb.ID, "b", time.Minute); err != nil {
+		t.Fatalf("move: %v", err)
+	}
+	if rec, ok, _ := mc.moveReg.Get(ctx, sb.ID); !ok || rec.State != moves.Committed {
+		t.Fatalf("record %+v %v with the target's journal unpersisted, want committed", rec, ok)
+	}
+	healStore(t, mc.t)
+	later := time.Now().Add(2 * moveStaleAge)
+	mc.t.sweepStaleMoves(ctx, later)
+	if rec, ok, _ := mc.moveReg.Get(ctx, sb.ID); !ok || rec.State != moves.Started {
+		t.Fatalf("record %+v %v after the target's sweep, want started", rec, ok)
+	}
+	mc.s.sweepStaleMoves(ctx, later)
+	if _, ok, _ := mc.moveReg.Get(ctx, sb.ID); ok {
+		t.Error("the source's sweep kept a started record")
+	}
+}
+
+func TestMoveAbortKeepsTheRecordUntilTheJournalIsCleared(t *testing.T) {
+	mc := newMoveCluster(t)
+	sb := mustClaim(t, mc.s, testKey)
+	ctx := t.Context()
+	mc.p.commitHook = func(int) error { return ErrMoveTarget }
+	mc.p.dropHook = func() { breakStore(t, mc.s) }
+	if _, err := mc.s.Move(ctx, sb.ID, "b", time.Minute); !errors.Is(err, ErrMoveTarget) {
+		t.Fatalf("move: %v, want ErrMoveTarget", err)
+	}
+	if rec, ok, _ := mc.moveReg.Get(ctx, sb.ID); !ok || rec.State != moves.Aborted {
+		t.Fatalf("record %+v %v with the journal unpersisted, want it kept aborted", rec, ok)
+	}
+	assertStillOnSource(t, mc, sb)
+	healStore(t, mc.s)
+	mc.s.sweepStaleMoves(ctx, time.Now().Add(2*moveStaleAge))
+	if _, ok, _ := mc.moveReg.Get(ctx, sb.ID); ok {
+		t.Error("the sweep kept the aborted record")
+	}
+}
+
+func TestMoveSourceBackFromAnOutageNeverResumesAClaimThatMovedOn(t *testing.T) {
+	mc := newMoveCluster(t)
+	third := mc.moveNode(t, "c")
+	sb := mustClaim(t, mc.s, testKey)
+	vm := sb.VMName
+	down := &lossyMoves{Registry: mc.moveReg}
+	mc.s.moves = down
+	mc.p.commitHook = func(int) error {
+		down.setDown(true)
+		return nil
+	}
+	mc.p.loseCommitReply = true
+	if _, err := mc.s.Move(t.Context(), sb.ID, "b", time.Minute); !errors.Is(err, ErrMoveStoreDown) {
+		t.Fatalf("move with the source cut off: %v, want ErrMoveStoreDown", err)
+	}
+	mc.p.commitHook, mc.p.loseCommitReply = nil, false
+	if !pausedOn(mc.s, vm) {
+		t.Fatal("the source resumed while it could not read the record")
+	}
+	if _, err := mc.t.Move(t.Context(), sb.ID, "c", time.Minute); err != nil {
+		t.Fatalf("move on to the third node: %v", err)
+	}
+	if _, held := third.byID(sb.ID); !held {
+		t.Fatal("the third node does not hold the claim")
+	}
+	down.setDown(false)
+	waitFor(t, func() bool {
+		_, held := mc.s.byID(sb.ID)
+		return !held && !mc.s.movingNow(sb.ID)
+	})
+	eng := fakeOf(mc.s)
+	eng.mu.Lock()
+	defer eng.mu.Unlock()
+	if len(eng.aborts) != 0 || !slices.Contains(eng.removes, vm) {
+		t.Errorf("source aborts %v removes %v, want the VM removed and never resumed", eng.aborts, eng.removes)
 	}
 }
 
@@ -505,6 +633,7 @@ type fakeMovePeer struct {
 	roundHook       func(round int) error
 	commitHook      func(round int) error
 	loseCommitReply bool
+	dropHook        func()
 }
 
 func newFakeMovePeer(t *testing.T, c *failoverCluster) *fakeMovePeer {
@@ -541,20 +670,23 @@ func (p *fakeMovePeer) SendRound(ctx context.Context, addr, id string, round int
 	return nil
 }
 
-func (p *fakeMovePeer) Commit(ctx context.Context, addr, id string, claim []byte, epoch int64) (int64, error) {
+func (p *fakeMovePeer) Commit(ctx context.Context, addr, id string, claim []byte, epoch int64) error {
 	if hook := p.commitHook; hook != nil {
 		if err := hook(0); err != nil {
-			return 0, err
+			return err
 		}
 	}
-	committed, err := p.target(addr).CommitMove(ctx, id, claim, epoch)
+	err := p.target(addr).CommitMove(ctx, id, claim, epoch)
 	if err == nil && p.loseCommitReply {
-		return 0, ErrMoveTarget
+		return ErrMoveTarget
 	}
-	return committed, err
+	return err
 }
 
 func (p *fakeMovePeer) Drop(_ context.Context, addr, id string) error {
+	if hook := p.dropHook; hook != nil {
+		hook()
+	}
 	p.target(addr).DropMove(id)
 	return nil
 }
@@ -564,6 +696,70 @@ func (p *fakeMovePeer) target(addr string) *Manager {
 	defer p.mu.Unlock()
 	i := slices.IndexFunc(p.c.nodes, func(m *Manager) bool { return m.nodeID == addr })
 	return p.c.nodes[i]
+}
+
+type lossyMoves struct {
+	moves.Registry
+	loseCommit bool
+	down       atomic.Bool
+}
+
+func (r *lossyMoves) setDown(down bool) { r.down.Store(down) }
+
+func (r *lossyMoves) Begin(ctx context.Context, id, from, to string) (int64, error) {
+	if r.down.Load() {
+		return 0, moves.ErrUnavailable
+	}
+	return r.Registry.Begin(ctx, id, from, to)
+}
+
+func (r *lossyMoves) Advance(ctx context.Context, id string, expect int64, from, to moves.State) (int64, error) {
+	if r.down.Load() {
+		return 0, moves.ErrUnavailable
+	}
+	epoch, err := r.Registry.Advance(ctx, id, expect, from, to)
+	if err == nil && to == moves.Committed && r.loseCommit {
+		r.loseCommit = false
+		return 0, moves.ErrUnavailable
+	}
+	return epoch, err
+}
+
+func (r *lossyMoves) Get(ctx context.Context, id string) (moves.Record, bool, error) {
+	if r.down.Load() {
+		return moves.Record{}, false, moves.ErrUnavailable
+	}
+	return r.Registry.Get(ctx, id)
+}
+
+func seedMoveRecord(t *testing.T, reg moves.Registry, id, from, to string, state moves.State) int64 {
+	t.Helper()
+	ctx := t.Context()
+	epoch, err := reg.Begin(ctx, id, from, to)
+	if err != nil {
+		t.Fatalf("begin %s: %v", id, err)
+	}
+	path := map[moves.State][]moves.State{
+		moves.Final:     {moves.Final},
+		moves.Committed: {moves.Final, moves.Committed},
+		moves.Started:   {moves.Final, moves.Committed, moves.Started},
+		moves.Aborted:   {moves.Aborted},
+	}[state]
+	at, reached := epoch, moves.Pending
+	for _, next := range path {
+		if at, err = reg.Advance(ctx, id, at, reached, next); err != nil {
+			t.Fatalf("advance %s to %s: %v", id, next, err)
+		}
+		reached = next
+	}
+	return epoch
+}
+
+func startsOf(m *Manager) []string {
+	eng := fakeOf(m)
+	eng.mu.Lock()
+	defer eng.mu.Unlock()
+	return slices.Clone(eng.starts)
 }
 
 func moveCounts(m *Manager, tenant string) [3]int {
