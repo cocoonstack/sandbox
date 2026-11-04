@@ -123,9 +123,9 @@ async fn pump<W: AsyncWrite + Unpin>(
 ) -> i32 {
     // stdin rides its own task so a slow write cannot stall output or reaping.
     let (disc_tx, mut disc_rx) = oneshot::channel::<()>();
-    tokio::spawn(pump_stdin(Arc::clone(master), client, disc_tx));
+    let stdin = tokio::spawn(pump_stdin(Arc::clone(master), client, disc_tx));
 
-    let mut buf = [0u8; READ_CHUNK];
+    let mut buf = vec![0u8; READ_CHUNK];
     let mut frame = Vec::new();
     let mut eof = false;
     let mut disc = false;
@@ -134,6 +134,7 @@ async fn pump<W: AsyncWrite + Unpin>(
             status = child.wait() => {
                 let code = status.map_or(-1, sysutil::exit_code);
                 drain(master, proc, out, &mut buf, &mut frame).await;
+                stdin.abort();
                 return code;
             }
             // kill the shell so child.wait publishes its real signalled code.
@@ -153,6 +154,7 @@ async fn pump<W: AsyncWrite + Unpin>(
                         proc.emit_bytes(false, &buf[..n]);
                         if proto::write_chunk_frame(out, &mut frame, "stdout", &buf[..n]).await.is_err() {
                             let _ = child.start_kill();
+                            stdin.abort();
                             return sysutil::wait_code(child).await;
                         }
                     }

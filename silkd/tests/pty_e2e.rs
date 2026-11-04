@@ -121,6 +121,37 @@ async fn resize_unknown_pid_is_not_found() {
 }
 
 #[tokio::test]
+async fn stdin_nobody_reads_after_the_shell_exits_does_not_wedge_the_next_request() {
+    let state = Arc::new(State::new());
+    let (mut cw, mut lines, handle) = connect(&state);
+    send(&mut cw, json!({"op":"pty_open","cols":80,"rows":24})).await;
+    read_until(&mut lines, |v| v["type"] == "started").await;
+    send(
+        &mut cw,
+        json!({"op":"stdin","data":b64(b"sleep 20 &\nexit\n")}),
+    )
+    .await;
+    read_until(&mut lines, |v| v["type"] == "exit").await;
+
+    let chunk = b64(&b"unread line\n".repeat(2048));
+    let answered = tokio::time::timeout(Duration::from_secs(8), async {
+        for _ in 0..64 {
+            send(&mut cw, json!({"op":"stdin","data":chunk})).await;
+        }
+        send(&mut cw, json!({"op":"ps"})).await;
+        read_until(&mut lines, |v| v.get("procs").is_some()).await;
+    })
+    .await;
+    assert!(
+        answered.is_ok(),
+        "the next request is wedged behind stdin nobody reads"
+    );
+
+    cw.shutdown().await.unwrap();
+    handle.await.unwrap().unwrap();
+}
+
+#[tokio::test]
 async fn pty_disconnect_tears_down_without_spin() {
     let state = Arc::new(State::new());
     let (mut cw, mut lines, handle) = connect(&state);
