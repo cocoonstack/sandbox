@@ -116,20 +116,21 @@ func TestMemoryOverLimitParksRefill(t *testing.T) {
 	}
 }
 
-func TestAnUnreadableSignalKeepsTheMemoryState(t *testing.T) {
-	m := memoryManager(t, config.MemoryLimit{Anon: "300G"})
+func TestAnUnreadableSignalDoesNotHoldTheNodeLow(t *testing.T) {
+	m := memoryManager(t, config.MemoryLimit{Anon: "300G", PSISomeAvg10: 40})
 	writeMemorySignals(t, m, 301*gib, "0.00")
+	if err := os.Remove(filepath.Join(m.procDir, "pressure", "memory")); err != nil {
+		t.Fatalf("remove pressure file: %v", err)
+	}
 	m.checkMemory(t.Context())
+	if !m.memoryLow.Load() || !m.memoryReadFailed.Load() {
+		t.Errorf("anon over with no PSI: low %v, failed %v, want both set", m.memoryLow.Load(), m.memoryReadFailed.Load())
+	}
 
-	if err := os.Remove(filepath.Join(m.procDir, "meminfo")); err != nil {
-		t.Fatalf("remove meminfo: %v", err)
-	}
+	writeMeminfo(t, m, 299*gib)
 	m.checkMemory(t.Context())
-	if !m.memoryLow.Load() {
-		t.Error("a failed read cleared the memory-low state")
-	}
-	if !m.memoryReadFailed.Load() {
-		t.Error("a failed read was not noted")
+	if m.memoryLow.Load() {
+		t.Error("anon under with no PSI left the node low")
 	}
 
 	writeMemorySignals(t, m, 299*gib, "0.00")
@@ -167,11 +168,17 @@ func memoryManager(t *testing.T, limit config.MemoryLimit) *Manager {
 
 func writeMemorySignals(t *testing.T, m *Manager, anon int64, psi string) {
 	t.Helper()
-	meminfo := "MemTotal:       395136616 kB\nMemFree:         1234 kB\nAnonPages:      " + strconv.FormatInt(anon/1024, 10) + " kB\nMapped:         4321 kB\n"
+	writeMeminfo(t, m, anon)
 	pressure := "some avg10=" + psi + " avg60=0.00 avg300=0.00 total=12\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=3\n"
-	for name, content := range map[string]string{"meminfo": meminfo, "pressure/memory": pressure} {
-		if err := os.WriteFile(filepath.Join(m.procDir, name), []byte(content), 0o600); err != nil {
-			t.Fatalf("write %s: %v", name, err)
-		}
+	if err := os.WriteFile(filepath.Join(m.procDir, "pressure", "memory"), []byte(pressure), 0o600); err != nil {
+		t.Fatalf("write pressure file: %v", err)
+	}
+}
+
+func writeMeminfo(t *testing.T, m *Manager, anon int64) {
+	t.Helper()
+	meminfo := "MemTotal:       395136616 kB\nMemFree:         1234 kB\nAnonPages:      " + strconv.FormatInt(anon/1024, 10) + " kB\nMapped:         4321 kB\n"
+	if err := os.WriteFile(filepath.Join(m.procDir, "meminfo"), []byte(meminfo), 0o600); err != nil {
+		t.Fatalf("write meminfo: %v", err)
 	}
 }

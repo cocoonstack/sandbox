@@ -1325,7 +1325,7 @@ A node cordoned via [`POST /v1/drain`](#post-v1drain) additionally reports
 move, omitted at zero). When refill is parked because the node cannot start
 another VM, `"at_capacity": true` distinguishes a full node from one still
 filling its warm target, and `at_capacity_reason` carries the engine's capacity
-reason, `disk below reserve` or `memory above limit`. Both capacity fields are omitted while refill is not capacity-blocked. Each VM holds a console pty, so a node stops at `kernel.pty.max` (4096 by default) with `no space left on device`; raise it past the VM count you plan to run.
+reason, or `disk below reserve` or `memory above limit`, which stay stable for callers that tell them apart. Both capacity fields are omitted while refill is not capacity-blocked. Each VM holds a console pty, so a node stops at `kernel.pty.max` (4096 by default) with `no space left on device`; raise it past the VM count you plan to run.
 
 `golden` reports whether the pool's snapshot exists (refill can clone);
 `warm` at `target` with `golden: true` means warm claims are served in

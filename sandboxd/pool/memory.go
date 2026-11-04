@@ -43,9 +43,6 @@ func (m *Manager) checkMemory(ctx context.Context) {
 		logger.Info(ctx, "memory signals read again")
 	}
 	low := anon > v.memoryAnon || psi > v.memoryPSI
-	if err != nil && !low {
-		return
-	}
 	switch was := m.memoryLow.Swap(low); {
 	case low && !was:
 		logger.Warnf(ctx, "anon %s limit %s, PSI some avg10 %.2f limit %.2f: refusing claims and refills",
