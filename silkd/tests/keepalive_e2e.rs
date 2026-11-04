@@ -1,6 +1,5 @@
 //! RPCs back to back on one connection, and the frames that cross an RPC boundary.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
 mod common;
 
 use std::sync::Arc;

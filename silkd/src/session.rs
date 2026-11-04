@@ -66,7 +66,6 @@ impl Table {
                 stdout,
                 _child: child,
                 cmd_buf: String::new(),
-                buf: vec![0u8; READ_CHUNK],
                 acc: Vec::new(),
                 frame: Vec::new(),
             }),
@@ -183,7 +182,6 @@ struct Io {
     stdout: ChildStdout,
     _child: Child,
     cmd_buf: String,
-    buf: Vec<u8>,
     acc: Vec<u8>,
     frame: Vec<u8>,
 }
@@ -211,20 +209,19 @@ impl Io {
         let keep = mb.len().saturating_sub(1);
         self.acc.clear();
         loop {
-            let n = self.stdout.read(&mut self.buf).await?;
+            self.acc.reserve(READ_CHUNK);
+            let n = self.stdout.read_buf(&mut self.acc).await?;
             if n == 0 {
                 return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "shell exited"));
             }
-            self.acc.extend_from_slice(&self.buf[..n]);
             if let Some(pos) = memchr::memmem::find(&self.acc, mb) {
                 emit(&mut out, &mut self.frame, &self.acc[..pos]).await;
                 self.acc.drain(..pos + mb.len());
                 while memchr::memchr(b'\n', &self.acc).is_none() && self.acc.len() < EXIT_TAIL_MAX {
-                    let m = self.stdout.read(&mut self.buf).await?;
-                    if m == 0 {
+                    self.acc.reserve(READ_CHUNK);
+                    if self.stdout.read_buf(&mut self.acc).await? == 0 {
                         break;
                     }
-                    self.acc.extend_from_slice(&self.buf[..m]);
                 }
                 // parse only the exit-code line: a background writer can land bytes after the newline.
                 let end = memchr::memchr(b'\n', &self.acc).unwrap_or(self.acc.len());
