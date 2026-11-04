@@ -247,11 +247,7 @@ func TestRestartKeepsAnEgressDoorThatSurvivedTheVMM(t *testing.T) {
 
 	m.recoverVMM(t.Context(), sb)
 
-	conn, err := net.Dial("unix", engine.EgressSocketPath(sb.VsockSocket))
-	if err != nil {
-		t.Fatalf("egress door after the restart: %v", err)
-	}
-	_ = conn.Close()
+	dialEgress(t, sb.VsockSocket)
 }
 
 func TestRestartRedeliversTheGuestEnv(t *testing.T) {

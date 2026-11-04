@@ -57,6 +57,7 @@ type outMove struct {
 	types.MoveOut
 	addr     string
 	to       string
+	replica  string
 	rounds   int
 	final    bool
 	locked   bool

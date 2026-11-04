@@ -420,6 +420,31 @@ func TestMoveOfAReplicatedClaimDropsItsRowBeforeTheFinalRound(t *testing.T) {
 	}
 }
 
+func TestMoveAbortedAfterDroppingTheRowPutsItBackOnTheNextRound(t *testing.T) {
+	mc := newMoveClusterWith(t, func(c *failoverCluster) { c.replicate = replicateEvery })
+	sb := mustClaim(t, mc.s, testKey)
+	replicateNow(t, mc.s, sb)
+	mc.s.mu.Lock()
+	replica := sb.ReplicaCk
+	mc.s.mu.Unlock()
+	mc.p.commitHook = func(int) error { return ErrMoveTarget }
+	if _, err := mc.s.Move(t.Context(), sb.ID, "b", time.Minute); !errors.Is(err, ErrMoveTarget) {
+		t.Fatalf("move: %v, want ErrMoveTarget", err)
+	}
+	assertStillOnSource(t, mc, sb)
+	if ckExists(t, mc.s, replica) {
+		t.Error("the aborted move left the replica it dropped")
+	}
+	if _, ok, _ := mc.reg.Get(t.Context(), sb.ID); ok {
+		t.Fatal("the row survived the final round")
+	}
+	mc.p.commitHook = nil
+	replicateNow(t, mc.s, sb)
+	if _, ok, _ := mc.reg.Get(t.Context(), sb.ID); !ok {
+		t.Error("the next round did not put the row back")
+	}
+}
+
 func TestMoveHoldsOffCapturesReleasesAndEvacuationWhileItRuns(t *testing.T) {
 	mc := newMoveCluster(t)
 	sb := mustClaim(t, mc.s, testKey)
@@ -1317,24 +1342,11 @@ func (r *lossyMoves) setDown(down bool) { r.down.Store(down) }
 
 func seedMoveRecord(t *testing.T, reg moves.Registry, id, from, to string, state moves.State) int64 {
 	t.Helper()
-	ctx := t.Context()
-	epoch, err := reg.Begin(ctx, id, from, to)
+	epoch, err := reg.Begin(t.Context(), id, from, to)
 	if err != nil {
 		t.Fatalf("begin %s: %v", id, err)
 	}
-	path := map[moves.State][]moves.State{
-		moves.Final:     {moves.Final},
-		moves.Committed: {moves.Final, moves.Committed},
-		moves.Started:   {moves.Final, moves.Committed, moves.Started},
-		moves.Aborted:   {moves.Aborted},
-	}[state]
-	at, reached := epoch, moves.Pending
-	for _, next := range path {
-		if at, err = reg.Advance(ctx, id, at, reached, next); err != nil {
-			t.Fatalf("advance %s to %s: %v", id, next, err)
-		}
-		reached = next
-	}
+	movestest.Reach(t, reg, id, epoch, state)
 	return epoch
 }
 

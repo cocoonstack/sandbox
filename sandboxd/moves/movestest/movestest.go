@@ -129,6 +129,23 @@ func Contract(t *testing.T, open Opener) {
 	t.Run("stale lists records written before a time", func(t *testing.T) { testStale(t, open(t)) })
 }
 
+// Reach advances a record begun at epoch to state and returns its last epoch.
+func Reach(t *testing.T, r moves.Registry, id string, epoch int64, state moves.State) int64 {
+	t.Helper()
+	path := map[moves.State][]moves.State{
+		moves.Final:     {moves.Final},
+		moves.Committed: {moves.Final, moves.Committed},
+		moves.Started:   {moves.Final, moves.Committed, moves.Started},
+		moves.Aborted:   {moves.Aborted},
+	}[state]
+	from := moves.Pending
+	for _, to := range path {
+		epoch = mustAdvance(t, r, id, epoch, from, to)
+		from = to
+	}
+	return epoch
+}
+
 func testBeginGet(t *testing.T, r moves.Registry) {
 	ctx := t.Context()
 	if _, ok, err := r.Get(ctx, "sb_1"); ok || err != nil {
@@ -351,17 +368,5 @@ func mustAdvance(t *testing.T, r moves.Registry, id string, expect int64, from, 
 
 func mustReach(t *testing.T, r moves.Registry, id string, state moves.State) int64 {
 	t.Helper()
-	epoch := mustBegin(t, r, id)
-	path := map[moves.State][]moves.State{
-		moves.Final:     {moves.Final},
-		moves.Committed: {moves.Final, moves.Committed},
-		moves.Started:   {moves.Final, moves.Committed, moves.Started},
-		moves.Aborted:   {moves.Aborted},
-	}[state]
-	from := moves.Pending
-	for _, to := range path {
-		epoch = mustAdvance(t, r, id, epoch, from, to)
-		from = to
-	}
-	return epoch
+	return Reach(t, r, id, mustBegin(t, r, id), state)
 }

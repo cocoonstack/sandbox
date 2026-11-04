@@ -104,7 +104,7 @@ func (m *Manager) moveOut(ctx context.Context, sb *types.Sandbox, mv *outMove, b
 	mv.locked = true
 	ctx, cancel := context.WithTimeout(ctx, moveFinalTimeout)
 	defer cancel()
-	if err = m.unrowForMove(ctx, sb); err != nil {
+	if err = m.unrowForMove(ctx, sb, mv); err != nil {
 		return err
 	}
 	mv.pausedAt = time.Now()
@@ -220,7 +220,7 @@ func (m *Manager) journalMoveOut(ctx context.Context, sb *types.Sandbox, mv *out
 }
 
 // unrowForMove deletes a replicated claim's row and replica, so no third node adopts a stale copy while the target runs it; the caller holds sb.Transition.
-func (m *Manager) unrowForMove(ctx context.Context, sb *types.Sandbox) error {
+func (m *Manager) unrowForMove(ctx context.Context, sb *types.Sandbox, mv *outMove) error {
 	if m.archives == nil {
 		return nil
 	}
@@ -238,12 +238,10 @@ func (m *Manager) unrowForMove(ctx context.Context, sb *types.Sandbox) error {
 	} else if err != nil {
 		return err
 	}
+	mv.replica = replica
 	live, err := m.commitIfLive(ctx, sb, func() { sb.ReplicaCk, sb.ArchiveEpoch = "", 0 })
 	if !live {
 		return ErrUnknownSandbox
-	}
-	if replica != "" {
-		m.deleteOrphanArchiveCk(ctx, replica)
 	}
 	return err
 }
@@ -257,7 +255,7 @@ func (m *Manager) finishMoveOut(ctx context.Context, sb *types.Sandbox, mv *outM
 		teardown()
 		m.recordUsage(ctx, usage.Event{Event: "move_out", ID: sb.ID, VMName: vm, Tenant: sb.Tenant})
 	}
-	m.endMoveOut(sb, mv)
+	m.endMoveOut(ctx, sb, mv)
 	logger := log.WithFunc("pool.finishMoveOut")
 	rec, ok, err := m.moves.Get(ctx, sb.ID)
 	if err != nil {
@@ -344,7 +342,7 @@ func (m *Manager) abortMoveOut(ctx context.Context, sb *types.Sandbox, mv *outMo
 		}
 	}
 	_, journalErr := m.commitIfLive(ctx, sb, func() { sb.MoveOut = nil })
-	m.endMoveOut(sb, mv)
+	m.endMoveOut(ctx, sb, mv)
 	if journalErr != nil {
 		logger.Warnf(ctx, "clear the move journal of %s, leaving its record to the sweep: %v", sb.ID, journalErr)
 		return nil
@@ -357,7 +355,7 @@ func (m *Manager) abortMoveOut(ctx context.Context, sb *types.Sandbox, mv *outMo
 	return nil
 }
 
-func (m *Manager) endMoveOut(sb *types.Sandbox, mv *outMove) {
+func (m *Manager) endMoveOut(ctx context.Context, sb *types.Sandbox, mv *outMove) {
 	m.mu.Lock()
 	if m.moving[sb.ID] == mv {
 		delete(m.moving, sb.ID)
@@ -366,6 +364,9 @@ func (m *Manager) endMoveOut(sb *types.Sandbox, mv *outMove) {
 	if mv.locked {
 		mv.locked = false
 		sb.Transition.Unlock()
+	}
+	if mv.replica != "" {
+		m.deleteOrphanArchiveCk(ctx, mv.replica)
 	}
 }
 
