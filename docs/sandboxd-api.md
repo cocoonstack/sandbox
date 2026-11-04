@@ -34,7 +34,8 @@ they reach its guest, so they share these answers:
 - 503 `lease lost; retry` for a replicated claim while its node's lease is
   overdue ([running claims](cluster.md#running-claims-across-node-loss))
 - 503 `sandbox moving to another node; retry` while an
-  [evacuation](#post-v1drain) has yet to move it
+  [evacuation](#post-v1drain) has yet to move it, or while a
+  [live move](#post-v1sandboxesidmove) pauses it for its final round
 - 503 `archive registry down; retry` for an archived claim under
   `archive_failover` while the meta store is down
 - 503 `tenant store down; retry` for an archived claim whose tenant the node has
@@ -845,6 +846,36 @@ Auth: root only (tenant tokens get 403). Lifts the drain, stops an evacuation, a
 fresh info payload. A claim an evacuation is archiving finishes its archive and
 stays here archived; the next call wakes it.
 
+## POST /v1/sandboxes/{id}/move
+
+Auth: root only (tenant tokens get 403). Moves one running claim to a peer with
+its guest's processes and memory (see
+[moving a running claim](cluster.md#moving-a-running-claim)). Body:
+`{"to": "<peer>", "max_downtime_ms": 2000}`, `to` as `GET /v1/peers` lists it
+and never this node (else 400), `max_downtime_ms` optional with a default of
+2000. Answers `{"owner_addr": "<peer>", "rounds": n, "downtime_ms": d}` once the
+peer runs the guest and this node dropped the claim; `downtime_ms` is the pause
+from the final capture to the peer's commit. While the move runs, release of
+the claim answers 503 `sandbox moving to another node; retry`, and fork,
+checkpoint, promote and hibernate answer the same during the rounds and wait
+out the final round. Env writes, renew and data-plane calls keep working until
+the final round. Every error leaves the claim running here:
+
+- 404 unknown sandbox
+- 409 the claim cannot move (hibernated, archived, failed, waking, with
+  volumes, egress lane, a move already running), cocoon or its run dir cannot
+  migrate, the target refused (`target <peer>: <reason>`), or the node lacks
+  `archive_failover` or `mesh.cluster_key`
+- 429 `move_concurrency` reached here or on the target, or the target's
+  admission refused (`target <peer>: <reason>`)
+- 502 the target is unreachable or failed
+- 503 the move or archive registry is down, the node lease is overdue, or the
+  final round would not fit `max_downtime_ms` after 4 deltas
+
+The target serves root-only peer routes for a move, `POST /v1/moves/{id}`,
+`PUT /v1/moves/{id}/rounds/{n}`, `POST /v1/moves/{id}/commit` and
+`DELETE /v1/moves/{id}`; they are no public API.
+
 ## POST /v1/sandboxes/{id}/preview
 
 Auth: node `api_token` in the header, the sandbox's own token in the body.
@@ -1088,7 +1119,7 @@ truth is the usage journal below.
 
 Always on: every lifecycle transition appends one JSONL event to
 `<data_dir>/usage.jsonl` — `{"t": <RFC3339>, "ev":
-"claim|renew|hibernate|wake|fork|checkpoint|adopt|promote|release|reap|archive|unarchive|archive_delete|egress|egress_bytes|vmm_exit|vmm_restart|vmm_failed",
+"claim|renew|hibernate|wake|fork|checkpoint|adopt|promote|release|reap|archive|unarchive|archive_delete|egress|egress_bytes|vmm_exit|vmm_restart|vmm_failed|move_in|move_out",
 "id": "sb_…"}` plus `vm` (the VM's name; absent on `renew`, `adopt`, `archive`,
 `unarchive`, `archive_delete`, `egress`, `egress_bytes`, and the `reap` or
 `release` of an archived claim), `key` (the pool key's stable hash, claim
@@ -1096,7 +1127,7 @@ events), `template`, `net` and `size` (the claim's template, lane and size
 tier, claim events, so a consumer can price a sandbox by its shape without the
 claim record, which is gone after release; `size` sets the CPU and memory,
 and `template` is a label, since promote lets the caller name it), `deadline` (the deadline in force after this event: `claim`,
-`renew`, `wake` and `unarchive` carry the lease, `archive` and `adopt` the retention
+`renew`, `wake`, `unarchive` and `move_in` carry the lease, `archive` and `adopt` the retention
 end, or nothing for an archive kept forever, and `reap` the deadline it ended under), `tenant` (the owning tenant, on every event of a
 tenant's claim), `children` (fork) and `ref` (the promoted template / checkpoint
 id, the egress host, a `vmm_failed` reason, or why reconcile ended a claim). An egress event that injected credentials names
@@ -1108,11 +1139,13 @@ the subset of those names claimed `rw`, so billing can discriminate write
 access (mounts and host paths are not billing dimensions). The file rotates at
 64 MiB keeping one `.1` backup, so a tailing collector never loses a window
 silently. A last line a crash cut short is ended with a newline when the node
-reopens the journal, so it never swallows the next event. Folding rules: fold a sandbox's events of all nodes in `t` order.
+reopens the journal, so it never swallows the next event. A [live move](#post-v1sandboxesidmove)
+records `move_in` on the target when it starts the guest and `move_out` on the
+source when it drops the claim, each with its own node's `vm`. Folding rules: fold a sandbox's events of all nodes in `t` order.
 An event ends the current span at its `t` and enters a state: `claim`, `wake`,
-`unarchive` and `vmm_restart` enter `running`, `hibernate` enters `hibernated`,
+`unarchive`, `vmm_restart` and `move_in` enter `running`, `hibernate` enters `hibernated`,
 `archive` enters `archived`, and `vmm_exit`, `archive_delete`, `release` and
-`reap` enter `ended`. Other events, `vmm_failed` included, change no state, and
+`reap` enter `ended`. Other events, `vmm_failed` and `move_out` included, change no state, and
 `reap`, `adopt` and `archive_delete` have the exceptions below.
 Billable compute, hibernated storage and archived storage seconds are the time
 in `running`, `hibernated` and `archived`, a cheaper store tier than a hibernated

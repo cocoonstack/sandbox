@@ -308,6 +308,81 @@ the move stops working until it is minted again, except behind a shared
 `preview_advertise`, where it answers when it reaches the new owner. `DELETE /v1/drain` stops the evacuation: claims not yet started
 stay as they are, and one mid-archive finishes its archive but keeps its row.
 
+### Moving a running claim
+
+`POST /v1/sandboxes/{id}/move` (root only) hands one running claim to a named
+peer with cocoon's live migration, so its guest keeps its processes and
+memory. Evacuation stays the cold path:
+
+| | Cold: `POST /v1/drain?evacuate=1` | Hot: `POST /v1/sandboxes/{id}/move` |
+|---|---|---|
+| What moves | every claim of a draining node | one running claim |
+| How | hibernate, archive to the checkpoint store, release the row, a peer adopts | memory and disk rounds straight to the target, which restores and starts the guest |
+| Guest after the move | stopped until the next call wakes it | running, with its processes and memory |
+| Target | any peer that answers | the one the caller names |
+| When it cannot move | the claim is skipped and keeps serving | the call fails and the claim keeps running here |
+
+Only a none-lane claim without volumes moves; a hibernated, archived, failed or
+waking claim, an egress-lane claim and a claim with volumes answer 409. Open
+exec and pty streams, port forwards and egress connections end; the client
+meets a 404 on the source and runs `Lookup`.
+
+**The record.** Each move has a record of its own in the meta store (table
+`sandboxd_moves`), separate from the archive rows: `id`, `from`, `to`, `state`
+and `epoch`, each change a compare-and-set at a new epoch.
+
+| From | To | Who | When |
+|---|---|---|---|
+| (none) | `pending` | source | after the target admitted the move, before the baseline round |
+| `pending` | `final` | source | the final round paused the guest |
+| `final` | `committed` | target | after the receive; the point of no return |
+| `pending` or `final` | `aborted` | source | before it resumes the guest |
+
+The target commits only from `final`, so it never starts a guest restored from
+a round the source kept running after. The source resumes its guest only after
+its `aborted` write lands; a write that finds `committed` means the claim moved,
+and the source drops it. While the meta store is down, a guest paused in the
+final round stays paused and the call answers 503; the abort is retried every 2
+seconds. The source deletes the record when the move ends. Each node's hourly
+sweep aborts and deletes its records older than an hour that no move in flight
+holds.
+
+**Rounds.** The source sends a baseline round, then up to 4 deltas, each over
+the control port with the root token. Once the last delta's size at the rate
+the rounds reached, plus 400 ms for the receive and the start, fits
+`max_downtime_ms` (default 2000), the source pauses the guest for the final
+round and the target receives the series and starts the guest. A move whose
+deltas never fit answers 503 and the guest runs on. `downtime_ms` in the answer
+is the pause the source measured, from the final capture to the target's
+commit.
+
+**Counting.** The target admits the move like a new claim: node `max_claims`,
+`max_running`, the tenant's `max_claims`, `memory_limit` and
+`move_concurrency`, and holds a reservation from admission to its commit. The
+reservation counts in every cap but is no claim: listings, reaps and gossip
+never see it. At the commit the reservation becomes the claim under one lock,
+so the target never counts it twice. The source counts the claim until it drops
+it after the commit, so the cluster counts a moving claim twice, which can make
+a node refuse earlier but never over-admit. `memory_limit` is checked again
+before the receive. A reservation with no round or commit for 2 minutes is
+dropped with its staged files.
+
+**Replicated claims.** Before the final round the source deletes the claim's
+registry row and its replica, so no third node can adopt a stale replica while
+the target runs the claim. The target's first replica round puts a new row one
+interval after the start, and an aborted move lets the source's next round put
+it again.
+
+**Failures.** Any failure before the commit aborts: the source resumes the
+guest, the target drops its reservation, files and any received VM, and the
+call answers the error. A target answer lost after its commit is resolved
+through the record, and the call answers 200. A source restarted with a move
+in its journal reads the record: `committed` drops the claim, anything else is
+aborted and the guest resumes. A target restarted with a received claim not yet
+started starts it when the record committed to it and removes it otherwise. A
+guest the target cannot start fails there through the
+[failed path](#running-claims-across-node-loss); it never goes back.
+
 ### Node lease
 
 With `archive_failover` every node renews one row of `sandboxd_nodes (cell,
