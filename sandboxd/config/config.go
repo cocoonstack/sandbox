@@ -299,9 +299,9 @@ func (c *Config) HasEgress() bool {
 	return len(c.Bridges) > 0 || len(c.Networks) > 0
 }
 
-// Movable reports whether the node can run live moves: they need the move registry and an encrypted mesh.
+// Movable reports whether the node can run live moves: they need a meta store cell for the move record and an encrypted mesh.
 func (c *Config) Movable() bool {
-	return c.ArchiveFailover && c.Mesh != nil && c.Mesh.ClusterKey != ""
+	return c.MetaStore != nil && c.MetaStore.Cell != "" && c.Mesh != nil && c.Mesh.ClusterKey != ""
 }
 
 func (c *Config) S3Checkpoints() bool {
@@ -398,7 +398,7 @@ func (c *Config) validate() error {
 		return fmt.Errorf("checkpoint_peer_heal requires api_token: without it resolveScope leaves the raw checkpoint blob GET reachable with no credential")
 	}
 	if c.MoveConcurrency > 0 && !c.Movable() {
-		return fmt.Errorf("move_concurrency requires archive_failover and an encrypted mesh (set mesh.cluster_key)")
+		return fmt.Errorf("move_concurrency requires meta_store with a cell and an encrypted mesh (set mesh.cluster_key)")
 	}
 	for _, check := range []func() error{c.validateNodeEgress, c.validateDiskReserve, c.validateMemoryLimit, c.validateMetaStore, c.validateVolumes, c.validateMesh, c.validateReplication} {
 		if err := check(); err != nil {

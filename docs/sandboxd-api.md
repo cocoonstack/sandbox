@@ -869,7 +869,7 @@ node drops the claim (see [moving a running claim](cluster.md#moving-a-running-c
 - 409 the claim cannot move (hibernated, archived, failed, waking, with
   volumes, egress lane, a move already running), cocoon or its run dir cannot
   migrate, a capture failed (the VMM died mid-move), the target refused (`target <peer>: <reason>`), or the node lacks
-  `archive_failover` or `mesh.cluster_key`
+  a `meta_store` cell or `mesh.cluster_key`
 - 429 `move_concurrency` reached here or on the target, or the target's
   admission refused (`target <peer>: <reason>`)
 - 502 the target is unreachable or failed

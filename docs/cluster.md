@@ -322,6 +322,10 @@ memory. Evacuation stays the cold path:
 | Target | any peer that answers | the one the caller names |
 | When it cannot move | the claim is skipped and keeps serving | the call fails and the claim keeps running here |
 
+A move needs `meta_store` with a `cell`, which holds its record, and
+`mesh.cluster_key`. It does not need `archive_failover` or an S3
+`checkpoint_store`, since its rounds go straight to the peer.
+
 Only a none-lane claim without volumes moves; a hibernated, archived, failed or
 waking claim, an egress-lane claim and a claim with volumes answer 409. Open
 exec and pty streams, port forwards and egress connections end; the client

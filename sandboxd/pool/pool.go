@@ -132,7 +132,7 @@ var (
 	errNoArchiveRow  = errors.New("archived before archive_failover was on, so no registry row names it")
 	errArchiveBusy   = errors.New("an archive of the claim is in flight")
 	errNoAdopter     = errors.New("no peer adopted the claim")
-	errMovesOff      = fmt.Errorf("%w: live moves need archive_failover and an encrypted mesh", ErrNotMovable)
+	errMovesOff      = fmt.Errorf("%w: live moves need a meta store cell and an encrypted mesh", ErrNotMovable)
 )
 
 // Engine is the slice of the cocoon driver the manager consumes.
@@ -444,8 +444,10 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 	m.out = outbound.New(m.outboundOptions(ca))
 	m.configSeedHash = poolSeedHash(cfg.Pools)
 	start := &fenceState{ch: make(chan struct{}), fenced: m.archives != nil}
-	if m.archives != nil {
+	if m.archives != nil || m.moves != nil {
 		m.nodeID = cfg.Mesh.ID()
+	}
+	if m.archives != nil {
 		close(start.ch)
 	}
 	m.fence.Store(start)

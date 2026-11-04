@@ -1869,13 +1869,14 @@ func TestFailoverAReleaseFindsItsUnsettledArchiveTakenElsewhere(t *testing.T) {
 }
 
 type failoverCluster struct {
-	reg       *archivestest.Mem
-	moves     moves.Registry
-	ckDir     string
-	replicate int
-	volumes   []config.VolumeSpec
-	nodes     []*Manager
-	egressPol *egress.Policy
+	reg        *archivestest.Mem
+	moves      moves.Registry
+	ckDir      string
+	replicate  int
+	volumes    []config.VolumeSpec
+	nodes      []*Manager
+	egressPol  *egress.Policy
+	noArchives bool
 }
 
 func newFailoverCluster(t *testing.T) *failoverCluster {
@@ -1942,7 +1943,10 @@ func (c *failoverCluster) nodeOn(t *testing.T, eng *fakeEngine, name, dataDir st
 		cfg.EgressCA = writeTestEgressCA(t)
 	}
 	b := testBackends(t, cfg)
-	b.Archives, b.Moves = c.reg, c.moves
+	b.Moves = c.moves
+	if !c.noArchives {
+		b.Archives = c.reg
+	}
 	m, err := NewManager(t.Context(), cfg, eng, testSecrets(t), b)
 	if err != nil {
 		t.Fatalf("manager %s: %v", name, err)

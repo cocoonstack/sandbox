@@ -107,7 +107,7 @@ func TestMoveRefusedByTheTargetLeavesTheClaimRunningOnTheSource(t *testing.T) {
 			claimTenant(t, mc.t, "acme")
 		},
 		"memory":      func(_ *testing.T, mc *moveCluster) { mc.t.memoryLow.Store(true) },
-		"move budget": func(t *testing.T, mc *moveCluster) { reserveMove(t, mc.t, "sb_other", "zed") },
+		"move budget": func(t *testing.T, mc *moveCluster) { reserveMove(t, mc.t, "sb_other", "acme") },
 	} {
 		t.Run(name, func(t *testing.T) {
 			mc := newMoveCluster(t)
@@ -470,6 +470,23 @@ func TestMoveAbortedAfterDroppingTheRowPutsItBackOnTheNextRound(t *testing.T) {
 	replicateNow(t, mc.s, sb)
 	if _, ok, _ := mc.reg.Get(t.Context(), sb.ID); !ok {
 		t.Error("the next round did not put the row back")
+	}
+}
+
+func TestMoveNeedsNoArchiveRegistry(t *testing.T) {
+	mc := newMoveClusterWith(t, func(c *failoverCluster) { c.noArchives = true })
+	sb := claimTenant(t, mc.s, "acme")
+	if _, err := mc.s.Move(t.Context(), sb.ID, "b", time.Minute); err != nil {
+		t.Fatalf("move without archive_failover: %v", err)
+	}
+	if _, held := mc.s.byID(sb.ID); held {
+		t.Error("the source kept the claim")
+	}
+	if moved, ok := mc.t.byID(sb.ID); !ok || moved.MoveIn {
+		t.Errorf("target claim %+v %v, want it started", moved, ok)
+	}
+	if got := [2][3]int{moveCounts(mc.s, "acme"), moveCounts(mc.t, "acme")}; got != [2][3]int{{0, 0, 0}, {1, 1, 1}} {
+		t.Errorf("counts %v, want the claim on the target only", got)
 	}
 }
 
