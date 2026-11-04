@@ -67,7 +67,7 @@ func (m *Manager) ReceiveMoveRound(id string, body io.Reader) error {
 func (m *Manager) CommitMove(ctx context.Context, id string, claim []byte, epoch int64) (int64, error) {
 	ctx = context.WithoutCancel(ctx)
 	if !m.touchReservation(id) {
-		return 0, fmt.Errorf("%w: no reservation for the move of %s", ErrQuota, id)
+		return 0, fmt.Errorf("%w: no reservation for the move of %s", ErrNotMovable, id)
 	}
 	if m.memoryLow.Load() {
 		return 0, fmt.Errorf("%w: %s", ErrQuota, memoryLowReason)
