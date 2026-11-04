@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -325,6 +326,92 @@ func TestMoveRefusesClaimsThatCannotMove(t *testing.T) {
 	}
 	if len(fakeOf(mc.s).captures) != 0 {
 		t.Errorf("a refused move captured %v", fakeOf(mc.s).captures)
+	}
+}
+
+func TestMoveRestartResolvesAJournaledMoveThroughItsRecord(t *testing.T) {
+	for name, tt := range map[string]struct {
+		node      string
+		reach     moves.State
+		journal   func(epoch int64) *types.Sandbox
+		wantClaim bool
+		check     func(t *testing.T, eng *fakeEngine)
+	}{
+		"source at pending": {node: "a", reach: moves.Pending, wantClaim: true, journal: func(epoch int64) *types.Sandbox {
+			return &types.Sandbox{MoveOut: &types.MoveOut{To: "b", Epoch: epoch, Series: "s1"}}
+		}, check: func(t *testing.T, eng *fakeEngine) {
+			if !slices.Contains(eng.aborts, "sbx-moved:s1") {
+				t.Errorf("aborts %v, want the series aborted", eng.aborts)
+			}
+		}},
+		"source at final": {node: "a", reach: moves.Final, wantClaim: true, journal: func(epoch int64) *types.Sandbox {
+			return &types.Sandbox{MoveOut: &types.MoveOut{To: "b", Epoch: epoch, Series: "s1"}}
+		}, check: func(t *testing.T, eng *fakeEngine) {
+			if !slices.Contains(eng.aborts, "sbx-moved:s1") {
+				t.Errorf("aborts %v, want the series aborted", eng.aborts)
+			}
+		}},
+		"source at committed": {node: "a", reach: moves.Committed, journal: func(epoch int64) *types.Sandbox {
+			return &types.Sandbox{MoveOut: &types.MoveOut{To: "b", Epoch: epoch, Series: "s1"}}
+		}, check: func(t *testing.T, eng *fakeEngine) {
+			if !slices.Contains(eng.removes, "sbx-moved") {
+				t.Errorf("removes %v, want the moved-away VM removed", eng.removes)
+			}
+		}},
+		"target at committed": {node: "b", reach: moves.Committed, wantClaim: true, journal: func(epoch int64) *types.Sandbox {
+			return &types.Sandbox{MoveIn: &types.MoveIn{From: "a", Epoch: epoch}}
+		}, check: func(t *testing.T, eng *fakeEngine) {
+			if !slices.Contains(eng.starts, "sbx-moved") {
+				t.Errorf("starts %v, want the received VM started", eng.starts)
+			}
+		}},
+		"target at aborted": {node: "b", reach: moves.Aborted, journal: func(epoch int64) *types.Sandbox {
+			return &types.Sandbox{MoveIn: &types.MoveIn{From: "a", Epoch: epoch}}
+		}, check: func(t *testing.T, eng *fakeEngine) {
+			if !slices.Contains(eng.removes, "sbx-moved") || slices.Contains(eng.starts, "sbx-moved") {
+				t.Errorf("removes %v starts %v, want the received VM removed unstarted", eng.removes, eng.starts)
+			}
+		}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			c := newFailoverCluster(t)
+			reg := movestest.NewMem()
+			c.moves = reg
+			ctx := t.Context()
+			epoch, _ := reg.Begin(ctx, "sb_moved", "a", "b")
+			path := map[moves.State][]moves.State{moves.Final: {moves.Final}, moves.Committed: {moves.Final, moves.Committed}, moves.Aborted: {moves.Aborted}}[tt.reach]
+			from, at := moves.Pending, epoch
+			for _, to := range path {
+				at, _ = reg.Advance(ctx, "sb_moved", at, from, to)
+				from = to
+			}
+			sb := tt.journal(epoch)
+			sb.ID, sb.VMName, sb.Key, sb.Token, sb.Deadline = "sb_moved", "sbx-moved", testKey, "tok", time.Now().Add(time.Hour)
+			dataDir := t.TempDir()
+			seedClaims(t, dataDir, map[string]*types.Sandbox{sb.ID: sb})
+			if err := os.MkdirAll(filepath.Join(dataDir, movesDir, sb.ID), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			eng := newFakeEngine()
+			eng.vms["sbx-moved"], eng.stopped["sbx-moved"] = "/vsock/sbx-moved", sb.MoveIn != nil
+			m := c.nodeOn(t, eng, tt.node, dataDir, keepAnHour)
+			m.liftFence()
+			if err := m.Reconcile(ctx); err != nil {
+				t.Fatalf("reconcile: %v", err)
+			}
+			waitFor(t, func() bool { return !m.moveHeld(sb.ID) })
+			waitFor(t, func() bool { _, ok, _ := reg.Get(ctx, sb.ID); return !ok || tt.node == "b" })
+			held, ok := m.byID(sb.ID)
+			if ok != tt.wantClaim {
+				t.Fatalf("claim held %v, want %v", ok, tt.wantClaim)
+			}
+			if ok && (held.MoveOut != nil || held.MoveIn != nil) {
+				t.Errorf("claim journal out %+v in %+v, want both cleared", held.MoveOut, held.MoveIn)
+			}
+			eng.mu.Lock()
+			defer eng.mu.Unlock()
+			tt.check(t, eng)
+		})
 	}
 }
 
