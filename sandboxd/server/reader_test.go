@@ -331,6 +331,29 @@ func TestSleepingAwakeClaimRelaysToItsGuest(t *testing.T) {
 	}
 }
 
+func TestSleepingReaderClosesWhenItsClientLeavesMidReply(t *testing.T) {
+	env := newSleepingEnv(t)
+	env.reader.serve = func(c net.Conn) {
+		defer func() {
+			_ = c.Close()
+			env.readerClosed <- struct{}{}
+		}()
+		if _, err := bufio.NewReader(c).ReadString('\n'); err != nil {
+			return
+		}
+		_, _ = c.Write(make([]byte, 64<<20))
+	}
+	conn, _ := env.upgrade(t)
+	send(t, conn, readFrame)
+	send(t, conn, statFrame)
+	_ = conn.Close()
+	select {
+	case <-env.readerClosed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the reader connection outlived its client")
+	}
+}
+
 func TestSleepingCloseRelaysEndsReaderConnections(t *testing.T) {
 	env := newSleepingEnv(t)
 	conn, r := env.upgrade(t)
