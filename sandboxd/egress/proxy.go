@@ -269,7 +269,7 @@ func (p *Proxy) serveConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	decision, intercept := p.tunnelDecision(host, port, true)
-	ev, route := p.routeEvent(Event{Method: r.Method, Host: host, Port: port, Decision: decision})
+	ev := Event{Method: r.Method, Host: host, Port: port, Decision: decision}
 	if intercept {
 		p.record(ev)
 		p.serveIntercept(w, r, host, port)
@@ -280,7 +280,7 @@ func (p *Proxy) serveConnect(w http.ResponseWriter, r *http.Request) {
 		denied(w, host)
 		return
 	}
-	upstream, err := p.router.Dial(r.Context(), route, "tcp", net.JoinHostPort(host, strconv.Itoa(int(port))))
+	upstream, err := p.router.Dial(r.Context(), p.router.Route(), "tcp", net.JoinHostPort(host, strconv.Itoa(int(port))))
 	ev.attach(upstream, err)
 	p.record(ev)
 	if err != nil {
@@ -347,17 +347,17 @@ func (p *Proxy) serveForward(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rule, decision := p.policy.Eval(host, r.Method, port)
-	ev, route := p.routeEvent(Event{Method: r.Method, Host: host, Port: port, Decision: decision})
-	p.relay(w, r, ev, rule, route, false, nil)
+	p.relay(w, r, Event{Method: r.Method, Host: host, Port: port, Decision: decision}, rule, false, nil)
 }
 
-func (p *Proxy) relay(w http.ResponseWriter, r *http.Request, ev Event, rule Rule, route string, mitm bool, prepare func(*http.Request)) {
+func (p *Proxy) relay(w http.ResponseWriter, r *http.Request, ev Event, rule Rule, mitm bool, prepare func(*http.Request)) {
 	if ev.Decision == DecisionDeny {
 		p.record(ev)
 		denied(w, ev.Host)
 		return
 	}
 
+	route := p.router.Route()
 	ctx := r.Context()
 	var got *net.Conn
 	if p.ends || route != "" {
@@ -453,13 +453,6 @@ func (p *Proxy) transport(route string, mitm bool) *http.Transport {
 		pools.routed[key] = tr
 	}
 	return tr
-}
-
-func (p *Proxy) routeEvent(ev Event) (Event, string) {
-	if ev.Decision != DecisionAllow {
-		return ev, ""
-	}
-	return ev, p.router.Route()
 }
 
 func (p *Proxy) reportTransfer(ev Event, sent, received int64) {

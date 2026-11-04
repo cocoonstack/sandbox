@@ -22,19 +22,9 @@ func GenerateRoot(commonName string) (certPEM, keyPEM []byte, err error) {
 	if err != nil {
 		return nil, nil, fmt.Errorf("generate root key: %w", err)
 	}
-	serial, err := serialNumber()
+	tmpl, err := caTemplate(commonName, rootValidity)
 	if err != nil {
 		return nil, nil, err
-	}
-	now := time.Now()
-	tmpl := &x509.Certificate{
-		SerialNumber:          serial,
-		Subject:               pkix.Name{CommonName: commonName},
-		NotBefore:             now.Add(-clockSkew),
-		NotAfter:              now.Add(rootValidity),
-		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
-		BasicConstraintsValid: true,
-		IsCA:                  true,
 	}
 	return marshalCA(tmpl, tmpl, key, key)
 }
@@ -53,22 +43,29 @@ func IssueIntermediate(rootCertPEM, rootKeyPEM []byte, nodeID string) (certPEM, 
 	if err != nil {
 		return nil, nil, fmt.Errorf("generate intermediate key: %w", err)
 	}
-	serial, err := serialNumber()
+	tmpl, err := caTemplate("sandbox egress intermediate "+nodeID, interValidity)
 	if err != nil {
 		return nil, nil, err
 	}
+	tmpl.MaxPathLenZero = true
+	return marshalCA(tmpl, root, rootKey, key)
+}
+
+func caTemplate(commonName string, validity time.Duration) (*x509.Certificate, error) {
+	serial, err := serialNumber()
+	if err != nil {
+		return nil, err
+	}
 	now := time.Now()
-	tmpl := &x509.Certificate{
+	return &x509.Certificate{
 		SerialNumber:          serial,
-		Subject:               pkix.Name{CommonName: "sandbox egress intermediate " + nodeID},
+		Subject:               pkix.Name{CommonName: commonName},
 		NotBefore:             now.Add(-clockSkew),
-		NotAfter:              now.Add(interValidity),
+		NotAfter:              now.Add(validity),
 		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
 		BasicConstraintsValid: true,
 		IsCA:                  true,
-		MaxPathLenZero:        true,
-	}
-	return marshalCA(tmpl, root, rootKey, key)
+	}, nil
 }
 
 func marshalCA(tmpl, parent *x509.Certificate, signer, key *ecdsa.PrivateKey) (certPEM, keyPEM []byte, err error) {

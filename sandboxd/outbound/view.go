@@ -85,7 +85,7 @@ func (v *View) HasClass(name string) bool {
 }
 
 // Resolve is sb's effective policy, pool ∩ tenant: root has no tenant layer, an unpooled key no pool one, a NoEgress claim none at all; pooled runs only when the key has no pool policy.
-func (v *View) Resolve(sb *types.Sandbox, pooled PooledFunc) (egress.Evaluator, bool) {
+func (v *View) Resolve(sb *types.Sandbox, pooled PooledFunc) (egress.PolicyEvaluator, bool) {
 	if sb.NoEgress {
 		return nil, false
 	}

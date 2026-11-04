@@ -64,7 +64,7 @@ func (p *Proxy) serveSocks(ctx context.Context, conn net.Conn) {
 	if intercept || port == 0 {
 		decision = DecisionDeny
 	}
-	ev, route := p.routeEvent(Event{Method: methodSOCKS, Host: host, Port: port, Decision: decision})
+	ev := Event{Method: methodSOCKS, Host: host, Port: port, Decision: decision}
 	if decision == DecisionDeny {
 		p.record(ev)
 		_ = socksReply(conn, socksDenied)
@@ -72,7 +72,7 @@ func (p *Proxy) serveSocks(ctx context.Context, conn net.Conn) {
 	}
 	dialCtx, cancel := context.WithTimeout(ctx, socksTimeout)
 	defer cancel()
-	upstream, err := p.router.Dial(dialCtx, route, "tcp", net.JoinHostPort(host, strconv.Itoa(int(port))))
+	upstream, err := p.router.Dial(dialCtx, p.router.Route(), "tcp", net.JoinHostPort(host, strconv.Itoa(int(port))))
 	ev.attach(upstream, err)
 	p.record(ev)
 	if err != nil {
