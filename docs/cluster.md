@@ -79,7 +79,7 @@ digest. Nodes gossip only their currently available catalog names: host paths
 and access lists never leave the node. After config load the set appears on the
 next gossip tick; later image distribution or removal is detected the same way.
 The node epoch bumps only when one of the gossiped sets — warm counts,
-template hashes, volume names — actually changes.
+template hashes, volume names — or the config digest actually changes.
 
 A writable name (`writable: true`) still needs its catalog entry — name,
 access list, and the `writable` flag — declared identically on every node

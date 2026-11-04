@@ -187,7 +187,7 @@ Responses include `volumes_want`, `volumes`, `states`, and `converging`.
 name the three states. A pending state with `converging=False` needs an explicit
 retry. `VolumeError`, exported from `cocoonsandbox` and `cocoonsandbox.errors`,
 retains a complete failure view in `.response`. Complete replies update both
-public sets; incomplete errors preserve the last view. Serialize calls on one
+public sets (`sb.volumes_want`, `sb.volumes`); incomplete errors preserve the last view. Serialize calls on one
 handle. See the [replacement tutorial](live-volumes.md) and
 [API recovery contract](sandboxd-api.md#partial-failure-and-recovery).
 
@@ -387,7 +387,7 @@ split multi-byte sequences) and returns the exit code. `user` de-escalates
 inside the guest; `session=` routes the command into a persistent session,
 where only `argv` applies — the session owns the cwd, environment and user,
 and stderr arrives merged into stdout. A command's environment is `PATH`,
-`TERM` and the lane's proxy variables plus `env`, not the image's `ENV`. The
+`TERM`, the lane's proxy variables and the claim env, plus `env`, not the image's `ENV`. The
 guest kills a foreground command whose connection dropped only once it next
 writes output, so a `run(timeout=)` cut does not leave that to the drop: once
 the guest has reported the command's pid, the cut sends that pid a `kill` over

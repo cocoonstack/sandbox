@@ -162,7 +162,7 @@ Facts to plan around, stated so the boundary is honest:
   `meta_store.usage` the usage journal also lands in the
   [shared usage table](deploy.md#shared-usage-table); the audit journal stays
   local.
-- **Rate limiting is capacity-based only** (`max_claims`, `max_running`,
+- **API rate limiting is capacity-based only** (`max_claims`, `max_running`,
   `disk_reserve`, `memory_limit` and per-tenant caps answer 429). The API assumes callers inside the trust boundary;
   front it with your own limiter if semi-trusted automation can reach it.
 - **A dead node's running sandboxes die with it** unless their pool

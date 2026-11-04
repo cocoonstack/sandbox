@@ -278,7 +278,7 @@ and `.Converging`. `VolumePhase` has `VolumeAttached`, `VolumePending`, and
 `VolumeDetaching` constants. Python exposes `VolumePhase` and the corresponding
 `VOLUME_ATTACHED`, `VOLUME_PENDING`, and `VOLUME_DETACHING` constants. Each state
 can include an `error`. Methods use the client API token on the owning node
-and update both public sets from each complete response, including a partial failure. Serialize changes to one handle as with
+and update both public sets (`Sandbox.VolumesWant`, `Sandbox.Volumes`) from each complete response, including a partial failure. Serialize changes to one handle as with
 `Renew`. Returned views do not share the handle's slices or dictionaries.
 
 Go returns `*sandbox.VolumeError` with a `Response` alongside the returned view.
@@ -329,7 +329,8 @@ err = sb.SetEnv(ctx, nil)   // replaces the whole env; nil clears it
 `WithEnv` sets the claim's own env under the [claim rules](sandboxd-api.md#post-v1claim).
 An entry with a nil `Guest` is delivered into the guest; `Guest: new(false)`
 keeps it host-side, where only the node's egress reads it (see
-[secrets](egress.md#claim-env-and-secrets)). `Env`, `SetEnv` and `PatchEnv`
+[secrets](egress.md#claim-env-and-secrets)), and `Inject: &sandbox.EnvInject{Hosts: …}`
+has egress send it to those hosts. `Env`, `SetEnv` and `PatchEnv`
 call [the env verbs](sandboxd-api.md#getputpatch-v1sandboxesidenv) on
 the claim's owner with the client's API token, not the sandbox token.
 `PatchEnv` sets each entry, removes each nil one and keeps the rest as stored,
@@ -547,7 +548,7 @@ the guest), `Session` (run inside a persistent session, below), `Stdin`
 across Runs), `Stdout`/`Stderr` (nil discards). With `Session` set only
 `Argv` applies: the session owns the cwd, environment and user, its commands
 read `/dev/null`, and stderr arrives merged into stdout. A command's
-environment is `PATH`, `TERM` and the lane's proxy variables plus `Env` — not
+environment is `PATH`, `TERM`, the lane's proxy variables and the claim env, plus `Env` — not
 the image's `ENV`; `HOME` and `USER` are set only with `User`. The guest kills
 a foreground command whose connection dropped only once it next writes output,
 so `Run` does not leave that to the drop: when its ctx ends after the guest
@@ -716,10 +717,13 @@ info, _ = client.SetPools(ctx, pools)     // retune warm targets without a resta
 res, _ := client.SetPoolsCluster(ctx, pools) // per-node results; retry the failures
 sb = client.Attach(ownerAddr, id, token)  // bind a known handle, no lookup round-trip
 
-err = client.PutTenant(ctx, sandbox.TenantSpec{Name: "u:42", Token: tok, MaxClaims: 10})
+err = client.PutTenant(ctx, sandbox.TenantSpec{Name: "u:42", Token: tok, MaxClaims: 10, EgressClass: "desk"})
+err = client.DeleteTenant(ctx, "u:42")
 res, _ = client.PutTenantCluster(ctx, sandbox.TenantSpec{Name: "u:42", MaxClaims: 20}) // token kept
 res, _ = client.DeleteTenantCluster(ctx, "u:42")
 page, _ := client.Tenants(ctx, "", 0)     // page.Tenants: names, caps, live claims, removed tenants; never tokens; page.Next pages
+page, _ = client.SetTenants(ctx, specs)   // replace the whole set
+res, _ = client.SetTenantsCluster(ctx, specs)
 ```
 
 `Sandboxes` is scoped to the calling token, so a tenant sees only its own

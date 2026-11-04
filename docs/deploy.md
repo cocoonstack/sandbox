@@ -1028,7 +1028,7 @@ Effects on what already runs:
   point at a different variable, but only one that was already set when
   sandboxd started.
 
-A successful reload writes an `op:"config_reload"` audit record listing what
+A reload that changes a setting writes an `op:"config_reload"` audit record listing what
 changed. Each node reloads its own file; on a cluster, distribute the file and
 reload every node.
 

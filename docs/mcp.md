@@ -29,18 +29,18 @@ in the guest, which can hold its reply up to 5 s past the cap.
 | tool | what it does |
 |---|---|
 | `create_sandbox` | claim a microVM and return its id plus deadline; optional `template`, `net` (`none` default, or `egress`), `size` (`small` default, `medium`, `large`, `xlarge`, `2xlarge`) and `ttl_seconds` (0 means one hour); warm claims take milliseconds, nothing renews the deadline |
-| `exec` | run a shell command to completion; returns stdout, stderr and the exit code, each stream keeping its first 1 MiB with `truncated` set past that; a cut-off or dropped run returns the output collected so far next to an `error` field; a hibernated sandbox wakes transparently |
-| `spawn` | start a command detached and return its pid; output goes to a 256 KiB ring buffer that `logs` replays |
+| `exec` | run a shell command to completion, with an optional `cwd`; returns stdout, stderr and the exit code, each stream keeping its first 1 MiB with `truncated` set past that; a cut-off or dropped run returns the output collected so far next to an `error` field; a hibernated sandbox wakes transparently |
+| `spawn` | start a command detached, with an optional `cwd`, and return its pid; output goes to a 256 KiB ring buffer that `logs` replays |
 | `ps` | list tracked processes (exec, spawn, pty) with state, exit code and start time |
 | `logs` | replay the newest 256 KiB of a tracked process's stdout/stderr (+ exit code once ended); an exited process is forgotten after 5 minutes |
-| `kill` | signal a tracked process (0 = SIGKILL); an exited process is a no-op success |
+| `kill` | send `signal` to a tracked process (0 = SIGKILL); an exited process is a no-op success |
 | `write_file` / `read_file` / `list_dir` | atomic whole-file write (parent must exist); whole-file text read of a regular file up to 1 MiB (a larger file, a directory or a device is an error, invalid UTF-8 replaced, missing path is an error); one-level listing of `{name, kind, size}` entries |
 | `fork` | clone into N children (1 to the node's `max_fork_count`, default 16) carrying exact memory + disk state, all-or-nothing; the parent keeps running and each child lives one hour |
-| `checkpoint` | capture full state without stopping; returns a `checkpoint_id` that can be branched repeatedly |
+| `checkpoint` | capture full state without stopping, with an optional `name`; returns a `checkpoint_id` that can be branched repeatedly |
 | `branch_checkpoint` | claim a fresh sandbox from a checkpoint's captured moment; it lives one hour |
 | `list_checkpoints` / `delete_checkpoint` | checkpoint lifecycle |
 | `hibernate` | snapshot + stop, freeing memory while keeping id, files and processes; the next call that reaches the guest wakes it |
-| `promote` | publish the sandbox as a named template on its node; re-promoting replaces it |
+| `promote` | publish the sandbox as the template `template_name` on its node; re-promoting replaces it |
 | `release` | destroy the sandbox and its files; the session forgets the id, so a second release is rejected as unknown |
 | `node_info` | warm pools, promoted templates, live claims, drain state, capacity and mesh peers; needs the operator token |
 
