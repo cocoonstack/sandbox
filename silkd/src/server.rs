@@ -35,26 +35,27 @@ impl State {
         W: AsyncWrite + Unpin,
     {
         let mut line = Vec::new();
-        let mut next: Option<Request> = None;
+        let mut next: Option<serde_json::Result<Request>> = None;
         let mut served = false;
         loop {
-            let req = match next.take() {
-                Some(req) => req,
+            let parsed = match next.take() {
+                Some(parsed) => parsed,
                 None => {
                     if !proto::read_frame_into(&mut reader, &mut line).await? {
                         return Ok(());
                     }
-                    match serde_json::from_slice(&line) {
-                        Ok(req) => req,
-                        Err(e) => {
-                            return proto::error_frame(
-                                &mut writer,
-                                ErrorKind::BadRequest,
-                                format!("parse: {e}"),
-                            )
-                            .await;
-                        }
-                    }
+                    serde_json::from_slice(&line)
+                }
+            };
+            let req = match parsed {
+                Ok(req) => req,
+                Err(e) => {
+                    return proto::error_frame(
+                        &mut writer,
+                        ErrorKind::BadRequest,
+                        format!("parse: {e}"),
+                    )
+                    .await;
                 }
             };
             // a finished RPC's input frames can still be in flight
@@ -72,7 +73,7 @@ impl State {
         req: Request,
         mut reader: R,
         writer: &mut W,
-    ) -> std::io::Result<(R, Option<Request>)>
+    ) -> std::io::Result<(R, Option<serde_json::Result<Request>>)>
     where
         R: AsyncBufRead + Unpin + Send + 'static,
         W: AsyncWrite + Unpin,
@@ -191,7 +192,7 @@ impl State {
         e: ExecReq,
         reader: R,
         writer: &mut W,
-    ) -> std::io::Result<(R, Option<Request>)>
+    ) -> std::io::Result<(R, Option<serde_json::Result<Request>>)>
     where
         R: AsyncBufRead + Unpin + Send + 'static,
         W: AsyncWrite + Unpin,
@@ -311,7 +312,7 @@ impl Default for State {
     }
 }
 
-type Feeder<R> = JoinHandle<(R, Option<Request>)>;
+type Feeder<R> = JoinHandle<(R, Option<serde_json::Result<Request>>)>;
 
 fn spawn_feeder<R>(reader: R) -> (mpsc::Receiver<Request>, Feeder<R>)
 where
@@ -325,7 +326,7 @@ where
 async fn finish_feeder<R>(
     feeder: Feeder<R>,
     res: std::io::Result<()>,
-) -> std::io::Result<(R, Option<Request>)> {
+) -> std::io::Result<(R, Option<serde_json::Result<Request>>)> {
     if let Err(e) = res {
         feeder.abort();
         return Err(e);
@@ -334,19 +335,20 @@ async fn finish_feeder<R>(
 }
 
 /// Reads the client's frames during a streaming RPC: input frames go to the handler, the next request ends the feed.
-async fn feed_client<R>(mut reader: R, tx: mpsc::Sender<Request>) -> (R, Option<Request>)
+async fn feed_client<R>(
+    mut reader: R,
+    tx: mpsc::Sender<Request>,
+) -> (R, Option<serde_json::Result<Request>>)
 where
     R: AsyncBufRead + Unpin,
 {
     let mut line = Vec::new();
     let mut data = Vec::new();
     while let Ok(true) = proto::read_frame_into(&mut reader, &mut line).await {
-        let Ok(req) = proto::parse_request(&line, &mut data) else {
-            break;
+        let req = match proto::parse_request(&line, &mut data) {
+            Ok(req) if req.is_continuation() => req,
+            parsed => return (reader, Some(parsed)),
         };
-        if !req.is_continuation() {
-            return (reader, Some(req));
-        }
         // a closed channel is a finished handler, whose late input is dropped
         let _ = tx.send(req).await;
     }
