@@ -50,7 +50,12 @@ func (e *Engine) MigrateCapture(ctx context.Context, vmName, series string, fina
 
 // MigrateReceive restores a transferred series into a VM whose guest stays paused until Start.
 func (e *Engine) MigrateReceive(ctx context.Context, fromDir, name string, key types.PoolKey) (types.VMRecord, error) {
-	args := append([]string{"vm", "migrate", "receive", "--from-dir", fromDir}, e.cloneFlags(name, key)...)
+	restore := e.restoreArgs()
+	if e.restoreMode == types.RestoreOnDemand {
+		// cocoon's hypervisor rejects ondemand for a series with deltas, so its default applies
+		restore = nil
+	}
+	args := append([]string{"vm", "migrate", "receive", "--from-dir", fromDir}, e.cloneFlags(name, key, restore)...)
 	return e.runRecord(ctx, dumpTimeout, dumpTermGrace, args...)
 }
 

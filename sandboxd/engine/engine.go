@@ -387,13 +387,13 @@ func (e *Engine) probe(ctx context.Context, vsockSocket string, port int, timeou
 }
 
 func (e *Engine) cloneArgs(name string, key types.PoolKey, source ...string) []string {
-	return append(append([]string{"vm", "clone"}, source...), e.cloneFlags(name, key)...)
+	return append(append([]string{"vm", "clone"}, source...), e.cloneFlags(name, key, e.restoreArgs())...)
 }
 
-func (e *Engine) cloneFlags(name string, key types.PoolKey) []string {
+func (e *Engine) cloneFlags(name string, key types.PoolKey, restore []string) []string {
 	// --pull: a checkpoint/template export carries only COW + memory, not the base image.
 	args := []string{argName, name, "--pull", argOutput, formatJSON, e.directIOArg()}
-	args = append(args, e.restoreArgs()...)
+	args = append(args, restore...)
 	return append(args, e.netArgs(name, key, false)...)
 }
 

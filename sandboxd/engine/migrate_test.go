@@ -84,3 +84,28 @@ func TestMigrateCaptureRejectsOutputThatIsNotARound(t *testing.T) {
 		t.Errorf("capture of prose = %v, want a parse error", err)
 	}
 }
+
+func TestMigrateReceiveLeavesTheOndemandRestoreModeToCocoon(t *testing.T) {
+	trace := filepath.Join(t.TempDir(), "trace")
+	t.Setenv("COCOON_TEST_TRACE", trace)
+	fakeCocoon(t, migrateCocoon)
+	key := types.PoolKey{Template: "rt:24.04", Net: types.NetNone, Size: types.SizeSmall}
+	for _, mode := range []types.RestoreMode{types.RestoreOnDemand, types.RestoreCopy} {
+		e := New("cocoon", nil, nil, false, false, mode)
+		if _, err := e.MigrateReceive(t.Context(), "/xfer/s1", "sbx-1", key); err != nil {
+			t.Fatalf("receive under %s: %v", mode, err)
+		}
+		_, _ = e.Clone(t.Context(), "/golden", "sbx-2", key)
+	}
+	data, err := os.ReadFile(trace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	calls := strings.Split(strings.TrimSpace(string(data)), "\n")
+	receive := "vm migrate receive --from-dir /xfer/s1 --name sbx-1 --pull --output json --no-direct-io=false"
+	clone := "vm clone --from-dir /golden --name sbx-2 --pull --output json --no-direct-io=false --restore-mode "
+	want := []string{receive, clone + "ondemand", receive + " --restore-mode copy", clone + "copy"}
+	if !slices.Equal(calls, want) {
+		t.Errorf("cocoon calls\n%q\nwant\n%q", calls, want)
+	}
+}
