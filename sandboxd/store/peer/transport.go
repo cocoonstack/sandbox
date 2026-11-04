@@ -246,15 +246,7 @@ func tarInto(src, prefix string, tw *tar.Writer) error {
 				Typeflag: tar.TypeDir,
 			})
 		}
-		if err = tw.WriteHeader(&tar.Header{
-			Name:       name,
-			Mode:       int64(fi.Mode().Perm()),
-			Typeflag:   tar.TypeReg,
-			PAXRecords: map[string]string{paxFileSize: strconv.FormatInt(fi.Size(), 10)},
-		}); err != nil {
-			return err
-		}
-		return tarChunks(path, name, fi.Size(), tw, scratch)
+		return tarFile(path, name, fi, tw, scratch)
 	})
 	if err != nil {
 		return fmt.Errorf("tar %s: %w", src, err)
@@ -262,8 +254,20 @@ func tarInto(src, prefix string, tw *tar.Writer) error {
 	return nil
 }
 
+func tarFile(path, name string, fi fs.FileInfo, tw *tar.Writer, scratch func() []byte) error {
+	if err := tw.WriteHeader(&tar.Header{
+		Name:       name,
+		Mode:       int64(fi.Mode().Perm()),
+		Typeflag:   tar.TypeReg,
+		PAXRecords: map[string]string{paxFileSize: strconv.FormatInt(fi.Size(), 10)},
+	}); err != nil {
+		return err
+	}
+	return tarChunks(path, name, fi.Size(), tw, scratch)
+}
+
 func tarChunks(path, name string, size int64, tw *tar.Writer, scratch func() []byte) error {
-	f, openErr := os.Open(path) //nolint:gosec // path comes from WalkDir over src
+	f, openErr := os.Open(path) //nolint:gosec // path is a file of a directory this node sends
 	if openErr != nil {
 		return openErr
 	}
