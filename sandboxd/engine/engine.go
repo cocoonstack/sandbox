@@ -16,6 +16,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -66,11 +67,15 @@ const (
 	cocoonMaxProcs = 4
 )
 
-// capacitySignatures mean the node cannot attach another VM, not that this VM failed.
-var capacitySignatures = []string{
-	"exchange full",
-	"no space left on device",
-}
+var (
+	errStopping = errors.New("sandboxd is stopping")
+
+	// capacitySignatures mean the node cannot attach another VM, not that this VM failed.
+	capacitySignatures = []string{
+		"exchange full",
+		"no space left on device",
+	}
+)
 
 // StaleCreateOutcome reports what reconcile-stale-create did with a record.
 type StaleCreateOutcome string
@@ -84,6 +89,9 @@ type Engine struct {
 	noBalloon   bool
 	restoreMode types.RestoreMode
 	dumps       chan struct{}
+	mu          sync.Mutex
+	closed      bool
+	running     sync.WaitGroup
 	// version caches the first successful query; replacing cocoon takes a restart.
 	version atomic.Pointer[string]
 }
@@ -91,6 +99,14 @@ type Engine struct {
 // New returns a cocoon engine with node-wide network and disk policy.
 func New(bin string, bridges, networks []string, noDirectIO, noBalloon bool, restoreMode types.RestoreMode) *Engine {
 	return &Engine{bin: bin, bridges: bridges, networks: networks, noDirectIO: noDirectIO, noBalloon: noBalloon, restoreMode: restoreMode, dumps: make(chan struct{}, memoryDumps)}
+}
+
+// Close refuses new cocoon commands and waits for the running ones, which die on their next log line once sandboxd's stderr pipe closes.
+func (e *Engine) Close() {
+	e.mu.Lock()
+	e.closed = true
+	e.mu.Unlock()
+	e.running.Wait()
 }
 
 // Version reports cocoon's version string: a "vX.Y.Z" release or a "master-<sha>" dev build.
@@ -422,6 +438,10 @@ func (e *Engine) run(ctx context.Context, args ...string) ([]byte, error) {
 }
 
 func (e *Engine) runFor(ctx context.Context, timeout, termGrace time.Duration, args ...string) ([]byte, error) {
+	if !e.begin() {
+		return nil, errStopping
+	}
+	defer e.running.Done()
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	log.WithFunc("engine.runFor").Debugf(ctx, "cocoon %s", strings.Join(args, " "))
@@ -435,6 +455,15 @@ func (e *Engine) runFor(ctx context.Context, timeout, termGrace time.Duration, a
 		return nil, fmt.Errorf("cocoon %s: %w: %s", strings.Join(args[:min(len(args), 2)], " "), err, tail(stderr.String()))
 	}
 	return stdout.Bytes(), nil
+}
+
+func (e *Engine) begin() bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if !e.closed {
+		e.running.Add(1)
+	}
+	return !e.closed
 }
 
 func (e *Engine) runDump(ctx context.Context, args ...string) error {

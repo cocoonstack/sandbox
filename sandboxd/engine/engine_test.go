@@ -290,6 +290,44 @@ func TestAMemoryCommandGetsItsLongerTermGraceAndAColdBootTheCommandOne(t *testin
 	}
 }
 
+func TestCloseWaitsForARunningCommandAndRefusesNewOnes(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	bin, ready, release := filepath.Join(dir, "cocoon"), filepath.Join(dir, "ready"), filepath.Join(dir, "release")
+	script := "#!/bin/sh\n: > " + ready + "\nwhile [ ! -e " + release + " ]; do sleep 0.05; done\n"
+	if err := os.WriteFile(bin, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	e := New(bin, nil, nil, false, false, "")
+	done := make(chan error, 1)
+	go func() { done <- e.Hibernate(t.Context(), "vm", "snap") }()
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+		if _, err := os.Stat(ready); err == nil {
+			break
+		}
+	}
+	closed := make(chan struct{})
+	go func() {
+		e.Close()
+		close(closed)
+	}()
+	select {
+	case <-closed:
+		t.Fatal("Close returned while a cocoon command was running")
+	case <-time.After(200 * time.Millisecond):
+	}
+	if err := os.WriteFile(release, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("the running hibernate: %v", err)
+	}
+	<-closed
+	if _, err := e.List(t.Context()); !errors.Is(err, errStopping) {
+		t.Errorf("List after Close = %v, want %v", err, errStopping)
+	}
+}
+
 func TestADialOfAGuestThatNeverAnswersFails(t *testing.T) {
 	t.Parallel()
 	path := sockPath(t)

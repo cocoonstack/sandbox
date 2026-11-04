@@ -655,6 +655,7 @@ ExecStart=/usr/local/bin/sandboxd -config /etc/sandboxd/config.json
 Restart=on-failure
 RestartSec=5s
 KillMode=process
+TimeoutStopSec=27min
 Environment=SANDBOXD_LOG_LEVEL=info
 
 [Install]
@@ -673,8 +674,12 @@ test the output for emptiness.
 
 Stopping sandboxd leaves VMs alive; the next start reconciles them. The unit's
 `KillMode=process` is what guarantees it: systemd signals sandboxd alone, so a
-VMM that cocoon could not move into its own scope, and any `cocoon` call still
-in flight, outlive the stop instead of dying with the service's cgroup. Claimed
+VMM that cocoon could not move into its own scope outlives the stop instead of
+dying with the service's cgroup. sandboxd starts no new `cocoon` command once
+stopped and waits for the running ones, since cocoon dies on its next log line
+once sandboxd's end of its stderr closes, and a hibernate killed that way leaves
+the guest paused. A save or hibernate can take 26 minutes, hence
+`TimeoutStopSec=27min`; stops normally take seconds. Claimed
 sandboxes are reaped when their TTL expires (default 5m, capped at 24h).
 
 A snapshot save, hibernate, export, restore or clone has 15 minutes. Once canceled, a
