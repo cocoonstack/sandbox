@@ -228,6 +228,8 @@ func (m *Manager) checkVolumeRunLocked(ctx context.Context, sb *types.Sandbox, r
 		return ErrUnknownSandbox
 	}
 	switch {
+	case m.midMoveLocked(sb):
+		return ErrEvacuating
 	case sb.Failed != "":
 		return ErrFailed
 	case sb.ArchiveCk != "":

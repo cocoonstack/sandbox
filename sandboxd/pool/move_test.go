@@ -545,6 +545,42 @@ func TestMoveRefusesWritesThatWouldMissTheRecordTheTargetReceives(t *testing.T) 
 	}
 }
 
+func TestMoveHoldsOffVolumeChanges(t *testing.T) {
+	addData := types.VolumePatch{Add: []types.Volume{{Name: "data", AttachOnly: true}}}
+	t.Run("during the rounds", func(t *testing.T) {
+		mc := newMoveClusterWith(t, func(c *failoverCluster) { c.volumes = liveCatalog(t) })
+		sb := mustClaim(t, mc.s, testKey)
+		mc.p.roundHook = func(round int) error {
+			if round == 1 {
+				if _, err := mc.s.PatchVolumes(t.Context(), sb.ID, "", addData); !errors.Is(err, ErrEvacuating) {
+					t.Errorf("volume change during the rounds: %v, want ErrEvacuating", err)
+				}
+			}
+			return nil
+		}
+		if _, err := mc.s.Move(t.Context(), sb.ID, "b", time.Minute); err != nil {
+			t.Fatalf("move: %v", err)
+		}
+		if ops := fakeOf(mc.s).volumeOpsLog(); slices.ContainsFunc(ops, func(op string) bool { return strings.HasPrefix(op, "attach") }) {
+			t.Errorf("volume ops %v during a move", ops)
+		}
+	})
+	t.Run("on a received claim", func(t *testing.T) {
+		mc := newMoveClusterWith(t, func(c *failoverCluster) { c.volumes = liveCatalog(t) })
+		sb := mustClaim(t, mc.s, testKey)
+		lossy := &lossyMoves{Registry: mc.moveReg, downAfterCommit: true}
+		mc.t.moves = lossy
+		if _, err := mc.s.Move(t.Context(), sb.ID, "b", time.Minute); err != nil {
+			t.Fatalf("move: %v", err)
+		}
+		if _, err := mc.t.PatchVolumes(t.Context(), sb.ID, "", addData); !errors.Is(err, ErrEvacuating) {
+			t.Errorf("volume change on a received claim: %v, want ErrEvacuating", err)
+		}
+		lossy.setDown(false)
+		waitFor(t, func() bool { return !mc.t.moveHeld(sb.ID) })
+	})
+}
+
 func TestMoveRefusesClaimsThatCannotMove(t *testing.T) {
 	mc := newMoveCluster(t)
 	hibernatedSb := mustClaim(t, mc.s, testKey)
