@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"maps"
 	"math/rand/v2"
-	"path/filepath"
 	"slices"
 	"sync"
 	"time"
@@ -17,11 +16,7 @@ import (
 	"github.com/projecteru2/core/log"
 )
 
-const (
-	leaveTimeout = time.Second
-
-	epochLease = 1024
-)
+const leaveTimeout = time.Second
 
 // NodeState is one node's gossiped placement view; the higher Epoch wins a merge.
 type NodeState struct {
@@ -39,12 +34,8 @@ type nodeMatch func(NodeState) bool
 
 // Mesh is the node's view of the cluster and its own gossiped state.
 type Mesh struct {
-	ml        *memberlist.Memberlist
-	epochPath string
-	ctx       context.Context
-
-	updateMu sync.Mutex
-	leased   uint64
+	ml  *memberlist.Memberlist
+	ctx context.Context
 
 	mu   sync.Mutex
 	self NodeState
@@ -53,20 +44,14 @@ type Mesh struct {
 }
 
 // New starts a mesh member listening per cfg.
-func New(ctx context.Context, cfg *memberlist.Config, self NodeState, secretKey []byte, dataDir string) (*Mesh, error) {
-	epochPath := filepath.Join(dataDir, "mesh-epoch")
-	self.Epoch = max(uint64(time.Now().UnixNano()), loadEpoch(epochPath)+1)
+func New(ctx context.Context, cfg *memberlist.Config, self NodeState, secretKey []byte) (*Mesh, error) {
+	self.Epoch = uint64(time.Now().UnixNano())
 	self.Pools = map[string]int{}
 	m := &Mesh{
-		ctx:       ctx,
-		epochPath: epochPath,
-		leased:    self.Epoch + epochLease,
-		self:      self,
-		view:      map[string]NodeState{self.NodeID: self},
-		live:      map[string]struct{}{},
-	}
-	if err := storeEpoch(m.epochPath, m.leased); err != nil {
-		return nil, fmt.Errorf("persist mesh epoch: %w", err)
+		ctx:  ctx,
+		self: self,
+		view: map[string]NodeState{self.NodeID: self},
+		live: map[string]struct{}{},
 	}
 
 	cfg.Name = self.NodeID
@@ -95,8 +80,8 @@ func (m *Mesh) Join(seeds []string) error {
 }
 
 // UpdateSelf republishes this node's counts, templates, and volumes; both slices must be sorted.
-func (m *Mesh) UpdateSelf(ctx context.Context, pools map[string]int, templates, volumes []string) {
-	m.publish(ctx, func(self *NodeState) bool {
+func (m *Mesh) UpdateSelf(pools map[string]int, templates, volumes []string) {
+	m.publish(func(self *NodeState) bool {
 		if maps.Equal(self.Pools, pools) && slices.Equal(self.Templates, templates) && slices.Equal(self.Volumes, volumes) {
 			return false
 		}
@@ -106,8 +91,8 @@ func (m *Mesh) UpdateSelf(ctx context.Context, pools map[string]int, templates, 
 }
 
 // UpdateDigest republishes this node's config digest after a runtime change to the cluster-invariant config.
-func (m *Mesh) UpdateDigest(ctx context.Context, digest string) {
-	m.publish(ctx, func(self *NodeState) bool {
+func (m *Mesh) UpdateDigest(digest string) {
+	m.publish(func(self *NodeState) bool {
 		if self.Digest == digest {
 			return false
 		}
@@ -265,31 +250,15 @@ func (m *Mesh) owners(match nodeMatch) []string {
 	return owners[:min(len(owners), 2)]
 }
 
-// publish applies change under a fresh epoch; the epoch lease is persisted first so a restart never reuses one.
-func (m *Mesh) publish(ctx context.Context, change func(*NodeState) bool) {
-	m.updateMu.Lock()
-	defer m.updateMu.Unlock()
+// publish applies change under a fresh epoch.
+func (m *Mesh) publish(change func(*NodeState) bool) {
 	m.mu.Lock()
-	probe := m.self
-	if !change(&probe) {
-		m.mu.Unlock()
+	defer m.mu.Unlock()
+	if !change(&m.self) {
 		return
 	}
-	epoch := m.self.Epoch + 1
-	m.mu.Unlock()
-	if epoch > m.leased {
-		leased := epoch + epochLease
-		if err := storeEpoch(m.epochPath, leased); err != nil {
-			log.WithFunc("mesh.publish").Warnf(ctx, "persist epoch: %v", err)
-			return
-		}
-		m.leased = leased
-	}
-	m.mu.Lock()
-	change(&m.self)
-	m.self.Epoch = epoch
+	m.self.Epoch++
 	m.view[m.self.NodeID] = m.self
-	m.mu.Unlock()
 }
 
 func (m *Mesh) admit(nodeID string) {

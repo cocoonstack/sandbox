@@ -117,9 +117,9 @@ func main() {
 		defer func() { _ = msh.Shutdown() }()
 		placer = msh
 		mgr.SetTemplateNotifier(func() {
-			msh.UpdateSelf(ctx, mgr.WarmCounts(), mgr.TemplateHashes(), mgr.VolumeNames())
+			msh.UpdateSelf(mgr.WarmCounts(), mgr.TemplateHashes(), mgr.VolumeNames())
 		})
-		republish = func() { msh.UpdateDigest(ctx, mgr.ClusterDigest()) }
+		republish = func() { msh.UpdateDigest(mgr.ClusterDigest()) }
 		mgr.OnTenants(republish)
 		clusterKey, err := cfg.Mesh.DecodedKey()
 		if err != nil {
@@ -230,11 +230,11 @@ func startMesh(ctx context.Context, cfg *config.Config, mgr *pool.Manager) (*mes
 		return nil, err
 	}
 	self := mesh.NodeState{NodeID: mc.ID(), Addr: cfg.AdvertiseAddr, ClientAddr: cfg.ClientAdvertise, Digest: mgr.ClusterDigest()}
-	msh, err := mesh.New(ctx, mlCfg, self, key, cfg.DataDir)
+	msh, err := mesh.New(ctx, mlCfg, self, key)
 	if err != nil {
 		return nil, err
 	}
-	msh.UpdateSelf(ctx, mgr.WarmCounts(), mgr.TemplateHashes(), mgr.VolumeNames())
+	msh.UpdateSelf(mgr.WarmCounts(), mgr.TemplateHashes(), mgr.VolumeNames())
 	if err := msh.Join(mc.Join); err != nil {
 		_ = msh.Shutdown()
 		return nil, err
@@ -249,7 +249,7 @@ func gossipNodeState(ctx context.Context, msh *mesh.Mesh, mgr *pool.Manager) {
 		case <-ctx.Done():
 			return
 		case <-tick:
-			msh.UpdateSelf(ctx, mgr.WarmCounts(), mgr.TemplateHashes(), mgr.VolumeNames())
+			msh.UpdateSelf(mgr.WarmCounts(), mgr.TemplateHashes(), mgr.VolumeNames())
 		}
 	}
 }

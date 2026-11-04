@@ -5,7 +5,6 @@ import (
 	"io"
 	"log"
 	"maps"
-	"path/filepath"
 	"slices"
 	"testing"
 	"time"
@@ -32,7 +31,7 @@ func TestMergeKeepsHigherEpoch(t *testing.T) {
 
 func TestMergeNeverOverwritesSelf(t *testing.T) {
 	m := newTestMesh(t, "a")
-	m.UpdateSelf(t.Context(), map[string]int{"k": 3}, nil, nil)
+	m.UpdateSelf(map[string]int{"k": 3}, nil, nil)
 
 	mergeStates(t, m, []NodeState{{NodeID: "a", Addr: "evil:9999", Epoch: 999, Pools: map[string]int{"k": 0}}})
 
@@ -45,7 +44,7 @@ func TestMergeNeverOverwritesSelf(t *testing.T) {
 
 func TestCandidatesExcludeSelfAndEmpty(t *testing.T) {
 	m := newTestMesh(t, "a")
-	m.UpdateSelf(t.Context(), map[string]int{"k": 5}, nil, nil)
+	m.UpdateSelf(map[string]int{"k": 5}, nil, nil)
 	mergeStates(t, m, []NodeState{
 		{NodeID: "b", Addr: "b:7777", Epoch: 1, Pools: map[string]int{"k": 2}},
 		{NodeID: "c", Addr: "c:7777", Epoch: 1, Pools: map[string]int{"k": 0}},
@@ -63,7 +62,7 @@ func TestCandidatesExcludeSelfAndEmpty(t *testing.T) {
 
 func TestTemplateOwnersExcludeSelfAndUnknown(t *testing.T) {
 	m := newTestMesh(t, "a")
-	m.UpdateSelf(t.Context(), nil, []string{"tpl"}, nil)
+	m.UpdateSelf(nil, []string{"tpl"}, nil)
 	mergeStates(t, m, []NodeState{
 		{NodeID: "b", Addr: "b:7777", Epoch: 1, Templates: []string{"tpl", "other"}},
 		{NodeID: "c", Addr: "c:7777", Epoch: 1, Templates: []string{"other"}},
@@ -88,7 +87,7 @@ func TestForgetPrunesDeadNode(t *testing.T) {
 		t.Errorf("candidates after forget %v, want nil (b pruned)", got)
 	}
 
-	m.UpdateSelf(t.Context(), map[string]int{"k": 1}, nil, nil)
+	m.UpdateSelf(map[string]int{"k": 1}, nil, nil)
 	m.forget("a")
 	if len(m.Members()) != 1 {
 		t.Error("forget removed self")
@@ -121,7 +120,7 @@ func TestForgottenNodeStaysGoneUntilItRejoins(t *testing.T) {
 
 func TestPoolPeersIncludeAColdPeerOfThePool(t *testing.T) {
 	m := newTestMesh(t, "a")
-	m.UpdateSelf(t.Context(), map[string]int{"pool": 0}, nil, nil)
+	m.UpdateSelf(map[string]int{"pool": 0}, nil, nil)
 	mergeStates(t, m, []NodeState{
 		{NodeID: "b", Addr: "b:7777", Epoch: 1, Pools: map[string]int{"pool": 0}},
 		{NodeID: "c", Addr: "c:7777", Epoch: 1, Pools: map[string]int{"other": 3}},
@@ -176,7 +175,7 @@ func TestTwoNodeClusterGossipsPools(t *testing.T) {
 	if err := b.mesh.Join([]string{a.addr}); err != nil {
 		t.Fatalf("join: %v", err)
 	}
-	a.mesh.UpdateSelf(t.Context(), map[string]int{"kk": 4}, []string{"tpl-hash"}, []string{"dataset"})
+	a.mesh.UpdateSelf(map[string]int{"kk": 4}, []string{"tpl-hash"}, []string{"dataset"})
 
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
@@ -199,7 +198,7 @@ func TestARuntimeDigestChangeReachesThePeer(t *testing.T) {
 	if err := b.mesh.Join([]string{a.addr}); err != nil {
 		t.Fatalf("join: %v", err)
 	}
-	a.mesh.UpdateDigest(t.Context(), "rotated")
+	a.mesh.UpdateDigest("rotated")
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
 		if b.mesh.ConfigMismatches() == 1 {
@@ -212,7 +211,7 @@ func TestARuntimeDigestChangeReachesThePeer(t *testing.T) {
 
 func TestVolumeOwnersRequireEveryNameAndExcludeSelf(t *testing.T) {
 	m := newTestMesh(t, "a")
-	m.UpdateSelf(t.Context(), nil, nil, []string{"dataset", "weights"})
+	m.UpdateSelf(nil, nil, []string{"dataset", "weights"})
 	mergeStates(t, m, []NodeState{
 		{NodeID: "b", Addr: "b:7777", Epoch: 1, Volumes: []string{"dataset", "weights"}},
 		{NodeID: "c", Addr: "c:7777", Epoch: 1, Volumes: []string{"dataset"}},
@@ -264,7 +263,7 @@ func TestTemplateVolumeOwnersUseTrueIntersection(t *testing.T) {
 
 func TestVolumeHoldersCountSelfAndPeers(t *testing.T) {
 	m := newTestMesh(t, "a")
-	m.UpdateSelf(t.Context(), nil, nil, []string{"dataset"})
+	m.UpdateSelf(nil, nil, []string{"dataset"})
 	mergeStates(t, m, []NodeState{
 		{NodeID: "b", Addr: "b:7777", Epoch: 1, Volumes: []string{"dataset", "weights"}},
 		{NodeID: "c", Addr: "c:7777", Epoch: 1, Volumes: []string{"weights"}},
@@ -287,10 +286,9 @@ func mergeStates(t *testing.T, m *Mesh, states []NodeState) {
 func newTestMesh(t *testing.T, id string) *Mesh {
 	t.Helper()
 	return &Mesh{
-		epochPath: filepath.Join(t.TempDir(), "mesh-epoch"),
-		self:      NodeState{NodeID: id, Addr: id + ":7777", Pools: map[string]int{}, Digest: id + "-digest"},
-		view:      map[string]NodeState{id: {NodeID: id, Addr: id + ":7777"}},
-		live:      map[string]struct{}{},
+		self: NodeState{NodeID: id, Addr: id + ":7777", Pools: map[string]int{}, Digest: id + "-digest"},
+		view: map[string]NodeState{id: {NodeID: id, Addr: id + ":7777"}},
+		live: map[string]struct{}{},
 	}
 }
 
@@ -309,7 +307,7 @@ func startNode(t *testing.T, host string, port int, id string) *node {
 	cfg.AdvertiseAddr = host
 	cfg.PushPullInterval = 200 * time.Millisecond
 	cfg.Logger = discardLogger()
-	m, err := New(t.Context(), cfg, NodeState{NodeID: id, Addr: id + ":7777", Digest: "shared"}, nil, t.TempDir())
+	m, err := New(t.Context(), cfg, NodeState{NodeID: id, Addr: id + ":7777", Digest: "shared"}, nil)
 	if err != nil {
 		t.Fatalf("new mesh %s: %v", id, err)
 	}
