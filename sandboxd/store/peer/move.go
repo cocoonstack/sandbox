@@ -25,7 +25,7 @@ func SendRound(ctx context.Context, addr, token, path, dir string, names []strin
 		_ = pw.CloseWithError(err)
 		written <- err
 	}()
-	err := putRound(ctx, URL(addr, path), token, pr)
+	err := peerCall(ctx, http.MethodPut, URL(addr, path), token, pr, 0, http.StatusOK, http.StatusNoContent)
 	_ = pr.Close()
 	if writeErr := <-written; writeErr != nil && !errors.Is(writeErr, io.ErrClosedPipe) {
 		return fmt.Errorf("send round to %s: %w", addr, writeErr)
@@ -43,28 +43,6 @@ func ReceiveRound(r io.Reader, dst string) error {
 		_ = os.Remove(open + partialSuffix)
 	}
 	return err
-}
-
-func putRound(ctx context.Context, target, token string, body io.Reader) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPut, target, body)
-	if err != nil {
-		return err
-	}
-	if token != "" {
-		req.Header.Set("Authorization", "Bearer "+token)
-	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer func() {
-		_, _ = io.Copy(io.Discard, resp.Body)
-		_ = resp.Body.Close()
-	}()
-	if resp.StatusCode/100 != 2 {
-		return fmt.Errorf("unexpected status %d", resp.StatusCode)
-	}
-	return nil
 }
 
 func writeRound(dir string, names []string, w io.Writer) error {

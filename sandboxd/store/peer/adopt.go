@@ -17,7 +17,7 @@ type Adopter struct {
 func (a *Adopter) Adopt(ctx context.Context, id, token string) bool {
 	logger := log.WithFunc("peer.Adopter.Adopt")
 	for _, addr := range a.Peers() {
-		err := peerCall(ctx, http.MethodGet, URL(addr, "/v1/sandboxes/"+url.PathEscape(id)+"/owner"), token, http.StatusOK)
+		err := peerCall(ctx, http.MethodGet, URL(addr, "/v1/sandboxes/"+url.PathEscape(id)+"/owner"), token, nil, peerCallTimeout, http.StatusOK)
 		if err == nil {
 			return true
 		}
