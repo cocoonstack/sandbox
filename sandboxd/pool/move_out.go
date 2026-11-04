@@ -88,7 +88,7 @@ func (m *Manager) moveOut(ctx context.Context, sb *types.Sandbox, mv *outMove, b
 			if finalPause(size, sent, sending) <= budget {
 				break
 			}
-			if delta == moveDeltaLimit || delta > 1 && size >= previous {
+			if delta == moveDeltaLimit || delta > 1 && size*10 >= previous*9 {
 				return fmt.Errorf("%w: delta %d of %d bytes does not fit %s", ErrMoveDowntime, delta, size, budget)
 			}
 		}

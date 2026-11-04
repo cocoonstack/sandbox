@@ -664,6 +664,10 @@ func TestMoveGivesUpOnDeltasThatStopShrinking(t *testing.T) {
 	}{
 		"second delta as large as the first":   {sizes: []int64{1000, 500, 500}, captures: 3},
 		"second delta larger than the first":   {sizes: []int64{1000, 500, 600}, captures: 3},
+		"second delta shrinks by 1%":           {sizes: []int64{1000, 519, 513}, captures: 3},
+		"second delta shrinks by exactly 10%":  {sizes: []int64{1000, 500, 450}, captures: 3},
+		"third delta shrinks by under 10%":     {sizes: []int64{1000, 800, 600, 550}, captures: 4},
+		"each delta shrinks by over 10%":       {sizes: []int64{1000, 500, 449, 400, 350}, captures: 5},
 		"shrinking but never fitting":          {sizes: []int64{1000, 900, 800, 700, 600}, captures: 5},
 		"first delta larger than the baseline": {sizes: []int64{100, 200, 150, 120, 110}, captures: 5},
 	} {

@@ -374,7 +374,7 @@ the rounds reached, plus 400 ms for the receive and the start, fits
 never fit), the source pauses the guest for the final
 round and the target receives the series and starts the guest. A move whose
 deltas never fit answers 503 and the guest runs on; from the second delta on, one
-not smaller than the delta before it and still too large answers at once. `downtime_ms` in the answer
+that shrinks by under 10% and is still too large answers at once. `downtime_ms` in the answer
 is the pause the source measured, from the final capture to the target's
 commit. Each round has one minute plus its size at 10 MB/s to arrive, so a
 target that stops reading fails the move. The final capture, its transfer and the target's commit have 2 minutes
