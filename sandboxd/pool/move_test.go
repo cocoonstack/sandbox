@@ -636,9 +636,10 @@ func TestMoveGivesUpOnDeltasThatStopShrinking(t *testing.T) {
 		sizes    []int64
 		captures int
 	}{
-		"second delta as large as the first": {sizes: []int64{1000, 500, 500}, captures: 3},
-		"second delta larger than the first": {sizes: []int64{1000, 500, 600}, captures: 3},
-		"shrinking but never fitting":        {sizes: []int64{1000, 900, 800, 700, 600}, captures: 5},
+		"second delta as large as the first":   {sizes: []int64{1000, 500, 500}, captures: 3},
+		"second delta larger than the first":   {sizes: []int64{1000, 500, 600}, captures: 3},
+		"shrinking but never fitting":          {sizes: []int64{1000, 900, 800, 700, 600}, captures: 5},
+		"first delta larger than the baseline": {sizes: []int64{100, 200, 150, 120, 110}, captures: 5},
 	} {
 		t.Run(name, func(t *testing.T) {
 			mc := newMoveCluster(t)
