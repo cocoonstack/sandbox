@@ -46,7 +46,6 @@ const (
 	publishConcurrency  = 4 // files scanned in parallel
 	fetchConcurrency    = 8 // chunk GETs in flight per fetch
 	transferBudget      = 30 * time.Minute
-	deleteBatch         = 1000 // DeleteObjects caps one request at 1000 keys
 )
 
 var chunkBufs = sync.Pool{New: func() any {
@@ -57,6 +56,7 @@ var chunkBufs = sync.Pool{New: func() any {
 type publishFile struct {
 	path string
 	rel  string
+	size int64
 }
 
 type manifest struct {
@@ -89,9 +89,6 @@ type Store struct {
 
 // New builds the backend; ctx bounds the credential-chain resolution.
 func New(ctx context.Context, cfg store.S3Config, stagingRoot string, idRe *regexp.Regexp) (*Store, error) {
-	if cfg.Bucket == "" {
-		return nil, errors.New("s3 checkpoint store needs a bucket")
-	}
 	// A prefix without its trailing slash hides every record from the delimiter listing.
 	if cfg.Prefix != "" && !strings.HasSuffix(cfg.Prefix, "/") {
 		cfg.Prefix += "/"
@@ -170,11 +167,7 @@ func (s *Store) Fetch(ctx context.Context, id string) (string, []byte, string, e
 func (s *Store) FetchFile(ctx context.Context, id, rel, dst string) error {
 	ctx, cancel := context.WithTimeout(ctx, transferBudget)
 	defer cancel()
-	meta, _, err := s.readMeta(ctx, id)
-	if err != nil {
-		return err
-	}
-	man, err := s.readManifest(ctx, id, store.ExportGen(meta))
+	man, err := s.currentManifest(ctx, id)
 	if err != nil {
 		return err
 	}
@@ -248,8 +241,8 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 		return err
 	}
 	drop := []string{s.key(id, store.LabelsFile)}
-	for _, key := range objectKeys(objs) {
-		man, refreshErr := s.refreshManifest(ctx, key)
+	for _, obj := range objs {
+		man, refreshErr := s.refreshManifest(ctx, *obj.Key)
 		if refreshErr != nil {
 			return refreshErr
 		}
@@ -610,25 +603,23 @@ func (s *Store) putObject(ctx context.Context, key string, body []byte, metadata
 }
 
 func (s *Store) deleteKeys(ctx context.Context, keys []string) error {
-	for chunk := range slices.Chunk(keys, deleteBatch) {
-		objs := make([]s3types.ObjectIdentifier, len(chunk))
-		for i := range chunk {
-			objs[i] = s3types.ObjectIdentifier{Key: &chunk[i]}
+	objs := make([]s3types.ObjectIdentifier, len(keys))
+	for i := range keys {
+		objs[i] = s3types.ObjectIdentifier{Key: &keys[i]}
+	}
+	out, err := s.client.DeleteObjects(ctx, &awss3.DeleteObjectsInput{
+		Bucket: &s.bucket,
+		Delete: &s3types.Delete{Objects: objs, Quiet: new(true)},
+	})
+	if err != nil {
+		return fmt.Errorf("delete %d objects: %w", len(keys), err)
+	}
+	for _, e := range out.Errors {
+		// Strict backends error on deleting an absent key where AWS succeeds silently.
+		if code := aws.ToString(e.Code); code == "NoSuchKey" || code == "NoSuchVersion" {
+			continue
 		}
-		out, err := s.client.DeleteObjects(ctx, &awss3.DeleteObjectsInput{
-			Bucket: &s.bucket,
-			Delete: &s3types.Delete{Objects: objs, Quiet: new(true)},
-		})
-		if err != nil {
-			return fmt.Errorf("delete %d objects: %w", len(chunk), err)
-		}
-		for _, e := range out.Errors {
-			// Strict backends error on deleting an absent key where AWS succeeds silently.
-			if code := aws.ToString(e.Code); code == "NoSuchKey" || code == "NoSuchVersion" {
-				continue
-			}
-			return fmt.Errorf("delete %s: %s", aws.ToString(e.Key), aws.ToString(e.Message))
-		}
+		return fmt.Errorf("delete %s: %s", aws.ToString(e.Key), aws.ToString(e.Message))
 	}
 	return nil
 }
@@ -663,15 +654,8 @@ func (u *chunkUploader) scan(ctx context.Context, file publishFile) (store.Diges
 		return store.DigestFile{}, manifestFile{}, err
 	}
 	defer func() { _ = f.Close() }()
-	info, err := f.Stat()
-	if err != nil {
-		return store.DigestFile{}, manifestFile{}, err
-	}
-	if err = store.RequireRegular(file.rel, info.Mode()); err != nil {
-		return store.DigestFile{}, manifestFile{}, err
-	}
-	entry := manifestFile{Path: file.rel, Size: info.Size()}
-	digest, err := store.ScanFile(f, file.rel, info.Size(), getChunkBuf, func(c store.Chunk) error {
+	entry := manifestFile{Path: file.rel, Size: file.size}
+	digest, err := store.ScanFile(f, file.rel, file.size, getChunkBuf, func(c store.Chunk) error {
 		entry.Chunks = append(entry.Chunks, manifestChunk{Index: c.Index, SHA256: c.SHA256})
 		return u.upload(ctx, c)
 	})
@@ -705,19 +689,11 @@ func (u *chunkUploader) claim(sha string) bool {
 
 func publishFiles(staging string) ([]publishFile, error) {
 	var files []publishFile
-	err := store.WalkExport(filepath.Join(staging, store.ExportDir), func(rel, abs string, _ fs.FileInfo) error {
-		files = append(files, publishFile{path: abs, rel: rel})
+	err := store.WalkExport(filepath.Join(staging, store.ExportDir), func(rel, abs string, info fs.FileInfo) error {
+		files = append(files, publishFile{path: abs, rel: rel, size: info.Size()})
 		return nil
 	})
 	return files, err
-}
-
-func objectKeys(objs []s3types.Object) []string {
-	keys := make([]string, len(objs))
-	for i, obj := range objs {
-		keys[i] = *obj.Key
-	}
-	return keys
 }
 
 // pruneIdleGenerations drops cached generations of one record that no Fetch used within the grace; a hit refreshes the mtime.

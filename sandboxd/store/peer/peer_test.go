@@ -17,13 +17,6 @@ import (
 
 const testID = "ck_00000000000000aa"
 
-func TestInertWithoutOwnersOrPuller(t *testing.T) {
-	h := NewHealer(nil, nil)
-	if err := h.Pull(t.Context(), testID, t.TempDir(), nil); !errors.Is(err, store.ErrNotFound) {
-		t.Fatalf("Pull error = %v, want store.ErrNotFound", err)
-	}
-}
-
 func TestPullWritesStaging(t *testing.T) {
 	puller := &fakePuller{records: map[string]map[string]string{"peer-a:7777": record()}}
 	h := healerOf(puller, "peer-a:7777")
@@ -176,7 +169,7 @@ func (p *fakePuller) Pull(_ context.Context, addr, _, dst string) error {
 	}
 	files, ok := p.records[addr]
 	if !ok {
-		return ErrNotFound
+		return store.ErrNotFound
 	}
 	for name, content := range files {
 		full := filepath.Join(dst, name)

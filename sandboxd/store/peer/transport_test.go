@@ -161,10 +161,10 @@ func TestHTTPPullerNotFound(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	p := &HTTPPuller{Client: srv.Client()}
+	p := &HTTPPuller{}
 	err := p.Pull(t.Context(), srv.URL, "ck_0000000000000001", t.TempDir())
-	if !errors.Is(err, ErrNotFound) {
-		t.Fatalf("Pull error = %v, want ErrNotFound so the next owner is tried", err)
+	if !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("Pull error = %v, want store.ErrNotFound so the next owner is tried", err)
 	}
 }
 
@@ -181,7 +181,7 @@ func TestHTTPPullerStopsReadingAfterAFailedUntar(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 	start := time.Now()
-	err := (&HTTPPuller{Client: srv.Client()}).Pull(t.Context(), srv.URL, "ck_0000000000000001", t.TempDir())
+	err := (&HTTPPuller{}).Pull(t.Context(), srv.URL, "ck_0000000000000001", t.TempDir())
 	if err == nil || time.Since(start) > 5*time.Second {
 		t.Fatalf("pull of a non-tar body: %v after %s, want a prompt untar error", err, time.Since(start))
 	}
@@ -201,7 +201,7 @@ func TestHTTPPullerPresentsToken(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	p := &HTTPPuller{Client: srv.Client(), Token: "fleet-token"}
+	p := &HTTPPuller{Token: "fleet-token"}
 	dst := t.TempDir()
 	if err := p.Pull(t.Context(), srv.URL, "ck_0000000000000001", dst); err != nil {
 		t.Fatalf("Pull: %v", err)

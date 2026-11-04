@@ -183,7 +183,6 @@ func (d *Store) sweep() error {
 	for _, e := range entries {
 		var sweepErr error
 		switch {
-		// ReadDir + suffix, not Glob: the root path may hold glob metacharacters.
 		case strings.HasSuffix(e.Name(), ".tmp"):
 			sweepErr = removeAgedEntry(d.root, e)
 		case e.IsDir() && d.idRe.MatchString(e.Name()):
@@ -278,21 +277,15 @@ func (d *Store) publish(_ context.Context, staging, id, digest string) error {
 }
 
 // sweepGenerations reclaims only entries whose install or supersession time is outside the grace.
-func (d *Store) sweepGenerations(id string) (err error) {
+func (d *Store) sweepGenerations(id string) error {
 	final := filepath.Join(d.root, id)
 	var keep []string
-	metaFile, err := os.Open(filepath.Join(final, store.MetaFile)) //nolint:gosec // id pinned by the instance idRe
+	meta, err := os.ReadFile(filepath.Join(final, store.MetaFile)) //nolint:gosec // id pinned by the instance idRe
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
 	case err != nil:
 		return err
 	default:
-		defer func() { err = errors.Join(err, metaFile.Close()) }()
-		// The open file pins one inode across a concurrent meta rename.
-		meta, readErr := io.ReadAll(metaFile)
-		if readErr != nil {
-			return readErr
-		}
 		keep = []string{store.MetaFile, store.LabelsFile, store.ExportGen(meta), digestName(meta)}
 	}
 	entries, err := os.ReadDir(final)
@@ -383,9 +376,6 @@ func hashExport(ctx context.Context, root string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if err := ctx.Err(); err != nil {
-		return "", err
-	}
 	if err := hashChunks(ctx, sources, min(runtime.GOMAXPROCS(0), digestWorkerLimit), hashChunk); err != nil {
 		return "", err
 	}
@@ -431,23 +421,17 @@ func hashChunk(source *digestSource, chunk int, buffer []byte) error {
 	if err != nil {
 		return fmt.Errorf("open export entry %s: %w", source.digest.Path, err)
 	}
+	defer func() { _ = f.Close() }()
 	offset := int64(chunk) * store.DigestChunkSize
 	size := min(store.DigestChunkSize, source.digest.Size-offset)
 	if sum, hole := store.HoleSum(f, offset, size); hole {
 		source.digest.Chunks[chunk] = sum
-		if err := f.Close(); err != nil {
-			return fmt.Errorf("close export entry %s: %w", source.digest.Path, err)
-		}
 		return nil
 	}
 	hash := sha256.New()
-	n, copyErr := io.CopyBuffer(hash, io.NewSectionReader(f, offset, size), buffer)
-	closeErr := f.Close()
-	if copyErr != nil {
-		return fmt.Errorf("hash export entry %s chunk %d: %w", source.digest.Path, chunk, copyErr)
-	}
-	if closeErr != nil {
-		return fmt.Errorf("close export entry %s: %w", source.digest.Path, closeErr)
+	n, err := io.CopyBuffer(hash, io.NewSectionReader(f, offset, size), buffer)
+	if err != nil {
+		return fmt.Errorf("hash export entry %s chunk %d: %w", source.digest.Path, chunk, err)
 	}
 	if n != size {
 		return fmt.Errorf("export entry %s changed size while hashing", source.digest.Path)
