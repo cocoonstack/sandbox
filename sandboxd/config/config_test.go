@@ -142,6 +142,8 @@ func TestLoadRejectsInvalid(t *testing.T) {
 		{"mesh with unspecified advertise", `{"advertise_addr":"0.0.0.0:7777","pools":[],"mesh":{"bind":"node1:7946"}}`, "routable host"},
 		{"mesh bind missing port", `{"pools":[],"mesh":{"bind":"node1"}}`, "mesh bind"},
 		{"mesh bind wildcard host", `{"pools":[],"mesh":{"bind":":7946"}}`, "explicit host"},
+		{"mesh bind unspecified ipv4", `{"pools":[],"mesh":{"bind":"0.0.0.0:7946"}}`, "explicit host"},
+		{"mesh bind unspecified ipv6", `{"pools":[],"mesh":{"bind":"[::]:7946"}}`, "explicit host"},
 		{"mesh cluster key not base64", `{"pools":[],"mesh":{"bind":"node1:7946","cluster_key":"not!base64"}}`, "not valid base64"},
 		{"mesh cluster key wrong length", `{"pools":[],"mesh":{"bind":"node1:7946","cluster_key":"YWJj"}}`, "want 16, 24, or 32"},
 		{"checkpoint peer heal without mesh", `{"checkpoint_peer_heal":true,"pools":[]}`, "requires an encrypted mesh"},
