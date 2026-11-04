@@ -36,42 +36,43 @@ func (m *Manager) Move(ctx context.Context, id, addr string, maxDowntime time.Du
 		return MoveResult{}, err
 	}
 	ctx = context.WithoutCancel(ctx)
-	downtime, err := m.moveOut(ctx, sb, mv, cmp.Or(maxDowntime, DefaultMoveDowntime))
-	if err == nil {
-		m.finishMoveOut(ctx, sb, mv)
-		return MoveResult{Rounds: mv.rounds, Downtime: downtime}, nil
+	err := m.moveOut(ctx, sb, mv, cmp.Or(maxDowntime, DefaultMoveDowntime))
+	if err != nil {
+		return m.failMoveOut(ctx, sb, mv, err)
 	}
-	return m.failMoveOut(ctx, sb, mv, err)
+	result := mv.result()
+	m.finishMoveOut(ctx, sb, mv)
+	return result, nil
 }
 
 // moveOut runs the rounds up to the target's commit; on any error the caller resolves the move through its record.
-func (m *Manager) moveOut(ctx context.Context, sb *types.Sandbox, mv *outMove, budget time.Duration) (time.Duration, error) {
+func (m *Manager) moveOut(ctx context.Context, sb *types.Sandbox, mv *outMove, budget time.Duration) error {
 	m.mu.Lock()
 	admission, vm := MoveAdmission{Tenant: sb.Tenant, Key: sb.Key, From: m.nodeID}, sb.VMName
 	m.mu.Unlock()
 	to, err := m.movePeer.Admit(ctx, mv.addr, sb.ID, admission)
 	if err != nil {
-		return 0, err
+		return err
 	}
 	mv.to = to
 	epoch, err := m.moves.Begin(ctx, sb.ID, m.nodeID, to)
 	if errors.Is(err, moves.ErrLost) {
-		return 0, fmt.Errorf("%w: another move of %s is on record", ErrNotMovable, sb.ID)
+		return fmt.Errorf("%w: another move of %s is on record", ErrNotMovable, sb.ID)
 	}
 	if err != nil {
-		return 0, err
+		return err
 	}
 	mv.epoch = epoch
 	if err = m.journalMoveOut(ctx, sb, mv); err != nil {
-		return 0, err
+		return err
 	}
 	round, err := m.eng.MigrateCapture(ctx, vm, "", false)
 	if err != nil {
-		return 0, fmt.Errorf("%w: baseline capture: %w", ErrNotMovable, err)
+		return fmt.Errorf("%w: baseline capture: %w", ErrNotMovable, err)
 	}
 	mv.series = round.Series
 	if err = m.journalMoveOut(ctx, sb, mv); err != nil {
-		return 0, err
+		return err
 	}
 	var sent int64
 	var sending time.Duration
@@ -79,7 +80,7 @@ func (m *Manager) moveOut(ctx context.Context, sb *types.Sandbox, mv *outMove, b
 	for i := 0; ; i++ {
 		start := time.Now()
 		if err = m.sendRound(ctx, sb.ID, mv, round); err != nil {
-			return 0, err
+			return err
 		}
 		sending += time.Since(start)
 		size := roundBytes(round)
@@ -91,11 +92,11 @@ func (m *Manager) moveOut(ctx context.Context, sb *types.Sandbox, mv *outMove, b
 			break
 		}
 		if round, err = m.eng.MigrateCapture(ctx, vm, mv.series, false); err != nil {
-			return 0, fmt.Errorf("delta capture: %w", err)
+			return fmt.Errorf("delta capture: %w", err)
 		}
 	}
 	if !fits {
-		return 0, fmt.Errorf("%w: %d deltas did not shrink under %s", ErrMoveDowntime, moveDeltaLimit, budget)
+		return fmt.Errorf("%w: %d deltas did not shrink under %s", ErrMoveDowntime, moveDeltaLimit, budget)
 	}
 	m.mu.Lock()
 	mv.final = true
@@ -105,18 +106,18 @@ func (m *Manager) moveOut(ctx context.Context, sb *types.Sandbox, mv *outMove, b
 	ctx, cancel := context.WithTimeout(ctx, moveFinalTimeout)
 	defer cancel()
 	if err = m.unrowForMove(ctx, sb); err != nil {
-		return 0, err
+		return err
 	}
-	pausedAt := time.Now()
+	mv.pausedAt = time.Now()
 	if round, err = m.eng.MigrateCapture(ctx, vm, mv.series, true); err != nil {
-		return 0, fmt.Errorf("final capture: %w", err)
+		return fmt.Errorf("final capture: %w", err)
 	}
 	final, err := m.moves.Advance(ctx, sb.ID, mv.epoch, moves.Pending, moves.Final)
 	if err != nil {
-		return 0, err
+		return err
 	}
 	if err = m.sendRound(ctx, sb.ID, mv, round); err != nil {
-		return 0, err
+		return err
 	}
 	m.mu.Lock()
 	dto := dtoOf(sb)
@@ -124,12 +125,9 @@ func (m *Manager) moveOut(ctx context.Context, sb *types.Sandbox, mv *outMove, b
 	dto.MoveOut = nil
 	claim, err := json.Marshal(&dto)
 	if err != nil {
-		return 0, fmt.Errorf("encode claim: %w", err)
+		return fmt.Errorf("encode claim: %w", err)
 	}
-	if err = m.movePeer.Commit(ctx, mv.addr, sb.ID, claim, final); err != nil {
-		return 0, err
-	}
-	return time.Since(pausedAt), nil
+	return m.movePeer.Commit(ctx, mv.addr, sb.ID, claim, final)
 }
 
 func (m *Manager) sendRound(ctx context.Context, id string, mv *outMove, round types.MigrateRound) error {
@@ -261,6 +259,7 @@ func (m *Manager) failMoveOut(ctx context.Context, sb *types.Sandbox, mv *outMov
 		_ = m.abortMoveOut(ctx, sb, mv, 0)
 		return MoveResult{}, cause
 	}
+	result := mv.result()
 	moved, err := m.settleMoveOut(ctx, sb, mv)
 	switch {
 	case err != nil:
@@ -268,7 +267,7 @@ func (m *Manager) failMoveOut(ctx context.Context, sb *types.Sandbox, mv *outMov
 		go m.retryMoveOut(ctx, sb, mv)
 		return MoveResult{}, fmt.Errorf("%w: %w", ErrMoveStoreDown, cause)
 	case moved:
-		return MoveResult{Rounds: mv.rounds}, nil
+		return result, nil
 	}
 	return MoveResult{}, cause
 }

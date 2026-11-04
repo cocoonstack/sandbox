@@ -23,10 +23,10 @@ const (
 	moveReservationIdle = 2 * time.Minute
 	moveRetryInterval   = 2 * time.Second
 	moveDeltaLimit      = 4
-	moveStaleAge = time.Hour
-	moveFinalTimeout   = 2 * time.Minute
-	moveRoundBase      = time.Minute
-	moveRoundMinRate   = 10_000_000
+	moveStaleAge        = time.Hour
+	moveFinalTimeout    = 2 * time.Minute
+	moveRoundBase       = time.Minute
+	moveRoundMinRate    = 10_000_000
 )
 
 // MoveAdmission is what a source asks a target to reserve for a live move.
@@ -54,13 +54,22 @@ type MovePeer interface {
 
 // outMove is a source's move in flight; final is guarded by m.mu, the rest belongs to the goroutine driving the move.
 type outMove struct {
-	addr   string
-	to     string
-	epoch  int64
-	series string
-	rounds int
-	final  bool
-	locked bool
+	addr     string
+	to       string
+	epoch    int64
+	series   string
+	rounds   int
+	final    bool
+	locked   bool
+	pausedAt time.Time
+}
+
+func (mv *outMove) result() MoveResult {
+	res := MoveResult{Rounds: mv.rounds}
+	if !mv.pausedAt.IsZero() {
+		res.Downtime = time.Since(mv.pausedAt)
+	}
+	return res
 }
 
 // WithMovePeer wires the transport a move uses to reach its target; set it before serving.

@@ -170,8 +170,12 @@ func TestMoveWhoseCommitAnswerIsLostResolvesThroughTheRecord(t *testing.T) {
 	mc := newMoveCluster(t)
 	sb := claimTenant(t, mc.s, "acme")
 	mc.p.loseCommitReply = true
-	if _, err := mc.s.Move(t.Context(), sb.ID, "b", time.Minute); err != nil {
+	res, err := mc.s.Move(t.Context(), sb.ID, "b", time.Minute)
+	if err != nil {
 		t.Fatalf("move whose commit answer was lost: %v, want the committed move", err)
+	}
+	if res.Rounds != 3 || res.Downtime <= 0 {
+		t.Errorf("result %+v, want the three rounds and the pause", res)
 	}
 	if _, held := mc.s.byID(sb.ID); held {
 		t.Error("the source kept a claim the target committed")
