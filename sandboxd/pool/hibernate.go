@@ -179,9 +179,10 @@ func (m *Manager) wakeOrRead(ctx context.Context, sb *types.Sandbox, readerOK bo
 	if readerOK && sb.ReaderSafe {
 		return "", ErrSleeping
 	}
-	if err := m.diskErr(); err != nil {
+	if err := m.beginWake(sb); err != nil {
 		return "", fmt.Errorf("wake %s: %w", sb.ID, err)
 	}
+	defer m.endWake(sb)
 	// A half-restored VM is worse than a wasted wake.
 	ctx = context.WithoutCancel(ctx)
 	if err := m.resolveIntent(ctx, sb); err != nil {
@@ -244,7 +245,8 @@ func (m *Manager) idleOnce(ctx context.Context) {
 	type victim struct{ id, token string }
 	var victims []victim
 	m.mu.Lock()
-	idlePolicy := m.idleDefault > 0
+	idleDefault := m.view.Load().idleDefault
+	idlePolicy := idleDefault > 0
 	for _, p := range m.pools {
 		idlePolicy = idlePolicy || p.idle > 0
 	}
@@ -257,7 +259,7 @@ func (m *Manager) idleOnce(ctx context.Context) {
 		if skipIdle(sb) {
 			continue
 		}
-		idle := m.idleDefault
+		idle := idleDefault
 		if p, pooled := m.activePool(sb.Key); pooled {
 			idle = p.idle
 		}

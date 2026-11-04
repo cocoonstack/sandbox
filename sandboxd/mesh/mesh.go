@@ -159,6 +159,14 @@ func (m *Mesh) TemplateOwners(keyHash string) []string {
 	return m.owners(func(st NodeState) bool { return slices.Contains(st.Templates, keyHash) })
 }
 
+// PoolPeers returns up to two peers that serve the pool, warm or not.
+func (m *Mesh) PoolPeers(keyHash string) []string {
+	return m.owners(func(st NodeState) bool {
+		_, served := st.Pools[keyHash]
+		return served
+	})
+}
+
 // VolumeOwners returns up to two peers that advertise every requested volume; self is excluded.
 func (m *Mesh) VolumeOwners(names []string) []string {
 	return m.owners(func(st NodeState) bool { return containsAll(st.Volumes, names) })

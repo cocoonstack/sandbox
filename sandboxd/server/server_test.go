@@ -1556,6 +1556,19 @@ func TestARequiredPromotedClaimIsNeverSentToAWarmPeer(t *testing.T) {
 	}
 }
 
+func TestAClaimAtQuotaWithNoWarmPeerGoesToAPeerServingThePool(t *testing.T) {
+	mgr := &fakeManager{claim: func(context.Context, types.PoolKey, time.Duration) (*types.Sandbox, error) {
+		return nil, pool.ErrQuota
+	}}
+	ts := newMeshTestServer(t, "sekret", mgr, &fakePlacer{poolPeers: []string{"cold:7777"}}, nil)
+	resp := postJSON(t, ts.URL+"/v1/claim", "sekret", `{"template":"ns/app"}`)
+	defer resp.Body.Close()
+	cr := decodeJSON[ClaimResponse](t, resp.Body)
+	if resp.StatusCode != http.StatusOK || !slices.Equal(cr.Redirect, []string{"cold:7777"}) {
+		t.Errorf("status=%d redirect=%v, want a redirect to the peer serving the pool", resp.StatusCode, cr.Redirect)
+	}
+}
+
 func TestAPlainClaimRequiringAPromotedTemplateNeverColdBoots(t *testing.T) {
 	for _, tt := range []struct {
 		name         string
@@ -2606,6 +2619,7 @@ func (f *fakeDialer) DialSilkd(ctx context.Context, sock string) (net.Conn, erro
 type fakePlacer struct {
 	addrs                []string
 	owners               []string
+	poolPeers            []string
 	ownersByProbe        map[string][]string
 	volumeCandidates     []string
 	volumeOwners         []string
@@ -2623,6 +2637,8 @@ func (f *fakePlacer) Candidates(string) []string {
 	f.candidateCalls++
 	return f.addrs
 }
+
+func (f *fakePlacer) PoolPeers(string) []string { return f.poolPeers }
 
 func (f *fakePlacer) VolumeCandidates(_ string, names []string) []string {
 	f.volumeCandidateCalls++

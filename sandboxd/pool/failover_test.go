@@ -1930,6 +1930,8 @@ func (c *failoverCluster) nodeOn(t *testing.T, eng *fakeEngine, name, dataDir st
 		t.Fatalf("manager %s: %v", name, err)
 	}
 	_ = c.reg.Renew(t.Context(), name, time.Hour)
+	t.Cleanup(func() { assertRunningCount(t, m) })
+	t.Cleanup(func() { settleGoldenBuilds(m) })
 	return m
 }
 

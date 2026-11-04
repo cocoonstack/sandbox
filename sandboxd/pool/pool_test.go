@@ -237,7 +237,7 @@ func TestReleaseDelayQueuesTeardown(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		eng := newFakeEngine()
 		m := newTestManager(t, eng)
-		m.releaseDelay = 2 * time.Second
+		tuneView(m, func(v *configView) { v.releaseDelay = 2 * time.Second })
 		sb := mustClaim(t, m, testKey)
 
 		if err := m.Release(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
@@ -795,6 +795,32 @@ func TestGoldenBuildExportsAndDestroysItsBuilder(t *testing.T) {
 	})
 }
 
+func TestGoldenBuildsDumpOneAtATime(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		eng := newFakeEngine()
+		eng.snapSaveStall = make(chan struct{})
+		specs := make([]config.PoolSpec, 0, 3)
+		for _, size := range []types.Size{types.SizeSmall, types.SizeMedium, types.SizeLarge} {
+			specs = append(specs, config.PoolSpec{Template: testKey.Template, Net: testKey.Net, Size: size, Warm: 1})
+		}
+		m := newTestManager(t, eng, specs...)
+
+		m.refillOnce(t.Context())
+		synctest.Wait()
+		eng.mu.Lock()
+		entered := eng.snapSavesEntered
+		eng.mu.Unlock()
+		if entered != 1 {
+			t.Errorf("memory dumps in flight = %d, want 1", entered)
+		}
+		close(eng.snapSaveStall)
+		waitFor(t, func() bool {
+			infos, _ := m.Info()
+			return !slices.ContainsFunc(infos, func(i PoolInfo) bool { return !i.Golden })
+		})
+	})
+}
+
 func TestGoldenBuildFailureBacksOff(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		eng := newFakeEngine()
@@ -1234,6 +1260,9 @@ type fakeEngine struct {
 	probeErr              error
 	hibernateErr          error
 	restoreErr            error
+	restoreStall          chan struct{}
+	snapSaveStall         chan struct{}
+	snapSavesEntered      int
 	snapListErr           error
 	snapSaveErr           error
 	startErr              error
@@ -1400,6 +1429,13 @@ func (f *fakeEngine) ReconcileStaleCreate(ctx context.Context, name string) (eng
 
 func (f *fakeEngine) SnapshotSave(_ context.Context, _, snapName string) error {
 	f.mu.Lock()
+	f.snapSavesEntered++
+	stall := f.snapSaveStall
+	f.mu.Unlock()
+	if stall != nil {
+		<-stall
+	}
+	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.snapSaveErr != nil {
 		return f.snapSaveErr
@@ -1514,6 +1550,12 @@ func (f *fakeEngine) Hibernate(_ context.Context, name, snapName string) error {
 }
 
 func (f *fakeEngine) Restore(_ context.Context, name, _ string) (string, error) {
+	f.mu.Lock()
+	stall := f.restoreStall
+	f.mu.Unlock()
+	if stall != nil {
+		<-stall
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.restores = append(f.restores, name)
@@ -2096,6 +2138,8 @@ func newTestManagerAt(t testing.TB, eng *fakeEngine, dataDir string, pools ...co
 	if err != nil {
 		t.Fatalf("setup manager: %v", err)
 	}
+	t.Cleanup(func() { assertRunningCount(t, m) })
+	t.Cleanup(func() { settleGoldenBuilds(m) })
 	t.Cleanup(func() {
 		m.mu.Lock()
 		defer m.mu.Unlock()
@@ -2108,6 +2152,38 @@ func newTestManagerAt(t testing.TB, eng *fakeEngine, dataDir string, pools ...co
 		}
 	})
 	return m
+}
+
+func settleGoldenBuilds(m *Manager) {
+	for deadline := time.Now().Add(3 * time.Second); time.Now().Before(deadline); time.Sleep(5 * time.Millisecond) {
+		m.mu.Lock()
+		building := slices.ContainsFunc(slices.Collect(maps.Values(m.pools)), func(p *pool) bool { return p.building })
+		m.mu.Unlock()
+		if !building {
+			return
+		}
+	}
+}
+
+func tuneView(m *Manager, change func(*configView)) {
+	v := *m.view.Load()
+	change(&v)
+	m.view.Store(&v)
+}
+
+func assertRunningCount(t testing.TB, m *Manager) {
+	t.Helper()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	want := 0
+	for _, sb := range m.claimed {
+		if sb.Waking || sb.HibernateSnap == "" && sb.ArchiveCk == "" && sb.Failed == "" {
+			want++
+		}
+	}
+	if got := m.store.runningCount(); got != want {
+		t.Errorf("running count %d, want %d from the claims", got, want)
+	}
 }
 
 func testBackends(t testing.TB, cfg *config.Config) Backends {

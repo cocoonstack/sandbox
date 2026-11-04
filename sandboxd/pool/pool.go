@@ -207,6 +207,8 @@ type PoolInfo struct {
 // Gauges are the manager's point-in-time claim counts and drain state.
 type Gauges struct {
 	Claimed    int
+	Running    int
+	MaxRunning int
 	Hibernated int
 	Archived   int
 	Failed     int
@@ -346,7 +348,6 @@ type Manager struct {
 	eng          Engine
 	dataDir      string
 	egress       bool
-	maxFork      int
 	store        *claimStore
 	catalog      volumeCatalog
 	volumeRuns   map[*types.Sandbox]*volumeRun
@@ -359,10 +360,8 @@ type Manager struct {
 	configSeedHash string // config pools' hash, to warn when a file edit is overridden
 
 	// idleDefault is the idle-hibernate threshold for unpooled keys; zero disables.
-	idleDefault time.Duration
-	idleSweep   atomic.Bool
+	idleSweep atomic.Bool
 
-	vmmRestart    types.VMMRestart
 	livenessSweep atomic.Bool
 	cocoondSocket string
 	// vmmEvents is set while the cocoon daemon stream is live; the poll is then only a backstop.
@@ -370,10 +369,8 @@ type Manager struct {
 	lastVMPoll atomic.Int64
 
 	// archive*Default are the archive thresholds for unpooled keys.
-	archiveAfterDefault  time.Duration
-	archiveDeleteDefault time.Duration
-	archiveSweep         atomic.Bool
-	archiveDeleteSweep   atomic.Bool
+	archiveSweep       atomic.Bool
+	archiveDeleteSweep atomic.Bool
 	// archiving holds ids with an export or a registry drop in flight; pendingCks pins ids mid-commit; both under m.mu.
 	archiving  map[string]struct{}
 	pendingCks map[string]struct{}
@@ -394,9 +391,7 @@ type Manager struct {
 	cfg      *config.Config
 	reloadMu sync.Mutex
 
-	maxClaims    int
-	releaseDelay time.Duration
-	draining     bool // guarded by m.mu; deliberately not persisted
+	draining bool // guarded by m.mu; deliberately not persisted
 
 	tenants    tenants.Source
 	rootSum    string
@@ -417,7 +412,6 @@ type Manager struct {
 	healAbort    map[string]struct{}
 	peerDelete   PeerDeleteFunc
 	tpls         store.Store
-	ckptTTL      time.Duration
 	ckptSweeping atomic.Bool
 	genSweeping  atomic.Bool
 
@@ -449,10 +443,11 @@ type Manager struct {
 	diskLow        atomic.Bool
 	diskStatFailed atomic.Bool
 
-	refillSem  chan struct{}
-	maintSem   chan struct{}
-	probeSem   chan struct{}
-	refillKick chan struct{}
+	refillSem   chan struct{}
+	maintSem    chan struct{}
+	probeSem    chan struct{}
+	refillKick  chan struct{}
+	goldenDumps chan struct{}
 }
 
 // NewManager builds a manager from the node config over backends the caller selected from it.
@@ -462,10 +457,7 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 		eng:             eng,
 		dataDir:         cfg.DataDir,
 		egress:          cfg.HasEgress(),
-		releaseDelay:    time.Duration(cfg.ReleaseDelaySeconds) * time.Second,
-		vmmRestart:      cfg.VMMRestart,
 		cocoondSocket:   cfg.CocoondSocket,
-		maxFork:         cmp.Or(cfg.MaxForkCount, defaultMaxFork),
 		store:           newClaimStore(cfg.DataDir, cfg.SyncClaims),
 		catalog:         volumeCatalog{entries: make(map[string]*catalogVolume, len(cfg.Volumes)), roots: cfg.VolumeRoots, holders: map[string]volumeHolders{}},
 		volumeRuns:      map[*types.Sandbox]*volumeRun{},
@@ -489,6 +481,7 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 		healPending:     map[string]struct{}{},
 		healAbort:       map[string]struct{}{},
 		refillSem:       make(chan struct{}, refill),
+		goldenDumps:     make(chan struct{}, 1),
 		maintSem:        make(chan struct{}, max(1, refill-max(1, refill/4))),
 		probeSem:        make(chan struct{}, refill),
 		refillKick:      make(chan struct{}, 1),
@@ -507,7 +500,6 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 	if err := os.MkdirAll(m.goldensDir(), 0o750); err != nil {
 		return nil, fmt.Errorf("create goldens dir: %w", err)
 	}
-	m.ckptTTL = time.Duration(cfg.CheckpointTTLHours) * time.Hour
 	m.tplSet = map[string]TemplateInfo{}
 	metas, listErr := m.tpls.Metas(ctx)
 	if listErr != nil {
@@ -533,15 +525,11 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 		}
 		m.audit = audit
 	}
-	m.maxClaims = cfg.MaxClaims
 	if cfg.APIToken != "" {
 		m.rootSum = tenants.TokenSHA256(cfg.APIToken)
 	}
 	m.cfg = cfg
 	m.view.Store(newConfigView(cfg, secrets))
-	m.idleDefault = time.Duration(cfg.IdleHibernateSeconds) * time.Second
-	m.archiveAfterDefault = time.Duration(cfg.ArchiveAfterSeconds) * time.Second
-	m.archiveDeleteDefault = time.Duration(cfg.ArchiveDeleteAfterSeconds) * time.Second
 	for _, spec := range cfg.Pools {
 		p := newPool(spec.PoolKey)
 		p.applySpec(spec)
@@ -664,7 +652,7 @@ func (m *Manager) Info() ([]PoolInfo, Gauges) {
 			Golden:    p.goldenDir != "",
 		})
 	}
-	g := Gauges{Claimed: len(m.claimed), Draining: m.draining}
+	g := Gauges{Claimed: len(m.claimed), Running: m.store.runningCount(), MaxRunning: m.view.Load().maxRunning, Draining: m.draining}
 	g.AtCapacityReason = m.capacityReasonLocked(now)
 	g.AtCapacity = g.AtCapacityReason != ""
 	for _, sb := range m.claimed {
@@ -700,18 +688,17 @@ func (m *Manager) Sandboxes(tenant, claimRef string, metadata types.Metadata) []
 	return out
 }
 
-// WarmCounts is the per-pool-key-hash warm count, for gossiping placement.
+// WarmCounts is the per-pool-key-hash warm count, for gossiping placement; a node that would refuse a claim names no pool.
 func (m *Manager) WarmCounts() map[string]int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	counts := make(map[string]int, len(m.pools))
-	low := m.diskLow.Load()
+	if m.quotaErr(1, "") != nil {
+		return counts
+	}
 	for _, p := range m.pools {
 		if !p.removed {
 			counts[p.hash] = len(p.warm)
-			if low {
-				counts[p.hash] = 0
-			}
 		}
 	}
 	return counts

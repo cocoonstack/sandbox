@@ -195,7 +195,7 @@ func (m *Manager) recoverVMM(ctx context.Context, sb *types.Sandbox) {
 		m.recordUsage(ctx, usage.Event{Event: "vmm_exit", ID: sb.ID, VMName: sb.VMName, Tenant: sb.Tenant})
 	}
 	reason := coldBootBlocker(sb, found, volumes)
-	if reason == "" && m.vmmRestart == types.VMMRestartNone {
+	if reason == "" && m.view.Load().vmmRestart == types.VMMRestartNone {
 		reason = "vmm exited"
 	}
 	sb.RestartLog = slices.DeleteFunc(sb.RestartLog, func(at time.Time) bool { return now.Sub(at) > vmmRestartWindow })
@@ -238,6 +238,10 @@ func (m *Manager) restartFailed(ctx context.Context, sb *types.Sandbox) error {
 	if reason := coldBootBlocker(sb, found, volumes); reason != "" {
 		return fmt.Errorf("%w: %s", ErrFailed, reason)
 	}
+	if err = m.beginWake(sb); err != nil {
+		return fmt.Errorf("wake %s: %w", sb.ID, err)
+	}
+	defer m.endWake(sb)
 	sb.RestartLog = nil
 	if err = m.restartLocked(ctx, sb); err != nil {
 		return fmt.Errorf("wake %s: %w", sb.ID, err)

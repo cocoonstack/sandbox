@@ -106,6 +106,7 @@ func TestLoadRejectsInvalid(t *testing.T) {
 		{"disk reserve without a size", `{"disk_reserve":{"free":""},"pools":[]}`, "disk_reserve.free"},
 		{"disk reserve relative dir", `{"disk_reserve":{"free":"100G","dirs":["run"]},"pools":[]}`, "disk_reserve.dirs"},
 		{"negative refill concurrency", `{"refill_concurrency":-1,"pools":[]}`, "refill_concurrency"},
+		{"negative max running", `{"max_running":-1,"pools":[]}`, "max_running"},
 		{"bad restore mode", `{"restore_mode":"Mmap","pools":[]}`, "restore_mode"},
 		{"bad pool key", `{"pools":[{"template":"","net":"none","size":"small"}]}`, "pool"},
 		{"egress without attachment", `{"pools":[{"template":"rt:24.04","net":"egress","size":"small"}]}`, "egress lane needs"},

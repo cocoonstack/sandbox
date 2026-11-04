@@ -28,6 +28,8 @@ func (s *Server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
 		draining = 1
 	}
 	scalar("claimed", "live claims on this node", g.Claimed)
+	scalar("running", "claims holding a VM, including wakes in flight", g.Running)
+	scalar("max_running", "cap on running claims, 0 when off", g.MaxRunning)
 	scalar("hibernated", "claims currently hibernated", g.Hibernated)
 	scalar("archived", "claims archived to the checkpoint store", g.Archived)
 	scalar("failed", "claims whose VMM is down and not restarted", g.Failed)

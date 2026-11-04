@@ -45,7 +45,7 @@ func TestIdleHibernateDefaultAppliesOnlyToUnpooledKeys(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		eng := newFakeEngine()
 		m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1})
-		m.idleDefault = time.Second
+		tuneView(m, func(v *configView) { v.idleDefault = time.Second })
 
 		sb := mustClaim(t, m, testKey)
 		backdate(m, sb, time.Hour)

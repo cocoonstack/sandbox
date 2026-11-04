@@ -602,6 +602,9 @@ type Sandbox struct {
 	// StaleSnap names a consumed wake snapshot a lagging journal references; guarded by Transition.
 	StaleSnap string `json:"-"`
 
+	// Waking marks a wake in flight, which counts as running; guarded by the manager mutex.
+	Waking bool `json:"-"`
+
 	// lastActivity is unix-nanos of the last data-plane connection, stamped lock-free.
 	lastActivity atomic.Int64
 	// replicated marks a claim of a replicating pool; it is set before the claim is published and read without a lock.

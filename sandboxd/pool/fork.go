@@ -22,8 +22,9 @@ func (m *Manager) Fork(ctx context.Context, id string, cred Cred, count int, ttl
 			return nil, err
 		}
 	}
-	if count < 1 || count > m.maxFork {
-		return nil, fmt.Errorf("%w: %d not in 1..%d", ErrBadCount, count, m.maxFork)
+	maxFork := m.view.Load().maxFork
+	if count < 1 || count > maxFork {
+		return nil, fmt.Errorf("%w: %d not in 1..%d", ErrBadCount, count, maxFork)
 	}
 	if !sb.Key.Capturable() {
 		return nil, ErrNoEgressFork

@@ -152,6 +152,7 @@ type Dialer interface {
 type Placer interface {
 	ClientAddr(addr string) string
 	Candidates(keyHash string) []string
+	PoolPeers(keyHash string) []string
 	VolumeCandidates(keyHash string, names []string) []string
 	TemplateOwners(keyHash string) []string
 	VolumeOwners(names []string) []string
@@ -180,6 +181,8 @@ type InfoResponse struct {
 	Pools            []pool.PoolInfo     `json:"pools"`
 	Templates        []pool.TemplateInfo `json:"templates"`
 	Claimed          int                 `json:"claimed"`
+	Running          int                 `json:"running"`
+	MaxRunning       int                 `json:"max_running,omitzero"`
 	Hibernated       int                 `json:"hibernated"`
 	Archived         int                 `json:"archived"`
 	Failed           int                 `json:"failed,omitzero"`
@@ -373,7 +376,7 @@ func (s *Server) handleClaim(w http.ResponseWriter, r *http.Request) {
 		sb, err = s.mgr.ClaimProvision(r.Context(), key, o)
 	}
 	if errors.Is(err, pool.ErrQuota) && s.placer != nil && !req.NoRedirect && !req.RequirePromoted &&
-		s.writeRedirect(w, s.placer.Candidates(key.Hash())) {
+		s.writeRedirect(w, s.quotaPeers(key.Hash())) {
 		s.claimRedirects.Add(1)
 		return
 	}
@@ -481,6 +484,14 @@ func (s *Server) templateOwners(query func(string) []string, hash, tenant string
 		}
 	}
 	return owners
+}
+
+// quotaPeers prefers warm peers; a pool with no warm target gossips zero, so any peer serving it is next.
+func (s *Server) quotaPeers(hash string) []string {
+	if peers := s.placer.Candidates(hash); len(peers) > 0 {
+		return peers
+	}
+	return s.placer.PoolPeers(hash)
 }
 
 func (s *Server) redirectClaim(ctx context.Context, w http.ResponseWriter, req ClaimRequest, key types.PoolKey, hash, tenant string) bool {
@@ -829,7 +840,7 @@ func (s *Server) handlePeers(w http.ResponseWriter, _ *http.Request) {
 func (s *Server) handleInfo(w http.ResponseWriter, _ *http.Request) {
 	pools, g := s.mgr.Info()
 	resp := InfoResponse{
-		Pools: pools, Templates: s.mgr.Templates(), Claimed: g.Claimed, Hibernated: g.Hibernated, Archived: g.Archived, Failed: g.Failed,
+		Pools: pools, Templates: s.mgr.Templates(), Claimed: g.Claimed, Running: g.Running, MaxRunning: g.MaxRunning, Hibernated: g.Hibernated, Archived: g.Archived, Failed: g.Failed,
 		Draining: g.Draining, AtCapacity: g.AtCapacity, AtCapacityReason: g.AtCapacityReason,
 		AdvertiseAddr: s.advertise,
 	}

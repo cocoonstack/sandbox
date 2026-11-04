@@ -341,11 +341,12 @@ func (m *Manager) releaseResolved(ctx context.Context, id string, sb *types.Sand
 	td.holds = volumeHolds
 	var err error
 	removed := vmName == ""
+	delay := m.view.Load().releaseDelay
 	switch {
 	case removed:
 		m.finishVolumeTeardown(ctx, td)
-	case m.releaseDelay > 0:
-		m.queueRemoval(vmName, id, "", td, time.Now().Add(m.releaseDelay))
+	case delay > 0:
+		m.queueRemoval(vmName, id, "", td, time.Now().Add(delay))
 	default:
 		if removed = m.removeOrRetry(ctx, vmName, id, td); !removed {
 			err = fmt.Errorf("vm %s survived removal", vmName)
@@ -399,8 +400,11 @@ func (m *Manager) quotaErr(extra int, tenant string) error {
 	if err := m.diskErr(); err != nil {
 		return err
 	}
-	if m.maxClaims > 0 && len(m.claimed)+extra > m.maxClaims {
-		return fmt.Errorf("%w: %d live claims, cap %d", ErrQuota, len(m.claimed), m.maxClaims)
+	if limit := m.view.Load().maxClaims; limit > 0 && len(m.claimed)+extra > limit {
+		return fmt.Errorf("%w: %d live claims, cap %d", ErrQuota, len(m.claimed), limit)
+	}
+	if err := m.runningErr(extra); err != nil {
+		return err
 	}
 	if tenant == "" {
 		return nil
@@ -414,6 +418,40 @@ func (m *Manager) quotaErr(extra int, tenant string) error {
 		return fmt.Errorf("%w: tenant %s at %d live claims, cap %d", ErrQuota, tenant, live, limit)
 	}
 	return nil
+}
+
+// Callers hold m.mu.
+func (m *Manager) runningErr(extra int) error {
+	limit := m.view.Load().maxRunning
+	if limit == 0 {
+		return nil
+	}
+	if running := m.store.runningCount(); running+extra > limit {
+		return fmt.Errorf("%w: %d running claims, cap %d", ErrQuota, running, limit)
+	}
+	return nil
+}
+
+// beginWake admits a wake and counts it as running until endWake; the caller holds sb.Transition.
+func (m *Manager) beginWake(sb *types.Sandbox) error {
+	if err := m.diskErr(); err != nil {
+		return err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if err := m.runningErr(1); err != nil {
+		return err
+	}
+	sb.Waking = true
+	m.store.recount(sb)
+	return nil
+}
+
+func (m *Manager) endWake(sb *types.Sandbox) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	sb.Waking = false
+	m.store.recount(sb)
 }
 
 // Callers hold m.mu.

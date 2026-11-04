@@ -1,6 +1,7 @@
 package pool
 
 import (
+	"cmp"
 	"time"
 
 	"github.com/cocoonstack/sandbox/sandboxd/config"
@@ -20,6 +21,16 @@ type configView struct {
 	diskReserve   int64
 	diskDirs      []string
 	noBalloon     bool
+
+	maxClaims            int
+	maxRunning           int
+	maxFork              int
+	releaseDelay         time.Duration
+	vmmRestart           types.VMMRestart
+	ckptTTL              time.Duration
+	idleDefault          time.Duration
+	archiveAfterDefault  time.Duration
+	archiveDeleteDefault time.Duration
 }
 
 func newConfigView(cfg *config.Config, secrets *egress.SecretStore) *configView {
@@ -31,6 +42,16 @@ func newConfigView(cfg *config.Config, secrets *egress.SecretStore) *configView 
 		poolReplicate: map[types.PoolKey]time.Duration{},
 		poolReaders:   map[types.PoolKey]bool{},
 		noBalloon:     cfg.NoBalloon,
+
+		maxClaims:            cfg.MaxClaims,
+		maxRunning:           cfg.MaxRunning,
+		maxFork:              cmp.Or(cfg.MaxForkCount, defaultMaxFork),
+		releaseDelay:         time.Duration(cfg.ReleaseDelaySeconds) * time.Second,
+		vmmRestart:           cfg.VMMRestart,
+		ckptTTL:              time.Duration(cfg.CheckpointTTLHours) * time.Hour,
+		idleDefault:          time.Duration(cfg.IdleHibernateSeconds) * time.Second,
+		archiveAfterDefault:  time.Duration(cfg.ArchiveAfterSeconds) * time.Second,
+		archiveDeleteDefault: time.Duration(cfg.ArchiveDeleteAfterSeconds) * time.Second,
 	}
 	if r := cfg.DiskReserve; r != nil {
 		v.diskReserve, _ = config.StorageBytes(r.Free)

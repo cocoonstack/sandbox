@@ -25,14 +25,14 @@ func (m *Manager) archiveAfterFor(key types.PoolKey) time.Duration {
 	if p, ok := m.activePool(key); ok {
 		return p.archiveAfter
 	}
-	return m.archiveAfterDefault
+	return m.view.Load().archiveAfterDefault
 }
 
 func (m *Manager) archiveDeleteFor(key types.PoolKey) time.Duration {
 	if p, ok := m.activePool(key); ok {
 		return p.archiveDelete
 	}
-	return m.archiveDeleteDefault
+	return m.view.Load().archiveDeleteDefault
 }
 
 // retentionDeadline is zero for an archive kept forever; callers hold m.mu.
@@ -194,9 +194,10 @@ func (m *Manager) wakeArchived(ctx context.Context, sb *types.Sandbox) (string, 
 	if err := m.tenantRemoved(ctx, sb.Tenant); err != nil {
 		return "", err
 	}
-	if err := m.diskErr(); err != nil {
+	if err := m.beginWake(sb); err != nil {
 		return "", fmt.Errorf("wake %s: %w", sb.ID, err)
 	}
+	defer m.endWake(sb)
 	ctx = context.WithoutCancel(ctx)
 	epoch, err := m.takeArchive(ctx, sb)
 	if err != nil {

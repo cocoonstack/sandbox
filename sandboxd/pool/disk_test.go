@@ -44,8 +44,8 @@ func TestDiskUnderReserveAdvertisesNoWarm(t *testing.T) {
 		t.Fatalf("warm count %d above the reserve, want 1", n)
 	}
 	m.checkDisk(t.Context())
-	if n, ok := m.WarmCounts()[p.hash]; !ok || n != 0 {
-		t.Errorf("warm count %d (listed %v) under the reserve, want a listed 0 so peers route around the node", n, ok)
+	if n, listed := m.WarmCounts()[p.hash]; listed {
+		t.Errorf("warm count %d under the reserve, want the pool unlisted so peers route around the node", n)
 	}
 }
 

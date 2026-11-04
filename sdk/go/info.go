@@ -14,6 +14,8 @@ type NodeInfo struct {
 	Pools            []PoolStatus     `json:"pools"`
 	Templates        []TemplateStatus `json:"templates"`
 	Claimed          int              `json:"claimed"`
+	Running          int              `json:"running"`
+	MaxRunning       int              `json:"max_running,omitzero"`
 	Hibernated       int              `json:"hibernated"`
 	Archived         int              `json:"archived"`
 	Failed           int              `json:"failed,omitzero"`

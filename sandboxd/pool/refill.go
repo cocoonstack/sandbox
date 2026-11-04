@@ -252,10 +252,7 @@ func (m *Manager) buildGoldenSteps(ctx context.Context, v *configView, key types
 	if err = m.eng.SettleGuest(ctx, sock); err != nil {
 		log.WithFunc("pool.buildGoldenSteps").Warnf(ctx, "capture golden of %s before its guest settled: %v", key.Template, err)
 	}
-	if err := m.eng.SnapshotSave(ctx, name, snap); err != nil {
-		return err
-	}
-	if err := m.exportGolden(ctx, snap, final); err != nil {
+	if err := m.dumpGolden(ctx, name, snap, final); err != nil {
 		return err
 	}
 	stamp := m.goldenStamp(v, key, imageID)
@@ -375,6 +372,19 @@ func (m *Manager) imageIDs(ctx context.Context) map[string]string {
 		log.WithFunc("pool.imageIDs").Warnf(ctx, "list images: %v", err)
 	}
 	return ids
+}
+
+func (m *Manager) dumpGolden(ctx context.Context, name, snap, final string) error {
+	select {
+	case m.goldenDumps <- struct{}{}:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	defer func() { <-m.goldenDumps }()
+	if err := m.eng.SnapshotSave(ctx, name, snap); err != nil {
+		return err
+	}
+	return m.exportGolden(ctx, snap, final)
 }
 
 // exportGolden exports snap into final through a unique sibling *.tmp dir.

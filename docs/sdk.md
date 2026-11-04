@@ -380,7 +380,9 @@ out, err := sb.Exec(ctx, "cat", "/tmp/state")   // sessions & memory intact
 `Hibernate` snapshots the VM and stops it in one atomic step — nothing the
 guest does can fall between the snapshot point and the stop. The handle
 stays valid: the first call that reaches the guest restores the VM (adding
-roughly a restore's latency, tens of milliseconds on bare metal). The TTL
+roughly a restore's latency, tens of milliseconds on bare metal). On a node at
+[`max_running`](deploy.md#configuration) that call returns a 429 `*APIError`,
+which the SDK does not retry, and the sandbox stays hibernated. The TTL
 keeps running — a hibernated sandbox is still reaped at its deadline, so
 claim with a `WithTimeout` that covers the idle period or `Renew` before it
 ends. When to hibernate is your policy; the node only provides the

@@ -61,6 +61,7 @@ func (m *Manager) ReloadConfig(ctx context.Context, next *config.Config) (Reload
 		}
 	}
 	m.mu.Unlock()
+	m.store.setSync(next.SyncClaims)
 	m.out.Reloaded()
 	m.destroyAll(context.WithoutCancel(ctx), trim).Wait()
 	m.cfg = next

@@ -226,7 +226,9 @@ sb.exec("cat", "/tmp/state")          # the next call that reaches the guest wak
 
 `hibernate` snapshots the VM and stops it in one atomic step. The handle
 stays valid: the first call that reaches the guest restores the VM (roughly
-a restore's latency, tens of milliseconds on bare metal). The TTL keeps
+a restore's latency, tens of milliseconds on bare metal). On a node at
+[`max_running`](deploy.md#configuration) that call raises a 429 `APIError`,
+which the SDK does not retry, and the sandbox stays hibernated. The TTL keeps
 running — a hibernated sandbox is still reaped at its deadline, so claim
 with a `ttl_seconds` that covers the idle period or `renew` before it ends.
 When to hibernate is your policy, unless the deployment opts into

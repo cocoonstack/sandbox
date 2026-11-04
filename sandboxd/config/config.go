@@ -270,6 +270,7 @@ type Config struct {
 	EgressConnRate      *EgressConnRate       `json:"egress_conn_rate,omitempty"`
 
 	MaxClaims           int  `json:"max_claims,omitzero"`
+	MaxRunning          int  `json:"max_running,omitzero"`
 	MaxForkCount        int  `json:"max_fork_count,omitzero"`
 	RefillConcurrency   int  `json:"refill_concurrency,omitzero"`
 	ReleaseDelaySeconds int  `json:"release_delay_seconds,omitzero"`
@@ -325,6 +326,7 @@ func (c *Config) validate() error {
 		{"idle_hibernate_seconds", c.IdleHibernateSeconds},
 		{"checkpoint_ttl_hours", c.CheckpointTTLHours},
 		{"max_claims", c.MaxClaims},
+		{"max_running", c.MaxRunning},
 		{"refill_concurrency", c.RefillConcurrency},
 		{"release_delay_seconds", c.ReleaseDelaySeconds},
 	} {
