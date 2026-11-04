@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+import json
+from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
     from .volumes import SandboxVolumesResponse
@@ -63,3 +64,10 @@ def require_field(reply: dict[str, Any], key: str, verb: str) -> Any:
     if key not in reply:
         raise APIError(verb, 0, f"reply without {key}")
     return reply[key]
+
+
+def _error_message(raw: bytes) -> str:
+    try:
+        return cast(str, json.loads(raw)["error"])
+    except (ValueError, KeyError, TypeError):
+        return raw.decode(errors="replace").strip()

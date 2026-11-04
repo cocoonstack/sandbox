@@ -12,7 +12,7 @@ import urllib.parse
 from collections.abc import Callable, Iterator
 from typing import Any, BinaryIO, Protocol, TypeVar, cast
 
-from .errors import APIError, ProtocolError, SandboxError, SandboxTimeout, SilkdError
+from .errors import APIError, ProtocolError, SandboxError, SandboxTimeout, SilkdError, _error_message
 from .frames import MAX_FRAME, decode_response, encode_request
 
 KEEP_ALIVE_CONNS = 8
@@ -294,5 +294,5 @@ def _read_upgrade(reader: BinaryIO, arm: Callable[[], None]) -> None:
                 raise ProtocolError("invalid content-length in upgrade reply") from exc
     if code != 101:
         arm()
-        body = reader.read(min(body_len, MAX_FRAME)).decode(errors="replace") if body_len else ""
-        raise APIError("agent upgrade", code, body.strip() or status.strip())
+        body = reader.read(min(body_len, MAX_FRAME)) if body_len else b""
+        raise APIError("agent upgrade", code, _error_message(body) or status.strip())

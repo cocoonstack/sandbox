@@ -74,6 +74,19 @@ def test_rejected_upgrade_is_an_api_error():
     assert agent.early == ["fs_mkdir"], agent.early
 
 
+def test_rejected_upgrade_reports_the_servers_error_text():
+    body = b'{"error":"unknown sandbox"}'
+    head = b"HTTP/1.1 404 Not Found\r\nContent-Type: application/json\r\nContent-Length: %d\r\n\r\n" % len(body)
+    agent = EarlyFrameAgent(head + body)
+    sb = sandbox_at(agent.addr, timeout=5, keep_alive=0)
+    try:
+        with pytest.raises(APIError) as refused:
+            sb.mkdir("/w")
+    finally:
+        agent.stop()
+    assert (refused.value.status, refused.value.message) == (404, "unknown sandbox"), refused.value
+
+
 def test_run_timeout_cuts_an_unanswered_upgrade(black_hole):
     sb = sandbox_at(black_hole, timeout=30, keep_alive=0)
     started = time.monotonic()
