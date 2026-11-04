@@ -18,7 +18,7 @@ const (
 	// MoveStartAllowance is what the target's receive and start add to the final round's transfer, so a smaller downtime budget never fits.
 	MoveStartAllowance = 400 * time.Millisecond
 
-	movesDir = "moves"
+	movesDir            = "moves"
 	moveReservationIdle = 2 * time.Minute
 	moveRetryInterval   = 2 * time.Second
 	moveDeltaLimit      = 4

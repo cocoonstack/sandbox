@@ -142,6 +142,13 @@ func Untar(r io.Reader, dst string) error {
 	}
 }
 
+func URL(addr, path string) string {
+	if !strings.Contains(addr, "://") {
+		addr = "http://" + addr
+	}
+	return addr + path
+}
+
 func untarRegular(r io.Reader, hdr *tar.Header, target string, sizes map[string]int64) error {
 	mode := os.FileMode(hdr.Mode).Perm() //nolint:gosec // Perm masks to 0777
 	if raw, ok := hdr.PAXRecords[paxFileSize]; ok {
@@ -203,13 +210,6 @@ func writeFile(target string, r io.Reader, mode os.FileMode) error {
 
 func checkpointURL(addr, id, suffix string) string {
 	return URL(addr, "/v1/checkpoints/"+url.PathEscape(id)+suffix)
-}
-
-func URL(addr, path string) string {
-	if !strings.Contains(addr, "://") {
-		addr = "http://" + addr
-	}
-	return addr + path
 }
 
 // safeJoin resolves name under root, rejecting absolute paths and names that escape root.
