@@ -43,8 +43,12 @@ func TestSendRoundShipsTheListedFilesInOrderAndKeepsSparseFilesSparse(t *testing
 	}))
 	defer srv.Close()
 
-	if err := SendRound(t.Context(), srv.URL, "fleet-token", "/v1/moves/m1/rounds/1", src, names); err != nil {
+	wire, err := SendRound(t.Context(), srv.URL, "fleet-token", "/v1/moves/m1/rounds/1", src, names)
+	if err != nil {
 		t.Fatalf("SendRound: %v", err)
+	}
+	if wire != int64(body.Len()) || wire >= size {
+		t.Errorf("SendRound counted %d bytes, want the %d on the wire, far below the sparse file's %d", wire, body.Len(), size)
 	}
 	if method != http.MethodPut || path != "/v1/moves/m1/rounds/1" || auth != "Bearer fleet-token" {
 		t.Errorf("request = %s %s auth %q, want PUT /v1/moves/m1/rounds/1 with the fleet token", method, path, auth)
@@ -210,10 +214,10 @@ func TestSendRoundFailsOnARefusedPutOrAMissingFile(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	if err := SendRound(t.Context(), srv.URL, "wrong", "/r", src, []string{"state.json"}); err == nil || !strings.Contains(err.Error(), "401") {
+	if _, err := SendRound(t.Context(), srv.URL, "wrong", "/r", src, []string{"state.json"}); err == nil || !strings.Contains(err.Error(), "401") {
 		t.Errorf("refused PUT = %v, want the 401", err)
 	}
-	if err := SendRound(t.Context(), srv.URL, "fleet-token", "/r", src, []string{"state.json", "missing"}); err == nil || !errors.Is(err, os.ErrNotExist) {
+	if _, err := SendRound(t.Context(), srv.URL, "fleet-token", "/r", src, []string{"state.json", "missing"}); err == nil || !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("round with a missing file = %v, want the stat error", err)
 	}
 }
@@ -230,7 +234,7 @@ func TestSendRoundFailsWhenATargetStopsReading(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
 	defer cancel()
-	if err := SendRound(ctx, srv.URL, "", "/r", src, []string{"memory-ranges"}); !errors.Is(err, context.DeadlineExceeded) {
+	if _, err := SendRound(ctx, srv.URL, "", "/r", src, []string{"memory-ranges"}); !errors.Is(err, context.DeadlineExceeded) {
 		t.Errorf("round to a target that stopped reading: %v, want the deadline", err)
 	}
 }

@@ -45,7 +45,7 @@ type MoveResult struct {
 type MovePeer interface {
 	// Admit reserves a claim slot on the target and returns its node id.
 	Admit(ctx context.Context, addr, id string, a MoveAdmission) (string, error)
-	SendRound(ctx context.Context, addr, id string, round int, dir string, files []string) error
+	SendRound(ctx context.Context, addr, id string, round int, dir string, files []string) (int64, error)
 	// Commit hands the target the claim record and the final epoch.
 	Commit(ctx context.Context, addr, id string, claim []byte, epoch int64) error
 	Drop(ctx context.Context, addr, id string) error

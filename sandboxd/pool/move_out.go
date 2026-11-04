@@ -78,11 +78,11 @@ func (m *Manager) moveOut(ctx context.Context, sb *types.Sandbox, mv *outMove, b
 	var sending time.Duration
 	for delta := 0; ; delta++ {
 		start := time.Now()
-		if err = m.sendRound(ctx, sb.ID, mv, round); err != nil {
-			return err
+		size, sendErr := m.sendRound(ctx, sb.ID, mv, round)
+		if sendErr != nil {
+			return sendErr
 		}
 		sending += time.Since(start)
-		size := roundBytes(round)
 		sent += size
 		if delta > 0 {
 			if finalPause(size, sent, sending) <= budget {
@@ -115,7 +115,7 @@ func (m *Manager) moveOut(ctx context.Context, sb *types.Sandbox, mv *outMove, b
 	if err != nil {
 		return err
 	}
-	if err = m.sendRound(ctx, sb.ID, mv, round); err != nil {
+	if _, err = m.sendRound(ctx, sb.ID, mv, round); err != nil {
 		return err
 	}
 	m.mu.Lock()
@@ -149,7 +149,7 @@ func (m *Manager) beginMove(ctx context.Context, sb *types.Sandbox, to string) (
 	return m.moves.Begin(ctx, sb.ID, m.nodeID, to)
 }
 
-func (m *Manager) sendRound(ctx context.Context, id string, mv *outMove, round types.MigrateRound) error {
+func (m *Manager) sendRound(ctx context.Context, id string, mv *outMove, round types.MigrateRound) (int64, error) {
 	mv.rounds++
 	names := make([]string, len(round.Files))
 	for i, f := range round.Files {

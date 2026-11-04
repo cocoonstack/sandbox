@@ -16,24 +16,36 @@ import (
 
 const partialSuffix = ".partial"
 
-// SendRound PUTs the named files of dir to a peer as one tar stream, in the given order, sparse files kept sparse.
-func SendRound(ctx context.Context, addr, token, path, dir string, names []string) error {
+type countingWriter struct {
+	w io.Writer
+	n int64
+}
+
+func (c *countingWriter) Write(p []byte) (int, error) {
+	n, err := c.w.Write(p)
+	c.n += int64(n)
+	return n, err
+}
+
+// SendRound PUTs the named files of dir to a peer as one tar stream, in the given order, sparse files kept sparse, and returns the bytes it wrote.
+func SendRound(ctx context.Context, addr, token, path, dir string, names []string) (int64, error) {
 	pr, pw := io.Pipe()
+	counted := &countingWriter{w: pw}
 	written := make(chan error, 1)
 	go func() {
-		err := writeRound(dir, names, pw)
+		err := writeRound(dir, names, counted)
 		_ = pw.CloseWithError(err)
 		written <- err
 	}()
 	err := peerCall(ctx, http.MethodPut, URL(addr, path), token, pr, 0, http.StatusOK, http.StatusNoContent)
 	_ = pr.Close()
 	if writeErr := <-written; writeErr != nil && !errors.Is(writeErr, io.ErrClosedPipe) {
-		return fmt.Errorf("send round to %s: %w", addr, writeErr)
+		return counted.n, fmt.Errorf("send round to %s: %w", addr, writeErr)
 	}
 	if err != nil {
-		return fmt.Errorf("send round to %s: %w", addr, err)
+		return counted.n, fmt.Errorf("send round to %s: %w", addr, err)
 	}
-	return nil
+	return counted.n, nil
 }
 
 // ReceiveRound writes a SendRound stream into dst, replacing same-named files; a file takes its name only once all of it arrived.

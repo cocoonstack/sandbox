@@ -33,11 +33,12 @@ func (c *MoveClient) Admit(ctx context.Context, addr, id string, a pool.MoveAdmi
 	return out.Node, err
 }
 
-func (c *MoveClient) SendRound(ctx context.Context, addr, id string, round int, dir string, files []string) error {
-	if err := peer.SendRound(ctx, addr, c.Token, movePath(id, "/rounds/"+strconv.Itoa(round)), dir, files); err != nil {
-		return fmt.Errorf("%w: %w", pool.ErrMoveTarget, err)
+func (c *MoveClient) SendRound(ctx context.Context, addr, id string, round int, dir string, files []string) (int64, error) {
+	wire, err := peer.SendRound(ctx, addr, c.Token, movePath(id, "/rounds/"+strconv.Itoa(round)), dir, files)
+	if err != nil {
+		return wire, fmt.Errorf("%w: %w", pool.ErrMoveTarget, err)
 	}
-	return nil
+	return wire, nil
 }
 
 func (c *MoveClient) Commit(ctx context.Context, addr, id string, claim []byte, epoch int64) error {

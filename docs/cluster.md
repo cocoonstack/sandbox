@@ -368,7 +368,7 @@ writes `aborted` over a `pending` or `final` one, and the source deletes the
 ended ones.
 
 **Rounds.** The source sends a baseline round, then up to 4 deltas, each over
-the control port with the root token. Once the last delta's size at the rate
+the control port with the root token. Once the last delta's bytes on the wire at the rate
 the rounds reached, plus 400 ms for the receive and the start, fits
 `max_downtime_ms` (default 2000, and above 400 since those 400 ms alone would
 never fit), the source pauses the guest for the final

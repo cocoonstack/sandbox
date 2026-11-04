@@ -280,7 +280,7 @@ func TestMoveTargetRefusesARoundThatOutlivedItsReservation(t *testing.T) {
 		w.WriteHeader(http.StatusNoContent)
 	}))
 	defer capture.Close()
-	if err := peer.SendRound(t.Context(), capture.URL, "", "/", src, []string{"state.json"}); err != nil {
+	if _, err := peer.SendRound(t.Context(), capture.URL, "", "/", src, []string{"state.json"}); err != nil {
 		t.Fatalf("capture a round: %v", err)
 	}
 	body, stream := io.Pipe()
@@ -631,6 +631,32 @@ func TestMoveFinalRoundAnswersUserCallsAtOnce(t *testing.T) {
 	}
 }
 
+func TestMoveEstimatesThePauseFromTheBytesOnTheWire(t *testing.T) {
+	mc := newMoveCluster(t)
+	sb := mustClaim(t, mc.s, testKey)
+	eng := fakeOf(mc.s)
+	eng.migrateSizes = []int64{10 << 30, 520 << 20, 500 << 20, 480 << 20, 460 << 20}
+	mc.p.wireSizes = []int64{1400 << 20, 520 << 20, 500 << 20, 480 << 20, 460 << 20}
+	mc.p.roundHook = func(round int) error {
+		if round == 1 {
+			time.Sleep(250 * time.Millisecond)
+		} else {
+			time.Sleep(50 * time.Millisecond)
+		}
+		return nil
+	}
+	if _, err := mc.s.Move(t.Context(), sb.ID, "b", MoveStartAllowance+50*time.Millisecond); !errors.Is(err, ErrMoveDowntime) {
+		t.Fatalf("move of a hot guest: %v, want ErrMoveDowntime", err)
+	}
+	eng.mu.Lock()
+	wentFinal := slices.ContainsFunc(eng.captures, func(c string) bool { return strings.HasSuffix(c, ":true") })
+	eng.mu.Unlock()
+	if wentFinal {
+		t.Error("the move paused the guest for a final round that cannot fit")
+	}
+	assertStillOnSource(t, mc, sb)
+}
+
 func TestMoveGivesUpOnDeltasThatStopShrinking(t *testing.T) {
 	for name, tt := range map[string]struct {
 		sizes    []int64
@@ -645,7 +671,7 @@ func TestMoveGivesUpOnDeltasThatStopShrinking(t *testing.T) {
 			mc := newMoveCluster(t)
 			sb := mustClaim(t, mc.s, testKey)
 			eng := fakeOf(mc.s)
-			eng.migrateSizes = tt.sizes
+			mc.p.wireSizes = tt.sizes
 			if _, err := mc.s.Move(t.Context(), sb.ID, "b", time.Millisecond); !errors.Is(err, ErrMoveDowntime) {
 				t.Fatalf("move: %v, want ErrMoveDowntime", err)
 			}
@@ -1217,6 +1243,7 @@ type fakeMovePeer struct {
 	loseCommitReply bool
 	dropHook        func()
 	roundBudgets    []time.Duration
+	wireSizes       []int64
 	commitKilled    <-chan struct{}
 }
 
@@ -1242,19 +1269,23 @@ func (p *fakeMovePeer) Admit(_ context.Context, addr, id string, a MoveAdmission
 	return p.target(addr).AdmitMove(id, a)
 }
 
-func (p *fakeMovePeer) SendRound(ctx context.Context, addr, id string, round int, dir string, files []string) error {
+func (p *fakeMovePeer) SendRound(ctx context.Context, addr, id string, round int, dir string, files []string) (int64, error) {
 	if deadline, ok := ctx.Deadline(); ok {
 		p.roundBudgets = append(p.roundBudgets, time.Until(deadline))
 	}
 	if hook := p.roundHook; hook != nil {
 		if err := hook(round); err != nil {
-			return err
+			return 0, err
 		}
 	}
-	if err := peer.SendRound(ctx, p.srv.URL, "", "/"+addr+"/"+id, dir, files); err != nil {
-		return errors.Join(ErrMoveTarget, err)
+	wire, err := peer.SendRound(ctx, p.srv.URL, "", "/"+addr+"/"+id, dir, files)
+	if err != nil {
+		return wire, errors.Join(ErrMoveTarget, err)
 	}
-	return nil
+	if len(p.wireSizes) > 0 {
+		wire, p.wireSizes = p.wireSizes[0], p.wireSizes[1:]
+	}
+	return wire, nil
 }
 
 func (p *fakeMovePeer) Commit(ctx context.Context, addr, id string, claim []byte, epoch int64) error {
