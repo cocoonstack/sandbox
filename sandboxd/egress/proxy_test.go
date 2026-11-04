@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -576,6 +577,33 @@ func TestARateLimitedConnectionAnswers429AndIsAudited(t *testing.T) {
 	}
 	if ev := recvEvent(t, events); ev.Decision != DecisionRateLimited {
 		t.Errorf("CONNECT audit %+v, want rate limited", ev)
+	}
+}
+
+func TestABlockedInternalDialIsAuditedAsADenyWithNoTransfer(t *testing.T) {
+	events, transfers := make(chan Event, 4), make(chan Event, 4)
+	dial := DialFunc(func(context.Context, string, string) (net.Conn, error) {
+		return nil, fmt.Errorf("%w 127.0.0.1", ErrInternalAddr)
+	})
+	p := New(Policy{Allow: []Rule{{Host: "*"}}}, nil, nil, dial, func(ev Event) { events <- ev }, nil)
+	p.OnTransfer(func(ev Event, _, _ int64) { transfers <- ev })
+	front := serveFront(t, p)
+
+	resp := proxiedGet(t, front.URL, "http://api.internal/x")
+	_ = resp.Body.Close()
+	if ev := recvEvent(t, events); ev.Decision != DecisionDeny {
+		t.Errorf("forward audit %+v, want deny", ev)
+	}
+	conn := dialConnect(t, front.Listener.Addr().String(), "echo.internal:443")
+	defer func() { _ = conn.Close() }()
+	_ = readStatus(t, bufio.NewReader(conn))
+	if ev := recvEvent(t, events); ev.Decision != DecisionDeny {
+		t.Errorf("CONNECT audit %+v, want deny", ev)
+	}
+	select {
+	case ev := <-transfers:
+		t.Errorf("a refused dial reported a transfer for %s", ev.Host)
+	case <-time.After(200 * time.Millisecond):
 	}
 }
 

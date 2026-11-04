@@ -101,7 +101,7 @@ func destVerdict(allow []egress.InternalAllow, self []netip.Addr, ip netip.Addr,
 		return true, nil
 	}
 	if internalAddr(self, ip) {
-		return false, fmt.Errorf("egress: blocked internal address %s", ip)
+		return false, fmt.Errorf("%w %s", egress.ErrInternalAddr, ip)
 	}
 	return false, nil
 }
