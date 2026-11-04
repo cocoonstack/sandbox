@@ -50,6 +50,10 @@ func (m *Manager) writeEnv(ctx context.Context, id, tenant, verb string, next fu
 		m.mu.Unlock()
 		return ErrUnknownSandbox
 	}
+	if m.pausedForMoveLocked(sb) {
+		m.mu.Unlock()
+		return ErrEvacuating
+	}
 	prev, sock, failed := sb.Env, sb.VsockSocket, sb.Failed != ""
 	env := next(prev)
 	if len(env) == 0 {

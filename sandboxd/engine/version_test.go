@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -35,19 +36,26 @@ func TestBelowFloorComparesReleasesAndLeavesOthersUnknown(t *testing.T) {
 	}
 }
 
-func TestLiveVolumeSupportFollowsTheCocoonVersion(t *testing.T) {
+func TestFeatureSupportFollowsTheCocoonVersion(t *testing.T) {
+	liveVolume, migrate := (*Engine).CheckLiveVolumeSupport, (*Engine).CheckMigrateSupport
 	for _, tt := range []struct {
+		check         func(*Engine, context.Context) error
+		floor         string
 		version       string
 		fail, allowed bool
 	}{
-		{"v0.7.1", false, false},
-		{"v0.7.2-rc.1", false, false},
-		{"v0.7.2", false, true},
-		{"v0.8.0", false, true},
-		{"master-abcdef", false, true},
-		{"v0.7.2", true, false},
+		{liveVolume, LiveVolumeCocoon, "v0.7.1", false, false},
+		{liveVolume, LiveVolumeCocoon, "v0.7.2-rc.1", false, false},
+		{liveVolume, LiveVolumeCocoon, "v0.7.2", false, true},
+		{liveVolume, LiveVolumeCocoon, "v0.8.0", false, true},
+		{liveVolume, LiveVolumeCocoon, "master-abcdef", false, true},
+		{liveVolume, LiveVolumeCocoon, "v0.7.2", true, false},
+		{migrate, MigrateCocoon, "v0.7.6", false, false},
+		{migrate, MigrateCocoon, "v0.7.7", false, true},
+		{migrate, MigrateCocoon, "master-ba2020c", false, true},
+		{migrate, MigrateCocoon, "v0.7.7", true, false},
 	} {
-		t.Run(fmt.Sprintf("%s/fail=%v", tt.version, tt.fail), func(t *testing.T) {
+		t.Run(fmt.Sprintf("floor=%s/%s/fail=%v", tt.floor, tt.version, tt.fail), func(t *testing.T) {
 			t.Setenv("COCOON_TEST_VERSION", tt.version)
 			t.Setenv("COCOON_TEST_VERSION_FAIL", "")
 			if tt.fail {
@@ -58,14 +66,16 @@ if [ "$#" != 1 ] || [ "$1" != version ]; then exit 2; fi
 if [ -n "$COCOON_TEST_VERSION_FAIL" ]; then echo /private/cocoon >&2; exit 1; fi
 printf 'Version: %s\n' "$COCOON_TEST_VERSION"
 `)
-			err := newTestEngine().CheckLiveVolumeSupport(t.Context())
+			err := tt.check(newTestEngine(), t.Context())
 			if tt.allowed {
 				if err != nil {
 					t.Fatal(err)
 				}
 				return
 			}
-			if _, ok := errors.AsType[*LiveVolumeUnsupported](err); !ok || !strings.Contains(err.Error(), LiveVolumeCocoon) || strings.Contains(err.Error(), "/private") {
+			_, isVolume := errors.AsType[*LiveVolumeUnsupported](err)
+			_, isMigrate := errors.AsType[*MigrateUnsupported](err)
+			if !isVolume && !isMigrate || !strings.Contains(err.Error(), tt.floor) || strings.Contains(err.Error(), "/private") {
 				t.Fatalf("error %v", err)
 			}
 		})

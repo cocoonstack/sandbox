@@ -57,7 +57,7 @@ func (m *Manager) SetInstanceMetadata(ctx context.Context, id string, doc []byte
 		return ErrArchived
 	case sb.Failed != "":
 		return ErrFailed
-	case sb.HibernateSnap != "" || sb.PendingSnap != "":
+	case !runningShaped(sb):
 		return ErrPaused
 	}
 	return m.eng.WriteInstanceMetadata(ctx, sb.VsockSocket, doc)

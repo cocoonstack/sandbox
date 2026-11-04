@@ -17,6 +17,7 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/archives/archivestest"
 	"github.com/cocoonstack/sandbox/sandboxd/config"
 	"github.com/cocoonstack/sandbox/sandboxd/egress"
+	"github.com/cocoonstack/sandbox/sandboxd/moves"
 	"github.com/cocoonstack/sandbox/sandboxd/store"
 	"github.com/cocoonstack/sandbox/sandboxd/tenants"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
@@ -1868,12 +1869,14 @@ func TestFailoverAReleaseFindsItsUnsettledArchiveTakenElsewhere(t *testing.T) {
 }
 
 type failoverCluster struct {
-	reg       *archivestest.Mem
-	ckDir     string
-	replicate int
-	volumes   []config.VolumeSpec
-	nodes     []*Manager
-	egressPol *egress.Policy
+	reg        *archivestest.Mem
+	moves      moves.Registry
+	ckDir      string
+	replicate  int
+	volumes    []config.VolumeSpec
+	nodes      []*Manager
+	egressPol  *egress.Policy
+	noArchives bool
 }
 
 func newFailoverCluster(t *testing.T) *failoverCluster {
@@ -1940,7 +1943,10 @@ func (c *failoverCluster) nodeOn(t *testing.T, eng *fakeEngine, name, dataDir st
 		cfg.EgressCA = writeTestEgressCA(t)
 	}
 	b := testBackends(t, cfg)
-	b.Archives = c.reg
+	b.Moves = c.moves
+	if !c.noArchives {
+		b.Archives = c.reg
+	}
 	m, err := NewManager(t.Context(), cfg, eng, testSecrets(t), b)
 	if err != nil {
 		t.Fatalf("manager %s: %v", name, err)
@@ -1972,6 +1978,7 @@ type hookRegistry struct {
 	loseConsumeReply bool
 	loseTakeReply    bool
 	loseReleaseReply bool
+	loseDeleteReply  bool
 	losePutReply     bool
 	failPut          bool
 	replaces         int
@@ -2041,7 +2048,12 @@ func (r *hookRegistry) Delete(ctx context.Context, id string, epoch int64) error
 		r.beforeDelete = nil
 		hook()
 	}
-	return r.Registry.Delete(ctx, id, epoch)
+	err := r.Registry.Delete(ctx, id, epoch)
+	if err == nil && r.loseDeleteReply {
+		r.loseDeleteReply = false
+		return archives.ErrUnavailable
+	}
+	return err
 }
 
 func (r *hookRegistry) Rows(ctx context.Context, ids []string) (map[string]archives.Record, error) {

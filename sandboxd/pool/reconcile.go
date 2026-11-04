@@ -75,6 +75,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 		owned[sb.VMName] = true
 		referenced[sb.HibernateSnap] = true
 	}
+	outs, ins := m.pendingMovesLocked()
 	saveErr := m.store.save(m.claimed)
 	pooled := make(map[string]bool, len(m.pools))
 	for _, p := range m.pools {
@@ -110,6 +111,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 	// A crash mid-export leaves a fork-* staging dir nothing in this life reuses
 	_ = utils.RemoveDirEntries(m.dataDir, func(name string) bool { return strings.HasPrefix(name, "fork-") })
 	_ = utils.RemoveDirEntries(filepath.Join(m.dataDir, readerDir), nil)
+	_ = utils.RemoveDirEntries(filepath.Join(m.dataDir, movesDir), func(id string) bool { return claims[id] == nil || !claims[id].MoveIn })
 
 	if fenced {
 		m.reclaimOrphanArchiveCks(ctx, claims)
@@ -135,7 +137,41 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 	m.resyncEgress(ctx, live, removed)
 	m.warnDeniedClaims(ctx)
 	logger.Infof(ctx, "adopted %d claims, %d VMs live", len(m.claimed), len(live))
+	m.resumeMoves(context.WithoutCancel(ctx), outs, ins)
 	return saveErr
+}
+
+// pendingMovesLocked marks the journaled moves of loaded claims: a source keeps its claim gated until the record resolves; callers hold m.mu.
+func (m *Manager) pendingMovesLocked() (map[*types.Sandbox]*outMove, []*types.Sandbox) {
+	if m.moves == nil {
+		return nil, nil
+	}
+	outs := map[*types.Sandbox]*outMove{}
+	var ins []*types.Sandbox
+	for id, sb := range m.claimed {
+		switch {
+		case sb.MoveOut != nil:
+			mv := &outMove{MoveOut: *sb.MoveOut, final: true}
+			m.moving[id], outs[sb] = mv, mv
+		case sb.MoveIn:
+			ins = append(ins, sb)
+		}
+	}
+	return outs, ins
+}
+
+// resumeMoves resolves each journaled move through its record in the background, retrying while the registry is down.
+func (m *Manager) resumeMoves(ctx context.Context, outs map[*types.Sandbox]*outMove, ins []*types.Sandbox) {
+	for sb, mv := range outs {
+		go func() {
+			sb.Transition.Lock()
+			mv.locked = true
+			m.retryMoveOut(ctx, sb, mv)
+		}()
+	}
+	for _, sb := range ins {
+		go m.settleMoveIn(ctx, sb)
+	}
 }
 
 // sweepStaleVMs removes sbx-prefixed VMs no claim owns and returns the ones confirmed gone.

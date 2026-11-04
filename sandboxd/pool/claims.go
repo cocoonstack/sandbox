@@ -64,6 +64,8 @@ type claimDTO struct {
 	Restarts       int                `json:"restarts,omitzero"`
 	RestartedAt    time.Time          `json:"restarted_at,omitzero"`
 	Failed         string             `json:"failed,omitempty"`
+	MoveOut        *types.MoveOut     `json:"move_out,omitempty"`
+	MoveIn         bool               `json:"move_in,omitzero"`
 }
 
 // claimRow keeps its encoded member until set replaces the row; set never edits one.
@@ -394,7 +396,7 @@ func dtoOf(sb *types.Sandbox) claimDTO {
 		Volumes: slices.Clone(sb.Volumes), VolumesWant: volumesWantDTO(sb), Env: sb.Env, VsockSocket: sb.VsockSocket,
 		TAP: sb.TAP, HibernateSnap: sb.HibernateSnap, PendingSnap: sb.PendingSnap, ReaderSafe: sb.ReaderSafe,
 		ArchiveCk: sb.ArchiveCk, ArchiveEpoch: sb.ArchiveEpoch, ArchivePending: sb.ArchivePending, ReplicaCk: sb.ReplicaCk, ReplicaPending: sb.ReplicaPending, FromCheckpoint: sb.FromCheckpoint,
-		Restarts: sb.Restarts, RestartedAt: sb.RestartedAt, Failed: sb.Failed,
+		Restarts: sb.Restarts, RestartedAt: sb.RestartedAt, Failed: sb.Failed, MoveOut: sb.MoveOut, MoveIn: sb.MoveIn,
 	}
 }
 

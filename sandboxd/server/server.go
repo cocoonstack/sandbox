@@ -60,6 +60,10 @@ var poolErrHTTP = []struct {
 	{pool.ErrVolumeCatalogUnavailable, http.StatusServiceUnavailable, "volume catalog unavailable; retry"},
 	{pool.ErrLeaseLost, http.StatusServiceUnavailable, "lease lost; retry"},
 	{pool.ErrEvacuating, http.StatusServiceUnavailable, "sandbox moving to another node; retry"},
+	{pool.ErrMoveStoreDown, http.StatusServiceUnavailable, ""},
+	{pool.ErrMoveDowntime, http.StatusServiceUnavailable, ""},
+	{pool.ErrMoveTarget, http.StatusBadGateway, ""},
+	{pool.ErrNotMovable, http.StatusConflict, ""},
 	{pool.ErrNoEgress, http.StatusConflict, ""},
 	{pool.ErrNoEgressHibernate, http.StatusConflict, ""},
 	{pool.ErrNoEgressFork, http.StatusConflict, ""},
@@ -142,6 +146,11 @@ type Manager interface {
 	Uncordon(ctx context.Context)
 	Info() ([]pool.PoolInfo, pool.Gauges)
 	Templates() []pool.TemplateInfo
+	Move(ctx context.Context, id, addr string, maxDowntime time.Duration) (pool.MoveResult, error)
+	AdmitMove(ctx context.Context, id string, a pool.MoveAdmission) (string, error)
+	ReceiveMoveRound(id string, body io.Reader) error
+	CommitMove(ctx context.Context, id string, claim []byte, epoch int64) error
+	DropMove(id string)
 }
 
 // Dialer opens the hybrid-vsock connection to a VM's silkd.
@@ -332,6 +341,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PUT /v1/tenants", s.requireRoot(s.handlePutTenants))
 	mux.HandleFunc("PUT /v1/tenants/{name}", s.requireRoot(s.handlePutTenant))
 	mux.HandleFunc("DELETE /v1/tenants/{name}", s.requireRoot(s.handleDeleteTenant))
+	mux.HandleFunc("POST /v1/sandboxes/{id}/move", s.requireRoot(s.handleMove))
+	mux.HandleFunc("POST /v1/moves/{id}", s.requireRoot(s.handleAdmitMove))
+	mux.HandleFunc("PUT /v1/moves/{id}/rounds/{n}", s.requireRoot(s.handleMoveRound))
+	mux.HandleFunc("POST /v1/moves/{id}/commit", s.requireRoot(s.handleCommitMove))
+	mux.HandleFunc("DELETE /v1/moves/{id}", s.requireRoot(s.handleDropMove))
 	mux.HandleFunc("POST /v1/drain", s.requireRoot(s.handleDrain))
 	mux.HandleFunc("DELETE /v1/drain", s.requireRoot(s.handleUncordon))
 	mux.HandleFunc("GET /v1/usage", s.requireRoot(s.handleUsage))

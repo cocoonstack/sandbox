@@ -66,8 +66,7 @@ func (m *Manager) replicateOnce(ctx context.Context) {
 
 // replicable excludes a claim that is paused, archived or archiving, failed, or whose tenant was removed; callers hold m.mu.
 func (m *Manager) replicable(sb *types.Sandbox) bool {
-	_, archiving := m.archiving[sb.ID]
-	return !archiving && runningShaped(sb) && sb.ArchivePending == "" && !m.tenantGone(sb.Tenant)
+	return m.vmSettledLocked(sb) && sb.ArchivePending == "" && !m.tenantGone(sb.Tenant)
 }
 
 func (m *Manager) replicate(ctx context.Context, sb *types.Sandbox) error {
@@ -108,7 +107,7 @@ func (m *Manager) replicate(ctx context.Context, sb *types.Sandbox) error {
 	var intent claimSnapshot
 	var refusal error
 	switch {
-	case m.claimed[sb.ID] != sb || sb.ArchiveCk != "" || sb.ArchivePending != "":
+	case m.claimed[sb.ID] != sb || sb.ArchiveCk != "" || sb.ArchivePending != "" || m.midMoveLocked(sb):
 		refusal = errWokeMeanwhile
 	case m.hasVolumeHolds(sb):
 		refusal = ErrVolumeCapture

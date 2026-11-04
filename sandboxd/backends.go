@@ -9,6 +9,7 @@ import (
 
 	archivespg "github.com/cocoonstack/sandbox/sandboxd/archives/pg"
 	"github.com/cocoonstack/sandbox/sandboxd/config"
+	movespg "github.com/cocoonstack/sandbox/sandboxd/moves/pg"
 	"github.com/cocoonstack/sandbox/sandboxd/pool"
 	poolpg "github.com/cocoonstack/sandbox/sandboxd/poolset/pg"
 	"github.com/cocoonstack/sandbox/sandboxd/store"
@@ -41,6 +42,11 @@ func openBackends(ctx context.Context, cfg *config.Config) (pool.Backends, error
 	}
 	if cfg.ArchiveFailover {
 		if b.Archives, err = archivespg.Open(ctx, os.Getenv(ms.DSNEnv), ms.Cell); err != nil {
+			return pool.Backends{}, err
+		}
+	}
+	if cfg.Movable() {
+		if b.Moves, err = movespg.Open(ctx, os.Getenv(ms.DSNEnv), ms.Cell); err != nil {
 			return pool.Backends{}, err
 		}
 	}

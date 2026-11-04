@@ -142,6 +142,13 @@ func Untar(r io.Reader, dst string) error {
 	}
 }
 
+func URL(addr, path string) string {
+	if !strings.Contains(addr, "://") {
+		addr = "http://" + addr
+	}
+	return addr + path
+}
+
 func untarRegular(r io.Reader, hdr *tar.Header, target string, sizes map[string]int64) error {
 	mode := os.FileMode(hdr.Mode).Perm() //nolint:gosec // Perm masks to 0777
 	if raw, ok := hdr.PAXRecords[paxFileSize]; ok {
@@ -202,14 +209,7 @@ func writeFile(target string, r io.Reader, mode os.FileMode) error {
 }
 
 func checkpointURL(addr, id, suffix string) string {
-	return peerURL(addr, "/v1/checkpoints/"+url.PathEscape(id)+suffix)
-}
-
-func peerURL(addr, path string) string {
-	if !strings.Contains(addr, "://") {
-		addr = "http://" + addr
-	}
-	return addr + path
+	return URL(addr, "/v1/checkpoints/"+url.PathEscape(id)+suffix)
 }
 
 // safeJoin resolves name under root, rejecting absolute paths and names that escape root.
@@ -246,15 +246,7 @@ func tarInto(src, prefix string, tw *tar.Writer) error {
 				Typeflag: tar.TypeDir,
 			})
 		}
-		if err = tw.WriteHeader(&tar.Header{
-			Name:       name,
-			Mode:       int64(fi.Mode().Perm()),
-			Typeflag:   tar.TypeReg,
-			PAXRecords: map[string]string{paxFileSize: strconv.FormatInt(fi.Size(), 10)},
-		}); err != nil {
-			return err
-		}
-		return tarChunks(path, name, fi.Size(), tw, scratch)
+		return tarFile(path, name, fi, tw, scratch)
 	})
 	if err != nil {
 		return fmt.Errorf("tar %s: %w", src, err)
@@ -262,8 +254,20 @@ func tarInto(src, prefix string, tw *tar.Writer) error {
 	return nil
 }
 
+func tarFile(path, name string, fi fs.FileInfo, tw *tar.Writer, scratch func() []byte) error {
+	if err := tw.WriteHeader(&tar.Header{
+		Name:       name,
+		Mode:       int64(fi.Mode().Perm()),
+		Typeflag:   tar.TypeReg,
+		PAXRecords: map[string]string{paxFileSize: strconv.FormatInt(fi.Size(), 10)},
+	}); err != nil {
+		return err
+	}
+	return tarChunks(path, name, fi.Size(), tw, scratch)
+}
+
 func tarChunks(path, name string, size int64, tw *tar.Writer, scratch func() []byte) error {
-	f, openErr := os.Open(path) //nolint:gosec // path comes from WalkDir over src
+	f, openErr := os.Open(path) //nolint:gosec // path is a file of a directory this node sends
 	if openErr != nil {
 		return openErr
 	}

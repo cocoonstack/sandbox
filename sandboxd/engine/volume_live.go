@@ -36,12 +36,7 @@ type volumeMount struct {
 
 // CheckLiveVolumeSupport rejects runtimes without idempotent live disk attach and detach.
 func (e *Engine) CheckLiveVolumeSupport(ctx context.Context) error {
-	version, err := e.Version(ctx)
-	if err != nil {
-		log.WithFunc("engine.CheckLiveVolumeSupport").Warnf(ctx, "query cocoon version: %v", err)
-		return &LiveVolumeUnsupported{}
-	}
-	if below, known := belowFloor(version, LiveVolumeCocoon); known && below {
+	if version, misses := e.missesFloor(ctx, LiveVolumeCocoon); misses {
 		return &LiveVolumeUnsupported{Version: version}
 	}
 	return nil

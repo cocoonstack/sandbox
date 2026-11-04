@@ -134,6 +134,20 @@ func (f *fakeEngine) WriteGuestEnv(_ context.Context, vsockSocket string, doc []
 	return nil
 }
 
+func (f *fakeEngine) CheckMigrateSupport(context.Context) error {
+	return errors.New("the e2e engine does not migrate")
+}
+
+func (f *fakeEngine) MigrateCapture(context.Context, string, string, bool) (types.MigrateRound, error) {
+	return types.MigrateRound{}, errors.New("the e2e engine does not migrate")
+}
+
+func (f *fakeEngine) MigrateReceive(context.Context, string, string, types.PoolKey) (types.VMRecord, error) {
+	return types.VMRecord{}, errors.New("the e2e engine does not migrate")
+}
+
+func (f *fakeEngine) MigrateAbort(context.Context, string, string) error { return nil }
+
 func (f *fakeEngine) Hibernate(ctx context.Context, name, _ string) error {
 	return f.Remove(ctx, name)
 }

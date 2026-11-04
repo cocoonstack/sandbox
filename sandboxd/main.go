@@ -134,6 +134,7 @@ func main() {
 		mgr.WithPeerDelete(broadcaster.Delete)
 		adopter := &peer.Adopter{Peers: msh.PeerAddrs}
 		mgr.WithPeerAdopt(adopter.Adopt)
+		mgr.WithMovePeer(&server.MoveClient{Token: cfg.APIToken})
 		go gossipNodeState(ctx, msh, mgr)
 		logger.Infof(ctx, "mesh %s joined (%d seeds)", cfg.Mesh.ID(), len(cfg.Mesh.Join))
 	}

@@ -2246,6 +2246,7 @@ type fakeManager struct {
 	envErr              error
 	env                 types.Env
 	claimDeadline       func(id, token string) (time.Time, error)
+	move                func(id, addr string, maxDowntime time.Duration) (pool.MoveResult, error)
 
 	gotTenant          string
 	gotDigest          string
@@ -2597,6 +2598,20 @@ func (f *fakeManager) Info() ([]pool.PoolInfo, pool.Gauges) {
 }
 
 func (f *fakeManager) Templates() []pool.TemplateInfo { return f.infoTemplates }
+
+func (f *fakeManager) Move(_ context.Context, id, addr string, maxDowntime time.Duration) (pool.MoveResult, error) {
+	return f.move(id, addr, maxDowntime)
+}
+
+func (f *fakeManager) AdmitMove(context.Context, string, pool.MoveAdmission) (string, error) {
+	return "", nil
+}
+
+func (f *fakeManager) ReceiveMoveRound(string, io.Reader) error { return nil }
+
+func (f *fakeManager) CommitMove(context.Context, string, []byte, int64) error { return nil }
+
+func (f *fakeManager) DropMove(string) {}
 
 func (f *fakeManager) SetTemplateLabels(_ context.Context, key types.PoolKey, labels types.Metadata, tenant, digest string) error {
 	f.labeled = append(f.labeled, fmt.Sprintf("%s %s %v %q", key.Template, key.Size, labels, tenant))

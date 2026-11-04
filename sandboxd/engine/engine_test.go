@@ -259,6 +259,14 @@ func TestAMemoryCommandGetsItsLongerTermGraceAndAColdBootTheCommandOne(t *testin
 		{"snapshot save", func(ctx context.Context, e *Engine) error {
 			return e.SnapshotSave(ctx, "vm", "snap")
 		}, "exit status 3"},
+		{"migrate capture", func(ctx context.Context, e *Engine) error {
+			_, err := e.MigrateCapture(ctx, "vm", "s1", true)
+			return err
+		}, "exit status 3"},
+		{"migrate receive", func(ctx context.Context, e *Engine) error {
+			_, err := e.MigrateReceive(ctx, "dir", "vm", types.PoolKey{})
+			return err
+		}, "exit status 3"},
 		{"cold boot", func(ctx context.Context, e *Engine) error {
 			_, err := e.RunCold(ctx, "vm", types.PoolKey{}, "")
 			return err
@@ -315,8 +323,8 @@ func TestCloseWaitsForARunningCommandAndRefusesNewOnes(t *testing.T) {
 		t.Fatalf("the running hibernate: %v", err)
 	}
 	<-closed
-	if _, err := e.List(t.Context()); !errors.Is(err, errStopping) {
-		t.Errorf("List after Close = %v, want %v", err, errStopping)
+	if _, err := e.List(t.Context()); !errors.Is(err, ErrStopping) {
+		t.Errorf("List after Close = %v, want %v", err, ErrStopping)
 	}
 }
 
@@ -345,10 +353,13 @@ func TestMemoryDumpsRunAtMostEightAtOnce(t *testing.T) {
 	var wg sync.WaitGroup
 	for i := range 40 {
 		wg.Go(func() {
-			if i%2 == 0 {
+			switch i % 3 {
+			case 0:
 				_ = e.Hibernate(t.Context(), "vm", "snap")
-			} else {
+			case 1:
 				_ = e.SnapshotSave(t.Context(), "vm", "snap")
+			default:
+				_, _ = e.MigrateCapture(t.Context(), "vm", "", false)
 			}
 		})
 	}

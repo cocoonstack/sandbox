@@ -28,7 +28,7 @@ func (b *Broadcaster) Delete(ctx context.Context, id string) {
 	for _, addr := range addrs {
 		wg.Go(func() {
 			// 404 means the peer never healed a copy — not a failure worth a retry.
-			if err := peerCall(ctx, http.MethodDelete, checkpointURL(addr, id, "?no_forward=1"), b.Token, http.StatusNoContent, http.StatusNotFound); err != nil {
+			if err := peerCall(ctx, http.MethodDelete, checkpointURL(addr, id, "?no_forward=1"), b.Token, nil, peerCallTimeout, http.StatusNoContent, http.StatusNotFound); err != nil {
 				logger.Warnf(ctx, "broadcast delete %s to %s: %v", id, addr, err)
 			}
 		})
@@ -36,12 +36,14 @@ func (b *Broadcaster) Delete(ctx context.Context, id string) {
 	wg.Wait()
 }
 
-// peerCall bounds one bodyless request to a peer; any status outside ok is an error.
-func peerCall(ctx context.Context, method, target, token string, ok ...int) error {
-	ctx, cancel := context.WithTimeout(ctx, peerCallTimeout)
-	defer cancel()
-
-	req, err := http.NewRequestWithContext(ctx, method, target, nil)
+// peerCall bounds one request to a peer unless timeout is zero; any status outside ok is an error.
+func peerCall(ctx context.Context, method, target, token string, body io.Reader, timeout time.Duration, ok ...int) error {
+	if timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
+	}
+	req, err := http.NewRequestWithContext(ctx, method, target, body)
 	if err != nil {
 		return err
 	}

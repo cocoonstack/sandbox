@@ -19,7 +19,9 @@ func (m *Manager) Hibernate(ctx context.Context, id string, cred Cred) error {
 	if !ok {
 		return ErrUnknownSandbox
 	}
-	sb.Transition.Lock()
+	if err := m.lockTransition(sb); err != nil {
+		return err
+	}
 	defer sb.Transition.Unlock()
 	return m.hibernateLocked(ctx, sb)
 }
@@ -69,8 +71,11 @@ func (m *Manager) hibernateLocked(ctx context.Context, sb *types.Sandbox) error 
 		return ErrFailed
 	}
 	m.mu.Lock()
-	volumeBlocked := m.hasVolumeHolds(sb)
+	moving, volumeBlocked := m.midMoveLocked(sb), m.hasVolumeHolds(sb)
 	m.mu.Unlock()
+	if moving {
+		return ErrEvacuating
+	}
 	if volumeBlocked {
 		return ErrVolumeCapture
 	}
@@ -151,6 +156,9 @@ func (m *Manager) wakeResolved(ctx context.Context, sb *types.Sandbox) (string, 
 }
 
 func (m *Manager) wakeOrRead(ctx context.Context, sb *types.Sandbox, readerOK bool) (string, error) {
+	if m.pausedForMove(sb) {
+		return "", ErrEvacuating
+	}
 	sb.Transition.Lock()
 	defer sb.Transition.Unlock()
 	if sb.ArchiveCk != "" {
@@ -255,7 +263,7 @@ func (m *Manager) idleOnce(ctx context.Context) {
 		return
 	}
 	for _, sb := range m.claimed {
-		if skipIdle(sb) {
+		if skipIdle(sb) || m.midMoveLocked(sb) {
 			continue
 		}
 		idle := idleDefault
