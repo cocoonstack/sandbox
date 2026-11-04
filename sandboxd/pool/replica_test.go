@@ -10,6 +10,9 @@ import (
 
 	"github.com/cocoonstack/sandbox/sandboxd/archives"
 	"github.com/cocoonstack/sandbox/sandboxd/config"
+	"github.com/cocoonstack/sandbox/sandboxd/egress"
+	"github.com/cocoonstack/sandbox/sandboxd/engine"
+	"github.com/cocoonstack/sandbox/sandboxd/outbound/outboundtest"
 	"github.com/cocoonstack/sandbox/sandboxd/store"
 	"github.com/cocoonstack/sandbox/sandboxd/tenants"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
@@ -1334,6 +1337,35 @@ func TestReplicaRestartMidArchiveKeepsTheClaim(t *testing.T) {
 				t.Errorf("row %+v ok=%v err=%v, want it on %s", rec, ok, err, held.ArchiveCk)
 			}
 		})
+	}
+}
+
+func TestARunningClaimThatMovedClosesItsDoors(t *testing.T) {
+	c := newReplicaCluster(t)
+	c.egressPol = &egress.Policy{Allow: []egress.Rule{{Host: "example.com"}}}
+	ea, eb := newFakeEngine(), newFakeEngine()
+	ea.sockRoot, eb.sockRoot = outboundtest.SockRoot(t), outboundtest.SockRoot(t)
+	a := c.nodeOn(t, ea, "a", t.TempDir(), keepAnHour)
+	a.liftFence()
+	b := c.nodeOn(t, eb, "b", t.TempDir(), keepAnHour)
+	b.liftFence()
+	sb := mustClaim(t, a, testKey)
+	if got := a.out.Route(sb); got != types.NetRouteRelay {
+		t.Fatalf("route after claim %q, want relay", got)
+	}
+	replicateNow(t, a, sb)
+	c.expire("a")
+	mustAdopt(t, b, sb, "adoption after the lease expired")
+	c.renew(t, "a")
+	a.trip(t.Context())
+	a.unfence(t.Context(), time.Now())
+	waitFor(t, func() bool { return ea.removed(sb.VMName) })
+	if got := a.out.Route(sb); got != types.NetRouteNone {
+		t.Errorf("route after the claim moved %q, want none", got)
+	}
+	if conn, err := net.Dial("unix", engine.EgressSocketPath(sb.VsockSocket)); err == nil {
+		_ = conn.Close()
+		t.Error("the door of the removed VM still accepts")
 	}
 }
 

@@ -418,6 +418,7 @@ func (m *Manager) forgetAdopted(ctx context.Context, sb *types.Sandbox) func() {
 		return nil
 	}
 	return func() {
+		m.out.Disarm(sb.ID, true)
 		if vm != "" {
 			m.removeOrRetry(ctx, vm, "", volumeTeardown{holds: holds})
 		}

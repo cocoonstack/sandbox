@@ -16,6 +16,7 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/archives"
 	"github.com/cocoonstack/sandbox/sandboxd/archives/archivestest"
 	"github.com/cocoonstack/sandbox/sandboxd/config"
+	"github.com/cocoonstack/sandbox/sandboxd/egress"
 	"github.com/cocoonstack/sandbox/sandboxd/store"
 	"github.com/cocoonstack/sandbox/sandboxd/tenants"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
@@ -1863,6 +1864,7 @@ type failoverCluster struct {
 	replicate int
 	volumes   []config.VolumeSpec
 	nodes     []*Manager
+	egressPol *egress.Policy
 }
 
 func newFailoverCluster(t *testing.T) *failoverCluster {
@@ -1920,9 +1922,13 @@ func (c *failoverCluster) nodeOn(t *testing.T, eng *fakeEngine, name, dataDir st
 	t.Helper()
 	spec := archivePool(deleteAfter)
 	spec.ReplicateSeconds = c.replicate
+	spec.Egress = c.egressPol
 	cfg := &config.Config{
 		APIToken: "root", DataDir: dataDir, CheckpointDir: c.ckDir, Pools: []config.PoolSpec{spec, {PoolKey: plainKey, Warm: 1}},
 		Mesh: &config.MeshConfig{NodeID: name}, Volumes: c.volumes,
+	}
+	if c.egressPol != nil {
+		cfg.EgressCA = writeTestEgressCA(t)
 	}
 	b := testBackends(t, cfg)
 	b.Archives = c.reg
