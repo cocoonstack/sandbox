@@ -749,7 +749,7 @@ func TestMoveReceivedClaimWaitingOutAnOutageIsNotHibernatedOrServed(t *testing.T
 	_, ckErr := mc.t.Checkpoint(ctx, sb.ID, cred, "ck", "")
 	_, _, promoteErr := mc.t.Promote(ctx, sb.ID, cred, "tpl", "")
 	_, renewErr := mc.t.Renew(ctx, sb.ID, cred, time.Hour, "")
-	_, _, _, dialErr := mc.t.WakeAgentSocket(ctx, sb.ID, sb.Token)
+	_, dialErr := mc.t.DialPort(ctx, sb.ID, cred, 80)
 	for op, err := range map[string]error{
 		"fork": forkErr, "checkpoint": ckErr, "promote": promoteErr, "renew": renewErr, "dial": dialErr,
 		"hibernate": mc.t.Hibernate(ctx, sb.ID, cred),
