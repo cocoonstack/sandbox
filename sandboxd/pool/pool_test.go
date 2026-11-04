@@ -1349,6 +1349,8 @@ type fakeEngine struct {
 	captureErr        error
 	finalCaptureErr   error
 	receiveErr        error
+	receiveStall      chan struct{}
+	receiveEntered    chan struct{}
 	abortErr          error
 }
 
@@ -1886,6 +1888,10 @@ func (f *fakeEngine) MigrateCapture(_ context.Context, vmName, series string, fi
 }
 
 func (f *fakeEngine) MigrateReceive(_ context.Context, fromDir, name string, _ types.PoolKey) (types.VMRecord, error) {
+	if f.receiveEntered != nil {
+		close(f.receiveEntered)
+		<-f.receiveStall
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.receives = append(f.receives, name)

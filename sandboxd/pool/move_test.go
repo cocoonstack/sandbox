@@ -297,6 +297,92 @@ func TestMoveTargetRefusesARoundThatOutlivedItsReservation(t *testing.T) {
 	assertNoMoveResidue(t, mc.t, "sb_r")
 }
 
+func TestMoveTargetLetsTheSameSourceRetryAndRefusesAnother(t *testing.T) {
+	mc := newMoveCluster(t)
+	tuneView(mc.t, func(v *configView) { v.moveConcurrency, v.maxClaims = 1, 1 })
+	reserveMove(t, mc.t, "sb_r", "acme")
+	first, _ := reservationOf(mc.t, "sb_r")
+	stale := filepath.Join(mc.t.moveDir("sb_r"), "state.json")
+	if err := os.WriteFile(stale, []byte("a crashed source's round"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := mc.t.AdmitMove("sb_r", MoveAdmission{Tenant: "acme", Key: testKey, From: "other"}); !errors.Is(err, ErrNotMovable) {
+		t.Errorf("admission from another source: %v, want ErrNotMovable", err)
+	}
+	if _, err := os.Stat(stale); err != nil {
+		t.Errorf("a refused admission touched the staging dir: %v", err)
+	}
+	reserveMove(t, mc.t, "sb_r", "acme")
+	if again, _ := reservationOf(mc.t, "sb_r"); again == first {
+		t.Error("the retry kept the crashed source's reservation")
+	}
+	if _, err := os.Stat(stale); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the retry kept the crashed source's files: %v", err)
+	}
+	if got := moveCounts(mc.t, "acme"); got != [3]int{1, 1, 1} {
+		t.Errorf("target counts %v after the retry, want one reservation", got)
+	}
+}
+
+func TestMoveTargetKeepsARetrysStagingDirWhenTheCrashedSourcesRoundEnds(t *testing.T) {
+	mc := newMoveCluster(t)
+	reserveMove(t, mc.t, "sb_r", "acme")
+	body, stream := io.Pipe()
+	done := make(chan error, 1)
+	go func() { done <- mc.t.ReceiveMoveRound("sb_r", body) }()
+	waitFor(t, func() bool {
+		in, _ := reservationOf(mc.t, "sb_r")
+		mc.t.mu.Lock()
+		defer mc.t.mu.Unlock()
+		return in.receiving == 1
+	})
+	reserveMove(t, mc.t, "sb_r", "acme")
+	retried := filepath.Join(mc.t.moveDir("sb_r"), "state.json")
+	if err := os.WriteFile(retried, []byte("the retry's round"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_ = stream.CloseWithError(errors.New("the crashed source's connection ended"))
+	if err := <-done; !errors.Is(err, ErrUnknownSandbox) {
+		t.Fatalf("the old round: %v, want ErrUnknownSandbox", err)
+	}
+	if _, err := os.Stat(retried); err != nil {
+		t.Errorf("the old round removed the retry's files: %v", err)
+	}
+}
+
+func TestMoveCommitOfACrashedSourceDoesNotTakeTheRetrysReservation(t *testing.T) {
+	mc := newMoveCluster(t)
+	sb := mustClaim(t, mc.s, testKey)
+	eng := fakeOf(mc.t)
+	eng.receiveEntered, eng.receiveStall = make(chan struct{}), make(chan struct{})
+	reserveMove(t, mc.t, sb.ID, "")
+	done := make(chan error, 1)
+	go func() { done <- mc.t.CommitMove(context.WithoutCancel(t.Context()), sb.ID, []byte(`{"id":"`+sb.ID+`","key":{"template":"rt:24.04","net":"none","size":"small"}}`), 1) }()
+	<-eng.receiveEntered
+	reserveMove(t, mc.t, sb.ID, "")
+	retry, _ := reservationOf(mc.t, sb.ID)
+	if err := os.WriteFile(filepath.Join(mc.t.moveDir(sb.ID), "state.json"), []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	close(eng.receiveStall)
+	if err := <-done; !errors.Is(err, ErrNotMovable) {
+		t.Fatalf("the crashed source's commit: %v, want ErrNotMovable", err)
+	}
+	if held, ok := reservationOf(mc.t, sb.ID); !ok || held != retry {
+		t.Error("the crashed source's commit took the retry's reservation")
+	}
+	if _, claimed := mc.t.byID(sb.ID); claimed {
+		t.Error("the crashed source's commit made a claim")
+	}
+	eng.mu.Lock()
+	defer eng.mu.Unlock()
+	for _, name := range eng.receives {
+		if _, live := eng.vms[name]; live {
+			t.Errorf("the crashed source's received VM %s survived", name)
+		}
+	}
+}
+
 func TestMoveOfAReplicatedClaimDropsItsRowBeforeTheFinalRound(t *testing.T) {
 	mc := newMoveClusterWith(t, func(c *failoverCluster) { c.replicate = replicateEvery })
 	third := mc.moveNode(t, "c")

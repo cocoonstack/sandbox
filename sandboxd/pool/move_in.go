@@ -59,8 +59,10 @@ func (m *Manager) ReceiveMoveRound(id string, body io.Reader) error {
 		return ErrUnknownSandbox
 	}
 	err := peer.ReceiveRound(body, m.moveDir(id))
-	if !m.endReceive(id, in) {
-		_ = os.RemoveAll(m.moveDir(id))
+	if current, reserved := m.endReceive(id, in); !current {
+		if !reserved {
+			_ = os.RemoveAll(m.moveDir(id))
+		}
 		return ErrUnknownSandbox
 	}
 	if err != nil {
@@ -72,9 +74,11 @@ func (m *Manager) ReceiveMoveRound(id string, body io.Reader) error {
 // CommitMove receives the staged series as the claim, commits the move record and starts the guest.
 func (m *Manager) CommitMove(ctx context.Context, id string, claim []byte, epoch int64) error {
 	ctx = context.WithoutCancel(ctx)
-	if !m.touchReservation(id) {
+	admitted := m.beginReceive(id)
+	if admitted == nil {
 		return fmt.Errorf("%w: no reservation for the move of %s", ErrNotMovable, id)
 	}
+	defer m.endReceive(id, admitted)
 	if m.memoryLow.Load() {
 		return fmt.Errorf("%w: %s", ErrQuota, memoryLowReason)
 	}
@@ -95,13 +99,12 @@ func (m *Manager) CommitMove(ctx context.Context, id string, claim []byte, epoch
 	sb.Transition.Lock()
 	defer sb.Transition.Unlock()
 	m.mu.Lock()
-	in := m.incoming[id]
-	if in == nil || m.claimed[id] != nil {
+	if m.incoming[id] != admitted || m.claimed[id] != nil {
 		m.mu.Unlock()
 		m.destroy(ctx, name)
 		return fmt.Errorf("%w: the reservation for %s ended", ErrNotMovable, id)
 	}
-	sb.MoveIn = &types.MoveIn{From: in.from, Epoch: epoch}
+	sb.MoveIn = &types.MoveIn{From: admitted.from, Epoch: epoch}
 	delete(m.incoming, id)
 	m.addClaimLocked(sb)
 	js := m.store.set(sb)
@@ -247,22 +250,13 @@ func (m *Manager) beginReceive(id string) *inMove {
 	return in
 }
 
-func (m *Manager) endReceive(id string, in *inMove) bool {
+func (m *Manager) endReceive(id string, in *inMove) (current, reserved bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	in.receiving--
 	in.touched = time.Now()
-	return m.incoming[id] == in
-}
-
-func (m *Manager) touchReservation(id string) bool {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	in := m.incoming[id]
-	if in != nil {
-		in.touched = time.Now()
-	}
-	return in != nil
+	held := m.incoming[id]
+	return held == in, held != nil
 }
 
 // dropIdleReservations ends the reservations of sources that went quiet.
@@ -297,13 +291,16 @@ func (m *Manager) admitMoveLocked(id string, a MoveAdmission) error {
 	if _, held := m.claimed[id]; held {
 		return fmt.Errorf("%w: this node already holds %s", ErrNotMovable, id)
 	}
-	if _, held := m.incoming[id]; held {
-		return fmt.Errorf("%w: a move of %s to this node is already running", ErrNotMovable, id)
-	}
-	if err := m.moveBudgetErr(); err != nil {
+	extra := 1
+	if in, held := m.incoming[id]; held {
+		if in.from != a.From {
+			return fmt.Errorf("%w: a move of %s to this node is already running", ErrNotMovable, id)
+		}
+		extra = 0
+	} else if err := m.moveBudgetErr(); err != nil {
 		return err
 	}
-	if err := m.quotaErr(1, a.Tenant); err != nil {
+	if err := m.quotaErr(extra, a.Tenant); err != nil {
 		return err
 	}
 	m.incoming[id] = &inMove{tenant: a.Tenant, from: a.From, touched: time.Now()}
