@@ -118,7 +118,7 @@ func (m *Manager) Release(ctx context.Context, id string, cred Cred) error {
 	if !ok {
 		return ErrUnknownSandbox
 	}
-	if m.movingNow(id) {
+	if m.movingNow(sb) {
 		return ErrEvacuating
 	}
 	if m.archives != nil {
@@ -167,7 +167,7 @@ func (m *Manager) Renew(ctx context.Context, id string, cred Cred, ttl time.Dura
 		m.mu.Unlock()
 		return time.Time{}, ErrUnknownSandbox
 	}
-	if m.movingFinalLocked(id) {
+	if m.pausedForMoveLocked(sb) {
 		m.mu.Unlock()
 		return time.Time{}, ErrEvacuating
 	}
@@ -261,7 +261,7 @@ func (m *Manager) dialPassive(ctx context.Context, id string, port uint16) (net.
 		return nil, ErrPaused
 	}
 	failed := sb.Failed != ""
-	paused, sock := sb.HibernateSnap != "" || sb.PendingSnap != "" || sb.ArchiveCk != "", sb.VsockSocket
+	paused, sock := sb.HibernateSnap != "" || sb.PendingSnap != "" || sb.ArchiveCk != "" || sb.MoveIn != nil, sb.VsockSocket
 	if !paused && !failed {
 		sb.Hold()
 	}

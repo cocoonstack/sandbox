@@ -351,11 +351,15 @@ func (m *Manager) endMoveOut(sb *types.Sandbox, mv *outMove) {
 	}
 }
 
-// movingFinal reports whether sb's guest is in the final round of a move, when dials and wakes answer ErrEvacuating.
-func (m *Manager) movingFinal(id string) bool {
+// pausedForMove reports whether sb's guest is paused by a move, in a source's final round or received and not started, when dials and wakes answer ErrEvacuating.
+func (m *Manager) pausedForMove(sb *types.Sandbox) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.movingFinalLocked(id)
+	return m.pausedForMoveLocked(sb)
+}
+
+func (m *Manager) pausedForMoveLocked(sb *types.Sandbox) bool {
+	return sb.MoveIn != nil || m.movingFinalLocked(sb.ID)
 }
 
 func (m *Manager) movingFinalLocked(id string) bool {
@@ -363,11 +367,15 @@ func (m *Manager) movingFinalLocked(id string) bool {
 	return mv != nil && mv.final
 }
 
-func (m *Manager) movingNow(id string) bool {
+func (m *Manager) movingNow(sb *types.Sandbox) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	_, moving := m.moving[id]
-	return moving
+	return m.midMoveLocked(sb)
+}
+
+func (m *Manager) midMoveLocked(sb *types.Sandbox) bool {
+	_, moving := m.moving[sb.ID]
+	return moving || sb.MoveIn != nil
 }
 
 func roundBytes(round types.MigrateRound) int64 {

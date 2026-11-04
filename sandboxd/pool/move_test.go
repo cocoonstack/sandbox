@@ -210,7 +210,7 @@ func TestMoveKeepsThePausedGuestUntilItsAbortLands(t *testing.T) {
 		t.Fatal("the source resumed its guest while the registry was down")
 	}
 	mc.moveReg.SetDown(false)
-	waitFor(t, func() bool { return !pausedOn(mc.s, sb.VMName) && !mc.s.movingNow(sb.ID) })
+	waitFor(t, func() bool { return !pausedOn(mc.s, sb.VMName) && !mc.s.movingNow(sb) })
 	assertStillOnSource(t, mc, sb)
 	if rec, ok, _ := mc.moveReg.Get(t.Context(), sb.ID); ok {
 		t.Errorf("record %+v after the abort, want it deleted", rec)
@@ -497,7 +497,7 @@ func TestMoveEndsWhenAFailoverTookTheClaimFromTheSource(t *testing.T) {
 	if _, err := mc.s.Move(t.Context(), sb.ID, "b", time.Minute); !errors.Is(err, ErrMoveTarget) {
 		t.Fatalf("move of a claim another node took: %v, want ErrMoveTarget", err)
 	}
-	if mc.s.movingNow(sb.ID) {
+	if mc.s.movingNow(sb) {
 		t.Fatal("the move still holds its slot")
 	}
 	if !sb.Transition.TryLock() {
@@ -706,6 +706,85 @@ func TestMoveStaleSweepLeavesACommittedRecordItsTargetStillHoldsMoveInFor(t *tes
 	}
 }
 
+func TestMoveReceivedClaimWaitingOutAnOutageIsNotHibernatedOrServed(t *testing.T) {
+	mc := newMoveCluster(t)
+	sb := mustClaim(t, mc.s, testKey)
+	ctx := t.Context()
+	lossy := &lossyMoves{Registry: mc.moveReg, downAfterCommit: true}
+	mc.t.moves = lossy
+	if _, err := mc.s.Move(ctx, sb.ID, "b", time.Minute); err != nil {
+		t.Fatalf("move: %v, want it resolved through the committed record", err)
+	}
+	received, ok := mc.t.byID(sb.ID)
+	if !ok {
+		t.Fatal("the target does not hold the received claim")
+	}
+	waitFor(t, func() bool {
+		if !received.Transition.TryLock() {
+			return false
+		}
+		received.Transition.Unlock()
+		return true
+	})
+	cred := Cred{Token: sb.Token}
+	backdate(mc.t, received, time.Hour)
+	sweepIdle(t, mc.t)
+	expire(mc.t, received)
+	mc.t.reapOnce(ctx)
+	if _, held := mc.t.byID(sb.ID); !held {
+		t.Fatal("the reap took the received claim")
+	}
+	mc.t.mu.Lock()
+	mc.t.evac = &evacuation{pending: map[string]*types.Sandbox{sb.ID: received}, stop: func() {}}
+	mc.t.mu.Unlock()
+	if err := mc.t.evacuateClaim(ctx, received); !errors.Is(err, errArchiveBusy) {
+		t.Errorf("evacuation of a received claim: %v, want errArchiveBusy", err)
+	}
+	mc.t.mu.Lock()
+	mc.t.evac = nil
+	mc.t.mu.Unlock()
+	_, forkErr := mc.t.Fork(ctx, sb.ID, cred, 1, time.Minute, "", "")
+	_, ckErr := mc.t.Checkpoint(ctx, sb.ID, cred, "ck", "")
+	_, _, promoteErr := mc.t.Promote(ctx, sb.ID, cred, "tpl", "")
+	_, renewErr := mc.t.Renew(ctx, sb.ID, cred, time.Hour, "")
+	_, _, _, dialErr := mc.t.WakeAgentSocket(ctx, sb.ID, sb.Token)
+	for op, err := range map[string]error{
+		"fork": forkErr, "checkpoint": ckErr, "promote": promoteErr, "renew": renewErr, "dial": dialErr,
+		"hibernate": mc.t.Hibernate(ctx, sb.ID, cred),
+		"release":   mc.t.Release(ctx, sb.ID, cred),
+		"env":       mc.t.PatchEnv(ctx, sb.ID, types.EnvPatch{"GH_TOKEN": {Value: "x", Guest: hostOnly}}, ""),
+		"wake":      mc.t.Wake(ctx, sb.ID, cred),
+	} {
+		if !errors.Is(err, ErrEvacuating) {
+			t.Errorf("%s of a received claim: %v, want ErrEvacuating", op, err)
+		}
+	}
+	if _, err := mc.t.DialPort(ctx, sb.ID, Cred{Operator: true}, 80); !errors.Is(err, ErrPaused) {
+		t.Errorf("operator dial of a received claim: %v, want ErrPaused", err)
+	}
+	if err := mc.t.SetInstanceMetadata(ctx, sb.ID, []byte("{}")); !errors.Is(err, ErrPaused) {
+		t.Errorf("instance metadata of a received claim: %v, want ErrPaused", err)
+	}
+	eng := fakeOf(mc.t)
+	if got := eng.hibernateCount(); got != 0 {
+		t.Fatalf("%d hibernates of a paused received guest", got)
+	}
+	if got := startsOf(mc.t); len(got) != 0 {
+		t.Fatalf("started %v before the record resolved", got)
+	}
+
+	lossy.setDown(false)
+	waitFor(t, func() bool { return !mc.t.moveHeld(sb.ID) })
+	mc.t.mu.Lock()
+	snap := received.HibernateSnap
+	mc.t.mu.Unlock()
+	eng.mu.Lock()
+	defer eng.mu.Unlock()
+	if snap != "" || len(eng.hibernates) != 0 || len(eng.exports) != 0 || len(eng.snapSaves) != 0 || !slices.Contains(eng.starts, received.VMName) || eng.stopped[received.VMName] {
+		t.Errorf("snapshot %q hibernates %v exports %v saves %v starts %v, want only the start of the paused guest", snap, eng.hibernates, eng.exports, eng.snapSaves, eng.starts)
+	}
+}
+
 func TestMoveCommitWhoseRegistryReplyIsLostKeepsTheOnlyGuest(t *testing.T) {
 	mc := newMoveCluster(t)
 	mc.t.moves = &lossyMoves{Registry: mc.moveReg, loseCommit: true}
@@ -837,7 +916,7 @@ func TestMoveSourceBackFromAnOutageNeverResumesAClaimThatMovedOn(t *testing.T) {
 	down.setDown(false)
 	waitFor(t, func() bool {
 		_, held := mc.s.byID(sb.ID)
-		return !held && !mc.s.movingNow(sb.ID)
+		return !held && !mc.s.movingNow(sb)
 	})
 	eng := fakeOf(mc.s)
 	eng.mu.Lock()
@@ -985,6 +1064,7 @@ func (p *fakeMovePeer) target(addr string) *Manager {
 
 type lossyMoves struct {
 	moves.Registry
+	downAfterCommit bool
 	loseCommit      bool
 	down            atomic.Bool
 	killAfterCommit chan struct{}
@@ -1007,6 +1087,10 @@ func (r *lossyMoves) Advance(ctx context.Context, id string, expect int64, from,
 		close(r.killAfterCommit)
 		<-r.processEnd
 		runtime.Goexit()
+	}
+	if err == nil && to == moves.Committed && r.downAfterCommit {
+		r.down.Store(true)
+		return 0, moves.ErrUnavailable
 	}
 	if err == nil && to == moves.Committed && r.loseCommit {
 		r.loseCommit = false

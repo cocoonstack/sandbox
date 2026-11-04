@@ -34,7 +34,7 @@ func (m *Manager) captureAllowed(sb *types.Sandbox) error {
 	if m.claimed[sb.ID] != sb {
 		return ErrUnknownSandbox
 	}
-	if _, moving := m.moving[sb.ID]; moving {
+	if m.midMoveLocked(sb) {
 		return ErrEvacuating
 	}
 	if _, err := m.fenceWatch(sb); err != nil {
