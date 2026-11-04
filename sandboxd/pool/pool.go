@@ -114,6 +114,7 @@ var (
 	ErrArchived            = errors.New("sandbox is archived; a wake or an exec wakes it first")
 	ErrLeaseLost           = errors.New("node lease lost; retry")
 	ErrPaused              = errors.New("sandbox is paused; an operator call does not wake it")
+	ErrEvacuating          = errors.New("sandbox is moving to another node; retry")
 	ErrFailed              = errors.New("sandbox failed: its VMM is down; release it, or wake it to cold-boot its disk")
 	ErrNoInstanceMetadata  = engine.ErrNoInstanceMetadata
 	ErrQuota               = errors.New("node claim quota reached")
@@ -123,6 +124,10 @@ var (
 	errNotSleeping   = errors.New("sandbox is no longer hibernated or archived")
 	errWokeMeanwhile = errors.New("woke between sweep and hibernate")
 	errNoEgressTap   = errors.New("egress-lane claim has no lockable tap")
+	errNoFailover    = errors.New("archive_failover is off, so no peer can adopt the claim")
+	errNoArchiveRow  = errors.New("archived before archive_failover was on, so no registry row names it")
+	errArchiveBusy   = errors.New("an archive of the claim is in flight")
+	errNoAdopter     = errors.New("no peer adopted the claim")
 )
 
 // Engine is the slice of the cocoon driver the manager consumes.
@@ -213,6 +218,8 @@ type Gauges struct {
 	Archived   int
 	Failed     int
 	Draining   bool
+	// Evacuating counts the claims an evacuation has yet to move.
+	Evacuating int
 	// AtCapacity marks refill parked because the node refused another VM.
 	AtCapacity       bool
 	AtCapacityReason string
@@ -229,6 +236,9 @@ type Backends struct {
 
 // PeerDeleteFunc broadcasts a checkpoint delete to every peer.
 type PeerDeleteFunc func(ctx context.Context, id string)
+
+// PeerAdoptFunc asks the peers to adopt a released claim and reports whether one holds it now.
+type PeerAdoptFunc func(ctx context.Context, id, token string) bool
 
 type pendingRemoval struct {
 	sandboxID   string
@@ -392,6 +402,7 @@ type Manager struct {
 	reloadMu sync.Mutex
 
 	draining bool // guarded by m.mu; deliberately not persisted
+	evac     *evacuation
 
 	tenants    tenants.Source
 	rootSum    string
@@ -411,6 +422,7 @@ type Manager struct {
 	healPending  map[string]struct{}
 	healAbort    map[string]struct{}
 	peerDelete   PeerDeleteFunc
+	peerAdopt    PeerAdoptFunc
 	tpls         store.Store
 	ckptSweeping atomic.Bool
 	genSweeping  atomic.Bool
@@ -653,6 +665,9 @@ func (m *Manager) Info() ([]PoolInfo, Gauges) {
 		})
 	}
 	g := Gauges{Claimed: len(m.claimed), Running: m.store.runningCount(), MaxRunning: m.view.Load().maxRunning, Draining: m.draining}
+	if m.evac != nil {
+		g.Evacuating = len(m.evac.pending)
+	}
 	g.AtCapacityReason = m.capacityReasonLocked(now)
 	g.AtCapacity = g.AtCapacityReason != ""
 	for _, sb := range m.claimed {
@@ -715,6 +730,11 @@ func (m *Manager) WithPeerHeal(enabled bool, owners peer.Owners, puller peer.Pul
 // WithPeerDelete wires the broadcast DeleteCheckpoint makes after a local delete.
 func (m *Manager) WithPeerDelete(fn PeerDeleteFunc) {
 	m.peerDelete = fn
+}
+
+// WithPeerAdopt wires the push an evacuation makes after it releases a row.
+func (m *Manager) WithPeerAdopt(fn PeerAdoptFunc) {
+	m.peerAdopt = fn
 }
 
 func (m *Manager) sweepStoreGenerations(ctx context.Context) {

@@ -596,7 +596,7 @@ func TestTheSweepsLeaveAReplicatedClaimAloneWhileFenced(t *testing.T) {
 	a.mu.Lock()
 	a.archiving[sb.ID] = struct{}{}
 	a.mu.Unlock()
-	if err := a.pauseExpired(t.Context(), sb); !errors.Is(err, ErrLeaseLost) || !benignSweepErr(err) {
+	if err := a.pauseArchive(t.Context(), sb); !errors.Is(err, ErrLeaseLost) || !benignSweepErr(err) {
 		t.Errorf("pause of an expired claim while fenced: %v, want a benign ErrLeaseLost", err)
 	}
 	a.mu.Lock()

@@ -122,7 +122,7 @@ func (m *Manager) putRow(ctx context.Context, sb *types.Sandbox, ck string, repl
 	case replica:
 		deadline = time.Time{}
 	case sb.ArchiveCk == "":
-		deadline = m.retentionDeadline(sb.Key)
+		deadline = m.archiveDeadline(sb)
 	}
 	m.mu.Unlock()
 	dto.Token, dto.VMName, dto.VsockSocket, dto.HibernateSnap, dto.PendingSnap, dto.ArchivePending, dto.ReplicaCk, dto.ReplicaPending = "", "", "", "", "", "", "", ""
@@ -161,7 +161,7 @@ func (m *Manager) checkArchiveRow(ctx context.Context, id string) error {
 		return nil
 	}
 	rec, ok, err := m.archives.Get(ctx, id)
-	if err == nil && ok && rec.Owner != m.nodeID {
+	if err == nil && ok && rec.Owner != m.nodeID && rec.Owner != "" {
 		return fmt.Errorf("%w: held by %s", archives.ErrLost, rec.Owner)
 	}
 	return err

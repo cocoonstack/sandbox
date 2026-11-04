@@ -12,7 +12,7 @@ import (
 	"github.com/projecteru2/core/log"
 )
 
-const deleteTimeout = 5 * time.Second
+const peerCallTimeout = 5 * time.Second
 
 // Broadcaster fans a checkpoint delete out to every peer so a healed copy does not outlive it.
 type Broadcaster struct {
@@ -30,7 +30,8 @@ func (b *Broadcaster) Delete(ctx context.Context, id string) {
 	var wg sync.WaitGroup
 	for _, addr := range addrs {
 		wg.Go(func() {
-			if err := deleteOn(ctx, addr, id, b.Token); err != nil {
+			// 404 means the peer never healed a copy — not a failure worth a retry.
+			if err := peerCall(ctx, http.MethodDelete, checkpointURL(addr, id, "?no_forward=1"), b.Token, http.StatusNoContent, http.StatusNotFound); err != nil {
 				logger.Warnf(ctx, "broadcast delete %s to %s: %v", id, addr, err)
 			}
 		})
@@ -38,11 +39,12 @@ func (b *Broadcaster) Delete(ctx context.Context, id string) {
 	wg.Wait()
 }
 
-func deleteOn(ctx context.Context, addr, id, token string) error {
-	ctx, cancel := context.WithTimeout(ctx, deleteTimeout)
+// peerCall bounds one bodyless request to a peer; any status outside ok is an error.
+func peerCall(ctx context.Context, method, target, token string, ok ...int) error {
+	ctx, cancel := context.WithTimeout(ctx, peerCallTimeout)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, checkpointURL(addr, id, "?no_forward=1"), nil)
+	req, err := http.NewRequestWithContext(ctx, method, target, nil)
 	if err != nil {
 		return err
 	}
@@ -57,8 +59,7 @@ func deleteOn(ctx context.Context, addr, id, token string) error {
 		_, _ = io.Copy(io.Discard, resp.Body)
 		_ = resp.Body.Close()
 	}()
-	// 404 means the peer never healed a copy — not a failure worth a retry.
-	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusNotFound {
+	if !slices.Contains(ok, resp.StatusCode) {
 		return fmt.Errorf("unexpected status %d", resp.StatusCode)
 	}
 	return nil

@@ -132,9 +132,9 @@ func (p *PreviewServer) proxyLocal(w http.ResponseWriter, r *http.Request, claim
 		},
 		Transport: p.transport,
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
-			if errors.Is(err, pool.ErrLeaseLost) {
-				w.Header().Set("Retry-After", retryAfterSeconds)
-				http.Error(w, "lease lost; retry", http.StatusServiceUnavailable)
+			if errors.Is(err, pool.ErrLeaseLost) || errors.Is(err, pool.ErrEvacuating) {
+				code, msg, _ := mapPoolErr(w, err)
+				http.Error(w, msg, code)
 				return
 			}
 			if errors.Is(err, pool.ErrQuota) {

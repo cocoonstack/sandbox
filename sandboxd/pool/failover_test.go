@@ -1862,6 +1862,7 @@ type failoverCluster struct {
 	ckDir     string
 	replicate int
 	volumes   []config.VolumeSpec
+	nodes     []*Manager
 }
 
 func newFailoverCluster(t *testing.T) *failoverCluster {
@@ -1930,6 +1931,16 @@ func (c *failoverCluster) nodeOn(t *testing.T, eng *fakeEngine, name, dataDir st
 		t.Fatalf("manager %s: %v", name, err)
 	}
 	_ = c.reg.Renew(t.Context(), name, time.Hour)
+	m.WithPeerAdopt(func(ctx context.Context, id, token string) bool {
+		return slices.ContainsFunc(c.nodes, func(p *Manager) bool {
+			if p.nodeID == name {
+				return false
+			}
+			adopted, err := p.AdoptArchived(ctx, id, token)
+			return err == nil && adopted
+		})
+	})
+	c.nodes = append(slices.DeleteFunc(c.nodes, func(p *Manager) bool { return p.nodeID == name }), m)
 	t.Cleanup(func() { assertRunningCount(t, m) })
 	t.Cleanup(func() { settleGoldenBuilds(m) })
 	return m
@@ -1940,10 +1951,12 @@ type hookRegistry struct {
 	beforePut        func()
 	beforeTake       func()
 	beforeConsume    func()
+	beforeRelease    func()
 	beforeDelete     func()
 	afterRows        func()
 	loseConsumeReply bool
 	loseTakeReply    bool
+	loseReleaseReply bool
 	losePutReply     bool
 	failPut          bool
 	replaces         int
@@ -1993,6 +2006,19 @@ func (r *hookRegistry) Take(ctx context.Context, id string, expect int64, owner 
 		return 0, archives.ErrUnavailable
 	}
 	return epoch, err
+}
+
+func (r *hookRegistry) Release(ctx context.Context, id string, expect int64, owner string) (int64, error) {
+	if hook := r.beforeRelease; hook != nil {
+		r.beforeRelease = nil
+		hook()
+	}
+	released, err := r.Registry.Release(ctx, id, expect, owner)
+	if r.loseReleaseReply && err == nil {
+		r.loseReleaseReply = false
+		return 0, archives.ErrUnavailable
+	}
+	return released, err
 }
 
 func (r *hookRegistry) Delete(ctx context.Context, id string, epoch int64) error {

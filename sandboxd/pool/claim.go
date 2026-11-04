@@ -439,6 +439,9 @@ func (m *Manager) beginWake(sb *types.Sandbox) error {
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if sb.Failed == "" && m.evacuatingLocked(sb.ID) {
+		return ErrEvacuating
+	}
 	if err := m.runningErr(1); err != nil {
 		return err
 	}
@@ -699,7 +702,7 @@ func (m *Manager) reapOnce(ctx context.Context) {
 		case reapArchive:
 			logSweepResult(ctx, logger, m.archive(ctx, v.sb), "archived expired sandbox "+v.id, "archive expired sandbox "+v.id)
 		case reapPause:
-			logSweepResult(ctx, logger, m.pauseExpired(ctx, v.sb), "archived expired sandbox "+v.id, "archive expired sandbox "+v.id)
+			logSweepResult(ctx, logger, m.pauseArchive(ctx, v.sb), "archived expired sandbox "+v.id, "archive expired sandbox "+v.id)
 		default:
 			td := m.quiesceVolumes(ctx, v.sb)
 			td.holds = v.holds
@@ -716,7 +719,7 @@ func (m *Manager) archivesAtDeadline(sb *types.Sandbox) bool {
 	return sb.Failed == "" && !m.tenantGone(sb.Tenant) && (sb.OnExpire == types.ExpireArchive || sb.HibernateSnap != "" && m.archiveAfterFor(sb.Key) > 0)
 }
 
-func (m *Manager) pauseExpired(ctx context.Context, sb *types.Sandbox) error {
+func (m *Manager) pauseArchive(ctx context.Context, sb *types.Sandbox) error {
 	sb.Transition.Lock()
 	m.mu.Lock()
 	live := m.claimed[sb.ID] == sb && sb.ArchiveCk == ""

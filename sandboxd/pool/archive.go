@@ -43,6 +43,16 @@ func (m *Manager) retentionDeadline(key types.PoolKey) time.Time {
 	return time.Time{}
 }
 
+// archiveDeadline is the retention deadline unless the claim's lease must survive the archive.
+func (m *Manager) archiveDeadline(sb *types.Sandbox) time.Time {
+	retention := m.retentionDeadline(sb.Key)
+	optedIn := sb.OnExpire == types.ExpireArchive || m.archiveAfterFor(sb.Key) > 0
+	if !optedIn || m.evacuatingLocked(sb.ID) && !retention.IsZero() && sb.Deadline.After(retention) {
+		return sb.Deadline
+	}
+	return retention
+}
+
 func (m *Manager) archiveOnce(ctx context.Context) {
 	if !m.archiveSweep.CompareAndSwap(false, true) {
 		return // the previous sweep's archives are still draining
@@ -146,7 +156,7 @@ func (m *Manager) archive(ctx context.Context, sb *types.Sandbox) error {
 	snap, vmName, sock, prevDeadline, prevPending, replica := sb.HibernateSnap, sb.VMName, sb.VsockSocket, sb.Deadline, sb.ArchivePending, sb.ReplicaCk
 	sb.ArchiveCk, sb.ArchiveEpoch, sb.ArchivePending, sb.ReplicaCk = ck.ID, epoch, "", ""
 	sb.HibernateSnap, sb.VsockSocket, sb.VMName = "", "", ""
-	sb.Deadline = m.retentionDeadline(sb.Key)
+	sb.Deadline = m.archiveDeadline(sb)
 	js := m.store.set(sb)
 	m.mu.Unlock()
 	if saveErr := m.store.commit(js); saveErr != nil {

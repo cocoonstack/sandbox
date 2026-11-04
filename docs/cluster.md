@@ -186,7 +186,8 @@ it while it sleeps write it, so the claim path is unchanged.
   not hold the claim reads the row; when the token hash matches, it takes the
   row with one compare-and-set on the epoch. The same statement requires the
   owner's [node lease](#node-lease) to be expired, unless the owner is this
-  node (with its record gone). The node records the claim as archived and
+  node (with its record gone) or the row has no owner, since its owner
+  released it in an [evacuation](#evacuating-a-node). The node records the claim as archived and
   answers as the owner. Two nodes adopting at once leave one owner; the other
   answers 404. A tombstone is never adopted. The next call that reaches the
   guest wakes the claim from the store as usual. An owner with a live lease answers for
@@ -261,6 +262,49 @@ pool without `replicate_seconds` are lost with their node, and an owner that
 never returns leaves behind only the tombstones and checkpoints of the claims it
 was waking or releasing when it died, plus what a replicated claim leaves (see
 [running claims](#running-claims-across-node-loss)).
+
+### Evacuating a node
+
+[`POST /v1/drain?evacuate=1`](sandboxd-api.md#post-v1drain) empties a node for
+maintenance or retirement without losing its claims. The node cordons as a
+drain does, then moves each claim with bounded concurrency, on the maintenance
+budget, archived claims first and running ones last: it hibernates a running claim, archives a hibernated one through the
+archive path above, releases the row, and asks a peer to adopt it. A release is
+one compare-and-set: the row this node owns at the epoch it holds moves to no
+owner at a new epoch. A row with no owner has no lease to wait out, so a peer
+takes it with the same epoch compare-and-set as any adoption, and two peers
+adopting at once still leave one owner. This node keeps the claim listed until
+a peer answers `GET /v1/sandboxes/{id}/owner`, so a root listing finds the claim
+on at least one node at every moment, then forgets it under the claim's transition lock
+and answers 404 for it; the checkpoint stays, since it belongs to the adopter.
+With no adopter (no peer, every peer draining or unreachable) the node takes the
+row back and the claim stays here. Until the hand-off, a wake of a claim the
+evacuation still has to move answers 503 with `Retry-After`, so a client call
+cannot wake it back onto the node. A running claim keeps serving until its turn.
+The run takes the budget one batch at a time, so crash recovery and reaps of the
+claims that stay keep their turn while it runs.
+
+The release keeps the fencing intact. Every later write of the old owner is
+refused: a put is owner-guarded, and a replace, consume or second release
+needs the epoch the release moved on. A release that finds its row moved
+reads it: a row with no owner is one an outage cut short or a later owner
+released, so the node asks a peer to adopt it and never takes it back; a row another node took means
+the claim moved already, and the node drops it; a row this node still owns at
+another epoch keeps the claim, which is skipped. A crash between the release and a peer's answer leaves a row no node
+lists: a restart drops the claim, and the next `Lookup` with its token adopts it,
+so a holder that recovers the token from a root listing loses that claim. A
+released row past its retention deadline is purged by any
+node's hourly sweep, like the row of a departed owner.
+
+An archive the sweeps already run for a claim is waited out and the claim
+retried every 5 seconds. Claims that cannot move are skipped and keep serving
+here; once `evacuating` is gone `claimed` counts them, and the log names each
+one with its reason. A client that holds a handle gets 404 from this node after
+the move, the same answer as for a released claim, and only a `Lookup` tells
+the two apart: the SDKs' `Close` does this itself. A reader-served connection
+gets the retry as an error frame, not a 503, and a preview URL minted before
+the move stops working until it is minted again. `DELETE /v1/drain` stops the evacuation: claims not yet started
+stay as they are, and one mid-archive finishes its archive but keeps its row.
 
 ### Node lease
 

@@ -224,15 +224,31 @@ func (s *Sandbox) Close() error {
 	s.pool.drain()
 	ctx, cancel := context.WithTimeout(context.Background(), releaseTimeout)
 	defer cancel()
-	resp, err := s.c.roundTrip(ctx, http.MethodPost, s.owner, "/v1/sandboxes/"+s.ID+"/release", nil, s.token)
-	if err != nil {
+	found, err := s.releaseAt(ctx, s.owner)
+	if err != nil || found {
 		return err
 	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode == http.StatusNoContent || resp.StatusCode == http.StatusNotFound {
+	moved, err := s.c.Lookup(ctx, s.ID, s.token)
+	if err != nil {
 		return nil
 	}
-	return apiError("release", resp)
+	_, err = s.releaseAt(ctx, moved.owner)
+	return err
+}
+
+func (s *Sandbox) releaseAt(ctx context.Context, addr string) (found bool, err error) {
+	resp, err := s.c.roundTrip(ctx, http.MethodPost, addr, "/v1/sandboxes/"+s.ID+"/release", nil, s.token)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	switch resp.StatusCode {
+	case http.StatusNoContent:
+		return true, nil
+	case http.StatusNotFound:
+		return false, nil
+	}
+	return false, apiError("release", resp)
 }
 
 // call sends req on a relay connection and hands back the lease that ends the RPC; ctx cancellation closes the connection under it.

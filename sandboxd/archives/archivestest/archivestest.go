@@ -83,6 +83,16 @@ func (m *Mem) Take(_ context.Context, id string, expect int64, owner string) (in
 	})
 }
 
+func (m *Mem) Release(_ context.Context, id string, expect int64, owner string) (int64, error) {
+	return m.advance(id, expect, func(rec *archives.Record) bool {
+		if rec.Owner != owner {
+			return false
+		}
+		rec.Owner = ""
+		return true
+	})
+}
+
 func (m *Mem) TakeOwned(_ context.Context, owner string, expect map[string]int64) (map[string]int64, error) {
 	taken := map[string]int64{}
 	for id, epoch := range expect {
@@ -228,6 +238,7 @@ func Run(t *testing.T, open Opener) {
 	t.Run("rows lists the named ids", func(t *testing.T) { testRows(t, open(t)) })
 	t.Run("replace is a compare-and-set", func(t *testing.T) { testReplace(t, open(t)) })
 	t.Run("take waits out a live lease", func(t *testing.T) { testTakeLease(t, open(t)) })
+	t.Run("release lets another node take the row at once", func(t *testing.T) { testRelease(t, open(t)) })
 	t.Run("sweepable spares a live owner's expired row", func(t *testing.T) { testSweepableLease(t, open(t)) })
 	t.Run("renew moves a lease forward", func(t *testing.T) { testRenewExtends(t, open(t)) })
 }
@@ -530,6 +541,54 @@ func testTakeLease(t *testing.T, r archives.Registry) {
 	never := mustPut(t, r, record("sb_2", "c", time.Time{}))
 	if _, err = r.Take(ctx, "sb_2", never, "b"); err != nil {
 		t.Errorf("take from a node that never held a lease: %v, want its row adoptable", err)
+	}
+}
+
+func testRelease(t *testing.T, r archives.Registry) {
+	ctx := t.Context()
+	first := mustPut(t, r, record("sb_1", "a", time.Time{}))
+	if err := r.Renew(ctx, "a", time.Hour); err != nil {
+		t.Fatalf("renew: %v", err)
+	}
+	if _, err := r.Release(ctx, "sb_1", first, "b"); !errors.Is(err, archives.ErrLost) {
+		t.Errorf("release by a node that does not own the row: %v, want ErrLost", err)
+	}
+	if _, err := r.Release(ctx, "sb_1", first-1, "a"); !errors.Is(err, archives.ErrLost) {
+		t.Errorf("release at a stale epoch: %v, want ErrLost", err)
+	}
+	moved, err := r.Release(ctx, "sb_1", first, "a")
+	if err != nil {
+		t.Fatalf("release: %v", err)
+	}
+	released, _, _ := r.Get(ctx, "sb_1")
+	if released.Owner != "" || released.Epoch != moved || released.Epoch <= first || released.Consumed {
+		t.Fatalf("row after release: %+v, want a live row with no owner above epoch %d", released, first)
+	}
+	if _, err = r.Put(ctx, record("sb_1", "a", time.Time{})); !errors.Is(err, archives.ErrLost) {
+		t.Errorf("the old owner's put after release: %v, want ErrLost", err)
+	}
+	if _, err = r.Replace(ctx, record("sb_1", "a", time.Time{}), first); !errors.Is(err, archives.ErrLost) {
+		t.Errorf("the old owner's replace after release: %v, want ErrLost", err)
+	}
+	if _, err = r.Consume(ctx, "sb_1", first); !errors.Is(err, archives.ErrLost) {
+		t.Errorf("a consume at the epoch before release: %v, want ErrLost", err)
+	}
+	if _, err = r.Release(ctx, "sb_1", released.Epoch, "a"); !errors.Is(err, archives.ErrLost) {
+		t.Errorf("a second release by the old owner: %v, want ErrLost", err)
+	}
+	epoch, err := r.Take(ctx, "sb_1", released.Epoch, "b")
+	if err != nil || epoch <= released.Epoch {
+		t.Fatalf("take of a released row while the old owner's lease is live: %d %v, want a new epoch", epoch, err)
+	}
+	if got, _, _ := r.Get(ctx, "sb_1"); got.Owner != "b" || got.Epoch != epoch {
+		t.Errorf("row after the take: %s@%d, want b@%d", got.Owner, got.Epoch, epoch)
+	}
+	spent, err := r.Consume(ctx, "sb_1", epoch)
+	if err != nil {
+		t.Fatalf("consume: %v", err)
+	}
+	if _, err = r.Release(ctx, "sb_1", spent, "b"); !errors.Is(err, archives.ErrLost) {
+		t.Errorf("release of a tombstone: %v, want ErrLost", err)
 	}
 }
 

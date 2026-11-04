@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -106,7 +107,9 @@ func TestCloseReleases(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			var gotPath, gotAuth string
 			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				gotPath, gotAuth = r.URL.Path, r.Header.Get("Authorization")
+				if strings.HasSuffix(r.URL.Path, "/release") {
+					gotPath, gotAuth = r.URL.Path, r.Header.Get("Authorization")
+				}
 				w.WriteHeader(tt.status)
 			}))
 			t.Cleanup(ts.Close)
@@ -121,6 +124,38 @@ func TestCloseReleases(t *testing.T) {
 				t.Errorf("got %s auth %q", gotPath, gotAuth)
 			}
 		})
+	}
+}
+
+func TestCloseReleasesASandboxThatMoved(t *testing.T) {
+	var released atomic.Bool
+	var adopter *httptest.Server
+	adopter = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/sandboxes/sb_9/owner":
+			_ = json.MarshalWrite(w, map[string]string{"owner_addr": strings.TrimPrefix(adopter.URL, "http://")})
+		case "/v1/sandboxes/sb_9/release":
+			released.Store(true)
+			w.WriteHeader(http.StatusNoContent)
+		}
+	}))
+	t.Cleanup(adopter.Close)
+	old := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/peers" {
+			_ = json.MarshalWrite(w, map[string]any{"peers": []string{strings.TrimPrefix(adopter.URL, "http://")}})
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	t.Cleanup(old.Close)
+
+	c := testClient(t, old)
+	sb := &Sandbox{ID: "sb_9", c: c, token: "tok9", owner: c.addr}
+	if err := sb.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if !released.Load() {
+		t.Error("Close reported success without releasing at the adopter")
 	}
 }
 

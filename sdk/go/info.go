@@ -20,6 +20,7 @@ type NodeInfo struct {
 	Archived         int              `json:"archived"`
 	Failed           int              `json:"failed,omitzero"`
 	Draining         bool             `json:"draining,omitzero"`
+	Evacuating       int              `json:"evacuating,omitzero"`
 	AdvertiseAddr    string           `json:"advertise_addr,omitempty"`
 	Peers            []string         `json:"peers,omitempty"`
 	AtCapacity       bool             `json:"at_capacity,omitzero"`
