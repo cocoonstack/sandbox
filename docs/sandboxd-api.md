@@ -477,7 +477,8 @@ for a blocked device call. Capture operations (hibernate, fork, checkpoint, and
 promote) are refused while either set is nonempty or a convergence request
 still owns admitted volume holds.
 
-Device calls honor cancellation and have a 30-second ceiling per volume; a
+Guest device calls honor cancellation and have a 30-second ceiling per volume, and a
+`cocoon` attach or detach can take 30 more to exit; a
 caller that disconnects cancels the run, leaving interrupted states to retry. Journal writes
 are atomic. Host-crash durability follows `sync_claims`. An older daemon
 ignores `VolumesWant`; finish pending volume changes before downgrading.
@@ -651,8 +652,8 @@ the export they were set on, which the new one replaces.
 
 400 invalid name, 401 bad api token, 409 when the name collides with a
 configured pool, the template is owned by another tenant, or the sandbox is
-on the egress lane, has volumes attached (see [egress](egress.md)), or is
-archived (`POST /wake` or an exec wakes it first), 404 unknown id or wrong
+on the egress lane, has volumes attached (see [egress](egress.md)), has failed,
+or is archived (`POST /wake` or an exec wakes it first), 404 unknown id or wrong
 sandbox token, 429 while the disk is under [`disk_reserve`](deploy.md), 503
 `lease lost; retry` for a replicated sandbox while its node's lease is overdue.
 
@@ -872,8 +873,8 @@ answers `200 {"checkpoint": {id, name?, sandbox_id, key, tenant?, created_at,
 policy_source?, no_egress?, guest_env?}}` — `tenant` records the calling tenant, absent for root.
 400 bad body or name, 401 bad api token, 404 unknown id or wrong sandbox
 token, 409 egress-lane sandbox, one with volumes attached (see
-[egress](egress.md)), or an archived one (`POST /wake` or an exec wakes it
-first), 429 while the disk is under [`disk_reserve`](deploy.md), 503 `lease lost; retry`
+[egress](egress.md)), a failed one, or an archived one (`POST /wake` or an exec
+wakes it first), 429 while the disk is under [`disk_reserve`](deploy.md), 503 `lease lost; retry`
 for a replicated sandbox while its node's lease is overdue.
 
 ## POST /v1/checkpoints/{id}/claim
@@ -1062,7 +1063,7 @@ template clone starts with the document its source held. The node writes it to
 is a no-op. silkd serves the address only in images that alias it on `lo`.
 
 204 on success; 400 when the body is not one JSON object within the bound; 404
-unknown id; 409 when the sandbox is hibernated, mid-transition or archived (this
+unknown id; 409 when the sandbox is failed, hibernated, mid-transition or archived (this
 verb never wakes one) or its image serves no instance metadata.
 
 ## GET /metrics
