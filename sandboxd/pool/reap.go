@@ -85,9 +85,6 @@ func (m *Manager) reapOnce(ctx context.Context) {
 		}
 		return bad
 	})
-	if len(expired) == 0 {
-		return
-	}
 	m.mu.Lock()
 	keep := expired[:0]
 	var purgeCks, purged []string

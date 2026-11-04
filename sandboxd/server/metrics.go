@@ -10,7 +10,6 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/pool"
 )
 
-// handleMetrics renders Prometheus text format by hand.
 func (s *Server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
 	pools, g := s.mgr.Info()
 	c := s.mgr.Counters()

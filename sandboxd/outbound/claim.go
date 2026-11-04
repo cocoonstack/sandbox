@@ -60,14 +60,6 @@ func (c *claim) EvalInner(host, method string, port uint16) (egress.Rule, egress
 	return c.current().EvalInner(host, method, port)
 }
 
-func (c *claim) ServesSocks() bool {
-	return c.current().ServesSocks()
-}
-
-func (c *claim) InterceptsHost(pattern string) bool {
-	return c.current().InterceptsHost(pattern)
-}
-
 func (c *claim) Header(name string) (header, value string, ok bool) {
 	secrets := c.h.o.View().secrets
 	if header, value, ok = secrets.Header(name); !ok {

@@ -61,12 +61,9 @@ func ValidDirectIO(mode string) bool {
 
 // VolumeNames projects the entries' names in order; nil for none.
 func VolumeNames(volumes []Volume) []string {
-	if len(volumes) == 0 {
-		return nil
-	}
-	names := make([]string, len(volumes))
-	for i, volume := range volumes {
-		names[i] = volume.Name
+	var names []string
+	for _, volume := range volumes {
+		names = append(names, volume.Name)
 	}
 	return names
 }

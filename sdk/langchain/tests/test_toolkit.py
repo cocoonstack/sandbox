@@ -11,6 +11,39 @@ from cocoonsandbox_langchain import CocoonToolkit
 from cocoonsandbox_langchain.toolkit import CALL_TIMEOUT
 
 
+class FakeSandbox:
+    def __init__(self):
+        self.closed = 0
+        self.close_error = None
+        self.files = {}
+
+    def run(self, argv, cwd="", on_stdout=None, on_stderr=None, timeout=None, **_):
+        assert argv[:2] == ["sh", "-c"], argv
+        assert timeout is not None and 0 < timeout <= 300, timeout
+        if argv[2] == "boom":
+            on_stderr(b"kaboom\n")
+            return 3
+        if argv[2] == "hang":
+            on_stdout(b"partial\n")
+            raise TimeoutError("cut")
+        on_stdout(f"ran: {argv[2]}\n".encode())
+        return 0
+
+    def write_file(self, path, data):
+        self.files[path] = data
+
+    def read_file(self, path):
+        return self.files[path]
+
+    def list_dir(self, path):
+        return [{"name": "a.txt", "kind": "file", "size": 3}]
+
+    def close(self):
+        self.closed += 1
+        if self.close_error is not None:
+            raise self.close_error
+
+
 def test_tools_shape(monkeypatch):
     kit, _ = hooked(monkeypatch)
     tools = kit.get_tools()
@@ -150,39 +183,6 @@ def test_a_stalled_agent_upgrade_comes_back_as_a_tool_error():
         assert "timed out" in tool.invoke({"path": "/etc/hostname"})
     finally:
         server.close()
-
-
-class FakeSandbox:
-    def __init__(self):
-        self.closed = 0
-        self.close_error = None
-        self.files = {}
-
-    def run(self, argv, cwd="", on_stdout=None, on_stderr=None, timeout=None, **_):
-        assert argv[:2] == ["sh", "-c"], argv
-        assert timeout is not None and 0 < timeout <= 300, timeout
-        if argv[2] == "boom":
-            on_stderr(b"kaboom\n")
-            return 3
-        if argv[2] == "hang":
-            on_stdout(b"partial\n")
-            raise TimeoutError("cut")
-        on_stdout(f"ran: {argv[2]}\n".encode())
-        return 0
-
-    def write_file(self, path, data):
-        self.files[path] = data
-
-    def read_file(self, path):
-        return self.files[path]
-
-    def list_dir(self, path):
-        return [{"name": "a.txt", "kind": "file", "size": 3}]
-
-    def close(self):
-        self.closed += 1
-        if self.close_error is not None:
-            raise self.close_error
 
 
 def hooked(monkeypatch):

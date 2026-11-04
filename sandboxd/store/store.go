@@ -75,7 +75,6 @@ type Store interface {
 	Metas(ctx context.Context) ([]Record, error)
 	// SetLabels replaces a record's labels; nil removes them. The caller holds the record lock.
 	SetLabels(ctx context.Context, id string, labels []byte) error
-	// Delete removes a record.
 	Delete(ctx context.Context, id string) error
 	// SweepStaging removes abandoned staging left by a crash mid-publish.
 	SweepStaging() error
@@ -98,14 +97,6 @@ func ExportGenHash(meta []byte) string {
 	return hex.EncodeToString(sum[:8])
 }
 
-// RequireRegular rejects an export entry that is not a regular file.
-func RequireRegular(rel string, mode fs.FileMode) error {
-	if !mode.IsRegular() {
-		return fmt.Errorf("export entry %s is not a regular file (%s)", rel, mode.Type())
-	}
-	return nil
-}
-
 // WalkExport calls fn for every file under a staged export root with its slash-separated path relative to root; any non-regular entry fails the walk.
 func WalkExport(root string, fn func(rel, path string, info fs.FileInfo) error) error {
 	return filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
@@ -121,17 +112,14 @@ func WalkExport(root string, fn func(rel, path string, info fs.FileInfo) error) 
 		if entry.IsDir() {
 			return nil
 		}
-		rel, err := filepath.Rel(root, path)
-		if err != nil {
-			return err
-		}
+		rel, _ := filepath.Rel(root, path)
 		rel = filepath.ToSlash(rel)
 		info, err := entry.Info()
 		if err != nil {
 			return err
 		}
-		if err := RequireRegular(rel, info.Mode()); err != nil {
-			return err
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("export entry %s is not a regular file (%s)", rel, info.Mode().Type())
 		}
 		return fn(rel, path, info)
 	})

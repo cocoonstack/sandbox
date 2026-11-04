@@ -312,7 +312,7 @@ func TestReplicaFollowsThePolicyPoolOfAPromotedTemplate(t *testing.T) {
 	sb.Key, sb.PolicySource = tplKey("promoted:v1"), testKey
 	a.addClaimLocked(sb)
 	a.mu.Unlock()
-	if !sb.Replicated() {
+	if !sb.Replicated {
 		t.Error("a claim of a template promoted out of a replicating pool is not marked replicated")
 	}
 
@@ -421,8 +421,8 @@ func TestReplicaLeftoverJournalWithFailoverOffStillServesStreams(t *testing.T) {
 		t.Fatalf("reconcile: %v", err)
 	}
 	held, ok := restarted.byID(sb.ID)
-	if !ok || held.ReplicaCk != "ck_leftover" || held.Replicated() {
-		t.Fatalf("claim held %v replica %q replicated %v, want the leftover kept and not replicated", ok, held.ReplicaCk, held.Replicated())
+	if !ok || held.ReplicaCk != "ck_leftover" || held.Replicated {
+		t.Fatalf("claim held %v replica %q replicated %v, want the leftover kept and not replicated", ok, held.ReplicaCk, held.Replicated)
 	}
 	_, fenced, done, err := restarted.WakeAgentSocket(t.Context(), sb.ID, sb.Token)
 	if err != nil || fenced != nil {

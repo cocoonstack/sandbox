@@ -31,7 +31,6 @@ func (e *guestExitError) Error() string {
 	return fmt.Sprintf("exit code %d: %s", e.code, e.output)
 }
 
-// silkdSession is a dialed silkd conn bound to a ctx, with wire-typed request/reply helpers.
 type silkdSession struct {
 	conn net.Conn
 	sc   *bufio.Scanner
@@ -104,42 +103,31 @@ func (e *Engine) silkdStream(ctx context.Context, vsockSocket string, req wire.R
 	}
 }
 
-func (e *Engine) silkdList(ctx context.Context, vsockSocket, path string) ([]wire.DirEntry, error) {
-	var entries []wire.DirEntry
-	err := e.silkdStream(ctx, vsockSocket, wire.FsList{Path: path}, func(frame wire.Response) error {
-		resp, ok := frame.(*wire.Entries)
+func (e *Engine) silkdCollect[F wire.Response, E any](ctx context.Context, vsockSocket string, req wire.Request, limit int, over error, items func(F) []E) ([]E, error) {
+	var out []E
+	err := e.silkdStream(ctx, vsockSocket, req, func(frame wire.Response) error {
+		resp, ok := frame.(F)
 		if !ok {
 			return fmt.Errorf("unexpected silkd frame %q", frame.RespType())
 		}
-		entries = append(entries, resp.Entries...)
-		if len(entries) > silkdListMax {
-			return fmt.Errorf("silkd list of %s exceeds %d entries", path, silkdListMax)
+		out = append(out, items(resp)...)
+		if len(out) > limit {
+			return over
 		}
 		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
-	return entries, nil
+	return out, nil
+}
+
+func (e *Engine) silkdList(ctx context.Context, vsockSocket, path string) ([]wire.DirEntry, error) {
+	return e.silkdCollect(ctx, vsockSocket, wire.FsList{Path: path}, silkdListMax, fmt.Errorf("silkd list of %s exceeds %d entries", path, silkdListMax), func(r *wire.Entries) []wire.DirEntry { return r.Entries })
 }
 
 func (e *Engine) silkdReadFile(ctx context.Context, vsockSocket, path string, limit int) ([]byte, error) {
-	var data []byte
-	err := e.silkdStream(ctx, vsockSocket, wire.FsRead{Path: path}, func(frame wire.Response) error {
-		resp, ok := frame.(*wire.DataResp)
-		if !ok {
-			return fmt.Errorf("unexpected silkd frame %q", frame.RespType())
-		}
-		data = append(data, resp.Data...)
-		if len(data) > limit {
-			return fmt.Errorf("silkd read of %s exceeds %d bytes", path, limit)
-		}
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	return data, nil
+	return e.silkdCollect(ctx, vsockSocket, wire.FsRead{Path: path}, limit, fmt.Errorf("silkd read of %s exceeds %d bytes", path, limit), func(r *wire.DataResp) []byte { return r.Data })
 }
 
 // silkdOnce sends a request answered by a single T frame and no Done, so it cannot ride silkdStream.
@@ -166,6 +154,8 @@ func (e *Engine) silkdOnce[T wire.Response](ctx context.Context, vsockSocket str
 }
 
 func (e *Engine) silkdWriteFile(ctx context.Context, vsockSocket, path string, mode uint32, data []byte) error {
+	ctx, cancel := context.WithTimeout(ctx, cmdTimeout)
+	defer cancel()
 	s, err := e.dialSilkdSession(ctx, vsockSocket)
 	if err != nil {
 		return err

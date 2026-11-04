@@ -1,6 +1,5 @@
 //! Filesystem verb E2E over the in-memory duplex, against real temp paths.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
 mod common;
 
 use std::os::unix::fs::{MetadataExt, PermissionsExt};

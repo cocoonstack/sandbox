@@ -16,15 +16,11 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/cocoonstack/sandbox/sandboxd/store"
 )
 
 const (
-	// Generous for a guest memory image, but a wedged peer must fail so the next owner is tried.
-	pullTimeout = 30 * time.Minute
-
 	maxRecordBytes = 1 << 40 // 1 TiB
 
 	exportPrefix = store.ExportDir + "/"
@@ -37,9 +33,6 @@ const (
 	paxChunk    = "SANDBOX.chunk"
 )
 
-// ErrNotFound reports that a peer does not hold the requested record.
-var ErrNotFound = errors.New("peer does not hold record")
-
 // Puller fetches a record from a peer into a local directory.
 type Puller interface {
 	Pull(ctx context.Context, addr, id, dst string) error
@@ -47,15 +40,10 @@ type Puller interface {
 
 // HTTPPuller pulls records over sandboxd's control-plane HTTP port.
 type HTTPPuller struct {
-	// A nil Client uses a default with no overall timeout; the deadline comes from the context.
-	Client *http.Client
-	Token  string
+	Token string
 }
 
 func (p *HTTPPuller) Pull(ctx context.Context, addr, id, dst string) error {
-	ctx, cancel := context.WithTimeout(ctx, pullTimeout)
-	defer cancel()
-
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, checkpointURL(addr, id, "/blob"), nil)
 	if err != nil {
 		return err
@@ -64,8 +52,7 @@ func (p *HTTPPuller) Pull(ctx context.Context, addr, id, dst string) error {
 		req.Header.Set("Authorization", "Bearer "+p.Token)
 	}
 
-	client := cmp.Or(p.Client, http.DefaultClient)
-	resp, err := client.Do(req)
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("pull %s from %s: %w", id, addr, err)
 	}
@@ -74,7 +61,7 @@ func (p *HTTPPuller) Pull(ctx context.Context, addr, id, dst string) error {
 	switch resp.StatusCode {
 	case http.StatusOK:
 	case http.StatusNotFound:
-		return ErrNotFound
+		return store.ErrNotFound
 	default:
 		return fmt.Errorf("pull %s from %s: unexpected status %d", id, addr, resp.StatusCode)
 	}
@@ -227,19 +214,10 @@ func peerURL(addr, path string) string {
 
 // safeJoin resolves name under root, rejecting absolute paths and names that escape root.
 func safeJoin(root, name string) (string, error) {
-	if name == "" || filepath.IsAbs(name) || strings.Contains(name, `\`) {
+	if !filepath.IsLocal(name) || strings.Contains(name, `\`) {
 		return "", fmt.Errorf("untar: refusing entry %q", name)
 	}
-	// clean as-is, never "/"+name: a leading slash absorbs a leading ".." instead of rejecting it.
-	clean := filepath.Clean(name)
-	if clean == ".." || strings.HasPrefix(clean, ".."+string(os.PathSeparator)) {
-		return "", fmt.Errorf("untar: entry %q escapes destination", name)
-	}
-	target := filepath.Join(root, clean)
-	if target != root && !strings.HasPrefix(target, root+string(os.PathSeparator)) {
-		return "", fmt.Errorf("untar: entry %q escapes destination", name)
-	}
-	return target, nil
+	return filepath.Join(root, name), nil
 }
 
 // tarInto emits only regular files and directories (a symlink would steer the reader outside dst); a file is a size entry plus its non-zero chunks.
@@ -249,10 +227,7 @@ func tarInto(src, prefix string, tw *tar.Writer) error {
 		if err != nil {
 			return err
 		}
-		rel, err := filepath.Rel(src, path)
-		if err != nil {
-			return err
-		}
+		rel, _ := filepath.Rel(src, path)
 		if rel == "." {
 			return nil
 		}

@@ -103,39 +103,31 @@ func (s *Source) List(_ context.Context, after string, limit int) ([]tenants.Ten
 }
 
 func (s *Source) Put(_ context.Context, r tenants.TenantRecord) (tenants.Change, error) {
-	return s.apply(func(cur *set) ([]tenants.TenantRecord, error) {
+	return s.apply(func(cur *set) (map[string]tenants.TenantRecord, error) {
 		kept, err := tenants.KeepTokens(cur.byName, []tenants.TenantRecord{r})
 		if err != nil {
 			return nil, err
 		}
 		next := maps.Clone(cur.byName)
 		maps.Copy(next, kept)
-		return slices.Collect(maps.Values(next)), nil
+		return next, nil
 	})
 }
 
 func (s *Source) Delete(_ context.Context, name string) (tenants.Change, error) {
-	return s.apply(func(cur *set) ([]tenants.TenantRecord, error) {
+	return s.apply(func(cur *set) (map[string]tenants.TenantRecord, error) {
 		if _, ok := cur.byName[name]; !ok {
 			return nil, tenants.ErrUnknown
 		}
 		next := maps.Clone(cur.byName)
 		delete(next, name)
-		return slices.Collect(maps.Values(next)), nil
+		return next, nil
 	})
 }
 
 func (s *Source) Replace(_ context.Context, records []tenants.TenantRecord) (tenants.Change, error) {
-	return s.apply(func(cur *set) ([]tenants.TenantRecord, error) {
-		next, err := tenants.KeepTokens(cur.byName, records)
-		if err != nil {
-			return nil, err
-		}
-		out := make([]tenants.TenantRecord, len(records))
-		for i, r := range records {
-			out[i] = next[r.Name]
-		}
-		return out, nil
+	return s.apply(func(cur *set) (map[string]tenants.TenantRecord, error) {
+		return tenants.KeepTokens(cur.byName, records)
 	})
 }
 
@@ -161,7 +153,7 @@ func (s *Source) Close() error {
 	return nil
 }
 
-func (s *Source) apply(next func(cur *set) ([]tenants.TenantRecord, error)) (tenants.Change, error) {
+func (s *Source) apply(next func(cur *set) (map[string]tenants.TenantRecord, error)) (tenants.Change, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	cur := s.set.Load()
@@ -169,7 +161,7 @@ func (s *Source) apply(next func(cur *set) ([]tenants.TenantRecord, error)) (ten
 	if err != nil {
 		return tenants.Change{}, err
 	}
-	updated, err := newSet(records, s.rootSum)
+	updated, err := newSet(slices.Collect(maps.Values(records)), s.rootSum)
 	if err != nil {
 		return tenants.Change{}, err
 	}

@@ -1,11 +1,4 @@
-"""OpenAI Agents SDK sandbox provider for cocoon microVMs.
-
-from cocoonsandbox_openai import CocoonSandboxClient, CocoonSandboxClientOptions
-
-client = CocoonSandboxClient()
-session = await client.create(options=CocoonSandboxClientOptions(
-    addr="10.0.0.5:7777", api_token="...", template="ghcr.io/cocoonstack/sandbox/rt:24.04"))
-"""
+"""OpenAI Agents SDK sandbox provider for cocoon microVMs."""
 
 from .adapter import (
     CocoonSandboxClient,

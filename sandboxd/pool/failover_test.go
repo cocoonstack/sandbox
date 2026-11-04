@@ -1407,12 +1407,12 @@ func TestFailoverArchiveExportsNothingForARowAnotherNodeHolds(t *testing.T) {
 	if _, err := c.reg.Put(t.Context(), archives.Record{ID: sb.ID, Owner: "b", Checkpoint: "ck_00000000000000ee", Claim: []byte(`{}`)}); err != nil {
 		t.Fatalf("put: %v", err)
 	}
-	published := &publishCountingStore{Store: a.ckpts}
+	published := &failingPublishStore{Store: a.ckpts}
 	a.ckpts = published
 	if err := a.archive(t.Context(), sb); !errors.Is(err, archives.ErrLost) {
 		t.Fatalf("archive of a claim another node holds: %v, want ErrLost", err)
 	}
-	if n := published.n.Load(); n != 0 {
+	if n := published.publishes.Load(); n != 0 {
 		t.Errorf("archive published %d exports, want none", n)
 	}
 }
@@ -2055,16 +2055,6 @@ func (r *hookRegistry) Consume(ctx context.Context, id string, expect int64) (in
 		return 0, archives.ErrUnavailable
 	}
 	return epoch, err
-}
-
-type publishCountingStore struct {
-	store.Store
-	n atomic.Int32
-}
-
-func (s *publishCountingStore) Publish(ctx context.Context, staging, id, lineage string) error {
-	s.n.Add(1)
-	return s.Store.Publish(ctx, staging, id, lineage)
 }
 
 type unreadableStore struct {

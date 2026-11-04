@@ -59,39 +59,6 @@ func TestOwnersReturnsPromptlyWithOneOwner(t *testing.T) {
 	}
 }
 
-func TestForgetDuringFlightPreventsStaleCache(t *testing.T) {
-	release := make(chan struct{})
-	inFlight := make(chan struct{})
-	probed := sync.OnceFunc(func() { close(inFlight) })
-	var hits atomic.Int32
-	owner := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		hits.Add(1)
-		probed()
-		<-release
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer owner.Close()
-
-	p := &HTTPProber{Peers: func() []string { return []string{owner.URL} }}
-	var owners []string
-	done := make(chan struct{})
-	go func() { owners = p.Owners(t.Context(), testID); close(done) }()
-
-	<-inFlight
-	p.Forget(testID)
-	close(release)
-	<-done
-
-	if len(owners) != 1 {
-		t.Fatalf("owners = %v, want the one that answered", owners)
-	}
-
-	p.Owners(t.Context(), testID)
-	if got := hits.Load(); got != 2 {
-		t.Errorf("owner probed %d times, want 2: a Forget mid-flight must not leave a stale positive cached", got)
-	}
-}
-
 func TestOwnersDedupsAddrs(t *testing.T) {
 	var hits atomic.Int32
 	ok := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

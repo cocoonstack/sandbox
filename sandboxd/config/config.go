@@ -206,7 +206,7 @@ func (mc *MeshConfig) ParsedBind() (string, int, error) {
 	if err != nil {
 		return "", 0, fmt.Errorf("mesh bind port %q: %w", portStr, err)
 	}
-	if host == "" {
+	if !RoutableHost(host) {
 		return "", 0, fmt.Errorf("mesh bind needs an explicit host (got %q); a wildcard advertises an unroutable address", mc.Bind)
 	}
 	return host, port, nil

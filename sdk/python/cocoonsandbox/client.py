@@ -15,7 +15,7 @@ from typing import Any, TypeVar, cast
 from .checkpoint import Checkpoint
 from .conn import Conn, dial_agent, is_quiet, remaining_timeout
 from .endpoint import _endpoint_url
-from .errors import APIError, SandboxTimeout, require_field
+from .errors import APIError, SandboxTimeout, _error_message, require_field
 from .sandbox import Sandbox
 from .template import _claim_body, _template_query
 from .volumes import Volume
@@ -259,7 +259,6 @@ class Client:
         return resp.status, raw
 
     def _take(self, key: tuple[str, str], timeout: float) -> http.client.HTTPConnection:
-        """Reuses a parked connection the node has not closed within keep_alive, else dials."""
         with self._idle_lock:
             idle = self._idle.get(key, [])
             while idle:
@@ -278,13 +277,6 @@ class Client:
             self._ssl_context = ssl.create_default_context()
             self._ssl_context.set_alpn_protocols(["http/1.1"])
         return self._ssl_context
-
-
-def _error_message(raw: bytes) -> str:
-    try:
-        return cast(str, json.loads(raw)["error"])
-    except (ValueError, KeyError, TypeError):
-        return raw.decode(errors="replace").strip()
 
 
 def _retry_miss(exc: APIError) -> bool:

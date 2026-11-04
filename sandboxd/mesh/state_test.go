@@ -1,109 +1,21 @@
 package mesh
 
 import (
-	"os"
-	"path/filepath"
 	"sync"
 	"testing"
 
 	"github.com/hashicorp/memberlist"
 )
 
-func TestEpochRoundTrip(t *testing.T) {
-	p := filepath.Join(t.TempDir(), "e")
-	if loadEpoch(p) != 0 {
-		t.Error("missing epoch file must read 0")
-	}
-	if err := storeEpoch(p, 42); err != nil {
-		t.Fatalf("store: %v", err)
-	}
-	if got := loadEpoch(p); got != 42 {
-		t.Errorf("loadEpoch = %d, want 42", got)
-	}
-}
-
-func TestLoadEpochRejectsImplausibleValue(t *testing.T) {
-	p := filepath.Join(t.TempDir(), "e")
-
-	if err := os.WriteFile(p, []byte("18446744073709551615"), 0o600); err != nil {
-		t.Fatalf("write: %v", err)
-	}
-	if got := loadEpoch(p); got != 0 {
-		t.Errorf("loadEpoch of a MaxUint64 file = %d, want 0 (treated as corrupt)", got)
-	}
-}
-
-func TestEpochSeededAbovePersistedFloor(t *testing.T) {
-	dir := t.TempDir()
-	huge := uint64(1) << 62
-	if err := storeEpoch(filepath.Join(dir, "mesh-epoch"), huge); err != nil {
-		t.Fatalf("store: %v", err)
-	}
-	m := newBoundMesh(t, dir)
-
-	if m.self.Epoch != huge+1 {
-		t.Errorf("epoch seeded %d, want persisted floor + 1 = %d (a backwards clock must land above peers' last-seen epoch)", m.self.Epoch, huge+1)
-	}
-}
-
-func TestUpdateSelfPersistFailKeepsOldState(t *testing.T) {
-	dir := t.TempDir()
-	m := newBoundMesh(t, dir)
-	before := m.self.Epoch
-
-	m.epochPath = filepath.Join(dir, "gone", "mesh-epoch")
-	m.leased = before
-	m.UpdateSelf(t.Context(), map[string]int{"k": 1}, nil, nil)
-	if m.self.Epoch != before {
-		t.Errorf("self epoch advanced to %d on a failed persist, want %d held", m.self.Epoch, before)
-	}
-	if len(m.self.Pools) != 0 {
-		t.Errorf("self pools published %v despite a failed persist", m.self.Pools)
-	}
-}
-
-func TestUpdateSelfPersistsEpoch(t *testing.T) {
-	dir := t.TempDir()
-	m := newBoundMesh(t, dir)
-	before := m.self.Epoch
-	m.UpdateSelf(t.Context(), map[string]int{"k": 1}, nil, nil)
-	if got := loadEpoch(filepath.Join(dir, "mesh-epoch")); got <= before {
-		t.Errorf("persisted epoch %d did not advance past the seed %d", got, before)
-	}
-}
-
-func TestUpdateSelfLeasesEpochFloor(t *testing.T) {
-	dir := t.TempDir()
-	m := newBoundMesh(t, dir)
-	path := filepath.Join(dir, "mesh-epoch")
-	seeded := loadEpoch(path)
-	if seeded <= m.self.Epoch {
-		t.Fatalf("seeded floor %d, want above the live epoch %d", seeded, m.self.Epoch)
-	}
-	for i := range 8 {
-		m.UpdateSelf(t.Context(), map[string]int{"k": i + 1}, nil, nil)
-	}
-	if got := loadEpoch(path); got != seeded {
-		t.Errorf("floor rewritten to %d during %d leased ticks, want %d held", got, 8, seeded)
-	}
-	m.mu.Lock()
-	m.self.Epoch = seeded
-	m.mu.Unlock()
-	m.UpdateSelf(t.Context(), map[string]int{"k": 99}, nil, nil)
-	if got := loadEpoch(path); got <= m.self.Epoch {
-		t.Errorf("floor %d not above the published epoch %d after crossing the lease", got, m.self.Epoch)
-	}
-}
-
 func TestUpdateSelfConcurrentDropsNothing(t *testing.T) {
-	m := newBoundMesh(t, t.TempDir())
+	m := newBoundMesh(t)
 	base := m.self.Epoch
 	for i := range 100 {
 		a := map[string]int{"a": i + 1}
 		b := map[string]int{"b": i + 1}
 		var wg sync.WaitGroup
-		wg.Go(func() { m.UpdateSelf(t.Context(), a, nil, nil) })
-		wg.Go(func() { m.UpdateSelf(t.Context(), b, nil, nil) })
+		wg.Go(func() { m.UpdateSelf(a, nil, nil) })
+		wg.Go(func() { m.UpdateSelf(b, nil, nil) })
 		wg.Wait()
 
 		want := base + uint64(2*(i+1))
@@ -114,17 +26,17 @@ func TestUpdateSelfConcurrentDropsNothing(t *testing.T) {
 }
 
 func TestUpdateSelfBumpsOnlyWhenVolumesChange(t *testing.T) {
-	m := newBoundMesh(t, t.TempDir())
+	m := newBoundMesh(t)
 	base := m.self.Epoch
-	m.UpdateSelf(t.Context(), nil, nil, []string{"dataset"})
+	m.UpdateSelf(nil, nil, []string{"dataset"})
 	if m.self.Epoch != base+1 {
 		t.Fatalf("first volume publish epoch=%d, want %d", m.self.Epoch, base+1)
 	}
-	m.UpdateSelf(t.Context(), nil, nil, []string{"dataset"})
+	m.UpdateSelf(nil, nil, []string{"dataset"})
 	if m.self.Epoch != base+1 {
 		t.Errorf("unchanged volume republished at epoch=%d", m.self.Epoch)
 	}
-	m.UpdateSelf(t.Context(), nil, nil, []string{"dataset", "weights"})
+	m.UpdateSelf(nil, nil, []string{"dataset", "weights"})
 	if m.self.Epoch != base+2 {
 		t.Errorf("changed volume epoch=%d, want %d", m.self.Epoch, base+2)
 	}
@@ -140,24 +52,24 @@ func TestConfigDigestMismatch(t *testing.T) {
 }
 
 func TestUpdateDigestRepublishesUnderAFreshEpoch(t *testing.T) {
-	m := newBoundMesh(t, t.TempDir())
+	m := newBoundMesh(t)
 	base := m.self.Epoch
-	m.UpdateDigest(t.Context(), "d1")
+	m.UpdateDigest("d1")
 	if m.self.Epoch != base {
 		t.Errorf("an unchanged digest republished at epoch=%d", m.self.Epoch)
 	}
-	m.UpdateDigest(t.Context(), "d2")
+	m.UpdateDigest("d2")
 	if m.self.Epoch != base+1 || m.view["self"].Digest != "d2" {
 		t.Errorf("epoch=%d view digest %q, want epoch %d and d2", m.self.Epoch, m.view["self"].Digest, base+1)
 	}
 }
 
-func newBoundMesh(t *testing.T, dataDir string) *Mesh {
+func newBoundMesh(t *testing.T) *Mesh {
 	t.Helper()
 	cfg := memberlist.DefaultLocalConfig()
 	cfg.BindPort = 0
 	cfg.Logger = discardLogger()
-	m, err := New(t.Context(), cfg, NodeState{NodeID: "self", Addr: "self:7777", ClientAddr: "https://self.example", Digest: "d1"}, nil, dataDir)
+	m, err := New(t.Context(), cfg, NodeState{NodeID: "self", Addr: "self:7777", ClientAddr: "https://self.example", Digest: "d1"}, nil)
 	if err != nil {
 		t.Fatalf("new mesh: %v", err)
 	}

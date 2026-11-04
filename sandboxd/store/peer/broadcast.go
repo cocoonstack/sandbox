@@ -23,9 +23,6 @@ type Broadcaster struct {
 // Delete sends DELETE ?no_forward=1 to every peer in parallel; failures are logged, not returned.
 func (b *Broadcaster) Delete(ctx context.Context, id string) {
 	addrs := slices.Compact(slices.Sorted(slices.Values(b.Peers())))
-	if len(addrs) == 0 {
-		return
-	}
 	logger := log.WithFunc("peer.Broadcaster.Delete")
 	var wg sync.WaitGroup
 	for _, addr := range addrs {

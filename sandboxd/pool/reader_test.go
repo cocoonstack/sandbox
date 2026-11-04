@@ -62,7 +62,7 @@ func TestReaderObeysTheNodeLeaseFence(t *testing.T) {
 	eng := newFakeEngine()
 	m := newReaderManager(t, eng)
 	replicated, plain := mustClaim(t, m, testKey), mustClaim(t, m, testKey)
-	replicated.SetReplicated(true)
+	replicated.Replicated = true
 	hibernateClaim(t, m, replicated)
 	hibernateClaim(t, m, plain)
 	seedReaderVMs(m, testKey, "sbx-reader-1", "sbx-reader-2")
@@ -90,7 +90,7 @@ func TestReaderConnectionEndsWhenTheFenceTrips(t *testing.T) {
 	m := newReaderManager(t, eng)
 	m.liftFence()
 	replicated, plain := mustClaim(t, m, testKey), mustClaim(t, m, testKey)
-	replicated.SetReplicated(true)
+	replicated.Replicated = true
 	hibernateClaim(t, m, replicated)
 	hibernateClaim(t, m, plain)
 	seedReaderVMs(m, testKey, "sbx-reader-1", "sbx-reader-2")

@@ -127,12 +127,12 @@ func (e *Engine) VersionWarning(ctx context.Context) (version, warning string) {
 
 // Clone restores a VM from an exported golden directory.
 func (e *Engine) Clone(ctx context.Context, fromDir, name string, key types.PoolKey) (types.VMRecord, error) {
-	return e.runRecord(ctx, dumpTimeout, dumpTermGrace, e.cloneArgs(fromDir, name, key)...)
+	return e.runRecord(ctx, dumpTimeout, dumpTermGrace, e.cloneArgs(name, key, "--from-dir", fromDir)...)
 }
 
 // CloneSnap clones from a local-store snapshot by name — fork's fast path.
 func (e *Engine) CloneSnap(ctx context.Context, snap, name string, key types.PoolKey) (types.VMRecord, error) {
-	return e.runRecord(ctx, dumpTimeout, dumpTermGrace, e.cloneSnapArgs(snap, name, key)...)
+	return e.runRecord(ctx, dumpTimeout, dumpTermGrace, e.cloneArgs(name, key, snap)...)
 }
 
 // RunCold boots a VM from the template image with a storage-sized disk (empty = cocoon's default), returning its lifecycle record.
@@ -317,7 +317,7 @@ func (e *Engine) DialGuestPort(ctx context.Context, vsockSocket string, port uin
 		_ = conn.Close()
 		return nil, fmt.Errorf("port_forward %d: %s", port, respFail(resp))
 	}
-	return newGuestPortConn(conn, r), nil
+	return &guestPortConn{Conn: conn, r: r}, nil
 }
 
 func (e *Engine) dialVsock(ctx context.Context, vsockSocket string, port int) (net.Conn, error) {
@@ -366,15 +366,10 @@ func (e *Engine) probe(ctx context.Context, vsockSocket string, port int, timeou
 	}
 }
 
-func (e *Engine) cloneArgs(fromDir, name string, key types.PoolKey) []string {
+func (e *Engine) cloneArgs(name string, key types.PoolKey, source ...string) []string {
+	args := append([]string{"vm", "clone"}, source...)
 	// --pull: a checkpoint/template export carries only COW + memory, not the base image.
-	args := []string{"vm", "clone", "--from-dir", fromDir, argName, name, "--pull", argOutput, formatJSON, e.directIOArg()}
-	args = append(args, e.restoreArgs()...)
-	return append(args, e.netArgs(name, key, false)...)
-}
-
-func (e *Engine) cloneSnapArgs(snap, name string, key types.PoolKey) []string {
-	args := []string{"vm", "clone", snap, argName, name, "--pull", argOutput, formatJSON, e.directIOArg()}
+	args = append(args, argName, name, "--pull", argOutput, formatJSON, e.directIOArg())
 	args = append(args, e.restoreArgs()...)
 	return append(args, e.netArgs(name, key, false)...)
 }

@@ -26,10 +26,7 @@ type DigestFile struct {
 
 // ChunkCount returns how many DigestChunkSize chunks size spans.
 func ChunkCount(size int64) int64 {
-	if size == 0 {
-		return 0
-	}
-	return (size-1)/DigestChunkSize + 1
+	return (size + DigestChunkSize - 1) / DigestChunkSize
 }
 
 // AssembleDigest returns the canonical v2 digest of indexed file chunks.

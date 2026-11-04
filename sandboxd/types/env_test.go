@@ -196,10 +196,12 @@ func TestSandboxPublishesItsEnvToTheProxy(t *testing.T) {
 
 func TestEnvSplitsGuestAndHostOnlyEntries(t *testing.T) {
 	env := Env{"G": {Value: "g"}, "H": {Value: "h", Guest: new(false)}, "T": {Value: "t", Guest: new(true)}}
-	if v, ok := env.Hidden("H"); !ok || v != "h" {
-		t.Errorf("Hidden(H) = %q %v, want h", v, ok)
+	sb := &Sandbox{}
+	sb.SetEnv(env)
+	if v, ok := sb.HiddenEnv("H"); !ok || v != "h" {
+		t.Errorf("HiddenEnv(H) = %q %v, want h", v, ok)
 	}
-	if _, ok := env.Hidden("G"); ok {
+	if _, ok := sb.HiddenEnv("G"); ok {
 		t.Error("a guest entry resolved as host-only")
 	}
 	if !env.HasGuest() || (Env{"H": env["H"]}).HasGuest() {

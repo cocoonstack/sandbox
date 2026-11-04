@@ -31,9 +31,6 @@ func NewHealer(owners Owners, puller Puller) *Healer {
 
 // Pull fetches id into staging from the first owner whose transfer validates.
 func (h *Healer) Pull(ctx context.Context, id, staging string, validate Validate) error {
-	if h.owners == nil || h.puller == nil {
-		return store.ErrNotFound
-	}
 	addrs := h.owners(id)
 	if len(addrs) == 0 {
 		return store.ErrNotFound
@@ -56,7 +53,7 @@ func (h *Healer) pullFrom(ctx context.Context, id, staging string, addrs []strin
 		err := h.puller.Pull(attemptCtx, addr, id, staging)
 		cancel()
 		if err != nil {
-			if !errors.Is(err, ErrNotFound) {
+			if !errors.Is(err, store.ErrNotFound) {
 				errs = append(errs, fmt.Errorf("peer %s: %w", addr, err))
 			}
 			continue

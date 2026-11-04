@@ -25,8 +25,8 @@ func TestCloneArgsRestoreMode(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			e := New("cocoon", []string{"br0"}, nil, false, false, tt.mode)
 			for _, args := range [][]string{
-				e.cloneArgs("/goldens/g1", "sbx-1", tt.key),
-				e.cloneSnapArgs("ck_1", "sbx-1", tt.key),
+				e.cloneArgs("sbx-1", tt.key, "--from-dir", "/goldens/g1"),
+				e.cloneArgs("sbx-1", tt.key, "ck_1"),
 				e.restoreCmdArgs("sbx-1", "sbx-hib-1"),
 			} {
 				i := slices.Index(args, "--restore-mode")
@@ -50,8 +50,8 @@ func TestLifecycleArgsApplyDirectIOPolicy(t *testing.T) {
 			cold := e.runColdArgs("sbx-1", key, "")
 			for _, args := range [][]string{
 				cold,
-				e.cloneArgs("/goldens/g1", "sbx-1", key),
-				e.cloneSnapArgs("ck_1", "sbx-1", key),
+				e.cloneArgs("sbx-1", key, "--from-dir", "/goldens/g1"),
+				e.cloneArgs("sbx-1", key, "ck_1"),
 			} {
 				if !slices.Contains(args, want) {
 					t.Errorf("args %v missing %q", args, want)
@@ -77,7 +77,7 @@ func TestEgressVMsSpreadOverEveryConfiguredShard(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			counts := map[string]int{}
 			for i := range 4000 {
-				args := tt.e.cloneArgs("/goldens/g1", "sbx-pool1-"+strconv.Itoa(i), key)
+				args := tt.e.cloneArgs("sbx-pool1-"+strconv.Itoa(i), key, "--from-dir", "/goldens/g1")
 				j := slices.Index(args, tt.flag)
 				if j < 0 {
 					t.Fatalf("args %v carry no %s", args, tt.flag)
@@ -126,7 +126,7 @@ func TestNoBalloonReachesColdBootsOnly(t *testing.T) {
 			if got := slices.Contains(e.runColdArgs("sbx-1", key, ""), "--no-balloon"); got != noBalloon {
 				t.Errorf("cold args carry --no-balloon = %v, want %v", got, noBalloon)
 			}
-			if slices.Contains(e.cloneArgs("/goldens/g1", "sbx-1", key), "--no-balloon") {
+			if slices.Contains(e.cloneArgs("sbx-1", key, "--from-dir", "/goldens/g1"), "--no-balloon") {
 				t.Error("clone args carry --no-balloon; clones inherit it from the golden")
 			}
 		})
@@ -145,7 +145,7 @@ func TestColdArgsSizeTheDiskOnlyWhenAsked(t *testing.T) {
 			t.Errorf("sized cold args %v, want --storage %s verbatim", args, storage)
 		}
 	}
-	if slices.Contains(e.cloneArgs("/goldens/g1", "sbx-1", key), "--storage") {
+	if slices.Contains(e.cloneArgs("sbx-1", key, "--from-dir", "/goldens/g1"), "--storage") {
 		t.Error("clone args carry --storage; clones inherit the golden's disk")
 	}
 }

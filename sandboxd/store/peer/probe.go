@@ -46,25 +46,21 @@ type HTTPProber struct {
 	ProbeKey []byte
 
 	redirectFlight singleflight.Group
-	healFlight     singleflight.Group
 
 	cacheMu sync.Mutex
 	cache   map[string]redirectCacheEntry
-	// epoch is bumped by every Forget, so a fan-out started before a delete cannot cache its result.
-	epoch uint64
 
 	// cacheTTL overrides redirectCacheTTL; a test seam, 5 seconds is slow to wait out.
 	cacheTTL time.Duration
 }
 
 func (p *HTTPProber) Owners(ctx context.Context, id string) []string {
-	owners, start, hit := p.cacheLookup(id)
-	if hit {
+	if owners, hit := p.cacheLookup(id); hit {
 		return owners
 	}
 	v, _, _ := p.redirectFlight.Do(id, func() (any, error) {
 		owners := p.fanOut(ctx, id, maxRedirectOwners, probeGrace)
-		p.cachePut(id, owners, start)
+		p.cachePut(id, owners)
 		return owners, nil
 	})
 	return v.([]string)
@@ -72,17 +68,13 @@ func (p *HTTPProber) Owners(ctx context.Context, id string) []string {
 
 // HealOwners is Owners' wide twin: a heal wants the largest source list, uncached.
 func (p *HTTPProber) HealOwners(ctx context.Context, id string) []string {
-	v, _, _ := p.healFlight.Do(id, func() (any, error) {
-		// No grace: a heal must not stop early on a fast owner and hide a slower valid source.
-		return p.fanOut(ctx, id, maxHealOwners, 0), nil
-	})
-	return v.([]string)
+	// No grace: a heal must not stop early on a fast owner and hide a slower valid source.
+	return p.fanOut(ctx, id, maxHealOwners, 0)
 }
 
 func (p *HTTPProber) Forget(id string) {
 	p.cacheMu.Lock()
 	defer p.cacheMu.Unlock()
-	p.epoch++
 	delete(p.cache, id)
 }
 
@@ -130,27 +122,22 @@ func (p *HTTPProber) fanOut(ctx context.Context, id string, maxOwners int, grace
 	}
 }
 
-// cacheLookup returns id's live owners and the current epoch the caller carries into the fan-out.
-func (p *HTTPProber) cacheLookup(id string) (owners []string, epoch uint64, hit bool) {
+func (p *HTTPProber) cacheLookup(id string) ([]string, bool) {
 	p.cacheMu.Lock()
 	defer p.cacheMu.Unlock()
 	entry, ok := p.cache[id]
 	if !ok || time.Now().After(entry.expires) {
-		return nil, p.epoch, false
+		return nil, false
 	}
-	return entry.owners, p.epoch, true
+	return entry.owners, true
 }
 
-// cachePut records a positive result unless a Forget bumped the epoch since the fan-out began.
-func (p *HTTPProber) cachePut(id string, owners []string, start uint64) {
+func (p *HTTPProber) cachePut(id string, owners []string) {
 	if len(owners) == 0 {
 		return
 	}
 	p.cacheMu.Lock()
 	defer p.cacheMu.Unlock()
-	if p.epoch != start {
-		return
-	}
 	if p.cache == nil {
 		p.cache = make(map[string]redirectCacheEntry)
 	}

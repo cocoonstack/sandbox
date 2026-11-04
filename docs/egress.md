@@ -267,7 +267,8 @@ recorded as a decision of its own before its inner requests. The HTTP and
 CONNECT doors deny a host longer than 253 bytes (the DNS limit); the audit
 record clips it. A sandbox records at most 10
 `deny` and `rate_limited` decisions per second after a burst of 100, dropping
-the rest, so a guest cannot flood the journals.
+the rest, so a guest cannot flood the journals. `rate_limited` comes from
+[`egress_conn_rate`](deploy.md#configuration).
 
 ## Claim env and secrets
 

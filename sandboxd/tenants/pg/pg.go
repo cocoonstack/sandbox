@@ -56,10 +56,8 @@ type Source struct {
 	byName   map[string]entry
 	misses   map[[sha256.Size]byte]time.Time
 	inflight map[string]struct{}
-	// seq counts evictions; a read caches only if neither its name nor the whole cache was evicted after it started.
-	seq     uint64
-	evicted map[string]uint64
-	floor   uint64
+	// seq counts evictions; a read caches only if none landed after it started.
+	seq uint64
 
 	stop context.CancelFunc
 	done chan struct{}
@@ -79,7 +77,6 @@ func Open(ctx context.Context, dsn string) (*Source, error) {
 		byName:   map[string]entry{},
 		misses:   map[[sha256.Size]byte]time.Time{},
 		inflight: map[string]struct{}{},
-		evicted:  map[string]uint64{},
 		stop:     stop,
 		done:     make(chan struct{}),
 	}
@@ -121,7 +118,7 @@ func (s *Source) Resolve(ctx context.Context, sum [sha256.Size]byte) (*tenants.T
 	case err != nil:
 		return nil, unavailable(err)
 	}
-	if s.fresh(r.Name, start) {
+	if s.seq == start {
 		s.cache(&r, sum)
 	}
 	return &r, nil
@@ -338,15 +335,10 @@ func (s *Source) write(ctx context.Context, key string, f func(tx pgx.Tx) error)
 	return nil
 }
 
-// fresh reports whether a read started at start may cache name; callers hold s.mu.
-func (s *Source) fresh(name string, start uint64) bool {
-	return start >= s.floor && s.evicted[name] <= start
-}
-
 // settle caches a by-name read that no eviction overtook; callers hold s.mu.
 func (s *Source) settle(name string, start uint64, r tenants.TenantRecord, ok bool, err error) {
 	switch {
-	case err != nil || !s.fresh(name, start):
+	case err != nil || s.seq != start:
 	case ok:
 		sum, _ := hex.DecodeString(r.TokenSHA256)
 		s.cache(&r, [sha256.Size]byte(sum))
@@ -368,17 +360,14 @@ func (s *Source) evict(key string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.seq++
-	if key == flushAll || len(s.evicted) >= maxCached {
+	if key == flushAll {
 		s.clearCache()
-		clear(s.evicted)
-		s.floor = s.seq
 		return
 	}
 	if e := s.byName[key]; e.rec != nil {
 		delete(s.byToken, e.sum)
 	}
 	delete(s.byName, key)
-	s.evicted[key] = s.seq
 	clear(s.misses)
 }
 

@@ -118,11 +118,6 @@ func (s *claimStore) load() (map[string]*types.Sandbox, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, sb := range claims {
-		for _, volumes := range [][]types.Volume{sb.Volumes, sb.VolumesWant} {
-			for i := range volumes {
-				volumes[i].AttachOnly = volumes[i].Mount == ""
-			}
-		}
 		if sb.VolumesWant == nil {
 			sb.VolumesWant = sb.Volumes
 		}

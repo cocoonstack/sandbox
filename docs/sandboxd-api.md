@@ -2,7 +2,8 @@
 
 All bodies are JSON. Three token kinds:
 
-- **root** — the node-level `api_token`: full access to every endpoint.
+- **root** — the node-level `api_token`: every endpoint except the agent relay, exec,
+  owner and the preview mint, which need the sandbox's own token.
 - **tenant** — a token the [tenant API](#tenants-v1tenants) added: accepted by the
   resource-creating verbs (claim, fork, promote, checkpoint create/claim,
   preview mint) and the tenant-scoped listings/deletes below; everything a
@@ -15,7 +16,7 @@ All bodies are JSON. Three token kinds:
   [`meta_store`](deploy.md#shared-tenant-database), a tenant token the node
   has not cached answers `503` while the database is unreachable; retry.
 - **sandbox** — every claimed sandbox carries its own bearer token guarding
-  the sandbox-scoped endpoints, regardless of the other two.
+  the sandbox-scoped endpoints; each endpoint says whether root also acts by id.
 
 Endpoints below that say "node API token" accept root or tenant unless
 marked root-only. Errors are `{"error": "message"}` with the status codes
@@ -530,7 +531,8 @@ Auth: the sandbox's own token, or the root token by id (operator). Restores
 a hibernated (or archived) sandbox and leaves it running — waking is
 otherwise only a side effect of the next agent access, so this is the
 explicit form for warming a sandbox ahead of use. Idempotent on one already
-running. A hibernated sandbox retains its existing deadline. An archived
+running. A hibernated sandbox retains its existing deadline, unless it is past its lease
+and archives at expiry, which starts a fresh lease. An archived
 sandbox instead uses `archive_delete_after_seconds` as its retention deadline
 while stored, and waking it starts a fresh lease of the length the claim was granted (the server default when it asked for none). A
 [failed](deploy.md#dead-vmms-and-host-restarts) sandbox is cold-booted from
@@ -866,8 +868,8 @@ resolving — no revocation list. A browser request to the minted URL answers 50
 Auth: node API token; body `{"token": "<sandbox token>", "name": "..."}`
 (name optional); the root `api_token` with an empty body `token` acts by id as
 the operator. Captures the sandbox's full state without stopping it and
-answers `200 {"checkpoint": {id, name, sandbox_id, key, tenant?,
-created_at}}` — `tenant` records the calling tenant, absent for root.
+answers `200 {"checkpoint": {id, name?, sandbox_id, key, tenant?, created_at,
+policy_source?, no_egress?, guest_env?}}` — `tenant` records the calling tenant, absent for root.
 400 bad body or name, 401 bad api token, 404 unknown id or wrong sandbox
 token, 409 egress-lane sandbox, one with volumes attached (see
 [egress](egress.md)), or an archived one (`POST /wake` or an exec wakes it
@@ -893,7 +895,7 @@ and answers with a redirect shaped like a warm-miss
 the claim. See the [placement lifecycle](cluster.md#checkpoints-on-a-cluster).
 
 404 for an unknown checkpoint (locally, and after redirect and heal both
-miss), 409 for an egress-lane checkpoint (see [egress](egress.md)), 429 node
+miss), 429 node
 or calling tenant at `max_claims`, the node at `max_running`, the node draining, the disk under
 `disk_reserve`, or memory over `memory_limit`, 503 when the node's
 concurrent-heal cap is already full — retryable, and the response carries a
@@ -927,7 +929,7 @@ part of the public API; an SDK caller has no reason to call it directly.
 Auth: node API token. Lists this node's checkpoints, newest first. A tenant
 sees only its own records; root sees everything. A checkpoint backing an
 archived claim is that claim's wake image, not a listable record. Answers
-`200 {"checkpoints": [{id, name, sandbox_id, key, tenant?, created_at}]}`, the
+`200 {"checkpoints": [{id, name?, sandbox_id, key, tenant?, created_at, policy_source?, no_egress?, guest_env?}]}`, the
 record shape `POST /v1/sandboxes/{id}/checkpoint` returns.
 
 ## DELETE /v1/checkpoints/{id}
@@ -942,7 +944,7 @@ healed replica does not outlive it — eventual cleanup, not a fleet-wide
 revocation.** A peer offline during the broadcast keeps its copy until the
 checkpoint TTL ages it out, so an id-holder can still branch it for that
 window; [placement lifecycle](cluster.md#delete-is-eventual-not-a-fleet-wide-revocation)
-has the bound and why heal requires a nonzero, fleet-matching TTL. A shared
+has the bound and why heal requires a nonzero, fleet-matching TTL. The s3
 checkpoint store skips the broadcast: every node already resolves every
 record directly, so there is no replica to chase. `?no_forward=1` marks a
 delete already arriving from another node's own broadcast, so it is not
@@ -1185,8 +1187,8 @@ them). 426 without the upgrade header, 404 unknown sandbox, 409 a failed sandbox
 claim of a replicating pool that is already open when the lease turns overdue
 is closed, whether or not it has a replica yet.
 
-A hibernated or archived sandbox wakes on the first frame that opens an RPC,
-unless the sandbox's pool sets [`reader`](deploy.md#reading-sleeping-claims-without-waking-them).
+A hibernated or archived sandbox wakes when the upgrade request arrives, before the `101`,
+unless its last sleep is reader-safe, which the pool's [`reader`](deploy.md#reading-sleeping-claims-without-waking-them) setting provides.
 With it, the node answers the `101` before it touches the sandbox, reads the
 first frame, and serves `fs_stat`, `fs_list`, `fs_read` and `fs_pull` from a
 reader VM, a warm VM of the sandbox's pool that mounts a copy of the sandbox's disk read-only: the sandbox stays

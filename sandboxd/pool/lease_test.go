@@ -41,6 +41,15 @@ func TestLeaseRenewLoopKeepsTheNodeLeasedUntilItStops(t *testing.T) {
 	})
 }
 
+func TestAnUnfenceOnALiftedNodeKeepsTheOpenFenceChannel(t *testing.T) {
+	m := newTestManager(t, newFakeEngine())
+	lifted := m.fence.Load()
+	m.unfence(t.Context(), time.Now())
+	if m.fence.Load() != lifted {
+		t.Error("an unfence replaced a lifted state, so open streams would miss the next trip")
+	}
+}
+
 func TestLeaseOverdueRenewalFencesReplicatedClaimsOnly(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		c := newReplicaCluster(t)

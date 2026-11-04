@@ -200,6 +200,10 @@ type Evaluator interface {
 	Eval(host, method string, port uint16) (Rule, Decision)
 	EvalHost(host string, port uint16) (Rule, Decision)
 	EvalInner(host, method string, port uint16) (Rule, Decision)
+}
+
+type PolicyEvaluator interface {
+	Evaluator
 	ServesSocks() bool
 	InterceptsHost(pattern string) bool
 }
@@ -209,41 +213,38 @@ type composite struct {
 }
 
 // Compose intersects a pool and a tenant policy; the pool rule wins on a double allow.
-func Compose(pool, tenant Policy) Evaluator {
+func Compose(pool, tenant Policy) PolicyEvaluator {
 	return composite{pool: pool, tenant: tenant}
 }
 
 func (c composite) Eval(host, method string, port uint16) (Rule, Decision) {
 	rule, pd := c.pool.Eval(host, method, port)
-	if pd != DecisionAllow {
-		return Rule{}, DecisionDeny
+	if pd == DecisionAllow {
+		if _, td := c.tenant.Eval(host, method, port); td == DecisionAllow {
+			return rule, DecisionAllow
+		}
 	}
-	if _, td := c.tenant.Eval(host, method, port); td != DecisionAllow {
-		return Rule{}, DecisionDeny
-	}
-	return rule, DecisionAllow
+	return Rule{}, DecisionDeny
 }
 
 func (c composite) EvalHost(host string, port uint16) (Rule, Decision) {
 	rule, pd := c.pool.EvalHost(host, port)
-	if pd != DecisionAllow {
-		return Rule{}, DecisionDeny
+	if pd == DecisionAllow {
+		if _, td := c.tenant.EvalHost(host, port); td == DecisionAllow {
+			return rule, DecisionAllow
+		}
 	}
-	if _, td := c.tenant.EvalHost(host, port); td != DecisionAllow {
-		return Rule{}, DecisionDeny
-	}
-	return rule, DecisionAllow
+	return Rule{}, DecisionDeny
 }
 
 func (c composite) EvalInner(host, method string, port uint16) (Rule, Decision) {
 	rule, pd := c.pool.EvalInner(host, method, port)
-	if pd != DecisionAllow {
-		return Rule{}, DecisionDeny
+	if pd == DecisionAllow {
+		if _, td := c.tenant.Eval(host, method, port); td == DecisionAllow {
+			return rule, DecisionAllow
+		}
 	}
-	if _, td := c.tenant.Eval(host, method, port); td != DecisionAllow {
-		return Rule{}, DecisionDeny
-	}
-	return rule, DecisionAllow
+	return Rule{}, DecisionDeny
 }
 
 // ServesSocks is the pool's call: the tenant's rules already gate every tunnel through Eval.

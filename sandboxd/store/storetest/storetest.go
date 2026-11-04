@@ -172,15 +172,8 @@ func runDigestContract(t *testing.T, st store.Store) {
 	t.Helper()
 	ctx := t.Context()
 	const id = "ck_00000000000000cc"
-	staging, err := st.Stage(id)
-	if err != nil {
-		t.Fatalf("Stage digested: %v", err)
-	}
-	writeExport(t, staging, "z.bin", "z")
+	staging := StageRecord(t, st, id, MetaJSON(id), "z.bin", "z")
 	writeExport(t, staging, "nested/a.bin", "a")
-	if err = os.WriteFile(filepath.Join(staging, store.MetaFile), []byte(MetaJSON(id)), 0o600); err != nil {
-		t.Fatalf("write digested meta: %v", err)
-	}
 	digest, commit, err := st.PrepareDigested(ctx, staging, id, "")
 	if err != nil {
 		t.Fatalf("PrepareDigested: %v", err)
@@ -207,14 +200,7 @@ func runDigestContract(t *testing.T, st store.Store) {
 		t.Errorf("Metas %+v, %v; want the one record with digest %q", recs, err, want)
 	}
 	rejectNonRegularReplacement(t, st, id, want)
-	staging, err = st.Stage(id)
-	if err != nil {
-		t.Fatalf("Stage replacement: %v", err)
-	}
-	writeExport(t, staging, "z.bin", "zz")
-	if err = os.WriteFile(filepath.Join(staging, store.MetaFile), []byte(`{"id":"`+id+`","gen":3}`), 0o600); err != nil {
-		t.Fatalf("write replacement meta: %v", err)
-	}
+	staging = StageRecord(t, st, id, `{"id":"`+id+`","gen":3}`, "z.bin", "zz")
 	next, commit, err := st.PrepareDigested(ctx, staging, id, "")
 	if err != nil {
 		t.Fatalf("PrepareDigested replacement: %v", err)
