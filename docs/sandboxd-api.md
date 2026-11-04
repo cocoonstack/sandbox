@@ -893,7 +893,7 @@ and answers with a redirect shaped like a warm-miss
 the claim. See the [placement lifecycle](cluster.md#checkpoints-on-a-cluster).
 
 404 for an unknown checkpoint (locally, and after redirect and heal both
-miss), 409 for an egress-lane checkpoint (see [egress](egress.md)), 429 node
+miss), 429 node
 or calling tenant at `max_claims`, the node at `max_running`, the node draining, the disk under
 `disk_reserve`, or memory over `memory_limit`, 503 when the node's
 concurrent-heal cap is already full — retryable, and the response carries a

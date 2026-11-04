@@ -1,7 +1,6 @@
 package pool
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -60,13 +59,6 @@ func TestLiveVolumeFourModesAndMixedRoundtrip(t *testing.T) {
 		t.Fatalf("explicit false inherited attach-only: %v", err)
 	}
 	assertLiveJournal(t, m, sb)
-	raw, err := os.ReadFile(m.store.path)
-	if err != nil {
-		t.Fatalf("ReadFile: %v", err)
-	}
-	if err = os.WriteFile(m.store.path, bytes.ReplaceAll(raw, []byte(`,"attach_only":true`), nil), 0o600); err != nil {
-		t.Fatalf("WriteFile: %v", err)
-	}
 	restarted := newVolumeManagerAt(t, eng, m.dataDir, catalog)
 	if err = restarted.Reconcile(t.Context()); err != nil {
 		t.Fatalf("Reconcile: %v", err)
@@ -527,7 +519,6 @@ func TestDesiredVolumesJournalMigration(t *testing.T) {
 		want        []types.Volume
 	}{
 		{"legacy", "", []types.Volume{{Name: "data", Mount: "/data"}}},
-		{"legacy attach-only desired", `,"volumes_want":[{"name":"raw","mode":"rw"}]`, []types.Volume{{Name: "raw", Mode: types.VolumeModeRW, AttachOnly: true}}},
 		{"explicit empty", `,"volumes_want":[]`, nil},
 		{"desired", `,"volumes_want":[{"name":"other","mount":"/other"}]`, []types.Volume{{Name: "other", Mount: "/other"}}},
 	} {

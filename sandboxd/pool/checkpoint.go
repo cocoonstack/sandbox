@@ -213,9 +213,6 @@ func (m *Manager) claimLoaded(ctx context.Context, ckpt types.Checkpoint, o Clai
 	if ckpt.Archive {
 		return nil, ErrUnknownCheckpoint // a wake image, not a branchable checkpoint
 	}
-	if !ckpt.Key.Capturable() {
-		return nil, ErrNoEgressFork
-	}
 	dir, _, _, err := m.ckpts.Fetch(ctx, ckpt.ID)
 	if errors.Is(err, store.ErrNotFound) {
 		return nil, ErrUnknownCheckpoint // deleted between the pre-check and the lock

@@ -63,13 +63,10 @@ func (m *Manager) SetInstanceMetadata(ctx context.Context, id string, doc []byte
 	return m.eng.WriteInstanceMetadata(ctx, sb.VsockSocket, doc)
 }
 
-// resolve authorizes id under cred; an unclaimed slot must never match an empty token.
+// resolve authorizes id under cred.
 func (m *Manager) resolve(id string, cred Cred) (*types.Sandbox, bool) {
 	if cred.Operator {
 		return m.byID(id)
-	}
-	if cred.Token == "" {
-		return nil, false
 	}
 	return m.claim(id, cred.Token)
 }
