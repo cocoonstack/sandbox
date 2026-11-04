@@ -323,11 +323,10 @@ func (m *Manager) reputArchive(ctx context.Context, sb *types.Sandbox) {
 }
 
 func (m *Manager) releaseRowed(ctx context.Context, id string, sb *types.Sandbox) error {
-	sb.Transition.Lock()
-	defer sb.Transition.Unlock()
-	if m.movingNow(sb) {
-		return ErrEvacuating
+	if err := m.lockTransition(sb); err != nil {
+		return err
 	}
+	defer sb.Transition.Unlock()
 	if err := m.resolveIntent(context.WithoutCancel(ctx), sb); err != nil {
 		return err
 	}

@@ -34,9 +34,6 @@ func (m *Manager) captureAllowed(sb *types.Sandbox) error {
 	if m.claimed[sb.ID] != sb {
 		return ErrUnknownSandbox
 	}
-	if m.midMoveLocked(sb) {
-		return ErrEvacuating
-	}
 	if _, err := m.fenceWatch(sb); err != nil {
 		return err
 	}
@@ -48,7 +45,9 @@ func (m *Manager) captureAllowed(sb *types.Sandbox) error {
 
 // exportSource captures a claimed sandbox into exportDir and returns its snapshot, VM name and guest-env presence.
 func (m *Manager) exportSource(ctx context.Context, sb *types.Sandbox, exportDir string) (snap, vmName string, guestEnv bool, err error) {
-	sb.Transition.Lock()
+	if lockErr := m.lockTransition(sb); lockErr != nil {
+		return "", "", false, lockErr
+	}
 	if captureErr := m.captureAllowed(sb); captureErr != nil {
 		sb.Transition.Unlock()
 		return "", "", false, captureErr

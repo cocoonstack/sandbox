@@ -387,10 +387,21 @@ func (m *Manager) movingFinalLocked(id string) bool {
 	return mv != nil && mv.final
 }
 
-func (m *Manager) movingNow(sb *types.Sandbox) bool {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.midMoveLocked(sb)
+func (m *Manager) lockTransition(sb *types.Sandbox) error {
+	midMove := func() bool {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		return m.midMoveLocked(sb)
+	}
+	if midMove() {
+		return ErrEvacuating
+	}
+	sb.Transition.Lock()
+	if midMove() {
+		sb.Transition.Unlock()
+		return ErrEvacuating
+	}
+	return nil
 }
 
 func (m *Manager) midMoveLocked(sb *types.Sandbox) bool {

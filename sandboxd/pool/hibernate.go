@@ -19,7 +19,9 @@ func (m *Manager) Hibernate(ctx context.Context, id string, cred Cred) error {
 	if !ok {
 		return ErrUnknownSandbox
 	}
-	sb.Transition.Lock()
+	if err := m.lockTransition(sb); err != nil {
+		return err
+	}
 	defer sb.Transition.Unlock()
 	return m.hibernateLocked(ctx, sb)
 }
@@ -62,9 +64,6 @@ func (m *Manager) hibernateLocked(ctx context.Context, sb *types.Sandbox) error 
 	if sb.ArchiveCk != "" {
 		return nil // already off the node
 	}
-	if m.movingNow(sb) {
-		return ErrEvacuating
-	}
 	if _, err := m.fenceWatch(sb); err != nil {
 		return err
 	}
@@ -72,8 +71,11 @@ func (m *Manager) hibernateLocked(ctx context.Context, sb *types.Sandbox) error 
 		return ErrFailed
 	}
 	m.mu.Lock()
-	volumeBlocked := m.hasVolumeHolds(sb)
+	moving, volumeBlocked := m.midMoveLocked(sb), m.hasVolumeHolds(sb)
 	m.mu.Unlock()
+	if moving {
+		return ErrEvacuating
+	}
 	if volumeBlocked {
 		return ErrVolumeCapture
 	}

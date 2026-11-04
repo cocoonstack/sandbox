@@ -75,7 +75,9 @@ func (m *Manager) forkClones(ctx context.Context, sb *types.Sandbox, count int) 
 
 // forkSource captures the fork source under the transition lock, against a racing hibernate.
 func (m *Manager) forkSource(ctx context.Context, sb *types.Sandbox) (create vmProvisioner, cleanup func(), inherited bool, err error) {
-	sb.Transition.Lock()
+	if err = m.lockTransition(sb); err != nil {
+		return nil, nil, false, err
+	}
 	defer sb.Transition.Unlock()
 	if err = m.captureAllowed(sb); err != nil {
 		return nil, nil, false, err

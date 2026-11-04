@@ -856,10 +856,9 @@ and never this node (else 400), `max_downtime_ms` optional with a default of
 2000 and a floor: 400 or less answers 400 at once, because the target's receive
 and start alone are allowed that long. Answers `{"owner_addr": "<peer>", "rounds": n, "downtime_ms": d}` once the
 peer runs the guest and this node dropped the claim; `downtime_ms` is the pause
-from the final capture to the peer's commit. While the move runs, release of
-the claim answers 503 `sandbox moving to another node; retry`, and fork,
-checkpoint, promote and hibernate answer the same during the rounds and wait
-out the final round. Env writes, renew and data-plane calls keep working until
+from the final capture to the peer's commit. While the move runs, release, fork,
+checkpoint, promote, hibernate and volume changes of the claim answer 503
+`sandbox moving to another node; retry`. Env writes, renew and data-plane calls keep working until
 the final round and answer the same 503 during it, because the peer would miss
 them. Every error leaves the claim running here, except a 503 with the registry
 down after the final round paused the guest: the guest stays paused until the

@@ -118,9 +118,6 @@ func (m *Manager) Release(ctx context.Context, id string, cred Cred) error {
 	if !ok {
 		return ErrUnknownSandbox
 	}
-	if m.movingNow(sb) {
-		return ErrEvacuating
-	}
 	if m.archives != nil {
 		return m.releaseRowed(ctx, id, sb)
 	}

@@ -210,7 +210,7 @@ func TestMoveKeepsThePausedGuestUntilItsAbortLands(t *testing.T) {
 		t.Fatal("the source resumed its guest while the registry was down")
 	}
 	mc.moveReg.SetDown(false)
-	waitFor(t, func() bool { return !pausedOn(mc.s, sb.VMName) && !mc.s.movingNow(sb) })
+	waitFor(t, func() bool { return !pausedOn(mc.s, sb.VMName) && !movingOn(mc.s, sb) })
 	assertStillOnSource(t, mc, sb)
 	if rec, ok, _ := mc.moveReg.Get(t.Context(), sb.ID); ok {
 		t.Errorf("record %+v after the abort, want it deleted", rec)
@@ -497,7 +497,7 @@ func TestMoveEndsWhenAFailoverTookTheClaimFromTheSource(t *testing.T) {
 	if _, err := mc.s.Move(t.Context(), sb.ID, "b", time.Minute); !errors.Is(err, ErrMoveTarget) {
 		t.Fatalf("move of a claim another node took: %v, want ErrMoveTarget", err)
 	}
-	if mc.s.movingNow(sb) {
+	if movingOn(mc.s, sb) {
 		t.Fatal("the move still holds its slot")
 	}
 	if !sb.Transition.TryLock() {
@@ -579,6 +579,31 @@ func TestMoveHoldsOffVolumeChanges(t *testing.T) {
 		lossy.setDown(false)
 		waitFor(t, func() bool { return !mc.t.moveHeld(sb.ID) })
 	})
+}
+
+func TestMoveFinalRoundAnswersUserCallsAtOnce(t *testing.T) {
+	mc := newMoveCluster(t)
+	sb := mustClaim(t, mc.s, testKey)
+	cred := Cred{Token: sb.Token}
+	ctx := t.Context()
+	mc.p.commitHook = func(int) error {
+		_, forkErr := mc.s.Fork(ctx, sb.ID, cred, 1, time.Minute, "", "")
+		_, ckErr := mc.s.Checkpoint(ctx, sb.ID, cred, "ck", "")
+		_, _, promoteErr := mc.s.Promote(ctx, sb.ID, cred, "tpl", "")
+		for op, err := range map[string]error{
+			"fork": forkErr, "checkpoint": ckErr, "promote": promoteErr,
+			"hibernate": mc.s.Hibernate(ctx, sb.ID, cred),
+			"release":   mc.s.Release(ctx, sb.ID, cred),
+		} {
+			if !errors.Is(err, ErrEvacuating) {
+				t.Errorf("%s during the final round: %v, want ErrEvacuating", op, err)
+			}
+		}
+		return nil
+	}
+	if _, err := mc.s.Move(ctx, sb.ID, "b", time.Minute); err != nil {
+		t.Fatalf("move: %v", err)
+	}
 }
 
 func TestMoveGivesUpOnDeltasThatStopShrinking(t *testing.T) {
@@ -1093,7 +1118,7 @@ func TestMoveSourceBackFromAnOutageNeverResumesAClaimThatMovedOn(t *testing.T) {
 	down.setDown(false)
 	waitFor(t, func() bool {
 		_, held := mc.s.byID(sb.ID)
-		return !held && !mc.s.movingNow(sb)
+		return !held && !movingOn(mc.s, sb)
 	})
 	eng := fakeOf(mc.s)
 	eng.mu.Lock()
@@ -1394,6 +1419,12 @@ func dialEgress(t *testing.T, sock string) {
 		t.Fatalf("no egress door at %s: %v", sock, err)
 	}
 	_ = conn.Close()
+}
+
+func movingOn(m *Manager, sb *types.Sandbox) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.midMoveLocked(sb)
 }
 
 func pausedOn(m *Manager, vm string) bool {
