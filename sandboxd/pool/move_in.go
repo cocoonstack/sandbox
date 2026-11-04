@@ -21,9 +21,10 @@ const reasonMoveStartFailed = "vmm did not start after a live move"
 
 // inMove is a target's reservation for a move in flight; guarded by m.mu.
 type inMove struct {
-	tenant  string
-	from    string
-	touched time.Time
+	tenant    string
+	from      string
+	touched   time.Time
+	receiving int
 }
 
 // AdmitMove reserves a claim slot for a live move of id to this node and returns this node's id.
@@ -53,13 +54,18 @@ func (m *Manager) AdmitMove(id string, a MoveAdmission) (string, error) {
 
 // ReceiveMoveRound writes one round of a reserved move into its staging dir.
 func (m *Manager) ReceiveMoveRound(id string, body io.Reader) error {
-	if !m.touchReservation(id) {
+	in := m.beginReceive(id)
+	if in == nil {
 		return ErrUnknownSandbox
 	}
-	if err := peer.ReceiveRound(body, m.moveDir(id)); err != nil {
+	err := peer.ReceiveRound(body, m.moveDir(id))
+	if !m.endReceive(id, in) {
+		_ = os.RemoveAll(m.moveDir(id))
+		return ErrUnknownSandbox
+	}
+	if err != nil {
 		return fmt.Errorf("move %s: %w", id, err)
 	}
-	m.touchReservation(id)
 	return nil
 }
 
@@ -231,6 +237,24 @@ func (m *Manager) resolveMoveIn(ctx context.Context, sb *types.Sandbox) bool {
 	return true
 }
 
+func (m *Manager) beginReceive(id string) *inMove {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	in := m.incoming[id]
+	if in != nil {
+		in.receiving++
+	}
+	return in
+}
+
+func (m *Manager) endReceive(id string, in *inMove) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	in.receiving--
+	in.touched = time.Now()
+	return m.incoming[id] == in
+}
+
 func (m *Manager) touchReservation(id string) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -247,7 +271,7 @@ func (m *Manager) dropIdleReservations() {
 	var idle []string
 	m.mu.Lock()
 	for id, in := range m.incoming {
-		if now.Sub(in.touched) > moveReservationIdle {
+		if in.receiving == 0 && now.Sub(in.touched) > moveReservationIdle {
 			idle = append(idle, id)
 		}
 	}

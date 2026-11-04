@@ -382,8 +382,8 @@ never see it. At the commit the reservation becomes the claim under one lock,
 so the target never counts it twice. The source counts the claim until it drops
 it after the commit, so the cluster counts a moving claim twice, which can make
 a node refuse earlier but never over-admit. `memory_limit` is checked again
-before the receive. A reservation with no round or commit for 2 minutes is
-dropped with its staged files.
+before the receive. A reservation with no round arriving and none finished or
+commit asked for 2 minutes is dropped with its staged files.
 
 **Replicated claims.** Before the final round the source deletes the claim's
 registry row and its replica, so no third node can adopt a stale replica while

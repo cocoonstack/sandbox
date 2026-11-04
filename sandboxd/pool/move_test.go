@@ -1,9 +1,11 @@
 package pool
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"errors"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -227,10 +229,71 @@ func TestMoveTargetCountsAReservationLikeAClaim(t *testing.T) {
 func TestMoveTargetDropsAReservationItsSourceAbandoned(t *testing.T) {
 	mc := newMoveCluster(t)
 	reserveMove(t, mc.t, "sb_r", "acme")
-	mc.t.mu.Lock()
-	mc.t.incoming["sb_r"].touched = time.Now().Add(-2 * moveReservationIdle)
-	mc.t.mu.Unlock()
+	backdateReservation(mc.t, "sb_r")
 	mc.t.dropIdleReservations()
+	assertNoMoveResidue(t, mc.t, "sb_r")
+}
+
+func TestMoveTargetKeepsTheReservationOfARoundStillArriving(t *testing.T) {
+	mc := newMoveCluster(t)
+	reserveMove(t, mc.t, "sb_r", "acme")
+	body, stream := io.Pipe()
+	done := make(chan error, 1)
+	go func() { done <- mc.t.ReceiveMoveRound("sb_r", body) }()
+	waitFor(t, func() bool {
+		mc.t.mu.Lock()
+		defer mc.t.mu.Unlock()
+		return mc.t.incoming["sb_r"].receiving == 1
+	})
+	backdateReservation(mc.t, "sb_r")
+	mc.t.dropIdleReservations()
+	if _, reserved := reservationOf(mc.t, "sb_r"); !reserved {
+		t.Fatal("the idle drop took a reservation with a round still arriving")
+	}
+	_ = stream.CloseWithError(errors.New("source hung up"))
+	if err := <-done; err == nil {
+		t.Fatal("a cut round was accepted")
+	}
+	if _, reserved := reservationOf(mc.t, "sb_r"); !reserved {
+		t.Fatal("a cut round took the reservation")
+	}
+	backdateReservation(mc.t, "sb_r")
+	mc.t.dropIdleReservations()
+	assertNoMoveResidue(t, mc.t, "sb_r")
+}
+
+func TestMoveTargetRefusesARoundThatOutlivedItsReservation(t *testing.T) {
+	mc := newMoveCluster(t)
+	reserveMove(t, mc.t, "sb_r", "acme")
+	src := t.TempDir()
+	if err := os.WriteFile(filepath.Join(src, "state.json"), []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var captured bytes.Buffer
+	capture := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(&captured, r.Body)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer capture.Close()
+	if err := peer.SendRound(t.Context(), capture.URL, "", "/", src, []string{"state.json"}); err != nil {
+		t.Fatalf("capture a round: %v", err)
+	}
+	body, stream := io.Pipe()
+	done := make(chan error, 1)
+	go func() { done <- mc.t.ReceiveMoveRound("sb_r", body) }()
+	waitFor(t, func() bool {
+		mc.t.mu.Lock()
+		defer mc.t.mu.Unlock()
+		return mc.t.incoming["sb_r"].receiving == 1
+	})
+	mc.t.DropMove("sb_r")
+	go func() {
+		_, _ = stream.Write(captured.Bytes())
+		_ = stream.Close()
+	}()
+	if err := <-done; !errors.Is(err, ErrUnknownSandbox) {
+		t.Fatalf("round over a dropped reservation: %v, want ErrUnknownSandbox", err)
+	}
 	assertNoMoveResidue(t, mc.t, "sb_r")
 }
 
@@ -786,6 +849,19 @@ func seedMoveRecord(t *testing.T, reg moves.Registry, id, from, to string, state
 		reached = next
 	}
 	return epoch
+}
+
+func backdateReservation(m *Manager, id string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.incoming[id].touched = time.Now().Add(-2 * moveReservationIdle)
+}
+
+func reservationOf(m *Manager, id string) (*inMove, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	in, ok := m.incoming[id]
+	return in, ok
 }
 
 func startsOf(m *Manager) []string {
