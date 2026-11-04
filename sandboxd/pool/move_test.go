@@ -545,7 +545,8 @@ func TestMoveRestartResolvesAJournaledMoveThroughItsRecord(t *testing.T) {
 			}
 			waitFor(t, func() bool {
 				rec, ok, _ := reg.Get(ctx, sb.ID)
-				return !m.moveHeld(sb.ID) && (ok && rec.State == tt.wantRecord || !ok && tt.wantRecord == "")
+				settled := !m.moveHeld(sb.ID) && (tt.wantClaim || eng.removed(vm))
+				return settled && (ok && rec.State == tt.wantRecord || !ok && tt.wantRecord == "")
 			})
 			held, ok := m.byID(sb.ID)
 			if ok != tt.wantClaim {
@@ -850,8 +851,6 @@ type lossyMoves struct {
 	down       atomic.Bool
 }
 
-func (r *lossyMoves) setDown(down bool) { r.down.Store(down) }
-
 func (r *lossyMoves) Begin(ctx context.Context, id, from, to string) (int64, error) {
 	if r.down.Load() {
 		return 0, moves.ErrUnavailable
@@ -877,6 +876,8 @@ func (r *lossyMoves) Get(ctx context.Context, id string) (moves.Record, bool, er
 	}
 	return r.Registry.Get(ctx, id)
 }
+
+func (r *lossyMoves) setDown(down bool) { r.down.Store(down) }
 
 func seedMoveRecord(t *testing.T, reg moves.Registry, id, from, to string, state moves.State) int64 {
 	t.Helper()
