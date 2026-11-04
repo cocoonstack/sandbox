@@ -341,11 +341,12 @@ checkpoint store and keeps each claim's registry row on the latest snapshot:
   the next round, a release, an archive, a wake, the hourly sweep and a restart
   settle it by reading the row: a row on that checkpoint promotes it, another
   owner's row drops the claim, and an absent row means the adopter finished
-  when the checkpoint is gone and a write that never landed when it is still
-  there. A refused write reads the row: one this node still owns only had a
+  when the checkpoint is gone or this node confirmed an earlier row, and a
+  write that never landed otherwise. A refused write reads the row: one this node still owns only had a
   stale epoch and is refreshed, and an absent or foreign row drops the claim and
-  its VM. A claim gets its first replica one interval after it is claimed (or
-  after a restart). A hibernated, archived or failed claim,
+  its VM. A claim gets its first replica one interval after it is claimed, after a
+  restart, or after it wakes from an archive or an adoption; until a claim woken
+  that way commits its first replica it has no row, and it is lost with its node. A hibernated, archived or failed claim,
   one whose tenant was removed, and one with volumes (capture refuses them) is
   skipped; a replicated claim that gains volumes
   drops its row and replica. The claim's policy pool, not its own template key,

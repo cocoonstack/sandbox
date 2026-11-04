@@ -666,7 +666,8 @@ success, 404 unknown template, 409 when the key belongs to a configured pool
 (those goldens are owned by the node config). `digest=<content digest>` deletes
 only while the record still has that digest and answers 412 otherwise, so a
 caller that observed an older build never removes the newer one that replaced
-it. On a cluster, a node that does not
+it on this node; on a shared store a promote committing on another node at the
+same moment is not covered. On a cluster, a node that does not
 hold the template but sees an owner in gossip answers `200
 {"redirect": [addrs]}` — the claim redirect shape — and the SDK retries the
 delete at the owner. The retry carries `no_redirect=1`, mirroring the claim
@@ -685,7 +686,7 @@ Labels follow the [claim `metadata`](#post-v1claim) rules — at most 16 pairs,
 the same key and value grammar, at most 4 KiB as JSON — and replace the whole
 map; `{}` clears it. `digest=<content digest>` writes only while the record
 still has that digest and answers 412 otherwise, so a writer that observed an
-older build never relabels the newer one. They are stored beside the template's record, so they
+older build never relabels the newer one on this node. They are stored beside the template's record, so they
 survive a restart, are listed by the node that promoted the template or loaded
 it at startup, and go with the template when it is deleted; a re-promote starts with none. A tenant may label
 only templates it promoted — anything else is 404, root labels anything. 204 on
