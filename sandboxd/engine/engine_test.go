@@ -238,7 +238,7 @@ func TestACanceledCommandGetsSIGTERMSoCocoonCanResumeTheVM(t *testing.T) {
 	}
 }
 
-func TestAMemoryRestoreGetsTheDumpTermGraceAndAColdBootTheCommandOne(t *testing.T) {
+func TestAMemoryCommandGetsItsLongerTermGraceAndAColdBootTheCommandOne(t *testing.T) {
 	t.Parallel()
 	for _, tt := range []struct {
 		name string
@@ -252,6 +252,12 @@ func TestAMemoryRestoreGetsTheDumpTermGraceAndAColdBootTheCommandOne(t *testing.
 		{"clone", func(ctx context.Context, e *Engine) error {
 			_, err := e.Clone(ctx, "dir", "vm", types.PoolKey{})
 			return err
+		}, "exit status 3"},
+		{"hibernate", func(ctx context.Context, e *Engine) error {
+			return e.Hibernate(ctx, "vm", "snap")
+		}, "exit status 3"},
+		{"snapshot save", func(ctx context.Context, e *Engine) error {
+			return e.SnapshotSave(ctx, "vm", "snap")
 		}, "exit status 3"},
 		{"cold boot", func(ctx context.Context, e *Engine) error {
 			_, err := e.RunCold(ctx, "vm", types.PoolKey{}, "")
