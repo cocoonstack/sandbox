@@ -72,9 +72,10 @@ mean an empty target.
 Go uses the same owning handle and client API token.
 
 ```go
+v2 := sandbox.Volume{Name: "dataset-v2", Mount: "/datasets/current"}
 _, err := sb.PatchVolumes(ctx, sandbox.VolumePatch{
 	Remove: []string{"dataset-v1"},
-	Add: []sandbox.Volume{{Name: "dataset-v2", Mount: "/datasets/current"}},
+	Add:    []sandbox.Volume{v2},
 })
 if err != nil {
 	return err
