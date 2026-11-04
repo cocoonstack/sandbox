@@ -35,7 +35,7 @@ impl State {
         W: AsyncWrite + Unpin,
     {
         let mut line = Vec::new();
-        let mut next: Option<serde_json::Result<Request>> = None;
+        let mut next: Option<Parsed> = None;
         let mut served = false;
         loop {
             let parsed = match next.take() {
@@ -73,7 +73,7 @@ impl State {
         req: Request,
         mut reader: R,
         writer: &mut W,
-    ) -> std::io::Result<(R, Option<serde_json::Result<Request>>)>
+    ) -> std::io::Result<(R, Option<Parsed>)>
     where
         R: AsyncBufRead + Unpin + Send + 'static,
         W: AsyncWrite + Unpin,
@@ -192,7 +192,7 @@ impl State {
         e: ExecReq,
         reader: R,
         writer: &mut W,
-    ) -> std::io::Result<(R, Option<serde_json::Result<Request>>)>
+    ) -> std::io::Result<(R, Option<Parsed>)>
     where
         R: AsyncBufRead + Unpin + Send + 'static,
         W: AsyncWrite + Unpin,
@@ -326,7 +326,8 @@ impl Default for State {
     }
 }
 
-type Feeder<R> = JoinHandle<(R, Option<serde_json::Result<Request>>)>;
+type Parsed = serde_json::Result<Request>;
+type Feeder<R> = JoinHandle<(R, Option<Parsed>)>;
 
 fn spawn_feeder<R>(reader: R) -> (mpsc::Receiver<Request>, Feeder<R>)
 where
@@ -340,7 +341,7 @@ where
 async fn finish_feeder<R>(
     feeder: Feeder<R>,
     res: std::io::Result<()>,
-) -> std::io::Result<(R, Option<serde_json::Result<Request>>)> {
+) -> std::io::Result<(R, Option<Parsed>)> {
     if let Err(e) = res {
         feeder.abort();
         return Err(e);
@@ -349,10 +350,7 @@ async fn finish_feeder<R>(
 }
 
 /// Reads the client's frames during a streaming RPC: input frames go to the handler, the next request ends the feed.
-async fn feed_client<R>(
-    mut reader: R,
-    tx: mpsc::Sender<Request>,
-) -> (R, Option<serde_json::Result<Request>>)
+async fn feed_client<R>(mut reader: R, tx: mpsc::Sender<Request>) -> (R, Option<Parsed>)
 where
     R: AsyncBufRead + Unpin,
 {

@@ -177,7 +177,7 @@ def test_run_stops_feeding_stdin_once_the_command_exits():
         call.start()
         call.join(2)
         assert codes == [0], "run outlived its timeout behind a stdin the guest stopped reading"
-        assert sb._pool._parked == []
+        assert sb._pool.take() is None
     finally:
         release.set()
         server.close()

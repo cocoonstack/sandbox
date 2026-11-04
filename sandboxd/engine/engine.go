@@ -101,7 +101,6 @@ func New(bin string, bridges, networks []string, noDirectIO, noBalloon bool, res
 	return &Engine{bin: bin, bridges: bridges, networks: networks, noDirectIO: noDirectIO, noBalloon: noBalloon, restoreMode: restoreMode, dumps: make(chan struct{}, memoryDumps)}
 }
 
-// Close refuses new cocoon commands and waits for the running ones, which die on their next log line once sandboxd's stderr pipe closes.
 func (e *Engine) Close() {
 	e.mu.Lock()
 	e.closed = true

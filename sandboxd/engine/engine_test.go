@@ -277,11 +277,7 @@ func TestAMemoryCommandGetsItsLongerTermGraceAndAColdBootTheCommandOne(t *testin
 			defer cancel()
 			done := make(chan error, 1)
 			go func() { done <- tt.run(ctx, New(bin, nil, nil, false, false, "")) }()
-			for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
-				if _, err := os.Stat(ready); err == nil {
-					break
-				}
-			}
+			waitFile(ready)
 			cancel()
 			if err := <-done; err == nil || !strings.Contains(err.Error(), tt.want) {
 				t.Errorf("got %v, want %q", err, tt.want)
@@ -301,11 +297,7 @@ func TestCloseWaitsForARunningCommandAndRefusesNewOnes(t *testing.T) {
 	e := New(bin, nil, nil, false, false, "")
 	done := make(chan error, 1)
 	go func() { done <- e.Hibernate(t.Context(), "vm", "snap") }()
-	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
-		if _, err := os.Stat(ready); err == nil {
-			break
-		}
-	}
+	waitFile(ready)
 	closed := make(chan struct{})
 	go func() {
 		e.Close()
@@ -437,6 +429,14 @@ func sockPath(t *testing.T) string {
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	return filepath.Join(dir, "mux.sock")
+}
+
+func waitFile(path string) {
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+		if _, err := os.Stat(path); err == nil {
+			return
+		}
+	}
 }
 
 func fakeCocoon(t *testing.T, script string) {

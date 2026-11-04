@@ -555,55 +555,46 @@ func TestAuditNamesTheConnectionEnds(t *testing.T) {
 	}
 }
 
-func TestARateLimitedConnectionAnswers429AndIsAudited(t *testing.T) {
-	events := make(chan Event, 4)
-	dial := DialFunc(func(context.Context, string, string) (net.Conn, error) { return nil, ErrRateLimited })
-	p := New(Policy{Allow: []Rule{{Host: "*"}}}, nil, nil, dial, func(ev Event) { events <- ev }, nil)
-	front := serveFront(t, p)
+func TestARefusedDialAnswersItsStatusAndIsAuditedWithNoTransfer(t *testing.T) {
+	for _, tt := range []struct {
+		name     string
+		err      error
+		status   int
+		connect  string
+		decision Decision
+	}{
+		{"rate limited", ErrRateLimited, http.StatusTooManyRequests, "HTTP/1.1 429 Too Many Requests", DecisionRateLimited},
+		{"internal address", fmt.Errorf("%w 127.0.0.1", ErrInternalAddr), http.StatusBadGateway, "HTTP/1.1 502 Bad Gateway", DecisionDeny},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			events, transfers := make(chan Event, 4), make(chan Event, 4)
+			dial := DialFunc(func(context.Context, string, string) (net.Conn, error) { return nil, tt.err })
+			p := New(Policy{Allow: []Rule{{Host: "*"}}}, nil, nil, dial, func(ev Event) { events <- ev }, nil)
+			p.OnTransfer(func(ev Event, _, _ int64) { transfers <- ev })
+			front := serveFront(t, p)
 
-	resp := proxiedGet(t, front.URL, "http://api.internal/x")
-	_ = resp.Body.Close()
-	if resp.StatusCode != http.StatusTooManyRequests {
-		t.Errorf("forward status %d, want 429", resp.StatusCode)
-	}
-	if ev := recvEvent(t, events); ev.Decision != DecisionRateLimited {
-		t.Errorf("forward audit %+v, want rate limited", ev)
-	}
-
-	conn := dialConnect(t, front.Listener.Addr().String(), "echo.internal:443")
-	defer func() { _ = conn.Close() }()
-	if status := readStatus(t, bufio.NewReader(conn)); status != "HTTP/1.1 429 Too Many Requests" {
-		t.Errorf("CONNECT status %q, want 429", status)
-	}
-	if ev := recvEvent(t, events); ev.Decision != DecisionRateLimited {
-		t.Errorf("CONNECT audit %+v, want rate limited", ev)
-	}
-}
-
-func TestABlockedInternalDialIsAuditedAsADenyWithNoTransfer(t *testing.T) {
-	events, transfers := make(chan Event, 4), make(chan Event, 4)
-	dial := DialFunc(func(context.Context, string, string) (net.Conn, error) {
-		return nil, fmt.Errorf("%w 127.0.0.1", ErrInternalAddr)
-	})
-	p := New(Policy{Allow: []Rule{{Host: "*"}}}, nil, nil, dial, func(ev Event) { events <- ev }, nil)
-	p.OnTransfer(func(ev Event, _, _ int64) { transfers <- ev })
-	front := serveFront(t, p)
-
-	resp := proxiedGet(t, front.URL, "http://api.internal/x")
-	_ = resp.Body.Close()
-	if ev := recvEvent(t, events); ev.Decision != DecisionDeny {
-		t.Errorf("forward audit %+v, want deny", ev)
-	}
-	conn := dialConnect(t, front.Listener.Addr().String(), "echo.internal:443")
-	defer func() { _ = conn.Close() }()
-	_ = readStatus(t, bufio.NewReader(conn))
-	if ev := recvEvent(t, events); ev.Decision != DecisionDeny {
-		t.Errorf("CONNECT audit %+v, want deny", ev)
-	}
-	select {
-	case ev := <-transfers:
-		t.Errorf("a refused dial reported a transfer for %s", ev.Host)
-	case <-time.After(200 * time.Millisecond):
+			resp := proxiedGet(t, front.URL, "http://api.internal/x")
+			_ = resp.Body.Close()
+			if resp.StatusCode != tt.status {
+				t.Errorf("forward status %d, want %d", resp.StatusCode, tt.status)
+			}
+			if ev := recvEvent(t, events); ev.Decision != tt.decision {
+				t.Errorf("forward audit %+v, want decision %v", ev, tt.decision)
+			}
+			conn := dialConnect(t, front.Listener.Addr().String(), "echo.internal:443")
+			defer func() { _ = conn.Close() }()
+			if status := readStatus(t, bufio.NewReader(conn)); status != tt.connect {
+				t.Errorf("CONNECT status %q, want %q", status, tt.connect)
+			}
+			if ev := recvEvent(t, events); ev.Decision != tt.decision {
+				t.Errorf("CONNECT audit %+v, want decision %v", ev, tt.decision)
+			}
+			select {
+			case ev := <-transfers:
+				t.Errorf("a refused dial reported a transfer for %s", ev.Host)
+			case <-time.After(200 * time.Millisecond):
+			}
+		})
 	}
 }
 
