@@ -3,7 +3,7 @@
 use std::borrow::Cow;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-use tokio::io::{AsyncBufRead, AsyncWrite};
+use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWrite};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
@@ -83,7 +83,7 @@ impl State {
             Request::Ps => self.ps(writer).await,
             Request::Kill { pid, signal } => self.kill(writer, pid, signal).await,
             Request::Logs { pid } => self.logs(writer, pid).await,
-            Request::Attach { pid } => self.attach(writer, pid).await,
+            Request::Attach { pid } => self.attach(&mut reader, writer, pid).await,
             Request::Exec(e) => return self.exec(e, reader, writer).await,
             Request::SessionCreate { id, cwd, env } => {
                 match self.sessions.create(id, cwd, &env).await {
@@ -278,7 +278,11 @@ impl State {
         proto::write_frame(w, &Response::Done).await
     }
 
-    async fn attach<W: AsyncWrite + Unpin>(&self, w: &mut W, pid: u32) -> std::io::Result<()> {
+    async fn attach<R, W>(&self, reader: &mut R, w: &mut W, pid: u32) -> std::io::Result<()>
+    where
+        R: AsyncBufRead + Unpin,
+        W: AsyncWrite + Unpin,
+    {
         let Some(proc) = self.table.get_or_not_found(w, pid).await? else {
             return Ok(());
         };
@@ -291,15 +295,25 @@ impl State {
         if let Some(code) = exit {
             return proto::write_frame(w, &Response::Exit { code }).await;
         }
+        let mut pipelined = false;
         loop {
-            match rx.recv().await {
-                Ok(Chunk::Exit(code)) => {
-                    return proto::write_frame(w, &Response::Exit { code }).await;
-                }
-                Ok(chunk) => write_chunk(w, &mut frame, chunk).await?,
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-                Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                    return proto::write_frame(w, &Response::Done).await;
+            tokio::select! {
+                biased;
+                recv = rx.recv() => match recv {
+                    Ok(Chunk::Exit(code)) => {
+                        return proto::write_frame(w, &Response::Exit { code }).await;
+                    }
+                    Ok(chunk) => write_chunk(w, &mut frame, chunk).await?,
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                        return proto::write_frame(w, &Response::Done).await;
+                    }
+                },
+                r = reader.fill_buf(), if !pipelined => {
+                    if !matches!(r, Ok(buf) if !buf.is_empty()) {
+                        return Ok(());
+                    }
+                    pipelined = true;
                 }
             }
         }

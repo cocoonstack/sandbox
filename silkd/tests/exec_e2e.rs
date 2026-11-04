@@ -26,6 +26,15 @@ async fn detached_pid(state: &Arc<State>, script: &str) -> u64 {
     started[0]["pid"].as_u64().unwrap()
 }
 
+async fn attach_frames(state: &Arc<State>, pid: u64) -> Vec<Value> {
+    let (mut cw, mut lines, _) = connect(state);
+    send(&mut cw, json!({"op":"attach","pid":pid})).await;
+    frames_until(&mut lines, |f| {
+        matches!(type_of(f), "exit" | "done" | "error")
+    })
+    .await
+}
+
 async fn wait_for_exit(state: &Arc<State>, pid: u64) -> Vec<Value> {
     for _ in 0..250 {
         let logs = one(state, &format!(r#"{{"op":"logs","pid":{pid}}}"#)).await;
@@ -143,12 +152,9 @@ async fn daemonizer_exit_is_the_last_frame() {
 async fn attach_streams_live_output_then_exit() {
     let state = Arc::new(State::new());
     let pid = detached_pid(&state, "sleep 0.3; echo live-chunk").await;
-    let frames = tokio::time::timeout(
-        Duration::from_secs(8),
-        one(&state, &format!(r#"{{"op":"attach","pid":{pid}}}"#)),
-    )
-    .await
-    .expect("attach hung");
+    let frames = tokio::time::timeout(Duration::from_secs(8), attach_frames(&state, pid))
+        .await
+        .expect("attach hung");
     assert!(
         stdout_body(&frames).contains("live-chunk"),
         "attach missed live output: {frames:?}"
@@ -206,6 +212,23 @@ async fn attach_keeps_a_tail_emitted_during_the_replay() {
         "attach dropped the tail emitted during the replay"
     );
     assert_eq!(type_of(frames.last().unwrap()), "exit");
+}
+
+#[tokio::test]
+async fn attach_ends_when_its_client_hangs_up() {
+    let state = Arc::new(State::new());
+    let pid = detached_pid(&state, "sleep 30").await;
+    let (mut cw, lines, handle) = connect(&state);
+    send(&mut cw, json!({"op":"attach","pid":pid})).await;
+
+    drop(lines);
+    drop(cw);
+    tokio::time::timeout(Duration::from_secs(5), handle)
+        .await
+        .expect("attach did not end on hang-up")
+        .unwrap()
+        .unwrap();
+    one(&state, &json!({"op":"kill","pid":pid}).to_string()).await;
 }
 
 #[tokio::test]
@@ -310,8 +333,7 @@ async fn disconnect_during_drain_publishes_real_exit_code() {
     let pid = started["pid"].as_u64().unwrap();
 
     let st = Arc::clone(&state);
-    let attach =
-        tokio::spawn(async move { one(&st, &json!({"op":"attach","pid":pid}).to_string()).await });
+    let attach = tokio::spawn(async move { attach_frames(&st, pid).await });
     tokio::time::sleep(Duration::from_millis(200)).await;
     drop(lines);
     drop(cw);
