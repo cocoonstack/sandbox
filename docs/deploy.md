@@ -677,8 +677,10 @@ VMM that cocoon could not move into its own scope, and any `cocoon` call still
 in flight, outlive the stop instead of dying with the service's cgroup. Claimed
 sandboxes are reaped when their TTL expires (default 5m, capped at 24h).
 
-A snapshot save, hibernate, export, restore or clone has 15 minutes, plus 3 to exit once
-canceled, and at most 8 saves and hibernates run at once on a node. A call that
+A snapshot save, hibernate, export, restore or clone has 15 minutes. Once canceled, a
+save or hibernate has 11 more to exit, since cocoon v0.7.6 or newer waits up to 10 for
+the VMM to resume the guest; an export, restore or clone has 3. At most 8 saves and
+hibernates run at once on a node. A call that
 dials a guest gives up after 10 s, since a paused or wedged guest never answers,
 and gets `502`.
 

@@ -51,6 +51,7 @@ const (
 	dumpTimeout    = 15 * time.Minute
 	cmdTermGrace   = 30 * time.Second
 	dumpTermGrace  = 3 * time.Minute
+	saveTermGrace  = 11 * time.Minute
 	connectTimeout = 10 * time.Second
 	trimTimeout    = 10 * time.Second
 	probeInterval  = 20 * time.Millisecond
@@ -443,7 +444,7 @@ func (e *Engine) runDump(ctx context.Context, args ...string) error {
 		return ctx.Err()
 	}
 	defer func() { <-e.dumps }()
-	_, err := e.runFor(ctx, dumpTimeout, dumpTermGrace, args...)
+	_, err := e.runFor(ctx, dumpTimeout, saveTermGrace, args...)
 	return err
 }
 
