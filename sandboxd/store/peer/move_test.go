@@ -58,7 +58,7 @@ func TestSendRoundShipsTheListedFilesInOrderAndKeepsSparseFilesSparse(t *testing
 	}
 	sent := int64(body.Len())
 	dst := t.TempDir()
-	if err := ReceiveRound(&body, dst); err != nil {
+	if err = ReceiveRound(&body, dst); err != nil {
 		t.Fatalf("ReceiveRound: %v", err)
 	}
 	for _, name := range names {
