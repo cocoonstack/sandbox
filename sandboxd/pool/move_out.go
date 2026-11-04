@@ -45,7 +45,7 @@ func (m *Manager) Move(ctx context.Context, id, addr string, maxDowntime time.Du
 	return result, nil
 }
 
-// moveOut runs the rounds up to the target's commit; on any error the caller resolves the move through its record.
+// On any error the caller settles the move through its record.
 func (m *Manager) moveOut(ctx context.Context, sb *types.Sandbox, mv *outMove, budget time.Duration) error {
 	m.mu.Lock()
 	admission, vm := MoveAdmission{Tenant: sb.Tenant, Key: sb.Key, From: m.nodeID}, sb.VMName
@@ -160,7 +160,6 @@ func (m *Manager) sendRound(ctx context.Context, id string, mv *outMove, round t
 	return m.movePeer.SendRound(ctx, mv.addr, id, mv.rounds, round.Dir, names)
 }
 
-// markMoving admits a move of sb and gates its captures, hibernates, releases and reaps until the move ends.
 func (m *Manager) markMoving(sb *types.Sandbox, mv *outMove) error {
 	sb.Transition.Lock()
 	defer sb.Transition.Unlock()
@@ -185,7 +184,7 @@ func (m *Manager) markMoving(sb *types.Sandbox, mv *outMove) error {
 	return nil
 }
 
-// moveBlocker names why sb cannot move, "" when it can; callers hold m.mu.
+// Callers hold m.mu.
 func (m *Manager) moveBlocker(sb *types.Sandbox) string {
 	_, archiving := m.archiving[sb.ID]
 	switch {
@@ -219,7 +218,7 @@ func (m *Manager) journalMoveOut(ctx context.Context, sb *types.Sandbox, mv *out
 	return nil
 }
 
-// unrowForMove deletes a replicated claim's row and replica, so no third node adopts a stale copy while the target runs it; the caller holds sb.Transition.
+// Without the row no third node adopts a stale copy; the caller holds sb.Transition.
 func (m *Manager) unrowForMove(ctx context.Context, sb *types.Sandbox, mv *outMove) error {
 	if m.archives == nil {
 		return nil
@@ -246,7 +245,7 @@ func (m *Manager) unrowForMove(ctx context.Context, sb *types.Sandbox, mv *outMo
 	return err
 }
 
-// finishMoveOut drops a claim that moved on, like a claim another node adopted, and deletes the record once its target marked it started.
+// Deletes the record only once the target marked it started.
 func (m *Manager) finishMoveOut(ctx context.Context, sb *types.Sandbox, mv *outMove) {
 	m.mu.Lock()
 	vm := sb.VMName
@@ -269,7 +268,7 @@ func (m *Manager) finishMoveOut(ctx context.Context, sb *types.Sandbox, mv *outM
 	}
 }
 
-// failMoveOut resolves a failed move through its record: only proof that the move stayed here resumes the guest, anything else drops the claim.
+// Only proof the move stayed here resumes the guest; anything else drops the claim.
 func (m *Manager) failMoveOut(ctx context.Context, sb *types.Sandbox, mv *outMove, cause error) (MoveResult, error) {
 	if mv.Epoch == 0 {
 		_ = m.abortMoveOut(ctx, sb, mv, 0)
@@ -299,7 +298,7 @@ func (m *Manager) retryMoveOut(ctx context.Context, sb *types.Sandbox, mv *outMo
 	}
 }
 
-// settleMoveOut resumes the guest only on a record of this move still open or aborted; a missing record, another node's, or a committed or started one means the claim moved on. An error leaves the move as it is.
+// An error leaves the move as it is.
 func (m *Manager) settleMoveOut(ctx context.Context, sb *types.Sandbox, mv *outMove) (bool, error) {
 	for range 2 {
 		rec, ok, err := m.moves.Get(ctx, sb.ID)
@@ -325,7 +324,7 @@ func (m *Manager) settleMoveOut(ctx context.Context, sb *types.Sandbox, mv *outM
 	return false, fmt.Errorf("the move record of %s kept changing", sb.ID)
 }
 
-// abortMoveOut ends the series, which resumes a paused guest, releases the target and the budget slot, and deletes the aborted record only once the journal no longer needs it.
+// Deletes the aborted record only once the journal no longer needs it.
 func (m *Manager) abortMoveOut(ctx context.Context, sb *types.Sandbox, mv *outMove, aborted int64) error {
 	logger := log.WithFunc("pool.abortMoveOut")
 	m.mu.Lock()
@@ -370,13 +369,13 @@ func (m *Manager) endMoveOut(ctx context.Context, sb *types.Sandbox, mv *outMove
 	}
 }
 
-// pausedForMove reports whether sb's guest is paused by a move, in a source's final round or received and not started, when dials and wakes answer ErrEvacuating.
 func (m *Manager) pausedForMove(sb *types.Sandbox) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.pausedForMoveLocked(sb)
 }
 
+// Paused: a source's final round, or a received claim not yet started.
 func (m *Manager) pausedForMoveLocked(sb *types.Sandbox) bool {
 	mv := m.moving[sb.ID]
 	return sb.MoveIn || mv != nil && mv.final

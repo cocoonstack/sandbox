@@ -19,7 +19,7 @@ import (
 
 const reasonMoveStartFailed = "vmm did not start after a live move"
 
-// inMove is a target's reservation for a move in flight; guarded by m.mu.
+// Guarded by m.mu.
 type inMove struct {
 	tenant    string
 	from      string
@@ -137,7 +137,7 @@ func (m *Manager) DropMove(id string) {
 	}
 }
 
-// startMoveIn starts a committed claim's guest and serves it, then marks the record started at committed when that is its epoch; a guest that cannot start fails the claim here, never back to the source. The caller holds sb.Transition.
+// A guest that cannot start fails the claim here, never back to the source; the caller holds sb.Transition.
 func (m *Manager) startMoveIn(ctx context.Context, sb *types.Sandbox, from string, committed int64) {
 	logger := log.WithFunc("pool.startMoveIn")
 	var err error
@@ -191,7 +191,6 @@ func (m *Manager) markMoveStarted(ctx context.Context, id string, epoch int64) {
 	}
 }
 
-// dropMoveIn forgets a received claim whose move did not commit and removes its VM.
 func (m *Manager) dropMoveIn(ctx context.Context, sb *types.Sandbox) {
 	if holds, ok := m.forgetClaim(ctx, sb); ok {
 		m.out.Disarm(sb.ID, true)
@@ -200,14 +199,13 @@ func (m *Manager) dropMoveIn(ctx context.Context, sb *types.Sandbox) {
 	_ = os.RemoveAll(m.moveDir(sb.ID))
 }
 
-// settleMoveIn resolves a received claim through its record until the registry answers.
 func (m *Manager) settleMoveIn(ctx context.Context, sb *types.Sandbox) {
 	for !m.resolveMoveIn(ctx, sb) {
 		time.Sleep(moveRetryInterval)
 	}
 }
 
-// resolveMoveIn starts a received claim whose record committed to this node, ends a move its source left open and drops any other; false while the registry is down.
+// False while the registry is down.
 func (m *Manager) resolveMoveIn(ctx context.Context, sb *types.Sandbox) bool {
 	sb.Transition.Lock()
 	defer sb.Transition.Unlock()
@@ -259,7 +257,6 @@ func (m *Manager) endReceive(id string, in *inMove) (current, reserved bool) {
 	return held == in, held != nil
 }
 
-// dropIdleReservations ends the reservations of sources that went quiet.
 func (m *Manager) dropIdleReservations() {
 	now := time.Now()
 	var idle []string
@@ -275,7 +272,7 @@ func (m *Manager) dropIdleReservations() {
 	}
 }
 
-// incomingOf counts tenant's reservations; callers hold m.mu.
+// Callers hold m.mu.
 func (m *Manager) incomingOf(tenant string) int {
 	n := 0
 	for _, in := range m.incoming {
@@ -286,7 +283,6 @@ func (m *Manager) incomingOf(tenant string) int {
 	return n
 }
 
-// admitMoveLocked counts a move like a new claim and reserves its slot; callers hold m.mu.
 func (m *Manager) admitMoveLocked(id string, a MoveAdmission) error {
 	if _, held := m.claimed[id]; held {
 		return fmt.Errorf("%w: this node already holds %s", ErrNotMovable, id)

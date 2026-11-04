@@ -19,7 +19,6 @@ const (
 	MoveStartAllowance = 400 * time.Millisecond
 
 	movesDir = "moves"
-	// A reservation with no round or commit for this long belongs to a source that gave up.
 	moveReservationIdle = 2 * time.Minute
 	moveRetryInterval   = 2 * time.Second
 	moveDeltaLimit      = 4
@@ -81,7 +80,7 @@ func (m *Manager) WithMovePeer(p MovePeer) {
 	m.movePeer = p
 }
 
-// moveBudgetErr refuses a move past move_concurrency, counting both directions; callers hold m.mu.
+// Callers hold m.mu.
 func (m *Manager) moveBudgetErr() error {
 	limit := m.view.Load().moveConcurrency
 	if n := len(m.moving) + len(m.incoming); n >= limit {
@@ -94,7 +93,7 @@ func (m *Manager) moveDir(id string) string {
 	return filepath.Join(m.dataDir, movesDir, id)
 }
 
-// sweepStaleMoves ends this node's stale moves no move in flight holds: a target marks a committed one started, either side aborts an open one, and only the source deletes an ended one.
+// A target only marks a committed move started; only the source deletes an ended one.
 func (m *Manager) sweepStaleMoves(ctx context.Context, now time.Time) {
 	logger := log.WithFunc("pool.sweepStaleMoves")
 	recs, err := m.moves.Stale(ctx, now.Add(-moveStaleAge))

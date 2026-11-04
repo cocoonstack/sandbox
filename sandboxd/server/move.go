@@ -48,7 +48,7 @@ func (c *MoveClient) Drop(ctx context.Context, addr, id string) error {
 	return c.call(ctx, http.MethodDelete, addr, movePath(id, ""), nil, nil)
 }
 
-// call maps the target's refusals onto the pool errors the source answers with, passing the target's reason through.
+// Maps the target's status codes onto pool errors.
 func (c *MoveClient) call(ctx context.Context, method, addr, path string, in, out any) error {
 	ctx, cancel := context.WithTimeout(ctx, moveCallTimeout)
 	defer cancel()
