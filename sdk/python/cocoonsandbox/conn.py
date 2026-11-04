@@ -24,8 +24,6 @@ _CloseableT = TypeVar("_CloseableT", bound="_Closeable")
 
 
 class _Closeable(Protocol):
-    """Context-manager mixin for handles whose exit is just close()."""
-
     def __enter__(self: _CloseableT) -> _CloseableT:
         return self
 

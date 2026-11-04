@@ -259,7 +259,6 @@ class Client:
         return resp.status, raw
 
     def _take(self, key: tuple[str, str], timeout: float) -> http.client.HTTPConnection:
-        """Reuses a parked connection the node has not closed within keep_alive, else dials."""
         with self._idle_lock:
             idle = self._idle.get(key, [])
             while idle:

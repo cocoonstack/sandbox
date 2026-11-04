@@ -1,5 +1,6 @@
-"""Exercise both SDK planes through the TLS cluster fixture."""
+"""Exercise both SDK planes through the TLS cluster fixture. Usage: tls_client.py ENTRY OWNER CA"""
 
+import argparse
 import socket
 import ssl
 import sys
@@ -8,8 +9,12 @@ from cocoonsandbox import APIError, Client, ProtocolError
 
 
 def main() -> None:
-    entry, owner, ca = sys.argv[1:]
-    context = ssl.create_default_context(cafile=ca)
+    parser = argparse.ArgumentParser(description=__doc__)
+    for name in ("entry", "owner", "ca"):
+        parser.add_argument(name)
+    args = parser.parse_args()
+    entry, owner = args.entry, args.owner
+    context = ssl.create_default_context(cafile=args.ca)
     client = Client(entry, api_token="node-token", ssl_context=context)
     with client.new("rt:24.04") as sb:
         assert sb.owner == owner, sb.owner
@@ -49,4 +54,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

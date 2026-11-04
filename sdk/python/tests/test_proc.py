@@ -9,6 +9,25 @@ from cocoonsandbox import ProtocolError
 from cocoonsandbox.frames import FS_CHUNK
 
 
+class BlockingStdinConn(FakeConn):
+    """A guest that stops draining stdin until its output is read, so send blocks past the buffer."""
+
+    def __init__(self, frames, buffer_frames):
+        super().__init__(frames)
+        self._room = threading.Semaphore(buffer_frames)
+        self._read = False
+
+    def send(self, op, **fields):
+        if op == "stdin" and not self._read and not self._room.acquire(blocking=False):
+            assert self._room.acquire(timeout=5), "stdin send deadlocked"
+        super().send(op, **fields)
+
+    def recv(self):
+        self._read = True
+        self._room.release()
+        return super().recv()
+
+
 def test_spawn_returns_pid(monkeypatch):
     sb, conn = fake_sandbox(monkeypatch, [{"type": "started", "pid": 41}])
     assert sb.spawn("sleep", "30") == 41
@@ -73,25 +92,6 @@ def test_a_text_stdin_is_refused_before_dialing(monkeypatch, call):
     with pytest.raises(TypeError, match="stdin must be bytes"):
         call(sb)
     assert dials == []
-
-
-class BlockingStdinConn(FakeConn):
-    """A guest that stops draining stdin until its output is read, so send blocks past the buffer."""
-
-    def __init__(self, frames, buffer_frames):
-        super().__init__(frames)
-        self._room = threading.Semaphore(buffer_frames)
-        self._read = False
-
-    def send(self, op, **fields):
-        if op == "stdin" and not self._read and not self._room.acquire(blocking=False):
-            assert self._room.acquire(timeout=5), "stdin send deadlocked"
-        super().send(op, **fields)
-
-    def recv(self):
-        self._read = True
-        self._room.release()
-        return super().recv()
 
 
 def fake_sandbox(monkeypatch, frames):

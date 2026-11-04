@@ -80,6 +80,27 @@ CASES = [
 UNSENT = {"req_session_create": {"id"}}
 
 
+class BranchActionConn(FakeConn):
+    """Records the action each git_branch verb puts on the wire."""
+
+    def __init__(self, sent):
+        super().__init__([])
+        self.sent = sent
+        self.action = ""
+
+    def send(self, op, **fields):
+        self.action = fields.get("action")
+        self.sent.append(self.action)
+
+    def recv(self):
+        if self.action == "list":
+            return {"type": "git_branches", "branches": [], "current": ""}
+        return {"type": "done"}
+
+    def recv_until(self, *terminal):
+        yield self.recv()
+
+
 @pytest.mark.parametrize("stem,replies,invoke", CASES, ids=lambda c: c if isinstance(c, str) else "")
 def test_call_site_matches_fixture(monkeypatch, stem, replies, invoke):
     fixture = json.loads((FIXTURES / f"{stem}.json").read_text())
@@ -120,27 +141,6 @@ def test_git_branch_actions_come_from_the_corpus(monkeypatch):
     sb.git_delete_branch("/w", "b")
     sb.git_checkout("/w", "b")
     assert set(sent) == set(enums["git_branch_action"])
-
-
-class BranchActionConn(FakeConn):
-    """Records the action each git_branch verb puts on the wire."""
-
-    def __init__(self, sent):
-        super().__init__([])
-        self.sent = sent
-        self.action = ""
-
-    def send(self, op, **fields):
-        self.action = fields.get("action")
-        self.sent.append(self.action)
-
-    def recv(self):
-        if self.action == "list":
-            return {"type": "git_branches", "branches": [], "current": ""}
-        return {"type": "done"}
-
-    def recv_until(self, *terminal):
-        yield self.recv()
 
 
 def fake_sandbox(monkeypatch, replies):
