@@ -861,7 +861,10 @@ the claim answers 503 `sandbox moving to another node; retry`, and fork,
 checkpoint, promote and hibernate answer the same during the rounds and wait
 out the final round. Env writes, renew and data-plane calls keep working until
 the final round and answer the same 503 during it, because the peer would miss
-them. Every error leaves the claim running here:
+them. Every error leaves the claim running here, except a 503 with the registry
+down after the final round paused the guest: the guest stays paused until the
+record answers, the guest then resumes or, when the record reads `committed`, the
+node drops the claim (see [moving a running claim](cluster.md#moving-a-running-claim)):
 
 - 404 unknown sandbox
 - 409 the claim cannot move (hibernated, archived, failed, waking, with

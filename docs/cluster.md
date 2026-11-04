@@ -336,11 +336,15 @@ and `epoch`, each change a compare-and-set at a new epoch.
 | (none) | `pending` | source | after the target admitted the move, before the baseline round |
 | `pending` | `final` | source | the final round paused the guest |
 | `final` | `committed` | target | after the receive; the point of no return |
-| `committed` | `started` | target | after it journaled that it runs the claim |
+| `committed` | `started` | target, or a later source that holds the claim | after it journaled that it runs the claim |
 | `pending` or `final` | `aborted` | source, or a target that holds a received claim or finds the record stale | before the guest resumes |
 
 A new move of the claim overwrites only a `started` or `aborted` record; a
-`committed` one refuses it with 409 until its target marks it `started`.
+`committed` one refuses it with 409 unless the node making the new move holds the
+claim, which proves the target started it, so that node marks it `started` first.
+Until a received claim starts, its target gates it like a claim in a move: sweeps
+skip it, calls that reach the guest or change the claim answer 503, and operator
+calls answer 409.
 
 The target commits only from `final`, so it never starts a guest restored from
 a round the source kept running after. The source resumes its guest only on
@@ -397,6 +401,16 @@ The string has to be set before the VM starts, because the VM's record keeps it.
 A move between nodes with different strings fails at the receive, after the
 guest paused: cocoon refuses the series with `untrusted storage path in snapshot
 metadata`, the call answers 502 and the guest resumes on the source.
+
+**Known limits.**
+
+- A `committed` record whose target never returns stays as one row until a node
+  holding the claim moves it.
+- Without `sync_claims` a host crash can roll back a node's journal. A source that
+  rolled back to a journal whose record is gone drops the claim, since a missing
+  record reads as moved on.
+- A move call on a claim that moved further than the peer it named answers 200
+  with that peer as `owner_addr`; `Lookup` finds the claim.
 
 **Replicated claims.** Before the final round the source deletes the claim's
 registry row and its replica, so no third node can adopt a stale replica while
