@@ -323,8 +323,8 @@ func TestCloseWaitsForARunningCommandAndRefusesNewOnes(t *testing.T) {
 		t.Fatalf("the running hibernate: %v", err)
 	}
 	<-closed
-	if _, err := e.List(t.Context()); !errors.Is(err, errStopping) {
-		t.Errorf("List after Close = %v, want %v", err, errStopping)
+	if _, err := e.List(t.Context()); !errors.Is(err, ErrStopping) {
+		t.Errorf("List after Close = %v, want %v", err, ErrStopping)
 	}
 }
 

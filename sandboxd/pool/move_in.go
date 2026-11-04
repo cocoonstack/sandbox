@@ -11,6 +11,7 @@ import (
 
 	"github.com/projecteru2/core/log"
 
+	"github.com/cocoonstack/sandbox/sandboxd/engine"
 	"github.com/cocoonstack/sandbox/sandboxd/moves"
 	"github.com/cocoonstack/sandbox/sandboxd/store/peer"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
@@ -144,6 +145,9 @@ func (m *Manager) startMoveIn(ctx context.Context, sb *types.Sandbox, from strin
 	for range 2 {
 		if err = m.eng.Start(ctx, sb.VMName); err == nil {
 			break
+		}
+		if errors.Is(err, engine.ErrStopping) {
+			return
 		}
 		logger.Warnf(ctx, "start moved claim %s: %v", sb.ID, err)
 	}

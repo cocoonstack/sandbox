@@ -70,7 +70,7 @@ const (
 )
 
 var (
-	errStopping = errors.New("sandboxd is stopping")
+	ErrStopping = errors.New("sandboxd is stopping")
 
 	// capacitySignatures mean the node cannot attach another VM, not that this VM failed.
 	capacitySignatures = []string{
@@ -445,7 +445,7 @@ func (e *Engine) run(ctx context.Context, args ...string) ([]byte, error) {
 
 func (e *Engine) runFor(ctx context.Context, timeout, termGrace time.Duration, args ...string) ([]byte, error) {
 	if !e.begin() {
-		return nil, errStopping
+		return nil, ErrStopping
 	}
 	defer e.running.Done()
 	ctx, cancel := context.WithTimeout(ctx, timeout)

@@ -1111,6 +1111,41 @@ func TestMoveTargetKilledBetweenCommitAndStartStartsTheGuestAfterItsRestart(t *t
 	}
 }
 
+func TestMoveTargetStoppingBeforeItsStartKeepsTheGuestForItsRestart(t *testing.T) {
+	mc := newMoveCluster(t)
+	sb := mustClaim(t, mc.s, testKey)
+	ctx := t.Context()
+	eng := fakeOf(mc.t)
+	eng.mu.Lock()
+	eng.startErr = engine.ErrStopping
+	eng.mu.Unlock()
+
+	if _, err := mc.s.Move(ctx, sb.ID, "b", time.Minute); err != nil {
+		t.Fatalf("move whose target began to stop: %v, want the committed move", err)
+	}
+	held, ok := mc.t.byID(sb.ID)
+	if !ok || !held.MoveIn || held.Failed != "" {
+		t.Fatalf("target claim %+v %v, want it journaled and not failed", held, ok)
+	}
+
+	eng.mu.Lock()
+	eng.startErr = nil
+	eng.mu.Unlock()
+	restarted := mc.restart(t, mc.t)
+	restarted.liftFence()
+	if err := restarted.Reconcile(ctx); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	waitFor(t, func() bool {
+		rec, found, _ := mc.moveReg.Get(ctx, sb.ID)
+		return !restarted.moveHeld(sb.ID) && found && rec.State == moves.Started
+	})
+	moved, ok := restarted.byID(sb.ID)
+	if !ok || moved.Failed != "" || moved.MoveIn {
+		t.Fatalf("restarted target claim %+v %v, want the guest started", moved, ok)
+	}
+}
+
 func TestMoveTargetMarksTheRecordStartedOnlyAfterItsJournalPersists(t *testing.T) {
 	mc := newMoveCluster(t)
 	sb := mustClaim(t, mc.s, testKey)
