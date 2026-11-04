@@ -292,7 +292,7 @@ released, so the node asks a peer to adopt it and never takes it back; a row ano
 the claim moved already, and the node drops it; a row this node still owns at
 another epoch keeps the claim, which is skipped. A crash between the release and a peer's answer leaves a row no node
 lists: a restart drops the claim, and the next `Lookup` with its token adopts it,
-so a holder that recovers the token from a root listing loses that claim. A
+so a holder that reads the token back with root's `GET /v1/sandboxes/{id}` loses that claim. A
 released row past its retention deadline is purged by any
 node's hourly sweep, like the row of a departed owner.
 

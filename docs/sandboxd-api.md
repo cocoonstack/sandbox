@@ -36,6 +36,8 @@ they reach its guest, so they share these answers:
   [evacuation](#post-v1drain) has yet to move it
 - 503 `archive registry down; retry` for an archived claim under
   `archive_failover` while the meta store is down
+- 503 `tenant store down; retry` for an archived claim whose tenant the node has
+  not cached while the meta store is down
 
 ## POST /v1/claim
 
@@ -565,7 +567,8 @@ token gets 403, the root token still renews. 400 a malformed body; 401 missing
 bearer token; 403 the claim's tenant was removed; 404 unknown id or wrong
 token; 409 archived, or being archived right now; 503 the archive registry is
 down, for a hibernated claim with a replica under `archive_failover`: the node
-already holds the new lease, and a resend replaces the row.
+already holds the new lease, and a resend replaces the row; 503 `tenant store
+down; retry` for a tenant the node has not cached while the meta store is down.
 
 ## POST /v1/sandboxes/{id}/fork
 
@@ -606,7 +609,7 @@ an unknown `on_expire`; 401 bad api token; 403 the parent's tenant was removed
 parent (neither forks, checkpoints, or promotes; see [egress](egress.md)), a
 failed parent, or an archived parent (`POST /wake` or an exec wakes it first);
 429 node or the parent's tenant at `max_claims`, the node at `max_running`, the node draining, or the disk
-under `disk_reserve`; 503 `lease lost; retry` for a replicated parent while its node's lease is overdue.
+under `disk_reserve`; 503 `lease lost; retry` for a replicated parent while its node's lease is overdue, `tenant store down; retry` for a sandbox token whose tenant the node has not cached while the meta store is down.
 
 ## POST /v1/sandboxes/{id}/promote
 
@@ -814,7 +817,7 @@ run out (see [evacuating a node](cluster.md#evacuating-a-node)). It needs
 background, with bounded concurrency, each claim is hibernated if it runs,
 archived to the checkpoint store if it is not archived, its registry row is
 released, and a peer is asked to adopt it through `GET /v1/sandboxes/{id}/owner`,
-so the root listing on that peer shows it with its token. Open streams to a
+so that peer lists it, and root's `GET /v1/sandboxes/{id}` there returns its token. Open streams to a
 claim end when it hibernates. Until a peer holds it, a call that would wake the
 claim answers 503 `sandbox moving to another node; retry` with `Retry-After`;
 after that this node answers 404 and the client looks the claim up again. With
@@ -826,7 +829,8 @@ whose step failed, and every claim of a node without `archive_failover`. The
 answer and `GET /v1/info` count the claims left in `evacuating`; once it is
 gone, `claimed` counts the ones that stayed, and the log names each and why. A
 claim of a pool without an archive tier, whose `on_expire` is not `archive`,
-keeps its lease deadline across the move; any other keeps the later of its
+keeps its lease deadline across the move until its first wake, which starts a
+fresh lease of the claim's length; any other keeps the later of its
 lease and `archive_delete_after_seconds`, or no deadline when that is 0. A call
 while an evacuation runs changes nothing; a call after one finished starts a
 new one over the claims still here.
@@ -855,7 +859,7 @@ has no `preview_listen`. The signed token embeds the sandbox id, port, and
 owner `advertise_addr`, so any node's preview listener can serve it (forwarding
 to the owner's main listener) and a released sandbox's URL simply stops
 resolving — no revocation list. A browser request to the minted URL answers 503
-`lease lost; retry` for a replicated claim while its node's lease is overdue, and 429 when it has to wake a sandbox while the disk reserve is low or the node is at `max_running`. See [deploy](deploy.md#preview-urls).
+`lease lost; retry` for a replicated claim while its node's lease is overdue, 503 `sandbox moving to another node; retry` while an [evacuation](#post-v1drain) has yet to move it, and 429 when it has to wake a sandbox while the disk reserve is low or the node is at `max_running`. See [deploy](deploy.md#preview-urls).
 
 ## POST /v1/sandboxes/{id}/checkpoint
 
