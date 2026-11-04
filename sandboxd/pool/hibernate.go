@@ -122,17 +122,16 @@ func (m *Manager) hibernateLocked(ctx context.Context, sb *types.Sandbox) error 
 	m.mu.Unlock()
 	if hibErr := m.eng.Hibernate(ctx, sb.VMName, snap); hibErr != nil {
 		// The engine can report failure after the snapshot landed
-		adopted, resolveErr := m.settlePendingSnap(ctx, sb)
+		adopted, settleErr := m.settleCapture(ctx, sb)
 		if adopted {
-			m.out.Disarm(sb.ID, true)
-			if resolveErr != nil {
-				return fmt.Errorf("hibernate %s: persist claims: %w", sb.ID, resolveErr)
+			if settleErr != nil {
+				return fmt.Errorf("hibernate %s: persist claims: %w", sb.ID, settleErr)
 			}
 			m.dropStale(ctx, sb)
 			return nil
 		}
-		if resolveErr != nil {
-			return errors.Join(fmt.Errorf("hibernate %s: %w", sb.ID, hibErr), resolveErr)
+		if settleErr != nil {
+			return errors.Join(fmt.Errorf("hibernate %s: %w", sb.ID, hibErr), settleErr)
 		}
 		return fmt.Errorf("hibernate %s: %w", sb.ID, hibErr)
 	}

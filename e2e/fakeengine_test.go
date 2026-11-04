@@ -180,6 +180,8 @@ func (f *fakeEngine) VMEvents(ctx context.Context, _ string, _ engine.VMSyncFunc
 	return ctx.Err()
 }
 
+func (f *fakeEngine) WaitCapture(context.Context, string) error { return nil }
+
 func (f *fakeEngine) Probe(ctx context.Context, vsockSocket string, timeout time.Duration) error {
 	return f.real.Probe(ctx, vsockSocket, timeout)
 }

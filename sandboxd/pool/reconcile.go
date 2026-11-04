@@ -39,11 +39,14 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 
 	owned := map[string]bool{}
 	referenced := map[string]bool{}
-	var adopted, dropped, resumed []*types.Sandbox
+	var adopted, dropped, resumed, interrupted []*types.Sandbox
 	m.mu.Lock()
 	for _, sb := range claims {
 		sb.SetEnv(sb.Env)
 		rec, ok := live[sb.VMName]
+		if !ok || rec.State != vmStateRunning {
+			sb.SaveSnap = ""
+		}
 		switch {
 		case sb.ArchiveCk != "":
 			// Archived: no local VM by design, so adopt the stub and let the first exec wake it
@@ -51,11 +54,14 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 			continue
 		case ok && rec.State == vmStateRunning:
 			sb.VsockSocket = rec.VsockSocket
-			// Running with either flag set means a crashed wake or an intent the engine never saw
 			if sb.HibernateSnap != "" {
 				resumed = append(resumed, sb)
 			}
-			sb.HibernateSnap, sb.PendingSnap = "", ""
+			sb.HibernateSnap = ""
+			if sb.PendingSnap != "" || sb.SaveSnap != "" {
+				referenced[sb.PendingSnap] = true
+				interrupted = append(interrupted, sb)
+			}
 		case ok && sb.HibernateSnap != "":
 			// Hibernated: the VM is stopped by design and wakes on demand.
 			sb.PendingSnap = ""
@@ -97,17 +103,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 	if err := m.tpls.SweepStaging(); err != nil {
 		logger.Error(ctx, err, "sweep template staging")
 	}
-	dir := m.goldensDir()
-	goldens, _ := os.ReadDir(dir)
-	for _, e := range goldens {
-		name := e.Name()
-		if pooled[strings.TrimSuffix(name, goldenStampSuffix)] {
-			continue
-		}
-		if os.RemoveAll(filepath.Join(dir, name)) == nil && filepath.Ext(name) == "" {
-			logger.Infof(ctx, "removed orphan golden %s", name)
-		}
-	}
+	m.sweepOrphanGoldens(ctx, pooled)
 	// A crash mid-export leaves a fork-* staging dir nothing in this life reuses
 	_ = utils.RemoveDirEntries(m.dataDir, func(name string) bool { return strings.HasPrefix(name, "fork-") })
 	_ = utils.RemoveDirEntries(filepath.Join(m.dataDir, readerDir), nil)
@@ -119,6 +115,35 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 	m.retryArchiveDeletes(ctx)
 	removed := m.sweepStaleVMs(ctx, live, owned)
 
+	m.sweepOrphanSnaps(ctx, snaps, snapsErr, referenced)
+	m.resyncEgress(ctx, live, removed)
+	m.warnDeniedClaims(ctx)
+	logger.Infof(ctx, "adopted %d claims, %d VMs live", len(m.claimed), len(live))
+	m.resumeMoves(context.WithoutCancel(ctx), outs, ins)
+	for _, sb := range interrupted {
+		sb.Transition.Lock()
+		go m.settleInterrupted(ctx, sb)
+	}
+	return saveErr
+}
+
+func (m *Manager) sweepOrphanGoldens(ctx context.Context, pooled map[string]bool) {
+	logger := log.WithFunc("pool.Reconcile")
+	dir := m.goldensDir()
+	goldens, _ := os.ReadDir(dir)
+	for _, e := range goldens {
+		name := e.Name()
+		if pooled[strings.TrimSuffix(name, goldenStampSuffix)] {
+			continue
+		}
+		if os.RemoveAll(filepath.Join(dir, name)) == nil && filepath.Ext(name) == "" {
+			logger.Infof(ctx, "removed orphan golden %s", name)
+		}
+	}
+}
+
+func (m *Manager) sweepOrphanSnaps(ctx context.Context, snaps []string, snapsErr error, referenced map[string]bool) {
+	logger := log.WithFunc("pool.Reconcile")
 	// An unreferenced hibernate snapshot is an orphan; fork and golden snapshots never span a restart
 	if snapsErr != nil {
 		logger.Warnf(ctx, "snapshot sweep skipped: %v", snapsErr)
@@ -134,11 +159,6 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 			logger.Infof(ctx, "removed orphan snapshot %s", orphans[i])
 		}).Wait()
 	}
-	m.resyncEgress(ctx, live, removed)
-	m.warnDeniedClaims(ctx)
-	logger.Infof(ctx, "adopted %d claims, %d VMs live", len(m.claimed), len(live))
-	m.resumeMoves(context.WithoutCancel(ctx), outs, ins)
-	return saveErr
 }
 
 // pendingMovesLocked marks the journaled moves of loaded claims: a source keeps its claim gated until the record resolves; callers hold m.mu.
