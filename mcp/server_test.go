@@ -197,12 +197,14 @@ func TestCloseBoxesWaitsForEveryReleaseOnce(t *testing.T) {
 	}
 	var wg sync.WaitGroup
 	for range 2 {
-		wg.Go(srv.closeBoxes)
+		wg.Go(func() {
+			srv.closeBoxes()
+			if got := releases.Load(); got != 3 {
+				t.Errorf("releases = %d after closeBoxes returned, want 3", got)
+			}
+		})
 	}
 	wg.Wait()
-	if got := releases.Load(); got != 3 {
-		t.Errorf("releases = %d after closeBoxes returned, want 3", got)
-	}
 }
 
 func TestExecRejectsAnEmptyCommand(t *testing.T) {

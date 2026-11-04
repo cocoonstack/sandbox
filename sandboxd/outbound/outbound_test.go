@@ -2,6 +2,7 @@ package outbound
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -106,6 +107,19 @@ func TestArmEgressFailsClosedWhenNICUnlockable(t *testing.T) {
 	sb := &types.Sandbox{ID: "sb_eg_no_tap", Key: egKey, VMName: "sbx-no-tap-1"}
 	if armErr := h.Arm(t.Context(), sb); armErr == nil {
 		t.Fatal("Arm must fail closed when the egress-lane NIC cannot be locked")
+	}
+}
+
+func TestArmEgressFailsClosedWhenTheLockFails(t *testing.T) {
+	lockErr := errors.New("nft down")
+	h := newHost(t, &fakeEngine{}, poolConfig(egKey, egPolicy), func(o *Options) {
+		o.LockNIC = true
+		o.Lock = func(string) error { return lockErr }
+	})
+
+	sb := &types.Sandbox{ID: "sb_eg_refused", Key: egKey, VMName: "sbx-refused-1", TAP: "tap-x"}
+	if armErr := h.Arm(t.Context(), sb); !errors.Is(armErr, lockErr) {
+		t.Fatalf("Arm = %v, want the lock failure", armErr)
 	}
 }
 

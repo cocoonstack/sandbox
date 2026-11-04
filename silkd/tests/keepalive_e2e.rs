@@ -3,6 +3,7 @@
 mod common;
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use serde_json::json;
 use silkd::server::State;
@@ -81,6 +82,32 @@ async fn late_stdin_after_exit_is_dropped() {
     send(&mut cw, json!({"v":1,"op":"stdin_close"})).await;
     send(&mut cw, json!({"v":1,"op":"info"})).await;
     assert_eq!(type_of(&next_frame(&mut lines).await), "info");
+}
+
+#[tokio::test]
+async fn a_malformed_request_after_exec_is_bad_request() {
+    let state = Arc::new(State::new());
+    let (mut cw, mut lines, _) = connect(&state);
+
+    send(
+        &mut cw,
+        json!({"v":1,"op":"exec","argv":["true"],"detach":false}),
+    )
+    .await;
+    assert_eq!(
+        types_until(&mut lines, "exit").await,
+        vec!["started", "exit"]
+    );
+
+    send(&mut cw, json!({"op":"exec","argv":"ls -la"})).await;
+    let err = timeout(Duration::from_secs(3), next_frame(&mut lines))
+        .await
+        .expect("a malformed request after exec went unanswered");
+    assert_error(&err, "bad_request");
+    assert!(
+        err["message"].as_str().unwrap().starts_with("parse: "),
+        "{err}"
+    );
 }
 
 #[tokio::test]

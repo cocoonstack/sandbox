@@ -200,6 +200,7 @@ func (r *router) startPump() {
 		_, _ = io.Copy(r.client, reader)
 		if !r.superseded.Load() {
 			_ = r.client.Close()
+			_ = reader.Close()
 		}
 	}()
 }

@@ -3,8 +3,10 @@ package egress
 import (
 	"bufio"
 	"encoding/binary"
+	"errors"
 	"io"
 	"net"
+	"os"
 	"testing"
 	"time"
 )
@@ -136,7 +138,7 @@ func TestCloseEndsSocksTunnelAndHandshake(t *testing.T) {
 		t.Error("established SOCKS tunnel survived proxy Close")
 	}
 	_ = pending.SetReadDeadline(time.Now().Add(2 * time.Second))
-	if _, err := pending.Read(make([]byte, 1)); err == nil {
+	if _, err := pending.Read(make([]byte, 1)); err == nil || errors.Is(err, os.ErrDeadlineExceeded) {
 		t.Error("mid-handshake SOCKS connection survived proxy Close")
 	}
 }

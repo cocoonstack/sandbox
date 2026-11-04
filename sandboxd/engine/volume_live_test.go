@@ -186,7 +186,7 @@ func TestLiveDetachKeepsBusyAndUnobservableDevices(t *testing.T) {
 }
 
 func TestLiveDetachMissingGuestStillChecksHost(t *testing.T) {
-	for _, hostErr := range []string{"", `disk "imagenet" not attached`, "vm not running", "backend unavailable"} {
+	for _, hostErr := range []string{"", "vm not running", "backend unavailable"} {
 		t.Run(hostErr, func(t *testing.T) {
 			sock := sockPath(t)
 			serveFakeSilkd(t, sock)

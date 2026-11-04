@@ -42,14 +42,14 @@ func (h *Healer) Pull(ctx context.Context, id, staging string, validate Validate
 }
 
 func (h *Healer) pullFrom(ctx context.Context, id, staging string, addrs []string, validate Validate) error {
-	perOwner := healBudget / time.Duration(len(addrs))
+	deadline, _ := ctx.Deadline()
 	var errs []error
-	for _, addr := range addrs {
+	for i, addr := range addrs {
 		// One peer's rejected or partial transfer must not linger into the next's.
 		if err := utils.RemoveDirEntries(staging, nil); err != nil {
 			return fmt.Errorf("reset staging: %w", err)
 		}
-		attemptCtx, cancel := context.WithTimeout(ctx, perOwner)
+		attemptCtx, cancel := context.WithTimeout(ctx, time.Until(deadline)/time.Duration(len(addrs)-i))
 		err := h.puller.Pull(attemptCtx, addr, id, staging)
 		cancel()
 		if err != nil {

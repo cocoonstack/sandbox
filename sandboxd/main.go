@@ -198,6 +198,8 @@ func main() {
 		logger.Fatalf(ctx, err, "serve")
 	}
 	<-drained
+	logger.Info(ctx, "waiting for running cocoon commands")
+	eng.Close()
 	if err := mgr.FlushClaims(); err != nil {
 		logger.Error(ctx, err, "flush claims")
 	}

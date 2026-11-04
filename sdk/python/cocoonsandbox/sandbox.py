@@ -184,6 +184,8 @@ class Sandbox:
                 if watchdog is not None:
                     watchdog.cancel()
             if pump is not None:
+                if pump.is_alive():
+                    conn.abort()
                 pump.join()  # the pump's frames must not land on the next RPC
             if code is None:
                 raise ProtocolError("exec stream ended without an exit frame")

@@ -80,6 +80,10 @@ func TestPlainPublishReplacesDigestWithEmpty(t *testing.T) {
 	if _, statErr := os.Stat(firstDigestPath); statErr != nil {
 		t.Fatalf("superseded digest removed inside the grace: %v", statErr)
 	}
+	mustPublish(t, st, testID, "digested")
+	if _, _, digest = mustFetch(t, st, testID); digest != "" {
+		t.Errorf("a plain publish of the digested meta kept digest %q, want empty", digest)
+	}
 }
 
 func TestPublishDigestedChunkBoundaries(t *testing.T) {

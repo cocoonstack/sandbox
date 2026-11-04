@@ -82,6 +82,9 @@ class FakeConn:
             if frame["type"] in terminal:
                 return
 
+    def abort(self):
+        pass
+
     def close(self):
         pass
 

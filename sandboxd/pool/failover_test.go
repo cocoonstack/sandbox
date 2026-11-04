@@ -1822,12 +1822,21 @@ func TestFailoverAWakeWithoutARegistryKeepsItsPendingIntent(t *testing.T) {
 	sb := mustClaim(t, a, testKey)
 	hibernateClaim(t, a, sb)
 	c.archiveLosingPutReply(t, a, sb)
+	a.mu.Lock()
+	pending := sb.ArchivePending
+	a.mu.Unlock()
 	a.archives = nil
 	if _, _, _, err := a.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
 		t.Fatalf("wake with failover off: %v", err)
 	}
 	if hibernated(a) != 0 {
 		t.Error("the claim stayed hibernated after the wake")
+	}
+	a.mu.Lock()
+	kept := sb.ArchivePending
+	a.mu.Unlock()
+	if pending == "" || kept != pending || !ckExists(t, a, pending) {
+		t.Errorf("intent %q then %q, want it and its export kept", pending, kept)
 	}
 }
 

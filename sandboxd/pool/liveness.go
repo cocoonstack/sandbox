@@ -264,10 +264,11 @@ func (m *Manager) restartLocked(ctx context.Context, sb *types.Sandbox) error {
 	}
 	m.mu.Lock()
 	sb.VsockSocket = sock
+	env := sb.Env
 	m.mu.Unlock()
 	err = m.out.ArmProxy(ctx, sb)
-	if err == nil {
-		err = m.deliverEnv(ctx, []*types.Sandbox{sb}, false)
+	if err == nil && env.HasGuest() {
+		err = m.eng.WriteGuestEnv(ctx, sock, env.GuestFile())
 	}
 	if err != nil {
 		m.out.Disarm(sb.ID, false)

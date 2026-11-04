@@ -96,6 +96,12 @@ func (m *Manager) replicate(ctx context.Context, sb *types.Sandbox) error {
 	if _, _, err := m.publishCheckpoint(ctx, sb, ckID, "replica", sb.Tenant, true); err != nil {
 		return err
 	}
+	var prev string
+	defer func() {
+		if prev != "" {
+			m.deleteOrphanArchiveCk(ctx, prev)
+		}
+	}()
 	sb.Transition.Lock()
 	defer sb.Transition.Unlock()
 	m.mu.Lock()
@@ -130,16 +136,12 @@ func (m *Manager) replicate(ctx context.Context, sb *types.Sandbox) error {
 	case err != nil:
 		return fmt.Errorf("replicate %s: registry: %w", sb.ID, err)
 	}
-	var prev string
 	live, _ := m.commitIfLive(ctx, sb, func() {
 		prev, sb.ReplicaCk, sb.ReplicaPending, sb.ArchiveEpoch = sb.ReplicaCk, ckID, "", epoch
 	})
 	if !live {
 		m.abandonArchive(ctx, sb, epoch, ckID)
 		return errWokeMeanwhile
-	}
-	if prev != "" {
-		m.deleteOrphanArchiveCk(ctx, prev)
 	}
 	return nil
 }

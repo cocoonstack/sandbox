@@ -43,12 +43,12 @@ help: ## show this list
 	@grep -E '^[a-z-]+:.*##' $(MAKEFILE_LIST) | awk -F ':.*## ' '{printf "%-14s %s\n", $$1, $$2}'
 
 test: ## Rust tests: boot/init + silkd
-	cd boot/init && cargo test
-	cd silkd && cargo test
+	cd boot/init && cargo test --locked
+	cd silkd && cargo test --locked
 
 lint: ## Rust fmt --check + clippy -D warnings: boot/init + silkd
-	cd boot/init && cargo fmt --check && cargo clippy --all-targets -- -D warnings
-	cd silkd && cargo fmt --check && cargo clippy --all-targets -- -D warnings
+	cd boot/init && cargo fmt --check && cargo clippy --locked --all-targets -- -D warnings
+	cd silkd && cargo fmt --check && cargo clippy --locked --all-targets -- -D warnings
 
 sh-lint: ## shellcheck every tracked shell script
 	git ls-files '*.sh' | xargs shellcheck
@@ -78,7 +78,7 @@ boot-debug: ## boot image with busybox + /bin/sh on fatal errors
 	docker build -t $(BOOT_IMAGE)-debug --build-arg KERNEL_VERSION=$(KERNEL_VERSION) --build-arg KERNEL_MIRROR=$(KERNEL_MIRROR) --build-arg INITRD_DEBUG=1 boot
 
 extract: ## dump /boot artifacts into dist/ for boot-bench.sh
-	rm -rf dist && mkdir -p dist
+	rm -rf dist/boot && mkdir -p dist
 	cid=$$(docker create $(EXTRACT_IMAGE)) && docker cp $$cid:/boot dist/boot && docker rm $$cid
 
 extract-debug: ## extract from the boot-debug image

@@ -44,7 +44,8 @@ const (
 
 var (
 	// ErrRateLimited refuses a new upstream connection over the claim's connection rate.
-	ErrRateLimited = errors.New("egress: connection rate limit")
+	ErrRateLimited  = errors.New("egress: connection rate limit")
+	ErrInternalAddr = errors.New("egress: blocked internal address")
 
 	// hopHeaders are hop-by-hop and proxy-scoped headers this hop owns, never passed on.
 	hopHeaders = []string{
@@ -96,8 +97,11 @@ type Event struct {
 }
 
 func (ev *Event) attach(conn net.Conn, err error) {
-	if errors.Is(err, ErrRateLimited) {
+	switch {
+	case errors.Is(err, ErrRateLimited):
 		ev.Decision = DecisionRateLimited
+	case errors.Is(err, ErrInternalAddr):
+		ev.Decision = DecisionDeny
 	}
 	if ue, ok := errors.AsType[*upstreamError](err); ok {
 		ev.Upstream = ue.host
@@ -387,12 +391,15 @@ func (p *Proxy) relay(w http.ResponseWriter, r *http.Request, ev Event, rule Rul
 		out.Body = body
 	}
 	var received int64
+	var failed bool
 	defer func() {
 		var sent int64
 		if body != nil {
 			sent = body.n.Load()
 		}
-		p.reportTransfer(ev, sent, received)
+		if !failed || sent > 0 {
+			p.reportTransfer(ev, sent, received)
+		}
 	}()
 
 	resp, err := p.transport(route, mitm).RoundTrip(out)
@@ -403,6 +410,7 @@ func (p *Proxy) relay(w http.ResponseWriter, r *http.Request, ev Event, rule Rul
 	ev.attach(conn, err)
 	p.record(ev)
 	if err != nil {
+		failed = true
 		upstreamFailed(w, err)
 		return
 	}

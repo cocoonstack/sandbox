@@ -1,7 +1,9 @@
 package silkd_test
 
 import (
+	"bufio"
 	"bytes"
+	"errors"
 	"io"
 	"net"
 	"strings"
@@ -123,8 +125,8 @@ func TestConnRejectsOversizedFrame(t *testing.T) {
 		_, _ = io.WriteString(server, huge+"\n")
 	}()
 
-	if _, err := conn.Recv(); err == nil {
-		t.Error("oversized frame accepted")
+	if _, err := conn.Recv(); !errors.Is(err, bufio.ErrTooLong) {
+		t.Errorf("Recv = %v, want the frame cap", err)
 	}
 }
 

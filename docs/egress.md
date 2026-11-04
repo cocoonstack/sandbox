@@ -159,7 +159,8 @@ domain policy first; the allow-list widens the IP gate only.
 
 A [config reload](deploy.md#reloading-the-config) applies policy, internal
 allow, secret and upstream changes without a restart: a live claim's next
-request or connection is evaluated against the new policy.
+request or connection is evaluated against the new policy. Whether a claim has
+the SOCKS5 door is settled when it is claimed.
 
 Policy is per pool and per egress class; a tenant claim's effective policy is
 the intersection of its pool's and its tenant's class (a request must pass

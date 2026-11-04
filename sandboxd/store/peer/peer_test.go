@@ -153,6 +153,15 @@ func TestPullBudgetBoundsSlowOwners(t *testing.T) {
 	})
 }
 
+func TestPullGivesTheNextOwnerTheTimeAFailedOneLeft(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		h := healerOf(&sleepyPuller{sleep: healBudget * 3 / 4, failAddr: "peer-a:7777"}, "peer-a:7777", "peer-b:7777")
+		if err := h.Pull(t.Context(), testID, t.TempDir(), nil); err != nil {
+			t.Errorf("Pull = %v, want peer-b to finish inside the budget peer-a left", err)
+		}
+	})
+}
+
 type fakePuller struct {
 	mu       sync.Mutex
 	records  map[string]map[string]string
@@ -184,10 +193,14 @@ func (p *fakePuller) Pull(_ context.Context, addr, _, dst string) error {
 }
 
 type sleepyPuller struct {
-	sleep time.Duration
+	sleep    time.Duration
+	failAddr string
 }
 
-func (p *sleepyPuller) Pull(ctx context.Context, _, _, _ string) error {
+func (p *sleepyPuller) Pull(ctx context.Context, addr, _, _ string) error {
+	if addr == p.failAddr {
+		return errors.New("refused")
+	}
 	select {
 	case <-time.After(p.sleep):
 		return nil

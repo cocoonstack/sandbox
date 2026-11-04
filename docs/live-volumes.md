@@ -62,7 +62,7 @@ with client.new("rt:24.04", ttl_seconds=900) as sb:
 ```
 
 A successful run reads `v1`, then `v2`, and preserves every identity assertion.
-The repeated full target verifies that a settled mount can be retained.
+The repeated full target is a no-op on a settled mount.
 This example starts without other volumes. Retain any volumes you intend to
 keep in a full PUT, or use PATCH to replace only the dataset names. All mounted
 and attach-only entries support live removal in either mode.
@@ -72,15 +72,13 @@ mean an empty target.
 Go uses the same owning handle and client API token.
 
 ```go
-view, err := sb.PatchVolumes(ctx, sandbox.VolumePatch{
+v2 := sandbox.Volume{Name: "dataset-v2", Mount: "/datasets/current"}
+_, err := sb.PatchVolumes(ctx, sandbox.VolumePatch{
 	Remove: []string{"dataset-v1"},
-	Add: []sandbox.Volume{{Name: "dataset-v2", Mount: "/datasets/current"}},
+	Add:    []sandbox.Volume{v2},
 })
 if err != nil {
 	return err
-}
-if view.Converging {
-	return errors.New("volume request still running")
 }
 ```
 

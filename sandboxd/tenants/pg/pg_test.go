@@ -152,6 +152,26 @@ func TestARoleWithoutCreateServesAPreCreatedTable(t *testing.T) {
 	}
 }
 
+func TestAnUnrelatedEvictionKeepsALookupCacheable(t *testing.T) {
+	s := &Source{evicted: map[string]uint64{}}
+	start := s.seq
+	s.seq++
+	s.evicted["other"] = s.seq
+	if !s.fresh("u-1", start) {
+		t.Error("another tenant's eviction discarded a read of u-1")
+	}
+	s.seq++
+	s.evicted["u-1"] = s.seq
+	if s.fresh("u-1", start) {
+		t.Error("a read that raced u-1's own eviction stays cacheable")
+	}
+	s.seq++
+	s.floor = s.seq
+	if s.fresh("u-2", start) {
+		t.Error("a read that raced a full flush stays cacheable")
+	}
+}
+
 func openIn(t *testing.T, dsn string) *Source {
 	t.Helper()
 	s, err := Open(t.Context(), dsn)

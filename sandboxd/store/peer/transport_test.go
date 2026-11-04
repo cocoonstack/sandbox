@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"testing"
@@ -78,6 +79,9 @@ func TestUntarRejectsPathTraversal(t *testing.T) {
 			if _, err := tw.Write(body); err != nil {
 				t.Fatalf("Write: %v", err)
 			}
+			if err := tw.WriteHeader(&tar.Header{Name: recordTrailer, Mode: 0o600, Typeflag: tar.TypeReg}); err != nil {
+				t.Fatalf("WriteHeader: %v", err)
+			}
 			if err := tw.Close(); err != nil {
 				t.Fatalf("Close: %v", err)
 			}
@@ -87,8 +91,8 @@ func TestUntarRejectsPathTraversal(t *testing.T) {
 			if err == nil {
 				t.Fatalf("Untar accepted %q; it must refuse to write outside the destination", name)
 			}
-			if !strings.Contains(err.Error(), "untar") {
-				t.Errorf("error = %v, want an untar rejection", err)
+			if !strings.Contains(err.Error(), "refusing") {
+				t.Errorf("error = %v, want the path refused", err)
 			}
 		})
 	}
@@ -144,14 +148,16 @@ func TestTarSkipsSymlinksAtSource(t *testing.T) {
 		t.Fatalf("tarDir: %v", err)
 	}
 	tr := tar.NewReader(&buf)
+	var names []string
 	for {
 		hdr, err := tr.Next()
 		if err != nil {
 			break
 		}
-		if hdr.Typeflag == tar.TypeSymlink {
-			t.Errorf("Tar emitted a symlink entry %q", hdr.Name)
-		}
+		names = append(names, hdr.Name)
+	}
+	if !slices.Contains(names, "real") || slices.Contains(names, "link") {
+		t.Errorf("Tar emitted %q, want real and no link", names)
 	}
 }
 
