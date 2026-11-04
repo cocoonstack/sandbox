@@ -74,18 +74,16 @@ func WriteFileSync(path string, data []byte, perm os.FileMode) error {
 // ReplaceFileSync writes data to the open temp file f, fsyncs it, renames it over path and fsyncs the directory; f is closed and removed on failure.
 func ReplaceFileSync(f *os.File, path string, data []byte) (err error) {
 	tmp := f.Name()
-	renamed := false
 	defer func() {
-		if !renamed {
+		if err != nil {
+			_ = f.Close()
 			_ = os.Remove(tmp)
 		}
 	}()
 	if _, err = f.Write(data); err != nil {
-		_ = f.Close()
 		return fmt.Errorf("write %s: %w", tmp, err)
 	}
 	if err = f.Sync(); err != nil {
-		_ = f.Close()
 		return fmt.Errorf("sync %s: %w", tmp, err)
 	}
 	if err = f.Close(); err != nil {
@@ -94,7 +92,6 @@ func ReplaceFileSync(f *os.File, path string, data []byte) (err error) {
 	if err = os.Rename(tmp, path); err != nil {
 		return fmt.Errorf("rename %s: %w", path, err)
 	}
-	renamed = true
 	return SyncDir(filepath.Dir(path))
 }
 

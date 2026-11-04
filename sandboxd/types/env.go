@@ -166,15 +166,6 @@ func (e Env) Validate() error {
 	return nil
 }
 
-// Hidden returns the value of a host-only entry.
-func (e Env) Hidden(name string) (string, bool) {
-	v, ok := e[name]
-	if !ok || v.InGuest() {
-		return "", false
-	}
-	return v.Value, true
-}
-
 // HasInject reports whether any entry injects into egress requests.
 func (e Env) HasInject() bool {
 	for _, v := range e {

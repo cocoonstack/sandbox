@@ -295,7 +295,6 @@ type Sandbox struct {
 	// ReplicaPending is the checkpoint a replication round is about to register; the row may already name it.
 	ReplicaPending string `json:"replica_pending,omitempty"`
 
-	// FromCheckpoint names the checkpoint this sandbox branched from; empty otherwise.
 	FromCheckpoint string `json:"from_checkpoint,omitempty"`
 	// TemplateDigest identifies the promoted-template export this sandbox was cloned from.
 	TemplateDigest string `json:"template_digest,omitempty"`
@@ -315,11 +314,11 @@ type Sandbox struct {
 
 	// Waking marks a wake in flight, which counts as running; guarded by the manager mutex.
 	Waking bool `json:"-"`
+	// Replicated marks a claim of a replicating pool; it is set before the claim is published, written only on a change, and read without a lock.
+	Replicated bool `json:"-"`
 
 	// lastActivity is unix-nanos of the last data-plane connection, stamped lock-free.
 	lastActivity atomic.Int64
-	// replicated marks a claim of a replicating pool; it is set before the claim is published and read without a lock.
-	replicated bool
 	// open counts the data-plane connections held right now.
 	open atomic.Int32
 	// live is the env as of the last SetEnv, read by the egress proxy without the manager mutex.
@@ -337,16 +336,6 @@ func (s *Sandbox) TouchAt(t time.Time) { s.lastActivity.Store(t.UnixNano()) }
 
 // LastSeen returns the last data-plane activity time.
 func (s *Sandbox) LastSeen() time.Time { return time.Unix(0, s.lastActivity.Load()) }
-
-// SetReplicated marks the claim as one of a replicating pool; it writes only a change, so a re-add of the same claim never races a reader.
-func (s *Sandbox) SetReplicated(v bool) {
-	if s.replicated != v {
-		s.replicated = v
-	}
-}
-
-// Replicated reports whether the claim's pool replicates it.
-func (s *Sandbox) Replicated() bool { return s.replicated }
 
 // HasReplica reports whether the claim's registry row may name a replica.
 func (s *Sandbox) HasReplica() bool { return s.ReplicaCk != "" || s.ReplicaPending != "" }
@@ -382,7 +371,9 @@ func (s *Sandbox) SetEnv(e Env) {
 // HiddenEnv returns a host-only entry's value as last published.
 func (s *Sandbox) HiddenEnv(name string) (string, bool) {
 	if view := s.live.Load(); view != nil {
-		return view.env.Hidden(name)
+		if v, ok := view.env[name]; ok && !v.InGuest() {
+			return v.Value, true
+		}
 	}
 	return "", false
 }
