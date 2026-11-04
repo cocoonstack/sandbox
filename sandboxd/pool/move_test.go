@@ -241,6 +241,24 @@ func TestMoveTargetCountsAReservationLikeAClaim(t *testing.T) {
 	mustClaim(t, mc.t, testKey)
 }
 
+func TestMoveTargetResolvesATenantItsCacheHasNotSeen(t *testing.T) {
+	mc := newMoveCluster(t)
+	claimTenant(t, mc.t, "acme")
+	setTenantCaps(t, mc.t, map[string]int{"acme": 1})
+	mc.t.tenants = &coldTenants{Source: mc.t.tenants}
+	if _, err := mc.t.AdmitMove(t.Context(), "sb_cold", MoveAdmission{Tenant: "acme", Key: testKey, From: "a"}); !errors.Is(err, ErrQuota) {
+		t.Errorf("admit past a capped tenant the cache has not seen: %v, want ErrQuota", err)
+	}
+	if _, err := mc.t.AdmitMove(t.Context(), "sb_gone", MoveAdmission{Tenant: "gone", Key: testKey, From: "a"}); !errors.Is(err, ErrTenantRemoved) {
+		t.Errorf("admit for a removed tenant: %v, want ErrTenantRemoved", err)
+	}
+	mc.t.mu.Lock()
+	defer mc.t.mu.Unlock()
+	if len(mc.t.incoming) != 0 {
+		t.Errorf("reservations %v, want none", mc.t.incoming)
+	}
+}
+
 func TestMoveTargetDropsAReservationItsSourceAbandoned(t *testing.T) {
 	mc := newMoveCluster(t)
 	reserveMove(t, mc.t, "sb_r", "acme")
@@ -321,7 +339,7 @@ func TestMoveTargetLetsTheSameSourceRetryAndRefusesAnother(t *testing.T) {
 	if err := os.WriteFile(stale, []byte("a crashed source's round"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := mc.t.AdmitMove("sb_r", MoveAdmission{Tenant: "acme", Key: testKey, From: "other"}); !errors.Is(err, ErrNotMovable) {
+	if _, err := mc.t.AdmitMove(t.Context(), "sb_r", MoveAdmission{Tenant: "acme", Key: testKey, From: "other"}); !errors.Is(err, ErrNotMovable) {
 		t.Errorf("admission from another source: %v, want ErrNotMovable", err)
 	}
 	if _, err := os.Stat(stale); err != nil {
@@ -1365,11 +1383,11 @@ func newFakeMovePeer(t *testing.T, c *failoverCluster) *fakeMovePeer {
 	return p
 }
 
-func (p *fakeMovePeer) Admit(_ context.Context, addr, id string, a MoveAdmission) (string, error) {
+func (p *fakeMovePeer) Admit(ctx context.Context, addr, id string, a MoveAdmission) (string, error) {
 	if p.admitErr != nil {
 		return "", p.admitErr
 	}
-	return p.target(addr).AdmitMove(id, a)
+	return p.target(addr).AdmitMove(ctx, id, a)
 }
 
 func (p *fakeMovePeer) SendRound(ctx context.Context, addr, id string, round int, dir string, files []string) (int64, error) {
@@ -1422,6 +1440,23 @@ func (p *fakeMovePeer) target(addr string) *Manager {
 	defer p.mu.Unlock()
 	i := slices.IndexFunc(p.c.nodes, func(m *Manager) bool { return m.nodeID == addr })
 	return p.c.nodes[i]
+}
+
+type coldTenants struct {
+	tenants.Source
+	warm atomic.Bool
+}
+
+func (c *coldTenants) Peek(name string) (tenants.TenantRecord, tenants.Presence) {
+	if !c.warm.Load() {
+		return tenants.TenantRecord{}, tenants.Unknown
+	}
+	return c.Source.Peek(name)
+}
+
+func (c *coldTenants) Lookup(ctx context.Context, name string) (tenants.TenantRecord, bool, error) {
+	c.warm.Store(true)
+	return c.Source.Lookup(ctx, name)
 }
 
 type lossyMoves struct {
@@ -1513,7 +1548,7 @@ func moveCounts(m *Manager, tenant string) [3]int {
 
 func reserveMove(t *testing.T, m *Manager, id, tenant string) {
 	t.Helper()
-	if _, err := m.AdmitMove(id, MoveAdmission{Tenant: tenant, Key: testKey, From: "zz"}); err != nil {
+	if _, err := m.AdmitMove(t.Context(), id, MoveAdmission{Tenant: tenant, Key: testKey, From: "zz"}); err != nil {
 		t.Fatalf("reserve %s: %v", id, err)
 	}
 }

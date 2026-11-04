@@ -29,12 +29,15 @@ type inMove struct {
 }
 
 // AdmitMove reserves a claim slot for a live move of id to this node and returns this node's id.
-func (m *Manager) AdmitMove(id string, a MoveAdmission) (string, error) {
+func (m *Manager) AdmitMove(ctx context.Context, id string, a MoveAdmission) (string, error) {
 	if m.moves == nil {
 		return "", errMovesOff
 	}
 	if err := m.validate(a.Key); err != nil {
 		return "", fmt.Errorf("%w: %w", ErrNotMovable, err)
+	}
+	if err := m.tenantRemoved(ctx, a.Tenant); err != nil {
+		return "", err
 	}
 	m.mu.Lock()
 	err := m.admitMoveLocked(id, a)

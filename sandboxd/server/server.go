@@ -147,7 +147,7 @@ type Manager interface {
 	Info() ([]pool.PoolInfo, pool.Gauges)
 	Templates() []pool.TemplateInfo
 	Move(ctx context.Context, id, addr string, maxDowntime time.Duration) (pool.MoveResult, error)
-	AdmitMove(id string, a pool.MoveAdmission) (string, error)
+	AdmitMove(ctx context.Context, id string, a pool.MoveAdmission) (string, error)
 	ReceiveMoveRound(id string, body io.Reader) error
 	CommitMove(ctx context.Context, id string, claim []byte, epoch int64) error
 	DropMove(id string)

@@ -2603,7 +2603,9 @@ func (f *fakeManager) Move(_ context.Context, id, addr string, maxDowntime time.
 	return f.move(id, addr, maxDowntime)
 }
 
-func (f *fakeManager) AdmitMove(string, pool.MoveAdmission) (string, error) { return "", nil }
+func (f *fakeManager) AdmitMove(context.Context, string, pool.MoveAdmission) (string, error) {
+	return "", nil
+}
 
 func (f *fakeManager) ReceiveMoveRound(string, io.Reader) error { return nil }
 

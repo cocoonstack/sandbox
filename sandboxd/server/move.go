@@ -142,7 +142,7 @@ func (s *Server) handleAdmitMove(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := r.PathValue("id")
-	node, err := s.mgr.AdmitMove(id, pool.MoveAdmission{Tenant: req.Tenant, Key: req.Key.Defaulted(), From: req.From})
+	node, err := s.mgr.AdmitMove(r.Context(), id, pool.MoveAdmission{Tenant: req.Tenant, Key: req.Key.Defaulted(), From: req.From})
 	writeResult(w, r, "admit move", id, "admit move failed", err, func() {
 		writeJSON(w, http.StatusOK, moveAdmitResponse{Node: node})
 	})
