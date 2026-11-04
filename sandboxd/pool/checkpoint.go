@@ -5,6 +5,7 @@ import (
 	"encoding/json/v2"
 	"errors"
 	"fmt"
+	"io/fs"
 	"maps"
 	"os"
 	"path/filepath"
@@ -276,6 +277,10 @@ func (m *Manager) runHeal(ctx context.Context, ckptID string) (types.Checkpoint,
 		}
 		return types.Checkpoint{}, fmt.Errorf("heal checkpoint: %w", err)
 	}
+	if err := syncFiles(staging); err != nil {
+		m.heals.clear(ckptID)
+		return types.Checkpoint{}, fmt.Errorf("sync healed checkpoint: %w", err)
+	}
 
 	defer m.recs.lockRec(ckptID)()
 	if aborted := m.heals.clear(ckptID); aborted {
@@ -422,4 +427,17 @@ func parseCheckpoint(raw []byte) (types.Checkpoint, error) {
 		return types.Checkpoint{}, ErrUnknownCheckpoint
 	}
 	return ckpt, nil
+}
+
+func syncFiles(dir string) error {
+	return filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || !d.Type().IsRegular() {
+			return err
+		}
+		f, err := os.Open(path) //nolint:gosec // walked under our staging dir
+		if err != nil {
+			return err
+		}
+		return errors.Join(f.Sync(), f.Close())
+	})
 }
