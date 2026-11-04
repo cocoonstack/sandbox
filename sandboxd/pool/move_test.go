@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -361,7 +362,9 @@ func TestMoveCommitOfACrashedSourceDoesNotTakeTheRetrysReservation(t *testing.T)
 	eng.receiveEntered, eng.receiveStall = make(chan struct{}), make(chan struct{})
 	reserveMove(t, mc.t, sb.ID, "")
 	done := make(chan error, 1)
-	go func() { done <- mc.t.CommitMove(context.WithoutCancel(t.Context()), sb.ID, []byte(`{"id":"`+sb.ID+`","key":{"template":"rt:24.04","net":"none","size":"small"}}`), 1) }()
+	go func() {
+		done <- mc.t.CommitMove(context.WithoutCancel(t.Context()), sb.ID, []byte(`{"id":"`+sb.ID+`","key":{"template":"rt:24.04","net":"none","size":"small"}}`), 1)
+	}()
 	<-eng.receiveEntered
 	reserveMove(t, mc.t, sb.ID, "")
 	retry, _ := reservationOf(mc.t, sb.ID)
@@ -724,6 +727,45 @@ func TestMoveCommitWhoseRegistryReplyIsLostKeepsTheOnlyGuest(t *testing.T) {
 	})
 }
 
+func TestMoveTargetKilledBetweenCommitAndStartStartsTheGuestAfterItsRestart(t *testing.T) {
+	mc := newMoveCluster(t)
+	sb := mustClaim(t, mc.s, testKey)
+	ctx := t.Context()
+	killed := make(chan struct{})
+	mc.t.moves = &lossyMoves{Registry: mc.moveReg, killAfterCommit: killed, processEnd: ctx.Done()}
+	mc.p.commitKilled = killed
+
+	if _, err := mc.s.Move(ctx, sb.ID, "b", time.Minute); err != nil {
+		t.Fatalf("move whose target died after its commit: %v, want the 200 the record proves", err)
+	}
+	if _, held := mc.s.byID(sb.ID); held {
+		t.Fatal("the source kept a claim the target committed")
+	}
+	if got := startsOf(mc.t); len(got) != 0 {
+		t.Fatalf("the killed target started %v", got)
+	}
+	if rec, ok, _ := mc.moveReg.Get(ctx, sb.ID); !ok || rec.State != moves.Committed {
+		t.Fatalf("record %+v %v after the source finished, want it kept committed", rec, ok)
+	}
+
+	restarted := mc.restart(t, mc.t)
+	restarted.liftFence()
+	if err := restarted.Reconcile(ctx); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	waitFor(t, func() bool {
+		rec, ok, _ := mc.moveReg.Get(ctx, sb.ID)
+		return !restarted.moveHeld(sb.ID) && ok && rec.State == moves.Started
+	})
+	moved, ok := restarted.byID(sb.ID)
+	if !ok || moved.Token != sb.Token || !slices.Contains(startsOf(restarted), moved.VMName) || fakeOf(restarted).removed(moved.VMName) {
+		t.Fatalf("restarted target claim %+v %v starts %v, want the only guest started", moved, ok, startsOf(restarted))
+	}
+	if got := usageEventsOf(t, restarted, sb.ID); got != "move_in" {
+		t.Errorf("target usage %s, want move_in", got)
+	}
+}
+
 func TestMoveTargetMarksTheRecordStartedOnlyAfterItsJournalPersists(t *testing.T) {
 	mc := newMoveCluster(t)
 	sb := mustClaim(t, mc.s, testKey)
@@ -868,6 +910,7 @@ type fakeMovePeer struct {
 	loseCommitReply bool
 	dropHook        func()
 	roundBudgets    []time.Duration
+	commitKilled    <-chan struct{}
 }
 
 func newFakeMovePeer(t *testing.T, c *failoverCluster) *fakeMovePeer {
@@ -913,6 +956,11 @@ func (p *fakeMovePeer) Commit(ctx context.Context, addr, id string, claim []byte
 			return err
 		}
 	}
+	if p.commitKilled != nil {
+		go func() { _ = p.target(addr).CommitMove(ctx, id, claim, epoch) }()
+		<-p.commitKilled
+		return ErrMoveTarget
+	}
 	err := p.target(addr).CommitMove(ctx, id, claim, epoch)
 	if err == nil && p.loseCommitReply {
 		return ErrMoveTarget
@@ -937,8 +985,10 @@ func (p *fakeMovePeer) target(addr string) *Manager {
 
 type lossyMoves struct {
 	moves.Registry
-	loseCommit bool
-	down       atomic.Bool
+	loseCommit      bool
+	down            atomic.Bool
+	killAfterCommit chan struct{}
+	processEnd      <-chan struct{}
 }
 
 func (r *lossyMoves) Begin(ctx context.Context, id, from, to string) (int64, error) {
@@ -953,6 +1003,11 @@ func (r *lossyMoves) Advance(ctx context.Context, id string, expect int64, from,
 		return 0, moves.ErrUnavailable
 	}
 	epoch, err := r.Registry.Advance(ctx, id, expect, from, to)
+	if err == nil && to == moves.Committed && r.killAfterCommit != nil {
+		close(r.killAfterCommit)
+		<-r.processEnd
+		runtime.Goexit()
+	}
 	if err == nil && to == moves.Committed && r.loseCommit {
 		r.loseCommit = false
 		return 0, moves.ErrUnavailable
