@@ -56,11 +56,7 @@ type server struct {
 }
 
 func newServer(addr, token, template string) (*server, error) {
-	var opts []sandbox.ClientOption
-	if token != "" {
-		opts = append(opts, sandbox.WithAPIToken(token))
-	}
-	client, err := sandbox.Connect(addr, opts...)
+	client, err := sandbox.Connect(addr, sandbox.WithAPIToken(token))
 	if err != nil {
 		return nil, err
 	}

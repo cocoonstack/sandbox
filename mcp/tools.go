@@ -111,14 +111,7 @@ func toolCreateSandbox(ctx context.Context, s *server, raw jsontext.Value) (stri
 	}
 	// An agent session outlives the node's 5-minute default, and nothing renews a lease
 	ttl := cmp.Or(time.Duration(args.TTLSeconds)*time.Second, defaultToolTTL)
-	opts := []sandbox.Option{sandbox.WithTimeout(ttl)}
-	if args.Net != "" {
-		opts = append(opts, sandbox.WithNetwork(sandbox.NetShape(args.Net)))
-	}
-	if args.Size != "" {
-		opts = append(opts, sandbox.WithSize(sandbox.Size(args.Size)))
-	}
-	sb, err := s.client.New(ctx, cmp.Or(args.Template, s.template), opts...)
+	sb, err := s.client.New(ctx, cmp.Or(args.Template, s.template), sandbox.WithTimeout(ttl), sandbox.WithNetwork(sandbox.NetShape(args.Net)), sandbox.WithSize(sandbox.Size(args.Size)))
 	if err != nil {
 		return "", err
 	}
@@ -472,10 +465,7 @@ func unmarshalInput(raw []byte, v any) error {
 }
 
 func jsonText(v any) string {
-	out, err := json.Marshal(v, jsontext.AllowInvalidUTF8(true), json.Deterministic(true))
-	if err != nil {
-		return fmt.Sprintf("%+v", v)
-	}
+	out, _ := json.Marshal(v, jsontext.AllowInvalidUTF8(true), json.Deterministic(true))
 	return string(out)
 }
 
