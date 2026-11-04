@@ -15,15 +15,15 @@ import (
 const (
 	// DefaultMoveDowntime is the final round's pause a move allows when the caller names none.
 	DefaultMoveDowntime = 2 * time.Second
+	// MoveStartAllowance is what the target's receive and start add to the final round's transfer, so a smaller downtime budget never fits.
+	MoveStartAllowance = 400 * time.Millisecond
 
 	movesDir = "moves"
 	// A reservation with no round or commit for this long belongs to a source that gave up.
 	moveReservationIdle = 2 * time.Minute
 	moveRetryInterval   = 2 * time.Second
 	moveDeltaLimit      = 4
-	// Receive and vm start on the target add this to the final round's transfer.
-	moveStartAllowance = 400 * time.Millisecond
-	moveStaleAge       = time.Hour
+	moveStaleAge = time.Hour
 	moveFinalTimeout   = 2 * time.Minute
 	moveRoundBase      = time.Minute
 	moveRoundMinRate   = 10_000_000

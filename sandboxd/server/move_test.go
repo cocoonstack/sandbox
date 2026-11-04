@@ -4,6 +4,7 @@ import (
 	"encoding/json/v2"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -39,6 +40,8 @@ func TestMoveRouteResolvesThePeerAndMapsTheOutcome(t *testing.T) {
 	}{
 		{"root", `{"to":"10.0.0.9:7777"}`, nil, http.StatusBadRequest},
 		{"root", `{"to":"10.0.0.2:7777","max_downtime_ms":-1}`, nil, http.StatusBadRequest},
+		{"root", `{"to":"10.0.0.2:7777","max_downtime_ms":400}`, nil, http.StatusBadRequest},
+		{"root", `{"to":"10.0.0.2:7777","max_downtime_ms":401}`, nil, http.StatusOK},
 		{"root", `{"to":"10.0.0.2:7777"}`, pool.ErrUnknownSandbox, http.StatusNotFound},
 		{"root", `{"to":"10.0.0.2:7777"}`, fmt.Errorf("%w: it has volumes", pool.ErrNotMovable), http.StatusConflict},
 		{"root", `{"to":"10.0.0.2:7777"}`, fmt.Errorf("%w: target: 3 moves in flight", pool.ErrQuota), http.StatusTooManyRequests},
@@ -53,6 +56,24 @@ func TestMoveRouteResolvesThePeerAndMapsTheOutcome(t *testing.T) {
 		if resp.StatusCode != tt.want {
 			t.Errorf("move %s with %v: %d, want %d", tt.body, tt.err, resp.StatusCode, tt.want)
 		}
+	}
+}
+
+func TestMoveRouteRefusesABudgetTheStartAllowanceAloneExceedsBeforeAnyMoveStarts(t *testing.T) {
+	calls := 0
+	mgr := &fakeManager{move: func(string, string, time.Duration) (pool.MoveResult, error) {
+		calls++
+		return pool.MoveResult{}, nil
+	}}
+	srv := newMeshTestServer(t, "root", mgr, &fakePlacer{addrs: []string{"10.0.0.2:7777"}}, nil)
+	resp := doReq(t, http.MethodPost, srv.URL+"/v1/sandboxes/sb_1/move", "root", `{"to":"10.0.0.2:7777","max_downtime_ms":400}`)
+	defer func() { _ = resp.Body.Close() }()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil || resp.StatusCode != http.StatusBadRequest || !strings.Contains(string(body), "above 400") {
+		t.Errorf("answer %d %s %v, want a 400 naming the floor", resp.StatusCode, body, err)
+	}
+	if calls != 0 {
+		t.Errorf("the manager saw %d moves, want none", calls)
 	}
 }
 

@@ -122,8 +122,9 @@ func (s *Server) handleMove(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if req.MaxDowntimeMS < 0 {
-		writeErr(w, http.StatusBadRequest, "max_downtime_ms must not be negative")
+	budget := time.Duration(req.MaxDowntimeMS) * time.Millisecond
+	if req.MaxDowntimeMS != 0 && budget <= pool.MoveStartAllowance {
+		writeErr(w, http.StatusBadRequest, fmt.Sprintf("max_downtime_ms must be above %d: the target's receive and start alone take that long", pool.MoveStartAllowance.Milliseconds()))
 		return
 	}
 	addr, ok := s.movePeerAddr(req.To)
@@ -132,7 +133,6 @@ func (s *Server) handleMove(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := r.PathValue("id")
-	budget := time.Duration(req.MaxDowntimeMS) * time.Millisecond
 	res, err := s.mgr.Move(r.Context(), id, addr, budget)
 	writeResult(w, r, "move", id, "move failed", err, func() {
 		writeJSON(w, http.StatusOK, MoveResponse{OwnerAddr: s.placer.ClientAddr(addr), Rounds: res.Rounds, DowntimeMS: res.Downtime.Milliseconds()})
