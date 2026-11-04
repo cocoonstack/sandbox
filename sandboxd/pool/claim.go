@@ -388,6 +388,9 @@ func (m *Manager) quotaErr(extra int, tenant string) error {
 	if err := m.diskErr(); err != nil {
 		return err
 	}
+	if m.memoryLow.Load() {
+		return fmt.Errorf("%w: %s", ErrQuota, memoryLowReason)
+	}
 	if limit := m.view.Load().maxClaims; limit > 0 && len(m.claimed)+extra > limit {
 		return fmt.Errorf("%w: %d live claims, cap %d", ErrQuota, len(m.claimed), limit)
 	}

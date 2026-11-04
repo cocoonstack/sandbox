@@ -224,8 +224,8 @@ Redirects (mutually exclusive with the fields above) name peers to retry
 at — sent on a warm miss with warm peers, when the node lacks a golden for
 the key but gossip names a template owner, and when a claim without `volumes`,
 `no_redirect` or `require_promoted` meets a 429 (the node at `max_claims` or
-`max_running`, the calling tenant at its cap, the node draining, or the disk under
-`disk_reserve`) and a peer reports warm capacity or, failing that, serves the pool:
+`max_running`, the calling tenant at its cap, the node draining, the disk under
+`disk_reserve`, or memory over `memory_limit`) and a peer reports warm capacity or, failing that, serves the pool:
 
 ```json
 {"redirect": ["10.0.0.6:7777", "10.0.0.7:7777"],
@@ -259,8 +259,8 @@ exclude a writer), or a `ro` claim against a writable image left dirty by an
 unclean `rw` release (needs recovery — one `rw` claim must replay and cleanly
 release before `ro` claims resume; see
 [deploy](deploy.md#writable-dataset-volumes)); 429 node at `max_claims` or `max_running`, the
-calling tenant at its own `max_claims`, the node draining, or the disk under
-`disk_reserve`; 500 provisioning failed.
+calling tenant at its own `max_claims`, the node draining, the disk under
+`disk_reserve`, or memory over `memory_limit`; 500 provisioning failed.
 
 ## GET /v1/volumes
 
@@ -608,8 +608,8 @@ an unknown `on_expire`; 401 bad api token; 403 the parent's tenant was removed
 (sandbox token); 404 unknown id or wrong sandbox token; 409 egress-lane or volume
 parent (neither forks, checkpoints, or promotes; see [egress](egress.md)), a
 failed parent, or an archived parent (`POST /wake` or an exec wakes it first);
-429 node or the parent's tenant at `max_claims`, the node at `max_running`, the node draining, or the disk
-under `disk_reserve`; 503 `lease lost; retry` for a replicated parent while its node's lease is overdue, `tenant store down; retry` for a sandbox token whose tenant the node has not cached while the meta store is down.
+429 node or the parent's tenant at `max_claims`, the node at `max_running`, the node draining, the disk
+under `disk_reserve`, or memory over `memory_limit`; 503 `lease lost; retry` for a replicated parent while its node's lease is overdue, `tenant store down; retry` for a sandbox token whose tenant the node has not cached while the meta store is down.
 
 ## POST /v1/sandboxes/{id}/promote
 
@@ -894,8 +894,8 @@ the claim. See the [placement lifecycle](cluster.md#checkpoints-on-a-cluster).
 
 404 for an unknown checkpoint (locally, and after redirect and heal both
 miss), 409 for an egress-lane checkpoint (see [egress](egress.md)), 429 node
-or calling tenant at `max_claims`, the node at `max_running`, the node draining, or the disk under
-`disk_reserve`, 503 when the node's
+or calling tenant at `max_claims`, the node at `max_running`, the node draining, the disk under
+`disk_reserve`, or memory over `memory_limit`, 503 when the node's
 concurrent-heal cap is already full — retryable, and the response carries a
 `Retry-After` hint.
 
@@ -1067,7 +1067,7 @@ verb never wakes one) or its image serves no instance metadata.
 
 Auth: root only (tenant tokens get 403). Prometheus text format,
 hand-rendered: pool warm/target gauges, claimed/running/max_running/hibernated/archived/failed/draining
-gauges, `sandboxd_evacuating` (the claims an evacuation has yet to move), a per-tenant live-claim gauge (`sandboxd_tenant_claims{tenant="…"}`,
+gauges, `sandboxd_evacuating` (the claims an evacuation has yet to move), `sandboxd_memory_low` and `sandboxd_anon_bytes` (see [`memory_limit`](deploy.md#configuration)), a per-tenant live-claim gauge (`sandboxd_tenant_claims{tenant="…"}`,
 tenants holding live claims only, so the label set is bounded by the node's claims), `sandboxd_config_digest_mismatch` on a mesh, claims
 by tier (warm/clone/cold),
 wake/hibernate/fork/checkpoint/promote/release/reap counters plus
@@ -1325,7 +1325,7 @@ A node cordoned via [`POST /v1/drain`](#post-v1drain) additionally reports
 move, omitted at zero). When refill is parked because the node cannot start
 another VM, `"at_capacity": true` distinguishes a full node from one still
 filling its warm target, and `at_capacity_reason` carries the engine's capacity
-reason. Both capacity fields are omitted while refill is not capacity-blocked. Each VM holds a console pty, so a node stops at `kernel.pty.max` (4096 by default) with `no space left on device`; raise it past the VM count you plan to run.
+reason, or `disk below reserve` or `memory above limit`, which stay stable for callers that tell them apart. Both capacity fields are omitted while refill is not capacity-blocked. Each VM holds a console pty, so a node stops at `kernel.pty.max` (4096 by default) with `no space left on device`; raise it past the VM count you plan to run.
 
 `golden` reports whether the pool's snapshot exists (refill can clone);
 `warm` at `target` with `golden: true` means warm claims are served in

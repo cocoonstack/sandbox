@@ -35,6 +35,12 @@ func (s *Server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
 	scalar("failed", "claims whose VMM is down and not restarted", g.Failed)
 	scalar("draining", "1 while the node is cordoned for maintenance", draining)
 	scalar("evacuating", "claims an evacuation has yet to move to a peer", g.Evacuating)
+	memoryLow := 0
+	if g.MemoryLow {
+		memoryLow = 1
+	}
+	scalar("memory_low", "1 while memory_limit refuses claims and refills", memoryLow)
+	scalar("anon_bytes", "node anon memory, 0 when memory_limit has no anon limit", g.AnonBytes)
 
 	if tenants := s.mgr.TenantClaims(); len(tenants) > 0 {
 		metric("tenant_claims", "gauge", "live claims per configured tenant")

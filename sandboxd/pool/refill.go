@@ -166,6 +166,8 @@ func (m *Manager) capacityReasonLocked(now time.Time) string {
 	switch {
 	case m.diskLow.Load():
 		return diskLowReason
+	case m.memoryLow.Load():
+		return memoryLowReason
 	case now.Before(m.atCapacityUntil):
 		return m.atCapacityReason
 	}

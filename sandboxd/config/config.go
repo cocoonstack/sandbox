@@ -177,6 +177,12 @@ type DiskReserve struct {
 	Dirs []string `json:"dirs,omitempty"`
 }
 
+// MemoryLimit refuses claims and refills while the node's anon memory or memory stall share is above a limit.
+type MemoryLimit struct {
+	Anon         string  `json:"anon,omitempty"`
+	PSISomeAvg10 float64 `json:"psi_some_avg10,omitzero"`
+}
+
 // MeshConfig configures cluster membership; every node shares one APIToken and tenant set.
 type MeshConfig struct {
 	NodeID     string   `json:"node_id"`               // unique name; defaults to Bind
@@ -277,6 +283,7 @@ type Config struct {
 	AuditLog            bool `json:"audit_log,omitzero"`
 
 	DiskReserve *DiskReserve `json:"disk_reserve,omitempty"`
+	MemoryLimit *MemoryLimit `json:"memory_limit,omitempty"`
 
 	Volumes []VolumeSpec `json:"volumes,omitempty"`
 	// VolumeRoots bounds runtime registration paths only; static volumes stay unchecked.
@@ -382,7 +389,7 @@ func (c *Config) validate() error {
 	if c.CheckpointPeerHeal && c.APIToken == "" {
 		return fmt.Errorf("checkpoint_peer_heal requires api_token: without it resolveScope leaves the raw checkpoint blob GET reachable with no credential")
 	}
-	for _, check := range []func() error{c.validateNodeEgress, c.validateDiskReserve, c.validateMetaStore, c.validateVolumes, c.validateMesh, c.validateReplication} {
+	for _, check := range []func() error{c.validateNodeEgress, c.validateDiskReserve, c.validateMemoryLimit, c.validateMetaStore, c.validateVolumes, c.validateMesh, c.validateReplication} {
 		if err := check(); err != nil {
 			return err
 		}
@@ -610,6 +617,25 @@ func (c *Config) validateDiskReserve() error {
 		if !filepath.IsAbs(d) {
 			return fmt.Errorf("disk_reserve.dirs %q must be an absolute path", d)
 		}
+	}
+	return nil
+}
+
+func (c *Config) validateMemoryLimit() error {
+	l := c.MemoryLimit
+	if l == nil {
+		return nil
+	}
+	if l.Anon == "" && l.PSISomeAvg10 == 0 {
+		return fmt.Errorf("memory_limit needs anon or psi_some_avg10")
+	}
+	if l.Anon != "" {
+		if n, err := StorageBytes(l.Anon); err != nil || n <= 0 {
+			return fmt.Errorf("memory_limit.anon %q must be a positive size like 300G", l.Anon)
+		}
+	}
+	if l.PSISomeAvg10 < 0 || l.PSISomeAvg10 > 100 {
+		return fmt.Errorf("memory_limit.psi_some_avg10 %v must be a percentage", l.PSISomeAvg10)
 	}
 	return nil
 }

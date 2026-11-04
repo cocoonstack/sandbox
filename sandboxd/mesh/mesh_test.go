@@ -134,6 +134,21 @@ func TestPoolPeersIncludeAColdPeerOfThePool(t *testing.T) {
 	}
 }
 
+func TestAPeerRefusingClaimsIsNoRedirectTarget(t *testing.T) {
+	m := newTestMesh(t, "a")
+	mergeStates(t, m, []NodeState{
+		{NodeID: "b", Addr: "b:7777", Epoch: 1, Pools: map[string]int{"k": 2}},
+		{NodeID: "c", Addr: "c:7777", Epoch: 1, Pools: map[string]int{"k": 2}},
+	})
+	mergeStates(t, m, []NodeState{{NodeID: "b", Addr: "b:7777", Epoch: 2, Pools: map[string]int{}}})
+	if got := m.Candidates("k"); !slices.Equal(got, []string{"c:7777"}) {
+		t.Errorf("candidates %v, want only the peer still naming the pool", got)
+	}
+	if got := m.PoolPeers("k"); !slices.Equal(got, []string{"c:7777"}) {
+		t.Errorf("pool peers %v, want only the peer still naming the pool", got)
+	}
+}
+
 func TestCandidatesPowerOfTwo(t *testing.T) {
 	m := newTestMesh(t, "a")
 	mergeStates(t, m, []NodeState{

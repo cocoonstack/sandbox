@@ -21,7 +21,7 @@ func TestDiskUnderReserveRefusesClaimsAndWakesUntilItRecovers(t *testing.T) {
 	if err := m.Wake(t.Context(), sb.ID, Cred{Token: sb.Token}); !errors.Is(err, ErrQuota) {
 		t.Errorf("wake under the reserve: %v, want ErrQuota", err)
 	}
-	if _, g := m.Info(); !g.AtCapacity || g.AtCapacityReason != diskLowReason {
+	if _, g := m.Info(); !g.AtCapacity || g.AtCapacityReason != "disk below reserve" {
 		t.Errorf("gauges %+v, want at capacity for the disk", g)
 	}
 

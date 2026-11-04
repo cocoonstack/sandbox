@@ -20,6 +20,8 @@ type configView struct {
 	poolReaders   map[types.PoolKey]bool
 	diskReserve   int64
 	diskDirs      []string
+	memoryAnon    int64
+	memoryPSI     float64
 	noBalloon     bool
 
 	maxClaims            int
@@ -58,6 +60,12 @@ func newConfigView(cfg *config.Config, secrets *egress.SecretStore) *configView 
 		v.diskDirs = r.Dirs
 		if len(v.diskDirs) == 0 {
 			v.diskDirs = []string{cfg.DataDir}
+		}
+	}
+	if l := cfg.MemoryLimit; l != nil {
+		v.memoryPSI = l.PSISomeAvg10
+		if l.Anon != "" {
+			v.memoryAnon, _ = config.StorageBytes(l.Anon)
 		}
 	}
 	for _, spec := range cfg.Pools {

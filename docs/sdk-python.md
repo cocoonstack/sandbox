@@ -358,7 +358,7 @@ client.info()   # pools, claims, drain, at_capacity/reason, and mesh peers
 
 `at_capacity: true` means refill is parked because the node cannot start
 another VM, not that it is still filling its warm target;
-`at_capacity_reason` carries the engine's reason. Both keys are absent while
+`at_capacity_reason` carries the reason. Both keys are absent while
 refill is not capacity-blocked.
 
 ## Running commands

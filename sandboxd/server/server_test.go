@@ -736,6 +736,16 @@ func TestDrainEvacuateStartsAnEvacuationAndReportsIt(t *testing.T) {
 	}
 }
 
+func TestMetricsReportTheMemoryState(t *testing.T) {
+	ts := newTestServer(t, "", &fakeManager{memoryLow: true, anonBytes: 1 << 40}, nil)
+	body := scrapeMetrics(t, ts.URL)
+	for _, want := range []string{"sandboxd_memory_low 1\n", "sandboxd_anon_bytes 1099511627776\n"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("metrics miss %q:\n%s", want, body)
+		}
+	}
+}
+
 func TestAnEvacuatingSandboxAnswersRetry(t *testing.T) {
 	mgr := &fakeManager{socket: func(string, string) (string, error) { return "", pool.ErrEvacuating }}
 	ts := newTestServer(t, "", mgr, nil)
@@ -2258,6 +2268,8 @@ type fakeManager struct {
 	draining           bool
 	evacuated          bool
 	evacuateLeft       int
+	memoryLow          bool
+	anonBytes          int
 	reader             *fakeReader
 }
 
@@ -2581,7 +2593,7 @@ func (f *fakeManager) SetPools(_ context.Context, pools []config.PoolSpec) error
 }
 
 func (f *fakeManager) Info() ([]pool.PoolInfo, pool.Gauges) {
-	return f.infoPools, pool.Gauges{Draining: f.draining, Evacuating: f.evacuateLeft}
+	return f.infoPools, pool.Gauges{Draining: f.draining, Evacuating: f.evacuateLeft, MemoryLow: f.memoryLow, AnonBytes: f.anonBytes}
 }
 
 func (f *fakeManager) Templates() []pool.TemplateInfo { return f.infoTemplates }
