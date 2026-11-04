@@ -874,7 +874,7 @@ node drops the claim (see [moving a running claim](cluster.md#moving-a-running-c
   admission refused (`target <peer>: <reason>`)
 - 502 the target is unreachable or failed
 - 503 the move or archive registry is down, the node lease is overdue, or the
-  final round would not fit `max_downtime_ms` after 4 deltas
+  final round would not fit `max_downtime_ms`, after at most 4 deltas
 
 The target serves root-only peer routes for a move, `POST /v1/moves/{id}`,
 `PUT /v1/moves/{id}/rounds/{n}`, `POST /v1/moves/{id}/commit` and
