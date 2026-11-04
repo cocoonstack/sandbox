@@ -25,6 +25,8 @@ const (
 	moveStartAllowance = 400 * time.Millisecond
 	moveStaleAge       = time.Hour
 	moveFinalTimeout   = 2 * time.Minute
+	moveRoundBase      = time.Minute
+	moveRoundMinRate   = 10_000_000
 )
 
 // MoveAdmission is what a source asks a target to reserve for a live move.

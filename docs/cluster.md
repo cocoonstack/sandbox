@@ -370,7 +370,8 @@ the rounds reached, plus 400 ms for the receive and the start, fits
 round and the target receives the series and starts the guest. A move whose
 deltas never fit answers 503 and the guest runs on. `downtime_ms` in the answer
 is the pause the source measured, from the final capture to the target's
-commit. The final capture, its transfer and the target's commit have 2 minutes
+commit. Each round has one minute plus its size at 10 MB/s to arrive, so a
+target that stops reading fails the move. The final capture, its transfer and the target's commit have 2 minutes
 together; past that the source resolves the move through the record, and the
 guest resumes on the source unless the target committed.
 

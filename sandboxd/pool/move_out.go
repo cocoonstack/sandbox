@@ -138,6 +138,8 @@ func (m *Manager) sendRound(ctx context.Context, id string, mv *outMove, round t
 	for i, f := range round.Files {
 		names[i] = f.Name
 	}
+	ctx, cancel := context.WithTimeout(ctx, roundTimeout(roundBytes(round)))
+	defer cancel()
 	return m.movePeer.SendRound(ctx, mv.addr, id, mv.rounds, round.Dir, names)
 }
 
@@ -375,6 +377,10 @@ func roundBytes(round types.MigrateRound) int64 {
 		n += f.Size
 	}
 	return n
+}
+
+func roundTimeout(size int64) time.Duration {
+	return moveRoundBase + time.Duration(size/moveRoundMinRate)*time.Second
 }
 
 // finalPause estimates the final round's pause from the last delta's size at the rate the rounds so far reached.

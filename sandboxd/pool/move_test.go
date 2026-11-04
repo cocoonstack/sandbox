@@ -373,6 +373,27 @@ func TestMoveHoldsOffCapturesReleasesAndEvacuationWhileItRuns(t *testing.T) {
 	}
 }
 
+func TestMoveGivesEachRoundADeadlineFromItsSize(t *testing.T) {
+	mc := newMoveCluster(t)
+	sb := mustClaim(t, mc.s, testKey)
+	fakeOf(mc.s).migrateSizes = []int64{1 << 30, 1, 1 << 40}
+	if _, err := mc.s.Move(t.Context(), sb.ID, "b", time.Hour); err != nil {
+		t.Fatalf("move: %v", err)
+	}
+	if len(mc.p.roundBudgets) != 3 {
+		t.Fatalf("round budgets %v, want three rounds", mc.p.roundBudgets)
+	}
+	for i, within := range [][2]time.Duration{
+		{moveRoundBase + 100*time.Second, moveRoundBase + 107*time.Second},
+		{moveRoundBase - time.Second, moveRoundBase},
+		{moveFinalTimeout - 5*time.Second, moveFinalTimeout},
+	} {
+		if got := mc.p.roundBudgets[i]; got <= within[0] || got > within[1] {
+			t.Errorf("round %d budget %s, want within %v", i+1, got, within)
+		}
+	}
+}
+
 func TestMoveEndsWhenAFailoverTookTheClaimFromTheSource(t *testing.T) {
 	mc := newMoveCluster(t)
 	sb := mustClaim(t, mc.s, testKey)
@@ -755,6 +776,7 @@ type fakeMovePeer struct {
 	commitHook      func(round int) error
 	loseCommitReply bool
 	dropHook        func()
+	roundBudgets    []time.Duration
 }
 
 func newFakeMovePeer(t *testing.T, c *failoverCluster) *fakeMovePeer {
@@ -780,6 +802,9 @@ func (p *fakeMovePeer) Admit(_ context.Context, addr, id string, a MoveAdmission
 }
 
 func (p *fakeMovePeer) SendRound(ctx context.Context, addr, id string, round int, dir string, files []string) error {
+	if deadline, ok := ctx.Deadline(); ok {
+		p.roundBudgets = append(p.roundBudgets, time.Until(deadline))
+	}
 	if hook := p.roundHook; hook != nil {
 		if err := hook(round); err != nil {
 			return err

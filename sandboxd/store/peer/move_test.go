@@ -3,6 +3,7 @@ package peer
 import (
 	"archive/tar"
 	"bytes"
+	"context"
 	"errors"
 	"io"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/cocoonstack/sandbox/sandboxd/store"
 	"github.com/cocoonstack/sandbox/sandboxd/store/storetest"
@@ -213,6 +215,23 @@ func TestSendRoundFailsOnARefusedPutOrAMissingFile(t *testing.T) {
 	}
 	if err := SendRound(t.Context(), srv.URL, "fleet-token", "/r", src, []string{"state.json", "missing"}); err == nil || !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("round with a missing file = %v, want the stat error", err)
+	}
+}
+
+func TestSendRoundFailsWhenATargetStopsReading(t *testing.T) {
+	src := t.TempDir()
+	if err := os.WriteFile(filepath.Join(src, "memory-ranges"), bytes.Repeat([]byte("guest-memory-"), 4<<20), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stop := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { <-stop }))
+	defer srv.Close()
+	defer close(stop)
+
+	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+	defer cancel()
+	if err := SendRound(ctx, srv.URL, "", "/r", src, []string{"memory-ranges"}); !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("round to a target that stopped reading: %v, want the deadline", err)
 	}
 }
 
