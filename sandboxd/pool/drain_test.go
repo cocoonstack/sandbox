@@ -249,6 +249,40 @@ func TestUncordonStopsAnEvacuationBeforeItsHandOff(t *testing.T) {
 	})
 }
 
+func TestAnUncordonDuringAnEvacuationsDrainStopsIt(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		c := newFailoverCluster(t)
+		a := c.node(t, "a", t.TempDir(), keepAnHour)
+		sb := mustClaim(t, a, testKey)
+		seedGolden(t, a, testKey, "")
+		if err := a.SetPools(t.Context(), []config.PoolSpec{{PoolKey: testKey, Warm: 1}}); err != nil {
+			t.Fatalf("SetPools: %v", err)
+		}
+		waitFor(t, func() bool {
+			infos, _ := a.Info()
+			return len(infos) == 1 && infos[0].Warm == 1
+		})
+		release := holdMaint(a)
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			a.Evacuate(t.Context())
+		}()
+		synctest.Wait()
+
+		a.Uncordon(t.Context())
+		release()
+		<-done
+		synctest.Wait()
+
+		assertEvacuation(t, a, 0, 0)
+		held, ok := a.byID(sb.ID)
+		if !ok || held.HibernateSnap != "" || held.ArchiveCk != "" {
+			t.Errorf("held %v, want the claim still running after the uncordon", ok)
+		}
+	})
+}
+
 func TestEvacuateHoldsTheWakeOfAQueuedClaimUntilUncordon(t *testing.T) {
 	tests := []struct {
 		name string
