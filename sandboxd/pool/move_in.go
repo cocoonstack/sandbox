@@ -104,7 +104,7 @@ func (m *Manager) CommitMove(ctx context.Context, id string, claim []byte, epoch
 		m.destroy(ctx, name)
 		return fmt.Errorf("%w: the reservation for %s ended", ErrNotMovable, id)
 	}
-	sb.MoveIn = &types.MoveIn{From: admitted.from, Epoch: epoch}
+	sb.MoveIn = true
 	delete(m.incoming, id)
 	m.addClaimLocked(sb)
 	js := m.store.set(sb)
@@ -122,7 +122,7 @@ func (m *Manager) CommitMove(ctx context.Context, id string, claim []byte, epoch
 		go m.settleMoveIn(ctx, sb)
 		return fmt.Errorf("move %s: %w", id, err)
 	}
-	m.startMoveIn(ctx, sb, committed)
+	m.startMoveIn(ctx, sb, admitted.from, committed)
 	return nil
 }
 
@@ -138,9 +138,8 @@ func (m *Manager) DropMove(id string) {
 }
 
 // startMoveIn starts a committed claim's guest and serves it, then marks the record started at committed when that is its epoch; a guest that cannot start fails the claim here, never back to the source. The caller holds sb.Transition.
-func (m *Manager) startMoveIn(ctx context.Context, sb *types.Sandbox, committed int64) {
+func (m *Manager) startMoveIn(ctx context.Context, sb *types.Sandbox, from string, committed int64) {
 	logger := log.WithFunc("pool.startMoveIn")
-	from := sb.MoveIn.From
 	var err error
 	for range 2 {
 		if err = m.eng.Start(ctx, sb.VMName); err == nil {
@@ -149,7 +148,7 @@ func (m *Manager) startMoveIn(ctx context.Context, sb *types.Sandbox, committed 
 		logger.Warnf(ctx, "start moved claim %s: %v", sb.ID, err)
 	}
 	if err != nil {
-		_, persistErr := m.commitIfLive(ctx, sb, func() { sb.MoveIn = nil })
+		_, persistErr := m.commitIfLive(ctx, sb, func() { sb.MoveIn = false })
 		sb.ExitRecorded = true
 		m.recordUsage(ctx, usage.Event{Event: "vmm_exit", ID: sb.ID, VMName: sb.VMName, Tenant: sb.Tenant})
 		m.failLocked(ctx, sb, reasonMoveStartFailed)
@@ -169,7 +168,7 @@ func (m *Manager) startMoveIn(ctx context.Context, sb *types.Sandbox, committed 
 	if proxyErr := m.out.ArmProxy(ctx, sb); proxyErr != nil {
 		logger.Errorf(ctx, proxyErr, "arm egress proxy %s", sb.ID)
 	}
-	live, err := m.commitIfLive(ctx, sb, func() { sb.MoveIn = nil })
+	live, err := m.commitIfLive(ctx, sb, func() { sb.MoveIn = false })
 	if !live {
 		m.out.Disarm(sb.ID, true)
 		return
@@ -213,7 +212,7 @@ func (m *Manager) resolveMoveIn(ctx context.Context, sb *types.Sandbox) bool {
 	sb.Transition.Lock()
 	defer sb.Transition.Unlock()
 	m.mu.Lock()
-	pending := m.claimed[sb.ID] == sb && sb.MoveIn != nil
+	pending := m.claimed[sb.ID] == sb && sb.MoveIn
 	m.mu.Unlock()
 	if !pending {
 		return true
@@ -226,10 +225,10 @@ func (m *Manager) resolveMoveIn(ctx context.Context, sb *types.Sandbox) bool {
 	toHere := ok && rec.To == m.nodeID
 	switch {
 	case toHere && rec.State == moves.Committed:
-		m.startMoveIn(ctx, sb, rec.Epoch)
+		m.startMoveIn(ctx, sb, rec.From, rec.Epoch)
 		return true
 	case toHere && rec.State == moves.Started:
-		m.startMoveIn(ctx, sb, 0)
+		m.startMoveIn(ctx, sb, rec.From, 0)
 		return true
 	case toHere && (rec.State == moves.Pending || rec.State == moves.Final):
 		if _, err = m.moves.Advance(ctx, sb.ID, rec.Epoch, rec.State, moves.Aborted); err != nil {

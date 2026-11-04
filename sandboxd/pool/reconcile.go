@@ -111,7 +111,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 	// A crash mid-export leaves a fork-* staging dir nothing in this life reuses
 	_ = utils.RemoveDirEntries(m.dataDir, func(name string) bool { return strings.HasPrefix(name, "fork-") })
 	_ = utils.RemoveDirEntries(filepath.Join(m.dataDir, readerDir), nil)
-	_ = utils.RemoveDirEntries(filepath.Join(m.dataDir, movesDir), func(id string) bool { return claims[id] == nil || claims[id].MoveIn == nil })
+	_ = utils.RemoveDirEntries(filepath.Join(m.dataDir, movesDir), func(id string) bool { return claims[id] == nil || !claims[id].MoveIn })
 
 	if fenced {
 		m.reclaimOrphanArchiveCks(ctx, claims)
@@ -151,9 +151,9 @@ func (m *Manager) pendingMovesLocked() (map[*types.Sandbox]*outMove, []*types.Sa
 	for id, sb := range m.claimed {
 		switch {
 		case sb.MoveOut != nil:
-			mv := &outMove{to: sb.MoveOut.To, epoch: sb.MoveOut.Epoch, series: sb.MoveOut.Series, final: true}
+			mv := &outMove{MoveOut: *sb.MoveOut, final: true}
 			m.moving[id], outs[sb] = mv, mv
-		case sb.MoveIn != nil:
+		case sb.MoveIn:
 			ins = append(ins, sb)
 		}
 	}

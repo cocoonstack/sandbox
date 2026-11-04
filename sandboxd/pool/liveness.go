@@ -316,7 +316,7 @@ func (m *Manager) vmSettledLocked(sb *types.Sandbox) bool {
 
 // runningShaped reports whether sb's VM should be up; callers hold m.mu.
 func runningShaped(sb *types.Sandbox) bool {
-	return sb.HibernateSnap == "" && sb.PendingSnap == "" && sb.ArchiveCk == "" && sb.Failed == "" && sb.MoveIn == nil
+	return sb.HibernateSnap == "" && sb.PendingSnap == "" && sb.ArchiveCk == "" && sb.Failed == "" && !sb.MoveIn
 }
 
 // coldBootBlocker names why sb's VM cannot be cold-booted, "" when it can.

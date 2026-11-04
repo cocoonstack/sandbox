@@ -34,7 +34,7 @@ func TestMigrateCallsBuildCocoonsArgsAndParseItsJSON(t *testing.T) {
 	if err != nil {
 		t.Fatalf("final capture: %v", err)
 	}
-	want := types.MigrateRound{Series: "s1", Dir: "/run/xfer/s1", Round: 2, Paused: true, Files: []types.MigrateFile{{Name: "state.json", Size: 3}, {Name: "cow.raw", Size: 4096}}}
+	want := types.MigrateRound{Series: "s1", Dir: "/run/xfer/s1", Files: []types.MigrateFile{{Name: "state.json", Size: 3}, {Name: "cow.raw", Size: 4096}}}
 	if !reflect.DeepEqual(round, want) {
 		t.Errorf("round = %+v, want %+v", round, want)
 	}

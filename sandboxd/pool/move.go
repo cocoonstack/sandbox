@@ -54,10 +54,9 @@ type MovePeer interface {
 
 // outMove is a source's move in flight; final is guarded by m.mu, the rest belongs to the goroutine driving the move.
 type outMove struct {
+	types.MoveOut
 	addr     string
 	to       string
-	epoch    int64
-	series   string
 	rounds   int
 	final    bool
 	locked   bool
@@ -65,7 +64,7 @@ type outMove struct {
 }
 
 func (mv *outMove) owns(rec moves.Record, node string) bool {
-	return rec.From == node && rec.Epoch >= mv.epoch
+	return rec.From == node && rec.Epoch >= mv.Epoch
 }
 
 func (mv *outMove) result() MoveResult {
@@ -134,5 +133,5 @@ func (m *Manager) moveHeld(id string) bool {
 	_, out := m.moving[id]
 	_, in := m.incoming[id]
 	sb := m.claimed[id]
-	return out || in || sb != nil && sb.MoveIn != nil
+	return out || in || sb != nil && sb.MoveIn
 }

@@ -42,7 +42,7 @@ func (e *Engine) MigrateCapture(ctx context.Context, vmName, series string, fina
 		return types.MigrateRound{}, err
 	}
 	var round types.MigrateRound
-	if err := json.Unmarshal(out, &round); err != nil {
+	if err = json.Unmarshal(out, &round); err != nil {
 		return types.MigrateRound{}, fmt.Errorf("parse migrate capture: %w", err)
 	}
 	return round, nil

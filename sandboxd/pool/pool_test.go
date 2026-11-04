@@ -1886,7 +1886,7 @@ func (f *fakeEngine) MigrateCapture(_ context.Context, vmName, series string, fi
 		size, f.migrateSizes = f.migrateSizes[0], f.migrateSizes[1:]
 	}
 	f.paused[vmName] = final
-	return types.MigrateRound{Series: series, Dir: dir, Round: round, Paused: final, Files: []types.MigrateFile{{Name: "state.json", Size: size}}}, nil
+	return types.MigrateRound{Series: series, Dir: dir, Files: []types.MigrateFile{{Name: "state.json", Size: size}}}, nil
 }
 
 func (f *fakeEngine) MigrateReceive(_ context.Context, fromDir, name string, _ types.PoolKey) (types.VMRecord, error) {

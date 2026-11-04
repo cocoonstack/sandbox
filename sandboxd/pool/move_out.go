@@ -62,7 +62,7 @@ func (m *Manager) moveOut(ctx context.Context, sb *types.Sandbox, mv *outMove, b
 	if err != nil {
 		return err
 	}
-	mv.epoch = epoch
+	mv.Epoch = epoch
 	if err = m.journalMoveOut(ctx, sb, mv); err != nil {
 		return err
 	}
@@ -70,7 +70,7 @@ func (m *Manager) moveOut(ctx context.Context, sb *types.Sandbox, mv *outMove, b
 	if err != nil {
 		return fmt.Errorf("%w: baseline capture: %w", ErrNotMovable, err)
 	}
-	mv.series = round.Series
+	mv.Series = round.Series
 	if err = m.journalMoveOut(ctx, sb, mv); err != nil {
 		return err
 	}
@@ -93,7 +93,7 @@ func (m *Manager) moveOut(ctx context.Context, sb *types.Sandbox, mv *outMove, b
 			}
 		}
 		previous = size
-		if round, err = m.eng.MigrateCapture(ctx, vm, mv.series, false); err != nil {
+		if round, err = m.eng.MigrateCapture(ctx, vm, mv.Series, false); err != nil {
 			return fmt.Errorf("delta capture: %w", err)
 		}
 	}
@@ -108,10 +108,10 @@ func (m *Manager) moveOut(ctx context.Context, sb *types.Sandbox, mv *outMove, b
 		return err
 	}
 	mv.pausedAt = time.Now()
-	if round, err = m.eng.MigrateCapture(ctx, vm, mv.series, true); err != nil {
+	if round, err = m.eng.MigrateCapture(ctx, vm, mv.Series, true); err != nil {
 		return fmt.Errorf("final capture: %w", err)
 	}
-	final, err := m.moves.Advance(ctx, sb.ID, mv.epoch, moves.Pending, moves.Final)
+	final, err := m.moves.Advance(ctx, sb.ID, mv.Epoch, moves.Pending, moves.Final)
 	if err != nil {
 		return err
 	}
@@ -121,7 +121,6 @@ func (m *Manager) moveOut(ctx context.Context, sb *types.Sandbox, mv *outMove, b
 	m.mu.Lock()
 	dto := dtoOf(sb)
 	m.mu.Unlock()
-	dto.MoveOut = nil
 	claim, err := json.Marshal(&dto)
 	if err != nil {
 		return fmt.Errorf("encode claim: %w", err)
@@ -139,7 +138,7 @@ func (m *Manager) beginMove(ctx context.Context, sb *types.Sandbox, to string) (
 		return 0, err
 	}
 	m.mu.Lock()
-	settled := m.claimed[sb.ID] == sb && sb.MoveIn == nil && sb.MoveOut == nil
+	settled := m.claimed[sb.ID] == sb && !sb.MoveIn && sb.MoveOut == nil
 	m.mu.Unlock()
 	if !ok || rec.State != moves.Committed || !settled {
 		return 0, moves.ErrLost
@@ -209,8 +208,8 @@ func (m *Manager) moveBlocker(sb *types.Sandbox) string {
 }
 
 func (m *Manager) journalMoveOut(ctx context.Context, sb *types.Sandbox, mv *outMove) error {
-	journal := &types.MoveOut{To: mv.to, Epoch: mv.epoch, Series: mv.series}
-	live, err := m.commitIfLive(ctx, sb, func() { sb.MoveOut = journal })
+	journal := mv.MoveOut
+	live, err := m.commitIfLive(ctx, sb, func() { sb.MoveOut = &journal })
 	if !live {
 		return ErrUnknownSandbox
 	}
@@ -274,7 +273,7 @@ func (m *Manager) finishMoveOut(ctx context.Context, sb *types.Sandbox, mv *outM
 
 // failMoveOut resolves a failed move through its record: only proof that the move stayed here resumes the guest, anything else drops the claim.
 func (m *Manager) failMoveOut(ctx context.Context, sb *types.Sandbox, mv *outMove, cause error) (MoveResult, error) {
-	if mv.epoch == 0 {
+	if mv.Epoch == 0 {
 		_ = m.abortMoveOut(ctx, sb, mv, 0)
 		return MoveResult{}, cause
 	}
@@ -334,9 +333,9 @@ func (m *Manager) abortMoveOut(ctx context.Context, sb *types.Sandbox, mv *outMo
 	m.mu.Lock()
 	vm, live := sb.VMName, m.claimed[sb.ID] == sb
 	m.mu.Unlock()
-	if live && mv.series != "" {
-		if err := m.eng.MigrateAbort(ctx, vm, mv.series); err != nil {
-			return fmt.Errorf("abort series %s: %w", mv.series, err)
+	if live && mv.Series != "" {
+		if err := m.eng.MigrateAbort(ctx, vm, mv.Series); err != nil {
+			return fmt.Errorf("abort series %s: %w", mv.Series, err)
 		}
 	}
 	if mv.addr != "" && mv.to != "" {
@@ -379,7 +378,7 @@ func (m *Manager) pausedForMove(sb *types.Sandbox) bool {
 
 func (m *Manager) pausedForMoveLocked(sb *types.Sandbox) bool {
 	mv := m.moving[sb.ID]
-	return sb.MoveIn != nil || mv != nil && mv.final
+	return sb.MoveIn || mv != nil && mv.final
 }
 
 func (m *Manager) lockTransition(sb *types.Sandbox) error {
@@ -401,7 +400,7 @@ func (m *Manager) lockTransition(sb *types.Sandbox) error {
 
 func (m *Manager) midMoveLocked(sb *types.Sandbox) bool {
 	_, moving := m.moving[sb.ID]
-	return moving || sb.MoveIn != nil
+	return moving || sb.MoveIn
 }
 
 func roundBytes(round types.MigrateRound) int64 {

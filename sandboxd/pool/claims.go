@@ -65,7 +65,7 @@ type claimDTO struct {
 	RestartedAt    time.Time          `json:"restarted_at,omitzero"`
 	Failed         string             `json:"failed,omitempty"`
 	MoveOut        *types.MoveOut     `json:"move_out,omitempty"`
-	MoveIn         *types.MoveIn      `json:"move_in,omitempty"`
+	MoveIn         bool               `json:"move_in,omitzero"`
 }
 
 // claimRow keeps its encoded member until set replaces the row; set never edits one.

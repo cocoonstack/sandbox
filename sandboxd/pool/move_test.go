@@ -55,7 +55,7 @@ func TestMoveHandsARunningClaimToThePeerWithBothNodesCountingIt(t *testing.T) {
 		t.Errorf("counts after the move %v, want 0/0/0 on the source and 1/1/1 on the target", got)
 	}
 	moved, ok := mc.t.byID(sb.ID)
-	if !ok || moved.Token != sb.Token || moved.Tenant != "acme" || moved.MoveIn != nil || !moved.Deadline.Equal(sb.Deadline) {
+	if !ok || moved.Token != sb.Token || moved.Tenant != "acme" || moved.MoveIn || !moved.Deadline.Equal(sb.Deadline) {
 		t.Fatalf("target claim %+v %v, want the source's record started", moved, ok)
 	}
 	if _, held := mc.s.byID(sb.ID); held || !fakeOf(mc.s).removed(vm) {
@@ -181,7 +181,7 @@ func TestMoveWhoseCommitAnswerIsLostResolvesThroughTheRecord(t *testing.T) {
 	if _, held := mc.s.byID(sb.ID); held {
 		t.Error("the source kept a claim the target committed")
 	}
-	if moved, ok := mc.t.byID(sb.ID); !ok || moved.MoveIn != nil {
+	if moved, ok := mc.t.byID(sb.ID); !ok || moved.MoveIn {
 		t.Errorf("target claim %+v %v, want it started", moved, ok)
 	}
 	if got := [2][3]int{moveCounts(mc.s, "acme"), moveCounts(mc.t, "acme")}; got != [2][3]int{{0, 0, 0}, {1, 1, 1}} {
@@ -742,9 +742,9 @@ func TestMoveRestartResolvesAJournaledMoveThroughItsRecord(t *testing.T) {
 			}
 			sb := &types.Sandbox{ID: "sb_moved", VMName: vm, Key: testKey, Token: "tok", Deadline: time.Now().Add(time.Hour)}
 			if tt.node == "a" {
-				sb.MoveOut = &types.MoveOut{To: "b", Epoch: journalEpoch, Series: series}
+				sb.MoveOut = &types.MoveOut{Epoch: journalEpoch, Series: series}
 			} else {
-				sb.MoveIn = &types.MoveIn{From: "a", Epoch: journalEpoch}
+				sb.MoveIn = true
 			}
 			dataDir := t.TempDir()
 			seedClaims(t, dataDir, map[string]*types.Sandbox{sb.ID: sb})
@@ -752,7 +752,7 @@ func TestMoveRestartResolvesAJournaledMoveThroughItsRecord(t *testing.T) {
 				t.Fatal(err)
 			}
 			eng := newFakeEngine()
-			eng.vms[vm], eng.stopped[vm] = "/vsock/"+vm, sb.MoveIn != nil
+			eng.vms[vm], eng.stopped[vm] = "/vsock/"+vm, sb.MoveIn
 			eng.migrateSeries[vm] = series
 			m := c.nodeOn(t, eng, tt.node, dataDir, keepAnHour)
 			m.liftFence()
@@ -768,7 +768,7 @@ func TestMoveRestartResolvesAJournaledMoveThroughItsRecord(t *testing.T) {
 			if ok != tt.wantClaim {
 				t.Fatalf("claim held %v, want %v", ok, tt.wantClaim)
 			}
-			if ok && (held.MoveOut != nil || held.MoveIn != nil) {
+			if ok && (held.MoveOut != nil || held.MoveIn) {
 				t.Errorf("claim journal out %+v in %+v, want both cleared", held.MoveOut, held.MoveIn)
 			}
 			eng.mu.Lock()
@@ -817,8 +817,8 @@ func TestStaleMoveRecordsAreDeletedOnlyByTheirSource(t *testing.T) {
 func TestMoveStaleSweepLeavesACommittedRecordItsTargetStillHoldsMoveInFor(t *testing.T) {
 	mc := newMoveCluster(t)
 	ctx, reg := t.Context(), mc.moveReg
-	epoch := seedMoveRecord(t, reg, "sb_held", "a", "b", moves.Committed)
-	sb := &types.Sandbox{ID: "sb_held", VMName: "sbx-held", Key: testKey, Deadline: time.Now().Add(time.Hour), MoveIn: &types.MoveIn{From: "a", Epoch: epoch}}
+	seedMoveRecord(t, reg, "sb_held", "a", "b", moves.Committed)
+	sb := &types.Sandbox{ID: "sb_held", VMName: "sbx-held", Key: testKey, Deadline: time.Now().Add(time.Hour), MoveIn: true}
 	mc.t.mu.Lock()
 	mc.t.addClaimLocked(sb)
 	mc.t.store.set(sb)
@@ -950,8 +950,8 @@ func TestMoveBeginLeavesARecordOnlyItsHolderMaySettle(t *testing.T) {
 	}{
 		"a move in flight":         {reach: moves.Pending},
 		"final":                    {reach: moves.Final},
-		"held under a journal":     {reach: moves.Committed, edit: func(sb *types.Sandbox) { sb.MoveOut = &types.MoveOut{To: "b", Epoch: 1} }},
-		"received and not started": {reach: moves.Committed, edit: func(sb *types.Sandbox) { sb.MoveIn = &types.MoveIn{From: "a", Epoch: 1} }},
+		"held under a journal":     {reach: moves.Committed, edit: func(sb *types.Sandbox) { sb.MoveOut = &types.MoveOut{Epoch: 1} }},
+		"received and not started": {reach: moves.Committed, edit: func(sb *types.Sandbox) { sb.MoveIn = true }},
 	} {
 		t.Run(name, func(t *testing.T) {
 			mc := newMoveCluster(t)
@@ -969,7 +969,7 @@ func TestMoveBeginLeavesARecordOnlyItsHolderMaySettle(t *testing.T) {
 				t.Errorf("record %+v, want %s untouched", rec, tt.reach)
 			}
 			mc.s.mu.Lock()
-			sb.MoveOut, sb.MoveIn = nil, nil
+			sb.MoveOut, sb.MoveIn = nil, false
 			mc.s.mu.Unlock()
 		})
 	}
