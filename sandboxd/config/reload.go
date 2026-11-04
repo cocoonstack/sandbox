@@ -22,6 +22,7 @@ var reloadableFields = map[string]bool{
 
 	"max_claims":                   true,
 	"max_running":                  true,
+	"move_concurrency":             true,
 	"max_fork_count":               true,
 	"release_delay_seconds":        true,
 	"vmm_restart":                  true,

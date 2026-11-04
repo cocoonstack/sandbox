@@ -25,7 +25,7 @@ func TestReloadDiffSortsReloadableOwnedAndRestartFields(t *testing.T) {
 	next.EgressConnRate = &EgressConnRate{PerSecond: 30, Burst: 600}
 	next.DiskReserve = &DiskReserve{Free: "100G"}
 	next.MemoryLimit = &MemoryLimit{Anon: "300G"}
-	next.MaxClaims, next.MaxRunning, next.MaxForkCount = 200, 12, 4
+	next.MaxClaims, next.MaxRunning, next.MaxForkCount, next.MoveConcurrency = 200, 12, 4, 3
 	changed, ignored, err := cur.ReloadDiff(&next)
 	if err != nil {
 		t.Fatalf("ReloadDiff: %v", err)
@@ -36,6 +36,7 @@ func TestReloadDiffSortsReloadableOwnedAndRestartFields(t *testing.T) {
 		"egress_conn_rate",
 		"max_claims",
 		"max_running",
+		"move_concurrency",
 		"max_fork_count",
 		"disk_reserve",
 		"memory_limit",

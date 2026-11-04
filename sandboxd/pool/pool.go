@@ -25,6 +25,7 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/config"
 	"github.com/cocoonstack/sandbox/sandboxd/egress"
 	"github.com/cocoonstack/sandbox/sandboxd/engine"
+	"github.com/cocoonstack/sandbox/sandboxd/moves"
 	"github.com/cocoonstack/sandbox/sandboxd/outbound"
 	"github.com/cocoonstack/sandbox/sandboxd/poolset"
 	"github.com/cocoonstack/sandbox/sandboxd/store"
@@ -63,7 +64,8 @@ const (
 	refillBackoffBase = 250 * time.Millisecond
 	refillBackoffMax  = buildRetryDelay
 	// Fallbacks when a Manager is built from a Config that skipped config.Load's defaulting
-	defaultRefill = 4
+	defaultRefill          = 4
+	defaultMoveConcurrency = 2
 
 	// A heal pulls a whole guest memory image, so a few saturate disk and NIC.
 	maxConcurrentHeals = 4
@@ -232,6 +234,7 @@ type Backends struct {
 	Tenants           tenants.Source
 	CellPools         poolset.Shared
 	Archives          archives.Registry
+	Moves             moves.Registry
 }
 
 // PeerDeleteFunc broadcasts a checkpoint delete to every peer.
@@ -283,6 +286,8 @@ type Manager struct {
 	unfencing   atomic.Bool
 	replicating atomic.Bool
 	replicas    map[string]time.Time
+	// moves is the cluster move registry, nil unless the node can run live moves.
+	moves moves.Registry
 
 	view atomic.Pointer[configView]
 	// cfg is the config the view was built from; reloadMu orders reloads, the only writers of cfg and view.
@@ -365,6 +370,7 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 		poolStore:       newPoolStore(cfg.DataDir),
 		poolShared:      b.CellPools,
 		archives:        b.Archives,
+		moves:           b.Moves,
 		tenants:         b.Tenants,
 		ckpts:           b.Checkpoints,
 		ckptsShared:     b.SharedCheckpoints,

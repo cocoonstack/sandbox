@@ -261,6 +261,30 @@ func TestLoadReplicateSeconds(t *testing.T) {
 	}
 }
 
+func TestLoadMoveConcurrency(t *testing.T) {
+	t.Setenv("SANDBOX_TEST_DSN", "postgres://sandboxd@db/sandboxd")
+	failover := `"archive_failover":true,"meta_store":{"kind":"pg","dsn_env":"SANDBOX_TEST_DSN","cell":"c1"},"checkpoint_store":{"kind":"s3","s3":{"bucket":"b"}},`
+	key := `"cluster_key":"MDEyMzQ1Njc4OWFiY2RlZg=="`
+	body := func(on, mesh, moves string) string {
+		return `{"api_token":"r","advertise_addr":"node1:7777",` + on + `"mesh":{"bind":"node1:7946"` + mesh + `},` + moves + `"pools":[]}`
+	}
+	cfg := mustLoad(t, writeConfig(t, body(failover, ","+key, `"move_concurrency":3,`)))
+	if cfg.MoveConcurrency != 3 || !cfg.Movable() {
+		t.Fatalf("Load: move_concurrency %d movable %v, want 3 and movable", cfg.MoveConcurrency, cfg.Movable())
+	}
+	for name, tt := range map[string]struct{ on, mesh, moves, want string }{
+		"no failover":           {"", "," + key, `"move_concurrency":2,`, "move_concurrency requires"},
+		"plain mesh":            {failover, "", `"move_concurrency":2,`, "move_concurrency requires"},
+		"negative":              {failover, "," + key, `"move_concurrency":-1,`, "must not be negative"},
+		"unset on a plain mesh": {failover, "", "", ""},
+	} {
+		cfg, err := Load(writeConfig(t, body(tt.on, tt.mesh, tt.moves)))
+		if tt.want == "" && (err != nil || cfg.Movable()) || tt.want != "" && (err == nil || !strings.Contains(err.Error(), tt.want)) {
+			t.Errorf("%s: %v, want %q", name, err, tt.want)
+		}
+	}
+}
+
 func TestLoadEgressUpstream(t *testing.T) {
 	t.Setenv("SANDBOX_TEST_RES", "http://user:pw@res.example:3128")
 	t.Setenv("SANDBOX_TEST_DC", "socks5://10.1.0.5:1080")

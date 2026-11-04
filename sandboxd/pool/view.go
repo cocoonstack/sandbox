@@ -26,6 +26,7 @@ type configView struct {
 
 	maxClaims            int
 	maxRunning           int
+	moveConcurrency      int
 	maxFork              int
 	releaseDelay         time.Duration
 	vmmRestart           types.VMMRestart
@@ -47,6 +48,7 @@ func newConfigView(cfg *config.Config, secrets *egress.SecretStore) *configView 
 
 		maxClaims:            cfg.MaxClaims,
 		maxRunning:           cfg.MaxRunning,
+		moveConcurrency:      cmp.Or(cfg.MoveConcurrency, defaultMoveConcurrency),
 		maxFork:              cmp.Or(cfg.MaxForkCount, config.DefaultMaxForkCount),
 		releaseDelay:         time.Duration(cfg.ReleaseDelaySeconds) * time.Second,
 		vmmRestart:           cfg.VMMRestart,
