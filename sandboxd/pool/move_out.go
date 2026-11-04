@@ -354,6 +354,10 @@ func (m *Manager) endMoveOut(sb *types.Sandbox, mv *outMove) {
 func (m *Manager) movingFinal(id string) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	return m.movingFinalLocked(id)
+}
+
+func (m *Manager) movingFinalLocked(id string) bool {
 	mv := m.moving[id]
 	return mv != nil && mv.final
 }

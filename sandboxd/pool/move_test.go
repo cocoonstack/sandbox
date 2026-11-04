@@ -310,6 +310,39 @@ func TestMoveHoldsOffCapturesReleasesAndEvacuationWhileItRuns(t *testing.T) {
 	}
 }
 
+func TestMoveRefusesWritesThatWouldMissTheRecordTheTargetReceives(t *testing.T) {
+	mc := newMoveCluster(t)
+	sb := mustClaim(t, mc.s, testKey)
+	var deadline time.Time
+	mc.p.roundHook = func(round int) error {
+		if round != 1 {
+			return nil
+		}
+		var err error
+		if deadline, err = mc.s.Renew(t.Context(), sb.ID, Cred{Token: sb.Token}, time.Hour, ""); err != nil {
+			t.Errorf("renew during the rounds: %v", err)
+		}
+		patchHostOnly(t, mc.s, sb, "rounds")
+		return nil
+	}
+	mc.p.commitHook = func(int) error {
+		if _, err := mc.s.Renew(t.Context(), sb.ID, Cred{Token: sb.Token}, 2*time.Hour, ""); !errors.Is(err, ErrEvacuating) {
+			t.Errorf("renew during the final round: %v, want ErrEvacuating", err)
+		}
+		if err := mc.s.PatchEnv(t.Context(), sb.ID, types.EnvPatch{"GH_TOKEN": {Value: "final", Guest: hostOnly}}, ""); !errors.Is(err, ErrEvacuating) {
+			t.Errorf("env write during the final round: %v, want ErrEvacuating", err)
+		}
+		return nil
+	}
+	if _, err := mc.s.Move(t.Context(), sb.ID, "b", time.Minute); err != nil {
+		t.Fatalf("move: %v", err)
+	}
+	moved, ok := mc.t.byID(sb.ID)
+	if !ok || !moved.Deadline.Equal(deadline) || moved.Env["GH_TOKEN"].Value != "rounds" {
+		t.Errorf("target claim deadline %v env %v, want the deadline %v and the env of the rounds", moved.Deadline, moved.Env, deadline)
+	}
+}
+
 func TestMoveRefusesClaimsThatCannotMove(t *testing.T) {
 	mc := newMoveCluster(t)
 	hibernatedSb := mustClaim(t, mc.s, testKey)

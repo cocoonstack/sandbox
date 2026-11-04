@@ -167,6 +167,10 @@ func (m *Manager) Renew(ctx context.Context, id string, cred Cred, ttl time.Dura
 		m.mu.Unlock()
 		return time.Time{}, ErrUnknownSandbox
 	}
+	if m.movingFinalLocked(id) {
+		m.mu.Unlock()
+		return time.Time{}, ErrEvacuating
+	}
 	// An archived claim's Deadline is a retention window, not a lease: a TTL over it schedules a purge
 	if _, archiving := m.archiving[id]; sb.ArchiveCk != "" || archiving {
 		m.mu.Unlock()
