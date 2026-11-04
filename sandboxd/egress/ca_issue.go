@@ -36,7 +36,7 @@ func GenerateRoot(commonName string) (certPEM, keyPEM []byte, err error) {
 		BasicConstraintsValid: true,
 		IsCA:                  true,
 	}
-	return marshalCA(tmpl, tmpl, &key.PublicKey, key, key)
+	return marshalCA(tmpl, tmpl, key, key)
 }
 
 // IssueIntermediate signs a per-node intermediate CA from the cluster root.
@@ -68,15 +68,15 @@ func IssueIntermediate(rootCertPEM, rootKeyPEM []byte, nodeID string) (certPEM, 
 		IsCA:                  true,
 		MaxPathLenZero:        true,
 	}
-	return marshalCA(tmpl, root, &key.PublicKey, rootKey, key)
+	return marshalCA(tmpl, root, rootKey, key)
 }
 
-func marshalCA(tmpl, parent *x509.Certificate, pub *ecdsa.PublicKey, signer, keyToPEM *ecdsa.PrivateKey) (certPEM, keyPEM []byte, err error) {
-	der, err := x509.CreateCertificate(rand.Reader, tmpl, parent, pub, signer)
+func marshalCA(tmpl, parent *x509.Certificate, signer, key *ecdsa.PrivateKey) (certPEM, keyPEM []byte, err error) {
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, parent, &key.PublicKey, signer)
 	if err != nil {
 		return nil, nil, fmt.Errorf("create cert: %w", err)
 	}
-	keyDER, err := x509.MarshalPKCS8PrivateKey(keyToPEM)
+	keyDER, err := x509.MarshalPKCS8PrivateKey(key)
 	if err != nil {
 		return nil, nil, fmt.Errorf("marshal key: %w", err)
 	}

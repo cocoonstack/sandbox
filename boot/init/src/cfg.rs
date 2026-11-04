@@ -3,24 +3,24 @@
 use std::fmt::Write as _;
 use std::time::Duration;
 
-pub const DEFAULT_INIT: &str = "/sbin/init";
+const DEFAULT_INIT: &str = "/sbin/init";
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
 // cap the timeout: `Instant + Duration` panics on overflow, and a PID 1 panic is a kernel panic.
 const MAX_TIMEOUT_SECS: u64 = 86_400;
 
 #[derive(Debug, PartialEq, Eq)]
-pub struct BootCfg {
+pub struct BootCfg<'a> {
     /// Layer disk serials in lowerdir order (first = uppermost lower layer).
-    pub layers: Vec<String>,
+    pub layers: Vec<&'a str>,
     /// Writable ext4 COW disk ID (same resolution rules as layers).
-    pub cow: String,
+    pub cow: &'a str,
     /// Wait budget for the whole disk set; NICs get a fixed 200 ms.
     pub timeout: Duration,
-    pub hostname: Option<String>,
+    pub hostname: Option<&'a str>,
     /// Static per-NIC config, persisted as networkd units and never applied in the initramfs.
-    pub ips: Vec<IpParam>,
+    pub ips: Vec<IpParam<'a>>,
     /// Handoff target inside the assembled rootfs.
-    pub init: String,
+    pub init: &'a str,
     /// Fatal errors drop to /bin/sh (debug initramfs) instead of poweroff.
     pub debug: bool,
     /// Emit one pre-handoff line with per-phase µs timings (sandbox.trace=1).
@@ -29,43 +29,38 @@ pub struct BootCfg {
 
 /// One kernel `ip=` param, as cocoon emits it per NIC.
 #[derive(Debug, PartialEq, Eq)]
-pub struct IpParam {
-    pub addr: String,
+pub struct IpParam<'a> {
+    pub addr: &'a str,
     pub prefix: u8,
-    pub gateway: Option<String>,
-    pub dns: Vec<String>,
+    pub gateway: Option<&'a str>,
+    pub dns: Vec<&'a str>,
     /// Initramfs-time device name, used only to look up the MAC the persisted unit matches on.
-    pub device: String,
+    pub device: &'a str,
 }
 
-pub fn parse(cmdline: &str) -> Result<BootCfg, String> {
+pub fn parse(cmdline: &str) -> Result<BootCfg<'_>, String> {
     let mut cfg = BootCfg {
         layers: Vec::new(),
-        cow: String::new(),
+        cow: "",
         timeout: DEFAULT_TIMEOUT,
         hostname: None,
         ips: Vec::new(),
-        init: DEFAULT_INIT.to_string(),
+        init: DEFAULT_INIT,
         debug: false,
         trace: false,
     };
     for (key, val) in params(cmdline) {
         match key {
             "cocoon.layers" => {
-                cfg.layers = val
-                    .split(',')
-                    .filter(|s| !s.is_empty())
-                    .map(String::from)
-                    .collect();
+                cfg.layers = val.split(',').filter(|s| !s.is_empty()).collect();
             }
-            "cocoon.cow" => cfg.cow = val.to_string(),
-            // a junk value keeps the default, matching the old initramfs hook.
+            "cocoon.cow" => cfg.cow = val,
             "cocoon.timeout" => {
                 if let Ok(secs) = val.parse::<u64>() {
                     cfg.timeout = Duration::from_secs(secs.min(MAX_TIMEOUT_SECS));
                 }
             }
-            "cocoon.hostname" if !val.is_empty() => cfg.hostname = Some(val.to_string()),
+            "cocoon.hostname" if !val.is_empty() => cfg.hostname = Some(val),
             "sandbox.debug" => cfg.debug = debug_token(val),
             "sandbox.trace" => cfg.trace = debug_token(val),
             "ip" => {
@@ -73,7 +68,7 @@ pub fn parse(cmdline: &str) -> Result<BootCfg, String> {
                     cfg.ips.push(param);
                 }
             }
-            "sandbox.init" if !val.is_empty() => cfg.init = val.to_string(),
+            "sandbox.init" if !val.is_empty() => cfg.init = val,
             _ => {}
         }
     }
@@ -128,24 +123,24 @@ fn debug_token(val: &str) -> bool {
 }
 
 /// Kernel ip= fields: client:server:gw:netmask:hostname:device:autoconf[:dns0[:dns1]]; anything else is ignored.
-fn parse_ip_param(val: &str) -> Option<IpParam> {
+fn parse_ip_param(val: &str) -> Option<IpParam<'_>> {
     let f: Vec<&str> = val.split(':').collect();
     if f.len() < 7 || f[0].is_empty() || f[5].is_empty() {
         return None;
     }
     let prefix = mask_to_prefix(f[3])?;
-    let gateway = (!f[2].is_empty() && f[2] != "0.0.0.0").then(|| f[2].to_string());
+    let gateway = (!f[2].is_empty() && f[2] != "0.0.0.0").then_some(f[2]);
     let dns = f[7..]
         .iter()
-        .filter(|d| !d.is_empty() && **d != "0.0.0.0")
-        .map(|d| d.to_string())
+        .copied()
+        .filter(|d| !d.is_empty() && *d != "0.0.0.0")
         .collect();
     Some(IpParam {
-        addr: f[0].to_string(),
+        addr: f[0],
         prefix,
         gateway,
         dns,
-        device: f[5].to_string(),
+        device: f[5],
     })
 }
 
@@ -171,7 +166,7 @@ mod tests {
         assert_eq!(cfg.layers, vec!["a", "b"]);
         assert_eq!(cfg.cow, "cow");
         assert_eq!(cfg.timeout, Duration::from_secs(3));
-        assert_eq!(cfg.hostname.as_deref(), Some("vm1"));
+        assert_eq!(cfg.hostname, Some("vm1"));
         assert_eq!(cfg.init, "/bin/systemd");
         assert!(cfg.debug);
         assert!(cfg.ips.is_empty());
@@ -213,11 +208,11 @@ mod tests {
 
     #[test]
     fn parse_huge_timeout_is_capped() {
-        let cfg = parse(&format!(
+        let cmdline = format!(
             "cocoon.layers=l0 cocoon.cow=cow cocoon.timeout={}",
             u64::MAX
-        ))
-        .unwrap();
+        );
+        let cfg = parse(&cmdline).unwrap();
         assert_eq!(cfg.timeout, Duration::from_secs(MAX_TIMEOUT_SECS));
     }
 
@@ -277,11 +272,11 @@ mod tests {
         assert_eq!(
             cfg.ips,
             vec![IpParam {
-                addr: "172.20.100.5".into(),
+                addr: "172.20.100.5",
                 prefix: 24,
-                gateway: Some("172.20.100.1".into()),
-                dns: vec!["8.8.8.8".into(), "8.8.4.4".into()],
-                device: "eth0".into(),
+                gateway: Some("172.20.100.1"),
+                dns: vec!["8.8.8.8", "8.8.4.4"],
+                device: "eth0",
             }]
         );
     }
@@ -315,11 +310,11 @@ mod tests {
     #[test]
     fn network_unit_layout() {
         let ip = IpParam {
-            addr: "172.20.100.5".into(),
+            addr: "172.20.100.5",
             prefix: 24,
-            gateway: Some("172.20.100.1".into()),
-            dns: vec!["8.8.8.8".into()],
-            device: "eth0".into(),
+            gateway: Some("172.20.100.1"),
+            dns: vec!["8.8.8.8"],
+            device: "eth0",
         };
         assert_eq!(
             network_unit(&ip, "aa:bb:cc:dd:ee:ff"),

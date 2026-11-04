@@ -198,20 +198,6 @@ def test_template_volume_claim_follows_redirect(node):
     assert sb.volumes == seen[1]["volumes"]
 
 
-def test_volume_catalog(node):
-    want = [
-        {
-            "name": "imagenet",
-            "default_mount": "/volumes/imagenet",
-            "size_bytes": 42,
-            "available": True,
-            "nodes": 3,
-        }
-    ]
-    FakeNode.routes[("GET", "/v1/volumes")] = lambda body, path: (200, {"volumes": want})
-    assert Client(node).volumes() == want
-
-
 def test_volume_catalog_surfaces_writable(node):
     want = [
         {
@@ -354,17 +340,6 @@ def test_claim_deadline_bounds_the_entry_node(black_hole):
     assert elapsed < 1.5, elapsed
 
 
-def recording_claim(reply):
-    seen = []
-
-    def claim(body, path):
-        seen.append(body)
-        return 200, reply
-
-    FakeNode.routes[("POST", "/v1/claim")] = claim
-    return seen
-
-
 @pytest.mark.parametrize(("keep_alive", "conns"), [(30.0, 1), (0, 2)])
 def test_control_calls_reuse_one_connection(kept_node, keep_alive, conns, fd_floor):
     KeptNode.routes[("POST", "/v1/claim")] = lambda body, path: (200, {"id": "sb_1", "token": "tok"})
@@ -391,3 +366,14 @@ def kept_node():
     threading.Thread(target=server.serve_forever, daemon=True).start()
     yield f"127.0.0.1:{server.server_port}"
     server.shutdown()
+
+
+def recording_claim(reply):
+    seen = []
+
+    def claim(body, path):
+        seen.append(body)
+        return 200, reply
+
+    FakeNode.routes[("POST", "/v1/claim")] = claim
+    return seen

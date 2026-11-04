@@ -1,6 +1,4 @@
-"""Guards the fast bulk slicer in frames.decode_response: a "data" match
-inside a nested unknown field or trailing bytes after the frame must never
-yield a silently wrong payload — unexpected shapes take the full parse."""
+"""Guards the fast bulk slicer in decode_response: unexpected shapes take the full parse."""
 
 import base64
 import json

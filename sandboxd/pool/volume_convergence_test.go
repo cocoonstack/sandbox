@@ -329,7 +329,7 @@ func TestVolumeHoldsRejectCaptureBeforeTrim(t *testing.T) {
 					t.Fatalf("beginVolumeRun: %v", err)
 				}
 				m.mu.Lock()
-				m.adoptVolumes(held)
+				m.catalog.adoptVolumes(held)
 				run.holds = held
 				m.mu.Unlock()
 				defer m.finishVolumeRun(sb, run)

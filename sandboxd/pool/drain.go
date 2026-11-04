@@ -37,7 +37,7 @@ func (m *Manager) Evacuate(ctx context.Context) {
 	m.Drain(ctx)
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.evac != nil && len(m.evac.pending) > 0 {
+	if !m.draining || m.evac != nil && len(m.evac.pending) > 0 {
 		return
 	}
 	ctx, stop := context.WithCancel(context.WithoutCancel(ctx))

@@ -34,6 +34,9 @@ func (m *Manager) captureAllowed(sb *types.Sandbox) error {
 	if m.claimed[sb.ID] != sb {
 		return ErrUnknownSandbox
 	}
+	if _, err := m.fenceWatch(sb); err != nil {
+		return err
+	}
 	if m.hasVolumeHolds(sb) {
 		return ErrVolumeCapture
 	}

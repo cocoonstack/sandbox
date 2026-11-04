@@ -1,5 +1,4 @@
 //! The instance-metadata document guest agents read, served in the IMDSv2 shape on 169.254.169.254 where an image aliases it.
-//! The token is fixed: the IMDSv2 defense is the PUT plus the custom header, not the token's secrecy.
 
 use std::io;
 use std::path::Path;
@@ -8,10 +7,11 @@ use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 /// The metadata address; an image opts in by aliasing it on `lo`, and without the alias the responder stays off.
-pub const ADDR: &str = "169.254.169.254:80";
+const ADDR: &str = "169.254.169.254:80";
 /// The document the host writes per sandbox through `fs_write`.
-pub const DOC_PATH: &str = "/run/silkd/instance-metadata.json";
+const DOC_PATH: &str = "/run/silkd/instance-metadata.json";
 
+/// Fixed: the IMDSv2 defense is the PUT plus the custom header, not the token's secrecy.
 const TOKEN: &[u8] = b"silkd-instance-metadata";
 const HEAD_MAX: usize = 8 * 1024;
 const CONN_TIMEOUT: Duration = Duration::from_secs(5);
@@ -41,7 +41,7 @@ pub async fn serve() -> io::Result<()> {
 }
 
 /// Answers one request on `conn` and closes it: `PUT /latest/api/token` mints a token, `GET /` serves `doc` or `{}`.
-pub async fn handle<S>(mut conn: S, doc: &Path) -> io::Result<()>
+async fn handle<S>(mut conn: S, doc: &Path) -> io::Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {

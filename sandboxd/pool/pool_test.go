@@ -2011,6 +2011,12 @@ func (m *Manager) liftFence() {
 	m.fence.Store(&fenceState{ch: make(chan struct{})})
 }
 
+func lockedVMName(sb *types.Sandbox) string {
+	sb.Transition.Lock()
+	defer sb.Transition.Unlock()
+	return sb.VMName
+}
+
 func newTestManager(t testing.TB, eng *fakeEngine, pools ...config.PoolSpec) *Manager {
 	t.Helper()
 	return newTestManagerAt(t, eng, t.TempDir(), pools...)
@@ -2218,15 +2224,15 @@ func testSecrets(t testing.TB, specs ...egress.SecretSpec) *egress.SecretStore {
 }
 
 func lockCount(m *Manager) int {
-	m.recLocksMu.Lock()
-	defer m.recLocksMu.Unlock()
-	return len(m.recLocks)
+	m.recs.mu.Lock()
+	defer m.recs.mu.Unlock()
+	return len(m.recs.held)
 }
 
 func hasRecLock(m *Manager, id string) bool {
-	m.recLocksMu.Lock()
-	defer m.recLocksMu.Unlock()
-	_, ok := m.recLocks[id]
+	m.recs.mu.Lock()
+	defer m.recs.mu.Unlock()
+	_, ok := m.recs.held[id]
 	return ok
 }
 
@@ -2327,7 +2333,7 @@ func hibernated(m *Manager) int {
 func sweepIdle(t *testing.T, m *Manager) {
 	t.Helper()
 	m.idleOnce(t.Context())
-	waitFor(t, func() bool { return !m.idleSweep.Load() })
+	waitFor(t, func() bool { return !m.sweeps.idle.Load() })
 }
 
 func expire(m *Manager, sb *types.Sandbox) {

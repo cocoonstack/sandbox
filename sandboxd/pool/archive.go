@@ -4,10 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io/fs"
-	"os"
-	"path/filepath"
-	"slices"
 	"time"
 
 	"github.com/projecteru2/core/log"
@@ -15,12 +11,9 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/store"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 	"github.com/cocoonstack/sandbox/sandboxd/usage"
-	"github.com/cocoonstack/sandbox/sandboxd/utils"
 )
 
-const archiveDeleteDir = "archive-deletes"
-
-// archive*For resolve a key's thresholds (pool's, else node default); callers hold m.mu.
+// archiveAfterFor resolves a key's threshold (pool's, else node default); callers hold m.mu.
 func (m *Manager) archiveAfterFor(key types.PoolKey) time.Duration {
 	if p, ok := m.activePool(key); ok {
 		return p.archiveAfter
@@ -28,16 +21,13 @@ func (m *Manager) archiveAfterFor(key types.PoolKey) time.Duration {
 	return m.view.Load().archiveAfterDefault
 }
 
-func (m *Manager) archiveDeleteFor(key types.PoolKey) time.Duration {
-	if p, ok := m.activePool(key); ok {
-		return p.archiveDelete
-	}
-	return m.view.Load().archiveDeleteDefault
-}
-
 // retentionDeadline is zero for an archive kept forever; callers hold m.mu.
 func (m *Manager) retentionDeadline(key types.PoolKey) time.Time {
-	if d := m.archiveDeleteFor(key); d > 0 {
+	d := m.view.Load().archiveDeleteDefault
+	if p, ok := m.activePool(key); ok {
+		d = p.archiveDelete
+	}
+	if d > 0 {
 		return time.Now().Add(d)
 	}
 	return time.Time{}
@@ -54,7 +44,7 @@ func (m *Manager) archiveDeadline(sb *types.Sandbox) time.Time {
 }
 
 func (m *Manager) archiveOnce(ctx context.Context) {
-	if !m.archiveSweep.CompareAndSwap(false, true) {
+	if !m.sweeps.archive.CompareAndSwap(false, true) {
 		return // the previous sweep's archives are still draining
 	}
 	now := time.Now()
@@ -76,11 +66,11 @@ func (m *Manager) archiveOnce(ctx context.Context) {
 	}
 	m.mu.Unlock()
 	if len(victims) == 0 {
-		m.archiveSweep.Store(false)
+		m.sweeps.archive.Store(false)
 		return
 	}
 	go func() {
-		defer m.archiveSweep.Store(false)
+		defer m.sweeps.archive.Store(false)
 		logger := log.WithFunc("pool.archiveOnce")
 		m.runBounded(ctx, len(victims), func(ctx context.Context, i int) {
 			sb := victims[i]
@@ -214,7 +204,7 @@ func (m *Manager) wakeArchived(ctx context.Context, sb *types.Sandbox) (string, 
 		return "", err
 	}
 	ck := sb.ArchiveCk
-	defer m.lockRec(ck)()
+	defer m.recs.lockRec(ck)()
 	dir, _, _, err := m.ckpts.Fetch(ctx, ck)
 	if errors.Is(err, store.ErrNotFound) {
 		return "", ErrUnknownSandbox // record disagrees with the store
@@ -231,24 +221,20 @@ func (m *Manager) wakeArchived(ctx context.Context, sb *types.Sandbox) (string, 
 		m.destroy(ctx, built.VMName)
 		return "", fenceErr
 	}
-	if markErr := m.markArchiveCk(ck); markErr != nil {
+	if markErr := m.ckMarks.mark(ck); markErr != nil {
 		m.destroy(ctx, built.VMName)
 		return "", fmt.Errorf("wake %s: track archive checkpoint: %w", sb.ID, markErr)
 	}
-	live, saved := m.commitWake(ctx, sb, built.VMName, built.VsockSocket)
-	if !live || !saved {
+	if err = m.commitWake(ctx, sb, built.VMName, built.VsockSocket); err != nil {
 		m.destroy(ctx, built.VMName)
-		if !live {
-			return "", ErrUnknownSandbox
-		}
-		return "", fmt.Errorf("wake %s: persist claims", sb.ID)
+		return "", err
 	}
 	logger := log.WithFunc("pool.wakeArchived")
 	// The pre-commit marker keeps a failed delete retryable after the journal update.
 	if delErr := m.ckpts.Delete(ctx, ck); delErr != nil {
 		logger.Warnf(ctx, "delete consumed archive ck %s: %v", ck, delErr)
 	} else {
-		if clearErr := m.clearArchiveCk(ck); clearErr != nil {
+		if clearErr := m.ckMarks.clear(ck); clearErr != nil {
 			logger.Warnf(ctx, "clear archive ck %s: %v", ck, clearErr)
 		}
 		m.dropTombstone(ctx, sb.ID, consumed)
@@ -265,12 +251,11 @@ func (m *Manager) wakeArchived(ctx context.Context, sb *types.Sandbox) (string, 
 	return built.VsockSocket, nil
 }
 
-func (m *Manager) commitWake(ctx context.Context, sb *types.Sandbox, vmName, sock string) (live, saved bool) {
+func (m *Manager) commitWake(ctx context.Context, sb *types.Sandbox, vmName, sock string) error {
 	m.mu.Lock()
-	live = m.claimed[sb.ID] == sb
-	if !live {
+	if m.claimed[sb.ID] != sb {
 		m.mu.Unlock()
-		return false, false
+		return ErrUnknownSandbox
 	}
 	ck, deadline, epoch, safe := sb.ArchiveCk, sb.Deadline, sb.ArchiveEpoch, sb.ReaderSafe
 	sb.VMName, sb.VsockSocket, sb.ArchiveCk, sb.ArchiveEpoch, sb.ReaderSafe = vmName, sock, "", 0, false
@@ -286,154 +271,14 @@ func (m *Manager) commitWake(ctx context.Context, sb *types.Sandbox, vmName, soc
 		}
 		m.mu.Unlock()
 		m.store.recommit(ctx, rb)
-		log.WithFunc("pool.commitWake").Warnf(ctx, "persist claims: %v", err)
-		return true, false
+		return fmt.Errorf("wake %s: persist claims: %w", sb.ID, err)
 	}
 	sb.Touch() // restart the idle→hibernate→archive clock
-	return true, true
+	return nil
 }
 
 func (m *Manager) deleteOrphanArchiveCk(ctx context.Context, ckID string) {
 	if _, err := m.deleteArchiveCk(ctx, ckID); err != nil {
 		log.WithFunc("pool.deleteOrphanArchiveCk").Warnf(ctx, "delete orphaned archive ck %s: %v", ckID, err)
 	}
-}
-
-// markArchiveCk records durable delete intent before the journal drops its reference.
-func (m *Manager) markArchiveCk(ckID string) error {
-	return m.markArchiveCks([]string{ckID})[ckID]
-}
-
-// markArchiveCks writes a delete marker per checkpoint and syncs the directory once; failed holds each id whose marker is not durable.
-func (m *Manager) markArchiveCks(ckIDs []string) (failed map[string]error) {
-	if len(ckIDs) == 0 {
-		return nil
-	}
-	failed = map[string]error{}
-	dir := filepath.Join(m.dataDir, archiveDeleteDir)
-	if err := os.MkdirAll(dir, 0o750); err != nil {
-		for _, id := range ckIDs {
-			failed[id] = err
-		}
-		return failed
-	}
-	written := make([]string, 0, len(ckIDs))
-	for _, id := range ckIDs {
-		if !store.CheckpointIDRe.MatchString(id) {
-			failed[id] = fmt.Errorf("invalid checkpoint id %q", id)
-			continue
-		}
-		if err := os.WriteFile(filepath.Join(dir, id), nil, 0o600); err != nil {
-			failed[id] = err
-			continue
-		}
-		written = append(written, id)
-	}
-	if len(written) == 0 {
-		return failed
-	}
-	if err := utils.SyncDir(dir); err != nil {
-		for _, id := range written {
-			failed[id] = err
-		}
-	}
-	return failed
-}
-
-func (m *Manager) archiveDeleteMarkers() ([]string, error) {
-	entries, err := os.ReadDir(filepath.Join(m.dataDir, archiveDeleteDir))
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	ids := make([]string, 0, len(entries))
-	for _, entry := range entries {
-		if entry.Type().IsRegular() && store.CheckpointIDRe.MatchString(entry.Name()) {
-			ids = append(ids, entry.Name())
-		}
-	}
-	return ids, nil
-}
-
-func (m *Manager) clearArchiveCk(ckID string) error {
-	err := os.Remove(filepath.Join(m.dataDir, archiveDeleteDir, ckID))
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil
-	}
-	return err
-}
-
-func (m *Manager) deleteArchiveCk(ctx context.Context, ckID string) (bool, error) {
-	if err := m.markArchiveCk(ckID); err != nil {
-		return false, fmt.Errorf("track: %w", err)
-	}
-	return m.finishArchiveCkDelete(ctx, ckID)
-}
-
-func (m *Manager) finishArchiveCkDelete(ctx context.Context, ckID string) (bool, error) {
-	unlock := m.lockRec(ckID)
-	if m.store.referencesCheckpoint(ckID) {
-		unlock()
-		return false, nil
-	}
-	err := m.ckpts.Delete(ctx, ckID)
-	unlock()
-	if err != nil {
-		return false, err
-	}
-	if err := m.clearArchiveCk(ckID); err != nil {
-		return false, fmt.Errorf("clear: %w", err)
-	}
-	return true, nil
-}
-
-func (m *Manager) retryArchiveDeletes(ctx context.Context) {
-	if !m.archiveDeleteSweep.CompareAndSwap(false, true) {
-		return
-	}
-	defer m.archiveDeleteSweep.Store(false)
-	ids, err := m.archiveDeleteMarkers()
-	if err != nil {
-		log.WithFunc("pool.retryArchiveDeletes").Warnf(ctx, "list: %v", err)
-		return
-	}
-	if len(ids) == 0 {
-		return
-	}
-	pinned := m.pinnedArchiveCks()
-	ids = slices.DeleteFunc(ids, func(id string) bool { _, ok := pinned[id]; return ok })
-	m.runBounded(ctx, len(ids), func(ctx context.Context, i int) {
-		m.retryArchiveDelete(ctx, ids[i])
-	}).Wait()
-}
-
-func (m *Manager) retryArchiveDelete(ctx context.Context, ckID string) {
-	unlock := m.lockRec(ckID)
-	if m.archiveCkPinned(ckID) || !m.deleteMarked(ckID) {
-		unlock()
-		return
-	}
-	err := m.ckpts.Delete(ctx, ckID)
-	unlock()
-	if err != nil {
-		log.WithFunc("pool.retryArchiveDelete").Warnf(ctx, "delete %s: %v", ckID, err)
-		return
-	}
-	if err := m.clearArchiveCk(ckID); err != nil {
-		log.WithFunc("pool.retryArchiveDelete").Warnf(ctx, "clear %s: %v", ckID, err)
-	}
-}
-
-func (m *Manager) deleteMarked(ckID string) bool {
-	_, err := os.Stat(filepath.Join(m.dataDir, archiveDeleteDir, ckID))
-	return err == nil
-}
-
-func (m *Manager) archiveCkPinned(ckID string) bool {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	_, pending := m.pendingCks[ckID]
-	return pending || m.store.referencesCheckpoint(ckID)
 }

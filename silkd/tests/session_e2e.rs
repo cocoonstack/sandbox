@@ -83,8 +83,7 @@ async fn session_create_rejects_an_env_name_bash_cannot_export() {
     )
     .await
     .expect("session_create hung on a hostile env key");
-    assert_eq!(type_of(&f[0]), "error", "{f:?}");
-    assert_eq!(f[0]["kind"], "bad_request", "{f:?}");
+    assert_error(&f[0], "bad_request");
     assert!(
         state.sessions.list().is_empty(),
         "{:?}",
@@ -162,8 +161,7 @@ async fn shell_killing_command_removes_the_session() {
     let id = create(&state).await;
     let _ = sh(&state, &id, &["exit"]).await;
     let again = sh(&state, &id, &["echo", "hi"]).await;
-    assert_eq!(type_of(&again[0]), "error");
-    assert_eq!(again[0]["kind"], "not_found", "dead session should be gone");
+    assert_error(&again[0], "not_found");
 }
 
 #[tokio::test]

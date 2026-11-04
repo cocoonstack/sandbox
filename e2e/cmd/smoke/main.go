@@ -51,7 +51,7 @@ func run(addr, token, template, lspTemplate string, egress bool) error {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	// explicitly the no-network lane: the git step asserts its typed error.
+	// Explicitly the no-network lane: the git step asserts its typed error.
 	client, sb, err := harness.Claim(ctx, addr, token, template, sandbox.WithNetwork(sandbox.NetNone))
 	if err != nil {
 		return err
@@ -210,8 +210,7 @@ func smokeWatch(ctx context.Context, sb *sandbox.Sandbox) error {
 			if !ok {
 				return fmt.Errorf("watch ended early: %v", w.Err())
 			}
-			// the atomic write surfaces as temp-file events too; any event
-			// whose path carries the name proves the stream.
+			// The atomic write also emits temp-file events; any event on the name proves the stream.
 			if strings.Contains(ev.Path, "w.txt") {
 				return nil
 			}
@@ -283,18 +282,14 @@ func smokeGit(ctx context.Context, sb *sandbox.Sandbox) error {
 		return fmt.Errorf("after checkout: current=%q, want feature", br.Current)
 	}
 
-	// this sandbox is on the no-network lane: push must fail with the typed
-	// unimplemented error, not hang on an unreachable remote.
+	// The none lane answers push with the typed unimplemented error.
 	if err := sb.GitPush(ctx, "/work", ""); !isSilkdKind(err, wire.KindUnimplemented) {
 		return fmt.Errorf("push on none lane: %v, want unimplemented", err)
 	}
 	return nil
 }
 
-// smokeEgress claims a second sandbox on the egress lane and pins the
-// positive half of silkd's lane detection: git must actually run there, so a
-// push with no remote fails inside git — never with the none-lane
-// unimplemented guard.
+// smokeEgress pins that git runs on the egress lane, unlike the none-lane unimplemented guard.
 func smokeEgress(ctx context.Context, client *sandbox.Client, template string) error {
 	sb, err := client.New(ctx, template, sandbox.WithNetwork(sandbox.NetEgress))
 	if err != nil {
@@ -310,9 +305,7 @@ func smokeEgress(ctx context.Context, client *sandbox.Client, template string) e
 	return nil
 }
 
-// smokeHibernate proves the full hibernate loop: a session (a live guest
-// process) survives hibernate → transparent wake-on-exec, and the node's
-// hibernated count tracks the transitions.
+// smokeHibernate proves a session survives hibernate and wake-on-exec while the hibernated count tracks.
 func smokeHibernate(ctx context.Context, client *sandbox.Client, sb *sandbox.Sandbox) error {
 	sess, err := sb.NewSession(ctx)
 	if err != nil {
@@ -338,9 +331,7 @@ func smokeHibernate(ctx context.Context, client *sandbox.Client, sb *sandbox.San
 	return wantHibernated(ctx, client, 0)
 }
 
-// smokeFork proves the fork loop: children inherit the parent's disk at the
-// fork point, get fresh distinct machine identities (clone reseed), and are
-// fully independent claims whose writes never reach a sibling or the parent.
+// smokeFork proves children inherit the fork-point disk, get fresh machine identities, and stay independent.
 func smokeFork(ctx context.Context, sb *sandbox.Sandbox) error {
 	if err := sb.WriteFile(ctx, "/work/fork-mark.txt", []byte("parent"), nil); err != nil {
 		return err
@@ -390,10 +381,7 @@ func smokeFork(ctx context.Context, sb *sandbox.Sandbox) error {
 	return nil
 }
 
-// smokePromote proves promote-to-template through the owner-bound handle:
-// claiming from it must clone the parent's state — on a real node a cold
-// boot of this never-registered image ref would fail, so success itself
-// proves the golden path — and delete removes it.
+// smokePromote proves a claim from a promoted template clones the parent's state and delete removes it.
 func smokePromote(ctx context.Context, client *sandbox.Client, sb *sandbox.Sandbox) error {
 	tpl, err := sb.Promote(ctx, "smoke-tpl:v1")
 	if err != nil {
@@ -439,9 +427,7 @@ func smokePty(ctx context.Context, sb *sandbox.Sandbox) error {
 	return nil
 }
 
-// smokeCheckpoint proves the checkpoint tree: a branch carries the exact
-// captured state, the source keeps running unaffected, two branches from one
-// checkpoint are independent, and a deleted checkpoint stops branching.
+// smokeCheckpoint proves branches carry the captured state independently and a deleted checkpoint stops branching.
 func smokeCheckpoint(ctx context.Context, sb *sandbox.Sandbox) error {
 	if _, err := sb.Exec(ctx, "sh", "-c", "echo v1 > /root/ck.txt"); err != nil {
 		return err
@@ -499,8 +485,7 @@ func smokeCheckpoint(ctx context.Context, sb *sandbox.Sandbox) error {
 	return nil
 }
 
-// smokeTree pushes a tar into the guest, proves a mid-stream failure leaves
-// the tree untouched (fs_push atomicity), and pulls it back.
+// smokeTree proves a failed mid-stream push leaves the tree untouched and a pull returns it.
 func smokeTree(ctx context.Context, sb *sandbox.Sandbox) error {
 	archive := func(content string) []byte {
 		var buf bytes.Buffer
@@ -525,8 +510,7 @@ func smokeTree(ctx context.Context, sb *sandbox.Sandbox) error {
 	if out, err := sb.Exec(ctx, "cat", "/root/tree/t.txt"); err != nil || strings.TrimSpace(out) != "tree-marker" {
 		return fmt.Errorf("tree changed by failed push: %q, %v", out, err)
 	}
-	// silkd unlinks the staging file when it notices the dead stream — an
-	// asynchronous cleanup a fresh RPC can outrun, so settle with a budget.
+	// The staging unlink is asynchronous, so settle with a budget.
 	var staging string
 	var stagingErr error
 	for range 20 {
@@ -550,13 +534,9 @@ func smokeTree(ctx context.Context, sb *sandbox.Sandbox) error {
 	return nil
 }
 
-// smokePortForward proves the guest-port relay on the no-network lane: sshd
-// (socket-activated in the base image) answers on 22, so its banner must
-// arrive through DialPort; a dead port must fail with the typed not_found.
+// smokePortForward proves sshd's banner arrives through DialPort and a dead port fails with not_found.
 func smokePortForward(ctx context.Context, sb *sandbox.Sandbox) error {
-	// the step proves the relay, not sshd's readiness SLA: the guest's
-	// socket-activated sshd can transiently refuse, so the positive probe
-	// retries briefly; the dead-port negative below stays strict.
+	// The step proves the relay, not sshd readiness, so the positive probe retries.
 	pc, err := sb.DialPort(ctx, 22)
 	for attempt := 0; err != nil && attempt < 100; attempt++ {
 		time.Sleep(100 * time.Millisecond)
@@ -579,9 +559,7 @@ func smokePortForward(ctx context.Context, sb *sandbox.Sandbox) error {
 	return nil
 }
 
-// smokeLsp proves the LSP broker on hardware: the base sandbox answers a
-// typed not_found (no manifests), and a python-flavor sandbox serves a real
-// pylsp session — initialize, didOpen, hover — over the relay.
+// smokeLsp proves the base sandbox answers not_found and a python sandbox serves a pylsp session.
 func smokeLsp(ctx context.Context, client *sandbox.Client, base *sandbox.Sandbox, template string) error {
 	if _, err := base.StartLsp(ctx, "python", ""); !isSilkdKind(err, wire.KindNotFound) {
 		return fmt.Errorf("base StartLsp: %v, want typed not_found", err)
@@ -665,7 +643,7 @@ func smokeProcs(ctx context.Context, sb *sandbox.Sandbox) error {
 		return fmt.Errorf("logs replay %q missing mark", out.String())
 	}
 
-	// a long-runner dies to kill; its pid must be gone from the next attach.
+	// A long-runner dies to kill; its pid must be gone from the next attach.
 	pid, err = sb.Spawn(ctx, sandbox.Cmd{Argv: []string{"sleep", "30"}})
 	if err != nil {
 		return fmt.Errorf("spawn sleeper: %w", err)
@@ -707,9 +685,7 @@ func lspWrite(w io.Writer, body string) error {
 	return err
 }
 
-// lspReadResponse reads framed server messages until the response carrying
-// id arrives (server-initiated requests also carry ids but have a method;
-// notifications have no id — both are skipped), returning its result.
+// lspReadResponse skips server requests and notifications until the response for id arrives.
 func lspReadResponse(r *bufio.Reader, id int) (jsontext.Value, error) {
 	tp := textproto.NewReader(r)
 	for {

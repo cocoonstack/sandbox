@@ -121,30 +121,22 @@ exposes `sb.id`, `sb.token`,
 `sb.owner`, `sb.deadline`, and `sb.from_checkpoint` (the lineage edge when
 branched). `sb.template_digest` is the exact content identity when the claim
 cloned a promoted template; it is empty for other sources. `Sandbox` is a
-context manager; `sb.close()` releases it (releasing one already gone is not
-an error — double-release and reap races stay silent).
+context manager; `sb.close()` releases it (it follows a sandbox that moved to
+another node with a lookup, also when that node is gone; releasing one already
+gone is not an error — double-release and reap races stay silent). Any other
+call on a handle raises a 404 `APIError` once its sandbox has moved; run
+`client.lookup` to tell that from a released sandbox.
 Volume sandboxes cannot hibernate, fork, checkpoint, or promote. Egress-lane
 sandboxes cannot either; each answers 409. Checkpoint
 branches do not accept volumes of either mode in this version.
 
-`mount=False` on `client.new` or `template.new` claims the same volumes
-without mounting them: the dictionaries in `sb.volumes` carry no `mount` key,
-and the workload finds each device by polling `/sys/block/*/serial` for the
-catalog name — not guaranteed present when the claim returns, typically
-within ~100ms — then confirms the `/dev/<blk>` node itself exists before
-mounting. Everything above describes the default (`mount=True`) and is
-unchanged by it. What changes is that the mount and its consistency are
-entirely yours: sandboxd writes and clears no dirty marker for an attach-only
-`rw` claim, because it cannot verify your unmount, so releasing without
-unmounting cleanly leaves the image as a crash would — see
-[sandboxd-api](sandboxd-api.md#attach-only-volumes) for the full contract.
+`mount=False` on `client.new` or `template.new` leaves the mount to you: the
+dictionaries in `sb.volumes` carry no `mount` key; see
+[attach-only volumes](sandboxd-api.md#attach-only-volumes) for finding the device
+and the consistency contract.
 For a root client managing a tenant claim, see the
 [external volume controller example](volume-controller.md). It keeps the
 controller reservation and access gate across detach, hibernate, and wake.
-
-The caller-visible constraints are deliberate: volume claims may consume a
-warm VM, remain non-capturable, mount read-only by default, and require Cloud
-Hypervisor.
 
 `client.volumes()` returns the fleet entries this token may use:
 
@@ -158,12 +150,8 @@ for volume in client.volumes():
 `writable` is present (and `true`) only for a writable entry; a read-only
 entry omits the key, so read it with `.get`, not `[...]`.
 
-Discovery returns the gossiped union and holder count; availability and size
-describe the connected node. Warm candidates retain normal ranking, filtered to
-nodes advertising every requested name. A promoted-template claim prefers a
-peer advertising both the template and every volume; when that intersection is
-empty, one volume holder may self-verify access to a shared template store
-before provisioning.
+Entry semantics and placement: [GET /v1/volumes](sandboxd-api.md#get-v1volumes),
+[cluster](cluster.md#volumes-and-placement).
 
 ## Changing live volumes
 
@@ -253,14 +241,9 @@ Streams (`watch`, `open_pty`, `dial_port`, an LSP session) take a connection
 of their own, and a guest whose silkd predates the back-to-back protocol
 gets one connection per call as before.
 
-If that deployment also enables `archive_after_seconds`, archiving replaces
-the original claim deadline with the archive-retention deadline (or no
-deadline when archives are kept forever). Waking an archive starts a fresh
-lease of the length the claim was granted (the server default when it asked
-for none). The existing handle's `sb.deadline` remains the value
-returned when that handle was created or last renewed; call
-`client.sandboxes()` to read the current server deadline after an
-archive/wake transition.
+The handle's `sb.deadline` remains the value returned when it was created or last
+renewed, so after an archive/wake transition read the current one from
+`client.sandboxes()` ([wake](sandboxd-api.md#post-v1sandboxesidwake)).
 
 ## Forking
 

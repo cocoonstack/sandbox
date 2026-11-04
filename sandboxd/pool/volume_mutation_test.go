@@ -1024,7 +1024,7 @@ func beginAdmittedVolumeRun(t *testing.T, m *Manager, sb *types.Sandbox) *volume
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	transient := []types.Volume{{Name: "data", Mount: "/volumes/data"}}
-	m.adoptVolumes(transient)
+	m.catalog.adoptVolumes(transient)
 	run.holds = append(run.holds, transient...)
 	return run
 }

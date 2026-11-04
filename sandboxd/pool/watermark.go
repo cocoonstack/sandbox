@@ -1,8 +1,13 @@
 package pool
 
 import (
+	"context"
 	"math"
+	"sync/atomic"
 	"time"
+
+	"github.com/cocoonstack/sandbox/sandboxd/config"
+	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
 const (
@@ -16,6 +21,111 @@ const (
 	// warmShrinkDwell holds a decayed target for one decay period before trimming, so a fluctuating load does not churn the pool
 	warmShrinkDwell = rateDecayTau
 )
+
+type pool struct {
+	key  types.PoolKey
+	hash string
+
+	// floor and warmMax bound the demand-adaptive target
+	floor           int
+	warmMax         int
+	idle            time.Duration
+	archiveAfter    time.Duration
+	archiveDelete   time.Duration
+	rate            float64
+	lead            time.Duration
+	lastArrival     time.Time
+	binStart        time.Time
+	binCount        int
+	overTargetSince time.Time
+
+	goldenDir string
+	imageID   string
+	// goldenGen counts installs, so a clone of a retired golden never lands after a rebuild at the same path.
+	goldenGen   uint64
+	building    bool
+	nextBuild   time.Time
+	removed     bool // dropped from the desired set while unsettled; swept by refillOnce
+	warm        []*types.Sandbox
+	refilling   int
+	claimClones atomic.Int32
+
+	// Without a streak gate a node-wide dead cause is retried every tick at full concurrency
+	refillFails     int
+	nextRefill      time.Time
+	cloneFails      int
+	goldenRetiredAt time.Time
+}
+
+func newPool(key types.PoolKey) *pool {
+	return &pool{key: key, hash: key.Hash()}
+}
+
+func (p *pool) settled() bool {
+	return !p.building && p.refilling == 0 && p.claimClones.Load() == 0
+}
+
+// refillGated reports whether a refill may not spawn: backoff wait, or one probe in flight.
+func (p *pool) refillGated(now time.Time) bool {
+	return now.Before(p.nextRefill) || (p.refillFails >= refillFailStreak && p.refilling > 0)
+}
+
+// noteRefillResult records one refill outcome and reports whether it started a backoff.
+func (p *pool) noteRefillResult(now time.Time, failed bool) bool {
+	if !failed {
+		p.refillFails, p.nextRefill = 0, time.Time{}
+		return false
+	}
+	p.refillFails++
+	if p.refillFails < refillFailStreak {
+		return false
+	}
+	first := !now.Before(p.nextRefill)
+	backoff := refillBackoffBase << min(p.refillFails-refillFailStreak, 16)
+	p.nextRefill = now.Add(min(backoff, refillBackoffMax))
+	return first
+}
+
+func (p *pool) countClone(ctx context.Context, gen uint64, cloned bool, capReason string) bool {
+	if ctx.Err() != nil || capReason != "" || gen != p.goldenGen {
+		return false
+	}
+	if cloned {
+		p.cloneFails = 0
+	} else {
+		p.cloneFails++
+	}
+	return true
+}
+
+func (p *pool) applySpec(spec config.PoolSpec) {
+	p.floor = spec.Warm
+	p.warmMax = spec.WarmMax
+	p.idle = time.Duration(spec.IdleHibernateSeconds) * time.Second
+	p.archiveAfter = time.Duration(spec.ArchiveAfterSeconds) * time.Second
+	p.archiveDelete = time.Duration(spec.ArchiveDeleteAfterSeconds) * time.Second
+}
+
+func (p *pool) popWarm() *types.Sandbox {
+	n := len(p.warm)
+	if n == 0 {
+		return nil
+	}
+	sb := p.warm[n-1]
+	p.warm = p.warm[:n-1]
+	return sb
+}
+
+// trimWarm shrinks p.warm to at most target and returns the trimmed VM names; callers hold m.mu.
+func (p *pool) trimWarm(target int) []string {
+	var trim []string
+	for len(p.warm) > target {
+		n := len(p.warm) - 1
+		trim = append(trim, p.warm[n].VMName)
+		p.warm = p.warm[:n]
+	}
+	return trim
+}
 
 // noteArrival counts one claim; a bin that has spanned rateBin folds its arrivals per second into the rate EWMA. Caller holds the manager mutex.
 func (p *pool) noteArrival(now time.Time) {

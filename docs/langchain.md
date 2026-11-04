@@ -14,6 +14,9 @@ with CocoonToolkit("10.0.0.5:7777", api_token="...",
     agent.invoke({"messages": [("user", "clone the repo and run the tests")]})
 ```
 
+Parameters: `template` (default `rt:24.04`), `net` (`none` or `egress`; empty
+takes the node default `none`), `ttl_seconds` (default 3600), `from_checkpoint`.
+
 The toolkit claims its sandbox lazily on the first tool call and releases
 it when the context manager exits. Tools (all `StructuredTool`s with typed
 schemas, sync-native with `asyncio.to_thread` async bridges):

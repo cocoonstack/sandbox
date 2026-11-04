@@ -67,15 +67,15 @@ struct Walk<'a> {
 }
 
 impl Walk<'_> {
-    /// Walks `root` depth-first per matching line; a failure below the root skips only that directory.
+    /// Walks `root` depth-first; a failure below the root skips only that directory.
     fn run(&self, root: PathBuf) -> std::io::Result<bool> {
         let mut stack = vec![root];
-        let mut root = true;
+        let mut at_root = true;
         let mut body = String::new();
         while let Some(dir) = stack.pop() {
             let rd = match std::fs::read_dir(&dir) {
                 Ok(rd) => rd,
-                Err(e) if root => return Err(e),
+                Err(e) if at_root => return Err(e),
                 Err(_) => continue,
             };
             for ent in rd {
@@ -84,7 +84,7 @@ impl Walk<'_> {
                 }
                 let ent = match ent {
                     Ok(ent) => ent,
-                    Err(e) if root => return Err(e),
+                    Err(e) if at_root => return Err(e),
                     Err(_) => break,
                 };
                 let Ok(ft) = ent.file_type() else {
@@ -100,7 +100,7 @@ impl Walk<'_> {
                     return Ok(false);
                 }
             }
-            root = false;
+            at_root = false;
         }
         Ok(true)
     }

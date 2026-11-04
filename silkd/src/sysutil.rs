@@ -1,5 +1,6 @@
 //! Small OS helpers; the crate's unsafe work lives here.
 
+use std::borrow::Cow;
 use std::io::Read;
 use std::os::fd::{AsRawFd, OwnedFd, RawFd};
 use std::os::unix::fs::MetadataExt;
@@ -14,6 +15,14 @@ use tokio::io::unix::AsyncFd;
 use tokio::process::Command;
 
 static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
+
+/// The FORWARDED values in silkd's own environment, read once: the unit environment is fixed.
+static PROXY_VARS: LazyLock<Vec<(&'static str, String)>> =
+    LazyLock::new(|| snapshot_proxy(|key| std::env::var(key).ok()));
+static DIRECT: LazyLock<Vec<(&'static str, &'static str)>> =
+    LazyLock::new(|| compose_env(true, &PROXY_VARS));
+static RELAYED: LazyLock<Vec<(&'static str, &'static str)>> =
+    LazyLock::new(|| compose_env(false, &PROXY_VARS));
 
 /// Forwarded into every exec that has no direct route: the loopback proxy relay is its only way out.
 const FORWARDED: [&str; 6] = [
@@ -69,10 +78,6 @@ pub fn signal_pid(pid: u32, sig: i32) {
 
 /// The environment every exec starts from; the proxy snapshot rides only where nothing routes directly.
 pub fn base_env() -> &'static [(&'static str, &'static str)] {
-    static DIRECT: LazyLock<Vec<(&'static str, &'static str)>> =
-        LazyLock::new(|| compose_env(true, proxy_vars()));
-    static RELAYED: LazyLock<Vec<(&'static str, &'static str)>> =
-        LazyLock::new(|| compose_env(false, proxy_vars()));
     if crate::net::routes_directly() {
         &DIRECT
     } else {
@@ -80,11 +85,22 @@ pub fn base_env() -> &'static [(&'static str, &'static str)] {
     }
 }
 
-/// The claim's environment every spawned child gets after base_env; empty when the host wrote none.
-pub fn claim_env() -> Vec<(String, String)> {
-    std::fs::read_to_string(CLAIM_ENV_PATH)
-        .map(|text| parse_env_file(&text))
-        .unwrap_or_default()
+/// The claim's environment file every exec, session and pty parses after base_env; empty when the host wrote none.
+pub fn claim_env() -> String {
+    std::fs::read_to_string(CLAIM_ENV_PATH).unwrap_or_default()
+}
+
+pub fn apply_claim_env(cmd: &mut Command) {
+    let claim = claim_env();
+    cmd.envs(parse_env_file(&claim).iter().map(|(k, v)| (*k, &**v)));
+}
+
+/// Parses the subset the host writes: one `KEY="value"` per line, with systemd's double-quote escapes.
+pub fn parse_env_file(text: &str) -> Vec<(&str, Cow<'_, str>)> {
+    text.lines()
+        .filter_map(|line| line.split_once('='))
+        .map(|(key, value)| (key, unquote(value)))
+        .collect()
 }
 
 /// Applies base_env's lane rule to an env-inheriting child: a routed NIC drops the proxy variables.
@@ -165,7 +181,7 @@ pub fn set_winsize(fd: RawFd, cols: u16, rows: u16) -> std::io::Result<()> {
 pub fn adopt_controlling_tty(cmd: &mut Command) {
     // SAFETY: make_controlling_tty runs only async-signal-safe syscalls, the contract for a post-fork pre_exec hook.
     unsafe {
-        cmd.pre_exec(|| make_controlling_tty());
+        cmd.pre_exec(make_controlling_tty);
     }
 }
 
@@ -189,12 +205,8 @@ pub async fn wait_code(child: &mut tokio::process::Child) -> i32 {
 }
 
 /// Makes the calling process a session leader and adopts fd 0 as its controlling terminal.
-///
-/// # Safety
-/// Only async-signal-safe syscalls; valid in a post-fork child.
-unsafe fn make_controlling_tty() -> std::io::Result<()> {
-    // SAFETY: setsid and ioctl are async-signal-safe and take no pointers; the
-    // caller guarantees a post-fork child (see # Safety).
+fn make_controlling_tty() -> std::io::Result<()> {
+    // SAFETY: setsid and ioctl take no pointers, so no memory precondition applies.
     unsafe {
         if libc::setsid() < 0 {
             return Err(std::io::Error::last_os_error());
@@ -257,13 +269,6 @@ fn compose_env<'a>(
     env
 }
 
-/// The FORWARDED values in silkd's own environment, read once: the unit environment is fixed.
-fn proxy_vars() -> &'static [(&'static str, String)] {
-    static PROXY_VARS: LazyLock<Vec<(&'static str, String)>> =
-        LazyLock::new(|| snapshot_proxy(|key| std::env::var(key).ok()));
-    &PROXY_VARS
-}
-
 fn snapshot_proxy(get: impl Fn(&str) -> Option<String>) -> Vec<(&'static str, String)> {
     FORWARDED
         .iter()
@@ -274,18 +279,13 @@ fn snapshot_proxy(get: impl Fn(&str) -> Option<String>) -> Vec<(&'static str, St
         .collect()
 }
 
-/// Parses the subset the host writes: one `KEY="value"` per line, with systemd's double-quote escapes.
-fn parse_env_file(text: &str) -> Vec<(String, String)> {
-    text.lines()
-        .filter_map(|line| line.split_once('='))
-        .map(|(key, value)| (key.to_owned(), unquote(value)))
-        .collect()
-}
-
-fn unquote(value: &str) -> String {
+fn unquote(value: &str) -> Cow<'_, str> {
     let Some(inner) = value.strip_prefix('"').and_then(|v| v.strip_suffix('"')) else {
-        return value.to_owned();
+        return Cow::Borrowed(value);
     };
+    if !inner.contains('\\') {
+        return Cow::Borrowed(inner);
+    }
     let mut out = String::with_capacity(inner.len());
     let mut chars = inner.chars();
     while let Some(c) = chars.next() {
@@ -302,7 +302,7 @@ fn unquote(value: &str) -> String {
             None => out.push('\\'),
         }
     }
-    out
+    Cow::Owned(out)
 }
 
 fn lookup_user(user: &str) -> Result<(u32, u32, PathBuf), String> {
@@ -374,10 +374,10 @@ mod tests {
     fn parse_env_file_reads_what_the_host_writes() {
         let text = "A=\"plain\"\nB=\"a \\\"quoted\\\" \\$HOME \\\\ path \\`x\\`\"\nC=bare\nnot-an-entry\nD=\"keep \\n\"\n";
         let want = vec![
-            ("A".to_owned(), "plain".to_owned()),
-            ("B".to_owned(), "a \"quoted\" $HOME \\ path `x`".to_owned()),
-            ("C".to_owned(), "bare".to_owned()),
-            ("D".to_owned(), "keep \\n".to_owned()),
+            ("A", Cow::from("plain")),
+            ("B", Cow::from("a \"quoted\" $HOME \\ path `x`")),
+            ("C", Cow::from("bare")),
+            ("D", Cow::from("keep \\n")),
         ];
         assert_eq!(parse_env_file(text), want);
     }

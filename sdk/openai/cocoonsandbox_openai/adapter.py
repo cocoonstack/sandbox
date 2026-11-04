@@ -1,7 +1,4 @@
-"""OpenAI Agents SDK sandbox provider backed by cocoon microVMs: implements
-the SDK's BaseSandboxClient/BaseSandboxSession pair on top of the sync
-cocoonsandbox SDK, bridged with asyncio.to_thread. One session is one
-claimed sandbox; delete releases it, resume reattaches by id + token."""
+"""OpenAI Agents SDK sandbox provider backed by cocoon microVMs."""
 
 from __future__ import annotations
 

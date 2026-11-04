@@ -598,6 +598,41 @@ func TestRoutedConnReportsItsTargetNotTheUpstream(t *testing.T) {
 	}
 }
 
+func TestAnUpstreamDyingMidBodyTruncatesTheForwardedResponse(t *testing.T) {
+	upstream := httptest.NewServer(dyingMidBody(""))
+	defer upstream.Close()
+	p := New(Policy{Allow: []Rule{{Host: "api.internal"}}}, nil, nil, fixedDial(upstream.Listener.Addr().String()), nil, nil)
+	resp := proxiedGet(t, serveFront(t, p).URL, "http://api.internal/x")
+	defer func() { _ = resp.Body.Close() }()
+	body, err := io.ReadAll(resp.Body)
+	if !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Errorf("read body: %v, want io.ErrUnexpectedEOF", err)
+	}
+	if string(body) != "partial" {
+		t.Errorf("body %q, want the bytes that arrived", body)
+	}
+}
+
+func TestAChunkedResponseEndsCleanlyThroughTheProxy(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, "whole")
+		_ = http.NewResponseController(w).Flush()
+	}))
+	defer upstream.Close()
+	p := New(Policy{Allow: []Rule{{Host: "api.internal"}}}, nil, nil, fixedDial(upstream.Listener.Addr().String()), nil, nil)
+	resp := proxiedGet(t, serveFront(t, p).URL, "http://api.internal/x")
+	defer func() { _ = resp.Body.Close() }()
+	if body, err := io.ReadAll(resp.Body); err != nil || string(body) != "whole" {
+		t.Errorf("body %q, %v; want the whole body and no error", body, err)
+	}
+}
+
+func (d DialFunc) Route() string { return "" }
+
+func (d DialFunc) Dial(ctx context.Context, _, network, addr string) (net.Conn, error) {
+	return d(ctx, network, addr)
+}
+
 type fakeSecrets map[string][2]string
 
 func (f fakeSecrets) Header(name string) (string, string, bool) {
@@ -629,6 +664,20 @@ type shortWriteConn struct{ net.Conn }
 func (c shortWriteConn) Write(b []byte) (int, error) {
 	n, _ := c.Conn.Write(b[:min(2, len(b))])
 	return n, errors.New("connection reset")
+}
+
+func dyingMidBody(length string) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if length != "" {
+			w.Header().Set("Content-Length", length)
+		}
+		_, _ = io.WriteString(w, "partial")
+		rc := http.NewResponseController(w)
+		_ = rc.Flush()
+		if conn, _, err := rc.Hijack(); err == nil {
+			_ = conn.Close()
+		}
+	})
 }
 
 func sseHandler(release <-chan struct{}) http.Handler {

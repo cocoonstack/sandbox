@@ -40,8 +40,7 @@ func (w *Watcher) Err() error {
 	return w.err
 }
 
-// drain relays event frames into the channel until a terminal condition; the
-// closed channel keeps it from blocking on a consumer that stopped reading.
+// drain relays event frames into the channel until the stream ends or w.closed fires.
 func (w *Watcher) drain(ctx context.Context, conn *silkd.Conn) {
 	defer close(w.events)
 	defer w.stop()

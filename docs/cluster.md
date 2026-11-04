@@ -292,7 +292,7 @@ released, so the node asks a peer to adopt it and never takes it back; a row ano
 the claim moved already, and the node drops it; a row this node still owns at
 another epoch keeps the claim, which is skipped. A crash between the release and a peer's answer leaves a row no node
 lists: a restart drops the claim, and the next `Lookup` with its token adopts it,
-so a holder that recovers the token from a root listing loses that claim. A
+so a holder that reads the token back with root's `GET /v1/sandboxes/{id}` loses that claim. A
 released row past its retention deadline is purged by any
 node's hourly sweep, like the row of a departed owner.
 
@@ -300,10 +300,12 @@ An archive the sweeps already run for a claim is waited out and the claim
 retried every 5 seconds. Claims that cannot move are skipped and keep serving
 here; once `evacuating` is gone `claimed` counts them, and the log names each
 one with its reason. A client that holds a handle gets 404 from this node after
-the move, the same answer as for a released claim, and only a `Lookup` tells
-the two apart: the SDKs' `Close` does this itself. A reader-served connection
+the move, the same answer as for a released claim, or a connection error once
+the node is retired, and only a `Lookup` tells these apart: the SDKs' `Close`
+does this itself. A reader-served connection
 gets the retry as an error frame, not a 503, and a preview URL minted before
-the move stops working until it is minted again. `DELETE /v1/drain` stops the evacuation: claims not yet started
+the move stops working until it is minted again, except behind a shared
+`preview_advertise`, where it answers when it reaches the new owner. `DELETE /v1/drain` stops the evacuation: claims not yet started
 stay as they are, and one mid-archive finishes its archive but keeps its row.
 
 ### Node lease
@@ -312,7 +314,7 @@ With `archive_failover` every node renews one row of `sandboxd_nodes (cell,
 node, lease_until)` every 5 seconds, with a single upsert on the database clock
 that covers the whole node: `lease_until = now() + 15 s`. A renewal that fails
 once does not lose the lease or trip the fence, as long as the next one
-answers within 2 seconds of its start. The table is created at start when it is missing, and a node
+answers within 2 seconds of its start. The table is [created at start](deploy.md#shared-archive-registry) when it is missing, and a node
 with no row counts as expired. Adoption and the departed-owner sweep consult the
 lease, never mesh membership, so a node the mesh lost but the database still
 hears keeps its claims, and a node the mesh still lists but the database no
@@ -400,7 +402,7 @@ checkpoint store and keeps each claim's registry row on the latest snapshot:
 - **Self-fencing.** A node whose renewal is overdue by 12 seconds (the lease
   length minus a 3 second margin, counted from the start of the last renewal
   that answered) stops serving every replicated claim it holds: relay, exec,
-  ports and preview answer `503 lease lost; retry` (a read through a
+  ports, preview, fork, checkpoint and promote answer `503 lease lost; retry` (a read through a
   [reader](deploy.md#reading-sleeping-claims-without-waking-them) after the `101`
   gets an `error` frame instead), and `/owner` answers 404 so
   a `Lookup` moves on to the other nodes. A claim is replicated when its policy
@@ -451,8 +453,8 @@ stay in the store until the operator's
 [offline reclamation](deploy.md#reclaiming-s3-storage) removes them. With replication this
 is the fastest-growing part of the store: roughly the per-round churn times the
 rounds since the last reclamation, per replicated claim, on top of the live replica.
-The first round after a wake or adoption uploads the whole claim again, because
-the wake deletes the record it restored from; later rounds dedup. Resolving a
+Later rounds dedup; the first after a wake or adoption does not, because the
+wake deletes the record it restored from. Resolving a
 claim for a stream of a pool that does not replicate reads one plain field and
 no atomic; a replicated claim adds one atomic load of the fence state and its
 stream one watcher goroutine. Adding a claim to a failover node gains one map
@@ -465,7 +467,8 @@ lives in its node's checkpoint store. On the default local-disk backend
 that means **only on its owner node**, and the mesh gossips each node's
 template set alongside its warm counts; on a shared store (a FUSE-mounted
 `checkpoint_dir` or the s3 backend) every node resolves every template
-directly, so the gossip routing simply never fires. An export carries only
+directly, so the gossip routing fires only for a template another node deleted
+after this one started, which stays listed until this node restarts. An export carries only
 the sandbox's writable state — the base image blobs resolve from the
 claiming node's local store, pulled by digest when missing (`vm clone
 --pull`). Name-based calls route cluster-wide:
@@ -543,6 +546,7 @@ fully from it:
 | operator config (`volumes`, `secrets`, egress policies, `bridges`/`networks`, `mesh`, `preview_secret`, `egress_ca`) | `config.json` (human/deploy-tool owned) | re-read at boot; its reloadable part on a per-node [reload](deploy.md#reloading-the-config) |
 | API-applied pool targets (`PUT /v1/pools`) | `<data_dir>/pools.json` (machine owned), or the cell's row in the shared `meta_store` when the node sets `meta_store.cell` | yes |
 | API-applied tenants (`/v1/tenants`) | `<data_dir>/tenants.json` (machine owned), or the shared `meta_store` table | yes |
+| API-registered volumes (`PUT /v1/volumes/{name}`) | `<data_dir>/runtime-volumes.json` (machine owned, per node) | yes |
 | claims | the claims journal + `Reconcile` | yes |
 | placement hints (warm counts, template and volume sets) | gossip | rebuilt |
 | checkpoint ownership | a live per-request probe (no gossip); a healed replica is this node's own persisted copy, aged out by `checkpoint_ttl_hours` | yes |
@@ -636,6 +640,7 @@ Some config must match on every node or the cluster fails in confusing ways:
 | `mesh.cluster_key` | nodes cannot join / decrypt gossip at all |
 | `egress_ca` cluster root | a guest checkpointed/redirected across nodes trusts the root; a divergent root fails interception |
 | egress: `egress_classes`, each pool's `egress` and `egress_upstream_env`, `secrets` names, headers and `value_env`, `egress_internal_allow`, `egress_upstream` | a claim or tenant redirected to a divergent node reaches different hosts, and its [claim credentials](egress.md#claim-credentials) are refused or not injected there |
+| `checkpoint_ttl_hours` | a healed replica a delete broadcast missed ages out at a different time on each node, and nodes report a digest mismatch until every node has reloaded the same value |
 | the engine root path (cocoon's `root_dir`) | a checkpoint or template export pins the base image blobs' absolute path under the root that captured it; a node whose root sits at another path refuses to clone a record it healed or pulled (`untrusted storage path in snapshot metadata`) — the heal succeeds, the branch fails. Not part of the gossiped digest below |
 
 Each node gossips a digest of these over its live tenant set and quotas (HMAC-keyed by
@@ -687,7 +692,9 @@ with every claim.
 - the same engine root path (cocoon's `root_dir`) on every node; it is not in
   the digest, so a mismatch shows only at the first cross-node branch
 - same `api_token`, tenant set, `preview_secret`, and `egress_ca` root everywhere
-  (a mismatch warns and shows in `sandboxd_config_digest_mismatch`)
+  (a mismatch warns and shows in `sandboxd_config_digest_mismatch`; only with
+  `cluster_key` set does that cover `api_token`, `preview_secret` and tenant
+  tokens)
 - with `meta_store`, every node's DSN points at the same database: the tenant
   set is not in the gossiped digest, so nodes on different databases serve
   diverging tenants without a warning

@@ -5,7 +5,7 @@ mod common;
 
 use serde_json::json;
 
-use common::{assert_error, exchange, request, type_of};
+use common::{assert_error, request, type_of};
 
 fn git(dir: &std::path::Path, args: &[&str]) -> String {
     let out = std::process::Command::new("git")
@@ -84,10 +84,8 @@ async fn branch_create_list_checkout() {
     git(repo.path(), &["add", "f"]);
     git(repo.path(), &["commit", "-qm", "c"]);
 
-    let created = exchange(&[
-        json!({"op":"git_branch","path":p,"action":"create","name":"feature"}).to_string(),
-    ])
-    .await;
+    let created =
+        request(json!({"op":"git_branch","path":p,"action":"create","name":"feature"})).await;
     assert_eq!(type_of(created.last().unwrap()), "done");
 
     let list = request(json!({"op":"git_branch","path":p,"action":"list"})).await;
@@ -101,11 +99,27 @@ async fn branch_create_list_checkout() {
         .collect();
     assert!(branches.contains(&"main") && branches.contains(&"feature"));
 
-    let co = exchange(&[
-        json!({"op":"git_branch","path":p,"action":"checkout","name":"feature"}).to_string(),
-    ])
-    .await;
+    let co =
+        request(json!({"op":"git_branch","path":p,"action":"checkout","name":"feature"})).await;
     assert_eq!(type_of(co.last().unwrap()), "done");
+}
+
+#[tokio::test]
+async fn branch_list_names_an_unborn_branch_and_a_detached_head() {
+    let repo = init_repo();
+    let p = repo.path().to_str().unwrap();
+
+    let unborn = request(json!({"op":"git_branch","path":p,"action":"list"})).await;
+    assert_eq!(type_of(&unborn[0]), "git_branches", "{unborn:?}");
+    assert_eq!(unborn[0]["current"], "main", "{unborn:?}");
+
+    std::fs::write(repo.path().join("f"), "x").unwrap();
+    git(repo.path(), &["add", "f"]);
+    git(repo.path(), &["commit", "-qm", "c"]);
+    git(repo.path(), &["checkout", "-q", "--detach"]);
+
+    let detached = request(json!({"op":"git_branch","path":p,"action":"list"})).await;
+    assert_eq!(detached[0]["current"], "HEAD", "{detached:?}");
 }
 
 #[tokio::test]
@@ -116,8 +130,7 @@ async fn commit_failure_surfaces_git_error() {
         "op":"git_commit","path":p,"message":"empty","author":"Dev <dev@example.com>"
     }))
     .await;
-    assert_eq!(type_of(&frames[0]), "error");
-    assert_eq!(frames[0]["kind"], "internal", "{frames:?}");
+    assert_error(&frames[0], "internal");
 }
 
 #[tokio::test]

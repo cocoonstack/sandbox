@@ -181,6 +181,13 @@ func testDeleteReplace(t *testing.T, s tenants.Source) {
 	if _, err = s.Resolve(ctx, Sum("tc")); !errors.Is(err, tenants.ErrUnknown) {
 		t.Errorf("a tenant the replace dropped: %v, want ErrUnknown", err)
 	}
+	c, err = s.Replace(ctx, nil)
+	if err != nil || !slices.Equal(c.Removed, []string{"a", "d"}) {
+		t.Fatalf("replace with no tenants: %+v %v, want a and d removed", c, err)
+	}
+	if _, err = s.Resolve(ctx, Sum("td")); !errors.Is(err, tenants.ErrUnknown) {
+		t.Errorf("a tenant the empty replace dropped: %v, want ErrUnknown", err)
+	}
 }
 
 func testReplaceSwap(t *testing.T, s tenants.Source) {

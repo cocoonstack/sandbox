@@ -58,6 +58,63 @@ func (c *volumeCatalog) normalize(name string, spec types.VolumeRegistration) (*
 	return volume, nil
 }
 
+func (c *volumeCatalog) adoptVolumes(volumes []types.Volume) {
+	for _, volume := range volumes {
+		holders := c.holders[volume.Name]
+		if volume.RW() {
+			holders.writers++
+		} else {
+			holders.readers++
+		}
+		c.holders[volume.Name] = holders
+	}
+}
+
+func (c *volumeCatalog) releaseVolumes(volumes []types.Volume) {
+	for _, volume := range volumes {
+		holders := c.holders[volume.Name]
+		if volume.RW() {
+			holders.writers--
+		} else {
+			holders.readers--
+		}
+		if holders.writers < 1 && holders.readers < 1 {
+			delete(c.holders, volume.Name)
+			continue
+		}
+		c.holders[volume.Name] = holders
+	}
+}
+
+func (c *volumeCatalog) volumeReferenced(name string) bool {
+	return c.holders[name] != (volumeHolders{})
+}
+
+func (c *volumeCatalog) checkResolvedLocked(volumes []resolvedVolume) error {
+	for _, resolved := range volumes {
+		volume := resolved.applied
+		if c.entries[volume.Name] != resolved.entry {
+			return ErrVolumeUnavailable
+		}
+		holders := c.holders[volume.Name]
+		if holders.writers > 0 || (volume.RW() && holders.readers > 0) {
+			return fmt.Errorf("%w: volume %q", ErrVolumeBusy, volume.Name)
+		}
+	}
+	return nil
+}
+
+type catalogVolume struct {
+	runtime  bool
+	disk     engine.VolumeSpec
+	tenants  []string
+	writable bool
+}
+
+func (v *catalogVolume) allowed(tenant string) bool {
+	return tenant == "" || len(v.tenants) == 0 || slices.Contains(v.tenants, tenant)
+}
+
 // RegisterVolume durably binds a root-managed name to a backing path.
 func (m *Manager) RegisterVolume(ctx context.Context, name string, spec types.VolumeRegistration) error {
 	volume, err := m.catalog.normalize(name, spec)
@@ -75,7 +132,7 @@ func (m *Manager) RegisterVolume(ctx context.Context, name string, spec types.Vo
 		}
 		return fmt.Errorf("%w: volume %q already has different semantics or is static", ErrVolumeRegistrationConflict, name)
 	}
-	if m.volumeReferenced(name) {
+	if m.catalog.volumeReferenced(name) {
 		m.mu.Unlock()
 		return fmt.Errorf("%w: volume %q is referenced", ErrVolumeRegistrationConflict, name)
 	}
@@ -104,7 +161,7 @@ func (m *Manager) UnregisterVolume(ctx context.Context, name string) error {
 	defer m.catalog.writeMu.Unlock()
 	m.mu.Lock()
 	entry := m.catalog.entries[name]
-	if (entry != nil && !entry.runtime) || m.volumeReferenced(name) {
+	if (entry != nil && !entry.runtime) || m.catalog.volumeReferenced(name) {
 		m.mu.Unlock()
 		return fmt.Errorf("%w: volume %q is static or referenced", ErrVolumeRegistrationConflict, name)
 	}
@@ -117,6 +174,16 @@ func (m *Manager) UnregisterVolume(ctx context.Context, name string) error {
 	}
 	m.recordAudit(ctx, "", auditFrame{Op: "volumes", Removed: []string{name}})
 	return nil
+}
+
+func (m *Manager) seedVolumes(volumes []config.VolumeSpec) {
+	for _, volume := range volumes {
+		m.catalog.entries[volume.Name] = &catalogVolume{
+			disk:     engine.VolumeSpec{Name: volume.Name, Path: volume.Path, DirectIO: volume.DirectIO},
+			tenants:  slices.Clone(volume.Tenants),
+			writable: volume.Writable,
+		}
+	}
 }
 
 func (m *Manager) loadRuntimeVolumes() error {
@@ -147,8 +214,10 @@ func (m *Manager) loadRuntimeVolumes() error {
 	return nil
 }
 
-func (m *Manager) volumeReferenced(name string) bool {
-	return m.catalog.holders[name] != (volumeHolders{})
+func (m *Manager) catalogSnapshot() map[string]*catalogVolume {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.catalog.entries
 }
 
 func (m *Manager) persistRuntimeCatalog(entries map[string]*catalogVolume) error {

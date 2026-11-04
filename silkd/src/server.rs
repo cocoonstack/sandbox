@@ -22,9 +22,9 @@ pub struct State {
 impl State {
     pub fn new() -> Self {
         Self {
-            table: Table::new(),
-            sessions: session::Table::new(),
-            lsp: lsp::Broker::new(),
+            table: Table::default(),
+            sessions: session::Table::default(),
+            lsp: lsp::Broker::default(),
             started: Instant::now(),
         }
     }

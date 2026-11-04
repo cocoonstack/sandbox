@@ -178,11 +178,7 @@ func main() {
 	}
 	if preview != nil {
 		previewSrv := &http.Server{Addr: cfg.PreviewListen, Handler: preview.Handler(), ReadHeaderTimeout: readHeaderTimeout}
-		go func() {
-			if err := previewSrv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
-				logger.Error(ctx, err, "preview server")
-			}
-		}()
+		go servePreview(ctx, previewSrv)
 		context.AfterFunc(ctx, func() {
 			sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownGrace)
 			defer cancel()
@@ -209,6 +205,12 @@ func main() {
 		logger.Error(ctx, err, "flush claims")
 	}
 	logger.Info(ctx, "sandboxd stopped; VMs stay alive for the next reconcile")
+}
+
+func servePreview(ctx context.Context, srv *http.Server) {
+	if err := srv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
+		log.WithFunc("main.servePreview").Fatalf(ctx, err, "preview server")
+	}
 }
 
 func startMesh(ctx context.Context, cfg *config.Config, mgr *pool.Manager) (*mesh.Mesh, error) {

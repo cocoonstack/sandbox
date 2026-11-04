@@ -105,7 +105,7 @@ func TestStaleClaimOperationsPreserveTheCurrentClaim(t *testing.T) {
 				} else if loaded[sb.ID] != nil {
 					t.Errorf("stale operation resurrected released claim on disk: %+v", loaded[sb.ID])
 				}
-				if err = m.markArchiveCk(ck.ID); err != nil {
+				if err = m.ckMarks.mark(ck.ID); err != nil {
 					t.Fatalf("mark the archive checkpoint: %v", err)
 				}
 				m.retryArchiveDeletes(t.Context())

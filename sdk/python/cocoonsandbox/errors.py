@@ -45,8 +45,7 @@ class SilkdError(SandboxError):
 
 
 class ExitError(SandboxError):
-    """A command exited non-zero; carries the exit code, stderr, and whatever
-    stdout it had produced — a failing build's log is on stdout."""
+    """A command exited non-zero; carries the code, stderr, and the stdout produced before it failed."""
 
     def __init__(self, code: int, stderr: str, stdout: str = "") -> None:
         super().__init__(f"exit status {code}: {stderr.strip()}")

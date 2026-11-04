@@ -40,7 +40,7 @@ func (m *Manager) Fork(ctx context.Context, id string, cred Cred, count int, ttl
 		return nil, fmt.Errorf("fork %s: %w", sb.ID, err)
 	}
 	m.mu.Lock()
-	parentExpire := sb.OnExpire
+	parentExpire, parentVM := sb.OnExpire, sb.VMName
 	m.mu.Unlock()
 	for _, c := range children {
 		c.Tenant, c.EgressClass = sb.Tenant, sb.EgressClass
@@ -58,7 +58,7 @@ func (m *Manager) Fork(ctx context.Context, id string, cred Cred, count int, ttl
 	for i, c := range children {
 		ids[i] = c.ID
 	}
-	m.recordUsage(ctx, usage.Event{Event: "fork", ID: sb.ID, VMName: lockedVMName(sb), Tenant: sb.Tenant, Children: ids})
+	m.recordUsage(ctx, usage.Event{Event: "fork", ID: sb.ID, VMName: parentVM, Tenant: sb.Tenant, Children: ids})
 	return children, nil
 }
 

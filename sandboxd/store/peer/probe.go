@@ -33,7 +33,6 @@ const (
 	probeBucketSeconds = 30
 )
 
-// redirectCacheEntry is Owners' positive-cache record.
 type redirectCacheEntry struct {
 	owners  []string
 	expires time.Time

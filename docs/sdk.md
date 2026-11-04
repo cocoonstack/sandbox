@@ -228,14 +228,16 @@ are exported.
 promoted template; it is empty for other sources. `Owner()` names the owning
 node, and `Token()` returns the per-sandbox bearer to persist with `ID` for a
 later `Lookup`; `Close()` releases the sandbox (it follows a sandbox that
-moved to another node with a `Lookup`, releasing one already gone is not an
-error, and `Close` is bounded internally so it stays defer-friendly). Any other
+moved to another node with a `Lookup`, also when that node is gone, releasing
+one already gone is not an error, and `Close` is bounded internally so it stays defer-friendly). Any other
 call on a handle answers 404 once its sandbox has moved; run `Lookup` to tell
 that from a released sandbox.
 Volume sandboxes cannot hibernate, fork, checkpoint, or promote. Egress-lane
 sandboxes cannot either, nor take `WithArchiveOnExpire`; each answers 409. Passing
-`WithVolumes` or `WithClaimRef` to `Checkpoint.New` returns a local error:
+`WithVolumes`, `WithVolumesAttachOnly` or `WithClaimRef` to `Checkpoint.New` returns a local error:
 checkpoint branches support neither volumes nor a claim reference in this version.
+`WithNetwork` or `WithSize` to `Checkpoint.New` or `Template.New` does too: the
+snapshot pins the lane and size.
 `WithMetadata`, `WithArchiveOnExpire` and `WithEnv` apply to `New`, `Template.New`, and
 `Checkpoint.New`: the labels follow the [claim bounds](sandboxd-api.md#post-v1claim),
 and a branch never inherits its source's labels or expiry action.
@@ -288,36 +290,17 @@ the handle retains its last known sets. Retry an interrupted operation with the
 same full PUT target, or set a new target to recover. `Client.Sandboxes` exposes
 `VolumesWant` and `Volumes` for inspection with an API token.
 
-PUT and PATCH can add or remove mounted and attach-only entries in either mode.
-Changing a held entry's mount, mode, or `attach_only` requires successful
-removal first. See the [live volume contract](sandboxd-api.md#put-v1sandboxesidvolumes)
-for admission policy and dirty-marker handling. Paused sandboxes are not woken,
-and images must exist on the owner node. Admission holds cover the union of
-desired and applied sets. A settled retained entry receives no new attach or
-mount calls. `converging` is true while a volume-change request is running.
-Pending or detaching entries with `converging: false` require an explicit retry.
-Daemon restart replaces unfinished diagnostics with
-an interrupted message. Capture is refused while either set is nonempty.
-Release cancels convergence and hands held volumes to teardown. See the
-[API recovery contract](sandboxd-api.md#partial-failure-and-recovery) and
-[same-sandbox replacement tutorial](live-volumes.md). A failed sandbox with
-volume holds is release-only after VMM exit; an empty target cannot recover it.
+What can change live, admission holds, retries, restart diagnostics, capture
+refusal, the release hand-off and a failed sandbox's release-only rule are in the
+[live volume contract](sandboxd-api.md#put-v1sandboxesidvolumes) and the
+[API recovery contract](sandboxd-api.md#partial-failure-and-recovery), with a
+[same-sandbox replacement tutorial](live-volumes.md). A settled retained entry
+receives no new attach or mount calls.
 
-`WithVolumesAttachOnly()` claims the same volumes without mounting them: the
-entries in `Sandbox.Volumes` carry an empty `Mount`, and the workload finds
-each device by polling `/sys/block/*/serial` for the catalog name — not
-guaranteed present when the claim returns, typically within ~100ms — then
-confirms the `/dev/<blk>` node itself exists before mounting. Everything
-above describes the default and is unchanged by this option. What changes is
-that the mount and its consistency are entirely yours: sandboxd writes and
-clears no dirty marker for an attach-only `rw` claim, because it cannot verify
-your unmount, so releasing without unmounting cleanly leaves the image as a
-crash would — see
-[sandboxd-api](sandboxd-api.md#attach-only-volumes) for the full contract.
-
-The caller-visible constraints are deliberate: volume claims may consume a
-warm VM, remain non-capturable, mount read-only by default, and require Cloud
-Hypervisor.
+`WithVolumesAttachOnly()` leaves the mount to you: the entries in
+`Sandbox.Volumes` carry an empty `Mount`; see
+[attach-only volumes](sandboxd-api.md#attach-only-volumes) for finding the device
+and the consistency contract.
 
 Discover the fleet entries this token may use before planning a claim:
 
@@ -328,12 +311,8 @@ for _, volume := range catalog {
 }
 ```
 
-Discovery returns the gossiped union and holder count; availability and size
-describe the connected node. Warm candidates retain normal ranking, filtered to
-nodes advertising every requested name. A promoted-template claim prefers a
-peer advertising both the template and every volume; when that intersection is
-empty, one volume holder may self-verify access to a shared template store
-before provisioning.
+Entry semantics and placement: [GET /v1/volumes](sandboxd-api.md#get-v1volumes),
+[cluster](cluster.md#volumes-and-placement).
 
 ## Claim env
 
@@ -405,14 +384,9 @@ destroying it, whatever the deployment's archive settings: the node hibernates
 it if it is running and moves it to the checkpoint store, and the next call
 that reaches the guest restores it. `Fork` children inherit the setting.
 
-If that deployment also enables `archive_after_seconds`, archiving replaces
-the original claim deadline with the archive-retention deadline (or no
-deadline when archives are kept forever). Waking an archive starts a fresh
-lease of the length the claim was granted (the server default when it asked
-for none). The existing handle's `Sandbox.Deadline` is the value
-returned when that handle was created or last renewed; call
-`Client.Sandboxes` to read the current server deadline after an
-archive/wake transition.
+The handle's `Sandbox.Deadline` is the value returned when it was created or last
+renewed, so after an archive/wake transition read the current one from
+`Client.Sandboxes` ([wake](sandboxd-api.md#post-v1sandboxesidwake)).
 
 ## Forking
 
@@ -761,6 +735,10 @@ tenant.
 ## Error handling
 
 - `*sandbox.ExitError` — non-zero exit from `Exec` (`Code`, `Stderr`)
+- `*sandbox.APIError` — a non-2xx control-plane reply (`Verb`, `Status`,
+  `Message`); claim, fork, checkpoint, renew, env and tenant verbs return it, and
+  a 404/429/409 is matched on `Status`. Volume calls wrap it in
+  `*sandbox.VolumeError`
 - `*wire.ErrorResp` — a typed guest-side failure; `Kind` is one of
   `wire.KindBadRequest` (including a spawn the guest cannot start: missing
   binary, a cwd that is not a directory, no exec bit, a `User` the guest

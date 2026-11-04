@@ -83,9 +83,7 @@ func (f *Fake) serve(conn net.Conn, r *bufio.Reader, req wire.Request) {
 	case *wire.PtyResize:
 		send(conn, wire.Done{})
 	default:
-		if !serveCommon(conn, r, req) {
-			errFrame(conn, wire.KindUnimplemented, "silkdtest: "+req.Op())
-		}
+		serveStateless(conn, r, req)
 	}
 }
 

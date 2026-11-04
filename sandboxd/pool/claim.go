@@ -1,12 +1,9 @@
 package pool
 
 import (
-	"cmp"
 	"context"
-	"crypto/subtle"
 	"fmt"
 	"net"
-	"slices"
 	"sync"
 	"time"
 
@@ -15,15 +12,6 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 	"github.com/cocoonstack/sandbox/sandboxd/usage"
 )
-
-const (
-	reapDestroy reapAction = iota
-	reapArchive
-	reapPurge
-	reapPause
-)
-
-type reapAction int
 
 // ClaimOptions is what a claim asks for beyond its key; the zero value takes every default.
 type ClaimOptions struct {
@@ -220,7 +208,7 @@ func (m *Manager) AgentSocket(id, token string) (string, error) {
 	if !ok {
 		return "", ErrUnknownSandbox
 	}
-	if sb.Replicated() && m.fence.Load().fenced {
+	if sb.Replicated() && m.isFenced() {
 		return "", ErrLeaseLost
 	}
 	// No activity stamp: a control-plane poll must not keep an idle sandbox awake
@@ -300,7 +288,7 @@ func (m *Manager) releaseResolved(ctx context.Context, id string, sb *types.Sand
 			break
 		}
 		m.mu.Unlock()
-		if markErr := m.markArchiveCk(ck); markErr != nil {
+		if markErr := m.ckMarks.mark(ck); markErr != nil {
 			return fmt.Errorf("release %s: track archive checkpoint: %w", id, markErr)
 		}
 		marked = ck
@@ -323,7 +311,7 @@ func (m *Manager) releaseResolved(ctx context.Context, id string, sb *types.Sand
 		m.mu.Unlock()
 		logger := log.WithFunc("pool.releaseResolved")
 		if ck != "" {
-			if clearErr := m.clearArchiveCk(ck); clearErr != nil {
+			if clearErr := m.ckMarks.clear(ck); clearErr != nil {
 				logger.Warnf(ctx, "clear archive ck %s: %v", ck, clearErr)
 			}
 		}
@@ -385,10 +373,10 @@ func (m *Manager) admitClaim(tenant string, volumes []resolvedVolume, applied []
 	if err := m.quotaErr(1, tenant); err != nil {
 		return err
 	}
-	if err := m.checkResolvedLocked(volumes); err != nil {
+	if err := m.catalog.checkResolvedLocked(volumes); err != nil {
 		return err
 	}
-	m.adoptVolumes(applied)
+	m.catalog.adoptVolumes(applied)
 	return nil
 }
 
@@ -471,8 +459,7 @@ func (m *Manager) tenantDelta(tenant string, delta int) {
 
 func (m *Manager) addClaimLocked(sb *types.Sandbox) {
 	if m.archives != nil {
-		_, replicating := m.replicaPools[sb.PolicyKey()]
-		sb.SetReplicated(replicating || sb.HasReplica())
+		sb.SetReplicated(m.view.Load().poolReplicate[sb.PolicyKey()] > 0 || sb.HasReplica())
 	}
 	m.claimed[sb.ID] = sb
 	m.tenantDelta(sb.Tenant, 1)
@@ -575,176 +562,6 @@ func (m *Manager) abortVolumeClaim(ctx context.Context, vmName string, reserved 
 	*reserved = nil
 }
 
-func (m *Manager) reapOnce(ctx context.Context) {
-	now := time.Now()
-	type victim struct {
-		action                       reapAction
-		id, vmName, snap, ck, tenant string
-		deadline                     time.Time
-		sb                           *types.Sandbox
-		holds                        []types.Volume
-	}
-	m.mu.Lock()
-	var expired []victim
-	var dropped, purges []string
-	var unrows []*types.Sandbox
-	for id, sb := range m.claimed {
-		// A zero deadline means no expiry (an archived claim kept forever).
-		if sb.Deadline.IsZero() || !now.After(sb.Deadline) {
-			continue
-		}
-		switch {
-		case m.expiryDropsRow(sb):
-			if _, busy := m.archiving[id]; !busy {
-				m.archiving[id] = struct{}{}
-				unrows = append(unrows, sb)
-			}
-		case sb.ArchiveCk != "":
-			expired = append(expired, victim{action: reapPurge, id: id, ck: sb.ArchiveCk, tenant: sb.Tenant, deadline: sb.Deadline, sb: sb})
-			purges = append(purges, sb.ArchiveCk)
-		case m.archivesAtDeadline(sb):
-			// Archive instead of destroy, kept in m.claimed for archive() to move
-			if _, busy := m.archiving[id]; busy {
-				continue
-			}
-			m.archiving[id] = struct{}{}
-			action := reapArchive
-			if sb.HibernateSnap == "" {
-				action = reapPause
-			}
-			expired = append(expired, victim{action: action, id: id, sb: sb})
-		default:
-			expired = append(expired, victim{action: reapDestroy, id: id, vmName: sb.VMName, snap: sb.HibernateSnap, tenant: sb.Tenant, deadline: sb.Deadline, sb: sb, holds: m.cancelVolumeRun(sb)})
-			m.dropClaimLocked(sb)
-			dropped = append(dropped, id)
-		}
-	}
-	if len(dropped) > 0 {
-		m.store.del(dropped...)
-	}
-	m.mu.Unlock()
-	if len(unrows) > 0 {
-		m.runBounded(ctx, len(unrows), func(ctx context.Context, i int) { m.unrowExpired(ctx, unrows[i]) })
-	}
-	if len(expired) == 0 {
-		return
-	}
-
-	logger := log.WithFunc("pool.reapOnce")
-	failed := m.markArchiveCks(purges)
-	expired = slices.DeleteFunc(expired, func(v victim) bool {
-		markErr, bad := failed[v.ck]
-		if bad {
-			logger.Errorf(ctx, markErr, "mark archive ck %s; keeping %s", v.ck, v.id)
-		}
-		return bad
-	})
-	if len(expired) == 0 {
-		return
-	}
-	m.mu.Lock()
-	keep := expired[:0]
-	var purgeCks, purged []string
-	for _, v := range expired {
-		if v.action == reapPurge {
-			if m.claimed[v.id] != v.sb || v.sb.ArchiveCk != v.ck {
-				continue
-			}
-			m.pendingCks[v.ck] = struct{}{}
-			m.dropClaimLocked(v.sb)
-			purgeCks = append(purgeCks, v.ck)
-			purged = append(purged, v.id)
-		}
-		keep = append(keep, v)
-	}
-	expired = keep
-	if len(expired) == 0 {
-		m.mu.Unlock()
-		return
-	}
-	js := m.store.del(purged...)
-	m.mu.Unlock()
-	if saveErr := m.store.commit(js); saveErr != nil {
-		m.mu.Lock()
-		var restored []*types.Sandbox
-		for _, v := range expired {
-			if v.action == reapArchive || v.action == reapPause {
-				delete(m.archiving, v.id) // never removed from m.claimed
-			} else {
-				m.addClaimLocked(v.sb)
-				m.restoreVolumeHolds(v.sb, v.holds)
-				delete(m.pendingCks, v.ck)
-				restored = append(restored, v.sb)
-			}
-		}
-		rb := m.store.set(restored...)
-		m.mu.Unlock()
-		for _, ck := range purgeCks {
-			if clearErr := m.clearArchiveCk(ck); clearErr != nil {
-				logger.Warnf(ctx, "clear archive ck %s: %v", ck, clearErr)
-			}
-		}
-		m.store.recommit(ctx, rb)
-		logger.Error(ctx, saveErr, "persist reap; rolled back")
-		return
-	}
-	// Engine teardown can take minutes, so fan out bounded and never stall the ticker loop
-	m.runBounded(ctx, len(expired), func(ctx context.Context, i int) {
-		v := expired[i]
-		switch v.action {
-		case reapPurge:
-			m.out.Disarm(v.id, true)
-			m.purgeArchiveCk(ctx, v.id, v.ck, v.tenant)
-			m.untrack(m.pendingCks, v.ck)
-			m.counters.reaps.Add(1)
-			m.recordUsage(ctx, usage.Event{Event: reapEvent, ID: v.id, Tenant: v.tenant, Deadline: v.deadline})
-			logger.Infof(ctx, "purged archived sandbox %s", v.id)
-		case reapArchive:
-			logSweepResult(ctx, logger, m.archive(ctx, v.sb), "archived expired sandbox "+v.id, "archive expired sandbox "+v.id)
-		case reapPause:
-			logSweepResult(ctx, logger, m.pauseArchive(ctx, v.sb), "archived expired sandbox "+v.id, "archive expired sandbox "+v.id)
-		default:
-			td := m.quiesceVolumes(ctx, v.sb)
-			td.holds = v.holds
-			m.out.Disarm(v.id, m.removeOrRetry(ctx, v.vmName, v.id, td))
-			m.dropSnap(ctx, v.snap)
-			m.counters.reaps.Add(1)
-			m.recordUsage(ctx, usage.Event{Event: reapEvent, ID: v.id, VMName: v.vmName, Tenant: v.tenant, Deadline: v.deadline})
-			logger.Infof(ctx, "reaped expired sandbox %s (%s)", v.id, v.vmName)
-		}
-	})
-}
-
-func (m *Manager) archivesAtDeadline(sb *types.Sandbox) bool {
-	return sb.Failed == "" && !m.tenantGone(sb.Tenant) && (sb.OnExpire == types.ExpireArchive || sb.HibernateSnap != "" && m.archiveAfterFor(sb.Key) > 0)
-}
-
-func (m *Manager) pauseArchive(ctx context.Context, sb *types.Sandbox) error {
-	sb.Transition.Lock()
-	m.mu.Lock()
-	live := m.claimed[sb.ID] == sb && sb.ArchiveCk == ""
-	m.mu.Unlock()
-	var err error
-	if live {
-		err = m.hibernateLocked(ctx, sb)
-	}
-	sb.Transition.Unlock()
-	if !live || err != nil {
-		m.untrack(m.archiving, sb.ID)
-		return cmp.Or(err, errWokeMeanwhile)
-	}
-	return m.archive(ctx, sb)
-}
-
-func (m *Manager) purgeArchiveCk(ctx context.Context, id, ck, tenant string) {
-	logger := log.WithFunc("pool.purgeArchiveCk")
-	if _, err := m.finishArchiveCkDelete(ctx, ck); err != nil {
-		logger.Warnf(ctx, "delete archive ck %s: %v", ck, err)
-	}
-	m.counters.archiveDeletes.Add(1)
-	m.recordUsage(ctx, usage.Event{Event: "archive_delete", ID: id, Reference: ck, Tenant: tenant})
-}
-
 func (m *Manager) setIfLive(sb *types.Sandbox, mutate func()) (claimSnapshot, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -767,25 +584,10 @@ func (m *Manager) commitIfLive(ctx context.Context, sb *types.Sandbox, mutate fu
 	return true, nil
 }
 
-func (m *Manager) claim(id, token string) (*types.Sandbox, bool) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.authed(id, token)
-}
-
 func (m *Manager) deadlineOf(sb *types.Sandbox) time.Time {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return sb.Deadline
-}
-
-// Callers hold m.mu.
-func (m *Manager) authed(id, token string) (*types.Sandbox, bool) {
-	sb := m.claimed[id]
-	if sb == nil || subtle.ConstantTimeCompare([]byte(sb.Token), []byte(token)) != 1 {
-		return nil, false
-	}
-	return sb, true
 }
 
 // admitOptions validates the key and options and admits the claim's volumes, which the caller unreserves until finalize.

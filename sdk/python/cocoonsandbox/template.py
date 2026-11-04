@@ -31,8 +31,7 @@ class Template:
         *,
         deadline: float | None = None,
     ) -> Sandbox:
-        """Claims the template, following placement when volumes require it.
-        mount=False attaches the volumes without mounting them."""
+        """Claims the template, following placement when volumes require it; mount=False attaches them unmounted."""
         claim = _claim_body(self.name, self.net, self.size, ttl_seconds, volumes, mount)
         claim["require_promoted"] = True
         if volumes:

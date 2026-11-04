@@ -1,13 +1,4 @@
-"""Binds the SDK's real call sites to the golden corpus: each case drives an
-actual Sandbox method with the fixture's own field values through a real
-Conn over a socketpair, then asserts the emitted frame carries exactly the
-fixture's fields with the same values — both directions, so a misspelled
-field name AND a silently dropped field fail here; the generic encode
-round-trip alone cannot see either.
-
-Each CASES entry is (fixture stem, scripted guest replies, invoke(sb, fixture));
-UNSENT lists the fields no SDK call site emits by design, which silkd defaults
-and the Go SDK omits too."""
+"""Drives each real Sandbox call site and asserts its frame carries exactly the golden fixture's fields."""
 
 import contextlib
 import json
@@ -16,7 +7,7 @@ import socket
 import threading
 
 import pytest
-from conftest import sandbox_at
+from conftest import FakeConn, sandbox_at
 
 from cocoonsandbox import Lsp, Pty, Session
 from cocoonsandbox.conn import Conn
@@ -131,18 +122,13 @@ def test_git_branch_actions_come_from_the_corpus(monkeypatch):
     assert set(sent) == set(enums["git_branch_action"])
 
 
-class BranchActionConn:
+class BranchActionConn(FakeConn):
     """Records the action each git_branch verb puts on the wire."""
 
     def __init__(self, sent):
+        super().__init__([])
         self.sent = sent
         self.action = ""
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *exc):
-        pass
 
     def send(self, op, **fields):
         self.action = fields.get("action")
@@ -156,13 +142,9 @@ class BranchActionConn:
     def recv_until(self, *terminal):
         yield self.recv()
 
-    def close(self):
-        pass
-
 
 def fake_sandbox(monkeypatch, replies):
-    """A Sandbox whose _dial yields a real Conn over a socketpair; a guest
-    thread records inbound frames and answers the scripted replies."""
+    """A Sandbox whose _dial yields a real Conn over a socketpair to a scripted guest thread."""
     sent = []
     client_sock, guest_sock = socket.socketpair()
 

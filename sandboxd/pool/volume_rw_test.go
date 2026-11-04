@@ -386,7 +386,7 @@ func TestRollbackQuiescesWritableVolumesBeforeRemoval(t *testing.T) {
 		eng.volumeMounts = sb.Volumes
 		m.mu.Lock()
 		m.claimed[sb.ID] = sb
-		m.adoptVolumes(sb.Volumes)
+		m.catalog.adoptVolumes(sb.Volumes)
 		m.mu.Unlock()
 
 		m.rollbackClaim(t.Context(), []*types.Sandbox{sb})

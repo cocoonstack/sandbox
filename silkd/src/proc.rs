@@ -3,7 +3,6 @@
 use std::borrow::Cow;
 use std::collections::{HashMap, VecDeque};
 use std::os::fd::{AsRawFd, OwnedFd};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use tokio::io::AsyncWrite;
@@ -14,9 +13,6 @@ use crate::sysutil;
 
 const LOG_RING_BYTES: usize = 256 * 1024;
 const OUTPUT_FANOUT: usize = 256;
-
-/// Fallback pids for a child with no OS pid, masked below i32::MAX so a pid_t cast stays valid.
-static SYNTH: AtomicU64 = AtomicU64::new(1 << 30);
 
 /// A chunk of process output tagged by stream, shared with live attachers.
 #[derive(Clone)]
@@ -33,10 +29,6 @@ pub struct Table {
 }
 
 impl Table {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     pub fn register(&self, pid: u32, argv: Vec<String>, detached: bool, now: u64) -> Arc<Proc> {
         let proc = Arc::new(Proc {
             pid,
@@ -263,17 +255,13 @@ pub async fn write_chunk<W: AsyncWrite + Unpin>(
     }
 }
 
-pub fn synth_pid() -> u32 {
-    (SYNTH.fetch_add(1, Ordering::Relaxed) & (i32::MAX as u64)) as u32
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn fan_out_is_built_by_the_first_attacher() {
-        let table = Table::new();
+        let table = Table::default();
         let proc = table.register(7, vec!["true".to_string()], true, 0);
         proc.emit_bytes(false, b"before");
         assert!(
@@ -295,7 +283,7 @@ mod tests {
 
     #[test]
     fn attach_after_exit_replays_the_tail_with_the_code() {
-        let table = Table::new();
+        let table = Table::default();
         let proc = table.register(8, vec!["true".to_string()], true, 0);
         proc.emit_bytes(false, b"tail");
         proc.finish(5);
@@ -310,7 +298,7 @@ mod tests {
 
     #[test]
     fn attach_before_exit_receives_the_tail_then_the_exit() {
-        let table = Table::new();
+        let table = Table::default();
         let proc = table.register(9, vec!["true".to_string()], true, 0);
         let (replay, mut rx, exit) = proc.attach_stream();
         assert!(replay.is_empty());

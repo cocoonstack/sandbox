@@ -4,7 +4,7 @@ use std::fs;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use crate::cfg::{self, BootCfg};
+use crate::cfg::{self, BootCfg, IpParam};
 use crate::sys;
 
 const LAYER_DIR: &str = "/l";
@@ -77,17 +77,12 @@ pub fn run() -> ! {
         uptime(),
         cfg.init
     );
-    let err = sys::exec_init(&cfg.init);
+    let err = sys::exec_init(cfg.init);
     sys::fatal(&format!("exec {}: {err}", cfg.init), cfg.debug)
 }
 
-fn assemble(cfg: &BootCfg, marks: &mut Marks) -> Result<(), String> {
-    let ids: Vec<&str> = cfg
-        .layers
-        .iter()
-        .map(String::as_str)
-        .chain([cfg.cow.as_str()])
-        .collect();
+fn assemble(cfg: &BootCfg<'_>, marks: &mut Marks) -> Result<(), String> {
+    let ids: Vec<&str> = cfg.layers.iter().copied().chain([cfg.cow]).collect();
     let mut devs = resolve_disks(&ids, cfg.timeout)?;
     let cow_dev = devs
         .pop()
@@ -119,7 +114,7 @@ fn assemble(cfg: &BootCfg, marks: &mut Marks) -> Result<(), String> {
     )?;
     marks.mark("overlay");
 
-    if let Some(hostname) = &cfg.hostname {
+    if let Some(hostname) = cfg.hostname {
         sys::sethostname(hostname)?;
     }
     // empty machine-id => systemd generates a fresh one per VM (clone identity).
@@ -140,7 +135,7 @@ fn assemble(cfg: &BootCfg, marks: &mut Marks) -> Result<(), String> {
 }
 
 /// Persists kernel ip= params as MAC-matched networkd units in the new root.
-fn persist_network(cfg: &BootCfg) {
+fn persist_network(cfg: &BootCfg<'_>) {
     if cfg.ips.is_empty() {
         return;
     }
@@ -149,8 +144,7 @@ fn persist_network(cfg: &BootCfg) {
         eprintln!("sandbox-init: WARN: mkdir {dir}: {err}");
         return;
     }
-    let devices: Vec<&str> = cfg.ips.iter().map(|ip| ip.device.as_str()).collect();
-    for (ip, mac) in cfg.ips.iter().zip(wait_nic_macs(&devices, NIC_TIMEOUT)) {
+    for (ip, mac) in cfg.ips.iter().zip(wait_nic_macs(&cfg.ips, NIC_TIMEOUT)) {
         let Some(mac) = mac else {
             eprintln!(
                 "sandbox-init: WARN: NIC {} not found, static config skipped",
@@ -166,11 +160,11 @@ fn persist_network(cfg: &BootCfg) {
 }
 
 /// Resolves every NIC MAC against one shared deadline, so a missing NIC costs the timeout once.
-fn wait_nic_macs(devices: &[&str], timeout: Duration) -> Vec<Option<String>> {
-    poll_slots(devices.len(), timeout, |found| {
-        for (slot, device) in found.iter_mut().zip(devices) {
+fn wait_nic_macs(ips: &[IpParam<'_>], timeout: Duration) -> Vec<Option<String>> {
+    poll_slots(ips.len(), timeout, |found| {
+        for (slot, ip) in found.iter_mut().zip(ips) {
             if slot.is_none() {
-                *slot = read_nic_mac(device);
+                *slot = read_nic_mac(ip.device);
             }
         }
     })
@@ -231,12 +225,8 @@ fn scan_serials(ids: &[&str], found: &mut [Option<String>]) {
             continue;
         }
         // the serial attribute location varies by kernel version.
-        let paths = [
-            format!("/sys/block/{name}/serial"),
-            format!("/sys/block/{name}/device/serial"),
-        ];
-        for path in paths {
-            let Ok(serial) = fs::read_to_string(&path) else {
+        for sub in ["serial", "device/serial"] {
+            let Ok(serial) = fs::read_to_string(format!("/sys/block/{name}/{sub}")) else {
                 continue;
             };
             if serial.trim_end().is_empty() {
@@ -266,10 +256,9 @@ fn record_serial(ids: &[&str], found: &mut [Option<String>], serial: &str, devic
 }
 
 fn uptime() -> String {
-    fs::read_to_string("/proc/uptime")
-        .ok()
-        .and_then(|s| s.split_ascii_whitespace().next().map(String::from))
-        .unwrap_or_else(|| "?".into())
+    let mut s = fs::read_to_string("/proc/uptime").unwrap_or_else(|_| "?".into());
+    s.truncate(s.find(' ').unwrap_or(s.len()));
+    s
 }
 
 #[cfg(test)]

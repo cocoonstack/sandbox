@@ -1,6 +1,4 @@
-//! LSP broker: silkd spawns the language server named by
-//! `/etc/silkd/lsp.d/<language>` and pipes JSON-RPC bytes, never parsing LSP
-//! semantics. A session is single-shot: the stream ending reaps the server.
+//! LSP broker: spawns the server `/etc/silkd/lsp.d/<language>` names and pipes JSON-RPC bytes; the stream ending reaps it.
 
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -12,8 +10,9 @@ use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 use tokio::sync::mpsc;
+use tokio::task::JoinHandle;
 
-use crate::proto::{self, ErrorKind, Request, Response};
+use crate::proto::{self, BULK_CHUNK, ErrorKind, Request, Response};
 use crate::sysutil;
 
 const MANIFEST_DIR: &str = "/etc/silkd/lsp.d";
@@ -30,10 +29,6 @@ pub struct Broker {
 }
 
 impl Broker {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     /// Spawns the manifested language server for `language` and returns its id.
     pub async fn start<W: AsyncWrite + Unpin>(
         &self,
@@ -41,20 +36,22 @@ impl Broker {
         language: &str,
         root: Option<&str>,
     ) -> std::io::Result<()> {
-        let argv = match read_manifest(language).await {
-            Some(argv) if !argv.is_empty() => argv,
-            _ => {
-                return proto::error_frame(
-                    w,
-                    ErrorKind::NotFound,
-                    format!("no language server for {language:?}; a flavor image provides {}/{language}", manifest_dir()),
-                )
-                .await;
-            }
+        let raw = read_manifest(language).await.unwrap_or_default();
+        let mut argv = raw.split_whitespace();
+        let Some(program) = argv.next() else {
+            return proto::error_frame(
+                w,
+                ErrorKind::NotFound,
+                format!(
+                    "no language server for {language:?}; a flavor image provides {}/{language}",
+                    manifest_dir()
+                ),
+            )
+            .await;
         };
-        let mut cmd = Command::new(&argv[0]);
+        let mut cmd = Command::new(program);
         sysutil::align_proxy_env(&mut cmd);
-        cmd.args(&argv[1..])
+        cmd.args(argv)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -124,8 +121,8 @@ impl Broker {
             return Err(e);
         }
 
-        let feed = tokio::spawn(feed_stdin(client, stdin));
-        let res = pump_stdout(stdout, w).await;
+        let mut feed = tokio::spawn(feed_stdin(client, stdin));
+        let res = pump_stdout(stdout, w, &mut feed).await;
         // aborting mid-write is safe: the child is killed next.
         feed.abort();
         self.reap(server_id).await;
@@ -184,21 +181,32 @@ async fn kill(mut server: Server) {
 }
 
 async fn feed_stdin(mut client: mpsc::Receiver<Request>, mut stdin: ChildStdin) {
-    while let Some(req) = client.recv().await {
-        // a stray frame closes rather than errors: this task has no writer.
-        let Request::Data { data } = req else { return };
+    // a stray frame closes rather than errors: this task has no writer.
+    while let Some(Request::Data { data }) = client.recv().await {
         if stdin.write_all(&data).await.is_err() || stdin.flush().await.is_err() {
-            return;
+            break;
         }
     }
+    drop(stdin);
+    while client.recv().await.is_some() {}
 }
 
 async fn pump_stdout<W: AsyncWrite + Unpin>(
     mut stdout: ChildStdout,
     w: &mut W,
+    client_gone: &mut JoinHandle<()>,
 ) -> std::io::Result<()> {
-    if let Err(e) = proto::stream_data_frames(&mut stdout, w).await? {
-        return proto::err_frame(w, &e, "read lsp stdout").await;
+    let mut buf = vec![0u8; BULK_CHUNK];
+    let mut frame = Vec::new();
+    loop {
+        tokio::select! {
+            r = stdout.read(&mut buf) => match r {
+                Ok(0) => break,
+                Ok(n) => proto::write_chunk_frame(w, &mut frame, "data", &buf[..n]).await?,
+                Err(e) => return proto::err_frame(w, &e, "read lsp stdout").await,
+            },
+            _ = &mut *client_gone => break,
+        }
     }
     proto::write_frame(w, &Response::Done).await
 }
@@ -208,7 +216,7 @@ fn manifest_dir() -> Cow<'static, str> {
     std::env::var("SILKD_LSP_DIR").map_or(Cow::Borrowed(MANIFEST_DIR), Cow::Owned)
 }
 
-async fn read_manifest(language: &str) -> Option<Vec<String>> {
+async fn read_manifest(language: &str) -> Option<String> {
     if language.is_empty() || language.contains(['/', '\\', '\0']) || language.contains("..") {
         return None; // never let a language name escape the manifest dir
     }
@@ -221,5 +229,5 @@ async fn read_manifest(language: &str) -> Option<Vec<String>> {
         .ok()?;
     let mut raw = String::new();
     f.read_to_string(&mut raw).await.ok()?;
-    Some(raw.split_whitespace().map(str::to_string).collect())
+    Some(raw)
 }

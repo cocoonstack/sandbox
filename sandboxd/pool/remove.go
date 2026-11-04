@@ -116,3 +116,17 @@ func (m *Manager) finishRemoval(ctx context.Context, pending pendingRemoval) {
 func (m *Manager) destroy(ctx context.Context, name string) {
 	m.removeOrRetry(ctx, name, "", volumeTeardown{})
 }
+
+func (m *Manager) destroyAll(ctx context.Context, names []string) *sync.WaitGroup {
+	return m.runBounded(ctx, len(names), func(ctx context.Context, i int) { m.destroy(ctx, names[i]) })
+}
+
+func (m *Manager) dropSnap(ctx context.Context, snap string) {
+	if snap == "" {
+		return
+	}
+	ctx = context.WithoutCancel(ctx)
+	if err := m.eng.SnapshotRemove(ctx, snap); err != nil {
+		log.WithFunc("pool.dropSnap").Warnf(ctx, "drop snapshot %s: %v", snap, err)
+	}
+}

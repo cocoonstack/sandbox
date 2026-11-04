@@ -1,16 +1,13 @@
 package pool
 
 import (
-	"cmp"
 	"context"
-	"errors"
 	"fmt"
 	"slices"
 	"strings"
 
 	"golang.org/x/sync/errgroup"
 
-	"github.com/cocoonstack/sandbox/sandboxd/archives"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
@@ -73,7 +70,7 @@ func (m *Manager) writeEnv(ctx context.Context, id, tenant, verb string, next fu
 		}
 	}
 	changed := !env.SameGuest(prev)
-	paused := !locked || sb.HibernateSnap != "" || sb.PendingSnap != "" || sb.ArchiveCk != "" || failed
+	paused := !locked || !runningShaped(sb)
 	if changed && paused {
 		m.mu.Unlock()
 		if failed {
@@ -106,40 +103,6 @@ func (m *Manager) writeEnv(ctx context.Context, id, tenant, verb string, next fu
 			return fmt.Errorf("%s env %s: %w", verb, id, err)
 		}
 	}
-	return m.deliverGuestEnv(ctx, verb, id, sock, env, deliver)
-}
-
-func (m *Manager) rewriteArchiveRow(ctx context.Context, sb *types.Sandbox, locked bool) error {
-	if !locked {
-		sb.Transition.Lock()
-		defer sb.Transition.Unlock()
-	}
-	for range 2 {
-		m.mu.Lock()
-		ck, replica, live, rowed := sb.ArchiveCk, sb.ReplicaCk, m.claimed[sb.ID] == sb, m.rowFollows(sb)
-		m.mu.Unlock()
-		switch {
-		case !live:
-			return ErrUnknownSandbox
-		case !rowed:
-			return nil
-		}
-		epoch, err := m.putRow(ctx, sb, cmp.Or(ck, replica), ck == "", true)
-		if err == nil {
-			_, _ = m.commitIfLive(ctx, sb, func() { sb.ArchiveEpoch = epoch })
-			return nil
-		}
-		if !errors.Is(err, archives.ErrLost) {
-			return err
-		}
-		if err = m.refusedReplace(ctx, sb); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (m *Manager) deliverGuestEnv(ctx context.Context, verb, id, sock string, env types.Env, deliver bool) error {
 	if !deliver {
 		return nil
 	}

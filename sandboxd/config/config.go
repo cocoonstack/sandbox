@@ -30,7 +30,7 @@ const (
 	defaultDataDir      = "/var/lib/sandboxd"
 	defaultCocoonBin    = "cocoon"
 	defaultWarm         = 4
-	defaultMaxForkCount = 16
+	DefaultMaxForkCount = 16
 	refillFloor         = 4
 	refillCeiling       = 256
 	// cocoon builds a VM with a 10G disk by default, so a pool never asks for less
@@ -290,6 +290,10 @@ func (c *Config) HasEgress() bool {
 	return len(c.Bridges) > 0 || len(c.Networks) > 0
 }
 
+func (c *Config) S3Checkpoints() bool {
+	return c.CheckpointStore != nil && c.CheckpointStore.Kind == "s3"
+}
+
 func (c *Config) guardsEgressLane() bool {
 	return len(c.EgressClasses) > 0 || slices.ContainsFunc(c.Pools, func(p PoolSpec) bool { return p.Net == types.NetEgress && p.Egress != nil })
 }
@@ -300,7 +304,7 @@ func (c *Config) applyDefaults() {
 	c.CocoonBin = cmp.Or(c.CocoonBin, defaultCocoonBin)
 	c.AdvertiseAddr = cmp.Or(c.AdvertiseAddr, c.Listen)
 	c.PreviewAdvertise = cmp.Or(c.PreviewAdvertise, c.PreviewListen)
-	c.MaxForkCount = cmp.Or(c.MaxForkCount, defaultMaxForkCount)
+	c.MaxForkCount = cmp.Or(c.MaxForkCount, DefaultMaxForkCount)
 	if c.RefillConcurrency == 0 {
 		c.RefillConcurrency = autoRefillConcurrency(runtime.NumCPU())
 	}
@@ -450,7 +454,7 @@ func (c *Config) validateClientAdvertise() error {
 		(u.Path != "" && u.Path != "/") || strings.ContainsAny(c.ClientAdvertise, "?#") {
 		return fmt.Errorf("client_advertise must be an http or https origin")
 	}
-	if !routableHost(u.Hostname()) {
+	if !RoutableHost(u.Hostname()) {
 		return fmt.Errorf("client_advertise must name a routable host")
 	}
 	if port := u.Port(); port != "" {
@@ -477,7 +481,7 @@ func (c *Config) validateMesh() error {
 	if err != nil {
 		return fmt.Errorf("advertise_addr: %w", err)
 	}
-	if !routableHost(host) {
+	if !RoutableHost(host) {
 		return fmt.Errorf("advertise_addr %q is gossiped to peers and must name a routable host", c.AdvertiseAddr)
 	}
 	return nil
@@ -613,7 +617,7 @@ func (c *Config) validateDiskReserve() error {
 func (c *Config) validateMetaStore() error {
 	ms := c.MetaStore
 	switch {
-	case c.ArchiveFailover && (ms == nil || ms.Cell == "" || c.CheckpointStore == nil || c.CheckpointStore.Kind != "s3" || c.Mesh == nil):
+	case c.ArchiveFailover && (ms == nil || ms.Cell == "" || !c.S3Checkpoints() || c.Mesh == nil):
 		return fmt.Errorf("archive_failover requires meta_store with a cell, an s3 checkpoint_store and a mesh")
 	case ms == nil:
 		return nil
@@ -681,6 +685,11 @@ func StorageBytes(s string) (int64, error) {
 	return units.RAMInBytes(s)
 }
 
+func RoutableHost(host string) bool {
+	ip, _ := netip.ParseAddr(host)
+	return host != "" && !ip.IsUnspecified()
+}
+
 func validatePolicy(p *egress.Policy, secrets map[string]struct{}) error {
 	if p == nil {
 		return nil
@@ -733,10 +742,5 @@ func namesHost(addr string) bool {
 		addr = "http://" + addr
 	}
 	u, err := url.Parse(addr)
-	return err == nil && routableHost(u.Hostname())
-}
-
-func routableHost(host string) bool {
-	ip, _ := netip.ParseAddr(host)
-	return host != "" && !ip.IsUnspecified()
+	return err == nil && RoutableHost(u.Hostname())
 }

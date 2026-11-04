@@ -71,7 +71,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 			continue
 		}
 		m.addClaimLocked(sb)
-		m.adoptVolumes(heldVolumes(sb))
+		m.catalog.adoptVolumes(heldVolumes(sb))
 		owned[sb.VMName] = true
 		referenced[sb.HibernateSnap] = true
 	}
@@ -204,7 +204,7 @@ func (m *Manager) holdStaleVolumes(ctx context.Context, name string, rec types.V
 		}
 	}
 	m.mu.Lock()
-	m.adoptVolumes(holds)
+	m.catalog.adoptVolumes(holds)
 	m.mu.Unlock()
 	return holds
 }

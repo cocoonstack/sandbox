@@ -16,6 +16,7 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/archives"
 	"github.com/cocoonstack/sandbox/sandboxd/archives/archivestest"
 	"github.com/cocoonstack/sandbox/sandboxd/config"
+	"github.com/cocoonstack/sandbox/sandboxd/egress"
 	"github.com/cocoonstack/sandbox/sandboxd/store"
 	"github.com/cocoonstack/sandbox/sandboxd/tenants"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
@@ -824,7 +825,7 @@ func TestFailoverALeftoverDeleteMarkerSparesTheAdoptersCheckpoint(t *testing.T) 
 	sb := mustClaim(t, a, testKey)
 	mustArchive(t, a, sb)
 	ck := sb.ArchiveCk
-	if err := a.markArchiveCk(ck); err != nil {
+	if err := a.ckMarks.mark(ck); err != nil {
 		t.Fatalf("mark: %v", err)
 	}
 	c.expire("a")
@@ -845,7 +846,7 @@ func TestFailoverRestartClearsTheMarkerOfAnAdoptedClaim(t *testing.T) {
 	sb := mustClaim(t, a, testKey)
 	mustArchive(t, a, sb)
 	ck := sb.ArchiveCk
-	if err := a.markArchiveCk(ck); err != nil {
+	if err := a.ckMarks.mark(ck); err != nil {
 		t.Fatalf("mark: %v", err)
 	}
 	if err := a.FlushClaims(); err != nil {
@@ -1207,7 +1208,7 @@ func TestFailoverADropClearsTheMarkerBeforeTheCheckpointIsUnpinned(t *testing.T)
 		sb := mustClaim(t, a, testKey)
 		mustArchive(t, a, sb)
 		ck := sb.ArchiveCk
-		if err := a.markArchiveCk(ck); err != nil {
+		if err := a.ckMarks.mark(ck); err != nil {
 			t.Fatalf("mark: %v", err)
 		}
 		c.expire("a")
@@ -1388,7 +1389,7 @@ func TestFailoverArchiveSweepExportsNothingWhileTheRegistryIsDown(t *testing.T) 
 	for range 3 {
 		backdate(a, sb, time.Minute)
 		a.archiveOnce(t.Context())
-		waitFor(t, func() bool { return !a.archiveSweep.Load() })
+		waitFor(t, func() bool { return !a.sweeps.archive.Load() })
 	}
 	if metas, err := a.ckpts.Metas(t.Context()); err != nil || len(metas) != 0 {
 		t.Errorf("three archive ticks with the registry down left %d exports %v, want none", len(metas), err)
@@ -1863,6 +1864,7 @@ type failoverCluster struct {
 	replicate int
 	volumes   []config.VolumeSpec
 	nodes     []*Manager
+	egressPol *egress.Policy
 }
 
 func newFailoverCluster(t *testing.T) *failoverCluster {
@@ -1920,9 +1922,13 @@ func (c *failoverCluster) nodeOn(t *testing.T, eng *fakeEngine, name, dataDir st
 	t.Helper()
 	spec := archivePool(deleteAfter)
 	spec.ReplicateSeconds = c.replicate
+	spec.Egress = c.egressPol
 	cfg := &config.Config{
 		APIToken: "root", DataDir: dataDir, CheckpointDir: c.ckDir, Pools: []config.PoolSpec{spec, {PoolKey: plainKey, Warm: 1}},
 		Mesh: &config.MeshConfig{NodeID: name}, Volumes: c.volumes,
+	}
+	if c.egressPol != nil {
+		cfg.EgressCA = writeTestEgressCA(t)
 	}
 	b := testBackends(t, cfg)
 	b.Archives = c.reg

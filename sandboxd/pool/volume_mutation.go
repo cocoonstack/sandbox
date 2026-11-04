@@ -198,7 +198,7 @@ func (m *Manager) beginVolumeRun(ctx context.Context, sb *types.Sandbox) (contex
 func (m *Manager) finishVolumeRun(sb *types.Sandbox, run *volumeRun) types.SandboxVolumesResponse {
 	m.mu.Lock()
 	if m.claimed[sb.ID] == sb {
-		m.releaseVolumes(volumeDifference(run.holds, heldVolumes(sb)))
+		m.catalog.releaseVolumes(volumeDifference(run.holds, heldVolumes(sb)))
 	}
 	delete(m.volumeRuns, sb)
 	view := m.volumeView(sb)
@@ -210,7 +210,7 @@ func (m *Manager) finishVolumeRun(sb *types.Sandbox, run *volumeRun) types.Sandb
 
 func (m *Manager) restoreVolumeHolds(sb *types.Sandbox, holds []types.Volume) {
 	if m.volumeRuns[sb] == nil {
-		m.releaseVolumes(volumeDifference(holds, heldVolumes(sb)))
+		m.catalog.releaseVolumes(volumeDifference(holds, heldVolumes(sb)))
 	}
 }
 
@@ -267,11 +267,11 @@ func (m *Manager) stageVolumeTarget(ctx context.Context, sb *types.Sandbox, run 
 		m.mu.Unlock()
 		return claimSnapshot{}, false, ErrVolumeCapture
 	}
-	if err := m.checkResolvedLocked(resolved); err != nil {
+	if err := m.catalog.checkResolvedLocked(resolved); err != nil {
 		m.mu.Unlock()
 		return claimSnapshot{}, false, err
 	}
-	m.adoptVolumes(additions)
+	m.catalog.adoptVolumes(additions)
 	run.holds = append(run.holds, additions...)
 	m.mu.Unlock()
 	cleanErr := m.confirmVolumesClean(resolved)
@@ -281,7 +281,7 @@ func (m *Manager) stageVolumeTarget(ctx context.Context, sb *types.Sandbox, run 
 		return claimSnapshot{}, false, err
 	}
 	if cleanErr != nil {
-		m.releaseVolumes(additions)
+		m.catalog.releaseVolumes(additions)
 		run.holds = volumeDifference(run.holds, additions)
 		return claimSnapshot{}, false, cleanErr
 	}
@@ -350,7 +350,7 @@ func (m *Manager) commitVolumeRun(ctx context.Context, sb *types.Sandbox, run *v
 		return err
 	}
 	dropped := volumeDifference(run.holds, heldVolumes(sb))
-	m.releaseVolumes(dropped)
+	m.catalog.releaseVolumes(dropped)
 	run.holds = volumeDifference(run.holds, dropped)
 	return nil
 }

@@ -1,6 +1,5 @@
 //! git verbs wrap the guest git binary into structured results; the none lane fails clone/push/pull with a typed error.
 
-use std::borrow::Cow;
 use std::process::Stdio;
 
 use tokio::io::AsyncWrite;
@@ -13,6 +12,8 @@ use crate::sysutil;
 const STATUS_FILES_BYTES: usize = proto::MAX_FRAME / 8;
 const STATUS_ENTRY_OVERHEAD: usize = 40;
 
+const NO_EGRESS: &str = "no network on this sandbox; use fs.push to move a repository in";
+
 /// Clones `url` into `path` (optionally a branch, shallow depth), then Done.
 pub async fn clone<W: AsyncWrite + Unpin>(
     w: &mut W,
@@ -23,7 +24,7 @@ pub async fn clone<W: AsyncWrite + Unpin>(
     auth: Option<String>,
 ) -> std::io::Result<()> {
     if !crate::net::has_egress() {
-        return proto::write_frame(w, &no_egress()).await;
+        return proto::error_frame(w, ErrorKind::Unimplemented, NO_EGRESS).await;
     }
     let depth_arg;
     let mut args: Vec<&str> = vec!["clone"];
@@ -97,7 +98,7 @@ pub async fn net_verb<W: AsyncWrite + Unpin>(
     verb: &str,
 ) -> std::io::Result<()> {
     if !crate::net::has_egress() {
-        return proto::write_frame(w, &no_egress()).await;
+        return proto::error_frame(w, ErrorKind::Unimplemented, NO_EGRESS).await;
     }
     let out = git(&path, auth.as_deref(), &[verb]).await?;
     terminal(w, verb, &out).await
@@ -113,11 +114,7 @@ pub async fn branch<W: AsyncWrite + Unpin>(
     let args: Vec<&str> = match (op, &name) {
         (GitBranchOp::List, _) => return list_branches(w, &path).await,
         (_, None) => {
-            return proto::write_frame(
-                w,
-                &Response::error(ErrorKind::BadRequest, "branch op needs a name"),
-            )
-            .await;
+            return proto::error_frame(w, ErrorKind::BadRequest, "branch op needs a name").await;
         }
         (GitBranchOp::Create, Some(name)) => vec!["branch", name],
         (GitBranchOp::Delete, Some(name)) => vec!["branch", "-D", name],
@@ -137,8 +134,11 @@ async fn list_branches<W: AsyncWrite + Unpin>(w: &mut W, path: &str) -> std::io:
         .lines()
         .map(str::to_string)
         .collect();
-    let cur = git(path, None, &["rev-parse", "--abbrev-ref", "HEAD"]).await?;
-    let current = String::from_utf8_lossy(&cur.stdout).trim().to_string();
+    let cur = git(path, None, &["symbolic-ref", "--short", "-q", "HEAD"]).await?;
+    let current = match String::from_utf8_lossy(&cur.stdout).trim() {
+        "" => "HEAD".to_string(),
+        name => name.to_string(),
+    };
     proto::write_frame(w, &Response::GitBranches { current, branches }).await
 }
 
@@ -166,26 +166,15 @@ async fn git(
 
 /// Injects git config as GIT_CONFIG_COUNT/KEY_n/VALUE_n env pairs.
 fn apply_config(cmd: &mut Command, auth: Option<&str>) {
-    let mut pairs: Vec<(&str, Cow<'static, str>)> =
-        vec![("core.quotePath", Cow::Borrowed("false"))];
+    cmd.env("GIT_CONFIG_COUNT", if auth.is_some() { "2" } else { "1" })
+        .env("GIT_CONFIG_KEY_0", "core.quotePath")
+        .env("GIT_CONFIG_VALUE_0", "false");
     if let Some(token) = auth {
-        pairs.push((
-            "http.extraHeader",
-            Cow::Owned(format!("Authorization: Bearer {token}")),
-        ));
+        cmd.env("GIT_CONFIG_KEY_1", "http.extraHeader").env(
+            "GIT_CONFIG_VALUE_1",
+            format!("Authorization: Bearer {token}"),
+        );
     }
-    cmd.env("GIT_CONFIG_COUNT", pairs.len().to_string());
-    for (i, (key, value)) in pairs.iter().enumerate() {
-        cmd.env(format!("GIT_CONFIG_KEY_{i}"), key);
-        cmd.env(format!("GIT_CONFIG_VALUE_{i}"), value.as_ref());
-    }
-}
-
-fn no_egress() -> Response {
-    Response::error(
-        ErrorKind::Unimplemented,
-        "no network on this sandbox; use fs.push to move a repository in",
-    )
 }
 
 /// Writes Done on success, else the git stderr as an error frame.

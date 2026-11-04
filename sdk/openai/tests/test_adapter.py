@@ -1,7 +1,4 @@
-"""Adapter unit tests: exercise the BaseSandboxSession hooks against an
-in-process fake sandboxd (control plane over http.server, data plane over
-the SDK's own conn). No real VM — this binds the adapter's mapping onto the
-cocoonsandbox surface, not cocoon itself."""
+"""Adapter hooks against an in-process fake sandboxd, with no real VM."""
 
 import asyncio
 import io

@@ -179,7 +179,7 @@ func TestConcurrentTenantPutsKeepEveryTenant(t *testing.T) {
 		})
 	}
 	wg.Wait()
-	if n := len(m.TenantRecords()); n != 32 {
+	if n := len(m.tenants.Records()); n != 32 {
 		t.Errorf("%d tenants after 32 concurrent puts, want 32", n)
 	}
 }
@@ -389,7 +389,7 @@ func TestTwoNodesOnOneMetaStoreShareTheTenantSet(t *testing.T) {
 	if _, err := a.Renew(t.Context(), sb.ID, Cred{Token: sb.Token}, time.Hour, ""); !errors.Is(err, ErrTenantRemoved) {
 		t.Errorf("renew on a after b removed the tenant: %v, want ErrTenantRemoved even though a's cache lost the name", err)
 	}
-	if a.TenantRecords() != nil {
+	if a.tenants.Records() != nil {
 		t.Error("a shared tenant set entered the cluster digest")
 	}
 	if _, err := os.Stat(filepath.Join(a.dataDir, "tenants.json")); !errors.Is(err, os.ErrNotExist) {

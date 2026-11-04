@@ -1,6 +1,4 @@
-// Package engine drives VM lifecycle through the cocoon CLI and dials the
-// in-guest silkd over hybrid vsock. The CLI is cocoon's only stable contract
-// (it exports no lifecycle library); no lifecycle call sits on the warm-claim path.
+// Package engine drives VM lifecycle through the cocoon CLI, its only stable contract, and dials the in-guest silkd over hybrid vsock.
 package engine
 
 import (
@@ -129,17 +127,17 @@ func (e *Engine) VersionWarning(ctx context.Context) (version, warning string) {
 
 // Clone restores a VM from an exported golden directory.
 func (e *Engine) Clone(ctx context.Context, fromDir, name string, key types.PoolKey) (types.VMRecord, error) {
-	return e.runRecord(ctx, e.cloneArgs(fromDir, name, key)...)
+	return e.runRecord(ctx, dumpTimeout, dumpTermGrace, e.cloneArgs(fromDir, name, key)...)
 }
 
 // CloneSnap clones from a local-store snapshot by name — fork's fast path.
 func (e *Engine) CloneSnap(ctx context.Context, snap, name string, key types.PoolKey) (types.VMRecord, error) {
-	return e.runRecord(ctx, e.cloneSnapArgs(snap, name, key)...)
+	return e.runRecord(ctx, dumpTimeout, dumpTermGrace, e.cloneSnapArgs(snap, name, key)...)
 }
 
 // RunCold boots a VM from the template image with a storage-sized disk (empty = cocoon's default), returning its lifecycle record.
 func (e *Engine) RunCold(ctx context.Context, name string, key types.PoolKey, storage string) (types.VMRecord, error) {
-	return e.runRecord(ctx, e.runColdArgs(name, key, storage)...)
+	return e.runRecord(ctx, cmdTimeout, cmdTermGrace, e.runColdArgs(name, key, storage)...)
 }
 
 // Remove force-deletes a VM; a refused delete gets a force stop and one more delete.
@@ -192,7 +190,7 @@ func (e *Engine) Hibernate(ctx context.Context, vmName, snapName string) error {
 
 // Restore resumes a VM from a snapshot, returning its vsock UDS.
 func (e *Engine) Restore(ctx context.Context, vmName, snapRef string) (string, error) {
-	rec, err := e.runRecord(ctx, e.restoreCmdArgs(vmName, snapRef)...)
+	rec, err := e.runRecord(ctx, dumpTimeout, dumpTermGrace, e.restoreCmdArgs(vmName, snapRef)...)
 	return rec.VsockSocket, err
 }
 
@@ -302,7 +300,7 @@ func (e *Engine) DialGuestPort(ctx context.Context, vsockSocket string, port uin
 	}
 	// The forwarded stream's own reader takes the handshake reply, so an over-read stays buffered.
 	r := bufio.NewReaderSize(conn, portForwardMax)
-	line, readErr := readBufLine(r, portForwardMax)
+	line, readErr := readBufLine(r)
 	if readErr != nil {
 		_ = conn.Close()
 		if ctxErr := ctx.Err(); ctxErr != nil {
@@ -337,7 +335,7 @@ func (e *Engine) dialVsock(ctx context.Context, vsockSocket string, port int) (n
 		return nil, fmt.Errorf("write CONNECT: %w", err)
 	}
 	r := bufio.NewReaderSize(conn, connectMax)
-	reply, err := readBufLine(r, connectMax)
+	reply, err := readBufLine(r)
 	if err != nil {
 		_ = conn.Close()
 		if ctxErr := ctx.Err(); ctxErr != nil {
@@ -454,8 +452,8 @@ func (e *Engine) runDump(ctx context.Context, args ...string) error {
 	return err
 }
 
-func (e *Engine) runRecord(ctx context.Context, args ...string) (types.VMRecord, error) {
-	out, err := e.run(ctx, args...)
+func (e *Engine) runRecord(ctx context.Context, timeout, termGrace time.Duration, args ...string) (types.VMRecord, error) {
+	out, err := e.runFor(ctx, timeout, termGrace, args...)
 	if err != nil {
 		return types.VMRecord{}, err
 	}
@@ -549,13 +547,10 @@ func belowFloor(v, floor string) (below, known bool) {
 	return semver.Compare(v, floor) < 0, true
 }
 
-func readBufLine(r *bufio.Reader, limit int) (string, error) {
+func readBufLine(r *bufio.Reader) (string, error) {
 	line, err := r.ReadSlice('\n')
 	if err != nil {
 		return "", err
-	}
-	if len(line) > limit {
-		return "", fmt.Errorf("reply exceeds %d bytes", limit)
 	}
 	return string(line[:len(line)-1]), nil
 }

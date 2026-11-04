@@ -76,9 +76,7 @@ pub async fn run<W: AsyncWrite + Unpin>(
             }
         }
     };
-    if !feed_done {
-        feed.abort();
-    }
+    feed.abort();
     res
 }
 

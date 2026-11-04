@@ -9,10 +9,13 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
 const (
@@ -232,6 +235,52 @@ func TestACanceledCommandGetsSIGTERMSoCocoonCanResumeTheVM(t *testing.T) {
 	}
 	if data, _ := os.ReadFile(trace); !strings.Contains(string(data), "term") {
 		t.Errorf("trace %q, want the command to have received SIGTERM", data)
+	}
+}
+
+func TestAMemoryRestoreGetsTheDumpTermGraceAndAColdBootTheCommandOne(t *testing.T) {
+	t.Parallel()
+	for _, tt := range []struct {
+		name string
+		run  func(ctx context.Context, e *Engine) error
+		want string
+	}{
+		{"restore", func(ctx context.Context, e *Engine) error {
+			_, err := e.Restore(ctx, "vm", "snap")
+			return err
+		}, "exit status 3"},
+		{"clone", func(ctx context.Context, e *Engine) error {
+			_, err := e.Clone(ctx, "dir", "vm", types.PoolKey{})
+			return err
+		}, "exit status 3"},
+		{"cold boot", func(ctx context.Context, e *Engine) error {
+			_, err := e.RunCold(ctx, "vm", types.PoolKey{}, "")
+			return err
+		}, "signal: killed"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			bin, ready := filepath.Join(dir, "cocoon"), filepath.Join(dir, "ready")
+			script := "#!/bin/sh\ntrap 'kill $!; sleep " + strconv.Itoa(int(cmdTermGrace/time.Second)+2) + " >/dev/null 2>&1; exit 3' TERM\n" +
+				"sleep 300 >/dev/null 2>&1 &\n: > " + ready + "\nwait\n"
+			if err := os.WriteFile(bin, []byte(script), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			done := make(chan error, 1)
+			go func() { done <- tt.run(ctx, New(bin, nil, nil, false, false, "")) }()
+			for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+				if _, err := os.Stat(ready); err == nil {
+					break
+				}
+			}
+			cancel()
+			if err := <-done; err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Errorf("got %v, want %q", err, tt.want)
+			}
+		})
 	}
 }
 

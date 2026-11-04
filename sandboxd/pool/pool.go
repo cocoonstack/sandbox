@@ -6,7 +6,6 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"maps"
@@ -64,8 +63,7 @@ const (
 	refillBackoffBase = 250 * time.Millisecond
 	refillBackoffMax  = buildRetryDelay
 	// Fallbacks when a Manager is built from a Config that skipped config.Load's defaulting
-	defaultMaxFork = 16
-	defaultRefill  = 4
+	defaultRefill = 4
 
 	// A heal pulls a whole guest memory image, so a few saturate disk and NIC.
 	maxConcurrentHeals = 4
@@ -248,111 +246,6 @@ type pendingRemoval struct {
 	notBefore   time.Time
 }
 
-type pool struct {
-	key  types.PoolKey
-	hash string
-
-	// floor and warmMax bound the demand-adaptive target computed in watermark.go
-	floor           int
-	warmMax         int
-	idle            time.Duration
-	archiveAfter    time.Duration
-	archiveDelete   time.Duration
-	rate            float64
-	lead            time.Duration
-	lastArrival     time.Time
-	binStart        time.Time
-	binCount        int
-	overTargetSince time.Time
-
-	goldenDir string
-	imageID   string
-	// goldenGen counts installs, so a clone of a retired golden never lands after a rebuild at the same path.
-	goldenGen   uint64
-	building    bool
-	nextBuild   time.Time
-	removed     bool // dropped from the desired set while unsettled; swept by refillOnce
-	warm        []*types.Sandbox
-	refilling   int
-	claimClones atomic.Int32
-
-	// Without a streak gate a node-wide dead cause is retried every tick at full concurrency
-	refillFails     int
-	nextRefill      time.Time
-	cloneFails      int
-	goldenRetiredAt time.Time
-}
-
-func newPool(key types.PoolKey) *pool {
-	return &pool{key: key, hash: key.Hash()}
-}
-
-func (p *pool) settled() bool {
-	return !p.building && p.refilling == 0 && p.claimClones.Load() == 0
-}
-
-// refillGated reports whether a refill may not spawn: backoff wait, or one probe in flight.
-func (p *pool) refillGated(now time.Time) bool {
-	return now.Before(p.nextRefill) || (p.refillFails >= refillFailStreak && p.refilling > 0)
-}
-
-// noteRefillResult records one refill outcome and reports whether it started a backoff.
-func (p *pool) noteRefillResult(now time.Time, failed bool) bool {
-	if !failed {
-		p.refillFails, p.nextRefill = 0, time.Time{}
-		return false
-	}
-	p.refillFails++
-	if p.refillFails < refillFailStreak {
-		return false
-	}
-	first := !now.Before(p.nextRefill)
-	backoff := refillBackoffBase << min(p.refillFails-refillFailStreak, 16)
-	p.nextRefill = now.Add(min(backoff, refillBackoffMax))
-	return first
-}
-
-func (p *pool) countClone(ctx context.Context, gen uint64, cloned bool, capReason string) bool {
-	if ctx.Err() != nil || capReason != "" || gen != p.goldenGen {
-		return false
-	}
-	if cloned {
-		p.cloneFails = 0
-	} else {
-		p.cloneFails++
-	}
-	return true
-}
-
-func (p *pool) applySpec(spec config.PoolSpec) {
-	p.floor = spec.Warm
-	p.warmMax = spec.WarmMax
-	p.idle = time.Duration(spec.IdleHibernateSeconds) * time.Second
-	p.archiveAfter = time.Duration(spec.ArchiveAfterSeconds) * time.Second
-	p.archiveDelete = time.Duration(spec.ArchiveDeleteAfterSeconds) * time.Second
-}
-
-func (p *pool) popWarm() *types.Sandbox {
-	n := len(p.warm)
-	if n == 0 {
-		return nil
-	}
-	sb := p.warm[n-1]
-	p.warm = p.warm[:n-1]
-	return sb
-}
-
-// trimWarm shrinks p.warm to at most target and returns the trimmed VM names; callers hold m.mu.
-func (p *pool) trimWarm(target int) []string {
-	var trim []string
-	for len(p.warm) > target {
-		n := len(p.warm) - 1
-		trim = append(trim, p.warm[n].VMName)
-		p.warm = p.warm[:n]
-	}
-	return trim
-}
-
 // Manager owns the node's pools, claims, and their persistence.
 type Manager struct {
 	eng          Engine
@@ -369,32 +262,25 @@ type Manager struct {
 	poolVersion    int64
 	configSeedHash string // config pools' hash, to warn when a file edit is overridden
 
-	// idleDefault is the idle-hibernate threshold for unpooled keys; zero disables.
-	idleSweep atomic.Bool
+	sweeps struct{ idle, liveness, archive, archiveDelete, orphan, ckpt, gen atomic.Bool }
 
-	livenessSweep atomic.Bool
 	cocoondSocket string
 	// vmmEvents is set while the cocoon daemon stream is live; the poll is then only a backstop.
 	vmmEvents  atomic.Bool
 	lastVMPoll atomic.Int64
 
-	// archive*Default are the archive thresholds for unpooled keys.
-	archiveSweep       atomic.Bool
-	archiveDeleteSweep atomic.Bool
 	// archiving holds ids with an export or a registry drop in flight; pendingCks pins ids mid-commit; both under m.mu.
 	archiving  map[string]struct{}
 	pendingCks map[string]struct{}
 	// archives is the cluster archive registry, nil unless archive_failover is set.
 	archives     archives.Registry
 	nodeID       string
-	orphanSweep  atomic.Bool
 	adoptFlights singleflight.Group
-	// fence gates replicated claims while the lease is overdue; replicaPools is fixed at start; replicas belongs to the pass holding replicating.
-	fence        atomic.Pointer[fenceState]
-	unfencing    atomic.Bool
-	replicaPools map[types.PoolKey]struct{}
-	replicating  atomic.Bool
-	replicas     map[string]time.Time
+	// fence gates replicated claims while the lease is overdue; replicas belongs to the pass holding replicating.
+	fence       atomic.Pointer[fenceState]
+	unfencing   atomic.Bool
+	replicating atomic.Bool
+	replicas    map[string]time.Time
 
 	view atomic.Pointer[configView]
 	// cfg is the config the view was built from; reloadMu orders reloads, the only writers of cfg and view.
@@ -417,24 +303,18 @@ type Manager struct {
 	healer      *peer.Healer
 	healSem     chan struct{}
 	healFlights singleflight.Group
-	// healPending/healAbort, guarded by healMu, let a delete veto a heal still staging.
-	healMu       sync.Mutex
-	healPending  map[string]struct{}
-	healAbort    map[string]struct{}
-	peerDelete   PeerDeleteFunc
-	peerAdopt    PeerAdoptFunc
-	tpls         store.Store
-	ckptSweeping atomic.Bool
-	genSweeping  atomic.Bool
+	heals       healVetoes
+	peerDelete  PeerDeleteFunc
+	peerAdopt   PeerAdoptFunc
+	tpls        store.Store
 
 	// tplSet caches each template id's key, digest and owning tenant ("" = operator).
 	tplMu  sync.Mutex
 	tplSet map[string]TemplateInfo
 
-	// recLocks serializes same-id record mutations; an entry lives exactly as long as a recLock reference to it.
-	recLocks   map[string]*sync.RWMutex
-	recLocksMu sync.Mutex
-	recRefs    map[string]int
+	recs recordLocks
+
+	ckMarks ckMarkers
 
 	// notifyTemplates is set before serving starts and fires after a promote or template delete.
 	notifyTemplates func()
@@ -488,10 +368,9 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 		readers:         &readerSet{live: map[string]*reader{}},
 		archiving:       map[string]struct{}{},
 		pendingCks:      map[string]struct{}{},
-		recLocks:        map[string]*sync.RWMutex{},
-		recRefs:         map[string]int{},
-		healPending:     map[string]struct{}{},
-		healAbort:       map[string]struct{}{},
+		ckMarks:         ckMarkers{dir: filepath.Join(cfg.DataDir, archiveDeleteDir)},
+		recs:            recordLocks{held: map[string]*sync.RWMutex{}, refs: map[string]int{}},
+		heals:           healVetoes{pending: map[string]struct{}{}, aborted: map[string]struct{}{}},
 		refillSem:       make(chan struct{}, refill),
 		goldenDumps:     make(chan struct{}, 1),
 		maintSem:        make(chan struct{}, max(1, refill-max(1, refill/4))),
@@ -499,32 +378,14 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 		refillKick:      make(chan struct{}, 1),
 		healSem:         make(chan struct{}, maxConcurrentHeals),
 	}
-	for _, volume := range cfg.Volumes {
-		m.catalog.entries[volume.Name] = &catalogVolume{
-			disk:     engine.VolumeSpec{Name: volume.Name, Path: volume.Path, DirectIO: volume.DirectIO},
-			tenants:  slices.Clone(volume.Tenants),
-			writable: volume.Writable,
-		}
-	}
+	m.seedVolumes(cfg.Volumes)
 	if err := m.loadRuntimeVolumes(); err != nil {
 		return nil, err
 	}
 	if err := os.MkdirAll(m.goldensDir(), 0o750); err != nil {
 		return nil, fmt.Errorf("create goldens dir: %w", err)
 	}
-	m.tplSet = map[string]TemplateInfo{}
-	metas, listErr := m.tpls.Metas(ctx)
-	if listErr != nil {
-		log.WithFunc("pool.NewManager").Warnf(ctx, "list templates skipped: %v", listErr)
-	}
-	for _, r := range metas {
-		var rec templateRecord
-		if json.Unmarshal(r.Meta, &rec) == nil && rec.ID != "" {
-			info := TemplateInfo{Key: rec.Key, ContentDigest: r.Digest, Tenant: rec.Tenant, CreatedAt: rec.CreatedAt}
-			_ = json.Unmarshal(r.Labels, &info.Labels)
-			m.tplSet[rec.ID] = info
-		}
-	}
+	m.loadTemplates(ctx)
 	usageJournal, err := newJournal(filepath.Join(cfg.DataDir, usage.JournalFile))
 	if err != nil {
 		return nil, fmt.Errorf("open usage journal: %w", err)
@@ -557,12 +418,6 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 	if m.archives != nil {
 		m.nodeID = cfg.Mesh.ID()
 		close(start.ch)
-		m.replicaPools = map[types.PoolKey]struct{}{}
-		for _, spec := range cfg.Pools {
-			if spec.ReplicateSeconds > 0 {
-				m.replicaPools[spec.PoolKey] = struct{}{}
-			}
-		}
 	}
 	m.fence.Store(start)
 	if err := m.adoptPools(ctx); err != nil {
@@ -578,7 +433,7 @@ func (m *Manager) ClusterDigest() string {
 	m.reloadMu.Lock()
 	cfg := m.cfg
 	m.reloadMu.Unlock()
-	return clusterDigest(cfg, m.out.CAFingerprint(), m.TenantRecords())
+	return clusterDigest(cfg, m.out.CAFingerprint(), m.tenants.Records())
 }
 
 // Run drives the refill and reap loops until ctx is canceled.
@@ -738,10 +593,10 @@ func (m *Manager) WithPeerAdopt(fn PeerAdoptFunc) {
 }
 
 func (m *Manager) sweepStoreGenerations(ctx context.Context) {
-	if !m.genSweeping.CompareAndSwap(false, true) {
+	if !m.sweeps.gen.CompareAndSwap(false, true) {
 		return
 	}
-	defer m.genSweeping.Store(false)
+	defer m.sweeps.gen.Store(false)
 	logger := log.WithFunc("pool.sweepStoreGenerations")
 	if err := m.ckpts.SweepGenerations(ctx); err != nil {
 		logger.Error(ctx, err, "sweep checkpoint generations")
@@ -749,6 +604,26 @@ func (m *Manager) sweepStoreGenerations(ctx context.Context) {
 	if err := m.tpls.SweepGenerations(ctx); err != nil {
 		logger.Error(ctx, err, "sweep template generations")
 	}
+}
+
+// runBounded fans f over n items on the refill semaphore, sharing the node-wide budget but never the share maintSem leaves to refill.
+func (m *Manager) runBounded(ctx context.Context, n int, f func(context.Context, int)) *sync.WaitGroup {
+	var wg sync.WaitGroup
+	for i := range n {
+		// Acquire inside the goroutine so a batch larger than the budget cannot block the caller
+		wg.Go(func() {
+			for _, sem := range [...]chan struct{}{m.maintSem, m.refillSem} {
+				select {
+				case sem <- struct{}{}:
+				case <-ctx.Done():
+					return
+				}
+				defer func() { <-sem }()
+			}
+			f(ctx, i)
+		})
+	}
+	return &wg
 }
 
 func (m *Manager) untrack(set map[string]struct{}, key string) {
@@ -820,13 +695,6 @@ func benignSweepErr(err error) bool {
 
 func vmName(key types.PoolKey) string {
 	return vmPrefix + key.Hash() + "-" + randHex(6)
-}
-
-// lockedVMName reads the VM name under the lock that archive() clears it under.
-func lockedVMName(sb *types.Sandbox) string {
-	sb.Transition.Lock()
-	defer sb.Transition.Unlock()
-	return sb.VMName
 }
 
 func randHex(n int) string {

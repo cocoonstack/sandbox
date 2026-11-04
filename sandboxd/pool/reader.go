@@ -133,7 +133,7 @@ func (m *Manager) dropReader(ctx context.Context, r *reader, force bool) {
 	}
 	delete(rs.live, r.claim)
 	rs.mu.Unlock()
-	m.destroyReader(context.WithoutCancel(ctx), r)
+	m.destroyReader(ctx, r)
 }
 
 func (m *Manager) ensureReader(ctx context.Context, sb *types.Sandbox) error {
@@ -175,7 +175,7 @@ func (m *Manager) openReader(ctx context.Context, sb *types.Sandbox) error {
 	r.idle = time.AfterFunc(readerIdle, func() { m.dropReader(context.Background(), r, false) })
 	rs.mu.Unlock()
 	if old != nil {
-		m.destroyReader(context.WithoutCancel(ctx), old)
+		m.destroyReader(ctx, old)
 	}
 	log.WithFunc("pool.openReader").Infof(ctx, "reader %s for sleeping claim %s ready in %s", r.vm, sb.ID, time.Since(start).Round(time.Millisecond))
 	return nil
@@ -228,8 +228,12 @@ func (m *Manager) fetchReaderArchive(ctx context.Context, r *reader) error {
 }
 
 func (m *Manager) fetchReaderFile(ctx context.Context, r *reader, name string) error {
-	if err := m.ckpts.FetchFile(ctx, r.source, name, filepath.Join(r.dir, name)); err != nil {
-		return archiveFetchErr(err)
+	err := m.ckpts.FetchFile(ctx, r.source, name, filepath.Join(r.dir, name))
+	if errors.Is(err, store.ErrNotFound) {
+		return errNotSleeping
+	}
+	if err != nil {
+		return fmt.Errorf("fetch archive: %w", err)
 	}
 	return nil
 }
@@ -282,13 +286,6 @@ func sleepSource(sb *types.Sandbox) string {
 		return ""
 	}
 	return cmp.Or(sb.HibernateSnap, sb.ArchiveCk)
-}
-
-func archiveFetchErr(err error) error {
-	if errors.Is(err, store.ErrNotFound) {
-		return errNotSleeping
-	}
-	return fmt.Errorf("fetch archive: %w", err)
 }
 
 func diskAttachFiles(envelope string) ([]string, error) {

@@ -1,6 +1,4 @@
-//! Whole-tree transfer through the guest tar binary: `fs.push` extracts a client
-//! tar stream into a directory, `fs.pull` streams a path back as a tar. Push is
-//! network-failure atomic: it stages inside `dest`, then merges by rename.
+//! Whole-tree transfer through the guest tar; `fs.push` stages inside `dest` and merges by rename, so a stream failure leaves `dest` unchanged.
 
 use std::io;
 use std::os::fd::OwnedFd;
@@ -23,7 +21,7 @@ const DIR_FLAGS: OFlag = OFlag::O_DIRECTORY
     .union(OFlag::O_CLOEXEC);
 
 /// Extracts a client tar stream into `dest`, creating it; a stream failure leaves `dest` unchanged.
-pub async fn push<R, W>(mut reader: R, w: &mut W, dest: String) -> io::Result<()>
+pub async fn push<R, W>(reader: &mut R, w: &mut W, dest: String) -> io::Result<()>
 where
     R: AsyncBufRead + Unpin,
     W: AsyncWrite + Unpin,
@@ -36,7 +34,7 @@ where
         Ok(fds) => fds,
         Err(e) => return err_frame(w, &e, "stage push").await,
     };
-    let res = push_staged(&mut reader, w, staging, dest_fd).await;
+    let res = push_staged(reader, w, staging, dest_fd).await;
     // a failed push can leave a large partial tree, so cleanup runs on every exit path.
     let _ = tokio::fs::remove_dir_all(Path::new(&dest).join(&name)).await;
     res
@@ -46,7 +44,7 @@ where
 pub async fn pull<W: AsyncWrite + Unpin>(w: &mut W, path: String) -> io::Result<()> {
     let p = Path::new(&path);
     let (parent, name) = match (p.parent(), p.file_name()) {
-        (Some(par), Some(n)) if !n.is_empty() => (par, n),
+        (Some(par), Some(n)) => (par, n),
         _ => return proto::error_frame(w, ErrorKind::BadRequest, "invalid path").await,
     };
     // symlink_metadata: a dangling symlink is still a valid tar source.

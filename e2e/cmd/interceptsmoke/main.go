@@ -18,8 +18,6 @@ import (
 	sandbox "github.com/cocoonstack/sandbox/sdk/go"
 )
 
-const proxy = "http://127.0.0.1:3128"
-
 func main() {
 	addr := flag.String("addr", "127.0.0.1:7779", "sandboxd address")
 	token := flag.String("token", "", "node api token")
@@ -54,7 +52,7 @@ func run(addr, token, template, echo, secret, issuer string) error {
 	}
 	fmt.Println("  cluster root baked into guest trust store")
 
-	verbose, err := sb.Exec(ctx, "sh", "-c", fmt.Sprintf("curl -sS -v -x %s https://%s/get 2>&1", proxy, echo))
+	verbose, err := sb.Exec(ctx, "sh", "-c", fmt.Sprintf("curl -sS -v -x %s https://%s/get 2>&1", harness.GuestProxy, echo))
 	if err != nil {
 		return fmt.Errorf("proxied HTTPS exec: %w (%s)", err, tail(verbose))
 	}

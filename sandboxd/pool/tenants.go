@@ -34,11 +34,6 @@ func (m *Manager) TenantByToken(ctx context.Context, token string) (*tenants.Ten
 	return m.tenants.Resolve(ctx, sha256.Sum256([]byte(token)))
 }
 
-// TenantRecords returns a node-local tenant set for the cluster config digest; a shared set returns nil.
-func (m *Manager) TenantRecords() []tenants.TenantRecord {
-	return m.tenants.Records()
-}
-
 // Tenants lists up to limit tenants after the cursor with each one's live claims here; the first page also names the removed tenants still holding claims.
 func (m *Manager) Tenants(ctx context.Context, after string, limit int) (TenantPage, error) {
 	records, err := m.tenants.List(ctx, after, limit+1)

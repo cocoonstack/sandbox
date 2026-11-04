@@ -20,7 +20,24 @@ All bodies are JSON. Three token kinds:
 Endpoints below that say "node API token" accept root or tenant unless
 marked root-only. Errors are `{"error": "message"}` with the status codes
 listed per endpoint. Request bodies are capped at 1 MiB; a larger one is
-rejected with `400 {"error": "invalid request body"}`.
+rejected with `400` and an error beginning `invalid request body`.
+
+## Guest errors
+
+Wake, the agent relay, the port relay and exec restore a sleeping sandbox before
+they reach its guest, so they share these answers:
+
+- 403 a removed tenant's archive
+- 429 while the disk reserve is low or the node is at
+  [`max_running`](deploy.md#configuration)
+- 503 `lease lost; retry` for a replicated claim while its node's lease is
+  overdue ([running claims](cluster.md#running-claims-across-node-loss))
+- 503 `sandbox moving to another node; retry` while an
+  [evacuation](#post-v1drain) has yet to move it
+- 503 `archive registry down; retry` for an archived claim under
+  `archive_failover` while the meta store is down
+- 503 `tenant store down; retry` for an archived claim whose tenant the node has
+  not cached while the meta store is down
 
 ## POST /v1/claim
 
@@ -58,7 +75,9 @@ Auth: `Authorization: Bearer <api_token>` (when configured).
   of the claim's length, so its next expiry archives it again; a call that
   wakes it between the hibernate and the export grants that fresh lease too.
   A failed hibernate or export at expiry keeps the claim and retries on every
-  reap tick (5 s); it never falls back to destroy. A volume claim or an egress-lane claim
+  reap tick (5 s); it never falls back to destroy. A failed claim (`failed` set, see
+  [dead VMMs](deploy.md#dead-vmms-and-host-restarts)) is destroyed at expiry even
+  under `archive`. A volume claim or an egress-lane claim
   cannot hibernate, so `archive` on one answers 409 with the same error as a
   hibernate
 - `no_redirect` is set by the SDK when retrying at a redirect target
@@ -203,8 +222,10 @@ VM closes the devices.
 
 Redirects (mutually exclusive with the fields above) name peers to retry
 at — sent on a warm miss with warm peers, when the node lacks a golden for
-the key but gossip names a template owner, and when the node is at
-`max_claims` or `max_running` and a peer reports warm capacity or, failing that, serves the pool:
+the key but gossip names a template owner, and when a claim without `volumes`,
+`no_redirect` or `require_promoted` meets a 429 (the node at `max_claims` or
+`max_running`, the calling tenant at its cap, the node draining, or the disk under
+`disk_reserve`) and a peer reports warm capacity or, failing that, serves the pool:
 
 ```json
 {"redirect": ["10.0.0.6:7777", "10.0.0.7:7777"],
@@ -515,11 +536,8 @@ while stored, and waking it starts a fresh lease of the length the claim was gra
 [failed](deploy.md#dead-vmms-and-host-restarts) sandbox is cold-booted from
 its own disk (memory is lost) and its restart budget resets. 204 on
 success, 404 unknown id or wrong token, 409 a failed egress-lane or volume
-sandbox, or one whose VM record is gone, 403 a removed tenant's archive,
-429 while the disk reserve is low or the node is at [`max_running`](deploy.md#configuration), 500 when the cold boot or a restore fails,
-503 `lease lost; retry` for a replicated claim while its node's lease is overdue,
-503 `sandbox moving to another node; retry` while an [evacuation](#post-v1drain) has yet to move it,
-503 `archive registry down; retry` for an archived claim under `archive_failover` while the meta store is down.
+sandbox, or one whose VM record is gone, 500 when the cold boot or a restore
+fails, and the [guest errors](#guest-errors).
 
 ## POST /v1/sandboxes/{id}/renew
 
@@ -549,12 +567,14 @@ token gets 403, the root token still renews. 400 a malformed body; 401 missing
 bearer token; 403 the claim's tenant was removed; 404 unknown id or wrong
 token; 409 archived, or being archived right now; 503 the archive registry is
 down, for a hibernated claim with a replica under `archive_failover`: the node
-already holds the new lease, and a resend replaces the row.
+already holds the new lease, and a resend replaces the row; 503 `tenant store
+down; retry` for a tenant the node has not cached while the meta store is down.
 
 ## POST /v1/sandboxes/{id}/fork
 
 Auth: the node `api_token` (Bearer) — forking creates node resources, like a
-claim. The sandbox's own token rides in the body as the ownership proof:
+claim. The sandbox's own token rides in the body as the ownership proof; the
+root `api_token` with an empty body `token` acts by id as the operator:
 
 ```json
 {"token": "…", "count": 2, "ttl_seconds": 300, "claim_ref_prefix": "team-a/"}
@@ -566,6 +586,9 @@ addresses the children by name; without it children carry no `claim_ref`.
 The prefix is at most 512 bytes of printable UTF-8, as `claim_ref` is.
 Children inherit the parent's `metadata`, `on_expire` and `"egress": false`; an
 `on_expire` in the body overrides the inherited action.
+Children do not inherit the claim env: a guest env file captured from the parent
+is rewritten empty in each child, and the parent's host-only entries are not
+copied; set one with `PUT /v1/sandboxes/{id}/env`.
 Clones the sandbox into `count` fresh claims (1 up to the node's
 `max_fork_count`, default 16). Memory, disk, and guest
 state (sessions, processes, tmpfs) duplicate at the fork point; cocoon's
@@ -586,12 +609,13 @@ an unknown `on_expire`; 401 bad api token; 403 the parent's tenant was removed
 parent (neither forks, checkpoints, or promotes; see [egress](egress.md)), a
 failed parent, or an archived parent (`POST /wake` or an exec wakes it first);
 429 node or the parent's tenant at `max_claims`, the node at `max_running`, the node draining, or the disk
-under `disk_reserve`.
+under `disk_reserve`; 503 `lease lost; retry` for a replicated parent while its node's lease is overdue, `tenant store down; retry` for a sandbox token whose tenant the node has not cached while the meta store is down.
 
 ## POST /v1/sandboxes/{id}/promote
 
 Auth: like fork — node `api_token` in the header, the sandbox's own token in
-the body:
+the body; the root `api_token` with an empty body `token` acts by id as the
+operator:
 
 ```json
 {"token": "…", "template": "myproj:v1"}
@@ -627,7 +651,8 @@ the export they were set on, which the new one replaces.
 configured pool, the template is owned by another tenant, or the sandbox is
 on the egress lane, has volumes attached (see [egress](egress.md)), or is
 archived (`POST /wake` or an exec wakes it first), 404 unknown id or wrong
-sandbox token, 429 while the disk is under [`disk_reserve`](deploy.md).
+sandbox token, 429 while the disk is under [`disk_reserve`](deploy.md), 503
+`lease lost; retry` for a replicated sandbox while its node's lease is overdue.
 
 ## DELETE /v1/templates?template=…&net=…&size=…
 
@@ -792,7 +817,7 @@ run out (see [evacuating a node](cluster.md#evacuating-a-node)). It needs
 background, with bounded concurrency, each claim is hibernated if it runs,
 archived to the checkpoint store if it is not archived, its registry row is
 released, and a peer is asked to adopt it through `GET /v1/sandboxes/{id}/owner`,
-so the root listing on that peer shows it with its token. Open streams to a
+so that peer lists it, and root's `GET /v1/sandboxes/{id}` there returns its token. Open streams to a
 claim end when it hibernates. Until a peer holds it, a call that would wake the
 claim answers 503 `sandbox moving to another node; retry` with `Retry-After`;
 after that this node answers 404 and the client looks the claim up again. With
@@ -804,7 +829,8 @@ whose step failed, and every claim of a node without `archive_failover`. The
 answer and `GET /v1/info` count the claims left in `evacuating`; once it is
 gone, `claimed` counts the ones that stayed, and the log names each and why. A
 claim of a pool without an archive tier, whose `on_expire` is not `archive`,
-keeps its lease deadline across the move; any other keeps the later of its
+keeps its lease deadline across the move until its first wake, which starts a
+fresh lease of the claim's length; any other keeps the later of its
 lease and `archive_delete_after_seconds`, or no deadline when that is 0. A call
 while an evacuation runs changes nothing; a call after one finished starts a
 new one over the claims still here.
@@ -822,7 +848,8 @@ Unlike fork, promote and checkpoint — where the root token with an empty body
 token acts by id as the operator — preview has no operator path: the body
 token is required. Mints a signed URL serving a
 guest HTTP port from a browser: body `{"token": "...", "port": 8080,
-"ttl_seconds": 0}` → `{"url": "http://<preview_advertise>/p/<token>/"}`.
+"ttl_seconds": 0}` → `{"url": "<preview_advertise>/p/<token>/"}` (`http://` is
+prefixed when `preview_advertise` names no scheme).
 The URL's life is clamped to the claim's remaining lease; an archived claim
 kept forever (`archive_delete_after_seconds: 0`) has no lease, so there the
 requested `ttl_seconds` stands unclamped and `ttl_seconds: 0` mints a one-hour
@@ -831,19 +858,21 @@ URL; releasing the sandbox ends it early either way.
 has no `preview_listen`. The signed token embeds the sandbox id, port, and
 owner `advertise_addr`, so any node's preview listener can serve it (forwarding
 to the owner's main listener) and a released sandbox's URL simply stops
-resolving — no revocation list. A request for a replicated claim answers 503
-`lease lost; retry` while its node's lease is overdue, and a request that has to wake a sandbox answers 429 while the disk reserve is low or the node is at `max_running`. See [deploy](deploy.md#preview-urls).
+resolving — no revocation list. A browser request to the minted URL answers 503
+`lease lost; retry` for a replicated claim while its node's lease is overdue, 503 `sandbox moving to another node; retry` while an [evacuation](#post-v1drain) has yet to move it, and 429 when it has to wake a sandbox while the disk reserve is low or the node is at `max_running`. See [deploy](deploy.md#preview-urls).
 
 ## POST /v1/sandboxes/{id}/checkpoint
 
 Auth: node API token; body `{"token": "<sandbox token>", "name": "..."}`
-(name optional). Captures the sandbox's full state without stopping it and
+(name optional); the root `api_token` with an empty body `token` acts by id as
+the operator. Captures the sandbox's full state without stopping it and
 answers `200 {"checkpoint": {id, name, sandbox_id, key, tenant?,
 created_at}}` — `tenant` records the calling tenant, absent for root.
 400 bad body or name, 401 bad api token, 404 unknown id or wrong sandbox
 token, 409 egress-lane sandbox, one with volumes attached (see
 [egress](egress.md)), or an archived one (`POST /wake` or an exec wakes it
-first), 429 while the disk is under [`disk_reserve`](deploy.md).
+first), 429 while the disk is under [`disk_reserve`](deploy.md), 503 `lease lost; retry`
+for a replicated sandbox while its node's lease is overdue.
 
 ## POST /v1/checkpoints/{id}/claim
 
@@ -897,7 +926,9 @@ part of the public API; an SDK caller has no reason to call it directly.
 
 Auth: node API token. Lists this node's checkpoints, newest first. A tenant
 sees only its own records; root sees everything. A checkpoint backing an
-archived claim is that claim's wake image, not a listable record.
+archived claim is that claim's wake image, not a listable record. Answers
+`200 {"checkpoints": [{id, name, sandbox_id, key, tenant?, created_at}]}`, the
+record shape `POST /v1/sandboxes/{id}/checkpoint` returns.
 
 ## DELETE /v1/checkpoints/{id}
 
@@ -1148,11 +1179,9 @@ ends after about two minutes of failed TCP keepalives. Frames sent right behind 
 before the 101, reach silkd in order; the Go and Python SDKs send their first
 frames that way over plain HTTP, so a proxy in front of a plain-HTTP endpoint
 must forward them too (Go's `httputil.ReverseProxy` drops them; Caddy forwards
-them). 426 without the upgrade header, 403 a removed tenant's archive, 404
-unknown sandbox, 409 a failed sandbox, 429 while the disk reserve is low or the node is at `max_running`, 500 a
-failed restore, 502 guest unreachable, 503 `lease lost; retry` for a replicated claim
-while its node's lease is overdue (see
-[running claims](cluster.md#running-claims-across-node-loss)), 503 `archive registry down; retry` for an archived claim under `archive_failover` while the meta store is down. A relay of a
+them). 426 without the upgrade header, 404 unknown sandbox, 409 a failed sandbox,
+500 a failed restore, 502 guest unreachable, and the
+[guest errors](#guest-errors). A relay of a
 claim of a replicating pool that is already open when the lease turns overdue
 is closed, whether or not it has a replica yet.
 
@@ -1213,9 +1242,8 @@ fork in flight, answers `409` at once; an open passive relay still holds the san
 400 a port outside 1-65535; 401 missing bearer token; 404 unknown sandbox or
 wrong token; 409 a failed sandbox or a passive relay to a paused one; 426 without the upgrade
 header; 502 when the guest cannot be reached on that port — no listener, or a
-hibernated sandbox whose restore failed. The node log carries which; 403 a
-removed tenant's archive; 429 while the disk reserve is low or the node is at `max_running`; 503
-`lease lost; retry` for a replicated claim while its node's lease is overdue; 503 `archive registry down; retry` for an archived claim under `archive_failover` while the meta store is down.
+hibernated sandbox whose restore failed. The node log carries which; and the
+[guest errors](#guest-errors).
 
 ## POST /v1/sandboxes/{id}/exec
 
@@ -1240,9 +1268,8 @@ does not exist are the caller's, not 502s; 401 missing bearer token; 404 unknown
 413 when stdout+stderr exceed 8 MiB; 503 with `Retry-After: 1` when the
 node's buffered-exec memory is exhausted (64 MiB of output across every
 buffered exec in flight; the command is killed); 502 guest unreachable or any other
-silkd error; 403 a removed tenant's archive; 409 a failed sandbox; 429 while the
-disk reserve is low or the node is at `max_running`; 500 a failed restore; 503 `lease lost; retry` for a replicated claim
-while its node's lease is overdue; 503 `archive registry down; retry` for an archived claim under `archive_failover` while the meta store is down; 504 when the command outlives `timeout_seconds`. A client that hangs up first gets no reply and the command is killed. A hibernated sandbox wakes transparently like on the relay.
+silkd error; 409 a failed sandbox; 500 a failed restore; the
+[guest errors](#guest-errors); 504 when the command outlives `timeout_seconds`. A client that hangs up first gets no reply and the command is killed. A hibernated sandbox wakes transparently like on the relay.
 
 ## GET /v1/sandboxes/{id}/owner
 
@@ -1311,7 +1338,8 @@ size tier, its [`labels`](#put-v1templateslabelstemplatenetsize) when any are
 set, and `tenant` when a tenant promoted it (omitted for the operator). A key
 a configured pool now owns is left out, since claims of it clone the pool's
 golden. On a shared checkpoint store a node lists what it promoted plus what
-was in the store when it started. A template published by an older sandboxd is
+was in the store when it started, and a template another node deletes later
+stays listed, and may redirect a claim to a 404, until this node restarts. A template published by an older sandboxd is
 listed once it is re-promoted.
 
 ## GET /v1/peers

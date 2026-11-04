@@ -16,55 +16,6 @@ from cocoonsandbox import sandbox as sandbox_module
 TIMEOUT = 0.2
 
 
-def legacy_sandbox(addr: str) -> Sandbox:
-    return sandbox_at(addr, timeout=TIMEOUT, keep_alive=0)
-
-
-def serve_port_forward(server: socket.socket, quiet: float, ops: list[str]) -> None:
-    conn, _ = server.accept()
-    reader = accept_upgrade(conn)
-    ops.append(json.loads(reader.readline())["op"])
-    conn.sendall(b'{"type":"ready"}\n')
-    time.sleep(quiet)
-    conn.sendall(b'{"type":"data","data":"bGF0ZQ=="}\n{"type":"done"}\n')
-    conn.close()
-
-
-def serve_started_then_hang(server: socket.socket, quiet: float, kills: list[dict]) -> None:
-    conn, _ = server.accept()
-    reader = accept_upgrade(conn)
-    reader.readline()
-    conn.sendall(b'{"type":"started","pid":7}\n')
-    killer, _ = server.accept()
-    kills.append(json.loads(accept_upgrade(killer).readline()))
-    killer.sendall(b'{"type":"done"}\n')
-    killer.close()
-    time.sleep(quiet)
-    conn.close()
-
-
-def serve_started_then_trickle_the_kill_reply(server: socket.socket, kills: list[dict]) -> None:
-    conn, _ = server.accept()
-    reader = accept_upgrade(conn)
-    reader.readline()
-    conn.sendall(b'{"type":"started","pid":7}\n')
-    killer, _ = server.accept()
-    kills.append(json.loads(accept_upgrade(killer).readline()))
-    with contextlib.suppress(OSError):
-        for byte in b'{"type":"done"}\n':
-            time.sleep(0.75 * TIMEOUT)
-            killer.sendall(bytes([byte]))
-    killer.close()
-    conn.close()
-
-
-def serve_silence(server: socket.socket) -> None:
-    conn, _ = server.accept()
-    conn.recv(4096)
-    time.sleep(5 * TIMEOUT)
-    conn.close()
-
-
 def test_port_stream_outlives_the_client_timeout():
     server = socket.create_server(("127.0.0.1", 0))
     addr = f"127.0.0.1:{server.getsockname()[1]}"
@@ -144,3 +95,52 @@ def test_dial_is_still_bounded_by_the_client_timeout():
 @pytest.mark.parametrize(("exc", "want"), [(socket.timeout(), SandboxTimeout), (ConnectionResetError(), ProtocolError)])
 def test_handshake_failures_are_typed(exc, want):
     assert isinstance(conn_module._handshake_error("agent upgrade", exc), want)
+
+
+def legacy_sandbox(addr: str) -> Sandbox:
+    return sandbox_at(addr, timeout=TIMEOUT, keep_alive=0)
+
+
+def serve_port_forward(server: socket.socket, quiet: float, ops: list[str]) -> None:
+    conn, _ = server.accept()
+    reader = accept_upgrade(conn)
+    ops.append(json.loads(reader.readline())["op"])
+    conn.sendall(b'{"type":"ready"}\n')
+    time.sleep(quiet)
+    conn.sendall(b'{"type":"data","data":"bGF0ZQ=="}\n{"type":"done"}\n')
+    conn.close()
+
+
+def serve_started_then_hang(server: socket.socket, quiet: float, kills: list[dict]) -> None:
+    conn, _ = server.accept()
+    reader = accept_upgrade(conn)
+    reader.readline()
+    conn.sendall(b'{"type":"started","pid":7}\n')
+    killer, _ = server.accept()
+    kills.append(json.loads(accept_upgrade(killer).readline()))
+    killer.sendall(b'{"type":"done"}\n')
+    killer.close()
+    time.sleep(quiet)
+    conn.close()
+
+
+def serve_started_then_trickle_the_kill_reply(server: socket.socket, kills: list[dict]) -> None:
+    conn, _ = server.accept()
+    reader = accept_upgrade(conn)
+    reader.readline()
+    conn.sendall(b'{"type":"started","pid":7}\n')
+    killer, _ = server.accept()
+    kills.append(json.loads(accept_upgrade(killer).readline()))
+    with contextlib.suppress(OSError):
+        for byte in b'{"type":"done"}\n':
+            time.sleep(0.75 * TIMEOUT)
+            killer.sendall(bytes([byte]))
+    killer.close()
+    conn.close()
+
+
+def serve_silence(server: socket.socket) -> None:
+    conn, _ = server.accept()
+    conn.recv(4096)
+    time.sleep(5 * TIMEOUT)
+    conn.close()

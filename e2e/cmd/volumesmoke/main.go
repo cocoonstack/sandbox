@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -38,7 +39,7 @@ func run(addr, token, template, volume, rwVolume, probe string, live bool) error
 	if volume == "" {
 		return errors.New("volume is required")
 	}
-	if probe == "" || probe == "." || path.IsAbs(probe) || path.Clean(probe) != probe || probe == ".." || strings.HasPrefix(probe, "../") {
+	if !filepath.IsLocal(probe) || probe == "." || path.Clean(probe) != probe {
 		return fmt.Errorf("probe %q must be a clean relative file path", probe)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
@@ -217,7 +218,7 @@ func runWritable(ctx context.Context, client *sandbox.Client, template, volume s
 	if _, err = writer.Exec(ctx, "sh", "-c", fmt.Sprintf("printf %%s %s > %s", stamp, path.Join(mount, file))); err != nil {
 		return fmt.Errorf("write through the writable mount: %w", err)
 	}
-	// a live writer owns the image: the second claim is refused before attach.
+	// A live writer owns the image: the second claim is refused before attach.
 	busy, busyErr := client.New(ctx, template, sandbox.WithNetwork(sandbox.NetNone),
 		sandbox.WithVolumes(sandbox.Volume{Name: volume, Mount: mount, Mode: "rw"}))
 	if busyErr == nil {

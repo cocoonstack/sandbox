@@ -19,7 +19,7 @@ import (
 	sandbox "github.com/cocoonstack/sandbox/sdk/go"
 )
 
-// one dd keeps exactly one virtio queue busy, so the writers are the queue fan-out
+// One dd keeps exactly one virtio queue busy, so the writers are the queue fan-out
 const ddScript = `pids=; for i in $(seq 1 %d); do dd if=/dev/zero of=/root/qaab.$i bs=%s count=%d oflag=direct conv=fsync 2>/dev/null & pids="$pids $!"; done; status=0; for pid in $pids; do wait "$pid" || status=1; done; exit "$status"`
 
 type stats struct {

@@ -1,24 +1,10 @@
-"""Fault matrix for the cluster redirect follow and the lookup scatter:
-dead first candidate (connection refused), 404 first candidate, a definitive
-candidate error that still tries the next one, every candidate exhausted
-(then the origin fallback heals, fails, or is skipped for a definitive
-error) — and lookup must not pay a hung or dead peer's full timeout."""
+"""Fault matrix for the cluster redirect follow and the lookup scatter."""
 
-import socket
 import time
 
 import pytest
 
 from cocoonsandbox import APIError, Client
-
-
-@pytest.fixture
-def hung_addr():
-    sock = socket.socket()
-    sock.bind(("127.0.0.1", 0))
-    sock.listen(1)
-    yield f"127.0.0.1:{sock.getsockname()[1]}"
-    sock.close()
 
 
 def test_claim_redirect_skips_dead_candidate(spawn_node, dead_addr):
@@ -184,12 +170,12 @@ def test_lookup_dead_peer_resolves_fast(spawn_node, dead_addr):
     assert elapsed < 2.0, elapsed
 
 
-def test_lookup_hung_peer_resolves_fast(spawn_node, hung_addr):
+def test_lookup_hung_peer_resolves_fast(spawn_node, black_hole):
     owner = spawn_node({("GET", "/v1/sandboxes/sb_1/owner"): lambda body, path: (200, {"owner_addr": "10.0.0.9:7777"})})
     entry = spawn_node(
         {
             ("GET", "/v1/sandboxes/sb_1/owner"): lambda body, path: (404, {"error": "not here"}),
-            ("GET", "/v1/peers"): lambda body, path: (200, {"peers": [hung_addr, owner]}),
+            ("GET", "/v1/peers"): lambda body, path: (200, {"peers": [black_hole, owner]}),
         }
     )
     start = time.monotonic()
@@ -233,6 +219,36 @@ def test_close_releases_a_sandbox_that_moved(spawn_node):
     )
     Client(old).attach(old, "sb_1", "tok").close()
     assert released
+
+
+def test_close_follows_a_move_off_a_retired_node(spawn_node, dead_addr):
+    released = []
+
+    def release(body, path):
+        released.append(path)
+        return (204, {})
+
+    adopter = spawn_node(
+        {
+            ("GET", "/v1/sandboxes/sb_1/owner"): lambda body, path: (200, {}),
+            ("POST", "/v1/sandboxes/sb_1/release"): release,
+            ("GET", "/v1/peers"): lambda body, path: (200, {"peers": []}),
+        }
+    )
+    Client(adopter).attach(dead_addr, "sb_1", "tok").close()
+    assert released
+
+
+def test_close_reports_a_retired_node_when_no_node_holds_the_sandbox(spawn_node, dead_addr):
+    entry = spawn_node(
+        {
+            ("GET", "/v1/sandboxes/sb_1/owner"): lambda body, path: (404, {"error": "not here"}),
+            ("GET", "/v1/peers"): lambda body, path: (200, {"peers": []}),
+        }
+    )
+    with pytest.raises(APIError) as exc:
+        Client(entry).attach(dead_addr, "sb_1", "tok").close()
+    assert exc.value.status == 0, exc.value
 
 
 def test_close_of_a_sandbox_no_node_holds_is_not_an_error(spawn_node):

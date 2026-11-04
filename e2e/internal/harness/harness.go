@@ -14,6 +14,8 @@ import (
 	sandbox "github.com/cocoonstack/sandbox/sdk/go"
 )
 
+const GuestProxy = "http://127.0.0.1:3128"
+
 // Claim connects to a node and claims one sandbox; the caller owns Close.
 func Claim(ctx context.Context, addr, token, template string, opts ...sandbox.Option) (*sandbox.Client, *sandbox.Sandbox, error) {
 	client, err := sandbox.Connect(addr, sandbox.WithAPIToken(token))
@@ -56,6 +58,11 @@ func HTTPOverPort(ctx context.Context, sb *sandbox.Sandbox, port uint16, method,
 	return out, nil
 }
 
+type RelayConn interface {
+	net.Conn
+	CloseWrite() error
+}
+
 // PortRelay drives the guest-port endpoint the way an edge proxy does, not via the SDK's DialPort.
 type PortRelay struct {
 	Owner string
@@ -69,13 +76,13 @@ func (p PortRelay) URL(port uint16) string {
 }
 
 // Dial upgrades to the raw relay and hands back the connection.
-func (p PortRelay) Dial(ctx context.Context, port uint16) (net.Conn, error) {
+func (p PortRelay) Dial(ctx context.Context, port uint16) (RelayConn, error) {
 	var d net.Dialer
 	conn, err := d.DialContext(ctx, "tcp", p.Owner)
 	if err != nil {
 		return nil, err
 	}
-	req, err := p.Request(ctx, p.URL(port), p.Token, true)
+	req, err := Request(ctx, p.URL(port), p.Token, true)
 	if err != nil {
 		_ = conn.Close()
 		return nil, err
@@ -103,7 +110,7 @@ func (p PortRelay) Dial(ctx context.Context, port uint16) (net.Conn, error) {
 }
 
 // Request builds one call to the endpoint, optionally asking for the upgrade.
-func (p PortRelay) Request(ctx context.Context, url, token string, upgrade bool) (*http.Request, error) {
+func Request(ctx context.Context, url, token string, upgrade bool) (*http.Request, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err

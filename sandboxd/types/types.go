@@ -5,13 +5,9 @@ import (
 	"cmp"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json/jsontext"
-	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"iter"
-	"maps"
-	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
@@ -20,8 +16,6 @@ import (
 	"time"
 	"unicode"
 	"unicode/utf8"
-
-	"golang.org/x/net/http/httpguts"
 )
 
 const (
@@ -51,53 +45,23 @@ const (
 	VMMRestartCold VMMRestart = "cold"
 	VMMRestartNone VMMRestart = "none"
 
-	MaxClaimVolumes   = 8
 	TemplateRootScope = "*"
-
-	// Also the guest `mount -o` option literals: renaming them changes the mount flags.
-	VolumeModeRO = "ro"
-	VolumeModeRW = "rw"
-
-	DirectIOOn   = "on"
-	DirectIOOff  = "off"
-	DirectIOAuto = "auto"
 
 	maxMetadataPairs      = 16
 	maxMetadataKeyBytes   = 128
 	maxMetadataValueBytes = 512
 	maxMetadataBytes      = 4 << 10
-
-	maxEnvVars       = 64
-	maxEnvValueBytes = 8 << 10
-	maxEnvBytes      = 64 << 10
-	maxInjectHosts   = 8
-	maxPlaceholder   = 256
 )
 
 var (
 	// NameRe pins caller-chosen names to one conservative charset cocoon also accepts.
-	NameRe = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._:/-]{0,62}$`)
-	// VolumeNameRe is the virtio disk serial grammar shared with cocoon.
-	VolumeNameRe = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,19}$`)
-	// EnvNameRe is the portable shell variable name.
-	EnvNameRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,127}$`)
-	// injectHostRe is a lowercase DNS name or IPv4 literal, optionally under a "*." wildcard.
-	injectHostRe = regexp.MustCompile(`^(\*\.)?([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
-
-	// guestFileEscaper covers the characters systemd unescapes inside a double-quoted EnvironmentFile value.
-	guestFileEscaper = strings.NewReplacer(`\`, `\\`, `"`, `\"`, "`", "\\`", `$`, `\$`)
-
+	NameRe    = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._:/-]{0,62}$`)
 	sizeSpecs = map[Size]SizeSpec{
 		SizeSmall:   {CPU: 1, Memory: "512M", MemoryBytes: 512 << 20},
 		SizeMedium:  {CPU: 2, Memory: "1G", MemoryBytes: 1 << 30},
 		SizeLarge:   {CPU: 4, Memory: "4G", MemoryBytes: 4 << 30},
 		SizeXLarge:  {CPU: 4, Memory: "8G", MemoryBytes: 8 << 30},
 		Size2XLarge: {CPU: 8, Memory: "16G", MemoryBytes: 16 << 30},
-	}
-
-	guestOSMountRoots = []string{
-		"/bin", "/boot", "/dev", "/etc", "/lib", "/lib64", "/proc",
-		"/run", "/sbin", "/sys", "/usr", "/var",
 	}
 )
 
@@ -218,259 +182,6 @@ func (md Metadata) encodedSize() int {
 		size += escapedLen(k) + escapedLen(v) + 1
 	}
 	return size
-}
-
-// EnvInject sends a host-only entry's value to Hosts, exact or "*." suffix, as Header or as the Query parameter, where the guest sent a set Placeholder.
-type EnvInject struct {
-	Hosts       []string `json:"hosts"`
-	Header      string   `json:"header,omitempty"`
-	Query       string   `json:"query,omitempty"`
-	Body        bool     `json:"body,omitzero"`
-	Placeholder string   `json:"placeholder,omitempty"`
-}
-
-// Matches reports whether the lowercased host is one of the inject hosts.
-func (i *EnvInject) Matches(host string) bool {
-	return slices.ContainsFunc(i.Hosts, func(h string) bool {
-		if suffix, wild := strings.CutPrefix(h, "*"); wild {
-			return strings.HasSuffix(host, suffix)
-		}
-		return host == h
-	})
-}
-
-func (i *EnvInject) validate(name string) error {
-	if len(i.Hosts) == 0 || len(i.Hosts) > maxInjectHosts {
-		return fmt.Errorf("env %s: inject needs 1 to %d hosts, got %d", name, maxInjectHosts, len(i.Hosts))
-	}
-	switch {
-	case (i.Header == "") == (i.Query == ""):
-		return fmt.Errorf("env %s: inject needs exactly one of header and query", name)
-	case i.Header != "" && !httpguts.ValidHeaderFieldName(i.Header):
-		return fmt.Errorf("env %s: inject header %q is not a valid header name", name, i.Header)
-	case !httpguts.ValidHeaderFieldValue(i.Query):
-		return fmt.Errorf("env %s: inject query must not hold control characters other than tab", name)
-	case i.Query != "" && i.Placeholder == "":
-		return fmt.Errorf("env %s: inject query needs a placeholder, so a value is never added to a request", name)
-	case i.Body && i.Query == "":
-		return fmt.Errorf("env %s: inject body needs query", name)
-	}
-	for _, h := range i.Hosts {
-		if len(h) > 253 || !injectHostRe.MatchString(h) {
-			return fmt.Errorf("env %s: inject host %q must be a lowercase host name or *.suffix", name, h)
-		}
-	}
-	if len(i.Placeholder) > maxPlaceholder || !httpguts.ValidHeaderFieldValue(i.Placeholder) || strings.TrimSpace(i.Placeholder) != i.Placeholder {
-		return fmt.Errorf("env %s: inject placeholder must be at most %d bytes of header value without control characters or surrounding space", name, maxPlaceholder)
-	}
-	return nil
-}
-
-func (i *EnvInject) size() int {
-	n := len(i.Header) + len(i.Query) + len(i.Placeholder)
-	for _, h := range i.Hosts {
-		n += len(h)
-	}
-	return n
-}
-
-func (i *EnvInject) equal(other *EnvInject) bool {
-	if i == nil || other == nil {
-		return i == other
-	}
-	return i.Header == other.Header && i.Query == other.Query && i.Body == other.Body && i.Placeholder == other.Placeholder && slices.Equal(i.Hosts, other.Hosts)
-}
-
-// EnvVar is one entry of a claim's environment; a nil Guest means the entry reaches the guest.
-type EnvVar struct {
-	Value string `json:"value"`
-	Guest *bool  `json:"guest,omitempty"`
-	// Inject, on a host-only entry, makes the egress proxy send Value to the named hosts.
-	Inject *EnvInject `json:"inject,omitempty"`
-}
-
-// InGuest reports whether the entry is delivered into the guest.
-func (v EnvVar) InGuest() bool { return v.Guest == nil || *v.Guest }
-
-// UnmarshalJSON rejects unknown members and a null guest, so a mistyped host-only flag never falls back to the guest.
-func (v *EnvVar) UnmarshalJSON(b []byte) error {
-	var raw struct {
-		Value  string         `json:"value"`
-		Guest  jsontext.Value `json:"guest,omitzero"`
-		Inject *EnvInject     `json:"inject,omitempty"`
-	}
-	if err := json.Unmarshal(b, &raw, json.RejectUnknownMembers(true)); err != nil {
-		return fmt.Errorf("env entry: %w", err)
-	}
-	*v = EnvVar{Value: raw.Value, Inject: raw.Inject}
-	if raw.Guest == nil {
-		return nil
-	}
-	var guest bool
-	if raw.Guest.Kind() == 'n' || json.Unmarshal(raw.Guest, &guest) != nil {
-		return errors.New("env entry: guest must be true or false")
-	}
-	v.Guest = &guest
-	return nil
-}
-
-func (v EnvVar) same(other EnvVar) bool {
-	return v.Value == other.Value && v.InGuest() == other.InGuest() && v.Inject.equal(other.Inject)
-}
-
-// Env is a claim's own environment: guest entries reach the guest, the others stay host-side for egress secrets.
-type Env map[string]EnvVar
-
-// Validate enforces the entry count, the name grammar, a bounded value a header and an env file both carry, and a bounded total.
-func (e Env) Validate() error {
-	if len(e) > maxEnvVars {
-		return fmt.Errorf("env must contain at most %d entries, got %d", maxEnvVars, len(e))
-	}
-	total := 0
-	for name, v := range e {
-		total += len(name) + len(v.Value)
-		if !EnvNameRe.MatchString(name) {
-			return fmt.Errorf("env name %q must match %s", name, EnvNameRe)
-		}
-		if len(v.Value) > maxEnvValueBytes {
-			return fmt.Errorf("env value of %s must be at most %d bytes, got %d", name, maxEnvValueBytes, len(v.Value))
-		}
-		if !httpguts.ValidHeaderFieldValue(v.Value) {
-			return fmt.Errorf("env value of %s must not hold control characters other than tab", name)
-		}
-		if v.Inject == nil {
-			continue
-		}
-		if v.InGuest() {
-			return fmt.Errorf("env %s: inject needs guest: false, or the guest holds the value", name)
-		}
-		if err := v.Inject.validate(name); err != nil {
-			return err
-		}
-		total += v.Inject.size()
-	}
-	if total > maxEnvBytes {
-		return fmt.Errorf("env names, values and injects must total at most %d bytes, got %d", maxEnvBytes, total)
-	}
-	return nil
-}
-
-// Hidden returns the value of a host-only entry.
-func (e Env) Hidden(name string) (string, bool) {
-	v, ok := e[name]
-	if !ok || v.InGuest() {
-		return "", false
-	}
-	return v.Value, true
-}
-
-// HasInject reports whether any entry injects into egress requests.
-func (e Env) HasInject() bool {
-	for _, v := range e {
-		if v.Inject != nil {
-			return true
-		}
-	}
-	return false
-}
-
-// InjectsChanged returns the entries of e that inject and that prev lacks or holds differently.
-func (e Env) InjectsChanged(prev Env) Env {
-	var out Env
-	for name, v := range e {
-		if old, ok := prev[name]; v.Inject != nil && (!ok || !v.same(old)) {
-			if out == nil {
-				out = Env{}
-			}
-			out[name] = v
-		}
-	}
-	return out
-}
-
-// HasGuest reports whether any entry reaches the guest.
-func (e Env) HasGuest() bool {
-	for _, v := range e {
-		if v.InGuest() {
-			return true
-		}
-	}
-	return false
-}
-
-// Equal reports whether e and other hold the same entries.
-func (e Env) Equal(other Env) bool {
-	return maps.EqualFunc(e, other, EnvVar.same)
-}
-
-// SameGuest reports whether e and other deliver the same guest entries.
-func (e Env) SameGuest(other Env) bool {
-	return maps.EqualFunc(e.guest(), other.guest(), EnvVar.same)
-}
-
-// Redacted copies e with every host-only value dropped, so a read names them without serving them.
-func (e Env) Redacted() Env {
-	out := maps.Clone(e)
-	for name, v := range out {
-		if !v.InGuest() {
-			v.Value = ""
-			out[name] = v
-		}
-	}
-	return out
-}
-
-// GuestFile renders the guest entries as a systemd EnvironmentFile, sorted by name.
-func (e Env) GuestFile() []byte {
-	var b strings.Builder
-	for _, name := range slices.Sorted(maps.Keys(e.guest())) {
-		fmt.Fprintf(&b, "%s=\"%s\"\n", name, guestFileEscaper.Replace(e[name].Value))
-	}
-	return []byte(b.String())
-}
-
-func (e Env) guest() Env {
-	out := Env{}
-	for name, v := range e {
-		if v.InGuest() {
-			out[name] = v
-		}
-	}
-	return out
-}
-
-// EnvPatch names the entries of a claim's env to set; a null entry removes the name.
-type EnvPatch map[string]*EnvVar
-
-// Validate enforces the name grammar on every entry and the Env rules on the entries it sets.
-func (p EnvPatch) Validate() error {
-	set := Env{}
-	for name, v := range p {
-		if !EnvNameRe.MatchString(name) {
-			return fmt.Errorf("env name %q must match %s", name, EnvNameRe)
-		}
-		if v != nil {
-			set[name] = *v
-		}
-	}
-	return set.Validate()
-}
-
-// Apply returns e with p's entries set or removed, nil when none remain; e is left unchanged.
-func (p EnvPatch) Apply(e Env) Env {
-	out := Env{}
-	maps.Copy(out, e)
-	for name, v := range p {
-		if v == nil {
-			delete(out, name)
-		} else {
-			out[name] = *v
-		}
-	}
-	if len(out) == 0 {
-		return nil
-	}
-	return out
 }
 
 // PoolKey identifies one warm pool.
@@ -752,130 +463,16 @@ func (r VMRecord) TapDevice() string {
 	return r.NetworkConfigs[0].TAP
 }
 
-// Volume is one dataset mount; Mode is normalized to "" (read-only) or VolumeModeRW.
-type Volume struct {
-	Name  string `json:"name"`
-	Mount string `json:"mount,omitempty"`
-	Mode  string `json:"mode,omitempty"`
-	// AttachOnly leaves mounting and unmounting to the caller.
-	AttachOnly bool `json:"attach_only,omitzero"`
-}
-
-// RW reports whether the entry asks for write access.
-func (v Volume) RW() bool { return v.Mode == VolumeModeRW }
-
 // TemplateGossipHash scopes a key hash to its owner; TemplateRootScope covers every tenant.
 func TemplateGossipHash(keyHash, tenant string) string {
 	sum := sha256.Sum256([]byte(keyHash + "|" + tenant))
 	return hex.EncodeToString(sum[:16])
 }
 
-// ValidVolumeName reports whether name is a legal cocoon data-disk serial.
-func ValidVolumeName(name string) bool {
-	return VolumeNameRe.MatchString(name) && !strings.HasPrefix(name, "cocoon-")
-}
-
-// DefaultVolumeMount returns the guest mount used when a request omits one.
-func DefaultVolumeMount(name string) string {
-	return "/volumes/" + name
-}
-
-// ValidDirectIO reports whether mode is a legal volume direct-I/O setting.
-func ValidDirectIO(mode string) bool {
-	return mode == DirectIOOn || mode == DirectIOOff || mode == DirectIOAuto
-}
-
-// VolumeNames projects the entries' names in order; nil for none.
-func VolumeNames(volumes []Volume) []string {
-	if len(volumes) == 0 {
-		return nil
-	}
-	names := make([]string, len(volumes))
-	for i, volume := range volumes {
-		names[i] = volume.Name
-	}
-	return names
-}
-
-// VolumeRWNames projects the names of the write-enabled entries; nil for none.
-func VolumeRWNames(volumes []Volume) []string {
-	var names []string
-	for _, volume := range volumes {
-		if volume.RW() {
-			names = append(names, volume.Name)
-		}
-	}
-	return names
-}
-
 // ValidateClaimRef bounds a caller reference named field like a metadata value.
 func ValidateClaimRef(field, ref string) error {
 	if len(ref) > maxMetadataValueBytes || !validMetadataValue(ref) {
 		return fmt.Errorf("%s must be at most %d bytes of printable UTF-8", field, maxMetadataValueBytes)
-	}
-	return nil
-}
-
-// ValidateVolumes returns detached entries with defaults filled and modes normalized.
-func ValidateVolumes(volumes []Volume) ([]Volume, error) {
-	if len(volumes) > MaxClaimVolumes {
-		return nil, fmt.Errorf("volumes must contain at most %d entries, got %d", MaxClaimVolumes, len(volumes))
-	}
-	applied := make([]Volume, len(volumes))
-	names := make(map[string]struct{}, len(volumes))
-	for i, volume := range volumes {
-		if !ValidVolumeName(volume.Name) {
-			return nil, fmt.Errorf("volumes[%d] name %q must match %s and not start with cocoon-", i, volume.Name, VolumeNameRe)
-		}
-		if _, ok := names[volume.Name]; ok {
-			return nil, fmt.Errorf("volumes[%d] duplicates name %q", i, volume.Name)
-		}
-		names[volume.Name] = struct{}{}
-		mode := volume.Mode
-		switch mode {
-		case VolumeModeRO:
-			mode = ""
-		case "", VolumeModeRW:
-		default:
-			return nil, fmt.Errorf("volumes[%d] mode %q must be %s or %s", i, mode, VolumeModeRO, VolumeModeRW)
-		}
-		if volume.AttachOnly {
-			if volume.Mount != "" {
-				return nil, fmt.Errorf("volumes[%d] mount %q is meaningless when the caller mounts the device itself", i, volume.Mount)
-			}
-			applied[i] = Volume{Name: volume.Name, Mode: mode, AttachOnly: true}
-			continue
-		}
-		mount := cmp.Or(volume.Mount, DefaultVolumeMount(volume.Name))
-		if err := validateVolumeMount(mount); err != nil {
-			return nil, fmt.Errorf("volumes[%d] mount %q: %w", i, mount, err)
-		}
-		for j := range i {
-			other := applied[j].Mount
-			if other == "" {
-				continue
-			}
-			switch {
-			case mount == other:
-				return nil, fmt.Errorf("volumes[%d] mount %q duplicates volumes[%d]", i, mount, j)
-			case pathWithin(other, mount), pathWithin(mount, other):
-				return nil, fmt.Errorf("volumes[%d] mount %q nests with volumes[%d] mount %q", i, mount, j, other)
-			}
-		}
-		applied[i] = Volume{Name: volume.Name, Mount: mount, Mode: mode}
-	}
-	return applied, nil
-}
-
-func validateVolumeMount(mount string) error {
-	if !filepath.IsAbs(mount) {
-		return errors.New("must be absolute")
-	}
-	if filepath.Clean(mount) != mount {
-		return errors.New("must be clean")
-	}
-	if mount == "/" || slices.ContainsFunc(guestOSMountRoots, func(root string) bool { return mount == root || pathWithin(root, mount) }) {
-		return errors.New("must be outside the guest OS tree")
 	}
 	return nil
 }
@@ -890,8 +487,4 @@ func validMetadataValue(v string) bool {
 
 func validMetadataKey(k string) bool {
 	return k != "" && len(k) <= maxMetadataKeyBytes && !strings.ContainsFunc(k, func(r rune) bool { return r < ' ' || r > '~' || r == '=' || r == '&' })
-}
-
-func pathWithin(parent, child string) bool {
-	return strings.HasPrefix(child, parent+"/")
 }

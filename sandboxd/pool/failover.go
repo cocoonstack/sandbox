@@ -1,6 +1,7 @@
 package pool
 
 import (
+	"cmp"
 	"context"
 	"crypto/subtle"
 	"encoding/json/v2"
@@ -142,6 +143,36 @@ func (m *Manager) putRow(ctx context.Context, sb *types.Sandbox, ck string, repl
 	return m.archives.Put(ctx, rec)
 }
 
+func (m *Manager) rewriteArchiveRow(ctx context.Context, sb *types.Sandbox, locked bool) error {
+	if !locked {
+		sb.Transition.Lock()
+		defer sb.Transition.Unlock()
+	}
+	for range 2 {
+		m.mu.Lock()
+		ck, replica, live, rowed := sb.ArchiveCk, sb.ReplicaCk, m.claimed[sb.ID] == sb, m.rowFollows(sb)
+		m.mu.Unlock()
+		switch {
+		case !live:
+			return ErrUnknownSandbox
+		case !rowed:
+			return nil
+		}
+		epoch, err := m.putRow(ctx, sb, cmp.Or(ck, replica), ck == "", true)
+		if err == nil {
+			_, _ = m.commitIfLive(ctx, sb, func() { sb.ArchiveEpoch = epoch })
+			return nil
+		}
+		if !errors.Is(err, archives.ErrLost) {
+			return err
+		}
+		if err = m.refusedReplace(ctx, sb); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // refusedReplace settles a refused replace: a row this node still owns only had a stale epoch, anything else means the claim moved.
 func (m *Manager) refusedReplace(ctx context.Context, sb *types.Sandbox) error {
 	rec, ok, err := m.archives.Get(ctx, sb.ID)
@@ -274,10 +305,7 @@ func (m *Manager) dropTombstone(ctx context.Context, id string, epoch int64) {
 	}
 }
 
-func (m *Manager) reputArchive(ctx context.Context, sb *types.Sandbox, held int64) {
-	if held == 0 {
-		return
-	}
+func (m *Manager) reputArchive(ctx context.Context, sb *types.Sandbox) {
 	var epoch int64
 	var err error
 	if sb.ArchiveCk != "" {
@@ -317,11 +345,14 @@ func (m *Manager) releaseRowed(ctx context.Context, id string, sb *types.Sandbox
 }
 
 func (m *Manager) consumeArchive(ctx context.Context, sb *types.Sandbox) (int64, error) {
-	if !m.archiveRowed(sb) && !m.replicaRowed(sb) {
+	m.mu.Lock()
+	rowed, epoch := m.archiveRowed(sb) || m.replicaRowed(sb), sb.ArchiveEpoch
+	m.mu.Unlock()
+	if !rowed {
 		return 0, nil
 	}
 	ctx = context.WithoutCancel(ctx)
-	consumed, err := m.consumeRow(ctx, sb, sb.ArchiveEpoch, "consume archive row")
+	consumed, err := m.consumeRow(ctx, sb, epoch, "consume archive row")
 	if err != nil {
 		return 0, err
 	}
@@ -378,7 +409,7 @@ func (m *Manager) forgetAdopted(ctx context.Context, sb *types.Sandbox) func() {
 	ck, vm, snap := sb.ArchiveCk, sb.VMName, sb.HibernateSnap
 	m.mu.Unlock()
 	if ck != "" {
-		if err := m.clearArchiveCk(ck); err != nil {
+		if err := m.ckMarks.clear(ck); err != nil {
 			logger.Warnf(ctx, "clear archive ck %s: %v", ck, err)
 		}
 	}
@@ -387,6 +418,7 @@ func (m *Manager) forgetAdopted(ctx context.Context, sb *types.Sandbox) func() {
 		return nil
 	}
 	return func() {
+		m.out.Disarm(sb.ID, true)
 		if vm != "" {
 			m.removeOrRetry(ctx, vm, "", volumeTeardown{holds: holds})
 		}
@@ -412,10 +444,10 @@ func (m *Manager) forgetClaim(ctx context.Context, sb *types.Sandbox) ([]types.V
 }
 
 func (m *Manager) sweepOrphanArchives(ctx context.Context) {
-	if !m.orphanSweep.CompareAndSwap(false, true) {
+	if !m.sweeps.orphan.CompareAndSwap(false, true) {
 		return
 	}
-	defer m.orphanSweep.Store(false)
+	defer m.sweeps.orphan.Store(false)
 	m.settleIntents(ctx)
 	now := time.Now()
 	recs, err := m.archives.Sweepable(ctx, now, m.nodeID)
@@ -456,12 +488,12 @@ func (m *Manager) reconcileOwnRow(ctx context.Context, rec archives.Record, now 
 	switch {
 	case !held:
 	case refs && rec.Consumed && epoch != 0:
-		m.reputArchive(ctx, sb, epoch)
+		m.reputArchive(ctx, sb)
 	case refs:
 	case rec.Consumed:
 		m.purgeArchiveRow(ctx, rec)
-	default:
-		m.dropStaleRow(ctx, sb, rec)
+	case !m.archiveCkPinned(rec.Checkpoint):
+		m.abandonArchive(ctx, sb, rec.Epoch, rec.Checkpoint)
 	}
 }
 
@@ -482,12 +514,6 @@ func (m *Manager) startRowRetention(ctx context.Context, id string, epoch int64)
 	}
 	_, err = m.archives.Replace(ctx, rec, epoch)
 	return err
-}
-
-func (m *Manager) dropStaleRow(ctx context.Context, sb *types.Sandbox, rec archives.Record) {
-	if !m.archiveCkPinned(rec.Checkpoint) {
-		m.abandonArchive(ctx, sb, rec.Epoch, rec.Checkpoint)
-	}
 }
 
 func (m *Manager) purgeArchiveRow(ctx context.Context, rec archives.Record) {
@@ -572,7 +598,7 @@ func (m *Manager) fenceArchived(ctx context.Context, claims map[string]*types.Sa
 		}
 		if drop {
 			if sb.ArchiveCk != "" {
-				if err := m.clearArchiveCk(sb.ArchiveCk); err != nil {
+				if err := m.ckMarks.clear(sb.ArchiveCk); err != nil {
 					logger.Warnf(ctx, "clear archive ck %s: %v", sb.ArchiveCk, err)
 				}
 			}

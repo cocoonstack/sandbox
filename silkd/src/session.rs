@@ -27,10 +27,6 @@ pub struct Table {
 }
 
 impl Table {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     /// Spawns a bash session, applies cwd/env, and registers it; a blank id is generated, a duplicate refused.
     pub async fn create(
         &self,
@@ -48,10 +44,10 @@ impl Table {
                 format!("environment name {name:?} is not a shell identifier"),
             ));
         }
-        let mut child = Command::new("bash")
-            .env_clear()
-            .envs(sysutil::base_env().iter().copied())
-            .envs(sysutil::claim_env())
+        let mut cmd = Command::new("bash");
+        cmd.env_clear().envs(sysutil::base_env().iter().copied());
+        sysutil::apply_claim_env(&mut cmd);
+        let mut child = cmd
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             // null, not piped: the init line `exec 2>&1` repoints fd 2 at the stdout pipe.
@@ -199,10 +195,7 @@ impl Io {
         cmd: &str,
         mut out: Option<&mut W>,
     ) -> io::Result<i32> {
-        let body = match cmd.trim_end() {
-            "" => ":",
-            c => c,
-        };
+        let body = cmd.trim_end();
         // the marker must be unforgeable: the shell runs untrusted code that could fake a sentinel.
         let marker = format!("__SILK_{}__", sysutil::rand_token()?);
         self.cmd_buf.clear();

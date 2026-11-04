@@ -11,7 +11,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"net/netip"
 	"net/url"
 	"slices"
 	"sync"
@@ -265,10 +264,8 @@ type Server struct {
 
 // New returns a Server; an empty apiToken leaves node-level endpoints open, and tenants resolve through mgr.
 func New(apiToken, advertise string, mgr Manager, dialer Dialer, placer Placer, prober CheckpointProber, probeKey []byte, preview *PreviewServer) *Server {
-	if host, _, err := net.SplitHostPort(advertise); err == nil {
-		if ip, _ := netip.ParseAddr(host); host == "" || ip.IsUnspecified() {
-			advertise = ""
-		}
+	if host, _, err := net.SplitHostPort(advertise); err == nil && !config.RoutableHost(host) {
+		advertise = ""
 	}
 	return &Server{
 		mgr:       mgr,
@@ -663,10 +660,7 @@ func (s *Server) handleClaimCheckpoint(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ckptID := r.PathValue("id")
-	o := pool.ClaimOptions{TTL: req.TTL(), OnExpire: req.OnExpire, Metadata: req.Metadata, Env: req.Env}
-	if tenant := tenantRecordFrom(r.Context()); tenant != nil {
-		o.Tenant, o.EgressClass = tenant.Name, tenant.EgressClass
-	}
+	o := forTenant(pool.ClaimOptions{TTL: req.TTL(), OnExpire: req.OnExpire, Metadata: req.Metadata, Env: req.Env}, tenantRecordFrom(r.Context()))
 	sb, err := s.mgr.ClaimCheckpoint(r.Context(), ckptID, o)
 	if errors.Is(err, pool.ErrUnknownCheckpoint) {
 		if !req.NoRedirect && s.prober != nil && s.writeRedirect(w, s.prober.Owners(r.Context(), ckptID)) {
@@ -930,10 +924,13 @@ func (s *Server) claimResponse(sb *types.Sandbox) ClaimResponse {
 }
 
 func claimOptions(req ClaimRequest, tenant *tenants.TenantRecord) pool.ClaimOptions {
-	o := pool.ClaimOptions{
+	return forTenant(pool.ClaimOptions{
 		TTL: req.TTL(), OnExpire: req.OnExpire, ClaimRef: req.ClaimRef, Metadata: req.Metadata, Volumes: req.Volumes,
 		NoEgress: req.Egress != nil && !*req.Egress, RequirePromoted: req.RequirePromoted, Env: req.Env,
-	}
+	}, tenant)
+}
+
+func forTenant(o pool.ClaimOptions, tenant *tenants.TenantRecord) pool.ClaimOptions {
 	if tenant != nil {
 		o.Tenant, o.EgressClass = tenant.Name, tenant.EgressClass
 	}

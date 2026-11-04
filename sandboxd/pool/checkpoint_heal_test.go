@@ -186,25 +186,25 @@ func TestRecLockEvictionWaitsForAllHolders(t *testing.T) {
 	m := newTestManager(t, newFakeEngine())
 	const id = "ck_00000000000000aa"
 
-	l1 := m.recLock(id)
+	l1 := m.recs.recLock(id)
 	l1.Lock()
-	l2 := m.recLock(id)
+	l2 := m.recs.recLock(id)
 	if l2 != l1 {
 		t.Fatalf("recLock returned a different mutex while the first holder is still outstanding")
 	}
 	l1.Unlock()
-	m.recDone(id)
+	m.recs.recDone(id)
 	if !hasRecLock(m, id) {
 		t.Fatal("entry evicted while a second holder still references it")
 	}
 
-	l3 := m.recLock(id)
+	l3 := m.recs.recLock(id)
 	if l3 != l1 {
 		t.Fatal("a concurrent recLock diverged onto a different mutex for the same id — the lock-identity split")
 	}
 
-	m.recDone(id)
-	m.recDone(id)
+	m.recs.recDone(id)
+	m.recs.recDone(id)
 	if hasRecLock(m, id) {
 		t.Error("entry not evicted once every holder released")
 	}

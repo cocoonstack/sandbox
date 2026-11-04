@@ -1,5 +1,4 @@
-"""Checkpoint claim redirect: mirrors the cluster redirect follow tested for
-Client.new in test_fault_matrix.py, applied to Checkpoint.new."""
+"""Checkpoint claim redirect, mirroring the Client.new redirect in test_fault_matrix.py."""
 
 import pytest
 

@@ -10,6 +10,9 @@ import (
 
 	"github.com/cocoonstack/sandbox/sandboxd/archives"
 	"github.com/cocoonstack/sandbox/sandboxd/config"
+	"github.com/cocoonstack/sandbox/sandboxd/egress"
+	"github.com/cocoonstack/sandbox/sandboxd/engine"
+	"github.com/cocoonstack/sandbox/sandboxd/outbound/outboundtest"
 	"github.com/cocoonstack/sandbox/sandboxd/store"
 	"github.com/cocoonstack/sandbox/sandboxd/tenants"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
@@ -583,6 +586,34 @@ func TestAFencedNodeNeitherHibernatesNorWakesAReplicatedClaim(t *testing.T) {
 	}
 }
 
+func TestAFencedNodeCapturesNoReplicatedClaim(t *testing.T) {
+	c := newReplicaCluster(t)
+	a := c.node(t, "a", t.TempDir(), keepAnHour)
+	sb, plain := mustClaim(t, a, testKey), mustClaim(t, a, plainKey)
+	replicateNow(t, a, sb)
+	a.tripFence()
+	cred := Cred{Token: sb.Token}
+	if _, err := a.Fork(t.Context(), sb.ID, cred, 1, time.Hour, "", ""); !errors.Is(err, ErrLeaseLost) {
+		t.Errorf("fork while fenced: %v, want ErrLeaseLost", err)
+	}
+	if _, err := a.Checkpoint(t.Context(), sb.ID, cred, "", ""); !errors.Is(err, ErrLeaseLost) {
+		t.Errorf("checkpoint while fenced: %v, want ErrLeaseLost", err)
+	}
+	if _, _, err := a.Promote(t.Context(), sb.ID, cred, "tpl", ""); !errors.Is(err, ErrLeaseLost) {
+		t.Errorf("promote while fenced: %v, want ErrLeaseLost", err)
+	}
+	if err := a.replicate(t.Context(), sb); !errors.Is(err, ErrLeaseLost) || !benignSweepErr(err) {
+		t.Errorf("replicate while fenced: %v, want a benign ErrLeaseLost", err)
+	}
+	if _, err := a.Checkpoint(t.Context(), plain.ID, Cred{Token: plain.Token}, "", ""); err != nil {
+		t.Errorf("checkpoint of an unreplicated claim while fenced: %v", err)
+	}
+	a.liftFence()
+	if _, err := a.Fork(t.Context(), sb.ID, cred, 1, time.Hour, "", ""); err != nil {
+		t.Errorf("fork after the fence lifted: %v", err)
+	}
+}
+
 func TestTheSweepsLeaveAReplicatedClaimAloneWhileFenced(t *testing.T) {
 	c := newReplicaCluster(t)
 	a := c.node(t, "a", t.TempDir(), keepAnHour)
@@ -1065,7 +1096,7 @@ func TestReplicaALeftoverDeleteMarkerSparesTheLiveReplica(t *testing.T) {
 	sb := mustClaim(t, a, testKey)
 	replicateNow(t, a, sb)
 	ck := a.replicaOf(sb)
-	if err := a.markArchiveCk(ck); err != nil {
+	if err := a.ckMarks.mark(ck); err != nil {
 		t.Fatalf("mark: %v", err)
 	}
 
@@ -1306,6 +1337,35 @@ func TestReplicaRestartMidArchiveKeepsTheClaim(t *testing.T) {
 				t.Errorf("row %+v ok=%v err=%v, want it on %s", rec, ok, err, held.ArchiveCk)
 			}
 		})
+	}
+}
+
+func TestARunningClaimThatMovedClosesItsDoors(t *testing.T) {
+	c := newReplicaCluster(t)
+	c.egressPol = &egress.Policy{Allow: []egress.Rule{{Host: "example.com"}}}
+	ea, eb := newFakeEngine(), newFakeEngine()
+	ea.sockRoot, eb.sockRoot = outboundtest.SockRoot(t), outboundtest.SockRoot(t)
+	a := c.nodeOn(t, ea, "a", t.TempDir(), keepAnHour)
+	a.liftFence()
+	b := c.nodeOn(t, eb, "b", t.TempDir(), keepAnHour)
+	b.liftFence()
+	sb := mustClaim(t, a, testKey)
+	if got := a.out.Route(sb); got != types.NetRouteRelay {
+		t.Fatalf("route after claim %q, want relay", got)
+	}
+	replicateNow(t, a, sb)
+	c.expire("a")
+	mustAdopt(t, b, sb, "adoption after the lease expired")
+	c.renew(t, "a")
+	a.trip(t.Context())
+	a.unfence(t.Context(), time.Now())
+	waitFor(t, func() bool { return ea.removed(sb.VMName) })
+	if got := a.out.Route(sb); got != types.NetRouteNone {
+		t.Errorf("route after the claim moved %q, want none", got)
+	}
+	if conn, err := net.Dial("unix", engine.EgressSocketPath(sb.VsockSocket)); err == nil {
+		_ = conn.Close()
+		t.Error("the door of the removed VM still accepts")
 	}
 }
 

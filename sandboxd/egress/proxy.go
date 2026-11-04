@@ -128,14 +128,8 @@ type connPools struct {
 	routed map[routeKey]*http.Transport
 }
 
-// DialFunc opens the upstream connection for a permitted request; as a Router it sends every connection direct.
+// DialFunc opens the upstream connection for a permitted request.
 type DialFunc func(ctx context.Context, network, addr string) (net.Conn, error)
-
-func (d DialFunc) Route() string { return "" }
-
-func (d DialFunc) Dial(ctx context.Context, _, network, addr string) (net.Conn, error) {
-	return d(ctx, network, addr)
-}
 
 // Proxy is one sandbox's forward proxy, gated by Policy and audited per request.
 type Proxy struct {
@@ -424,11 +418,17 @@ func (p *Proxy) relay(w http.ResponseWriter, r *http.Request, ev Event, rule Rul
 		src = newScrubReader(resp.Body, sc, *buf)
 	}
 	w.WriteHeader(resp.StatusCode)
+	var copyErr error
 	if streamed(resp) {
-		received = copyFlushing(w, src)
-		return
+		received, copyErr = copyFlushing(w, src)
+	} else {
+		received, copyErr = io.Copy(w, src)
 	}
-	received, _ = io.Copy(w, src)
+	if copyErr != nil {
+		if conn, _, err := http.NewResponseController(w).Hijack(); err == nil {
+			_ = conn.Close()
+		}
+	}
 }
 
 // transport returns the pool for route; the direct route keeps the base transports.
@@ -695,11 +695,10 @@ func mediaType(h http.Header) string {
 	return strings.ToLower(strings.TrimSpace(mt))
 }
 
-func copyFlushing(w http.ResponseWriter, body io.Reader) int64 {
+func copyFlushing(w http.ResponseWriter, body io.Reader) (int64, error) {
 	rc := http.NewResponseController(w)
 	if rc.Flush() != nil {
-		n, _ := io.Copy(w, body)
-		return n
+		return io.Copy(w, body)
 	}
 	buf := copyBufs.Get().(*[]byte)
 	defer copyBufs.Put(buf)
@@ -709,12 +708,18 @@ func copyFlushing(w http.ResponseWriter, body io.Reader) int64 {
 		if n > 0 {
 			written, werr := w.Write((*buf)[:n])
 			total += int64(written)
-			if werr != nil || rc.Flush() != nil {
-				return total
+			if werr != nil {
+				return total, werr
+			}
+			if werr = rc.Flush(); werr != nil {
+				return total, werr
 			}
 		}
+		if errors.Is(err, io.EOF) {
+			return total, nil
+		}
 		if err != nil {
-			return total
+			return total, err
 		}
 	}
 }
@@ -745,6 +750,12 @@ func hostPort(authority string, def uint16) (host string, port uint16, ok bool) 
 	}
 	n, err := strconv.ParseUint(text, 10, 16)
 	return host, uint16(n), err == nil && n != 0 && len(host) <= maxHostLen
+}
+
+func tcpAddrPort(a net.Addr) netip.AddrPort {
+	ta, _ := a.(*net.TCPAddr)
+	ap := ta.AddrPort()
+	return netip.AddrPortFrom(ap.Addr().Unmap(), ap.Port())
 }
 
 // replaceParam fills the first name=placeholder pair of a query or form string, leaving every other byte as sent.

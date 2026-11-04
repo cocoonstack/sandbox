@@ -20,7 +20,6 @@ import (
 )
 
 const (
-	proxy  = "http://127.0.0.1:3128"
 	header = "X-Api-Key"
 	entry  = "API_KEY"
 	tsPH   = "@TS@"
@@ -99,7 +98,7 @@ func run(ctx context.Context, addr, token, template, echo, secret, sse string) e
 	}
 	fmt.Println("  each claim's origin saw only its own credential, the plain claim the guest's placeholder, all the pool secret")
 	if sse != "" {
-		out, _ := plain.Exec(ctx, "sh", "-c", fmt.Sprintf("timeout 4 curl -sSN --noproxy '' -x %s %s 2>&1; true", proxy, sse))
+		out, _ := plain.Exec(ctx, "sh", "-c", fmt.Sprintf("timeout 4 curl -sSN --noproxy '' -x %s %s 2>&1; true", harness.GuestProxy, sse))
 		if !strings.Contains(out, "data: one") {
 			return fmt.Errorf("the first event did not reach the guest while the stream stayed open: %q", out)
 		}
@@ -257,7 +256,7 @@ func conditional(ctx context.Context, addr, token, template string, size sandbox
 		{"json body", base + `/post -H 'Content-Type: application/json' -d '{"access_token":"` + fbPH + `"}'`, fmt.Sprintf(`"content-length":"%d"`, len(doc)), fb},
 		{"response header echo", "-D - -o /dev/null '" + base + "/response-headers?api_key=" + url.QueryEscape(serpPH) + "'", serpPH, stamp},
 	} {
-		out, execErr := vault.Exec(ctx, "sh", "-c", fmt.Sprintf("curl -sS -x %s %s", proxy, tt.args))
+		out, execErr := vault.Exec(ctx, "sh", "-c", fmt.Sprintf("curl -sS -x %s %s", harness.GuestProxy, tt.args))
 		if execErr != nil {
 			return fmt.Errorf("%s exec: %w (%s)", tt.name, execErr, out)
 		}
@@ -288,16 +287,16 @@ func credential(echo, value string) map[string]sandbox.EnvVar {
 }
 
 func expectPlaceholder(ctx context.Context, sb *sandbox.Sandbox, echo, value string) error {
-	entry := &sandbox.EnvVar{Value: value, Guest: new(false), Inject: &sandbox.EnvInject{Hosts: []string{echo}, Header: "X-Ph-Key", Placeholder: "@PH_KEY@"}}
-	if err := sb.PatchEnv(ctx, map[string]*sandbox.EnvVar{"PH_KEY": entry}); err != nil {
+	env := &sandbox.EnvVar{Value: value, Guest: new(false), Inject: &sandbox.EnvInject{Hosts: []string{echo}, Header: "X-Ph-Key", Placeholder: "@PH_KEY@"}}
+	if err := sb.PatchEnv(ctx, map[string]*sandbox.EnvVar{"PH_KEY": env}); err != nil {
 		return fmt.Errorf("placeholder inject: %w", err)
 	}
 	for sent, want := range map[string]bool{"": false, "@PH_KEY@": true, "@OTHER@": false} {
-		header := ""
+		hdr := ""
 		if sent != "" {
-			header = fmt.Sprintf("-H 'X-Ph-Key: %s' ", sent)
+			hdr = fmt.Sprintf("-H 'X-Ph-Key: %s' ", sent)
 		}
-		out, err := sb.Exec(ctx, "sh", "-c", fmt.Sprintf("curl -sS -x %s %shttps://%s/headers", proxy, header, echo))
+		out, err := sb.Exec(ctx, "sh", "-c", fmt.Sprintf("curl -sS -x %s %shttps://%s/headers", harness.GuestProxy, hdr, echo))
 		if err != nil {
 			return fmt.Errorf("placeholder exec: %w (%s)", err, out)
 		}
@@ -310,7 +309,7 @@ func expectPlaceholder(ctx context.Context, sb *sandbox.Sandbox, echo, value str
 
 // expectTunnel reads the issuer and HTTP version the guest gets from host; an intercepted tunnel shows the e2e CA and HTTP/1.1.
 func expectTunnel(ctx context.Context, sb *sandbox.Sandbox, host string, intercepted bool) error {
-	out, err := sb.Exec(ctx, "sh", "-c", fmt.Sprintf("curl -sSv -o /dev/null -w 'version=%%{http_version}\\n' -x %s https://%s/ 2>&1", proxy, host))
+	out, err := sb.Exec(ctx, "sh", "-c", fmt.Sprintf("curl -sSv -o /dev/null -w 'version=%%{http_version}\\n' -x %s https://%s/ 2>&1", harness.GuestProxy, host))
 	if err != nil {
 		return fmt.Errorf("%s exec: %w (%s)", host, err, out)
 	}
@@ -325,7 +324,7 @@ func expectTunnel(ctx context.Context, sb *sandbox.Sandbox, host string, interce
 }
 
 func expectHeader(ctx context.Context, sb *sandbox.Sandbox, echo, want, not, secret string) error {
-	out, err := sb.Exec(ctx, "sh", "-c", fmt.Sprintf("curl -sS -x %s -H '%s: placeholder' https://%s/headers", proxy, header, echo))
+	out, err := sb.Exec(ctx, "sh", "-c", fmt.Sprintf("curl -sS -x %s -H '%s: placeholder' https://%s/headers", harness.GuestProxy, header, echo))
 	if err != nil {
 		return fmt.Errorf("proxied HTTPS exec: %w (%s)", err, out)
 	}

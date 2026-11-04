@@ -1,6 +1,5 @@
 """OpenAI Agents SDK sandbox provider for cocoon microVMs.
 
-from agents.sandbox import SandboxRunConfig  # SDK side
 from cocoonsandbox_openai import CocoonSandboxClient, CocoonSandboxClientOptions
 
 client = CocoonSandboxClient()
