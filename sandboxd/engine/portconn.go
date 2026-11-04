@@ -24,10 +24,6 @@ type guestPortConn struct {
 	pending []byte
 }
 
-func newGuestPortConn(conn net.Conn, r *bufio.Reader) *guestPortConn {
-	return &guestPortConn{Conn: conn, r: r}
-}
-
 func (g *guestPortConn) Read(p []byte) (int, error) {
 	for len(g.pending) == 0 {
 		line, err := g.readFrame()

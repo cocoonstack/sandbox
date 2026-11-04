@@ -120,10 +120,7 @@ func decodeBody[T any](w http.ResponseWriter, r *http.Request) (T, bool) {
 func decodeOptionalBody[T any](w http.ResponseWriter, r *http.Request) (T, bool) {
 	var v T
 	err := json.UnmarshalDecode(jsontext.NewDecoder(http.MaxBytesReader(w, r.Body, maxBodyBytes)), &v, json.MatchCaseInsensitiveNames(true))
-	if errors.Is(err, io.EOF) {
-		return v, true
-	}
-	if err != nil {
+	if err != nil && !errors.Is(err, io.EOF) {
 		writeErr(w, http.StatusBadRequest, "invalid request body")
 		return v, false
 	}
@@ -153,9 +150,6 @@ func validRequest(w http.ResponseWriter, errs ...error) bool {
 }
 
 func metadataFilter(pairs []string) (types.Metadata, error) {
-	if len(pairs) == 0 {
-		return nil, nil
-	}
 	filter := make(types.Metadata, len(pairs))
 	for _, pair := range pairs {
 		k, v, ok := strings.Cut(pair, "=")

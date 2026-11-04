@@ -73,38 +73,30 @@ func (s *Server) handleAgent(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	s.relay(r.Context(), id, client, clientBuf, guest)
+	s.splice(client, s.audited(r.Context(), id, clientReader(client, clientBuf)), guest, switchingProtocols, silkdEnds)
 }
 
 // wakeGuest dials the sandbox's silkd, waking a hibernated VM first unless wake answers ErrSleeping; on failure it has already answered the request.
 func (s *Server) wakeGuest(ctx context.Context, w http.ResponseWriter, id, token string, wake agentWaker) (guest net.Conn, release func(), sleeping, ok bool) {
-	sock, fenced, done, err := wake(ctx, id, token)
+	guest, done, err := s.openGuest(ctx, id, token, wake)
 	switch {
+	case err == nil:
+		return guest, done, false, true
 	case errors.Is(err, pool.ErrSleeping):
 		return nil, nil, true, false
-	case writePoolErr(w, err):
-		return nil, nil, false, false
-	case err != nil:
-		log.WithFunc("server.wakeGuest").Errorf(ctx, err, "agent socket for %s", id)
-		writeErr(w, http.StatusInternalServerError, "sandbox lookup failed")
-		return nil, nil, false, false
-	}
-	guest, err = s.dialer.DialSilkd(ctx, sock)
-	if err != nil {
-		done()
+	case errors.Is(err, errUnreachable):
 		if errors.Is(err, context.Canceled) && errors.Is(ctx.Err(), context.Canceled) {
 			log.WithFunc("server.wakeGuest").Debugf(ctx, "client canceled the dial of silkd for %s: %v", id, err)
 		} else {
 			log.WithFunc("server.wakeGuest").Errorf(ctx, err, "dial silkd for %s", id)
 		}
 		writeErr(w, http.StatusBadGateway, "guest agent unreachable")
-		return nil, nil, false, false
+	case writePoolErr(w, err):
+	default:
+		log.WithFunc("server.wakeGuest").Errorf(ctx, err, "agent socket for %s", id)
+		writeErr(w, http.StatusInternalServerError, "sandbox lookup failed")
 	}
-	return guest, fenceGuest(guest, fenced, done), false, true
-}
-
-func (s *Server) relay(ctx context.Context, id string, client net.Conn, clientBuf *bufio.Reader, guest net.Conn) {
-	s.splice(client, s.audited(ctx, id, clientReader(client, clientBuf)), guest, switchingProtocols, silkdEnds)
+	return nil, nil, false, false
 }
 
 func (s *Server) audited(ctx context.Context, id string, clientR io.Reader) io.Reader {
@@ -208,9 +200,6 @@ func (t *auditTee) endLine() {
 }
 
 func fenceGuest(guest net.Conn, fenced <-chan struct{}, done func()) func() {
-	if fenced == nil {
-		return done
-	}
 	stop := pool.CloseOnFence(fenced, guest)
 	return func() { stop(); done() }
 }

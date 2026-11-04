@@ -123,7 +123,7 @@ func TestGuestPortConnRoundTripsFixtures(t *testing.T) {
 
 	client2, silk2 := net.Pipe()
 	t.Cleanup(func() { _ = client2.Close(); _ = silk2.Close() })
-	gc2 := newGuestPortConn(client2, bufio.NewReaderSize(client2, portReadBuf))
+	gc2 := &guestPortConn{Conn: client2, r: bufio.NewReaderSize(client2, portReadBuf)}
 	respError := fixture("resp_error.json")
 	go func() { _, _ = silk2.Write(respError) }()
 	if _, err := gc2.Read(buf); err == nil || errors.Is(err, io.EOF) {
@@ -132,7 +132,7 @@ func TestGuestPortConnRoundTripsFixtures(t *testing.T) {
 
 	client3, silk3 := net.Pipe()
 	t.Cleanup(func() { _ = client3.Close(); _ = silk3.Close() })
-	gc3 := newGuestPortConn(client3, bufio.NewReaderSize(client3, portReadBuf))
+	gc3 := &guestPortConn{Conn: client3, r: bufio.NewReaderSize(client3, portReadBuf)}
 	go func() { _, _ = gc3.Write([]byte("hello")) }()
 	line := make([]byte, 256)
 	n, _ = silk3.Read(line)
@@ -196,7 +196,7 @@ func newTestGuestPortConn(t *testing.T) (net.Conn, *guestPortConn) {
 	t.Helper()
 	client, silk := net.Pipe()
 	t.Cleanup(func() { _ = client.Close(); _ = silk.Close() })
-	return silk, newGuestPortConn(client, bufio.NewReaderSize(client, portForwardMax))
+	return silk, &guestPortConn{Conn: client, r: bufio.NewReaderSize(client, portForwardMax)}
 }
 
 func writeDataFrames(t *testing.T, silk net.Conn, chunks ...[]byte) {
