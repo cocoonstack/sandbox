@@ -94,7 +94,7 @@ func (m *Manager) moveOut(ctx context.Context, sb *types.Sandbox, mv *outMove, b
 		}
 		previous = size
 		if round, err = m.eng.MigrateCapture(ctx, vm, mv.Series, false); err != nil {
-			return fmt.Errorf("delta capture: %w", err)
+			return fmt.Errorf("%w: delta capture: %w", ErrNotMovable, err)
 		}
 	}
 	m.mu.Lock()
@@ -109,7 +109,7 @@ func (m *Manager) moveOut(ctx context.Context, sb *types.Sandbox, mv *outMove, b
 	}
 	mv.pausedAt = time.Now()
 	if round, err = m.eng.MigrateCapture(ctx, vm, mv.Series, true); err != nil {
-		return fmt.Errorf("final capture: %w", err)
+		return fmt.Errorf("%w: final capture: %w", ErrNotMovable, err)
 	}
 	final, err := m.moves.Advance(ctx, sb.ID, mv.Epoch, moves.Pending, moves.Final)
 	if err != nil {

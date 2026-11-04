@@ -136,10 +136,18 @@ func TestMoveFailingAtAnyStepKeepsOneOwner(t *testing.T) {
 		"baseline":        {fail: func(mc *moveCluster) { fakeOf(mc.s).captureErr = errors.New("no reflink") }, want: ErrNotMovable},
 		"round transfer":  {fail: func(mc *moveCluster) { mc.p.roundHook = failRound(2) }, want: ErrMoveTarget},
 		"downtime budget": {budget: time.Millisecond, want: ErrMoveDowntime},
-		"final capture":   {fail: func(mc *moveCluster) { fakeOf(mc.s).finalCaptureErr = errors.New("pause failed") }},
-		"final transfer":  {fail: func(mc *moveCluster) { mc.p.roundHook = failRound(3) }, want: ErrMoveTarget},
-		"receive":         {fail: func(mc *moveCluster) { fakeOf(mc.t).receiveErr = errors.New("restore failed") }},
-		"target memory":   {fail: func(mc *moveCluster) { mc.p.commitHook = func(int) error { mc.t.memoryLow.Store(true); return nil } }, want: ErrQuota},
+		"delta capture": {fail: func(mc *moveCluster) {
+			mc.p.roundHook = func(round int) error {
+				if round == 1 {
+					fakeOf(mc.s).captureErr = errors.New("vmm gone")
+				}
+				return nil
+			}
+		}, want: ErrNotMovable},
+		"final capture":  {fail: func(mc *moveCluster) { fakeOf(mc.s).finalCaptureErr = errors.New("pause failed") }, want: ErrNotMovable},
+		"final transfer": {fail: func(mc *moveCluster) { mc.p.roundHook = failRound(3) }, want: ErrMoveTarget},
+		"receive":        {fail: func(mc *moveCluster) { fakeOf(mc.t).receiveErr = errors.New("restore failed") }},
+		"target memory":  {fail: func(mc *moveCluster) { mc.p.commitHook = func(int) error { mc.t.memoryLow.Store(true); return nil } }, want: ErrQuota},
 		"source aborted first": {fail: func(mc *moveCluster) {
 			mc.p.commitHook = func(int) error { abortRecord(mc); return nil }
 		}, want: ErrNotMovable},
@@ -708,8 +716,8 @@ func TestMoveLeavesAnExitedVMMToLivenessUntilItEnds(t *testing.T) {
 		}
 		return nil
 	}
-	if _, err := mc.s.Move(t.Context(), sb.ID, "b", time.Minute); err == nil {
-		t.Fatal("a move whose VMM exited succeeded")
+	if _, err := mc.s.Move(t.Context(), sb.ID, "b", time.Minute); !errors.Is(err, ErrNotMovable) {
+		t.Fatalf("a move whose VMM exited: %v, want ErrNotMovable", err)
 	}
 	if _, held := mc.t.byID(sb.ID); held {
 		t.Error("the target holds a claim whose VMM exited mid-move")
