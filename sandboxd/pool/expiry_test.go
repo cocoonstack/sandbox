@@ -189,6 +189,29 @@ func TestExpiryArchiveWakeBeforeTheExportGrantsAFreshLease(t *testing.T) {
 	}
 }
 
+func TestATierClaimWokenPastItsLeaseBeforeTheExportGetsAFreshLease(t *testing.T) {
+	m := newTestManager(t, newFakeEngine(), config.PoolSpec{PoolKey: testKey, ArchiveAfterSeconds: 3600})
+	sb, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{TTL: time.Hour})
+	if err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	hibernateClaim(t, m, sb)
+	expire(m, sb)
+	if _, _, _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
+		t.Fatalf("wake: %v", err)
+	}
+	m.mu.Lock()
+	lease := time.Until(sb.Deadline)
+	m.mu.Unlock()
+	if lease < 59*time.Minute {
+		t.Fatalf("lease after a wake past the lease = %v, want the claim's hour again", lease)
+	}
+	m.reapOnce(t.Context())
+	if _, ok := m.byID(sb.ID); !ok {
+		t.Error("the reaper destroyed the woken claim")
+	}
+}
+
 func TestRenewSwitchesTheExpireAction(t *testing.T) {
 	m := newTestManager(t, newFakeEngine())
 	sb := mustClaim(t, m, testKey)

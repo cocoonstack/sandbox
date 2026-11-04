@@ -300,7 +300,7 @@ func (m *Manager) commitTransition(ctx context.Context, sb *types.Sandbox, snap,
 		sb.VsockSocket = sock
 		sb.PendingSnap = ""
 		sb.ReaderSafe = sb.ReaderSafe && snap != ""
-		if now := time.Now(); snap == "" && sb.OnExpire == types.ExpireArchive && !m.tenantGone(sb.Tenant) && now.After(sb.Deadline) {
+		if now := time.Now(); snap == "" && (sb.OnExpire == types.ExpireArchive || m.archiveAfterFor(sb.Key) > 0) && !m.tenantGone(sb.Tenant) && now.After(sb.Deadline) {
 			sb.Deadline = now.Add(clampTTL(types.Seconds(sb.LeaseSeconds)))
 		}
 	})
