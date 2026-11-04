@@ -511,36 +511,93 @@ func TestMoveWhoseRowDeleteReplyIsLostKeepsTheOnlyGuest(t *testing.T) {
 	}
 }
 
-func TestMoveRestartBeforeTheRowDeleteKeepsTheClaim(t *testing.T) {
-	c := newFailoverCluster(t)
-	reg := movestest.NewMem()
-	c.moves = reg
-	ctx := t.Context()
-	epoch, _ := reg.Begin(ctx, "sb_moved", "a", "b")
-	if _, err := c.reg.Put(ctx, archives.Record{ID: "sb_moved", TokenSHA256: tenants.TokenSHA256("tok"), Owner: "a", Checkpoint: "ck_00000000000000aa", Claim: []byte("{}")}); err != nil {
-		t.Fatalf("seed row: %v", err)
+func TestMoveWhoseRowConsumeReplyIsLostKeepsTheGuestAndItsReplica(t *testing.T) {
+	mc := newMoveClusterWith(t, func(c *failoverCluster) { c.replicate = replicateEvery })
+	sb := mustClaim(t, mc.s, testKey)
+	replicateNow(t, mc.s, sb)
+	mc.s.mu.Lock()
+	replica := sb.ReplicaCk
+	mc.s.mu.Unlock()
+	mc.s.archives = &hookRegistry{Registry: mc.reg, loseConsumeReply: true}
+	if _, err := mc.s.Move(t.Context(), sb.ID, "b", time.Minute); !errors.Is(err, archives.ErrUnavailable) {
+		t.Fatalf("move: %v, want the lost reply's error", err)
 	}
-	sb := &types.Sandbox{ID: "sb_moved", VMName: "sbx-moved", Key: testKey, Token: "tok", Deadline: time.Now().Add(time.Hour), MoveOut: &types.MoveOut{Epoch: epoch, Series: "s1"}}
-	dataDir := t.TempDir()
-	seedClaims(t, dataDir, map[string]*types.Sandbox{sb.ID: sb})
-	eng := newFakeEngine()
-	eng.vms["sbx-moved"] = "/vsock/sbx-moved"
-	m := c.nodeOn(t, eng, "a", dataDir, keepAnHour)
-	m.liftFence()
-	if err := m.Reconcile(ctx); err != nil {
-		t.Fatalf("reconcile: %v", err)
+	assertStillOnSource(t, mc, sb)
+	if rec, ok, _ := mc.reg.Get(t.Context(), sb.ID); !ok || !rec.Consumed || rec.Owner != "a" {
+		t.Fatalf("row %+v %v, want this node's tombstone", rec, ok)
 	}
-	waitFor(t, func() bool { return !m.moveHeld(sb.ID) })
-	if _, held := m.byID(sb.ID); !held {
-		t.Fatal("the restart dropped a claim whose move had not committed")
+	if !ckExists(t, mc.s, replica) {
+		t.Fatal("the failed move deleted the replica the claim still names")
 	}
-	if _, ok, _ := c.reg.Get(ctx, sb.ID); ok {
-		t.Error("the row the journal no longer names survived the restart")
+	mc.s.sweepOrphanArchives(t.Context())
+	if rec, ok, _ := mc.reg.Get(t.Context(), sb.ID); !ok || rec.Consumed || rec.Checkpoint != replica {
+		t.Errorf("row %+v %v after the sweep, want the replica back on it", rec, ok)
 	}
-	eng.mu.Lock()
-	defer eng.mu.Unlock()
-	if !slices.Contains(eng.aborts, "sbx-moved:s1") || slices.Contains(eng.removes, "sbx-moved") {
-		t.Errorf("aborts %v removes %v, want the series aborted and the VM kept", eng.aborts, eng.removes)
+	replicateNow(t, mc.s, sb)
+	if _, held := mc.s.byID(sb.ID); !held {
+		t.Error("the next replica round dropped the claim")
+	}
+}
+
+func TestMoveCutOffFromTheRegistryLeavesAnAdoptionToTheFence(t *testing.T) {
+	mc := newMoveClusterWith(t, func(c *failoverCluster) { c.replicate = replicateEvery })
+	u := mc.moveNode(t, "c")
+	sb := mustClaim(t, mc.s, testKey)
+	replicateNow(t, mc.s, sb)
+	mc.s.archives = &unreachableRowWrites{Registry: mc.reg}
+	if _, err := mc.s.Move(t.Context(), sb.ID, "b", time.Minute); !errors.Is(err, archives.ErrUnavailable) {
+		t.Fatalf("move: %v, want the registry's error", err)
+	}
+	mc.s.archives = mc.reg
+	mc.expire("a")
+	mustAdopt(t, u, sb, "adoption while the source was cut off")
+	mc.renew(t, "a")
+	mc.s.trip(t.Context())
+	mc.s.unfence(t.Context(), time.Now())
+	waitFor(t, func() bool { return fakeOf(mc.s).removed(sb.VMName) })
+	if _, held := mc.s.byID(sb.ID); held {
+		t.Error("the source kept serving a claim a peer adopted")
+	}
+}
+
+func TestMoveRestartAfterTheConsumeKeepsTheClaim(t *testing.T) {
+	for name, fieldsCleared := range map[string]bool{"before its fields are cleared": false, "after its fields are cleared": true} {
+		t.Run(name, func(t *testing.T) {
+			c := newFailoverCluster(t)
+			reg := movestest.NewMem()
+			c.moves = reg
+			ctx := t.Context()
+			epoch, _ := reg.Begin(ctx, "sb_moved", "a", "b")
+			rowEpoch, err := c.reg.Put(ctx, archives.Record{ID: "sb_moved", TokenSHA256: tenants.TokenSHA256("tok"), Owner: "a", Checkpoint: "ck_00000000000000aa", Claim: []byte("{}")})
+			if err != nil {
+				t.Fatalf("seed row: %v", err)
+			}
+			if _, err = c.reg.Consume(ctx, "sb_moved", rowEpoch); err != nil {
+				t.Fatalf("seed tombstone: %v", err)
+			}
+			sb := &types.Sandbox{ID: "sb_moved", VMName: "sbx-moved", Key: testKey, Token: "tok", Deadline: time.Now().Add(time.Hour), MoveOut: &types.MoveOut{Epoch: epoch, Series: "s1"}}
+			if !fieldsCleared {
+				sb.ReplicaCk, sb.ArchiveEpoch = "ck_00000000000000aa", rowEpoch
+			}
+			dataDir := t.TempDir()
+			seedClaims(t, dataDir, map[string]*types.Sandbox{sb.ID: sb})
+			eng := newFakeEngine()
+			eng.vms["sbx-moved"] = "/vsock/sbx-moved"
+			m := c.nodeOn(t, eng, "a", dataDir, keepAnHour)
+			m.liftFence()
+			if err = m.Reconcile(ctx); err != nil {
+				t.Fatalf("reconcile: %v", err)
+			}
+			waitFor(t, func() bool { return !m.moveHeld(sb.ID) })
+			if _, held := m.byID(sb.ID); !held {
+				t.Fatal("the restart dropped a claim whose move had not committed")
+			}
+			eng.mu.Lock()
+			defer eng.mu.Unlock()
+			if !slices.Contains(eng.aborts, "sbx-moved:s1") || slices.Contains(eng.removes, "sbx-moved") {
+				t.Errorf("aborts %v removes %v, want the series aborted and the VM kept", eng.aborts, eng.removes)
+			}
+		})
 	}
 }
 
@@ -1474,6 +1531,18 @@ func (c *coldTenants) Peek(name string) (tenants.TenantRecord, tenants.Presence)
 func (c *coldTenants) Lookup(ctx context.Context, name string) (tenants.TenantRecord, bool, error) {
 	c.warm.Store(true)
 	return c.Source.Lookup(ctx, name)
+}
+
+type unreachableRowWrites struct {
+	archives.Registry
+}
+
+func (r *unreachableRowWrites) Consume(context.Context, string, int64) (int64, error) {
+	return 0, archives.ErrUnavailable
+}
+
+func (r *unreachableRowWrites) Delete(context.Context, string, int64) error {
+	return archives.ErrUnavailable
 }
 
 type lossyMoves struct {

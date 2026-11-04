@@ -417,11 +417,16 @@ metadata`, the call answers 502 and the guest resumes on the source.
 - A move call on a claim that moved further than the peer it named answers 200
   with that peer as `owner_addr`; `Lookup` finds the claim.
 
-**Replicated claims.** Before the final round the source deletes the claim's
-registry row and its replica, so no third node can adopt a stale replica while
-the target runs the claim. The target's first replica round puts a new row one
-interval after the start, and an aborted move lets the source's next round put
-it again.
+**Replicated claims.** Before the final round the source consumes the claim's
+registry row, since no node adopts a tombstone, then clears the claim's replica
+fields and deletes the row, so no third node can adopt a stale replica while
+the target runs the claim. It keeps the replica until the move ends. The target's
+first replica round puts a new row one interval after the start, and an aborted
+move lets the source's next round put it again. A source cut off from the
+registry changes nothing and its move fails: it keeps the row's epoch, so the
+fence still finds a peer that adopted the claim during the outage, and the source
+drops it. A consume whose reply was lost leaves the source's own tombstone, which
+the hourly sweep puts back on the replica.
 
 **Failures.** Any failure before the commit aborts: the source resumes the
 guest, the target drops its reservation, files and any received VM, and the

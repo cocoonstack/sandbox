@@ -232,6 +232,10 @@ func (m *Manager) unrowForMove(ctx context.Context, sb *types.Sandbox, mv *outMo
 	if epoch == 0 {
 		return nil
 	}
+	consumed, err := m.consumeRow(ctx, sb, epoch, "move")
+	if err != nil {
+		return err
+	}
 	live, err := m.commitIfLive(ctx, sb, func() { sb.ReplicaCk, sb.ArchiveEpoch = "", 0 })
 	if !live {
 		return ErrUnknownSandbox
@@ -239,9 +243,7 @@ func (m *Manager) unrowForMove(ctx context.Context, sb *types.Sandbox, mv *outMo
 	if err != nil {
 		return err
 	}
-	if err = m.archives.Delete(ctx, sb.ID, epoch); errors.Is(err, archives.ErrLost) {
-		return fmt.Errorf("%w: its replica row moved under it", ErrNotMovable)
-	} else if err != nil {
+	if err = m.archives.Delete(ctx, sb.ID, consumed); err != nil && !errors.Is(err, archives.ErrLost) {
 		return err
 	}
 	mv.replica = replica
