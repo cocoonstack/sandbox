@@ -32,10 +32,6 @@ var reloadableFields = map[string]bool{
 	"archive_delete_after_seconds": true,
 }
 
-type poolTargets struct {
-	warm, warmMax, idle, archiveAfter, archiveDelete int
-}
-
 // ReloadDiff sorts next's differences from c into reloadable settings it changes and parts their own API owns, which a reload leaves alone; any other difference needs a restart and fails.
 func (c *Config) ReloadDiff(next *Config) (changed, ignored []string, err error) {
 	cur, nxt := reflect.ValueOf(c).Elem(), reflect.ValueOf(next).Elem()
@@ -91,8 +87,8 @@ func diffPools(cur, next []PoolSpec) (changed, ignored, restart []string) {
 	return changed, ignored, restart
 }
 
-func targetsOf(s PoolSpec) poolTargets {
-	return poolTargets{s.Warm, s.WarmMax, s.IdleHibernateSeconds, s.ArchiveAfterSeconds, s.ArchiveDeleteAfterSeconds}
+func targetsOf(s PoolSpec) [5]int {
+	return [5]int{s.Warm, s.WarmMax, s.IdleHibernateSeconds, s.ArchiveAfterSeconds, s.ArchiveDeleteAfterSeconds}
 }
 
 func poolLabel(k types.PoolKey) string {

@@ -54,7 +54,7 @@ func (s *Source) Load(ctx context.Context) (*poolset.Set, int64, error) {
 	case errors.Is(err, pgx.ErrNoRows):
 		return nil, 0, nil
 	case err != nil:
-		return nil, 0, unavailable(err)
+		return nil, 0, fmt.Errorf("%w: %w", poolset.ErrUnavailable, err)
 	}
 	if err = json.Unmarshal(raw, &set.Pools); err != nil {
 		return nil, 0, fmt.Errorf("decode cell %q pool set: %w", s.cell, err)
@@ -76,7 +76,7 @@ func (s *Source) Store(ctx context.Context, set poolset.Set) (int64, error) {
 				version = sandboxd_pool_sets.version + 1, updated_at = now()
 			RETURNING version)
 		SELECT version, pg_notify($4, $1) FROM up`, s.cell, set.ConfigSeed, raw, channel).Scan(&version, nil); err != nil {
-		return 0, unavailable(err)
+		return 0, fmt.Errorf("%w: %w", poolset.ErrUnavailable, err)
 	}
 	return version, nil
 }
@@ -92,8 +92,4 @@ func (s *Source) Watch(ctx context.Context, changed func()) {
 func (s *Source) Close() error {
 	s.pool.Close()
 	return nil
-}
-
-func unavailable(err error) error {
-	return fmt.Errorf("%w: %w", poolset.ErrUnavailable, err)
 }

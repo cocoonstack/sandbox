@@ -121,10 +121,7 @@ func main() {
 		})
 		republish = func() { msh.UpdateDigest(mgr.ClusterDigest()) }
 		mgr.OnTenants(republish)
-		clusterKey, err := cfg.Mesh.DecodedKey()
-		if err != nil {
-			logger.Fatalf(ctx, err, "decode mesh cluster key")
-		}
+		clusterKey, _ := cfg.Mesh.DecodedKey()
 		if len(clusterKey) > 0 {
 			probeKey = peer.DeriveProbeKey(clusterKey)
 		}
@@ -216,19 +213,13 @@ func servePreview(ctx context.Context, srv *http.Server) {
 func startMesh(ctx context.Context, cfg *config.Config, mgr *pool.Manager) (*mesh.Mesh, error) {
 	mc := cfg.Mesh
 	mlCfg := memberlist.DefaultLANConfig()
-	host, port, err := mc.ParsedBind()
-	if err != nil {
-		return nil, err
-	}
+	host, port, _ := mc.ParsedBind()
 	mlCfg.BindAddr, mlCfg.BindPort = host, port
 	mlCfg.AdvertiseAddr, mlCfg.AdvertisePort = host, port
 	mlCfg.PushPullInterval = gossipInterval
 	mlCfg.LogOutput = io.Discard // memberlist's own logs bypass core/log
 
-	key, err := mc.DecodedKey()
-	if err != nil {
-		return nil, err
-	}
+	key, _ := mc.DecodedKey()
 	self := mesh.NodeState{NodeID: mc.ID(), Addr: cfg.AdvertiseAddr, ClientAddr: cfg.ClientAdvertise, Digest: mgr.ClusterDigest()}
 	msh, err := mesh.New(ctx, mlCfg, self, key)
 	if err != nil {

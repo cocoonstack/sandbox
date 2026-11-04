@@ -23,7 +23,6 @@ import (
 func openBackends(ctx context.Context, cfg *config.Config) (pool.Backends, error) {
 	var b pool.Backends
 	var err error
-	// Checkpoints and templates are two id-namespaced views (ck_*, tp_*) over one store root
 	if b.Checkpoints, err = newStoreView(ctx, cfg, "checkpoint-staging", store.CheckpointIDRe); err != nil {
 		return pool.Backends{}, err
 	}

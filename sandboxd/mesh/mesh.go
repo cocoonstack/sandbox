@@ -70,9 +70,6 @@ func New(ctx context.Context, cfg *memberlist.Config, self NodeState, secretKey 
 
 // Join contacts seed members; an empty list leaves a mesh of one.
 func (m *Mesh) Join(seeds []string) error {
-	if len(seeds) == 0 {
-		return nil
-	}
 	if _, err := m.ml.Join(seeds); err != nil {
 		return fmt.Errorf("join mesh: %w", err)
 	}

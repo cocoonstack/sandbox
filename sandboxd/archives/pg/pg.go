@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/cocoonstack/sandbox/sandboxd/archives"
@@ -59,7 +60,7 @@ func (r *Registry) Put(ctx context.Context, rec archives.Record) (int64, error) 
 			deadline = EXCLUDED.deadline, claim = EXCLUDED.claim, updated_at = now()
 		WHERE sandboxd_archives.owner = EXCLUDED.owner
 		RETURNING epoch`,
-		rec.ID, rec.Tenant, rec.TokenSHA256, rec.Owner, rec.Checkpoint, nullTime(rec.Deadline), []byte(rec.Claim), r.cell)
+		rec.ID, rec.Tenant, rec.TokenSHA256, rec.Owner, rec.Checkpoint, pgtype.Timestamptz{Time: rec.Deadline, Valid: !rec.Deadline.IsZero()}, []byte(rec.Claim), r.cell)
 }
 
 func (r *Registry) Replace(ctx context.Context, rec archives.Record, expect int64) (int64, error) {
@@ -69,7 +70,7 @@ func (r *Registry) Replace(ctx context.Context, rec archives.Record, expect int6
 	return r.advance(ctx, `UPDATE sandboxd_archives SET tenant = $5, token_sha256 = $6, epoch = nextval('sandboxd_archives_epoch'),
 			checkpoint = $7, deadline = $8, claim = $9, updated_at = now()
 		WHERE cell = $1 AND id = $2 AND epoch = $3 AND owner = $4 AND NOT consumed
-		RETURNING epoch`, r.cell, rec.ID, expect, rec.Owner, rec.Tenant, rec.TokenSHA256, rec.Checkpoint, nullTime(rec.Deadline), []byte(rec.Claim))
+		RETURNING epoch`, r.cell, rec.ID, expect, rec.Owner, rec.Tenant, rec.TokenSHA256, rec.Checkpoint, pgtype.Timestamptz{Time: rec.Deadline, Valid: !rec.Deadline.IsZero()}, []byte(rec.Claim))
 }
 
 func (r *Registry) Take(ctx context.Context, id string, expect int64, owner string) (int64, error) {
@@ -131,7 +132,7 @@ func (r *Registry) Get(ctx context.Context, id string) (archives.Record, bool, e
 	case errors.Is(err, pgx.ErrNoRows):
 		return archives.Record{}, false, nil
 	case err != nil:
-		return archives.Record{}, false, err
+		return archives.Record{}, false, unavailable(err)
 	}
 	return rec, true, nil
 }
@@ -202,28 +203,14 @@ func (r *Registry) collect(ctx context.Context, sql string, args ...any) ([]arch
 func scan(row pgx.Row) (archives.Record, error) {
 	var (
 		rec      archives.Record
-		deadline *time.Time
+		deadline pgtype.Timestamptz
 		claim    []byte
 	)
-	err := row.Scan(&rec.ID, &rec.Tenant, &rec.TokenSHA256, &rec.Owner, &rec.Epoch, &rec.Consumed, &rec.Checkpoint, &deadline, &claim)
-	switch {
-	case errors.Is(err, pgx.ErrNoRows):
+	if err := row.Scan(&rec.ID, &rec.Tenant, &rec.TokenSHA256, &rec.Owner, &rec.Epoch, &rec.Consumed, &rec.Checkpoint, &deadline, &claim); err != nil {
 		return archives.Record{}, err
-	case err != nil:
-		return archives.Record{}, unavailable(err)
 	}
-	if deadline != nil {
-		rec.Deadline = *deadline
-	}
-	rec.Claim = claim
+	rec.Deadline, rec.Claim = deadline.Time, claim
 	return rec, nil
-}
-
-func nullTime(t time.Time) *time.Time {
-	if t.IsZero() {
-		return nil
-	}
-	return &t
 }
 
 func unavailable(err error) error {
