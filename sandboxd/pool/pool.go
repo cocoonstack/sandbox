@@ -520,7 +520,7 @@ func (m *Manager) Run(ctx context.Context) {
 				go m.sweepOrphanArchives(ctx)
 			}
 			if m.moves != nil {
-				go m.sweepStaleMoves(ctx)
+				go m.sweepStaleMoves(ctx, time.Now())
 			}
 		}
 	}

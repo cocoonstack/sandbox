@@ -344,8 +344,9 @@ its `aborted` write lands; a write that finds `committed` means the claim moved,
 and the source drops it. While the meta store is down, a guest paused in the
 final round stays paused and the call answers 503; the abort is retried every 2
 seconds. The source deletes the record when the move ends. Each node's hourly
-sweep aborts and deletes its records older than an hour that no move in flight
-holds.
+sweep aborts its records older than an hour that no move in flight holds, and
+deletes only those it sourced: a source reads a missing record as an aborted
+move, so a target never deletes one.
 
 **Rounds.** The source sends a baseline round, then up to 4 deltas, each over
 the control port with the root token. Once the last delta's size at the rate
@@ -354,7 +355,9 @@ the rounds reached, plus 400 ms for the receive and the start, fits
 round and the target receives the series and starts the guest. A move whose
 deltas never fit answers 503 and the guest runs on. `downtime_ms` in the answer
 is the pause the source measured, from the final capture to the target's
-commit.
+commit. The final capture, its transfer and the target's commit have 2 minutes
+together; past that the source resolves the move through the record, and the
+guest resumes on the source unless the target committed.
 
 **Counting.** The target admits the move like a new claim: node `max_claims`,
 `max_running`, the tenant's `max_claims`, `memory_limit` and

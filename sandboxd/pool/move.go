@@ -24,6 +24,7 @@ const (
 	// Receive and vm start on the target add this to the final round's transfer.
 	moveStartAllowance = 400 * time.Millisecond
 	moveStaleAge       = time.Hour
+	moveFinalTimeout   = 2 * time.Minute
 )
 
 // MoveAdmission is what a source asks a target to reserve for a live move.
@@ -78,10 +79,10 @@ func (m *Manager) moveDir(id string) string {
 	return filepath.Join(m.dataDir, movesDir, id)
 }
 
-// sweepStaleMoves ends this node's move records no move in flight holds.
-func (m *Manager) sweepStaleMoves(ctx context.Context) {
+// sweepStaleMoves aborts this node's stale moves and deletes only those it sourced, since a source reads a missing record as aborted.
+func (m *Manager) sweepStaleMoves(ctx context.Context, now time.Time) {
 	logger := log.WithFunc("pool.sweepStaleMoves")
-	recs, err := m.moves.Stale(ctx, time.Now().Add(-moveStaleAge))
+	recs, err := m.moves.Stale(ctx, now.Add(-moveStaleAge))
 	if err != nil {
 		logger.Warnf(ctx, "list stale moves: %v", err)
 		return
@@ -96,6 +97,9 @@ func (m *Manager) sweepStaleMoves(ctx context.Context) {
 				logger.Warnf(ctx, "abort stale move %s: %v", rec.ID, err)
 				continue
 			}
+		}
+		if rec.From != m.nodeID {
+			continue
 		}
 		if err = m.moves.Delete(ctx, rec.ID, epoch); err != nil {
 			logger.Warnf(ctx, "delete stale move %s: %v", rec.ID, err)

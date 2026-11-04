@@ -107,6 +107,8 @@ func (m *Manager) moveOut(ctx context.Context, sb *types.Sandbox, mv *outMove, b
 	m.mu.Unlock()
 	sb.Transition.Lock()
 	mv.locked = true
+	ctx, cancel := context.WithTimeout(ctx, moveFinalTimeout)
+	defer cancel()
 	if err = m.unrowForMove(ctx, sb); err != nil {
 		return movedAt{}, err
 	}

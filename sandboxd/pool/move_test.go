@@ -415,6 +415,35 @@ func TestMoveRestartResolvesAJournaledMoveThroughItsRecord(t *testing.T) {
 	}
 }
 
+func TestStaleMoveRecordsAreDeletedOnlyByTheirSource(t *testing.T) {
+	mc := newMoveCluster(t)
+	ctx, reg := t.Context(), mc.moveReg
+	done, _ := reg.Begin(ctx, "sb_done", "a", "b")
+	done, _ = reg.Advance(ctx, "sb_done", done, moves.Pending, moves.Final)
+	if _, err := reg.Advance(ctx, "sb_done", done, moves.Final, moves.Committed); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+	if _, err := reg.Begin(ctx, "sb_open", "a", "b"); err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	later := time.Now().Add(2 * moveStaleAge)
+
+	mc.t.sweepStaleMoves(ctx, later)
+	if rec, ok, _ := reg.Get(ctx, "sb_done"); !ok || rec.State != moves.Committed {
+		t.Errorf("committed record after the target's sweep: %+v %v, want it kept for its source", rec, ok)
+	}
+	if rec, ok, _ := reg.Get(ctx, "sb_open"); !ok || rec.State != moves.Aborted {
+		t.Errorf("open record after the target's sweep: %+v %v, want it aborted and kept", rec, ok)
+	}
+
+	mc.s.sweepStaleMoves(ctx, later)
+	for _, id := range []string{"sb_done", "sb_open"} {
+		if rec, ok, _ := reg.Get(ctx, id); ok {
+			t.Errorf("record %s after the source's sweep: %+v, want it deleted", id, rec)
+		}
+	}
+}
+
 func BenchmarkQuotaErr(b *testing.B) {
 	for _, incoming := range []int{0, 2} {
 		b.Run(map[int]string{0: "no reservations", 2: "two reservations"}[incoming], func(b *testing.B) {
