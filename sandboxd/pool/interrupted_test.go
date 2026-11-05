@@ -467,6 +467,40 @@ func TestReconcileWithoutASnapshotListSettlesAStoppedHibernate(t *testing.T) {
 	}
 }
 
+func TestACaptureSettlesTheIntentAFailedHibernateLeft(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		capture func(m *Manager, sb *types.Sandbox) error
+	}{
+		{"fork", func(m *Manager, sb *types.Sandbox) error {
+			_, err := m.Fork(t.Context(), sb.ID, Cred{Token: sb.Token}, 1, 0, "", "")
+			return err
+		}},
+		{"checkpoint", func(m *Manager, sb *types.Sandbox) error {
+			_, err := m.Checkpoint(t.Context(), sb.ID, Cred{Token: sb.Token}, "", "")
+			return err
+		}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			eng := newFakeEngine()
+			m := newTestManager(t, eng)
+			sb := mustClaim(t, m, testKey)
+			eng.mu.Lock()
+			eng.snapshots = append(eng.snapshots, interruptedHib)
+			eng.mu.Unlock()
+			m.mu.Lock()
+			sb.PendingSnap = interruptedHib
+			m.mu.Unlock()
+			if err := tt.capture(m, sb); err != nil {
+				t.Fatalf("capture: %v", err)
+			}
+			if len(eng.snapSaves) != 0 || sb.HibernateSnap != interruptedHib {
+				t.Errorf("saves %q hibernate snap %q, want the listed hibernate adopted and no save of the paused guest", eng.snapSaves, sb.HibernateSnap)
+			}
+		})
+	}
+}
+
 func waitStarted(t *testing.T, eng *fakeEngine, n int) {
 	t.Helper()
 	waitFor(t, func() bool {
