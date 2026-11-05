@@ -88,7 +88,7 @@ func TestConnExecStdinEcho(t *testing.T) {
 
 func TestRecvKeepsDataWhileRecvTransientReusesIt(t *testing.T) {
 	client, server := net.Pipe()
-	t.Cleanup(func() { client.Close(); server.Close() })
+	t.Cleanup(func() { _ = client.Close(); _ = server.Close() })
 	go func() {
 		for _, payload := range []string{"aGVsbG8=", "d29ybGQ=", "Zmlyc3Q=", "c2Vjb25k"} {
 			_, _ = io.WriteString(server, `{"type":"data","data":"`+payload+`"}`+"\n")
@@ -118,7 +118,7 @@ func TestRecvKeepsDataWhileRecvTransientReusesIt(t *testing.T) {
 
 func TestConnRejectsOversizedFrame(t *testing.T) {
 	client, server := net.Pipe()
-	t.Cleanup(func() { client.Close(); server.Close() })
+	t.Cleanup(func() { _ = client.Close(); _ = server.Close() })
 	conn := silkd.NewConn(client)
 	go func() {
 		huge := strings.Repeat("a", wire.MaxFrame+2)

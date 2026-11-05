@@ -101,12 +101,12 @@ func TestExpiryArchiveRetriesOnlyTheExportAfterItFails(t *testing.T) {
 	if !hibernated || archived || !kept {
 		t.Fatalf("after a failed export: hibernated %t archived %t deadline kept %t, want a hibernated claim with its deadline", hibernated, archived, kept)
 	}
-	hibernates := failing.publishes.Load()
+	exports := failing.publishes.Load()
 	failing.fail.Store(false)
 	m.reapOnce(t.Context())
 	waitFor(t, func() bool { return archivedCount(m) == 1 })
-	if m.Counters().Hibernates != 1 || failing.publishes.Load() != hibernates+1 {
-		t.Errorf("hibernates %d, exports %d after %d: want one hibernate and one more export", m.Counters().Hibernates, failing.publishes.Load(), hibernates)
+	if m.Counters().Hibernates != 1 || failing.publishes.Load() != exports+1 {
+		t.Errorf("hibernates %d, exports %d after %d: want one hibernate and one more export", m.Counters().Hibernates, failing.publishes.Load(), exports)
 	}
 }
 

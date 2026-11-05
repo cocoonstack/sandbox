@@ -50,7 +50,7 @@ type shipper struct {
 }
 
 func (s *shipper) drain(ctx context.Context) {
-	logger := log.WithFunc("usage.Ship")
+	logger := log.WithFunc("usage.shipper.drain")
 	for {
 		n, err := s.shipOnce(ctx)
 		switch {
@@ -158,7 +158,7 @@ func (s *shipper) read(ctx context.Context, files []*os.File, off int64) ([]Reco
 			last = newAnchor(line, end)
 			ev, err := decode(line)
 			if err != nil {
-				log.WithFunc("usage.Ship").Warnf(ctx, "skip undecodable line ending at %s:%d: %v", f.Name(), end, err)
+				log.WithFunc("usage.shipper.read").Warnf(ctx, "skip undecodable line ending at %s:%d: %v", f.Name(), end, err)
 			} else {
 				recs = append(recs, Record{Node: s.node, Digest: last.digest, Event: ev})
 			}

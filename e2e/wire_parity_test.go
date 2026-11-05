@@ -150,7 +150,5 @@ func parseSDKFields(t *testing.T) map[string]map[string]string {
 
 func splitJSONTag(tag string) (name, opts string) {
 	name, rest, _ := strings.Cut(tag, ",")
-	options := strings.Split(rest, ",")
-	slices.Sort(options)
-	return name, strings.Join(options, ",")
+	return name, strings.Join(slices.Sorted(strings.SplitSeq(rest, ",")), ",")
 }

@@ -344,10 +344,10 @@ func (h *Host) lockNIC(ctx context.Context, sb *types.Sandbox) error {
 func (h *Host) tapOf(ctx context.Context, vmName string) (string, error) {
 	vm, ok, err := h.o.Engine.Inspect(ctx, vmName)
 	if err != nil {
-		return "", fmt.Errorf("list %s: %w", vmName, err)
+		return "", fmt.Errorf("inspect %s: %w", vmName, err)
 	}
 	if !ok {
-		return "", fmt.Errorf("no NIC config for %s", vmName)
+		return "", fmt.Errorf("vm %s not found", vmName)
 	}
 	if tap := vm.TapDevice(); tap != "" {
 		return tap, nil

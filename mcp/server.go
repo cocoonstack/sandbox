@@ -198,6 +198,38 @@ func (s *server) dropCkpt(id string) {
 	delete(s.ckpts, id)
 }
 
+// parseAndBox decodes a tool's arguments and resolves their sandbox_id to a live handle, the prologue every sandbox-scoped tool shares.
+func (s *server) parseAndBox[T sandboxIDer](raw jsontext.Value) (T, *sandbox.Sandbox, error) {
+	var args T
+	if err := parse(raw, &args); err != nil {
+		return args, nil, err
+	}
+	sb, err := s.box(args.id())
+	return args, sb, err
+}
+
+func (s *server) boxArg(raw jsontext.Value) (*sandbox.Sandbox, error) {
+	_, sb, err := s.parseAndBox[sandboxArg](raw)
+	return sb, err
+}
+
+// checkpointArg resolves a checkpoint_id argument: a handle minted in this session when available, else a fresh one, because checkpoints outlive sessions.
+func (s *server) checkpointArg(raw jsontext.Value) (*sandbox.Checkpoint, error) {
+	var args struct {
+		CheckpointID string `json:"checkpoint_id"`
+	}
+	if err := parse(raw, &args); err != nil {
+		return nil, err
+	}
+	if ckpt, ok := s.ckpt(args.CheckpointID); ok {
+		return ckpt, nil
+	}
+	if args.CheckpointID == "" {
+		return nil, fmt.Errorf("checkpoint_id is required")
+	}
+	return s.client.Checkpoint(args.CheckpointID), nil
+}
+
 func result(id jsontext.Value, v any) rpcResponse {
 	return rpcResponse{JSONRPC: "2.0", ID: id, Result: v}
 }

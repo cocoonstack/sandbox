@@ -16,48 +16,6 @@ import (
 
 const GuestProxy = "http://127.0.0.1:3128"
 
-// Claim connects to a node and claims one sandbox; the caller owns Close.
-func Claim(ctx context.Context, addr, token, template string, opts ...sandbox.Option) (*sandbox.Client, *sandbox.Sandbox, error) {
-	client, err := sandbox.Connect(addr, sandbox.WithAPIToken(token))
-	if err != nil {
-		return nil, nil, err
-	}
-	sb, err := client.New(ctx, template, opts...)
-	if err != nil {
-		return nil, nil, fmt.Errorf("claim: %w", err)
-	}
-	return client, sb, nil
-}
-
-// HTTPOverPort sends one HTTP/1.1 request over the port relay and returns a 200 body; the Host stays "localhost" because Chrome's DevTools allowlist accepts it but not proxied vhosts.
-func HTTPOverPort(ctx context.Context, sb *sandbox.Sandbox, port uint16, method, path string, body []byte) ([]byte, error) {
-	pc, err := sb.DialPort(ctx, port)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = pc.Close() }()
-	head := fmt.Sprintf("%s %s HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n", method, path)
-	if body != nil {
-		head += fmt.Sprintf("Content-Type: application/json\r\nContent-Length: %d\r\n", len(body))
-	}
-	if _, err = fmt.Fprintf(pc, "%s\r\n%s", head, body); err != nil {
-		return nil, err
-	}
-	resp, err := http.ReadResponse(bufio.NewReader(pc), nil)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = resp.Body.Close() }()
-	out, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
-	}
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("%s %s: %s: %s", method, path, resp.Status, strings.TrimSpace(string(out)))
-	}
-	return out, nil
-}
-
 type RelayConn interface {
 	net.Conn
 	CloseWrite() error
@@ -109,6 +67,61 @@ func (p PortRelay) Dial(ctx context.Context, port uint16) (RelayConn, error) {
 	return &portRelayConn{Conn: conn, reader: reader}, nil
 }
 
+type portRelayConn struct {
+	net.Conn
+	reader *bufio.Reader
+}
+
+func (c *portRelayConn) Read(p []byte) (int, error) {
+	return c.reader.Read(p)
+}
+
+func (c *portRelayConn) CloseWrite() error {
+	return c.Conn.(*net.TCPConn).CloseWrite()
+}
+
+// Claim connects to a node and claims one sandbox; the caller owns Close.
+func Claim(ctx context.Context, addr, token, template string, opts ...sandbox.Option) (*sandbox.Client, *sandbox.Sandbox, error) {
+	client, err := sandbox.Connect(addr, sandbox.WithAPIToken(token))
+	if err != nil {
+		return nil, nil, err
+	}
+	sb, err := client.New(ctx, template, opts...)
+	if err != nil {
+		return nil, nil, fmt.Errorf("claim: %w", err)
+	}
+	return client, sb, nil
+}
+
+// HTTPOverPort sends one HTTP/1.1 request over the port relay and returns a 200 body; the Host stays "localhost" because Chrome's DevTools allowlist accepts it but not proxied vhosts.
+func HTTPOverPort(ctx context.Context, sb *sandbox.Sandbox, port uint16, method, path string, body []byte) ([]byte, error) {
+	pc, err := sb.DialPort(ctx, port)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = pc.Close() }()
+	head := fmt.Sprintf("%s %s HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n", method, path)
+	if body != nil {
+		head += fmt.Sprintf("Content-Type: application/json\r\nContent-Length: %d\r\n", len(body))
+	}
+	if _, err = fmt.Fprintf(pc, "%s\r\n%s", head, body); err != nil {
+		return nil, err
+	}
+	resp, err := http.ReadResponse(bufio.NewReader(pc), nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	out, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("%s %s: %s: %s", method, path, resp.Status, strings.TrimSpace(string(out)))
+	}
+	return out, nil
+}
+
 // Request builds one call to the endpoint, optionally asking for the upgrade.
 func Request(ctx context.Context, url, token string, upgrade bool) (*http.Request, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
@@ -123,17 +136,4 @@ func Request(ctx context.Context, url, token string, upgrade bool) (*http.Reques
 		req.Header.Set("Connection", "Upgrade")
 	}
 	return req, nil
-}
-
-type portRelayConn struct {
-	net.Conn
-	reader *bufio.Reader
-}
-
-func (c *portRelayConn) Read(p []byte) (int, error) {
-	return c.reader.Read(p)
-}
-
-func (c *portRelayConn) CloseWrite() error {
-	return c.Conn.(*net.TCPConn).CloseWrite()
 }

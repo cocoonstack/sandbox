@@ -2200,7 +2200,7 @@ type fakeManager struct {
 	tenants              []tenants.TenantSpec
 	setTenants           func(specs []tenants.TenantSpec) error
 	putTenant            func(spec tenants.TenantSpec) error
-	deleteTenant         func(name string) error
+	deleteTenant         idActionFunc
 	tenantList           []pool.TenantInfo
 	tenantErr            error
 	gotEgressClass       string
