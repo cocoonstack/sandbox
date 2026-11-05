@@ -320,7 +320,7 @@ Malformed or conflicting metadata, including a saved path outside `volume_roots`
 prevents startup. The catalog is node-local with one sandboxd writer.
 
 Sandboxd does not create, check, or delete backings. Keep them outside
-`data_dir`: sandboxd clears its `readers`, `goldens`, `fork-*`,
+`data_dir`: sandboxd clears its `readers`, `goldens`, `moves`, `fork-*`,
 `checkpoint-staging` and `template-staging` entries.
 
 ### Volume access lists
@@ -804,7 +804,7 @@ A refused reload changes nothing.
 ## POST /v1/drain
 
 Auth: root only (tenant tokens get 403). Cordons the node for maintenance: claim/fork/branch answer
-429 `node draining` (on a cluster a non-volume claim tries a peer redirect first, and
+429 with an error ending `node draining` (on a cluster a non-volume claim tries a peer redirect first, and
 peers stop redirecting here within a tick, because this node gossips no pools),
 unclaimed warm VMs are destroyed, and live claims keep serving until release
 or TTL. Pool ownership is untouched — no pools.json write, no config change.
@@ -924,8 +924,9 @@ never the source sandbox's. 400 metadata over a bound, an unknown
 `on_expire`, or a bad `env` entry.
 
 Checkpoints are node-local (unless the store is shared — see
-[Configuration](deploy.md#configuration)). On a miss the node probes its peers
-and answers with a redirect shaped like a warm-miss
+[Configuration](deploy.md#configuration)). On a miss a node with a node-local
+store probes its peers (a shared s3 store skips the probe: every node already
+resolves every record) and answers with a redirect shaped like a warm-miss
 [`POST /v1/claim`](#post-v1claim), at most 3 addresses; retry the same body
 (+`no_redirect: true`) at each candidate. With nothing to redirect to (or
 `no_redirect` set) and `checkpoint_peer_heal` on, it pulls the record and serves
@@ -1139,8 +1140,9 @@ them in `secret` (`gh,claim:<entry>`, never a value). An egress event routed thr
 [upstream proxy](egress.md#upstream-proxies) carries `upstream` (its `host:port`), and with
 `egress_usage_bytes` on, `egress_bytes` events add the connection's payload `tx`/`rx` bytes. A sandbox records at most 10 denied or rate-limited egress decisions per second after a burst of 100, so `egress` events do not count every refusal. A volume claim also carries
 `volumes`, the applied catalog names, and — omitted when empty — `volumes_rw`,
-the subset of those names claimed `rw`, so billing can discriminate write
-access (mounts and host paths are not billing dimensions). The file rotates at
+the subset of those names claimed `rw`, on its `claim` event, so billing can
+discriminate write access at claim (mounts and host paths are not billing
+dimensions); a live attach or detach records no usage event. The file rotates at
 64 MiB keeping one `.1` backup, so a tailing collector never loses a window
 silently. A last line a crash cut short is ended with a newline when the node
 reopens the journal, so it never swallows the next event. A [live move](#post-v1sandboxesidmove)

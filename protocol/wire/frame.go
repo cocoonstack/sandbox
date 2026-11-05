@@ -447,7 +447,7 @@ type DataEnd struct{}
 
 func (DataEnd) Op() string { return "data_end" }
 
-// Started reports the spawned pid (synthetic when the OS pid is unknown).
+// Started reports the spawned pid.
 type Started struct {
 	PID uint32 `json:"pid"`
 }
@@ -468,7 +468,7 @@ type Stderr struct {
 
 func (Stderr) RespType() string { return "stderr" }
 
-// Exit is the terminal frame of a foreground exec; -1 means killed or unknown.
+// Exit is the terminal frame of a foreground exec; a signaled child reports 128+signal, -1 an unknown status.
 type Exit struct {
 	Code int32 `json:"code"`
 }
@@ -480,7 +480,7 @@ type Done struct{}
 
 func (Done) RespType() string { return "done" }
 
-// Ready acknowledges an armed watch (events after it are guaranteed captured) or a connected port_forward.
+// Ready acknowledges an armed watch (events after it are guaranteed captured), a connected port_forward or an attached lsp_request.
 type Ready struct{}
 
 func (Ready) RespType() string { return "ready" }

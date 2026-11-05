@@ -90,7 +90,7 @@ directly. To recover a handle when only `id` + `token` survived (say,
 across a process restart):
 
 ```python
-sb = client.lookup(id, token)   # probes the entry node and every mesh peer concurrently
+sb = client.lookup(id, token)   # lists the peers, then probes the entry node and every peer concurrently
 ```
 
 ## Claiming
@@ -107,7 +107,6 @@ sb = client.new("ghcr.io/cocoonstack/sandbox/rt:24.04",
 | `net` | `"none"`, `"egress"` | `"none"` | Cloud Hypervisor network shape: `none` disables the NIC and uses vsock-only I/O; `egress` attaches a bridge/CNI NIC |
 | `size` | `"small"`, `"medium"`, `"large"`, `"xlarge"`, `"2xlarge"` | `"small"` | resource tier: 1cpu/512M, 2cpu/1G, 4cpu/4G, 4cpu/8G, 8cpu/16G |
 | `volumes` | bare names or `{name, mount?, mode?, attach_only?}` mappings | `None` | attach and mount up to eight unique catalog dataset disks; an omitted mount defaults to `/volumes/<name>`; `mode` is `"ro"` (default) or `"rw"` — `"rw"` requires the catalog entry's `writable: true`; accepted by `Client.new` and `Template.new` |
-| `mount` | bool | `True` | mount every requested volume. `False` attaches the devices and leaves the mounting to the workload; sandboxd then rejects a mapping carrying `mount` with 400 |
 | `ttl_seconds` | int | server default 5m | sandbox TTL, server-capped at 24h. The node reaps the sandbox after the TTL even if the client vanishes |
 | `deadline` | `time.monotonic()` value | `None` | keyword-only wall clock over the whole claim, redirect targets included: every request is bounded by whatever is left and a spent deadline raises `TimeoutError`. Without it each redirect candidate gets a fresh `timeout`, so a cluster with unreachable peers can cost a multiple of it. Also on `Template.new` and `Checkpoint.new` |
 
@@ -238,8 +237,7 @@ handle parks at most 8 idle connections. A kept connection counts as live for
 `idle_hibernate_seconds` until it closes, so keep the window below that
 setting; `close` and `hibernate` drop it at once.
 Streams (`watch`, `open_pty`, `dial_port`, an LSP session) take a connection
-of their own, and a guest whose silkd predates the back-to-back protocol
-gets one connection per call as before.
+of their own.
 
 The handle's `sb.deadline` remains the value returned when it was created or last
 renewed, so after an archive/wake transition read the current one from
@@ -281,8 +279,6 @@ tick — prefer the handle right after promoting (see
 `tpl.content_digest` identifies the published export bytes. A caller pinning
 the mutable name can compare a claim's `template_digest` with its expected
 value and close/refuse a mismatch.
-Templates published by an older sandboxd have empty digests until they are
-re-promoted after the node is upgraded.
 
 ## Checkpoints — branching and time travel
 

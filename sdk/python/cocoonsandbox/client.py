@@ -38,7 +38,7 @@ class Client:
         ssl_context: ssl.SSLContext | None = None,
         keep_alive: float = 30.0,
     ) -> None:
-        """keep_alive keeps a handle's idle relay connection, which holds the sandbox's idle clock; 0 dials per call.
+        """keep_alive parks idle control and relay connections, which hold the sandbox's idle clock; 0 dials per call.
 
         ssl_context is set to offer ALPN http/1.1, which the relay upgrade needs; pass a dedicated context.
         """
@@ -82,7 +82,7 @@ class Client:
         _try_each(candidates, lambda peer: self._request(peer, "DELETE", path, None, "delete template"))
 
     def lookup(self, id: str, token: str) -> Sandbox:
-        """Finds the owner by probing the entry and peers concurrently."""
+        """Finds the owner by listing the peers, then probing the entry and every peer concurrently."""
 
         def probe(addr: str) -> Sandbox:
             reply = self._request(

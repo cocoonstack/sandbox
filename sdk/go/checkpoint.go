@@ -53,7 +53,7 @@ type Checkpoint struct {
 // New claims a sandbox cloned from the checkpoint on the checkpoint's node.
 // The snapshot pins the key axes; WithTimeout, WithMetadata,
 // WithArchiveOnExpire and WithEnv apply. A node that no longer holds the
-// checkpoint redirects to a probed owner, which New follows; if every
+// checkpoint redirects to a probed owner, which New follows; if the last
 // candidate fails transiently, New falls back to the origin once to heal there.
 func (ck *Checkpoint) New(ctx context.Context, opts ...Option) (*Sandbox, error) {
 	var claim claimRequest

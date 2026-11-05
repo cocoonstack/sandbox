@@ -600,7 +600,7 @@ class Session(_Closeable):
 
 
 class Watcher(_Closeable):
-    """A live filesystem event stream; iterate for {kind, path} events."""
+    """A live filesystem event stream; iterate for {type, kind, path} events."""
 
     def __init__(self, conn: Conn) -> None:
         self._conn = conn

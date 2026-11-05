@@ -45,8 +45,9 @@ supported*), no authentication (the socket path already carries the sandbox's
 identity), and a `DOMAINNAME` destination is resolved host-side, so the guest
 still needs no resolver. Each door serves at most 256 connections per sandbox
 at a time; later ones sit unserved in the socket backlog until one closes, and
-the proxy keeps at most 64 idle upstream connections per sandbox — 64 more for
-decrypted traffic when the pool intercepts — so a guest cannot turn its proxy
+the proxy keeps at most 64 idle upstream connections per sandbox and exit (the
+node's own and each upstream proxy the claim has used), as many again for
+decrypted traffic when the pool intercepts, so a guest cannot turn its proxy
 into a host descriptor sink.
 
 A SOCKS5 tunnel takes the decision an HTTP `CONNECT` to the same host takes,
@@ -310,9 +311,9 @@ gateway key per user, while the guest holds a placeholder.
   never logged, listed or returned.
 
 The proxy reads a snapshot of the claim's env that each env write publishes,
-without a lock, once per request whose matched rule names a secret or whose
-host has a claim credential, and once per `CONNECT` an `"inject"` rule covers;
-other requests pay nothing.
+without a lock, once per intercepted request, once per request whose matched
+rule names a secret, and once per `CONNECT` an `"inject"` rule covers; other
+requests pay nothing.
 
 ### Claim credentials
 

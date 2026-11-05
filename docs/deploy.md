@@ -425,7 +425,7 @@ generation sweep.
 | `<prefix><id>/labels.json` | Optional labels, removed with the record. |
 | `<prefix>manifests/<id>/<gen>.json` | One JSON manifest per published generation: `lineage` and, per file, `path`, `size` and the present `chunks` (`index`, `sha256`). `<gen>` is `export-<16 hex>`. |
 | `<prefix>chunks/<lineage>/<sha256>` | A 16 MiB chunk. A lineage is the dedup scope: it defaults to the record id, and every checkpoint and archive of one claim shares the claim's sandbox id. A chunk is shared by every record of its lineage that names the same digest, and only by those. |
-| `<prefix>lineages/<lineage>/<id>` | Zero-byte marker: record `<id>` published into `<lineage>`, written after the manifest and before `meta.json`. A publish into a shared lineage reads only the records these list, so a crash between manifest and marker only costs a missed dedup. It only drives dedup, never chunk liveness. |
+| `<prefix>lineages/<lineage>/<id>` | Zero-byte marker: record `<id>` published into another record's lineage `<lineage>`, written after the manifest and before `meta.json`; a record in its own lineage writes none. A publish into a shared lineage reads only the records these list, so a crash between manifest and marker only costs a missed dedup. It only drives dedup, never chunk liveness. |
 
 **Offline reclamation only.** Stop every sandboxd node using the prefix and
 wait for all in-flight publishes, deletes and fetches to finish. Keep the
