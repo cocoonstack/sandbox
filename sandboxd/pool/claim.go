@@ -34,13 +34,20 @@ func (o ClaimOptions) apply(sb *types.Sandbox) {
 	sb.SetEnv(o.Env)
 }
 
+type claimHold struct {
+	n      int
+	tenant string
+	done   bool
+}
+
 // ClaimWarm transfers ownership of a warm sandbox without provisioning; ErrNoWarm means empty.
 func (m *Manager) ClaimWarm(ctx context.Context, key types.PoolKey, o ClaimOptions) (*types.Sandbox, error) {
 	start := time.Now()
-	volumeSpecs, applied, err := m.admitOptions(ctx, key, o)
+	volumeSpecs, applied, hold, err := m.admitOptions(ctx, key, o)
 	if err != nil {
 		return nil, err
 	}
+	defer m.dropHold(hold)
 	reserved := applied
 	defer func() { m.unreserveVolumes(reserved) }()
 	m.mu.Lock()
@@ -60,7 +67,7 @@ func (m *Manager) ClaimWarm(ctx context.Context, key types.PoolKey, o ClaimOptio
 	}
 	o.apply(sb)
 	reserved = nil
-	out, err := m.finalize(ctx, sb, o.TTL, false)
+	out, err := m.finalize(ctx, sb, o.TTL, false, hold)
 	if err == nil {
 		m.counters.claimsWarm.Add(1)
 		m.counters.claimWarmLatency.observe(time.Since(start))
@@ -71,10 +78,11 @@ func (m *Manager) ClaimWarm(ctx context.Context, key types.PoolKey, o ClaimOptio
 // ClaimProvision creates a claim-ready sandbox, a golden clone or a cold boot; with RequirePromoted only a promoted template serves it.
 func (m *Manager) ClaimProvision(ctx context.Context, key types.PoolKey, o ClaimOptions) (*types.Sandbox, error) {
 	start := time.Now()
-	volumeSpecs, applied, err := m.admitOptions(ctx, key, o)
+	volumeSpecs, applied, hold, err := m.admitOptions(ctx, key, o)
 	if err != nil {
 		return nil, err
 	}
+	defer m.dropHold(hold)
 	reserved := applied
 	defer func() { m.unreserveVolumes(reserved) }()
 	golden, err := m.resolveGolden(ctx, key, o.Tenant)
@@ -98,7 +106,7 @@ func (m *Manager) ClaimProvision(ctx context.Context, key types.PoolKey, o Claim
 	sb.PolicySource = golden.source
 	o.apply(sb)
 	reserved = nil
-	out, err := m.finalize(ctx, sb, o.TTL, golden.guestEnv)
+	out, err := m.finalize(ctx, sb, o.TTL, golden.guestEnv, hold)
 	if err == nil {
 		if golden.dir != "" {
 			m.counters.claimsClone.Add(1)
@@ -353,37 +361,77 @@ func (m *Manager) releaseResolved(ctx context.Context, id string, sb *types.Sand
 	return err
 }
 
-// overQuota is an advisory precheck; finalizeBatch does the authoritative admission check.
-func (m *Manager) overQuota(extra int, tenant string) error {
+// holdClaims takes n claim slots under every cap, so claims racing for the last slot fail before they spend a VM.
+func (m *Manager) holdClaims(n int, tenant string) (*claimHold, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.quotaErr(extra, tenant)
+	return m.holdClaimsLocked(n, tenant)
+}
+
+func (m *Manager) holdClaimsLocked(n int, tenant string) (*claimHold, error) {
+	if err := m.quotaErr(n, tenant); err != nil {
+		return nil, err
+	}
+	m.held += n
+	if tenant != "" {
+		m.heldTenants[tenant] += n
+	}
+	return &claimHold{n: n, tenant: tenant}, nil
+}
+
+func (m *Manager) dropHold(h *claimHold) {
+	if h == nil || h.done {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.dropHoldLocked(h)
+}
+
+func (m *Manager) dropHoldLocked(h *claimHold) {
+	if h == nil || h.done {
+		return
+	}
+	h.done = true
+	m.held -= h.n
+	if h.tenant == "" {
+		return
+	}
+	if left := m.heldTenants[h.tenant] - h.n; left > 0 {
+		m.heldTenants[h.tenant] = left
+	} else {
+		delete(m.heldTenants, h.tenant)
+	}
 }
 
 // admitVolumes takes one claim's holds; a refusal on either check leaves nothing held.
-func (m *Manager) admitVolumes(tenant string, volumes []resolvedVolume) ([]types.Volume, error) {
+func (m *Manager) admitVolumes(tenant string, volumes []resolvedVolume) ([]types.Volume, *claimHold, error) {
 	applied := appliedVolumes(volumes)
-	if err := m.admitClaim(tenant, volumes, applied); err != nil {
-		return nil, err
+	hold, err := m.admitClaim(tenant, volumes, applied)
+	if err != nil {
+		return nil, nil, err
 	}
 	if err := m.confirmVolumesClean(volumes); err != nil {
 		m.unreserveVolumes(applied)
-		return nil, err
+		m.dropHold(hold)
+		return nil, nil, err
 	}
-	return applied, nil
+	return applied, hold, nil
 }
 
-func (m *Manager) admitClaim(tenant string, volumes []resolvedVolume, applied []types.Volume) error {
+func (m *Manager) admitClaim(tenant string, volumes []resolvedVolume, applied []types.Volume) (*claimHold, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if err := m.quotaErr(1, tenant); err != nil {
-		return err
+	hold, err := m.holdClaimsLocked(1, tenant)
+	if err != nil {
+		return nil, err
 	}
 	if err := m.catalog.checkResolvedLocked(volumes); err != nil {
-		return err
+		m.dropHoldLocked(hold)
+		return nil, err
 	}
 	m.catalog.adoptVolumes(applied)
-	return nil
+	return hold, nil
 }
 
 // Callers hold m.mu.
@@ -397,7 +445,7 @@ func (m *Manager) quotaErr(extra int, tenant string) error {
 	if m.memoryLow.Load() {
 		return fmt.Errorf("%w: %s", ErrQuota, memoryLowReason)
 	}
-	if limit, live := m.view.Load().maxClaims, len(m.claimed)+len(m.incoming); limit > 0 && live+extra > limit {
+	if limit, live := m.view.Load().maxClaims, len(m.claimed)+len(m.incoming)+m.held; limit > 0 && live+extra > limit {
 		return fmt.Errorf("%w: %d live claims, cap %d", ErrQuota, live, limit)
 	}
 	if err := m.runningErr(extra); err != nil {
@@ -411,7 +459,7 @@ func (m *Manager) quotaErr(extra int, tenant string) error {
 	if limit <= 0 {
 		return nil
 	}
-	live := m.tenantLive[tenant] + m.incomingOf(tenant)
+	live := m.tenantLive[tenant] + m.incomingOf(tenant) + m.heldTenants[tenant]
 	if live+extra > limit {
 		return fmt.Errorf("%w: tenant %s at %d live claims, cap %d", ErrQuota, tenant, live, limit)
 	}
@@ -424,7 +472,7 @@ func (m *Manager) runningErr(extra int) error {
 	if limit == 0 {
 		return nil
 	}
-	if running := m.store.runningCount() + len(m.incoming); running+extra > limit {
+	if running := m.store.runningCount() + len(m.incoming) + m.held; running+extra > limit {
 		return fmt.Errorf("%w: %d running claims, cap %d", ErrQuota, running, limit)
 	}
 	return nil
@@ -499,15 +547,15 @@ func (m *Manager) setVMNameLocked(sb *types.Sandbox, vmName string) {
 }
 
 // finalize stamps identity and persists the claim; a failed write destroys the VM.
-func (m *Manager) finalize(ctx context.Context, sb *types.Sandbox, ttl time.Duration, inherited bool) (*types.Sandbox, error) {
-	if err := m.finalizeBatch(ctx, []*types.Sandbox{sb}, ttl, "", inherited); err != nil {
+func (m *Manager) finalize(ctx context.Context, sb *types.Sandbox, ttl time.Duration, inherited bool, hold *claimHold) (*types.Sandbox, error) {
+	if err := m.finalizeBatch(ctx, []*types.Sandbox{sb}, ttl, "", inherited, hold); err != nil {
 		return nil, err
 	}
 	return sb, nil
 }
 
 // finalizeBatch persists the batch as one write, all-or-nothing; one tenant per batch.
-func (m *Manager) finalizeBatch(ctx context.Context, sbs []*types.Sandbox, ttl time.Duration, claimRefPrefix string, inherited bool) error {
+func (m *Manager) finalizeBatch(ctx context.Context, sbs []*types.Sandbox, ttl time.Duration, claimRefPrefix string, inherited bool, hold *claimHold) error {
 	now, lease := time.Now(), clampTTL(ttl)
 	for _, sb := range sbs {
 		sb.ID, sb.Token = "sb_"+randHex(8), randHex(16)
@@ -522,6 +570,7 @@ func (m *Manager) finalizeBatch(ctx context.Context, sbs []*types.Sandbox, ttl t
 		err = m.deliverEnv(ctx, sbs, inherited)
 	}
 	m.mu.Lock()
+	m.dropHoldLocked(hold)
 	if err == nil {
 		err = m.quotaErr(len(sbs), sbs[0].Tenant)
 	}
@@ -620,22 +669,22 @@ func (m *Manager) deadlineOf(sb *types.Sandbox) time.Time {
 }
 
 // admitOptions validates the key and options and admits the claim's volumes, which the caller unreserves until finalize.
-func (m *Manager) admitOptions(ctx context.Context, key types.PoolKey, o ClaimOptions) ([]resolvedVolume, []types.Volume, error) {
+func (m *Manager) admitOptions(ctx context.Context, key types.PoolKey, o ClaimOptions) ([]resolvedVolume, []types.Volume, *claimHold, error) {
 	if err := m.validate(key); err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	if err := archivable(key, len(o.Volumes) > 0, o.OnExpire); err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	if err := m.checkEnv(o.Env); err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	volumeSpecs, err := m.resolveVolumes(ctx, o.Tenant, o.Volumes)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
-	applied, err := m.admitVolumes(o.Tenant, volumeSpecs)
-	return volumeSpecs, applied, err
+	applied, hold, err := m.admitVolumes(o.Tenant, volumeSpecs)
+	return volumeSpecs, applied, hold, err
 }
 
 // heldConn keeps its sandbox held until the guest connection closes.

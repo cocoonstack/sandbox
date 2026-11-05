@@ -29,9 +29,11 @@ func (m *Manager) Fork(ctx context.Context, id string, cred Cred, count int, ttl
 	if !sb.Key.Capturable() {
 		return nil, ErrNoEgressFork
 	}
-	if err := m.overQuota(count, sb.Tenant); err != nil {
+	hold, err := m.holdClaims(count, sb.Tenant)
+	if err != nil {
 		return nil, err
 	}
+	defer m.dropHold(hold)
 	// A started fork must finish even if the caller hangs up.
 	ctx = context.WithoutCancel(ctx)
 
@@ -49,7 +51,7 @@ func (m *Manager) Fork(ctx context.Context, id string, cred Cred, count int, ttl
 		c.Metadata = sb.Metadata
 		c.OnExpire = onExpire.Or(parentExpire)
 	}
-	if err := m.finalizeBatch(ctx, children, ttl, claimRefPrefix, inherited); err != nil {
+	if err := m.finalizeBatch(ctx, children, ttl, claimRefPrefix, inherited, hold); err != nil {
 		return nil, fmt.Errorf("fork %s: %w", sb.ID, err)
 	}
 	m.counters.forks.Add(1)

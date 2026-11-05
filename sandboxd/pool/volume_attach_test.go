@@ -199,21 +199,22 @@ func TestFinalizeQuotaFailureKeepsHoldsUntilRemoval(t *testing.T) {
 	scratch := writeVolumeImage(t, "scratch.img", "scratch")
 	eng := newFakeEngine()
 	m := newVolumeManager(t, eng, []config.VolumeSpec{{Name: "scratch", Path: scratch, Writable: true}})
-	editView(m, func(v *configView) { v.maxClaims = 1 })
+	editView(m, func(v *configView) { v.maxClaims = 2 })
+	filler, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{})
+	if err != nil {
+		t.Fatalf("volume-less claim: %v", err)
+	}
 	attaches := rendezvousAttaches(eng, 2)
 	writable := []types.Volume{{Name: "scratch", Mode: types.VolumeModeRW}}
 
 	claimErr := make(chan error, 1)
 	go func() {
-		_, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Volumes: writable})
-		claimErr <- err
+		_, provisionErr := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Volumes: writable})
+		claimErr <- provisionErr
 	}()
 	waitFor(t, func() bool { return slices.Contains(eng.volumeOpsLog(), "attach:scratch") })
-	vmName, vmCount := soleVM(eng)
-	filler, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{})
-	if err != nil {
-		t.Fatalf("volume-less claim: %v", err)
-	}
+	vmName, vmCount := soleVM(eng, filler.VMName)
+	editView(m, func(v *configView) { v.maxClaims = 1 })
 	eng.mu.Lock()
 	eng.removeErrFor = vmName
 	eng.attachRendezvous = nil
@@ -266,24 +267,26 @@ func TestFinalizeTenantQuotaFailureQuiescesAndUncountsTenant(t *testing.T) {
 	scratch := writeVolumeImage(t, "scratch.img", "scratch")
 	eng := newFakeEngine()
 	m := newVolumeManager(t, eng, []config.VolumeSpec{{Name: "scratch", Path: scratch, Writable: true}})
-	setTenantCaps(t, m, map[string]int{"acme": 1})
+	setTenantCaps(t, m, map[string]int{"acme": 2})
+	filler, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Tenant: "acme"})
+	if err != nil {
+		t.Fatalf("volume-less tenant claim: %v", err)
+	}
 	attaches := rendezvousAttaches(eng, 2)
 
 	claimErr := make(chan error, 1)
 	go func() {
-		_, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Tenant: "acme", Volumes: []types.Volume{{Name: "scratch", Mode: types.VolumeModeRW}}})
-		claimErr <- err
+		_, provisionErr := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Tenant: "acme", Volumes: []types.Volume{{Name: "scratch", Mode: types.VolumeModeRW}}})
+		claimErr <- provisionErr
 	}()
 	waitFor(t, func() bool { return slices.Contains(eng.volumeOpsLog(), "attach:scratch") })
-	vmName, _ := soleVM(eng)
-	if _, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Tenant: "acme"}); err != nil {
-		t.Fatalf("volume-less tenant claim: %v", err)
-	}
+	vmName, _ := soleVM(eng, filler.VMName)
+	setTenantCaps(t, m, map[string]int{"acme": 1})
 	eng.mu.Lock()
 	eng.attachRendezvous = nil
 	eng.mu.Unlock()
 	attaches.Done()
-	err := <-claimErr
+	err = <-claimErr
 
 	if !errors.Is(err, ErrQuota) {
 		t.Fatalf("tenant volume claim: %v, want ErrQuota from the finalize re-check", err)
@@ -378,11 +381,14 @@ func TestQuiesceVolumesSkipsAttachOnlyEntries(t *testing.T) {
 	}
 }
 
-func soleVM(eng *fakeEngine) (name string, count int) {
+func soleVM(eng *fakeEngine, except ...string) (name string, count int) {
 	eng.mu.Lock()
 	defer eng.mu.Unlock()
 	for vm := range eng.vms {
-		name = vm
+		if !slices.Contains(except, vm) {
+			name = vm
+			count++
+		}
 	}
-	return name, len(eng.vms)
+	return name, count
 }

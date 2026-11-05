@@ -351,6 +351,9 @@ type Manager struct {
 	moving   map[string]*outMove
 	incoming map[string]*inMove
 
+	held        int
+	heldTenants map[string]int
+
 	// Node-wide, unlike the per-pool streak backoff: the exhausted resource is shared
 	atCapacityUntil  time.Time
 	atCapacityReason string
@@ -397,6 +400,7 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 		pendingRemovals: map[string]pendingRemoval{},
 		moving:          map[string]*outMove{},
 		incoming:        map[string]*inMove{},
+		heldTenants:     map[string]int{},
 		tenantLive:      map[string]int{},
 		readers:         &readerSet{live: map[string]*reader{}},
 		archiving:       map[string]struct{}{},
