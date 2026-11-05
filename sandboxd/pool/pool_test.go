@@ -632,8 +632,8 @@ func TestSetPoolsRejectsInvalidSpec(t *testing.T) {
 		Template: "rt:24.04", Net: types.NetNone, Size: types.SizeSmall,
 		Warm: -1,
 	}})
-	if !errors.Is(err, ErrBadCount) {
-		t.Fatalf("got %v, want ErrBadCount", err)
+	if !errors.Is(err, ErrBadConfig) || errors.Is(err, ErrBadCount) {
+		t.Fatalf("got %v, want ErrBadConfig naming the pool", err)
 	}
 }
 

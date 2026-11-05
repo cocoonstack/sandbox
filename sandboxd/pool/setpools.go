@@ -38,7 +38,7 @@ func (m *Manager) desiredPools(specs []config.PoolSpec) (map[types.PoolKey]confi
 			return nil, err
 		}
 		if err := spec.ValidateLimits(); err != nil {
-			return nil, fmt.Errorf("%w: %w", ErrBadCount, err)
+			return nil, fmt.Errorf("%w: pool %s: %w", ErrBadConfig, spec.Template, err)
 		}
 		// Config-owned fields; accepting one here would silently drop it
 		for _, f := range []struct {
