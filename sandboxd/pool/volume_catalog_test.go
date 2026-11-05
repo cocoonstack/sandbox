@@ -307,8 +307,9 @@ func TestRuntimeCatalogFailedWriteLeavesUnrelatedAdmissionsAvailable(t *testing.
 			if err = tt.write(m, specs["affected"]); !errors.Is(err, ErrVolumeCatalogUnavailable) {
 				t.Fatalf("obstructed catalog write: %v", err)
 			}
-			holds, err := m.admitVolumes("", resolved)
+			holds, hold, err := m.admitVolumes("", resolved)
 			m.unreserveVolumes(holds)
+			m.dropHold(hold)
 			if !errors.Is(err, tt.wantResolved) {
 				t.Fatalf("admission resolved before the write = %v, want %v", err, tt.wantResolved)
 			}
@@ -350,18 +351,19 @@ func TestResolvedCatalogBindingRequiresSameEntry(t *testing.T) {
 	if err = m.RegisterVolume(t.Context(), "other", types.VolumeRegistration{Path: writeVolumeImage(t, "other", "bytes")}); err != nil {
 		t.Fatalf("RegisterVolume: %v", err)
 	}
-	holds, err := m.admitVolumes("", resolved)
+	holds, hold, err := m.admitVolumes("", resolved)
 	if err != nil {
 		t.Fatalf("unrelated registration invalidated resolution: %v", err)
 	}
 	m.unreserveVolumes(holds)
+	m.dropHold(hold)
 	if err = m.UnregisterVolume(t.Context(), "runtime"); err != nil {
 		t.Fatalf("UnregisterVolume: %v", err)
 	}
 	if err = m.RegisterVolume(t.Context(), "runtime", spec); err != nil {
 		t.Fatalf("RegisterVolume: %v", err)
 	}
-	if _, err = m.admitVolumes("", resolved); !errors.Is(err, ErrVolumeUnavailable) {
+	if _, _, err = m.admitVolumes("", resolved); !errors.Is(err, ErrVolumeUnavailable) {
 		t.Fatalf("same-file reuse admitted stale resolution: %v", err)
 	}
 	if got := volumeHoldersOf(m, "runtime"); got != (volumeHolders{}) {

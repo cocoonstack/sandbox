@@ -69,10 +69,12 @@ func (m *Manager) ClaimCheckpoint(ctx context.Context, ckptID string, o ClaimOpt
 	if err != nil {
 		return nil, err
 	}
-	if err := m.overQuota(1, o.Tenant); err != nil {
+	hold, err := m.holdClaims(1, o.Tenant)
+	if err != nil {
 		return nil, err
 	}
-	return m.claimLoaded(ctx, ckpt, o)
+	defer m.dropHold(hold)
+	return m.claimLoaded(ctx, ckpt, o, hold)
 }
 
 // ClaimCheckpointHeal claims a checkpoint held only by a peer, pulling it first.
@@ -81,14 +83,16 @@ func (m *Manager) ClaimCheckpointHeal(ctx context.Context, ckptID string, o Clai
 		return nil, ErrUnknownCheckpoint
 	}
 	// Resolving moves a guest memory image, so quota rejects a full node before that cost
-	if err := m.overQuota(1, o.Tenant); err != nil {
+	hold, err := m.holdClaims(1, o.Tenant)
+	if err != nil {
 		return nil, err
 	}
+	defer m.dropHold(hold)
 	ckpt, err := m.healCheckpoint(ctx, ckptID)
 	if err != nil {
 		return nil, err
 	}
-	return m.claimLoaded(ctx, ckpt, o)
+	return m.claimLoaded(ctx, ckpt, o, hold)
 }
 
 // Checkpoints lists tenant's checkpoints, newest first, hiding archive wake images.
@@ -205,7 +209,7 @@ func (m *Manager) publishCheckpoint(ctx context.Context, sb *types.Sandbox, ckID
 }
 
 // claimLoaded re-fetches under the record lock, so a delete racing the pre-check cannot slip in.
-func (m *Manager) claimLoaded(ctx context.Context, ckpt types.Checkpoint, o ClaimOptions) (*types.Sandbox, error) {
+func (m *Manager) claimLoaded(ctx context.Context, ckpt types.Checkpoint, o ClaimOptions, hold *claimHold) (*types.Sandbox, error) {
 	if err := m.checkEnv(o.Env); err != nil {
 		return nil, err
 	}
@@ -227,7 +231,7 @@ func (m *Manager) claimLoaded(ctx context.Context, ckpt types.Checkpoint, o Clai
 	o.apply(sb)
 	sb.FromCheckpoint = ckpt.ID
 	sb.PolicySource, sb.NoEgress = ckpt.PolicySource, ckpt.NoEgress
-	out, err := m.finalize(ctx, sb, o.TTL, ckpt.GuestEnv)
+	out, err := m.finalize(ctx, sb, o.TTL, ckpt.GuestEnv, hold)
 	if err == nil {
 		m.counters.claimsClone.Add(1)
 	}

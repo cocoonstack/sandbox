@@ -253,9 +253,11 @@ func TestConfirmVolumesCleanCatchesMarkerAfterAdmission(t *testing.T) {
 	if markErr := markVolumeDirty(path); markErr != nil {
 		t.Fatalf("mark dirty: %v", markErr)
 	}
-	if reserveErr := m.admitClaim("", resolved, appliedVolumes(resolved)); reserveErr != nil {
+	hold, reserveErr := m.admitClaim("", resolved, appliedVolumes(resolved))
+	if reserveErr != nil {
 		t.Fatalf("reserve once the writer released: %v", reserveErr)
 	}
+	m.dropHold(hold)
 
 	if cleanErr := m.confirmVolumesClean(resolved); !errors.Is(cleanErr, ErrVolumeNeedsRecovery) {
 		t.Errorf("reader over a marker that landed after resolve: %v, want ErrVolumeNeedsRecovery", cleanErr)

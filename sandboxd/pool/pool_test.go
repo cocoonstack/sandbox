@@ -1198,6 +1198,75 @@ func TestOperatorPortDialsOnOneSandboxRunConcurrently(t *testing.T) {
 	}
 }
 
+func TestAClaimForASlotAnotherClaimHoldsTakesNoVM(t *testing.T) {
+	for name, tt := range map[string]struct {
+		tenant string
+		cap    func(*testing.T, *Manager)
+	}{
+		"node max_claims": {cap: func(_ *testing.T, m *Manager) { editView(m, func(v *configView) { v.maxClaims = 1 }) }},
+		"tenant max_claims": {tenant: "acme", cap: func(t *testing.T, m *Manager) {
+			setTenantCaps(t, m, map[string]int{"acme": 1})
+		}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			eng := newFakeEngine()
+			m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 2})
+			m.pools[testKey].goldenDir = "/goldens/x"
+			m.refillOnce(t.Context())
+			waitWarm(t, m, 2)
+			tt.cap(t, m)
+			hold, err := m.holdClaims(1, tt.tenant)
+			if err != nil {
+				t.Fatalf("hold the last slot: %v", err)
+			}
+			if _, err := m.ClaimWarm(t.Context(), testKey, ClaimOptions{Tenant: tt.tenant}); !errors.Is(err, ErrQuota) {
+				t.Fatalf("claim behind a held slot: %v, want ErrQuota", err)
+			}
+			if infos, _ := m.Info(); infos[0].Warm != 2 || len(eng.removedNames()) != 0 {
+				t.Errorf("warm %d removes %v, want the refused claim to leave both warm VMs", infos[0].Warm, eng.removedNames())
+			}
+			m.dropHold(hold)
+			if _, err := m.ClaimWarm(t.Context(), testKey, ClaimOptions{Tenant: tt.tenant}); err != nil {
+				t.Fatalf("claim once the slot is free: %v", err)
+			}
+		})
+	}
+}
+
+func TestABurstForTheLastSlotDestroysNoWarmVM(t *testing.T) {
+	eng := newFakeEngine()
+	m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 8})
+	m.pools[testKey].goldenDir = "/goldens/x"
+	m.refillOnce(t.Context())
+	waitWarm(t, m, 8)
+	editView(m, func(v *configView) { v.maxClaims = 1 })
+	start := make(chan struct{})
+	results := make(chan error, 8)
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Go(func() {
+			<-start
+			_, err := m.ClaimWarm(t.Context(), testKey, ClaimOptions{})
+			results <- err
+		})
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+	won := 0
+	for err := range results {
+		switch {
+		case err == nil:
+			won++
+		case !errors.Is(err, ErrQuota):
+			t.Errorf("a burst claim failed with %v, want ErrQuota", err)
+		}
+	}
+	if won != 1 || len(eng.removedNames()) != 0 {
+		t.Errorf("won %d removes %v, want one claim and no warm VM destroyed", won, eng.removedNames())
+	}
+}
+
 type plainConn struct {
 	net.Conn
 }

@@ -230,7 +230,7 @@ func TestBatchArmFailureRecordsNoUsage(t *testing.T) {
 		{VMName: "sbx-ok", Key: testKey},
 		{VMName: "sbx-eg", Key: egKey},
 	}
-	if err := m.finalizeBatch(t.Context(), sbs, time.Minute, "", false); err == nil {
+	if err := m.finalizeBatch(t.Context(), sbs, time.Minute, "", false, nil); err == nil {
 		t.Fatal("finalizeBatch must fail when a batch member cannot arm")
 	}
 	waitFor(t, m.store.synced)
