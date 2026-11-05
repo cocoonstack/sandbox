@@ -160,7 +160,7 @@ the intersection of the two.
 | `storage` (pool entry) | unset (cocoon's default, 10G) | size of the copy-on-write disk the pool's golden is cold-booted with, in cocoon's own `--storage` spelling (`"40G"`, `"40GiB"`, `"40Gi"`: Docker/Kubernetes units, all binary) and passed to it verbatim; every clone, fork, checkpoint branch and promoted template of the pool inherits it. At least cocoon's default of 10G. Equal sizes spelled differently build the same golden; a changed size rebuilds the golden on the next build, and claims already out keep their disk. Config-owned like `egress`: `PUT /v1/pools` rejects it |
 | `max_claims` | 0 (unlimited) | node-wide cap on live claims; claim/fork/branch requests beyond it answer 429 with the pool state unharmed (on a cluster a non-volume claim first tries a redirect to a warm peer, else to a peer that serves the pool; a volume claim answers the 429 with no redirect) |
 | `max_running` | 0 (off) | node-wide cap on claims that hold a VM: not hibernated, not archived, not failed, with a wake in flight counted; claim, fork, branch and wake beyond it answer 429 and leave the claim as it was; a claim takes the same redirect as `max_claims`. Hibernated and archived claims hold no slot, so `max_claims` can follow disk while this follows RAM and CPU. Warm and reader VMs are not counted: keep `max_running` × the largest size plus every pool's warm target × its size within the node's RAM. A wake cannot move to another node, so its 429 stays until a running claim sleeps or goes. Lowering the cap stops nothing that runs. A [reload](#reloading-the-config) applies a change |
-| `move_concurrency` | 2 | node-wide cap on [live moves](cluster.md#moving-a-running-claim) in flight, counting moves this node sends and reservations it holds for moves to it; a move past it answers 429. Moves need `meta_store` with a `cell`, for the move record, and `mesh.cluster_key`, but not `archive_failover` or an S3 `checkpoint_store`: a node that sets this without them refuses to load, and one that leaves it unset without them cannot move (409). A move also needs a cocoon with live migration (v0.7.7 or a master build), the Cloud Hypervisor fork at `35b098c65260` or newer (a VM keeps the VMM it started with), a run dir that supports reflink such as XFS, nodes of the same CPU model, and the same path strings in cocoon's `root_dir` and `run_dir` on both nodes ([same paths](cluster.md#moving-a-running-claim)). Lowering the cap stops no move in flight. A [reload](#reloading-the-config) applies a change |
+| `move_concurrency` | 2 | node-wide cap on [live moves](cluster.md#moving-a-running-claim) in flight, counting moves this node sends and reservations it holds for moves to it; a move past it answers 429. Moves need `meta_store` with a `cell`, for the move record, and `mesh.cluster_key`, but not `archive_failover` or an S3 `checkpoint_store`: a node that sets this without them refuses to load, and one that leaves it unset without them cannot move (409). A move also needs a cocoon with live migration (v0.7.7 or a master build), the Cloud Hypervisor fork at `35b098c65260` or newer (a VM started before the upgrade cannot move), a run dir that supports reflink such as XFS, nodes of the same CPU model, and the same path strings in cocoon's `root_dir` and `run_dir` on both nodes ([same paths](cluster.md#moving-a-running-claim)). Lowering the cap stops no move in flight. A [reload](#reloading-the-config) applies a change |
 | `audit_log` | false | append every relayed frame that opens an RPC — its op + addressing fields, never payloads — to `<data_dir>/audit.jsonl`; continuation `data`, `data_end`, `stdin`, and `stdin_close` frames pass through unrecorded. The file is size-rotated with one `.1` backup. Records are `{t, id, op}` plus whichever addressing fields the op carries (`argv`, `path`, `dest`, `from`, `to`, `url`, `session`, `port`), plus `method` (`GET`, `CONNECT`, `SOCKS5`, …), `decision` (`allow`, `deny`, `rate_limited`), `secret` (the ref name, never its value), `upstream` (the [upstream proxy](egress.md#upstream-proxies)'s `host:port`, when one carried it), `tenant`, and on an allowed connection `src_addr` and `dst_addr` (the node-side and destination `ip:port` of the upstream TCP connection, the tunnel target through an upstream proxy) on `egress` records, which a relayed frame cannot set; preview accesses record as op `preview`, one per request; a tenant change records as op `tenants` with the `added`, `changed` and `removed` names, never a token; a config reload records as op `config_reload` with `changed`, and a runtime volume change as op `volumes` with `added` or `removed`. An opening frame whose first line exceeds 4 KiB records as op `oversized` with no addressing fields |
 | `disk_reserve` | unset | `{"free": "100G", "dirs": ["/srv/sbx/run"]}`: while the filesystem of any listed directory (default `data_dir`) has less than `free` available, checked every 2 s, the node refuses new claims, forks, checkpoint claims, wakes of hibernated or archived sandboxes, hibernates, checkpoint captures and promotes with 429, and parks refill; the idle sweep and a lease-end archive leave their sandboxes running and retry on the next tick; `/v1/info` reports it as at capacity and the mesh sees no warm VMs on it. Running sandboxes keep running. On an XFS project quota the free space is the project's. List cocoon's `run_dir` when it sits on another filesystem, since the copy-on-write disks grow there. Size `free` to at least two sandboxes' worst-case growth (copy-on-write disk plus memory file each) and keep the refusal above your disk alert's warning level, so the warning comes first: on a 640G project with 40G disks and 8G memory files, `100G` refuses at 84% used |
 | `memory_limit` | unset | `{"anon": "300G", "psi_some_avg10": 40}`, either key alone: while `AnonPages` in `/proc/meminfo` is above `anon`, or the `some avg10` of `/proc/pressure/memory` is above `psi_some_avg10`, checked every 2 s, the node refuses new claims, forks and checkpoint claims with 429 and parks refill; `/v1/info` reports it as at capacity and the mesh sees no pools on it, so a warm or pool redirect skips it; a template or volume held only there still redirects to it and answers 429. Wakes of its own claims, hibernates, checkpoints and archives go on, and running sandboxes keep running. Guest memory is a private file mapping, so page cache and clean guest pages are reclaimable and only anon is what a hibernate has to free. Both signals are node-wide; `AnonPages` leaves out swapped pages and explicit hugepages. A signal the node cannot read, such as PSI on a kernel without it, logs an error and is ignored. PSI also counts a task stalled by its own cgroup limit and weighs by busy CPUs, so on a mostly idle node a few throttled tasks in one small cgroup can cross it: 16 tasks under a 64M `MemoryHigh` reached 75 on an idle 384-CPU host with memory to spare. Treat `anon` as the main limit, and set `psi_some_avg10` only where no workload runs under a tight memory cgroup. Size `anon` so the running guests' further growth still fits under physical memory |
@@ -677,20 +677,21 @@ Stopping sandboxd leaves VMs alive; the next start reconciles them. The unit's
 `KillMode=process` is what guarantees it: systemd signals sandboxd alone, so a
 VMM that cocoon could not move into its own scope outlives the stop instead of
 dying with the service's cgroup. sandboxd starts no new `cocoon` command once
-stopped and waits for the running ones, since cocoon dies on its next log line
-once sandboxd's end of its stderr closes, and a hibernate killed that way leaves
-the guest paused. A save or hibernate can take 26 minutes, hence
+stopped and waits for the running ones, since a `cocoon` command outlives a
+stopped sandboxd only until its next log line, and a hibernate cut short that
+way leaves the guest paused. A save or hibernate can take 26 minutes, hence
 `TimeoutStopSec=27min`; stops normally take seconds. If sandboxd dies abruptly during
 a capture instead, the next start holds that claim until the `cocoon` command has
-exited, then settles it: a hibernate whose snapshot landed stays hibernated and wakes
-from it, and any other capture resumes the guest, or marks the claim failed if it
+exited, then settles it: with cocoon v0.7.7 or newer, a hibernate whose snapshot
+landed stays hibernated and wakes from it, and any other capture resumes the guest, or marks the claim failed if it
 does not answer within 30 minutes. Claimed
 sandboxes are reaped when their TTL expires (default 5m, capped at 24h).
 
-A snapshot save, hibernate, export, restore or clone has 15 minutes. Once canceled, a
-save or hibernate has 11 more to exit, since cocoon v0.7.6 or newer waits up to 10 for
-the VMM to resume the guest; an export, restore or clone has 3. At most 8 saves and
-hibernates run at once on a node. A call that
+A snapshot save, hibernate, live-move capture, export, restore, clone or
+live-move receive has 15 minutes. Once canceled, a save, hibernate or live-move
+capture has 11 more to exit, since cocoon v0.7.6 or newer can take up to 10 to
+exit after a cancel; an export, restore, clone or receive has 3. At most 8
+saves, hibernates and live-move captures run at once on a node. A call that
 dials a guest gives up after 10 s, since a paused or wedged guest never answers,
 and gets `502`.
 
@@ -788,6 +789,7 @@ through `/v1/tenants` on any node.
     `max_connections`.
   - Every other shared table a node opens adds a query pool of the same size:
     the pool set with a `cell`, the [archive registry](#shared-archive-registry) with `archive_failover`,
+    the [move registry](#shared-move-registry) with a `cell` and `mesh.cluster_key`,
     and the usage table with `usage`. Count each in `max_connections`.
   - LISTEN needs a session-mode connection, so a connection pooler in front
     of the database must not run in transaction mode for that DSN.
@@ -976,6 +978,29 @@ With `archive_failover`, each node keeps its archive and replica rows in
       node        text        NOT NULL,
       lease_until timestamptz NOT NULL,
       PRIMARY KEY (cell, node)
+  );
+  ```
+
+### Shared move registry
+
+With `meta_store.cell` and `mesh.cluster_key`, each node keeps its
+[live-move](cluster.md#moving-a-running-claim) records in `sandboxd_moves`,
+whether or not `move_concurrency` is set.
+
+- **Schema:** sandboxd creates the table at boot when it is missing; create it
+  ahead with the same DDL when the node's role has no `CREATE` right:
+
+  ```sql
+  CREATE SEQUENCE IF NOT EXISTS sandboxd_moves_epoch;
+  CREATE TABLE IF NOT EXISTS sandboxd_moves (
+      cell       text        NOT NULL,
+      id         text        NOT NULL,
+      from_node  text        NOT NULL,
+      to_node    text        NOT NULL,
+      state      text        NOT NULL CHECK (state IN ('pending', 'final', 'committed', 'started', 'aborted')),
+      epoch      bigint      NOT NULL CHECK (epoch > 0),
+      updated_at timestamptz NOT NULL DEFAULT now(),
+      PRIMARY KEY (cell, id)
   );
   ```
 
