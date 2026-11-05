@@ -18,9 +18,9 @@ const QUERY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 const INFLIGHT: usize = 256;
 #[cfg(target_os = "linux")]
 const RESOLV_CONF: &str = "/etc/resolv.conf";
+/// Boot services such as a tmpfiles `L+` line may relink resolv.conf after silkd starts.
 #[cfg(target_os = "linux")]
-const RESOLVED_DROPIN: &str = "/run/systemd/resolved.conf.d/silkd-dns.conf";
-const RESOLVED_STUB_DIR: &str = "/systemd/resolve/";
+const RECLAIM_SECS: u32 = 60;
 
 /// Serves the stub over UDP; the caller relays TCP like any egress door.
 #[cfg(target_os = "linux")]
@@ -31,23 +31,15 @@ pub async fn serve() -> io::Result<()> {
     use tokio::sync::Semaphore;
 
     if !crate::net::has_egress() {
-        let systemd = Path::new("/run/systemd/system").exists();
-        if let Err(e) = configure(
-            Path::new(RESOLV_CONF),
-            systemd.then_some(Path::new(RESOLVED_DROPIN)),
-        ) {
-            eprintln!("silkd dns: configure resolver: {e}");
-        }
-        if systemd {
-            let _ = tokio::process::Command::new("systemctl")
-                .args([
-                    "--no-block",
-                    "try-reload-or-restart",
-                    "systemd-resolved.service",
-                ])
-                .status()
-                .await;
-        }
+        tokio::spawn(async {
+            for _ in 0..RECLAIM_SECS {
+                if let Err(e) = configure(Path::new(RESOLV_CONF)) {
+                    eprintln!("silkd dns: configure resolver: {e}");
+                    return;
+                }
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            }
+        });
     }
     let sock = Arc::new(UdpSocket::bind((STUB_ADDR, PORT)).await?);
     let slots = Arc::new(Semaphore::new(INFLIGHT));
@@ -125,22 +117,17 @@ pub fn servfail(query: &[u8]) -> Option<Vec<u8>> {
     Some(out)
 }
 
-/// Points the guest resolver at the stub: systemd-resolved gets it as its only upstream, and a resolv.conf resolved does not own names it directly.
-pub fn configure(resolv_conf: &Path, resolved_dropin: Option<&Path>) -> io::Result<()> {
-    if let Some(dropin) = resolved_dropin {
-        if let Some(dir) = dropin.parent() {
-            std::fs::create_dir_all(dir)?;
-        }
-        std::fs::write(dropin, format!("[Resolve]\nDNS={STUB_ADDR}\nDomains=~.\n"))?;
-    }
-    let owned_by_resolved = std::fs::read_link(resolv_conf)
-        .is_ok_and(|target| target.to_string_lossy().contains(RESOLVED_STUB_DIR));
-    if owned_by_resolved {
-        return Ok(());
+/// Makes resolv.conf a plain file naming only the stub; systemd-resolved cannot use a loopback upstream without a routable link.
+pub fn configure(resolv_conf: &Path) -> io::Result<bool> {
+    let want = format!("nameserver {STUB_ADDR}\n");
+    let plain = std::fs::symlink_metadata(resolv_conf).is_ok_and(|m| m.file_type().is_file());
+    if plain && std::fs::read_to_string(resolv_conf).is_ok_and(|have| have == want) {
+        return Ok(false);
     }
     let tmp = resolv_conf.with_extension("silkd");
-    std::fs::write(&tmp, format!("nameserver {STUB_ADDR}\n"))?;
-    std::fs::rename(&tmp, resolv_conf)
+    std::fs::write(&tmp, want)?;
+    std::fs::rename(&tmp, resolv_conf)?;
+    Ok(true)
 }
 
 #[cfg(test)]
@@ -177,54 +164,35 @@ mod tests {
     }
 
     #[test]
-    fn configure_rewrites_a_plain_resolv_conf_and_writes_the_resolved_dropin() {
+    fn configure_rewrites_resolv_conf_once() {
         let dir = tempfile::tempdir().unwrap();
         let conf = dir.path().join("resolv.conf");
         std::fs::write(&conf, "nameserver 10.0.0.2\n").unwrap();
-        let dropin = dir.path().join("resolved.conf.d/silkd-dns.conf");
-        configure(&conf, Some(&dropin)).unwrap();
+        assert!(configure(&conf).unwrap());
         assert_eq!(
             std::fs::read_to_string(&conf).unwrap(),
             "nameserver 127.0.0.153\n"
         );
-        assert_eq!(
-            std::fs::read_to_string(&dropin).unwrap(),
-            "[Resolve]\nDNS=127.0.0.153\nDomains=~.\n"
-        );
+        assert!(!configure(&conf).unwrap());
     }
 
     #[test]
-    fn configure_leaves_a_resolved_owned_resolv_conf_alone() {
+    fn configure_replaces_a_resolved_stub_link_and_leaves_its_target() {
         let dir = tempfile::tempdir().unwrap();
         let stub = dir.path().join("run/systemd/resolve/stub-resolv.conf");
         std::fs::create_dir_all(stub.parent().unwrap()).unwrap();
-        std::fs::write(&stub, "nameserver 127.0.0.53\n").unwrap();
+        std::fs::write(&stub, "nameserver 127.0.0.153\n").unwrap();
         let conf = dir.path().join("resolv.conf");
         std::os::unix::fs::symlink(&stub, &conf).unwrap();
-        configure(&conf, Some(&dir.path().join("silkd-dns.conf"))).unwrap();
-        assert_eq!(std::fs::read_link(&conf).unwrap(), stub);
-        assert_eq!(
-            std::fs::read_to_string(&stub).unwrap(),
-            "nameserver 127.0.0.53\n"
-        );
-    }
-
-    #[test]
-    fn configure_replaces_a_symlink_resolved_does_not_own() {
-        let dir = tempfile::tempdir().unwrap();
-        let other = dir.path().join("other.conf");
-        std::fs::write(&other, "nameserver 10.0.0.2\n").unwrap();
-        let conf = dir.path().join("resolv.conf");
-        std::os::unix::fs::symlink(&other, &conf).unwrap();
-        configure(&conf, None).unwrap();
+        assert!(configure(&conf).unwrap());
         assert!(std::fs::read_link(&conf).is_err());
         assert_eq!(
             std::fs::read_to_string(&conf).unwrap(),
             "nameserver 127.0.0.153\n"
         );
         assert_eq!(
-            std::fs::read_to_string(&other).unwrap(),
-            "nameserver 10.0.0.2\n"
+            std::fs::read_to_string(&stub).unwrap(),
+            "nameserver 127.0.0.153\n"
         );
     }
 }

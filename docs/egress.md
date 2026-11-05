@@ -82,12 +82,13 @@ and TCP) carries each query over `CID2:2052` (`<vsock_socket>_2052`) to a
 per-sandbox resolver in sandboxd, which asks the node's nameservers (from the
 node's `/etc/resolv.conf`) and answers with real addresses.
 
-- **Guest resolver config.** In a guest without a device-backed NIC, silkd at
-  start writes `/run/systemd/resolved.conf.d/silkd-dns.conf` (`DNS=127.0.0.153`,
-  `Domains=~.`) and asks systemd-resolved to reload, so `127.0.0.53` keeps
-  serving and forwards to the stub. When `/etc/resolv.conf` is not a link into
-  systemd-resolved's `/run/systemd/resolve/`, silkd replaces it with
-  `nameserver 127.0.0.153`. A guest with a NIC keeps its own resolver.
+- **Guest resolver config.** In a guest without a device-backed NIC, silkd
+  makes `/etc/resolv.conf` a plain file with `nameserver 127.0.0.153`, replacing
+  a link to systemd-resolved's stub: resolved answers "network is down" for a
+  loopback upstream while no link is routable, which is the none lane. silkd
+  checks the file again every second for its first minute, since boot services
+  such as a tmpfiles `L+` line can relink it after silkd starts; after that a
+  change made in the guest stays. A guest with a NIC keeps its own resolver.
 - **Internal addresses.** An `A` or `AAAA` record that the dial guard would
   refuse (special-purpose ranges and the node's own addresses, minus the
   prefixes `egress_internal_allow` re-admits on any port) is dropped from the
