@@ -31,6 +31,7 @@ RUN curl -fsSL -o /usr/local/bin/envd \
       '  }' \
       '}' \
       > /etc/nftables-envd.conf && \
+    # [envd] Firecracker mode: silkd answers MMDS on the loopback alias the guard adds.
     printf '%s\n' \
       '[Unit]' \
       'Description=drop non-loopback traffic to envd' \
@@ -46,7 +47,6 @@ RUN curl -fsSL -o /usr/local/bin/envd \
       '[Install]' \
       'WantedBy=sysinit.target' \
       > /etc/systemd/system/envd-guard.service && \
-    # [envd] Firecracker mode: silkd answers MMDS on the loopback alias the guard adds.
     # -no-cgroups: envd's freeze/thaw is Firecracker's pause model; cocoon
     # hibernates the whole VM, and the guest's cgroup tree is systemd's.
     printf '%s\n' \

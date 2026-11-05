@@ -14,6 +14,7 @@ WORKDIR /silkd
 # compiler. A digest bump that moves ahead of the pin then costs a toolchain
 # download instead of silently building the guest binary with another rustc.
 COPY rust-toolchain.toml ./
+RUN sed -i '/^components/d;/^targets/d' rust-toolchain.toml
 RUN case "$TARGETARCH" in \
       amd64) echo x86_64-unknown-linux-musl > /musl-target ;; \
       arm64) echo aarch64-unknown-linux-musl > /musl-target ;; \
@@ -24,9 +25,8 @@ RUN case "$TARGETARCH" in \
     rm -rf /var/lib/apt/lists/*
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src
-RUN cargo build --release --locked && strip target/release/silkd
+RUN cargo build --release --locked
 RUN cargo build --release --locked --target "$(cat /musl-target)" && \
-    strip "target/$(cat /musl-target)/release/silkd" && \
     cp "target/$(cat /musl-target)/release/silkd" /silkd-static
 
 FROM scratch
