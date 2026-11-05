@@ -193,6 +193,8 @@ func (m *Manager) moveBlocker(sb *types.Sandbox) string {
 		return "it is archived or archiving"
 	case sb.HibernateSnap != "" || sb.PendingSnap != "":
 		return "it is hibernated"
+	case sb.SaveSnap != "":
+		return "a capture of it is settling"
 	case sb.Failed != "":
 		return "it failed"
 	case sb.Waking:
