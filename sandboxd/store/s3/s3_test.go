@@ -834,7 +834,7 @@ func TestFetchFileDownloadsOnlyTheRequestedFile(t *testing.T) {
 	if n := fake.requestCount(http.MethodGet, memoryKey); n != 0 {
 		t.Errorf("GET %s = %d requests, want 0", memoryKey, n)
 	}
-	if _, err := os.Stat(filepath.Join(st.staging, "cache")); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(filepath.Join(st.staging, cacheDir)); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("FetchFile touched the shared fetch cache: %v", err)
 	}
 }

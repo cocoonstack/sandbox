@@ -14,7 +14,6 @@ import (
 	"runtime"
 	"slices"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -95,11 +94,11 @@ func TestMoveDisarmsTheSourceDoorsAndArmsTheTarget(t *testing.T) {
 func TestMoveRefusedByTheTargetLeavesTheClaimRunningOnTheSource(t *testing.T) {
 	for name, refuse := range map[string]func(t *testing.T, mc *moveCluster){
 		"max_claims": func(t *testing.T, mc *moveCluster) {
-			tuneView(mc.t, func(v *configView) { v.maxClaims = 1 })
+			editView(mc.t, func(v *configView) { v.maxClaims = 1 })
 			mustClaim(t, mc.t, testKey)
 		},
 		"max_running": func(t *testing.T, mc *moveCluster) {
-			tuneView(mc.t, func(v *configView) { v.maxRunning = 1 })
+			editView(mc.t, func(v *configView) { v.maxRunning = 1 })
 			mustClaim(t, mc.t, testKey)
 		},
 		"tenant cap": func(t *testing.T, mc *moveCluster) {
@@ -111,7 +110,7 @@ func TestMoveRefusedByTheTargetLeavesTheClaimRunningOnTheSource(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			mc := newMoveCluster(t)
-			tuneView(mc.t, func(v *configView) { v.moveConcurrency = 1 })
+			editView(mc.t, func(v *configView) { v.moveConcurrency = 1 })
 			sb := claimTenant(t, mc.s, "acme")
 			refuse(t, mc)
 			before := moveCounts(mc.t, "acme")
@@ -270,7 +269,7 @@ func TestMoveRestartedSourceDropsTheTargetsReservation(t *testing.T) {
 
 func TestMoveTargetCountsAReservationLikeAClaim(t *testing.T) {
 	mc := newMoveCluster(t)
-	tuneView(mc.t, func(v *configView) { v.maxClaims = 1 })
+	editView(mc.t, func(v *configView) { v.maxClaims = 1 })
 	reserveMove(t, mc.t, "sb_r", "acme")
 	if _, err := claimAny(t.Context(), mc.t, testKey, ClaimOptions{}); !errors.Is(err, ErrQuota) {
 		t.Fatalf("claim beside a reservation at max_claims 1: %v, want ErrQuota", err)
@@ -373,7 +372,7 @@ func TestMoveTargetRefusesARoundThatOutlivedItsReservation(t *testing.T) {
 
 func TestMoveTargetLetsTheSameSourceRetryAndRefusesAnother(t *testing.T) {
 	mc := newMoveCluster(t)
-	tuneView(mc.t, func(v *configView) { v.moveConcurrency, v.maxClaims = 1, 1 })
+	editView(mc.t, func(v *configView) { v.moveConcurrency, v.maxClaims = 1, 1 })
 	reserveMove(t, mc.t, "sb_r", "acme")
 	first, _ := reservationOf(mc.t, "sb_r")
 	stale := filepath.Join(mc.t.moveDir("sb_r"), "state.json")
@@ -1100,13 +1099,7 @@ func TestMoveReceivedClaimWaitingOutAnOutageIsNotHibernatedOrServed(t *testing.T
 	if !ok {
 		t.Fatal("the target does not hold the received claim")
 	}
-	waitFor(t, func() bool {
-		if !received.Transition.TryLock() {
-			return false
-		}
-		received.Transition.Unlock()
-		return true
-	})
+	waitSettled(t, received)
 	cred := Cred{Token: sb.Token}
 	backdate(mc.t, received, time.Hour)
 	received.Transition.Lock()
@@ -1428,7 +1421,7 @@ func BenchmarkQuotaErr(b *testing.B) {
 			for i := range incoming {
 				m.incoming["sb_"+string(rune('a'+i))] = &inMove{tenant: "acme", touched: time.Now()}
 			}
-			tuneView(m, func(v *configView) { v.maxClaims, v.maxRunning = 1000, 1000 })
+			editView(m, func(v *configView) { v.maxClaims, v.maxRunning = 1000, 1000 })
 			for b.Loop() {
 				m.mu.Lock()
 				_ = m.quotaErr(1, "")
@@ -1474,7 +1467,7 @@ func testMoveHoldsOffCallers(t *testing.T, archived bool) {
 		if _, held := mc.s.byID(sb.ID); !held {
 			t.Error("the reap took the moving claim")
 		}
-		tuneView(mc.s, func(v *configView) { v.moveConcurrency = 1 })
+		editView(mc.s, func(v *configView) { v.moveConcurrency = 1 })
 		if _, err := mc.s.Move(t.Context(), other.ID, "b", time.Minute); !errors.Is(err, ErrQuota) {
 			t.Errorf("a second move past a lowered move_concurrency: %v, want ErrQuota", err)
 		}
@@ -1544,7 +1537,6 @@ type fakeMovePeer struct {
 	c   *failoverCluster
 	srv *httptest.Server
 
-	mu              sync.Mutex
 	admitErr        error
 	roundHook       func(round int) error
 	commitHook      func(round int) error
@@ -1623,8 +1615,6 @@ func (p *fakeMovePeer) Drop(_ context.Context, addr, id string) error {
 }
 
 func (p *fakeMovePeer) target(addr string) *Manager {
-	p.mu.Lock()
-	defer p.mu.Unlock()
 	i := slices.IndexFunc(p.c.nodes, func(m *Manager) bool { return m.nodeID == addr })
 	return p.c.nodes[i]
 }

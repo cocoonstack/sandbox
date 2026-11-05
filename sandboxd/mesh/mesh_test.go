@@ -170,8 +170,8 @@ func TestCandidatesPowerOfTwo(t *testing.T) {
 }
 
 func TestTwoNodeClusterGossipsPools(t *testing.T) {
-	a := startNode(t, "127.0.0.1", 0, "node-a")
-	b := startNode(t, "127.0.0.1", 0, "node-b")
+	a := startNode(t, "node-a")
+	b := startNode(t, "node-b")
 	if err := b.mesh.Join([]string{a.addr}); err != nil {
 		t.Fatalf("join: %v", err)
 	}
@@ -193,8 +193,8 @@ func TestTwoNodeClusterGossipsPools(t *testing.T) {
 }
 
 func TestARuntimeDigestChangeReachesThePeer(t *testing.T) {
-	a := startNode(t, "127.0.0.1", 0, "node-a")
-	b := startNode(t, "127.0.0.1", 0, "node-b")
+	a := startNode(t, "node-a")
+	b := startNode(t, "node-b")
 	if err := b.mesh.Join([]string{a.addr}); err != nil {
 		t.Fatalf("join: %v", err)
 	}
@@ -299,12 +299,12 @@ type node struct {
 	addr string
 }
 
-func startNode(t *testing.T, host string, port int, id string) *node {
+func startNode(t *testing.T, id string) *node {
 	t.Helper()
 	cfg := memberlist.DefaultLocalConfig()
-	cfg.BindAddr = host
-	cfg.BindPort = port
-	cfg.AdvertiseAddr = host
+	cfg.BindAddr = "127.0.0.1"
+	cfg.BindPort = 0
+	cfg.AdvertiseAddr = "127.0.0.1"
 	cfg.PushPullInterval = 200 * time.Millisecond
 	cfg.Logger = discardLogger()
 	m, err := New(t.Context(), cfg, NodeState{NodeID: id, Addr: id + ":7777", Digest: "shared"}, nil)
@@ -312,5 +312,5 @@ func startNode(t *testing.T, host string, port int, id string) *node {
 		t.Fatalf("new mesh %s: %v", id, err)
 	}
 	t.Cleanup(func() { _ = m.Shutdown() })
-	return &node{mesh: m, addr: fmt.Sprintf("%s:%d", host, m.ml.LocalNode().Port)}
+	return &node{mesh: m, addr: fmt.Sprintf("127.0.0.1:%d", m.ml.LocalNode().Port)}
 }

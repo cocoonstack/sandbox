@@ -144,7 +144,7 @@ func TestJournalRotationKeepsOneBackup(t *testing.T) {
 func TestQuotaRefusesClaimsPastCap(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 2})
-	tuneView(m, func(v *configView) { v.maxClaims = 1 })
+	editView(m, func(v *configView) { v.maxClaims = 1 })
 
 	first := mustClaim(t, m, testKey)
 	if _, err := claimAny(t.Context(), m, testKey, ClaimOptions{TTL: time.Hour}); !errors.Is(err, ErrQuota) {

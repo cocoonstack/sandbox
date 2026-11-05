@@ -75,7 +75,7 @@ func TestClaimCheckpointHealDedupsConcurrentPulls(t *testing.T) {
 			})
 		}
 		waitFor(t, func() bool { return puller.count() >= 1 })
-		time.Sleep(50 * time.Millisecond)
+		synctest.Wait()
 		close(puller.release)
 		wg.Wait()
 

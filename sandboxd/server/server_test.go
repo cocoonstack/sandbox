@@ -2232,7 +2232,6 @@ type fakeManager struct {
 	claimCheckpoint     checkpointClaimFunc
 	healCheckpoint      checkpointClaimFunc
 	healCalls           int
-	checkpoints         []types.Checkpoint
 	deleteCheckpoint    idActionFunc
 	setPools            func(pools []config.PoolSpec) error
 	setInstanceMetadata func(id string, doc []byte) error
@@ -2574,7 +2573,7 @@ func (f *fakeManager) ClaimCheckpointHeal(_ context.Context, ckptID string, o po
 
 func (f *fakeManager) Checkpoints(_ context.Context, tenant string) ([]types.Checkpoint, error) {
 	f.gotTenant = tenant
-	return f.checkpoints, nil
+	return nil, nil
 }
 
 func (f *fakeManager) DeleteCheckpoint(_ context.Context, ckptID, tenant string, scope pool.DeleteScope) error {

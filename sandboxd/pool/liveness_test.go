@@ -51,7 +51,7 @@ func TestLivenessRestartsExitedVMM(t *testing.T) {
 func TestLivenessNonePolicyFailsAndWakeRestarts(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
-	tuneView(m, func(v *configView) { v.vmmRestart = types.VMMRestartNone })
+	editView(m, func(v *configView) { v.vmmRestart = types.VMMRestartNone })
 	sb := mustClaim(t, m, testKey)
 	killVMM(eng, sb.VMName)
 
@@ -471,7 +471,7 @@ func TestStaleReportsKeepALiveWarmVM(t *testing.T) {
 func TestRestartFailedRefusesAReleasedClaim(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
-	tuneView(m, func(v *configView) { v.vmmRestart = types.VMMRestartNone })
+	editView(m, func(v *configView) { v.vmmRestart = types.VMMRestartNone })
 	sb := mustClaim(t, m, testKey)
 	killVMM(eng, sb.VMName)
 	m.recoverVMM(t.Context(), sb)
@@ -543,7 +543,7 @@ func TestColdBootBlockerNamesWhyAVMCannotColdBoot(t *testing.T) {
 func TestExpiredFailedClaimIsDestroyedNotArchived(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
-	tuneView(m, func(v *configView) { v.vmmRestart = types.VMMRestartNone })
+	editView(m, func(v *configView) { v.vmmRestart = types.VMMRestartNone })
 	sb, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{OnExpire: types.ExpireArchive})
 	if err != nil {
 		t.Fatalf("claim: %v", err)

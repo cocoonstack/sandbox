@@ -238,7 +238,7 @@ func TestReleaseDelayQueuesTeardown(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		eng := newFakeEngine()
 		m := newTestManager(t, eng)
-		tuneView(m, func(v *configView) { v.releaseDelay = 2 * time.Second })
+		editView(m, func(v *configView) { v.releaseDelay = 2 * time.Second })
 		sb := mustClaim(t, m, testKey)
 
 		if err := m.Release(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
@@ -2329,12 +2329,6 @@ func settleGoldenBuilds(m *Manager) {
 			return
 		}
 	}
-}
-
-func tuneView(m *Manager, change func(*configView)) {
-	v := *m.view.Load()
-	change(&v)
-	m.view.Store(&v)
 }
 
 func assertRunningCount(t testing.TB, m *Manager) {

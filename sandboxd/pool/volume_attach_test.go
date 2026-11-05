@@ -199,7 +199,7 @@ func TestFinalizeQuotaFailureKeepsHoldsUntilRemoval(t *testing.T) {
 	scratch := writeVolumeImage(t, "scratch.img", "scratch")
 	eng := newFakeEngine()
 	m := newVolumeManager(t, eng, []config.VolumeSpec{{Name: "scratch", Path: scratch, Writable: true}})
-	tuneView(m, func(v *configView) { v.maxClaims = 1 })
+	editView(m, func(v *configView) { v.maxClaims = 1 })
 	attaches := rendezvousAttaches(eng, 2)
 	writable := []types.Volume{{Name: "scratch", Mode: types.VolumeModeRW}}
 

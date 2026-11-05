@@ -15,7 +15,7 @@ import (
 
 func TestMaxRunningRefusesPastCapAndIgnoresSleepingClaims(t *testing.T) {
 	m := newTestManager(t, newFakeEngine())
-	tuneView(m, func(v *configView) { v.maxRunning = 2 })
+	editView(m, func(v *configView) { v.maxRunning = 2 })
 	first, second := mustClaim(t, m, testKey), mustClaim(t, m, testKey)
 	if _, err := claimAny(t.Context(), m, testKey, ClaimOptions{TTL: time.Hour}); !errors.Is(err, ErrQuota) {
 		t.Fatalf("claim past cap: %v, want ErrQuota", err)
@@ -43,7 +43,7 @@ func TestMaxRunningLeavesTheWarmPoolAlone(t *testing.T) {
 	m := newTestManager(t, newFakeEngine(), config.PoolSpec{PoolKey: testKey, Warm: 1})
 	mustClaim(t, m, testKey)
 	fillOneWarm(t, m)
-	tuneView(m, func(v *configView) { v.maxRunning = 1 })
+	editView(m, func(v *configView) { v.maxRunning = 1 })
 	if _, err := m.ClaimWarm(t.Context(), testKey, ClaimOptions{TTL: time.Hour}); !errors.Is(err, ErrQuota) {
 		t.Fatalf("warm claim past cap: %v, want ErrQuota", err)
 	}
@@ -57,7 +57,7 @@ func TestANodeAtACapGossipsNoPools(t *testing.T) {
 	if _, served := m.WarmCounts()[testKey.Hash()]; !served {
 		t.Fatal("a node under its caps names no pool")
 	}
-	tuneView(m, func(v *configView) { v.maxRunning = 1 })
+	editView(m, func(v *configView) { v.maxRunning = 1 })
 	mustClaim(t, m, testKey)
 	if counts := m.WarmCounts(); len(counts) != 0 {
 		t.Errorf("counts %v at the cap, want none", counts)
@@ -66,7 +66,7 @@ func TestANodeAtACapGossipsNoPools(t *testing.T) {
 
 func TestMaxRunningCountsEveryForkChild(t *testing.T) {
 	m := newTestManager(t, newFakeEngine())
-	tuneView(m, func(v *configView) { v.maxRunning = 2 })
+	editView(m, func(v *configView) { v.maxRunning = 2 })
 	parent := mustClaim(t, m, testKey)
 	if _, err := m.Fork(t.Context(), parent.ID, Cred{Token: parent.Token}, 2, 0, "", ""); !errors.Is(err, ErrQuota) {
 		t.Fatalf("fork past cap: %v, want ErrQuota", err)
@@ -85,7 +85,7 @@ func TestARefusedWakeOfAnArchivedClaimKeepsItsRow(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("row before the wake: %v %v", ok, err)
 	}
-	tuneView(a, func(v *configView) { v.maxRunning = 1 })
+	editView(a, func(v *configView) { v.maxRunning = 1 })
 	if wakeErr := wakeClaim(t, a, sb); !errors.Is(wakeErr, ErrQuota) {
 		t.Fatalf("wake past cap: %v, want ErrQuota", wakeErr)
 	}
@@ -112,7 +112,7 @@ func TestConcurrentWakesStayUnderMaxRunning(t *testing.T) {
 		claims[i] = mustClaim(t, m, testKey)
 		hibernateClaim(t, m, claims[i])
 	}
-	tuneView(m, func(v *configView) { v.maxRunning = 2 })
+	editView(m, func(v *configView) { v.maxRunning = 2 })
 	eng.restoreStall = make(chan struct{})
 	var refused, woken atomic.Int32
 	var wg sync.WaitGroup
@@ -147,7 +147,7 @@ func TestAFailedWakeGivesBackItsSlot(t *testing.T) {
 	m := newTestManager(t, eng)
 	sb := mustClaim(t, m, testKey)
 	hibernateClaim(t, m, sb)
-	tuneView(m, func(v *configView) { v.maxRunning = 1 })
+	editView(m, func(v *configView) { v.maxRunning = 1 })
 	eng.restoreErr = errors.New("restore failed")
 	if err := wakeClaim(t, m, sb); err == nil || errors.Is(err, ErrQuota) {
 		t.Fatalf("wake: %v, want the restore error", err)
@@ -160,7 +160,7 @@ func TestAFailedWakeGivesBackItsSlot(t *testing.T) {
 
 func TestAFailedClaimHoldsNoSlotUntilItsWake(t *testing.T) {
 	m := newTestManager(t, newFakeEngine())
-	tuneView(m, func(v *configView) { v.maxRunning = 1 })
+	editView(m, func(v *configView) { v.maxRunning = 1 })
 	sb := mustClaim(t, m, testKey)
 	sb.Transition.Lock()
 	m.failLocked(t.Context(), sb, "vmm exited")
