@@ -11,11 +11,11 @@ import (
 )
 
 const (
-	cocoondEventsURL = "http://cocoond/v1/events"
-	sseMaxLine       = 1 << 20
-
 	// VMDeleted is the change kind cocoon daemon sends when a VM record goes away.
 	VMDeleted = "DELETED"
+
+	cocoondEventsURL = "http://cocoond/v1/events"
+	sseMaxLine       = 1 << 20
 )
 
 // VMStatus is cocoon daemon's view of one supervised VM.

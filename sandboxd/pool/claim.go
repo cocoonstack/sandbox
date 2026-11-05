@@ -41,7 +41,6 @@ func (m *Manager) ClaimWarm(ctx context.Context, key types.PoolKey, o ClaimOptio
 	if err != nil {
 		return nil, err
 	}
-	// Holds belong to this path until finalize; past it the sandbox carries them.
 	reserved := applied
 	defer func() { m.unreserveVolumes(reserved) }()
 	m.mu.Lock()

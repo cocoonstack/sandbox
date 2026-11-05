@@ -169,7 +169,7 @@ func (e *Engine) Remove(ctx context.Context, name string) error {
 	return err
 }
 
-// Start cold-boots a stopped VM from its own disk, or resumes the paused guest of a received VM.
+// Start cold-boots a stopped VM from its own disk, or resumes a paused guest.
 func (e *Engine) Start(ctx context.Context, name string) error {
 	_, err := e.run(ctx, "vm", "start", name)
 	return err
@@ -202,7 +202,7 @@ func (e *Engine) SnapshotSave(ctx context.Context, vmName, snapName string) erro
 	return err
 }
 
-// Hibernate atomically snapshots a running VM under snapName and stops it.
+// Hibernate snapshots a running VM under snapName and stops it.
 func (e *Engine) Hibernate(ctx context.Context, vmName, snapName string) error {
 	_, err := e.runDump(ctx, "vm", "hibernate", argName, snapName, vmName)
 	return err
