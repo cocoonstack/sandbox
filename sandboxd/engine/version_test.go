@@ -2,7 +2,6 @@ package engine
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -73,9 +72,7 @@ printf 'Version: %s\n' "$COCOON_TEST_VERSION"
 				}
 				return
 			}
-			_, isVolume := errors.AsType[*LiveVolumeUnsupported](err)
-			_, isMigrate := errors.AsType[*MigrateUnsupported](err)
-			if !isVolume && !isMigrate || !strings.Contains(err.Error(), tt.floor) || strings.Contains(err.Error(), "/private") {
+			if err == nil || !strings.Contains(err.Error(), tt.floor) || strings.Contains(err.Error(), "/private") {
 				t.Fatalf("error %v", err)
 			}
 		})

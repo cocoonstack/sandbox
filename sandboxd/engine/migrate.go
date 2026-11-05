@@ -11,19 +11,10 @@ import (
 
 const argSeries = "--series"
 
-// MigrateUnsupported reports a runtime without cocoon's live migration.
-type MigrateUnsupported struct {
-	Version string
-}
-
-func (e *MigrateUnsupported) Error() string {
-	return fmt.Sprintf("live migration requires Cocoon >= %s; installed version is %s", MigrateCocoon, cmp.Or(e.Version, "unavailable"))
-}
-
 // CheckMigrateSupport rejects runtimes without live migration.
 func (e *Engine) CheckMigrateSupport(ctx context.Context) error {
 	if version, misses := e.missesFloor(ctx, MigrateCocoon); misses {
-		return &MigrateUnsupported{Version: version}
+		return fmt.Errorf("live migration requires Cocoon >= %s; installed version is %s", MigrateCocoon, cmp.Or(version, "unavailable"))
 	}
 	return nil
 }

@@ -266,12 +266,6 @@ func (m *Manager) replicaRowed(sb *types.Sandbox) bool {
 	return m.archives != nil && sb.ReplicaCk != "" && sb.ArchiveEpoch != 0
 }
 
-func (m *Manager) replicaHeld(sb *types.Sandbox) bool {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return sb.HasReplica()
-}
-
 func (m *Manager) replicaOf(sb *types.Sandbox) string {
 	m.mu.Lock()
 	defer m.mu.Unlock()

@@ -422,8 +422,5 @@ func roundTimeout(size int64) time.Duration {
 
 // finalPause estimates the final round's pause from the last delta's size at the rate the rounds so far reached.
 func finalPause(last, sent int64, sending time.Duration) time.Duration {
-	if sent <= 0 {
-		return MoveStartAllowance
-	}
 	return MoveStartAllowance + time.Duration(float64(sending)*float64(last)/float64(sent))
 }

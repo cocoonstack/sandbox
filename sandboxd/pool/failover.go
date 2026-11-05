@@ -387,7 +387,10 @@ func (m *Manager) unrowExpired(ctx context.Context, sb *types.Sandbox) {
 	sb.Transition.Lock()
 	defer sb.Transition.Unlock()
 	var err error
-	if m.replicaHeld(sb) {
+	m.mu.Lock()
+	replicaHeld := sb.HasReplica()
+	m.mu.Unlock()
+	if replicaHeld {
 		err = m.dropReplica(ctx, sb)
 	} else {
 		_, err = m.consumeArchive(ctx, sb)
