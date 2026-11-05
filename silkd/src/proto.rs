@@ -597,7 +597,7 @@ fn cap_check(len: usize) -> io::Result<()> {
 fn render_frame(buf: &mut Vec<u8>, resp: &Response) -> io::Result<()> {
     let start = buf.len();
     serde_json::to_writer(&mut *buf, resp).map_err(io::Error::other)?;
-    if let Err(e) = cap_check(buf.len() - start) {
+    if let Err(e) = cap_check(buf.len() - start + 1) {
         buf.truncate(start);
         return Err(e);
     }
@@ -733,6 +733,24 @@ mod tests {
             "exactly the short frame reached the sink"
         );
         assert!(sent.contains("a.txt"), "{sent}");
+    }
+
+    #[test]
+    fn render_frame_counts_the_newline_against_the_cap() {
+        let frame = |content: String| Response::Match {
+            file: "a".into(),
+            line: 1,
+            content,
+        };
+        let overhead = serde_json::to_vec(&frame(String::new()))
+            .expect("encode")
+            .len();
+        let mut buf = Vec::new();
+        render_frame(&mut buf, &frame("a".repeat(MAX_FRAME - overhead)))
+            .expect_err("a body of MAX_FRAME bytes plus its newline exceeds the cap");
+        render_frame(&mut buf, &frame("a".repeat(MAX_FRAME - overhead - 1)))
+            .expect("a body one byte shorter fits");
+        assert_eq!(buf.len(), MAX_FRAME);
     }
 
     #[tokio::test]
