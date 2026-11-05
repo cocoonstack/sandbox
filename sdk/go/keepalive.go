@@ -1,7 +1,6 @@
 package sandbox
 
 import (
-	"context"
 	"errors"
 	"slices"
 	"sync"
@@ -112,23 +111,6 @@ func (c *agentConn) sent(req wire.Request) (*agentConn, error) {
 	return c, nil
 }
 
-// probeProto pipelines info ahead of req and reads the daemon's answer.
-func (c *agentConn) probeProto(ctx context.Context, req wire.Request) (uint32, error) {
-	if err := c.Send(wire.Info{}); err != nil {
-		return 0, err
-	}
-	if err := c.Send(req); err != nil {
-		return 0, err
-	}
-	stop := context.AfterFunc(ctx, func() { _ = c.Close() })
-	defer stop()
-	info, err := expect[wire.InfoResp](ctx, c.Conn)
-	if err != nil {
-		return 0, err
-	}
-	return max(info.Proto, 1), nil
-}
-
 // lease is one RPC's hold on a relay connection: close drops it, reuse parks it for the next call.
 type lease struct {
 	s    *Sandbox
@@ -151,7 +133,7 @@ func (l *lease) reuse() {
 	if !l.over.CompareAndSwap(false, true) {
 		return
 	}
-	if !l.stop() || !canProbe || l.s.c.keepAlive <= 0 || l.s.proto.Load() < wire.KeepAliveProto {
+	if !l.stop() || !canProbe || l.s.c.keepAlive <= 0 {
 		_ = l.conn.Close()
 		return
 	}

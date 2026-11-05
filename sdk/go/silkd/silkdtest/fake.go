@@ -39,7 +39,7 @@ func NewFake(root string) *Fake {
 // ServeConn serves RPCs on an already-open connection (e.g. after an HTTP
 // hijack) until the peer closes it.
 func (f *Fake) ServeConn(conn net.Conn) {
-	serveConn(conn, bufio.NewReader(conn), wire.KeepAliveProto, f.serve)
+	serveConn(conn, bufio.NewReader(conn), f.serve)
 }
 
 func (f *Fake) serve(conn net.Conn, r *bufio.Reader, req wire.Request) {

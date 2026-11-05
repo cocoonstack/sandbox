@@ -67,7 +67,7 @@ func TestPtyReleasesTheRelayWhenTheShellExits(t *testing.T) {
 		_, _ = r.ReadByte()
 		close(released)
 	})
-	pty, err := legacySandbox(t, ts).OpenPty(t.Context(), wire.PtyOpen{Cols: 80, Rows: 24})
+	pty, err := testSandbox(t, ts).OpenPty(t.Context(), wire.PtyOpen{Cols: 80, Rows: 24})
 	if err != nil {
 		t.Fatalf("OpenPty: %v", err)
 	}

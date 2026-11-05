@@ -88,8 +88,7 @@ loaded node moved every arm together and left the ratio intact.
 
 The edge here is a local HTTP/1.1 TLS terminator on loopback, so its
 handshake carries no network RTT — a client across a WAN saves more, not
-less. An old daemon reporting proto 1 makes the SDK dial per call, which is
-the plain dial-per-RPC row.
+less.
 
 The node's own hybrid-vsock `CONNECT` handshake read its `OK <port>` reply one
 byte per `read(2)` until #304 moved it to one buffered read: 13 fewer syscalls
