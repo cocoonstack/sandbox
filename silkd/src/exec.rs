@@ -89,7 +89,7 @@ where
     let mut pump = tokio::spawn(pump_out(Arc::clone(&proc), stdout, stderr, pump_fg));
     let pump_abort = pump.abort_handle();
     // stdin rides its own task so a slow write cannot stall output or reaping.
-    let stdin_task = tokio::spawn(pump_stdin(stdin, client, req.detach));
+    let stdin_task = tokio::spawn(pump_stdin(stdin.filter(|_| !req.detach), client));
 
     // record the reaped code before the drain: an abort mid-drain must publish the real code, not -1.
     let reaped: Arc<OnceLock<i32>> = Arc::new(OnceLock::new());
@@ -208,12 +208,8 @@ where
 async fn pump_stdin(
     stdin: Option<tokio::process::ChildStdin>,
     mut client: mpsc::Receiver<Request>,
-    detach: bool,
 ) {
     let Some(mut sink) = stdin else { return };
-    if detach {
-        return;
-    }
     while let Some(frame) = client.recv().await {
         match frame {
             Request::Stdin { data } => {
