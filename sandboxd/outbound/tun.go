@@ -30,7 +30,6 @@ type TunState struct {
 	Bytes   int64
 }
 
-// tunDoor is a claim's packet door and the byte counter its router claim charges.
 type tunDoor struct {
 	ln   net.Listener
 	addr netip.Addr
@@ -205,7 +204,6 @@ func (h *Host) tunDown(id, sock string) {
 	}()
 }
 
-// tunLive reports whether t is still the packet door of claim id.
 func (h *Host) tunLive(id string, t *tunDoor) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()

@@ -135,7 +135,6 @@ type Router struct {
 	claims map[netip.Addr]*armed
 }
 
-// New builds a router over under with the overlay o.
 func New(under Underlay, o *Overlay) *Router {
 	r := &Router{under: under, claims: map[netip.Addr]*armed{}}
 	r.conf.Store(load(o))
@@ -256,7 +255,6 @@ func (r *Router) EndFlows() {
 	}
 }
 
-// Stats snapshots the counters.
 func (r *Router) Stats() Stats {
 	s := Stats{
 		FramesIn: r.framesIn.Load(), FramesOut: r.framesOut.Load(),
@@ -440,7 +438,6 @@ func (a *armed) close() {
 	a.flows.sweep(time.Now(), true)
 }
 
-// link is one claim's live packet stream.
 type link struct {
 	r     *Router
 	a     *armed

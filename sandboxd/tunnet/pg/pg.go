@@ -77,7 +77,6 @@ func (s *Store) Release(ctx context.Context, claimID string, addr netip.Addr) er
 		WHERE cell = $1 AND address = $2 AND claim = $3 AND released_at IS NULL`, s.cell, addr.String(), claimID)
 }
 
-// Close releases the connection pool.
 func (s *Store) Close() {
 	s.pool.Close()
 }

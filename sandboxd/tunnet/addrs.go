@@ -28,7 +28,6 @@ const (
 // ErrNoAddress means every overlay address is held or still inside its reuse window.
 var ErrNoAddress = errors.New("no free overlay address")
 
-// Addresses hands out the claims' overlay addresses.
 type Addresses interface {
 	// Assign returns claimID's address, allocating one on the first call.
 	Assign(ctx context.Context, claimID string) (netip.Addr, error)

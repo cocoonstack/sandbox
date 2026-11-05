@@ -190,13 +190,11 @@ func (t *TunConfig) Prefix() netip.Prefix {
 	return p.Masked()
 }
 
-// ListenAddr is the parsed VXLAN socket address.
 func (t *TunConfig) ListenAddr() netip.AddrPort {
 	ap, _ := netip.ParseAddrPort(t.Listen)
 	return ap
 }
 
-// ReuseAfter is the freed address reuse wait.
 func (t *TunConfig) ReuseAfter() time.Duration {
 	return time.Duration(t.ReuseAfterSeconds) * time.Second
 }

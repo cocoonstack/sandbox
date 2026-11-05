@@ -251,7 +251,6 @@ func (f *flows) open(key flowKey, now time.Time) *flow {
 	return fl
 }
 
-// sweep ends idle flows, or every flow when all is set, and writes their records.
 func (f *flows) sweep(now time.Time, all bool) {
 	var ended []FlowRecord
 	f.mu.Lock()

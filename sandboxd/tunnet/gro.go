@@ -105,7 +105,6 @@ func (c *coalescer) finish(frame []byte) {
 	binary.LittleEndian.PutUint16(frame[8:], 16)
 }
 
-// tcpSegment is what the coalescer needs from one TCP segment.
 type tcpSegment struct {
 	seq     uint32
 	hdr     int

@@ -92,7 +92,6 @@ func (u *Underlay) Recv(each func(d []byte, from netip.AddrPort)) error {
 	return u.rx.recv(each)
 }
 
-// Close closes every socket.
 func (u *Underlay) Close() {
 	if u.recv != nil {
 		_ = u.recv.Close()
