@@ -90,6 +90,8 @@ var (
 		"lsp_start":      decodeReq[LspStart],
 		"lsp_request":    decodeReq[LspRequest],
 		"lsp_stop":       decodeReq[LspStop],
+		"tun_up":         decodeReq[TunUp],
+		"tun_down":       decodeReq[TunDown],
 		"data":           decodeReq[Data], //nolint:goconst // wire tag shared with the response type by design
 		"data_end":       decodeReq[DataEnd],
 	}
@@ -434,6 +436,16 @@ type LspStop struct {
 }
 
 func (LspStop) Op() string { return "lsp_stop" }
+
+// TunUp brings tun0 up and starts its packet stream on vsock port 2051; the host hello may still turn it off.
+type TunUp struct{}
+
+func (TunUp) Op() string { return "tun_up" }
+
+// TunDown removes tun0 and its routes; the host, not the guest, enforces packet mode.
+type TunDown struct{}
+
+func (TunDown) Op() string { return "tun_down" }
 
 // Data carries one chunk of an upload stream (FsWrite/FsPush payloads).
 type Data struct {

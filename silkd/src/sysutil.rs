@@ -2,7 +2,9 @@
 
 use std::borrow::Cow;
 use std::io::Read;
-use std::os::fd::{AsRawFd, OwnedFd, RawFd};
+#[cfg(target_os = "linux")]
+use std::net::Ipv4Addr;
+use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd, RawFd};
 use std::os::unix::fs::MetadataExt;
 use std::os::unix::process::ExitStatusExt;
 use std::path::PathBuf;
@@ -157,9 +159,9 @@ pub fn openpty(cols: u16, rows: u16) -> std::io::Result<(OwnedFd, OwnedFd)> {
     Ok((pty.master, pty.slave))
 }
 
-/// Registers an owned fd with the tokio reactor for readiness-driven I/O.
-pub fn watch_fd(fd: OwnedFd) -> std::io::Result<AsyncFd<OwnedFd>> {
-    // SAFETY: an OwnedFd stays open and yields the same raw fd until the AsyncFd that owns it drops.
+/// Registers an owned or borrowed fd with the tokio reactor for readiness-driven I/O.
+pub fn watch_fd<T: AsFd + AsRawFd>(fd: T) -> std::io::Result<AsyncFd<T>> {
+    // SAFETY: AsFd's I/O-safety contract keeps the raw fd open while `fd`, and so the AsyncFd, lives.
     unsafe { AsyncFd::register(fd) }.map_err(|e| e.into_parts().1)
 }
 
@@ -204,6 +206,145 @@ pub fn exit_code(status: ExitStatus) -> i32 {
 /// Reaps the child and maps its status via `exit_code`; -1 when the wait fails.
 pub async fn wait_code(child: &mut tokio::process::Child) -> i32 {
     child.wait().await.map_or(-1, exit_code)
+}
+
+/// Opens tun device `name`, nonblocking, with a virtio-net header leading every packet.
+#[cfg(target_os = "linux")]
+pub fn tun_open(name: &str) -> std::io::Result<OwnedFd> {
+    use std::os::unix::fs::OpenOptionsExt;
+
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .custom_flags(libc::O_NONBLOCK)
+        .open("/dev/net/tun")?;
+    let mut req = ifreq(name)?;
+    req.ifr_ifru.ifru_flags =
+        (libc::IFF_TUN | libc::IFF_NO_PI | libc::IFF_VNET_HDR) as libc::c_short;
+    // SAFETY: file is an open tun control fd; req is an initialized ifreq that outlives the call.
+    check(unsafe { libc::ioctl(file.as_raw_fd(), libc::TUNSETIFF, &mut req) })?;
+    Ok(file.into())
+}
+
+/// Sets the `TUN_F_*` offloads the tun reader accepts; the kernel refuses a bit it does not know.
+#[cfg(target_os = "linux")]
+pub fn tun_set_offload(fd: RawFd, flags: u32) -> std::io::Result<()> {
+    // SAFETY: TUNSETOFFLOAD takes its argument by value.
+    check(unsafe { libc::ioctl(fd, libc::TUNSETOFFLOAD, libc::c_ulong::from(flags)) })
+}
+
+/// Assigns `addr/prefix` to interface `name` and brings it up.
+#[cfg(target_os = "linux")]
+pub fn if_up(name: &str, addr: Ipv4Addr, prefix: u8) -> std::io::Result<()> {
+    let sock = std::net::UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0))?;
+    let fd = sock.as_raw_fd();
+    let mut req = ifreq(name)?;
+    req.ifr_ifru.ifru_addr = inet_sockaddr(addr);
+    if_ioctl(fd, libc::SIOCSIFADDR, &mut req)?;
+    req.ifr_ifru.ifru_netmask = inet_sockaddr(prefix_mask(prefix));
+    if_ioctl(fd, libc::SIOCSIFNETMASK, &mut req)?;
+    if_ioctl(fd, libc::SIOCGIFFLAGS, &mut req)?;
+    // SAFETY: SIOCGIFFLAGS just filled ifru_flags.
+    let flags = unsafe { req.ifr_ifru.ifru_flags };
+    req.ifr_ifru.ifru_flags = flags | libc::IFF_UP as libc::c_short;
+    if_ioctl(fd, libc::SIOCSIFFLAGS, &mut req)
+}
+
+/// Sets the MTU of interface `name`.
+#[cfg(target_os = "linux")]
+pub fn if_set_mtu(name: &str, mtu: u16) -> std::io::Result<()> {
+    let sock = std::net::UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0))?;
+    let mut req = ifreq(name)?;
+    req.ifr_ifru.ifru_mtu = libc::c_int::from(mtu);
+    if_ioctl(sock.as_raw_fd(), libc::SIOCSIFMTU, &mut req)
+}
+
+/// Adds an IPv4 route to `dst/prefix` on `dev`, through `gateway` when given.
+#[cfg(target_os = "linux")]
+pub fn route_add(
+    dev: &str,
+    dst: Ipv4Addr,
+    prefix: u8,
+    gateway: Option<Ipv4Addr>,
+) -> std::io::Result<()> {
+    let sock = std::net::UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0))?;
+    let name = std::ffi::CString::new(dev)?;
+    // SAFETY: rtentry is plain data and all-zero is a valid value, a null rt_dev included.
+    let mut rt: libc::rtentry = unsafe { std::mem::zeroed() };
+    rt.rt_dst = inet_sockaddr(dst);
+    rt.rt_genmask = inet_sockaddr(prefix_mask(prefix));
+    rt.rt_flags = libc::RTF_UP;
+    if let Some(gw) = gateway {
+        rt.rt_gateway = inet_sockaddr(gw);
+        rt.rt_flags |= libc::RTF_GATEWAY;
+    }
+    rt.rt_dev = name.as_ptr().cast_mut();
+    // SAFETY: rt is initialized and rt_dev points into `name`, which outlives the call.
+    check(unsafe { libc::ioctl(sock.as_raw_fd(), libc::SIOCADDRT as _, &mut rt) })
+}
+
+/// Switches `fd` between blocking and nonblocking mode.
+pub fn set_nonblocking(fd: BorrowedFd<'_>, on: bool) -> std::io::Result<()> {
+    let flags = OFlag::from_bits_retain(fcntl(fd, FcntlArg::F_GETFL)?);
+    let next = if on {
+        flags | OFlag::O_NONBLOCK
+    } else {
+        flags - OFlag::O_NONBLOCK
+    };
+    if next != flags {
+        fcntl(fd, FcntlArg::F_SETFL(next))?;
+    }
+    Ok(())
+}
+
+/// Writes all of `buf` to blocking `fd`.
+pub fn write_all_fd(fd: BorrowedFd<'_>, mut buf: &[u8]) -> std::io::Result<()> {
+    while !buf.is_empty() {
+        match nix::unistd::write(fd, buf) {
+            Ok(n) => buf = &buf[n..],
+            Err(nix::errno::Errno::EINTR) => {}
+            Err(e) => return Err(e.into()),
+        }
+    }
+    Ok(())
+}
+
+/// Fills `buf` from blocking `fd`, failing with TimedOut once `timeout` passes.
+pub fn read_exact_fd(
+    fd: BorrowedFd<'_>,
+    buf: &mut [u8],
+    timeout: std::time::Duration,
+) -> std::io::Result<()> {
+    let deadline = std::time::Instant::now() + timeout;
+    let mut got = 0;
+    while got < buf.len() {
+        let left = deadline.saturating_duration_since(std::time::Instant::now());
+        let mut pfd = libc::pollfd {
+            fd: fd.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        let ms = libc::c_int::try_from(left.as_millis()).unwrap_or(libc::c_int::MAX);
+        // SAFETY: pfd is one initialized pollfd that outlives the call.
+        match unsafe { libc::poll(&mut pfd, 1, ms) } {
+            0 => return Err(std::io::ErrorKind::TimedOut.into()),
+            r if r < 0 => {
+                let e = std::io::Error::last_os_error();
+                if e.kind() != std::io::ErrorKind::Interrupted {
+                    return Err(e);
+                }
+                continue;
+            }
+            _ => {}
+        }
+        match nix::unistd::read(fd, &mut buf[got..]) {
+            Ok(0) => return Err(std::io::ErrorKind::UnexpectedEof.into()),
+            Ok(n) => got += n,
+            Err(nix::errno::Errno::EINTR) => {}
+            Err(e) => return Err(e.into()),
+        }
+    }
+    Ok(())
 }
 
 fn make_controlling_tty() -> std::io::Result<()> {
@@ -312,6 +453,53 @@ fn lookup_user(user: &str) -> Result<(u32, u32, PathBuf), String> {
         Ok(None) => Err(format!("unknown user {user:?}")),
         Err(e) => Err(format!("look up user {user:?}: {e}")),
     }
+}
+
+#[cfg(target_os = "linux")]
+fn ifreq(name: &str) -> std::io::Result<libc::ifreq> {
+    if name.len() >= libc::IFNAMSIZ || name.as_bytes().contains(&0) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("interface name {name:?}"),
+        ));
+    }
+    // SAFETY: ifreq is plain data and all-zero is a valid value.
+    let mut req: libc::ifreq = unsafe { std::mem::zeroed() };
+    for (d, s) in req.ifr_name.iter_mut().zip(name.bytes()) {
+        *d = libc::c_char::from_ne_bytes([s]);
+    }
+    Ok(req)
+}
+
+#[cfg(target_os = "linux")]
+fn if_ioctl(fd: RawFd, request: libc::c_ulong, req: &mut libc::ifreq) -> std::io::Result<()> {
+    // SAFETY: fd is an open socket; req is an initialized ifreq that outlives the call.
+    check(unsafe { libc::ioctl(fd, request as _, req) })
+}
+
+#[cfg(target_os = "linux")]
+fn inet_sockaddr(addr: Ipv4Addr) -> libc::sockaddr {
+    let mut sa_data = [0; 14];
+    for (d, s) in sa_data[2..6].iter_mut().zip(addr.octets()) {
+        *d = libc::c_char::from_ne_bytes([s]);
+    }
+    libc::sockaddr {
+        sa_family: libc::AF_INET as libc::sa_family_t,
+        sa_data,
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn prefix_mask(prefix: u8) -> Ipv4Addr {
+    Ipv4Addr::from(u32::MAX.checked_shl(32 - u32::from(prefix)).unwrap_or(0))
+}
+
+#[cfg(target_os = "linux")]
+fn check(rc: libc::c_int) -> std::io::Result<()> {
+    if rc < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
 }
 
 #[cfg(test)]

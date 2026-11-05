@@ -9,7 +9,7 @@ use tokio::task::JoinHandle;
 
 use crate::proc::{Chunk, Table, write_chunk};
 use crate::proto::{self, ErrorKind, ExecReq, ProcInfo, Request, Response};
-use crate::{exec, find, forward, fs, git, lsp, pty, session, tree, watch};
+use crate::{exec, find, forward, fs, git, lsp, pty, session, tree, tun, watch};
 
 /// Shared daemon state handed to every connection.
 pub struct State {
@@ -153,6 +153,16 @@ impl State {
                 return finish_feeder(feeder, res).await;
             }
             Request::LspStop { server_id } => self.lsp.stop(writer, &server_id).await,
+            Request::TunUp => match tun::up() {
+                Ok(()) => proto::write_frame(writer, &Response::Done).await,
+                Err(e) => {
+                    proto::error_frame(writer, ErrorKind::Internal, format!("tun up: {e}")).await
+                }
+            },
+            Request::TunDown => {
+                let _ = tokio::task::spawn_blocking(tun::down).await;
+                proto::write_frame(writer, &Response::Done).await
+            }
             Request::PortForward { port } => {
                 let (rx, feeder) = spawn_feeder(reader);
                 let res = forward::run(port, rx, writer).await;
