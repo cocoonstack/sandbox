@@ -70,6 +70,10 @@ func (m *Manager) exportSource(ctx context.Context, sb *types.Sandbox, exportDir
 		sb.Transition.Unlock()
 		return "", "", false, captureErr
 	}
+	if settleErr := m.settleCapture(ctx, sb); settleErr != nil {
+		sb.Transition.Unlock()
+		return "", "", false, settleErr
+	}
 	m.trimForCapture(ctx, sb)
 	snap, cleanup, err := m.sourceSnap(ctx, sb)
 	if err != nil {

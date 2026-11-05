@@ -82,6 +82,9 @@ func (m *Manager) forkSource(ctx context.Context, sb *types.Sandbox) (create vmP
 	if err = m.captureAllowed(sb); err != nil {
 		return nil, nil, false, err
 	}
+	if err = m.settleCapture(ctx, sb); err != nil {
+		return nil, nil, false, err
+	}
 	inherited = m.heldGuestEnv(sb)
 	if sb.HibernateSnap == "" {
 		snap, drop, snapErr := m.sourceSnap(ctx, sb)
