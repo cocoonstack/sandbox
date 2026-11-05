@@ -313,3 +313,15 @@ async fn a_dead_session_command_leaves_a_recreated_session_alone() {
         "the recreated session died: {got:?}"
     );
 }
+
+#[tokio::test]
+async fn a_shell_that_exits_ends_its_command_while_a_job_holds_its_output() {
+    let state = Arc::new(State::new());
+    let id = create(&state).await;
+    let bg = sh(&state, &id, &["sh", "-c", "sleep 30 &"]).await;
+    assert_eq!(type_of(bg.last().unwrap()), "exit", "{bg:?}");
+    let frames = tokio::time::timeout(Duration::from_secs(5), sh(&state, &id, &["exit"]))
+        .await
+        .expect("exit hung while a background job held the session's stdout");
+    assert_eq!(type_of(frames.last().unwrap()), "error", "{frames:?}");
+}
