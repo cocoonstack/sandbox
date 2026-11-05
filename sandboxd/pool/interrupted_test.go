@@ -400,6 +400,25 @@ func TestASaveJournalsItsIntentAndAFailureResumesTheGuest(t *testing.T) {
 	waitFor(t, func() bool { return journaled(t, m)[sb.ID].SaveSnap == "" })
 }
 
+func TestAWakeWhoseGuestDoesNotResumeAnswersFailed(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		eng := newFakeEngine()
+		eng.snapListErr = errors.New("cocoon unreachable")
+		m, sb := reconcileInterrupted(t, eng, interruptedHib, "", nil)
+		time.Sleep(captureResumeBudget + 2*captureResumeRetry)
+		synctest.Wait()
+		eng.mu.Lock()
+		eng.snapListErr, eng.probeErr = nil, errors.New("never ready")
+		eng.mu.Unlock()
+		if _, _, _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token); !errors.Is(err, ErrFailed) {
+			t.Fatalf("wake: %v, want ErrFailed", err)
+		}
+		if err := m.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); !errors.Is(err, ErrFailed) {
+			t.Errorf("hibernate: %v, want ErrFailed", err)
+		}
+	})
+}
+
 func waitStarted(t *testing.T, eng *fakeEngine, n int) {
 	t.Helper()
 	waitFor(t, func() bool {
