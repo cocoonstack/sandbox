@@ -424,7 +424,7 @@ func TestS3BackendContractRealEndpoint(t *testing.T) {
 		Region:                 "us-east-1",
 		ForcePathStyle:         true,
 		UnsignedAcceptEncoding: os.Getenv("SANDBOX_S3_E2E_UNSIGNED_ACCEPT_ENCODING") != "",
-	}, t.TempDir(), store.CheckpointIDRe)
+	}, t.TempDir(), store.CheckpointIDRe, true)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -891,6 +891,29 @@ func TestFetchFileKeepsHoles(t *testing.T) {
 	}
 }
 
+func TestOnlyALabeledStoreReadsLabelsWhenListing(t *testing.T) {
+	ids := []string{"ck_00000000000000d1", "ck_00000000000000d2"}
+	for _, labeled := range []bool{true, false} {
+		fake := &fakeS3{objects: map[string][]byte{}}
+		for _, id := range ids {
+			fake.objects["ck/"+id+"/"+store.MetaFile] = metaJSON(id)
+		}
+		st := newTestStore(t, fake)
+		st.labeled = labeled
+		recs, err := st.Metas(t.Context())
+		if err != nil || len(recs) != len(ids) {
+			t.Fatalf("labeled=%v: Metas = %d records, %v", labeled, len(recs), err)
+		}
+		gets := 0
+		for _, id := range ids {
+			gets += fake.requestCount(http.MethodGet, "ck/"+id+"/"+store.LabelsFile)
+		}
+		if want := map[bool]int{true: len(ids), false: 0}[labeled]; gets != want {
+			t.Errorf("labeled=%v: %d label GETs, want %d", labeled, gets, want)
+		}
+	}
+}
+
 type fakeRequest struct {
 	method string
 	key    string
@@ -1262,7 +1285,7 @@ func newTestStoreAt(t *testing.T, endpoint http.Handler, unsignedAcceptEncoding 
 	st, err := New(t.Context(), store.S3Config{
 		Bucket: "testbucket", Prefix: "ck/", Endpoint: ts.URL,
 		Region: "us-east-1", ForcePathStyle: true, UnsignedAcceptEncoding: unsignedAcceptEncoding,
-	}, t.TempDir(), store.CheckpointIDRe)
+	}, t.TempDir(), store.CheckpointIDRe, true)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

@@ -84,11 +84,12 @@ type Store struct {
 	prefix  string
 	staging string
 	idRe    *regexp.Regexp
+	labeled bool
 	fetches singleflight.Group
 }
 
-// New builds the backend; ctx bounds the credential-chain resolution.
-func New(ctx context.Context, cfg store.S3Config, stagingRoot string, idRe *regexp.Regexp) (*Store, error) {
+// New builds the backend; ctx bounds the credential-chain resolution, and only a labeled store reads labels in Metas.
+func New(ctx context.Context, cfg store.S3Config, stagingRoot string, idRe *regexp.Regexp, labeled bool) (*Store, error) {
 	// A prefix without its trailing slash hides every record from the delimiter listing.
 	if cfg.Prefix != "" && !strings.HasSuffix(cfg.Prefix, "/") {
 		cfg.Prefix += "/"
@@ -117,7 +118,7 @@ func New(ctx context.Context, cfg store.S3Config, stagingRoot string, idRe *rege
 			})
 		}
 	})
-	return &Store{client: client, bucket: cfg.Bucket, prefix: cfg.Prefix, staging: stagingRoot, idRe: idRe}, nil
+	return &Store{client: client, bucket: cfg.Bucket, prefix: cfg.Prefix, staging: stagingRoot, idRe: idRe, labeled: labeled}, nil
 }
 
 func (s *Store) Stage(id string) (string, error) {
@@ -212,9 +213,11 @@ func (s *Store) Metas(ctx context.Context) ([]store.Record, error) {
 			if err != nil {
 				return err
 			}
-			labels, _, err := s.getObject(gctx, s.key(id, store.LabelsFile))
-			if err != nil && !errors.Is(err, store.ErrNotFound) {
-				return err
+			var labels []byte
+			if s.labeled {
+				if labels, _, err = s.getObject(gctx, s.key(id, store.LabelsFile)); err != nil && !errors.Is(err, store.ErrNotFound) {
+					return err
+				}
 			}
 			recs[i] = store.Record{Meta: raw, Digest: digest, Labels: labels}
 			return nil
