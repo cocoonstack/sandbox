@@ -143,7 +143,10 @@ guest -> tun0 -> silkd --vsock 2051--> sandboxd --VXLAN--> exit (vxlan0, forward
   the inner 5-tuple.
 - **Inbound**: a VXLAN packet from an exit's VTEP whose inner destination is
   a claim on this node goes back to `100.64.0.2` and onto that claim's stream;
-  anything else is dropped. In-order TCP segments of one flow whose checksums
+  anything else is dropped. Inbound passes only for a flow the claim opened,
+  except that a TCP segment other than a bare SYN reopens its flow when the
+  claim's policy allows the peer, so a stream crosses a move, a wake or a
+  restart. In-order TCP segments of one flow whose checksums
   verify are merged into one GSO frame for the guest. An ICMP error gets the
   quoted packet's source rewritten to `100.64.0.2` too, so path MTU discovery
   and port-unreachable reach the guest's socket.

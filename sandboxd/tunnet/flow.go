@@ -158,6 +158,12 @@ func (f *flows) outbound(p Packet, n int, now time.Time) Drop {
 // inbound passes a packet only for a flow the claim opened, and ICMP errors about one, then charges it.
 func (f *flows) inbound(p Packet, frame []byte, n int, now time.Time) Drop {
 	fl, ok := f.match(p, frame)
+	if fl == nil && !ok && p.Proto == ProtoTCP && !p.Open && f.allow(p.Src, p.SrcPort) {
+		if fl = f.open(flowKey{proto: ProtoTCP, dst: p.Src, dport: p.SrcPort, sport: p.DstPort}, now); fl == nil {
+			return DropLimit
+		}
+		ok = fl.allowed
+	}
 	if !ok {
 		return DropPolicy
 	}

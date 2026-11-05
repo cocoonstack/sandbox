@@ -37,6 +37,7 @@ const (
 	srcAt     = 12
 	dstAt     = 16
 	tcpFin    = 0x01
+	tcpSyn    = 0x02
 	tcpRst    = 0x04
 )
 
@@ -99,8 +100,8 @@ type Packet struct {
 	Proto            uint8
 	Src, Dst         netip.Addr
 	SrcPort, DstPort uint16
-	// End marks a TCP FIN or RST.
-	End bool
+	// End marks a TCP FIN or RST; Open a SYN without ACK.
+	End, Open bool
 	// ICMPType is the type of an ICMP packet.
 	ICMPType uint8
 }
@@ -137,6 +138,7 @@ func Parse(frame []byte) (Packet, Drop) {
 		}
 		p.SrcPort, p.DstPort = binary.BigEndian.Uint16(l4), binary.BigEndian.Uint16(l4[2:])
 		p.End = l4[13]&(tcpFin|tcpRst) != 0
+		p.Open = l4[13]&(tcpSyn|tcpAck) == tcpSyn
 	case ProtoUDP:
 		if len(l4) < 8 {
 			return Packet{}, DropMalformed

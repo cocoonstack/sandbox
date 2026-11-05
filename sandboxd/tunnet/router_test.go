@@ -48,7 +48,9 @@ func TestRouterAnnouncesRewritesAndPassesOnlyReplies(t *testing.T) {
 	binary.BigEndian.PutUint16(denied[VnetHdrLen+20+2:], 22)
 	sendFrame(t, guest, denied)
 	sendFrame(t, guest, frame(ProtoTCP, GuestAddr, netip.MustParseAddr("100.80.0.5"), false))
-	u.inject(t, reply(netip.MustParseAddr("198.51.100.1")))
+	stranger := reply(netip.MustParseAddr("198.51.100.1"))
+	binary.BigEndian.PutUint16(stranger[Overhead+20:], 22)
+	u.inject(t, stranger)
 	u.inject(t, reply(remote))
 	got := readFrame(t, guest)
 	if p, _ := Parse(got); p.Dst != GuestAddr || p.Src != remote || !validIP(got) {
@@ -234,6 +236,22 @@ func TestRouterHandsAnICMPErrorBackWithTheQuotedGuestAddress(t *testing.T) {
 	ip := got[VnetHdrLen:]
 	if netip.AddrFrom4([4]byte(ip[28+srcAt:])) != GuestAddr || fold(onesSum(ip[20:], 0)) != 0xffff || fold(onesSum(ip[28:48], 0)) != 0xffff || !validIP(got) {
 		t.Fatalf("quoted source %v, checksums icmp %#x quoted %#x", netip.AddrFrom4([4]byte(ip[28+srcAt:])), fold(onesSum(ip[20:], 0)), fold(onesSum(ip[28:48], 0)))
+	}
+}
+
+func TestRouterResumesAStreamOpenedBeforeTheArmButRefusesAnOpener(t *testing.T) {
+	u, r := newRouter()
+	r.Arm(Claim{ID: "c1", Addr: claimAddr, Allow: func(_ netip.Addr, port uint16) bool { return port == 443 }})
+	u.sent(t)
+	guest := serve(t, r, claimAddr)
+	guestHello(t, guest)
+	syn := reply(remote)
+	syn[Overhead+20+13] = tcpSyn
+	u.inject(t, syn)
+	waitFor(t, func() bool { return r.Stats().Drops[DropPolicy] == 1 })
+	u.inject(t, reply(remote))
+	if p, _ := Parse(readFrame(t, guest)); p.Src != remote || p.Dst != GuestAddr {
+		t.Fatalf("delivered %+v, want the stream's next segment", p)
 	}
 }
 
