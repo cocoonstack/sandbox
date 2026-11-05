@@ -283,9 +283,12 @@ func (m *Manager) failMoveOut(ctx context.Context, sb *types.Sandbox, mv *outMov
 	moved, err := m.settleMoveOut(ctx, sb, mv)
 	switch {
 	case err != nil:
-		log.WithFunc("pool.failMoveOut").Warnf(ctx, "move of %s failed (%v) and its abort waits for the registry: %v", sb.ID, cause, err)
+		log.WithFunc("pool.failMoveOut").Warnf(ctx, "move of %s failed (%v) and its abort is retrying: %v", sb.ID, cause, err)
 		go m.retryMoveOut(ctx, sb, mv)
-		return MoveResult{}, fmt.Errorf("%w: %w", ErrMoveStoreDown, cause)
+		if errors.Is(err, ErrMoveStoreDown) {
+			return MoveResult{}, fmt.Errorf("%w: %w", ErrMoveStoreDown, cause)
+		}
+		return MoveResult{}, errors.Join(cause, err)
 	case moved:
 		return result, nil
 	}
