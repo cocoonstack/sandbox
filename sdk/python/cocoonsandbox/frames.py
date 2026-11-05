@@ -13,9 +13,9 @@ PROTO_VERSION = 1
 # the info proto from which silkd serves RPCs back to back on one connection
 KEEP_ALIVE_PROTO = 2
 MAX_FRAME = 8 * 1024 * 1024
-FS_CHUNK = 256 * 1024
+BULK_CHUNK = 256 * 1024
 # tar and port streams chunk at 1 MiB, still under MAX_FRAME after base64
-BULK_CHUNK = 1 << 20
+STREAM_CHUNK = 1 << 20
 _FAST_DATA = sys.version_info >= (3, 11)
 
 

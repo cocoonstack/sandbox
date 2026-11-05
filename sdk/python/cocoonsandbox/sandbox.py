@@ -22,7 +22,7 @@ from .errors import (
     VolumeError,
     require_field,
 )
-from .frames import BULK_CHUNK, FS_CHUNK, KEEP_ALIVE_PROTO
+from .frames import BULK_CHUNK, KEEP_ALIVE_PROTO, STREAM_CHUNK
 from .template import Template
 from .volumes import SandboxVolumesResponse, Volume, _volume_body, _volume_response
 
@@ -227,7 +227,7 @@ class Sandbox:
     def write_file(self, path: str, data: bytes, mode: int | None = None) -> None:
         """Writes data to path atomically (temp + rename on the guest)."""
         with self._lease(self._connect("fs_write", path=path, mode=mode)) as conn:
-            _upload(conn, data, FS_CHUNK)
+            _upload(conn, data, BULK_CHUNK)
 
     def read_file(self, path: str) -> bytes:
         with self._lease(self._connect("fs_read", path=path)) as conn:
@@ -256,7 +256,7 @@ class Sandbox:
     def push(self, dest: str, tar_stream: bytes) -> None:
         """Extracts a tar stream into dest; a truncated stream leaves dest untouched."""
         with self._lease(self._connect("fs_push", dest=dest)) as conn:
-            _upload(conn, tar_stream, BULK_CHUNK)
+            _upload(conn, tar_stream, STREAM_CHUNK)
 
     def pull(self, path: str) -> bytes:
         """Returns path (file or tree) as a tar archive."""
@@ -420,11 +420,9 @@ class Sandbox:
             unreachable = exc if exc.status == 0 else None
         try:
             moved = self._client.lookup(self.id, self.token)
-        except APIError as exc:
+        except APIError:
             if unreachable is not None:
                 raise unreachable from None
-            if exc.status != 404:
-                raise
             return
         try:
             self._release_at(moved.owner)
@@ -558,7 +556,7 @@ class Sandbox:
         try:
             with contextlib.suppress(SandboxError, OSError):
                 while True:
-                    chunk = local.recv(FS_CHUNK)
+                    chunk = local.recv(BULK_CHUNK)
                     if not chunk:
                         break
                     guest.send(chunk)
@@ -699,7 +697,7 @@ class PortConn(_Closeable):
         self._eof = False
 
     def send(self, data: bytes) -> None:
-        _send_chunks(self._conn, data, chunk=BULK_CHUNK)
+        _send_chunks(self._conn, data, chunk=STREAM_CHUNK)
 
     def recv(self) -> bytes:
         """Returns the next chunk from the guest; b'' on stream end."""
@@ -719,7 +717,7 @@ class PortConn(_Closeable):
         self._conn.close()
 
 
-def _send_chunks(conn: Conn, data: bytes, op: str = "data", chunk: int = FS_CHUNK) -> None:
+def _send_chunks(conn: Conn, data: bytes, op: str = "data", chunk: int = BULK_CHUNK) -> None:
     view = memoryview(data)
     for off in range(0, len(view), chunk):
         conn.send(op, data=view[off : off + chunk])
