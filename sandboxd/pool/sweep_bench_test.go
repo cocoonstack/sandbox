@@ -41,7 +41,7 @@ func sweepManager(b *testing.B, idleSeconds int) *Manager {
 	for i := range sweepClaims {
 		sb := &types.Sandbox{ID: fmt.Sprintf("sb_%05d", i), VMName: fmt.Sprintf("sbx-%05d", i), Key: testKey, Deadline: now.Add(time.Hour)}
 		sb.TouchAt(now)
-		m.claimed[sb.ID] = sb
+		m.addClaimLocked(sb)
 	}
 	m.mu.Unlock()
 	return m

@@ -149,7 +149,8 @@ func (m *Manager) archive(ctx context.Context, sb *types.Sandbox) error {
 	}
 	snap, vmName, sock, prevDeadline, prevPending, replica := sb.HibernateSnap, sb.VMName, sb.VsockSocket, sb.Deadline, sb.ArchivePending, sb.ReplicaCk
 	sb.ArchiveCk, sb.ArchiveEpoch, sb.ArchivePending, sb.ReplicaCk = ck.ID, epoch, "", ""
-	sb.HibernateSnap, sb.VsockSocket, sb.VMName = "", "", ""
+	sb.HibernateSnap, sb.VsockSocket = "", ""
+	m.setVMNameLocked(sb, "")
 	sb.Deadline = m.archiveDeadline(sb)
 	js := m.store.set(sb)
 	m.mu.Unlock()
@@ -163,7 +164,8 @@ func (m *Manager) archive(ctx context.Context, sb *types.Sandbox) error {
 			if replica != "" {
 				sb.ArchiveEpoch = epoch
 			}
-			sb.HibernateSnap, sb.VsockSocket, sb.VMName = snap, sock, vmName
+			sb.HibernateSnap, sb.VsockSocket = snap, sock
+			m.setVMNameLocked(sb, vmName)
 			sb.Deadline = prevDeadline
 			rb = m.store.set(sb)
 		}
@@ -262,7 +264,8 @@ func (m *Manager) commitWake(ctx context.Context, sb *types.Sandbox, vmName, soc
 		return ErrUnknownSandbox
 	}
 	ck, deadline, epoch, safe := sb.ArchiveCk, sb.Deadline, sb.ArchiveEpoch, sb.ReaderSafe
-	sb.VMName, sb.VsockSocket, sb.ArchiveCk, sb.ArchiveEpoch, sb.ReaderSafe = vmName, sock, "", 0, false
+	sb.VsockSocket, sb.ArchiveCk, sb.ArchiveEpoch, sb.ReaderSafe = sock, "", 0, false
+	m.setVMNameLocked(sb, vmName)
 	sb.Deadline = time.Now().Add(clampTTL(types.Seconds(sb.LeaseSeconds))) // a woken sandbox is a fresh lease
 	js := m.store.set(sb)
 	m.mu.Unlock()
@@ -270,7 +273,8 @@ func (m *Manager) commitWake(ctx context.Context, sb *types.Sandbox, vmName, soc
 		m.mu.Lock()
 		var rb claimSnapshot
 		if m.claimed[sb.ID] == sb {
-			sb.VMName, sb.VsockSocket, sb.ArchiveCk, sb.ArchiveEpoch, sb.Deadline, sb.ReaderSafe = "", "", ck, epoch, deadline, safe
+			sb.VsockSocket, sb.ArchiveCk, sb.ArchiveEpoch, sb.Deadline, sb.ReaderSafe = "", ck, epoch, deadline, safe
+			m.setVMNameLocked(sb, "")
 			rb = m.store.set(sb)
 		}
 		m.mu.Unlock()

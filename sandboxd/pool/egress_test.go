@@ -268,7 +268,7 @@ func TestRollbackKeepsLockWhenRemoveFails(t *testing.T) {
 	}
 	m.mu.Lock()
 	for _, sb := range sbs {
-		m.claimed[sb.ID] = sb
+		m.addClaimLocked(sb)
 	}
 	m.mu.Unlock()
 	m.out.KeepLock("sb_r1", "tap-r1")
@@ -303,7 +303,7 @@ func TestQuarantineFailedRemoveStaysUnswept(t *testing.T) {
 	m := egressManager(t, eng, config.PoolSpec{PoolKey: egKey, Egress: egPolicy})
 	sb := &types.Sandbox{ID: "sb_q1", VMName: "sbx-q1", Key: egKey, TAP: "tap-q1"}
 	m.mu.Lock()
-	m.claimed[sb.ID] = sb
+	m.addClaimLocked(sb)
 	m.mu.Unlock()
 	live := map[string]types.VMRecord{"sbx-q1": {Config: types.VMConfig{Name: "sbx-q1"}, State: vmStateRunning}}
 	removed := map[string]bool{}
@@ -360,7 +360,7 @@ func TestEgressLaneCannotForkOrCheckpoint(t *testing.T) {
 	m := egressManager(t, newFakeEngine(), config.PoolSpec{PoolKey: egKey, Egress: egPolicy})
 	sb := &types.Sandbox{ID: "sb_egb", Key: egKey, Token: "tok", VMName: "sbx-egb"}
 	m.mu.Lock()
-	m.claimed[sb.ID] = sb
+	m.addClaimLocked(sb)
 	m.mu.Unlock()
 	if _, err := m.Fork(t.Context(), sb.ID, Cred{Token: "tok"}, 1, time.Minute, "", ""); !errors.Is(err, ErrNoEgressFork) {
 		t.Errorf("Fork on egress lane: got %v, want ErrNoEgressFork", err)

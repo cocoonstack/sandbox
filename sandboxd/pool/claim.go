@@ -474,12 +474,28 @@ func (m *Manager) addClaimLocked(sb *types.Sandbox) {
 		}
 	}
 	m.claimed[sb.ID] = sb
+	if sb.VMName != "" {
+		m.claimedVMs[sb.VMName] = sb
+	}
 	m.tenantDelta(sb.Tenant, 1)
 }
 
 func (m *Manager) dropClaimLocked(sb *types.Sandbox) {
 	delete(m.claimed, sb.ID)
+	if m.claimedVMs[sb.VMName] == sb {
+		delete(m.claimedVMs, sb.VMName)
+	}
 	m.tenantDelta(sb.Tenant, -1)
+}
+
+func (m *Manager) setVMNameLocked(sb *types.Sandbox, vmName string) {
+	if m.claimedVMs[sb.VMName] == sb {
+		delete(m.claimedVMs, sb.VMName)
+	}
+	sb.VMName = vmName
+	if vmName != "" {
+		m.claimedVMs[vmName] = sb
+	}
 }
 
 // finalize stamps identity and persists the claim; a failed write destroys the VM.

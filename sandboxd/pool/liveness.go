@@ -114,12 +114,16 @@ func (m *Manager) watchedClaims(vmName string) []liveSuspect {
 	now := time.Now()
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	watched := func(sb *types.Sandbox) bool { return m.vmSettledLocked(sb) && !m.leaseLapsed(sb, now) }
+	if vmName != "" {
+		if sb := m.claimedVMs[vmName]; sb != nil && watched(sb) {
+			return []liveSuspect{{sb, vmName}}
+		}
+		return nil
+	}
 	var out []liveSuspect
 	for _, sb := range m.claimed {
-		if vmName != "" && sb.VMName != vmName {
-			continue
-		}
-		if m.vmSettledLocked(sb) && !m.leaseLapsed(sb, now) {
+		if watched(sb) {
 			out = append(out, liveSuspect{sb, sb.VMName})
 		}
 	}

@@ -124,7 +124,7 @@ func TestInterceptPoolAllowsPromote(t *testing.T) {
 	m := egressManager(t, newFakeEngine(), config.PoolSpec{PoolKey: testKey, Warm: 1, Egress: interceptPolicy()})
 	sb := &types.Sandbox{ID: "sb_i", Key: testKey, Token: "tok", VMName: "sbx-i"}
 	m.mu.Lock()
-	m.claimed[sb.ID] = sb
+	m.addClaimLocked(sb)
 	m.mu.Unlock()
 
 	if _, _, err := m.Promote(t.Context(), sb.ID, Cred{Token: "tok"}, "tpl:x", ""); err != nil {

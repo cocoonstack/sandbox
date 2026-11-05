@@ -148,7 +148,7 @@ func TestEgressRequestInFlightBlocksIdleSweep(t *testing.T) {
 	sb := outboundtest.VsockSandbox(t, "sb_inflight", testKey)
 	sb.VMName = "sbx-inflight-1"
 	m.mu.Lock()
-	m.claimed[sb.ID] = sb
+	m.addClaimLocked(sb)
 	m.mu.Unlock()
 	if armErr := m.out.ArmProxy(t.Context(), sb); armErr != nil {
 		t.Fatalf("arm proxy: %v", armErr)
