@@ -245,9 +245,9 @@ func (m *Manager) resolveMoveIn(ctx context.Context, sb *types.Sandbox) bool {
 		if rec.State == moves.Started {
 			committed = 0
 		}
-		vm, found, err := m.eng.Inspect(ctx, sb.VMName)
-		if err != nil {
-			log.WithFunc("pool.resolveMoveIn").Warnf(ctx, "inspect moved claim %s, retrying: %v", sb.ID, err)
+		vm, found, inspectErr := m.eng.Inspect(ctx, sb.VMName)
+		if inspectErr != nil {
+			log.WithFunc("pool.resolveMoveIn").Warnf(ctx, "inspect moved claim %s, retrying: %v", sb.ID, inspectErr)
 			return false
 		}
 		m.startMoveIn(ctx, sb, rec.From, committed, found && vm.State != vmStateRunning)
