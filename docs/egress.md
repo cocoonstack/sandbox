@@ -77,36 +77,59 @@ curl --socks5-hostname 127.0.0.1:1080 imaps://imap.example.com/   # allowed: {"s
 A none-lane guest has no resolver of its own. Clients that hand the proxy or the
 SOCKS5 door a name need none, but `dig`, `getent hosts`, tools with their own
 resolver, and programs that look a host up before they connect by address do.
-When the pool policy sets `"dns": true`, silkd's stub on `127.0.0.153:53` (UDP
-and TCP) carries each query over `CID2:2052` (`<vsock_socket>_2052`) to a
-per-sandbox resolver in sandboxd, which asks the node's nameservers (from the
-node's `/etc/resolv.conf`) and answers with real addresses.
+When the pool policy sets `"dns": true`, the guest's queries to
+`127.0.0.153:53` reach a per-sandbox resolver in sandboxd over `CID2:2052`
+(`<vsock_socket>_2052`). The resolver asks the node's nameservers, from the
+node's `/etc/resolv.conf`, and answers with real addresses. silkd only carries
+bytes: TCP the way it carries 3128 and 1080, and each UDP datagram as one
+length-framed message on its own vsock connection, with one framed reply.
 
-- **Guest resolver config.** In a guest without a device-backed NIC, silkd
-  makes `/etc/resolv.conf` a plain file with `nameserver 127.0.0.153`, replacing
-  a link to systemd-resolved's stub: resolved answers "network is down" for a
-  loopback upstream while no link is routable, which is the none lane. silkd
-  checks the file again every second for its first minute, since boot services
-  such as a tmpfiles `L+` line can relink it after silkd starts; after that a
-  change made in the guest stays. A guest with a NIC keeps its own resolver.
+- **Image requirement.** On a lane without a direct NIC, the guest must name
+  the relay in a plain `/etc/resolv.conf`: `nameserver 127.0.0.153`. With only
+  `lo` up, systemd-resolved answers "network is down" for a loopback upstream,
+  so it cannot forward to the relay. The sandbox base image, and every image
+  built on it, ships `sandbox-resolv.service`, a oneshot that runs after
+  `systemd-tmpfiles-setup.service` and before `nss-lookup.target`:
+  - with no device-backed NIC (the none lane), or `relay` in `/etc/silkd-lane`
+    (a locked bridge lane), it writes the plain file over resolved's link;
+  - otherwise (a direct CNI lane) it leaves resolved and its DHCP DNS alone.
+
+  sandboxd writes `/etc/silkd-lane` after the golden's first boot, so
+  `sandbox-resolv.path` reruns the check when the file changes. A product image
+  that wants `"dns": true` carries the same unit, or a resolv.conf to the same
+  effect. Do not turn the switch on for a pool whose image has neither. The
+  switch is off by default. The android flavor resolves through its own netd,
+  which does not read `/etc/resolv.conf`, so the relay does not serve it.
+- **Failures.** When the pool has no DNS door, silkd's dial is refused. When
+  the reply does not come within 5 s, silkd drops the datagram and the client
+  retries on its own schedule. When no nameserver answers, sandboxd replies
+  `SERVFAIL`.
 - **Internal addresses.** An `A` or `AAAA` record that the dial guard would
-  refuse (special-purpose ranges and the node's own addresses, minus the
-  prefixes `egress_internal_allow` re-admits on any port) is dropped from the
-  answer. The answer keeps the other records, the question and the EDNS record,
-  and drops the authority and additional sections.
+  refuse is dropped from every section of the answer, glue records included.
+  That covers special-purpose ranges and the node's own addresses, minus the
+  prefixes `egress_internal_allow` re-admits on any port. An answer with no
+  such record goes back byte for byte, with its EDNS, DNSSEC records, name case
+  and compression as the nameserver sent them. Only an answer that lost a
+  record is rebuilt.
 - **Rate.** Each claim gets 50 queries a second with a burst of 200; a query
   past the bucket answers `REFUSED`.
+- **Malformed queries.** sandboxd refuses a query before it allocates the query
+  when its length is under a DNS header or over 4 KiB. It also refuses one that
+  ends early, that is not a standard query with exactly one question, or that
+  has a section that does not parse (a compression pointer loop included).
+  sandboxd closes the connection and counts the query in
+  `sandboxd_dns_malformed_total`. Each claim holds at most 256 connections with
+  one 4 KiB query each, and at most 32 upstream exchanges in flight.
 - **Audit.** With `audit_log` on, each query appends
   `{"op":"dns","name":…,"qtype":…,"answers":…,"decision":…}` with the claim id
   and tenant. The decision is `allow`, `filtered` (an address was dropped),
-  `failed` (no nameserver answered; the guest gets `SERVFAIL`) or
-  `rate_limited` (at most one a second per claim after a burst of ten).
+  `failed` (no nameserver answered) or `rate_limited` (at most one a second per
+  claim after a burst of ten).
 - **Names for flow audit.** The resolver remembers, per claim, the name each
-  kept address was resolved from until its TTL ends (at most 4,096 entries).
+  kept answer address was resolved from until its TTL ends (at most 4,096
+  entries).
 
-Like the SOCKS5 door, the switch is the pool's: without it the host side stays
-unwired, the stub's dial is refused, and the guest gets `SERVFAIL` at once. A
-connect by address still goes through the proxy or the SOCKS5 door and is
+A connect by address still goes through the proxy or the SOCKS5 door and is
 judged there. Hibernate, wake and move need nothing: every UDP query opens a new
 vsock connection.
 
