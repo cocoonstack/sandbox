@@ -22,7 +22,7 @@ from cocoonsandbox import (
     Watcher,
 )
 from cocoonsandbox.conn import Conn, dial_agent, remaining_timeout
-from cocoonsandbox.frames import FS_CHUNK
+from cocoonsandbox.frames import BULK_CHUNK
 
 
 def test_dial_agent_rejects_control_chars_in_identity():
@@ -125,10 +125,10 @@ def test_pty_write_chunks_a_large_buffer(conn_pair):
 
     reader_thread = threading.Thread(target=drain, daemon=True)
     reader_thread.start()
-    pty.write(b"x" * (3 * FS_CHUNK))
+    pty.write(b"x" * (3 * BULK_CHUNK))
     reader_thread.join(5)
     assert [f["op"] for f in frames] == ["stdin"] * 3
-    assert all(len(base64.b64decode(f["data"])) == FS_CHUNK for f in frames)
+    assert all(len(base64.b64decode(f["data"])) == BULK_CHUNK for f in frames)
 
 
 def test_session_and_lsp_close_twice(monkeypatch):

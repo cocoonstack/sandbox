@@ -75,7 +75,7 @@ class Client:
         query = _template_query(template, net, size)
         path = "/v1/templates?" + urllib.parse.urlencode(query)
         reply = self._request(self.addr, "DELETE", path, None, "delete template")
-        candidates = (reply or {}).get("redirect") or []
+        candidates = reply.get("redirect") or []
         if not candidates:
             return
         query["no_redirect"] = "1"

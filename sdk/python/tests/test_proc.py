@@ -6,7 +6,7 @@ import pytest
 from conftest import FakeConn, sandbox_at
 
 from cocoonsandbox import ProtocolError
-from cocoonsandbox.frames import FS_CHUNK
+from cocoonsandbox.frames import BULK_CHUNK
 
 
 class BlockingStdinConn(FakeConn):
@@ -75,7 +75,7 @@ def test_run_pumps_stdin_while_reading_output(monkeypatch):
     blocking = BlockingStdinConn([{"type": "exit", "code": 0}], buffer_frames=1)
     monkeypatch.setattr(sb, "_dial", lambda deadline=None: blocking)
 
-    assert sb.run(["cat"], stdin=b"x" * (FS_CHUNK * 3)) == 0
+    assert sb.run(["cat"], stdin=b"x" * (BULK_CHUNK * 3)) == 0
     assert [op for op, _ in blocking.sent].count("stdin") == 3
     assert blocking.sent[-1][0] == "stdin_close"
 
