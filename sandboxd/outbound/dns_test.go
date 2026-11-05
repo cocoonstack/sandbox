@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -240,6 +241,7 @@ func TestDNSDoorDropsAndCountsMalformedQueries(t *testing.T) {
 		{"a response", frame(packQuery(t, dnsmessage.Header{Response: true}, "a.test."))},
 		{"an update", frame(packQuery(t, dnsmessage.Header{OpCode: 5}, "a.test."))},
 		{"a truncated additional record", frame(badAdditional(packQuery(t, dnsmessage.Header{}, "a.test.")))},
+		{"an additional record named by a pointer to itself", frame(selfPointerAdditional(packQuery(t, dnsmessage.Header{}, "a.test.")))},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			before := h.DNSMalformed()
@@ -265,7 +267,11 @@ func TestDNSDoorDropsAndCountsMalformedQueries(t *testing.T) {
 func FuzzDNSDoor(f *testing.F) {
 	upstream := newFakeNameserver(f)
 	v := NewView(poolConfig(testKey, dnsPolicy), nil)
-	h := New(Options{View: func() *View { return v }, Nameservers: func() []string { return []string{upstream.udp} }})
+	var forwarded atomic.Int64
+	h := New(Options{View: func() *View { return v }, Nameservers: func() []string {
+		forwarded.Add(1)
+		return []string{upstream.udp}
+	}})
 	valid := packQuery(f, dnsmessage.Header{RecursionDesired: true}, "public.test.")
 	for _, seed := range [][]byte{
 		frame(valid),
@@ -275,6 +281,7 @@ func FuzzDNSDoor(f *testing.F) {
 		append([]byte{0, 40}, make([]byte, 10)...),
 		frame(compressionLoop()),
 		frame(packQuery(f, dnsmessage.Header{OpCode: 5}, "a.test.")),
+		frame(selfPointerAdditional(packQuery(f, dnsmessage.Header{}, "a.test."))),
 	} {
 		f.Add(seed)
 	}
@@ -282,7 +289,7 @@ func FuzzDNSDoor(f *testing.F) {
 		r := newResolver(h, func(DNSEvent) {})
 		r.queries.SetLimit(rate.Inf)
 		conn := &fuzzConn{in: bytes.NewReader(stream)}
-		before := h.DNSMalformed()
+		before, sent := h.DNSMalformed(), forwarded.Load()
 		r.serveConn(t.Context(), conn)
 		if len(r.conns) != 0 {
 			t.Fatalf("%d connections left tracked", len(r.conns))
@@ -290,9 +297,19 @@ func FuzzDNSDoor(f *testing.F) {
 		if conn.maxRead > dnsQueryMax {
 			t.Fatalf("read a %d-byte message, past the %d-byte cap", conn.maxRead, dnsQueryMax)
 		}
-		if len(stream) >= 2 {
-			if n := int(stream[0])<<8 | int(stream[1]); (n < dnsHeaderLen || n > dnsQueryMax) && h.DNSMalformed() == before {
-				t.Fatalf("a %d-byte first frame was not counted as malformed", n)
+		if len(stream) < 2 {
+			return
+		}
+		n := int(stream[0])<<8 | int(stream[1])
+		if n < dnsHeaderLen || n > dnsQueryMax || len(stream) < 2+n {
+			if h.DNSMalformed() == before {
+				t.Fatalf("a %d-byte first frame of a %d-byte stream was not counted as malformed", n, len(stream))
+			}
+			return
+		}
+		if !standardQuery(stream[2 : 2+n]) {
+			if h.DNSMalformed() == before || forwarded.Load() != sent {
+				t.Fatalf("a first query the parser refuses was forwarded or not counted: %x", stream[2:2+n])
 			}
 		}
 	})
@@ -545,6 +562,17 @@ func compressionLoop() []byte {
 func badAdditional(query []byte) []byte {
 	query[11] = 1
 	return append(query, 0xc0)
+}
+
+func standardQuery(query []byte) bool {
+	var msg dnsmessage.Message
+	return msg.Unpack(query) == nil && !msg.Response && msg.OpCode == 0 && len(msg.Questions) == 1
+}
+
+func selfPointerAdditional(query []byte) []byte {
+	query[11] = 1
+	off := len(query)
+	return append(query, 0xc0|byte(off>>8), byte(off), 0, 1, 0, 1, 0, 0, 0, 0, 0, 4, 1, 2, 3, 4)
 }
 
 type fuzzConn struct {

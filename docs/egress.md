@@ -89,9 +89,10 @@ length-framed message on its own vsock connection, with one framed reply.
   uses it by naming it, either as a plain `/etc/resolv.conf` with
   `nameserver 127.0.0.153` or per query (`dig @127.0.0.153`). systemd-resolved
   takes it as `DNS=127.0.0.153` in a drop-in only while the guest has a
-  routable link, such as a direct NIC or a `tun0` with a default route. With
-  only `lo` up, as on the none lane, resolved answers "network is down" for a
-  loopback upstream and never forwards. Name the relay only in a pool with
+  routable link, such as a `tun0` with a default route. With only `lo` up, as
+  on the none lane, resolved answers "network is down" for a loopback upstream
+  and never forwards. The door needs a guarded policy, so it serves the none
+  lane and the bridge lane; a CNI lane keeps the DNS its network gives it. Name the relay only in a pool with
   `"dns": true`: elsewhere it is unwired and a query to it gets no reply. The
   switch is off by default, and a guest that does not name the relay behaves
   as before.
@@ -111,7 +112,8 @@ length-framed message on its own vsock connection, with one framed reply.
 - **Malformed queries.** sandboxd refuses a query before it allocates the query
   when its length is under a DNS header or over 4 KiB. It also refuses one that
   ends early, that is not a standard query with exactly one question, or that
-  has a section that does not parse (a compression pointer loop included).
+  the full parser refuses in any section, names behind compression pointers and
+  record bodies included.
   sandboxd closes the connection and counts the query in
   `sandboxd_dns_malformed_total`. Each claim holds at most 256 connections with
   one 4 KiB query each, and at most 32 upstream exchanges in flight.

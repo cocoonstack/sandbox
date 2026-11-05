@@ -397,24 +397,13 @@ func refusedAddr(self []netip.Addr, allow []egress.InternalAllow, ip netip.Addr)
 	return internalAddr(self, ip) && !slices.ContainsFunc(allow, func(a egress.InternalAllow) bool { return a.Prefix.Contains(ip) })
 }
 
-// parseQuery admits a standard query with one question whose every section parses.
+// parseQuery admits a standard query with one question that the full parser accepts, compression pointers and record bodies included.
 func parseQuery(query []byte) (dnsmessage.Header, dnsmessage.Question, bool) {
-	var p dnsmessage.Parser
-	hdr, err := p.Start(query)
-	if err != nil || hdr.Response || hdr.OpCode != 0 {
+	var msg dnsmessage.Message
+	if msg.Unpack(query) != nil || msg.Response || msg.OpCode != 0 || len(msg.Questions) != 1 {
 		return dnsmessage.Header{}, dnsmessage.Question{}, false
 	}
-	q, err := p.Question()
-	if err != nil {
-		return dnsmessage.Header{}, dnsmessage.Question{}, false
-	}
-	if _, err = p.Question(); !errors.Is(err, dnsmessage.ErrSectionDone) {
-		return dnsmessage.Header{}, dnsmessage.Question{}, false
-	}
-	if p.SkipAllAnswers() != nil || p.SkipAllAuthorities() != nil || p.SkipAllAdditionals() != nil {
-		return dnsmessage.Header{}, dnsmessage.Question{}, false
-	}
-	return hdr, q, true
+	return msg.Header, msg.Questions[0], true
 }
 
 // readQuery reads one framed guest query, refusing a length outside a DNS header and dnsQueryMax before it allocates.
