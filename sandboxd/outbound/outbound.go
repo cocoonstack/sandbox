@@ -47,14 +47,13 @@ type Options struct {
 	LockNIC    bool
 	RecordEnds bool
 	NoRxSplice bool
-	// Dial, Verdict, Lock, Unlock and Sweep default to the internal-address guard and netfilter; tests swap them.
-	Dial egress.DialFunc
-	// Nameservers defaults to the node's /etc/resolv.conf.
-	Nameservers func() []string
+	// Dial, Verdict, Lock, Unlock, Sweep and Nameservers default to the internal-address guard, netfilter and /etc/resolv.conf; tests swap them.
+	Dial        egress.DialFunc
 	Verdict     VerdictFunc
 	Lock        TapFunc
 	Unlock      TapFunc
 	Sweep       func(keep map[string]bool) error
+	Nameservers func() []string
 }
 
 // Host holds every sandbox's doors and NIC lock; it guards its own state, never the caller's.
