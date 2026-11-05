@@ -6,7 +6,6 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json/v2"
-	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -132,13 +131,8 @@ func (p *PreviewServer) proxyLocal(w http.ResponseWriter, r *http.Request, claim
 		},
 		Transport: p.transport,
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
-			if errors.Is(err, pool.ErrLeaseLost) || errors.Is(err, pool.ErrEvacuating) {
-				code, msg, _ := mapPoolErr(w, err)
+			if code, msg, ok := mapPoolErr(w, err); ok {
 				http.Error(w, msg, code)
-				return
-			}
-			if errors.Is(err, pool.ErrQuota) {
-				http.Error(w, "node at capacity; retry", http.StatusTooManyRequests)
 				return
 			}
 			log.WithFunc("server.proxyLocal").Errorf(r.Context(), err, "proxy %s:%d", claims.ID, claims.Port)
