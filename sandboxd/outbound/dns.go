@@ -45,6 +45,9 @@ const (
 var (
 	errNoNameserver = errors.New("no nameserver")
 	errMalformed    = errors.New("malformed dns query")
+	errAnswerID     = errors.New("dns answer for another query")
+
+	udpBufs = sync.Pool{New: func() any { return new([dnsMsgMax]byte) }}
 )
 
 // DNSEvent is one guest DNS query and what the resolver did with it.
@@ -120,12 +123,16 @@ func (r *resolver) serveConn(ctx context.Context, conn net.Conn) {
 		if err != nil {
 			return
 		}
-		answer, ok := r.answer(ctx, query)
+		answer, pooled, ok := r.answer(ctx, query)
 		if !ok {
 			r.h.dnsMalformed.Add(1)
 			return
 		}
-		if writeDNSMsg(conn, answer) != nil {
+		err = writeDNSMsg(conn, answer)
+		if pooled != nil {
+			udpBufs.Put(pooled)
+		}
+		if err != nil {
 			return
 		}
 	}
@@ -148,10 +155,11 @@ func (r *resolver) untrack(conn net.Conn) {
 	_ = conn.Close()
 }
 
-func (r *resolver) answer(ctx context.Context, query []byte) ([]byte, bool) {
+// answer returns the reply for query; a non-nil pooled buffer backs it and goes back to udpBufs once the reply is written.
+func (r *resolver) answer(ctx context.Context, query []byte) ([]byte, *[dnsMsgMax]byte, bool) {
 	hdr, q, ok := parseQuery(query)
 	if !ok {
-		return nil, false
+		return nil, nil, false
 	}
 	ev := DNSEvent{Name: strings.TrimSuffix(q.Name.String(), "."), Type: strings.TrimPrefix(q.Type.String(), "Type")}
 	if !r.queries.Allow() {
@@ -162,68 +170,95 @@ func (r *resolver) answer(ctx context.Context, query []byte) ([]byte, bool) {
 		return failure(hdr, q, dnsmessage.RCodeRefused)
 	}
 	r.inflight <- struct{}{}
-	resp, err := r.exchange(ctx, query)
+	resp, pooled, err := r.exchange(ctx, query)
 	<-r.inflight
-	var msg dnsmessage.Message
+	var drop bool
 	if err == nil {
-		err = msg.Unpack(resp)
+		ev.Answers, drop, err = r.scan(resp, hdr.ID, ev.Name)
 	}
-	if err != nil || msg.ID != hdr.ID {
+	if err != nil {
+		if pooled != nil {
+			udpBufs.Put(pooled)
+		}
 		ev.Decision = DNSFailed
 		r.record(ev)
 		return failure(hdr, q, dnsmessage.RCodeServerFailure)
 	}
-	ev.Decision = DNSAllow
-	if !r.filter(&msg, ev.Name) {
-		ev.Answers = len(msg.Answers)
+	if !drop {
+		ev.Decision = DNSAllow
 		r.record(ev)
-		return resp, true
+		return resp, pooled, true
 	}
 	ev.Decision = DNSFiltered
-	ev.Answers = len(msg.Answers)
 	r.record(ev)
-	out, err := msg.Pack()
+	out, err := r.strip(resp)
+	if pooled != nil {
+		udpBufs.Put(pooled)
+	}
 	if err != nil {
 		return failure(hdr, q, dnsmessage.RCodeServerFailure)
 	}
-	return out, true
+	return out, nil, true
 }
 
-// filter drops address records the dial guard would refuse from every section, and remembers the answer section's kept addresses.
-func (r *resolver) filter(msg *dnsmessage.Message, name string) bool {
-	self := *r.h.self.Load()
-	allow := r.h.o.View().internalAllow
-	refused := func(rr dnsmessage.Resource) (netip.Addr, bool) {
-		var ip netip.Addr
-		switch body := rr.Body.(type) {
-		case *dnsmessage.AResource:
-			ip = netip.AddrFrom4(body.A)
-		case *dnsmessage.AAAAResource:
-			ip = netip.AddrFrom16(body.AAAA)
-		default:
-			return ip, false
-		}
-		ip = canonicalAddr(ip)
-		return ip, internalAddr(self, ip) && !slices.ContainsFunc(allow, func(a egress.InternalAllow) bool { return a.Prefix.Contains(ip) })
+// scan walks resp without allocating: it counts the answers kept, reports whether an address record must go, and remembers the kept answer addresses.
+func (r *resolver) scan(resp []byte, id uint16, name string) (int, bool, error) {
+	var p dnsmessage.Parser
+	hdr, err := p.Start(resp)
+	if err != nil {
+		return 0, false, err
 	}
+	if hdr.ID != id {
+		return 0, false, errAnswerID
+	}
+	if err = p.SkipAllQuestions(); err != nil {
+		return 0, false, err
+	}
+	self, allow := *r.h.self.Load(), r.h.o.View().internalAllow
 	now := time.Now()
-	dropped := false
-	msg.Answers = slices.DeleteFunc(msg.Answers, func(rr dnsmessage.Resource) bool {
-		ip, drop := refused(rr)
-		if !drop && ip.IsValid() {
-			r.remember(ip, name, now.Add(time.Duration(rr.Header.TTL)*time.Second))
+	answers, drop := 0, false
+	for section := range 3 {
+		for {
+			rh, err := resourceHeader(&p, section)
+			if errors.Is(err, dnsmessage.ErrSectionDone) {
+				break
+			}
+			if err != nil {
+				return 0, false, err
+			}
+			ip, err := resourceAddr(&p, section, rh.Type)
+			if err != nil {
+				return 0, false, err
+			}
+			switch {
+			case ip.IsValid() && refusedAddr(self, allow, ip):
+				drop = true
+			case section == 0:
+				answers++
+				if ip.IsValid() {
+					r.remember(ip, name, now.Add(time.Duration(rh.TTL)*time.Second))
+				}
+			}
 		}
-		dropped = dropped || drop
-		return drop
-	})
-	for _, section := range []*[]dnsmessage.Resource{&msg.Authorities, &msg.Additionals} {
-		*section = slices.DeleteFunc(*section, func(rr dnsmessage.Resource) bool {
-			_, drop := refused(rr)
-			dropped = dropped || drop
-			return drop
-		})
 	}
-	return dropped
+	return answers, drop, nil
+}
+
+// strip rebuilds resp without the address records the dial guard would refuse, in every section.
+func (r *resolver) strip(resp []byte) ([]byte, error) {
+	var msg dnsmessage.Message
+	if err := msg.Unpack(resp); err != nil {
+		return nil, err
+	}
+	self, allow := *r.h.self.Load(), r.h.o.View().internalAllow
+	refused := func(rr dnsmessage.Resource) bool {
+		ip := recordAddr(rr)
+		return ip.IsValid() && refusedAddr(self, allow, ip)
+	}
+	msg.Answers = slices.DeleteFunc(msg.Answers, refused)
+	msg.Authorities = slices.DeleteFunc(msg.Authorities, refused)
+	msg.Additionals = slices.DeleteFunc(msg.Additionals, refused)
+	return msg.Pack()
 }
 
 func (r *resolver) remember(ip netip.Addr, name string, expires time.Time) {
@@ -256,52 +291,110 @@ func (r *resolver) name(ip netip.Addr) (string, bool) {
 	return rn.name, true
 }
 
-func (r *resolver) exchange(ctx context.Context, query []byte) ([]byte, error) {
+func (r *resolver) exchange(ctx context.Context, query []byte) ([]byte, *[dnsMsgMax]byte, error) {
 	var errs error
 	for _, server := range r.h.o.Nameservers() {
-		resp, err := exchangeWith(ctx, server, query)
+		resp, pooled, err := exchangeWith(ctx, server, query)
 		if err == nil {
-			return resp, nil
+			return resp, pooled, nil
 		}
 		errs = errors.Join(errs, err)
 	}
-	return nil, cmp.Or(errs, errNoNameserver)
+	return nil, nil, cmp.Or(errs, errNoNameserver)
 }
 
-func exchangeWith(ctx context.Context, server string, query []byte) ([]byte, error) {
-	resp, err := exchangeOver(ctx, "udp", server, query)
-	if err == nil && len(resp) > 2 && resp[2]&0x02 != 0 {
-		resp, err = exchangeOver(ctx, "tcp", server, query)
+// exchangeWith asks server over UDP into a pooled buffer, and again over TCP when the reply is truncated.
+func exchangeWith(ctx context.Context, server string, query []byte) ([]byte, *[dnsMsgMax]byte, error) {
+	buf := udpBufs.Get().(*[dnsMsgMax]byte)
+	n, err := exchangeUDP(ctx, server, query, buf[:])
+	if err == nil && (n < dnsHeaderLen || buf[2]&0x02 == 0) {
+		return buf[:n], buf, nil
 	}
-	return resp, err
+	udpBufs.Put(buf)
+	if err != nil {
+		return nil, nil, err
+	}
+	resp, err := exchangeTCP(ctx, server, query)
+	return resp, nil, err
 }
 
-func exchangeOver(ctx context.Context, network, server string, query []byte) ([]byte, error) {
-	ctx, cancel := context.WithTimeout(ctx, dnsExchange)
-	defer cancel()
-	var d net.Dialer
-	conn, err := d.DialContext(ctx, network, server)
+func exchangeUDP(ctx context.Context, server string, query, buf []byte) (int, error) {
+	conn, err := dialUpstream(ctx, "udp", server)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = conn.Close() }()
+	if _, err = conn.Write(query); err != nil {
+		return 0, err
+	}
+	return conn.Read(buf)
+}
+
+func exchangeTCP(ctx context.Context, server string, query []byte) ([]byte, error) {
+	conn, err := dialUpstream(ctx, "tcp", server)
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = conn.Close() }()
-	deadline, _ := ctx.Deadline()
-	_ = conn.SetDeadline(deadline)
-	if network == "tcp" {
-		if err = writeDNSMsg(conn, query); err != nil {
-			return nil, err
-		}
-		return readDNSMsg(conn)
-	}
-	if _, err = conn.Write(query); err != nil {
+	if err = writeDNSMsg(conn, query); err != nil {
 		return nil, err
 	}
-	buf := make([]byte, dnsMsgMax)
-	n, err := conn.Read(buf)
+	return readDNSMsg(conn)
+}
+
+func dialUpstream(ctx context.Context, network, server string) (net.Conn, error) {
+	d := net.Dialer{Timeout: dnsExchange}
+	conn, err := d.DialContext(ctx, network, server)
 	if err != nil {
 		return nil, err
 	}
-	return buf[:n], nil
+	_ = conn.SetDeadline(time.Now().Add(dnsExchange))
+	return conn, nil
+}
+
+func resourceHeader(p *dnsmessage.Parser, section int) (dnsmessage.ResourceHeader, error) {
+	switch section {
+	case 0:
+		return p.AnswerHeader()
+	case 1:
+		return p.AuthorityHeader()
+	default:
+		return p.AdditionalHeader()
+	}
+}
+
+// resourceAddr reads an A or AAAA body as its address and skips any other body.
+func resourceAddr(p *dnsmessage.Parser, section int, typ dnsmessage.Type) (netip.Addr, error) {
+	switch typ {
+	case dnsmessage.TypeA:
+		body, err := p.AResource()
+		return canonicalAddr(netip.AddrFrom4(body.A)), err
+	case dnsmessage.TypeAAAA:
+		body, err := p.AAAAResource()
+		return canonicalAddr(netip.AddrFrom16(body.AAAA)), err
+	}
+	switch section {
+	case 0:
+		return netip.Addr{}, p.SkipAnswer()
+	case 1:
+		return netip.Addr{}, p.SkipAuthority()
+	default:
+		return netip.Addr{}, p.SkipAdditional()
+	}
+}
+
+func recordAddr(rr dnsmessage.Resource) netip.Addr {
+	switch body := rr.Body.(type) {
+	case *dnsmessage.AResource:
+		return canonicalAddr(netip.AddrFrom4(body.A))
+	case *dnsmessage.AAAAResource:
+		return canonicalAddr(netip.AddrFrom16(body.AAAA))
+	}
+	return netip.Addr{}
+}
+
+func refusedAddr(self []netip.Addr, allow []egress.InternalAllow, ip netip.Addr) bool {
+	return internalAddr(self, ip) && !slices.ContainsFunc(allow, func(a egress.InternalAllow) bool { return a.Prefix.Contains(ip) })
 }
 
 // parseQuery admits a standard query with one question whose every section parses.
@@ -341,12 +434,12 @@ func readQuery(r io.Reader) ([]byte, error) {
 	return msg, nil
 }
 
-func failure(hdr dnsmessage.Header, q dnsmessage.Question, rcode dnsmessage.RCode) ([]byte, bool) {
+func failure(hdr dnsmessage.Header, q dnsmessage.Question, rcode dnsmessage.RCode) ([]byte, *[dnsMsgMax]byte, bool) {
 	out, err := (&dnsmessage.Message{
 		ID: hdr.ID, Response: true, OpCode: hdr.OpCode, RecursionDesired: hdr.RecursionDesired, RCode: rcode,
 		Questions: []dnsmessage.Question{q},
 	}).Pack()
-	return out, err == nil
+	return out, nil, err == nil
 }
 
 func readDNSMsg(r io.Reader) ([]byte, error) {
@@ -365,11 +458,8 @@ func writeDNSMsg(w io.Writer, msg []byte) error {
 	if len(msg) > dnsMsgMax {
 		return fmt.Errorf("dns message of %d bytes", len(msg))
 	}
-	_, err := w.Write(binary.BigEndian.AppendUint16(make([]byte, 0, 2+len(msg)), uint16(len(msg)))) //nolint:gosec // capped above
-	if err != nil {
-		return err
-	}
-	_, err = w.Write(msg)
+	bufs := net.Buffers{binary.BigEndian.AppendUint16(nil, uint16(len(msg))), msg} //nolint:gosec // capped above
+	_, err := bufs.WriteTo(w)
 	return err
 }
 

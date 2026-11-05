@@ -71,9 +71,9 @@ pub async fn serve_datagrams(listen: SocketAddrV4, host_vsock_port: u32) -> io::
 
     let sock = Arc::new(UdpSocket::bind(listen).await?);
     let slots = Arc::new(Semaphore::new(DATAGRAMS_IN_FLIGHT));
-    let mut buf = vec![0u8; usize::from(u16::MAX)];
+    let mut buf = vec![0u8; 2 + usize::from(u16::MAX)];
     loop {
-        let (n, from) = match sock.recv_from(&mut buf).await {
+        let (n, from) = match sock.recv_from(&mut buf[2..]).await {
             Ok(got) => got,
             Err(e) => {
                 eprintln!("silkd egress: recv: {e}");
@@ -81,17 +81,18 @@ pub async fn serve_datagrams(listen: SocketAddrV4, host_vsock_port: u32) -> io::
                 continue;
             }
         };
-        let Ok(slot) = slots.clone().try_acquire_owned() else {
+        let (Ok(slot), Ok(len)) = (slots.clone().try_acquire_owned(), u16::try_from(n)) else {
             continue;
         };
-        let datagram = buf[..n].to_vec();
+        buf[..2].copy_from_slice(&len.to_be_bytes());
+        let framed = buf[..2 + n].to_vec();
         let sock = sock.clone();
         tokio::spawn(async move {
             let _slot = slot;
             let exchange = async {
                 let mut host =
                     VsockStream::connect(VsockAddr::new(VMADDR_CID_HOST, host_vsock_port)).await?;
-                exchange_frame(&mut host, &datagram).await
+                exchange_frame(&mut host, &framed).await
             };
             if let Ok(Ok(reply)) = tokio::time::timeout(DATAGRAM_TIMEOUT, exchange).await {
                 let _ = sock.send_to(&reply, from).await;
@@ -116,17 +117,12 @@ pub async fn serve_datagrams(_listen: SocketAddrV4, _host_vsock_port: u32) -> io
     ))
 }
 
-/// Writes payload behind a two-byte big-endian length and reads one reply framed the same way.
-pub async fn exchange_frame<S>(conn: &mut S, payload: &[u8]) -> io::Result<Vec<u8>>
+/// Writes one message already behind its two-byte big-endian length and reads one reply framed the same way.
+pub async fn exchange_frame<S>(conn: &mut S, framed: &[u8]) -> io::Result<Vec<u8>>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
-    let len =
-        u16::try_from(payload.len()).map_err(|_| io::Error::from(io::ErrorKind::InvalidInput))?;
-    let mut framed = Vec::with_capacity(2 + payload.len());
-    framed.extend_from_slice(&len.to_be_bytes());
-    framed.extend_from_slice(payload);
-    conn.write_all(&framed).await?;
+    conn.write_all(framed).await?;
     let mut size = [0u8; 2];
     conn.read_exact(&mut size).await?;
     let mut reply = vec![0u8; usize::from(u16::from_be_bytes(size))];
@@ -151,7 +147,10 @@ mod tests {
             host.write_all(&[0, 3, b'a', b'n', b's']).await.unwrap();
             payload
         });
-        assert_eq!(exchange_frame(&mut guest, b"query").await.unwrap(), b"ans");
+        assert_eq!(
+            exchange_frame(&mut guest, b"\x00\x05query").await.unwrap(),
+            b"ans"
+        );
         assert_eq!(server.await.unwrap(), b"query");
     }
 
@@ -159,6 +158,6 @@ mod tests {
     async fn exchange_frame_fails_when_the_host_hangs_up() {
         let (mut guest, host) = tokio::io::duplex(1024);
         drop(host);
-        assert!(exchange_frame(&mut guest, b"query").await.is_err());
+        assert!(exchange_frame(&mut guest, b"\x00\x05query").await.is_err());
     }
 }
