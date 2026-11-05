@@ -91,9 +91,13 @@ func (m *Manager) archive(ctx context.Context, sb *types.Sandbox) error {
 	}
 	sb.Transition.Lock()
 	err := m.resolveIntent(ctx, sb)
+	snap := sb.HibernateSnap
 	sb.Transition.Unlock()
 	if err != nil {
 		return fmt.Errorf("archive %s: settle intent: %w", sb.ID, err)
+	}
+	if snap == "" {
+		return errWokeMeanwhile
 	}
 	if err = m.checkArchiveRow(ctx, sb.ID); err != nil {
 		return fmt.Errorf("archive %s: registry: %w", sb.ID, err)
@@ -105,7 +109,7 @@ func (m *Manager) archive(ctx context.Context, sb *types.Sandbox) error {
 	m.mu.Unlock()
 	defer m.untrack(m.pendingCks, ckID)
 	// A hibernated source is copied from its wake image, so no VM starts.
-	ck, srcSnap, err := m.publishCheckpoint(ctx, sb, ckID, "archive", sb.Tenant, true)
+	ck, srcSnap, err := m.publishCheckpoint(ctx, sb, ckID, "archive", sb.Tenant, snap, true)
 	if err != nil {
 		return err
 	}
