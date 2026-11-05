@@ -678,6 +678,7 @@ func (s *Server) handleClaimCheckpoint(w http.ResponseWriter, r *http.Request) {
 	sb, err := s.mgr.ClaimCheckpoint(r.Context(), ckptID, o)
 	if errors.Is(err, pool.ErrUnknownCheckpoint) {
 		if !req.NoRedirect && s.prober != nil && s.writeRedirect(w, s.prober.Owners(r.Context(), ckptID)) {
+			s.claimRedirects.Add(1)
 			return
 		}
 		sb, err = s.mgr.ClaimCheckpointHeal(r.Context(), ckptID, o)

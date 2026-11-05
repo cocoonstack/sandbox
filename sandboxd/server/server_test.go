@@ -649,6 +649,16 @@ func TestClaimRedirectsAreCounted(t *testing.T) {
 	}
 }
 
+func TestCheckpointClaimRedirectsAreCounted(t *testing.T) {
+	ts := newProberTestServer(t, "", &fakeManager{}, &fakeProber{owners: []string{"peer:7777"}})
+	if code := statusOf(t, http.MethodPost, ts.URL+"/v1/checkpoints/ck_0011223344556677/claim", "", `{}`); code != http.StatusOK {
+		t.Fatalf("claim status %d, want 200 with a redirect", code)
+	}
+	if want, raw := "sandboxd_claim_redirects_total 1\n", scrapeMetrics(t, ts.URL); !strings.Contains(raw, want) {
+		t.Errorf("missing %q in:\n%s", want, raw)
+	}
+}
+
 func TestPutPoolsRejectsUnknownFields(t *testing.T) {
 	ts := newTestServer(t, "sekret", &fakeManager{}, nil)
 	if code := statusOf(t, http.MethodPut, ts.URL+"/v1/pools", "sekret", `{"pools":[{"template":"rt:24.04","net":"none","size":"small","egres":{"allow":[]}}]}`); code != http.StatusBadRequest {
