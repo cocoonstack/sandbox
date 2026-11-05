@@ -60,6 +60,7 @@ type Options struct {
 type Host struct {
 	o            Options
 	self         atomic.Pointer[[]netip.Addr]
+	ns           atomic.Pointer[nameserverList]
 	dnsMalformed atomic.Uint64
 
 	mu       sync.Mutex
@@ -87,7 +88,7 @@ func New(o Options) *Host {
 		h.o.Verdict = h.verdict
 	}
 	if h.o.Nameservers == nil {
-		h.o.Nameservers = func() []string { return nameservers(resolvConf) }
+		h.o.Nameservers = h.nameservers
 	}
 	return h
 }
@@ -135,21 +136,20 @@ func (h *Host) ArmProxy(ctx context.Context, sb *types.Sandbox) error {
 	if v.usageBytes {
 		proxy.OnTransfer(func(ev egress.Event, sent, received int64) { h.o.Transfer(evCtx, id, tenant, ev, sent, received) })
 	}
-	if d != nil && (reached(d.ln) || (d.socks != nil && reached(d.socks)) || (d.socks != nil) != policy.ServesSocks() ||
-		(d.dns != nil) != policy.ServesDNS()) {
+	if d != nil && d.stale(policy) {
 		d.close()
 		d = nil
 	}
 	if d == nil {
 		var err error
-		if d, err = bindDoors(sb.VsockSocket, policy.ServesSocks(), policy.ServesDNS()); err != nil {
+		if d, err = bindDoors(sb.VsockSocket, policy); err != nil {
 			return err
 		}
 	}
 	d.srv = &http.Server{Handler: proxy, ReadHeaderTimeout: 30 * time.Second}
 	d.proxy = proxy
 	if d.dns != nil {
-		d.resolver = newResolver(h, func(ev DNSEvent) { h.o.RecordDNS(evCtx, id, tenant, ev) })
+		d.resolver = newResolver(evCtx, h, func(ev DNSEvent) { h.o.RecordDNS(evCtx, id, tenant, ev) })
 	}
 	h.mu.Lock()
 	h.doors[id] = d
@@ -159,7 +159,8 @@ func (h *Host) ArmProxy(ctx context.Context, sb *types.Sandbox) error {
 		go proxy.ServeSOCKS(evCtx, d.socks)
 	}
 	if d.resolver != nil {
-		go d.resolver.serve(evCtx, d.dns)
+		go d.resolver.serve(d.dns, false)
+		go d.resolver.serve(d.dnsGram, true)
 	}
 	return nil
 }
@@ -171,7 +172,7 @@ func (h *Host) Prebind(ctx context.Context, sb *types.Sandbox) {
 	if policy == nil || sb.VsockSocket == "" {
 		return
 	}
-	d, err := bindDoors(sb.VsockSocket, policy.ServesSocks(), policy.ServesDNS())
+	d, err := bindDoors(sb.VsockSocket, *policy)
 	if err != nil {
 		log.WithFunc("outbound.Prebind").Warnf(ctx, "pre-bind %s: %v; the claim binds instead", sb.VMName, err)
 		return

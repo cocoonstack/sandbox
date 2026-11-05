@@ -51,6 +51,7 @@ const (
 	egressPort     = 2049
 	socksPort      = 2050
 	dnsPort        = 2052
+	dnsGramPort    = 2053
 	cmdTimeout     = 2 * time.Minute
 	dumpTimeout    = 15 * time.Minute
 	cmdTermGrace   = 30 * time.Second
@@ -541,6 +542,11 @@ func EgressSocketPath(vsockSocket string) string {
 // DNSSocketPath is the host UDS the VMM connects when the guest dials CID2:dnsPort.
 func DNSSocketPath(vsockSocket string) string {
 	return fmt.Sprintf("%s_%d", vsockSocket, dnsPort)
+}
+
+// DNSDatagramSocketPath is the host UDS the VMM connects when the guest dials CID2:dnsGramPort.
+func DNSDatagramSocketPath(vsockSocket string) string {
+	return fmt.Sprintf("%s_%d", vsockSocket, dnsGramPort)
 }
 
 // SocksSocketPath is the host UDS the VMM connects when the guest dials CID2:socksPort.

@@ -42,17 +42,21 @@ func TestDNSDoorBindsOnlyWhenOptedIn(t *testing.T) {
 			if err := h.ArmProxy(t.Context(), sb); err != nil {
 				t.Fatalf("arm proxy: %v", err)
 			}
-			path := engine.DNSSocketPath(sb.VsockSocket)
-			conn, err := net.Dial("unix", path)
-			if (err == nil) != tt.want {
-				t.Fatalf("dns door bound = %v, want %v", err == nil, tt.want)
-			}
-			if conn != nil {
-				_ = conn.Close()
+			paths := []string{engine.DNSSocketPath(sb.VsockSocket), engine.DNSDatagramSocketPath(sb.VsockSocket)}
+			for _, path := range paths {
+				conn, err := net.Dial("unix", path)
+				if (err == nil) != tt.want {
+					t.Fatalf("%s bound = %v, want %v", filepath.Base(path), err == nil, tt.want)
+				}
+				if conn != nil {
+					_ = conn.Close()
+				}
 			}
 			h.Disarm(sb.ID, true)
-			if _, err := net.Dial("unix", path); err == nil {
-				t.Error("dns door still accepts after disarm")
+			for _, path := range paths {
+				if _, err := net.Dial("unix", path); err == nil {
+					t.Errorf("%s still accepts after disarm", filepath.Base(path))
+				}
 			}
 		})
 	}
@@ -112,7 +116,7 @@ func TestDNSDoorPassesAnUnfilteredAnswerByteForByte(t *testing.T) {
 	if err := writeDNSMsg(conn, query); err != nil {
 		t.Fatal(err)
 	}
-	got, err := readDNSMsg(conn)
+	got, err := readDNSMsg(conn, dnsMsgMax)
 	if err != nil {
 		t.Fatalf("read answer: %v", err)
 	}
@@ -160,19 +164,61 @@ func TestDNSDoorDisarmEndsAnOpenConnection(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = writeDNSMsg(conn, query)
-	if answer, err := readDNSMsg(conn); err == nil {
+	if answer, err := readDNSMsg(conn, dnsMsgMax); err == nil {
 		t.Fatalf("a disarmed door answered %d bytes on a connection opened while armed", len(answer))
 	}
 }
 
-func TestDNSDoorRetriesATruncatedAnswerOverTCP(t *testing.T) {
+func TestDNSDoorsHandATruncatedAnswerToEachTransport(t *testing.T) {
 	upstream := newFakeNameserver(t)
 	h := newHost(t, &fakeEngine{}, poolConfig(testKey, dnsPolicy), func(o *Options) {
 		o.Nameservers = func() []string { return []string{upstream.udp} }
 	})
-	msg := queryDoor(t, armDNS(t, h), "big.test.", dnsmessage.TypeA)
-	if got := addresses(msg); len(got) != bigAnswers {
-		t.Errorf("truncated name answers %d addresses, want %d over TCP", len(got), bigAnswers)
+	sb := armDNS(t, h)
+	gram, err := net.Dial("unix", engine.DNSDatagramSocketPath(sb.VsockSocket))
+	if err != nil {
+		t.Fatalf("dial datagram door: %v", err)
+	}
+	t.Cleanup(func() { _ = gram.Close() })
+	if msg := exchangeDoor(t, gram, "big.test.", dnsmessage.TypeA); !msg.Truncated || len(msg.Answers) != 0 {
+		t.Errorf("datagram door answered truncated=%v with %d answers, want the upstream's truncated reply", msg.Truncated, len(msg.Answers))
+	}
+	if msg := queryDoor(t, sb, "big.test.", dnsmessage.TypeA); msg.Truncated || len(addresses(msg)) != bigAnswers {
+		t.Errorf("stream door answered truncated=%v with %d addresses, want %d over TCP", msg.Truncated, len(addresses(msg)), bigAnswers)
+	}
+}
+
+func TestADNSDialBeforeTheClaimForcesARebind(t *testing.T) {
+	upstream := newFakeNameserver(t)
+	events := &dnsEvents{}
+	h := newHost(t, &fakeEngine{}, poolConfig(testKey, dnsPolicy), func(o *Options) {
+		o.Nameservers = func() []string { return []string{upstream.udp} }
+		o.RecordDNS = events.record
+	})
+	sb := outboundtest.VsockSandbox(t, "sb_dns", testKey)
+	sb.VMName = "sbx-dns-1"
+	h.Prebind(t.Context(), sb)
+	early, err := net.Dial("unix", engine.DNSDatagramSocketPath(sb.VsockSocket))
+	if err != nil {
+		t.Fatalf("dial the pre-bound door: %v", err)
+	}
+	t.Cleanup(func() { _ = early.Close() })
+	if err = writeDNSMsg(early, packQuery(t, dnsmessage.Header{ID: 1}, "public.test.")); err != nil {
+		t.Fatal(err)
+	}
+	if err = h.ArmProxy(t.Context(), sb); err != nil {
+		t.Fatalf("arm proxy: %v", err)
+	}
+	t.Cleanup(func() { h.Disarm(sb.ID, true) })
+	_ = early.SetDeadline(time.Now().Add(2 * time.Second))
+	if answer, err := readDNSMsg(early, dnsMsgMax); err == nil {
+		t.Fatalf("a query queued before the claim got %d bytes under the claim", len(answer))
+	}
+	if got := addresses(queryDoor(t, sb, "public.test.", dnsmessage.TypeA)); len(got) != 2 {
+		t.Errorf("the rebound door answers %v, want two addresses", got)
+	}
+	if n := events.count(DNSAllow); n != 1 {
+		t.Errorf("%d allow events, want only the query made after the claim", n)
 	}
 }
 
@@ -251,7 +297,7 @@ func TestDNSDoorDropsAndCountsMalformedQueries(t *testing.T) {
 				t.Fatalf("write: %v", err)
 			}
 			_ = conn.(*net.UnixConn).CloseWrite()
-			if answer, err := readDNSMsg(conn); err == nil {
+			if answer, err := readDNSMsg(conn, dnsMsgMax); err == nil {
 				t.Fatalf("door answered %d bytes to a malformed query", len(answer))
 			}
 			if got := h.DNSMalformed() - before; got != 1 {
@@ -286,14 +332,11 @@ func FuzzDNSDoor(f *testing.F) {
 		f.Add(seed)
 	}
 	f.Fuzz(func(t *testing.T, stream []byte) {
-		r := newResolver(h, func(DNSEvent) {})
+		r := newResolver(t.Context(), h, func(DNSEvent) {})
 		r.queries.SetLimit(rate.Inf)
 		conn := &fuzzConn{in: bytes.NewReader(stream)}
 		before, sent := h.DNSMalformed(), forwarded.Load()
-		r.serveConn(t.Context(), conn)
-		if len(r.conns) != 0 {
-			t.Fatalf("%d connections left tracked", len(r.conns))
-		}
+		r.serveConn(conn, len(stream)%2 == 0)
 		if conn.maxRead > dnsQueryMax {
 			t.Fatalf("read a %d-byte message, past the %d-byte cap", conn.maxRead, dnsQueryMax)
 		}
@@ -315,16 +358,16 @@ func FuzzDNSDoor(f *testing.F) {
 	})
 }
 
-func TestNameserversReadsResolvConf(t *testing.T) {
+func TestReadNameserversReadsResolvConf(t *testing.T) {
 	dir := t.TempDir()
 	conf := filepath.Join(dir, "resolv.conf")
 	if err := os.WriteFile(conf, []byte("# comment\nnameserver 10.0.0.2\nsearch example\nnameserver fe80::1%eth0\nnameserver bogus\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if got, want := nameservers(conf), []string{"10.0.0.2:53", "[fe80::1%eth0]:53"}; !slices.Equal(got, want) {
+	if got, want := readNameservers(conf), []string{"10.0.0.2:53", "[fe80::1%eth0]:53"}; !slices.Equal(got, want) {
 		t.Errorf("nameservers = %v, want %v", got, want)
 	}
-	if got := nameservers(filepath.Join(dir, "missing")); !slices.Equal(got, []string{"127.0.0.1:53"}) {
+	if got := readNameservers(filepath.Join(dir, "missing")); !slices.Equal(got, []string{"127.0.0.1:53"}) {
 		t.Errorf("nameservers of a missing file = %v, want the loopback default", got)
 	}
 }
@@ -362,7 +405,7 @@ func newFakeNameserver(t testing.TB) *fakeNameserver {
 			}
 			go func() {
 				defer func() { _ = conn.Close() }()
-				if query, err := readDNSMsg(conn); err == nil {
+				if query, err := readDNSMsg(conn, dnsMsgMax); err == nil {
 					_ = writeDNSMsg(conn, fakeAnswer(query, false))
 				}
 			}()
@@ -461,7 +504,7 @@ func exchangeDoor(t *testing.T, conn net.Conn, name string, qtype dnsmessage.Typ
 	if err = writeDNSMsg(conn, query); err != nil {
 		t.Fatalf("write query: %v", err)
 	}
-	raw, err := readDNSMsg(conn)
+	raw, err := readDNSMsg(conn, dnsMsgMax)
 	if err != nil {
 		t.Fatalf("read answer: %v", err)
 	}

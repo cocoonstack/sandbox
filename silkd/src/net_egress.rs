@@ -16,8 +16,10 @@ pub const SOCKS_HOST_VSOCK_PORT: u32 = 2050;
 /// Loopback address of the DNS relay; systemd-resolved owns 127.0.0.53 and 127.0.0.54.
 pub const DNS_ADDR: Ipv4Addr = Ipv4Addr::new(127, 0, 0, 153);
 pub const DNS_PORT: u16 = 53;
-/// Host vsock port of the DNS resolver, mapped like `HOST_VSOCK_PORT`.
+/// Host vsock port of the DNS resolver's stream door, mapped like `HOST_VSOCK_PORT`.
 pub const DNS_HOST_VSOCK_PORT: u32 = 2052;
+/// Host vsock port of the DNS resolver's datagram door, so the host keeps a truncated answer truncated.
+pub const DNS_DATAGRAM_HOST_VSOCK_PORT: u32 = 2053;
 /// Copy buffer per direction; tokio's 8 KiB default costs a syscall pair per 8 KiB in a one-vCPU guest.
 #[cfg(target_os = "linux")]
 const RELAY_BUF: usize = 64 << 10;

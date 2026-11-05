@@ -29,8 +29,10 @@ const (
 	DNSFailed      = "failed"
 
 	resolvConf      = "/etc/resolv.conf"
+	resolvConfTTL   = 5 * time.Second
 	dnsIdle         = 30 * time.Second
 	dnsExchange     = 2 * time.Second
+	dnsAcceptRetry  = 50 * time.Millisecond
 	dnsQueryRate    = 50
 	dnsQueryBurst   = 200
 	dnsRefusalRate  = 1
@@ -44,7 +46,7 @@ const (
 
 var (
 	errNoNameserver = errors.New("no nameserver")
-	errMalformed    = errors.New("malformed dns query")
+	errMalformed    = errors.New("malformed dns message")
 	errAnswerID     = errors.New("dns answer for another query")
 
 	udpBufs = sync.Pool{New: func() any { return new([dnsMsgMax]byte) }}
@@ -63,59 +65,63 @@ type resolvedName struct {
 	expires time.Time
 }
 
+type nameserverList struct {
+	servers []string
+	read    time.Time
+}
+
 type resolver struct {
 	h        *Host
+	ctx      context.Context
+	cancel   context.CancelFunc
 	record   func(DNSEvent)
 	queries  *rate.Limiter
 	refusals *rate.Limiter
 	inflight chan struct{}
 
-	mu     sync.Mutex
-	names  map[netip.Addr]resolvedName
-	conns  map[net.Conn]struct{}
-	closed bool
+	mu    sync.Mutex
+	names map[netip.Addr]resolvedName
 }
 
-func newResolver(h *Host, record func(DNSEvent)) *resolver {
+func newResolver(ctx context.Context, h *Host, record func(DNSEvent)) *resolver {
+	ctx, cancel := context.WithCancel(ctx)
 	return &resolver{
 		h:        h,
+		ctx:      ctx,
+		cancel:   cancel,
 		record:   record,
 		queries:  rate.NewLimiter(dnsQueryRate, dnsQueryBurst),
 		refusals: rate.NewLimiter(dnsRefusalRate, dnsRefusalBurst),
 		inflight: make(chan struct{}, dnsInflight),
 		names:    map[netip.Addr]resolvedName{},
-		conns:    map[net.Conn]struct{}{},
 	}
 }
 
-func (r *resolver) serve(ctx context.Context, ln net.Listener) {
+func (r *resolver) serve(ln net.Listener, datagram bool) {
 	for {
 		conn, err := ln.Accept()
-		if err != nil {
+		if errors.Is(err, net.ErrClosed) {
 			return
 		}
-		go r.serveConn(ctx, conn)
+		if err != nil {
+			time.Sleep(dnsAcceptRetry)
+			continue
+		}
+		go r.serveConn(conn, datagram)
 	}
 }
 
 func (r *resolver) close() {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.closed = true
-	for conn := range r.conns {
-		_ = conn.Close()
-	}
+	r.cancel()
 }
 
-func (r *resolver) serveConn(ctx context.Context, conn net.Conn) {
-	if !r.track(conn) {
-		_ = conn.Close()
-		return
-	}
-	defer r.untrack(conn)
+func (r *resolver) serveConn(conn net.Conn, datagram bool) {
+	defer func() { _ = conn.Close() }()
+	stop := context.AfterFunc(r.ctx, func() { _ = conn.Close() })
+	defer stop()
 	for {
-		_ = conn.SetReadDeadline(time.Now().Add(dnsIdle))
-		query, err := readQuery(conn)
+		_ = conn.SetDeadline(time.Now().Add(dnsIdle))
+		query, err := readDNSMsg(conn, dnsQueryMax)
 		if errors.Is(err, errMalformed) || errors.Is(err, io.ErrUnexpectedEOF) {
 			r.h.dnsMalformed.Add(1)
 			return
@@ -123,14 +129,17 @@ func (r *resolver) serveConn(ctx context.Context, conn net.Conn) {
 		if err != nil {
 			return
 		}
-		answer, pooled, ok := r.answer(ctx, query)
+		r.inflight <- struct{}{}
+		buf := udpBufs.Get().(*[dnsMsgMax]byte)
+		answer, ok := r.answer(query, buf[:], datagram)
+		if ok {
+			err = writeDNSMsg(conn, answer)
+		}
+		udpBufs.Put(buf)
+		<-r.inflight
 		if !ok {
 			r.h.dnsMalformed.Add(1)
 			return
-		}
-		err = writeDNSMsg(conn, answer)
-		if pooled != nil {
-			udpBufs.Put(pooled)
 		}
 		if err != nil {
 			return
@@ -138,67 +147,40 @@ func (r *resolver) serveConn(ctx context.Context, conn net.Conn) {
 	}
 }
 
-func (r *resolver) track(conn net.Conn) bool {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.closed {
-		return false
-	}
-	r.conns[conn] = struct{}{}
-	return true
-}
-
-func (r *resolver) untrack(conn net.Conn) {
-	r.mu.Lock()
-	delete(r.conns, conn)
-	r.mu.Unlock()
-	_ = conn.Close()
-}
-
-// answer returns the reply for query; a non-nil pooled buffer backs it and goes back to udpBufs once the reply is written.
-func (r *resolver) answer(ctx context.Context, query []byte) ([]byte, *[dnsMsgMax]byte, bool) {
+// answer returns the reply to query; an unfiltered upstream reply is returned in buf as received.
+func (r *resolver) answer(query, buf []byte, datagram bool) ([]byte, bool) {
 	hdr, q, ok := parseQuery(query)
 	if !ok {
-		return nil, nil, false
+		return nil, false
 	}
-	ev := DNSEvent{Name: strings.TrimSuffix(q.Name.String(), "."), Type: strings.TrimPrefix(q.Type.String(), "Type")}
 	if !r.queries.Allow() {
-		ev.Decision = DNSRateLimited
 		if r.refusals.Allow() {
-			r.record(ev)
+			r.record(dnsEvent(q, DNSRateLimited))
 		}
-		return failure(hdr, q, dnsmessage.RCodeRefused)
+		return failure(hdr, q, dnsmessage.RCodeRefused), true
 	}
-	r.inflight <- struct{}{}
-	resp, pooled, err := r.exchange(ctx, query)
-	<-r.inflight
+	ev := dnsEvent(q, DNSAllow)
+	resp, err := r.exchange(query, buf, datagram)
 	var drop bool
 	if err == nil {
 		ev.Answers, drop, err = r.scan(resp, hdr.ID, ev.Name)
 	}
-	if err != nil {
-		if pooled != nil {
-			udpBufs.Put(pooled)
-		}
+	switch {
+	case err != nil:
 		ev.Decision = DNSFailed
 		r.record(ev)
-		return failure(hdr, q, dnsmessage.RCodeServerFailure)
-	}
-	if !drop {
-		ev.Decision = DNSAllow
+		return failure(hdr, q, dnsmessage.RCodeServerFailure), true
+	case !drop:
 		r.record(ev)
-		return resp, pooled, true
+		return resp, true
 	}
 	ev.Decision = DNSFiltered
 	r.record(ev)
 	out, err := r.strip(resp)
-	if pooled != nil {
-		udpBufs.Put(pooled)
-	}
 	if err != nil {
-		return failure(hdr, q, dnsmessage.RCodeServerFailure)
+		return failure(hdr, q, dnsmessage.RCodeServerFailure), true
 	}
-	return out, nil, true
+	return out, true
 }
 
 // scan walks resp without allocating: it counts the answers kept, reports whether an address record must go, and remembers the kept answer addresses.
@@ -265,17 +247,9 @@ func (r *resolver) remember(ip netip.Addr, name string, expires time.Time) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if _, ok := r.names[ip]; !ok && len(r.names) >= dnsNamesMax {
-		now := time.Now()
-		for addr, rn := range r.names {
-			if now.After(rn.expires) {
-				delete(r.names, addr)
-			}
-		}
-		if len(r.names) >= dnsNamesMax {
-			for addr := range r.names {
-				delete(r.names, addr)
-				break
-			}
+		for addr := range r.names {
+			delete(r.names, addr)
+			break
 		}
 	}
 	r.names[ip] = resolvedName{name: name, expires: expires}
@@ -291,31 +265,37 @@ func (r *resolver) name(ip netip.Addr) (string, bool) {
 	return rn.name, true
 }
 
-func (r *resolver) exchange(ctx context.Context, query []byte) ([]byte, *[dnsMsgMax]byte, error) {
+func (r *resolver) exchange(query, buf []byte, datagram bool) ([]byte, error) {
 	var errs error
 	for _, server := range r.h.o.Nameservers() {
-		resp, pooled, err := exchangeWith(ctx, server, query)
+		resp, err := exchangeWith(r.ctx, server, query, buf, datagram)
 		if err == nil {
-			return resp, pooled, nil
+			return resp, nil
 		}
 		errs = errors.Join(errs, err)
 	}
-	return nil, nil, cmp.Or(errs, errNoNameserver)
+	return nil, cmp.Or(errs, errNoNameserver)
 }
 
-// exchangeWith asks server over UDP into a pooled buffer, and again over TCP when the reply is truncated.
-func exchangeWith(ctx context.Context, server string, query []byte) ([]byte, *[dnsMsgMax]byte, error) {
-	buf := udpBufs.Get().(*[dnsMsgMax]byte)
-	n, err := exchangeUDP(ctx, server, query, buf[:])
-	if err == nil && (n < dnsHeaderLen || buf[2]&0x02 == 0) {
-		return buf[:n], buf, nil
+func (h *Host) nameservers() []string {
+	if l := h.ns.Load(); l != nil && time.Since(l.read) < resolvConfTTL {
+		return l.servers
 	}
-	udpBufs.Put(buf)
+	l := &nameserverList{servers: readNameservers(resolvConf), read: time.Now()}
+	h.ns.Store(l)
+	return l.servers
+}
+
+// exchangeWith asks server over UDP into buf; a truncated reply goes back as is to a datagram client and is asked again over TCP for a stream one.
+func exchangeWith(ctx context.Context, server string, query, buf []byte, datagram bool) ([]byte, error) {
+	n, err := exchangeUDP(ctx, server, query, buf)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	resp, err := exchangeTCP(ctx, server, query)
-	return resp, nil, err
+	if datagram || n < dnsHeaderLen || buf[2]&0x02 == 0 {
+		return buf[:n], nil
+	}
+	return exchangeTCP(ctx, server, query)
 }
 
 func exchangeUDP(ctx context.Context, server string, query, buf []byte) (int, error) {
@@ -339,7 +319,7 @@ func exchangeTCP(ctx context.Context, server string, query []byte) ([]byte, erro
 	if err = writeDNSMsg(conn, query); err != nil {
 		return nil, err
 	}
-	return readDNSMsg(conn)
+	return readDNSMsg(conn, dnsMsgMax)
 }
 
 func dialUpstream(ctx context.Context, network, server string) (net.Conn, error) {
@@ -350,6 +330,10 @@ func dialUpstream(ctx context.Context, network, server string) (net.Conn, error)
 	}
 	_ = conn.SetDeadline(time.Now().Add(dnsExchange))
 	return conn, nil
+}
+
+func dnsEvent(q dnsmessage.Question, decision string) DNSEvent {
+	return DNSEvent{Name: strings.TrimSuffix(q.Name.String(), "."), Type: strings.TrimPrefix(q.Type.String(), "Type"), Decision: decision}
 }
 
 func resourceHeader(p *dnsmessage.Parser, section int) (dnsmessage.ResourceHeader, error) {
@@ -406,37 +390,25 @@ func parseQuery(query []byte) (dnsmessage.Header, dnsmessage.Question, bool) {
 	return msg.Header, msg.Questions[0], true
 }
 
-// readQuery reads one framed guest query, refusing a length outside a DNS header and dnsQueryMax before it allocates.
-func readQuery(r io.Reader) ([]byte, error) {
-	var size [2]byte
-	if _, err := io.ReadFull(r, size[:]); err != nil {
-		return nil, err
-	}
-	n := binary.BigEndian.Uint16(size[:])
-	if n < dnsHeaderLen || n > dnsQueryMax {
-		return nil, errMalformed
-	}
-	msg := make([]byte, n)
-	if _, err := io.ReadFull(r, msg); err != nil {
-		return nil, err
-	}
-	return msg, nil
-}
-
-func failure(hdr dnsmessage.Header, q dnsmessage.Question, rcode dnsmessage.RCode) ([]byte, *[dnsMsgMax]byte, bool) {
-	out, err := (&dnsmessage.Message{
+func failure(hdr dnsmessage.Header, q dnsmessage.Question, rcode dnsmessage.RCode) []byte {
+	out, _ := (&dnsmessage.Message{
 		ID: hdr.ID, Response: true, OpCode: hdr.OpCode, RecursionDesired: hdr.RecursionDesired, RCode: rcode,
 		Questions: []dnsmessage.Question{q},
 	}).Pack()
-	return out, nil, err == nil
+	return out
 }
 
-func readDNSMsg(r io.Reader) ([]byte, error) {
+// readDNSMsg reads one length-framed message, refusing a length outside a DNS header and limit before it allocates.
+func readDNSMsg(r io.Reader, limit int) ([]byte, error) {
 	var size [2]byte
 	if _, err := io.ReadFull(r, size[:]); err != nil {
 		return nil, err
 	}
-	msg := make([]byte, binary.BigEndian.Uint16(size[:]))
+	n := int(binary.BigEndian.Uint16(size[:]))
+	if n < dnsHeaderLen || n > limit {
+		return nil, errMalformed
+	}
+	msg := make([]byte, n)
 	if _, err := io.ReadFull(r, msg); err != nil {
 		return nil, err
 	}
@@ -452,8 +424,8 @@ func writeDNSMsg(w io.Writer, msg []byte) error {
 	return err
 }
 
-// nameservers reads path's nameserver lines as host:53 addresses, the loopback default when it names none.
-func nameservers(path string) []string {
+// readNameservers reads path's nameserver lines as host:53 addresses, the loopback default when it names none.
+func readNameservers(path string) []string {
 	f, err := os.Open(path) //nolint:gosec // the node's resolver config
 	if err != nil {
 		return []string{"127.0.0.1:53"}

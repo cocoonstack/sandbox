@@ -32,11 +32,7 @@ async fn main() {
     ));
     let dns = SocketAddrV4::new(net_egress::DNS_ADDR, net_egress::DNS_PORT);
     tokio::spawn(relay(dns, net_egress::DNS_HOST_VSOCK_PORT));
-    tokio::spawn(async move {
-        if let Err(e) = net_egress::serve_datagrams(dns, net_egress::DNS_HOST_VSOCK_PORT).await {
-            eprintln!("silkd egress: datagrams on {dns}: {e}");
-        }
-    });
+    tokio::spawn(datagrams(dns, net_egress::DNS_DATAGRAM_HOST_VSOCK_PORT));
     tokio::spawn(async {
         if let Err(e) = imds::serve().await {
             eprintln!("silkd imds: {e}");
@@ -51,5 +47,11 @@ async fn main() {
 async fn relay(listen: SocketAddrV4, host_vsock_port: u32) {
     if let Err(e) = net_egress::serve(listen, host_vsock_port).await {
         eprintln!("silkd egress: relay on {listen}: {e}");
+    }
+}
+
+async fn datagrams(listen: SocketAddrV4, host_vsock_port: u32) {
+    if let Err(e) = net_egress::serve_datagrams(listen, host_vsock_port).await {
+        eprintln!("silkd egress: datagrams on {listen}: {e}");
     }
 }

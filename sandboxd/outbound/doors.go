@@ -25,6 +25,7 @@ type doors struct {
 	ln       net.Listener
 	socks    net.Listener
 	dns      net.Listener
+	dnsGram  net.Listener
 }
 
 func (d *doors) close() {
@@ -32,16 +33,24 @@ func (d *doors) close() {
 		_ = d.srv.Close()
 		d.proxy.Close()
 	}
-	_ = d.ln.Close()
-	if d.socks != nil {
-		_ = d.socks.Close()
-	}
-	if d.dns != nil {
-		_ = d.dns.Close()
+	for _, ln := range [...]net.Listener{d.ln, d.socks, d.dns, d.dnsGram} {
+		if ln != nil {
+			_ = ln.Close()
+		}
 	}
 	if d.resolver != nil {
 		d.resolver.close()
 	}
+}
+
+// stale reports whether a guest dialed a pre-bound door before it was armed, or the doors bound differ from what p serves.
+func (d *doors) stale(p egress.PolicyEvaluator) bool {
+	for _, ln := range [...]net.Listener{d.ln, d.socks, d.dns, d.dnsGram} {
+		if ln != nil && reached(ln) {
+			return true
+		}
+	}
+	return (d.socks != nil) != p.ServesSocks() || (d.dns != nil) != p.ServesDNS()
 }
 
 // doorListener caps a door's live connections; doorConn's NetConn hands splice the *net.UnixConn the kernel copy needs.
@@ -89,25 +98,28 @@ func (c *doorConn) Close() error {
 
 func (c *doorConn) NetConn() net.Conn { return c.UnixConn }
 
-func bindDoors(vsock string, socks, dns bool) (*doors, error) {
-	ln, err := listenUnix(engine.EgressSocketPath(vsock))
-	if err != nil {
-		return nil, fmt.Errorf("listen egress: %w", err)
-	}
-	d := &doors{ln: limitDoor(ln)}
-	if socks {
-		if ln, err = listenUnix(engine.SocksSocketPath(vsock)); err != nil {
-			d.close()
-			return nil, fmt.Errorf("listen socks: %w", err)
+func bindDoors(vsock string, p egress.PolicyEvaluator) (*doors, error) {
+	d := &doors{}
+	for _, door := range []struct {
+		ln   *net.Listener
+		path string
+		name string
+		on   bool
+	}{
+		{&d.ln, engine.EgressSocketPath(vsock), "egress", true},
+		{&d.socks, engine.SocksSocketPath(vsock), "socks", p.ServesSocks()},
+		{&d.dns, engine.DNSSocketPath(vsock), "dns", p.ServesDNS()},
+		{&d.dnsGram, engine.DNSDatagramSocketPath(vsock), "dns datagram", p.ServesDNS()},
+	} {
+		if !door.on {
+			continue
 		}
-		d.socks = limitDoor(ln)
-	}
-	if dns {
-		if ln, err = listenUnix(engine.DNSSocketPath(vsock)); err != nil {
+		ln, err := listenUnix(door.path)
+		if err != nil {
 			d.close()
-			return nil, fmt.Errorf("listen dns: %w", err)
+			return nil, fmt.Errorf("listen %s: %w", door.name, err)
 		}
-		d.dns = limitDoor(ln)
+		*door.ln = limitDoor(ln)
 	}
 	return d, nil
 }
