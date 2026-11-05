@@ -1436,7 +1436,7 @@ func (f *fakeEngine) Start(_ context.Context, name string) error {
 	if _, ok := f.vms[name]; !ok {
 		return fmt.Errorf("vm %s not found", name)
 	}
-	f.stopped[name] = false
+	f.stopped[name], f.paused[name] = false, false
 	return nil
 }
 
@@ -1933,7 +1933,7 @@ func (f *fakeEngine) MigrateReceive(_ context.Context, fromDir, name string, _ t
 	if _, err := os.Stat(filepath.Join(fromDir, "state.json")); err != nil {
 		return types.VMRecord{}, err
 	}
-	f.vms[name], f.stopped[name] = f.sockRoot+"/"+name, true
+	f.vms[name], f.paused[name] = f.sockRoot+"/"+name, true
 	return f.record(name), nil
 }
 
