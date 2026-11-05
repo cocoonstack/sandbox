@@ -58,9 +58,13 @@ func (m *Manager) captureAllowed(sb *types.Sandbox) error {
 }
 
 // exportSource captures a claimed sandbox into exportDir and returns its snapshot, VM name and guest-env presence.
-func (m *Manager) exportSource(ctx context.Context, sb *types.Sandbox, exportDir string) (snap, vmName string, guestEnv bool, err error) {
+func (m *Manager) exportSource(ctx context.Context, sb *types.Sandbox, exportDir, from string) (snap, vmName string, guestEnv bool, err error) {
 	if lockErr := m.lockTransition(sb); lockErr != nil {
 		return "", "", false, lockErr
+	}
+	if from != "" && sb.HibernateSnap != from {
+		sb.Transition.Unlock()
+		return "", "", false, errWokeMeanwhile
 	}
 	if captureErr := m.captureAllowed(sb); captureErr != nil {
 		sb.Transition.Unlock()

@@ -809,7 +809,7 @@ func TestReplicaRestartAdoptsTheRowsCheckpointOfAnInterruptedRound(t *testing.T)
 	if err := a.FlushClaims(); err != nil {
 		t.Fatalf("flush: %v", err)
 	}
-	interrupted, _, publishErr := a.publishCheckpoint(t.Context(), sb, store.CheckpointID(randHex(8)), "replica", sb.Tenant, true)
+	interrupted, _, publishErr := a.publishCheckpoint(t.Context(), sb, store.CheckpointID(randHex(8)), "replica", sb.Tenant, "", true)
 	if publishErr != nil {
 		t.Fatalf("publish: %v", publishErr)
 	}

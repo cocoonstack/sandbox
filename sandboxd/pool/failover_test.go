@@ -2129,7 +2129,7 @@ func assertReleasedForGood(t *testing.T, c *failoverCluster, sb *types.Sandbox, 
 
 func interruptArchive(t *testing.T, m *Manager, sb *types.Sandbox, putCommitted bool) string {
 	t.Helper()
-	ck, _, err := m.publishCheckpoint(t.Context(), sb, store.CheckpointID(randHex(8)), "archive", sb.Tenant, true)
+	ck, _, err := m.publishCheckpoint(t.Context(), sb, store.CheckpointID(randHex(8)), "archive", sb.Tenant, "", true)
 	if err != nil {
 		t.Fatalf("publish: %v", err)
 	}

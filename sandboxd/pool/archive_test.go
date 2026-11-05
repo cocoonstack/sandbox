@@ -107,6 +107,29 @@ func TestArchiveWakeRehibernateWindowAborts(t *testing.T) {
 	}
 }
 
+func TestArchiveNeverCapturesAGuestThatWokeBeforeItsExport(t *testing.T) {
+	eng := newFakeEngine()
+	m := newTestManager(t, eng, archivePool(3600))
+	sb := mustClaim(t, m, testKey)
+	hibernateClaim(t, m, sb)
+	m.ckpts = &stagingStore{Store: m.ckpts, onStage: func() {
+		if _, _, release, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
+			t.Errorf("wake before the export: %v", err)
+		} else {
+			release()
+		}
+	}}
+	if err := m.archive(t.Context(), sb); !errors.Is(err, errWokeMeanwhile) {
+		t.Fatalf("archive: %v, want errWokeMeanwhile", err)
+	}
+	eng.mu.Lock()
+	saves := eng.snapSavesEntered
+	eng.mu.Unlock()
+	if saves != 0 {
+		t.Errorf("the archive paused the woken guest for %d snapshot saves", saves)
+	}
+}
+
 func TestArchiveCkHiddenAcrossNodes(t *testing.T) {
 	shared := t.TempDir()
 	mkMgr := func() *Manager {
@@ -912,6 +935,16 @@ func BenchmarkReapPurgesArchivedClaims(b *testing.B) {
 		b.StartTimer()
 		m.reapOnce(b.Context())
 	}
+}
+
+type stagingStore struct {
+	store.Store
+	onStage func()
+}
+
+func (s *stagingStore) Stage(id string) (string, error) {
+	s.onStage()
+	return s.Store.Stage(id)
 }
 
 type stallingStore struct {

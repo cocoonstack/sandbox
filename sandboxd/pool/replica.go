@@ -92,7 +92,7 @@ func (m *Manager) replicate(ctx context.Context, sb *types.Sandbox) error {
 	m.pendingCks[ckID] = struct{}{}
 	m.mu.Unlock()
 	defer m.untrack(m.pendingCks, ckID)
-	if _, _, err := m.publishCheckpoint(ctx, sb, ckID, "replica", sb.Tenant, true); err != nil {
+	if _, _, err := m.publishCheckpoint(ctx, sb, ckID, "replica", sb.Tenant, "", true); err != nil {
 		return err
 	}
 	var prev string
