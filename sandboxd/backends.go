@@ -24,11 +24,11 @@ import (
 func openBackends(ctx context.Context, cfg *config.Config) (pool.Backends, error) {
 	var b pool.Backends
 	var err error
-	if b.Checkpoints, err = newStoreView(ctx, cfg, "checkpoint-staging", store.CheckpointIDRe); err != nil {
+	if b.Checkpoints, err = newStoreView(ctx, cfg, "checkpoint-staging", store.CheckpointIDRe, false); err != nil {
 		return pool.Backends{}, err
 	}
 	b.SharedCheckpoints = cfg.S3Checkpoints()
-	if b.Templates, err = newStoreView(ctx, cfg, "template-staging", store.TemplateIDRe); err != nil {
+	if b.Templates, err = newStoreView(ctx, cfg, "template-staging", store.TemplateIDRe, true); err != nil {
 		return pool.Backends{}, err
 	}
 	if b.Tenants, err = openTenants(ctx, cfg); err != nil {
@@ -68,9 +68,9 @@ func usageNode(cfg *config.Config) (string, error) {
 	return os.Hostname()
 }
 
-func newStoreView(ctx context.Context, cfg *config.Config, staging string, idRe *regexp.Regexp) (store.Store, error) {
+func newStoreView(ctx context.Context, cfg *config.Config, staging string, idRe *regexp.Regexp, labeled bool) (store.Store, error) {
 	if cfg.S3Checkpoints() {
-		return s3.New(ctx, *cfg.CheckpointStore.S3, filepath.Join(cfg.DataDir, staging), idRe)
+		return s3.New(ctx, *cfg.CheckpointStore.S3, filepath.Join(cfg.DataDir, staging), idRe, labeled)
 	}
 	return dir.New(cmp.Or(cfg.CheckpointDir, filepath.Join(cfg.DataDir, "checkpoints")), idRe)
 }
