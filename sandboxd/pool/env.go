@@ -34,7 +34,6 @@ func (m *Manager) Env(id, tenant string) (types.Env, error) {
 	return sb.Env.Redacted(), nil
 }
 
-// writeEnv stores next's env for claim id.
 func (m *Manager) writeEnv(ctx context.Context, id, tenant, verb string, next func(types.Env) types.Env) error {
 	sb, ok := m.byID(id)
 	if !ok || !tenantOwns(tenant, sb.Tenant) {
