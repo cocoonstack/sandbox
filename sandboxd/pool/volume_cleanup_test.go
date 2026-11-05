@@ -59,7 +59,6 @@ func TestOwnershipTransferReleasesRunningVolumeHoldAfterRemoval(t *testing.T) {
 	}
 }
 
-// dispatchBlocked moves the removal queue into workers parked on a full maintenance semaphore.
 func dispatchBlocked(ctx context.Context, t *testing.T, m *Manager) *sync.WaitGroup {
 	t.Helper()
 	for range cap(m.maintSem) {

@@ -204,7 +204,6 @@ pub async fn wait_code(child: &mut tokio::process::Child) -> i32 {
     child.wait().await.map_or(-1, exit_code)
 }
 
-/// Makes the calling process a session leader and adopts fd 0 as its controlling terminal.
 fn make_controlling_tty() -> std::io::Result<()> {
     // SAFETY: setsid and ioctl take no pointers, so no memory precondition applies.
     unsafe {

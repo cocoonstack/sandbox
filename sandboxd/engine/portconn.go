@@ -48,7 +48,7 @@ func (g *guestPortConn) Read(p []byte) (int, error) {
 		case "data":
 			g.pending = frame.Data
 		case "done", "":
-			return 0, io.EOF // the guest closed the forwarded port
+			return 0, io.EOF
 		default:
 			return 0, fmt.Errorf("port stream ended: %s", frame.Type)
 		}
@@ -72,7 +72,6 @@ func (g *guestPortConn) Write(p []byte) (int, error) {
 	written := 0
 	for len(p) > 0 {
 		n := min(len(p), wire.PortWriteChunk)
-		// The hot relay path reuses one buffer instead of allocating per chunk.
 		g.wbuf = wire.AppendBulkRequest(g.wbuf, "data", p[:n])
 		if _, err := g.Conn.Write(g.wbuf); err != nil {
 			return written, err

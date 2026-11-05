@@ -146,8 +146,7 @@ func statRPC(conn net.Conn) error {
 	return nil
 }
 
-// bufferedConn reads through the handshake reader so bytes coalesced behind
-// the 101 are never lost.
+// bufferedConn reads through the handshake reader so bytes behind the 101 are kept.
 type bufferedConn struct {
 	net.Conn
 	r *bufio.Reader

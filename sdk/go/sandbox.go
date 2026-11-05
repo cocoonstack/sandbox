@@ -75,7 +75,7 @@ type Sandbox struct {
 
 	c     *Client
 	token string
-	owner string // data-plane address (owner node), from the claim
+	owner string
 	proto atomic.Uint32
 	pool  agentPool
 }

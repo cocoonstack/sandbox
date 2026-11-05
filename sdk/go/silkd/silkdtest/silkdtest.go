@@ -149,7 +149,7 @@ func serveExec(conn net.Conn, r *bufio.Reader, req *wire.Exec) {
 	case "false":
 		send(conn, &wire.Exit{Code: 1})
 	case "sleep":
-		_, _ = io.Copy(io.Discard, r) // hold the RPC open until disconnect
+		_, _ = io.Copy(io.Discard, r)
 	default:
 		errFrame(conn, wire.KindNotFound, "silkdtest: no such command "+req.Argv[0])
 	}

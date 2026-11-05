@@ -116,8 +116,7 @@ func adbHandshake(ctx context.Context, sb *sandbox.Sandbox) error {
 	}
 }
 
-// dialAdb sends one ADB CNXN message; adbd replies CNXN (unauthenticated)
-// or AUTH — either proves a live endpoint.
+// dialAdb sends one ADB CNXN; a CNXN or AUTH reply proves a live adbd.
 func dialAdb(ctx context.Context, sb *sandbox.Sandbox) (string, error) {
 	pc, err := sb.DialPort(ctx, adbPort)
 	if err != nil {

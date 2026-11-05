@@ -191,8 +191,7 @@ func runLive(ctx context.Context, client *sandbox.Client, template, volume, prob
 	return nil
 }
 
-// runWritable proves the publish workflow: a writer's bytes survive its own
-// release, it excludes concurrent claims, and the next reader sees them.
+// runWritable proves a writer's bytes outlive its release, exclude a concurrent writer, and reach the next reader.
 func runWritable(ctx context.Context, client *sandbox.Client, template, volume string) error {
 	const (
 		mount = "/datasets/e2e-rw"
