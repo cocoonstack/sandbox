@@ -226,6 +226,23 @@ func TestADNSDialBeforeTheClaimForcesARebind(t *testing.T) {
 	}
 }
 
+func TestDNSDoorMovesPastANameserverThatAnswersServfail(t *testing.T) {
+	upstream := newFakeNameserver(t)
+	failing := newServfailNameserver(t)
+	h := newHost(t, &fakeEngine{}, poolConfig(testKey, dnsPolicy), func(o *Options) {
+		o.Nameservers = func() []string { return []string{failing, upstream.udp} }
+	})
+	if got := addresses(queryDoor(t, armDNS(t, h), "public.test.", dnsmessage.TypeA)); len(got) != 2 {
+		t.Errorf("answers %v, want the second nameserver's two addresses", got)
+	}
+	allFailing := newHost(t, &fakeEngine{}, poolConfig(testKey, dnsPolicy), func(o *Options) {
+		o.Nameservers = func() []string { return []string{failing, failing} }
+	})
+	if msg := queryDoor(t, armDNS(t, allFailing), "public.test.", dnsmessage.TypeA); msg.RCode != dnsmessage.RCodeServerFailure {
+		t.Errorf("rcode %v with every nameserver failing, want their SERVFAIL", msg.RCode)
+	}
+}
+
 func TestDNSDoorAnswersServfailWhenNoNameserverAnswers(t *testing.T) {
 	dead, err := net.ListenPacket("udp", "127.0.0.1:0")
 	if err != nil {
@@ -416,6 +433,31 @@ func newFakeNameserver(t testing.TB) *fakeNameserver {
 		}
 	}()
 	return &fakeNameserver{udp: pc.LocalAddr().String()}
+}
+
+func newServfailNameserver(t testing.TB) string {
+	t.Helper()
+	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = pc.Close() })
+	go func() {
+		buf := make([]byte, dnsMsgMax)
+		for {
+			n, from, err := pc.ReadFrom(buf)
+			if err != nil {
+				return
+			}
+			var q dnsmessage.Message
+			if q.Unpack(buf[:n]) != nil {
+				continue
+			}
+			out, _ := (&dnsmessage.Message{ID: q.ID, Response: true, RCode: dnsmessage.RCodeServerFailure, Questions: q.Questions}).Pack()
+			_, _ = pc.WriteTo(out, from)
+		}
+	}()
+	return pc.LocalAddr().String()
 }
 
 func fakeAnswer(query []byte, udp bool) []byte {

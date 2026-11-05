@@ -268,12 +268,20 @@ func (r *resolver) name(ip netip.Addr) (string, bool) {
 
 func (r *resolver) exchange(query, buf []byte, datagram bool) ([]byte, error) {
 	var errs error
+	var last []byte
 	for _, server := range r.h.o.Nameservers() {
 		resp, err := exchangeWith(r.ctx, server, query, buf, datagram)
-		if err == nil {
+		switch {
+		case err != nil:
+			errs = errors.Join(errs, err)
+		case !nextServerRCode(resp):
 			return resp, nil
+		default:
+			last = append(last[:0], resp...)
 		}
-		errs = errors.Join(errs, err)
+	}
+	if last != nil {
+		return last, nil
 	}
 	return nil, cmp.Or(errs, errNoNameserver)
 }
@@ -331,6 +339,17 @@ func dialUpstream(ctx context.Context, network, server string) (net.Conn, error)
 	}
 	_ = conn.SetDeadline(time.Now().Add(dnsExchange))
 	return conn, nil
+}
+
+func nextServerRCode(resp []byte) bool {
+	if len(resp) < 4 {
+		return false
+	}
+	switch dnsmessage.RCode(resp[3] & 0x0f) {
+	case dnsmessage.RCodeServerFailure, dnsmessage.RCodeNotImplemented, dnsmessage.RCodeRefused:
+		return true
+	}
+	return false
 }
 
 func dnsEvent(q dnsmessage.Question, decision string) DNSEvent {
