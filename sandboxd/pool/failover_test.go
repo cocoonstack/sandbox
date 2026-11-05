@@ -301,6 +301,41 @@ func TestFailoverADrainingNodeDoesNotAdopt(t *testing.T) {
 	mustAdopt(t, b, sb, "adopt once the drain lifts")
 }
 
+func TestFailoverAdoptionIgnoresClaimCapsAndAWakeStillChecksMaxRunning(t *testing.T) {
+	c := newFailoverCluster(t)
+	a, b := c.node(t, "a", t.TempDir(), keepAnHour), c.node(t, "b", t.TempDir(), keepAnHour)
+	for _, m := range []*Manager{a, b} {
+		if err := m.PutTenant(t.Context(), tenants.TenantSpec{Name: "acme", Token: "tok-acme", MaxClaims: 1}); err != nil {
+			t.Fatalf("put tenant: %v", err)
+		}
+	}
+	lost, err := claimAny(t.Context(), a, testKey, ClaimOptions{Tenant: "acme"})
+	if err != nil {
+		t.Fatalf("claim on a: %v", err)
+	}
+	mustArchive(t, a, lost)
+	if _, err = claimAny(t.Context(), b, testKey, ClaimOptions{Tenant: "acme"}); err != nil {
+		t.Fatalf("claim on b: %v", err)
+	}
+	editView(b, func(v *configView) { v.maxClaims, v.maxRunning = 1, 1 })
+	c.expire("a")
+
+	mustAdopt(t, b, lost, "adopt on a node at node and tenant max_claims")
+	if _, _, _, err = b.WakeAgentSocket(t.Context(), lost.ID, lost.Token); !errors.Is(err, ErrQuota) {
+		t.Fatalf("wake at max_running: %v, want ErrQuota", err)
+	}
+	sb, held := b.byID(lost.ID)
+	if !held {
+		t.Fatal("the refused wake dropped the adopted claim")
+	}
+	b.mu.Lock()
+	archived := sb.ArchiveCk != ""
+	b.mu.Unlock()
+	if _, g := b.Info(); !archived || g.Claimed != 2 || g.Running != 1 {
+		t.Errorf("archived %v gauges %+v, want the claim kept archived beside one running claim", archived, g)
+	}
+}
+
 func TestFailoverAdoptionNeedsTheToken(t *testing.T) {
 	c := newFailoverCluster(t)
 	a, b := c.node(t, "a", t.TempDir(), keepAnHour), c.node(t, "b", t.TempDir(), keepAnHour)
