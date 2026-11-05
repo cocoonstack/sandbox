@@ -419,7 +419,6 @@ func TestLoadDefaultsWarmOnlyWhenOmitted(t *testing.T) {
 		{"omitted", `{"template":"rt:24.04","net":"none","size":"small"}`, defaultWarm},
 		{"explicit zero", `{"template":"rt:24.04","net":"none","size":"small","warm":0}`, 0},
 		{"explicit zero under warm_max", `{"template":"rt:24.04","net":"none","size":"small","warm":0,"warm_max":8}`, 0},
-		{"explicit zero, other case", `{"template":"rt:24.04","net":"none","size":"small","WARM":0}`, 0},
 		{"explicit three", `{"template":"rt:24.04","net":"none","size":"small","warm":3}`, 3},
 	}
 	for _, tt := range tests {

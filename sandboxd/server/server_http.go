@@ -109,7 +109,7 @@ func hijack(ctx context.Context, w http.ResponseWriter) (net.Conn, *bufio.Reader
 
 func decodeBody[T any](w http.ResponseWriter, r *http.Request) (T, bool) {
 	var v T
-	if err := json.UnmarshalRead(http.MaxBytesReader(w, r.Body, maxBodyBytes), &v, json.MatchCaseInsensitiveNames(true)); err != nil {
+	if err := json.UnmarshalRead(http.MaxBytesReader(w, r.Body, maxBodyBytes), &v); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid request body")
 		return v, false
 	}
@@ -119,7 +119,7 @@ func decodeBody[T any](w http.ResponseWriter, r *http.Request) (T, bool) {
 // decodeOptionalBody reads an absent body as the zero value, for verbs whose fields all default.
 func decodeOptionalBody[T any](w http.ResponseWriter, r *http.Request) (T, bool) {
 	var v T
-	err := json.UnmarshalDecode(jsontext.NewDecoder(http.MaxBytesReader(w, r.Body, maxBodyBytes)), &v, json.MatchCaseInsensitiveNames(true))
+	err := json.UnmarshalDecode(jsontext.NewDecoder(http.MaxBytesReader(w, r.Body, maxBodyBytes)), &v)
 	if err != nil && !errors.Is(err, io.EOF) {
 		writeErr(w, http.StatusBadRequest, "invalid request body")
 		return v, false
