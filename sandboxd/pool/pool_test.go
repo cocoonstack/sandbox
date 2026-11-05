@@ -1313,6 +1313,7 @@ type fakeEngine struct {
 	liveVolumeSupportErr error
 	liveVolumeHook       func(string) error
 	inspectHook          func()
+	inspectFails         int
 
 	startedReaders   []string
 	attachedCopies   []string
@@ -1633,9 +1634,16 @@ func (f *fakeEngine) Inspect(ctx context.Context, name string) (types.VMRecord, 
 	f.inspects++
 	hook := f.inspectHook
 	f.inspectHook = nil
+	failing := f.inspectFails > 0
+	if failing {
+		f.inspectFails--
+	}
 	f.mu.Unlock()
 	if hook != nil {
 		hook()
+	}
+	if failing {
+		return types.VMRecord{}, false, errors.New("cocoon unreachable")
 	}
 	vms, _ := f.list(ctx)
 	i := slices.IndexFunc(vms, func(vm types.VMRecord) bool { return vm.Config.Name == name })
