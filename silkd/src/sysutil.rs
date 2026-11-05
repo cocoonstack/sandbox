@@ -159,7 +159,6 @@ pub fn openpty(cols: u16, rows: u16) -> std::io::Result<(OwnedFd, OwnedFd)> {
     Ok((pty.master, pty.slave))
 }
 
-/// Registers an owned or borrowed fd with the tokio reactor for readiness-driven I/O.
 pub fn watch_fd<T: AsFd + AsRawFd>(fd: T) -> std::io::Result<AsyncFd<T>> {
     // SAFETY: AsFd's I/O-safety contract keeps the raw fd open while `fd`, and so the AsyncFd, lives.
     unsafe { AsyncFd::register(fd) }.map_err(|e| e.into_parts().1)
@@ -247,7 +246,6 @@ pub fn if_up(name: &str, addr: Ipv4Addr, prefix: u8) -> std::io::Result<()> {
     if_ioctl(fd, libc::SIOCSIFFLAGS, &mut req)
 }
 
-/// Sets the MTU of interface `name`.
 #[cfg(target_os = "linux")]
 pub fn if_set_mtu(name: &str, mtu: u16) -> std::io::Result<()> {
     let sock = ctl_socket()?;
@@ -256,7 +254,6 @@ pub fn if_set_mtu(name: &str, mtu: u16) -> std::io::Result<()> {
     if_ioctl(sock.as_raw_fd(), libc::SIOCSIFMTU, &mut req)
 }
 
-/// Adds an IPv4 route to `dst/prefix` on `dev`, through `gateway` when given.
 #[cfg(target_os = "linux")]
 pub fn route_add(
     dev: &str,
@@ -280,7 +277,6 @@ pub fn route_add(
     check(unsafe { libc::ioctl(sock.as_raw_fd(), libc::SIOCADDRT as _, &mut rt) })
 }
 
-/// Switches `fd` between blocking and nonblocking mode.
 pub fn set_nonblocking(fd: BorrowedFd<'_>, on: bool) -> std::io::Result<()> {
     let flags = OFlag::from_bits_retain(fcntl(fd, FcntlArg::F_GETFL)?);
     let next = if on {
@@ -294,7 +290,6 @@ pub fn set_nonblocking(fd: BorrowedFd<'_>, on: bool) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Writes all of `buf` to blocking `fd`.
 pub fn write_all_fd(fd: BorrowedFd<'_>, mut buf: &[u8]) -> std::io::Result<()> {
     while !buf.is_empty() {
         match nix::unistd::write(fd, buf) {
@@ -452,7 +447,6 @@ fn lookup_user(user: &str) -> Result<(u32, u32, PathBuf), String> {
     }
 }
 
-/// A socket to carry interface and route ioctls.
 #[cfg(target_os = "linux")]
 fn ctl_socket() -> std::io::Result<std::net::UdpSocket> {
     std::net::UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0))

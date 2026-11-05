@@ -3,7 +3,6 @@
 use std::io;
 use std::net::Ipv4Addr;
 
-/// Host vsock port of the packet stream.
 pub const HOST_VSOCK_PORT: u32 = 2051;
 /// The guest's address, the same in every box; the host tells boxes apart by their vsock stream.
 pub const GUEST_ADDR: Ipv4Addr = Ipv4Addr::new(100, 64, 0, 2);
@@ -12,11 +11,9 @@ pub const PEER_ADDR: Ipv4Addr = Ipv4Addr::new(100, 64, 0, 1);
 pub const PREFIX: u8 = 30;
 pub const VERSION: u16 = 1;
 pub const HELLO_LEN: usize = 12;
-/// The virtio-net header that leads every frame's packet.
 pub const VNET_HDR_LEN: usize = 10;
 /// The largest frame body: a virtio-net header and a 64 KiB GSO packet.
 pub const MAX_FRAME: usize = VNET_HDR_LEN + 65535;
-/// Host hello flag: packet mode is on for this box.
 pub const FLAG_ON: u16 = 0x01;
 
 /// Offload bits in a hello, equal to the kernel's `TUN_F_*` values.
@@ -99,7 +96,6 @@ mod linux {
     /// Serializes tun_up, tun_down and the boot ask through teardown, so a verb answers only after the last one finished.
     static SWITCH: Mutex<()> = Mutex::new(());
 
-    /// How a session moves packets.
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub enum Io {
         Uring,
@@ -116,7 +112,6 @@ mod linux {
         }
     }
 
-    /// How a session ended.
     #[derive(Debug, PartialEq, Eq)]
     pub enum Flow {
         /// The host turned packet mode off for this box.
@@ -176,7 +171,6 @@ mod linux {
         }
     }
 
-    /// A link thread's stop signal and the stream it may block on.
     struct Link {
         stopping: AtomicBool,
         configured: Arc<AtomicBool>,
@@ -488,7 +482,6 @@ pub fn next_frame(buf: &[u8]) -> io::Result<Option<usize>> {
     Ok((buf.len() >= 4 + len).then_some(len))
 }
 
-/// Packet mode needs a Linux tun device.
 #[cfg(not(target_os = "linux"))]
 pub fn up() -> io::Result<()> {
     Err(io::Error::new(
