@@ -223,8 +223,9 @@ func TestWakeResolvesDanglingIntent(t *testing.T) {
 	sb := mustClaim(t, m, testKey)
 	leaveDanglingIntent(t, m, eng, sb)
 
-	eng.hibernateErr = nil
-	eng.snapListErr = nil
+	eng.mu.Lock()
+	eng.hibernateErr, eng.snapListErr = nil, nil
+	eng.mu.Unlock()
 	sock, _, _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token)
 	if err != nil {
 		t.Fatalf("wake: %v", err)
