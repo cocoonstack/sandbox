@@ -76,6 +76,7 @@ func TestNodeAtCapacityParksRefillInsteadOfRetrying(t *testing.T) {
 		for range 5 {
 			m.refillOnce(t.Context())
 		}
+		synctest.Wait()
 		if n := eng.cloneCount(); n != attempts {
 			t.Errorf("clones=%d after parking, want %d: a parked node must not attempt again", n, attempts)
 		}

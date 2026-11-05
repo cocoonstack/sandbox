@@ -179,11 +179,12 @@ func edgeTLS(addr, caCert string) (*tls.Config, error) {
 func dialAgent(ctx context.Context, addr, id, token string, tlsCfg *tls.Config) (net.Conn, error) {
 	host := strings.TrimPrefix(strings.TrimPrefix(addr, "https://"), "http://")
 	var d net.Dialer
-	raw, err := d.DialContext(ctx, "tcp", host)
+	dialed, err := d.DialContext(ctx, "tcp", host)
 	if err != nil {
 		return nil, err
 	}
-	stop := context.AfterFunc(ctx, func() { _ = raw.Close() })
+	raw := dialed
+	stop := context.AfterFunc(ctx, func() { _ = dialed.Close() })
 	defer stop()
 	scheme := "http"
 	if tlsCfg != nil {

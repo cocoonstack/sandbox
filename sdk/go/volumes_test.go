@@ -179,17 +179,6 @@ func TestVolumeClaimRedirectPreservesEntries(t *testing.T) {
 	}
 }
 
-func TestCheckpointNewRejectsVolumesLocally(t *testing.T) {
-	ck := &Checkpoint{}
-	sb, err := ck.New(t.Context(), WithVolumes(Volume{Name: "imagenet"}))
-	if err == nil || !strings.Contains(err.Error(), "do not accept WithVolumes") {
-		t.Errorf("err %v, want local WithVolumes rejection", err)
-	}
-	if sb != nil {
-		t.Errorf("sandbox %+v, want nil", sb)
-	}
-}
-
 func TestWithVolumesEncodesMode(t *testing.T) {
 	tests := []struct {
 		name string

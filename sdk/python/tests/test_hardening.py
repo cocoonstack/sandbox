@@ -72,6 +72,7 @@ def test_watcher_ends_cleanly_on_garbage_frame(conn_pair):
     guest_sock.close()
     watcher = Watcher(conn)
     assert list(watcher) == []
+    assert isinstance(watcher.error, ProtocolError), watcher.error
 
 
 @pytest.mark.parametrize(

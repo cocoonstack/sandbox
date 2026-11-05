@@ -64,70 +64,6 @@ func TestFixtureCorpusRoundTrips(t *testing.T) {
 }
 
 func TestEveryVerbHasAFixture(t *testing.T) {
-	allRequests := []Request{
-		Exec{},
-		Info{},
-		Ps{},
-		Kill{},
-		Attach{},
-		Logs{},
-		SessionCreate{},
-		SessionList{},
-		SessionRm{},
-		Stdin{},
-		StdinClose{},
-		FsWrite{},
-		FsRead{},
-		FsList{},
-		FsStat{},
-		FsMkdir{},
-		FsRm{},
-		FsRename{},
-		FsPush{},
-		FsPull{},
-		FsFind{},
-		FsReplace{},
-		FsWatch{},
-		PtyOpen{},
-		PtyResize{},
-		PortForward{},
-		GitClone{},
-		GitStatus{},
-		GitAdd{},
-		GitCommit{},
-		GitPush{},
-		GitPull{},
-		GitBranch{},
-		LspStart{},
-		LspRequest{},
-		LspStop{},
-		Data{},
-		DataEnd{},
-	}
-	allResponses := []Response{
-		Started{},
-		Stdout{},
-		Stderr{},
-		Exit{},
-		Done{},
-		Ready{},
-		ErrorResp{},
-		InfoResp{},
-		Procs{},
-		DataResp{},
-		Entries{},
-		Stat{},
-		SessionCreated{},
-		Sessions{},
-		Match{},
-		Replaced{},
-		Event{},
-		GitStatusResult{},
-		GitCommitResult{},
-		GitBranches{},
-		LspStarted{},
-	}
-
 	entries, err := os.ReadDir(fixtureDir)
 	if err != nil {
 		t.Fatalf("fixtures dir: %v", err)
@@ -150,14 +86,14 @@ func TestEveryVerbHasAFixture(t *testing.T) {
 			}
 		}
 	}
-	for _, r := range allRequests {
-		if !haveReq[r.Op()] {
-			t.Errorf("request %q has no fixture", r.Op())
+	for op := range requestDecoders {
+		if !haveReq[op] {
+			t.Errorf("request %q has no fixture", op)
 		}
 	}
-	for _, r := range allResponses {
-		if !haveResp[r.RespType()] {
-			t.Errorf("response %q has no fixture", r.RespType())
+	for typ := range responseDecoders {
+		if !haveResp[typ] {
+			t.Errorf("response %q has no fixture", typ)
 		}
 	}
 }

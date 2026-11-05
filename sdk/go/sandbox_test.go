@@ -164,11 +164,7 @@ func TestFirstCallSendsItsFramesAheadOfThe101(t *testing.T) {
 		defer conn.Close()
 		_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
 		var got []string
-		for range 1 {
-			line, readErr := brw.ReadBytes('\n')
-			if readErr != nil {
-				break
-			}
+		if line, readErr := brw.ReadBytes('\n'); readErr == nil {
 			if req, decodeErr := wire.DecodeRequest(line); decodeErr == nil {
 				got = append(got, req.Op())
 			}

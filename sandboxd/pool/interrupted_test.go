@@ -470,14 +470,14 @@ func TestReconcileWithoutASnapshotListSettlesAStoppedHibernate(t *testing.T) {
 func TestACaptureSettlesTheIntentAFailedHibernateLeft(t *testing.T) {
 	for _, tt := range []struct {
 		name    string
-		capture func(m *Manager, sb *types.Sandbox) error
+		capture func(ctx context.Context, m *Manager, sb *types.Sandbox) error
 	}{
-		{"fork", func(m *Manager, sb *types.Sandbox) error {
-			_, err := m.Fork(t.Context(), sb.ID, Cred{Token: sb.Token}, 1, 0, "", "")
+		{"fork", func(ctx context.Context, m *Manager, sb *types.Sandbox) error {
+			_, err := m.Fork(ctx, sb.ID, Cred{Token: sb.Token}, 1, 0, "", "")
 			return err
 		}},
-		{"checkpoint", func(m *Manager, sb *types.Sandbox) error {
-			_, err := m.Checkpoint(t.Context(), sb.ID, Cred{Token: sb.Token}, "", "")
+		{"checkpoint", func(ctx context.Context, m *Manager, sb *types.Sandbox) error {
+			_, err := m.Checkpoint(ctx, sb.ID, Cred{Token: sb.Token}, "", "")
 			return err
 		}},
 	} {
@@ -491,7 +491,7 @@ func TestACaptureSettlesTheIntentAFailedHibernateLeft(t *testing.T) {
 			m.mu.Lock()
 			sb.PendingSnap = interruptedHib
 			m.mu.Unlock()
-			if err := tt.capture(m, sb); err != nil {
+			if err := tt.capture(t.Context(), m, sb); err != nil {
 				t.Fatalf("capture: %v", err)
 			}
 			if len(eng.snapSaves) != 0 || sb.HibernateSnap != interruptedHib {
