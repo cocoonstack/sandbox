@@ -858,6 +858,14 @@ func TestMoveRefusesClaimsThatCannotMove(t *testing.T) {
 	if len(fakeOf(mc.s).captures) != 0 {
 		t.Errorf("a refused move captured %v", fakeOf(mc.s).captures)
 	}
+	fakeOf(mc.s).migrateSupportErr = nil
+	fakeOf(mc.t).migrateSupportErr = errors.New("cocoon too old")
+	if _, err := mc.s.Move(t.Context(), sb.ID, "b", time.Minute); !errors.Is(err, ErrNotMovable) {
+		t.Errorf("move to a cocoon without migration: %v, want ErrNotMovable", err)
+	}
+	if len(mc.p.roundBudgets) != 0 {
+		t.Errorf("a move the target refused sent %d rounds", len(mc.p.roundBudgets))
+	}
 }
 
 func TestMoveRestartResolvesAJournaledMoveThroughItsRecord(t *testing.T) {
