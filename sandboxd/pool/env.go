@@ -67,7 +67,7 @@ func (m *Manager) writeEnv(ctx context.Context, id, tenant, verb string, next fu
 		return err
 	}
 	if fresh := env.InjectsChanged(prev); fresh != nil {
-		if gap := m.view.Load().out.InjectGap(sb, fresh, m.claimPooledLocked); len(gap) > 0 {
+		if gap := m.view.Load().out.InjectGap(sb, fresh); len(gap) > 0 {
 			m.mu.Unlock()
 			return fmt.Errorf("%w: inject %s", ErrBadEnv, strings.Join(gap, ", "))
 		}
@@ -148,7 +148,7 @@ func (m *Manager) checkInjects(v *configView, sbs []*types.Sandbox) error {
 		if !sb.Env.HasInject() {
 			continue
 		}
-		if gap := v.out.InjectGap(sb, sb.Env, m.claimPooled); len(gap) > 0 {
+		if gap := v.out.InjectGap(sb, sb.Env); len(gap) > 0 {
 			return fmt.Errorf("%w: inject %s", ErrBadEnv, strings.Join(gap, ", "))
 		}
 	}

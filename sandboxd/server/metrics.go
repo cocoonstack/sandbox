@@ -42,7 +42,7 @@ func (s *Server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
 	scalar("anon_bytes", "node anon memory, 0 when memory_limit has no anon limit", g.AnonBytes)
 
 	if tenants := s.mgr.TenantClaims(); len(tenants) > 0 {
-		metric("tenant_claims", "gauge", "live claims per configured tenant")
+		metric("tenant_claims", "gauge", "live claims per tenant holding any")
 		for _, name := range slices.Sorted(maps.Keys(tenants)) {
 			_, _ = fmt.Fprintf(w, "sandboxd_tenant_claims{tenant=%q} %d\n", name, tenants[name])
 		}

@@ -71,7 +71,7 @@ type Store interface {
 	ReadMeta(ctx context.Context, id string) ([]byte, error)
 	// ReadDigest returns a record's export digest, empty when it was published undigested.
 	ReadDigest(ctx context.Context, id string) (string, error)
-	// Metas lists the metadata and digest of every record in this instance's id namespace.
+	// Metas lists every record of this instance's id namespace, with labels where the store reads them.
 	Metas(ctx context.Context) ([]Record, error)
 	// SetLabels replaces a record's labels; nil removes them. The caller holds the record lock.
 	SetLabels(ctx context.Context, id string, labels []byte) error

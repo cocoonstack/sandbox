@@ -64,7 +64,7 @@ impl Table {
             io: tokio::sync::Mutex::new(Io {
                 stdin,
                 stdout,
-                _child: child,
+                child,
                 cmd_buf: String::new(),
                 acc: Vec::new(),
                 frame: Vec::new(),
@@ -188,7 +188,7 @@ impl Session {
 struct Io {
     stdin: ChildStdin,
     stdout: ChildStdout,
-    _child: Child,
+    child: Child,
     cmd_buf: String,
     acc: Vec<u8>,
     frame: Vec<u8>,
@@ -217,17 +217,14 @@ impl Io {
         let keep = mb.len().saturating_sub(1);
         self.acc.clear();
         loop {
-            self.acc.reserve(READ_CHUNK);
-            let n = self.stdout.read_buf(&mut self.acc).await?;
-            if n == 0 {
+            if self.read_more().await? == 0 {
                 return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "shell exited"));
             }
             if let Some(pos) = memchr::memmem::find(&self.acc, mb) {
                 emit(&mut out, &mut self.frame, &self.acc[..pos]).await;
                 self.acc.drain(..pos + mb.len());
                 while memchr::memchr(b'\n', &self.acc).is_none() && self.acc.len() < EXIT_TAIL_MAX {
-                    self.acc.reserve(READ_CHUNK);
-                    if self.stdout.read_buf(&mut self.acc).await? == 0 {
+                    if self.read_more().await? == 0 {
                         break;
                     }
                 }
@@ -243,6 +240,15 @@ impl Io {
                 emit(&mut out, &mut self.frame, &self.acc[..upto]).await;
                 self.acc.drain(..upto);
             }
+        }
+    }
+
+    async fn read_more(&mut self) -> io::Result<usize> {
+        self.acc.reserve(READ_CHUNK);
+        tokio::select! {
+            biased;
+            n = self.stdout.read_buf(&mut self.acc) => n,
+            _ = self.child.wait() => Ok(0),
         }
     }
 }

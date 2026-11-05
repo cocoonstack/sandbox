@@ -10,7 +10,6 @@ import pytest
 from conftest import accept_upgrade, sandbox_at, wait_until
 
 from cocoonsandbox import SilkdError
-from cocoonsandbox.frames import KEEP_ALIVE_PROTO
 
 INPUT_OPS = ("stdin", "stdin_close", "data", "data_end")
 
@@ -64,7 +63,7 @@ class FakeAgent:
 
     def _answer(self, op: str) -> list:
         if op == "info":
-            return [{"type": "info", "version": "fake", "proto": KEEP_ALIVE_PROTO, "uptime_secs": 0, "procs": 0}]
+            return [{"type": "info", "version": "fake", "uptime_secs": 0, "procs": 0}]
         if op == "fs_stat":
             return [{"type": "stat", "info": {"kind": "dir", "size": 0, "mode": 0o755, "mtime_epoch_secs": 0}}]
         if op == "exec":
@@ -145,7 +144,7 @@ def test_run_stops_feeding_stdin_once_the_command_exits():
             for line in iter(reader.readline, b""):
                 op = json.loads(line)["op"]
                 if op == "info":
-                    info = {"type": "info", "version": "fake", "proto": KEEP_ALIVE_PROTO, "uptime_secs": 0}
+                    info = {"type": "info", "version": "fake", "uptime_secs": 0}
                     conn.sendall(json.dumps(info).encode() + b"\n")
                 elif op == "exec":
                     conn.sendall(b'{"type":"started","pid":1}\n{"type":"exit","code":0}\n')

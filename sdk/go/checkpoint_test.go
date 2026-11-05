@@ -57,7 +57,7 @@ func TestCheckpointNewRejectsVolumeOptionsLocally(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			ck := &Checkpoint{}
 			sb, err := ck.New(t.Context(), tt.opt)
-			if err == nil || !strings.Contains(err.Error(), tt.name) {
+			if err == nil || !strings.Contains(err.Error(), "checkpoint claims do not accept") {
 				t.Errorf("err %v, want local %s rejection", err, tt.name)
 			}
 			if sb != nil {

@@ -19,8 +19,8 @@ import (
 const (
 	probeTimeout      = time.Second
 	fanOutTimeout     = 2 * time.Second
-	maxRedirectOwners = 3 // a redirect decision needs a couple of candidates, not the whole fleet
-	maxHealOwners     = 8 // a heal wants the widest source list a few full/corrupt owners can't hide behind
+	maxRedirectOwners = 3
+	maxHealOwners     = 8
 	redirectCacheTTL  = 5 * time.Second
 
 	// probeGrace bounds how long a fan-out waits for more owners once it has its first.
@@ -50,7 +50,7 @@ type HTTPProber struct {
 	cacheMu sync.Mutex
 	cache   map[string]redirectCacheEntry
 
-	// cacheTTL overrides redirectCacheTTL; a test seam, 5 seconds is slow to wait out.
+	// cacheTTL overrides redirectCacheTTL in tests.
 	cacheTTL time.Duration
 }
 

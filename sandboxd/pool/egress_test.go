@@ -113,11 +113,11 @@ func TestEffectivePolicyKeepsTheLayerPinnedAtClaim(t *testing.T) {
 	})
 
 	m.pools = map[types.PoolKey]*pool{testKey: newPool(testKey)}
-	if _, ok := m.view.Load().out.Resolve(&types.Sandbox{Key: testKey, Tenant: "acme", EgressClass: "desk", Layer: types.LayerUnpooled}, m.claimPooled); !ok {
+	if _, ok := m.view.Load().out.Resolve(&types.Sandbox{Key: testKey, Tenant: "acme", EgressClass: "desk", Layer: types.LayerUnpooled}); !ok {
 		t.Error("a claim made on an unpooled key lost its tenant policy when the key gained a pool")
 	}
 	m.pools = map[types.PoolKey]*pool{}
-	if _, ok := m.view.Load().out.Resolve(&types.Sandbox{Key: testKey, Tenant: "acme", EgressClass: "desk", Layer: types.LayerPooled}, m.claimPooled); ok {
+	if _, ok := m.view.Load().out.Resolve(&types.Sandbox{Key: testKey, Tenant: "acme", EgressClass: "desk", Layer: types.LayerPooled}); ok {
 		t.Error("a claim made on a policy-less pool gained the tenant policy when the pool was dropped")
 	}
 }
@@ -163,22 +163,20 @@ func TestEffectivePolicyIntersectsPoolAndTenantPolicies(t *testing.T) {
 	}
 	for _, tt := range cases {
 		t.Run(tt.name, func(t *testing.T) {
-			m.pools = map[types.PoolKey]*pool{}
-			if tt.pooled {
-				m.pools[testKey] = newPool(testKey)
-				m.pools[testKey].removed = tt.removed
-			}
 			editEgress(t, m, func(cfg *config.Config) {
 				cfg.Pools = []config.PoolSpec{{PoolKey: testKey, Egress: tt.pool}}
 				if tt.tnPol != nil {
 					cfg.EgressClasses = []config.EgressClass{{Name: "desk", Egress: tt.tnPol}}
 				}
 			})
-			sb := &types.Sandbox{Key: testKey, Tenant: tt.tenant}
+			sb := &types.Sandbox{Key: testKey, Tenant: tt.tenant, Layer: types.LayerUnpooled}
+			if tt.pooled && !tt.removed {
+				sb.Layer = types.LayerPooled
+			}
 			if tt.tenant != "" {
 				sb.EgressClass = "desk"
 			}
-			eval, ok := m.view.Load().out.Resolve(sb, m.claimPooled)
+			eval, ok := m.view.Load().out.Resolve(sb)
 			if ok != tt.wantArmed {
 				t.Fatalf("armed=%v, want %v", ok, tt.wantArmed)
 			}
@@ -335,7 +333,7 @@ func TestSetPoolsPreservesEgressPolicy(t *testing.T) {
 	m.pools[egKey].goldenDir = gd
 	m.mu.Unlock()
 	policyLive := func() bool {
-		_, ok := m.view.Load().out.Resolve(&types.Sandbox{Key: egKey}, m.claimPooled)
+		_, ok := m.view.Load().out.Resolve(&types.Sandbox{Key: egKey})
 		return ok
 	}
 	if err := m.SetPools(t.Context(), []config.PoolSpec{{PoolKey: egKey, WarmMax: 3}}); err != nil {
@@ -461,7 +459,7 @@ func TestAPromotedTemplatesCloneEgressesAsItsSourcePool(t *testing.T) {
 		t.Fatalf("clone policy source %+v layer %q, want the source pool %+v and its pooled layer", clone.PolicySource, clone.Layer, testKey)
 	}
 	dialDoors(t, clone)
-	eval, ok := m.view.Load().out.Resolve(clone, m.claimPooled)
+	eval, ok := m.view.Load().out.Resolve(clone)
 	if !ok {
 		t.Fatal("the clone resolved no policy")
 	}

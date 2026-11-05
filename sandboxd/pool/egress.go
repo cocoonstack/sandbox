@@ -29,23 +29,6 @@ func (m *Manager) disarmIfReleased(sb *types.Sandbox) bool {
 	return !live
 }
 
-func (m *Manager) claimPooled(sb *types.Sandbox) bool {
-	if sb.Layer != "" {
-		return sb.Layer == types.LayerPooled
-	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.claimPooledLocked(sb)
-}
-
-func (m *Manager) claimPooledLocked(sb *types.Sandbox) bool {
-	if sb.Layer != "" {
-		return sb.Layer == types.LayerPooled
-	}
-	_, ok := m.activePool(sb.PolicyKey())
-	return ok
-}
-
 // deniedClaims counts per policy key the live claims v denies for lack of a pool policy.
 func (m *Manager) deniedClaims(v *outbound.View) map[types.PoolKey]int {
 	denied := map[types.PoolKey]int{}
@@ -56,7 +39,7 @@ func (m *Manager) deniedClaims(v *outbound.View) map[types.PoolKey]int {
 		if sb.NoEgress || v.HasPolicy(key) {
 			continue
 		}
-		if _, ok := v.Resolve(sb, m.claimPooledLocked); !ok {
+		if _, ok := v.Resolve(sb); !ok {
 			denied[key]++
 		}
 	}
@@ -78,7 +61,6 @@ func (m *Manager) outboundOptions(ca *egress.CA) outbound.Options {
 	return outbound.Options{
 		Engine: m.eng,
 		View:   func() *outbound.View { return m.view.Load().out },
-		Pooled: m.claimPooled,
 		Record: m.recordEgress,
 		Transfer: func(ctx context.Context, id, tenant string, ev egress.Event, sent, received int64) {
 			m.recordUsage(ctx, usage.Event{Event: "egress_bytes", ID: id, Tenant: tenant, Reference: ev.Host, Upstream: ev.Upstream, Sent: sent, Received: received})

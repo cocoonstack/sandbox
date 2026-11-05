@@ -101,7 +101,6 @@ class CocoonSandboxSession(BaseSandboxSession):
         stdout, stderr = bytearray(), bytearray()
 
         def run() -> int:
-            # the SDK's wall clock cuts the connection, kills the reported pid, and raises TimeoutError
             return sb.run(argv, on_stdout=stdout.extend, on_stderr=stderr.extend, timeout=timeout)
 
         code = await asyncio.to_thread(run)

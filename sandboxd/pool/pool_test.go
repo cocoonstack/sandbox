@@ -234,6 +234,23 @@ func TestReleaseAfterResolveTearsDownOnce(t *testing.T) {
 	}
 }
 
+func TestReleaseRecordsItsUsageEventBeforeTheTeardown(t *testing.T) {
+	eng := newFakeEngine()
+	m := newTestManager(t, eng)
+	sb := mustClaim(t, m, testKey)
+	stall := make(chan struct{})
+	eng.mu.Lock()
+	eng.removeStall = stall
+	eng.mu.Unlock()
+	done := make(chan error, 1)
+	go func() { done <- m.Release(t.Context(), sb.ID, Cred{Token: sb.Token}) }()
+	waitFor(t, func() bool { return strings.HasSuffix(usageEventsOf(t, m, sb.ID), "release") })
+	close(stall)
+	if err := <-done; err != nil {
+		t.Fatalf("release: %v", err)
+	}
+}
+
 func TestReleaseDelayQueuesTeardown(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		eng := newFakeEngine()
@@ -615,8 +632,8 @@ func TestSetPoolsRejectsInvalidSpec(t *testing.T) {
 		Template: "rt:24.04", Net: types.NetNone, Size: types.SizeSmall,
 		Warm: -1,
 	}})
-	if !errors.Is(err, ErrBadCount) {
-		t.Fatalf("got %v, want ErrBadCount", err)
+	if !errors.Is(err, ErrBadConfig) || errors.Is(err, ErrBadCount) {
+		t.Fatalf("got %v, want ErrBadConfig naming the pool", err)
 	}
 }
 

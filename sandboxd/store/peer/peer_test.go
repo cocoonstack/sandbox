@@ -97,7 +97,7 @@ func TestPullDoesNotDedupConcurrentCalls(t *testing.T) {
 		}
 	}
 	if len(puller.asked) != 2 {
-		t.Errorf("puller called %d times, want 2: Pull must not dedup — that's the caller's job now", len(puller.asked))
+		t.Errorf("puller called %d times, want 2 (Pull does not dedup)", len(puller.asked))
 	}
 	for _, dst := range []string{dst1, dst2} {
 		if got, err := os.ReadFile(filepath.Join(dst, store.ExportDir, "mem")); err != nil || string(got) != "guest-pages" {

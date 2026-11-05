@@ -565,7 +565,7 @@ func TestInjectsSurviveARestartAndAReloadThatDropsTheInterceptStopsThem(t *testi
 		cfg.Pools = []config.PoolSpec{{PoolKey: testKey, Warm: 1, Egress: &egress.Policy{Allow: []egress.Rule{{Host: "api.github.com"}}}}}
 	})
 	v := m2.view.Load()
-	if gap := v.out.InjectGap(restored, env, m2.claimPooled); len(gap) != 1 {
+	if gap := v.out.InjectGap(restored, env); len(gap) != 1 {
 		t.Errorf("gap after the intercept rule went %v, want the inject named", gap)
 	}
 }

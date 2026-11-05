@@ -273,7 +273,7 @@ func TestARuntimeTenantTakesItsEgressClassWithoutARestart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("claim u-1: %v", err)
 	}
-	eval, ok := m.view.Load().out.Resolve(classed, m.claimPooled)
+	eval, ok := m.view.Load().out.Resolve(classed)
 	if !ok || classed.EgressClass != "desk" || dtoOf(classed).EgressClass != "desk" {
 		t.Fatalf("u-1 claim class %q armed %v, want the desk class stamped and journaled", classed.EgressClass, ok)
 	}
@@ -312,7 +312,7 @@ func TestARuntimeTenantTakesItsEgressClassWithoutARestart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("claim u-2: %v", err)
 	}
-	if _, ok = m.view.Load().out.Resolve(bare, m.claimPooled); ok {
+	if _, ok = m.view.Load().out.Resolve(bare); ok {
 		t.Error("a tenant without a class gained egress")
 	}
 

@@ -39,7 +39,7 @@ func BenchmarkVolumeAdmission(b *testing.B) {
 func volumeBenchManager(b *testing.B) *Manager {
 	b.Helper()
 	m := newTestManager(b, newFakeEngine(), config.PoolSpec{PoolKey: testKey})
-	m.claimed = checkpointBenchClaims(false)
+	adoptBenchClaims(m, checkpointBenchClaims(false))
 	if err := m.store.save(m.claimed); err != nil {
 		b.Fatal(err)
 	}

@@ -14,8 +14,6 @@ use tokio::io::{
 
 /// Mirrors cocoon-agent's frame cap so a malformed peer can't OOM us.
 pub const MAX_FRAME: usize = 8 * 1024 * 1024;
-/// 2 serves RPCs back to back on one connection; 1 closed after one.
-pub const KEEP_ALIVE_PROTO: u32 = 2;
 
 /// Read size for exec, pty and session output.
 pub const READ_CHUNK: usize = 32 * 1024;
@@ -243,7 +241,6 @@ pub enum Response {
     },
     Info {
         version: Cow<'static, str>,
-        proto: u32,
         uptime_secs: u64,
         procs: usize,
         sessions: usize,

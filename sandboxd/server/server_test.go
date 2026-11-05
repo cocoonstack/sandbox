@@ -168,29 +168,16 @@ func TestRenewWithoutABodyTakesTheNodeDefault(t *testing.T) {
 	}
 }
 
-func TestRenewMatchesBodyKeysCaseInsensitively(t *testing.T) {
-	var gotTTL time.Duration
-	mgr := &fakeManager{renew: func(_, _ string, ttl time.Duration) (time.Time, error) {
-		gotTTL = ttl
-		return time.Now(), nil
-	}}
-	ts := newTestServer(t, "", mgr, nil)
-
-	if code := statusOf(t, http.MethodPost, ts.URL+"/v1/sandboxes/sb_1/renew", "tok", `{"TTL_Seconds":3600}`); code != http.StatusOK || gotTTL != time.Hour {
-		t.Errorf("status %d ttl %v, want 200 and 1h", code, gotTTL)
-	}
-}
-
-func TestClaimMatchesBodyKeysCaseInsensitively(t *testing.T) {
+func TestClaimTakesExactBodyKeys(t *testing.T) {
 	var gotKey types.PoolKey
 	mgr := &fakeManager{claim: func(_ context.Context, key types.PoolKey, _ time.Duration) (*types.Sandbox, error) {
 		gotKey = key
 		return &types.Sandbox{ID: "sb_1"}, nil
 	}}
 	ts := newTestServer(t, "", mgr, nil)
-
-	if code := statusOf(t, http.MethodPost, ts.URL+"/v1/claim", "", `{"Template":"rt:24.04"}`); code != http.StatusOK || gotKey.Template != "rt:24.04" {
-		t.Errorf("status %d template %q, want 200 and rt:24.04", code, gotKey.Template)
+	statusOf(t, http.MethodPost, ts.URL+"/v1/claim", "", `{"Template":"rt:24.04"}`)
+	if gotKey.Template != "" {
+		t.Errorf("a case-variant key set template %q", gotKey.Template)
 	}
 }
 
@@ -646,6 +633,16 @@ func TestClaimRedirectsAreCounted(t *testing.T) {
 				t.Errorf("missing %q in:\n%s", want, raw)
 			}
 		})
+	}
+}
+
+func TestCheckpointClaimRedirectsAreCounted(t *testing.T) {
+	ts := newProberTestServer(t, "", &fakeManager{}, &fakeProber{owners: []string{"peer:7777"}})
+	if code := statusOf(t, http.MethodPost, ts.URL+"/v1/checkpoints/ck_0011223344556677/claim", "", `{}`); code != http.StatusOK {
+		t.Fatalf("claim status %d, want 200 with a redirect", code)
+	}
+	if want, raw := "sandboxd_claim_redirects_total 1\n", scrapeMetrics(t, ts.URL); !strings.Contains(raw, want) {
+		t.Errorf("missing %q in:\n%s", want, raw)
 	}
 }
 

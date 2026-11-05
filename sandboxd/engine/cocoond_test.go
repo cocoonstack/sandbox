@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -29,6 +30,25 @@ func TestVMEventsDeliversTheSnapshotThenChanges(t *testing.T) {
 	}
 	if len(changes) != 1 || changes[0].Kind != "MODIFIED" || changes[0].VM.Name != "sbx-1" || changes[0].VM.Live {
 		t.Errorf("changes = %+v, want one unexpected exit of sbx-1", changes)
+	}
+}
+
+func TestVMEventsReadsTheSnapshotOfAFullNode(t *testing.T) {
+	socket := sockPath(t)
+	var sync strings.Builder
+	sync.WriteString("event: sync\ndata: {\"vms\":[")
+	for i := range 5000 {
+		if i > 0 {
+			sync.WriteByte(',')
+		}
+		fmt.Fprintf(&sync, `{"backend":"cloud-hypervisor","id":"%064d","name":"sbx-%d","state":"stopped","transition_generation":3,"last_transition_reason":"hibernate","live":false,"verified_at":"2026-11-05T10:00:00Z"}`, i, i)
+	}
+	sync.WriteString("]}\n\n")
+	serveCocoond(t, socket, sync.String())
+	var synced []VMStatus
+	_ = newTestEngine().VMEvents(t.Context(), socket, func(vms []VMStatus) { synced = vms }, func(VMChange) {})
+	if len(synced) != 5000 {
+		t.Errorf("synced %d VMs from a %d-byte snapshot line, want 5000", len(synced), sync.Len())
 	}
 }
 

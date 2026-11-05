@@ -45,7 +45,7 @@ const (
 	coldProbeTimeout  = 90 * time.Second
 	// A clone answers in ~1s even saturated, so a silent one is replaced, not waited on
 	warmProbeTimeout = 5 * time.Second
-	// One list; a wrong answer only costs an extra sweep.
+	// One inspect; a wrong answer only costs an extra sweep.
 	removeVerifyTimeout = 15 * time.Second
 	cellRetry           = 5 * time.Second
 	// A full node clears only when VMs go away; retrying sooner buys nothing.

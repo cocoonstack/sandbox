@@ -59,8 +59,6 @@ linters:
   exclusions:
     generated: strict
     paths:
-      - vendor
-      - mocks
       - dist
     rules:
       - path: _test\.go

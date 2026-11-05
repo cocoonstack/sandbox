@@ -431,7 +431,7 @@ func parse(raw jsontext.Value, v any) error {
 }
 
 func unmarshalInput(raw []byte, v any) error {
-	return json.Unmarshal(raw, v, json.MatchCaseInsensitiveNames(true), jsontext.AllowInvalidUTF8(true))
+	return json.Unmarshal(raw, v, jsontext.AllowInvalidUTF8(true))
 }
 
 func jsonText(v any) string {

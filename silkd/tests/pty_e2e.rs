@@ -86,6 +86,30 @@ async fn pty_runs_a_shell_and_echoes() {
     handle.await.unwrap().unwrap();
 }
 
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn the_pty_shell_holds_no_master_fd() {
+    let state = Arc::new(State::new());
+    let (mut cw, mut lines, handle) = connect(&state);
+    send(&mut cw, json!({"op":"pty_open","cols":80,"rows":24})).await;
+    read_until(&mut lines, |v| v["type"] == "started").await;
+    send(
+        &mut cw,
+        json!({"op":"stdin","data":b64(b"echo silk-$(ls -l /proc/$$/fd | grep -c ptmx)-masters\n")}),
+    )
+    .await;
+    let mut out = String::new();
+    while !(0..10).any(|n| out.contains(&format!("silk-{n}-masters"))) {
+        let frame = read_until(&mut lines, |v| v["type"] == "stdout").await;
+        out.push_str(&String::from_utf8_lossy(&decode(&frame)));
+    }
+    assert!(out.contains("silk-0-masters"), "{out}");
+    send(&mut cw, json!({"op":"stdin","data":b64(b"exit\n")})).await;
+    read_until(&mut lines, |v| v["type"] == "exit").await;
+    cw.shutdown().await.unwrap();
+    handle.await.unwrap().unwrap();
+}
+
 #[tokio::test]
 async fn pty_appears_in_ps_and_resizes() {
     let state = Arc::new(State::new());

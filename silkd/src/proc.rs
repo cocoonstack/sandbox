@@ -129,7 +129,7 @@ impl Proc {
         self.emit(&Chunk::Exit(code));
     }
 
-    /// Records a pty master fd (a dup, owned here) so `resize` can reach it.
+    /// Records a pty master fd so `resize` can reach it.
     pub fn set_pty_master(&self, fd: OwnedFd) {
         *sysutil::lock(&self.pty_master) = Some(fd);
     }

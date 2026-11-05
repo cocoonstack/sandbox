@@ -2,6 +2,7 @@ package pool
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -17,10 +18,8 @@ func (m *Manager) Fork(ctx context.Context, id string, cred Cred, count int, ttl
 	if !ok {
 		return nil, ErrUnknownSandbox
 	}
-	if !cred.Operator {
-		if err := m.tenantRemoved(ctx, sb.Tenant); err != nil {
-			return nil, err
-		}
+	if err := m.tenantRemoved(ctx, sb.Tenant); err != nil && (!cred.Operator || !errors.Is(err, ErrTenantRemoved)) {
+		return nil, err
 	}
 	maxFork := m.view.Load().maxFork
 	if count < 1 || count > maxFork {

@@ -95,8 +95,6 @@ func TestRunCancelKillsTheCommandItStarted(t *testing.T) {
 				return
 			}
 			switch req := req.(type) {
-			case *wire.Info:
-				_, _ = io.WriteString(conn, `{"type":"info","version":"test","proto":2}`+"\n")
 			case *wire.Exec:
 				_, _ = io.WriteString(conn, `{"type":"started","pid":7}`+"\n"+`{"type":"stdout","data":"NDIK"}`+"\n")
 				_, _ = io.Copy(io.Discard, r)
@@ -166,11 +164,7 @@ func TestFirstCallSendsItsFramesAheadOfThe101(t *testing.T) {
 		defer conn.Close()
 		_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
 		var got []string
-		for range 1 {
-			line, readErr := brw.ReadBytes('\n')
-			if readErr != nil {
-				break
-			}
+		if line, readErr := brw.ReadBytes('\n'); readErr == nil {
 			if req, decodeErr := wire.DecodeRequest(line); decodeErr == nil {
 				got = append(got, req.Op())
 			}

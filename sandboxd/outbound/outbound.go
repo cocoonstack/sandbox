@@ -28,9 +28,6 @@ type Engine interface {
 	InstallCACert(ctx context.Context, vsockSocket string, certPEM []byte) error
 }
 
-// PooledFunc reports whether sb's key had a pool when it was claimed; it may take the caller's lock.
-type PooledFunc func(sb *types.Sandbox) bool
-
 // TapFunc applies or drops the nft lock on one tap.
 type TapFunc func(tap string) error
 
@@ -41,7 +38,6 @@ type VerdictFunc func(ip netip.Addr, port uint16) (bool, error)
 type Options struct {
 	Engine   Engine
 	View     func() *View
-	Pooled   PooledFunc
 	Record   func(ctx context.Context, id, tenant string, ev egress.Event)
 	Transfer func(ctx context.Context, id, tenant string, ev egress.Event, sent, received int64)
 	CA       *egress.CA
@@ -108,7 +104,7 @@ func (h *Host) ArmProxy(ctx context.Context, sb *types.Sandbox) error {
 		displaced.close()
 	}
 	v := h.o.View()
-	policy, ok := v.Resolve(sb, h.o.Pooled)
+	policy, ok := v.Resolve(sb)
 	if !ok || sb.VsockSocket == "" {
 		if d != nil {
 			d.close()
@@ -117,7 +113,6 @@ func (h *Host) ArmProxy(ctx context.Context, sb *types.Sandbox) error {
 	}
 	id, tenant := sb.ID, sb.Tenant
 	evCtx := context.WithoutCancel(ctx)
-	// Only an intercepting pool pays for the TLS transport and leaf cache
 	ca := h.o.CA
 	if !v.Intercepts(sb.PolicyKey()) {
 		ca = nil

@@ -77,6 +77,17 @@ func TestMoveHandsARunningClaimToThePeerWithBothNodesCountingIt(t *testing.T) {
 	assertNoMoveResidue(t, mc.t, sb.ID)
 }
 
+func TestMoveRefusesAClaimWhoseSaveIsUnsettled(t *testing.T) {
+	mc := newMoveCluster(t)
+	sb := claimTenant(t, mc.s, "acme")
+	mc.s.mu.Lock()
+	sb.SaveSnap = "sbx-fork-unsettled"
+	mc.s.mu.Unlock()
+	if _, err := mc.s.Move(t.Context(), sb.ID, "b", time.Minute); !errors.Is(err, ErrNotMovable) {
+		t.Errorf("move with an unsettled save: %v, want ErrNotMovable", err)
+	}
+}
+
 func TestMoveDisarmsTheSourceDoorsAndArmsTheTarget(t *testing.T) {
 	mc := newMoveCluster(t)
 	sb := mustClaim(t, mc.s, testKey)

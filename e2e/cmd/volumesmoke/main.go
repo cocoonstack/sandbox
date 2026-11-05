@@ -7,6 +7,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"net/http"
 	"os"
 	"path"
 	"path/filepath"
@@ -224,7 +225,7 @@ func runWritable(ctx context.Context, client *sandbox.Client, template, volume s
 		_ = busy.Close()
 		return errors.New("second writable claim succeeded while the first held the image")
 	}
-	if !strings.Contains(busyErr.Error(), "409") {
+	if apiErr, ok := errors.AsType[*sandbox.APIError](busyErr); !ok || apiErr.Status != http.StatusConflict {
 		return fmt.Errorf("second writable claim failed without 409: %w", busyErr)
 	}
 	if err = writer.Close(); err != nil {

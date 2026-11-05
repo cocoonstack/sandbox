@@ -15,8 +15,6 @@ import (
 const (
 	// ProtoVersion is stamped into every request as "v"; silkd ignores unknown fields.
 	ProtoVersion = 1
-	// KeepAliveProto is the InfoResp.Proto from which silkd serves RPCs back to back on one connection.
-	KeepAliveProto = 2
 	// MaxFrame mirrors silkd's frame cap.
 	MaxFrame = 8 << 20
 	// BulkChunk mirrors silkd's BULK_CHUNK, the payload of one bulk data frame.
@@ -449,7 +447,7 @@ type DataEnd struct{}
 
 func (DataEnd) Op() string { return "data_end" }
 
-// Started reports the spawned pid (synthetic when the OS pid is unknown).
+// Started reports the spawned pid.
 type Started struct {
 	PID uint32 `json:"pid"`
 }
@@ -470,7 +468,7 @@ type Stderr struct {
 
 func (Stderr) RespType() string { return "stderr" }
 
-// Exit is the terminal frame of a foreground exec; -1 means killed or unknown.
+// Exit is the terminal frame of a foreground exec; a signaled child reports 128+signal, -1 an unknown status.
 type Exit struct {
 	Code int32 `json:"code"`
 }
@@ -482,7 +480,7 @@ type Done struct{}
 
 func (Done) RespType() string { return "done" }
 
-// Ready acknowledges an armed watch (events after it are guaranteed captured) or a connected port_forward.
+// Ready acknowledges an armed watch (events after it are guaranteed captured), a connected port_forward or an attached lsp_request.
 type Ready struct{}
 
 func (Ready) RespType() string { return "ready" }
@@ -500,7 +498,6 @@ func (e *ErrorResp) Error() string { return e.Kind + ": " + e.Message }
 // InfoResp answers Info.
 type InfoResp struct {
 	Version    string `json:"version"`
-	Proto      uint32 `json:"proto"`
 	UptimeSecs uint64 `json:"uptime_secs"`
 	Procs      int    `json:"procs"`
 	Sessions   int    `json:"sessions"`

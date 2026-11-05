@@ -127,7 +127,7 @@ func (f *fakeSilkd) serve(conn net.Conn) {
 	}
 	switch req.Op {
 	case "info":
-		writeFakeSilkdResponse(conn, &wire.InfoResp{Version: "test", Proto: wire.KeepAliveProto})
+		writeFakeSilkdResponse(conn, &wire.InfoResp{Version: "test"})
 	case "fs_write":
 		f.handleWrite(conn, r, req.Path, req.Mode)
 	case "fs_list":

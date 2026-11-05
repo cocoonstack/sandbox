@@ -21,7 +21,7 @@ import (
 )
 
 const (
-	infoFrame = `{"type":"info","version":"test","proto":1,"uptime_secs":0,"procs":0,"sessions":0}` + "\n"
+	infoFrame = `{"type":"info","version":"test","uptime_secs":0,"procs":0,"sessions":0}` + "\n"
 	errFrame  = `{"type":"error","kind":"internal","message":"boom"}` + "\n"
 )
 

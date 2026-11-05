@@ -127,7 +127,7 @@ func RemoveDirEntries(dir string, match func(name string) bool) error {
 
 // DecodeStrictJSON decodes one JSON value into v, refusing unknown fields, duplicates and trailing data.
 func DecodeStrictJSON(raw []byte, v any) error {
-	return json.Unmarshal(raw, v, json.RejectUnknownMembers(true), json.MatchCaseInsensitiveNames(true))
+	return json.Unmarshal(raw, v, json.RejectUnknownMembers(true))
 }
 
 // DigestJSON encodes v with sorted map keys, so equal values always digest equal.

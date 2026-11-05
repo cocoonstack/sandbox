@@ -21,7 +21,7 @@ import (
 )
 
 var infoFrame = func() string {
-	frame, err := wire.EncodeResponse(&wire.InfoResp{Version: "test", Proto: wire.KeepAliveProto})
+	frame, err := wire.EncodeResponse(&wire.InfoResp{Version: "test"})
 	if err != nil {
 		panic(err)
 	}

@@ -19,7 +19,7 @@ class FakeSandbox:
 
     def run(self, argv, cwd="", on_stdout=None, on_stderr=None, timeout=None, **_):
         assert argv[:2] == ["sh", "-c"], argv
-        assert timeout is not None and 0 < timeout <= 300, timeout
+        assert timeout is not None and 0 < timeout <= CALL_TIMEOUT, timeout
         if argv[2] == "boom":
             on_stderr(b"kaboom\n")
             return 3
@@ -59,7 +59,7 @@ def test_exec_tool_output(monkeypatch):
     assert exec_tool.invoke({"command": "echo hi"}) == "ran: echo hi\n"
     out = exec_tool.invoke({"command": "boom"})
     assert "kaboom" in out and "exit code: 3" in out
-    assert exec_tool.invoke({"command": "hang"}) == "partial\n\ncut off after 300s"
+    assert exec_tool.invoke({"command": "hang"}) == f"partial\n\ncut off after {CALL_TIMEOUT}s"
 
 
 def test_async_bridge(monkeypatch):

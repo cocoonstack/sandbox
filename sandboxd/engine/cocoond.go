@@ -15,7 +15,7 @@ const (
 	VMDeleted = "DELETED"
 
 	cocoondEventsURL = "http://cocoond/v1/events"
-	sseMaxLine       = 1 << 20
+	sseMaxLine       = 64 << 20
 )
 
 // VMStatus is cocoon daemon's view of one supervised VM.

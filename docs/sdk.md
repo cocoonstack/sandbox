@@ -166,8 +166,7 @@ at most 8 idle connections. A kept connection counts as live for
 setting; `Close` and `Hibernate` drop it at once. Long-lived streams
 (`Watch`, `OpenPty`, `DialPort`, an LSP session) take a connection of their
 own. Reuse needs a Unix client (the liveness peek is a `MSG_PEEK`); on
-Windows, and against a guest whose silkd predates the back-to-back protocol,
-every call dials as before.
+Windows every call dials as before.
 
 An explicit scheme in an owner, redirect, peer, or `Attach` address wins;
 a bare address inherits the entry client's scheme. Trust settings are shared
@@ -425,8 +424,6 @@ replaces the template. `Template.ContentDigest` identifies the published
 export bytes; a claim from that exact generation carries the same value in
 `Sandbox.TemplateDigest`. A caller pinning a mutable template name can compare
 the claim's value with its expected digest and close/refuse a mismatch.
-Templates published by an older sandboxd have empty digests until they are
-re-promoted after the node is upgraded.
 
 **On the default local-disk backend templates live on one node**, and on a
 cluster the parent claim may have been redirected — the returned `Template`

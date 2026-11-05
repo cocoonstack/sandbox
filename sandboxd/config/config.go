@@ -34,8 +34,7 @@ const (
 	defaultWarm      = 4
 	refillFloor      = 4
 	refillCeiling    = 256
-	// cocoon builds a VM with a 10G disk by default, so a pool never asks for less
-	minStorageBytes = 10 << 30
+	minStorageBytes  = 10 << 30
 )
 
 // PoolSpec declares one warm pool and its target of claim-ready VMs.
@@ -77,7 +76,7 @@ func (s *PoolSpec) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
 	var probe struct {
 		Warm *int `json:"warm"`
 	}
-	_ = json.Unmarshal(raw, &probe, json.MatchCaseInsensitiveNames(true))
+	_ = json.Unmarshal(raw, &probe)
 	s.warmSet = probe.Warm != nil
 	return nil
 }

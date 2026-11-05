@@ -16,7 +16,7 @@ func TestDecodeStrictJSON(t *testing.T) {
 		{"case-folded duplicate", `{"methods":["GET"],"Methods":[]}`, false},
 		{"trailing whitespace ok", `{"methods":["GET"]} `, true},
 		{"trailing data", `{"methods":["GET"]} {"methods":[]}`, false},
-		{"case-insensitive name", `{"Methods":["GET"]}`, true},
+		{"case-variant name", `{"Methods":["GET"]}`, false},
 		{"invalid utf-8", "{\"methods\":[\"\xff\"]}", false},
 		{"null field", `{"methods":null}`, true},
 	} {

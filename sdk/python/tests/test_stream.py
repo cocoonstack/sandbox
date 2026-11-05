@@ -21,7 +21,7 @@ def test_port_stream_outlives_the_client_timeout():
     addr = f"127.0.0.1:{server.getsockname()[1]}"
     ops: list[str] = []
     threading.Thread(target=serve_port_forward, args=(server, 3 * TIMEOUT, ops), daemon=True).start()
-    sb = legacy_sandbox(addr)
+    sb = short_timeout_sandbox(addr)
     try:
         with sb.dial_port(5000) as port:
             assert port.recv() == b"late"
@@ -36,7 +36,7 @@ def test_run_timeout_cuts_a_silent_command_and_kills_it():
     addr = f"127.0.0.1:{server.getsockname()[1]}"
     kills: list[dict] = []
     threading.Thread(target=serve_started_then_hang, args=(server, 5 * TIMEOUT, kills), daemon=True).start()
-    sb = legacy_sandbox(addr)
+    sb = short_timeout_sandbox(addr)
     started = time.monotonic()
     try:
         with pytest.raises(TimeoutError):
@@ -53,7 +53,7 @@ def test_run_timeout_bounds_the_kill_it_sends(monkeypatch):
     addr = f"127.0.0.1:{server.getsockname()[1]}"
     kills: list[dict] = []
     threading.Thread(target=serve_started_then_trickle_the_kill_reply, args=(server, kills), daemon=True).start()
-    sb = legacy_sandbox(addr)
+    sb = short_timeout_sandbox(addr)
     started = time.monotonic()
     try:
         with pytest.raises(TimeoutError):
@@ -73,7 +73,7 @@ def test_run_timeout_cuts_a_blocked_exec_send(black_hole):
 
 
 def test_run_rejects_a_non_positive_timeout():
-    sb = legacy_sandbox("127.0.0.1:1")
+    sb = short_timeout_sandbox("127.0.0.1:1")
     with pytest.raises(ValueError):
         sb.run(["true"], timeout=0)
 
@@ -82,7 +82,7 @@ def test_dial_is_still_bounded_by_the_client_timeout():
     server = socket.create_server(("127.0.0.1", 0))
     addr = f"127.0.0.1:{server.getsockname()[1]}"
     threading.Thread(target=serve_silence, args=(server,), daemon=True).start()
-    sb = legacy_sandbox(addr)
+    sb = short_timeout_sandbox(addr)
     started = time.monotonic()
     try:
         with pytest.raises(SandboxTimeout):
@@ -97,7 +97,7 @@ def test_handshake_failures_are_typed(exc, want):
     assert isinstance(conn_module._handshake_error("agent upgrade", exc), want)
 
 
-def legacy_sandbox(addr: str) -> Sandbox:
+def short_timeout_sandbox(addr: str) -> Sandbox:
     return sandbox_at(addr, timeout=TIMEOUT, keep_alive=0)
 
 

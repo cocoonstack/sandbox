@@ -29,6 +29,9 @@ func (m *Manager) replicateOnce(ctx context.Context) {
 				retire = append(retire, sb)
 			}
 		case !m.replicable(sb):
+			if !tried.IsZero() {
+				next[id] = tried
+			}
 		case m.hasVolumeHolds(sb):
 			if sb.HasReplica() {
 				retire = append(retire, sb)

@@ -108,7 +108,7 @@ sandboxd](docs/deploy.md) covers release binaries, the full config and systemd.
   base SDK
 - `shell.yml` — shellcheck over every tracked shell script
 - `images.yml` — the single image entry point: on a push touching
-  `boot/**`, `silkd/**`, `protocol/**`, or `os-image/**` it builds the
+  `boot/**`, `silkd/**`, or `os-image/**` it builds the
   changed carriers (via `build-boot.yml` / `build-silkd.yml`,
   `workflow_call`) then os-images, in order, so the chain is deterministic
 - `build-os-images.yml` — bakes base + flavors FROM the sha-pinned carriers
