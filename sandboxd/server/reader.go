@@ -288,5 +288,6 @@ func (s *Server) openGuest(ctx context.Context, id, token string, wake agentWake
 		done()
 		return nil, nil, fmt.Errorf("%w: %w", errUnreachable, err)
 	}
-	return guest, fenceGuest(guest, fenced, done), nil
+	stop := pool.CloseOnFence(fenced, guest)
+	return guest, func() { stop(); done() }, nil
 }

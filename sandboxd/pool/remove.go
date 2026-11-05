@@ -21,14 +21,10 @@ func (m *Manager) removeVM(ctx context.Context, name string) bool {
 	if err == nil {
 		return true
 	}
-	log.WithFunc("pool.removeVM").Warnf(ctx, "remove vm %s: %v; verifying", name, err)
-	return m.confirmGone(ctx, name)
-}
-
-func (m *Manager) confirmGone(ctx context.Context, name string) bool {
+	logger := log.WithFunc("pool.removeVM")
+	logger.Warnf(ctx, "remove vm %s: %v; verifying", name, err)
 	ctx, cancel := context.WithTimeout(ctx, removeVerifyTimeout)
 	defer cancel()
-	logger := log.WithFunc("pool.confirmGone")
 	_, present, err := m.eng.Inspect(ctx, name)
 	if err != nil {
 		// Cannot tell: a false "gone" leaks a running VM, a retry only costs a sweep

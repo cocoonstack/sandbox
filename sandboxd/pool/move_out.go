@@ -36,7 +36,7 @@ func (m *Manager) Move(ctx context.Context, id, addr string, maxDowntime time.Du
 		return MoveResult{}, err
 	}
 	ctx = context.WithoutCancel(ctx)
-	err := m.moveOut(ctx, sb, mv, cmp.Or(maxDowntime, DefaultMoveDowntime))
+	err := m.moveOut(ctx, sb, mv, cmp.Or(maxDowntime, defaultMoveDowntime))
 	if err != nil {
 		return m.failMoveOut(ctx, sb, mv, err)
 	}
@@ -152,10 +152,11 @@ func (m *Manager) beginMove(ctx context.Context, sb *types.Sandbox, to string) (
 func (m *Manager) sendRound(ctx context.Context, id string, mv *outMove, round types.MigrateRound) (int64, error) {
 	mv.rounds++
 	names := make([]string, len(round.Files))
+	var size int64
 	for i, f := range round.Files {
-		names[i] = f.Name
+		names[i], size = f.Name, size+f.Size
 	}
-	ctx, cancel := context.WithTimeout(ctx, roundTimeout(roundBytes(round)))
+	ctx, cancel := context.WithTimeout(ctx, moveRoundBase+time.Duration(size/moveRoundMinRate)*time.Second)
 	defer cancel()
 	return m.movePeer.SendRound(ctx, mv.Addr, id, mv.rounds, round.Dir, names)
 }
@@ -198,7 +199,7 @@ func (m *Manager) moveBlocker(sb *types.Sandbox) string {
 		return "it is waking"
 	case m.midMoveLocked(sb):
 		return "a move of it is already running"
-	case hasVolumes(sb) || m.hasVolumeHolds(sb):
+	case m.hasVolumeHolds(sb):
 		return "it has volumes"
 	case sb.Key.Net != types.NetNone:
 		return "an egress-lane claim does not move"
@@ -406,18 +407,6 @@ func (m *Manager) lockTransition(sb *types.Sandbox) error {
 func (m *Manager) midMoveLocked(sb *types.Sandbox) bool {
 	_, moving := m.moving[sb.ID]
 	return moving || sb.MoveIn
-}
-
-func roundBytes(round types.MigrateRound) int64 {
-	var n int64
-	for _, f := range round.Files {
-		n += f.Size
-	}
-	return n
-}
-
-func roundTimeout(size int64) time.Duration {
-	return moveRoundBase + time.Duration(size/moveRoundMinRate)*time.Second
 }
 
 func finalPause(last, sent int64, sending time.Duration) time.Duration {

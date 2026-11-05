@@ -13,11 +13,10 @@ import (
 )
 
 const (
-	// DefaultMoveDowntime is the final round's pause a move allows when the caller names none.
-	DefaultMoveDowntime = 2 * time.Second
 	// MoveStartAllowance is what the target's receive and start add to the final round's transfer, so a smaller downtime budget never fits.
 	MoveStartAllowance = 400 * time.Millisecond
 
+	defaultMoveDowntime = 2 * time.Second
 	movesDir            = "moves"
 	moveReservationIdle = 2 * time.Minute
 	moveRetryInterval   = 2 * time.Second

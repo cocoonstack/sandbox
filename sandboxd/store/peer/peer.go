@@ -38,10 +38,6 @@ func (h *Healer) Pull(ctx context.Context, id, staging string, validate Validate
 	// A client hanging up must not abandon a started pull; the budget bounds it.
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), healBudget)
 	defer cancel()
-	return h.pullFrom(ctx, id, staging, addrs, validate)
-}
-
-func (h *Healer) pullFrom(ctx context.Context, id, staging string, addrs []string, validate Validate) error {
 	deadline, _ := ctx.Deadline()
 	var errs []error
 	for i, addr := range addrs {

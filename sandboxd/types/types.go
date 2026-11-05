@@ -306,7 +306,7 @@ type Sandbox struct {
 
 	FromCheckpoint string `json:"from_checkpoint,omitempty"`
 	// TemplateDigest identifies the promoted-template export this sandbox was cloned from.
-	TemplateDigest string `json:"template_digest,omitempty"`
+	TemplateDigest string `json:"-"`
 
 	// Restarts counts the cold boots that replaced an exited VMM; each loses guest memory.
 	Restarts    int       `json:"restarts,omitzero"`
