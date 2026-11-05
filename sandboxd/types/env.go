@@ -224,11 +224,11 @@ func (e Env) Redacted() Env {
 
 // GuestFile renders the guest entries as a systemd EnvironmentFile, sorted by name.
 func (e Env) GuestFile() []byte {
-	var b strings.Builder
+	var b []byte
 	for _, name := range slices.Sorted(maps.Keys(e.guest())) {
-		fmt.Fprintf(&b, "%s=\"%s\"\n", name, guestFileEscaper.Replace(e[name].Value))
+		b = fmt.Appendf(b, "%s=\"%s\"\n", name, guestFileEscaper.Replace(e[name].Value))
 	}
-	return []byte(b.String())
+	return b
 }
 
 func (e Env) guest() Env {

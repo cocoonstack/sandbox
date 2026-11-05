@@ -100,8 +100,8 @@ func (m *Manager) Checkpoints(ctx context.Context, tenant string) ([]types.Check
 	pinned := m.pinnedArchiveCks()
 	ckpts := make([]types.Checkpoint, 0, len(metas))
 	for _, rec := range metas {
-		var ckpt types.Checkpoint
-		if err := json.Unmarshal(rec.Meta, &ckpt); err != nil || !tenantOwns(tenant, ckpt.Tenant) {
+		ckpt, err := parseCheckpoint(rec.Meta)
+		if err != nil || !tenantOwns(tenant, ckpt.Tenant) {
 			continue
 		}
 		if _, archived := pinned[ckpt.ID]; archived || ckpt.Archive {

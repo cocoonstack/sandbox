@@ -159,7 +159,7 @@ func (h *Host) ArmProxy(ctx context.Context, sb *types.Sandbox) error {
 func (h *Host) Prebind(ctx context.Context, sb *types.Sandbox) {
 	v := h.o.View()
 	policy := v.poolEgress[sb.Key]
-	if !v.guarded || policy == nil || sb.VsockSocket == "" {
+	if policy == nil || sb.VsockSocket == "" {
 		return
 	}
 	d, err := bindDoors(sb.VsockSocket, policy.ServesSocks())

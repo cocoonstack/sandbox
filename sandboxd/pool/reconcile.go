@@ -25,7 +25,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	fenced := m.fenceArchived(ctx, claims)
+	answered := m.fenceArchived(ctx, claims)
 	vms, err := m.eng.List(ctx)
 	if err != nil {
 		return fmt.Errorf("list vms: %w", err)
@@ -97,7 +97,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 	}
 	// A failed save keeps the records, so the next boot records them
 	if saveErr == nil {
-		m.recordReconciled(ctx, resumed, dropped, fenced)
+		m.recordReconciled(ctx, resumed, dropped, answered)
 	}
 	logger := log.WithFunc("pool.Reconcile")
 	if err := m.ckpts.SweepStaging(); err != nil {
@@ -112,7 +112,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 	_ = utils.RemoveDirEntries(filepath.Join(m.dataDir, readerDir), nil)
 	_ = utils.RemoveDirEntries(filepath.Join(m.dataDir, movesDir), func(id string) bool { return claims[id] == nil || !claims[id].MoveIn })
 
-	if fenced {
+	if answered {
 		m.reclaimOrphanArchiveCks(ctx, claims)
 	}
 	m.retryArchiveDeletes(ctx)

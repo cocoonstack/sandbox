@@ -165,8 +165,9 @@ func collectExec(guest net.Conn, reserve func(int) bool) (resp ExecResponse, pid
 		return nil
 	}
 	sc := wire.NewFrameScanner(guest)
+	var scratch []byte
 	for sc.Scan() {
-		frame, err := wire.DecodeResponse(sc.Bytes())
+		frame, err := wire.DecodeResponseInto(sc.Bytes(), &scratch)
 		if err != nil {
 			return ExecResponse{}, pid, err
 		}

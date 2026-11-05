@@ -199,11 +199,6 @@ func (t *auditTee) endLine() {
 	t.skip = false
 }
 
-func fenceGuest(guest net.Conn, fenced <-chan struct{}, done func()) func() {
-	stop := pool.CloseOnFence(fenced, guest)
-	return func() { stop(); done() }
-}
-
 func copyBoth(client net.Conn, clientR io.Reader, guest net.Conn, ends relayEnds, noSplice bool) {
 	done := make(chan struct{})
 	go func() {

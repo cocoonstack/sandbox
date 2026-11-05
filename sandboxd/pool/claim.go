@@ -492,9 +492,10 @@ func (m *Manager) finalize(ctx context.Context, sb *types.Sandbox, ttl time.Dura
 
 // finalizeBatch persists the batch as one write, all-or-nothing; one tenant per batch.
 func (m *Manager) finalizeBatch(ctx context.Context, sbs []*types.Sandbox, ttl time.Duration, claimRefPrefix string, inherited bool) error {
-	now := time.Now()
+	now, lease := time.Now(), clampTTL(ttl)
 	for _, sb := range sbs {
-		stampIdentity(sb, clampTTL(ttl))
+		sb.ID, sb.Token = "sb_"+randHex(8), randHex(16)
+		sb.ClaimedAt, sb.Deadline, sb.LeaseSeconds = now, now.Add(lease), int(lease/time.Second)
 		if claimRefPrefix != "" {
 			sb.ClaimRef = claimRefPrefix + sb.ID
 		}
@@ -542,7 +543,7 @@ func (m *Manager) finalizeBatch(ctx context.Context, sbs []*types.Sandbox, ttl t
 			Event: "claim",
 			ID:    sb.ID, VMName: sb.VMName,
 			KeyHash: sb.Key.Hash(), Template: sb.Key.Template, Net: string(sb.Key.Net), Size: string(sb.Key.Size),
-			Tenant: sb.Tenant, Deadline: sb.ClaimedAt.Add(clampTTL(ttl)),
+			Tenant: sb.Tenant, Deadline: sb.ClaimedAt.Add(lease),
 			Volumes: types.VolumeNames(sb.Volumes), VolumesRW: types.VolumeRWNames(sb.Volumes),
 		})
 	}
@@ -644,15 +645,6 @@ func (c *heldConn) CloseWrite() error {
 		return nil
 	}
 	return cw.CloseWrite()
-}
-
-func stampIdentity(sb *types.Sandbox, ttl time.Duration) {
-	now := time.Now()
-	sb.ID = "sb_" + randHex(8)
-	sb.Token = randHex(16)
-	sb.ClaimedAt = now
-	sb.Deadline = now.Add(ttl)
-	sb.LeaseSeconds = int(ttl / time.Second)
 }
 
 func clampTTL(ttl time.Duration) time.Duration {

@@ -18,9 +18,6 @@ type PoolSpec struct {
 	ArchiveDeleteAfterSeconds int      `json:"archive_delete_after_seconds,omitzero"`
 }
 
-// PoolResult is one node's outcome from SetPoolsCluster.
-type PoolResult = NodeResult
-
 type poolUpdate struct {
 	Pools []PoolSpec `json:"pools"`
 }
@@ -35,7 +32,7 @@ func (c *Client) SetPools(ctx context.Context, pools []PoolSpec) (*NodeInfo, err
 // per-node result; retrying failed nodes is the whole protocol (idempotent
 // replace). A non-nil error means peer discovery failed and only the entry node
 // was reached — an incomplete apply to retry, not a single-node cluster (nil).
-func (c *Client) SetPoolsCluster(ctx context.Context, pools []PoolSpec) ([]PoolResult, error) {
+func (c *Client) SetPoolsCluster(ctx context.Context, pools []PoolSpec) ([]NodeResult, error) {
 	return c.eachNode(ctx, func(addr string) (*NodeInfo, error) { return c.setPoolsAt(ctx, addr, pools) })
 }
 
