@@ -411,6 +411,9 @@ func readDNSMsg(r io.Reader, limit int) ([]byte, error) {
 	}
 	msg := make([]byte, n)
 	if _, err := io.ReadFull(r, msg); err != nil {
+		if errors.Is(err, io.EOF) {
+			err = io.ErrUnexpectedEOF
+		}
 		return nil, err
 	}
 	return msg, nil
