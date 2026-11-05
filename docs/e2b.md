@@ -76,7 +76,7 @@ for the truth.
 `e2b-ci` is built from e2b's own recipe, `e2b-dev/code-interpreter`
 `template/` at the `CI_RECIPE_SHA` the Dockerfile pins: the build fetches that
 commit's archive, checks its sha256, and applies the one local change listed in
-`os-image/e2b-ci/PATCHES`; e2b's license ships in the image under
+`os-image/e2b-ci/PATCHES.md`; e2b's license ships in the image under
 `/usr/share/doc/e2b-code-interpreter/`. Moving to a newer recipe is a bump of the
 two `CI_RECIPE_*` args plus a refresh of the constraints files. On top of `e2b-rt`'s contents it runs a Jupyter server on
 loopback 8888 and the code-interpreter API on 49999, both enabled at boot, and

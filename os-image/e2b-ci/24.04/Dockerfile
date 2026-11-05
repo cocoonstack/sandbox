@@ -1,7 +1,7 @@
 # e2b's code interpreter on the e2b data plane: envd, a Jupyter server and the
 # code-interpreter API on 49999, both started at boot. The recipe is
 # e2b-dev/code-interpreter template/ at CI_RECIPE_SHA, fetched and checksummed
-# here, with PATCHES applied; constraints.txt and server-constraints.txt pin the
+# here, with PATCHES.md applied; constraints.txt and server-constraints.txt pin the
 # full sets it resolves to, so a rebuild of one commit installs the same
 # packages. Python kernel only: the recipe's javascript, R and Java kernels
 # install from unpinned sources.

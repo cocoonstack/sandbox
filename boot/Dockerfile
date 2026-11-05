@@ -9,7 +9,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential bc bison flex libelf-dev libssl-dev \
     xz-utils curl ca-certificates python3 \
     && rm -rf /var/lib/apt/lists/*
-ARG KERNEL_VERSION=6.18.37
+ARG KERNEL_VERSION
 # Mirror chain: KERNEL_MIRROR (cdn.kernel.org by default), then kernel.org's
 # edge mirror and an rsync mirror. Download to a file first — a mid-stream
 # failure must not leave a half-extracted tree — and verify against the pinned SHA256
