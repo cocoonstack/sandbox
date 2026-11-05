@@ -40,45 +40,6 @@ RUN --mount=type=secret,id=sandbox_install_agent \
     # Docker bind-mounts /etc/resolv.conf during build (EBUSY on ln), so the
     # resolved-stub symlink is materialized at first boot via tmpfiles.
     echo 'L+ /etc/resolv.conf - - - - ../run/systemd/resolve/stub-resolv.conf' > /usr/lib/tmpfiles.d/sandbox-resolv.conf && \
-    # [DNS] No device-backed NIC, or a relay verdict, resolves through the
-    # 127.0.0.153 relay; a direct NIC keeps resolved. The path unit reruns the
-    # check when the host writes the verdict after the golden's first boot.
-    printf '%s\n' \
-      '#!/bin/sh' \
-      'relay=1' \
-      'for dev in /sys/class/net/*; do [ -e "$dev/device" ] && relay=0; done' \
-      'grep -qx relay /etc/silkd-lane 2>/dev/null && relay=1' \
-      '[ "$relay" = 1 ] || exit 0' \
-      'printf "nameserver 127.0.0.153\n" > /etc/resolv.conf.sandbox && mv -f /etc/resolv.conf.sandbox /etc/resolv.conf' \
-      > /usr/local/sbin/sandbox-resolv && \
-    chmod 755 /usr/local/sbin/sandbox-resolv && \
-    printf '%s\n' \
-      '[Unit]' \
-      'Description=Point resolv.conf at the sandbox DNS relay on a lane without a direct NIC' \
-      'DefaultDependencies=no' \
-      'After=systemd-tmpfiles-setup.service' \
-      'Before=nss-lookup.target sysinit.target' \
-      'Wants=nss-lookup.target' \
-      '' \
-      '[Service]' \
-      'Type=oneshot' \
-      'ExecStart=/usr/local/sbin/sandbox-resolv' \
-      '' \
-      '[Install]' \
-      'WantedBy=sysinit.target' \
-      > /etc/systemd/system/sandbox-resolv.service && \
-    printf '%s\n' \
-      '[Unit]' \
-      'Description=Rerun sandbox-resolv when the host writes the lane verdict' \
-      'DefaultDependencies=no' \
-      '' \
-      '[Path]' \
-      'PathChanged=/etc/silkd-lane' \
-      '' \
-      '[Install]' \
-      'WantedBy=sysinit.target' \
-      > /etc/systemd/system/sandbox-resolv.path && \
-    systemctl enable sandbox-resolv.service sandbox-resolv.path && \
     mkdir -p /etc/systemd/network && \
     printf "[Match]\nName=e* v*\n[Network]\nDHCP=yes\n\n[DHCPv4]\nClientIdentifier=mac\n" > /etc/systemd/network/20-wired.network && \
     # [SSH] Socket-activated: nothing in the boot path, spawned on first connect.

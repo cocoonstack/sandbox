@@ -84,22 +84,17 @@ node's `/etc/resolv.conf`, and answers with real addresses. silkd only carries
 bytes: TCP the way it carries 3128 and 1080, and each UDP datagram as one
 length-framed message on its own vsock connection, with one framed reply.
 
-- **Image requirement.** On a lane without a direct NIC, the guest must name
-  the relay in a plain `/etc/resolv.conf`: `nameserver 127.0.0.153`. With only
-  `lo` up, systemd-resolved answers "network is down" for a loopback upstream,
-  so it cannot forward to the relay. The sandbox base image, and every image
-  built on it, ships `sandbox-resolv.service`, a oneshot that runs after
-  `systemd-tmpfiles-setup.service` and before `nss-lookup.target`:
-  - with no device-backed NIC (the none lane), or `relay` in `/etc/silkd-lane`
-    (a locked bridge lane), it writes the plain file over resolved's link;
-  - otherwise (a direct CNI lane) it leaves resolved and its DHCP DNS alone.
-
-  sandboxd writes `/etc/silkd-lane` after the golden's first boot, so
-  `sandbox-resolv.path` reruns the check when the file changes. A product image
-  that wants `"dns": true` carries the same unit, or a resolv.conf to the same
-  effect. Do not turn the switch on for a pool whose image has neither. The
-  switch is off by default. The android flavor resolves through its own netd,
-  which does not read `/etc/resolv.conf`, so the relay does not serve it.
+- **Guest configuration.** sandboxd and silkd leave the guest's resolver
+  alone: the image or the product decides whether it uses the relay. A guest
+  uses it by naming it, either as a plain `/etc/resolv.conf` with
+  `nameserver 127.0.0.153` or per query (`dig @127.0.0.153`). systemd-resolved
+  takes it as `DNS=127.0.0.153` in a drop-in only while the guest has a
+  routable link, such as a direct NIC or a `tun0` with a default route. With
+  only `lo` up, as on the none lane, resolved answers "network is down" for a
+  loopback upstream and never forwards. Name the relay only in a pool with
+  `"dns": true`: elsewhere it is unwired and a query to it gets no reply. The
+  switch is off by default, and a guest that does not name the relay behaves
+  as before.
 - **Failures.** When the pool has no DNS door, silkd's dial is refused. When
   the reply does not come within 5 s, silkd drops the datagram and the client
   retries on its own schedule. When no nameserver answers, sandboxd replies
