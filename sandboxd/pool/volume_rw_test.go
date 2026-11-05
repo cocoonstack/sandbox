@@ -384,7 +384,7 @@ func TestRollbackQuiescesWritableVolumesBeforeRemoval(t *testing.T) {
 		}
 		eng.volumeMounts = sb.Volumes
 		m.mu.Lock()
-		m.claimed[sb.ID] = sb
+		m.addClaimLocked(sb)
 		m.catalog.adoptVolumes(sb.Volumes)
 		m.mu.Unlock()
 

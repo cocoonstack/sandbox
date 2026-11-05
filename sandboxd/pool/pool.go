@@ -345,6 +345,7 @@ type Manager struct {
 	mu              sync.Mutex
 	pools           map[types.PoolKey]*pool
 	claimed         map[string]*types.Sandbox
+	claimedVMs      map[string]*types.Sandbox
 	pendingRemovals map[string]pendingRemoval
 	// moving holds this node's outgoing moves, incoming its reservations for moves to it; neither enters claimed.
 	moving   map[string]*outMove
@@ -392,6 +393,7 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 		tpls:            b.Templates,
 		pools:           make(map[types.PoolKey]*pool, len(cfg.Pools)),
 		claimed:         map[string]*types.Sandbox{},
+		claimedVMs:      map[string]*types.Sandbox{},
 		pendingRemovals: map[string]pendingRemoval{},
 		moving:          map[string]*outMove{},
 		incoming:        map[string]*inMove{},

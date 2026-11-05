@@ -929,7 +929,7 @@ func BenchmarkReapPurgesArchivedClaims(b *testing.B) {
 		m.mu.Lock()
 		for i := range 500 {
 			sb := &types.Sandbox{ID: fmt.Sprintf("sb_p%05d", i), Key: testKey, Deadline: past, ArchiveCk: fmt.Sprintf("ck_%016x", i), OnExpire: types.ExpireArchive}
-			m.claimed[sb.ID] = sb
+			m.addClaimLocked(sb)
 		}
 		m.mu.Unlock()
 		b.StartTimer()

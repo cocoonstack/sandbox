@@ -2297,7 +2297,26 @@ func newTestManagerAt(t testing.TB, eng *fakeEngine, dataDir string, pools ...co
 			}
 		}
 	})
+	t.Cleanup(func() { assertClaimedVMs(t, m) })
 	return m
+}
+
+func assertClaimedVMs(t testing.TB, m *Manager) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	named := 0
+	for id, sb := range m.claimed {
+		if sb.VMName == "" {
+			continue
+		}
+		named++
+		if m.claimedVMs[sb.VMName] != sb {
+			t.Errorf("claim %s with VM %s is missing from the VM index", id, sb.VMName)
+		}
+	}
+	if len(m.claimedVMs) != named {
+		t.Errorf("VM index holds %d entries for %d named claims", len(m.claimedVMs), named)
+	}
 }
 
 func settleCaptures(m *Manager) {

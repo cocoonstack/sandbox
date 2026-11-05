@@ -492,7 +492,7 @@ func TestResyncRecordsADownEgressLaneTap(t *testing.T) {
 	m := egressManager(t, eng, config.PoolSpec{PoolKey: egKey, Egress: egPolicy})
 	sb := &types.Sandbox{ID: "sb_down", VMName: "sbx-down", Key: egKey}
 	m.mu.Lock()
-	m.claimed[sb.ID] = sb
+	m.addClaimLocked(sb)
 	m.mu.Unlock()
 	live := map[string]types.VMRecord{"sbx-down": {
 		Config: types.VMConfig{Name: "sbx-down"}, State: "stopped",
@@ -599,6 +599,35 @@ func TestReconcileKeepsRunningClaimsTheHostLost(t *testing.T) {
 				t.Errorf("summary %+v (listed %v), want failed %q restarts %d", got, ok, tt.wantFailed, tt.wantRestarts)
 			}
 		})
+	}
+}
+
+func TestAVMEventFindsAWokenArchivedClaimByItsNewVM(t *testing.T) {
+	m := newTestManager(t, newFakeEngine(), archivePool(3600))
+	sb := mustClaim(t, m, testKey)
+	hibernateClaim(t, m, sb)
+	oldVM := sb.VMName
+	if err := m.archive(t.Context(), sb); err != nil {
+		t.Fatalf("archive: %v", err)
+	}
+	if got := m.watchedClaims(oldVM); len(got) != 0 {
+		t.Fatalf("an event for the archived claim's old VM found %v", got)
+	}
+	if _, _, release, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
+		t.Fatalf("wake: %v", err)
+	} else {
+		release()
+	}
+	m.mu.Lock()
+	newVM := sb.VMName
+	m.mu.Unlock()
+	if got := m.watchedClaims(newVM); len(got) != 1 || got[0].sb != sb {
+		t.Errorf("an event for the woken VM %s found %v, want the claim", newVM, got)
+	}
+	if newVM != oldVM {
+		if got := m.watchedClaims(oldVM); len(got) != 0 {
+			t.Errorf("an event for the old VM %s still finds %v", oldVM, got)
+		}
 	}
 }
 

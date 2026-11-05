@@ -1952,6 +1952,7 @@ func (c *failoverCluster) nodeOn(t *testing.T, eng *fakeEngine, name, dataDir st
 		t.Fatalf("manager %s: %v", name, err)
 	}
 	t.Cleanup(func() { settleCaptures(m) })
+	t.Cleanup(func() { assertClaimedVMs(t, m) })
 	_ = c.reg.Renew(t.Context(), name, time.Hour)
 	m.WithPeerAdopt(func(ctx context.Context, id, token string) bool {
 		return slices.ContainsFunc(c.nodes, func(p *Manager) bool {
