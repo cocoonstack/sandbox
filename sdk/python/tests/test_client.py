@@ -262,6 +262,20 @@ def test_claim_follows_redirect_with_no_redirect(node):
     )
 
 
+@pytest.mark.parametrize(
+    ("verb", "method", "path"),
+    [
+        ("drain", "POST", "/v1/drain"),
+        ("undrain", "DELETE", "/v1/drain"),
+        ("cordon", "POST", "/v1/cordon"),
+        ("uncordon", "DELETE", "/v1/cordon"),
+    ],
+)
+def test_node_hold_verbs_hit_their_routes(node, verb, method, path):
+    FakeNode.routes[(method, path)] = lambda body, path: (200, {"claimed": 3})
+    assert getattr(Client(node), verb)() == {"claimed": 3}
+
+
 def test_api_error_carries_server_message(node):
     FakeNode.routes[("POST", "/v1/claim")] = lambda body, path: (409, {"error": "no egress"})
     with pytest.raises(APIError) as exc:
