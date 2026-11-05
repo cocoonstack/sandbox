@@ -39,6 +39,9 @@ func (d *doors) close() {
 	if d.dns != nil {
 		_ = d.dns.Close()
 	}
+	if d.resolver != nil {
+		d.resolver.close()
+	}
 }
 
 // doorListener caps a door's live connections; doorConn's NetConn hands splice the *net.UnixConn the kernel copy needs.

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"golang.org/x/net/dns/dnsmessage"
 
@@ -98,6 +99,31 @@ func TestDNSDoorDropsInternalAnswersAndRemembersTheRest(t *testing.T) {
 	}
 }
 
+func TestDNSDoorDisarmEndsAnOpenConnection(t *testing.T) {
+	upstream := newFakeNameserver(t)
+	h := newHost(t, &fakeEngine{}, poolConfig(testKey, dnsPolicy), func(o *Options) {
+		o.Nameservers = func() []string { return []string{upstream.udp} }
+	})
+	sb := armDNS(t, h)
+	conn := dialDNS(t, sb)
+	if got := addresses(exchangeDoor(t, conn, "public.test.", dnsmessage.TypeA)); len(got) != 2 {
+		t.Fatalf("armed door answers %v, want two addresses", got)
+	}
+	h.Disarm(sb.ID, false)
+	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+	query, err := (&dnsmessage.Message{
+		ID:        1,
+		Questions: []dnsmessage.Question{{Name: dnsmessage.MustNewName("public.test."), Type: dnsmessage.TypeA, Class: dnsmessage.ClassINET}},
+	}).Pack()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = writeDNSMsg(conn, query)
+	if answer, err := readDNSMsg(conn); err == nil {
+		t.Fatalf("a disarmed door answered %d bytes on a connection opened while armed", len(answer))
+	}
+}
+
 func TestDNSDoorRetriesATruncatedAnswerOverTCP(t *testing.T) {
 	upstream := newFakeNameserver(t)
 	h := newHost(t, &fakeEngine{}, poolConfig(testKey, dnsPolicy), func(o *Options) {
@@ -134,18 +160,24 @@ func TestDNSDoorRefusesAQueryFloodPastItsBucket(t *testing.T) {
 		o.Nameservers = func() []string { return []string{upstream.udp} }
 		o.RecordDNS = events.record
 	})
-	conn := dialDNS(t, armDNS(t, h))
+	sb := armDNS(t, h)
+	h.mu.Lock()
+	res := h.doors[sb.ID].resolver
+	h.mu.Unlock()
+	res.queries.SetLimit(0)
+	res.refusals.SetLimit(0)
+	conn := dialDNS(t, sb)
 	refused := 0
 	for range dnsQueryBurst + 100 {
 		if exchangeDoor(t, conn, "public.test.", dnsmessage.TypeA).RCode == dnsmessage.RCodeRefused {
 			refused++
 		}
 	}
-	if refused == 0 {
-		t.Fatalf("no query refused after %d in a burst of %d", dnsQueryBurst+100, dnsQueryBurst)
+	if refused != 100 {
+		t.Errorf("%d of %d queries refused with a bucket of %d and no refill, want 100", refused, dnsQueryBurst+100, dnsQueryBurst)
 	}
-	if logged := events.count(DNSRateLimited); logged == 0 || logged > dnsRefusalBurst+2 {
-		t.Errorf("%d rate_limited events for %d refusals, want between 1 and %d", logged, refused, dnsRefusalBurst+2)
+	if logged := events.count(DNSRateLimited); logged != dnsRefusalBurst {
+		t.Errorf("%d rate_limited events for %d refusals, want %d", logged, refused, dnsRefusalBurst)
 	}
 }
 

@@ -60,8 +60,10 @@ type resolver struct {
 	queries  *rate.Limiter
 	refusals *rate.Limiter
 
-	mu    sync.Mutex
-	names map[netip.Addr]resolvedName
+	mu     sync.Mutex
+	names  map[netip.Addr]resolvedName
+	conns  map[net.Conn]struct{}
+	closed bool
 }
 
 func newResolver(h *Host, record func(DNSEvent)) *resolver {
@@ -71,6 +73,7 @@ func newResolver(h *Host, record func(DNSEvent)) *resolver {
 		queries:  rate.NewLimiter(dnsQueryRate, dnsQueryBurst),
 		refusals: rate.NewLimiter(dnsRefusalRate, dnsRefusalBurst),
 		names:    map[netip.Addr]resolvedName{},
+		conns:    map[net.Conn]struct{}{},
 	}
 }
 
@@ -84,8 +87,21 @@ func (r *resolver) serve(ctx context.Context, ln net.Listener) {
 	}
 }
 
+func (r *resolver) close() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.closed = true
+	for conn := range r.conns {
+		_ = conn.Close()
+	}
+}
+
 func (r *resolver) serveConn(ctx context.Context, conn net.Conn) {
-	defer func() { _ = conn.Close() }()
+	if !r.track(conn) {
+		_ = conn.Close()
+		return
+	}
+	defer r.untrack(conn)
 	for {
 		_ = conn.SetReadDeadline(time.Now().Add(dnsIdle))
 		query, err := readDNSMsg(conn)
@@ -97,6 +113,23 @@ func (r *resolver) serveConn(ctx context.Context, conn net.Conn) {
 			return
 		}
 	}
+}
+
+func (r *resolver) track(conn net.Conn) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.closed {
+		return false
+	}
+	r.conns[conn] = struct{}{}
+	return true
+}
+
+func (r *resolver) untrack(conn net.Conn) {
+	r.mu.Lock()
+	delete(r.conns, conn)
+	r.mu.Unlock()
+	_ = conn.Close()
 }
 
 func (r *resolver) answer(ctx context.Context, query []byte) ([]byte, bool) {
