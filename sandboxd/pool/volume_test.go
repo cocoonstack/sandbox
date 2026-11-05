@@ -255,21 +255,20 @@ func TestClaimProvisionRejectsInvalidVolumesBeforeProvision(t *testing.T) {
 	}
 	for _, tt := range []struct {
 		name    string
-		key     types.PoolKey
 		catalog []config.VolumeSpec
 		volumes []types.Volume
 	}{
-		{"invalid name", testKey, []config.VolumeSpec{{Name: "data", Path: path}}, []types.Volume{{Name: "Data"}}},
-		{"reserved name", testKey, []config.VolumeSpec{{Name: "data", Path: path}}, []types.Volume{{Name: "cocoon-data"}}},
-		{"duplicate", testKey, []config.VolumeSpec{{Name: "data", Path: path}}, []types.Volume{{Name: "data"}, {Name: "data"}}},
-		{"too many", testKey, nil, tooMany},
-		{"unknown", testKey, []config.VolumeSpec{{Name: "data", Path: path}}, []types.Volume{{Name: "other"}}},
-		{"invalid mount", testKey, []config.VolumeSpec{{Name: "data", Path: path}}, []types.Volume{{Name: "data", Mount: "relative"}}},
+		{"invalid name", []config.VolumeSpec{{Name: "data", Path: path}}, []types.Volume{{Name: "Data"}}},
+		{"reserved name", []config.VolumeSpec{{Name: "data", Path: path}}, []types.Volume{{Name: "cocoon-data"}}},
+		{"duplicate", []config.VolumeSpec{{Name: "data", Path: path}}, []types.Volume{{Name: "data"}, {Name: "data"}}},
+		{"too many", nil, tooMany},
+		{"unknown", []config.VolumeSpec{{Name: "data", Path: path}}, []types.Volume{{Name: "other"}}},
+		{"invalid mount", []config.VolumeSpec{{Name: "data", Path: path}}, []types.Volume{{Name: "data", Mount: "relative"}}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			eng := newFakeEngine()
 			m := newVolumeManager(t, eng, tt.catalog)
-			if _, err := m.ClaimProvision(t.Context(), tt.key, ClaimOptions{Volumes: tt.volumes}); !errors.Is(err, ErrBadVolume) {
+			if _, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Volumes: tt.volumes}); !errors.Is(err, ErrBadVolume) {
 				t.Errorf("got %v, want ErrBadVolume", err)
 			}
 			if len(eng.colds)+len(eng.clones) != 0 {

@@ -513,12 +513,12 @@ func TestLiveVolumesRespectOwningTenantAndRemoval(t *testing.T) {
 	}
 }
 
-func TestDesiredVolumesJournalMigration(t *testing.T) {
+func TestVolumesWantOmittedWhenEqualToApplied(t *testing.T) {
 	for _, tt := range []struct {
 		name, field string
 		want        []types.Volume
 	}{
-		{"legacy", "", []types.Volume{{Name: "data", Mount: "/data"}}},
+		{"omitted", "", []types.Volume{{Name: "data", Mount: "/data"}}},
 		{"explicit empty", `,"volumes_want":[]`, nil},
 		{"desired", `,"volumes_want":[{"name":"other","mount":"/other"}]`, []types.Volume{{Name: "other", Mount: "/other"}}},
 	} {

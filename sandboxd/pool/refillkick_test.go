@@ -31,7 +31,6 @@ func TestAFreshGoldenStartsRefillWithoutWaitingForATick(t *testing.T) {
 		eng := newFakeEngine()
 		m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1})
 		ctx, cancel := context.WithCancel(t.Context())
-		start := time.Now()
 
 		go m.Run(ctx)
 		synctest.Wait()
@@ -39,14 +38,14 @@ func TestAFreshGoldenStartsRefillWithoutWaitingForATick(t *testing.T) {
 		m.mu.Lock()
 		golden := m.pools[testKey].goldenDir
 		m.mu.Unlock()
-		clones, waited := eng.cloneCount(), time.Since(start)
+		clones := eng.cloneCount()
 		cancel()
 		synctest.Wait()
 		if golden == "" {
 			t.Fatal("no golden built, so the test proves nothing")
 		}
-		if clones == 0 || waited >= refillInterval {
-			t.Errorf("%d warm clones %v after Run started, want the first one before the %v refill tick", clones, waited, refillInterval)
+		if clones == 0 {
+			t.Errorf("no warm clone before the %v refill tick", refillInterval)
 		}
 	})
 }

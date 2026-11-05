@@ -327,7 +327,7 @@ func TestAQueuedFailedClaimStillRestarts(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		c := newFailoverCluster(t)
 		a := c.node(t, "a", t.TempDir(), keepAnHour)
-		tuneView(a, func(v *configView) { v.vmmRestart = types.VMMRestartNone })
+		editView(a, func(v *configView) { v.vmmRestart = types.VMMRestartNone })
 		sb := mustClaim(t, a, testKey)
 		killVMM(fakeOf(a), sb.VMName)
 		a.recoverVMM(t.Context(), sb)

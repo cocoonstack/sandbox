@@ -154,7 +154,7 @@ func TestRemovingTheMemoryLimitClearsTheState(t *testing.T) {
 	m := memoryManager(t, config.MemoryLimit{Anon: "300G"})
 	observeAnon(t, m, 301*units.GiB)
 
-	tuneView(m, func(v *configView) { v.memoryAnon = 0 })
+	editView(m, func(v *configView) { v.memoryAnon = 0 })
 	m.checkMemory(t.Context())
 	if _, g := m.Info(); g.MemoryLow || g.AnonBytes != 0 {
 		t.Errorf("gauges %+v, want no memory state with the limit off", g)

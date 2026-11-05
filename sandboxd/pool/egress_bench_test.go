@@ -41,7 +41,8 @@ func BenchmarkArmEgress(b *testing.B) {
 					id := "sb_" + strconv.FormatInt(n.Add(1), 10)
 					sb := &types.Sandbox{ID: id, Key: testKey, Layer: types.LayerPooled, VsockSocket: filepath.Join(root, id)}
 					if err := m.out.ArmProxy(b.Context(), sb); err != nil {
-						b.Fatal(err)
+						b.Error(err)
+						return
 					}
 					m.out.Disarm(id, true)
 				}
