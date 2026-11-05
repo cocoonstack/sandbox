@@ -399,14 +399,7 @@ type fakeNameserver struct {
 
 func newFakeNameserver(t testing.TB) *fakeNameserver {
 	t.Helper()
-	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	ln, err := net.Listen("tcp", pc.LocalAddr().String())
-	if err != nil {
-		t.Fatal(err)
-	}
+	pc, ln := listenUDPAndTCP(t)
 	t.Cleanup(func() { _ = pc.Close(); _ = ln.Close() })
 	go func() {
 		buf := make([]byte, dnsMsgMax)
@@ -433,6 +426,23 @@ func newFakeNameserver(t testing.TB) *fakeNameserver {
 		}
 	}()
 	return &fakeNameserver{udp: pc.LocalAddr().String()}
+}
+
+func listenUDPAndTCP(t testing.TB) (net.PacketConn, net.Listener) {
+	t.Helper()
+	for range 10 {
+		pc, err := net.ListenPacket("udp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		ln, err := net.Listen("tcp", pc.LocalAddr().String())
+		if err == nil {
+			return pc, ln
+		}
+		_ = pc.Close()
+	}
+	t.Fatal("no port free for both UDP and TCP")
+	return nil, nil
 }
 
 func newServfailNameserver(t testing.TB) string {
