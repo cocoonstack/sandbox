@@ -13,7 +13,6 @@ on:
     paths:
       - "boot/**"
       - "silkd/**"
-      - "protocol/**"
       - "os-image/**"
       - ".github/workflows/images.yml"
       - ".github/workflows/build-os-images.yml"
@@ -72,7 +71,7 @@ jobs:
             # built must rebuild it, or the run goes green having built nothing.
             wf=.github/workflows
             changed boot/ $wf/build-boot.yml && boot=true || boot=false
-            changed silkd/ protocol/ $wf/build-silkd.yml && silkd=true || silkd=false
+            changed silkd/ $wf/build-silkd.yml && silkd=true || silkd=false
             changed os-image/ $wf/build-os-images.yml $wf/images.yml && osimage=true || osimage=false
           fi
           {
