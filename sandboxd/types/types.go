@@ -463,6 +463,8 @@ func (r VMRecord) TapDevice() string {
 type MoveOut struct {
 	Epoch  int64  `json:"epoch"`
 	Series string `json:"series,omitempty"`
+	Addr   string `json:"addr,omitempty"`
+	To     string `json:"to,omitempty"`
 }
 
 // MigrateFile is one file a migrate round wrote, named relative to the round's Dir.

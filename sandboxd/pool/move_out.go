@@ -31,7 +31,7 @@ func (m *Manager) Move(ctx context.Context, id, addr string, maxDowntime time.Du
 	if err := m.eng.CheckMigrateSupport(ctx); err != nil {
 		return MoveResult{}, fmt.Errorf("%w: %w", ErrNotMovable, err)
 	}
-	mv := &outMove{addr: addr}
+	mv := &outMove{MoveOut: types.MoveOut{Addr: addr}}
 	if err := m.markMoving(sb, mv); err != nil {
 		return MoveResult{}, err
 	}
@@ -50,11 +50,11 @@ func (m *Manager) moveOut(ctx context.Context, sb *types.Sandbox, mv *outMove, b
 	m.mu.Lock()
 	admission, vm := MoveAdmission{Tenant: sb.Tenant, Key: sb.Key, From: m.nodeID}, sb.VMName
 	m.mu.Unlock()
-	to, err := m.movePeer.Admit(ctx, mv.addr, sb.ID, admission)
+	to, err := m.movePeer.Admit(ctx, mv.Addr, sb.ID, admission)
 	if err != nil {
 		return err
 	}
-	mv.to = to
+	mv.To = to
 	epoch, err := m.beginMove(ctx, sb, to)
 	if errors.Is(err, moves.ErrLost) {
 		return fmt.Errorf("%w: another move of %s is on record", ErrNotMovable, sb.ID)
@@ -125,7 +125,7 @@ func (m *Manager) moveOut(ctx context.Context, sb *types.Sandbox, mv *outMove, b
 	if err != nil {
 		return fmt.Errorf("encode claim: %w", err)
 	}
-	return m.movePeer.Commit(ctx, mv.addr, sb.ID, claim, final)
+	return m.movePeer.Commit(ctx, mv.Addr, sb.ID, claim, final)
 }
 
 func (m *Manager) beginMove(ctx context.Context, sb *types.Sandbox, to string) (int64, error) {
@@ -157,7 +157,7 @@ func (m *Manager) sendRound(ctx context.Context, id string, mv *outMove, round t
 	}
 	ctx, cancel := context.WithTimeout(ctx, roundTimeout(roundBytes(round)))
 	defer cancel()
-	return m.movePeer.SendRound(ctx, mv.addr, id, mv.rounds, round.Dir, names)
+	return m.movePeer.SendRound(ctx, mv.Addr, id, mv.rounds, round.Dir, names)
 }
 
 func (m *Manager) markMoving(sb *types.Sandbox, mv *outMove) error {
@@ -340,9 +340,9 @@ func (m *Manager) abortMoveOut(ctx context.Context, sb *types.Sandbox, mv *outMo
 			return fmt.Errorf("abort series %s: %w", mv.Series, err)
 		}
 	}
-	if mv.addr != "" && mv.to != "" {
-		if err := m.movePeer.Drop(ctx, mv.addr, sb.ID); err != nil {
-			logger.Warnf(ctx, "drop the reservation for %s on %s: %v", sb.ID, mv.addr, err)
+	if mv.Addr != "" && mv.To != "" {
+		if err := m.movePeer.Drop(ctx, mv.Addr, sb.ID); err != nil {
+			logger.Warnf(ctx, "drop the reservation for %s on %s: %v", sb.ID, mv.Addr, err)
 		}
 	}
 	_, journalErr := m.commitIfLive(ctx, sb, func() { sb.MoveOut = nil })

@@ -54,8 +54,6 @@ type MovePeer interface {
 // outMove is a source's move in flight; final is guarded by m.mu, the rest belongs to the goroutine driving the move.
 type outMove struct {
 	types.MoveOut
-	addr     string
-	to       string
 	replica  string
 	rounds   int
 	final    bool

@@ -244,6 +244,30 @@ func TestMoveWhoseAbortFailsBlamesTheAbortNotTheRegistry(t *testing.T) {
 	assertStillOnSource(t, mc, sb)
 }
 
+func TestMoveRestartedSourceDropsTheTargetsReservation(t *testing.T) {
+	mc := newMoveCluster(t)
+	const id, vm, series = "sb_x", "sbx-x", "s1"
+	reserveMove(t, mc.t, id, "acme")
+	epoch := seedMoveRecord(t, mc.moveReg, id, "a", "b", moves.Pending)
+	dataDir := t.TempDir()
+	seedClaims(t, dataDir, map[string]*types.Sandbox{id: {
+		ID: id, VMName: vm, Key: testKey, Token: "tok", Tenant: "acme", Deadline: time.Now().Add(time.Hour),
+		MoveOut: &types.MoveOut{Epoch: epoch, Series: series, Addr: "b", To: "b"},
+	}})
+	eng := newFakeEngine()
+	eng.vms[vm], eng.migrateSeries[vm] = "/vsock/"+vm, series
+	restarted := mc.nodeOn(t, eng, "a", dataDir, keepAnHour)
+	restarted.liftFence()
+	restarted.WithMovePeer(mc.p)
+	if err := restarted.Reconcile(t.Context()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	waitFor(t, func() bool { return !restarted.moveHeld(id) })
+	if mc.t.moveHeld(id) {
+		t.Error("the target still holds the reservation of a move the restarted source aborted")
+	}
+}
+
 func TestMoveTargetCountsAReservationLikeAClaim(t *testing.T) {
 	mc := newMoveCluster(t)
 	tuneView(mc.t, func(v *configView) { v.maxClaims = 1 })
