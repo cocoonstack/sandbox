@@ -22,9 +22,12 @@ func (s *Server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
 		metric(name, "gauge", help)
 		_, _ = fmt.Fprintf(w, "sandboxd_%s %d\n", name, value)
 	}
-	draining := 0
-	if g.Draining {
-		draining = 1
+	flag := func(name, help string, on bool) {
+		value := 0
+		if on {
+			value = 1
+		}
+		scalar(name, help, value)
 	}
 	scalar("claimed", "live claims on this node", g.Claimed)
 	scalar("running", "claims holding a VM, including wakes in flight", g.Running)
@@ -32,13 +35,10 @@ func (s *Server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
 	scalar("hibernated", "claims currently hibernated", g.Hibernated)
 	scalar("archived", "claims archived to the checkpoint store", g.Archived)
 	scalar("failed", "claims whose VMM is down and not restarted", g.Failed)
-	scalar("draining", "1 while the node is cordoned for maintenance", draining)
+	flag("draining", "1 while the node is draining", g.Draining)
+	flag("cordoned", "1 while the node is cordoned", g.Cordoned)
 	scalar("evacuating", "claims an evacuation has yet to move to a peer", g.Evacuating)
-	memoryLow := 0
-	if g.MemoryLow {
-		memoryLow = 1
-	}
-	scalar("memory_low", "1 while memory_limit refuses claims and refills", memoryLow)
+	flag("memory_low", "1 while memory_limit refuses claims and refills", g.MemoryLow)
 	scalar("anon_bytes", "node anon memory, 0 when memory_limit has no anon limit", g.AnonBytes)
 
 	if tenants := s.mgr.TenantClaims(); len(tenants) > 0 {

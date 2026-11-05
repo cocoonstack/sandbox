@@ -436,6 +436,14 @@ func (m *Manager) admitClaim(tenant string, volumes []resolvedVolume, applied []
 
 // Callers hold m.mu.
 func (m *Manager) quotaErr(extra int, tenant string) error {
+	if m.cordoned {
+		return fmt.Errorf("%w: node cordoned", ErrQuota)
+	}
+	return m.capacityErr(extra, tenant)
+}
+
+// capacityErr is quotaErr less the cordon, which admits moves in; callers hold m.mu.
+func (m *Manager) capacityErr(extra int, tenant string) error {
 	if m.draining {
 		return fmt.Errorf("%w: node draining", ErrQuota)
 	}

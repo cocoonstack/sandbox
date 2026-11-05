@@ -143,7 +143,9 @@ type Manager interface {
 	DeleteTenant(ctx context.Context, name string) error
 	Drain(ctx context.Context)
 	Evacuate(ctx context.Context)
-	Uncordon(ctx context.Context)
+	Undrain(ctx context.Context)
+	Cordon(ctx context.Context) error
+	Uncordon(ctx context.Context) error
 	Info() ([]pool.PoolInfo, pool.Gauges)
 	Templates() []pool.TemplateInfo
 	Move(ctx context.Context, id, addr string, maxDowntime time.Duration) (pool.MoveResult, error)
@@ -197,6 +199,7 @@ type InfoResponse struct {
 	Archived         int                 `json:"archived"`
 	Failed           int                 `json:"failed,omitzero"`
 	Draining         bool                `json:"draining,omitzero"`
+	Cordoned         bool                `json:"cordoned,omitzero"`
 	Evacuating       int                 `json:"evacuating,omitzero"`
 	AdvertiseAddr    string              `json:"advertise_addr,omitempty"`
 	Peers            []string            `json:"peers,omitempty"`
@@ -347,7 +350,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/moves/{id}/commit", s.requireRoot(s.handleCommitMove))
 	mux.HandleFunc("DELETE /v1/moves/{id}", s.requireRoot(s.handleDropMove))
 	mux.HandleFunc("POST /v1/drain", s.requireRoot(s.handleDrain))
-	mux.HandleFunc("DELETE /v1/drain", s.requireRoot(s.handleUncordon))
+	mux.HandleFunc("DELETE /v1/drain", s.requireRoot(s.handleUndrain))
+	mux.HandleFunc("POST /v1/cordon", s.requireRoot(s.handleCordon))
+	mux.HandleFunc("DELETE /v1/cordon", s.requireRoot(s.handleUncordon))
 	mux.HandleFunc("GET /v1/usage", s.requireRoot(s.handleUsage))
 	mux.HandleFunc("GET /v1/sandboxes/{id}/agent", s.handleAgent)
 	mux.HandleFunc("GET /v1/sandboxes/{id}/ports/{port}", s.handlePort)
@@ -840,9 +845,17 @@ func (s *Server) handleDrain(w http.ResponseWriter, r *http.Request) {
 	s.handleInfo(w, r)
 }
 
-func (s *Server) handleUncordon(w http.ResponseWriter, r *http.Request) {
-	s.mgr.Uncordon(r.Context())
+func (s *Server) handleUndrain(w http.ResponseWriter, r *http.Request) {
+	s.mgr.Undrain(r.Context())
 	s.handleInfo(w, r)
+}
+
+func (s *Server) handleCordon(w http.ResponseWriter, r *http.Request) {
+	writeResult(w, r, "cordon", "", "cordon failed", s.mgr.Cordon(r.Context()), func() { s.handleInfo(w, r) })
+}
+
+func (s *Server) handleUncordon(w http.ResponseWriter, r *http.Request) {
+	writeResult(w, r, "uncordon", "", "uncordon failed", s.mgr.Uncordon(r.Context()), func() { s.handleInfo(w, r) })
 }
 
 func (s *Server) handlePeers(w http.ResponseWriter, _ *http.Request) {
@@ -857,7 +870,7 @@ func (s *Server) handleInfo(w http.ResponseWriter, _ *http.Request) {
 	pools, g := s.mgr.Info()
 	resp := InfoResponse{
 		Pools: pools, Templates: s.mgr.Templates(), Claimed: g.Claimed, Running: g.Running, MaxRunning: g.MaxRunning, Hibernated: g.Hibernated, Archived: g.Archived, Failed: g.Failed,
-		Draining: g.Draining, Evacuating: g.Evacuating, AtCapacity: g.AtCapacity, AtCapacityReason: g.AtCapacityReason,
+		Draining: g.Draining, Cordoned: g.Cordoned, Evacuating: g.Evacuating, AtCapacity: g.AtCapacity, AtCapacityReason: g.AtCapacityReason,
 		AdvertiseAddr: s.advertise,
 	}
 	if s.placer != nil {

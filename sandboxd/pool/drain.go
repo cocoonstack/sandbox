@@ -20,14 +20,11 @@ type evacuation struct {
 	stop    context.CancelFunc
 }
 
-// Drain cordons the node: claims answer 429 and warm VMs are destroyed.
+// Drain closes the node until Undrain or a restart: claims and moves in answer 429 and warm VMs are destroyed.
 func (m *Manager) Drain(ctx context.Context) {
-	var trim []string
 	m.mu.Lock()
 	m.draining = true
-	for _, p := range m.pools {
-		trim = append(trim, p.trimWarm(0)...)
-	}
+	trim := m.trimAllWarmLocked()
 	m.mu.Unlock()
 	m.destroyAll(context.WithoutCancel(ctx), trim).Wait()
 }
@@ -45,8 +42,8 @@ func (m *Manager) Evacuate(ctx context.Context) {
 	go m.runEvacuation(ctx, m.evac)
 }
 
-// Uncordon lifts a drain, stops an evacuation, and kicks an immediate refill.
-func (m *Manager) Uncordon(ctx context.Context) {
+// Undrain lifts a drain, stops an evacuation, and kicks an immediate refill.
+func (m *Manager) Undrain(ctx context.Context) {
 	m.mu.Lock()
 	m.draining = false
 	e := m.evac
@@ -185,6 +182,18 @@ func (m *Manager) takeBack(ctx context.Context, sb *types.Sandbox, released int6
 	}
 	_, _ = m.commitIfLive(ctx, sb, func() { sb.ArchiveEpoch = epoch })
 	return errNoAdopter
+}
+
+func (m *Manager) closedLocked() bool {
+	return m.draining || m.cordoned
+}
+
+func (m *Manager) trimAllWarmLocked() []string {
+	var trim []string
+	for _, p := range m.pools {
+		trim = append(trim, p.trimWarm(0)...)
+	}
+	return trim
 }
 
 func (m *Manager) evacuatingLocked(id string) bool {

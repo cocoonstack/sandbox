@@ -14,7 +14,7 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
-func TestDrainRefusesClaimsTrimsWarmAndUncordonRefills(t *testing.T) {
+func TestDrainRefusesClaimsTrimsWarmAndUndrainRefills(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		eng := newFakeEngine()
 		m := newTestManager(t, eng)
@@ -47,13 +47,13 @@ func TestDrainRefusesClaimsTrimsWarmAndUncordonRefills(t *testing.T) {
 			t.Fatalf("refill ran during drain: %+v", infos)
 		}
 
-		m.Uncordon(t.Context())
+		m.Undrain(t.Context())
 		waitFor(t, func() bool {
 			now, gauges := m.Info()
 			return !gauges.Draining && len(now) == 1 && now[0].Warm == 2
 		})
 		if _, err := claimAny(t.Context(), m, testKey, ClaimOptions{}); err != nil {
-			t.Fatalf("claim after uncordon: %v", err)
+			t.Fatalf("claim after undrain: %v", err)
 		}
 	})
 }
@@ -216,7 +216,7 @@ func TestEvacuateWaitsOutAnArchiveInFlight(t *testing.T) {
 	})
 }
 
-func TestUncordonStopsAnEvacuationBeforeItsHandOff(t *testing.T) {
+func TestUndrainStopsAnEvacuationBeforeItsHandOff(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		c := newFailoverCluster(t)
 		a, b := c.node(t, "a", t.TempDir(), keepAnHour), c.node(t, "b", t.TempDir(), keepAnHour)
@@ -227,29 +227,29 @@ func TestUncordonStopsAnEvacuationBeforeItsHandOff(t *testing.T) {
 		synctest.Wait()
 		assertEvacuation(t, a, 1, 0)
 
-		a.Uncordon(t.Context())
+		a.Undrain(t.Context())
 		close(stall)
 		synctest.Wait()
 
 		assertEvacuation(t, a, 0, 0)
 		if _, g := a.Info(); g.Draining {
-			t.Error("still draining after uncordon")
+			t.Error("still draining after undrain")
 		}
 		held, ok := a.byID(sb.ID)
 		if !ok || held.ArchiveCk == "" {
 			t.Fatalf("held %v, want the claim kept archived on a", ok)
 		}
 		if rec, _, _ := c.reg.Get(t.Context(), sb.ID); rec.Owner != "a" {
-			t.Errorf("row owner %q after uncordon, want a", rec.Owner)
+			t.Errorf("row owner %q after undrain, want a", rec.Owner)
 		}
 		assertNotAdopted(t, b, sb, "adopt a claim whose evacuation stopped")
 		if _, _, _, err := a.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
-			t.Errorf("wake after uncordon: %v", err)
+			t.Errorf("wake after undrain: %v", err)
 		}
 	})
 }
 
-func TestAnUncordonDuringAnEvacuationsDrainStopsIt(t *testing.T) {
+func TestAnUndrainDuringAnEvacuationsDrainStopsIt(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		c := newFailoverCluster(t)
 		a := c.node(t, "a", t.TempDir(), keepAnHour)
@@ -270,7 +270,7 @@ func TestAnUncordonDuringAnEvacuationsDrainStopsIt(t *testing.T) {
 		}()
 		synctest.Wait()
 
-		a.Uncordon(t.Context())
+		a.Undrain(t.Context())
 		release()
 		<-done
 		synctest.Wait()
@@ -278,12 +278,12 @@ func TestAnUncordonDuringAnEvacuationsDrainStopsIt(t *testing.T) {
 		assertEvacuation(t, a, 0, 0)
 		held, ok := a.byID(sb.ID)
 		if !ok || held.HibernateSnap != "" || held.ArchiveCk != "" {
-			t.Errorf("held %v, want the claim still running after the uncordon", ok)
+			t.Errorf("held %v, want the claim still running after the undrain", ok)
 		}
 	})
 }
 
-func TestEvacuateHoldsTheWakeOfAQueuedClaimUntilUncordon(t *testing.T) {
+func TestEvacuateHoldsTheWakeOfAQueuedClaimUntilUndrain(t *testing.T) {
 	tests := []struct {
 		name string
 		park func(*testing.T, *Manager, *types.Sandbox)
@@ -308,7 +308,7 @@ func TestEvacuateHoldsTheWakeOfAQueuedClaimUntilUncordon(t *testing.T) {
 				}
 				assertEvacuation(t, a, 1, 0)
 
-				a.Uncordon(t.Context())
+				a.Undrain(t.Context())
 				release()
 				synctest.Wait()
 
@@ -316,7 +316,7 @@ func TestEvacuateHoldsTheWakeOfAQueuedClaimUntilUncordon(t *testing.T) {
 					t.Fatalf("held %v, want the claim left as it was parked", ok)
 				}
 				if _, _, _, err := a.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
-					t.Errorf("wake after uncordon: %v", err)
+					t.Errorf("wake after undrain: %v", err)
 				}
 			})
 		})
@@ -339,7 +339,7 @@ func TestAQueuedFailedClaimStillRestarts(t *testing.T) {
 			t.Errorf("wake of a queued failed claim: %v", err)
 		}
 
-		a.Uncordon(t.Context())
+		a.Undrain(t.Context())
 		release()
 		synctest.Wait()
 	})
@@ -361,7 +361,7 @@ func TestEvacuateRequeuesAClaimAWakeUnarchived(t *testing.T) {
 			t.Errorf("hand-off of a running claim: %v, want errArchiveBusy", err)
 		}
 
-		a.Uncordon(t.Context())
+		a.Undrain(t.Context())
 		release()
 		synctest.Wait()
 	})
@@ -451,11 +451,11 @@ func TestASecondEvacuateWhileOneRunsChangesNothing(t *testing.T) {
 			t.Error("a second evacuate replaced the run")
 		}
 
-		a.Uncordon(t.Context())
+		a.Undrain(t.Context())
 		release()
 		synctest.Wait()
 		if held, ok := a.byID(sb.ID); !ok || held.HibernateSnap != "" || held.ArchiveCk != "" {
-			t.Errorf("held %v, want the claim left running after uncordon", ok)
+			t.Errorf("held %v, want the claim left running after undrain", ok)
 		}
 	})
 }
@@ -469,9 +469,9 @@ func TestAStoppedEvacuationDoesNotPauseAClaimItHadQueued(t *testing.T) {
 
 		a.Evacuate(t.Context())
 		synctest.Wait()
-		a.Uncordon(t.Context())
+		a.Undrain(t.Context())
 		if err := a.evacuateClaim(t.Context(), sb); err != nil {
-			t.Errorf("evacuateClaim after uncordon: %v, want nil", err)
+			t.Errorf("evacuateClaim after undrain: %v, want nil", err)
 		}
 		if held, ok := a.byID(sb.ID); !ok || held.HibernateSnap != "" || held.ArchiveCk != "" {
 			t.Errorf("held %v, want the claim left running", ok)
