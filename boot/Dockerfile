@@ -10,10 +10,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     xz-utils curl ca-certificates python3 \
     && rm -rf /var/lib/apt/lists/*
 ARG KERNEL_VERSION=6.18.37
-# Mirror chain: cdn.kernel.org currently 404s /pub/linux/kernel tarball paths
-# (observed from GitHub runners and CN networks alike), while rsync mirrors
-# still carry the tree. Download to a file first — a mid-stream failure must
-# not leave a half-extracted tree — and verify against the pinned SHA256
+# Mirror chain: KERNEL_MIRROR (cdn.kernel.org by default), then kernel.org's
+# edge mirror and an rsync mirror. Download to a file first — a mid-stream
+# failure must not leave a half-extracted tree — and verify against the pinned SHA256
 # (kernel/SHA256, updated together with VERSION): the fallback mirrors are
 # third parties and this kernel boots untrusted-code sandboxes.
 ARG KERNEL_MIRROR=https://cdn.kernel.org/pub/linux/kernel
@@ -27,7 +26,6 @@ RUN set -e; \
     [ -n "$hash" ] || { echo "kernel/SHA256 has no entry for linux-${KERNEL_VERSION}.tar.xz"; exit 1; }; \
     rel="v${KERNEL_VERSION%%.*}.x/linux-${KERNEL_VERSION}.tar.xz"; \
     for m in "${KERNEL_MIRROR}" \
-             https://cdn.kernel.org/pub/linux/kernel \
              https://mirrors.edge.kernel.org/pub/linux/kernel \
              https://mirrors.tuna.tsinghua.edu.cn/kernel; do \
         echo "fetching ${m}/${rel}"; \
@@ -78,8 +76,9 @@ RUN set -e; \
 FROM rust:1.99.1-alpine@sha256:b1d5dd5a22a09404d3e798c0cf051b689077360374eb505fa5bb93c479693d87 AS initbuild
 RUN apk add --no-cache musl-dev
 WORKDIR /build
-# See silkd/Dockerfile: the pin, not the base image's default, is the compiler.
+# See silkd/Dockerfile: the pin, not the base image's default, is the compiler; the build needs no rustfmt or clippy.
 COPY init/rust-toolchain.toml ./
+RUN sed -i '/^components/d' rust-toolchain.toml
 COPY init/Cargo.toml init/Cargo.lock ./
 COPY init/src ./src
 RUN cargo build --release --locked && cp target/release/sandbox-init /sandbox-init
