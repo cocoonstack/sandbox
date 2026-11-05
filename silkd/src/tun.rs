@@ -96,6 +96,8 @@ mod linux {
 
     /// The link thread that owns tun0, if one runs.
     static LINK: Mutex<Option<Arc<Link>>> = Mutex::new(None);
+    /// Serializes tun_up, tun_down and the boot ask through teardown, so a verb answers only after the last one finished.
+    static SWITCH: Mutex<()> = Mutex::new(());
 
     /// How a session moves packets.
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -205,6 +207,7 @@ mod linux {
 
     /// Handles `tun_up`: brings tun0 up with its route and starts its link, or makes a running link dial again, since a restored VMM never resets the old stream.
     pub fn up() -> io::Result<()> {
+        let _switch = sysutil::lock(&SWITCH);
         loop {
             let mut slot = sysutil::lock(&LINK);
             let Some(link) = slot.as_ref() else {
@@ -227,6 +230,7 @@ mod linux {
 
     /// Handles `tun_down`: stops the link and removes tun0 with its routes before returning; enforcement stays on the host.
     pub fn down() {
+        let _switch = sysutil::lock(&SWITCH);
         let link = sysutil::lock(&LINK).take();
         if let Some(link) = link {
             link.stop();
@@ -235,6 +239,7 @@ mod linux {
 
     /// Asks the host at boot; a refused dial or an off answer leaves no tun0.
     pub fn ask_at_boot() {
+        let _switch = sysutil::lock(&SWITCH);
         let mut slot = sysutil::lock(&LINK);
         if slot.is_some() {
             return;
