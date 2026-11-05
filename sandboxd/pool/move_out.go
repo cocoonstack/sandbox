@@ -31,7 +31,7 @@ func (m *Manager) Move(ctx context.Context, id, addr string, maxDowntime time.Du
 	if err := m.eng.CheckMigrateSupport(ctx); err != nil {
 		return MoveResult{}, fmt.Errorf("%w: %w", ErrNotMovable, err)
 	}
-	mv := &outMove{MoveOut: types.MoveOut{Addr: addr}}
+	mv := &outMove{Addr: addr}
 	if err := m.markMoving(sb, mv); err != nil {
 		return MoveResult{}, err
 	}
