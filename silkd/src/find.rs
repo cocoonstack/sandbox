@@ -167,44 +167,56 @@ pub async fn replace<W: AsyncWrite + Unpin>(
     pattern: String,
     replacement: String,
 ) -> std::io::Result<()> {
-    let re = match Regex::new(&pattern) {
+    let re = match compile(pattern).await {
         Ok(re) => re,
-        Err(e) => return proto::error_frame(w, ErrorKind::BadRequest, e.to_string()).await,
+        Err(e) => return proto::error_frame(w, ErrorKind::BadRequest, e).await,
     };
+    let replacement: Arc<str> = replacement.into();
     for file in files {
-        let mut counting = Counting {
-            replacement: &replacement,
-            count: 0,
-        };
-        let path = PathBuf::from(&file);
-        let read = tokio::task::spawn_blocking(move || {
+        let (re, replacement, path) = (re.clone(), Arc::clone(&replacement), PathBuf::from(&file));
+        let replaced = tokio::task::spawn_blocking(move || {
             let mut body = String::new();
-            read_bounded(&path, &mut body).map(|within| within.then_some(body))
+            if !read_bounded(&path, &mut body)? {
+                return Ok((0, None));
+            }
+            let mut counting = Counting {
+                replacement: &replacement,
+                count: 0,
+            };
+            let new = re.replace_all(&body, counting.by_ref());
+            Ok::<_, std::io::Error>((
+                counting.count,
+                (counting.count > 0).then(|| new.into_owned()),
+            ))
         })
         .await;
-        let body = match read {
-            Ok(Ok(body)) => body,
+        let (count, new) = match replaced {
+            Ok(Ok(replaced)) => replaced,
             Ok(Err(e)) => return err_frame(w, &e, "read").await,
             Err(e) => return err_frame(w, &std::io::Error::other(e), "read").await,
         };
-        if let Some(body) = body {
-            let new = re.replace_all(&body, counting.by_ref());
-            if counting.count > 0
-                && let Err(e) = crate::fs::write_atomic(Path::new(&file), new.as_bytes()).await
-            {
-                return err_frame(w, &e, "write").await;
-            }
+        if let Some(new) = new
+            && let Err(e) = crate::fs::write_atomic(Path::new(&file), new.as_bytes()).await
+        {
+            return err_frame(w, &e, "write").await;
         }
         proto::write_frame(
             w,
             &Response::Replaced {
                 file,
-                replacements: counting.count,
+                replacements: count,
             },
         )
         .await?;
     }
     proto::write_frame(w, &Response::Done).await
+}
+
+async fn compile(pattern: String) -> Result<Regex, String> {
+    match tokio::task::spawn_blocking(move || Regex::new(&pattern)).await {
+        Ok(compiled) => compiled.map_err(|e| e.to_string()),
+        Err(e) => Err(e.to_string()),
+    }
 }
 
 async fn find_bounded<R, W>(
@@ -219,16 +231,16 @@ where
     R: AsyncBufRead + Unpin,
     W: AsyncWrite + Unpin,
 {
-    let re = match Regex::new(&pattern) {
+    let prefilter = !ANCHORS.iter().any(|a| pattern.contains(a));
+    let re = match compile(pattern).await {
         Ok(re) => re,
-        Err(e) => return proto::error_frame(w, ErrorKind::BadRequest, e.to_string()).await,
+        Err(e) => return proto::error_frame(w, ErrorKind::BadRequest, e).await,
     };
     let name_re = match glob.as_deref().filter(|g| !g.is_empty()).map(glob_regex) {
         None => None,
         Some(Ok(re)) => Some(re),
         Some(Err(e)) => return proto::error_frame(w, ErrorKind::BadRequest, e.to_string()).await,
     };
-    let prefilter = !ANCHORS.iter().any(|a| pattern.contains(a));
     // one blocking-pool dispatch for the whole tree, not three per file.
     let (tx, mut rx) = mpsc::channel::<Response>(MATCH_QUEUE);
     let budget = Arc::new(MatchBudget::new(budget_bytes, Handle::current()));
