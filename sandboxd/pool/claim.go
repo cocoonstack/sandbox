@@ -333,6 +333,8 @@ func (m *Manager) releaseResolved(ctx context.Context, id string, sb *types.Sand
 		logger.Errorf(ctx, saveErr, "persist release of %s", id)
 		return fmt.Errorf("release %s: %w", id, saveErr)
 	}
+	m.counters.releases.Add(1)
+	m.recordUsage(ctx, usage.Event{Event: "release", ID: id, VMName: vmName, Tenant: sb.Tenant})
 	// Cleanup must survive the caller hanging up; the claim is already dropped.
 	ctx = context.WithoutCancel(ctx)
 	if ck != "" {
@@ -356,8 +358,6 @@ func (m *Manager) releaseResolved(ctx context.Context, id string, sb *types.Sand
 	}
 	m.out.Disarm(id, removed)
 	m.dropSnap(ctx, snap)
-	m.counters.releases.Add(1)
-	m.recordUsage(ctx, usage.Event{Event: "release", ID: id, VMName: vmName, Tenant: sb.Tenant})
 	return err
 }
 

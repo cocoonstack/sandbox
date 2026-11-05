@@ -234,6 +234,23 @@ func TestReleaseAfterResolveTearsDownOnce(t *testing.T) {
 	}
 }
 
+func TestReleaseRecordsItsUsageEventBeforeTheTeardown(t *testing.T) {
+	eng := newFakeEngine()
+	m := newTestManager(t, eng)
+	sb := mustClaim(t, m, testKey)
+	stall := make(chan struct{})
+	eng.mu.Lock()
+	eng.removeStall = stall
+	eng.mu.Unlock()
+	done := make(chan error, 1)
+	go func() { done <- m.Release(t.Context(), sb.ID, Cred{Token: sb.Token}) }()
+	waitFor(t, func() bool { return strings.HasSuffix(usageEventsOf(t, m, sb.ID), "release") })
+	close(stall)
+	if err := <-done; err != nil {
+		t.Fatalf("release: %v", err)
+	}
+}
+
 func TestReleaseDelayQueuesTeardown(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		eng := newFakeEngine()
