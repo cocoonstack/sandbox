@@ -10,10 +10,9 @@ import pytest
 from conftest import sandbox_at
 
 from cocoonsandbox import APIError, SandboxTimeout
-from cocoonsandbox.frames import KEEP_ALIVE_PROTO
 
 REPLIES = {
-    "info": {"type": "info", "version": "fake", "proto": KEEP_ALIVE_PROTO, "uptime_secs": 0, "procs": 0},
+    "info": {"type": "info", "version": "fake", "uptime_secs": 0, "procs": 0},
     "fs_mkdir": {"type": "done"},
 }
 REJECT = b"HTTP/1.1 404 Not Found\r\nContent-Type: text/plain\r\nContent-Length: 15\r\n\r\nunknown sandbox"

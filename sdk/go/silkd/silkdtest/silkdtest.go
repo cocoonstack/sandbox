@@ -76,7 +76,7 @@ func serveConn(conn net.Conn, r *bufio.Reader, serve func(net.Conn, *bufio.Reade
 		case *wire.Stdin, *wire.StdinClose, *wire.Data, *wire.DataEnd:
 			continue
 		case *wire.Info:
-			send(conn, &wire.InfoResp{Version: "silkdtest", Proto: wire.KeepAliveProto})
+			send(conn, &wire.InfoResp{Version: "silkdtest"})
 		default:
 			serve(conn, r, req)
 		}

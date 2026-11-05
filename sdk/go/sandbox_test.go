@@ -95,8 +95,6 @@ func TestRunCancelKillsTheCommandItStarted(t *testing.T) {
 				return
 			}
 			switch req := req.(type) {
-			case *wire.Info:
-				_, _ = io.WriteString(conn, `{"type":"info","version":"test","proto":2}`+"\n")
 			case *wire.Exec:
 				_, _ = io.WriteString(conn, `{"type":"started","pid":7}`+"\n"+`{"type":"stdout","data":"NDIK"}`+"\n")
 				_, _ = io.Copy(io.Discard, r)

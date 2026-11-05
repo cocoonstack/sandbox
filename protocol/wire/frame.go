@@ -15,8 +15,6 @@ import (
 const (
 	// ProtoVersion is stamped into every request as "v"; silkd ignores unknown fields.
 	ProtoVersion = 1
-	// KeepAliveProto is the InfoResp.Proto from which silkd serves RPCs back to back on one connection.
-	KeepAliveProto = 2
 	// MaxFrame mirrors silkd's frame cap.
 	MaxFrame = 8 << 20
 	// BulkChunk mirrors silkd's BULK_CHUNK, the payload of one bulk data frame.
@@ -500,7 +498,6 @@ func (e *ErrorResp) Error() string { return e.Kind + ": " + e.Message }
 // InfoResp answers Info.
 type InfoResp struct {
 	Version    string `json:"version"`
-	Proto      uint32 `json:"proto"`
 	UptimeSecs uint64 `json:"uptime_secs"`
 	Procs      int    `json:"procs"`
 	Sessions   int    `json:"sessions"`

@@ -232,7 +232,6 @@ impl State {
             w,
             &Response::Info {
                 version: Cow::Borrowed(env!("CARGO_PKG_VERSION")),
-                proto: proto::KEEP_ALIVE_PROTO,
                 uptime_secs: self.started.elapsed().as_secs(),
                 procs: self.table.len(),
                 sessions: self.sessions.len(),
