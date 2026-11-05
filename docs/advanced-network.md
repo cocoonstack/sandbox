@@ -34,10 +34,10 @@ intercept DNS.
   and route, starts the packet stream, answers `done` or an `error` saying why
   `tun0` could not be created. On a guest whose `tun0` is already up it ends
   the current stream and dials again. sandboxd sends it once a claim of a
-  tun-enabled pool is live, and again after every wake, unarchive and move:
-  a restored VMM never resets the guest's old stream, so without it an idle
-  guest keeps waiting on a dead one. Warm VMs never get it, so goldens are
-  unchanged.
+  tun-enabled pool is live, and again after every wake, unarchive and move,
+  so the guest drops its old stream at once whatever the VMM did with it (on
+  Cloud Hypervisor the guest also notices by itself within about 200 ms of a
+  restore). Warm VMs never get it, so goldens are unchanged.
 - **`tun_down`** (control channel): stops the packet stream and removes `tun0`
   with its routes before answering `done`, so clients fail at once with
   "network unreachable".
@@ -67,6 +67,10 @@ answers.
 | 6 | 2 | offloads | offloads its tun accepts on write | offloads its tun accepts on write |
 | 8 | 2 | mtu | 0 | MTU for `tun0`; 0 keeps the current one |
 | 10 | 2 | flags | 0 | bit 0 `ON`: packet mode is on for this box |
+
+Flag bits 1 to 15 are reserved and sent as 0; a peer ignores a bit it does
+not know. A later revision uses one to open several streams per guest, one
+per `tun0` queue.
 
 A host that answers without `ON` closes the stream after the hello; the guest
 removes `tun0`. A host that refuses a guest answers without `ON` rather than
