@@ -189,6 +189,50 @@ func TestARearmWhileTunUpIsInFlightLeavesTheGuestUp(t *testing.T) {
 	}
 }
 
+func TestAProfileChangeADisableOvertookDoesNotReEnable(t *testing.T) {
+	eng, addrs := newFakeEngine(), &fakeAddrs{}
+	m := tunManager(t, eng, addrs, config.PoolSpec{PoolKey: testKey, Tun: true, Egress: anyPolicy})
+	sb := mustClaim(t, m, testKey)
+	prev, next, assign, err := m.planTun(sb, true, nil, new("res"))
+	if err != nil {
+		t.Fatalf("plan: %v", err)
+	}
+	m.mu.Lock()
+	sb.TunOff = true
+	m.mu.Unlock()
+	if _, _, err = m.commitTun(t.Context(), sb, true, prev, next, assign); !errors.Is(err, errTunRaced) {
+		t.Fatalf("commit over a newer disable: %v, want errTunRaced", err)
+	}
+	if st := m.tunState(sb); st.On || st.Profile != "" {
+		t.Errorf("state %+v, want the disable kept and the stale plan dropped", st)
+	}
+	if err = m.SetTun(t.Context(), sb.ID, nil, new("res")); err != nil {
+		t.Fatalf("re-planned profile change: %v", err)
+	}
+	if st := m.tunState(sb); st.On || st.Profile != "res" {
+		t.Errorf("state %+v, want still off with the new label", st)
+	}
+}
+
+func TestAWakeIntoAPoolWithoutTunTellsTheGuestTunDown(t *testing.T) {
+	eng, addrs := newFakeEngine(), &fakeAddrs{}
+	m := tunManager(t, eng, addrs, config.PoolSpec{PoolKey: testKey, Tun: true, Egress: anyPolicy})
+	sb := mustClaim(t, m, testKey)
+	hibernateClaim(t, m, sb)
+	next := *m.cfg
+	next.Pools = []config.PoolSpec{{PoolKey: testKey, Egress: anyPolicy}}
+	if _, err := m.ReloadConfig(t.Context(), &next); err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	if err := m.Wake(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
+		t.Fatalf("wake: %v", err)
+	}
+	waitFor(t, func() bool { return slices.Contains(tunVerbsOf(eng), "down "+sb.VsockSocket) })
+	if doorOpen(sb) {
+		t.Error("a claim of a pool without tun got a packet door at the wake")
+	}
+}
+
 func TestADisableTheWakeMissedStillTurnsTheGuestOff(t *testing.T) {
 	eng, addrs := newFakeEngine(), &fakeAddrs{}
 	m := tunManager(t, eng, addrs, config.PoolSpec{PoolKey: testKey, Tun: true, Egress: anyPolicy})

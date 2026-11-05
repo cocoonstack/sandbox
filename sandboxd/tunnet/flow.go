@@ -72,6 +72,18 @@ type flow struct {
 	ended   atomic.Bool
 }
 
+func (fl *flow) carry(bytes *atomic.Int64, p Packet, n int, now time.Time) Drop {
+	fl.last.Store(now.UnixNano())
+	if !fl.allowed {
+		return DropPolicy
+	}
+	bytes.Add(int64(n))
+	if p.End {
+		fl.ended.Store(true)
+	}
+	return DropNone
+}
+
 type direction struct {
 	bytes, packets *rate.Limiter
 }
@@ -136,34 +148,43 @@ func (f *flows) outbound(p Packet, n int, now time.Time) Drop {
 	default:
 		return DropProto
 	}
-	f.mu.RLock()
-	fl := f.table[key]
-	f.mu.RUnlock()
-	if fl == nil {
-		if fl = f.open(key, now); fl == nil {
-			return DropLimit
+	for range 2 {
+		f.mu.RLock()
+		if fl := f.table[key]; fl != nil {
+			drop := fl.carry(&fl.up, p, n, now)
+			f.mu.RUnlock()
+			return drop
+		}
+		f.mu.RUnlock()
+		if f.open(key, now) == nil {
+			break
 		}
 	}
-	fl.last.Store(now.UnixNano())
-	if !fl.allowed {
-		return DropPolicy
-	}
-	fl.up.Add(int64(n))
-	if p.End {
-		fl.ended.Store(true)
-	}
-	return DropNone
+	return DropLimit
 }
 
 // inbound passes a packet only for a flow the claim opened, and ICMP errors about one, then charges it.
 func (f *flows) inbound(p Packet, frame []byte, n int, now time.Time) Drop {
-	fl, ok := f.match(p, frame)
-	if fl == nil && !ok && p.Proto == ProtoTCP && !p.Open && f.allow(p.Src, p.SrcPort) {
-		if fl = f.open(flowKey{proto: ProtoTCP, dst: p.Src, dport: p.SrcPort, sport: p.DstPort}, now); fl == nil {
+	for resumed := false; ; resumed = true {
+		f.mu.RLock()
+		fl, ok := f.match(p, frame)
+		if ok || fl != nil || resumed || p.Proto != ProtoTCP || p.Open {
+			drop := f.admitIn(fl, ok, p, n, now)
+			f.mu.RUnlock()
+			return drop
+		}
+		f.mu.RUnlock()
+		if !f.allow(p.Src, p.SrcPort) {
+			return DropPolicy
+		}
+		if f.open(flowKey{proto: ProtoTCP, dst: p.Src, dport: p.SrcPort, sport: p.DstPort}, now) == nil {
 			return DropLimit
 		}
-		ok = fl.allowed
 	}
+}
+
+// admitIn charges an inbound packet match found and counts it on its flow; the caller holds mu, so a sweep never records the flow before the count.
+func (f *flows) admitIn(fl *flow, ok bool, p Packet, n int, now time.Time) Drop {
 	if !ok {
 		return DropPolicy
 	}
@@ -171,19 +192,13 @@ func (f *flows) inbound(p Packet, frame []byte, n int, now time.Time) Drop {
 		return DropLimit
 	}
 	if fl != nil {
-		fl.down.Add(int64(n))
-		fl.last.Store(now.UnixNano())
-		if p.End {
-			fl.ended.Store(true)
-		}
+		_ = fl.carry(&fl.down, p, n, now)
 	}
 	return DropNone
 }
 
 // match finds the allowed flow an inbound packet answers; an ICMP error about a peer passes without one.
 func (f *flows) match(p Packet, frame []byte) (*flow, bool) {
-	f.mu.RLock()
-	defer f.mu.RUnlock()
 	key := flowKey{proto: p.Proto, dst: p.Src}
 	switch p.Proto {
 	case ProtoTCP, ProtoUDP:

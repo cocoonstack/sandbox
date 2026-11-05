@@ -3,6 +3,7 @@ package pool
 import (
 	"context"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"maps"
 	"net/netip"
@@ -16,12 +17,15 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
+const tunPlanTries = 3
+
+var errTunRaced = errors.New("tun state changed since planned")
+
 // tunSeeder is a node-local address store that learns which addresses the loaded claims hold.
 type tunSeeder interface {
 	Seed(held map[string]netip.Addr)
 }
 
-// tunState is the part of a claim SetTun changes.
 type tunState struct {
 	off     bool
 	profile string
@@ -38,6 +42,24 @@ func (m *Manager) SetTun(ctx context.Context, id string, enabled *bool, profile 
 	if locked {
 		defer sb.Transition.Unlock()
 	}
+	for range tunPlanTries {
+		if err := m.setTun(ctx, sb, locked, enabled, profile); !errors.Is(err, errTunRaced) {
+			return err
+		}
+	}
+	return ErrPaused
+}
+
+// TunStats snapshots the tun router's counters; false when the node has no tun block.
+func (m *Manager) TunStats() (tunnet.Stats, bool) {
+	if m.tunRouter == nil {
+		return tunnet.Stats{}, false
+	}
+	return m.tunRouter.Stats(), true
+}
+
+func (m *Manager) setTun(ctx context.Context, sb *types.Sandbox, locked bool, enabled *bool, profile *string) error {
+	id := sb.ID
 	prev, next, assign, err := m.planTun(sb, locked, enabled, profile)
 	if err != nil {
 		return err
@@ -69,14 +91,6 @@ func (m *Manager) SetTun(ctx context.Context, id string, enabled *bool, profile 
 		}
 	}
 	return nil
-}
-
-// TunStats snapshots the tun router's counters; false when the node has no tun block.
-func (m *Manager) TunStats() (tunnet.Stats, bool) {
-	if m.tunRouter == nil {
-		return tunnet.Stats{}, false
-	}
-	return m.tunRouter.Stats(), true
 }
 
 // assignTun gives each new claim of a tun pool its overlay address; a failure leaves that claim without tun, and a mesh never falls back to a local address.
@@ -199,6 +213,13 @@ func (m *Manager) commitTun(
 			m.releaseTun(ctx, sb.ID, next.addr)
 		}
 		return "", false, ErrUnknownSandbox
+	}
+	if (tunState{off: sb.TunOff, profile: sb.TunProfile, addr: sb.TunAddr}) != prev {
+		m.mu.Unlock()
+		if assign {
+			m.releaseTun(ctx, sb.ID, next.addr)
+		}
+		return "", false, errTunRaced
 	}
 	sb.TunOff, sb.TunProfile, sb.TunAddr = next.off, next.profile, next.addr
 	if locked && runningShaped(sb) {

@@ -88,12 +88,14 @@ func (h *Host) TunUsed(id string) (int64, bool) {
 // armTun binds the packet door of sb, whose doors d hold none, when its pool has tun and the claim is on and holds an address; then it arms the router and turns the guest's tun0 on.
 func (h *Host) armTun(ctx context.Context, sb *types.Sandbox, d *doors, v *View, c *claim) {
 	key, id, sock := sb.PolicyKey(), sb.ID, sb.VsockSocket
-	if h.o.Router == nil || !v.Tun(key) || sock == "" {
+	if h.o.Router == nil || sock == "" {
 		return
 	}
 	st := h.tunState(sb)
-	if !st.On || !st.Addr.IsValid() {
-		h.tunDown(id, sock)
+	if !v.Tun(key) || !st.On || !st.Addr.IsValid() {
+		if v.Tun(key) || st.Addr.IsValid() {
+			h.tunDown(id, sock)
+		}
 		return
 	}
 	logger := log.WithFunc("outbound.armTun")

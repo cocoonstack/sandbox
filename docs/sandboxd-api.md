@@ -1149,7 +1149,10 @@ and a label the exit table does not hold yet is accepted, since the table
 reloads (until it appears, the claim's packets are dropped as having no exit).
 The state is persisted with the claim, follows it through hibernate, archive,
 move and an archive row, and is accepted on a hibernated or archived claim
-without waking it; its next wake applies it. On a running claim the change
+without waking it; its next wake applies it. A running claim's replica row
+under `archive_failover` picks the change up at its next replica capture, as
+an env change does, so an adoption before then restores the switch with the
+rest of that replica. On a running claim the change
 applies at once: disabling closes the claim's packet stream and its door, drops
 its flows and stops its ARP answers, then sends the guest `tun_down`;
 enabling, or changing the profile, re-arms the packet door and sends `tun_up`.
