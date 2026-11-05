@@ -607,6 +607,26 @@ func TestMoveHoldsOffCapturesReleasesAndEvacuationWhileItRuns(t *testing.T) {
 	}
 }
 
+func TestMoveToANodeThatStartedDrainingAborts(t *testing.T) {
+	mc := newMoveCluster(t)
+	sb := mustClaim(t, mc.s, testKey)
+	mc.p.roundHook = func(round int) error {
+		if round == 2 {
+			mc.t.Drain(t.Context())
+		}
+		return nil
+	}
+	if _, err := mc.s.Move(t.Context(), sb.ID, "b", time.Minute); !errors.Is(err, ErrNotMovable) {
+		t.Fatalf("move to a draining node: %v, want ErrNotMovable", err)
+	}
+	if _, held := mc.t.byID(sb.ID); held {
+		t.Error("the draining node took the claim")
+	}
+	if _, held := mc.s.byID(sb.ID); !held {
+		t.Error("the source dropped the claim the target refused")
+	}
+}
+
 func TestMoveGivesEachRoundADeadlineFromItsSize(t *testing.T) {
 	mc := newMoveCluster(t)
 	sb := mustClaim(t, mc.s, testKey)

@@ -106,7 +106,7 @@ func (m *Manager) CommitMove(ctx context.Context, id string, claim []byte, epoch
 	sb.Transition.Lock()
 	defer sb.Transition.Unlock()
 	m.mu.Lock()
-	if m.incoming[id] != admitted || m.claimed[id] != nil {
+	if m.incoming[id] != admitted || m.claimed[id] != nil || m.draining {
 		m.mu.Unlock()
 		m.destroy(ctx, name)
 		return fmt.Errorf("%w: the reservation for %s ended", ErrNotMovable, id)
