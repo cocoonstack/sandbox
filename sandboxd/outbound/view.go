@@ -85,14 +85,14 @@ func (v *View) HasClass(name string) bool {
 }
 
 // Resolve is sb's effective policy, pool ∩ tenant: root has no tenant layer, an unpooled key no pool one, a NoEgress claim none at all; pooled runs only when the key has no pool policy.
-func (v *View) Resolve(sb *types.Sandbox, pooled PooledFunc) (egress.PolicyEvaluator, bool) {
+func (v *View) Resolve(sb *types.Sandbox) (egress.PolicyEvaluator, bool) {
 	if sb.NoEgress {
 		return nil, false
 	}
 	poolPol := v.poolEgress[sb.PolicyKey()]
 	tenantPol := v.classEgress[sb.EgressClass]
 	if poolPol == nil {
-		if sb.Tenant == "" || tenantPol == nil || pooled(sb) {
+		if sb.Tenant == "" || tenantPol == nil || sb.Layer == types.LayerPooled {
 			return nil, false
 		}
 		return *tenantPol, true
@@ -107,8 +107,8 @@ func (v *View) Resolve(sb *types.Sandbox, pooled PooledFunc) (egress.PolicyEvalu
 }
 
 // InjectGap names, in env order, each inject host sb's egress does not intercept and each header a covering pool secret already sets.
-func (v *View) InjectGap(sb *types.Sandbox, env types.Env, pooled PooledFunc) []string {
-	eval, ok := v.Resolve(sb, pooled)
+func (v *View) InjectGap(sb *types.Sandbox, env types.Env) []string {
+	eval, ok := v.Resolve(sb)
 	var gap []string
 	pool := v.poolEgress[sb.PolicyKey()]
 	for _, name := range slices.Sorted(maps.Keys(env)) {

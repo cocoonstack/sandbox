@@ -191,8 +191,7 @@ stays denied). A claim with `"egress": false`
 takes no policy at all, whatever its pool's: no door is bound, so the guest's
 dial is refused. Which layers a claim has is settled when it
 is made and kept for its life: a `PUT /v1/pools` that adds or drops a pool
-without a config-file policy changes the claims made after it, never a live one (a record from before this
-rule resolves against the live pool set). Secrets are registered separately and
+without a config-file policy changes the claims made after it, never a live one. Secrets are registered separately and
 referenced by name — the value comes from the environment, never the config
 file: a claim's own `guest: false` env first, the node's second
 ([below](#claim-env-and-secrets)).

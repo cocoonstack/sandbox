@@ -260,9 +260,8 @@ type Sandbox struct {
 	// ClaimedAt is the first grant; renew and wake move Deadline, never this.
 	ClaimedAt time.Time `json:"claimed_at,omitzero"`
 	// LeaseSeconds is the lease the claim was granted; a wake from the archive grants it again.
-	LeaseSeconds int `json:"lease_seconds,omitzero"`
-	// Layer is empty on a record older than the field, which resolves against the live pool set.
-	Layer PolicyLayer `json:"policy_layer,omitempty"`
+	LeaseSeconds int         `json:"lease_seconds,omitzero"`
+	Layer        PolicyLayer `json:"policy_layer,omitempty"`
 	// PolicySource is the pool whose egress policy a clone of a promoted template or its checkpoint inherits.
 	PolicySource PoolKey `json:"policy_source,omitzero"`
 	// NoEgress pins a claim that asked for no egress policy.

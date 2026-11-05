@@ -264,7 +264,6 @@ func newHost(t *testing.T, eng *fakeEngine, cfg *config.Config, edit func(*Optio
 	o := Options{
 		Engine:   eng,
 		View:     func() *View { return v },
-		Pooled:   func(*types.Sandbox) bool { return false },
 		Record:   func(context.Context, string, string, egress.Event) {},
 		Transfer: func(context.Context, string, string, egress.Event, int64, int64) {},
 		Lock:     func(string) error { return nil },

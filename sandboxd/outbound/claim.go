@@ -146,7 +146,7 @@ func (c *claim) current() egress.Evaluator {
 	if r := c.cur.Load(); r.view == v {
 		return r.eval
 	}
-	eval, ok := v.Resolve(c.sb, c.h.o.Pooled)
+	eval, ok := v.Resolve(c.sb)
 	if !ok {
 		eval = egress.Policy{}
 	}
