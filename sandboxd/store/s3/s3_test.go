@@ -391,7 +391,7 @@ func TestAcceptEncodingIsUnsignedOnlyWhenConfigured(t *testing.T) {
 				headers = append(headers, r.Header.Clone())
 				mu.Unlock()
 				fake.ServeHTTP(w, r)
-			}), unsigned)
+			}), store.S3Config{UnsignedAcceptEncoding: unsigned})
 			if _, err := st.ReadMeta(t.Context(), "ck_0123456789abcdef"); !errors.Is(err, store.ErrNotFound) {
 				t.Fatalf("ReadMeta: %v, want ErrNotFound", err)
 			}
@@ -914,6 +914,48 @@ func TestOnlyALabeledStoreReadsLabelsWhenListing(t *testing.T) {
 	}
 }
 
+func TestConfiguredConcurrencyBoundsChunkTransfersAndKeepsTheirConnections(t *testing.T) {
+	const (
+		id      = "ck_00000000000000b1"
+		chunks  = 12
+		uploads = 2
+		fetches = chunks
+	)
+	gate := &chunkGate{fake: &fakeS3{objects: map[string][]byte{}}, conns: map[string]struct{}{}}
+	st := newTestStoreAt(t, gate, store.S3Config{UploadConcurrency: uploads, FetchConcurrency: fetches})
+	writes := map[int64][]byte{}
+	for i := range int64(chunks) {
+		writes[i*store.DigestChunkSize] = []byte{byte(i + 1)}
+	}
+	staging, src := stageSparseRecord(t, st, id, metaJSON(id), chunks*store.DigestChunkSize, writes)
+	srcSum := fileSum(t, src)
+
+	gate.arm(http.MethodPut, uploads)
+	if err := st.Publish(t.Context(), staging, id, ""); err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+	if peak, _ := gate.result(); peak != uploads {
+		t.Errorf("chunk PUTs in flight = %d, want %d", peak, uploads)
+	}
+	for round := range 2 {
+		gate.arm(http.MethodGet, fetches)
+		dst := filepath.Join(t.TempDir(), "disk.img")
+		if err := st.FetchFile(t.Context(), id, "disk.img", dst); err != nil {
+			t.Fatalf("FetchFile round %d: %v", round, err)
+		}
+		if fileSum(t, dst) != srcSum {
+			t.Fatalf("FetchFile round %d: content differs from the source", round)
+		}
+		peak, opened := gate.result()
+		if peak != fetches {
+			t.Errorf("round %d: chunk GETs in flight = %d, want %d", round, peak, fetches)
+		}
+		if round == 1 && opened != 0 {
+			t.Errorf("second fetch opened %d connections, want every one reused from the idle pool", opened)
+		}
+	}
+}
+
 type fakeRequest struct {
 	method string
 	key    string
@@ -1257,7 +1299,7 @@ func newFakeStore(t *testing.T) (*fakeS3, *Store) {
 
 func newTestStore(t *testing.T, fake *fakeS3) *Store {
 	t.Helper()
-	return newTestStoreAt(t, fake, false)
+	return newTestStoreAt(t, fake, store.S3Config{})
 }
 
 func metaJSON(id string) []byte {
@@ -1273,7 +1315,7 @@ func newGatedStore(t *testing.T, gateOn string) (*fakeS3, *Store, func()) {
 	return fake, st, release
 }
 
-func newTestStoreAt(t *testing.T, endpoint http.Handler, unsignedAcceptEncoding bool) *Store {
+func newTestStoreAt(t *testing.T, endpoint http.Handler, cfg store.S3Config) *Store {
 	t.Helper()
 	ts := httptest.NewServer(endpoint)
 	t.Cleanup(ts.Close)
@@ -1282,10 +1324,8 @@ func newTestStoreAt(t *testing.T, endpoint http.Handler, unsignedAcceptEncoding 
 
 	t.Setenv("AWS_REQUEST_CHECKSUM_CALCULATION", "when_required")
 	t.Setenv("AWS_RESPONSE_CHECKSUM_VALIDATION", "when_required")
-	st, err := New(t.Context(), store.S3Config{
-		Bucket: "testbucket", Prefix: "ck/", Endpoint: ts.URL,
-		Region: "us-east-1", ForcePathStyle: true, UnsignedAcceptEncoding: unsignedAcceptEncoding,
-	}, t.TempDir(), store.CheckpointIDRe, true)
+	cfg.Bucket, cfg.Prefix, cfg.Endpoint, cfg.Region, cfg.ForcePathStyle = "testbucket", "ck/", ts.URL, "us-east-1", true
+	st, err := New(t.Context(), cfg, t.TempDir(), store.CheckpointIDRe, true)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -1317,4 +1357,70 @@ func writeMetadata(header http.Header, metadata map[string]string) {
 	for key, value := range metadata {
 		header.Set("x-amz-meta-"+key, value)
 	}
+}
+
+type chunkGate struct {
+	fake *fakeS3
+
+	mu       sync.Mutex
+	method   string
+	want     int
+	full     chan struct{}
+	inflight int
+	peak     int
+	conns    map[string]struct{}
+	opened   int
+}
+
+func (g *chunkGate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if g.enter(r) {
+		defer g.leave()
+	}
+	g.fake.ServeHTTP(w, r)
+}
+
+func (g *chunkGate) arm(method string, want int) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.method, g.want, g.full, g.peak, g.opened = method, want, make(chan struct{}), 0, 0
+}
+
+func (g *chunkGate) result() (peak, opened int) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.peak, g.opened
+}
+
+func (g *chunkGate) enter(r *http.Request) bool {
+	g.mu.Lock()
+	if _, ok := g.conns[r.RemoteAddr]; !ok {
+		g.conns[r.RemoteAddr] = struct{}{}
+		g.opened++
+	}
+	if r.Method != g.method || !strings.Contains(r.URL.Path, "/"+chunksDir+"/") {
+		g.mu.Unlock()
+		return false
+	}
+	g.inflight++
+	g.peak = max(g.peak, g.inflight)
+	full := g.full
+	if g.inflight == g.want {
+		select {
+		case <-full:
+		default:
+			close(full)
+		}
+	}
+	g.mu.Unlock()
+	select {
+	case <-full:
+	case <-time.After(5 * time.Second):
+	}
+	return true
+}
+
+func (g *chunkGate) leave() {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.inflight--
 }

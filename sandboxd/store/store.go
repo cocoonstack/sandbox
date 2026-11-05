@@ -50,6 +50,11 @@ type S3Config struct {
 	Region                 string `json:"region,omitempty"`
 	ForcePathStyle         bool   `json:"force_path_style,omitzero"`
 	UnsignedAcceptEncoding bool   `json:"unsigned_accept_encoding,omitzero"`
+
+	UploadConcurrency   int `json:"upload_concurrency,omitzero"`
+	FetchConcurrency    int `json:"fetch_concurrency,omitzero"`
+	PublishConcurrency  int `json:"publish_concurrency,omitzero"`
+	MetaReadConcurrency int `json:"meta_read_concurrency,omitzero"`
 }
 
 // CommitFunc makes a prepared generation the record's current one.
