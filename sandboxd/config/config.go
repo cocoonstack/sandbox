@@ -26,13 +26,14 @@ import (
 )
 
 const (
-	defaultListen       = ":7777"
-	defaultDataDir      = "/var/lib/sandboxd"
-	defaultCocoonBin    = "cocoon"
-	defaultWarm         = 4
 	DefaultMaxForkCount = 16
-	refillFloor         = 4
-	refillCeiling       = 256
+
+	defaultListen    = ":7777"
+	defaultDataDir   = "/var/lib/sandboxd"
+	defaultCocoonBin = "cocoon"
+	defaultWarm      = 4
+	refillFloor      = 4
+	refillCeiling    = 256
 	// cocoon builds a VM with a 10G disk by default, so a pool never asks for less
 	minStorageBytes = 10 << 30
 )
@@ -185,10 +186,10 @@ type MemoryLimit struct {
 
 // MeshConfig configures cluster membership; every node shares one APIToken and tenant set.
 type MeshConfig struct {
-	NodeID     string   `json:"node_id"`               // unique name; defaults to Bind
-	Bind       string   `json:"bind"`                  // memberlist host:port
-	Join       []string `json:"join,omitempty"`        // seed members; empty = mesh of one
-	ClusterKey string   `json:"cluster_key,omitempty"` // base64 gossip-encryption key
+	NodeID     string   `json:"node_id"`
+	Bind       string   `json:"bind"`           // memberlist host:port
+	Join       []string `json:"join,omitempty"` // seed members; empty = mesh of one
+	ClusterKey string   `json:"cluster_key,omitempty"`
 }
 
 // ID is the node's mesh name: NodeID, else Bind.

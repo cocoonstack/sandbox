@@ -63,8 +63,9 @@ const (
 	refillFailStreak  = 8
 	refillBackoffBase = 250 * time.Millisecond
 	refillBackoffMax  = buildRetryDelay
-	// Fallbacks when a Manager is built from a Config that skipped config.Load's defaulting
-	defaultRefill          = 4
+	// Fallback when a Manager is built from a Config that skipped config.Load's defaulting
+	defaultRefill = 4
+
 	defaultMoveConcurrency = 2
 
 	// A heal pulls a whole guest memory image, so a few saturate disk and NIC.
@@ -230,7 +231,7 @@ type Gauges struct {
 	Draining   bool
 	// Evacuating counts the claims an evacuation has yet to move.
 	Evacuating int
-	// AtCapacity marks refill parked because the node refused another VM.
+	// AtCapacity marks refill parked by a refused VM or a low disk or memory reserve.
 	AtCapacity       bool
 	AtCapacityReason string
 	MemoryLow        bool

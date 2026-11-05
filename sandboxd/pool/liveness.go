@@ -314,7 +314,7 @@ func (m *Manager) vmSettledLocked(sb *types.Sandbox) bool {
 	return runningShaped(sb) && !archiving && !moving
 }
 
-// runningShaped reports whether sb's VM should be up; callers hold m.mu.
+// runningShaped reports whether sb's VM should be up; callers hold m.mu or sb.Transition.
 func runningShaped(sb *types.Sandbox) bool {
 	return sb.HibernateSnap == "" && sb.PendingSnap == "" && sb.ArchiveCk == "" && sb.Failed == "" && !sb.MoveIn
 }

@@ -1,4 +1,4 @@
-// Package peer pulls a record from the node that holds it and finds, heals and deletes records across peers.
+// Package peer moves records and live-move rounds between nodes: it pulls, finds, heals, deletes and adopts them across peers.
 package peer
 
 import (
@@ -21,7 +21,7 @@ import (
 )
 
 const (
-	maxRecordBytes = 1 << 40 // 1 TiB
+	maxRecordBytes = 1 << 40
 
 	exportPrefix = store.ExportDir + "/"
 
@@ -115,7 +115,7 @@ func Untar(r io.Reader, dst string) error {
 			return fmt.Errorf("untar: %w", err)
 		}
 		if hdr.Name == recordTrailer {
-			complete = true // a protocol marker, never written to disk
+			complete = true
 			continue
 		}
 		target, err := safeJoin(dst, hdr.Name)

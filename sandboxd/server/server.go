@@ -1,4 +1,4 @@
-// Package server exposes the v0 control plane: claim/release/info over HTTP/JSON, plus the data plane — an HTTP Upgrade relayed byte-for-byte between the client and the guest's silkd vsock port.
+// Package server exposes the /v1 control plane over HTTP/JSON, plus the data plane — an HTTP Upgrade relayed byte-for-byte between the client and the guest's silkd vsock port.
 package server
 
 import (

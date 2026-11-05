@@ -93,7 +93,7 @@ func (m *Manager) moveDir(id string) string {
 	return filepath.Join(m.dataDir, movesDir, id)
 }
 
-// A target only marks a committed move started; only the source deletes an ended one.
+// A target marks a committed move started and aborts a stale pending or final one; only the source deletes an ended one.
 func (m *Manager) sweepStaleMoves(ctx context.Context, now time.Time) {
 	logger := log.WithFunc("pool.sweepStaleMoves")
 	recs, err := m.moves.Stale(ctx, now.Add(-moveStaleAge))

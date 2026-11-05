@@ -131,7 +131,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 }
 
 func (m *Manager) sweepOrphanGoldens(ctx context.Context, pooled map[string]bool) {
-	logger := log.WithFunc("pool.Reconcile")
+	logger := log.WithFunc("pool.sweepOrphanGoldens")
 	dir := m.goldensDir()
 	goldens, _ := os.ReadDir(dir)
 	for _, e := range goldens {
@@ -146,7 +146,7 @@ func (m *Manager) sweepOrphanGoldens(ctx context.Context, pooled map[string]bool
 }
 
 func (m *Manager) sweepOrphanSnaps(ctx context.Context, snaps []string, snapsErr error, referenced map[string]bool) {
-	logger := log.WithFunc("pool.Reconcile")
+	logger := log.WithFunc("pool.sweepOrphanSnaps")
 	// An unreferenced hibernate snapshot is an orphan; fork and golden snapshots never span a restart
 	if snapsErr != nil {
 		logger.Warnf(ctx, "snapshot sweep skipped: %v", snapsErr)
@@ -228,7 +228,6 @@ func (m *Manager) removeStaleVM(ctx context.Context, name string, rec types.VMRe
 		// A canceled ctx must not skip the busy check guarding the forced remove
 		switch outcome, err := m.eng.ReconcileStaleCreate(context.WithoutCancel(ctx), name); {
 		case err != nil:
-			// Verb missing (cocoon < v0.5.8) or failed: keep the old sweep.
 			logger.Warnf(ctx, "reconcile stale create %s: %v; removing", name, err)
 		case outcome == engine.StaleCreateCollected, outcome == engine.StaleCreateNotFound:
 			return true
