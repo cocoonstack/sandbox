@@ -9,6 +9,8 @@ use io_uring::{IoUring, opcode, squeue, types};
 use crate::tun::{MAX_FRAME, VNET_HDR_LEN, next_frame};
 
 const ENTRIES: u32 = 256;
+/// One stream read of minimal frames queues about 7,700 tun writes; the completion queue holds them all.
+const CQ_ENTRIES: u32 = 8192;
 /// Tun reads kept queued, one frame per slot.
 const SLOTS: usize = 32;
 const DOWN_BUF: usize = 256 << 10;
@@ -25,7 +27,9 @@ pub struct Ring(IoUring);
 
 impl Ring {
     pub fn new() -> io::Result<Ring> {
-        Ok(Ring(IoUring::new(ENTRIES)?))
+        Ok(Ring(
+            IoUring::builder().setup_cqsize(CQ_ENTRIES).build(ENTRIES)?,
+        ))
     }
 
     /// Moves frames between blocking `tun` and `stream` fds until either fails or the stream ends.

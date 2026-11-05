@@ -153,7 +153,10 @@ impl State {
                 return finish_feeder(feeder, res).await;
             }
             Request::LspStop { server_id } => self.lsp.stop(writer, &server_id).await,
-            Request::TunUp => match tun::up() {
+            Request::TunUp => match tokio::task::spawn_blocking(tun::up)
+                .await
+                .unwrap_or_else(|e| Err(std::io::Error::other(e)))
+            {
                 Ok(()) => proto::write_frame(writer, &Response::Done).await,
                 Err(e) => {
                     proto::error_frame(writer, ErrorKind::Internal, format!("tun up: {e}")).await

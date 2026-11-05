@@ -152,11 +152,9 @@ mod linux {
             self.accepts
         }
 
-        /// Turns on the offloads both kernels accept; segmentation offloads need checksum offload.
+        /// Turns on the offloads both kernels accept.
         pub fn agree(&self, peer: u16) -> io::Result<()> {
-            let both = self.accepts & peer;
-            let on = if both & OFFLOAD_CSUM == 0 { 0 } else { both };
-            sysutil::tun_set_offload(self.fd.as_raw_fd(), on.into())
+            sysutil::tun_set_offload(self.fd.as_raw_fd(), settable(self.accepts & peer).into())
         }
 
         /// Gives tun0 the fixed guest address and the default route; idempotent.
@@ -172,30 +170,33 @@ mod linux {
         }
     }
 
-    /// Handles `tun_up`: brings tun0 up now and starts its link; the host's hello may still turn it off.
+    /// Handles `tun_up`: brings tun0 up with its route and starts its link, or makes a running link dial again, since a restored VMM never resets the old stream.
     pub fn up() -> io::Result<()> {
-        let mut slot = sysutil::lock(&LINK);
-        if slot.is_some() {
-            return Ok(());
+        loop {
+            let mut slot = sysutil::lock(&LINK);
+            let Some(link) = slot.as_ref() else {
+                let mut tun = Tun::open(IFNAME)?;
+                tun.configure_guest()?;
+                *slot = Some(spawn_link(tun)?);
+                return Ok(());
+            };
+            if link.configured.load(Ordering::Relaxed) {
+                link.redial();
+                return Ok(());
+            }
+            let boot = slot.take();
+            drop(slot);
+            if let Some(boot) = boot {
+                boot.stop();
+            }
         }
-        let mut tun = Tun::open(IFNAME)?;
-        tun.configure_guest()?;
-        *slot = Some(spawn_link(tun)?);
-        Ok(())
     }
 
     /// Handles `tun_down`: stops the link and removes tun0 with its routes before returning; enforcement stays on the host.
     pub fn down() {
-        let Some(link) = sysutil::lock(&LINK).take() else {
-            return;
-        };
-        link.stop.store(true, Ordering::Relaxed);
-        if let Some(stream) = sysutil::lock(&link.stream).as_ref() {
-            let _ = stream.shutdown(std::net::Shutdown::Both);
-        }
-        if let Some(thread) = sysutil::lock(&link.thread).take() {
-            thread.thread().unpark();
-            let _ = thread.join();
+        let link = sysutil::lock(&LINK).take();
+        if let Some(link) = link {
+            link.stop();
         }
     }
 
@@ -251,29 +252,71 @@ mod linux {
                 Ok(ring) => {
                     sysutil::set_nonblocking(tun_fd, false)?;
                     sysutil::set_nonblocking(stream, false)?;
-                    return ring.pump(tun_fd.as_raw_fd(), stream.as_raw_fd());
+                    return ended(ring.pump(tun_fd.as_raw_fd(), stream.as_raw_fd()));
                 }
                 Err(e) => eprintln!("silkd tun: io_uring unavailable, using epoll: {e}"),
             }
         }
         sysutil::set_nonblocking(tun_fd, true)?;
         sysutil::set_nonblocking(stream, true)?;
-        tokio::runtime::Builder::new_current_thread()
-            .enable_io()
-            .build()?
-            .block_on(epoll_pump(tun_fd, stream))
+        ended(
+            tokio::runtime::Builder::new_current_thread()
+                .enable_io()
+                .build()?
+                .block_on(epoll_pump(tun_fd, stream)),
+        )
+    }
+
+    /// A peer that went away while a write was in flight ends the stream the same way an EOF does.
+    fn ended(res: io::Result<()>) -> io::Result<()> {
+        match res {
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    io::ErrorKind::BrokenPipe
+                        | io::ErrorKind::ConnectionReset
+                        | io::ErrorKind::NotConnected
+                ) =>
+            {
+                Ok(())
+            }
+            res => res,
+        }
     }
 
     /// A link thread's stop signal and the stream it may block on.
     struct Link {
         stop: AtomicBool,
+        configured: AtomicBool,
         stream: Mutex<Option<Arc<vsock::VsockStream>>>,
         thread: Mutex<Option<std::thread::JoinHandle<()>>>,
+    }
+
+    impl Link {
+        /// Ends the current stream and wakes a waiting redial.
+        fn redial(&self) {
+            if let Some(stream) = sysutil::lock(&self.stream).as_ref() {
+                let _ = stream.shutdown(std::net::Shutdown::Both);
+            }
+            if let Some(thread) = sysutil::lock(&self.thread).as_ref() {
+                thread.thread().unpark();
+            }
+        }
+
+        /// Stops the link and waits until its thread has dropped tun0.
+        fn stop(&self) {
+            self.stop.store(true, Ordering::Relaxed);
+            self.redial();
+            if let Some(thread) = sysutil::lock(&self.thread).take() {
+                let _ = thread.join();
+            }
+        }
     }
 
     fn spawn_link(tun: Tun) -> io::Result<Arc<Link>> {
         let link = Arc::new(Link {
             stop: AtomicBool::new(false),
+            configured: AtomicBool::new(tun.configured),
             stream: Mutex::new(None),
             thread: Mutex::new(None),
         });
@@ -303,9 +346,11 @@ mod linux {
                     }
                     let flow = session(&mut tun, &*stream, io);
                     *sysutil::lock(&me.stream) = None;
+                    me.configured.store(tun.configured, Ordering::Relaxed);
                     match flow {
                         Ok(Flow::Off) => break,
                         Ok(Flow::Closed) => {}
+                        Err(_) if !tun.configured => break,
                         Err(e) if !me.stop.load(Ordering::Relaxed) => eprintln!("silkd tun: {e}"),
                         Err(_) => {}
                     }
@@ -423,6 +468,28 @@ pub fn next_frame(buf: &[u8]) -> io::Result<Option<usize>> {
     Ok((buf.len() >= 4 + len).then_some(len))
 }
 
+#[cfg(any(target_os = "linux", test))]
+/// Trims `bits` to a set `TUNSETOFFLOAD` takes: segmentation needs CSUM, ECN needs TSO, and USO comes in pairs.
+fn settable(bits: u16) -> u16 {
+    if bits & OFFLOAD_CSUM == 0 {
+        return 0;
+    }
+    let mut on = bits
+        & (OFFLOAD_CSUM
+            | OFFLOAD_TSO4
+            | OFFLOAD_TSO6
+            | OFFLOAD_TSO_ECN
+            | OFFLOAD_USO4
+            | OFFLOAD_USO6);
+    if on & (OFFLOAD_TSO4 | OFFLOAD_TSO6) == 0 {
+        on &= !OFFLOAD_TSO_ECN;
+    }
+    if on & (OFFLOAD_USO4 | OFFLOAD_USO6) != OFFLOAD_USO4 | OFFLOAD_USO6 {
+        on &= !(OFFLOAD_USO4 | OFFLOAD_USO6);
+    }
+    on
+}
+
 /// Packet mode needs a Linux tun device.
 #[cfg(not(target_os = "linux"))]
 pub fn up() -> io::Result<()> {
@@ -465,6 +532,18 @@ mod tests {
         assert_eq!(
             Hello::decode(&b).unwrap_err().kind(),
             io::ErrorKind::InvalidData
+        );
+    }
+
+    #[test]
+    fn settable_drops_sets_the_kernel_refuses() {
+        let tso = OFFLOAD_CSUM | OFFLOAD_TSO4 | OFFLOAD_TSO6 | OFFLOAD_TSO_ECN;
+        assert_eq!(settable(OFFLOAD_TSO4 | OFFLOAD_TSO6), 0);
+        assert_eq!(settable(OFFLOAD_CSUM | OFFLOAD_TSO_ECN), OFFLOAD_CSUM);
+        assert_eq!(settable(tso | OFFLOAD_USO4), tso);
+        assert_eq!(
+            settable(tso | OFFLOAD_USO4 | OFFLOAD_USO6 | 0x10),
+            tso | OFFLOAD_USO4 | OFFLOAD_USO6
         );
     }
 

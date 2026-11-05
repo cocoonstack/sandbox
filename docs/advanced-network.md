@@ -32,15 +32,19 @@ intercept DNS.
 
 - **`tun_up`** (control channel, port 2048): creates `tun0` with its address
   and route, starts the packet stream, answers `done` or an `error` saying why
-  `tun0` could not be created. Idempotent. sandboxd sends it once a claim of a
-  tun-enabled pool is live; warm VMs never get it, so goldens are unchanged.
+  `tun0` could not be created. On a guest whose `tun0` is already up it ends
+  the current stream and dials again. sandboxd sends it once a claim of a
+  tun-enabled pool is live, and again after every wake, unarchive and move:
+  a restored VMM never resets the guest's old stream, so without it an idle
+  guest keeps waiting on a dead one. Warm VMs never get it, so goldens are
+  unchanged.
 - **`tun_down`** (control channel): stops the packet stream and removes `tun0`
   with its routes before answering `done`, so clients fail at once with
   "network unreachable".
-- **Boot and reconnect**: silkd dials 2051 at boot and after every lost stream
-  (wake, move, host restart) and lets the host hello decide. A refused dial at
-  boot means off. A refused dial while `tun0` is up is retried with backoff
-  (50 ms doubling to 1 s); an off answer removes `tun0`.
+- **Boot and reconnect**: silkd dials 2051 at boot and after every stream it
+  sees end, and lets the host hello decide. At boot a refused dial or a failed
+  hello means off. Once `tun0` is up, a refused dial or a failed hello is
+  retried with backoff (50 ms doubling to 1 s); an off answer removes `tun0`.
 
 The guest switch is advisory. The guest user can be root, create its own TUN
 and dial 2051 directly, so the host enforces: it accepts a packet stream only
@@ -65,14 +69,17 @@ answers.
 | 10 | 2 | flags | 0 | bit 0 `ON`: packet mode is on for this box |
 
 A host that answers without `ON` closes the stream after the hello; the guest
-removes `tun0`. A guest that does not speak the host's version closes the
+removes `tun0`. A host that refuses a guest answers without `ON` rather than
+closing silently. A guest that does not speak the host's version closes the
 stream. The guest gives up on a hello that does not arrive in 5 seconds.
 
 Offload bits are the kernel's `TUN_F_*` values: `0x01` CSUM, `0x02` TSO4,
 `0x04` TSO6, `0x08` TSO_ECN, `0x20` USO4, `0x40` USO6. Each side probes its
 kernel (USO needs Linux 6.2) and then enables, with `TUNSETOFFLOAD`, only the
 offloads both hellos carry; segmentation offloads are dropped when CSUM is not
-common. A side never sends a frame whose GSO type the peer did not offer.
+common. A side never builds a frame whose GSO type the peer did not offer;
+packets its kernel queued before a reconnect keep their old type, and a
+receiver may drop one it cannot take.
 
 ### Frames
 
@@ -103,32 +110,26 @@ lost; TCP retransmits.
 
 ## Host side
 
-The host side is sandboxd ([#471](https://github.com/cocoonstack/sandbox/issues/471)):
+The host side is sandboxd; its design is
+[#471](https://github.com/cocoonstack/sandbox/issues/471). Whatever it does
+with the packets, it owes the guest this contract:
 
-- **One shared TUN per node**, created at start, multi-queue, `IFF_VNET_HDR`,
-  never added or removed per claim.
-- **Per-claim host address** from an ordinal: unique across the cell under a
-  meta store (and kept across a move), node-local otherwise; kept while the
-  claim is hibernated or archived, freed at release.
-- **1:1 rewrite in the pump**: outbound, the source address becomes the
-  claim's host address whatever the guest wrote; inbound, the destination goes
-  back to `100.64.0.2` and the packet goes to that claim's stream. Checksums
-  change incrementally: the IPv4 header checksum, and the L4 checksum, which
-  for a frame with `VIRTIO_NET_HDR_F_NEEDS_CSUM` sits at
+- **One stream per claim.** The packet stream arrives on the claim's own
+  vsock socket, so the stream, not any address in a packet, names the claim.
+  Every guest uses `100.64.0.2`; the host must not trust a source address the
+  guest wrote and must deliver only the claim's own return traffic on its
+  stream, with the destination set back to `100.64.0.2`.
+- **Enforcement on the host.** The host answers `ON` only for a claim that is
+  allowed packet mode, and answers off, closes the stream or refuses the dial
+  otherwise; revocation closes the stream. Nothing depends on the guest
+  obeying `tun_down`.
+- **Checksums after a rewrite.** A host that changes an address updates the
+  IPv4 header checksum and the L4 checksum incrementally. For a frame with
+  `VIRTIO_NET_HDR_F_NEEDS_CSUM` the L4 checksum sits at
   `csum_start + csum_offset` and holds the uncomplemented pseudo-header sum;
-  a UDP checksum of 0 stays 0. With GSO this happens once per frame, not per
-  segment.
-- **The kernel does the rest**: sandboxd writes rewritten packets into the
-  shared TUN; one static NAT rule (exit mode `masquerade`, `snat` or `none`)
-  and the route that sends the claim range into the TUN are all it installs.
-  Filtering, rate limits and quotas happen in the pump (`EvalFlow` over bare
-  `host: "*"` rules); netd is a control plane that writes kernel rules and
-  moves no packets.
-- **Enforcement**: the packet port accepts a stream only for a tun-enabled
-  claim (pool switch and claim switch), otherwise it closes it without reading
-  a packet; revocation closes the stream, drops flow state and deletes the
-  claim address's conntrack entries; the disabled state persists in the claim
-  record.
+  a UDP checksum of 0 stays 0. With GSO this happens once per frame.
+- **Offloads it offered.** The host sends only GSO types the guest's hello
+  offered and segments the rest itself.
 
 ## Limits
 
