@@ -242,8 +242,9 @@ func (r *Router) Run(ctx context.Context) error {
 			}
 		}
 	}()
+	receive := r.receive
 	for ctx.Err() == nil {
-		err := r.under.Recv(r.receive)
+		err := r.under.Recv(receive)
 		r.gro.flush(r)
 		if err != nil {
 			if ctx.Err() != nil {
@@ -511,6 +512,7 @@ func (l *link) enqueue(bp *[]byte) bool {
 func (l *link) write() {
 	batch := make(net.Buffers, 0, 64)
 	held := make([]*[]byte, 0, 64)
+	var bufs net.Buffers
 	for {
 		select {
 		case <-l.done:
@@ -526,7 +528,7 @@ func (l *link) write() {
 					break drain
 				}
 			}
-			bufs := batch
+			bufs = batch
 			_, err := bufs.WriteTo(l.conn)
 			l.r.framesOut.Add(uint64(len(held)))
 			for _, bp := range held {

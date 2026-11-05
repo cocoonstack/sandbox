@@ -9,8 +9,6 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"golang.org/x/net/ipv4"
-
 	"github.com/cocoonstack/sandbox/sandboxd/tunnet"
 )
 
@@ -32,8 +30,7 @@ var _ tunnet.Underlay = (*Underlay)(nil)
 // Underlay is a receive socket on the VXLAN port and a set of send sockets on ephemeral ports.
 type Underlay struct {
 	recv  *net.UDPConn
-	batch *ipv4.PacketConn
-	msgs  []ipv4.Message
+	rx    *receiver
 	sends []*net.UDPConn
 	gso   atomic.Bool
 }
@@ -44,10 +41,10 @@ func Listen(addr netip.AddrPort, senders int) (*Underlay, error) {
 	if err != nil {
 		return nil, fmt.Errorf("listen vxlan %s: %w", addr, err)
 	}
-	u := &Underlay{recv: recv, batch: ipv4.NewPacketConn(recv), msgs: make([]ipv4.Message, recvBatch)}
-	for i := range u.msgs {
-		u.msgs[i].Buffers = [][]byte{make([]byte, recvBuf)}
-		u.msgs[i].OOB = make([]byte, oobLen)
+	u := &Underlay{recv: recv}
+	if u.rx, err = newReceiver(recv); err != nil {
+		u.Close()
+		return nil, fmt.Errorf("listen vxlan %s: %w", addr, err)
 	}
 	_ = recv.SetReadBuffer(sockBuf)
 	enableGRO(recv)
@@ -95,26 +92,7 @@ func (u *Underlay) Send(b []byte, seg int, dst netip.AddrPort, flow uint64) erro
 }
 
 func (u *Underlay) Recv(each func(d []byte, from netip.AddrPort)) error {
-	got, err := u.batch.ReadBatch(u.msgs, 0)
-	if err != nil {
-		return err
-	}
-	for i := range got {
-		m := &u.msgs[i]
-		ua, ok := m.Addr.(*net.UDPAddr)
-		if !ok {
-			continue
-		}
-		from, buf := ua.AddrPort(), m.Buffers[0][:m.N]
-		seg := groSize(m.OOB[:m.NN])
-		if seg <= 0 {
-			seg = len(buf)
-		}
-		for off := 0; off < len(buf); off += seg {
-			each(buf[off:min(off+seg, len(buf))], from)
-		}
-	}
-	return nil
+	return u.rx.recv(each)
 }
 
 // Close closes every socket.
@@ -124,5 +102,15 @@ func (u *Underlay) Close() {
 	}
 	for _, c := range u.sends {
 		_ = c.Close()
+	}
+}
+
+// split hands each datagram the kernel coalesced into buf at seg bytes to each.
+func split(buf []byte, seg int, from netip.AddrPort, each func(d []byte, from netip.AddrPort)) {
+	if seg <= 0 {
+		seg = len(buf)
+	}
+	for off := 0; off < len(buf); off += seg {
+		each(buf[off:min(off+seg, len(buf))], from)
 	}
 }
