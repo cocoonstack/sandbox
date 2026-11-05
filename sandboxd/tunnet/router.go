@@ -95,20 +95,6 @@ func (o *Overlay) exit(profile string) (Exit, bool) {
 	return e, ok
 }
 
-// overlay is a loaded Overlay with the set of exit VTEPs the router accepts VXLAN from.
-type overlay struct {
-	*Overlay
-	vteps map[netip.Addr]bool
-}
-
-func load(o *Overlay) *overlay {
-	v := &overlay{Overlay: o, vteps: make(map[netip.Addr]bool, len(o.Exits))}
-	for _, e := range o.Exits {
-		v.vteps[e.VTEP] = true
-	}
-	return v
-}
-
 // Claim is one tun-enabled claim as the router sees it.
 type Claim struct {
 	ID   string
@@ -372,6 +358,20 @@ func (r *Router) announce(a *armed) {
 	if r.under.Send(g, len(g), netip.AddrPortFrom(exit.VTEP, o.Port), 0) == nil {
 		r.arpSent.Add(1)
 	}
+}
+
+// overlay is a loaded Overlay with the set of exit VTEPs the router accepts VXLAN from.
+type overlay struct {
+	*Overlay
+	vteps map[netip.Addr]bool
+}
+
+func load(o *Overlay) *overlay {
+	v := &overlay{Overlay: o, vteps: make(map[netip.Addr]bool, len(o.Exits))}
+	for _, e := range o.Exits {
+		v.vteps[e.VTEP] = true
+	}
+	return v
 }
 
 // armed is a claim this node answers for, with its flows and limits, which outlive a stream, and its live stream if one runs.

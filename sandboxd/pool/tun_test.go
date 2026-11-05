@@ -284,7 +284,6 @@ func tunManager(t *testing.T, eng *fakeEngine, addrs tunnet.Addresses, pools ...
 	return m
 }
 
-// tunHello sends a guest hello on sb's packet door and reports whether the host answered on.
 func tunHello(t *testing.T, sb *types.Sandbox) bool {
 	t.Helper()
 	conn, err := net.Dial("unix", engine.TunSocketPath(sb.VsockSocket))
@@ -295,7 +294,6 @@ func tunHello(t *testing.T, sb *types.Sandbox) bool {
 	return helloOn(t, conn)
 }
 
-// openStream returns a packet stream the host turned on.
 func openStream(t *testing.T, sb *types.Sandbox) net.Conn {
 	t.Helper()
 	conn, err := net.Dial("unix", engine.TunSocketPath(sb.VsockSocket))

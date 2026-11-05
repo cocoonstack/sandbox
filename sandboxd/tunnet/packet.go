@@ -102,7 +102,6 @@ type Packet struct {
 	SrcPort, DstPort uint16
 	// End marks a TCP FIN or RST; Open a SYN without ACK.
 	End, Open bool
-	// ICMPType is the type of an ICMP packet.
 	ICMPType uint8
 }
 

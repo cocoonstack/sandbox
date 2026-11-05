@@ -26,7 +26,9 @@ import (
 	usagepg "github.com/cocoonstack/sandbox/sandboxd/usage/pg"
 )
 
-func openBackends(ctx context.Context, cfg *config.Config) (pool.Backends, func(context.Context), error) {
+type runFunc func(context.Context)
+
+func openBackends(ctx context.Context, cfg *config.Config) (pool.Backends, runFunc, error) {
 	var b pool.Backends
 	var err error
 	if b.Checkpoints, err = newStoreView(ctx, cfg, "checkpoint-staging", store.CheckpointIDRe, false); err != nil {
@@ -55,7 +57,7 @@ func openBackends(ctx context.Context, cfg *config.Config) (pool.Backends, func(
 			return pool.Backends{}, nil, err
 		}
 	}
-	runTun := func(context.Context) {}
+	runTun := runFunc(func(context.Context) {})
 	if cfg.Tun != nil {
 		if runTun, err = openTun(ctx, cfg, &b); err != nil {
 			return pool.Backends{}, nil, err
@@ -65,7 +67,7 @@ func openBackends(ctx context.Context, cfg *config.Config) (pool.Backends, func(
 }
 
 // openTun returns run, which receives VXLAN until its context ends.
-func openTun(ctx context.Context, cfg *config.Config, b *pool.Backends) (func(context.Context), error) {
+func openTun(ctx context.Context, cfg *config.Config, b *pool.Backends) (runFunc, error) {
 	t := cfg.Tun
 	under, err := udp.Listen(t.ListenAddr(), t.Senders)
 	if err != nil {

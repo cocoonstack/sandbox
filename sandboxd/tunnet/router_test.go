@@ -245,6 +245,7 @@ func TestRouterResumesAStreamOpenedBeforeTheArmButRefusesAnOpener(t *testing.T) 
 	u.sent(t)
 	guest := serve(t, r, claimAddr)
 	guestHello(t, guest)
+	waitFor(t, func() bool { return r.claims[claimAddr].live() != nil })
 	syn := reply(remote)
 	syn[Overhead+20+13] = tcpSyn
 	u.inject(t, syn)

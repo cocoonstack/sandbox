@@ -1,8 +1,6 @@
 package tunnet
 
-import (
-	"encoding/binary"
-)
+import "encoding/binary"
 
 const (
 	gsoNone  = 0
