@@ -855,16 +855,19 @@ its guest's processes and memory (see
 and never this node (else 400), `max_downtime_ms` optional with a default of
 2000 and a floor: 400 or less answers 400 at once, because the target's receive
 and start alone are allowed that long. Answers `{"owner_addr": "<peer>", "rounds": n, "downtime_ms": d}` once the
-peer runs the guest and this node dropped the claim; `downtime_ms` is the pause
-from the final capture to the peer's commit. While the move runs, release, fork,
+peer took the claim and this node dropped it; a guest the peer cannot start is
+failed there. `downtime_ms` is the pause from the final capture until the peer
+answers the commit, after it started the guest. While the move runs, release, fork,
 checkpoint, promote, hibernate and volume changes of the claim answer 503
 `sandbox moving to another node; retry`. Env writes, renew and data-plane calls keep working until
 the final round and answer the same 503 during it, because the peer would miss
-them. Every error leaves the claim running here, except a 503 with the registry
-down after the final round paused the guest: the guest stays paused until the
-record answers, the guest then resumes or, when the record reads `committed`, the
+them. Every error leaves the claim running here, except one after the final round
+paused the guest whose abort did not land (a 503 with the registry down, or a
+failed `cocoon vm migrate abort`): the guest stays paused until the abort is
+retried through, the guest then resumes or, when the record reads `committed`, the
 node drops the claim (see [moving a running claim](cluster.md#moving-a-running-claim)):
 
+- 403 the claim's tenant was removed
 - 404 unknown sandbox
 - 409 the claim cannot move (hibernated, archived, failed, waking, with
   volumes, egress lane, a move already running), cocoon or its run dir cannot
@@ -873,7 +876,8 @@ node drops the claim (see [moving a running claim](cluster.md#moving-a-running-c
 - 429 `move_concurrency` reached here or on the target, or the target's
   admission refused (`target <peer>: <reason>`)
 - 502 the target is unreachable or failed
-- 503 the move or archive registry is down, the node lease is overdue, or the
+- 503 the move or archive registry is down, the node lease is overdue, the node
+  is evacuating the claim (`sandbox moving to another node; retry`), or the
   final round would not fit `max_downtime_ms`, after at most 4 deltas
 
 The target serves root-only peer routes for a move, `POST /v1/moves/{id}`,

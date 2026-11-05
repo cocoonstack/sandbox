@@ -332,8 +332,8 @@ exec and pty streams, port forwards and egress connections end; the client
 meets a 404 on the source and runs `Lookup`.
 
 **The record.** Each move has a record of its own in the meta store (table
-`sandboxd_moves`), separate from the archive rows: `id`, `from`, `to`, `state`
-and `epoch`, each change a compare-and-set at a new epoch.
+`sandboxd_moves`), separate from the archive rows: `id`, `from_node`,
+`to_node`, `state` and `epoch`, each change a compare-and-set at a new epoch.
 
 | From | To | Who | When |
 |---|---|---|---|
@@ -379,21 +379,21 @@ never fit), the source pauses the guest for the final
 round and the target receives the series and starts the guest. A move whose
 deltas never fit answers 503 and the guest runs on; from the second delta on, one
 that shrinks by under 10% and is still too large answers at once. `downtime_ms` in the answer
-is the pause the source measured, from the final capture to the target's
-commit. Each round has one minute plus its size at 10 MB/s to arrive, so a
+is the pause the source measured, from the final capture until the target
+answers the commit, after it started the guest. Each round has one minute plus its size at 10 MB/s to arrive, so a
 target that stops reading fails the move. The final capture, its transfer and the target's commit have 2 minutes
 together; past that the source resolves the move through the record, and the
 guest resumes on the source unless the target committed.
 
-**Counting.** The target admits the move like a new claim: node `max_claims`,
-`max_running`, the tenant's `max_claims`, `memory_limit` and
-`move_concurrency`, and holds a reservation from admission to its commit. The
+**Counting.** The target admits the move like a new claim: drain,
+`disk_reserve`, `memory_limit`, node `max_claims` and `max_running`, the
+tenant's `max_claims` and `move_concurrency`, and holds a reservation from admission to its commit. The
 reservation counts in every cap but is no claim: listings, reaps and gossip
 never see it. At the commit the reservation becomes the claim under one lock,
 so the target never counts it twice. The source counts the claim until it drops
 it after the commit, so the cluster counts a moving claim twice, which can make
 a node refuse earlier but never over-admit. `memory_limit` is checked again
-before the receive. A new admission from the source that holds the reservation
+before the receive, and a target that started draining refuses the commit. A new admission from the source that holds the reservation
 replaces it and resets its staged files, so a move retried after a source crash
 does not wait out the idle drop; one from another source answers 409. A
 reservation with no round arriving and none finished or
@@ -401,11 +401,11 @@ commit asked for 2 minutes is dropped with its staged files.
 
 **Same paths.** Both nodes need the same path strings in cocoon's `root_dir` and
 `run_dir`. The requirement is on the string, not the real directory: a symlink
-of one name can lead to different disks on each node, and `data_dir` may differ.
-The string has to be set before the VM starts, because the VM's record keeps it.
-A move between nodes with different strings fails at the receive, after the
-guest paused: cocoon refuses the series with `untrusted storage path in snapshot
-metadata`, the call answers 502 and the guest resumes on the source.
+of one name can lead to different disks on each node, and sandboxd's `data_dir`
+may differ. Set the string before the VM starts; a VM started under another
+string cannot move. A move between nodes with different strings fails at the
+receive, after the guest paused: `cocoon vm migrate receive` refuses the series,
+the call answers 502 and the guest resumes on the source.
 
 **Known limits.**
 

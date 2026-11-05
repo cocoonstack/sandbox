@@ -22,13 +22,13 @@ vsock-only I/O (hardened default); `net=egress` attaches a bridge/CNI NIC.
   images, running as a service, the bare-metal e2e and acceptance drivers, the
   boot contract
 - [Clusters](cluster.md) — joining a mesh, querying members, how redirect
-  placement works, relocating handles, and surviving node loss (archived and
-  replicated claims)
+  placement works, relocating handles, draining and moving claims between
+  nodes, and surviving node loss (archived and replicated claims)
 - [sandboxd HTTP API](sandboxd-api.md) — every endpoint: claim/release,
   renew, hibernate, fork, promote, checkpoints, preview, the guest-port
   relay, claim env, runtime volume registration, live volume changes,
-  runtime tenants, config reload, online pool reconfigure, metrics, the usage
-  journal and its shared table
+  runtime tenants, config reload, online pool reconfigure, drain and
+  evacuation, live move, metrics, the usage journal and its shared table
 - [Replace a dataset in a running sandbox](live-volumes.md) — swapping a
   read-only catalog volume on a running claim with the volume API
 - [Hibernate with an external volume controller](volume-controller.md) — detach,
