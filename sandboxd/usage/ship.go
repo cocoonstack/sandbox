@@ -98,7 +98,7 @@ func (s *shipper) shipOnce(ctx context.Context) (int, error) {
 			return 0, nil // rotated between the two opens
 		}
 	}
-	f, off := s.locate(live, backup)
+	f, off := s.locate(ctx, live, backup)
 	files := []*os.File{f}
 	if f == backup {
 		files = append(files, live)
@@ -117,7 +117,7 @@ func (s *shipper) shipOnce(ctx context.Context) (int, error) {
 }
 
 // locate returns where the first unlanded line starts: past the anchor when a file still holds it, else past the marked line, else at the oldest line.
-func (s *shipper) locate(live, backup *os.File) (*os.File, int64) {
+func (s *shipper) locate(ctx context.Context, live, backup *os.File) (*os.File, int64) {
 	for _, f := range []*os.File{live, backup} {
 		if f != nil && s.at.in(f) {
 			return f, s.at.end
@@ -139,6 +139,7 @@ func (s *shipper) locate(live, backup *os.File) (*os.File, int64) {
 		}
 	}
 	if found == nil {
+		log.WithFunc("usage.shipper.locate").Warn(ctx, "the last landed usage line rotated out of the journal; the lines between it and the oldest kept line are lost")
 		return oldest, 0
 	}
 	return found, s.at.end
