@@ -57,7 +57,7 @@ func benchLink() *link {
 	c := Claim{ID: "c1", Addr: claimAddr, Allow: func(netip.Addr, uint16) bool { return true }}
 	r.Arm(c)
 	a := r.claims[claimAddr]
-	l := &link{r: r, a: a, send: make(chan *[]byte, sendQueue), done: make(chan struct{})}
+	l := &link{r: r, a: a, mtu: 1450, merge: true, send: make(chan *[]byte, sendQueue), done: make(chan struct{})}
 	a.attach(l)
 	return l
 }

@@ -3,6 +3,7 @@ package sandbox
 import (
 	"context"
 	"net/http"
+	"net/netip"
 	"time"
 )
 
@@ -72,6 +73,9 @@ type SandboxSummary struct {
 	CPUCount       int               `json:"cpu_count,omitzero"`
 	MemTotalBytes  int64             `json:"mem_total_bytes,omitzero"`
 	OnExpire       string            `json:"on_expire,omitempty"`
+	TunAddr        netip.Addr        `json:"tun_addr,omitzero"`
+	TunOff         bool              `json:"tun_off,omitzero"`
+	TunProfile     string            `json:"tun_profile,omitempty"`
 	// Restarts counts cold boots that replaced an exited VMM; each loses guest memory.
 	Restarts    int       `json:"restarts,omitzero"`
 	RestartedAt time.Time `json:"restarted_at,omitzero"`
