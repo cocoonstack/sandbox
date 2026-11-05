@@ -151,7 +151,7 @@ func TestMoveFailingAtAnyStepKeepsOneOwner(t *testing.T) {
 		"receive":        {fail: func(mc *moveCluster) { fakeOf(mc.t).receiveErr = errors.New("restore failed") }},
 		"target memory":  {fail: func(mc *moveCluster) { mc.p.commitHook = func(int) error { mc.t.memoryLow.Store(true); return nil } }, want: ErrQuota},
 		"source aborted first": {fail: func(mc *moveCluster) {
-			mc.p.commitHook = func(int) error { abortRecord(mc); return nil }
+			mc.p.commitHook = func(int) error { abortRecord(t, mc); return nil }
 		}, want: ErrNotMovable},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -1452,6 +1452,23 @@ func testMoveHoldsOffCallers(t *testing.T, archived bool) {
 		if _, err := mc.s.Move(t.Context(), other.ID, "b", time.Minute); !errors.Is(err, ErrQuota) {
 			t.Errorf("a second move past a lowered move_concurrency: %v, want ErrQuota", err)
 		}
+		wantEvac := errArchiveBusy
+		if !archived {
+			wantEvac = errNoFailover
+		}
+		mc.s.mu.Lock()
+		mc.s.evac = &evacuation{pending: map[string]*types.Sandbox{sb.ID: sb}, stop: func() {}}
+		mc.s.mu.Unlock()
+		evacErr := mc.s.evacuateClaim(t.Context(), sb)
+		mc.s.mu.Lock()
+		mc.s.evac = nil
+		mc.s.mu.Unlock()
+		if !errors.Is(evacErr, wantEvac) {
+			t.Errorf("evacuation of the moving claim: %v, want %v", evacErr, wantEvac)
+		}
+		if _, held := mc.s.byID(sb.ID); !held || sb.ArchiveCk != "" {
+			t.Error("the evacuation took the moving claim")
+		}
 		return nil
 	}
 	if _, err := mc.s.Move(t.Context(), sb.ID, "b", time.Minute); err != nil {
@@ -1781,14 +1798,18 @@ func failRound(n int) func(int) error {
 	}
 }
 
-func abortRecord(mc *moveCluster) {
-	ctx := context.Background()
-	for _, rec := range mustStale(mc) {
-		_, _ = mc.moveReg.Advance(ctx, rec.ID, rec.Epoch, rec.State, moves.Aborted)
+func abortRecord(t *testing.T, mc *moveCluster) {
+	t.Helper()
+	for _, rec := range mustStale(t, mc) {
+		_, _ = mc.moveReg.Advance(t.Context(), rec.ID, rec.Epoch, rec.State, moves.Aborted)
 	}
 }
 
-func mustStale(mc *moveCluster) []moves.Record {
-	recs, _ := mc.moveReg.Stale(context.Background(), time.Now().Add(time.Hour))
+func mustStale(t *testing.T, mc *moveCluster) []moves.Record {
+	t.Helper()
+	recs, err := mc.moveReg.Stale(t.Context(), time.Now().Add(time.Hour))
+	if err != nil {
+		t.Errorf("stale move records: %v", err)
+	}
 	return recs
 }
