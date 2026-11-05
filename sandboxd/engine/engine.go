@@ -63,7 +63,7 @@ const (
 	outputTail     = 400
 	portForwardMax = 4096
 	vmNotFound     = "vm not found" // cocoon's hypervisor.ErrNotFound text
-	// At 16 concurrent memory dumps cocoon's sqlite writers already time out on its 5 s lock wait; 8 measured clean
+	// 16 concurrent memory dumps timed out cocoon's sqlite writers; 8 measured clean
 	memoryDumps = 8
 	// A Go runtime starts slower with more Ps, and every cocoon op is one short process
 	cocoonMaxProcs = 4
