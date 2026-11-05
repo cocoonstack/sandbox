@@ -462,7 +462,8 @@ it, each allowed request reads the claim's env snapshot, without a lock.
 tunnel or request when it ends, with the payload bytes it moved (`tx` guest to
 destination, `rx` back) and its upstream, so per-exit traffic can be billed.
 The counts come from the copies the proxy already runs; the cost is one more
-usage-journal append per connection, which is why it is opt-in.
+usage-journal append per connection, which is why it is opt-in. A tunnel that a
+sandboxd stop cuts records no `egress_bytes` event.
 
 ## HTTPS interception
 

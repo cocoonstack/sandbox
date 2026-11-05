@@ -9,7 +9,8 @@ All bodies are JSON. Three token kinds:
   preview mint) and the tenant-scoped listings/deletes below; everything a
   tenant creates is stamped with its name. Operator surfaces
   (the per-id sandbox reads, `PUT /v1/sandboxes/{id}/instance-metadata`, `GET /v1/info`,
-  `PUT /v1/pools`, `PUT/DELETE /v1/volumes/{name}`, `POST/DELETE /v1/drain`,
+  `PUT /v1/pools`, `POST /v1/config/reload`, the [tenant API](#tenants-v1tenants),
+  `POST /v1/sandboxes/{id}/move`, `PUT/DELETE /v1/volumes/{name}`, `POST/DELETE /v1/drain`,
   `GET /metrics`, `GET /v1/usage`, `GET /v1/checkpoints/{id}/blob`)
   answer a tenant token `403` — authenticated but not authorized; an unknown
   token stays `401`. On a node with a shared
@@ -449,8 +450,7 @@ ignore `attach_only` in claims and reject it in live PUT and PATCH with 400.
 Older Python SDKs reject the field when
 returned descriptors are reused in requests. Responses without the field do
 not safely roundtrip attach-only intent through new clients. The server still
-accepts the legacy claim-wide request flag and normalizes old persisted empty
-mounts when loading claims.
+accepts the legacy claim-wide request flag.
 
 ### Partial failure and recovery
 

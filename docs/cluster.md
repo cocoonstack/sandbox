@@ -141,9 +141,12 @@ curl -s -H "Authorization: Bearer $TOKEN" http://node-a:7777/v1/info | jq .
     {"key": {"template": "base:24.04", "net": "none", "size": "small"},
      "warm": 4, "refilling": 0, "target": 4, "golden": true}
   ],
+  "templates": [],
   "claimed": 2,
+  "running": 2,
   "hibernated": 0,
   "archived": 0,
+  "advertise_addr": "10.0.0.5:7777",
   "peers": ["10.0.0.6:7777"]
 }
 ```

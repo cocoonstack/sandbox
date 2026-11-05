@@ -31,7 +31,7 @@ type Record struct {
 
 // Registry keeps the rows; every write is a compare-and-set, and every epoch it hands out is new.
 type Registry interface {
-	// Put writes rec for rec.Owner as a live row at a new epoch and returns it; ErrLost when another owner holds the row.
+	// Put writes rec for rec.Owner as a live row at a new epoch and returns it; ErrLost when the row has another owner or none.
 	Put(ctx context.Context, rec Record) (int64, error)
 	// Replace writes rec over the live row of rec.Owner at epoch expect, at a new epoch; with expect 0 it is Put.
 	Replace(ctx context.Context, rec Record, expect int64) (int64, error)

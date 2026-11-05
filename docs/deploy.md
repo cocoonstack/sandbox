@@ -210,8 +210,7 @@ taken. Unpooled claims (template and checkpoint claims) always wake.
 connections to finish, and the next connection wakes the claim.
 
 A reader is a warm VM taken from the claim's own pool, so it boots the claim's
-image with the claim's layers, and it has that pool's lane: no NIC on the none
-lane, the bridge NIC the claim had on the bridge lane (egress-lane claims never
+image with the claim's layers, and it has no NIC (egress-lane claims never
 hibernate). Taking one removes a VM from the pool until the refill replaces it,
 and an empty pool never cold-boots one: the call wakes the claim. A reader is never shared: it
 serves one claim, and only the claim's own token reaches it. The guest's own
@@ -600,7 +599,7 @@ can delete only its own checkpoints and templates (root sees everything).
 Operator surfaces stay root-only — per-id sandbox reads and stats,
 `PUT/DELETE /v1/volumes/{name}`, `PUT /v1/sandboxes/{id}/instance-metadata`,
 `GET /v1/checkpoints/{id}/blob`, `GET /v1/info`, `PUT /v1/pools`,
-`/v1/tenants`, `/v1/config/reload`, `POST/DELETE /v1/drain`, `/metrics`, `GET /v1/usage`; a
+`/v1/tenants`, `/v1/config/reload`, `POST/DELETE /v1/drain`, `POST /v1/sandboxes/{id}/move` and the peer `/v1/moves/{id}` calls, `/metrics`, `GET /v1/usage`; a
 tenant token there is authenticated but not authorized, so it answers 403 (a
 wrong token stays 401). Per-sandbox
 tokens are unchanged: whoever holds a sandbox's token drives that sandbox.
@@ -1213,7 +1212,7 @@ HTTP port under a signed, expiring shareable URL; a node that cannot bind it
 exits. The whole mechanism is in sandboxd:
 
 - **Minting** (`sb.PreviewURL(ctx, port, ttl)`): the owner node signs a token
-  embedding `{sandbox, port, owner, exp}` with `preview_secret`; the URL's
+  embedding `{id, port, owner, exp}` with `preview_secret`; the URL's
   life is clamped to the claim's lease.
 - **Serving**: any node's preview listener verifies the token (no shared
   state), then reverse-proxies to the guest port over the relay if it owns

@@ -76,7 +76,7 @@ type Store interface {
 	// SetLabels replaces a record's labels; nil removes them. The caller holds the record lock.
 	SetLabels(ctx context.Context, id string, labels []byte) error
 	Delete(ctx context.Context, id string) error
-	// SweepStaging removes abandoned staging left by a crash mid-publish.
+	// SweepStaging clears abandoned staging, and a backend's local fetch cache, at startup.
 	SweepStaging() error
 	// SweepGenerations runs generation retention, sparing staging and fetch caches used within GenerationGrace.
 	SweepGenerations(ctx context.Context) error

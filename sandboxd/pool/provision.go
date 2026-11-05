@@ -127,7 +127,7 @@ func (m *Manager) cloneBatch(ctx context.Context, count int, key types.PoolKey, 
 	return children, nil
 }
 
-// probeReady waits until a VM's silkd answers, polling `vm list` when sock is empty.
+// probeReady waits until a VM's silkd answers, polling `vm inspect` when sock is empty.
 func (m *Manager) probeReady(ctx context.Context, name, sock string, timeout time.Duration) (string, error) {
 	deadline := time.Now().Add(timeout)
 	if sock == "" {

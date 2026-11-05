@@ -62,7 +62,7 @@ class CocoonToolkit:
                 raise
 
     def get_tools(self) -> list[StructuredTool]:
-        """The sandbox tool set; sync-native (_run), async via to_thread."""
+        """The sandbox tool set; async calls run on a worker thread."""
         return [
             self._tool(
                 "sandbox_exec",
