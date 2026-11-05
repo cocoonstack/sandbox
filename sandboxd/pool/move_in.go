@@ -33,6 +33,9 @@ func (m *Manager) AdmitMove(ctx context.Context, id string, a MoveAdmission) (st
 	if m.moves == nil {
 		return "", errMovesOff
 	}
+	if err := m.eng.CheckMigrateSupport(ctx); err != nil {
+		return "", fmt.Errorf("%w: %w", ErrNotMovable, err)
+	}
 	if err := m.validate(a.Key); err != nil {
 		return "", fmt.Errorf("%w: %w", ErrNotMovable, err)
 	}
