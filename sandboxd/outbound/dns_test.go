@@ -198,6 +198,7 @@ func TestADNSDialBeforeTheClaimForcesARebind(t *testing.T) {
 	sb := outboundtest.VsockSandbox(t, "sb_dns", testKey)
 	sb.VMName = "sbx-dns-1"
 	h.Prebind(t.Context(), sb)
+	prebound := h.prebound[sb.VMName].ln
 	early, err := net.Dial("unix", engine.DNSDatagramSocketPath(sb.VsockSocket))
 	if err != nil {
 		t.Fatalf("dial the pre-bound door: %v", err)
@@ -210,6 +211,9 @@ func TestADNSDialBeforeTheClaimForcesARebind(t *testing.T) {
 		t.Fatalf("arm proxy: %v", err)
 	}
 	t.Cleanup(func() { h.Disarm(sb.ID, true) })
+	if h.doors[sb.ID].ln != prebound {
+		t.Error("the egress door no guest dialed was rebound too")
+	}
 	_ = early.SetDeadline(time.Now().Add(2 * time.Second))
 	if answer, err := readDNSMsg(early, dnsMsgMax); err == nil {
 		t.Fatalf("a query queued before the claim got %d bytes under the claim", len(answer))

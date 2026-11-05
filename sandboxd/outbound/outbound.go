@@ -136,7 +136,7 @@ func (h *Host) ArmProxy(ctx context.Context, sb *types.Sandbox) error {
 	if v.usageBytes {
 		proxy.OnTransfer(func(ev egress.Event, sent, received int64) { h.o.Transfer(evCtx, id, tenant, ev, sent, received) })
 	}
-	if d != nil && d.stale(policy) {
+	if d != nil && (!d.serves(policy) || d.renew(sb.VsockSocket, policy) != nil) {
 		d.close()
 		d = nil
 	}

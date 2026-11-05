@@ -17,6 +17,22 @@ import (
 // doorConns bounds one sandbox's open connections per door; the guest's next dial waits in the backlog.
 const doorConns = 256
 
+type doorSpec struct {
+	ln   *net.Listener
+	path string
+	name string
+	on   bool
+}
+
+func (s doorSpec) bind() error {
+	ln, err := listenUnix(s.path)
+	if err != nil {
+		return fmt.Errorf("listen %s: %w", s.name, err)
+	}
+	*s.ln = limitDoor(ln)
+	return nil
+}
+
 // doors are a sandbox's proxy door and optional SOCKS5 and DNS doors, served once armed.
 type doors struct {
 	srv      *http.Server
@@ -43,14 +59,31 @@ func (d *doors) close() {
 	}
 }
 
-// stale reports whether a guest dialed a pre-bound door before it was armed, or the doors bound differ from what p serves.
-func (d *doors) stale(p egress.PolicyEvaluator) bool {
-	for _, ln := range [...]net.Listener{d.ln, d.socks, d.dns, d.dnsGram} {
-		if ln != nil && reached(ln) {
-			return true
+// renew rebinds each door a guest dialed before it was armed, so no connection queued then is served under the claim.
+func (d *doors) renew(vsock string, p egress.PolicyEvaluator) error {
+	for _, door := range d.specs(vsock, p) {
+		if !door.on || !reached(*door.ln) {
+			continue
+		}
+		_ = (*door.ln).Close()
+		if err := door.bind(); err != nil {
+			return err
 		}
 	}
-	return (d.socks != nil) != p.ServesSocks() || (d.dns != nil) != p.ServesDNS()
+	return nil
+}
+
+func (d *doors) serves(p egress.PolicyEvaluator) bool {
+	return (d.socks != nil) == p.ServesSocks() && (d.dns != nil) == p.ServesDNS()
+}
+
+func (d *doors) specs(vsock string, p egress.PolicyEvaluator) [4]doorSpec {
+	return [...]doorSpec{
+		{&d.ln, engine.EgressSocketPath(vsock), "egress", true},
+		{&d.socks, engine.SocksSocketPath(vsock), "socks", p.ServesSocks()},
+		{&d.dns, engine.DNSSocketPath(vsock), "dns", p.ServesDNS()},
+		{&d.dnsGram, engine.DNSDatagramSocketPath(vsock), "dns datagram", p.ServesDNS()},
+	}
 }
 
 // doorListener caps a door's live connections; doorConn's NetConn hands splice the *net.UnixConn the kernel copy needs.
@@ -100,26 +133,14 @@ func (c *doorConn) NetConn() net.Conn { return c.UnixConn }
 
 func bindDoors(vsock string, p egress.PolicyEvaluator) (*doors, error) {
 	d := &doors{}
-	for _, door := range []struct {
-		ln   *net.Listener
-		path string
-		name string
-		on   bool
-	}{
-		{&d.ln, engine.EgressSocketPath(vsock), "egress", true},
-		{&d.socks, engine.SocksSocketPath(vsock), "socks", p.ServesSocks()},
-		{&d.dns, engine.DNSSocketPath(vsock), "dns", p.ServesDNS()},
-		{&d.dnsGram, engine.DNSDatagramSocketPath(vsock), "dns datagram", p.ServesDNS()},
-	} {
+	for _, door := range d.specs(vsock, p) {
 		if !door.on {
 			continue
 		}
-		ln, err := listenUnix(door.path)
-		if err != nil {
+		if err := door.bind(); err != nil {
 			d.close()
-			return nil, fmt.Errorf("listen %s: %w", door.name, err)
+			return nil, err
 		}
-		*door.ln = limitDoor(ln)
 	}
 	return d, nil
 }

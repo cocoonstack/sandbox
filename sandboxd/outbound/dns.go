@@ -120,7 +120,7 @@ func (r *resolver) serveConn(conn net.Conn, datagram bool) {
 	stop := context.AfterFunc(r.ctx, func() { _ = conn.Close() })
 	defer stop()
 	for {
-		_ = conn.SetDeadline(time.Now().Add(dnsIdle))
+		_ = conn.SetReadDeadline(time.Now().Add(dnsIdle))
 		query, err := readDNSMsg(conn, dnsQueryMax)
 		if errors.Is(err, errMalformed) || errors.Is(err, io.ErrUnexpectedEOF) {
 			r.h.dnsMalformed.Add(1)
@@ -133,6 +133,7 @@ func (r *resolver) serveConn(conn net.Conn, datagram bool) {
 		buf := udpBufs.Get().(*[dnsMsgMax]byte)
 		answer, ok := r.answer(query, buf[:], datagram)
 		if ok {
+			_ = conn.SetWriteDeadline(time.Now().Add(dnsIdle))
 			err = writeDNSMsg(conn, answer)
 		}
 		udpBufs.Put(buf)
