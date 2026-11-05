@@ -65,7 +65,10 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 		case ok && sb.HibernateSnap != "":
 			// Hibernated: the VM is stopped by design and wakes on demand.
 			sb.PendingSnap = ""
-		case ok && sb.PendingSnap != "" && (snapsErr != nil || slices.Contains(snaps, sb.PendingSnap)):
+		case ok && sb.PendingSnap != "" && snapsErr != nil:
+			referenced[sb.PendingSnap] = true
+			interrupted = append(interrupted, sb)
+		case ok && sb.PendingSnap != "" && slices.Contains(snaps, sb.PendingSnap):
 			// The journaled intent names the wake image, so adopt it when the snapshot is there
 			sb.HibernateSnap, sb.PendingSnap, sb.ReaderSafe = sb.PendingSnap, "", false
 			adopted = append(adopted, sb)

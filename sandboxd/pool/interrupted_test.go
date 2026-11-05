@@ -431,6 +431,34 @@ func TestASettleWithNoIntentLeftKeepsTheReaderSafeHibernate(t *testing.T) {
 	}
 }
 
+func TestReconcileWithoutASnapshotListSettlesAStoppedHibernate(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		listed []string
+		want   string
+	}{
+		{"snapshot persisted", []string{interruptedHib}, interruptedHib},
+		{"snapshot never persisted", nil, ""},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				eng := newFakeEngine()
+				eng.vmStates = map[string]string{interruptedVM: "stopped"}
+				eng.snapListErr = errors.New("cocoon unreachable")
+				_, sb := reconcileInterrupted(t, eng, interruptedHib, "", tt.listed)
+				eng.mu.Lock()
+				eng.snapListErr = nil
+				eng.mu.Unlock()
+				time.Sleep(2 * captureResumeRetry)
+				synctest.Wait()
+				if sb.HibernateSnap != tt.want || sb.PendingSnap != "" {
+					t.Errorf("hibernate snap %q intent %q, want %q and no intent", sb.HibernateSnap, sb.PendingSnap, tt.want)
+				}
+			})
+		})
+	}
+}
+
 func waitStarted(t *testing.T, eng *fakeEngine, n int) {
 	t.Helper()
 	waitFor(t, func() bool {
