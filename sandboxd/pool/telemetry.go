@@ -14,6 +14,7 @@ import (
 	"github.com/projecteru2/core/log"
 
 	"github.com/cocoonstack/sandbox/sandboxd/egress"
+	"github.com/cocoonstack/sandbox/sandboxd/outbound"
 	"github.com/cocoonstack/sandbox/sandboxd/usage"
 )
 
@@ -22,6 +23,7 @@ const (
 	AuditLineCap = 4096
 
 	egressEvent = "egress"
+	dnsEvent    = "dns"
 	reapEvent   = "reap"
 )
 
@@ -123,6 +125,15 @@ type egressFrame struct {
 	Dst      netip.AddrPort `json:"dst_addr,omitzero"`
 }
 
+type dnsFrame struct {
+	Op       string `json:"op"`
+	Name     string `json:"name"`
+	Type     string `json:"qtype"`
+	Answers  int    `json:"answers"`
+	Decision string `json:"decision"`
+	Tenant   string `json:"tenant,omitempty"`
+}
+
 func (m *Manager) Counters() Counters {
 	c := &m.counters
 	warm, clone, cold := c.claimWarmLatency.snapshot(), c.claimCloneLatency.snapshot(), c.claimColdLatency.snapshot()
@@ -215,6 +226,17 @@ func (m *Manager) recordEgress(ctx context.Context, id, tenant string, ev egress
 		})
 	}
 	m.recordUsage(ctx, usage.Event{Event: egressEvent, ID: id, Tenant: tenant, Reference: ev.Host, Upstream: ev.Upstream, Secret: ev.Injected})
+}
+
+func (m *Manager) recordDNS(ctx context.Context, id, tenant string, ev outbound.DNSEvent) {
+	if m.audit == nil {
+		return
+	}
+	m.appendAudit(ctx, struct {
+		Time time.Time `json:"t"`
+		ID   string    `json:"id"`
+		dnsFrame
+	}{time.Now(), id, dnsFrame{Op: dnsEvent, Name: ev.Name, Type: ev.Type, Answers: ev.Answers, Decision: ev.Decision, Tenant: tenant}})
 }
 
 func (m *Manager) recordUsage(ctx context.Context, ev usage.Event) {

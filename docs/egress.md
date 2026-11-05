@@ -72,6 +72,48 @@ Audit lines (with `audit_log` on) carry `"method":"SOCKS5"`.
 curl --socks5-hostname 127.0.0.1:1080 imaps://imap.example.com/   # allowed: {"socks5": true, "allow": [{"host": "imap.example.com"}]}
 ```
 
+### Name resolution (DNS)
+
+A none-lane guest has no resolver of its own. Clients that hand the proxy or the
+SOCKS5 door a name need none, but `dig`, `getent hosts`, tools with their own
+resolver, and programs that look a host up before they connect by address do.
+When the pool policy sets `"dns": true`, silkd's stub on `127.0.0.153:53` (UDP
+and TCP) carries each query over `CID2:2052` (`<vsock_socket>_2052`) to a
+per-sandbox resolver in sandboxd, which asks the node's nameservers (from the
+node's `/etc/resolv.conf`) and answers with real addresses.
+
+- **Guest resolver config.** In a guest without a device-backed NIC, silkd at
+  start writes `/run/systemd/resolved.conf.d/silkd-dns.conf` (`DNS=127.0.0.153`,
+  `Domains=~.`) and asks systemd-resolved to reload, so `127.0.0.53` keeps
+  serving and forwards to the stub. When `/etc/resolv.conf` is not a link into
+  systemd-resolved's `/run/systemd/resolve/`, silkd replaces it with
+  `nameserver 127.0.0.153`. A guest with a NIC keeps its own resolver.
+- **Internal addresses.** An `A` or `AAAA` record that the dial guard would
+  refuse (special-purpose ranges and the node's own addresses, minus the
+  prefixes `egress_internal_allow` re-admits on any port) is dropped from the
+  answer. The answer keeps the other records, the question and the EDNS record,
+  and drops the authority and additional sections.
+- **Rate.** Each claim gets 50 queries a second with a burst of 200; a query
+  past the bucket answers `REFUSED`.
+- **Audit.** With `audit_log` on, each query appends
+  `{"op":"dns","name":…,"qtype":…,"answers":…,"decision":…}` with the claim id
+  and tenant. The decision is `allow`, `filtered` (an address was dropped),
+  `failed` (no nameserver answered; the guest gets `SERVFAIL`) or
+  `rate_limited` (at most one a second per claim after a burst of ten).
+- **Names for flow audit.** The resolver remembers, per claim, the name each
+  kept address was resolved from until its TTL ends (at most 4,096 entries).
+
+Like the SOCKS5 door, the switch is the pool's: without it the host side stays
+unwired, the stub's dial is refused, and the guest gets `SERVFAIL` at once. A
+connect by address still goes through the proxy or the SOCKS5 door and is
+judged there. Hibernate, wake and move need nothing: every UDP query opens a new
+vsock connection.
+
+```sh
+dig example.com                # answered: {"dns": true, "allow": [...]}
+getent hosts example.com
+```
+
 ## How it works (egress lane)
 
 A `net:"egress"` guest owns a real NIC on the host bridge and reaches the same

@@ -50,6 +50,7 @@ const (
 	silkdPort      = 2048
 	egressPort     = 2049
 	socksPort      = 2050
+	dnsPort        = 2052
 	cmdTimeout     = 2 * time.Minute
 	dumpTimeout    = 15 * time.Minute
 	cmdTermGrace   = 30 * time.Second
@@ -535,6 +536,11 @@ func (e *Engine) missesFloor(ctx context.Context, floor string) (string, bool) {
 // EgressSocketPath is the host UDS the VMM connects when the guest dials CID2:egressPort.
 func EgressSocketPath(vsockSocket string) string {
 	return fmt.Sprintf("%s_%d", vsockSocket, egressPort)
+}
+
+// DNSSocketPath is the host UDS the VMM connects when the guest dials CID2:dnsPort.
+func DNSSocketPath(vsockSocket string) string {
+	return fmt.Sprintf("%s_%d", vsockSocket, dnsPort)
 }
 
 // SocksSocketPath is the host UDS the VMM connects when the guest dials CID2:socksPort.

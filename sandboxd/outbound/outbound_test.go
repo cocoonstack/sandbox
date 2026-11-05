@@ -262,12 +262,13 @@ func newHost(t *testing.T, eng *fakeEngine, cfg *config.Config, edit func(*Optio
 	t.Helper()
 	v := NewView(cfg, testSecrets(t))
 	o := Options{
-		Engine:   eng,
-		View:     func() *View { return v },
-		Record:   func(context.Context, string, string, egress.Event) {},
-		Transfer: func(context.Context, string, string, egress.Event, int64, int64) {},
-		Lock:     func(string) error { return nil },
-		Unlock:   func(string) error { return nil },
+		Engine:    eng,
+		View:      func() *View { return v },
+		Record:    func(context.Context, string, string, egress.Event) {},
+		RecordDNS: func(context.Context, string, string, DNSEvent) {},
+		Transfer:  func(context.Context, string, string, egress.Event, int64, int64) {},
+		Lock:      func(string) error { return nil },
+		Unlock:    func(string) error { return nil },
 	}
 	if edit != nil {
 		edit(&o)

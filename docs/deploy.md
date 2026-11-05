@@ -68,7 +68,7 @@ Since v0.1.11 the guest images and sandboxd move together on the egress lane: sa
 a NIC-bearing guest how its traffic leaves through `/etc/silkd-lane`, and a
 guest image from another release reads a different file or none, which on a
 locked bridge lane leaves its execs routing into the lock. Roll the images
-with the daemon. A config that uses the `socks5` or `ports` policy keys does
+with the daemon. A config that uses the `socks5`, `dns` or `ports` policy keys does
 not load on an older sandboxd (unknown keys are rejected), so a rollback takes
 the config with it. The SOCKS5 door is opt-in and the pool policy owns it: a
 pool that relied on the door binding for any bare host rule adds
@@ -1058,7 +1058,7 @@ Effects on what already runs:
   policy a reload adds reaches it only after a release or a wake. A restart
   cannot refuse, so it logs a warning for each pool whose live claims have no
   policy and reach nothing, on a node that still holds any egress policy.
-- **Armed once per claim**: the SOCKS5 door (`socks5`) and
+- **Armed once per claim**: the SOCKS5 door (`socks5`), the DNS door (`dns`) and
   `egress_usage_bytes` apply to claims armed after the reload.
 - **Claim caps**: a lower `max_claims` or `max_running` refuses new claims, and
   a lower `max_running` refuses wakes, until the count falls under it. It stops

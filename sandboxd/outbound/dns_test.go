@@ -1,0 +1,351 @@
+package outbound
+
+import (
+	"context"
+	"net"
+	"net/netip"
+	"os"
+	"path/filepath"
+	"slices"
+	"strings"
+	"sync"
+	"testing"
+
+	"golang.org/x/net/dns/dnsmessage"
+
+	"github.com/cocoonstack/sandbox/sandboxd/egress"
+	"github.com/cocoonstack/sandbox/sandboxd/engine"
+	"github.com/cocoonstack/sandbox/sandboxd/outbound/outboundtest"
+	"github.com/cocoonstack/sandbox/sandboxd/types"
+)
+
+const bigAnswers = 40
+
+var dnsPolicy = &egress.Policy{DNS: true, Allow: []egress.Rule{{Host: "example.com"}}}
+
+func TestDNSDoorBindsOnlyWhenOptedIn(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		policy *egress.Policy
+		want   bool
+	}{
+		{"opted in", dnsPolicy, true},
+		{"not opted in", &egress.Policy{Allow: []egress.Rule{{Host: "example.com"}}}, false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			h := newHost(t, &fakeEngine{}, poolConfig(testKey, tt.policy), nil)
+			sb := outboundtest.VsockSandbox(t, "sb_dns", testKey)
+			if err := h.ArmProxy(t.Context(), sb); err != nil {
+				t.Fatalf("arm proxy: %v", err)
+			}
+			path := engine.DNSSocketPath(sb.VsockSocket)
+			conn, err := net.Dial("unix", path)
+			if (err == nil) != tt.want {
+				t.Fatalf("dns door bound = %v, want %v", err == nil, tt.want)
+			}
+			if conn != nil {
+				_ = conn.Close()
+			}
+			h.Disarm(sb.ID, true)
+			if _, err := net.Dial("unix", path); err == nil {
+				t.Error("dns door still accepts after disarm")
+			}
+		})
+	}
+}
+
+func TestDNSDoorDropsInternalAnswersAndRemembersTheRest(t *testing.T) {
+	upstream := newFakeNameserver(t)
+	cfg := poolConfig(testKey, dnsPolicy)
+	cfg.EgressInternalAllow = []string{"10.9.0.0/16:5432"}
+	events := &dnsEvents{}
+	h := newHost(t, &fakeEngine{}, cfg, func(o *Options) {
+		o.Nameservers = func() []string { return []string{upstream.udp} }
+		o.RecordDNS = events.record
+	})
+	h.self.Store(&[]netip.Addr{netip.MustParseAddr("93.184.216.99")})
+	sb := armDNS(t, h)
+
+	for _, tt := range []struct {
+		name     string
+		want     []string
+		decision string
+	}{
+		{"mixed.test.", []string{"93.184.216.34"}, DNSFiltered},
+		{"inside.test.", nil, DNSFiltered},
+		{"node.test.", nil, DNSFiltered},
+		{"mapped.test.", nil, DNSFiltered},
+		{"allowed.test.", []string{"10.9.1.1"}, DNSAllow},
+		{"public.test.", []string{"93.184.216.35", "2606:2800:220:1::1"}, DNSAllow},
+	} {
+		msg := queryDoor(t, sb, tt.name, dnsmessage.TypeA)
+		if got := addresses(msg); !slices.Equal(got, tt.want) {
+			t.Errorf("%s answers %v, want %v", tt.name, got, tt.want)
+		}
+		if msg.RCode != dnsmessage.RCodeSuccess || len(msg.Authorities) != 0 {
+			t.Errorf("%s rcode %v with %d authority records, want success and none", tt.name, msg.RCode, len(msg.Authorities))
+		}
+		ev := events.last(t)
+		if ev.Name != strings.TrimSuffix(tt.name, ".") || ev.Type != "A" || ev.Answers != len(tt.want) || ev.Decision != tt.decision {
+			t.Errorf("%s event %+v, want %d answers and %s", tt.name, ev, len(tt.want), tt.decision)
+		}
+	}
+	if name, ok := h.ResolvedName(sb.ID, netip.MustParseAddr("93.184.216.34")); !ok || name != "mixed.test" {
+		t.Errorf("name of 93.184.216.34 = %q, %v, want mixed.test", name, ok)
+	}
+	if _, ok := h.ResolvedName(sb.ID, netip.MustParseAddr("10.0.0.5")); ok {
+		t.Error("a dropped internal address has a name")
+	}
+}
+
+func TestDNSDoorRetriesATruncatedAnswerOverTCP(t *testing.T) {
+	upstream := newFakeNameserver(t)
+	h := newHost(t, &fakeEngine{}, poolConfig(testKey, dnsPolicy), func(o *Options) {
+		o.Nameservers = func() []string { return []string{upstream.udp} }
+	})
+	msg := queryDoor(t, armDNS(t, h), "big.test.", dnsmessage.TypeA)
+	if got := addresses(msg); len(got) != bigAnswers {
+		t.Errorf("truncated name answers %d addresses, want %d over TCP", len(got), bigAnswers)
+	}
+}
+
+func TestDNSDoorAnswersServfailWhenNoNameserverAnswers(t *testing.T) {
+	dead, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := dead.LocalAddr().String()
+	_ = dead.Close()
+	events := &dnsEvents{}
+	h := newHost(t, &fakeEngine{}, poolConfig(testKey, dnsPolicy), func(o *Options) {
+		o.Nameservers = func() []string { return []string{addr} }
+		o.RecordDNS = events.record
+	})
+	msg := queryDoor(t, armDNS(t, h), "public.test.", dnsmessage.TypeA)
+	if msg.RCode != dnsmessage.RCodeServerFailure || events.last(t).Decision != DNSFailed {
+		t.Errorf("rcode %v decision %q, want SERVFAIL and failed", msg.RCode, events.last(t).Decision)
+	}
+}
+
+func TestDNSDoorRefusesAQueryFloodPastItsBucket(t *testing.T) {
+	upstream := newFakeNameserver(t)
+	events := &dnsEvents{}
+	h := newHost(t, &fakeEngine{}, poolConfig(testKey, dnsPolicy), func(o *Options) {
+		o.Nameservers = func() []string { return []string{upstream.udp} }
+		o.RecordDNS = events.record
+	})
+	conn := dialDNS(t, armDNS(t, h))
+	refused := 0
+	for range dnsQueryBurst + 100 {
+		if exchangeDoor(t, conn, "public.test.", dnsmessage.TypeA).RCode == dnsmessage.RCodeRefused {
+			refused++
+		}
+	}
+	if refused == 0 {
+		t.Fatalf("no query refused after %d in a burst of %d", dnsQueryBurst+100, dnsQueryBurst)
+	}
+	if logged := events.count(DNSRateLimited); logged == 0 || logged > dnsRefusalBurst+2 {
+		t.Errorf("%d rate_limited events for %d refusals, want between 1 and %d", logged, refused, dnsRefusalBurst+2)
+	}
+}
+
+func TestNameserversReadsResolvConf(t *testing.T) {
+	dir := t.TempDir()
+	conf := filepath.Join(dir, "resolv.conf")
+	if err := os.WriteFile(conf, []byte("# comment\nnameserver 10.0.0.2\nsearch example\nnameserver fe80::1%eth0\nnameserver bogus\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := nameservers(conf), []string{"10.0.0.2:53", "[fe80::1%eth0]:53"}; !slices.Equal(got, want) {
+		t.Errorf("nameservers = %v, want %v", got, want)
+	}
+	if got := nameservers(filepath.Join(dir, "missing")); !slices.Equal(got, []string{"127.0.0.1:53"}) {
+		t.Errorf("nameservers of a missing file = %v, want the loopback default", got)
+	}
+}
+
+type fakeNameserver struct {
+	udp string
+}
+
+func newFakeNameserver(t *testing.T) *fakeNameserver {
+	t.Helper()
+	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ln, err := net.Listen("tcp", pc.LocalAddr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = pc.Close(); _ = ln.Close() })
+	go func() {
+		buf := make([]byte, dnsMsgMax)
+		for {
+			n, from, err := pc.ReadFrom(buf)
+			if err != nil {
+				return
+			}
+			_, _ = pc.WriteTo(fakeAnswer(buf[:n], true), from)
+		}
+	}()
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer func() { _ = conn.Close() }()
+				if query, err := readDNSMsg(conn); err == nil {
+					_ = writeDNSMsg(conn, fakeAnswer(query, false))
+				}
+			}()
+		}
+	}()
+	return &fakeNameserver{udp: pc.LocalAddr().String()}
+}
+
+func fakeAnswer(query []byte, udp bool) []byte {
+	var q dnsmessage.Message
+	if q.Unpack(query) != nil {
+		return nil
+	}
+	name := q.Questions[0].Name
+	resp := dnsmessage.Message{
+		ID: q.ID, Response: true, RecursionAvailable: true,
+		Questions:   q.Questions,
+		Authorities: []dnsmessage.Resource{{Header: dnsmessage.ResourceHeader{Name: name, Class: dnsmessage.ClassINET, TTL: 60}, Body: &dnsmessage.NSResource{NS: dnsmessage.MustNewName("ns.test.")}}},
+	}
+	addA := func(ip string) {
+		a := netip.MustParseAddr(ip)
+		hdr := dnsmessage.ResourceHeader{Name: name, Class: dnsmessage.ClassINET, TTL: 60}
+		if a.Is4() {
+			resp.Answers = append(resp.Answers, dnsmessage.Resource{Header: hdr, Body: &dnsmessage.AResource{A: a.As4()}})
+		} else {
+			resp.Answers = append(resp.Answers, dnsmessage.Resource{Header: hdr, Body: &dnsmessage.AAAAResource{AAAA: a.As16()}})
+		}
+	}
+	switch name.String() {
+	case "mixed.test.":
+		addA("93.184.216.34")
+		addA("10.0.0.5")
+	case "inside.test.":
+		addA("169.254.169.254")
+	case "node.test.":
+		addA("93.184.216.99")
+	case "mapped.test.":
+		addA("::ffff:127.0.0.1")
+	case "allowed.test.":
+		addA("10.9.1.1")
+	case "public.test.":
+		addA("93.184.216.35")
+		addA("2606:2800:220:1::1")
+	case "big.test.":
+		if udp {
+			resp.Truncated = true
+			break
+		}
+		for i := range bigAnswers {
+			addA(netip.AddrFrom4([4]byte{93, 184, 217, byte(i + 1)}).String())
+		}
+	}
+	out, _ := resp.Pack()
+	return out
+}
+
+func armDNS(t *testing.T, h *Host) *types.Sandbox {
+	t.Helper()
+	sb := outboundtest.VsockSandbox(t, "sb_dns", testKey)
+	if err := h.ArmProxy(t.Context(), sb); err != nil {
+		t.Fatalf("arm proxy: %v", err)
+	}
+	t.Cleanup(func() { h.Disarm(sb.ID, true) })
+	return sb
+}
+
+func dialDNS(t *testing.T, sb *types.Sandbox) net.Conn {
+	t.Helper()
+	conn, err := net.Dial("unix", engine.DNSSocketPath(sb.VsockSocket))
+	if err != nil {
+		t.Fatalf("dial dns door: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	return conn
+}
+
+func queryDoor(t *testing.T, sb *types.Sandbox, name string, qtype dnsmessage.Type) dnsmessage.Message {
+	t.Helper()
+	return exchangeDoor(t, dialDNS(t, sb), name, qtype)
+}
+
+func exchangeDoor(t *testing.T, conn net.Conn, name string, qtype dnsmessage.Type) dnsmessage.Message {
+	t.Helper()
+	query, err := (&dnsmessage.Message{
+		ID: 0x5a5a, RecursionDesired: true,
+		Questions: []dnsmessage.Question{{Name: dnsmessage.MustNewName(name), Type: qtype, Class: dnsmessage.ClassINET}},
+	}).Pack()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = writeDNSMsg(conn, query); err != nil {
+		t.Fatalf("write query: %v", err)
+	}
+	raw, err := readDNSMsg(conn)
+	if err != nil {
+		t.Fatalf("read answer: %v", err)
+	}
+	var msg dnsmessage.Message
+	if err = msg.Unpack(raw); err != nil {
+		t.Fatalf("unpack answer: %v", err)
+	}
+	if msg.ID != 0x5a5a {
+		t.Fatalf("answer id %#x, want the query's", msg.ID)
+	}
+	return msg
+}
+
+func addresses(msg dnsmessage.Message) []string {
+	var out []string
+	for _, rr := range msg.Answers {
+		switch body := rr.Body.(type) {
+		case *dnsmessage.AResource:
+			out = append(out, netip.AddrFrom4(body.A).String())
+		case *dnsmessage.AAAAResource:
+			out = append(out, netip.AddrFrom16(body.AAAA).String())
+		}
+	}
+	return out
+}
+
+type dnsEvents struct {
+	mu  sync.Mutex
+	evs []DNSEvent
+}
+
+func (e *dnsEvents) record(_ context.Context, _, _ string, ev DNSEvent) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.evs = append(e.evs, ev)
+}
+
+func (e *dnsEvents) last(t *testing.T) DNSEvent {
+	t.Helper()
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if len(e.evs) == 0 {
+		t.Fatal("no dns event recorded")
+	}
+	return e.evs[len(e.evs)-1]
+}
+
+func (e *dnsEvents) count(decision string) int {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	n := 0
+	for _, ev := range e.evs {
+		if ev.Decision == decision {
+			n++
+		}
+	}
+	return n
+}

@@ -36,21 +36,25 @@ type VerdictFunc func(ip netip.Addr, port uint16) (bool, error)
 
 // Options wires a Host to the node: its engine, the live egress view, and where events go.
 type Options struct {
-	Engine   Engine
-	View     func() *View
-	Record   func(ctx context.Context, id, tenant string, ev egress.Event)
-	Transfer func(ctx context.Context, id, tenant string, ev egress.Event, sent, received int64)
-	CA       *egress.CA
+	Engine Engine
+	View   func() *View
+	Record func(ctx context.Context, id, tenant string, ev egress.Event)
+	// RecordDNS takes one event per guest DNS query.
+	RecordDNS func(ctx context.Context, id, tenant string, ev DNSEvent)
+	Transfer  func(ctx context.Context, id, tenant string, ev egress.Event, sent, received int64)
+	CA        *egress.CA
 	// LockNIC nft-locks egress-lane NICs, which only a node with bridges has.
 	LockNIC    bool
 	RecordEnds bool
 	NoRxSplice bool
 	// Dial, Verdict, Lock, Unlock and Sweep default to the internal-address guard and netfilter; tests swap them.
-	Dial    egress.DialFunc
-	Verdict VerdictFunc
-	Lock    TapFunc
-	Unlock  TapFunc
-	Sweep   func(keep map[string]bool) error
+	Dial egress.DialFunc
+	// Nameservers defaults to the node's /etc/resolv.conf.
+	Nameservers func() []string
+	Verdict     VerdictFunc
+	Lock        TapFunc
+	Unlock      TapFunc
+	Sweep       func(keep map[string]bool) error
 }
 
 // Host holds every sandbox's doors and NIC lock; it guards its own state, never the caller's.
@@ -81,6 +85,9 @@ func New(o Options) *Host {
 	}
 	if h.o.Verdict == nil {
 		h.o.Verdict = h.verdict
+	}
+	if h.o.Nameservers == nil {
+		h.o.Nameservers = func() []string { return nameservers(resolvConf) }
 	}
 	return h
 }
@@ -128,24 +135,31 @@ func (h *Host) ArmProxy(ctx context.Context, sb *types.Sandbox) error {
 	if v.usageBytes {
 		proxy.OnTransfer(func(ev egress.Event, sent, received int64) { h.o.Transfer(evCtx, id, tenant, ev, sent, received) })
 	}
-	if d != nil && (reached(d.ln) || (d.socks != nil && reached(d.socks)) || (d.socks != nil) != policy.ServesSocks()) {
+	if d != nil && (reached(d.ln) || (d.socks != nil && reached(d.socks)) || (d.socks != nil) != policy.ServesSocks() ||
+		(d.dns != nil) != policy.ServesDNS()) {
 		d.close()
 		d = nil
 	}
 	if d == nil {
 		var err error
-		if d, err = bindDoors(sb.VsockSocket, policy.ServesSocks()); err != nil {
+		if d, err = bindDoors(sb.VsockSocket, policy.ServesSocks(), policy.ServesDNS()); err != nil {
 			return err
 		}
 	}
 	d.srv = &http.Server{Handler: proxy, ReadHeaderTimeout: 30 * time.Second}
 	d.proxy = proxy
+	if d.dns != nil {
+		d.resolver = newResolver(h, func(ev DNSEvent) { h.o.RecordDNS(evCtx, id, tenant, ev) })
+	}
 	h.mu.Lock()
 	h.doors[id] = d
 	h.mu.Unlock()
 	go func() { _ = d.srv.Serve(d.ln) }()
 	if d.socks != nil {
 		go proxy.ServeSOCKS(evCtx, d.socks)
+	}
+	if d.resolver != nil {
+		go d.resolver.serve(evCtx, d.dns)
 	}
 	return nil
 }
@@ -157,7 +171,7 @@ func (h *Host) Prebind(ctx context.Context, sb *types.Sandbox) {
 	if policy == nil || sb.VsockSocket == "" {
 		return
 	}
-	d, err := bindDoors(sb.VsockSocket, policy.ServesSocks())
+	d, err := bindDoors(sb.VsockSocket, policy.ServesSocks(), policy.ServesDNS())
 	if err != nil {
 		log.WithFunc("outbound.Prebind").Warnf(ctx, "pre-bind %s: %v; the claim binds instead", sb.VMName, err)
 		return
@@ -195,6 +209,17 @@ func (h *Host) Disarm(id string, removed bool) {
 	if tap != "" {
 		_ = h.o.Unlock(tap)
 	}
+}
+
+// ResolvedName is the name sandbox id's guest last resolved to ip, while that answer's TTL holds.
+func (h *Host) ResolvedName(id string, ip netip.Addr) (string, bool) {
+	h.mu.Lock()
+	d := h.doors[id]
+	h.mu.Unlock()
+	if d == nil || d.resolver == nil {
+		return "", false
+	}
+	return d.resolver.name(ip)
 }
 
 // Reloaded follows a view swap: live proxies drop their pooled connections.

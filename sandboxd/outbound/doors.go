@@ -17,12 +17,14 @@ import (
 // doorConns bounds one sandbox's open connections per door; the guest's next dial waits in the backlog.
 const doorConns = 256
 
-// doors are a sandbox's proxy door and optional SOCKS5 door, with the proxy serving them once armed.
+// doors are a sandbox's proxy door and optional SOCKS5 and DNS doors, served once armed.
 type doors struct {
-	srv   *http.Server
-	proxy *egress.Proxy
-	ln    net.Listener
-	socks net.Listener
+	srv      *http.Server
+	proxy    *egress.Proxy
+	resolver *resolver
+	ln       net.Listener
+	socks    net.Listener
+	dns      net.Listener
 }
 
 func (d *doors) close() {
@@ -33,6 +35,9 @@ func (d *doors) close() {
 	_ = d.ln.Close()
 	if d.socks != nil {
 		_ = d.socks.Close()
+	}
+	if d.dns != nil {
+		_ = d.dns.Close()
 	}
 }
 
@@ -81,7 +86,7 @@ func (c *doorConn) Close() error {
 
 func (c *doorConn) NetConn() net.Conn { return c.UnixConn }
 
-func bindDoors(vsock string, socks bool) (*doors, error) {
+func bindDoors(vsock string, socks, dns bool) (*doors, error) {
 	ln, err := listenUnix(engine.EgressSocketPath(vsock))
 	if err != nil {
 		return nil, fmt.Errorf("listen egress: %w", err)
@@ -93,6 +98,13 @@ func bindDoors(vsock string, socks bool) (*doors, error) {
 			return nil, fmt.Errorf("listen socks: %w", err)
 		}
 		d.socks = limitDoor(ln)
+	}
+	if dns {
+		if ln, err = listenUnix(engine.DNSSocketPath(vsock)); err != nil {
+			d.close()
+			return nil, fmt.Errorf("listen dns: %w", err)
+		}
+		d.dns = limitDoor(ln)
 	}
 	return d, nil
 }

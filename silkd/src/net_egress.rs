@@ -1,6 +1,7 @@
 //! Guest→host egress relay, one vsock connection per proxied connection; an unwired host refuses the dial (default-deny).
 
 use std::io;
+use std::net::SocketAddrV4;
 
 /// Loopback port the guest reaches the proxy at (`proxy.internal:3128`).
 pub const LOOPBACK_PORT: u16 = 3128;
@@ -15,11 +16,11 @@ pub const SOCKS_HOST_VSOCK_PORT: u32 = 2050;
 const RELAY_BUF: usize = 64 << 10;
 
 #[cfg(target_os = "linux")]
-pub async fn serve(loopback_port: u16, host_vsock_port: u32) -> io::Result<()> {
+pub async fn serve(listen: SocketAddrV4, host_vsock_port: u32) -> io::Result<()> {
     use tokio::net::TcpListener;
     use tokio_vsock::{VMADDR_CID_HOST, VsockAddr, VsockStream};
 
-    let listener = TcpListener::bind(("127.0.0.1", loopback_port)).await?;
+    let listener = TcpListener::bind(listen).await?;
     loop {
         let mut tcp = match listener.accept().await {
             Ok((conn, _)) => {
@@ -49,7 +50,7 @@ pub async fn serve(loopback_port: u16, host_vsock_port: u32) -> io::Result<()> {
 }
 
 #[cfg(not(target_os = "linux"))]
-pub async fn serve(_loopback_port: u16, _host_vsock_port: u32) -> io::Result<()> {
+pub async fn serve(_listen: SocketAddrV4, _host_vsock_port: u32) -> io::Result<()> {
     Err(io::Error::new(
         io::ErrorKind::Unsupported,
         "silkd egress requires linux vsock",

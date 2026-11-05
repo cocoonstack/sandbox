@@ -1,9 +1,10 @@
 //! silkd: the in-guest daemon serving newline-JSON RPC frames over hybrid-vsock; `proto::Request` is the verb list.
 
+use std::net::{Ipv4Addr, SocketAddrV4};
 use std::sync::Arc;
 
 use silkd::server::State;
-use silkd::{imds, net_egress, session, vsock};
+use silkd::{dns, imds, net_egress, session, vsock};
 
 const DEFAULT_PORT: u32 = 2048;
 
@@ -22,13 +23,22 @@ async fn main() {
     ));
     // no lane gate needed: an unwired host refuses the per-conn vsock dial.
     tokio::spawn(relay(
-        net_egress::LOOPBACK_PORT,
+        SocketAddrV4::new(Ipv4Addr::LOCALHOST, net_egress::LOOPBACK_PORT),
         net_egress::HOST_VSOCK_PORT,
     ));
     tokio::spawn(relay(
-        net_egress::SOCKS_LOOPBACK_PORT,
+        SocketAddrV4::new(Ipv4Addr::LOCALHOST, net_egress::SOCKS_LOOPBACK_PORT),
         net_egress::SOCKS_HOST_VSOCK_PORT,
     ));
+    tokio::spawn(relay(
+        SocketAddrV4::new(dns::STUB_ADDR, dns::PORT),
+        dns::HOST_VSOCK_PORT,
+    ));
+    tokio::spawn(async {
+        if let Err(e) = dns::serve().await {
+            eprintln!("silkd dns: {e}");
+        }
+    });
     tokio::spawn(async {
         if let Err(e) = imds::serve().await {
             eprintln!("silkd imds: {e}");
@@ -40,8 +50,8 @@ async fn main() {
     }
 }
 
-async fn relay(loopback_port: u16, host_vsock_port: u32) {
-    if let Err(e) = net_egress::serve(loopback_port, host_vsock_port).await {
-        eprintln!("silkd egress: relay on {loopback_port}: {e}");
+async fn relay(listen: SocketAddrV4, host_vsock_port: u32) {
+    if let Err(e) = net_egress::serve(listen, host_vsock_port).await {
+        eprintln!("silkd egress: relay on {listen}: {e}");
     }
 }
