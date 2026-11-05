@@ -215,7 +215,7 @@ impl State {
             match self.sessions.get(sid) {
                 Some(sess) => {
                     if !sess.run(&e.argv, writer).await {
-                        self.sessions.remove(sid);
+                        self.sessions.remove_if(sid, &sess);
                     }
                 }
                 None => proto::error_frame(writer, ErrorKind::NotFound, "no such session").await?,

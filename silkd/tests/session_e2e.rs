@@ -284,3 +284,32 @@ async fn session_merges_stderr_into_stdout() {
         "stderr not merged: {frames:?}"
     );
 }
+
+#[tokio::test]
+async fn a_dead_session_command_leaves_a_recreated_session_alone() {
+    let state = Arc::new(State::new());
+    let id = create_with(&state, json!({"op":"session_create","id":"s"})).await;
+    let bg = sh(
+        &state,
+        &id,
+        &["sh", "-c", "perl -MPOSIX -e 'setsid(); sleep 2' &"],
+    )
+    .await;
+    assert_eq!(type_of(bg.last().unwrap()), "exit", "{bg:?}");
+    let busy = spawn_sh(&state, &id, &["sleep", "3600"]);
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let rm = one(&state, &json!({"op":"session_rm","id":id}).to_string()).await;
+    assert_eq!(type_of(&rm[0]), "done");
+    let again = create_with(&state, json!({"op":"session_create","id":"s"})).await;
+    let frames = tokio::time::timeout(Duration::from_secs(10), busy)
+        .await
+        .expect("the removed session's command never saw its shell die")
+        .unwrap();
+    assert_eq!(type_of(frames.last().unwrap()), "error");
+    let got = sh(&state, &again, &["echo", "alive"]).await;
+    assert_eq!(
+        stdout_body(&got).trim(),
+        "alive",
+        "the recreated session died: {got:?}"
+    );
+}

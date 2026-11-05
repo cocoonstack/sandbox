@@ -122,6 +122,14 @@ impl Table {
         removed.is_some()
     }
 
+    pub fn remove_if(&self, id: &str, sess: &Arc<Session>) {
+        let mut map = sysutil::lock(&self.inner);
+        if map.get(id).is_some_and(|cur| Arc::ptr_eq(cur, sess)) {
+            map.remove(id);
+            sysutil::kill_group(sess.pid);
+        }
+    }
+
     /// Removes and kills sessions idle longer than `ttl`; a session holding the io lock is never idle.
     pub fn reap_idle(&self, ttl: Duration) -> usize {
         let mut map = sysutil::lock(&self.inner);
