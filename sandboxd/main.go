@@ -129,7 +129,9 @@ func main() {
 			probeKey = peer.DeriveProbeKey(clusterKey)
 		}
 		httpProber := &peer.HTTPProber{Peers: msh.PeerAddrs, ProbeKey: probeKey}
-		prober = httpProber
+		if !cfg.S3Checkpoints() {
+			prober = httpProber
+		}
 		mgr.WithPeerHeal(cfg.CheckpointPeerHeal, func(id string) []string {
 			return httpProber.HealOwners(ctx, id)
 		}, &peer.HTTPPuller{Token: cfg.APIToken})

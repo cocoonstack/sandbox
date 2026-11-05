@@ -625,7 +625,9 @@ one placement redirect to a node that can resolve both resources.
 A checkpoint lives on whichever node captured it (the default
 [`checkpoint_dir`](deploy.md#configuration)) unless the store is shared (a
 FUSE mount or the s3 backend), in which case every node resolves every
-checkpoint directly and nothing below applies.
+checkpoint directly and nothing below applies; on a FUSE mount, which the node
+cannot tell from a local directory, a miss still probes the peers, which find
+nothing.
 
 On the default per-node store, a branch claim (`Checkpoint.New` /
 [`POST /v1/checkpoints/{id}/claim`](sandboxd-api.md#post-v1checkpointsidclaim))
