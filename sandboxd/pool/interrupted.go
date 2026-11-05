@@ -55,16 +55,19 @@ func (m *Manager) settleCapture(ctx context.Context, sb *types.Sandbox) (err err
 		return err
 	}
 	listed := pending != "" && slices.Contains(snaps, pending)
+	var failed error
 	if !listed && running {
 		if err = m.resumeGuest(ctx, sb, sock); err != nil {
 			if ctx.Err() != nil || errors.Is(err, engine.ErrStopping) {
 				return err
 			}
-			m.failLocked(ctx, sb, fmt.Sprintf("capture stopped short: guest did not resume: %v", err))
+			reason := fmt.Sprintf("capture stopped short: guest did not resume: %v", err)
+			m.failLocked(ctx, sb, reason)
+			failed = fmt.Errorf("%w: %s", ErrFailed, reason)
 		}
 	}
 	_, err = m.finishCapture(ctx, sb, running && listed, saved, snaps)
-	return err
+	return errors.Join(failed, err)
 }
 
 func (m *Manager) settleFailedCapture(ctx context.Context, sb *types.Sandbox) (adopted bool, err error) {
