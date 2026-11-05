@@ -39,7 +39,9 @@ func (m *Manager) Wake(ctx context.Context, id string, cred Cred) error {
 	if err := m.restartFailed(ctx, sb); err != nil {
 		return err
 	}
-	return m.wake(ctx, sb)
+	sb.Touch()
+	_, err := m.wakeResolved(ctx, sb)
+	return err
 }
 
 // SetInstanceMetadata replaces a running sandbox's instance-metadata document; a paused or archived one is refused, not woken.
@@ -92,10 +94,4 @@ func (m *Manager) authed(id, token string) (*types.Sandbox, bool) {
 		return nil, false
 	}
 	return sb, true
-}
-
-func (m *Manager) wake(ctx context.Context, sb *types.Sandbox) error {
-	sb.Touch()
-	_, err := m.wakeResolved(ctx, sb)
-	return err
 }

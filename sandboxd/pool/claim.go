@@ -411,10 +411,7 @@ func (m *Manager) quotaErr(extra int, tenant string) error {
 	if limit <= 0 {
 		return nil
 	}
-	live := m.tenantLive[tenant]
-	if len(m.incoming) > 0 {
-		live += m.incomingOf(tenant)
-	}
+	live := m.tenantLive[tenant] + m.incomingOf(tenant)
 	if live+extra > limit {
 		return fmt.Errorf("%w: tenant %s at %d live claims, cap %d", ErrQuota, tenant, live, limit)
 	}
