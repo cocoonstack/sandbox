@@ -24,13 +24,12 @@ func (m *Manager) settleInterrupted(ctx context.Context, sb *types.Sandbox) {
 	logger := log.WithFunc("pool.settleInterrupted")
 	m.mu.Lock()
 	snap := cmp.Or(sb.PendingSnap, sb.SaveSnap)
-	if snap != "" {
-		sb.ReaderSafe = false
-	}
-	m.mu.Unlock()
 	if snap == "" {
+		m.mu.Unlock()
 		return
 	}
+	sb.ReaderSafe = false
+	m.mu.Unlock()
 	logger.Warnf(ctx, "%s has an interrupted capture %s; holding it until the capture exits", sb.ID, snap)
 	if err := m.settleCapture(ctx, sb); err != nil {
 		logger.Warnf(ctx, "%s did not settle its capture: %v", sb.ID, err)

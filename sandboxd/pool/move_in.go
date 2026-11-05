@@ -144,7 +144,7 @@ func (m *Manager) DropMove(id string) {
 	}
 }
 
-// A guest that cannot start fails the claim here, never back to the source; a cold one goes to liveness; the caller holds sb.Transition.
+// A guest that cannot start fails the claim here, never back to the source; the caller holds sb.Transition.
 func (m *Manager) startMoveIn(ctx context.Context, sb *types.Sandbox, from string, committed int64, cold bool) {
 	logger := log.WithFunc("pool.startMoveIn")
 	if !cold && !m.startMovedGuest(ctx, sb, committed) {
@@ -239,14 +239,14 @@ func (m *Manager) resolveMoveIn(ctx context.Context, sb *types.Sandbox) bool {
 		return false
 	}
 	toHere := ok && rec.To == m.nodeID
-	vm, found, inspectErr := m.eng.Inspect(ctx, sb.VMName)
-	cold := inspectErr == nil && found && vm.State != vmStateRunning
 	switch {
-	case toHere && rec.State == moves.Committed:
-		m.startMoveIn(ctx, sb, rec.From, rec.Epoch, cold)
-		return true
-	case toHere && rec.State == moves.Started:
-		m.startMoveIn(ctx, sb, rec.From, 0, cold)
+	case toHere && (rec.State == moves.Committed || rec.State == moves.Started):
+		committed := rec.Epoch
+		if rec.State == moves.Started {
+			committed = 0
+		}
+		vm, found, inspectErr := m.eng.Inspect(ctx, sb.VMName)
+		m.startMoveIn(ctx, sb, rec.From, committed, inspectErr == nil && found && vm.State != vmStateRunning)
 		return true
 	case toHere && (rec.State == moves.Pending || rec.State == moves.Final):
 		if _, err = m.moves.Advance(ctx, sb.ID, rec.Epoch, rec.State, moves.Aborted); err != nil {
