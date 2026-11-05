@@ -1000,7 +1000,7 @@ func TestMoveRestartResolvesAJournaledMoveThroughItsRecord(t *testing.T) {
 				waitFor(t, func() bool {
 					m.mu.Lock()
 					defer m.mu.Unlock()
-					return held.Restarts == 1
+					return held.Restarts == 1 && !m.sweeps.liveness.Load()
 				})
 			}
 			eng.mu.Lock()

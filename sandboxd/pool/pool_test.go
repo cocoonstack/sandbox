@@ -2277,6 +2277,7 @@ func newTestManagerAt(t testing.TB, eng *fakeEngine, dataDir string, pools ...co
 	}
 	t.Cleanup(func() { assertRunningCount(t, m) })
 	t.Cleanup(func() { settleGoldenBuilds(m) })
+	t.Cleanup(func() { settleCaptures(m) })
 	t.Cleanup(func() {
 		m.mu.Lock()
 		defer m.mu.Unlock()
@@ -2289,6 +2290,26 @@ func newTestManagerAt(t testing.TB, eng *fakeEngine, dataDir string, pools ...co
 		}
 	})
 	return m
+}
+
+func settleCaptures(m *Manager) {
+	start := time.Now()
+	for deadline := start.Add(3 * time.Second); time.Now().Before(deadline); time.Sleep(5 * time.Millisecond) {
+		m.mu.Lock()
+		claims := slices.Collect(maps.Values(m.claimed))
+		intent := slices.ContainsFunc(claims, func(sb *types.Sandbox) bool { return sb.PendingSnap != "" || sb.SaveSnap != "" })
+		m.mu.Unlock()
+		busy := slices.ContainsFunc(claims, func(sb *types.Sandbox) bool {
+			if !sb.Transition.TryLock() {
+				return true
+			}
+			sb.Transition.Unlock()
+			return false
+		})
+		if !busy && (!intent || time.Since(start) > 300*time.Millisecond) {
+			return
+		}
+	}
 }
 
 func settleGoldenBuilds(m *Manager) {
