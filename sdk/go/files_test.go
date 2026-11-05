@@ -155,7 +155,7 @@ func TestReadFileMultiChunk(t *testing.T) {
 	}
 }
 
-func TestUploadToAnOldDaemonReturnsItsRejection(t *testing.T) {
+func TestAnUploadReturnsItsEarlyRejection(t *testing.T) {
 	sb := testSandbox(t, newAgentServer(t, func(conn net.Conn) {
 		defer func() { _ = conn.Close() }()
 		line, err := bufio.NewReader(conn).ReadBytes('\n')
@@ -166,16 +166,15 @@ func TestUploadToAnOldDaemonReturnsItsRejection(t *testing.T) {
 		if err != nil {
 			return
 		}
-		var resp wire.Response = &wire.ErrorResp{Kind: wire.KindNotFound, Message: "create /missing/f: no such file or directory"}
-		if _, ok := req.(*wire.Info); ok {
-			resp = &wire.InfoResp{Proto: 1}
+		if _, ok := req.(*wire.FsWrite); !ok {
+			return
 		}
-		frame, _ := wire.EncodeResponse(resp)
+		frame, _ := wire.EncodeResponse(&wire.ErrorResp{Kind: wire.KindNotFound, Message: "create /missing/f: no such file or directory"})
 		_, _ = conn.Write(append(frame, '\n'))
 	}))
 	err := sb.WriteFile(t.Context(), "/missing/f", make([]byte, 64<<20), nil)
 	if e, ok := errors.AsType[*wire.ErrorResp](err); !ok || e.Kind != wire.KindNotFound {
-		t.Fatalf("upload rejected by a proto 1 daemon: %v, want its not_found frame", err)
+		t.Fatalf("upload rejected at open: %v, want its not_found frame", err)
 	}
 }
 
@@ -193,8 +192,6 @@ func uploadAgent(t *testing.T) (*Sandbox, <-chan int) {
 			}
 			var resp wire.Response
 			switch req.(type) {
-			case *wire.Info:
-				resp = &wire.InfoResp{Proto: wire.KeepAliveProto}
 			case *wire.Data:
 				data++
 			case *wire.DataEnd:

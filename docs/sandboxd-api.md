@@ -1236,9 +1236,8 @@ With it, the node answers the `101` before it touches the sandbox, reads the
 first frame, and serves `fs_stat`, `fs_list`, `fs_read` and `fs_pull` from a
 reader VM, a warm VM of the sandbox's pool that mounts a copy of the sandbox's disk read-only: the sandbox stays
 hibernated or archived, no `wake` usage event is recorded, and the read stamps
-neither the idle nor the archive clock. An `info` frame pipelined ahead of the
-call (the SDKs' first frames) rides along to the reader; one alone, with no call
-behind it for 100 ms, wakes the sandbox. A second `info` frame before any call wakes it too. The first frame on the connection that
+neither the idle nor the archive clock. An `info` frame wakes the sandbox, since a
+reader would answer with its own processes and uptime. The first frame on the connection that
 is anything else, or any later one, wakes the sandbox and hands the same
 connection to its silkd with the unread bytes replayed, so a client sees one
 silkd and no close. When the sandbox sleeps again meanwhile (a new hibernate or

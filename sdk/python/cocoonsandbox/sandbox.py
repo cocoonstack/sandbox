@@ -22,7 +22,7 @@ from .errors import (
     VolumeError,
     require_field,
 )
-from .frames import BULK_CHUNK, KEEP_ALIVE_PROTO, STREAM_CHUNK
+from .frames import BULK_CHUNK, STREAM_CHUNK
 from .template import Template
 from .volumes import SandboxVolumesResponse, Volume, _volume_body, _volume_response
 
@@ -57,7 +57,6 @@ class Sandbox:
         self.volumes = [volume.copy() for volume in volumes or []]
         self.volumes_want = [volume.copy() for volume in self.volumes]
         self._pool = ConnPool(client.keep_alive)
-        self._proto = 0
 
     def __enter__(self) -> Sandbox:
         return self
@@ -468,29 +467,20 @@ class Sandbox:
         return self._client._dial(self.owner, self.id, self.token, deadline)
 
     def _connect(self, op: str, deadline: float | None = None, /, **fields: object) -> Conn:
-        """Sends the request on a parked or new connection, behind an info probe on a handle's first kept dial."""
+        """Sends the request on a parked or new connection."""
         conn = self._pool.take()
         if conn is None:
             conn = self._dial(deadline)
-        probe = not self._proto and self._client.keep_alive > 0
-        bounded = probe or deadline is not None
         try:
-            if bounded:
+            if deadline is not None:
                 conn.settimeout(remaining_timeout(self._client.timeout, deadline, "agent request"))
-            if probe:
-                conn.send("info")
             conn.send(op, **fields)
-            if probe:
-                self._proto = int(_expect(conn, "info").get("proto") or 1)
-            if bounded:
+            if deadline is not None:
                 conn.settimeout(None)
         except BaseException:
             conn.close()
             raise
-        if not probe or self._proto >= KEEP_ALIVE_PROTO:
-            return conn
-        conn.close()
-        return self._connect(op, deadline, **fields)
+        return conn
 
     @contextlib.contextmanager
     def _lease(self, conn: Conn) -> Iterator[Conn]:
@@ -498,25 +488,19 @@ class Sandbox:
         try:
             yield conn
         except SilkdError:
-            self._park(conn)
+            self._pool.park(conn)
             raise
         except BaseException:
             conn.close()
             raise
-        self._park(conn)
-
-    def _park(self, conn: Conn) -> None:
-        if self._proto >= KEEP_ALIVE_PROTO:
-            self._pool.park(conn)
-        else:
-            conn.close()
+        self._pool.park(conn)
 
     def _open_stream(self, op: str, expect: str = "ready", **fields: object) -> tuple[Conn, dict[str, Any]]:
         conn = self._connect(op, **fields)
         try:
             frame = _expect(conn, expect)
         except SilkdError:
-            self._park(conn)
+            self._pool.park(conn)
             raise
         except BaseException:
             conn.close()

@@ -44,24 +44,7 @@ func TestSleepingReadIsServedByTheReaderWithoutWaking(t *testing.T) {
 	}
 }
 
-func TestSleepingFirstDialPipelinesInfoBehindTheRead(t *testing.T) {
-	env := newSleepingEnv(t)
-	conn, r := env.upgrade(t)
-
-	send(t, conn, infoFrame)
-	time.Sleep(10 * time.Millisecond)
-	send(t, conn, readFrame)
-	expectLine(t, r, "reader")
-	expectLine(t, r, "reader")
-	if wakes, _ := env.reader.counts(); wakes != 0 {
-		t.Errorf("wakes=%d, want the info and the read served by the reader", wakes)
-	}
-	if got := env.frames.all(); !slices.Equal(got, []string{"reader:" + infoFrame, "reader:" + readFrame}) {
-		t.Errorf("frames %q, want info then read at the reader in order", got)
-	}
-}
-
-func TestSleepingLoneInfoWakes(t *testing.T) {
+func TestSleepingInfoWakes(t *testing.T) {
 	env := newSleepingEnv(t)
 	conn, r := env.upgrade(t)
 
@@ -75,32 +58,16 @@ func TestSleepingLoneInfoWakes(t *testing.T) {
 	}
 }
 
-func TestSleepingSecondInfoBeforeACallWakes(t *testing.T) {
+func TestSleepingInfoAfterAReadWakes(t *testing.T) {
 	env := newSleepingEnv(t)
 	conn, r := env.upgrade(t)
 
-	send(t, conn, infoFrame+infoFrame)
-	stop := make(chan struct{})
-	defer close(stop)
-	go func() {
-		tick := time.Tick(10 * time.Millisecond)
-		for {
-			select {
-			case <-stop:
-				return
-			case <-tick:
-				_, _ = io.WriteString(conn, infoFrame)
-			}
-		}
-	}()
-	_ = conn.SetReadDeadline(time.Now().Add(time.Second))
+	send(t, conn, statFrame)
+	expectLine(t, r, "reader")
+	send(t, conn, infoFrame)
 	expectLine(t, r, "guest")
-	expectLine(t, r, "guest")
-	if wakes, dials := env.reader.counts(); wakes != 1 || dials != 0 {
-		t.Errorf("wakes=%d reader dials=%d, want a wake and no reader", wakes, dials)
-	}
-	if got := env.frames.all(); len(got) < 2 || !slices.Equal(got[:2], []string{"guest:" + infoFrame, "guest:" + infoFrame}) {
-		t.Errorf("frames %q, want both infos replayed to the guest first", got)
+	if wakes, _ := env.reader.counts(); wakes != 1 {
+		t.Errorf("wakes=%d, want the info to wake the claim rather than ask the reader", wakes)
 	}
 }
 
@@ -291,17 +258,14 @@ func TestSleepingFramesAreAuditedOnceOnEitherPath(t *testing.T) {
 		mu.Unlock()
 	}
 	conn, r := env.upgrade(t)
-	send(t, conn, infoFrame)
-	time.Sleep(10 * time.Millisecond)
 	send(t, conn, statFrame)
-	expectLine(t, r, "reader")
 	expectLine(t, r, "reader")
 	send(t, conn, execFrame)
 	expectLine(t, r, "guest")
 
 	mu.Lock()
 	defer mu.Unlock()
-	want := []string{strings.TrimSpace(infoFrame), strings.TrimSpace(statFrame), strings.TrimSpace(execFrame)}
+	want := []string{strings.TrimSpace(statFrame), strings.TrimSpace(execFrame)}
 	if !slices.Equal(audited, want) {
 		t.Errorf("audited %q, want each opening frame once: %q", audited, want)
 	}

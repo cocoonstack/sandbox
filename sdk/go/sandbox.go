@@ -8,7 +8,6 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	"github.com/cocoonstack/sandbox/protocol/wire"
@@ -76,7 +75,6 @@ type Sandbox struct {
 	c     *Client
 	token string
 	owner string
-	proto atomic.Uint32
 	pool  agentPool
 }
 
@@ -261,29 +259,13 @@ func (s *Sandbox) call(ctx context.Context, req wire.Request) (*silkd.Conn, *lea
 	return c.Conn, &lease{s: s, conn: c, stop: context.AfterFunc(ctx, func() { _ = c.Close() })}, nil
 }
 
-// connect sends req on a parked connection or a fresh dial; a handle's first dial pipelines info ahead of req, and a daemon before proto 2 closes after answering it without reading req, hence the second dial.
+// connect sends req on a parked connection or a fresh dial.
 func (s *Sandbox) connect(ctx context.Context, req wire.Request) (*agentConn, error) {
 	if c := s.pool.take(); c != nil {
 		return c.sent(req)
 	}
 	c, err := s.dial(ctx)
 	if err != nil {
-		return nil, err
-	}
-	if s.proto.Load() != 0 || !canProbe || s.c.keepAlive <= 0 {
-		return c.sent(req)
-	}
-	proto, err := c.probeProto(ctx, req)
-	if err != nil {
-		_ = c.Close()
-		return nil, err
-	}
-	s.proto.Store(proto)
-	if proto >= wire.KeepAliveProto {
-		return c, nil
-	}
-	_ = c.Close()
-	if c, err = s.dial(ctx); err != nil {
 		return nil, err
 	}
 	return c.sent(req)

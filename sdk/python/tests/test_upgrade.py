@@ -48,18 +48,16 @@ class EarlyFrameAgent:
                 conn.sendall(json.dumps(REPLIES[json.loads(line)["op"]]).encode() + b"\n")
 
 
-@pytest.mark.parametrize(
-    ("keep_alive", "early"), [(0, ["fs_mkdir"]), (30, ["info", "fs_mkdir"])], ids=["no probe", "proto probe"]
-)
-def test_first_frames_ride_ahead_of_the_101(keep_alive, early):
-    agent = EarlyFrameAgent(frames=len(early))
+@pytest.mark.parametrize("keep_alive", [0, 30], ids=["dial per call", "kept connection"])
+def test_the_first_frame_rides_ahead_of_the_101(keep_alive):
+    agent = EarlyFrameAgent(frames=1)
     sb = sandbox_at(agent.addr, timeout=5, keep_alive=keep_alive)
     try:
         sb.mkdir("/w")
     finally:
         sb._pool.drain()
         agent.stop()
-    assert agent.early == early, agent.early
+    assert agent.early == ["fs_mkdir"], agent.early
 
 
 def test_rejected_upgrade_is_an_api_error():

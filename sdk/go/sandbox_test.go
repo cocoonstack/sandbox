@@ -145,7 +145,7 @@ func TestUpgradeKeepsCoalescedBytes(t *testing.T) {
 	t.Cleanup(ts.Close)
 
 	var out strings.Builder
-	code, err := legacySandbox(t, ts).Run(t.Context(), Cmd{Argv: []string{"echo", "42"}, Stdout: &out})
+	code, err := testSandbox(t, ts).Run(t.Context(), Cmd{Argv: []string{"echo", "42"}, Stdout: &out})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -166,7 +166,7 @@ func TestFirstCallSendsItsFramesAheadOfThe101(t *testing.T) {
 		defer conn.Close()
 		_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
 		var got []string
-		for range 2 {
+		for range 1 {
 			line, readErr := brw.ReadBytes('\n')
 			if readErr != nil {
 				break
@@ -176,7 +176,7 @@ func TestFirstCallSendsItsFramesAheadOfThe101(t *testing.T) {
 			}
 		}
 		ops <- got
-		_, _ = io.WriteString(conn, upgrade101+`{"type":"info","proto":2}`+"\n"+`{"type":"done"}`+"\n")
+		_, _ = io.WriteString(conn, upgrade101+`{"type":"done"}`+"\n")
 		_ = conn.SetReadDeadline(time.Time{})
 		_, _ = io.Copy(io.Discard, brw)
 	})
@@ -186,8 +186,8 @@ func TestFirstCallSendsItsFramesAheadOfThe101(t *testing.T) {
 	if err := testSandbox(t, ts).Mkdir(t.Context(), "/w", false); err != nil {
 		t.Fatalf("Mkdir: %v", err)
 	}
-	if got := <-ops; !slices.Equal(got, []string{"info", "fs_mkdir"}) {
-		t.Errorf("frames ahead of the 101 = %q, want [info fs_mkdir]", got)
+	if got := <-ops; !slices.Equal(got, []string{"fs_mkdir"}) {
+		t.Errorf("frames ahead of the 101 = %q, want [fs_mkdir]", got)
 	}
 }
 
@@ -311,12 +311,5 @@ func testSandbox(t testing.TB, ts *httptest.Server, opts ...ClientOption) *Sandb
 	c := testClient(t, ts, opts...)
 	sb := &Sandbox{ID: "sb_1", c: c, token: "tok", owner: c.addr}
 	t.Cleanup(sb.pool.drain)
-	return sb
-}
-
-func legacySandbox(t *testing.T, ts *httptest.Server) *Sandbox {
-	t.Helper()
-	sb := testSandbox(t, ts)
-	sb.proto.Store(1)
 	return sb
 }

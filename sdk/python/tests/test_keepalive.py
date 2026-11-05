@@ -16,10 +16,9 @@ INPUT_OPS = ("stdin", "stdin_close", "data", "data_end")
 
 
 class FakeAgent:
-    """A relay-side silkd stand-in; proto 1 half-closes after one RPC and drains; slam closes as a failed relay does."""
+    """A relay-side silkd stand-in; hang_up_after half-closes after N RPCs, slam closes as a failed relay does."""
 
-    def __init__(self, proto: int = KEEP_ALIVE_PROTO, hang_up_after: int = 0, slam: bool = False) -> None:
-        self.proto = proto
+    def __init__(self, hang_up_after: int = 0, slam: bool = False) -> None:
         self.hang_up_after = hang_up_after
         self.slam = slam
         self.upgrades = 0
@@ -55,7 +54,7 @@ class FakeAgent:
                 replies += 1
                 if self.slam:
                     break
-                if self.proto < KEEP_ALIVE_PROTO or replies == self.hang_up_after:
+                if replies == self.hang_up_after:
                     conn.shutdown(socket.SHUT_WR)
                     self.hangups += 1
                     while reader.readline():
@@ -65,7 +64,7 @@ class FakeAgent:
 
     def _answer(self, op: str) -> list:
         if op == "info":
-            return [{"type": "info", "version": "fake", "proto": self.proto, "uptime_secs": 0, "procs": 0}]
+            return [{"type": "info", "version": "fake", "proto": KEEP_ALIVE_PROTO, "uptime_secs": 0, "procs": 0}]
         if op == "fs_stat":
             return [{"type": "stat", "info": {"kind": "dir", "size": 0, "mode": 0o755, "mtime_epoch_secs": 0}}]
         if op == "exec":
@@ -91,20 +90,6 @@ def test_a_refused_stream_open_keeps_its_connection(relay):
     assert agent.upgrades == 1
 
 
-def test_old_daemon_dials_per_call(relay):
-    agent, sb = relay(proto=1)
-    for _ in range(3):
-        assert sb.exec("echo", "42") == "42\n"
-    assert agent.upgrades == 4, "the proto probe plus one dial per call"
-
-
-def test_old_daemon_that_closes_after_info_gets_the_request_on_a_redial(relay):
-    agent, sb = relay(proto=1, slam=True)
-    for _ in range(2):
-        assert sb.stat("/")["kind"] == "dir"
-    assert agent.upgrades == 3, "the proto probe plus one dial per call"
-
-
 def test_keep_alive_off_dials_per_call(relay):
     agent, sb = relay(keep_alive=0)
     for _ in range(3):
@@ -119,14 +104,14 @@ def test_idle_connection_closes(relay):
 
 
 def test_peer_hang_up_is_noticed_before_reuse(fd_floor, relay):
-    agent, sb = relay(hang_up_after=2)
+    agent, sb = relay(hang_up_after=1)
     sb.stat("/")
     wait_until(lambda: agent.hangups == 1, "the fake never hung up")
     assert sb.stat("/")["kind"] == "dir"
     assert agent.upgrades == 2
 
 
-def test_run_timeout_bounds_the_proto_probe():
+def test_run_timeout_bounds_an_unanswered_request():
     server = socket.create_server(("127.0.0.1", 0))
     cut = threading.Event()
 
@@ -144,7 +129,7 @@ def test_run_timeout_bounds_the_proto_probe():
     try:
         with pytest.raises(TimeoutError):
             sb.run(["true"], timeout=0.5)
-        assert cut.wait(1), "the unanswered info probe outlived the run timeout"
+        assert cut.wait(1), "the unanswered request outlived the run timeout"
     finally:
         server.close()
 
@@ -191,8 +176,8 @@ def test_close_drains_the_parked_connection(monkeypatch, relay):
     wait_until(lambda: agent.closed == 1, "parked connection survived close")
 
 
-def test_an_upload_an_old_daemon_rejects_raises_its_error_frame(relay):
-    _, sb = relay(proto=1, slam=True)
+def test_an_upload_the_daemon_rejects_at_open_raises_its_error_frame(relay):
+    _, sb = relay(slam=True)
     with pytest.raises(SilkdError):
         sb.write_file("/missing/f", bytes(64 << 20))
 
@@ -201,8 +186,8 @@ def test_an_upload_an_old_daemon_rejects_raises_its_error_frame(relay):
 def relay():
     started = []
 
-    def start(proto=KEEP_ALIVE_PROTO, hang_up_after=0, slam=False, **client_kwargs):
-        agent = FakeAgent(proto, hang_up_after, slam)
+    def start(hang_up_after=0, slam=False, **client_kwargs):
+        agent = FakeAgent(hang_up_after, slam)
         sb = sandbox_at(agent.addr, **client_kwargs)
         started.append((agent, sb))
         return agent, sb

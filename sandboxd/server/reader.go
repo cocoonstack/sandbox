@@ -19,11 +19,7 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/pool"
 )
 
-const (
-	// infoWait bounds how long a lone info frame waits for the call a client pipelines behind it.
-	infoWait = 100 * time.Millisecond
-	routeBuf = 64 << 10
-)
+const routeBuf = 64 << 10
 
 var (
 	readOnlyOps = map[string]bool{
@@ -32,7 +28,6 @@ var (
 		wire.FsRead{}.Op(): true,
 		wire.FsPull{}.Op(): true,
 	}
-	infoOp = wire.Info{}.Op()
 
 	errReaderGone  = errors.New("reader connection lost")
 	errUnreachable = errors.New("guest agent unreachable")
@@ -52,8 +47,7 @@ type router struct {
 	pumped     chan struct{}
 	superseded atomic.Bool
 
-	pending []byte
-	replay  []byte
+	replay []byte
 }
 
 func (r *router) run() (net.Conn, func(), bool) {
@@ -74,19 +68,7 @@ func (r *router) run() (net.Conn, func(), bool) {
 			if err != nil {
 				return nil, nil, false
 			}
-		case op == infoOp && r.reader == nil:
-			if len(r.pending) > 0 {
-				return r.handover(head)
-			}
-			r.pending = append(r.pending, head...)
-			followed, waitErr := r.infoFollowed()
-			if waitErr != nil {
-				return nil, nil, false
-			}
-			if !followed {
-				return r.handover(nil)
-			}
-		case readOnlyOps[op] || op == infoOp:
+		case readOnlyOps[op]:
 			switch err = r.toReader(head, partial); {
 			case err == nil:
 			case errors.Is(err, errReaderGone):
@@ -129,16 +111,6 @@ func (r *router) dialReader() error {
 	}
 	r.reader, r.source = conn, source
 	r.startPump()
-	if len(r.pending) == 0 {
-		return nil
-	}
-	if r.s.mgr.AuditEnabled() {
-		r.auditPending()
-	}
-	if _, err = conn.Write(r.pending); err != nil {
-		return errReaderGone
-	}
-	r.pending = nil
 	return nil
 }
 
@@ -149,7 +121,7 @@ func (r *router) handover(head []byte) (net.Conn, func(), bool) {
 		r.fail(err)
 		return nil, nil, false
 	}
-	r.replay = slices.Concat(r.pending, head)
+	r.replay = slices.Clone(head)
 	return guest, done, true
 }
 
@@ -176,19 +148,6 @@ func (r *router) pass(head []byte, partial bool, w io.Writer) error {
 		}
 	}
 	return nil
-}
-
-func (r *router) infoFollowed() (bool, error) {
-	if r.br.Buffered() > 0 {
-		return true, nil
-	}
-	_ = r.client.SetReadDeadline(time.Now().Add(infoWait))
-	_, err := r.br.Peek(1)
-	_ = r.client.SetReadDeadline(time.Time{})
-	if timeout, ok := errors.AsType[net.Error](err); ok && timeout.Timeout() {
-		return false, nil
-	}
-	return err == nil, err
 }
 
 func (r *router) startPump() {
@@ -235,12 +194,6 @@ func (r *router) fail(err error) {
 		return
 	}
 	_, _ = r.client.Write(append(frame, '\n'))
-}
-
-func (r *router) auditPending() {
-	for line := range bytes.SplitSeq(bytes.TrimSuffix(r.pending, newline), newline) {
-		r.s.mgr.Audit(r.ctx, r.id, line)
-	}
 }
 
 func (r *router) audit(head []byte, partial bool) {

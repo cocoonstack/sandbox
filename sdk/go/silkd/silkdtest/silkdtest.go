@@ -26,12 +26,7 @@ func Serve(l net.Listener) {
 
 // ServeConn serves RPCs on an open connection until the peer closes it.
 func ServeConn(conn net.Conn) {
-	serveConn(conn, bufio.NewReader(conn), wire.KeepAliveProto, serveStateless)
-}
-
-// ServeConnOnce serves one RPC and closes, like a daemon from before proto 2.
-func ServeConnOnce(conn net.Conn) {
-	serveConn(conn, bufio.NewReader(conn), 1, serveStateless)
+	serveConn(conn, bufio.NewReader(conn), serveStateless)
 }
 
 // Upgrade hijacks an agent request and answers the 101, handing back the relay connection with any frames sent ahead of the 101.
@@ -64,13 +59,13 @@ func ListenHybrid(sockPath string, port int) (io.Closer, error) {
 			_ = c.Close()
 			return
 		}
-		serveConn(c, r, wire.KeepAliveProto, serveStateless)
+		serveConn(c, r, serveStateless)
 	})
 	return l, nil
 }
 
-// serveConn answers info with proto and dispatches the other requests until the peer closes, or after one when proto predates keep-alive; input frames outside an RPC are dropped as silkd drops them.
-func serveConn(conn net.Conn, r *bufio.Reader, proto uint32, serve func(net.Conn, *bufio.Reader, wire.Request)) {
+// serveConn answers info and dispatches the other requests until the peer closes; input frames outside an RPC are dropped as silkd drops them.
+func serveConn(conn net.Conn, r *bufio.Reader, serve func(net.Conn, *bufio.Reader, wire.Request)) {
 	defer func() { _ = conn.Close() }()
 	for {
 		req, err := recvRequest(r)
@@ -81,12 +76,9 @@ func serveConn(conn net.Conn, r *bufio.Reader, proto uint32, serve func(net.Conn
 		case *wire.Stdin, *wire.StdinClose, *wire.Data, *wire.DataEnd:
 			continue
 		case *wire.Info:
-			send(conn, &wire.InfoResp{Version: "silkdtest", Proto: proto})
+			send(conn, &wire.InfoResp{Version: "silkdtest", Proto: wire.KeepAliveProto})
 		default:
 			serve(conn, r, req)
-		}
-		if proto < wire.KeepAliveProto {
-			return
 		}
 	}
 }
