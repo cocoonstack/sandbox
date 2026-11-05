@@ -481,7 +481,7 @@ checkpoint store and keeps each claim's registry row on the latest snapshot:
   restart, or after it wakes from an archive or an adoption; until a claim woken
   that way commits its first replica it has no row, and it is lost with its node. A hibernated, archived or failed claim,
   one whose tenant was removed, and one with volumes (capture refuses them) is
-  skipped; a replicated claim that gains volumes
+  skipped, and a skipped claim keeps its interval, so one that wakes past it is due at once; a replicated claim that gains volumes
   drops its row and replica. The claim's policy pool, not its own template key,
   picks the interval, so a claim cloned from a template promoted out of a
   replicating pool follows that pool. Rounds share the maintenance budget with

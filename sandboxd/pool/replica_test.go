@@ -67,6 +67,23 @@ func TestReplicaRoundPublishesMovesTheRowAndDropsThePrevious(t *testing.T) {
 	}
 }
 
+func TestReplicaIntervalSurvivesATickTheClaimCannotReplicate(t *testing.T) {
+	c := newReplicaCluster(t)
+	a := c.node(t, "a", t.TempDir(), keepAnHour)
+	sb := mustClaim(t, a, testKey)
+	last := time.Now().Add(-2 * replicateEvery * time.Second)
+	a.mu.Lock()
+	a.replicas = map[string]time.Time{sb.ID: last}
+	sb.ArchivePending = "ck_pending"
+	a.mu.Unlock()
+	a.replicateOnce(t.Context())
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if got := a.replicas[sb.ID]; !got.Equal(last) {
+		t.Errorf("last attempt %v after a tick the claim could not replicate, want %v kept so a woken claim is due at once", got, last)
+	}
+}
+
 func TestReplicaRefusedPutDropsTheCopyAndItsExport(t *testing.T) {
 	c := newReplicaCluster(t)
 	a, b := c.node(t, "a", t.TempDir(), keepAnHour), c.node(t, "b", t.TempDir(), keepAnHour)
