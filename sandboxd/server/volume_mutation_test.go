@@ -172,27 +172,3 @@ func TestLiveVolumeRoutesReportRefusalsOverRecordedDiagnostics(t *testing.T) {
 		})
 	}
 }
-
-func TestClaimVolumeCompatibilityExpansion(t *testing.T) {
-	for _, tt := range []struct {
-		name string
-		req  ClaimRequest
-		want []types.Volume
-		err  bool
-	}{
-		{"legacy all devices", ClaimRequest{VolumesAttachOnly: true, Volumes: []types.Volume{{Name: "data"}, {Name: "work", Mode: types.VolumeModeRW}}}, []types.Volume{{Name: "data", AttachOnly: true}, {Name: "work", Mode: types.VolumeModeRW, AttachOnly: true}}, false},
-		{"empty legacy", ClaimRequest{VolumesAttachOnly: true}, nil, true},
-		{"legacy mount conflict", ClaimRequest{VolumesAttachOnly: true, Volumes: []types.Volume{{Name: "data", Mount: "/data"}}}, nil, true},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			before := slices.Clone(tt.req.Volumes)
-			got, err := tt.req.normalizedVolumes()
-			if (err != nil) != tt.err || !slices.Equal(got, tt.want) {
-				t.Fatalf("normalized volumes=%+v err=%v, want %+v error=%t", got, err, tt.want, tt.err)
-			}
-			if !slices.Equal(tt.req.Volumes, before) {
-				t.Fatal("legacy expansion mutated caller input")
-			}
-		})
-	}
-}

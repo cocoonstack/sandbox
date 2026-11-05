@@ -113,9 +113,6 @@ Auth: `Authorization: Bearer <api_token>` (when configured).
   entry's `writable: true` (see [deploy](deploy.md#dataset-volumes)).
   `attach_only: true` attaches that entry without mounting it and requires an
   empty or omitted `mount`. Mounted and attach-only entries can share a list
-- `volumes_attach_only` (default `false`) is the legacy claim-wide form of
-  `attach_only`. The server expands it onto every entry before validation.
-  It requires at least one volume and rejects a nonempty `mount`.
 
 Success:
 
@@ -251,7 +248,7 @@ an unknown and a forbidden volume return the same error text.
 
 Errors: 400 unknown template axis, `claim_ref` or metadata over a bound (the
 message names it), a bad `env` entry, an unknown `on_expire`, invalid/duplicate volumes,
-`volumes_attach_only` with no volumes, or an attach-only entry with a nonempty `mount`,
+an attach-only entry with a nonempty `mount`,
 `mode: "rw"`
 against a non-writable entry, or a volume that is unknown or forbidden (the
 latter two are deliberately indistinguishable), or
@@ -449,8 +446,7 @@ The per-entry field requires coordinated daemon and SDK releases. Older daemons
 ignore `attach_only` in claims and reject it in live PUT and PATCH with 400.
 Older Python SDKs reject the field when
 returned descriptors are reused in requests. Responses without the field do
-not safely roundtrip attach-only intent through new clients. The server still
-accepts the legacy claim-wide request flag.
+not safely roundtrip attach-only intent through new clients.
 
 ### Partial failure and recovery
 

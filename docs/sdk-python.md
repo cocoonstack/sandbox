@@ -130,8 +130,8 @@ Volume sandboxes cannot hibernate, fork, checkpoint, or promote. Egress-lane
 sandboxes cannot either; each answers 409. Checkpoint
 branches do not accept volumes of either mode in this version.
 
-`mount=False` on `client.new` or `template.new` leaves the mount to you: the
-dictionaries in `sb.volumes` carry no `mount` key; see
+`{"attach_only": True}` on a volume entry leaves the mount to you: that
+entry in `sb.volumes` carries no `mount` key; see
 [attach-only volumes](sandboxd-api.md#attach-only-volumes) for finding the device
 and the consistency contract.
 For a root client managing a tenant claim, see the

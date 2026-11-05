@@ -759,8 +759,7 @@ func TestAttachOnlyVolumeEndToEnd(t *testing.T) {
 		[]config.VolumeSpec{{Name: "scratch", Path: scratch, Writable: true}})
 
 	sb, err := st.client.New(t.Context(), "rt:24.04",
-		sandbox.WithVolumes(sandbox.Volume{Name: "scratch", Mode: "rw"}),
-		sandbox.WithVolumesAttachOnly())
+		sandbox.WithVolumes(sandbox.Volume{Name: "scratch", Mode: "rw", AttachOnly: true}))
 	if err != nil {
 		t.Fatalf("attach-only claim: %v", err)
 	}
@@ -799,7 +798,7 @@ func TestAttachOnlyVolumeWireShape(t *testing.T) {
 	}{
 		{
 			"attach-only omits the mount",
-			`{"template":"rt:24.04","volumes_attach_only":true,"volumes":[{"name":"scratch","mode":"rw"}]}`,
+			`{"template":"rt:24.04","volumes":[{"name":"scratch","mode":"rw","attach_only":true}]}`,
 			map[string]any{"name": "scratch", "mode": "rw", "attach_only": true},
 		},
 		{
@@ -816,9 +815,6 @@ func TestAttachOnlyVolumeWireShape(t *testing.T) {
 			var reply map[string]any
 			if err := json.Unmarshal(body, &reply); err != nil {
 				t.Fatalf("decode claim %s: %v", body, err)
-			}
-			if _, leaked := reply["volumes_attach_only"]; leaked {
-				t.Errorf("reply %s carries the request flag", body)
 			}
 			entries, _ := reply["volumes"].([]any)
 			if len(entries) != 1 {

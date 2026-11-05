@@ -27,12 +27,11 @@ class Template:
         self,
         ttl_seconds: int = 0,
         volumes: list[str | Volume] | None = None,
-        mount: bool = True,
         *,
         deadline: float | None = None,
     ) -> Sandbox:
-        """Claims the template, following placement when volumes require it; mount=False attaches them unmounted."""
-        claim = _claim_body(self.name, self.net, self.size, ttl_seconds, volumes, mount)
+        """Claims the template, following placement when volumes require it."""
+        claim = _claim_body(self.name, self.net, self.size, ttl_seconds, volumes)
         claim["require_promoted"] = True
         if volumes:
             return self._client._claim_from(self._addr, claim, deadline=deadline)
@@ -54,7 +53,6 @@ def _claim_body(
     size: str,
     ttl_seconds: int,
     volumes: list[str | Volume] | None = None,
-    mount: bool = True,
     claim_ref: str = "",
 ) -> dict[str, Any]:
     claim: dict[str, Any] = {"template": template}
@@ -68,8 +66,6 @@ def _claim_body(
         raise TypeError("volumes must be a list")
     if volumes:
         claim["volumes"] = [_volume_body(volume) for volume in volumes]
-    if not mount:
-        claim["volumes_attach_only"] = True
     if claim_ref:
         claim["claim_ref"] = claim_ref
     return claim

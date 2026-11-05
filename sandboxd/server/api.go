@@ -1,8 +1,6 @@
 package server
 
 import (
-	"errors"
-	"slices"
 	"time"
 
 	"github.com/cocoonstack/sandbox/sandboxd/types"
@@ -24,8 +22,6 @@ type ClaimRequest struct {
 	Net      types.NetShape `json:"net,omitempty"`
 	Size     types.Size     `json:"size,omitempty"`
 	Volumes  []types.Volume `json:"volumes,omitempty"`
-	// VolumesAttachOnly attaches every requested volume without mounting it.
-	VolumesAttachOnly bool `json:"volumes_attach_only,omitzero"`
 	TTLField
 	NoRedirect bool `json:"no_redirect,omitzero"`
 	// RequirePromoted makes the target refuse a cold-image fallback.
@@ -42,20 +38,6 @@ type ClaimRequest struct {
 // Key resolves the requested pool key with the wire defaults filled.
 func (r ClaimRequest) Key() types.PoolKey {
 	return types.PoolKey{Template: r.Template, Net: r.Net, Size: r.Size}.Defaulted()
-}
-
-func (r ClaimRequest) normalizedVolumes() ([]types.Volume, error) {
-	if !r.VolumesAttachOnly {
-		return types.ValidateVolumes(r.Volumes)
-	}
-	if len(r.Volumes) == 0 {
-		return nil, errors.New("volumes_attach_only requires at least one volume")
-	}
-	volumes := slices.Clone(r.Volumes)
-	for i := range volumes {
-		volumes[i].AttachOnly = true
-	}
-	return types.ValidateVolumes(volumes)
 }
 
 // ClaimResponse is the wire reply of POST /v1/claim; success and Redirect are exclusive.

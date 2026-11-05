@@ -62,12 +62,11 @@ class Client:
         ttl_seconds: int = 0,
         claim_ref: str = "",
         volumes: list[str | Volume] | None = None,
-        mount: bool = True,
         *,
         deadline: float | None = None,
     ) -> Sandbox:
         """Claims a sandbox; a warm hit is milliseconds. deadline is a time.monotonic() bound over the whole claim."""
-        claim = _claim_body(template, net, size, ttl_seconds, volumes, mount, claim_ref)
+        claim = _claim_body(template, net, size, ttl_seconds, volumes, claim_ref)
         return self._claim_from(self.addr, claim, deadline=deadline)
 
     def delete_template(self, template: str, net: str = "", size: str = "") -> None:

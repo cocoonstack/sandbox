@@ -89,18 +89,17 @@ func (e *APIError) Error() string {
 }
 
 type claimRequest struct {
-	Template          string            `json:"template"`
-	Net               string            `json:"net,omitempty"`
-	Size              string            `json:"size,omitempty"`
-	Volumes           []Volume          `json:"volumes,omitempty"`
-	VolumesAttachOnly bool              `json:"volumes_attach_only,omitzero"`
-	TTLSeconds        int               `json:"ttl_seconds,omitzero"`
-	NoRedirect        bool              `json:"no_redirect,omitzero"`
-	RequirePromoted   bool              `json:"require_promoted,omitzero"`
-	ClaimRef          string            `json:"claim_ref,omitempty"`
-	Metadata          map[string]string `json:"metadata,omitempty"`
-	OnExpire          string            `json:"on_expire,omitempty"`
-	Env               map[string]EnvVar `json:"env,omitempty"`
+	Template        string            `json:"template"`
+	Net             string            `json:"net,omitempty"`
+	Size            string            `json:"size,omitempty"`
+	Volumes         []Volume          `json:"volumes,omitempty"`
+	TTLSeconds      int               `json:"ttl_seconds,omitzero"`
+	NoRedirect      bool              `json:"no_redirect,omitzero"`
+	RequirePromoted bool              `json:"require_promoted,omitzero"`
+	ClaimRef        string            `json:"claim_ref,omitempty"`
+	Metadata        map[string]string `json:"metadata,omitempty"`
+	OnExpire        string            `json:"on_expire,omitempty"`
+	Env             map[string]EnvVar `json:"env,omitempty"`
 }
 
 func (r claimRequest) rejectPinnedAxes() error {
