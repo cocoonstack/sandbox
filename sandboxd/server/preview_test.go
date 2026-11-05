@@ -97,6 +97,23 @@ func TestPreviewRevokedWhenDialFails(t *testing.T) {
 	}
 }
 
+func TestPreviewAnswers404ForAReleasedSandbox(t *testing.T) {
+	ps := NewPreviewServer("secret", "node:9000", "node:7777", &fakePreviewMgr{
+		dial: func(string, uint16) (net.Conn, error) { return nil, pool.ErrUnknownSandbox },
+	})
+	ts := httptest.NewServer(ps.Handler())
+	t.Cleanup(ts.Close)
+
+	resp, err := http.Get(ts.URL + "/p/" + mintToken(ps, "sb_released", 3000, time.Hour) + "/")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("status %d, want 404 for a released sandbox", resp.StatusCode)
+	}
+}
+
 func TestPreviewAnswers503WhileAClaimCannotServe(t *testing.T) {
 	for _, dialErr := range []error{pool.ErrLeaseLost, pool.ErrEvacuating} {
 		t.Run(dialErr.Error(), func(t *testing.T) {
