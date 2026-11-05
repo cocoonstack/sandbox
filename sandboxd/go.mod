@@ -11,7 +11,7 @@ require (
 	github.com/docker/go-units v0.5.0
 	github.com/google/nftables v0.3.0
 	github.com/hashicorp/memberlist v0.7.0
-	github.com/jackc/pgx/v5 v5.11.0
+	github.com/jackc/pgx/v5 v5.12.0
 	github.com/projecteru2/core v0.1.7
 	github.com/rs/zerolog v1.35.1
 	golang.org/x/mod v0.42.0
