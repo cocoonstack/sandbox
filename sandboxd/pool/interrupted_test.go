@@ -419,6 +419,18 @@ func TestAWakeWhoseGuestDoesNotResumeAnswersFailed(t *testing.T) {
 	})
 }
 
+func TestASettleWithNoIntentLeftKeepsTheReaderSafeHibernate(t *testing.T) {
+	m, sb := reconcileInterrupted(t, newFakeEngine(), "", "", nil)
+	m.mu.Lock()
+	sb.ReaderSafe = true
+	m.mu.Unlock()
+	sb.Transition.Lock()
+	m.settleInterrupted(t.Context(), sb)
+	if !sb.ReaderSafe {
+		t.Error("a settle with nothing to settle dropped ReaderSafe")
+	}
+}
+
 func waitStarted(t *testing.T, eng *fakeEngine, n int) {
 	t.Helper()
 	waitFor(t, func() bool {
