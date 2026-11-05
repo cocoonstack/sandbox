@@ -319,7 +319,7 @@ func smokeHibernate(ctx context.Context, client *sandbox.Client, sb *sandbox.San
 	if err = wantHibernated(ctx, client, 1); err != nil {
 		return err
 	}
-	out, err := sess.Exec(ctx, "sh", "-c", "echo $HIBMARK") // first guest access wakes the VM
+	out, err := sess.Exec(ctx, "sh", "-c", "echo $HIBMARK")
 	if err != nil {
 		return fmt.Errorf("exec after hibernate: %w", err)
 	}

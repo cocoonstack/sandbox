@@ -59,7 +59,6 @@ func (m *Manager) vmResidentBytes(ctx context.Context, vmName string) (int64, bo
 	return residentBytes(vm.PID)
 }
 
-// residentBytes reads a process's resident page count from statm's second field.
 func residentBytes(pid int) (int64, bool) {
 	b, err := os.ReadFile(filepath.Join("/proc", strconv.Itoa(pid), "statm"))
 	if err != nil {

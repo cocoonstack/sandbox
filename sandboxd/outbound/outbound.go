@@ -113,7 +113,6 @@ func (h *Host) ArmProxy(ctx context.Context, sb *types.Sandbox) error {
 	}
 	id, tenant := sb.ID, sb.Tenant
 	evCtx := context.WithoutCancel(ctx)
-	// Only an intercepting pool pays for the TLS transport and leaf cache
 	ca := h.o.CA
 	if !v.Intercepts(sb.PolicyKey()) {
 		ca = nil

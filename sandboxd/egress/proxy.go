@@ -149,7 +149,6 @@ type Proxy struct {
 	pools    atomic.Pointer[connPools]
 	refusals *rate.Limiter
 
-	// leaves caches this sandbox's interception leaves; per-proxy, never shared.
 	leafMu sync.Mutex
 	leaves map[string]*tls.Certificate
 	// tickets lets a guest resume an intercepted TLS session on its next CONNECT.

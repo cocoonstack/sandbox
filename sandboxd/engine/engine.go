@@ -47,8 +47,8 @@ const (
 	argNetwork     = "--network"
 	argBridge      = "--bridge"
 	formatJSON     = "json"
-	silkdPort      = 2048 // silkd's fixed guest vsock port, the claim-ready anchor
-	egressPort     = 2049 // guest→host egress port; VMM maps it to <vsock_socket>_2049
+	silkdPort      = 2048
+	egressPort     = 2049
 	socksPort      = 2050
 	cmdTimeout     = 2 * time.Minute
 	dumpTimeout    = 15 * time.Minute

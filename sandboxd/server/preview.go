@@ -20,7 +20,7 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/pool"
 )
 
-// forwardedHeader marks a request one owner already forwarded; a token whose owner string no longer names this node must not bounce forever.
+// forwardedHeader stops a forward loop when a token's owner no longer names this node.
 const forwardedHeader = "X-Sandbox-Preview-Forwarded"
 
 type previewClaims struct {

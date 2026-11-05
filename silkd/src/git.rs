@@ -164,7 +164,6 @@ async fn git(
     git_cmd(dir, auth).args(args).output().await
 }
 
-/// Injects git config as GIT_CONFIG_COUNT/KEY_n/VALUE_n env pairs.
 fn apply_config(cmd: &mut Command, auth: Option<&str>) {
     cmd.env("GIT_CONFIG_COUNT", if auth.is_some() { "2" } else { "1" })
         .env("GIT_CONFIG_KEY_0", "core.quotePath")
@@ -177,7 +176,6 @@ fn apply_config(cmd: &mut Command, auth: Option<&str>) {
     }
 }
 
-/// Writes Done on success, else the git stderr as an error frame.
 async fn terminal<W: AsyncWrite + Unpin>(
     w: &mut W,
     verb: &str,

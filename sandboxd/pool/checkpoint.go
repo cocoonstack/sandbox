@@ -354,14 +354,12 @@ type healVetoes struct {
 	pending, aborted map[string]struct{}
 }
 
-// mark records ckptID as staging or pulling, so a delete can veto it.
 func (h *healVetoes) mark(ckptID string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.pending[ckptID] = struct{}{}
 }
 
-// clear un-marks ckptID and reports a veto.
 func (h *healVetoes) clear(ckptID string) (aborted bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
