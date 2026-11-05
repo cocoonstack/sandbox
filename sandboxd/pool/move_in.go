@@ -245,8 +245,12 @@ func (m *Manager) resolveMoveIn(ctx context.Context, sb *types.Sandbox) bool {
 		if rec.State == moves.Started {
 			committed = 0
 		}
-		vm, found, inspectErr := m.eng.Inspect(ctx, sb.VMName)
-		m.startMoveIn(ctx, sb, rec.From, committed, inspectErr == nil && found && vm.State != vmStateRunning)
+		vm, found, err := m.eng.Inspect(ctx, sb.VMName)
+		if err != nil {
+			log.WithFunc("pool.resolveMoveIn").Warnf(ctx, "inspect moved claim %s, retrying: %v", sb.ID, err)
+			return false
+		}
+		m.startMoveIn(ctx, sb, rec.From, committed, found && vm.State != vmStateRunning)
 		return true
 	case toHere && (rec.State == moves.Pending || rec.State == moves.Final):
 		if _, err = m.moves.Advance(ctx, sb.ID, rec.Epoch, rec.State, moves.Aborted); err != nil {
