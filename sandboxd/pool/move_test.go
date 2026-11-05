@@ -227,6 +227,23 @@ func TestMoveKeepsThePausedGuestUntilItsAbortLands(t *testing.T) {
 	}
 }
 
+func TestMoveWhoseAbortFailsBlamesTheAbortNotTheRegistry(t *testing.T) {
+	mc := newMoveCluster(t)
+	sb := claimTenant(t, mc.s, "acme")
+	eng := fakeOf(mc.s)
+	eng.abortErr = errors.New("vmm busy")
+	mc.p.commitHook = func(int) error { return ErrMoveTarget }
+	_, err := mc.s.Move(t.Context(), sb.ID, "b", time.Minute)
+	if !errors.Is(err, ErrMoveTarget) || errors.Is(err, ErrMoveStoreDown) {
+		t.Fatalf("move whose abort failed: %v, want ErrMoveTarget and not ErrMoveStoreDown", err)
+	}
+	eng.mu.Lock()
+	eng.abortErr = nil
+	eng.mu.Unlock()
+	waitFor(t, func() bool { return !pausedOn(mc.s, sb.VMName) && !movingOn(mc.s, sb) })
+	assertStillOnSource(t, mc, sb)
+}
+
 func TestMoveTargetCountsAReservationLikeAClaim(t *testing.T) {
 	mc := newMoveCluster(t)
 	tuneView(mc.t, func(v *configView) { v.maxClaims = 1 })
