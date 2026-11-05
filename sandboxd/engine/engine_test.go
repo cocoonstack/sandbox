@@ -280,9 +280,7 @@ func TestAMemoryCommandGetsItsLongerTermGraceAndAColdBootTheCommandOne(t *testin
 			bin, ready := filepath.Join(dir, "cocoon"), filepath.Join(dir, "ready")
 			script := "#!/bin/sh\ntrap 'kill $!; sleep " + strconv.Itoa(int(cmdTermGrace/time.Second)+2) + " >/dev/null 2>&1; exit 3' TERM\n" +
 				"sleep 300 >/dev/null 2>&1 &\n: > " + ready + "\nwait\n"
-			if err := os.WriteFile(bin, []byte(script), 0o700); err != nil {
-				t.Fatal(err)
-			}
+			installScript(t, bin, script)
 			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
 			done := make(chan error, 1)
@@ -300,10 +298,7 @@ func TestCloseWaitsForARunningCommandAndRefusesNewOnes(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	bin, ready, release := filepath.Join(dir, "cocoon"), filepath.Join(dir, "ready"), filepath.Join(dir, "release")
-	script := "#!/bin/sh\n: > " + ready + "\nwhile [ ! -e " + release + " ]; do sleep 0.05; done\n"
-	if err := os.WriteFile(bin, []byte(script), 0o700); err != nil {
-		t.Fatal(err)
-	}
+	installScript(t, bin, "#!/bin/sh\n: > "+ready+"\nwhile [ ! -e "+release+" ]; do sleep 0.05; done\n")
 	e := New(bin, nil, nil, false, false, "")
 	done := make(chan error, 1)
 	go func() { done <- e.Hibernate(t.Context(), "vm", "snap") }()
@@ -484,8 +479,17 @@ func waitFile(t *testing.T, path string) {
 func fakeCocoon(t *testing.T, script string) {
 	t.Helper()
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "cocoon"), []byte(script), 0o755); err != nil {
+	installScript(t, filepath.Join(dir, "cocoon"), script)
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+func installScript(t *testing.T, path, script string) {
+	t.Helper()
+	src := path + ".src"
+	if err := os.WriteFile(src, []byte(script), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	if out, err := exec.Command("install", "-m", "0700", src, path).CombinedOutput(); err != nil {
+		t.Fatalf("install %s: %v: %s", path, err, out)
+	}
 }

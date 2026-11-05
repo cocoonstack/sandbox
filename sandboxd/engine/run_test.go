@@ -1,7 +1,6 @@
 package engine
 
 import (
-	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -11,9 +10,7 @@ import (
 func TestRunCapsCocoonsGoMaxProcs(t *testing.T) {
 	t.Setenv("SANDBOXD_RUN_TEST", "kept")
 	bin := filepath.Join(t.TempDir(), "cocoon")
-	if err := os.WriteFile(bin, []byte("#!/bin/sh\necho \"$GOMAXPROCS $SANDBOXD_RUN_TEST\"\n"), 0o700); err != nil {
-		t.Fatalf("write fake cocoon: %v", err)
-	}
+	installScript(t, bin, "#!/bin/sh\necho \"$GOMAXPROCS $SANDBOXD_RUN_TEST\"\n")
 	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(0))
 	for _, tt := range []struct {
 		procs int
