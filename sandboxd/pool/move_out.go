@@ -285,9 +285,6 @@ func (m *Manager) failMoveOut(ctx context.Context, sb *types.Sandbox, mv *outMov
 	case err != nil:
 		log.WithFunc("pool.failMoveOut").Warnf(ctx, "move of %s failed (%v) and its abort is retrying: %v", sb.ID, cause, err)
 		go m.retryMoveOut(ctx, sb, mv)
-		if errors.Is(err, ErrMoveStoreDown) {
-			return MoveResult{}, fmt.Errorf("%w: %w", ErrMoveStoreDown, cause)
-		}
 		return MoveResult{}, errors.Join(cause, err)
 	case moved:
 		return result, nil
