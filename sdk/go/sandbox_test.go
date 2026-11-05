@@ -145,7 +145,7 @@ func TestUpgradeKeepsCoalescedBytes(t *testing.T) {
 	t.Cleanup(ts.Close)
 
 	var out strings.Builder
-	code, err := testSandbox(t, ts).Run(t.Context(), Cmd{Argv: []string{"echo", "42"}, Stdout: &out})
+	code, err := testSandbox(t, ts, WithKeepAlive(0)).Run(t.Context(), Cmd{Argv: []string{"echo", "42"}, Stdout: &out})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
