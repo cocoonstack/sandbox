@@ -564,7 +564,6 @@ pub async fn write_feed_error<W: AsyncWrite + Unpin>(w: &mut W, err: FeedError) 
     }
 }
 
-#[inline]
 pub(crate) fn parse_request(frame: &[u8], buf: &mut Vec<u8>) -> serde_json::Result<Request> {
     if let Some(data) = decode_bulk_frame(frame, DATA_FRAME_HEAD, buf) {
         return Ok(Request::Data { data });
