@@ -459,7 +459,7 @@ func (r VMRecord) TapDevice() string {
 	return r.NetworkConfigs[0].TAP
 }
 
-// MoveOut is the source's journal of a live move: the record's first epoch and cocoon's series.
+// MoveOut is the source's journal of a live move: the record's first epoch, cocoon's series and the target.
 type MoveOut struct {
 	Epoch  int64  `json:"epoch"`
 	Series string `json:"series,omitempty"`
