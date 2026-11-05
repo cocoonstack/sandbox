@@ -265,15 +265,12 @@ func (c *Client) deleteTemplates(ctx context.Context, addr string, u url.Values)
 	}
 }
 
-func (c *Client) requestURL(addr, path string) string {
-	if strings.Contains(addr, "://") {
-		return addr + path
-	}
-	return c.scheme + "://" + addr + path
-}
-
 func (c *Client) roundTrip(ctx context.Context, method, addr, path string, body io.Reader, bearer string) (*http.Response, error) {
-	req, err := http.NewRequestWithContext(ctx, method, c.requestURL(addr, path), body)
+	u := addr + path
+	if !strings.Contains(addr, "://") {
+		u = c.scheme + "://" + u
+	}
+	req, err := http.NewRequestWithContext(ctx, method, u, body)
 	if err != nil {
 		return nil, err
 	}

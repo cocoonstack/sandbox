@@ -84,21 +84,14 @@ func serveConn(conn net.Conn, r *bufio.Reader, serve func(net.Conn, *bufio.Reade
 }
 
 func serveStateless(conn net.Conn, r *bufio.Reader, req wire.Request) {
-	if !serveCommon(conn, r, req) {
-		errFrame(conn, wire.KindUnimplemented, "silkdtest: "+req.Op())
-	}
-}
-
-func serveCommon(conn net.Conn, r *bufio.Reader, req wire.Request) bool {
 	switch req := req.(type) {
 	case *wire.Exec:
 		serveExec(conn, r, req)
 	case *wire.PortForward:
 		portEcho(conn, r, req.Port)
 	default:
-		return false
+		errFrame(conn, wire.KindUnimplemented, "silkdtest: "+req.Op())
 	}
-	return true
 }
 
 func acceptLoop(l net.Listener, serve func(net.Conn)) {

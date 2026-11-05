@@ -45,11 +45,8 @@ type PreviewServer struct {
 	transport *http.Transport
 }
 
-// NewPreviewServer returns nil when preview is not configured.
+// NewPreviewServer serves preview URLs signed with secret and minted under base.
 func NewPreviewServer(secret, base, owner string, mgr PreviewManager) *PreviewServer {
-	if secret == "" {
-		return nil
-	}
 	p := &PreviewServer{secret: []byte(secret), base: base, owner: owner, mgr: mgr}
 	p.transport = &http.Transport{
 		// A pooled guest conn skips PreviewDial, and with it wakeResolved and the Transition lock

@@ -91,26 +91,19 @@ func (r *router) toReader(head []byte, partial bool) error {
 		r.closeReader()
 	}
 	if r.reader == nil {
-		if err := r.dialReader(); err != nil {
+		conn, source, err := r.s.mgr.DialReader(r.ctx, r.id, r.token)
+		if err != nil {
 			return err
 		}
+		r.reader, r.source = conn, source
+		r.startPump()
 	}
 	if r.s.mgr.AuditEnabled() {
-		r.audit(head, partial)
+		r.s.mgr.Audit(r.ctx, r.id, bytes.TrimSuffix(head, newline))
 	}
 	if err := r.pass(head, partial, r.reader); err != nil {
 		return errReaderGone
 	}
-	return nil
-}
-
-func (r *router) dialReader() error {
-	conn, source, err := r.s.mgr.DialReader(r.ctx, r.id, r.token)
-	if err != nil {
-		return err
-	}
-	r.reader, r.source = conn, source
-	r.startPump()
 	return nil
 }
 
@@ -194,14 +187,6 @@ func (r *router) fail(err error) {
 		return
 	}
 	_, _ = r.client.Write(append(frame, '\n'))
-}
-
-func (r *router) audit(head []byte, partial bool) {
-	if partial {
-		r.s.mgr.Audit(r.ctx, r.id, head)
-		return
-	}
-	r.s.mgr.Audit(r.ctx, r.id, bytes.TrimSuffix(head, newline))
 }
 
 // serveSleeping answers the 101 before reading any frame, since a client's first frame can wait on it.
