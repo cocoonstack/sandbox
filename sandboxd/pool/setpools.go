@@ -74,7 +74,6 @@ func (m *Manager) applyPools(ctx context.Context, desired map[types.PoolKey]conf
 		return nil
 	}
 	m.poolVersion = version
-	// Sequenced under the mutex (apply order) so commit drops a write a later apply superseded.
 	seq := m.poolStore.seq.Add(1)
 	now := time.Now()
 	for key, p := range m.pools {

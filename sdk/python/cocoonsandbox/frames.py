@@ -36,7 +36,6 @@ def encode_request(op: str, **fields: object) -> bytes:
 
 def decode_response(line: bytes) -> dict[str, Any]:
     """Decodes one response with binary payloads under data."""
-    # base64 is JSON-escape-free, so an exactly-shaped data frame slices without json.loads.
     if _FAST_DATA and line.startswith(b'{"type":"'):
         te = line.find(b'"', 9)
         if te > 0 and line[9:te] in (b"stdout", b"stderr", b"data") and line.startswith(b'","data":"', te):

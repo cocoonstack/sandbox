@@ -101,7 +101,7 @@ func (r Rule) matchPort(port uint16) bool {
 // Policy is one sandbox's egress allow-list; a request matching no rule is denied.
 type Policy struct {
 	Allow  []Rule `json:"allow"`
-	Socks5 bool   `json:"socks5,omitzero"` // opts the SOCKS5 door in; a rule must still admit CONNECT
+	Socks5 bool   `json:"socks5,omitzero"`
 }
 
 // Intercepts reports whether any rule may terminate HTTPS; nil is false.

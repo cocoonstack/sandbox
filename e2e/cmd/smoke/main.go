@@ -57,8 +57,7 @@ func run(addr, token, template, lspTemplate string, egress bool) error {
 		return err
 	}
 	defer func() { _ = sb.Close() }()
-	// Info is node-local: on a cluster the claim may have been redirected, so
-	// hibernated-count assertions must ask the owner, not the entry node.
+	// Info is node-local; hibernated counts come from the owner, not the entry node.
 	ownerClient := client
 	if sb.Owner() != addr {
 		if ownerClient, err = sandbox.Connect(sb.Owner(), sandbox.WithAPIToken(token)); err != nil {
@@ -282,7 +281,6 @@ func smokeGit(ctx context.Context, sb *sandbox.Sandbox) error {
 		return fmt.Errorf("after checkout: current=%q, want feature", br.Current)
 	}
 
-	// The none lane answers push with the typed unimplemented error.
 	if err := sb.GitPush(ctx, "/work", ""); !isSilkdKind(err, wire.KindUnimplemented) {
 		return fmt.Errorf("push on none lane: %v, want unimplemented", err)
 	}
@@ -643,7 +641,6 @@ func smokeProcs(ctx context.Context, sb *sandbox.Sandbox) error {
 		return fmt.Errorf("logs replay %q missing mark", out.String())
 	}
 
-	// A long-runner dies to kill; its pid must be gone from the next attach.
 	pid, err = sb.Spawn(ctx, sandbox.Cmd{Argv: []string{"sleep", "30"}})
 	if err != nil {
 		return fmt.Errorf("spawn sleeper: %w", err)

@@ -10,7 +10,6 @@ pub async fn serve(port: u32, state: Arc<State>) -> std::io::Result<()> {
 
     let listener = VsockListener::bind(VsockAddr::new(VMADDR_CID_ANY, port))?;
     loop {
-        // a transient accept error must not tear down the daemon and lose every session.
         let conn = match listener.accept().await {
             Ok((conn, peer)) if peer.cid() == VMADDR_CID_HOST => conn,
             // only the host may drive silkd; a guest-side vsock loopback peer would exec as root
@@ -18,6 +17,7 @@ pub async fn serve(port: u32, state: Arc<State>) -> std::io::Result<()> {
                 eprintln!("silkd: refused peer cid {}", peer.cid());
                 continue;
             }
+            // a transient accept error must not tear down the daemon and lose every session.
             Err(e) => {
                 eprintln!("silkd: accept: {e}");
                 tokio::time::sleep(std::time::Duration::from_millis(50)).await;

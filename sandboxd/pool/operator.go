@@ -21,7 +21,6 @@ func (m *Manager) Sandbox(id string) (SandboxSummary, bool) {
 	if sb == nil {
 		return SandboxSummary{}, false
 	}
-	// summarize reads fields hibernate and archive mutate under m.mu
 	out := summarize(sb)
 	out.Token = sb.Token
 	return out, true

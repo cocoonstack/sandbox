@@ -65,7 +65,6 @@ func (m *Manager) Checkpoint(ctx context.Context, id string, cred Cred, name, te
 
 // ClaimCheckpoint provisions a fresh claim cloned from a checkpoint, attributed to tenant.
 func (m *Manager) ClaimCheckpoint(ctx context.Context, ckptID string, o ClaimOptions) (*types.Sandbox, error) {
-	// A rejected id must not leave a lock-map entry, so resolve before recLock and quota
 	ckpt, err := m.loadCheckpoint(ctx, ckptID)
 	if err != nil {
 		return nil, err
@@ -130,7 +129,7 @@ func (m *Manager) DeleteCheckpoint(ctx context.Context, ckptID, tenant string, s
 	}
 	// ckpt.Archive guards wake images store-wide; the pin set guards uncommitted local ones
 	if ckpt.Archive || m.archiveCkPinned(ckptID) {
-		return ErrUnknownCheckpoint // backs an archived sandbox, not a deletable checkpoint
+		return ErrUnknownCheckpoint
 	}
 	if err := m.ckpts.Delete(ctx, ckptID); err != nil {
 		return fmt.Errorf("delete checkpoint: %w", err)

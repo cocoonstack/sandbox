@@ -615,7 +615,7 @@ type echoReply struct {
 	body   string
 }
 
-// seen decodes the upstream's /echo report; its hex survives the scrub, the query reflected after it does not.
+// seen's hex report survives the scrub; the query reflected after it does not.
 func (r echoReply) seen(t *testing.T) (echoed, string) {
 	t.Helper()
 	report, reflected, _ := strings.Cut(r.body, "\n")

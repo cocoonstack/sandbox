@@ -104,7 +104,7 @@ where
     };
 
     let feed = proto::feed_data_frames(reader, &mut sink).await;
-    drop(sink); // EOF to tar regardless of outcome
+    drop(sink);
     let status = child.wait().await?;
     let msg = err_task.await.unwrap_or_default();
 

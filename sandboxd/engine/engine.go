@@ -58,10 +58,10 @@ const (
 	connectTimeout = 10 * time.Second
 	trimTimeout    = 10 * time.Second
 	probeInterval  = 20 * time.Millisecond
-	connectMax     = 64   // "OK <port>" handshake reply cap
-	infoMax        = 4096 // info response frame cap
+	connectMax     = 64 // "OK <port>" handshake reply cap
+	infoMax        = 4096
 	outputTail     = 400
-	portForwardMax = 4096           // port_forward handshake reply line cap
+	portForwardMax = 4096
 	vmNotFound     = "vm not found" // cocoon's hypervisor.ErrNotFound text
 	// At 16 concurrent memory dumps cocoon's sqlite writers already time out on its 5 s lock wait; 8 measured clean
 	memoryDumps = 8
