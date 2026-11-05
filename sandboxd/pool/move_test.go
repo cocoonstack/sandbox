@@ -602,48 +602,8 @@ func TestMoveRestartAfterTheConsumeKeepsTheClaim(t *testing.T) {
 }
 
 func TestMoveHoldsOffCapturesReleasesAndEvacuationWhileItRuns(t *testing.T) {
-	mc := newMoveCluster(t)
-	sb := mustClaim(t, mc.s, testKey)
-	other := mustClaim(t, mc.s, testKey)
-	cred := Cred{Token: sb.Token}
-	mc.p.roundHook = func(round int) error {
-		if round != 2 {
-			return nil
-		}
-		_, forkErr := mc.s.Fork(t.Context(), sb.ID, cred, 1, time.Minute, "", "")
-		_, ckErr := mc.s.Checkpoint(t.Context(), sb.ID, cred, "ck", "")
-		_, _, promoteErr := mc.s.Promote(t.Context(), sb.ID, cred, "tpl", "")
-		for op, err := range map[string]error{
-			"fork": forkErr, "checkpoint": ckErr, "promote": promoteErr,
-			"hibernate": mc.s.Hibernate(t.Context(), sb.ID, cred),
-			"release":   mc.s.Release(t.Context(), sb.ID, cred),
-		} {
-			if !errors.Is(err, ErrEvacuating) {
-				t.Errorf("%s during a move: %v, want ErrEvacuating", op, err)
-			}
-		}
-		mc.s.mu.Lock()
-		replicable := mc.s.replicable(sb)
-		mc.s.mu.Unlock()
-		if replicable {
-			t.Error("a replica round may capture the moving claim")
-		}
-		expire(mc.s, sb)
-		mc.s.reapOnce(t.Context())
-		if _, held := mc.s.byID(sb.ID); !held {
-			t.Error("the reap took the moving claim")
-		}
-		tuneView(mc.s, func(v *configView) { v.moveConcurrency = 1 })
-		if _, err := mc.s.Move(t.Context(), other.ID, "b", time.Minute); !errors.Is(err, ErrQuota) {
-			t.Errorf("a second move past a lowered move_concurrency: %v, want ErrQuota", err)
-		}
-		return nil
-	}
-	if _, err := mc.s.Move(t.Context(), sb.ID, "b", time.Minute); err != nil {
-		t.Fatalf("the move the lowered budget did not stop: %v", err)
-	}
-	if _, held := mc.t.byID(sb.ID); !held {
-		t.Error("the target does not hold the moved claim")
+	for name, archived := range map[string]bool{"archives": true, "no archives": false} {
+		t.Run(name, func(t *testing.T) { testMoveHoldsOffCallers(t, archived) })
 	}
 }
 
@@ -1389,6 +1349,56 @@ func BenchmarkQuotaErr(b *testing.B) {
 				m.mu.Unlock()
 			}
 		})
+	}
+}
+
+func testMoveHoldsOffCallers(t *testing.T, archived bool) {
+	t.Helper()
+	mc := newMoveCluster(t)
+	if !archived {
+		mc.s.archives, mc.t.archives = nil, nil
+	}
+	sb := mustClaim(t, mc.s, testKey)
+	other := mustClaim(t, mc.s, testKey)
+	cred := Cred{Token: sb.Token}
+	mc.p.roundHook = func(round int) error {
+		if round != 2 {
+			return nil
+		}
+		_, forkErr := mc.s.Fork(t.Context(), sb.ID, cred, 1, time.Minute, "", "")
+		_, ckErr := mc.s.Checkpoint(t.Context(), sb.ID, cred, "ck", "")
+		_, _, promoteErr := mc.s.Promote(t.Context(), sb.ID, cred, "tpl", "")
+		for op, err := range map[string]error{
+			"fork": forkErr, "checkpoint": ckErr, "promote": promoteErr,
+			"hibernate": mc.s.Hibernate(t.Context(), sb.ID, cred),
+			"release":   mc.s.Release(t.Context(), sb.ID, cred),
+		} {
+			if !errors.Is(err, ErrEvacuating) {
+				t.Errorf("%s during a move: %v, want ErrEvacuating", op, err)
+			}
+		}
+		mc.s.mu.Lock()
+		replicable := mc.s.replicable(sb)
+		mc.s.mu.Unlock()
+		if replicable {
+			t.Error("a replica round may capture the moving claim")
+		}
+		expire(mc.s, sb)
+		mc.s.reapOnce(t.Context())
+		if _, held := mc.s.byID(sb.ID); !held {
+			t.Error("the reap took the moving claim")
+		}
+		tuneView(mc.s, func(v *configView) { v.moveConcurrency = 1 })
+		if _, err := mc.s.Move(t.Context(), other.ID, "b", time.Minute); !errors.Is(err, ErrQuota) {
+			t.Errorf("a second move past a lowered move_concurrency: %v, want ErrQuota", err)
+		}
+		return nil
+	}
+	if _, err := mc.s.Move(t.Context(), sb.ID, "b", time.Minute); err != nil {
+		t.Fatalf("the move the lowered budget did not stop: %v", err)
+	}
+	if _, held := mc.t.byID(sb.ID); !held {
+		t.Error("the target does not hold the moved claim")
 	}
 }
 

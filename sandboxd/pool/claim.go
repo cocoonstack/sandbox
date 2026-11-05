@@ -286,6 +286,10 @@ func (m *Manager) releaseResolved(ctx context.Context, id string, sb *types.Sand
 			m.mu.Unlock()
 			return ErrUnknownSandbox
 		}
+		if m.midMoveLocked(sb) {
+			m.mu.Unlock()
+			return ErrEvacuating
+		}
 		ck := sb.ArchiveCk
 		if ck == "" || ck == marked {
 			break
