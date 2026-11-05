@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"iter"
+	"net/netip"
 	"regexp"
 	"slices"
 	"strings"
@@ -287,6 +288,14 @@ type Sandbox struct {
 	VsockSocket string `json:"vsock_socket,omitempty"`
 	// TAP is the egress-lane NIC's host tap; empty on the none lane.
 	TAP string `json:"tap,omitempty"`
+	// TunAddr is the claim's overlay address in the advanced network mode; zero when its pool has no tun.
+	TunAddr netip.Addr `json:"tun_addr,omitzero"`
+	// TunOff disables the claim's advanced network mode; only the root sets it.
+	TunOff bool `json:"tun_off,omitzero"`
+	// TunProfile labels the claim's exit; empty means "default".
+	TunProfile string `json:"tun_profile,omitempty"`
+	// TunBytes counts the claim's tun bytes both ways against its quota.
+	TunBytes int64 `json:"tun_bytes,omitzero"`
 	// HibernateSnap names the memory snapshot while the VM is hibernated; empty means running.
 	HibernateSnap string `json:"hibernate_snap,omitempty"`
 	// PendingSnap is the journaled intent of a hibernate in flight, cleared by its commit.
@@ -420,6 +429,9 @@ type Checkpoint struct {
 	// PolicySource and NoEgress carry the source sandbox's egress to a branch.
 	PolicySource PoolKey `json:"policy_source,omitzero"`
 	NoEgress     bool    `json:"no_egress,omitzero"`
+	// TunOff and TunProfile carry the operator's tun switch and exit label to a branch, so a branch cannot turn tun back on.
+	TunOff     bool   `json:"tun_off,omitzero"`
+	TunProfile string `json:"tun_profile,omitempty"`
 	// GuestEnv marks a capture whose guest holds an env file a branch must replace.
 	GuestEnv bool `json:"guest_env,omitzero"`
 

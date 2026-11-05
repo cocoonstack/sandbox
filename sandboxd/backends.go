@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"regexp"
 
+	"github.com/projecteru2/core/log"
+
 	archivespg "github.com/cocoonstack/sandbox/sandboxd/archives/pg"
 	"github.com/cocoonstack/sandbox/sandboxd/config"
 	movespg "github.com/cocoonstack/sandbox/sandboxd/moves/pg"
@@ -18,39 +20,75 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/tenants"
 	"github.com/cocoonstack/sandbox/sandboxd/tenants/file"
 	tenantspg "github.com/cocoonstack/sandbox/sandboxd/tenants/pg"
+	"github.com/cocoonstack/sandbox/sandboxd/tunnet"
+	tunpg "github.com/cocoonstack/sandbox/sandboxd/tunnet/pg"
+	"github.com/cocoonstack/sandbox/sandboxd/tunnet/udp"
 	usagepg "github.com/cocoonstack/sandbox/sandboxd/usage/pg"
 )
 
-func openBackends(ctx context.Context, cfg *config.Config) (pool.Backends, error) {
+func openBackends(ctx context.Context, cfg *config.Config) (pool.Backends, func(context.Context), error) {
 	var b pool.Backends
 	var err error
 	if b.Checkpoints, err = newStoreView(ctx, cfg, "checkpoint-staging", store.CheckpointIDRe, false); err != nil {
-		return pool.Backends{}, err
+		return pool.Backends{}, nil, err
 	}
 	b.SharedCheckpoints = cfg.S3Checkpoints()
 	if b.Templates, err = newStoreView(ctx, cfg, "template-staging", store.TemplateIDRe, true); err != nil {
-		return pool.Backends{}, err
+		return pool.Backends{}, nil, err
 	}
 	if b.Tenants, err = openTenants(ctx, cfg); err != nil {
-		return pool.Backends{}, err
+		return pool.Backends{}, nil, err
 	}
 	ms := cfg.MetaStore
 	if ms != nil && ms.Cell != "" {
 		if b.CellPools, err = poolpg.Open(ctx, os.Getenv(ms.DSNEnv), ms.Cell); err != nil {
-			return pool.Backends{}, err
+			return pool.Backends{}, nil, err
 		}
 	}
 	if cfg.ArchiveFailover {
 		if b.Archives, err = archivespg.Open(ctx, os.Getenv(ms.DSNEnv), ms.Cell); err != nil {
-			return pool.Backends{}, err
+			return pool.Backends{}, nil, err
 		}
 	}
 	if cfg.Movable() {
 		if b.Moves, err = movespg.Open(ctx, os.Getenv(ms.DSNEnv), ms.Cell); err != nil {
-			return pool.Backends{}, err
+			return pool.Backends{}, nil, err
 		}
 	}
-	return b, nil
+	runTun := func(context.Context) {}
+	if cfg.Tun != nil {
+		if runTun, err = openTun(ctx, cfg, &b); err != nil {
+			return pool.Backends{}, nil, err
+		}
+	}
+	return b, runTun, nil
+}
+
+// openTun returns run, which receives VXLAN until its context ends.
+func openTun(ctx context.Context, cfg *config.Config, b *pool.Backends) (func(context.Context), error) {
+	t := cfg.Tun
+	under, err := udp.Listen(t.ListenAddr(), t.Senders)
+	if err != nil {
+		return nil, err
+	}
+	var addrs tunnet.Addresses
+	if cfg.Mesh != nil {
+		ms := cfg.MetaStore
+		addrs, err = tunpg.Open(ctx, os.Getenv(ms.DSNEnv), ms.Cell, t.Prefix(), t.ReuseAfter())
+	} else {
+		addrs, err = tunnet.NewLocal(cfg.DataDir, t.Prefix(), t.ReuseAfter())
+	}
+	if err != nil {
+		under.Close()
+		return nil, err
+	}
+	router := tunnet.New(under, t.Overlay())
+	b.TunRouter, b.TunAddrs = router, addrs
+	return func(ctx context.Context) {
+		// closing the underlay is what ends the blocked receive
+		context.AfterFunc(ctx, under.Close)
+		log.WithFunc("main.openTun").Error(ctx, router.Run(ctx), "tun router stopped; the advanced network mode is down")
+	}, nil
 }
 
 func openUsage(ctx context.Context, cfg *config.Config) (*usagepg.Store, error) {

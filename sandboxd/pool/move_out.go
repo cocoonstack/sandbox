@@ -118,6 +118,9 @@ func (m *Manager) moveOut(ctx context.Context, sb *types.Sandbox, mv *outMove, b
 	if _, err = m.sendRound(ctx, sb.ID, mv, round); err != nil {
 		return err
 	}
+	if used, ok := m.out.TunUsed(sb.ID); ok {
+		m.setTunBytes(sb, used)
+	}
 	m.mu.Lock()
 	dto := dtoOf(sb)
 	m.mu.Unlock()

@@ -10,6 +10,8 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
+const tunField = "tun"
+
 var reloadableFields = map[string]bool{
 	"egress_classes":        true,
 	"egress_internal_allow": true,
@@ -43,6 +45,9 @@ func (c *Config) ReloadDiff(next *Config) (changed, ignored []string, err error)
 		case name == "pools":
 			ch, ig, rs := diffPools(c.Pools, next.Pools)
 			changed, ignored, restart = append(changed, ch...), append(ignored, ig...), append(restart, rs...)
+		case name == tunField:
+			ch, rs := diffTun(c.Tun, next.Tun)
+			changed, restart = append(changed, ch...), append(restart, rs...)
 		case reflect.DeepEqual(cur.Field(i).Interface(), nxt.Field(i).Interface()):
 		case reloadableFields[name]:
 			changed = append(changed, name)
@@ -73,6 +78,7 @@ func diffPools(cur, next []PoolSpec) (changed, ignored, restart []string) {
 			{"storage", x.Storage == y.Storage},
 			{"reader", x.Reader == y.Reader},
 			{"egress_upstream_env", x.EgressUpstreamEnv == y.EgressUpstreamEnv},
+			{"tun", x.Tun == y.Tun},
 		} {
 			if !f.same {
 				changed = append(changed, label+"."+f.name)
@@ -86,6 +92,39 @@ func diffPools(cur, next []PoolSpec) (changed, ignored, restart []string) {
 		}
 	}
 	return changed, ignored, restart
+}
+
+// diffTun reloads the exits, MTU, exit port and limits; the socket, the subnet, the VNI and the allocator need a restart, as does adding or dropping the block.
+func diffTun(cur, next *TunConfig) (changed, restart []string) {
+	switch {
+	case reflect.DeepEqual(cur, next):
+		return nil, nil
+	case cur == nil || next == nil:
+		return nil, []string{tunField}
+	}
+	for _, f := range []struct {
+		name          string
+		restart, same bool
+	}{
+		{"tun.subnet", true, cur.Prefix() == next.Prefix()},
+		{"tun.listen", true, cur.ListenAddr() == next.ListenAddr()},
+		{"tun.vni", true, cur.VNI == next.VNI},
+		{"tun.senders", true, cur.Senders == next.Senders},
+		{"tun.reuse_after_seconds", true, cur.ReuseAfterSeconds == next.ReuseAfterSeconds},
+		{"tun.port", false, cur.Port == next.Port},
+		{"tun.mtu", false, cur.MTU == next.MTU},
+		{"tun.exits", false, maps.Equal(cur.Exits, next.Exits)},
+		{"tun.limits", false, cur.Limits == next.Limits},
+	} {
+		switch {
+		case f.same:
+		case f.restart:
+			restart = append(restart, f.name)
+		default:
+			changed = append(changed, f.name)
+		}
+	}
+	return changed, restart
 }
 
 func targetsOf(s PoolSpec) [5]int {

@@ -8,6 +8,7 @@ import (
 	"slices"
 
 	"github.com/cocoonstack/sandbox/sandboxd/pool"
+	"github.com/cocoonstack/sandbox/sandboxd/tunnet"
 )
 
 func (s *Server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
@@ -94,6 +95,27 @@ func (s *Server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
 	} {
 		metric(row.name, "counter", row.help)
 		_, _ = fmt.Fprintf(w, "sandboxd_%s %d\n", row.name, row.value)
+	}
+	if st, ok := s.mgr.TunStats(); ok {
+		writeTunStats(w, metric, st)
+	}
+}
+
+func writeTunStats(w io.Writer, metric func(name, kind, help string), st tunnet.Stats) {
+	metric("tun_frames_total", "counter", "packet frames on the claims' vsock streams, by direction from the guest")
+	_, _ = fmt.Fprintf(w, "sandboxd_tun_frames_total{dir=\"out\"} %d\n", st.FramesIn)
+	_, _ = fmt.Fprintf(w, "sandboxd_tun_frames_total{dir=\"in\"} %d\n", st.FramesOut)
+	metric("tun_datagrams_total", "counter", "VXLAN datagrams on the underlay, by direction from the guest")
+	_, _ = fmt.Fprintf(w, "sandboxd_tun_datagrams_total{dir=\"out\"} %d\n", st.DgramsOut)
+	_, _ = fmt.Fprintf(w, "sandboxd_tun_datagrams_total{dir=\"in\"} %d\n", st.DgramsIn)
+	metric("tun_arp_total", "counter", "ARP replies to exits and gratuitous ARPs sent")
+	_, _ = fmt.Fprintf(w, "sandboxd_tun_arp_total{kind=\"answered\"} %d\n", st.ARPAnswered)
+	_, _ = fmt.Fprintf(w, "sandboxd_tun_arp_total{kind=\"announced\"} %d\n", st.ARPSent)
+	metric("tun_drops_total", "counter", "packets the tun path did not carry, by reason")
+	for i, n := range st.Drops {
+		if reason := tunnet.Drop(i).String(); reason != "" {
+			_, _ = fmt.Fprintf(w, "sandboxd_tun_drops_total{reason=%q} %d\n", reason, n)
+		}
 	}
 }
 

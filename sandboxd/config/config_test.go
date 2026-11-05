@@ -1,14 +1,17 @@
 package config
 
 import (
+	"net/netip"
 	"os"
 	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cocoonstack/sandbox/sandboxd/egress"
+	"github.com/cocoonstack/sandbox/sandboxd/tunnet"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
@@ -286,6 +289,61 @@ func TestLoadMoveConcurrency(t *testing.T) {
 		cfg, err := Load(writeConfig(t, body(tt.on, tt.mesh, tt.moves)))
 		if tt.want == "" && (err != nil || cfg.Movable() != tt.movable) || tt.want != "" && (err == nil || !strings.Contains(err.Error(), tt.want)) {
 			t.Errorf("%s: %v, want %q", name, err, tt.want)
+		}
+	}
+}
+
+func TestLoadTun(t *testing.T) {
+	t.Setenv("SANDBOX_TEST_DSN", "postgres://sandboxd@db/sandboxd")
+	block := func(over string) string {
+		return `"tun":{"subnet":"240.0.0.0/4","listen":"10.0.0.5:4789","exits":{"default":{"vtep":"10.0.0.9","mac":"02:aa:00:00:00:01"},"res":{"vtep":"10.0.0.10","mac":"02:aa:00:00:00:02"}}` + over + `}`
+	}
+	cfg := mustLoad(t, writeConfig(t, `{`+block("")+`,"pools":[{"template":"rt:24.04","tun":true}]}`))
+	tun := cfg.Tun
+	if tun.VNI != 1 || tun.Port != 4789 || tun.MTU != 1450 || tun.Senders != 4 || tun.ReuseAfter() != 120*time.Hour {
+		t.Errorf("defaults %+v, want vni 1, port 4789, mtu 1450, senders 4, reuse 120h", tun)
+	}
+	if tun.Prefix() != netip.MustParsePrefix("240.0.0.0/4") || tun.ListenAddr() != netip.MustParseAddrPort("10.0.0.5:4789") {
+		t.Errorf("prefix %s listen %s", tun.Prefix(), tun.ListenAddr())
+	}
+	o := tun.Overlay()
+	want := tunnet.Exit{VTEP: netip.MustParseAddr("10.0.0.10"), MAC: [6]byte{0x02, 0xaa, 0, 0, 0, 2}}
+	if o.Subnet != tun.Prefix() || o.VNI != 1 || o.Port != 4789 || o.MTU != 1450 || len(o.Exits) != 2 || o.Exits["res"] != want {
+		t.Errorf("overlay %+v", o)
+	}
+	if !cfg.Pools[0].Tun {
+		t.Error("pool tun not read")
+	}
+	meshed := `"api_token":"r","advertise_addr":"node1:7777","mesh":{"bind":"node1:7946"},`
+	cell := `"meta_store":{"kind":"pg","dsn_env":"SANDBOX_TEST_DSN","cell":"c1"},`
+	if _, err := Load(writeConfig(t, `{`+meshed+cell+block("")+`,"pools":[]}`)); err != nil {
+		t.Errorf("tun under a mesh with a cell: %v", err)
+	}
+	for name, tt := range map[string]struct{ body, want string }{
+		"pool without the block":  {`{"pools":[{"template":"rt:24.04","tun":true}]}`, "tun needs the node tun block"},
+		"egress lane pool":        {`{"bridges":["br0"],` + block("") + `,"pools":[{"template":"rt:24.04","net":"egress","tun":true}]}`, "tun needs net"},
+		"mesh without meta store": {`{` + meshed + block("") + `,"pools":[]}`, "requires meta_store with a cell"},
+		"mesh without a cell":     {`{` + meshed + `"meta_store":{"kind":"pg","dsn_env":"SANDBOX_TEST_DSN"},` + block("") + `,"pools":[]}`, "requires meta_store with a cell"},
+		"ipv6 subnet":             {`{` + strings.Replace(block(""), "240.0.0.0/4", "fd00::/8", 1) + `,"pools":[]}`, "IPv4 prefix"},
+		"subnet too wide":         {`{` + strings.Replace(block(""), "240.0.0.0/4", "0.0.0.0/3", 1) + `,"pools":[]}`, "between /4 and /24"},
+		"subnet too narrow":       {`{` + strings.Replace(block(""), "240.0.0.0/4", "10.1.2.0/25", 1) + `,"pools":[]}`, "between /4 and /24"},
+		"subnet over guests":      {`{` + strings.Replace(block(""), "240.0.0.0/4", "100.64.0.0/10", 1) + `,"pools":[]}`, "overlaps the guest range"},
+		"wildcard listen":         {`{` + strings.Replace(block(""), "10.0.0.5:4789", "0.0.0.0:4789", 1) + `,"pools":[]}`, "tun.listen"},
+		"listen without port":     {`{` + strings.Replace(block(""), "10.0.0.5:4789", "10.0.0.5", 1) + `,"pools":[]}`, "tun.listen"},
+		"vni past 24 bits":        {`{` + block(`,"vni":16777216`) + `,"pools":[]}`, "tun.vni"},
+		"mtu too small":           {`{` + block(`,"mtu":500`) + `,"pools":[]}`, "tun.mtu"},
+		"negative senders":        {`{` + block(`,"senders":-1`) + `,"pools":[]}`, "tun.senders"},
+		"negative reuse":          {`{` + block(`,"reuse_after_seconds":-1`) + `,"pools":[]}`, "reuse_after_seconds"},
+		"negative limit":          {`{` + block(`,"limits":{"max_flows":-1}`) + `,"pools":[]}`, "tun.limits"},
+		"no default exit":         {`{` + strings.Replace(block(""), `"default"`, `"main"`, 1) + `,"pools":[]}`, `"default" exit`},
+		"bad exit label":          {`{` + strings.Replace(block(""), `"res"`, `"two words"`, 1) + `,"pools":[]}`, "label"},
+		"ipv6 vtep":               {`{` + strings.Replace(block(""), "10.0.0.9", "fd00::9", 1) + `,"pools":[]}`, "vtep"},
+		"multicast mac":           {`{` + strings.Replace(block(""), "02:aa:00:00:00:01", "01:00:5e:00:00:01", 1) + `,"pools":[]}`, "unicast"},
+		"zero mac":                {`{` + strings.Replace(block(""), "02:aa:00:00:00:01", "00:00:00:00:00:00", 1) + `,"pools":[]}`, "unicast"},
+		"long mac":                {`{` + strings.Replace(block(""), "02:aa:00:00:00:01", "02:00:00:00:00:00:00:01", 1) + `,"pools":[]}`, "unicast"},
+	} {
+		if _, err := Load(writeConfig(t, tt.body)); err == nil || !strings.Contains(err.Error(), tt.want) {
+			t.Errorf("%s: %v, want an error containing %q", name, err, tt.want)
 		}
 	}
 }

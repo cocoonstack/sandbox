@@ -309,7 +309,7 @@ func (m *Manager) releaseResolved(ctx context.Context, id string, sb *types.Sand
 		m.mu.Lock()
 	}
 	volumeHolds := m.cancelVolumeRun(sb)
-	snap, ck, vmName := sb.HibernateSnap, sb.ArchiveCk, sb.VMName
+	snap, ck, vmName, tunAddr := sb.HibernateSnap, sb.ArchiveCk, sb.VMName, sb.TunAddr
 	if ck != "" {
 		m.pendingCks[ck] = struct{}{}
 	}
@@ -357,6 +357,7 @@ func (m *Manager) releaseResolved(ctx context.Context, id string, sb *types.Sand
 		}
 	}
 	m.out.Disarm(id, removed)
+	m.releaseTun(ctx, id, tunAddr)
 	m.dropSnap(ctx, snap)
 	return err
 }
@@ -577,6 +578,9 @@ func (m *Manager) finalizeBatch(ctx context.Context, sbs []*types.Sandbox, ttl t
 	if err == nil {
 		err = m.deliverEnv(ctx, sbs, inherited)
 	}
+	if err == nil {
+		m.assignTun(ctx, sbs)
+	}
 	m.mu.Lock()
 	m.dropHoldLocked(hold)
 	if err == nil {
@@ -585,6 +589,7 @@ func (m *Manager) finalizeBatch(ctx context.Context, sbs []*types.Sandbox, ttl t
 	if err != nil {
 		m.mu.Unlock()
 		for _, sb := range sbs {
+			m.releaseTun(ctx, sb.ID, sb.TunAddr)
 			// The rw mount dirtied the journal, so the clean umount is still owed
 			td := m.quiesceVolumes(ctx, sb)
 			m.removeOrRetry(ctx, sb.VMName, "", td)
@@ -640,6 +645,7 @@ func (m *Manager) rollbackClaim(ctx context.Context, sbs []*types.Sandbox) {
 		td := m.quiesceVolumes(ctx, sb)
 		td.holds = holds[i]
 		m.out.Disarm(sb.ID, m.removeOrRetry(ctx, sb.VMName, sb.ID, td))
+		m.releaseTun(ctx, sb.ID, sb.TunAddr)
 	}
 }
 

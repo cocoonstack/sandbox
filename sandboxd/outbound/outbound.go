@@ -18,14 +18,17 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/config"
 	"github.com/cocoonstack/sandbox/sandboxd/egress"
 	"github.com/cocoonstack/sandbox/sandboxd/netfilter"
+	"github.com/cocoonstack/sandbox/sandboxd/tunnet"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
-// Engine is the VM engine surface the host needs: a VM's tap, and a guest's lane verdict and egress root.
+// Engine is the VM engine surface the host needs: a VM's tap, a guest's lane verdict and egress root, and its tun0.
 type Engine interface {
 	Inspect(ctx context.Context, name string) (types.VMRecord, bool, error)
 	MarkLane(ctx context.Context, vsockSocket string, lane types.NetRoute) error
 	InstallCACert(ctx context.Context, vsockSocket string, certPEM []byte) error
+	TunUp(ctx context.Context, vsockSocket string) error
+	TunDown(ctx context.Context, vsockSocket string) error
 }
 
 // TapFunc applies or drops the nft lock on one tap.
@@ -47,6 +50,12 @@ type Options struct {
 	LockNIC    bool
 	RecordEnds bool
 	NoRxSplice bool
+	// Router carries the advanced network mode; nil when the node has no tun block.
+	Router *tunnet.Router
+	// Flow records one ended tun flow; TunBytes takes a disarmed claim's tun byte count back; TunOn reads the claim's tun switch under the owner's lock.
+	Flow     func(ctx context.Context, id, tenant, profile string, r tunnet.FlowRecord)
+	TunBytes func(sb *types.Sandbox, used int64)
+	TunOn    func(sb *types.Sandbox) bool
 	// Dial, Verdict, Lock, Unlock, Sweep and Nameservers default to the internal-address guard, netfilter and /etc/resolv.conf; tests swap them.
 	Dial        egress.DialFunc
 	Verdict     VerdictFunc
@@ -107,9 +116,11 @@ func (h *Host) ArmProxy(ctx context.Context, sb *types.Sandbox) error {
 	d, displaced := h.prebound[sb.VMName], h.doors[sb.ID]
 	delete(h.prebound, sb.VMName)
 	delete(h.doors, sb.ID)
+	stale := displaced.takeTun()
 	h.mu.Unlock()
 	if displaced != nil {
 		displaced.close()
+		h.dropTun(stale)
 	}
 	v := h.o.View()
 	policy, ok := v.Resolve(sb)
@@ -162,6 +173,7 @@ func (h *Host) ArmProxy(ctx context.Context, sb *types.Sandbox) error {
 		go d.resolver.serve(d.dns, false)
 		go d.resolver.serve(d.dnsGram, true)
 	}
+	h.armTun(ctx, sb, d, v, c)
 	return nil
 }
 
@@ -203,9 +215,11 @@ func (h *Host) Disarm(id string, removed bool) {
 		tap = h.taps[id]
 		delete(h.taps, id)
 	}
+	t := d.takeTun()
 	h.mu.Unlock()
 	if d != nil {
 		d.close()
+		h.dropTun(t)
 	}
 	if tap != "" {
 		_ = h.o.Unlock(tap)
@@ -228,13 +242,23 @@ func (h *Host) ResolvedName(id string, ip netip.Addr) (string, bool) {
 	return d.resolver.name(ip)
 }
 
-// Reloaded follows a view swap: live proxies drop their pooled connections.
+// Reloaded follows a view swap: live proxies drop their pooled connections, and claims of a pool whose tun switch went off lose their packet path.
 func (h *Host) Reloaded() {
+	v := h.o.View()
+	var off []*tunDoor
 	h.mu.Lock()
 	live := slices.Collect(maps.Values(h.doors))
+	for _, d := range live {
+		if d.tun != nil && !v.Tun(d.tun.sb.PolicyKey()) {
+			off = append(off, d.takeTun())
+		}
+	}
 	h.mu.Unlock()
 	for _, d := range live {
 		d.proxy.ResetPools()
+	}
+	for _, t := range off {
+		h.dropTun(t)
 	}
 }
 

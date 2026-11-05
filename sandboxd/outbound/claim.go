@@ -20,7 +20,7 @@ const upstreamDirect = "direct"
 
 type resolvedPolicy struct {
 	view *View
-	eval egress.Evaluator
+	eval egress.PolicyEvaluator
 }
 
 type connBucket struct {
@@ -42,7 +42,7 @@ type claim struct {
 	bucket atomic.Pointer[connBucket]
 }
 
-func newClaim(h *Host, sb *types.Sandbox, v *View, eval egress.Evaluator) *claim {
+func newClaim(h *Host, sb *types.Sandbox, v *View, eval egress.PolicyEvaluator) *claim {
 	c := &claim{h: h, sb: sb}
 	c.cur.Store(&resolvedPolicy{view: v, eval: eval})
 	return c
@@ -141,7 +141,7 @@ func (c *claim) limiter(r config.EgressConnRate) *rate.Limiter {
 }
 
 // current denies everything once a reload leaves the claim with no policy.
-func (c *claim) current() egress.Evaluator {
+func (c *claim) current() egress.PolicyEvaluator {
 	v := c.h.o.View()
 	if r := c.cur.Load(); r.view == v {
 		return r.eval

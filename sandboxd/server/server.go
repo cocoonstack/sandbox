@@ -24,6 +24,7 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/pool"
 	"github.com/cocoonstack/sandbox/sandboxd/store/peer"
 	"github.com/cocoonstack/sandbox/sandboxd/tenants"
+	"github.com/cocoonstack/sandbox/sandboxd/tunnet"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 	"github.com/cocoonstack/sandbox/sandboxd/usage"
 )
@@ -67,6 +68,7 @@ var poolErrHTTP = []struct {
 	{pool.ErrNoEgress, http.StatusConflict, ""},
 	{pool.ErrNoEgressHibernate, http.StatusConflict, ""},
 	{pool.ErrNoEgressFork, http.StatusConflict, ""},
+	{pool.ErrTunOffPromote, http.StatusConflict, ""},
 	{pool.ErrVolumeCapture, http.StatusConflict, ""},
 	{pool.ErrVolumeBusy, http.StatusConflict, ""},
 	{pool.ErrVolumeRegistrationConflict, http.StatusConflict, pool.ErrVolumeRegistrationConflict.Error()},
@@ -116,6 +118,8 @@ type Manager interface {
 	SetEnv(ctx context.Context, id string, env types.Env, tenant string) error
 	PatchEnv(ctx context.Context, id string, patch types.EnvPatch, tenant string) error
 	Env(id, tenant string) (types.Env, error)
+	SetTun(ctx context.Context, id string, enabled *bool, profile *string) error
+	TunStats() (tunnet.Stats, bool)
 	Audit(ctx context.Context, id string, line []byte)
 	AuditEnabled() bool
 	ClaimCheckpoint(ctx context.Context, ckptID string, o pool.ClaimOptions) (*types.Sandbox, error)
@@ -227,6 +231,12 @@ type SandboxEnvPatch struct {
 	Env types.EnvPatch `json:"env"`
 }
 
+// SandboxTun is the wire body of PUT /v1/sandboxes/{id}/tun; an omitted field keeps the claim's value, and an empty profile means "default".
+type SandboxTun struct {
+	Enabled *bool   `json:"enabled,omitempty"`
+	Profile *string `json:"profile,omitempty"`
+}
+
 // TenantsRequest is the wire body of PUT /v1/tenants: the whole tenant set, an entry without a token keeping that tenant's.
 type TenantsRequest struct {
 	Tenants []tenants.TenantSpec `json:"tenants"`
@@ -324,6 +334,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/sandboxes/{id}", s.requireRoot(s.handleSandbox))
 	mux.HandleFunc("GET /v1/sandboxes/{id}/stats", s.requireRoot(s.handleSandboxStats))
 	mux.HandleFunc("PUT /v1/sandboxes/{id}/instance-metadata", s.requireRoot(s.handleInstanceMetadata))
+	mux.HandleFunc("PUT /v1/sandboxes/{id}/tun", s.requireRoot(s.handleSetTun))
 	mux.HandleFunc("GET /v1/sandboxes/{id}/env", s.requireToken(s.handleGetEnv))
 	mux.HandleFunc("PUT /v1/sandboxes/{id}/env", s.requireToken(s.handleSetEnv))
 	mux.HandleFunc("PATCH /v1/sandboxes/{id}/env", s.requireToken(s.handlePatchEnv))
@@ -603,6 +614,20 @@ func (s *Server) handlePatchEnv(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	err := s.mgr.PatchEnv(r.Context(), id, req.Env, tenantFrom(r.Context()))
 	writeResult(w, r, "env", id, "patch env failed", err, noContent(w))
+}
+
+func (s *Server) handleSetTun(w http.ResponseWriter, r *http.Request) {
+	req, ok := decodeBodyStrict[SandboxTun](w, r)
+	if !ok {
+		return
+	}
+	if p := req.Profile; p != nil && *p != "" && !types.NameRe.MatchString(*p) {
+		writeErr(w, http.StatusBadRequest, fmt.Sprintf("profile %q must match %s", *p, types.NameRe))
+		return
+	}
+	id := r.PathValue("id")
+	err := s.mgr.SetTun(r.Context(), id, req.Enabled, req.Profile)
+	writeResult(w, r, "tun", id, "set tun failed", err, noContent(w))
 }
 
 func (s *Server) handleSandboxVerb(verb string, do func(ctx context.Context, id string, cred pool.Cred) error) http.HandlerFunc {

@@ -51,6 +51,9 @@ func (m *Manager) Promote(ctx context.Context, id string, cred Cred, template, t
 	if !sb.Key.Capturable() {
 		return types.PoolKey{}, "", ErrNoEgressFork
 	}
+	if sb.TunOff {
+		return types.PoolKey{}, "", ErrTunOffPromote
+	}
 	if err := m.diskErr(); err != nil {
 		return types.PoolKey{}, "", fmt.Errorf("promote %s: %w", sb.ID, err)
 	}

@@ -8,6 +8,7 @@ import (
 	"maps"
 	"net/netip"
 	"slices"
+	"strconv"
 	"sync/atomic"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 
 	"github.com/cocoonstack/sandbox/sandboxd/egress"
 	"github.com/cocoonstack/sandbox/sandboxd/outbound"
+	"github.com/cocoonstack/sandbox/sandboxd/tunnet"
 	"github.com/cocoonstack/sandbox/sandboxd/usage"
 )
 
@@ -22,9 +24,11 @@ const (
 	// AuditLineCap bounds how much of a relayed request frame the audit tap captures and records.
 	AuditLineCap = 4096
 
-	egressEvent = "egress"
-	dnsEvent    = "dns"
-	reapEvent   = "reap"
+	egressEvent  = "egress"
+	dnsEvent     = "dns"
+	reapEvent    = "reap"
+	tunFlowEvent = "tun_flow"
+	tunFlowPath  = "tun"
 )
 
 // ClaimBuckets are the upper bounds of the claim latency histogram.
@@ -136,6 +140,20 @@ type dnsFrame struct {
 	Tenant   string `json:"tenant,omitempty"`
 }
 
+type tunFlowFrame struct {
+	Op       string         `json:"op"`
+	Path     string         `json:"path"`
+	Tenant   string         `json:"tenant,omitempty"`
+	Proto    string         `json:"proto"`
+	Dst      netip.AddrPort `json:"dst_addr"`
+	Decision string         `json:"decision"`
+	Sent     int64          `json:"sent"`
+	Received int64          `json:"received"`
+	Start    time.Time      `json:"start"`
+	End      time.Time      `json:"end"`
+	Profile  string         `json:"profile"`
+}
+
 func (m *Manager) Counters() Counters {
 	c := &m.counters
 	warm, clone, cold := c.claimWarmLatency.snapshot(), c.claimCloneLatency.snapshot(), c.claimColdLatency.snapshot()
@@ -242,6 +260,25 @@ func (m *Manager) recordDNS(ctx context.Context, id, tenant string, ev outbound.
 	}{time.Now(), id, dnsFrame{Op: dnsEvent, Name: ev.Name, Type: ev.Type, Answers: ev.Answers, Decision: ev.Decision, Tenant: tenant}})
 }
 
+func (m *Manager) recordTunFlow(ctx context.Context, id, tenant, profile string, r tunnet.FlowRecord) {
+	if m.audit == nil {
+		return
+	}
+	decision := "deny"
+	if r.Allowed {
+		decision = "allow"
+	}
+	m.appendAudit(ctx, struct {
+		Time time.Time `json:"t"`
+		ID   string    `json:"id"`
+		tunFlowFrame
+	}{
+		Time: r.End, ID: id,
+		Op: tunFlowEvent, Path: tunFlowPath, Tenant: tenant, Proto: protoName(r.Proto), Dst: netip.AddrPortFrom(r.Dst, r.Port),
+		Decision: decision, Sent: r.Up, Received: r.Down, Start: r.Start, End: r.End, Profile: cmp.Or(profile, "default"),
+	})
+}
+
 func (m *Manager) recordUsage(ctx context.Context, ev usage.Event) {
 	ev.Time = cmp.Or(ev.Time, time.Now())
 	if err := m.usage.append(ev); err != nil {
@@ -260,4 +297,17 @@ func memberwiseFrame(line []byte) requestFrame {
 		_ = json.Unmarshal(append(append(append(member, ':'), v...), '}'), &frame)
 	}
 	return frame
+}
+
+func protoName(proto uint8) string {
+	switch proto {
+	case tunnet.ProtoTCP:
+		return "tcp"
+	case tunnet.ProtoUDP:
+		return "udp"
+	case tunnet.ProtoICMP:
+		return "icmp"
+	default:
+		return strconv.Itoa(int(proto))
+	}
 }

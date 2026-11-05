@@ -127,6 +127,10 @@ func (f *fakeEngine) ImageIDs(context.Context) (map[string]string, error) { retu
 
 func (f *fakeEngine) WriteInstanceMetadata(context.Context, string, []byte) error { return nil }
 
+func (f *fakeEngine) TunUp(context.Context, string) error { return nil }
+
+func (f *fakeEngine) TunDown(context.Context, string) error { return nil }
+
 func (f *fakeEngine) WriteGuestEnv(_ context.Context, vsockSocket string, doc []byte) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
