@@ -101,7 +101,7 @@ func TestInterruptedCaptureDoesNothingUntilTheCLIExits(t *testing.T) {
 
 func TestInterruptedCaptureNeverStartsAVMThatStoppedMeanwhile(t *testing.T) {
 	eng := newFakeEngine()
-	eng.inspectHook = func() {
+	eng.captureHook = func() {
 		eng.mu.Lock()
 		defer eng.mu.Unlock()
 		eng.vmStates[interruptedVM] = "stopped"
@@ -120,7 +120,7 @@ func TestInterruptedCaptureNeverStartsAVMThatStoppedMeanwhile(t *testing.T) {
 
 func TestInterruptedCaptureDoesNotStopAVMThatStoppedMeanwhile(t *testing.T) {
 	eng := newFakeEngine()
-	eng.inspectHook = func() {
+	eng.captureHook = func() {
 		eng.mu.Lock()
 		defer eng.mu.Unlock()
 		eng.vmStates[interruptedVM] = "stopped"
@@ -134,7 +134,7 @@ func TestInterruptedCaptureDoesNotStopAVMThatStoppedMeanwhile(t *testing.T) {
 
 func TestInterruptedCaptureDropsASaveSnapshotListedAfterTheSweep(t *testing.T) {
 	eng := newFakeEngine()
-	eng.inspectHook = func() {
+	eng.captureHook = func() {
 		eng.mu.Lock()
 		defer eng.mu.Unlock()
 		eng.snapshots = append(eng.snapshots, interruptedSave)
@@ -159,6 +159,33 @@ func TestInterruptedCaptureKeepsTheIntentWhenStopFails(t *testing.T) {
 	if sb.PendingSnap != interruptedHib || sb.HibernateSnap != "" || eng.snapRemoved(interruptedHib) {
 		t.Errorf("intent %q snap %q, want the intent and its snapshot kept, not adopted", sb.PendingSnap, sb.HibernateSnap)
 	}
+}
+
+func TestAWakeAfterAFailedSettleResumesTheGuestBeforeClearingTheIntent(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		eng := newFakeEngine()
+		eng.snapListErr = errors.New("cocoon unreachable")
+		m, sb := reconcileInterrupted(t, eng, interruptedHib, "", nil)
+		time.Sleep(captureResumeBudget + 2*captureResumeRetry)
+		synctest.Wait()
+		if row := journaled(t, m)[sb.ID]; row.PendingSnap != interruptedHib || len(eng.starts) != 0 {
+			t.Fatalf("intent %q starts %q, want the intent kept after the settle gave up", row.PendingSnap, eng.starts)
+		}
+		eng.mu.Lock()
+		eng.snapListErr = nil
+		eng.mu.Unlock()
+		if _, _, release, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
+			t.Fatalf("wake: %v", err)
+		} else {
+			release()
+		}
+		if !slices.Equal(eng.starts, []string{interruptedVM}) {
+			t.Errorf("starts %q, want the paused guest resumed before the intent goes", eng.starts)
+		}
+		if row := journaled(t, m)[sb.ID]; row.PendingSnap != "" {
+			t.Errorf("intent %q kept after the guest resumed", row.PendingSnap)
+		}
+	})
 }
 
 func TestInterruptedCaptureRetriesWhileTheDumpRuns(t *testing.T) {
@@ -223,15 +250,17 @@ func TestInterruptedCaptureKeepsItsIntentWhenStopping(t *testing.T) {
 }
 
 func TestAFailedHibernateResumesTheGuest(t *testing.T) {
-	for _, inspectFails := range []int{0, 2} {
+	for _, listFails := range []int{0, 3} {
 		synctest.Test(t, func(t *testing.T) {
 			eng := newFakeEngine()
 			m := newTestManager(t, eng)
 			sb := mustClaim(t, m, testKey)
-			eng.hibernateErr, eng.inspectFails = errors.New("signal: killed"), inspectFails
+			eng.hibernateErr, eng.listFails = errors.New("signal: killed"), listFails
 			if err := m.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err == nil {
 				t.Fatal("Hibernate reported success")
 			}
+			time.Sleep(time.Duration(listFails+1) * captureResumeRetry)
+			synctest.Wait()
 			if !slices.Equal(eng.starts, []string{sb.VMName}) {
 				t.Errorf("starts %q, want the guest resumed", eng.starts)
 			}
@@ -239,12 +268,33 @@ func TestAFailedHibernateResumesTheGuest(t *testing.T) {
 	}
 }
 
+func TestAFailedCaptureAnswersWithoutWaitingForTheGuest(t *testing.T) {
+	eng := newFakeEngine()
+	eng.captureStall = make(chan struct{})
+	m := newTestManager(t, eng)
+	sb := mustClaim(t, m, testKey)
+	eng.hibernateErr = errors.New("signal: killed")
+	done := make(chan error, 1)
+	go func() { done <- m.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}) }()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("Hibernate reported success")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("the API waited on a capture that is still exiting")
+	}
+	close(eng.captureStall)
+	waitStarted(t, eng, 1)
+	waitSettled(t, sb)
+}
+
 func TestAFailedHibernateNeverStartsAStoppedVM(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
 	sb := mustClaim(t, m, testKey)
 	eng.hibernateErr = errors.New("signal: killed")
-	eng.inspectHook = func() {
+	eng.captureHook = func() {
 		eng.mu.Lock()
 		defer eng.mu.Unlock()
 		eng.stopped[sb.VMName] = true
@@ -252,6 +302,12 @@ func TestAFailedHibernateNeverStartsAStoppedVM(t *testing.T) {
 	if err := m.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err == nil {
 		t.Fatal("Hibernate reported success")
 	}
+	waitFor(t, func() bool {
+		eng.mu.Lock()
+		defer eng.mu.Unlock()
+		return len(eng.captureWaits) == 1
+	})
+	waitSettled(t, sb)
 	if len(eng.starts) != 0 {
 		t.Errorf("starts %q on a stopped VM: a silent cold boot", eng.starts)
 	}
@@ -296,6 +352,8 @@ func TestAFailedCaptureKeepsItsIntentWhileSandboxdStops(t *testing.T) {
 			if err := tt.capture(m, sb, eng); err == nil {
 				t.Fatal("the capture reported success")
 			}
+			waitStarted(t, eng, 1)
+			waitSettled(t, sb)
 			if err := m.FlushClaims(); err != nil {
 				t.Fatalf("flush: %v", err)
 			}
@@ -338,9 +396,17 @@ func TestASaveJournalsItsIntentAndAFailureResumesTheGuest(t *testing.T) {
 	if err := <-done; err == nil {
 		t.Fatal("sourceSnap reported success")
 	}
-	if !slices.Equal(eng.starts, []string{sb.VMName}) || sb.SaveSnap != "" {
-		t.Errorf("starts %q intent %q, want the guest resumed and the intent cleared", eng.starts, sb.SaveSnap)
-	}
+	waitStarted(t, eng, 1)
+	waitFor(t, func() bool { return journaled(t, m)[sb.ID].SaveSnap == "" })
+}
+
+func waitStarted(t *testing.T, eng *fakeEngine, n int) {
+	t.Helper()
+	waitFor(t, func() bool {
+		eng.mu.Lock()
+		defer eng.mu.Unlock()
+		return len(eng.starts) >= n
+	})
 }
 
 func waitSettled(t *testing.T, sb *types.Sandbox) {

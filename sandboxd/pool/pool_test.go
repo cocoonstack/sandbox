@@ -1266,10 +1266,11 @@ type fakeEngine struct {
 	captureWaits          []string
 	vmStates              map[string]string
 	startFails            int
-	inspectFails          int
 	stopErr               error
 	hibernateLeavesVMM    bool
 	captureStall          chan struct{}
+	captureHook           func()
+	listFails             int
 	restoreErr            error
 	restoreStall          chan struct{}
 	snapSaveStall         chan struct{}
@@ -1453,10 +1454,13 @@ func (f *fakeEngine) Stop(_ context.Context, name string) error {
 func (f *fakeEngine) WaitCapture(_ context.Context, snap string) error {
 	f.mu.Lock()
 	f.captureWaits = append(f.captureWaits, snap)
-	stall := f.captureStall
+	stall, hook := f.captureStall, f.captureHook
 	f.mu.Unlock()
 	if stall != nil {
 		<-stall
+	}
+	if hook != nil {
+		hook()
 	}
 	return nil
 }
@@ -1632,14 +1636,7 @@ func (f *fakeEngine) Inspect(ctx context.Context, name string) (types.VMRecord, 
 	f.inspects++
 	hook := f.inspectHook
 	f.inspectHook = nil
-	failing := f.inspectFails > 0
-	if failing {
-		f.inspectFails--
-	}
 	f.mu.Unlock()
-	if failing {
-		return types.VMRecord{}, false, errors.New("cocoon vm inspect: signal: killed")
-	}
 	if hook != nil {
 		hook()
 	}
@@ -1960,6 +1957,10 @@ func (f *fakeEngine) MigrateAbort(_ context.Context, vmName, series string) erro
 func (f *fakeEngine) list(_ context.Context) ([]types.VMRecord, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.listFails > 0 {
+		f.listFails--
+		return nil, errors.New("cocoon vm list: signal: killed")
+	}
 	var vms []types.VMRecord
 	for name, sock := range f.vms {
 		sock = f.lateVsock(sock)

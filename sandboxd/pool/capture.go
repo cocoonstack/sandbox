@@ -33,7 +33,7 @@ func (m *Manager) sourceSnap(ctx context.Context, sb *types.Sandbox) (string, fu
 		return "", nil, fmt.Errorf("save %s: persist intent: %w", sb.ID, err)
 	}
 	if err := m.eng.SnapshotSave(ctx, sb.VMName, snap); err != nil {
-		_, settleErr := m.settleCapture(ctx, sb)
+		_, settleErr := m.settleFailedCapture(ctx, sb)
 		return "", nil, errors.Join(err, settleErr)
 	}
 	if _, err := m.commitIfLive(ctx, sb, func() { sb.SaveSnap = "" }); err != nil {

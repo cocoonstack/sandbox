@@ -27,48 +27,80 @@ func (m *Manager) settleInterrupted(ctx context.Context, sb *types.Sandbox) {
 	snap := cmp.Or(sb.PendingSnap, sb.SaveSnap)
 	m.mu.Unlock()
 	logger.Warnf(ctx, "%s has an interrupted capture %s; holding it until the capture exits", sb.ID, snap)
-	if _, err := m.settleCapture(ctx, sb); err != nil {
+	if err := m.settleCapture(ctx, sb); err != nil {
 		logger.Warnf(ctx, "%s keeps its capture intent for the next start: %v", sb.ID, err)
 		return
 	}
 	logger.Infof(ctx, "%s settled its interrupted capture", sb.ID)
 }
 
-func (m *Manager) settleCapture(ctx context.Context, sb *types.Sandbox) (adopted bool, err error) {
+func (m *Manager) settleCapture(ctx context.Context, sb *types.Sandbox) (err error) {
 	m.mu.Lock()
 	pending, saved, vmName, sock := sb.PendingSnap, sb.SaveSnap, sb.VMName, sb.VsockSocket
 	m.mu.Unlock()
-	if err = m.eng.WaitCapture(ctx, cmp.Or(pending, saved)); err != nil {
-		return false, err
+	if pending == "" && saved == "" {
+		return nil
 	}
-	var rec types.VMRecord
+	if err = m.eng.WaitCapture(ctx, cmp.Or(pending, saved)); err != nil {
+		return err
+	}
+	var running bool
+	var snaps []string
 	err = retryCapture(ctx, func() (bool, error) {
-		var inspectErr error
-		rec, _, inspectErr = m.eng.Inspect(ctx, vmName)
-		return false, inspectErr
+		var readErr error
+		running, snaps, readErr = m.readCapture(ctx, vmName)
+		return false, readErr
 	})
 	if err != nil {
-		return false, err
+		return err
 	}
-	snaps, err := m.eng.SnapshotList(ctx)
-	if err != nil {
-		return false, err
-	}
-	running := rec.State == vmStateRunning
-	switch {
-	// A listed hibernate snapshot is the guest as it last ran, so it is the wake image in any VMM state
-	case pending != "" && slices.Contains(snaps, pending):
-		if running {
-			if err = m.eng.Stop(ctx, vmName); err != nil {
-				return false, err
-			}
-		}
-	case running:
+	listed := pending != "" && slices.Contains(snaps, pending)
+	if !listed && running {
 		if err = m.resumeGuest(ctx, sb, sock); err != nil {
 			if ctx.Err() != nil || errors.Is(err, engine.ErrStopping) {
-				return false, err
+				return err
 			}
 			m.failLocked(ctx, sb, fmt.Sprintf("capture stopped short: guest did not resume: %v", err))
+		}
+	}
+	_, err = m.finishCapture(ctx, sb, running && listed, saved, snaps)
+	return err
+}
+
+func (m *Manager) settleFailedCapture(ctx context.Context, sb *types.Sandbox) (adopted bool, err error) {
+	m.mu.Lock()
+	pending, saved, vmName := sb.PendingSnap, sb.SaveSnap, sb.VMName
+	m.mu.Unlock()
+	running, snaps, err := m.readCapture(ctx, vmName)
+	if err == nil && pending != "" && slices.Contains(snaps, pending) {
+		return m.finishCapture(ctx, sb, running, saved, snaps)
+	}
+	go func() {
+		sb.Transition.Lock()
+		m.settleInterrupted(context.WithoutCancel(ctx), sb)
+	}()
+	return false, err
+}
+
+func (m *Manager) readCapture(ctx context.Context, vmName string) (running bool, snaps []string, err error) {
+	vms, err := m.eng.List(ctx)
+	if err != nil {
+		return false, nil, err
+	}
+	snaps, err = m.eng.SnapshotList(ctx)
+	if err != nil {
+		return false, nil, err
+	}
+	return slices.ContainsFunc(vms, func(vm types.VMRecord) bool {
+		return vm.Config.Name == vmName && vm.State == vmStateRunning
+	}), snaps, nil
+}
+
+func (m *Manager) finishCapture(ctx context.Context, sb *types.Sandbox, stop bool, saved string, snaps []string) (adopted bool, err error) {
+	// A listed hibernate snapshot is the guest as it last ran, so it is the wake image in any VMM state
+	if stop {
+		if err = m.eng.Stop(ctx, sb.VMName); err != nil {
+			return false, err
 		}
 	}
 	adopted, err = m.settlePendingSnap(ctx, sb)

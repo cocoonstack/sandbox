@@ -83,7 +83,7 @@ func (m *Manager) hibernateLocked(ctx context.Context, sb *types.Sandbox) error 
 		// cocoon resumes the guest before its fresh tap can be re-locked
 		return ErrNoEgressHibernate
 	}
-	if _, err := m.settlePendingSnap(ctx, sb); err != nil {
+	if err := m.settleCapture(ctx, sb); err != nil {
 		return err
 	}
 	if sb.HibernateSnap != "" {
@@ -122,7 +122,7 @@ func (m *Manager) hibernateLocked(ctx context.Context, sb *types.Sandbox) error 
 	m.mu.Unlock()
 	if hibErr := m.eng.Hibernate(ctx, sb.VMName, snap); hibErr != nil {
 		// The engine can report failure after the snapshot landed
-		adopted, settleErr := m.settleCapture(ctx, sb)
+		adopted, settleErr := m.settleFailedCapture(ctx, sb)
 		if adopted {
 			if settleErr != nil {
 				return fmt.Errorf("hibernate %s: persist claims: %w", sb.ID, settleErr)
@@ -169,7 +169,7 @@ func (m *Manager) wakeOrRead(ctx context.Context, sb *types.Sandbox, readerOK bo
 	if sb.Failed != "" {
 		return "", fmt.Errorf("%w: %s", ErrFailed, sb.Failed)
 	}
-	if _, err := m.settlePendingSnap(ctx, sb); err != nil {
+	if err := m.settleCapture(ctx, sb); err != nil {
 		return "", fmt.Errorf("wake %s: %w", sb.ID, err)
 	}
 	if sb.HibernateSnap == "" {
