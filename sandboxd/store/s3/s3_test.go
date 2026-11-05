@@ -914,15 +914,13 @@ func TestOnlyALabeledStoreReadsLabelsWhenListing(t *testing.T) {
 	}
 }
 
-func TestConfiguredConcurrencyBoundsChunkTransfersAndKeepsTheirConnections(t *testing.T) {
+func TestRaisedConcurrencyReachesItsLimitAndKeepsItsConnections(t *testing.T) {
 	const (
-		id      = "ck_00000000000000b1"
-		chunks  = 12
-		uploads = 2
-		fetches = chunks
+		id     = "ck_00000000000000b1"
+		chunks = 12
 	)
 	gate := &chunkGate{fake: &fakeS3{objects: map[string][]byte{}}, conns: map[string]struct{}{}}
-	st := newTestStoreAt(t, gate, store.S3Config{UploadConcurrency: uploads, FetchConcurrency: fetches})
+	st := newTestStoreAt(t, gate, store.S3Config{UploadConcurrency: chunks, FetchConcurrency: chunks})
 	writes := map[int64][]byte{}
 	for i := range int64(chunks) {
 		writes[i*store.DigestChunkSize] = []byte{byte(i + 1)}
@@ -930,15 +928,15 @@ func TestConfiguredConcurrencyBoundsChunkTransfersAndKeepsTheirConnections(t *te
 	staging, src := stageSparseRecord(t, st, id, metaJSON(id), chunks*store.DigestChunkSize, writes)
 	srcSum := fileSum(t, src)
 
-	gate.arm(http.MethodPut, uploads)
+	gate.arm(http.MethodPut, chunks)
 	if err := st.Publish(t.Context(), staging, id, ""); err != nil {
 		t.Fatalf("Publish: %v", err)
 	}
-	if peak, _ := gate.result(); peak != uploads {
-		t.Errorf("chunk PUTs in flight = %d, want %d", peak, uploads)
+	if peak, _ := gate.result(); peak != chunks {
+		t.Errorf("chunk PUTs in flight = %d, want %d", peak, chunks)
 	}
 	for round := range 2 {
-		gate.arm(http.MethodGet, fetches)
+		gate.arm(http.MethodGet, chunks)
 		dst := filepath.Join(t.TempDir(), "disk.img")
 		if err := st.FetchFile(t.Context(), id, "disk.img", dst); err != nil {
 			t.Fatalf("FetchFile round %d: %v", round, err)
@@ -947,8 +945,8 @@ func TestConfiguredConcurrencyBoundsChunkTransfersAndKeepsTheirConnections(t *te
 			t.Fatalf("FetchFile round %d: content differs from the source", round)
 		}
 		peak, opened := gate.result()
-		if peak != fetches {
-			t.Errorf("round %d: chunk GETs in flight = %d, want %d", round, peak, fetches)
+		if peak != chunks {
+			t.Errorf("round %d: chunk GETs in flight = %d, want %d", round, peak, chunks)
 		}
 		if round == 1 && opened != 0 {
 			t.Errorf("second fetch opened %d connections, want every one reused from the idle pool", opened)
