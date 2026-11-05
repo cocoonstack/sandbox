@@ -58,8 +58,9 @@ type Options struct {
 
 // Host holds every sandbox's doors and NIC lock; it guards its own state, never the caller's.
 type Host struct {
-	o    Options
-	self atomic.Pointer[[]netip.Addr]
+	o            Options
+	self         atomic.Pointer[[]netip.Addr]
+	dnsMalformed atomic.Uint64
 
 	mu       sync.Mutex
 	doors    map[string]*doors
@@ -208,6 +209,11 @@ func (h *Host) Disarm(id string, removed bool) {
 	if tap != "" {
 		_ = h.o.Unlock(tap)
 	}
+}
+
+// DNSMalformed counts guest DNS queries dropped as malformed, with the connection that carried each.
+func (h *Host) DNSMalformed() uint64 {
+	return h.dnsMalformed.Load()
 }
 
 // ResolvedName is the name sandbox id's guest last resolved to ip, while that answer's TTL holds.

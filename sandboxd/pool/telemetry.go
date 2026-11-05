@@ -60,6 +60,8 @@ type Counters struct {
 
 	ClaimNanos uint64
 	WakeNanos  uint64
+
+	DNSMalformed uint64
 }
 
 type counters struct {
@@ -153,6 +155,7 @@ func (m *Manager) Counters() Counters {
 		ArchiveDeletes: c.archiveDeletes.Load(),
 		ClaimNanos:     warm.Nanos + clone.Nanos + cold.Nanos,
 		WakeNanos:      c.wakeNanos.Load(),
+		DNSMalformed:   m.out.DNSMalformed(),
 
 		ClaimWarmLatency:  warm,
 		ClaimCloneLatency: clone,

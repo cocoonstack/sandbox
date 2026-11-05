@@ -67,6 +67,10 @@ jobs:
       - name: Test
         run: make go-test
 
+      - name: Fuzz the guest DNS door
+        working-directory: sandboxd
+        run: GOWORK=off go test -run '^$' -fuzz '^FuzzDNSDoor$' -fuzztime 60s ./outbound/
+
       - name: Test the PostgreSQL meta store
         working-directory: sandboxd
         shell: bash

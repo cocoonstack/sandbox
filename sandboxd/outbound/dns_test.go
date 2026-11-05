@@ -1,6 +1,7 @@
 package outbound
 
 import (
+	"bytes"
 	"context"
 	"net"
 	"net/netip"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"golang.org/x/net/dns/dnsmessage"
+	"golang.org/x/time/rate"
 
 	"github.com/cocoonstack/sandbox/sandboxd/egress"
 	"github.com/cocoonstack/sandbox/sandboxd/engine"
@@ -83,8 +85,8 @@ func TestDNSDoorDropsInternalAnswersAndRemembersTheRest(t *testing.T) {
 		if got := addresses(msg); !slices.Equal(got, tt.want) {
 			t.Errorf("%s answers %v, want %v", tt.name, got, tt.want)
 		}
-		if msg.RCode != dnsmessage.RCodeSuccess || len(msg.Authorities) != 0 {
-			t.Errorf("%s rcode %v with %d authority records, want success and none", tt.name, msg.RCode, len(msg.Authorities))
+		if msg.RCode != dnsmessage.RCodeSuccess {
+			t.Errorf("%s rcode %v, want success", tt.name, msg.RCode)
 		}
 		ev := events.last(t)
 		if ev.Name != strings.TrimSuffix(tt.name, ".") || ev.Type != "A" || ev.Answers != len(tt.want) || ev.Decision != tt.decision {
@@ -96,6 +98,44 @@ func TestDNSDoorDropsInternalAnswersAndRemembersTheRest(t *testing.T) {
 	}
 	if _, ok := h.ResolvedName(sb.ID, netip.MustParseAddr("10.0.0.5")); ok {
 		t.Error("a dropped internal address has a name")
+	}
+}
+
+func TestDNSDoorPassesAnUnfilteredAnswerByteForByte(t *testing.T) {
+	upstream := newFakeNameserver(t)
+	h := newHost(t, &fakeEngine{}, poolConfig(testKey, dnsPolicy), func(o *Options) {
+		o.Nameservers = func() []string { return []string{upstream.udp} }
+	})
+	conn := dialDNS(t, armDNS(t, h))
+	query := packQuery(t, dnsmessage.Header{ID: 0x5a5a, RecursionDesired: true}, "raw.test.")
+	if err := writeDNSMsg(conn, query); err != nil {
+		t.Fatal(err)
+	}
+	got, err := readDNSMsg(conn)
+	if err != nil {
+		t.Fatalf("read answer: %v", err)
+	}
+	if want := fakeAnswer(query, true); !bytes.Equal(got, want) {
+		t.Errorf("answer differs from the upstream's bytes:\n got %x\nwant %x", got, want)
+	}
+}
+
+func TestDNSDoorDropsAnInternalGlueRecord(t *testing.T) {
+	upstream := newFakeNameserver(t)
+	events := &dnsEvents{}
+	h := newHost(t, &fakeEngine{}, poolConfig(testKey, dnsPolicy), func(o *Options) {
+		o.Nameservers = func() []string { return []string{upstream.udp} }
+		o.RecordDNS = events.record
+	})
+	msg := queryDoor(t, armDNS(t, h), "glue.test.", dnsmessage.TypeA)
+	if got := addresses(msg); !slices.Equal(got, []string{"93.184.216.37"}) {
+		t.Errorf("answers %v, want the public address", got)
+	}
+	if len(msg.Additionals) != 0 || len(msg.Authorities) != 1 {
+		t.Errorf("%d additional and %d authority records, want the glue dropped and the NS kept", len(msg.Additionals), len(msg.Authorities))
+	}
+	if ev := events.last(t); ev.Decision != DNSFiltered || ev.Answers != 1 {
+		t.Errorf("event %+v, want filtered with one answer", ev)
 	}
 }
 
@@ -181,6 +221,83 @@ func TestDNSDoorRefusesAQueryFloodPastItsBucket(t *testing.T) {
 	}
 }
 
+func TestDNSDoorDropsAndCountsMalformedQueries(t *testing.T) {
+	upstream := newFakeNameserver(t)
+	h := newHost(t, &fakeEngine{}, poolConfig(testKey, dnsPolicy), func(o *Options) {
+		o.Nameservers = func() []string { return []string{upstream.udp} }
+	})
+	sb := armDNS(t, h)
+	for _, tt := range []struct {
+		name   string
+		stream []byte
+	}{
+		{"shorter than a header", []byte{0, 5, 1, 2, 3, 4, 5}},
+		{"past the query cap", []byte{0xff, 0xff}},
+		{"truncated body", append([]byte{0, 40}, make([]byte, 10)...)},
+		{"truncated length", []byte{0}},
+		{"compression pointer loop", frame(compressionLoop())},
+		{"two questions", frame(packQuery(t, dnsmessage.Header{RecursionDesired: true}, "a.test.", "b.test."))},
+		{"a response", frame(packQuery(t, dnsmessage.Header{Response: true}, "a.test."))},
+		{"an update", frame(packQuery(t, dnsmessage.Header{OpCode: 5}, "a.test."))},
+		{"a truncated additional record", frame(badAdditional(packQuery(t, dnsmessage.Header{}, "a.test.")))},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			before := h.DNSMalformed()
+			conn := dialDNS(t, sb)
+			_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+			if _, err := conn.Write(tt.stream); err != nil {
+				t.Fatalf("write: %v", err)
+			}
+			_ = conn.(*net.UnixConn).CloseWrite()
+			if answer, err := readDNSMsg(conn); err == nil {
+				t.Fatalf("door answered %d bytes to a malformed query", len(answer))
+			}
+			if got := h.DNSMalformed() - before; got != 1 {
+				t.Errorf("malformed count rose by %d, want 1", got)
+			}
+		})
+	}
+	if got := addresses(queryDoor(t, sb, "public.test.", dnsmessage.TypeA)); len(got) != 2 {
+		t.Errorf("door after the malformed queries answers %v, want two addresses", got)
+	}
+}
+
+func FuzzDNSDoor(f *testing.F) {
+	upstream := newFakeNameserver(f)
+	v := NewView(poolConfig(testKey, dnsPolicy), nil)
+	h := New(Options{View: func() *View { return v }, Nameservers: func() []string { return []string{upstream.udp} }})
+	valid := packQuery(f, dnsmessage.Header{RecursionDesired: true}, "public.test.")
+	for _, seed := range [][]byte{
+		frame(valid),
+		append(frame(valid), frame(valid)...),
+		{0, 5, 1, 2, 3, 4, 5},
+		{0xff, 0xff},
+		append([]byte{0, 40}, make([]byte, 10)...),
+		frame(compressionLoop()),
+		frame(packQuery(f, dnsmessage.Header{OpCode: 5}, "a.test.")),
+	} {
+		f.Add(seed)
+	}
+	f.Fuzz(func(t *testing.T, stream []byte) {
+		r := newResolver(h, func(DNSEvent) {})
+		r.queries.SetLimit(rate.Inf)
+		conn := &fuzzConn{in: bytes.NewReader(stream)}
+		before := h.DNSMalformed()
+		r.serveConn(t.Context(), conn)
+		if len(r.conns) != 0 {
+			t.Fatalf("%d connections left tracked", len(r.conns))
+		}
+		if conn.maxRead > dnsQueryMax {
+			t.Fatalf("read a %d-byte message, past the %d-byte cap", conn.maxRead, dnsQueryMax)
+		}
+		if len(stream) >= 2 {
+			if n := int(stream[0])<<8 | int(stream[1]); (n < dnsHeaderLen || n > dnsQueryMax) && h.DNSMalformed() == before {
+				t.Fatalf("a %d-byte first frame was not counted as malformed", n)
+			}
+		}
+	})
+}
+
 func TestNameserversReadsResolvConf(t *testing.T) {
 	dir := t.TempDir()
 	conf := filepath.Join(dir, "resolv.conf")
@@ -199,7 +316,7 @@ type fakeNameserver struct {
 	udp string
 }
 
-func newFakeNameserver(t *testing.T) *fakeNameserver {
+func newFakeNameserver(t testing.TB) *fakeNameserver {
 	t.Helper()
 	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
 	if err != nil {
@@ -272,6 +389,11 @@ func fakeAnswer(query []byte, udp bool) []byte {
 	case "public.test.":
 		addA("93.184.216.35")
 		addA("2606:2800:220:1::1")
+	case "raw.test.":
+		return rawAnswer(q)
+	case "glue.test.":
+		addA("93.184.216.37")
+		resp.Additionals = []dnsmessage.Resource{{Header: dnsmessage.ResourceHeader{Name: dnsmessage.MustNewName("ns.test."), Class: dnsmessage.ClassINET, TTL: 60}, Body: &dnsmessage.AResource{A: [4]byte{10, 0, 0, 9}}}}
 	case "big.test.":
 		if udp {
 			resp.Truncated = true
@@ -381,3 +503,64 @@ func (e *dnsEvents) count(decision string) int {
 	}
 	return n
 }
+
+// rawAnswer repeats the question name uncompressed and carries an EDNS record, so a repack changes its bytes.
+func rawAnswer(q dnsmessage.Message) []byte {
+	b := dnsmessage.NewBuilder(nil, dnsmessage.Header{ID: q.ID, Response: true, RecursionAvailable: true})
+	_ = b.StartQuestions()
+	_ = b.Question(q.Questions[0])
+	_ = b.StartAnswers()
+	_ = b.AResource(dnsmessage.ResourceHeader{Name: q.Questions[0].Name, Class: dnsmessage.ClassINET, TTL: 60}, dnsmessage.AResource{A: [4]byte{93, 184, 216, 36}})
+	_ = b.StartAdditionals()
+	var opt dnsmessage.ResourceHeader
+	_ = opt.SetEDNS0(1232, dnsmessage.RCodeSuccess, true)
+	_ = b.OPTResource(opt, dnsmessage.OPTResource{})
+	out, _ := b.Finish()
+	return out
+}
+
+func frame(msg []byte) []byte {
+	return append([]byte{byte(len(msg) >> 8), byte(len(msg))}, msg...)
+}
+
+func packQuery(t testing.TB, hdr dnsmessage.Header, names ...string) []byte {
+	t.Helper()
+	msg := dnsmessage.Message{Header: hdr}
+	for _, name := range names {
+		msg.Questions = append(msg.Questions, dnsmessage.Question{Name: dnsmessage.MustNewName(name), Type: dnsmessage.TypeA, Class: dnsmessage.ClassINET})
+	}
+	out, err := msg.Pack()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+// compressionLoop is a one-question query whose name is a pointer to itself.
+func compressionLoop() []byte {
+	return []byte{0, 1, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0xc0, 12, 0, 1, 0, 1}
+}
+
+// badAdditional claims one additional record and carries half a name pointer.
+func badAdditional(query []byte) []byte {
+	query[11] = 1
+	return append(query, 0xc0)
+}
+
+type fuzzConn struct {
+	in      *bytes.Reader
+	maxRead int
+}
+
+func (c *fuzzConn) Read(p []byte) (int, error) {
+	c.maxRead = max(c.maxRead, len(p))
+	return c.in.Read(p)
+}
+
+func (c *fuzzConn) Write(p []byte) (int, error)      { return len(p), nil }
+func (c *fuzzConn) Close() error                     { return nil }
+func (c *fuzzConn) LocalAddr() net.Addr              { return nil }
+func (c *fuzzConn) RemoteAddr() net.Addr             { return nil }
+func (c *fuzzConn) SetDeadline(time.Time) error      { return nil }
+func (c *fuzzConn) SetReadDeadline(time.Time) error  { return nil }
+func (c *fuzzConn) SetWriteDeadline(time.Time) error { return nil }
