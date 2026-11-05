@@ -232,8 +232,8 @@ moved to another node with a `Lookup`, also when that node is gone, releasing
 one already gone is not an error, and `Close` is bounded internally so it stays defer-friendly). Any other
 call on a handle answers 404 once its sandbox has moved; run `Lookup` to tell
 that from a released sandbox.
-Volume sandboxes cannot hibernate, fork, checkpoint, or promote. Egress-lane
-sandboxes cannot either, nor take `WithArchiveOnExpire`; each answers 409. Passing
+Volume sandboxes and egress-lane sandboxes cannot hibernate, fork, checkpoint,
+or promote, nor take `WithArchiveOnExpire`; each answers 409. Passing
 `WithVolumes`, `WithVolumesAttachOnly` or `WithClaimRef` to `Checkpoint.New` returns a local error:
 checkpoint branches support neither volumes nor a claim reference in this version.
 `WithNetwork` or `WithSize` to `Checkpoint.New` or `Template.New` does too: the

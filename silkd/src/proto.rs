@@ -235,7 +235,7 @@ pub enum Response {
         code: i32,
     },
     Done,
-    /// Acknowledges an armed watch (later events are guaranteed captured) or a connected port_forward.
+    /// Acknowledges an armed watch (later events are guaranteed captured), a connected port_forward or an attached lsp_request.
     Ready,
     Error {
         kind: ErrorKind,

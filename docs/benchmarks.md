@@ -147,10 +147,9 @@ delta is the host, not the round's code (cocoon-specs
 | cold boot (unpooled ghcr.io/cocoonstack/sandbox/python:3.12) | 215.4 ms | 215.4 ms | 221.5 ms | 3 |
 | burst: 16 concurrent clones | 102.1 ms | 179.3 ms | 234.5 ms | 16 |
 
-The clone-tier row measured warm hits this round: the pipelined refill
-(clone and probe gated separately) refills between back-to-back claims, so
-the adaptive watermark wins the race the harness assumes it loses. The
-burst row is the real clone-path number.
+The clone-tier row measured warm hits this round: before #185 the config
+default turned the golden-only pool's `warm: 0` into 4, so its claims popped
+warm VMs. The burst row is the real clone-path number.
 
 | data plane | measured |
 |---|---|

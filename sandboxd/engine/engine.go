@@ -131,7 +131,7 @@ func (e *Engine) Version(ctx context.Context) (string, error) {
 	return "", fmt.Errorf("cocoon version: no Version line in output")
 }
 
-// VersionWarning returns a non-empty warning when cocoon's version is below RequiredCocoon.
+// VersionWarning returns a non-empty warning when cocoon's version is below RequiredCocoon or cannot be read.
 func (e *Engine) VersionWarning(ctx context.Context) (version, warning string) {
 	v, err := e.Version(ctx)
 	if err != nil {

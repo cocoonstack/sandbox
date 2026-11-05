@@ -67,7 +67,7 @@ keep an idle relay for 30 seconds and send later RPCs on it; use mode C of
 
 Every data-plane RPC used to pay a TCP dial, an HTTP Upgrade and, behind a
 TLS edge, a handshake. From proto 2 silkd serves RPCs back to back, and both
-SDKs keep one relay connection per handle with a 30s idle window.
+SDKs park up to 8 idle relay connections per handle for a 30s idle window.
 
 `e2e/cmd/rpcbench`, warm `rt:24.04` sandbox, `net=none`, n=200 `fs_stat`
 RPCs per arm, bare-metal host B, client on the node, 2026-09-16 at

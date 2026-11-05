@@ -2,7 +2,7 @@
 // A dials+upgrades per RPC by hand; mode C is the SDK's own path, one kept
 // connection serving RPCs back to back. A and C interleave sample by sample
 // and swap which one leads, so node drift cannot land on one arm. Run by
-// hand against a claimed sandbox:
+// hand, or by scripts/bench.sh; it claims its own sandbox:
 //
 //	rpcbench -addr <node> -token <api token> -template <ref> -n 200
 //

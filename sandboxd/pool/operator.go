@@ -73,7 +73,7 @@ func (m *Manager) resolve(id string, cred Cred) (*types.Sandbox, bool) {
 	return m.claim(id, cred.Token)
 }
 
-// byID resolves a live claim by id alone; callers must have authorized the Operator credential.
+// byID resolves a live claim by id alone; the caller authorizes the request.
 func (m *Manager) byID(id string) (*types.Sandbox, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

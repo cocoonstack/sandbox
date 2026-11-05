@@ -18,7 +18,7 @@ const (
 	silkdReadMax   = 64 << 10
 	mountInfoMax   = 1 << 20
 	guestOutputMax = 4096
-	// guestExecPATH is set because silkd starts the guest command with an empty environment.
+	// guestExecPATH overrides a PATH the claim's env sets for host-driven commands.
 	guestExecPATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 )
 
