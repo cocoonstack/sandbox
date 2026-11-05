@@ -119,6 +119,22 @@ type StoreConfig struct {
 	S3   *store.S3Config `json:"s3,omitempty"`
 }
 
+func (s *StoreConfig) validate() error {
+	switch s.Kind {
+	case "", "dir":
+	case "s3":
+		if s.S3 == nil || s.S3.Bucket == "" {
+			return fmt.Errorf("checkpoint_store s3 needs a bucket")
+		}
+		if min(s.S3.UploadConcurrency, s.S3.FetchConcurrency, s.S3.PublishConcurrency, s.S3.MetaReadConcurrency) < 0 {
+			return fmt.Errorf("checkpoint_store s3 concurrency must not be negative")
+		}
+	default:
+		return fmt.Errorf("checkpoint_store kind %q: want dir or s3", s.Kind)
+	}
+	return nil
+}
+
 // EgressUpstreamConfig lets a claim's host-only ClaimEnv entry name the proxy its egress leaves through, from the Allow list.
 type EgressUpstreamConfig struct {
 	ClaimEnv string   `json:"claim_env"`
@@ -378,14 +394,8 @@ func (c *Config) validate() error {
 		return err
 	}
 	if cs := c.CheckpointStore; cs != nil {
-		switch cs.Kind {
-		case "", "dir":
-		case "s3":
-			if cs.S3 == nil || cs.S3.Bucket == "" {
-				return fmt.Errorf("checkpoint_store s3 needs a bucket")
-			}
-		default:
-			return fmt.Errorf("checkpoint_store kind %q: want dir or s3", cs.Kind)
+		if err := cs.validate(); err != nil {
+			return err
 		}
 	}
 	if c.CheckpointPeerHeal && (c.Mesh == nil || c.Mesh.ClusterKey == "") {

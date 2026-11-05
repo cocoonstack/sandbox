@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	awshttp "github.com/aws/aws-sdk-go-v2/aws/transport/http"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
@@ -35,17 +36,17 @@ import (
 )
 
 const (
-	digestMetadataKey   = "content-digest"
-	cacheDir            = "cache"
-	manifestsDir        = "manifests"
-	manifestExt         = ".json"
-	chunksDir           = "chunks"
-	lineagesDir         = "lineages"
-	uploadConcurrency   = 8 // chunk PUTs in flight per publish
-	metaReadConcurrency = 8
-	publishConcurrency  = 4 // files scanned in parallel
-	fetchConcurrency    = 8 // chunk GETs in flight per fetch
-	transferBudget      = 30 * time.Minute
+	digestMetadataKey          = "content-digest"
+	cacheDir                   = "cache"
+	manifestsDir               = "manifests"
+	manifestExt                = ".json"
+	chunksDir                  = "chunks"
+	lineagesDir                = "lineages"
+	defaultUploadConcurrency   = 8
+	defaultFetchConcurrency    = 8
+	defaultPublishConcurrency  = 4
+	defaultMetaReadConcurrency = 8
+	transferBudget             = 30 * time.Minute
 )
 
 var chunkBufs = sync.Pool{New: func() any {
@@ -86,6 +87,11 @@ type Store struct {
 	idRe    *regexp.Regexp
 	labeled bool
 	fetches singleflight.Group
+
+	uploadLimit   int
+	fetchLimit    int
+	publishLimit  int
+	metaReadLimit int
 }
 
 // New builds the backend; ctx bounds the credential-chain resolution, and only a labeled store reads labels in Metas.
@@ -97,11 +103,27 @@ func New(ctx context.Context, cfg store.S3Config, stagingRoot string, idRe *rege
 	if err := os.MkdirAll(stagingRoot, 0o750); err != nil {
 		return nil, fmt.Errorf("create staging dir: %w", err)
 	}
-	awsCfg, err := awsconfig.LoadDefaultConfig(ctx, awsconfig.WithRegion(cfg.Region))
+	st := &Store{
+		bucket:        cfg.Bucket,
+		prefix:        cfg.Prefix,
+		staging:       stagingRoot,
+		idRe:          idRe,
+		labeled:       labeled,
+		uploadLimit:   cmp.Or(cfg.UploadConcurrency, defaultUploadConcurrency),
+		fetchLimit:    cmp.Or(cfg.FetchConcurrency, defaultFetchConcurrency),
+		publishLimit:  cmp.Or(cfg.PublishConcurrency, defaultPublishConcurrency),
+		metaReadLimit: cmp.Or(cfg.MetaReadConcurrency, defaultMetaReadConcurrency),
+	}
+	idle := max(awshttp.DefaultHTTPTransportMaxIdleConnsPerHost, st.uploadLimit, st.fetchLimit, st.metaReadLimit)
+	httpClient := awshttp.NewBuildableClient().WithTransportOptions(func(t *http.Transport) {
+		t.MaxIdleConnsPerHost = idle
+		t.MaxIdleConns = max(t.MaxIdleConns, idle)
+	})
+	awsCfg, err := awsconfig.LoadDefaultConfig(ctx, awsconfig.WithRegion(cfg.Region), awsconfig.WithHTTPClient(httpClient))
 	if err != nil {
 		return nil, fmt.Errorf("aws config: %w", err)
 	}
-	client := awss3.NewFromConfig(awsCfg, func(o *awss3.Options) {
+	st.client = awss3.NewFromConfig(awsCfg, func(o *awss3.Options) {
 		if cfg.Endpoint != "" {
 			o.BaseEndpoint = new(cfg.Endpoint)
 		}
@@ -118,7 +140,7 @@ func New(ctx context.Context, cfg store.S3Config, stagingRoot string, idRe *rege
 			})
 		}
 	})
-	return &Store{client: client, bucket: cfg.Bucket, prefix: cfg.Prefix, staging: stagingRoot, idRe: idRe, labeled: labeled}, nil
+	return st, nil
 }
 
 func (s *Store) Stage(id string) (string, error) {
@@ -203,7 +225,7 @@ func (s *Store) Metas(ctx context.Context) ([]store.Record, error) {
 	}
 	recs := make([]store.Record, len(ids))
 	g, gctx := errgroup.WithContext(ctx)
-	g.SetLimit(metaReadConcurrency)
+	g.SetLimit(s.metaReadLimit)
 	for i, id := range ids {
 		g.Go(func() error {
 			raw, digest, err := s.readMeta(gctx, id)
@@ -363,10 +385,10 @@ func (s *Store) prepare(ctx context.Context, staging, id, lineage string, digest
 	man := manifest{Lineage: lineage, Files: make([]manifestFile, len(files))}
 	digestFiles := make([]store.DigestFile, len(files))
 	chunkGroup, chunkCtx := errgroup.WithContext(ctx)
-	chunkGroup.SetLimit(uploadConcurrency)
+	chunkGroup.SetLimit(s.uploadLimit)
 	up := &chunkUploader{store: s, group: chunkGroup, ctx: chunkCtx, lineage: lineage, have: have}
 	fileGroup, fileCtx := errgroup.WithContext(chunkCtx)
-	fileGroup.SetLimit(publishConcurrency)
+	fileGroup.SetLimit(s.publishLimit)
 	for i, file := range files {
 		fileGroup.Go(func() (err error) {
 			digestFiles[i], man.Files[i], err = up.scan(fileCtx, file)
@@ -466,7 +488,7 @@ func (s *Store) materialize(ctx context.Context, man manifest, root string) (err
 		}
 	}
 	g, gctx := errgroup.WithContext(ctx)
-	g.SetLimit(fetchConcurrency)
+	g.SetLimit(s.fetchLimit)
 	for i, file := range man.Files {
 		for _, chunk := range file.Chunks {
 			g.Go(func() error {
@@ -548,7 +570,7 @@ func (s *Store) referencedChunks(ctx context.Context, id, lineage string) (map[s
 	have := map[string]struct{}{}
 	var mu sync.Mutex
 	g, gctx := errgroup.WithContext(ctx)
-	g.SetLimit(metaReadConcurrency)
+	g.SetLimit(s.metaReadLimit)
 	for _, recordID := range ids {
 		g.Go(func() error {
 			man, err := s.currentManifest(gctx, recordID)

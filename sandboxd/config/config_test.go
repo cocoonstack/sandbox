@@ -110,6 +110,7 @@ func TestLoadRejectsInvalid(t *testing.T) {
 		{"memory limit without a size", `{"memory_limit":{"anon":"lots"},"pools":[]}`, "memory_limit.anon"},
 		{"memory limit past a percentage", `{"memory_limit":{"psi_some_avg10":101},"pools":[]}`, "memory_limit.psi_some_avg10"},
 		{"negative max running", `{"max_running":-1,"pools":[]}`, "max_running"},
+		{"negative s3 concurrency", `{"checkpoint_store":{"kind":"s3","s3":{"bucket":"b","fetch_concurrency":-1}},"pools":[]}`, "concurrency must not be negative"},
 		{"bad restore mode", `{"restore_mode":"Mmap","pools":[]}`, "restore_mode"},
 		{"bad pool key", `{"pools":[{"template":"","net":"none","size":"small"}]}`, `pool "": template must not be empty`},
 		{"egress without attachment", `{"pools":[{"template":"rt:24.04","net":"egress","size":"small"}]}`, "egress lane needs"},
