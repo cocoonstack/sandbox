@@ -58,6 +58,7 @@ suites — a frame only one side can parse fails CI.
 | git | `git_clone {url, path, branch?, depth?, auth?}` / `git_status {path}` / `git_add {path, files}` / `git_commit {path, message, author}` / `git_push {path, auth?}` / `git_pull {path, auth?}` / `git_branch {path, action, name?}` | `git_status_result` (porcelain v2), `git_commit_result{hash}`, `git_branches{current, branches}` for `git_branch {action: "list"}`; every other verb terminates with `done`. A status past about 1 MiB of entries carries `truncated: true` with the head of the list, so one frame never exceeds the cap. `auth` is injected as an in-memory header, never written to guest disk |
 | port | `port_forward {port}` | relays guest TCP 127.0.0.1:port over this connection: `ready` once connected, then `data` both ways. Each direction ends on its own: `data_end` half-closes the guest socket, `done` reports the guest closing its write side, and the RPC ends once both have. A client that only drops the connection leaves the relay open until the guest side closes or writes. Works on both lanes — the no-network lane's only way in |
 | lsp | `lsp_start {language, root?}` / `lsp_request {server_id}` / `lsp_stop {server_id}` | a broker for the language server a flavor image ships: `lsp_start` spawns the argv named in `/etc/silkd/lsp.d/<language>` (absent on the base image → `not_found` naming the flavor) and answers `lsp_started{server_id}`; `lsp_request` attaches the JSON-RPC byte stream (`ready`, then `data` both ways — silkd pipes bytes, it never parses LSP; `data_end` half-closes the server's stdin) and the stream ending reaps the server (v1 single-shot); `lsp_stop` kills it early, and a server nothing attaches within 5 minutes is reaped |
+| tun | `tun_up` / `tun_down` | the [advanced network mode](advanced-network.md) switch: `tun_up` creates `tun0` and starts its packet stream on vsock 2051, `tun_down` removes `tun0` and its routes; both answer `done`, `tun_up` an `error` when `tun0` cannot be created. Advisory: the host enforces |
 | misc | `info` | `info{version, uptime_secs, procs, sessions}` — sandboxd uses it for readiness; there is no public SDK method. Distinct from the control plane's `GET /v1/info`, which reports node pools and claims |
 
 ## Error kinds
@@ -93,6 +94,11 @@ verdict in `/etc/silkd-lane` reads `relay` because it is nft-locked — silkd
 forwards the image-baked proxy variables (`http_proxy` and friends) into every
 exec, so unconfigured clients use the relay without being told; a lane with its
 own routed network never gets them.
+
+In the [advanced network mode](advanced-network.md) silkd also owns `tun0`
+(`100.64.0.2/30`, default route) and carries its packets to the host over
+vsock (`CID2:2051`); it asks the host at boot and after every lost stream, and
+the proxy variables stay set beside it.
 
 ## Claim env
 
