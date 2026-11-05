@@ -4,7 +4,7 @@ use std::net::{Ipv4Addr, SocketAddrV4};
 use std::sync::Arc;
 
 use silkd::server::State;
-use silkd::{dns, imds, net_egress, session, vsock};
+use silkd::{imds, net_egress, session, vsock};
 
 const DEFAULT_PORT: u32 = 2048;
 
@@ -30,13 +30,11 @@ async fn main() {
         SocketAddrV4::new(Ipv4Addr::LOCALHOST, net_egress::SOCKS_LOOPBACK_PORT),
         net_egress::SOCKS_HOST_VSOCK_PORT,
     ));
-    tokio::spawn(relay(
-        SocketAddrV4::new(dns::STUB_ADDR, dns::PORT),
-        dns::HOST_VSOCK_PORT,
-    ));
-    tokio::spawn(async {
-        if let Err(e) = dns::serve().await {
-            eprintln!("silkd dns: {e}");
+    let dns = SocketAddrV4::new(net_egress::DNS_ADDR, net_egress::DNS_PORT);
+    tokio::spawn(relay(dns, net_egress::DNS_HOST_VSOCK_PORT));
+    tokio::spawn(async move {
+        if let Err(e) = net_egress::serve_datagrams(dns, net_egress::DNS_HOST_VSOCK_PORT).await {
+            eprintln!("silkd egress: datagrams on {dns}: {e}");
         }
     });
     tokio::spawn(async {
