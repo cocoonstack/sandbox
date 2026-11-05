@@ -17,7 +17,7 @@ import (
 func TestMoveRouteResolvesThePeerAndMapsTheOutcome(t *testing.T) {
 	var gotAddr string
 	var gotBudget time.Duration
-	outcome := error(nil)
+	var outcome error
 	mgr := &fakeManager{move: func(_, addr string, budget time.Duration) (pool.MoveResult, error) {
 		gotAddr, gotBudget = addr, budget
 		return pool.MoveResult{Rounds: 3, Downtime: 180 * time.Millisecond}, outcome
@@ -34,24 +34,24 @@ func TestMoveRouteResolvesThePeerAndMapsTheOutcome(t *testing.T) {
 		t.Errorf("move to %s within %s answered %+v", gotAddr, gotBudget, body)
 	}
 	for _, tt := range []struct {
-		token, body string
-		err         error
-		want        int
+		body string
+		err  error
+		want int
 	}{
-		{"root", `{"to":"10.0.0.9:7777"}`, nil, http.StatusBadRequest},
-		{"root", `{"to":"10.0.0.2:7777","max_downtime_ms":-1}`, nil, http.StatusBadRequest},
-		{"root", `{"to":"10.0.0.2:7777","max_downtime_ms":400}`, nil, http.StatusBadRequest},
-		{"root", `{"to":"10.0.0.2:7777","max_downtime_ms":401}`, nil, http.StatusOK},
-		{"root", `{"to":"10.0.0.2:7777"}`, pool.ErrUnknownSandbox, http.StatusNotFound},
-		{"root", `{"to":"10.0.0.2:7777"}`, fmt.Errorf("%w: it has volumes", pool.ErrNotMovable), http.StatusConflict},
-		{"root", `{"to":"10.0.0.2:7777"}`, fmt.Errorf("%w: target: 3 moves in flight", pool.ErrQuota), http.StatusTooManyRequests},
-		{"root", `{"to":"10.0.0.2:7777"}`, pool.ErrMoveTarget, http.StatusBadGateway},
-		{"root", `{"to":"10.0.0.2:7777"}`, fmt.Errorf("%w: %w", pool.ErrMoveStoreDown, pool.ErrMoveTarget), http.StatusServiceUnavailable},
-		{"root", `{"to":"10.0.0.2:7777"}`, pool.ErrMoveDowntime, http.StatusServiceUnavailable},
-		{"root", `{"to":"10.0.0.2:7777"}`, pool.ErrLeaseLost, http.StatusServiceUnavailable},
+		{`{"to":"10.0.0.9:7777"}`, nil, http.StatusBadRequest},
+		{`{"to":"10.0.0.2:7777","max_downtime_ms":-1}`, nil, http.StatusBadRequest},
+		{`{"to":"10.0.0.2:7777","max_downtime_ms":400}`, nil, http.StatusBadRequest},
+		{`{"to":"10.0.0.2:7777","max_downtime_ms":401}`, nil, http.StatusOK},
+		{`{"to":"10.0.0.2:7777"}`, pool.ErrUnknownSandbox, http.StatusNotFound},
+		{`{"to":"10.0.0.2:7777"}`, fmt.Errorf("%w: it has volumes", pool.ErrNotMovable), http.StatusConflict},
+		{`{"to":"10.0.0.2:7777"}`, fmt.Errorf("%w: target: 3 moves in flight", pool.ErrQuota), http.StatusTooManyRequests},
+		{`{"to":"10.0.0.2:7777"}`, pool.ErrMoveTarget, http.StatusBadGateway},
+		{`{"to":"10.0.0.2:7777"}`, fmt.Errorf("%w: %w", pool.ErrMoveStoreDown, pool.ErrMoveTarget), http.StatusServiceUnavailable},
+		{`{"to":"10.0.0.2:7777"}`, pool.ErrMoveDowntime, http.StatusServiceUnavailable},
+		{`{"to":"10.0.0.2:7777"}`, pool.ErrLeaseLost, http.StatusServiceUnavailable},
 	} {
 		outcome = tt.err
-		resp := doReq(t, http.MethodPost, srv.URL+"/v1/sandboxes/sb_1/move", tt.token, tt.body)
+		resp := doReq(t, http.MethodPost, srv.URL+"/v1/sandboxes/sb_1/move", "root", tt.body)
 		_ = resp.Body.Close()
 		if resp.StatusCode != tt.want {
 			t.Errorf("move %s with %v: %d, want %d", tt.body, tt.err, resp.StatusCode, tt.want)

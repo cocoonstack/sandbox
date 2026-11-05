@@ -13,7 +13,7 @@ import (
 )
 
 func TestLoadAppliesDefaults(t *testing.T) {
-	path := writeConfig(t, `{"pools":[{"template":"rt:24.04","net":"none","size":"small"}]}`)
+	path := writeConfig(t, `{"pools":[{"template":"rt:24.04"}]}`)
 	cfg := mustLoad(t, path)
 	if cfg.Listen == "" || cfg.DataDir == "" || cfg.CocoonBin == "" {
 		t.Errorf("defaults not applied: %+v", cfg)
@@ -111,7 +111,7 @@ func TestLoadRejectsInvalid(t *testing.T) {
 		{"memory limit past a percentage", `{"memory_limit":{"psi_some_avg10":101},"pools":[]}`, "memory_limit.psi_some_avg10"},
 		{"negative max running", `{"max_running":-1,"pools":[]}`, "max_running"},
 		{"bad restore mode", `{"restore_mode":"Mmap","pools":[]}`, "restore_mode"},
-		{"bad pool key", `{"pools":[{"template":"","net":"none","size":"small"}]}`, "pool"},
+		{"bad pool key", `{"pools":[{"template":"","net":"none","size":"small"}]}`, `pool "": template must not be empty`},
 		{"egress without attachment", `{"pools":[{"template":"rt:24.04","net":"egress","size":"small"}]}`, "egress lane needs"},
 		{"egress idle hibernate", `{"bridges":["br0"],"pools":[{"template":"rt:24.04","net":"egress","size":"small","idle_hibernate_seconds":1}]}`, "not supported for egress"},
 		{"negative warm", `{"pools":[{"template":"rt:24.04","net":"none","size":"small","warm":-2}]}`, "negative"},

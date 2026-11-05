@@ -892,9 +892,6 @@ func TestHeldConnForwardsCloseWrite(t *testing.T) {
 	inner := &closeWriteConn{}
 	held := &heldConn{Conn: inner, release: func() {}}
 
-	if _, ok := any(held).(interface{ CloseWrite() error }); !ok {
-		t.Fatal("heldConn does not expose CloseWrite; a relay half-close would be dropped")
-	}
 	if err := held.CloseWrite(); err != nil {
 		t.Fatalf("CloseWrite: %v", err)
 	}

@@ -39,8 +39,12 @@ func TestLivenessRestartsExitedVMM(t *testing.T) {
 		t.Errorf("events %s, want %s", got, want)
 	}
 	reloaded, err := newClaimStore(m.dataDir, false).load()
-	if err != nil || reloaded[sb.ID].Restarts != 1 {
-		t.Errorf("journal restarts %d (err %v), want 1", reloaded[sb.ID].Restarts, err)
+	if err != nil {
+		t.Fatalf("load journal: %v", err)
+	}
+	rec, ok := reloaded[sb.ID]
+	if !ok || rec.Restarts != 1 {
+		t.Errorf("journal record %+v (present %v), want one restart", rec, ok)
 	}
 }
 
@@ -201,7 +205,6 @@ func TestLivenessLeavesALapsedLeaseToReap(t *testing.T) {
 func TestWakeOfAFailedClaimRearmsEgressAfterARestart(t *testing.T) {
 	eng := newFakeEngine()
 	eng.sockRoot = outboundtest.SockRoot(t)
-	t.Setenv("GH_TOKEN", "s3cr3t")
 	cfg := &config.Config{
 		DataDir: t.TempDir(), Bridges: []string{"sbxbr0"}, EgressCA: writeTestEgressCA(t), VMMRestart: types.VMMRestartNone,
 		Pools: []config.PoolSpec{{PoolKey: testKey, Egress: &egress.Policy{Allow: []egress.Rule{{Host: "example.com"}}}}},
@@ -317,7 +320,7 @@ func TestDaemonExitEventRecoversWithoutAList(t *testing.T) {
 	killVMM(eng, other.VMName)
 	eng.vmEvents <- fakeVMEvent{change: engine.VMChange{Kind: "MODIFIED", VM: engine.VMStatus{Name: sb.VMName}}}
 
-	waitFor(t, func() bool { got, _ := m.Sandbox(sb.ID); return got.Restarts == 1 })
+	waitFor(t, func() bool { got, _ := m.Sandbox(sb.ID); return got.Restarts == 1 && len(m.maintSem) == 0 })
 	if got, _ := m.Sandbox(other.ID); got.Restarts != 0 {
 		t.Errorf("an event for %s restarted %s too", sb.VMName, other.VMName)
 	}

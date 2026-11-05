@@ -227,10 +227,10 @@ func TestInterruptedCaptureFailsTheClaim(t *testing.T) {
 func TestInterruptedCaptureKeepsItsIntentWhenStopping(t *testing.T) {
 	for _, tt := range []struct {
 		name string
-		run  func(*testing.T, *fakeEngine, context.CancelFunc)
+		run  func(*fakeEngine, context.CancelFunc)
 	}{
-		{"engine stopping", func(_ *testing.T, eng *fakeEngine, _ context.CancelFunc) { eng.startErr = engine.ErrStopping }},
-		{"context canceled mid retry", func(_ *testing.T, eng *fakeEngine, cancel context.CancelFunc) {
+		{"engine stopping", func(eng *fakeEngine, _ context.CancelFunc) { eng.startErr = engine.ErrStopping }},
+		{"context canceled mid retry", func(eng *fakeEngine, cancel context.CancelFunc) {
 			eng.startFails = 1 << 30
 			eng.startHook = cancel
 		}},
@@ -239,7 +239,7 @@ func TestInterruptedCaptureKeepsItsIntentWhenStopping(t *testing.T) {
 			eng := newFakeEngine()
 			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
-			tt.run(t, eng, cancel)
+			tt.run(eng, cancel)
 			m, sb := reconcileInterruptedCtx(ctx, t, eng, interruptedHib, "", nil)
 			waitSettled(t, sb)
 			if row := journaled(t, m)[sb.ID]; row.PendingSnap != interruptedHib || sb.Failed != "" {
@@ -250,20 +250,28 @@ func TestInterruptedCaptureKeepsItsIntentWhenStopping(t *testing.T) {
 }
 
 func TestAFailedHibernateResumesTheGuest(t *testing.T) {
-	for _, listFails := range []int{0, 3} {
-		synctest.Test(t, func(t *testing.T) {
-			eng := newFakeEngine()
-			m := newTestManager(t, eng)
-			sb := mustClaim(t, m, testKey)
-			eng.hibernateErr, eng.listFails = errors.New("signal: killed"), listFails
-			if err := m.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err == nil {
-				t.Fatal("Hibernate reported success")
-			}
-			time.Sleep(time.Duration(listFails+1) * captureResumeRetry)
-			synctest.Wait()
-			if !slices.Equal(eng.starts, []string{sb.VMName}) {
-				t.Errorf("starts %q, want the guest resumed", eng.starts)
-			}
+	for _, tt := range []struct {
+		name      string
+		listFails int
+	}{
+		{"list answers", 0},
+		{"list fails three times", 3},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				eng := newFakeEngine()
+				m := newTestManager(t, eng)
+				sb := mustClaim(t, m, testKey)
+				eng.hibernateErr, eng.listFails = errors.New("signal: killed"), tt.listFails
+				if err := m.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err == nil {
+					t.Fatal("Hibernate reported success")
+				}
+				time.Sleep(time.Duration(tt.listFails+1) * captureResumeRetry)
+				synctest.Wait()
+				if !slices.Equal(eng.starts, []string{sb.VMName}) {
+					t.Errorf("starts %q, want the guest resumed", eng.starts)
+				}
+			})
 		})
 	}
 }
@@ -329,18 +337,18 @@ func TestAFailedHibernateThatPersistedStopsTheVMMAndAdopts(t *testing.T) {
 func TestAFailedCaptureKeepsItsIntentWhileSandboxdStops(t *testing.T) {
 	for _, tt := range []struct {
 		name    string
-		capture func(*Manager, *types.Sandbox, *fakeEngine) error
+		capture func(context.Context, *Manager, *types.Sandbox, *fakeEngine) error
 		intent  func(*types.Sandbox) string
 	}{
-		{"hibernate", func(m *Manager, sb *types.Sandbox, eng *fakeEngine) error {
+		{"hibernate", func(ctx context.Context, m *Manager, sb *types.Sandbox, eng *fakeEngine) error {
 			eng.hibernateErr = errors.New("signal: killed")
-			return m.Hibernate(context.Background(), sb.ID, Cred{Token: sb.Token})
+			return m.Hibernate(ctx, sb.ID, Cred{Token: sb.Token})
 		}, func(row *types.Sandbox) string { return row.PendingSnap }},
-		{"save", func(m *Manager, sb *types.Sandbox, eng *fakeEngine) error {
+		{"save", func(ctx context.Context, m *Manager, sb *types.Sandbox, eng *fakeEngine) error {
 			eng.snapSaveErr = errors.New("signal: killed")
 			sb.Transition.Lock()
 			defer sb.Transition.Unlock()
-			_, _, err := m.sourceSnap(context.Background(), sb)
+			_, _, err := m.sourceSnap(ctx, sb)
 			return err
 		}, func(row *types.Sandbox) string { return row.SaveSnap }},
 	} {
@@ -349,7 +357,7 @@ func TestAFailedCaptureKeepsItsIntentWhileSandboxdStops(t *testing.T) {
 			m := newTestManager(t, eng)
 			sb := mustClaim(t, m, testKey)
 			eng.startErr = engine.ErrStopping
-			if err := tt.capture(m, sb, eng); err == nil {
+			if err := tt.capture(t.Context(), m, sb, eng); err == nil {
 				t.Fatal("the capture reported success")
 			}
 			waitStarted(t, eng, 1)

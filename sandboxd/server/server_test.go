@@ -480,17 +480,20 @@ func TestSandboxByIDCarriesTheTokenOnlyForTheRootCredential(t *testing.T) {
 	}}
 	for _, tt := range []struct {
 		name, apiToken, bearer, want string
+		status                       int
+		specs                        []tenants.TenantSpec
 	}{
-		{"open node", "", "", ""},
-		{"root", "root", "root", "victim"},
+		{name: "open node", status: http.StatusOK},
+		{name: "root", apiToken: "root", bearer: "root", want: "victim", status: http.StatusOK},
+		{name: "tenant", apiToken: "root", bearer: "acme-tok", status: http.StatusForbidden, specs: []tenants.TenantSpec{{Name: "acme", Token: "acme-tok"}}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			ts := newTestServer(t, tt.apiToken, mgr, nil)
+			ts := newTenantTestServer(t, tt.apiToken, tt.specs, mgr, nil)
 			resp := doReq(t, http.MethodGet, ts.URL+"/v1/sandboxes/sb_1", tt.bearer, "")
 			defer resp.Body.Close()
 			got := decodeJSON[pool.SandboxSummary](t, resp.Body)
-			if resp.StatusCode != http.StatusOK || got.Token != tt.want {
-				t.Errorf("status %d token %q, want 200 and %q", resp.StatusCode, got.Token, tt.want)
+			if resp.StatusCode != tt.status || got.Token != tt.want {
+				t.Errorf("status %d token %q, want %d and %q", resp.StatusCode, got.Token, tt.status, tt.want)
 			}
 		})
 	}
@@ -793,6 +796,7 @@ func TestReleaseAndHibernateMapEachOutcomeToItsStatus(t *testing.T) {
 	}{
 		{"release", func(f *fakeManager, h sandboxVerbFunc) { f.release = h }},
 		{"hibernate", func(f *fakeManager, h sandboxVerbFunc) { f.hibernate = h }},
+		{"wake", func(f *fakeManager, h sandboxVerbFunc) { f.wake = h }},
 	}
 	tests := []struct {
 		name string
@@ -896,11 +900,7 @@ func TestAgentErrorPaths(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			mgr := &fakeManager{socket: func(string, string) (string, error) { return "/v/sock", tt.sockErr }}
 			dialer := &fakeDialer{dial: func(context.Context, string) (net.Conn, error) {
-				if tt.dialErr != nil {
-					return nil, tt.dialErr
-				}
-				c, _ := net.Pipe()
-				return c, nil
+				return nil, tt.dialErr
 			}}
 			ts := newTestServer(t, "", mgr, dialer)
 			req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, ts.URL+"/v1/sandboxes/sb_1/agent", nil)
@@ -2828,12 +2828,7 @@ func postJSON(t *testing.T, url, token, body string) *http.Response {
 
 func scrapeMetrics(t *testing.T, base string) string {
 	t.Helper()
-	resp, err := http.Get(base + "/metrics")
-	if err != nil {
-		t.Fatalf("metrics: %v", err)
-	}
-	defer resp.Body.Close()
-	raw, _ := io.ReadAll(resp.Body)
+	_, raw := bodyOf(t, http.MethodGet, base+"/metrics", "", "")
 	return string(raw)
 }
 
