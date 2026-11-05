@@ -129,7 +129,7 @@ func (m *Manager) CommitMove(ctx context.Context, id string, claim []byte, epoch
 		go m.settleMoveIn(ctx, sb)
 		return fmt.Errorf("move %s: %w", id, err)
 	}
-	m.startMoveIn(ctx, sb, admitted.from, committed)
+	m.startMoveIn(ctx, sb, admitted.from, committed, false)
 	return nil
 }
 
@@ -144,39 +144,11 @@ func (m *Manager) DropMove(id string) {
 	}
 }
 
-// A guest that cannot start fails the claim here, never back to the source; the caller holds sb.Transition.
-func (m *Manager) startMoveIn(ctx context.Context, sb *types.Sandbox, from string, committed int64) {
+// A guest that cannot start fails the claim here, never back to the source; a cold one goes to liveness; the caller holds sb.Transition.
+func (m *Manager) startMoveIn(ctx context.Context, sb *types.Sandbox, from string, committed int64, cold bool) {
 	logger := log.WithFunc("pool.startMoveIn")
-	var err error
-	for range 2 {
-		if err = m.eng.Start(ctx, sb.VMName); err == nil {
-			break
-		}
-		if errors.Is(err, engine.ErrStopping) {
-			return
-		}
-		logger.Warnf(ctx, "start moved claim %s: %v", sb.ID, err)
-	}
-	if err != nil {
-		_, persistErr := m.commitIfLive(ctx, sb, func() { sb.MoveIn = false })
-		sb.ExitRecorded = true
-		m.recordUsage(ctx, usage.Event{Event: "vmm_exit", ID: sb.ID, VMName: sb.VMName, Tenant: sb.Tenant})
-		m.failLocked(ctx, sb, reasonMoveStartFailed)
-		_ = os.RemoveAll(m.moveDir(sb.ID))
-		if committed != 0 && persistErr == nil {
-			m.markMoveStarted(ctx, sb.ID, committed)
-		}
+	if !cold && !m.startMovedGuest(ctx, sb, committed) {
 		return
-	}
-	if sock, probeErr := m.probeReady(ctx, sb.VMName, sb.VsockSocket, claimProbeTimeout); probeErr != nil {
-		logger.Warnf(ctx, "probe moved claim %s: %v", sb.ID, probeErr)
-	} else {
-		m.mu.Lock()
-		sb.VsockSocket = sock
-		m.mu.Unlock()
-	}
-	if proxyErr := m.out.ArmProxy(ctx, sb); proxyErr != nil {
-		logger.Errorf(ctx, proxyErr, "arm egress proxy %s", sb.ID)
 	}
 	live, err := m.commitIfLive(ctx, sb, func() { sb.MoveIn = false })
 	if !live {
@@ -193,6 +165,42 @@ func (m *Manager) startMoveIn(ctx context.Context, sb *types.Sandbox, from strin
 		m.markMoveStarted(ctx, sb.ID, committed)
 	}
 	logger.Infof(ctx, "sandbox %s moved here from %s", sb.ID, from)
+}
+
+func (m *Manager) startMovedGuest(ctx context.Context, sb *types.Sandbox, committed int64) bool {
+	logger := log.WithFunc("pool.startMovedGuest")
+	var err error
+	for range 2 {
+		if err = m.eng.Start(ctx, sb.VMName); err == nil {
+			break
+		}
+		if errors.Is(err, engine.ErrStopping) {
+			return false
+		}
+		logger.Warnf(ctx, "start moved claim %s: %v", sb.ID, err)
+	}
+	if err != nil {
+		_, persistErr := m.commitIfLive(ctx, sb, func() { sb.MoveIn = false })
+		sb.ExitRecorded = true
+		m.recordUsage(ctx, usage.Event{Event: "vmm_exit", ID: sb.ID, VMName: sb.VMName, Tenant: sb.Tenant})
+		m.failLocked(ctx, sb, reasonMoveStartFailed)
+		_ = os.RemoveAll(m.moveDir(sb.ID))
+		if committed != 0 && persistErr == nil {
+			m.markMoveStarted(ctx, sb.ID, committed)
+		}
+		return false
+	}
+	if sock, probeErr := m.probeReady(ctx, sb.VMName, sb.VsockSocket, claimProbeTimeout); probeErr != nil {
+		logger.Warnf(ctx, "probe moved claim %s: %v", sb.ID, probeErr)
+	} else {
+		m.mu.Lock()
+		sb.VsockSocket = sock
+		m.mu.Unlock()
+	}
+	if proxyErr := m.out.ArmProxy(ctx, sb); proxyErr != nil {
+		logger.Errorf(ctx, proxyErr, "arm egress proxy %s", sb.ID)
+	}
+	return true
 }
 
 func (m *Manager) markMoveStarted(ctx context.Context, id string, epoch int64) {
@@ -231,12 +239,14 @@ func (m *Manager) resolveMoveIn(ctx context.Context, sb *types.Sandbox) bool {
 		return false
 	}
 	toHere := ok && rec.To == m.nodeID
+	vm, found, inspectErr := m.eng.Inspect(ctx, sb.VMName)
+	cold := inspectErr == nil && found && vm.State != vmStateRunning
 	switch {
 	case toHere && rec.State == moves.Committed:
-		m.startMoveIn(ctx, sb, rec.From, rec.Epoch)
+		m.startMoveIn(ctx, sb, rec.From, rec.Epoch, cold)
 		return true
 	case toHere && rec.State == moves.Started:
-		m.startMoveIn(ctx, sb, rec.From, 0)
+		m.startMoveIn(ctx, sb, rec.From, 0, cold)
 		return true
 	case toHere && (rec.State == moves.Pending || rec.State == moves.Final):
 		if _, err = m.moves.Advance(ctx, sb.ID, rec.Epoch, rec.State, moves.Aborted); err != nil {

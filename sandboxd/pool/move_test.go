@@ -922,6 +922,11 @@ func TestMoveRestartResolvesAJournaledMoveThroughItsRecord(t *testing.T) {
 			t.Errorf("starts %v removes %v, want the received VM started", eng.starts, eng.removes)
 		}
 	}
+	coldRestarted := func(t *testing.T, eng *fakeEngine) {
+		if len(eng.starts) != 1 || slices.Contains(eng.removes, vm) {
+			t.Errorf("starts %v removes %v, want one cold boot by liveness", eng.starts, eng.removes)
+		}
+	}
 	unstarted := func(t *testing.T, eng *fakeEngine) {
 		if slices.Contains(eng.starts, vm) || !slices.Contains(eng.removes, vm) {
 			t.Errorf("starts %v removes %v, want the received VM removed unstarted", eng.starts, eng.removes)
@@ -933,20 +938,22 @@ func TestMoveRestartResolvesAJournaledMoveThroughItsRecord(t *testing.T) {
 		reach      moves.State
 		wantClaim  bool
 		wantRecord moves.State
+		vmmLost    bool
 		check      func(t *testing.T, eng *fakeEngine)
 	}{
-		"source at pending":          {node: "a", from: "a", to: "b", reach: moves.Pending, wantClaim: true, check: aborted},
-		"source at final":            {node: "a", from: "a", to: "b", reach: moves.Final, wantClaim: true, check: aborted},
-		"source at aborted":          {node: "a", from: "a", to: "b", reach: moves.Aborted, wantClaim: true, check: aborted},
-		"source at committed":        {node: "a", from: "a", to: "b", reach: moves.Committed, wantRecord: moves.Committed, check: movedOn},
-		"source at started":          {node: "a", from: "a", to: "b", reach: moves.Started, check: movedOn},
-		"source, record missing":     {node: "a", check: movedOn},
-		"source, another node moved": {node: "a", from: "b", to: "c", reach: moves.Pending, wantRecord: moves.Pending, check: movedOn},
-		"target at final":            {node: "b", from: "a", to: "b", reach: moves.Final, wantRecord: moves.Aborted, check: unstarted},
-		"target at committed":        {node: "b", from: "a", to: "b", reach: moves.Committed, wantClaim: true, wantRecord: moves.Started, check: started},
-		"target at started":          {node: "b", from: "a", to: "b", reach: moves.Started, wantClaim: true, wantRecord: moves.Started, check: started},
-		"target at aborted":          {node: "b", from: "a", to: "b", reach: moves.Aborted, wantRecord: moves.Aborted, check: unstarted},
-		"target, record missing":     {node: "b", check: unstarted},
+		"source at pending":                           {node: "a", from: "a", to: "b", reach: moves.Pending, wantClaim: true, check: aborted},
+		"source at final":                             {node: "a", from: "a", to: "b", reach: moves.Final, wantClaim: true, check: aborted},
+		"source at aborted":                           {node: "a", from: "a", to: "b", reach: moves.Aborted, wantClaim: true, check: aborted},
+		"source at committed":                         {node: "a", from: "a", to: "b", reach: moves.Committed, wantRecord: moves.Committed, check: movedOn},
+		"source at started":                           {node: "a", from: "a", to: "b", reach: moves.Started, check: movedOn},
+		"source, record missing":                      {node: "a", check: movedOn},
+		"source, another node moved":                  {node: "a", from: "b", to: "c", reach: moves.Pending, wantRecord: moves.Pending, check: movedOn},
+		"target at final":                             {node: "b", from: "a", to: "b", reach: moves.Final, wantRecord: moves.Aborted, check: unstarted},
+		"target at committed":                         {node: "b", from: "a", to: "b", reach: moves.Committed, wantClaim: true, wantRecord: moves.Started, check: started},
+		"target at started":                           {node: "b", from: "a", to: "b", reach: moves.Started, wantClaim: true, wantRecord: moves.Started, check: started},
+		"target at committed, VMM lost with the host": {node: "b", from: "a", to: "b", reach: moves.Committed, wantClaim: true, wantRecord: moves.Started, vmmLost: true, check: coldRestarted},
+		"target at aborted":                           {node: "b", from: "a", to: "b", reach: moves.Aborted, wantRecord: moves.Aborted, check: unstarted},
+		"target, record missing":                      {node: "b", check: unstarted},
 	} {
 		t.Run(name, func(t *testing.T) {
 			c := newFailoverCluster(t)
@@ -969,7 +976,7 @@ func TestMoveRestartResolvesAJournaledMoveThroughItsRecord(t *testing.T) {
 				t.Fatal(err)
 			}
 			eng := newFakeEngine()
-			eng.vms[vm], eng.stopped[vm] = "/vsock/"+vm, sb.MoveIn
+			eng.vms[vm], eng.paused[vm], eng.stopped[vm] = "/vsock/"+vm, sb.MoveIn, tt.vmmLost
 			eng.migrateSeries[vm] = series
 			m := c.nodeOn(t, eng, tt.node, dataDir, keepAnHour)
 			m.liftFence()
@@ -987,6 +994,14 @@ func TestMoveRestartResolvesAJournaledMoveThroughItsRecord(t *testing.T) {
 			}
 			if ok && (held.MoveOut != nil || held.MoveIn) {
 				t.Errorf("claim journal out %+v in %+v, want both cleared", held.MoveOut, held.MoveIn)
+			}
+			if tt.vmmLost {
+				m.livenessOnce(ctx)
+				waitFor(t, func() bool {
+					m.mu.Lock()
+					defer m.mu.Unlock()
+					return held.Restarts == 1
+				})
 			}
 			eng.mu.Lock()
 			defer eng.mu.Unlock()
