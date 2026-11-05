@@ -38,7 +38,7 @@ func BenchmarkPinnedArchiveCheckpoints(b *testing.B) {
 	for _, checkpoints := range []bool{false, true} {
 		b.Run(fmt.Sprintf("claims=5000/checkpoints=%t", checkpoints), func(b *testing.B) {
 			m := newTestManager(b, newFakeEngine(), config.PoolSpec{PoolKey: testKey})
-			m.claimed = checkpointBenchClaims(checkpoints)
+			adoptBenchClaims(m, checkpointBenchClaims(checkpoints))
 			if err := m.store.save(m.claimed); err != nil {
 				b.Fatal(err)
 			}
@@ -53,6 +53,14 @@ func BenchmarkPinnedArchiveCheckpoints(b *testing.B) {
 				}
 			}
 		})
+	}
+}
+
+func adoptBenchClaims(m *Manager, claims map[string]*types.Sandbox) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, sb := range claims {
+		m.addClaimLocked(sb)
 	}
 }
 

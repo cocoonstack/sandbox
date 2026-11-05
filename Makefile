@@ -57,8 +57,8 @@ sandboxd: ## build dist/sandboxd
 	mkdir -p dist
 	cd sandboxd && GOWORK=off go build -ldflags "-X main.version=$(SANDBOXD_VERSION)" -o ../dist/sandboxd .
 
-go-test: ## go test -race across the Go modules
-	for m in $(GO_MODULES); do (cd $$m && GOWORK=off go test -race ./...) || exit 1; done
+go-test: ## go test -race and one pass of every benchmark across the Go modules
+	for m in $(GO_MODULES); do (cd $$m && GOWORK=off go test -race ./... && GOWORK=off go test -run '^$$' -bench . -benchtime 1x ./...) || exit 1; done
 
 bench: ## claim-tier + data-plane benchmarks on this node; removes every sbx-* VM (see docs/benchmarks.md)
 	bash scripts/bench.sh
