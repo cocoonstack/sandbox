@@ -51,7 +51,6 @@ func TestCheckpointNewRejectsVolumeOptionsLocally(t *testing.T) {
 		opt  Option
 	}{
 		{"WithClaimRef", WithClaimRef("ns/claim")},
-		{"WithVolumesAttachOnly", WithVolumesAttachOnly()},
 		{"WithVolumes", WithVolumes(Volume{Name: "data"})},
 	}
 	for _, tt := range tests {

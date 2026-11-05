@@ -82,11 +82,6 @@ func WithVolumes(volumes ...Volume) Option {
 	return func(r *claimRequest) { r.Volumes = volumes }
 }
 
-// WithVolumesAttachOnly is the legacy claim-wide form of Volume.AttachOnly.
-func WithVolumesAttachOnly() Option {
-	return func(r *claimRequest) { r.VolumesAttachOnly = true }
-}
-
 // WithTimeout bounds the sandbox's lifetime: the owning node reaps it after
 // d (rounded up to seconds) even if the client vanishes.
 func WithTimeout(d time.Duration) Option {

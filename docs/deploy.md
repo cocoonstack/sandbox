@@ -382,8 +382,8 @@ with concurrent readers.
   proceed; a crashed writer leaves it, and `ro` claims are refused until one
   `rw` claim replays and releases cleanly.
 
-**Attach-only claims opt out of the marker, not out of admission.** A claim
-sent with `volumes_attach_only` gets the device attached and nothing else, so
+**Attach-only claims opt out of the marker, not out of admission.** A volume
+claimed with `attach_only` gets the device attached and nothing else, so
 sandboxd neither writes nor clears `<path>.dirty` for it — it cannot verify a
 mount it did not perform. Everything in this section still applies to the
 default, mounting claims, and the exclusion rules above apply to attach-only

@@ -226,39 +226,6 @@ func TestWithVolumesEncodesMode(t *testing.T) {
 	}
 }
 
-func TestWithVolumesAttachOnlySendsFlagAndDecodesMountlessEcho(t *testing.T) {
-	var raw struct {
-		Volumes           []map[string]any `json:"volumes"`
-		VolumesAttachOnly bool             `json:"volumes_attach_only"`
-	}
-	echo := []Volume{{Name: "imagenet", AttachOnly: true}, {Name: "scratch", Mode: "rw", AttachOnly: true}}
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if err := json.UnmarshalRead(r.Body, &raw); err != nil {
-			t.Errorf("decode body: %v", err)
-		}
-		_ = json.MarshalWrite(w, claimResponse{ID: "sb_1", Token: "tok", Volumes: echo})
-	}))
-	t.Cleanup(ts.Close)
-
-	sb, err := testClient(t, ts).New(t.Context(), "rt:24.04",
-		WithVolumes(Volume{Name: "imagenet"}, Volume{Name: "scratch", Mode: "rw"}),
-		WithVolumesAttachOnly())
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	if !raw.VolumesAttachOnly {
-		t.Error("volumes_attach_only missing from the claim body")
-	}
-	for _, entry := range raw.Volumes {
-		if mount, present := entry["mount"]; present {
-			t.Errorf("volume %v carries mount %v, want none", entry["name"], mount)
-		}
-	}
-	if !slices.Equal(sb.Volumes, echo) {
-		t.Errorf("volumes = %+v, want %+v", sb.Volumes, echo)
-	}
-}
-
 func TestVolumePolicyErrorsComeFromServer(t *testing.T) {
 	tests := []struct {
 		name  string

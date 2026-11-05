@@ -114,41 +114,12 @@ def test_claim_preserves_explicit_volume_mode(node):
     assert seen[1]["volumes"] == [{"name": "imagenet", "mode": ""}]
 
 
-def test_claim_attaches_volumes_without_mounting(node):
-    seen = recording_claim(
-        {"id": "sb_1", "token": "tok", "volumes": [{"name": "imagenet"}, {"name": "scratch", "mode": "rw"}]}
-    )
-    sb = Client(node).new("rt:24.04", volumes=["imagenet", {"name": "scratch", "mode": "rw"}], mount=False)
-    assert seen == [
-        {
-            "template": "rt:24.04",
-            "volumes": [{"name": "imagenet"}, {"name": "scratch", "mode": "rw"}],
-            "volumes_attach_only": True,
-        }
-    ]
-    assert sb.volumes == [{"name": "imagenet"}, {"name": "scratch", "mode": "rw"}]
-
-
-def test_template_claim_attaches_volumes_without_mounting(node):
-    seen = recording_claim({"id": "sb_2", "token": "tok", "volumes": [{"name": "imagenet"}]})
-    sb = Template(Client(node), node, "task:v1", "none", "small").new(volumes=["imagenet"], mount=False)
-    assert seen[0]["volumes_attach_only"] is True
-    assert seen[0]["volumes"] == [{"name": "imagenet"}]
-    assert sb.volumes == [{"name": "imagenet"}]
-
-
 def test_claim_leaves_volume_policy_to_server(node):
     seen = recording_claim({"id": "sb_1", "token": "tok"})
     entry = {"name": "imagenet", "mount": "/datasets", "attach_only": True, "mode": "future-mode"}
-    Client(node).new("rt:24.04", volumes=[entry], mount=False)
-    Template(Client(node), node, "task:v1", "none", "small").new(volumes=[entry], mount=False)
+    Client(node).new("rt:24.04", volumes=[entry])
+    Template(Client(node), node, "task:v1", "none", "small").new(volumes=[entry])
     assert [request["volumes"] for request in seen] == [[entry], [entry]]
-
-
-def test_claim_keeps_mounting_by_default(node):
-    seen = recording_claim({"id": "sb_1", "token": "tok"})
-    Client(node).new("rt:24.04", volumes=["imagenet"])
-    assert "volumes_attach_only" not in seen[0]
 
 
 def test_template_claim_asks_for_the_promoted_template(node):

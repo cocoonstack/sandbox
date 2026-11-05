@@ -371,7 +371,7 @@ func (s *Server) handleClaim(w http.ResponseWriter, r *http.Request) {
 	}
 	key := req.Key()
 	tenant := tenantFrom(r.Context())
-	if len(req.Volumes) > 0 || req.VolumesAttachOnly {
+	if len(req.Volumes) > 0 {
 		s.handleVolumeClaim(w, r, req, key, key.Hash(), tenant)
 		return
 	}
@@ -400,7 +400,7 @@ func (s *Server) handleClaim(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleVolumeClaim(w http.ResponseWriter, r *http.Request, req ClaimRequest, key types.PoolKey, hash, tenant string) {
-	volumes, err := req.normalizedVolumes()
+	volumes, err := types.ValidateVolumes(req.Volumes)
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, fmt.Sprintf("%v: %v", pool.ErrBadVolume, err))
 		return
