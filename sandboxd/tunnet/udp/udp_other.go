@@ -36,6 +36,4 @@ func (r *receiver) recv(each func(d []byte, from netip.AddrPort)) error {
 
 func segmentCmsg(*[cmsgCap]byte, int) []byte { return nil }
 
-func groSize([]byte) int { return 0 }
-
 func enableGRO(*net.UDPConn) {}

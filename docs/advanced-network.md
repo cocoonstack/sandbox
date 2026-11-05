@@ -163,19 +163,25 @@ guest -> tun0 -> silkd --vsock 2051--> sandboxd --VXLAN--> exit (vxlan0, forward
   a guest that reconnects its stream starts with what it had used.
 - **Untrusted input**: frames, virtio-net headers and IPv4 headers are bounds
   checked; non-IPv4, IP options, fragments, a packet or GSO segment larger
-  than `tun.mtu`, a GSO type that does not match the protocol and a partial
-  checksum outside the L4 checksum field are dropped and counted per reason.
+  than the MTU the stream's hello announced, a GSO frame of more than 128
+  packets, a GSO type that does not match the protocol and a partial checksum
+  outside the L4 checksum field are dropped and counted per reason. A stream
+  whose guest stops reading for 10 seconds is closed, freeing its queue.
 - **Enforcement**: the packet port answers `ON` only for an armed,
   tun-enabled claim; disabling a claim ends its stream, drops its flows and
-  stops its ARP answers. The claim switch and the profile label change only
+  stops its ARP answers. A guest of a `tun` pool that wakes, moves or reloads
+  into a state without a door (disabled, no address, the pool's `tun` off) is
+  sent `tun_down` in the background. The claim switch and the profile label change only
   with the operator token, through
   [`PUT /v1/sandboxes/{id}/tun`](sandboxd-api.md#put-v1sandboxesidtun).
 - **Audit and usage**: with `audit_log` on, each flow writes one
   `op:"tun_flow"` record when it ends ([fields](deploy.md#configuration)); with
   `egress_usage_bytes` on, each allowed flow also appends an `egress_bytes`
-  usage event with its IP bytes both ways, the destination address and port,
-  and `upstream` `tun/<label>`. The quota counter is persisted when the claim
-  is disarmed, moved or written, and at a clean stop.
+  usage event with its IP bytes both ways, the destination `ip:port` as its
+  reference, and `upstream` `tun/<label>`. A clean stop ends every live flow,
+  so its records cover the bytes up to the stop, and persists the quota
+  counter, which is also persisted when the claim is disarmed or moved; a
+  crash loses both since the last of these.
 - **Cost**: a claim of a pool without `tun` pays one map lookup. A tun claim
   adds, on the claim path, an in-memory address (or one meta-store round
   trip), a socket bind and one gratuitous ARP; `tun_up` is sent in the
@@ -201,7 +207,7 @@ The node's `tun` block turns the mode on; a pool opts in with `"tun": true`
 
 | key | default | meaning |
 |---|---|---|
-| `subnet` | required | the overlay addresses, `/4` to `/24`, outside `100.64.0.0/30`; every node of a cell sets the same one |
+| `subnet` | required | the overlay addresses, `/4` to `/24`, outside `100.64.0.0/30`; every node of a cell sets the same one; a change needs a restart, and claims that still hold an old address keep it until released, so drain tun claims first |
 | `listen` | required | the node's VXLAN socket, a specific IPv4 `ip:port`; the exits send to it |
 | `vni` | `1` | the VXLAN network identifier |
 | `port` | `4789` | the exits' VXLAN port |
@@ -249,6 +255,8 @@ ip netns exec exit sysctl -w net.netfilter.nf_conntrack_max=1048576
   ARP is not IP traffic and is unaffected.
 - `underlay_input` accepts VXLAN only from node addresses, because a sender
   that reaches the port could claim an overlay address with a gratuitous ARP.
+  sandboxd in turn accepts VXLAN only from the exits' VTEP addresses; the
+  underlay must not let other hosts spoof those addresses toward `tun.listen`.
 - Watch `nf_conntrack_count` against `nf_conntrack_max`; a full table drops
   new flows for every claim.
 - A host without `nft` carries the same four rules in `iptables` inside the

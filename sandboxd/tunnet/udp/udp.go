@@ -18,9 +18,6 @@ const (
 	maxSegments = 64
 	sockBuf     = 8 << 20
 	recvBuf     = 1 << 16
-	// recvBatch is the datagrams one receive call can return, each up to a GRO-coalesced 64 KiB.
-	recvBatch = 32
-	oobLen    = 64
 )
 
 var cmsgPool = sync.Pool{New: func() any { return new([cmsgCap]byte) }}
@@ -102,15 +99,5 @@ func (u *Underlay) Close() {
 	}
 	for _, c := range u.sends {
 		_ = c.Close()
-	}
-}
-
-// split hands each datagram the kernel coalesced into buf at seg bytes to each.
-func split(buf []byte, seg int, from netip.AddrPort, each func(d []byte, from netip.AddrPort)) {
-	if seg <= 0 {
-		seg = len(buf)
-	}
-	for off := 0; off < len(buf); off += seg {
-		each(buf[off:min(off+seg, len(buf))], from)
 	}
 }

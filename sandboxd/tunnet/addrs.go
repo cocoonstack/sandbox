@@ -44,6 +44,7 @@ type Local struct {
 	subnet netip.Prefix
 	reuse  time.Duration
 
+	io        sync.Mutex
 	mu        sync.Mutex
 	next      uint64
 	lines     int
@@ -115,11 +116,13 @@ func (l *Local) Assign(_ context.Context, claimID string) (netip.Addr, error) {
 	return netip.Addr{}, ErrNoAddress
 }
 
-// Release frees addr unless another claim holds it, and appends the release to the log.
+// Release frees addr unless another claim holds it, and appends the release to the log outside the lock Assign takes.
 func (l *Local) Release(_ context.Context, claimID string, addr netip.Addr) error {
+	l.io.Lock()
+	defer l.io.Unlock()
 	l.mu.Lock()
-	defer l.mu.Unlock()
 	if owner, ok := l.held[addr]; ok && owner != claimID {
+		l.mu.Unlock()
 		return nil
 	}
 	delete(l.held, addr)
@@ -130,8 +133,11 @@ func (l *Local) Release(_ context.Context, claimID string, addr netip.Addr) erro
 	l.freed[addr] = now
 	if l.lines++; l.lines > l.compactAt {
 		maps.DeleteFunc(l.freed, func(_ netip.Addr, at time.Time) bool { return now.Sub(at) >= l.reuse })
-		return l.compact()
+		b := l.snapshot()
+		l.mu.Unlock()
+		return utils.WriteFileSync(l.path, b, 0o600)
 	}
+	l.mu.Unlock()
 	f, err := os.OpenFile(l.path, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o600)
 	if err != nil {
 		return fmt.Errorf("open %s: %w", freedFile, err)
@@ -147,12 +153,16 @@ func (l *Local) Release(_ context.Context, claimID string, addr netip.Addr) erro
 }
 
 func (l *Local) compact() error {
+	return utils.WriteFileSync(l.path, l.snapshot(), 0o600)
+}
+
+func (l *Local) snapshot() []byte {
 	var b []byte
 	for addr, at := range l.freed {
 		b = appendFreed(b, addr, at)
 	}
 	l.lines, l.compactAt = len(l.freed), 2*len(l.freed)+compactAfter
-	return utils.WriteFileSync(l.path, b, 0o600)
+	return b
 }
 
 // HostAt maps a counter onto subnet's host addresses in order, skipping the network and broadcast addresses.

@@ -11,6 +11,7 @@ import (
 	"github.com/projecteru2/core/log"
 
 	"github.com/cocoonstack/sandbox/sandboxd/archives"
+	"github.com/cocoonstack/sandbox/sandboxd/outbound"
 	"github.com/cocoonstack/sandbox/sandboxd/tunnet"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
@@ -134,11 +135,12 @@ func (m *Manager) releaseRowTun(ctx context.Context, rec archives.Record) {
 	m.releaseTun(ctx, rec.ID, sb.TunAddr)
 }
 
-// foldTunBytes copies every armed claim's live tun byte count into its record, so the next commit persists it.
+// foldTunBytes ends the live flows, so their records are written, and copies every armed claim's live tun byte count into its record, so the next commit persists it.
 func (m *Manager) foldTunBytes() {
 	if m.tunRouter == nil {
 		return
 	}
+	m.tunRouter.EndFlows()
 	m.mu.Lock()
 	sbs := slices.Collect(maps.Values(m.claimed))
 	m.mu.Unlock()
@@ -149,10 +151,10 @@ func (m *Manager) foldTunBytes() {
 	}
 }
 
-func (m *Manager) tunOn(sb *types.Sandbox) bool {
+func (m *Manager) tunState(sb *types.Sandbox) outbound.TunState {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return !sb.TunOff
+	return outbound.TunState{On: !sb.TunOff, Addr: sb.TunAddr, Profile: sb.TunProfile, Bytes: sb.TunBytes}
 }
 
 func (m *Manager) tunRowed(sb *types.Sandbox) bool {

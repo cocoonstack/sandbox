@@ -52,10 +52,10 @@ type Options struct {
 	NoRxSplice bool
 	// Router carries the advanced network mode; nil when the node has no tun block.
 	Router *tunnet.Router
-	// Flow records one ended tun flow; TunBytes takes a disarmed claim's tun byte count back; TunOn reads the claim's tun switch under the owner's lock.
+	// Flow records one ended tun flow; TunBytes takes a disarmed claim's tun byte count back; TunState reads the claim's tun fields under the owner's lock.
 	Flow     func(ctx context.Context, id, tenant, profile string, r tunnet.FlowRecord)
 	TunBytes func(sb *types.Sandbox, used int64)
-	TunOn    func(sb *types.Sandbox) bool
+	TunState func(sb *types.Sandbox) TunState
 	// Dial, Verdict, Lock, Unlock, Sweep and Nameservers default to the internal-address guard, netfilter and /etc/resolv.conf; tests swap them.
 	Dial        egress.DialFunc
 	Verdict     VerdictFunc
@@ -259,6 +259,7 @@ func (h *Host) Reloaded() {
 	}
 	for _, t := range off {
 		h.dropTun(t)
+		h.tunDown(t.sb.ID, t.sb.VsockSocket)
 	}
 }
 

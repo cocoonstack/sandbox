@@ -15,6 +15,9 @@ import (
 const (
 	gsoSupported = true
 	cmsgCap      = 32
+	// recvBatch is the datagrams one receive call can return, each up to a GRO-coalesced 64 KiB.
+	recvBatch = 32
+	oobLen    = 64
 )
 
 var errGSORefused = unix.EIO
@@ -62,7 +65,7 @@ func (r *receiver) recv(each func(d []byte, from netip.AddrPort)) error {
 	case r.errno != 0:
 		return r.errno
 	}
-	for i := range int(r.got) { //nolint:gosec // at most recvBatch
+	for i := range int(r.got) {
 		h, name := &r.hdrs[i], &r.names[i]
 		port := binary.BigEndian.Uint16((*[2]byte)(unsafe.Pointer(&name.Port))[:]) //nolint:gosec // Port holds network byte order
 		split(r.bufs[i][:h.n], groSize(r.oobs[i][:h.hdr.Controllen]), netip.AddrPortFrom(netip.AddrFrom4(name.Addr), port), each)
@@ -119,4 +122,14 @@ func enableGRO(c *net.UDPConn) {
 	_ = rc.Control(func(fd uintptr) {
 		_ = unix.SetsockoptInt(int(fd), unix.SOL_UDP, unix.UDP_GRO, 1)
 	})
+}
+
+// split hands each datagram the kernel coalesced into buf at seg bytes to each.
+func split(buf []byte, seg int, from netip.AddrPort, each func(d []byte, from netip.AddrPort)) {
+	if seg <= 0 {
+		seg = len(buf)
+	}
+	for off := 0; off < len(buf); off += seg {
+		each(buf[off:min(off+seg, len(buf))], from)
+	}
 }

@@ -73,6 +73,6 @@ func (m *Manager) outboundOptions(ca *egress.CA) outbound.Options {
 		Router:     m.tunRouter,
 		Flow:       m.recordTunFlow,
 		TunBytes:   m.setTunBytes,
-		TunOn:      m.tunOn,
+		TunState:   m.tunState,
 	}
 }

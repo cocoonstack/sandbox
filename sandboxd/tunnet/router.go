@@ -41,9 +41,9 @@ const (
 	sweepEvery   = 10 * time.Second
 	refreshEvery = 45 * time.Second
 	// sendQueue bounds the frames waiting for one guest, about 64 MiB at worst; a full queue drops, as a congested link would.
-	sendQueue = 1024
-	readBuf   = 256 << 10
-	// segmentable is what the segmenter takes from a guest.
+	sendQueue   = 1024
+	readBuf     = 256 << 10
+	writeStall  = 10 * time.Second
 	segmentable = OffloadCSUM | OffloadTSO4 | OffloadTSOECN | OffloadUSO4
 )
 
@@ -198,7 +198,10 @@ func (r *Router) Serve(conn net.Conn, addr netip.Addr) error {
 		return err
 	}
 	_ = conn.SetDeadline(time.Time{})
-	l := &link{r: r, a: a, conn: conn, send: make(chan *[]byte, sendQueue), done: make(chan struct{})}
+	l := &link{
+		r: r, a: a, conn: conn, mtu: int(o.MTU), merge: guest.Offloads&(OffloadCSUM|OffloadTSO4) == OffloadCSUM|OffloadTSO4,
+		send: make(chan *[]byte, sendQueue), done: make(chan struct{}),
+	}
 	if !a.attach(l) {
 		return nil
 	}
@@ -240,6 +243,17 @@ func (r *Router) Run(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// EndFlows ends every armed claim's flows and writes their records, so a flow that outlives a stop is recorded up to it.
+func (r *Router) EndFlows() {
+	r.mu.RLock()
+	all := slices.Collect(maps.Values(r.claims))
+	r.mu.RUnlock()
+	now := time.Now()
+	for _, a := range all {
+		a.flows.sweep(now, true)
+	}
 }
 
 // Stats snapshots the counters.
@@ -329,12 +343,12 @@ func (r *Router) admit(frame []byte) (*link, Drop) {
 	if l == nil {
 		return nil, DropUnknownClaim
 	}
-	if drop = a.flows.inbound(p, frame, len(frame), time.Now()); drop != DropNone {
+	if drop = a.flows.inbound(p, frame, len(frame)-VnetHdrLen, time.Now()); drop != DropNone {
 		return nil, drop
 	}
 	RewriteDst(frame, GuestAddr)
-	if p.Proto == ProtoICMP && p.ICMPType != icmpEchoReply {
-		rewriteQuotedSrc(frame, p.Dst, GuestAddr)
+	if icmpError(p) {
+		rewriteQuoted(frame, srcAt, p.Dst, GuestAddr)
 	}
 	return l, DropNone
 }
@@ -428,13 +442,15 @@ func (a *armed) close() {
 
 // link is one claim's live packet stream.
 type link struct {
-	r    *Router
-	a    *armed
-	conn net.Conn
-	out  []byte
-	send chan *[]byte
-	done chan struct{}
-	once sync.Once
+	r     *Router
+	a     *armed
+	conn  net.Conn
+	mtu   int
+	merge bool
+	out   []byte
+	send  chan *[]byte
+	done  chan struct{}
+	once  sync.Once
 }
 
 func (l *link) read(br *bufio.Reader) error {
@@ -466,7 +482,7 @@ func (l *link) forward(frame []byte) Drop {
 		return drop
 	}
 	o := l.r.conf.Load()
-	segs, wire, ok := wireCost(frame, int(o.MTU))
+	segs, wire, ok := wireCost(frame, l.mtu)
 	if !ok {
 		return DropSize
 	}
@@ -485,6 +501,9 @@ func (l *link) forward(frame []byte) Drop {
 		return DropNoExit
 	}
 	RewriteSrc(frame, l.a.c.Addr)
+	if icmpError(p) {
+		rewriteQuoted(frame, dstAt, GuestAddr, l.a.c.Addr)
+	}
 	var hdr [Overhead]byte
 	appendHeader(hdr[:0], o.VNI, exit.MAC, MAC(l.a.c.Addr), etherIPv4)
 	out, stride, n := appendSegments(l.out[:0], hdr[:], frame)
@@ -529,6 +548,7 @@ func (l *link) write() {
 				}
 			}
 			bufs = batch
+			_ = l.conn.SetWriteDeadline(time.Now().Add(writeStall))
 			_, err := bufs.WriteTo(l.conn)
 			l.r.framesOut.Add(uint64(len(held)))
 			for _, bp := range held {

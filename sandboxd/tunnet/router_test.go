@@ -183,6 +183,11 @@ func TestRouterChargesSegmentsAndRefusesOversizedPackets(t *testing.T) {
 	u, r := newRouter()
 	r.Arm(Claim{ID: "c1", Addr: claimAddr, Limits: Limits{PacketsPerSecond: 10}, Allow: func(netip.Addr, uint16) bool { return true }})
 	u.sent(t)
+	go func() {
+		for s := range u.out {
+			_ = s
+		}
+	}()
 	guest := serve(t, r, claimAddr)
 	guestHello(t, guest)
 	sendFrame(t, guest, gsoFrame(ProtoTCP, 4000, 1420))
@@ -190,9 +195,11 @@ func TestRouterChargesSegmentsAndRefusesOversizedPackets(t *testing.T) {
 	big[1] = gsoNone
 	sendFrame(t, guest, big)
 	sendFrame(t, guest, gsoFrame(ProtoTCP, 4000, 8))
-	waitFor(t, func() bool { s := r.Stats(); return s.Drops[DropSize] == 2 && s.Drops[DropLimit] == 1 })
-	if s := r.Stats(); s.DgramsOut != 0 {
-		t.Errorf("sent %d datagrams, want none", s.DgramsOut)
+	sendFrame(t, guest, gsoFrame(ProtoTCP, 4000, 40))
+	sendFrame(t, guest, gsoFrame(ProtoTCP, 4000, 40))
+	waitFor(t, func() bool { s := r.Stats(); return s.Drops[DropSize] == 3 && s.Drops[DropLimit] == 1 })
+	if s := r.Stats(); s.DgramsOut != 100 {
+		t.Errorf("sent %d datagrams, want the 100 segments of the one frame the packet bucket admitted", s.DgramsOut)
 	}
 }
 
@@ -253,6 +260,95 @@ func TestRouterResumesAStreamOpenedBeforeTheArmButRefusesAnOpener(t *testing.T) 
 	u.inject(t, reply(remote))
 	if p, _ := Parse(readFrame(t, guest)); p.Src != remote || p.Dst != GuestAddr {
 		t.Fatalf("delivered %+v, want the stream's next segment", p)
+	}
+}
+
+func TestRouterKeepsTheMTUAStreamWasToldUntilItsNextHello(t *testing.T) {
+	u, r := newRouter()
+	r.Arm(Claim{ID: "c1", Addr: claimAddr, Allow: func(netip.Addr, uint16) bool { return true }})
+	u.sent(t)
+	guest := serve(t, r, claimAddr)
+	guestHello(t, guest)
+	r.Reload(&Overlay{Subnet: subnet, VNI: 7, Port: 4789, MTU: 1410, Exits: map[string]Exit{"default": {VTEP: vtep, MAC: exitMAC}}})
+	u.sent(t)
+	full := gsoFrame(ProtoUDP, 1412, 1412)
+	full[0], full[1] = 0, gsoNone
+	sendFrame(t, guest, full)
+	if inner, _, _ := u.sent(t); len(inner) != 1440 {
+		t.Errorf("sent %d bytes, want the 1440-byte packet the stream's MTU allows", len(inner))
+	}
+}
+
+func TestEndFlowsRecordsLiveFlowsWithIPBytes(t *testing.T) {
+	u, r := newRouter()
+	var mu sync.Mutex
+	var records []FlowRecord
+	r.Arm(Claim{
+		ID: "c1", Addr: claimAddr, Allow: func(netip.Addr, uint16) bool { return true },
+		Record: func(fr FlowRecord) { mu.Lock(); records = append(records, fr); mu.Unlock() },
+	})
+	u.sent(t)
+	guest := serve(t, r, claimAddr)
+	guestHello(t, guest)
+	out := frame(ProtoTCP, GuestAddr, remote, false)
+	sendFrame(t, guest, out)
+	u.sent(t)
+	in := reply(remote)
+	u.inject(t, in)
+	readFrame(t, guest)
+	r.EndFlows()
+	mu.Lock()
+	defer mu.Unlock()
+	if len(records) != 1 || records[0].Up != int64(len(out)-VnetHdrLen) || records[0].Down != int64(len(in)-Overhead) {
+		t.Fatalf("records %+v, want one flow with %d up and %d down IP bytes", records, len(out)-VnetHdrLen, len(in)-Overhead)
+	}
+}
+
+func TestDeliverMergesOnlyForAGuestThatOfferedTSO(t *testing.T) {
+	u, r := newRouter()
+	r.Arm(Claim{ID: "c1", Addr: claimAddr, Allow: func(netip.Addr, uint16) bool { return true }})
+	u.sent(t)
+	host, guest := net.Pipe()
+	t.Cleanup(func() { _ = guest.Close() })
+	go func() { _ = r.Serve(host, claimAddr) }()
+	h := Hello{Version: Version, Offloads: OffloadCSUM}.Encode()
+	if _, err := guest.Write(h[:]); err != nil {
+		t.Fatal(err)
+	}
+	guestHello(t, guest)
+	sendFrame(t, guest, frame(ProtoTCP, GuestAddr, remote, false))
+	u.sent(t)
+	u.inject(t, dataSegment(1000, 1000))
+	u.inject(t, dataSegment(2000, 1000))
+	for range 2 {
+		if f := readFrame(t, guest); f[1] != gsoNone || len(f) != VnetHdrLen+1040 {
+			t.Fatalf("frame gso %d len %d, want each segment alone", f[1], len(f))
+		}
+	}
+}
+
+func TestRouterPointsAGuestICMPErrorAtTheClaimAddress(t *testing.T) {
+	u, r := newRouter()
+	r.Arm(Claim{ID: "c1", Addr: claimAddr, Allow: func(netip.Addr, uint16) bool { return true }})
+	u.sent(t)
+	guest := serve(t, r, claimAddr)
+	guestHello(t, guest)
+	quoted := frame(ProtoUDP, remote, GuestAddr, false)[VnetHdrLen:][:28]
+	icmp := make([]byte, VnetHdrLen+20+8+28)
+	ip := icmp[VnetHdrLen:]
+	ip[0], ip[8], ip[9] = 0x45, 64, ProtoICMP
+	binary.BigEndian.PutUint16(ip[2:], uint16(len(ip)))
+	s, d := GuestAddr.As4(), remote.As4()
+	copy(ip[srcAt:], s[:])
+	copy(ip[dstAt:], d[:])
+	binary.BigEndian.PutUint16(ip[10:], ^fold(onesSum(ip[:20], 0)))
+	ip[20], ip[21] = icmpUnreachable, 3
+	copy(ip[28:], quoted)
+	binary.BigEndian.PutUint16(ip[22:], ^fold(onesSum(ip[20:], 0)))
+	sendFrame(t, guest, icmp)
+	inner, _, _ := u.sent(t)
+	if got := netip.AddrFrom4([4]byte(inner[28+dstAt:])); got != claimAddr || fold(onesSum(inner[20:], 0)) != 0xffff {
+		t.Errorf("quoted destination %v, icmp checksum %#x; want the claim address and a valid checksum", got, fold(onesSum(inner[20:], 0)))
 	}
 }
 

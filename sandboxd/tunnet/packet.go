@@ -102,7 +102,7 @@ type Packet struct {
 	SrcPort, DstPort uint16
 	// End marks a TCP FIN or RST; Open a SYN without ACK.
 	End, Open bool
-	ICMPType uint8
+	ICMPType  uint8
 }
 
 // Parse reads frame's IPv4 header and refuses, with the reason, what the first version does not carry: other versions, IP options, fragments, a length that disagrees with the frame.
@@ -179,17 +179,17 @@ func wireCost(frame []byte, mtu int) (segs, bytes int, ok bool) {
 		return 0, 0, false
 	}
 	segs = max((len(ip)-hdrs+size-1)/size, 1)
-	return segs, len(ip) + (segs-1)*hdrs, true
+	return segs, len(ip) + (segs-1)*hdrs, segs <= maxSegs
 }
 
-// rewriteQuotedSrc moves the source of the packet an ICMP error quotes from one address to another and refreshes both checksums, so the guest's socket lookup finds it.
-func rewriteQuotedSrc(frame []byte, from, to netip.Addr) {
+// rewriteQuoted moves the address at offset at of the packet an ICMP error quotes from one address to another and refreshes both checksums, so the receiver relates the error to its flow.
+func rewriteQuoted(frame []byte, at int, from, to netip.Addr) {
 	ip := frame[VnetHdrLen:]
-	if len(ip) < 28+20 || [4]byte(ip[28+srcAt:28+srcAt+4]) != from.As4() {
+	if len(ip) < 28+20 || [4]byte(ip[28+at:28+at+4]) != from.As4() {
 		return
 	}
 	q, f, t := ip[28:], from.As4(), to.As4()
-	copy(q[srcAt:], t[:])
+	copy(q[at:], t[:])
 	binary.BigEndian.PutUint16(q[10:], ^adjust(^binary.BigEndian.Uint16(q[10:]), f, t))
 	binary.BigEndian.PutUint16(ip[22:], 0)
 	binary.BigEndian.PutUint16(ip[22:], ^fold(onesSum(ip[20:], 0)))

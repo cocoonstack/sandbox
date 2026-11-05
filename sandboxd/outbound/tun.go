@@ -3,6 +3,7 @@ package outbound
 import (
 	"cmp"
 	"context"
+	"errors"
 	"net"
 	"net/netip"
 	"sync/atomic"
@@ -16,8 +17,18 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
-// tunVerbTimeout bounds a tun_up or tun_down; an old silkd that never answers costs the caller no more.
-const tunVerbTimeout = 3 * time.Second
+const (
+	// tunVerbTimeout bounds a tun_up or tun_down; an old silkd that never answers costs the caller no more.
+	tunVerbTimeout = 3 * time.Second
+	acceptBackoff  = 100 * time.Millisecond
+)
+
+type TunState struct {
+	On      bool
+	Addr    netip.Addr
+	Profile string
+	Bytes   int64
+}
 
 // tunDoor is a claim's packet door and the byte counter its router claim charges.
 type tunDoor struct {
@@ -76,24 +87,29 @@ func (h *Host) TunUsed(id string) (int64, bool) {
 
 // armTun binds the packet door of sb, whose doors d hold none, when its pool has tun and the claim is on and holds an address; then it arms the router and turns the guest's tun0 on.
 func (h *Host) armTun(ctx context.Context, sb *types.Sandbox, d *doors, v *View, c *claim) {
-	key := sb.PolicyKey()
-	if h.o.Router == nil || !v.Tun(key) || !sb.TunAddr.IsValid() || sb.VsockSocket == "" || !h.tunOn(sb) {
+	key, id, sock := sb.PolicyKey(), sb.ID, sb.VsockSocket
+	if h.o.Router == nil || !v.Tun(key) || sock == "" {
+		return
+	}
+	st := h.tunState(sb)
+	if !st.On || !st.Addr.IsValid() {
+		h.tunDown(id, sock)
 		return
 	}
 	logger := log.WithFunc("outbound.armTun")
-	ln, err := listenUnix(engine.TunSocketPath(sb.VsockSocket))
+	ln, err := listenUnix(engine.TunSocketPath(sock))
 	if err != nil {
-		logger.Warnf(ctx, "bind the packet door of %s, it runs without tun: %v", sb.ID, err)
+		logger.Warnf(ctx, "bind the packet door of %s, it runs without tun: %v", id, err)
 		return
 	}
-	t := &tunDoor{ln: limitDoor(ln), addr: sb.TunAddr, used: new(atomic.Int64), sb: sb}
-	t.used.Store(sb.TunBytes)
-	id, tenant, profile, sock, usage := sb.ID, sb.Tenant, sb.TunProfile, sb.VsockSocket, v.usageBytes
+	t := &tunDoor{ln: limitDoor(ln), addr: st.Addr, used: new(atomic.Int64), sb: sb}
+	t.used.Store(st.Bytes)
+	tenant, profile, usage := sb.Tenant, st.Profile, v.usageBytes
 	evCtx := context.WithoutCancel(ctx)
 	tc := tunnet.Claim{
 		ID:      id,
 		Addr:    t.addr,
-		Enabled: func() bool { return h.o.View().Tun(key) && h.tunLive(id, t) && h.tunOn(sb) },
+		Enabled: func() bool { return h.o.View().Tun(key) && h.tunLive(id, t) && h.tunState(sb).On },
 		Profile: profile,
 		Allow: func(dst netip.Addr, port uint16) bool {
 			if c.current().EvalFlow(port) != egress.DecisionAllow {
@@ -109,7 +125,8 @@ func (h *Host) armTun(ctx context.Context, sb *types.Sandbox, d *doors, v *View,
 				h.o.Flow(evCtx, id, tenant, profile, r)
 			}
 			if usage && r.Allowed && r.Up+r.Down > 0 {
-				h.o.Transfer(evCtx, id, tenant, egress.Event{Host: r.Dst.String(), Port: r.Port, Upstream: "tun/" + cmp.Or(profile, "default")}, r.Up, r.Down)
+				dst := netip.AddrPortFrom(r.Dst, r.Port).String()
+				h.o.Transfer(evCtx, id, tenant, egress.Event{Host: dst, Port: r.Port, Upstream: "tun/" + cmp.Or(profile, "default")}, r.Up, r.Down)
 			}
 		},
 	}
@@ -120,6 +137,19 @@ func (h *Host) armTun(ctx context.Context, sb *types.Sandbox, d *doors, v *View,
 		d.tun = t
 	}
 	h.mu.Unlock()
+	if live && !h.tunState(sb).On {
+		h.mu.Lock()
+		mine := d.tun == t
+		if mine {
+			d.tun = nil
+		}
+		h.mu.Unlock()
+		if mine {
+			h.dropTun(t)
+			h.tunDown(id, sock)
+		}
+		return
+	}
 	if !live {
 		h.dropTun(t)
 		return
@@ -131,7 +161,7 @@ func (h *Host) armTun(ctx context.Context, sb *types.Sandbox, d *doors, v *View,
 		if err := h.o.Engine.TunUp(vctx, sock); err != nil {
 			logger.Warnf(ctx, "tun_up %s: %v", id, err)
 		}
-		if !h.tunLive(id, t) {
+		if _, armed := h.TunUsed(id); !armed {
 			_ = h.o.Engine.TunDown(vctx, sock)
 		}
 	}()
@@ -140,8 +170,13 @@ func (h *Host) armTun(ctx context.Context, sb *types.Sandbox, d *doors, v *View,
 func (h *Host) serveTun(ctx context.Context, t *tunDoor) {
 	for {
 		conn, err := t.ln.Accept()
-		if err != nil {
+		if errors.Is(err, net.ErrClosed) {
 			return
+		}
+		if err != nil {
+			log.WithFunc("outbound.serveTun").Warnf(ctx, "packet door of %s: %v", t.sb.ID, err)
+			time.Sleep(acceptBackoff)
+			continue
 		}
 		go func() {
 			if err := h.o.Router.Serve(conn, t.addr); err != nil {
@@ -151,8 +186,21 @@ func (h *Host) serveTun(ctx context.Context, t *tunDoor) {
 	}
 }
 
-func (h *Host) tunOn(sb *types.Sandbox) bool {
-	return h.o.TunOn == nil || h.o.TunOn(sb)
+func (h *Host) tunState(sb *types.Sandbox) TunState {
+	if h.o.TunState == nil {
+		return TunState{On: !sb.TunOff, Addr: sb.TunAddr, Profile: sb.TunProfile, Bytes: sb.TunBytes}
+	}
+	return h.o.TunState(sb)
+}
+
+func (h *Host) tunDown(id, sock string) {
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), tunVerbTimeout)
+		defer cancel()
+		if err := h.o.Engine.TunDown(ctx, sock); err != nil {
+			log.WithFunc("outbound.tunDown").Debugf(ctx, "tun_down %s: %v", id, err)
+		}
+	}()
 }
 
 // tunLive reports whether t is still the packet door of claim id.

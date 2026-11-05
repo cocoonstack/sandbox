@@ -19,8 +19,8 @@ const (
 	idleUDP    = 2 * time.Minute
 	idleOther  = 30 * time.Second
 
-	// packetBurst lets one GSO frame of small segments through a low packet rate.
-	packetBurst = 128
+	// maxSegs bounds the packets one GSO frame may put on the wire: 64 KiB at a 512-byte MSS; it is also the packet bucket's least burst.
+	maxSegs = 128
 )
 
 // AllowFunc judges a new flow's destination; port 0 asks for a rule that covers every port.
@@ -82,7 +82,7 @@ func newDirection(l Limits) *direction {
 		d.bytes = rate.NewLimiter(rate.Limit(l.BytesPerSecond), max(int(l.BytesPerSecond), 2*MaxFrame))
 	}
 	if l.PacketsPerSecond > 0 {
-		d.packets = rate.NewLimiter(rate.Limit(l.PacketsPerSecond), max(int(l.PacketsPerSecond), packetBurst))
+		d.packets = rate.NewLimiter(rate.Limit(l.PacketsPerSecond), max(int(l.PacketsPerSecond), maxSegs))
 	}
 	return d
 }
@@ -189,7 +189,7 @@ func (f *flows) match(p Packet, frame []byte) (*flow, bool) {
 	case ProtoTCP, ProtoUDP:
 		key.dport, key.sport = p.SrcPort, p.DstPort
 	case ProtoICMP:
-		if p.ICMPType == icmpUnreachable || p.ICMPType == icmpTimeExceed {
+		if icmpError(p) {
 			inner, ok := innerDst(frame)
 			return nil, ok && (f.peers[peerKey{ProtoTCP, inner}] > 0 || f.peers[peerKey{ProtoUDP, inner}] > 0 || f.peers[peerKey{ProtoICMP, inner}] > 0)
 		}
@@ -277,6 +277,10 @@ func idleFor(proto uint8, fl *flow) time.Duration {
 	default:
 		return idleOther
 	}
+}
+
+func icmpError(p Packet) bool {
+	return p.Proto == ProtoICMP && (p.ICMPType == icmpUnreachable || p.ICMPType == icmpTimeExceed)
 }
 
 // innerDst is the destination of the packet an ICMP error quotes.

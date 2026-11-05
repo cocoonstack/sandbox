@@ -121,9 +121,7 @@ func TestAFailedAssignLeavesTheClaimWithoutTun(t *testing.T) {
 	if doorOpen(sb) {
 		t.Error("a claim without an address has a packet door")
 	}
-	if got := tunVerbsOf(eng); len(got) != 0 {
-		t.Errorf("tun verbs %q, want none", got)
-	}
+	waitFor(t, func() bool { return slices.Equal(tunVerbsOf(eng), []string{"down " + sb.VsockSocket}) })
 }
 
 func TestSetTunRewritesAHibernatedClaimWithoutWakingIt(t *testing.T) {
@@ -171,6 +169,23 @@ func TestDisablingARunningClaimRevokesItsPacketPath(t *testing.T) {
 	}
 	if !tunHello(t, sb) {
 		t.Error("the re-enabled claim has no live packet door")
+	}
+}
+
+func TestARearmWhileTunUpIsInFlightLeavesTheGuestUp(t *testing.T) {
+	eng, addrs := newFakeEngine(), &fakeAddrs{}
+	eng.tunUpGate = make(chan struct{})
+	m := tunManager(t, eng, addrs, config.PoolSpec{PoolKey: testKey, Tun: true, Egress: anyPolicy})
+	sb := mustClaim(t, m, testKey)
+	if err := m.SetTun(t.Context(), sb.ID, nil, new("res")); err != nil {
+		t.Fatalf("set profile: %v", err)
+	}
+	close(eng.tunUpGate)
+	up := "up " + sb.VsockSocket
+	waitFor(t, func() bool { return slices.Equal(tunVerbsOf(eng), []string{up, up}) })
+	time.Sleep(100 * time.Millisecond)
+	if got := tunVerbsOf(eng); !slices.Equal(got, []string{up, up}) {
+		t.Errorf("tun verbs %q, want two tun_up and no tun_down from the replaced arm", got)
 	}
 }
 
@@ -244,6 +259,10 @@ func TestFlushClaimsPersistsTheLiveTunBytes(t *testing.T) {
 	if got := journaled(t, m)[sb.ID].TunBytes; got != int64(len(pkt)-tunnet.VnetHdrLen) {
 		t.Errorf("journaled tun bytes %d, want the %d sent", got, len(pkt)-tunnet.VnetHdrLen)
 	}
+	raw, err := os.ReadFile(filepath.Join(m.cfg.DataDir, "audit.jsonl"))
+	if err != nil || !strings.Contains(string(raw), `"op":"tun_flow"`) {
+		t.Errorf("audit journal %q %v, want the live flow recorded at the flush", raw, err)
+	}
 }
 
 func TestATunFlowEndWritesOneAuditRecord(t *testing.T) {
@@ -273,7 +292,7 @@ func tunManager(t *testing.T, eng *fakeEngine, addrs tunnet.Addresses, pools ...
 	t.Helper()
 	eng.sockRoot = outboundtest.SockRoot(t)
 	tun := &config.TunConfig{Subnet: "240.0.0.0/4", Listen: "127.0.0.1:4789", VNI: 1, Port: 4789, MTU: 1450, Exits: map[string]config.TunExit{"default": {VTEP: "127.0.0.2", MAC: "02:aa:00:00:00:01"}}}
-	cfg := &config.Config{DataDir: t.TempDir(), Tun: tun, Pools: pools}
+	cfg := &config.Config{DataDir: t.TempDir(), Tun: tun, Pools: pools, AuditLog: true}
 	b := testBackends(t, cfg)
 	b.TunRouter, b.TunAddrs = tunnet.New(fakeUnderlay{}, tun.Overlay()), addrs
 	m, err := NewManager(t.Context(), cfg, eng, testSecrets(t), b)

@@ -25,7 +25,7 @@ type coalescer struct {
 // add takes an admitted frame held in bp; false leaves both with the caller to enqueue unmerged.
 func (c *coalescer) add(r *Router, l *link, bp *[]byte, frame []byte) bool {
 	seg, ok := segmentOf(frame)
-	if !ok {
+	if !ok || !l.merge {
 		c.flush(r)
 		return false
 	}
@@ -75,7 +75,7 @@ func (c *coalescer) joins(l *link, frame []byte, seg tcpSegment) bool {
 	ip, pip := frame[VnetHdrLen:], p[VnetHdrLen:]
 	return int(pip[32]>>4)*4 == seg.hdr && ip[1] == pip[1] && ip[ipTTL] == pip[ipTTL] &&
 		bytes.Equal(ip[srcAt:dstAt+4], pip[srcAt:dstAt+4]) && bytes.Equal(ip[20:24], pip[20:24]) &&
-		bytes.Equal(ip[28:32], pip[28:32]) && bytes.Equal(ip[40:20+seg.hdr], pip[40:20+seg.hdr])
+		bytes.Equal(ip[28:32], pip[28:32]) && bytes.Equal(ip[34:36], pip[34:36]) && bytes.Equal(ip[40:20+seg.hdr], pip[40:20+seg.hdr])
 }
 
 func (c *coalescer) append(frame []byte, seg tcpSegment) {
