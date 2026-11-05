@@ -7,7 +7,9 @@ import (
 	"io"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -325,6 +327,33 @@ func TestCloseWaitsForARunningCommandAndRefusesNewOnes(t *testing.T) {
 	<-closed
 	if _, err := e.List(t.Context()); !errors.Is(err, ErrStopping) {
 		t.Errorf("List after Close = %v, want %v", err, ErrStopping)
+	}
+}
+
+func TestWaitCaptureBlocksOnAnExactArgument(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("reads /proc")
+	}
+	snap := "sbx-hib-" + strings.ReplaceAll(t.Name(), "/", "-")
+	cmd := exec.Command("sh", "-c", "sleep 30; :", "--name", snap)
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = cmd.Process.Kill(); _ = cmd.Wait() })
+	done := make(chan error, 1)
+	go func() { done <- newTestEngine().WaitCapture(t.Context(), snap) }()
+	select {
+	case err := <-done:
+		t.Fatalf("WaitCapture returned %v with the process alive", err)
+	case <-time.After(2 * captureExitPoll):
+	}
+	if err := newTestEngine().WaitCapture(t.Context(), snap[:len(snap)-1]); err != nil {
+		t.Errorf("a prefix of the name: %v", err)
+	}
+	_ = cmd.Process.Kill()
+	_ = cmd.Wait()
+	if err := <-done; err != nil {
+		t.Errorf("WaitCapture after exit: %v", err)
 	}
 }
 

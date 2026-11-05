@@ -2,6 +2,8 @@ package pool
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"strings"
 
 	"github.com/projecteru2/core/log"
@@ -22,8 +24,20 @@ func (m *Manager) sourceSnap(ctx context.Context, sb *types.Sandbox) (string, fu
 		return sb.HibernateSnap, func() {}, nil
 	}
 	snap := forkPrefix + strings.TrimPrefix(sb.VMName, vmPrefix) + "-" + randHex(3)
+	intent, live := m.setIfLive(sb, func() { sb.SaveSnap = snap })
+	if !live {
+		return "", nil, ErrUnknownSandbox
+	}
+	if err := m.store.commit(intent); err != nil {
+		m.setIfLive(sb, func() { sb.SaveSnap = "" })
+		return "", nil, fmt.Errorf("save %s: persist intent: %w", sb.ID, err)
+	}
 	if err := m.eng.SnapshotSave(ctx, sb.VMName, snap); err != nil {
-		return "", nil, err
+		_, settleErr := m.settleFailedCapture(ctx, sb)
+		return "", nil, errors.Join(err, settleErr)
+	}
+	if _, err := m.commitIfLive(ctx, sb, func() { sb.SaveSnap = "" }); err != nil {
+		log.WithFunc("pool.sourceSnap").Warnf(ctx, "clear save intent of %s: %v", sb.ID, err)
 	}
 	return snap, func() { m.dropSnap(ctx, snap) }, nil
 }

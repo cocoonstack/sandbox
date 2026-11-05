@@ -155,6 +155,7 @@ type Engine interface {
 	Inspect(ctx context.Context, name string) (types.VMRecord, bool, error)
 	VMEvents(ctx context.Context, socket string, onSync engine.VMSyncFunc, onChange engine.VMChangeFunc) error
 	Probe(ctx context.Context, vsockSocket string, timeout time.Duration) error
+	WaitCapture(ctx context.Context, snap string) error
 	DialGuestPort(ctx context.Context, vsockSocket string, port uint16) (net.Conn, error)
 	InstallCACert(ctx context.Context, vsockSocket string, certPEM []byte) error
 	MarkLane(ctx context.Context, vsockSocket string, lane types.NetRoute) error

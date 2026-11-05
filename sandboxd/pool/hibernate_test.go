@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 	"testing/synctest"
+	"time"
 
 	"github.com/cocoonstack/sandbox/sandboxd/config"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
@@ -109,10 +110,10 @@ func TestHibernateVerifiedFailureClearsIntent(t *testing.T) {
 	if _, g := m.Info(); g.Hibernated != 0 {
 		t.Errorf("hibernated %d, want 0 (still running)", g.Hibernated)
 	}
-	got := journaled(t, m)
-	if got[sb.ID] == nil || got[sb.ID].HibernateSnap != "" || got[sb.ID].PendingSnap != "" {
-		t.Fatalf("journal %+v, want running (no snaps)", got[sb.ID])
-	}
+	waitFor(t, func() bool {
+		row := journaled(t, m)[sb.ID]
+		return row != nil && row.HibernateSnap == "" && row.PendingSnap == ""
+	})
 	eng.hibernateErr = nil
 	if err := m.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
 		t.Fatalf("Hibernate retry: %v", err)
@@ -192,8 +193,9 @@ func TestRetryResolvesDanglingIntent(t *testing.T) {
 		t.Fatalf("intent %q, want the real snapshot %q kept", got[sb.ID].PendingSnap, realSnap)
 	}
 
-	eng.hibernateErr = nil
-	eng.snapListErr = nil
+	eng.mu.Lock()
+	eng.hibernateErr, eng.snapListErr = nil, nil
+	eng.mu.Unlock()
 	if err := m.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
 		t.Fatalf("Hibernate retry: %v", err)
 	}
@@ -247,24 +249,23 @@ func TestResolvePendingSnapReleaseRaceDropsOrphan(t *testing.T) {
 		leaveDanglingIntent(t, m, eng, sb)
 		realSnap := eng.hibernates[0]
 
-		eng.snapListErr = nil
-		eng.snapListStall = make(chan struct{})
 		callsBefore := eng.snapListCalls()
-		wakeErr := make(chan error, 1)
-		go func() {
-			_, _, _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token)
-			wakeErr <- err
-		}()
-		waitFor(t, func() bool { return eng.snapListCalls() > callsBefore })
+		eng.mu.Lock()
+		eng.snapListErr, eng.snapListStall = nil, make(chan struct{})
+		eng.mu.Unlock()
+		time.Sleep(2 * captureResumeRetry)
+		synctest.Wait()
+		if eng.snapListCalls() <= callsBefore {
+			t.Fatal("the settle never re-read the snapshot list")
+		}
 		if err := m.Release(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
 			t.Fatalf("release: %v", err)
 		}
 		close(eng.snapListStall)
-
-		if err := <-wakeErr; !errors.Is(err, ErrUnknownSandbox) {
+		waitFor(t, func() bool { return eng.snapRemoved(realSnap) })
+		if _, _, _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token); !errors.Is(err, ErrUnknownSandbox) {
 			t.Fatalf("wake: %v, want ErrUnknownSandbox", err)
 		}
-		waitFor(t, func() bool { return eng.snapRemoved(realSnap) })
 	})
 }
 
@@ -275,11 +276,12 @@ func TestResolveAdoptBillsWhenPersistFails(t *testing.T) {
 		sb := mustClaim(t, m, testKey)
 		leaveDanglingIntent(t, m, eng, sb)
 
-		eng.snapListErr = nil
 		breakStore(t, m)
-		if err := m.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err == nil {
-			t.Fatal("Hibernate reported success despite a persist failure")
-		}
+		eng.mu.Lock()
+		eng.snapListErr = nil
+		eng.mu.Unlock()
+		time.Sleep(2 * captureResumeRetry)
+		synctest.Wait()
 		if n := m.Counters().Hibernates; n != 1 {
 			t.Errorf("hibernates billed=%d, want 1 (billed even while the persist lags)", n)
 		}

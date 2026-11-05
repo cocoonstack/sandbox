@@ -680,7 +680,11 @@ dying with the service's cgroup. sandboxd starts no new `cocoon` command once
 stopped and waits for the running ones, since cocoon dies on its next log line
 once sandboxd's end of its stderr closes, and a hibernate killed that way leaves
 the guest paused. A save or hibernate can take 26 minutes, hence
-`TimeoutStopSec=27min`; stops normally take seconds. Claimed
+`TimeoutStopSec=27min`; stops normally take seconds. If sandboxd dies abruptly during
+a capture instead, the next start holds that claim until the `cocoon` command has
+exited, then settles it: a hibernate whose snapshot landed stays hibernated and wakes
+from it, and any other capture resumes the guest, or marks the claim failed if it
+does not answer within 30 minutes. Claimed
 sandboxes are reaped when their TTL expires (default 5m, capped at 24h).
 
 A snapshot save, hibernate, export, restore or clone has 15 minutes. Once canceled, a

@@ -1263,6 +1263,14 @@ type fakeEngine struct {
 	runColdErr            error
 	probeErr              error
 	hibernateErr          error
+	captureWaits          []string
+	vmStates              map[string]string
+	startFails            int
+	stopErr               error
+	hibernateLeavesVMM    bool
+	captureStall          chan struct{}
+	captureHook           func()
+	listFails             int
 	restoreErr            error
 	restoreStall          chan struct{}
 	snapSaveStall         chan struct{}
@@ -1418,6 +1426,10 @@ func (f *fakeEngine) Start(_ context.Context, name string) error {
 		hook()
 	}
 	f.starts = append(f.starts, name)
+	if f.startFails > 0 {
+		f.startFails--
+		return errors.New("query vm.info: context deadline exceeded")
+	}
 	if f.startErr != nil {
 		return f.startErr
 	}
@@ -1432,7 +1444,24 @@ func (f *fakeEngine) Stop(_ context.Context, name string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.stops = append(f.stops, name)
+	if f.stopErr != nil {
+		return f.stopErr
+	}
 	f.stopped[name] = true
+	return nil
+}
+
+func (f *fakeEngine) WaitCapture(_ context.Context, snap string) error {
+	f.mu.Lock()
+	f.captureWaits = append(f.captureWaits, snap)
+	stall, hook := f.captureStall, f.captureHook
+	f.mu.Unlock()
+	if stall != nil {
+		<-stall
+	}
+	if hook != nil {
+		hook()
+	}
 	return nil
 }
 
@@ -1568,7 +1597,7 @@ func (f *fakeEngine) Hibernate(_ context.Context, name, snapName string) error {
 	}
 	if completes {
 		f.mu.Lock()
-		f.stopped[name] = true
+		f.stopped[name] = !f.hibernateLeavesVMM
 		f.snapshots = append(f.snapshots, snapName)
 		f.mu.Unlock()
 	}
@@ -1928,11 +1957,17 @@ func (f *fakeEngine) MigrateAbort(_ context.Context, vmName, series string) erro
 func (f *fakeEngine) list(_ context.Context) ([]types.VMRecord, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.listFails > 0 {
+		f.listFails--
+		return nil, errors.New("cocoon vm list: signal: killed")
+	}
 	var vms []types.VMRecord
 	for name, sock := range f.vms {
 		sock = f.lateVsock(sock)
 		state := vmStateRunning
 		switch {
+		case f.vmStates[name] != "":
+			state = f.vmStates[name]
 		case f.creating[name]:
 			state = vmStateCreating
 		case f.stopped[name]:
