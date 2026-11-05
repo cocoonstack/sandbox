@@ -18,35 +18,6 @@ import (
 	"sync"
 )
 
-func main() {
-	addr := flag.String("addr", "127.0.0.1:49983", "loopback address to listen on")
-	halfClose := flag.String("half-close-addr", "", "raw address that greets, shuts its write side, then reads")
-	flag.Parse()
-
-	var seen halfCloseSink
-	if *halfClose != "" {
-		go seen.serve(*halfClose)
-	}
-
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusNoContent)
-	})
-	mux.HandleFunc("GET /half-close-seen", func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = io.WriteString(w, seen.read())
-	})
-	mux.HandleFunc("/", report)
-
-	var protocols http.Protocols
-	protocols.SetHTTP1(true)
-	protocols.SetUnencryptedHTTP2(true)
-	srv := &http.Server{Addr: *addr, Handler: mux, Protocols: &protocols} //nolint:gosec // loopback test server inside a sandbox; no header timeout by design
-	if err := srv.ListenAndServe(); err != nil {
-		fmt.Fprintln(os.Stderr, "guestserver:", err)
-		os.Exit(1)
-	}
-}
-
 // halfCloseSink greets, shuts its write side, and keeps reading what the client sends after.
 type halfCloseSink struct {
 	mu   sync.Mutex
@@ -94,6 +65,35 @@ func (h *halfCloseSink) read() string {
 		return ""
 	}
 	return h.got
+}
+
+func main() {
+	addr := flag.String("addr", "127.0.0.1:49983", "loopback address to listen on")
+	halfClose := flag.String("half-close-addr", "", "raw address that greets, shuts its write side, then reads")
+	flag.Parse()
+
+	var seen halfCloseSink
+	if *halfClose != "" {
+		go seen.serve(*halfClose)
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("GET /half-close-seen", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, seen.read())
+	})
+	mux.HandleFunc("/", report)
+
+	var protocols http.Protocols
+	protocols.SetHTTP1(true)
+	protocols.SetUnencryptedHTTP2(true)
+	srv := &http.Server{Addr: *addr, Handler: mux, Protocols: &protocols} //nolint:gosec // loopback test server inside a sandbox; no header timeout by design
+	if err := srv.ListenAndServe(); err != nil {
+		fmt.Fprintln(os.Stderr, "guestserver:", err)
+		os.Exit(1)
+	}
 }
 
 // report answers with what the guest received, so a caller can assert the relay changed nothing.

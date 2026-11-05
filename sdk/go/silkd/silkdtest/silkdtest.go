@@ -12,6 +12,13 @@ import (
 	"github.com/cocoonstack/sandbox/protocol/wire"
 )
 
+type hijackedConn struct {
+	net.Conn
+	r *bufio.Reader
+}
+
+func (c *hijackedConn) Read(p []byte) (int, error) { return c.r.Read(p) }
+
 // Serve accepts connections until l closes, serving RPCs back to back on each like silkd.
 func Serve(l net.Listener) {
 	acceptLoop(l, ServeConn)
@@ -61,13 +68,6 @@ func ListenHybrid(sockPath string, port int) (io.Closer, error) {
 	})
 	return l, nil
 }
-
-type hijackedConn struct {
-	net.Conn
-	r *bufio.Reader
-}
-
-func (c *hijackedConn) Read(p []byte) (int, error) { return c.r.Read(p) }
 
 // serveConn answers info with proto and dispatches the other requests until the peer closes, or after one when proto predates keep-alive; input frames outside an RPC are dropped as silkd drops them.
 func serveConn(conn net.Conn, r *bufio.Reader, proto uint32, serve func(net.Conn, *bufio.Reader, wire.Request)) {

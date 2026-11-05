@@ -18,14 +18,6 @@ const (
 	keepAliveConns = 8
 )
 
-// WithKeepAlive bounds how long a handle keeps an idle relay connection for
-// its next call (default 30s; 0 dials per call). An open connection holds
-// the sandbox's idle-hibernate clock, so keep it below the deployment's
-// idle_hibernate_seconds.
-func WithKeepAlive(idle time.Duration) ClientOption {
-	return func(c *Client) { c.keepAlive = idle }
-}
-
 // agentPool parks a handle's idle relay connections between calls.
 type agentPool struct {
 	mu   sync.Mutex
@@ -172,4 +164,12 @@ func (l *lease) close() {
 	}
 	l.stop()
 	_ = l.conn.Close()
+}
+
+// WithKeepAlive bounds how long a handle keeps an idle relay connection for
+// its next call (default 30s; 0 dials per call). An open connection holds
+// the sandbox's idle-hibernate clock, so keep it below the deployment's
+// idle_hibernate_seconds.
+func WithKeepAlive(idle time.Duration) ClientOption {
+	return func(c *Client) { c.keepAlive = idle }
 }

@@ -221,14 +221,14 @@ func (r *router) fail(err error) {
 	switch _, mapped, ok := lookupPoolErr(err); {
 	case errors.Is(err, errUnreachable):
 		msg = errUnreachable.Error()
-		log.WithFunc("server.fail").Errorf(r.ctx, err, "dial silkd for %s", r.id)
+		log.WithFunc("server.router.fail").Errorf(r.ctx, err, "dial silkd for %s", r.id)
 	case ok:
 		msg = mapped
 		if errors.Is(err, pool.ErrUnknownSandbox) {
 			kind = wire.KindNotFound
 		}
 	default:
-		log.WithFunc("server.fail").Errorf(r.ctx, err, "agent socket for %s", r.id)
+		log.WithFunc("server.router.fail").Errorf(r.ctx, err, "agent socket for %s", r.id)
 	}
 	frame, encodeErr := wire.EncodeResponse(&wire.ErrorResp{Kind: kind, Message: msg})
 	if encodeErr != nil {

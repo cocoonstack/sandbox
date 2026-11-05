@@ -88,6 +88,35 @@ type tool struct {
 	handler     func(context.Context, *server, jsontext.Value) (string, error)
 }
 
+type sandboxArg struct {
+	SandboxID string `json:"sandbox_id"`
+}
+
+func (a sandboxArg) id() string { return a.SandboxID }
+
+type sandboxIDer interface{ id() string }
+
+// cappedOutput keeps the first execOutputCap bytes: an agent that tails a firehose must not grow this process.
+type cappedOutput struct {
+	strings.Builder
+	stopAtCap bool
+	truncated bool
+}
+
+func (o *cappedOutput) Write(p []byte) (int, error) {
+	n := len(p)
+	if room := execOutputCap - o.Len(); len(p) > room {
+		if o.stopAtCap {
+			return 0, errOutputCap
+		}
+		p, o.truncated = p[:room], true
+	}
+	_, _ = o.Builder.Write(p)
+	return n, nil
+}
+
+type props map[string]map[string]any
+
 func toolSpecs() []map[string]any {
 	specs := make([]map[string]any, len(tools))
 	for i, t := range tools {
@@ -119,14 +148,6 @@ func toolCreateSandbox(ctx context.Context, s *server, raw jsontext.Value) (stri
 	return jsonText(map[string]any{"sandbox_id": sb.ID, "deadline": sb.Deadline}), nil
 }
 
-type sandboxArg struct {
-	SandboxID string `json:"sandbox_id"`
-}
-
-func (a sandboxArg) id() string { return a.SandboxID }
-
-type sandboxIDer interface{ id() string }
-
 type cmdArgs struct {
 	sandboxArg
 	Command string `json:"command"`
@@ -139,25 +160,6 @@ func parseCommand(s *server, raw jsontext.Value) (cmdArgs, *sandbox.Sandbox, err
 		return args, nil, errors.New("command must not be empty")
 	}
 	return args, sb, err
-}
-
-// cappedOutput keeps the first execOutputCap bytes: an agent that tails a firehose must not grow this process.
-type cappedOutput struct {
-	strings.Builder
-	stopAtCap bool
-	truncated bool
-}
-
-func (o *cappedOutput) Write(p []byte) (int, error) {
-	n := len(p)
-	if room := execOutputCap - o.Len(); len(p) > room {
-		if o.stopAtCap {
-			return 0, errOutputCap
-		}
-		p, o.truncated = p[:room], true
-	}
-	_, _ = o.Builder.Write(p)
-	return n, nil
 }
 
 func toolExec(ctx context.Context, s *server, raw jsontext.Value) (string, error) {
@@ -418,38 +420,6 @@ func toolNodeInfo(ctx context.Context, s *server, _ jsontext.Value) (string, err
 	return jsonText(info), nil
 }
 
-// parseAndBox decodes a tool's arguments and resolves their sandbox_id to a live handle, the prologue every sandbox-scoped tool shares.
-func (s *server) parseAndBox[T sandboxIDer](raw jsontext.Value) (T, *sandbox.Sandbox, error) {
-	var args T
-	if err := parse(raw, &args); err != nil {
-		return args, nil, err
-	}
-	sb, err := s.box(args.id())
-	return args, sb, err
-}
-
-func (s *server) boxArg(raw jsontext.Value) (*sandbox.Sandbox, error) {
-	_, sb, err := s.parseAndBox[sandboxArg](raw)
-	return sb, err
-}
-
-// checkpointArg resolves a checkpoint_id argument: a handle minted in this session when available, else a fresh one, because checkpoints outlive sessions.
-func (s *server) checkpointArg(raw jsontext.Value) (*sandbox.Checkpoint, error) {
-	var args struct {
-		CheckpointID string `json:"checkpoint_id"`
-	}
-	if err := parse(raw, &args); err != nil {
-		return nil, err
-	}
-	if ckpt, ok := s.ckpt(args.CheckpointID); ok {
-		return ckpt, nil
-	}
-	if args.CheckpointID == "" {
-		return nil, fmt.Errorf("checkpoint_id is required")
-	}
-	return s.client.Checkpoint(args.CheckpointID), nil
-}
-
 func parse(raw jsontext.Value, v any) error {
 	if len(raw) == 0 {
 		return nil
@@ -468,8 +438,6 @@ func jsonText(v any) string {
 	out, _ := json.Marshal(v, jsontext.AllowInvalidUTF8(true), json.Deterministic(true))
 	return string(out)
 }
-
-type props map[string]map[string]any
 
 func str(description string) map[string]any {
 	return map[string]any{"type": "string", "description": description}

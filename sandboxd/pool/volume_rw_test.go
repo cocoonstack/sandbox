@@ -278,7 +278,6 @@ func TestVolumeAdmissionMatrix(t *testing.T) {
 		wantErr       error
 	}{
 		{"writer excludes writer", types.VolumeModeRW, types.VolumeModeRW, ErrVolumeBusy},
-
 		{"writer excludes reader", types.VolumeModeRW, "", ErrVolumeBusy},
 		{"reader excludes writer", "", types.VolumeModeRW, ErrVolumeBusy},
 		{"readers share", "", "", nil},

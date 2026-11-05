@@ -162,14 +162,14 @@ func (s *Sandbox) proxyConn(ctx context.Context, local net.Conn, port uint16) {
 	<-done
 }
 
+type portAddr string
+
+func (a portAddr) Network() string { return "silkd" }
+func (a portAddr) String() string  { return string(a) }
+
 // closeWrite half-closes so the peer sees EOF while the tail still drains.
 func closeWrite(conn net.Conn) {
 	if cw, ok := conn.(interface{ CloseWrite() error }); ok {
 		_ = cw.CloseWrite()
 	}
 }
-
-type portAddr string
-
-func (a portAddr) Network() string { return "silkd" }
-func (a portAddr) String() string  { return string(a) }

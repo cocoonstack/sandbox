@@ -241,6 +241,14 @@ type namedVar struct {
 	v    EnvVar
 }
 
+// MoveOut is the source's journal of a live move: the record's first epoch, cocoon's series and the target.
+type MoveOut struct {
+	Epoch  int64  `json:"epoch"`
+	Series string `json:"series,omitempty"`
+	Addr   string `json:"addr,omitempty"`
+	To     string `json:"to,omitempty"`
+}
+
 // Sandbox is the node-local record of one pooled or claimed VM.
 type Sandbox struct {
 	ID     string  `json:"id"`
@@ -457,14 +465,6 @@ func (r VMRecord) TapDevice() string {
 		return ""
 	}
 	return r.NetworkConfigs[0].TAP
-}
-
-// MoveOut is the source's journal of a live move: the record's first epoch, cocoon's series and the target.
-type MoveOut struct {
-	Epoch  int64  `json:"epoch"`
-	Series string `json:"series,omitempty"`
-	Addr   string `json:"addr,omitempty"`
-	To     string `json:"to,omitempty"`
 }
 
 // MigrateFile is one file a migrate round wrote, named relative to the round's Dir.

@@ -5,7 +5,7 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use regex::{Regex, Replacer};
+use regex::{Captures, Regex, Replacer};
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWrite};
 use tokio::runtime::Handle;
 use tokio::sync::{Semaphore, SemaphorePermit, mpsc};
@@ -138,8 +138,8 @@ struct Counting<'a> {
     count: u64,
 }
 
-impl regex::Replacer for Counting<'_> {
-    fn replace_append(&mut self, caps: &regex::Captures<'_>, dst: &mut String) {
+impl Replacer for Counting<'_> {
+    fn replace_append(&mut self, caps: &Captures<'_>, dst: &mut String) {
         self.count += 1;
         caps.expand(self.replacement, dst);
     }

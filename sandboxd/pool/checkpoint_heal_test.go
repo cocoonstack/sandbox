@@ -190,7 +190,7 @@ func TestRecLockEvictionWaitsForAllHolders(t *testing.T) {
 	l1.Lock()
 	l2 := m.recs.recLock(id)
 	if l2 != l1 {
-		t.Fatalf("recLock returned a different mutex while the first holder is still outstanding")
+		t.Fatal("recLock returned a different mutex while the first holder is still outstanding")
 	}
 	l1.Unlock()
 	m.recs.recDone(id)

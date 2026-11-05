@@ -133,12 +133,13 @@ func (m *Manager) lift(ctx context.Context, fenced *fenceState, start time.Time)
 	if !m.fence.CompareAndSwap(fenced, &fenceState{ch: make(chan struct{}), lifted: time.Now()}) {
 		return
 	}
+	logger := log.WithFunc("pool.lift")
 	if time.Since(start) > leaseWindow {
-		log.WithFunc("pool.unfence").Warn(ctx, "replicated claims stay fenced: confirming ownership outlasted the lease window")
+		logger.Warn(ctx, "replicated claims stay fenced: confirming ownership outlasted the lease window")
 		m.trip(ctx)
 		return
 	}
-	log.WithFunc("pool.unfence").Info(ctx, "node lease renewed; replicated claims are served again")
+	logger.Info(ctx, "node lease renewed; replicated claims are served again")
 }
 
 func (m *Manager) takeOwnRows(ctx context.Context, held map[string]*types.Sandbox, rows map[string]archives.Record) (map[string]int64, error) {

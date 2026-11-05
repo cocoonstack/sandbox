@@ -29,6 +29,14 @@ import (
 	"github.com/cocoonstack/sandbox/sdk/go/silkd"
 )
 
+// bufferedConn reads through the handshake reader so bytes behind the 101 are kept.
+type bufferedConn struct {
+	net.Conn
+	r *bufio.Reader
+}
+
+func (b bufferedConn) Read(p []byte) (int, error) { return b.r.Read(p) }
+
 func main() {
 	addr := flag.String("addr", "127.0.0.1:7777", "sandboxd address")
 	token := flag.String("token", "", "node api token")
@@ -145,14 +153,6 @@ func statRPC(conn net.Conn) error {
 	}
 	return nil
 }
-
-// bufferedConn reads through the handshake reader so bytes behind the 101 are kept.
-type bufferedConn struct {
-	net.Conn
-	r *bufio.Reader
-}
-
-func (b bufferedConn) Read(p []byte) (int, error) { return b.r.Read(p) }
 
 // edgeTLS returns the client config for an https address, or nil for a plain one.
 func edgeTLS(addr, caCert string) (*tls.Config, error) {

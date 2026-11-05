@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json/jsontext"
 	"encoding/json/v2"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -12,11 +13,11 @@ import (
 
 func TestClientAddressesInResponses(t *testing.T) {
 	for _, tt := range []struct{ method, path, body, field string }{
-		{"POST", "/v1/claim", `{"template":"rt"}`, "redirect"},
-		{"POST", "/v1/checkpoints/ck_1/claim", `{}`, "redirect"},
-		{"DELETE", "/v1/templates?template=rt", "", "redirect"},
-		{"GET", "/v1/peers", "", "peers"},
-		{"GET", "/v1/info", "", "peers"},
+		{http.MethodPost, "/v1/claim", `{"template":"rt"}`, "redirect"},
+		{http.MethodPost, "/v1/checkpoints/ck_1/claim", `{}`, "redirect"},
+		{http.MethodDelete, "/v1/templates?template=rt", "", "redirect"},
+		{http.MethodGet, "/v1/peers", "", "peers"},
+		{http.MethodGet, "/v1/info", "", "peers"},
 	} {
 		t.Run(tt.path, func(t *testing.T) {
 			p := &clientPlacer{addrs: []string{"private:7777"}, owners: []string{"private:7777"}}
@@ -43,7 +44,7 @@ func TestClientOwner(t *testing.T) {
 	if got := s.claimResponse(&types.Sandbox{ID: "sb_1"}).OwnerAddr; got != "https://self.example" {
 		t.Fatalf("owner = %q", got)
 	}
-	r := httptest.NewRequest("GET", "/v1/sandboxes/sb_1/owner", nil)
+	r := httptest.NewRequest(http.MethodGet, "/v1/sandboxes/sb_1/owner", nil)
 	r.Header.Set("Authorization", "Bearer tok")
 	w := httptest.NewRecorder()
 	s.Handler().ServeHTTP(w, r)
