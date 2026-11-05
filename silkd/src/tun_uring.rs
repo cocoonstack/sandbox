@@ -6,7 +6,7 @@ use std::os::fd::RawFd;
 
 use io_uring::{IoUring, opcode, squeue, types};
 
-use crate::tun::{MAX_FRAME, VNET_HDR_LEN, next_frame};
+use crate::tun::{MAX_FRAME, VNET_HDR_LEN, compact, next_frame};
 
 const ENTRIES: u32 = 256;
 /// One stream read of minimal frames queues about 7,700 tun writes; the completion queue holds them all.
@@ -20,7 +20,7 @@ const TUN_WRITE: u64 = 2 << 32;
 const STREAM_READ: u64 = 3 << 32;
 const STREAM_WRITE: u64 = 4 << 32;
 const CANCEL: u64 = 5 << 32;
-const KIND: u64 = !0xffff_ffff;
+const KIND_MASK: u64 = !0xffff_ffff;
 
 /// A ring set up before the session commits to io_uring, so a refusing kernel falls back to epoll.
 pub struct Ring(IoUring);
@@ -49,7 +49,6 @@ impl Ring {
             down: vec![0u8; DOWN_BUF].into_boxed_slice(),
             start: 0,
             end: 0,
-            reading: false,
             tun_writes: 0,
             done: Vec::with_capacity(ENTRIES as usize),
         };
@@ -57,7 +56,7 @@ impl Ring {
     }
 }
 
-/// One session's ring and every buffer its queued operations name; Drop drains the ring before the buffers go.
+/// One session's ring and every buffer its queued operations name.
 struct Pump {
     ring: IoUring,
     inflight: usize,
@@ -73,7 +72,6 @@ struct Pump {
     down: Box<[u8]>,
     start: usize,
     end: usize,
-    reading: bool,
     tun_writes: usize,
 
     done: Vec<(u64, i32)>,
@@ -96,8 +94,8 @@ impl Pump {
             self.inflight -= self.done.len();
             for i in 0..self.done.len() {
                 let (ud, res) = self.done[i];
-                let id = (ud & !KIND) as usize;
-                match ud & KIND {
+                let id = (ud & !KIND_MASK) as usize;
+                match ud & KIND_MASK {
                     TUN_READ => self.tun_read_done(id, res)?,
                     TUN_WRITE => self.tun_write_done()?,
                     STREAM_READ => {
@@ -128,7 +126,7 @@ impl Pump {
 
     fn tun_write_done(&mut self) -> io::Result<()> {
         self.tun_writes -= 1;
-        if self.tun_writes == 0 && !self.reading {
+        if self.tun_writes == 0 {
             self.compact_and_read()?;
         }
         Ok(())
@@ -136,7 +134,6 @@ impl Pump {
 
     /// Returns false once the host closed the stream.
     fn stream_read_done(&mut self, res: i32) -> io::Result<bool> {
-        self.reading = false;
         match res {
             0 => return Ok(false),
             r if r < 0 && retryable(r) => {
@@ -183,10 +180,9 @@ impl Pump {
         if self.iov_at < self.iov.len() {
             return self.submit_writev();
         }
-        for i in 0..self.writing.len() {
-            self.arm_tun_read(self.writing[i])?;
+        while let Some(slot) = self.writing.pop() {
+            self.arm_tun_read(slot)?;
         }
-        self.writing.clear();
         Ok(())
     }
 
@@ -223,9 +219,7 @@ impl Pump {
     }
 
     fn compact_and_read(&mut self) -> io::Result<()> {
-        self.down.copy_within(self.start..self.end, 0);
-        self.end -= self.start;
-        self.start = 0;
+        (self.start, self.end) = compact(&mut self.down, self.start, self.end);
         self.arm_stream_read()
     }
 
@@ -234,16 +228,11 @@ impl Pump {
         let read = opcode::Read::new(types::Fd(self.stream), rest.as_mut_ptr(), rest.len() as u32)
             .build()
             .user_data(STREAM_READ);
-        self.push(read)?;
-        self.reading = true;
-        Ok(())
+        self.push(read)
     }
 
     fn push(&mut self, entry: squeue::Entry) -> io::Result<()> {
-        // SAFETY: every buffer an entry names lives in this Pump, and Drop waits out each queued entry first.
-        while unsafe { self.ring.submission().push(&entry) }.is_err() {
-            self.ring.submit()?;
-        }
+        queue(&mut self.ring, &entry)?;
         self.inflight += 1;
         Ok(())
     }
@@ -251,23 +240,13 @@ impl Pump {
 
 impl Drop for Pump {
     fn drop(&mut self) {
-        let mut targets: Vec<u64> = (0..SLOTS)
-            .filter(|i| !self.writing.contains(i) && !self.ready.iter().any(|(s, _)| s == i))
-            .map(|i| TUN_READ | i as u64)
-            .collect();
-        if self.reading {
-            targets.push(STREAM_READ);
-        }
-        if !self.writing.is_empty() {
-            targets.push(STREAM_WRITE);
-        }
+        let targets = (0..SLOTS as u64)
+            .map(|i| TUN_READ | i)
+            .chain([STREAM_READ, STREAM_WRITE]);
         for ud in targets {
             let cancel = opcode::AsyncCancel::new(ud).build().user_data(CANCEL);
-            // SAFETY: a cancel entry names no buffer.
-            while unsafe { self.ring.submission().push(&cancel) }.is_err() {
-                if self.ring.submit().is_err() {
-                    break;
-                }
+            if queue(&mut self.ring, &cancel).is_err() {
+                break;
             }
         }
         while self.inflight > 0 {
@@ -290,6 +269,15 @@ impl Drop for Pump {
             self.inflight -= finished;
         }
     }
+}
+
+/// Pushes entry, submitting to make room while the queue is full.
+fn queue(ring: &mut IoUring, entry: &squeue::Entry) -> io::Result<()> {
+    // SAFETY: every buffer an entry names lives in its Pump, and Pump's Drop waits out each queued entry before freeing them.
+    while unsafe { ring.submission().push(entry) }.is_err() {
+        ring.submit()?;
+    }
+    Ok(())
 }
 
 fn retryable(res: i32) -> bool {

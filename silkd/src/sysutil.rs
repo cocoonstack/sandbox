@@ -208,15 +208,12 @@ pub async fn wait_code(child: &mut tokio::process::Child) -> i32 {
     child.wait().await.map_or(-1, exit_code)
 }
 
-/// Opens tun device `name`, nonblocking, with a virtio-net header leading every packet.
+/// Opens tun device `name` with a virtio-net header leading every packet.
 #[cfg(target_os = "linux")]
 pub fn tun_open(name: &str) -> std::io::Result<OwnedFd> {
-    use std::os::unix::fs::OpenOptionsExt;
-
     let file = std::fs::OpenOptions::new()
         .read(true)
         .write(true)
-        .custom_flags(libc::O_NONBLOCK)
         .open("/dev/net/tun")?;
     let mut req = ifreq(name)?;
     req.ifr_ifru.ifru_flags =
@@ -236,7 +233,7 @@ pub fn tun_set_offload(fd: RawFd, flags: u32) -> std::io::Result<()> {
 /// Assigns `addr/prefix` to interface `name` and brings it up.
 #[cfg(target_os = "linux")]
 pub fn if_up(name: &str, addr: Ipv4Addr, prefix: u8) -> std::io::Result<()> {
-    let sock = std::net::UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0))?;
+    let sock = ctl_socket()?;
     let fd = sock.as_raw_fd();
     let mut req = ifreq(name)?;
     req.ifr_ifru.ifru_addr = inet_sockaddr(addr);
@@ -253,7 +250,7 @@ pub fn if_up(name: &str, addr: Ipv4Addr, prefix: u8) -> std::io::Result<()> {
 /// Sets the MTU of interface `name`.
 #[cfg(target_os = "linux")]
 pub fn if_set_mtu(name: &str, mtu: u16) -> std::io::Result<()> {
-    let sock = std::net::UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0))?;
+    let sock = ctl_socket()?;
     let mut req = ifreq(name)?;
     req.ifr_ifru.ifru_mtu = libc::c_int::from(mtu);
     if_ioctl(sock.as_raw_fd(), libc::SIOCSIFMTU, &mut req)
@@ -267,7 +264,7 @@ pub fn route_add(
     prefix: u8,
     gateway: Option<Ipv4Addr>,
 ) -> std::io::Result<()> {
-    let sock = std::net::UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0))?;
+    let sock = ctl_socket()?;
     let name = std::ffi::CString::new(dev)?;
     // SAFETY: rtentry is plain data and all-zero is a valid value, a null rt_dev included.
     let mut rt: libc::rtentry = unsafe { std::mem::zeroed() };
@@ -455,12 +452,18 @@ fn lookup_user(user: &str) -> Result<(u32, u32, PathBuf), String> {
     }
 }
 
+/// A socket to carry interface and route ioctls.
+#[cfg(target_os = "linux")]
+fn ctl_socket() -> std::io::Result<std::net::UdpSocket> {
+    std::net::UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0))
+}
+
 #[cfg(target_os = "linux")]
 fn ifreq(name: &str) -> std::io::Result<libc::ifreq> {
     if name.len() >= libc::IFNAMSIZ || name.as_bytes().contains(&0) {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
-            format!("interface name {name:?}"),
+            format!("invalid interface name {name:?}"),
         ));
     }
     // SAFETY: ifreq is plain data and all-zero is a valid value.

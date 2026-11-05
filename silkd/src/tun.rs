@@ -71,8 +71,6 @@ pub use linux::*;
 
 #[cfg(target_os = "linux")]
 mod linux {
-    use std::io;
-    use std::net::Ipv4Addr;
     use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd};
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex};
@@ -84,6 +82,7 @@ mod linux {
     use crate::{sysutil, tun_uring};
 
     const IFNAME: &str = "tun0";
+    const IPV6_OFF: &str = "/proc/sys/net/ipv6/conf/tun0/disable_ipv6";
     const DEFAULT_MTU: u16 = 1500;
     /// Per-direction buffer; the sender batches every packet its tun has ready into one stream write.
     const BATCH: usize = 256 << 10;
@@ -128,7 +127,7 @@ mod linux {
     pub struct Tun {
         fd: OwnedFd,
         accepts: u16,
-        configured: bool,
+        configured: Arc<AtomicBool>,
     }
 
     impl Tun {
@@ -144,7 +143,7 @@ mod linux {
             Ok(Tun {
                 fd,
                 accepts,
-                configured: false,
+                configured: Arc::new(AtomicBool::new(false)),
             })
         }
 
@@ -157,16 +156,50 @@ mod linux {
             sysutil::tun_set_offload(self.fd.as_raw_fd(), settable(self.accepts & peer).into())
         }
 
-        /// Gives tun0 the fixed guest address and the default route; idempotent.
-        pub fn configure_guest(&mut self) -> io::Result<()> {
-            if self.configured {
+        /// Gives tun0 the fixed guest address and the default route, and no IPv6; idempotent.
+        pub fn configure_guest(&self) -> io::Result<()> {
+            if self.configured() {
                 return Ok(());
             }
+            let _ = std::fs::write(IPV6_OFF, "1");
             sysutil::if_set_mtu(IFNAME, DEFAULT_MTU)?;
             sysutil::if_up(IFNAME, GUEST_ADDR, PREFIX)?;
             sysutil::route_add(IFNAME, Ipv4Addr::UNSPECIFIED, 0, Some(PEER_ADDR))?;
-            self.configured = true;
+            self.configured.store(true, Ordering::Relaxed);
             Ok(())
+        }
+
+        fn configured(&self) -> bool {
+            self.configured.load(Ordering::Relaxed)
+        }
+    }
+
+    /// A link thread's stop signal and the stream it may block on.
+    struct Link {
+        stopping: AtomicBool,
+        configured: Arc<AtomicBool>,
+        stream: Mutex<Option<Arc<vsock::VsockStream>>>,
+        thread: Mutex<Option<std::thread::JoinHandle<()>>>,
+    }
+
+    impl Link {
+        /// Ends the current stream and wakes a waiting redial.
+        fn redial(&self) {
+            if let Some(stream) = sysutil::lock(&self.stream).as_ref() {
+                let _ = stream.shutdown(std::net::Shutdown::Both);
+            }
+            if let Some(thread) = sysutil::lock(&self.thread).as_ref() {
+                thread.thread().unpark();
+            }
+        }
+
+        /// Stops the link and waits until its thread has dropped tun0.
+        fn stop(&self) {
+            self.stopping.store(true, Ordering::Relaxed);
+            self.redial();
+            if let Some(thread) = sysutil::lock(&self.thread).take() {
+                let _ = thread.join();
+            }
         }
     }
 
@@ -175,7 +208,7 @@ mod linux {
         loop {
             let mut slot = sysutil::lock(&LINK);
             let Some(link) = slot.as_ref() else {
-                let mut tun = Tun::open(IFNAME)?;
+                let tun = Tun::open(IFNAME)?;
                 tun.configure_guest()?;
                 *slot = Some(spawn_link(tun)?);
                 return Ok(());
@@ -213,7 +246,7 @@ mod linux {
     }
 
     /// Runs one guest connection: hello both ways, then pumps until the stream ends; configures tun0 on the first on.
-    pub fn session<S: AsFd>(tun: &mut Tun, stream: &S, io: Io) -> io::Result<Flow> {
+    pub fn session<S: AsFd>(tun: &Tun, stream: &S, backend: Io) -> io::Result<Flow> {
         let fd = stream.as_fd();
         sysutil::set_nonblocking(fd, false)?;
         let hello = Hello {
@@ -240,14 +273,14 @@ mod linux {
         if host.mtu != 0 {
             sysutil::if_set_mtu(IFNAME, host.mtu)?;
         }
-        pump(tun, fd, io)?;
+        pump(tun, fd, backend)?;
         Ok(Flow::Closed)
     }
 
     /// Moves frames between `tun` and `stream` until either fails or the stream ends; blocks the calling thread.
-    pub fn pump(tun: &Tun, stream: BorrowedFd<'_>, io: Io) -> io::Result<()> {
+    pub fn pump(tun: &Tun, stream: BorrowedFd<'_>, backend: Io) -> io::Result<()> {
         let tun_fd = tun.fd.as_fd();
-        if io == Io::Uring {
+        if backend == Io::Uring {
             match tun_uring::Ring::new() {
                 Ok(ring) => {
                     sysutil::set_nonblocking(tun_fd, false)?;
@@ -284,39 +317,10 @@ mod linux {
         }
     }
 
-    /// A link thread's stop signal and the stream it may block on.
-    struct Link {
-        stop: AtomicBool,
-        configured: AtomicBool,
-        stream: Mutex<Option<Arc<vsock::VsockStream>>>,
-        thread: Mutex<Option<std::thread::JoinHandle<()>>>,
-    }
-
-    impl Link {
-        /// Ends the current stream and wakes a waiting redial.
-        fn redial(&self) {
-            if let Some(stream) = sysutil::lock(&self.stream).as_ref() {
-                let _ = stream.shutdown(std::net::Shutdown::Both);
-            }
-            if let Some(thread) = sysutil::lock(&self.thread).as_ref() {
-                thread.thread().unpark();
-            }
-        }
-
-        /// Stops the link and waits until its thread has dropped tun0.
-        fn stop(&self) {
-            self.stop.store(true, Ordering::Relaxed);
-            self.redial();
-            if let Some(thread) = sysutil::lock(&self.thread).take() {
-                let _ = thread.join();
-            }
-        }
-    }
-
     fn spawn_link(tun: Tun) -> io::Result<Arc<Link>> {
         let link = Arc::new(Link {
-            stop: AtomicBool::new(false),
-            configured: AtomicBool::new(tun.configured),
+            stopping: AtomicBool::new(false),
+            configured: Arc::clone(&tun.configured),
             stream: Mutex::new(None),
             thread: Mutex::new(None),
         });
@@ -328,40 +332,41 @@ mod linux {
         Ok(link)
     }
 
-    fn run_link(me: &Arc<Link>, mut tun: Tun) {
-        let io = Io::from_env();
+    fn run_link(me: &Arc<Link>, tun: Tun) {
+        let backend = Io::from_env();
         let mut wait = REDIAL_MIN;
-        while !me.stop.load(Ordering::Relaxed) {
+        while !me.stopping.load(Ordering::Relaxed) {
             match vsock::VsockStream::connect_with_cid_port(libc::VMADDR_CID_HOST, HOST_VSOCK_PORT)
             {
                 Ok(stream) => {
-                    wait = REDIAL_MIN;
                     let stream = Arc::new(stream);
                     {
                         let mut slot = sysutil::lock(&me.stream);
-                        if me.stop.load(Ordering::Relaxed) {
+                        if me.stopping.load(Ordering::Relaxed) {
                             break;
                         }
                         *slot = Some(Arc::clone(&stream));
                     }
-                    let flow = session(&mut tun, &*stream, io);
+                    let flow = session(&tun, &*stream, backend);
                     *sysutil::lock(&me.stream) = None;
-                    me.configured.store(tun.configured, Ordering::Relaxed);
                     match flow {
                         Ok(Flow::Off) => break,
-                        Ok(Flow::Closed) => {}
-                        Err(_) if !tun.configured => break,
-                        Err(e) if !me.stop.load(Ordering::Relaxed) => eprintln!("silkd tun: {e}"),
+                        Ok(Flow::Closed) => wait = REDIAL_MIN,
+                        Err(_) if !tun.configured() => break,
+                        Err(e) if !me.stopping.load(Ordering::Relaxed) => {
+                            eprintln!("silkd tun: {e}")
+                        }
                         Err(_) => {}
                     }
                 }
-                Err(_) if !tun.configured => break,
+                Err(_) if !tun.configured() => break,
                 Err(_) => {}
             }
             std::thread::park_timeout(wait);
             wait = (wait * 2).min(REDIAL_MAX);
         }
         let mut slot = sysutil::lock(&LINK);
+        // tun0 closes under LINK, so a racing up() never finds the name still taken.
         drop(tun);
         if slot.as_ref().is_some_and(|l| Arc::ptr_eq(l, me)) {
             *slot = None;
@@ -416,15 +421,13 @@ mod linux {
         stream: &AsyncFd<BorrowedFd<'_>>,
     ) -> io::Result<()> {
         let mut buf = vec![0u8; BATCH];
-        let mut end = 0;
+        let (mut start, mut end) = (0, 0);
         loop {
-            let mut start = 0;
             while let Some(len) = next_frame(&buf[start..end])? {
                 send_packet(tun, &buf[start + 4..start + 4 + len]).await;
                 start += 4 + len;
             }
-            buf.copy_within(start..end, 0);
-            end -= start;
+            (start, end) = compact(&mut buf, start, end);
             let mut guard = stream.readable().await?;
             match guard
                 .try_io(|fd| nix::unistd::read(fd.get_ref(), &mut buf[end..]).map_err(Into::into))
@@ -453,6 +456,18 @@ mod linux {
     }
 }
 
+/// Keeps a partial frame in `buf[start..end]` readable: rewinds an empty buffer, and moves the tail to the front only when a whole frame no longer fits behind it.
+pub fn compact(buf: &mut [u8], start: usize, end: usize) -> (usize, usize) {
+    if start == end {
+        return (0, 0);
+    }
+    if buf.len() - end >= 4 + MAX_FRAME {
+        return (start, end);
+    }
+    buf.copy_within(start..end, 0);
+    (0, end - start)
+}
+
 /// The body length of the complete frame at the head of `buf`, or None while it is still partial.
 pub fn next_frame(buf: &[u8]) -> io::Result<Option<usize>> {
     let Some(head) = buf.first_chunk::<4>() else {
@@ -468,8 +483,20 @@ pub fn next_frame(buf: &[u8]) -> io::Result<Option<usize>> {
     Ok((buf.len() >= 4 + len).then_some(len))
 }
 
-#[cfg(any(target_os = "linux", test))]
+/// Packet mode needs a Linux tun device.
+#[cfg(not(target_os = "linux"))]
+pub fn up() -> io::Result<()> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "silkd tun requires linux",
+    ))
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn down() {}
+
 /// Trims `bits` to a set `TUNSETOFFLOAD` takes: segmentation needs CSUM, ECN needs TSO, and USO comes in pairs.
+#[cfg(any(target_os = "linux", test))]
 fn settable(bits: u16) -> u16 {
     if bits & OFFLOAD_CSUM == 0 {
         return 0;
@@ -489,18 +516,6 @@ fn settable(bits: u16) -> u16 {
     }
     on
 }
-
-/// Packet mode needs a Linux tun device.
-#[cfg(not(target_os = "linux"))]
-pub fn up() -> io::Result<()> {
-    Err(io::Error::new(
-        io::ErrorKind::Unsupported,
-        "silkd tun requires linux",
-    ))
-}
-
-#[cfg(not(target_os = "linux"))]
-pub fn down() {}
 
 #[cfg(test)]
 mod tests {
@@ -545,6 +560,17 @@ mod tests {
             settable(tso | OFFLOAD_USO4 | OFFLOAD_USO6 | 0x10),
             tso | OFFLOAD_USO4 | OFFLOAD_USO6
         );
+    }
+
+    #[test]
+    fn compact_moves_a_partial_frame_only_when_a_frame_no_longer_fits() {
+        let mut buf = vec![0u8; 2 * (4 + MAX_FRAME)];
+        assert_eq!(compact(&mut buf, 7, 7), (0, 0));
+        assert_eq!(compact(&mut buf, 10, 20), (10, 20));
+        let end = buf.len() - 4;
+        buf[end - 2] = 0xab;
+        assert_eq!(compact(&mut buf, end - 3, end), (0, 3));
+        assert_eq!(buf[1], 0xab);
     }
 
     #[test]

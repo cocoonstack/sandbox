@@ -3,7 +3,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::net::{Ipv4Addr, SocketAddr};
-use std::os::fd::AsRawFd;
+use std::os::fd::{AsFd, AsRawFd};
 use std::os::unix::net::UnixStream;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -31,6 +31,10 @@ const BULK: u64 = 256 << 20;
 const GSO_NONE: u8 = 0;
 const GSO_UDP_L4: u8 = 5;
 const NEEDS_CSUM: u8 = 1;
+const IP_SRC: usize = 12;
+const IP_DST: usize = 16;
+const PROTO_TCP: u8 = 6;
+const PROTO_UDP: u8 = 17;
 const UDP_SEGMENT: libc::c_int = 103;
 const UDP_DATAGRAMS: usize = 32;
 const UDP_SEG: usize = 1000;
@@ -117,16 +121,11 @@ fn full_checksums_cross_when_offloads_are_off() {
 #[ignore = "needs root for network namespaces and /dev/net/tun"]
 fn host_off_answer_leaves_no_tun() {
     in_netns(|| {
-        let mut tun = Tun::open("tun0").unwrap();
+        let tun = Tun::open("tun0").unwrap();
         let (guest, host) = UnixStream::pair().unwrap();
         let answer = std::thread::spawn(move || {
             let mut b = [0u8; HELLO_LEN];
-            sysutil::read_exact_fd(
-                std::os::fd::AsFd::as_fd(&host),
-                &mut b,
-                Duration::from_secs(5),
-            )
-            .unwrap();
+            sysutil::read_exact_fd(host.as_fd(), &mut b, Duration::from_secs(5)).unwrap();
             assert_eq!(Hello::decode(&b).unwrap().version, VERSION);
             let off = Hello {
                 version: VERSION,
@@ -134,12 +133,9 @@ fn host_off_answer_leaves_no_tun() {
                 mtu: 0,
                 flags: 0,
             };
-            sysutil::write_all_fd(std::os::fd::AsFd::as_fd(&host), &off.encode()).unwrap();
+            sysutil::write_all_fd(host.as_fd(), &off.encode()).unwrap();
         });
-        assert_eq!(
-            tun::session(&mut tun, &guest, Io::Uring).unwrap(),
-            Flow::Off
-        );
+        assert_eq!(tun::session(&tun, &guest, Io::Uring).unwrap(), Flow::Off);
         answer.join().unwrap();
         drop(tun);
         assert!(Tun::open("tun0").is_ok(), "tun0 still held after off");
@@ -209,11 +205,11 @@ fn with_link<T: Send + 'static>(
                     rg.try_clone().unwrap(),
                     rh.try_clone().unwrap(),
                     up,
-                    12,
+                    IP_SRC,
                     tun::GUEST_ADDR,
                     CLAIM_ADDR,
                 ),
-                forward(rh, rg, down, 16, CLAIM_ADDR, tun::GUEST_ADDR),
+                forward(rh, rg, down, IP_DST, CLAIM_ADDR, tun::GUEST_ADDR),
             ];
             (g, h, threads)
         }
@@ -232,7 +228,7 @@ fn with_link<T: Send + 'static>(
         stop.clone(),
     );
     let out = in_netns(move || {
-        let mut tun = Tun::open("tun0").unwrap();
+        let tun = Tun::open("tun0").unwrap();
         tun.configure_guest().unwrap();
         let shut = guest_end.try_clone().unwrap();
         let (tid_tx, tid_rx) = std::sync::mpsc::channel();
@@ -241,7 +237,7 @@ fn with_link<T: Send + 'static>(
             .spawn(move || {
                 // SAFETY: gettid takes no arguments.
                 tid_tx.send(unsafe { libc::gettid() }).unwrap();
-                tun::session(&mut tun, &guest_end, io)
+                tun::session(&tun, &guest_end, io)
             })
             .unwrap();
         let tid = tid_rx.recv().unwrap();
@@ -301,7 +297,7 @@ fn spawn_host(
         });
         bound_rx.recv().unwrap();
         ready_tx.send(tun.accepts()).unwrap();
-        let fd = std::os::fd::AsFd::as_fd(&stream);
+        let fd = stream.as_fd();
         let mut b = [0u8; HELLO_LEN];
         sysutil::read_exact_fd(fd, &mut b, Duration::from_secs(5)).unwrap();
         let guest = Hello::decode(&b).unwrap();
@@ -560,7 +556,7 @@ async fn serve_flood(l: TcpListener) {
 /// Copies frames one way, rewriting the IPv4 address at header offset `at` from `from` to `to`.
 fn forward(
     r: UnixStream,
-    w: UnixStream,
+    mut w: UnixStream,
     stats: Arc<Stats>,
     at: usize,
     from: Ipv4Addr,
@@ -570,7 +566,6 @@ fn forward(
         use std::io::{Read, Write};
 
         let mut r = std::io::BufReader::with_capacity(256 << 10, r);
-        let mut w = w;
         let mut hello = [0u8; HELLO_LEN];
         if r.read_exact(&mut hello).is_err() || w.write_all(&hello).is_err() {
             return;
@@ -599,12 +594,12 @@ fn forward(
             }
             out.extend_from_slice(&head);
             out.extend_from_slice(body);
-            let buffered = frame_buffered(r.buffer());
-            if (!buffered || out.len() > 192 << 10) && {
-                let res = w.write_all(&out);
-                out.clear();
-                res.is_err()
-            } {
+            if frame_buffered(r.buffer()) && out.len() <= 192 << 10 {
+                continue;
+            }
+            let res = w.write_all(&out);
+            out.clear();
+            if res.is_err() {
                 return;
             }
         }
@@ -632,15 +627,15 @@ fn rewrite(frame: &mut [u8], at: usize, from: [u8; 4], to: [u8; 4]) {
         csum_at
     } else {
         match ip[9] {
-            6 => l4 + 16,
-            17 => l4 + 6,
+            PROTO_TCP => l4 + 16,
+            PROTO_UDP => l4 + 6,
             _ => return,
         }
     };
     let sum = u16::from_be_bytes([ip[field], ip[field + 1]]);
     let next = if partial {
         adjust(sum, from, to)
-    } else if ip[9] == 17 && sum == 0 {
+    } else if ip[9] == PROTO_UDP && sum == 0 {
         0
     } else {
         !adjust(!sum, from, to)

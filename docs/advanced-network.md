@@ -15,11 +15,11 @@ This page is the contract between silkd and the host. The host side design is
 
 | Item | Value |
 | --- | --- |
-| Device | `tun0`, `IFF_TUN | IFF_NO_PI | IFF_VNET_HDR`, owned by silkd |
+| Device | `tun0`, `IFF_TUN \| IFF_NO_PI \| IFF_VNET_HDR`, owned by silkd |
 | Address | `100.64.0.2/30` in every guest; the host tells guests apart by their vsock stream, never by address |
 | Gateway | `100.64.0.1`, default route via `tun0` |
 | MTU | 1500 until the host hello names another |
-| IPv6 | none |
+| IPv6 | none; silkd turns IPv6 off on `tun0` |
 | Packet stream | guest dials host vsock port **2051** (`<vsock_socket>_2051` on the host) |
 
 Both modes run at once. silkd keeps the proxy variables in every exec, so a
@@ -103,7 +103,7 @@ dropped like a packet lost on a link.
 
 Writers batch: every frame ready at the moment goes out in one stream write.
 Readers parse every complete frame one stream read returns; the io_uring path
-hands them to the TUN in one submission.
+hands them to the TUN in batched submissions.
 
 ### Reconnect
 

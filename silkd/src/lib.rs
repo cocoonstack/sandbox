@@ -18,6 +18,6 @@ pub mod sysutil;
 pub mod tree;
 pub mod tun;
 #[cfg(target_os = "linux")]
-pub mod tun_uring;
+mod tun_uring;
 pub mod vsock;
 pub mod watch;
