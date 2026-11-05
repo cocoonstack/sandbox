@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cocoonstack/sandbox/sandboxd/tenants"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
@@ -50,6 +51,15 @@ func TestForkRacingHibernateUsesPrivateSource(t *testing.T) {
 	}
 	if len(eng.exports) != 1 || !strings.HasPrefix(eng.exports[0], hibernatePrefix) {
 		t.Errorf("exports %v, want one private copy of the wake snapshot", eng.exports)
+	}
+}
+
+func TestAnOperatorForkCountsAgainstACapTheCacheHasNotLoaded(t *testing.T) {
+	m := tenantManager(t, t.TempDir(), tenants.TenantSpec{Name: "acme", Token: "acme-tok", MaxClaims: 2})
+	parent := claimTenant(t, m, "acme")
+	m.tenants = &coldTenants{Source: m.tenants}
+	if _, err := m.Fork(t.Context(), parent.ID, Cred{Operator: true}, 2, 0, "", ""); !errors.Is(err, ErrQuota) {
+		t.Errorf("operator fork of 2 under a cap of 2 with 1 live = %v, want ErrQuota", err)
 	}
 }
 
