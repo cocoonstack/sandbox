@@ -286,10 +286,10 @@ func TestMountVolumeReadsEachOtherSerialOnce(t *testing.T) {
 	if fake.listCalls != 4 {
 		t.Fatalf("list calls = %d, want 4 (3 blank serials + the successful poll)", fake.listCalls)
 	}
-	if got := len(slices.DeleteFunc(slices.Clone(fake.readCalls), func(p string) bool { return p != "/sys/block/vda/serial" })); got != 1 {
+	if got := countOf(fake.readCalls, "/sys/block/vda/serial"); got != 1 {
 		t.Errorf("read the root disk's serial %d times, want once: %v", got, fake.readCalls)
 	}
-	if got := len(slices.DeleteFunc(slices.Clone(fake.readCalls), func(p string) bool { return p != "/sys/block/vdc/serial" })); got != 4 {
+	if got := countOf(fake.readCalls, "/sys/block/vdc/serial"); got != 4 {
 		t.Errorf("read the awaited disk's serial %d times, want 4: %v", got, fake.readCalls)
 	}
 }
@@ -397,6 +397,16 @@ func TestSilkdListAndReadAreBounded(t *testing.T) {
 	if _, err := e.silkdReadFile(t.Context(), path, "/sys/block/vda/serial", silkdReadMax); err == nil || !strings.Contains(err.Error(), "exceeds") {
 		t.Errorf("read of %d bytes: %v, want a bound error", silkdReadMax+1, err)
 	}
+}
+
+func countOf(items []string, want string) int {
+	n := 0
+	for _, item := range items {
+		if item == want {
+			n++
+		}
+	}
+	return n
 }
 
 func configureVolumeDevices(f *fakeSilkd) {

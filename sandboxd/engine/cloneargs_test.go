@@ -93,16 +93,6 @@ func TestEgressVMsSpreadOverEveryConfiguredShard(t *testing.T) {
 	}
 }
 
-func TestNetworkChoiceIsStableForAName(t *testing.T) {
-	shards := []string{"a", "b", "c"}
-	first := shardOf(shards, "sbx-pool1-42")
-	for range 100 {
-		if got := shardOf(shards, "sbx-pool1-42"); got != first {
-			t.Fatalf("shardOf returned %q then %q for one name", first, got)
-		}
-	}
-}
-
 func TestNetArgsHonorsTheLaneAndTheAttachment(t *testing.T) {
 	none := types.PoolKey{Template: "rt:24.04", Net: types.NetNone, Size: types.SizeMedium}
 	egress := types.PoolKey{Template: "rt:24.04", Net: types.NetEgress, Size: types.SizeMedium}

@@ -40,7 +40,7 @@ func TestInstallCACertWritesCertAndUpdates(t *testing.T) {
 func TestInstallCACertNonzeroExitFails(t *testing.T) {
 	path := sockPath(t)
 	fake := serveFakeSilkd(t, path)
-	fake.execCode = 3
+	fake.set(func(f *fakeSilkd) { f.execCode = 3 })
 	err := newTestEngine().InstallCACert(t.Context(), path, []byte("x"))
 	if err == nil || !strings.Contains(err.Error(), "exit code 3") {
 		t.Errorf("got %v, want exit code 3 failure", err)
@@ -50,7 +50,7 @@ func TestInstallCACertNonzeroExitFails(t *testing.T) {
 func TestInstallCACertWriteErrorFrameFails(t *testing.T) {
 	path := sockPath(t)
 	fake := serveFakeSilkd(t, path)
-	fake.writeErr = "disk full"
+	fake.set(func(f *fakeSilkd) { f.writeErr = "disk full" })
 	err := newTestEngine().InstallCACert(t.Context(), path, []byte("x"))
 	if err == nil || !strings.Contains(err.Error(), "disk full") {
 		t.Errorf("got %v, want fs_write error-frame failure", err)

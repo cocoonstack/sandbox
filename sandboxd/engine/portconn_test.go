@@ -17,7 +17,7 @@ import (
 )
 
 func TestGuestPortConnReadsDataUntilDone(t *testing.T) {
-	silk, gc := newTestGuestPortConn(t)
+	silk, gc := newTestGuestPortConn(t, portForwardMax)
 
 	go func() {
 		frame, _ := json.Marshal(map[string]string{"type": "data", "data": base64.StdEncoding.EncodeToString([]byte("HTTP/1.1 200 OK"))}, json.Deterministic(true))
@@ -37,7 +37,7 @@ func TestGuestPortConnReadsDataUntilDone(t *testing.T) {
 func TestGuestPortConnCutBeforeDoneIsUnexpectedEOF(t *testing.T) {
 	for name, trailer := range map[string]string{"between frames": "", "mid frame": `{"type":"da`} {
 		t.Run(name, func(t *testing.T) {
-			silk, gc := newTestGuestPortConn(t)
+			silk, gc := newTestGuestPortConn(t, portForwardMax)
 
 			go func() {
 				frame, _ := json.Marshal(map[string]string{"type": "data", "data": base64.StdEncoding.EncodeToString([]byte("partial"))}, json.Deterministic(true))
@@ -57,7 +57,7 @@ func TestGuestPortConnCutBeforeDoneIsUnexpectedEOF(t *testing.T) {
 }
 
 func TestGuestPortConnWriteWrapsInDataFrame(t *testing.T) {
-	silk, gc := newTestGuestPortConn(t)
+	silk, gc := newTestGuestPortConn(t, portForwardMax)
 
 	go func() { _, _ = gc.Write([]byte("GET / HTTP/1.1\r\n")) }()
 
@@ -77,7 +77,7 @@ func TestGuestPortConnWriteWrapsInDataFrame(t *testing.T) {
 }
 
 func TestGuestPortConnCloseWriteSendsDataEnd(t *testing.T) {
-	silk, gc := newTestGuestPortConn(t)
+	silk, gc := newTestGuestPortConn(t, portForwardMax)
 
 	go func() { _ = gc.CloseWrite() }()
 
@@ -105,7 +105,7 @@ func TestGuestPortConnRoundTripsFixtures(t *testing.T) {
 		return append(bytes.TrimSpace(raw), '\n')
 	}
 
-	silk, gc := newTestGuestPortConn(t)
+	silk, gc := newTestGuestPortConn(t, portForwardMax)
 
 	respData, respDone := fixture("resp_data.json"), fixture("resp_done.json")
 	go func() {
@@ -121,18 +121,14 @@ func TestGuestPortConnRoundTripsFixtures(t *testing.T) {
 		t.Errorf("fixture done frame: %v, want EOF", err)
 	}
 
-	client2, silk2 := net.Pipe()
-	t.Cleanup(func() { _ = client2.Close(); _ = silk2.Close() })
-	gc2 := &guestPortConn{Conn: client2, r: bufio.NewReaderSize(client2, portReadBuf)}
+	silk2, gc2 := newTestGuestPortConn(t, portReadBuf)
 	respError := fixture("resp_error.json")
 	go func() { _, _ = silk2.Write(respError) }()
 	if _, err := gc2.Read(buf); err == nil || errors.Is(err, io.EOF) {
 		t.Errorf("fixture error frame: %v, want a typed error", err)
 	}
 
-	client3, silk3 := net.Pipe()
-	t.Cleanup(func() { _ = client3.Close(); _ = silk3.Close() })
-	gc3 := &guestPortConn{Conn: client3, r: bufio.NewReaderSize(client3, portReadBuf)}
+	silk3, gc3 := newTestGuestPortConn(t, portReadBuf)
 	go func() { _, _ = gc3.Write([]byte("hello")) }()
 	line := make([]byte, 256)
 	n, _ = silk3.Read(line)
@@ -152,7 +148,7 @@ func TestPortReadBufHoldsOneBulkFrame(t *testing.T) {
 }
 
 func TestGuestPortConnReadsAFirstFrameThatIsAFullBulkFrame(t *testing.T) {
-	silk, gc := newTestGuestPortConn(t)
+	silk, gc := newTestGuestPortConn(t, portForwardMax)
 	payload := patterned(wire.BulkChunk)
 
 	go writeDataFrames(t, silk, payload)
@@ -163,7 +159,7 @@ func TestGuestPortConnReadsAFirstFrameThatIsAFullBulkFrame(t *testing.T) {
 }
 
 func TestGuestPortConnReadsSmallFramesThenBulkFrames(t *testing.T) {
-	silk, gc := newTestGuestPortConn(t)
+	silk, gc := newTestGuestPortConn(t, portForwardMax)
 	chunks := [][]byte{[]byte("HTTP/1.1 200 OK\r\n"), patterned(100), patterned(3000), patterned(wire.BulkChunk), patterned(wire.BulkChunk - 1), []byte("tail")}
 
 	go writeDataFrames(t, silk, chunks...)
@@ -179,7 +175,7 @@ func TestGuestPortConnReadsSmallFramesThenBulkFrames(t *testing.T) {
 func TestGuestPortConnRefusesAFrameOverMaxFrame(t *testing.T) {
 	for name, trailer := range map[string]string{"unterminated": "", "terminated": "\n"} {
 		t.Run(name, func(t *testing.T) {
-			silk, gc := newTestGuestPortConn(t)
+			silk, gc := newTestGuestPortConn(t, portForwardMax)
 
 			go func() {
 				_, _ = silk.Write(append(bytes.Repeat([]byte("a"), wire.MaxFrame+1), trailer...))
@@ -192,11 +188,11 @@ func TestGuestPortConnRefusesAFrameOverMaxFrame(t *testing.T) {
 	}
 }
 
-func newTestGuestPortConn(t *testing.T) (net.Conn, *guestPortConn) {
+func newTestGuestPortConn(t *testing.T, size int) (net.Conn, *guestPortConn) {
 	t.Helper()
 	client, silk := net.Pipe()
 	t.Cleanup(func() { _ = client.Close(); _ = silk.Close() })
-	return silk, &guestPortConn{Conn: client, r: bufio.NewReaderSize(client, portForwardMax)}
+	return silk, &guestPortConn{Conn: client, r: bufio.NewReaderSize(client, size)}
 }
 
 func writeDataFrames(t *testing.T, silk net.Conn, chunks ...[]byte) {
