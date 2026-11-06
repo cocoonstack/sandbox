@@ -627,7 +627,7 @@ func (m *Manager) finalizeBatch(ctx context.Context, sbs []*types.Sandbox, ttl t
 		m.rollbackClaim(ctx, sbs, false)
 		return fmt.Errorf("persist claim: %w", saveErr)
 	}
-	// The claim event follows the commit at once, so a crash cannot restore a claim nothing billed
+	// The claim event follows the commit, so a claim that never committed is never billed
 	for _, sb := range sbs {
 		m.recordUsage(ctx, usage.Event{
 			Event: "claim",
