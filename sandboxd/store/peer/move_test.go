@@ -12,7 +12,6 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 
@@ -62,7 +61,7 @@ func TestSendRoundShipsTheListedFilesInOrderAndKeepsSparseFilesSparse(t *testing
 		t.Fatalf("ReceiveRound: %v", err)
 	}
 	for _, name := range names {
-		if sha256OfFile(t, filepath.Join(dst, name)) != sha256OfFile(t, filepath.Join(src, name)) {
+		if storetest.FileSum(t, filepath.Join(dst, name)) != storetest.FileSum(t, filepath.Join(src, name)) {
 			t.Errorf("%s differs from the source", name)
 		}
 	}
@@ -70,7 +69,7 @@ func TestSendRoundShipsTheListedFilesInOrderAndKeepsSparseFilesSparse(t *testing
 	if err != nil || info.Size() != size {
 		t.Fatalf("received cow.raw = %v, %v, want %d bytes", info, err, size)
 	}
-	if allocated := info.Sys().(*syscall.Stat_t).Blocks * 512; allocated > sent {
+	if allocated := storetest.AllocatedBytes(t, filepath.Join(dst, "cow.raw")); allocated > sent {
 		t.Errorf("received cow.raw allocates %d bytes, more than the %d sent", allocated, sent)
 	}
 	entries, _ := os.ReadDir(dst)
@@ -99,7 +98,7 @@ func TestReceiveRoundReplacesFilesOfTheSameName(t *testing.T) {
 	if body, err := os.ReadFile(filepath.Join(dst, "state.json")); err != nil || string(body) != "new" {
 		t.Errorf("state.json = %q, %v, want the new round's bytes", body, err)
 	}
-	if sha256OfFile(t, filepath.Join(dst, "cow.raw")) != sha256OfFile(t, filepath.Join(src, "cow.raw")) {
+	if storetest.FileSum(t, filepath.Join(dst, "cow.raw")) != storetest.FileSum(t, filepath.Join(src, "cow.raw")) {
 		t.Error("cow.raw keeps bytes of the replaced file in its holes")
 	}
 }

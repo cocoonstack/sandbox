@@ -28,32 +28,27 @@ func TestBroadcastDeleteSendsNoForward(t *testing.T) {
 }
 
 func TestBroadcastDeleteFansOutToEveryPeer(t *testing.T) {
-	var hits atomic.Int32
-	newSrv := func() *httptest.Server {
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			hits.Add(1)
-			w.WriteHeader(http.StatusNoContent)
-		}))
-		t.Cleanup(srv.Close)
-		return srv
+	var addrs []string
+	var hits []*atomic.Int32
+	for range 3 {
+		srv, n := countingServer(t, http.StatusNoContent)
+		addrs, hits = append(addrs, srv.URL), append(hits, n)
 	}
-	addrs := []string{newSrv().URL, newSrv().URL, newSrv().URL}
 
 	b := &Broadcaster{Peers: func() []string { return addrs }}
 	b.Delete(t.Context(), testID)
 
-	if got := hits.Load(); got != 3 {
+	got := 0
+	for _, n := range hits {
+		got += int(n.Load())
+	}
+	if got != 3 {
 		t.Errorf("peers hit %d times, want 3 (one per distinct peer)", got)
 	}
 }
 
 func TestBroadcastDeleteDedupsRepeatedAddrs(t *testing.T) {
-	var hits atomic.Int32
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		hits.Add(1)
-		w.WriteHeader(http.StatusNoContent)
-	}))
-	defer srv.Close()
+	srv, hits := countingServer(t, http.StatusNoContent)
 
 	b := &Broadcaster{Peers: func() []string { return []string{srv.URL, srv.URL, srv.URL} }}
 	b.Delete(t.Context(), testID)
@@ -68,21 +63,11 @@ func TestBroadcastDeleteSwallowsFailures(t *testing.T) {
 		w.WriteHeader(http.StatusInternalServerError)
 	}))
 	defer fail.Close()
-	var reached atomic.Int32
-	ok := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		reached.Add(1)
-		w.WriteHeader(http.StatusNoContent)
-	}))
-	defer ok.Close()
+	ok, reached := countingServer(t, http.StatusNoContent)
 
 	b := &Broadcaster{Peers: func() []string { return []string{fail.URL, ok.URL, "127.0.0.1:1"} }}
 	b.Delete(t.Context(), testID)
 	if got := reached.Load(); got != 1 {
 		t.Errorf("healthy peer hit %d times, want 1 (fan-out continues past a failure)", got)
 	}
-}
-
-func TestBroadcastDeleteNoPeersNoOp(t *testing.T) {
-	b := &Broadcaster{Peers: func() []string { return nil }}
-	b.Delete(t.Context(), testID)
 }

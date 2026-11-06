@@ -3,7 +3,6 @@ package peer
 import (
 	"archive/tar"
 	"bytes"
-	"crypto/sha256"
 	"errors"
 	"io"
 	"net/http"
@@ -12,7 +11,6 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 
@@ -236,12 +234,9 @@ func TestTarRecordRoundTripsAWholeRecord(t *testing.T) {
 	}
 	meta := []byte(`{"id":"ck_0000000000000001","key":{"template":"t"}}`)
 
-	var buf bytes.Buffer
-	if err := TarRecord(exportDir, meta, &buf); err != nil {
-		t.Fatalf("TarRecord: %v", err)
-	}
+	buf := tarOf(t, exportDir, meta)
 	dst := t.TempDir()
-	if err := Untar(&buf, dst); err != nil {
+	if err := Untar(buf, dst); err != nil {
 		t.Fatalf("Untar: %v", err)
 	}
 
@@ -269,6 +264,9 @@ func TestTarRecordRoundTripsAWholeRecord(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dst, "memory-ranges")); err == nil {
 		t.Error("export contents landed at the record root; they must be under export/")
 	}
+	if _, err := os.Stat(filepath.Join(dst, recordTrailer)); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("completion marker was written to disk (%v); it must be consumed, not stored", err)
+	}
 }
 
 func TestUntarRejectsRecordWithoutCompletionMarker(t *testing.T) {
@@ -286,27 +284,6 @@ func TestUntarRejectsRecordWithoutCompletionMarker(t *testing.T) {
 	}
 }
 
-func TestTarRecordUntarRoundTripComplete(t *testing.T) {
-	exportDir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(exportDir, "mem"), []byte("state"), 0o600); err != nil {
-		t.Fatalf("setup: %v", err)
-	}
-	var buf bytes.Buffer
-	if err := TarRecord(exportDir, []byte(`{"id":"ck_1"}`), &buf); err != nil {
-		t.Fatalf("TarRecord: %v", err)
-	}
-	dst := t.TempDir()
-	if err := Untar(&buf, dst); err != nil {
-		t.Fatalf("Untar: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(dst, recordTrailer)); !errors.Is(err, os.ErrNotExist) {
-		t.Errorf("completion marker was written to disk (%v); it must be consumed, not stored", err)
-	}
-	if _, err := os.Stat(filepath.Join(dst, "export", "mem")); err != nil {
-		t.Errorf("export content missing after round trip: %v", err)
-	}
-}
-
 func TestTarRecordKeepsSparseFilesSparse(t *testing.T) {
 	size := 10*store.DigestChunkSize + 4096
 	exportDir := t.TempDir()
@@ -318,18 +295,15 @@ func TestTarRecordKeepsSparseFilesSparse(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(exportDir, "snapshot.json"), []byte("{}"), 0o600); err != nil {
 		t.Fatalf("write snapshot: %v", err)
 	}
-	want := sha256OfFile(t, src)
+	want := storetest.FileSum(t, src)
 
-	var buf bytes.Buffer
-	if err := TarRecord(exportDir, []byte(`{"id":"ck_0000000000000001"}`), &buf); err != nil {
-		t.Fatalf("TarRecord: %v", err)
-	}
+	buf := tarOf(t, exportDir, []byte(`{"id":"ck_0000000000000001"}`))
 	sent := int64(buf.Len())
 	if limit := 3*store.DigestChunkSize + 1<<20; sent > limit {
 		t.Errorf("stream carries %d bytes for a %d-byte file with 3 data chunks, want at most %d", sent, size, limit)
 	}
 	dst := t.TempDir()
-	if err := Untar(&buf, dst); err != nil {
+	if err := Untar(buf, dst); err != nil {
 		t.Fatalf("Untar: %v", err)
 	}
 	got := filepath.Join(dst, "export", "cow.raw")
@@ -337,10 +311,10 @@ func TestTarRecordKeepsSparseFilesSparse(t *testing.T) {
 	if err != nil || info.Size() != size {
 		t.Fatalf("pulled size = %v, %v, want %d", info, err, size)
 	}
-	if sha256OfFile(t, got) != want {
+	if storetest.FileSum(t, got) != want {
 		t.Error("pulled content differs from the source")
 	}
-	if allocated := info.Sys().(*syscall.Stat_t).Blocks * 512; allocated > sent {
+	if allocated := storetest.AllocatedBytes(t, got); allocated > sent {
 		t.Errorf("pulled file allocates %d bytes, more than the %d sent", allocated, sent)
 	}
 	if body, err := os.ReadFile(filepath.Join(dst, "export", "snapshot.json")); err != nil || string(body) != "{}" {
@@ -353,11 +327,7 @@ func TestUntarRejectsDamagedChunk(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(exportDir, "mem"), []byte("guest-pages-payload"), 0o600); err != nil {
 		t.Fatalf("setup: %v", err)
 	}
-	var buf bytes.Buffer
-	if err := TarRecord(exportDir, []byte(`{"id":"ck_1"}`), &buf); err != nil {
-		t.Fatalf("TarRecord: %v", err)
-	}
-	raw := buf.Bytes()
+	raw := tarOf(t, exportDir, []byte(`{"id":"ck_1"}`)).Bytes()
 	raw[bytes.Index(raw, []byte("guest-pages-payload"))] ^= 0xff
 	err := Untar(bytes.NewReader(raw), t.TempDir())
 	if err == nil || !strings.Contains(err.Error(), "checksum") {
@@ -377,16 +347,11 @@ func tarDir(src string, w io.Writer) error {
 	return tw.Close()
 }
 
-func sha256OfFile(t *testing.T, path string) [sha256.Size]byte {
+func tarOf(t *testing.T, exportDir string, meta []byte) *bytes.Buffer {
 	t.Helper()
-	f, err := os.Open(path)
-	if err != nil {
-		t.Fatalf("open %s: %v", path, err)
+	var buf bytes.Buffer
+	if err := TarRecord(exportDir, meta, &buf); err != nil {
+		t.Fatalf("TarRecord: %v", err)
 	}
-	defer func() { _ = f.Close() }()
-	h := sha256.New()
-	if _, err = io.Copy(h, f); err != nil {
-		t.Fatalf("hash %s: %v", path, err)
-	}
-	return [sha256.Size]byte(h.Sum(nil))
+	return &buf
 }

@@ -15,12 +15,10 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"runtime"
 	"slices"
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"testing"
 	"time"
 
@@ -158,7 +156,9 @@ func TestFetchOutlivesTheCallerThatStartedIt(t *testing.T) {
 		_, _, _, err := st.Fetch(t.Context(), id)
 		joined <- err
 	}()
-	waitParkedFetchers(t, 2)
+	storetest.WaitStacks(t, 2, func(stack string) bool {
+		return strings.Contains(stack, "s3.(*Store).Fetch(") && !strings.Contains(stack, "readMeta")
+	})
 	hangUp()
 	select {
 	case err := <-started:
@@ -436,7 +436,7 @@ func TestSparseExportStaysSparseThroughS3(t *testing.T) {
 	size := 12*store.DigestChunkSize + 4096
 	meta := metaJSON(id)
 	staging, src := stageSparseRecord(t, st, id, meta, size, map[int64][]byte{0: []byte("head"), 3*store.DigestChunkSize + 100: []byte("mid"), 11*store.DigestChunkSize + 10: []byte("tail")})
-	srcSum := fileSum(t, src)
+	srcSum := storetest.FileSum(t, src)
 	if err := st.Publish(t.Context(), staging, id, ""); err != nil {
 		t.Fatalf("Publish: %v", err)
 	}
@@ -454,10 +454,10 @@ func TestSparseExportStaysSparseThroughS3(t *testing.T) {
 	if err != nil || info.Size() != size {
 		t.Fatalf("fetched size = %v, %v, want %d", info, err, size)
 	}
-	if fileSum(t, got) != srcSum {
+	if storetest.FileSum(t, got) != srcSum {
 		t.Error("fetched content differs from the source")
 	}
-	if blocks := allocatedBytes(t, got); blocks > uploaded+(1<<20) {
+	if blocks := storetest.AllocatedBytes(t, got); blocks > uploaded+(1<<20) {
 		t.Errorf("fetched file allocates %d bytes, want at most the %d uploaded", blocks, uploaded)
 	}
 }
@@ -569,7 +569,7 @@ func TestLineageDedupUploadsOnlyChangedChunks(t *testing.T) {
 		t.Helper()
 		before, _ := fake.chunkPuts("ck/chunks/")
 		staging, src := stageSparseRecord(t, st, id, fmt.Appendf(nil, `{"id":"%s","gen":%d}`, id, gen), 8*cs, writes)
-		srcSum = fileSum(t, src)
+		srcSum = storetest.FileSum(t, src)
 		if err := st.Publish(t.Context(), staging, id, scope); err != nil {
 			t.Fatalf("Publish %s: %v", id, err)
 		}
@@ -595,7 +595,7 @@ func TestLineageDedupUploadsOnlyChangedChunks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Fetch: %v", err)
 	}
-	if fileSum(t, filepath.Join(dir, "disk.img")) != srcSum {
+	if storetest.FileSum(t, filepath.Join(dir, "disk.img")) != srcSum {
 		t.Error("fetched content differs from the source")
 	}
 }
@@ -863,7 +863,7 @@ func TestFetchFileKeepsHoles(t *testing.T) {
 	_, st := newFakeStore(t)
 	size := 12*store.DigestChunkSize + 4096
 	staging, src := stageSparseRecord(t, st, id, metaJSON(id), size, map[int64][]byte{0: []byte("head"), 11*store.DigestChunkSize + 10: []byte("tail")})
-	srcSum := fileSum(t, src)
+	srcSum := storetest.FileSum(t, src)
 	if err := st.Publish(t.Context(), staging, id, ""); err != nil {
 		t.Fatalf("Publish: %v", err)
 	}
@@ -875,10 +875,10 @@ func TestFetchFileKeepsHoles(t *testing.T) {
 	if info, err := os.Stat(dst); err != nil || info.Size() != size {
 		t.Fatalf("fetched size = %v, %v, want %d", info, err, size)
 	}
-	if fileSum(t, dst) != srcSum {
+	if storetest.FileSum(t, dst) != srcSum {
 		t.Error("fetched content differs from the source")
 	}
-	if blocks, limit := allocatedBytes(t, dst), 2*store.DigestChunkSize+1<<20; blocks > limit {
+	if blocks, limit := storetest.AllocatedBytes(t, dst), 2*store.DigestChunkSize+1<<20; blocks > limit {
 		t.Errorf("fetched file allocates %d bytes, want at most %d for two data chunks", blocks, limit)
 	}
 }
@@ -918,7 +918,7 @@ func TestRaisedConcurrencyReachesItsLimitAndKeepsItsConnections(t *testing.T) {
 		writes[i*store.DigestChunkSize] = []byte{byte(i + 1)}
 	}
 	staging, src := stageSparseRecord(t, st, id, metaJSON(id), chunks*store.DigestChunkSize, writes)
-	srcSum := fileSum(t, src)
+	srcSum := storetest.FileSum(t, src)
 
 	gate.arm(http.MethodPut, chunks)
 	if err := st.Publish(t.Context(), staging, id, ""); err != nil {
@@ -933,7 +933,7 @@ func TestRaisedConcurrencyReachesItsLimitAndKeepsItsConnections(t *testing.T) {
 		if err := st.FetchFile(t.Context(), id, "disk.img", dst); err != nil {
 			t.Fatalf("FetchFile round %d: %v", round, err)
 		}
-		if fileSum(t, dst) != srcSum {
+		if storetest.FileSum(t, dst) != srcSum {
 			t.Fatalf("FetchFile round %d: content differs from the source", round)
 		}
 		peak, opened := gate.result()
@@ -1238,29 +1238,6 @@ func stageSparseRecord(t *testing.T, st *Store, id string, meta []byte, size int
 	return staging, storetest.WriteSparse(t, filepath.Join(staging, store.ExportDir, "disk.img"), size, writes)
 }
 
-func fileSum(t *testing.T, path string) [sha256.Size]byte {
-	t.Helper()
-	f, err := os.Open(path)
-	if err != nil {
-		t.Fatalf("open %s: %v", path, err)
-	}
-	defer func() { _ = f.Close() }()
-	h := sha256.New()
-	if _, err = io.Copy(h, f); err != nil {
-		t.Fatalf("hash %s: %v", path, err)
-	}
-	return [sha256.Size]byte(h.Sum(nil))
-}
-
-func allocatedBytes(t *testing.T, path string) int64 {
-	t.Helper()
-	info, err := os.Stat(path)
-	if err != nil {
-		t.Fatalf("stat %s: %v", path, err)
-	}
-	return info.Sys().(*syscall.Stat_t).Blocks * 512
-}
-
 func denseChunkSums(t *testing.T, path string) [][sha256.Size]byte {
 	t.Helper()
 	f, err := os.Open(path)
@@ -1320,24 +1297,6 @@ func newTestStoreAt(t *testing.T, endpoint http.Handler, cfg store.S3Config) *St
 		t.Fatalf("New: %v", err)
 	}
 	return st
-}
-
-func waitParkedFetchers(t *testing.T, want int) {
-	t.Helper()
-	buf := make([]byte, 1<<20)
-	for range 5000 {
-		parked := 0
-		for _, g := range strings.Split(string(buf[:runtime.Stack(buf, true)]), "\n\n") {
-			if strings.Contains(g, "s3.(*Store).Fetch(") && !strings.Contains(g, "readMeta") {
-				parked++
-			}
-		}
-		if parked >= want {
-			return
-		}
-		time.Sleep(time.Millisecond)
-	}
-	t.Fatalf("fewer than %d Fetch callers joined the shared download", want)
 }
 
 func assertSingleMetaGet(t *testing.T, fake *fakeS3, metaKey string) {

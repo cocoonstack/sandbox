@@ -3,10 +3,13 @@ package peer
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/cocoonstack/sandbox/sandboxd/store/storetest"
 )
 
 func TestOwnersReturnsOnly200(t *testing.T) {
@@ -29,21 +32,6 @@ func TestOwnersAllMissIsEmpty(t *testing.T) {
 	}
 }
 
-func TestOwnersHungPeerExcludedWithoutBlockingOthers(t *testing.T) {
-	hung := hungServer(t)
-	ok := statusServer(t, http.StatusOK)
-
-	start := time.Now()
-	p := &HTTPProber{Peers: func() []string { return []string{hung.URL, ok.URL} }}
-	owners := p.Owners(t.Context(), testID)
-	if elapsed := time.Since(start); elapsed > 2*time.Second {
-		t.Errorf("Owners took %v, want bounded by the per-probe timeout", elapsed)
-	}
-	if len(owners) != 1 || owners[0] != ok.URL {
-		t.Errorf("owners = %v, want [%s]", owners, ok.URL)
-	}
-}
-
 func TestOwnersReturnsPromptlyWithOneOwner(t *testing.T) {
 	hung := hungServer(t)
 	ok := statusServer(t, http.StatusOK)
@@ -60,12 +48,7 @@ func TestOwnersReturnsPromptlyWithOneOwner(t *testing.T) {
 }
 
 func TestOwnersDedupsAddrs(t *testing.T) {
-	var hits atomic.Int32
-	ok := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		hits.Add(1)
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer ok.Close()
+	ok, hits := countingServer(t, http.StatusOK)
 
 	p := &HTTPProber{Peers: func() []string { return []string{ok.URL, ok.URL, ok.URL} }}
 	owners := p.Owners(t.Context(), testID)
@@ -77,15 +60,15 @@ func TestOwnersDedupsAddrs(t *testing.T) {
 	}
 }
 
-func TestOwnersCapsAtThree(t *testing.T) {
+func TestOwnersCapsAtTheRedirectLimit(t *testing.T) {
 	var addrs []string
-	for range 4 {
+	for range maxRedirectOwners + 1 {
 		addrs = append(addrs, statusServer(t, http.StatusOK).URL)
 	}
 
 	p := &HTTPProber{Peers: func() []string { return addrs }}
-	if owners := p.Owners(t.Context(), testID); len(owners) != 3 {
-		t.Errorf("owners = %v, want capped at 3", owners)
+	if owners := p.Owners(t.Context(), testID); len(owners) != maxRedirectOwners {
+		t.Errorf("owners = %v, want capped at %d", owners, maxRedirectOwners)
 	}
 }
 
@@ -136,18 +119,23 @@ func TestHealOwnersIsExhaustiveDespiteAFastOwner(t *testing.T) {
 
 func TestOwnersCoalescesConcurrentProbes(t *testing.T) {
 	var hits atomic.Int32
+	hold := make(chan struct{})
+	release := sync.OnceFunc(func() { close(hold) })
 	ok := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		hits.Add(1)
-		time.Sleep(50 * time.Millisecond)
+		<-hold
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer ok.Close()
+	defer release()
 
 	p := &HTTPProber{Peers: func() []string { return []string{ok.URL} }}
 	var wg sync.WaitGroup
 	for range 10 {
 		wg.Go(func() { p.Owners(t.Context(), testID) })
 	}
+	storetest.WaitStacks(t, 10, func(stack string) bool { return strings.Contains(stack, "singleflight.(*Group).Do(") })
+	release()
 	wg.Wait()
 	if got := hits.Load(); got != 1 {
 		t.Errorf("peer hit %d times by 10 concurrent callers, want 1 (coalesced)", got)
@@ -182,16 +170,10 @@ func TestOwnersCacheCollapsesRepeatedRedirects(t *testing.T) {
 }
 
 func TestOwnersCacheExpires(t *testing.T) {
-	var hits atomic.Int32
-	ok := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		hits.Add(1)
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer ok.Close()
+	ok, hits := countingServer(t, http.StatusOK)
 
-	p := &HTTPProber{Peers: func() []string { return []string{ok.URL} }, cacheTTL: 10 * time.Millisecond}
+	p := &HTTPProber{Peers: func() []string { return []string{ok.URL} }, cacheTTL: -time.Second}
 	p.Owners(t.Context(), testID)
-	time.Sleep(20 * time.Millisecond)
 	p.Owners(t.Context(), testID)
 	if got := hits.Load(); got != 2 {
 		t.Errorf("peer hit %d times across two Owners calls spanning the TTL, want 2 (expired)", got)
@@ -199,12 +181,7 @@ func TestOwnersCacheExpires(t *testing.T) {
 }
 
 func TestForgetEvictsCachedEntry(t *testing.T) {
-	var hits atomic.Int32
-	ok := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		hits.Add(1)
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer ok.Close()
+	ok, hits := countingServer(t, http.StatusOK)
 
 	p := &HTTPProber{Peers: func() []string { return []string{ok.URL} }}
 	p.Owners(t.Context(), testID)
@@ -216,12 +193,7 @@ func TestForgetEvictsCachedEntry(t *testing.T) {
 }
 
 func TestForgetOtherIDLeavesCacheAlone(t *testing.T) {
-	var hits atomic.Int32
-	ok := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		hits.Add(1)
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer ok.Close()
+	ok, hits := countingServer(t, http.StatusOK)
 
 	p := &HTTPProber{Peers: func() []string { return []string{ok.URL} }}
 	p.Owners(t.Context(), testID)
@@ -279,6 +251,17 @@ func statusServer(t *testing.T, code int) *httptest.Server {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(code) }))
 	t.Cleanup(srv.Close)
 	return srv
+}
+
+func countingServer(t *testing.T, code int) (*httptest.Server, *atomic.Int32) {
+	t.Helper()
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+		w.WriteHeader(code)
+	}))
+	t.Cleanup(srv.Close)
+	return srv, &hits
 }
 
 func hungServer(t *testing.T) *httptest.Server {
