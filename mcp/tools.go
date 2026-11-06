@@ -96,6 +96,49 @@ func (a sandboxArg) id() string { return a.SandboxID }
 
 type sandboxIDer interface{ id() string }
 
+type cmdArgs struct {
+	sandboxArg
+	Command string `json:"command"`
+	Cwd     string `json:"cwd"`
+}
+
+type killArgs struct {
+	sandboxArg
+	PID    uint32 `json:"pid"`
+	Signal int32  `json:"signal"`
+}
+
+type logsArgs struct {
+	sandboxArg
+	PID uint32 `json:"pid"`
+}
+
+type writeFileArgs struct {
+	sandboxArg
+	Path    string `json:"path"`
+	Content string `json:"content"`
+}
+
+type pathArgs struct {
+	sandboxArg
+	Path string `json:"path"`
+}
+
+type forkArgs struct {
+	sandboxArg
+	Count int `json:"count"`
+}
+
+type checkpointArgs struct {
+	sandboxArg
+	Name string `json:"name"`
+}
+
+type promoteArgs struct {
+	sandboxArg
+	TemplateName string `json:"template_name"`
+}
+
 // cappedOutput keeps the first execOutputCap bytes: an agent that tails a firehose must not grow this process.
 type cappedOutput struct {
 	strings.Builder
@@ -148,20 +191,6 @@ func toolCreateSandbox(ctx context.Context, s *server, raw jsontext.Value) (stri
 	return jsonText(map[string]any{"sandbox_id": sb.ID, "deadline": sb.Deadline}), nil
 }
 
-type cmdArgs struct {
-	sandboxArg
-	Command string `json:"command"`
-	Cwd     string `json:"cwd"`
-}
-
-func parseCommand(s *server, raw jsontext.Value) (cmdArgs, *sandbox.Sandbox, error) {
-	args, sb, err := s.parseAndBox[cmdArgs](raw)
-	if err == nil && args.Command == "" {
-		return args, nil, errors.New("command must not be empty")
-	}
-	return args, sb, err
-}
-
 func toolExec(ctx context.Context, s *server, raw jsontext.Value) (string, error) {
 	args, sb, err := parseCommand(s, raw)
 	if err != nil {
@@ -208,12 +237,6 @@ func toolPs(ctx context.Context, s *server, raw jsontext.Value) (string, error) 
 	return jsonText(procs), nil
 }
 
-type killArgs struct {
-	sandboxArg
-	PID    uint32 `json:"pid"`
-	Signal int32  `json:"signal"`
-}
-
 func toolKill(ctx context.Context, s *server, raw jsontext.Value) (string, error) {
 	args, sb, err := s.parseAndBox[killArgs](raw)
 	if err != nil {
@@ -223,11 +246,6 @@ func toolKill(ctx context.Context, s *server, raw jsontext.Value) (string, error
 		return "", err
 	}
 	return "killed", nil
-}
-
-type logsArgs struct {
-	sandboxArg
-	PID uint32 `json:"pid"`
 }
 
 func toolLogs(ctx context.Context, s *server, raw jsontext.Value) (string, error) {
@@ -247,12 +265,6 @@ func toolLogs(ctx context.Context, s *server, raw jsontext.Value) (string, error
 	return jsonText(out), nil
 }
 
-type writeFileArgs struct {
-	sandboxArg
-	Path    string `json:"path"`
-	Content string `json:"content"`
-}
-
 func toolWriteFile(ctx context.Context, s *server, raw jsontext.Value) (string, error) {
 	args, sb, err := s.parseAndBox[writeFileArgs](raw)
 	if err != nil {
@@ -262,11 +274,6 @@ func toolWriteFile(ctx context.Context, s *server, raw jsontext.Value) (string, 
 		return "", err
 	}
 	return fmt.Sprintf("wrote %d bytes to %s", len(args.Content), args.Path), nil
-}
-
-type pathArgs struct {
-	sandboxArg
-	Path string `json:"path"`
 }
 
 func toolReadFile(ctx context.Context, s *server, raw jsontext.Value) (string, error) {
@@ -295,11 +302,6 @@ func toolListDir(ctx context.Context, s *server, raw jsontext.Value) (string, er
 	return jsonText(entries), nil
 }
 
-type forkArgs struct {
-	sandboxArg
-	Count int `json:"count"`
-}
-
 func toolFork(ctx context.Context, s *server, raw jsontext.Value) (string, error) {
 	args, sb, err := s.parseAndBox[forkArgs](raw)
 	if err != nil {
@@ -315,11 +317,6 @@ func toolFork(ctx context.Context, s *server, raw jsontext.Value) (string, error
 		ids[i] = c.ID
 	}
 	return jsonText(map[string]any{"sandbox_ids": ids}), nil
-}
-
-type checkpointArgs struct {
-	sandboxArg
-	Name string `json:"name"`
 }
 
 func toolCheckpoint(ctx context.Context, s *server, raw jsontext.Value) (string, error) {
@@ -383,11 +380,6 @@ func toolHibernate(ctx context.Context, s *server, raw jsontext.Value) (string, 
 	return "hibernated (the next call that reaches the guest wakes it transparently)", nil
 }
 
-type promoteArgs struct {
-	sandboxArg
-	TemplateName string `json:"template_name"`
-}
-
 func toolPromote(ctx context.Context, s *server, raw jsontext.Value) (string, error) {
 	args, sb, err := s.parseAndBox[promoteArgs](raw)
 	if err != nil {
@@ -418,6 +410,14 @@ func toolNodeInfo(ctx context.Context, s *server, _ jsontext.Value) (string, err
 		return "", err
 	}
 	return jsonText(info), nil
+}
+
+func parseCommand(s *server, raw jsontext.Value) (cmdArgs, *sandbox.Sandbox, error) {
+	args, sb, err := s.parseAndBox[cmdArgs](raw)
+	if err == nil && args.Command == "" {
+		return args, nil, errors.New("command must not be empty")
+	}
+	return args, sb, err
 }
 
 func parse(raw jsontext.Value, v any) error {
