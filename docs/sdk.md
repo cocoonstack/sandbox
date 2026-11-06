@@ -218,7 +218,8 @@ runs `Lookup` once, and a different owner replaces the old one. A call whose
 request is its whole input is sent again there: the control calls, `Run`
 without `Stdin`, and the file, git, process and session calls that send no
 data. `Run` with `Stdin`, `WriteFile`, `Push`, `OpenPty`, `Watch`, `DialPort`, `Lsp.Request`,
-`Logs` and `Attach` fail once and the next call reaches the new owner. A
+`Logs` and `Attach` fail once and the next call reaches the new owner. An
+error from the caller's own writer is returned as it is and never retried, and a
 released sandbox still answers 404.
 Volume sandboxes and egress-lane sandboxes cannot hibernate, fork, checkpoint,
 or promote, nor take `WithArchiveOnExpire`; each answers 409, as does a promote

@@ -489,8 +489,11 @@ class Sandbox:
         self.volumes = [volume.copy() for volume in view["volumes"]]
 
     def _rebind(self, exc: SandboxError) -> bool:
-        if exc._owner_gone != (self.id, self.owner):
+        tag = exc._owner_gone
+        if tag is None or tag[0] != self.id:
             return False
+        if tag[1] != self.owner:
+            return True
         try:
             moved = self._client.lookup(self.id, self.token)
         except APIError:
@@ -798,12 +801,21 @@ def _pump_stdio(
         if t == "started" and on_started:
             on_started(cast(int, _need(frame, "pid")))
         elif t == "stdout" and on_stdout:
-            on_stdout(_need(frame, "data"))
+            _deliver(on_stdout, _need(frame, "data"))
         elif t == "stderr" and on_stderr:
-            on_stderr(_need(frame, "data"))
+            _deliver(on_stderr, _need(frame, "data"))
         elif t == "exit":
             return cast(int, _need(frame, "code"))
     return None
+
+
+def _deliver(callback: Callable[[bytes], object], data: bytes) -> None:
+    """Runs a caller's output callback; an SDK error it raises never sends the running call to another node."""
+    try:
+        callback(data)
+    except SandboxError as exc:
+        exc._owner_gone = None
+        raise
 
 
 def _expect(conn: Conn, frame_type: str) -> dict[str, Any]:
