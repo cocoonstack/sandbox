@@ -40,21 +40,9 @@ func (m *Manager) desiredPools(specs []config.PoolSpec) (map[types.PoolKey]confi
 		if err := spec.ValidateLimits(); err != nil {
 			return nil, fmt.Errorf("%w: pool %s: %w", ErrBadConfig, spec.Template, err)
 		}
-		// Config-owned fields; accepting one here would silently drop it
-		for _, f := range []struct {
-			name string
-			set  bool
-		}{
-			{"egress", spec.Egress != nil},
-			{"warmup", spec.Warmup != nil},
-			{"capture_trim", spec.CaptureTrim},
-			{"reader", spec.Reader},
-			{"storage", spec.Storage != ""},
-			{"replicate_seconds", spec.ReplicateSeconds != 0},
-			{"egress_upstream_env", spec.EgressUpstreamEnv != ""},
-		} {
-			if f.set {
-				return nil, fmt.Errorf("%w: pool %q: %s is set in the config file, not via the API", ErrBadKey, spec.Template, f.name)
+		for _, f := range spec.ConfigOwned() {
+			if !f.Value.IsZero() {
+				return nil, fmt.Errorf("%w: pool %q: %s is set in the config file, not via the API", ErrBadKey, spec.Template, f.Name)
 			}
 		}
 		if _, ok := desired[spec.PoolKey]; ok {

@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"slices"
 	"strconv"
@@ -29,6 +30,8 @@ import (
 
 const (
 	DefaultMaxForkCount = 16
+
+	fieldReplicateSeconds = "replicate_seconds"
 
 	defaultListen    = ":7777"
 	defaultDataDir   = "/var/lib/sandboxd"
@@ -123,6 +126,25 @@ func (s PoolSpec) ValidateLimits() error {
 		}
 	}
 	return validateArchiveWindow(s.IdleHibernateSeconds, s.ArchiveAfterSeconds, s.ArchiveDeleteAfterSeconds)
+}
+
+type ConfigField struct {
+	Name  string
+	Value reflect.Value
+}
+
+// ConfigOwned lists s's config-only fields; PUT /v1/pools refuses them, the seed hash drops them, and reload diffs them.
+func (s *PoolSpec) ConfigOwned() []ConfigField {
+	return []ConfigField{
+		{"egress", reflect.ValueOf(&s.Egress).Elem()},
+		{"warmup", reflect.ValueOf(&s.Warmup).Elem()},
+		{"capture_trim", reflect.ValueOf(&s.CaptureTrim).Elem()},
+		{"storage", reflect.ValueOf(&s.Storage).Elem()},
+		{fieldReplicateSeconds, reflect.ValueOf(&s.ReplicateSeconds).Elem()},
+		{"reader", reflect.ValueOf(&s.Reader).Elem()},
+		{"egress_upstream_env", reflect.ValueOf(&s.EgressUpstreamEnv).Elem()},
+		{"tun", reflect.ValueOf(&s.Tun).Elem()},
+	}
 }
 
 // StoreConfig selects a checkpoint backend.

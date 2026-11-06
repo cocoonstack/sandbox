@@ -194,7 +194,7 @@ guest -> tun0 -> silkd --vsock 2051--> sandboxd --VXLAN--> exit (vxlan0, forward
 ### Configuration
 
 The node's `tun` block turns the mode on; a pool opts in with `"tun": true`
-(the `none` lane only).
+(the `none` lane only). Like `egress`, the flag is config-owned: `PUT /v1/pools` rejects it.
 
 ```json
 "tun": {

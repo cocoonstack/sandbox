@@ -68,27 +68,18 @@ func diffPools(cur, next []PoolSpec) (changed, ignored, restart []string) {
 		x, inA := a[k]
 		y, inB := b[k]
 		label := poolLabel(k)
-		for _, f := range []struct {
-			name string
-			same bool
-		}{
-			{"egress", reflect.DeepEqual(x.Egress, y.Egress)},
-			{"warmup", slices.Equal(x.Warmup, y.Warmup)},
-			{"capture_trim", x.CaptureTrim == y.CaptureTrim},
-			{"storage", x.Storage == y.Storage},
-			{"reader", x.Reader == y.Reader},
-			{"egress_upstream_env", x.EgressUpstreamEnv == y.EgressUpstreamEnv},
-			{"tun", x.Tun == y.Tun},
-		} {
-			if !f.same {
-				changed = append(changed, label+"."+f.name)
+		ys := y.ConfigOwned()
+		for i, f := range x.ConfigOwned() {
+			switch {
+			case reflect.DeepEqual(f.Value.Interface(), ys[i].Value.Interface()):
+			case f.Name == fieldReplicateSeconds:
+				restart = append(restart, label+"."+f.Name)
+			default:
+				changed = append(changed, label+"."+f.Name)
 			}
 		}
 		if inA != inB || targetsOf(x) != targetsOf(y) {
 			ignored = append(ignored, label+" targets (PUT /v1/pools owns them)")
-		}
-		if x.ReplicateSeconds != y.ReplicateSeconds {
-			restart = append(restart, label+".replicate_seconds")
 		}
 	}
 	return changed, ignored, restart
