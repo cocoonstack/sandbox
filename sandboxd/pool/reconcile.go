@@ -221,7 +221,6 @@ func (m *Manager) sweepStaleVMs(ctx context.Context, live map[string]types.VMRec
 	return removed
 }
 
-// removeStaleVM reclaims one unowned VM, reporting whether it is gone.
 func (m *Manager) removeStaleVM(ctx context.Context, name string, rec types.VMRecord) bool {
 	logger := log.WithFunc("pool.removeStaleVM")
 	if rec.State == vmStateCreating {
