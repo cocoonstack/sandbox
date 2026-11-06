@@ -118,11 +118,6 @@ func (m *Manager) replaceArchive(ctx context.Context, sb *types.Sandbox, ck stri
 	return m.putRow(ctx, sb, ck, false, true)
 }
 
-// putReplica writes a live claim's row with no deadline: retention starts when the claim is archived or adopted.
-func (m *Manager) putReplica(ctx context.Context, sb *types.Sandbox, ck string) (int64, error) {
-	return m.putRow(ctx, sb, ck, true, false)
-}
-
 // replaceReplica moves the row from the epoch this node holds; a row another node took or deleted refuses the write.
 func (m *Manager) replaceReplica(ctx context.Context, sb *types.Sandbox, ck string) (int64, error) {
 	return m.putRow(ctx, sb, ck, true, true)
@@ -324,13 +319,7 @@ func (m *Manager) dropTombstone(ctx context.Context, id string, epoch int64) {
 }
 
 func (m *Manager) reputArchive(ctx context.Context, sb *types.Sandbox) {
-	var epoch int64
-	var err error
-	if sb.ArchiveCk != "" {
-		epoch, err = m.putArchive(ctx, sb, sb.ArchiveCk)
-	} else {
-		epoch, err = m.putReplica(ctx, sb, sb.ReplicaCk)
-	}
+	epoch, err := m.putRow(ctx, sb, cmp.Or(sb.ArchiveCk, sb.ReplicaCk), sb.ArchiveCk == "", false)
 	if err != nil {
 		if !errors.Is(err, ErrVolumeCapture) {
 			log.WithFunc("pool.reputArchive").Warnf(ctx, "re-put archive row %s: %v", sb.ID, err)

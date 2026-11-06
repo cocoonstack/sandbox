@@ -12,6 +12,7 @@ import (
 
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 	"github.com/cocoonstack/sandbox/sandboxd/usage"
+	"github.com/cocoonstack/sandbox/sandboxd/utils"
 )
 
 // ClaimOptions is what a claim asks for beyond its key; the zero value takes every default.
@@ -663,10 +664,8 @@ func (m *Manager) rollbackClaim(ctx context.Context, sbs []*types.Sandbox, bille
 			m.recordUsage(ctx, usage.Event{Event: "release", ID: sb.ID, VMName: sb.VMName, Tenant: sb.Tenant})
 		}
 	}
-	for _, sb := range sbs {
-		m.releaseTun(ctx, sb.ID, sb.TunAddr)
-	}
 	for i, sb := range sbs {
+		m.releaseTun(ctx, sb.ID, sb.TunAddr)
 		td := m.quiesceVolumes(ctx, sb)
 		td.holds = holds[i]
 		m.out.Disarm(sb.ID, m.removeOrRetry(ctx, sb.VMName, sb.ID, td))
@@ -737,11 +736,8 @@ func (c *heldConn) Close() error {
 
 // CloseWrite forwards the half-close; net.Conn does not carry it, so embedding cannot promote one.
 func (c *heldConn) CloseWrite() error {
-	cw, ok := c.Conn.(interface{ CloseWrite() error })
-	if !ok {
-		return nil
-	}
-	return cw.CloseWrite()
+	utils.CloseWrite(c.Conn)
+	return nil
 }
 
 func clampTTL(ttl time.Duration) time.Duration {

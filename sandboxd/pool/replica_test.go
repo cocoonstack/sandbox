@@ -828,7 +828,7 @@ func TestReplicaRestartAdoptsTheRowsCheckpointOfAnInterruptedRound(t *testing.T)
 	if publishErr != nil {
 		t.Fatalf("publish: %v", publishErr)
 	}
-	if _, putErr := a.putReplica(t.Context(), sb, interrupted.ID); putErr != nil {
+	if _, putErr := a.putRow(t.Context(), sb, interrupted.ID, true, false); putErr != nil {
 		t.Fatalf("put: %v", putErr)
 	}
 	second := interrupted.ID

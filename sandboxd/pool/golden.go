@@ -213,7 +213,6 @@ func (m *Manager) dumpGolden(ctx context.Context, name, snap, final string) erro
 	return m.exportGolden(ctx, snap, final)
 }
 
-// exportGolden exports snap into final through a unique sibling *.tmp dir.
 func (m *Manager) exportGolden(ctx context.Context, snap, final string) error {
 	staging, err := os.MkdirTemp(filepath.Dir(final), filepath.Base(final)+"-*.tmp")
 	if err != nil {

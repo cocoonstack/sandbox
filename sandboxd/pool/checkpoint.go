@@ -222,7 +222,7 @@ func (m *Manager) claimLoaded(ctx context.Context, ckpt types.Checkpoint, o Clai
 	}
 	dir, _, _, err := m.ckpts.Fetch(ctx, ckpt.ID)
 	if errors.Is(err, store.ErrNotFound) {
-		return nil, ErrUnknownCheckpoint // deleted between the pre-check and the lock
+		return nil, ErrUnknownCheckpoint
 	}
 	if err != nil {
 		return nil, fmt.Errorf("fetch checkpoint: %w", err)
@@ -368,9 +368,8 @@ func (h *healVetoes) clear(ckptID string) (aborted bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	delete(h.pending, ckptID)
-	if _, aborted = h.aborted[ckptID]; aborted {
-		delete(h.aborted, ckptID)
-	}
+	_, aborted = h.aborted[ckptID]
+	delete(h.aborted, ckptID)
 	return aborted
 }
 

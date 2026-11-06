@@ -282,9 +282,10 @@ func (m *Manager) idleOnce(ctx context.Context) {
 	// Hibernates are seconds-long engine snapshots, so fan out off the housekeeping loop
 	go func() {
 		defer m.sweeps.idle.Store(false)
+		logger := log.WithFunc("pool.idleOnce")
 		m.runBounded(ctx, len(victims), func(ctx context.Context, i int) {
 			sb := victims[i]
-			logSweepResult(ctx, log.WithFunc("pool.idleOnce"), m.idleHibernate(ctx, sb, now), "idle-hibernated "+sb.ID, "idle-hibernate "+sb.ID)
+			logSweepResult(ctx, logger, m.idleHibernate(ctx, sb, now), "idle-hibernated "+sb.ID, "idle-hibernate "+sb.ID)
 		}).Wait()
 	}()
 }

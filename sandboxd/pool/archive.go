@@ -158,11 +158,7 @@ func (m *Manager) archive(ctx context.Context, sb *types.Sandbox) error {
 	js, archivedAt := m.store.set(sb), time.Now()
 	m.mu.Unlock()
 	if saveErr := m.store.commit(js); saveErr != nil {
-		m.mu.Lock()
-		var rb claimSnapshot
-		// A Release that landed meanwhile already deleted the claim; re-setting it would resurrect it
-		live := m.claimed[sb.ID] == sb
-		if live {
+		rb, live := m.setIfLive(sb, func() {
 			sb.ArchiveCk, sb.ArchiveEpoch, sb.ArchivePending, sb.ReplicaCk = "", 0, prevPending, replica
 			if replica != "" {
 				sb.ArchiveEpoch = epoch
@@ -170,9 +166,7 @@ func (m *Manager) archive(ctx context.Context, sb *types.Sandbox) error {
 			sb.HibernateSnap, sb.VsockSocket = snap, sock
 			m.setVMNameLocked(sb, vmName)
 			sb.Deadline = prevDeadline
-			rb = m.store.set(sb)
-		}
-		m.mu.Unlock()
+		})
 		sb.Transition.Unlock()
 		m.store.recommit(ctx, rb)
 		if !live || replica == "" {
@@ -301,14 +295,10 @@ func (m *Manager) commitWake(ctx context.Context, sb *types.Sandbox, vmName, soc
 	js, lease := m.store.set(sb), sb.Deadline
 	m.mu.Unlock()
 	if err := m.store.commit(js); err != nil {
-		m.mu.Lock()
-		var rb claimSnapshot
-		if m.claimed[sb.ID] == sb {
+		rb, _ := m.setIfLive(sb, func() {
 			sb.VsockSocket, sb.ArchiveCk, sb.ArchiveEpoch, sb.Deadline, sb.ReaderSafe = "", ck, epoch, deadline, safe
 			m.setVMNameLocked(sb, "")
-			rb = m.store.set(sb)
-		}
-		m.mu.Unlock()
+		})
 		m.store.recommit(ctx, rb)
 		return fmt.Errorf("wake %s: persist claims: %w", sb.ID, err)
 	}
