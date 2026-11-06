@@ -293,8 +293,20 @@ class Sandbox:
 
     def find_iter(self, path: str, pattern: str, glob: str = "") -> Iterator[dict[str, Any]]:
         """Yields matches as they stream."""
-        with self._lease(self._connect("fs_find", path=path, pattern=pattern, glob=glob or None)) as conn:
-            for f in conn.recv_until("done"):
+        try:
+            conn = self._connect("fs_find", path=path, pattern=pattern, glob=glob or None)
+        except SandboxError as exc:
+            self._rebind(exc)
+            raise
+        with self._lease(conn):
+            while True:
+                try:
+                    f = conn.recv()
+                except SandboxError as exc:
+                    self._rebind(exc)
+                    raise
+                if f["type"] == "done":
+                    return
                 if f["type"] == "match":
                     yield f
 
