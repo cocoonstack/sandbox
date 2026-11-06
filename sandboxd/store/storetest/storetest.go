@@ -181,7 +181,7 @@ func WaitStacks(t testing.TB, want int, match func(stack string) bool) {
 	buf := make([]byte, 1<<20)
 	for range 5000 {
 		matched := 0
-		for _, stack := range strings.Split(string(buf[:runtime.Stack(buf, true)]), "\n\n") {
+		for stack := range strings.SplitSeq(string(buf[:runtime.Stack(buf, true)]), "\n\n") {
 			if match(stack) {
 				matched++
 			}
