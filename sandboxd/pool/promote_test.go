@@ -24,10 +24,7 @@ func TestPromoteThenClaimClonesFromTemplate(t *testing.T) {
 	m := newTestManager(t, eng)
 	parent := mustClaim(t, m, testKey)
 
-	gotKey, gotDigest, err := m.Promote(t.Context(), parent.ID, Cred{Token: parent.Token}, "tpl:x", "")
-	if err != nil {
-		t.Fatalf("Promote: %v", err)
-	}
+	gotKey, gotDigest := mustPromote(t, m, parent, "tpl:x", "")
 	if len(eng.snapSaves) != 1 || !slices.Contains(eng.snapRemoves, eng.snapSaves[0]) {
 		t.Errorf("snapSaves=%v snapRemoves=%v, want one transient snapshot dropped", eng.snapSaves, eng.snapRemoves)
 	}
@@ -71,23 +68,14 @@ func TestRepromoteContentDigestTracksExportBytes(t *testing.T) {
 	m := newTestManager(t, eng)
 	parent := mustClaim(t, m, testKey)
 
-	_, firstDigest, err := m.Promote(t.Context(), parent.ID, Cred{Token: parent.Token}, "tpl:digest", "")
-	if err != nil {
-		t.Fatalf("first Promote: %v", err)
-	}
-	_, secondDigest, err := m.Promote(t.Context(), parent.ID, Cred{Token: parent.Token}, "tpl:digest", "")
-	if err != nil {
-		t.Fatalf("same-byte Promote: %v", err)
-	}
+	_, firstDigest := mustPromote(t, m, parent, "tpl:digest", "")
+	_, secondDigest := mustPromote(t, m, parent, "tpl:digest", "")
 	if secondDigest != firstDigest {
 		t.Errorf("same export bytes changed digest: %q then %q", firstDigest, secondDigest)
 	}
 
 	eng.exportContent = []byte("generation two")
-	thirdKey, thirdDigest, err := m.Promote(t.Context(), parent.ID, Cred{Token: parent.Token}, "tpl:digest", "")
-	if err != nil {
-		t.Fatalf("changed-byte Promote: %v", err)
-	}
+	thirdKey, thirdDigest := mustPromote(t, m, parent, "tpl:digest", "")
 	if thirdDigest == firstDigest {
 		t.Errorf("changed export bytes kept digest %q", thirdDigest)
 	}
@@ -106,9 +94,7 @@ func TestPromoteHibernatedUsesWakeImage(t *testing.T) {
 	parent := mustClaim(t, m, testKey)
 	hibernateClaim(t, m, parent)
 
-	if _, _, err := m.Promote(t.Context(), parent.ID, Cred{Token: parent.Token}, "tpl:hib", ""); err != nil {
-		t.Fatalf("Promote: %v", err)
-	}
+	mustPromote(t, m, parent, "tpl:hib", "")
 	if len(eng.snapSaves) != 0 {
 		t.Errorf("snapSaves %v, want none — the hibernate image is the source", eng.snapSaves)
 	}
@@ -145,20 +131,14 @@ func TestTemplateDigestGuardReadsTheSharedRecord(t *testing.T) {
 	eng.exportContent = []byte("generation one")
 	m := newTestManager(t, eng)
 	parent := mustClaim(t, m, testKey)
-	key, stale, err := m.Promote(t.Context(), parent.ID, Cred{Token: parent.Token}, "tpl:shared", "")
-	if err != nil {
-		t.Fatalf("Promote: %v", err)
-	}
+	key, stale := mustPromote(t, m, parent, "tpl:shared", "")
 	peer := newTestManager(t, newFakeEngine())
 	peer.tpls = m.tpls
 	id := store.TemplateID(key.Hash())
 	peer.tplSet[id] = TemplateInfo{Key: key, ContentDigest: stale}
 
 	eng.exportContent = []byte("generation two")
-	_, latest, err := m.Promote(t.Context(), parent.ID, Cred{Token: parent.Token}, "tpl:shared", "")
-	if err != nil {
-		t.Fatalf("re-Promote: %v", err)
-	}
+	_, latest := mustPromote(t, m, parent, "tpl:shared", "")
 	if err := peer.SetTemplateLabels(t.Context(), key, types.Metadata{"a": "b"}, "", stale); !errors.Is(err, ErrTemplateReplaced) {
 		t.Errorf("labels with the replaced digest: %v, want ErrTemplateReplaced", err)
 	}
@@ -181,10 +161,7 @@ func TestDeleteTemplateRefusesPooledUnknownAndReplacedTemplates(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 0})
 	parent := mustClaim(t, m, testKey)
-	_, digest, err := m.Promote(t.Context(), parent.ID, Cred{Token: parent.Token}, "tpl:del", "")
-	if err != nil {
-		t.Fatalf("Promote: %v", err)
-	}
+	_, digest := mustPromote(t, m, parent, "tpl:del", "")
 	key := tplKey("tpl:del")
 
 	if err := m.DeleteTemplate(t.Context(), testKey, "", ""); !errors.Is(err, ErrPooledTemplate) {
@@ -225,9 +202,7 @@ func TestTemplateRecordLockEvictsWithTheRecord(t *testing.T) {
 	if hasRecLock(m, id) {
 		t.Error("recLocks kept an entry for a template that was never promoted")
 	}
-	if _, _, err := m.Promote(t.Context(), parent.ID, Cred{Token: parent.Token}, key.Template, ""); err != nil {
-		t.Fatalf("Promote: %v", err)
-	}
+	mustPromote(t, m, parent, key.Template, "")
 	if err := m.DeleteTemplate(t.Context(), key, "", ""); err != nil {
 		t.Fatalf("DeleteTemplate: %v", err)
 	}
@@ -257,10 +232,7 @@ func TestReconcileSweepsGoldenTmpDirs(t *testing.T) {
 func TestResolveGoldenNeverServesAPooledKeyFromATemplate(t *testing.T) {
 	m := newTestManager(t, newFakeEngine())
 	parent := mustClaim(t, m, testKey)
-	key, _, err := m.Promote(t.Context(), parent.ID, Cred{Token: parent.Token}, "tpl:pooled", "")
-	if err != nil {
-		t.Fatalf("Promote: %v", err)
-	}
+	key, _ := mustPromote(t, m, parent, "tpl:pooled", "")
 	m.mu.Lock()
 	m.pools[key] = newPool(config.PoolSpec{PoolKey: key})
 	m.mu.Unlock()
@@ -294,10 +266,7 @@ func TestTemplateTenantScopedDelete(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
 	parent := claimTenant(t, m, "acme")
-	key, _, err := m.Promote(t.Context(), parent.ID, Cred{Token: parent.Token}, "tpl:tenant", "acme")
-	if err != nil {
-		t.Fatalf("Promote: %v", err)
-	}
+	key, _ := mustPromote(t, m, parent, "tpl:tenant", "acme")
 
 	if err := m.DeleteTemplate(t.Context(), key, "beta", ""); !errors.Is(err, ErrUnknownTemplate) {
 		t.Errorf("cross-tenant delete: %v, want ErrUnknownTemplate", err)
@@ -305,9 +274,7 @@ func TestTemplateTenantScopedDelete(t *testing.T) {
 	if err := m.DeleteTemplate(t.Context(), key, "acme", ""); err != nil {
 		t.Errorf("own delete: %v", err)
 	}
-	if _, _, err := m.Promote(t.Context(), parent.ID, Cred{Token: parent.Token}, "tpl:tenant", "acme"); err != nil {
-		t.Fatalf("re-promote: %v", err)
-	}
+	mustPromote(t, m, parent, "tpl:tenant", "acme")
 	if err := m.DeleteTemplate(t.Context(), key, "", ""); err != nil {
 		t.Errorf("root delete: %v", err)
 	}
@@ -331,9 +298,7 @@ func TestPromoteFailsClosedOnMetaError(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
 	a := claimTenant(t, m, "acme")
-	if _, _, err := m.Promote(t.Context(), a.ID, Cred{Token: a.Token}, "shared:v1", "acme"); err != nil {
-		t.Fatalf("promote: %v", err)
-	}
+	mustPromote(t, m, a, "shared:v1", "acme")
 	key := tplKey("shared:v1")
 	meta := filepath.Join(m.dataDir, "checkpoints", store.TemplateID(key.Hash()), store.MetaFile)
 	if err := os.Chmod(meta, 0o000); err != nil {
@@ -349,9 +314,7 @@ func TestPromoteRefusesCrossTenantOverwrite(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
 	a := claimTenant(t, m, "acme")
-	if _, _, err := m.Promote(t.Context(), a.ID, Cred{Token: a.Token}, "shared:v1", "acme"); err != nil {
-		t.Fatalf("acme promote: %v", err)
-	}
+	mustPromote(t, m, a, "shared:v1", "acme")
 	b := claimTenant(t, m, "beta")
 	if _, _, err := m.Promote(t.Context(), b.ID, Cred{Token: b.Token}, "shared:v1", "beta"); !errors.Is(err, ErrTemplateOwned) {
 		t.Errorf("beta overwrite: %v, want ErrTemplateOwned", err)
@@ -367,15 +330,9 @@ func TestTemplateClaimIsTenantScoped(t *testing.T) {
 	m := newTestManager(t, eng)
 
 	a := claimTenant(t, m, "acme")
-	private, _, err := m.Promote(t.Context(), a.ID, Cred{Token: a.Token}, "acme-private", "acme")
-	if err != nil {
-		t.Fatalf("acme promote: %v", err)
-	}
+	private, _ := mustPromote(t, m, a, "acme-private", "acme")
 	r := claimTenant(t, m, "")
-	shared, _, err := m.Promote(t.Context(), r.ID, Cred{Token: r.Token}, "ops-shared", "")
-	if err != nil {
-		t.Fatalf("root promote: %v", err)
-	}
+	shared, _ := mustPromote(t, m, r, "ops-shared", "")
 
 	if _, err := m.ClaimProvision(t.Context(), private, ClaimOptions{RequirePromoted: true, TTL: time.Hour, Tenant: "beta"}); !errors.Is(err, ErrUnknownTemplate) {
 		t.Errorf("beta claiming acme's template: %v, want ErrUnknownTemplate", err)
@@ -404,10 +361,7 @@ func TestTemplateClaimIsTenantScoped(t *testing.T) {
 func TestHasPromotedTemplateIsTenantScoped(t *testing.T) {
 	m := newTestManager(t, newFakeEngine())
 	a := claimTenant(t, m, "acme")
-	key, _, err := m.Promote(t.Context(), a.ID, Cred{Token: a.Token}, "acme-private", "acme")
-	if err != nil {
-		t.Fatalf("promote: %v", err)
-	}
+	key, _ := mustPromote(t, m, a, "acme-private", "acme")
 
 	if m.HasPromotedTemplate(t.Context(), key, "beta") {
 		t.Error("beta sees acme's template as a local golden")
@@ -422,10 +376,7 @@ func TestHasPromotedTemplateIsTenantScoped(t *testing.T) {
 func TestTemplateHashesAreTenantScoped(t *testing.T) {
 	m := tenantManager(t, t.TempDir(), tenants.TenantSpec{Name: "acme", Token: "acme-tok"})
 	a := claimTenant(t, m, "acme")
-	key, _, err := m.Promote(t.Context(), a.ID, Cred{Token: a.Token}, "acme-private", "acme")
-	if err != nil {
-		t.Fatalf("promote: %v", err)
-	}
+	key, _ := mustPromote(t, m, a, "acme-private", "acme")
 	if err := m.DeleteTenant(t.Context(), "acme"); err != nil {
 		t.Fatalf("remove tenant: %v", err)
 	}
@@ -453,9 +404,7 @@ func TestTemplateHashesSortedForMeshCompare(t *testing.T) {
 	m := newTestManager(t, eng)
 	parent := mustClaim(t, m, testKey)
 	for _, name := range []string{"tpl:a", "tpl:b", "tpl:c", "tpl:d"} {
-		if _, _, err := m.Promote(t.Context(), parent.ID, Cred{Token: parent.Token}, name, ""); err != nil {
-			t.Fatalf("Promote %s: %v", name, err)
-		}
+		mustPromote(t, m, parent, name, "")
 	}
 	hashes := m.TemplateHashes()
 	if len(hashes) != 8 {
@@ -471,21 +420,15 @@ func TestTemplatesListWhatTheNodeHoldsAcrossARestart(t *testing.T) {
 	dir := t.TempDir()
 	m := newTestManagerAt(t, eng, dir)
 	parent := mustClaim(t, m, testKey)
-	keyA, digestA, err := m.Promote(t.Context(), parent.ID, Cred{Token: parent.Token}, "tpl:a", "")
-	if err != nil {
-		t.Fatalf("Promote tpl:a: %v", err)
-	}
+	keyA, digestA := mustPromote(t, m, parent, "tpl:a", "")
 	acme := claimTenant(t, m, "acme")
-	keyB, digestB, err := m.Promote(t.Context(), acme.ID, Cred{Token: acme.Token}, "tpl:b", "acme")
-	if err != nil {
-		t.Fatalf("Promote tpl:b: %v", err)
-	}
+	keyB, digestB := mustPromote(t, m, acme, "tpl:b", "acme")
 	oldID := store.TemplateID(tplKey("tpl:old").Hash())
 	staging := stageTemplate(t, m, oldID)
-	if err = os.WriteFile(filepath.Join(staging, store.MetaFile), []byte(`{"id":"`+oldID+`","created_at":"2026-01-01T00:00:00Z"}`), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(staging, store.MetaFile), []byte(`{"id":"`+oldID+`","created_at":"2026-01-01T00:00:00Z"}`), 0o600); err != nil {
 		t.Fatalf("write keyless meta: %v", err)
 	}
-	if _, err = storetest.PublishDigested(t.Context(), m.tpls, staging, oldID); err != nil {
+	if _, err := storetest.PublishDigested(t.Context(), m.tpls, staging, oldID); err != nil {
 		t.Fatalf("publish keyless record: %v", err)
 	}
 
@@ -508,7 +451,7 @@ func TestTemplatesListWhatTheNodeHoldsAcrossARestart(t *testing.T) {
 	if hashes := restarted.TemplateHashes(); len(hashes) != 6 {
 		t.Errorf("gossip %v, want the keyless record still routed", hashes)
 	}
-	if err = restarted.DeleteTemplate(t.Context(), keyA, "", ""); err != nil {
+	if err := restarted.DeleteTemplate(t.Context(), keyA, "", ""); err != nil {
 		t.Fatalf("DeleteTemplate: %v", err)
 	}
 	if got = restarted.Templates(); len(got) != 1 || got[0].Key != keyB {
@@ -525,10 +468,7 @@ func TestTemplateLabelsPersistUntilTheTemplateIsRepromotedOrDeleted(t *testing.T
 	dir := t.TempDir()
 	m := newTestManagerAt(t, eng, dir)
 	parent := mustClaim(t, m, testKey)
-	key, _, err := m.Promote(t.Context(), parent.ID, Cred{Token: parent.Token}, "tpl:l", "")
-	if err != nil {
-		t.Fatalf("Promote: %v", err)
-	}
+	key, _ := mustPromote(t, m, parent, "tpl:l", "")
 	labelsOf := func(m *Manager) types.Metadata {
 		t.Helper()
 		i := slices.IndexFunc(m.Templates(), func(ti TemplateInfo) bool { return ti.Key == key })
@@ -538,10 +478,10 @@ func TestTemplateLabelsPersistUntilTheTemplateIsRepromotedOrDeleted(t *testing.T
 		return m.Templates()[i].Labels
 	}
 	want := types.Metadata{"v1": "sha256:aa"}
-	if err = m.SetTemplateLabels(t.Context(), key, want, "", "sha256:observed-elsewhere"); !errors.Is(err, ErrTemplateReplaced) || labelsOf(m) != nil {
+	if err := m.SetTemplateLabels(t.Context(), key, want, "", "sha256:observed-elsewhere"); !errors.Is(err, ErrTemplateReplaced) || labelsOf(m) != nil {
 		t.Errorf("labels with another digest: %v, want ErrTemplateReplaced and no labels written", err)
 	}
-	if err = m.SetTemplateLabels(t.Context(), key, want, "", ""); err != nil {
+	if err := m.SetTemplateLabels(t.Context(), key, want, "", ""); err != nil {
 		t.Fatalf("SetTemplateLabels: %v", err)
 	}
 	if got := labelsOf(m); !maps.Equal(got, want) {
@@ -551,38 +491,34 @@ func TestTemplateLabelsPersistUntilTheTemplateIsRepromotedOrDeleted(t *testing.T
 	if got := labelsOf(restarted); !maps.Equal(got, want) {
 		t.Errorf("labels after restart %v, want %v", got, want)
 	}
-	if err = m.SetTemplateLabels(t.Context(), key, types.Metadata{"x": "y"}, "acme", ""); !errors.Is(err, ErrUnknownTemplate) {
+	if err := m.SetTemplateLabels(t.Context(), key, types.Metadata{"x": "y"}, "acme", ""); !errors.Is(err, ErrUnknownTemplate) {
 		t.Errorf("a tenant labeling the operator's template: %v, want ErrUnknownTemplate", err)
 	}
-	if err = m.SetTemplateLabels(t.Context(), tplKey("tpl:none"), want, "", ""); !errors.Is(err, ErrUnknownTemplate) {
+	if err := m.SetTemplateLabels(t.Context(), tplKey("tpl:none"), want, "", ""); !errors.Is(err, ErrUnknownTemplate) {
 		t.Errorf("an unknown template: %v, want ErrUnknownTemplate", err)
 	}
-	if _, _, err = m.Promote(t.Context(), parent.ID, Cred{Token: parent.Token}, "tpl:l", ""); err != nil {
-		t.Fatalf("re-promote: %v", err)
-	}
+	mustPromote(t, m, parent, "tpl:l", "")
 	if got := labelsOf(newTestManagerAt(t, eng, dir)); got != nil {
 		t.Errorf("labels %v survived a re-promote, want none", got)
 	}
-	if err = m.SetTemplateLabels(t.Context(), key, want, "", ""); err != nil {
+	if err := m.SetTemplateLabels(t.Context(), key, want, "", ""); err != nil {
 		t.Fatalf("SetTemplateLabels again: %v", err)
 	}
-	if err = m.SetTemplateLabels(t.Context(), key, types.Metadata{}, "", ""); err != nil || labelsOf(m) != nil {
+	if err := m.SetTemplateLabels(t.Context(), key, types.Metadata{}, "", ""); err != nil || labelsOf(m) != nil {
 		t.Errorf("empty labels: %v, labels %v; want them cleared", err, labelsOf(m))
 	}
-	if err = m.SetTemplateLabels(t.Context(), key, want, "", ""); err != nil {
+	if err := m.SetTemplateLabels(t.Context(), key, want, "", ""); err != nil {
 		t.Fatalf("SetTemplateLabels before delete: %v", err)
 	}
-	if err = m.DeleteTemplate(t.Context(), key, "", ""); err != nil {
+	if err := m.DeleteTemplate(t.Context(), key, "", ""); err != nil {
 		t.Fatalf("DeleteTemplate: %v", err)
 	}
-	if _, _, err = m.Promote(t.Context(), parent.ID, Cred{Token: parent.Token}, "tpl:l", ""); err != nil {
-		t.Fatalf("promote after delete: %v", err)
-	}
+	mustPromote(t, m, parent, "tpl:l", "")
 	if got := labelsOf(newTestManagerAt(t, eng, dir)); got != nil {
 		t.Errorf("labels %v outlived the deleted template", got)
 	}
 	pooled := newTestManagerAt(t, eng, t.TempDir(), config.PoolSpec{PoolKey: key})
-	if err = pooled.SetTemplateLabels(t.Context(), key, want, "", ""); !errors.Is(err, ErrPooledTemplate) {
+	if err := pooled.SetTemplateLabels(t.Context(), key, want, "", ""); !errors.Is(err, ErrPooledTemplate) {
 		t.Errorf("a pooled key: %v, want ErrPooledTemplate", err)
 	}
 }
@@ -605,10 +541,7 @@ func TestClaimFromATemplateRunsBesideItsRepromote(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		m := newTestManager(t, newFakeEngine())
 		parent := mustClaim(t, m, testKey)
-		key, _, err := m.Promote(t.Context(), parent.ID, Cred{Token: parent.Token}, "tpl:x", "")
-		if err != nil {
-			t.Fatalf("Promote: %v", err)
-		}
+		key, _ := mustPromote(t, m, parent, "tpl:x", "")
 		slow := &slowPrepareStore{Store: m.tpls, entered: make(chan struct{}), release: make(chan struct{})}
 		m.tpls = slow
 		repromoted := make(chan error, 1)
@@ -627,7 +560,7 @@ func TestClaimFromATemplateRunsBesideItsRepromote(t *testing.T) {
 		}()
 		synctest.Wait()
 		select {
-		case err = <-claimed:
+		case err := <-claimed:
 			if err != nil {
 				t.Errorf("claim during a re-promote: %v, want a clone of the committed template", err)
 			}
@@ -635,7 +568,7 @@ func TestClaimFromATemplateRunsBesideItsRepromote(t *testing.T) {
 			t.Error("a claim with a 100 ms context was still blocked during a re-promote")
 		}
 		close(slow.release)
-		if err = <-repromoted; err != nil {
+		if err := <-repromoted; err != nil {
 			t.Fatalf("re-promote: %v", err)
 		}
 	})
@@ -651,6 +584,15 @@ func (s *slowPrepareStore) PrepareDigested(ctx context.Context, staging, id, lin
 	close(s.entered)
 	<-s.release
 	return s.Store.PrepareDigested(ctx, staging, id, lineage)
+}
+
+func mustPromote(t *testing.T, m *Manager, sb *types.Sandbox, name, tenant string) (types.PoolKey, string) {
+	t.Helper()
+	key, digest, err := m.Promote(t.Context(), sb.ID, Cred{Token: sb.Token}, name, tenant)
+	if err != nil {
+		t.Fatalf("promote %s: %v", name, err)
+	}
+	return key, digest
 }
 
 func stageTemplate(t *testing.T, m *Manager, id string) string {
