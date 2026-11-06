@@ -195,7 +195,7 @@ func (m *Manager) HasPoolGolden(key types.PoolKey) bool {
 	return ok && p.goldenDir != ""
 }
 
-// HasPromotedTemplate applies resolveGolden's owner test, so routing does not promise another tenant's template.
+// HasPromotedTemplate reports whether tenant may clone the promoted template held under key.
 func (m *Manager) HasPromotedTemplate(ctx context.Context, key types.PoolKey, tenant string) bool {
 	if m.pooled(key) {
 		return false
@@ -217,7 +217,7 @@ func (m *Manager) HasPromotedTemplate(ctx context.Context, key types.PoolKey, te
 		}
 		owner = rec.Tenant
 	}
-	return owner == "" || tenantOwns(tenant, owner)
+	return templateVisible(tenant, owner)
 }
 
 func (m *Manager) loadTemplates(ctx context.Context) {
@@ -393,7 +393,7 @@ func (m *Manager) resolveGolden(ctx context.Context, key types.PoolKey, tenant s
 		cleanup()
 		return goldenResolution{}, fmt.Errorf("decode template metadata: %w", err)
 	}
-	if rec.Tenant != "" && !tenantOwns(tenant, rec.Tenant) {
+	if !templateVisible(tenant, rec.Tenant) {
 		cleanup()
 		return goldenResolution{}, nil
 	}

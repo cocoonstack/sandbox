@@ -750,6 +750,10 @@ func tenantOwns(tenant, owner string) bool {
 	return tenant == "" || tenant == owner
 }
 
+func templateVisible(tenant, owner string) bool {
+	return owner == "" || tenantOwns(tenant, owner)
+}
+
 func hasVolumes(sb *types.Sandbox) bool {
 	return len(sb.Volumes) > 0 || len(sb.VolumesWant) > 0
 }
