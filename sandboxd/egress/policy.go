@@ -238,39 +238,25 @@ func Compose(pool, tenant Policy) PolicyEvaluator {
 
 func (c composite) Eval(host, method string, port uint16) (Rule, Decision) {
 	rule, pd := c.pool.Eval(host, method, port)
-	if pd == DecisionAllow {
-		if _, td := c.tenant.Eval(host, method, port); td == DecisionAllow {
-			return rule, DecisionAllow
-		}
-	}
-	return Rule{}, DecisionDeny
+	_, td := c.tenant.Eval(host, method, port)
+	return intersect(rule, pd, td)
 }
 
 func (c composite) EvalHost(host string, port uint16) (Rule, Decision) {
 	rule, pd := c.pool.EvalHost(host, port)
-	if pd == DecisionAllow {
-		if _, td := c.tenant.EvalHost(host, port); td == DecisionAllow {
-			return rule, DecisionAllow
-		}
-	}
-	return Rule{}, DecisionDeny
+	_, td := c.tenant.EvalHost(host, port)
+	return intersect(rule, pd, td)
 }
 
 func (c composite) EvalInner(host, method string, port uint16) (Rule, Decision) {
 	rule, pd := c.pool.EvalInner(host, method, port)
-	if pd == DecisionAllow {
-		if _, td := c.tenant.Eval(host, method, port); td == DecisionAllow {
-			return rule, DecisionAllow
-		}
-	}
-	return Rule{}, DecisionDeny
+	_, td := c.tenant.Eval(host, method, port)
+	return intersect(rule, pd, td)
 }
 
 func (c composite) EvalFlow(port uint16) Decision {
-	if c.pool.EvalFlow(port) == DecisionAllow && c.tenant.EvalFlow(port) == DecisionAllow {
-		return DecisionAllow
-	}
-	return DecisionDeny
+	_, d := intersect(Rule{}, c.pool.EvalFlow(port), c.tenant.EvalFlow(port))
+	return d
 }
 
 // ServesSocks is the pool's call: the tenant's rules already gate every tunnel through Eval.
@@ -284,4 +270,11 @@ func (c composite) ServesDNS() bool {
 
 func (c composite) InterceptsHost(pattern string) bool {
 	return c.pool.InterceptsHost(pattern) && slices.ContainsFunc(c.tenant.Allow, func(r Rule) bool { return r.Covers(pattern) })
+}
+
+func intersect(rule Rule, pd, td Decision) (Rule, Decision) {
+	if pd == DecisionAllow && td == DecisionAllow {
+		return rule, DecisionAllow
+	}
+	return Rule{}, DecisionDeny
 }
