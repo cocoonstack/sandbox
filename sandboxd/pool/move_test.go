@@ -35,7 +35,7 @@ func TestMoveHandsARunningClaimToThePeerWithBothNodesCountingIt(t *testing.T) {
 	vm := sb.VMName
 	var during [][2][3]int
 	mc.p.roundHook = func(int) error {
-		during = append(during, [2][3]int{moveCounts(mc.s, "acme"), moveCounts(mc.t, "acme")})
+		during = append(during, mc.counts("acme"))
 		return nil
 	}
 	mc.p.commitHook = mc.p.roundHook
@@ -52,7 +52,7 @@ func TestMoveHandsARunningClaimToThePeerWithBothNodesCountingIt(t *testing.T) {
 			t.Errorf("step %d counts source/target %v, want 1/1/1 on both", i, counts)
 		}
 	}
-	if got := [2][3]int{moveCounts(mc.s, "acme"), moveCounts(mc.t, "acme")}; got != [2][3]int{{0, 0, 0}, {1, 1, 1}} {
+	if got := mc.counts("acme"); got != [2][3]int{{0, 0, 0}, {1, 1, 1}} {
 		t.Errorf("counts after the move %v, want 0/0/0 on the source and 1/1/1 on the target", got)
 	}
 	moved, ok := mc.t.byID(sb.ID)
@@ -204,7 +204,7 @@ func TestMoveWhoseCommitAnswerIsLostResolvesThroughTheRecord(t *testing.T) {
 	if moved, ok := mc.t.byID(sb.ID); !ok || moved.MoveIn {
 		t.Errorf("target claim %+v %v, want it started", moved, ok)
 	}
-	if got := [2][3]int{moveCounts(mc.s, "acme"), moveCounts(mc.t, "acme")}; got != [2][3]int{{0, 0, 0}, {1, 1, 1}} {
+	if got := mc.counts("acme"); got != [2][3]int{{0, 0, 0}, {1, 1, 1}} {
 		t.Errorf("counts %v, want the claim on the target only", got)
 	}
 }
@@ -536,7 +536,7 @@ func TestMoveNeedsNoArchiveRegistry(t *testing.T) {
 	if moved, ok := mc.t.byID(sb.ID); !ok || moved.MoveIn {
 		t.Errorf("target claim %+v %v, want it started", moved, ok)
 	}
-	if got := [2][3]int{moveCounts(mc.s, "acme"), moveCounts(mc.t, "acme")}; got != [2][3]int{{0, 0, 0}, {1, 1, 1}} {
+	if got := mc.counts("acme"); got != [2][3]int{{0, 0, 0}, {1, 1, 1}} {
 		t.Errorf("counts %v, want the claim on the target only", got)
 	}
 }
@@ -816,18 +816,7 @@ func TestMoveFinalRoundAnswersUserCallsAtOnce(t *testing.T) {
 	cred := Cred{Token: sb.Token}
 	ctx := t.Context()
 	mc.p.commitHook = func(int) error {
-		_, forkErr := mc.s.Fork(ctx, sb.ID, cred, 1, time.Minute, "", "")
-		_, ckErr := mc.s.Checkpoint(ctx, sb.ID, cred, "ck", "")
-		_, _, promoteErr := mc.s.Promote(ctx, sb.ID, cred, "tpl", "")
-		for op, err := range map[string]error{
-			"fork": forkErr, "checkpoint": ckErr, "promote": promoteErr,
-			"hibernate": mc.s.Hibernate(ctx, sb.ID, cred),
-			"release":   mc.s.Release(ctx, sb.ID, cred),
-		} {
-			if !errors.Is(err, ErrEvacuating) {
-				t.Errorf("%s during the final round: %v, want ErrEvacuating", op, err)
-			}
-		}
+		assertEvacuating(t, evacuatingCalls(ctx, mc.s, sb.ID, cred), "during the final round")
 		return nil
 	}
 	if _, err := mc.s.Move(ctx, sb.ID, "b", time.Minute); err != nil {
@@ -1147,22 +1136,12 @@ func TestMoveReceivedClaimWaitingOutAnOutageIsNotHibernatedOrServed(t *testing.T
 	mc.t.mu.Lock()
 	mc.t.evac = nil
 	mc.t.mu.Unlock()
-	_, forkErr := mc.t.Fork(ctx, sb.ID, cred, 1, time.Minute, "", "")
-	_, ckErr := mc.t.Checkpoint(ctx, sb.ID, cred, "ck", "")
-	_, _, promoteErr := mc.t.Promote(ctx, sb.ID, cred, "tpl", "")
-	_, renewErr := mc.t.Renew(ctx, sb.ID, cred, time.Hour, "")
-	_, dialErr := mc.t.DialPort(ctx, sb.ID, cred, 80)
-	for op, err := range map[string]error{
-		"fork": forkErr, "checkpoint": ckErr, "promote": promoteErr, "renew": renewErr, "dial": dialErr,
-		"hibernate": mc.t.Hibernate(ctx, sb.ID, cred),
-		"release":   mc.t.Release(ctx, sb.ID, cred),
-		"env":       mc.t.PatchEnv(ctx, sb.ID, types.EnvPatch{"GH_TOKEN": {Value: "x", Guest: hostOnly}}, ""),
-		"wake":      mc.t.Wake(ctx, sb.ID, cred),
-	} {
-		if !errors.Is(err, ErrEvacuating) {
-			t.Errorf("%s of a received claim: %v, want ErrEvacuating", op, err)
-		}
-	}
+	calls := evacuatingCalls(ctx, mc.t, sb.ID, cred)
+	_, calls["renew"] = mc.t.Renew(ctx, sb.ID, cred, time.Hour, "")
+	_, calls["dial"] = mc.t.DialPort(ctx, sb.ID, cred, 80)
+	calls["env"] = mc.t.PatchEnv(ctx, sb.ID, types.EnvPatch{"GH_TOKEN": {Value: "x", Guest: hostOnly}}, "")
+	calls["wake"] = mc.t.Wake(ctx, sb.ID, cred)
+	assertEvacuating(t, calls, "of a received claim")
 	if _, err := mc.t.DialPort(ctx, sb.ID, Cred{Operator: true}, 80); !errors.Is(err, ErrPaused) {
 		t.Errorf("operator dial of a received claim: %v, want ErrPaused", err)
 	}
@@ -1472,18 +1451,7 @@ func testMoveHoldsOffCallers(t *testing.T, archived bool) {
 		if round != 2 {
 			return nil
 		}
-		_, forkErr := mc.s.Fork(t.Context(), sb.ID, cred, 1, time.Minute, "", "")
-		_, ckErr := mc.s.Checkpoint(t.Context(), sb.ID, cred, "ck", "")
-		_, _, promoteErr := mc.s.Promote(t.Context(), sb.ID, cred, "tpl", "")
-		for op, err := range map[string]error{
-			"fork": forkErr, "checkpoint": ckErr, "promote": promoteErr,
-			"hibernate": mc.s.Hibernate(t.Context(), sb.ID, cred),
-			"release":   mc.s.Release(t.Context(), sb.ID, cred),
-		} {
-			if !errors.Is(err, ErrEvacuating) {
-				t.Errorf("%s during a move: %v, want ErrEvacuating", op, err)
-			}
-		}
+		assertEvacuating(t, evacuatingCalls(t.Context(), mc.s, sb.ID, cred), "during a move")
 		mc.s.mu.Lock()
 		replicable := mc.s.replicable(sb)
 		mc.s.mu.Unlock()
@@ -1559,6 +1527,10 @@ func (mc *moveCluster) moveNode(t *testing.T, name string) *Manager {
 	m.WithMovePeer(mc.p)
 	setTenantCaps(t, m, map[string]int{"acme": 0})
 	return m
+}
+
+func (mc *moveCluster) counts(tenant string) [2][3]int {
+	return [2][3]int{moveCounts(mc.s, tenant), moveCounts(mc.t, tenant)}
 }
 
 type fakeMovePeer struct {
@@ -1755,6 +1727,25 @@ func startsOf(m *Manager) []string {
 	eng.mu.Lock()
 	defer eng.mu.Unlock()
 	return slices.Clone(eng.starts)
+}
+
+func evacuatingCalls(ctx context.Context, m *Manager, id string, cred Cred) map[string]error {
+	calls := map[string]error{}
+	_, calls["fork"] = m.Fork(ctx, id, cred, 1, time.Minute, "", "")
+	_, calls["checkpoint"] = m.Checkpoint(ctx, id, cred, "ck", "")
+	_, _, calls["promote"] = m.Promote(ctx, id, cred, "tpl", "")
+	calls["hibernate"] = m.Hibernate(ctx, id, cred)
+	calls["release"] = m.Release(ctx, id, cred)
+	return calls
+}
+
+func assertEvacuating(t *testing.T, calls map[string]error, when string) {
+	t.Helper()
+	for op, err := range calls {
+		if !errors.Is(err, ErrEvacuating) {
+			t.Errorf("%s %s: %v, want ErrEvacuating", op, when, err)
+		}
+	}
 }
 
 func moveCounts(m *Manager, tenant string) [3]int {
