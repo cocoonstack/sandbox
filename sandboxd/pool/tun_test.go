@@ -297,9 +297,7 @@ func TestFlushClaimsPersistsTheLiveTunBytes(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitFor(t, func() bool { used, _ := m.out.TunUsed(sb.ID); return used > 0 })
-	if err := m.FlushClaims(); err != nil {
-		t.Fatalf("flush: %v", err)
-	}
+	mustFlush(t, m)
 	if got := journaled(t, m)[sb.ID].TunBytes; got != int64(len(pkt)-tunnet.VnetHdrLen) {
 		t.Errorf("journaled tun bytes %d, want the %d sent", got, len(pkt)-tunnet.VnetHdrLen)
 	}

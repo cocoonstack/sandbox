@@ -365,9 +365,7 @@ func TestAFailedCaptureKeepsItsIntentWhileSandboxdStops(t *testing.T) {
 			}
 			waitStarted(t, eng, 1)
 			waitSettled(t, sb)
-			if err := m.FlushClaims(); err != nil {
-				t.Fatalf("flush: %v", err)
-			}
+			mustFlush(t, m)
 			if tt.intent(journaled(t, m)[sb.ID]) == "" || sb.Failed != "" {
 				t.Errorf("journal lost the intent or failed the claim: %q", sb.Failed)
 			}

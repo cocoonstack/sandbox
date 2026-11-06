@@ -72,7 +72,7 @@ func TestFailoverRowWriteFailureKeepsTheClaimHibernated(t *testing.T) {
 
 func TestFailoverEnvRotationReachesTheAdopter(t *testing.T) {
 	c := newFailoverCluster(t)
-	a, b := c.node(t, "a", t.TempDir(), keepAnHour), c.node(t, "b", t.TempDir(), keepAnHour)
+	a, b := c.pair(t)
 	sb := archivedWithEnv(t, a)
 	if rowEnv(t, c, sb) != "old" {
 		t.Fatalf("archive row env %q, want old", rowEnv(t, c, sb))
@@ -150,7 +150,7 @@ func TestFailoverEnvRotationSurvivesALostReply(t *testing.T) {
 
 func TestFailoverEnvRotationOfAClaimAdoptedElsewhereDropsIt(t *testing.T) {
 	c := newFailoverCluster(t)
-	a, b := c.node(t, "a", t.TempDir(), keepAnHour), c.node(t, "b", t.TempDir(), keepAnHour)
+	a, b := c.pair(t)
 	sb := archivedWithEnv(t, a)
 	c.expire("a")
 	mustAdopt(t, b, sb, "adopt")
@@ -243,7 +243,7 @@ func TestFailoverOwnerWakeWithTheRegistryDownFailsClosed(t *testing.T) {
 
 func TestFailoverAdoptionMovesTheClaimAndTheOldOwnerLetsGo(t *testing.T) {
 	c := newFailoverCluster(t)
-	a, b := c.node(t, "a", t.TempDir(), keepAnHour), c.node(t, "b", t.TempDir(), keepAnHour)
+	a, b := c.pair(t)
 	sb := mustClaim(t, a, testKey)
 	mustArchive(t, a, sb)
 	ck := sb.ArchiveCk
@@ -273,7 +273,7 @@ func TestFailoverAdoptionMovesTheClaimAndTheOldOwnerLetsGo(t *testing.T) {
 
 func TestFailoverNoAdoptionWhileTheOwnerIsAlive(t *testing.T) {
 	c := newFailoverCluster(t)
-	a, b := c.node(t, "a", t.TempDir(), keepAnHour), c.node(t, "b", t.TempDir(), keepAnHour)
+	a, b := c.pair(t)
 	sb := mustClaim(t, a, testKey)
 	mustArchive(t, a, sb)
 
@@ -285,7 +285,7 @@ func TestFailoverNoAdoptionWhileTheOwnerIsAlive(t *testing.T) {
 
 func TestFailoverADrainingNodeDoesNotAdopt(t *testing.T) {
 	c := newFailoverCluster(t)
-	a, b := c.node(t, "a", t.TempDir(), keepAnHour), c.node(t, "b", t.TempDir(), keepAnHour)
+	a, b := c.pair(t)
 	sb := mustClaim(t, a, testKey)
 	mustArchive(t, a, sb)
 	c.expire("a")
@@ -303,7 +303,7 @@ func TestFailoverADrainingNodeDoesNotAdopt(t *testing.T) {
 
 func TestFailoverAdoptionIgnoresClaimCapsAndAWakeStillChecksMaxRunning(t *testing.T) {
 	c := newFailoverCluster(t)
-	a, b := c.node(t, "a", t.TempDir(), keepAnHour), c.node(t, "b", t.TempDir(), keepAnHour)
+	a, b := c.pair(t)
 	for _, m := range []*Manager{a, b} {
 		if err := m.PutTenant(t.Context(), tenants.TenantSpec{Name: "acme", Token: "tok-acme", MaxClaims: 1}); err != nil {
 			t.Fatalf("put tenant: %v", err)
@@ -339,7 +339,7 @@ func TestFailoverAdoptionIgnoresClaimCapsAndAWakeStillChecksMaxRunning(t *testin
 
 func TestFailoverAdoptionNeedsTheToken(t *testing.T) {
 	c := newFailoverCluster(t)
-	a, b := c.node(t, "a", t.TempDir(), keepAnHour), c.node(t, "b", t.TempDir(), keepAnHour)
+	a, b := c.pair(t)
 	sb := mustClaim(t, a, testKey)
 	mustArchive(t, a, sb)
 	c.expire("a")
@@ -493,9 +493,7 @@ func TestFailoverRestartDropsAClaimWhoseInterruptedArchiveWasAdopted(t *testing.
 	a := c.node(t, "a", t.TempDir(), keepAnHour)
 	sb := mustClaim(t, a, testKey)
 	hibernateClaim(t, a, sb)
-	if err := a.FlushClaims(); err != nil {
-		t.Fatalf("flush: %v", err)
-	}
+	mustFlush(t, a)
 	a.mu.Lock()
 	vm, snap := sb.VMName, sb.HibernateSnap
 	a.mu.Unlock()
@@ -527,9 +525,7 @@ func TestFailoverRestartWithTheRegistryDownKeepsEverything(t *testing.T) {
 	a := c.node(t, "a", dirA, keepAnHour)
 	sb := mustClaim(t, a, testKey)
 	mustArchive(t, a, sb)
-	if err := a.FlushClaims(); err != nil {
-		t.Fatalf("flush: %v", err)
-	}
+	mustFlush(t, a)
 
 	c.reg.SetDown(true)
 	restarted := c.node(t, "a", dirA, keepAnHour)
@@ -566,7 +562,7 @@ func TestFailoverReleaseDropsTheRowThenTheCheckpoint(t *testing.T) {
 
 func TestFailoverReleaseAfterAdoptionKeepsTheCheckpoint(t *testing.T) {
 	c := newFailoverCluster(t)
-	a, b := c.node(t, "a", t.TempDir(), keepAnHour), c.node(t, "b", t.TempDir(), keepAnHour)
+	a, b := c.pair(t)
 	sb := mustClaim(t, a, testKey)
 	mustArchive(t, a, sb)
 	c.expire("a")
@@ -640,7 +636,7 @@ func TestFailoverSweepPurgesADepartedOwnersArchiveOnce(t *testing.T) {
 
 func TestFailoverAdoptionMidWakeFencesTheOwnerOut(t *testing.T) {
 	c := newFailoverCluster(t)
-	a, b := c.node(t, "a", t.TempDir(), keepAnHour), c.node(t, "b", t.TempDir(), keepAnHour)
+	a, b := c.pair(t)
 	sb := mustClaim(t, a, testKey)
 	mustArchive(t, a, sb)
 	ck := sb.ArchiveCk
@@ -730,9 +726,7 @@ func TestFailoverRestartFencesWithOneQuery(t *testing.T) {
 		mustArchive(t, a, sb)
 		ids = append(ids, sb.ID)
 	}
-	if err := a.FlushClaims(); err != nil {
-		t.Fatalf("flush: %v", err)
-	}
+	mustFlush(t, a)
 	restarted := c.node(t, "a", dirA, keepAnHour)
 	counted := &countingRegistry{Registry: c.reg}
 	restarted.archives = counted
@@ -799,9 +793,7 @@ func TestFailoverRestartAfterAConsumeWithoutCommitKeepsTheClaim(t *testing.T) {
 	epoch := c.take(t, sb.ID, "a")
 	_, _ = a.commitIfLive(t.Context(), sb, func() { sb.ArchiveEpoch = epoch })
 	c.consume(t, sb.ID, epoch)
-	if err := a.FlushClaims(); err != nil {
-		t.Fatalf("flush: %v", err)
-	}
+	mustFlush(t, a)
 
 	restarted := c.restartReconciled(t, a)
 	held, _ := restarted.byID(sb.ID)
@@ -819,9 +811,7 @@ func TestFailoverAnArchiveWokenElsewhereIsDropped(t *testing.T) {
 	a, b := c.node(t, "a", dirA, keepAnHour), c.node(t, "b", t.TempDir(), keepAnHour)
 	sb := mustClaim(t, a, testKey)
 	mustArchive(t, a, sb)
-	if err := a.FlushClaims(); err != nil {
-		t.Fatalf("flush: %v", err)
-	}
+	mustFlush(t, a)
 	c.expire("a")
 	mustAdopt(t, b, sb, "adopt")
 	if _, _, _, err := b.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
@@ -843,7 +833,7 @@ func TestFailoverAnArchiveWokenElsewhereIsDropped(t *testing.T) {
 
 func TestFailoverALeftoverDeleteMarkerSparesTheAdoptersCheckpoint(t *testing.T) {
 	c := newFailoverCluster(t)
-	a, b := c.node(t, "a", t.TempDir(), keepAnHour), c.node(t, "b", t.TempDir(), keepAnHour)
+	a, b := c.pair(t)
 	sb := mustClaim(t, a, testKey)
 	mustArchive(t, a, sb)
 	ck := sb.ArchiveCk
@@ -864,16 +854,14 @@ func TestFailoverALeftoverDeleteMarkerSparesTheAdoptersCheckpoint(t *testing.T) 
 
 func TestFailoverRestartClearsTheMarkerOfAnAdoptedClaim(t *testing.T) {
 	c := newFailoverCluster(t)
-	a, b := c.node(t, "a", t.TempDir(), keepAnHour), c.node(t, "b", t.TempDir(), keepAnHour)
+	a, b := c.pair(t)
 	sb := mustClaim(t, a, testKey)
 	mustArchive(t, a, sb)
 	ck := sb.ArchiveCk
 	if err := a.ckMarks.mark(ck); err != nil {
 		t.Fatalf("mark: %v", err)
 	}
-	if err := a.FlushClaims(); err != nil {
-		t.Fatalf("flush: %v", err)
-	}
+	mustFlush(t, a)
 	c.expire("a")
 	mustAdopt(t, b, sb, "adopt")
 	c.renew(t, "a")
@@ -886,7 +874,7 @@ func TestFailoverRestartClearsTheMarkerOfAnAdoptedClaim(t *testing.T) {
 
 func TestFailoverARepeatedAdoptionOnOneNodeKeepsOneClaim(t *testing.T) {
 	c := newFailoverCluster(t)
-	a, b := c.node(t, "a", t.TempDir(), keepAnHour), c.node(t, "b", t.TempDir(), keepAnHour)
+	a, b := c.pair(t)
 	for _, m := range []*Manager{a, b} {
 		if err := m.PutTenant(t.Context(), tenants.TenantSpec{Name: "acme", Token: "tok-acme"}); err != nil {
 			t.Fatalf("put tenant: %v", err)
@@ -927,12 +915,10 @@ func TestFailoverARepeatedAdoptionOnOneNodeKeepsOneClaim(t *testing.T) {
 
 func TestFailoverRestartInsideAnAdoptersWakeDropsTheClaim(t *testing.T) {
 	c := newFailoverCluster(t)
-	a, b := c.node(t, "a", t.TempDir(), keepAnHour), c.node(t, "b", t.TempDir(), keepAnHour)
+	a, b := c.pair(t)
 	sb := mustClaim(t, a, testKey)
 	mustArchive(t, a, sb)
-	if err := a.FlushClaims(); err != nil {
-		t.Fatalf("flush: %v", err)
-	}
+	mustFlush(t, a)
 	ck := sb.ArchiveCk
 	c.expire("a")
 	mustAdopt(t, b, sb, "adopt")
@@ -961,12 +947,10 @@ func TestFailoverRestartInsideAnAdoptersWakeDropsTheClaim(t *testing.T) {
 
 func TestFailoverRestartAfterAnAdopterReleasedDropsTheClaim(t *testing.T) {
 	c := newFailoverCluster(t)
-	a, b := c.node(t, "a", t.TempDir(), keepAnHour), c.node(t, "b", t.TempDir(), keepAnHour)
+	a, b := c.pair(t)
 	sb := mustClaim(t, a, testKey)
 	mustArchive(t, a, sb)
-	if err := a.FlushClaims(); err != nil {
-		t.Fatalf("flush: %v", err)
-	}
+	mustFlush(t, a)
 	c.expire("a")
 	mustAdopt(t, b, sb, "adopt")
 	b.ckpts = &failingDeleteStore{Store: b.ckpts, attempts: make(chan string, 8)}
@@ -1020,12 +1004,10 @@ func TestFailoverReleaseDuringAnArchiveLeavesNoRow(t *testing.T) {
 
 func TestFailoverRestartDropsAClaimAdoptedWhileItsInterruptedArchiveSettles(t *testing.T) {
 	c := newFailoverCluster(t)
-	a, b := c.node(t, "a", t.TempDir(), keepAnHour), c.node(t, "b", t.TempDir(), keepAnHour)
+	a, b := c.pair(t)
 	sb := mustClaim(t, a, testKey)
 	hibernateClaim(t, a, sb)
-	if err := a.FlushClaims(); err != nil {
-		t.Fatalf("flush: %v", err)
-	}
+	mustFlush(t, a)
 	const ck = "ck_00000000000000cc"
 	seedArchiveCk(t, a, ck, sb.ID)
 	if _, err := a.putArchive(t.Context(), sb, ck); err != nil {
@@ -1055,9 +1037,7 @@ func TestFailoverRestartKeepsAClaimWhoseInterruptedArchiveRowVanished(t *testing
 	a := c.node(t, "a", t.TempDir(), keepAnHour)
 	sb := mustClaim(t, a, testKey)
 	hibernateClaim(t, a, sb)
-	if err := a.FlushClaims(); err != nil {
-		t.Fatalf("flush: %v", err)
-	}
+	mustFlush(t, a)
 	const ck = "ck_00000000000000dd"
 	seedArchiveCk(t, a, ck, sb.ID)
 	epoch, err := a.putArchive(t.Context(), sb, ck)
@@ -1091,9 +1071,7 @@ func TestFailoverRestartLeavesItsOwnTombstoneToTheSweep(t *testing.T) {
 	if _, _, _, err := a.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
 		t.Fatalf("wake: %v", err)
 	}
-	if err := a.FlushClaims(); err != nil {
-		t.Fatalf("flush: %v", err)
-	}
+	mustFlush(t, a)
 	before, _, _ := c.reg.Get(t.Context(), sb.ID)
 
 	restarted := c.restartReconciled(t, a)
@@ -1107,7 +1085,7 @@ func TestFailoverRestartLeavesItsOwnTombstoneToTheSweep(t *testing.T) {
 
 func TestFailoverSweepLeavesADepartedOwnersTombstoneUntilItReturns(t *testing.T) {
 	c := newFailoverCluster(t)
-	a, b := c.node(t, "a", t.TempDir(), keepAnHour), c.node(t, "b", t.TempDir(), keepAnHour)
+	a, b := c.pair(t)
 	d := c.node(t, "d", t.TempDir(), keepAnHour)
 	sb := mustClaim(t, a, testKey)
 	mustArchive(t, a, sb)
@@ -1214,7 +1192,7 @@ func TestFailoverATombstoneIsNotAdopted(t *testing.T) {
 func TestFailoverADropClearsTheMarkerBeforeTheCheckpointIsUnpinned(t *testing.T) {
 	for range 20 {
 		c := newFailoverCluster(t)
-		a, b := c.node(t, "a", t.TempDir(), keepAnHour), c.node(t, "b", t.TempDir(), keepAnHour)
+		a, b := c.pair(t)
 		sb := mustClaim(t, a, testKey)
 		mustArchive(t, a, sb)
 		ck := sb.ArchiveCk
@@ -1249,7 +1227,7 @@ func TestFailoverADropClearsTheMarkerBeforeTheCheckpointIsUnpinned(t *testing.T)
 
 func TestFailoverReleaseAfterALostTakeReplyLeavesNoLiveRow(t *testing.T) {
 	c := newFailoverCluster(t)
-	a, b := c.node(t, "a", t.TempDir(), keepAnHour), c.node(t, "b", t.TempDir(), keepAnHour)
+	a, b := c.pair(t)
 	sb := mustClaim(t, a, testKey)
 	mustArchive(t, a, sb)
 	a.archives = &hookRegistry{Registry: c.reg, loseTakeReply: true}
@@ -1264,7 +1242,7 @@ func TestFailoverReleaseAfterALostTakeReplyLeavesNoLiveRow(t *testing.T) {
 
 func TestFailoverReleaseAfterALostRearmReplyLeavesNoLiveRow(t *testing.T) {
 	c := newFailoverCluster(t)
-	a, b := c.node(t, "a", t.TempDir(), keepAnHour), c.node(t, "b", t.TempDir(), keepAnHour)
+	a, b := c.pair(t)
 	sb := mustClaim(t, a, testKey)
 	mustArchive(t, a, sb)
 	a.archives = &hookRegistry{Registry: c.reg, loseConsumeReply: true}
@@ -1286,7 +1264,7 @@ func TestFailoverReleaseAfterALostRearmReplyLeavesNoLiveRow(t *testing.T) {
 
 func TestFailoverARepeatedAdoptionOfAReleasedClaimIsRefused(t *testing.T) {
 	c := newFailoverCluster(t)
-	a, b := c.node(t, "a", t.TempDir(), keepAnHour), c.node(t, "b", t.TempDir(), keepAnHour)
+	a, b := c.pair(t)
 	sb := mustClaim(t, a, testKey)
 	mustArchive(t, a, sb)
 	c.expire("a")
@@ -1328,7 +1306,7 @@ func TestFailoverSweepDropsTheRowOfAnArchiveThatNeverCommitted(t *testing.T) {
 
 func TestFailoverSweepRearmsATombstoneItsArchivedClaimHolds(t *testing.T) {
 	c := newFailoverCluster(t)
-	a, b := c.node(t, "a", t.TempDir(), keepAnHour), c.node(t, "b", t.TempDir(), keepAnHour)
+	a, b := c.pair(t)
 	sb := mustClaim(t, a, testKey)
 	mustArchive(t, a, sb)
 	a.archives = &hookRegistry{Registry: c.reg, loseConsumeReply: true}
@@ -1350,7 +1328,7 @@ func TestFailoverSweepRearmsATombstoneItsArchivedClaimHolds(t *testing.T) {
 
 func TestFailoverSweepLeavesADepartedOwnersWakeTombstone(t *testing.T) {
 	c := newFailoverCluster(t)
-	a, b := c.node(t, "a", t.TempDir(), keepAnHour), c.node(t, "b", t.TempDir(), keepAnHour)
+	a, b := c.pair(t)
 	sb := mustClaim(t, a, testKey)
 	mustArchive(t, a, sb)
 	epoch := c.take(t, sb.ID, "a")
@@ -1365,15 +1343,13 @@ func TestFailoverSweepLeavesADepartedOwnersWakeTombstone(t *testing.T) {
 
 func TestFailoverRestartAfterAConsumeWhileAPeerSweptKeepsTheClaim(t *testing.T) {
 	c := newFailoverCluster(t)
-	a, b := c.node(t, "a", t.TempDir(), keepAnHour), c.node(t, "b", t.TempDir(), keepAnHour)
+	a, b := c.pair(t)
 	sb := mustClaim(t, a, testKey)
 	mustArchive(t, a, sb)
 	epoch := c.take(t, sb.ID, "a")
 	_, _ = a.commitIfLive(t.Context(), sb, func() { sb.ArchiveEpoch = epoch })
 	c.consume(t, sb.ID, epoch)
-	if err := a.FlushClaims(); err != nil {
-		t.Fatalf("flush: %v", err)
-	}
+	mustFlush(t, a)
 	c.expire("a")
 	b.sweepOrphanArchives(t.Context())
 	c.renew(t, "a")
@@ -1426,7 +1402,7 @@ func TestFailoverArchiveExportsNothingForARowAnotherNodeHolds(t *testing.T) {
 
 func TestFailoverAWakeKeepsItsFenceAgainstThisNodesOwnAdoption(t *testing.T) {
 	c := newFailoverCluster(t)
-	a, b := c.node(t, "a", t.TempDir(), keepAnHour), c.node(t, "b", t.TempDir(), keepAnHour)
+	a, b := c.pair(t)
 	sb := mustClaim(t, a, testKey)
 	mustArchive(t, a, sb)
 	ck := sb.ArchiveCk
@@ -1459,7 +1435,7 @@ func TestFailoverAWakeKeepsItsFenceAgainstThisNodesOwnAdoption(t *testing.T) {
 
 func TestFailoverConcurrentAdoptionsOnOneNodeAllAnswerForIt(t *testing.T) {
 	c := newFailoverCluster(t)
-	a, b := c.node(t, "a", t.TempDir(), keepAnHour), c.node(t, "b", t.TempDir(), keepAnHour)
+	a, b := c.pair(t)
 	for _, m := range []*Manager{a, b} {
 		if err := m.PutTenant(t.Context(), tenants.TenantSpec{Name: "acme", Token: "tok-acme"}); err != nil {
 			t.Fatalf("put tenant: %v", err)
@@ -1501,7 +1477,7 @@ func TestFailoverConcurrentAdoptionsOnOneNodeAllAnswerForIt(t *testing.T) {
 func TestFailoverACoalescedAdoptionStillNeedsTheToken(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		c := newFailoverCluster(t)
-		a, b := c.node(t, "a", t.TempDir(), keepAnHour), c.node(t, "b", t.TempDir(), keepAnHour)
+		a, b := c.pair(t)
 		sb := mustClaim(t, a, testKey)
 		mustArchive(t, a, sb)
 		c.expire("a")
@@ -1552,7 +1528,7 @@ func TestFailoverArchivePersistsItsIntentBeforeThePut(t *testing.T) {
 
 func TestFailoverRestartDropsAClaimWhoseInterruptedArchiveWasConsumedElsewhere(t *testing.T) {
 	c := newFailoverCluster(t)
-	a, b := c.node(t, "a", t.TempDir(), keepAnHour), c.node(t, "b", t.TempDir(), keepAnHour)
+	a, b := c.pair(t)
 	sb := mustClaim(t, a, testKey)
 	hibernateClaim(t, a, sb)
 	a.mu.Lock()
@@ -1652,7 +1628,7 @@ func TestFailoverAnAbandonKeepsTheExportWhileItsIntentIsDurable(t *testing.T) {
 
 func TestFailoverAnOwnerReturningWithItsWakeCommittedPurgesItsTombstone(t *testing.T) {
 	c := newFailoverCluster(t)
-	a, b := c.node(t, "a", t.TempDir(), keepAnHour), c.node(t, "b", t.TempDir(), keepAnHour)
+	a, b := c.pair(t)
 	sb := mustClaim(t, a, testKey)
 	mustArchive(t, a, sb)
 	ck := sb.ArchiveCk
@@ -1660,9 +1636,7 @@ func TestFailoverAnOwnerReturningWithItsWakeCommittedPurgesItsTombstone(t *testi
 	if _, _, _, err := a.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
 		t.Fatalf("wake: %v", err)
 	}
-	if err := a.FlushClaims(); err != nil {
-		t.Fatalf("flush: %v", err)
-	}
+	mustFlush(t, a)
 	c.expire("a")
 	b.sweepOrphanArchives(t.Context())
 	c.renew(t, "a")
@@ -1679,7 +1653,7 @@ func TestFailoverAnOwnerReturningWithItsWakeCommittedPurgesItsTombstone(t *testi
 
 func TestFailoverRestartDropsAClaimConsumedWhileItSettlesItsInterruptedArchive(t *testing.T) {
 	c := newFailoverCluster(t)
-	a, b := c.node(t, "a", t.TempDir(), keepAnHour), c.node(t, "b", t.TempDir(), keepAnHour)
+	a, b := c.pair(t)
 	sb := mustClaim(t, a, testKey)
 	hibernateClaim(t, a, sb)
 	ck := interruptArchive(t, a, sb, true)
@@ -1727,7 +1701,7 @@ func TestFailoverRestartUndoesItsOwnInterruptedArchiveAndItsIntent(t *testing.T)
 
 func TestFailoverReleaseAfterALostArchivePutReplyLeavesNothingAdoptable(t *testing.T) {
 	c := newFailoverCluster(t)
-	a, b := c.node(t, "a", t.TempDir(), keepAnHour), c.node(t, "b", t.TempDir(), keepAnHour)
+	a, b := c.pair(t)
 	sb := mustClaim(t, a, testKey)
 	hibernateClaim(t, a, sb)
 	c.archiveLosingPutReply(t, a, sb)
@@ -1834,7 +1808,7 @@ func TestFailoverAWakeWithoutARegistryKeepsItsPendingIntent(t *testing.T) {
 
 func TestFailoverAReleaseFindsItsUnsettledArchiveTakenElsewhere(t *testing.T) {
 	c := newFailoverCluster(t)
-	a, b := c.node(t, "a", t.TempDir(), keepAnHour), c.node(t, "b", t.TempDir(), keepAnHour)
+	a, b := c.pair(t)
 	sb := mustClaim(t, a, testKey)
 	hibernateClaim(t, a, sb)
 	a.mu.Lock()
@@ -1862,7 +1836,7 @@ func TestFailoverAReleaseFindsItsUnsettledArchiveTakenElsewhere(t *testing.T) {
 func TestALookupRacingAWakeAdoptionTakesTheRowOnce(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		c := newFailoverCluster(t)
-		a, b := c.node(t, "a", t.TempDir(), keepAnHour), c.node(t, "b", t.TempDir(), keepAnHour)
+		a, b := c.pair(t)
 		sb := mustClaim(t, a, testKey)
 		mustArchive(t, a, sb)
 		rec, _, err := c.reg.Get(t.Context(), sb.ID)
@@ -1951,6 +1925,11 @@ func (c *failoverCluster) node(t *testing.T, name, dataDir string, deleteAfter i
 	return m
 }
 
+func (c *failoverCluster) pair(t *testing.T) (a, b *Manager) {
+	t.Helper()
+	return c.node(t, "a", t.TempDir(), keepAnHour), c.node(t, "b", t.TempDir(), keepAnHour)
+}
+
 func (c *failoverCluster) restart(t *testing.T, old *Manager) *Manager {
 	t.Helper()
 	return c.nodeOn(t, fakeOf(old), old.nodeID, old.dataDir, keepAnHour)
@@ -2024,79 +2003,40 @@ type hookRegistry struct {
 }
 
 func (r *hookRegistry) Put(ctx context.Context, rec archives.Record) (int64, error) {
-	if r.failPut {
-		return 0, archives.ErrUnavailable
-	}
-	if hook := r.beforePut; hook != nil {
-		r.beforePut = nil
-		hook()
-	}
-	epoch, err := r.Registry.Put(ctx, rec)
-	if r.losePutReply && err == nil {
-		r.losePutReply = false
-		return 0, archives.ErrUnavailable
-	}
-	return epoch, err
+	return r.write(func() (int64, error) { return r.Registry.Put(ctx, rec) })
 }
 
 func (r *hookRegistry) Replace(ctx context.Context, rec archives.Record, expect int64) (int64, error) {
 	r.replaces++
-	if r.failPut {
-		return 0, archives.ErrUnavailable
-	}
-	if hook := r.beforePut; hook != nil {
-		r.beforePut = nil
-		hook()
-	}
-	epoch, err := r.Registry.Replace(ctx, rec, expect)
-	if r.losePutReply && err == nil {
-		r.losePutReply = false
-		return 0, archives.ErrUnavailable
-	}
-	return epoch, err
+	return r.write(func() (int64, error) { return r.Registry.Replace(ctx, rec, expect) })
 }
 
 func (r *hookRegistry) Take(ctx context.Context, id string, expect int64, owner string) (int64, error) {
-	if hook := r.beforeTake; hook != nil {
-		r.beforeTake = nil
-		hook()
-	}
+	fire(&r.beforeTake)
 	epoch, err := r.Registry.Take(ctx, id, expect, owner)
 	if err == nil {
 		r.takes.Add(1)
-		if hook := r.afterTake; hook != nil {
-			r.afterTake = nil
-			hook()
-		}
+		fire(&r.afterTake)
 	}
-	if r.loseTakeReply && err == nil {
-		r.loseTakeReply = false
+	if err == nil && lost(&r.loseTakeReply) {
 		return 0, archives.ErrUnavailable
 	}
 	return epoch, err
 }
 
 func (r *hookRegistry) Release(ctx context.Context, id string, expect int64, owner string) (int64, error) {
-	if hook := r.beforeRelease; hook != nil {
-		r.beforeRelease = nil
-		hook()
-	}
+	fire(&r.beforeRelease)
 	released, err := r.Registry.Release(ctx, id, expect, owner)
-	if r.loseReleaseReply && err == nil {
-		r.loseReleaseReply = false
+	if err == nil && lost(&r.loseReleaseReply) {
 		return 0, archives.ErrUnavailable
 	}
 	return released, err
 }
 
 func (r *hookRegistry) Delete(ctx context.Context, id string, epoch int64) error {
-	if hook := r.beforeDelete; hook != nil {
-		r.beforeDelete = nil
-		hook()
-	}
+	fire(&r.beforeDelete)
 	err := r.Registry.Delete(ctx, id, epoch)
-	if err == nil && r.loseDeleteReply {
-		r.loseDeleteReply = false
+	if err == nil && lost(&r.loseDeleteReply) {
 		return archives.ErrUnavailable
 	}
 	return err
@@ -2104,24 +2044,42 @@ func (r *hookRegistry) Delete(ctx context.Context, id string, epoch int64) error
 
 func (r *hookRegistry) Rows(ctx context.Context, ids []string) (map[string]archives.Record, error) {
 	rows, err := r.Registry.Rows(ctx, ids)
-	if hook := r.afterRows; hook != nil {
-		r.afterRows = nil
-		hook()
-	}
+	fire(&r.afterRows)
 	return rows, err
 }
 
 func (r *hookRegistry) Consume(ctx context.Context, id string, expect int64) (int64, error) {
-	if hook := r.beforeConsume; hook != nil {
-		r.beforeConsume = nil
-		hook()
-	}
+	fire(&r.beforeConsume)
 	epoch, err := r.Registry.Consume(ctx, id, expect)
-	if r.loseConsumeReply && err == nil {
-		r.loseConsumeReply = false
+	if err == nil && lost(&r.loseConsumeReply) {
 		return 0, archives.ErrUnavailable
 	}
 	return epoch, err
+}
+
+func (r *hookRegistry) write(do func() (int64, error)) (int64, error) {
+	if r.failPut {
+		return 0, archives.ErrUnavailable
+	}
+	fire(&r.beforePut)
+	epoch, err := do()
+	if err == nil && lost(&r.losePutReply) {
+		return 0, archives.ErrUnavailable
+	}
+	return epoch, err
+}
+
+func fire(hook *func()) {
+	if h := *hook; h != nil {
+		*hook = nil
+		h()
+	}
+}
+
+func lost(flag *bool) bool {
+	was := *flag
+	*flag = false
+	return was
 }
 
 type unreadableStore struct {

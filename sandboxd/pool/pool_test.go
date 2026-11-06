@@ -2289,6 +2289,13 @@ func hibernateClaim(t *testing.T, m *Manager, sb *types.Sandbox) {
 	}
 }
 
+func mustFlush(t *testing.T, m *Manager) {
+	t.Helper()
+	if err := m.FlushClaims(); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+}
+
 func mustAdopt(t *testing.T, m *Manager, sb *types.Sandbox, step string) {
 	t.Helper()
 	if adopted, err := m.AdoptArchived(t.Context(), sb.ID, sb.Token); err != nil || !adopted {

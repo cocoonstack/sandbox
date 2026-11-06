@@ -175,9 +175,7 @@ func TestACordonedNodeNeverAdoptsButKeepsItsOwnRowAcrossARestart(t *testing.T) {
 	mustArchive(t, a, lost)
 	own := mustClaim(t, b, testKey)
 	mustArchive(t, b, own)
-	if err := b.FlushClaims(); err != nil {
-		t.Fatalf("flush: %v", err)
-	}
+	mustFlush(t, b)
 	if err := b.Cordon(t.Context()); err != nil {
 		t.Fatalf("cordon: %v", err)
 	}

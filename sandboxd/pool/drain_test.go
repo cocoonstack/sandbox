@@ -62,7 +62,7 @@ func TestDrainRefusesClaimsTrimsWarmAndUndrainRefills(t *testing.T) {
 func TestEvacuateHandsClaimsToAPeerWhileItsLeaseIsLive(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		c := newFailoverCluster(t)
-		a, b := c.node(t, "a", t.TempDir(), keepAnHour), c.node(t, "b", t.TempDir(), keepAnHour)
+		a, b := c.pair(t)
 		running, asleep, archived := mustClaim(t, a, testKey), mustClaim(t, a, testKey), mustClaim(t, a, testKey)
 		hibernateClaim(t, a, asleep)
 		mustArchive(t, a, archived)
@@ -95,7 +95,7 @@ func TestEvacuateHandsClaimsToAPeerWhileItsLeaseIsLive(t *testing.T) {
 func TestEvacuateHandOffRefusedByAConcurrentOwnerWriteKeepsTheClaim(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		c := newFailoverCluster(t)
-		a, b := c.node(t, "a", t.TempDir(), keepAnHour), c.node(t, "b", t.TempDir(), keepAnHour)
+		a, b := c.pair(t)
 		sb := mustClaim(t, a, testKey)
 		mustArchive(t, a, sb)
 		a.archives = &hookRegistry{Registry: c.reg, beforeRelease: func() {
@@ -127,7 +127,7 @@ func TestEvacuateHandOffRefusedByAConcurrentOwnerWriteKeepsTheClaim(t *testing.T
 func TestEvacuateHandOffOfARowAPeerTookDropsTheClaim(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		c := newFailoverCluster(t)
-		a, b := c.node(t, "a", t.TempDir(), keepAnHour), c.node(t, "b", t.TempDir(), keepAnHour)
+		a, b := c.pair(t)
 		sb := mustClaim(t, a, testKey)
 		mustArchive(t, a, sb)
 		a.archives = &hookRegistry{Registry: c.reg, beforeRelease: func() {
@@ -198,7 +198,7 @@ func TestEvacuateWithoutArchiveFailoverSkipsEveryClaim(t *testing.T) {
 func TestEvacuateWaitsOutAnArchiveInFlight(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		c := newFailoverCluster(t)
-		a, b := c.node(t, "a", t.TempDir(), keepAnHour), c.node(t, "b", t.TempDir(), keepAnHour)
+		a, b := c.pair(t)
 		sb := mustClaim(t, a, testKey)
 		mustArchive(t, a, sb)
 		a.mu.Lock()
@@ -220,7 +220,7 @@ func TestEvacuateWaitsOutAnArchiveInFlight(t *testing.T) {
 func TestUndrainStopsAnEvacuationBeforeItsHandOff(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		c := newFailoverCluster(t)
-		a, b := c.node(t, "a", t.TempDir(), keepAnHour), c.node(t, "b", t.TempDir(), keepAnHour)
+		a, b := c.pair(t)
 		stall := stallExports(a)
 		sb := mustClaim(t, a, testKey)
 
@@ -405,7 +405,7 @@ func TestAnEnvWriteThatLostTheClaimAnswersUnknown(t *testing.T) {
 
 func TestAnEnvWriteDuringTheArchiveReachesItsRow(t *testing.T) {
 	c := newFailoverCluster(t)
-	a, b := c.node(t, "a", t.TempDir(), keepAnHour), c.node(t, "b", t.TempDir(), keepAnHour)
+	a, b := c.pair(t)
 	sb := mustClaim(t, a, testKey)
 	hibernateClaim(t, a, sb)
 	written := make(chan error, 1)
@@ -507,7 +507,7 @@ func TestEvacuateKeepsAClaimArchivedWithoutARow(t *testing.T) {
 func TestEvacuateMovesTheCheapestClaimsFirst(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		c := newFailoverCluster(t)
-		a, b := c.node(t, "a", t.TempDir(), keepAnHour), c.node(t, "b", t.TempDir(), keepAnHour)
+		a, b := c.pair(t)
 		running, hibernated, archived := mustClaim(t, a, testKey), mustClaim(t, a, testKey), mustClaim(t, a, testKey)
 		hibernateClaim(t, a, hibernated)
 		mustArchive(t, a, archived)
@@ -580,7 +580,7 @@ func TestEvacuateWithNoPeerToAdoptKeepsTheClaim(t *testing.T) {
 func TestEvacuateConvergesWhenAPeersAnswerIsLost(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		c := newFailoverCluster(t)
-		a, b := c.node(t, "a", t.TempDir(), keepAnHour), c.node(t, "b", t.TempDir(), keepAnHour)
+		a, b := c.pair(t)
 		sb := mustClaim(t, a, testKey)
 		a.WithPeerAdopt(func(ctx context.Context, id, token string, _ bool) bool {
 			if _, err := b.AdoptArchived(ctx, id, token); err != nil {
@@ -605,7 +605,7 @@ func TestEvacuateConvergesWhenAPeersAnswerIsLost(t *testing.T) {
 func TestEvacuateConvergesWhenTheReleaseReplyIsLost(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		c := newFailoverCluster(t)
-		a, b := c.node(t, "a", t.TempDir(), keepAnHour), c.node(t, "b", t.TempDir(), keepAnHour)
+		a, b := c.pair(t)
 		sb := mustClaim(t, a, testKey)
 		a.archives = &hookRegistry{Registry: c.reg, loseReleaseReply: true}
 
@@ -626,7 +626,7 @@ func TestEvacuateConvergesWhenTheReleaseReplyIsLost(t *testing.T) {
 func TestARepeatEvacuateResumesAHandOffAnOutageCutShort(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		c := newFailoverCluster(t)
-		a, b := c.node(t, "a", t.TempDir(), keepAnHour), c.node(t, "b", t.TempDir(), keepAnHour)
+		a, b := c.pair(t)
 		sb := mustClaim(t, a, testKey)
 		a.archives = &hookRegistry{Registry: c.reg, loseReleaseReply: true}
 
@@ -649,7 +649,7 @@ func TestARepeatEvacuateResumesAHandOffAnOutageCutShort(t *testing.T) {
 func TestARepeatEvacuateWithNoAdopterLeavesAReleasedRowReleased(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		c := newFailoverCluster(t)
-		a, b := c.node(t, "a", t.TempDir(), keepAnHour), c.node(t, "b", t.TempDir(), keepAnHour)
+		a, b := c.pair(t)
 		sb := mustClaim(t, a, testKey)
 		a.archives = &hookRegistry{Registry: c.reg, loseReleaseReply: true}
 		a.Evacuate(t.Context())
@@ -673,7 +673,7 @@ func TestARepeatEvacuateWithNoAdopterLeavesAReleasedRowReleased(t *testing.T) {
 func TestACrashBeforeThePeersAnswerLeavesARowAnyNodeSettles(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		c := newFailoverCluster(t)
-		a, b := c.node(t, "a", t.TempDir(), keepAnHour), c.node(t, "b", t.TempDir(), keepAnHour)
+		a, b := c.pair(t)
 		adopted, purged := mustClaim(t, a, testKey), mustClaim(t, a, testKey)
 		for _, sb := range []*types.Sandbox{adopted, purged} {
 			mustArchive(t, a, sb)

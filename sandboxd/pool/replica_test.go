@@ -193,9 +193,7 @@ func TestReplicaRestartSettlesALostPutReply(t *testing.T) {
 	a.mu.Lock()
 	pending := sb.ReplicaPending
 	a.mu.Unlock()
-	if err := a.FlushClaims(); err != nil {
-		t.Fatalf("flush: %v", err)
-	}
+	mustFlush(t, a)
 
 	restarted := c.restartReconciled(t, a)
 	held, ok := restarted.byID(sb.ID)
@@ -795,9 +793,7 @@ func TestReplicaRestartKeepsItsRowAndStaysFencedUntilALeaseRenews(t *testing.T) 
 	sb := mustClaim(t, a, testKey)
 	replicateNow(t, a, sb)
 	ck := a.replicaOf(sb)
-	if err := a.FlushClaims(); err != nil {
-		t.Fatalf("flush: %v", err)
-	}
+	mustFlush(t, a)
 	before, _, _ := c.reg.Get(t.Context(), sb.ID)
 
 	restarted := c.restartReconciled(t, a)
@@ -821,9 +817,7 @@ func TestReplicaRestartAdoptsTheRowsCheckpointOfAnInterruptedRound(t *testing.T)
 	sb := mustClaim(t, a, testKey)
 	replicateNow(t, a, sb)
 	first := a.replicaOf(sb)
-	if err := a.FlushClaims(); err != nil {
-		t.Fatalf("flush: %v", err)
-	}
+	mustFlush(t, a)
 	interrupted, _, publishErr := a.publishCheckpoint(t.Context(), sb, store.CheckpointID(randHex(8)), "replica", sb.Tenant, "", true)
 	if publishErr != nil {
 		t.Fatalf("publish: %v", publishErr)
@@ -906,9 +900,7 @@ func TestReconcileWithTheRegistryDownRecordsOnlyTheEndNoOtherNodeCanHold(t *test
 	a := c.node(t, "a", t.TempDir(), keepAnHour)
 	replicated, plain := mustClaim(t, a, testKey), mustClaim(t, a, plainKey)
 	replicateNow(t, a, replicated)
-	if err := a.FlushClaims(); err != nil {
-		t.Fatalf("flush: %v", err)
-	}
+	mustFlush(t, a)
 	eng := fakeOf(a)
 	delete(eng.vms, replicated.VMName)
 	delete(eng.vms, plain.VMName)
@@ -930,9 +922,7 @@ func TestReplicaRestartDropsAClaimAdoptedElsewhere(t *testing.T) {
 	sb := mustClaim(t, a, testKey)
 	replicateNow(t, a, sb)
 	ck := a.replicaOf(sb)
-	if err := a.FlushClaims(); err != nil {
-		t.Fatalf("flush: %v", err)
-	}
+	mustFlush(t, a)
 	c.expire("a")
 	mustAdopt(t, b, sb, "adopt")
 
@@ -952,9 +942,7 @@ func TestReplicaRestartDropsAClaimTheAdopterWokeAndFinished(t *testing.T) {
 	a, b := c.node(t, "a", dirA, keepAnHour), c.node(t, "b", t.TempDir(), keepAnHour)
 	sb := mustClaim(t, a, testKey)
 	replicateNow(t, a, sb)
-	if err := a.FlushClaims(); err != nil {
-		t.Fatalf("flush: %v", err)
-	}
+	mustFlush(t, a)
 	c.expire("a")
 	mustAdopt(t, b, sb, "adopt")
 	if _, _, _, err := b.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
@@ -1075,9 +1063,7 @@ func TestReplicaRestartKeepsTheCheckpointOfARoundItCannotSettleYet(t *testing.T)
 	a.mu.Lock()
 	pending := sb.ReplicaPending
 	a.mu.Unlock()
-	if err := a.FlushClaims(); err != nil {
-		t.Fatalf("flush: %v", err)
-	}
+	mustFlush(t, a)
 
 	restarted := c.restart(t, a)
 	restarted.ckpts = &unreadableStore{Store: restarted.ckpts}
@@ -1371,9 +1357,7 @@ func TestARunningClaimThatMovedClosesItsDoors(t *testing.T) {
 
 func restartWithoutVM(t *testing.T, c *failoverCluster, a *Manager, sb *types.Sandbox, deleteAfter int) *Manager {
 	t.Helper()
-	if err := a.FlushClaims(); err != nil {
-		t.Fatalf("flush: %v", err)
-	}
+	mustFlush(t, a)
 	eng := fakeOf(a)
 	delete(eng.vms, sb.VMName)
 	restarted := c.nodeOn(t, eng, a.nodeID, a.dataDir, deleteAfter)
