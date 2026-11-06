@@ -1,9 +1,6 @@
 package sandbox
 
-import (
-	"context"
-	"net/url"
-)
+import "context"
 
 // Template is a promoted template bound to the node that holds it.
 type Template struct {
@@ -18,10 +15,7 @@ type Template struct {
 
 // New claims a sandbox cloned from the template; its key axes cannot be overridden.
 func (t *Template) New(ctx context.Context, opts ...Option) (*Sandbox, error) {
-	claim := claimRequest{Template: t.Name}
-	for _, opt := range opts {
-		opt(&claim)
-	}
+	claim := newClaim(t.Name, opts)
 	if err := claim.rejectPinnedAxes(); err != nil {
 		return nil, err
 	}
@@ -41,12 +35,8 @@ func (t *Template) New(ctx context.Context, opts ...Option) (*Sandbox, error) {
 
 // Delete removes the template from its owning node, never a same-name template elsewhere.
 func (t *Template) Delete(ctx context.Context) error {
-	u := url.Values{
-		templateQueryParam:   {t.Name},
-		netQueryParam:        {t.net},
-		sizeQueryParam:       {t.size},
-		noRedirectQueryParam: {"1"},
-	}
+	u := templateQuery(t.Name, t.net, t.size)
+	u.Set(noRedirectQueryParam, "1")
 	_, err := t.c.deleteTemplates(ctx, t.addr, u)
 	return err
 }

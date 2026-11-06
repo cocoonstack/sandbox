@@ -20,11 +20,7 @@ import (
 )
 
 const (
-	idleConnsPerHost = 100
-
-	templateQueryParam   = "template"
-	netQueryParam        = "net"
-	sizeQueryParam       = "size"
+	idleConnsPerHost     = 100
 	noRedirectQueryParam = "no_redirect"
 )
 
@@ -126,10 +122,7 @@ func Connect(addr string, opts ...ClientOption) (*Client, error) {
 
 // New claims a sandbox for template.
 func (c *Client) New(ctx context.Context, template string, opts ...Option) (*Sandbox, error) {
-	claim := claimRequest{Template: template}
-	for _, opt := range opts {
-		opt(&claim)
-	}
+	claim := newClaim(template, opts)
 	addr, cr, err := claimFollow(c.addr, "claim", func(noRedirect, requirePromoted bool) ([]byte, error) {
 		claim.NoRedirect, claim.RequirePromoted = noRedirect, requirePromoted
 		return encodeBody("claim", claim)
@@ -176,11 +169,8 @@ func (c *Client) Attach(ownerAddr, id, token string) *Sandbox {
 
 // DeleteTemplate removes a promoted template by name.
 func (c *Client) DeleteTemplate(ctx context.Context, template string, opts ...Option) error {
-	claim := claimRequest{Template: template}
-	for _, opt := range opts {
-		opt(&claim)
-	}
-	u := url.Values{templateQueryParam: {claim.Template}, netQueryParam: {claim.Net}, sizeQueryParam: {claim.Size}}
+	claim := newClaim(template, opts)
+	u := templateQuery(claim.Template, claim.Net, claim.Size)
 	redirect, err := c.deleteTemplates(ctx, c.addr, u)
 	if err != nil || len(redirect) == 0 {
 		return err
@@ -413,4 +403,16 @@ func apiError(verb string, resp *http.Response) error {
 	_ = json.UnmarshalRead(io.LimitReader(resp.Body, 4096), &er)
 	_, _ = io.Copy(io.Discard, resp.Body)
 	return &APIError{Verb: verb, Status: resp.StatusCode, Message: er.Error}
+}
+
+func newClaim(template string, opts []Option) claimRequest {
+	claim := claimRequest{Template: template}
+	for _, opt := range opts {
+		opt(&claim)
+	}
+	return claim
+}
+
+func templateQuery(name, net, size string) url.Values {
+	return url.Values{"template": {name}, "net": {net}, "size": {size}}
 }

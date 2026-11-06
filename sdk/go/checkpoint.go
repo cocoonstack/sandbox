@@ -49,10 +49,7 @@ type Checkpoint struct {
 
 // New claims a sandbox branched from the checkpoint, following an owner redirect.
 func (ck *Checkpoint) New(ctx context.Context, opts ...Option) (*Sandbox, error) {
-	var claim claimRequest
-	for _, opt := range opts {
-		opt(&claim)
-	}
+	claim := newClaim("", opts)
 	if len(claim.Volumes) > 0 || claim.ClaimRef != "" {
 		return nil, errors.New("checkpoint claims do not accept WithVolumes or WithClaimRef")
 	}
