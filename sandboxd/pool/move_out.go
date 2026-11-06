@@ -213,8 +213,7 @@ func (m *Manager) moveBlocker(sb *types.Sandbox) string {
 }
 
 func (m *Manager) journalMoveOut(ctx context.Context, sb *types.Sandbox, mv *outMove) error {
-	journal := mv.MoveOut
-	live, err := m.commitIfLive(ctx, sb, func() { sb.MoveOut = &journal })
+	live, err := m.commitIfLive(ctx, sb, func() { sb.MoveOut = new(mv.MoveOut) })
 	if !live {
 		return ErrUnknownSandbox
 	}
