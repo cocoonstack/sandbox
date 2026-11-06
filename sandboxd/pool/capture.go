@@ -8,6 +8,7 @@ import (
 
 	"github.com/projecteru2/core/log"
 
+	"github.com/cocoonstack/sandbox/sandboxd/outbound"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
@@ -57,37 +58,37 @@ func (m *Manager) captureAllowed(sb *types.Sandbox) error {
 	return nil
 }
 
-func (m *Manager) exportSource(ctx context.Context, sb *types.Sandbox, exportDir, from string) (snap, vmName string, guestEnv bool, err error) {
+func (m *Manager) exportSource(ctx context.Context, sb *types.Sandbox, exportDir, from string) (snap, vmName string, guestEnv bool, tun outbound.TunState, err error) {
 	if lockErr := m.lockTransition(sb); lockErr != nil {
-		return "", "", false, lockErr
+		return "", "", false, outbound.TunState{}, lockErr
 	}
 	if from != "" && sb.HibernateSnap != from {
 		sb.Transition.Unlock()
-		return "", "", false, errWokeMeanwhile
+		return "", "", false, outbound.TunState{}, errWokeMeanwhile
 	}
 	if captureErr := m.captureAllowed(sb); captureErr != nil {
 		sb.Transition.Unlock()
-		return "", "", false, captureErr
+		return "", "", false, outbound.TunState{}, captureErr
 	}
 	if settleErr := m.settleCapture(ctx, sb); settleErr != nil {
 		sb.Transition.Unlock()
-		return "", "", false, settleErr
+		return "", "", false, outbound.TunState{}, settleErr
 	}
 	m.trimForCapture(ctx, sb)
 	snap, cleanup, err := m.sourceSnap(ctx, sb)
 	if err != nil {
 		sb.Transition.Unlock()
-		return "", "", false, err
+		return "", "", false, outbound.TunState{}, err
 	}
 	defer cleanup()
-	vmName, guestEnv = sb.VMName, m.heldGuestEnv(sb)
+	vmName, guestEnv, tun = sb.VMName, m.heldGuestEnv(sb), m.tunState(sb)
 	// A fresh snapshot is this capture's alone, so dials need not wait out its export; a wake consumes a hibernate snapshot
 	if snap != sb.HibernateSnap {
 		sb.Transition.Unlock()
 	} else {
 		defer sb.Transition.Unlock()
 	}
-	return snap, vmName, guestEnv, m.eng.SnapshotExport(ctx, snap, exportDir)
+	return snap, vmName, guestEnv, tun, m.eng.SnapshotExport(ctx, snap, exportDir)
 }
 
 // A failed trim only leaves the capture larger.

@@ -171,7 +171,6 @@ func (m *Manager) FetchCheckpoint(ctx context.Context, ckptID string) (string, [
 }
 
 func (m *Manager) publishCheckpoint(ctx context.Context, sb *types.Sandbox, ckID, name, tenant, from string, archive bool) (types.Checkpoint, string, error) {
-	tun := m.tunState(sb)
 	ckpt := types.Checkpoint{
 		ID:           ckID,
 		Name:         name,
@@ -181,8 +180,6 @@ func (m *Manager) publishCheckpoint(ctx context.Context, sb *types.Sandbox, ckID
 		CreatedAt:    time.Now(),
 		PolicySource: sb.PolicySource,
 		NoEgress:     sb.NoEgress,
-		TunOff:       !tun.On,
-		TunProfile:   tun.Profile,
 		Archive:      archive,
 	}
 	if archive {
@@ -193,11 +190,11 @@ func (m *Manager) publishCheckpoint(ctx context.Context, sb *types.Sandbox, ckID
 		return types.Checkpoint{}, "", fmt.Errorf("stage checkpoint: %w", err)
 	}
 	defer func() { _ = os.RemoveAll(staging) }()
-	srcSnap, _, guestEnv, err := m.exportSource(ctx, sb, filepath.Join(staging, store.ExportDir), from)
+	srcSnap, _, guestEnv, tun, err := m.exportSource(ctx, sb, filepath.Join(staging, store.ExportDir), from)
 	if err != nil {
 		return types.Checkpoint{}, "", fmt.Errorf("checkpoint %s: %w", sb.ID, err)
 	}
-	ckpt.GuestEnv = guestEnv
+	ckpt.GuestEnv, ckpt.TunOff, ckpt.TunProfile = guestEnv, !tun.On, tun.Profile
 	meta, err := json.Marshal(ckpt)
 	if err != nil {
 		return types.Checkpoint{}, "", fmt.Errorf("encode checkpoint meta: %w", err)
