@@ -21,6 +21,23 @@ import (
 
 const runtimeVolumesFile = "runtime-volumes.json"
 
+// volumeHolders is one name's live admission state: a writer excludes every other claim.
+type volumeHolders struct {
+	writers int
+	readers int
+}
+
+type catalogVolume struct {
+	runtime  bool
+	disk     engine.VolumeSpec
+	tenants  []string
+	writable bool
+}
+
+func (v *catalogVolume) allowed(tenant string) bool {
+	return tenant == "" || len(v.tenants) == 0 || slices.Contains(v.tenants, tenant)
+}
+
 type volumeCatalog struct {
 	entries map[string]*catalogVolume
 	roots   []string
@@ -102,17 +119,6 @@ func (c *volumeCatalog) checkResolvedLocked(volumes []resolvedVolume) error {
 		}
 	}
 	return nil
-}
-
-type catalogVolume struct {
-	runtime  bool
-	disk     engine.VolumeSpec
-	tenants  []string
-	writable bool
-}
-
-func (v *catalogVolume) allowed(tenant string) bool {
-	return tenant == "" || len(v.tenants) == 0 || slices.Contains(v.tenants, tenant)
 }
 
 // RegisterVolume durably binds a root-managed name to a backing path.

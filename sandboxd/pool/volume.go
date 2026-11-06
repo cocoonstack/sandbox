@@ -20,12 +20,6 @@ import (
 // Sidecar, not data_dir: the marker travels with the image and survives a data_dir wipe
 const volumeDirtySuffix = ".dirty"
 
-// volumeHolders is one name's live admission state: a writer excludes every other claim.
-type volumeHolders struct {
-	writers int
-	readers int
-}
-
 type resolvedVolume struct {
 	entry   *catalogVolume
 	disk    engine.VolumeSpec
@@ -186,7 +180,6 @@ func (m *Manager) applyVolumes(ctx context.Context, sb *types.Sandbox, volumes [
 
 // applyVolume keeps one volume's steps strictly ordered; siblings overlap freely.
 func (m *Manager) applyVolume(ctx context.Context, sb *types.Sandbox, volume resolvedVolume, live bool) error {
-	// Attach-only mounts nothing, so there is no umount to verify and no marker.
 	attachOnly := volume.applied.AttachOnly
 	// Write-ahead: the marker must be durable before any guest write can be.
 	if volume.disk.RW && !attachOnly {
@@ -226,7 +219,7 @@ func (m *Manager) quiesceVolumes(ctx context.Context, sb *types.Sandbox) volumeT
 	stuck := false
 	for _, volume := range slices.Backward(sb.Volumes) {
 		if !needsUnmount(volume) {
-			continue // attach-only: no mount to bring down, VM removal closes the device
+			continue
 		}
 		unmountCtx, cancel := context.WithTimeout(ctx, engine.VolumeMutationTimeout)
 		clean, err := m.eng.UnmountVolume(unmountCtx, sb.VsockSocket, volume.Mount)

@@ -2,7 +2,6 @@ package pool
 
 import (
 	"context"
-	"encoding/json/v2"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -382,8 +381,8 @@ func (m *Manager) reclaimOrphanArchiveCks(ctx context.Context, claims map[string
 	var orphans []types.Checkpoint
 	var ids []string
 	for _, rec := range metas {
-		var ckpt types.Checkpoint
-		if json.Unmarshal(rec.Meta, &ckpt) != nil || !ckpt.Archive {
+		ckpt, err := parseCheckpoint(rec.Meta)
+		if err != nil || !ckpt.Archive {
 			continue
 		}
 		orig, mine := claims[ckpt.SandboxID]

@@ -13,7 +13,7 @@ import (
 
 // sourceSnap picks the snapshot to export a claimed sandbox from, with its cleanup; the caller holds sb.Transition.
 func (m *Manager) sourceSnap(ctx context.Context, sb *types.Sandbox) (string, func(), error) {
-	// archive() clears VMName under the same lock, so this is the check that cannot race it
+	// The archive clears VMName under the same lock, so this check cannot race it
 	if sb.ArchiveCk != "" {
 		return "", nil, ErrArchived
 	}
@@ -57,7 +57,6 @@ func (m *Manager) captureAllowed(sb *types.Sandbox) error {
 	return nil
 }
 
-// exportSource captures a claimed sandbox into exportDir and returns its snapshot, VM name and guest-env presence.
 func (m *Manager) exportSource(ctx context.Context, sb *types.Sandbox, exportDir, from string) (snap, vmName string, guestEnv bool, err error) {
 	if lockErr := m.lockTransition(sb); lockErr != nil {
 		return "", "", false, lockErr
@@ -91,7 +90,7 @@ func (m *Manager) exportSource(ctx context.Context, sb *types.Sandbox, exportDir
 	return snap, vmName, guestEnv, m.eng.SnapshotExport(ctx, snap, exportDir)
 }
 
-// trimForCapture trims a live sandbox's copy-on-write disk when its pool asks for it; a failed trim only leaves the capture larger.
+// A failed trim only leaves the capture larger.
 func (m *Manager) trimForCapture(ctx context.Context, sb *types.Sandbox) {
 	if !m.view.Load().poolTrims[sb.PolicyKey()] || sb.HibernateSnap != "" || sb.ArchiveCk != "" {
 		return

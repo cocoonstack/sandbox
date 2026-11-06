@@ -353,8 +353,7 @@ type Manager struct {
 	// notifyTemplates is set before serving starts and fires after a promote or template delete.
 	notifyTemplates func()
 
-	out *outbound.Host
-	// tunRouter and tunAddrs are nil when the node has no tun block.
+	out       *outbound.Host
 	tunRouter *tunnet.Router
 	tunAddrs  tunnet.Addresses
 

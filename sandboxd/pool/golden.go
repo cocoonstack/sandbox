@@ -35,7 +35,7 @@ func (m *Manager) buildGolden(ctx context.Context, p *pool) {
 
 	err := m.buildGoldenSteps(ctx, v, p.key, name, snap, final, imageID)
 	if rmErr := m.eng.SnapshotRemove(ctx, snap); rmErr != nil && err == nil {
-		logger.Debugf(ctx, "drop golden snapshot %s: %v", snap, rmErr)
+		logger.Warnf(ctx, "drop golden snapshot %s: %v", snap, rmErr)
 	}
 	m.destroy(ctx, name)
 
