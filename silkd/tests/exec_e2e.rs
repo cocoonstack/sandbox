@@ -410,7 +410,7 @@ async fn a_client_gone_mid_output_releases_the_stdin_a_forked_child_holds() {
         &state,
         json!({
             "op": "exec",
-            "argv": ["/bin/sh", "-c", "exec 3<&0; perl -e 'setpgrp; exec @ARGV' /bin/sh -c 'sleep 1; wc -c <&3 >\"$OUT.tmp\"; mv \"$OUT.tmp\" \"$OUT\"' >/dev/null 2>&1 & while :; do echo x; sleep 0.05; done"],
+            "argv": ["/bin/sh", "-c", "exec 3<&0; perl -e 'setpgrp; exec @ARGV' /bin/sh -c ': >\"$OUT.ready\"; sleep 1; wc -c <&3 >\"$OUT.tmp\"; mv \"$OUT.tmp\" \"$OUT\"' >/dev/null 2>&1 & while :; do echo x; sleep 0.05; done"],
             "env": {"OUT": out.to_str().unwrap()}
         }),
     )
@@ -420,6 +420,7 @@ async fn a_client_gone_mid_output_releases_the_stdin_a_forked_child_holds() {
         send(&mut cw, json!({"op":"stdin","data":chunk})).await;
     }
     frames_until(&mut lines, |f| type_of(f) == "stdout").await;
+    wait_for_path(&dir.path().join("count.ready")).await;
     drop(lines);
     drop(cw);
 
