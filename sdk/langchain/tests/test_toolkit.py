@@ -109,15 +109,22 @@ def test_exec_reports_a_claim_that_outlives_the_budget(monkeypatch):
     assert kit.get_tools()[0].invoke({"command": "echo hi"}) == f"cut off after {CALL_TIMEOUT}s"
 
 
-def test_a_guest_error_comes_back_as_a_tool_error(monkeypatch):
+@pytest.mark.parametrize(
+    ("name", "method", "args", "message"),
+    [
+        ("sandbox_write_file", "write_file", {"path": "/nope/a.txt", "content": "body"}, "no such directory"),
+        ("sandbox_read_file", "read_file", {"path": "/nope"}, "no such file"),
+    ],
+)
+def test_a_guest_error_comes_back_as_a_tool_error(monkeypatch, name, method, args, message):
     kit, fake = hooked(monkeypatch)
 
-    def refused(path, data):
-        raise SilkdError("not_found", "no such directory")
+    def refused(*_):
+        raise SilkdError("not_found", message)
 
-    fake.write_file = refused
-    tool = next(t for t in kit.get_tools() if t.name == "sandbox_write_file")
-    assert "no such directory" in tool.invoke({"path": "/nope/a.txt", "content": "body"})
+    setattr(fake, method, refused)
+    tool = next(t for t in kit.get_tools() if t.name == name)
+    assert message in tool.invoke(args)
 
 
 def test_default_lease_outlives_an_agent_run(monkeypatch):
@@ -158,17 +165,6 @@ def test_a_failed_release_never_hides_the_block_error(monkeypatch):
     fake.close_error = APIError("release", 500, "boom")
     with pytest.raises(APIError), kit:
         kit.get_tools()[0].invoke({"command": "x"})
-
-
-def test_read_file_reports_a_missing_path_as_a_tool_error(monkeypatch):
-    kit, fake = hooked(monkeypatch)
-
-    def missing(path):
-        raise SilkdError("not_found", "no such file")
-
-    fake.read_file = missing
-    tool = next(t for t in kit.get_tools() if t.name == "sandbox_read_file")
-    assert "no such file" in tool.invoke({"path": "/nope"})
 
 
 def test_a_stalled_agent_upgrade_comes_back_as_a_tool_error():
