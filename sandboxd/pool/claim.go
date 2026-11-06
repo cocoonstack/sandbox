@@ -610,7 +610,7 @@ func (m *Manager) finalizeBatch(ctx context.Context, sbs []*types.Sandbox, ttl t
 	js := m.store.set(sbs...)
 	m.mu.Unlock()
 	if saveErr := m.store.commit(js); saveErr != nil {
-		m.rollbackClaim(ctx, sbs)
+		m.rollbackClaim(ctx, sbs, false)
 		return fmt.Errorf("persist claim: %w", saveErr)
 	}
 	// The claim event follows the commit at once, so a crash cannot restore a claim nothing billed
@@ -625,10 +625,7 @@ func (m *Manager) finalizeBatch(ctx context.Context, sbs []*types.Sandbox, ttl t
 	}
 	for _, sb := range sbs {
 		if armErr := m.out.Arm(ctx, sb); armErr != nil {
-			m.rollbackClaim(ctx, sbs)
-			for _, sb := range sbs {
-				m.recordUsage(ctx, usage.Event{Event: "release", ID: sb.ID, VMName: sb.VMName, Tenant: sb.Tenant})
-			}
+			m.rollbackClaim(ctx, sbs, true)
 			return fmt.Errorf("arm egress %s: %w", sb.ID, armErr)
 		}
 	}
@@ -636,7 +633,7 @@ func (m *Manager) finalizeBatch(ctx context.Context, sbs []*types.Sandbox, ttl t
 }
 
 // rollbackClaim unwinds a claim batch: a NIC that cannot be locked is never handed out.
-func (m *Manager) rollbackClaim(ctx context.Context, sbs []*types.Sandbox) {
+func (m *Manager) rollbackClaim(ctx context.Context, sbs []*types.Sandbox, billed bool) {
 	m.mu.Lock()
 	ids := make([]string, len(sbs))
 	holds := make([][]types.Volume, len(sbs))
@@ -648,8 +645,13 @@ func (m *Manager) rollbackClaim(ctx context.Context, sbs []*types.Sandbox) {
 	rb := m.store.del(ids...)
 	m.mu.Unlock()
 	m.store.recommit(ctx, rb)
-	for i, sb := range sbs {
+	for _, sb := range sbs {
+		if billed {
+			m.recordUsage(ctx, usage.Event{Event: "release", ID: sb.ID, VMName: sb.VMName, Tenant: sb.Tenant})
+		}
 		m.releaseTun(ctx, sb.ID, sb.TunAddr)
+	}
+	for i, sb := range sbs {
 		td := m.quiesceVolumes(ctx, sb)
 		td.holds = holds[i]
 		m.out.Disarm(sb.ID, m.removeOrRetry(ctx, sb.VMName, sb.ID, td))

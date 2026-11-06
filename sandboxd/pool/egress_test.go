@@ -17,6 +17,7 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/outbound"
 	"github.com/cocoonstack/sandbox/sandboxd/outbound/outboundtest"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
+	"github.com/cocoonstack/sandbox/sandboxd/usage"
 )
 
 func TestLaneVerdictReachesGuestOnColdBoots(t *testing.T) {
@@ -219,6 +220,26 @@ func TestLockUsesProvisionedTapWithoutList(t *testing.T) {
 	}
 }
 
+func TestArmFailureEndsTheClaimEventsBeforeTheTeardown(t *testing.T) {
+	eng := newFakeEngine()
+	m := egressManager(t, eng, config.PoolSpec{PoolKey: egKey, Egress: egPolicy})
+	stall := make(chan struct{})
+	eng.mu.Lock()
+	eng.removeStall = stall
+	eng.mu.Unlock()
+	sbs := []*types.Sandbox{{VMName: "sbx-ok", Key: testKey}, {VMName: "sbx-eg", Key: egKey}}
+	done := make(chan error, 1)
+	go func() { done <- m.finalizeBatch(t.Context(), sbs, time.Minute, "", false, nil) }()
+	waitFor(t, func() bool {
+		raw, _ := os.ReadFile(filepath.Join(m.dataDir, usage.JournalFile))
+		return strings.Count(string(raw), `"ev":"release"`) == len(sbs)
+	})
+	close(stall)
+	if err := <-done; err == nil {
+		t.Fatal("finalizeBatch must fail when a batch member cannot arm")
+	}
+}
+
 func TestBatchArmFailureEndsEveryClaimEvent(t *testing.T) {
 	eng := newFakeEngine()
 	m := egressManager(t, eng, config.PoolSpec{PoolKey: egKey, Egress: egPolicy})
@@ -269,7 +290,7 @@ func TestRollbackKeepsLockWhenRemoveFails(t *testing.T) {
 	m.out.KeepLock("sb_r1", "tap-r1")
 	m.out.KeepLock("sb_r2", "tap-r2")
 
-	m.rollbackClaim(t.Context(), sbs)
+	m.rollbackClaim(t.Context(), sbs, false)
 	waitFor(t, m.store.synced)
 
 	m.mu.Lock()

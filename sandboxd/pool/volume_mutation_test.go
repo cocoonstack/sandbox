@@ -851,7 +851,7 @@ func TestRollbackClaimTakesOverAdmittedRunHolds(t *testing.T) {
 	m := newVolumeManager(t, eng, liveCatalog(t))
 	sb := mustClaim(t, m, testKey)
 	run := beginAdmittedVolumeRun(t, m, sb)
-	m.rollbackClaim(t.Context(), []*types.Sandbox{sb})
+	m.rollbackClaim(t.Context(), []*types.Sandbox{sb}, false)
 	m.finishVolumeRun(sb, run)
 	waitFor(t, m.store.synced)
 	if got := volumeHoldersOf(m, "data"); got != (volumeHolders{}) {
