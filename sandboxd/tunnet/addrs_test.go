@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"testing/synctest"
 	"time"
 )
 
@@ -74,29 +75,31 @@ func TestLocalSkipsHeldAddressesAndHoldsFreedOnesForTheReuseWindow(t *testing.T)
 }
 
 func TestLocalCompactsTheLogToTheLiveHolds(t *testing.T) {
-	dir := t.TempDir()
-	l, err := NewLocal(dir, netip.MustParsePrefix("10.1.0.0/16"), 20*time.Millisecond)
-	if err != nil {
-		t.Fatal(err)
-	}
-	churn := func(from, to int) {
-		for i := from; i < to; i++ {
-			id := fmt.Sprint(i)
-			if relErr := l.Release(t.Context(), id, assign(t, l, id)); relErr != nil {
-				t.Fatalf("release %d: %v", i, relErr)
+	synctest.Test(t, func(t *testing.T) {
+		dir := t.TempDir()
+		l, err := NewLocal(dir, netip.MustParsePrefix("10.1.0.0/16"), 20*time.Millisecond)
+		if err != nil {
+			t.Fatal(err)
+		}
+		churn := func(from, to int) {
+			for i := from; i < to; i++ {
+				id := fmt.Sprint(i)
+				if relErr := l.Release(t.Context(), id, assign(t, l, id)); relErr != nil {
+					t.Fatalf("release %d: %v", i, relErr)
+				}
 			}
 		}
-	}
-	churn(0, compactAfter-24)
-	time.Sleep(30 * time.Millisecond)
-	churn(compactAfter-24, compactAfter+100)
-	raw, err := os.ReadFile(filepath.Join(dir, freedFile))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if n := bytes.Count(raw, []byte("\n")); n > 200 {
-		t.Errorf("log holds %d lines after its expired holds were compacted away, want at most 200", n)
-	}
+		churn(0, compactAfter-24)
+		time.Sleep(30 * time.Millisecond)
+		churn(compactAfter-24, compactAfter+100)
+		raw, err := os.ReadFile(filepath.Join(dir, freedFile))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if n := bytes.Count(raw, []byte("\n")); n > 200 {
+			t.Errorf("log holds %d lines after its expired holds were compacted away, want at most 200", n)
+		}
+	})
 }
 
 func TestLocalRefusesWhenTheSubnetIsFull(t *testing.T) {

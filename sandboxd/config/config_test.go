@@ -419,21 +419,18 @@ func TestLoadAcceptsEgressPolicy(t *testing.T) {
 	}
 }
 
-func TestLoadAcceptsUnguardedCNINetwork(t *testing.T) {
-	path := writeConfig(t, `{"networks":["cni"],"pools":[{"template":"rt:24.04","net":"egress","size":"small"}]}`)
-	if _, err := Load(path); err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-}
-
-func TestLoadAcceptsNoneLanePolicyOnCNI(t *testing.T) {
-	for _, body := range []string{
-		`{"networks":["cni"],"pools":[{"template":"rt:24.04","net":"none","size":"small","egress":{"allow":[{"host":"x"}]}}]}`,
-		`{"networks":["cni"],"pools":[{"template":"rt:24.04","net":"egress","size":"small"},{"template":"rt:24.04","net":"none","size":"medium","egress":{"allow":[{"host":"x"}]}}]}`,
+func TestLoadAcceptsValidNetworkShapes(t *testing.T) {
+	for name, body := range map[string]string{
+		"unguarded cni network":              `{"networks":["cni"],"pools":[{"template":"rt:24.04","net":"egress","size":"small"}]}`,
+		"none-lane policy on cni":            `{"networks":["cni"],"pools":[{"template":"rt:24.04","net":"none","size":"small","egress":{"allow":[{"host":"x"}]}}]}`,
+		"none-lane policy beside cni egress": `{"networks":["cni"],"pools":[{"template":"rt:24.04","net":"egress","size":"small"},{"template":"rt:24.04","net":"none","size":"medium","egress":{"allow":[{"host":"x"}]}}]}`,
+		"guarded egress on a bridges list":   `{"bridges":["sbx0","sbx1"],"pools":[{"template":"rt:24.04","net":"egress","size":"small","egress":{"allow":[{"host":"x"}]}}]}`,
 	} {
-		if _, err := Load(writeConfig(t, body)); err != nil {
-			t.Errorf("Load rejected a none-lane policy on CNI: %v", err)
-		}
+		t.Run(name, func(t *testing.T) {
+			if _, err := Load(writeConfig(t, body)); err != nil {
+				t.Errorf("Load: %v", err)
+			}
+		})
 	}
 }
 
@@ -520,13 +517,6 @@ func TestLoadRejectsUnusableNetworkLists(t *testing.T) {
 				t.Error("Load accepted an unusable network list; want rejection")
 			}
 		})
-	}
-}
-
-func TestLoadAcceptsGuardedEgressOnABridgesList(t *testing.T) {
-	path := writeConfig(t, `{"bridges":["sbx0","sbx1"],"pools":[{"template":"rt:24.04","net":"egress","size":"small","egress":{"allow":[{"host":"x"}]}}]}`)
-	if _, err := Load(path); err != nil {
-		t.Fatalf("guarded egress on a bridges list must load (taps stay in the root netns): %v", err)
 	}
 }
 

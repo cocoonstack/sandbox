@@ -135,7 +135,7 @@ func TestArmEgressLocksEgressLaneWithoutPolicy(t *testing.T) {
 	}
 }
 
-func TestLockFallsBackToALookupForPreTapClaims(t *testing.T) {
+func TestLockFallsBackToALookupForAClaimWithoutARecordedTap(t *testing.T) {
 	eng := &fakeEngine{taps: map[string]string{"sbx-old": "tap-fake1"}}
 	var taps outboundtest.TapLog
 	h := newHost(t, eng, poolConfig(egKey, egPolicy), func(o *Options) {

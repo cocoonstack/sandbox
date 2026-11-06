@@ -200,8 +200,7 @@ func TestRouterChargesSegmentsAndRefusesOversizedPackets(t *testing.T) {
 	r.Arm(Claim{ID: "c1", Addr: claimAddr, Limits: Limits{PacketsPerSecond: 10}, Allow: func(netip.Addr, uint16) bool { return true }})
 	u.sent(t)
 	go func() {
-		for s := range u.out {
-			_ = s
+		for range u.out {
 		}
 	}()
 	guest := serve(t, r, claimAddr)
@@ -244,17 +243,7 @@ func TestRouterHandsAnICMPErrorBackWithTheQuotedGuestAddress(t *testing.T) {
 	guestHello(t, guest)
 	sendFrame(t, guest, frame(ProtoTCP, GuestAddr, remote, false))
 	inner, _, _ := u.sent(t)
-	icmp := make([]byte, 20+8+28)
-	icmp[0], icmp[8], icmp[9] = 0x45, 64, ProtoICMP
-	binary.BigEndian.PutUint16(icmp[2:], uint16(len(icmp)))
-	s, d := remote.As4(), claimAddr.As4()
-	copy(icmp[srcAt:], s[:])
-	copy(icmp[dstAt:], d[:])
-	binary.BigEndian.PutUint16(icmp[10:], ^fold(onesSum(icmp[:20], 0)))
-	icmp[20], icmp[21] = icmpUnreachable, 4
-	copy(icmp[28:], inner[:28])
-	binary.BigEndian.PutUint16(icmp[22:], ^fold(onesSum(icmp[20:], 0)))
-	u.inject(t, append(appendHeader(nil, 7, MAC(claimAddr), exitMAC, etherIPv4), icmp...))
+	u.inject(t, append(appendHeader(nil, 7, MAC(claimAddr), exitMAC, etherIPv4), unreachable(remote, claimAddr, 4, inner[:28])...))
 	got := readFrame(t, guest)
 	ip := got[VnetHdrLen:]
 	if netip.AddrFrom4([4]byte(ip[28+srcAt:])) != GuestAddr || fold(onesSum(ip[20:], 0)) != 0xffff || fold(onesSum(ip[28:48], 0)) != 0xffff || !validIP(got) {
@@ -349,18 +338,7 @@ func TestRouterPointsAGuestICMPErrorAtTheClaimAddress(t *testing.T) {
 	guest := serve(t, r, claimAddr)
 	guestHello(t, guest)
 	quoted := frame(ProtoUDP, remote, GuestAddr, false)[VnetHdrLen:][:28]
-	icmp := make([]byte, VnetHdrLen+20+8+28)
-	ip := icmp[VnetHdrLen:]
-	ip[0], ip[8], ip[9] = 0x45, 64, ProtoICMP
-	binary.BigEndian.PutUint16(ip[2:], uint16(len(ip)))
-	s, d := GuestAddr.As4(), remote.As4()
-	copy(ip[srcAt:], s[:])
-	copy(ip[dstAt:], d[:])
-	binary.BigEndian.PutUint16(ip[10:], ^fold(onesSum(ip[:20], 0)))
-	ip[20], ip[21] = icmpUnreachable, 3
-	copy(ip[28:], quoted)
-	binary.BigEndian.PutUint16(ip[22:], ^fold(onesSum(ip[20:], 0)))
-	sendFrame(t, guest, icmp)
+	sendFrame(t, guest, append(make([]byte, VnetHdrLen), unreachable(GuestAddr, remote, 3, quoted)...))
 	inner, _, _ := u.sent(t)
 	if got := netip.AddrFrom4([4]byte(inner[28+dstAt:])); got != claimAddr || fold(onesSum(inner[20:], 0)) != 0xffff {
 		t.Errorf("quoted destination %v, icmp checksum %#x; want the claim address and a valid checksum", got, fold(onesSum(inner[20:], 0)))
@@ -448,6 +426,20 @@ func dataSegment(seq uint32, payload int) []byte {
 	}
 	binary.BigEndian.PutUint16(tcp[16:], ^fold(onesSum(tcp, pseudoSum(ip, len(tcp)))))
 	return append(appendHeader(nil, 7, MAC(claimAddr), exitMAC, etherIPv4), ip...)
+}
+
+func unreachable(src, dst netip.Addr, code byte, quoted []byte) []byte {
+	ip := make([]byte, 20+8+28)
+	ip[0], ip[8], ip[9] = 0x45, 64, ProtoICMP
+	binary.BigEndian.PutUint16(ip[2:], uint16(len(ip)))
+	s, d := src.As4(), dst.As4()
+	copy(ip[srcAt:], s[:])
+	copy(ip[dstAt:], d[:])
+	binary.BigEndian.PutUint16(ip[10:], ^fold(onesSum(ip[:20], 0)))
+	ip[20], ip[21] = icmpUnreachable, code
+	copy(ip[28:], quoted)
+	binary.BigEndian.PutUint16(ip[22:], ^fold(onesSum(ip[20:], 0)))
+	return ip
 }
 
 func waitFor(t *testing.T, ok func() bool) {

@@ -3,6 +3,7 @@ package tunnet
 import (
 	"bytes"
 	"encoding/binary"
+	"slices"
 	"testing"
 )
 
@@ -10,7 +11,7 @@ func TestSegmentSplitsTCPAtGSOSizeWithValidHeaders(t *testing.T) {
 	f := gsoFrame(ProtoTCP, 5000, 1400)
 	ip := f[VnetHdrLen:]
 	ip[20+13] = tcpFin | tcpPsh | tcpCwr
-	payload := append([]byte(nil), ip[40:]...)
+	payload := slices.Clone(ip[40:])
 	got := segments(f)
 	if len(got) != 4 {
 		t.Fatalf("segments = %d, want 4", len(got))

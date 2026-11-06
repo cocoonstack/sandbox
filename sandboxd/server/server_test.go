@@ -828,7 +828,7 @@ func TestPutPoolsUpdatesTargets(t *testing.T) {
 	}
 }
 
-func TestReleaseAndHibernateMapEachOutcomeToItsStatus(t *testing.T) {
+func TestReleaseHibernateAndWakeMapEachOutcomeToItsStatus(t *testing.T) {
 	verbs := []struct {
 		name string
 		hook func(f *fakeManager, h sandboxVerbFunc)
