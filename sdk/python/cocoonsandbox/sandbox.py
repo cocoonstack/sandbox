@@ -21,6 +21,7 @@ from .errors import (
     SandboxTimeout,
     SilkdError,
     VolumeError,
+    _DialError,
     _mark_gone,
     _require_field,
 )
@@ -849,6 +850,7 @@ def _drain_data(conn: Conn) -> bytes:
 
 
 def _owner_answer(exc: APIError, tag: tuple[str, str]) -> APIError:
-    if exc.status == 404 or isinstance(exc.__cause__, ConnectionRefusedError):
+    cause = exc.__cause__.__cause__ if isinstance(exc.__cause__, _DialError) else exc.__cause__
+    if exc.status == 404 or isinstance(cause, ConnectionRefusedError):
         return _mark_gone(exc, tag)
     return exc

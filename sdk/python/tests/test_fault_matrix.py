@@ -228,15 +228,19 @@ def test_close_releases_a_sandbox_that_moved(spawn_node, dead_addr, retired):
     assert released
 
 
-def test_a_moved_sandbox_retries_a_control_call_at_its_new_owner(spawn_node):
+@pytest.mark.parametrize("retired", [False, True], ids=["old_node_404", "old_node_retired"])
+def test_a_moved_sandbox_retries_a_control_call_at_its_new_owner(spawn_node, dead_addr, retired):
     adopter = spawn_node(
         {
             ("GET", "/v1/sandboxes/sb_1/owner"): lambda body, path: (200, {}),
             ("POST", "/v1/sandboxes/sb_1/renew"): lambda body, path: (200, {"deadline": "2026-11-06T12:00:00Z"}),
         }
     )
-    old = spawn_node({("GET", "/v1/peers"): lambda body, path: (200, {"peers": [adopter]})})
-    sb = Client(old).attach(old, "sb_1", "tok")
+    if retired:
+        entry, old = adopter, dead_addr
+    else:
+        entry = old = spawn_node({("GET", "/v1/peers"): lambda body, path: (200, {"peers": [adopter]})})
+    sb = Client(entry).attach(old, "sb_1", "tok")
     assert sb.renew(60) == "2026-11-06T12:00:00Z"
     assert sb.owner == adopter
 
