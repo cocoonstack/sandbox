@@ -3,6 +3,7 @@ package udp_test
 import (
 	"bytes"
 	"encoding/binary"
+	"fmt"
 	"io"
 	"net"
 	"net/netip"
@@ -48,54 +49,55 @@ func TestTrafficCrossesAKernelExit(t *testing.T) {
 	go func() { _ = r.Serve(host, claimAddr) }()
 	go pumpGuest(tun, guest)
 
-	inNetns(t, "inet", func() {
+	inNetns(t, "inet", func() error {
 		l, err := net.Listen("tcp", "10.98.0.2:7000")
 		if err != nil {
-			t.Fatal(err)
+			return err
 		}
 		c, err := net.ListenPacket("udp", "10.98.0.2:7001")
 		if err != nil {
-			t.Fatal(err)
+			return err
 		}
 		go echoTCP(l)
 		go echoUDP(c)
+		return nil
 	})
-	time.Sleep(300 * time.Millisecond)
 	waitNeigh(t)
 
-	var got []byte
-	inNetns(t, "guest", func() {
+	inNetns(t, "guest", func() error {
 		c, err := net.DialTimeout("tcp", "10.98.0.2:7000", 5*time.Second)
 		if err != nil {
-			t.Log(run(t, "sh", "-c", "ip netns exec guest cat /proc/net/snmp | grep -E '^(Ip|Tcp|Udp):'; ip netns exec exit cat /proc/net/snmp | grep -E '^(Ip|Tcp):'; ip netns exec exit conntrack -L 2>&1 | head; ip -n exit -s link show vxlan0 | head -8"))
-			t.Fatalf("tcp through the exit: %v", err)
+			diag, _ := runOut("sh", "-c", "ip netns exec guest cat /proc/net/snmp | grep -E '^(Ip|Tcp|Udp):'; ip netns exec exit cat /proc/net/snmp | grep -E '^(Ip|Tcp):'; ip netns exec exit conntrack -L 2>&1 | head; ip -n exit -s link show vxlan0 | head -8")
+			t.Log(diag)
+			return fmt.Errorf("tcp through the exit: %w", err)
 		}
 		defer func() { _ = c.Close() }()
 		start := time.Now()
 		go func() { _, _ = c.Write(bytes.Repeat([]byte{0x5a}, bulk)); _ = c.(*net.TCPConn).CloseWrite() }()
-		got, err = io.ReadAll(c)
+		got, err := io.ReadAll(c)
 		if err != nil || len(got) != bulk {
-			t.Fatalf("tcp echo %d bytes, err %v", len(got), err)
+			return fmt.Errorf("tcp echo %d bytes, err %v", len(got), err)
 		}
 		t.Logf("tcp echo %d MiB both ways in %v", bulk>>20, time.Since(start))
 		u, err := net.Dial("udp", "10.98.0.2:7001")
 		if err != nil {
-			t.Fatal(err)
+			return err
 		}
 		defer func() { _ = u.Close() }()
 		_ = u.SetReadDeadline(time.Now().Add(3 * time.Second))
 		if _, err = u.Write([]byte("ping")); err != nil {
-			t.Fatal(err)
+			return err
 		}
 		b := make([]byte, 64)
 		n, err := u.Read(b)
 		if err != nil || !strings.HasPrefix(string(b[:n]), "10.98.0.1") {
-			t.Fatalf("udp echo %q %v, want the exit's masquerade address", b[:n], err)
+			return fmt.Errorf("udp echo %q %v, want the exit's masquerade address", b[:n], err)
 		}
 		other, _ := net.DialTimeout("tcp", otherAddr.String()+":7000", 500*time.Millisecond)
 		if other != nil {
 			t.Error("a claim reached another claim's overlay address")
 		}
+		return nil
 	})
 	ct := run(t, "ip", "netns", "exec", "exit", "conntrack", "-L", "-s", claimAddr.String())
 	if !strings.Contains(ct, "src="+claimAddr.String()) {
@@ -143,20 +145,21 @@ NFT
 func guestTun(t *testing.T) *os.File {
 	t.Helper()
 	var f *os.File
-	inNetns(t, "guest", func() {
+	inNetns(t, "guest", func() error {
 		fd, err := unix.Open("/dev/net/tun", unix.O_RDWR|unix.O_CLOEXEC, 0)
 		if err != nil {
-			t.Fatal(err)
+			return err
 		}
 		ifr, _ := unix.NewIfreq("tun0")
 		ifr.SetUint16(unix.IFF_TUN | unix.IFF_NO_PI | unix.IFF_VNET_HDR)
 		if err = unix.IoctlIfreq(fd, unix.TUNSETIFF, ifr); err != nil {
-			t.Fatal(err)
+			return err
 		}
 		if err = unix.IoctlSetInt(fd, unix.TUNSETOFFLOAD, tunnet.OffloadCSUM|tunnet.OffloadTSO4|tunnet.OffloadTSO6|tunnet.OffloadTSOECN); err != nil {
-			t.Fatal(err)
+			return err
 		}
 		f = os.NewFile(uintptr(fd), "tun0")
+		return nil
 	})
 	run(t, "sh", "-c", "ip -n guest addr add 100.64.0.2/30 dev tun0 && ip -n guest link set tun0 mtu 1450 up && ip -n guest route add default via 100.64.0.1")
 	return f
@@ -230,32 +233,38 @@ func waitNeigh(t *testing.T) {
 }
 
 // inNetns runs fn on a thread inside netns name; sockets fn opens stay in that netns.
-func inNetns(t *testing.T, name string, fn func()) {
+func inNetns(t *testing.T, name string, fn func() error) {
 	t.Helper()
-	done := make(chan struct{})
+	errc := make(chan error, 1)
 	go func() {
-		defer close(done)
 		runtime.LockOSThread()
 		f, err := os.Open("/var/run/netns/" + name)
 		if err != nil {
-			t.Error(err)
+			errc <- err
 			return
 		}
 		defer func() { _ = f.Close() }()
 		if err = unix.Setns(int(f.Fd()), unix.CLONE_NEWNET); err != nil {
-			t.Error(err)
+			errc <- err
 			return
 		}
-		fn()
+		errc <- fn()
 	}()
-	<-done
+	if err := <-errc; err != nil {
+		t.Fatal(err)
+	}
 }
 
 func run(t *testing.T, name string, args ...string) string {
 	t.Helper()
-	out, err := exec.Command(name, args...).CombinedOutput()
+	out, err := runOut(name, args...)
 	if err != nil {
 		t.Fatalf("%s %v: %v\n%s", name, args, err, out)
 	}
-	return string(out)
+	return out
+}
+
+func runOut(name string, args ...string) (string, error) {
+	out, err := exec.Command(name, args...).CombinedOutput()
+	return string(out), err
 }
