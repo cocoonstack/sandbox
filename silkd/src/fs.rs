@@ -12,6 +12,7 @@ use tokio::sync::mpsc;
 use crate::proto::{
     self, BULK_CHUNK, DirEntry, ErrorKind, FileInfo, FileKind, Response, err_frame,
 };
+use crate::sysutil;
 
 /// Entries per `entries` frame; a worst-case 1.6KiB entry keeps a full batch under MAX_FRAME.
 pub const LIST_BATCH: usize = 4096;
@@ -214,7 +215,7 @@ fn scan_dir(path: &str, tx: &mpsc::Sender<Vec<DirEntry>>) -> io::Result<()> {
 fn tmp_name(path: &Path) -> PathBuf {
     let mut tmp = path.as_os_str().to_os_string();
     tmp.push(".silkd-");
-    tmp.push(crate::sysutil::tmp_suffix());
+    tmp.push(sysutil::tmp_suffix());
     tmp.push(".tmp");
     PathBuf::from(tmp)
 }

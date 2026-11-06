@@ -130,8 +130,7 @@ pub fn start_in(cmd: &mut Command, dir: &OwnedFd) {
     // SAFETY: fchdir is async-signal-safe and `dir` outlives the spawn that runs this hook.
     unsafe {
         cmd.pre_exec(move || {
-            nix::unistd::fchdir(std::os::fd::BorrowedFd::borrow_raw(fd))
-                .map_err(std::io::Error::from)
+            nix::unistd::fchdir(BorrowedFd::borrow_raw(fd)).map_err(std::io::Error::from)
         })
     };
 }

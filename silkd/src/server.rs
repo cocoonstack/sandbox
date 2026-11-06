@@ -9,7 +9,7 @@ use tokio::task::JoinHandle;
 
 use crate::proc::{Chunk, Table, write_chunk};
 use crate::proto::{self, ErrorKind, ExecReq, ProcInfo, Request, Response};
-use crate::{exec, find, forward, fs, git, lsp, pty, session, tree, tun, watch};
+use crate::{exec, find, forward, fs, git, lsp, pty, session, sysutil, tree, tun, watch};
 
 type Parsed = serde_json::Result<Request>;
 type Feeder<R> = JoinHandle<(R, Option<Parsed>)>;
@@ -92,7 +92,7 @@ impl State {
                 match self.sessions.create(id, cwd.as_deref(), &env).await {
                     Ok(id) => proto::write_frame(writer, &Response::SessionCreated { id }).await,
                     Err(e) => {
-                        let kind = crate::exec::spawn_kind(&e);
+                        let kind = exec::spawn_kind(&e);
                         proto::error_frame(writer, kind, format!("session create: {e}")).await
                     }
                 }
@@ -278,7 +278,7 @@ impl State {
         };
         // an exited pid may already be recycled, so signalling it would hit an unrelated process.
         if proc.exit_code().is_none() {
-            crate::sysutil::signal_group(proc.pid, signal.unwrap_or(libc::SIGKILL));
+            sysutil::signal_group(proc.pid, signal.unwrap_or(libc::SIGKILL));
         }
         proto::write_frame(w, &Response::Done).await
     }
