@@ -158,6 +158,9 @@ func (m *Manager) wakeOrRead(ctx context.Context, sb *types.Sandbox, readerOK bo
 	}
 	sb.Transition.Lock()
 	defer sb.Transition.Unlock()
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	if sb.ArchiveCk != "" {
 		if readerOK && sb.ReaderSafe {
 			return "", ErrSleeping
