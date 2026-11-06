@@ -149,6 +149,25 @@ func TestRouterQuotaStopsTraffic(t *testing.T) {
 	}
 }
 
+func TestRouterChargesNothingForAFrameWithNoExit(t *testing.T) {
+	_, r := newRouter()
+	used := new(atomic.Int64)
+	r.Arm(Claim{ID: "c1", Addr: claimAddr, Profile: "nowhere", Used: used, Allow: func(netip.Addr, uint16) bool { return true }})
+	guest := serve(t, r, claimAddr)
+	guestHello(t, guest)
+	sendFrame(t, guest, frame(ProtoTCP, GuestAddr, remote, false))
+	waitFor(t, func() bool { return r.Stats().Drops[DropNoExit] == 1 })
+	r.mu.RLock()
+	a := r.claims[claimAddr]
+	r.mu.RUnlock()
+	a.flows.mu.RLock()
+	opened := len(a.flows.table)
+	a.flows.mu.RUnlock()
+	if used.Load() != 0 || opened != 0 {
+		t.Errorf("used %d bytes and opened %d flows for a frame that never left", used.Load(), opened)
+	}
+}
+
 func TestDeliverCoalescesInOrderSegmentsIntoOneGSOFrame(t *testing.T) {
 	u, r := newRouter()
 	r.Arm(Claim{ID: "c1", Addr: claimAddr, Allow: func(netip.Addr, uint16) bool { return true }})
