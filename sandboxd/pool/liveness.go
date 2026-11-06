@@ -178,7 +178,7 @@ func (m *Manager) recoverVMM(ctx context.Context, sb *types.Sandbox) {
 	defer sb.Transition.Unlock()
 	now := time.Now()
 	m.mu.Lock()
-	live := m.claimed[sb.ID] == sb && m.vmSettledLocked(sb) && !m.leaseLapsed(sb, now)
+	live := m.claimed[sb.ID] == sb && m.vmSettledLocked(sb) && !m.leaseLapsed(sb, now) && !(sb.Replicated && m.isFenced())
 	volumes := m.hasVolumeHolds(sb)
 	m.mu.Unlock()
 	if !live {

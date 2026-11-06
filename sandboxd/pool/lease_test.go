@@ -351,6 +351,22 @@ func TestLeaseFencedNodeDoesNotAnswerAsOwnerOfReplicatedClaims(t *testing.T) {
 	}
 }
 
+func TestLeaseFencedNodeLeavesAReplicatedClaimsExitedVMMAlone(t *testing.T) {
+	c := newReplicaCluster(t)
+	eng := newFakeEngine()
+	a := c.nodeOn(t, eng, "a", t.TempDir(), keepAnHour)
+	a.liftFence()
+	sb := mustClaim(t, a, testKey)
+	replicateNow(t, a, sb)
+	a.tripFence()
+	before := usageEventsOf(t, a, sb.ID)
+	killVMM(eng, sb.VMName)
+	a.recoverVMM(t.Context(), sb)
+	if got := usageEventsOf(t, a, sb.ID); got != before {
+		t.Errorf("events %q after %q, want nothing journaled for a claim a peer may have adopted", got, before)
+	}
+}
+
 func TestLeaseLiftAfterTheWindowClosedFencesAgain(t *testing.T) {
 	c := newReplicaCluster(t)
 	a := c.node(t, "a", t.TempDir(), keepAnHour)
