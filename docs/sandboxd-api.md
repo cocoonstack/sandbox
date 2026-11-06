@@ -524,12 +524,11 @@ sandbox instead uses `archive_delete_after_seconds` as its retention deadline
 while stored, and waking it starts a fresh lease of the length the claim was granted (the server default when it asked for none). A
 [failed](deploy.md#dead-vmms-and-host-restarts) sandbox is cold-booted from
 its own disk (memory is lost) and its restart budget resets. 204 on
-success, 404 unknown id or wrong token, 409 a failed egress-lane or volume
-sandbox, or one whose VM record is gone, 429 when `max_running` or
-`disk_reserve` refuses the wake, 503 with `Retry-After` when an archived
-sandbox the node had no room for was [handed to a peer](cluster.md#waking-an-archived-claim-on-a-full-node)
-(look it up again; this node then answers 404), 500 when the cold boot or a
-restore fails, and the [guest errors](#guest-errors).
+success, 404 unknown id or wrong token, or an archived sandbox the node had no
+room for that it [handed to a peer](cluster.md#waking-an-archived-claim-on-a-full-node)
+(look it up again), 409 a failed egress-lane or volume sandbox, or one whose VM
+record is gone, 429 when `max_running` or `disk_reserve` refuses the wake, 500
+when the cold boot or a restore fails, and the [guest errors](#guest-errors).
 
 ## POST /v1/sandboxes/{id}/renew
 

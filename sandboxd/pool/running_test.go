@@ -273,8 +273,8 @@ func TestAnArchivedWakeOnAFullOwnerMovesToAPeerWithRoom(t *testing.T) {
 	mustArchive(t, a, sb)
 	mustClaim(t, a, testKey)
 	editView(a, func(v *configView) { v.maxRunning = 1 })
-	if err := wakeClaim(t, a, sb); !errors.Is(err, ErrEvacuating) {
-		t.Fatalf("wake on a full owner: %v, want ErrEvacuating while a peer takes it", err)
+	if err := wakeClaim(t, a, sb); !errors.Is(err, ErrUnknownSandbox) {
+		t.Fatalf("wake on a full owner: %v, want ErrUnknownSandbox once a peer took it", err)
 	}
 	if _, held := a.byID(sb.ID); held {
 		t.Error("the full owner still lists the handed-off claim")

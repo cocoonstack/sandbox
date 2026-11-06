@@ -278,16 +278,15 @@ release and adoption an evacuation uses:
   `GET /v1/sandboxes/{id}/owner?room=1`. A peer adopts only while it could
   admit the wake itself: not draining, cordoned or fenced, above
   `disk_reserve` and under `max_running`.
-- When a peer adopts, the owner forgets the claim and the wake answers 503 with
-  `Retry-After`. The client's next call to the old owner gets 404, and its
-  `Lookup` finds the peer, which wakes the claim there. The hand-off counts in
-  `sandboxd_wake_handoffs_total`.
+- When a peer adopts, the owner forgets the claim and the wake answers 404, as
+  after an evacuation. The client's `Lookup` finds the peer, which wakes the
+  claim there. The hand-off counts in `sandboxd_wake_handoffs_total`.
 - When no peer adopts (no peer, or every peer full or closed), the owner takes
   the row back and the wake answers 429 as before. A node runs one hand-off at
   a time, and after one fails it asks no peer for 30 seconds, so clients
   retrying a full cell cost no registry writes.
 - Two wakes of one claim queue on its transition lock. One that waited behind
-  a hand-off answers 404, so it never hands the claim off twice.
+  a hand-off also answers 404, so it never hands the claim off twice.
 - A peer's room is checked when it adopts, not reserved. If the peer fills up
   before the client's wake arrives, that wake is refused there and may be
   handed on again.

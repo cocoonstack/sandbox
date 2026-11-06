@@ -205,7 +205,7 @@ func (m *Manager) wakeArchived(ctx context.Context, sb *types.Sandbox) (string, 
 	}
 	if err := m.beginWake(sb); err != nil {
 		if errors.Is(err, ErrQuota) && m.handOffForRoom(ctx, sb) {
-			return "", fmt.Errorf("wake %s: %w", sb.ID, ErrEvacuating)
+			return "", fmt.Errorf("wake %s: %w", sb.ID, ErrUnknownSandbox)
 		}
 		return "", fmt.Errorf("wake %s: %w", sb.ID, err)
 	}
