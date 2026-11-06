@@ -160,6 +160,12 @@ type tunFlowFrame struct {
 	Profile  string         `json:"profile"`
 }
 
+type stamped[F any] struct {
+	Time  time.Time `json:"t"`
+	ID    string    `json:"id"`
+	Frame F         `json:",embed"`
+}
+
 func (m *Manager) Counters() Counters {
 	c := &m.counters
 	warm, clone, cold := c.claimWarmLatency.snapshot(), c.claimCloneLatency.snapshot(), c.claimColdLatency.snapshot()
@@ -225,11 +231,7 @@ func (m *Manager) recordAudit(ctx context.Context, id string, frame auditFrame) 
 	if m.audit == nil {
 		return
 	}
-	m.appendAudit(ctx, struct {
-		Time time.Time `json:"t"`
-		ID   string    `json:"id"`
-		auditFrame
-	}{time.Now(), id, frame})
+	m.appendAudit(ctx, stamped[auditFrame]{time.Now(), id, frame})
 }
 
 func (m *Manager) appendAudit(ctx context.Context, event any) {
@@ -247,15 +249,10 @@ func (m *Manager) recordEgress(ctx context.Context, id, tenant string, ev egress
 		decision = "rate_limited"
 	}
 	if m.audit != nil {
-		m.appendAudit(ctx, struct {
-			Time time.Time `json:"t"`
-			ID   string    `json:"id"`
-			egressFrame
-		}{
-			Time: time.Now(), ID: id,
+		m.appendAudit(ctx, stamped[egressFrame]{time.Now(), id, egressFrame{
 			Op: egressEvent, Dest: ev.Host, Method: ev.Method, Port: ev.Port, Decision: decision, Secret: ev.Injected, Upstream: ev.Upstream,
 			Tenant: tenant, Src: ev.Local, Dst: ev.Remote,
-		})
+		}})
 	}
 	m.recordUsage(ctx, usage.Event{Event: egressEvent, ID: id, Tenant: tenant, Reference: ev.Host, Upstream: ev.Upstream, Secret: ev.Injected})
 }
@@ -264,11 +261,7 @@ func (m *Manager) recordDNS(ctx context.Context, id, tenant string, ev outbound.
 	if m.audit == nil {
 		return
 	}
-	m.appendAudit(ctx, struct {
-		Time time.Time `json:"t"`
-		ID   string    `json:"id"`
-		dnsFrame
-	}{time.Now(), id, dnsFrame{Op: dnsEvent, Name: ev.Name, Type: ev.Type, Answers: ev.Answers, Decision: ev.Decision, Tenant: tenant}})
+	m.appendAudit(ctx, stamped[dnsFrame]{time.Now(), id, dnsFrame{Op: dnsEvent, Name: ev.Name, Type: ev.Type, Answers: ev.Answers, Decision: ev.Decision, Tenant: tenant}})
 }
 
 func (m *Manager) recordTunFlow(ctx context.Context, id, tenant, profile string, r tunnet.FlowRecord) {
@@ -279,15 +272,10 @@ func (m *Manager) recordTunFlow(ctx context.Context, id, tenant, profile string,
 	if r.Allowed {
 		decision = "allow"
 	}
-	m.appendAudit(ctx, struct {
-		Time time.Time `json:"t"`
-		ID   string    `json:"id"`
-		tunFlowFrame
-	}{
-		Time: r.End, ID: id,
+	m.appendAudit(ctx, stamped[tunFlowFrame]{r.End, id, tunFlowFrame{
 		Op: tunFlowEvent, Path: tunFlowPath, Tenant: tenant, Proto: protoName(r.Proto), Dst: netip.AddrPortFrom(r.Dst, r.Port),
 		Decision: decision, Sent: r.Up, Received: r.Down, Start: r.Start, End: r.End, Profile: cmp.Or(profile, "default"),
-	})
+	}})
 }
 
 func (m *Manager) recordUsage(ctx context.Context, ev usage.Event) {
