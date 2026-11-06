@@ -2,6 +2,7 @@ package tunnet
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/binary"
 	"errors"
@@ -142,9 +143,7 @@ func (l *Local) Release(_ context.Context, claimID string, addr netip.Addr) erro
 		return fmt.Errorf("open %s: %w", freedFile, err)
 	}
 	_, err = f.Write(appendFreed(nil, addr, now))
-	if closeErr := f.Close(); err == nil {
-		err = closeErr
-	}
+	err = cmp.Or(err, f.Close())
 	if err != nil {
 		return fmt.Errorf("append %s: %w", freedFile, err)
 	}
