@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"slices"
 	"sync/atomic"
-	"time"
 
 	"github.com/projecteru2/core/log"
 
@@ -195,16 +194,11 @@ func (s *Server) serveSleeping(ctx context.Context, w http.ResponseWriter, id, t
 	if !ok {
 		return
 	}
-	release, ok := s.trackRelay(client, io.NopCloser(nil))
+	release, ok := s.openRelay(client, io.NopCloser(nil), switchingProtocols)
 	if !ok {
 		return
 	}
 	defer release()
-	_ = client.SetDeadline(time.Time{})
-	keepAlive(client)
-	if _, err := client.Write(switchingProtocols); err != nil {
-		return
-	}
 	rt := &router{s: s, ctx: ctx, id: id, token: token, client: client, br: bufio.NewReaderSize(clientReader(client, clientBuf), routeBuf)}
 	guest, done, ok := rt.run()
 	if !ok {

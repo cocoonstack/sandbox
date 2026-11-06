@@ -109,23 +109,16 @@ func (s *Server) audited(ctx context.Context, id string, clientR io.Reader) io.R
 }
 
 func (s *Server) splice(client net.Conn, clientR io.Reader, guest net.Conn, hello []byte, ends relayEnds) {
-	release, ok := s.trackRelay(client, guest)
+	release, ok := s.openRelay(client, guest, hello)
 	if !ok {
 		return
 	}
 	defer release()
-
-	// The http server may have armed a header-read deadline on this conn
-	_ = client.SetDeadline(time.Time{})
-	keepAlive(client)
-	if _, err := client.Write(hello); err != nil {
-		return
-	}
 	copyBoth(client, clientR, guest, ends, s.noSplice)
 }
 
-// trackRelay registers a hijacked pair for CloseRelays; !ok means the server is already draining.
-func (s *Server) trackRelay(client net.Conn, guest io.Closer) (func(), bool) {
+// openRelay registers a hijacked pair for CloseRelays and sends hello; !ok means the server is draining or the client is gone.
+func (s *Server) openRelay(client net.Conn, guest io.Closer, hello []byte) (func(), bool) {
 	s.relayMu.Lock()
 	if s.relayClosed {
 		s.relayMu.Unlock()
@@ -136,14 +129,22 @@ func (s *Server) trackRelay(client net.Conn, guest io.Closer) (func(), bool) {
 	s.relays[client] = guest
 	s.relayWG.Add(1)
 	s.relayMu.Unlock()
-	return func() {
+	release := func() {
 		_ = client.Close()
 		_ = guest.Close()
 		s.relayMu.Lock()
 		delete(s.relays, client)
 		s.relayMu.Unlock()
 		s.relayWG.Done()
-	}, true
+	}
+	// The http server may have armed a header-read deadline on this conn
+	_ = client.SetDeadline(time.Time{})
+	keepAlive(client)
+	if _, err := client.Write(hello); err != nil {
+		release()
+		return nil, false
+	}
+	return release, true
 }
 
 func (s *Server) retargetRelay(client net.Conn, peer io.Closer) {
