@@ -8,7 +8,7 @@ import (
 
 func TestOnlyAdmittedTrafficTouchesClaim(t *testing.T) {
 	u := &fakeUnder{out: make(chan sent, 64)}
-	r := New(u, &Overlay{Subnet: subnet, VNI: 7, Port: 4789, MTU: 1450, Exits: map[string]Exit{"default": {VTEP: vtep, MAC: exitMAC}}})
+	r := New(u, testOverlay(1450))
 	touches := 0
 	r.Arm(Claim{
 		ID: "c1", Addr: claimAddr,

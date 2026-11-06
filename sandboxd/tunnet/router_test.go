@@ -280,7 +280,7 @@ func TestRouterKeepsTheMTUAStreamWasToldUntilItsNextHello(t *testing.T) {
 	u.sent(t)
 	guest := serve(t, r, claimAddr)
 	guestHello(t, guest)
-	r.Reload(&Overlay{Subnet: subnet, VNI: 7, Port: 4789, MTU: 1410, Exits: map[string]Exit{"default": {VTEP: vtep, MAC: exitMAC}}})
+	r.Reload(testOverlay(1410))
 	u.sent(t)
 	full := gsoFrame(ProtoUDP, 1412, 1412)
 	full[0], full[1] = 0, gsoNone
@@ -355,9 +355,13 @@ func newRouter(t *testing.T) (*fakeUnder, *Router) {
 	t.Helper()
 	u := &fakeUnder{out: make(chan sent, 64), in: make(chan []sent, 16), done: make(chan struct{})}
 	t.Cleanup(func() { close(u.done) })
-	r := New(u, &Overlay{Subnet: subnet, VNI: 7, Port: 4789, MTU: 1450, Exits: map[string]Exit{"default": {VTEP: vtep, MAC: exitMAC}}})
+	r := New(u, testOverlay(1450))
 	go func() { _ = r.Run(t.Context()) }()
 	return u, r
+}
+
+func testOverlay(mtu uint16) *Overlay {
+	return &Overlay{Subnet: subnet, VNI: 7, Port: 4789, MTU: mtu, Exits: map[string]Exit{"default": {VTEP: vtep, MAC: exitMAC}}}
 }
 
 func serve(t *testing.T, r *Router, addr netip.Addr) net.Conn {

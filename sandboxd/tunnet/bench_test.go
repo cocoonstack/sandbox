@@ -53,7 +53,7 @@ func BenchmarkDeliver(b *testing.B) {
 }
 
 func benchLink() *link {
-	r := New(nopUnder{}, &Overlay{Subnet: subnet, VNI: 7, Port: 4789, MTU: 1450, Exits: map[string]Exit{"default": {VTEP: vtep, MAC: exitMAC}}})
+	r := New(nopUnder{}, testOverlay(1450))
 	c := Claim{ID: "c1", Addr: claimAddr, Allow: func(netip.Addr, uint16) bool { return true }}
 	r.Arm(c)
 	a := r.claims[claimAddr]
