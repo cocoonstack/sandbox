@@ -11,7 +11,6 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
-// nonInjectable lists the secret headers the transport owns or strips.
 var nonInjectable = slices.Concat([]string{"Host", "Content-Length"}, hopHeaders)
 
 // SecretSpec declares a credential the proxy injects, valued from the env ValueEnv names (a claim's host-only entry first, then the node's), or from the claim env Name when ValueEnv is empty.

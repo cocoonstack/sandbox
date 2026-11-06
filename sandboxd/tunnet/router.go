@@ -19,7 +19,6 @@ import (
 )
 
 const (
-	// Drop reasons, one counter each.
 	DropNone Drop = iota
 	DropMalformed
 	DropNotIPv4

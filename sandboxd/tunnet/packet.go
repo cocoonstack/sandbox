@@ -27,7 +27,6 @@ const (
 	OffloadTSOECN = 0x08
 	OffloadUSO4   = 0x20
 
-	// IPv4 protocols the tun path carries.
 	ProtoICMP = 1
 	ProtoTCP  = 6
 	ProtoUDP  = 17
