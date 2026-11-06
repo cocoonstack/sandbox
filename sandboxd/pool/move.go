@@ -18,7 +18,7 @@ const (
 
 	defaultMoveDowntime = 2 * time.Second
 	movesDir            = "moves"
-	moveReservationIdle = 2 * time.Minute
+	moveReservationIdle = 15 * time.Minute
 	moveRetryInterval   = 2 * time.Second
 	moveDeltaLimit      = 4
 	moveStaleAge        = time.Hour
