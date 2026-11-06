@@ -85,10 +85,7 @@ func TestRuntimeCatalogPersistsNormalizedSemantics(t *testing.T) {
 
 func TestRuntimeCatalogChangesAreAudited(t *testing.T) {
 	cfg := &config.Config{DataDir: t.TempDir(), AuditLog: true}
-	m, initErr := NewManager(t.Context(), cfg, newFakeEngine(), testSecrets(t), testBackends(t, cfg))
-	if initErr != nil {
-		t.Fatalf("NewManager: %v", initErr)
-	}
+	m := mustManager(t, cfg, newFakeEngine())
 	spec := types.VolumeRegistration{Path: "/images/data"}
 	restore := blockCatalogRename(t, m)
 	if err := m.RegisterVolume(t.Context(), "data", spec); !errors.Is(err, ErrVolumeCatalogUnavailable) {

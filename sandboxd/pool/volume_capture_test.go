@@ -37,10 +37,7 @@ func TestReconcileRetainsVolumeCaptureGateWithoutCatalog(t *testing.T) {
 		DataDir: dataDir,
 		Volumes: []config.VolumeSpec{{Name: "dataset", Path: volumePath, DirectIO: "off"}},
 	}
-	m, err := NewManager(t.Context(), cfg, eng, testSecrets(t), testBackends(t, cfg))
-	if err != nil {
-		t.Fatalf("setup manager: %v", err)
-	}
+	m := mustManager(t, cfg, eng)
 	sb, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Volumes: []types.Volume{{Name: "dataset", Mount: "/datasets"}}})
 	if err != nil {
 		t.Fatalf("ClaimProvision: %v", err)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"sync"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -263,16 +264,13 @@ func TestAnUndrainDuringAnEvacuationsDrainStopsIt(t *testing.T) {
 			return len(infos) == 1 && infos[0].Warm == 1
 		})
 		release := holdMaint(a)
-		done := make(chan struct{})
-		go func() {
-			defer close(done)
-			a.Evacuate(t.Context())
-		}()
+		var wg sync.WaitGroup
+		wg.Go(func() { a.Evacuate(t.Context()) })
 		synctest.Wait()
 
 		a.Undrain(t.Context())
 		release()
-		<-done
+		wg.Wait()
 		synctest.Wait()
 
 		assertEvacuation(t, a, 0, 0)

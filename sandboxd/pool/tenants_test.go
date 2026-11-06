@@ -229,10 +229,7 @@ func TestTenantChangesAreValidatedAndAudited(t *testing.T) {
 	}
 
 	cfg = &config.Config{DataDir: t.TempDir()}
-	open, err := NewManager(t.Context(), cfg, newFakeEngine(), testSecrets(t), testBackends(t, cfg))
-	if err != nil {
-		t.Fatalf("setup open manager: %v", err)
-	}
+	open := mustManager(t, cfg, newFakeEngine())
 	if err := open.PutTenant(t.Context(), tenants.TenantSpec{Name: "acme", Token: "t"}); !errors.Is(err, ErrBadTenant) {
 		t.Errorf("tenant on a node without api_token: %v, want ErrBadTenant", err)
 	}
@@ -316,10 +313,7 @@ func TestARuntimeTenantTakesItsEgressClassWithoutARestart(t *testing.T) {
 		t.Error("a tenant without a class gained egress")
 	}
 
-	restarted, err := NewManager(t.Context(), cfg, newFakeEngine(), testSecrets(t), testBackends(t, cfg))
-	if err != nil {
-		t.Fatalf("restart manager: %v", err)
-	}
+	restarted := mustManager(t, cfg, newFakeEngine())
 	if r, _ := restarted.tenants.Peek("u-1"); r.EgressClass != "desk" {
 		t.Errorf("after a restart u-1 has class %q, want desk from tenants.json", r.EgressClass)
 	}
@@ -421,10 +415,7 @@ func listTenants(t *testing.T, m *Manager) []TenantInfo {
 func tenantManager(t *testing.T, dir string, specs ...tenants.TenantSpec) *Manager {
 	t.Helper()
 	cfg := &config.Config{DataDir: dir, APIToken: "root"}
-	m, err := NewManager(t.Context(), cfg, newFakeEngine(), testSecrets(t), testBackends(t, cfg))
-	if err != nil {
-		t.Fatalf("setup manager: %v", err)
-	}
+	m := mustManager(t, cfg, newFakeEngine())
 	putTenants(t, m, specs...)
 	return m
 }

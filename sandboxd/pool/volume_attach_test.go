@@ -126,27 +126,7 @@ func TestClaimProvisionAttachFailureKeepsHoldsUntilRemoval(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), `attach volume "broken"`) {
 		t.Fatalf("ClaimProvision: %v, want the failing volume's attach error", err)
 	}
-	if holders := volumeHoldersOf(m, "scratch"); holders != (volumeHolders{writers: 1}) {
-		t.Errorf("scratch registry after failed removal=%+v, want writer retained", holders)
-	}
-	if holders := volumeHoldersOf(m, "broken"); holders != (volumeHolders{readers: 1}) {
-		t.Errorf("broken registry after failed removal=%+v, want reader retained", holders)
-	}
-	if _, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Volumes: requested[:1]}); !errors.Is(err, ErrVolumeBusy) {
-		t.Errorf("claim against surviving VM: %v, want ErrVolumeBusy", err)
-	}
-
-	eng.removeErrFor = ""
-	m.retryRemovals(t.Context()).Wait()
-
-	if !eng.removed(vmName) {
-		t.Errorf("removes=%v, want %s drained", eng.removedNames(), vmName)
-	}
-	for _, name := range []string{"scratch", "broken"} {
-		if holders := volumeHoldersOf(m, name); holders != (volumeHolders{}) {
-			t.Errorf("registry for %s after retry=%+v, want empty", name, holders)
-		}
-	}
+	assertHoldsUntilRetry(t, m, eng, vmName, requested[:1])
 }
 
 func TestClaimWarmAttachFailureKeepsHoldsUntilRemoval(t *testing.T) {
@@ -172,27 +152,7 @@ func TestClaimWarmAttachFailureKeepsHoldsUntilRemoval(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), `attach volume "broken"`) {
 		t.Fatalf("ClaimWarm: %v, want the failing volume's attach error", err)
 	}
-	if holders := volumeHoldersOf(m, "scratch"); holders != (volumeHolders{writers: 1}) {
-		t.Errorf("scratch registry after failed removal=%+v, want writer retained", holders)
-	}
-	if holders := volumeHoldersOf(m, "broken"); holders != (volumeHolders{readers: 1}) {
-		t.Errorf("broken registry after failed removal=%+v, want reader retained", holders)
-	}
-	if _, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Volumes: requested[:1]}); !errors.Is(err, ErrVolumeBusy) {
-		t.Errorf("claim against surviving warm VM: %v, want ErrVolumeBusy", err)
-	}
-
-	eng.removeErrFor = ""
-	m.retryRemovals(t.Context()).Wait()
-
-	if !eng.removed(warm.VMName) {
-		t.Errorf("removes=%v, want %s drained", eng.removedNames(), warm.VMName)
-	}
-	for _, name := range []string{"scratch", "broken"} {
-		if holders := volumeHoldersOf(m, name); holders != (volumeHolders{}) {
-			t.Errorf("registry for %s after retry=%+v, want empty", name, holders)
-		}
-	}
+	assertHoldsUntilRetry(t, m, eng, warm.VMName, requested[:1])
 }
 
 func TestFinalizeQuotaFailureKeepsHoldsUntilRemoval(t *testing.T) {
@@ -391,4 +351,27 @@ func soleVM(eng *fakeEngine, except ...string) (name string, count int) {
 		}
 	}
 	return name, count
+}
+
+func assertHoldsUntilRetry(t *testing.T, m *Manager, eng *fakeEngine, vmName string, writer []types.Volume) {
+	t.Helper()
+	if holders := volumeHoldersOf(m, "scratch"); holders != (volumeHolders{writers: 1}) {
+		t.Errorf("scratch registry after failed removal=%+v, want writer retained", holders)
+	}
+	if holders := volumeHoldersOf(m, "broken"); holders != (volumeHolders{readers: 1}) {
+		t.Errorf("broken registry after failed removal=%+v, want reader retained", holders)
+	}
+	if _, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Volumes: writer}); !errors.Is(err, ErrVolumeBusy) {
+		t.Errorf("claim against surviving VM %s: %v, want ErrVolumeBusy", vmName, err)
+	}
+	eng.removeErrFor = ""
+	m.retryRemovals(t.Context()).Wait()
+	if !eng.removed(vmName) {
+		t.Errorf("removes=%v, want %s drained", eng.removedNames(), vmName)
+	}
+	for _, name := range []string{"scratch", "broken"} {
+		if holders := volumeHoldersOf(m, name); holders != (volumeHolders{}) {
+			t.Errorf("registry for %s after retry=%+v, want empty", name, holders)
+		}
+	}
 }

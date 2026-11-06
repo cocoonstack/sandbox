@@ -165,10 +165,7 @@ func TestForkWithAWrongTokenIsAnUnknownSandbox(t *testing.T) {
 func TestForkAllOrNothing(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
-	parent, err := claimAny(t.Context(), m, testKey, ClaimOptions{})
-	if err != nil {
-		t.Fatalf("Claim: %v", err)
-	}
+	parent := mustClaim(t, m, testKey)
 	eng.cloneFailNth = 2
 
 	if _, err := m.Fork(t.Context(), parent.ID, Cred{Token: parent.Token}, 3, 0, "", ""); err == nil {

@@ -89,9 +89,5 @@ func TestAFailedStatfsKeepsTheDiskLowState(t *testing.T) {
 func diskReserveManager(t *testing.T, free string) *Manager {
 	t.Helper()
 	cfg := &config.Config{DataDir: t.TempDir(), DiskReserve: &config.DiskReserve{Free: free}, Pools: []config.PoolSpec{{PoolKey: testKey}}}
-	m, err := NewManager(t.Context(), cfg, newFakeEngine(), testSecrets(t), testBackends(t, cfg))
-	if err != nil {
-		t.Fatalf("setup manager: %v", err)
-	}
-	return m
+	return mustManager(t, cfg, newFakeEngine())
 }

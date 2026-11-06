@@ -179,10 +179,7 @@ func TestMemorySignalsParseTheHostProc(t *testing.T) {
 func memoryManager(t *testing.T, limit config.MemoryLimit) *Manager {
 	t.Helper()
 	cfg := &config.Config{DataDir: t.TempDir(), MemoryLimit: &limit, Pools: []config.PoolSpec{{PoolKey: testKey}}}
-	m, err := NewManager(t.Context(), cfg, newFakeEngine(), testSecrets(t), testBackends(t, cfg))
-	if err != nil {
-		t.Fatalf("setup manager: %v", err)
-	}
+	m := mustManager(t, cfg, newFakeEngine())
 	m.procDir = t.TempDir()
 	if err := os.Mkdir(filepath.Join(m.procDir, "pressure"), 0o750); err != nil {
 		t.Fatalf("setup proc dir: %v", err)

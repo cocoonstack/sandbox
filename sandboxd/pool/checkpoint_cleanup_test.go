@@ -109,10 +109,7 @@ func TestCheckpointCleanupWaitsForTheClaimWrite(t *testing.T) {
 				}
 				restoreWrites()
 				if restart {
-					m = c.restart(t, m)
-					if err := m.Reconcile(t.Context()); err != nil {
-						t.Fatalf("reconcile: %v", err)
-					}
+					m = c.restartReconciled(t, m)
 					var ok bool
 					if sb, ok = m.byID(sb.ID); !ok {
 						t.Fatal("restart dropped the claim")
