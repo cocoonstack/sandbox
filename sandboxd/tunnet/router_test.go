@@ -178,10 +178,7 @@ func TestDeliverCoalescesInOrderSegmentsIntoOneGSOFrame(t *testing.T) {
 	u.sent(t)
 	bad := dataSegment(5000, 1000)
 	bad[len(bad)-1] ^= 0xff
-	batch := [][]byte{dataSegment(1000, 1000), dataSegment(2000, 1000), dataSegment(3000, 1000), dataSegment(4000, 400), bad}
-	for _, d := range batch {
-		u.inject(t, d)
-	}
+	u.injectBatch(t, dataSegment(1000, 1000), dataSegment(2000, 1000), dataSegment(3000, 1000), dataSegment(4000, 400), bad)
 	merged := readFrame(t, guest)
 	ip := merged[VnetHdrLen:]
 	if merged[1] != gsoTCPv4 || binary.LittleEndian.Uint16(merged[4:]) != 1000 || len(ip) != 40+3400 {
@@ -337,8 +334,7 @@ func TestDeliverMergesOnlyForAGuestThatOfferedTSO(t *testing.T) {
 	guestHello(t, guest)
 	sendFrame(t, guest, frame(ProtoTCP, GuestAddr, remote, false))
 	u.sent(t)
-	u.inject(t, dataSegment(1000, 1000))
-	u.inject(t, dataSegment(2000, 1000))
+	u.injectBatch(t, dataSegment(1000, 1000), dataSegment(2000, 1000))
 	for range 2 {
 		if f := readFrame(t, guest); f[1] != gsoNone || len(f) != VnetHdrLen+1040 {
 			t.Fatalf("frame gso %d len %d, want each segment alone", f[1], len(f))
@@ -372,7 +368,7 @@ func TestRouterPointsAGuestICMPErrorAtTheClaimAddress(t *testing.T) {
 }
 
 func newRouter() (*fakeUnder, *Router) {
-	u := &fakeUnder{out: make(chan sent, 64), in: make(chan sent, 16)}
+	u := &fakeUnder{out: make(chan sent, 64), in: make(chan []sent, 16)}
 	r := New(u, &Overlay{Subnet: subnet, VNI: 7, Port: 4789, MTU: 1450, Exits: map[string]Exit{"default": {VTEP: vtep, MAC: exitMAC}}})
 	go func() { _ = r.Run(context.Background()) }()
 	return u, r
@@ -471,7 +467,7 @@ type sent struct {
 
 type fakeUnder struct {
 	out     chan sent
-	in      chan sent
+	in      chan []sent
 	batches atomic.Int64
 }
 
@@ -486,16 +482,10 @@ func (u *fakeUnder) Send(b []byte, seg int, dst netip.AddrPort, _ uint64) error 
 }
 
 func (u *fakeUnder) Recv(each func(d []byte, from netip.AddrPort)) error {
-	s := <-u.in
-	each(s.d, s.to)
-	for {
-		select {
-		case s = <-u.in:
-			each(s.d, s.to)
-		default:
-			return nil
-		}
+	for _, s := range <-u.in {
+		each(s.d, s.to)
 	}
+	return nil
 }
 
 func (u *fakeUnder) inject(t *testing.T, d []byte) {
@@ -505,7 +495,16 @@ func (u *fakeUnder) inject(t *testing.T, d []byte) {
 
 func (u *fakeUnder) injectFrom(t *testing.T, d []byte, from netip.AddrPort) {
 	t.Helper()
-	u.in <- sent{d: d, to: from}
+	u.in <- []sent{{d: d, to: from}}
+}
+
+func (u *fakeUnder) injectBatch(t *testing.T, ds ...[]byte) {
+	t.Helper()
+	batch := make([]sent, len(ds))
+	for i, d := range ds {
+		batch[i] = sent{d: d, to: netip.AddrPortFrom(vtep, 50000)}
+	}
+	u.in <- batch
 }
 
 func (u *fakeUnder) sent(t *testing.T) ([]byte, uint16, netip.AddrPort) {
