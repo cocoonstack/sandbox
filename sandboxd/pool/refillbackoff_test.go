@@ -398,39 +398,6 @@ func TestALateClaimCloneResultOfARetiredGoldenDoesNotCount(t *testing.T) {
 	}
 }
 
-func TestAFailingCloneOfAPromotedTemplateDoesNotCount(t *testing.T) {
-	eng := newFakeEngine()
-	m := envManager(t, eng, t.TempDir())
-	src, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{})
-	if err != nil {
-		t.Fatalf("source claim: %v", err)
-	}
-	key, _, err := m.Promote(t.Context(), src.ID, Cred{Token: src.Token}, "tpl:broken", "")
-	if err != nil {
-		t.Fatalf("promote: %v", err)
-	}
-	m.mu.Lock()
-	p := newPool(key)
-	m.pools[key] = p
-	m.mu.Unlock()
-	eng.mu.Lock()
-	eng.cloneErr = errors.New(`vm.restore -> 500 "Memory manager error"`)
-	eng.mu.Unlock()
-	clones := eng.cloneCount()
-
-	for range refillFailStreak {
-		if _, err := m.ClaimProvision(t.Context(), key, ClaimOptions{}); err == nil {
-			t.Fatal("claim on a failing template clone succeeded")
-		}
-	}
-	if n := eng.cloneCount() - clones; n != refillFailStreak {
-		t.Fatalf("clones %d, want each claim to clone the template", n)
-	}
-	if fails := cloneFailsOf(m, p); fails != 0 {
-		t.Errorf("clone fails %d on the template's pool, want 0: no pool golden was cloned", fails)
-	}
-}
-
 func adoptedGoldenNoWarm(t *testing.T, eng *fakeEngine) (*Manager, *pool, string) {
 	t.Helper()
 	m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey})

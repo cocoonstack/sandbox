@@ -375,8 +375,8 @@ func (m *Manager) resolveGolden(ctx context.Context, key types.PoolKey, tenant s
 	if dir != "" {
 		return goldenResolution{dir: dir, held: p, gen: gen}, nil
 	}
-	if key.Net == types.NetEgress {
-		return goldenResolution{}, nil // never resume a live-captured template on the egress lane; cold-boot instead
+	if ok || key.Net == types.NetEgress {
+		return goldenResolution{}, nil // a pooled key waits for its golden; the egress lane never resumes a live capture
 	}
 	id := store.TemplateID(key.Hash())
 	cleanup := m.recs.rlockRec(id)

@@ -253,6 +253,26 @@ func TestReconcileSweepsGoldenTmpDirs(t *testing.T) {
 	}
 }
 
+func TestResolveGoldenNeverServesAPooledKeyFromATemplate(t *testing.T) {
+	m := newTestManager(t, newFakeEngine())
+	parent := mustClaim(t, m, testKey)
+	key, _, err := m.Promote(t.Context(), parent.ID, Cred{Token: parent.Token}, "tpl:pooled", "")
+	if err != nil {
+		t.Fatalf("Promote: %v", err)
+	}
+	m.mu.Lock()
+	m.pools[key] = newPool(key)
+	m.mu.Unlock()
+	golden, err := m.resolveGolden(t.Context(), key, "")
+	if err != nil {
+		t.Fatalf("resolveGolden: %v", err)
+	}
+	golden.release()
+	if golden.dir != "" || golden.promoted {
+		t.Errorf("resolveGolden served pooled key from template %q; want cold-boot until the pool golden lands", golden.dir)
+	}
+}
+
 func TestResolveGoldenSkipsPromotedEgressTemplate(t *testing.T) {
 	m := newTestManager(t, newFakeEngine())
 	staging := stageTemplate(t, m, store.TemplateID(egKey.Hash()))
