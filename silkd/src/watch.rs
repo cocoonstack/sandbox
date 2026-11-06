@@ -101,6 +101,10 @@ fn to_frames(res: notify::Result<notify::Event>, out: &mut Vec<Response>) {
             return;
         }
     };
+    if event.need_rescan() {
+        out.push(Response::error(ErrorKind::Internal, OVERFLOW_MESSAGE));
+        return;
+    }
     let kind = match event.kind {
         N::Create(_) => EventKind::Created,
         N::Modify(notify::event::ModifyKind::Name(_)) => EventKind::Renamed,
@@ -137,6 +141,19 @@ mod tests {
         assert_eq!(frames.len(), 1);
         match &frames[0] {
             Response::Error { message, .. } => assert!(message.contains("inotify overflow")),
+            other => panic!("expected error frame, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn kernel_queue_overflow_becomes_terminal_error_frame() {
+        let event =
+            notify::Event::new(notify::EventKind::Other).set_flag(notify::event::Flag::Rescan);
+        let mut frames = Vec::new();
+        to_frames(Ok(event), &mut frames);
+        assert_eq!(frames.len(), 1);
+        match &frames[0] {
+            Response::Error { message, .. } => assert_eq!(message, OVERFLOW_MESSAGE),
             other => panic!("expected error frame, got {other:?}"),
         }
     }
