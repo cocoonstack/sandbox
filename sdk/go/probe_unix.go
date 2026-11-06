@@ -2,7 +2,10 @@
 
 package sandbox
 
-import "syscall"
+import (
+	"errors"
+	"syscall"
+)
 
 const canProbe = true
 
@@ -10,6 +13,6 @@ const canProbe = true
 func (c *agentConn) peek(fd uintptr) bool {
 	var b [1]byte
 	_, _, err := syscall.Recvfrom(int(fd), b[:], syscall.MSG_PEEK)
-	c.peeked = err == syscall.EAGAIN
+	c.peeked = errors.Is(err, syscall.EAGAIN)
 	return true
 }
