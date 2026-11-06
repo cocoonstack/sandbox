@@ -225,6 +225,7 @@ func (m *Manager) settleMoveIn(ctx context.Context, sb *types.Sandbox) {
 
 // False while the registry is down.
 func (m *Manager) resolveMoveIn(ctx context.Context, sb *types.Sandbox) bool {
+	logger := log.WithFunc("pool.resolveMoveIn")
 	sb.Transition.Lock()
 	defer sb.Transition.Unlock()
 	m.mu.Lock()
@@ -235,7 +236,7 @@ func (m *Manager) resolveMoveIn(ctx context.Context, sb *types.Sandbox) bool {
 	}
 	rec, ok, err := m.moves.Get(ctx, sb.ID)
 	if err != nil {
-		log.WithFunc("pool.resolveMoveIn").Warnf(ctx, "resolve moved claim %s, retrying: %v", sb.ID, err)
+		logger.Warnf(ctx, "resolve moved claim %s, retrying: %v", sb.ID, err)
 		return false
 	}
 	toHere := ok && rec.To == m.nodeID
@@ -247,14 +248,14 @@ func (m *Manager) resolveMoveIn(ctx context.Context, sb *types.Sandbox) bool {
 		}
 		vm, found, inspectErr := m.eng.Inspect(ctx, sb.VMName)
 		if inspectErr != nil {
-			log.WithFunc("pool.resolveMoveIn").Warnf(ctx, "inspect moved claim %s, retrying: %v", sb.ID, inspectErr)
+			logger.Warnf(ctx, "inspect moved claim %s, retrying: %v", sb.ID, inspectErr)
 			return false
 		}
 		m.startMoveIn(ctx, sb, rec.From, committed, found && vm.State != vmStateRunning)
 		return true
 	case toHere && (rec.State == moves.Pending || rec.State == moves.Final):
 		if _, err = m.moves.Advance(ctx, sb.ID, rec.Epoch, rec.State, moves.Aborted); err != nil {
-			log.WithFunc("pool.resolveMoveIn").Warnf(ctx, "abort the move of %s, retrying: %v", sb.ID, err)
+			logger.Warnf(ctx, "abort the move of %s, retrying: %v", sb.ID, err)
 			return false
 		}
 	}
