@@ -90,6 +90,15 @@ func TestEgressDialerWildcardAllowsEverything(t *testing.T) {
 	}
 }
 
+func TestAWildcardAllowReadmitsOnlyInternalAddresses(t *testing.T) {
+	verdict := verdictOf([]string{"0.0.0.0/0", "::/0"})
+	for addr, want := range map[string]bool{"93.184.216.34": false, "10.8.7.149": true, "2606:4700::1111": false, "fd00:c0c0:38::5": true} {
+		if internal, err := verdict(netip.MustParseAddr(addr), 443); err != nil || internal != want {
+			t.Errorf("%s internal %v err %v, want %v: a public address keeps its upstream", addr, internal, err, want)
+		}
+	}
+}
+
 func TestEgressDialerScopesInternalAllowToPorts(t *testing.T) {
 	d := newDialer(verdictOf([]string{"10.8.0.1/32:18090,9000", "fdc8::/16:443", "10.9.0.0/16"}))
 	for name, tt := range map[string]struct {
