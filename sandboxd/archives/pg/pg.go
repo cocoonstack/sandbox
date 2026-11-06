@@ -4,7 +4,6 @@ package pg
 import (
 	"context"
 	_ "embed"
-	"errors"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -91,7 +90,7 @@ func (r *Registry) TakeOwned(ctx context.Context, owner string, expect map[strin
 	for id, epoch := range expect {
 		ids, epochs = append(ids, id), append(epochs, epoch)
 	}
-	recs, err := r.collect(ctx, `UPDATE sandboxd_archives a SET epoch = nextval('sandboxd_archives_epoch'), updated_at = now()
+	recs, err := cas.All(ctx, r.pool, scan, `UPDATE sandboxd_archives a SET epoch = nextval('sandboxd_archives_epoch'), updated_at = now()
 		FROM unnest($2::text[], $3::bigint[]) AS t(id, epoch)
 		WHERE a.cell = $1 AND a.id = t.id AND a.epoch = t.epoch AND a.owner = $4 AND NOT a.consumed
 		RETURNING a.id, a.tenant, a.token_sha256, a.owner, a.epoch, a.consumed, a.checkpoint, a.deadline, NULL::jsonb`, r.cell, ids, epochs, owner)
@@ -116,26 +115,17 @@ func (r *Registry) Delete(ctx context.Context, id string, epoch int64) error {
 }
 
 func (r *Registry) Get(ctx context.Context, id string) (archives.Record, bool, error) {
-	qctx, cancel := context.WithTimeout(ctx, metastore.QueryTimeout)
-	defer cancel()
-	rec, err := scan(r.pool.QueryRow(qctx, `SELECT id, tenant, token_sha256, owner, epoch, consumed, checkpoint, deadline, claim
-		FROM sandboxd_archives WHERE cell = $2 AND id = $1`, id, r.cell))
-	switch {
-	case errors.Is(err, pgx.ErrNoRows):
-		return archives.Record{}, false, nil
-	case err != nil:
-		return archives.Record{}, false, cas.Down(err)
-	}
-	return rec, true, nil
+	return cas.One(ctx, r.pool, scan, `SELECT id, tenant, token_sha256, owner, epoch, consumed, checkpoint, deadline, claim
+		FROM sandboxd_archives WHERE cell = $2 AND id = $1`, id, r.cell)
 }
 
 func (r *Registry) Sweepable(ctx context.Context, now time.Time, owner string) ([]archives.Record, error) {
-	return r.collect(ctx, `SELECT id, tenant, token_sha256, owner, epoch, consumed, checkpoint, deadline, NULL::jsonb
+	return cas.All(ctx, r.pool, scan, `SELECT id, tenant, token_sha256, owner, epoch, consumed, checkpoint, deadline, NULL::jsonb
 		FROM sandboxd_archives WHERE cell = $2 AND (consumed OR owner = $3 OR deadline < $1 AND `+leaseExpired+`)`, now, r.cell, owner)
 }
 
 func (r *Registry) Rows(ctx context.Context, ids []string) (map[string]archives.Record, error) {
-	recs, err := r.collect(ctx, `SELECT id, tenant, token_sha256, owner, epoch, consumed, checkpoint, deadline, NULL::jsonb
+	recs, err := cas.All(ctx, r.pool, scan, `SELECT id, tenant, token_sha256, owner, epoch, consumed, checkpoint, deadline, NULL::jsonb
 		FROM sandboxd_archives WHERE cell = $1 AND id = ANY($2)`, r.cell, ids)
 	if err != nil {
 		return nil, err
@@ -162,20 +152,6 @@ func (r *Registry) Renew(ctx context.Context, node string, ttl time.Duration) er
 // Close releases the connection pool.
 func (r *Registry) Close() {
 	r.pool.Close()
-}
-
-func (r *Registry) collect(ctx context.Context, sql string, args ...any) ([]archives.Record, error) {
-	qctx, cancel := context.WithTimeout(ctx, metastore.QueryTimeout)
-	defer cancel()
-	rows, err := r.pool.Query(qctx, sql, args...)
-	if err != nil {
-		return nil, cas.Down(err)
-	}
-	recs, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (archives.Record, error) { return scan(row) })
-	if err != nil {
-		return nil, cas.Down(err)
-	}
-	return recs, nil
 }
 
 func scan(row pgx.Row) (archives.Record, error) {

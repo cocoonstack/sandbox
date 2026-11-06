@@ -36,8 +36,12 @@ const (
 	uniqueViolation = "23505"
 )
 
-//go:embed schema.sql
-var schema string
+var (
+	//go:embed schema.sql
+	schema string
+
+	cas = metastore.CAS{Unavailable: tenants.ErrUnavailable}
+)
 
 type entry struct {
 	rec *tenants.TenantRecord
@@ -104,13 +108,13 @@ func (s *Source) Resolve(ctx context.Context, sum [sha256.Size]byte) (*tenants.T
 	case !s.cold.Allow():
 		return nil, fmt.Errorf("%w: cold lookups over %d/s", tenants.ErrUnavailable, coldLookups)
 	}
-	qctx, cancel := context.WithTimeout(ctx, metastore.QueryTimeout)
-	defer cancel()
-	r, err := scanRecord(s.pool.QueryRow(qctx, `SELECT name, token_sha256, max_claims, egress_class FROM sandboxd_tenants WHERE token_sha256 = $1`, sum[:]))
+	r, ok, err := cas.One(ctx, s.pool, scanRecord, `SELECT name, token_sha256, max_claims, egress_class FROM sandboxd_tenants WHERE token_sha256 = $1`, sum[:])
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	switch {
-	case errors.Is(err, pgx.ErrNoRows):
+	case err != nil:
+		return nil, err
+	case !ok:
 		if s.seq == start {
 			if len(s.misses) >= maxCached {
 				clear(s.misses)
@@ -118,8 +122,6 @@ func (s *Source) Resolve(ctx context.Context, sum [sha256.Size]byte) (*tenants.T
 			s.misses[sum] = time.Now().Add(negativeTTL)
 		}
 		return nil, tenants.ErrUnknown
-	case err != nil:
-		return nil, unavailable(err)
 	}
 	if s.fresh(r.Name, start) {
 		s.cache(&r, sum)
@@ -161,17 +163,10 @@ func (s *Source) Lookup(ctx context.Context, name string) (tenants.TenantRecord,
 }
 
 func (s *Source) List(ctx context.Context, after string, limit int) ([]tenants.TenantRecord, error) {
-	qctx, cancel := context.WithTimeout(ctx, metastore.QueryTimeout)
-	defer cancel()
-	rows, err := s.pool.Query(qctx, `SELECT name, max_claims, egress_class FROM sandboxd_tenants WHERE name > $1 ORDER BY name LIMIT $2`, after, limit)
-	if err != nil {
-		return nil, unavailable(err)
-	}
-	out, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (tenants.TenantRecord, error) {
+	return cas.All(ctx, s.pool, func(row pgx.Row) (tenants.TenantRecord, error) {
 		var r tenants.TenantRecord
 		return r, row.Scan(&r.Name, &r.MaxClaims, &r.EgressClass)
-	})
-	return out, unavailable(err)
+	}, `SELECT name, max_claims, egress_class FROM sandboxd_tenants WHERE name > $1 ORDER BY name LIMIT $2`, after, limit)
 }
 
 func (s *Source) Put(ctx context.Context, r tenants.TenantRecord) (tenants.Change, error) {
@@ -258,13 +253,13 @@ func (s *Source) Classes(ctx context.Context) (map[string]int, error) {
 	defer cancel()
 	rows, err := s.pool.Query(qctx, `SELECT egress_class, count(*) FROM sandboxd_tenants WHERE egress_class <> '' GROUP BY egress_class`)
 	if err != nil {
-		return nil, unavailable(err)
+		return nil, cas.Down(err)
 	}
 	out := map[string]int{}
 	var class string
 	var n int
 	if _, err = pgx.ForEachRow(rows, []any{&class, &n}, func() error { out[class] = n; return nil }); err != nil {
-		return nil, unavailable(err)
+		return nil, cas.Down(err)
 	}
 	return out, nil
 }
@@ -304,16 +299,7 @@ func (s *Source) fetch(name string) {
 }
 
 func (s *Source) lookupNow(ctx context.Context, name string) (tenants.TenantRecord, bool, error) {
-	qctx, cancel := context.WithTimeout(ctx, metastore.QueryTimeout)
-	defer cancel()
-	r, err := scanRecord(s.pool.QueryRow(qctx, `SELECT name, token_sha256, max_claims, egress_class FROM sandboxd_tenants WHERE name = $1`, name))
-	switch {
-	case errors.Is(err, pgx.ErrNoRows):
-		return tenants.TenantRecord{}, false, nil
-	case err != nil:
-		return tenants.TenantRecord{}, false, unavailable(err)
-	}
-	return r, true, nil
+	return cas.One(ctx, s.pool, scanRecord, `SELECT name, token_sha256, max_claims, egress_class FROM sandboxd_tenants WHERE name = $1`, name)
 }
 
 // write runs f in one transaction that notifies every node to evict key, then evicts it here at once.
@@ -332,7 +318,7 @@ func (s *Source) write(ctx context.Context, key string, f func(tx pgx.Tx) error)
 		if errors.Is(err, tenants.ErrInvalid) || errors.Is(err, tenants.ErrUnknown) {
 			return err
 		}
-		return unavailable(err)
+		return cas.Down(err)
 	}
 	s.evict(key)
 	return nil
@@ -419,11 +405,4 @@ func scanRecord(row pgx.Row) (tenants.TenantRecord, error) {
 	}
 	r.TokenSHA256 = hex.EncodeToString(sum)
 	return r, nil
-}
-
-func unavailable(err error) error {
-	if err == nil {
-		return nil
-	}
-	return fmt.Errorf("%w: %w", tenants.ErrUnavailable, err)
 }

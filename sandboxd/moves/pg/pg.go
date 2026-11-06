@@ -4,7 +4,6 @@ package pg
 import (
 	"context"
 	_ "embed"
-	"errors"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -59,17 +58,8 @@ func (r *Registry) Advance(ctx context.Context, id string, expect int64, from, t
 }
 
 func (r *Registry) Get(ctx context.Context, id string) (moves.Record, bool, error) {
-	qctx, cancel := context.WithTimeout(ctx, metastore.QueryTimeout)
-	defer cancel()
-	rec, err := scan(r.pool.QueryRow(qctx, `SELECT id, from_node, to_node, state, epoch, updated_at
-		FROM sandboxd_moves WHERE cell = $1 AND id = $2`, r.cell, id))
-	switch {
-	case errors.Is(err, pgx.ErrNoRows):
-		return moves.Record{}, false, nil
-	case err != nil:
-		return moves.Record{}, false, cas.Down(err)
-	}
-	return rec, true, nil
+	return cas.One(ctx, r.pool, scan, `SELECT id, from_node, to_node, state, epoch, updated_at
+		FROM sandboxd_moves WHERE cell = $1 AND id = $2`, r.cell, id)
 }
 
 func (r *Registry) Delete(ctx context.Context, id string, epoch int64) error {
@@ -77,18 +67,8 @@ func (r *Registry) Delete(ctx context.Context, id string, epoch int64) error {
 }
 
 func (r *Registry) Stale(ctx context.Context, before time.Time) ([]moves.Record, error) {
-	qctx, cancel := context.WithTimeout(ctx, metastore.QueryTimeout)
-	defer cancel()
-	rows, err := r.pool.Query(qctx, `SELECT id, from_node, to_node, state, epoch, updated_at
+	return cas.All(ctx, r.pool, scan, `SELECT id, from_node, to_node, state, epoch, updated_at
 		FROM sandboxd_moves WHERE cell = $1 AND updated_at < $2`, r.cell, before)
-	if err != nil {
-		return nil, cas.Down(err)
-	}
-	recs, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (moves.Record, error) { return scan(row) })
-	if err != nil {
-		return nil, cas.Down(err)
-	}
-	return recs, nil
 }
 
 // Close releases the connection pool.
