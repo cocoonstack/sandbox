@@ -158,11 +158,11 @@ func pumpStdio(ctx context.Context, conn *silkd.Conn, stdout, stderr io.Writer) 
 			pid = resp.PID
 		case *wire.Stdout:
 			if _, err := stdout.Write(resp.Data); err != nil {
-				return pid, 0, false, err
+				return pid, 0, false, &callerError{err}
 			}
 		case *wire.Stderr:
 			if _, err := stderr.Write(resp.Data); err != nil {
-				return pid, 0, false, err
+				return pid, 0, false, &callerError{err}
 			}
 		case *wire.Exit:
 			return pid, resp.Code, true, nil
@@ -186,7 +186,7 @@ func drainData(ctx context.Context, conn *silkd.Conn, sink chunkSink) error {
 		switch r := resp.(type) {
 		case *wire.DataResp:
 			if err := sink(r.Data); err != nil {
-				return err
+				return &callerError{err}
 			}
 		case *wire.Done:
 			return nil

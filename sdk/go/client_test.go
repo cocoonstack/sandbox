@@ -209,7 +209,7 @@ func TestAHandleFollowsItsSandboxOffARetiredNode(t *testing.T) {
 	}
 }
 
-func TestARunWhoseWriterFailsIsNotReplayedElsewhere(t *testing.T) {
+func TestAWriterErrorTaggedForThisSandboxIsNotReplayed(t *testing.T) {
 	fake := silkdtest.NewFake(t.TempDir())
 	var elsewhere atomic.Int32
 	other := newAgentServer(t, func(c net.Conn) {
@@ -223,8 +223,10 @@ func TestARunWhoseWriterFailsIsNotReplayedElsewhere(t *testing.T) {
 	t.Cleanup(entry.Close)
 	sb := &Sandbox{ID: "sb_1", c: testClient(t, entry), token: "tok", owner: strings.TrimPrefix(owner.URL, "http://")}
 	t.Cleanup(sb.pool.drain)
-	refused := writerFunc(func([]byte) (int, error) { return 0, syscall.ECONNREFUSED })
-	if _, err := sb.Run(t.Context(), Cmd{Argv: []string{"echo", "42"}, Stdout: refused}); !errors.Is(err, syscall.ECONNREFUSED) {
+	tagged := writerFunc(func([]byte) (int, error) {
+		return 0, &ownerGoneError{err: syscall.ECONNREFUSED, id: sb.ID, addr: sb.Owner()}
+	})
+	if _, err := sb.Run(t.Context(), Cmd{Argv: []string{"echo", "42"}, Stdout: tagged}); !errors.Is(err, syscall.ECONNREFUSED) {
 		t.Fatalf("run: %v, want the writer's error", err)
 	}
 	if n := elsewhere.Load(); n != 0 {
@@ -261,6 +263,18 @@ func TestAnotherSandboxsErrorInAWriterIsNotReplayed(t *testing.T) {
 	}
 	if n := elsewhere.Load(); n != 0 {
 		t.Errorf("the command was sent again to another node %d times", n)
+	}
+}
+
+func TestACallThatLostARaceToAMoveRetriesAtTheOwnerFound(t *testing.T) {
+	entry := httptest.NewServer(http.NotFoundHandler())
+	t.Cleanup(entry.Close)
+	sb := &Sandbox{ID: "sb_1", c: testClient(t, entry), token: "tok", owner: "new:7777"}
+	if !sb.rebind(t.Context(), &ownerGoneError{err: errors.New("gone"), id: "sb_1", addr: "old:7777"}) {
+		t.Error("a call tagged by the old owner did not retry at the owner another call found")
+	}
+	if sb.rebind(t.Context(), &ownerGoneError{err: errors.New("gone"), id: "sb_2", addr: "old:7777"}) {
+		t.Error("another sandbox's tag rebound this handle")
 	}
 }
 

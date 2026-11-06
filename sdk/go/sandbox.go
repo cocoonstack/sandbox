@@ -48,6 +48,13 @@ func (e *ExitError) Error() string {
 	return fmt.Sprintf("exit status %d", e.Code)
 }
 
+// callerError carries an error from the caller's own writer, which never sends a call to another node.
+type callerError struct{ err error }
+
+func (e *callerError) Error() string { return e.err.Error() }
+
+func (e *callerError) Unwrap() error { return e.err }
+
 // ownerGoneError tags an owner answer after which nothing reached it, naming the sandbox and the address it came from.
 type ownerGoneError struct {
 	err      error
@@ -253,8 +260,15 @@ func (s *Sandbox) releaseAt(ctx context.Context, addr string) (found bool, err e
 
 // rebind follows a moved sandbox: a tagged owner error asks Lookup, and a different owner replaces it and its parked connections.
 func (s *Sandbox) rebind(ctx context.Context, err error) bool {
-	if g, gone := errors.AsType[*ownerGoneError](err); !gone || g.id != s.ID || g.addr != s.Owner() {
+	if _, caller := errors.AsType[*callerError](err); caller {
 		return false
+	}
+	g, gone := errors.AsType[*ownerGoneError](err)
+	if !gone || g.id != s.ID {
+		return false
+	}
+	if g.addr != s.Owner() {
+		return true
 	}
 	moved, lookupErr := s.c.Lookup(ctx, s.ID, s.token)
 	if lookupErr != nil {

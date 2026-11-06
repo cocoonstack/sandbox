@@ -10,6 +10,7 @@ import pytest
 from conftest import accept_upgrade, sandbox_at, wait_until
 
 from cocoonsandbox import APIError, Client, SandboxError, SilkdError
+from cocoonsandbox.errors import _mark_gone
 
 INPUT_OPS = ("stdin", "stdin_close", "data", "data_end")
 
@@ -210,7 +211,7 @@ def test_a_handle_follows_its_sandbox_off_a_retired_node(spawn_node, dead_addr):
         agent.stop()
 
 
-def test_a_run_whose_callback_fails_is_not_replayed_elsewhere(spawn_node):
+def test_a_callback_error_tagged_for_this_sandbox_is_not_replayed(spawn_node):
     owner, other = FakeAgent(), FakeAgent()
     try:
         directory = spawn_node(
@@ -219,9 +220,9 @@ def test_a_run_whose_callback_fails_is_not_replayed_elsewhere(spawn_node):
         sb = Client(directory).attach(owner.addr, "sb_1", "tok")
 
         def refuse(_: bytes) -> None:
-            raise APIError("another sandbox", 404, "gone")
+            raise _mark_gone(APIError("agent upgrade", 404, "gone"), (sb.id, sb.owner))
 
-        with pytest.raises(APIError, match="another sandbox"):
+        with pytest.raises(APIError, match="agent upgrade"):
             sb.run(["echo", "42"], on_stdout=refuse)
         assert other.upgrades == 0
     finally:
