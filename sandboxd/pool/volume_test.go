@@ -336,10 +336,7 @@ func TestPooledKeyOutranksPromotedTemplate(t *testing.T) {
 		Pools:   []config.PoolSpec{{PoolKey: key, Warm: 1}},
 		Volumes: catalog,
 	}
-	m, err := NewManager(t.Context(), cfg, eng, testSecrets(t), testBackends(t, cfg))
-	if err != nil {
-		t.Fatalf("restart with the key pooled: %v", err)
-	}
+	m := mustManager(t, cfg, eng)
 	m.pools[key].goldenDir = "/goldens/pooled"
 
 	if m.HasPromotedTemplate(t.Context(), key, "") {
@@ -590,11 +587,7 @@ func newVolumePoolManager(t *testing.T, eng *fakeEngine, dataDir string, volumes
 		Pools:   []config.PoolSpec{{PoolKey: testKey, Warm: 1}},
 		Volumes: volumes,
 	}
-	m, err := NewManager(t.Context(), cfg, eng, testSecrets(t), testBackends(t, cfg))
-	if err != nil {
-		t.Fatalf("setup manager: %v", err)
-	}
-	return m
+	return mustManager(t, cfg, eng)
 }
 
 func writeVolumeImage(t testing.TB, name, content string) string {

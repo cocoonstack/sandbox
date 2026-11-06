@@ -137,11 +137,7 @@ func TestArchiveCkHiddenAcrossNodes(t *testing.T) {
 			DataDir: t.TempDir(), CheckpointDir: shared,
 			Pools: []config.PoolSpec{archivePool(3600)},
 		}
-		m, err := NewManager(t.Context(), cfg, newFakeEngine(), testSecrets(t), testBackends(t, cfg))
-		if err != nil {
-			t.Fatalf("manager: %v", err)
-		}
-		return m
+		return mustManager(t, cfg, newFakeEngine())
 	}
 	mA, mB := mkMgr(), mkMgr()
 	sb := mustClaim(t, mA, testKey)

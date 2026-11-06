@@ -824,11 +824,7 @@ func (s *fetchCountingStore) files() []string {
 func newReaderManager(t *testing.T, eng *fakeEngine, extra ...config.PoolSpec) *Manager {
 	t.Helper()
 	cfg := &config.Config{DataDir: t.TempDir(), Pools: append([]config.PoolSpec{{PoolKey: testKey, Warm: 1, Reader: true}}, extra...)}
-	m, err := NewManager(t.Context(), cfg, eng, testSecrets(t), testBackends(t, cfg))
-	if err != nil {
-		t.Fatalf("setup manager: %v", err)
-	}
-	return m
+	return mustManager(t, cfg, eng)
 }
 
 func readerManagerIf(t *testing.T, eng *fakeEngine, on bool) *Manager {

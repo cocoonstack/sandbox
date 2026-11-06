@@ -197,10 +197,7 @@ func TestReplicaRestartSettlesALostPutReply(t *testing.T) {
 		t.Fatalf("flush: %v", err)
 	}
 
-	restarted := c.restart(t, a)
-	if err := restarted.Reconcile(t.Context()); err != nil {
-		t.Fatalf("reconcile: %v", err)
-	}
+	restarted := c.restartReconciled(t, a)
 	held, ok := restarted.byID(sb.ID)
 	if !ok || restarted.replicaOf(held) != pending || !ckExists(t, restarted, pending) {
 		t.Fatalf("claim held %v, replica %q, ck kept %v, want the row's checkpoint %s adopted", ok, restarted.replicaOf(held), ckExists(t, restarted, pending), pending)
@@ -803,10 +800,7 @@ func TestReplicaRestartKeepsItsRowAndStaysFencedUntilALeaseRenews(t *testing.T) 
 	}
 	before, _, _ := c.reg.Get(t.Context(), sb.ID)
 
-	restarted := c.restart(t, a)
-	if err := restarted.Reconcile(t.Context()); err != nil {
-		t.Fatalf("reconcile: %v", err)
-	}
+	restarted := c.restartReconciled(t, a)
 	held, ok := restarted.byID(sb.ID)
 	if !ok {
 		t.Fatal("the restart dropped a replicated claim whose row is its own")
@@ -839,10 +833,7 @@ func TestReplicaRestartAdoptsTheRowsCheckpointOfAnInterruptedRound(t *testing.T)
 	}
 	second := interrupted.ID
 
-	restarted := c.restart(t, a)
-	if err := restarted.Reconcile(t.Context()); err != nil {
-		t.Fatalf("reconcile: %v", err)
-	}
+	restarted := c.restartReconciled(t, a)
 	held, ok := restarted.byID(sb.ID)
 	if !ok {
 		t.Fatal("the restart dropped the claim")
@@ -922,10 +913,7 @@ func TestReconcileWithTheRegistryDownRecordsOnlyTheEndNoOtherNodeCanHold(t *test
 	delete(eng.vms, replicated.VMName)
 	delete(eng.vms, plain.VMName)
 	c.reg.SetDown(true)
-	restarted := c.restart(t, a)
-	if err := restarted.Reconcile(t.Context()); err != nil {
-		t.Fatalf("reconcile: %v", err)
-	}
+	restarted := c.restartReconciled(t, a)
 	c.reg.SetDown(false)
 	if got, want := usageEventsOf(t, restarted, replicated.ID), "claim"; got != want {
 		t.Errorf("events of the replicated claim %s, want %s", got, want)
@@ -949,10 +937,7 @@ func TestReplicaRestartDropsAClaimAdoptedElsewhere(t *testing.T) {
 	mustAdopt(t, b, sb, "adopt")
 
 	c.renew(t, "a")
-	restarted := c.restart(t, a)
-	if err := restarted.Reconcile(t.Context()); err != nil {
-		t.Fatalf("reconcile: %v", err)
-	}
+	restarted := c.restartReconciled(t, a)
 	if _, held := restarted.byID(sb.ID); held {
 		t.Error("the restarted node kept a claim another node adopted")
 	}
@@ -977,10 +962,7 @@ func TestReplicaRestartDropsAClaimTheAdopterWokeAndFinished(t *testing.T) {
 	}
 
 	c.renew(t, "a")
-	restarted := c.restart(t, a)
-	if err := restarted.Reconcile(t.Context()); err != nil {
-		t.Fatalf("reconcile: %v", err)
-	}
+	restarted := c.restartReconciled(t, a)
 	if _, held := restarted.byID(sb.ID); held {
 		t.Error("the restarted node kept a claim whose adopter woke it and consumed the row")
 	}
@@ -1008,10 +990,7 @@ func TestReplicaRestartKeepsAClaimWhoseUnconfirmedRowIsGone(t *testing.T) {
 		t.Fatalf("commit: %v", err)
 	}
 
-	restarted := c.restart(t, a)
-	if err := restarted.Reconcile(t.Context()); err != nil {
-		t.Fatalf("reconcile: %v", err)
-	}
+	restarted := c.restartReconciled(t, a)
 	held, ok := restarted.byID(sb.ID)
 	if !ok || restarted.replicaOf(held) != ck || !ckExists(t, restarted, ck) {
 		t.Errorf("claim held %v, replica %q, ck kept %v, want the claim and its replica kept", ok, restarted.replicaOf(held), ckExists(t, restarted, ck))

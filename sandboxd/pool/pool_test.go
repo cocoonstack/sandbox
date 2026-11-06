@@ -114,9 +114,7 @@ func TestClaimUnpooledKeyColdBoots(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
 
-	if _, err := claimAny(t.Context(), m, testKey, ClaimOptions{}); err != nil {
-		t.Fatalf("Claim: %v", err)
-	}
+	mustClaim(t, m, testKey)
 	if len(eng.colds) != 1 || len(eng.clones) != 0 {
 		t.Fatalf("got clones=%v colds=%v, want one cold boot", eng.clones, eng.colds)
 	}
@@ -762,10 +760,7 @@ func TestDirectClaimSkipsProbeGate(t *testing.T) {
 
 func TestRefillBudgetFollowsConfig(t *testing.T) {
 	cfg := &config.Config{DataDir: t.TempDir(), RefillConcurrency: 2}
-	m, err := NewManager(t.Context(), cfg, newFakeEngine(), testSecrets(t), testBackends(t, cfg))
-	if err != nil {
-		t.Fatalf("NewManager: %v", err)
-	}
+	m := mustManager(t, cfg, newFakeEngine())
 	if got := cap(m.refillSem); got != 2 {
 		t.Errorf("budget %d, want the configured 2", got)
 	}
@@ -897,10 +892,7 @@ func TestProbeReadyWaitsForVsock(t *testing.T) {
 	eng.vsockLateN = 2
 	m := newTestManager(t, eng)
 
-	sb, err := claimAny(t.Context(), m, testKey, ClaimOptions{})
-	if err != nil {
-		t.Fatalf("Claim: %v", err)
-	}
+	sb := mustClaim(t, m, testKey)
 	if sb.VsockSocket == "" {
 		t.Error("claim returned an empty vsock socket")
 	}
@@ -2388,13 +2380,19 @@ func buildGoldenAt(t *testing.T, m *Manager, key types.PoolKey, imageID string) 
 	return final
 }
 
-func newTestManagerAt(t testing.TB, eng *fakeEngine, dataDir string, pools ...config.PoolSpec) *Manager {
+func mustManager(t testing.TB, cfg *config.Config, eng Engine) *Manager {
 	t.Helper()
-	cfg := &config.Config{DataDir: dataDir, Pools: pools}
 	m, err := NewManager(t.Context(), cfg, eng, testSecrets(t), testBackends(t, cfg))
 	if err != nil {
 		t.Fatalf("setup manager: %v", err)
 	}
+	return m
+}
+
+func newTestManagerAt(t testing.TB, eng *fakeEngine, dataDir string, pools ...config.PoolSpec) *Manager {
+	t.Helper()
+	cfg := &config.Config{DataDir: dataDir, Pools: pools}
+	m := mustManager(t, cfg, eng)
 	t.Cleanup(func() { assertRunningCount(t, m) })
 	t.Cleanup(func() { settleGoldenBuilds(m) })
 	t.Cleanup(func() { settleCaptures(m) })
@@ -2739,11 +2737,7 @@ func volumeHoldersOf(m *Manager, name string) volumeHolders {
 func newVolumeManagerAt(t *testing.T, eng *fakeEngine, dataDir string, volumes []config.VolumeSpec) *Manager {
 	t.Helper()
 	cfg := &config.Config{DataDir: dataDir, Volumes: volumes}
-	m, err := NewManager(t.Context(), cfg, eng, testSecrets(t), testBackends(t, cfg))
-	if err != nil {
-		t.Fatalf("setup manager: %v", err)
-	}
-	return m
+	return mustManager(t, cfg, eng)
 }
 
 func liveCatalog(t *testing.T) []config.VolumeSpec {

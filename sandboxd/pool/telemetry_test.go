@@ -496,10 +496,7 @@ func TestGuestPortDialsWriteAuditEvents(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			dir := t.TempDir()
 			cfg := &config.Config{DataDir: dir, AuditLog: true, Pools: []config.PoolSpec{}}
-			m, err := NewManager(t.Context(), cfg, newFakeEngine(), testSecrets(t), testBackends(t, cfg))
-			if err != nil {
-				t.Fatalf("setup manager: %v", err)
-			}
+			m := mustManager(t, cfg, newFakeEngine())
 			sb := mustClaim(t, m, testKey)
 			if dialErr := tt.dial(m, sb); dialErr == nil {
 				t.Fatal("fake engine dial unexpectedly succeeded")
@@ -609,10 +606,7 @@ func TestEgressUsageEventNamesTheInjectedCredentials(t *testing.T) {
 func TestEgressAuditNamesTenantAndEndsARelayedFrameCannot(t *testing.T) {
 	dir := t.TempDir()
 	cfg := &config.Config{DataDir: dir, AuditLog: true, Pools: []config.PoolSpec{}}
-	m, err := NewManager(t.Context(), cfg, newFakeEngine(), testSecrets(t), testBackends(t, cfg))
-	if err != nil {
-		t.Fatalf("setup manager: %v", err)
-	}
+	m := mustManager(t, cfg, newFakeEngine())
 	m.recordEgress(t.Context(), "sb_v", "acme", egress.Event{
 		Method: http.MethodConnect, Host: "example.com", Port: 443, Decision: egress.DecisionAllow,
 		Local: netip.MustParseAddrPort("198.51.100.7:40123"), Remote: netip.MustParseAddrPort("93.184.216.34:443"),
@@ -643,10 +637,7 @@ func TestEgressAuditNamesTenantAndEndsARelayedFrameCannot(t *testing.T) {
 func TestARelayedFrameCannotForgeOrDropItsAuditLine(t *testing.T) {
 	dir := t.TempDir()
 	cfg := &config.Config{DataDir: dir, AuditLog: true, Pools: []config.PoolSpec{}}
-	m, err := NewManager(t.Context(), cfg, newFakeEngine(), testSecrets(t), testBackends(t, cfg))
-	if err != nil {
-		t.Fatalf("setup manager: %v", err)
-	}
+	m := mustManager(t, cfg, newFakeEngine())
 	frames := []string{
 		`{"op":"exec","argv":["id"],"decision":1,"src_addr":"x","secret":"gh","upstream":"up:3128","method":"GET","added":["t"]}`,
 		`{"op":"exec","argv":["id"],"path":1}`,

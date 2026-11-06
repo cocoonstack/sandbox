@@ -504,10 +504,7 @@ func TestFailoverRestartDropsAClaimWhoseInterruptedArchiveWasAdopted(t *testing.
 		t.Fatalf("put: %v", err)
 	}
 
-	restarted := c.restart(t, a)
-	if err := restarted.Reconcile(t.Context()); err != nil {
-		t.Fatalf("reconcile: %v", err)
-	}
+	restarted := c.restartReconciled(t, a)
 	if _, held := restarted.byID(sb.ID); held {
 		t.Error("the restarted node kept a claim whose archive another node adopted")
 	}
@@ -701,18 +698,12 @@ func TestFailoverSweepRunsOnTheHourlyStoreTicker(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		c := newFailoverCluster(t)
 		cfg := &config.Config{DataDir: t.TempDir(), CheckpointDir: c.ckDir}
-		m, err := NewManager(t.Context(), cfg, newFakeEngine(), testSecrets(t), testBackends(t, cfg))
-		if err != nil {
-			t.Fatalf("manager: %v", err)
-		}
+		m := mustManager(t, cfg, newFakeEngine())
 		counted := &countingRegistry{Registry: c.reg}
 		m.archives, m.nodeID = counted, "b"
 		ctx, cancel := context.WithCancel(t.Context())
-		done := make(chan struct{})
-		go func() {
-			defer close(done)
-			m.Run(ctx)
-		}()
+		var wg sync.WaitGroup
+		wg.Go(func() { m.Run(ctx) })
 		time.Sleep(time.Hour - time.Minute)
 		synctest.Wait()
 		if n := counted.sweepable.Load(); n != 0 {
@@ -724,7 +715,7 @@ func TestFailoverSweepRunsOnTheHourlyStoreTicker(t *testing.T) {
 			t.Errorf("%d sweeps after the hourly tick, want 1", n)
 		}
 		cancel()
-		<-done
+		wg.Wait()
 	})
 }
 
@@ -811,10 +802,7 @@ func TestFailoverRestartAfterAConsumeWithoutCommitKeepsTheClaim(t *testing.T) {
 		t.Fatalf("flush: %v", err)
 	}
 
-	restarted := c.restart(t, a)
-	if err := restarted.Reconcile(t.Context()); err != nil {
-		t.Fatalf("reconcile: %v", err)
-	}
+	restarted := c.restartReconciled(t, a)
 	held, _ := restarted.byID(sb.ID)
 	if rec, ok, _ := c.reg.Get(t.Context(), sb.ID); !ok || rec.Owner != "a" || rec.Consumed || held == nil || held.ArchiveEpoch != rec.Epoch {
 		t.Fatalf("row %+v present %v, held %v, want the tombstone re-armed at the claim's epoch", rec, ok, held != nil)
@@ -840,10 +828,7 @@ func TestFailoverAnArchiveWokenElsewhereIsDropped(t *testing.T) {
 	}
 	c.renew(t, "a")
 
-	restarted := c.restart(t, a)
-	if err := restarted.Reconcile(t.Context()); err != nil {
-		t.Fatalf("reconcile: %v", err)
-	}
+	restarted := c.restartReconciled(t, a)
 	if _, held := restarted.byID(sb.ID); held {
 		t.Error("the restart kept a claim whose checkpoint an adopter consumed")
 	}
@@ -892,10 +877,7 @@ func TestFailoverRestartClearsTheMarkerOfAnAdoptedClaim(t *testing.T) {
 	mustAdopt(t, b, sb, "adopt")
 	c.renew(t, "a")
 
-	restarted := c.restart(t, a)
-	if err := restarted.Reconcile(t.Context()); err != nil {
-		t.Fatalf("reconcile: %v", err)
-	}
+	restarted := c.restartReconciled(t, a)
 	if !ckExists(t, b, ck) || archiveCkMarked(restarted, ck) {
 		t.Error("the restart deleted the adopter's checkpoint or kept its marker")
 	}
@@ -965,10 +947,7 @@ func TestFailoverRestartInsideAnAdoptersWakeDropsTheClaim(t *testing.T) {
 	}
 	c.renew(t, "a")
 
-	restarted := c.restart(t, a)
-	if err := restarted.Reconcile(t.Context()); err != nil {
-		t.Fatalf("reconcile: %v", err)
-	}
+	restarted := c.restartReconciled(t, a)
 	if _, held := restarted.byID(sb.ID); held {
 		t.Error("the restarted node kept a claim the adopter woke")
 	}
@@ -998,10 +977,7 @@ func TestFailoverRestartAfterAnAdopterReleasedDropsTheClaim(t *testing.T) {
 	}
 	c.renew(t, "a")
 
-	restarted := c.restart(t, a)
-	if err := restarted.Reconcile(t.Context()); err != nil {
-		t.Fatalf("reconcile: %v", err)
-	}
+	restarted := c.restartReconciled(t, a)
 	if _, held := restarted.byID(sb.ID); held {
 		t.Error("the restarted node kept a claim the adopter released")
 	}
@@ -1119,10 +1095,7 @@ func TestFailoverRestartLeavesItsOwnTombstoneToTheSweep(t *testing.T) {
 	}
 	before, _, _ := c.reg.Get(t.Context(), sb.ID)
 
-	restarted := c.restart(t, a)
-	if err := restarted.Reconcile(t.Context()); err != nil {
-		t.Fatalf("reconcile: %v", err)
-	}
+	restarted := c.restartReconciled(t, a)
 	if _, held := restarted.byID(sb.ID); !held {
 		t.Error("the restart dropped a claim whose wake committed")
 	}
@@ -1404,10 +1377,7 @@ func TestFailoverRestartAfterAConsumeWhileAPeerSweptKeepsTheClaim(t *testing.T) 
 	b.sweepOrphanArchives(t.Context())
 	c.renew(t, "a")
 
-	restarted := c.restart(t, a)
-	if err := restarted.Reconcile(t.Context()); err != nil {
-		t.Fatalf("reconcile: %v", err)
-	}
+	restarted := c.restartReconciled(t, a)
 	if _, held := restarted.byID(sb.ID); !held {
 		t.Fatal("the restart dropped a claim whose only copy a peer swept")
 	}
@@ -1598,10 +1568,7 @@ func TestFailoverRestartDropsAClaimWhoseInterruptedArchiveWasConsumedElsewhere(t
 	}
 	c.renew(t, "a")
 
-	restarted := c.restart(t, a)
-	if err := restarted.Reconcile(t.Context()); err != nil {
-		t.Fatalf("reconcile: %v", err)
-	}
+	restarted := c.restartReconciled(t, a)
 	if _, held := restarted.byID(sb.ID); held {
 		t.Error("the restarted node kept a claim another node adopted and woke")
 	}
@@ -1617,10 +1584,7 @@ func TestFailoverRestartKeepsAClaimWhoseArchivePutNeverCommitted(t *testing.T) {
 	hibernateClaim(t, a, sb)
 	ck := interruptArchive(t, a, sb, false)
 
-	restarted := c.restart(t, a)
-	if err := restarted.Reconcile(t.Context()); err != nil {
-		t.Fatalf("reconcile: %v", err)
-	}
+	restarted := c.restartReconciled(t, a)
 	held, ok := restarted.byID(sb.ID)
 	if !ok || held.ArchivePending != "" {
 		t.Fatalf("claim held %v, want it kept with its intent cleared", ok)
@@ -1661,10 +1625,7 @@ func TestFailoverRestartAfterAnAbandonClearedItsIntentReclaimsTheExport(t *testi
 		t.Fatal("setup: clear intent")
 	}
 
-	restarted := c.restart(t, a)
-	if err := restarted.Reconcile(t.Context()); err != nil {
-		t.Fatalf("reconcile: %v", err)
-	}
+	restarted := c.restartReconciled(t, a)
 	if _, held := restarted.byID(sb.ID); !held || ckExists(t, restarted, ck) {
 		t.Error("the restart dropped the claim or kept the export an abandon left")
 	}
@@ -1705,10 +1666,7 @@ func TestFailoverAnOwnerReturningWithItsWakeCommittedPurgesItsTombstone(t *testi
 	b.sweepOrphanArchives(t.Context())
 	c.renew(t, "a")
 
-	restarted := c.restart(t, a)
-	if err := restarted.Reconcile(t.Context()); err != nil {
-		t.Fatalf("reconcile: %v", err)
-	}
+	restarted := c.restartReconciled(t, a)
 	restarted.sweepOrphanArchives(t.Context())
 	if held, ok := restarted.byID(sb.ID); !ok || held.ArchiveCk != "" {
 		t.Fatal("the returning owner lost the claim its wake committed")
@@ -1756,10 +1714,7 @@ func TestFailoverRestartUndoesItsOwnInterruptedArchiveAndItsIntent(t *testing.T)
 	hibernateClaim(t, a, sb)
 	ck := interruptArchive(t, a, sb, true)
 
-	restarted := c.restart(t, a)
-	if err := restarted.Reconcile(t.Context()); err != nil {
-		t.Fatalf("reconcile: %v", err)
-	}
+	restarted := c.restartReconciled(t, a)
 	held, ok := restarted.byID(sb.ID)
 	if !ok || held.ArchivePending != "" {
 		t.Fatalf("claim held %v, want it kept with its intent cleared", ok)
@@ -1963,6 +1918,15 @@ func (c *failoverCluster) node(t *testing.T, name, dataDir string, deleteAfter i
 func (c *failoverCluster) restart(t *testing.T, old *Manager) *Manager {
 	t.Helper()
 	return c.nodeOn(t, fakeOf(old), old.nodeID, old.dataDir, keepAnHour)
+}
+
+func (c *failoverCluster) restartReconciled(t *testing.T, old *Manager) *Manager {
+	t.Helper()
+	restarted := c.restart(t, old)
+	if err := restarted.Reconcile(t.Context()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	return restarted
 }
 
 func (c *failoverCluster) nodeOn(t *testing.T, eng *fakeEngine, name, dataDir string, deleteAfter int) *Manager {

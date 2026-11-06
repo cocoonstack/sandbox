@@ -193,14 +193,14 @@ func TestAProfileChangeADisableOvertookDoesNotReEnable(t *testing.T) {
 	eng, addrs := newFakeEngine(), &fakeAddrs{}
 	m := tunManager(t, eng, addrs, config.PoolSpec{PoolKey: testKey, Tun: true, Egress: anyPolicy})
 	sb := mustClaim(t, m, testKey)
-	prev, next, assign, err := m.planTun(sb, true, nil, new("res"))
+	plan, err := m.planTun(sb, true, nil, new("res"))
 	if err != nil {
 		t.Fatalf("plan: %v", err)
 	}
 	m.mu.Lock()
 	sb.TunOff = true
 	m.mu.Unlock()
-	if _, _, err = m.commitTun(t.Context(), sb, true, prev, next, assign); !errors.Is(err, errTunRaced) {
+	if _, _, err = m.commitTun(t.Context(), sb, true, plan); !errors.Is(err, errTunRaced) {
 		t.Fatalf("commit over a newer disable: %v, want errTunRaced", err)
 	}
 	if st := m.tunState(sb); st.On || st.Profile != "" {
@@ -372,10 +372,7 @@ func TestAReleaseTheAddressStoreRefusedIsRetried(t *testing.T) {
 func TestATunFlowEndWritesOneAuditRecord(t *testing.T) {
 	dir := t.TempDir()
 	cfg := &config.Config{DataDir: dir, AuditLog: true}
-	m, err := NewManager(t.Context(), cfg, newFakeEngine(), testSecrets(t), testBackends(t, cfg))
-	if err != nil {
-		t.Fatalf("manager: %v", err)
-	}
+	m := mustManager(t, cfg, newFakeEngine())
 	start := time.Date(2026, 11, 5, 12, 0, 0, 0, time.UTC)
 	m.recordTunFlow(t.Context(), "sb_t", "acme", "", tunnet.FlowRecord{
 		Proto: tunnet.ProtoUDP, Dst: netip.MustParseAddr("93.184.216.34"), Port: 443, Allowed: true,

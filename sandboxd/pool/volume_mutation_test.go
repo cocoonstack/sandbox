@@ -976,10 +976,7 @@ func (e *stalledDetachEngine) DetachVolume(ctx context.Context, _, _, _, _ strin
 func newTenantVolumeManager(t *testing.T, eng *fakeEngine, catalog []config.VolumeSpec, volumes ...types.Volume) (*Manager, *types.Sandbox) {
 	t.Helper()
 	cfg := &config.Config{DataDir: t.TempDir(), APIToken: "root", Volumes: catalog}
-	m, err := NewManager(t.Context(), cfg, eng, testSecrets(t), testBackends(t, cfg))
-	if err != nil {
-		t.Fatalf("NewManager: %v", err)
-	}
+	m := mustManager(t, cfg, eng)
 	putTenants(t, m, tenants.TenantSpec{Name: "acme", Token: "acme-token"})
 	sb, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Tenant: "acme", Volumes: volumes})
 	if err != nil {

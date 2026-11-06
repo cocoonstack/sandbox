@@ -209,10 +209,7 @@ func TestWakeOfAFailedClaimRearmsEgressAfterARestart(t *testing.T) {
 		DataDir: t.TempDir(), Bridges: []string{"sbxbr0"}, EgressCA: writeTestEgressCA(t), VMMRestart: types.VMMRestartNone,
 		Pools: []config.PoolSpec{{PoolKey: testKey, Egress: &egress.Policy{Allow: []egress.Rule{{Host: "example.com"}}}}},
 	}
-	first, err := NewManager(t.Context(), cfg, eng, testSecrets(t), testBackends(t, cfg))
-	if err != nil {
-		t.Fatalf("manager: %v", err)
-	}
+	first := mustManager(t, cfg, eng)
 	sb := mustClaim(t, first, testKey)
 	door := engine.EgressSocketPath(sb.VsockSocket)
 	killVMM(eng, sb.VMName)
@@ -598,10 +595,7 @@ func TestReconcileKeepsRunningClaimsTheHostLost(t *testing.T) {
 			}
 			seedClaims(t, dataDir, claims)
 			cfg := &config.Config{DataDir: dataDir, VMMRestart: tt.policy}
-			m, err := NewManager(t.Context(), cfg, eng, testSecrets(t), testBackends(t, cfg))
-			if err != nil {
-				t.Fatalf("setup manager: %v", err)
-			}
+			m := mustManager(t, cfg, eng)
 
 			if err := m.Reconcile(t.Context()); err != nil {
 				t.Fatalf("Reconcile: %v", err)
