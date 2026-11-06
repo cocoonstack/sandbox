@@ -12,7 +12,7 @@ use nix::unistd::{self, UnlinkatFlags};
 use tokio::io::{AsyncBufRead, AsyncReadExt, AsyncWrite};
 use tokio::process::Command;
 
-use crate::proto::{self, ErrorKind, Response, err_frame};
+use crate::proto::{self, BULK_CHUNK, ErrorKind, Response, err_frame};
 use crate::sysutil;
 
 const STDERR_CAP: usize = 16 * 1024;
@@ -73,7 +73,9 @@ pub async fn pull<W: AsyncWrite + Unpin>(w: &mut W, path: &str) -> io::Result<()
         Err(e) => return err_frame(w, &e, "spawn tar").await,
     };
 
-    if let Err(e) = proto::stream_data_frames(&mut out, w).await? {
+    if let Err(e) =
+        proto::stream_data_frames(&mut out, w, &mut vec![0u8; BULK_CHUNK], &mut Vec::new()).await?
+    {
         let _ = child.wait().await;
         return err_frame(w, &e, "read tar").await;
     }

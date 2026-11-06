@@ -67,7 +67,7 @@ pub async fn read<W: AsyncWrite + Unpin>(w: &mut W, path: String) -> io::Result<
     })
     .await
     .map_err(io::Error::other)?;
-    let (file, head) = match opened {
+    let (file, mut head) = match opened {
         Ok(Some((file, Ok(head)))) => (file, head),
         Ok(Some((_, Err(e)))) => return err_frame(w, &e, "read").await,
         Ok(None) => {
@@ -75,11 +75,14 @@ pub async fn read<W: AsyncWrite + Unpin>(w: &mut W, path: String) -> io::Result<
         }
         Err(e) => return err_frame(w, &e, "open").await,
     };
+    let mut frame = Vec::new();
     if !head.is_empty() {
-        proto::write_chunk_frame(w, &mut Vec::new(), "data", &head).await?;
+        proto::write_chunk_frame(w, &mut frame, "data", &head).await?;
     }
     if head.len() == BULK_CHUNK
-        && let Err(e) = proto::stream_data_frames(&mut fs::File::from_std(file), w).await?
+        && let Err(e) =
+            proto::stream_data_frames(&mut fs::File::from_std(file), w, &mut head, &mut frame)
+                .await?
     {
         return err_frame(w, &e, "read").await;
     }

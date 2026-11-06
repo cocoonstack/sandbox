@@ -168,12 +168,16 @@ pub async fn replace<W: AsyncWrite + Unpin>(
     replacement: String,
 ) -> std::io::Result<()> {
     let re = match compile(pattern).await {
-        Ok(re) => re,
+        Ok(re) => Arc::new(re),
         Err(e) => return proto::error_frame(w, ErrorKind::BadRequest, e).await,
     };
     let replacement: Arc<str> = replacement.into();
     for file in files {
-        let (re, replacement, path) = (re.clone(), Arc::clone(&replacement), PathBuf::from(&file));
+        let (re, replacement, path) = (
+            Arc::clone(&re),
+            Arc::clone(&replacement),
+            PathBuf::from(&file),
+        );
         let replaced = tokio::task::spawn_blocking(move || {
             let mut body = String::new();
             if !read_bounded(&path, &mut body)? {

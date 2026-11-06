@@ -511,17 +511,17 @@ pub async fn error_frame<W: AsyncWrite + Unpin>(
 pub async fn stream_data_frames<R, W>(
     reader: &mut R,
     w: &mut W,
+    buf: &mut [u8],
+    frame: &mut Vec<u8>,
 ) -> io::Result<Result<(), io::Error>>
 where
     R: AsyncRead + Unpin,
     W: AsyncWrite + Unpin,
 {
-    let mut buf = vec![0u8; BULK_CHUNK];
-    let mut frame = Vec::new();
     loop {
-        match reader.read(&mut buf).await {
+        match reader.read(buf).await {
             Ok(0) => return Ok(Ok(())),
-            Ok(n) => write_chunk_frame(w, &mut frame, "data", &buf[..n]).await?,
+            Ok(n) => write_chunk_frame(w, frame, "data", &buf[..n]).await?,
             Err(e) => return Ok(Err(e)),
         }
     }
