@@ -194,7 +194,7 @@ func (m *Manager) foldTunBytes() {
 func (m *Manager) tunState(sb *types.Sandbox) outbound.TunState {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return outbound.TunState{On: !sb.TunOff, Addr: sb.TunAddr, Profile: sb.TunProfile, Bytes: sb.TunBytes}
+	return outbound.TunState{On: !sb.TunOff, Addr: sb.TunAddr, Profile: sb.TunProfile, Bytes: sb.TunBytes, Sock: sb.VsockSocket}
 }
 
 func (m *Manager) tunRowed(sb *types.Sandbox) bool {
