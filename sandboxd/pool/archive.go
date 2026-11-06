@@ -264,10 +264,13 @@ func (m *Manager) wakeArchived(ctx context.Context, sb *types.Sandbox) (string, 
 
 // handOffForRoom runs one capacity hand-off at a time and reports whether a peer adopted the claim; the caller holds Transition.
 func (m *Manager) handOffForRoom(ctx context.Context, sb *types.Sandbox) bool {
-	if m.archives == nil || time.Now().UnixNano() < m.handOffQuietUntil.Load() || !m.handOffBusy.CompareAndSwap(false, true) {
+	if m.archives == nil || !m.handOffBusy.CompareAndSwap(false, true) {
 		return false
 	}
 	defer m.handOffBusy.Store(false)
+	if time.Now().UnixNano() < m.handOffQuietUntil.Load() {
+		return false
+	}
 	logger := log.WithFunc("pool.handOffForRoom")
 	err := m.handOff(ctx, sb, true)
 	switch {
