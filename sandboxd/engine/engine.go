@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -390,7 +391,7 @@ func (e *Engine) probe(ctx context.Context, vsockSocket string, port int, timeou
 }
 
 func (e *Engine) cloneArgs(name string, key types.PoolKey, source ...string) []string {
-	return append(append([]string{"vm", "clone"}, source...), e.cloneFlags(name, key, e.restoreArgs())...)
+	return slices.Concat([]string{"vm", "clone"}, source, e.cloneFlags(name, key, e.restoreArgs()))
 }
 
 func (e *Engine) cloneFlags(name string, key types.PoolKey, restore []string) []string {
@@ -401,8 +402,7 @@ func (e *Engine) cloneFlags(name string, key types.PoolKey, restore []string) []
 }
 
 func (e *Engine) restoreCmdArgs(vmName, snapRef string) []string {
-	args := append([]string{"vm", "restore", argOutput, formatJSON}, e.restoreArgs()...)
-	return append(args, vmName, snapRef)
+	return slices.Concat([]string{"vm", "restore", argOutput, formatJSON}, e.restoreArgs(), []string{vmName, snapRef})
 }
 
 func (e *Engine) directIOArg() string {
