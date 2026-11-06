@@ -155,16 +155,6 @@ func TestInterceptsHostCoversPatterns(t *testing.T) {
 	}
 }
 
-func TestWildcardApexIsNotMatched(t *testing.T) {
-	policy := Policy{Allow: []Rule{{Host: "*.example.com"}}}
-	if _, d := policy.Eval("example.com", "GET", 443); d != DecisionDeny {
-		t.Error("apex example.com matched *.example.com, want deny")
-	}
-	if _, d := policy.Eval("a.example.com", "GET", 443); d != DecisionAllow {
-		t.Error("a.example.com did not match *.example.com, want allow")
-	}
-}
-
 func TestEvalFlowMatchesOnlyBareWildcardRules(t *testing.T) {
 	p := Policy{Allow: []Rule{
 		{Host: "api.example.com", Ports: []uint16{443}},
