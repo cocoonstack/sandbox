@@ -58,8 +58,8 @@ func TestFixtureCorpusRoundTrips(t *testing.T) {
 		seen++
 	}
 
-	if seen != 61 {
-		t.Fatalf("fixture corpus: %d frames, want exactly 61", seen)
+	if seen != 63 {
+		t.Fatalf("fixture corpus: %d frames, want exactly 63", seen)
 	}
 }
 

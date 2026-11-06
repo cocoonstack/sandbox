@@ -9,7 +9,7 @@ use tokio::task::JoinHandle;
 
 use crate::proc::{Chunk, Table, write_chunk};
 use crate::proto::{self, ErrorKind, ExecReq, ProcInfo, Request, Response};
-use crate::{exec, find, forward, fs, git, lsp, pty, session, tree, watch};
+use crate::{exec, find, forward, fs, git, lsp, pty, session, tree, tun, watch};
 
 /// Shared daemon state handed to every connection.
 pub struct State {
@@ -153,6 +153,14 @@ impl State {
                 return finish_feeder(feeder, res).await;
             }
             Request::LspStop { server_id } => self.lsp.stop(writer, &server_id).await,
+            Request::TunUp => tun_switch(writer, "tun up", tun::up).await,
+            Request::TunDown => {
+                tun_switch(writer, "tun down", || {
+                    tun::down();
+                    Ok(())
+                })
+                .await
+            }
             Request::PortForward { port } => {
                 let (rx, feeder) = spawn_feeder(reader);
                 let res = forward::run(port, rx, writer).await;
@@ -364,6 +372,21 @@ where
         let _ = tx.send(req).await;
     }
     (reader, None)
+}
+
+/// Runs a blocking tun switch off the async workers and answers `done` or the error.
+async fn tun_switch<W: AsyncWrite + Unpin>(
+    w: &mut W,
+    what: &str,
+    switch: fn() -> std::io::Result<()>,
+) -> std::io::Result<()> {
+    match tokio::task::spawn_blocking(switch)
+        .await
+        .unwrap_or_else(|e| Err(std::io::Error::other(e)))
+    {
+        Ok(()) => proto::write_frame(w, &Response::Done).await,
+        Err(e) => proto::error_frame(w, ErrorKind::Internal, format!("{what}: {e}")).await,
+    }
 }
 
 fn now_secs() -> u64 {

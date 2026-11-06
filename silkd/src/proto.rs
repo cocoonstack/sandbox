@@ -169,6 +169,8 @@ pub enum Request {
     LspStop {
         server_id: String,
     },
+    TunUp,
+    TunDown,
     Data {
         #[serde(with = "b64")]
         data: Vec<u8>,
@@ -845,7 +847,7 @@ mod tests {
             seen += 1;
         }
         assert_eq!(
-            seen, 61,
+            seen, 63,
             "fixture corpus: adding a verb means adding its fixture"
         );
     }

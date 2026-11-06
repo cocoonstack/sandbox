@@ -59,6 +59,8 @@ vsock-only I/O (hardened default); `net=egress` attaches a bridge/CNI NIC.
 - [Security model](security.md) — trust boundaries, what a compromised
   guest can reach, the deployment assumptions the guarantees rest on, and
   the honest limitations
+- [Advanced network mode](advanced-network.md) — the L3 `tun0` path beside the
+  proxies, and its vsock packet protocol
 - [silkd](silkd.md) — the in-guest daemon: protocol, verb reference, lanes
   and limits
 - [Performance](performance.md) — measured latencies and the environments

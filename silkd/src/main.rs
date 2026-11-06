@@ -33,6 +33,8 @@ async fn main() {
     let dns = SocketAddrV4::new(net_egress::DNS_ADDR, net_egress::DNS_PORT);
     tokio::spawn(relay(dns, net_egress::DNS_HOST_VSOCK_PORT));
     tokio::spawn(datagrams(dns, net_egress::DNS_DATAGRAM_HOST_VSOCK_PORT));
+    #[cfg(target_os = "linux")]
+    silkd::tun::ask_at_boot();
     tokio::spawn(async {
         if let Err(e) = imds::serve().await {
             eprintln!("silkd imds: {e}");

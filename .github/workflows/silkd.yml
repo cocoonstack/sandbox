@@ -36,4 +36,4 @@ jobs:
 
       - name: root-only tests
         working-directory: silkd
-        run: sudo -E env "PATH=$PATH" "HOME=$HOME" cargo test --locked --test git_e2e --test fs_e2e --test find_e2e -- --ignored
+        run: sudo -E env "PATH=$PATH" "HOME=$HOME" cargo test --locked --test git_e2e --test fs_e2e --test find_e2e --test tun_e2e -- --ignored --skip throughput

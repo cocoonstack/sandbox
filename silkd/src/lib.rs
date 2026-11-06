@@ -16,5 +16,8 @@ pub mod server;
 pub mod session;
 pub mod sysutil;
 pub mod tree;
+pub mod tun;
+#[cfg(target_os = "linux")]
+mod tun_uring;
 pub mod vsock;
 pub mod watch;
