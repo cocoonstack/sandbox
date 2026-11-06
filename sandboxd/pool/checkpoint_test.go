@@ -277,6 +277,12 @@ func TestCheckpointTenantIsolation(t *testing.T) {
 		t.Errorf("root listing %+v, %v; want both records", ckpts, err)
 	}
 
+	if _, err := m.ClaimCheckpoint(t.Context(), ckA.ID, ClaimOptions{Tenant: "beta"}); !errors.Is(err, ErrUnknownCheckpoint) {
+		t.Errorf("cross-tenant branch: %v, want ErrUnknownCheckpoint", err)
+	}
+	if _, err := m.ClaimCheckpoint(t.Context(), ckA.ID, ClaimOptions{Tenant: "acme"}); err != nil {
+		t.Errorf("own branch: %v", err)
+	}
 	if err := m.DeleteCheckpoint(t.Context(), ckA.ID, "beta", DeleteFleet); !errors.Is(err, ErrUnknownCheckpoint) {
 		t.Errorf("cross-tenant delete: %v, want ErrUnknownCheckpoint", err)
 	}

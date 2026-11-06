@@ -937,7 +937,8 @@ for a replicated sandbox while its node's lease is overdue.
 Auth: node API token; body `{"ttl_seconds": 0, "no_redirect": false,
 "metadata": {}, "on_expire": "destroy", "env": {}}`. Claims a fresh sandbox branched from the checkpoint (a
 normal claim response, attributed to the caller); the checkpoint's recorded
-key applies — the unguessable id is the capability to branch. The branch
+key applies. A tenant token branches only its own tenant's checkpoints; any
+other id answers 404, as for list and delete. The branch
 carries this request's `metadata`, `on_expire` and `env`, under the claim rules,
 never the source sandbox's. 400 metadata over a bound, an unknown
 `on_expire`, or a bad `env` entry.

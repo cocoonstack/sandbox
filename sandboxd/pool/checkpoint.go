@@ -217,7 +217,7 @@ func (m *Manager) claimLoaded(ctx context.Context, ckpt types.Checkpoint, o Clai
 		return nil, err
 	}
 	defer m.recs.rlockRec(ckpt.ID)()
-	if ckpt.Archive {
+	if ckpt.Archive || !tenantOwns(o.Tenant, ckpt.Tenant) {
 		return nil, ErrUnknownCheckpoint // a wake image, not a branchable checkpoint
 	}
 	dir, _, _, err := m.ckpts.Fetch(ctx, ckpt.ID)
