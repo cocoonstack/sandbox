@@ -121,13 +121,9 @@ func (m *Manager) adoptPools(ctx context.Context) error {
 func poolSeedHash(specs []config.PoolSpec) string {
 	shaped := slices.Clone(specs)
 	for i := range shaped {
-		shaped[i].Egress = nil
-		shaped[i].Warmup = nil
-		shaped[i].CaptureTrim = false
-		shaped[i].Storage = ""
-		shaped[i].ReplicateSeconds = 0
-		shaped[i].Reader = false
-		shaped[i].EgressUpstreamEnv = ""
+		for _, f := range shaped[i].ConfigOwned() {
+			f.Value.SetZero()
+		}
 	}
 	slices.SortFunc(shaped, func(a, b config.PoolSpec) int { return a.Compare(b.PoolKey) })
 	return utils.DigestHex(shaped)

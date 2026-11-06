@@ -90,6 +90,7 @@ func TestPoolSeedHashIgnoresConfigOwnedFields(t *testing.T) {
 		"replicate_seconds":   func(s *config.PoolSpec) { s.ReplicateSeconds = 60 },
 		"reader":              func(s *config.PoolSpec) { s.Reader = true },
 		"egress_upstream_env": func(s *config.PoolSpec) { s.EgressUpstreamEnv = "POOL_UPSTREAM" },
+		"tun":                 func(s *config.PoolSpec) { s.Tun = true },
 	} {
 		spec := base
 		edit(&spec)
