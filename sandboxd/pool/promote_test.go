@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"slices"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/cocoonstack/sandbox/sandboxd/config"
@@ -601,40 +602,43 @@ func TestRejectedLabelWritesLeakNoRecLock(t *testing.T) {
 }
 
 func TestClaimFromATemplateRunsBesideItsRepromote(t *testing.T) {
-	m := newTestManager(t, newFakeEngine())
-	parent := mustClaim(t, m, testKey)
-	key, _, err := m.Promote(t.Context(), parent.ID, Cred{Token: parent.Token}, "tpl:x", "")
-	if err != nil {
-		t.Fatalf("Promote: %v", err)
-	}
-	slow := &slowPrepareStore{Store: m.tpls, entered: make(chan struct{}), release: make(chan struct{})}
-	m.tpls = slow
-	repromoted := make(chan error, 1)
-	go func() {
-		_, _, promoteErr := m.Promote(t.Context(), parent.ID, Cred{Token: parent.Token}, "tpl:x", "")
-		repromoted <- promoteErr
-	}()
-	<-slow.entered
-
-	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
-	defer cancel()
-	claimed := make(chan error, 1)
-	go func() {
-		_, claimErr := claimAny(ctx, m, key, ClaimOptions{})
-		claimed <- claimErr
-	}()
-	select {
-	case err = <-claimed:
+	synctest.Test(t, func(t *testing.T) {
+		m := newTestManager(t, newFakeEngine())
+		parent := mustClaim(t, m, testKey)
+		key, _, err := m.Promote(t.Context(), parent.ID, Cred{Token: parent.Token}, "tpl:x", "")
 		if err != nil {
-			t.Errorf("claim during a re-promote: %v, want a clone of the committed template", err)
+			t.Fatalf("Promote: %v", err)
 		}
-	case <-time.After(2 * time.Second):
-		t.Error("a claim with a 100 ms context was still blocked 2 s into a re-promote")
-	}
-	close(slow.release)
-	if err = <-repromoted; err != nil {
-		t.Fatalf("re-promote: %v", err)
-	}
+		slow := &slowPrepareStore{Store: m.tpls, entered: make(chan struct{}), release: make(chan struct{})}
+		m.tpls = slow
+		repromoted := make(chan error, 1)
+		go func() {
+			_, _, promoteErr := m.Promote(t.Context(), parent.ID, Cred{Token: parent.Token}, "tpl:x", "")
+			repromoted <- promoteErr
+		}()
+		<-slow.entered
+
+		ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+		defer cancel()
+		claimed := make(chan error, 1)
+		go func() {
+			_, claimErr := claimAny(ctx, m, key, ClaimOptions{})
+			claimed <- claimErr
+		}()
+		synctest.Wait()
+		select {
+		case err = <-claimed:
+			if err != nil {
+				t.Errorf("claim during a re-promote: %v, want a clone of the committed template", err)
+			}
+		default:
+			t.Error("a claim with a 100 ms context was still blocked during a re-promote")
+		}
+		close(slow.release)
+		if err = <-repromoted; err != nil {
+			t.Fatalf("re-promote: %v", err)
+		}
+	})
 }
 
 type slowPrepareStore struct {
