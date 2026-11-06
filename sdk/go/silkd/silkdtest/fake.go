@@ -36,8 +36,7 @@ func NewFake(root string) *Fake {
 	return &Fake{Root: root, sessions: map[string]bool{}, branches: []string{"main"}, current: "main"}
 }
 
-// ServeConn serves RPCs on an already-open connection (e.g. after an HTTP
-// hijack) until the peer closes it.
+// ServeConn serves RPCs on an already-open connection (e.g. after an HTTP hijack) until the peer closes it.
 func (f *Fake) ServeConn(conn net.Conn) {
 	serveConn(conn, bufio.NewReader(conn), f.serve)
 }
@@ -118,9 +117,9 @@ func (f *Fake) fsList(conn net.Conn, path string) {
 	var entries []wire.DirEntry
 	for _, e := range ents {
 		info, _ := e.Info()
-		kind := "file"
+		kind := wire.FileKindFile
 		if e.IsDir() {
-			kind = "dir"
+			kind = wire.FileKindDir
 		}
 		var size uint64
 		if info != nil {
@@ -138,9 +137,9 @@ func (f *Fake) fsStat(conn net.Conn, path string) {
 		errFrame(conn, wire.KindNotFound, err.Error())
 		return
 	}
-	kind := "file"
+	kind := wire.FileKindFile
 	if info.IsDir() {
-		kind = "dir"
+		kind = wire.FileKindDir
 	}
 	send(conn, &wire.Stat{Info: wire.FileInfo{
 		Kind: kind,
@@ -225,8 +224,7 @@ func (f *Fake) fsPull(conn net.Conn, path string) {
 		return
 	}
 	_ = tw.Close()
-	data := buf.Bytes()
-	sendChunked(conn, data)
+	sendChunked(conn, buf.Bytes())
 }
 
 func (f *Fake) sessionCreate(conn net.Conn, req *wire.SessionCreate) {
@@ -337,7 +335,7 @@ func (f *Fake) fsWatch(conn net.Conn, r *bufio.Reader, req *wire.FsWatch) {
 		return
 	}
 	send(conn, wire.Ready{})
-	send(conn, &wire.Event{Kind: "created", Path: req.Path + "/silkdtest-event"})
+	send(conn, &wire.Event{Kind: wire.EventCreated, Path: req.Path + "/silkdtest-event"})
 	_, _ = io.Copy(io.Discard, r)
 }
 
