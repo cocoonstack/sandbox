@@ -12,7 +12,6 @@ from cocoonsandbox import APIError, Client, Sandbox, SandboxError
 from langchain_core.tools import StructuredTool, ToolException
 from pydantic import BaseModel, Field
 
-# one call's wall clock over the claim, the dial and the command; the tool description states it
 CALL_TIMEOUT = 300
 
 
@@ -70,7 +69,7 @@ class CocoonToolkit:
                 "Returns stdout; a non-empty stderr is appended as a 'stderr:' "
                 "line and a non-zero status as an 'exit code: N' line; a "
                 "command that prints nothing and exits 0 returns '(no output)'. "
-                "The call is cut off after 5 minutes and the reply says so. "
+                f"The call is cut off after {CALL_TIMEOUT // 60} minutes and the reply says so. "
                 "Files and installed packages persist across calls; environment "
                 "variables and the working directory do not.",
                 ExecInput,
