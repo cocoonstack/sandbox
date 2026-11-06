@@ -1,7 +1,6 @@
 """Checkpoint claim redirect, mirroring the Client.new redirect in test_fault_matrix.py."""
 
 import pytest
-
 from cocoonsandbox import APIError, Client
 
 

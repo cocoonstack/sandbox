@@ -7,8 +7,6 @@ import threading
 import time
 
 import pytest
-from conftest import sandbox_at
-
 from cocoonsandbox import (
     APIError,
     Client,
@@ -23,6 +21,7 @@ from cocoonsandbox import (
 )
 from cocoonsandbox.conn import Conn, dial_agent, remaining_timeout
 from cocoonsandbox.frames import BULK_CHUNK
+from conftest import sandbox_at
 
 
 def test_dial_agent_rejects_control_chars_in_identity():

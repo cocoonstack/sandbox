@@ -566,7 +566,7 @@ class Sandbox:
         while True:
             try:
                 local, _ = listener.accept()
-            except socket.timeout:
+            except TimeoutError:
                 continue
             except OSError:
                 return

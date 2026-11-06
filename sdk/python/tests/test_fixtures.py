@@ -5,7 +5,6 @@ import json
 import pathlib
 
 import pytest
-
 from cocoonsandbox import frames
 
 FIXTURES = pathlib.Path(__file__).parents[3] / "protocol" / "wire" / "fixtures" / "v1"

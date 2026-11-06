@@ -7,9 +7,8 @@ import threading
 import time
 
 import pytest
-from conftest import sandbox_at
-
 from cocoonsandbox import APIError, SandboxTimeout
+from conftest import sandbox_at
 
 REPLIES = {
     "info": {"type": "info", "version": "fake", "uptime_secs": 0, "procs": 0},

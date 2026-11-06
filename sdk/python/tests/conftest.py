@@ -6,11 +6,11 @@ import resource
 import socket
 import threading
 import time
+from collections.abc import Callable
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from typing import BinaryIO, Callable
+from typing import BinaryIO
 
 import pytest
-
 from cocoonsandbox import Client, Sandbox
 
 

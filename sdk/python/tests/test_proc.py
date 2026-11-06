@@ -3,10 +3,9 @@
 import threading
 
 import pytest
-from conftest import FakeConn, sandbox_at
-
 from cocoonsandbox import ProtocolError
 from cocoonsandbox.frames import BULK_CHUNK
+from conftest import FakeConn, sandbox_at
 
 
 class BlockingStdinConn(FakeConn):

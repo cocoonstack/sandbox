@@ -7,11 +7,10 @@ import threading
 import time
 
 import pytest
-from conftest import accept_upgrade, sandbox_at
-
 from cocoonsandbox import ProtocolError, Sandbox, SandboxTimeout
 from cocoonsandbox import conn as conn_module
 from cocoonsandbox import sandbox as sandbox_module
+from conftest import accept_upgrade, sandbox_at
 
 TIMEOUT = 0.2
 
@@ -92,7 +91,7 @@ def test_dial_is_still_bounded_by_the_client_timeout():
     assert time.monotonic() - started < 3 * TIMEOUT
 
 
-@pytest.mark.parametrize(("exc", "want"), [(socket.timeout(), SandboxTimeout), (ConnectionResetError(), ProtocolError)])
+@pytest.mark.parametrize(("exc", "want"), [(TimeoutError(), SandboxTimeout), (ConnectionResetError(), ProtocolError)])
 def test_handshake_failures_are_typed(exc, want):
     assert isinstance(conn_module._handshake_error("agent upgrade", exc), want)
 

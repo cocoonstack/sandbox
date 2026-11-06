@@ -1,9 +1,8 @@
 from types import SimpleNamespace
 
 import pytest
-from conftest import FakeNode
-
 from cocoonsandbox import Client, VolumeError
+from conftest import FakeNode
 from examples.volume_controller import VolumeHooks, hibernate_volume, resume_volume
 
 PATH = "/v1/sandboxes/sb_1"

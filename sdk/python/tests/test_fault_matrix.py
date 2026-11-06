@@ -5,7 +5,6 @@ import threading
 import time
 
 import pytest
-
 from cocoonsandbox import APIError, Client
 
 

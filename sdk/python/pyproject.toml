@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "cocoonstack-sandbox"
 version = "0.1.23"
 description = "Python SDK for the cocoon sandbox control plane"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 license = { text = "Apache-2.0" }
 readme = "README.md"
 
@@ -22,10 +22,3 @@ pythonpath = ["."]
 [tool.mypy]
 strict = true
 files = ["cocoonsandbox", "examples"]
-
-[tool.ruff]
-line-length = 120
-target-version = "py39"
-
-[tool.ruff.lint]
-select = ["E", "F", "W", "I", "UP", "B", "SIM"]

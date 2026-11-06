@@ -3,9 +3,8 @@
 from collections import UserDict
 
 import pytest
-from conftest import FakeNode, sandbox_at
-
 from cocoonsandbox import APIError, VolumeError
+from conftest import FakeNode, sandbox_at
 
 PATH = "/v1/sandboxes/sb_1/volumes"
 VIEW = {

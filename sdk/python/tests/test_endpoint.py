@@ -2,7 +2,6 @@ import socket
 import threading
 
 import pytest
-
 from cocoonsandbox import Client, SandboxTimeout
 from cocoonsandbox.conn import dial_agent
 from cocoonsandbox.endpoint import _endpoint_url

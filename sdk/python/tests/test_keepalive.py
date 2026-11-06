@@ -7,10 +7,9 @@ import socket
 import threading
 
 import pytest
-from conftest import accept_upgrade, sandbox_at, wait_until
-
 from cocoonsandbox import APIError, Client, SandboxError, SilkdError
 from cocoonsandbox.errors import _mark_gone
+from conftest import accept_upgrade, sandbox_at, wait_until
 
 INPUT_OPS = ("stdin", "stdin_close", "data", "data_end")
 

@@ -7,11 +7,10 @@ import socket
 import threading
 
 import pytest
-from conftest import FakeConn, sandbox_at
-
 from cocoonsandbox import Lsp, Pty, Session
 from cocoonsandbox.conn import Conn
 from cocoonsandbox.frames import PROTO_VERSION
+from conftest import FakeConn, sandbox_at
 
 FIXTURES = pathlib.Path(__file__).parents[3] / "protocol" / "wire" / "fixtures" / "v1"
 

@@ -5,9 +5,8 @@ import time
 from http.server import ThreadingHTTPServer
 
 import pytest
-from conftest import FakeNode, sandbox_at, wait_until
-
 from cocoonsandbox import APIError, Client, Template
+from conftest import FakeNode, sandbox_at, wait_until
 
 
 class KeptNode(FakeNode):

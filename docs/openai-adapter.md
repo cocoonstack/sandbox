@@ -44,5 +44,5 @@ ref, network lane (empty for the node's default, or `none`/`egress`), and
 `ttl_seconds`, which defaults to one hour: nothing renews a lease, and a
 session outlives the node's 5-minute default. The session state is
 JSON-serializable, so a run can be resumed against the same sandbox after a
-process restart. Requires Python 3.10+ (the Agents SDK floor); the
-underlying `cocoonsandbox` stays 3.9+.
+process restart. Requires Python 3.10+, the floor of both the Agents SDK
+and `cocoonsandbox`.
