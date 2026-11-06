@@ -306,6 +306,23 @@ func TestRestartThatCannotArmTheEgressDoorFailsAndSpendsTheBudget(t *testing.T) 
 	assertRestartFailsUntilBudget(t, m, eng, sb)
 }
 
+func TestARestartedGuestIsBilledFromItsBoot(t *testing.T) {
+	eng := newFakeEngine()
+	m := newTestManager(t, eng)
+	sb, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Env: types.Env{"MODE": {Value: "prod"}}})
+	if err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	killVMM(eng, sb.VMName)
+	eng.mu.Lock()
+	eng.guestEnvErr = errors.New("guest write refused")
+	eng.mu.Unlock()
+	m.recoverVMM(t.Context(), sb)
+	if got := usageEventsOf(t, m, sb.ID); got != "claim,vmm_exit,vmm_restart,vmm_exit" {
+		t.Errorf("events %q, want the booted guest billed from its start to its stop", got)
+	}
+}
+
 func TestDaemonExitEventRecoversWithoutAList(t *testing.T) {
 	eng := newFakeEngine()
 	eng.vmEvents = make(chan fakeVMEvent)
@@ -649,8 +666,9 @@ func assertRestartFailsUntilBudget(t *testing.T, m *Manager, eng *fakeEngine, sb
 	if stops != vmmRestartBudget {
 		t.Errorf("stops %d, want every failed restart's VM stopped", stops)
 	}
-	if events := usageEventsOf(t, m, sb.ID); strings.Contains(events, "vmm_restart") {
-		t.Errorf("events %s record a restart that never completed", events)
+	events := usageEventsOf(t, m, sb.ID)
+	if !strings.HasSuffix(events, "vmm_exit,vmm_failed") || strings.Count(events, "vmm_restart") != strings.Count(events, "vmm_exit")-1 {
+		t.Errorf("events %s, want each booted attempt billed up to its stop, then the failure", events)
 	}
 }
 

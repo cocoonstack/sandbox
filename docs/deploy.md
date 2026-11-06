@@ -743,7 +743,7 @@ claimed `on_expire: archive`, which needs a running VM to archive:
 | outcome | when | client sees |
 |---|---|---|
 | cold restart | `cold` (default), none-lane claim without volumes, within 3 restarts in 10 min | `restarts` +1 and `restarted_at` on the sandbox row, `vmm_exit` then `vmm_restart` usage events; a call before the next pass gets `502`, one during the boot waits for it, open relays see EOF and redial |
-| failed | `none`, an egress-lane or volume claim, the VM record gone, the restart budget spent, or 3 failed boots | `failed: "<reason>"` on the row, `vmm_exit` then `vmm_failed` usage events, `409` from exec, relays, ports, hibernate, fork, checkpoint and promote |
+| failed | `none`, an egress-lane or volume claim, the VM record gone, the restart budget spent, or 3 failed boots | `failed: "<reason>"` on the row, `vmm_exit` then `vmm_failed` usage events (a boot whose guest setup failed adds its own `vmm_restart` and `vmm_exit`), `409` from exec, relays, ports, hibernate, fork, checkpoint and promote |
 
 A cold restart boots the claim's own copy-on-write disk: files the guest
 synced survive, memory and processes do not. The claim's guest env entries
