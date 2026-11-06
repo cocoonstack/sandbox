@@ -87,7 +87,8 @@ func (p *Pty) drain(ctx context.Context, pw *io.PipeWriter, stop func()) {
 }
 
 // OpenPty starts a shell whose lifetime is governed by ctx or Close.
-func (s *Sandbox) OpenPty(ctx context.Context, opts wire.PtyOpen) (*Pty, error) {
+func (s *Sandbox) OpenPty(ctx context.Context, opts wire.PtyOpen) (_ *Pty, err error) {
+	defer func() { s.rebind(ctx, err) }()
 	conn, l, err := s.call(ctx, &opts)
 	if err != nil {
 		return nil, err

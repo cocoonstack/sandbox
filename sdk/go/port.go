@@ -1,7 +1,6 @@
 package sandbox
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -86,7 +85,7 @@ func (s *Sandbox) PreviewURL(ctx context.Context, port uint16, ttl time.Duration
 	if err != nil {
 		return "", err
 	}
-	pr, err := s.c.doJSON[previewResponse](ctx, http.MethodPost, s.owner, "/v1/sandboxes/"+s.ID+"/preview", bytes.NewReader(body), s.c.apiToken, "preview")
+	pr, err := s.ownerJSON[previewResponse](ctx, http.MethodPost, "/preview", body, s.c.apiToken, "preview")
 	if err != nil {
 		return "", err
 	}
@@ -112,7 +111,8 @@ func (s *Sandbox) ProxyPort(ctx context.Context, localAddr string, port uint16) 
 }
 
 // openStream turns a call into a raw byte stream, shared by DialPort and Lsp.Request.
-func (s *Sandbox) openStream(ctx context.Context, req wire.Request) (*PortConn, error) {
+func (s *Sandbox) openStream(ctx context.Context, req wire.Request) (_ *PortConn, err error) {
+	defer func() { s.rebind(ctx, err) }()
 	conn, l, err := s.call(ctx, req)
 	if err != nil {
 		return nil, err

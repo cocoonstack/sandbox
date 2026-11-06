@@ -1,13 +1,14 @@
 package sandbox
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
+	"sync"
+	"syscall"
 	"time"
 
 	"github.com/cocoonstack/sandbox/protocol/wire"
@@ -67,13 +68,17 @@ type Sandbox struct {
 
 	c     *Client
 	token string
-	owner string
 	pool  agentPool
+
+	mu    sync.Mutex
+	owner string
 }
 
 // Owner returns the data-plane address of the node that owns the sandbox —
 // on a cluster the node a redirected claim landed on.
 func (s *Sandbox) Owner() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	return s.owner
 }
 
@@ -103,6 +108,85 @@ func (s *Sandbox) Run(ctx context.Context, cmd Cmd) (int, error) {
 	if len(cmd.Argv) == 0 {
 		return 0, fmt.Errorf("empty argv")
 	}
+	code, err := s.run(ctx, cmd)
+	if s.rebind(ctx, err) && cmd.Stdin == nil {
+		return s.run(ctx, cmd)
+	}
+	return code, err
+}
+
+// Fork clones the sandbox into count children with their own leases; on error no child survives.
+func (s *Sandbox) Fork(ctx context.Context, count int, ttl time.Duration) ([]*Sandbox, error) {
+	body, err := encodeBody("fork", forkRequest{Token: s.token, Count: count, TTLSeconds: ttlSeconds(ttl)})
+	if err != nil {
+		return nil, err
+	}
+	fr, err := s.ownerJSON[forkResponse](ctx, http.MethodPost, "/fork", body, s.c.apiToken, "fork")
+	if err != nil {
+		return nil, err
+	}
+	children := make([]*Sandbox, len(fr.Children))
+	for i, c := range fr.Children {
+		children[i] = s.c.handleFrom(s.Owner(), c)
+	}
+	return children, nil
+}
+
+// Promote publishes the sandbox's current state as a template; the returned handle is bound to the owning node.
+func (s *Sandbox) Promote(ctx context.Context, template string) (*Template, error) {
+	body, err := encodeBody("promote", promoteRequest{Token: s.token, Template: template})
+	if err != nil {
+		return nil, err
+	}
+	pr, err := s.ownerJSON[promoteResponse](ctx, http.MethodPost, "/promote", body, s.c.apiToken, "promote")
+	if err != nil {
+		return nil, err
+	}
+	return &Template{
+		Name: pr.Key.Template, ContentDigest: pr.ContentDigest,
+		c: s.c, addr: s.Owner(), net: pr.Key.Net, size: pr.Key.Size,
+	}, nil
+}
+
+// Hibernate snapshots the sandbox and stops its VM; the next guest call wakes it, and the TTL keeps running.
+func (s *Sandbox) Hibernate(ctx context.Context) error {
+	s.pool.drain()
+	return s.ownerNoContent(ctx, http.MethodPost, "/hibernate", nil, s.token, "hibernate")
+}
+
+// Renew resets the lease to ttl from now (zero means the server default) and records the granted deadline in Deadline.
+func (s *Sandbox) Renew(ctx context.Context, ttl time.Duration) (time.Time, error) {
+	body, err := encodeBody("renew", renewRequest{TTLSeconds: ttlSeconds(ttl)})
+	if err != nil {
+		return time.Time{}, err
+	}
+	rr, err := s.ownerJSON[renewResponse](ctx, http.MethodPost, "/renew", body, s.token, "renew")
+	if err != nil {
+		return time.Time{}, err
+	}
+	s.Deadline = rr.Deadline
+	return rr.Deadline, nil
+}
+
+// Close releases the sandbox on its node; releasing one already gone is not
+// an error. It takes no ctx so it stays defer-friendly — bounded internally.
+func (s *Sandbox) Close() error {
+	s.pool.drain()
+	ctx, cancel := context.WithTimeout(context.Background(), releaseTimeout)
+	defer cancel()
+	found, err := s.releaseAt(ctx, s.Owner())
+	if _, refused := errors.AsType[*APIError](err); refused || found {
+		return err
+	}
+	moved, lookupErr := s.c.Lookup(ctx, s.ID, s.token)
+	if lookupErr != nil {
+		return err
+	}
+	_, err = s.releaseAt(ctx, moved.owner)
+	return err
+}
+
+func (s *Sandbox) run(ctx context.Context, cmd Cmd) (int, error) {
 	conn, l, err := s.call(ctx, &wire.Exec{Argv: cmd.Argv, Cwd: cmd.Cwd, Env: cmd.Env, User: cmd.User, Session: cmd.Session})
 	if err != nil {
 		return 0, err
@@ -142,77 +226,6 @@ func (s *Sandbox) Run(ctx context.Context, cmd Cmd) (int, error) {
 	return int(code), nil
 }
 
-// Fork clones the sandbox into count children with their own leases; on error no child survives.
-func (s *Sandbox) Fork(ctx context.Context, count int, ttl time.Duration) ([]*Sandbox, error) {
-	body, err := encodeBody("fork", forkRequest{Token: s.token, Count: count, TTLSeconds: ttlSeconds(ttl)})
-	if err != nil {
-		return nil, err
-	}
-	fr, err := s.c.doJSON[forkResponse](ctx, http.MethodPost, s.owner, "/v1/sandboxes/"+s.ID+"/fork", bytes.NewReader(body), s.c.apiToken, "fork")
-	if err != nil {
-		return nil, err
-	}
-	children := make([]*Sandbox, len(fr.Children))
-	for i, c := range fr.Children {
-		children[i] = s.c.handleFrom(s.owner, c)
-	}
-	return children, nil
-}
-
-// Promote publishes the sandbox's current state as a template; the returned handle is bound to the owning node.
-func (s *Sandbox) Promote(ctx context.Context, template string) (*Template, error) {
-	body, err := encodeBody("promote", promoteRequest{Token: s.token, Template: template})
-	if err != nil {
-		return nil, err
-	}
-	pr, err := s.c.doJSON[promoteResponse](ctx, http.MethodPost, s.owner, "/v1/sandboxes/"+s.ID+"/promote", bytes.NewReader(body), s.c.apiToken, "promote")
-	if err != nil {
-		return nil, err
-	}
-	return &Template{
-		Name: pr.Key.Template, ContentDigest: pr.ContentDigest,
-		c: s.c, addr: s.owner, net: pr.Key.Net, size: pr.Key.Size,
-	}, nil
-}
-
-// Hibernate snapshots the sandbox and stops its VM; the next guest call wakes it, and the TTL keeps running.
-func (s *Sandbox) Hibernate(ctx context.Context) error {
-	s.pool.drain()
-	return s.c.doNoContent(ctx, http.MethodPost, s.owner, "/v1/sandboxes/"+s.ID+"/hibernate", nil, s.token, "hibernate")
-}
-
-// Renew resets the lease to ttl from now (zero means the server default) and records the granted deadline in Deadline.
-func (s *Sandbox) Renew(ctx context.Context, ttl time.Duration) (time.Time, error) {
-	body, err := encodeBody("renew", renewRequest{TTLSeconds: ttlSeconds(ttl)})
-	if err != nil {
-		return time.Time{}, err
-	}
-	rr, err := s.c.doJSON[renewResponse](ctx, http.MethodPost, s.owner, "/v1/sandboxes/"+s.ID+"/renew", bytes.NewReader(body), s.token, "renew")
-	if err != nil {
-		return time.Time{}, err
-	}
-	s.Deadline = rr.Deadline
-	return rr.Deadline, nil
-}
-
-// Close releases the sandbox on its node; releasing one already gone is not
-// an error. It takes no ctx so it stays defer-friendly — bounded internally.
-func (s *Sandbox) Close() error {
-	s.pool.drain()
-	ctx, cancel := context.WithTimeout(context.Background(), releaseTimeout)
-	defer cancel()
-	found, err := s.releaseAt(ctx, s.owner)
-	if _, refused := errors.AsType[*APIError](err); refused || found {
-		return err
-	}
-	moved, lookupErr := s.c.Lookup(ctx, s.ID, s.token)
-	if lookupErr != nil {
-		return err
-	}
-	_, err = s.releaseAt(ctx, moved.owner)
-	return err
-}
-
 func (s *Sandbox) releaseAt(ctx context.Context, addr string) (found bool, err error) {
 	resp, err := s.c.roundTrip(ctx, http.MethodPost, addr, "/v1/sandboxes/"+s.ID+"/release", nil, s.token)
 	if err != nil {
@@ -226,6 +239,49 @@ func (s *Sandbox) releaseAt(ctx context.Context, addr string) (found bool, err e
 		return false, nil
 	}
 	return false, apiError("release", resp)
+}
+
+// rebind follows a moved sandbox: a 404 or a refused dial from its owner asks Lookup, and a different owner replaces it and its parked connections.
+func (s *Sandbox) rebind(ctx context.Context, err error) bool {
+	if !ownerGone(err) {
+		return false
+	}
+	moved, lookupErr := s.c.Lookup(ctx, s.ID, s.token)
+	if lookupErr != nil {
+		return false
+	}
+	s.mu.Lock()
+	changed := moved.owner != s.owner
+	s.owner = moved.owner
+	s.mu.Unlock()
+	if changed {
+		s.pool.drain()
+	}
+	return changed
+}
+
+// retryMoved runs rpc once more on the new owner when nothing of it reached the old one; rpc's request must be its whole input.
+func (s *Sandbox) retryMoved(ctx context.Context, rpc func() error) error {
+	err := rpc()
+	if s.rebind(ctx, err) {
+		return rpc()
+	}
+	return err
+}
+
+func (s *Sandbox) ownerJSON[T any](ctx context.Context, method, suffix string, body []byte, bearer, verb string) (T, error) {
+	var out T
+	err := s.retryMoved(ctx, func() (err error) {
+		out, err = s.c.doJSON[T](ctx, method, s.Owner(), "/v1/sandboxes/"+s.ID+suffix, bodyReader(body), bearer, verb)
+		return err
+	})
+	return out, err
+}
+
+func (s *Sandbox) ownerNoContent(ctx context.Context, method, suffix string, body []byte, bearer, verb string) error {
+	return s.retryMoved(ctx, func() error {
+		return s.c.doNoContent(ctx, method, s.Owner(), "/v1/sandboxes/"+s.ID+suffix, bodyReader(body), bearer, verb)
+	})
 }
 
 // call sends req on a relay connection and hands back the lease that ends the RPC; ctx cancellation closes the connection under it.
@@ -253,11 +309,19 @@ func (s *Sandbox) connect(ctx context.Context, req wire.Request) (*agentConn, er
 }
 
 func (s *Sandbox) dial(ctx context.Context) (*agentConn, error) {
-	raw, err := s.c.dialAgent(ctx, s.owner, s.ID, s.token)
+	raw, err := s.c.dialAgent(ctx, s.Owner(), s.ID, s.token)
 	if err != nil {
 		return nil, err
 	}
 	return newAgentConn(raw), nil
+}
+
+// ownerGone reports an error after which nothing reached the owner: a 404, or a refused dial.
+func ownerGone(err error) bool {
+	if ae, ok := errors.AsType[*APIError](err); ok {
+		return ae.Status == http.StatusNotFound
+	}
+	return errors.Is(err, syscall.ECONNREFUSED)
 }
 
 // pumpStdin chunks the reader into stdin frames.

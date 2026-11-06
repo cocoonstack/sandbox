@@ -9,7 +9,7 @@ import threading
 import pytest
 from conftest import accept_upgrade, sandbox_at, wait_until
 
-from cocoonsandbox import SilkdError
+from cocoonsandbox import Client, SilkdError
 
 INPUT_OPS = ("stdin", "stdin_close", "data", "data_end")
 
@@ -179,6 +179,35 @@ def test_an_upload_the_daemon_rejects_at_open_raises_its_error_frame(relay):
     _, sb = relay(slam=True)
     with pytest.raises(SilkdError):
         sb.write_file("/missing/f", bytes(64 << 20))
+
+
+def test_a_moved_sandbox_follows_its_new_owner_on_the_next_call(spawn_node):
+    agent = FakeAgent()
+    try:
+        directory = spawn_node(
+            {("GET", "/v1/sandboxes/sb_1/owner"): lambda body, path: (200, {"owner_addr": agent.addr})}
+        )
+        old = spawn_node({("GET", "/v1/peers"): lambda body, path: (200, {"peers": [directory]})})
+        sb = Client(old).attach(old, "sb_1", "tok")
+        assert sb.stat("/")["kind"] == "dir"
+        assert sb.owner == agent.addr
+        assert sb.exec("echo", "42") == "42\n"
+    finally:
+        agent.stop()
+
+
+def test_a_handle_follows_its_sandbox_off_a_retired_node(spawn_node, dead_addr):
+    agent = FakeAgent()
+    try:
+        directory = spawn_node(
+            {("GET", "/v1/sandboxes/sb_1/owner"): lambda body, path: (200, {"owner_addr": agent.addr})}
+        )
+        entry = spawn_node({("GET", "/v1/peers"): lambda body, path: (200, {"peers": [directory]})})
+        sb = Client(entry).attach(dead_addr, "sb_1", "tok")
+        assert sb.stat("/")["kind"] == "dir"
+        assert sb.owner == agent.addr
+    finally:
+        agent.stop()
 
 
 @pytest.fixture

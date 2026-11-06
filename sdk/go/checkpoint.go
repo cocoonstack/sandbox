@@ -85,11 +85,11 @@ func (s *Sandbox) Checkpoint(ctx context.Context, name string) (*Checkpoint, err
 	if err != nil {
 		return nil, err
 	}
-	cr, err := s.c.doJSON[checkpointResponse](ctx, http.MethodPost, s.owner, "/v1/sandboxes/"+s.ID+"/checkpoint", bytes.NewReader(body), s.c.apiToken, "checkpoint")
+	cr, err := s.ownerJSON[checkpointResponse](ctx, http.MethodPost, "/checkpoint", body, s.c.apiToken, "checkpoint")
 	if err != nil {
 		return nil, err
 	}
-	return checkpointHandle(s.c, s.owner, cr.Checkpoint), nil
+	return checkpointHandle(s.c, s.Owner(), cr.Checkpoint), nil
 }
 
 // Checkpoints lists the connected node's checkpoints, newest first, as handles bound to it.

@@ -214,7 +214,7 @@ class Client:
         except (OSError, http.client.HTTPException) as exc:
             if deadline is not None and time.monotonic() >= deadline:
                 raise SandboxTimeout(f"{verb} timed out") from None
-            raise APIError(verb, 0, str(exc)) from None
+            raise APIError(verb, 0, str(exc)) from exc
         if status >= 400:
             try:
                 reply = json.loads(raw)

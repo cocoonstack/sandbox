@@ -305,8 +305,9 @@ retried every 5 seconds. Claims that cannot move are skipped and keep serving
 here; once `evacuating` is gone `claimed` counts them, and the log names each
 one with its reason. A client that holds a handle gets 404 from this node after
 the move, the same answer as for a released claim, or a connection error once
-the node is retired, and only a `Lookup` tells these apart: the SDKs' `Close`
-does this itself. A reader-served connection
+the node is retired, and only a `Lookup` tells these apart: the SDKs run it on
+either answer and send the call again to the new owner when nothing of it
+reached the old one. A reader-served connection
 gets the retry as an error frame, not a 503, and a preview URL minted before
 the move stops working until it is minted again, except behind a shared
 `preview_advertise`, where it answers when it reaches the new owner. `DELETE /v1/drain` stops the evacuation: claims not yet started
@@ -332,8 +333,8 @@ A move needs `meta_store` with a `cell`, which holds its record, and
 
 Only a none-lane claim without volumes moves; a hibernated, archived, failed or
 waking claim, an egress-lane claim and a claim with volumes answer 409. Open
-exec and pty streams, port forwards and egress connections end; the client
-meets a 404 on the source and runs `Lookup`.
+exec and pty streams, port forwards and egress connections end; the next call
+meets a 404 on the source, and the SDKs look the claim up and reach the target.
 
 **The record.** Each move has a record of its own in the meta store (table
 `sandboxd_moves`), separate from the archive rows: `id`, `from_node`,

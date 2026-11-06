@@ -221,6 +221,27 @@ def test_close_releases_a_sandbox_that_moved(spawn_node):
     assert released
 
 
+def test_a_moved_sandbox_retries_a_control_call_at_its_new_owner(spawn_node):
+    adopter = spawn_node(
+        {
+            ("GET", "/v1/sandboxes/sb_1/owner"): lambda body, path: (200, {}),
+            ("POST", "/v1/sandboxes/sb_1/renew"): lambda body, path: (200, {"deadline": "2026-11-06T12:00:00Z"}),
+        }
+    )
+    old = spawn_node({("GET", "/v1/peers"): lambda body, path: (200, {"peers": [adopter]})})
+    sb = Client(old).attach(old, "sb_1", "tok")
+    assert sb.renew(60) == "2026-11-06T12:00:00Z"
+    assert sb.owner == adopter
+
+
+def test_a_released_sandbox_still_answers_404(spawn_node):
+    old = spawn_node({("GET", "/v1/peers"): lambda body, path: (200, {"peers": []})})
+    sb = Client(old).attach(old, "sb_1", "tok")
+    with pytest.raises(APIError) as exc:
+        sb.renew(60)
+    assert exc.value.status == 404 and sb.owner == old
+
+
 def test_close_follows_a_move_off_a_retired_node(spawn_node, dead_addr):
     released = []
 
