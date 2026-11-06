@@ -47,7 +47,6 @@ func (m *Manager) Stats(ctx context.Context, id string) (SandboxStats, bool) {
 	return st, true
 }
 
-// vmResidentBytes reports the resident set of the hypervisor process serving vmName.
 func (m *Manager) vmResidentBytes(ctx context.Context, vmName string) (int64, bool) {
 	if vmName == "" {
 		return 0, false
@@ -56,11 +55,11 @@ func (m *Manager) vmResidentBytes(ctx context.Context, vmName string) (int64, bo
 	if err != nil || !ok || vm.PID <= 0 {
 		return 0, false
 	}
-	return residentBytes(vm.PID)
+	return residentBytes(m.procDir, vm.PID)
 }
 
-func residentBytes(pid int) (int64, bool) {
-	b, err := os.ReadFile(filepath.Join("/proc", strconv.Itoa(pid), "statm"))
+func residentBytes(proc string, pid int) (int64, bool) {
+	b, err := os.ReadFile(filepath.Join(proc, strconv.Itoa(pid), "statm")) //nolint:gosec // an engine pid under the proc root
 	if err != nil {
 		return 0, false
 	}
