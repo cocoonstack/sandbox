@@ -476,13 +476,17 @@ func (l *link) read(br *bufio.Reader) error {
 	}
 }
 
-// forward carries one guest frame out: parse, size, charge and policy, then rewrite, segment and send.
+// forward carries one guest frame out: parse, exit, size, charge and policy, then rewrite, segment and send.
 func (l *link) forward(frame []byte) Drop {
 	p, drop := Parse(frame)
 	if drop != DropNone {
 		return drop
 	}
 	o := l.r.conf.Load()
+	exit, ok := o.exit(l.a.c.Profile)
+	if !ok {
+		return DropNoExit
+	}
 	segs, wire, ok := wireCost(frame, l.mtu)
 	if !ok {
 		return DropSize
@@ -496,10 +500,6 @@ func (l *link) forward(frame []byte) Drop {
 	}
 	if drop = f.outbound(p, wire, now); drop != DropNone {
 		return drop
-	}
-	exit, ok := o.exit(l.a.c.Profile)
-	if !ok {
-		return DropNoExit
 	}
 	RewriteSrc(frame, l.a.c.Addr)
 	if icmpError(p) {
