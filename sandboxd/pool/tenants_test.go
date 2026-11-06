@@ -389,6 +389,35 @@ func TestTwoNodesOnOneMetaStoreShareTheTenantSet(t *testing.T) {
 	}
 }
 
+func TestTenantQuotaBindsPerTenant(t *testing.T) {
+	eng := newFakeEngine()
+	m := newTestManager(t, eng)
+	setTenantCaps(t, m, map[string]int{"acme": 1, "beta": 2})
+
+	first := claimTenant(t, m, "acme")
+	if first.Tenant != "acme" {
+		t.Errorf("tenant %q, want acme", first.Tenant)
+	}
+	if _, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{TTL: time.Hour, Tenant: "acme"}); !errors.Is(err, ErrQuota) {
+		t.Fatalf("acme past its cap: %v, want ErrQuota", err)
+	}
+
+	if _, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{TTL: time.Hour, Tenant: "beta"}); err != nil {
+		t.Errorf("beta claim while acme is at cap: %v", err)
+	}
+	if _, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{TTL: time.Hour}); err != nil {
+		t.Errorf("root claim while acme is at cap: %v", err)
+	}
+	counts := m.TenantClaims()
+	if counts["acme"] != 1 || counts["beta"] != 1 {
+		t.Errorf("TenantClaims %v, want acme=1 beta=1", counts)
+	}
+	if err := m.Release(t.Context(), first.ID, Cred{Token: first.Token}); err != nil {
+		t.Fatalf("Release: %v", err)
+	}
+	claimTenant(t, m, "acme")
+}
+
 func tenantOf(t *testing.T, m *Manager, token string) (string, bool) {
 	t.Helper()
 	r, err := m.TenantByToken(t.Context(), token)

@@ -2,7 +2,6 @@ package pool
 
 import (
 	"encoding/json/v2"
-	"errors"
 	"maps"
 	"net/http"
 	"net/netip"
@@ -139,53 +138,6 @@ func TestJournalRotationKeepsOneBackup(t *testing.T) {
 	if !strings.Contains(string(raw), `"sb_1"`) {
 		t.Errorf("post-rotation file missing the event: %q", raw)
 	}
-}
-
-func TestQuotaRefusesClaimsPastCap(t *testing.T) {
-	eng := newFakeEngine()
-	m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 2})
-	editView(m, func(v *configView) { v.maxClaims = 1 })
-
-	first := mustClaim(t, m, testKey)
-	if _, err := claimAny(t.Context(), m, testKey, ClaimOptions{TTL: time.Hour}); !errors.Is(err, ErrQuota) {
-		t.Fatalf("claim past cap: %v, want ErrQuota", err)
-	}
-
-	if err := m.Release(t.Context(), first.ID, Cred{Token: first.Token}); err != nil {
-		t.Fatalf("Release: %v", err)
-	}
-	if _, err := claimAny(t.Context(), m, testKey, ClaimOptions{TTL: time.Hour}); err != nil {
-		t.Errorf("claim after release: %v", err)
-	}
-}
-
-func TestTenantQuotaBindsPerTenant(t *testing.T) {
-	eng := newFakeEngine()
-	m := newTestManager(t, eng)
-	setTenantCaps(t, m, map[string]int{"acme": 1, "beta": 2})
-
-	first := claimTenant(t, m, "acme")
-	if first.Tenant != "acme" {
-		t.Errorf("tenant %q, want acme", first.Tenant)
-	}
-	if _, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{TTL: time.Hour, Tenant: "acme"}); !errors.Is(err, ErrQuota) {
-		t.Fatalf("acme past its cap: %v, want ErrQuota", err)
-	}
-
-	if _, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{TTL: time.Hour, Tenant: "beta"}); err != nil {
-		t.Errorf("beta claim while acme is at cap: %v", err)
-	}
-	if _, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{TTL: time.Hour}); err != nil {
-		t.Errorf("root claim while acme is at cap: %v", err)
-	}
-	counts := m.TenantClaims()
-	if counts["acme"] != 1 || counts["beta"] != 1 {
-		t.Errorf("TenantClaims %v, want acme=1 beta=1", counts)
-	}
-	if err := m.Release(t.Context(), first.ID, Cred{Token: first.Token}); err != nil {
-		t.Fatalf("Release: %v", err)
-	}
-	claimTenant(t, m, "acme")
 }
 
 func TestTenantStampedInJournals(t *testing.T) {

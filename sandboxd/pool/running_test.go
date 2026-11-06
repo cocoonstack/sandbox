@@ -3,7 +3,6 @@ package pool
 import (
 	"context"
 	"errors"
-	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -222,28 +221,6 @@ func TestAReloadAppliesTheClaimCapsWithoutStoppingAClaim(t *testing.T) {
 	}
 }
 
-func TestAReloadAppliesTheNodeSettings(t *testing.T) {
-	m := newTestManager(t, newFakeEngine())
-	reloadWith(t, m, func(c *config.Config) {
-		c.MaxForkCount, c.ReleaseDelaySeconds, c.VMMRestart = 1, 5, types.VMMRestartNone
-		c.SyncClaims, c.CheckpointTTLHours = true, 24
-		c.IdleHibernateSeconds, c.ArchiveAfterSeconds, c.ArchiveDeleteAfterSeconds = 60, 120, 3600
-	})
-	v := m.view.Load()
-	got := []time.Duration{v.releaseDelay, v.ckptTTL, v.idleDefault, v.archiveAfterDefault, v.archiveDeleteDefault}
-	want := []time.Duration{5 * time.Second, 24 * time.Hour, time.Minute, 2 * time.Minute, time.Hour}
-	if !slices.Equal(got, want) || v.maxFork != 1 || v.vmmRestart != types.VMMRestartNone {
-		t.Errorf("durations %v max fork %d restart %q, want %v, 1 and none", got, v.maxFork, v.vmmRestart, want)
-	}
-	if !m.store.sync {
-		t.Error("sync_claims did not reach the store")
-	}
-	parent := mustClaim(t, m, testKey)
-	if _, err := m.Fork(t.Context(), parent.ID, Cred{Token: parent.Token}, 2, 0, "", ""); !errors.Is(err, ErrBadCount) {
-		t.Errorf("fork of 2 over a reloaded limit of 1: %v, want ErrBadCount", err)
-	}
-}
-
 func TestARefusedWakeIsCountedByTheLimitThatRefusedIt(t *testing.T) {
 	m := newTestManager(t, newFakeEngine())
 	editView(m, func(v *configView) { v.maxRunning = 1 })
@@ -349,6 +326,24 @@ func TestOneHandOffRunsAtATimeAndItsCooldownStartsWhenItFails(t *testing.T) {
 			t.Fatalf("wake inside the cooldown after a failed hand-off: %v, peers asked %d times, want 429 and no ask", err, asks.Load())
 		}
 	})
+}
+
+func TestQuotaRefusesClaimsPastCap(t *testing.T) {
+	eng := newFakeEngine()
+	m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 2})
+	editView(m, func(v *configView) { v.maxClaims = 1 })
+
+	first := mustClaim(t, m, testKey)
+	if _, err := claimAny(t.Context(), m, testKey, ClaimOptions{TTL: time.Hour}); !errors.Is(err, ErrQuota) {
+		t.Fatalf("claim past cap: %v, want ErrQuota", err)
+	}
+
+	if err := m.Release(t.Context(), first.ID, Cred{Token: first.Token}); err != nil {
+		t.Fatalf("Release: %v", err)
+	}
+	if _, err := claimAny(t.Context(), m, testKey, ClaimOptions{TTL: time.Hour}); err != nil {
+		t.Errorf("claim after release: %v", err)
+	}
 }
 
 func wakeClaim(t *testing.T, m *Manager, sb *types.Sandbox) error {

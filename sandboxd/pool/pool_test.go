@@ -2784,3 +2784,9 @@ func liveCatalog(t *testing.T) []config.VolumeSpec {
 		{Name: "other", Path: writeVolumeImage(t, "other.img", "other"), Writable: true},
 	}
 }
+
+func disableReplication(m *Manager) {
+	view := *m.view.Load()
+	view.poolReplicate = nil
+	m.view.Store(&view)
+}

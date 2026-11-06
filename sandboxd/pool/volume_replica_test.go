@@ -107,9 +107,3 @@ func newReplicaVolumeManager(t *testing.T) (*Manager, *failoverCluster) {
 	c.volumes = []config.VolumeSpec{{Name: "data", Path: writeVolumeImage(t, "data", "original"), Writable: true}}
 	return c.node(t, "a", t.TempDir(), keepAnHour), c
 }
-
-func disableReplication(m *Manager) {
-	view := *m.view.Load()
-	view.poolReplicate = nil
-	m.view.Store(&view)
-}
