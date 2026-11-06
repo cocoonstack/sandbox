@@ -138,9 +138,6 @@ Behavior of the relay:
   and tenant. The decision is `allow`, `filtered` (an address was dropped),
   `failed` (no nameserver answered) or `rate_limited` (at most one a second per
   claim after a burst of ten).
-- **Names for flow audit.** The resolver remembers, per claim, the name each
-  kept answer address was resolved from until its TTL ends (at most 4,096
-  entries).
 - **Pre-bound doors.** As with the proxy doors, a guest that dials a DNS door
   of a warm VM before its claim makes the claim bind fresh doors, so no query
   queued before the claim is answered under the claim's identity.
@@ -243,7 +240,7 @@ domain policy first; the allow-list widens the IP gate only.
 A [config reload](deploy.md#reloading-the-config) applies policy, internal
 allow, secret and upstream changes without a restart: a live claim's next
 request or connection is evaluated against the new policy. Whether a claim has
-the SOCKS5 door is settled when it is claimed.
+the SOCKS5 and DNS doors is settled when it is claimed.
 
 Policy is per pool and per egress class; a tenant claim's effective policy is
 the intersection of its pool's and its tenant's class (a request must pass
@@ -516,7 +513,7 @@ A claim names its upstream in that env entry, which must be `guest: false`
 `socks5://[user:pass@]host:port`. `direct` forces the node's own exit, and an
 absent entry falls back to the claim's egress class, then the pool's default:
 `egress_upstream_env` on an egress class or pool entry names a node environment
-variable holding the URL, read at startup, so no credential sits in the config
+variable holding the URL, read at every config load, so no credential sits in the config
 file. A claim (a checkpoint branch included), `PUT` or `PATCH` naming an
 upstream outside `allow` (exact host
 names, IPs or CIDR prefixes), a malformed URL or a guest-visible entry answers
@@ -636,8 +633,7 @@ reconcile adopts the guest with whatever root it was born with. Each golden's
 the image id, a sized pool's disk size, `no_balloon` when set, and the warmup
 argv), and a golden is
 adopted only when its stamp exists and
-matches, so a changed root rebuilds goldens; a golden from before the stamp
-has none and is rebuilt once. Nothing rebuilds an existing checkpoint,
+matches, so a changed root rebuilds goldens. Nothing rebuilds an existing checkpoint,
 archive, promoted template, or live/hibernated claim. Because the baked cert
 is the shared cluster root, promote/checkpoint/archive carry no node-private
 material and stay unrestricted.

@@ -38,5 +38,6 @@ ever completes.
   Use Cloud Hypervisor with `net: none`; snapshot/restore of a booted Android
   is covered by the `androidsmoke` acceptance round.
 - **silkd on Android**: the musl-static binary runs against an Android
-  userspace (`/system/bin/sh`, no `/bin/sh`); exec/session behavior is
-  covered by the `androidsmoke` acceptance round.
+  userspace (`/system/bin/sh`, no `/bin/sh`); exec behavior is covered by
+  the `androidsmoke` acceptance round, and the session verbs need bash, which
+  the image lacks.

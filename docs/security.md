@@ -28,7 +28,11 @@ exposing any part of a deployment beyond a single trusted host.
   plus, on a policy that opts into `socks5`, a SOCKS5 door to the same
   allow-list that carries arbitrary TCP rather than HTTP only, and on one
   that opts into `dns`, a rate-limited resolver whose answers carry no `A`
-  or `AAAA` record the dial guard refuses; names reach any domain.
+  or `AAAA` record the dial guard refuses; names reach any domain. On a `tun`
+  pool the guest also has an L3 path to the exits ([advanced network
+  mode](advanced-network.md)), carrying only flows the policy's bare
+  `host: "*"` rules and the internal-address guard allow, under per-claim
+  rate, flow and quota limits.
   On the egress lane: the same vsock paths plus a NIC whose every
   guest-initiated packet is dropped by an nftables lock in the host
   root netns ([egress](egress.md)); the lock is fail-closed and applied
@@ -37,8 +41,9 @@ exposing any part of a deployment beyond a single trusted host.
   IPv4-embedding IPv6 ranges and the node's own interface addresses, so an
   allow-listed name that resolves or rebinds to an internal address cannot
   reach the host or a sibling. A prefix the operator re-admits with
-  `egress_internal_allow` is the exception: scope it with ports
-  ([egress](egress.md)).
+  `egress_internal_allow` is an exception: scope it with ports
+  ([egress](egress.md)). The upstream proxies `egress_upstream.allow` names
+  are the other: sandboxd dials them unguarded, so list only proxies.
 - **What never enters the guest.** Egress credentials: the proxy injects
   the secret host-side, so prompt injection can exfiltrate at most the
   proxy's answers, and every credentialed call is journaled. Git auth
@@ -125,7 +130,7 @@ list and egress policy together. With `directio=off`, concurrent readers share
 the host page cache, which improves reuse but lets one tenant's large scan evict
 another's cached pages — the same holds for a writer: a large `rw` write can
 evict cached pages backing another volume's readers exactly like a large scan
-would. `directio=on` is the per-volume mitigation; v1 has no per-tenant cache
+would. `directio=on` is the per-volume mitigation; there is no per-tenant cache
 quota or accounting. Operators must keep a read-only entry's attached image
 immutable and publish a new name/path for new content.
 

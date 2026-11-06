@@ -13,5 +13,5 @@ pins the corpus size, so adding a verb without its fixture fails CI.
 
 `enums.json` pins each wire enum's full value set (error/event/file kinds,
 git branch actions). Frame fixtures carry only one representative value per
-enum, so both sides also assert their whole vocabulary against this file —
-renaming or adding a variant on one side alone fails that side's test.
+enum, so every implementation also asserts its whole vocabulary against this
+file — renaming or adding a variant in one implementation alone fails its test.

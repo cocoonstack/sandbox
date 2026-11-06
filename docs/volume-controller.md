@@ -7,8 +7,8 @@ claim and catalog registration. The controller owns reservation and access polic
 
 Use a `net: none` claim on its owning node, since egress-lane claims cannot
 hibernate, and keep its TTL valid across sleep. Its pool sets
-`replicate_seconds: 0` and `archive_after_seconds: 0`, and the claim uses
-`on_expire: "destroy"`: a detached sleeping claim holds no volume, so a replica
+`replicate_seconds: 0` and `archive_after_seconds: 0`, and the claim leaves
+`on_expire` unset (destroy): a detached sleeping claim holds no volume, so a replica
 or an archive of it could wake on another node. Keep the pool configured, because
 an unpooled key falls back to the node-wide `archive_after_seconds`. Replication
 changes only at a restart; see

@@ -106,8 +106,7 @@ it too, with about 90 MiB left once the server and its default kernel are up,
 which a heavier import (pandas, matplotlib) quickly spends.
 
 `envd` hardcodes a `0.0.0.0` listener and takes no bind address, so the image
-drops inbound traffic to 49983 from anything but loopback (`envd-guard.service`,
-one nftables rule). On the `none` lane there is no other interface for it to
+drops inbound traffic to 49983 from anything but loopback (`envd-guard.service`). On the `none` lane there is no other interface for it to
 have bound. On the egress lane the NIC is real, but sandboxd locks the tap
 first — a netdev ingress chain that drops every guest packet — so nothing
 off the guest reaches it anyway. The guard is the layer underneath, for the

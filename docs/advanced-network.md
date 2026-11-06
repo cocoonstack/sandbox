@@ -25,8 +25,8 @@ This page is the contract between silkd and the host. The host side design is
 Both modes run at once. silkd keeps the proxy variables in every exec, so a
 client that honours them still reaches `127.0.0.1:3128` over loopback; all
 other traffic takes the default route through `tun0`. Loopback never enters
-`tun0`, so the guest DNS stub of #472 is unaffected; the tun path does not
-intercept DNS.
+`tun0`, so the [guest DNS relay](egress.md#name-resolution-dns) on
+`127.0.0.153` is unaffected; the tun path does not intercept DNS.
 
 ### Turning it on and off
 
@@ -81,7 +81,8 @@ Offload bits are the kernel's `TUN_F_*` values: `0x01` CSUM, `0x02` TSO4,
 `0x04` TSO6, `0x08` TSO_ECN, `0x20` USO4, `0x40` USO6. Each side probes its
 kernel (USO needs Linux 6.2) and then enables, with `TUNSETOFFLOAD`, only the
 offloads both hellos carry; segmentation offloads are dropped when CSUM is not
-common. A side never builds a frame whose GSO type the peer did not offer;
+common, and USO is enabled only as the USO4 and USO6 pair. The host offers
+USO4 alone, so a guest never enables USO. A side never builds a frame whose GSO type the peer did not offer;
 packets its kernel queued before a reconnect keep their old type, and a
 receiver may drop one it cannot take.
 
@@ -117,7 +118,6 @@ lost; TCP retransmits.
 sandboxd needs no TUN, no kernel routes and no NAT rules on the node. It
 carries each claim's packets over VXLAN, on an ordinary UDP socket, to an
 **exit**: plain Linux configuration on the same host or on a gateway machine.
-The design is [#471](https://github.com/cocoonstack/sandbox/issues/471).
 
 ```
 guest -> tun0 -> silkd --vsock 2051--> sandboxd --VXLAN--> exit (vxlan0, forward, NAT) -> uplink
@@ -129,7 +129,7 @@ guest -> tun0 -> silkd --vsock 2051--> sandboxd --VXLAN--> exit (vxlan0, forward
   disk write on the claim path; each release is appended to
   `<data_dir>/tun-freed.log` so its reuse window outlives a restart. A node
   with a `mesh` must have `meta_store.cell` and allocates it in the cell's
-  table, one round trip per claim, and stays off (proxy mode only) while the
+  [table](deploy.md#shared-tun-address-table), one round trip per claim, and stays off (proxy mode only) while the
   meta store is unreachable. A freed address is reused after
   `tun.reuse_after_seconds`, so the subnet's size over that window bounds the
   sustained claim rate: a `/8` with the 5-day default carries about 38 new tun
@@ -180,13 +180,16 @@ guest -> tun0 -> silkd --vsock 2051--> sandboxd --VXLAN--> exit (vxlan0, forward
   usage event with its IP bytes both ways, the destination `ip:port` as its
   reference, and `upstream` `tun/<label>`. A clean stop ends every live flow,
   so its records cover the bytes up to the stop, and persists the quota
-  counter, which is also persisted when the claim is disarmed or moved; a
-  crash loses both since the last of these.
-- **Cost**: a claim of a pool without `tun` pays one map lookup. A tun claim
+  counter. A disarm or a move copies the counter into the claim record, which
+  the next `claims.json` write persists (a move's on the target); a crash
+  loses both since the last of these.
+- **Cost**: on a node with a `tun` block, a claim of a pool without `tun` pays
+  one map lookup and one short hold of the pool lock. A tun claim
   adds, on the claim path, an in-memory address (or one meta-store round
   trip), a socket bind and one gratuitous ARP; `tun_up` is sent in the
   background. Per packet: one parse, one flow-table read, the rate checks, an
-  incremental checksum update and one copy into the send buffer; a 64 KiB GSO
+  incremental checksum update, one copy out of the stream buffer and one into
+the send buffer; a 64 KiB GSO
   frame costs about 9 µs to segment and checksum (`BenchmarkForwardGSO`), a
   small packet about 100 ns, a delivered packet about 250 ns, all without
   allocation.
