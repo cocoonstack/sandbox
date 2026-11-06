@@ -47,6 +47,9 @@ impl Table {
         let mut cmd = Command::new("bash");
         cmd.env_clear().envs(sysutil::base_env().iter().copied());
         sysutil::apply_claim_env(&mut cmd);
+        if let Some(dir) = &cwd {
+            cmd.current_dir(dir);
+        }
         let mut child = cmd
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -74,11 +77,6 @@ impl Table {
 
         // sync on a sentinel so the first real command reads a clean stream.
         let mut init = String::from("exec 2>&1\n");
-        if let Some(dir) = cwd {
-            init.push_str("cd ");
-            shell_quote_into(&mut init, &dir);
-            init.push_str(" || exit 1\n");
-        }
         for (k, v) in env {
             init.push_str("export ");
             shell_quote_into(&mut init, k);

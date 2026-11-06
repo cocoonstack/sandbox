@@ -72,6 +72,18 @@ async fn session_applies_cwd_and_env_at_create() {
 }
 
 #[tokio::test]
+async fn session_create_rejects_a_missing_cwd_like_exec() {
+    let state = Arc::new(State::new());
+    let f = one(
+        &state,
+        &json!({"op":"session_create","cwd":"/nonexistent/silkd-cwd"}).to_string(),
+    )
+    .await;
+    assert_error(&f[0], "bad_request");
+    assert!(state.sessions.list().is_empty());
+}
+
+#[tokio::test]
 async fn session_create_rejects_an_env_name_bash_cannot_export() {
     let state = Arc::new(State::new());
     let f = tokio::time::timeout(
