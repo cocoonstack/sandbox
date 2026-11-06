@@ -213,11 +213,14 @@ func TestInterruptedCaptureFailsTheClaim(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				eng := newFakeEngine()
 				tt.edit(eng)
-				_, sb := reconcileInterrupted(t, eng, interruptedHib, "", nil)
+				m, sb := reconcileInterrupted(t, eng, interruptedHib, "", nil)
 				time.Sleep(captureResumeBudget + 2*captureResumeRetry)
 				synctest.Wait()
 				if !strings.Contains(sb.Failed, "did not resume") {
 					t.Errorf("failed %q, want the resume failure", sb.Failed)
+				}
+				if events := usageEventsOf(t, m, sb.ID); !strings.HasSuffix(events, "vmm_exit,vmm_failed") {
+					t.Errorf("events %q, want the failure to end the running span", events)
 				}
 			})
 		})

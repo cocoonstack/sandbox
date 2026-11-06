@@ -194,10 +194,7 @@ func (m *Manager) recoverVMM(ctx context.Context, sb *types.Sandbox) {
 	case found && vm.State == vmStateRunning:
 		return
 	}
-	if !sb.ExitRecorded {
-		sb.ExitRecorded = true
-		m.recordUsage(ctx, usage.Event{Event: "vmm_exit", ID: sb.ID, VMName: sb.VMName, Tenant: sb.Tenant})
-	}
+	m.recordExit(ctx, sb)
 	reason := coldBootBlocker(sb, found, volumes)
 	if reason == "" && m.view.Load().vmmRestart == types.VMMRestartNone {
 		reason = "vmm exited"
@@ -260,10 +257,16 @@ func (m *Manager) restartLocked(ctx context.Context, sb *types.Sandbox) error {
 		m.stopVM(ctx, sb.VMName)
 		return fmt.Errorf("cold boot: %w", err)
 	}
+	m.mu.Lock()
+	if m.claimed[sb.ID] == sb {
+		sb.ExitRecorded = false
+		m.recordUsage(ctx, usage.Event{Event: "vmm_restart", ID: sb.ID, VMName: sb.VMName, Tenant: sb.Tenant})
+	}
+	m.mu.Unlock()
 	// cocoon keeps a VM's run dir across a cold boot, so the journaled socket path still holds
 	sock, err := m.probeReady(ctx, sb.VMName, sb.VsockSocket, coldProbeTimeout)
 	if err != nil {
-		m.stopVM(ctx, sb.VMName)
+		m.stopRestarted(ctx, sb)
 		return fmt.Errorf("probe after cold boot: %w", err)
 	}
 	m.mu.Lock()
@@ -276,7 +279,7 @@ func (m *Manager) restartLocked(ctx context.Context, sb *types.Sandbox) error {
 	}
 	if err != nil {
 		m.out.Disarm(sb.ID, false)
-		m.stopVM(ctx, sb.VMName)
+		m.stopRestarted(ctx, sb)
 		return fmt.Errorf("restore egress and env after cold boot: %w", err)
 	}
 	if live, _ := m.commitIfLive(ctx, sb, func() {
@@ -291,11 +294,21 @@ func (m *Manager) restartLocked(ctx context.Context, sb *types.Sandbox) error {
 	if m.disarmIfReleased(sb) {
 		return ErrUnknownSandbox
 	}
-	sb.ExitRecorded = false
 	sb.Touch()
-	m.recordUsage(ctx, usage.Event{Event: "vmm_restart", ID: sb.ID, VMName: sb.VMName, Tenant: sb.Tenant})
 	log.WithFunc("pool.restartLocked").Warnf(ctx, "restarted %s (%s) from its disk; guest memory is lost", sb.ID, sb.VMName)
 	return nil
+}
+
+func (m *Manager) stopRestarted(ctx context.Context, sb *types.Sandbox) {
+	m.stopVM(ctx, sb.VMName)
+	m.recordExit(ctx, sb)
+}
+
+func (m *Manager) recordExit(ctx context.Context, sb *types.Sandbox) {
+	if !sb.ExitRecorded {
+		sb.ExitRecorded = true
+		m.recordUsage(ctx, usage.Event{Event: "vmm_exit", ID: sb.ID, VMName: sb.VMName, Tenant: sb.Tenant})
+	}
 }
 
 // failLocked parks sb as failed with reason; the caller holds sb.Transition.
@@ -303,6 +316,7 @@ func (m *Manager) failLocked(ctx context.Context, sb *types.Sandbox, reason stri
 	if live, _ := m.commitIfLive(ctx, sb, func() { sb.Failed = reason }); !live {
 		return
 	}
+	m.recordExit(ctx, sb)
 	m.recordUsage(ctx, usage.Event{Event: "vmm_failed", ID: sb.ID, VMName: sb.VMName, Tenant: sb.Tenant, Reference: reason})
 	log.WithFunc("pool.failLocked").Warnf(ctx, "sandbox %s failed: %s", sb.ID, reason)
 }
