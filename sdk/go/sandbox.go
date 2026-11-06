@@ -211,6 +211,7 @@ func (s *Sandbox) run(ctx context.Context, cmd Cmd) (int, error) {
 	defer l.close()
 
 	stdinDone := make(chan struct{})
+	var stdinErr error
 	if cmd.Stdin == nil {
 		// A guest that already answered and closed fails this send; the frames it sent still come back below
 		_ = conn.Send(wire.StdinClose{})
@@ -218,15 +219,16 @@ func (s *Sandbox) run(ctx context.Context, cmd Cmd) (int, error) {
 	} else {
 		go func() {
 			defer close(stdinDone)
-			pumpStdin(conn, cmd.Stdin)
+			stdinErr = pumpStdin(conn, cmd.Stdin)
 		}()
 	}
 
 	pid, code, exited, err := pumpStdio(ctx, conn, cmd.Stdout, cmd.Stderr)
 	// A pump still parked in Read would write into the next RPC, so its connection is not kept
+	pumped := false
 	select {
 	case <-stdinDone:
-		err = l.done(err)
+		err, pumped = l.done(err), true
 	default:
 	}
 	if err != nil {
@@ -239,6 +241,9 @@ func (s *Sandbox) run(ctx context.Context, cmd Cmd) (int, error) {
 	}
 	if !exited {
 		return 0, unexpected(&wire.Done{})
+	}
+	if pumped && stdinErr != nil {
+		return int(code), &callerError{fmt.Errorf("read stdin: %w", stdinErr)}
 	}
 	return int(code), nil
 }
@@ -354,18 +359,21 @@ func markGone(err error, id, addr string) error {
 }
 
 // pumpStdin chunks the reader into stdin frames.
-func pumpStdin(conn *silkd.Conn, r io.Reader) {
+func pumpStdin(conn *silkd.Conn, r io.Reader) error {
 	buf := make([]byte, stdinChunk)
 	for {
 		n, err := r.Read(buf)
 		if n > 0 {
 			if sendErr := conn.Send(&wire.Stdin{Data: buf[:n]}); sendErr != nil {
-				return
+				return nil
 			}
 		}
 		if err != nil {
 			_ = conn.Send(wire.StdinClose{})
-			return
+			if errors.Is(err, io.EOF) {
+				return nil
+			}
+			return err
 		}
 	}
 }
