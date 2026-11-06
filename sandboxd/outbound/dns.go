@@ -37,7 +37,6 @@ const (
 	dnsQueryBurst   = 200
 	dnsRefusalRate  = 1
 	dnsRefusalBurst = 10
-	dnsNamesMax     = 4096
 	dnsMsgMax       = 65535
 	dnsHeaderLen    = 12
 	dnsQueryMax     = 4096
@@ -60,11 +59,6 @@ type DNSEvent struct {
 	Decision string
 }
 
-type resolvedName struct {
-	name    string
-	expires time.Time
-}
-
 type nameserverList struct {
 	servers []string
 	read    time.Time
@@ -78,9 +72,6 @@ type resolver struct {
 	queries  *rate.Limiter
 	refusals *rate.Limiter
 	inflight chan struct{}
-
-	mu    sync.Mutex
-	names map[netip.Addr]resolvedName
 }
 
 func newResolver(ctx context.Context, h *Host, record func(DNSEvent)) *resolver {
@@ -93,7 +84,6 @@ func newResolver(ctx context.Context, h *Host, record func(DNSEvent)) *resolver 
 		queries:  rate.NewLimiter(dnsQueryRate, dnsQueryBurst),
 		refusals: rate.NewLimiter(dnsRefusalRate, dnsRefusalBurst),
 		inflight: make(chan struct{}, dnsInflight),
-		names:    map[netip.Addr]resolvedName{},
 	}
 }
 
@@ -164,7 +154,7 @@ func (r *resolver) answer(query, buf []byte, datagram bool) ([]byte, bool) {
 	resp, err := r.exchange(query, buf, datagram)
 	var drop bool
 	if err == nil {
-		ev.Answers, drop, err = r.scan(resp, hdr.ID, ev.Name)
+		ev.Answers, drop, err = r.scan(resp, hdr.ID)
 	}
 	switch {
 	case err != nil:
@@ -184,8 +174,8 @@ func (r *resolver) answer(query, buf []byte, datagram bool) ([]byte, bool) {
 	return out, true
 }
 
-// scan walks resp without allocating: it counts the answers kept, reports whether an address record must go, and remembers the kept answer addresses.
-func (r *resolver) scan(resp []byte, id uint16, name string) (int, bool, error) {
+// scan walks resp without allocating: it counts the answers kept and reports whether an address record must go.
+func (r *resolver) scan(resp []byte, id uint16) (int, bool, error) {
 	var p dnsmessage.Parser
 	hdr, err := p.Start(resp)
 	if err != nil {
@@ -198,7 +188,6 @@ func (r *resolver) scan(resp []byte, id uint16, name string) (int, bool, error) 
 		return 0, false, err
 	}
 	self, allow := *r.h.self.Load(), r.h.o.View().internalAllow
-	now := time.Now()
 	answers, drop := 0, false
 	for section := range 3 {
 		for {
@@ -218,9 +207,6 @@ func (r *resolver) scan(resp []byte, id uint16, name string) (int, bool, error) 
 				drop = true
 			case section == 0:
 				answers++
-				if ip.IsValid() {
-					r.remember(ip, name, now.Add(time.Duration(rh.TTL)*time.Second))
-				}
 			}
 		}
 	}
@@ -242,28 +228,6 @@ func (r *resolver) strip(resp []byte) ([]byte, error) {
 	msg.Authorities = slices.DeleteFunc(msg.Authorities, refused)
 	msg.Additionals = slices.DeleteFunc(msg.Additionals, refused)
 	return msg.Pack()
-}
-
-func (r *resolver) remember(ip netip.Addr, name string, expires time.Time) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if _, ok := r.names[ip]; !ok && len(r.names) >= dnsNamesMax {
-		for addr := range r.names {
-			delete(r.names, addr)
-			break
-		}
-	}
-	r.names[ip] = resolvedName{name: name, expires: expires}
-}
-
-func (r *resolver) name(ip netip.Addr) (string, bool) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	rn, ok := r.names[canonicalAddr(ip)]
-	if !ok || time.Now().After(rn.expires) {
-		return "", false
-	}
-	return rn.name, true
 }
 
 func (r *resolver) exchange(query, buf []byte, datagram bool) ([]byte, error) {
