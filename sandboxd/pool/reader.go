@@ -138,20 +138,18 @@ func (m *Manager) dropReader(ctx context.Context, r *reader, force bool) {
 	m.destroyReader(ctx, r)
 }
 
-func (m *Manager) dropStaleReaders(ctx context.Context) {
+func (m *Manager) dropStaleReaders(ctx context.Context) *sync.WaitGroup {
 	rs := m.readers
 	rs.mu.Lock()
 	live := slices.Collect(maps.Values(rs.live))
 	rs.mu.Unlock()
-	for _, r := range live {
-		m.mu.Lock()
+	m.mu.Lock()
+	stale := slices.DeleteFunc(live, func(r *reader) bool {
 		sb := m.claimed[r.claim]
-		stale := sb == nil || sleepSource(sb) != r.source
-		m.mu.Unlock()
-		if stale {
-			m.dropReader(ctx, r, true)
-		}
-	}
+		return sb != nil && sleepSource(sb) == r.source
+	})
+	m.mu.Unlock()
+	return m.runBounded(ctx, len(stale), func(ctx context.Context, i int) { m.dropReader(ctx, stale[i], true) })
 }
 
 func (m *Manager) ensureReader(ctx context.Context, sb *types.Sandbox) error {
