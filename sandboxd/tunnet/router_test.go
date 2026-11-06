@@ -2,7 +2,6 @@ package tunnet
 
 import (
 	"bytes"
-	"context"
 	"encoding/binary"
 	"errors"
 	"io"
@@ -21,7 +20,7 @@ var (
 )
 
 func TestRouterAnnouncesRewritesAndPassesOnlyReplies(t *testing.T) {
-	u, r := newRouter()
+	u, r := newRouter(t)
 	var records []FlowRecord
 	var mu sync.Mutex
 	r.Arm(Claim{
@@ -66,7 +65,7 @@ func TestRouterAnnouncesRewritesAndPassesOnlyReplies(t *testing.T) {
 }
 
 func TestRouterAnswersARPOnlyForArmedClaims(t *testing.T) {
-	u, r := newRouter()
+	u, r := newRouter(t)
 	r.Arm(Claim{ID: "c1", Addr: claimAddr})
 	u.sent(t)
 	asker := netip.MustParseAddr("100.80.0.1")
@@ -84,14 +83,21 @@ func TestRouterAnswersARPOnlyForArmedClaims(t *testing.T) {
 	r.Disarm(claimAddr)
 	b = appendHeader(nil, 7, broadcast, exitMAC, etherARP)
 	u.inject(t, appendARP(b, arpReq, exitMAC, asker, [6]byte{}, claimAddr))
-	time.Sleep(50 * time.Millisecond)
+	sentinel := netip.MustParseAddr("100.80.0.8")
+	r.Arm(Claim{ID: "c2", Addr: sentinel})
+	u.sent(t)
+	b = appendHeader(nil, 7, broadcast, exitMAC, etherARP)
+	u.inject(t, appendARP(b, arpReq, exitMAC, asker, [6]byte{}, sentinel))
+	if inner, _, _ := u.sent(t); netip.AddrFrom4([4]byte(inner[14:18])) != sentinel {
+		t.Fatalf("first answer after the disarm announces %x, want only the sentinel's", inner[14:18])
+	}
 	if len(u.out) != 0 {
 		t.Error("a disarmed claim, or a sender that is no exit, got an ARP answer")
 	}
 }
 
 func TestRouterSegmentsGSOIntoOneBatch(t *testing.T) {
-	u, r := newRouter()
+	u, r := newRouter(t)
 	r.Arm(Claim{ID: "c1", Addr: claimAddr, Allow: func(netip.Addr, uint16) bool { return true }})
 	u.sent(t)
 	guest := serve(t, r, claimAddr)
@@ -109,7 +115,7 @@ func TestRouterSegmentsGSOIntoOneBatch(t *testing.T) {
 }
 
 func TestRouterRefusesUnarmedAndDisabledAndDisarmEndsStream(t *testing.T) {
-	_, r := newRouter()
+	_, r := newRouter(t)
 	if h := guestHello(t, serve(t, r, claimAddr)); h.Flags&FlagOn != 0 {
 		t.Error("an unarmed address got on")
 	}
@@ -132,7 +138,7 @@ func TestRouterRefusesUnarmedAndDisabledAndDisarmEndsStream(t *testing.T) {
 }
 
 func TestRouterQuotaStopsTraffic(t *testing.T) {
-	u, r := newRouter()
+	u, r := newRouter(t)
 	used := new(atomic.Int64)
 	r.Arm(Claim{ID: "c1", Addr: claimAddr, Used: used, Limits: Limits{QuotaBytes: 100}, Allow: func(netip.Addr, uint16) bool { return true }})
 	u.sent(t)
@@ -150,7 +156,7 @@ func TestRouterQuotaStopsTraffic(t *testing.T) {
 }
 
 func TestRouterChargesNothingForAFrameWithNoExit(t *testing.T) {
-	_, r := newRouter()
+	_, r := newRouter(t)
 	used := new(atomic.Int64)
 	r.Arm(Claim{ID: "c1", Addr: claimAddr, Profile: "nowhere", Used: used, Allow: func(netip.Addr, uint16) bool { return true }})
 	guest := serve(t, r, claimAddr)
@@ -169,7 +175,7 @@ func TestRouterChargesNothingForAFrameWithNoExit(t *testing.T) {
 }
 
 func TestDeliverCoalescesInOrderSegmentsIntoOneGSOFrame(t *testing.T) {
-	u, r := newRouter()
+	u, r := newRouter(t)
 	r.Arm(Claim{ID: "c1", Addr: claimAddr, Allow: func(netip.Addr, uint16) bool { return true }})
 	u.sent(t)
 	guest := serve(t, r, claimAddr)
@@ -196,12 +202,11 @@ func TestDeliverCoalescesInOrderSegmentsIntoOneGSOFrame(t *testing.T) {
 }
 
 func TestRouterChargesSegmentsAndRefusesOversizedPackets(t *testing.T) {
-	u, r := newRouter()
+	u, r := newRouter(t)
 	r.Arm(Claim{ID: "c1", Addr: claimAddr, Limits: Limits{PacketsPerSecond: 10}, Allow: func(netip.Addr, uint16) bool { return true }})
 	u.sent(t)
 	go func() {
-		for s := range u.out {
-			_ = s
+		for range u.out {
 		}
 	}()
 	guest := serve(t, r, claimAddr)
@@ -220,7 +225,7 @@ func TestRouterChargesSegmentsAndRefusesOversizedPackets(t *testing.T) {
 }
 
 func TestRouterLimitsOutliveAReconnect(t *testing.T) {
-	u, r := newRouter()
+	u, r := newRouter(t)
 	r.Arm(Claim{ID: "c1", Addr: claimAddr, Limits: Limits{NewFlowsPerSecond: 0.01}, Allow: func(netip.Addr, uint16) bool { return true }})
 	u.sent(t)
 	first := serve(t, r, claimAddr)
@@ -237,7 +242,7 @@ func TestRouterLimitsOutliveAReconnect(t *testing.T) {
 }
 
 func TestRouterHandsAnICMPErrorBackWithTheQuotedGuestAddress(t *testing.T) {
-	u, r := newRouter()
+	u, r := newRouter(t)
 	r.Arm(Claim{ID: "c1", Addr: claimAddr, Allow: func(netip.Addr, uint16) bool { return true }})
 	u.sent(t)
 	guest := serve(t, r, claimAddr)
@@ -253,7 +258,7 @@ func TestRouterHandsAnICMPErrorBackWithTheQuotedGuestAddress(t *testing.T) {
 }
 
 func TestRouterResumesAStreamOpenedBeforeTheArmButRefusesAnOpener(t *testing.T) {
-	u, r := newRouter()
+	u, r := newRouter(t)
 	r.Arm(Claim{ID: "c1", Addr: claimAddr, Allow: func(_ netip.Addr, port uint16) bool { return port == 443 }})
 	u.sent(t)
 	guest := serve(t, r, claimAddr)
@@ -270,7 +275,7 @@ func TestRouterResumesAStreamOpenedBeforeTheArmButRefusesAnOpener(t *testing.T) 
 }
 
 func TestRouterKeepsTheMTUAStreamWasToldUntilItsNextHello(t *testing.T) {
-	u, r := newRouter()
+	u, r := newRouter(t)
 	r.Arm(Claim{ID: "c1", Addr: claimAddr, Allow: func(netip.Addr, uint16) bool { return true }})
 	u.sent(t)
 	guest := serve(t, r, claimAddr)
@@ -286,7 +291,7 @@ func TestRouterKeepsTheMTUAStreamWasToldUntilItsNextHello(t *testing.T) {
 }
 
 func TestEndFlowsRecordsLiveFlowsWithIPBytes(t *testing.T) {
-	u, r := newRouter()
+	u, r := newRouter(t)
 	var mu sync.Mutex
 	var records []FlowRecord
 	r.Arm(Claim{
@@ -311,7 +316,7 @@ func TestEndFlowsRecordsLiveFlowsWithIPBytes(t *testing.T) {
 }
 
 func TestDeliverMergesOnlyForAGuestThatOfferedTSO(t *testing.T) {
-	u, r := newRouter()
+	u, r := newRouter(t)
 	r.Arm(Claim{ID: "c1", Addr: claimAddr, Allow: func(netip.Addr, uint16) bool { return true }})
 	u.sent(t)
 	host, guest := net.Pipe()
@@ -333,7 +338,7 @@ func TestDeliverMergesOnlyForAGuestThatOfferedTSO(t *testing.T) {
 }
 
 func TestRouterPointsAGuestICMPErrorAtTheClaimAddress(t *testing.T) {
-	u, r := newRouter()
+	u, r := newRouter(t)
 	r.Arm(Claim{ID: "c1", Addr: claimAddr, Allow: func(netip.Addr, uint16) bool { return true }})
 	u.sent(t)
 	guest := serve(t, r, claimAddr)
@@ -346,10 +351,12 @@ func TestRouterPointsAGuestICMPErrorAtTheClaimAddress(t *testing.T) {
 	}
 }
 
-func newRouter() (*fakeUnder, *Router) {
-	u := &fakeUnder{out: make(chan sent, 64), in: make(chan []sent, 16)}
+func newRouter(t *testing.T) (*fakeUnder, *Router) {
+	t.Helper()
+	u := &fakeUnder{out: make(chan sent, 64), in: make(chan []sent, 16), done: make(chan struct{})}
+	t.Cleanup(func() { close(u.done) })
 	r := New(u, &Overlay{Subnet: subnet, VNI: 7, Port: 4789, MTU: 1450, Exits: map[string]Exit{"default": {VTEP: vtep, MAC: exitMAC}}})
-	go func() { _ = r.Run(context.Background()) }()
+	go func() { _ = r.Run(t.Context()) }()
 	return u, r
 }
 
@@ -461,6 +468,7 @@ type sent struct {
 type fakeUnder struct {
 	out     chan sent
 	in      chan []sent
+	done    chan struct{}
 	batches atomic.Int64
 }
 
@@ -475,10 +483,15 @@ func (u *fakeUnder) Send(b []byte, seg int, dst netip.AddrPort, _ uint64) error 
 }
 
 func (u *fakeUnder) Recv(each func(d []byte, from netip.AddrPort)) error {
-	for _, s := range <-u.in {
-		each(s.d, s.to)
+	select {
+	case batch := <-u.in:
+		for _, s := range batch {
+			each(s.d, s.to)
+		}
+		return nil
+	case <-u.done:
+		return net.ErrClosed
 	}
-	return nil
 }
 
 func (u *fakeUnder) inject(t *testing.T, d []byte) {
