@@ -679,12 +679,6 @@ func (m *Manager) commitIfLive(ctx context.Context, sb *types.Sandbox, mutate fu
 	return true, nil
 }
 
-func (m *Manager) deadlineOf(sb *types.Sandbox) time.Time {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return sb.Deadline
-}
-
 // admitOptions validates the key and options and admits the claim's volumes, which the caller unreserves until finalize.
 func (m *Manager) admitOptions(ctx context.Context, key types.PoolKey, o ClaimOptions) ([]resolvedVolume, []types.Volume, *claimHold, error) {
 	if err := m.validate(key); err != nil {

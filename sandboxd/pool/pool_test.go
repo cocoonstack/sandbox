@@ -2240,6 +2240,12 @@ func (f *fakeEngine) snapRemoved(name string) bool {
 	return slices.Contains(f.snapRemoves, name)
 }
 
+func (m *Manager) deadlineOf(sb *types.Sandbox) time.Time {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return sb.Deadline
+}
+
 func (m *Manager) epochOf(sb *types.Sandbox) int64 {
 	m.mu.Lock()
 	defer m.mu.Unlock()
