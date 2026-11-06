@@ -12,7 +12,7 @@ use std::process::ExitStatus;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{LazyLock, Mutex};
 
-use nix::fcntl::{FcntlArg, FdFlag, OFlag, fcntl};
+use nix::fcntl::{FcntlArg, OFlag, fcntl};
 use tokio::io::unix::AsyncFd;
 use tokio::process::Command;
 
@@ -135,20 +135,33 @@ pub fn start_in(cmd: &mut Command, dir: &OwnedFd) {
     };
 }
 
-/// Opens a pty, returning the (master, slave) fds; the master is non-blocking for async I/O.
+/// Opens a pty, returning the (master, slave) fds; both are close-on-exec from birth and the master is non-blocking.
 pub fn openpty(cols: u16, rows: u16) -> std::io::Result<(OwnedFd, OwnedFd)> {
-    let ws = nix::pty::Winsize {
-        ws_row: rows,
-        ws_col: cols,
-        ws_xpixel: 0,
-        ws_ypixel: 0,
-    };
-    let pty = nix::pty::openpty(&ws, None)?;
-    fcntl(&pty.master, FcntlArg::F_SETFD(FdFlag::FD_CLOEXEC))?;
-    fcntl(&pty.slave, FcntlArg::F_SETFD(FdFlag::FD_CLOEXEC))?;
-    let flags = OFlag::from_bits_retain(fcntl(&pty.master, FcntlArg::F_GETFL)?);
-    fcntl(&pty.master, FcntlArg::F_SETFL(flags | OFlag::O_NONBLOCK))?;
-    Ok((pty.master, pty.slave))
+    let master = nix::pty::posix_openpt(OFlag::O_RDWR | OFlag::O_NOCTTY | OFlag::O_CLOEXEC)?;
+    nix::pty::grantpt(&master)?;
+    nix::pty::unlockpt(&master)?;
+    let slave = nix::fcntl::open(
+        pty_name(&master)?.as_str(),
+        OFlag::O_RDWR | OFlag::O_NOCTTY | OFlag::O_CLOEXEC,
+        nix::sys::stat::Mode::empty(),
+    )?;
+    let master = OwnedFd::from(master);
+    set_winsize(master.as_raw_fd(), cols, rows)?;
+    set_nonblocking(master.as_fd(), true)?;
+    Ok((master, slave))
+}
+
+#[cfg(target_os = "linux")]
+fn pty_name(master: &nix::pty::PtyMaster) -> nix::Result<String> {
+    nix::pty::ptsname_r(master)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn pty_name(master: &nix::pty::PtyMaster) -> nix::Result<String> {
+    static PTSNAME: Mutex<()> = Mutex::new(());
+    let _serial = lock(&PTSNAME);
+    // SAFETY: PTSNAME serializes every ptsname call in silkd, so its static buffer is copied before another call reuses it.
+    unsafe { nix::pty::ptsname(master) }
 }
 
 pub fn watch_fd<T: AsFd + AsRawFd>(fd: T) -> std::io::Result<AsyncFd<T>> {
@@ -499,6 +512,18 @@ fn check(rc: libc::c_int) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn openpty_fds_are_close_on_exec_and_the_master_non_blocking() {
+        let (master, slave) = openpty(80, 24).unwrap();
+        for fd in [&master, &slave] {
+            let fd_flags =
+                nix::fcntl::FdFlag::from_bits_retain(fcntl(fd, FcntlArg::F_GETFD).unwrap());
+            assert!(fd_flags.contains(nix::fcntl::FdFlag::FD_CLOEXEC));
+        }
+        let fl = OFlag::from_bits_retain(fcntl(&master, FcntlArg::F_GETFL).unwrap());
+        assert!(fl.contains(OFlag::O_NONBLOCK));
+    }
 
     #[test]
     fn base_env_has_path_and_term() {
