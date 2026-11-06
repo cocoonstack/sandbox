@@ -86,7 +86,7 @@ impl State {
             Request::Attach { pid } => self.attach(&mut reader, writer, pid).await,
             Request::Exec(e) => return self.exec(e, reader, writer).await,
             Request::SessionCreate { id, cwd, env } => {
-                match self.sessions.create(id, cwd, &env).await {
+                match self.sessions.create(id, cwd.as_deref(), &env).await {
                     Ok(id) => proto::write_frame(writer, &Response::SessionCreated { id }).await,
                     Err(e) => {
                         let kind = crate::exec::spawn_kind(&e);
@@ -110,20 +110,20 @@ impl State {
                     proto::error_frame(writer, ErrorKind::NotFound, "no such session").await
                 }
             }
-            Request::FsWrite { path, mode } => fs::write(&mut reader, writer, path, mode).await,
+            Request::FsWrite { path, mode } => fs::write(&mut reader, writer, &path, mode).await,
             Request::FsRead { path } => fs::read(writer, path).await,
             Request::FsList { path } => fs::list(writer, path).await,
-            Request::FsStat { path } => fs::stat(writer, path).await,
-            Request::FsMkdir { path, parents } => fs::mkdir(writer, path, parents).await,
-            Request::FsRm { path, recursive } => fs::rm(writer, path, recursive).await,
-            Request::FsRename { from, to } => fs::rename(writer, from, to).await,
-            Request::FsPush { dest } => tree::push(&mut reader, writer, dest).await,
-            Request::FsPull { path } => tree::pull(writer, path).await,
+            Request::FsStat { path } => fs::stat(writer, &path).await,
+            Request::FsMkdir { path, parents } => fs::mkdir(writer, &path, parents).await,
+            Request::FsRm { path, recursive } => fs::rm(writer, &path, recursive).await,
+            Request::FsRename { from, to } => fs::rename(writer, &from, &to).await,
+            Request::FsPush { dest } => tree::push(&mut reader, writer, &dest).await,
+            Request::FsPull { path } => tree::pull(writer, &path).await,
             Request::FsFind {
                 path,
                 pattern,
                 glob,
-            } => find::find(&mut reader, writer, path, pattern, glob).await,
+            } => find::find(&mut reader, writer, path, pattern, glob.as_deref()).await,
             Request::FsReplace {
                 files,
                 pattern,
@@ -168,18 +168,32 @@ impl State {
                 branch,
                 depth,
                 auth,
-            } => git::clone(writer, url, path, branch, depth, auth).await,
-            Request::GitStatus { path } => git::status(writer, path).await,
-            Request::GitAdd { path, files } => git::add(writer, path, files).await,
+            } => {
+                git::clone(
+                    writer,
+                    &url,
+                    &path,
+                    branch.as_deref(),
+                    depth,
+                    auth.as_deref(),
+                )
+                .await
+            }
+            Request::GitStatus { path } => git::status(writer, &path).await,
+            Request::GitAdd { path, files } => git::add(writer, &path, &files).await,
             Request::GitCommit {
                 path,
                 message,
                 author,
-            } => git::commit(writer, path, message, author).await,
-            Request::GitPush { path, auth } => git::net_verb(writer, path, auth, "push").await,
-            Request::GitPull { path, auth } => git::net_verb(writer, path, auth, "pull").await,
+            } => git::commit(writer, &path, &message, &author).await,
+            Request::GitPush { path, auth } => {
+                git::net_verb(writer, &path, auth.as_deref(), "push").await
+            }
+            Request::GitPull { path, auth } => {
+                git::net_verb(writer, &path, auth.as_deref(), "pull").await
+            }
             Request::GitBranch { path, action, name } => {
-                git::branch(writer, path, action, name).await
+                git::branch(writer, &path, action, name.as_deref()).await
             }
             Request::Stdin { .. }
             | Request::StdinClose

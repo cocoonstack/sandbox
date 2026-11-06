@@ -17,34 +17,34 @@ const NO_EGRESS: &str = "no network on this sandbox; use fs.push to move a repos
 /// Clones `url` into `path` (optionally a branch, shallow depth), then Done.
 pub async fn clone<W: AsyncWrite + Unpin>(
     w: &mut W,
-    url: String,
-    path: String,
-    branch: Option<String>,
+    url: &str,
+    path: &str,
+    branch: Option<&str>,
     depth: Option<u32>,
-    auth: Option<String>,
+    auth: Option<&str>,
 ) -> std::io::Result<()> {
     if !crate::net::has_egress() {
         return proto::error_frame(w, ErrorKind::Unimplemented, NO_EGRESS).await;
     }
     let depth_arg;
     let mut args: Vec<&str> = vec!["clone"];
-    if let Some(b) = &branch {
+    if let Some(b) = branch {
         args.extend(["--branch", b]);
     }
     if let Some(d) = depth {
         depth_arg = d.to_string();
         args.extend(["--depth", &depth_arg]);
     }
-    args.push(&url);
-    args.push(&path);
+    args.push(url);
+    args.push(path);
     // clone has no repo dir yet, so run it from cwd (-C ".").
-    let out = git(".", auth.as_deref(), &args).await?;
+    let out = git(".", auth, &args).await?;
     terminal(w, "clone", &out).await
 }
 
 /// Reports branch, ahead/behind, and per-file status from porcelain v2.
-pub async fn status<W: AsyncWrite + Unpin>(w: &mut W, path: String) -> std::io::Result<()> {
-    let out = git(&path, None, &["status", "--porcelain=v2", "--branch"]).await?;
+pub async fn status<W: AsyncWrite + Unpin>(w: &mut W, path: &str) -> std::io::Result<()> {
+    let out = git(path, None, &["status", "--porcelain=v2", "--branch"]).await?;
     if !out.status.success() {
         return terminal(w, "status", &out).await;
     }
@@ -54,35 +54,35 @@ pub async fn status<W: AsyncWrite + Unpin>(w: &mut W, path: String) -> std::io::
 /// Stages `files` under `path`.
 pub async fn add<W: AsyncWrite + Unpin>(
     w: &mut W,
-    path: String,
-    files: Vec<String>,
+    path: &str,
+    files: &[String],
 ) -> std::io::Result<()> {
     let mut args = vec!["add", "--"];
     args.extend(files.iter().map(String::as_str));
-    let out = git(&path, None, &args).await?;
+    let out = git(path, None, &args).await?;
     terminal(w, "add", &out).await
 }
 
 /// Commits staged changes and returns the new commit hash.
 pub async fn commit<W: AsyncWrite + Unpin>(
     w: &mut W,
-    path: String,
-    message: String,
-    author: String,
+    path: &str,
+    message: &str,
+    author: &str,
 ) -> std::io::Result<()> {
     // a fresh guest has no committer identity, so derive one from the author.
-    let (name, email) = split_author(&author);
-    let mut cmd = git_cmd(&path, None);
+    let (name, email) = split_author(author);
+    let mut cmd = git_cmd(path, None);
     cmd.env("GIT_COMMITTER_NAME", name)
         .env("GIT_COMMITTER_EMAIL", email);
     let out = cmd
-        .args(["commit", "--author", &author, "-m", &message])
+        .args(["commit", "--author", author, "-m", message])
         .output()
         .await?;
     if !out.status.success() {
         return terminal(w, "commit", &out).await;
     }
-    let rev = git(&path, None, &["rev-parse", "HEAD"]).await?;
+    let rev = git(path, None, &["rev-parse", "HEAD"]).await?;
     if !rev.status.success() {
         return terminal(w, "rev-parse", &rev).await;
     }
@@ -93,26 +93,26 @@ pub async fn commit<W: AsyncWrite + Unpin>(
 /// Runs `push` or `pull` on the current branch behind the egress guard.
 pub async fn net_verb<W: AsyncWrite + Unpin>(
     w: &mut W,
-    path: String,
-    auth: Option<String>,
+    path: &str,
+    auth: Option<&str>,
     verb: &str,
 ) -> std::io::Result<()> {
     if !crate::net::has_egress() {
         return proto::error_frame(w, ErrorKind::Unimplemented, NO_EGRESS).await;
     }
-    let out = git(&path, auth.as_deref(), &[verb]).await?;
+    let out = git(path, auth, &[verb]).await?;
     terminal(w, verb, &out).await
 }
 
 /// Lists, creates, deletes, or checks out a branch.
 pub async fn branch<W: AsyncWrite + Unpin>(
     w: &mut W,
-    path: String,
+    path: &str,
     op: GitBranchOp,
-    name: Option<String>,
+    name: Option<&str>,
 ) -> std::io::Result<()> {
-    let args: Vec<&str> = match (op, &name) {
-        (GitBranchOp::List, _) => return list_branches(w, &path).await,
+    let args: Vec<&str> = match (op, name) {
+        (GitBranchOp::List, _) => return list_branches(w, path).await,
         (_, None) => {
             return proto::error_frame(w, ErrorKind::BadRequest, "branch op needs a name").await;
         }
@@ -120,7 +120,7 @@ pub async fn branch<W: AsyncWrite + Unpin>(
         (GitBranchOp::Delete, Some(name)) => vec!["branch", "-D", name],
         (GitBranchOp::Checkout, Some(name)) => vec!["checkout", name],
     };
-    let out = git(&path, None, &args).await?;
+    let out = git(path, None, &args).await?;
     terminal(w, "branch", &out).await
 }
 

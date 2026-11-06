@@ -31,7 +31,7 @@ impl Table {
     pub async fn create(
         &self,
         id: Option<String>,
-        cwd: Option<String>,
+        cwd: Option<&str>,
         env: &HashMap<String, String>,
     ) -> io::Result<String> {
         let id = match id {
@@ -47,7 +47,7 @@ impl Table {
         let mut cmd = Command::new("bash");
         cmd.env_clear().envs(sysutil::base_env().iter().copied());
         sysutil::apply_claim_env(&mut cmd);
-        if let Some(dir) = &cwd {
+        if let Some(dir) = cwd {
             cmd.current_dir(dir);
         }
         let mut child = cmd

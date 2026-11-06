@@ -151,7 +151,7 @@ pub async fn find<R, W>(
     w: &mut W,
     path: String,
     pattern: String,
-    glob: Option<String>,
+    glob: Option<&str>,
 ) -> std::io::Result<()>
 where
     R: AsyncBufRead + Unpin,
@@ -224,7 +224,7 @@ async fn find_bounded<R, W>(
     w: &mut W,
     path: String,
     pattern: String,
-    glob: Option<String>,
+    glob: Option<&str>,
     budget_bytes: usize,
 ) -> std::io::Result<()>
 where
@@ -236,7 +236,7 @@ where
         Ok(re) => re,
         Err(e) => return proto::error_frame(w, ErrorKind::BadRequest, e).await,
     };
-    let name_re = match glob.as_deref().filter(|g| !g.is_empty()).map(glob_regex) {
+    let name_re = match glob.filter(|g| !g.is_empty()).map(glob_regex) {
         None => None,
         Some(Ok(re)) => Some(re),
         Some(Err(e)) => return proto::error_frame(w, ErrorKind::BadRequest, e.to_string()).await,

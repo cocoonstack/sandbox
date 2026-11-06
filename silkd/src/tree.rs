@@ -21,28 +21,28 @@ const DIR_FLAGS: OFlag = OFlag::O_DIRECTORY
     .union(OFlag::O_CLOEXEC);
 
 /// Extracts a client tar stream into `dest`, creating it; a stream failure leaves `dest` unchanged.
-pub async fn push<R, W>(reader: &mut R, w: &mut W, dest: String) -> io::Result<()>
+pub async fn push<R, W>(reader: &mut R, w: &mut W, dest: &str) -> io::Result<()>
 where
     R: AsyncBufRead + Unpin,
     W: AsyncWrite + Unpin,
 {
-    if let Err(e) = tokio::fs::create_dir_all(&dest).await {
+    if let Err(e) = tokio::fs::create_dir_all(dest).await {
         return err_frame(w, &e, "mkdir dest").await;
     }
     let name = format!(".silkd-push-{}", sysutil::tmp_suffix());
-    let (dest_fd, staging) = match stage_dir(&dest, &name) {
+    let (dest_fd, staging) = match stage_dir(dest, &name) {
         Ok(fds) => fds,
         Err(e) => return err_frame(w, &e, "stage push").await,
     };
     let res = push_staged(reader, w, staging, dest_fd).await;
     // a failed push can leave a large partial tree, so cleanup runs on every exit path.
-    let _ = tokio::fs::remove_dir_all(Path::new(&dest).join(&name)).await;
+    let _ = tokio::fs::remove_dir_all(Path::new(dest).join(&name)).await;
     res
 }
 
 /// Streams `path` back as a tar carrying the entry under its own basename.
-pub async fn pull<W: AsyncWrite + Unpin>(w: &mut W, path: String) -> io::Result<()> {
-    let p = Path::new(&path);
+pub async fn pull<W: AsyncWrite + Unpin>(w: &mut W, path: &str) -> io::Result<()> {
+    let p = Path::new(path);
     let (parent, name) = match (p.parent(), p.file_name()) {
         (Some(par), Some(n)) => (par, n),
         _ => return proto::error_frame(w, ErrorKind::BadRequest, "invalid path").await,

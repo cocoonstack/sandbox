@@ -17,17 +17,12 @@ use crate::proto::{
 pub const LIST_BATCH: usize = 4096;
 
 /// Streams client `data` frames into `path` via a temp file renamed only on clean completion.
-pub async fn write<R, W>(
-    reader: &mut R,
-    w: &mut W,
-    path: String,
-    mode: Option<u32>,
-) -> io::Result<()>
+pub async fn write<R, W>(reader: &mut R, w: &mut W, path: &str, mode: Option<u32>) -> io::Result<()>
 where
     R: AsyncBufRead + Unpin,
     W: AsyncWrite + Unpin,
 {
-    let path = Path::new(&path);
+    let path = Path::new(path);
     let (tmp, mut file) = match create_tmp(path, mode).await {
         Ok(created) => created,
         Err(e) => return err_frame(w, &e, "create").await,
@@ -129,8 +124,8 @@ pub async fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
 }
 
 /// Reports metadata for `path` (following symlinks).
-pub async fn stat<W: AsyncWrite + Unpin>(w: &mut W, path: String) -> io::Result<()> {
-    let meta = match fs::metadata(&path).await {
+pub async fn stat<W: AsyncWrite + Unpin>(w: &mut W, path: &str) -> io::Result<()> {
+    let meta = match fs::metadata(path).await {
         Ok(m) => m,
         Err(e) => return err_frame(w, &e, "stat").await,
     };
@@ -150,15 +145,11 @@ pub async fn stat<W: AsyncWrite + Unpin>(w: &mut W, path: String) -> io::Result<
 }
 
 /// Creates a directory, with parents when `parents` is set.
-pub async fn mkdir<W: AsyncWrite + Unpin>(
-    w: &mut W,
-    path: String,
-    parents: bool,
-) -> io::Result<()> {
+pub async fn mkdir<W: AsyncWrite + Unpin>(w: &mut W, path: &str, parents: bool) -> io::Result<()> {
     let res = if parents {
-        fs::create_dir_all(&path).await
+        fs::create_dir_all(path).await
     } else {
-        fs::create_dir(&path).await
+        fs::create_dir(path).await
     };
     match res {
         Ok(()) => proto::write_frame(w, &Response::Done).await,
@@ -167,17 +158,17 @@ pub async fn mkdir<W: AsyncWrite + Unpin>(
 }
 
 /// Removes a file, or a directory (recursively when `recursive` is set).
-pub async fn rm<W: AsyncWrite + Unpin>(w: &mut W, path: String, recursive: bool) -> io::Result<()> {
-    let meta = match fs::symlink_metadata(&path).await {
+pub async fn rm<W: AsyncWrite + Unpin>(w: &mut W, path: &str, recursive: bool) -> io::Result<()> {
+    let meta = match fs::symlink_metadata(path).await {
         Ok(m) => m,
         Err(e) => return err_frame(w, &e, "rm").await,
     };
     let res = if meta.is_dir() && recursive {
-        fs::remove_dir_all(&path).await
+        fs::remove_dir_all(path).await
     } else if meta.is_dir() {
-        fs::remove_dir(&path).await
+        fs::remove_dir(path).await
     } else {
-        fs::remove_file(&path).await
+        fs::remove_file(path).await
     };
     match res {
         Ok(()) => proto::write_frame(w, &Response::Done).await,
@@ -186,8 +177,8 @@ pub async fn rm<W: AsyncWrite + Unpin>(w: &mut W, path: String, recursive: bool)
 }
 
 /// Renames `from` to `to` within the guest filesystem.
-pub async fn rename<W: AsyncWrite + Unpin>(w: &mut W, from: String, to: String) -> io::Result<()> {
-    match fs::rename(&from, &to).await {
+pub async fn rename<W: AsyncWrite + Unpin>(w: &mut W, from: &str, to: &str) -> io::Result<()> {
+    match fs::rename(from, to).await {
         Ok(()) => proto::write_frame(w, &Response::Done).await,
         Err(e) => err_frame(w, &e, "rename").await,
     }
