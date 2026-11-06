@@ -137,24 +137,6 @@ type Request interface{ Op() string }
 // Response is a server→client frame; RespType is its wire tag.
 type Response interface{ RespType() string }
 
-type respDecoder func([]byte) (Response, error)
-
-type bulkResponse struct {
-	head []byte
-	mk   func([]byte) Response
-}
-
-// reqPtr and respPtr turn a mistyped decoder table entry into a compile error.
-type reqPtr[T any] interface {
-	*T
-	Request
-}
-
-type respPtr[T any] interface {
-	*T
-	Response
-}
-
 // Exec starts a process; with Session set it runs inside that persistent shell instead.
 type Exec struct {
 	Argv    []string          `json:"argv"`
@@ -345,17 +327,14 @@ type PtyResize struct {
 
 func (PtyResize) Op() string { return "pty_resize" }
 
-// PortForward relays a guest TCP port over this connection: Ready once
-// connected, then Data both ways (DataEnd half-closes the guest socket);
-// the guest server closing ends the stream with Done.
+// PortForward relays a guest TCP port: Ready, then Data both ways (DataEnd half-closes the guest socket), Done when the guest server closes.
 type PortForward struct {
 	Port uint16 `json:"port"`
 }
 
 func (PortForward) Op() string { return "port_forward" }
 
-// GitClone clones a repo; network-lane only. Auth is a token passed as an
-// in-memory Authorization header, never written to guest disk.
+// GitClone clones a repo; network-lane only; Auth rides an in-memory Authorization header, never guest disk.
 type GitClone struct {
 	URL    string `json:"url"`
 	Path   string `json:"path"`
@@ -648,6 +627,24 @@ type GitBranches struct {
 }
 
 func (GitBranches) RespType() string { return "git_branches" }
+
+type respDecoder func([]byte) (Response, error)
+
+type bulkResponse struct {
+	head []byte
+	mk   func([]byte) Response
+}
+
+// reqPtr and respPtr turn a mistyped decoder table entry into a compile error.
+type reqPtr[T any] interface {
+	*T
+	Request
+}
+
+type respPtr[T any] interface {
+	*T
+	Response
+}
 
 // EncodeRequest renders {"v":1,"op":...,fields} without a trailing newline.
 func EncodeRequest(r Request) ([]byte, error) {

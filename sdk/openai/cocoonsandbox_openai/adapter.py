@@ -169,7 +169,7 @@ class CocoonSandboxClient(BaseSandboxClient[CocoonSandboxClientOptions]):
         if not isinstance(inner, CocoonSandboxSession):
             raise TypeError("CocoonSandboxClient.delete expects a CocoonSandboxSession")
         await inner._shutdown_backend()
-        await asyncio.to_thread(inner._sandbox().close)  # 404-safe in the SDK
+        await asyncio.to_thread(inner._sandbox().close)
         return session
 
     async def resume(self, state: SandboxSessionState) -> SandboxSession:

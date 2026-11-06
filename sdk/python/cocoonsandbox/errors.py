@@ -59,8 +59,7 @@ class ProtocolError(SandboxError):
     """The peer broke the frame protocol (unexpected frame, oversized line)."""
 
 
-def require_field(reply: dict[str, Any], key: str, verb: str) -> Any:
-    """The named member of a control-plane reply, or an APIError naming the verb that got a truncated one."""
+def _require_field(reply: dict[str, Any], key: str, verb: str) -> Any:
     if key not in reply:
         raise APIError(verb, 0, f"reply without {key}")
     return reply[key]

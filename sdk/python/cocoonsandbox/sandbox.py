@@ -20,7 +20,7 @@ from .errors import (
     SandboxTimeout,
     SilkdError,
     VolumeError,
-    require_field,
+    _require_field,
 )
 from .frames import BULK_CHUNK, STREAM_CHUNK
 from .template import Template
@@ -329,7 +329,7 @@ class Sandbox:
         body = {"token": self.token, "count": count}
         if ttl_seconds:
             body["ttl_seconds"] = ttl_seconds
-        reply = self._client._post_json(self.owner, f"/v1/sandboxes/{self.id}/fork", body, "fork")
+        reply = self._client._request(self.owner, "POST", f"/v1/sandboxes/{self.id}/fork", body, "fork")
         return [self._client._handle_from(self.owner, child, "fork") for child in reply.get("children") or []]
 
     def hibernate(self) -> None:
@@ -345,7 +345,7 @@ class Sandbox:
         reply = self._client._request(
             self.owner, "POST", f"/v1/sandboxes/{self.id}/renew", body, "renew", bearer=self.token
         )
-        self.deadline = cast(str, require_field(reply, "deadline", "renew"))
+        self.deadline = cast(str, _require_field(reply, "deadline", "renew"))
         return self.deadline
 
     def checkpoint(self, name: str = "") -> Checkpoint:
@@ -353,15 +353,14 @@ class Sandbox:
         body = {"token": self.token}
         if name:
             body["name"] = name
-        reply = self._client._post_json(self.owner, f"/v1/sandboxes/{self.id}/checkpoint", body, "checkpoint")
-        return Checkpoint(self._client, self.owner, require_field(reply, "checkpoint", "checkpoint"))
+        reply = self._client._request(self.owner, "POST", f"/v1/sandboxes/{self.id}/checkpoint", body, "checkpoint")
+        return Checkpoint(self._client, self.owner, _require_field(reply, "checkpoint", "checkpoint"))
 
     def promote(self, template: str) -> Template:
         """Publishes a claimable template and returns an owner-bound handle."""
-        reply = self._client._post_json(
-            self.owner, f"/v1/sandboxes/{self.id}/promote", {"token": self.token, "template": template}, "promote"
-        )
-        key = require_field(reply, "key", "promote")
+        body = {"token": self.token, "template": template}
+        reply = self._client._request(self.owner, "POST", f"/v1/sandboxes/{self.id}/promote", body, "promote")
+        key = _require_field(reply, "key", "promote")
         return Template(
             self._client,
             self.owner,
@@ -399,8 +398,8 @@ class Sandbox:
         body = {"token": self.token, "port": port}
         if ttl_seconds:
             body["ttl_seconds"] = ttl_seconds
-        reply = self._client._post_json(self.owner, f"/v1/sandboxes/{self.id}/preview", body, "preview")
-        return cast(str, require_field(reply, "url", "preview"))
+        reply = self._client._request(self.owner, "POST", f"/v1/sandboxes/{self.id}/preview", body, "preview")
+        return cast(str, _require_field(reply, "url", "preview"))
 
     def dial_port(self, port: int) -> PortConn:
         """Opens a byte stream to 127.0.0.1:port inside the guest."""
@@ -467,7 +466,6 @@ class Sandbox:
         return self._client._dial(self.owner, self.id, self.token, deadline)
 
     def _connect(self, op: str, deadline: float | None = None, /, **fields: object) -> Conn:
-        """Sends the request on a parked or new connection."""
         conn = self._pool.take()
         if conn is None:
             conn = self._dial(deadline)
@@ -484,7 +482,6 @@ class Sandbox:
 
     @contextlib.contextmanager
     def _lease(self, conn: Conn) -> Iterator[Conn]:
-        """Runs one RPC on conn; a terminal frame parks it and anything else drops it."""
         try:
             yield conn
         except SilkdError:

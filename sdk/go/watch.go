@@ -8,9 +8,7 @@ import (
 	"github.com/cocoonstack/sandbox/sdk/go/silkd"
 )
 
-// Watcher is an open filesystem watch. Events yields events until the watch
-// ends — by Close, ctx cancellation, or a watcher error on the sandbox side —
-// after which Err reports the terminal error (nil after a clean Close).
+// Watcher is an open filesystem watch; Err reports why it ended.
 type Watcher struct {
 	events chan wire.Event
 	stop   func()
@@ -77,9 +75,7 @@ func (w *Watcher) setErr(err error) {
 	w.err = err
 }
 
-// Watch streams filesystem events under path (recursively when set). It
-// returns once the sandbox acknowledges the watch is armed, so events caused
-// after Watch returns are guaranteed captured.
+// Watch streams filesystem events under path; events caused after it returns are guaranteed captured.
 func (s *Sandbox) Watch(ctx context.Context, path string, recursive bool) (*Watcher, error) {
 	conn, l, err := s.call(ctx, &wire.FsWatch{Path: path, Recursive: recursive})
 	if err != nil {

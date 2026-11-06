@@ -5,9 +5,7 @@ import (
 	"net/url"
 )
 
-// Template is a promoted template bound to the node that holds it. Delete and
-// New without volumes dial the owner directly, so they are usable the instant
-// Promote returns; a volume claim may follow one placement redirect.
+// Template is a promoted template bound to the node that holds it.
 type Template struct {
 	Name          string
 	ContentDigest string
@@ -18,9 +16,7 @@ type Template struct {
 	size string
 }
 
-// New claims a sandbox cloned from the template. Options may set the TTL or
-// request volumes; the key axes (network lane, size) are the template's own
-// and cannot be overridden.
+// New claims a sandbox cloned from the template; its key axes cannot be overridden.
 func (t *Template) New(ctx context.Context, opts ...Option) (*Sandbox, error) {
 	claim := claimRequest{Template: t.Name}
 	for _, opt := range opts {
@@ -43,10 +39,7 @@ func (t *Template) New(ctx context.Context, opts ...Option) (*Sandbox, error) {
 	return t.c.handleFrom(addr, cr), nil
 }
 
-// Delete removes the template from its node. The handle is owner-bound, so
-// the delete carries no_redirect: the owner answers for itself (404 once the
-// template is gone there) and gossip about same-name templates elsewhere is
-// never consulted.
+// Delete removes the template from its owning node, never a same-name template elsewhere.
 func (t *Template) Delete(ctx context.Context) error {
 	u := url.Values{
 		templateQueryParam:   {t.Name},

@@ -173,7 +173,6 @@ def main() -> int:
                 raise
             print(f"  {name:<18} ok ({int((time.time() - start) * 1000)}ms)")
     finally:
-        # never mask a step failure with a close error.
         with contextlib.suppress(Exception):
             sb.close()
     print("PY-E2E PASS")

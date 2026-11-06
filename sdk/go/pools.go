@@ -22,16 +22,12 @@ type poolUpdate struct {
 	Pools []PoolSpec `json:"pools"`
 }
 
-// SetPools replaces the entry node's desired warm pools (PUT /v1/pools): omitted
-// pools drain and lose their golden once idle. Requires the operator token.
+// SetPools replaces the entry node's desired warm pools with the operator token; omitted pools drain.
 func (c *Client) SetPools(ctx context.Context, pools []PoolSpec) (*NodeInfo, error) {
 	return c.setPoolsAt(ctx, c.addr, pools)
 }
 
-// SetPoolsCluster applies pools to the entry node and every peer, returning a
-// per-node result; retrying failed nodes is the whole protocol (idempotent
-// replace). A non-nil error means peer discovery failed and only the entry node
-// was reached — an incomplete apply to retry, not a single-node cluster (nil).
+// SetPoolsCluster applies pools to every node and returns per-node results; an error means only the entry node was reached.
 func (c *Client) SetPoolsCluster(ctx context.Context, pools []PoolSpec) ([]NodeResult, error) {
 	return c.eachNode(ctx, func(addr string) (*NodeInfo, error) { return c.setPoolsAt(ctx, addr, pools) })
 }
