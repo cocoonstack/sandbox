@@ -87,7 +87,6 @@ func (m *Manager) applyPools(ctx context.Context, desired map[types.PoolKey]conf
 	runCtx := context.WithoutCancel(ctx)
 	m.destroyAll(runCtx, trim).Wait()
 	m.refillOnce(runCtx)
-	// Persist the applied set so a restart rebuilds from it, not the config seed.
 	return m.poolStore.commit(seq, poolset.Set{ConfigSeed: m.configSeedHash, Pools: slices.Collect(maps.Values(desired))})
 }
 
