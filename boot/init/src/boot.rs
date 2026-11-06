@@ -248,9 +248,9 @@ fn record_devices(ids: &[&str], found: &mut [Option<String>]) {
 }
 
 fn record_serial(ids: &[&str], found: &mut [Option<String>], serial: &str, device: &str) {
-    for (i, id) in ids.iter().enumerate() {
-        if found[i].is_none() && *id == serial && Path::new(device).exists() {
-            found[i] = Some(device.into());
+    for (slot, id) in found.iter_mut().zip(ids) {
+        if slot.is_none() && *id == serial && Path::new(device).exists() {
+            *slot = Some(device.into());
         }
     }
 }
