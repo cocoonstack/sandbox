@@ -111,19 +111,21 @@ func (s *Sandbox) ProxyPort(ctx context.Context, localAddr string, port uint16) 
 }
 
 // openStream turns a call into a raw byte stream.
-func (s *Sandbox) openStream(ctx context.Context, req wire.Request) (_ *PortConn, err error) {
-	defer func() { s.rebind(ctx, err) }()
-	conn, l, err := s.call(ctx, req)
-	if err != nil {
-		return nil, err
-	}
-	if _, err = expect[wire.Ready](ctx, conn); err != nil {
-		return nil, l.done(err)
-	}
-	pr, pw := io.Pipe()
-	p := &PortConn{conn: conn, stop: l.close, out: pr}
-	go p.drain(ctx, pw)
-	return p, nil
+func (s *Sandbox) openStream(ctx context.Context, req wire.Request) (p *PortConn, err error) {
+	err = s.retryMoved(ctx, func() error {
+		conn, l, err := s.call(ctx, req)
+		if err != nil {
+			return err
+		}
+		if _, err = expect[wire.Ready](ctx, conn); err != nil {
+			return l.done(err)
+		}
+		pr, pw := io.Pipe()
+		p = &PortConn{conn: conn, stop: l.close, out: pr}
+		go p.drain(ctx, pw)
+		return nil
+	})
+	return p, err
 }
 
 func (s *Sandbox) proxyConn(ctx context.Context, local net.Conn, port uint16) {

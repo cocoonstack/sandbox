@@ -10,7 +10,9 @@ import (
 
 // WriteFile atomically writes data to path in the sandbox; a non-nil mode sets the file's permission bits.
 func (s *Sandbox) WriteFile(ctx context.Context, path string, data []byte, mode *uint32) error {
-	return s.uploadRPC(ctx, &wire.FsWrite{Path: path, Mode: mode}, bytes.NewReader(data))
+	return s.retryMoved(ctx, func() error {
+		return s.uploadRPC(ctx, &wire.FsWrite{Path: path, Mode: mode}, bytes.NewReader(data))
+	})
 }
 
 // ReadFile returns the contents of path.

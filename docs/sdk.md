@@ -216,9 +216,10 @@ one already gone is not an error, and `Close` is bounded internally so it stays 
 other call follows a move too: a 404 or a refused connection from the owner
 runs `Lookup` once, and a different owner replaces the old one. A call whose
 request is its whole input is sent again there: the control calls, `Run`
-without `Stdin`, and the file, git, process and session calls that send no
-data. `Run` with `Stdin`, `WriteFile`, `Push`, `OpenPty`, `Watch`, `DialPort`, `Lsp.Request`,
-`Logs` and `Attach` fail once and the next call reaches the new owner. An
+without `Stdin`, `WriteFile`, `OpenPty`, `Watch`, `DialPort`, `Lsp.Request`,
+`Logs`, `Attach`, and the file, git, process and session calls. `Run` with
+`Stdin` and `Push` stream the caller's reader, so they fail once and the next
+call reaches the new owner. An
 error from the caller's own writer is returned as it is and never retried, and a
 released sandbox still answers 404.
 Volume sandboxes and egress-lane sandboxes cannot hibernate, fork, checkpoint,

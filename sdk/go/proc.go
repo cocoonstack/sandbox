@@ -52,17 +52,19 @@ func (s *Sandbox) Attach(ctx context.Context, pid uint32, stdout, stderr io.Writ
 	return s.drainProc(ctx, &wire.Attach{PID: pid}, stdout, stderr)
 }
 
-func (s *Sandbox) drainProc(ctx context.Context, req wire.Request, stdout, stderr io.Writer) (_ int32, _ bool, err error) {
-	defer func() { s.rebind(ctx, err) }()
-	conn, l, err := s.call(ctx, req)
-	if err != nil {
-		return 0, false, err
-	}
-	defer l.close()
-	_, code, exited, err := pumpStdio(ctx, conn, stdout, stderr)
-	// Logs closes with done after the exit frame
-	if _, replay := req.(*wire.Logs); replay && exited && err == nil {
-		err = terminalErr(ctx, conn)
-	}
-	return code, exited, l.done(err)
+func (s *Sandbox) drainProc(ctx context.Context, req wire.Request, stdout, stderr io.Writer) (code int32, exited bool, err error) {
+	err = s.retryMoved(ctx, func() error {
+		conn, l, err := s.call(ctx, req)
+		if err != nil {
+			return err
+		}
+		defer l.close()
+		_, code, exited, err = pumpStdio(ctx, conn, stdout, stderr)
+		// Logs closes with done after the exit frame
+		if _, replay := req.(*wire.Logs); replay && exited && err == nil {
+			err = terminalErr(ctx, conn)
+		}
+		return l.done(err)
+	})
+	return code, exited, err
 }

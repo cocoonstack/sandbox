@@ -76,20 +76,22 @@ func (w *Watcher) setErr(err error) {
 }
 
 // Watch streams filesystem events under path; events caused after it returns are guaranteed captured.
-func (s *Sandbox) Watch(ctx context.Context, path string, recursive bool) (_ *Watcher, err error) {
-	defer func() { s.rebind(ctx, err) }()
-	conn, l, err := s.call(ctx, &wire.FsWatch{Path: path, Recursive: recursive})
-	if err != nil {
-		return nil, err
-	}
-	if _, err = expect[wire.Ready](ctx, conn); err != nil {
-		return nil, l.done(err)
-	}
-	w := &Watcher{
-		events: make(chan wire.Event, 16),
-		stop:   l.close,
-		closed: make(chan struct{}),
-	}
-	go w.drain(ctx, conn)
-	return w, nil
+func (s *Sandbox) Watch(ctx context.Context, path string, recursive bool) (w *Watcher, err error) {
+	err = s.retryMoved(ctx, func() error {
+		conn, l, err := s.call(ctx, &wire.FsWatch{Path: path, Recursive: recursive})
+		if err != nil {
+			return err
+		}
+		if _, err = expect[wire.Ready](ctx, conn); err != nil {
+			return l.done(err)
+		}
+		w = &Watcher{
+			events: make(chan wire.Event, 16),
+			stop:   l.close,
+			closed: make(chan struct{}),
+		}
+		go w.drain(ctx, conn)
+		return nil
+	})
+	return w, err
 }

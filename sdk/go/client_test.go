@@ -183,6 +183,27 @@ func TestAMovedSandboxRetriesAControlCallAtItsNewOwner(t *testing.T) {
 	}
 }
 
+func TestAMovedSandboxRetriesAStreamCallAtItsNewOwner(t *testing.T) {
+	for name, call := range map[string]func(*Sandbox) error{
+		"write file": func(sb *Sandbox) error { return sb.WriteFile(t.Context(), "/f", []byte("x"), nil) },
+		"watch": func(sb *Sandbox) error {
+			w, err := sb.Watch(t.Context(), "/", false)
+			if err == nil {
+				err = w.Close()
+			}
+			return err
+		},
+	} {
+		sb, adopter := movedSandbox(t)
+		if err := call(sb); err != nil {
+			t.Errorf("%s after the move: %v", name, err)
+		}
+		if got := sb.Owner(); got != adopter {
+			t.Errorf("%s: owner %s, want the adopter %s", name, got, adopter)
+		}
+	}
+}
+
 func TestAMovedSandboxDoesNotReplayARunThatStreamedStdin(t *testing.T) {
 	sb, adopter := movedSandbox(t)
 	if _, err := sb.Run(t.Context(), Cmd{Argv: []string{"cat"}, Stdin: strings.NewReader("once")}); err == nil {
