@@ -388,6 +388,19 @@ func TestARetriedReleaseLeavesAnAddressItsClaimHoldsAgain(t *testing.T) {
 	}
 }
 
+func TestALosingConcurrentEnableKeepsTheAddressTheWinnerPublished(t *testing.T) {
+	addrs := &fakeAddrs{}
+	m := tunManager(t, newFakeEngine(), addrs, config.PoolSpec{PoolKey: testKey, Tun: true, Egress: anyPolicy})
+	sb := mustClaim(t, m, testKey)
+	stale := tunPlan{next: tunState{addr: sb.TunAddr}, assign: true}
+	if _, _, err := m.commitTun(t.Context(), sb, false, stale); !errors.Is(err, errTunRaced) {
+		t.Fatalf("commit of a stale plan: %v, want errTunRaced", err)
+	}
+	if got := addrs.releasedList(); len(got) != 0 {
+		t.Errorf("released %v, want the address the claim holds kept", got)
+	}
+}
+
 func TestATunFlowEndWritesOneAuditRecord(t *testing.T) {
 	dir := t.TempDir()
 	cfg := &config.Config{DataDir: dir, AuditLog: true}

@@ -249,8 +249,9 @@ func (m *Manager) commitTun(ctx context.Context, sb *types.Sandbox, locked bool,
 		return "", false, ErrUnknownSandbox
 	}
 	if (tunState{off: sb.TunOff, profile: sb.TunProfile, addr: sb.TunAddr}) != prev {
+		held := sb.TunAddr == next.addr
 		m.mu.Unlock()
-		if plan.assign {
+		if plan.assign && !held {
 			m.releaseTun(ctx, sb.ID, next.addr)
 		}
 		return "", false, errTunRaced
