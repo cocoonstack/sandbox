@@ -25,9 +25,9 @@ func TestConnectAddress(t *testing.T) {
 		ok   bool
 	}{
 		{"single", "n1:7777", "n1:7777", true},
-		{"seed list uses first", "n1:7777, n2:7777", "n1:7777", true},
+		{"seed list refused", "n1:7777, n2:7777", "", false},
 		{"empty", "", "", false},
-		{"only commas", " , ", "", false},
+		{"blank", " ", "", false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

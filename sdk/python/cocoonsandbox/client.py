@@ -43,7 +43,7 @@ class Client(_Closeable):
 
         ssl_context is set to offer ALPN http/1.1, which the relay upgrade needs; pass a dedicated context.
         """
-        endpoint = _endpoint_url(addr.split(",")[0].strip())
+        endpoint = _endpoint_url(addr.strip())
         self.addr = endpoint.geturl().removeprefix("http://")
         self._scheme = endpoint.scheme
         self._ssl_context = ssl_context

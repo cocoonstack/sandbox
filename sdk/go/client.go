@@ -99,14 +99,13 @@ type Client struct {
 	keepAlive time.Duration
 }
 
-// Connect returns a client for a sandboxd node; a comma-separated seed list keeps only its first address.
+// Connect returns a client for a sandboxd node.
 func Connect(addr string, opts ...ClientOption) (*Client, error) {
-	first, _, _ := strings.Cut(addr, ",")
-	first = strings.TrimSpace(first)
-	if first == "" {
+	addr = strings.TrimSpace(addr)
+	if addr == "" {
 		return nil, errors.New("empty sandboxd address")
 	}
-	u, err := endpointURL(first, "http")
+	u, err := endpointURL(addr, "http")
 	if err != nil {
 		return nil, err
 	}

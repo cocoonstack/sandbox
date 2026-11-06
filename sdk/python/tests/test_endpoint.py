@@ -38,6 +38,8 @@ def test_endpoint_url(addr: str, want: str) -> None:
         "https://node:65536",
         "https://node:bad",
         "https://node\r\nX: bad",
+        "n1:7777,n2:7777",
+        "n1:7777, n2:7777",
     ],
 )
 def test_endpoint_rejects_invalid_origins(addr: str) -> None:
