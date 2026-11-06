@@ -23,11 +23,12 @@ const (
 	NetNone   NetShape = "none"
 	NetEgress NetShape = "egress"
 
-	SizeSmall   Size = "small"
-	SizeMedium  Size = "medium"
-	SizeLarge   Size = "large"
-	SizeXLarge  Size = "xlarge"
-	Size2XLarge Size = "2xlarge"
+	SizeSmall    Size = "small"
+	SizeMedium   Size = "medium"
+	SizeMedium4G Size = "medium-4g"
+	SizeLarge    Size = "large"
+	SizeXLarge   Size = "xlarge"
+	Size2XLarge  Size = "2xlarge"
 
 	LayerPooled   PolicyLayer = "pooled"
 	LayerUnpooled PolicyLayer = "unpooled"
@@ -58,11 +59,12 @@ var (
 	// NameRe pins caller-chosen names to one conservative charset cocoon also accepts.
 	NameRe    = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._:/-]{0,62}$`)
 	sizeSpecs = map[Size]SizeSpec{
-		SizeSmall:   {CPU: 1, Memory: "512M", MemoryBytes: 512 << 20},
-		SizeMedium:  {CPU: 2, Memory: "1G", MemoryBytes: 1 << 30},
-		SizeLarge:   {CPU: 4, Memory: "4G", MemoryBytes: 4 << 30},
-		SizeXLarge:  {CPU: 4, Memory: "8G", MemoryBytes: 8 << 30},
-		Size2XLarge: {CPU: 8, Memory: "16G", MemoryBytes: 16 << 30},
+		SizeSmall:    {CPU: 1, Memory: "512M", MemoryBytes: 512 << 20},
+		SizeMedium:   {CPU: 2, Memory: "1G", MemoryBytes: 1 << 30},
+		SizeMedium4G: {CPU: 2, Memory: "4G", MemoryBytes: 4 << 30},
+		SizeLarge:    {CPU: 4, Memory: "4G", MemoryBytes: 4 << 30},
+		SizeXLarge:   {CPU: 4, Memory: "8G", MemoryBytes: 8 << 30},
+		Size2XLarge:  {CPU: 8, Memory: "16G", MemoryBytes: 16 << 30},
 	}
 )
 

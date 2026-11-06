@@ -149,6 +149,7 @@ fragment the warm pools):
 |---|---|---|
 | `small` | 1 | 512M |
 | `medium` | 2 | 1G |
+| `medium-4g` | 2 | 4G |
 | `large` | 4 | 4G |
 | `xlarge` | 4 | 8G |
 | `2xlarge` | 8 | 16G |
