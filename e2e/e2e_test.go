@@ -429,39 +429,67 @@ func TestVolumesEndToEnd(t *testing.T) {
 	}
 }
 
-func TestWritableVolumeEndToEnd(t *testing.T) {
-	scratch := writeVolumeImage(t, "scratch.img", "scratch-bytes")
-	st := startTenantStack(t, nil,
-		[]config.VolumeSpec{{Name: "scratch", Path: scratch, Writable: true}})
+func TestWriterVolumeEndToEnd(t *testing.T) {
+	for _, tt := range []struct {
+		name     string
+		volume   sandbox.Volume
+		applied  []string
+		released []string
+		marker   bool
+	}{
+		{
+			name:     "writable",
+			volume:   sandbox.Volume{Name: "scratch", Mount: "/datasets/rw", Mode: "rw"},
+			applied:  []string{"attach:scratch:rw", "mount:scratch:/datasets/rw:rw"},
+			released: []string{"umount:/datasets/rw", "remove"},
+		},
+		{
+			name:     "attach-only",
+			volume:   sandbox.Volume{Name: "scratch", Mode: "rw", AttachOnly: true},
+			applied:  []string{"attach:scratch:rw"},
+			released: []string{"remove"},
+			marker:   true,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			scratch := writeVolumeImage(t, "scratch.img", "scratch-bytes")
+			st := startTenantStack(t, nil,
+				[]config.VolumeSpec{{Name: "scratch", Path: scratch, Writable: true}})
 
-	sb, err := st.client.New(t.Context(), "rt:24.04",
-		sandbox.WithVolumes(sandbox.Volume{Name: "scratch", Mount: "/datasets/rw", Mode: "rw"}))
-	if err != nil {
-		t.Fatalf("writable claim: %v", err)
-	}
-	if want := []sandbox.Volume{{Name: "scratch", Mount: "/datasets/rw", Mode: "rw"}}; !slices.Equal(sb.Volumes, want) {
-		t.Errorf("claim volumes %+v, want %+v", sb.Volumes, want)
-	}
-	applied := []string{"attach:scratch:rw", "mount:scratch:/datasets/rw:rw"}
-	if got := st.eng.volumeOpsLog(); !slices.Equal(got, applied) {
-		t.Errorf("engine ops %v, want %v", got, applied)
-	}
-	for _, requested := range []string{`{"name":"scratch"}`, `{"name":"scratch","mode":"rw"}`} {
-		if status, _ := rawClaim(t, st, requested); status != http.StatusConflict {
-			t.Errorf("claim %s under a live writer: %d, want 409", requested, status)
-		}
-	}
+			sb, err := st.client.New(t.Context(), "rt:24.04", sandbox.WithVolumes(tt.volume))
+			if err != nil {
+				t.Fatalf("%s claim: %v", tt.name, err)
+			}
+			if want := []sandbox.Volume{tt.volume}; !slices.Equal(sb.Volumes, want) {
+				t.Errorf("claim volumes %+v, want %+v", sb.Volumes, want)
+			}
+			if got := st.eng.volumeOpsLog(); !slices.Equal(got, tt.applied) {
+				t.Errorf("engine ops %v, want %v", got, tt.applied)
+			}
+			if tt.marker {
+				assertNoDirtyMarker(t, scratch, "apply")
+			}
+			for _, requested := range []string{`{"name":"scratch"}`, `{"name":"scratch","mode":"rw"}`} {
+				if status, _ := rawClaim(t, st, requested); status != http.StatusConflict {
+					t.Errorf("claim %s under a live %s writer: %d, want 409", requested, tt.name, status)
+				}
+			}
 
-	if err := sb.Close(); err != nil {
-		t.Fatalf("Close: %v", err)
-	}
-	want := slices.Concat(applied, []string{"umount:/datasets/rw", "remove"})
-	if got := st.eng.volumeOpsLog(); !slices.Equal(got, want) {
-		t.Errorf("engine ops after release %v, want %v", got, want)
+			if err := sb.Close(); err != nil {
+				t.Fatalf("Close: %v", err)
+			}
+			want := slices.Concat(tt.applied, tt.released)
+			if got := st.eng.volumeOpsLog(); !slices.Equal(got, want) {
+				t.Errorf("engine ops after release %v, want %v", got, want)
+			}
+			if tt.marker {
+				assertNoDirtyMarker(t, scratch, "release")
+			}
+		})
 	}
 }
 
-func TestVolumeModeWireShape(t *testing.T) {
+func TestVolumeWireShape(t *testing.T) {
 	scratch := writeVolumeImage(t, "scratch.img", "scratch-bytes")
 	st := startTenantStack(t, nil,
 		[]config.VolumeSpec{{Name: "scratch", Path: scratch, Writable: true}})
@@ -479,6 +507,16 @@ func TestVolumeModeWireShape(t *testing.T) {
 			"read-only omits mode",
 			`{"name":"scratch","mount":"/datasets/x"}`,
 			map[string]any{"name": "scratch", "mount": "/datasets/x"},
+		},
+		{
+			"attach-only omits the mount",
+			`{"name":"scratch","mode":"rw","attach_only":true}`,
+			map[string]any{"name": "scratch", "mode": "rw", "attach_only": true},
+		},
+		{
+			"eager claim is unchanged",
+			`{"name":"scratch","mode":"rw"}`,
+			map[string]any{"name": "scratch", "mount": "/volumes/scratch", "mode": "rw"},
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -602,10 +640,7 @@ func TestClaimEnvEndToEnd(t *testing.T) {
 	if gotA, gotB := seen(a), seen(b); gotA != "Bearer tenant-a" || gotB != "Bearer tenant-b" {
 		t.Fatalf("injected %q / %q, want each claim's own value", gotA, gotB)
 	}
-	st.eng.mu.Lock()
-	guestEnv := st.eng.guestEnvs[sockA]
-	st.eng.mu.Unlock()
-	if guestEnv != "AGENT_MODE=\"on\"\n" {
+	if guestEnv := st.eng.guestEnv(sockA); guestEnv != "AGENT_MODE=\"on\"\n" {
 		t.Errorf("guest env file %q, want only the guest entry", guestEnv)
 	}
 	if status, body := rawJSON(t, st, http.MethodPut, "/v1/sandboxes/"+idA+"/env", `{"env":{"GW_KEY":{"value":"Bearer rotated","guest":false}}}`); status != http.StatusNoContent {
@@ -636,9 +671,7 @@ func TestClaimEnvThroughTheSDK(t *testing.T) {
 		if err != nil {
 			t.Fatalf("socket: %v", err)
 		}
-		st.eng.mu.Lock()
-		defer st.eng.mu.Unlock()
-		return st.eng.guestEnvs[sock]
+		return st.eng.guestEnv(sock)
 	}
 	readEnv := func(sb *sandbox.Sandbox, want map[string]sandbox.EnvVar) {
 		t.Helper()
@@ -750,88 +783,6 @@ func TestForkClaimRefPrefixWireShape(t *testing.T) {
 		if got, ok := row("/v1/sandboxes/" + child.ID)["claim_ref"]; ok {
 			t.Errorf("unprefixed fork child %s carries claim_ref %v", child.ID, got)
 		}
-	}
-}
-
-func TestAttachOnlyVolumeEndToEnd(t *testing.T) {
-	scratch := writeVolumeImage(t, "scratch.img", "scratch-bytes")
-	st := startTenantStack(t, nil,
-		[]config.VolumeSpec{{Name: "scratch", Path: scratch, Writable: true}})
-
-	sb, err := st.client.New(t.Context(), "rt:24.04",
-		sandbox.WithVolumes(sandbox.Volume{Name: "scratch", Mode: "rw", AttachOnly: true}))
-	if err != nil {
-		t.Fatalf("attach-only claim: %v", err)
-	}
-	if want := []sandbox.Volume{{Name: "scratch", Mode: "rw", AttachOnly: true}}; !slices.Equal(sb.Volumes, want) {
-		t.Errorf("claim volumes %+v, want %+v", sb.Volumes, want)
-	}
-	applied := []string{"attach:scratch:rw"}
-	if got := st.eng.volumeOpsLog(); !slices.Equal(got, applied) {
-		t.Errorf("engine ops %v, want %v", got, applied)
-	}
-	assertNoDirtyMarker(t, scratch, "apply")
-	for _, requested := range []string{`{"name":"scratch"}`, `{"name":"scratch","mode":"rw"}`} {
-		if status, _ := rawClaim(t, st, requested); status != http.StatusConflict {
-			t.Errorf("claim %s under a live attach-only writer: %d, want 409", requested, status)
-		}
-	}
-
-	if err := sb.Close(); err != nil {
-		t.Fatalf("Close: %v", err)
-	}
-	want := slices.Concat(applied, []string{"remove"})
-	if got := st.eng.volumeOpsLog(); !slices.Equal(got, want) {
-		t.Errorf("engine ops after release %v, want %v", got, want)
-	}
-	assertNoDirtyMarker(t, scratch, "release")
-}
-
-func TestAttachOnlyVolumeWireShape(t *testing.T) {
-	scratch := writeVolumeImage(t, "scratch.img", "scratch-bytes")
-	st := startTenantStack(t, nil,
-		[]config.VolumeSpec{{Name: "scratch", Path: scratch, Writable: true}})
-	for _, tt := range []struct {
-		name    string
-		request string
-		want    map[string]any
-	}{
-		{
-			"attach-only omits the mount",
-			`{"template":"rt:24.04","volumes":[{"name":"scratch","mode":"rw","attach_only":true}]}`,
-			map[string]any{"name": "scratch", "mode": "rw", "attach_only": true},
-		},
-		{
-			"eager claim is unchanged",
-			`{"template":"rt:24.04","volumes":[{"name":"scratch","mode":"rw"}]}`,
-			map[string]any{"name": "scratch", "mount": "/volumes/scratch", "mode": "rw"},
-		},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			status, body := rawJSON(t, st, http.MethodPost, "/v1/claim", tt.request)
-			if status != http.StatusOK {
-				t.Fatalf("claim: %d %s, want 200", status, body)
-			}
-			var reply map[string]any
-			if err := json.Unmarshal(body, &reply); err != nil {
-				t.Fatalf("decode claim %s: %v", body, err)
-			}
-			entries, _ := reply["volumes"].([]any)
-			if len(entries) != 1 {
-				t.Fatalf("reply volumes %v, want one entry", reply["volumes"])
-			}
-			entry, _ := entries[0].(map[string]any)
-			if !maps.Equal(entry, tt.want) {
-				t.Errorf("reply volume %v, want %v", entry, tt.want)
-			}
-			var claimed rawClaimResponse
-			if err := json.Unmarshal(body, &claimed); err != nil {
-				t.Fatalf("decode claim %s: %v", body, err)
-			}
-			if err := st.client.Attach(st.addr, claimed.ID, claimed.Token).Close(); err != nil {
-				t.Fatalf("release: %v", err)
-			}
-		})
 	}
 }
 

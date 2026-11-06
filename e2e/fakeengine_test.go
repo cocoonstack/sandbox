@@ -254,6 +254,24 @@ func (f *fakeEngine) volumeOpsLog() []string {
 	return slices.Clone(f.volumeOps)
 }
 
+func (f *fakeEngine) guestEnv(sock string) string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.guestEnvs[sock]
+}
+
+func (f *fakeEngine) setReaderRoot(root string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.readerRoot = root
+}
+
+func (f *fakeEngine) readerCounts() (started, attached int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.readerStarts), len(f.readerAttaches)
+}
+
 func (f *fakeEngine) create(name string) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

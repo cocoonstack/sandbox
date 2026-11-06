@@ -21,9 +21,7 @@ func TestReaderServesAHibernatedClaimUntilAWriteWakesIt(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "work", "out.txt"), []byte("result"), 0o600); err != nil {
 		t.Fatalf("setup: %v", err)
 	}
-	st.eng.mu.Lock()
-	st.eng.readerRoot = root
-	st.eng.mu.Unlock()
+	st.eng.setReaderRoot(root)
 	sb, err := st.client.New(t.Context(), testKey.Template)
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -44,9 +42,7 @@ func TestReaderServesAHibernatedClaimUntilAWriteWakesIt(t *testing.T) {
 	if !hibernated(t, st, sb.ID) {
 		t.Fatal("reading a file woke the claim")
 	}
-	st.eng.mu.Lock()
-	started, attached := len(st.eng.readerStarts), len(st.eng.readerAttaches)
-	st.eng.mu.Unlock()
+	started, attached := st.eng.readerCounts()
 	if started != 1 || attached != 1 {
 		t.Errorf("%d readers started over %d snapshot copies, want one of each", started, attached)
 	}
