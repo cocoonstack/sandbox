@@ -232,7 +232,7 @@ func TestUndrainStopsAnEvacuationBeforeItsHandOff(t *testing.T) {
 		close(stall)
 		synctest.Wait()
 
-		assertEvacuation(t, a, 0, 0)
+		assertEvacuation(t, a, 0, 1)
 		if _, g := a.Info(); g.Draining {
 			t.Error("still draining after undrain")
 		}
@@ -273,7 +273,7 @@ func TestAnUndrainDuringAnEvacuationsDrainStopsIt(t *testing.T) {
 		wg.Wait()
 		synctest.Wait()
 
-		assertEvacuation(t, a, 0, 0)
+		assertEvacuation(t, a, 0, 1)
 		held, ok := a.byID(sb.ID)
 		if !ok || held.HibernateSnap != "" || held.ArchiveCk != "" {
 			t.Errorf("held %v, want the claim still running after the undrain", ok)
@@ -747,7 +747,7 @@ func TestEvacuationDeadlines(t *testing.T) {
 
 func assertEvacuation(t *testing.T, m *Manager, left, kept int) {
 	t.Helper()
-	if _, g := m.Info(); g.Evacuating != left || g.Draining && g.Claimed-g.Evacuating != kept {
+	if _, g := m.Info(); g.Evacuating != left || g.Claimed-g.Evacuating != kept {
 		t.Errorf("evacuation left %d of %d claims, want %d left and %d kept", g.Evacuating, g.Claimed, left, kept)
 	}
 }
