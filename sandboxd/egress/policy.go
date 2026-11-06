@@ -102,6 +102,7 @@ func (r Rule) matchPort(port uint16) bool {
 type Policy struct {
 	Allow  []Rule `json:"allow"`
 	Socks5 bool   `json:"socks5,omitzero"`
+	DNS    bool   `json:"dns,omitzero"`
 }
 
 // Intercepts reports whether any rule may terminate HTTPS; nil is false.
@@ -186,6 +187,11 @@ func (p Policy) ServesSocks() bool {
 	return p.Socks5
 }
 
+// ServesDNS reports whether the policy opted into the guest DNS door.
+func (p Policy) ServesDNS() bool {
+	return p.DNS
+}
+
 // InterceptsHost reports whether an intercept rule covers the host pattern, so a claim credential for it can be injected.
 func (p Policy) InterceptsHost(pattern string) bool {
 	return slices.ContainsFunc(p.Allow, func(r Rule) bool { return r.Intercept != InterceptOff && r.Covers(pattern) })
@@ -205,6 +211,7 @@ type Evaluator interface {
 type PolicyEvaluator interface {
 	Evaluator
 	ServesSocks() bool
+	ServesDNS() bool
 	InterceptsHost(pattern string) bool
 }
 
@@ -250,6 +257,10 @@ func (c composite) EvalInner(host, method string, port uint16) (Rule, Decision) 
 // ServesSocks is the pool's call: the tenant's rules already gate every tunnel through Eval.
 func (c composite) ServesSocks() bool {
 	return c.pool.ServesSocks()
+}
+
+func (c composite) ServesDNS() bool {
+	return c.pool.ServesDNS()
 }
 
 func (c composite) InterceptsHost(pattern string) bool {

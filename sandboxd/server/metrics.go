@@ -90,6 +90,7 @@ func (s *Server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
 		{"archives_total", "claims archived to the store", c.Archives},
 		{"unarchives_total", "archived claims restored", c.Unarchives},
 		{"archive_deletes_total", "archived checkpoints deleted at release or retention", c.ArchiveDeletes},
+		{"dns_malformed_total", "guest DNS queries dropped as malformed", c.DNSMalformed},
 	} {
 		metric(row.name, "counter", row.help)
 		_, _ = fmt.Fprintf(w, "sandboxd_%s %d\n", row.name, row.value)

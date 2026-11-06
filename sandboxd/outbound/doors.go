@@ -17,12 +17,31 @@ import (
 // doorConns bounds one sandbox's open connections per door; the guest's next dial waits in the backlog.
 const doorConns = 256
 
-// doors are a sandbox's proxy door and optional SOCKS5 door, with the proxy serving them once armed.
+type doorSpec struct {
+	ln   *net.Listener
+	path string
+	name string
+	on   bool
+}
+
+func (s doorSpec) bind() error {
+	ln, err := listenUnix(s.path)
+	if err != nil {
+		return fmt.Errorf("listen %s: %w", s.name, err)
+	}
+	*s.ln = limitDoor(ln)
+	return nil
+}
+
+// doors are a sandbox's proxy door and optional SOCKS5 and DNS doors, served once armed.
 type doors struct {
-	srv   *http.Server
-	proxy *egress.Proxy
-	ln    net.Listener
-	socks net.Listener
+	srv      *http.Server
+	proxy    *egress.Proxy
+	resolver *resolver
+	ln       net.Listener
+	socks    net.Listener
+	dns      net.Listener
+	dnsGram  net.Listener
 }
 
 func (d *doors) close() {
@@ -30,9 +49,40 @@ func (d *doors) close() {
 		_ = d.srv.Close()
 		d.proxy.Close()
 	}
-	_ = d.ln.Close()
-	if d.socks != nil {
-		_ = d.socks.Close()
+	for _, ln := range [...]net.Listener{d.ln, d.socks, d.dns, d.dnsGram} {
+		if ln != nil {
+			_ = ln.Close()
+		}
+	}
+	if d.resolver != nil {
+		d.resolver.close()
+	}
+}
+
+// renew rebinds each door a guest dialed before it was armed, so no connection queued then is served under the claim.
+func (d *doors) renew(vsock string, p egress.PolicyEvaluator) error {
+	for _, door := range d.specs(vsock, p) {
+		if !door.on || !reached(*door.ln) {
+			continue
+		}
+		_ = (*door.ln).Close()
+		if err := door.bind(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (d *doors) serves(p egress.PolicyEvaluator) bool {
+	return (d.socks != nil) == p.ServesSocks() && (d.dns != nil) == p.ServesDNS()
+}
+
+func (d *doors) specs(vsock string, p egress.PolicyEvaluator) [4]doorSpec {
+	return [...]doorSpec{
+		{&d.ln, engine.EgressSocketPath(vsock), "egress", true},
+		{&d.socks, engine.SocksSocketPath(vsock), "socks", p.ServesSocks()},
+		{&d.dns, engine.DNSSocketPath(vsock), "dns", p.ServesDNS()},
+		{&d.dnsGram, engine.DNSDatagramSocketPath(vsock), "dns datagram", p.ServesDNS()},
 	}
 }
 
@@ -81,18 +131,16 @@ func (c *doorConn) Close() error {
 
 func (c *doorConn) NetConn() net.Conn { return c.UnixConn }
 
-func bindDoors(vsock string, socks bool) (*doors, error) {
-	ln, err := listenUnix(engine.EgressSocketPath(vsock))
-	if err != nil {
-		return nil, fmt.Errorf("listen egress: %w", err)
-	}
-	d := &doors{ln: limitDoor(ln)}
-	if socks {
-		if ln, err = listenUnix(engine.SocksSocketPath(vsock)); err != nil {
-			d.close()
-			return nil, fmt.Errorf("listen socks: %w", err)
+func bindDoors(vsock string, p egress.PolicyEvaluator) (*doors, error) {
+	d := &doors{}
+	for _, door := range d.specs(vsock, p) {
+		if !door.on {
+			continue
 		}
-		d.socks = limitDoor(ln)
+		if err := door.bind(); err != nil {
+			d.close()
+			return nil, err
+		}
 	}
 	return d, nil
 }

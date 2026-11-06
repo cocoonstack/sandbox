@@ -26,7 +26,9 @@ exposing any part of a deployment beyond a single trusted host.
 - **What a compromised guest can reach.** On the none lane: nothing but
   vsock — the relay back to its own client and the guarded-egress proxy,
   plus, on a policy that opts into `socks5`, a SOCKS5 door to the same
-  allow-list that carries arbitrary TCP rather than HTTP only.
+  allow-list that carries arbitrary TCP rather than HTTP only, and on one
+  that opts into `dns`, a rate-limited resolver whose answers carry no `A`
+  or `AAAA` record the dial guard refuses; names reach any domain.
   On the egress lane: the same vsock paths plus a NIC whose every
   guest-initiated packet is dropped by an nftables lock in the host
   root netns ([egress](egress.md)); the lock is fail-closed and applied

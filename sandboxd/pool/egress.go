@@ -59,9 +59,10 @@ func (m *Manager) warnDeniedClaims(ctx context.Context) {
 
 func (m *Manager) outboundOptions(ca *egress.CA) outbound.Options {
 	return outbound.Options{
-		Engine: m.eng,
-		View:   func() *outbound.View { return m.view.Load().out },
-		Record: m.recordEgress,
+		Engine:    m.eng,
+		View:      func() *outbound.View { return m.view.Load().out },
+		Record:    m.recordEgress,
+		RecordDNS: m.recordDNS,
 		Transfer: func(ctx context.Context, id, tenant string, ev egress.Event, sent, received int64) {
 			m.recordUsage(ctx, usage.Event{Event: "egress_bytes", ID: id, Tenant: tenant, Reference: ev.Host, Upstream: ev.Upstream, Sent: sent, Received: received})
 		},

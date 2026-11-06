@@ -72,6 +72,88 @@ Audit lines (with `audit_log` on) carry `"method":"SOCKS5"`.
 curl --socks5-hostname 127.0.0.1:1080 imaps://imap.example.com/   # allowed: {"socks5": true, "allow": [{"host": "imap.example.com"}]}
 ```
 
+### Name resolution (DNS)
+
+A none-lane guest has no resolver of its own. Clients that hand the proxy or the
+SOCKS5 door a name need none, but `dig`, `getent hosts`, tools with their own
+resolver, and programs that look a host up before they connect by address do.
+When the pool policy sets `"dns": true`, the guest's queries to
+`127.0.0.153:53` reach a per-sandbox resolver in sandboxd, which asks the node's
+nameservers (the node's `/etc/resolv.conf`, read again every 5 s) and answers
+with real addresses. silkd only carries bytes, through two doors:
+
+- **Stream door, `CID2:2052` (`<vsock_socket>_2052`).** silkd relays a TCP
+  connection to port 53 byte for byte, the way it relays 3128 and 1080. When the
+  nameserver truncates its UDP answer, sandboxd asks again over TCP and returns
+  the full answer.
+- **Datagram door, `CID2:2053` (`<vsock_socket>_2053`).** silkd carries each UDP
+  datagram to port 53 as one length-framed message on its own vsock
+  connection and sends the one framed reply back as a datagram. sandboxd
+  never upgrades a datagram query: a truncated answer comes back with its TC
+  bit, so the client retries over TCP within its own buffer size, as RFC 6891
+  asks.
+
+Behavior of the relay:
+
+- **Guest configuration.** sandboxd and silkd leave the guest's resolver
+  alone: the image or the product decides whether it uses the relay. A guest
+  uses it by naming it, either as a plain `/etc/resolv.conf` with
+  `nameserver 127.0.0.153` or per query (`dig @127.0.0.153`). systemd-resolved
+  takes it as `DNS=127.0.0.153` in a drop-in only while the guest has a
+  routable link, such as a `tun0` with a default route. With only `lo` up, as
+  on the none lane, resolved answers "network is down" for a loopback upstream
+  and never forwards. The doors need a guarded policy, so they serve the none
+  lane and the bridge lane; a CNI lane keeps the DNS its network gives it.
+  Name the relay only in a pool with `"dns": true`: elsewhere it is unwired and
+  a query to it gets no reply. The switch is off by default, and a guest that
+  does not name the relay behaves as before.
+- **Failures.** When the pool has no DNS door, silkd's dial is refused. When
+  the reply does not come within 5 s, silkd drops the datagram and the client
+  retries on its own schedule. When no nameserver answers, sandboxd replies
+  `SERVFAIL`.
+- **Internal addresses.** An `A` or `AAAA` record that the dial guard would
+  refuse is dropped from every section of the answer, glue records included.
+  That covers special-purpose ranges and the node's own addresses, minus the
+  prefixes `egress_internal_allow` re-admits on any port. Other record types
+  pass unchanged, so an internal zone's `PTR`, `SRV`, `TXT` or an `HTTPS`
+  address hint can still name an internal host; the dial guard refuses the
+  connect. An answer with no record to drop goes back byte for byte, with its
+  EDNS, DNSSEC records, name case and compression as the nameserver sent them.
+  Only an answer that lost a record is rebuilt.
+- **Rate.** Each claim gets 50 queries a second with a burst of 200; a query
+  past the bucket answers `REFUSED`. Queries reach any domain: the allow-list
+  gates connections, not names.
+- **Malformed queries.** sandboxd refuses a query before it allocates the query
+  when its length is under a DNS header or over 4 KiB. It also refuses one that
+  ends early, that is not a standard query with exactly one question, or that
+  the full parser refuses in any section, names behind compression pointers and
+  record bodies included. sandboxd closes the connection and counts the query
+  in `sandboxd_dns_malformed_total`.
+- **Memory.** Each door holds at most 256 connections with one 4 KiB query
+  each. Each claim answers at most 32 queries at a time, each with one pooled
+  64 KiB reply buffer. A connection that neither sends nor reads for 30 s is
+  closed.
+- **Audit.** With `audit_log` on, each query appends
+  `{"op":"dns","name":…,"qtype":…,"answers":…,"decision":…}` with the claim id
+  and tenant. The decision is `allow`, `filtered` (an address was dropped),
+  `failed` (no nameserver answered) or `rate_limited` (at most one a second per
+  claim after a burst of ten).
+- **Names for flow audit.** The resolver remembers, per claim, the name each
+  kept answer address was resolved from until its TTL ends (at most 4,096
+  entries).
+- **Pre-bound doors.** As with the proxy doors, a guest that dials a DNS door
+  of a warm VM before its claim makes the claim bind fresh doors, so no query
+  queued before the claim is answered under the claim's identity.
+
+A connect by address still goes through the proxy or the SOCKS5 door and is
+judged there. Hibernate, wake and move need nothing: every UDP query opens a new
+vsock connection.
+
+```sh
+dig @127.0.0.153 example.com   # answered: {"dns": true, "allow": [...]}
+dig +tcp @127.0.0.153 example.com
+```
+
 ## How it works (egress lane)
 
 A `net:"egress"` guest owns a real NIC on the host bridge and reaches the same
