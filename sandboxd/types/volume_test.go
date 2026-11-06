@@ -45,16 +45,7 @@ func TestValidateVolumes(t *testing.T) {
 	if !slices.Equal(volumes, wantInput) {
 		t.Errorf("input mutated to %v, want %v", volumes, wantInput)
 	}
-	if got, err := ValidateVolumes([]Volume{
-		{Name: "a"},
-		{Name: "b"},
-		{Name: "c"},
-		{Name: "d"},
-		{Name: "e"},
-		{Name: "f"},
-		{Name: "g"},
-		{Name: "h"},
-	}); err != nil || len(got) != MaxClaimVolumes {
+	if got, err := ValidateVolumes(namedVolumes(MaxClaimVolumes)); err != nil || len(got) != MaxClaimVolumes {
 		t.Errorf("ValidateVolumes at limit: got=%v err=%v", got, err)
 	}
 
@@ -62,7 +53,7 @@ func TestValidateVolumes(t *testing.T) {
 		name    string
 		volumes []Volume
 	}{
-		{"too-many", []Volume{{Name: "a"}, {Name: "b"}, {Name: "c"}, {Name: "d"}, {Name: "e"}, {Name: "f"}, {Name: "g"}, {Name: "h"}, {Name: "i"}}},
+		{"too-many", namedVolumes(MaxClaimVolumes + 1)},
 		{"invalid-name", []Volume{{Name: "bad/name"}}},
 		{"duplicate-name", []Volume{{Name: "dataset"}, {Name: "dataset", Mount: "/other"}}},
 		{"relative-mount", []Volume{{Name: "dataset", Mount: "data"}}},
@@ -166,4 +157,12 @@ func TestValidateMixedVolumesPreservesPerEntryIntent(t *testing.T) {
 	if err != nil || !slices.Equal(again, want) {
 		t.Fatalf("second validation changed mixed intent: %+v, %v", again, err)
 	}
+}
+
+func namedVolumes(n int) []Volume {
+	volumes := make([]Volume, n)
+	for i := range volumes {
+		volumes[i].Name = string(rune('a' + i))
+	}
+	return volumes
 }
