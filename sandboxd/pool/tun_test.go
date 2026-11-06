@@ -347,6 +347,28 @@ func TestAReleaseFreesTheOverlayAddressBeforeTheSlowTeardown(t *testing.T) {
 	}
 }
 
+func TestAReleaseTheAddressStoreRefusedIsRetried(t *testing.T) {
+	addrs := &fakeAddrs{}
+	m := tunManager(t, newFakeEngine(), addrs, config.PoolSpec{PoolKey: testKey, Tun: true, Egress: anyPolicy})
+	sb := mustClaim(t, m, testKey)
+	addrs.mu.Lock()
+	addrs.err = errors.New("meta store down")
+	addrs.mu.Unlock()
+	if err := m.Release(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
+		t.Fatalf("release: %v", err)
+	}
+	if got := addrs.releasedList(); len(got) != 0 {
+		t.Fatalf("released %v while the store was down", got)
+	}
+	addrs.mu.Lock()
+	addrs.err = nil
+	addrs.mu.Unlock()
+	m.retryTunReleases(t.Context())
+	if got := addrs.releasedList(); len(got) != 1 {
+		t.Errorf("released %v after the store came back, want the refused release retried", got)
+	}
+}
+
 func TestATunFlowEndWritesOneAuditRecord(t *testing.T) {
 	dir := t.TempDir()
 	cfg := &config.Config{DataDir: dir, AuditLog: true}
@@ -482,6 +504,9 @@ func (f *fakeAddrs) Assign(_ context.Context, id string) (netip.Addr, error) {
 func (f *fakeAddrs) Release(_ context.Context, id string, addr netip.Addr) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.err != nil {
+		return f.err
+	}
 	delete(f.held, id)
 	f.released = append(f.released, fmt.Sprintf("%s %s", id, addr))
 	return nil

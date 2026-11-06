@@ -133,7 +133,28 @@ func (m *Manager) releaseTun(ctx context.Context, id string, addr netip.Addr) {
 		return
 	}
 	if err := m.tunAddrs.Release(context.WithoutCancel(ctx), id, addr); err != nil {
-		log.WithFunc("pool.releaseTun").Warnf(ctx, "release overlay address %s of %s: %v", addr, id, err)
+		log.WithFunc("pool.releaseTun").Warnf(ctx, "release overlay address %s of %s, retrying hourly: %v", addr, id, err)
+		m.mu.Lock()
+		if m.tunReleases == nil {
+			m.tunReleases = map[string]netip.Addr{}
+		}
+		m.tunReleases[id] = addr
+		m.mu.Unlock()
+	}
+}
+
+func (m *Manager) retryTunReleases(ctx context.Context) {
+	m.mu.Lock()
+	pending := maps.Clone(m.tunReleases)
+	m.mu.Unlock()
+	for id, addr := range pending {
+		if err := m.tunAddrs.Release(ctx, id, addr); err != nil {
+			log.WithFunc("pool.retryTunReleases").Warnf(ctx, "release overlay address %s of %s: %v", addr, id, err)
+			return
+		}
+		m.mu.Lock()
+		delete(m.tunReleases, id)
+		m.mu.Unlock()
 	}
 }
 
