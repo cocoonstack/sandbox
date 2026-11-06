@@ -261,6 +261,9 @@ func (s *Sandbox) call(ctx context.Context, req wire.Request) (*silkd.Conn, *lea
 
 // connect sends req on a parked connection or a fresh dial.
 func (s *Sandbox) connect(ctx context.Context, req wire.Request) (*agentConn, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if c := s.pool.take(); c != nil {
 		return c.sent(req)
 	}
