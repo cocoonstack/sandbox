@@ -918,8 +918,7 @@ func (s *Server) requireToken(next http.HandlerFunc) http.HandlerFunc {
 		tenant, err := s.resolveScope(r)
 		switch {
 		case errors.Is(err, pool.ErrTenantStoreDown):
-			w.Header().Set("Retry-After", retryAfterSeconds)
-			writeErr(w, http.StatusServiceUnavailable, "tenant store down; retry")
+			writePoolErr(w, err)
 			return
 		case err != nil:
 			writeErr(w, http.StatusUnauthorized, "invalid api token")
