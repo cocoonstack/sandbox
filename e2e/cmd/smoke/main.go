@@ -1,4 +1,4 @@
-// smoke drives the SDK surface (files, sessions, find/replace, watch, git, pty) against one live sandbox; scripts/sandboxd-e2e.sh runs it.
+// smoke drives the SDK surface against one live sandbox; scripts/sandboxd-e2e.sh runs it.
 package main
 
 import (

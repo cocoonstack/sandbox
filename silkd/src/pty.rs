@@ -205,7 +205,6 @@ async fn pump_stdin(
     }
 }
 
-/// Reads the master's buffered tail after the shell exits.
 async fn drain<W: AsyncWrite + Unpin>(
     master: &AsyncFd<OwnedFd>,
     proc: &Proc,

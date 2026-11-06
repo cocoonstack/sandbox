@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use nix::unistd::{AccessFlags, access};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-use tokio::process::Command;
+use tokio::process::{ChildStderr, ChildStdin, ChildStdout, Command};
 use tokio::sync::mpsc;
 use tokio::time::timeout;
 
@@ -169,8 +169,8 @@ where
 /// Reads both streams in this one task, so a nested spawn cannot outlive the pump abort.
 async fn pump_out(
     proc: Arc<Proc>,
-    stdout: Option<tokio::process::ChildStdout>,
-    stderr: Option<tokio::process::ChildStderr>,
+    stdout: Option<ChildStdout>,
+    stderr: Option<ChildStderr>,
     fg: Option<mpsc::Sender<Chunk>>,
 ) {
     let fg = fg.as_ref();
@@ -210,10 +210,7 @@ where
     }
 }
 
-async fn pump_stdin(
-    stdin: Option<tokio::process::ChildStdin>,
-    mut client: mpsc::Receiver<Request>,
-) {
+async fn pump_stdin(stdin: Option<ChildStdin>, mut client: mpsc::Receiver<Request>) {
     let Some(mut sink) = stdin else { return };
     while let Some(frame) = client.recv().await {
         match frame {

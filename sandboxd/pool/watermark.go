@@ -130,7 +130,6 @@ func (p *pool) trimWarm(target int) []string {
 	return trim
 }
 
-// noteArrival counts one claim; a bin that has spanned rateBin folds its arrivals per second into the rate EWMA.
 func (p *pool) noteArrival(now time.Time) {
 	switch elapsed := now.Sub(p.binStart); {
 	case p.binStart.IsZero():

@@ -14,7 +14,7 @@ use std::sync::{LazyLock, Mutex};
 
 use nix::fcntl::{FcntlArg, OFlag, fcntl};
 use tokio::io::unix::AsyncFd;
-use tokio::process::Command;
+use tokio::process::{Child, Command};
 
 static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
 
@@ -195,7 +195,7 @@ pub fn exit_code(status: ExitStatus) -> i32 {
 }
 
 /// Reaps the child and maps its status via `exit_code`; -1 when the wait fails.
-pub async fn wait_code(child: &mut tokio::process::Child) -> i32 {
+pub async fn wait_code(child: &mut Child) -> i32 {
     child.wait().await.map_or(-1, exit_code)
 }
 

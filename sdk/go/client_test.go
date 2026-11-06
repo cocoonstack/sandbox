@@ -207,15 +207,10 @@ func TestAMovedSandboxRetriesAStreamCallAtItsNewOwner(t *testing.T) {
 func TestAWriteToAGoneSandboxLooksItsOwnerUpOnce(t *testing.T) {
 	var lookups atomic.Int32
 	node := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/v1/peers":
-			_ = json.MarshalWrite(w, map[string]any{"peers": []string{}})
-		case "/v1/sandboxes/sb_1/owner":
+		if r.URL.Path == "/v1/sandboxes/sb_1/owner" {
 			lookups.Add(1)
-			w.WriteHeader(http.StatusNotFound)
-		default:
-			w.WriteHeader(http.StatusNotFound)
 		}
+		w.WriteHeader(http.StatusNotFound)
 	}))
 	t.Cleanup(node.Close)
 	sb := testSandbox(t, node)
