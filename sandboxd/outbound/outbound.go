@@ -51,10 +51,10 @@ type Options struct {
 	RecordEnds bool
 	NoRxSplice bool
 	// Router carries the advanced network mode; nil when the node has no tun block.
-	Router *tunnet.Router
-	// Flow records one ended tun flow; TunBytes takes a disarmed claim's tun byte count back; TunState reads the claim's tun fields under the owner's lock.
+	Router   *tunnet.Router
 	Flow     func(ctx context.Context, id, tenant, profile string, r tunnet.FlowRecord)
 	TunBytes func(sb *types.Sandbox, used int64)
+	// TunState reads the claim's tun fields under the owner's lock.
 	TunState func(sb *types.Sandbox) TunState
 	// Dial, Verdict, Lock, Unlock, Sweep and Nameservers default to the internal-address guard, netfilter and /etc/resolv.conf; tests swap them.
 	Dial        egress.DialFunc
@@ -229,17 +229,6 @@ func (h *Host) Disarm(id string, removed bool) {
 // DNSMalformed counts guest DNS queries dropped as malformed, with the connection that carried each.
 func (h *Host) DNSMalformed() uint64 {
 	return h.dnsMalformed.Load()
-}
-
-// ResolvedName is the name sandbox id's guest last resolved to ip, while that answer's TTL holds.
-func (h *Host) ResolvedName(id string, ip netip.Addr) (string, bool) {
-	h.mu.Lock()
-	d := h.doors[id]
-	h.mu.Unlock()
-	if d == nil || d.resolver == nil {
-		return "", false
-	}
-	return d.resolver.name(ip)
 }
 
 // Reloaded follows a view swap: live proxies drop their pooled connections, and claims of a pool whose tun switch went off lose their packet path.

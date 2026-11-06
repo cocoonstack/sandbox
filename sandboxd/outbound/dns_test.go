@@ -86,7 +86,7 @@ func TestDNSDoorDropsInternalAnswersAndRemembersTheRest(t *testing.T) {
 		{"allowed.test.", []string{"10.9.1.1"}, DNSAllow},
 		{"public.test.", []string{"93.184.216.35", "2606:2800:220:1::1"}, DNSAllow},
 	} {
-		msg := queryDoor(t, sb, tt.name, dnsmessage.TypeA)
+		msg := queryDoor(t, sb, tt.name)
 		if got := addresses(msg); !slices.Equal(got, tt.want) {
 			t.Errorf("%s answers %v, want %v", tt.name, got, tt.want)
 		}
@@ -97,12 +97,6 @@ func TestDNSDoorDropsInternalAnswersAndRemembersTheRest(t *testing.T) {
 		if ev.Name != strings.TrimSuffix(tt.name, ".") || ev.Type != "A" || ev.Answers != len(tt.want) || ev.Decision != tt.decision {
 			t.Errorf("%s event %+v, want %d answers and %s", tt.name, ev, len(tt.want), tt.decision)
 		}
-	}
-	if name, ok := h.ResolvedName(sb.ID, netip.MustParseAddr("93.184.216.34")); !ok || name != "mixed.test" {
-		t.Errorf("name of 93.184.216.34 = %q, %v, want mixed.test", name, ok)
-	}
-	if _, ok := h.ResolvedName(sb.ID, netip.MustParseAddr("10.0.0.5")); ok {
-		t.Error("a dropped internal address has a name")
 	}
 }
 
@@ -132,7 +126,7 @@ func TestDNSDoorDropsAnInternalGlueRecord(t *testing.T) {
 		o.Nameservers = func() []string { return []string{upstream.udp} }
 		o.RecordDNS = events.record
 	})
-	msg := queryDoor(t, armDNS(t, h), "glue.test.", dnsmessage.TypeA)
+	msg := queryDoor(t, armDNS(t, h), "glue.test.")
 	if got := addresses(msg); !slices.Equal(got, []string{"93.184.216.37"}) {
 		t.Errorf("answers %v, want the public address", got)
 	}
@@ -151,19 +145,12 @@ func TestDNSDoorDisarmEndsAnOpenConnection(t *testing.T) {
 	})
 	sb := armDNS(t, h)
 	conn := dialDNS(t, sb)
-	if got := addresses(exchangeDoor(t, conn, "public.test.", dnsmessage.TypeA)); len(got) != 2 {
+	if got := addresses(exchangeDoor(t, conn, "public.test.")); len(got) != 2 {
 		t.Fatalf("armed door answers %v, want two addresses", got)
 	}
 	h.Disarm(sb.ID, false)
 	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
-	query, err := (&dnsmessage.Message{
-		ID:        1,
-		Questions: []dnsmessage.Question{{Name: dnsmessage.MustNewName("public.test."), Type: dnsmessage.TypeA, Class: dnsmessage.ClassINET}},
-	}).Pack()
-	if err != nil {
-		t.Fatal(err)
-	}
-	_ = writeDNSMsg(conn, query)
+	_ = writeDNSMsg(conn, packQuery(t, dnsmessage.Header{ID: 1}, "public.test."))
 	if answer, err := readDNSMsg(conn, dnsMsgMax); err == nil {
 		t.Fatalf("a disarmed door answered %d bytes on a connection opened while armed", len(answer))
 	}
@@ -180,10 +167,10 @@ func TestDNSDoorsHandATruncatedAnswerToEachTransport(t *testing.T) {
 		t.Fatalf("dial datagram door: %v", err)
 	}
 	t.Cleanup(func() { _ = gram.Close() })
-	if msg := exchangeDoor(t, gram, "big.test.", dnsmessage.TypeA); !msg.Truncated || len(msg.Answers) != 0 {
+	if msg := exchangeDoor(t, gram, "big.test."); !msg.Truncated || len(msg.Answers) != 0 {
 		t.Errorf("datagram door answered truncated=%v with %d answers, want the upstream's truncated reply", msg.Truncated, len(msg.Answers))
 	}
-	if msg := queryDoor(t, sb, "big.test.", dnsmessage.TypeA); msg.Truncated || len(addresses(msg)) != bigAnswers {
+	if msg := queryDoor(t, sb, "big.test."); msg.Truncated || len(addresses(msg)) != bigAnswers {
 		t.Errorf("stream door answered truncated=%v with %d addresses, want %d over TCP", msg.Truncated, len(addresses(msg)), bigAnswers)
 	}
 }
@@ -218,7 +205,7 @@ func TestADNSDialBeforeTheClaimForcesARebind(t *testing.T) {
 	if answer, err := readDNSMsg(early, dnsMsgMax); err == nil {
 		t.Fatalf("a query queued before the claim got %d bytes under the claim", len(answer))
 	}
-	if got := addresses(queryDoor(t, sb, "public.test.", dnsmessage.TypeA)); len(got) != 2 {
+	if got := addresses(queryDoor(t, sb, "public.test.")); len(got) != 2 {
 		t.Errorf("the rebound door answers %v, want two addresses", got)
 	}
 	if n := events.count(DNSAllow); n != 1 {
@@ -232,13 +219,13 @@ func TestDNSDoorMovesPastANameserverThatAnswersServfail(t *testing.T) {
 	h := newHost(t, &fakeEngine{}, poolConfig(testKey, dnsPolicy), func(o *Options) {
 		o.Nameservers = func() []string { return []string{failing, upstream.udp} }
 	})
-	if got := addresses(queryDoor(t, armDNS(t, h), "public.test.", dnsmessage.TypeA)); len(got) != 2 {
+	if got := addresses(queryDoor(t, armDNS(t, h), "public.test.")); len(got) != 2 {
 		t.Errorf("answers %v, want the second nameserver's two addresses", got)
 	}
 	allFailing := newHost(t, &fakeEngine{}, poolConfig(testKey, dnsPolicy), func(o *Options) {
 		o.Nameservers = func() []string { return []string{failing, failing} }
 	})
-	if msg := queryDoor(t, armDNS(t, allFailing), "public.test.", dnsmessage.TypeA); msg.RCode != dnsmessage.RCodeServerFailure {
+	if msg := queryDoor(t, armDNS(t, allFailing), "public.test."); msg.RCode != dnsmessage.RCodeServerFailure {
 		t.Errorf("rcode %v with every nameserver failing, want their SERVFAIL", msg.RCode)
 	}
 }
@@ -255,7 +242,7 @@ func TestDNSDoorAnswersServfailWhenNoNameserverAnswers(t *testing.T) {
 		o.Nameservers = func() []string { return []string{addr} }
 		o.RecordDNS = events.record
 	})
-	msg := queryDoor(t, armDNS(t, h), "public.test.", dnsmessage.TypeA)
+	msg := queryDoor(t, armDNS(t, h), "public.test.")
 	if msg.RCode != dnsmessage.RCodeServerFailure || events.last(t).Decision != DNSFailed {
 		t.Errorf("rcode %v decision %q, want SERVFAIL and failed", msg.RCode, events.last(t).Decision)
 	}
@@ -277,7 +264,7 @@ func TestDNSDoorRefusesAQueryFloodPastItsBucket(t *testing.T) {
 	conn := dialDNS(t, sb)
 	refused := 0
 	for range dnsQueryBurst + 100 {
-		if exchangeDoor(t, conn, "public.test.", dnsmessage.TypeA).RCode == dnsmessage.RCodeRefused {
+		if exchangeDoor(t, conn, "public.test.").RCode == dnsmessage.RCodeRefused {
 			refused++
 		}
 	}
@@ -326,7 +313,7 @@ func TestDNSDoorDropsAndCountsMalformedQueries(t *testing.T) {
 			}
 		})
 	}
-	if got := addresses(queryDoor(t, sb, "public.test.", dnsmessage.TypeA)); len(got) != 2 {
+	if got := addresses(queryDoor(t, sb, "public.test.")); len(got) != 2 {
 		t.Errorf("door after the malformed queries answers %v, want two addresses", got)
 	}
 }
@@ -543,21 +530,14 @@ func dialDNS(t *testing.T, sb *types.Sandbox) net.Conn {
 	return conn
 }
 
-func queryDoor(t *testing.T, sb *types.Sandbox, name string, qtype dnsmessage.Type) dnsmessage.Message {
+func queryDoor(t *testing.T, sb *types.Sandbox, name string) dnsmessage.Message {
 	t.Helper()
-	return exchangeDoor(t, dialDNS(t, sb), name, qtype)
+	return exchangeDoor(t, dialDNS(t, sb), name)
 }
 
-func exchangeDoor(t *testing.T, conn net.Conn, name string, qtype dnsmessage.Type) dnsmessage.Message {
+func exchangeDoor(t *testing.T, conn net.Conn, name string) dnsmessage.Message {
 	t.Helper()
-	query, err := (&dnsmessage.Message{
-		ID: 0x5a5a, RecursionDesired: true,
-		Questions: []dnsmessage.Question{{Name: dnsmessage.MustNewName(name), Type: qtype, Class: dnsmessage.ClassINET}},
-	}).Pack()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = writeDNSMsg(conn, query); err != nil {
+	if err := writeDNSMsg(conn, packQuery(t, dnsmessage.Header{ID: 0x5a5a, RecursionDesired: true}, name)); err != nil {
 		t.Fatalf("write query: %v", err)
 	}
 	raw, err := readDNSMsg(conn, dnsMsgMax)
