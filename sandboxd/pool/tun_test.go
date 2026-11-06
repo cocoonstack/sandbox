@@ -369,6 +369,25 @@ func TestAReleaseTheAddressStoreRefusedIsRetried(t *testing.T) {
 	}
 }
 
+func TestARetriedReleaseLeavesAnAddressItsClaimHoldsAgain(t *testing.T) {
+	addrs := &fakeAddrs{}
+	m := tunManager(t, newFakeEngine(), addrs, config.PoolSpec{PoolKey: testKey, Tun: true, Egress: anyPolicy})
+	sb := mustClaim(t, m, testKey)
+	m.mu.Lock()
+	m.tunReleases = map[string]netip.Addr{sb.ID: sb.TunAddr}
+	m.mu.Unlock()
+	m.retryTunReleases(t.Context())
+	if got := addrs.releasedList(); len(got) != 0 {
+		t.Errorf("released %v, want the held address kept", got)
+	}
+	m.mu.Lock()
+	pending := len(m.tunReleases)
+	m.mu.Unlock()
+	if pending != 0 {
+		t.Errorf("%d releases still pending, want the obsolete one dropped", pending)
+	}
+}
+
 func TestATunFlowEndWritesOneAuditRecord(t *testing.T) {
 	dir := t.TempDir()
 	cfg := &config.Config{DataDir: dir, AuditLog: true}

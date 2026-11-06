@@ -390,7 +390,7 @@ func TestRollbackQuiescesWritableVolumesBeforeRemoval(t *testing.T) {
 		m.catalog.adoptVolumes(sb.Volumes)
 		m.mu.Unlock()
 
-		m.rollbackClaim(t.Context(), []*types.Sandbox{sb})
+		m.rollbackClaim(t.Context(), []*types.Sandbox{sb}, false)
 		waitFor(t, m.store.synced)
 
 		if seen := eng.opsAtRemoval(sb.VMName); !slices.Contains(seen, "umount:/volumes/scratch") {

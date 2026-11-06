@@ -153,6 +153,15 @@ func (m *Manager) retryTunReleases(ctx context.Context) {
 	pending := maps.Clone(m.tunReleases)
 	m.mu.Unlock()
 	for id, addr := range pending {
+		m.mu.Lock()
+		held := m.claimed[id] != nil && m.claimed[id].TunAddr == addr
+		if held {
+			delete(m.tunReleases, id)
+		}
+		m.mu.Unlock()
+		if held {
+			continue
+		}
 		if err := m.tunAddrs.Release(ctx, id, addr); err != nil {
 			log.WithFunc("pool.retryTunReleases").Warnf(ctx, "release overlay address %s of %s: %v", addr, id, err)
 			return
