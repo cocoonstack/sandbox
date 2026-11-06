@@ -1142,8 +1142,9 @@ under `archive_failover` picks the change up at its next replica capture, as
 an env change does, so an adoption before then restores the switch with the
 rest of that replica. On a running claim the change
 applies at once: disabling closes the claim's packet stream and its door, drops
-its flows and stops its ARP answers, then sends the guest `tun_down`;
-enabling, or changing the profile, re-arms the packet door and sends `tun_up`.
+its flows and stops its ARP answers, then sends the guest `tun_down`, except
+while a checkpoint, fork or replica capture holds the claim, when the guest
+keeps a `tun0` that carries nothing; enabling, or changing the profile, re-arms the packet door and sends `tun_up`.
 Enabling a claim of a `tun` pool that holds no overlay address, because the
 address store failed at its claim, allocates one. A fork child takes its
 parent's switch and label, with its own address.
