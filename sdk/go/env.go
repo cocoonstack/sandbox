@@ -15,7 +15,7 @@ type envPatchBody struct {
 
 // Env reads the claim's env with the node API token; a host-only entry comes back with an empty Value.
 func (s *Sandbox) Env(ctx context.Context) (map[string]EnvVar, error) {
-	resp, err := s.ownerJSON[envBody](ctx, http.MethodGet, "/env", nil, s.c.apiToken, "read env")
+	resp, _, err := s.ownerJSON[envBody](ctx, http.MethodGet, "/env", nil, s.c.apiToken, "read env")
 	if err != nil {
 		return nil, err
 	}

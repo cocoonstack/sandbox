@@ -80,7 +80,7 @@ func (s *Sandbox) requestVolumes(ctx context.Context, method string, request any
 	var out SandboxVolumesResponse
 	err := s.retryMoved(ctx, func() (err error) {
 		out, err = s.volumesAt(ctx, method, body, verb)
-		return err
+		return markGone(err)
 	})
 	return out, err
 }

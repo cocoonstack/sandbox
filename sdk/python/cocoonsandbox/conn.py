@@ -12,7 +12,7 @@ import urllib.parse
 from collections.abc import Callable, Iterator
 from typing import Any, BinaryIO, Protocol, TypeVar, cast
 
-from .errors import APIError, ProtocolError, SandboxError, SandboxTimeout, SilkdError, _error_message
+from .errors import APIError, ProtocolError, SandboxError, SandboxTimeout, SilkdError, _error_message, _mark_gone
 from .frames import MAX_FRAME, decode_response, encode_request
 
 KEEP_ALIVE_CONNS = 8
@@ -192,7 +192,8 @@ def dial_agent(
     try:
         sock = socket.create_connection((host, port), timeout=remaining_timeout(timeout, deadline))
     except OSError as exc:
-        raise _handshake_error(f"dial {addr}", exc) from exc
+        err = _handshake_error(f"dial {addr}", exc)
+        raise (_mark_gone(err) if isinstance(exc, ConnectionRefusedError) else err) from exc
     sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
     for opt, setting in _TCP_KEEPALIVE.items():
@@ -293,4 +294,5 @@ def _read_upgrade(reader: BinaryIO, arm: Callable[[], None]) -> None:
     if code != 101:
         arm()
         body = reader.read(min(body_len, MAX_FRAME)) if body_len else b""
-        raise APIError("agent upgrade", code, _error_message(body) or status.strip())
+        err = APIError("agent upgrade", code, _error_message(body) or status.strip())
+        raise _mark_gone(err) if code == 404 else err

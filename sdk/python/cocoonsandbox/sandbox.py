@@ -21,6 +21,7 @@ from .errors import (
     SandboxTimeout,
     SilkdError,
     VolumeError,
+    _mark_gone,
     _require_field,
 )
 from .frames import BULK_CHUNK, STREAM_CHUNK
@@ -43,7 +44,7 @@ def _follows_move(method: _F) -> _F:
     def wrapper(self: Sandbox, *args: Any, **kwargs: Any) -> Any:
         try:
             return method(self, *args, **kwargs)
-        except (APIError, ProtocolError) as exc:
+        except SandboxError as exc:
             if not self._rebind(exc):
                 raise
         return method(self, *args, **kwargs)
@@ -355,8 +356,8 @@ class Sandbox:
         body = {"token": self.token, "count": count}
         if ttl_seconds:
             body["ttl_seconds"] = ttl_seconds
-        reply = self._owner_request("fork", body, "fork")
-        return [self._client._handle_from(self.owner, child, "fork") for child in reply.get("children") or []]
+        reply, addr = self._owner_request("fork", body, "fork")
+        return [self._client._handle_from(addr, child, "fork") for child in reply.get("children") or []]
 
     def hibernate(self) -> None:
         """Snapshots and stops the VM; the next guest call restores its state."""
@@ -366,7 +367,7 @@ class Sandbox:
     def renew(self, ttl_seconds: int = 0) -> str:
         """Resets the lease to ttl_seconds from now (0 means the node default) and records the granted deadline."""
         body = {"ttl_seconds": ttl_seconds} if ttl_seconds else None
-        reply = self._owner_request("renew", body, "renew", bearer=self.token)
+        reply, _ = self._owner_request("renew", body, "renew", bearer=self.token)
         self.deadline = cast(str, _require_field(reply, "deadline", "renew"))
         return self.deadline
 
@@ -375,17 +376,17 @@ class Sandbox:
         body = {"token": self.token}
         if name:
             body["name"] = name
-        reply = self._owner_request("checkpoint", body, "checkpoint")
-        return Checkpoint(self._client, self.owner, _require_field(reply, "checkpoint", "checkpoint"))
+        reply, addr = self._owner_request("checkpoint", body, "checkpoint")
+        return Checkpoint(self._client, addr, _require_field(reply, "checkpoint", "checkpoint"))
 
     def promote(self, template: str) -> Template:
         """Publishes a claimable template and returns an owner-bound handle."""
         body = {"token": self.token, "template": template}
-        reply = self._owner_request("promote", body, "promote")
+        reply, addr = self._owner_request("promote", body, "promote")
         key = _require_field(reply, "key", "promote")
         return Template(
             self._client,
-            self.owner,
+            addr,
             key["template"],
             key.get("net", ""),
             key.get("size", ""),
@@ -420,7 +421,7 @@ class Sandbox:
         body = {"token": self.token, "port": port}
         if ttl_seconds:
             body["ttl_seconds"] = ttl_seconds
-        reply = self._owner_request("preview", body, "preview")
+        reply, _ = self._owner_request("preview", body, "preview")
         return cast(str, _require_field(reply, "url", "preview"))
 
     def dial_port(self, port: int) -> PortConn:
@@ -470,11 +471,12 @@ class Sandbox:
             )
         except APIError as exc:
             if exc.status == 0:
+                _owner_answer(exc)
                 raise
             view = _volume_response(exc.reply)
             if view is not None:
                 self._record_volumes(view)
-            raise VolumeError(exc, view) from exc
+            raise _owner_answer(VolumeError(exc, view)) from exc
         view = _volume_response(reply)
         if view is None:
             raise APIError(verb, 0, "reply without complete volume view")
@@ -486,7 +488,7 @@ class Sandbox:
         self.volumes = [volume.copy() for volume in view["volumes"]]
 
     def _rebind(self, exc: SandboxError) -> bool:
-        if not (isinstance(exc, APIError) and exc.status == 404 or isinstance(exc.__cause__, ConnectionRefusedError)):
+        if not exc._owner_gone:
             return False
         try:
             moved = self._client.lookup(self.id, self.token)
@@ -499,8 +501,17 @@ class Sandbox:
         return True
 
     @_follows_move
-    def _owner_request(self, suffix: str, body: dict[str, Any] | None, verb: str, bearer: str = "") -> dict[str, Any]:
-        return self._client._request(self.owner, "POST", f"/v1/sandboxes/{self.id}/{suffix}", body, verb, bearer=bearer)
+    def _owner_request(
+        self, suffix: str, body: dict[str, Any] | None, verb: str, bearer: str = ""
+    ) -> tuple[dict[str, Any], str]:
+        """Returns the reply and the address that gave it, which derived handles bind to."""
+        addr = self.owner
+        try:
+            reply = self._client._request(addr, "POST", f"/v1/sandboxes/{self.id}/{suffix}", body, verb, bearer=bearer)
+        except APIError as exc:
+            _owner_answer(exc)
+            raise
+        return reply, addr
 
     def _dial(self, deadline: float | None = None) -> Conn:
         return self._client._dial(self.owner, self.id, self.token, deadline)
@@ -821,3 +832,9 @@ def _drain_data(conn: Conn) -> bytes:
         if frame["type"] == "data":
             chunks.append(_need(frame, "data"))
     return b"".join(chunks)
+
+
+def _owner_answer(exc: APIError) -> APIError:
+    if exc.status == 404 or isinstance(exc.__cause__, ConnectionRefusedError):
+        return _mark_gone(exc)
+    return exc
