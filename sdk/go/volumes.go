@@ -36,8 +36,8 @@ type SandboxVolumesResponse struct {
 
 // VolumePatch adds and removes volumes by name; a nil slice changes nothing.
 type VolumePatch struct {
-	Add    []Volume `json:"add,omitempty"`
-	Remove []string `json:"remove,omitempty"`
+	Add    []Volume `json:"add,omitzero"`
+	Remove []string `json:"remove,omitzero"`
 }
 
 // VolumeError reports a failed volume request; Response is nil unless the reply carried the full view.
