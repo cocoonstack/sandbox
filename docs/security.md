@@ -86,9 +86,9 @@ all of them.
 Three credentials in descending scope: the root `api_token`, tenant tokens
 (isolated at the API layer) and per-sandbox tokens (that sandbox only, nothing
 node-level); what each may call is in the
-[API reference](sandboxd-api.md#sandboxd-http-api). Two capabilities ride on
-top: a preview URL is HMAC-signed with no revocation list, and a checkpoint id
-is the capability to branch it, which a delete does not revoke fleet-wide the
+[API reference](sandboxd-api.md#sandboxd-http-api). A preview URL is a
+capability on top, HMAC-signed with no revocation list. A checkpoint branches
+only for its own tenant, and a delete does not remove it fleet-wide the
 instant it runs
 ([why](cluster.md#delete-is-eventual-not-a-fleet-wide-revocation)).
 
