@@ -60,7 +60,9 @@ func (s *Store) Assign(ctx context.Context, claimID string) (netip.Addr, error) 
 	hosts := int64(1)<<(32-s.subnet.Bits()) - 2
 	for range assignTries {
 		var addr string
-		err := s.scan(ctx, &addr, assignSQL, s.cell, claimID, s.subnet.Addr().String(), hosts, s.reuse.Seconds())
+		qctx, cancel := context.WithTimeout(ctx, metastore.QueryTimeout)
+		err := s.pool.QueryRow(qctx, assignSQL, s.cell, claimID, s.subnet.Addr().String(), hosts, s.reuse.Seconds()).Scan(&addr)
+		cancel()
 		switch {
 		case err == nil:
 			return netip.ParseAddr(addr)
@@ -73,27 +75,17 @@ func (s *Store) Assign(ctx context.Context, claimID string) (netip.Addr, error) 
 
 // Release stamps addr released; the stamp starts its reuse window.
 func (s *Store) Release(ctx context.Context, claimID string, addr netip.Addr) error {
-	return s.exec(ctx, `UPDATE sandboxd_tun_addrs SET released_at = now()
-		WHERE cell = $1 AND address = $2 AND claim = $3 AND released_at IS NULL`, s.cell, addr.String(), claimID)
+	qctx, cancel := context.WithTimeout(ctx, metastore.QueryTimeout)
+	defer cancel()
+	if _, err := s.pool.Exec(qctx, `UPDATE sandboxd_tun_addrs SET released_at = now()
+		WHERE cell = $1 AND address = $2 AND claim = $3 AND released_at IS NULL`, s.cell, addr.String(), claimID); err != nil {
+		return down(err)
+	}
+	return nil
 }
 
 func (s *Store) Close() {
 	s.pool.Close()
-}
-
-func (s *Store) scan(ctx context.Context, dest any, sql string, args ...any) error {
-	qctx, cancel := context.WithTimeout(ctx, metastore.QueryTimeout)
-	defer cancel()
-	return s.pool.QueryRow(qctx, sql, args...).Scan(dest)
-}
-
-func (s *Store) exec(ctx context.Context, sql string, args ...any) error {
-	qctx, cancel := context.WithTimeout(ctx, metastore.QueryTimeout)
-	defer cancel()
-	if _, err := s.pool.Exec(qctx, sql, args...); err != nil {
-		return down(err)
-	}
-	return nil
 }
 
 func down(err error) error {
