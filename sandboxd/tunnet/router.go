@@ -108,6 +108,7 @@ type Claim struct {
 	// Used counts the claim's bytes both ways; the caller persists it.
 	Used   *atomic.Int64
 	Record RecordFunc
+	Touch  func()
 }
 
 // Stats counts what crossed each hop and why packets were dropped.
@@ -344,6 +345,9 @@ func (r *Router) admit(frame []byte) (*link, Drop) {
 	if drop = a.flows.inbound(p, frame, len(frame)-VnetHdrLen, time.Now()); drop != DropNone {
 		return nil, drop
 	}
+	if a.c.Touch != nil {
+		a.c.Touch()
+	}
 	RewriteDst(frame, GuestAddr)
 	if icmpError(p) {
 		rewriteQuoted(frame, srcAt, p.Dst, GuestAddr)
@@ -511,6 +515,9 @@ func (l *link) forward(frame []byte) Drop {
 	flow := maphash.Comparable(seed, [3]uint64{uint64(p.Proto), uint64(p.SrcPort)<<16 | uint64(p.DstPort), dst4(p.Dst)})
 	if l.r.under.Send(out, stride, netip.AddrPortFrom(exit.VTEP, o.Port), flow) != nil {
 		return DropSend
+	}
+	if l.a.c.Touch != nil {
+		l.a.c.Touch()
 	}
 	l.r.dgramsOut.Add(uint64(n)) //nolint:gosec // a count
 	return DropNone
