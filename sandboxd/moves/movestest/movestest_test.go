@@ -7,5 +7,5 @@ import (
 )
 
 func TestMemContract(t *testing.T) {
-	Contract(t, func(*testing.T) moves.Registry { return NewMem() })
+	Run(t, func(*testing.T) moves.Registry { return NewMem() })
 }

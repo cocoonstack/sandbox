@@ -11,7 +11,7 @@ import (
 )
 
 func TestRegistryContract(t *testing.T) {
-	movestest.Contract(t, func(t *testing.T) moves.Registry { return open(t, metastoretest.PGSchema(t), "c1") })
+	movestest.Run(t, func(t *testing.T) moves.Registry { return open(t, metastoretest.PGSchema(t), "c1") })
 }
 
 func TestCellsKeepTheirOwnRecords(t *testing.T) {

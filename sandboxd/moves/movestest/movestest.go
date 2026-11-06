@@ -115,8 +115,8 @@ func (m *Mem) write(rec moves.Record) int64 {
 	return rec.Epoch
 }
 
-// Contract checks the behavior every backend shares.
-func Contract(t *testing.T, open Opener) {
+// Run checks the behavior every backend shares.
+func Run(t *testing.T, open Opener) {
 	t.Run("begin get", func(t *testing.T) { testBeginGet(t, open(t)) })
 	t.Run("every allowed advance", func(t *testing.T) { testAdvance(t, open(t)) })
 	t.Run("advance is a compare-and-set", func(t *testing.T) { testAdvanceFences(t, open(t)) })
