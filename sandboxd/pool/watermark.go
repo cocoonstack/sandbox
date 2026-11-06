@@ -24,6 +24,7 @@ const (
 	warmShrinkDwell = rateDecayTau
 )
 
+// pool fields are guarded by the manager mutex, except claimClones and the immutable key and hash.
 type pool struct {
 	key  types.PoolKey
 	hash string
@@ -120,7 +121,6 @@ func (p *pool) popWarm() *types.Sandbox {
 	return sb
 }
 
-// trimWarm shrinks p.warm to at most target and returns the trimmed VM names; callers hold m.mu.
 func (p *pool) trimWarm(target int) []string {
 	var trim []string
 	for len(p.warm) > target {
@@ -131,7 +131,7 @@ func (p *pool) trimWarm(target int) []string {
 	return trim
 }
 
-// noteArrival counts one claim; a bin that has spanned rateBin folds its arrivals per second into the rate EWMA. Caller holds the manager mutex.
+// noteArrival counts one claim; a bin that has spanned rateBin folds its arrivals per second into the rate EWMA.
 func (p *pool) noteArrival(now time.Time) {
 	switch elapsed := now.Sub(p.binStart); {
 	case p.binStart.IsZero():
@@ -145,7 +145,6 @@ func (p *pool) noteArrival(now time.Time) {
 	p.lastArrival = now
 }
 
-// noteLead folds one provision duration into the lead EWMA. Caller holds the manager mutex.
 func (p *pool) noteLead(d time.Duration) {
 	if p.lead == 0 {
 		p.lead = d
@@ -154,7 +153,7 @@ func (p *pool) noteLead(d time.Duration) {
 	p.lead = time.Duration(ewmaAlpha*float64(d) + (1-ewmaAlpha)*float64(p.lead))
 }
 
-// effectiveTarget raises the floor toward warmMax by rate × lead. Caller holds the manager mutex.
+// effectiveTarget raises the floor toward warmMax by rate × lead.
 func (p *pool) effectiveTarget(now time.Time) int {
 	if p.warmMax <= 0 {
 		return p.floor
@@ -173,7 +172,7 @@ func (p *pool) effectiveTarget(now time.Time) int {
 	return max(p.floor, min(dynamic, p.warmMax))
 }
 
-// shrink trims the pool to its target once the warm count has stayed above it for warmShrinkDwell, returning the trimmed VM names. Caller holds the manager mutex.
+// shrink trims the pool to its target once the warm count has stayed above it for warmShrinkDwell, returning the trimmed VM names.
 func (p *pool) shrink(now time.Time) []string {
 	target := p.effectiveTarget(now)
 	switch {
