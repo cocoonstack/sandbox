@@ -107,9 +107,6 @@ func writeKeyMaterial(path string, data []byte, perm os.FileMode, force bool) er
 		flags |= os.O_EXCL
 	}
 	f, err := os.OpenFile(path, flags, perm) //nolint:gosec // operator-chosen -out path
-	if errors.Is(err, os.ErrExist) {
-		return fmt.Errorf("%s exists; refusing to overwrite (use -force)", path)
-	}
 	if err != nil {
 		return err
 	}
