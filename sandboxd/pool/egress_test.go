@@ -112,7 +112,7 @@ func TestEffectivePolicyKeepsTheLayerPinnedAtClaim(t *testing.T) {
 		cfg.EgressClasses = []config.EgressClass{{Name: "desk", Egress: &egress.Policy{Allow: []egress.Rule{{Host: "b.test"}}}}}
 	})
 
-	m.pools = map[types.PoolKey]*pool{testKey: newPool(testKey)}
+	m.pools = map[types.PoolKey]*pool{testKey: newPool(config.PoolSpec{PoolKey: testKey})}
 	if _, ok := m.view.Load().out.Resolve(&types.Sandbox{Key: testKey, Tenant: "acme", EgressClass: "desk", Layer: types.LayerUnpooled}); !ok {
 		t.Error("a claim made on an unpooled key lost its tenant policy when the key gained a pool")
 	}

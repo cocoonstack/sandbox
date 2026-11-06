@@ -261,7 +261,7 @@ func TestResolveGoldenNeverServesAPooledKeyFromATemplate(t *testing.T) {
 		t.Fatalf("Promote: %v", err)
 	}
 	m.mu.Lock()
-	m.pools[key] = newPool(key)
+	m.pools[key] = newPool(config.PoolSpec{PoolKey: key})
 	m.mu.Unlock()
 	golden, err := m.resolveGolden(t.Context(), key, "")
 	if err != nil {

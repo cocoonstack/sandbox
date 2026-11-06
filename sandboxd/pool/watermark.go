@@ -59,8 +59,10 @@ type pool struct {
 	goldenRetiredAt time.Time
 }
 
-func newPool(key types.PoolKey) *pool {
-	return &pool{key: key, hash: key.Hash()}
+func newPool(spec config.PoolSpec) *pool {
+	p := &pool{key: spec.PoolKey, hash: spec.Hash()}
+	p.applySpec(spec)
+	return p
 }
 
 func (p *pool) settled() bool {

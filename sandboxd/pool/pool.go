@@ -466,9 +466,7 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 	m.cfg = cfg
 	m.view.Store(newConfigView(cfg, secrets))
 	for _, spec := range cfg.Pools {
-		p := newPool(spec.PoolKey)
-		p.applySpec(spec)
-		m.pools[spec.PoolKey] = p
+		m.pools[spec.PoolKey] = newPool(spec)
 	}
 	ca, caErr := outbound.LoadCA(cfg)
 	if caErr != nil {

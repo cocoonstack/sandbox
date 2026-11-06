@@ -78,9 +78,7 @@ func (m *Manager) applyPools(ctx context.Context, desired map[types.PoolKey]conf
 		if p := m.pools[key]; p != nil {
 			continue
 		}
-		p := newPool(key)
-		p.applySpec(spec)
-		m.pools[key] = p
+		m.pools[key] = newPool(spec)
 	}
 	m.mu.Unlock()
 

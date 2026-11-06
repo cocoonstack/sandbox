@@ -109,9 +109,7 @@ func (m *Manager) adoptPools(ctx context.Context) error {
 		if err := spec.ValidateLimits(); err != nil {
 			return fmt.Errorf("restore pool %q from %s: %w", spec.Template, from, err)
 		}
-		p := newPool(spec.PoolKey)
-		p.applySpec(spec)
-		m.pools[spec.PoolKey] = p
+		m.pools[spec.PoolKey] = newPool(spec)
 	}
 	logger.Infof(ctx, "restored %d API-applied pools from %s", len(set.Pools), from)
 	return nil
