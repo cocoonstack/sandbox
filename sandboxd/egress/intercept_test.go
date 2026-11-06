@@ -540,8 +540,7 @@ func TestInterceptStreamsAnEventStreamAsItArrives(t *testing.T) {
 	defer close(release)
 	ca, _ := testCA(t)
 	p := New(Policy{Allow: []Rule{{Host: "example.com", Intercept: InterceptAlways}}}, nil, ca, fixedDial(upstream.Listener.Addr().String()), nil, nil)
-	guestRoots := x509.NewCertPool()
-	guestRoots.AppendCertsFromPEM(ca.CertPEM())
+	guestRoots := rootsFor(t, ca)
 	front := serveTrusting(t, p, upstream)
 
 	tc := connectTLS(t, front.Listener.Addr().String(), "example.com:443", "example.com", guestRoots)
@@ -568,8 +567,7 @@ func TestAnUpstreamDyingMidBodyTruncatesTheInterceptedResponse(t *testing.T) {
 			defer upstream.Close()
 			ca, _ := testCA(t)
 			p := New(Policy{Allow: []Rule{{Host: "example.com", Intercept: InterceptAlways}}}, tt.secrets, ca, fixedDial(upstream.Listener.Addr().String()), nil, nil)
-			guestRoots := x509.NewCertPool()
-			guestRoots.AppendCertsFromPEM(ca.CertPEM())
+			guestRoots := rootsFor(t, ca)
 			tc := connectTLS(t, serveTrusting(t, p, upstream).Listener.Addr().String(), "example.com:443", "example.com", guestRoots)
 			defer func() { _ = tc.Close() }()
 			req := newRequest(t, http.MethodGet, tt.target, "")
@@ -703,11 +701,16 @@ func interceptProxySecrets(t *testing.T, policy Policy, secrets Secrets, events 
 	}
 	p := New(policy, secrets, ca, fixedDial(upstream.Listener.Addr().String()), audit, nil)
 
-	guestRoots := x509.NewCertPool()
-	if !guestRoots.AppendCertsFromPEM(ca.CertPEM()) {
-		t.Fatal("guest trust: append ca cert")
+	return p, rootsFor(t, ca), upstream
+}
+
+func rootsFor(tb testing.TB, ca *CA) *x509.CertPool {
+	tb.Helper()
+	roots := x509.NewCertPool()
+	if !roots.AppendCertsFromPEM(ca.CertPEM()) {
+		tb.Fatal("guest trust: append ca cert")
 	}
-	return p, guestRoots, upstream
+	return roots
 }
 
 func serveTrusting(t *testing.T, p *Proxy, upstream *httptest.Server) *httptest.Server {

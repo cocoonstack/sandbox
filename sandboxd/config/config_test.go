@@ -41,10 +41,20 @@ func TestLoadAppliesDefaults(t *testing.T) {
 	}
 }
 
-func TestLoadReadsCaptureTrim(t *testing.T) {
-	cfg := mustLoad(t, writeConfig(t, `{"pools":[{"template":"rt:24.04","capture_trim":true},{"template":"py:3.12"}]}`))
-	if !cfg.Pools[0].CaptureTrim || cfg.Pools[1].CaptureTrim {
-		t.Errorf("capture_trim %v/%v, want on for the pool that names it and off by default", cfg.Pools[0].CaptureTrim, cfg.Pools[1].CaptureTrim)
+func TestLoadReadsPoolFlags(t *testing.T) {
+	for _, tt := range []struct {
+		key string
+		get func(PoolSpec) bool
+	}{
+		{"capture_trim", func(p PoolSpec) bool { return p.CaptureTrim }},
+		{"reader", func(p PoolSpec) bool { return p.Reader }},
+	} {
+		t.Run(tt.key, func(t *testing.T) {
+			cfg := mustLoad(t, writeConfig(t, `{"pools":[{"template":"rt:24.04","`+tt.key+`":true},{"template":"py:3.12"}]}`))
+			if got, other := tt.get(cfg.Pools[0]), tt.get(cfg.Pools[1]); !got || other {
+				t.Errorf("%s %v/%v, want on for the pool that names it and off by default", tt.key, got, other)
+			}
+		})
 	}
 }
 
@@ -375,13 +385,6 @@ func TestLoadAcceptsPreviewAdvertiseShapes(t *testing.T) {
 				t.Errorf("Load: %v, want the shape Mint accepts to pass validation", err)
 			}
 		})
-	}
-}
-
-func TestLoadReadsReader(t *testing.T) {
-	cfg := mustLoad(t, writeConfig(t, `{"pools":[{"template":"rt:24.04","reader":true},{"template":"py:3.12"}]}`))
-	if !cfg.Pools[0].Reader || cfg.Pools[1].Reader {
-		t.Errorf("reader %v/%v, want on for the pool that names it and off by default", cfg.Pools[0].Reader, cfg.Pools[1].Reader)
 	}
 }
 

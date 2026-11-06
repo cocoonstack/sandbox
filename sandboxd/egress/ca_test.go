@@ -13,28 +13,16 @@ import (
 )
 
 func TestLoadCARejectsForeignIntermediate(t *testing.T) {
-	rootA, keyA, err := GenerateRoot("A")
-	if err != nil {
-		t.Fatalf("root A: %v", err)
-	}
-	rootB, _, err := GenerateRoot("B")
-	if err != nil {
-		t.Fatalf("root B: %v", err)
-	}
-	interCert, interKey, err := IssueIntermediate(rootA, keyA, "n")
-	if err != nil {
-		t.Fatalf("intermediate: %v", err)
-	}
+	rootA, keyA := testRoot(t, "A")
+	rootB, _ := testRoot(t, "B")
+	interCert, interKey := testIntermediate(t, rootA, keyA, "n")
 	if _, err := LoadCA(rootB, interCert, interKey); err == nil {
 		t.Error("LoadCA accepted an intermediate not signed by the given root")
 	}
 }
 
 func TestLoadCARejectsRootAsIntermediate(t *testing.T) {
-	rootCert, rootKey, err := GenerateRoot("root")
-	if err != nil {
-		t.Fatalf("root: %v", err)
-	}
+	rootCert, rootKey := testRoot(t, "root")
 	if _, err := LoadCA(rootCert, rootCert, rootKey); err == nil {
 		t.Error("LoadCA accepted the root as its own intermediate; want rejection (would put the root key on the node)")
 	}
@@ -77,10 +65,7 @@ func TestSignLeafChainsToRoot(t *testing.T) {
 }
 
 func TestLoadCARejectsExpiredIntermediate(t *testing.T) {
-	rootCert, rootKey, err := GenerateRoot("root")
-	if err != nil {
-		t.Fatalf("root: %v", err)
-	}
+	rootCert, rootKey := testRoot(t, "root")
 	root, err := parseCert(rootCert, "root")
 	if err != nil {
 		t.Fatalf("parse root: %v", err)
@@ -123,18 +108,9 @@ func TestLoadCARejectsExpiredIntermediate(t *testing.T) {
 }
 
 func TestLoadCARootBundle(t *testing.T) {
-	rootA, keyA, err := GenerateRoot("A")
-	if err != nil {
-		t.Fatalf("root A: %v", err)
-	}
-	rootB, _, err := GenerateRoot("B")
-	if err != nil {
-		t.Fatalf("root B: %v", err)
-	}
-	interCert, interKey, err := IssueIntermediate(rootA, keyA, "n")
-	if err != nil {
-		t.Fatalf("intermediate: %v", err)
-	}
+	rootA, keyA := testRoot(t, "A")
+	rootB, _ := testRoot(t, "B")
+	interCert, interKey := testIntermediate(t, rootA, keyA, "n")
 	bundle := slices.Concat(rootA, rootB)
 	ca, err := LoadCA(bundle, interCert, interKey)
 	if err != nil {
@@ -153,14 +129,8 @@ func TestLoadCARootBundle(t *testing.T) {
 }
 
 func TestLoadCARejectsNonCertBlockInRoot(t *testing.T) {
-	rootCert, rootKey, err := GenerateRoot("root")
-	if err != nil {
-		t.Fatalf("root: %v", err)
-	}
-	interCert, interKey, err := IssueIntermediate(rootCert, rootKey, "n")
-	if err != nil {
-		t.Fatalf("intermediate: %v", err)
-	}
+	rootCert, rootKey := testRoot(t, "root")
+	interCert, interKey := testIntermediate(t, rootCert, rootKey, "n")
 	polluted := slices.Concat(rootCert, rootKey)
 	if _, err := LoadCA(polluted, interCert, interKey); err == nil {
 		t.Error("LoadCA accepted a non-certificate pem block in the root bundle")
@@ -168,12 +138,9 @@ func TestLoadCARejectsNonCertBlockInRoot(t *testing.T) {
 }
 
 func TestFingerprintIsRootAndStable(t *testing.T) {
-	rootCert, rootKey, err := GenerateRoot("root")
-	if err != nil {
-		t.Fatalf("root: %v", err)
-	}
-	c1, k1, _ := IssueIntermediate(rootCert, rootKey, "n1")
-	c2, k2, _ := IssueIntermediate(rootCert, rootKey, "n2")
+	rootCert, rootKey := testRoot(t, "root")
+	c1, k1 := testIntermediate(t, rootCert, rootKey, "n1")
+	c2, k2 := testIntermediate(t, rootCert, rootKey, "n2")
 	ca1, err := LoadCA(rootCert, c1, k1)
 	if err != nil {
 		t.Fatalf("load ca1: %v", err)
@@ -187,16 +154,28 @@ func TestFingerprintIsRootAndStable(t *testing.T) {
 	}
 }
 
+func testRoot(tb testing.TB, name string) (cert, key []byte) {
+	tb.Helper()
+	cert, key, err := GenerateRoot(name)
+	if err != nil {
+		tb.Fatalf("generate root %s: %v", name, err)
+	}
+	return cert, key
+}
+
+func testIntermediate(tb testing.TB, rootCert, rootKey []byte, name string) (cert, key []byte) {
+	tb.Helper()
+	cert, key, err := IssueIntermediate(rootCert, rootKey, name)
+	if err != nil {
+		tb.Fatalf("issue intermediate %s: %v", name, err)
+	}
+	return cert, key
+}
+
 func testCA(tb testing.TB) (*CA, []byte) {
 	tb.Helper()
-	rootCert, rootKey, err := GenerateRoot("test root")
-	if err != nil {
-		tb.Fatalf("generate root: %v", err)
-	}
-	interCert, interKey, err := IssueIntermediate(rootCert, rootKey, "node1")
-	if err != nil {
-		tb.Fatalf("issue intermediate: %v", err)
-	}
+	rootCert, rootKey := testRoot(tb, "test root")
+	interCert, interKey := testIntermediate(tb, rootCert, rootKey, "node1")
 	ca, err := LoadCA(rootCert, interCert, interKey)
 	if err != nil {
 		tb.Fatalf("load ca: %v", err)

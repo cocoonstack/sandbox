@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -146,11 +147,7 @@ func BenchmarkScrubBody(b *testing.B) {
 	}{
 		{"64KiB-page", func() io.Reader { return bytes.NewReader(page) }},
 		{"sse-256-events", func() io.Reader {
-			events := make([]string, 256)
-			for i := range events {
-				events[i] = string(event)
-			}
-			return chunked(events...)
+			return chunked(slices.Repeat([]string{string(event)}, 256)...)
 		}},
 	} {
 		b.Run(arm.name+"/plain", func(b *testing.B) {
@@ -178,14 +175,11 @@ func benchFront(b *testing.B, mode InterceptMode) (proxyAddr string, roots *x509
 	b.Cleanup(upstream.Close)
 	rule := Rule{Host: "example.com", Intercept: mode}
 	var ca *CA
-	roots = x509.NewCertPool()
 	if mode == InterceptAlways {
 		ca = testCAOnly(b)
-		if !roots.AppendCertsFromPEM(ca.CertPEM()) {
-			b.Fatal("append cluster root")
-		}
+		roots = rootsFor(b, ca)
 	} else {
-		roots.AddCert(upstream.Certificate())
+		roots = trustUpstream(upstream)
 	}
 	p := New(Policy{Allow: []Rule{rule}}, nil, ca, fixedDial(upstream.Listener.Addr().String()), nil, nil)
 	if ca != nil {
