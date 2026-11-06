@@ -11,6 +11,9 @@ use crate::proc::{Chunk, Table, write_chunk};
 use crate::proto::{self, ErrorKind, ExecReq, ProcInfo, Request, Response};
 use crate::{exec, find, forward, fs, git, lsp, pty, session, tree, tun, watch};
 
+type Parsed = serde_json::Result<Request>;
+type Feeder<R> = JoinHandle<(R, Option<Parsed>)>;
+
 /// Shared daemon state handed to every connection.
 pub struct State {
     pub table: Table,
@@ -342,9 +345,6 @@ impl Default for State {
         Self::new()
     }
 }
-
-type Parsed = serde_json::Result<Request>;
-type Feeder<R> = JoinHandle<(R, Option<Parsed>)>;
 
 fn spawn_feeder<R>(reader: R) -> (mpsc::Receiver<Request>, Feeder<R>)
 where
