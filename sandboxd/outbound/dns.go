@@ -1,7 +1,6 @@
 package outbound
 
 import (
-	"bufio"
 	"cmp"
 	"context"
 	"encoding/binary"
@@ -413,15 +412,10 @@ func writeDNSMsg(w io.Writer, msg []byte) error {
 
 // readNameservers reads path's nameserver lines as host:53 addresses, the loopback default when it names none.
 func readNameservers(path string) []string {
-	f, err := os.Open(path) //nolint:gosec // the node's resolver config
-	if err != nil {
-		return []string{"127.0.0.1:53"}
-	}
-	defer func() { _ = f.Close() }()
+	data, _ := os.ReadFile(path) //nolint:gosec // the node's resolver config
 	var out []string
-	sc := bufio.NewScanner(f)
-	for sc.Scan() {
-		fields := strings.Fields(sc.Text())
+	for line := range strings.Lines(string(data)) {
+		fields := strings.Fields(line)
 		if len(fields) >= 2 && fields[0] == "nameserver" {
 			if ip, err := netip.ParseAddr(fields[1]); err == nil {
 				out = append(out, netip.AddrPortFrom(ip, 53).String())
