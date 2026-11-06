@@ -1860,40 +1860,38 @@ func TestFailoverAReleaseFindsItsUnsettledArchiveTakenElsewhere(t *testing.T) {
 }
 
 func TestALookupRacingAWakeAdoptionTakesTheRowOnce(t *testing.T) {
-	c := newFailoverCluster(t)
-	a, b := c.node(t, "a", t.TempDir(), keepAnHour), c.node(t, "b", t.TempDir(), keepAnHour)
-	sb := mustClaim(t, a, testKey)
-	mustArchive(t, a, sb)
-	rec, _, err := c.reg.Get(t.Context(), sb.ID)
-	if err != nil {
-		t.Fatalf("row: %v", err)
-	}
-	if _, err = c.reg.Release(t.Context(), sb.ID, rec.Epoch, "a"); err != nil {
-		t.Fatalf("release: %v", err)
-	}
-	reg := &hookRegistry{Registry: c.reg}
-	b.archives = reg
-	lookup := make(chan bool, 1)
-	reg.afterTake = func() {
-		go func() {
-			adopted, _ := b.AdoptArchived(t.Context(), sb.ID, sb.Token)
-			lookup <- adopted
-		}()
-		select {
-		case <-lookup:
-			lookup <- true
-		case <-time.After(200 * time.Millisecond):
+	synctest.Test(t, func(t *testing.T) {
+		c := newFailoverCluster(t)
+		a, b := c.node(t, "a", t.TempDir(), keepAnHour), c.node(t, "b", t.TempDir(), keepAnHour)
+		sb := mustClaim(t, a, testKey)
+		mustArchive(t, a, sb)
+		rec, _, err := c.reg.Get(t.Context(), sb.ID)
+		if err != nil {
+			t.Fatalf("row: %v", err)
 		}
-	}
-	if adopted, adoptErr := b.AdoptForWake(t.Context(), sb.ID, sb.Token); adoptErr != nil || !adopted {
-		t.Fatalf("wake adoption: %v %v", adopted, adoptErr)
-	}
-	if !<-lookup {
-		t.Error("the racing lookup did not find the adopted claim")
-	}
-	if got := reg.takes.Load(); got != 1 {
-		t.Errorf("row taken %d times, want once", got)
-	}
+		if _, err = c.reg.Release(t.Context(), sb.ID, rec.Epoch, "a"); err != nil {
+			t.Fatalf("release: %v", err)
+		}
+		reg := &hookRegistry{Registry: c.reg}
+		b.archives = reg
+		lookup := make(chan bool, 1)
+		reg.afterTake = func() {
+			go func() {
+				adopted, _ := b.AdoptArchived(t.Context(), sb.ID, sb.Token)
+				lookup <- adopted
+			}()
+			synctest.Wait()
+		}
+		if adopted, adoptErr := b.AdoptForWake(t.Context(), sb.ID, sb.Token); adoptErr != nil || !adopted {
+			t.Fatalf("wake adoption: %v %v", adopted, adoptErr)
+		}
+		if !<-lookup {
+			t.Error("the racing lookup did not find the adopted claim")
+		}
+		if got := reg.takes.Load(); got != 1 {
+			t.Errorf("row taken %d times, want once", got)
+		}
+	})
 }
 
 type failoverCluster struct {
