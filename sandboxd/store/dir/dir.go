@@ -354,15 +354,11 @@ func removeAgedEntry(final string, entry fs.DirEntry) error {
 
 func writeGenerationDigest(final string, meta []byte, digest string) error {
 	path := filepath.Join(final, digestName(meta))
-	tmp := path + ".tmp"
 	if digest == "" {
-		return errors.Join(os.RemoveAll(path), os.RemoveAll(tmp)) //nolint:gosec // hash-derived paths under our root
+		return os.RemoveAll(path) //nolint:gosec // hash-derived path under our root
 	}
-	if err := os.WriteFile(tmp, []byte(digest), 0o600); err != nil { //nolint:gosec // hash-derived path under our root
+	if err := utils.WriteFileSync(path, []byte(digest), 0o600); err != nil {
 		return fmt.Errorf("write digest: %w", err)
-	}
-	if err := os.Rename(tmp, path); err != nil { //nolint:gosec // hash-derived paths under our root
-		return fmt.Errorf("commit digest: %w", err)
 	}
 	return nil
 }
