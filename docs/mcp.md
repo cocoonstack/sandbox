@@ -28,7 +28,7 @@ in the guest, which can hold its reply up to 5 s past the cap.
 
 | tool | what it does |
 |---|---|
-| `create_sandbox` | claim a microVM and return its id plus deadline; optional `template`, `net` (`none` default, or `egress`), `size` (`small` default, `medium`, `large`, `xlarge`, `2xlarge`) and `ttl_seconds` (0 means one hour); warm claims take milliseconds, nothing renews the deadline |
+| `create_sandbox` | claim a microVM and return its id plus deadline; optional `template`, `net` (`none` default, or `egress`), `size` (`small` default, `medium`, `medium-4g`, `large`, `xlarge`, `2xlarge`) and `ttl_seconds` (0 means one hour); warm claims take milliseconds, nothing renews the deadline |
 | `exec` | run a shell command to completion, with an optional `cwd`; returns stdout, stderr and the exit code, each stream keeping its first 1 MiB with `truncated` set past that; a cut-off or dropped run returns the output collected so far next to an `error` field; a hibernated sandbox wakes transparently |
 | `spawn` | start a command detached, with an optional `cwd`, and return its pid; output goes to a 256 KiB ring buffer that `logs` replays |
 | `ps` | list tracked processes (exec, spawn, pty) with state, exit code and start time |

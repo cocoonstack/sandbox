@@ -193,7 +193,7 @@ defer sb.Close()
 | option | values | default | meaning |
 |---|---|---|---|
 | `WithNetwork(n)` | `NetNone`, `NetEgress` | `NetNone` | Cloud Hypervisor network shape: `NetNone` disables the NIC and uses vsock-only I/O; `NetEgress` attaches a bridge/CNI NIC |
-| `WithSize(s)` | `Small`, `Medium`, `Large`, `XLarge`, `XXLarge` | `Small` | resource tier: 1cpu/512M, 2cpu/1G, 4cpu/4G, 4cpu/8G, 8cpu/16G |
+| `WithSize(s)` | `Small`, `Medium`, `Medium4G`, `Large`, `XLarge`, `XXLarge` | `Small` | resource tier: 1cpu/512M, 2cpu/1G, 2cpu/4G, 4cpu/4G, 4cpu/8G, 8cpu/16G |
 | `WithVolumes(volumes...)` | `Volume{Name, Mount?, Mode?, AttachOnly?}` entries | none | attach and mount up to eight unique catalog dataset disks; `Mount` defaults to `/volumes/<name>`; `Mode` is `"ro"` (default) or `"rw"` — `"rw"` requires the catalog entry's `writable: true`; supported by `Client.New` and `Template.New` |
 | `WithTimeout(d)` | duration | server default 5m | sandbox TTL, rounded up to seconds, server-capped at 24h. The node reaps the sandbox after the TTL even if the client vanishes |
 
