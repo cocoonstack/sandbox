@@ -150,7 +150,10 @@ func (m *Manager) startMoveIn(ctx context.Context, sb *types.Sandbox, from strin
 	if !cold && !m.startMovedGuest(ctx, sb, committed) {
 		return
 	}
-	live, err := m.commitIfLive(ctx, sb, func() { sb.MoveIn = false })
+	live, err := m.commitIfLive(ctx, sb, func() {
+		sb.MoveIn = false
+		m.recordUsage(ctx, usage.Event{Event: "move_in", ID: sb.ID, VMName: sb.VMName, Tenant: sb.Tenant, Deadline: sb.Deadline})
+	})
 	if !live {
 		m.out.Disarm(sb.ID, true)
 		return
@@ -159,7 +162,6 @@ func (m *Manager) startMoveIn(ctx context.Context, sb *types.Sandbox, from strin
 		logger.Warnf(ctx, "persist the start of moved claim %s: %v", sb.ID, err)
 	}
 	sb.Touch()
-	m.recordUsage(ctx, usage.Event{Event: "move_in", ID: sb.ID, VMName: sb.VMName, Tenant: sb.Tenant, Deadline: m.deadlineOf(sb)})
 	_ = os.RemoveAll(m.moveDir(sb.ID))
 	if committed != 0 && err == nil {
 		m.markMoveStarted(ctx, sb.ID, committed)
@@ -181,8 +183,6 @@ func (m *Manager) startMovedGuest(ctx context.Context, sb *types.Sandbox, commit
 	}
 	if err != nil {
 		_, persistErr := m.commitIfLive(ctx, sb, func() { sb.MoveIn = false })
-		sb.ExitRecorded = true
-		m.recordUsage(ctx, usage.Event{Event: "vmm_exit", ID: sb.ID, VMName: sb.VMName, Tenant: sb.Tenant})
 		m.failLocked(ctx, sb, reasonMoveStartFailed)
 		_ = os.RemoveAll(m.moveDir(sb.ID))
 		if committed != 0 && persistErr == nil {

@@ -70,13 +70,13 @@ func (m *Manager) adoptArchived(ctx context.Context, id, token string) (bool, er
 		sb.Deadline = m.retentionDeadline(sb.Key)
 	}
 	m.addClaimLocked(sb)
-	js := m.store.set(sb)
+	js, adoptedAt, retention := m.store.set(sb), time.Now(), sb.Deadline
 	m.mu.Unlock()
 	if err := m.store.commit(js); err != nil {
 		m.forgetClaim(ctx, sb)
 		return false, fmt.Errorf("adopt %s: persist claims: %w", id, err)
 	}
-	m.recordUsage(ctx, usage.Event{Event: "adopt", ID: id, Reference: rec.Checkpoint, Tenant: sb.Tenant, Deadline: m.deadlineOf(sb)})
+	m.recordUsage(ctx, usage.Event{Time: adoptedAt, Event: "adopt", ID: id, Reference: rec.Checkpoint, Tenant: sb.Tenant, Deadline: retention})
 	log.WithFunc("pool.adoptArchived").Infof(ctx, "adopted archived sandbox %s from %s", id, rec.Owner)
 	return true, nil
 }
