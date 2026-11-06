@@ -42,8 +42,10 @@ connection-bound verbs are `fs_watch`, `pty_open`, `lsp_request`, and
 `port_forward`.
 
 The authoritative wire contract is the shared fixture corpus in
-`protocol/wire/fixtures/v1`, round-tripped by the Rust, Go, and Python test
-suites — a frame only one side can parse fails CI.
+`protocol/wire/fixtures/v1`, round-tripped by the Rust and Go test suites; the
+Python suite round-trips the request frames and checks that each response
+decodes to the fixture's `type` tag and `data` — a frame the Rust or Go side
+cannot parse fails CI.
 
 ## Verbs
 

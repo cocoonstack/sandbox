@@ -26,7 +26,7 @@ out, _ := sb.Exec(ctx, "echo", "hello")
 - `upgrade.go` / `keepalive.go` / `endpoint.go` — the relay upgrade, idle connection reuse, endpoint and TLS parsing
 - `silkd/` — the conn/stream layer over the relay; the frame types live in
   `protocol/wire`, whose tests round-trip `protocol/wire/fixtures/` (drift
-  against the Rust guest fails CI); `silkdtest/` is an in-process fake guest
+  against the Rust guest fails CI); `silkd/silkdtest/` is an in-process fake guest
   for consumers' tests
 
 Module path `github.com/cocoonstack/sandbox/sdk/go`; no third-party

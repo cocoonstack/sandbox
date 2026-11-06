@@ -246,14 +246,8 @@ view, err = sb.PatchVolumes(ctx, sandbox.VolumePatch{Remove: []string{"imagenet"
 view, err = sb.SetVolumes(ctx, []sandbox.Volume{})
 ```
 
-Python exposes the same operations and response fields:
-
-```python
-view = sb.set_volumes([{"name": "imagenet", "mount": "/datasets/training"}])
-view = sb.get_volumes()
-view = sb.patch_volumes(remove=["imagenet"])
-view = sb.set_volumes([])  # None is rejected.
-```
+The [Python SDK](sdk-python.md#changing-live-volumes) exposes the same
+operations and response fields.
 
 `Volume.AttachOnly` leaves mounting and unmounting to the caller: the entry in
 `Sandbox.Volumes` carries an empty `Mount`; see
@@ -267,15 +261,12 @@ writer exclusion and dirty-marker limits.
 Each response contains `volumes_want`, `volumes`, `states`, and `converging`.
 Go exposes them as `SandboxVolumesResponse.VolumesWant`, `.Volumes`, `.States`,
 and `.Converging`. `VolumePhase` has `VolumeAttached`, `VolumePending`, and
-`VolumeDetaching` constants. Python exposes `VolumePhase` and the corresponding
-`VOLUME_ATTACHED`, `VOLUME_PENDING`, and `VOLUME_DETACHING` constants. Each state
-can include an `error`. Methods use the client API token on the owning node
+`VolumeDetaching` constants. Each state can include an `error`. Methods use the client API token on the owning node
 and update both public sets (`Sandbox.VolumesWant`, `Sandbox.Volumes`) from each complete response, including a partial failure. Serialize changes to one handle as with
 `Renew`. Returned views do not share the handle's slices or dictionaries.
 
 Go returns `*sandbox.VolumeError` with a `Response` alongside the returned view.
-It wraps `*sandbox.APIError`, so `errors.As` can inspect the status. Python raises
-`VolumeError`, a subclass of `APIError`, with `.response`. A response is absent
+It wraps `*sandbox.APIError`, so `errors.As` can inspect the status. A response is absent
 when the reply carries no complete view (a malformed request, authentication,
 an unknown sandbox, or a non-JSON proxy reply). In that case
 the handle retains its last known sets. Retry an interrupted operation with the

@@ -17,7 +17,10 @@ their siblings), the claim env (`WithEnv`, `Env`/`SetEnv`/`PatchEnv`) and
 setting claim `metadata` or `on_expire`, and reading a claim's `net_route` remain Go-only, `Template.new` takes no
 `claim_ref`, and file and tar payloads are whole `bytes` values rather than
 streams (`read_file`/`pull` return them, `write_file`/`push` take them; the
-wire is chunked, the caller's copy is not). Wire fidelity is
+wire is chunked, the caller's copy is not). Two behaviors differ as well:
+`Session.close()` and `Lsp.stop()` swallow `not_found` where Go returns it, and
+a failed session command puts its merged output in `ExitError.stdout` with
+`stderr` empty, where Go's `ExitError.Stderr` holds it. Wire fidelity is
 pinned by the shared protocol fixture corpus that the Rust guest, Go, and
 Python all round-trip in CI.
 
@@ -209,7 +212,7 @@ Responses include `volumes_want`, `volumes`, `states`, and `converging`.
 `VolumePhase` and `VOLUME_ATTACHED`, `VOLUME_PENDING`, and `VOLUME_DETACHING`
 name the three states. A pending state with `converging=False` needs an explicit
 retry. `VolumeError`, exported from `cocoonsandbox` and `cocoonsandbox.errors`,
-retains a complete failure view in `.response`. Complete replies update both
+is a subclass of `APIError` and retains a complete failure view in `.response`. Complete replies update both
 public sets (`sb.volumes_want`, `sb.volumes`); incomplete errors preserve the last view. Serialize calls on one
 handle. See the [replacement tutorial](live-volumes.md) and
 [API recovery contract](sandboxd-api.md#partial-failure-and-recovery).
