@@ -11,9 +11,7 @@ import (
 	"github.com/cocoonstack/sandbox/protocol/wire"
 )
 
-// Conn frames a byte stream (typically the upgraded relay connection) into
-// silkd RPCs. Reads are single-consumer; Send is safe for concurrent use so
-// a stdin pump can interleave with the caller.
+// Conn frames a byte stream (typically the upgraded relay connection) into silkd RPCs; reads are single-consumer, and Send is safe for concurrent use so a stdin pump can interleave.
 type Conn struct {
 	wmu  sync.Mutex
 	wbuf []byte

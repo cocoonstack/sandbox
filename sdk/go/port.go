@@ -110,7 +110,7 @@ func (s *Sandbox) ProxyPort(ctx context.Context, localAddr string, port uint16) 
 	return l, nil
 }
 
-// openStream turns a call into a raw byte stream, shared by DialPort and Lsp.Request.
+// openStream turns a call into a raw byte stream.
 func (s *Sandbox) openStream(ctx context.Context, req wire.Request) (_ *PortConn, err error) {
 	defer func() { s.rebind(ctx, err) }()
 	conn, l, err := s.call(ctx, req)

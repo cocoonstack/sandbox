@@ -7,16 +7,14 @@ import (
 	"github.com/cocoonstack/sandbox/protocol/wire"
 )
 
-// Session is a persistent shell in the sandbox: cwd, env, and shell state
-// survive across Exec calls until Close.
+// Session is a persistent shell in the sandbox: cwd, env, and shell state survive across Exec calls until Close.
 type Session struct {
 	ID string
 
 	sb *Sandbox
 }
 
-// Exec runs argv in the session and returns its combined output; state (cwd,
-// env, shell variables) persists to the next call.
+// Exec runs argv in the session and returns its combined output; state (cwd, env, shell variables) persists to the next call.
 func (sess *Session) Exec(ctx context.Context, argv ...string) (string, error) {
 	var out strings.Builder
 	code, err := sess.sb.Run(ctx, Cmd{Argv: argv, Session: sess.ID, Stdout: &out, Stderr: &out})

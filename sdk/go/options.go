@@ -109,7 +109,6 @@ func WithArchiveOnExpire() Option {
 	return func(r *claimRequest) { r.OnExpire = "archive" }
 }
 
-// ttlSeconds rounds a lease up to whole wire seconds.
 func ttlSeconds(d time.Duration) int {
 	return int((d + time.Second - 1) / time.Second)
 }

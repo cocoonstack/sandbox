@@ -97,8 +97,7 @@ type renewResponse struct {
 	Deadline time.Time `json:"deadline"`
 }
 
-// Sandbox is a claimed sandbox handle; all data-plane calls dial its owning
-// node directly.
+// Sandbox is a claimed sandbox handle; all data-plane calls dial its owning node directly.
 type Sandbox struct {
 	ID       string
 	Deadline time.Time
@@ -108,10 +107,8 @@ type Sandbox struct {
 	VolumesWant []Volume
 	// TemplateDigest is the content identity of the promoted-template export this sandbox was cloned from; empty otherwise.
 	TemplateDigest string
-
 	// FromCheckpoint names the checkpoint this sandbox branched from; empty otherwise.
 	FromCheckpoint string
-
 	// NetRoute is the guest's network path at claim, as the node reports it.
 	NetRoute string
 
@@ -123,22 +120,19 @@ type Sandbox struct {
 	owner string
 }
 
-// Owner returns the data-plane address of the node that owns the sandbox —
-// on a cluster the node a redirected claim landed on.
+// Owner returns the data-plane address of the node that owns the sandbox, on a cluster the node a redirected claim landed on.
 func (s *Sandbox) Owner() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.owner
 }
 
-// Token is the per-sandbox bearer secret — persist it with ID to reattach
-// later via Lookup (treat it like a credential).
+// Token is the per-sandbox bearer secret; persist it with ID to reattach later via Lookup, and treat it like a credential.
 func (s *Sandbox) Token() string {
 	return s.token
 }
 
-// Exec runs argv to completion and returns its stdout; a non-zero exit
-// surfaces as *ExitError carrying stderr, alongside the partial stdout.
+// Exec runs argv to completion and returns its stdout; a non-zero exit surfaces as *ExitError carrying stderr, alongside the partial stdout.
 func (s *Sandbox) Exec(ctx context.Context, argv ...string) (string, error) {
 	var stdout, stderr strings.Builder
 	code, err := s.Run(ctx, Cmd{Argv: argv, Stdout: &stdout, Stderr: &stderr})
@@ -151,8 +145,7 @@ func (s *Sandbox) Exec(ctx context.Context, argv ...string) (string, error) {
 	return stdout.String(), nil
 }
 
-// Run executes cmd in the sandbox, streaming stdio over one relayed silkd
-// connection, and returns the exit code; a ctx that ends first kills the command.
+// Run executes cmd in the sandbox, streaming stdio over one relayed silkd connection, and returns the exit code; a ctx that ends first kills the command.
 func (s *Sandbox) Run(ctx context.Context, cmd Cmd) (int, error) {
 	if len(cmd.Argv) == 0 {
 		return 0, fmt.Errorf("empty argv")
@@ -217,8 +210,7 @@ func (s *Sandbox) Renew(ctx context.Context, ttl time.Duration) (time.Time, erro
 	return rr.Deadline, nil
 }
 
-// Close releases the sandbox on its node; releasing one already gone is not
-// an error. It takes no ctx so it stays defer-friendly — bounded internally.
+// Close releases the sandbox on its node, bounded internally and without a ctx to stay defer-friendly; releasing one already gone is not an error.
 func (s *Sandbox) Close() error {
 	s.pool.drain()
 	ctx, cancel := context.WithTimeout(context.Background(), releaseTimeout)
