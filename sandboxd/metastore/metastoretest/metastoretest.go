@@ -4,7 +4,6 @@ package metastoretest
 import (
 	"context"
 	"crypto/rand"
-	"encoding/hex"
 	"os"
 	"strings"
 	"testing"
@@ -19,9 +18,7 @@ func PGSchema(t *testing.T) string {
 	if url == "" {
 		t.Skip("SANDBOXD_TEST_PG_URL unset")
 	}
-	raw := make([]byte, 6)
-	_, _ = rand.Read(raw)
-	name := "t_" + hex.EncodeToString(raw)
+	name := "t_" + strings.ToLower(rand.Text())
 	exec := func(ctx context.Context, sql string) error {
 		conn, err := pgx.Connect(ctx, url)
 		if err != nil {
