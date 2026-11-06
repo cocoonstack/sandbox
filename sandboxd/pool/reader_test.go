@@ -649,6 +649,33 @@ func TestReaderOfAStaleSleepIsRetiredEvenWithAConnectionOpen(t *testing.T) {
 	}
 }
 
+func TestReaderWithAConnectionOpenIsRetiredOnceItsClaimWakesOrLeaves(t *testing.T) {
+	for _, leave := range []bool{false, true} {
+		eng := newFakeEngine()
+		m := newReaderManager(t, eng)
+		sb := mustClaim(t, m, testKey)
+		hibernateClaim(t, m, sb)
+		seedReaderVMs(m, testKey, "sbx-reader-1")
+		open, _, err := m.DialReader(t.Context(), sb.ID, sb.Token)
+		if err != nil {
+			t.Fatalf("DialReader: %v", err)
+		}
+		if leave {
+			err = m.Release(t.Context(), sb.ID, Cred{Token: sb.Token})
+		} else {
+			_, _, _, err = m.WakeAgentSocket(t.Context(), sb.ID, sb.Token)
+		}
+		if err != nil {
+			t.Fatalf("leave=%v: %v", leave, err)
+		}
+		m.dropStaleReaders(t.Context())
+		if removes, _ := readerLifecycle(eng); !slices.Contains(removes, "sbx-reader-1") {
+			t.Errorf("leave=%v: removes=%v, want the reader destroyed although its connection is open", leave, removes)
+		}
+		_ = open.Close()
+	}
+}
+
 func TestFailedPreHibernateSyncSendsReadsToTheWakePath(t *testing.T) {
 	for _, tt := range []struct {
 		name    string

@@ -6,9 +6,11 @@ import (
 	"encoding/json/v2"
 	"errors"
 	"fmt"
+	"maps"
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 	"time"
 
@@ -134,6 +136,22 @@ func (m *Manager) dropReader(ctx context.Context, r *reader, force bool) {
 	delete(rs.live, r.claim)
 	rs.mu.Unlock()
 	m.destroyReader(ctx, r)
+}
+
+func (m *Manager) dropStaleReaders(ctx context.Context) {
+	rs := m.readers
+	rs.mu.Lock()
+	live := slices.Collect(maps.Values(rs.live))
+	rs.mu.Unlock()
+	for _, r := range live {
+		m.mu.Lock()
+		sb := m.claimed[r.claim]
+		stale := sb == nil || sleepSource(sb) != r.source
+		m.mu.Unlock()
+		if stale {
+			m.dropReader(ctx, r, true)
+		}
+	}
 }
 
 func (m *Manager) ensureReader(ctx context.Context, sb *types.Sandbox) error {

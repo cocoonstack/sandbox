@@ -537,6 +537,7 @@ func (m *Manager) Run(ctx context.Context) {
 			m.refillOnce(ctx)
 		case <-reap:
 			m.dropIdleReservations()
+			m.dropStaleReaders(ctx)
 			m.retryRemovals(ctx)
 			m.reapOnce(ctx)
 			m.idleOnce(ctx)
