@@ -341,6 +341,7 @@ type Manager struct {
 	peerDelete        PeerDeleteFunc
 	peerAdopt         PeerAdoptFunc
 	handOffQuietUntil atomic.Int64
+	handOffBusy       atomic.Bool
 	tpls              store.Store
 
 	// tplSet caches each template id's key, digest and owning tenant ("" = operator).

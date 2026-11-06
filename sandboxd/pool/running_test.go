@@ -8,6 +8,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/cocoonstack/sandbox/sandboxd/config"
@@ -318,6 +319,38 @@ func TestAFullPeerLeavesTheWakeOnItsOwnerAndTheRetryAsksNoPeer(t *testing.T) {
 	if _, held := a.byID(sb.ID); !held || asked.Load() != 1 {
 		t.Errorf("owner holds %v, peers asked %d times, want the claim kept and one ask inside the quiet period", held, asked.Load())
 	}
+}
+
+func TestOneHandOffRunsAtATimeAndItsCooldownStartsWhenItFails(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		c := newFailoverCluster(t)
+		a := c.node(t, "a", t.TempDir(), keepAnHour)
+		slow, next := mustClaim(t, a, testKey), mustClaim(t, a, testKey)
+		mustArchive(t, a, slow)
+		mustArchive(t, a, next)
+		mustClaim(t, a, testKey)
+		editView(a, func(v *configView) { v.maxRunning = 1 })
+		var asks atomic.Int32
+		release := make(chan struct{})
+		a.WithPeerAdopt(func(context.Context, string, string, bool) bool {
+			if asks.Add(1) == 1 {
+				<-release
+			}
+			return false
+		})
+		go func() { _ = wakeClaim(t, a, slow) }()
+		synctest.Wait()
+		time.Sleep(handOffQuiet + time.Second)
+		if err := wakeClaim(t, a, next); !errors.Is(err, ErrQuota) || asks.Load() != 1 {
+			t.Fatalf("wake during a long hand-off: %v, peers asked %d times, want 429 and no second hand-off", err, asks.Load())
+		}
+		close(release)
+		synctest.Wait()
+		time.Sleep(handOffQuiet - 10*time.Second)
+		if err := wakeClaim(t, a, next); !errors.Is(err, ErrQuota) || asks.Load() != 1 {
+			t.Fatalf("wake inside the cooldown after a failed hand-off: %v, peers asked %d times, want 429 and no ask", err, asks.Load())
+		}
+	})
 }
 
 func wakeClaim(t *testing.T, m *Manager, sb *types.Sandbox) error {
