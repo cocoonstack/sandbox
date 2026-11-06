@@ -344,6 +344,17 @@ def test_a_parked_connection_the_node_closed_is_not_reused(kept_node, fd_floor):
     assert KeptNode.conns == 2
 
 
+def test_close_releases_the_parked_connections(kept_node):
+    KeptNode.routes[("POST", "/v1/claim")] = lambda body, path: (200, {"id": "sb_1", "token": "tok"})
+    with Client(kept_node) as client:
+        client.new("rt:24.04")
+        assert KeptNode.closed == 0
+    wait_until(lambda: KeptNode.closed == 1, "close left the parked connection open")
+    client.close()
+    assert client.new("rt:24.04").id == "sb_1"
+    assert KeptNode.conns == 2
+
+
 @pytest.fixture
 def kept_node():
     server = ThreadingHTTPServer(("127.0.0.1", 0), KeptNode)

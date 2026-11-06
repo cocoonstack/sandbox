@@ -14,7 +14,7 @@ from collections.abc import Callable, Iterable, Sequence
 from typing import Any, TypeVar, cast
 
 from .checkpoint import Checkpoint
-from .conn import Conn, dial_agent, is_quiet, remaining_timeout
+from .conn import Conn, _Closeable, dial_agent, is_quiet, remaining_timeout
 from .endpoint import _endpoint_url
 from .errors import APIError, SandboxTimeout, _error_message, _require_field
 from .sandbox import Sandbox
@@ -27,7 +27,7 @@ _PEERS_TIMEOUT = 5.0
 _IDLE_CONNS = 8
 
 
-class Client:
+class Client(_Closeable):
     """Talks to one sandboxd node (and, transparently, its cluster)."""
 
     def __init__(
@@ -145,6 +145,14 @@ class Client:
     def info(self) -> dict[str, Any]:
         """The node's pool/claim counters, as served by GET /v1/info."""
         return self._request(self.addr, "GET", "/v1/info", None, "info")
+
+    def close(self) -> None:
+        """Closes the parked control connections; a later call dials afresh."""
+        with self._idle_lock:
+            while self._idle:
+                _, idle = self._idle.popitem()
+                for conn, _ in idle:
+                    conn.close()
 
     def _claim_from(
         self,
