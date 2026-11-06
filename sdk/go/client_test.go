@@ -12,6 +12,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/cocoonstack/sandbox/sdk/go/silkd/silkdtest"
 )
 
 func TestConnectAddress(t *testing.T) {
@@ -157,6 +159,52 @@ func TestCloseReleasesASandboxThatMoved(t *testing.T) {
 	}
 	if !released.Load() {
 		t.Error("Close reported success without releasing at the adopter")
+	}
+}
+
+func TestAMovedSandboxFollowsItsNewOwnerOnTheNextCall(t *testing.T) {
+	sb, adopter := movedSandbox(t)
+	if _, err := sb.Stat(t.Context(), "/"); err != nil {
+		t.Fatalf("stat after the move: %v", err)
+	}
+	if got := sb.Owner(); got != adopter {
+		t.Errorf("owner %s, want the adopter %s", got, adopter)
+	}
+}
+
+func TestAMovedSandboxRetriesAControlCallAtItsNewOwner(t *testing.T) {
+	sb, adopter := movedSandbox(t)
+	if _, err := sb.Renew(t.Context(), time.Minute); err != nil {
+		t.Fatalf("renew after the move: %v", err)
+	}
+	if got := sb.Owner(); got != adopter {
+		t.Errorf("owner %s, want the adopter %s", got, adopter)
+	}
+}
+
+func TestAMovedSandboxDoesNotReplayARunThatStreamedStdin(t *testing.T) {
+	sb, adopter := movedSandbox(t)
+	if _, err := sb.Run(t.Context(), Cmd{Argv: []string{"cat"}, Stdin: strings.NewReader("once")}); err == nil {
+		t.Fatal("a run whose stdin went to the old owner succeeded")
+	}
+	if got := sb.Owner(); got != adopter {
+		t.Errorf("owner %s, want the adopter %s for the next call", got, adopter)
+	}
+	if out, err := sb.Exec(t.Context(), "echo", "42"); err != nil || out != "42\n" {
+		t.Errorf("exec at the adopter: %q, %v", out, err)
+	}
+}
+
+func TestAHandleFollowsItsSandboxOffARetiredNode(t *testing.T) {
+	sb, adopter := movedSandbox(t)
+	sb.mu.Lock()
+	sb.owner = retiredAddr(t)
+	sb.mu.Unlock()
+	if _, err := sb.Stat(t.Context(), "/"); err != nil {
+		t.Fatalf("stat after the owner retired: %v", err)
+	}
+	if got := sb.Owner(); got != adopter {
+		t.Errorf("owner %s, want the adopter %s", got, adopter)
 	}
 }
 
@@ -598,6 +646,39 @@ func TestAPIErrorDrainsOversizedBody(t *testing.T) {
 	if body.Len() != 0 {
 		t.Errorf("apiError left %d bytes unread; the transport cannot reuse the connection", body.Len())
 	}
+}
+
+func movedSandbox(t *testing.T) (*Sandbox, string) {
+	t.Helper()
+	fake := silkdtest.NewFake(t.TempDir())
+	mux := http.NewServeMux()
+	var adopter *httptest.Server
+	mux.HandleFunc("GET /v1/sandboxes/sb_1/agent", func(w http.ResponseWriter, _ *http.Request) {
+		conn, err := silkdtest.Upgrade(w)
+		if err != nil {
+			t.Errorf("upgrade: %v", err)
+			return
+		}
+		fake.ServeConn(conn)
+	})
+	mux.HandleFunc("GET /v1/sandboxes/sb_1/owner", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.MarshalWrite(w, map[string]string{"owner_addr": strings.TrimPrefix(adopter.URL, "http://")})
+	})
+	mux.HandleFunc("POST /v1/sandboxes/sb_1/renew", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.MarshalWrite(w, map[string]time.Time{"deadline": time.Now().Add(time.Minute)})
+	})
+	adopter = httptest.NewServer(mux)
+	t.Cleanup(adopter.Close)
+	old := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/peers" {
+			_ = json.MarshalWrite(w, map[string]any{"peers": []string{strings.TrimPrefix(adopter.URL, "http://")}})
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	t.Cleanup(old.Close)
+	sb := testSandbox(t, old)
+	return sb, strings.TrimPrefix(adopter.URL, "http://")
 }
 
 func retiredAddr(t *testing.T) string {

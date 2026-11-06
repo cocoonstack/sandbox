@@ -1,6 +1,7 @@
 package sandbox
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"errors"
@@ -21,16 +22,19 @@ type respPtr[T any] interface {
 type chunkSink func([]byte) error
 
 func (s *Sandbox) doneRPC(ctx context.Context, req wire.Request) error {
-	conn, l, err := s.call(ctx, req)
-	if err != nil {
-		return err
-	}
-	defer l.close()
-	return l.done(terminalErr(ctx, conn))
+	return s.retryMoved(ctx, func() error {
+		conn, l, err := s.call(ctx, req)
+		if err != nil {
+			return err
+		}
+		defer l.close()
+		return l.done(terminalErr(ctx, conn))
+	})
 }
 
 // uploadRPC streams r as full Data frames after req and expects Done; an early terminal frame is the guest rejecting the upload and stops the stream.
-func (s *Sandbox) uploadRPC(ctx context.Context, req wire.Request, r io.Reader) error {
+func (s *Sandbox) uploadRPC(ctx context.Context, req wire.Request, r io.Reader) (err error) {
+	defer func() { s.rebind(ctx, err) }()
 	conn, l, err := s.call(ctx, req)
 	if err != nil {
 		return err
@@ -66,22 +70,28 @@ func (s *Sandbox) uploadRPC(ctx context.Context, req wire.Request, r io.Reader) 
 }
 
 func (s *Sandbox) downloadRPC(ctx context.Context, req wire.Request, sink chunkSink) error {
-	conn, l, err := s.call(ctx, req)
-	if err != nil {
-		return err
-	}
-	defer l.close()
-	return l.done(drainData(ctx, conn, sink))
+	return s.retryMoved(ctx, func() error {
+		conn, l, err := s.call(ctx, req)
+		if err != nil {
+			return err
+		}
+		defer l.close()
+		return l.done(drainData(ctx, conn, sink))
+	})
 }
 
 func (s *Sandbox) oneShotRPC[T any, PT respPtr[T]](ctx context.Context, req wire.Request) (*T, error) {
-	conn, l, err := s.call(ctx, req)
-	if err != nil {
-		return nil, err
-	}
-	defer l.close()
-	v, err := expect[T, PT](ctx, conn)
-	return v, l.done(err)
+	var v *T
+	err := s.retryMoved(ctx, func() error {
+		conn, l, err := s.call(ctx, req)
+		if err != nil {
+			return err
+		}
+		defer l.close()
+		v, err = expect[T, PT](ctx, conn)
+		return l.done(err)
+	})
+	return v, err
 }
 
 func (s *Sandbox) collectRPC[T any, PT respPtr[T]](ctx context.Context, req wire.Request) ([]T, error) {
@@ -98,35 +108,38 @@ func (s *Sandbox) collectRPC[T any, PT respPtr[T]](ctx context.Context, req wire
 // streamRPC sends req and yields each streamed frame of type T until Done; breaking out closes the connection, which ends the guest-side producer.
 func (s *Sandbox) streamRPC[T any, PT respPtr[T]](ctx context.Context, req wire.Request) iter.Seq2[T, error] {
 	return func(yield func(T, error) bool) {
-		var zero T
-		conn, l, err := s.call(ctx, req)
-		if err != nil {
-			yield(zero, err)
-			return
-		}
-		defer l.close()
-		for {
-			resp, err := recv(ctx, conn)
+		err := s.retryMoved(ctx, func() error {
+			conn, l, err := s.call(ctx, req)
 			if err != nil {
-				yield(zero, err)
-				return
+				return err
 			}
-			if v, ok := resp.(PT); ok {
-				if !yield(*v, nil) {
-					return
+			defer l.close()
+			for {
+				resp, err := recv(ctx, conn)
+				if err != nil {
+					return err
 				}
-				continue
+				if v, ok := resp.(PT); ok {
+					if !yield(*v, nil) {
+						return nil
+					}
+					continue
+				}
+				switch r := resp.(type) {
+				case *wire.Done:
+					l.reuse()
+					return nil
+				case *wire.ErrorResp:
+					l.reuse()
+					return r
+				default:
+					return unexpected(resp)
+				}
 			}
-			switch r := resp.(type) {
-			case *wire.Done:
-				l.reuse()
-			case *wire.ErrorResp:
-				l.reuse()
-				yield(zero, r)
-			default:
-				yield(zero, unexpected(resp))
-			}
-			return
+		})
+		if err != nil {
+			var zero T
+			yield(zero, err)
 		}
 	}
 }
@@ -252,4 +265,11 @@ func readChunk(r io.Reader, buf []byte) (int, bool, error) {
 		}
 	}
 	return n, false, nil
+}
+
+func bodyReader(b []byte) io.Reader {
+	if b == nil {
+		return nil
+	}
+	return bytes.NewReader(b)
 }

@@ -1,12 +1,10 @@
 package sandbox
 
 import (
-	"bytes"
 	"context"
 	"encoding/json/v2"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"slices"
 )
@@ -71,16 +69,25 @@ func (s *Sandbox) PatchVolumes(ctx context.Context, patch VolumePatch) (SandboxV
 }
 
 func (s *Sandbox) requestVolumes(ctx context.Context, method string, request any, verb string) (SandboxVolumesResponse, error) {
-	var out SandboxVolumesResponse
-	var body io.Reader
+	var body []byte
 	if request != nil {
 		encoded, err := encodeBody(verb, request)
 		if err != nil {
-			return out, err
+			return SandboxVolumesResponse{}, err
 		}
-		body = bytes.NewReader(encoded)
+		body = encoded
 	}
-	resp, err := s.c.roundTrip(ctx, method, s.owner, "/v1/sandboxes/"+s.ID+"/volumes", body, s.c.apiToken)
+	var out SandboxVolumesResponse
+	err := s.retryMoved(ctx, func() (err error) {
+		out, err = s.volumesAt(ctx, method, body, verb)
+		return err
+	})
+	return out, err
+}
+
+func (s *Sandbox) volumesAt(ctx context.Context, method string, body []byte, verb string) (SandboxVolumesResponse, error) {
+	var out SandboxVolumesResponse
+	resp, err := s.c.roundTrip(ctx, method, s.Owner(), "/v1/sandboxes/"+s.ID+"/volumes", bodyReader(body), s.c.apiToken)
 	if err != nil {
 		return out, err
 	}

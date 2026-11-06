@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import contextlib
+import functools
 import socket
 import threading
 import time
 from collections import deque
 from collections.abc import Callable, Iterator
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, TypeVar, cast
 
 from .checkpoint import Checkpoint
 from .conn import Conn, ConnPool, _Closeable, remaining_timeout
@@ -31,6 +32,23 @@ if TYPE_CHECKING:
 
 _ACCEPT_POLL_SECONDS = 1.0
 _KILL_WAIT_SECONDS = 5.0
+
+_F = TypeVar("_F", bound=Callable[..., Any])
+
+
+def _follows_move(method: _F) -> _F:
+    """Runs a call once more on the owner a 404 points to; its arguments must be re-sendable."""
+
+    @functools.wraps(method)
+    def wrapper(self: Sandbox, *args: Any, **kwargs: Any) -> Any:
+        try:
+            return method(self, *args, **kwargs)
+        except (APIError, ProtocolError) as exc:
+            if not self._rebind(exc):
+                raise
+        return method(self, *args, **kwargs)
+
+    return cast(_F, wrapper)
 
 
 class Sandbox:
@@ -124,6 +142,7 @@ class Sandbox:
             raise ExitError(code, err.decode(errors="replace"), out.decode(errors="replace"))
         return out.decode(errors="replace")
 
+    @_follows_move
     def run(
         self,
         argv: list[str],
@@ -223,15 +242,18 @@ class Sandbox:
         """Replays then follows output; returns None if the process record disappears."""
         return self._drain_proc("attach", pid, on_stdout, on_stderr)
 
+    @_follows_move
     def write_file(self, path: str, data: bytes, mode: int | None = None) -> None:
         """Writes data to path atomically (temp + rename on the guest)."""
         with self._lease(self._connect("fs_write", path=path, mode=mode)) as conn:
             _upload(conn, data, BULK_CHUNK)
 
+    @_follows_move
     def read_file(self, path: str) -> bytes:
         with self._lease(self._connect("fs_read", path=path)) as conn:
             return _drain_data(conn)
 
+    @_follows_move
     def list_dir(self, path: str) -> list[dict[str, Any]]:
         with self._lease(self._connect("fs_list", path=path)) as conn:
             entries: list[dict[str, Any]] = []
@@ -252,16 +274,19 @@ class Sandbox:
     def rename(self, src: str, dst: str) -> None:
         self._done_rpc("fs_rename", **{"from": src, "to": dst})
 
+    @_follows_move
     def push(self, dest: str, tar_stream: bytes) -> None:
         """Extracts a tar stream into dest; a truncated stream leaves dest untouched."""
         with self._lease(self._connect("fs_push", dest=dest)) as conn:
             _upload(conn, tar_stream, STREAM_CHUNK)
 
+    @_follows_move
     def pull(self, path: str) -> bytes:
         """Returns path (file or tree) as a tar archive."""
         with self._lease(self._connect("fs_pull", path=path)) as conn:
             return _drain_data(conn)
 
+    @_follows_move
     def find(self, path: str, pattern: str, glob: str = "") -> list[dict[str, Any]]:
         return list(self.find_iter(path, pattern, glob))
 
@@ -272,6 +297,7 @@ class Sandbox:
                 if f["type"] == "match":
                     yield f
 
+    @_follows_move
     def replace(self, files: list[str], pattern: str, replacement: str) -> list[dict[str, Any]]:
         with self._lease(self._connect("fs_replace", files=files, pattern=pattern, replacement=replacement)) as conn:
             return [f for f in conn.recv_until("done") if f["type"] == "replaced"]
@@ -329,22 +355,18 @@ class Sandbox:
         body = {"token": self.token, "count": count}
         if ttl_seconds:
             body["ttl_seconds"] = ttl_seconds
-        reply = self._client._request(self.owner, "POST", f"/v1/sandboxes/{self.id}/fork", body, "fork")
+        reply = self._owner_request("fork", body, "fork")
         return [self._client._handle_from(self.owner, child, "fork") for child in reply.get("children") or []]
 
     def hibernate(self) -> None:
         """Snapshots and stops the VM; the next guest call restores its state."""
         self._pool.drain()
-        self._client._request(
-            self.owner, "POST", f"/v1/sandboxes/{self.id}/hibernate", None, "hibernate", bearer=self.token
-        )
+        self._owner_request("hibernate", None, "hibernate", bearer=self.token)
 
     def renew(self, ttl_seconds: int = 0) -> str:
         """Resets the lease to ttl_seconds from now (0 means the node default) and records the granted deadline."""
         body = {"ttl_seconds": ttl_seconds} if ttl_seconds else None
-        reply = self._client._request(
-            self.owner, "POST", f"/v1/sandboxes/{self.id}/renew", body, "renew", bearer=self.token
-        )
+        reply = self._owner_request("renew", body, "renew", bearer=self.token)
         self.deadline = cast(str, _require_field(reply, "deadline", "renew"))
         return self.deadline
 
@@ -353,13 +375,13 @@ class Sandbox:
         body = {"token": self.token}
         if name:
             body["name"] = name
-        reply = self._client._request(self.owner, "POST", f"/v1/sandboxes/{self.id}/checkpoint", body, "checkpoint")
+        reply = self._owner_request("checkpoint", body, "checkpoint")
         return Checkpoint(self._client, self.owner, _require_field(reply, "checkpoint", "checkpoint"))
 
     def promote(self, template: str) -> Template:
         """Publishes a claimable template and returns an owner-bound handle."""
         body = {"token": self.token, "template": template}
-        reply = self._client._request(self.owner, "POST", f"/v1/sandboxes/{self.id}/promote", body, "promote")
+        reply = self._owner_request("promote", body, "promote")
         key = _require_field(reply, "key", "promote")
         return Template(
             self._client,
@@ -398,7 +420,7 @@ class Sandbox:
         body = {"token": self.token, "port": port}
         if ttl_seconds:
             body["ttl_seconds"] = ttl_seconds
-        reply = self._client._request(self.owner, "POST", f"/v1/sandboxes/{self.id}/preview", body, "preview")
+        reply = self._owner_request("preview", body, "preview")
         return cast(str, _require_field(reply, "url", "preview"))
 
     def dial_port(self, port: int) -> PortConn:
@@ -431,6 +453,7 @@ class Sandbox:
     def _release_at(self, addr: str) -> None:
         self._client._request(addr, "POST", f"/v1/sandboxes/{self.id}/release", None, "release", bearer=self.token)
 
+    @_follows_move
     def _volumes_request(
         self, method: str, body: dict[str, Any] | None, verb: str, timeout: float | None
     ) -> SandboxVolumesResponse:
@@ -462,6 +485,23 @@ class Sandbox:
         self.volumes_want = [volume.copy() for volume in view["volumes_want"]]
         self.volumes = [volume.copy() for volume in view["volumes"]]
 
+    def _rebind(self, exc: SandboxError) -> bool:
+        if not (isinstance(exc, APIError) and exc.status == 404 or isinstance(exc.__cause__, ConnectionRefusedError)):
+            return False
+        try:
+            moved = self._client.lookup(self.id, self.token)
+        except APIError:
+            return False
+        if moved.owner == self.owner:
+            return False
+        self.owner = moved.owner
+        self._pool.drain()
+        return True
+
+    @_follows_move
+    def _owner_request(self, suffix: str, body: dict[str, Any] | None, verb: str, bearer: str = "") -> dict[str, Any]:
+        return self._client._request(self.owner, "POST", f"/v1/sandboxes/{self.id}/{suffix}", body, verb, bearer=bearer)
+
     def _dial(self, deadline: float | None = None) -> Conn:
         return self._client._dial(self.owner, self.id, self.token, deadline)
 
@@ -492,6 +532,7 @@ class Sandbox:
             raise
         self._pool.park(conn)
 
+    @_follows_move
     def _open_stream(self, op: str, expect: str = "ready", **fields: object) -> tuple[Conn, dict[str, Any]]:
         conn = self._connect(op, **fields)
         try:
@@ -549,6 +590,7 @@ class Sandbox:
             with contextlib.suppress(OSError):
                 local.close()
 
+    @_follows_move
     def _call(self, op: str, expect: str, **fields: object) -> dict[str, Any]:
         with self._lease(self._connect(op, **fields)) as conn:
             return _expect(conn, expect)
@@ -556,6 +598,7 @@ class Sandbox:
     def _done_rpc(self, op: str, **fields: object) -> None:
         self._call(op, "done", **fields)
 
+    @_follows_move
     def _drain_proc(
         self,
         op: str,

@@ -52,7 +52,8 @@ func (s *Sandbox) Attach(ctx context.Context, pid uint32, stdout, stderr io.Writ
 	return s.drainProc(ctx, &wire.Attach{PID: pid}, stdout, stderr)
 }
 
-func (s *Sandbox) drainProc(ctx context.Context, req wire.Request, stdout, stderr io.Writer) (int32, bool, error) {
+func (s *Sandbox) drainProc(ctx context.Context, req wire.Request, stdout, stderr io.Writer) (_ int32, _ bool, err error) {
+	defer func() { s.rebind(ctx, err) }()
 	conn, l, err := s.call(ctx, req)
 	if err != nil {
 		return 0, false, err
