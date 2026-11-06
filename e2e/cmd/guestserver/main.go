@@ -20,9 +20,8 @@ import (
 
 // halfCloseSink greets, shuts its write side, and keeps reading what the client sends after.
 type halfCloseSink struct {
-	mu   sync.Mutex
-	got  string
-	done bool
+	mu  sync.Mutex
+	got string
 }
 
 func (h *halfCloseSink) serve(addr string) {
@@ -54,16 +53,13 @@ func (h *halfCloseSink) greetThenRead(conn net.Conn) {
 	}
 	rest, _ := io.ReadAll(tcp)
 	h.mu.Lock()
-	h.got, h.done = string(rest), true
+	h.got = string(rest)
 	h.mu.Unlock()
 }
 
 func (h *halfCloseSink) read() string {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if !h.done {
-		return ""
-	}
 	return h.got
 }
 
