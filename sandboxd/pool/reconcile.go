@@ -340,8 +340,13 @@ func (m *Manager) recordReconciled(ctx context.Context, resumed, dropped []*type
 		m.recordUsage(ctx, usage.Event{Event: "wake", ID: sb.ID, VMName: sb.VMName, Tenant: sb.Tenant, Deadline: sb.Deadline})
 	}
 	for _, sb := range dropped {
+		if sb.MoveIn || sb.MoveOut != nil {
+			continue
+		}
 		if answered || !sb.HasReplica() {
 			m.recordEnd(ctx, sb, "vm_gone")
+		}
+		if !sb.HasReplica() {
 			m.releaseTun(ctx, sb.ID, sb.TunAddr)
 		}
 	}
