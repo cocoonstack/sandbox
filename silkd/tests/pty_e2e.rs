@@ -19,7 +19,7 @@ use tokio::sync::mpsc;
 
 use common::{
     FrameLines, FrameWriter, alive, assert_error, b64, connect_with, decode, frames_until, one,
-    proc_entry, request, send, type_of,
+    proc_entry, request, send, type_of, wait_for_path,
 };
 
 struct FailingSink(Vec<u8>);
@@ -194,6 +194,37 @@ async fn pty_disconnect_tears_down_without_spin() {
         proc_entry(&ps, pid).is_none(),
         "pty still in table after disconnect: {ps:?}"
     );
+}
+
+#[tokio::test]
+async fn pty_disconnect_hangs_up_background_jobs() {
+    let dir = tempfile::tempdir().unwrap();
+    let pid_file = dir.path().join("job");
+    let state = Arc::new(State::new());
+    let (mut cw, mut lines, handle) = open_pty(&state).await;
+    read_until(&mut lines, |v| v["type"] == "started").await;
+    let cmd = format!("sleep 300 & echo $! > {}\n", pid_file.display());
+    send(&mut cw, json!({"op":"stdin","data":b64(cmd.as_bytes())})).await;
+    wait_for_path(&pid_file).await;
+    let job: u32 = loop {
+        if let Ok(pid) = std::fs::read_to_string(&pid_file).unwrap().trim().parse() {
+            break pid;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    };
+    drop(lines);
+    drop(cw);
+    let _ = tokio::time::timeout(Duration::from_secs(5), handle)
+        .await
+        .expect("pty did not tear down on disconnect");
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while alive(job) {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "background job {job} outlived the hang-up"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
 }
 
 #[tokio::test]

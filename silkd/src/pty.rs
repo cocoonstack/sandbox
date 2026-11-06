@@ -9,7 +9,7 @@ use tokio::io::AsyncWrite;
 use tokio::io::unix::AsyncFd;
 use tokio::process::Command;
 use tokio::sync::{mpsc, oneshot};
-use tokio::time::timeout;
+use tokio::time::{Instant, sleep_until, timeout};
 
 use crate::proc::{Proc, Table};
 use crate::proto::{self, ErrorKind, PtyReq, READ_CHUNK, Request, Response};
@@ -17,6 +17,7 @@ use crate::sysutil;
 
 /// Bounds the post-exit drain of the master's buffered tail so a stuck fd cannot wedge teardown.
 const POST_EXIT_DRAIN: Duration = Duration::from_secs(1);
+const HUP_GRACE: Duration = Duration::from_secs(2);
 
 type Master = Arc<AsyncFd<OwnedFd>>;
 
@@ -129,6 +130,8 @@ async fn pump<W: AsyncWrite + Unpin>(
     let mut frame = Vec::new();
     let mut eof = false;
     let mut disc = false;
+    let mut gone = false;
+    let mut kill_at = None;
     loop {
         tokio::select! {
             status = child.wait() => {
@@ -137,9 +140,13 @@ async fn pump<W: AsyncWrite + Unpin>(
                 stdin.abort();
                 return code;
             }
-            // kill the shell so child.wait publishes its real signalled code.
+            // hang up like a closed terminal so the shell hangs up its jobs; SIGKILL follows the grace.
             _ = &mut disc_rx, if !disc => {
                 disc = true;
+                kill_at = Some(hang_up(child));
+            }
+            _ = sleep_until(kill_at.unwrap_or_else(Instant::now)), if kill_at.is_some() => {
+                kill_at = None;
                 let _ = child.start_kill();
             }
             readable = master.readable(), if !eof => {
@@ -152,10 +159,14 @@ async fn pump<W: AsyncWrite + Unpin>(
                     Ok(Ok(0)) | Ok(Err(_)) => eof = true,
                     Ok(Ok(n)) => {
                         proc.emit_bytes(false, &buf[..n]);
-                        if proto::write_chunk_frame(out, &mut frame, "stdout", &buf[..n]).await.is_err() {
-                            let _ = child.start_kill();
+                        // keep reading after the client is gone: a shell exits only once its tty output drains.
+                        if !gone && proto::write_chunk_frame(out, &mut frame, "stdout", &buf[..n]).await.is_err() {
+                            gone = true;
                             stdin.abort();
-                            return sysutil::wait_code(child).await;
+                            if !disc {
+                                disc = true;
+                                kill_at = Some(hang_up(child));
+                            }
                         }
                     }
                     Err(_would_block) => {}
@@ -163,6 +174,13 @@ async fn pump<W: AsyncWrite + Unpin>(
             }
         }
     }
+}
+
+fn hang_up(child: &tokio::process::Child) -> Instant {
+    if let Some(pid) = child.id() {
+        sysutil::signal_group(pid, libc::SIGHUP);
+    }
+    Instant::now() + HUP_GRACE
 }
 
 /// Writes client stdin frames into the master; StdinClose is ignored because a pty outlives input EOF.
