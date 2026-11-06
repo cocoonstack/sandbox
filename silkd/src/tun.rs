@@ -6,7 +6,7 @@ use std::net::Ipv4Addr;
 pub const HOST_VSOCK_PORT: u32 = 2051;
 /// The guest's address, the same in every box; the host tells boxes apart by their vsock stream.
 pub const GUEST_ADDR: Ipv4Addr = Ipv4Addr::new(100, 64, 0, 2);
-/// The guest's gateway, and the resolver address the host answers.
+/// The guest's gateway; names resolve through the loopback DNS relay, never here.
 pub const PEER_ADDR: Ipv4Addr = Ipv4Addr::new(100, 64, 0, 1);
 pub const PREFIX: u8 = 30;
 pub const VERSION: u16 = 1;
