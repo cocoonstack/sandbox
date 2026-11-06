@@ -84,7 +84,7 @@ func (m *Manager) refillOne(ctx context.Context, p *pool, golden string, gen uin
 	sb, err := m.startVM(ctx, p.key, func(name string) (types.VMRecord, error) {
 		return m.eng.Clone(ctx, golden, name, p.key)
 	})
-	cloned := err == nil
+	cloneErr := err
 	<-m.refillSem
 	if err == nil {
 		if ctx.Err() == nil {
@@ -112,7 +112,7 @@ func (m *Manager) refillOne(ctx context.Context, p *pool, golden string, gen uin
 	}
 	// A canceled context or a capacity failure says nothing about this pool's health
 	backedOff := false
-	if p.countClone(ctx, gen, cloned, capReason) {
+	if p.countClone(ctx, gen, cloneErr, capReason) {
 		backedOff = p.noteRefillResult(now, err != nil)
 	}
 	if backedOff {

@@ -3,12 +3,14 @@ package pool
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"testing"
 	"testing/synctest"
 	"time"
 
 	"github.com/cocoonstack/sandbox/sandboxd/config"
+	"github.com/cocoonstack/sandbox/sandboxd/engine"
 )
 
 func TestRefillBacksOffOnlyAfterAnUnbrokenRunOfFailures(t *testing.T) {
@@ -253,6 +255,23 @@ func TestRetiringAGoldenLeavesItsDirectoryForAClaimMidClone(t *testing.T) {
 	if _, err := os.Stat(g + goldenStampSuffix); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("golden stamp after retirement: %v, want it removed so nothing adopts it", err)
 	}
+}
+
+func TestClaimClonesCutOffByShutdownNeverRetireTheGolden(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		eng := newFakeEngine()
+		eng.cloneErr = fmt.Errorf("clone: %w", engine.ErrStopping)
+		m, p, g := adoptedGoldenNoWarm(t, eng)
+
+		for i := range refillFailStreak {
+			if _, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{}); err == nil {
+				t.Fatalf("claim %d on a stopping engine succeeded", i)
+			}
+		}
+		if goldenOf(m, p) != g {
+			t.Fatalf("golden %q after %d clones cut off by shutdown, want %q kept", goldenOf(m, p), refillFailStreak, g)
+		}
+	})
 }
 
 func TestClaimClonesThatFailRetireTheGoldenOfAPoolWithNoRefill(t *testing.T) {

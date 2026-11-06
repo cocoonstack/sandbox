@@ -2,11 +2,13 @@ package pool
 
 import (
 	"context"
+	"errors"
 	"math"
 	"sync/atomic"
 	"time"
 
 	"github.com/cocoonstack/sandbox/sandboxd/config"
+	"github.com/cocoonstack/sandbox/sandboxd/engine"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
@@ -86,11 +88,11 @@ func (p *pool) noteRefillResult(now time.Time, failed bool) bool {
 	return first
 }
 
-func (p *pool) countClone(ctx context.Context, gen uint64, cloned bool, capReason string) bool {
-	if ctx.Err() != nil || capReason != "" || gen != p.goldenGen {
+func (p *pool) countClone(ctx context.Context, gen uint64, cloneErr error, capReason string) bool {
+	if ctx.Err() != nil || capReason != "" || gen != p.goldenGen || errors.Is(cloneErr, engine.ErrStopping) {
 		return false
 	}
-	if cloned {
+	if cloneErr == nil {
 		p.cloneFails = 0
 	} else {
 		p.cloneFails++

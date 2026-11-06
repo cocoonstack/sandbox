@@ -36,7 +36,7 @@ func (m *Manager) provisionResolved(ctx context.Context, key types.PoolKey, g go
 func (m *Manager) noteClaimClone(ctx context.Context, g goldenResolution, err error) {
 	capReason := engine.CapacitySignature(err)
 	m.mu.Lock()
-	g.held.countClone(ctx, g.gen, err == nil, capReason)
+	g.held.countClone(ctx, g.gen, err, capReason)
 	retired := m.retireUnclonableLocked(g.held, g.gen, time.Now())
 	m.mu.Unlock()
 	if retired {
