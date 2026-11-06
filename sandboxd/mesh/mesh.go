@@ -57,9 +57,7 @@ func New(ctx context.Context, cfg *memberlist.Config, self NodeState, secretKey 
 	cfg.Name = self.NodeID
 	cfg.Delegate = (*delegate)(m)
 	cfg.Events = (*eventDelegate)(m)
-	if len(secretKey) > 0 {
-		cfg.SecretKey = secretKey
-	}
+	cfg.SecretKey = secretKey
 	ml, err := memberlist.Create(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("create memberlist: %w", err)
