@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -85,12 +86,8 @@ func TestAReleaseRacingAWakeBillsTheWakeFirst(t *testing.T) {
 	sb := mustClaim(t, m, testKey)
 	hibernateClaim(t, m, sb)
 	m.store.writeMu.Lock()
-	locked := true
-	t.Cleanup(func() {
-		if locked {
-			m.store.writeMu.Unlock()
-		}
-	})
+	unlock := sync.OnceFunc(m.store.writeMu.Unlock)
+	t.Cleanup(unlock)
 	woke := make(chan error, 1)
 	go func() {
 		_, _, _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token)
@@ -111,8 +108,7 @@ func TestAReleaseRacingAWakeBillsTheWakeFirst(t *testing.T) {
 		defer m.mu.Unlock()
 		return m.claimed[sb.ID] == nil
 	})
-	m.store.writeMu.Unlock()
-	locked = false
+	unlock()
 	<-woke
 	if err := <-released; err != nil {
 		t.Fatalf("release: %v", err)

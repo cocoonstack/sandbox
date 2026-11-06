@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -168,25 +169,8 @@ func TestReconcileReclaimsOrphanArchiveCk(t *testing.T) {
 	}
 	seedClaims(t, dataDir, claims)
 	m := newTestManagerAt(t, eng, dataDir)
-	seedCk := func(id, sandboxID string) {
-		t.Helper()
-		staging, err := m.ckpts.Stage(id)
-		if err != nil {
-			t.Fatalf("stage: %v", err)
-		}
-		if err := os.MkdirAll(filepath.Join(staging, store.ExportDir), 0o750); err != nil {
-			t.Fatalf("mkdir: %v", err)
-		}
-		meta := `{"id":"` + id + `","sandbox_id":"` + sandboxID + `","archive":true}`
-		if err := os.WriteFile(filepath.Join(staging, store.MetaFile), []byte(meta), 0o600); err != nil {
-			t.Fatalf("meta: %v", err)
-		}
-		if err := m.ckpts.Publish(t.Context(), staging, id, ""); err != nil {
-			t.Fatalf("publish: %v", err)
-		}
-	}
-	seedCk("ck_00000000000000aa", "sb_mine")
-	seedCk("ck_00000000000000bb", "sb_elsewhere")
+	seedArchiveCkBy(t, m, "", "ck_00000000000000aa", "sb_mine")
+	seedArchiveCkBy(t, m, "", "ck_00000000000000bb", "sb_elsewhere")
 
 	if err := m.Reconcile(t.Context()); err != nil {
 		t.Fatalf("Reconcile: %v", err)
@@ -560,12 +544,8 @@ func TestArchiveRemovalCommitPinsCheckpoint(t *testing.T) {
 			}
 
 			m.store.writeMu.Lock()
-			locked := true
-			t.Cleanup(func() {
-				if locked {
-					m.store.writeMu.Unlock()
-				}
-			})
+			unlock := sync.OnceFunc(m.store.writeMu.Unlock)
+			t.Cleanup(unlock)
 			done := make(chan error, 1)
 			go func() {
 				if action == testArchiveRelease {
@@ -587,8 +567,7 @@ func TestArchiveRemovalCommitPinsCheckpoint(t *testing.T) {
 				t.Error("retry deleted the checkpoint before the claims commit")
 			}
 			breakStore(t, m)
-			m.store.writeMu.Unlock()
-			locked = false
+			unlock()
 			if err := <-done; action == testArchiveRelease && err == nil {
 				t.Fatal("release succeeded despite a persist failure")
 			}
@@ -662,12 +641,8 @@ func TestArchiveDeleteRetryRechecksWakeRollback(t *testing.T) {
 	id, token, ck := sb.ID, sb.Token, sb.ArchiveCk
 
 	m.store.writeMu.Lock()
-	locked := true
-	t.Cleanup(func() {
-		if locked {
-			m.store.writeMu.Unlock()
-		}
-	})
+	unlock := sync.OnceFunc(m.store.writeMu.Unlock)
+	t.Cleanup(unlock)
 	woke := make(chan error, 1)
 	go func() {
 		_, _, _, err := m.WakeAgentSocket(t.Context(), id, token)
@@ -695,8 +670,7 @@ func TestArchiveDeleteRetryRechecksWakeRollback(t *testing.T) {
 		t.Fatal("retry deleted the checkpoint before wake persistence completed")
 	}
 	breakStore(t, m)
-	m.store.writeMu.Unlock()
-	locked = false
+	unlock()
 	if err := <-woke; err == nil {
 		t.Fatal("wake succeeded despite a persist failure")
 	}
@@ -784,78 +758,71 @@ func TestArchivePersistFailureRollsBack(t *testing.T) {
 	})
 }
 
-func TestReleaseArchivedRollsBackOnPersistFailure(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		eng := newFakeEngine()
-		m := newTestManager(t, eng, archivePool(3600))
-		sb := mustClaim(t, m, testKey)
-		id, token := sb.ID, sb.Token
-		mustArchive(t, m, sb)
-		ck := sb.ArchiveCk
-		breakStore(t, m)
+func TestArchivedClaimRollsBackOnPersistFailure(t *testing.T) {
+	tests := []struct {
+		name  string
+		setup func(m *Manager, sb *types.Sandbox)
+		act   func(t *testing.T, m *Manager, sb *types.Sandbox, ck string)
+	}{
+		{
+			name: "release",
+			act: func(t *testing.T, m *Manager, sb *types.Sandbox, _ string) {
+				if err := m.Release(t.Context(), sb.ID, Cred{Token: sb.Token}); err == nil {
+					t.Fatal("release succeeded despite a persist failure")
+				}
+				if _, ok := m.claim(sb.ID, sb.Token); !ok {
+					t.Error("release dropped the claim despite a failed persist")
+				}
+			},
+		},
+		{
+			name: "wake",
+			act: func(t *testing.T, m *Manager, sb *types.Sandbox, ck string) {
+				if _, _, _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err == nil {
+					t.Fatal("wake succeeded despite a persist failure")
+				}
+				m.mu.Lock()
+				archived := sb.ArchiveCk == ck && sb.VMName == ""
+				m.mu.Unlock()
+				if !archived {
+					t.Error("wake did not roll the record back to archived on a failed persist")
+				}
+			},
+		},
+		{
+			name:  "reap purge",
+			setup: expire,
+			act: func(t *testing.T, m *Manager, sb *types.Sandbox, _ string) {
+				m.reapOnce(t.Context())
+				m.mu.Lock()
+				_, present := m.claimed[sb.ID]
+				m.mu.Unlock()
+				if !present {
+					t.Error("reap dropped the archived claim despite a failed persist")
+				}
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				m := newTestManager(t, newFakeEngine(), archivePool(3600))
+				sb := mustClaim(t, m, testKey)
+				mustArchive(t, m, sb)
+				ck := sb.ArchiveCk
+				if tt.setup != nil {
+					tt.setup(m, sb)
+				}
+				breakStore(t, m)
 
-		if err := m.Release(t.Context(), id, Cred{Token: token}); err == nil {
-			t.Fatal("release succeeded despite a persist failure")
-		}
-		if _, ok := m.claim(id, token); !ok {
-			t.Error("release dropped the claim despite a failed persist")
-		}
-		if !pinnedHidden(t, m, ck) {
-			t.Error("kept ck is not pinned after a failed release")
-		}
-		healStore(t, m)
-	})
-}
-
-func TestWakeArchivedRollsBackOnPersistFailure(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		eng := newFakeEngine()
-		m := newTestManager(t, eng, archivePool(3600))
-		sb := mustClaim(t, m, testKey)
-		id, token := sb.ID, sb.Token
-		mustArchive(t, m, sb)
-		ck := sb.ArchiveCk
-		breakStore(t, m)
-
-		if _, _, _, err := m.WakeAgentSocket(t.Context(), id, token); err == nil {
-			t.Fatal("wake succeeded despite a persist failure")
-		}
-		m.mu.Lock()
-		archived := sb.ArchiveCk == ck && sb.VMName == ""
-		m.mu.Unlock()
-		if !archived {
-			t.Error("wake did not roll the record back to archived on a failed persist")
-		}
-		if !pinnedHidden(t, m, ck) {
-			t.Error("kept ck is not pinned after a failed wake")
-		}
-		healStore(t, m)
-	})
-}
-
-func TestReapPurgeRollsBackOnPersistFailure(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		eng := newFakeEngine()
-		m := newTestManager(t, eng, archivePool(3600))
-		sb := mustClaim(t, m, testKey)
-		id := sb.ID
-		mustArchive(t, m, sb)
-		ck := sb.ArchiveCk
-		expire(m, sb)
-		breakStore(t, m)
-
-		m.reapOnce(t.Context())
-		m.mu.Lock()
-		_, present := m.claimed[id]
-		m.mu.Unlock()
-		if !present {
-			t.Error("reap dropped the archived claim despite a failed persist")
-		}
-		if !pinnedHidden(t, m, ck) {
-			t.Error("kept ck is not pinned after a failed reap purge")
-		}
-		healStore(t, m)
-	})
+				tt.act(t, m, sb, ck)
+				if !pinnedHidden(t, m, ck) {
+					t.Errorf("kept ck is not pinned after a failed %s", tt.name)
+				}
+				healStore(t, m)
+			})
+		})
+	}
 }
 
 func TestArchiveOnceSkipsInFlight(t *testing.T) {
