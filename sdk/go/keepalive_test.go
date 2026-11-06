@@ -2,6 +2,8 @@ package sandbox
 
 import (
 	"bufio"
+	"context"
+	"errors"
 	"io"
 	"net"
 	"sync/atomic"
@@ -51,6 +53,21 @@ func TestRefusedStreamOpenKeepsItsConnection(t *testing.T) {
 	}
 	if got := upgrades.Load(); got != 1 {
 		t.Errorf("upgrades = %d, want 1: an error frame ends the RPC, not the connection", got)
+	}
+}
+
+func TestCanceledCallSendsNothingOnAParkedConnection(t *testing.T) {
+	sb := testSandbox(t, newAgentServer(t, silkdtest.NewFake(t.TempDir()).ServeConn))
+	if _, err := sb.Stat(t.Context(), "/"); err != nil {
+		t.Fatalf("stat: %v", err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if err := sb.Mkdir(ctx, "/d", false); !errors.Is(err, context.Canceled) {
+		t.Fatalf("mkdir on a canceled ctx: %v, want context.Canceled", err)
+	}
+	if _, err := sb.Stat(t.Context(), "/d"); err == nil {
+		t.Fatal("a canceled mkdir still ran in the guest")
 	}
 }
 
