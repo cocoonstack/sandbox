@@ -1,8 +1,4 @@
-// crossnode is the two-node store acceptance: a checkpoint created on node
-// A is claimed on node B through the shared checkpoint store; run it with a
-// template absent from B's image store so the claim exercises the engine's
-// clone --pull path (base blobs resolved by digest). The marker written on
-// A proves the memory state crossed nodes.
+// crossnode claims on node B a checkpoint made on node A through the shared store; use a template absent from B's image store.
 package main
 
 import (

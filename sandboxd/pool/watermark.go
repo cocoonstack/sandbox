@@ -13,7 +13,6 @@ import (
 )
 
 const (
-	// ewmaAlpha weights the newest observation in the arrival-rate and provision-lead averages
 	ewmaAlpha = 0.3
 	rateBin   = time.Second
 	// rateDecayTau halves the observed arrival rate roughly every 40s of silence
@@ -153,7 +152,6 @@ func (p *pool) noteLead(d time.Duration) {
 	p.lead = time.Duration(ewmaAlpha*float64(d) + (1-ewmaAlpha)*float64(p.lead))
 }
 
-// effectiveTarget raises the floor toward warmMax by rate × lead.
 func (p *pool) effectiveTarget(now time.Time) int {
 	if p.warmMax <= 0 {
 		return p.floor
@@ -172,7 +170,6 @@ func (p *pool) effectiveTarget(now time.Time) int {
 	return max(p.floor, min(dynamic, p.warmMax))
 }
 
-// shrink trims the pool to its target once the warm count has stayed above it for warmShrinkDwell, returning the trimmed VM names.
 func (p *pool) shrink(now time.Time) []string {
 	target := p.effectiveTarget(now)
 	switch {

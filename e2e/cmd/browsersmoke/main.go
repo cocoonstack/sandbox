@@ -1,6 +1,4 @@
-// browsersmoke is the browser-flavor acceptance: claim the browser flavor → CDP
-// /json/version over the relay → open a target → checkpoint/branch of the
-// warmed browser.
+// browsersmoke checks the browser flavor: claim, CDP /json/version over the relay, a new target, and checkpoint/branch.
 package main
 
 import (

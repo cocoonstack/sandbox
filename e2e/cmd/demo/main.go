@@ -1,5 +1,4 @@
-// demo exercises a live sandboxd through the SDK and prints per-iteration
-// latencies — the bare-metal e2e script drives it on a real node.
+// demo claims, execs and releases through the SDK and prints per-iteration latencies.
 package main
 
 import (

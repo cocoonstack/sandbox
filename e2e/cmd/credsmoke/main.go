@@ -1,6 +1,4 @@
-// credsmoke is the claim-credential acceptance: claims each send their own env-injected header,
-// query or body credential through the proxy (-inject-size: on an "inject" pool), the guest never
-// holds the value, and rotation, refusal, clearing and forks behave as the API says.
+// credsmoke checks claim credentials end to end through the proxy; -inject-size names an "inject" pool.
 package main
 
 import (

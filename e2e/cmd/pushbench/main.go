@@ -1,5 +1,4 @@
-// pushbench measures fs_write throughput end to end — the hardware A/B for
-// the SDK's data-frame encode path: writes size MiB to the guest n times.
+// pushbench times n fs_write transfers of size MiB to the guest.
 package main
 
 import (

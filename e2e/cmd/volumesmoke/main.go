@@ -1,5 +1,4 @@
-// volumesmoke validates shared read-only dataset mounts, and optionally one
-// writable dataset mount and live volume changes, on a live Cloud Hypervisor node.
+// volumesmoke checks read-only dataset mounts and, optionally, a writable mount and live volume changes.
 package main
 
 import (

@@ -1,7 +1,4 @@
-// lifecycle exercises sandboxd's auto-archive: a claim idles into hibernation,
-// then to a store checkpoint with its local VM dropped, and the next access
-// wakes it from the store with the same id and guest state intact. The node
-// must run a pool with idle_hibernate_seconds + archive_after_seconds set.
+// lifecycle checks that an idle claim archives and wakes with its id and guest state; the pool needs idle_hibernate_seconds and archive_after_seconds.
 package main
 
 import (
@@ -82,7 +79,6 @@ func run(addr, token, template, netShape string, wait time.Duration) error {
 	return nil
 }
 
-// waitArchived returns how long the reaper's idle→hibernate→archive ladder took to archive the claim.
 func waitArchived(ctx context.Context, client *sandbox.Client, timeout time.Duration) (time.Duration, error) {
 	start := time.Now()
 	deadline := start.Add(timeout)

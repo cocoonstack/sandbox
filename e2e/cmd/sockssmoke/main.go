@@ -1,10 +1,4 @@
-// Command sockssmoke proves the SOCKS5 egress channel from inside a claimed
-// sandbox: an allowed host tunnels over 127.0.0.1:1080, a GET-only host is
-// reachable on the HTTP proxy but refused on SOCKS5, an unlisted host and an
-// unlisted port are refused, IMAPS rides the tunnel on its listed port, the
-// HTTP door refuses unlisted ports on CONNECT and forward requests, and no
-// tunnel opens from a pool without a policy or from one whose policy did not
-// opt in.
+// sockssmoke checks the SOCKS5 egress door from a claimed sandbox against the allow, refuse and opt-in rules of its pool policy.
 package main
 
 import (

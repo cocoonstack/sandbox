@@ -1,6 +1,4 @@
-// ringsmoke drives two silkd paths the other smokes leave alone: a detached
-// process that overflows its output ring one byte at a time, whose logs must
-// replay exactly the newest 256 KiB, and exec as a named user.
+// ringsmoke checks the replay of a detached process's 256 KiB output ring and exec as a named user.
 package main
 
 import (

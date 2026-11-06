@@ -1,7 +1,4 @@
-// coldproof measures a cold claim end-to-end and proves the guest is live:
-// it claims an unpooled template (RunCold path), then execs inside the guest
-// and prints the guest's own /proc/uptime and kernel — the guest-side clock
-// is the evidence that claim-ready means a booted, exec-serving system.
+// coldproof times a cold claim and prints the guest uptime and kernel as proof it booted.
 package main
 
 import (

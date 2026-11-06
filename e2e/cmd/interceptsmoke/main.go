@@ -1,8 +1,4 @@
-// interceptsmoke is the HTTPS-interception acceptance: a none-lane sandbox whose
-// golden had the cluster root baked reaches an HTTPS echo through the proxy; the
-// leaf the node's intermediate signed validates against that baked root, the TLS
-// is terminated (so the guest sees our issuer, not the origin's), and the secret
-// is injected into the HTTPS request — the guarantees plaintext already had.
+// interceptsmoke checks HTTPS interception: a none-lane guest with the baked cluster root reaches an HTTPS echo with the secret injected.
 package main
 
 import (
