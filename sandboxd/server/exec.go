@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -76,10 +77,8 @@ func (s *Server) handleExec(w http.ResponseWriter, r *http.Request) {
 	if s.mgr.AuditEnabled() {
 		s.mgr.Audit(ctx, id, frame)
 	}
-	frame = append(frame, '\n')
 	stdinClose, _ := wire.EncodeRequest(wire.StdinClose{})
-	frame = append(frame, stdinClose...)
-	frame = append(frame, '\n')
+	frame = slices.Concat(frame, []byte{'\n'}, stdinClose, []byte{'\n'})
 	if _, err := guest.Write(frame); err != nil {
 		writeErr(w, http.StatusBadGateway, "guest agent unreachable")
 		return
