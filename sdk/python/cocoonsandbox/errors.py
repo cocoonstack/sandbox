@@ -64,6 +64,10 @@ class ProtocolError(SandboxError):
     """The peer broke the frame protocol (unexpected frame, oversized line)."""
 
 
+class _DialError(OSError):
+    pass
+
+
 def _require_field(reply: dict[str, Any], key: str, verb: str) -> Any:
     if key not in reply:
         raise APIError(verb, 0, f"reply without {key}")
