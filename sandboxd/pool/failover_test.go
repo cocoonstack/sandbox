@@ -277,7 +277,7 @@ func TestFailoverNoAdoptionWhileTheOwnerIsAlive(t *testing.T) {
 	sb := mustClaim(t, a, testKey)
 	mustArchive(t, a, sb)
 
-	assertNotAdopted(t, b, sb, "adopt from a live owner")
+	mustNotAdopt(t, b, sb, "adopt from a live owner")
 	if rec, _, _ := c.reg.Get(t.Context(), sb.ID); rec.Owner != "a" || rec.Epoch != 1 {
 		t.Errorf("row %s@%d, want a@1", rec.Owner, rec.Epoch)
 	}
@@ -291,7 +291,7 @@ func TestFailoverADrainingNodeDoesNotAdopt(t *testing.T) {
 	c.expire("a")
 	b.Drain(t.Context())
 
-	assertNotAdopted(t, b, sb, "adopt on a draining node")
+	mustNotAdopt(t, b, sb, "adopt on a draining node")
 	if rec, _, _ := c.reg.Get(t.Context(), sb.ID); rec.Owner != "a" || rec.Epoch != 1 {
 		t.Errorf("row %s@%d, want a@1 left for another node", rec.Owner, rec.Epoch)
 	}
@@ -1183,7 +1183,7 @@ func TestFailoverATombstoneIsNotAdopted(t *testing.T) {
 	counted := &countingRegistry{Registry: c.reg}
 	d.archives = counted
 
-	assertNotAdopted(t, d, sb, "adopt of a tombstone")
+	mustNotAdopt(t, d, sb, "adopt of a tombstone")
 	if n := counted.takes.Load(); n != 0 {
 		t.Errorf("adoption tried %d takes on a tombstone, want none", n)
 	}
@@ -1275,7 +1275,7 @@ func TestFailoverARepeatedAdoptionOfAReleasedClaimIsRefused(t *testing.T) {
 		t.Fatalf("release: %v", err)
 	}
 
-	assertNotAdopted(t, b, sb, "repeated adopt of a released claim")
+	mustNotAdopt(t, b, sb, "repeated adopt of a released claim")
 	if rec, ok, _ := c.reg.Get(t.Context(), sb.ID); ok {
 		t.Errorf("row %+v outlived the released claim", rec)
 	}

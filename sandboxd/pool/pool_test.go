@@ -2310,13 +2310,6 @@ func mustNotAdopt(t *testing.T, m *Manager, sb *types.Sandbox, step string) {
 	}
 }
 
-func assertNotAdopted(t *testing.T, m *Manager, sb *types.Sandbox, step string) {
-	t.Helper()
-	if adopted, err := m.AdoptArchived(t.Context(), sb.ID, sb.Token); err != nil || adopted {
-		t.Errorf("%s: %v %v, want refused", step, adopted, err)
-	}
-}
-
 func breakStore(t *testing.T, m *Manager) {
 	t.Helper()
 	m.store.path = filepath.Join(t.TempDir(), "gone", "claims.json")

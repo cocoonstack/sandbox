@@ -115,7 +115,7 @@ func TestEvacuateHandOffRefusedByAConcurrentOwnerWriteKeepsTheClaim(t *testing.T
 		if rec, _, _ := c.reg.Get(t.Context(), sb.ID); rec.Owner != "a" {
 			t.Errorf("row owner %q after a refused hand-off, want a", rec.Owner)
 		}
-		assertNotAdopted(t, b, sb, "adopt a row the hand-off did not release")
+		mustNotAdopt(t, b, sb, "adopt a row the hand-off did not release")
 
 		a.Evacuate(t.Context())
 		synctest.Wait()
@@ -243,7 +243,7 @@ func TestUndrainStopsAnEvacuationBeforeItsHandOff(t *testing.T) {
 		if rec, _, _ := c.reg.Get(t.Context(), sb.ID); rec.Owner != "a" {
 			t.Errorf("row owner %q after undrain, want a", rec.Owner)
 		}
-		assertNotAdopted(t, b, sb, "adopt a claim whose evacuation stopped")
+		mustNotAdopt(t, b, sb, "adopt a claim whose evacuation stopped")
 		if _, _, _, err := a.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
 			t.Errorf("wake after undrain: %v", err)
 		}
