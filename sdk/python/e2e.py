@@ -149,7 +149,7 @@ def main() -> int:
 
     @step("port")
     def _port():
-        deadline = time.time() + 5
+        deadline = time.monotonic() + 5
         while True:
             try:
                 conn = sb.dial_port(22)
@@ -158,20 +158,20 @@ def main() -> int:
                 assert banner.startswith(b"SSH-"), banner
                 return
             except SilkdError:
-                if time.time() > deadline:
+                if time.monotonic() > deadline:
                     raise
                 time.sleep(0.3)
 
     try:
         for name, fn in steps:
-            start = time.time()
+            start = time.monotonic()
             try:
                 fn()
             except BaseException:
                 print(f"  {name:<18} FAIL")
                 traceback.print_exc()
                 raise
-            print(f"  {name:<18} ok ({int((time.time() - start) * 1000)}ms)")
+            print(f"  {name:<18} ok ({int((time.monotonic() - start) * 1000)}ms)")
     finally:
         with contextlib.suppress(Exception):
             sb.close()
