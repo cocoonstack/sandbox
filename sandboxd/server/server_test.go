@@ -2286,6 +2286,8 @@ type checkpointClaimFunc func(string) (*types.Sandbox, error)
 
 type idActionFunc func(string) error
 
+type guestFunc func(net.Conn)
+
 type fakeManager struct {
 	counters             pool.Counters
 	registerVolume       func(context.Context, string, types.VolumeRegistration) error
@@ -2788,8 +2790,6 @@ func (f *fakeManager) record(o pool.ClaimOptions) {
 	f.gotOnExpire = o.OnExpire
 	f.gotNoEgress = o.NoEgress
 }
-
-type guestFunc func(net.Conn)
 
 type fakeDialer struct {
 	dial func(ctx context.Context, sock string) (net.Conn, error)
