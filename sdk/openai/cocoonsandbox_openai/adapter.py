@@ -162,7 +162,9 @@ class CocoonSandboxClient(BaseSandboxClient[CocoonSandboxClientOptions]):
             with contextlib.suppress(Exception):  # the construction error is the one worth reading
                 await asyncio.to_thread(sb.close)
             raise
-        return self._wrap_session(CocoonSandboxSession.from_state(state))
+        session = CocoonSandboxSession.from_state(state)
+        session._sb = sb
+        return self._wrap_session(session)
 
     async def delete(self, session: SandboxSession) -> SandboxSession:
         inner = session._inner
