@@ -200,7 +200,8 @@ func TestRouterChargesSegmentsAndRefusesOversizedPackets(t *testing.T) {
 	r.Arm(Claim{ID: "c1", Addr: claimAddr, Limits: Limits{PacketsPerSecond: 10}, Allow: func(netip.Addr, uint16) bool { return true }})
 	u.sent(t)
 	go func() {
-		for range u.out {
+		for s := range u.out {
+			_ = s
 		}
 	}()
 	guest := serve(t, r, claimAddr)
