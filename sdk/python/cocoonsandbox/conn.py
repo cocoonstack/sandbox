@@ -37,12 +37,18 @@ class Conn(_Closeable):
     """A frame stream to one sandbox's silkd; a plain-HTTP upgrade rides the first send, its 101 the first recv."""
 
     def __init__(
-        self, sock: socket.socket, reader: BinaryIO, request: bytes = b"", upgrade_timeout: float | None = None
+        self,
+        sock: socket.socket,
+        reader: BinaryIO,
+        request: bytes = b"",
+        upgrade_timeout: float | None = None,
+        tag: tuple[str, str] = ("", ""),
     ) -> None:
         self._sock = sock
         self._reader = reader
         self._request = request
         self._upgrade_timeout = upgrade_timeout
+        self._tag = tag
 
     def send(self, op: str, **fields: object) -> None:
         frame = encode_request(op, **fields)
@@ -107,7 +113,9 @@ class Conn(_Closeable):
         deadline = time.monotonic() + limit
         try:
             _read_upgrade(
-                self._reader, lambda: self._sock.settimeout(remaining_timeout(limit, deadline, "agent upgrade"))
+                self._reader,
+                lambda: self._sock.settimeout(remaining_timeout(limit, deadline, "agent upgrade")),
+                self._tag,
             )
             self._sock.settimeout(caller)
         except Exception as exc:
@@ -179,6 +187,7 @@ def dial_agent(
     deadline: float | None = None,
     *,
     ssl_context: ssl.SSLContext | None = None,
+    tag: tuple[str, str] = ("", ""),
 ) -> Conn:
     """Opens one TCP/HTTP Upgrade relay within timeout and the optional deadline."""
     budget = time.monotonic() + timeout
@@ -193,7 +202,7 @@ def dial_agent(
         sock = socket.create_connection((host, port), timeout=remaining_timeout(timeout, deadline))
     except OSError as exc:
         err = _handshake_error(f"dial {addr}", exc)
-        raise (_mark_gone(err) if isinstance(exc, ConnectionRefusedError) else err) from exc
+        raise (_mark_gone(err, tag) if isinstance(exc, ConnectionRefusedError) else err) from exc
     sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
     for opt, setting in _TCP_KEEPALIVE.items():
@@ -211,7 +220,7 @@ def dial_agent(
     try:
         if endpoint.scheme != "https":
             sock.settimeout(None)
-            return Conn(sock, _buffered_reader(sock), request, timeout)
+            return Conn(sock, _buffered_reader(sock), request, timeout, tag)
         context = ssl_context or ssl.create_default_context()
         sock = context.wrap_socket(sock, server_hostname=host, do_handshake_on_connect=False)
         sock.settimeout(remaining_timeout(timeout, deadline))
@@ -223,7 +232,7 @@ def dial_agent(
         sock.settimeout(remaining_timeout(timeout, deadline))
         sock.sendall(request)
         reader = _buffered_reader(sock)
-        _read_upgrade(reader, lambda: sock.settimeout(remaining_timeout(timeout, deadline)))
+        _read_upgrade(reader, lambda: sock.settimeout(remaining_timeout(timeout, deadline)), tag)
         remaining_timeout(timeout, deadline)
         sock.settimeout(None)
         return Conn(sock, reader)
@@ -270,7 +279,7 @@ def _handshake_error(what: str, exc: OSError) -> SandboxError:
     return ProtocolError(f"{what}: {exc}")
 
 
-def _read_upgrade(reader: BinaryIO, arm: Callable[[], None]) -> None:
+def _read_upgrade(reader: BinaryIO, arm: Callable[[], None], tag: tuple[str, str]) -> None:
     arm()
     status = reader.readline(1024).decode(errors="replace")
     if not status:
@@ -295,4 +304,4 @@ def _read_upgrade(reader: BinaryIO, arm: Callable[[], None]) -> None:
         arm()
         body = reader.read(min(body_len, MAX_FRAME)) if body_len else b""
         err = APIError("agent upgrade", code, _error_message(body) or status.strip())
-        raise _mark_gone(err) if code == 404 else err
+        raise _mark_gone(err, tag) if code == 404 else err

@@ -14,7 +14,7 @@ _E = TypeVar("_E", bound="SandboxError")
 class SandboxError(Exception):
     """Base class for all SDK errors."""
 
-    _owner_gone = False
+    _owner_gone: tuple[str, str] | None = None
 
 
 class SandboxTimeout(SandboxError, TimeoutError):
@@ -77,7 +77,7 @@ def _error_message(raw: bytes) -> str:
         return raw.decode(errors="replace").strip()
 
 
-def _mark_gone(exc: _E) -> _E:
-    """Tags an owner's 404 or refused dial, after which nothing reached it; caller callback errors stay untagged."""
-    exc._owner_gone = True
+def _mark_gone(exc: _E, tag: tuple[str, str]) -> _E:
+    """Tags an owner's 404 or refused dial with its (sandbox id, owner address); callback errors stay untagged."""
+    exc._owner_gone = tag
     return exc
