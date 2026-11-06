@@ -226,16 +226,7 @@ def test_find_retries_at_the_new_owner(spawn_node, dead_addr, relay, retired, st
     directory = spawn_node({("GET", "/v1/sandboxes/sb_1/owner"): locate})
     old = dead_addr if retired else spawn_node({})
     sb = Client(directory, keep_alive=0).attach(old, "sb_1", "tok")
-    if streamed:
-        with pytest.raises(SandboxError) as failed:
-            list(sb.find_iter("/work", "TODO"))
-        assert failed.value._owner_gone == (sb.id, old)
-        assert sb.owner == agent.addr
-        assert len(lookups) == 1
-        assert agent.upgrades == 0
-        matches = list(sb.find_iter("/work", "TODO"))
-    else:
-        matches = sb.find("/work", "TODO")
+    matches = list(sb.find_iter("/work", "TODO")) if streamed else sb.find("/work", "TODO")
     assert matches == [{"type": "match", "path": "/work/f", "line": 1, "text": "TODO"}]
     assert sb.owner == agent.addr
     assert len(lookups) == 1
