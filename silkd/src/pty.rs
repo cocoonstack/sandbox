@@ -68,7 +68,7 @@ pub async fn open<W: AsyncWrite + Unpin>(
         Ok(c) => c,
         Err(e) => return proto::err_frame(out, &e, "spawn shell").await,
     };
-    // drop cmd so its slave dups close, else the master never sees the shell's exit and the pump hangs.
+    // close silkd's slave dups, else the master never hangs up and the exit drain runs to its timeout.
     drop(cmd);
 
     let pid = child.id().unwrap_or(0);

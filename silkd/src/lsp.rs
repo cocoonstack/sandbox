@@ -63,15 +63,14 @@ impl Broker {
             Ok(c) => c,
             Err(e) => return proto::err_frame(w, &e, "spawn language server").await,
         };
-        let Some((stdin, stdout)) = child.stdin.take().zip(child.stdout.take()) else {
+        let Some(stdio) = child.stdout.take().zip(child.stdin.take()) else {
             let _ = child.start_kill();
             return proto::error_frame(w, ErrorKind::Internal, "language server stdio not piped")
                 .await;
         };
         let server = Server {
             child,
-            stdin: Some(stdin),
-            stdout: Some(stdout),
+            stdio: Some(stdio),
         };
 
         let id = format!("lsp-{}", NEXT_ID.fetch_add(1, Ordering::Relaxed));
@@ -106,7 +105,7 @@ impl Broker {
     ) -> std::io::Result<()> {
         let taken = sysutil::lock(&self.inner)
             .get_mut(server_id)
-            .map(|s| s.stdout.take().zip(s.stdin.take()));
+            .map(|s| s.stdio.take());
         let (stdout, stdin) = match taken {
             None => return proto::error_frame(w, ErrorKind::NotFound, "no such lsp server").await,
             Some(None) => {
@@ -158,7 +157,7 @@ impl Broker {
         let removed = {
             let mut table = sysutil::lock(&self.inner);
             match table.get(server_id) {
-                Some(server) if server.stdout.is_some() => table.remove(server_id),
+                Some(server) if server.stdio.is_some() => table.remove(server_id),
                 _ => None,
             }
         };
@@ -168,11 +167,10 @@ impl Broker {
     }
 }
 
-/// One running language server; a present `stdout` means no connection has attached.
+/// One running language server; a present `stdio` means no connection has attached.
 struct Server {
     child: Child,
-    stdin: Option<ChildStdin>,
-    stdout: Option<ChildStdout>,
+    stdio: Option<(ChildStdout, ChildStdin)>,
 }
 
 async fn kill(mut server: Server) {

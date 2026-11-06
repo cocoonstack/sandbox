@@ -553,7 +553,6 @@ async fn serve_flood(l: TcpListener) {
     }
 }
 
-/// Copies frames one way, rewriting the IPv4 address at header offset `at` from `from` to `to`.
 fn forward(
     r: UnixStream,
     mut w: UnixStream,
@@ -610,7 +609,6 @@ fn frame_buffered(buf: &[u8]) -> bool {
     tun::next_frame(buf).ok().flatten().is_some()
 }
 
-/// Swaps an IPv4 address at header offset `at`, patching the IP checksum and the L4 checksum (partial or full).
 fn rewrite(frame: &mut [u8], at: usize, from: [u8; 4], to: [u8; 4]) {
     let partial = frame[0] & NEEDS_CSUM != 0;
     let csum_at = usize::from(u16::from_le_bytes([frame[6], frame[7]]))
