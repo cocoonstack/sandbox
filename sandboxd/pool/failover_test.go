@@ -1859,6 +1859,43 @@ func TestFailoverAReleaseFindsItsUnsettledArchiveTakenElsewhere(t *testing.T) {
 	}
 }
 
+func TestALookupRacingAWakeAdoptionTakesTheRowOnce(t *testing.T) {
+	c := newFailoverCluster(t)
+	a, b := c.node(t, "a", t.TempDir(), keepAnHour), c.node(t, "b", t.TempDir(), keepAnHour)
+	sb := mustClaim(t, a, testKey)
+	mustArchive(t, a, sb)
+	rec, _, err := c.reg.Get(t.Context(), sb.ID)
+	if err != nil {
+		t.Fatalf("row: %v", err)
+	}
+	if _, err = c.reg.Release(t.Context(), sb.ID, rec.Epoch, "a"); err != nil {
+		t.Fatalf("release: %v", err)
+	}
+	reg := &hookRegistry{Registry: c.reg}
+	b.archives = reg
+	lookup := make(chan bool, 1)
+	reg.afterTake = func() {
+		go func() {
+			adopted, _ := b.AdoptArchived(t.Context(), sb.ID, sb.Token)
+			lookup <- adopted
+		}()
+		select {
+		case <-lookup:
+			lookup <- true
+		case <-time.After(200 * time.Millisecond):
+		}
+	}
+	if adopted, adoptErr := b.AdoptForWake(t.Context(), sb.ID, sb.Token); adoptErr != nil || !adopted {
+		t.Fatalf("wake adoption: %v %v", adopted, adoptErr)
+	}
+	if !<-lookup {
+		t.Error("the racing lookup did not find the adopted claim")
+	}
+	if got := reg.takes.Load(); got != 1 {
+		t.Errorf("row taken %d times, want once", got)
+	}
+}
+
 type failoverCluster struct {
 	reg        *archivestest.Mem
 	moves      moves.Registry
@@ -1973,6 +2010,7 @@ type hookRegistry struct {
 	archives.Registry
 	beforePut        func()
 	beforeTake       func()
+	afterTake        func()
 	beforeConsume    func()
 	beforeRelease    func()
 	beforeDelete     func()
@@ -1984,6 +2022,7 @@ type hookRegistry struct {
 	losePutReply     bool
 	failPut          bool
 	replaces         int
+	takes            atomic.Int32
 }
 
 func (r *hookRegistry) Put(ctx context.Context, rec archives.Record) (int64, error) {
@@ -2025,6 +2064,13 @@ func (r *hookRegistry) Take(ctx context.Context, id string, expect int64, owner 
 		hook()
 	}
 	epoch, err := r.Registry.Take(ctx, id, expect, owner)
+	if err == nil {
+		r.takes.Add(1)
+		if hook := r.afterTake; hook != nil {
+			r.afterTake = nil
+			hook()
+		}
+	}
 	if r.loseTakeReply && err == nil {
 		r.loseTakeReply = false
 		return 0, archives.ErrUnavailable

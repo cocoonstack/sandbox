@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"maps"
 	"slices"
-	"strconv"
 	"time"
 
 	"github.com/projecteru2/core/log"
@@ -35,7 +34,7 @@ func (m *Manager) adopt(ctx context.Context, id, token string, room bool) (bool,
 	if m.archives == nil {
 		return false, nil
 	}
-	adopted, err, _ := m.adoptFlights.Do(id+"\x00"+token+"\x00"+strconv.FormatBool(room), func() (any, error) { return m.adoptArchived(ctx, id, token, room) })
+	adopted, err, _ := m.adoptFlights.Do(id+"\x00"+token, func() (any, error) { return m.adoptArchived(ctx, id, token, room) })
 	return adopted.(bool), err
 }
 
