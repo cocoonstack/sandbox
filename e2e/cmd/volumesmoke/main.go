@@ -69,12 +69,9 @@ func run(addr, token, template, volume, rwVolume, probe string, live bool) error
 		_ = sbA.Close()
 		return fmt.Errorf("claim at %s: %w", mountB, err)
 	}
-	released := false
 	defer func() {
-		if !released {
-			_ = sbA.Close()
-			_ = sbB.Close()
-		}
+		_ = sbA.Close()
+		_ = sbB.Close()
 	}()
 	if want := []sandbox.Volume{{Name: volume, Mount: mountA}}; !slices.Equal(sbA.Volumes, want) {
 		return fmt.Errorf("first claim volumes %+v, want %+v", sbA.Volumes, want)
@@ -114,7 +111,6 @@ func run(addr, token, template, volume, rwVolume, probe string, live bool) error
 	if err := errors.Join(sbA.Close(), sbB.Close()); err != nil {
 		return fmt.Errorf("release volume claims: %w", err)
 	}
-	released = true
 	fmt.Printf("VOLUME PASS concurrent_read_bytes=%d read_only=true released=true\n", len(outputs[0]))
 	if live {
 		if err := runLive(ctx, client, template, volume, probe, outputs[0]); err != nil {
@@ -206,12 +202,7 @@ func runWritable(ctx context.Context, client *sandbox.Client, template, volume s
 		return fmt.Errorf("writable claim: %w", err)
 	}
 	claimRW := time.Since(start)
-	live := writer
-	defer func() {
-		if live != nil {
-			_ = live.Close()
-		}
-	}()
+	defer func() { _ = writer.Close() }()
 	if want := []sandbox.Volume{{Name: volume, Mount: mount, Mode: "rw"}}; !slices.Equal(writer.Volumes, want) {
 		return fmt.Errorf("writable claim volumes %+v, want %+v", writer.Volumes, want)
 	}
@@ -231,14 +222,13 @@ func runWritable(ctx context.Context, client *sandbox.Client, template, volume s
 	if err = writer.Close(); err != nil {
 		return fmt.Errorf("release writable claim: %w", err)
 	}
-	live = nil
 
 	reader, err := client.New(ctx, template, sandbox.WithNetwork(sandbox.NetNone),
 		sandbox.WithVolumes(sandbox.Volume{Name: volume, Mount: mount}))
 	if err != nil {
 		return fmt.Errorf("read-only claim after the writer released: %w", err)
 	}
-	live = reader
+	defer func() { _ = reader.Close() }()
 	out, err := reader.Exec(ctx, "cat", path.Join(mount, file))
 	if err != nil {
 		return fmt.Errorf("read back the written file: %w", err)
@@ -249,7 +239,6 @@ func runWritable(ctx context.Context, client *sandbox.Client, template, volume s
 	if err = reader.Close(); err != nil {
 		return fmt.Errorf("release read-only claim: %w", err)
 	}
-	live = nil
 	fmt.Printf("VOLUME RW PASS volume=%s claim=%.1fms durable=true busy_refused=true\n",
 		volume, float64(claimRW.Microseconds())/1000)
 	return nil
