@@ -287,16 +287,17 @@ class Sandbox:
         with self._lease(self._connect("fs_pull", path=path)) as conn:
             return _drain_data(conn)
 
-    @_follows_move
     def find(self, path: str, pattern: str, glob: str = "") -> list[dict[str, Any]]:
         return list(self.find_iter(path, pattern, glob))
 
     def find_iter(self, path: str, pattern: str, glob: str = "") -> Iterator[dict[str, Any]]:
         """Yields matches as they stream."""
-        with self._lease(self._connect("fs_find", path=path, pattern=pattern, glob=glob or None)) as conn:
-            for f in conn.recv_until("done"):
-                if f["type"] == "match":
-                    yield f
+        conn, frame = self._open_stream("fs_find", "", path=path, pattern=pattern, glob=glob or None)
+        with self._lease(conn):
+            while frame["type"] != "done":
+                if frame["type"] == "match":
+                    yield frame
+                frame = conn.recv()
 
     @_follows_move
     def replace(self, files: list[str], pattern: str, replacement: str) -> list[dict[str, Any]]:
@@ -551,7 +552,7 @@ class Sandbox:
     def _open_stream(self, op: str, expect: str = "ready", **fields: object) -> tuple[Conn, dict[str, Any]]:
         conn = self._connect(op, **fields)
         try:
-            frame = _expect(conn, expect)
+            frame = _expect(conn, expect) if expect else conn.recv()
         except SilkdError:
             self._pool.park(conn)
             raise

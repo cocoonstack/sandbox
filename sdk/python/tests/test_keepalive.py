@@ -67,6 +67,8 @@ class FakeAgent:
             return [{"type": "info", "version": "fake", "uptime_secs": 0, "procs": 0}]
         if op == "fs_stat":
             return [{"type": "stat", "info": {"kind": "dir", "size": 0, "mode": 0o755, "mtime_epoch_secs": 0}}]
+        if op == "fs_find":
+            return [{"type": "match", "path": "/work/f", "line": 1, "text": "TODO"}, {"type": "done"}]
         if op == "exec":
             out = base64.b64encode(b"42\n").decode()
             return [{"type": "started", "pid": 1}, {"type": "stdout", "data": out}, {"type": "exit", "code": 0}]
@@ -209,6 +211,26 @@ def test_a_handle_follows_its_sandbox_off_a_retired_node(spawn_node, dead_addr):
         assert sb.owner == agent.addr
     finally:
         agent.stop()
+
+
+@pytest.mark.parametrize("retired", [False, True], ids=["owner_404", "connection_refused"])
+@pytest.mark.parametrize("streamed", [True, False], ids=["find_iter", "find"])
+def test_find_retries_at_the_new_owner(spawn_node, dead_addr, relay, retired, streamed):
+    agent, _ = relay()
+    lookups = []
+
+    def locate(body, path):
+        lookups.append(path)
+        return 200, {"owner_addr": agent.addr}
+
+    directory = spawn_node({("GET", "/v1/sandboxes/sb_1/owner"): locate})
+    old = dead_addr if retired else spawn_node({})
+    sb = Client(directory, keep_alive=0).attach(old, "sb_1", "tok")
+    matches = list(sb.find_iter("/work", "TODO")) if streamed else sb.find("/work", "TODO")
+    assert matches == [{"type": "match", "path": "/work/f", "line": 1, "text": "TODO"}]
+    assert sb.owner == agent.addr
+    assert len(lookups) == 1
+    assert agent.upgrades == 1
 
 
 def test_a_callback_error_tagged_for_this_sandbox_is_not_replayed(spawn_node):
