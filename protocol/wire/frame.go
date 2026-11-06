@@ -97,7 +97,7 @@ var (
 	}
 
 	// responseDecoders dispatches on the type tag first: one key differs in shape across variants.
-	responseDecoders = map[string]respDecoder{
+	responseDecoders = map[string]func([]byte) (Response, error){
 		"started":           decodeResp[Started],
 		"stdout":            decodeResp[Stdout],
 		"stderr":            decodeResp[Stderr],
@@ -628,8 +628,6 @@ type GitBranches struct {
 
 func (GitBranches) RespType() string { return "git_branches" }
 
-type respDecoder func([]byte) (Response, error)
-
 type bulkResponse struct {
 	head []byte
 	mk   func([]byte) Response
@@ -759,7 +757,7 @@ func decodeBulk(line, head []byte, scratch *[]byte) ([]byte, bool) {
 	return out[:n], true
 }
 
-// encodeTagged splices the tag head in front of v's fields, so wire tags never live on the structs; the spare capacity byte lets Conn.Send append the newline without a copy.
+// encodeTagged splices the tag head in front of v's fields, so wire tags never live on the structs.
 func encodeTagged(head string, v any) ([]byte, error) {
 	body, err := json.Marshal(v)
 	if err != nil {
