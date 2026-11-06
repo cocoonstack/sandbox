@@ -28,6 +28,7 @@ type TunState struct {
 	Addr    netip.Addr
 	Profile string
 	Bytes   int64
+	Sock    string
 }
 
 type tunDoor struct {
@@ -190,7 +191,7 @@ func (h *Host) serveTun(ctx context.Context, t *tunDoor) {
 
 func (h *Host) tunState(sb *types.Sandbox) TunState {
 	if h.o.TunState == nil {
-		return TunState{On: !sb.TunOff, Addr: sb.TunAddr, Profile: sb.TunProfile, Bytes: sb.TunBytes}
+		return TunState{On: !sb.TunOff, Addr: sb.TunAddr, Profile: sb.TunProfile, Bytes: sb.TunBytes, Sock: sb.VsockSocket}
 	}
 	return h.o.TunState(sb)
 }
