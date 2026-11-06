@@ -177,19 +177,17 @@ func TestTwoNodeClusterGossipsPools(t *testing.T) {
 	}
 	a.mesh.UpdateSelf(map[string]int{"kk": 4}, []string{"tpl-hash"}, []string{"dataset"})
 
-	deadline := time.Now().Add(10 * time.Second)
-	for time.Now().Before(deadline) {
+	learned := eventually(func() bool {
 		cands := b.mesh.Candidates("kk")
 		owners := b.mesh.TemplateOwners("tpl-hash")
 		volumeOwners := b.mesh.VolumeOwners([]string{"dataset"})
-		if len(cands) == 1 && cands[0] == "node-a:7777" &&
+		return len(cands) == 1 && cands[0] == "node-a:7777" &&
 			len(owners) == 1 && owners[0] == "node-a:7777" &&
-			len(volumeOwners) == 1 && volumeOwners[0] == "node-a:7777" {
-			return
-		}
-		time.Sleep(100 * time.Millisecond)
+			len(volumeOwners) == 1 && volumeOwners[0] == "node-a:7777"
+	})
+	if !learned {
+		t.Fatalf("node-b never learned node-a's state: view=%+v", b.mesh.Members())
 	}
-	t.Fatalf("node-b never learned node-a's state: view=%+v", b.mesh.Members())
 }
 
 func TestARuntimeDigestChangeReachesThePeer(t *testing.T) {
@@ -199,14 +197,9 @@ func TestARuntimeDigestChangeReachesThePeer(t *testing.T) {
 		t.Fatalf("join: %v", err)
 	}
 	a.mesh.UpdateDigest("rotated")
-	deadline := time.Now().Add(10 * time.Second)
-	for time.Now().Before(deadline) {
-		if b.mesh.ConfigMismatches() == 1 {
-			return
-		}
-		time.Sleep(100 * time.Millisecond)
+	if !eventually(func() bool { return b.mesh.ConfigMismatches() == 1 }) {
+		t.Fatalf("node-b never saw node-a's new digest: view=%+v", b.mesh.Members())
 	}
-	t.Fatalf("node-b never saw node-a's new digest: view=%+v", b.mesh.Members())
 }
 
 func TestVolumeOwnersRequireEveryNameAndExcludeSelf(t *testing.T) {
@@ -273,6 +266,15 @@ func TestVolumeHoldersCountSelfAndPeers(t *testing.T) {
 	if got := m.VolumeHolders(); !maps.Equal(got, want) {
 		t.Errorf("holders=%v, want %v", got, want)
 	}
+}
+
+func eventually(cond func() bool) bool {
+	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(100 * time.Millisecond) {
+		if cond() {
+			return true
+		}
+	}
+	return false
 }
 
 func mergeStates(t *testing.T, m *Mesh, states []NodeState) {

@@ -3,6 +3,7 @@ package outbound
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"net"
 	"net/netip"
 	"os"
@@ -68,7 +69,7 @@ func TestDNSDoorDropsInternalAnswersAndRemembersTheRest(t *testing.T) {
 	cfg.EgressInternalAllow = []string{"10.9.0.0/16:5432"}
 	events := &dnsEvents{}
 	h := newHost(t, &fakeEngine{}, cfg, func(o *Options) {
-		o.Nameservers = func() []string { return []string{upstream.udp} }
+		o.Nameservers = func() []string { return []string{upstream} }
 		o.RecordDNS = events.record
 	})
 	h.self.Store(&[]netip.Addr{netip.MustParseAddr("93.184.216.99")})
@@ -103,7 +104,7 @@ func TestDNSDoorDropsInternalAnswersAndRemembersTheRest(t *testing.T) {
 func TestDNSDoorPassesAnUnfilteredAnswerByteForByte(t *testing.T) {
 	upstream := newFakeNameserver(t)
 	h := newHost(t, &fakeEngine{}, poolConfig(testKey, dnsPolicy), func(o *Options) {
-		o.Nameservers = func() []string { return []string{upstream.udp} }
+		o.Nameservers = func() []string { return []string{upstream} }
 	})
 	conn := dialDNS(t, armDNS(t, h))
 	query := packQuery(t, dnsmessage.Header{ID: 0x5a5a, RecursionDesired: true}, "raw.test.")
@@ -123,7 +124,7 @@ func TestDNSDoorDropsAnInternalGlueRecord(t *testing.T) {
 	upstream := newFakeNameserver(t)
 	events := &dnsEvents{}
 	h := newHost(t, &fakeEngine{}, poolConfig(testKey, dnsPolicy), func(o *Options) {
-		o.Nameservers = func() []string { return []string{upstream.udp} }
+		o.Nameservers = func() []string { return []string{upstream} }
 		o.RecordDNS = events.record
 	})
 	msg := queryDoor(t, armDNS(t, h), "glue.test.")
@@ -141,7 +142,7 @@ func TestDNSDoorDropsAnInternalGlueRecord(t *testing.T) {
 func TestDNSDoorDisarmEndsAnOpenConnection(t *testing.T) {
 	upstream := newFakeNameserver(t)
 	h := newHost(t, &fakeEngine{}, poolConfig(testKey, dnsPolicy), func(o *Options) {
-		o.Nameservers = func() []string { return []string{upstream.udp} }
+		o.Nameservers = func() []string { return []string{upstream} }
 	})
 	sb := armDNS(t, h)
 	conn := dialDNS(t, sb)
@@ -159,7 +160,7 @@ func TestDNSDoorDisarmEndsAnOpenConnection(t *testing.T) {
 func TestDNSDoorsHandATruncatedAnswerToEachTransport(t *testing.T) {
 	upstream := newFakeNameserver(t)
 	h := newHost(t, &fakeEngine{}, poolConfig(testKey, dnsPolicy), func(o *Options) {
-		o.Nameservers = func() []string { return []string{upstream.udp} }
+		o.Nameservers = func() []string { return []string{upstream} }
 	})
 	sb := armDNS(t, h)
 	gram, err := net.Dial("unix", engine.DNSDatagramSocketPath(sb.VsockSocket))
@@ -179,7 +180,7 @@ func TestADNSDialBeforeTheClaimForcesARebind(t *testing.T) {
 	upstream := newFakeNameserver(t)
 	events := &dnsEvents{}
 	h := newHost(t, &fakeEngine{}, poolConfig(testKey, dnsPolicy), func(o *Options) {
-		o.Nameservers = func() []string { return []string{upstream.udp} }
+		o.Nameservers = func() []string { return []string{upstream} }
 		o.RecordDNS = events.record
 	})
 	sb := outboundtest.VsockSandbox(t, "sb_dns", testKey)
@@ -217,7 +218,7 @@ func TestDNSDoorMovesPastANameserverThatAnswersServfail(t *testing.T) {
 	upstream := newFakeNameserver(t)
 	failing := newServfailNameserver(t)
 	h := newHost(t, &fakeEngine{}, poolConfig(testKey, dnsPolicy), func(o *Options) {
-		o.Nameservers = func() []string { return []string{failing, upstream.udp} }
+		o.Nameservers = func() []string { return []string{failing, upstream} }
 	})
 	if got := addresses(queryDoor(t, armDNS(t, h), "public.test.")); len(got) != 2 {
 		t.Errorf("answers %v, want the second nameserver's two addresses", got)
@@ -252,7 +253,7 @@ func TestDNSDoorRefusesAQueryFloodPastItsBucket(t *testing.T) {
 	upstream := newFakeNameserver(t)
 	events := &dnsEvents{}
 	h := newHost(t, &fakeEngine{}, poolConfig(testKey, dnsPolicy), func(o *Options) {
-		o.Nameservers = func() []string { return []string{upstream.udp} }
+		o.Nameservers = func() []string { return []string{upstream} }
 		o.RecordDNS = events.record
 	})
 	sb := armDNS(t, h)
@@ -279,7 +280,7 @@ func TestDNSDoorRefusesAQueryFloodPastItsBucket(t *testing.T) {
 func TestDNSDoorDropsAndCountsMalformedQueries(t *testing.T) {
 	upstream := newFakeNameserver(t)
 	h := newHost(t, &fakeEngine{}, poolConfig(testKey, dnsPolicy), func(o *Options) {
-		o.Nameservers = func() []string { return []string{upstream.udp} }
+		o.Nameservers = func() []string { return []string{upstream} }
 	})
 	sb := armDNS(t, h)
 	for _, tt := range []struct {
@@ -324,7 +325,7 @@ func FuzzDNSDoor(f *testing.F) {
 	var forwarded atomic.Int64
 	h := New(Options{View: func() *View { return v }, Nameservers: func() []string {
 		forwarded.Add(1)
-		return []string{upstream.udp}
+		return []string{upstream}
 	}})
 	valid := packQuery(f, dnsmessage.Header{RecursionDesired: true}, "public.test.")
 	for _, seed := range [][]byte{
@@ -380,11 +381,7 @@ func TestReadNameserversReadsResolvConf(t *testing.T) {
 	}
 }
 
-type fakeNameserver struct {
-	udp string
-}
-
-func newFakeNameserver(t testing.TB) *fakeNameserver {
+func newFakeNameserver(t testing.TB) string {
 	t.Helper()
 	pc, ln := listenUDPAndTCP(t)
 	t.Cleanup(func() { _ = pc.Close(); _ = ln.Close() })
@@ -412,7 +409,7 @@ func newFakeNameserver(t testing.TB) *fakeNameserver {
 			}()
 		}
 	}()
-	return &fakeNameserver{udp: pc.LocalAddr().String()}
+	return pc.LocalAddr().String()
 }
 
 func listenUDPAndTCP(t testing.TB) (net.PacketConn, net.Listener) {
@@ -616,7 +613,7 @@ func rawAnswer(q dnsmessage.Message) []byte {
 }
 
 func frame(msg []byte) []byte {
-	return append([]byte{byte(len(msg) >> 8), byte(len(msg))}, msg...)
+	return append(binary.BigEndian.AppendUint16(nil, uint16(len(msg))), msg...)
 }
 
 func packQuery(t testing.TB, hdr dnsmessage.Header, names ...string) []byte {
@@ -651,7 +648,7 @@ func standardQuery(query []byte) bool {
 func selfPointerAdditional(query []byte) []byte {
 	query[11] = 1
 	off := len(query)
-	return append(query, 0xc0|byte(off>>8), byte(off), 0, 1, 0, 1, 0, 0, 0, 0, 0, 4, 1, 2, 3, 4)
+	return append(binary.BigEndian.AppendUint16(query, 0xc000|uint16(off)), 0, 1, 0, 1, 0, 0, 0, 0, 0, 4, 1, 2, 3, 4)
 }
 
 type fuzzConn struct {

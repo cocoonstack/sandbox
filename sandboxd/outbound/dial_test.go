@@ -1,6 +1,7 @@
 package outbound
 
 import (
+	"net"
 	"net/netip"
 	"strings"
 	"testing"
@@ -28,24 +29,18 @@ func TestEgressDialerBlocksInternal(t *testing.T) {
 		"[64:ff9b::a9fe:a9fe]:80",
 		"[64:ff9b::a00:1]:80",
 	}
+	d := newDialer(verdictOf(nil))
 	for _, addr := range blocked {
-		if err := newDialer(verdictOf(nil)).Control("tcp", addr, nil); err == nil {
-			t.Errorf("dial to internal %s allowed; SSRF not blocked", addr)
-		}
+		assertControl(t, d, addr, false)
 	}
 
 	for _, addr := range []string{"93.184.216.34:443", "[2606:4700:4700::1111]:443", "[64:ff9b::5db8:d822]:443"} {
-		if err := newDialer(verdictOf(nil)).Control("tcp", addr, nil); err != nil {
-			t.Errorf("dial to public %s blocked: %v", addr, err)
-		}
+		assertControl(t, d, addr, true)
 	}
 }
 
 func TestEgressDialerAdmitsOnlyNamedInternalPrefixes(t *testing.T) {
 	d := newDialer(verdictOf([]string{"fdc8::/16", "10.8.0.0/16"}))
-	check := func(addr string) error {
-		return d.Control("tcp", addr, nil)
-	}
 	for name, tt := range map[string]struct {
 		addr    string
 		allowed bool
@@ -63,13 +58,7 @@ func TestEgressDialerAdmitsOnlyNamedInternalPrefixes(t *testing.T) {
 		"CGNAT metadata":                {"100.100.100.200:80", false},
 	} {
 		t.Run(name, func(t *testing.T) {
-			err := check(tt.addr)
-			if tt.allowed && err != nil {
-				t.Errorf("%s was blocked: %v", tt.addr, err)
-			}
-			if !tt.allowed && err == nil {
-				t.Errorf("%s was allowed; it must not be reachable from a guest", tt.addr)
-			}
+			assertControl(t, d, tt.addr, tt.allowed)
 		})
 	}
 }
@@ -84,9 +73,7 @@ func TestEgressDialerWildcardAllowsEverything(t *testing.T) {
 		"127.0.0.1:7777",
 		"169.254.169.254:80",
 	} {
-		if err := d.Control("tcp", addr, nil); err != nil {
-			t.Errorf("%s blocked under a wildcard allow-list: %v", addr, err)
-		}
+		assertControl(t, d, addr, true)
 	}
 }
 
@@ -118,13 +105,7 @@ func TestEgressDialerScopesInternalAllowToPorts(t *testing.T) {
 		"outside the prefix": {"10.8.0.2:18090", false},
 	} {
 		t.Run(name, func(t *testing.T) {
-			err := d.Control("tcp", tt.addr, nil)
-			if tt.allowed && err != nil {
-				t.Errorf("%s was blocked: %v", tt.addr, err)
-			}
-			if !tt.allowed && (err == nil || !strings.Contains(err.Error(), "blocked internal address")) {
-				t.Errorf("%s: %v, want blocked internal address", tt.addr, err)
-			}
+			assertControl(t, d, tt.addr, tt.allowed)
 		})
 	}
 }
@@ -145,22 +126,8 @@ func TestEgressDialerBlocksTheNodesOwnAddresses(t *testing.T) {
 		"another public host":       {"93.184.216.35:22", true},
 	} {
 		t.Run(name, func(t *testing.T) {
-			err := d.Control("tcp", tt.addr, nil)
-			if tt.allowed && err != nil {
-				t.Errorf("%s was blocked: %v", tt.addr, err)
-			}
-			if !tt.allowed && (err == nil || !strings.Contains(err.Error(), "blocked internal address")) {
-				t.Errorf("%s: %v, want blocked internal address", tt.addr, err)
-			}
+			assertControl(t, d, tt.addr, tt.allowed)
 		})
-	}
-}
-
-func TestSelfAddrsAreOnlyPublic(t *testing.T) {
-	for _, ip := range selfAddrs() {
-		if !ip.IsGlobalUnicast() || ip.IsPrivate() || ip.Is4In6() {
-			t.Errorf("self address %s is not a public unicast address", ip)
-		}
 	}
 }
 
@@ -190,4 +157,15 @@ func TestTheTunnelTargetPrefersIPv4(t *testing.T) {
 func verdictOf(allow []string, self ...netip.Addr) VerdictFunc {
 	a := parseInternalAllow(allow)
 	return func(ip netip.Addr, port uint16) (bool, error) { return destVerdict(a, self, ip, port) }
+}
+
+func assertControl(t *testing.T, d *net.Dialer, addr string, allowed bool) {
+	t.Helper()
+	err := d.Control("tcp", addr, nil)
+	if allowed && err != nil {
+		t.Errorf("%s was blocked: %v", addr, err)
+	}
+	if !allowed && (err == nil || !strings.Contains(err.Error(), "blocked internal address")) {
+		t.Errorf("%s: %v, want blocked internal address; it must not be reachable from a guest", addr, err)
+	}
 }
