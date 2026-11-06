@@ -291,8 +291,8 @@ func (m *Manager) resyncEgress(ctx context.Context, live map[string]types.VMReco
 				quarantine = append(quarantine, sb)
 				continue
 			}
-			err := lockedErr
-			if err == nil && !locked[tap] {
+			var err error
+			if lockedErr != nil || !locked[tap] {
 				err = m.out.Relock(ctx, sb, tap)
 			}
 			if err != nil {
