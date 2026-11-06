@@ -178,8 +178,9 @@ presence; git keeps running as on any lane with a NIC. A golden built under
 another verdict is rebuilt, not adopted.
 
 Egress-lane sandboxes never archive and do not hibernate, fork, checkpoint, or
-promote: cocoon resumes a guest before its fresh tap can be re-locked, so any
-resume from a snapshot would open an unlocked-NIC window. Keeping the lane live
+promote: cocoon resumes a restored or cloned guest inside the call, before
+sandboxd can re-lock its tap, so any resume from a snapshot would open an
+unlocked-NIC window. Keeping the lane live
 holds the lock unbroken from claim to release; the idle sweep skips the lane and
 those four verbs are refused (409) on it.
 
