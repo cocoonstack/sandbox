@@ -32,6 +32,11 @@ type tunState struct {
 	addr    netip.Addr
 }
 
+type tunPlan struct {
+	prev, next tunState
+	assign     bool
+}
+
 // SetTun updates a claim's tun state without waking a hibernated or archived claim.
 func (m *Manager) SetTun(ctx context.Context, id string, enabled *bool, profile *string) error {
 	sb, ok := m.byID(id)
@@ -60,27 +65,27 @@ func (m *Manager) TunStats() (tunnet.Stats, bool) {
 
 func (m *Manager) setTun(ctx context.Context, sb *types.Sandbox, locked bool, enabled *bool, profile *string) error {
 	id := sb.ID
-	prev, next, assign, err := m.planTun(sb, locked, enabled, profile)
+	plan, err := m.planTun(sb, locked, enabled, profile)
 	if err != nil {
 		return err
 	}
-	if assign {
-		if next.addr, err = m.tunAddrs.Assign(ctx, id); err != nil {
+	if plan.assign {
+		if plan.next.addr, err = m.tunAddrs.Assign(ctx, id); err != nil {
 			return fmt.Errorf("set tun %s: %w", id, err)
 		}
 	}
-	if next == prev {
+	if plan.next == plan.prev {
 		if m.tunRowed(sb) {
 			return m.rewriteArchiveRow(ctx, sb, locked)
 		}
 		return nil
 	}
-	sock, rowed, err := m.commitTun(ctx, sb, locked, prev, next, assign)
+	sock, rowed, err := m.commitTun(ctx, sb, locked, plan)
 	if err != nil {
 		return err
 	}
 	switch {
-	case next.off:
+	case plan.next.off:
 		m.out.DisarmTun(ctx, id, sock)
 	case sock != "":
 		m.out.RearmTun(ctx, sb)
@@ -198,46 +203,45 @@ func (m *Manager) tunRowed(sb *types.Sandbox) bool {
 	return m.rowFollows(sb) || sb.ArchivePending != ""
 }
 
-func (m *Manager) planTun(sb *types.Sandbox, locked bool, enabled *bool, profile *string) (prev, next tunState, assign bool, err error) {
+func (m *Manager) planTun(sb *types.Sandbox, locked bool, enabled *bool, profile *string) (tunPlan, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	switch {
 	case m.claimed[sb.ID] != sb:
-		return prev, next, false, ErrUnknownSandbox
+		return tunPlan{}, ErrUnknownSandbox
 	case m.pausedForMoveLocked(sb):
-		return prev, next, false, ErrEvacuating
+		return tunPlan{}, ErrEvacuating
 	}
-	prev = tunState{off: sb.TunOff, profile: sb.TunProfile, addr: sb.TunAddr}
-	next = prev
+	prev := tunState{off: sb.TunOff, profile: sb.TunProfile, addr: sb.TunAddr}
+	next := prev
 	if enabled != nil {
 		next.off = !*enabled
 	}
 	if profile != nil {
 		next.profile = *profile
 	}
-	// only a disable runs beside a transition, which reads the rest of the tun state
+	// Only a disable runs beside a transition, which reads the rest of the tun state
 	if !locked && (!next.off || next.profile != prev.profile) {
-		return prev, next, false, ErrPaused
+		return tunPlan{}, ErrPaused
 	}
-	assign = !next.off && !prev.addr.IsValid() && m.tunAddrs != nil && m.view.Load().out.Tun(sb.PolicyKey())
-	return prev, next, assign, nil
+	assign := !next.off && !prev.addr.IsValid() && m.tunAddrs != nil && m.view.Load().out.Tun(sb.PolicyKey())
+	return tunPlan{prev: prev, next: next, assign: assign}, nil
 }
 
 // commitTun persists next on sb and returns the running guest's socket, empty when it is not running or a capture holds it.
-func (m *Manager) commitTun(
-	ctx context.Context, sb *types.Sandbox, locked bool, prev, next tunState, assign bool,
-) (sock string, rowed bool, err error) {
+func (m *Manager) commitTun(ctx context.Context, sb *types.Sandbox, locked bool, plan tunPlan) (sock string, rowed bool, err error) {
+	prev, next := plan.prev, plan.next
 	m.mu.Lock()
 	if m.claimed[sb.ID] != sb {
 		m.mu.Unlock()
-		if assign {
+		if plan.assign {
 			m.releaseTun(ctx, sb.ID, next.addr)
 		}
 		return "", false, ErrUnknownSandbox
 	}
 	if (tunState{off: sb.TunOff, profile: sb.TunProfile, addr: sb.TunAddr}) != prev {
 		m.mu.Unlock()
-		if assign {
+		if plan.assign {
 			m.releaseTun(ctx, sb.ID, next.addr)
 		}
 		return "", false, errTunRaced
@@ -261,7 +265,7 @@ func (m *Manager) commitTun(
 	}
 	m.mu.Unlock()
 	m.store.recommit(ctx, rb)
-	if undone && assign {
+	if undone && plan.assign {
 		m.releaseTun(ctx, sb.ID, next.addr)
 	}
 	return "", false, fmt.Errorf("set tun %s: persist claims: %w", sb.ID, err)

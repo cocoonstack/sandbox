@@ -343,7 +343,6 @@ func coldBootBlocker(sb *types.Sandbox, found, volumes bool) string {
 	case !found:
 		return "vm record gone"
 	case sb.Key.Net == types.NetEgress:
-		// The netdev nft chain dies with the tap, so the guest would boot with an unlocked NIC
 		return "vmm exited; an egress-lane sandbox cannot cold-boot"
 	case volumes:
 		return "vmm exited; volume mounts do not survive a cold boot"
