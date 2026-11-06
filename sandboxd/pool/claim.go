@@ -609,13 +609,7 @@ func (m *Manager) finalizeBatch(ctx context.Context, sbs []*types.Sandbox, ttl t
 		m.rollbackClaim(ctx, sbs)
 		return fmt.Errorf("persist claim: %w", saveErr)
 	}
-	for _, sb := range sbs {
-		if armErr := m.out.Arm(ctx, sb); armErr != nil {
-			m.rollbackClaim(ctx, sbs)
-			return fmt.Errorf("arm egress %s: %w", sb.ID, armErr)
-		}
-	}
-	// Usage lands only after the batch armed, so a rollback leaves no unterminated claim event
+	// The claim event follows the commit at once, so a crash cannot restore a claim nothing billed
 	for _, sb := range sbs {
 		m.recordUsage(ctx, usage.Event{
 			Event: "claim",
@@ -624,6 +618,15 @@ func (m *Manager) finalizeBatch(ctx context.Context, sbs []*types.Sandbox, ttl t
 			Tenant: sb.Tenant, Deadline: sb.ClaimedAt.Add(lease),
 			Volumes: types.VolumeNames(sb.Volumes), VolumesRW: types.VolumeRWNames(sb.Volumes),
 		})
+	}
+	for _, sb := range sbs {
+		if armErr := m.out.Arm(ctx, sb); armErr != nil {
+			m.rollbackClaim(ctx, sbs)
+			for _, sb := range sbs {
+				m.recordUsage(ctx, usage.Event{Event: "release", ID: sb.ID, VMName: sb.VMName, Tenant: sb.Tenant})
+			}
+			return fmt.Errorf("arm egress %s: %w", sb.ID, armErr)
+		}
 	}
 	return nil
 }
