@@ -21,7 +21,7 @@ from .sandbox import Sandbox
 from .template import _claim_body, _template_query
 from .volumes import Volume
 
-T = TypeVar("T")
+_T = TypeVar("_T")
 
 _PEERS_TIMEOUT = 5.0
 _IDLE_CONNS = 8
@@ -297,8 +297,8 @@ def _retry_miss(exc: APIError) -> bool:
 
 
 def _try_each(
-    candidates: Iterable[str], call: Callable[[str], T], retry: Callable[[APIError], bool] = _retry_miss
-) -> T:
+    candidates: Iterable[str], call: Callable[[str], _T], retry: Callable[[APIError], bool] = _retry_miss
+) -> _T:
     last_error = None
     for addr in candidates:
         try:
@@ -311,7 +311,7 @@ def _try_each(
 
 
 def _retry_transient(exc: APIError) -> bool:
-    return exc.status in (0, 401, 404, 429, 503, 500)
+    return exc.status in (0, 401, 404, 429, 500, 503)
 
 
 def _claim_refused(exc: APIError) -> bool:
@@ -341,8 +341,8 @@ def _redirect_fallback(
             raise APIError(verb, origin_exc.status, combined) from origin_exc
 
 
-def _scatter(addrs: Sequence[str], probe: Callable[[str], T]) -> T:
-    results: queue.Queue[tuple[T | None, Exception | None]] = queue.Queue(maxsize=len(addrs))
+def _scatter(addrs: Sequence[str], probe: Callable[[str], _T]) -> _T:
+    results: queue.Queue[tuple[_T | None, Exception | None]] = queue.Queue(maxsize=len(addrs))
 
     def run(addr: str) -> None:
         try:
@@ -356,6 +356,6 @@ def _scatter(addrs: Sequence[str], probe: Callable[[str], T]) -> T:
     for _ in addrs:
         value, error = results.get()
         if error is None:
-            return cast(T, value)
+            return cast(_T, value)
         last_error = error
     raise cast(Exception, last_error)

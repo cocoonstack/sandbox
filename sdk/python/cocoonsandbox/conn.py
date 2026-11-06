@@ -15,7 +15,7 @@ from typing import Any, BinaryIO, Protocol, TypeVar, cast
 from .errors import APIError, ProtocolError, SandboxError, SandboxTimeout, SilkdError, _error_message, _mark_gone
 from .frames import MAX_FRAME, decode_response, encode_request
 
-KEEP_ALIVE_CONNS = 8
+_KEEP_ALIVE_CONNS = 8
 _FD_SETSIZE = 1024
 _READ_BUFFER = 64 * 1024
 _TCP_KEEPALIVE = {"TCP_KEEPIDLE": 15, "TCP_KEEPALIVE": 15, "TCP_KEEPINTVL": 15, "TCP_KEEPCNT": 9}
@@ -146,7 +146,7 @@ class ConnPool:
 
     def park(self, conn: Conn) -> None:
         with self._lock:
-            if self._idle > 0 and len(self._parked) < KEEP_ALIVE_CONNS:
+            if self._idle > 0 and len(self._parked) < _KEEP_ALIVE_CONNS:
                 self._parked.append((time.monotonic() + self._idle, conn))
                 if self._sweep is None:
                     self._arm(self._idle)
