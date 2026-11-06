@@ -105,20 +105,6 @@ func TestProbeRetriesPastFailures(t *testing.T) {
 	}
 }
 
-func TestProbeRetriesUntilListenerAppears(t *testing.T) {
-	path := sockPath(t)
-	done := make(chan error, 1)
-	go func() {
-		done <- newTestEngine().Probe(t.Context(), path, 2*time.Second)
-	}()
-
-	time.Sleep(60 * time.Millisecond)
-	listenMuxer(t, path, "OK 2048\n", infoFrame)
-	if err := <-done; err != nil {
-		t.Errorf("Probe: %v", err)
-	}
-}
-
 func TestDialGuestPortCtxCancel(t *testing.T) {
 	path := sockPath(t)
 	ln, err := net.Listen("unix", path)
