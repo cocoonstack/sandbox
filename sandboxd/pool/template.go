@@ -66,7 +66,6 @@ func (m *Manager) Promote(ctx context.Context, id string, cred Cred, template, t
 	if err := m.checkTemplateOwner(ctx, store.TemplateID(key.Hash()), tenant); err != nil {
 		return types.PoolKey{}, "", err
 	}
-	// A started promote must finish uncanceled
 	ctx = context.WithoutCancel(ctx)
 	staging, err := m.tpls.Stage(store.TemplateID(key.Hash()))
 	if err != nil {
