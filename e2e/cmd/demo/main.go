@@ -53,11 +53,14 @@ func run(addr, token, template, netShape, size string, n, ttl int, leak bool) er
 		}
 		claimed := time.Now()
 		out, err := sb.Exec(ctx, "echo", "42")
-		if err != nil {
-			return fmt.Errorf("exec in %s: %w", sb.ID, err)
+		if err == nil && out != "42\n" {
+			err = fmt.Errorf("got %q, want 42", out)
 		}
-		if out != "42\n" {
-			return fmt.Errorf("exec in %s: got %q, want 42", sb.ID, out)
+		if err != nil {
+			if !leak {
+				_ = sb.Close()
+			}
+			return fmt.Errorf("exec in %s: %w", sb.ID, err)
 		}
 		execDone := time.Now()
 		fmt.Printf("iter=%d id=%s claim=%.1fms exec=%.1fms\n",

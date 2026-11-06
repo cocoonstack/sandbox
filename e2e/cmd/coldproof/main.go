@@ -44,11 +44,13 @@ func run(addr, token, template string, n int) error {
 		claim := time.Since(start)
 		uptime, err := sb.Exec(ctx, "cat", "/proc/uptime")
 		if err != nil {
+			_ = sb.Close()
 			return fmt.Errorf("exec uptime: %w", err)
 		}
 		exec1 := time.Since(start)
 		kernel, err := sb.Exec(ctx, "uname", "-r")
 		if err != nil {
+			_ = sb.Close()
 			return fmt.Errorf("exec uname: %w", err)
 		}
 		fmt.Printf("iter=%d claim=%.1fms first_exec_done=%.1fms guest_uptime=%ss guest_kernel=%s\n",

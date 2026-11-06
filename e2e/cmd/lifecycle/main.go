@@ -40,6 +40,7 @@ func run(addr, token, template, netShape string, wait time.Duration) error {
 	if err != nil {
 		return err
 	}
+	defer func() { _ = sb.Close() }()
 	id := sb.ID
 	marker := fmt.Appendf(nil, "archive-marker-%d", time.Now().UnixNano())
 	if err = sb.WriteFile(ctx, markerPath, marker, nil); err != nil {
@@ -47,7 +48,7 @@ func run(addr, token, template, netShape string, wait time.Duration) error {
 	}
 	fmt.Printf("claimed id=%s, marker written\n", id)
 
-	elapsed, err := waitArchived(ctx, client, 1, wait)
+	elapsed, err := waitArchived(ctx, client, wait)
 	if err != nil {
 		return err
 	}
@@ -81,8 +82,8 @@ func run(addr, token, template, netShape string, wait time.Duration) error {
 	return nil
 }
 
-// waitArchived returns how long the reaper's idle→hibernate→archive ladder took to archive n claims.
-func waitArchived(ctx context.Context, client *sandbox.Client, n int, timeout time.Duration) (time.Duration, error) {
+// waitArchived returns how long the reaper's idle→hibernate→archive ladder took to archive the claim.
+func waitArchived(ctx context.Context, client *sandbox.Client, timeout time.Duration) (time.Duration, error) {
 	start := time.Now()
 	deadline := start.Add(timeout)
 	for {
@@ -90,12 +91,12 @@ func waitArchived(ctx context.Context, client *sandbox.Client, n int, timeout ti
 		if err != nil {
 			return 0, err
 		}
-		if info.Archived == n {
+		if info.Archived == 1 {
 			return time.Since(start), nil
 		}
 		if time.Now().After(deadline) {
-			return 0, fmt.Errorf("archived never reached %d within %s (hibernated=%d archived=%d claimed=%d)",
-				n, timeout, info.Hibernated, info.Archived, info.Claimed)
+			return 0, fmt.Errorf("archived never reached 1 within %s (hibernated=%d archived=%d claimed=%d)",
+				timeout, info.Hibernated, info.Archived, info.Claimed)
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
