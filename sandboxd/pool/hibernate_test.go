@@ -1,6 +1,7 @@
 package pool
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -118,6 +119,20 @@ func TestAReleaseRacingAWakeBillsTheWakeFirst(t *testing.T) {
 	}
 	if got := usageEventsOf(t, m, sb.ID); got != "claim,hibernate,wake,release" {
 		t.Errorf("usage = %q, want the release to end the span the wake opened", got)
+	}
+}
+
+func TestAWakeWhoseCallerLeftWhileQueuedLeavesTheClaimAsleep(t *testing.T) {
+	m := newTestManager(t, newFakeEngine())
+	sb := mustClaim(t, m, testKey)
+	hibernateClaim(t, m, sb)
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if _, err := m.wakeResolved(ctx, sb); !errors.Is(err, context.Canceled) {
+		t.Fatalf("wake: %v, want context.Canceled", err)
+	}
+	if got := usageEventsOf(t, m, sb.ID); got != "claim,hibernate" {
+		t.Errorf("events %q, want no wake for a caller that left", got)
 	}
 }
 
