@@ -134,6 +134,7 @@ type Manager interface {
 	HasPromotedTemplate(ctx context.Context, key types.PoolKey, tenant string) bool
 	AgentSocket(id, token string) (string, error)
 	AdoptArchived(ctx context.Context, id, token string) (bool, error)
+	AdoptForWake(ctx context.Context, id, token string) (bool, error)
 	DialPort(ctx context.Context, id string, cred pool.Cred, port uint16) (net.Conn, error)
 	WakeAgentSocket(ctx context.Context, id, token string) (string, <-chan struct{}, func(), error)
 	WakeAgentSocketOrRead(ctx context.Context, id, token string) (string, <-chan struct{}, func(), error)
@@ -798,7 +799,11 @@ func (s *Server) handleOwner(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		adopted, adoptErr := s.mgr.AdoptArchived(r.Context(), id, token)
+		adopt := s.mgr.AdoptArchived
+		if r.URL.Query().Get("room") != "" {
+			adopt = s.mgr.AdoptForWake
+		}
+		adopted, adoptErr := adopt(r.Context(), id, token)
 		switch {
 		case adoptErr != nil:
 			writeResult(w, r, "adopt", id, "adopt archived sandbox failed", adoptErr, nil)

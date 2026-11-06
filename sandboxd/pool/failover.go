@@ -22,25 +22,39 @@ import (
 
 // AdoptArchived takes over a claim whose owner's lease expired and reports whether this node owns it now.
 func (m *Manager) AdoptArchived(ctx context.Context, id, token string) (bool, error) {
+	return m.adopt(ctx, id, token, false)
+}
+
+// AdoptForWake adopts as AdoptArchived does, but only while this node could admit the claim's wake.
+func (m *Manager) AdoptForWake(ctx context.Context, id, token string) (bool, error) {
+	return m.adopt(ctx, id, token, true)
+}
+
+func (m *Manager) adopt(ctx context.Context, id, token string, room bool) (bool, error) {
 	if m.archives == nil {
 		return false, nil
 	}
-	adopted, err, _ := m.adoptFlights.Do(id+"\x00"+token, func() (any, error) { return m.adoptArchived(ctx, id, token) })
+	adopted, err, _ := m.adoptFlights.Do(id+"\x00"+token, func() (any, error) { return m.adoptArchived(ctx, id, token, room) })
 	return adopted.(bool), err
 }
 
-func (m *Manager) adoptArchived(ctx context.Context, id, token string) (bool, error) {
+func (m *Manager) adoptArchived(ctx context.Context, id, token string, room bool) (bool, error) {
 	m.mu.Lock()
 	draining, cordoned := m.draining, m.cordoned
 	_, held := m.authed(id, token)
 	fenced := m.adoptFenced()
+	full := false
+	if room {
+		_, roomErr := m.wakeRoomErrLocked()
+		full = roomErr != nil
+	}
 	m.mu.Unlock()
 	switch {
 	case draining:
 		return false, nil
 	case held:
 		return true, nil
-	case fenced, cordoned:
+	case fenced, cordoned, full:
 		return false, nil
 	}
 	ctx = context.WithoutCancel(ctx)

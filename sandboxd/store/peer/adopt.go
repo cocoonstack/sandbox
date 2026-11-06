@@ -13,11 +13,15 @@ type Adopter struct {
 	Peers func() []string
 }
 
-// Adopt tries the peers until one holds the claim and reports whether one does.
-func (a *Adopter) Adopt(ctx context.Context, id, token string) bool {
+// Adopt tries the peers until one holds the claim and reports whether one does; with room, only a peer that could wake it adopts.
+func (a *Adopter) Adopt(ctx context.Context, id, token string, room bool) bool {
 	logger := log.WithFunc("peer.Adopter.Adopt")
+	path := "/v1/sandboxes/" + url.PathEscape(id) + "/owner"
+	if room {
+		path += "?room=1"
+	}
 	for _, addr := range a.Peers() {
-		err := peerCall(ctx, http.MethodGet, URL(addr, "/v1/sandboxes/"+url.PathEscape(id)+"/owner"), token, nil, peerCallTimeout, http.StatusOK)
+		err := peerCall(ctx, http.MethodGet, URL(addr, path), token, nil, peerCallTimeout, http.StatusOK)
 		if err == nil {
 			return true
 		}

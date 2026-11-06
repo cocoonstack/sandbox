@@ -524,9 +524,11 @@ sandbox instead uses `archive_delete_after_seconds` as its retention deadline
 while stored, and waking it starts a fresh lease of the length the claim was granted (the server default when it asked for none). A
 [failed](deploy.md#dead-vmms-and-host-restarts) sandbox is cold-booted from
 its own disk (memory is lost) and its restart budget resets. 204 on
-success, 404 unknown id or wrong token, 409 a failed egress-lane or volume
-sandbox, or one whose VM record is gone, 500 when the cold boot or a restore
-fails, and the [guest errors](#guest-errors).
+success, 404 unknown id or wrong token, or an archived sandbox the node had no
+room for that it [handed to a peer](cluster.md#waking-an-archived-claim-on-a-full-node)
+(look it up again), 409 a failed egress-lane or volume sandbox, or one whose VM
+record is gone, 429 when `max_running` or `disk_reserve` refuses the wake, 500
+when the cold boot or a restore fails, and the [guest errors](#guest-errors).
 
 ## POST /v1/sandboxes/{id}/renew
 
@@ -1169,8 +1171,11 @@ by tier (warm/clone/cold),
 wake/hibernate/fork/checkpoint/promote/release/reap counters plus
 archive/unarchive/archive-delete counters, `sandboxd_dns_malformed_total` (guest DNS queries dropped as malformed), claim/wake `*_seconds_total`
 for average latency, `sandboxd_claim_duration_seconds{tier}`, a histogram of pool
-claims by tier, and `sandboxd_claim_redirects_total`, claims this node handed to a
-peer. On a node with a `tun` block it adds the packet path's counters:
+claims by tier, `sandboxd_claim_redirects_total`, claims this node handed to a
+peer, `sandboxd_wakes_refused_total{reason}`, wakes `max_running` (`max_running`) or
+`disk_reserve` (`disk`) refused with 429, and `sandboxd_wake_handoffs_total`,
+archived claims this node [handed to a peer with room](cluster.md#waking-an-archived-claim-on-a-full-node)
+instead. On a node with a `tun` block it adds the packet path's counters:
 `sandboxd_tun_frames_total{dir}` (frames on the claims' vsock streams, `out`
 from the guest and `in` to it), `sandboxd_tun_datagrams_total{dir}` (VXLAN
 datagrams), `sandboxd_tun_arp_total{kind}` (`answered` replies to exits,
@@ -1385,7 +1390,7 @@ this node owns the sandbox, 404 otherwise. With
 [`archive_failover`](cluster.md#archived-claims-across-node-loss), a node that
 does not hold the sandbox adopts it when its row names an owner whose node
 lease expired, or whose owner released it in an
-[evacuation](#post-v1drain), and answers 200; 503 with `Retry-After` when the meta store is
+[evacuation](#post-v1drain) or a [wake it had no room for](cluster.md#waking-an-archived-claim-on-a-full-node), and answers 200; with `?room=1`, which the owner of such a wake sends, it adopts only while it could admit the wake itself; 503 with `Retry-After` when the meta store is
 down. A row whose owner's lease is live is never adopted unless the owner released it: 404. A draining, cordoned or fenced
 node, or one that lifted its fence less than 8 seconds ago, does not adopt: 404. A node whose
 lease is overdue answers 404 for the replicated claims it holds, so the

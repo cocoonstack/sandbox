@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/projecteru2/core/log"
@@ -489,20 +490,32 @@ func (m *Manager) runningErr(extra int) error {
 
 // beginWake admits a wake and counts it as running until endWake; the caller holds sb.Transition.
 func (m *Manager) beginWake(sb *types.Sandbox) error {
-	if err := m.diskErr(); err != nil {
-		return err
-	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if sb.Failed == "" && m.evacuatingLocked(sb.ID) {
+	switch {
+	case m.claimed[sb.ID] != sb:
+		return ErrUnknownSandbox
+	case sb.Failed == "" && m.evacuatingLocked(sb.ID):
 		return ErrEvacuating
 	}
-	if err := m.runningErr(1); err != nil {
+	if refused, err := m.wakeRoomErrLocked(); err != nil {
+		refused.Add(1)
 		return err
 	}
 	sb.Waking = true
 	m.store.recount(sb)
 	return nil
+}
+
+// wakeRoomErrLocked refuses a wake this node has no room for and names the counter of the limit that refused it; callers hold m.mu.
+func (m *Manager) wakeRoomErrLocked() (*atomic.Uint64, error) {
+	if err := m.diskErr(); err != nil {
+		return &m.counters.wakesRefusedDisk, err
+	}
+	if err := m.runningErr(1); err != nil {
+		return &m.counters.wakesRefusedRunning, err
+	}
+	return nil, nil
 }
 
 func (m *Manager) endWake(sb *types.Sandbox) {

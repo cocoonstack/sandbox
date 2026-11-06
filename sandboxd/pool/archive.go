@@ -13,6 +13,9 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/usage"
 )
 
+// handOffQuiet spaces a node's capacity hand-offs after one failed, so retried wakes do not churn the registry.
+const handOffQuiet = 30 * time.Second
+
 // archiveAfterFor resolves a key's threshold (pool's, else node default); callers hold m.mu.
 func (m *Manager) archiveAfterFor(key types.PoolKey) time.Duration {
 	if p, ok := m.activePool(key); ok {
@@ -201,6 +204,9 @@ func (m *Manager) wakeArchived(ctx context.Context, sb *types.Sandbox) (string, 
 		return "", err
 	}
 	if err := m.beginWake(sb); err != nil {
+		if errors.Is(err, ErrQuota) && m.handOffForRoom(ctx, sb) {
+			return "", fmt.Errorf("wake %s: %w", sb.ID, ErrUnknownSandbox)
+		}
 		return "", fmt.Errorf("wake %s: %w", sb.ID, err)
 	}
 	defer m.endWake(sb)
@@ -254,6 +260,31 @@ func (m *Manager) wakeArchived(ctx context.Context, sb *types.Sandbox) (string, 
 		return "", ErrUnknownSandbox
 	}
 	return built.VsockSocket, nil
+}
+
+// handOffForRoom runs one capacity hand-off at a time and reports whether a peer adopted the claim; the caller holds Transition.
+func (m *Manager) handOffForRoom(ctx context.Context, sb *types.Sandbox) bool {
+	if m.archives == nil || !m.handOffBusy.CompareAndSwap(false, true) {
+		return false
+	}
+	defer m.handOffBusy.Store(false)
+	if time.Now().UnixNano() < m.handOffQuietUntil.Load() {
+		return false
+	}
+	logger := log.WithFunc("pool.handOffForRoom")
+	err := m.handOff(ctx, sb, true)
+	switch {
+	case err == nil:
+		m.counters.wakeHandoffs.Add(1)
+		logger.Infof(ctx, "handed archived %s to a peer with room to wake it", sb.ID)
+		return true
+	case errors.Is(err, errNoArchiveRow):
+		return false
+	case !errors.Is(err, errNoAdopter):
+		logger.Warnf(ctx, "hand %s to a peer with room: %v", sb.ID, err)
+	}
+	m.handOffQuietUntil.Store(time.Now().Add(handOffQuiet).UnixNano())
+	return false
 }
 
 func (m *Manager) commitWake(ctx context.Context, sb *types.Sandbox, vmName, sock string) error {

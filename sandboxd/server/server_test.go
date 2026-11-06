@@ -2422,6 +2422,10 @@ func (f *fakeManager) AdoptArchived(_ context.Context, id, token string) (bool, 
 	return f.adopt(id, token)
 }
 
+func (f *fakeManager) AdoptForWake(ctx context.Context, id, token string) (bool, error) {
+	return f.AdoptArchived(ctx, id, token)
+}
+
 func (f *fakeManager) WakeAgentSocket(_ context.Context, id, token string) (string, <-chan struct{}, func(), error) {
 	if f.reader != nil {
 		f.reader.wake()
