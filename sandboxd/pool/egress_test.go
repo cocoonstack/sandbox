@@ -17,7 +17,6 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/outbound"
 	"github.com/cocoonstack/sandbox/sandboxd/outbound/outboundtest"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
-	"github.com/cocoonstack/sandbox/sandboxd/usage"
 )
 
 func TestLaneVerdictReachesGuestOnColdBoots(t *testing.T) {
@@ -220,7 +219,7 @@ func TestLockUsesProvisionedTapWithoutList(t *testing.T) {
 	}
 }
 
-func TestBatchArmFailureRecordsNoUsage(t *testing.T) {
+func TestBatchArmFailureEndsEveryClaimEvent(t *testing.T) {
 	eng := newFakeEngine()
 	m := egressManager(t, eng, config.PoolSpec{PoolKey: egKey, Egress: egPolicy})
 
@@ -238,12 +237,10 @@ func TestBatchArmFailureRecordsNoUsage(t *testing.T) {
 	if claimed != 0 {
 		t.Errorf("rollback left %d claims", claimed)
 	}
-	raw, err := os.ReadFile(filepath.Join(m.dataDir, usage.JournalFile))
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("read usage journal: %v", err)
-	}
-	if strings.Contains(string(raw), `"ev":"claim"`) {
-		t.Errorf("rolled-back batch left claim usage events:\n%s", raw)
+	for _, sb := range sbs {
+		if got := usageEventsOf(t, m, sb.ID); got != "claim,release" {
+			t.Errorf("%s usage = %q, want a claim the rollback ends", sb.VMName, got)
+		}
 	}
 	if !eng.removed("sbx-ok") || !eng.removed("sbx-eg") {
 		t.Error("rollback must destroy every batch VM")
