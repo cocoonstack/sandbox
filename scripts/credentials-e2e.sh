@@ -5,7 +5,7 @@
 # survives a sandboxd restart; a pool whose only rule is intercept "inject"
 # intercepts only the claims that hold a credential for a host and fills query
 # and body placeholders. Runs a dedicated sandboxd on $ADDR.
-# Needs outbound to $ECHO and a $TEMPLATE whose silkd binds the egress relay.
+# Needs outbound to $ECHO and a $TEMPLATE whose silkd binds the egress relay; cleanup removes every sbx-* VM on the cocoon root.
 set -euo pipefail
 
 TEMPLATE=${TEMPLATE:-rt:24.04}

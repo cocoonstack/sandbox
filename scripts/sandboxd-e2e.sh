@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Bare-metal e2e for sandboxd v0: warm pool, claim tiers, reap, reconcile.
-# Run on a node with cocoon and a silkd-baked template image (see os-image/).
+# Needs a silkd-baked template (os-image/) and a cocoon root no other sandboxd serves; cleanup removes every sbx-* VM.
 set -euo pipefail
 
 TEMPLATE=${TEMPLATE:-rt:24.04}

@@ -2,7 +2,7 @@
 # Bare-metal proof for sandboxd's guest-port relay, the path an edge proxy takes
 # into a sandbox with no NIC: GET /v1/sandboxes/{id}/ports/{port}.
 # Run as root on a node with cocoon; K names a kit holding bin/sandboxd,
-# bin/portsmoke, bin/guestserver, bin/jq and a cocoon on PATH.
+# bin/portsmoke, bin/guestserver, bin/jq and a cocoon on PATH; cleanup removes every sbx-* VM on the cocoon root.
 set -uo pipefail
 K=${K:?kit dir}
 ADDR=${ADDR:-127.0.0.1:7990}

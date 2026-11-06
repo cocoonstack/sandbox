@@ -4,7 +4,7 @@
 # through the proxy where the leaf — signed by this node's intermediate, chaining
 # to the cluster root — is trusted and the credential is injected into the HTTPS
 # request; direct egress is blocked. Runs a dedicated sandboxd on port 7779.
-# Needs outbound to $ECHO and a $TEMPLATE whose silkd binds the egress relay.
+# Needs outbound to $ECHO and a $TEMPLATE whose silkd binds the egress relay; cleanup removes every sbx-* VM on the cocoon root.
 set -euo pipefail
 
 TEMPLATE=${TEMPLATE:-rt:24.04}
