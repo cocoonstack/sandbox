@@ -145,8 +145,8 @@ another node with a lookup, also when that node is gone; releasing one already
 gone is not an error — double-release and reap races stay silent). Every other
 call follows a move too: a 404 or a refused connection from the owner runs
 `client.lookup` once, and the call is sent again to a different owner, since
-every argument (stdin, file data, tar streams) is bytes; only `find_iter`
-fails once before the next call reaches the new owner. An exception from the
+every argument (stdin, file data, tar streams) is bytes. `find_iter` also retries
+once before its first frame; it never replays matches already yielded. An exception from the
 caller's own `on_stdout`/`on_stderr` is raised as it is and never retried, and
 a released sandbox still raises a 404 `APIError`.
 Volume sandboxes cannot hibernate, fork, checkpoint, or promote. Egress-lane
