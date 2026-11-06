@@ -115,7 +115,7 @@ impl Table {
     pub fn remove(&self, id: &str) -> bool {
         let removed = sysutil::lock(&self.inner).remove(id);
         if let Some(s) = &removed {
-            sysutil::kill_group(s.pid);
+            sysutil::signal_group(s.pid, libc::SIGKILL);
         }
         removed.is_some()
     }
@@ -124,7 +124,7 @@ impl Table {
         let mut map = sysutil::lock(&self.inner);
         if map.get(id).is_some_and(|cur| Arc::ptr_eq(cur, sess)) {
             map.remove(id);
-            sysutil::kill_group(sess.pid);
+            sysutil::signal_group(sess.pid, libc::SIGKILL);
         }
     }
 
@@ -135,7 +135,7 @@ impl Table {
         map.retain(|_, s| {
             let idle = s.io.try_lock().is_ok() && sysutil::lock(&s.last_active).elapsed() > ttl;
             if idle {
-                sysutil::kill_group(s.pid);
+                sysutil::signal_group(s.pid, libc::SIGKILL);
             }
             !idle
         });

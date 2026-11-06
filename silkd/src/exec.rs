@@ -48,6 +48,7 @@ where
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
+        .process_group(0)
         .kill_on_drop(!req.detach);
     if let Some(cwd) = &req.cwd {
         cmd.current_dir(cwd);
@@ -121,6 +122,9 @@ where
 
     if let Err(e) = stream_to_client(&mut fg_rx, out).await {
         // client gone: publish the terminal state the abort pre-empts, else an attacher waits forever.
+        if proc.exit_code().is_none() {
+            sysutil::signal_group(pid, libc::SIGKILL);
+        }
         supervise.abort();
         pump_abort.abort();
         stdin_task.abort();

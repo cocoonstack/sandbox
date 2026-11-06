@@ -33,7 +33,7 @@ fields are ignored (the forward-compatibility story).
 Sessions and detached processes are server-side state addressed by id — a
 dropped connection loses nothing (`attach` resumes). A foreground `exec` is
 bound to its connection, but silkd learns of a drop only when a write to the
-client fails: a child that is producing output is killed and its pid freed, a
+client fails: a child that is producing output is killed with its process group and its pid freed, a
 silent one runs to completion — which is why the SDKs' `Run`/`run` answer a
 canceled ctx or a timeout with a `kill` of the pid `started` reported. The other
 connection-bound verbs are `fs_watch`, `pty_open`, `lsp_request`, and
@@ -48,7 +48,7 @@ suites — a frame only one side can parse fails CI.
 | group | ops | response flow |
 |---|---|---|
 | exec | `exec {argv, cwd?, env?, user?, detach?, session?}` | `started{pid}` → `stdout/stderr{data}`… → `exit{code}`; the client may stream `stdin{data}` / `stdin_close`. `detach` returns after `started`; the process keeps a bounded output ring for later `logs`/`attach` and leaves the table 5 minutes after it exits, after which its pid answers `not_found`; not combinable with `session`. With `session` only `argv` is used — `cwd`, `env`, `user` and `stdin` frames are ignored (the session owns them, and its commands read `/dev/null`) — no `started` is sent, and stderr arrives merged into `stdout`. A child's environment is cleared to `PATH`, `TERM` and the lane's proxy variables, then the [claim env](#claim-env), then `env`; `HOME` and `USER` are set only with `user` |
-| procs | `ps` / `kill {pid, signal?}` / `attach {pid}` / `logs {pid}` | `ps` answers one `procs{procs}` frame, `kill` a bare `done`; `logs` replays `stdout/stderr{data}`…, adds `exit{code}` once the process has exited, and closes with `done`; `attach` replays and follows `stdout/stderr{data}`… to `exit{code}`. Handles are guest pids; any connection can list, signal, replay, or re-attach live |
+| procs | `ps` / `kill {pid, signal?}` / `attach {pid}` / `logs {pid}` | `ps` answers one `procs{procs}` frame, `kill` signals the process group the pid leads (every exec and pty runs in its own) and answers a bare `done`; `logs` replays `stdout/stderr{data}`…, adds `exit{code}` once the process has exited, and closes with `done`; `attach` replays and follows `stdout/stderr{data}`… to `exit{code}`. Handles are guest pids; any connection can list, signal, replay, or re-attach live |
 | sessions | `session_create {id?, cwd?, env?}` / `session_list` / `session_rm {id}` | `session_created{id}` / `sessions{sessions}` / `done`. A session is a real persistent bash; `exec` with `session` runs inside it. Idle sessions are reaped after 30 minutes |
 | fs | `fs_write {path, mode?}` (+`data`/`data_end` frames) / `fs_read` / `fs_list` / `fs_stat` / `fs_mkdir {parents?}` / `fs_rm {recursive?}` / `fs_rename {from, to}` | `fs_read` streams `data{data}`… → `done` for a regular file and answers `bad_request` for a directory, device or FIFO, `fs_list` streams 4096-entry `entries{entries}` batches → `done`, `fs_stat` answers one `stat{info}`, and the mutating verbs terminate with `done`. Streaming runs both directions; write commits atomically via temp+rename and inherits an overwritten file's mode and, under root, its owner |
 | tree | `fs_push {dest}` (+tar as `data` frames) / `fs_pull {path}` | whole trees as tar streams through the guest tar: `fs_pull` streams `data{data}`… → `done`, `fs_push` terminates with `done` |

@@ -261,7 +261,7 @@ impl State {
         };
         // an exited pid may already be recycled, so signalling it would hit an unrelated process.
         if proc.exit_code().is_none() {
-            crate::sysutil::signal_pid(proc.pid, signal.unwrap_or(libc::SIGKILL));
+            crate::sysutil::signal_group(proc.pid, signal.unwrap_or(libc::SIGKILL));
         }
         proto::write_frame(w, &Response::Done).await
     }
