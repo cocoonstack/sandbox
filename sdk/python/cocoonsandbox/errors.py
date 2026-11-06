@@ -49,7 +49,8 @@ class ExitError(SandboxError):
     """A command exited non-zero; carries the code, stderr, and the stdout produced before it failed."""
 
     def __init__(self, code: int, stderr: str, stdout: str = "") -> None:
-        super().__init__(f"exit status {code}: {stderr.strip()}")
+        detail = stderr.strip()
+        super().__init__(f"exit status {code}: {detail}" if detail else f"exit status {code}")
         self.code = code
         self.stderr = stderr
         self.stdout = stdout
