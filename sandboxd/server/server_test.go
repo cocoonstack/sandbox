@@ -495,15 +495,17 @@ func TestSandboxesNarrowToAClaimRef(t *testing.T) {
 		{"/v1/sandboxes?claim_ref=team-a%2Fdemo", "team-a/demo"},
 		{"/v1/sandboxes", ""},
 	} {
-		got := "unset"
-		mgr := &fakeManager{sandboxIndex: func(_, claimRef string) []pool.SandboxSummary {
-			got = claimRef
-			return nil
-		}}
-		ts := newTenantTestServer(t, "root", nil, mgr, nil)
-		if code := statusOf(t, http.MethodGet, ts.URL+tt.path, "root", ""); code != http.StatusOK || got != tt.want {
-			t.Errorf("%s: status %d, manager saw claim_ref %q, want %q", tt.path, code, got, tt.want)
-		}
+		t.Run(tt.path, func(t *testing.T) {
+			got := "unset"
+			mgr := &fakeManager{sandboxIndex: func(_, claimRef string) []pool.SandboxSummary {
+				got = claimRef
+				return nil
+			}}
+			ts := newTenantTestServer(t, "root", nil, mgr, nil)
+			if code := statusOf(t, http.MethodGet, ts.URL+tt.path, "root", ""); code != http.StatusOK || got != tt.want {
+				t.Errorf("%s: status %d, manager saw claim_ref %q, want %q", tt.path, code, got, tt.want)
+			}
+		})
 	}
 }
 
@@ -689,9 +691,11 @@ func TestInstanceMetadataVerb(t *testing.T) {
 		{"over 4 KiB", "sekret", "sb_1", `{"a":"` + strings.Repeat("x", 4<<10) + `"}`, http.StatusBadRequest},
 		{"unknown sandbox", "sekret", "sb_2", valid, http.StatusNotFound},
 	} {
-		if code := put(tt.token, tt.id, tt.body); code != tt.want {
-			t.Errorf("%s: status %d, want %d", tt.name, code, tt.want)
-		}
+		t.Run(tt.name, func(t *testing.T) {
+			if code := put(tt.token, tt.id, tt.body); code != tt.want {
+				t.Errorf("%s: status %d, want %d", tt.name, code, tt.want)
+			}
+		})
 	}
 	for _, err := range []error{pool.ErrPaused, pool.ErrArchived, pool.ErrNoInstanceMetadata} {
 		fail = err
@@ -711,12 +715,14 @@ func TestDrainEndpoints(t *testing.T) {
 		{http.MethodPost, true},
 		{http.MethodDelete, false},
 	} {
-		resp := doReq(t, tt.method, ts.URL+"/v1/drain", "sekret", "")
-		info := decodeJSON[InfoResponse](t, resp.Body)
-		resp.Body.Close()
-		if resp.StatusCode != http.StatusOK || info.Draining != tt.draining || mgr.draining != tt.draining {
-			t.Fatalf("%s: status=%d draining=%v mgr=%v, want 200/%v", tt.method, resp.StatusCode, info.Draining, mgr.draining, tt.draining)
-		}
+		t.Run(tt.method, func(t *testing.T) {
+			resp := doReq(t, tt.method, ts.URL+"/v1/drain", "sekret", "")
+			info := decodeJSON[InfoResponse](t, resp.Body)
+			resp.Body.Close()
+			if resp.StatusCode != http.StatusOK || info.Draining != tt.draining || mgr.draining != tt.draining {
+				t.Fatalf("%s: status=%d draining=%v mgr=%v, want 200/%v", tt.method, resp.StatusCode, info.Draining, mgr.draining, tt.draining)
+			}
+		})
 	}
 }
 
@@ -731,15 +737,17 @@ func TestCordonEndpoints(t *testing.T) {
 		{http.MethodPost, true, "sandboxd_cordoned 1\n"},
 		{http.MethodDelete, false, "sandboxd_cordoned 0\n"},
 	} {
-		resp := doReq(t, tt.method, ts.URL+"/v1/cordon", "sekret", "")
-		info := decodeJSON[InfoResponse](t, resp.Body)
-		resp.Body.Close()
-		if resp.StatusCode != http.StatusOK || info.Cordoned != tt.cordoned || mgr.cordoned != tt.cordoned || info.Draining {
-			t.Fatalf("%s: status=%d info=%+v mgr=%v, want 200/%v and no drain", tt.method, resp.StatusCode, info, mgr.cordoned, tt.cordoned)
-		}
-		if _, body := bodyOf(t, http.MethodGet, ts.URL+"/metrics", "sekret", ""); !strings.Contains(string(body), tt.metric) {
-			t.Errorf("%s: metrics miss %q", tt.method, tt.metric)
-		}
+		t.Run(tt.method, func(t *testing.T) {
+			resp := doReq(t, tt.method, ts.URL+"/v1/cordon", "sekret", "")
+			info := decodeJSON[InfoResponse](t, resp.Body)
+			resp.Body.Close()
+			if resp.StatusCode != http.StatusOK || info.Cordoned != tt.cordoned || mgr.cordoned != tt.cordoned || info.Draining {
+				t.Fatalf("%s: status=%d info=%+v mgr=%v, want 200/%v and no drain", tt.method, resp.StatusCode, info, mgr.cordoned, tt.cordoned)
+			}
+			if _, body := bodyOf(t, http.MethodGet, ts.URL+"/metrics", "sekret", ""); !strings.Contains(string(body), tt.metric) {
+				t.Errorf("%s: metrics miss %q", tt.method, tt.metric)
+			}
+		})
 	}
 }
 
@@ -751,11 +759,13 @@ func TestCordonPersistFailureAnswers500AndKeepsState(t *testing.T) {
 		{http.MethodPost, false},
 		{http.MethodDelete, true},
 	} {
-		mgr := &fakeManager{cordoned: tt.cordoned, cordonErr: errors.New("disk gone")}
-		ts := newTestServer(t, "sekret", mgr, nil)
-		if code := statusOf(t, tt.method, ts.URL+"/v1/cordon", "sekret", ""); code != http.StatusInternalServerError || mgr.cordoned != tt.cordoned {
-			t.Errorf("%s: status %d cordoned=%v, want 500 and cordoned=%v", tt.method, code, mgr.cordoned, tt.cordoned)
-		}
+		t.Run(tt.method, func(t *testing.T) {
+			mgr := &fakeManager{cordoned: tt.cordoned, cordonErr: errors.New("disk gone")}
+			ts := newTestServer(t, "sekret", mgr, nil)
+			if code := statusOf(t, tt.method, ts.URL+"/v1/cordon", "sekret", ""); code != http.StatusInternalServerError || mgr.cordoned != tt.cordoned {
+				t.Errorf("%s: status %d cordoned=%v, want 500 and cordoned=%v", tt.method, code, mgr.cordoned, tt.cordoned)
+			}
+		})
 	}
 }
 
@@ -2105,17 +2115,19 @@ func TestClaimRejectsMetadataOrClaimRefOverABound(t *testing.T) {
 		{"/v1/claim", `{"template":"rt:24.04","volumes":[{"name":"data"}],"claim_ref":"` + strings.Repeat("r", 513) + `"}`, "claim_ref must"},
 		{"/v1/sandboxes/sb_1/fork", `{"token":"tok","count":1,"claim_ref_prefix":"ns/\u0007"}`, "claim_ref_prefix must"},
 	} {
-		mgr := &fakeManager{}
-		ts := newTestServer(t, "sekret", mgr, nil)
-		resp := postJSON(t, ts.URL+tt.path, "sekret", tt.body)
-		got := decodeJSON[errorReply](t, resp.Body)
-		resp.Body.Close()
-		if resp.StatusCode != http.StatusBadRequest || !strings.Contains(got.Error, tt.want) {
-			t.Errorf("%s: status %d error %q, want 400 naming %q", tt.path, resp.StatusCode, got.Error, tt.want)
-		}
-		if mgr.warmCalls+mgr.provisionCalls+mgr.healCalls != 0 || mgr.gotMetadata != nil {
-			t.Errorf("%s: the manager ran on a rejected claim", tt.path)
-		}
+		t.Run(tt.want+" "+tt.path, func(t *testing.T) {
+			mgr := &fakeManager{}
+			ts := newTestServer(t, "sekret", mgr, nil)
+			resp := postJSON(t, ts.URL+tt.path, "sekret", tt.body)
+			got := decodeJSON[errorReply](t, resp.Body)
+			resp.Body.Close()
+			if resp.StatusCode != http.StatusBadRequest || !strings.Contains(got.Error, tt.want) {
+				t.Errorf("%s: status %d error %q, want 400 naming %q", tt.path, resp.StatusCode, got.Error, tt.want)
+			}
+			if mgr.warmCalls+mgr.provisionCalls+mgr.healCalls != 0 || mgr.gotMetadata != nil {
+				t.Errorf("%s: the manager ran on a rejected claim", tt.path)
+			}
+		})
 	}
 }
 
@@ -2140,12 +2152,14 @@ func TestClaimThreadsMetadataAndEnv(t *testing.T) {
 		{"checkpoint", "/v1/checkpoints/ck_00000000000000aa/claim", `{"metadata":{"team":"a"},"env":{"GW":{"value":"Bearer k","guest":false}}}`, func(f *fakeManager) { f.claimCheckpoint = ckpt }},
 		{"checkpoint heal", "/v1/checkpoints/ck_00000000000000aa/claim", `{"metadata":{"team":"a"},"env":{"GW":{"value":"Bearer k","guest":false}}}`, func(f *fakeManager) { f.healCheckpoint = ckpt }},
 	} {
-		mgr := &fakeManager{}
-		tt.setup(mgr)
-		ts := newTestServer(t, "sekret", mgr, nil)
-		if code := statusOf(t, http.MethodPost, ts.URL+tt.path, "sekret", tt.body); code != http.StatusOK || !maps.Equal(mgr.gotMetadata, want) || !mgr.gotEnv.Equal(wantEnv) {
-			t.Errorf("%s: status %d, manager saw metadata %v env %v, want 200 and %v %v", tt.name, code, mgr.gotMetadata, mgr.gotEnv, want, wantEnv)
-		}
+		t.Run(tt.name, func(t *testing.T) {
+			mgr := &fakeManager{}
+			tt.setup(mgr)
+			ts := newTestServer(t, "sekret", mgr, nil)
+			if code := statusOf(t, http.MethodPost, ts.URL+tt.path, "sekret", tt.body); code != http.StatusOK || !maps.Equal(mgr.gotMetadata, want) || !mgr.gotEnv.Equal(wantEnv) {
+				t.Errorf("%s: status %d, manager saw metadata %v env %v, want 200 and %v %v", tt.name, code, mgr.gotMetadata, mgr.gotEnv, want, wantEnv)
+			}
+		})
 	}
 }
 
@@ -2164,11 +2178,13 @@ func TestSandboxesFilterByMetadata(t *testing.T) {
 		{"?metadata=%3Dv", http.StatusBadRequest, nil},
 		{"?metadata=a%3D1&metadata=a%3D2", http.StatusBadRequest, nil},
 	} {
-		mgr := &fakeManager{}
-		ts := newTestServer(t, "root", mgr, nil)
-		if code := statusOf(t, http.MethodGet, ts.URL+"/v1/sandboxes"+tt.query, "root", ""); code != tt.code || !maps.Equal(mgr.gotMetadata, tt.want) {
-			t.Errorf("%q: status %d, manager saw %v, want %d and %v", tt.query, code, mgr.gotMetadata, tt.code, tt.want)
-		}
+		t.Run(tt.query, func(t *testing.T) {
+			mgr := &fakeManager{}
+			ts := newTestServer(t, "root", mgr, nil)
+			if code := statusOf(t, http.MethodGet, ts.URL+"/v1/sandboxes"+tt.query, "root", ""); code != tt.code || !maps.Equal(mgr.gotMetadata, tt.want) {
+				t.Errorf("%q: status %d, manager saw %v, want %d and %v", tt.query, code, mgr.gotMetadata, tt.code, tt.want)
+			}
+		})
 	}
 }
 
@@ -2191,22 +2207,24 @@ func TestExpireActionThreadsThroughEveryDecoder(t *testing.T) {
 			f.renew = func(string, string, time.Duration) (time.Time, error) { return time.Now(), nil }
 		}},
 	} {
-		mgr := &fakeManager{}
-		tt.setup(mgr)
-		ts := newTestServer(t, "sekret", mgr, nil)
-		if code := statusOf(t, http.MethodPost, ts.URL+tt.path, "sekret", tt.body); code != http.StatusOK || mgr.gotOnExpire != types.ExpireArchive {
-			t.Errorf("%s: status %d, manager saw on_expire %q, want 200 and archive", tt.name, code, mgr.gotOnExpire)
-		}
+		t.Run(tt.name, func(t *testing.T) {
+			mgr := &fakeManager{}
+			tt.setup(mgr)
+			ts := newTestServer(t, "sekret", mgr, nil)
+			if code := statusOf(t, http.MethodPost, ts.URL+tt.path, "sekret", tt.body); code != http.StatusOK || mgr.gotOnExpire != types.ExpireArchive {
+				t.Errorf("%s: status %d, manager saw on_expire %q, want 200 and archive", tt.name, code, mgr.gotOnExpire)
+			}
 
-		mgr = &fakeManager{}
-		tt.setup(mgr)
-		ts = newTestServer(t, "sekret", mgr, nil)
-		resp := postJSON(t, ts.URL+tt.path, "sekret", strings.Replace(tt.body, `"archive"`, `"pause"`, 1))
-		got := decodeJSON[errorReply](t, resp.Body)
-		resp.Body.Close()
-		if resp.StatusCode != http.StatusBadRequest || !strings.Contains(got.Error, "on_expire") {
-			t.Errorf("%s with on_expire pause: status %d error %q, want 400 naming on_expire", tt.name, resp.StatusCode, got.Error)
-		}
+			mgr = &fakeManager{}
+			tt.setup(mgr)
+			ts = newTestServer(t, "sekret", mgr, nil)
+			resp := postJSON(t, ts.URL+tt.path, "sekret", strings.Replace(tt.body, `"archive"`, `"pause"`, 1))
+			got := decodeJSON[errorReply](t, resp.Body)
+			resp.Body.Close()
+			if resp.StatusCode != http.StatusBadRequest || !strings.Contains(got.Error, "on_expire") {
+				t.Errorf("%s with on_expire pause: status %d error %q, want 400 naming on_expire", tt.name, resp.StatusCode, got.Error)
+			}
+		})
 	}
 }
 
@@ -2244,9 +2262,11 @@ func TestTunVerbIsRootOnlyAndPassesOnlyTheNamedFields(t *testing.T) {
 		{"unknown field", "sekret", "sb_1", `{"quota": 1}`, http.StatusBadRequest},
 		{"unknown sandbox", "sekret", "sb_2", `{"enabled": true}`, http.StatusNotFound},
 	} {
-		if code := put(tt.token, tt.id, tt.body); code != tt.want {
-			t.Errorf("%s: status %d, want %d", tt.name, code, tt.want)
-		}
+		t.Run(tt.name, func(t *testing.T) {
+			if code := put(tt.token, tt.id, tt.body); code != tt.want {
+				t.Errorf("%s: status %d, want %d", tt.name, code, tt.want)
+			}
+		})
 	}
 }
 
@@ -2931,6 +2951,18 @@ func doReq(t *testing.T, method, url, token, body string) *http.Response {
 func postJSON(t *testing.T, url, token, body string) *http.Response {
 	t.Helper()
 	return doReq(t, http.MethodPost, url, token, body)
+}
+
+func await[T any](t *testing.T, ch <-chan T, msg string) T {
+	t.Helper()
+	select {
+	case v := <-ch:
+		return v
+	case <-time.After(5 * time.Second):
+		t.Fatal(msg)
+		var zero T
+		return zero
+	}
 }
 
 func scrapeMetrics(t *testing.T, base string) string {

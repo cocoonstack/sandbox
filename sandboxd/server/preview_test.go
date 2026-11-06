@@ -79,46 +79,22 @@ func TestPreviewProxiesToGuest(t *testing.T) {
 	}
 }
 
-func TestPreviewRevokedWhenDialFails(t *testing.T) {
-	ps := NewPreviewServer("secret", "node:9000", "node:7777", &fakePreviewMgr{
-		dial: func(string, uint16) (net.Conn, error) { return nil, net.ErrClosed },
-	})
-	ts := httptest.NewServer(ps.Handler())
-	t.Cleanup(ts.Close)
-	token := mintToken(ps, "sb_gone", 3000, time.Hour)
-
-	resp, err := http.Get(ts.URL + "/p/" + token + "/")
-	if err != nil {
-		t.Fatalf("get: %v", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusBadGateway {
-		t.Errorf("status %d, want 502 for a gone sandbox", resp.StatusCode)
-	}
-}
-
-func TestPreviewAnswers404ForAReleasedSandbox(t *testing.T) {
-	ps := NewPreviewServer("secret", "node:9000", "node:7777", &fakePreviewMgr{
-		dial: func(string, uint16) (net.Conn, error) { return nil, pool.ErrUnknownSandbox },
-	})
-	ts := httptest.NewServer(ps.Handler())
-	t.Cleanup(ts.Close)
-
-	resp, err := http.Get(ts.URL + "/p/" + mintToken(ps, "sb_released", 3000, time.Hour) + "/")
-	if err != nil {
-		t.Fatalf("get: %v", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusNotFound {
-		t.Errorf("status %d, want 404 for a released sandbox", resp.StatusCode)
-	}
-}
-
-func TestPreviewAnswers503WhileAClaimCannotServe(t *testing.T) {
-	for _, dialErr := range []error{pool.ErrLeaseLost, pool.ErrEvacuating} {
-		t.Run(dialErr.Error(), func(t *testing.T) {
+func TestPreviewAnswersTheStatusOfAFailedDial(t *testing.T) {
+	for _, tt := range []struct {
+		name      string
+		dialErr   error
+		status    int
+		wantRetry bool
+	}{
+		{"gone sandbox", net.ErrClosed, http.StatusBadGateway, false},
+		{"released sandbox", pool.ErrUnknownSandbox, http.StatusNotFound, false},
+		{pool.ErrLeaseLost.Error(), pool.ErrLeaseLost, http.StatusServiceUnavailable, true},
+		{pool.ErrEvacuating.Error(), pool.ErrEvacuating, http.StatusServiceUnavailable, true},
+		{"quota", fmt.Errorf("wake sb_1: %w", pool.ErrQuota), http.StatusTooManyRequests, false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
 			ps := NewPreviewServer("secret", "node:9000", "node:7777", &fakePreviewMgr{
-				dial: func(string, uint16) (net.Conn, error) { return nil, dialErr },
+				dial: func(string, uint16) (net.Conn, error) { return nil, tt.dialErr },
 			})
 			ts := httptest.NewServer(ps.Handler())
 			t.Cleanup(ts.Close)
@@ -129,30 +105,13 @@ func TestPreviewAnswers503WhileAClaimCannotServe(t *testing.T) {
 				t.Fatalf("get: %v", err)
 			}
 			defer resp.Body.Close()
-			if resp.StatusCode != http.StatusServiceUnavailable || resp.Header.Get("Retry-After") == "" {
-				t.Errorf("status %d retry-after %q, want 503 with a retry hint", resp.StatusCode, resp.Header.Get("Retry-After"))
+			if resp.StatusCode != tt.status {
+				t.Errorf("status %d, want %d", resp.StatusCode, tt.status)
+			}
+			if tt.wantRetry && resp.Header.Get("Retry-After") == "" {
+				t.Error("no Retry-After on a 503, want a retry hint")
 			}
 		})
-	}
-}
-
-func TestPreviewAnswers429AtACap(t *testing.T) {
-	ps := NewPreviewServer("secret", "node:9000", "node:7777", &fakePreviewMgr{
-		dial: func(string, uint16) (net.Conn, error) {
-			return nil, fmt.Errorf("wake sb_1: %w", pool.ErrQuota)
-		},
-	})
-	ts := httptest.NewServer(ps.Handler())
-	t.Cleanup(ts.Close)
-	token := mintToken(ps, "sb_1", 3000, time.Hour)
-
-	resp, err := http.Get(ts.URL + "/p/" + token + "/")
-	if err != nil {
-		t.Fatalf("get: %v", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusTooManyRequests {
-		t.Errorf("status %d, want 429", resp.StatusCode)
 	}
 }
 

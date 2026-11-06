@@ -97,11 +97,7 @@ func TestSleepingLaterWriteMovesTheConnectionToTheGuest(t *testing.T) {
 
 	send(t, conn, execFrame)
 	expectLine(t, r, "guest")
-	select {
-	case <-env.readerClosed:
-	case <-time.After(3 * time.Second):
-		t.Fatal("the reader connection stayed open after the claim woke")
-	}
+	await(t, env.readerClosed, "the reader connection stayed open after the claim woke")
 	send(t, conn, statFrame)
 	expectLine(t, r, "guest")
 	if wakes, dials := env.reader.counts(); wakes != 1 || dials != 1 {
@@ -122,11 +118,7 @@ func TestSleepingReaderStopsServingOnceTheClaimWoke(t *testing.T) {
 	env.reader.setSource("")
 	send(t, conn, statFrame)
 	expectLine(t, r, "guest")
-	select {
-	case <-env.readerClosed:
-	case <-time.After(3 * time.Second):
-		t.Fatal("the stale reader connection stayed open")
-	}
+	await(t, env.readerClosed, "the stale reader connection stayed open")
 }
 
 func TestSleepingConnectionMovesToAFreshReaderWhenTheClaimSleepsAgain(t *testing.T) {
@@ -138,11 +130,7 @@ func TestSleepingConnectionMovesToAFreshReaderWhenTheClaimSleepsAgain(t *testing
 	env.reader.setSource("snap-2")
 	send(t, conn, readFrame)
 	expectLine(t, r, "reader")
-	select {
-	case <-env.readerClosed:
-	case <-time.After(3 * time.Second):
-		t.Fatal("the stale reader connection stayed open")
-	}
+	await(t, env.readerClosed, "the stale reader connection stayed open")
 	if wakes, dials := env.reader.counts(); wakes != 0 || dials != 2 {
 		t.Errorf("wakes=%d reader dials=%d, want a fresh reader for the new sleep and no wake", wakes, dials)
 	}
@@ -311,11 +299,7 @@ func TestSleepingReaderClosesWhenItsClientLeavesMidReply(t *testing.T) {
 	send(t, conn, readFrame)
 	send(t, conn, statFrame)
 	_ = conn.Close()
-	select {
-	case <-env.readerClosed:
-	case <-time.After(5 * time.Second):
-		t.Fatal("the reader connection outlived its client")
-	}
+	await(t, env.readerClosed, "the reader connection outlived its client")
 }
 
 func TestSleepingCloseRelaysEndsReaderConnections(t *testing.T) {
@@ -329,11 +313,7 @@ func TestSleepingCloseRelaysEndsReaderConnections(t *testing.T) {
 		env.srv.CloseRelays()
 		close(done)
 	}()
-	select {
-	case <-done:
-	case <-time.After(3 * time.Second):
-		t.Fatal("CloseRelays hung on a reader connection")
-	}
+	await(t, done, "CloseRelays hung on a reader connection")
 	if _, err := r.ReadString('\n'); !errors.Is(err, io.EOF) {
 		t.Errorf("client after CloseRelays: %v, want EOF", err)
 	}

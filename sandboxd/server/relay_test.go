@@ -125,11 +125,7 @@ func TestRelayClientDisconnectClosesGuest(t *testing.T) {
 
 	conn, _ := upgradeConn(t, ts)
 	_ = conn.Close()
-	select {
-	case <-guestClosed:
-	case <-time.After(3 * time.Second):
-		t.Fatal("guest side not closed after client disconnect")
-	}
+	await(t, guestClosed, "guest side not closed after client disconnect")
 }
 
 func TestRelayEndsWhenItsClaimIsFenced(t *testing.T) {
