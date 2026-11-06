@@ -7,20 +7,8 @@ for Go and Python. Warm claims are sub-millisecond; a pool miss clones from a
 golden snapshot in tens of milliseconds; cold boot is ~0.2–0.4 s on bare metal.
 
 **Documentation: [cocoonstack.github.io/sandbox](https://cocoonstack.github.io/sandbox/)**
-(source in [`docs/`](docs/)).
-
-## Architecture
-
-```
-SDK (Go/Python)         sandboxd (per node)              guest microVM
-client.New/new ─ HTTP ─► claim: warm pool / golden clone   Cloud Hypervisor
-exec/files/… ─ HTTP upgrade (kept) ─► byte relay ─ vsock ─► silkd :2048
-                        memberlist mesh: warm-count gossip,
-                        MOVED-style redirect to the owning node
-```
-
-Cloud Hypervisor serves both network lanes. `net=none` has no NIC and uses
-vsock-only I/O (hardened default); `net=egress` attaches a bridge/CNI NIC.
+(source in [`docs/`](docs/)); the architecture overview is in
+[`docs/index.md`](docs/index.md).
 
 ## Quick start
 
@@ -140,7 +128,7 @@ The cmdline keys `sandbox-init` consumes are in the
 make help          # every target; the ones below are the daily set
 make lint test     # Rust: boot/init + silkd (fmt --check, clippy -D warnings, tests)
 make go-lint       # Go: protocol/wire + sandboxd + sdk/go + e2e + mcp, GOOS linux AND darwin
-make go-test       # Go: go test -race across the Go modules
+make go-test       # Go: go test -race plus one pass of every benchmark, across the Go modules
 make sh-lint       # shellcheck every tracked shell script
 make sandboxd      # build dist/sandboxd
 make bench         # claim-tier + data-plane benchmarks; removes every sbx-* VM
