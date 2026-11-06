@@ -6,7 +6,7 @@ Reproduce with `make bench` (tier definitions and the dated results log:
 [Benchmarks](benchmarks.md)), `scripts/sandboxd-e2e.sh` (claim/verb
 latencies print per run), and `scripts/boot-bench.sh` (boot phases).
 
-**Bare metal** = a 16-core AMD (SVM) node, Ubuntu 24.04, kernel 6.x, local
+**Bare metal** = a 16-core AMD (SVM) node, Ubuntu 24.04, kernel 6.17–7.0, local
 NVMe, KVM. **Nested** = a cloud VM with nested virtualization, never comparable
 with bare-metal claims ([why](benchmarks.md#the-three-claim-tiers)).
 

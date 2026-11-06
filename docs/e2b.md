@@ -2,7 +2,7 @@
 
 The `e2b-rt` flavor carries [e2b](https://e2b.dev)'s `envd` alongside silkd, so
 an **unmodified e2b SDK** can drive a cocoon microVM; `e2b-ci` adds e2b's code
-interpreter on top, for `@e2b/code-interpreter` and `e2b_code_interpreter`. It is the guest half of a
+interpreter, for `@e2b/code-interpreter` and `e2b_code_interpreter`. It is the guest half of a
 compatibility layer whose other two halves live in
 [sandbox-operator](https://github.com/cocoonstack/sandbox-operator): the
 apiserver's e2b REST surface answers `Sandbox.create()`, and `envd-proxy`
@@ -78,7 +78,9 @@ for the truth.
 commit's archive, checks its sha256, and applies the one local change listed in
 `os-image/e2b-ci/PATCHES.md`; e2b's license ships in the image under
 `/usr/share/doc/e2b-code-interpreter/`. Moving to a newer recipe is a bump of the
-two `CI_RECIPE_*` args plus a refresh of the constraints files. On top of `e2b-rt`'s contents it runs a Jupyter server on
+two `CI_RECIPE_*` args plus a refresh of the constraints files. It builds from
+`base`, not on top of `e2b-rt`, with the same `envd` pin, guard unit and `user`
+account as `e2b-rt`, and it runs a Jupyter server on
 loopback 8888 and the code-interpreter API on 49999, both enabled at boot, and
 the guard drops off-guest traffic to 49983, 49999 and 8888. Only the python
 kernel ships: the recipe installs its javascript, R and Java kernels from
