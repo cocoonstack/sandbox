@@ -130,6 +130,40 @@ async fn lsp_stop_kills_an_idle_server() {
 }
 
 #[tokio::test]
+async fn lsp_stop_kills_the_servers_children_too() {
+    let _env_lock = ENV_LOCK.lock().await;
+    let (env, state, server_id) = started_server(
+        "grouptest",
+        "#!/bin/sh\nsleep 300 &\necho $! > \"$(dirname \"$0\")/child\"\nwait\n",
+    )
+    .await;
+    let pid_file = env.path().join("child");
+    let deadline = tokio::time::Instant::now() + DEADLINE;
+    let pid: libc::pid_t = loop {
+        if let Some(pid) = std::fs::read_to_string(&pid_file)
+            .ok()
+            .and_then(|s| s.trim().parse().ok())
+        {
+            break pid;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "server never forked"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    };
+    lsp_stop(&state, &server_id).await;
+    // SAFETY: kill(2) with signal 0 only probes whether the pid exists; it takes no pointers.
+    while unsafe { libc::kill(pid, 0) } == 0 {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "server child {pid} outlived lsp_stop"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+}
+
+#[tokio::test]
 async fn lsp_request_reaps_when_the_client_vanishes_before_ready() {
     let _env_lock = ENV_LOCK.lock().await;
     let (_env, state, server_id) = started_server("gonetest", "#!/bin/sh\nsleep 60\n").await;

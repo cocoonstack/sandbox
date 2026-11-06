@@ -55,6 +55,7 @@ impl Broker {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
+            .process_group(0)
             .kill_on_drop(true);
         if let Some(dir) = root {
             cmd.current_dir(dir);
@@ -174,6 +175,9 @@ struct Server {
 }
 
 async fn kill(mut server: Server) {
+    if let Some(pid) = server.child.id() {
+        sysutil::signal_group(pid, libc::SIGKILL);
+    }
     let _ = server.child.start_kill();
     let _ = server.child.wait().await;
 }
