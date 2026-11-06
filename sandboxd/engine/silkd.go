@@ -94,7 +94,7 @@ func (e *Engine) silkdStream(ctx context.Context, vsockSocket string, req wire.R
 		case *wire.Done:
 			return nil
 		case *wire.ErrorResp:
-			return fmt.Errorf("silkd %w", resp)
+			return frameErr(resp)
 		default:
 			if err := onFrame(resp); err != nil {
 				return err
@@ -108,7 +108,7 @@ func (e *Engine) silkdCollect[F wire.Response, E any](ctx context.Context, vsock
 	err := e.silkdStream(ctx, vsockSocket, req, func(frame wire.Response) error {
 		resp, ok := frame.(F)
 		if !ok {
-			return fmt.Errorf("unexpected silkd frame %q", frame.RespType())
+			return frameErr(frame)
 		}
 		out = append(out, items(resp)...)
 		if len(out) > limit {
@@ -147,10 +147,7 @@ func (e *Engine) silkdOnce[T wire.Response](ctx context.Context, vsockSocket str
 	if _, ok := frame.(T); ok {
 		return nil
 	}
-	if resp, ok := frame.(*wire.ErrorResp); ok {
-		return fmt.Errorf("silkd %w", resp)
-	}
-	return fmt.Errorf("unexpected silkd frame %q", frame.RespType())
+	return frameErr(frame)
 }
 
 func (e *Engine) silkdWriteFile(ctx context.Context, vsockSocket, path string, mode uint32, data []byte) error {
@@ -177,14 +174,10 @@ func (e *Engine) silkdWriteFile(ctx context.Context, vsockSocket, path string, m
 	if err != nil {
 		return errors.Join(sendErr, err)
 	}
-	switch resp := frame.(type) {
-	case *wire.Done:
+	if _, ok := frame.(*wire.Done); ok {
 		return nil
-	case *wire.ErrorResp:
-		return fmt.Errorf("silkd %w", resp)
-	default:
-		return fmt.Errorf("unexpected silkd frame %q", resp.RespType())
 	}
+	return frameErr(frame)
 }
 
 func (e *Engine) silkdExec(ctx context.Context, vsockSocket string, argv ...string) error {
@@ -220,10 +213,8 @@ func (e *Engine) silkdOutput(ctx context.Context, vsockSocket string, argv ...st
 				return nil, &guestExitError{code: resp.Code, output: string(bytes.TrimSpace(out))}
 			}
 			return stdout, nil
-		case *wire.ErrorResp:
-			return nil, fmt.Errorf("silkd %w", resp)
 		default:
-			return nil, fmt.Errorf("unexpected silkd frame %q", resp.RespType())
+			return nil, frameErr(resp)
 		}
 	}
 }
@@ -233,4 +224,11 @@ func appendCapped(out, data []byte) []byte {
 		out = append(out, data[:min(len(data), room)]...)
 	}
 	return out
+}
+
+func frameErr(frame wire.Response) error {
+	if resp, ok := frame.(*wire.ErrorResp); ok {
+		return fmt.Errorf("silkd %w", resp)
+	}
+	return fmt.Errorf("unexpected silkd frame %q", frame.RespType())
 }
