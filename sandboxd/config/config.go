@@ -97,7 +97,7 @@ func (s *PoolSpec) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
 }
 
 // ValidateLimits checks the warm/watermark/idle bounds shared by config and PUT /v1/pools.
-func (s PoolSpec) ValidateLimits() error {
+func (s *PoolSpec) ValidateLimits() error {
 	if s.Warm < 0 {
 		return fmt.Errorf("warm must not be negative")
 	}
