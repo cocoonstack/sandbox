@@ -85,7 +85,6 @@ func diffPools(cur, next []PoolSpec) (changed, ignored, restart []string) {
 	return changed, ignored, restart
 }
 
-// diffTun reloads the exits, MTU, exit port and limits; the socket, the subnet, the VNI and the allocator need a restart, as does adding or dropping the block.
 func diffTun(cur, next *TunConfig) (changed, restart []string) {
 	switch {
 	case reflect.DeepEqual(cur, next):

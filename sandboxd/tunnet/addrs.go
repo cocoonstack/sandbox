@@ -21,7 +21,7 @@ import (
 
 const (
 	freedFile = "tun-freed.log"
-	// compactAfter is how far the log may grow past twice its holds before it is rewritten with the live ones.
+	// compactAfter is how far the log may grow past twice its in-window releases before it is rewritten with them.
 	compactAfter = 1024
 )
 
@@ -72,7 +72,7 @@ func NewLocal(dir string, subnet netip.Prefix, reuse time.Duration) (*Local, err
 			l.freed[addr] = time.Unix(at, 0)
 		}
 	}
-	if err = l.compact(); err != nil {
+	if err = utils.WriteFileSync(l.path, l.snapshot(), 0o600); err != nil {
 		return nil, err
 	}
 	return l, nil
@@ -149,10 +149,6 @@ func (l *Local) Release(_ context.Context, claimID string, addr netip.Addr) erro
 		return fmt.Errorf("append %s: %w", freedFile, err)
 	}
 	return nil
-}
-
-func (l *Local) compact() error {
-	return utils.WriteFileSync(l.path, l.snapshot(), 0o600)
 }
 
 func (l *Local) snapshot() []byte {

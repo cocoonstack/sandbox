@@ -434,7 +434,6 @@ func (s *Store) prepare(ctx context.Context, staging, id, lineage string, digest
 	}, nil
 }
 
-// populate downloads one cache generation and installs it atomically.
 func (s *Store) populate(ctx context.Context, id string, meta []byte, gen string) error {
 	if _, err := os.Stat(gen); err == nil {
 		return nil // another flight installed it between stat and Do

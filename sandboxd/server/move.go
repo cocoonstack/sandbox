@@ -20,6 +20,21 @@ import (
 
 const moveCallTimeout = 10 * time.Minute
 
+type moveAdmitRequest struct {
+	Tenant string        `json:"tenant,omitempty"`
+	Key    types.PoolKey `json:"key"`
+	From   string        `json:"from"`
+}
+
+type moveAdmitResponse struct {
+	Node string `json:"node"`
+}
+
+type moveCommitRequest struct {
+	Claim jsontext.Value `json:"claim"`
+	Epoch int64          `json:"epoch"`
+}
+
 var _ pool.MovePeer = (*MoveClient)(nil)
 
 // MoveClient reaches a move's target on its control port with the root token.
@@ -49,7 +64,6 @@ func (c *MoveClient) Drop(ctx context.Context, addr, id string) error {
 	return c.call(ctx, http.MethodDelete, addr, movePath(id, ""), nil, nil)
 }
 
-// Maps the target's status codes onto pool errors.
 func (c *MoveClient) call(ctx context.Context, method, addr, path string, in, out any) error {
 	ctx, cancel := context.WithTimeout(ctx, moveCallTimeout)
 	defer cancel()
@@ -97,21 +111,6 @@ type MoveResponse struct {
 	OwnerAddr  string `json:"owner_addr"`
 	Rounds     int    `json:"rounds"`
 	DowntimeMS int64  `json:"downtime_ms"`
-}
-
-type moveAdmitRequest struct {
-	Tenant string        `json:"tenant,omitempty"`
-	Key    types.PoolKey `json:"key"`
-	From   string        `json:"from"`
-}
-
-type moveAdmitResponse struct {
-	Node string `json:"node"`
-}
-
-type moveCommitRequest struct {
-	Claim jsontext.Value `json:"claim"`
-	Epoch int64          `json:"epoch"`
 }
 
 func (s *Server) handleMove(w http.ResponseWriter, r *http.Request) {

@@ -113,7 +113,7 @@ func (e *Engine) Close() {
 	e.running.Wait()
 }
 
-// Version reports cocoon's version string: a "vX.Y.Z" release or a "master-<sha>" dev build.
+// Version reports cocoon's version string.
 func (e *Engine) Version(ctx context.Context) (string, error) {
 	if v := e.version.Load(); v != nil {
 		return *v, nil

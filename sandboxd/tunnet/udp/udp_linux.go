@@ -22,6 +22,13 @@ const (
 
 var errGSORefused = unix.EIO
 
+// mmsghdr is the kernel's struct mmsghdr.
+type mmsghdr struct {
+	hdr unix.Msghdr
+	n   uint32
+	_   [4]byte
+}
+
 // receiver reads up to recvBatch datagrams per recvmmsg into buffers it owns, without allocating.
 type receiver struct {
 	rc    syscall.RawConn
@@ -80,13 +87,6 @@ func (r *receiver) recvmmsg(fd uintptr) bool {
 			return r.errno != unix.EAGAIN
 		}
 	}
-}
-
-// mmsghdr is the kernel's struct mmsghdr.
-type mmsghdr struct {
-	hdr unix.Msghdr
-	n   uint32
-	_   [4]byte
 }
 
 // segmentCmsg fills b with a control message asking the kernel to cut one send into seg-byte datagrams.
