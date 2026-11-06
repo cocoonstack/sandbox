@@ -4,7 +4,6 @@ import (
 	"encoding/json/v2"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"sync"
 	"testing"
 )
@@ -49,7 +48,7 @@ func TestSetPoolsClusterFansOut(t *testing.T) {
 	}
 	peer := httptest.NewServer(http.HandlerFunc(pools))
 	defer peer.Close()
-	peerAddr := strings.TrimPrefix(peer.URL, "http://")
+	peerAddr := addrOf(peer)
 
 	entry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/v1/peers" {

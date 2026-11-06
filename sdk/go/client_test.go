@@ -137,7 +137,7 @@ func TestCloseReleasesASandboxThatMoved(t *testing.T) {
 	adopter = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/v1/sandboxes/sb_9/owner":
-			_ = json.MarshalWrite(w, map[string]string{"owner_addr": strings.TrimPrefix(adopter.URL, "http://")})
+			_ = json.MarshalWrite(w, map[string]string{"owner_addr": addrOf(adopter)})
 		case "/v1/sandboxes/sb_9/release":
 			released.Store(true)
 			w.WriteHeader(http.StatusNoContent)
@@ -146,7 +146,7 @@ func TestCloseReleasesASandboxThatMoved(t *testing.T) {
 	t.Cleanup(adopter.Close)
 	old := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/v1/peers" {
-			_ = json.MarshalWrite(w, map[string]any{"peers": []string{strings.TrimPrefix(adopter.URL, "http://")}})
+			_ = json.MarshalWrite(w, map[string]any{"peers": []string{addrOf(adopter)}})
 			return
 		}
 		w.WriteHeader(http.StatusNotFound)
@@ -218,10 +218,10 @@ func TestAWriterErrorTaggedForThisSandboxIsNotReplayed(t *testing.T) {
 	})
 	owner := newAgentServer(t, fake.ServeConn)
 	entry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_ = json.MarshalWrite(w, map[string]string{"owner_addr": strings.TrimPrefix(other.URL, "http://")})
+		_ = json.MarshalWrite(w, map[string]string{"owner_addr": addrOf(other)})
 	}))
 	t.Cleanup(entry.Close)
-	sb := &Sandbox{ID: "sb_1", c: testClient(t, entry), token: "tok", owner: strings.TrimPrefix(owner.URL, "http://")}
+	sb := &Sandbox{ID: "sb_1", c: testClient(t, entry), token: "tok", owner: addrOf(owner)}
 	t.Cleanup(sb.pool.drain)
 	tagged := writerFunc(func([]byte) (int, error) {
 		return 0, &ownerGoneError{err: syscall.ECONNREFUSED, id: sb.ID, addr: sb.Owner()}
@@ -247,11 +247,11 @@ func TestAnotherSandboxsErrorInAWriterIsNotReplayed(t *testing.T) {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
-		_ = json.MarshalWrite(w, map[string]string{"owner_addr": strings.TrimPrefix(other.URL, "http://")})
+		_ = json.MarshalWrite(w, map[string]string{"owner_addr": addrOf(other)})
 	}))
 	t.Cleanup(entry.Close)
 	c := testClient(t, entry)
-	sb := &Sandbox{ID: "sb_1", c: c, token: "tok", owner: strings.TrimPrefix(owner.URL, "http://")}
+	sb := &Sandbox{ID: "sb_1", c: c, token: "tok", owner: addrOf(owner)}
 	gone := &Sandbox{ID: "sb_2", c: c, token: "tok", owner: retiredAddr(t)}
 	t.Cleanup(sb.pool.drain)
 	writeElsewhere := writerFunc(func([]byte) (int, error) {
@@ -284,7 +284,7 @@ func TestCloseFollowsAMoveOffARetiredNode(t *testing.T) {
 	adopter = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/v1/sandboxes/sb_9/owner":
-			_ = json.MarshalWrite(w, map[string]string{"owner_addr": strings.TrimPrefix(adopter.URL, "http://")})
+			_ = json.MarshalWrite(w, map[string]string{"owner_addr": addrOf(adopter)})
 		case "/v1/sandboxes/sb_9/release":
 			released.Store(true)
 			w.WriteHeader(http.StatusNoContent)
@@ -317,17 +317,12 @@ func TestNewFollowsRedirect(t *testing.T) {
 	var nodeB *httptest.Server
 	nodeB = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_ = json.MarshalWrite(w, claimResponse{
-			ID: "sb_2", Token: "tok", OwnerAddr: strings.TrimPrefix(nodeB.URL, "http://"),
+			ID: "sb_2", Token: "tok", OwnerAddr: addrOf(nodeB),
 		})
 	}))
 	t.Cleanup(nodeB.Close)
 
-	nodeA := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_ = json.MarshalWrite(w, claimResponse{
-			Redirect: []string{strings.TrimPrefix(nodeB.URL, "http://")},
-		})
-	}))
-	t.Cleanup(nodeA.Close)
+	nodeA := redirectEntry(t, addrOf(nodeB))
 
 	sb, err := testClient(t, nodeA).New(t.Context(), "rt:24.04")
 	if err != nil {
@@ -336,7 +331,7 @@ func TestNewFollowsRedirect(t *testing.T) {
 	if sb.ID != "sb_2" {
 		t.Errorf("id %q, want sb_2 (claimed at the redirect target)", sb.ID)
 	}
-	if sb.owner != strings.TrimPrefix(nodeB.URL, "http://") {
+	if sb.owner != addrOf(nodeB) {
 		t.Errorf("owner %q, want node B", sb.owner)
 	}
 }
@@ -354,12 +349,7 @@ func TestDeleteTemplateFollowsRedirect(t *testing.T) {
 	}))
 	t.Cleanup(nodeB.Close)
 
-	nodeA := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_ = json.MarshalWrite(w, claimResponse{
-			Redirect: []string{strings.TrimPrefix(nodeB.URL, "http://")},
-		})
-	}))
-	t.Cleanup(nodeA.Close)
+	nodeA := redirectEntry(t, addrOf(nodeB))
 
 	if err := testClient(t, nodeA).DeleteTemplate(t.Context(), "tpl"); err != nil {
 		t.Fatalf("DeleteTemplate: %v", err)
@@ -373,31 +363,11 @@ func TestDeleteTemplateFollowsRedirect(t *testing.T) {
 }
 
 func TestDeleteTemplateRetryPolicy(t *testing.T) {
-	status := func(code int, hit *bool) *httptest.Server {
-		s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			*hit = true
-			w.WriteHeader(code)
-		}))
-		t.Cleanup(s.Close)
-		return s
-	}
-	entry := func(candidates ...*httptest.Server) *httptest.Server {
-		addrs := make([]string, len(candidates))
-		for i, c := range candidates {
-			addrs[i] = strings.TrimPrefix(c.URL, "http://")
-		}
-		s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			_ = json.MarshalWrite(w, claimResponse{Redirect: addrs})
-		}))
-		t.Cleanup(s.Close)
-		return s
-	}
-
 	t.Run("miss walks to the next owner", func(t *testing.T) {
 		var missHit, ownerHit bool
-		miss := status(http.StatusNotFound, &missHit)
-		owner := status(http.StatusNoContent, &ownerHit)
-		if err := testClient(t, entry(miss, owner)).DeleteTemplate(t.Context(), "tpl"); err != nil {
+		miss := statusServer(t, http.StatusNotFound, &missHit)
+		owner := statusServer(t, http.StatusNoContent, &ownerHit)
+		if err := testClient(t, redirectEntry(t, addrOf(miss), addrOf(owner))).DeleteTemplate(t.Context(), "tpl"); err != nil {
 			t.Fatalf("DeleteTemplate: %v", err)
 		}
 		if !missHit || !ownerHit {
@@ -406,9 +376,9 @@ func TestDeleteTemplateRetryPolicy(t *testing.T) {
 	})
 	t.Run("served error stops the walk", func(t *testing.T) {
 		var brokenHit, ownerHit bool
-		broken := status(http.StatusInternalServerError, &brokenHit)
-		owner := status(http.StatusNoContent, &ownerHit)
-		err := testClient(t, entry(broken, owner)).DeleteTemplate(t.Context(), "tpl")
+		broken := statusServer(t, http.StatusInternalServerError, &brokenHit)
+		owner := statusServer(t, http.StatusNoContent, &ownerHit)
+		err := testClient(t, redirectEntry(t, addrOf(broken), addrOf(owner))).DeleteTemplate(t.Context(), "tpl")
 		if err == nil || !strings.Contains(err.Error(), "http 500") {
 			t.Fatalf("err %v, want the 500 surfaced", err)
 		}
@@ -428,12 +398,7 @@ func TestRedirectSetsNoRedirect(t *testing.T) {
 	}))
 	t.Cleanup(target.Close)
 
-	entry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_ = json.MarshalWrite(w, claimResponse{
-			Redirect: []string{strings.TrimPrefix(target.URL, "http://")},
-		})
-	}))
-	t.Cleanup(entry.Close)
+	entry := redirectEntry(t, addrOf(target))
 
 	sb, err := testClient(t, entry).New(t.Context(), "rt:24.04")
 	if err != nil {
@@ -447,25 +412,28 @@ func TestRedirectSetsNoRedirect(t *testing.T) {
 	}
 }
 
-func TestRedirectTriesAllCandidates(t *testing.T) {
-	good := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_ = json.MarshalWrite(w, claimResponse{ID: "sb_4", Token: "t"})
-	}))
-	t.Cleanup(good.Close)
+func TestRedirectWalksPastACandidateThatRefusedTheClaim(t *testing.T) {
+	for _, tt := range []struct {
+		name  string
+		first func(*testing.T) string
+	}{
+		{"unreachable", func(*testing.T) string { return "127.0.0.1:1" }},
+		{"forbidden", func(t *testing.T) string { return addrOf(statusServer(t, http.StatusForbidden, nil)) }},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			good := serveFunc(t, func(w http.ResponseWriter, _ *http.Request) {
+				_ = json.MarshalWrite(w, claimResponse{ID: "sb_5", Token: "t"})
+			})
+			entry := redirectEntry(t, tt.first(t), addrOf(good))
 
-	entry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_ = json.MarshalWrite(w, claimResponse{
-			Redirect: []string{"127.0.0.1:1", strings.TrimPrefix(good.URL, "http://")},
+			sb, err := testClient(t, entry).New(t.Context(), "rt:24.04")
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+			if sb.ID != "sb_5" {
+				t.Errorf("id %q, want sb_5 (second candidate, reached despite the first's refusal)", sb.ID)
+			}
 		})
-	}))
-	t.Cleanup(entry.Close)
-
-	sb, err := testClient(t, entry).New(t.Context(), "rt:24.04")
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	if sb.ID != "sb_4" {
-		t.Errorf("id %q, want sb_4 (second candidate)", sb.ID)
 	}
 }
 
@@ -488,7 +456,7 @@ func TestRedirectStopsWhenACandidateMayHaveClaimed(t *testing.T) {
 	entry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		entryCalls.Add(1)
 		_ = json.MarshalWrite(w, claimResponse{
-			Redirect: []string{strings.TrimPrefix(lost.URL, "http://"), strings.TrimPrefix(good.URL, "http://")},
+			Redirect: []string{addrOf(lost), addrOf(good)},
 		})
 	}))
 	t.Cleanup(entry.Close)
@@ -501,72 +469,55 @@ func TestRedirectStopsWhenACandidateMayHaveClaimed(t *testing.T) {
 	}
 }
 
-func TestRedirectCandidateDefinitiveErrorStillTriesNextCandidate(t *testing.T) {
-	forbidden := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusForbidden)
-	}))
-	t.Cleanup(forbidden.Close)
+func TestRedirectFallbackProvisionsAtTheOrigin(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		code int
+		body string
+	}{
+		{"candidate full", http.StatusTooManyRequests, ""},
+		{"rotating token", http.StatusUnauthorized, "invalid api token"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var candidateCalls, entryCalls int
+			candidate := serveFunc(t, func(w http.ResponseWriter, _ *http.Request) {
+				candidateCalls++
+				w.WriteHeader(tt.code)
+				if tt.body != "" {
+					_ = json.MarshalWrite(w, errorResponse{Error: tt.body})
+				}
+			})
+			entry := serveFunc(t, func(w http.ResponseWriter, r *http.Request) {
+				entryCalls++
+				if entryCalls == 1 {
+					_ = json.MarshalWrite(w, claimResponse{Redirect: []string{addrOf(candidate)}})
+					return
+				}
+				var req claimRequest
+				_ = json.UnmarshalRead(r.Body, &req)
+				if !req.NoRedirect {
+					t.Error("origin fallback did not carry no_redirect")
+				}
+				_ = json.MarshalWrite(w, claimResponse{ID: "sb_origin", Token: "t"})
+			})
 
-	good := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_ = json.MarshalWrite(w, claimResponse{ID: "sb_5", Token: "t"})
-	}))
-	t.Cleanup(good.Close)
-
-	entry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_ = json.MarshalWrite(w, claimResponse{
-			Redirect: []string{strings.TrimPrefix(forbidden.URL, "http://"), strings.TrimPrefix(good.URL, "http://")},
+			sb, err := testClient(t, entry).New(t.Context(), "rt:24.04")
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+			if sb.ID != "sb_origin" {
+				t.Errorf("id %q, want sb_origin (provisioned at the origin)", sb.ID)
+			}
+			if sb.owner != addrOf(entry) {
+				t.Errorf("owner %q, want the origin", sb.owner)
+			}
+			if entryCalls != 2 {
+				t.Errorf("origin called %d times, want 2 (initial + fallback)", entryCalls)
+			}
+			if candidateCalls != 1 {
+				t.Errorf("candidate called %d times, want 1", candidateCalls)
+			}
 		})
-	}))
-	t.Cleanup(entry.Close)
-
-	sb, err := testClient(t, entry).New(t.Context(), "rt:24.04")
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	if sb.ID != "sb_5" {
-		t.Errorf("id %q, want sb_5 (second candidate, reached despite the first's 403)", sb.ID)
-	}
-}
-
-func TestRedirectFallbackHeals(t *testing.T) {
-	var fullCalls int
-	full := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		fullCalls++
-		w.WriteHeader(http.StatusTooManyRequests)
-	}))
-	t.Cleanup(full.Close)
-
-	var entryCalls int
-	entry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		entryCalls++
-		if entryCalls == 1 {
-			_ = json.MarshalWrite(w, claimResponse{Redirect: []string{strings.TrimPrefix(full.URL, "http://")}})
-			return
-		}
-		var req claimRequest
-		_ = json.UnmarshalRead(r.Body, &req)
-		if !req.NoRedirect {
-			t.Error("origin fallback did not carry no_redirect")
-		}
-		_ = json.MarshalWrite(w, claimResponse{ID: "sb_healed", Token: "t"})
-	}))
-	t.Cleanup(entry.Close)
-
-	sb, err := testClient(t, entry).New(t.Context(), "rt:24.04")
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	if sb.ID != "sb_healed" {
-		t.Errorf("id %q, want sb_healed", sb.ID)
-	}
-	if sb.owner != strings.TrimPrefix(entry.URL, "http://") {
-		t.Errorf("owner %q, want the origin", sb.owner)
-	}
-	if entryCalls != 2 {
-		t.Errorf("origin called %d times, want 2 (initial + fallback)", entryCalls)
-	}
-	if fullCalls != 1 {
-		t.Errorf("candidate called %d times, want 1", fullCalls)
 	}
 }
 
@@ -583,7 +534,7 @@ func TestRedirectFallbackAlsoFails(t *testing.T) {
 	entry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		entryCalls++
 		if entryCalls == 1 {
-			_ = json.MarshalWrite(w, claimResponse{Redirect: []string{strings.TrimPrefix(full.URL, "http://")}})
+			_ = json.MarshalWrite(w, claimResponse{Redirect: []string{addrOf(full)}})
 			return
 		}
 		w.WriteHeader(http.StatusConflict)
@@ -633,7 +584,7 @@ func TestRedirectDefinitiveErrorSkipsFallback(t *testing.T) {
 			var entryCalls int
 			entry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				entryCalls++
-				_ = json.MarshalWrite(w, claimResponse{Redirect: []string{strings.TrimPrefix(bad.URL, "http://")}})
+				_ = json.MarshalWrite(w, claimResponse{Redirect: []string{addrOf(bad)}})
 			}))
 			t.Cleanup(entry.Close)
 
@@ -648,48 +599,11 @@ func TestRedirectDefinitiveErrorSkipsFallback(t *testing.T) {
 	}
 }
 
-func TestRedirectRotating401CandidateFallsBackToOrigin(t *testing.T) {
-	var staleCalls int
-	stale := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		staleCalls++
-		w.WriteHeader(http.StatusUnauthorized)
-		_ = json.MarshalWrite(w, errorResponse{Error: "invalid api token"})
-	}))
-	t.Cleanup(stale.Close)
-
-	var entryCalls int
-	entry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		entryCalls++
-		if entryCalls == 1 {
-			_ = json.MarshalWrite(w, claimResponse{Redirect: []string{strings.TrimPrefix(stale.URL, "http://")}})
-			return
-		}
-		var req claimRequest
-		_ = json.UnmarshalRead(r.Body, &req)
-		if !req.NoRedirect {
-			t.Error("origin fallback did not carry no_redirect")
-		}
-		_ = json.MarshalWrite(w, claimResponse{ID: "sb_local", Token: "t"})
-	}))
-	t.Cleanup(entry.Close)
-
-	sb, err := testClient(t, entry).New(t.Context(), "rt:24.04")
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	if sb.ID != "sb_local" {
-		t.Errorf("id %q, want sb_local (provisioned at the already-authorized origin)", sb.ID)
-	}
-	if staleCalls != 1 || entryCalls != 2 {
-		t.Errorf("stale=%d entry=%d calls, want 1 and 2 (redirect + fallback)", staleCalls, entryCalls)
-	}
-}
-
 func TestLookupScatter(t *testing.T) {
 	var owner *httptest.Server
 	owner = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/v1/sandboxes/sb_1/owner" && r.Header.Get("Authorization") == "Bearer tok" {
-			_ = json.MarshalWrite(w, map[string]string{"owner_addr": strings.TrimPrefix(owner.URL, "http://")})
+			_ = json.MarshalWrite(w, map[string]string{"owner_addr": addrOf(owner)})
 			return
 		}
 		w.WriteHeader(http.StatusNotFound)
@@ -701,7 +615,7 @@ func TestLookupScatter(t *testing.T) {
 		case "/v1/sandboxes/sb_1/owner":
 			w.WriteHeader(http.StatusNotFound)
 		case "/v1/peers":
-			_ = json.MarshalWrite(w, map[string]any{"peers": []string{strings.TrimPrefix(owner.URL, "http://")}})
+			_ = json.MarshalWrite(w, map[string]any{"peers": []string{addrOf(owner)}})
 		}
 	}))
 	t.Cleanup(entry.Close)
@@ -710,7 +624,7 @@ func TestLookupScatter(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Lookup: %v", err)
 	}
-	if sb.ID != "sb_1" || sb.owner != strings.TrimPrefix(owner.URL, "http://") {
+	if sb.ID != "sb_1" || sb.owner != addrOf(owner) {
 		t.Errorf("handle %+v, want owner=B", sb)
 	}
 }
@@ -764,7 +678,7 @@ func movedSandbox(t *testing.T) (*Sandbox, string) {
 		fake.ServeConn(conn)
 	})
 	mux.HandleFunc("GET /v1/sandboxes/sb_1/owner", func(w http.ResponseWriter, _ *http.Request) {
-		_ = json.MarshalWrite(w, map[string]string{"owner_addr": strings.TrimPrefix(adopter.URL, "http://")})
+		_ = json.MarshalWrite(w, map[string]string{"owner_addr": addrOf(adopter)})
 	})
 	mux.HandleFunc("POST /v1/sandboxes/sb_1/renew", func(w http.ResponseWriter, _ *http.Request) {
 		_ = json.MarshalWrite(w, map[string]time.Time{"deadline": time.Now().Add(time.Minute)})
@@ -773,14 +687,14 @@ func movedSandbox(t *testing.T) (*Sandbox, string) {
 	t.Cleanup(adopter.Close)
 	old := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/v1/peers" {
-			_ = json.MarshalWrite(w, map[string]any{"peers": []string{strings.TrimPrefix(adopter.URL, "http://")}})
+			_ = json.MarshalWrite(w, map[string]any{"peers": []string{addrOf(adopter)}})
 			return
 		}
 		w.WriteHeader(http.StatusNotFound)
 	}))
 	t.Cleanup(old.Close)
 	sb := testSandbox(t, old)
-	return sb, strings.TrimPrefix(adopter.URL, "http://")
+	return sb, addrOf(adopter)
 }
 
 func retiredAddr(t *testing.T) string {
@@ -794,9 +708,37 @@ func retiredAddr(t *testing.T) string {
 	return addr
 }
 
+func serveFunc(t testing.TB, h http.HandlerFunc) *httptest.Server {
+	t.Helper()
+	ts := httptest.NewServer(h)
+	t.Cleanup(ts.Close)
+	return ts
+}
+
+func statusServer(t testing.TB, code int, hit *bool) *httptest.Server {
+	t.Helper()
+	return serveFunc(t, func(w http.ResponseWriter, _ *http.Request) {
+		if hit != nil {
+			*hit = true
+		}
+		w.WriteHeader(code)
+	})
+}
+
+func redirectEntry(t testing.TB, candidates ...string) *httptest.Server {
+	t.Helper()
+	return serveFunc(t, func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.MarshalWrite(w, claimResponse{Redirect: candidates})
+	})
+}
+
+func addrOf(ts *httptest.Server) string {
+	return strings.TrimPrefix(ts.URL, "http://")
+}
+
 func testClient(t testing.TB, ts *httptest.Server, opts ...ClientOption) *Client {
 	t.Helper()
-	c, err := Connect(strings.TrimPrefix(ts.URL, "http://"), opts...)
+	c, err := Connect(addrOf(ts), opts...)
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}

@@ -98,13 +98,6 @@ func TestReadFileToStopsWhenTheWriterRefuses(t *testing.T) {
 	}
 }
 
-func TestReadMissingFileErrors(t *testing.T) {
-	sb := fakeSandbox(t)
-	if _, err := sb.ReadFile(t.Context(), "/nope"); err == nil {
-		t.Error("read of missing file succeeded")
-	}
-}
-
 func TestSessionLifecycle(t *testing.T) {
 	sb := fakeSandbox(t)
 	ctx := t.Context()

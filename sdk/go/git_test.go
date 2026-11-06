@@ -1,8 +1,11 @@
 package sandbox
 
 import (
+	"net"
 	"slices"
 	"testing"
+
+	"github.com/cocoonstack/sandbox/protocol/wire"
 )
 
 func TestGitBranchLifecycle(t *testing.T) {
@@ -39,11 +42,32 @@ func TestGitBranchLifecycle(t *testing.T) {
 }
 
 func TestGitPushPullPlumbing(t *testing.T) {
-	sb := fakeSandbox(t)
+	reqs := make(chan wire.Request, 2)
+	sb := testSandbox(t, newAgentServer(t, func(conn net.Conn) {
+		defer func() { _ = conn.Close() }()
+		sc := wire.NewFrameScanner(conn)
+		for sc.Scan() {
+			req, err := wire.DecodeRequest(sc.Bytes())
+			if err != nil {
+				return
+			}
+			reqs <- req
+			line, _ := wire.EncodeResponse(wire.Done{})
+			if _, err = conn.Write(append(line, '\n')); err != nil {
+				return
+			}
+		}
+	}))
 	if err := sb.GitPush(t.Context(), "/repo", ""); err != nil {
 		t.Errorf("push: %v", err)
 	}
 	if err := sb.GitPull(t.Context(), "/repo", "tok"); err != nil {
 		t.Errorf("pull: %v", err)
+	}
+	if push, ok := (<-reqs).(*wire.GitPush); !ok || push.Path != "/repo" || push.Auth != "" {
+		t.Errorf("guest saw %+v, want a git push of /repo", push)
+	}
+	if pull, ok := (<-reqs).(*wire.GitPull); !ok || pull.Path != "/repo" || pull.Auth != "tok" {
+		t.Errorf("guest saw %+v, want a git pull of /repo with the token", pull)
 	}
 }

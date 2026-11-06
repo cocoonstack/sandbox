@@ -94,7 +94,7 @@ func TestTemplateNewVolumeClaimFollowsRedirect(t *testing.T) {
 	entry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		originAuth = r.Header.Get("Authorization")
 		_ = json.MarshalWrite(w, claimResponse{
-			Redirect: []string{strings.TrimPrefix(target.URL, "http://")}, RequirePromoted: true,
+			Redirect: []string{addrOf(target)}, RequirePromoted: true,
 		})
 	}))
 	t.Cleanup(entry.Close)
@@ -162,7 +162,7 @@ func TestVolumeClaimRedirectPreservesEntries(t *testing.T) {
 	t.Cleanup(target.Close)
 	entry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_ = json.MarshalWrite(w, claimResponse{
-			Redirect: []string{strings.TrimPrefix(target.URL, "http://")},
+			Redirect: []string{addrOf(target)},
 		})
 	}))
 	t.Cleanup(entry.Close)

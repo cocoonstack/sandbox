@@ -7,7 +7,6 @@ import (
 	"maps"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"sync"
 	"testing"
 )
@@ -81,7 +80,7 @@ func TestDeleteTenantClusterCountsAMissingTenantAsDone(t *testing.T) {
 	defer broken.Close()
 	old := httptest.NewServer(http.NotFoundHandler())
 	defer old.Close()
-	peers := []string{strings.TrimPrefix(gone.URL, "http://"), strings.TrimPrefix(broken.URL, "http://"), strings.TrimPrefix(old.URL, "http://")}
+	peers := []string{addrOf(gone), addrOf(broken), addrOf(old)}
 	entry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/v1/peers" {
 			_ = json.MarshalWrite(w, map[string][]string{"peers": peers})

@@ -14,12 +14,7 @@ import (
 )
 
 func TestCallsShareOneConnection(t *testing.T) {
-	var upgrades atomic.Int32
-	fake := silkdtest.NewFake(t.TempDir())
-	sb := testSandbox(t, newAgentServer(t, func(c net.Conn) {
-		upgrades.Add(1)
-		fake.ServeConn(c)
-	}))
+	sb, upgrades := countingSandbox(t, silkdtest.NewFake(t.TempDir()).ServeConn)
 	for range 3 {
 		if _, err := sb.Stat(t.Context(), "/"); err != nil {
 			t.Fatalf("stat: %v", err)
@@ -40,12 +35,7 @@ func TestCallsShareOneConnection(t *testing.T) {
 }
 
 func TestRefusedStreamOpenKeepsItsConnection(t *testing.T) {
-	var upgrades atomic.Int32
-	fake := silkdtest.NewFake(t.TempDir())
-	sb := testSandbox(t, newAgentServer(t, func(c net.Conn) {
-		upgrades.Add(1)
-		fake.ServeConn(c)
-	}))
+	sb, upgrades := countingSandbox(t, silkdtest.NewFake(t.TempDir()).ServeConn)
 	for range 3 {
 		if _, err := sb.Watch(t.Context(), "/missing", false); err == nil {
 			t.Fatal("watch on a missing path succeeded")
@@ -72,11 +62,7 @@ func TestCanceledCallSendsNothingOnAParkedConnection(t *testing.T) {
 }
 
 func TestKeepAliveOffDialsPerCall(t *testing.T) {
-	var upgrades atomic.Int32
-	sb := testSandbox(t, newAgentServer(t, func(c net.Conn) {
-		upgrades.Add(1)
-		silkdtest.ServeConn(c)
-	}), WithKeepAlive(0))
+	sb, upgrades := countingSandbox(t, silkdtest.ServeConn, WithKeepAlive(0))
 	for range 3 {
 		if _, err := sb.Exec(t.Context(), "echo", "42"); err != nil {
 			t.Fatalf("exec: %v", err)
@@ -105,11 +91,7 @@ func TestIdleConnectionCloses(t *testing.T) {
 }
 
 func TestStalledStdinKeepsItsConnectionOut(t *testing.T) {
-	var upgrades atomic.Int32
-	sb := testSandbox(t, newAgentServer(t, func(c net.Conn) {
-		upgrades.Add(1)
-		silkdtest.ServeConn(c)
-	}))
+	sb, upgrades := countingSandbox(t, silkdtest.ServeConn)
 	pr, pw := io.Pipe()
 	t.Cleanup(func() { _ = pw.Close() })
 	if code, err := sb.Run(t.Context(), Cmd{Argv: []string{"echo", "hi"}, Stdin: pr}); err != nil || code != 0 {
@@ -127,14 +109,12 @@ func TestPeerHangUpIsNoticedBeforeReuse(t *testing.T) {
 	if !canProbe {
 		t.Skip("no parked-connection probe on this platform")
 	}
-	var upgrades atomic.Int32
 	gone := make(chan struct{}, 2)
 	fake := silkdtest.NewFake(t.TempDir())
-	sb := testSandbox(t, newAgentServer(t, func(c net.Conn) {
-		upgrades.Add(1)
+	sb, upgrades := countingSandbox(t, func(c net.Conn) {
 		fake.ServeConn(&hangUpAfterReply{Conn: c})
 		gone <- struct{}{}
-	}))
+	})
 	if _, err := sb.Stat(t.Context(), "/"); err != nil {
 		t.Fatalf("stat: %v", err)
 	}
@@ -182,6 +162,16 @@ func TestPeerQuiet(t *testing.T) {
 	}
 	_ = server.Close()
 	waitUntil(t, func() bool { return !probe.quiet() }, "hang-up not noticed")
+}
+
+func countingSandbox(t *testing.T, serve func(net.Conn), opts ...ClientOption) (*Sandbox, *atomic.Int32) {
+	t.Helper()
+	var upgrades atomic.Int32
+	sb := testSandbox(t, newAgentServer(t, func(c net.Conn) {
+		upgrades.Add(1)
+		serve(c)
+	}), opts...)
+	return sb, &upgrades
 }
 
 func waitUntil(t *testing.T, cond func() bool, msg string) {

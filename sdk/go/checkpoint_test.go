@@ -23,7 +23,7 @@ func TestCheckpointNewFollowsRedirect(t *testing.T) {
 	nodeA := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		nodeACalls++
 		_ = json.MarshalWrite(w, claimResponse{
-			Redirect: []string{strings.TrimPrefix(nodeB.URL, "http://")},
+			Redirect: []string{addrOf(nodeB)},
 		})
 	}))
 	t.Cleanup(nodeA.Close)
@@ -37,7 +37,7 @@ func TestCheckpointNewFollowsRedirect(t *testing.T) {
 	if sb.ID != "sb_ck1" {
 		t.Errorf("id %q, want sb_ck1 (claimed at the redirect target)", sb.ID)
 	}
-	if sb.owner != strings.TrimPrefix(nodeB.URL, "http://") {
+	if sb.owner != addrOf(nodeB) {
 		t.Errorf("owner %q, want node B", sb.owner)
 	}
 	if nodeACalls != 1 {
@@ -78,7 +78,7 @@ func TestCheckpointNewRedirectAllCandidatesFail(t *testing.T) {
 		entryCalls++
 		if entryCalls == 1 {
 			_ = json.MarshalWrite(w, claimResponse{
-				Redirect: []string{strings.TrimPrefix(broken.URL, "http://")},
+				Redirect: []string{addrOf(broken)},
 			})
 			return
 		}
@@ -114,7 +114,7 @@ func TestCheckpointNewRedirectFallbackHeals(t *testing.T) {
 	entry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		entryCalls++
 		if entryCalls == 1 {
-			_ = json.MarshalWrite(w, claimResponse{Redirect: []string{strings.TrimPrefix(busy.URL, "http://")}})
+			_ = json.MarshalWrite(w, claimResponse{Redirect: []string{addrOf(busy)}})
 			return
 		}
 		var req checkpointClaimRequest
@@ -165,7 +165,7 @@ func TestCheckpointNewSecondLevelRedirectFails(t *testing.T) {
 
 	nodeA := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_ = json.MarshalWrite(w, claimResponse{
-			Redirect: []string{strings.TrimPrefix(nodeB.URL, "http://")},
+			Redirect: []string{addrOf(nodeB)},
 		})
 	}))
 	t.Cleanup(nodeA.Close)
