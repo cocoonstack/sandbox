@@ -4,7 +4,6 @@ import (
 	"cmp"
 	"context"
 	"net/netip"
-	"slices"
 	"time"
 
 	"github.com/projecteru2/core/log"
@@ -80,17 +79,14 @@ func (m *Manager) reapOnce(ctx context.Context) {
 
 	logger := log.WithFunc("pool.reapOnce")
 	failed := m.ckMarks.markAll(purges)
-	expired = slices.DeleteFunc(expired, func(v victim) bool {
-		markErr, bad := failed[v.ck]
-		if bad {
-			logger.Errorf(ctx, markErr, "mark archive ck %s; keeping %s", v.ck, v.id)
-		}
-		return bad
-	})
 	m.mu.Lock()
 	keep := expired[:0]
 	var purgeCks, purged []string
 	for _, v := range expired {
+		if markErr, bad := failed[v.ck]; bad {
+			logger.Errorf(ctx, markErr, "mark archive ck %s; keeping %s", v.ck, v.id)
+			continue
+		}
 		if v.action == reapPurge {
 			if m.claimed[v.id] != v.sb || v.sb.ArchiveCk != v.ck {
 				continue
