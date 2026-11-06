@@ -119,8 +119,7 @@ p50) on a newer host kernel (7.0.0-30 vs -28). The same-day A/B of this
 sandboxd (4604b69) against the pre-round main (d5ba35d), three interleaved
 reps each on this host and kernel, read burst p50 104 / 75 / 51 ms vs
 85 / 134 / 159 ms, warm 0.3 ms on both, cold 216–221 vs 213–219 ms, so the
-delta is the host, not the round's code (cocoon-specs
-`tests/2026-09-02-batch0-hardware-regression.md`, B0-05).
+delta is the host, not the round's code.
 
 | data plane | measured |
 |---|---|

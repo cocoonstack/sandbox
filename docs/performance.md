@@ -13,7 +13,9 @@ with bare-metal claims ([why](benchmarks.md#the-three-claim-tiers)).
 ## Claim latency (what the SDK sees)
 
 Measured through the full stack (SDK → sandboxd → cocoon → guest silkd),
-bare metal, `small` tier:
+bare metal, `small` tier, in the [results log](benchmarks.md#results-log) rows
+of 2026-07-08 to 2026-09-02 (the clone row through 2026-07-14 only; later
+rounds measured warm hits there):
 
 | tier | latency | what happens |
 |---|---|---|

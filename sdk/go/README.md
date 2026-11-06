@@ -14,12 +14,16 @@ out, _ := sb.Exec(ctx, "echo", "hello")
 - `sandbox.go` — exec/run, renew, fork, hibernate (transparent wake)
 - `session.go` — persistent shell sessions
 - `env.go` — the claim env verbs (`Env`/`SetEnv`/`PatchEnv`)
-- `files.go` / `tree.go` — streaming file verbs, tar push/pull
+- `files.go` / `tree.go` / `find.go` / `watch.go` — streaming file verbs, tar
+  push/pull, find/replace, file watches
+- `git.go` / `pty.go` — structured git verbs, interactive PTYs
+- `volumes.go` — live volume changes on a running sandbox
 - `port.go` — `DialPort`/`ProxyPort` (net.Conn over the relay), `PreviewURL`
 - `lsp.go` — `StartLsp` + the JSON-RPC byte stream to a flavor's server
 - `proc.go` — background process management (Spawn/Ps/Kill/Logs/Attach)
 - `checkpoint.go` / `template.go` — branch/rewind and promote handles
-- `pools.go` / `tenants.go` — node operations: warm targets and the tenant set, per node or cluster-wide
+- `pools.go` / `tenants.go` / `drain.go` / `info.go` — node operations: warm targets and the tenant set (per node or cluster-wide), drain and cordon, node info and the sandbox index
+- `upgrade.go` / `keepalive.go` / `endpoint.go` — the relay upgrade, idle connection reuse, endpoint and TLS parsing
 - `silkd/` — the conn/stream layer over the relay; the frame types live in
   `protocol/wire`, whose tests round-trip `protocol/wire/fixtures/` (drift
   against the Rust guest fails CI); `silkdtest/` is an in-process fake guest

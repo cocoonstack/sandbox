@@ -83,6 +83,26 @@ Go SDK, where a canceled context closes any call, only `run`/`exec` take a
 or the connection drops. A caller with a wall clock of its own passes `deadline` to a claim
 (below) so the redirect walk cannot outlive it.
 
+For HTTPS ([endpoints](sdk.md#https-endpoints)) with a private CA, pass a
+standard `ssl.SSLContext`:
+
+```python
+import os
+import ssl
+from cocoonsandbox import Client
+
+client = Client(
+    "https://node-a.sandbox.example.com",
+    api_token=os.environ["SANDBOXD_TOKEN"],
+    ssl_context=ssl.create_default_context(cafile="edge-ca.pem"),
+)
+with client.new("rt:24.04") as sb:
+    assert sb.run(["true"]) == 0
+```
+
+Omit `ssl_context` for system trust. The SDK configures that context for
+HTTP/1.1; use a dedicated context if another caller requires a different ALPN.
+
 **Clusters need nothing extra**: dial any node. On a warm miss the entry
 node answers with a redirect and `new` follows it transparently; the
 returned handle is bound to the owning node and all further calls go there
@@ -126,7 +146,8 @@ gone is not an error — double-release and reap races stay silent). Any other
 call on a handle raises a 404 `APIError` once its sandbox has moved; run
 `client.lookup` to tell that from a released sandbox.
 Volume sandboxes cannot hibernate, fork, checkpoint, or promote. Egress-lane
-sandboxes cannot either; each answers 409. Checkpoint
+sandboxes cannot either, and a sandbox whose tun is turned off cannot promote;
+each answers 409. Checkpoint
 branches do not accept volumes of either mode in this version.
 
 `{"attach_only": True}` on a volume entry leaves the mount to you: that
@@ -160,7 +181,6 @@ methods use the client's API token on the owning node; a sandbox token cannot
 manage volumes. `set_volumes([])` detaches all entries; `None` is rejected.
 PATCH retains omitted names. Parameters take lists of names or `Volume` mappings.
 The SDK sends volume policy to sandboxd and preserves `attach_only` directly.
-Use matching daemon and SDK releases for attach-only GET-to-PUT retries.
 
 ```python
 from __future__ import annotations
@@ -538,9 +558,7 @@ claims; the fields are those of [`GET /v1/sandboxes`](sandboxd-api.md#get-v1sand
 `drain()` leaves live claims alone — poll `info()` until `claimed` is
 zero. `undrain()` lifts only a drain and `uncordon()` only a
 [cordon](sandboxd-api.md#post-v1cordon); the
-[admission table](cluster.md#node-admission) compares the two. Through v0.1.23
-`uncordon()` sent `DELETE /v1/drain`; a caller that still pairs it with
-`drain()` leaves the node drained, and `info()` reports `draining`.
+[admission table](cluster.md#node-admission) compares the two.
 
 ## Errors
 

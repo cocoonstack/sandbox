@@ -116,6 +116,8 @@ client, err := sandbox.Connect("10.0.0.5:7777",
 - `WithTLSConfig(config)` — set certificate verification for both HTTPS
   requests and agent relays. With `WithHTTPClient`, its transport must be an
   `*http.Transport`; the SDK clones it rather than changing the caller's client.
+- `WithKeepAlive(idle)` — how long a handle keeps an idle relay connection
+  (default 30s; 0 dials per call); see below.
 
 ### HTTPS endpoints
 
@@ -135,24 +137,7 @@ For a private CA, load it into an `x509.CertPool` and pass
 The same trust configuration covers control requests and every agent relay.
 Certificate and hostname verification are enabled by default.
 
-Python uses a standard `ssl.SSLContext`:
-
-```python
-import os
-import ssl
-from cocoonsandbox import Client
-
-client = Client(
-    "https://node-a.sandbox.example.com",
-    api_token=os.environ["SANDBOXD_TOKEN"],
-    ssl_context=ssl.create_default_context(cafile="edge-ca.pem"),
-)
-with client.new("rt:24.04") as sb:
-    assert sb.run(["true"]) == 0
-```
-
-Omit `ssl_context` for system trust. The SDK configures that context for
-HTTP/1.1; use a dedicated context if another caller requires a different ALPN.
+Python takes an `ssl.SSLContext` ([Python SDK](sdk-python.md#connecting)).
 TLS handshakes share the existing dial timeout/cancellation budget. The agent
 connection then uses HTTP/1.1 `Upgrade: silkd` and remains a bidirectional
 stream; the guest protocol and port-forwarding frames do not change.
@@ -166,7 +151,7 @@ at most 8 idle connections. A kept connection counts as live for
 setting; `Close` and `Hibernate` drop it at once. Long-lived streams
 (`Watch`, `OpenPty`, `DialPort`, an LSP session) take a connection of their
 own. Reuse needs a Unix client (the liveness peek is a `MSG_PEEK`); on
-Windows every call dials as before.
+other platforms every call dials.
 
 An explicit scheme in an owner, redirect, peer, or `Attach` address wins;
 a bare address inherits the entry client's scheme. Trust settings are shared
@@ -231,7 +216,8 @@ one already gone is not an error, and `Close` is bounded internally so it stays 
 call on a handle answers 404 once its sandbox has moved; run `Lookup` to tell
 that from a released sandbox.
 Volume sandboxes and egress-lane sandboxes cannot hibernate, fork, checkpoint,
-or promote, nor take `WithArchiveOnExpire`; each answers 409. Passing
+or promote, nor take `WithArchiveOnExpire`; each answers 409, as does a promote
+of a sandbox whose tun is turned off. Passing
 `WithVolumes` or `WithClaimRef` to `Checkpoint.New` returns a local error:
 checkpoint branches support neither volumes nor a claim reference in this version.
 `WithNetwork` or `WithSize` to `Checkpoint.New` or `Template.New` does too: the
@@ -263,10 +249,12 @@ view = sb.patch_volumes(remove=["imagenet"])
 view = sb.set_volumes([])  # None is rejected.
 ```
 
-`Volume.AttachOnly` leaves mounting and unmounting to the caller. Each entry
+`Volume.AttachOnly` leaves mounting and unmounting to the caller: the entry in
+`Sandbox.Volumes` carries an empty `Mount`; see
+[attach-only volumes](sandboxd-api.md#attach-only-volumes) for finding the device
+and the consistency contract. Each entry
 can independently use `Mode: "rw"` and `AttachOnly: true`. The SDK preserves
 these fields directly and leaves name, mode, and mount policy to sandboxd.
-Use matching daemon and SDK releases for attach-only GET-to-PUT retries.
 See the [live volume contract](sandboxd-api.md#put-v1sandboxesidvolumes) for
 writer exclusion and dirty-marker limits.
 
@@ -294,11 +282,6 @@ refusal, the release hand-off and a failed sandbox's release-only rule are in th
 [API recovery contract](sandboxd-api.md#partial-failure-and-recovery), with a
 [same-sandbox replacement tutorial](live-volumes.md). A settled retained entry
 receives no new attach or mount calls.
-
-`Volume{AttachOnly: true}` leaves the mount to you: the entry in
-`Sandbox.Volumes` carries an empty `Mount`; see
-[attach-only volumes](sandboxd-api.md#attach-only-volumes) for finding the device
-and the consistency contract.
 
 Discover the fleet entries this token may use before planning a claim:
 
@@ -730,9 +713,7 @@ claims; the fields are those of [`GET /v1/sandboxes`](sandboxd-api.md#get-v1sand
 including each claim's `Metadata`, `CPUCount`, and `MemTotalBytes`.
 `Drain` leaves live claims alone — poll `Info` until `Claimed` is zero.
 `Undrain` lifts only a drain and `Uncordon` only a [cordon](sandboxd-api.md#post-v1cordon);
-the [admission table](cluster.md#node-admission) compares the two. Through v0.1.23
-`Uncordon` sent `DELETE /v1/drain`; a caller that still pairs it with `Drain`
-leaves the node drained, and `Info` reports `Draining`.
+the [admission table](cluster.md#node-admission) compares the two.
 The tenant verbs follow [`/v1/tenants`](sandboxd-api.md#tenants-v1tenants): a
 `TenantSpec` without `Token` keeps the stored token, and the `*Cluster` forms
 return one `NodeResult` per node to retry (see
@@ -761,6 +742,6 @@ if errors.As(err, &e) && e.Kind == wire.KindUnimplemented {
 ```
 
 Context cancellation is honored on every call that takes a ctx: canceling it
-closes the underlying connection. Data-plane calls return `ctx.Err()`
-directly; control-plane verbs return a `*url.Error` wrapping it, so test with
+closes the underlying connection. Data-plane calls return `ctx.Err()`,
+wrapped while dialing; control-plane verbs return a `*url.Error` wrapping it, so test with
 `errors.Is`, never `==`. `Close` is the exception: it takes no ctx.

@@ -135,21 +135,7 @@ data-plane addresses it currently sees:
 curl -s -H "Authorization: Bearer $TOKEN" http://node-a:7777/v1/info | jq .
 ```
 
-```json
-{
-  "pools": [
-    {"key": {"template": "base:24.04", "net": "none", "size": "small"},
-     "warm": 4, "refilling": 0, "target": 4, "golden": true}
-  ],
-  "templates": [],
-  "claimed": 2,
-  "running": 2,
-  "hibernated": 0,
-  "archived": 0,
-  "advertise_addr": "10.0.0.5:7777",
-  "peers": ["10.0.0.6:7777"]
-}
-```
+The [API page](sandboxd-api.md#get-v1info) describes the payload.
 
 `peers`, served by `GET /v1/peers` (root or tenant token), is what the SDK
 scatters across in `Lookup`. An empty/absent `peers` means a mesh of one.
@@ -397,10 +383,10 @@ never fit), the source pauses the guest for the final
 round and the target receives the series and starts the guest. A move whose
 deltas never fit answers 503 and the guest runs on; from the second delta on, one
 that shrinks by under 10% and is still too large answers at once. `downtime_ms` in the answer
-is the pause the source measured, from the final capture until the target
-answers the commit, after it started the guest. Each round has one minute plus its size at 10 MB/s to arrive, so a
-target that stops reading fails the move. The final capture, its transfer and the target's commit have 2 minutes
-together; past that the source resolves the move through the record, and the
+is what the source measured from the final capture's start, including its wait
+for a free dump slot, until the target answers the commit, after it started the guest. Each round has one minute plus its size at 10 MB/s to arrive, so a
+target that stops reading fails the move. A replicated claim's registry unrow, the final capture, its transfer and the
+target's commit have 2 minutes together; past that the source resolves the move through the record, and the
 guest resumes on the source unless the target committed.
 
 **Counting.** The target admits the move like a new claim: drain,
@@ -432,7 +418,9 @@ the call answers 502 and the guest resumes on the source.
   holding the claim moves it.
 - Without `sync_claims` a host crash can roll back a node's journal. A source that
   rolled back to a journal whose record is gone drops the claim, since a missing
-  record reads as moved on.
+  record reads as moved on. A journal write that keeps failing for over an hour
+  has the same effect after a restart: the hourly sweep goes by the claims in
+  memory, so it can advance or delete a record the unwritten journal still names.
 - A move call on a claim that moved further than the peer it named answers 200
   with that peer as `owner_addr`; `Lookup` finds the claim.
 
@@ -663,9 +651,8 @@ at a node that does not hold the record runs a tier order:
    answered, the node pulls the record from a probed peer, validates its
    shape and id before trusting it, and publishes it locally so later
    branches are local — paid once per node. The pull is bounded to one
-   overall time budget across however many peers it tries (`healBudget` in
-   `store/peer`), and a node accepts only so many heals at once
-   (`maxConcurrentHeals` in `pool`) — past that cap it answers `503` rather
+   30-minute budget across however many peers it tries, and a node accepts at
+   most 4 heals at once — past that cap it answers `503` rather
    than queuing indefinitely.
 
 ### Delete is eventual, not a fleet-wide revocation
@@ -792,6 +779,7 @@ Some config must match on every node or the cluster fails in confusing ways:
 | `mesh.cluster_key` | nodes cannot join / decrypt gossip at all |
 | `egress_ca` cluster root | a guest checkpointed/redirected across nodes trusts the root; a divergent root fails interception |
 | egress: `egress_classes`, each pool's `egress` and `egress_upstream_env`, `secrets` names, headers and `value_env`, `egress_internal_allow`, `egress_upstream` | a claim or tenant redirected to a divergent node reaches different hosts, and its [claim credentials](egress.md#claim-credentials) are refused or not injected there |
+| `tun.subnet` | every node of a cell draws overlay addresses from one shared table, and a claim keeps its address across a move or an adoption, so a node with another subnet serves claims outside it (see [advanced network mode](advanced-network.md#configuration)). Not part of the gossiped digest below |
 | `checkpoint_ttl_hours` | a healed replica a delete broadcast missed ages out at a different time on each node, and nodes report a digest mismatch until every node has reloaded the same value |
 | the engine root path (cocoon's `root_dir`) | a checkpoint or template export pins the base image blobs' absolute path under the root that captured it; a node whose root sits at another path refuses to clone a record it healed or pulled (`untrusted storage path in snapshot metadata`) — the heal succeeds, the branch fails. Not part of the gossiped digest below |
 

@@ -12,7 +12,8 @@ second copy, the claim's own, chrooted into a read-only view of the claim's
 filesystem on vsock port 2051.
 
 Most users never speak the protocol directly — the [Go SDK](sdk.md) and
-[Python SDK](sdk-python.md) cover the full surface. This page is the wire
+[Python SDK](sdk-python.md) cover every verb except `info` and
+`tun_up`/`tun_down`, which sandboxd sends. This page is the wire
 reference for other clients and for debugging.
 
 ## Protocol
@@ -26,7 +27,8 @@ terminal frame they are dropped, and a request frame sent while a streaming
 RPC still runs ends that RPC's input and is served after it, except in the
 upload of `fs_write` or `fs_push`: there a request frame before `data_end`
 fails the upload with `bad_request` and is dropped. A client may close
-after any terminal frame. Binary payloads ride base64 in `data`
+after any terminal frame. A frame that does not parse is answered with
+`bad_request` and closes the connection. Binary payloads ride base64 in `data`
 fields. Frames are capped at 8 MiB; requests carry `"v": 1` and unknown
 fields are ignored (the forward-compatibility story).
 
@@ -88,7 +90,9 @@ policy (the pool's, or the tenant's on a claim outside any pool) did not opt
 into the SOCKS5 door, the per-connection dial is refused, so the ports are
 inert. Where an image aliases `169.254.169.254` on `lo`, silkd also serves the
 sandbox's [instance-metadata document](sandboxd-api.md#put-v1sandboxesidinstance-metadata)
-there in the IMDSv2 shape.
+there in the IMDSv2 shape. On `127.0.0.153:53` it relays DNS to the host's
+[DNS relay](egress.md#name-resolution-dns): TCP over `CID2:2052`, datagrams
+over `CID2:2053`.
 Where nothing routes directly — the no-network lane, or a NIC whose host
 verdict in `/etc/silkd-lane` reads `relay` because it is nft-locked — silkd
 forwards the image-baked proxy variables (`http_proxy` and friends) into every
@@ -116,8 +120,7 @@ touches it. A unit that must follow a change restarts on it, for example from
 a `.path` unit. The file is in the guest's memory, so it survives hibernate
 and archive; a branch, fork child or promoted-template clone whose source had
 guest entries gets its file rewritten at claim with its own claim's entries
-(none for a fork child). An
-older silkd ignores the file; units that read it still see it.
+(none for a fork child).
 
 ## Limits
 

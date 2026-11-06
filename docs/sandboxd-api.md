@@ -10,7 +10,7 @@ All bodies are JSON. Three token kinds:
   tenant creates is stamped with its name. Operator surfaces
   (the per-id sandbox reads, `PUT /v1/sandboxes/{id}/instance-metadata`, `PUT /v1/sandboxes/{id}/tun`, `GET /v1/info`,
   `PUT /v1/pools`, `POST /v1/config/reload`, the [tenant API](#tenants-v1tenants),
-  `POST /v1/sandboxes/{id}/move`, `PUT/DELETE /v1/volumes/{name}`, `POST/DELETE /v1/drain`, `POST/DELETE /v1/cordon`,
+  `POST /v1/sandboxes/{id}/move` and the peer `/v1/moves/{id}` calls, `PUT/DELETE /v1/volumes/{name}`, `POST/DELETE /v1/drain`, `POST/DELETE /v1/cordon`,
   `GET /metrics`, `GET /v1/usage`, `GET /v1/checkpoints/{id}/blob`)
   answer a tenant token `403` — authenticated but not authorized; an unknown
   token stays `401`. On a node with a shared
@@ -279,8 +279,7 @@ permits it. `nodes` counts members advertising the name; `size_bytes` and
 eventually consistent by one gossip tick.
 `writable` is the entry's catalog configuration, fleet-uniform like the access
 list; the field is emitted (as `true`) only for a writable entry this node
-declares and omitted otherwise (peer-only rows never carry it), so a read-only
-entry's response is byte-identical to v1.
+declares and omitted otherwise (peer-only rows never carry it).
 
 ## PUT /v1/volumes/{name}
 
@@ -342,9 +341,6 @@ cleanup return 409. Otherwise DELETE writes the absence and returns 204, also
 for an absent name.
 Persistence failure returns 503 with `Retry-After`. Retry the same DELETE,
 even if GET no longer lists the name; a restart can restore the old registration.
-
-Before downgrading to a daemon without runtime registration, release claims
-that use runtime names or declare those names in static `volumes`.
 
 ## GET /v1/sandboxes/{id}/volumes
 
@@ -442,12 +438,6 @@ remaining marker. Attach-only writers have no automatic dirty-marker
 protection. The caller owns mounting, flushing, unmounting, recovery, and
 fencing before reuse.
 
-The per-entry field requires coordinated daemon and SDK releases. Older daemons
-ignore `attach_only` in claims and reject it in live PUT and PATCH with 400.
-Older Python SDKs reject the field when
-returned descriptors are reused in requests. Responses without the field do
-not safely roundtrip attach-only intent through new clients.
-
 ### Partial failure and recovery
 
 PUT and PATCH return the GET response shape on success. A convergence error
@@ -477,8 +467,7 @@ still owns admitted volume holds.
 Guest device calls honor cancellation and have a 30-second ceiling per volume, and a
 `cocoon` attach or detach can take 30 more to exit; a
 caller that disconnects cancels the run, leaving interrupted states to retry. Journal writes
-are atomic. Host-crash durability follows `sync_claims`. An older daemon
-ignores `VolumesWant`; finish pending volume changes before downgrading.
+are atomic. Host-crash durability follows `sync_claims`.
 
 Live convergence requires Cocoon v0.7.2 or newer for idempotent matching
 attach and absent detach. PUT and PATCH reject an older release, or a runtime
@@ -649,8 +638,8 @@ the export they were set on, which the new one replaces.
 
 400 invalid name, 401 bad api token, 409 when the name collides with a
 configured pool, the template is owned by another tenant, or the sandbox is
-on the egress lane, has volumes attached (see [egress](egress.md)), has failed,
-or is archived (`POST /wake` or an exec wakes it first), 404 unknown id or wrong
+on the egress lane, has volumes attached (see [egress](egress.md)), has its
+[tun](#put-v1sandboxesidtun) turned off, has failed, or is archived (`POST /wake` or an exec wakes it first), 404 unknown id or wrong
 sandbox token, 429 while the disk is under [`disk_reserve`](deploy.md), 503
 `lease lost; retry` for a replicated sandbox while its node's lease is overdue.
 
@@ -880,8 +869,8 @@ and never this node (else 400), `max_downtime_ms` optional with a default of
 2000 and a floor: 400 or less answers 400 at once, because the target's receive
 and start alone are allowed that long. Answers `{"owner_addr": "<peer>", "rounds": n, "downtime_ms": d}` once the
 peer took the claim and this node dropped it; a guest the peer cannot start is
-failed there. `downtime_ms` is the pause from the final capture until the peer
-answers the commit, after it started the guest. While the move runs, release, fork,
+failed there. `downtime_ms` runs from the final capture's start, including its
+wait for a free dump slot, until the peer answers the commit, after it started the guest. While the move runs, release, fork,
 checkpoint, promote, hibernate and volume changes of the claim answer 503
 `sandbox moving to another node; retry`. Env writes, renew and data-plane calls keep working until
 the final round and answer the same 503 during it, because the peer would miss
@@ -1030,8 +1019,7 @@ the instance-metadata document, so a caller re-establishes guest state when
 (see [dead VMMs](deploy.md#dead-vmms-and-host-restarts));
 `mode` is omitted for `ro`, matching the claim echo; never sandbox tokens,
 volume host paths, or catalog access lists. `claimed_at` is the first grant
-(renew and wake move `deadline` only) and is absent for a claim recorded before
-the field existed. `?claim_ref=<ref>` keeps only the claims recorded under
+(renew and wake move `deadline` only). `?claim_ref=<ref>` keeps only the claims recorded under
 exactly that reference, so a caller that named its claim reads its row without
 the rest of the index; an empty value lists everything. `?metadata=key=value`,
 repeatable, keeps only the claims holding every pair; 400 a pair without `=`,
@@ -1178,7 +1166,7 @@ gauges, `sandboxd_evacuating` (the claims an evacuation has yet to move), `sandb
 tenants holding live claims only, so the label set is bounded by the node's claims), `sandboxd_config_digest_mismatch` on a mesh, claims
 by tier (warm/clone/cold),
 wake/hibernate/fork/checkpoint/promote/release/reap counters plus
-archive/unarchive/archive-delete counters, claim/wake `*_seconds_total`
+archive/unarchive/archive-delete counters, `sandboxd_dns_malformed_total` (guest DNS queries dropped as malformed), claim/wake `*_seconds_total`
 for average latency, `sandboxd_claim_duration_seconds{tier}`, a histogram of pool
 claims by tier, and `sandboxd_claim_redirects_total`, claims this node handed to a
 peer. On a node with a `tun` block it adds the packet path's counters:
@@ -1188,7 +1176,7 @@ datagrams), `sandboxd_tun_arp_total{kind}` (`answered` replies to exits,
 `announced` gratuitous ARPs) and `sandboxd_tun_drops_total{reason}` (packets
 not carried: `malformed`, `not_ipv4`, `options`, `fragment`, `proto`, `gso`,
 `policy`, `no_exit`, `unknown_claim`, `queue_full`, `size` (a packet or GSO
-segment over `tun.mtu`), `limit` (a claim's rate, flow or quota limit), `send`
+segment over `tun.mtu`, or a GSO frame of more than 128 packets), `limit` (a claim's rate, flow or quota limit), `send`
 (the underlay refused a send) and `sender` (VXLAN from an address that is no
 exit)). The warm hit rate is `sandboxd_claim_duration_seconds_count{tier="warm"}`
 over the three tiers' counts: `sandboxd_claims_total` also counts forked children
