@@ -22,8 +22,7 @@ const (
 // NetShape selects the sandbox network lane.
 type NetShape string
 
-// Size is a T-shirt resource tier; free-form CPU/memory would fragment the
-// node's warm pools.
+// Size is a T-shirt resource tier; free-form CPU/memory would fragment the node's warm pools.
 type Size string
 
 // Volume requests one catalog entry at an optional guest mount path and mode.
@@ -75,23 +74,20 @@ func WithSize(s Size) Option {
 	return func(r *claimRequest) { r.Size = string(s) }
 }
 
-// WithVolumes requests catalog volumes for a claim; each entry defaults to
-// read-only, set Volume.Mode to "rw" for a writable mount.
+// WithVolumes requests catalog volumes for a claim; each entry defaults to read-only.
 func WithVolumes(volumes ...Volume) Option {
 	volumes = slices.Clone(volumes)
 	return func(r *claimRequest) { r.Volumes = volumes }
 }
 
-// WithTimeout bounds the sandbox's lifetime: the owning node reaps it after
-// d (rounded up to seconds) even if the client vanishes.
+// WithTimeout makes the owning node reap the sandbox after d, rounded up to seconds.
 func WithTimeout(d time.Duration) Option {
 	return func(r *claimRequest) {
 		r.TTLSeconds = ttlSeconds(d)
 	}
 }
 
-// WithClaimRef records an opaque caller reference on the claim (the aggregated
-// apiserver passes its k8s "<namespace>/<name>"), echoed by Client.Sandboxes.
+// WithClaimRef records an opaque caller reference on the claim, echoed by Client.Sandboxes.
 func WithClaimRef(ref string) Option {
 	return func(r *claimRequest) { r.ClaimRef = ref }
 }

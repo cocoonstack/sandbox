@@ -148,10 +148,7 @@ func (l *lease) close() {
 	_ = l.conn.Close()
 }
 
-// WithKeepAlive bounds how long a handle keeps an idle relay connection for
-// its next call (default 30s; 0 dials per call). An open connection holds
-// the sandbox's idle-hibernate clock, so keep it below the deployment's
-// idle_hibernate_seconds.
+// WithKeepAlive bounds how long a handle keeps an idle relay connection (default 30s; 0 dials per call); an open one holds the idle-hibernate clock.
 func WithKeepAlive(idle time.Duration) ClientOption {
 	return func(c *Client) { c.keepAlive = idle }
 }

@@ -6,9 +6,7 @@ import (
 	"github.com/cocoonstack/sandbox/protocol/wire"
 )
 
-// GitClone clones url into path in the sandbox; depth > 0 makes a shallow
-// clone. Auth, when non-empty, is a token sent as an in-memory Authorization
-// header. Needs the egress lane.
+// GitClone clones url into path, shallow when depth > 0; auth is an in-memory header token; needs the egress lane.
 func (s *Sandbox) GitClone(ctx context.Context, url, path, branch string, depth uint32, auth string) error {
 	return s.doneRPC(ctx, &wire.GitClone{URL: url, Path: path, Branch: branch, Depth: depth, Auth: auth})
 }
@@ -18,8 +16,7 @@ func (s *Sandbox) GitStatus(ctx context.Context, path string) (*wire.GitStatusRe
 	return s.oneShotRPC[wire.GitStatusResult](ctx, &wire.GitStatus{Path: path})
 }
 
-// GitCommit stages nothing (call GitAdd first); it commits the index with
-// message and author ("Name <email>") and returns the new commit hash.
+// GitCommit commits the index with author "Name <email>" and returns the new hash; it stages nothing.
 func (s *Sandbox) GitCommit(ctx context.Context, path, message, author string) (string, error) {
 	c, err := s.oneShotRPC[wire.GitCommitResult](ctx, &wire.GitCommit{Path: path, Message: message, Author: author})
 	if err != nil {
@@ -33,8 +30,7 @@ func (s *Sandbox) GitAdd(ctx context.Context, path string, files ...string) erro
 	return s.doneRPC(ctx, &wire.GitAdd{Path: path, Files: files})
 }
 
-// GitPush pushes the current branch. Auth as in GitClone. Needs the egress
-// lane; on the no-network lane it fails with a typed error pointing at Push.
+// GitPush pushes the current branch; on the no-network lane it fails with a typed error pointing at Push.
 func (s *Sandbox) GitPush(ctx context.Context, path, auth string) error {
 	return s.doneRPC(ctx, &wire.GitPush{Path: path, Auth: auth})
 }

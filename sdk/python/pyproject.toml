@@ -29,4 +29,3 @@ target-version = "py39"
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B", "SIM"]
-ignore = ["UP045"]  # keep Optional-style unions out; X | None needs 3.10 at runtime without future imports

@@ -36,7 +36,7 @@ class Template:
         if volumes:
             return self._client._claim_from(self._addr, claim, deadline=deadline)
         claim["no_redirect"] = True
-        reply = self._client._post_json(self._addr, "/v1/claim", claim, "claim", deadline=deadline)
+        reply = self._client._request(self._addr, "POST", "/v1/claim", claim, "claim", deadline=deadline)
         return self._client._handle_from(self._addr, reply)
 
     def delete(self) -> None:

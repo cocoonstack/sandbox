@@ -8,10 +8,7 @@ import (
 	"github.com/cocoonstack/sandbox/protocol/wire"
 )
 
-// Spawn starts cmd detached: it returns the guest pid as soon as the
-// process starts, and the process keeps running with a bounded output ring
-// readable later via Logs or Attach. cmd's Stdin/Stdout/Stderr are ignored;
-// cmd.Session must be empty — the session exec path cannot detach.
+// Spawn starts cmd detached and returns its guest pid; stdio is ignored and Session must be empty.
 func (s *Sandbox) Spawn(ctx context.Context, cmd Cmd) (uint32, error) {
 	if len(cmd.Argv) == 0 {
 		return 0, fmt.Errorf("empty argv")
@@ -27,8 +24,7 @@ func (s *Sandbox) Spawn(ctx context.Context, cmd Cmd) (uint32, error) {
 	return started.PID, nil
 }
 
-// Ps lists the guest's tracked processes — execs, spawns, and ptys — with
-// state and exit codes.
+// Ps lists the guest's tracked processes with state and exit codes.
 func (s *Sandbox) Ps(ctx context.Context) ([]wire.ProcInfo, error) {
 	procs, err := s.oneShotRPC[wire.Procs](ctx, wire.Ps{})
 	if err != nil {
@@ -37,9 +33,7 @@ func (s *Sandbox) Ps(ctx context.Context) ([]wire.ProcInfo, error) {
 	return procs.Procs, nil
 }
 
-// Kill signals a tracked process; sig 0 sends SIGKILL. Killing one that
-// already exited is a no-op success — its OS pid may be recycled, so silkd
-// never signals a reaped child.
+// Kill signals the process group a tracked pid leads; sig 0 sends SIGKILL, and an exited process is a no-op success.
 func (s *Sandbox) Kill(ctx context.Context, pid uint32, sig int32) error {
 	req := &wire.Kill{PID: pid}
 	if sig != 0 {
@@ -48,16 +42,12 @@ func (s *Sandbox) Kill(ctx context.Context, pid uint32, sig int32) error {
 	return s.doneRPC(ctx, req)
 }
 
-// Logs replays a tracked process's ring-buffered output into the writers
-// (nil discards). exited reports whether the process has ended; code is its
-// exit code when it has.
+// Logs replays a tracked process's ring-buffered output; code is valid only when exited.
 func (s *Sandbox) Logs(ctx context.Context, pid uint32, stdout, stderr io.Writer) (code int32, exited bool, err error) {
 	return s.drainProc(ctx, &wire.Logs{PID: pid}, stdout, stderr)
 }
 
-// Attach replays the buffered output, then follows live output until the
-// process exits, returning its exit code. exited is false only when the
-// proc table dropped the process mid-attach (reap race).
+// Attach replays the buffered output, then follows live output until the process exits.
 func (s *Sandbox) Attach(ctx context.Context, pid uint32, stdout, stderr io.Writer) (code int32, exited bool, err error) {
 	return s.drainProc(ctx, &wire.Attach{PID: pid}, stdout, stderr)
 }

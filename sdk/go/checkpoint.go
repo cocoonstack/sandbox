@@ -37,9 +37,6 @@ type checkpointListResponse struct {
 }
 
 // Checkpoint is a captured sandbox state bound to the node that holds it.
-// New claims fresh sandboxes branched from the captured moment, any number
-// of times; the source sandbox is unaffected and can keep being
-// checkpointed, so successive captures form a tree.
 type Checkpoint struct {
 	ID        string
 	Name      string
@@ -50,11 +47,7 @@ type Checkpoint struct {
 	addr string
 }
 
-// New claims a sandbox cloned from the checkpoint on the checkpoint's node.
-// The snapshot pins the key axes; WithTimeout, WithMetadata,
-// WithArchiveOnExpire and WithEnv apply. A node that no longer holds the
-// checkpoint redirects to a probed owner, which New follows; if the last
-// candidate fails transiently, New falls back to the origin once to heal there.
+// New claims a sandbox branched from the checkpoint, following an owner redirect.
 func (ck *Checkpoint) New(ctx context.Context, opts ...Option) (*Sandbox, error) {
 	var claim claimRequest
 	for _, opt := range opts {
@@ -77,12 +70,7 @@ func (ck *Checkpoint) New(ctx context.Context, opts ...Option) (*Sandbox, error)
 	return ck.c.handleFrom(addr, cr), nil
 }
 
-// Delete removes the checkpoint from its node and asks every peer that node
-// currently sees to drop any replica a heal pulled — best-effort eventual
-// cleanup, not a fleet-wide revocation. A peer that misses that broadcast
-// (offline, partitioned, or joined later) keeps serving branches from its
-// replica until the node's checkpoint_ttl_hours ages it out; a node later run
-// with healing off and that TTL back at 0 keeps the replica until a delete.
+// Delete removes the checkpoint from its node; peer replicas are dropped best-effort.
 func (ck *Checkpoint) Delete(ctx context.Context) error {
 	return ck.c.doNoContent(ctx, http.MethodDelete, ck.addr, "/v1/checkpoints/"+ck.ID, nil, ck.c.apiToken, "delete checkpoint")
 }
@@ -104,8 +92,7 @@ func (s *Sandbox) Checkpoint(ctx context.Context, name string) (*Checkpoint, err
 	return checkpointHandle(s.c, s.owner, cr.Checkpoint), nil
 }
 
-// Checkpoints lists the CONNECTED node's checkpoints, newest first; the
-// returned handles are bound to that node.
+// Checkpoints lists the connected node's checkpoints, newest first, as handles bound to it.
 func (c *Client) Checkpoints(ctx context.Context) ([]*Checkpoint, error) {
 	lr, err := c.doJSON[checkpointListResponse](ctx, http.MethodGet, c.addr, "/v1/checkpoints", nil, c.apiToken, "list checkpoints")
 	if err != nil {
@@ -118,8 +105,7 @@ func (c *Client) Checkpoints(ctx context.Context) ([]*Checkpoint, error) {
 	return ckpts, nil
 }
 
-// Checkpoint returns a handle for a known checkpoint id, bound to the entry
-// node — no listing round-trip; an unknown id surfaces as 404 at claim time.
+// Checkpoint returns an entry-node handle for a known id; an unknown id surfaces as 404 at claim.
 func (c *Client) Checkpoint(id string) *Checkpoint {
 	return checkpointHandle(c, c.addr, checkpointRecord{ID: id})
 }

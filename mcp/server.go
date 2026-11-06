@@ -198,7 +198,6 @@ func (s *server) dropCkpt(id string) {
 	delete(s.ckpts, id)
 }
 
-// parseAndBox decodes a tool's arguments and resolves their sandbox_id to a live handle, the prologue every sandbox-scoped tool shares.
 func (s *server) parseAndBox[T sandboxIDer](raw jsontext.Value) (T, *sandbox.Sandbox, error) {
 	var args T
 	if err := parse(raw, &args); err != nil {

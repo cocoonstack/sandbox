@@ -15,7 +15,7 @@ from typing import Any, TypeVar, cast
 from .checkpoint import Checkpoint
 from .conn import Conn, dial_agent, is_quiet, remaining_timeout
 from .endpoint import _endpoint_url
-from .errors import APIError, SandboxTimeout, _error_message, require_field
+from .errors import APIError, SandboxTimeout, _error_message, _require_field
 from .sandbox import Sandbox
 from .template import _claim_body, _template_query
 from .volumes import Volume
@@ -38,7 +38,7 @@ class Client:
         ssl_context: ssl.SSLContext | None = None,
         keep_alive: float = 30.0,
     ) -> None:
-        """keep_alive parks idle control and relay connections, which hold the sandbox's idle clock; 0 dials per call.
+        """keep_alive parks idle connections, 0 dials per call; a parked relay one holds the sandbox's idle clock.
 
         ssl_context is set to offer ALPN http/1.1, which the relay upgrade needs; pass a dedicated context.
         """
@@ -154,7 +154,7 @@ class Client:
         *,
         deadline: float | None = None,
     ) -> Sandbox:
-        reply = self._post_json(addr, path, claim, verb, deadline=deadline)
+        reply = self._request(addr, "POST", path, claim, verb, deadline=deadline)
         redirect = reply.get("redirect") or []
         if not redirect:
             return self._handle_from(addr, reply, verb)
@@ -163,7 +163,7 @@ class Client:
             claim["require_promoted"] = True
 
         def post(peer: str) -> dict[str, Any]:
-            return self._post_json(peer, path, claim, verb, deadline=deadline)
+            return self._request(peer, "POST", path, claim, verb, deadline=deadline)
 
         owner, reply = _redirect_fallback(addr, redirect, post, verb)
         return self._handle_from(owner, reply, verb)
@@ -182,19 +182,14 @@ class Client:
     def _handle_from(self, dialed: str, reply: dict[str, Any], verb: str = "claim") -> Sandbox:
         return Sandbox(
             client=self,
-            id=require_field(reply, "id", verb),
-            token=require_field(reply, "token", verb),
+            id=_require_field(reply, "id", verb),
+            token=_require_field(reply, "token", verb),
             owner=reply.get("owner_addr") or dialed,
             deadline=reply.get("deadline", ""),
             from_checkpoint=reply.get("from_checkpoint", ""),
             template_digest=reply.get("template_digest", ""),
             volumes=reply.get("volumes") or [],
         )
-
-    def _post_json(
-        self, addr: str, path: str, body: dict[str, Any], verb: str, *, deadline: float | None = None
-    ) -> dict[str, Any]:
-        return self._request(addr, "POST", path, body, verb, deadline=deadline)
 
     def _request(
         self,

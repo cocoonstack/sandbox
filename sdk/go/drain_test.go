@@ -4,6 +4,7 @@ import (
 	"encoding/json/v2"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"testing"
 )
 
@@ -39,12 +40,7 @@ func TestDrainCordonVerbs(t *testing.T) {
 		}
 	}
 	want := []string{"POST /v1/drain", "DELETE /v1/drain", "POST /v1/cordon", "DELETE /v1/cordon"}
-	if len(calls) != len(want) {
-		t.Fatalf("calls = %v, want %v", calls, want)
-	}
-	for i := range want {
-		if calls[i] != want[i] {
-			t.Errorf("call %d = %s, want %s", i, calls[i], want[i])
-		}
+	if !slices.Equal(calls, want) {
+		t.Errorf("calls = %v, want %v", calls, want)
 	}
 }

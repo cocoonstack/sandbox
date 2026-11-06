@@ -28,11 +28,7 @@ type Cmd struct {
 	User    string
 	Session string // when set, runs inside that persistent shell session
 
-	// Stdin is consumed until EOF or until the command exits. A blocking
-	// reader (e.g. os.Stdin) whose command exits first keeps its pump
-	// goroutine parked in Read until the next bytes arrive — do not share
-	// one reader across Runs, the stale pump would swallow them. nil closes
-	// the child's stdin immediately.
+	// Stdin is read until EOF or exit; a reader shared across Runs loses bytes to a stale pump, and nil closes the child's stdin.
 	Stdin  io.Reader
 	Stdout io.Writer // nil discards
 	Stderr io.Writer // nil discards
@@ -60,16 +56,13 @@ type Sandbox struct {
 	Volumes []Volume
 	// VolumesWant is the persisted desired set, which may differ after a failed convergence.
 	VolumesWant []Volume
-	// TemplateDigest is the content identity of the promoted-template export
-	// this sandbox was cloned from; empty for any other source.
+	// TemplateDigest is the content identity of the promoted-template export this sandbox was cloned from; empty otherwise.
 	TemplateDigest string
 
-	// FromCheckpoint names the checkpoint this sandbox branched from; empty
-	// for pool and template claims.
+	// FromCheckpoint names the checkpoint this sandbox branched from; empty otherwise.
 	FromCheckpoint string
 
-	// NetRoute is how the guest reaches the network at claim: "relay" through
-	// the host proxy, "direct" over its own NIC, or "none".
+	// NetRoute is the guest's network path at claim, as the node reports it.
 	NetRoute string
 
 	c     *Client
@@ -149,12 +142,7 @@ func (s *Sandbox) Run(ctx context.Context, cmd Cmd) (int, error) {
 	return int(code), nil
 }
 
-// Fork clones the sandbox into count children — memory, disk, and guest
-// state (sessions, processes, tmpfs) duplicate at the fork point, and each
-// child gets a fresh machine identity and its own lease. ttl bounds every
-// child's lifetime; zero means the server default. All-or-nothing: on error
-// no child survived. Forking a hibernated sandbox reuses its memory image
-// without waking it.
+// Fork clones the sandbox into count children with their own leases; on error no child survives.
 func (s *Sandbox) Fork(ctx context.Context, count int, ttl time.Duration) ([]*Sandbox, error) {
 	body, err := encodeBody("fork", forkRequest{Token: s.token, Count: count, TTLSeconds: ttlSeconds(ttl)})
 	if err != nil {
@@ -171,14 +159,7 @@ func (s *Sandbox) Fork(ctx context.Context, count int, ttl time.Duration) ([]*Sa
 	return children, nil
 }
 
-// Promote publishes the sandbox's current state as a template on its owning
-// node: later claims for it (with this sandbox's network lane and size)
-// clone from it, provision-on-demand. Re-promoting to the same name replaces
-// the template. Like Fork, a hibernated sandbox is promoted from its memory
-// image without waking. Templates are node-local — the returned handle is
-// bound to the owning node. Delete and New without volumes reach that node;
-// New with volumes may follow one placement redirect (name-based Client calls
-// only see the connected node's templates).
+// Promote publishes the sandbox's current state as a template; the returned handle is bound to the owning node.
 func (s *Sandbox) Promote(ctx context.Context, template string) (*Template, error) {
 	body, err := encodeBody("promote", promoteRequest{Token: s.token, Template: template})
 	if err != nil {
@@ -194,10 +175,7 @@ func (s *Sandbox) Promote(ctx context.Context, template string) (*Template, erro
 	}, nil
 }
 
-// Hibernate atomically snapshots the sandbox and stops its VM, freeing its
-// memory; the next call that reaches the guest wakes it transparently with
-// sessions, processes, and memory state intact. The TTL keeps running: at its
-// deadline a hibernated sandbox is destroyed, or archived under WithArchiveOnExpire.
+// Hibernate snapshots the sandbox and stops its VM; the next guest call wakes it, and the TTL keeps running.
 func (s *Sandbox) Hibernate(ctx context.Context) error {
 	s.pool.drain()
 	return s.c.doNoContent(ctx, http.MethodPost, s.owner, "/v1/sandboxes/"+s.ID+"/hibernate", nil, s.token, "hibernate")

@@ -26,10 +26,7 @@ type previewResponse struct {
 
 var _ net.Conn = (*PortConn)(nil)
 
-// PortConn is a net.Conn to a TCP port inside the sandbox, relayed over the
-// silkd protocol (works on the no-network lane — the vsock relay is its only
-// transport). Read returns io.EOF when the guest server closes; CloseWrite
-// half-closes the guest socket.
+// PortConn is a net.Conn to a guest TCP port over the silkd relay; Read returns io.EOF when the guest server closes.
 type PortConn struct {
 	conn *silkd.Conn
 	stop func()
@@ -40,14 +37,12 @@ type PortConn struct {
 
 func (p *PortConn) Read(b []byte) (int, error) { return p.out.Read(b) }
 
-// Write chunks b so no frame (with its base64 and envelope overhead) can
-// exceed the protocol cap — one oversized frame would kill the relay.
+// Write chunks b because one frame over the protocol cap kills the relay.
 func (p *PortConn) Write(b []byte) (int, error) {
 	return sendChunks(p.conn, wire.PortWriteChunk, func(chunk []byte) wire.Request { return &wire.Data{Data: chunk} }, b)
 }
 
-// CloseWrite half-closes the guest socket (the server sees EOF) while reads
-// keep draining its response.
+// CloseWrite half-closes the guest socket while reads keep draining its response.
 func (p *PortConn) CloseWrite() error {
 	return p.conn.Send(wire.DataEnd{})
 }
@@ -61,7 +56,6 @@ func (p *PortConn) Close() error {
 	return nil
 }
 
-// LocalAddr implements net.Conn; the relay has no meaningful socket address.
 func (p *PortConn) LocalAddr() net.Addr { return portAddr("sandbox-relay") }
 
 func (p *PortConn) RemoteAddr() net.Addr { return portAddr("sandbox-guest") }
@@ -69,10 +63,8 @@ func (p *PortConn) RemoteAddr() net.Addr { return portAddr("sandbox-guest") }
 // SetDeadline implements net.Conn; deadlines are unsupported, so bound the DialPort ctx instead.
 func (p *PortConn) SetDeadline(time.Time) error { return errors.ErrUnsupported }
 
-// SetReadDeadline implements net.Conn; unsupported, see SetDeadline.
 func (p *PortConn) SetReadDeadline(time.Time) error { return errors.ErrUnsupported }
 
-// SetWriteDeadline implements net.Conn; unsupported, see SetDeadline.
 func (p *PortConn) SetWriteDeadline(time.Time) error { return errors.ErrUnsupported }
 
 // drain relays guest bytes into the pipe; a relay dropped before its terminal frame ends in drainData's truncation error, not EOF.
@@ -83,16 +75,12 @@ func (p *PortConn) drain(ctx context.Context, pw *io.PipeWriter) {
 	}))
 }
 
-// DialPort connects to 127.0.0.1:port inside the sandbox. The ctx governs
-// the connection's lifetime: canceling it (or Close) tears the relay down.
-// A port nobody listens on fails here with silkd's not_found error.
+// DialPort connects to 127.0.0.1:port inside the sandbox for the lifetime of ctx; a closed port fails with not_found.
 func (s *Sandbox) DialPort(ctx context.Context, port uint16) (*PortConn, error) {
 	return s.openStream(ctx, &wire.PortForward{Port: port})
 }
 
-// PreviewURL mints a shareable URL that serves the sandbox's guest HTTP
-// port from a plain browser, valid for ttl (the node clamps it to the
-// claim's lease). Requires the node to have preview configured.
+// PreviewURL mints a browser URL for a guest HTTP port, valid for ttl clamped to the lease.
 func (s *Sandbox) PreviewURL(ctx context.Context, port uint16, ttl time.Duration) (string, error) {
 	body, err := encodeBody("preview", previewRequest{Token: s.token, Port: port, TTLSeconds: ttlSeconds(ttl)})
 	if err != nil {
@@ -105,10 +93,7 @@ func (s *Sandbox) PreviewURL(ctx context.Context, port uint16, ttl time.Duration
 	return pr.URL, nil
 }
 
-// ProxyPort listens on localAddr (e.g. "127.0.0.1:0") and pipes every
-// accepted connection to the sandbox port, so unmodified local tools reach
-// the guest server. Closing the listener stops new connections; canceling
-// ctx tears down the live ones.
+// ProxyPort pipes every connection accepted on localAddr to the sandbox port; canceling ctx tears down the live ones.
 func (s *Sandbox) ProxyPort(ctx context.Context, localAddr string, port uint16) (net.Listener, error) {
 	l, err := net.Listen("tcp", localAddr)
 	if err != nil {

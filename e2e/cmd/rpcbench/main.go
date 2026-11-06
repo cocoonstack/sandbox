@@ -154,7 +154,6 @@ func statRPC(conn net.Conn) error {
 	return nil
 }
 
-// edgeTLS returns the client config for an https address, or nil for a plain one.
 func edgeTLS(addr, caCert string) (*tls.Config, error) {
 	if !strings.HasPrefix(addr, "https://") {
 		return nil, nil
