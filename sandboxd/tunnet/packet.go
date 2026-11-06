@@ -260,13 +260,10 @@ func rewrite(frame []byte, at int, to [4]byte) {
 
 // adjust moves a ones'-complement sum from one address to another (RFC 1624).
 func adjust(sum uint16, from, to [4]byte) uint16 {
-	s := uint32(sum)
+	s := uint64(sum)
 	for i := 0; i < 4; i += 2 {
-		s += uint32(^binary.BigEndian.Uint16(from[i:]))
-		s += uint32(binary.BigEndian.Uint16(to[i:]))
+		s += uint64(^binary.BigEndian.Uint16(from[i:]))
+		s += uint64(binary.BigEndian.Uint16(to[i:]))
 	}
-	for s>>16 != 0 {
-		s = s&0xffff + s>>16
-	}
-	return uint16(s)
+	return fold(s)
 }
