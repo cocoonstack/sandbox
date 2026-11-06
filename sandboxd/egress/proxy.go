@@ -132,9 +132,6 @@ type connPools struct {
 	routed map[routeKey]*http.Transport
 }
 
-// DialFunc opens the upstream connection for a permitted request.
-type DialFunc func(ctx context.Context, network, addr string) (net.Conn, error)
-
 // Proxy is one sandbox's forward proxy, gated by Policy and audited per request.
 type Proxy struct {
 	policy   Evaluator

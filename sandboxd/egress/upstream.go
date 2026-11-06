@@ -27,6 +27,9 @@ type Router interface {
 	Dial(ctx context.Context, route, network, addr string) (net.Conn, error)
 }
 
+// DialFunc opens the upstream connection for a permitted request.
+type DialFunc func(ctx context.Context, network, addr string) (net.Conn, error)
+
 // UpstreamAllow is the set of proxies a claim may route through: exact host names and IP prefixes.
 type UpstreamAllow struct {
 	hosts    []string

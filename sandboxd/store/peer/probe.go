@@ -17,6 +17,9 @@ import (
 )
 
 const (
+	// ProbeHeader carries the base64 probe MAC when a ProbeKey is configured.
+	ProbeHeader = "X-Cocoon-Probe"
+
 	probeTimeout      = time.Second
 	fanOutTimeout     = 2 * time.Second
 	maxRedirectOwners = 3
@@ -25,9 +28,6 @@ const (
 
 	// probeGrace bounds how long a fan-out waits for more owners once it has its first.
 	probeGrace = 150 * time.Millisecond
-
-	// ProbeHeader carries the base64 probe MAC when a ProbeKey is configured.
-	ProbeHeader = "X-Cocoon-Probe"
 
 	// probeBucketSeconds is the coarse time step the probe MAC is bound to.
 	probeBucketSeconds = 30
