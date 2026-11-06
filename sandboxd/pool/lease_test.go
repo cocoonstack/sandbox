@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net"
 	"os"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"testing/synctest"
@@ -531,17 +530,14 @@ func TestLeaseConsumeDoesNotRaceAnUnfenceRewritingTheEpoch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("rows: %v", err)
 	}
-	var unfence sync.WaitGroup
-	unfence.Go(func() {
+	a.archives = &hookRegistry{Registry: c.reg, beforeConsume: func() {
 		if _, takeErr := a.takeOwnRows(t.Context(), map[string]*types.Sandbox{sb.ID: sb}, rows); takeErr != nil {
 			t.Errorf("take own rows: %v", takeErr)
 		}
-	})
-	time.Sleep(20 * time.Millisecond)
+	}}
 	sb.Transition.Lock()
 	consumed, err := a.consumeArchive(t.Context(), sb)
 	sb.Transition.Unlock()
-	unfence.Wait()
 	if err != nil || consumed == 0 {
 		t.Errorf("consume after the unfence took the row: epoch %d, %v", consumed, err)
 	}
