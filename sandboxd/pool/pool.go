@@ -264,7 +264,7 @@ type Backends struct {
 type PeerDeleteFunc func(ctx context.Context, id string)
 
 // PeerAdoptFunc asks the peers to adopt a released claim and reports whether one holds it now.
-type PeerAdoptFunc func(ctx context.Context, id, token string) bool
+type PeerAdoptFunc func(ctx context.Context, id, token string, room bool) bool
 
 type pendingRemoval struct {
 	sandboxID   string
@@ -333,14 +333,15 @@ type Manager struct {
 	counters   counters
 	ckpts      store.Store
 	// A cluster-wide backend makes heal and the delete broadcast no-ops
-	ckptsShared bool
-	healer      *peer.Healer
-	healSem     chan struct{}
-	healFlights singleflight.Group
-	heals       healVetoes
-	peerDelete  PeerDeleteFunc
-	peerAdopt   PeerAdoptFunc
-	tpls        store.Store
+	ckptsShared       bool
+	healer            *peer.Healer
+	healSem           chan struct{}
+	healFlights       singleflight.Group
+	heals             healVetoes
+	peerDelete        PeerDeleteFunc
+	peerAdopt         PeerAdoptFunc
+	handOffQuietUntil atomic.Int64
+	tpls              store.Store
 
 	// tplSet caches each template id's key, digest and owning tenant ("" = operator).
 	tplMu  sync.Mutex
@@ -660,7 +661,7 @@ func (m *Manager) WithPeerDelete(fn PeerDeleteFunc) {
 	m.peerDelete = fn
 }
 
-// WithPeerAdopt wires the push an evacuation makes after it releases a row.
+// WithPeerAdopt wires the push an evacuation or a full owner's wake makes after it releases a row.
 func (m *Manager) WithPeerAdopt(fn PeerAdoptFunc) {
 	m.peerAdopt = fn
 }

@@ -122,13 +122,13 @@ func (m *Manager) evacuateClaim(ctx context.Context, sb *types.Sandbox) error {
 	}
 	sb.Transition.Lock()
 	defer sb.Transition.Unlock()
-	return m.handOff(ctx, sb)
+	return m.handOff(ctx, sb, false)
 }
 
-// Caller holds Transition.
-func (m *Manager) handOff(ctx context.Context, sb *types.Sandbox) error {
+// handOff releases an archived claim's row and asks a peer to adopt it, one that could wake it when room is set; the caller holds Transition.
+func (m *Manager) handOff(ctx context.Context, sb *types.Sandbox, room bool) error {
 	m.mu.Lock()
-	live, archived := m.claimed[sb.ID] == sb && m.evacuatingLocked(sb.ID), sb.ArchiveCk != ""
+	live, archived := m.claimed[sb.ID] == sb && (room || m.evacuatingLocked(sb.ID)), sb.ArchiveCk != ""
 	epoch, token := sb.ArchiveEpoch, sb.Token
 	m.mu.Unlock()
 	switch {
@@ -142,12 +142,12 @@ func (m *Manager) handOff(ctx context.Context, sb *types.Sandbox) error {
 	ctx = context.WithoutCancel(ctx)
 	released, err := m.archives.Release(ctx, sb.ID, epoch, m.nodeID)
 	if errors.Is(err, archives.ErrLost) {
-		return m.resumeHandOff(ctx, sb, token)
+		return m.resumeHandOff(ctx, sb, token, room)
 	}
 	if err != nil {
 		return fmt.Errorf("hand off %s: %w", sb.ID, err)
 	}
-	if !m.peerAdopt(ctx, sb.ID, token) {
+	if !m.peerAdopt(ctx, sb.ID, token, room) {
 		return m.takeBack(ctx, sb, released)
 	}
 	m.dropAdopted(ctx, sb)
@@ -155,7 +155,7 @@ func (m *Manager) handOff(ctx context.Context, sb *types.Sandbox) error {
 }
 
 // A row with no owner may hold a later owner's writes, so it outranks this claim and only a peer may take it.
-func (m *Manager) resumeHandOff(ctx context.Context, sb *types.Sandbox, token string) error {
+func (m *Manager) resumeHandOff(ctx context.Context, sb *types.Sandbox, token string, room bool) error {
 	rec, ok, err := m.archives.Get(ctx, sb.ID)
 	switch {
 	case err != nil:
@@ -165,7 +165,7 @@ func (m *Manager) resumeHandOff(ctx context.Context, sb *types.Sandbox, token st
 			err = archives.ErrLost
 		}
 		return fmt.Errorf("hand off %s: %w", sb.ID, err)
-	case !m.peerAdopt(ctx, sb.ID, token):
+	case !m.peerAdopt(ctx, sb.ID, token, room):
 		return errNoAdopter
 	}
 	m.dropAdopted(ctx, sb)

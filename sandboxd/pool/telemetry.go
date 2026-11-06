@@ -60,6 +60,10 @@ type Counters struct {
 	Unarchives     uint64
 	ArchiveDeletes uint64
 
+	WakesRefusedRunning uint64
+	WakesRefusedDisk    uint64
+	WakeHandoffs        uint64
+
 	ClaimWarmLatency, ClaimCloneLatency, ClaimColdLatency ClaimLatency
 
 	ClaimNanos uint64
@@ -69,12 +73,14 @@ type Counters struct {
 }
 
 type counters struct {
-	claimsWarm, claimsClone, claimsCold  atomic.Uint64
-	wakes, hibernates                    atomic.Uint64
-	forks, checkpoints, promotes         atomic.Uint64
-	releases, reaps                      atomic.Uint64
-	archives, unarchives, archiveDeletes atomic.Uint64
-	wakeNanos                            atomic.Uint64
+	claimsWarm, claimsClone, claimsCold   atomic.Uint64
+	wakes, hibernates                     atomic.Uint64
+	forks, checkpoints, promotes          atomic.Uint64
+	releases, reaps                       atomic.Uint64
+	archives, unarchives, archiveDeletes  atomic.Uint64
+	wakesRefusedRunning, wakesRefusedDisk atomic.Uint64
+	wakeHandoffs                          atomic.Uint64
+	wakeNanos                             atomic.Uint64
 
 	claimWarmLatency, claimCloneLatency, claimColdLatency claimHistogram
 }
@@ -171,9 +177,14 @@ func (m *Manager) Counters() Counters {
 		Archives:       c.archives.Load(),
 		Unarchives:     c.unarchives.Load(),
 		ArchiveDeletes: c.archiveDeletes.Load(),
-		ClaimNanos:     warm.Nanos + clone.Nanos + cold.Nanos,
-		WakeNanos:      c.wakeNanos.Load(),
-		DNSMalformed:   m.out.DNSMalformed(),
+
+		WakesRefusedRunning: c.wakesRefusedRunning.Load(),
+		WakesRefusedDisk:    c.wakesRefusedDisk.Load(),
+		WakeHandoffs:        c.wakeHandoffs.Load(),
+
+		ClaimNanos:   warm.Nanos + clone.Nanos + cold.Nanos,
+		WakeNanos:    c.wakeNanos.Load(),
+		DNSMalformed: m.out.DNSMalformed(),
 
 		ClaimWarmLatency:  warm,
 		ClaimCloneLatency: clone,

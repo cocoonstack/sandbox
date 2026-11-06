@@ -319,6 +319,7 @@ func TestFailoverAdoptionIgnoresClaimCapsAndAWakeStillChecksMaxRunning(t *testin
 	}
 	editView(b, func(v *configView) { v.maxClaims, v.maxRunning = 1, 1 })
 	c.expire("a")
+	a.Drain(t.Context())
 
 	mustAdopt(t, b, lost, "adopt on a node at node and tenant max_claims")
 	if _, _, _, err = b.WakeAgentSocket(t.Context(), lost.ID, lost.Token); !errors.Is(err, ErrQuota) {
@@ -1953,12 +1954,12 @@ func (c *failoverCluster) nodeOn(t *testing.T, eng *fakeEngine, name, dataDir st
 	t.Cleanup(func() { settleCaptures(m) })
 	t.Cleanup(func() { assertClaimedVMs(t, m) })
 	_ = c.reg.Renew(t.Context(), name, time.Hour)
-	m.WithPeerAdopt(func(ctx context.Context, id, token string) bool {
+	m.WithPeerAdopt(func(ctx context.Context, id, token string, room bool) bool {
 		return slices.ContainsFunc(c.nodes, func(p *Manager) bool {
 			if p.nodeID == name {
 				return false
 			}
-			adopted, err := p.AdoptArchived(ctx, id, token)
+			adopted, err := p.adopt(ctx, id, token, room)
 			return err == nil && adopted
 		})
 	})

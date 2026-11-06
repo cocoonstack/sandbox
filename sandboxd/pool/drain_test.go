@@ -353,7 +353,7 @@ func TestEvacuateRequeuesAClaimAWakeUnarchived(t *testing.T) {
 		a.Evacuate(t.Context())
 		synctest.Wait()
 		sb.Transition.Lock()
-		err := a.handOff(t.Context(), sb)
+		err := a.handOff(t.Context(), sb, false)
 		sb.Transition.Unlock()
 		if !errors.Is(err, errArchiveBusy) {
 			t.Errorf("hand-off of a running claim: %v, want errArchiveBusy", err)
@@ -513,7 +513,7 @@ func TestEvacuateMovesTheCheapestClaimsFirst(t *testing.T) {
 		mustArchive(t, a, archived)
 		a.maintSem = make(chan struct{}, 1)
 		var moved []string
-		a.WithPeerAdopt(func(ctx context.Context, id, token string) bool {
+		a.WithPeerAdopt(func(ctx context.Context, id, token string, _ bool) bool {
 			moved = append(moved, id)
 			adopted, err := b.AdoptArchived(ctx, id, token)
 			return err == nil && adopted
@@ -582,7 +582,7 @@ func TestEvacuateConvergesWhenAPeersAnswerIsLost(t *testing.T) {
 		c := newFailoverCluster(t)
 		a, b := c.node(t, "a", t.TempDir(), keepAnHour), c.node(t, "b", t.TempDir(), keepAnHour)
 		sb := mustClaim(t, a, testKey)
-		a.WithPeerAdopt(func(ctx context.Context, id, token string) bool {
+		a.WithPeerAdopt(func(ctx context.Context, id, token string, _ bool) bool {
 			if _, err := b.AdoptArchived(ctx, id, token); err != nil {
 				t.Errorf("adopt: %v", err)
 			}
@@ -654,7 +654,7 @@ func TestARepeatEvacuateWithNoAdopterLeavesAReleasedRowReleased(t *testing.T) {
 		a.archives = &hookRegistry{Registry: c.reg, loseReleaseReply: true}
 		a.Evacuate(t.Context())
 		synctest.Wait()
-		a.WithPeerAdopt(func(context.Context, string, string) bool { return false })
+		a.WithPeerAdopt(func(context.Context, string, string, bool) bool { return false })
 
 		a.Evacuate(t.Context())
 		synctest.Wait()

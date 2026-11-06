@@ -1,6 +1,7 @@
 package pool
 
 import (
+	"context"
 	"errors"
 	"slices"
 	"strings"
@@ -90,7 +91,7 @@ func TestARefusedWakeOfAnArchivedClaimKeepsItsRow(t *testing.T) {
 		t.Fatalf("wake past cap: %v, want ErrQuota", wakeErr)
 	}
 	after, ok, err := c.reg.Get(t.Context(), sb.ID)
-	if err != nil || !ok || after.Consumed || after.Epoch != before.Epoch || sb.ArchiveCk == "" {
+	if err != nil || !ok || after.Consumed || after.Owner != before.Owner || after.Checkpoint != before.Checkpoint || sb.ArchiveCk == "" {
 		t.Fatalf("row %+v present %v err %v, claim checkpoint %q, want the archive untouched", after, ok, err, sb.ArchiveCk)
 	}
 	if err := a.Release(t.Context(), other.ID, Cred{Token: other.Token}); err != nil {
@@ -241,6 +242,81 @@ func TestAReloadAppliesTheNodeSettings(t *testing.T) {
 	parent := mustClaim(t, m, testKey)
 	if _, err := m.Fork(t.Context(), parent.ID, Cred{Token: parent.Token}, 2, 0, "", ""); !errors.Is(err, ErrBadCount) {
 		t.Errorf("fork of 2 over a reloaded limit of 1: %v, want ErrBadCount", err)
+	}
+}
+
+func TestARefusedWakeIsCountedByTheLimitThatRefusedIt(t *testing.T) {
+	m := newTestManager(t, newFakeEngine())
+	editView(m, func(v *configView) { v.maxRunning = 1 })
+	sleeper := mustClaim(t, m, testKey)
+	hibernateClaim(t, m, sleeper)
+	mustClaim(t, m, testKey)
+	if err := wakeClaim(t, m, sleeper); !errors.Is(err, ErrQuota) {
+		t.Fatalf("wake past max_running: %v, want ErrQuota", err)
+	}
+	editView(m, func(v *configView) { v.maxRunning = 0 })
+	m.diskLow.Store(true)
+	if err := wakeClaim(t, m, sleeper); !errors.Is(err, ErrQuota) {
+		t.Fatalf("wake under disk_reserve: %v, want ErrQuota", err)
+	}
+	m.diskLow.Store(false)
+	if c := m.Counters(); c.WakesRefusedRunning != 1 || c.WakesRefusedDisk != 1 || c.WakeHandoffs != 0 {
+		t.Errorf("counters running %d disk %d handoffs %d, want 1 1 0", c.WakesRefusedRunning, c.WakesRefusedDisk, c.WakeHandoffs)
+	}
+}
+
+func TestAnArchivedWakeOnAFullOwnerMovesToAPeerWithRoom(t *testing.T) {
+	c := newFailoverCluster(t)
+	a, b := c.node(t, "a", t.TempDir(), keepAnHour), c.node(t, "b", t.TempDir(), keepAnHour)
+	sb := mustClaim(t, a, testKey)
+	mustArchive(t, a, sb)
+	mustClaim(t, a, testKey)
+	editView(a, func(v *configView) { v.maxRunning = 1 })
+	if err := wakeClaim(t, a, sb); !errors.Is(err, ErrEvacuating) {
+		t.Fatalf("wake on a full owner: %v, want ErrEvacuating while a peer takes it", err)
+	}
+	if _, held := a.byID(sb.ID); held {
+		t.Error("the full owner still lists the handed-off claim")
+	}
+	if _, err := a.wakeResolved(t.Context(), sb); !errors.Is(err, ErrUnknownSandbox) {
+		t.Errorf("a wake that waited on the old owner: %v, want ErrUnknownSandbox", err)
+	}
+	if rec, _, _ := c.reg.Get(t.Context(), sb.ID); rec.Owner != "b" || rec.Consumed {
+		t.Fatalf("row owner %q consumed %v, want b holding it unconsumed", rec.Owner, rec.Consumed)
+	}
+	if err := wakeClaim(t, b, sb); err != nil {
+		t.Fatalf("wake on the peer: %v", err)
+	}
+	if got := a.Counters().WakeHandoffs; got != 1 {
+		t.Errorf("hand-offs %d, want 1", got)
+	}
+}
+
+func TestAFullPeerLeavesTheWakeOnItsOwnerAndTheRetryAsksNoPeer(t *testing.T) {
+	c := newFailoverCluster(t)
+	a, b := c.node(t, "a", t.TempDir(), keepAnHour), c.node(t, "b", t.TempDir(), keepAnHour)
+	sb := mustClaim(t, a, testKey)
+	mustArchive(t, a, sb)
+	mustClaim(t, a, testKey)
+	mustClaim(t, b, testKey)
+	editView(a, func(v *configView) { v.maxRunning = 1 })
+	editView(b, func(v *configView) { v.maxRunning = 1 })
+	var asked atomic.Int32
+	a.WithPeerAdopt(func(ctx context.Context, id, token string, room bool) bool {
+		asked.Add(1)
+		adopted, err := b.adopt(ctx, id, token, room)
+		return err == nil && adopted
+	})
+	for range 2 {
+		if err := wakeClaim(t, a, sb); !errors.Is(err, ErrQuota) {
+			t.Fatalf("wake with every node full: %v, want ErrQuota", err)
+		}
+	}
+	if rec, _, _ := c.reg.Get(t.Context(), sb.ID); rec.Owner != "a" || rec.Consumed {
+		t.Errorf("row owner %q consumed %v, want a taking it back", rec.Owner, rec.Consumed)
+	}
+	if _, held := a.byID(sb.ID); !held || asked.Load() != 1 {
+		t.Errorf("owner holds %v, peers asked %d times, want the claim kept and one ask inside the quiet period", held, asked.Load())
 	}
 }
 
