@@ -381,8 +381,8 @@ func (m *Manager) reclaimOrphanArchiveCks(ctx context.Context, claims map[string
 	var orphans []types.Checkpoint
 	var ids []string
 	for _, rec := range metas {
-		ckpt, err := parseCheckpoint(rec.Meta)
-		if err != nil || !ckpt.Archive {
+		ckpt, parseErr := parseCheckpoint(rec.Meta)
+		if parseErr != nil || !ckpt.Archive {
 			continue
 		}
 		orig, mine := claims[ckpt.SandboxID]
