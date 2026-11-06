@@ -76,8 +76,9 @@ func (w *Watcher) setErr(err error) {
 }
 
 // Watch streams filesystem events under path; events caused after it returns are guaranteed captured.
-func (s *Sandbox) Watch(ctx context.Context, path string, recursive bool) (w *Watcher, err error) {
-	err = s.retryMoved(ctx, func() error {
+func (s *Sandbox) Watch(ctx context.Context, path string, recursive bool) (*Watcher, error) {
+	var w *Watcher
+	err := s.retryMoved(ctx, func() error {
 		conn, l, err := s.call(ctx, &wire.FsWatch{Path: path, Recursive: recursive})
 		if err != nil {
 			return err
