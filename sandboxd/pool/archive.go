@@ -268,7 +268,7 @@ func (m *Manager) handOffForRoom(ctx context.Context, sb *types.Sandbox) bool {
 	logger := log.WithFunc("pool.handOffForRoom")
 	err := m.handOff(ctx, sb, true)
 	switch {
-	case err == nil:
+	case err == nil || errors.Is(err, ErrUnknownSandbox):
 		m.counters.wakeHandoffs.Add(1)
 		logger.Infof(ctx, "handed archived %s to a peer with room to wake it", sb.ID)
 		return true
