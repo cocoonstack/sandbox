@@ -3,6 +3,7 @@ package tunnet
 import (
 	"net/netip"
 	"testing"
+	"time"
 )
 
 func TestOnlyAdmittedTrafficTouchesClaim(t *testing.T) {
@@ -12,7 +13,7 @@ func TestOnlyAdmittedTrafficTouchesClaim(t *testing.T) {
 	r.Arm(Claim{
 		ID: "c1", Addr: claimAddr,
 		Allow: func(_ netip.Addr, port uint16) bool { return port == 443 },
-		Touch: func() { touches++ },
+		Touch: func(time.Time) { touches++ },
 	})
 	a := r.claims[claimAddr]
 	l := &link{r: r, a: a, mtu: 1450}
