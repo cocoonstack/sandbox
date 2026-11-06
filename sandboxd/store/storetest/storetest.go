@@ -153,7 +153,6 @@ func WriteSparse(t testing.TB, path string, size int64, writes map[int64][]byte)
 	return path
 }
 
-// FileSum hashes the file at path.
 func FileSum(t testing.TB, path string) [sha256.Size]byte {
 	t.Helper()
 	f, err := os.Open(path) //nolint:gosec // test path
@@ -168,7 +167,6 @@ func FileSum(t testing.TB, path string) [sha256.Size]byte {
 	return [sha256.Size]byte(h.Sum(nil))
 }
 
-// AllocatedBytes reports the disk blocks path occupies.
 func AllocatedBytes(t testing.TB, path string) int64 {
 	t.Helper()
 	info, err := os.Stat(path)
@@ -178,7 +176,6 @@ func AllocatedBytes(t testing.TB, path string) int64 {
 	return info.Sys().(*syscall.Stat_t).Blocks * 512
 }
 
-// WaitStacks polls until at least want goroutine stacks satisfy match.
 func WaitStacks(t testing.TB, want int, match func(stack string) bool) {
 	t.Helper()
 	buf := make([]byte, 1<<20)
