@@ -7,8 +7,9 @@ use tokio::sync::mpsc;
 use crate::proto::{self, ErrorKind, EventKind, Response};
 
 const OVERFLOW_MESSAGE: &str = "watch event queue overflow";
+const EVENT_QUEUE: usize = 256;
 
-/// Events written per syscall; batching keeps the queue far from its 256-slot cap.
+/// Events written per syscall; batching keeps the queue far from its cap.
 const EVENT_BATCH: usize = 64;
 
 /// Watches `path`, writing `ready`, ordered events, or a terminal error until disconnect.
@@ -22,7 +23,7 @@ where
     R: AsyncBufRead + Unpin,
     W: AsyncWrite + Unpin,
 {
-    let (tx, mut rx) = mpsc::channel::<Response>(256);
+    let (tx, mut rx) = mpsc::channel::<Response>(EVENT_QUEUE);
     // arming walks the tree and adds a watch per directory, so it must not hold a runtime worker
     let armed = tokio::task::spawn_blocking(move || arm(tx, &path, recursive)).await;
     let _watcher = match armed {
