@@ -247,6 +247,38 @@ async fn kill_actually_terminates_a_live_process() {
 }
 
 #[tokio::test]
+async fn kill_ends_the_whole_command_not_only_its_shell() {
+    let dir = tempfile::tempdir().unwrap();
+    let marker = dir.path().join("child");
+    let state = Arc::new(State::new());
+    let script = format!("sleep 300 & echo $! > {}; wait", marker.display());
+    let pid = detached_pid(&state, &script).await;
+    wait_listed(&state, pid).await;
+    let child = tokio::time::timeout(common::DEADLINE, async {
+        loop {
+            if let Ok(s) = std::fs::read_to_string(&marker)
+                && let Ok(n) = s.trim().parse::<u32>()
+            {
+                return n;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the shell never wrote its child's pid");
+    let killed = one(&state, &format!(r#"{{"op":"kill","pid":{pid}}}"#)).await;
+    assert_eq!(type_of(&killed[0]), "done");
+    wait_for_exit(&state, pid).await;
+    tokio::time::timeout(common::DEADLINE, async {
+        while alive(child) {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the command's child outlived the kill");
+}
+
+#[tokio::test]
 async fn exec_unknown_user_is_rejected() {
     let frames =
         roundtrip(r#"{"op":"exec","argv":["true"],"user":"definitely-not-a-user-xyz"}"#).await;
@@ -388,7 +420,7 @@ async fn a_client_gone_mid_output_releases_the_stdin_a_forked_child_holds() {
         &mut cw,
         json!({
             "op": "exec",
-            "argv": ["/bin/sh", "-c", "exec 3<&0; (sleep 1; wc -c <&3 >\"$OUT.tmp\"; mv \"$OUT.tmp\" \"$OUT\") >/dev/null 2>&1 & while :; do echo x; sleep 0.05; done"],
+            "argv": ["/bin/sh", "-c", "exec 3<&0; perl -e 'setpgrp; exec @ARGV' /bin/sh -c 'sleep 1; wc -c <&3 >\"$OUT.tmp\"; mv \"$OUT.tmp\" \"$OUT\"' >/dev/null 2>&1 & while :; do echo x; sleep 0.05; done"],
             "env": {"OUT": out.to_str().unwrap()}
         }),
     )
@@ -418,4 +450,11 @@ async fn a_client_gone_mid_output_releases_the_stdin_a_forked_child_holds() {
         read < 256 * 1024,
         "the forked child read {read} bytes: stdin kept flowing after its client left"
     );
+}
+
+fn alive(pid: u32) -> bool {
+    std::process::Command::new("/bin/sh")
+        .args(["-c", &format!("kill -0 {pid} 2>/dev/null")])
+        .status()
+        .is_ok_and(|s| s.success())
 }

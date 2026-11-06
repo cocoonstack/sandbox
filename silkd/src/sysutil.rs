@@ -64,17 +64,10 @@ pub fn rand_token() -> std::io::Result<String> {
         .collect())
 }
 
-/// SIGKILLs the group led by `pgid`, so a session's external command dies with its shell.
-pub fn kill_group(pgid: u32) {
+/// Sends `sig` to the group led by `pgid`, so a command's children share its fate; ESRCH is ignored.
+pub fn signal_group(pgid: u32, sig: i32) {
     if is_valid_pid(pgid) {
-        send_signal(-(pgid as libc::pid_t), libc::SIGKILL);
-    }
-}
-
-/// Sends `sig` to `pid`, ignoring ESRCH against a just-exited pid.
-pub fn signal_pid(pid: u32, sig: i32) {
-    if is_valid_pid(pid) {
-        send_signal(pid as libc::pid_t, sig);
+        send_signal(-(pgid as libc::pid_t), sig);
     }
 }
 
