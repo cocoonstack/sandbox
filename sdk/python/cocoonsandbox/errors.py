@@ -78,6 +78,6 @@ def _error_message(raw: bytes) -> str:
 
 
 def _mark_gone(exc: _E, tag: tuple[str, str]) -> _E:
-    """Tags an owner's 404 or refused dial with its (sandbox id, owner address); callback errors stay untagged."""
+    """Tags an owner's 404 or refused dial with its (sandbox id, owner address)."""
     exc._owner_gone = tag
     return exc
