@@ -589,10 +589,11 @@ func TestARefusedDialAnswersItsStatusAndIsAuditedWithNoTransfer(t *testing.T) {
 			if ev := recvEvent(t, events); ev.Decision != tt.decision {
 				t.Errorf("CONNECT audit %+v, want decision %v", ev, tt.decision)
 			}
+			front.Close()
 			select {
 			case ev := <-transfers:
 				t.Errorf("a refused dial reported a transfer for %s", ev.Host)
-			case <-time.After(200 * time.Millisecond):
+			default:
 			}
 		})
 	}

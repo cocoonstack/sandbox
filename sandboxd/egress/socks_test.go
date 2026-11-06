@@ -97,14 +97,18 @@ func TestSocksRefusesWhatItCannotServe(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			events := make(chan Event, 4)
 			_, addr := socksProxy(t, Policy{Allow: []Rule{{Host: "*"}}}, nil, fixedDial("127.0.0.1:1"), events, nil)
-			_, reply := socksExchange(t, addr, tt.greeting, tt.request)
+			conn, reply := socksExchange(t, addr, tt.greeting, tt.request)
 			if string(reply[:2]) != string(tt.want) {
 				t.Errorf("reply = %v, want prefix %v", reply, tt.want)
+			}
+			_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+			if _, err := io.Copy(io.Discard, conn); errors.Is(err, os.ErrDeadlineExceeded) {
+				t.Fatalf("the proxy never hung up: %v", err)
 			}
 			select {
 			case ev := <-events:
 				t.Errorf("refused handshake recorded %+v", ev)
-			case <-time.After(50 * time.Millisecond):
+			default:
 			}
 		})
 	}
