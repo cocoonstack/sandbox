@@ -150,10 +150,10 @@ func (m *Manager) reapOnce(ctx context.Context) {
 		case reapPause:
 			logSweepResult(ctx, logger, m.pauseArchive(ctx, v.sb), "archived expired sandbox "+v.id, "archive expired sandbox "+v.id)
 		default:
+			m.releaseTun(ctx, v.id, v.tun)
 			td := m.quiesceVolumes(ctx, v.sb)
 			td.holds = v.holds
 			m.out.Disarm(v.id, m.removeOrRetry(ctx, v.vmName, v.id, td))
-			m.releaseTun(ctx, v.id, v.tun)
 			m.dropSnap(ctx, v.snap)
 			m.counters.reaps.Add(1)
 			m.recordUsage(ctx, usage.Event{Event: reapEvent, ID: v.id, VMName: v.vmName, Tenant: v.tenant, Deadline: v.deadline})
