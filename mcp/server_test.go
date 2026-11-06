@@ -14,7 +14,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/cocoonstack/sandbox/protocol/wire"
 	"github.com/cocoonstack/sandbox/sdk/go/silkd/silkdtest"
@@ -53,14 +52,14 @@ func TestServeSpeaksMCP(t *testing.T) {
 		t.Fatalf("got %d replies, want 8 (notification unanswered)", len(replies))
 	}
 
-	initResult := replies[1]["result"].(map[string]any)
+	initResult := as[map[string]any](t, replies[1]["result"])
 	if initResult["protocolVersion"] != protocolVersion {
 		t.Errorf("initialize protocolVersion = %v", initResult["protocolVersion"])
 	}
-	if info := initResult["serverInfo"].(map[string]any); info["version"] != version {
+	if info := as[map[string]any](t, initResult["serverInfo"]); info["version"] != version {
 		t.Errorf("initialize serverInfo = %v, want version %q", info, version)
 	}
-	tools := replies[2]["result"].(map[string]any)["tools"].([]any)
+	tools := as[[]any](t, as[map[string]any](t, replies[2]["result"])["tools"])
 	if len(tools) != len(toolSpecs()) {
 		t.Errorf("tools/list: %d tools, want %d", len(tools), len(toolSpecs()))
 	}
@@ -76,7 +75,7 @@ func TestServeSpeaksMCP(t *testing.T) {
 		t.Errorf("release: %q", got)
 	}
 
-	execReply := replies[6]["result"].(map[string]any)
+	execReply := as[map[string]any](t, replies[6]["result"])
 	if execReply["isError"] != true {
 		t.Errorf("exec after release: %+v, want isError", execReply)
 	}
@@ -114,7 +113,7 @@ func TestExecKeepsOutputWhenTheGuestDrops(t *testing.T) {
 		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"create_sandbox","arguments":{}}}`,
 		`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"exec","arguments":{"sandbox_id":"sb_1","command":"yes"}}}`,
 	)
-	execResult := replies[2]["result"].(map[string]any)
+	execResult := as[map[string]any](t, replies[2]["result"])
 	text := toolText(t, replies[2])
 	if execResult["isError"] != true || !strings.Contains(text, `"stdout":"partial"`) || !strings.Contains(text, `"error"`) {
 		t.Errorf("exec reply %v: want isError with the partial stdout and an error field", text)
@@ -179,9 +178,13 @@ func TestToolRepliesReplaceInvalidUTF8(t *testing.T) {
 
 func TestCloseBoxesWaitsForEveryReleaseOnce(t *testing.T) {
 	var releases atomic.Int32
+	var arrived sync.WaitGroup
+	arrived.Add(3)
+	gate := make(chan struct{})
 	node := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, "/release") {
-			time.Sleep(200 * time.Millisecond)
+			arrived.Done()
+			<-gate
 			releases.Add(1)
 		}
 		w.WriteHeader(http.StatusNoContent)
@@ -196,14 +199,20 @@ func TestCloseBoxesWaitsForEveryReleaseOnce(t *testing.T) {
 		srv.trackBox(srv.client.Attach(addr, id, "tok"))
 	}
 	var wg sync.WaitGroup
+	called := make(chan struct{}, 2)
 	for range 2 {
 		wg.Go(func() {
+			called <- struct{}{}
 			srv.closeBoxes()
 			if got := releases.Load(); got != 3 {
 				t.Errorf("releases = %d after closeBoxes returned, want 3", got)
 			}
 		})
 	}
+	<-called
+	<-called
+	arrived.Wait()
+	close(gate)
 	wg.Wait()
 }
 
@@ -240,14 +249,23 @@ func TestCappedOutputMarksTruncation(t *testing.T) {
 	}
 }
 
+func as[T any](t *testing.T, v any) T {
+	t.Helper()
+	got, ok := v.(T)
+	if !ok {
+		t.Fatalf("%v is %T, want %T", v, v, got)
+	}
+	return got
+}
+
 func toolText(t *testing.T, resp map[string]any) string {
 	t.Helper()
 	res, ok := resp["result"].(map[string]any)
 	if !ok {
 		t.Fatalf("reply without result: %+v", resp)
 	}
-	content := res["content"].([]any)
-	return fmt.Sprintf("%v", content[0].(map[string]any)["text"])
+	content := as[[]any](t, res["content"])
+	return fmt.Sprintf("%v", as[map[string]any](t, content[0])["text"])
 }
 
 func newTestServer(t *testing.T, extra func(http.ResponseWriter, *http.Request) bool) *server {
@@ -313,7 +331,7 @@ func serveLines(t *testing.T, srv *server, lines ...string) map[int]map[string]a
 		if err := json.Unmarshal(line, &resp); err != nil {
 			t.Fatalf("decode reply %q: %v", line, err)
 		}
-		replies[int(resp["id"].(float64))] = resp
+		replies[int(as[float64](t, resp["id"]))] = resp
 	}
 	return replies
 }

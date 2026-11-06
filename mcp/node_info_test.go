@@ -3,13 +3,14 @@ package main
 import (
 	"encoding/json/v2"
 	"net/http"
-	"net/http/httptest"
-	"strings"
 	"testing"
 )
 
 func TestNodeInfoReportsCapacityState(t *testing.T) {
-	node := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	srv := newTestServer(t, func(w http.ResponseWriter, r *http.Request) bool {
+		if r.URL.Path != "/v1/info" {
+			return false
+		}
 		_ = json.MarshalWrite(w, map[string]any{
 			"pools":              []any{},
 			"claimed":            2,
@@ -18,13 +19,8 @@ func TestNodeInfoReportsCapacityState(t *testing.T) {
 			"at_capacity":        true,
 			"at_capacity_reason": "not enough memory",
 		})
-	}))
-	t.Cleanup(node.Close)
-
-	srv, err := newServer(strings.TrimPrefix(node.URL, "http://"), "", "rt:24.04")
-	if err != nil {
-		t.Fatalf("newServer: %v", err)
-	}
+		return true
+	})
 	text, err := toolNodeInfo(t.Context(), srv, nil)
 	if err != nil {
 		t.Fatalf("toolNodeInfo: %v", err)
