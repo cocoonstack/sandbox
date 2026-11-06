@@ -2,6 +2,7 @@ package pool
 
 import (
 	"errors"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -25,9 +26,7 @@ func TestDiskUnderReserveRefusesClaimsAndWakesUntilItRecovers(t *testing.T) {
 		t.Errorf("gauges %+v, want at capacity for the disk", g)
 	}
 
-	next := &config.Config{DataDir: m.dataDir, DiskReserve: &config.DiskReserve{Free: "1K"}, Pools: []config.PoolSpec{{PoolKey: testKey}}}
-	m.view.Store(newConfigView(next, testSecrets(t)))
-	m.checkDisk(t.Context())
+	setDiskReserve(t, m, &config.DiskReserve{Free: "1K"})
 	if err := m.Wake(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
 		t.Errorf("wake above the reserve: %v", err)
 	}
@@ -68,8 +67,7 @@ func TestDiskUnderReserveHoldsHibernatesAndCaptures(t *testing.T) {
 		t.Errorf("promote under the reserve: %v, want ErrQuota", err)
 	}
 
-	m.view.Store(newConfigView(&config.Config{DataDir: m.dataDir, DiskReserve: &config.DiskReserve{Free: "1K"}, Pools: []config.PoolSpec{{PoolKey: testKey}}}, testSecrets(t)))
-	m.checkDisk(t.Context())
+	setDiskReserve(t, m, &config.DiskReserve{Free: "1K"})
 	if err := m.Hibernate(t.Context(), sb.ID, cred); err != nil {
 		t.Errorf("hibernate above the reserve: %v", err)
 	}
@@ -78,12 +76,17 @@ func TestDiskUnderReserveHoldsHibernatesAndCaptures(t *testing.T) {
 func TestAFailedStatfsKeepsTheDiskLowState(t *testing.T) {
 	m := diskReserveManager(t, "1000P")
 	m.checkDisk(t.Context())
-	unreadable := &config.Config{DataDir: m.dataDir, DiskReserve: &config.DiskReserve{Free: "1K", Dirs: []string{m.dataDir + "/missing"}}, Pools: []config.PoolSpec{{PoolKey: testKey}}}
-	m.view.Store(newConfigView(unreadable, testSecrets(t)))
-	m.checkDisk(t.Context())
+	setDiskReserve(t, m, &config.DiskReserve{Free: "1K", Dirs: []string{filepath.Join(m.dataDir, "missing")}})
 	if _, err := claimAny(t.Context(), m, testKey, ClaimOptions{TTL: time.Hour}); !errors.Is(err, ErrQuota) {
 		t.Errorf("claim after a failed statfs: %v, want ErrQuota while the disk was last seen low", err)
 	}
+}
+
+func setDiskReserve(t *testing.T, m *Manager, reserve *config.DiskReserve) {
+	t.Helper()
+	cfg := &config.Config{DataDir: m.dataDir, DiskReserve: reserve, Pools: []config.PoolSpec{{PoolKey: testKey}}}
+	m.view.Store(newConfigView(cfg, testSecrets(t)))
+	m.checkDisk(t.Context())
 }
 
 func diskReserveManager(t *testing.T, free string) *Manager {

@@ -10,7 +10,6 @@ import (
 
 	"github.com/cocoonstack/sandbox/sandboxd/archives"
 	"github.com/cocoonstack/sandbox/sandboxd/config"
-	"github.com/cocoonstack/sandbox/sandboxd/egress"
 	"github.com/cocoonstack/sandbox/sandboxd/engine"
 	"github.com/cocoonstack/sandbox/sandboxd/outbound/outboundtest"
 	"github.com/cocoonstack/sandbox/sandboxd/store"
@@ -1328,7 +1327,7 @@ func TestReplicaRestartMidArchiveKeepsTheClaim(t *testing.T) {
 
 func TestARunningClaimThatMovedClosesItsDoors(t *testing.T) {
 	c := newReplicaCluster(t)
-	c.egressPol = &egress.Policy{Allow: []egress.Rule{{Host: "example.com"}}}
+	c.egressPol = hostPolicy()
 	ea, eb := newFakeEngine(), newFakeEngine()
 	ea.sockRoot, eb.sockRoot = outboundtest.SockRoot(t), outboundtest.SockRoot(t)
 	a := c.nodeOn(t, ea, "a", t.TempDir(), keepAnHour)

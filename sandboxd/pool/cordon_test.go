@@ -225,10 +225,7 @@ func TestCordonOutlivesAReloadAndAnUndrain(t *testing.T) {
 	if err := m.Cordon(t.Context()); err != nil {
 		t.Fatalf("cordon: %v", err)
 	}
-	next := *m.cfg
-	if _, err := m.ReloadConfig(t.Context(), &next); err != nil {
-		t.Fatalf("reload: %v", err)
-	}
+	reloadWith(t, m, func(*config.Config) {})
 	m.Drain(t.Context())
 	m.Undrain(t.Context())
 	if _, g := m.Info(); !g.Cordoned || g.Draining {

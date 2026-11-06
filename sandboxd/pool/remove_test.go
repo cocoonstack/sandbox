@@ -44,17 +44,13 @@ func TestRemovalRetryConvergesConfirmedSurvivor(t *testing.T) {
 	eng.removeErrFor = "survivor"
 
 	m.destroy(t.Context(), "survivor")
-	m.mu.Lock()
-	_, pending := m.pendingRemovals["survivor"]
-	m.mu.Unlock()
+	pending := pendingOf(m, "survivor")
 	if !pending {
 		t.Fatal("surviving VM was not retained for retry")
 	}
 
 	m.retryRemovals(t.Context()).Wait()
-	m.mu.Lock()
-	_, pending = m.pendingRemovals["survivor"]
-	m.mu.Unlock()
+	pending = pendingOf(m, "survivor")
 	if !pending {
 		t.Fatal("failed retry dropped the survivor from the queue")
 	}
@@ -63,9 +59,7 @@ func TestRemovalRetryConvergesConfirmedSurvivor(t *testing.T) {
 	eng.removeErrFor = ""
 	eng.mu.Unlock()
 	m.retryRemovals(t.Context()).Wait()
-	m.mu.Lock()
-	_, pending = m.pendingRemovals["survivor"]
-	m.mu.Unlock()
+	pending = pendingOf(m, "survivor")
 	if pending || !eng.removed("survivor") {
 		t.Fatalf("retry did not converge: pending=%v removed=%v", pending, eng.removed("survivor"))
 	}
@@ -93,9 +87,7 @@ func TestRemovalRetryFinishesEgressCleanup(t *testing.T) {
 	eng.removeErrFor = ""
 	eng.mu.Unlock()
 	m.retryRemovals(t.Context()).Wait()
-	m.mu.Lock()
-	_, pending := m.pendingRemovals["survivor"]
-	m.mu.Unlock()
+	pending := pendingOf(m, "survivor")
 	if unlocked := taps.Unlocked(); pending || !slices.Equal(unlocked, []string{"tap-survivor"}) || !eng.removed("survivor") {
 		t.Fatalf("egress cleanup incomplete: pending=%v unlocked=%v removed=%v",
 			pending, unlocked, eng.removed("survivor"))
@@ -126,9 +118,7 @@ func TestStaleRemovalRetryKeepsTapForCleanup(t *testing.T) {
 	eng.removeErrFor = ""
 	eng.mu.Unlock()
 	m.retryRemovals(t.Context()).Wait()
-	m.mu.Lock()
-	_, pending := m.pendingRemovals["sbx-stale"]
-	m.mu.Unlock()
+	pending := pendingOf(m, "sbx-stale")
 	if pending || !eng.removed("sbx-stale") {
 		t.Fatalf("stale retry did not converge: pending=%v removed=%v", pending, eng.removed("sbx-stale"))
 	}

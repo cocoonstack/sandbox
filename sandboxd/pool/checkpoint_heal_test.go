@@ -329,61 +329,36 @@ func TestValidateHealedCheckpoint(t *testing.T) {
 	}
 }
 
-func TestDeleteCheckpointBroadcasts(t *testing.T) {
-	eng := newFakeEngine()
-	m := newTestManager(t, eng)
-	src := mustClaim(t, m, testKey)
-	ckpt, err := m.Checkpoint(t.Context(), src.ID, Cred{Token: src.Token}, "", "")
-	if err != nil {
-		t.Fatalf("checkpoint: %v", err)
+func TestDeleteCheckpointBroadcastsOnlyAcrossAFleet(t *testing.T) {
+	tests := []struct {
+		name   string
+		scope  DeleteScope
+		shared bool
+		calls  int
+	}{
+		{"fleet scope", DeleteFleet, false, 1},
+		{"no forward", DeleteLocal, false, 0},
+		{"shared store", DeleteFleet, true, 0},
 	}
-	var calls []string
-	m.peerDelete = func(_ context.Context, id string) { calls = append(calls, id) }
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := newTestManager(t, newFakeEngine())
+			src := mustClaim(t, m, testKey)
+			ckpt, err := m.Checkpoint(t.Context(), src.ID, Cred{Token: src.Token}, "", "")
+			if err != nil {
+				t.Fatalf("checkpoint: %v", err)
+			}
+			m.ckptsShared = tt.shared
+			var calls []string
+			m.peerDelete = func(_ context.Context, id string) { calls = append(calls, id) }
 
-	if err := m.DeleteCheckpoint(t.Context(), ckpt.ID, "", DeleteFleet); err != nil {
-		t.Fatalf("DeleteCheckpoint: %v", err)
-	}
-	if len(calls) != 1 || calls[0] != ckpt.ID {
-		t.Errorf("peerDelete calls = %v, want one call for %s", calls, ckpt.ID)
-	}
-}
-
-func TestDeleteCheckpointNoForwardSkipsBroadcast(t *testing.T) {
-	eng := newFakeEngine()
-	m := newTestManager(t, eng)
-	src := mustClaim(t, m, testKey)
-	ckpt, err := m.Checkpoint(t.Context(), src.ID, Cred{Token: src.Token}, "", "")
-	if err != nil {
-		t.Fatalf("checkpoint: %v", err)
-	}
-	called := false
-	m.peerDelete = func(context.Context, string) { called = true }
-
-	if err := m.DeleteCheckpoint(t.Context(), ckpt.ID, "", DeleteLocal); err != nil {
-		t.Fatalf("DeleteCheckpoint: %v", err)
-	}
-	if called {
-		t.Error("peerDelete called despite no_forward")
-	}
-}
-
-func TestDeleteCheckpointSharedStoreSkipsBroadcast(t *testing.T) {
-	eng := newFakeEngine()
-	m := newTestManager(t, eng)
-	src := mustClaim(t, m, testKey)
-	ckpt, err := m.Checkpoint(t.Context(), src.ID, Cred{Token: src.Token}, "", "")
-	if err != nil {
-		t.Fatalf("checkpoint: %v", err)
-	}
-	m.ckptsShared = true
-	called := false
-	m.peerDelete = func(context.Context, string) { called = true }
-
-	if err := m.DeleteCheckpoint(t.Context(), ckpt.ID, "", DeleteFleet); err != nil {
-		t.Fatalf("DeleteCheckpoint: %v", err)
-	}
-	if called {
-		t.Error("peerDelete called on a shared-store node")
+			if err = m.DeleteCheckpoint(t.Context(), ckpt.ID, "", tt.scope); err != nil {
+				t.Fatalf("DeleteCheckpoint: %v", err)
+			}
+			if len(calls) != tt.calls || tt.calls == 1 && calls[0] != ckpt.ID {
+				t.Errorf("peerDelete calls = %v, want %d for %s", calls, tt.calls, ckpt.ID)
+			}
+		})
 	}
 }
 

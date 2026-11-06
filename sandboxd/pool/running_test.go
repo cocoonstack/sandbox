@@ -224,13 +224,11 @@ func TestAReloadAppliesTheClaimCapsWithoutStoppingAClaim(t *testing.T) {
 
 func TestAReloadAppliesTheNodeSettings(t *testing.T) {
 	m := newTestManager(t, newFakeEngine())
-	next := *m.cfg
-	next.MaxForkCount, next.ReleaseDelaySeconds, next.VMMRestart = 1, 5, types.VMMRestartNone
-	next.SyncClaims, next.CheckpointTTLHours = true, 24
-	next.IdleHibernateSeconds, next.ArchiveAfterSeconds, next.ArchiveDeleteAfterSeconds = 60, 120, 3600
-	if _, err := m.ReloadConfig(t.Context(), &next); err != nil {
-		t.Fatalf("reload: %v", err)
-	}
+	reloadWith(t, m, func(c *config.Config) {
+		c.MaxForkCount, c.ReleaseDelaySeconds, c.VMMRestart = 1, 5, types.VMMRestartNone
+		c.SyncClaims, c.CheckpointTTLHours = true, 24
+		c.IdleHibernateSeconds, c.ArchiveAfterSeconds, c.ArchiveDeleteAfterSeconds = 60, 120, 3600
+	})
 	v := m.view.Load()
 	got := []time.Duration{v.releaseDelay, v.ckptTTL, v.idleDefault, v.archiveAfterDefault, v.archiveDeleteDefault}
 	want := []time.Duration{5 * time.Second, 24 * time.Hour, time.Minute, 2 * time.Minute, time.Hour}

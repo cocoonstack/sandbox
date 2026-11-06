@@ -612,11 +612,7 @@ func TestEgressAuditNamesTenantAndEndsARelayedFrameCannot(t *testing.T) {
 		Local: netip.MustParseAddrPort("198.51.100.7:40123"), Remote: netip.MustParseAddrPort("93.184.216.34:443"),
 	})
 	m.Audit(t.Context(), "sb_v", []byte(`{"op":"egress","dest":"x","tenant":"other","src_addr":"198.51.100.7:1","dst_addr":"192.0.2.1:25"}`))
-	raw, err := os.ReadFile(filepath.Join(dir, "audit.jsonl"))
-	if err != nil {
-		t.Fatalf("read audit journal: %v", err)
-	}
-	lines := strings.Split(strings.TrimSpace(string(raw)), "\n")
+	lines := auditLines(t, dir)
 	if len(lines) != 2 {
 		t.Fatalf("audit lines %q, want 2", lines)
 	}
@@ -646,11 +642,7 @@ func TestARelayedFrameCannotForgeOrDropItsAuditLine(t *testing.T) {
 	for _, frame := range frames {
 		m.Audit(t.Context(), "sb_f", []byte(frame))
 	}
-	raw, err := os.ReadFile(filepath.Join(dir, "audit.jsonl"))
-	if err != nil {
-		t.Fatalf("read audit journal: %v", err)
-	}
-	lines := strings.Split(strings.TrimSpace(string(raw)), "\n")
+	lines := auditLines(t, dir)
 	if len(lines) != len(frames) {
 		t.Fatalf("audit lines %q for %d frames", lines, len(frames))
 	}

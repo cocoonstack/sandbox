@@ -294,11 +294,9 @@ func TestARuntimeTenantTakesItsEgressClassWithoutARestart(t *testing.T) {
 	if status("b.test") != http.StatusOK || status("a.test") != http.StatusForbidden {
 		t.Fatal("the live claim's door does not serve the class it was claimed under")
 	}
-	next := *m.cfg
-	next.EgressClasses = []config.EgressClass{{Name: "desk", Egress: &egress.Policy{Allow: []egress.Rule{{Host: "a.test"}}}}}
-	if _, err = m.ReloadConfig(t.Context(), &next); err != nil {
-		t.Fatalf("reload the class: %v", err)
-	}
+	reloadWith(t, m, func(c *config.Config) {
+		c.EgressClasses = []config.EgressClass{{Name: "desk", Egress: &egress.Policy{Allow: []egress.Rule{{Host: "a.test"}}}}}
+	})
 	if status("a.test") != http.StatusOK {
 		t.Error("a reload that widens the class did not reach the live claim")
 	}

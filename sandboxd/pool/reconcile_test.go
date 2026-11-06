@@ -72,9 +72,7 @@ func TestReconcileStaleCreateSweep(t *testing.T) {
 			if eng.removed("sbx-stale-1") != tt.wantRemove {
 				t.Errorf("removed=%v, want %v", eng.removed("sbx-stale-1"), tt.wantRemove)
 			}
-			m.mu.Lock()
-			_, pending := m.pendingRemovals["sbx-stale-1"]
-			m.mu.Unlock()
+			pending := pendingOf(m, "sbx-stale-1")
 			if pending != tt.wantPending {
 				t.Errorf("pending=%v, want %v", pending, tt.wantPending)
 			}
@@ -109,9 +107,7 @@ func TestBusyStaleCreateRetryConverges(t *testing.T) {
 			eng.mu.Lock()
 			_, present := eng.vms["sbx-stale-1"]
 			eng.mu.Unlock()
-			m.mu.Lock()
-			_, pending := m.pendingRemovals["sbx-stale-1"]
-			m.mu.Unlock()
+			pending := pendingOf(m, "sbx-stale-1")
 			removed := eng.removed("sbx-stale-1")
 			if present != tt.wantPresent || removed != tt.wantRemove || pending != tt.wantPending {
 				t.Errorf("present=%v removed=%v pending=%v, want %v %v %v",

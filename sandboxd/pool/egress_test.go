@@ -252,9 +252,7 @@ func TestBatchArmFailureEndsEveryClaimEvent(t *testing.T) {
 		t.Fatal("finalizeBatch must fail when a batch member cannot arm")
 	}
 	waitFor(t, m.store.synced)
-	m.mu.Lock()
-	claimed := len(m.claimed)
-	m.mu.Unlock()
+	claimed := claimedCount(m)
 	if claimed != 0 {
 		t.Errorf("rollback left %d claims", claimed)
 	}
@@ -293,9 +291,7 @@ func TestRollbackKeepsLockWhenRemoveFails(t *testing.T) {
 	m.rollbackClaim(t.Context(), sbs, false)
 	waitFor(t, m.store.synced)
 
-	m.mu.Lock()
-	claimed := len(m.claimed)
-	m.mu.Unlock()
+	claimed := claimedCount(m)
 	if claimed != 0 {
 		t.Errorf("rollback left %d claims", claimed)
 	}
@@ -534,7 +530,7 @@ func TestAPromotedTemplatesCloneInterceptsAsItsSourcePool(t *testing.T) {
 func TestAClaimWithoutEgressGetsNoDoorsWhateverItsPolicy(t *testing.T) {
 	eng := newFakeEngine()
 	eng.sockRoot = outboundtest.SockRoot(t)
-	pol := &egress.Policy{Allow: []egress.Rule{{Host: "example.com"}}}
+	pol := hostPolicy()
 	m := egressManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1, Egress: pol})
 	pin := pinDoor(t, engine.EgressSocketPath(refillWarmVM(t, m).VsockSocket))
 	warm, err := m.ClaimWarm(t.Context(), testKey, ClaimOptions{NoEgress: true})

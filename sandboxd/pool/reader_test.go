@@ -166,18 +166,13 @@ func TestReaderServesOnlyPoolsThatAskForIt(t *testing.T) {
 func TestReloadTurnsTheReaderOnForLaterSleeps(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1})
-	next := *m.cfg
-	next.Pools = []config.PoolSpec{{PoolKey: testKey, Warm: 1, Reader: true}}
-	res, err := m.ReloadConfig(t.Context(), &next)
-	if err != nil {
-		t.Fatalf("reload: %v", err)
-	}
+	res := reloadWith(t, m, func(c *config.Config) { c.Pools = []config.PoolSpec{{PoolKey: testKey, Warm: 1, Reader: true}} })
 	if want := []string{"pools[rt:24.04 none small].reader"}; !slices.Equal(res.Changed, want) {
 		t.Errorf("changed %v, want %v", res.Changed, want)
 	}
 	sb := mustClaim(t, m, testKey)
 	hibernateClaim(t, m, sb)
-	if _, _, _, err = m.WakeAgentSocketOrRead(t.Context(), sb.ID, sb.Token); !errors.Is(err, ErrSleeping) {
+	if _, _, _, err := m.WakeAgentSocketOrRead(t.Context(), sb.ID, sb.Token); !errors.Is(err, ErrSleeping) {
 		t.Errorf("WakeAgentSocketOrRead after the reload = %v, want ErrSleeping", err)
 	}
 }

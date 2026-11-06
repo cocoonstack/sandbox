@@ -189,8 +189,8 @@ func TestEvacuateWithoutArchiveFailoverSkipsEveryClaim(t *testing.T) {
 		synctest.Wait()
 
 		assertEvacuation(t, m, 0, 1)
-		if held, ok := m.byID(sb.ID); !ok || held.HibernateSnap != "" || len(eng.hibernates) != 0 {
-			t.Errorf("held %v hibernates %v, want the claim left running", ok, eng.hibernates)
+		if !runningKept(m, sb.ID) || len(eng.hibernates) != 0 {
+			t.Errorf("hibernates %v, want the claim left running", eng.hibernates)
 		}
 	})
 }
@@ -274,9 +274,8 @@ func TestAnUndrainDuringAnEvacuationsDrainStopsIt(t *testing.T) {
 		synctest.Wait()
 
 		assertEvacuation(t, a, 0, 1)
-		held, ok := a.byID(sb.ID)
-		if !ok || held.HibernateSnap != "" || held.ArchiveCk != "" {
-			t.Errorf("held %v, want the claim still running after the undrain", ok)
+		if !runningKept(a, sb.ID) {
+			t.Error("want the claim still running after the undrain")
 		}
 	})
 }
@@ -381,8 +380,8 @@ func TestEvacuateKeepsAClaimOfARemovedTenant(t *testing.T) {
 		synctest.Wait()
 
 		assertEvacuation(t, m, 0, 1)
-		if held, ok := m.byID(sb.ID); !ok || held.HibernateSnap != "" || held.ArchiveCk != "" {
-			t.Errorf("held %v, want the claim left running", ok)
+		if !runningKept(m, sb.ID) {
+			t.Error("want the claim left running")
 		}
 	})
 }
@@ -452,8 +451,8 @@ func TestASecondEvacuateWhileOneRunsChangesNothing(t *testing.T) {
 		a.Undrain(t.Context())
 		release()
 		synctest.Wait()
-		if held, ok := a.byID(sb.ID); !ok || held.HibernateSnap != "" || held.ArchiveCk != "" {
-			t.Errorf("held %v, want the claim left running after undrain", ok)
+		if !runningKept(a, sb.ID) {
+			t.Error("want the claim left running after undrain")
 		}
 	})
 }
@@ -471,8 +470,8 @@ func TestAStoppedEvacuationDoesNotPauseAClaimItHadQueued(t *testing.T) {
 		if err := a.evacuateClaim(t.Context(), sb); err != nil {
 			t.Errorf("evacuateClaim after undrain: %v, want nil", err)
 		}
-		if held, ok := a.byID(sb.ID); !ok || held.HibernateSnap != "" || held.ArchiveCk != "" {
-			t.Errorf("held %v, want the claim left running", ok)
+		if !runningKept(a, sb.ID) {
+			t.Error("want the claim left running")
 		}
 
 		release()
@@ -750,6 +749,11 @@ func assertEvacuation(t *testing.T, m *Manager, left, kept int) {
 	if _, g := m.Info(); g.Evacuating != left || g.Claimed-g.Evacuating != kept {
 		t.Errorf("evacuation left %d of %d claims, want %d left and %d kept", g.Evacuating, g.Claimed, left, kept)
 	}
+}
+
+func runningKept(m *Manager, id string) bool {
+	held, ok := m.byID(id)
+	return ok && held.HibernateSnap == "" && held.ArchiveCk == ""
 }
 
 func holdMaint(m *Manager) (release func()) {

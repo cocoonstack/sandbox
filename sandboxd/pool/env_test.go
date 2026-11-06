@@ -349,9 +349,7 @@ func TestAFailedEnvDeliveryDestroysTheClaim(t *testing.T) {
 	if len(eng.removes) != 1 {
 		t.Errorf("removed %v, want the claim's VM", eng.removes)
 	}
-	m.mu.Lock()
-	claimed := len(m.claimed)
-	m.mu.Unlock()
+	claimed := claimedCount(m)
 	if claimed != 0 {
 		t.Errorf("%d claims recorded, want none", claimed)
 	}
@@ -502,9 +500,7 @@ func TestAClaimWithAnUninterceptedInjectIsRefused(t *testing.T) {
 	if _, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Env: injectEnv("k", "other.test")}); !errors.Is(err, ErrBadEnv) {
 		t.Fatalf("claim: %v, want ErrBadEnv", err)
 	}
-	m.mu.Lock()
-	claimed := len(m.claimed)
-	m.mu.Unlock()
+	claimed := claimedCount(m)
 	if claimed != 0 || len(eng.removedNames()) != 1 {
 		t.Errorf("%d claims left and %v removed, want none kept and the VM destroyed", claimed, eng.removedNames())
 	}

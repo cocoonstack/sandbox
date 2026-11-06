@@ -2289,6 +2289,43 @@ func hibernateClaim(t *testing.T, m *Manager, sb *types.Sandbox) {
 	}
 }
 
+func auditLines(t *testing.T, dir string) []string {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(dir, "audit.jsonl"))
+	if err != nil {
+		t.Fatalf("read audit journal: %v", err)
+	}
+	return strings.Split(strings.TrimSpace(string(raw)), "\n")
+}
+
+func reloadWith(t *testing.T, m *Manager, edit func(*config.Config)) ReloadResult {
+	t.Helper()
+	next := *m.cfg
+	edit(&next)
+	res, err := m.ReloadConfig(t.Context(), &next)
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	return res
+}
+
+func hostPolicy() *egress.Policy {
+	return &egress.Policy{Allow: []egress.Rule{{Host: "example.com"}}}
+}
+
+func pendingOf(m *Manager, name string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	_, ok := m.pendingRemovals[name]
+	return ok
+}
+
+func claimedCount(m *Manager) int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.claimed)
+}
+
 func mustFlush(t *testing.T, m *Manager) {
 	t.Helper()
 	if err := m.FlushClaims(); err != nil {

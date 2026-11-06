@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/cocoonstack/sandbox/sandboxd/config"
-	"github.com/cocoonstack/sandbox/sandboxd/egress"
 	"github.com/cocoonstack/sandbox/sandboxd/engine"
 	"github.com/cocoonstack/sandbox/sandboxd/outbound"
 	"github.com/cocoonstack/sandbox/sandboxd/outbound/outboundtest"
@@ -207,7 +206,7 @@ func TestWakeOfAFailedClaimRearmsEgressAfterARestart(t *testing.T) {
 	eng.sockRoot = outboundtest.SockRoot(t)
 	cfg := &config.Config{
 		DataDir: t.TempDir(), Bridges: []string{"sbxbr0"}, EgressCA: writeTestEgressCA(t), VMMRestart: types.VMMRestartNone,
-		Pools: []config.PoolSpec{{PoolKey: testKey, Egress: &egress.Policy{Allow: []egress.Rule{{Host: "example.com"}}}}},
+		Pools: []config.PoolSpec{{PoolKey: testKey, Egress: hostPolicy()}},
 	}
 	first := mustManager(t, cfg, eng)
 	sb := mustClaim(t, first, testKey)
@@ -241,7 +240,7 @@ func TestWakeOfAFailedClaimRearmsEgressAfterARestart(t *testing.T) {
 func TestRestartKeepsAnEgressDoorThatSurvivedTheVMM(t *testing.T) {
 	eng := newFakeEngine()
 	eng.sockRoot = outboundtest.SockRoot(t)
-	m := egressManager(t, eng, config.PoolSpec{PoolKey: testKey, Egress: &egress.Policy{Allow: []egress.Rule{{Host: "example.com"}}}})
+	m := egressManager(t, eng, config.PoolSpec{PoolKey: testKey, Egress: hostPolicy()})
 	sb := mustClaim(t, m, testKey)
 	killVMM(eng, sb.VMName)
 
@@ -292,7 +291,7 @@ func TestRestartThatCannotArmTheEgressDoorFailsAndSpendsTheBudget(t *testing.T) 
 	}
 	eng := newFakeEngine()
 	eng.sockRoot = outboundtest.SockRoot(t)
-	m := egressManager(t, eng, config.PoolSpec{PoolKey: testKey, Egress: &egress.Policy{Allow: []egress.Rule{{Host: "example.com"}}}})
+	m := egressManager(t, eng, config.PoolSpec{PoolKey: testKey, Egress: hostPolicy()})
 	sb := mustClaim(t, m, testKey)
 	killVMM(eng, sb.VMName)
 	if err := os.Chmod(eng.sockRoot, 0o500); err != nil {

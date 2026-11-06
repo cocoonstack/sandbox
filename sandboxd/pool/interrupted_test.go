@@ -305,11 +305,7 @@ func TestAFailedHibernateNeverStartsAStoppedVM(t *testing.T) {
 	m := newTestManager(t, eng)
 	sb := mustClaim(t, m, testKey)
 	eng.hibernateErr = errors.New("signal: killed")
-	eng.captureHook = func() {
-		eng.mu.Lock()
-		defer eng.mu.Unlock()
-		eng.stopped[sb.VMName] = true
-	}
+	eng.captureHook = func() { killVMM(eng, sb.VMName) }
 	if err := m.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); err == nil {
 		t.Fatal("Hibernate reported success")
 	}

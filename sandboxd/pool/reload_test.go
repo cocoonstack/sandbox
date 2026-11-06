@@ -30,13 +30,10 @@ var interceptOnKey = types.PoolKey{Template: "mitm:1", Net: types.NetNone, Size:
 func TestReloadGivesANewKeyItsSettingsBeforeItsGolden(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
-	next := *m.cfg
 	argv := []string{"node", "-e", "0"}
-	next.Pools = []config.PoolSpec{{PoolKey: testKey, Warm: 3, Warmup: argv, Storage: "20G"}}
-	res, err := m.ReloadConfig(t.Context(), &next)
-	if err != nil {
-		t.Fatalf("reload: %v", err)
-	}
+	res := reloadWith(t, m, func(c *config.Config) {
+		c.Pools = []config.PoolSpec{{PoolKey: testKey, Warm: 3, Warmup: argv, Storage: "20G"}}
+	})
 	label := "pools[rt:24.04 none small]"
 	if want := []string{label + ".warmup", label + ".storage"}; !slices.Equal(res.Changed, want) {
 		t.Errorf("changed %v, want %v", res.Changed, want)
@@ -67,11 +64,7 @@ func TestReloadRetiresAGoldenWhoseStampChangedAndLeavesClaims(t *testing.T) {
 	waitFor(t, func() bool { return refilledTo(t, m, testKey, 2) })
 	sb := mustClaim(t, m, testKey)
 	vm := sb.VMName
-	next := *m.cfg
-	next.Pools = []config.PoolSpec{{PoolKey: testKey, Warm: 2, Storage: "30G"}}
-	if _, err := m.ReloadConfig(t.Context(), &next); err != nil {
-		t.Fatalf("reload: %v", err)
-	}
+	reloadWith(t, m, func(c *config.Config) { c.Pools = []config.PoolSpec{{PoolKey: testKey, Warm: 2, Storage: "30G"}} })
 	m.mu.Lock()
 	golden, warm, live := m.pools[testKey].goldenDir, len(m.pools[testKey].warm), m.claimed[sb.ID]
 	m.mu.Unlock()
@@ -128,7 +121,7 @@ func TestReloadTurnsInterceptOnOnlyForAKeyItHasNotServedWithTheCALoaded(t *testi
 func TestReloadRefusesDroppingAPolicyLiveClaimsUse(t *testing.T) {
 	eng := newFakeEngine()
 	eng.sockRoot = outboundtest.SockRoot(t)
-	m := egressManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1, Egress: &egress.Policy{Allow: []egress.Rule{{Host: "example.com"}}}})
+	m := egressManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1, Egress: hostPolicy()})
 	if _, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{NoEgress: true}); err != nil {
 		t.Fatalf("claim without egress: %v", err)
 	}
@@ -158,7 +151,7 @@ func TestARestartWithoutAClaimsPoolPolicyCountsTheClaimDenied(t *testing.T) {
 	eng := newFakeEngine()
 	eng.sockRoot = outboundtest.SockRoot(t)
 	dataDir := t.TempDir()
-	policy := &egress.Policy{Allow: []egress.Rule{{Host: "example.com"}}}
+	policy := hostPolicy()
 	m := egressManagerAt(t, eng, dataDir, config.PoolSpec{PoolKey: testKey, Warm: 1, Egress: policy})
 	mustClaim(t, m, testKey)
 	m2 := egressManagerAt(t, eng, dataDir, config.PoolSpec{PoolKey: otherKey, Warm: 1, Egress: policy})
@@ -248,11 +241,7 @@ func TestAReloadDropsTheLiveProxiesPooledConnections(t *testing.T) {
 	inflight := make(chan error, 1)
 	go func() { inflight <- get("/slow") }()
 	<-started
-	next := *m.cfg
-	next.EgressInternalAllow = []string{"10.8.0.0/16"}
-	if _, err := m.ReloadConfig(t.Context(), &next); err != nil {
-		t.Fatalf("reload: %v", err)
-	}
+	reloadWith(t, m, func(c *config.Config) { c.EgressInternalAllow = []string{"10.8.0.0/16"} })
 	if err := get("/"); err != nil {
 		t.Fatalf("get after the reload: %v", err)
 	}
@@ -293,11 +282,7 @@ func TestReloadIsAudited(t *testing.T) {
 func TestAReloadOfTheEgressLayerChangesTheClusterDigest(t *testing.T) {
 	m := newTestManager(t, newFakeEngine())
 	before := m.ClusterDigest()
-	next := *m.cfg
-	next.EgressInternalAllow = []string{"10.8.0.0/16"}
-	if _, err := m.ReloadConfig(t.Context(), &next); err != nil {
-		t.Fatalf("reload: %v", err)
-	}
+	reloadWith(t, m, func(c *config.Config) { c.EgressInternalAllow = []string{"10.8.0.0/16"} })
 	if m.ClusterDigest() == before {
 		t.Error("the digest still covers the boot config after an egress reload")
 	}
@@ -334,14 +319,10 @@ func TestAnInterruptedReloadStillDestroysTheRetiredWarmVMs(t *testing.T) {
 func TestAReloadThatUnguardsTheNodeClosesAWarmVMsDoorsAtItsClaim(t *testing.T) {
 	eng := newFakeEngine()
 	eng.sockRoot = outboundtest.SockRoot(t)
-	m := egressManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1, Egress: &egress.Policy{Allow: []egress.Rule{{Host: "example.com"}}}})
+	m := egressManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1, Egress: hostPolicy()})
 	warm := refillWarmVM(t, m)
 	pin := pinDoor(t, engine.EgressSocketPath(warm.VsockSocket))
-	next := *m.cfg
-	next.Pools = []config.PoolSpec{{PoolKey: testKey, Warm: 1}}
-	if _, err := m.ReloadConfig(t.Context(), &next); err != nil {
-		t.Fatalf("reload: %v", err)
-	}
+	reloadWith(t, m, func(c *config.Config) { c.Pools = []config.PoolSpec{{PoolKey: testKey, Warm: 1}} })
 	conn, err := net.Dial("unix", pin)
 	if err != nil {
 		t.Fatalf("the unclaimed warm VM's door: %v, want it bound until the claim", err)

@@ -372,9 +372,7 @@ func TestArchiveWakeRegrantsTheClaimsLease(t *testing.T) {
 	if _, _, _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
 		t.Fatalf("wake: %v", err)
 	}
-	m.mu.Lock()
-	lease := time.Until(sb.Deadline)
-	m.mu.Unlock()
+	lease := time.Until(m.deadlineOf(sb))
 	if lease < time.Hour || lease > 2*time.Hour {
 		t.Errorf("lease after the wake = %v, want the 2h the claim asked for", lease)
 	}

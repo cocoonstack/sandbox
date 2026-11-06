@@ -219,11 +219,7 @@ func TestAWakeIntoAPoolWithoutTunTellsTheGuestTunDown(t *testing.T) {
 	m := tunManager(t, eng, addrs, config.PoolSpec{PoolKey: testKey, Tun: true, Egress: anyPolicy})
 	sb := mustClaim(t, m, testKey)
 	hibernateClaim(t, m, sb)
-	next := *m.cfg
-	next.Pools = []config.PoolSpec{{PoolKey: testKey, Egress: anyPolicy}}
-	if _, err := m.ReloadConfig(t.Context(), &next); err != nil {
-		t.Fatalf("reload: %v", err)
-	}
+	reloadWith(t, m, func(c *config.Config) { c.Pools = []config.PoolSpec{{PoolKey: testKey, Egress: anyPolicy}} })
 	if err := m.Wake(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
 		t.Fatalf("wake: %v", err)
 	}

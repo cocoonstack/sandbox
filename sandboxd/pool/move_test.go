@@ -19,7 +19,6 @@ import (
 	"time"
 
 	"github.com/cocoonstack/sandbox/sandboxd/archives"
-	"github.com/cocoonstack/sandbox/sandboxd/egress"
 	"github.com/cocoonstack/sandbox/sandboxd/engine"
 	"github.com/cocoonstack/sandbox/sandboxd/moves"
 	"github.com/cocoonstack/sandbox/sandboxd/moves/movestest"
@@ -1509,7 +1508,7 @@ func newMoveCluster(t *testing.T) *moveCluster {
 func newMoveClusterWith(t *testing.T, edit func(*failoverCluster)) *moveCluster {
 	t.Helper()
 	c := newFailoverCluster(t)
-	c.egressPol = &egress.Policy{Allow: []egress.Rule{{Host: "example.com"}}}
+	c.egressPol = hostPolicy()
 	edit(c)
 	reg := movestest.NewMem()
 	c.moves = reg

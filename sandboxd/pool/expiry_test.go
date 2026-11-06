@@ -32,9 +32,7 @@ func TestExpiryArchiveHibernatesAndArchivesARunningClaim(t *testing.T) {
 		if _, _, _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
 			t.Fatalf("round %d: wake: %v", round, err)
 		}
-		m.mu.Lock()
-		lease := time.Until(sb.Deadline)
-		m.mu.Unlock()
+		lease := time.Until(m.deadlineOf(sb))
 		if lease < 59*time.Minute {
 			t.Fatalf("round %d: lease after the wake %v, want the claim's hour again", round, lease)
 		}
@@ -174,9 +172,7 @@ func TestExpiryArchiveWakeBeforeTheExportGrantsAFreshLease(t *testing.T) {
 	if _, _, _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
 		t.Fatalf("wake: %v", err)
 	}
-	m.mu.Lock()
-	lease := time.Until(sb.Deadline)
-	m.mu.Unlock()
+	lease := time.Until(m.deadlineOf(sb))
 	if lease < 59*time.Minute {
 		t.Fatalf("lease after a wake from the expiry hibernate = %v, want the claim's hour again", lease)
 	}
@@ -200,9 +196,7 @@ func TestATierClaimWokenPastItsLeaseBeforeTheExportGetsAFreshLease(t *testing.T)
 	if _, _, _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
 		t.Fatalf("wake: %v", err)
 	}
-	m.mu.Lock()
-	lease := time.Until(sb.Deadline)
-	m.mu.Unlock()
+	lease := time.Until(m.deadlineOf(sb))
 	if lease < 59*time.Minute {
 		t.Fatalf("lease after a wake past the lease = %v, want the claim's hour again", lease)
 	}

@@ -107,14 +107,10 @@ func TestRuntimeCatalogChangesAreAudited(t *testing.T) {
 			t.Fatalf("UnregisterVolume: %v", err)
 		}
 	}
-	raw, err := os.ReadFile(filepath.Join(m.dataDir, "audit.jsonl"))
-	if err != nil {
-		t.Fatalf("ReadFile: %v", err)
-	}
-	lines := strings.Split(strings.TrimSpace(string(raw)), "\n")
+	lines := auditLines(t, m.dataDir)
 	want := []auditFrame{{Op: "volumes", Added: []string{"data"}}, {Op: "volumes", Removed: []string{"data"}}, {Op: "volumes", Removed: []string{"data"}}}
 	if len(lines) != len(want) {
-		t.Fatalf("audit records: %s", raw)
+		t.Fatalf("audit records: %q", lines)
 	}
 	for i, line := range lines {
 		var got auditFrame

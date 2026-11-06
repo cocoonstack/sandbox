@@ -12,38 +12,35 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
-func TestGoldenBuildInstallsCAForInterceptPool(t *testing.T) {
-	eng := newFakeEngine()
-	m := egressManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1, Egress: interceptPolicy()})
-	if m.out.CAFingerprint() == "" {
-		t.Fatal("egress CA not loaded for an intercept pool")
+func TestGoldenBuildInstallsCAOnlyForAnInterceptPool(t *testing.T) {
+	tests := []struct {
+		name     string
+		policy   *egress.Policy
+		caLoaded bool
+		installs int
+	}{
+		{"intercept pool", interceptPolicy(), true, 1},
+		{"plain pool", plainPolicy(), false, 0},
 	}
-	final := buildGoldenAt(t, m, testKey, "")
-	if len(eng.caInstalls) != 1 {
-		t.Fatalf("InstallCACert calls = %d, want 1", len(eng.caInstalls))
-	}
-	stamp, err := os.ReadFile(final + goldenStampSuffix)
-	if err != nil {
-		t.Fatalf("read golden stamp: %v", err)
-	}
-	if want := m.goldenStamp(m.view.Load(), testKey, ""); string(stamp) != want {
-		t.Errorf("stamp = %q, want %q", stamp, want)
-	}
-}
-
-func TestGoldenBuildSkipsCAForPlainPool(t *testing.T) {
-	eng := newFakeEngine()
-	plain := &egress.Policy{Allow: []egress.Rule{{Host: "api.github.com", Secret: "gh"}}}
-	m := egressManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1, Egress: plain})
-	if m.out.CAFingerprint() != "" {
-		t.Error("egress CA loaded though no pool intercepts")
-	}
-	final := buildGoldenAt(t, m, testKey, "")
-	if len(eng.caInstalls) != 0 {
-		t.Errorf("InstallCACert called %d times for a plain pool", len(eng.caInstalls))
-	}
-	if stamp, err := os.ReadFile(final + goldenStampSuffix); err != nil || string(stamp) != m.goldenStamp(m.view.Load(), testKey, "") {
-		t.Errorf("stamp = %q (%v), want one without a CA fingerprint", stamp, err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			eng := newFakeEngine()
+			m := egressManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1, Egress: tt.policy})
+			if loaded := m.out.CAFingerprint() != ""; loaded != tt.caLoaded {
+				t.Fatalf("egress CA loaded = %v, want %v", loaded, tt.caLoaded)
+			}
+			final := buildGoldenAt(t, m, testKey, "")
+			if len(eng.caInstalls) != tt.installs {
+				t.Fatalf("InstallCACert calls = %d, want %d", len(eng.caInstalls), tt.installs)
+			}
+			stamp, err := os.ReadFile(final + goldenStampSuffix)
+			if err != nil {
+				t.Fatalf("read golden stamp: %v", err)
+			}
+			if want := m.goldenStamp(m.view.Load(), testKey, ""); string(stamp) != want {
+				t.Errorf("stamp = %q, want %q", stamp, want)
+			}
+		})
 	}
 }
 
@@ -76,7 +73,7 @@ func TestGoldenCAStampRebuildsOnMismatch(t *testing.T) {
 	}
 	p.goldenDir = ""
 	editEgress(t, m, func(cfg *config.Config) {
-		cfg.Pools = []config.PoolSpec{{PoolKey: testKey, Warm: 1, Egress: &egress.Policy{Allow: []egress.Rule{{Host: "api.github.com", Secret: "gh"}}}}}
+		cfg.Pools = []config.PoolSpec{{PoolKey: testKey, Warm: 1, Egress: plainPolicy()}}
 	})
 	m.adoptGolden(p, "")
 	if p.goldenDir != "" {
@@ -84,30 +81,28 @@ func TestGoldenCAStampRebuildsOnMismatch(t *testing.T) {
 	}
 }
 
-func TestColdProvisionInstallsCAForInterceptPool(t *testing.T) {
-	eng := newFakeEngine()
-	m := egressManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1, Egress: interceptPolicy()})
-	sb, err := m.provision(t.Context(), testKey, "")
-	if err != nil {
-		t.Fatalf("cold provision: %v", err)
+func TestColdProvisionInstallsCAOnlyForAnInterceptPool(t *testing.T) {
+	tests := []struct {
+		name     string
+		policy   *egress.Policy
+		installs int
+	}{
+		{"intercept pool", interceptPolicy(), 1},
+		{"plain pool", plainPolicy(), 0},
 	}
-	m.destroy(t.Context(), sb.VMName)
-	if n := len(eng.caInstalls); n != 1 {
-		t.Errorf("InstallCACert calls = %d, want 1 (pre-golden cold claim must trust the root)", n)
-	}
-}
-
-func TestColdProvisionSkipsCAForPlainPool(t *testing.T) {
-	eng := newFakeEngine()
-	plain := &egress.Policy{Allow: []egress.Rule{{Host: "api.github.com", Secret: "gh"}}}
-	m := egressManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1, Egress: plain})
-	sb, err := m.provision(t.Context(), testKey, "")
-	if err != nil {
-		t.Fatalf("cold provision: %v", err)
-	}
-	m.destroy(t.Context(), sb.VMName)
-	if n := len(eng.caInstalls); n != 0 {
-		t.Errorf("InstallCACert called %d times for a plain pool", n)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			eng := newFakeEngine()
+			m := egressManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1, Egress: tt.policy})
+			sb, err := m.provision(t.Context(), testKey, "")
+			if err != nil {
+				t.Fatalf("cold provision: %v", err)
+			}
+			m.destroy(t.Context(), sb.VMName)
+			if n := len(eng.caInstalls); n != tt.installs {
+				t.Errorf("InstallCACert calls = %d, want %d", n, tt.installs)
+			}
+		})
 	}
 }
 
@@ -130,6 +125,10 @@ func TestInterceptPoolAllowsPromote(t *testing.T) {
 	if _, _, err := m.Promote(t.Context(), sb.ID, Cred{Token: "tok"}, "tpl:x", ""); err != nil {
 		t.Errorf("Promote of an interception-pool sandbox: %v, want success", err)
 	}
+}
+
+func plainPolicy() *egress.Policy {
+	return &egress.Policy{Allow: []egress.Rule{{Host: "api.github.com", Secret: "gh"}}}
 }
 
 func interceptPolicy() *egress.Policy {
