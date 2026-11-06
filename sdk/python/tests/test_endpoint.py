@@ -9,18 +9,17 @@ from cocoonsandbox.endpoint import _endpoint_url
 
 
 @pytest.mark.parametrize(
-    ("addr", "scheme", "want"),
+    ("addr", "want"),
     [
-        ("localhost:7777", "http", "http://localhost:7777"),
-        ("localhost:443", "https", "https://localhost:443"),
-        ("https://example.com/", "http", "https://example.com"),
-        ("http://example.com", "https", "http://example.com"),
-        ("[::1]:7777", "https", "https://[::1]:7777"),
-        ("https://[::1]", "http", "https://[::1]"),
+        ("localhost:7777", "http://localhost:7777"),
+        ("https://example.com/", "https://example.com"),
+        ("http://example.com", "http://example.com"),
+        ("[::1]:7777", "http://[::1]:7777"),
+        ("https://[::1]", "https://[::1]"),
     ],
 )
-def test_endpoint_url(addr: str, scheme: str, want: str) -> None:
-    assert _endpoint_url(addr, scheme).geturl() == want
+def test_endpoint_url(addr: str, want: str) -> None:
+    assert _endpoint_url(addr).geturl() == want
 
 
 @pytest.mark.parametrize(

@@ -5,11 +5,11 @@ from __future__ import annotations
 import urllib.parse
 
 
-def _endpoint_url(addr: str, scheme: str = "http") -> urllib.parse.SplitResult:
+def _endpoint_url(addr: str) -> urllib.parse.SplitResult:
     if any(ord(c) <= 32 or ord(c) == 127 for c in addr):
         raise ValueError("sandboxd endpoint contains whitespace or a control character")
     if "://" not in addr:
-        addr = f"{scheme}://{addr}"
+        addr = f"http://{addr}"
     endpoint = urllib.parse.urlsplit(addr)
     if (
         endpoint.scheme not in ("http", "https")
