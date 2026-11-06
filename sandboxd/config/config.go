@@ -835,8 +835,8 @@ func (c *Config) validateMemoryLimit() error {
 func (c *Config) validateMetaStore() error {
 	ms := c.MetaStore
 	switch {
-	case c.ArchiveFailover && (ms == nil || ms.Cell == "" || !c.S3Checkpoints() || c.Mesh == nil):
-		return fmt.Errorf("archive_failover requires meta_store with a cell, an s3 checkpoint_store and a mesh")
+	case c.ArchiveFailover && (ms == nil || ms.Cell == "" || !c.S3Checkpoints() || c.Mesh == nil || c.Mesh.ClusterKey == ""):
+		return fmt.Errorf("archive_failover requires meta_store with a cell, an s3 checkpoint_store and a mesh with a cluster_key")
 	case ms == nil:
 		return nil
 	case ms.Kind != "pg":

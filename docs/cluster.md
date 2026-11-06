@@ -31,8 +31,9 @@ Give every node a `mesh` block:
   join mesh: … connection refused`), so two nodes that name only each other
   cannot cold-start together: list the node's own `bind` alongside its peers
   and every node comes up in any order, joining whoever is already there
-- `cluster_key` — optional base64 key (16/24/32 bytes) enabling gossip
-  encryption; all members must share it
+- `cluster_key` — base64 key (16/24/32 bytes) enabling gossip encryption;
+  all members must share it. Required by `archive_failover`,
+  `checkpoint_peer_heal` and live moves
 
 Two constraints, fine for a homogeneous cluster: all nodes share the same
 `api_token` and tenant set (the SDK replays whichever token authorized a

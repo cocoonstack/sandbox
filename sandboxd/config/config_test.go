@@ -214,7 +214,7 @@ func TestLoadArchiveFailover(t *testing.T) {
 	parts := map[string]string{
 		"meta_store":       `"meta_store":{"kind":"pg","dsn_env":"SANDBOX_TEST_DSN","cell":"c1"}`,
 		"checkpoint_store": `"checkpoint_store":{"kind":"s3","s3":{"bucket":"b"}}`,
-		"mesh":             `"mesh":{"bind":"node1:7946"}`,
+		"mesh":             `"mesh":{"bind":"node1:7946","cluster_key":"MDEyMzQ1Njc4OWFiY2RlZg=="}`,
 	}
 	body := func(skip string) string {
 		b := `{"api_token":"r","advertise_addr":"node1:7777","archive_failover":true,"pools":[]`
@@ -240,11 +240,14 @@ func TestLoadArchiveFailover(t *testing.T) {
 	if _, err := Load(writeConfig(t, strings.Replace(body(""), `,"cell":"c1"`, "", 1))); err == nil || !strings.Contains(err.Error(), "archive_failover requires") {
 		t.Errorf("archive_failover without meta_store.cell: %v, want a refusal", err)
 	}
+	if _, err := Load(writeConfig(t, strings.Replace(body(""), `,"cluster_key":"MDEyMzQ1Njc4OWFiY2RlZg=="`, "", 1))); err == nil || !strings.Contains(err.Error(), "archive_failover requires") {
+		t.Errorf("archive_failover without mesh.cluster_key: %v, want a refusal", err)
+	}
 }
 
 func TestLoadReplicateSeconds(t *testing.T) {
 	t.Setenv("SANDBOX_TEST_DSN", "postgres://sandboxd@db/sandboxd")
-	failover := `"archive_failover":true,"meta_store":{"kind":"pg","dsn_env":"SANDBOX_TEST_DSN","cell":"c1"},"checkpoint_store":{"kind":"s3","s3":{"bucket":"b"}},"mesh":{"bind":"node1:7946"},`
+	failover := `"archive_failover":true,"meta_store":{"kind":"pg","dsn_env":"SANDBOX_TEST_DSN","cell":"c1"},"checkpoint_store":{"kind":"s3","s3":{"bucket":"b"}},"mesh":{"bind":"node1:7946","cluster_key":"MDEyMzQ1Njc4OWFiY2RlZg=="},`
 	body := func(on, pool string) string {
 		return `{"api_token":"r","advertise_addr":"node1:7777",` + on + `"pools":[` + pool + `]}`
 	}
