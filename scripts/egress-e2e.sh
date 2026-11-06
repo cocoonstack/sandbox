@@ -3,7 +3,7 @@
 # through the host proxy with a host-injected credential it never holds, direct
 # egress is blocked (no NIC on the none lane, an nft lock on the egress lane),
 # and a disallowed host is denied. NET=none|egress selects the lane.
-# Runs a dedicated sandboxd on port 7779 (7777=e2e, 7778=archive).
+# Runs a dedicated sandboxd on port 7779 (7777=e2e, 7778=archive); cleanup removes every sbx-* VM on the cocoon root.
 set -euo pipefail
 
 TEMPLATE=${TEMPLATE:-rt:24.04}

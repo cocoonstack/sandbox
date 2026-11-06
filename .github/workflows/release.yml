@@ -42,8 +42,7 @@ jobs:
       - name: Build silkd (musl static, arm64)
         # Emulated cargo build via the carrier Dockerfile — byte-consistent
         # with the image artifact; slow but release-rare.
-        # Intermediates live outside the worktree: goreleaser refuses a dirty
-        # git state, and only dist-extra/ is gitignored.
+        # Intermediates live outside the worktree: goreleaser refuses a dirty git state.
         run: |
           docker buildx build --platform linux/arm64 -o type=local,dest=/tmp/silkd-arm64 silkd
           mkdir -p /tmp/silkd-dist && cp /tmp/silkd-arm64/silkd-static /tmp/silkd-dist/silkd

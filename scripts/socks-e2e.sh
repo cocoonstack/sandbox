@@ -4,7 +4,7 @@
 # unlisted port are refused there, IMAPS rides the tunnel on its listed port,
 # the HTTP door refuses unlisted ports on CONNECT and forward requests, and a
 # pool without a policy or without socks5 leaves the host door unwired. Runs a
-# dedicated sandboxd on port 7780 (7779=egress).
+# dedicated sandboxd on port 7780 (7779=egress); cleanup removes every sbx-* VM on the cocoon root.
 set -euo pipefail
 
 TEMPLATE=${TEMPLATE:-rt:24.04}
