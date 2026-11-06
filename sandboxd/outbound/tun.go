@@ -91,7 +91,7 @@ func (h *Host) armTun(ctx context.Context, sb *types.Sandbox, d *doors, v *View,
 	if h.o.Router == nil || sock == "" {
 		return
 	}
-	st := h.tunState(sb)
+	st := h.o.TunState(sb)
 	if !v.Tun(key) || !st.On || !st.Addr.IsValid() {
 		if v.Tun(key) || st.Addr.IsValid() {
 			h.tunDown(id, sock)
@@ -111,7 +111,7 @@ func (h *Host) armTun(ctx context.Context, sb *types.Sandbox, d *doors, v *View,
 	tc := tunnet.Claim{
 		ID:      id,
 		Addr:    t.addr,
-		Enabled: func() bool { return h.o.View().Tun(key) && h.tunLive(id, t) && h.tunState(sb).On },
+		Enabled: func() bool { return h.o.View().Tun(key) && h.tunLive(id, t) && h.o.TunState(sb).On },
 		Profile: profile,
 		Allow: func(dst netip.Addr, port uint16) bool {
 			if c.current().EvalFlow(port) != egress.DecisionAllow {
@@ -124,9 +124,7 @@ func (h *Host) armTun(ctx context.Context, sb *types.Sandbox, d *doors, v *View,
 		Used:   t.used,
 		Touch:  sb.TouchAt,
 		Record: func(r tunnet.FlowRecord) {
-			if h.o.Flow != nil {
-				h.o.Flow(evCtx, id, tenant, profile, r)
-			}
+			h.o.Flow(evCtx, id, tenant, profile, r)
 			if usage && r.Allowed && r.Up+r.Down > 0 {
 				dst := netip.AddrPortFrom(r.Dst, r.Port).String()
 				h.o.Transfer(evCtx, id, tenant, egress.Event{Host: dst, Port: r.Port, Upstream: "tun/" + cmp.Or(profile, "default")}, r.Up, r.Down)
@@ -140,7 +138,7 @@ func (h *Host) armTun(ctx context.Context, sb *types.Sandbox, d *doors, v *View,
 		d.tun = t
 	}
 	h.mu.Unlock()
-	if live && !h.tunState(sb).On {
+	if live && !h.o.TunState(sb).On {
 		h.mu.Lock()
 		mine := d.tun == t
 		if mine {
@@ -189,13 +187,6 @@ func (h *Host) serveTun(ctx context.Context, t *tunDoor) {
 	}
 }
 
-func (h *Host) tunState(sb *types.Sandbox) TunState {
-	if h.o.TunState == nil {
-		return TunState{On: !sb.TunOff, Addr: sb.TunAddr, Profile: sb.TunProfile, Bytes: sb.TunBytes, Sock: sb.VsockSocket}
-	}
-	return h.o.TunState(sb)
-}
-
 func (h *Host) tunDown(id, sock string) {
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), tunVerbTimeout)
@@ -220,7 +211,5 @@ func (h *Host) dropTun(t *tunDoor) {
 	}
 	_ = t.ln.Close()
 	h.o.Router.Disarm(t.addr)
-	if h.o.TunBytes != nil {
-		h.o.TunBytes(t.sb, t.used.Load())
-	}
+	h.o.TunBytes(t.sb, t.used.Load())
 }

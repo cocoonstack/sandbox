@@ -248,7 +248,7 @@ func (h *Host) Reloaded() {
 	}
 	for _, t := range off {
 		h.dropTun(t)
-		h.tunDown(t.sb.ID, h.tunState(t.sb).Sock)
+		h.tunDown(t.sb.ID, h.o.TunState(t.sb).Sock)
 	}
 }
 
