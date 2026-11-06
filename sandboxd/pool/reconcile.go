@@ -110,7 +110,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 	// A crash mid-export leaves a fork-* staging dir nothing in this life reuses
 	_ = utils.RemoveDirEntries(m.dataDir, func(name string) bool { return strings.HasPrefix(name, "fork-") })
 	_ = utils.RemoveDirEntries(filepath.Join(m.dataDir, readerDir), nil)
-	_ = utils.RemoveDirEntries(filepath.Join(m.dataDir, movesDir), func(id string) bool { return claims[id] == nil || !claims[id].MoveIn })
+	_ = utils.RemoveDirEntries(filepath.Join(m.dataDir, movesDir), func(id string) bool { return m.claimed[id] == nil || !m.claimed[id].MoveIn })
 
 	if answered {
 		m.reclaimOrphanArchiveCks(ctx, claims)
@@ -276,7 +276,7 @@ func (m *Manager) resyncEgress(ctx context.Context, live map[string]types.VMReco
 	for _, sb := range m.claimed {
 		sb.TouchAt(now)
 		// A hibernated or archived claim has no guest to serve; its wake arms the door
-		if sb.HibernateSnap != "" || sb.ArchiveCk != "" || sb.Failed != "" {
+		if sb.HibernateSnap != "" || sb.ArchiveCk != "" || sb.Failed != "" || sb.MoveIn {
 			continue
 		}
 		if m.out.LocksNIC(sb.Key) {

@@ -652,6 +652,23 @@ func TestMoveRestartAfterTheConsumeKeepsTheClaim(t *testing.T) {
 	}
 }
 
+func TestRestartSweepsTheStagingOfAMovedInClaimItDrops(t *testing.T) {
+	dataDir := t.TempDir()
+	sb := &types.Sandbox{ID: "sb_in", VMName: "sbx-in", Key: testKey, Token: "tok", Deadline: time.Now().Add(time.Hour), MoveIn: true}
+	seedClaims(t, dataDir, map[string]*types.Sandbox{sb.ID: sb})
+	staging := filepath.Join(dataDir, movesDir, sb.ID)
+	if err := os.MkdirAll(staging, 0o750); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	m := newTestManagerAt(t, newFakeEngine(), dataDir)
+	if err := m.Reconcile(t.Context()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if _, err := os.Stat(staging); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("staging of a dropped moved-in claim: %v, want it removed", err)
+	}
+}
+
 func TestMoveHoldsOffCapturesReleasesAndEvacuationWhileItRuns(t *testing.T) {
 	for name, archived := range map[string]bool{"archives": true, "no archives": false} {
 		t.Run(name, func(t *testing.T) { testMoveHoldsOffCallers(t, archived) })
