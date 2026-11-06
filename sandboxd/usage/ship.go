@@ -145,7 +145,6 @@ func (s *shipper) locate(ctx context.Context, live, backup *os.File) (*os.File, 
 	return found, s.at.end
 }
 
-// read decodes up to shipBatch lines of files, the first from off, into s.node's next records.
 func (s *shipper) read(ctx context.Context, files []*os.File, off int64) ([]Record, anchor, int) {
 	var (
 		recs []Record
