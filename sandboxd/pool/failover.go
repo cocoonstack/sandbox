@@ -65,6 +65,8 @@ func (m *Manager) adoptArchived(ctx context.Context, id, token string) (bool, er
 	}
 	sb.Token, sb.ArchiveCk, sb.ArchiveEpoch, sb.Deadline = token, rec.Checkpoint, epoch, rec.Deadline
 	sb.SetEnv(sb.Env)
+	sb.Transition.Lock()
+	defer sb.Transition.Unlock()
 	m.mu.Lock()
 	if sb.Deadline.IsZero() {
 		sb.Deadline = m.retentionDeadline(sb.Key)
@@ -244,7 +246,9 @@ func (m *Manager) takeArchive(ctx context.Context, sb *types.Sandbox) (int64, er
 	if err != nil {
 		return 0, fmt.Errorf("wake %s: %w", sb.ID, err)
 	}
-	_, _ = m.commitIfLive(ctx, sb, func() { sb.ArchiveEpoch = epoch })
+	if live, _ := m.commitIfLive(ctx, sb, func() { sb.ArchiveEpoch = epoch }); !live {
+		return 0, ErrUnknownSandbox
+	}
 	return epoch, nil
 }
 
