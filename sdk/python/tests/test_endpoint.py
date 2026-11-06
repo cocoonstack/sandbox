@@ -1,3 +1,5 @@
+"""Endpoint origin parsing and the TLS handshake timeout."""
+
 import socket
 import threading
 

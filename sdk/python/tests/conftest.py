@@ -2,6 +2,7 @@
 
 import json
 import os
+import pathlib
 import resource
 import socket
 import threading
@@ -12,6 +13,8 @@ from typing import BinaryIO
 
 import pytest
 from cocoonsandbox import Client, Sandbox
+
+FIXTURES = pathlib.Path(__file__).parents[3] / "protocol" / "wire" / "fixtures" / "v1"
 
 
 class FakeNode(BaseHTTPRequestHandler):
@@ -62,12 +65,6 @@ class FakeConn:
     def __init__(self, frames):
         self._frames = list(frames)
         self.sent = []
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *exc):
-        pass
 
     def send(self, op, **fields):
         self.sent.append((op, fields))
@@ -158,6 +155,21 @@ def raw_reply():
         return f"127.0.0.1:{server.getsockname()[1]}"
 
     yield serve
+    for server in servers:
+        server.close()
+
+
+@pytest.fixture
+def script_server():
+    servers = []
+
+    def start(script, *args) -> str:
+        server = socket.create_server(("127.0.0.1", 0))
+        servers.append(server)
+        threading.Thread(target=script, args=(server, *args), daemon=True).start()
+        return f"127.0.0.1:{server.getsockname()[1]}"
+
+    yield start
     for server in servers:
         server.close()
 

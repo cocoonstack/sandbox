@@ -2,7 +2,6 @@
 
 import contextlib
 import json
-import pathlib
 import socket
 import threading
 
@@ -10,9 +9,7 @@ import pytest
 from cocoonsandbox import Lsp, Pty, Session
 from cocoonsandbox.conn import Conn
 from cocoonsandbox.frames import PROTO_VERSION
-from conftest import FakeConn, sandbox_at
-
-FIXTURES = pathlib.Path(__file__).parents[3] / "protocol" / "wire" / "fixtures" / "v1"
+from conftest import FIXTURES, FakeConn, sandbox_at
 
 CASES = [
     (
@@ -95,9 +92,6 @@ class BranchActionConn(FakeConn):
         if self.action == "list":
             return {"type": "git_branches", "branches": [], "current": ""}
         return {"type": "done"}
-
-    def recv_until(self, *terminal):
-        yield self.recv()
 
 
 @pytest.mark.parametrize("stem,replies,invoke", CASES, ids=lambda c: c if isinstance(c, str) else "")

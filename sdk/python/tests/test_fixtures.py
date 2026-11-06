@@ -2,12 +2,10 @@
 
 import base64
 import json
-import pathlib
 
 import pytest
 from cocoonsandbox import frames
-
-FIXTURES = pathlib.Path(__file__).parents[3] / "protocol" / "wire" / "fixtures" / "v1"
+from conftest import FIXTURES
 
 
 def fixture_files(prefix):

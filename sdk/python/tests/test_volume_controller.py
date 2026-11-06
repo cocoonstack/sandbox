@@ -1,3 +1,5 @@
+"""The example volume controller's hibernate and resume flows against a fake node."""
+
 from types import SimpleNamespace
 
 import pytest

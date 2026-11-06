@@ -16,12 +16,7 @@ VIEW = {
 
 
 def test_volume_mapping_is_json_encoded(spawn_node):
-    seen = []
-
-    def reply(body, path):
-        seen.append(body)
-        return 200, VIEW
-
+    seen, reply = recording()
     sb = sandbox_at(spawn_node({("PUT", PATH): reply}))
     sb.set_volumes([UserDict({"name": "data", "mount": "/data"})])
     assert seen == [{"volumes": [{"name": "data", "mount": "/data"}]}]
@@ -40,12 +35,7 @@ def test_volume_mapping_is_json_encoded(spawn_node):
     ],
 )
 def test_volume_requests_use_owner_and_api_token(spawn_node, method, body, call):
-    seen = []
-
-    def reply(body, path):
-        seen.append(body)
-        return 200, VIEW
-
+    seen, reply = recording()
     addr = spawn_node({(method, PATH): reply})
     sb = sandbox_at(addr, api_token="operator-token")
     sb._client.addr = "unused.invalid:7777"
@@ -103,12 +93,7 @@ def test_validation_error_preserves_last_view(spawn_node):
 
 
 def test_explicit_empty_set_and_omitted_patch(spawn_node):
-    seen = []
-
-    def reply(body, path):
-        seen.append(body)
-        return 200, {"volumes_want": [], "volumes": [], "converging": False, "states": []}
-
+    seen, reply = recording({"volumes_want": [], "volumes": [], "converging": False, "states": []})
     sb = sandbox_at(spawn_node({("PUT", PATH): reply, ("PATCH", PATH): reply}))
     with pytest.raises(TypeError, match="explicit"):
         sb.set_volumes(None)
@@ -199,13 +184,18 @@ def test_volume_mutations_encode_explicit_device_fields(spawn_node):
         {"name": "device", "mount": "", "mode": "rw", "attach_only": True},
         {"name": "mounted", "attach_only": False},
     ]
-    seen = []
-
-    def reply(body, path):
-        seen.append(body)
-        return 200, VIEW
-
+    seen, reply = recording()
     sb = sandbox_at(spawn_node({("PUT", PATH): reply, ("PATCH", PATH): reply}))
     sb.set_volumes(entries)
     sb.patch_volumes(add=entries)
     assert seen == [{"volumes": entries}, {"add": entries}]
+
+
+def recording(view=VIEW):
+    seen = []
+
+    def reply(body, path):
+        seen.append(body)
+        return 200, view
+
+    return seen, reply

@@ -3,7 +3,6 @@
 import contextlib
 import json
 import socket
-import threading
 import time
 
 import pytest
@@ -15,50 +14,32 @@ from conftest import accept_upgrade, sandbox_at
 TIMEOUT = 0.2
 
 
-def test_port_stream_outlives_the_client_timeout():
-    server = socket.create_server(("127.0.0.1", 0))
-    addr = f"127.0.0.1:{server.getsockname()[1]}"
+def test_port_stream_outlives_the_client_timeout(script_server):
     ops: list[str] = []
-    threading.Thread(target=serve_port_forward, args=(server, 3 * TIMEOUT, ops), daemon=True).start()
-    sb = short_timeout_sandbox(addr)
-    try:
-        with sb.dial_port(5000) as port:
-            assert port.recv() == b"late"
-            assert port.recv() == b""
-    finally:
-        server.close()
+    sb = short_timeout_sandbox(script_server(serve_port_forward, 3 * TIMEOUT, ops))
+    with sb.dial_port(5000) as port:
+        assert port.recv() == b"late"
+        assert port.recv() == b""
     assert ops == ["port_forward"]
 
 
-def test_run_timeout_cuts_a_silent_command_and_kills_it():
-    server = socket.create_server(("127.0.0.1", 0))
-    addr = f"127.0.0.1:{server.getsockname()[1]}"
+def test_run_timeout_cuts_a_silent_command_and_kills_it(script_server):
     kills: list[dict] = []
-    threading.Thread(target=serve_started_then_hang, args=(server, 5 * TIMEOUT, kills), daemon=True).start()
-    sb = short_timeout_sandbox(addr)
+    sb = short_timeout_sandbox(script_server(serve_started_then_hang, 5 * TIMEOUT, kills))
     started = time.monotonic()
-    try:
-        with pytest.raises(TimeoutError):
-            sb.run(["sleep", "9"], timeout=TIMEOUT)
-    finally:
-        server.close()
+    with pytest.raises(TimeoutError):
+        sb.run(["sleep", "9"], timeout=TIMEOUT)
     assert time.monotonic() - started < 3 * TIMEOUT
     assert kills == [{"v": 1, "op": "kill", "pid": 7}], kills
 
 
-def test_run_timeout_bounds_the_kill_it_sends(monkeypatch):
+def test_run_timeout_bounds_the_kill_it_sends(monkeypatch, script_server):
     monkeypatch.setattr(sandbox_module, "_KILL_WAIT_SECONDS", TIMEOUT)
-    server = socket.create_server(("127.0.0.1", 0))
-    addr = f"127.0.0.1:{server.getsockname()[1]}"
     kills: list[dict] = []
-    threading.Thread(target=serve_started_then_trickle_the_kill_reply, args=(server, kills), daemon=True).start()
-    sb = short_timeout_sandbox(addr)
+    sb = short_timeout_sandbox(script_server(serve_started_then_trickle_the_kill_reply, kills))
     started = time.monotonic()
-    try:
-        with pytest.raises(TimeoutError):
-            sb.run(["sleep", "9"], timeout=TIMEOUT)
-    finally:
-        server.close()
+    with pytest.raises(TimeoutError):
+        sb.run(["sleep", "9"], timeout=TIMEOUT)
     assert time.monotonic() - started < 4 * TIMEOUT
     assert kills == [{"v": 1, "op": "kill", "pid": 7}], kills
 
@@ -77,17 +58,11 @@ def test_run_rejects_a_non_positive_timeout():
         sb.run(["true"], timeout=0)
 
 
-def test_dial_is_still_bounded_by_the_client_timeout():
-    server = socket.create_server(("127.0.0.1", 0))
-    addr = f"127.0.0.1:{server.getsockname()[1]}"
-    threading.Thread(target=serve_silence, args=(server,), daemon=True).start()
-    sb = short_timeout_sandbox(addr)
+def test_dial_is_still_bounded_by_the_client_timeout(script_server):
+    sb = short_timeout_sandbox(script_server(serve_silence))
     started = time.monotonic()
-    try:
-        with pytest.raises(SandboxTimeout):
-            sb.dial_port(5000)
-    finally:
-        server.close()
+    with pytest.raises(SandboxTimeout):
+        sb.dial_port(5000)
     assert time.monotonic() - started < 3 * TIMEOUT
 
 
