@@ -151,19 +151,6 @@ pub fn openpty(cols: u16, rows: u16) -> std::io::Result<(OwnedFd, OwnedFd)> {
     Ok((master, slave))
 }
 
-#[cfg(target_os = "linux")]
-fn pty_name(master: &nix::pty::PtyMaster) -> nix::Result<String> {
-    nix::pty::ptsname_r(master)
-}
-
-#[cfg(not(target_os = "linux"))]
-fn pty_name(master: &nix::pty::PtyMaster) -> nix::Result<String> {
-    static PTSNAME: Mutex<()> = Mutex::new(());
-    let _serial = lock(&PTSNAME);
-    // SAFETY: PTSNAME serializes every ptsname call in silkd, so its static buffer is copied before another call reuses it.
-    unsafe { nix::pty::ptsname(master) }
-}
-
 pub fn watch_fd<T: AsFd + AsRawFd>(fd: T) -> std::io::Result<AsyncFd<T>> {
     // SAFETY: AsFd's I/O-safety contract keeps the raw fd open while `fd`, and so the AsyncFd, lives.
     unsafe { AsyncFd::register(fd) }.map_err(|e| e.into_parts().1)
@@ -380,6 +367,19 @@ fn fill_random(b: &mut [u8]) -> bool {
 /// Rejects pid 0, which kill(2) reads as silkd's own process group, and anything that would go negative through the pid_t cast.
 fn is_valid_pid(id: u32) -> bool {
     id != 0 && id <= i32::MAX as u32
+}
+
+#[cfg(target_os = "linux")]
+fn pty_name(master: &nix::pty::PtyMaster) -> nix::Result<String> {
+    nix::pty::ptsname_r(master)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn pty_name(master: &nix::pty::PtyMaster) -> nix::Result<String> {
+    static PTSNAME: Mutex<()> = Mutex::new(());
+    let _serial = lock(&PTSNAME);
+    // SAFETY: PTSNAME serializes every ptsname call in silkd, so its static buffer is copied before another call reuses it.
+    unsafe { nix::pty::ptsname(master) }
 }
 
 fn send_signal(target: libc::pid_t, sig: i32) {
