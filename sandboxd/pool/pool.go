@@ -420,6 +420,7 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 		claimed:         map[string]*types.Sandbox{},
 		claimedVMs:      map[string]*types.Sandbox{},
 		pendingRemovals: map[string]pendingRemoval{},
+		tunReleases:     map[string]netip.Addr{},
 		moving:          map[string]*outMove{},
 		incoming:        map[string]*inMove{},
 		heldTenants:     map[string]int{},

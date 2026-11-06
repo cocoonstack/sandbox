@@ -140,9 +140,6 @@ func (m *Manager) releaseTun(ctx context.Context, id string, addr netip.Addr) {
 	if err := m.tunAddrs.Release(context.WithoutCancel(ctx), id, addr); err != nil {
 		log.WithFunc("pool.releaseTun").Warnf(ctx, "release overlay address %s of %s, retrying hourly: %v", addr, id, err)
 		m.mu.Lock()
-		if m.tunReleases == nil {
-			m.tunReleases = map[string]netip.Addr{}
-		}
 		m.tunReleases[id] = addr
 		m.mu.Unlock()
 	}
