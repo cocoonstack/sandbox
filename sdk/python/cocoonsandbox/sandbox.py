@@ -460,9 +460,10 @@ class Sandbox:
     ) -> SandboxVolumesResponse:
         if timeout is not None and timeout <= 0:
             raise ValueError("timeout must be positive")
+        addr = self.owner
         try:
             reply = self._client._request(
-                self.owner,
+                addr,
                 method,
                 f"/v1/sandboxes/{self.id}/volumes",
                 body,
@@ -471,12 +472,12 @@ class Sandbox:
             )
         except APIError as exc:
             if exc.status == 0:
-                _owner_answer(exc)
+                _owner_answer(exc, (self.id, addr))
                 raise
             view = _volume_response(exc.reply)
             if view is not None:
                 self._record_volumes(view)
-            raise _owner_answer(VolumeError(exc, view)) from exc
+            raise _owner_answer(VolumeError(exc, view), (self.id, addr)) from exc
         view = _volume_response(reply)
         if view is None:
             raise APIError(verb, 0, "reply without complete volume view")
@@ -488,7 +489,7 @@ class Sandbox:
         self.volumes = [volume.copy() for volume in view["volumes"]]
 
     def _rebind(self, exc: SandboxError) -> bool:
-        if not exc._owner_gone:
+        if exc._owner_gone != (self.id, self.owner):
             return False
         try:
             moved = self._client.lookup(self.id, self.token)
@@ -509,7 +510,7 @@ class Sandbox:
         try:
             reply = self._client._request(addr, "POST", f"/v1/sandboxes/{self.id}/{suffix}", body, verb, bearer=bearer)
         except APIError as exc:
-            _owner_answer(exc)
+            _owner_answer(exc, (self.id, addr))
             raise
         return reply, addr
 
@@ -834,7 +835,7 @@ def _drain_data(conn: Conn) -> bytes:
     return b"".join(chunks)
 
 
-def _owner_answer(exc: APIError) -> APIError:
+def _owner_answer(exc: APIError, tag: tuple[str, str]) -> APIError:
     if exc.status == 404 or isinstance(exc.__cause__, ConnectionRefusedError):
-        return _mark_gone(exc)
+        return _mark_gone(exc, tag)
     return exc

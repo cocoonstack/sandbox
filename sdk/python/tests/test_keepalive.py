@@ -9,7 +9,7 @@ import threading
 import pytest
 from conftest import accept_upgrade, sandbox_at, wait_until
 
-from cocoonsandbox import APIError, Client, SilkdError
+from cocoonsandbox import APIError, Client, SandboxError, SilkdError
 
 INPUT_OPS = ("stdin", "stdin_close", "data", "data_end")
 
@@ -223,6 +223,26 @@ def test_a_run_whose_callback_fails_is_not_replayed_elsewhere(spawn_node):
 
         with pytest.raises(APIError, match="another sandbox"):
             sb.run(["echo", "42"], on_stdout=refuse)
+        assert other.upgrades == 0
+    finally:
+        owner.stop()
+        other.stop()
+
+
+def test_another_sandboxs_error_in_a_callback_is_not_replayed(spawn_node, dead_addr):
+    owner, other = FakeAgent(), FakeAgent()
+    try:
+        directory = spawn_node(
+            {("GET", "/v1/sandboxes/sb_1/owner"): lambda body, path: (200, {"owner_addr": other.addr})}
+        )
+        sb = Client(directory).attach(owner.addr, "sb_1", "tok")
+        gone = Client(directory).attach(dead_addr, "sb_2", "tok")
+
+        def write_elsewhere(_: bytes) -> None:
+            gone.write_file("/f", b"x")
+
+        with pytest.raises(SandboxError):
+            sb.run(["echo", "42"], on_stdout=write_elsewhere)
         assert other.upgrades == 0
     finally:
         owner.stop()

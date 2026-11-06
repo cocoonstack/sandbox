@@ -18,6 +18,8 @@ type upgradedConn struct {
 	r     *bufio.Reader
 	req   []byte // unsent upgrade request; writes arrive serialized by silkd.Conn
 	await bool
+
+	id, addr string
 }
 
 func (u *upgradedConn) Read(p []byte) (int, error) {
@@ -48,7 +50,7 @@ func (u *upgradedConn) handshake() error {
 		return fmt.Errorf("read upgrade response: %w", err)
 	}
 	if resp.StatusCode != http.StatusSwitchingProtocols {
-		err = markGone(apiError("agent upgrade", resp))
+		err = markGone(apiError("agent upgrade", resp), u.id, u.addr)
 		_ = resp.Body.Close()
 		_ = u.tcp.Close()
 		return err
@@ -64,7 +66,7 @@ func (c *Client) dialAgent(ctx context.Context, addr, id, token string) (*upgrad
 	var d net.Dialer
 	raw, err := d.DialContext(ctx, "tcp", target)
 	if err != nil {
-		return nil, markGone(err)
+		return nil, markGone(err, id, addr)
 	}
 	stop := context.AfterFunc(ctx, func() { _ = raw.Close() })
 	defer stop()
@@ -85,7 +87,7 @@ func (c *Client) dialAgent(ctx context.Context, addr, id, token string) (*upgrad
 
 	req := "GET /v1/sandboxes/" + id + "/agent HTTP/1.1\r\nHost: " + authority +
 		"\r\nConnection: Upgrade\r\nUpgrade: silkd\r\nAuthorization: Bearer " + token + "\r\n\r\n"
-	u := &upgradedConn{Conn: conn, tcp: raw, r: bufio.NewReader(conn), req: []byte(req), await: true}
+	u := &upgradedConn{Conn: conn, tcp: raw, r: bufio.NewReader(conn), req: []byte(req), await: true, id: id, addr: addr}
 	if scheme != httpsScheme {
 		return u, nil
 	}

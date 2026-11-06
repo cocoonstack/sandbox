@@ -79,15 +79,16 @@ func (s *Sandbox) requestVolumes(ctx context.Context, method string, request any
 	}
 	var out SandboxVolumesResponse
 	err := s.retryMoved(ctx, func() (err error) {
-		out, err = s.volumesAt(ctx, method, body, verb)
-		return markGone(err)
+		addr := s.Owner()
+		out, err = s.volumesAt(ctx, method, addr, body, verb)
+		return markGone(err, s.ID, addr)
 	})
 	return out, err
 }
 
-func (s *Sandbox) volumesAt(ctx context.Context, method string, body []byte, verb string) (SandboxVolumesResponse, error) {
+func (s *Sandbox) volumesAt(ctx context.Context, method, addr string, body []byte, verb string) (SandboxVolumesResponse, error) {
 	var out SandboxVolumesResponse
-	resp, err := s.c.roundTrip(ctx, method, s.Owner(), "/v1/sandboxes/"+s.ID+"/volumes", bodyReader(body), s.c.apiToken)
+	resp, err := s.c.roundTrip(ctx, method, addr, "/v1/sandboxes/"+s.ID+"/volumes", bodyReader(body), s.c.apiToken)
 	if err != nil {
 		return out, err
 	}

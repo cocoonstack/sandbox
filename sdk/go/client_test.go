@@ -223,9 +223,41 @@ func TestARunWhoseWriterFailsIsNotReplayedElsewhere(t *testing.T) {
 	t.Cleanup(entry.Close)
 	sb := &Sandbox{ID: "sb_1", c: testClient(t, entry), token: "tok", owner: strings.TrimPrefix(owner.URL, "http://")}
 	t.Cleanup(sb.pool.drain)
-	refused := failingWriter{syscall.ECONNREFUSED}
+	refused := writerFunc(func([]byte) (int, error) { return 0, syscall.ECONNREFUSED })
 	if _, err := sb.Run(t.Context(), Cmd{Argv: []string{"echo", "42"}, Stdout: refused}); !errors.Is(err, syscall.ECONNREFUSED) {
 		t.Fatalf("run: %v, want the writer's error", err)
+	}
+	if n := elsewhere.Load(); n != 0 {
+		t.Errorf("the command was sent again to another node %d times", n)
+	}
+}
+
+func TestAnotherSandboxsErrorInAWriterIsNotReplayed(t *testing.T) {
+	fake := silkdtest.NewFake(t.TempDir())
+	var elsewhere atomic.Int32
+	other := newAgentServer(t, func(c net.Conn) {
+		elsewhere.Add(1)
+		fake.ServeConn(c)
+	})
+	owner := newAgentServer(t, fake.ServeConn)
+	entry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/sandboxes/sb_1/owner" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		_ = json.MarshalWrite(w, map[string]string{"owner_addr": strings.TrimPrefix(other.URL, "http://")})
+	}))
+	t.Cleanup(entry.Close)
+	c := testClient(t, entry)
+	sb := &Sandbox{ID: "sb_1", c: c, token: "tok", owner: strings.TrimPrefix(owner.URL, "http://")}
+	gone := &Sandbox{ID: "sb_2", c: c, token: "tok", owner: retiredAddr(t)}
+	t.Cleanup(sb.pool.drain)
+	writeElsewhere := writerFunc(func([]byte) (int, error) {
+		_, err := gone.Stat(t.Context(), "/")
+		return 0, err
+	})
+	if _, err := sb.Run(t.Context(), Cmd{Argv: []string{"echo", "42"}, Stdout: writeElsewhere}); err == nil {
+		t.Fatal("run succeeded although its writer failed")
 	}
 	if n := elsewhere.Load(); n != 0 {
 		t.Errorf("the command was sent again to another node %d times", n)
@@ -725,6 +757,6 @@ func testClient(t testing.TB, ts *httptest.Server, opts ...ClientOption) *Client
 	return c
 }
 
-type failingWriter struct{ err error }
+type writerFunc func([]byte) (int, error)
 
-func (w failingWriter) Write([]byte) (int, error) { return 0, w.err }
+func (f writerFunc) Write(p []byte) (int, error) { return f(p) }

@@ -231,7 +231,9 @@ class Client:
     def _dial(self, addr: str, sandbox_id: str, token: str, deadline: float | None = None) -> Conn:
         origin = addr if "://" in addr else f"{self._scheme}://{addr}"
         context = self._tls() if origin.startswith("https://") else None
-        return dial_agent(origin, sandbox_id, token, self.timeout, deadline, ssl_context=context)
+        return dial_agent(
+            origin, sandbox_id, token, self.timeout, deadline, ssl_context=context, tag=(sandbox_id, addr)
+        )
 
     def _roundtrip(
         self, url: urllib.parse.SplitResult, method: str, data: bytes | None, headers: dict[str, str], timeout: float

@@ -48,8 +48,11 @@ func (e *ExitError) Error() string {
 	return fmt.Sprintf("exit status %d", e.Code)
 }
 
-// ownerGoneError tags an owner answer after which nothing reached it, so the call may go to the sandbox's new owner.
-type ownerGoneError struct{ err error }
+// ownerGoneError tags an owner answer after which nothing reached it, naming the sandbox and the address it came from.
+type ownerGoneError struct {
+	err      error
+	id, addr string
+}
 
 func (e *ownerGoneError) Error() string { return e.err.Error() }
 
@@ -250,7 +253,7 @@ func (s *Sandbox) releaseAt(ctx context.Context, addr string) (found bool, err e
 
 // rebind follows a moved sandbox: a tagged owner error asks Lookup, and a different owner replaces it and its parked connections.
 func (s *Sandbox) rebind(ctx context.Context, err error) bool {
-	if _, gone := errors.AsType[*ownerGoneError](err); !gone {
+	if g, gone := errors.AsType[*ownerGoneError](err); !gone || g.id != s.ID || g.addr != s.Owner() {
 		return false
 	}
 	moved, lookupErr := s.c.Lookup(ctx, s.ID, s.token)
@@ -283,14 +286,15 @@ func (s *Sandbox) ownerJSON[T any](ctx context.Context, method, suffix string, b
 	err := s.retryMoved(ctx, func() (err error) {
 		addr = s.Owner()
 		out, err = s.c.doJSON[T](ctx, method, addr, "/v1/sandboxes/"+s.ID+suffix, bodyReader(body), bearer, verb)
-		return markGone(err)
+		return markGone(err, s.ID, addr)
 	})
 	return out, addr, err
 }
 
 func (s *Sandbox) ownerNoContent(ctx context.Context, method, suffix string, body []byte, bearer, verb string) error {
 	return s.retryMoved(ctx, func() error {
-		return markGone(s.c.doNoContent(ctx, method, s.Owner(), "/v1/sandboxes/"+s.ID+suffix, bodyReader(body), bearer, verb))
+		addr := s.Owner()
+		return markGone(s.c.doNoContent(ctx, method, addr, "/v1/sandboxes/"+s.ID+suffix, bodyReader(body), bearer, verb), s.ID, addr)
 	})
 }
 
@@ -327,10 +331,10 @@ func (s *Sandbox) dial(ctx context.Context) (*agentConn, error) {
 }
 
 // markGone tags an owner's 404 or refused dial, after which nothing reached it; errors from the caller's own writers stay untagged.
-func markGone(err error) error {
+func markGone(err error, id, addr string) error {
 	ae, ok := errors.AsType[*APIError](err)
 	if ok && ae.Status == http.StatusNotFound || !ok && errors.Is(err, syscall.ECONNREFUSED) {
-		return &ownerGoneError{err}
+		return &ownerGoneError{err, id, addr}
 	}
 	return err
 }
