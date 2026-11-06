@@ -416,7 +416,7 @@ before the receive, and a target that started draining refuses the commit. A new
 replaces it and resets its staged files, so a move retried after a source crash
 does not wait out the idle drop; one from another source answers 409. A
 reservation with no round arriving and none finished or
-commit asked for 2 minutes is dropped with its staged files.
+commit asked for 15 minutes, the longest a capture may take, is dropped with its staged files.
 
 **Same paths.** Both nodes need the same path strings in cocoon's `root_dir` and
 `run_dir`. The requirement is on the string, not the real directory: a symlink
