@@ -700,14 +700,16 @@ ctx) tears the shell down.
 
 ## Node operations
 
-Verbs for operating a node — `Drain`, `Uncordon`, `SetPools`,
+Verbs for operating a node — `Drain`, `Undrain`, `Cordon`, `Uncordon`, `SetPools`,
 `SetPoolsCluster` and the tenant verbs need the root token — plus the reference
 the aggregated apiserver claims under:
 
 ```go
 sb, _ := client.New(ctx, "rt:24.04", sandbox.WithClaimRef("ns/workload"))
 list, _ := client.Sandboxes(ctx)          // one SandboxSummary per live claim — never tokens
-info, _ := client.Drain(ctx)              // cordon: refuse new claims, run leases out
+info, _ := client.Drain(ctx)              // refuse new claims, run leases out
+info, _ = client.Undrain(ctx)
+info, _ = client.Cordon(ctx)              // refuse new claims across restarts; moves in still land
 info, _ = client.Uncordon(ctx)
 info, _ = client.SetPools(ctx, pools)     // retune warm targets without a restart
 res, _ := client.SetPoolsCluster(ctx, pools) // per-node results; retry the failures
@@ -726,6 +728,10 @@ res, _ = client.SetTenantsCluster(ctx, specs)
 claims; the fields are those of [`GET /v1/sandboxes`](sandboxd-api.md#get-v1sandboxes),
 including each claim's `Metadata`, `CPUCount`, and `MemTotalBytes`.
 `Drain` leaves live claims alone — poll `Info` until `Claimed` is zero.
+`Undrain` lifts only a drain and `Uncordon` only a [cordon](sandboxd-api.md#post-v1cordon);
+the [admission table](cluster.md#node-admission) compares the two. Through v0.1.23
+`Uncordon` sent `DELETE /v1/drain`; a caller that still pairs it with `Drain`
+leaves the node drained, and `Info` reports `Draining`.
 The tenant verbs follow [`/v1/tenants`](sandboxd-api.md#tenants-v1tenants): a
 `TenantSpec` without `Token` keeps the stored token, and the `*Cluster` forms
 return one `NodeResult` per node to retry (see

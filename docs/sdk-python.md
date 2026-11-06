@@ -525,7 +525,9 @@ pty.close()
 ```python
 sb = client.new("rt:24.04", claim_ref="ns/workload")
 client.sandboxes()                     # one summary dict per live claim — never tokens
-client.drain()                         # cordon: refuse new claims, run leases out
+client.drain()                         # refuse new claims, run leases out
+client.undrain()
+client.cordon()                        # refuse new claims across restarts; moves in still land
 client.uncordon()
 client.attach(owner_addr, id, token)   # bind a known handle, no lookup round-trip
 ```
@@ -533,7 +535,11 @@ client.attach(owner_addr, id, token)   # bind a known handle, no lookup round-tr
 `sandboxes()` is scoped to the calling token, so a tenant sees only its own
 claims; the fields are those of [`GET /v1/sandboxes`](sandboxd-api.md#get-v1sandboxes).
 `drain()` leaves live claims alone — poll `info()` until `claimed` is
-zero.
+zero. `undrain()` lifts only a drain and `uncordon()` only a
+[cordon](sandboxd-api.md#post-v1cordon); the
+[admission table](cluster.md#node-admission) compares the two. Through v0.1.23
+`uncordon()` sent `DELETE /v1/drain`; a caller that still pairs it with
+`drain()` leaves the node drained, and `info()` reports `draining`.
 
 ## Errors
 

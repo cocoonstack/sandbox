@@ -172,6 +172,21 @@ client, _ := sandbox.Connect("10.0.0.6:7777", sandbox.WithAPIToken(token))
 sb, err := client.Lookup(ctx, savedID, savedToken)
 ```
 
+## Node admission
+
+A node is in one of these states. `POST /v1/cordon` and `POST /v1/drain` set
+them, and each `DELETE` lifts only its own; both are root-only (see the
+[API](sandboxd-api.md#post-v1cordon)). A cap of `0` or an omitted cap means no
+cap; to take no claims, cordon the node.
+
+| State | New claim, fork, branch | Existing claims | Root live move in | Adoption of archived claims | Refill and pool gossip | Survives restart and reboot |
+|---|---|---|---|---|---|---|
+| serving | yes, under `max_claims`, `max_running`, the tenant's `max_claims`, `disk_reserve` and `memory_limit`; a 429 for a claim without volumes redirects to a peer | yes; a wake is bound by `max_running` and `disk_reserve` | yes, under the same caps and `move_concurrency` | yes; no claim cap binds, `max_running` binds at the wake | yes | — |
+| cordoned | no: 429 `node cordoned`; peers stop redirecting here | yes | yes, under the same caps and `move_concurrency` | no; its own claims stay | no; warm VMs are destroyed | yes, as `<data_dir>/cordoned` |
+| draining | no: 429 `node draining`; peers stop redirecting here | yes | no: admission and commit refuse | no | no; warm VMs are destroyed | no |
+| draining with `evacuate=1` | no, as draining | yes until the claim's turn, then 503 until a peer holds it and 404 after; a claim that cannot move stays and serves | no | no | no | no: a restart stops the evacuation |
+| cordoned and draining | no: 429 `node cordoned` | yes | no | no | no | the cordon only |
+
 ## Archived claims across node loss
 
 A claim lives on one node, so a lost node takes its running and hibernated
@@ -195,7 +210,7 @@ it while it sleeps write it, so the claim path is unchanged.
   answers 404. A tombstone is never adopted. The next call that reaches the
   guest wakes the claim from the store as usual. An owner with a live lease answers for
   itself, and a node that tries to take its row is refused with a 404.
-  A draining node never adopts, nor does a fenced node or one that lifted its
+  A draining or [cordoned](sandboxd-api.md#post-v1cordon) node never adopts, nor does a fenced node or one that lifted its
   fence less than 8 seconds ago (one renewal interval plus one registry query),
   so after a registry outage every healthy owner renews before a peer can take
   its rows. Adoption checks no tenant `max_claims` or node
@@ -269,8 +284,8 @@ was waking or releasing when it died, plus what a replicated claim leaves (see
 ### Evacuating a node
 
 [`POST /v1/drain?evacuate=1`](sandboxd-api.md#post-v1drain) empties a node for
-maintenance or retirement without losing its claims. The node cordons as a
-drain does, then moves each claim with bounded concurrency, on the maintenance
+maintenance or retirement without losing its claims. The node stops taking
+claims as a drain does, then moves each claim with bounded concurrency, on the maintenance
 budget, archived claims first and running ones last: it hibernates a running claim, archives a hibernated one through the
 archive path above, releases the row, and asks a peer to adopt it. A release is
 one compare-and-set: the row this node owns at the epoch it holds moves to no
@@ -280,7 +295,7 @@ adopting at once still leave one owner. This node keeps the claim listed until
 a peer answers `GET /v1/sandboxes/{id}/owner`, so a root listing finds the claim
 on at least one node at every moment, then forgets it under the claim's transition lock
 and answers 404 for it; the checkpoint stays, since it belongs to the adopter.
-With no adopter (no peer, every peer draining or unreachable) the node takes the
+With no adopter (no peer, every peer draining, cordoned or unreachable) the node takes the
 row back and the claim stays here. Until the hand-off, a wake of a claim the
 evacuation still has to move answers 503 with `Retry-After`, so a client call
 cannot wake it back onto the node. A running claim keeps serving until its turn.
@@ -390,7 +405,8 @@ guest resumes on the source unless the target committed.
 
 **Counting.** The target admits the move like a new claim: drain,
 `disk_reserve`, `memory_limit`, node `max_claims` and `max_running`, the
-tenant's `max_claims` and `move_concurrency`, and holds a reservation from admission to its commit. The
+tenant's `max_claims` and `move_concurrency`, and holds a reservation from admission to its commit. A
+[cordon](sandboxd-api.md#post-v1cordon) refuses only new claims, so a cordoned target admits the move. The
 reservation counts in every cap but is no claim: listings, reaps and gossip
 never see it. At the commit the reservation becomes the claim under one lock,
 so the target never counts it twice. The source counts the claim until it drops

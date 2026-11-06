@@ -543,6 +543,8 @@ func TestTenantAuthMatrix(t *testing.T) {
 		{"tenant forbidden on metrics", http.MethodGet, "/metrics", "acme-tok", http.StatusForbidden, ""},
 		{"tenant forbidden on pools", http.MethodPut, "/v1/pools", "acme-tok", http.StatusForbidden, ""},
 		{"tenant forbidden on checkpoint blob", http.MethodGet, "/v1/checkpoints/ck_00000000000000aa/blob", "acme-tok", http.StatusForbidden, ""},
+		{"tenant forbidden on cordon", http.MethodPost, "/v1/cordon", "acme-tok", http.StatusForbidden, ""},
+		{"tenant forbidden on uncordon", http.MethodDelete, "/v1/cordon", "acme-tok", http.StatusForbidden, ""},
 		{"wrong token on info stays 401", http.MethodGet, "/v1/info", "nope", http.StatusUnauthorized, ""},
 		{"root reads info", http.MethodGet, "/v1/info", "sekret", http.StatusOK, ""},
 	} {
@@ -713,6 +715,45 @@ func TestDrainEndpoints(t *testing.T) {
 		resp.Body.Close()
 		if resp.StatusCode != http.StatusOK || info.Draining != tt.draining || mgr.draining != tt.draining {
 			t.Fatalf("%s: status=%d draining=%v mgr=%v, want 200/%v", tt.method, resp.StatusCode, info.Draining, mgr.draining, tt.draining)
+		}
+	}
+}
+
+func TestCordonEndpoints(t *testing.T) {
+	mgr := &fakeManager{}
+	ts := newTestServer(t, "sekret", mgr, nil)
+	for _, tt := range []struct {
+		method   string
+		cordoned bool
+		metric   string
+	}{
+		{http.MethodPost, true, "sandboxd_cordoned 1\n"},
+		{http.MethodDelete, false, "sandboxd_cordoned 0\n"},
+	} {
+		resp := doReq(t, tt.method, ts.URL+"/v1/cordon", "sekret", "")
+		info := decodeJSON[InfoResponse](t, resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK || info.Cordoned != tt.cordoned || mgr.cordoned != tt.cordoned || info.Draining {
+			t.Fatalf("%s: status=%d info=%+v mgr=%v, want 200/%v and no drain", tt.method, resp.StatusCode, info, mgr.cordoned, tt.cordoned)
+		}
+		if _, body := bodyOf(t, http.MethodGet, ts.URL+"/metrics", "sekret", ""); !strings.Contains(string(body), tt.metric) {
+			t.Errorf("%s: metrics miss %q", tt.method, tt.metric)
+		}
+	}
+}
+
+func TestCordonPersistFailureAnswers500AndKeepsState(t *testing.T) {
+	for _, tt := range []struct {
+		method   string
+		cordoned bool
+	}{
+		{http.MethodPost, false},
+		{http.MethodDelete, true},
+	} {
+		mgr := &fakeManager{cordoned: tt.cordoned, cordonErr: errors.New("disk gone")}
+		ts := newTestServer(t, "sekret", mgr, nil)
+		if code := statusOf(t, tt.method, ts.URL+"/v1/cordon", "sekret", ""); code != http.StatusInternalServerError || mgr.cordoned != tt.cordoned {
+			t.Errorf("%s: status %d cordoned=%v, want 500 and cordoned=%v", tt.method, code, mgr.cordoned, tt.cordoned)
 		}
 	}
 }
@@ -2260,6 +2301,8 @@ type fakeManager struct {
 	sandboxIndex       func(tenant, claimRef string) []pool.SandboxSummary
 	sandboxByID        func(id string) (pool.SandboxSummary, bool)
 	draining           bool
+	cordoned           bool
+	cordonErr          error
 	evacuated          bool
 	evacuateLeft       int
 	memoryLow          bool
@@ -2587,7 +2630,7 @@ func (f *fakeManager) SetPools(_ context.Context, pools []config.PoolSpec) error
 }
 
 func (f *fakeManager) Info() ([]pool.PoolInfo, pool.Gauges) {
-	return f.infoPools, pool.Gauges{Draining: f.draining, Evacuating: f.evacuateLeft, MemoryLow: f.memoryLow, AnonBytes: f.anonBytes}
+	return f.infoPools, pool.Gauges{Draining: f.draining, Cordoned: f.cordoned, Evacuating: f.evacuateLeft, MemoryLow: f.memoryLow, AnonBytes: f.anonBytes}
 }
 
 func (f *fakeManager) Templates() []pool.TemplateInfo { return f.infoTemplates }
@@ -2633,7 +2676,21 @@ func (f *fakeManager) Drain(context.Context) { f.draining = true }
 
 func (f *fakeManager) Evacuate(context.Context) { f.draining, f.evacuated = true, true }
 
-func (f *fakeManager) Uncordon(context.Context) { f.draining = false }
+func (f *fakeManager) Undrain(context.Context) { f.draining = false }
+
+func (f *fakeManager) Cordon(context.Context) error {
+	if f.cordonErr == nil {
+		f.cordoned = true
+	}
+	return f.cordonErr
+}
+
+func (f *fakeManager) Uncordon(context.Context) error {
+	if f.cordonErr == nil {
+		f.cordoned = false
+	}
+	return f.cordonErr
+}
 
 func (f *fakeManager) FetchCheckpoint(_ context.Context, _ string) (string, []byte, func(), error) {
 	if f.ckptDir == "" {

@@ -7,36 +7,44 @@ import (
 	"testing"
 )
 
-func TestDrainAndUncordon(t *testing.T) {
-	var methods []string
+func TestDrainCordonVerbs(t *testing.T) {
+	var calls []string
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1/drain" {
-			t.Errorf("path = %s, want /v1/drain", r.URL.Path)
-		}
 		if auth := r.Header.Get("Authorization"); auth != "Bearer root" {
 			t.Errorf("auth = %q, want Bearer root", auth)
 		}
-		methods = append(methods, r.Method)
-		_ = json.MarshalWrite(w, NodeInfo{Claimed: 3, Draining: r.Method == http.MethodPost})
+		calls = append(calls, r.Method+" "+r.URL.Path)
+		post := r.Method == http.MethodPost
+		_ = json.MarshalWrite(w, NodeInfo{Claimed: 3, Draining: post && r.URL.Path == "/v1/drain", Cordoned: post && r.URL.Path == "/v1/cordon"})
 	}))
 	defer ts.Close()
 
 	c := testClient(t, ts, WithAPIToken("root"))
-	info, err := c.Drain(t.Context())
-	if err != nil {
-		t.Fatalf("Drain: %v", err)
+	for _, tt := range []struct {
+		name               string
+		verb               func() (*NodeInfo, error)
+		draining, cordoned bool
+	}{
+		{"Drain", func() (*NodeInfo, error) { return c.Drain(t.Context()) }, true, false},
+		{"Undrain", func() (*NodeInfo, error) { return c.Undrain(t.Context()) }, false, false},
+		{"Cordon", func() (*NodeInfo, error) { return c.Cordon(t.Context()) }, false, true},
+		{"Uncordon", func() (*NodeInfo, error) { return c.Uncordon(t.Context()) }, false, false},
+	} {
+		info, err := tt.verb()
+		if err != nil {
+			t.Fatalf("%s: %v", tt.name, err)
+		}
+		if info.Draining != tt.draining || info.Cordoned != tt.cordoned || info.Claimed != 3 {
+			t.Errorf("%s: info = %+v, want draining %v cordoned %v", tt.name, info, tt.draining, tt.cordoned)
+		}
 	}
-	if !info.Draining || info.Claimed != 3 {
-		t.Errorf("info = %+v, want Draining true, Claimed 3", info)
+	want := []string{"POST /v1/drain", "DELETE /v1/drain", "POST /v1/cordon", "DELETE /v1/cordon"}
+	if len(calls) != len(want) {
+		t.Fatalf("calls = %v, want %v", calls, want)
 	}
-	info, err = c.Uncordon(t.Context())
-	if err != nil {
-		t.Fatalf("Uncordon: %v", err)
-	}
-	if info.Draining {
-		t.Errorf("info = %+v, want Draining false", info)
-	}
-	if len(methods) != 2 || methods[0] != http.MethodPost || methods[1] != http.MethodDelete {
-		t.Errorf("methods = %v, want [POST DELETE]", methods)
+	for i := range want {
+		if calls[i] != want[i] {
+			t.Errorf("call %d = %s, want %s", i, calls[i], want[i])
+		}
 	}
 }

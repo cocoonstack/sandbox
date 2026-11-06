@@ -229,6 +229,7 @@ type Gauges struct {
 	Archived   int
 	Failed     int
 	Draining   bool
+	Cordoned   bool
 	// Evacuating counts the claims an evacuation has yet to move.
 	Evacuating int
 	// AtCapacity marks refill parked by a refused VM or a low disk or memory reserve.
@@ -308,6 +309,9 @@ type Manager struct {
 
 	draining bool // guarded by m.mu; deliberately not persisted
 	evac     *evacuation
+	// cordoned, under m.mu, mirrors the cordon file; cordonMu orders its writers.
+	cordoned bool
+	cordonMu sync.Mutex
 
 	tenants    tenants.Source
 	rootSum    string
@@ -416,6 +420,9 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 		healSem:         make(chan struct{}, maxConcurrentHeals),
 	}
 	m.seedVolumes(cfg.Volumes)
+	if err := m.loadCordon(); err != nil {
+		return nil, err
+	}
 	if err := m.loadRuntimeVolumes(); err != nil {
 		return nil, err
 	}
@@ -565,7 +572,7 @@ func (m *Manager) Info() ([]PoolInfo, Gauges) {
 		})
 	}
 	g := Gauges{
-		Claimed: len(m.claimed), Running: m.store.runningCount(), MaxRunning: m.view.Load().maxRunning, Draining: m.draining,
+		Claimed: len(m.claimed), Running: m.store.runningCount(), MaxRunning: m.view.Load().maxRunning, Draining: m.draining, Cordoned: m.cordoned,
 		MemoryLow: m.memoryLow.Load(), AnonBytes: int(m.anonBytes.Load()),
 	}
 	if m.evac != nil {

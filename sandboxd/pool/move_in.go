@@ -320,7 +320,7 @@ func (m *Manager) admitMoveLocked(id string, a MoveAdmission) error {
 	} else if err := m.moveBudgetErr(); err != nil {
 		return err
 	}
-	if err := m.quotaErr(extra, a.Tenant); err != nil {
+	if err := m.capacityErr(extra, a.Tenant); err != nil {
 		return err
 	}
 	m.incoming[id] = &inMove{tenant: a.Tenant, from: a.From, touched: time.Now()}

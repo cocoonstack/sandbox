@@ -10,7 +10,7 @@ All bodies are JSON. Three token kinds:
   tenant creates is stamped with its name. Operator surfaces
   (the per-id sandbox reads, `PUT /v1/sandboxes/{id}/instance-metadata`, `GET /v1/info`,
   `PUT /v1/pools`, `POST /v1/config/reload`, the [tenant API](#tenants-v1tenants),
-  `POST /v1/sandboxes/{id}/move`, `PUT/DELETE /v1/volumes/{name}`, `POST/DELETE /v1/drain`,
+  `POST /v1/sandboxes/{id}/move`, `PUT/DELETE /v1/volumes/{name}`, `POST/DELETE /v1/drain`, `POST/DELETE /v1/cordon`,
   `GET /metrics`, `GET /v1/usage`, `GET /v1/checkpoints/{id}/blob`)
   answer a tenant token `403` — authenticated but not authorized; an unknown
   token stays `401`. On a node with a shared
@@ -224,7 +224,7 @@ Redirects (mutually exclusive with the fields above) name peers to retry
 at — sent on a warm miss with warm peers, when the node lacks a golden for
 the key but gossip names a template owner, and when a claim without `volumes`,
 `no_redirect` or `require_promoted` meets a 429 (the node at `max_claims` or
-`max_running`, the calling tenant at its cap, the node draining, the disk under
+`max_running`, the calling tenant at its cap, the node draining or cordoned, the disk under
 `disk_reserve`, or memory over `memory_limit`) and a peer reports warm capacity or, failing that, serves the pool:
 
 ```json
@@ -259,7 +259,7 @@ exclude a writer), or a `ro` claim against a writable image left dirty by an
 unclean `rw` release (needs recovery — one `rw` claim must replay and cleanly
 release before `ro` claims resume; see
 [deploy](deploy.md#writable-dataset-volumes)); 429 node at `max_claims` or `max_running`, the
-calling tenant at its own `max_claims`, the node draining, the disk under
+calling tenant at its own `max_claims`, the node draining or cordoned, the disk under
 `disk_reserve`, or memory over `memory_limit`; 500 provisioning failed.
 
 ## GET /v1/volumes
@@ -608,7 +608,7 @@ an unknown `on_expire`; 401 bad api token; 403 the parent's tenant was removed
 (sandbox token); 404 unknown id or wrong sandbox token; 409 egress-lane or volume
 parent (neither forks, checkpoints, or promotes; see [egress](egress.md)), a
 failed parent, or an archived parent (`POST /wake` or an exec wakes it first);
-429 node or the parent's tenant at `max_claims`, the node at `max_running`, the node draining, the disk
+429 node or the parent's tenant at `max_claims`, the node at `max_running`, the node draining or cordoned, the disk
 under `disk_reserve`, or memory over `memory_limit`; 503 `lease lost; retry` for a replicated parent while its node's lease is overdue, `tenant store down; retry` for a sandbox token whose tenant the node has not cached while the meta store is down.
 
 ## POST /v1/sandboxes/{id}/promote
@@ -803,15 +803,18 @@ A refused reload changes nothing.
 
 ## POST /v1/drain
 
-Auth: root only (tenant tokens get 403). Cordons the node for maintenance: claim/fork/branch answer
+Auth: root only (tenant tokens get 403). Empties the node for maintenance: claim/fork/branch answer
 429 with an error ending `node draining` (on a cluster a non-volume claim tries a peer redirect first, and
 peers stop redirecting here within a tick, because this node gossips no pools),
+a live [move](#post-v1sandboxesidmove) to this node is refused,
 unclaimed warm VMs are destroyed, and live claims keep serving until release
 or TTL. Pool ownership is untouched — no pools.json write, no config change.
 Answers the fresh `GET /v1/info` payload; poll `claimed` to zero to know the
-node is empty. Deliberately not persisted: a restarted node serves again.
+node is empty. Deliberately not persisted: a restarted node serves again. To
+keep a node out of service across restarts, [cordon](#post-v1cordon) it; the
+[admission table](cluster.md#node-admission) compares the states.
 
-`POST /v1/drain?evacuate=1` cordons the same way, then moves the claims to the
+`POST /v1/drain?evacuate=1` drains the same way, then moves the claims to the
 peers with their state, so the node empties without waiting for the leases to
 run out (see [evacuating a node](cluster.md#evacuating-a-node)). It needs
 [`archive_failover`](cluster.md#archived-claims-across-node-loss). In the
@@ -840,7 +843,32 @@ new one over the claims still here.
 
 Auth: root only (tenant tokens get 403). Lifts the drain, stops an evacuation, and kicks an immediate refill. Answers the
 fresh info payload. A claim an evacuation is archiving finishes its archive and
-stays here archived; the next call wakes it.
+stays here archived; the next call wakes it. A cordon stays in place.
+
+## POST /v1/cordon
+
+Auth: root only (tenant tokens get 403). Takes the node out of service until
+`DELETE /v1/cordon`, across restarts: claim/fork/branch answer 429 with an
+error ending `node cordoned`, whatever `max_claims` and `max_running` allow (on
+a cluster a non-volume claim tries a peer redirect first, and peers stop
+redirecting here within a tick, because this node gossips no pools), refill
+stops and unclaimed warm VMs are destroyed. Live claims keep serving, and unlike
+a drain, a root [move](#post-v1sandboxesidmove) to this node is admitted. The
+[admission table](cluster.md#node-admission) lists what each state allows; a
+cordon and a drain are independent, and each `DELETE` lifts only its own.
+
+The cordon is the file `<data_dir>/cordoned`; it survives a restart, a reboot
+and a config reload, and a node that starts cordoned starts no warm VM. With
+`audit_log` on, `audit.jsonl` records op `cordon`. Answers the fresh
+`GET /v1/info` payload with `"cordoned": true`; 500 when the file cannot be
+written, and the node stays as it was.
+
+## DELETE /v1/cordon
+
+Auth: root only (tenant tokens get 403). Removes `<data_dir>/cordoned`, lifts
+the cordon and kicks an immediate refill; `audit.jsonl` records op `uncordon`.
+A drain stays in place. Answers the fresh info payload; 500 when the file cannot
+be removed.
 
 ## POST /v1/sandboxes/{id}/move
 
@@ -934,7 +962,7 @@ the claim. See the [placement lifecycle](cluster.md#checkpoints-on-a-cluster).
 
 404 for an unknown checkpoint (locally, and after redirect and heal both
 miss), 429 node
-or calling tenant at `max_claims`, the node at `max_running`, the node draining, the disk under
+or calling tenant at `max_claims`, the node at `max_running`, the node draining or cordoned, the disk under
 `disk_reserve`, or memory over `memory_limit`, 503 when the node's
 concurrent-heal cap is already full — retryable, and the response carries a
 `Retry-After` hint.
@@ -1106,7 +1134,7 @@ verb never wakes one) or its image serves no instance metadata.
 ## GET /metrics
 
 Auth: root only (tenant tokens get 403). Prometheus text format,
-hand-rendered: pool warm/target gauges, claimed/running/max_running/hibernated/archived/failed/draining
+hand-rendered: pool warm/target gauges, claimed/running/max_running/hibernated/archived/failed/draining/cordoned
 gauges, `sandboxd_evacuating` (the claims an evacuation has yet to move), `sandboxd_memory_low` and `sandboxd_anon_bytes` (see [`memory_limit`](deploy.md#configuration)), a per-tenant live-claim gauge (`sandboxd_tenant_claims{tenant="…"}`,
 tenants holding live claims only, so the label set is bounded by the node's claims), `sandboxd_config_digest_mismatch` on a mesh, claims
 by tier (warm/clone/cold),
@@ -1321,7 +1349,7 @@ this node owns the sandbox, 404 otherwise. With
 does not hold the sandbox adopts it when its row names an owner whose node
 lease expired, or whose owner released it in an
 [evacuation](#post-v1drain), and answers 200; 503 with `Retry-After` when the meta store is
-down. A row whose owner's lease is live is never adopted unless the owner released it: 404. A draining or fenced
+down. A row whose owner's lease is live is never adopted unless the owner released it: 404. A draining, cordoned or fenced
 node, or one that lifted its fence less than 8 seconds ago, does not adopt: 404. A node whose
 lease is overdue answers 404 for the replicated claims it holds, so the
 `Lookup` scatter moves on. With `client_advertise` configured,
@@ -1362,8 +1390,9 @@ checkpointed to the store with the local VM dropped (see
 and was not restarted (omitted at zero); all are included in `claimed`.
 `running` counts claims that hold a VM, with a wake in flight counted, and
 `max_running` is the [cap](deploy.md#configuration) on it (omitted when off).
-A node cordoned via [`POST /v1/drain`](#post-v1drain) additionally reports
-`"draining": true`, and during an evacuation `evacuating` (claims left to
+A node drained via [`POST /v1/drain`](#post-v1drain) additionally reports
+`"draining": true`, a node cordoned via [`POST /v1/cordon`](#post-v1cordon)
+`"cordoned": true`, and during an evacuation `evacuating` (claims left to
 move, omitted at zero). When refill is parked because the node cannot start
 another VM, `"at_capacity": true` distinguishes a full node from one still
 filling its warm target, and `at_capacity_reason` carries the engine's capacity

@@ -112,12 +112,20 @@ class Client:
         return [dict(sb) for sb in reply.get("sandboxes") or []]
 
     def drain(self) -> dict[str, Any]:
-        """Cordons the node (root token): new claims are refused, live ones run to their leases."""
+        """Drains the node (root token): new claims are refused, live ones run to their leases."""
         return self._request(self.addr, "POST", "/v1/drain", None, "drain")
 
-    def uncordon(self) -> dict[str, Any]:
+    def undrain(self) -> dict[str, Any]:
         """Lifts a drain on the node (root token)."""
-        return self._request(self.addr, "DELETE", "/v1/drain", None, "uncordon")
+        return self._request(self.addr, "DELETE", "/v1/drain", None, "undrain")
+
+    def cordon(self) -> dict[str, Any]:
+        """Refuses new claims across restarts (root token); live claims and moves in stay admitted."""
+        return self._request(self.addr, "POST", "/v1/cordon", None, "cordon")
+
+    def uncordon(self) -> dict[str, Any]:
+        """Lifts a cordon on the node (root token); a drain stays."""
+        return self._request(self.addr, "DELETE", "/v1/cordon", None, "uncordon")
 
     def checkpoint(self, id: str) -> Checkpoint:
         """Binds a checkpoint handle to the entry node without a lookup."""

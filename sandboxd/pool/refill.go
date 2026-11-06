@@ -22,12 +22,9 @@ func (m *Manager) kickRefill() {
 func (m *Manager) refillOnce(ctx context.Context) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.draining {
-		return
-	}
 	now := time.Now()
 	// Spawning VMs into a full node still takes the global rtnl lock even when doomed to fail
-	parked := m.capacityReasonLocked(now) != ""
+	parked := m.closedLocked() || m.capacityReasonLocked(now) != ""
 	inFlight := 0
 	for _, p := range m.pools {
 		inFlight += p.refilling
@@ -108,7 +105,7 @@ func (m *Manager) refillOne(ctx context.Context, p *pool, golden string, gen uin
 	m.mu.Lock()
 	now := time.Now()
 	p.refilling--
-	if err == nil && !m.draining && p.goldenDir != "" && p.goldenGen == gen && len(p.warm) < p.effectiveTarget(now) {
+	if err == nil && !m.closedLocked() && p.goldenDir != "" && p.goldenGen == gen && len(p.warm) < p.effectiveTarget(now) {
 		p.warm = append(p.warm, sb)
 		p.noteLead(time.Since(start))
 		keep = true
