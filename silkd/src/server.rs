@@ -89,11 +89,7 @@ impl State {
                 match self.sessions.create(id, cwd, &env).await {
                     Ok(id) => proto::write_frame(writer, &Response::SessionCreated { id }).await,
                     Err(e) => {
-                        let kind = if e.kind() == std::io::ErrorKind::InvalidInput {
-                            ErrorKind::BadRequest
-                        } else {
-                            ErrorKind::Internal
-                        };
+                        let kind = crate::exec::spawn_kind(&e);
                         proto::error_frame(writer, kind, format!("session create: {e}")).await
                     }
                 }

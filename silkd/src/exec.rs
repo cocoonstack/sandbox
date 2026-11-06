@@ -138,11 +138,12 @@ where
 }
 
 /// A missing or unrunnable argv or cwd is the caller's mistake; anything else is the guest's.
-fn spawn_kind(e: &std::io::Error) -> ErrorKind {
+pub(crate) fn spawn_kind(e: &std::io::Error) -> ErrorKind {
     match e.kind() {
         std::io::ErrorKind::NotFound
         | std::io::ErrorKind::NotADirectory
-        | std::io::ErrorKind::PermissionDenied => ErrorKind::BadRequest,
+        | std::io::ErrorKind::PermissionDenied
+        | std::io::ErrorKind::InvalidInput => ErrorKind::BadRequest,
         _ => ErrorKind::Internal,
     }
 }
