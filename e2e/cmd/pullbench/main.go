@@ -1,6 +1,4 @@
-// pullbench measures fs_pull throughput end to end — the hardware A/B for
-// silkd's chunk-frame render path: writes size MiB of random bytes in the
-// guest, then times n sequential Pulls.
+// pullbench times n sequential fs_pull transfers of size MiB from the guest.
 package main
 
 import (

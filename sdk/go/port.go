@@ -110,7 +110,6 @@ func (s *Sandbox) ProxyPort(ctx context.Context, localAddr string, port uint16) 
 	return l, nil
 }
 
-// openStream turns a call into a raw byte stream.
 func (s *Sandbox) openStream(ctx context.Context, req wire.Request) (*PortConn, error) {
 	var p *PortConn
 	err := s.retryMoved(ctx, func() error {

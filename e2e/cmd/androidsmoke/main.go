@@ -1,7 +1,4 @@
-// androidsmoke is the android-flavor acceptance: claim (none/xlarge) → Android
-// init tree over the relay → adb CNXN handshake on the adb port →
-// checkpoint/branch of the booted guest. No session step: the guest
-// ships no bash.
+// androidsmoke checks the android flavor: claim, the init tree over the relay, the adb handshake, and checkpoint/branch.
 package main
 
 import (

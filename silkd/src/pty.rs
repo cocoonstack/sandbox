@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use tokio::io::AsyncWrite;
 use tokio::io::unix::AsyncFd;
-use tokio::process::Command;
+use tokio::process::{Child, Command};
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::{Instant, sleep_until, timeout};
 
@@ -120,7 +120,7 @@ async fn pump<W: AsyncWrite + Unpin>(
     proc: &Proc,
     client: mpsc::Receiver<Request>,
     out: &mut W,
-    child: &mut tokio::process::Child,
+    child: &mut Child,
 ) -> i32 {
     // stdin rides its own task so a slow write cannot stall output or reaping.
     let (disc_tx, mut disc_rx) = oneshot::channel::<()>();
@@ -176,7 +176,7 @@ async fn pump<W: AsyncWrite + Unpin>(
     }
 }
 
-fn hang_up(child: &tokio::process::Child) -> Instant {
+fn hang_up(child: &Child) -> Instant {
     if let Some(pid) = child.id() {
         sysutil::signal_group(pid, libc::SIGHUP);
     }
@@ -205,7 +205,6 @@ async fn pump_stdin(
     }
 }
 
-/// Reads the master's buffered tail after the shell exits.
 async fn drain<W: AsyncWrite + Unpin>(
     master: &AsyncFd<OwnedFd>,
     proc: &Proc,

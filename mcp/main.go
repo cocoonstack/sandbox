@@ -1,7 +1,4 @@
-// sandbox-mcp is a Model Context Protocol server over stdio: it exposes the
-// sandbox surface (claim, exec, files, fork, checkpoint, promote, hibernate)
-// as MCP tools. One process serves one sandboxd endpoint, configured by
-// flags or environment.
+// sandbox-mcp serves the sandbox surface as Model Context Protocol tools over stdio, one sandboxd endpoint per process.
 package main
 
 import (

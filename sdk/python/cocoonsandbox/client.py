@@ -5,7 +5,6 @@ from __future__ import annotations
 import http.client
 import json
 import queue
-import socket
 import ssl
 import threading
 import time
@@ -16,7 +15,7 @@ from typing import Any, TypeVar, cast
 from .checkpoint import Checkpoint
 from .conn import Conn, _Closeable, dial_agent, is_quiet, remaining_timeout
 from .endpoint import _endpoint_url
-from .errors import APIError, SandboxTimeout, _error_message, _require_field
+from .errors import APIError, SandboxTimeout, _DialError, _error_message, _require_field
 from .sandbox import Sandbox
 from .template import _claim_body, _template_query
 from .volumes import Volume
@@ -249,6 +248,12 @@ class Client(_Closeable):
     ) -> tuple[int, bytes]:
         key = (url.scheme, url.netloc)
         conn = self._take(key, timeout)
+        if conn.sock is None:
+            try:
+                conn.connect()
+            except OSError as exc:
+                conn.close()
+                raise _DialError(str(exc)) from exc
         status = 0
         try:
             conn.request(method, url.path + (f"?{url.query}" if url.query else ""), body=data, headers=headers)
@@ -317,7 +322,7 @@ def _retry_transient(exc: APIError) -> bool:
 def _claim_refused(exc: APIError) -> bool:
     if exc.status:
         return exc.status not in (502, 504)
-    return exc.__cause__ is None or isinstance(exc.__cause__, (ConnectionRefusedError, socket.gaierror))
+    return exc.__cause__ is None or isinstance(exc.__cause__, _DialError)
 
 
 def _redirect_fallback(

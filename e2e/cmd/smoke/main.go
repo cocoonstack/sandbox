@@ -1,7 +1,4 @@
-// smoke drives the full SDK v2 surface against one live sandbox: files,
-// sessions, find/replace, watch, git, and pty — the bare-metal proof that
-// silkd v2 works end to end through the relay. Run by scripts/sandboxd-e2e.sh
-// on a real node.
+// smoke drives the SDK surface against one live sandbox; scripts/sandboxd-e2e.sh runs it.
 package main
 
 import (

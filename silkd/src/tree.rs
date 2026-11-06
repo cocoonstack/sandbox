@@ -10,9 +10,9 @@ use nix::fcntl::{self, AtFlags, OFlag};
 use nix::sys::stat::{self, Mode, SFlag};
 use nix::unistd::{self, UnlinkatFlags};
 use tokio::io::{AsyncBufRead, AsyncReadExt, AsyncWrite};
-use tokio::process::Command;
+use tokio::process::{Child, ChildStderr, Command};
 
-use crate::proto::{self, ErrorKind, Response, err_frame};
+use crate::proto::{self, BULK_CHUNK, ErrorKind, Response, err_frame};
 use crate::sysutil;
 
 const STDERR_CAP: usize = 16 * 1024;
@@ -73,7 +73,9 @@ pub async fn pull<W: AsyncWrite + Unpin>(w: &mut W, path: &str) -> io::Result<()
         Err(e) => return err_frame(w, &e, "spawn tar").await,
     };
 
-    if let Err(e) = proto::stream_data_frames(&mut out, w).await? {
+    if let Err(e) =
+        proto::stream_data_frames(&mut out, w, &mut vec![0u8; BULK_CHUNK], &mut Vec::new()).await?
+    {
         let _ = child.wait().await;
         return err_frame(w, &e, "read tar").await;
     }
@@ -130,9 +132,7 @@ where
 }
 
 /// Spawns tar draining stderr on its own task, so a full stderr pipe cannot deadlock.
-fn spawn_tar(
-    mut cmd: Command,
-) -> io::Result<(tokio::process::Child, tokio::task::JoinHandle<Vec<u8>>)> {
+fn spawn_tar(mut cmd: Command) -> io::Result<(Child, tokio::task::JoinHandle<Vec<u8>>)> {
     let mut child = cmd.stderr(Stdio::piped()).kill_on_drop(true).spawn()?;
     let stderr = sysutil::take_pipe(child.stderr.take(), "stderr")?;
     Ok((child, tokio::spawn(drain(stderr))))
@@ -184,7 +184,7 @@ fn is_dir(mode: stat::mode_t) -> bool {
 }
 
 /// Reads a child's stderr up to STDERR_CAP; tar's first error is the useful one.
-async fn drain(mut stderr: tokio::process::ChildStderr) -> Vec<u8> {
+async fn drain(mut stderr: ChildStderr) -> Vec<u8> {
     let mut out = Vec::new();
     let mut buf = [0u8; 4096];
     while let Ok(n) = stderr.read(&mut buf).await {

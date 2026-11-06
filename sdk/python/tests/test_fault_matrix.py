@@ -1,5 +1,7 @@
 """Fault matrix for the cluster redirect follow and the lookup scatter."""
 
+import errno
+import http.client
 import socket
 import threading
 import time
@@ -19,6 +21,21 @@ def test_claim_redirect_skips_a_failed_candidate(spawn_node, dead_addr, status, 
     )
     good = spawn_node({("POST", "/v1/claim"): lambda body, path: (200, {"id": "sb_ok", "token": "t"})})
     entry = spawn_node({("POST", "/v1/claim"): lambda body, path: (200, {"redirect": [failed, good]})})
+    sb = Client(entry).new("rt:24.04")
+    assert sb.id == "sb_ok" and sb.owner == good
+
+
+def test_claim_redirect_skips_an_unreachable_candidate(spawn_node, monkeypatch):
+    good = spawn_node({("POST", "/v1/claim"): lambda body, path: (200, {"id": "sb_ok", "token": "t"})})
+    entry = spawn_node({("POST", "/v1/claim"): lambda body, path: (200, {"redirect": ["10.0.0.9:7777", good]})})
+    connect = http.client.HTTPConnection.connect
+
+    def unreachable(conn):
+        if conn.host == "10.0.0.9":
+            raise OSError(errno.EHOSTUNREACH, "no route to host")
+        connect(conn)
+
+    monkeypatch.setattr(http.client.HTTPConnection, "connect", unreachable)
     sb = Client(entry).new("rt:24.04")
     assert sb.id == "sb_ok" and sb.owner == good
 
@@ -211,15 +228,19 @@ def test_close_releases_a_sandbox_that_moved(spawn_node, dead_addr, retired):
     assert released
 
 
-def test_a_moved_sandbox_retries_a_control_call_at_its_new_owner(spawn_node):
+@pytest.mark.parametrize("retired", [False, True], ids=["old_node_404", "old_node_retired"])
+def test_a_moved_sandbox_retries_a_control_call_at_its_new_owner(spawn_node, dead_addr, retired):
     adopter = spawn_node(
         {
             ("GET", "/v1/sandboxes/sb_1/owner"): lambda body, path: (200, {}),
             ("POST", "/v1/sandboxes/sb_1/renew"): lambda body, path: (200, {"deadline": "2026-11-06T12:00:00Z"}),
         }
     )
-    old = spawn_node({("GET", "/v1/peers"): lambda body, path: (200, {"peers": [adopter]})})
-    sb = Client(old).attach(old, "sb_1", "tok")
+    if retired:
+        entry, old = adopter, dead_addr
+    else:
+        entry = old = spawn_node({("GET", "/v1/peers"): lambda body, path: (200, {"peers": [adopter]})})
+    sb = Client(entry).attach(old, "sb_1", "tok")
     assert sb.renew(60) == "2026-11-06T12:00:00Z"
     assert sb.owner == adopter
 

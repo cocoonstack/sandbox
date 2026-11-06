@@ -1,5 +1,4 @@
-// qaab measures one A/B arm against a live sandboxd: a concurrent cold-claim
-// burst, then a concurrent in-guest write burst, reported as one JSON row.
+// qaab measures one A/B arm: a concurrent cold-claim burst, then a concurrent in-guest write burst, as one JSON row.
 package main
 
 import (

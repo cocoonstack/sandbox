@@ -1,7 +1,4 @@
-// portsmoke proves sandboxd's guest-port relay on real hardware: it starts a
-// listener inside a claimed microVM and drives
-// GET /v1/sandboxes/{id}/ports/{port} end to end — the path an edge proxy
-// takes to reach a sandbox that has no NIC. Run by scripts/port-e2e.sh.
+// portsmoke checks the guest-port relay end to end against a claimed microVM; scripts/port-e2e.sh runs it.
 package main
 
 import (

@@ -14,7 +14,7 @@ use std::sync::{LazyLock, Mutex};
 
 use nix::fcntl::{FcntlArg, OFlag, fcntl};
 use tokio::io::unix::AsyncFd;
-use tokio::process::Command;
+use tokio::process::{Child, Command};
 
 static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
 
@@ -151,19 +151,6 @@ pub fn openpty(cols: u16, rows: u16) -> std::io::Result<(OwnedFd, OwnedFd)> {
     Ok((master, slave))
 }
 
-#[cfg(target_os = "linux")]
-fn pty_name(master: &nix::pty::PtyMaster) -> nix::Result<String> {
-    nix::pty::ptsname_r(master)
-}
-
-#[cfg(not(target_os = "linux"))]
-fn pty_name(master: &nix::pty::PtyMaster) -> nix::Result<String> {
-    static PTSNAME: Mutex<()> = Mutex::new(());
-    let _serial = lock(&PTSNAME);
-    // SAFETY: PTSNAME serializes every ptsname call in silkd, so its static buffer is copied before another call reuses it.
-    unsafe { nix::pty::ptsname(master) }
-}
-
 pub fn watch_fd<T: AsFd + AsRawFd>(fd: T) -> std::io::Result<AsyncFd<T>> {
     // SAFETY: AsFd's I/O-safety contract keeps the raw fd open while `fd`, and so the AsyncFd, lives.
     unsafe { AsyncFd::register(fd) }.map_err(|e| e.into_parts().1)
@@ -208,7 +195,7 @@ pub fn exit_code(status: ExitStatus) -> i32 {
 }
 
 /// Reaps the child and maps its status via `exit_code`; -1 when the wait fails.
-pub async fn wait_code(child: &mut tokio::process::Child) -> i32 {
+pub async fn wait_code(child: &mut Child) -> i32 {
     child.wait().await.map_or(-1, exit_code)
 }
 
@@ -380,6 +367,19 @@ fn fill_random(b: &mut [u8]) -> bool {
 /// Rejects pid 0, which kill(2) reads as silkd's own process group, and anything that would go negative through the pid_t cast.
 fn is_valid_pid(id: u32) -> bool {
     id != 0 && id <= i32::MAX as u32
+}
+
+#[cfg(target_os = "linux")]
+fn pty_name(master: &nix::pty::PtyMaster) -> nix::Result<String> {
+    nix::pty::ptsname_r(master)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn pty_name(master: &nix::pty::PtyMaster) -> nix::Result<String> {
+    static PTSNAME: Mutex<()> = Mutex::new(());
+    let _serial = lock(&PTSNAME);
+    // SAFETY: PTSNAME serializes every ptsname call in silkd, so its static buffer is copied before another call reuses it.
+    unsafe { nix::pty::ptsname(master) }
 }
 
 fn send_signal(target: libc::pid_t, sig: i32) {

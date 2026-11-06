@@ -663,11 +663,41 @@ func TestReaderWithAConnectionOpenIsRetiredOnceItsClaimWakesOrLeaves(t *testing.
 		if err != nil {
 			t.Fatalf("leave=%v: %v", leave, err)
 		}
-		m.dropStaleReaders(t.Context())
+		m.dropStaleReaders(t.Context()).Wait()
 		if removes, _ := readerLifecycle(eng); !slices.Contains(removes, "sbx-reader-1") {
 			t.Errorf("leave=%v: removes=%v, want the reader destroyed although its connection is open", leave, removes)
 		}
 		_ = open.Close()
+	}
+}
+
+func TestStaleReaderTeardownNeverBlocksTheCaller(t *testing.T) {
+	eng := newFakeEngine()
+	m := newReaderManager(t, eng)
+	sb := mustClaim(t, m, testKey)
+	hibernateClaim(t, m, sb)
+	seedReaderVMs(m, testKey, "sbx-reader-1")
+	open, _, err := m.DialReader(t.Context(), sb.ID, sb.Token)
+	if err != nil {
+		t.Fatalf("DialReader: %v", err)
+	}
+	defer func() { _ = open.Close() }()
+	if _, _, _, err = m.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
+		t.Fatalf("wake: %v", err)
+	}
+	stall := make(chan struct{})
+	eng.mu.Lock()
+	eng.removeStall = stall
+	eng.mu.Unlock()
+	started := make(chan *sync.WaitGroup, 1)
+	go func() { started <- m.dropStaleReaders(t.Context()) }()
+	select {
+	case wg := <-started:
+		close(stall)
+		wg.Wait()
+	case <-time.After(5 * time.Second):
+		close(stall)
+		t.Fatal("dropStaleReaders waited for the engine removal")
 	}
 }
 
