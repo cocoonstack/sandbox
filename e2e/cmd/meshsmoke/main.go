@@ -60,16 +60,12 @@ func run(addr, peer, token, template string) error {
 
 	// Poll for gossip to reach the entry node; a premature claim cold-fails at A.
 	var clone *sandbox.Sandbox
-	deadline := time.Now().Add(15 * time.Second)
-	for {
+	err = harness.Poll(ctx, 15*time.Second, 500*time.Millisecond, func() (err error) {
 		clone, err = client.New(ctx, "mesh-tpl", sandbox.WithNetwork(sandbox.NetNone))
-		if err == nil {
-			break
-		}
-		if time.Now().After(deadline) {
-			return fmt.Errorf("name-based claim of mesh-tpl via %s: %w", addr, err)
-		}
-		time.Sleep(500 * time.Millisecond)
+		return err
+	})
+	if err != nil {
+		return fmt.Errorf("name-based claim of mesh-tpl via %s: %w", addr, err)
 	}
 	defer func() { _ = clone.Close() }()
 	out, err := clone.Exec(ctx, "cat", "/root/marker")

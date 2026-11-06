@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	sandbox "github.com/cocoonstack/sandbox/sdk/go"
 )
@@ -91,6 +92,24 @@ func Claim(ctx context.Context, addr, token, template string, opts ...sandbox.Op
 		return nil, nil, fmt.Errorf("claim: %w", err)
 	}
 	return client, sb, nil
+}
+
+func Poll(ctx context.Context, budget, every time.Duration, try func() error) error {
+	deadline := time.Now().Add(budget)
+	for {
+		err := try()
+		if err == nil {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(every):
+		}
+	}
 }
 
 // HTTPOverPort sends one HTTP/1.1 request over the port relay and returns a 200 body; the Host stays "localhost" because Chrome's DevTools allowlist accepts it but not proxied vhosts.

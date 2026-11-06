@@ -102,18 +102,16 @@ func initTree(ctx context.Context, sb *sandbox.Sandbox) error {
 }
 
 func adbHandshake(ctx context.Context, sb *sandbox.Sandbox) error {
-	deadline := time.Now().Add(adbWait)
-	for {
-		reply, err := dialAdb(ctx, sb)
-		if err == nil {
-			fmt.Printf("  adb: port %d answered %s to CNXN\n", adbPort, reply)
-			return nil
-		}
-		if time.Now().After(deadline) {
-			return fmt.Errorf("adb port %d: %w", adbPort, err)
-		}
-		time.Sleep(2 * time.Second)
+	var reply string
+	err := harness.Poll(ctx, adbWait, 2*time.Second, func() (err error) {
+		reply, err = dialAdb(ctx, sb)
+		return err
+	})
+	if err != nil {
+		return fmt.Errorf("adb port %d: %w", adbPort, err)
 	}
+	fmt.Printf("  adb: port %d answered %s to CNXN\n", adbPort, reply)
+	return nil
 }
 
 // dialAdb sends one ADB CNXN; a CNXN or AUTH reply proves a live adbd.

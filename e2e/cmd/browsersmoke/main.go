@@ -73,21 +73,22 @@ func run(addr, token, template string) error {
 }
 
 func waitCDP(ctx context.Context, sb *sandbox.Sandbox) error {
-	deadline := time.Now().Add(cdpWait)
-	for {
+	err := harness.Poll(ctx, cdpWait, 2*time.Second, func() error {
 		ver, err := cdpJSON(ctx, sb, "GET", "/json/version")
-		if err == nil {
-			if b, _ := ver["Browser"].(string); strings.Contains(b, "Chrome") {
-				fmt.Printf("  cdp: /json/version → %s (protocol %v)\n", b, ver["Protocol-Version"])
-				return nil
-			}
-			err = fmt.Errorf("unexpected browser %v", ver["Browser"])
+		if err != nil {
+			return err
 		}
-		if time.Now().After(deadline) {
-			return fmt.Errorf("cdp never answered: %w", err)
+		b, _ := ver["Browser"].(string)
+		if !strings.Contains(b, "Chrome") {
+			return fmt.Errorf("unexpected browser %v", ver["Browser"])
 		}
-		time.Sleep(2 * time.Second)
+		fmt.Printf("  cdp: /json/version → %s (protocol %v)\n", b, ver["Protocol-Version"])
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("cdp never answered: %w", err)
 	}
+	return nil
 }
 
 // openTarget proves CDP accepts writes, not just liveness.

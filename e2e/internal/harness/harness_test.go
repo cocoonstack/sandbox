@@ -2,6 +2,8 @@ package harness
 
 import (
 	"bufio"
+	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -48,6 +50,31 @@ func TestPortRelayPreservesGreetingAndHalfClose(t *testing.T) {
 	}
 	if err := <-served; err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestPoll(t *testing.T) {
+	errTry := errors.New("not yet")
+
+	calls := 0
+	if err := Poll(t.Context(), time.Second, time.Millisecond, func() error {
+		calls++
+		if calls < 3 {
+			return errTry
+		}
+		return nil
+	}); err != nil || calls != 3 {
+		t.Errorf("success: err %v calls %d, want nil and 3", err, calls)
+	}
+
+	if err := Poll(t.Context(), 5*time.Millisecond, time.Millisecond, func() error { return errTry }); !errors.Is(err, errTry) {
+		t.Errorf("exhausted: err %v, want the last try error", err)
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if err := Poll(ctx, time.Minute, time.Minute, func() error { return errTry }); !errors.Is(err, context.Canceled) {
+		t.Errorf("canceled: err %v, want context.Canceled", err)
 	}
 }
 

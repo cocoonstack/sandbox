@@ -510,16 +510,14 @@ func smokeTree(ctx context.Context, sb *sandbox.Sandbox) error {
 	}
 	// The staging unlink is asynchronous, so settle with a budget.
 	var staging string
-	var stagingErr error
-	for range 20 {
-		staging, stagingErr = sb.Exec(ctx, "sh", "-c", "ls -a /root/tree")
-		if stagingErr == nil && !strings.Contains(staging, ".silkd-push-") {
-			break
+	if err := harness.Poll(ctx, 2*time.Second, 100*time.Millisecond, func() (err error) {
+		staging, err = sb.Exec(ctx, "sh", "-c", "ls -a /root/tree")
+		if err == nil && strings.Contains(staging, ".silkd-push-") {
+			err = errors.New("staging present")
 		}
-		time.Sleep(100 * time.Millisecond)
-	}
-	if stagingErr != nil || strings.Contains(staging, ".silkd-push-") {
-		return fmt.Errorf("staging left behind: %q, %v", staging, stagingErr)
+		return err
+	}); err != nil {
+		return fmt.Errorf("staging left behind: %q, %v", staging, err)
 	}
 
 	var pulled bytes.Buffer
@@ -535,12 +533,11 @@ func smokeTree(ctx context.Context, sb *sandbox.Sandbox) error {
 // smokePortForward proves sshd's banner arrives through DialPort and a dead port fails with not_found.
 func smokePortForward(ctx context.Context, sb *sandbox.Sandbox) error {
 	// The step proves the relay, not sshd readiness, so the positive probe retries.
-	pc, err := sb.DialPort(ctx, 22)
-	for attempt := 0; err != nil && attempt < 100; attempt++ {
-		time.Sleep(100 * time.Millisecond)
+	var pc *sandbox.PortConn
+	if err := harness.Poll(ctx, 10*time.Second, 100*time.Millisecond, func() (err error) {
 		pc, err = sb.DialPort(ctx, 22)
-	}
-	if err != nil {
+		return err
+	}); err != nil {
 		return err
 	}
 	defer func() { _ = pc.Close() }()

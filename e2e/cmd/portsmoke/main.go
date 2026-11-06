@@ -120,15 +120,17 @@ func startGuestListener(ctx context.Context, sb *sandbox.Sandbox, listener strin
 	if _, err := sb.Spawn(ctx, sandbox.Cmd{Argv: argv}); err != nil {
 		return fmt.Errorf("spawn listener: %w", err)
 	}
-	deadline := time.Now().Add(listenerReadyWait)
-	for time.Now().Before(deadline) {
-		out, execErr := sb.Exec(ctx, "sh", "-c", fmt.Sprintf("ss -ltn 'sport = :%d' | grep -c LISTEN", guestPort))
-		if execErr == nil && strings.TrimSpace(out) != "0" {
-			return nil
+	bound := harness.Poll(ctx, listenerReadyWait, 500*time.Millisecond, func() error {
+		out, err := sb.Exec(ctx, "sh", "-c", fmt.Sprintf("ss -ltn 'sport = :%d' | grep -c LISTEN", guestPort))
+		if err == nil && strings.TrimSpace(out) == "0" {
+			return errors.New("not listening")
 		}
-		time.Sleep(500 * time.Millisecond)
+		return err
+	})
+	if bound != nil {
+		return fmt.Errorf("listener never bound 127.0.0.1:%d", guestPort)
 	}
-	return fmt.Errorf("listener never bound 127.0.0.1:%d", guestPort)
+	return nil
 }
 
 func stepHTTP(ctx context.Context, rt *harness.PortRelay, _ *sandbox.Sandbox) error {
