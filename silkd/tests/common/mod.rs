@@ -2,6 +2,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 #![allow(dead_code)]
 
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -11,6 +12,7 @@ use silkd::server::State;
 use tokio::io::{
     AsyncBufReadExt, AsyncWriteExt, BufReader, DuplexStream, Lines, ReadHalf, WriteHalf,
 };
+use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
 use tokio::time::timeout;
 
@@ -28,6 +30,19 @@ pub fn connect(state: &Arc<State>) -> (FrameWriter, FrameLines, JoinHandle<std::
     (cw, BufReader::new(cr).lines(), handle)
 }
 
+pub async fn connect_with(
+    state: &Arc<State>,
+    first: Value,
+) -> (FrameWriter, FrameLines, JoinHandle<std::io::Result<()>>) {
+    let (mut cw, lines, handle) = connect(state);
+    send(&mut cw, first).await;
+    (cw, lines, handle)
+}
+
+pub async fn under_deadline<T>(fut: impl Future<Output = T>) -> T {
+    timeout(DEADLINE, fut).await.expect("deadline")
+}
+
 pub async fn send(cw: &mut FrameWriter, frame: Value) {
     let mut line = serde_json::to_vec(&frame).expect("encode frame");
     line.push(b'\n');
@@ -41,6 +56,12 @@ pub async fn next_frame(lines: &mut FrameLines) -> Value {
         .expect("read line")
         .expect("stream closed");
     serde_json::from_str(&line).unwrap_or_else(|e| panic!("bad frame {line:?}: {e}"))
+}
+
+pub async fn expect_frame(lines: &mut FrameLines, kind: &str) -> Value {
+    let frame = next_frame(lines).await;
+    assert_type(&frame, kind);
+    frame
 }
 
 pub async fn frames_until(lines: &mut FrameLines, pred: impl Fn(&Value) -> bool) -> Vec<Value> {
@@ -69,12 +90,58 @@ pub fn assert_error(frame: &Value, kind: &str) {
     assert_eq!(frame["kind"], kind, "{frame}");
 }
 
+#[track_caller]
+pub fn assert_type(frame: &Value, kind: &str) {
+    assert_eq!(type_of(frame), kind, "{frame}");
+}
+
 pub async fn one(state: &Arc<State>, request_line: &str) -> Vec<Value> {
     request_on(state, &[request_line.to_string()]).await
 }
 
 pub async fn exchange(lines: &[String]) -> Vec<Value> {
     request_on(&Arc::new(State::new()), lines).await
+}
+
+pub fn proc_entry(ps: &[Value], pid: u64) -> Option<&Value> {
+    ps[0]["procs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["pid"].as_u64() == Some(pid))
+}
+
+pub async fn bind_local() -> (TcpListener, u16) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let port = listener.local_addr().expect("addr").port();
+    (listener, port)
+}
+
+pub async fn fs_push(dest: &Path, archive: &[u8]) -> Vec<Value> {
+    let mut lines = vec![json!({"op":"fs_push","dest":dest.to_str().unwrap()}).to_string()];
+    lines.extend(data_frames(archive));
+    exchange(&lines).await
+}
+
+pub async fn wait_for_path(path: &Path) {
+    under_deadline(async {
+        while !path.exists() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await;
+}
+
+pub fn alive(pid: u32) -> bool {
+    // SAFETY: kill(2) with signal 0 only probes whether the pid exists; it takes no pointers.
+    if unsafe { libc::kill(pid as libc::pid_t, 0) } != 0 {
+        return false;
+    }
+    !std::fs::read_to_string(format!("/proc/{pid}/stat")).is_ok_and(|stat| {
+        stat.rsplit(')')
+            .next()
+            .is_some_and(|rest| rest.trim_start().starts_with('Z'))
+    })
 }
 
 pub fn type_of(frame: &Value) -> &str {

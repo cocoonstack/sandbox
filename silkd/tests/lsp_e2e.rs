@@ -12,7 +12,10 @@ use tempfile::TempDir;
 use tokio::io::AsyncWriteExt;
 use tokio::time::timeout;
 
-use common::{DEADLINE, assert_error, b64, connect, decode, next_frame, one, send, type_of};
+use common::{
+    DEADLINE, FrameLines, FrameWriter, alive, assert_error, b64, connect_with, decode,
+    expect_frame, one, send, type_of, under_deadline,
+};
 
 const FAKE_SERVER: &str = r#"#!/bin/sh
 IFS= read -r line
@@ -51,6 +54,20 @@ async fn started_server(lang: &str, server_body: &str) -> (TempDir, Arc<State>, 
     (env, state, server_id)
 }
 
+async fn lsp_stream(
+    state: &Arc<State>,
+    server_id: &str,
+) -> (
+    FrameWriter,
+    FrameLines,
+    tokio::task::JoinHandle<std::io::Result<()>>,
+) {
+    let (cw, mut out, handle) =
+        connect_with(state, json!({"op":"lsp_request","server_id":server_id})).await;
+    expect_frame(&mut out, "ready").await;
+    (cw, out, handle)
+}
+
 async fn assert_stopped(state: &Arc<State>, server_id: &str) {
     let gone = lsp_stop(state, server_id).await;
     assert_eq!(gone.last().unwrap()["kind"], "not_found", "{gone:?}");
@@ -67,15 +84,12 @@ async fn lsp_stop(state: &Arc<State>, server_id: &str) -> Vec<Value> {
 #[tokio::test]
 async fn lsp_start_missing_manifest_is_not_found() {
     let _env_lock = ENV_LOCK.lock().await;
-    let frames = timeout(
-        DEADLINE,
-        one(
-            &Arc::new(State::new()),
-            &json!({"op":"lsp_start","language":"nope"}).to_string(),
-        ),
-    )
-    .await
-    .expect("deadline");
+    let _env = manifest_env("#!/bin/sh\n");
+    let frames = under_deadline(one(
+        &Arc::new(State::new()),
+        &json!({"op":"lsp_start","language":"nope"}).to_string(),
+    ))
+    .await;
     let last = frames.last().unwrap();
     assert_error(last, "not_found");
 }
@@ -105,15 +119,12 @@ async fn lsp_broker_relays_to_the_server() {
     let _env_lock = ENV_LOCK.lock().await;
     let (_env, state, server_id) = started_server("faketest", FAKE_SERVER).await;
 
-    let (mut cw, mut out, handle) = connect(&state);
-    send(&mut cw, json!({"op":"lsp_request","server_id":server_id})).await;
-    assert_eq!(type_of(&next_frame(&mut out).await), "ready");
+    let (mut cw, mut out, handle) = lsp_stream(&state, &server_id).await;
     send(&mut cw, json!({"op":"data","data":b64(b"ping\n")})).await;
 
-    let frame = next_frame(&mut out).await;
-    assert_eq!(type_of(&frame), "data");
+    let frame = expect_frame(&mut out, "data").await;
     assert_eq!(decode(&frame), b"reply:ping\n");
-    assert_eq!(type_of(&next_frame(&mut out).await), "done");
+    expect_frame(&mut out, "done").await;
     cw.shutdown().await.unwrap();
     handle.await.unwrap().unwrap();
 
@@ -139,7 +150,7 @@ async fn lsp_stop_kills_the_servers_children_too() {
     .await;
     let pid_file = env.path().join("child");
     let deadline = tokio::time::Instant::now() + DEADLINE;
-    let pid: libc::pid_t = loop {
+    let pid: u32 = loop {
         if let Some(pid) = std::fs::read_to_string(&pid_file)
             .ok()
             .and_then(|s| s.trim().parse().ok())
@@ -153,8 +164,7 @@ async fn lsp_stop_kills_the_servers_children_too() {
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     };
     lsp_stop(&state, &server_id).await;
-    // SAFETY: kill(2) with signal 0 only probes whether the pid exists; it takes no pointers.
-    while unsafe { libc::kill(pid, 0) } == 0 {
+    while alive(pid) {
         assert!(
             tokio::time::Instant::now() < deadline,
             "server child {pid} outlived lsp_stop"
@@ -174,9 +184,7 @@ async fn lsp_request_reaps_when_the_client_vanishes_before_ready() {
     client.write_all(b"\n").await.unwrap();
     drop(client);
     let (sr, sw) = tokio::io::split(server);
-    let served = timeout(DEADLINE, state.serve(tokio::io::BufReader::new(sr), sw))
-        .await
-        .expect("deadline");
+    let served = under_deadline(state.serve(tokio::io::BufReader::new(sr), sw)).await;
     assert!(served.is_err(), "the ready write must fail: {served:?}");
 
     assert_stopped(&state, &server_id).await;
@@ -188,16 +196,13 @@ async fn lsp_data_end_half_closes_stdin() {
     let (_env, state, server_id) =
         started_server("eoftest", "#!/bin/sh\nprintf 'ate:%s\\n' $(cat | wc -c)\n").await;
 
-    let (mut cw, mut out, handle) = connect(&state);
-    send(&mut cw, json!({"op":"lsp_request","server_id":server_id})).await;
-    assert_eq!(type_of(&next_frame(&mut out).await), "ready");
+    let (mut cw, mut out, handle) = lsp_stream(&state, &server_id).await;
     send(&mut cw, json!({"op":"data","data":b64(b"12345")})).await;
     send(&mut cw, json!({"op":"data_end"})).await;
 
-    let frame = next_frame(&mut out).await;
-    assert_eq!(type_of(&frame), "data");
+    let frame = expect_frame(&mut out, "data").await;
     assert_eq!(decode(&frame), b"ate:5\n");
-    assert_eq!(type_of(&next_frame(&mut out).await), "done");
+    expect_frame(&mut out, "done").await;
     cw.shutdown().await.unwrap();
     handle.await.unwrap().unwrap();
 }
@@ -209,9 +214,7 @@ async fn lsp_client_hang_up_reaps_a_silent_server() {
         let (_env, state, server_id) =
             started_server("silenttest", "#!/bin/sh\nexec sleep 60\n").await;
 
-        let (mut cw, mut out, handle) = connect(&state);
-        send(&mut cw, json!({"op":"lsp_request","server_id":server_id})).await;
-        assert_eq!(type_of(&next_frame(&mut out).await), "ready");
+        let (mut cw, out, handle) = lsp_stream(&state, &server_id).await;
         if half_closed_first {
             send(&mut cw, json!({"op":"data_end"})).await;
         }
@@ -232,11 +235,9 @@ async fn lsp_request_during_a_stream_ends_it_and_runs_after_it() {
     let (_env, state, server_id) =
         started_server("pipelinetest", "#!/bin/sh\nexec sleep 60\n").await;
 
-    let (mut cw, mut out, _) = connect(&state);
-    send(&mut cw, json!({"op":"lsp_request","server_id":server_id})).await;
-    assert_eq!(type_of(&next_frame(&mut out).await), "ready");
+    let (mut cw, mut out, _) = lsp_stream(&state, &server_id).await;
     send(&mut cw, json!({"op":"info"})).await;
-    assert_eq!(type_of(&next_frame(&mut out).await), "done");
-    assert_eq!(type_of(&next_frame(&mut out).await), "info");
+    expect_frame(&mut out, "done").await;
+    expect_frame(&mut out, "info").await;
     assert_stopped(&state, &server_id).await;
 }

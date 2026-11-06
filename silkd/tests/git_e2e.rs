@@ -136,8 +136,9 @@ async fn commit_failure_surfaces_git_error() {
 #[tokio::test]
 async fn clone_lane_behavior() {
     silkd::net::override_egress_for_tests(Some(false));
+    let refused = tempfile::tempdir().unwrap();
     let none = request(json!({
-        "op":"git_clone","url":"https://example.com/x.git","path":"/tmp/silkd-x"
+        "op":"git_clone","url":"https://example.com/x.git","path":refused.path().join("x").to_str().unwrap()
     }))
     .await;
     assert_error(&none[0], "unimplemented");

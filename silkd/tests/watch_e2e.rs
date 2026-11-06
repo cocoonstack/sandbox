@@ -8,19 +8,18 @@ use std::time::Duration;
 use serde_json::json;
 use silkd::server::State;
 
-use common::{assert_error, connect, next_frame, request, send, type_of};
+use common::{assert_error, connect_with, expect_frame, next_frame, request, type_of};
 
 #[tokio::test]
 async fn watch_streams_events_until_disconnect() {
     let dir = tempfile::tempdir().unwrap();
     let state = Arc::new(State::new());
-    let (mut cw, mut lines, handle) = connect(&state);
-    send(
-        &mut cw,
+    let (cw, mut lines, handle) = connect_with(
+        &state,
         json!({"op": "fs_watch", "path": dir.path().to_str().unwrap(), "recursive": true}),
     )
     .await;
-    assert_eq!(type_of(&next_frame(&mut lines).await), "ready");
+    expect_frame(&mut lines, "ready").await;
     tokio::fs::write(dir.path().join("new.txt"), b"hi")
         .await
         .unwrap();

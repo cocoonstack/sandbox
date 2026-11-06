@@ -11,7 +11,8 @@ use tokio::io::AsyncWriteExt;
 use tokio::time::timeout;
 
 use common::{
-    DEADLINE, FrameLines, assert_error, b64, connect, frames_until, next_frame, send, type_of,
+    DEADLINE, FrameLines, assert_error, b64, connect_with, expect_frame, frames_until, next_frame,
+    send, type_of,
 };
 
 async fn types_until(lines: &mut FrameLines, terminal: &str) -> Vec<String> {
@@ -25,14 +26,12 @@ async fn types_until(lines: &mut FrameLines, terminal: &str) -> Vec<String> {
 #[tokio::test]
 async fn rpcs_run_back_to_back_on_one_connection() {
     let state = Arc::new(State::new());
-    let (mut cw, mut lines, handle) = connect(&state);
-
-    send(&mut cw, json!({"v":1,"op":"info"})).await;
-    assert_eq!(type_of(&next_frame(&mut lines).await), "info");
+    let (mut cw, mut lines, handle) = connect_with(&state, json!({"v":1,"op":"info"})).await;
+    expect_frame(&mut lines, "info").await;
     send(&mut cw, json!({"v":1,"op":"fs_stat","path":"/"})).await;
-    assert_eq!(type_of(&next_frame(&mut lines).await), "stat");
+    expect_frame(&mut lines, "stat").await;
     send(&mut cw, json!({"v":1,"op":"ps"})).await;
-    assert_eq!(type_of(&next_frame(&mut lines).await), "procs");
+    expect_frame(&mut lines, "procs").await;
 
     cw.shutdown().await.unwrap();
     timeout(DEADLINE, handle)
@@ -45,10 +44,8 @@ async fn rpcs_run_back_to_back_on_one_connection() {
 #[tokio::test]
 async fn exec_hands_the_connection_back_after_exit() {
     let state = Arc::new(State::new());
-    let (mut cw, mut lines, _) = connect(&state);
-
-    send(
-        &mut cw,
+    let (mut cw, mut lines, _) = connect_with(
+        &state,
         json!({"v":1,"op":"exec","argv":["echo","hi"],"detach":false}),
     )
     .await;
@@ -62,16 +59,14 @@ async fn exec_hands_the_connection_back_after_exit() {
     assert!(types.iter().any(|t| t == "stdout"), "got {types:?}");
 
     send(&mut cw, json!({"v":1,"op":"info"})).await;
-    assert_eq!(type_of(&next_frame(&mut lines).await), "info");
+    expect_frame(&mut lines, "info").await;
 }
 
 #[tokio::test]
 async fn late_stdin_after_exit_is_dropped() {
     let state = Arc::new(State::new());
-    let (mut cw, mut lines, _) = connect(&state);
-
-    send(
-        &mut cw,
+    let (mut cw, mut lines, _) = connect_with(
+        &state,
         json!({"v":1,"op":"exec","argv":["true"],"detach":false}),
     )
     .await;
@@ -81,16 +76,14 @@ async fn late_stdin_after_exit_is_dropped() {
     send(&mut cw, json!({"v":1,"op":"stdin","data":b64(b"late")})).await;
     send(&mut cw, json!({"v":1,"op":"stdin_close"})).await;
     send(&mut cw, json!({"v":1,"op":"info"})).await;
-    assert_eq!(type_of(&next_frame(&mut lines).await), "info");
+    expect_frame(&mut lines, "info").await;
 }
 
 #[tokio::test]
 async fn a_malformed_request_after_exec_is_bad_request() {
     let state = Arc::new(State::new());
-    let (mut cw, mut lines, _) = connect(&state);
-
-    send(
-        &mut cw,
+    let (mut cw, mut lines, _) = connect_with(
+        &state,
         json!({"v":1,"op":"exec","argv":["true"],"detach":false}),
     )
     .await;
@@ -115,46 +108,39 @@ async fn upload_hands_the_connection_back_after_done() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("f").to_string_lossy().into_owned();
     let state = Arc::new(State::new());
-    let (mut cw, mut lines, _) = connect(&state);
-
-    send(&mut cw, json!({"v":1,"op":"fs_write","path":path})).await;
+    let (mut cw, mut lines, _) =
+        connect_with(&state, json!({"v":1,"op":"fs_write","path":path})).await;
     send(&mut cw, json!({"v":1,"op":"data","data":b64(b"hello")})).await;
     send(&mut cw, json!({"v":1,"op":"data_end"})).await;
-    assert_eq!(type_of(&next_frame(&mut lines).await), "done");
+    expect_frame(&mut lines, "done").await;
 
     send(&mut cw, json!({"v":1,"op":"fs_stat","path":path})).await;
-    let stat = next_frame(&mut lines).await;
-    assert_eq!(type_of(&stat), "stat", "got {stat}");
+    let stat = expect_frame(&mut lines, "stat").await;
     assert_eq!(stat["info"]["size"], 5, "got {stat}");
 }
 
 #[tokio::test]
 async fn a_request_during_exec_ends_its_stdin_and_runs_after_it() {
     let state = Arc::new(State::new());
-    let (mut cw, mut lines, _) = connect(&state);
-
-    send(
-        &mut cw,
+    let (mut cw, mut lines, _) = connect_with(
+        &state,
         json!({"v":1,"op":"exec","argv":["cat"],"detach":false}),
     )
     .await;
-    assert_eq!(type_of(&next_frame(&mut lines).await), "started");
+    expect_frame(&mut lines, "started").await;
     send(&mut cw, json!({"v":1,"op":"info"})).await;
-    let exit = next_frame(&mut lines).await;
-    assert_eq!(type_of(&exit), "exit", "got {exit}");
+    let exit = expect_frame(&mut lines, "exit").await;
     assert_eq!(exit["code"], 0, "got {exit}");
-    assert_eq!(type_of(&next_frame(&mut lines).await), "info");
+    expect_frame(&mut lines, "info").await;
 }
 
 #[tokio::test]
 async fn a_leading_input_frame_is_bad_request_and_the_connection_stays() {
     let state = Arc::new(State::new());
-    let (mut cw, mut lines, _) = connect(&state);
-
-    send(&mut cw, json!({"v":1,"op":"stdin_close"})).await;
+    let (mut cw, mut lines, _) = connect_with(&state, json!({"v":1,"op":"stdin_close"})).await;
     let err = next_frame(&mut lines).await;
     assert_error(&err, "bad_request");
 
     send(&mut cw, json!({"v":1,"op":"info"})).await;
-    assert_eq!(type_of(&next_frame(&mut lines).await), "info");
+    expect_frame(&mut lines, "info").await;
 }

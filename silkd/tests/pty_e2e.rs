@@ -18,7 +18,8 @@ use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio::sync::mpsc;
 
 use common::{
-    FrameLines, assert_error, b64, connect, decode, frames_until, one, request, send, type_of,
+    FrameLines, FrameWriter, alive, assert_error, b64, connect_with, decode, frames_until, one,
+    proc_entry, request, send, type_of,
 };
 
 struct FailingSink(Vec<u8>);
@@ -46,10 +47,19 @@ async fn read_until(lines: &mut FrameLines, pred: impl Fn(&Value) -> bool) -> Va
     frames_until(lines, pred).await.pop().unwrap()
 }
 
+async fn open_pty(
+    state: &Arc<State>,
+) -> (
+    FrameWriter,
+    FrameLines,
+    tokio::task::JoinHandle<std::io::Result<()>>,
+) {
+    connect_with(state, json!({"op":"pty_open","cols":80,"rows":24})).await
+}
+
 async fn wait_gone(pid: u32) {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-    // SAFETY: kill(2) with signal 0 only probes whether the pid exists; it takes no pointers.
-    while unsafe { libc::kill(pid as libc::pid_t, 0) } == 0 {
+    while alive(pid) {
         assert!(
             tokio::time::Instant::now() < deadline,
             "shell {pid} still alive 5 s after the started write failed"
@@ -61,8 +71,7 @@ async fn wait_gone(pid: u32) {
 #[tokio::test]
 async fn pty_runs_a_shell_and_echoes() {
     let state = Arc::new(State::new());
-    let (mut cw, mut lines, handle) = connect(&state);
-    send(&mut cw, json!({"op":"pty_open","cols":80,"rows":24})).await;
+    let (mut cw, mut lines, handle) = open_pty(&state).await;
 
     let started = read_until(&mut lines, |v| v["type"] == "started").await;
     let pid = started["pid"].as_u64().unwrap();
@@ -90,8 +99,7 @@ async fn pty_runs_a_shell_and_echoes() {
 #[tokio::test]
 async fn the_pty_shell_holds_no_master_fd() {
     let state = Arc::new(State::new());
-    let (mut cw, mut lines, handle) = connect(&state);
-    send(&mut cw, json!({"op":"pty_open","cols":80,"rows":24})).await;
+    let (mut cw, mut lines, handle) = open_pty(&state).await;
     read_until(&mut lines, |v| v["type"] == "started").await;
     send(
         &mut cw,
@@ -113,21 +121,13 @@ async fn the_pty_shell_holds_no_master_fd() {
 #[tokio::test]
 async fn pty_appears_in_ps_and_resizes() {
     let state = Arc::new(State::new());
-    let (mut cw, mut lines, _) = connect(&state);
-    send(&mut cw, json!({"op":"pty_open","cols":80,"rows":24})).await;
+    let (cw, mut lines, _) = open_pty(&state).await;
     let pid = read_until(&mut lines, |v| v["type"] == "started").await["pid"]
         .as_u64()
         .unwrap();
 
     let ps = one(&state, r#"{"op":"ps"}"#).await;
-    assert!(
-        ps[0]["procs"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|p| p["pid"].as_u64() == Some(pid)),
-        "pty not in ps: {ps:?}"
-    );
+    assert!(proc_entry(&ps, pid).is_some(), "pty not in ps: {ps:?}");
     let resized = one(
         &state,
         &json!({"op":"pty_resize","pid":pid,"cols":120,"rows":40}).to_string(),
@@ -147,8 +147,7 @@ async fn resize_unknown_pid_is_not_found() {
 #[tokio::test]
 async fn stdin_nobody_reads_after_the_shell_exits_does_not_wedge_the_next_request() {
     let state = Arc::new(State::new());
-    let (mut cw, mut lines, handle) = connect(&state);
-    send(&mut cw, json!({"op":"pty_open","cols":80,"rows":24})).await;
+    let (mut cw, mut lines, handle) = open_pty(&state).await;
     read_until(&mut lines, |v| v["type"] == "started").await;
     send(
         &mut cw,
@@ -178,8 +177,7 @@ async fn stdin_nobody_reads_after_the_shell_exits_does_not_wedge_the_next_reques
 #[tokio::test]
 async fn pty_disconnect_tears_down_without_spin() {
     let state = Arc::new(State::new());
-    let (mut cw, mut lines, handle) = connect(&state);
-    send(&mut cw, json!({"op":"pty_open","cols":80,"rows":24})).await;
+    let (cw, mut lines, handle) = open_pty(&state).await;
     let pid = read_until(&mut lines, |v| v["type"] == "started").await["pid"]
         .as_u64()
         .unwrap();
@@ -193,11 +191,7 @@ async fn pty_disconnect_tears_down_without_spin() {
         .expect("pty did not tear down on disconnect");
     let ps = one(&state, r#"{"op":"ps"}"#).await;
     assert!(
-        !ps[0]["procs"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|p| p["pid"].as_u64() == Some(pid)),
+        proc_entry(&ps, pid).is_none(),
         "pty still in table after disconnect: {ps:?}"
     );
 }

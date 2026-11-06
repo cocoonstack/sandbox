@@ -2,6 +2,7 @@
 #![cfg(target_os = "linux")]
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+use std::io::{Read, Write};
 use std::net::{Ipv4Addr, SocketAddr};
 use std::os::fd::{AsFd, AsRawFd};
 use std::os::unix::net::UnixStream;
@@ -562,8 +563,6 @@ fn forward(
     to: Ipv4Addr,
 ) -> JoinHandle<()> {
     std::thread::spawn(move || {
-        use std::io::{Read, Write};
-
         let mut r = std::io::BufReader::with_capacity(256 << 10, r);
         let mut hello = [0u8; HELLO_LEN];
         if r.read_exact(&mut hello).is_err() || w.write_all(&hello).is_err() {

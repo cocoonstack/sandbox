@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 use silkd::server::State;
 use tokio::task::JoinHandle;
 
-use common::{assert_error, one, stdout_body, type_of};
+use common::{assert_error, one, stdout_body, type_of, wait_for_path};
 
 async fn create(state: &Arc<State>) -> String {
     create_with(state, json!({"op":"session_create"})).await
@@ -31,10 +31,28 @@ async fn sh(state: &Arc<State>, id: &str, cmd: &[&str]) -> Vec<Value> {
     .await
 }
 
-fn spawn_sh(state: &Arc<State>, id: &str, cmd: &'static [&'static str]) -> JoinHandle<Vec<Value>> {
+async fn spawn_busy(state: &Arc<State>, id: &str, seconds: &'static str) -> JoinHandle<Vec<Value>> {
+    let dir = tempfile::tempdir().unwrap();
+    let marker = dir.path().join("started");
+    let marker_arg = marker.to_str().unwrap().to_string();
     let s = Arc::clone(state);
     let sid = id.to_string();
-    tokio::spawn(async move { sh(&s, &sid, cmd).await })
+    let busy = tokio::spawn(async move {
+        sh(
+            &s,
+            &sid,
+            &[
+                "sh",
+                "-c",
+                "touch \"$0\"; exec sleep \"$1\"",
+                &marker_arg,
+                seconds,
+            ],
+        )
+        .await
+    });
+    wait_for_path(&marker).await;
+    busy
 }
 
 #[tokio::test]
@@ -216,8 +234,7 @@ async fn reap_idle_removes_idle_sessions() {
 async fn reap_skips_a_session_running_a_command() {
     let state = Arc::new(State::new());
     let id = create(&state).await;
-    let busy = spawn_sh(&state, &id, &["sleep", "1"]);
-    tokio::time::sleep(Duration::from_millis(150)).await;
+    let busy = spawn_busy(&state, &id, "1").await;
     let reaped = state.sessions.reap_idle(Duration::ZERO);
     assert_eq!(reaped, 0, "a running session must not be reaped");
     let done = busy.await.unwrap();
@@ -242,8 +259,7 @@ async fn session_argv_with_metacharacters_is_one_literal_token() {
 async fn session_rm_unwedges_a_running_external_command() {
     let state = Arc::new(State::new());
     let id = create(&state).await;
-    let busy = spawn_sh(&state, &id, &["sleep", "3600"]);
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    let busy = spawn_busy(&state, &id, "3600").await;
     let rm = one(&state, &json!({"op":"session_rm","id":id}).to_string()).await;
     assert_eq!(type_of(&rm[0]), "done");
     let done = tokio::time::timeout(Duration::from_secs(5), busy)
@@ -308,8 +324,7 @@ async fn a_dead_session_command_leaves_a_recreated_session_alone() {
     )
     .await;
     assert_eq!(type_of(bg.last().unwrap()), "exit", "{bg:?}");
-    let busy = spawn_sh(&state, &id, &["sleep", "3600"]);
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    let busy = spawn_busy(&state, &id, "3600").await;
     let rm = one(&state, &json!({"op":"session_rm","id":id}).to_string()).await;
     assert_eq!(type_of(&rm[0]), "done");
     let again = create_with(&state, json!({"op":"session_create","id":"s"})).await;

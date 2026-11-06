@@ -9,18 +9,15 @@ use std::time::{Duration, Instant};
 use serde_json::json;
 use silkd::server::State;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpListener;
 use tokio::sync::oneshot;
-use tokio::time::timeout;
 
 use common::{
-    DEADLINE, FrameLines, FrameWriter, assert_error, b64, connect, decode, next_frame, send,
-    type_of,
+    FrameLines, FrameWriter, assert_error, b64, bind_local, connect, connect_with, decode,
+    expect_frame, next_frame, send, type_of, under_deadline,
 };
 
 async fn echo_listener() -> u16 {
-    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
-    let port = listener.local_addr().expect("addr").port();
+    let (listener, port) = bind_local().await;
     tokio::spawn(async move {
         while let Ok((mut conn, _)) = listener.accept().await {
             tokio::spawn(async move {
@@ -44,14 +41,12 @@ async fn echo_listener() -> u16 {
 async fn forwarded(state: &Arc<State>, port: u16) -> (FrameWriter, FrameLines) {
     let (mut cw, mut lines, _) = connect(state);
     send(&mut cw, json!({"v":1,"op":"port_forward","port":port})).await;
-    let ready = next_frame(&mut lines).await;
-    assert_eq!(type_of(&ready), "ready", "got {ready}");
+    expect_frame(&mut lines, "ready").await;
     (cw, lines)
 }
 
 async fn request_listener(request: usize) -> u16 {
-    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
-    let port = listener.local_addr().expect("addr").port();
+    let (listener, port) = bind_local().await;
     tokio::spawn(async move {
         let (mut conn, _) = listener.accept().await.expect("accept");
         let mut buf = vec![0u8; request];
@@ -65,8 +60,7 @@ async fn request_listener(request: usize) -> u16 {
 }
 
 async fn half_close_listener() -> (u16, oneshot::Receiver<Vec<u8>>) {
-    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
-    let port = listener.local_addr().expect("addr").port();
+    let (listener, port) = bind_local().await;
     let (tx, rx) = oneshot::channel();
     tokio::spawn(async move {
         let (conn, _) = listener.accept().await.expect("accept");
@@ -82,37 +76,32 @@ async fn half_close_listener() -> (u16, oneshot::Receiver<Vec<u8>>) {
 
 #[tokio::test]
 async fn forward_round_trips_and_done_on_server_close() {
-    timeout(DEADLINE, async {
+    under_deadline(async {
         let port = echo_listener().await;
         let state = Arc::new(State::new());
         let (mut cw, mut lines) = forwarded(&state, port).await;
 
         send(&mut cw, json!({"v":1,"op":"data","data":b64(b"hi")})).await;
-        let echoed = next_frame(&mut lines).await;
-        assert_eq!(type_of(&echoed), "data", "got {echoed}");
+        let echoed = expect_frame(&mut lines, "data").await;
         assert_eq!(decode(&echoed), b"hi");
 
         send(&mut cw, json!({"v":1,"op":"data_end"})).await;
-        let done = next_frame(&mut lines).await;
-        assert_eq!(type_of(&done), "done", "got {done}");
+        expect_frame(&mut lines, "done").await;
     })
-    .await
-    .expect("test deadline");
+    .await;
 }
 
 #[tokio::test]
 async fn forward_accepts_client_writes_after_the_guest_half_closes() {
-    timeout(DEADLINE, async {
+    under_deadline(async {
         let (port, got) = half_close_listener().await;
         let state = Arc::new(State::new());
         let (mut cw, mut lines) = forwarded(&state, port).await;
 
-        let greeting = next_frame(&mut lines).await;
-        assert_eq!(type_of(&greeting), "data", "got {greeting}");
+        let greeting = expect_frame(&mut lines, "data").await;
         assert_eq!(decode(&greeting), b"greeting");
 
-        let done = next_frame(&mut lines).await;
-        assert_eq!(type_of(&done), "done", "got {done}");
+        expect_frame(&mut lines, "done").await;
 
         send(
             &mut cw,
@@ -127,8 +116,7 @@ async fn forward_accepts_client_writes_after_the_guest_half_closes() {
             "guest lost the client's post-done bytes"
         );
     })
-    .await
-    .expect("test deadline");
+    .await;
 }
 
 #[tokio::test]
@@ -136,7 +124,7 @@ async fn forward_bidirectional_bulk_no_deadlock() {
     const CHUNK: usize = 3072;
     const FRAMES: usize = 400;
 
-    timeout(DEADLINE, async {
+    under_deadline(async {
         let port = echo_listener().await;
         let state = Arc::new(State::new());
         let (mut cw, mut lines) = forwarded(&state, port).await;
@@ -159,44 +147,38 @@ async fn forward_bidirectional_bulk_no_deadlock() {
         writer.await.expect("writer");
         assert_eq!(got, CHUNK * FRAMES);
     })
-    .await
-    .expect("test deadline");
+    .await;
 }
 
 #[tokio::test]
 async fn forward_refused_port_is_not_found() {
-    timeout(DEADLINE, async {
+    under_deadline(async {
         let state = Arc::new(State::new());
-        let (mut cw, mut lines, _) = connect(&state);
-
-        send(&mut cw, json!({"v":1,"op":"port_forward","port":1})).await;
+        let (_cw, mut lines, _) =
+            connect_with(&state, json!({"v":1,"op":"port_forward","port":1})).await;
         let err = next_frame(&mut lines).await;
         assert_error(&err, "not_found");
     })
-    .await
-    .expect("test deadline");
+    .await;
 }
 
 #[tokio::test]
 async fn a_request_during_forward_ends_its_input_and_runs_after_it() {
-    timeout(DEADLINE, async {
+    under_deadline(async {
         let port = echo_listener().await;
         let state = Arc::new(State::new());
         let (mut cw, mut lines) = forwarded(&state, port).await;
 
         send(&mut cw, json!({"v":1,"op":"ps"})).await;
-        let done = next_frame(&mut lines).await;
-        assert_eq!(type_of(&done), "done", "got {done}");
-        let procs = next_frame(&mut lines).await;
-        assert_eq!(type_of(&procs), "procs", "got {procs}");
+        expect_frame(&mut lines, "done").await;
+        expect_frame(&mut lines, "procs").await;
     })
-    .await
-    .expect("test deadline");
+    .await;
 }
 
 #[tokio::test]
 async fn forward_split_requests_do_not_wait_on_delayed_acks() {
-    timeout(DEADLINE, async {
+    under_deadline(async {
         let port = request_listener(8192 + 1024).await;
         let state = Arc::new(State::new());
         let (mut cw, mut lines) = forwarded(&state, port).await;
@@ -221,6 +203,5 @@ async fn forward_split_requests_do_not_wait_on_delayed_acks() {
             "20 split requests took {elapsed:?}: the guest-side write waits on delayed ACKs"
         );
     })
-    .await
-    .expect("test deadline");
+    .await;
 }

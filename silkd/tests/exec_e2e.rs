@@ -11,8 +11,8 @@ use silkd::server::State;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 
 use common::{
-    assert_error, b64, connect, exchange, frames_until, next_frame, one, roundtrip, send,
-    stdout_body, type_of,
+    alive, assert_error, b64, connect_with, exchange, frames_until, next_frame, one, proc_entry,
+    roundtrip, send, stdout_body, type_of, wait_for_path,
 };
 
 async fn detached_pid(state: &Arc<State>, script: &str) -> u64 {
@@ -27,8 +27,7 @@ async fn detached_pid(state: &Arc<State>, script: &str) -> u64 {
 }
 
 async fn attach_frames(state: &Arc<State>, pid: u64) -> Vec<Value> {
-    let (mut cw, mut lines, _) = connect(state);
-    send(&mut cw, json!({"op":"attach","pid":pid})).await;
+    let (_cw, mut lines, _) = connect_with(state, json!({"op":"attach","pid":pid})).await;
     frames_until(&mut lines, |f| {
         matches!(type_of(f), "exit" | "done" | "error")
     })
@@ -49,12 +48,7 @@ async fn wait_for_exit(state: &Arc<State>, pid: u64) -> Vec<Value> {
 async fn wait_listed(state: &Arc<State>, pid: u64) -> Value {
     for _ in 0..250 {
         let ps = one(state, r#"{"op":"ps"}"#).await;
-        if let Some(p) = ps[0]["procs"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|p| p["pid"].as_u64() == Some(pid))
-        {
+        if let Some(p) = proc_entry(&ps, pid) {
             return p.clone();
         }
         tokio::time::sleep(Duration::from_millis(20)).await;
@@ -217,8 +211,7 @@ async fn attach_keeps_a_tail_emitted_during_the_replay() {
 async fn attach_ends_when_its_client_hangs_up() {
     let state = Arc::new(State::new());
     let pid = detached_pid(&state, "sleep 30").await;
-    let (mut cw, lines, handle) = connect(&state);
-    send(&mut cw, json!({"op":"attach","pid":pid})).await;
+    let (cw, lines, handle) = connect_with(&state, json!({"op":"attach","pid":pid})).await;
 
     drop(lines);
     drop(cw);
@@ -349,9 +342,8 @@ async fn detached_exec_is_listed_then_logs_replay_output_and_exit() {
 #[tokio::test]
 async fn disconnect_during_drain_publishes_real_exit_code() {
     let state = Arc::new(State::new());
-    let (mut cw, mut lines, _) = connect(&state);
-    send(
-        &mut cw,
+    let (cw, mut lines, _) = connect_with(
+        &state,
         json!({
             "op": "exec",
             "argv": ["/bin/sh", "-c", "{ sleep 0.5; echo late; sleep 30; } & exit 7"]
@@ -385,9 +377,8 @@ async fn disconnect_during_drain_publishes_real_exit_code() {
 #[tokio::test]
 async fn stdin_held_by_a_forked_child_does_not_wedge_the_next_rpc() {
     let state = Arc::new(State::new());
-    let (mut cw, mut lines, handle) = connect(&state);
-    send(
-        &mut cw,
+    let (mut cw, mut lines, handle) = connect_with(
+        &state,
         json!({
             "op": "exec",
             "argv": ["/bin/sh", "-c", "exec 3<&0; sleep 8 <&3 3<&- & exit 0"]
@@ -415,9 +406,8 @@ async fn a_client_gone_mid_output_releases_the_stdin_a_forked_child_holds() {
     let dir = tempfile::tempdir().unwrap();
     let out = dir.path().join("count");
     let state = Arc::new(State::new());
-    let (mut cw, mut lines, _) = connect(&state);
-    send(
-        &mut cw,
+    let (mut cw, mut lines, _) = connect_with(
+        &state,
         json!({
             "op": "exec",
             "argv": ["/bin/sh", "-c", "exec 3<&0; perl -e 'setpgrp; exec @ARGV' /bin/sh -c 'sleep 1; wc -c <&3 >\"$OUT.tmp\"; mv \"$OUT.tmp\" \"$OUT\"' >/dev/null 2>&1 & while :; do echo x; sleep 0.05; done"],
@@ -433,14 +423,7 @@ async fn a_client_gone_mid_output_releases_the_stdin_a_forked_child_holds() {
     drop(lines);
     drop(cw);
 
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(8);
-    while !out.exists() {
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "the forked child never saw stdin end"
-        );
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
+    wait_for_path(&out).await;
     let read: usize = std::fs::read_to_string(&out)
         .unwrap()
         .trim()
@@ -450,11 +433,4 @@ async fn a_client_gone_mid_output_releases_the_stdin_a_forked_child_holds() {
         read < 256 * 1024,
         "the forked child read {read} bytes: stdin kept flowing after its client left"
     );
-}
-
-fn alive(pid: u32) -> bool {
-    std::process::Command::new("/bin/sh")
-        .args(["-c", &format!("kill -0 {pid} 2>/dev/null")])
-        .status()
-        .is_ok_and(|s| s.success())
 }

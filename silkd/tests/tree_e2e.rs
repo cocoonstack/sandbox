@@ -10,7 +10,7 @@ use std::process::Command;
 
 use serde_json::json;
 
-use common::{assert_error, b64, data_frames, exchange, payload, request, type_of};
+use common::{assert_error, b64, exchange, fs_push, payload, request, type_of};
 
 fn sys_tar_create(dir: &Path) -> Vec<u8> {
     let out = Command::new("tar")
@@ -46,9 +46,7 @@ async fn push_extracts_a_tar_stream() {
 
     let dest = tempfile::tempdir().unwrap();
     let dest_path = dest.path().join("proj");
-    let mut lines = vec![json!({"op":"fs_push","dest":dest_path.to_str().unwrap()}).to_string()];
-    lines.extend(data_frames(&archive));
-    let frames = exchange(&lines).await;
+    let frames = fs_push(&dest_path, &archive).await;
 
     assert_eq!(
         type_of(&frames[0]),
@@ -92,9 +90,7 @@ async fn push_then_pull_roundtrips_a_tree() {
 
     let work = tempfile::tempdir().unwrap();
     let dest = work.path().join("t");
-    let mut lines = vec![json!({"op":"fs_push","dest":dest.to_str().unwrap()}).to_string()];
-    lines.extend(data_frames(&archive));
-    assert_eq!(type_of(&exchange(&lines).await[0]), "done");
+    assert_eq!(type_of(&fs_push(&dest, &archive).await[0]), "done");
 
     let pulled = request(json!({"op":"fs_pull","path":dest.to_str().unwrap()})).await;
     let out_archive = payload(&pulled, "data");
@@ -238,9 +234,7 @@ async fn push_overlays_existing_tree_and_cleans_staging() {
     std::fs::create_dir(dest.path().join("sub")).unwrap();
     std::fs::write(dest.path().join("sub/old.txt"), b"OLD").unwrap();
 
-    let mut lines = vec![json!({"op":"fs_push","dest":dest.path().to_str().unwrap()}).to_string()];
-    lines.extend(data_frames(&archive));
-    let frames = exchange(&lines).await;
+    let frames = fs_push(dest.path(), &archive).await;
     assert_eq!(type_of(&frames[0]), "done", "push failed: {frames:?}");
 
     assert_eq!(
