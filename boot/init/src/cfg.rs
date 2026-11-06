@@ -61,8 +61,8 @@ pub fn parse(cmdline: &str) -> Result<BootCfg<'_>, String> {
                 }
             }
             "cocoon.hostname" if !val.is_empty() => cfg.hostname = Some(val),
-            "sandbox.debug" => cfg.debug = debug_token(val),
-            "sandbox.trace" => cfg.trace = debug_token(val),
+            "sandbox.debug" => cfg.debug = flag_token(val),
+            "sandbox.trace" => cfg.trace = flag_token(val),
             "ip" => {
                 if let Some(param) = parse_ip_param(val) {
                     cfg.ips.push(param);
@@ -85,7 +85,7 @@ pub fn parse(cmdline: &str) -> Result<BootCfg<'_>, String> {
 pub fn debug_requested(cmdline: &str) -> bool {
     params(cmdline)
         .rfind(|&(key, _)| key == "sandbox.debug")
-        .is_some_and(|(_, val)| debug_token(val))
+        .is_some_and(|(_, val)| flag_token(val))
 }
 
 /// Overlay mount data; index-based layer mountpoints keep a serial string out of lowerdir parsing.
@@ -118,7 +118,7 @@ fn params(cmdline: &str) -> impl DoubleEndedIterator<Item = (&str, &str)> {
         .map(|tok| tok.split_once('=').unwrap_or((tok, "")))
 }
 
-fn debug_token(val: &str) -> bool {
+fn flag_token(val: &str) -> bool {
     val.is_empty() || val == "1"
 }
 
