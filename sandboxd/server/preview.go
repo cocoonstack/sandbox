@@ -47,7 +47,10 @@ type PreviewServer struct {
 
 // NewPreviewServer serves preview URLs signed with secret and minted under base.
 func NewPreviewServer(secret, base, owner string, mgr PreviewManager) *PreviewServer {
-	p := &PreviewServer{secret: []byte(secret), base: base, owner: owner, mgr: mgr}
+	if !strings.Contains(base, "://") {
+		base = "http://" + base
+	}
+	p := &PreviewServer{secret: []byte(secret), base: strings.TrimRight(base, "/"), owner: owner, mgr: mgr}
 	p.transport = &http.Transport{
 		// A pooled guest conn skips PreviewDial, and with it wakeResolved and the Transition lock
 		DisableKeepAlives: true,
@@ -72,11 +75,7 @@ func (p *PreviewServer) Mint(id string, port uint16, ttl time.Duration) string {
 	payload, _ := json.Marshal(claims)
 	enc := base64.RawURLEncoding.EncodeToString(payload)
 	token := enc + "." + p.sign(enc)
-	base := p.base
-	if !strings.Contains(base, "://") {
-		base = "http://" + base
-	}
-	return fmt.Sprintf("%s/p/%s/", strings.TrimRight(base, "/"), token)
+	return fmt.Sprintf("%s/p/%s/", p.base, token)
 }
 
 // Handler serves preview requests and health checks on preview_listen.

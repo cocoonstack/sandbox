@@ -954,7 +954,7 @@ func validateShards(names []string, field, kind string) error {
 	return nil
 }
 
-// namesHost reads addr the way Mint does and reports whether it carries a host a client could dial.
+// namesHost reads addr the way NewPreviewServer does and reports whether it carries a host a client could dial.
 func namesHost(addr string) bool {
 	if !strings.Contains(addr, "://") {
 		addr = "http://" + addr
