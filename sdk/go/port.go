@@ -85,7 +85,7 @@ func (s *Sandbox) PreviewURL(ctx context.Context, port uint16, ttl time.Duration
 	if err != nil {
 		return "", err
 	}
-	pr, err := s.ownerJSON[previewResponse](ctx, http.MethodPost, "/preview", body, s.c.apiToken, "preview")
+	pr, _, err := s.ownerJSON[previewResponse](ctx, http.MethodPost, "/preview", body, s.c.apiToken, "preview")
 	if err != nil {
 		return "", err
 	}

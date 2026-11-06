@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -205,6 +206,29 @@ func TestAHandleFollowsItsSandboxOffARetiredNode(t *testing.T) {
 	}
 	if got := sb.Owner(); got != adopter {
 		t.Errorf("owner %s, want the adopter %s", got, adopter)
+	}
+}
+
+func TestARunWhoseWriterFailsIsNotReplayedElsewhere(t *testing.T) {
+	fake := silkdtest.NewFake(t.TempDir())
+	var elsewhere atomic.Int32
+	other := newAgentServer(t, func(c net.Conn) {
+		elsewhere.Add(1)
+		fake.ServeConn(c)
+	})
+	owner := newAgentServer(t, fake.ServeConn)
+	entry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.MarshalWrite(w, map[string]string{"owner_addr": strings.TrimPrefix(other.URL, "http://")})
+	}))
+	t.Cleanup(entry.Close)
+	sb := &Sandbox{ID: "sb_1", c: testClient(t, entry), token: "tok", owner: strings.TrimPrefix(owner.URL, "http://")}
+	t.Cleanup(sb.pool.drain)
+	refused := failingWriter{syscall.ECONNREFUSED}
+	if _, err := sb.Run(t.Context(), Cmd{Argv: []string{"echo", "42"}, Stdout: refused}); !errors.Is(err, syscall.ECONNREFUSED) {
+		t.Fatalf("run: %v, want the writer's error", err)
+	}
+	if n := elsewhere.Load(); n != 0 {
+		t.Errorf("the command was sent again to another node %d times", n)
 	}
 }
 
@@ -700,3 +724,7 @@ func testClient(t testing.TB, ts *httptest.Server, opts ...ClientOption) *Client
 	}
 	return c
 }
+
+type failingWriter struct{ err error }
+
+func (w failingWriter) Write([]byte) (int, error) { return 0, w.err }

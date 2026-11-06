@@ -48,7 +48,7 @@ func (u *upgradedConn) handshake() error {
 		return fmt.Errorf("read upgrade response: %w", err)
 	}
 	if resp.StatusCode != http.StatusSwitchingProtocols {
-		err = apiError("agent upgrade", resp)
+		err = markGone(apiError("agent upgrade", resp))
 		_ = resp.Body.Close()
 		_ = u.tcp.Close()
 		return err
@@ -64,7 +64,7 @@ func (c *Client) dialAgent(ctx context.Context, addr, id, token string) (*upgrad
 	var d net.Dialer
 	raw, err := d.DialContext(ctx, "tcp", target)
 	if err != nil {
-		return nil, err
+		return nil, markGone(err)
 	}
 	stop := context.AfterFunc(ctx, func() { _ = raw.Close() })
 	defer stop()

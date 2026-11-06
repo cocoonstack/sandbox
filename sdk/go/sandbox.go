@@ -48,6 +48,13 @@ func (e *ExitError) Error() string {
 	return fmt.Sprintf("exit status %d", e.Code)
 }
 
+// ownerGoneError tags an owner answer after which nothing reached it, so the call may go to the sandbox's new owner.
+type ownerGoneError struct{ err error }
+
+func (e *ownerGoneError) Error() string { return e.err.Error() }
+
+func (e *ownerGoneError) Unwrap() error { return e.err }
+
 // Sandbox is a claimed sandbox handle; all data-plane calls dial its owning
 // node directly.
 type Sandbox struct {
@@ -121,13 +128,13 @@ func (s *Sandbox) Fork(ctx context.Context, count int, ttl time.Duration) ([]*Sa
 	if err != nil {
 		return nil, err
 	}
-	fr, err := s.ownerJSON[forkResponse](ctx, http.MethodPost, "/fork", body, s.c.apiToken, "fork")
+	fr, addr, err := s.ownerJSON[forkResponse](ctx, http.MethodPost, "/fork", body, s.c.apiToken, "fork")
 	if err != nil {
 		return nil, err
 	}
 	children := make([]*Sandbox, len(fr.Children))
 	for i, c := range fr.Children {
-		children[i] = s.c.handleFrom(s.Owner(), c)
+		children[i] = s.c.handleFrom(addr, c)
 	}
 	return children, nil
 }
@@ -138,13 +145,13 @@ func (s *Sandbox) Promote(ctx context.Context, template string) (*Template, erro
 	if err != nil {
 		return nil, err
 	}
-	pr, err := s.ownerJSON[promoteResponse](ctx, http.MethodPost, "/promote", body, s.c.apiToken, "promote")
+	pr, addr, err := s.ownerJSON[promoteResponse](ctx, http.MethodPost, "/promote", body, s.c.apiToken, "promote")
 	if err != nil {
 		return nil, err
 	}
 	return &Template{
 		Name: pr.Key.Template, ContentDigest: pr.ContentDigest,
-		c: s.c, addr: s.Owner(), net: pr.Key.Net, size: pr.Key.Size,
+		c: s.c, addr: addr, net: pr.Key.Net, size: pr.Key.Size,
 	}, nil
 }
 
@@ -160,7 +167,7 @@ func (s *Sandbox) Renew(ctx context.Context, ttl time.Duration) (time.Time, erro
 	if err != nil {
 		return time.Time{}, err
 	}
-	rr, err := s.ownerJSON[renewResponse](ctx, http.MethodPost, "/renew", body, s.token, "renew")
+	rr, _, err := s.ownerJSON[renewResponse](ctx, http.MethodPost, "/renew", body, s.token, "renew")
 	if err != nil {
 		return time.Time{}, err
 	}
@@ -241,9 +248,9 @@ func (s *Sandbox) releaseAt(ctx context.Context, addr string) (found bool, err e
 	return false, apiError("release", resp)
 }
 
-// rebind follows a moved sandbox: a 404 or a refused dial from its owner asks Lookup, and a different owner replaces it and its parked connections.
+// rebind follows a moved sandbox: a tagged owner error asks Lookup, and a different owner replaces it and its parked connections.
 func (s *Sandbox) rebind(ctx context.Context, err error) bool {
-	if !ownerGone(err) {
+	if _, gone := errors.AsType[*ownerGoneError](err); !gone {
 		return false
 	}
 	moved, lookupErr := s.c.Lookup(ctx, s.ID, s.token)
@@ -269,18 +276,21 @@ func (s *Sandbox) retryMoved(ctx context.Context, rpc func() error) error {
 	return err
 }
 
-func (s *Sandbox) ownerJSON[T any](ctx context.Context, method, suffix string, body []byte, bearer, verb string) (T, error) {
+// ownerJSON returns the reply and the address that gave it, which derived handles bind to.
+func (s *Sandbox) ownerJSON[T any](ctx context.Context, method, suffix string, body []byte, bearer, verb string) (T, string, error) {
 	var out T
+	var addr string
 	err := s.retryMoved(ctx, func() (err error) {
-		out, err = s.c.doJSON[T](ctx, method, s.Owner(), "/v1/sandboxes/"+s.ID+suffix, bodyReader(body), bearer, verb)
-		return err
+		addr = s.Owner()
+		out, err = s.c.doJSON[T](ctx, method, addr, "/v1/sandboxes/"+s.ID+suffix, bodyReader(body), bearer, verb)
+		return markGone(err)
 	})
-	return out, err
+	return out, addr, err
 }
 
 func (s *Sandbox) ownerNoContent(ctx context.Context, method, suffix string, body []byte, bearer, verb string) error {
 	return s.retryMoved(ctx, func() error {
-		return s.c.doNoContent(ctx, method, s.Owner(), "/v1/sandboxes/"+s.ID+suffix, bodyReader(body), bearer, verb)
+		return markGone(s.c.doNoContent(ctx, method, s.Owner(), "/v1/sandboxes/"+s.ID+suffix, bodyReader(body), bearer, verb))
 	})
 }
 
@@ -316,12 +326,13 @@ func (s *Sandbox) dial(ctx context.Context) (*agentConn, error) {
 	return newAgentConn(raw), nil
 }
 
-// ownerGone reports an error after which nothing reached the owner: a 404, or a refused dial.
-func ownerGone(err error) bool {
-	if ae, ok := errors.AsType[*APIError](err); ok {
-		return ae.Status == http.StatusNotFound
+// markGone tags an owner's 404 or refused dial, after which nothing reached it; errors from the caller's own writers stay untagged.
+func markGone(err error) error {
+	ae, ok := errors.AsType[*APIError](err)
+	if ok && ae.Status == http.StatusNotFound || !ok && errors.Is(err, syscall.ECONNREFUSED) {
+		return &ownerGoneError{err}
 	}
-	return errors.Is(err, syscall.ECONNREFUSED)
+	return err
 }
 
 // pumpStdin chunks the reader into stdin frames.

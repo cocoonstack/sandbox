@@ -3,14 +3,18 @@
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, TypeVar, cast
 
 if TYPE_CHECKING:
     from .volumes import SandboxVolumesResponse
 
+_E = TypeVar("_E", bound="SandboxError")
+
 
 class SandboxError(Exception):
     """Base class for all SDK errors."""
+
+    _owner_gone = False
 
 
 class SandboxTimeout(SandboxError, TimeoutError):
@@ -71,3 +75,9 @@ def _error_message(raw: bytes) -> str:
         return cast(str, json.loads(raw)["error"])
     except (ValueError, KeyError, TypeError):
         return raw.decode(errors="replace").strip()
+
+
+def _mark_gone(exc: _E) -> _E:
+    """Tags an owner's 404 or refused dial, after which nothing reached it; caller callback errors stay untagged."""
+    exc._owner_gone = True
+    return exc
