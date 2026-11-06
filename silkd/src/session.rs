@@ -60,8 +60,8 @@ impl Table {
             .kill_on_drop(true)
             .spawn()?;
         let pid = child.id().unwrap_or(0);
-        let stdin = take_pipe(child.stdin.take(), "stdin")?;
-        let stdout = take_pipe(child.stdout.take(), "stdout")?;
+        let stdin = sysutil::take_pipe(child.stdin.take(), "stdin")?;
+        let stdout = sysutil::take_pipe(child.stdout.take(), "stdout")?;
         let session = Arc::new(Session {
             pid,
             io: tokio::sync::Mutex::new(Io {
@@ -276,11 +276,6 @@ async fn emit<W: AsyncWrite + Unpin>(out: &mut Option<&mut W>, frame: &mut Vec<u
     if failed {
         *out = None;
     }
-}
-
-/// Unwraps a piped child stdio handle; absent means the spawn contract broke.
-fn take_pipe<T>(pipe: Option<T>, name: &str) -> io::Result<T> {
-    pipe.ok_or_else(|| io::Error::other(format!("child {name} not piped")))
 }
 
 /// POSIX single-quote quoting: wraps `s` in '…' onto `out`, reopening around embedded quotes.

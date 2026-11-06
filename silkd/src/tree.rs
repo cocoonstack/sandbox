@@ -68,8 +68,9 @@ pub async fn pull<W: AsyncWrite + Unpin>(w: &mut W, path: &str) -> io::Result<()
         Ok(pair) => pair,
         Err(e) => return err_frame(w, &e, "spawn tar").await,
     };
-    let Some(mut out) = child.stdout.take() else {
-        return err_frame(w, &io::Error::other("tar stdout not piped"), "spawn tar").await;
+    let mut out = match sysutil::take_pipe(child.stdout.take(), "stdout") {
+        Ok(out) => out,
+        Err(e) => return err_frame(w, &e, "spawn tar").await,
     };
 
     if let Err(e) = proto::stream_data_frames(&mut out, w).await? {
@@ -99,8 +100,9 @@ where
         Ok(pair) => pair,
         Err(e) => return err_frame(w, &e, "spawn tar").await,
     };
-    let Some(mut sink) = child.stdin.take() else {
-        return err_frame(w, &io::Error::other("tar stdin not piped"), "spawn tar").await;
+    let mut sink = match sysutil::take_pipe(child.stdin.take(), "stdin") {
+        Ok(sink) => sink,
+        Err(e) => return err_frame(w, &e, "spawn tar").await,
     };
 
     let feed = proto::feed_data_frames(reader, &mut sink).await;
@@ -132,10 +134,7 @@ fn spawn_tar(
     mut cmd: Command,
 ) -> io::Result<(tokio::process::Child, tokio::task::JoinHandle<Vec<u8>>)> {
     let mut child = cmd.stderr(Stdio::piped()).kill_on_drop(true).spawn()?;
-    let stderr = child
-        .stderr
-        .take()
-        .ok_or_else(|| io::Error::other("tar stderr not piped"))?;
+    let stderr = sysutil::take_pipe(child.stderr.take(), "stderr")?;
     Ok((child, tokio::spawn(drain(stderr))))
 }
 

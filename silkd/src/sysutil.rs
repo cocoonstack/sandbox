@@ -200,6 +200,11 @@ pub async fn wait_code(child: &mut tokio::process::Child) -> i32 {
     child.wait().await.map_or(-1, exit_code)
 }
 
+/// Unwraps a piped child stdio handle; absent means the spawn contract broke.
+pub fn take_pipe<T>(pipe: Option<T>, name: &str) -> std::io::Result<T> {
+    pipe.ok_or_else(|| std::io::Error::other(format!("child {name} not piped")))
+}
+
 /// Opens tun device `name` with a virtio-net header leading every packet.
 #[cfg(target_os = "linux")]
 pub fn tun_open(name: &str) -> std::io::Result<OwnedFd> {
