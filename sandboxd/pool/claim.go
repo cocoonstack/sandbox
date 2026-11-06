@@ -337,6 +337,7 @@ func (m *Manager) releaseResolved(ctx context.Context, id string, sb *types.Sand
 	m.recordUsage(ctx, usage.Event{Event: "release", ID: id, VMName: vmName, Tenant: sb.Tenant})
 	// Cleanup must survive the caller hanging up; the claim is already dropped.
 	ctx = context.WithoutCancel(ctx)
+	m.releaseTun(ctx, id, tunAddr)
 	if ck != "" {
 		m.purgeArchiveCk(ctx, id, ck, sb.Tenant) // archived: no local VM
 		m.untrack(m.pendingCks, ck)
@@ -357,7 +358,6 @@ func (m *Manager) releaseResolved(ctx context.Context, id string, sb *types.Sand
 		}
 	}
 	m.out.Disarm(id, removed)
-	m.releaseTun(ctx, id, tunAddr)
 	m.dropSnap(ctx, snap)
 	return err
 }
@@ -649,10 +649,10 @@ func (m *Manager) rollbackClaim(ctx context.Context, sbs []*types.Sandbox) {
 	m.mu.Unlock()
 	m.store.recommit(ctx, rb)
 	for i, sb := range sbs {
+		m.releaseTun(ctx, sb.ID, sb.TunAddr)
 		td := m.quiesceVolumes(ctx, sb)
 		td.holds = holds[i]
 		m.out.Disarm(sb.ID, m.removeOrRetry(ctx, sb.VMName, sb.ID, td))
-		m.releaseTun(ctx, sb.ID, sb.TunAddr)
 	}
 }
 

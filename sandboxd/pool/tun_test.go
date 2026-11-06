@@ -329,6 +329,24 @@ func TestReconcileKeepsTheAddressAndBillOfAClaimAnotherNodeRunsOrCanAdopt(t *tes
 	}
 }
 
+func TestAReleaseFreesTheOverlayAddressBeforeTheSlowTeardown(t *testing.T) {
+	addrs := &fakeAddrs{}
+	eng := newFakeEngine()
+	m := tunManager(t, eng, addrs, config.PoolSpec{PoolKey: testKey, Tun: true, Egress: anyPolicy})
+	sb := mustClaim(t, m, testKey)
+	stall := make(chan struct{})
+	eng.mu.Lock()
+	eng.removeStall = stall
+	eng.mu.Unlock()
+	released := make(chan error, 1)
+	go func() { released <- m.Release(t.Context(), sb.ID, Cred{Token: sb.Token}) }()
+	waitFor(t, func() bool { return len(addrs.releasedList()) == 1 })
+	close(stall)
+	if err := <-released; err != nil {
+		t.Fatalf("release: %v", err)
+	}
+}
+
 func TestATunFlowEndWritesOneAuditRecord(t *testing.T) {
 	dir := t.TempDir()
 	cfg := &config.Config{DataDir: dir, AuditLog: true}

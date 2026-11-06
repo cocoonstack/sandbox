@@ -330,8 +330,8 @@ func (m *Manager) quarantineClaim(ctx context.Context, sb *types.Sandbox) bool {
 	td := m.quiesceVolumes(ctx, sb)
 	gone := m.removeOrRetry(ctx, sb.VMName, sb.ID, td)
 	m.forgetClaim(ctx, sb)
-	m.recordEnd(ctx, sb, "quarantined")
 	m.releaseTun(ctx, sb.ID, sb.TunAddr)
+	m.recordEnd(ctx, sb, "quarantined")
 	return gone
 }
 
