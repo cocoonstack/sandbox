@@ -100,10 +100,6 @@ func (r *resolver) serve(ln net.Listener, datagram bool) {
 	}
 }
 
-func (r *resolver) close() {
-	r.cancel()
-}
-
 func (r *resolver) serveConn(conn net.Conn, datagram bool) {
 	defer func() { _ = conn.Close() }()
 	stop := context.AfterFunc(r.ctx, func() { _ = conn.Close() })

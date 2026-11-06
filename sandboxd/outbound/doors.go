@@ -57,7 +57,7 @@ func (d *doors) close() {
 		}
 	}
 	if d.resolver != nil {
-		d.resolver.close()
+		d.resolver.cancel()
 	}
 }
 
