@@ -42,6 +42,24 @@ they reach its guest, so they share these answers:
 - 503 `tenant store down; retry` for an archived claim whose tenant the node has
   not cached while the meta store is down
 
+## Admission refusals
+
+A claim, fork or checkpoint branch answers 429 when the node refuses it for
+capacity, with the pool state unharmed. The causes:
+
+- the node is at [`max_claims`](deploy.md#configuration) or `max_running`
+- the tenant the claim counts against is at its own `max_claims`: the caller's
+  for a claim or branch, the parent's for a fork
+- the node is draining ([`POST /v1/drain`](#post-v1drain)) or cordoned
+  ([`POST /v1/cordon`](#post-v1cordon))
+- the disk is under `disk_reserve`
+- memory is over `memory_limit`
+
+On a cluster, a claim without `volumes`, `no_redirect` or `require_promoted`
+that meets one of these redirects to a peer with warm capacity or, failing
+that, one that serves the pool; see [`POST /v1/claim`](#post-v1claim). Wake and
+the guest-reaching verbs have their own 429 causes, listed with each.
+
 ## POST /v1/claim
 
 Auth: `Authorization: Bearer <api_token>` (when configured).
@@ -223,9 +241,8 @@ VM closes the devices.
 Redirects (mutually exclusive with the fields above) name peers to retry
 at — sent on a warm miss with warm peers, when the node lacks a golden for
 the key but gossip names a template owner, and when a claim without `volumes`,
-`no_redirect` or `require_promoted` meets a 429 (the node at `max_claims` or
-`max_running`, the calling tenant at its cap, the node draining or cordoned, the disk under
-`disk_reserve`, or memory over `memory_limit`) and a peer reports warm capacity or, failing that, serves the pool:
+`no_redirect` or `require_promoted` meets an [admission refusal](#admission-refusals)
+and a peer reports warm capacity or, failing that, serves the pool:
 
 ```json
 {"redirect": ["10.0.0.6:7777", "10.0.0.7:7777"],
@@ -258,9 +275,7 @@ busy — a live writer excludes every other claim for that name, live readers
 exclude a writer), or a `ro` claim against a writable image left dirty by an
 unclean `rw` release (needs recovery — one `rw` claim must replay and cleanly
 release before `ro` claims resume; see
-[deploy](deploy.md#writable-dataset-volumes)); 429 node at `max_claims` or `max_running`, the
-calling tenant at its own `max_claims`, the node draining or cordoned, the disk under
-`disk_reserve`, or memory over `memory_limit`; 500 provisioning failed.
+[deploy](deploy.md#writable-dataset-volumes)); 429 an [admission refusal](#admission-refusals); 500 provisioning failed.
 
 ## GET /v1/volumes
 
@@ -424,19 +439,20 @@ a safe per-volume reason. Guest transport failures remain server errors;
 timeouts return 504 and cancellation returns 408.
 
 A mounted writable attachment marks the image dirty before the guest can write.
-Live removal and release clear the marker only when the unmount observes and
-normally unmounts the exact writable whole-device filesystem and finds no
-residual device mounts. These checks read silkd's own mount namespace, so a
-mount of the device in another namespace, or one moved there, is not seen.
-Live removal also needs a confirmed host detach. Both
-mount and superblock options must be writable; ext4's `emergency_ro` after a
-filesystem error counts as read-only. A missing device or pre-unmounted
-filesystem does not prove clean unmount. The marker remains on uncertainty and
-blocks subsequent readers. Release waits up to 30 seconds for each writable
-volume's unmount, and a guest that does not answer within that keeps every
-remaining marker. Attach-only writers have no automatic dirty-marker
-protection. The caller owns mounting, flushing, unmounting, recovery, and
-fencing before reuse.
+Live removal and release clear the marker only when the unmount of the mount at
+the volume's path succeeds, the mount was the filesystem's root and writable in
+both its mount and superblock options (ext4's `emergency_ro` after a filesystem
+error counts as read-only), and no other mount of its device remains. Live
+removal finds the device by its serial and refuses any other mount of it;
+release identifies the mount by its path alone and does not check which device
+it is. These checks read silkd's own mount namespace, so a mount of the device
+in another namespace, or one moved there, is not seen. Live removal also needs
+a confirmed host detach. A missing device or pre-unmounted filesystem does not
+prove clean unmount. The marker remains on uncertainty and blocks subsequent
+readers. Release waits up to 30 seconds for each writable volume's unmount, and
+a guest that does not answer within that keeps every remaining marker.
+Attach-only writers have no automatic dirty-marker protection. The caller owns
+mounting, flushing, unmounting, recovery, and fencing before reuse.
 
 ### Partial failure and recovery
 
@@ -599,8 +615,7 @@ an unknown `on_expire`; 401 bad api token; 403 the parent's tenant was removed
 (sandbox token); 404 unknown id or wrong sandbox token; 409 egress-lane or volume
 parent (neither forks, checkpoints, or promotes; see [egress](egress.md)), a
 failed parent, or an archived parent (`POST /wake` or an exec wakes it first);
-429 node or the parent's tenant at `max_claims`, the node at `max_running`, the node draining or cordoned, the disk
-under `disk_reserve`, or memory over `memory_limit`; 503 `lease lost; retry` for a replicated parent while its node's lease is overdue, `tenant store down; retry` for a sandbox token whose tenant the node has not cached while the meta store is down.
+429 an [admission refusal](#admission-refusals); 503 `lease lost; retry` for a replicated parent while its node's lease is overdue, `tenant store down; retry` for a sandbox token whose tenant the node has not cached while the meta store is down.
 
 ## POST /v1/sandboxes/{id}/promote
 
@@ -753,8 +768,10 @@ reach nothing on a pool with a policy. The API references a class and never
 defines one. A claim keeps the class its tenant had when it was made.
 
 A change applies to the next request: a removed or rotated token gets 401 at
-once. Lowering `max_claims` below the live count refuses new claims and evicts
-none. A removed tenant's claims keep running and stay listed for root
+once. `max_claims` is a per-node cap (0 = unlimited), so a tenant's cluster
+limit is `max_claims` × nodes; every usage event of a tenant's claim carries the
+tenant, for per-tenant billing. Lowering `max_claims` below the live count
+refuses new claims and evicts none. A removed tenant's claims keep running and stay listed for root
 (`GET /v1/sandboxes?tenant=<name>`) until they expire or root releases them,
 but they cannot extend: renew and fork answer 403 to the sandbox's own token,
 a hibernated one is never archived, one archived before the removal is not
@@ -953,9 +970,7 @@ resolves every record) and answers with a redirect shaped like a warm-miss
 the claim. See the [placement lifecycle](cluster.md#checkpoints-on-a-cluster).
 
 404 for an unknown checkpoint (locally, and after redirect and heal both
-miss), 429 node
-or calling tenant at `max_claims`, the node at `max_running`, the node draining or cordoned, the disk under
-`disk_reserve`, or memory over `memory_limit`, 503 when the node's
+miss), 429 an [admission refusal](#admission-refusals), 503 when the node's
 concurrent-heal cap is already full — retryable, and the response carries a
 `Retry-After` hint.
 
@@ -1300,12 +1315,12 @@ claim of a replicating pool that is already open when the lease turns overdue
 is closed, whether or not it has a replica yet.
 
 A hibernated or archived sandbox wakes when the upgrade request arrives, before the `101`,
-unless its last sleep is reader-safe, which the pool's [`reader`](deploy.md#reading-sleeping-claims-without-waking-them) setting provides.
+unless its last sleep is reader-safe, which the pool's [`reader`](deploy.md#reading-sleeping-claims-without-waking-them) setting provides;
+what a reader is, what it needs and when the call wakes instead are there.
 With it, the node answers the `101` before it touches the sandbox, reads the
 first frame, and serves `fs_stat`, `fs_list`, `fs_read` and `fs_pull` from a
-reader VM, a warm VM of the sandbox's pool that mounts a copy of the sandbox's disk read-only: the sandbox stays
-hibernated or archived, no `wake` usage event is recorded, and the read stamps
-neither the idle nor the archive clock. An `info` frame wakes the sandbox, since a
+reader VM: the sandbox stays hibernated or archived, no `wake` usage event is
+recorded, and the read stamps neither the idle nor the archive clock. An `info` frame wakes the sandbox, since a
 reader would answer with its own processes and uptime. The first frame on the connection that
 is anything else, or any later one, wakes the sandbox and hands the same
 connection to its silkd with the unread bytes replayed, so a client sees one
@@ -1314,13 +1329,9 @@ an archive), the connection's next read moves to a fresh reader of the new sleep
 when it wakes, the connection moves to the woken sandbox, so reads never come
 from a stale sleep. Pipelining a request behind a read that has not yet sent
 its terminal frame is unsupported: when that request moves the connection, the
-reader closes and the rest of the read's reply is lost. Files
-and symlinks resolve inside the sandbox's own filesystem as of the guest `sync`
-that runs right before the last hibernate's pause; a write the guest made in
-the instant between that `sync` and the pause is visible only after a wake. A
-hibernate whose `sync` failed, or one made before the pool had `reader`,
-is not served by a reader: its reads wake the sandbox. When no reader can be built (no warm VM in the pool, a failed attach, an archive from an older cocoon) the call wakes the sandbox as if the
-feature were off. Because the `101` has gone out by then, a failure on this path
+reader closes and the rest of the read's reply is lost. A read that no reader
+can serve wakes the sandbox as if the feature were off. Because the `101` has
+gone out by then, a failure on this path
 (unknown sandbox, a refused wake, an unreachable guest, an overdue node lease)
 arrives as a silkd `error` frame (`not_found` for an unknown sandbox, else
 `internal`) rather than an HTTP status, and the connection ends. A connection

@@ -384,9 +384,8 @@ gateway key per user, while the guest holds a placeholder.
   sets. Processes captured live in a snapshot (sessions, detached execs,
   units) keep the source's guest values in their own environment; a
   `guest: false` value never enters the guest, so no snapshot, checkpoint or
-  store object holds one. With [`archive_failover`](deploy.md#configuration),
-  the row of an archived or replicated claim carries the env, `guest: false`
-  values included, in plaintext in the shared PostgreSQL.
+  store object holds one; the `archive_failover` row is the exception
+  ([security](security.md#deployment-assumptions)).
 - **Audit.** An injection is recorded as the secret's name; the value is
   never logged, listed or returned.
 

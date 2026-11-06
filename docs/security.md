@@ -49,9 +49,8 @@ exposing any part of a deployment beyond a single trusted host.
   proxy's answers, and every credentialed call is journaled. Git auth
   tokens travel as in-memory headers, never guest disk. Secrets come from
   the host environment or a claim's `guest: false` env, never the config
-  file. That env stays in the node-local claim record; with
-  `archive_failover`, the row of an archived or replicated claim also carries
-  it, `guest: false` values included, in plaintext in the shared PostgreSQL.
+  file. That env stays in the node-local claim record, except in the
+  `archive_failover` row ([assumption 4](#deployment-assumptions)).
 - **Sandbox identity.** Every clone is reseeded (entropy, machine-id), so
   branches and forks never share an identity with their source.
 
@@ -84,21 +83,14 @@ all of them.
 
 ## Token model
 
-Three credentials, in descending scope ([API reference](sandboxd-api.md)):
-the root `api_token` (operator surfaces, full access), tenant tokens
-(resource-creating verbs, everything stamped and quota'd per tenant), and
-per-sandbox tokens (that sandbox only — holding a handle amplifies to
-nothing node-level). Two capability tokens ride on top: preview URLs are
-HMAC-signed, expire with the claim's lease (an archived claim kept forever
-has none, so its URL runs for the TTL it was minted with), and die with the
-sandbox (no revocation list to leak); a checkpoint id is the unguessable capability to
-branch it. On a cluster, deleting a checkpoint does not revoke that
-capability fleet-wide the instant it runs: the delete is best-effort —
-broadcast to every peer the node currently sees — so a peer that is offline
-or partitioned at that moment keeps its own replica branchable until
-`checkpoint_ttl_hours` ages it out ([placement lifecycle](cluster.md#checkpoints-on-a-cluster)).
-Tenants are isolated at the API layer — listings filter, deletes answer 404
-rather than confirming existence, and operator surfaces answer tenants 403.
+Three credentials in descending scope: the root `api_token`, tenant tokens
+(isolated at the API layer) and per-sandbox tokens (that sandbox only, nothing
+node-level); what each may call is in the
+[API reference](sandboxd-api.md#sandboxd-http-api). Two capabilities ride on
+top: a preview URL is HMAC-signed with no revocation list, and a checkpoint id
+is the capability to branch it, which a delete does not revoke fleet-wide the
+instant it runs
+([why](cluster.md#delete-is-eventual-not-a-fleet-wide-revocation)).
 
 ## Dataset volumes
 

@@ -129,8 +129,8 @@ the intersection of the two.
 | `replicate_seconds` (pool entry) | 0 (off) | snapshot every running claim of this pool to the checkpoint store this often and point the claim's registry row at the snapshot, so another node restores the claim, memory and processes included, when this node is lost (see [running claims across node loss](cluster.md#running-claims-across-node-loss)). Each round pauses the guest for the length of a memory and disk capture. A restore loses what ran after the last committed replica: [the bound](cluster.md#running-claims-across-node-loss). The claim's row carries no retention deadline while it runs. Requires `archive_failover` and a `none`-lane pool, both checked at config load; a claim with volumes is skipped. Config-owned like `egress`: `PUT /v1/pools` rejects it. Restart only: a claim is replicated by its pool's setting from the moment it is claimed, so a reload that changes it is refused (a pool restarted with 0 starts retiring its replicas while the registry remains enabled; see [Disabling archive failover](#disabling-archive-failover)) |
 | `storage` (pool entry) | unset (cocoon's default, 10G) | size of the copy-on-write disk the pool's golden is cold-booted with, in cocoon's own `--storage` spelling (`"40G"`, `"40GiB"`, `"40Gi"`: Docker/Kubernetes units, all binary) and passed to it verbatim; every clone, fork, checkpoint branch and promoted template of the pool inherits it. At least cocoon's default of 10G. Equal sizes spelled differently build the same golden; a changed size rebuilds the golden on the next build, and claims already out keep their disk. Config-owned like `egress`: `PUT /v1/pools` rejects it |
 | `tun` (pool entry) | `false` | turns the [advanced network mode](advanced-network.md#configuration) on for the pool's claims; needs the node's `tun` block and the `none` lane. Config-owned like `egress`: `PUT /v1/pools` rejects it |
-| `max_claims` | 0 (unlimited) | node-wide cap on live claims (to take none, [cordon](sandboxd-api.md#post-v1cordon) the node); claim/fork/branch requests beyond it answer 429 with the pool state unharmed (on a cluster a non-volume claim first tries a redirect to a warm peer, else to a peer that serves the pool; a volume claim answers the 429 with no redirect) |
-| `max_running` | 0 (off) | node-wide cap on claims that hold a VM: not hibernated, not archived, not failed, with a wake in flight counted; claim, fork, branch and wake beyond it answer 429 and leave the claim as it was; a claim takes the same redirect as `max_claims`. Hibernated and archived claims hold no slot, so `max_claims` can follow disk while this follows RAM and CPU. Warm and reader VMs are not counted: keep `max_running` × the largest size plus every pool's warm target × its size within the node's RAM. A hibernated claim's wake cannot move to another node, so its 429 stays until a running claim sleeps or goes; with `archive_failover`, an archived claim's refused wake [moves to a peer with room](cluster.md#waking-an-archived-claim-on-a-full-node). `sandboxd_wakes_refused_total` counts the refusals. Lowering the cap stops nothing that runs. A [reload](#reloading-the-config) applies a change |
+| `max_claims` | 0 (unlimited) | node-wide cap on live claims (to take none, [cordon](sandboxd-api.md#post-v1cordon) the node); claim/fork/branch requests beyond it answer 429 ([admission refusals](sandboxd-api.md#admission-refusals)) |
+| `max_running` | 0 (off) | node-wide cap on claims that hold a VM: not hibernated, not archived, not failed, with a wake in flight counted; claim, fork, branch and wake beyond it answer 429 and leave the claim as it was ([admission refusals](sandboxd-api.md#admission-refusals)). Hibernated and archived claims hold no slot, so `max_claims` can follow disk while this follows RAM and CPU. Warm and reader VMs are not counted: keep `max_running` × the largest size plus every pool's warm target × its size within the node's RAM. A hibernated claim's wake cannot move to another node, so its 429 stays until a running claim sleeps or goes; with `archive_failover`, an archived claim's refused wake [moves to a peer with room](cluster.md#waking-an-archived-claim-on-a-full-node). `sandboxd_wakes_refused_total` counts the refusals. Lowering the cap stops nothing that runs. A [reload](#reloading-the-config) applies a change |
 | `move_concurrency` | 2 | node-wide cap on [live moves](cluster.md#moving-a-running-claim) in flight, counting moves this node sends and reservations it holds for moves to it; a move past it answers 429. Moves need `meta_store` with a `cell`, for the move record, and `mesh.cluster_key`, but not `archive_failover` or an S3 `checkpoint_store`: a node that sets this without them refuses to load, and one that leaves it unset without them cannot move (409). A move also needs a cocoon with live migration (v0.7.7 or newer; a master build is judged by the newest tag it reports), the Cloud Hypervisor fork at `35b098c65260` or newer (a VM started before the upgrade cannot move), a run dir that supports reflink such as XFS, nodes of the same CPU model, and the same path strings in cocoon's `root_dir` and `run_dir` on both nodes ([same paths](cluster.md#moving-a-running-claim)). Lowering the cap stops no move in flight. A [reload](#reloading-the-config) applies a change |
 | `audit_log` | false | append every relayed frame that opens an RPC — its op + addressing fields, never payloads — to `<data_dir>/audit.jsonl`; continuation `data`, `data_end`, `stdin`, and `stdin_close` frames pass through unrecorded. The file is size-rotated with one `.1` backup. Records are `{t, id, op}` plus whichever addressing fields the op carries (`argv`, `path`, `dest`, `from`, `to`, `url`, `session`, `port`), plus `method` (`GET`, `CONNECT`, `SOCKS5`, …), `decision` (`allow`, `deny`, `rate_limited`), `secret` (the ref name, never its value), `upstream` (the [upstream proxy](egress.md#upstream-proxies)'s `host:port`, when one carried it), `tenant`, and on an allowed connection `src_addr` and `dst_addr` (the node-side and destination `ip:port` of the upstream TCP connection, the tunnel target through an upstream proxy) on `egress` records, which a relayed frame cannot set; preview accesses record as op `preview`, one per request; a tenant change records as op `tenants` with the `added`, `changed` and `removed` names, never a token; a config reload records as op `config_reload` with `changed`, a runtime volume change as op `volumes` with `added` or `removed`, and each ended flow of the [advanced network mode](advanced-network.md) as op `tun_flow` with `path` (`tun`), `tenant`, `proto` (`tcp`, `udp`, `icmp`), `dst_addr`, `decision` (`allow`, `deny`), `sent` and `received` bytes, `start`, `end` and the exit `profile`; a guest DNS-relay query records as op `dns` ([fields](egress.md#name-resolution-dns)), a cordon and its lift as ops `cordon` and `uncordon`, and a guest-port relay as op `port` with `port`. An opening frame whose first line exceeds 4 KiB records as op `oversized` with no addressing fields |
 | `disk_reserve` | unset | `{"free": "100G", "dirs": ["/srv/sbx/run"]}`: while the filesystem of any listed directory (default `data_dir`) has less than `free` available, checked every 2 s, the node refuses new claims, forks, checkpoint claims, wakes of hibernated or archived sandboxes, hibernates, checkpoint captures and promotes with 429, and parks refill; the idle sweep and a lease-end archive leave their sandboxes running and retry on the next tick; `/v1/info` reports it as at capacity and the mesh sees no pools on it. Running sandboxes keep running. On an XFS project quota the free space is the project's. List cocoon's `run_dir` when it sits on another filesystem, since the copy-on-write disks grow there. Size `free` to at least two sandboxes' worst-case growth (copy-on-write disk plus memory file each) and keep the refusal above your disk alert's warning level, so the warning comes first: on a 640G project with 40G disks and 8G memory files, `100G` refuses at 84% used |
@@ -183,9 +183,9 @@ connections to finish, and the next connection wakes the claim.
 A reader is a warm VM taken from the claim's own pool, so it boots the claim's
 image with the claim's layers, and it has no NIC (egress-lane claims never
 hibernate). Taking one removes a VM from the pool until the refill replaces it,
-and an empty pool never cold-boots one: the call wakes the claim. A reader is never shared: it
-serves one claim, and only the claim's own token reaches it. The guest's own
-kernel does the parsing, as it does for the claim:
+and an empty pool never cold-boots one: the call wakes the claim. Only the
+claim's own token reaches its reader. The guest's own kernel does the parsing,
+as it does for the claim:
 
 - a hibernated claim's copy-on-write disk is copied by cocoon (`vm disk attach
   --from-snapshot`) into the reader VM and hot-attached read-write; cocoon uses
@@ -217,8 +217,8 @@ is destroyed. A wake waits for a reader only while cocoon copies the disk:
 milliseconds with a reflink, the time to copy the whole disk without one. A
 reader serves only the sleep it was built from: a later hibernate or archive
 gets a fresh one. The claim's own code runs in its reader with root, as it did
-in the claim, and the reader serves one claim and is destroyed afterwards, so
-the claim's bytes never reach a shared VM or the host kernel.
+in the claim, and a reader is never shared, so the claim's bytes never reach a
+shared VM or the host kernel.
 
 Whenever a reader cannot be built (no warm VM in the claim's pool, a failed
 attach, an archive without
@@ -580,24 +580,11 @@ docs cover validation semantics and the per-VM knobs.
 
 ### Auth model
 
-Three token kinds. The root `api_token` has full access — operators and
-single-tenant deployments need nothing else. Tenant tokens, added through
-the [tenant API](sandboxd-api.md#tenants-v1tenants) and kept in
+A root `api_token` for operators, tenant tokens added through the
+[tenant API](sandboxd-api.md#tenants-v1tenants) and kept in
 `<data_dir>/tenants.json` (or the [shared tenant database](#shared-tenant-database)),
-create and manage their own resources: claims, forks, checkpoints,
-promoted templates, and preview URLs are stamped with the tenant name;
-sandbox and checkpoint listings filter to the caller's tenant, and a tenant
-can delete only its own checkpoints and templates (root sees everything).
-The [operator surfaces](sandboxd-api.md) stay root-only; a
-tenant token there is authenticated but not authorized, so it answers 403 (a
-wrong token stays 401). Per-sandbox
-tokens are unchanged: whoever holds a sandbox's token drives that sandbox.
-Fork children inherit the parent's tenant and count against its
-`max_claims` (0 = unlimited, a per-node cap, so a tenant's cluster limit is
-`max_claims` × nodes); a tenant at its cap gets 429 exactly like a node at
-`max_claims`, and every usage event of a tenant's claim carries the tenant for
-per-tenant billing. `config.json` has no `tenants` field: a node starts with
-no tenants until the API adds them.
+and one token per sandbox. What each may call is in the
+[API reference](sandboxd-api.md#sandboxd-http-api).
 
 ## Running
 
@@ -630,26 +617,9 @@ count): sandboxd then retires it and builds a new golden, and until that is
 ready, claims for that pool that find no warm VM cold-boot. If clones of the new
 golden fail the same way, it is retired again at most once every 30 s.
 
-A minimal systemd unit (shipped as
-[`packaging/sandboxd.service`](https://github.com/cocoonstack/sandbox/blob/main/packaging/sandboxd.service)):
-
-```ini
-[Unit]
-Description=sandboxd
-Wants=network-online.target
-After=network-online.target
-
-[Service]
-ExecStart=/usr/local/bin/sandboxd -config /etc/sandboxd/config.json
-Restart=on-failure
-RestartSec=5s
-KillMode=process
-TimeoutStopSec=27min
-Environment=SANDBOXD_LOG_LEVEL=info
-
-[Install]
-WantedBy=multi-user.target
-```
+The systemd unit is
+[`packaging/sandboxd.service`](https://github.com/cocoonstack/sandbox/blob/main/packaging/sandboxd.service);
+install it as shipped. Its `KillMode` and `TimeoutStopSec` are explained below.
 
 Each record carries its syslog level, so alerting keys on systemd priority:
 `journalctl -u sandboxd -p err` lists the errors and `-p warning` the
@@ -853,7 +823,9 @@ only; computing durations or prices stays with the consumer.
   until it catches up. The journal append is unchanged, so a claim, release,
   hibernate or wake never waits on the database.
 - **Node:** rows carry the node's mesh `node_id` (its `bind` when unset), or
-  its host name without a mesh. The name must be unique within the cell.
+  its host name without a mesh. The name must be unique within the cell. Keep
+  the name stable: a renamed node lands its whole journal again under the new
+  name.
 - **Schema:** sandboxd creates the table at boot when it is missing; create it
   ahead with the same DDL when the node's role has no `CREATE` right:
 
@@ -1130,7 +1102,7 @@ some of them on a node:
 |---|---|---|
 | `demo`, `smoke` | claim tiers and the verb surface | `sandboxd-e2e.sh` |
 | `volumesmoke` | shared read-only, writable, and live volumes | `sandboxd-e2e.sh` |
-| `meshsmoke` | template routing on a two-node mesh without a shared checkpoint store, because [a shared store never routes](cluster.md#templates-on-a-cluster) | |
+| `meshsmoke` | template routing on a two-node mesh without a shared checkpoint store, because [a shared store resolves templates locally](cluster.md#templates-on-a-cluster) | |
 | `crossnode` | a checkpoint claimed on another node through the shared store | |
 | `coldproof` | a cold claim, by the guest's own clock | |
 | `lifecycle` | idle → hibernate → archive → wake | `archive-e2e.sh` |
