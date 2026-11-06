@@ -152,7 +152,7 @@ func (m *Manager) archive(ctx context.Context, sb *types.Sandbox) error {
 	sb.HibernateSnap, sb.VsockSocket = "", ""
 	m.setVMNameLocked(sb, "")
 	sb.Deadline = m.archiveDeadline(sb)
-	js := m.store.set(sb)
+	js, archivedAt := m.store.set(sb), time.Now()
 	m.mu.Unlock()
 	if saveErr := m.store.commit(js); saveErr != nil {
 		m.mu.Lock()
@@ -178,7 +178,7 @@ func (m *Manager) archive(ctx context.Context, sb *types.Sandbox) error {
 		return fmt.Errorf("archive %s: persist claims: %w", sb.ID, saveErr)
 	}
 	m.counters.archives.Add(1)
-	m.recordUsage(ctx, usage.Event{Event: "archive", ID: sb.ID, Reference: ck.ID, Tenant: sb.Tenant, Deadline: sb.Deadline})
+	m.recordUsage(ctx, usage.Event{Time: archivedAt, Event: "archive", ID: sb.ID, Reference: ck.ID, Tenant: sb.Tenant, Deadline: sb.Deadline})
 	// Disarm under Transition so a wake right after the release is not clobbered by a late disarm
 	m.out.Disarm(sb.ID, true)
 	sb.Transition.Unlock()
@@ -235,7 +235,12 @@ func (m *Manager) wakeArchived(ctx context.Context, sb *types.Sandbox) (string, 
 		m.destroy(ctx, built.VMName)
 		return "", err
 	}
+	m.counters.unarchives.Add(1)
 	logger := log.WithFunc("pool.wakeArchived")
+	// Only the none lane reaches here, so there is no NIC to re-lock
+	if proxyErr := m.out.ArmProxy(ctx, sb); proxyErr != nil {
+		logger.Errorf(ctx, proxyErr, "arm egress proxy %s", sb.ID)
+	}
 	// The pre-commit marker keeps a failed delete retryable after the journal update.
 	if delErr := m.ckpts.Delete(ctx, ck); delErr != nil {
 		logger.Warnf(ctx, "delete consumed archive ck %s: %v", ck, delErr)
@@ -245,15 +250,9 @@ func (m *Manager) wakeArchived(ctx context.Context, sb *types.Sandbox) (string, 
 		}
 		m.dropTombstone(ctx, sb.ID, consumed)
 	}
-	// Only the none lane reaches here, so there is no NIC to re-lock
-	if proxyErr := m.out.ArmProxy(ctx, sb); proxyErr != nil {
-		logger.Errorf(ctx, proxyErr, "arm egress proxy %s", sb.ID)
-	}
 	if m.disarmIfReleased(sb) {
 		return "", ErrUnknownSandbox
 	}
-	m.counters.unarchives.Add(1)
-	m.recordUsage(ctx, usage.Event{Event: "unarchive", ID: sb.ID, Reference: ck, Tenant: sb.Tenant, Deadline: m.deadlineOf(sb)})
 	return built.VsockSocket, nil
 }
 
@@ -266,8 +265,9 @@ func (m *Manager) commitWake(ctx context.Context, sb *types.Sandbox, vmName, soc
 	ck, deadline, epoch, safe := sb.ArchiveCk, sb.Deadline, sb.ArchiveEpoch, sb.ReaderSafe
 	sb.VsockSocket, sb.ArchiveCk, sb.ArchiveEpoch, sb.ReaderSafe = sock, "", 0, false
 	m.setVMNameLocked(sb, vmName)
-	sb.Deadline = time.Now().Add(clampTTL(types.Seconds(sb.LeaseSeconds))) // a woken sandbox is a fresh lease
-	js := m.store.set(sb)
+	wokeAt := time.Now()
+	sb.Deadline = wokeAt.Add(clampTTL(types.Seconds(sb.LeaseSeconds))) // a woken sandbox is a fresh lease
+	js, lease := m.store.set(sb), sb.Deadline
 	m.mu.Unlock()
 	if err := m.store.commit(js); err != nil {
 		m.mu.Lock()
@@ -282,6 +282,7 @@ func (m *Manager) commitWake(ctx context.Context, sb *types.Sandbox, vmName, soc
 		return fmt.Errorf("wake %s: persist claims: %w", sb.ID, err)
 	}
 	sb.Touch() // restart the idle→hibernate→archive clock
+	m.recordUsage(ctx, usage.Event{Time: wokeAt, Event: "unarchive", ID: sb.ID, Reference: ck, Tenant: sb.Tenant, Deadline: lease})
 	return nil
 }
 

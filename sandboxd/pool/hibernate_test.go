@@ -79,6 +79,48 @@ func TestWakePersistFailureSurfaces(t *testing.T) {
 	})
 }
 
+func TestAReleaseRacingAWakeBillsTheWakeFirst(t *testing.T) {
+	m := newTestManager(t, newFakeEngine())
+	sb := mustClaim(t, m, testKey)
+	hibernateClaim(t, m, sb)
+	m.store.writeMu.Lock()
+	locked := true
+	t.Cleanup(func() {
+		if locked {
+			m.store.writeMu.Unlock()
+		}
+	})
+	woke := make(chan error, 1)
+	go func() {
+		_, _, _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token)
+		woke <- err
+	}()
+	waitFor(t, func() bool {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		return sb.HibernateSnap == ""
+	})
+	if got := usageEventsOf(t, m, sb.ID); got != "claim,hibernate,wake" {
+		t.Fatalf("usage once the wake is published = %q, want its wake already recorded", got)
+	}
+	released := make(chan error, 1)
+	go func() { released <- m.Release(t.Context(), sb.ID, Cred{Token: sb.Token}) }()
+	waitFor(t, func() bool {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		return m.claimed[sb.ID] == nil
+	})
+	m.store.writeMu.Unlock()
+	locked = false
+	<-woke
+	if err := <-released; err != nil {
+		t.Fatalf("release: %v", err)
+	}
+	if got := usageEventsOf(t, m, sb.ID); got != "claim,hibernate,wake,release" {
+		t.Errorf("usage = %q, want the release to end the span the wake opened", got)
+	}
+}
+
 func TestHibernateAmbiguousErrorTreatedAsDone(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)

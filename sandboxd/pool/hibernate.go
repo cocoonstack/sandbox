@@ -140,8 +140,6 @@ func (m *Manager) hibernateLocked(ctx context.Context, sb *types.Sandbox) error 
 		m.dropSnap(ctx, snap)
 		return ErrUnknownSandbox
 	}
-	// The VM is hibernated either way, so the billing window closes here.
-	m.recordHibernate(ctx, sb)
 	m.out.Disarm(sb.ID, true)
 	if err != nil {
 		return fmt.Errorf("hibernate %s: persist claims: %w", sb.ID, err)
@@ -216,7 +214,6 @@ func (m *Manager) wakeOrRead(ctx context.Context, sb *types.Sandbox, readerOK bo
 	}
 	m.counters.wakes.Add(1)
 	m.counters.wakeNanos.Add(uint64(time.Since(wakeStart))) //nolint:gosec // durations are positive
-	m.recordUsage(ctx, usage.Event{Event: "wake", ID: sb.ID, VMName: sb.VMName, Tenant: sb.Tenant, Deadline: m.deadlineOf(sb)})
 	if proxyErr := m.out.ArmProxy(ctx, sb); proxyErr != nil {
 		log.WithFunc("pool.wakeOrRead").Errorf(ctx, proxyErr, "arm egress proxy %s", sb.ID)
 	}
@@ -310,6 +307,12 @@ func (m *Manager) commitTransition(ctx context.Context, sb *types.Sandbox, snap,
 		if now := time.Now(); snap == "" && (sb.OnExpire == types.ExpireArchive || m.archiveAfterFor(sb.Key) > 0) && !m.tenantGone(sb.Tenant) && now.After(sb.Deadline) {
 			sb.Deadline = now.Add(clampTTL(types.Seconds(sb.LeaseSeconds)))
 		}
+		// Under m.mu, so a racing release's event lands after this one and a shutdown cannot keep the record without it
+		if snap != "" {
+			m.recordHibernate(ctx, sb)
+		} else {
+			m.recordUsage(ctx, usage.Event{Event: "wake", ID: sb.ID, VMName: sb.VMName, Tenant: sb.Tenant, Deadline: sb.Deadline})
+		}
 	})
 }
 
@@ -333,14 +336,6 @@ func (m *Manager) dropStale(ctx context.Context, sb *types.Sandbox) {
 
 // settlePendingSnap settles a dangling hibernate intent and bills an adopted one, which never was.
 func (m *Manager) settlePendingSnap(ctx context.Context, sb *types.Sandbox) (adopted bool, err error) {
-	adopted, err = m.resolvePendingSnap(ctx, sb)
-	if adopted {
-		m.recordHibernate(ctx, sb)
-	}
-	return adopted, err
-}
-
-func (m *Manager) resolvePendingSnap(ctx context.Context, sb *types.Sandbox) (adopted bool, err error) {
 	if sb.PendingSnap == "" {
 		return false, nil
 	}
@@ -356,6 +351,7 @@ func (m *Manager) resolvePendingSnap(ctx context.Context, sb *types.Sandbox) (ad
 	if live {
 		if exists {
 			sb.HibernateSnap = pending
+			m.recordHibernate(ctx, sb)
 		}
 		sb.PendingSnap = ""
 		js = m.store.set(sb)
@@ -370,7 +366,6 @@ func (m *Manager) resolvePendingSnap(ctx context.Context, sb *types.Sandbox) (ad
 	}
 	if err := m.store.commit(js); err != nil {
 		m.store.recommit(ctx, js)
-		// The transition is decided in memory, so report the adoption for the caller to bill
 		return exists, fmt.Errorf("resolve hibernate intent %s: persist: %w", sb.ID, err)
 	}
 	return exists, nil
