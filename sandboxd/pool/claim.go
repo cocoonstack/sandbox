@@ -649,6 +649,8 @@ func (m *Manager) rollbackClaim(ctx context.Context, sbs []*types.Sandbox, bille
 		if billed {
 			m.recordUsage(ctx, usage.Event{Event: "release", ID: sb.ID, VMName: sb.VMName, Tenant: sb.Tenant})
 		}
+	}
+	for _, sb := range sbs {
 		m.releaseTun(ctx, sb.ID, sb.TunAddr)
 	}
 	for i, sb := range sbs {
