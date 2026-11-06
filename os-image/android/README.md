@@ -3,9 +3,8 @@
 Android guest for UI-automation sandboxes: the cocoon project's official
 redroid image (`ghcr.io/cocoonstack/cocoon/android:15.0`, upstream
 redroid 15 rootfs + cocoon boot chain, built from `cocoon/os-image/android/`)
-plus silkd, claimable like any other template. Remote access is adb on
-port 5555 — no VNC in this lineage. The intended pool shape is
-`net: none`, `size: xlarge` (4 CPU / 8G).
+plus silkd. Claim shape, adb access and behavior are in
+[docs/android.md](../../docs/android.md); this file holds the build notes.
 
 ## Build
 
@@ -30,14 +29,3 @@ no NIC, 4 CPU / 8G).
 Do not revert to the previous third-party VNC android pin: that build ships a
 broken dexpreopt boot-image chain that crash-loops zygote before the framework
 ever completes.
-
-## Constraints
-
-- **Boot chain**: the image boots its embedded 6.8 kernel via Android
-  `/init`, not the sandbox boot chain (PVH kernel + overlay-root init).
-  Use Cloud Hypervisor with `net: none`; snapshot/restore of a booted Android
-  is covered by the `androidsmoke` acceptance round.
-- **silkd on Android**: the musl-static binary runs against an Android
-  userspace (`/system/bin/sh`, no `/bin/sh`); exec behavior is covered by
-  the `androidsmoke` acceptance round, and the session verbs need bash, which
-  the image lacks.
