@@ -218,7 +218,6 @@ impl State {
         R: AsyncBufRead + Unpin + Send + 'static,
         W: AsyncWrite + Unpin,
     {
-        // validated ahead of the session/process split so an empty argv errors on both paths.
         if e.argv.is_empty() {
             proto::error_frame(writer, ErrorKind::BadRequest, "argv must not be empty").await?;
             return Ok((reader, None));

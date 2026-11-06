@@ -37,7 +37,7 @@ pub async fn clone<W: AsyncWrite + Unpin>(
     }
     args.push(url);
     args.push(path);
-    // clone has no repo dir yet, so run it from cwd (-C ".").
+    // clone has no repo dir yet.
     let out = git(".", auth, &args).await?;
     terminal(w, "clone", &out).await
 }

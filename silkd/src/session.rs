@@ -89,7 +89,6 @@ impl Table {
             io.converse::<tokio::io::Sink>(&init, None).await?;
         }
 
-        // reserve the id under the table lock so a concurrent create with the same id sees AlreadyExists.
         let mut map = sysutil::lock(&self.inner);
         if map.contains_key(&id) {
             return Err(io::Error::new(

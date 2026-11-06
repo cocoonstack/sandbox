@@ -251,7 +251,7 @@ fn effective_path<'a>(
         })
 }
 
-/// Finds a bare program on path like execvp, minus its fall-through past an entry whose exec fails, so std can posix_spawn an absolute path; a relative entry leaves the search to execvp.
+/// Resolves a bare program on an all-absolute `path`, so std can posix_spawn it.
 fn resolve_program(name: &str, path: Option<&str>) -> Option<PathBuf> {
     if name.is_empty() || name.contains('/') {
         return None;

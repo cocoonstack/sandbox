@@ -12,7 +12,7 @@ use tokio::io::{
     AsyncBufRead, AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt,
 };
 
-/// Mirrors cocoon-agent's frame cap so a malformed peer can't OOM us.
+/// Every client rejects a larger frame, and the cap keeps a malformed peer from OOMing us.
 pub const MAX_FRAME: usize = 8 * 1024 * 1024;
 
 /// Read size for exec, pty and session output.
