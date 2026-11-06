@@ -11,6 +11,13 @@ const (
 	ipTTL = 8
 )
 
+type tcpSegment struct {
+	seq     uint32
+	hdr     int
+	payload int
+	push    bool
+}
+
 // coalescer merges in-order TCP segments of one flow into a GSO frame for the guest, as kernel GRO does; only the receive goroutine uses it.
 type coalescer struct {
 	l    *link
@@ -103,13 +110,6 @@ func (c *coalescer) finish(frame []byte) {
 	binary.LittleEndian.PutUint16(frame[4:], uint16(c.mss)) //nolint:gosec // an MSS fits
 	binary.LittleEndian.PutUint16(frame[6:], 20)
 	binary.LittleEndian.PutUint16(frame[8:], 16)
-}
-
-type tcpSegment struct {
-	seq     uint32
-	hdr     int
-	payload int
-	push    bool
 }
 
 // segmentOf accepts a data segment with only ACK or ACK+PSH set and a valid checksum; GRO never vouches for a checksum it did not check.

@@ -66,7 +66,6 @@ func openBackends(ctx context.Context, cfg *config.Config) (pool.Backends, runFu
 	return b, runTun, nil
 }
 
-// openTun returns run, which receives VXLAN until its context ends.
 func openTun(ctx context.Context, cfg *config.Config, b *pool.Backends) (runFunc, error) {
 	t := cfg.Tun
 	under, err := udp.Listen(t.ListenAddr(), t.Senders)
@@ -87,7 +86,7 @@ func openTun(ctx context.Context, cfg *config.Config, b *pool.Backends) (runFunc
 	router := tunnet.New(under, t.Overlay())
 	b.TunRouter, b.TunAddrs = router, addrs
 	return func(ctx context.Context) {
-		// closing the underlay is what ends the blocked receive
+		// Closing the underlay is what ends the blocked receive.
 		context.AfterFunc(ctx, under.Close)
 		log.WithFunc("main.openTun").Error(ctx, router.Run(ctx), "tun router stopped; the advanced network mode is down")
 	}, nil

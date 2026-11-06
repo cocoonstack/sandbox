@@ -28,7 +28,7 @@ const (
 )
 
 var (
-	switchingProtocols = []byte("HTTP/1.1 101 Switching Protocols\r\nUpgrade: silkd\r\nConnection: Upgrade\r\n\r\n")
+	switchingProtocols = []byte("HTTP/1.1 101 Switching Protocols\r\nUpgrade: " + upgradeProto + "\r\nConnection: Upgrade\r\n\r\n")
 	newline            = []byte{'\n'}
 
 	// silkd delimits input with terminal frames, so a TCP half-close carries no meaning here.

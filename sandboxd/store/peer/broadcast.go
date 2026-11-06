@@ -27,7 +27,7 @@ func (b *Broadcaster) Delete(ctx context.Context, id string) {
 	var wg sync.WaitGroup
 	for _, addr := range addrs {
 		wg.Go(func() {
-			// a 404 means the peer never healed a copy
+			// A 404 means the peer never healed a copy.
 			if err := peerCall(ctx, http.MethodDelete, checkpointURL(addr, id, "?no_forward=1"), b.Token, nil, peerCallTimeout, http.StatusNoContent, http.StatusNotFound); err != nil {
 				logger.Warnf(ctx, "broadcast delete %s to %s: %v", id, addr, err)
 			}

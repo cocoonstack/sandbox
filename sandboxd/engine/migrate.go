@@ -43,7 +43,7 @@ func (e *Engine) MigrateCapture(ctx context.Context, vmName, series string, fina
 func (e *Engine) MigrateReceive(ctx context.Context, fromDir, name string, key types.PoolKey) (types.VMRecord, error) {
 	restore := e.restoreArgs()
 	if e.restoreMode == types.RestoreOnDemand {
-		// cocoon's hypervisor rejects ondemand for a series with deltas, so its default applies
+		// Cocoon's hypervisor rejects ondemand for a series with deltas, so its default applies
 		restore = nil
 	}
 	args := append([]string{"vm", "migrate", "receive", "--from-dir", fromDir}, e.cloneFlags(name, key, restore)...)
