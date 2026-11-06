@@ -264,6 +264,12 @@ ip netns exec exit sysctl -w net.netfilter.nf_conntrack_max=1048576
   new flows for every claim.
 - A host without `nft` carries the same four rules in `iptables` inside the
   exit's namespace.
+- The exit must reach every node's `tun.listen` address through the same next
+  hop: all on its own link, or all through one gateway. Kernel VXLAN learning
+  moves a claim's MAC to its new node but keeps the route it cached for the old
+  one, so after a live move to a node behind another next hop the exit sends
+  that claim's packets the wrong way until the cache is invalidated;
+  `ip route flush cache` in the exit's namespace clears it at once.
 - A gateway machine uses the same configuration with its own addresses, and
   its NIC computes inner checksums, so the `ethtool` line is only for veth.
 - MTU: VXLAN adds 50 bytes; on a 1500-byte underlay `tun.mtu` is 1450, on a
