@@ -46,8 +46,8 @@ func TestFetchPinsGenerationAcrossStoreInstances(t *testing.T) {
 		t.Fatalf("fetch digest %q, want first generation %q", digest, firstDigest)
 	}
 	secondDigest := mustPublishDigested(t, writer, testID, "second")
-	assertPresent(t, filepath.Join(dir, "disk.img"), "first generation disturbed by re-publish")
-	assertPresent(t, firstDigestPath, "first generation digest disturbed by re-publish")
+	assertPresentf(t, filepath.Join(dir, "disk.img"), "first generation disturbed by re-publish")
+	assertPresentf(t, firstDigestPath, "first generation digest disturbed by re-publish")
 
 	_, meta, digest = mustFetch(t, reader, testID)
 	if string(meta) != storetest.MetaJSON("second") {
@@ -73,7 +73,7 @@ func TestPlainPublishReplacesDigestWithEmpty(t *testing.T) {
 	if firstDigest == "" {
 		t.Fatal("digested generation returned an empty digest")
 	}
-	assertPresent(t, firstDigestPath, "superseded digest removed inside the grace")
+	assertPresentf(t, firstDigestPath, "superseded digest removed inside the grace")
 	mustPublish(t, st, testID, "digested")
 	if _, _, digest = mustFetch(t, st, testID); digest != "" {
 		t.Errorf("a plain publish of the digested meta kept digest %q, want empty", digest)
@@ -264,10 +264,10 @@ func TestSweepGenerationsPairsCurrentAndSupersededDigests(t *testing.T) {
 		t.Fatalf("SweepGenerations: %v", err)
 	}
 	for _, path := range []string{firstGen, firstSidecar} {
-		assertGone(t, path, "superseded entry %s survived sweep", filepath.Base(path))
+		assertGonef(t, path, "superseded entry %s survived sweep", filepath.Base(path))
 	}
 	for _, path := range []string{secondGen, secondSidecar, labels} {
-		assertPresent(t, path, "current entry %s was swept", filepath.Base(path))
+		assertPresentf(t, path, "current entry %s was swept", filepath.Base(path))
 	}
 	_, meta, digest := mustFetch(t, st, testID)
 	if string(meta) != storetest.MetaJSON("second") || digest != secondDigest {
@@ -294,13 +294,13 @@ func TestPublishRetriesAfterExpiredInstall(t *testing.T) {
 	if sweepErr := st.SweepGenerations(t.Context()); sweepErr != nil {
 		t.Fatalf("sweep expired generation: %v", sweepErr)
 	}
-	assertGone(t, gen, "expired generation survived sweep")
+	assertGonef(t, gen, "expired generation survived sweep")
 
 	mustPublish(t, st, testID, "same")
 	backdate(t, gen)
 	mustPublish(t, st, testID, "same")
 	dir, _, _ := mustFetch(t, st, testID)
-	assertPresent(t, filepath.Join(dir, "disk.img"), "export after retried publish")
+	assertPresentf(t, filepath.Join(dir, "disk.img"), "export after retried publish")
 }
 
 func TestPublishSweepsGenerationsBySupersessionAge(t *testing.T) {
@@ -311,18 +311,18 @@ func TestPublishSweepsGenerationsBySupersessionAge(t *testing.T) {
 	mustPublish(t, st, testID, "first")
 	mustPublish(t, st, testID, "second")
 	mustPublish(t, st, testID, "third")
-	assertPresent(t, gen1, "superseded generation reclaimed inside the grace")
+	assertPresentf(t, gen1, "superseded generation reclaimed inside the grace")
 
 	setAge(t, gen1, store.GenerationGrace+time.Minute)
 	setAge(t, gen2, store.GenerationGrace/2)
 	mustPublish(t, st, testID, "fourth")
-	assertGone(t, gen1, "generation past its supersession grace survived publish")
-	assertPresent(t, gen2, "generation inside its supersession grace was reclaimed")
+	assertGonef(t, gen1, "generation past its supersession grace survived publish")
+	assertPresentf(t, gen2, "generation inside its supersession grace was reclaimed")
 	dir, meta, _ := mustFetch(t, st, testID)
 	if string(meta) != storetest.MetaJSON("fourth") {
 		t.Fatalf("fetch meta %q, want the current generation", meta)
 	}
-	assertPresent(t, filepath.Join(dir, "disk.img"), "current export after sweep")
+	assertPresentf(t, filepath.Join(dir, "disk.img"), "current export after sweep")
 }
 
 func TestSweepSparesPublishingGeneration(t *testing.T) {
@@ -336,7 +336,7 @@ func TestSweepSparesPublishingGeneration(t *testing.T) {
 	if sweepErr := sweeper.SweepStaging(); sweepErr != nil {
 		t.Fatalf("sweep during publish: %v", sweepErr)
 	}
-	assertPresent(t, gen, "publishing generation was swept")
+	assertPresentf(t, gen, "publishing generation was swept")
 
 	tmp := filepath.Join(root, testID, store.MetaFile+".tmp")
 	if writeErr := os.WriteFile(tmp, meta, 0o600); writeErr != nil {
@@ -389,9 +389,9 @@ func TestSweepReclaimsOnlyAgedUncommittedGenerations(t *testing.T) {
 	if sweepErr := sweeper.SweepStaging(); sweepErr != nil {
 		t.Fatalf("sweep old: %v", sweepErr)
 	}
-	assertGone(t, orphan, "aged uncommitted generation survived")
-	assertPresent(t, filepath.Join(root, orphanID), "orphan record shell was removed")
-	assertPresent(t, fresh, "publishing generation was swept")
+	assertGonef(t, orphan, "aged uncommitted generation survived")
+	assertPresentf(t, filepath.Join(root, orphanID), "orphan record shell was removed")
+	assertPresentf(t, fresh, "publishing generation was swept")
 
 	if removeErr := os.RemoveAll(commitBlocker); removeErr != nil {
 		t.Fatalf("remove commit blocker: %v", removeErr)
@@ -418,13 +418,13 @@ func TestSweepStagingSparesAPeersFreshStaging(t *testing.T) {
 	if sweepErr := restarted.SweepStaging(); sweepErr != nil {
 		t.Fatalf("sweep: %v", sweepErr)
 	}
-	assertPresent(t, filepath.Join(staging, store.MetaFile), "a peer's in-progress staging was swept")
+	assertPresentf(t, filepath.Join(staging, store.MetaFile), "a peer's in-progress staging was swept")
 
 	backdate(t, staging)
 	if sweepErr := restarted.SweepStaging(); sweepErr != nil {
 		t.Fatalf("sweep aged: %v", sweepErr)
 	}
-	assertGone(t, staging, "aged staging survived")
+	assertGonef(t, staging, "aged staging survived")
 }
 
 func TestSweepGenerationsRemovesOnlyAgedStaging(t *testing.T) {
@@ -440,8 +440,8 @@ func TestSweepGenerationsRemovesOnlyAgedStaging(t *testing.T) {
 		t.Fatalf("SweepGenerations: %v", err)
 	}
 
-	assertGone(t, aged, "staging aged past the grace survived the periodic sweep")
-	assertPresent(t, fresh, "fresh staging was swept")
+	assertGonef(t, aged, "staging aged past the grace survived the periodic sweep")
+	assertPresentf(t, fresh, "fresh staging was swept")
 }
 
 func TestSweepGenerationsToleratesConcurrentDelete(t *testing.T) {
@@ -676,14 +676,14 @@ func setAge(t *testing.T, path string, age time.Duration) {
 	}
 }
 
-func assertGone(t *testing.T, path, format string, args ...any) {
+func assertGonef(t *testing.T, path, format string, args ...any) {
 	t.Helper()
 	if _, err := os.Stat(path); !errors.Is(err, fs.ErrNotExist) {
 		t.Errorf(format+": %v", append(args, err)...)
 	}
 }
 
-func assertPresent(t *testing.T, path, format string, args ...any) {
+func assertPresentf(t *testing.T, path, format string, args ...any) {
 	t.Helper()
 	if _, err := os.Stat(path); err != nil {
 		t.Errorf(format+": %v", append(args, err)...)
