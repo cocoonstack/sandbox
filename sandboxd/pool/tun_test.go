@@ -309,6 +309,26 @@ func TestFlushClaimsPersistsTheLiveTunBytes(t *testing.T) {
 	}
 }
 
+func TestReconcileKeepsTheAddressAndBillOfAClaimAnotherNodeRunsOrCanAdopt(t *testing.T) {
+	addrs := &fakeAddrs{}
+	m := tunManager(t, newFakeEngine(), addrs, config.PoolSpec{PoolKey: testKey, Tun: true, Egress: anyPolicy})
+	addr := netip.MustParseAddr("240.0.0.9")
+	dropped := []*types.Sandbox{
+		{ID: "sb_out", VMName: "sbx-out", TunAddr: addr, MoveOut: &types.MoveOut{Epoch: 1}},
+		{ID: "sb_in", VMName: "sbx-in", TunAddr: addr, MoveIn: true},
+		{ID: "sb_rep", VMName: "sbx-rep", TunAddr: addr, ReplicaCk: "ck_00000000000000aa"},
+	}
+	m.recordReconciled(t.Context(), nil, dropped, true)
+	for id, want := range map[string]string{"sb_out": "", "sb_in": "", "sb_rep": "reap"} {
+		if got := usageEventsOf(t, m, id); got != want {
+			t.Errorf("%s events %q, want %q", id, got, want)
+		}
+	}
+	if got := addrs.releasedList(); len(got) != 0 {
+		t.Errorf("released %v, want every address kept", got)
+	}
+}
+
 func TestATunFlowEndWritesOneAuditRecord(t *testing.T) {
 	dir := t.TempDir()
 	cfg := &config.Config{DataDir: dir, AuditLog: true}
