@@ -315,6 +315,14 @@ func (f *fakeEngine) MarkLane(context.Context, string, types.NetRoute) error {
 	return nil
 }
 
+func (f *fakeEngine) TunUp(context.Context, string) error {
+	return nil
+}
+
+func (f *fakeEngine) TunDown(context.Context, string) error {
+	return nil
+}
+
 func (f *fakeEngine) lookups() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()

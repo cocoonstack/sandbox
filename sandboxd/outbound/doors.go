@@ -33,7 +33,7 @@ func (s doorSpec) bind() error {
 	return nil
 }
 
-// doors are a sandbox's proxy door and optional SOCKS5 and DNS doors, served once armed.
+// doors are a sandbox's proxy door and optional SOCKS5, DNS and packet doors, served once armed.
 type doors struct {
 	srv      *http.Server
 	proxy    *egress.Proxy
@@ -42,6 +42,8 @@ type doors struct {
 	socks    net.Listener
 	dns      net.Listener
 	dnsGram  net.Listener
+	// tun is guarded by the host mutex.
+	tun *tunDoor
 }
 
 func (d *doors) close() {
@@ -84,6 +86,13 @@ func (d *doors) specs(vsock string, p egress.PolicyEvaluator) [4]doorSpec {
 		{&d.dns, engine.DNSSocketPath(vsock), "dns", p.ServesDNS()},
 		{&d.dnsGram, engine.DNSDatagramSocketPath(vsock), "dns datagram", p.ServesDNS()},
 	}
+}
+
+func (d *doors) takeTun() (t *tunDoor) {
+	if d != nil {
+		t, d.tun = d.tun, nil
+	}
+	return t
 }
 
 // doorListener caps a door's live connections; doorConn's NetConn hands splice the *net.UnixConn the kernel copy needs.

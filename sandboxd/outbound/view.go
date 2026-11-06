@@ -9,6 +9,7 @@ import (
 
 	"github.com/cocoonstack/sandbox/sandboxd/config"
 	"github.com/cocoonstack/sandbox/sandboxd/egress"
+	"github.com/cocoonstack/sandbox/sandboxd/tunnet"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
@@ -26,6 +27,9 @@ type View struct {
 	secrets       *egress.SecretStore
 	guarded       bool
 	usageBytes    bool
+
+	tunPools  map[types.PoolKey]bool
+	tunLimits tunnet.Limits
 }
 
 // NewView reads cfg's egress settings; config validation already rejected bad entries.
@@ -39,6 +43,10 @@ func NewView(cfg *config.Config, secrets *egress.SecretStore) *View {
 		connRate:      cfg.EgressConnRate,
 		secrets:       secrets,
 		usageBytes:    cfg.EgressUsageBytes,
+		tunPools:      map[types.PoolKey]bool{},
+	}
+	if cfg.Tun != nil {
+		v.tunLimits = cfg.Tun.Limits
 	}
 	if u := cfg.EgressUpstream; u != nil {
 		v.upstreamEnv = u.ClaimEnv
@@ -59,8 +67,16 @@ func NewView(cfg *config.Config, secrets *egress.SecretStore) *View {
 		if spec.EgressUpstreamEnv != "" {
 			v.poolUpstream[spec.PoolKey] = os.Getenv(spec.EgressUpstreamEnv)
 		}
+		if spec.Tun {
+			v.tunPools[spec.PoolKey] = true
+		}
 	}
 	return v
+}
+
+// Tun reports whether key's pool has the advanced network mode on.
+func (v *View) Tun(key types.PoolKey) bool {
+	return v.tunPools[key]
 }
 
 // Intercepts reports whether key's pool policy may terminate HTTPS.

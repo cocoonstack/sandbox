@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"maps"
 	"net"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"slices"
@@ -31,6 +32,7 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/store"
 	"github.com/cocoonstack/sandbox/sandboxd/store/peer"
 	"github.com/cocoonstack/sandbox/sandboxd/tenants"
+	"github.com/cocoonstack/sandbox/sandboxd/tunnet"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 	"github.com/cocoonstack/sandbox/sandboxd/usage"
 )
@@ -104,6 +106,7 @@ var (
 	ErrNoEgress          = errors.New("node has no egress attachment (bridge or network)")
 	ErrNoEgressHibernate = errors.New("egress-lane sandboxes do not hibernate")
 	ErrNoEgressFork      = errors.New("egress-lane sandboxes cannot fork, checkpoint, or promote: a resumed guest egresses before its fresh tap can be locked")
+	ErrTunOffPromote     = errors.New("a sandbox whose tun is turned off cannot be promoted: its template's claims would get tun back")
 	ErrVolumeCapture     = errors.New("sandboxes with volumes cannot hibernate, fork, checkpoint, or promote")
 	ErrVolumeBusy        = errors.New("volume is held by another claim")
 
@@ -160,6 +163,8 @@ type Engine interface {
 	DialGuestPort(ctx context.Context, vsockSocket string, port uint16) (net.Conn, error)
 	InstallCACert(ctx context.Context, vsockSocket string, certPEM []byte) error
 	MarkLane(ctx context.Context, vsockSocket string, lane types.NetRoute) error
+	TunUp(ctx context.Context, vsockSocket string) error
+	TunDown(ctx context.Context, vsockSocket string) error
 	Warmup(ctx context.Context, vsockSocket string, argv []string) error
 	SettleGuest(ctx context.Context, vsockSocket string) error
 	TrimCow(ctx context.Context, vsockSocket string) error
@@ -191,8 +196,11 @@ type SandboxSummary struct {
 	ID     string        `json:"id"`
 	Key    types.PoolKey `json:"key"`
 	Tenant string        `json:"tenant,omitempty"`
-	// Token is the sandbox's own bearer token; only the root by-id read carries it.
-	Token string `json:"token,omitempty"`
+	// Token is the sandbox's own bearer token; only the root by-id read carries it, like the tun fields.
+	Token      string     `json:"token,omitempty"`
+	TunAddr    netip.Addr `json:"tun_addr,omitzero"`
+	TunOff     bool       `json:"tun_off,omitzero"`
+	TunProfile string     `json:"tun_profile,omitempty"`
 	// ClaimRef echoes the caller reference; empty for checkpoint branches and unprefixed forks.
 	ClaimRef       string             `json:"claim_ref,omitempty"`
 	Metadata       types.Metadata     `json:"metadata,omitempty"`
@@ -247,6 +255,9 @@ type Backends struct {
 	CellPools         poolset.Shared
 	Archives          archives.Registry
 	Moves             moves.Registry
+	// TunRouter and TunAddrs carry the advanced network mode; both nil when the node has no tun block.
+	TunRouter *tunnet.Router
+	TunAddrs  tunnet.Addresses
 }
 
 // PeerDeleteFunc broadcasts a checkpoint delete to every peer.
@@ -343,6 +354,9 @@ type Manager struct {
 	notifyTemplates func()
 
 	out *outbound.Host
+	// tunRouter and tunAddrs are nil when the node has no tun block.
+	tunRouter *tunnet.Router
+	tunAddrs  tunnet.Addresses
 
 	readers *readerSet
 
@@ -394,6 +408,8 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 		poolShared:      b.CellPools,
 		archives:        b.Archives,
 		moves:           b.Moves,
+		tunRouter:       b.TunRouter,
+		tunAddrs:        b.TunAddrs,
 		tenants:         b.Tenants,
 		ckpts:           b.Checkpoints,
 		ckptsShared:     b.SharedCheckpoints,
@@ -545,6 +561,7 @@ func (m *Manager) Run(ctx context.Context) {
 
 // FlushClaims synchronously persists the current claim set at shutdown.
 func (m *Manager) FlushClaims() error {
+	m.foldTunBytes()
 	return m.store.commit(m.store.mark())
 }
 

@@ -8,7 +8,7 @@ All bodies are JSON. Three token kinds:
   resource-creating verbs (claim, fork, promote, checkpoint create/claim,
   preview mint) and the tenant-scoped listings/deletes below; everything a
   tenant creates is stamped with its name. Operator surfaces
-  (the per-id sandbox reads, `PUT /v1/sandboxes/{id}/instance-metadata`, `GET /v1/info`,
+  (the per-id sandbox reads, `PUT /v1/sandboxes/{id}/instance-metadata`, `PUT /v1/sandboxes/{id}/tun`, `GET /v1/info`,
   `PUT /v1/pools`, `POST /v1/config/reload`, the [tenant API](#tenants-v1tenants),
   `POST /v1/sandboxes/{id}/move`, `PUT/DELETE /v1/volumes/{name}`, `POST/DELETE /v1/drain`, `POST/DELETE /v1/cordon`,
   `GET /metrics`, `GET /v1/usage`, `GET /v1/checkpoints/{id}/blob`)
@@ -1046,8 +1046,11 @@ loop can read a single sandbox without scanning the whole node listing. When
 the caller presents the configured `api_token` the row also carries `token`,
 the sandbox's own bearer token, so a control plane can hand a returning client
 its data-plane credential without keeping a copy; a node without an
-`api_token` never grants per-sandbox authority and answers without it. 404
-unknown id.
+`api_token` never grants per-sandbox authority and answers without it. The
+row also carries the [advanced network mode](advanced-network.md#host-side)
+state, each field omitted when unset: `tun_addr` (the claim's overlay address),
+`tun_off` (true when the claim is disabled) and `tun_profile` (the exit label;
+absent means `default`). 404 unknown id.
 
 ## GET /v1/sandboxes/{id}/stats
 
@@ -1131,6 +1134,42 @@ is a no-op. silkd serves the address only in images that alias it on `lo`.
 unknown id; 409 when the sandbox is failed, hibernated, mid-transition or archived (this
 verb never wakes one) or its image serves no instance metadata.
 
+## PUT /v1/sandboxes/{id}/tun
+
+Auth: root only. Switches a claim's [advanced network mode](advanced-network.md)
+and sets its exit profile label:
+
+```json
+{"enabled": false, "profile": "residential"}
+```
+
+Both fields are optional; an omitted field keeps the claim's value. `profile`
+names an entry of `tun.exits`; an empty string returns the claim to `default`,
+and a label the exit table does not hold yet is accepted, since the table
+reloads (until it appears, the claim's packets are dropped as having no exit).
+The state is persisted with the claim, follows it through hibernate, archive,
+move and an archive row, and is accepted on a hibernated or archived claim
+without waking it; its next wake applies it. A running claim's replica row
+under `archive_failover` picks the change up at its next replica capture, as
+an env change does, so an adoption before then restores the switch with the
+rest of that replica. On a running claim the change
+applies at once: disabling closes the claim's packet stream and its door, drops
+its flows and stops its ARP answers, then sends the guest `tun_down`;
+enabling, or changing the profile, re-arms the packet door and sends `tun_up`.
+Enabling a claim of a `tun` pool that holds no overlay address, because the
+address store failed at its claim, allocates one. A fork child takes its
+parent's switch and label, with its own address.
+
+204 on success; 400 an unknown field or a `profile` that does not match the
+name rule; 404 unknown id; 409 an enable or profile change while a
+transition (a capture, wake, hibernate or archive) holds the claim (retry; a
+disable never waits); 503 the claim is moving to another node
+(retry); 500 the address store failed or the claims
+journal could not be written (nothing changed); 503 the archive registry is
+down for an archived claim or one with a replica under `archive_failover`:
+the node already holds the change, and a resend of the same body replaces the
+row.
+
 ## GET /metrics
 
 Auth: root only (tenant tokens get 403). Prometheus text format,
@@ -1142,7 +1181,16 @@ wake/hibernate/fork/checkpoint/promote/release/reap counters plus
 archive/unarchive/archive-delete counters, claim/wake `*_seconds_total`
 for average latency, `sandboxd_claim_duration_seconds{tier}`, a histogram of pool
 claims by tier, and `sandboxd_claim_redirects_total`, claims this node handed to a
-peer. The warm hit rate is `sandboxd_claim_duration_seconds_count{tier="warm"}`
+peer. On a node with a `tun` block it adds the packet path's counters:
+`sandboxd_tun_frames_total{dir}` (frames on the claims' vsock streams, `out`
+from the guest and `in` to it), `sandboxd_tun_datagrams_total{dir}` (VXLAN
+datagrams), `sandboxd_tun_arp_total{kind}` (`answered` replies to exits,
+`announced` gratuitous ARPs) and `sandboxd_tun_drops_total{reason}` (packets
+not carried: `malformed`, `not_ipv4`, `options`, `fragment`, `proto`, `gso`,
+`policy`, `no_exit`, `unknown_claim`, `queue_full`, `size` (a packet or GSO
+segment over `tun.mtu`), `limit` (a claim's rate, flow or quota limit), `send`
+(the underlay refused a send) and `sender` (VXLAN from an address that is no
+exit)). The warm hit rate is `sandboxd_claim_duration_seconds_count{tier="warm"}`
 over the three tiers' counts: `sandboxd_claims_total` also counts forked children
 and checkpoint branches under `clone`, and the histogram does not. A claim with
 volumes includes their attach and mount in its tier. /metrics is a derived ops view; the billing source of

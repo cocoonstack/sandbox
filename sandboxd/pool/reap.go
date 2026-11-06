@@ -3,6 +3,7 @@ package pool
 import (
 	"cmp"
 	"context"
+	"net/netip"
 	"slices"
 	"time"
 
@@ -29,6 +30,7 @@ func (m *Manager) reapOnce(ctx context.Context) {
 		deadline                     time.Time
 		sb                           *types.Sandbox
 		holds                        []types.Volume
+		tun                          netip.Addr
 	}
 	m.mu.Lock()
 	var expired []victim
@@ -46,7 +48,7 @@ func (m *Manager) reapOnce(ctx context.Context) {
 				unrows = append(unrows, sb)
 			}
 		case sb.ArchiveCk != "":
-			expired = append(expired, victim{action: reapPurge, id: id, ck: sb.ArchiveCk, tenant: sb.Tenant, deadline: sb.Deadline, sb: sb})
+			expired = append(expired, victim{action: reapPurge, id: id, ck: sb.ArchiveCk, tenant: sb.Tenant, deadline: sb.Deadline, sb: sb, tun: sb.TunAddr})
 			purges = append(purges, sb.ArchiveCk)
 		case m.archivesAtDeadline(sb):
 			// Archive instead of destroy, kept in m.claimed for archive() to move
@@ -60,7 +62,7 @@ func (m *Manager) reapOnce(ctx context.Context) {
 			}
 			expired = append(expired, victim{action: action, id: id, sb: sb})
 		default:
-			expired = append(expired, victim{action: reapDestroy, id: id, vmName: sb.VMName, snap: sb.HibernateSnap, tenant: sb.Tenant, deadline: sb.Deadline, sb: sb, holds: m.cancelVolumeRun(sb)})
+			expired = append(expired, victim{action: reapDestroy, id: id, vmName: sb.VMName, snap: sb.HibernateSnap, tenant: sb.Tenant, deadline: sb.Deadline, sb: sb, holds: m.cancelVolumeRun(sb), tun: sb.TunAddr})
 			m.dropClaimLocked(sb)
 			dropped = append(dropped, id)
 		}
@@ -137,6 +139,7 @@ func (m *Manager) reapOnce(ctx context.Context) {
 		switch v.action {
 		case reapPurge:
 			m.out.Disarm(v.id, true)
+			m.releaseTun(ctx, v.id, v.tun)
 			m.purgeArchiveCk(ctx, v.id, v.ck, v.tenant)
 			m.untrack(m.pendingCks, v.ck)
 			m.counters.reaps.Add(1)
@@ -150,6 +153,7 @@ func (m *Manager) reapOnce(ctx context.Context) {
 			td := m.quiesceVolumes(ctx, v.sb)
 			td.holds = v.holds
 			m.out.Disarm(v.id, m.removeOrRetry(ctx, v.vmName, v.id, td))
+			m.releaseTun(ctx, v.id, v.tun)
 			m.dropSnap(ctx, v.snap)
 			m.counters.reaps.Add(1)
 			m.recordUsage(ctx, usage.Event{Event: reapEvent, ID: v.id, VMName: v.vmName, Tenant: v.tenant, Deadline: v.deadline})

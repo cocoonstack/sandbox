@@ -56,6 +56,9 @@ type fakeSilkd struct {
 	statMisses map[string]int
 	statErr    map[string]string
 	statCalls  []string
+
+	tunOps []string
+	tunErr string
 }
 
 func serveFakeSilkd(t *testing.T, path string) *fakeSilkd {
@@ -138,6 +141,8 @@ func (f *fakeSilkd) serve(conn net.Conn) {
 		f.handleStat(conn, req.Path)
 	case "exec":
 		f.handleExec(conn, req.Argv, req.Env)
+	case "tun_up", "tun_down":
+		f.handleTun(conn, req.Op)
 	}
 }
 
@@ -276,6 +281,18 @@ func (f *fakeSilkd) handleStat(conn net.Conn, path string) {
 		return
 	}
 	writeFakeSilkdResponse(conn, &wire.Stat{Info: wire.FileInfo{Kind: wire.FileKindFile}})
+}
+
+func (f *fakeSilkd) handleTun(conn net.Conn, op string) {
+	f.mu.Lock()
+	f.tunOps = append(f.tunOps, op)
+	reply := f.tunErr
+	f.mu.Unlock()
+	if reply != "" {
+		writeFakeSilkdResponse(conn, &wire.ErrorResp{Kind: wire.KindInternal, Message: reply})
+		return
+	}
+	writeFakeSilkdResponse(conn, &wire.Done{})
 }
 
 func writeFakeSilkdResponse(conn net.Conn, resp wire.Response) {

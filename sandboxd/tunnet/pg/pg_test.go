@@ -1,0 +1,136 @@
+package pg
+
+import (
+	"encoding/binary"
+	"errors"
+	"fmt"
+	"net/netip"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/cocoonstack/sandbox/sandboxd/metastore/metastoretest"
+	"github.com/cocoonstack/sandbox/sandboxd/tunnet"
+)
+
+func TestAssignIsUniqueAcrossNodesAndIdempotentPerClaim(t *testing.T) {
+	dsn := metastoretest.PGSchema(t)
+	nodes := []*Store{open(t, dsn, "c1", time.Hour), open(t, dsn, "c1", time.Hour)}
+	var mu sync.Mutex
+	got := map[netip.Addr]string{}
+	var wg sync.WaitGroup
+	for i := range 40 {
+		wg.Go(func() {
+			id := fmt.Sprintf("sb_%d", i)
+			addr, err := nodes[i%2].Assign(t.Context(), id)
+			if err != nil {
+				t.Errorf("assign %s: %v", id, err)
+				return
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			if other, dup := got[addr]; dup {
+				t.Errorf("%s and %s share %s", id, other, addr)
+			}
+			got[addr] = id
+		})
+	}
+	wg.Wait()
+	for addr, id := range got {
+		if again, err := nodes[1].Assign(t.Context(), id); err != nil || again != addr {
+			t.Errorf("a second assign of %s = %s %v, want %s", id, again, err, addr)
+		}
+	}
+}
+
+func TestReleasedAddressWaitsOutTheReuseWindow(t *testing.T) {
+	s := open(t, metastoretest.PGSchema(t), "c1", time.Hour)
+	ctx := t.Context()
+	addr, err := s.Assign(ctx, "sb_a")
+	if err != nil {
+		t.Fatalf("assign: %v", err)
+	}
+	if err = s.Release(ctx, "sb_b", addr); err != nil {
+		t.Fatalf("release by another claim: %v", err)
+	}
+	rewind(t, s, addr)
+	if b, assignErr := s.Assign(ctx, "sb_b"); assignErr != nil || b == addr {
+		t.Fatalf("assign over a held address = %s %v, want another address", b, assignErr)
+	}
+	if err = s.Release(ctx, "sb_a", addr); err != nil {
+		t.Fatalf("release: %v", err)
+	}
+	rewind(t, s, addr)
+	if c, assignErr := s.Assign(ctx, "sb_c"); assignErr != nil || c == addr {
+		t.Fatalf("assign inside the reuse window = %s %v, want another address", c, assignErr)
+	}
+	if _, err = s.pool.Exec(ctx, `UPDATE sandboxd_tun_addrs SET released_at = now() - interval '2 hours' WHERE address = $1`, addr.String()); err != nil {
+		t.Fatalf("age the release: %v", err)
+	}
+	rewind(t, s, addr)
+	if d, assignErr := s.Assign(ctx, "sb_d"); assignErr != nil || d != addr {
+		t.Errorf("assign past the reuse window = %s %v, want %s", d, assignErr, addr)
+	}
+}
+
+func TestAssignGivesUpOnARunOfHeldAddresses(t *testing.T) {
+	s := open(t, metastoretest.PGSchema(t), "c1", time.Hour)
+	ctx := t.Context()
+	first, err := s.Assign(ctx, "sb_0")
+	if err != nil {
+		t.Fatalf("assign: %v", err)
+	}
+	for i := 1; i < assignTries; i++ {
+		if _, err = s.Assign(ctx, fmt.Sprintf("sb_%d", i)); err != nil {
+			t.Fatalf("assign %d: %v", i, err)
+		}
+	}
+	rewind(t, s, first)
+	if addr, assignErr := s.Assign(ctx, "sb_over"); !errors.Is(assignErr, tunnet.ErrNoAddress) {
+		t.Errorf("assign over %d held addresses = %s %v, want ErrNoAddress", assignTries, addr, assignErr)
+	}
+}
+
+func TestCellsKeepTheirOwnAddresses(t *testing.T) {
+	dsn := metastoretest.PGSchema(t)
+	c1, c2 := open(t, dsn, "c1", time.Hour), open(t, dsn, "c2", time.Hour)
+	ctx := t.Context()
+	addr, err := c1.Assign(ctx, "sb_1")
+	if err != nil {
+		t.Fatalf("assign in c1: %v", err)
+	}
+	rewind(t, c2, addr)
+	if other, assignErr := c2.Assign(ctx, "sb_2"); assignErr != nil || other != addr {
+		t.Errorf("c2 assign = %s %v, want %s: cells do not share addresses", other, assignErr, addr)
+	}
+}
+
+func TestADownDatabaseFailsClosed(t *testing.T) {
+	s := open(t, metastoretest.PGSchema(t), "c1", time.Hour)
+	s.Close()
+	ctx := t.Context()
+	if addr, err := s.Assign(ctx, "sb_1"); err == nil || addr.IsValid() {
+		t.Errorf("assign on a closed pool = %s %v, want an error and no address", addr, err)
+	}
+	if err := s.Release(ctx, "sb_1", netip.MustParseAddr("240.0.0.2")); err == nil {
+		t.Error("release on a closed pool succeeded")
+	}
+}
+
+func open(t *testing.T, dsn, cell string, reuse time.Duration) *Store {
+	t.Helper()
+	s, err := Open(t.Context(), dsn, cell, netip.MustParsePrefix("240.0.0.0/4"), reuse)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(s.Close)
+	return s
+}
+
+func rewind(t *testing.T, s *Store, addr netip.Addr) {
+	t.Helper()
+	off := binary.BigEndian.Uint32(addr.AsSlice()) - binary.BigEndian.Uint32(s.subnet.Addr().AsSlice()) - 1
+	if _, err := s.pool.Exec(t.Context(), `SELECT setval('sandboxd_tun_addrs_cursor', $1, false)`, int64(off)); err != nil {
+		t.Fatalf("rewind the cursor: %v", err)
+	}
+}

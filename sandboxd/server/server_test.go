@@ -22,6 +22,7 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/pool"
 	"github.com/cocoonstack/sandbox/sandboxd/store/peer"
 	"github.com/cocoonstack/sandbox/sandboxd/tenants"
+	"github.com/cocoonstack/sandbox/sandboxd/tunnet"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
@@ -2209,6 +2210,46 @@ func TestExpireActionThreadsThroughEveryDecoder(t *testing.T) {
 	}
 }
 
+func TestTunVerbIsRootOnlyAndPassesOnlyTheNamedFields(t *testing.T) {
+	var gotEnabled *bool
+	var gotProfile *string
+	mgr := &fakeManager{setTun: func(id string, enabled *bool, profile *string) error {
+		if id != "sb_1" {
+			return pool.ErrUnknownSandbox
+		}
+		gotEnabled, gotProfile = enabled, profile
+		return nil
+	}}
+	ts := newTenantTestServer(t, "sekret", []tenants.TenantSpec{{Name: "acme", Token: "acme-tok"}}, mgr, nil)
+	put := func(token, id, body string) int {
+		t.Helper()
+		return statusOf(t, http.MethodPut, ts.URL+"/v1/sandboxes/"+id+"/tun", token, body)
+	}
+	if code := put("sekret", "sb_1", `{"enabled": false}`); code != http.StatusNoContent {
+		t.Fatalf("status %d, want 204", code)
+	}
+	if gotEnabled == nil || *gotEnabled || gotProfile != nil {
+		t.Errorf("manager got enabled %v profile %v, want false and no profile", gotEnabled, gotProfile)
+	}
+	if code := put("sekret", "sb_1", `{"profile": "res"}`); code != http.StatusNoContent || gotEnabled != nil || gotProfile == nil || *gotProfile != "res" {
+		t.Errorf("profile only: status %d, enabled %v profile %v", code, gotEnabled, gotProfile)
+	}
+	for _, tt := range []struct {
+		name, token, id, body string
+		want                  int
+	}{
+		{"tenant token", "acme-tok", "sb_1", `{"enabled": true}`, http.StatusForbidden},
+		{"no token", "", "sb_1", `{"enabled": true}`, http.StatusUnauthorized},
+		{"bad profile", "sekret", "sb_1", `{"profile": "two words"}`, http.StatusBadRequest},
+		{"unknown field", "sekret", "sb_1", `{"quota": 1}`, http.StatusBadRequest},
+		{"unknown sandbox", "sekret", "sb_2", `{"enabled": true}`, http.StatusNotFound},
+	} {
+		if code := put(tt.token, tt.id, tt.body); code != tt.want {
+			t.Errorf("%s: status %d, want %d", tt.name, code, tt.want)
+		}
+	}
+}
+
 type ownerReply struct {
 	OwnerAddr string `json:"owner_addr"`
 }
@@ -2270,6 +2311,7 @@ type fakeManager struct {
 	deleteCheckpoint    idActionFunc
 	setPools            func(pools []config.PoolSpec) error
 	setInstanceMetadata func(id string, doc []byte) error
+	setTun              func(id string, enabled *bool, profile *string) error
 	infoPools           []pool.PoolInfo
 	infoTemplates       []pool.TemplateInfo
 	labeled             []string
@@ -2566,6 +2608,17 @@ func (f *fakeManager) SetInstanceMetadata(_ context.Context, id string, doc []by
 		return nil
 	}
 	return f.setInstanceMetadata(id, doc)
+}
+
+func (f *fakeManager) SetTun(_ context.Context, id string, enabled *bool, profile *string) error {
+	if f.setTun == nil {
+		return nil
+	}
+	return f.setTun(id, enabled, profile)
+}
+
+func (f *fakeManager) TunStats() (tunnet.Stats, bool) {
+	return tunnet.Stats{}, false
 }
 
 func (f *fakeManager) Wake(_ context.Context, id string, cred pool.Cred) error {

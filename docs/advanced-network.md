@@ -114,26 +114,157 @@ lost; TCP retransmits.
 
 ## Host side
 
-The host side is sandboxd; its design is
-[#471](https://github.com/cocoonstack/sandbox/issues/471). Whatever it does
-with the packets, it owes the guest this contract:
+sandboxd needs no TUN, no kernel routes and no NAT rules on the node. It
+carries each claim's packets over VXLAN, on an ordinary UDP socket, to an
+**exit**: plain Linux configuration on the same host or on a gateway machine.
+The design is [#471](https://github.com/cocoonstack/sandbox/issues/471).
 
-- **One stream per claim.** The packet stream arrives on the claim's own
-  vsock socket, so the stream, not any address in a packet, names the claim.
-  Every guest uses `100.64.0.2`; the host must not trust a source address the
-  guest wrote and must deliver only the claim's own return traffic on its
-  stream, with the destination set back to `100.64.0.2`.
-- **Enforcement on the host.** The host answers `ON` only for a claim that is
-  allowed packet mode, and answers off, closes the stream or refuses the dial
-  otherwise; revocation closes the stream. Nothing depends on the guest
-  obeying `tun_down`.
-- **Checksums after a rewrite.** A host that changes an address updates the
-  IPv4 header checksum and the L4 checksum incrementally. For a frame with
-  `VIRTIO_NET_HDR_F_NEEDS_CSUM` the L4 checksum sits at
-  `csum_start + csum_offset` and holds the uncomplemented pseudo-header sum;
-  a UDP checksum of 0 stays 0. With GSO this happens once per frame.
-- **Offloads it offered.** The host sends only GSO types the guest's hello
-  offered and segments the rest itself.
+```
+guest -> tun0 -> silkd --vsock 2051--> sandboxd --VXLAN--> exit (vxlan0, forward, NAT) -> uplink
+```
+
+- **Overlay address**: each tun-enabled claim gets a unique address from
+  `tun.subnet`, kept across hibernate, archive and move and freed at release.
+  A single node allocates it in memory and keeps it in `claims.json`, with no
+  disk write on the claim path; each release is appended to
+  `<data_dir>/tun-freed.log` so its reuse window outlives a restart. A node
+  with a `mesh` must have `meta_store.cell` and allocates it in the cell's
+  table, one round trip per claim, and stays off (proxy mode only) while the
+  meta store is unreachable. A freed address is reused after
+  `tun.reuse_after_seconds`, so the subnet's size over that window bounds the
+  sustained claim rate: a `/8` with the 5-day default carries about 38 new tun
+  claims a second across the cell. The claim's MAC is `02:00:` followed by the
+  address bytes.
+- **Outbound**: the source address becomes the claim's overlay address
+  whatever the guest wrote; a GSO frame is cut into wire-sized packets with
+  full checksums; each gets an Ethernet header (claim MAC to the exit's MAC)
+  and a VXLAN header and leaves for the exit picked by the claim's profile
+  label (`default` when it has none). The outer source port follows a hash of
+  the inner 5-tuple.
+- **Inbound**: a VXLAN packet from an exit's VTEP whose inner destination is
+  a claim on this node goes back to `100.64.0.2` and onto that claim's stream;
+  anything else is dropped. Inbound passes only for a flow the claim opened,
+  except that a TCP segment other than a bare SYN reopens its flow when the
+  claim's policy allows the peer, so a stream crosses a move, a wake or a
+  restart. In-order TCP segments of one flow whose checksums
+  verify are merged into one GSO frame for the guest. An ICMP error gets the
+  quoted packet's source rewritten to `100.64.0.2` too, so path MTU discovery
+  and port-unreachable reach the guest's socket.
+- **ARP**: sandboxd answers ARP from the exits for its own claims only,
+  announces a claim with a gratuitous ARP when it is armed (claim, wake,
+  move-in), after a reload of `tun.exits` and every 45 seconds, and never
+  forwards a frame the guest built.
+- **Policy**: a flow table keyed by 5-tuple; the first packet of a flow is
+  judged by `EvalFlow` (bare `host: "*"` rules only) and the internal-address
+  guard, which also refuses the overlay subnet and `100.64.0.0/30`.
+  Per-claim byte, packet and new-flow rates, a flow cap and a byte quota apply
+  before any further work on a packet; a GSO frame is charged for every packet
+  and header it puts on the wire. The limits and flows belong to the claim, so
+  a guest that reconnects its stream starts with what it had used.
+- **Untrusted input**: frames, virtio-net headers and IPv4 headers are bounds
+  checked; non-IPv4, IP options, fragments, a packet or GSO segment larger
+  than the MTU the stream's hello announced, a GSO frame of more than 128
+  packets, a GSO type that does not match the protocol and a partial checksum
+  outside the L4 checksum field are dropped and counted per reason. A stream
+  whose guest stops reading for 10 seconds is closed, freeing its queue.
+- **Enforcement**: the packet port answers `ON` only for an armed,
+  tun-enabled claim; disabling a claim ends its stream, drops its flows and
+  stops its ARP answers. A guest of a `tun` pool that wakes, moves or reloads
+  into a state without a door (disabled, no address, the pool's `tun` off) is
+  sent `tun_down` in the background. The claim switch and the profile label change only
+  with the operator token, through
+  [`PUT /v1/sandboxes/{id}/tun`](sandboxd-api.md#put-v1sandboxesidtun).
+- **Audit and usage**: with `audit_log` on, each flow writes one
+  `op:"tun_flow"` record when it ends ([fields](deploy.md#configuration)); with
+  `egress_usage_bytes` on, each allowed flow also appends an `egress_bytes`
+  usage event with its IP bytes both ways, the destination `ip:port` as its
+  reference, and `upstream` `tun/<label>`. A clean stop ends every live flow,
+  so its records cover the bytes up to the stop, and persists the quota
+  counter, which is also persisted when the claim is disarmed or moved; a
+  crash loses both since the last of these.
+- **Cost**: a claim of a pool without `tun` pays one map lookup. A tun claim
+  adds, on the claim path, an in-memory address (or one meta-store round
+  trip), a socket bind and one gratuitous ARP; `tun_up` is sent in the
+  background. Per packet: one parse, one flow-table read, the rate checks, an
+  incremental checksum update and one copy into the send buffer; a 64 KiB GSO
+  frame costs about 9 µs to segment and checksum (`BenchmarkForwardGSO`), a
+  small packet about 100 ns, a delivered packet about 250 ns, all without
+  allocation.
+
+### Configuration
+
+The node's `tun` block turns the mode on; a pool opts in with `"tun": true`
+(the `none` lane only).
+
+```json
+"tun": {
+  "subnet": "100.80.0.0/12",
+  "listen": "10.0.0.5:4789",
+  "exits": {"default": {"vtep": "10.0.0.20", "mac": "02:ee:00:00:00:01"}},
+  "limits": {"bytes_per_second": 125000000, "quota_bytes": 107374182400}
+}
+```
+
+| key | default | meaning |
+|---|---|---|
+| `subnet` | required | the overlay addresses, `/4` to `/24`, outside `100.64.0.0/30`; every node of a cell sets the same one; a change needs a restart, and claims that still hold an old address keep it until released, so drain tun claims first |
+| `listen` | required | the node's VXLAN socket, a specific IPv4 `ip:port`; the exits send to it |
+| `vni` | `1` | the VXLAN network identifier |
+| `port` | `4789` | the exits' VXLAN port |
+| `mtu` | `1450` | the guest `tun0` MTU, 576 to 9000 |
+| `senders` | `4` | send sockets; the outer source port follows the flow across them |
+| `exits` | required | profile label to `{vtep, mac}`; a `default` entry is required |
+| `limits` | `max_flows` 16384, `new_flows_per_second` 1000 | per claim: `bytes_per_second`, `packets_per_second`, `new_flows_per_second`, `max_flows`, `quota_bytes`; an unset `bytes_per_second`, `packets_per_second` or `quota_bytes` is unlimited |
+| `reuse_after_seconds` | `432000` | how long a freed address waits; match the exits' `nf_conntrack_tcp_timeout_established` |
+
+### Single-host exit
+
+The exit's VXLAN socket binds the wildcard address, so on the node itself
+the exit lives in its own network namespace, reached over a veth pair. This
+is the layout the CI test runs:
+
+```sh
+ip netns add exit
+ip link add vh type veth peer name ve netns exit
+ip addr add 10.99.0.1/24 dev vh && ip link set vh up          # tun.listen 10.99.0.1:4789
+ip -n exit addr add 10.99.0.2/24 dev ve && ip -n exit link set ve up
+# a veth leaves the inner checksum partial; the exit must compute it
+ip netns exec exit ethtool -K ve tx off
+ip -n exit link add vxlan0 address 02:ee:00:00:00:01 \
+    type vxlan id 1 dstport 4789 local 10.99.0.2 dev ve learning
+# the exit's own address sits outside tun.subnet, so no claim can be handed it
+ip -n exit addr add 192.0.2.1/32 dev vxlan0 && ip -n exit link set vxlan0 up
+ip -n exit route add 100.80.0.0/12 dev vxlan0
+ip netns exec exit sysctl -w net.ipv4.ip_forward=1 \
+    net.ipv4.conf.vxlan0.arp_accept=1 \
+    net.ipv4.neigh.vxlan0.base_reachable_time_ms=300000
+# uplink: route the exit namespace out through a second veth or a NIC moved into it
+ip netns exec exit nft -f - <<'NFT'
+table ip exit {
+  chain overlay_nat { type nat hook postrouting priority srcnat; ip saddr 100.80.0.0/12 oifname != "vxlan0" masquerade; }
+  chain overlay_forward { type filter hook forward priority filter; iifname "vxlan0" oifname "vxlan0" drop; }
+  chain overlay_input { type filter hook input priority filter; iifname "vxlan0" drop; }
+  chain underlay_input { type filter hook input priority filter; udp dport 4789 ip saddr != 10.99.0.1 drop; }
+}
+NFT
+ip netns exec exit sysctl -w net.netfilter.nf_conntrack_max=1048576
+```
+
+- `overlay_forward` keeps claims from reaching each other through the exit.
+- `overlay_input` drops everything from `vxlan0` addressed to the exit itself;
+  ARP is not IP traffic and is unaffected.
+- `underlay_input` accepts VXLAN only from node addresses, because a sender
+  that reaches the port could claim an overlay address with a gratuitous ARP.
+  sandboxd in turn accepts VXLAN only from the exits' VTEP addresses; the
+  underlay must not let other hosts spoof those addresses toward `tun.listen`.
+- Watch `nf_conntrack_count` against `nf_conntrack_max`; a full table drops
+  new flows for every claim.
+- A host without `nft` carries the same four rules in `iptables` inside the
+  exit's namespace.
+- A gateway machine uses the same configuration with its own addresses, and
+  its NIC computes inner checksums, so the `ethtool` line is only for veth.
+- MTU: VXLAN adds 50 bytes; on a 1500-byte underlay `tun.mtu` is 1450, on a
+  1460-byte cloud underlay 1410.
 
 ## Limits
 

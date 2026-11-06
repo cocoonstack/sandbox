@@ -4,6 +4,7 @@ import (
 	"errors"
 	"io"
 	"io/fs"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -82,6 +83,7 @@ func TestClaimStoreRoundTripsWithoutLeavingATempFile(t *testing.T) {
 	claims := map[string]*types.Sandbox{
 		"sb_a": {ID: "sb_a", VMName: "sbx-1", Key: testKey, Token: "t1", Deadline: time.Now().Add(time.Minute).UTC(), ClaimedAt: time.Now().Add(-time.Minute).UTC(), ClaimRef: "ns/workload", Metadata: types.Metadata{"team": "a"}, OnExpire: types.ExpireArchive, Volumes: dataset, VolumesWant: dataset, VsockSocket: "/v/1"},
 		"sb_b": {ID: "sb_b", VMName: "sbx-2", Key: testKey, Token: "t2"},
+		"sb_c": {ID: "sb_c", VMName: "sbx-3", Key: testKey, TunAddr: netip.MustParseAddr("240.0.0.7"), TunOff: true, TunProfile: "res", TunBytes: 1 << 33},
 	}
 	for _, fsync := range []bool{false, true} {
 		s := newClaimStore(t.TempDir(), fsync)
@@ -131,7 +133,7 @@ func TestClaimRowOmitsUnsetFlags(t *testing.T) {
 	if err != nil {
 		t.Fatalf("encode: %v", err)
 	}
-	for _, flag := range []string{"reader_safe", "no_egress"} {
+	for _, flag := range []string{"reader_safe", "no_egress", "tun_addr", "tun_off", "tun_profile", "tun_bytes"} {
 		if strings.Contains(string(raw), flag) {
 			t.Errorf("row %s carries the unset flag %s", raw, flag)
 		}

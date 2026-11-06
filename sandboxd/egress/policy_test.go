@@ -165,6 +165,29 @@ func TestWildcardApexIsNotMatched(t *testing.T) {
 	}
 }
 
+func TestEvalFlowMatchesOnlyBareWildcardRules(t *testing.T) {
+	p := Policy{Allow: []Rule{
+		{Host: "api.example.com", Ports: []uint16{443}},
+		{Host: "*", Methods: []string{"GET"}, Ports: []uint16{80}},
+		{Host: "*", Secret: "s", Ports: []uint16{8080}},
+		{Host: "*", Intercept: InterceptInject, Ports: []uint16{8443}},
+		{Host: "*", Ports: []uint16{53, 3478}},
+	}}
+	for port, want := range map[uint16]Decision{443: DecisionDeny, 80: DecisionDeny, 8080: DecisionDeny, 8443: DecisionDeny, 53: DecisionAllow, 3478: DecisionAllow, 22: DecisionDeny} {
+		if got := p.EvalFlow(port); got != want {
+			t.Errorf("EvalFlow(%d) = %v, want %v", port, got, want)
+		}
+	}
+	if (Policy{Allow: []Rule{{Host: "*"}}}).EvalFlow(22) != DecisionAllow {
+		t.Error("a bare * rule without ports must allow every port")
+	}
+	pool := Policy{Allow: []Rule{{Host: "*"}}}
+	tenant := Policy{Allow: []Rule{{Host: "*", Ports: []uint16{443}}}}
+	if c := Compose(pool, tenant); c.EvalFlow(443) != DecisionAllow || c.EvalFlow(22) != DecisionDeny {
+		t.Error("a composite flow verdict must intersect pool and tenant")
+	}
+}
+
 func TestPolicyValidate(t *testing.T) {
 	tests := []struct {
 		name    string

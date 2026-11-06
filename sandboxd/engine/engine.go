@@ -52,6 +52,7 @@ const (
 	socksPort      = 2050
 	dnsPort        = 2052
 	dnsGramPort    = 2053
+	tunPort        = 2051
 	cmdTimeout     = 2 * time.Minute
 	dumpTimeout    = 15 * time.Minute
 	cmdTermGrace   = 30 * time.Second
@@ -552,6 +553,11 @@ func DNSDatagramSocketPath(vsockSocket string) string {
 // SocksSocketPath is the host UDS the VMM connects when the guest dials CID2:socksPort.
 func SocksSocketPath(vsockSocket string) string {
 	return fmt.Sprintf("%s_%d", vsockSocket, socksPort)
+}
+
+// TunSocketPath is the host UDS the VMM connects when the guest dials CID2:tunPort.
+func TunSocketPath(vsockSocket string) string {
+	return fmt.Sprintf("%s_%d", vsockSocket, tunPort)
 }
 
 // CapacitySignature returns the node-capacity signature err carries, or "".

@@ -182,6 +182,16 @@ func (p Policy) EvalInner(host, method string, port uint16) (Rule, Decision) {
 	return Rule{}, DecisionDeny
 }
 
+// EvalFlow judges an L3 flow to port: only a bare "*" rule has nothing an address and a port cannot carry.
+func (p Policy) EvalFlow(port uint16) Decision {
+	if slices.ContainsFunc(p.Allow, func(r Rule) bool {
+		return r.Host == "*" && len(r.Methods) == 0 && r.Secret == "" && r.Intercept == InterceptOff && r.matchPort(port)
+	}) {
+		return DecisionAllow
+	}
+	return DecisionDeny
+}
+
 // ServesSocks reports whether the policy opted into the SOCKS5 door; Validate holds the rule that makes the door usable.
 func (p Policy) ServesSocks() bool {
 	return p.Socks5
@@ -208,8 +218,10 @@ type Evaluator interface {
 	EvalInner(host, method string, port uint16) (Rule, Decision)
 }
 
+// PolicyEvaluator is a claim's effective policy: the per-request checks plus the door and flow decisions.
 type PolicyEvaluator interface {
 	Evaluator
+	EvalFlow(port uint16) Decision
 	ServesSocks() bool
 	ServesDNS() bool
 	InterceptsHost(pattern string) bool
@@ -252,6 +264,13 @@ func (c composite) EvalInner(host, method string, port uint16) (Rule, Decision) 
 		}
 	}
 	return Rule{}, DecisionDeny
+}
+
+func (c composite) EvalFlow(port uint16) Decision {
+	if c.pool.EvalFlow(port) == DecisionAllow && c.tenant.EvalFlow(port) == DecisionAllow {
+		return DecisionAllow
+	}
+	return DecisionDeny
 }
 
 // ServesSocks is the pool's call: the tenant's rules already gate every tunnel through Eval.

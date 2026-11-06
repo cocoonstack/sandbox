@@ -84,7 +84,7 @@ func main() {
 	if err != nil {
 		logger.Fatalf(ctx, err, "init egress secrets")
 	}
-	backends, err := openBackends(ctx, cfg)
+	backends, runTun, err := openBackends(ctx, cfg)
 	if err != nil {
 		logger.Fatalf(ctx, err, "open backends")
 	}
@@ -103,6 +103,7 @@ func main() {
 	if cfg.Mesh != nil {
 		mgr.WithMovePeer(&server.MoveClient{Token: cfg.APIToken})
 	}
+	go runTun(ctx)
 	if err := mgr.Reconcile(ctx); err != nil {
 		logger.Fatalf(ctx, err, "reconcile")
 	}

@@ -70,5 +70,9 @@ func (m *Manager) outboundOptions(ca *egress.CA) outbound.Options {
 		LockNIC:    len(m.cfg.Bridges) > 0,
 		RecordEnds: m.audit != nil,
 		NoRxSplice: m.cfg.NoRxSplice,
+		Router:     m.tunRouter,
+		Flow:       m.recordTunFlow,
+		TunBytes:   m.setTunBytes,
+		TunState:   m.tunState,
 	}
 }

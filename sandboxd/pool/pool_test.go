@@ -1428,6 +1428,8 @@ type fakeEngine struct {
 	metadataErr  error
 	guestEnvs    map[string]string
 	guestEnvErr  error
+	tunVerbs     []string
+	tunUpGate    chan struct{}
 
 	migrateDir        string
 	migrateSeries     map[string]string
@@ -1798,6 +1800,23 @@ func (f *fakeEngine) MarkLane(_ context.Context, _ string, lane types.NetRoute) 
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.laneMarks = append(f.laneMarks, string(lane))
+	return nil
+}
+
+func (f *fakeEngine) TunUp(_ context.Context, sock string) error {
+	if f.tunUpGate != nil {
+		<-f.tunUpGate
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.tunVerbs = append(f.tunVerbs, "up "+sock)
+	return nil
+}
+
+func (f *fakeEngine) TunDown(_ context.Context, sock string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.tunVerbs = append(f.tunVerbs, "down "+sock)
 	return nil
 }
 

@@ -71,3 +71,41 @@ func TestReloadDiffSortsReloadableOwnedAndRestartFields(t *testing.T) {
 		t.Errorf("an identical config: %v %v %v, want nothing", changed, ignored, err)
 	}
 }
+
+func TestReloadDiffReloadsTheExitsAndRefusesASubnetChange(t *testing.T) {
+	key := types.PoolKey{Template: "desktop:v12", Net: types.NetNone, Size: types.SizeSmall}
+	tun := TunConfig{Subnet: "240.0.0.0/4", Listen: "10.0.0.5:4789", VNI: 1, Port: 4789, MTU: 1450, Senders: 4, Exits: map[string]TunExit{"default": {VTEP: "10.0.0.9", MAC: "02:aa:00:00:00:01"}}}
+	cur := &Config{Tun: &tun, Pools: []PoolSpec{{PoolKey: key}}}
+
+	exits := tun
+	exits.MTU = 1410
+	exits.Exits = map[string]TunExit{"default": {VTEP: "10.0.0.10", MAC: "02:aa:00:00:00:01"}}
+	next := *cur
+	next.Tun, next.Pools = &exits, []PoolSpec{{PoolKey: key, Tun: true}}
+	changed, _, err := cur.ReloadDiff(&next)
+	if want := []string{"tun.mtu", "tun.exits", "pools[desktop:v12 none small].tun"}; err != nil || !slices.Equal(changed, want) {
+		t.Errorf("ReloadDiff over exits and the pool switch: %v %v, want %v", changed, err, want)
+	}
+
+	for _, tt := range []struct {
+		edit func(*TunConfig)
+		want string
+	}{
+		{func(c *TunConfig) { c.Subnet = "10.0.0.0/8" }, "tun.subnet change only at a restart"},
+		{func(c *TunConfig) { c.Listen = "10.0.0.6:4789" }, "tun.listen change only at a restart"},
+		{func(c *TunConfig) { c.VNI = 2 }, "tun.vni change only at a restart"},
+	} {
+		moved := tun
+		tt.edit(&moved)
+		edited := *cur
+		edited.Tun = &moved
+		if _, _, err := cur.ReloadDiff(&edited); err == nil || err.Error() != tt.want {
+			t.Errorf("ReloadDiff: %v, want %q", err, tt.want)
+		}
+	}
+	dropped := *cur
+	dropped.Tun = nil
+	if _, _, err := cur.ReloadDiff(&dropped); err == nil || err.Error() != "tun change only at a restart" {
+		t.Errorf("ReloadDiff dropping the block: %v, want a restart refusal", err)
+	}
+}

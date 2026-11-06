@@ -62,6 +62,9 @@ func (m *Manager) ReloadConfig(ctx context.Context, next *config.Config) (Reload
 	}
 	m.mu.Unlock()
 	m.store.setSync(next.SyncClaims)
+	if m.tunRouter != nil {
+		m.tunRouter.Reload(next.Tun.Overlay())
+	}
 	m.out.Reloaded()
 	m.destroyAll(context.WithoutCancel(ctx), trim).Wait()
 	m.cfg = next

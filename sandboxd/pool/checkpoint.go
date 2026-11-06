@@ -171,6 +171,7 @@ func (m *Manager) FetchCheckpoint(ctx context.Context, ckptID string) (string, [
 }
 
 func (m *Manager) publishCheckpoint(ctx context.Context, sb *types.Sandbox, ckID, name, tenant, from string, archive bool) (types.Checkpoint, string, error) {
+	tun := m.tunState(sb)
 	ckpt := types.Checkpoint{
 		ID:           ckID,
 		Name:         name,
@@ -180,6 +181,8 @@ func (m *Manager) publishCheckpoint(ctx context.Context, sb *types.Sandbox, ckID
 		CreatedAt:    time.Now(),
 		PolicySource: sb.PolicySource,
 		NoEgress:     sb.NoEgress,
+		TunOff:       !tun.On,
+		TunProfile:   tun.Profile,
 		Archive:      archive,
 	}
 	if archive {
@@ -231,6 +234,7 @@ func (m *Manager) claimLoaded(ctx context.Context, ckpt types.Checkpoint, o Clai
 	o.apply(sb)
 	sb.FromCheckpoint = ckpt.ID
 	sb.PolicySource, sb.NoEgress = ckpt.PolicySource, ckpt.NoEgress
+	sb.TunOff, sb.TunProfile = ckpt.TunOff, ckpt.TunProfile
 	out, err := m.finalize(ctx, sb, o.TTL, ckpt.GuestEnv, hold)
 	if err == nil {
 		m.counters.claimsClone.Add(1)

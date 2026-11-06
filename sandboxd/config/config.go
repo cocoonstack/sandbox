@@ -16,11 +16,13 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/docker/go-units"
 
 	"github.com/cocoonstack/sandbox/sandboxd/egress"
 	"github.com/cocoonstack/sandbox/sandboxd/store"
+	"github.com/cocoonstack/sandbox/sandboxd/tunnet"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 	"github.com/cocoonstack/sandbox/sandboxd/utils"
 )
@@ -35,6 +37,14 @@ const (
 	refillFloor      = 4
 	refillCeiling    = 256
 	minStorageBytes  = 10 << 30
+
+	defaultTunVNI     = 1
+	defaultTunPort    = 4789
+	defaultTunMTU     = 1450
+	defaultTunSenders = 4
+	defaultTunReuse   = 5 * 24 * 3600
+	defaultTunFlows   = 16384
+	defaultTunNewRate = 1000
 )
 
 // PoolSpec declares one warm pool and its target of claim-ready VMs.
@@ -55,6 +65,8 @@ type PoolSpec struct {
 	ReplicateSeconds int `json:"replicate_seconds,omitzero"`
 	// Reader serves read-only file calls on this pool's hibernated or archived claims from a warm VM, without waking them.
 	Reader bool `json:"reader,omitzero"`
+	// Tun gives this pool's claims the advanced network mode; the node's tun block must be set.
+	Tun bool `json:"tun,omitzero"`
 
 	IdleHibernateSeconds      int `json:"idle_hibernate_seconds,omitzero"`
 	ArchiveAfterSeconds       int `json:"archive_after_seconds,omitzero"`
@@ -145,6 +157,119 @@ type EgressUpstreamConfig struct {
 type EgressConnRate struct {
 	PerSecond float64 `json:"per_second"`
 	Burst     int     `json:"burst"`
+}
+
+// TunExit is one exit: its VTEP address and the MAC of its VXLAN device.
+type TunExit struct {
+	VTEP string `json:"vtep"`
+	MAC  string `json:"mac"`
+}
+
+// TunConfig turns on the advanced network mode: the overlay subnet, the VXLAN socket and the exits claims leave through.
+type TunConfig struct {
+	// Subnet holds the claims' overlay addresses; under a meta store every node of the cell sets the same subnet.
+	Subnet string `json:"subnet"`
+	// Listen is the ip:port the VXLAN socket binds; exits reach the node at this address.
+	Listen string `json:"listen"`
+	VNI    uint32 `json:"vni,omitzero"`
+	// Port is the exits' VXLAN port.
+	Port uint16 `json:"port,omitzero"`
+	// MTU is the guest tun0 MTU.
+	MTU     int `json:"mtu,omitzero"`
+	Senders int `json:"senders,omitzero"`
+	// Exits maps a claim's profile label to its exit; "default" serves a claim without one.
+	Exits  map[string]TunExit `json:"exits"`
+	Limits tunnet.Limits      `json:"limits,omitzero"`
+	// ReuseAfterSeconds holds a freed address back until exit conntrack entries for it can have expired.
+	ReuseAfterSeconds int `json:"reuse_after_seconds,omitzero"`
+}
+
+// Prefix is the parsed overlay subnet; validation already rejected a bad one.
+func (t *TunConfig) Prefix() netip.Prefix {
+	p, _ := netip.ParsePrefix(t.Subnet)
+	return p.Masked()
+}
+
+func (t *TunConfig) ListenAddr() netip.AddrPort {
+	ap, _ := netip.ParseAddrPort(t.Listen)
+	return ap
+}
+
+func (t *TunConfig) ReuseAfter() time.Duration {
+	return time.Duration(t.ReuseAfterSeconds) * time.Second
+}
+
+// Overlay is the router's reloadable view of the block.
+func (t *TunConfig) Overlay() *tunnet.Overlay {
+	o, _ := t.overlay()
+	return o
+}
+
+func (t *TunConfig) applyDefaults() {
+	t.VNI = cmp.Or(t.VNI, defaultTunVNI)
+	t.Port = cmp.Or(t.Port, defaultTunPort)
+	t.MTU = cmp.Or(t.MTU, defaultTunMTU)
+	t.Senders = cmp.Or(t.Senders, defaultTunSenders)
+	t.ReuseAfterSeconds = cmp.Or(t.ReuseAfterSeconds, defaultTunReuse)
+	t.Limits.MaxFlows = cmp.Or(t.Limits.MaxFlows, defaultTunFlows)
+	t.Limits.NewFlowsPerSecond = cmp.Or(t.Limits.NewFlowsPerSecond, defaultTunNewRate)
+}
+
+func (t *TunConfig) validate() error {
+	listen, err := netip.ParseAddrPort(t.Listen)
+	l := t.Limits
+	switch {
+	case err != nil || !listen.Addr().Is4() || listen.Addr().IsUnspecified() || listen.Port() == 0:
+		return fmt.Errorf("tun.listen %q must be a specific IPv4 address and port", t.Listen)
+	case t.VNI >= 1<<24:
+		return fmt.Errorf("tun.vni %d does not fit 24 bits", t.VNI)
+	case t.MTU < 576 || t.MTU > 9000:
+		return fmt.Errorf("tun.mtu %d must be between 576 and 9000", t.MTU)
+	case t.Senders < 1:
+		return fmt.Errorf("tun.senders must be at least 1, got %d", t.Senders)
+	case t.ReuseAfterSeconds < 0:
+		return fmt.Errorf("tun.reuse_after_seconds must not be negative")
+	case l.BytesPerSecond < 0 || l.PacketsPerSecond < 0 || l.NewFlowsPerSecond < 0 || l.MaxFlows < 0 || l.QuotaBytes < 0:
+		return fmt.Errorf("tun.limits must not be negative")
+	}
+	_, err = t.overlay()
+	return err
+}
+
+func (t *TunConfig) overlay() (*tunnet.Overlay, error) {
+	subnet, err := netip.ParsePrefix(t.Subnet)
+	switch {
+	case err != nil || !subnet.Addr().Is4():
+		return nil, fmt.Errorf("tun.subnet %q must be an IPv4 prefix", t.Subnet)
+	case subnet.Bits() < 4 || subnet.Bits() > 24:
+		return nil, fmt.Errorf("tun.subnet %q must be between /4 and /24", t.Subnet)
+	case subnet.Overlaps(tunnet.GuestRange):
+		return nil, fmt.Errorf("tun.subnet %q overlaps the guest range %s", t.Subnet, tunnet.GuestRange)
+	}
+	if _, ok := t.Exits["default"]; !ok {
+		return nil, fmt.Errorf(`tun.exits needs a "default" exit`)
+	}
+	exits := make(map[string]tunnet.Exit, len(t.Exits))
+	for label, e := range t.Exits {
+		vtep, vtepErr := netip.ParseAddr(e.VTEP)
+		mac, macErr := net.ParseMAC(e.MAC)
+		switch {
+		case !types.NameRe.MatchString(label):
+			return nil, fmt.Errorf("tun.exits label %q must match %s", label, types.NameRe)
+		case vtepErr != nil || !vtep.Is4() || vtep.IsUnspecified():
+			return nil, fmt.Errorf("tun.exits %q vtep %q must be an IPv4 address", label, e.VTEP)
+		case macErr != nil || len(mac) != 6 || mac[0]&1 != 0 || [6]byte(mac) == [6]byte{}:
+			return nil, fmt.Errorf("tun.exits %q mac %q must be a unicast 6-byte MAC", label, e.MAC)
+		}
+		exits[label] = tunnet.Exit{VTEP: vtep, MAC: [6]byte(mac)}
+	}
+	return &tunnet.Overlay{
+		Subnet: subnet.Masked(),
+		VNI:    t.VNI,
+		Port:   t.Port,
+		MTU:    uint16(t.MTU), //nolint:gosec // validate bounds it to 576..9000
+		Exits:  exits,
+	}, nil
 }
 
 // EgressCAConfig provisions HTTPS interception; the root private key never appears here.
@@ -303,6 +428,8 @@ type Config struct {
 	DiskReserve *DiskReserve `json:"disk_reserve,omitempty"`
 	MemoryLimit *MemoryLimit `json:"memory_limit,omitempty"`
 
+	Tun *TunConfig `json:"tun,omitempty"`
+
 	Volumes []VolumeSpec `json:"volumes,omitempty"`
 	// VolumeRoots bounds runtime registration paths only; static volumes stay unchecked.
 	VolumeRoots []string    `json:"volume_roots,omitempty"`
@@ -346,6 +473,9 @@ func (c *Config) applyDefaults() {
 	}
 	for i := range c.Volumes {
 		c.Volumes[i].DirectIO = cmp.Or(c.Volumes[i].DirectIO, types.DirectIOOff)
+	}
+	if c.Tun != nil {
+		c.Tun.applyDefaults()
 	}
 }
 
@@ -410,7 +540,7 @@ func (c *Config) validate() error {
 	if c.MoveConcurrency > 0 && !c.Movable() {
 		return fmt.Errorf("move_concurrency requires meta_store with a cell and an encrypted mesh (set mesh.cluster_key)")
 	}
-	for _, check := range []func() error{c.validateNodeEgress, c.validateDiskReserve, c.validateMemoryLimit, c.validateMetaStore, c.validateVolumes, c.validateMesh, c.validateReplication} {
+	for _, check := range []func() error{c.validateNodeEgress, c.validateDiskReserve, c.validateMemoryLimit, c.validateMetaStore, c.validateVolumes, c.validateMesh, c.validateReplication, c.validateTun} {
 		if err := check(); err != nil {
 			return err
 		}
@@ -434,6 +564,25 @@ func (c *Config) validateReplication() error {
 		}
 	}
 	return nil
+}
+
+func (c *Config) validateTun() error {
+	for _, p := range c.Pools {
+		switch {
+		case !p.Tun:
+		case c.Tun == nil:
+			return fmt.Errorf("pool %q: tun needs the node tun block", p.Template)
+		case p.Net != types.NetNone:
+			return fmt.Errorf("pool %q: tun needs net %q", p.Template, types.NetNone)
+		}
+	}
+	if c.Tun == nil {
+		return nil
+	}
+	if c.Mesh != nil && (c.MetaStore == nil || c.MetaStore.Cell == "") {
+		return fmt.Errorf("tun with a mesh requires meta_store with a cell: overlay addresses must be unique across the cell")
+	}
+	return c.Tun.validate()
 }
 
 func (c *Config) validateVolumes() error {

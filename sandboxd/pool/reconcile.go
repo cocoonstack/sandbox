@@ -92,6 +92,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 		pooled[p.hash] = true
 	}
 	m.mu.Unlock()
+	m.seedTun()
 	for _, sb := range adopted {
 		m.recordHibernate(ctx, sb)
 	}
@@ -330,6 +331,7 @@ func (m *Manager) quarantineClaim(ctx context.Context, sb *types.Sandbox) bool {
 	gone := m.removeOrRetry(ctx, sb.VMName, sb.ID, td)
 	m.forgetClaim(ctx, sb)
 	m.recordEnd(ctx, sb, "quarantined")
+	m.releaseTun(ctx, sb.ID, sb.TunAddr)
 	return gone
 }
 
@@ -340,6 +342,7 @@ func (m *Manager) recordReconciled(ctx context.Context, resumed, dropped []*type
 	for _, sb := range dropped {
 		if answered || !sb.HasReplica() {
 			m.recordEnd(ctx, sb, "vm_gone")
+			m.releaseTun(ctx, sb.ID, sb.TunAddr)
 		}
 	}
 }

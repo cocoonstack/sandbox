@@ -81,6 +81,22 @@ jobs:
           GOWORK=off go test -race -count=1 -v -run 'TestTwoNodesOnOneMetaStore|TestNodesOfACell|TestAMetaStoreNodeWithoutACell' ./pool/ | tee -a "$RUNNER_TEMP/pg-test.log"
           ! grep -- '--- SKIP' "$RUNNER_TEMP/pg-test.log"
 
+      - name: Test the tun path through a kernel exit
+        working-directory: sandboxd
+        shell: bash
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends nftables conntrack ethtool
+          GOWORK=off go test -c -o "$RUNNER_TEMP/udp.test" ./tunnet/udp/
+          sudo SANDBOXD_TUN_EXIT_TEST=1 "$RUNNER_TEMP/udp.test" -test.run TestTrafficCrossesAKernelExit -test.v | tee "$RUNNER_TEMP/exit-test.log"
+          ! grep -- '--- SKIP' "$RUNNER_TEMP/exit-test.log"
+
+      - name: Fuzz the tun parsers
+        working-directory: sandboxd
+        run: |
+          for t in FuzzFrameLen FuzzParseAndRewrite FuzzSegment FuzzVXLANAndARP; do
+            GOWORK=off go test -run '^$' -fuzz "^$t\$" -fuzztime 30s ./tunnet/
+          done
+
       - name: Set up Python
         uses: actions/setup-python@v7.1.0
         with:
