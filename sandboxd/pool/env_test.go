@@ -510,6 +510,19 @@ func TestAClaimWithAnUninterceptedInjectIsRefused(t *testing.T) {
 	}
 }
 
+func TestAClaimOnAPoolWithoutEgressRefusesAnInjectOnlyItsTenantClassIntercepts(t *testing.T) {
+	eng := newFakeEngine()
+	eng.sockRoot = outboundtest.SockRoot(t)
+	m := egressManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1})
+	editEgress(t, m, func(cfg *config.Config) {
+		cfg.EgressClasses = []config.EgressClass{{Name: "desk", Egress: interceptPolicy()}}
+	})
+	_, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Tenant: "acme", EgressClass: "desk", Env: injectEnv("k", "api.github.com")})
+	if !errors.Is(err, ErrBadEnv) {
+		t.Fatalf("claim: %v, want ErrBadEnv: a pooled claim never takes its class policy, so the inject could never apply", err)
+	}
+}
+
 func TestEachClaimInjectsItsOwnCredentialAndAHostOnlyChangeNeedsNoGuest(t *testing.T) {
 	eng := newFakeEngine()
 	eng.sockRoot = outboundtest.SockRoot(t)
