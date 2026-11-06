@@ -204,6 +204,29 @@ func TestAMovedSandboxRetriesAStreamCallAtItsNewOwner(t *testing.T) {
 	}
 }
 
+func TestAWriteToAGoneSandboxLooksItsOwnerUpOnce(t *testing.T) {
+	var lookups atomic.Int32
+	node := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/peers":
+			_ = json.MarshalWrite(w, map[string]any{"peers": []string{}})
+		case "/v1/sandboxes/sb_1/owner":
+			lookups.Add(1)
+			w.WriteHeader(http.StatusNotFound)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(node.Close)
+	sb := testSandbox(t, node)
+	if err := sb.WriteFile(t.Context(), "/f", []byte("x"), nil); err == nil {
+		t.Fatal("a write to a released sandbox succeeded")
+	}
+	if n := lookups.Load(); n != 1 {
+		t.Errorf("owner probed %d times, want one lookup", n)
+	}
+}
+
 func TestAMovedSandboxDoesNotReplayARunThatStreamedStdin(t *testing.T) {
 	sb, adopter := movedSandbox(t)
 	if _, err := sb.Run(t.Context(), Cmd{Argv: []string{"cat"}, Stdin: strings.NewReader("once")}); err == nil {

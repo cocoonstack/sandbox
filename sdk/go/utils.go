@@ -33,8 +33,7 @@ func (s *Sandbox) doneRPC(ctx context.Context, req wire.Request) error {
 }
 
 // uploadRPC streams r as full Data frames after req and expects Done; an early terminal frame is the guest rejecting the upload and stops the stream.
-func (s *Sandbox) uploadRPC(ctx context.Context, req wire.Request, r io.Reader) (err error) {
-	defer func() { s.rebind(ctx, err) }()
+func (s *Sandbox) uploadRPC(ctx context.Context, req wire.Request, r io.Reader) error {
 	conn, l, err := s.call(ctx, req)
 	if err != nil {
 		return err
