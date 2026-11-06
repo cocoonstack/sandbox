@@ -148,37 +148,40 @@ func TestPortRelayEndsOnGuestClose(t *testing.T) {
 }
 
 func TestSpliceTearsDownWhenTheClientDies(t *testing.T) {
-	srv := New("", "node:7777", &fakeManager{}, &fakeDialer{}, nil, nil, nil, nil)
-	t.Cleanup(srv.CloseRelays)
-	client, clientPeer := net.Pipe()
-	t.Cleanup(func() { _ = client.Close(); _ = clientPeer.Close() })
-	guest, guestPeer := net.Pipe()
-	t.Cleanup(func() { _ = guestPeer.Close() })
-	go func() { _, _ = io.Copy(io.Discard, clientPeer) }()
+	synctest.Test(t, func(t *testing.T) {
+		srv := New("", "node:7777", &fakeManager{}, &fakeDialer{}, nil, nil, nil, nil)
+		t.Cleanup(srv.CloseRelays)
+		client, clientPeer := net.Pipe()
+		t.Cleanup(func() { _ = client.Close(); _ = clientPeer.Close() })
+		guest, guestPeer := net.Pipe()
+		t.Cleanup(func() { _ = guestPeer.Close() })
+		go func() { _, _ = io.Copy(io.Discard, clientPeer) }()
 
-	guestClosed := make(chan error, 1)
-	go func() {
-		_, err := guestPeer.Read(make([]byte, 1))
-		guestClosed <- err
-	}()
+		guestClosed := make(chan error, 1)
+		go func() {
+			_, err := guestPeer.Read(make([]byte, 1))
+			guestClosed <- err
+		}()
 
-	ended := make(chan struct{})
-	go func() {
-		defer close(ended)
-		srv.splice(client, iotest.ErrReader(errors.New("client vanished")), guest,
-			switchingProtocolsTCP, tunnelEnds)
-	}()
+		ended := make(chan struct{})
+		go func() {
+			defer close(ended)
+			srv.splice(client, iotest.ErrReader(errors.New("client vanished")), guest,
+				switchingProtocolsTCP, tunnelEnds)
+		}()
 
-	select {
-	case err := <-guestClosed:
-		if err == nil {
-			t.Error("guest read succeeded; the relay should have closed it")
+		synctest.Wait()
+		select {
+		case err := <-guestClosed:
+			if err == nil {
+				t.Error("guest read succeeded; the relay should have closed it")
+			}
+		default:
+			t.Fatal("a dead client left the guest connection open; the relay holds the sandbox")
 		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("a dead client left the guest connection open; the relay holds the sandbox")
-	}
-	_ = client.Close()
-	<-ended
+		_ = client.Close()
+		<-ended
+	})
 }
 
 func TestSpliceTearsDownWhenTheGuestFails(t *testing.T) {
