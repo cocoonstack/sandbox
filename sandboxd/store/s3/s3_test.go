@@ -15,6 +15,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -26,6 +27,8 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/store"
 	"github.com/cocoonstack/sandbox/sandboxd/store/storetest"
 )
+
+const _ = uint(store.GenerationGrace - transferBudget - 1)
 
 func TestS3BackendContract(t *testing.T) {
 	_, st := newFakeStore(t)
@@ -139,7 +142,6 @@ func TestFetchReportsMetaWithoutExportAsNotFound(t *testing.T) {
 
 func TestFetchOutlivesTheCallerThatStartedIt(t *testing.T) {
 	const id = "ck_00000000000000dd"
-	metaKey := "ck/" + id + "/" + store.MetaFile
 	fake, st, release := newGatedStore(t, "")
 	publishRecord(t, st, id, metaJSON(id), "payload")
 	fake.resetRequests()
@@ -156,10 +158,7 @@ func TestFetchOutlivesTheCallerThatStartedIt(t *testing.T) {
 		_, _, _, err := st.Fetch(t.Context(), id)
 		joined <- err
 	}()
-	for fake.requestCount(http.MethodGet, metaKey) < 2 {
-		time.Sleep(time.Millisecond)
-	}
-	time.Sleep(50 * time.Millisecond)
+	waitParkedFetchers(t, 2)
 	hangUp()
 	select {
 	case err := <-started:
@@ -802,13 +801,6 @@ func TestDeleteRemovesTheLineageMarker(t *testing.T) {
 	}
 }
 
-func TestTransferBudgetStaysBelowTheReuseWindow(t *testing.T) {
-	budget := transferBudget
-	if budget >= store.GenerationGrace {
-		t.Errorf("transfer budget %v must stay below the generation grace %v", budget, store.GenerationGrace)
-	}
-}
-
 func TestFetchFileDownloadsOnlyTheRequestedFile(t *testing.T) {
 	const id = "ck_00000000000000aa"
 	meta := metaJSON(id)
@@ -1328,6 +1320,24 @@ func newTestStoreAt(t *testing.T, endpoint http.Handler, cfg store.S3Config) *St
 		t.Fatalf("New: %v", err)
 	}
 	return st
+}
+
+func waitParkedFetchers(t *testing.T, want int) {
+	t.Helper()
+	buf := make([]byte, 1<<20)
+	for range 5000 {
+		parked := 0
+		for _, g := range strings.Split(string(buf[:runtime.Stack(buf, true)]), "\n\n") {
+			if strings.Contains(g, "s3.(*Store).Fetch(") && !strings.Contains(g, "readMeta") {
+				parked++
+			}
+		}
+		if parked >= want {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("fewer than %d Fetch callers joined the shared download", want)
 }
 
 func assertSingleMetaGet(t *testing.T, fake *fakeS3, metaKey string) {
