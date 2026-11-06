@@ -33,50 +33,6 @@ var errRedirectedAgain = errors.New("redirected again despite no_redirect")
 // ClientOption configures Connect.
 type ClientOption func(*Client)
 
-type claimEncoder func(noRedirect, requirePromoted bool) ([]byte, error)
-
-type claimPoster func(addr string, body []byte) (claimResponse, error)
-
-type volumeListResponse struct {
-	Volumes []VolumeInfo `json:"volumes"`
-}
-
-type forkRequest struct {
-	Token      string `json:"token"`
-	Count      int    `json:"count"`
-	TTLSeconds int    `json:"ttl_seconds,omitzero"`
-}
-
-type forkResponse struct {
-	Children []claimResponse `json:"children"`
-}
-
-type promoteRequest struct {
-	Token    string `json:"token"`
-	Template string `json:"template"`
-}
-
-type promoteResponse struct {
-	Key struct {
-		Template string `json:"template"`
-		Net      string `json:"net"`
-		Size     string `json:"size"`
-	} `json:"key"`
-	ContentDigest string `json:"content_digest"`
-}
-
-type renewRequest struct {
-	TTLSeconds int `json:"ttl_seconds,omitzero"`
-}
-
-type renewResponse struct {
-	Deadline time.Time `json:"deadline"`
-}
-
-type errorResponse struct {
-	Error string `json:"error"`
-}
-
 // APIError is a non-2xx control-plane reply.
 type APIError struct {
 	Verb    string
@@ -89,6 +45,18 @@ func (e *APIError) Error() string {
 		return fmt.Sprintf("%s: %s (http %d)", e.Verb, e.Message, e.Status)
 	}
 	return fmt.Sprintf("%s: http %d", e.Verb, e.Status)
+}
+
+type claimEncoder func(noRedirect, requirePromoted bool) ([]byte, error)
+
+type claimPoster func(addr string, body []byte) (claimResponse, error)
+
+type volumeListResponse struct {
+	Volumes []VolumeInfo `json:"volumes"`
+}
+
+type errorResponse struct {
+	Error string `json:"error"`
 }
 
 type claimRequest struct {

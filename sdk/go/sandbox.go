@@ -65,6 +65,38 @@ func (e *ownerGoneError) Error() string { return e.err.Error() }
 
 func (e *ownerGoneError) Unwrap() error { return e.err }
 
+type forkRequest struct {
+	Token      string `json:"token"`
+	Count      int    `json:"count"`
+	TTLSeconds int    `json:"ttl_seconds,omitzero"`
+}
+
+type forkResponse struct {
+	Children []claimResponse `json:"children"`
+}
+
+type promoteRequest struct {
+	Token    string `json:"token"`
+	Template string `json:"template"`
+}
+
+type promoteResponse struct {
+	Key struct {
+		Template string `json:"template"`
+		Net      string `json:"net"`
+		Size     string `json:"size"`
+	} `json:"key"`
+	ContentDigest string `json:"content_digest"`
+}
+
+type renewRequest struct {
+	TTLSeconds int `json:"ttl_seconds,omitzero"`
+}
+
+type renewResponse struct {
+	Deadline time.Time `json:"deadline"`
+}
+
 // Sandbox is a claimed sandbox handle; all data-plane calls dial its owning
 // node directly.
 type Sandbox struct {
