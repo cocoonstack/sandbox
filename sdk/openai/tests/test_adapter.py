@@ -92,19 +92,13 @@ def test_operations_share_one_sandbox_handle(node):
 
 def test_exec_maps_stdio_and_exit(node, monkeypatch):
     class FakeSandbox:
-        def __init__(self, **kw):
-            self.id = "sb_1"
-
         def run(self, argv, on_stdout=None, on_stderr=None, timeout=None):
             assert argv == ["echo", "hi"] and timeout is None
             on_stdout(b"hi\n")
             return 0
 
     async def go():
-        client = CocoonSandboxClient()
-        session = await client.create(options=CocoonSandboxClientOptions(addr=node))
-        inner = session._inner
-        monkeypatch.setattr(inner, "_sandbox", lambda: FakeSandbox())
+        inner = await _session_with(node, monkeypatch, FakeSandbox())
         result = await inner._exec_internal("echo", "hi")
         assert result.exit_code == 0 and result.stdout == b"hi\n"
         assert result.ok()
@@ -124,10 +118,7 @@ def test_exec_timeout_reaches_the_sdk_and_surfaces_as_timeouterror(node, monkeyp
             return 0
 
     async def go():
-        client = CocoonSandboxClient()
-        session = await client.create(options=CocoonSandboxClientOptions(addr=node))
-        inner = session._inner
-        monkeypatch.setattr(inner, "_sandbox", lambda: FakeSandbox())
+        inner = await _session_with(node, monkeypatch, FakeSandbox())
         with pytest.raises(TimeoutError):
             await inner._exec_internal("sleep", "9", timeout=1.5)
         result = await inner._exec_internal("sleep", "9")
@@ -142,10 +133,7 @@ def test_read_missing_maps_to_filenotfound(node, monkeypatch):
             raise SilkdError("not_found", path)
 
     async def go():
-        client = CocoonSandboxClient()
-        session = await client.create(options=CocoonSandboxClientOptions(addr=node))
-        inner = session._inner
-        monkeypatch.setattr(inner, "_sandbox", lambda: FakeSandbox())
+        inner = await _session_with(node, monkeypatch, FakeSandbox())
         with pytest.raises(FileNotFoundError):
             await inner.read(Path("/nope"))
 
@@ -158,10 +146,7 @@ def test_running_is_false_when_the_dial_fails(node, monkeypatch):
             raise ProtocolError("dial 127.0.0.1:1: connection refused")
 
     async def go():
-        client = CocoonSandboxClient()
-        session = await client.create(options=CocoonSandboxClientOptions(addr=node))
-        inner = session._inner
-        monkeypatch.setattr(inner, "_sandbox", lambda: FakeSandbox())
+        inner = await _session_with(node, monkeypatch, FakeSandbox())
         assert await inner.running() is False
 
     asyncio.run(go())
@@ -182,10 +167,7 @@ def test_write_and_persist_use_tree_verbs(node, monkeypatch):
             calls["push"] = (dest, data)
 
     async def go():
-        client = CocoonSandboxClient()
-        session = await client.create(options=CocoonSandboxClientOptions(addr=node))
-        inner = session._inner
-        monkeypatch.setattr(inner, "_sandbox", lambda: FakeSandbox())
+        inner = await _session_with(node, monkeypatch, FakeSandbox())
         await inner.write(Path("/workspace/a.txt"), io.BytesIO(b"body"))
         assert calls["write"] == ("/workspace/a.txt", b"body")
         tar = await inner.persist_workspace()
@@ -198,15 +180,20 @@ def test_write_and_persist_use_tree_verbs(node, monkeypatch):
     asyncio.run(go())
 
 
-def test_create_keeps_the_construction_error_when_the_release_also_fails(node, monkeypatch):
+@pytest.mark.parametrize("release_fails", [False, True])
+def test_create_releases_the_claim_and_keeps_the_construction_error(node, monkeypatch, release_fails):
+    released = []
+
     def bad_snapshot(*args, **kwargs):
         raise ValueError("bad snapshot")
 
-    def bad_close(self):
-        raise RuntimeError("node gone")
+    def close(self):
+        released.append(self.id)
+        if release_fails:
+            raise RuntimeError("node gone")
 
     monkeypatch.setattr("cocoonsandbox_openai.adapter.resolve_snapshot", bad_snapshot)
-    monkeypatch.setattr("cocoonsandbox.Sandbox.close", bad_close)
+    monkeypatch.setattr("cocoonsandbox.Sandbox.close", close)
 
     async def go():
         client = CocoonSandboxClient()
@@ -214,24 +201,14 @@ def test_create_keeps_the_construction_error_when_the_release_also_fails(node, m
             await client.create(options=CocoonSandboxClientOptions(addr=node))
 
     asyncio.run(go())
-
-
-def test_create_releases_the_claim_when_state_construction_fails(node, monkeypatch):
-    released = []
-
-    def bad_snapshot(*args, **kwargs):
-        raise ValueError("bad snapshot")
-
-    monkeypatch.setattr("cocoonsandbox_openai.adapter.resolve_snapshot", bad_snapshot)
-    monkeypatch.setattr("cocoonsandbox.Sandbox.close", lambda self: released.append(self.id))
-
-    async def go():
-        client = CocoonSandboxClient()
-        with pytest.raises(ValueError):
-            await client.create(options=CocoonSandboxClientOptions(addr=node))
-
-    asyncio.run(go())
     assert released == ["sb_1"]
+
+
+async def _session_with(node, monkeypatch, fake):
+    session = await CocoonSandboxClient().create(options=CocoonSandboxClientOptions(addr=node))
+    inner = session._inner
+    monkeypatch.setattr(inner, "_sandbox", lambda: fake)
+    return inner
 
 
 def _silkd_pull_tar(root: str, files: dict[str, bytes]) -> bytes:
