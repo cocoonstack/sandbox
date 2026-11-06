@@ -469,6 +469,38 @@ func TestRedirectTriesAllCandidates(t *testing.T) {
 	}
 }
 
+func TestRedirectStopsWhenACandidateMayHaveClaimed(t *testing.T) {
+	var goodCalls, entryCalls atomic.Int32
+	lost := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		conn, _, err := http.NewResponseController(w).Hijack()
+		if err == nil {
+			_ = conn.Close()
+		}
+	}))
+	t.Cleanup(lost.Close)
+
+	good := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		goodCalls.Add(1)
+		_ = json.MarshalWrite(w, claimResponse{ID: "sb_6", Token: "t"})
+	}))
+	t.Cleanup(good.Close)
+
+	entry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		entryCalls.Add(1)
+		_ = json.MarshalWrite(w, claimResponse{
+			Redirect: []string{strings.TrimPrefix(lost.URL, "http://"), strings.TrimPrefix(good.URL, "http://")},
+		})
+	}))
+	t.Cleanup(entry.Close)
+
+	if _, err := testClient(t, entry).New(t.Context(), "rt:24.04"); err == nil {
+		t.Fatal("New succeeded after a candidate dropped the reply to a delivered claim")
+	}
+	if goodCalls.Load() != 0 || entryCalls.Load() != 1 {
+		t.Errorf("good=%d entry=%d calls, want 0 and 1: a delivered claim is never sent again", goodCalls.Load(), entryCalls.Load())
+	}
+}
+
 func TestRedirectCandidateDefinitiveErrorStillTriesNextCandidate(t *testing.T) {
 	forbidden := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusForbidden)

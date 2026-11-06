@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"slices"
@@ -26,6 +27,8 @@ const (
 	sizeQueryParam       = "size"
 	noRedirectQueryParam = "no_redirect"
 )
+
+var errRedirectedAgain = errors.New("redirected again despite no_redirect")
 
 // ClientOption configures Connect.
 type ClientOption func(*Client)
@@ -336,8 +339,7 @@ func retryTransient(err error) bool {
 	}
 	switch he.Status {
 	case http.StatusUnauthorized, http.StatusNotFound, http.StatusTooManyRequests,
-		http.StatusServiceUnavailable, http.StatusInternalServerError,
-		http.StatusBadGateway, http.StatusGatewayTimeout:
+		http.StatusServiceUnavailable, http.StatusInternalServerError:
 		return true
 	default:
 		return false
@@ -375,7 +377,7 @@ func redirectFallback(origin string, candidates []string, claimAt func(addr stri
 			return claimResponse{}, err
 		}
 		if len(cr.Redirect) > 0 {
-			return claimResponse{}, fmt.Errorf("%s redirected again despite no_redirect", target)
+			return claimResponse{}, fmt.Errorf("%s %w", target, errRedirectedAgain)
 		}
 		return cr, nil
 	}
@@ -384,6 +386,9 @@ func redirectFallback(origin string, candidates []string, claimAt func(addr stri
 		cr, err := claimNoRedirect(addr)
 		if err == nil {
 			return addr, cr, nil
+		}
+		if !claimRefused(err) {
+			return "", claimResponse{}, fmt.Errorf("redirect target %s: %w", addr, err)
 		}
 		lastErr = err
 	}
@@ -395,6 +400,16 @@ func redirectFallback(origin string, candidates []string, claimAt func(addr stri
 		return "", claimResponse{}, fmt.Errorf("all redirect targets failed, origin fallback failed: %w", errors.Join(lastErr, err))
 	}
 	return origin, cr, nil
+}
+
+func claimRefused(err error) bool {
+	if he, ok := errors.AsType[*APIError](err); ok {
+		return he.Status != http.StatusBadGateway && he.Status != http.StatusGatewayTimeout
+	}
+	if op, ok := errors.AsType[*net.OpError](err); ok && op.Op == "dial" {
+		return true
+	}
+	return errors.Is(err, errRedirectedAgain)
 }
 
 func scatter[T any](ctx context.Context, addrs []string, probe func(ctx context.Context, addr string) (T, error)) (result T, ok bool) {

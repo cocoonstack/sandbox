@@ -5,6 +5,7 @@ from __future__ import annotations
 import http.client
 import json
 import queue
+import socket
 import ssl
 import threading
 import time
@@ -302,7 +303,13 @@ def _try_each(
 
 
 def _retry_transient(exc: APIError) -> bool:
-    return exc.status in (0, 401, 404, 429, 503, 500, 502, 504)
+    return exc.status in (0, 401, 404, 429, 503, 500)
+
+
+def _claim_refused(exc: APIError) -> bool:
+    if exc.status:
+        return exc.status not in (502, 504)
+    return exc.__cause__ is None or isinstance(exc.__cause__, (ConnectionRefusedError, socket.gaierror))
 
 
 def _redirect_fallback(
@@ -315,9 +322,9 @@ def _redirect_fallback(
         return addr, reply
 
     try:
-        return _try_each(candidates, attempt, retry=lambda _: True)
+        return _try_each(candidates, attempt, retry=_claim_refused)
     except APIError as exc:
-        if not _retry_transient(exc):
+        if not (_claim_refused(exc) and _retry_transient(exc)):
             raise
         try:
             return attempt(origin)

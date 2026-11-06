@@ -1,5 +1,7 @@
 """Fault matrix for the cluster redirect follow and the lookup scatter."""
 
+import socket
+import threading
 import time
 
 import pytest
@@ -12,6 +14,32 @@ def test_claim_redirect_skips_dead_candidate(spawn_node, dead_addr):
     entry = spawn_node({("POST", "/v1/claim"): lambda body, path: (200, {"redirect": [dead_addr, good]})})
     sb = Client(entry).new("rt:24.04")
     assert sb.id == "sb_ok" and sb.owner == good
+
+
+def test_claim_redirect_stops_when_a_candidate_may_have_claimed(spawn_node):
+    server = socket.create_server(("127.0.0.1", 0))
+
+    def drop_reply():
+        conn, _ = server.accept()
+        conn.recv(65536)
+        conn.close()
+
+    threading.Thread(target=drop_reply, daemon=True).start()
+    lost = f"127.0.0.1:{server.getsockname()[1]}"
+    good_calls = []
+    good = spawn_node(
+        {("POST", "/v1/claim"): lambda body, path: good_calls.append(body) or (200, {"id": "x", "token": "t"})}
+    )
+    entry_calls = []
+    entry = spawn_node(
+        {("POST", "/v1/claim"): lambda body, path: entry_calls.append(body) or (200, {"redirect": [lost, good]})}
+    )
+    try:
+        with pytest.raises(APIError):
+            Client(entry).new("rt:24.04")
+    finally:
+        server.close()
+    assert not good_calls and len(entry_calls) == 1
 
 
 def test_claim_redirect_skips_404_candidate(spawn_node):
