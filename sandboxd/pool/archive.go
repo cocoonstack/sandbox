@@ -61,7 +61,7 @@ func (m *Manager) archiveOnce(ctx context.Context) {
 			continue // a reap-triggered archive is already exporting this one
 		}
 		after := m.archiveAfterFor(sb.Key)
-		if after <= 0 || now.Sub(sb.LastSeen()) < after {
+		if after <= 0 || now.Sub(sb.LastSeen()) < after || now.Before(sb.ArchiveRetryAt) {
 			continue
 		}
 		m.archiving[sb.ID] = struct{}{}
@@ -82,10 +82,17 @@ func (m *Manager) archiveOnce(ctx context.Context) {
 	}()
 }
 
-func (m *Manager) archive(ctx context.Context, sb *types.Sandbox) error {
+func (m *Manager) archive(ctx context.Context, sb *types.Sandbox) (err error) {
 	// Must finish even if the sweep ctx is canceled, or the record diverges from the store.
 	ctx = context.WithoutCancel(ctx)
-	defer m.untrack(m.archiving, sb.ID)
+	defer func() {
+		m.mu.Lock()
+		delete(m.archiving, sb.ID)
+		if err != nil {
+			sb.ArchiveRetryAt = time.Now().Add(archiveRetryDelay)
+		}
+		m.mu.Unlock()
+	}()
 	m.mu.Lock()
 	ok := m.claimed[sb.ID] == sb && sb.HibernateSnap != "" && sb.ArchiveCk == ""
 	m.mu.Unlock()
@@ -93,7 +100,7 @@ func (m *Manager) archive(ctx context.Context, sb *types.Sandbox) error {
 		return errWokeMeanwhile
 	}
 	sb.Transition.Lock()
-	err := m.resolveIntent(ctx, sb)
+	err = m.resolveIntent(ctx, sb)
 	snap := sb.HibernateSnap
 	sb.Transition.Unlock()
 	if err != nil {

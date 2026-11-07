@@ -43,6 +43,7 @@ const (
 	livenessInterval  = 10 * time.Second
 	imageInterval     = time.Minute
 	buildRetryDelay   = 30 * time.Second
+	archiveRetryDelay = time.Minute
 	claimProbeTimeout = 15 * time.Second
 	coldProbeTimeout  = 90 * time.Second
 	// A clone answers in ~1s even saturated, so a silent one is replaced, not waited on

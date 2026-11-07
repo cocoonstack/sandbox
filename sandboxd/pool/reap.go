@@ -52,7 +52,7 @@ func (m *Manager) reapOnce(ctx context.Context) {
 			purges = append(purges, sb.ArchiveCk)
 		case m.archivesAtDeadline(sb):
 			// Archive instead of destroy, kept in m.claimed for archive() to move
-			if _, busy := m.archiving[id]; busy {
+			if _, busy := m.archiving[id]; busy || now.Before(sb.ArchiveRetryAt) {
 				continue
 			}
 			m.archiving[id] = struct{}{}
@@ -177,7 +177,12 @@ func (m *Manager) pauseArchive(ctx context.Context, sb *types.Sandbox) error {
 	}
 	sb.Transition.Unlock()
 	if !live || err != nil {
-		m.untrack(m.archiving, sb.ID)
+		m.mu.Lock()
+		delete(m.archiving, sb.ID)
+		if err != nil {
+			sb.ArchiveRetryAt = time.Now().Add(archiveRetryDelay)
+		}
+		m.mu.Unlock()
 		return cmp.Or(err, errWokeMeanwhile)
 	}
 	return m.archive(ctx, sb)

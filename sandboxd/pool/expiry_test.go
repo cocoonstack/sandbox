@@ -101,6 +101,13 @@ func TestExpiryArchiveRetriesOnlyTheExportAfterItFails(t *testing.T) {
 	}
 	exports := failing.publishes.Load()
 	failing.fail.Store(false)
+	m.mu.Lock()
+	spaced := sb.ArchiveRetryAt.After(time.Now())
+	sb.ArchiveRetryAt = time.Time{}
+	m.mu.Unlock()
+	if !spaced {
+		t.Error("a failed archive was retried without spacing")
+	}
 	m.reapOnce(t.Context())
 	waitFor(t, func() bool { return archivedCount(m) == 1 })
 	if m.Counters().Hibernates != 1 || failing.publishes.Load() != exports+1 {
@@ -135,6 +142,13 @@ func TestExpiryArchiveRetriesTheHibernateAfterItFails(t *testing.T) {
 	eng.mu.Lock()
 	eng.hibernateErr = nil
 	eng.mu.Unlock()
+	m.mu.Lock()
+	spaced := sb.ArchiveRetryAt.After(time.Now())
+	sb.ArchiveRetryAt = time.Time{}
+	m.mu.Unlock()
+	if !spaced {
+		t.Error("a failed archive was retried without spacing")
+	}
 	m.reapOnce(t.Context())
 	waitFor(t, func() bool { return archivedCount(m) == 1 })
 }
