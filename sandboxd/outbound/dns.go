@@ -114,7 +114,11 @@ func (r *resolver) serveConn(conn net.Conn, datagram bool) {
 		if err != nil {
 			return
 		}
-		r.inflight <- struct{}{}
+		select {
+		case r.inflight <- struct{}{}:
+		case <-r.ctx.Done():
+			return
+		}
 		buf := udpBufs.Get().(*[dnsMsgMax]byte)
 		answer, ok := r.answer(query, buf[:], datagram)
 		if ok {

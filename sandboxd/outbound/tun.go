@@ -50,7 +50,13 @@ func (h *Host) RearmTun(ctx context.Context, sb *types.Sandbox) {
 	h.dropTun(old)
 	v := h.o.View()
 	policy, ok := v.Resolve(sb)
-	if d == nil || !ok {
+	if d == nil {
+		return
+	}
+	if !ok {
+		if sb.TunAddr.IsValid() {
+			h.tunDown(sb.ID, sb.VsockSocket)
+		}
 		return
 	}
 	h.armTun(ctx, sb, d, v, newClaim(h, sb, v, policy))
@@ -168,7 +174,7 @@ func (h *Host) armTun(ctx context.Context, sb *types.Sandbox, d *doors, v *View,
 			logger.Warnf(ctx, "tun_up %s: %v", id, err)
 		}
 		if _, armed := h.TunUsed(id); !armed {
-			_ = h.o.Engine.TunDown(vctx, sock)
+			h.tunDown(id, sock)
 		}
 	}()
 }
