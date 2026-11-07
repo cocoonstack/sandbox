@@ -96,11 +96,12 @@ class Client(_Closeable):
             )
             return Sandbox(client=self, id=id, token=token, owner=reply.get("owner_addr") or addr)
 
-        addrs = [self.addr, *self._peers()]
+        peers, peers_err = self._peers()
         try:
-            return _scatter(addrs, probe)
+            return _scatter([self.addr, *peers], probe)
         except APIError:
-            raise APIError("lookup", 404, f"no owner found for {id}") from None
+            reason = f"no owner found for {id}" if peers_err is None else f"no owner found for {id}; {peers_err}"
+            raise APIError("lookup", 404, reason) from None
 
     def attach(self, owner_addr: str, id: str, token: str) -> Sandbox:
         """Binds a handle to a known owner without a lookup."""
@@ -176,16 +177,14 @@ class Client(_Closeable):
         owner, reply = _redirect_fallback(addr, redirect, post, verb)
         return self._handle_from(owner, reply, verb)
 
-    def _peers(self) -> list[str]:
+    def _peers(self) -> tuple[list[str], APIError | None]:
         try:
-            return (
-                self._request(
-                    self.addr, "GET", "/v1/peers", None, "peers", timeout=min(_PEERS_TIMEOUT, self.timeout)
-                ).get("peers")
-                or []
+            reply = self._request(
+                self.addr, "GET", "/v1/peers", None, "peers", timeout=min(_PEERS_TIMEOUT, self.timeout)
             )
-        except APIError:
-            return []
+        except APIError as exc:
+            return [], exc
+        return reply.get("peers") or [], None
 
     def _handle_from(self, dialed: str, reply: dict[str, Any], verb: str = "claim") -> Sandbox:
         return Sandbox(

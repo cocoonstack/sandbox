@@ -203,11 +203,6 @@ def dial_agent(
     except OSError as exc:
         err = _handshake_error(f"dial {addr}", exc)
         raise (_mark_gone(err, tag) if isinstance(exc, ConnectionRefusedError) else err) from exc
-    sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-    sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
-    for opt, setting in _TCP_KEEPALIVE.items():
-        if hasattr(socket, opt):
-            sock.setsockopt(socket.IPPROTO_TCP, getattr(socket, opt), setting)
     request = (
         f"GET /v1/sandboxes/{sandbox_id}/agent HTTP/1.1\r\n"
         f"Host: {endpoint.netloc}\r\n"
@@ -218,6 +213,11 @@ def dial_agent(
     ).encode()
     reader = None
     try:
+        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+        for opt, setting in _TCP_KEEPALIVE.items():
+            if hasattr(socket, opt):
+                sock.setsockopt(socket.IPPROTO_TCP, getattr(socket, opt), setting)
         if endpoint.scheme != "https":
             sock.settimeout(None)
             return Conn(sock, _buffered_reader(sock), request, timeout, tag)
