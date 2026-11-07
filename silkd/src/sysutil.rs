@@ -209,6 +209,38 @@ pub fn tun_open(name: &str) -> std::io::Result<OwnedFd> {
     Ok(file.into())
 }
 
+#[cfg(target_os = "linux")]
+pub fn vsock_connect_start(cid: u32, port: u32) -> std::io::Result<OwnedFd> {
+    // SAFETY: socket(2) takes no pointers.
+    let raw = unsafe {
+        libc::socket(
+            libc::AF_VSOCK,
+            libc::SOCK_STREAM | libc::SOCK_CLOEXEC | libc::SOCK_NONBLOCK,
+            0,
+        )
+    };
+    check(raw)?;
+    // SAFETY: raw is the fresh fd socket(2) just returned, owned by nothing else.
+    let fd = unsafe { <OwnedFd as std::os::fd::FromRawFd>::from_raw_fd(raw) };
+    // SAFETY: sockaddr_vm is plain data and all-zero is a valid value.
+    let mut addr: libc::sockaddr_vm = unsafe { std::mem::zeroed() };
+    addr.svm_family = libc::AF_VSOCK as libc::sa_family_t;
+    addr.svm_cid = cid;
+    addr.svm_port = port;
+    // SAFETY: addr is an initialized sockaddr_vm and the length passed is its size.
+    let rc = unsafe {
+        libc::connect(
+            fd.as_raw_fd(),
+            (&raw const addr).cast(),
+            std::mem::size_of::<libc::sockaddr_vm>() as libc::socklen_t,
+        )
+    };
+    match check(rc) {
+        Err(e) if e.raw_os_error() != Some(libc::EINPROGRESS) => Err(e),
+        _ => Ok(fd),
+    }
+}
+
 /// Sets the `TUN_F_*` offloads the tun reader accepts; the kernel refuses a bit it does not know.
 #[cfg(target_os = "linux")]
 pub fn tun_set_offload(fd: RawFd, flags: u32) -> std::io::Result<()> {

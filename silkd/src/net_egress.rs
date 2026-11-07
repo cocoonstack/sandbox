@@ -130,13 +130,15 @@ where
 
 #[cfg(target_os = "linux")]
 async fn dial_host_cloexec(port: u32) -> io::Result<tokio_vsock::VsockStream> {
-    let stream = tokio::task::spawn_blocking(move || {
-        let stream = vsock::VsockStream::connect_with_cid_port(libc::VMADDR_CID_HOST, port)?;
-        stream.set_nonblocking(true)?;
-        Ok::<_, io::Error>(stream)
-    })
-    .await
-    .map_err(io::Error::other)??;
+    let pending = crate::sysutil::watch_fd(crate::sysutil::vsock_connect_start(
+        libc::VMADDR_CID_HOST,
+        port,
+    )?)?;
+    drop(pending.writable().await?);
+    let stream = vsock::VsockStream::from(pending.into_inner());
+    if let Some(e) = stream.take_error()? {
+        return Err(e);
+    }
     tokio_vsock::VsockStream::new(stream)
 }
 
