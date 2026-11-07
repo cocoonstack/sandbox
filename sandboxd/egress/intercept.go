@@ -59,6 +59,7 @@ func (p *Proxy) serveIntercept(w http.ResponseWriter, r *http.Request, host stri
 	srv := &http.Server{
 		Handler:           &interceptHandler{proxy: p, host: host, port: port, authority: net.JoinHostPort(host, strconv.Itoa(int(port)))},
 		ReadHeaderTimeout: interceptTimeout,
+		IdleTimeout:       idleConnTimeout,
 	}
 	_ = srv.Serve(ln)
 }
