@@ -16,7 +16,7 @@ func main() {
 	var (
 		addr     = flag.String("addr", "127.0.0.1:7777", "sandboxd address")
 		token    = flag.String("token", "", "node api token")
-		template = flag.String("template", "rt:24.04", "template ref (must be unpooled for a true cold boot)")
+		template = flag.String("template", "rt:24.04", "template ref; only an unpooled one measures a cold boot")
 		n        = flag.Int("n", 1, "iterations")
 	)
 	flag.Parse()

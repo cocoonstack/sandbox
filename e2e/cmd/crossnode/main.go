@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -29,6 +30,9 @@ func main() {
 }
 
 func run(addrA, addrB, token, template string) error {
+	if addrB == "" {
+		return errors.New("-b is required")
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	defer cancel()
 
