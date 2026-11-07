@@ -154,7 +154,7 @@ func (m *Manager) reapOnce(ctx context.Context) {
 			td := m.quiesceVolumes(ctx, v.sb)
 			td.holds = v.holds
 			m.out.Disarm(v.id, m.removeOrRetry(ctx, v.vmName, v.id, td))
-			m.dropSnap(ctx, v.snap)
+			m.dropSnapAfterTransition(ctx, v.sb, v.snap)
 			m.counters.reaps.Add(1)
 			m.recordUsage(ctx, usage.Event{Event: reapEvent, ID: v.id, VMName: v.vmName, Tenant: v.tenant, Deadline: v.deadline})
 			logger.Infof(ctx, "reaped expired sandbox %s (%s)", v.id, v.vmName)
