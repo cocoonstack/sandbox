@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 )
 
@@ -86,9 +87,11 @@ func main() {
 
 // report answers with what the guest received, so a caller can assert the relay changed nothing.
 func report(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "text/plain")
-	_, _ = fmt.Fprintf(w, "proto=%d\nmethod=%s\npath=%s\nhost=%s\n", r.ProtoMajor, r.Method, r.URL.RequestURI(), r.Host)
+	body := new(strings.Builder)
+	fmt.Fprintf(body, "proto=%d\nmethod=%s\npath=%s\nhost=%s\n", r.ProtoMajor, r.Method, r.URL.RequestURI(), r.Host)
 	for _, name := range []string{"X-Access-Token", "X-API-KEY", "X-Probe"} {
-		_, _ = fmt.Fprintf(w, "header[%s]=%s\n", name, r.Header.Get(name))
+		fmt.Fprintf(body, "header[%s]=%s\n", name, r.Header.Get(name))
 	}
+	w.Header().Set("Content-Type", "text/plain")
+	_, _ = io.WriteString(w, body.String())
 }
