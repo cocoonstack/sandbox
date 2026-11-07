@@ -25,6 +25,9 @@ compromise; [security](security.md#cells) has the contract.
   for example a group of CPU-compatible nodes whose snapshots restore on each
   other. It is not the security boundary: one cell may hold several names.
   Where these docs speak of a cell's shared rows, they mean this partition.
+- Nodes sharing a `tun.subnet` and exit must use the same `meta_store.cell`:
+  address uniqueness is per partition. Different names need non-overlapping
+  subnets or separate overlays.
 - Cell size is the operator's knob: a smaller cell loses less to one
   compromised host. [Scale](#scale) sets the upper bound.
 
@@ -830,7 +833,7 @@ ways:
 | `mesh.cluster_key` | nodes cannot join / decrypt gossip at all |
 | `egress_ca` root | a guest checkpointed/redirected across nodes trusts the cell's root; a divergent root fails interception |
 | egress: `egress_classes`, each pool's `egress` and `egress_upstream_env`, `secrets` names, headers and `value_env`, `egress_internal_allow`, `egress_upstream` | a claim or tenant redirected to a divergent node reaches different hosts, and its [claim credentials](egress.md#claim-credentials) are refused or not injected there |
-| `tun.subnet` | every node of a cell draws overlay addresses from one shared table, and a claim keeps its address across a move or an adoption, so a node with another subnet serves claims outside it (see [advanced network mode](advanced-network.md#configuration)). Not part of the gossiped digest below |
+| `tun.subnet` | every node of a `meta_store.cell` partition draws overlay addresses from that partition, and a claim keeps its address across a move or an adoption, so a node with another subnet serves claims outside it (see [advanced network mode](advanced-network.md#configuration)). Not part of the gossiped digest below |
 | `checkpoint_ttl_hours` | a healed replica a delete broadcast missed ages out at a different time on each node, and nodes report a digest mismatch until every node has reloaded the same value |
 | the engine root path (cocoon's `root_dir`) | a checkpoint or template export pins the base image blobs' absolute path under the root that captured it; a node whose root sits at another path refuses to clone a record it healed or pulled (`untrusted storage path in snapshot metadata`) — the heal succeeds, the branch fails. Not part of the gossiped digest below |
 

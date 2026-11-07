@@ -751,9 +751,18 @@ next.
 ### Rotating a cell's credentials
 
 `api_token`, `mesh.cluster_key`, `preview_secret`, `meta_store` (and its DSN),
-`checkpoint_store` and `egress_ca` change only at a restart. Nodes on old and
-new values cannot work together: peer calls answer 401, gossip splits, and a
-preview URL signed on one fails on the other. Write the new values to every
+`checkpoint_store` and `egress_ca` change only at a restart.
+
+For an egress root change, follow the
+[root rotation procedure](egress.md#https-interception): bundle the roots
+while keeping the old intermediate, then drain or recreate all old-root guests,
+checkpoints, archives and promoted templates before switching to the new intermediate.
+A restart does not update their trust stores. Replacing only an intermediate
+under the same root needs no drain.
+
+Nodes on old and new shared tokens or mesh keys cannot work together:
+peer calls answer 401, gossip splits, and a preview URL signed on one fails
+on the other. Write the new values to every
 node of the cell, then restart all of them at once. Preview URLs signed before
 the rotation stop working.
 
@@ -761,8 +770,6 @@ the rotation stop working.
   credentials from an instance role refresh by themselves.
 - Tenant tokens change through the [tenant API](sandboxd-api.md#tenants-v1tenants),
   with no restart.
-- A new egress root reaches only guests created after it
-  ([egress](egress.md#https-interception)).
 
 ### Recovering a cell
 
