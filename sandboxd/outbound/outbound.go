@@ -227,6 +227,20 @@ func (h *Host) Disarm(id string, removed bool) {
 	}
 }
 
+func (h *Host) DropTunnels(ids []string) {
+	var proxies []*egress.Proxy
+	h.mu.Lock()
+	for _, id := range ids {
+		if d := h.doors[id]; d != nil && d.proxy != nil {
+			proxies = append(proxies, d.proxy)
+		}
+	}
+	h.mu.Unlock()
+	for _, p := range proxies {
+		p.DropTunnels()
+	}
+}
+
 // DNSMalformed counts guest DNS queries dropped as malformed, with the connection that carried each.
 func (h *Host) DNSMalformed() uint64 {
 	return h.dnsMalformed.Load()
