@@ -91,13 +91,13 @@ def main() -> int:
             member = tr.extractfile("tree/t.txt")
             assert member and member.read() == b"tar-marker"
 
-    @step("git-typed-error")
+    @step("git-unreachable-remote")
     def _git():
         try:
             sb.git_clone("https://example.com/x.git", "/root/x")
-            raise AssertionError("clone on the none lane did not raise")
+            raise AssertionError("clone of a host the policy does not allow succeeded")
         except SilkdError as exc:
-            assert exc.kind == "unimplemented", exc
+            assert exc.kind == "internal", exc
 
     @step("hibernate-wake")
     def _hibernate():

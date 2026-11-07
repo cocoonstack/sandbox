@@ -35,7 +35,7 @@ func (s *Sandbox) GitPush(ctx context.Context, path, auth string) error {
 	return s.doneRPC(ctx, &wire.GitPush{Path: path, Auth: auth})
 }
 
-// GitPull pulls the current branch; same lane rules as GitPush.
+// GitPull pulls the current branch.
 func (s *Sandbox) GitPull(ctx context.Context, path, auth string) error {
 	return s.doneRPC(ctx, &wire.GitPull{Path: path, Auth: auth})
 }

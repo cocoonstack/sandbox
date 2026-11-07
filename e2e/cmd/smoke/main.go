@@ -278,13 +278,13 @@ func smokeGit(ctx context.Context, sb *sandbox.Sandbox) error {
 		return fmt.Errorf("after checkout: current=%q, want feature", br.Current)
 	}
 
-	if err := sb.GitPush(ctx, "/work", ""); !isSilkdKind(err, wire.KindUnimplemented) {
-		return fmt.Errorf("push on none lane: %v, want unimplemented", err)
+	if err := sb.GitPush(ctx, "/work", ""); !isSilkdKind(err, wire.KindInternal) {
+		return fmt.Errorf("push without a remote: %v, want git's own error", err)
 	}
 	return nil
 }
 
-// smokeEgress pins that git runs on the egress lane, unlike the none-lane unimplemented guard.
+// smokeEgress pins that git reaches a remote on the egress lane.
 func smokeEgress(ctx context.Context, client *sandbox.Client, template string) error {
 	sb, err := client.New(ctx, template, sandbox.WithNetwork(sandbox.NetEgress))
 	if err != nil {
