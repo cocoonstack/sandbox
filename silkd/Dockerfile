@@ -1,12 +1,6 @@
-# Builds silkd and ships it as a binaries-only carrier image, the same shape
-# as the boot artifact: base images COPY --from this image rather than
-# rebuilding silkd, so a silkd change rebuilds only this artifact and the
-# images gating workflow refolds it into the os-images.
-# Two binaries: /silkd is glibc-dynamic (Debian's glibc is older than Ubuntu
-# 24.04's, so the binary is forward-compatible into the base image);
-# /silkd-static is musl-static for guests without glibc, such as the android
-# flavor's non-systemd userspace. Built per-platform (amd64/arm64) on native
-# runners; TARGETARCH picks the musl target triple.
+# Binaries-only carrier the os-images COPY --from: /silkd is glibc-dynamic
+# (Debian's glibc is older than Ubuntu 24.04's), /silkd-static is musl-static
+# for guests without glibc, such as android. TARGETARCH picks the musl triple.
 FROM rust:1.99.1-slim-bookworm@sha256:24707e70a4f1e23d9a7b25202ec43126d28a52294b96aad5c670df1fd1f1d400 AS build
 ARG TARGETARCH
 WORKDIR /silkd

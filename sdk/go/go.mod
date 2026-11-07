@@ -4,7 +4,5 @@ go 1.27.1
 
 replace github.com/cocoonstack/sandbox/protocol/wire => ../../protocol/wire
 
-// Downstream consumers ignore the local replace, so this must name a real,
-// resolvable version: cut a protocol/wire tag alongside every sdk/go release
-// and keep this pinned to it.
+// Consumers ignore the replace: pin the protocol/wire tag cut with each sdk/go release.
 require github.com/cocoonstack/sandbox/protocol/wire v0.1.24

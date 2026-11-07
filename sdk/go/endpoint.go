@@ -3,6 +3,7 @@ package sandbox
 import (
 	"cmp"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -16,7 +17,7 @@ func (c *Client) configureTLS() error {
 	tr, ok := cmp.Or(c.hc.Transport, http.DefaultTransport).(*http.Transport)
 	switch {
 	case !ok && c.tlsConfig != nil:
-		return fmt.Errorf("tls configuration requires an http.Transport")
+		return errors.New("tls configuration requires an http.Transport")
 	case !ok:
 		c.tlsConfig = &tls.Config{MinVersion: tls.VersionTLS12}
 	case c.tlsConfig == nil && c.hc.Transport != nil:
@@ -53,12 +54,12 @@ func endpointURL(addr, scheme string) (*url.URL, error) {
 	}
 	if (u.Scheme != "http" && u.Scheme != httpsScheme) || u.Hostname() == "" || u.User != nil ||
 		(u.Path != "" && u.Path != "/") || strings.ContainsAny(addr, "?#") {
-		return nil, fmt.Errorf("sandboxd endpoint must be an http or https origin")
+		return nil, errors.New("sandboxd endpoint must be an http or https origin")
 	}
 	if port := u.Port(); port != "" {
 		n, err := strconv.Atoi(port)
 		if err != nil || n < 1 || n > 65535 {
-			return nil, fmt.Errorf("sandboxd endpoint port must be between 1 and 65535")
+			return nil, errors.New("sandboxd endpoint port must be between 1 and 65535")
 		}
 	}
 	u.Path = ""

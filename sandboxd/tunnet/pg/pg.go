@@ -109,7 +109,14 @@ func (s *Store) Confirm(ctx context.Context, held map[string]netip.Addr) ([]stri
 	if err != nil {
 		return nil, down(err)
 	}
-	lost := slices.DeleteFunc(claims, func(c string) bool { return slices.Contains(confirmed, c) })
+	done := make(map[string]struct{}, len(confirmed))
+	for _, c := range confirmed {
+		done[c] = struct{}{}
+	}
+	lost := slices.DeleteFunc(claims, func(c string) bool {
+		_, ok := done[c]
+		return ok
+	})
 	return lost, nil
 }
 

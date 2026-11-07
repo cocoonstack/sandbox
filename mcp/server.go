@@ -229,7 +229,7 @@ func (s *server) checkpointArg(raw jsontext.Value) (*sandbox.Checkpoint, error) 
 		return ckpt, nil
 	}
 	if args.CheckpointID == "" {
-		return nil, fmt.Errorf("checkpoint_id is required")
+		return nil, errors.New("checkpoint_id is required")
 	}
 	return s.client.Checkpoint(args.CheckpointID), nil
 }

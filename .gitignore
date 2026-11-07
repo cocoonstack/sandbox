@@ -1,10 +1,13 @@
 bin/
 dist/
+dist-extra/
 boot/init/target/
 silkd/target/
 e2e/demo
 e2e/guestserver
 e2e/portsmoke
+e2e/pullbench
+e2e/rpcbench
 e2e/smoke
 *.log
 .DS_Store
@@ -16,6 +19,3 @@ __pycache__/
 *.pyc
 *.egg-info/
 .pytest_cache/
-e2e/pullbench
-e2e/rpcbench
-dist-extra/

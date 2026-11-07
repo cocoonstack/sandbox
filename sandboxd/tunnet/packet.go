@@ -37,6 +37,9 @@ const (
 	tcpFin    = 0x01
 	tcpSyn    = 0x02
 	tcpRst    = 0x04
+	tcpPsh    = 0x08
+	tcpAck    = 0x10
+	tcpCwr    = 0x80
 )
 
 var (

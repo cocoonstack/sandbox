@@ -12,7 +12,7 @@ import (
 
 func runCA(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: sandboxd ca {init|issue-intermediate}")
+		return errors.New("usage: sandboxd ca {init|issue-intermediate}")
 	}
 	switch args[0] {
 	case "init":
@@ -54,7 +54,7 @@ func caIssueIntermediate(args []string) error {
 		return err
 	}
 	if *rootCert == "" || *rootKey == "" || *node == "" {
-		return fmt.Errorf("-root-cert, -root-key, and -node are required")
+		return errors.New("-root-cert, -root-key, and -node are required")
 	}
 	rc, err := os.ReadFile(*rootCert)
 	if err != nil {

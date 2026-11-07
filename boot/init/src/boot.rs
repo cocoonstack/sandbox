@@ -238,7 +238,7 @@ fn scan_serials(ids: &[&str], found: &mut [Option<String>]) {
     }
 }
 
-// cocoon's Firecracker lane names the device node itself; there is no virtio serial to match
+/// cocoon's Firecracker lane names the device node itself; there is no virtio serial to match.
 fn record_devices(ids: &[&str], found: &mut [Option<String>]) {
     for (slot, id) in found.iter_mut().zip(ids) {
         if slot.is_none() && id.starts_with("/dev/") && Path::new(id).exists() {
