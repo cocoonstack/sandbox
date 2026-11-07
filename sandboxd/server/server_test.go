@@ -1442,7 +1442,7 @@ func TestVolumeClaimUsesVolumeAndTemplateIntersections(t *testing.T) {
 		{
 			name:         "redirect target refuses missing promoted template before provisioning",
 			localVolumes: true, noRedirect: true, requirePromoted: true,
-			wantStatus: http.StatusBadRequest, wantPromoted: true,
+			wantStatus: http.StatusNotFound, wantPromoted: true,
 		},
 		{
 			name:          "promoted template refuses when no volume holder exists",
