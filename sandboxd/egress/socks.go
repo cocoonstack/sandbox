@@ -51,7 +51,8 @@ func (p *Proxy) ServeSOCKS(ctx context.Context, ln net.Listener) {
 func (p *Proxy) serveSocks(ctx context.Context, conn net.Conn) {
 	defer func() { _ = conn.Close() }()
 	defer p.hold()()
-	if !p.track(conn) {
+	scope := p.dropScope()
+	if !p.track(scope, conn) {
 		return
 	}
 	defer p.untrack(conn)
@@ -84,7 +85,7 @@ func (p *Proxy) serveSocks(ctx context.Context, conn net.Conn) {
 		return
 	}
 	defer func() { _ = upstream.Close() }()
-	if !p.track(upstream) {
+	if !p.track(scope, upstream) {
 		return
 	}
 	defer p.untrack(upstream)
