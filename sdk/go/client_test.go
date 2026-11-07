@@ -204,6 +204,24 @@ func TestAMovedSandboxRetriesAStreamCallAtItsNewOwner(t *testing.T) {
 	}
 }
 
+func TestARebindThatLosesTheRaceToAnotherCallStillRetries(t *testing.T) {
+	var sb *Sandbox
+	var adopter *httptest.Server
+	adopter = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/sandboxes/sb_9/owner" {
+			sb.mu.Lock()
+			sb.owner = addrOf(adopter)
+			sb.mu.Unlock()
+			_ = json.MarshalWrite(w, map[string]string{"owner_addr": addrOf(adopter)})
+		}
+	}))
+	t.Cleanup(adopter.Close)
+	sb = &Sandbox{ID: "sb_9", c: testClient(t, adopter), token: "tok9", owner: "127.0.0.1:1"}
+	if !sb.rebind(t.Context(), &ownerGoneError{err: errors.New("refused"), id: "sb_9", addr: "127.0.0.1:1"}) {
+		t.Error("a call that failed at the old owner was not retried after another call rebound the handle")
+	}
+}
+
 func TestAWriteToAGoneSandboxLooksItsOwnerUpOnce(t *testing.T) {
 	var lookups atomic.Int32
 	node := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
