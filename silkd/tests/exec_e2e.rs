@@ -12,7 +12,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 
 use common::{
     alive, assert_error, b64, connect_with, exchange, frames_until, next_frame, one, proc_entry,
-    roundtrip, send, stdout_body, type_of, wait_for_path,
+    request, roundtrip, send, stdout_body, type_of, wait_for_path,
 };
 
 async fn detached_pid(state: &Arc<State>, script: &str) -> u64 {
@@ -276,6 +276,40 @@ async fn exec_unknown_user_is_rejected() {
     let frames =
         roundtrip(r#"{"op":"exec","argv":["true"],"user":"definitely-not-a-user-xyz"}"#).await;
     assert_error(&frames[0], "bad_request");
+}
+
+#[tokio::test]
+#[ignore = "needs root"]
+async fn exec_as_a_user_keeps_its_supplementary_groups() {
+    let groups = std::fs::read_to_string("/etc/group").unwrap();
+    let Some(user) = groups
+        .lines()
+        .filter_map(|line| line.rsplit(':').next())
+        .find_map(|members| members.split(',').find(|u| !u.is_empty()))
+    else {
+        return;
+    };
+    let want = std::process::Command::new("id")
+        .args(["-G", user])
+        .output()
+        .unwrap();
+    let mut want: Vec<String> = String::from_utf8(want.stdout)
+        .unwrap()
+        .split_whitespace()
+        .map(str::to_owned)
+        .collect();
+    want.sort();
+    let frames = request(json!({"op":"exec","argv":["id","-G"],"user":user})).await;
+    let mut got: Vec<String> = stdout_body(&frames)
+        .split_whitespace()
+        .map(str::to_owned)
+        .collect();
+    got.sort();
+    assert!(
+        want.len() > 1,
+        "{user} has no supplementary group: {want:?}"
+    );
+    assert_eq!(got, want, "{frames:?}");
 }
 
 #[tokio::test]
