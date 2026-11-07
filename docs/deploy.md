@@ -53,11 +53,10 @@ v0.1.24 cannot read. Before going back to it, turn the flag off and restart,
 then send every missing entry again or release its claim, until no claim's
 `env_missing` is true. Each write stores the value in `claims.json` and in the
 row of an archived or hibernated claim. A running replicated claim's row takes
-it only at its next replica, up to two `replicate_seconds` intervals plus one
-replica's capture after the restart; to rewrite the row at once, hibernate the
-claim and send its entries again. A `claims.json` that still holds a missing
-entry stops v0.1.24 from starting, and a row that holds one cannot be adopted
-by it.
+it only at a later replica, with no fixed bound, so hibernate each such claim
+and send its entries again; a write that succeeds has rewritten its row. A
+`claims.json` that still holds a missing entry stops v0.1.24 from starting, and
+a row that holds one cannot be adopted by it.
 
 ## Configuration
 
