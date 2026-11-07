@@ -219,7 +219,7 @@ without `Stdin`, `WriteFile`, `OpenPty`, `Watch`, `DialPort`, `Lsp.Request`,
 `Logs`, `Attach`, and the file, git, process and session calls. `Run` with
 `Stdin` and `Push` stream the caller's reader, so they fail once and the next
 call reaches the new owner. An
-error from the caller's own writer is returned as it is and never retried, and a
+error from the caller's own writer is returned wrapped (match it with `errors.Is`) and never retried, and a
 released sandbox still answers 404.
 Volume sandboxes and egress-lane sandboxes cannot hibernate, fork, checkpoint,
 or promote, nor take `WithArchiveOnExpire`; each answers 409, as does a promote

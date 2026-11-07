@@ -74,9 +74,9 @@ On exit it removes every `sbx-*` VM on the cocoon root, a serving
 sandboxd's claims included, so run it only on a node that serves no claims.
 The daemon also reclaims every `sbx-` VM at start.
 
-Knobs (environment variables): `WARM`/`WARM_N` (warm-pool depth and burst
-size — the burst must stay within the depth, or refill loses the race and
-the tail measures clones), `CLONE_N`, `COLD_N`, `RPC_N`, `PULL_MB`,
+Knobs (environment variables): `WARM`/`WARM_N` (warm-pool depth and the
+number of back-to-back warm-tier claims, which must stay within the depth, or
+refill loses the race and the tail measures clones), `CLONE_N`, `COLD_N`, `RPC_N`, `PULL_MB`,
 `PULL_N`, `BURST_N` (concurrent clone-claim burst; 0 skips the stage),
 `ADDR`/`TOKEN` (the throwaway daemon's listen address and token).
 

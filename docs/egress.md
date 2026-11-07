@@ -158,7 +158,7 @@ proxy over the same vsock path. To stop it bypassing the proxy, sandboxd locks
 the NIC at claim — until then a warm VM of the pool, and the pool's golden
 build, sit on the bridge unlocked, running only the image's own services, never
 tenant code: an nftables netdev table (`sandbox_egress_<tap>`) with an
-ingress hook on the guest's tap drops every guest-initiated packet, so the guest's
+ingress hook on the guest's tap drops every packet the guest sends, so the guest's
 only egress is the audited vsock proxy. A locked guest therefore cannot renew a
 DHCP lease and loses its NIC address when the lease ends, which nothing on this
 lane needs. The

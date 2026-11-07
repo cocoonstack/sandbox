@@ -3,7 +3,7 @@
 A cluster is a set of sandboxd nodes joined through a
 [hashicorp/memberlist](https://github.com/hashicorp/memberlist) SWIM mesh.
 Gossip carries only placement hints — per-pool warm counts, promoted-template
-hashes, available volume names, each node's data-plane address, and a digest
+hashes, available volume names, each node's data-plane and client addresses, and a digest
 of the cluster-invariant config.
 Gossip carries no per-sandbox state, so a stale view costs at most
 one extra redirect, never correctness. A single node with no seeds is a valid
@@ -444,7 +444,7 @@ guest resumes on the source unless the target committed.
 
 **Counting.** The target admits the move like a new claim: drain,
 `disk_reserve`, `memory_limit`, node `max_claims` and `max_running`, the
-tenant's `max_claims` and `move_concurrency`, and holds a reservation from admission to its commit. A
+tenant's `max_claims`, and the node's `move_concurrency`, and holds a reservation from admission to its commit. A
 [cordon](sandboxd-api.md#post-v1cordon) refuses only new claims, so a cordoned target admits the move. The
 reservation counts in every cap but is no claim: listings, reaps and gossip
 never see it. At the commit the reservation becomes the claim under one lock,
