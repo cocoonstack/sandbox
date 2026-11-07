@@ -21,8 +21,6 @@ import (
 )
 
 const (
-	maxRecordBytes = 1 << 40
-
 	exportPrefix = store.ExportDir + "/"
 
 	// recordTrailer is written last, so EOF without it means the transfer stopped early.
@@ -132,8 +130,8 @@ func Untar(r io.Reader, dst string) error {
 				return fmt.Errorf("untar mkdir %s: %w", filepath.Dir(hdr.Name), err)
 			}
 			written += hdr.Size
-			if written > maxRecordBytes {
-				return fmt.Errorf("untar: record exceeds %d bytes", int64(maxRecordBytes))
+			if written > store.MaxRecordBytes {
+				return fmt.Errorf("untar: record exceeds %d bytes", int64(store.MaxRecordBytes))
 			}
 			if err := untarRegular(tr, hdr, target, sizes); err != nil {
 				return err
@@ -162,7 +160,7 @@ func untarRegular(r io.Reader, hdr *tar.Header, target string, sizes map[string]
 
 func createSparse(target, rawSize string, mode os.FileMode, sizes map[string]int64) error {
 	size, err := strconv.ParseInt(rawSize, 10, 64)
-	if err != nil || size < 0 || size > maxRecordBytes {
+	if err != nil || size < 0 || size > store.MaxRecordBytes {
 		return fmt.Errorf("untar: bad size %q for %s", rawSize, target)
 	}
 	f, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, cmp.Or(mode, os.FileMode(0o600))) //nolint:gosec // target resolved by safeJoin
