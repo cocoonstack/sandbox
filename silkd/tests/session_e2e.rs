@@ -153,6 +153,19 @@ async fn session_exit_code_propagates() {
 }
 
 #[tokio::test]
+async fn session_exit_code_survives_xtrace() {
+    let state = Arc::new(State::new());
+    let id = create(&state).await;
+
+    sh(&state, &id, &["set", "-xv"]).await;
+    let bad = sh(&state, &id, &["false"]).await;
+    assert_eq!(bad.last().unwrap()["code"], 1, "{bad:?}");
+    let next = sh(&state, &id, &["echo", "next-ok"]).await;
+    assert!(stdout_body(&next).contains("next-ok"), "{next:?}");
+    assert_eq!(next.last().unwrap()["code"], 0, "{next:?}");
+}
+
+#[tokio::test]
 async fn session_list_and_rm() {
     let state = Arc::new(State::new());
     let id = create(&state).await;

@@ -200,12 +200,13 @@ impl Io {
     ) -> io::Result<i32> {
         let body = cmd.trim_end();
         // the marker must be unforgeable: the shell runs untrusted code that could fake a sentinel.
-        let marker = format!("__SILK_{}__", sysutil::rand_token()?);
+        let token = sysutil::rand_token()?;
+        let marker = format!("__SILK_{token}__");
         self.cmd_buf.clear();
         // `{ …; } </dev/null` keeps cd/export in this shell and stops a stdin reader eating the printf.
         let _ = write!(
             self.cmd_buf,
-            "{{ {body} ; }} </dev/null\nprintf '{marker} %s\\n' \"$?\"\n"
+            "{{ {body} ; }} </dev/null\nprintf '__SILK_%s__ %s\\n' {token} \"$?\"\n"
         );
         self.stdin.write_all(self.cmd_buf.as_bytes()).await?;
         self.stdin.flush().await?;
