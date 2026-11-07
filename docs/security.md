@@ -52,9 +52,9 @@ exposing any part of a deployment beyond a single trusted host.
   file. That env stays in the node-local claim record, except in the
   `archive_failover` row ([assumption 4](#deployment-assumptions)). With
   [`host_env_memory_only`](deploy.md#configuration), `guest: false` values
-  stay in sandboxd's memory for running claims only: neither file nor row
-  holds one, and the control plane sends them again after a restart, wake or
-  adoption.
+  stay in sandboxd's memory: `claims.json` and the rows written with it on hold
+  none, and a hibernating claim drops them. The control plane sends them again
+  after a hibernate, a restart or an adoption.
 - **Sandbox identity.** Every clone is reseeded (entropy, machine-id), so
   branches and forks never share an identity with their source.
 

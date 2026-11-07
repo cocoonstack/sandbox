@@ -1088,13 +1088,13 @@ it reaches; on a cluster, send it to the claim's `owner_addr`.
 rules; `{"env": {}}` clears it. `PATCH` merges: each entry in the body is set,
 an entry of `null` removes that name, and every other entry is kept as stored,
 host-only values included, so a control plane that cannot read those values
-back never has to send them again:
+back sends them again only when the node reports them missing (below):
 
 ```json
 {"env": {"CB_META_wake": {"value": "w2"}, "OLD": null}}
 ```
 
-The claim rules apply to the merged env, so a patch that takes it past 64
+The size rules apply to the merged env, so a patch that takes it past 64
 entries or 64 KiB answers 400 and changes nothing. `GET` answers the same shape with every
 `guest: false` value blanked, so a control plane sees the names without the
 values:
@@ -1104,20 +1104,24 @@ values:
 ```
 
 An entry with `inject` comes back with its hosts, header or query, body flag and placeholder, value blanked.
-
-An entry the node holds no value for comes back with `"missing": true`, and
-the claim's index row carries `env_missing`. Under
-[`host_env_memory_only`](deploy.md#configuration) that happens after a
-restart, a wake from hibernate or the archive, and an adoption. A missing entry
-injects nothing, does not override the node's value, and routes no upstream;
-send it again with `PATCH` to clear it:
-
-```json
-{"env": {"GW_KEY": {"value": "", "guest": false, "missing": true}}}
-```
 An `inject` host the claim's pool does not intercept, or its tenant class does
 not allow, and a header the pool rule's own secret already sets on that host,
 answer 400 and store nothing.
+
+An entry the node holds no value for comes back with `"missing": true`, and
+the claim's index row carries `env_missing`. Under
+[`host_env_memory_only`](deploy.md#configuration) that happens when the claim
+hibernates, after a restart and after an adoption. A missing entry injects
+nothing and blocks the node's value for its secret; a missing upstream entry
+falls back to the class or pool upstream. Send it again once the claim runs:
+a `PATCH` replaces the entry whole, so repeat `guest` and `inject`:
+
+```json
+{"env": {"GW_KEY": {"value": "Bearer …", "guest": false, "inject": {"hosts": ["api.example.com"], "header": "Authorization"}}}}
+```
+
+A value sent to a hibernated claim stays in that node's memory until the
+claim hibernates again.
 
 The env is persisted with the claim, its `guest: false` values only without
 `host_env_memory_only`. A `guest: false` change takes effect on

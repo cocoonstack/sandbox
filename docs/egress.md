@@ -373,7 +373,7 @@ gateway key per user, while the guest holds a placeholder.
   `guest: true` entry never feeds a secret.
 - **Precedence.** The claim's entry wins over the node's value for that claim;
   a `missing` entry ([claim env](sandboxd-api.md#getputpatch-v1sandboxesidenv))
-  does not. Prefer claim entries for per-user credentials: a node value is
+  blocks the node's value until it is sent again. Prefer claim entries for per-user credentials: a node value is
   shared by every claim of the cell and long-lived. A secret with `value_env`
   needs that variable set on the node: unset or empty, it stops the daemon at
   start and a reload answers 400. A secret only claims supply omits `value_env`;
@@ -475,7 +475,7 @@ changed: resend it, and the resend replaces the row.
 - **Precedence.** The pool rule's own `secret` is set first and wins: a
   credential naming that header for a host the rule covers is a 400. Among
   credentials for the same header, the first by entry name whose placeholder
-  (if any) the request carries wins. An empty value injects nothing.
+  (if any) the request carries wins. A missing entry injects nothing.
 - **Echo.** Origins reflect the request URL: a redirect's `Location`, a
   paging link, an echoed query. On a request that carried a `query`
   credential, its value, as sent, query- or path-escaped, or with `/` written
