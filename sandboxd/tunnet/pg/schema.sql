@@ -5,6 +5,7 @@ CREATE TABLE IF NOT EXISTS sandboxd_tun_addrs (
     claim        text        NOT NULL,
     allocated_at timestamptz NOT NULL DEFAULT now(),
     released_at  timestamptz,
+    seen_at      timestamptz NOT NULL DEFAULT now(),
     PRIMARY KEY (cell, address)
 );
 CREATE UNIQUE INDEX IF NOT EXISTS sandboxd_tun_addrs_claim ON sandboxd_tun_addrs (cell, claim) WHERE released_at IS NULL;

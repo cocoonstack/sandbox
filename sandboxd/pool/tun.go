@@ -8,6 +8,7 @@ import (
 	"maps"
 	"net/netip"
 	"slices"
+	"time"
 
 	"github.com/projecteru2/core/log"
 
@@ -17,13 +18,23 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
-const tunPlanTries = 3
+const (
+	tunPlanTries = 3
+	// Every node confirms its claims hourly, so a day without one means no node holds the claim.
+	tunUnconfirmedAfter = 24 * time.Hour
+)
 
 var errTunRaced = errors.New("tun state changed since planned")
 
 // tunSeeder is a node-local address store that learns which addresses the loaded claims hold.
 type tunSeeder interface {
 	Seed(held map[string]netip.Addr)
+}
+
+// tunReconciler is a cell-shared address store that reports the addresses no node confirmed lately.
+type tunReconciler interface {
+	Confirm(ctx context.Context, claims []string) error
+	Unconfirmed(ctx context.Context, age time.Duration) (map[string]netip.Addr, error)
 }
 
 type tunState struct {
@@ -166,6 +177,45 @@ func (m *Manager) retryTunReleases(ctx context.Context) {
 		m.mu.Lock()
 		delete(m.tunReleases, id)
 		m.mu.Unlock()
+	}
+}
+
+func (m *Manager) reconcileTunAddrs(ctx context.Context) {
+	addrs, ok := m.tunAddrs.(tunReconciler)
+	if !ok {
+		return
+	}
+	logger := log.WithFunc("pool.reconcileTunAddrs")
+	var held []string
+	m.mu.Lock()
+	for id, sb := range m.claimed {
+		if sb.TunAddr.IsValid() {
+			held = append(held, id)
+		}
+	}
+	m.mu.Unlock()
+	if err := addrs.Confirm(ctx, held); err != nil {
+		logger.Warnf(ctx, "confirm overlay addresses: %v", err)
+		return
+	}
+	stale, err := addrs.Unconfirmed(ctx, tunUnconfirmedAfter)
+	if err != nil {
+		logger.Warnf(ctx, "list unconfirmed overlay addresses: %v", err)
+		return
+	}
+	for id, addr := range stale {
+		if m.archives != nil {
+			row, found, getErr := m.archives.Get(ctx, id)
+			if getErr != nil {
+				logger.Warnf(ctx, "look up archive row %s: %v", id, getErr)
+				return
+			}
+			if found && !row.Consumed {
+				continue
+			}
+		}
+		logger.Infof(ctx, "release overlay address %s of %s: no node confirmed it for %s", addr, id, tunUnconfirmedAfter)
+		m.releaseTun(ctx, id, addr)
 	}
 }
 

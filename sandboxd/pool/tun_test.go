@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"net/netip"
 	"os"
@@ -16,6 +17,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cocoonstack/sandbox/sandboxd/archives"
+	"github.com/cocoonstack/sandbox/sandboxd/archives/archivestest"
 	"github.com/cocoonstack/sandbox/sandboxd/config"
 	"github.com/cocoonstack/sandbox/sandboxd/egress"
 	"github.com/cocoonstack/sandbox/sandboxd/engine"
@@ -415,6 +418,27 @@ func TestATunFlowEndWritesOneAuditRecord(t *testing.T) {
 	}
 }
 
+func TestReconcileReleasesOnlyAnAddressNoClaimHolds(t *testing.T) {
+	addrs := &reconcilingAddrs{}
+	m := tunManager(t, newFakeEngine(), addrs, config.PoolSpec{PoolKey: testKey, Tun: true, Egress: anyPolicy})
+	sb := mustClaim(t, m, testKey)
+	reg := archivestest.NewMem()
+	if _, err := reg.Put(t.Context(), archives.Record{ID: "sb_archived", Owner: "gone", Checkpoint: "ck_1", Claim: []byte(`{}`)}); err != nil {
+		t.Fatalf("put archive row: %v", err)
+	}
+	m.archives = reg
+	orphan, archived := netip.MustParseAddr("240.0.0.200"), netip.MustParseAddr("240.0.0.201")
+	addrs.stale = map[string]netip.Addr{"sb_orphan": orphan, "sb_archived": archived}
+
+	m.reconcileTunAddrs(t.Context())
+	if !slices.Equal(addrs.confirmedList(), []string{sb.ID}) {
+		t.Errorf("confirmed %v, want only the held claim %s", addrs.confirmedList(), sb.ID)
+	}
+	if got := addrs.releasedList(); !slices.Equal(got, []string{"sb_orphan " + orphan.String()}) {
+		t.Errorf("released %v, want only the orphan", got)
+	}
+}
+
 func tunManager(t *testing.T, eng *fakeEngine, addrs tunnet.Addresses, pools ...config.PoolSpec) *Manager {
 	t.Helper()
 	eng.sockRoot = outboundtest.SockRoot(t)
@@ -539,6 +563,31 @@ func (f *fakeAddrs) releasedList() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return slices.Clone(f.released)
+}
+
+type reconcilingAddrs struct {
+	fakeAddrs
+	stale     map[string]netip.Addr
+	confirmed []string
+}
+
+func (r *reconcilingAddrs) Confirm(_ context.Context, claims []string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.confirmed = append(r.confirmed, claims...)
+	return nil
+}
+
+func (r *reconcilingAddrs) Unconfirmed(context.Context, time.Duration) (map[string]netip.Addr, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return maps.Clone(r.stale), nil
+}
+
+func (r *reconcilingAddrs) confirmedList() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return slices.Clone(r.confirmed)
 }
 
 type fakeUnderlay struct{}

@@ -564,6 +564,7 @@ func (m *Manager) Run(ctx context.Context) {
 				go m.sweepStaleMoves(ctx, time.Now())
 			}
 			go m.retryTunReleases(ctx)
+			go m.reconcileTunAddrs(ctx)
 		}
 	}
 }

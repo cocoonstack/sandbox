@@ -117,6 +117,38 @@ func TestADownDatabaseFailsClosed(t *testing.T) {
 	}
 }
 
+func TestOnlyAnAddressNoNodeConfirmsGoesUnconfirmed(t *testing.T) {
+	s := open(t, metastoretest.PGSchema(t), "c1", time.Hour)
+	ctx := t.Context()
+	held, err := s.Assign(ctx, "sb_held")
+	if err != nil {
+		t.Fatalf("assign held: %v", err)
+	}
+	orphan, err := s.Assign(ctx, "sb_orphan")
+	if err != nil {
+		t.Fatalf("assign orphan: %v", err)
+	}
+	if _, err = s.pool.Exec(ctx, `UPDATE sandboxd_tun_addrs SET seen_at = now() - interval '2 days' WHERE cell = 'c1'`); err != nil {
+		t.Fatalf("age the rows: %v", err)
+	}
+	if err = s.Confirm(ctx, []string{"sb_held"}); err != nil {
+		t.Fatalf("confirm: %v", err)
+	}
+	stale, err := s.Unconfirmed(ctx, 24*time.Hour)
+	if err != nil {
+		t.Fatalf("unconfirmed: %v", err)
+	}
+	if len(stale) != 1 || stale["sb_orphan"] != orphan {
+		t.Errorf("unconfirmed %v, want only sb_orphan at %s (sb_held holds %s)", stale, orphan, held)
+	}
+	if err = s.Release(ctx, "sb_orphan", orphan); err != nil {
+		t.Fatalf("release: %v", err)
+	}
+	if stale, err = s.Unconfirmed(ctx, 24*time.Hour); err != nil || len(stale) != 0 {
+		t.Errorf("unconfirmed after the release %v %v, want none", stale, err)
+	}
+}
+
 func open(t *testing.T, dsn, cell string, reuse time.Duration) *Store {
 	t.Helper()
 	s, err := Open(t.Context(), dsn, cell, netip.MustParsePrefix("240.0.0.0/4"), reuse)
