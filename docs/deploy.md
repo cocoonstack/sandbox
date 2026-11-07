@@ -48,7 +48,9 @@ prefix stay in the bucket until you delete them.
 From v0.1.25, `sandboxd_tun_addrs` has a `seen_at` column. A cell that ran a
 mesh with `tun` on v0.1.24 adds it before the first v0.1.25 node starts:
 `ALTER TABLE sandboxd_tun_addrs ADD COLUMN seen_at timestamptz NOT NULL DEFAULT now();`
-Without it every tun claim of the cell runs without an overlay address.
+Without it every new tun claim of the cell runs without an overlay address.
+Finish the cell's upgrade within a day: a v0.1.24 node never stamps
+`seen_at`, so a v0.1.25 node releases its claims' addresses after a day.
 
 From v0.1.25, a claim env write refuses a `guest: false` entry with an empty
 value, so sending back a `GET` env reply answers 400; send each entry with its
@@ -1080,10 +1082,11 @@ one set per `meta_store.cell`.
   CREATE UNIQUE INDEX IF NOT EXISTS sandboxd_tun_addrs_claim ON sandboxd_tun_addrs (cell, claim) WHERE released_at IS NULL;
   ```
 - **Reconcile:** every node stamps `seen_at` on the addresses of the claims it
-  holds once an hour, and any node releases an address no node stamped for a
-  day unless an unconsumed [archive row](#shared-archive-registry) names its
-  claim, so an address a crash or a lost release left behind returns to the
-  pool after its reuse window.
+  holds once an hour, reserving again one released while it still held it, and
+  logs a held address another claim took. Any node releases an address neither
+  stamped nor allocated for a day unless an unconsumed
+  [archive row](#shared-archive-registry) names its claim, so an address a crash
+  or a lost release left behind returns to the pool after its reuse window.
 
 ### Reloading the config
 

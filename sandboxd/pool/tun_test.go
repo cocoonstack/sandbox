@@ -571,11 +571,11 @@ type reconcilingAddrs struct {
 	confirmed []string
 }
 
-func (r *reconcilingAddrs) Confirm(_ context.Context, claims []string) error {
+func (r *reconcilingAddrs) Confirm(_ context.Context, held map[string]netip.Addr) ([]string, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.confirmed = append(r.confirmed, claims...)
-	return nil
+	r.confirmed = append(r.confirmed, slices.Sorted(maps.Keys(held))...)
+	return nil, nil
 }
 
 func (r *reconcilingAddrs) Unconfirmed(context.Context, time.Duration) (map[string]netip.Addr, error) {
