@@ -69,8 +69,12 @@ all of them.
    TLS-terminating proxy ([deploy](deploy.md#preview-urls)). Never expose
    `listen` itself publicly.
 2. **One sandboxd per host** ([why](egress.md#deployment-constraints)).
-3. **Set `mesh.cluster_key` unless the gossip network is itself trusted**,
-   and open the memberlist port node-to-node only.
+3. **A cell is the boundary of a host compromise.** Every node of a
+   [cell](cluster.md#cells) holds the cell's credentials, so host root on one
+   node reaches every claim, checkpoint and template of its cell. Cells share
+   no credential, database, store or network path ([cells](#cells)). Set
+   `mesh.cluster_key` unless the gossip network is itself trusted, and open
+   the memberlist port to the cell's nodes only.
 4. **Treat the checkpoint store like backups.** A checkpoint, an archive and
    a replica each embed full guest memory, including any secret the workload
    held at capture. Restrict store access; use S3 server-side encryption or
@@ -81,13 +85,61 @@ all of them.
    cannot see through an operator-specific translator prefix
    ([egress](egress.md#deployment-constraints)).
 
+## Cells
+
+A host compromise on one node is bounded to its cell, and operators can cut a
+node off without its cooperation. Both hold only when the deployment meets
+this contract.
+
+**Per cell**, each with its own permissions, not only its own name:
+
+- a PostgreSQL database and role that cannot reach another cell's database;
+- a store credential that the store's policy limits to the cell's bucket or
+  prefix;
+- a cloud identity that cannot read another cell's secrets or change IAM,
+  network or firewall rules;
+- its own `api_token`, `mesh.cluster_key`, `preview_secret` and egress root;
+- its own tenant tokens: the control plane never gives one tenant token to
+  two cells;
+- on `tun` pools, its own exit, with its own netns, FDB and neighbor table,
+  admitting only the cell's nodes. A separate VNI is not enough: host root can
+  send any VNI.
+
+**Per node**, recommended: its own PostgreSQL role and store key with the
+cell's grants, so one node can be cut off without a restart of the rest.
+
+**Ingress**: the control, preview and mesh ports, PostgreSQL and the store
+admit only the cell's node addresses, plus the control plane where it calls
+in. The backends refuse the cell's credentials from anywhere else.
+
+**Anti-spoofing** outside the host: VPC rules on a cloud; port security or
+routed ports on bare metal.
+
+[Cutting off a node](deploy.md#cutting-off-a-node),
+[rotating a cell's credentials](deploy.md#rotating-a-cells-credentials) and
+[recovering a cell](deploy.md#recovering-a-cell) are in the runbook.
+
+Check the boundary when a cell is built and after each change to it:
+
+- cell A's credentials reach none of cell B's control API, previews,
+  database, store or cloud resources;
+- a cutoff ends established and new access within the measured bound,
+  without the node's help;
+- credentials copied off a host do not work from outside the cell;
+- a node of cell A cannot inject into or draw traffic from cell B's overlay;
+- cell B's guests do not trust a certificate issued under cell A's egress
+  root;
+- a rotation drill follows the restart requirements.
+
 ## Token model
 
 Three credentials in descending scope: the root `api_token`, tenant tokens
 (isolated at the API layer) and per-sandbox tokens (that sandbox only, nothing
 node-level); what each may call is in the
-[API reference](sandboxd-api.md#sandboxd-http-api). A preview URL is a
-capability on top, HMAC-signed with no revocation list. A checkpoint branches
+[API reference](sandboxd-api.md#sandboxd-http-api). The root and tenant tokens
+are valid on every node of their [cell](#cells) and nowhere else. A preview URL
+is a capability on top, HMAC-signed with the cell's `preview_secret` and no
+revocation list. A checkpoint branches
 only for its own tenant, and a delete does not remove it fleet-wide the
 instant it runs
 ([why](cluster.md#delete-is-eventual-not-a-fleet-wide-revocation)).

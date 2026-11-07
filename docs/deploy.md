@@ -107,14 +107,14 @@ the intersection of the two.
 | `egress_conn_rate` | unset | caps the new upstream connections each claim's proxy opens: `{"per_second": 30, "burst": 600}`, a token bucket per claim; a reused keep-alive connection and a connection to an internal IP address (the SSRF guard decides those) cost nothing, while a host name costs a token even when it resolves to one `egress_internal_allow` re-admits. A connection past it gets 429 (SOCKS5: not allowed) and an audit `decision` of `rate_limited`. A claim's bucket starts full at its first connection, and again when a reload changes `per_second` or `burst`. Unset leaves the rate unlimited |
 | `egress_usage_bytes` | `false` | append an `egress_bytes` usage event with the payload bytes of every allowed egress tunnel or request when it ends, and with the IP bytes of every allowed flow of the [advanced network mode](advanced-network.md); one extra usage-journal write per connection or flow |
 | `tun` | absent | turns on the [advanced network mode](advanced-network.md#configuration): the overlay subnet, the VXLAN socket, the exits and per-claim limits |
-| `egress_ca` | unset | [HTTPS-interception](egress.md#https-interception) PKI: `root_cert` (the cluster root baked into intercepted guests; may bundle old+new roots during rotation) plus this node's `intermediate_cert`/`intermediate_key` from `sandboxd ca issue-intermediate`. Required when any pool rule sets `intercept` |
-| `api_token` | unset | the operator (root) credential: when set, guards the node-level endpoints (Bearer) with full access, including release-by-id cleanup. Per-sandbox tokens guard ordinary sandbox-scoped calls |
-| `meta_store` | unset | `{"kind": "pg", "dsn_env": "SANDBOXD_PG_DSN"}`: keep the tenant set in one shared PostgreSQL instead of each node's `tenants.json` (see [shared tenant database](#shared-tenant-database)). `dsn_env` names the node env holding the connection string. An optional `cell` also keeps the API-applied pool set there, one per cell, instead of in each node's `pools.json` (see [shared pool set](#shared-pool-set)); without it pool targets stay per node. An optional `usage: true` also lands this node's usage journal in one shared table and serves [`GET /v1/usage`](sandboxd-api.md#get-v1usage) from it (see [shared usage table](#shared-usage-table)). Needs `api_token`. Restart only |
+| `egress_ca` | unset | [HTTPS-interception](egress.md#https-interception) PKI: `root_cert` (the cell's root baked into intercepted guests; may bundle old+new roots during rotation) plus this node's `intermediate_cert`/`intermediate_key` from `sandboxd ca issue-intermediate`. Required when any pool rule sets `intercept` |
+| `api_token` | unset | the operator (root) credential: when set, guards the node-level endpoints (Bearer) with full access, including release-by-id cleanup. Per-sandbox tokens guard ordinary sandbox-scoped calls. Shared within a [cell](cluster.md#cells); restart only |
+| `meta_store` | unset | `{"kind": "pg", "dsn_env": "SANDBOXD_PG_DSN"}`: keep the tenant set in the [cell's](cluster.md#cells) PostgreSQL database instead of each node's `tenants.json` (see [shared tenant database](#shared-tenant-database)). `dsn_env` names the node env holding the connection string. An optional `cell` also keeps the API-applied pool set there, one per cell, instead of in each node's `pools.json` (see [shared pool set](#shared-pool-set)); without it pool targets stay per node. An optional `usage: true` also lands this node's usage journal in one shared table and serves [`GET /v1/usage`](sandboxd-api.md#get-v1usage) from it (see [shared usage table](#shared-usage-table)). Needs `api_token`. Restart only |
 | `max_fork_count` | 16 | children a single `fork` may create; each is a full-RAM VM, so this bounds one request's memory blast radius to the node's capacity |
 | `refill_concurrency` | 0 (auto) | concurrent VM provisioning budget, shared by warm-pool refills, fork clones, and the reap/hibernate/reconcile engine batches; the batches never take the last quarter of it (at least one slot), so a mass expiry or idle sweep cannot stop refills. 0 sizes it from the node: `NumCPU*2/3` clamped to [4, 256] — a 384-core node gets 256; small nodes keep a floor of 4 |
 | `release_delay_seconds` | 0 | seconds a released VM waits in the removal queue before `cocoon vm rm`. The claim is dropped and journaled and its egress listener closed at release; the VM removal, the volume hold release and the egress tap unlock run on the first reap tick (5 s) after the delay, on the `refill_concurrency` budget like every other batch teardown, so a burst of releases does not compete with the claims still running. Until then the VM holds its memory and its volume reservations without counting as a claim. 0 removes inline |
 | `preview_listen` | (off) | address for a preview HTTP server that serves guest ports under signed URLs; needs `preview_secret` |
-| `preview_secret` | — | cluster-shared HMAC secret signing preview tokens (all nodes share one) |
+| `preview_secret` | — | HMAC secret signing preview tokens, shared within a [cell](cluster.md#cells). Restart only |
 | `preview_advertise` | = `preview_listen` | the browser-facing preview base URL, minted into every preview URL, so it must name a routable host (a wildcard `preview_listen` needs it set explicitly); nodes behind one TLS proxy may share it, while signed tokens route internally through each owner's `advertise_addr` |
 | `checkpoint_dir` | `<data_dir>/checkpoints` | where checkpoints and promoted templates live. Point it at a shared FUSE mount (JuiceFS over object storage, NFS) and every node sharing the mount can branch every checkpoint — records are generation-addressed with `meta.json` as the atomic commit pointer, so no cross-node locking is required of the filesystem. A re-publish retains its superseded export generation for at least ~1h and until a following hourly sweep so an in-flight clone that resolved the old metadata can finish; budget the current generation plus every generation retained across that grace-and-sweep window. An explicit delete can make a concurrent clone fail visibly. One contract on any shared root (mount or bucket): a template key has a single writer — promotes go to the sandbox's owner node, and operators must not race promotes of one name from different nodes (checkpoint ids are node-generated and never collide). Abandoned staging (`*.tmp`) is removed only once it is older than an hour, at startup and on the hourly generation sweep, so a publish in flight on another node of a shared root survives; the `meta.json` commit pointer is fsynced with its directory |
 | `checkpoint_store` | dir | checkpoint AND promoted-template backend (both live in one store root, id-namespaced ck_/tp_): `{"kind": "s3", "s3": {"bucket": "…", "prefix": "ck/", "endpoint": "…", "region": "…", "force_path_style": true}}` stores checkpoints in object storage (any node claims any checkpoint, no shared mount needed). Credentials come from the standard AWS chain (env/IAM role), never this file. Holes and all-zero chunks are never uploaded, and a fetch recreates the file at its full size and writes only the present chunks, so a mostly-empty disk costs its data, not its size, on the wire and on the fetching node. Consecutive captures of one claim upload only the chunks that changed (the first capture after a wake uploads everything again when no other live record of that claim remains, because the wake deletes the record it restored from). sandboxd never deletes a chunk or a manifest from the bucket; [Reclaiming S3 storage](#reclaiming-s3-storage) has the key layout and the operator's job. A publish or fetch is aborted after 30 minutes. Each publish in flight holds up to (`upload_concurrency` + `publish_concurrency`) × 16 MiB of chunk buffers, 192 MiB at the defaults ([S3 transfer concurrency](#s3-transfer-concurrency)), and sandboxd does not cap concurrent checkpoints or promotes, so the layer above it limits how many a tenant starts. Do not put an expiry lifecycle rule on the prefix: it would delete chunks a live record still names. Budget storage for every generation and chunk until your reclaim runs. When caching a new generation, each node prunes other cached generations of that record unused for at least an hour. The periodic generation sweep drops a node's cache of a record once the record is gone from the bucket and the cache is unused for at least an hour. Absent = the dir backend at `checkpoint_dir` |
@@ -476,7 +476,7 @@ here validates on load:
   },
 
   "preview_listen": ":8443",
-  "preview_secret": "cluster-shared-hmac-secret",
+  "preview_secret": "cell-shared-hmac-secret",
   "preview_advertise": "https://preview.example.com",
 
   "checkpoint_store": {
@@ -513,7 +513,7 @@ here validates on load:
 Secret values come from the environment named by `value_env` (here
 `GH_TOKEN`), never the file. The `egress_ca` files are provisioned with
 `sandboxd ca` — see [Guarded egress](egress.md#https-interception). On a
-cluster, some of these must match on every node: see
+cluster, some of these must match on every node of a cell: see
 [cluster-invariant config](cluster.md#cluster-invariant-config).
 
 ### High-density no-network pools
@@ -585,7 +585,8 @@ A root `api_token` for operators, tenant tokens added through the
 [tenant API](sandboxd-api.md#tenants-v1tenants) and kept in
 `<data_dir>/tenants.json` (or the [shared tenant database](#shared-tenant-database)),
 and one token per sandbox. What each may call is in the
-[API reference](sandboxd-api.md#sandboxd-http-api).
+[API reference](sandboxd-api.md#sandboxd-http-api). The root and tenant tokens
+are shared within a [cell](cluster.md#cells); never reuse one in another cell.
 
 ## Running
 
@@ -711,6 +712,72 @@ expire), then stop sandboxd; with `archive_failover`, `?evacuate=1` moves the
 claims to the peers instead (see [evacuating a node](cluster.md#evacuating-a-node)).
 To keep a node out of service across restarts, [cordon](sandboxd-api.md#post-v1cordon)
 it. The [admission table](cluster.md#node-admission) compares the states.
+
+### Cutting off a node
+
+When a node may be compromised, cut it off from the outside; it does not have
+to cooperate. The [cell contract](security.md#cells) makes this possible: every
+backend and port admits only the cell's node addresses.
+
+1. On every host the node reaches (the cell's other nodes, the database, the
+   store endpoint, the `tun` exit), drop its address ahead of the rule that
+   accepts established connections, then delete its connection-tracking
+   entries (`conntrack -D -s <addr>`). A rule that only blocks new
+   connections leaves the open ones working.
+2. In PostgreSQL, end its sessions:
+   `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE client_addr = '<addr>'`.
+   With a role per node, also `ALTER ROLE <role> NOLOGIN`.
+3. Disable its store key. With one key for the whole cell, rotate it instead.
+
+The cutoff is done when:
+
+- the drop rules count packets from the address;
+- no host shows an established connection to it (`ss -tn dst <addr>`);
+- no database session from it remains;
+- it is missing from [`GET /v1/peers`](sandboxd-api.md#get-v1peers) on every
+  remaining node.
+
+For example, on a two-node test cell with the drop in an nft input chain at
+priority -200, the node left `/v1/peers` after 6.6 s, the drop counter had
+counted 40 packets, and no established flow to it remained. The bound grows
+with cell size, because memberlist's suspicion timeout scales with log N, so
+measure it for your cell. Keep the drop until the host is rebuilt: with the
+drop lifted, the same node rejoined in 1.0 s.
+
+Credentials copied off the host do not work from elsewhere, because the
+backends admit the cell's addresses only. Rotate the cell's shared secrets
+next.
+
+### Rotating a cell's credentials
+
+`api_token`, `mesh.cluster_key`, `preview_secret`, `meta_store` (and its DSN),
+`checkpoint_store` and `egress_ca` change only at a restart. Nodes on old and
+new shared secrets cannot work together: peer calls answer 401, gossip splits,
+and a preview URL signed on one fails on the other. Write the new values to
+every node of the cell, then restart all of them at once. Preview URLs signed
+before the rotation stop working.
+
+- Store keys from sandboxd's environment change only at the restart;
+  credentials from an instance role refresh by themselves.
+- Tenant tokens change through the [tenant API](sandboxd-api.md#tenants-v1tenants),
+  with no restart.
+
+The egress root is the exception: a restart does not update the trust store of
+a guest that already exists. Follow the
+[root rotation procedure](egress.md#https-interception): bundle the roots while
+keeping the old intermediate, drain or recreate every old-root guest,
+checkpoint, archive and promoted template, then switch to the new intermediate.
+Replacing only an intermediate under the same root needs no drain.
+
+### Recovering a cell
+
+Treat the whole cell as compromised, not only the node that was cut off.
+
+- Rebuild its hosts from clean images and give the cell new credentials.
+- Re-promote operator templates from a source outside the cell, never from the
+  cell's store.
+- Do not trust the cell's checkpoints, archives or templates automatically;
+  the tenant decides whether to restore its data.
 
 ### Disabling archive failover
 
@@ -1007,7 +1074,11 @@ all at once or not at all. Every field falls into one of three classes:
   them as `ignored`. A pool key new in the file gets its settings at once and stays
   at no warm VMs until `PUT /v1/pools` names it.
 - **Restart only**: every other field. A reload that changes one is refused
-  with the field names, and nothing applies.
+  with the field names, and nothing applies. A cell's shared credentials are
+  all in this class:
+  `api_token`, `mesh` (with `cluster_key`), `preview_secret`, `meta_store`,
+  `checkpoint_store` and `egress_ca`. See
+  [rotating a cell's credentials](#rotating-a-cells-credentials).
 
 Effects on what already runs:
 

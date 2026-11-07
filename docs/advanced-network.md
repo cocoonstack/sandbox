@@ -210,7 +210,7 @@ The node's `tun` block turns the mode on; a pool opts in with `"tun": true`
 
 | key | default | meaning |
 |---|---|---|
-| `subnet` | required | the overlay addresses, `/4` to `/24`, outside `100.64.0.0/30`; every node of a cell sets the same one; a change needs a restart, and claims that still hold an old address keep it until released, so drain tun claims first |
+| `subnet` | required | the overlay addresses, `/4` to `/24`, outside `100.64.0.0/30`; every node of a `meta_store.cell` partition sets the same one; different partitions need non-overlapping subnets or separate overlays ([cells](cluster.md#cells)); a change needs a restart, and claims that still hold an old address keep it until released, so drain tun claims first |
 | `listen` | required | the node's VXLAN socket, a specific IPv4 `ip:port`; the exits send to it |
 | `vni` | `1` | the VXLAN network identifier |
 | `port` | `4789` | the exits' VXLAN port |

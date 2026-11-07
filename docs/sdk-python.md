@@ -78,7 +78,7 @@ client = Client("10.0.0.5:7777", api_token="...", timeout=120.0)
 
 `api_token` is the node token — a root `api_token` (full access) or a
 tenant token (resource-creating verbs only; operator surfaces answer it
-403). On a cluster every node shares the root token and the same tenants
+403). Every node of a cell shares the root token and the same tenants
 set. `timeout` bounds every control-plane request and the data-plane dial
 and upgrade; a guest stream then lives until the guest ends it. Unlike the
 Go SDK, where a canceled context closes any call, only `run`/`exec` take a

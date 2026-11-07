@@ -9,6 +9,28 @@ Gossip carries no per-sandbox state, so a stale view costs at most
 one extra redirect, never correctness. A single node with no seeds is a valid
 mesh of one.
 
+## Cells
+
+A cell is one mesh and the backends its nodes share: one PostgreSQL database
+for `meta_store`, one checkpoint store location, and one set of secrets
+(`api_token`, `mesh.cluster_key`, `preview_secret`, the egress root). Every
+node of a cell holds the cell's credentials, so a host compromise on one node
+reaches its whole cell. A cell that shares nothing with another bounds that
+compromise; [security](security.md#cells) has the contract.
+
+- `sandboxd_tenants` has no cell column, so each cell needs its own database.
+- `meta_store.cell` partitions the shared rows inside that database: the pool
+  set, archives, moves, node leases, `tun` addresses and usage. Adoption and
+  moves see only the rows of their own name, so the name is also their scope,
+  for example a group of CPU-compatible nodes whose snapshots restore on each
+  other. It is not the security boundary: one cell may hold several names.
+  Where these docs speak of a cell's shared rows, they mean this partition.
+- Nodes sharing a `tun.subnet` and exit must use the same `meta_store.cell`:
+  address uniqueness is per partition. Different names need non-overlapping
+  subnets or separate overlays.
+- Cell size is the operator's knob: a smaller cell loses less to one
+  compromised host. [Scale](#scale) sets the upper bound.
+
 ## Joining
 
 Give every node a `mesh` block:
@@ -35,8 +57,8 @@ Give every node a `mesh` block:
   all members must share it. Required by `archive_failover`,
   `checkpoint_peer_heal` and live moves
 
-Two constraints, fine for a homogeneous cluster: all nodes share the same
-`api_token` and tenant set (the SDK replays whichever token authorized a
+Two constraints, fine for a homogeneous cluster: all nodes of a cell share the
+same `api_token` and tenant set (the SDK replays whichever token authorized a
 call across a redirect; a peer missing that tenant answers 401), and only
 egress-capable nodes redirect egress claims.
 
@@ -733,10 +755,10 @@ by pool key at boot.
 
 With [`meta_store.cell`](deploy.md#shared-pool-set), the set belongs to the
 node's cell: one `PUT /v1/pools` on any node of the cell reaches every node in
-it, and no fan-out is needed; every node of the cell runs the same targets. This
-pool cell is only a name for nodes that share one pool set in the database. It
-is not a mesh cell (see [scale](#scale)): a pool cell may cover part of a mesh
-or nodes of several meshes, and gossip, redirects and heals ignore it.
+it, and no fan-out is needed; every node of the cell runs the same targets. The
+`meta_store.cell` name partitions the database's shared rows, not the
+[cell](#cells): it may cover all or part of a cell's nodes, and gossip,
+redirects and heals ignore it.
 
 Without it, cluster-wide pool changes are a client-side fan-out, not a gossiped desired
 state (pools are legitimately heterogeneous per node): `Client.SetPoolsCluster`
@@ -801,16 +823,17 @@ one PostgreSQL table that every node reads, so one tenant per end user works:
 
 ### Cluster-invariant config
 
-Some config must match on every node or the cluster fails in confusing ways:
+Some config must match on every node of a cell or the cell fails in confusing
+ways:
 
 | config | what breaks on mismatch |
 |---|---|
 | `api_token`, the tenant set | the SDK replays the authorizing token across a redirect; a mid-rotation peer missing that tenant/token answers 401, which the SDK treats as transient — the claim falls back to the origin node (which already authorized it) and resolves there |
 | `preview_secret` | a preview URL signed on one node fails verification on another |
 | `mesh.cluster_key` | nodes cannot join / decrypt gossip at all |
-| `egress_ca` cluster root | a guest checkpointed/redirected across nodes trusts the root; a divergent root fails interception |
+| `egress_ca` root | a guest checkpointed/redirected across nodes trusts the cell's root; a divergent root fails interception |
 | egress: `egress_classes`, each pool's `egress` and `egress_upstream_env`, `secrets` names, headers and `value_env`, `egress_internal_allow`, `egress_upstream` | a claim or tenant redirected to a divergent node reaches different hosts, and its [claim credentials](egress.md#claim-credentials) are refused or not injected there |
-| `tun.subnet` | every node of a cell draws overlay addresses from one shared table, and a claim keeps its address across a move or an adoption, so a node with another subnet serves claims outside it (see [advanced network mode](advanced-network.md#configuration)). Not part of the gossiped digest below |
+| `tun.subnet` | every node of a `meta_store.cell` partition draws overlay addresses from that partition, and a claim keeps its address across a move or an adoption, so a node with another subnet serves claims outside it (see [advanced network mode](advanced-network.md#configuration)). Not part of the gossiped digest below |
 | `checkpoint_ttl_hours` | a healed replica a delete broadcast missed ages out at a different time on each node, and nodes report a digest mismatch until every node has reloaded the same value |
 | the engine root path (cocoon's `root_dir`) | a checkpoint or template export pins the base image blobs' absolute path under the root that captured it; a node whose root sits at another path refuses to clone a record it healed or pulled (`untrusted storage path in snapshot metadata`) — the heal succeeds, the branch fails. Not part of the gossiped digest below |
 
@@ -843,11 +866,9 @@ nodes), so a change takes minutes to reach every node while warm counts move
 with every claim.
 
 - **Size one mesh in the hundreds of nodes.** Split a larger fleet into
-  independent meshes (cells), each with its own `mesh.join`, and route users
-  to a cell in front of them. Redirects, heals and template lookups stay
-  inside the cell. A mesh cell is not configured by `meta_store.cell`, which
-  only names the nodes that share a pool set (see
-  [state ownership](#state-ownership)).
+  independent [cells](#cells), each with its own `mesh.join`, database and
+  credentials, and route users to a cell in front of them. Redirects, heals
+  and template lookups stay inside the cell.
 - **Keep per-user data out of the gossip.** A promoted template is gossiped by
   every node that holds it, so templates belong to pools or tenants, not to
   end users. At 500 templates per node the state reaches the 20 MiB limit near
@@ -862,13 +883,13 @@ with every claim.
   never a wildcard)
 - the same engine root path (cocoon's `root_dir`) on every node; it is not in
   the digest, so a mismatch shows only at the first cross-node branch
-- same `api_token`, tenant set, `preview_secret`, and `egress_ca` root everywhere
-  (a mismatch warns and shows in `sandboxd_config_digest_mismatch`; only with
-  `cluster_key` set does that cover `api_token`, `preview_secret` and tenant
-  tokens)
-- with `meta_store`, every node's DSN points at the same database: the tenant
-  set is not in the gossiped digest, so nodes on different databases serve
-  diverging tenants without a warning
+- same `api_token`, tenant set, `preview_secret`, and `egress_ca` root on every
+  node of the cell, and different ones in every other cell (a mismatch warns
+  and shows in `sandboxd_config_digest_mismatch`; only with `cluster_key` set
+  does that cover `api_token`, `preview_secret` and tenant tokens)
+- with `meta_store`, every node of a cell points at the cell's database, and no
+  other cell uses it: the tenant set is not in the gossiped digest, so nodes on
+  different databases serve diverging tenants without a warning
 - `cluster_key` set if the gossip network is not otherwise trusted
 - one mesh sized in the hundreds of nodes, and promoted templates per pool or
   tenant rather than per end user (see [scale](#scale))
