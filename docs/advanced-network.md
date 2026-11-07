@@ -69,8 +69,7 @@ answers.
 | 10 | 2 | flags | 0 | bit 0 `ON`: packet mode is on for this box |
 
 Flag bits 1 to 15 are reserved and sent as 0; a peer ignores a bit it does
-not know. A later revision uses one to open several streams per guest, one
-per `tun0` queue.
+not know.
 
 A host that answers without `ON` closes the stream after the hello; the guest
 removes `tun0`. A host that refuses a guest answers without `ON` rather than
@@ -129,7 +128,7 @@ guest -> tun0 -> silkd --vsock 2051--> sandboxd --VXLAN--> exit (vxlan0, forward
   disk write on the claim path; each release is appended to
   `<data_dir>/tun-freed.log` so its reuse window outlives a restart. A node
   with a `mesh` must have `meta_store.cell` and allocates it in the cell's
-  [table](deploy.md#shared-tun-address-table), one round trip per claim, and stays off (proxy mode only) while the
+  [table](deploy.md#shared-tun-address-table), one round trip per candidate address, and stays off (proxy mode only) while the
   meta store is unreachable. A freed address is reused after
   `tun.reuse_after_seconds`, so the subnet's size over that window bounds the
   sustained claim rate: a `/8` with the 5-day default carries about 38 new tun
@@ -139,8 +138,8 @@ guest -> tun0 -> silkd --vsock 2051--> sandboxd --VXLAN--> exit (vxlan0, forward
   whatever the guest wrote; a GSO frame is cut into wire-sized packets with
   full checksums; each gets an Ethernet header (claim MAC to the exit's MAC)
   and a VXLAN header and leaves for the exit picked by the claim's profile
-  label (`default` when it has none). The outer source port follows a hash of
-  the inner 5-tuple.
+  label (`default` when it has none). The outer source port is one of `senders`
+  sockets, picked by a hash of the protocol, the ports and the inner destination.
 - **Inbound**: a VXLAN packet from an exit's VTEP whose inner destination is
   a claim on this node goes back to `100.64.0.2` and onto that claim's stream;
   anything else is dropped. Inbound passes only for a flow the claim opened,
@@ -152,7 +151,7 @@ guest -> tun0 -> silkd --vsock 2051--> sandboxd --VXLAN--> exit (vxlan0, forward
   and port-unreachable reach the guest's socket.
 - **ARP**: sandboxd answers ARP from the exits for its own claims only,
   announces a claim with a gratuitous ARP when it is armed (claim, wake,
-  move-in), after a reload of `tun.exits` and every 45 seconds, and never
+  move-in), after every config reload and every 45 seconds, and never
   forwards a frame the guest built.
 - **Policy**: a flow table keyed by 5-tuple; the first packet of a flow is
   judged by `EvalFlow` (bare `host: "*"` rules only) and the internal-address

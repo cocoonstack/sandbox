@@ -19,7 +19,7 @@ verdict that decides whether an exec inherits the proxy variables
 (`src/net.rs`).
 
 - `src/proto.rs` — frame types + caps; the golden corpus in
-  `../protocol/wire/fixtures/v1/` is round-tripped by the Rust, Go, and Python
+  `../protocol/wire/fixtures/v1/` is checked by the Rust, Go, and Python
   sides, so wire drift fails CI
 - `src/server.rs` — dispatch; one module per verb family
 - `tests/` — e2e suites driving the daemon in-process

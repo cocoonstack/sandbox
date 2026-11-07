@@ -429,7 +429,7 @@ generation sweep.
 | `<prefix><id>/meta.json` | The live record, uploaded last as the commit marker. Absent once the record is deleted. Its current generation is `export-` plus the first 16 hex characters of the SHA-256 of the object body. |
 | `<prefix><id>/labels.json` | Optional labels, removed with the record. |
 | `<prefix>manifests/<id>/<gen>.json` | One JSON manifest per published generation: `lineage` and, per file, `path`, `size` and the present `chunks` (`index`, `sha256`). `<gen>` is `export-<16 hex>`. |
-| `<prefix>chunks/<lineage>/<sha256>` | A 16 MiB chunk. A lineage is the dedup scope: it defaults to the record id, and every checkpoint and archive of one claim shares the claim's sandbox id. A chunk is shared by every record of its lineage that names the same digest, and only by those. |
+| `<prefix>chunks/<lineage>/<sha256>` | A chunk of up to 16 MiB; a file's last chunk is shorter. A lineage is the dedup scope: it defaults to the record id, and every checkpoint and archive of one claim shares the claim's sandbox id. A chunk is shared by every record of its lineage that names the same digest, and only by those. |
 | `<prefix>lineages/<lineage>/<id>` | Zero-byte marker: record `<id>` published into another record's lineage `<lineage>`, written after the manifest and before `meta.json`; a record in its own lineage writes none. A publish into a shared lineage reads only the records these list, so a crash between manifest and marker only costs a missed dedup. It only drives dedup, never chunk liveness. |
 
 **Offline reclamation only.** Stop every sandboxd node using the prefix and

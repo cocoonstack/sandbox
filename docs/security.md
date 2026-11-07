@@ -34,7 +34,7 @@ exposing any part of a deployment beyond a single trusted host.
   `host: "*"` rules and the internal-address guard allow, under per-claim
   rate, flow and quota limits.
   On the egress lane: the same vsock paths plus a NIC whose every
-  guest-initiated packet is dropped by an nftables lock in the host
+  outgoing packet, replies and ARP included, is dropped by an nftables lock in the host
   root netns ([egress](egress.md)); the lock is fail-closed and applied
   before the claim is handed out. On both lanes the proxy refuses
   loopback, private, link-local (cloud metadata), CGN, the

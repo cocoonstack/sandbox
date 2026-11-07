@@ -28,7 +28,7 @@ RPC still runs ends that RPC's input and is served after it, except in the
 upload of `fs_write` or `fs_push`: there a request frame before `data_end`
 fails the upload with `bad_request` and is dropped. A client may close
 after any terminal frame. A frame that does not parse is answered with
-`bad_request` and closes the connection. Binary payloads ride base64 in `data`
+`bad_request` and, outside an upload, closes the connection. Binary payloads ride base64 in `data`
 fields. Frames are capped at 8 MiB; requests carry `"v": 1` and unknown
 fields are ignored (the forward-compatibility story).
 
@@ -42,7 +42,7 @@ connection-bound verbs are `fs_watch`, `pty_open`, `lsp_request`, and
 `port_forward`.
 
 The authoritative wire contract is the shared fixture corpus in
-`protocol/wire/fixtures/v1`, round-tripped by the Rust and Go test suites; the
+`protocol/wire/fixtures/v1`: the Go suite round-trips every fixture, Rust parses the requests and round-trips the responses, and the
 Python suite round-trips the request frames and checks that each response
 decodes to the fixture's `type` tag and `data` — a frame the Rust or Go side
 cannot parse fails CI.
