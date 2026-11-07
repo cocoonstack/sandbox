@@ -31,7 +31,6 @@ const DATAGRAMS_IN_FLIGHT: usize = 256;
 #[cfg(target_os = "linux")]
 pub async fn serve(listen: SocketAddrV4, host_vsock_port: u32) -> io::Result<()> {
     use tokio::net::TcpListener;
-    use tokio_vsock::{VMADDR_CID_HOST, VsockAddr, VsockStream};
 
     let listener = TcpListener::bind(listen).await?;
     loop {
@@ -47,8 +46,7 @@ pub async fn serve(listen: SocketAddrV4, host_vsock_port: u32) -> io::Result<()>
             }
         };
         tokio::spawn(async move {
-            let addr = VsockAddr::new(VMADDR_CID_HOST, host_vsock_port);
-            let mut host = match VsockStream::connect(addr).await {
+            let mut host = match dial_host_cloexec(host_vsock_port).await {
                 Ok(s) => s,
                 Err(e) => {
                     eprintln!("silkd egress: host dial: {e}");
@@ -69,7 +67,6 @@ pub async fn serve_datagrams(listen: SocketAddrV4, host_vsock_port: u32) -> io::
 
     use tokio::net::UdpSocket;
     use tokio::sync::Semaphore;
-    use tokio_vsock::{VMADDR_CID_HOST, VsockAddr, VsockStream};
 
     let sock = Arc::new(UdpSocket::bind(listen).await?);
     let slots = Arc::new(Semaphore::new(DATAGRAMS_IN_FLIGHT));
@@ -92,8 +89,7 @@ pub async fn serve_datagrams(listen: SocketAddrV4, host_vsock_port: u32) -> io::
         tokio::spawn(async move {
             let _slot = slot;
             let exchange = async {
-                let mut host =
-                    VsockStream::connect(VsockAddr::new(VMADDR_CID_HOST, host_vsock_port)).await?;
+                let mut host = dial_host_cloexec(host_vsock_port).await?;
                 exchange_frame(&mut host, &framed).await
             };
             if let Ok(Ok(reply)) = tokio::time::timeout(DATAGRAM_TIMEOUT, exchange).await {
@@ -101,6 +97,18 @@ pub async fn serve_datagrams(listen: SocketAddrV4, host_vsock_port: u32) -> io::
             }
         });
     }
+}
+
+#[cfg(target_os = "linux")]
+async fn dial_host_cloexec(port: u32) -> io::Result<tokio_vsock::VsockStream> {
+    let stream = tokio::task::spawn_blocking(move || {
+        let stream = vsock::VsockStream::connect_with_cid_port(libc::VMADDR_CID_HOST, port)?;
+        stream.set_nonblocking(true)?;
+        Ok::<_, io::Error>(stream)
+    })
+    .await
+    .map_err(io::Error::other)??;
+    tokio_vsock::VsockStream::new(stream)
 }
 
 #[cfg(not(target_os = "linux"))]
