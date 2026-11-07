@@ -2,7 +2,7 @@ package sandbox
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"io"
 
 	"github.com/cocoonstack/sandbox/protocol/wire"
@@ -11,10 +11,10 @@ import (
 // Spawn starts cmd detached and returns its guest pid; stdio is ignored and Session must be empty.
 func (s *Sandbox) Spawn(ctx context.Context, cmd Cmd) (uint32, error) {
 	if len(cmd.Argv) == 0 {
-		return 0, fmt.Errorf("empty argv")
+		return 0, errors.New("empty argv")
 	}
 	if cmd.Session != "" {
-		return 0, fmt.Errorf("spawn does not support session")
+		return 0, errors.New("spawn does not support session")
 	}
 	req := &wire.Exec{Argv: cmd.Argv, Cwd: cmd.Cwd, Env: cmd.Env, User: cmd.User, Detach: true}
 	started, err := s.oneShotRPC[wire.Started](ctx, req)

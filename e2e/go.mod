@@ -3,6 +3,12 @@ module github.com/cocoonstack/sandbox/e2e
 go 1.27.1
 
 require (
+	github.com/cocoonstack/sandbox/protocol/wire v0.1.24
+	github.com/cocoonstack/sandbox/sandboxd v0.0.0
+	github.com/cocoonstack/sandbox/sdk/go v0.0.0
+)
+
+require (
 	github.com/cockroachdb/errors v1.14.0 // indirect
 	github.com/cockroachdb/logtags v0.0.0-20241215232642-bb51bb14a506 // indirect
 	github.com/cockroachdb/redact v1.1.8 // indirect
@@ -34,14 +40,7 @@ require (
 )
 
 replace (
+	github.com/cocoonstack/sandbox/protocol/wire => ../protocol/wire
 	github.com/cocoonstack/sandbox/sandboxd => ../sandboxd
 	github.com/cocoonstack/sandbox/sdk/go => ../sdk/go
 )
-
-require (
-	github.com/cocoonstack/sandbox/protocol/wire v0.1.24
-	github.com/cocoonstack/sandbox/sandboxd v0.0.0
-	github.com/cocoonstack/sandbox/sdk/go v0.0.0
-)
-
-replace github.com/cocoonstack/sandbox/protocol/wire => ../protocol/wire

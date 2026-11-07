@@ -184,6 +184,7 @@ func testCA(tb testing.TB) (*CA, []byte) {
 }
 
 func testCAOnly(tb testing.TB) *CA {
+	tb.Helper()
 	ca, _ := testCA(tb)
 	return ca
 }

@@ -5,6 +5,7 @@ import (
 	"cmp"
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -60,7 +61,7 @@ func (u *upgradedConn) handshake() error {
 
 func (c *Client) dialAgent(ctx context.Context, addr, id, token string) (*upgradedConn, error) {
 	if strings.ContainsAny(id, "\r\n\x00") || strings.ContainsAny(token, "\r\n\x00") {
-		return nil, fmt.Errorf("agent upgrade: id or token contains a control character")
+		return nil, errors.New("agent upgrade: id or token contains a control character")
 	}
 	scheme, authority, target := agentEndpoint(addr, c.scheme)
 	d := net.Dialer{Timeout: agentDialTimeout}

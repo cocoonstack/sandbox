@@ -34,6 +34,7 @@ func TestValidateSizes(t *testing.T) {
 		{SizeMedium4G, true},
 		{SizeLarge, true},
 		{SizeXLarge, true},
+		{Size2XLarge, true},
 		{Size("huge"), false},
 		{Size(""), false},
 	} {

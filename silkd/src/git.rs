@@ -85,7 +85,7 @@ pub async fn commit<W: AsyncWrite + Unpin>(
     proto::write_frame(w, &Response::GitCommitResult { hash }).await
 }
 
-/// Runs `push` or `pull` on the current branch behind the egress guard.
+/// Runs `push` or `pull` on the current branch.
 pub async fn net_verb<W: AsyncWrite + Unpin>(
     w: &mut W,
     path: &str,

@@ -2,7 +2,7 @@ package sandbox
 
 import (
 	"context"
-	"fmt"
+	"errors"
 
 	"github.com/cocoonstack/sandbox/protocol/wire"
 )
@@ -31,7 +31,7 @@ func (s *Sandbox) StartLsp(ctx context.Context, language, root string) (*Lsp, er
 		return nil, err
 	}
 	if started.ServerID == "" {
-		return nil, fmt.Errorf("lsp start: empty server id")
+		return nil, errors.New("lsp start: empty server id")
 	}
 	return &Lsp{ServerID: started.ServerID, s: s}, nil
 }

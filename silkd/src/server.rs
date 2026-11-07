@@ -8,7 +8,7 @@ use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
 use crate::proc::{Chunk, Table, write_chunk};
-use crate::proto::{self, ErrorKind, ExecReq, ProcInfo, Request, Response};
+use crate::proto::{self, ErrorKind, ExecReq, Request, Response};
 use crate::{exec, find, forward, fs, git, lsp, pty, session, sysutil, tree, tun, watch};
 
 type Parsed = serde_json::Result<Request>;
@@ -261,7 +261,7 @@ impl State {
     }
 
     async fn ps<W: AsyncWrite + Unpin>(&self, w: &mut W) -> std::io::Result<()> {
-        let mut procs: Vec<ProcInfo> = self.table.list();
+        let mut procs = self.table.list();
         procs.sort_by_key(|p| p.pid);
         proto::write_frame(w, &Response::Procs { procs }).await
     }

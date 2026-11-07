@@ -54,6 +54,8 @@ capacity, with the pool state unharmed. The causes:
   ([`POST /v1/cordon`](#post-v1cordon))
 - the disk is under `disk_reserve`
 - memory is over `memory_limit`
+- the node is [fenced](cluster.md#running-claims-across-node-loss) and the
+  claim's policy pool has `replicate_seconds`
 
 On a cluster, a claim without `volumes`, `no_redirect` or `require_promoted`
 that meets one of these redirects to a peer with warm capacity or, failing

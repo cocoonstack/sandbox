@@ -50,7 +50,7 @@ func main() {
 	defer sb.Close()
 	fmt.Printf("claimed %s on %s\n", sb.ID, sb.Owner())
 
-	// Push is the only ingestion path on the no-network lane.
+	// Push needs no egress policy, so it works on the no-network lane.
 	if err := sb.Push(ctx, "/work", projectTar()); err != nil {
 		log.Fatal(err)
 	}
@@ -607,7 +607,8 @@ err = sb.Push(ctx, "/work", tarReader)   // extract a tar stream under /work
 err = sb.Pull(ctx, "/work", tarWriter)   // stream /work back as a tar
 ```
 
-`Push` is the only project-ingestion path on the no-network lane.
+`Push` needs no egress policy, so it brings a project into a no-network
+sandbox whose pool allows no git host.
 
 ## Search
 

@@ -128,14 +128,14 @@ func (s *PoolSpec) ValidateLimits() error {
 	return validateArchiveWindow(s.IdleHibernateSeconds, s.ArchiveAfterSeconds, s.ArchiveDeleteAfterSeconds)
 }
 
-type ConfigField struct {
+type Field struct {
 	Name  string
 	Value reflect.Value
 }
 
 // ConfigOwned lists s's config-only fields; PUT /v1/pools refuses them, the seed hash drops them, and reload diffs them.
-func (s *PoolSpec) ConfigOwned() []ConfigField {
-	return []ConfigField{
+func (s *PoolSpec) ConfigOwned() []Field {
+	return []Field{
 		{"egress", reflect.ValueOf(&s.Egress).Elem()},
 		{"warmup", reflect.ValueOf(&s.Warmup).Elem()},
 		{"capture_trim", reflect.ValueOf(&s.CaptureTrim).Elem()},

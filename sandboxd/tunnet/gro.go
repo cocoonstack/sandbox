@@ -5,11 +5,7 @@ import (
 	"encoding/binary"
 )
 
-const (
-	tcpAck = 0x10
-
-	ipTTL = 8
-)
+const ipTTL = 8
 
 type tcpSegment struct {
 	seq     uint32

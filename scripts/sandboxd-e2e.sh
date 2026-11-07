@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Bare-metal e2e for sandboxd v0: warm pool, claim tiers, reap, reconcile.
+# Bare-metal e2e for sandboxd: warm pool, claim tiers, reap, reconcile.
 # Needs a silkd-baked template (os-image/) and a cocoon root no other sandboxd serves; cleanup removes every sbx-* VM.
 set -euo pipefail
 
@@ -109,10 +109,8 @@ else
   fi
 fi
 
-# BRIDGE (optional) attaches the node to an egress bridge, adds a small
-# egress pool, and turns on the smoke's egress-lane check; lane detection
-# needs a NIC, not connectivity, so a plain `ip link add ... type bridge`
-# with no uplink is enough.
+# BRIDGE (optional) adds a small egress pool and the smoke's egress-lane step;
+# a bridge with no uplink is enough.
 BRIDGE_LINE=""
 EGRESS_POOL=""
 if [[ -n ${BRIDGE:-} ]]; then
@@ -179,7 +177,7 @@ else
   "$DATA/demo" -addr "$ADDR" -token "$TOKEN" -template "$TEMPLATE" -n 3
 fi
 
-echo "== v2 smoke: files/session/find/replace/watch/git/pty through the relay"
+echo "== smoke: files/session/find/replace/watch/git/pty through the relay"
 # LSP_TEMPLATE (optional, a python-flavor ref) adds the LSP broker step.
 "$DATA/smoke" -addr "$ADDR" -token "$TOKEN" -template "$TEMPLATE" ${BRIDGE:+-egress} ${LSP_TEMPLATE:+-lsp-template "$LSP_TEMPLATE"}
 

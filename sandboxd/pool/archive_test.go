@@ -698,7 +698,7 @@ func TestIdleOnceSkipsArchived(t *testing.T) {
 
 		sweepIdle(t, m)
 		if got := eng.hibernateCount(); got != hibBefore {
-			t.Errorf("idle sweep hibernated an archived claim: %d→%d", hibBefore, got)
+			t.Errorf("idle sweep hibernated an archived claim: %d->%d", hibBefore, got)
 		}
 		if archivedCount(m) != 1 {
 			t.Error("idle sweep disturbed the archived claim")
@@ -839,7 +839,7 @@ func TestArchiveOnceSkipsInFlight(t *testing.T) {
 		m.archiveOnce(t.Context())
 		waitFor(t, func() bool { return !m.sweeps.archive.Load() })
 		if got := eng.exportCount(); got != exportsBefore {
-			t.Errorf("archiveOnce double-exported an in-flight sandbox: %d→%d", exportsBefore, got)
+			t.Errorf("archiveOnce double-exported an in-flight sandbox: %d->%d", exportsBefore, got)
 		}
 		if archivedCount(m) != 0 {
 			t.Error("archiveOnce archived a sandbox already being archived elsewhere")

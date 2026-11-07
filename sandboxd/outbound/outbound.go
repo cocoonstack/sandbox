@@ -234,7 +234,7 @@ func (h *Host) DropTunnels(ids []string) {
 	var proxies []*egress.Proxy
 	h.mu.Lock()
 	for _, id := range ids {
-		if d := h.doors[id]; d != nil && d.proxy != nil {
+		if d := h.doors[id]; d != nil {
 			proxies = append(proxies, d.proxy)
 		}
 	}

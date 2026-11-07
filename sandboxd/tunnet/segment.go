@@ -7,9 +7,6 @@ const (
 	gsoTCPv4 = 1
 	gsoUDPL4 = 5
 	gsoECN   = 0x80
-
-	tcpPsh = 0x08
-	tcpCwr = 0x80
 )
 
 // appendSegments appends frame's packets to out behind hdr, splitting a GSO frame and finishing a partial checksum; it returns out, the length of every datagram but the last, and the count, zero for a dropped frame.

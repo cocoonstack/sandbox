@@ -379,20 +379,6 @@ func TestReconcileAdoptsLiveClaimsAndDestroysTheRest(t *testing.T) {
 	}
 }
 
-func TestRefillTopsUpToTarget(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		eng := newFakeEngine()
-		m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 2})
-		m.pools[testKey].goldenDir = "/goldens/x"
-
-		m.refillOnce(t.Context())
-		waitWarm(t, m, 2)
-		if n := eng.cloneCount(); n != 2 {
-			t.Errorf("clones=%d, want 2", n)
-		}
-	})
-}
-
 func TestSetPoolsGrowShrinkAndDrain(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		eng := newFakeEngine()

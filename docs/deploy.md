@@ -1181,9 +1181,9 @@ reap → restart reconcile):
 TEMPLATE=rt:24.04 scripts/sandboxd-e2e.sh
 ```
 
-Set `BRIDGE=<dev>` to include the egress lane: it adds an egress pool and the
-lane-detect check. A plain `ip link add br0 type bridge` with no uplink is
-enough, since the check needs a NIC, not a network. On a node without a Go
+Set `BRIDGE=<dev>` to include the egress lane: it adds an egress pool and a
+smoke step that claims from it. A plain `ip link add br0 type bridge` with no
+uplink is enough, since the step needs a NIC, not a network. On a node without a Go
 toolchain, point `SANDBOXD_BIN`, `DEMO_BIN`, and `SMOKE_BIN` at prebuilt
 binaries.
 
