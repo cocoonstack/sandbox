@@ -181,10 +181,7 @@ func (r *router) fail(err error) {
 	default:
 		log.WithFunc("server.router.fail").Errorf(r.ctx, err, "agent socket for %s", r.id)
 	}
-	frame, encodeErr := wire.EncodeResponse(&wire.ErrorResp{Kind: kind, Message: msg})
-	if encodeErr != nil {
-		return
-	}
+	frame, _ := wire.EncodeResponse(&wire.ErrorResp{Kind: kind, Message: msg})
 	_, _ = r.client.Write(append(frame, '\n'))
 }
 
