@@ -45,7 +45,7 @@ every archived claim and delete the checkpoints, then re-promote templates, or
 point `prefix` at an empty location. Objects of the old layout under a reused
 prefix stay in the bucket until you delete them.
 
-From v0.1.24, a claim env write refuses a `guest: false` entry with an empty
+From v0.1.25, a claim env write refuses a `guest: false` entry with an empty
 value, so sending back a `GET` env reply answers 400; send each entry with its
 value. An empty value no longer blocks the node's secret for one claim. A node
 that ran with `host_env_memory_only` stores entries marked `missing`, which
