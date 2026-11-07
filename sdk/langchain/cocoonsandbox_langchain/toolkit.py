@@ -106,6 +106,7 @@ class CocoonToolkit:
             self._closed = True
         if sb is not None:
             sb.close()
+        self._client.close()
 
     def sandbox(self, deadline: float | None = None) -> Sandbox:
         """The claimed sandbox, claiming (or branching) on first use by deadline, else within CALL_TIMEOUT."""
