@@ -127,6 +127,25 @@ func TestBlockedDestinationNeverReachesTheUpstream(t *testing.T) {
 	}
 }
 
+func TestAFencedNodeDeniesEgressToItsReplicatedClaimsOnly(t *testing.T) {
+	var fenced atomic.Bool
+	h := upstreamHost(t, &config.Config{}, func(o *Options) { o.Fenced = fenced.Load })
+	allowAll := egress.Policy{Allow: []egress.Rule{{Host: "*"}}}
+	replicated := newClaim(h, &types.Sandbox{ID: "r", Replicated: true}, h.o.View(), allowAll)
+	plain := newClaim(h, &types.Sandbox{ID: "p"}, h.o.View(), allowAll)
+	fenced.Store(true)
+	if _, d := replicated.Eval("example.com", http.MethodGet, 443); d == egress.DecisionAllow {
+		t.Error("a fenced node let a replicated claim out")
+	}
+	if _, d := plain.Eval("example.com", http.MethodGet, 443); d != egress.DecisionAllow {
+		t.Errorf("a fenced node refused an unreplicated claim: %v", d)
+	}
+	fenced.Store(false)
+	if _, d := replicated.Eval("example.com", http.MethodGet, 443); d != egress.DecisionAllow {
+		t.Errorf("a lifted fence still refuses the replicated claim: %v", d)
+	}
+}
+
 func TestInternallyAllowedDestinationDialsDirect(t *testing.T) {
 	var direct atomic.Int32
 	h := upstreamHost(t, &config.Config{}, func(o *Options) {

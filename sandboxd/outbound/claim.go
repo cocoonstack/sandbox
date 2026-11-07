@@ -142,6 +142,9 @@ func (c *claim) limiter(r config.EgressConnRate) *rate.Limiter {
 
 // current denies everything once a reload leaves the claim with no policy.
 func (c *claim) current() egress.PolicyEvaluator {
+	if c.sb.Replicated && c.h.o.Fenced != nil && c.h.o.Fenced() {
+		return egress.Policy{}
+	}
 	v := c.h.o.View()
 	if r := c.cur.Load(); r.view == v {
 		return r.eval

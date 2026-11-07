@@ -73,8 +73,21 @@ func (m *Manager) trip(ctx context.Context) {
 		}
 		close(old.ch)
 		log.WithFunc("pool.trip").Warnf(ctx, "node lease not renewed for %s; replicated claims answer 503 until it is", leaseWindow)
+		m.out.DropTunnels(m.replicatedIDs())
 		return
 	}
+}
+
+func (m *Manager) replicatedIDs() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var ids []string
+	for id, sb := range m.claimed {
+		if sb.Replicated {
+			ids = append(ids, id)
+		}
+	}
+	return ids
 }
 
 // unfence confirms each replicated claim against its row, then lifts the fence if that finished inside the window the renewal at start still covers.
@@ -118,7 +131,7 @@ func (m *Manager) unfence(ctx context.Context, start time.Time) {
 			continue
 		}
 		if td := m.forgetAdopted(ctx, sb); td != nil {
-			m.out.DisarmTun(ctx, sb.ID, "")
+			m.out.Disarm(sb.ID, false)
 			go func() {
 				sb.Transition.Lock()
 				defer sb.Transition.Unlock()

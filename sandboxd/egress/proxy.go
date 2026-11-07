@@ -206,9 +206,15 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // Close ends every hijacked tunnel, which outlives http.Server.Close; idempotent.
 func (p *Proxy) Close() {
 	p.connMu.Lock()
+	p.closed = true
+	p.connMu.Unlock()
+	p.DropTunnels()
+}
+
+func (p *Proxy) DropTunnels() {
+	p.connMu.Lock()
 	conns := slices.Collect(maps.Keys(p.conns))
 	clear(p.conns)
-	p.closed = true
 	p.connMu.Unlock()
 	for _, conn := range conns {
 		_ = conn.Close()
