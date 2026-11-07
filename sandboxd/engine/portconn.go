@@ -38,8 +38,9 @@ func (g *guestPortConn) Read(p []byte) (int, error) {
 			continue
 		}
 		var frame struct {
-			Type string `json:"type"`
-			Data []byte `json:"data"`
+			Type    string `json:"type"`
+			Data    []byte `json:"data"`
+			Message string `json:"message"`
 		}
 		if err := json.Unmarshal(line, &frame); err != nil {
 			return 0, fmt.Errorf("port frame: %w", err)
@@ -50,7 +51,7 @@ func (g *guestPortConn) Read(p []byte) (int, error) {
 		case "done", "":
 			return 0, io.EOF
 		default:
-			return 0, fmt.Errorf("port stream ended: %s", frame.Type)
+			return 0, fmt.Errorf("port stream ended: %s %s", frame.Type, frame.Message)
 		}
 	}
 	n := copy(p, g.pending)
