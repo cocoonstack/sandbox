@@ -116,6 +116,48 @@ func TestCloseReleasesIdleUpstreamConns(t *testing.T) {
 	}
 }
 
+func TestDropTunnelsEndsAStreamingForwardAndRefusesALateTunnel(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, "first")
+		http.NewResponseController(w).Flush()
+		<-r.Context().Done()
+	}))
+	defer upstream.Close()
+	p := New(Policy{Allow: []Rule{{Host: "api.internal"}}}, nil, nil, fixedDial(upstream.Listener.Addr().String()), nil, nil)
+	front := serveFront(t, p)
+
+	resp := proxiedGet(t, front.URL, "http://api.internal/stream")
+	defer func() { _ = resp.Body.Close() }()
+	first := make([]byte, 5)
+	if _, err := io.ReadFull(resp.Body, first); err != nil {
+		t.Fatalf("read the first bytes: %v", err)
+	}
+	late := p.dropScope()
+	p.DropTunnels()
+	done := make(chan error, 1)
+	go func() {
+		_, err := io.Copy(io.Discard, resp.Body)
+		done <- err
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("a forwarded stream outlived DropTunnels")
+	}
+
+	guest, other := net.Pipe()
+	defer func() { _ = other.Close() }()
+	if p.track(late, guest) {
+		t.Fatal("a tunnel whose policy check predates DropTunnels was tracked")
+	}
+	if _, err := guest.Write([]byte("x")); err == nil {
+		t.Error("the refused tunnel conn is still open")
+	}
+	if !p.track(p.dropScope(), other) {
+		t.Error("a tunnel after DropTunnels was refused")
+	}
+}
+
 func TestForwardNeverInjectsInterceptSecret(t *testing.T) {
 	reached := false
 	upstream := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {

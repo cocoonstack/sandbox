@@ -152,9 +152,11 @@ type Proxy struct {
 	tickets [][32]byte
 
 	// conns tracks both halves of every tunnel and SOCKS5 connection, which http.Server.Close does not reach.
-	connMu sync.Mutex
-	conns  map[net.Conn]struct{}
-	closed bool
+	connMu   sync.Mutex
+	conns    map[net.Conn]struct{}
+	closed   bool
+	scope    context.Context
+	endScope context.CancelFunc
 }
 
 // New builds a Proxy for one sandbox; secrets, ca, audit and holder may be nil, router must not.
@@ -172,6 +174,7 @@ func New(policy Evaluator, secrets Secrets, ca *CA, router Router, audit AuditFu
 		refusals: rate.NewLimiter(refusalRate, refusalBurst),
 		conns:    map[net.Conn]struct{}{},
 	}
+	p.scope, p.endScope = context.WithCancel(context.Background())
 	// The stdlib default of 2 idle conns per host re-dials bursty same-host traffic.
 	pools := &connPools{tr: &http.Transport{DialContext: direct, MaxIdleConns: maxIdleConns, MaxIdleConnsPerHost: 8, IdleConnTimeout: idleConnTimeout, DisableCompression: true}, routed: map[routeKey]*http.Transport{}}
 	if ca != nil {
@@ -215,6 +218,8 @@ func (p *Proxy) DropTunnels() {
 	p.connMu.Lock()
 	conns := slices.Collect(maps.Keys(p.conns))
 	clear(p.conns)
+	p.endScope()
+	p.scope, p.endScope = context.WithCancel(context.Background())
 	p.connMu.Unlock()
 	for _, conn := range conns {
 		_ = conn.Close()
@@ -241,16 +246,22 @@ func (p *Proxy) ResetPools() {
 	}
 }
 
-// track registers conn for Close; false means already closed, conn closed instead.
-func (p *Proxy) track(conn net.Conn) bool {
+// track registers conn for Close; false means closed or dropped since scope was taken, conn closed instead.
+func (p *Proxy) track(scope context.Context, conn net.Conn) bool {
 	p.connMu.Lock()
 	defer p.connMu.Unlock()
-	if p.closed {
+	if p.closed || scope.Err() != nil {
 		_ = conn.Close()
 		return false
 	}
 	p.conns[conn] = struct{}{}
 	return true
+}
+
+func (p *Proxy) dropScope() context.Context {
+	p.connMu.Lock()
+	defer p.connMu.Unlock()
+	return p.scope
 }
 
 func (p *Proxy) untrack(conn net.Conn) {
@@ -268,6 +279,7 @@ func (p *Proxy) hold() func() {
 }
 
 func (p *Proxy) serveConnect(w http.ResponseWriter, r *http.Request) {
+	scope := p.dropScope()
 	host, port, ok := hostPort(r.Host, 443)
 	if !ok {
 		p.record(Event{Method: r.Method, Host: host, Decision: DecisionDeny})
@@ -278,7 +290,7 @@ func (p *Proxy) serveConnect(w http.ResponseWriter, r *http.Request) {
 	ev := Event{Method: r.Method, Host: host, Port: port, Decision: decision}
 	if intercept {
 		p.record(ev)
-		p.serveIntercept(w, r, host, port)
+		p.serveIntercept(scope, w, r, host, port)
 		return
 	}
 	if decision == DecisionDeny {
@@ -294,7 +306,7 @@ func (p *Proxy) serveConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer func() { _ = upstream.Close() }()
-	if !p.track(upstream) {
+	if !p.track(scope, upstream) {
 		return
 	}
 	defer p.untrack(upstream)
@@ -304,7 +316,7 @@ func (p *Proxy) serveConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer func() { _ = client.Close() }()
-	if !p.track(client) {
+	if !p.track(scope, client) {
 		return
 	}
 	defer p.untrack(client)
@@ -338,6 +350,7 @@ func (p *Proxy) holdsCredential(host string) bool {
 }
 
 func (p *Proxy) serveForward(w http.ResponseWriter, r *http.Request) {
+	scope := p.dropScope()
 	if !r.URL.IsAbs() {
 		http.Error(w, "egress: proxy requires an absolute-form request URI", http.StatusBadRequest)
 		return
@@ -353,7 +366,10 @@ func (p *Proxy) serveForward(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rule, decision := p.policy.Eval(host, r.Method, port)
-	p.relay(w, r, Event{Method: r.Method, Host: host, Port: port, Decision: decision}, rule, false, nil)
+	ctx, cancel := context.WithCancel(r.Context())
+	defer cancel()
+	defer context.AfterFunc(scope, cancel)()
+	p.relay(w, r.WithContext(ctx), Event{Method: r.Method, Host: host, Port: port, Decision: decision}, rule, false, nil)
 }
 
 func (p *Proxy) relay(w http.ResponseWriter, r *http.Request, ev Event, rule Rule, mitm bool, prepare func(*http.Request)) {

@@ -1,6 +1,7 @@
 package egress
 
 import (
+	"context"
 	"crypto/tls"
 	"io"
 	"net"
@@ -23,7 +24,7 @@ const (
 )
 
 // serveIntercept terminates a matched CONNECT's TLS with a node-signed leaf.
-func (p *Proxy) serveIntercept(w http.ResponseWriter, r *http.Request, host string, port uint16) {
+func (p *Proxy) serveIntercept(scope context.Context, w http.ResponseWriter, r *http.Request, host string, port uint16) {
 	leaf, err := p.leafFor(host)
 	if err != nil {
 		http.Error(w, "egress: intercept setup failed", http.StatusInternalServerError)
@@ -41,7 +42,7 @@ func (p *Proxy) serveIntercept(w http.ResponseWriter, r *http.Request, host stri
 		return
 	}
 	defer func() { _ = client.Close() }()
-	if !p.track(client) {
+	if !p.track(scope, client) {
 		return
 	}
 	defer p.untrack(client)
