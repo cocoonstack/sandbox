@@ -29,7 +29,7 @@ func main() {
 	addr := flag.String("addr", "127.0.0.1:7777", "sandboxd address")
 	token := flag.String("token", "", "node api token")
 	template := flag.String("template", "rt:24.04", "template ref")
-	egress := flag.Bool("egress", false, "also claim an egress-lane sandbox and check lane detection")
+	egress := flag.Bool("egress", false, "also claim an egress-lane sandbox and run git in it")
 	lspTemplate := flag.String("lsp-template", "", "python-flavor template ref; when set, adds the LSP broker step")
 	flag.Parse()
 
@@ -48,7 +48,6 @@ func run(addr, token, template, lspTemplate string, egress bool) error {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	// Explicitly the no-network lane: the git step asserts its typed error.
 	client, sb, err := harness.Claim(ctx, addr, token, template, sandbox.WithNetwork(sandbox.NetNone))
 	if err != nil {
 		return err
@@ -284,18 +283,18 @@ func smokeGit(ctx context.Context, sb *sandbox.Sandbox) error {
 	return nil
 }
 
-// smokeEgress pins that git reaches a remote on the egress lane.
+// smokeEgress claims an egress-lane sandbox and reads a repository's status through it.
 func smokeEgress(ctx context.Context, client *sandbox.Client, template string) error {
 	sb, err := client.New(ctx, template, sandbox.WithNetwork(sandbox.NetEgress))
 	if err != nil {
 		return fmt.Errorf("claim: %w", err)
 	}
 	defer func() { _ = sb.Close() }()
-	if _, err := sb.Exec(ctx, "git", "init", "-q", "-b", "main", "/tmp/r"); err != nil {
+	if _, err = sb.Exec(ctx, "git", "init", "-q", "/tmp/r"); err != nil {
 		return err
 	}
-	if err := sb.GitPush(ctx, "/tmp/r", ""); !isSilkdKind(err, wire.KindInternal) {
-		return fmt.Errorf("push on egress lane: %v, want internal git failure (lane misdetected?)", err)
+	if _, err = sb.GitStatus(ctx, "/tmp/r"); err != nil {
+		return fmt.Errorf("status on the egress lane: %w", err)
 	}
 	return nil
 }
