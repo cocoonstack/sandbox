@@ -514,6 +514,7 @@ func (c *Config) validate() error {
 		{"idle_hibernate_seconds", c.IdleHibernateSeconds},
 		{"checkpoint_ttl_hours", c.CheckpointTTLHours},
 		{"max_claims", c.MaxClaims},
+		{"max_fork_count", c.MaxForkCount},
 		{"max_running", c.MaxRunning},
 		{"move_concurrency", c.MoveConcurrency},
 		{"refill_concurrency", c.RefillConcurrency},
@@ -528,9 +529,6 @@ func (c *Config) validate() error {
 	}
 	if len(c.Networks) > 0 && c.guardsEgressLane() {
 		return fmt.Errorf("guarded egress needs a bridge lane, not a CNI network: the tap lives in the VM netns and cannot be locked")
-	}
-	if c.MaxForkCount < 1 {
-		return fmt.Errorf("max_fork_count must be at least 1, got %d", c.MaxForkCount)
 	}
 	if err := c.RestoreMode.Validate(); err != nil {
 		return fmt.Errorf("restore_mode: %w", err)
@@ -559,7 +557,7 @@ func (c *Config) validate() error {
 		return fmt.Errorf("checkpoint_peer_heal requires checkpoint_ttl_hours > 0: the ttl is what ages out a healed replica a delete broadcast missed")
 	}
 	if c.CheckpointPeerHeal && c.APIToken == "" {
-		return fmt.Errorf("checkpoint_peer_heal requires api_token: without it resolveScope leaves the raw checkpoint blob GET reachable with no credential")
+		return fmt.Errorf("checkpoint_peer_heal requires api_token: without it the raw checkpoint blob GET needs no credential")
 	}
 	if c.MoveConcurrency > 0 && !c.Movable() {
 		return fmt.Errorf("move_concurrency requires meta_store with a cell and an encrypted mesh (set mesh.cluster_key)")
@@ -573,7 +571,7 @@ func (c *Config) validate() error {
 	if err != nil {
 		return err
 	}
-	return c.validateEgress(secrets)
+	return c.validatePools(secrets)
 }
 
 func (c *Config) validateReplication() error {
@@ -688,7 +686,7 @@ func (c *Config) validateMesh() error {
 	return nil
 }
 
-func (c *Config) validateEgress(secrets map[string]struct{}) error {
+func (c *Config) validatePools(secrets map[string]struct{}) error {
 	for _, p := range c.Pools {
 		if err := p.Validate(); err != nil {
 			return fmt.Errorf("pool %q: %w", p.Template, err)
