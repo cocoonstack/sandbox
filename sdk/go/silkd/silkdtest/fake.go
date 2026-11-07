@@ -22,7 +22,7 @@ import (
 
 // Fake is a stateful silkd fake: fs verbs run on a real directory and sessions are tracked, so a write-then-read round-trips.
 type Fake struct {
-	Root string
+	root string
 
 	mu       sync.Mutex
 	sessions map[string]bool
@@ -33,7 +33,7 @@ type Fake struct {
 
 // NewFake returns a Fake serving files under root.
 func NewFake(root string) *Fake {
-	return &Fake{Root: root, sessions: map[string]bool{}, branches: []string{"main"}, current: "main"}
+	return &Fake{root: root, sessions: map[string]bool{}, branches: []string{"main"}, current: "main"}
 }
 
 // ServeConn serves RPCs on an already-open connection (e.g. after an HTTP hijack) until the peer closes it.
@@ -102,7 +102,7 @@ func (f *Fake) fsWrite(conn net.Conn, r *bufio.Reader, req *wire.FsWrite) {
 func (f *Fake) fsRead(conn net.Conn, path string) {
 	data, err := os.ReadFile(f.abs(path))
 	if err != nil {
-		errFrame(conn, wire.KindNotFound, err.Error())
+		fsErr(conn, err)
 		return
 	}
 	sendChunked(conn, data)
@@ -111,7 +111,7 @@ func (f *Fake) fsRead(conn net.Conn, path string) {
 func (f *Fake) fsList(conn net.Conn, path string) {
 	ents, err := os.ReadDir(f.abs(path))
 	if err != nil {
-		errFrame(conn, wire.KindNotFound, err.Error())
+		fsErr(conn, err)
 		return
 	}
 	var entries []wire.DirEntry
@@ -134,7 +134,7 @@ func (f *Fake) fsList(conn net.Conn, path string) {
 func (f *Fake) fsStat(conn net.Conn, path string) {
 	info, err := os.Stat(f.abs(path))
 	if err != nil {
-		errFrame(conn, wire.KindNotFound, err.Error())
+		fsErr(conn, err)
 		return
 	}
 	kind := wire.FileKindFile
@@ -150,13 +150,17 @@ func (f *Fake) fsStat(conn net.Conn, path string) {
 
 func (f *Fake) fsRm(conn net.Conn, req *wire.FsRm) {
 	if req.Recursive {
+		if _, err := os.Lstat(f.abs(req.Path)); err != nil {
+			fsErr(conn, err)
+			return
+		}
 		f.done(conn, os.RemoveAll(f.abs(req.Path)))
 	} else {
 		f.done(conn, os.Remove(f.abs(req.Path)))
 	}
 }
 
-// fsPush extracts the uploaded tar under dest, close enough to silkd for SDK round trips.
+// fsPush extracts only directories and regular files from the uploaded tar under dest.
 func (f *Fake) fsPush(conn net.Conn, r *bufio.Reader, dest string) {
 	data, err := drainUpload(r)
 	if err != nil {
@@ -220,7 +224,7 @@ func (f *Fake) fsPull(conn net.Conn, path string) {
 		return err
 	})
 	if err != nil {
-		errFrame(conn, wire.KindNotFound, err.Error())
+		fsErr(conn, err)
 		return
 	}
 	_ = tw.Close()
@@ -241,7 +245,7 @@ func (f *Fake) sessionCreate(conn net.Conn, req *wire.SessionCreate) {
 
 func (f *Fake) sessionList(conn net.Conn) {
 	f.mu.Lock()
-	ids := slices.Collect(maps.Keys(f.sessions))
+	ids := slices.Sorted(maps.Keys(f.sessions))
 	f.mu.Unlock()
 	send(conn, &wire.Sessions{Sessions: ids})
 }
@@ -289,7 +293,7 @@ func (f *Fake) fsFind(conn net.Conn, req *wire.FsFind) {
 		for i, line := range strings.Split(strings.TrimSuffix(string(body), "\n"), "\n") {
 			if re.MatchString(line) {
 				send(conn, &wire.Match{
-					File:    strings.TrimPrefix(path, f.Root),
+					File:    strings.TrimPrefix(path, f.root),
 					Line:    uint64(i) + 1,
 					Content: line,
 				})
@@ -313,7 +317,7 @@ func (f *Fake) fsReplace(conn net.Conn, req *wire.FsReplace) {
 	for _, file := range req.Files {
 		body, err := os.ReadFile(f.abs(file))
 		if err != nil {
-			errFrame(conn, wire.KindNotFound, err.Error())
+			fsErr(conn, err)
 			return
 		}
 		count := len(re.FindAll(body, -1))
@@ -331,7 +335,7 @@ func (f *Fake) fsReplace(conn net.Conn, req *wire.FsReplace) {
 // fsWatch answers ready and one synthetic created event, then holds the stream until the client disconnects.
 func (f *Fake) fsWatch(conn net.Conn, r *bufio.Reader, req *wire.FsWatch) {
 	if _, err := os.Stat(f.abs(req.Path)); err != nil {
-		errFrame(conn, wire.KindNotFound, err.Error())
+		fsErr(conn, err)
 		return
 	}
 	send(conn, wire.Ready{})
@@ -367,15 +371,15 @@ func (f *Fake) gitBranch(conn net.Conn, req *wire.GitBranch) {
 
 func (f *Fake) done(conn net.Conn, err error) {
 	if err != nil {
-		errFrame(conn, wire.KindInternal, err.Error())
+		fsErr(conn, err)
 		return
 	}
 	send(conn, wire.Done{})
 }
 
-// abs keeps a request path inside Root; an absolute request path is rebased.
+// abs keeps a request path inside root; an absolute request path is rebased.
 func (f *Fake) abs(path string) string {
-	return filepath.Join(f.Root, filepath.Clean("/"+path))
+	return filepath.Join(f.root, filepath.Clean("/"+path))
 }
 
 // portEcho refuses port 1 as not_found and echoes Data frames on any other port until DataEnd (Done) or disconnect.
@@ -427,6 +431,14 @@ func globRegexp(glob string) *regexp.Regexp {
 	pat = strings.ReplaceAll(pat, `\*`, ".*")
 	pat = strings.ReplaceAll(pat, `\?`, ".")
 	return regexp.MustCompile("^" + pat + "$")
+}
+
+func fsErr(conn net.Conn, err error) {
+	kind := wire.KindInternal
+	if errors.Is(err, fs.ErrNotExist) {
+		kind = wire.KindNotFound
+	}
+	errFrame(conn, kind, err.Error())
 }
 
 func errFrame(conn net.Conn, kind, msg string) {

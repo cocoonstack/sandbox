@@ -12,13 +12,6 @@ import (
 	"github.com/cocoonstack/sandbox/protocol/wire"
 )
 
-type hijackedConn struct {
-	net.Conn
-	r *bufio.Reader
-}
-
-func (c *hijackedConn) Read(p []byte) (int, error) { return c.r.Read(p) }
-
 // Serve accepts connections until l closes, serving RPCs back to back on each like silkd.
 func Serve(l net.Listener) {
 	acceptLoop(l, ServeConn)
@@ -63,6 +56,13 @@ func ListenHybrid(sockPath string, port int) (io.Closer, error) {
 	})
 	return l, nil
 }
+
+type hijackedConn struct {
+	net.Conn
+	r *bufio.Reader
+}
+
+func (c *hijackedConn) Read(p []byte) (int, error) { return c.r.Read(p) }
 
 // serveConn answers info and dispatches the other requests until the peer closes; input frames outside an RPC are dropped as silkd drops them.
 func serveConn(conn net.Conn, r *bufio.Reader, serve func(net.Conn, *bufio.Reader, wire.Request)) {
@@ -110,6 +110,9 @@ func serveExec(conn net.Conn, r *bufio.Reader, req *wire.Exec) {
 		return
 	}
 	send(conn, &wire.Started{PID: 4242})
+	if req.Detach {
+		return
+	}
 	switch req.Argv[0] {
 	case "echo":
 		send(conn, &wire.Stdout{Data: []byte(strings.Join(req.Argv[1:], " ") + "\n")})
