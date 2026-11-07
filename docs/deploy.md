@@ -51,8 +51,9 @@ value. An empty value no longer blocks the node's secret for one claim. A node
 that ran with `host_env_memory_only` stores entries marked `missing`, which
 v0.1.24 cannot read. Before going back to it, turn the flag off and restart,
 then send every missing entry again or release its claim, until no claim's
-`env_missing` is true: each write stores the value in `claims.json` and the
-claim's row. A `claims.json` that still holds a missing entry stops v0.1.24
+`env_missing` is true, then wait one `replicate_seconds` interval. Each write
+stores the value in `claims.json` and in the row of an archived or hibernated
+claim; a running replicated claim's row takes it at its next replica. A `claims.json` that still holds a missing entry stops v0.1.24
 from starting, and a row that holds one cannot be adopted by it.
 
 ## Configuration
