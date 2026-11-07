@@ -26,7 +26,6 @@ type resolvedVolume struct {
 	applied types.Volume
 }
 
-// volumeTeardown captures marker paths at quiesce time; a later config can re-point the entry.
 type volumeTeardown struct {
 	holds  []types.Volume
 	clears []string
@@ -115,9 +114,9 @@ func (m *Manager) resolveVolumes(ctx context.Context, tenant string, requested [
 	if len(requested) == 0 {
 		return nil, nil
 	}
-	applied, err := types.ValidateVolumes(requested)
+	applied, err := normalizeVolumes(requested)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrBadVolume, err)
+		return nil, err
 	}
 	catalog := m.catalogSnapshot()
 	resolved := make([]resolvedVolume, 0, len(applied))

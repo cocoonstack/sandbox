@@ -46,7 +46,7 @@ func (m *Manager) PatchVolumes(ctx context.Context, id, tenant string, patch typ
 		if err := validateDetachNames(patch.Remove); err != nil {
 			return nil, err
 		}
-		additions, err := normalizeLiveVolumes(patch.Add)
+		additions, err := normalizeVolumes(patch.Add)
 		if err != nil {
 			return nil, err
 		}
@@ -91,7 +91,7 @@ func (m *Manager) changeVolumes(ctx context.Context, id, tenant string, change v
 	if err != nil {
 		return view, err
 	}
-	target, err = normalizeLiveVolumes(target)
+	target, err = normalizeVolumes(target)
 	if err != nil {
 		return view, err
 	}
@@ -430,7 +430,7 @@ func (m *Manager) clearVolumeError(sb *types.Sandbox, run *volumeRun, name strin
 	}
 }
 
-func normalizeLiveVolumes(volumes []types.Volume) ([]types.Volume, error) {
+func normalizeVolumes(volumes []types.Volume) ([]types.Volume, error) {
 	out, err := types.ValidateVolumes(volumes)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrBadVolume, err)

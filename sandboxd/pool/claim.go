@@ -342,7 +342,7 @@ func (m *Manager) releaseResolved(ctx context.Context, id string, sb *types.Sand
 	ctx = context.WithoutCancel(ctx)
 	m.releaseTun(ctx, id, tunAddr)
 	if ck != "" {
-		m.purgeArchiveCk(ctx, id, ck, sb.Tenant) // archived: no local VM
+		m.purgeArchiveCk(ctx, id, ck, sb.Tenant)
 		m.untrack(m.pendingCks, ck)
 	}
 	td := m.quiesceVolumes(ctx, sb)
