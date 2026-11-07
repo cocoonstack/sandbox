@@ -15,6 +15,7 @@ on:
       - "protocol/**"
       - "Makefile"
       - ".golangci.yml"
+      - ".goreleaser.yml"
       - ".github/workflows/sandboxd.yml"
   pull_request:
     paths:
@@ -26,6 +27,7 @@ on:
       - "protocol/**"
       - "Makefile"
       - ".golangci.yml"
+      - ".goreleaser.yml"
       - ".github/workflows/sandboxd.yml"
   workflow_dispatch:
 
@@ -57,9 +59,11 @@ jobs:
           go-version-file: sandboxd/go.mod
           cache-dependency-path: "**/go.sum"
 
-      - name: Build sandboxd
-        working-directory: sandboxd
-        run: go build ./...
+      - name: Check the release config
+        uses: goreleaser/goreleaser-action@v7.3.0
+        with:
+          version: v2.18.2
+          args: check
 
       - name: Lint
         run: make go-lint
