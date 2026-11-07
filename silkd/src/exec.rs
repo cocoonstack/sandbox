@@ -97,7 +97,7 @@ where
     let sup_reaped = Arc::clone(&reaped);
     let sup_proc = Arc::clone(&proc);
     let supervise = tokio::spawn(async move {
-        let code = sysutil::wait_code(&mut child).await;
+        let code = child.wait().await.map_or(-1, sysutil::exit_code);
         let _ = sup_reaped.set(code);
         if timeout(POST_EXIT_DRAIN, &mut pump).await.is_err() {
             pump.abort();

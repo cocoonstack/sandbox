@@ -14,7 +14,7 @@ use std::sync::{LazyLock, Mutex};
 
 use nix::fcntl::{FcntlArg, OFlag, fcntl};
 use tokio::io::unix::AsyncFd;
-use tokio::process::{Child, Command};
+use tokio::process::Command;
 
 static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
 
@@ -36,8 +36,6 @@ const FORWARDED: [&str; 6] = [
     "NO_PROXY",
 ];
 
-const HEX: [u8; 16] = *b"0123456789abcdef";
-
 /// The claim's environment the host writes, in systemd EnvironmentFile syntax.
 const CLAIM_ENV_PATH: &str = "/run/silkd.env";
 
@@ -58,10 +56,7 @@ pub fn rand_token() -> std::io::Result<String> {
             "no entropy source for a session marker",
         ));
     }
-    Ok(b.iter()
-        .flat_map(|byte| [HEX[(byte >> 4) as usize], HEX[(byte & 0xf) as usize]])
-        .map(char::from)
-        .collect())
+    Ok(format!("{:032x}", u128::from_be_bytes(b)))
 }
 
 /// Sends `sig` to the group led by `pgid`, so a command's children share its fate; ESRCH is ignored.
@@ -192,11 +187,6 @@ pub fn exit_code(status: ExitStatus) -> i32 {
         return code;
     }
     status.signal().map_or(-1, |s| 128 + s)
-}
-
-/// Reaps the child and maps its status via `exit_code`; -1 when the wait fails.
-pub async fn wait_code(child: &mut Child) -> i32 {
-    child.wait().await.map_or(-1, exit_code)
 }
 
 /// Unwraps a piped child stdio handle; absent means the spawn contract broke.
