@@ -63,7 +63,7 @@ func (c *Client) dialAgent(ctx context.Context, addr, id, token string) (*upgrad
 		return nil, fmt.Errorf("agent upgrade: id or token contains a control character")
 	}
 	scheme, authority, target := agentEndpoint(addr, c.scheme)
-	var d net.Dialer
+	d := net.Dialer{Timeout: agentDialTimeout}
 	raw, err := d.DialContext(ctx, "tcp", target)
 	if err != nil {
 		return nil, markGone(err, id, addr)

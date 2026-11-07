@@ -102,6 +102,7 @@ func (s *Sandbox) ProxyPort(ctx context.Context, localAddr string, port uint16) 
 		for {
 			local, err := l.Accept()
 			if err != nil {
+				_ = l.Close()
 				return
 			}
 			go s.proxyConn(ctx, local, port)

@@ -16,9 +16,10 @@ import (
 )
 
 const (
-	releaseTimeout = 30 * time.Second
-	killWait       = 5 * time.Second
-	stdinChunk     = 32 * 1024
+	releaseTimeout   = 30 * time.Second
+	agentDialTimeout = 30 * time.Second
+	killWait         = 5 * time.Second
+	stdinChunk       = 32 * 1024
 )
 
 // Cmd describes a streaming Run.
@@ -352,7 +353,6 @@ func (s *Sandbox) call(ctx context.Context, req wire.Request) (*silkd.Conn, *lea
 	return c.Conn, &lease{s: s, conn: c, stop: context.AfterFunc(ctx, func() { _ = c.Close() })}, nil
 }
 
-// connect sends req on a parked connection or a fresh dial.
 func (s *Sandbox) connect(ctx context.Context, req wire.Request) (*agentConn, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -384,7 +384,6 @@ func markGone(err error, id, addr string) error {
 	return err
 }
 
-// pumpStdin chunks the reader into stdin frames.
 func pumpStdin(conn *silkd.Conn, r io.Reader) error {
 	buf := make([]byte, stdinChunk)
 	for {

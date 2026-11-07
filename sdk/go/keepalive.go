@@ -102,7 +102,6 @@ func (c *agentConn) quiet() bool {
 	return c.sock != nil && c.sock.Read(c.peekFn) == nil && c.peeked
 }
 
-// sent sends req on c and hands it back, closing it on failure.
 func (c *agentConn) sent(req wire.Request) (*agentConn, error) {
 	if err := c.Send(req); err != nil {
 		_ = c.Close()
