@@ -32,6 +32,8 @@ class McpClient:
         self.proc.stdin.write((json.dumps(req) + "\n").encode())
         self.proc.stdin.flush()
         line = self.proc.stdout.readline()
+        if not line:
+            raise RuntimeError("sandbox-mcp exited")
         resp = json.loads(line)
         assert resp["id"] == self.seq, resp
         assert "error" not in resp, resp
