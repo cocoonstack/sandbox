@@ -83,8 +83,9 @@ type claimRow struct {
 
 // claimStore persists claimed sandboxes across daemon restarts; warm VMs are not persisted.
 type claimStore struct {
-	path string
-	sync bool
+	path        string
+	sync        bool
+	dropHostEnv bool
 
 	// writeMu orders commits and guards every row's raw and buf.
 	writeMu sync.Mutex
@@ -168,7 +169,11 @@ func (s *claimStore) put(id string, sb *types.Sandbox) {
 		delete(s.rows, id)
 	} else {
 		refs = checkpointRefs(sb)
-		row := &claimRow{dto: dtoOf(sb), running: holdsVM(sb)}
+		dto := dtoOf(sb)
+		if s.dropHostEnv {
+			dto.Env = dto.Env.DropHostValues()
+		}
+		row := &claimRow{dto: dto, running: holdsVM(sb)}
 		if row.running {
 			s.running++
 		}

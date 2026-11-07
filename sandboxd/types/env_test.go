@@ -33,6 +33,8 @@ func TestEnvValidate(t *testing.T) {
 		{"over the bound", Env{"A": {Value: strings.Repeat("a", maxEnvValueBytes+1)}}, "at most"},
 		{"total at the bound", full, ""},
 		{"total over the bound", over, "total at most"},
+		{"host-only without a value", Env{"TOKEN": {Guest: new(false)}}, "needs a value"},
+		{"missing from a caller", Env{"TOKEN": {Value: "t", Guest: new(false), Missing: true}}, "set by the node"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -216,6 +218,36 @@ func TestEnvSplitsGuestAndHostOnlyEntries(t *testing.T) {
 	}
 	if got := string(env.GuestFile()); got != "G=\"g\"\nT=\"t\"\n" {
 		t.Errorf("GuestFile = %q", got)
+	}
+}
+
+func TestDroppedHostValuesAreMissingAndUnpublished(t *testing.T) {
+	inj := &EnvInject{Hosts: []string{"a.test"}, Header: "X-Key"}
+	env := Env{"G": {Value: "g"}, "H": {Value: "h", Guest: new(false), Inject: inj}}
+	dropped := env.DropHostValues()
+	if h := dropped["H"]; h.Value != "" || !h.Missing || h.Inject != inj || dropped["G"].Value != "g" || env["H"].Value != "h" || env.HasMissing() {
+		t.Errorf("DropHostValues = %v (source %v), want H missing with its inject kept, G and the source intact", dropped, env)
+	}
+	if !dropped.HasMissing() || !dropped.Redacted()["H"].Missing || dropped.Equal(env) {
+		t.Error("a dropped entry must stay missing through Redacted and differ from the held one")
+	}
+	if err := dropped.ValidateStored(); err != nil {
+		t.Errorf("ValidateStored = %v, want the node's missing entry admitted", err)
+	}
+	if err := dropped.Validate(); err == nil {
+		t.Error("Validate admitted a missing entry from a caller")
+	}
+	sb := &Sandbox{}
+	sb.SetEnv(dropped)
+	if _, ok := sb.HiddenEnv("H"); ok {
+		t.Error("a missing entry served a hidden value")
+	}
+	for name := range sb.Injections("a.test") {
+		t.Errorf("a missing entry %s injects", name)
+	}
+	var decoded EnvVar
+	if err := json.Unmarshal([]byte(`{"value":"","guest":false,"missing":true}`), &decoded); err != nil || !decoded.Missing {
+		t.Errorf("decode = %+v %v, want missing", decoded, err)
 	}
 }
 

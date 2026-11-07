@@ -50,7 +50,11 @@ exposing any part of a deployment beyond a single trusted host.
   tokens travel as in-memory headers, never guest disk. Secrets come from
   the host environment or a claim's `guest: false` env, never the config
   file. That env stays in the node-local claim record, except in the
-  `archive_failover` row ([assumption 4](#deployment-assumptions)).
+  `archive_failover` row ([assumption 4](#deployment-assumptions)). With
+  [`host_env_memory_only`](deploy.md#configuration), `guest: false` values
+  stay in sandboxd's memory for running claims only: neither file nor row
+  holds one, and the control plane sends them again after a restart, wake or
+  adoption.
 - **Sandbox identity.** Every clone is reseeded (entropy, machine-id), so
   branches and forks never share an identity with their source.
 
@@ -80,7 +84,7 @@ all of them.
    held at capture. Restrict store access; use S3 server-side encryption or
    an encrypted mount where that matters. With `archive_failover`, treat the
    shared PostgreSQL the same way: its rows hold claim env in plaintext,
-   `guest: false` values included.
+   `guest: false` values included unless `host_env_memory_only` is on.
 5. **No custom NAT64 prefix routed on a sandboxd host** — the SSRF guard
    cannot see through an operator-specific translator prefix
    ([egress](egress.md#deployment-constraints)).

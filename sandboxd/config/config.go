@@ -415,6 +415,8 @@ type Config struct {
 	APIToken  string              `json:"api_token,omitempty"`
 	MetaStore *MetaStoreConfig    `json:"meta_store,omitempty"`
 	Secrets   []egress.SecretSpec `json:"secrets,omitempty"`
+	// HostEnvMemoryOnly keeps host-only env values out of claims.json and the archive rows, and drops them when a claim hibernates.
+	HostEnvMemoryOnly bool `json:"host_env_memory_only,omitzero"`
 
 	IdleHibernateSeconds      int `json:"idle_hibernate_seconds,omitzero"`
 	ArchiveAfterSeconds       int `json:"archive_after_seconds,omitzero"`

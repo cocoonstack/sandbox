@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json/v2"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -1868,6 +1869,31 @@ func TestALookupRacingAWakeAdoptionTakesTheRowOnce(t *testing.T) {
 	})
 }
 
+func TestFailoverRowsHoldNoHostOnlyValueWhenMemoryOnly(t *testing.T) {
+	for _, memoryOnly := range []bool{false, true} {
+		t.Run(fmt.Sprintf("memory_only=%v", memoryOnly), func(t *testing.T) {
+			c := newFailoverCluster(t)
+			c.hostEnvMemory = memoryOnly
+			a, b := c.pair(t)
+			sb := archivedWithEnv(t, a)
+			patchHostOnly(t, a, sb, "new")
+			if row := rowClaim(t, c, sb).Env["GH_TOKEN"]; (row.Value == "") != memoryOnly || row.Missing != memoryOnly {
+				t.Errorf("row entry %+v, want the value kept only without memory_only", row)
+			}
+			c.expire("a")
+			mustAdopt(t, b, sb, "adopt")
+			held, ok := b.byID(sb.ID)
+			if !ok {
+				t.Fatal("adopter has no claim")
+			}
+			summary, _ := b.Sandbox(sb.ID)
+			if v, set := held.HiddenEnv("GH_TOKEN"); set != !memoryOnly || summary.EnvMissing != memoryOnly || (set && v != "new") {
+				t.Errorf("adopter holds %q %v, env_missing %v; want the row's value only without memory_only", v, set, summary.EnvMissing)
+			}
+		})
+	}
+}
+
 type failoverCluster struct {
 	reg        *archivestest.Mem
 	moves      moves.Registry
@@ -1877,6 +1903,8 @@ type failoverCluster struct {
 	nodes      []*Manager
 	egressPol  *egress.Policy
 	noArchives bool
+
+	hostEnvMemory bool
 }
 
 func newFailoverCluster(t *testing.T) *failoverCluster {
@@ -1951,7 +1979,7 @@ func (c *failoverCluster) nodeOn(t *testing.T, eng *fakeEngine, name, dataDir st
 	spec.Egress = c.egressPol
 	cfg := &config.Config{
 		APIToken: "root", DataDir: dataDir, CheckpointDir: c.ckDir, Pools: []config.PoolSpec{spec, {PoolKey: plainKey, Warm: 1}},
-		Mesh: &config.MeshConfig{NodeID: name}, Volumes: c.volumes,
+		Mesh: &config.MeshConfig{NodeID: name}, Volumes: c.volumes, HostEnvMemoryOnly: c.hostEnvMemory,
 	}
 	if c.egressPol != nil {
 		cfg.EgressCA = writeTestEgressCA(t)

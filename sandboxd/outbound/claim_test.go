@@ -38,6 +38,7 @@ func TestRouteTakesTheClaimThenClassThenPoolUpstream(t *testing.T) {
 		{"class default", "desk", nil, "http://127.0.0.1:3002"},
 		{"claim value", "desk", types.Env{"EGRESS_UPSTREAM": {Value: "socks5://127.0.0.1:3003", Guest: hostOnly}}, "socks5://127.0.0.1:3003"},
 		{"claim direct", "desk", types.Env{"EGRESS_UPSTREAM": {Value: "direct", Guest: hostOnly}}, ""},
+		{"claim value missing", "desk", types.Env{"EGRESS_UPSTREAM": {Guest: hostOnly, Missing: true}}, "http://127.0.0.1:3002"},
 	} {
 		sb := &types.Sandbox{ID: "sb_route", Key: testKey, Tenant: "acme", EgressClass: tt.class}
 		sb.SetEnv(tt.env)
@@ -186,6 +187,22 @@ func TestAnInjectShapeRidesIntoTheCredential(t *testing.T) {
 				t.Errorf("credentials %+v, want [%+v]", creds, want)
 			}
 		})
+	}
+}
+
+func TestAMissingEntryInjectsNothingAndLeavesTheNodeSecret(t *testing.T) {
+	h := newHost(t, &fakeEngine{}, &config.Config{}, nil)
+	sb := &types.Sandbox{}
+	sb.SetEnv(types.Env{
+		"KEY":      {Guest: hostOnly, Inject: &types.EnvInject{Hosts: []string{"api.github.com"}, Header: "X-Api-Key"}, Missing: true},
+		"GH_TOKEN": {Guest: hostOnly, Missing: true},
+	})
+	c := newClaim(h, sb, nil, nil)
+	if creds := c.Credentials("api.github.com"); len(creds) != 0 {
+		t.Errorf("credentials %+v, want none for a missing entry", creds)
+	}
+	if _, value, ok := c.Header("gh"); !ok || value != "s3cr3t" {
+		t.Errorf("header %q %v, want the node value", value, ok)
 	}
 }
 

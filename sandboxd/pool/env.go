@@ -58,7 +58,7 @@ func (m *Manager) writeEnv(ctx context.Context, id, tenant, verb string, next fu
 	if len(env) == 0 {
 		env = nil
 	}
-	if err := env.Validate(); err != nil {
+	if err := env.ValidateStored(); err != nil {
 		m.mu.Unlock()
 		return fmt.Errorf("%w: %w", ErrBadEnv, err)
 	}

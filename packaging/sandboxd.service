@@ -9,6 +9,7 @@ Restart=on-failure
 RestartSec=5s
 KillMode=process
 TimeoutStopSec=27min
+LimitCORE=0
 Environment=SANDBOXD_LOG_LEVEL=info
 
 [Install]

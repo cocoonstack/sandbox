@@ -287,10 +287,12 @@ func TestEnvVerbsForRootOrTheTenant(t *testing.T) {
 		t.Errorf("read: %d %s as %q", code, body, mgr.gotTenant)
 	}
 	for body, want := range map[string]int{
-		`{"vars":{}}`:                       http.StatusBadRequest,
-		`{"env":{"A-B":{"value":"x"}}}`:     http.StatusBadRequest,
-		`{"env":{"A":{"value":"a\nb"}}}`:    http.StatusBadRequest,
-		`{"env":{"A":{"value":"a","x":1}}}`: http.StatusBadRequest,
+		`{"vars":{}}`:                                              http.StatusBadRequest,
+		`{"env":{"A-B":{"value":"x"}}}`:                            http.StatusBadRequest,
+		`{"env":{"A":{"value":"a\nb"}}}`:                           http.StatusBadRequest,
+		`{"env":{"A":{"value":"a","x":1}}}`:                        http.StatusBadRequest,
+		`{"env":{"H":{"value":"","guest":false}}}`:                 http.StatusBadRequest,
+		`{"env":{"H":{"value":"h","guest":false,"missing":true}}}`: http.StatusBadRequest,
 	} {
 		if code, _ := call(t, http.MethodPut, "root", body); code != want {
 			t.Errorf("%s: %d, want %d", body, code, want)
@@ -328,11 +330,13 @@ func TestEnvPatchVerb(t *testing.T) {
 		t.Errorf("PatchEnv calls %q, want %q", mgr.envPatched, want)
 	}
 	for body, want := range map[string]int{
-		`{"vars":{}}`:                              http.StatusBadRequest,
-		`{"env":{"A-B":null}}`:                     http.StatusBadRequest,
-		`{"env":{"A":{"value":"a\nb"}}}`:           http.StatusBadRequest,
-		`{"env":{"A":{"value":"a","x":1}}}`:        http.StatusBadRequest,
-		`{"env":{"A":{"value":"s","guest":null}}}`: http.StatusBadRequest,
+		`{"vars":{}}`:                                              http.StatusBadRequest,
+		`{"env":{"A-B":null}}`:                                     http.StatusBadRequest,
+		`{"env":{"A":{"value":"a\nb"}}}`:                           http.StatusBadRequest,
+		`{"env":{"A":{"value":"a","x":1}}}`:                        http.StatusBadRequest,
+		`{"env":{"A":{"value":"s","guest":null}}}`:                 http.StatusBadRequest,
+		`{"env":{"H":{"value":"","guest":false}}}`:                 http.StatusBadRequest,
+		`{"env":{"H":{"value":"h","guest":false,"missing":true}}}`: http.StatusBadRequest,
 	} {
 		if code := call(t, "root", body); code != want {
 			t.Errorf("%s: %d, want %d", body, code, want)

@@ -632,6 +632,112 @@ func TestALostInterceptRefusesOnlyAChangedInject(t *testing.T) {
 	}
 }
 
+func TestHostEnvMemoryOnlyKeepsValuesOffDiskAndARestartReportsThemMissing(t *testing.T) {
+	for _, memoryOnly := range []bool{false, true} {
+		t.Run(fmt.Sprintf("memory_only=%v", memoryOnly), func(t *testing.T) {
+			eng := newFakeEngine()
+			dataDir := t.TempDir()
+			cfg := &config.Config{DataDir: dataDir, APIToken: "root", HostEnvMemoryOnly: memoryOnly}
+			m := envManagerOf(t, eng, cfg)
+			sb, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Env: types.Env{"gw": {Value: "Bearer a", Guest: hostOnly}, "SEEN": {Value: "yes"}}})
+			if err != nil {
+				t.Fatalf("claim: %v", err)
+			}
+			if v, ok := sb.HiddenEnv("gw"); !ok || v != "Bearer a" {
+				t.Errorf("running claim holds %q %v, want the value in memory", v, ok)
+			}
+			claims, err := newClaimStore(dataDir, false).load()
+			if err != nil {
+				t.Fatalf("load: %v", err)
+			}
+			if gw := claims[sb.ID].Env["gw"]; (gw.Value == "") != memoryOnly || gw.Missing != memoryOnly || claims[sb.ID].Env["SEEN"].Value != "yes" {
+				t.Errorf("journal gw %+v, want the value kept only without memory_only", gw)
+			}
+
+			m2 := envManagerOf(t, eng, cfg)
+			if err = m2.Reconcile(t.Context()); err != nil {
+				t.Fatalf("Reconcile: %v", err)
+			}
+			summary, _ := m2.Sandbox(sb.ID)
+			listed := m2.Sandboxes("", "", nil)
+			read, err := m2.Env(sb.ID, "")
+			if err != nil || summary.EnvMissing != memoryOnly || len(listed) != 1 || listed[0].EnvMissing != memoryOnly || read["gw"].Missing != memoryOnly {
+				t.Errorf("after a restart: summary %v, list %+v, read %+v %v; want missing reported only with memory_only", summary.EnvMissing, listed, read, err)
+			}
+			if err = m2.PatchEnv(t.Context(), sb.ID, types.EnvPatch{"gw": {Value: "Bearer b", Guest: hostOnly}}, ""); err != nil {
+				t.Fatalf("re-push: %v", err)
+			}
+			m2.mu.Lock()
+			restored := m2.claimed[sb.ID]
+			m2.mu.Unlock()
+			summary, _ = m2.Sandbox(sb.ID)
+			if v, ok := restored.HiddenEnv("gw"); !ok || v != "Bearer b" || summary.EnvMissing {
+				t.Errorf("after a re-push: %q %v, env_missing %v; want the value back and the flag clear", v, ok, summary.EnvMissing)
+			}
+		})
+	}
+}
+
+func TestTurningHostEnvMemoryOnlyOnDropsTheValuesAJournalStillHolds(t *testing.T) {
+	eng := newFakeEngine()
+	dataDir := t.TempDir()
+	m := envManagerOf(t, eng, &config.Config{DataDir: dataDir, APIToken: "root"})
+	sb, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Env: types.Env{"gw": {Value: "Bearer a", Guest: hostOnly}}})
+	if err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	m2 := envManagerOf(t, eng, &config.Config{DataDir: dataDir, APIToken: "root", HostEnvMemoryOnly: true})
+	if err = m2.Reconcile(t.Context()); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	m2.mu.Lock()
+	restored := m2.claimed[sb.ID]
+	m2.mu.Unlock()
+	claims, err := newClaimStore(dataDir, false).load()
+	if _, held := restored.HiddenEnv("gw"); held || err != nil || claims[sb.ID].Env["gw"].Value != "" {
+		t.Errorf("after the first memory-only boot: held %v, journal %+v %v; want the value gone from both", held, claims[sb.ID].Env, err)
+	}
+}
+
+func TestHostEnvMemoryOnlyDropsValuesWhenAClaimHibernates(t *testing.T) {
+	for _, memoryOnly := range []bool{false, true} {
+		t.Run(fmt.Sprintf("memory_only=%v", memoryOnly), func(t *testing.T) {
+			cfg := &config.Config{DataDir: t.TempDir(), APIToken: "root", HostEnvMemoryOnly: memoryOnly}
+			m := envManagerOf(t, newFakeEngine(), cfg)
+			sb, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Env: types.Env{"gw": {Value: "Bearer a", Guest: hostOnly}}})
+			if err != nil {
+				t.Fatalf("claim: %v", err)
+			}
+			hibernateClaim(t, m, sb)
+			_, held := sb.HiddenEnv("gw")
+			summary, _ := m.Sandbox(sb.ID)
+			if held == memoryOnly || summary.EnvMissing != memoryOnly {
+				t.Errorf("hibernated claim holds the value %v, env_missing %v; want it dropped only with memory_only", held, summary.EnvMissing)
+			}
+		})
+	}
+}
+
+func TestHostEnvMemoryOnlyDropsValuesWhenAnUnconfirmedHibernateIsAdopted(t *testing.T) {
+	eng := newFakeEngine()
+	m := envManagerOf(t, eng, &config.Config{DataDir: t.TempDir(), APIToken: "root", HostEnvMemoryOnly: true})
+	sb, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Env: types.Env{"gw": {Value: "Bearer a", Guest: hostOnly}}})
+	if err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	leaveDanglingIntent(t, m, eng, sb)
+	eng.mu.Lock()
+	eng.snapListErr = nil
+	eng.mu.Unlock()
+	hibernateClaim(t, m, sb)
+	m.mu.Lock()
+	snap := sb.HibernateSnap
+	m.mu.Unlock()
+	if _, held := sb.HiddenEnv("gw"); held || snap == "" {
+		t.Errorf("adopted hibernate %q still holds the value %v, want it dropped", snap, held)
+	}
+}
+
 func injectEnv(value string, hosts ...string) types.Env {
 	return types.Env{"KEY": {Value: value, Guest: hostOnly, Inject: &types.EnvInject{Hosts: hosts, Header: "X-Api-Key"}}}
 }
@@ -650,12 +756,16 @@ func credentialsFor(sb *types.Sandbox, host string) string {
 
 func envManager(t *testing.T, eng *fakeEngine, dataDir string, pools ...config.PoolSpec) *Manager {
 	t.Helper()
+	return envManagerOf(t, eng, &config.Config{DataDir: dataDir, APIToken: "root", Pools: pools})
+}
+
+func envManagerOf(t *testing.T, eng *fakeEngine, cfg *config.Config) *Manager {
+	t.Helper()
 	t.Setenv("GH_TOKEN", "node-gh")
 	secrets := testSecrets(t,
 		egress.SecretSpec{Name: "gh", Header: "Authorization", ValueEnv: "GH_TOKEN"},
 		egress.SecretSpec{Name: "gw", Header: "Authorization"},
 	)
-	cfg := &config.Config{DataDir: dataDir, APIToken: "root", Pools: pools}
 	m, err := NewManager(t.Context(), cfg, eng, secrets, testBackends(t, cfg))
 	if err != nil {
 		t.Fatalf("manager: %v", err)

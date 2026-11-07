@@ -217,6 +217,8 @@ type SandboxSummary struct {
 	Failed         string             `json:"failed,omitempty"`
 	ClaimedAt      time.Time          `json:"claimed_at,omitzero"`
 	Deadline       time.Time          `json:"deadline"`
+	// EnvMissing reports a host-only env entry whose value the node no longer holds.
+	EnvMissing bool `json:"env_missing,omitzero"`
 }
 
 // PoolInfo is the ops view of one pool.
@@ -438,6 +440,7 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 		refillKick:      make(chan struct{}, 1),
 		healSem:         make(chan struct{}, maxConcurrentHeals),
 	}
+	m.store.dropHostEnv = cfg.HostEnvMemoryOnly
 	m.seedVolumes(cfg.Volumes)
 	if err := m.loadCordon(); err != nil {
 		return nil, err
@@ -733,7 +736,7 @@ func summarize(sb *types.Sandbox) SandboxSummary {
 		ID: sb.ID, Key: sb.Key, Tenant: sb.Tenant, Deadline: sb.Deadline, ClaimedAt: sb.ClaimedAt,
 		Hibernated: sb.HibernateSnap != "", Archived: sb.ArchiveCk != "",
 		FromCheckpoint: sb.FromCheckpoint, ClaimRef: sb.ClaimRef, Metadata: sb.Metadata, OnExpire: sb.OnExpire,
-		Restarts: sb.Restarts, RestartedAt: sb.RestartedAt, Failed: sb.Failed,
+		Restarts: sb.Restarts, RestartedAt: sb.RestartedAt, Failed: sb.Failed, EnvMissing: sb.Env.HasMissing(),
 		CPUCount: spec.CPU, MemTotalBytes: spec.MemoryBytes,
 		Volumes: slices.Clone(sb.Volumes), VolumesWant: slices.Clone(sb.VolumesWant),
 	}

@@ -81,6 +81,8 @@ type SandboxSummary struct {
 	RestartedAt time.Time `json:"restarted_at,omitzero"`
 	// Failed names why the VMM is down and was not restarted; empty means serviceable.
 	Failed string `json:"failed,omitempty"`
+	// EnvMissing reports a host-only env entry whose value the node no longer holds; re-push it with PatchEnv.
+	EnvMissing bool `json:"env_missing,omitzero"`
 }
 
 type sandboxListResponse struct {

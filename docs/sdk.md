@@ -315,6 +315,10 @@ the claim's owner with the client's API token, not the sandbox token.
 so a host-only value is never resent. A host-only change applies to the next
 egress request at any time; a guest change needs a running guest and answers
 a 409 `*APIError` on a hibernated or archived sandbox.
+`Env` reports `Missing` on a host-only entry the node holds no value for, and
+`SandboxSummary.EnvMissing` flags the claim; send the entry again with
+`PatchEnv`. A host-only entry with an empty value, or one with `Missing` set,
+answers 400.
 
 ## Renewing
 
