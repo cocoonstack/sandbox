@@ -26,7 +26,7 @@ const (
 	), taken AS (
 		INSERT INTO sandboxd_tun_addrs (cell, address, claim)
 		SELECT $1, host($3::inet + (1 + nextval('sandboxd_tun_addrs_cursor') % $4)), $2 WHERE NOT EXISTS (SELECT 1 FROM held)
-		ON CONFLICT (cell, address) DO UPDATE SET claim = EXCLUDED.claim, allocated_at = now(), released_at = NULL
+		ON CONFLICT (cell, address) DO UPDATE SET claim = EXCLUDED.claim, allocated_at = now(), seen_at = now(), released_at = NULL
 		WHERE sandboxd_tun_addrs.released_at < now() - make_interval(secs => $5)
 		RETURNING address
 	)
@@ -82,6 +82,43 @@ func (s *Store) Release(ctx context.Context, claimID string, addr netip.Addr) er
 		return down(err)
 	}
 	return nil
+}
+
+// Confirm stamps the active addresses of claims as seen now.
+func (s *Store) Confirm(ctx context.Context, claims []string) error {
+	qctx, cancel := context.WithTimeout(ctx, metastore.QueryTimeout)
+	defer cancel()
+	if _, err := s.pool.Exec(qctx, `UPDATE sandboxd_tun_addrs SET seen_at = now()
+		WHERE cell = $1 AND released_at IS NULL AND claim = ANY($2)`, s.cell, claims); err != nil {
+		return down(err)
+	}
+	return nil
+}
+
+// Unconfirmed returns the active addresses no node has confirmed for age, by claim.
+func (s *Store) Unconfirmed(ctx context.Context, age time.Duration) (map[string]netip.Addr, error) {
+	qctx, cancel := context.WithTimeout(ctx, metastore.QueryTimeout)
+	defer cancel()
+	rows, err := s.pool.Query(qctx, `SELECT claim, address FROM sandboxd_tun_addrs
+		WHERE cell = $1 AND released_at IS NULL AND seen_at < now() - make_interval(secs => $2)`, s.cell, age.Seconds())
+	if err != nil {
+		return nil, down(err)
+	}
+	defer rows.Close()
+	stale := map[string]netip.Addr{}
+	for rows.Next() {
+		var claim, addr string
+		if err := rows.Scan(&claim, &addr); err != nil {
+			return nil, down(err)
+		}
+		if a, parseErr := netip.ParseAddr(addr); parseErr == nil {
+			stale[claim] = a
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, down(err)
+	}
+	return stale, nil
 }
 
 func (s *Store) Close() {

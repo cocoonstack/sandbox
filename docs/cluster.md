@@ -812,7 +812,9 @@ one PostgreSQL table that every node reads, so one tenant per end user works:
 - **Cache:** each node caches the tenants it has seen. A tenant's first request
   on a node is one indexed query; later ones are a map hit. Unknown tokens are
   cached as misses for 10 s, and a node sends at most 200 cold lookups per
-  second, so random tokens cannot load the database.
+  second, so random tokens cannot load the database. The budget is node-wide:
+  a flood of random tokens past it makes every tenant the node has not cached
+  answer 503 until the flood stops; cached tenants are unaffected.
 - **Database down:**
   - cached tenants keep authenticating and their claims keep running;
   - an uncached tenant answers 503, and writes fail;

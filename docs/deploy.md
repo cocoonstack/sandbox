@@ -45,6 +45,11 @@ every archived claim and delete the checkpoints, then re-promote templates, or
 point `prefix` at an empty location. Objects of the old layout under a reused
 prefix stay in the bucket until you delete them.
 
+From v0.1.25, `sandboxd_tun_addrs` has a `seen_at` column. A cell that ran a
+mesh with `tun` on v0.1.24 adds it before the first v0.1.25 node starts:
+`ALTER TABLE sandboxd_tun_addrs ADD COLUMN seen_at timestamptz NOT NULL DEFAULT now();`
+Without it every tun claim of the cell runs without an overlay address.
+
 From v0.1.25, a claim env write refuses a `guest: false` entry with an empty
 value, so sending back a `GET` env reply answers 400; send each entry with its
 value. An empty value no longer blocks the node's secret for one claim. A node
@@ -1069,10 +1074,16 @@ one set per `meta_store.cell`.
       claim        text        NOT NULL,
       allocated_at timestamptz NOT NULL DEFAULT now(),
       released_at  timestamptz,
+      seen_at      timestamptz NOT NULL DEFAULT now(),
       PRIMARY KEY (cell, address)
   );
   CREATE UNIQUE INDEX IF NOT EXISTS sandboxd_tun_addrs_claim ON sandboxd_tun_addrs (cell, claim) WHERE released_at IS NULL;
   ```
+- **Reconcile:** every node stamps `seen_at` on the addresses of the claims it
+  holds once an hour, and any node releases an address no node stamped for a
+  day unless an unconsumed [archive row](#shared-archive-registry) names its
+  claim, so an address a crash or a lost release left behind returns to the
+  pool after its reuse window.
 
 ### Reloading the config
 
