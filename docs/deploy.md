@@ -48,7 +48,8 @@ prefix stay in the bucket until you delete them.
 From v0.1.25, `sandboxd_tun_addrs` has a `seen_at` column. A cell that ran a
 mesh with `tun` on v0.1.24 adds it before the first v0.1.25 node starts:
 `ALTER TABLE sandboxd_tun_addrs ADD COLUMN seen_at timestamptz NOT NULL DEFAULT now();`
-Without it every new tun claim of the cell runs without an overlay address.
+Without it every new tun claim of the cell runs without an overlay address,
+and adopting an archived tun claim from another node fails.
 Finish the cell's upgrade within a day: a v0.1.24 node never stamps
 `seen_at`, so a v0.1.25 node releases its claims' addresses after a day.
 

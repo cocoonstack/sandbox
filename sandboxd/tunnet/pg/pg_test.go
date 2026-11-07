@@ -145,8 +145,8 @@ func TestOnlyAnAddressNoNodeConfirmsGoesUnconfirmed(t *testing.T) {
 	if _, err = s.Confirm(ctx, map[string]netip.Addr{"sb_orphan": orphan}); err != nil {
 		t.Fatalf("a late confirm: %v", err)
 	}
-	if err = s.Reclaim(ctx, "sb_orphan", orphan, 24*time.Hour); err != nil {
-		t.Fatalf("reclaim after a late confirm: %v", err)
+	if reclaimed, reclaimErr := s.Reclaim(ctx, "sb_orphan", orphan, 24*time.Hour); reclaimErr != nil || reclaimed {
+		t.Fatalf("reclaim after a late confirm = %v %v, want nothing reclaimed", reclaimed, reclaimErr)
 	}
 	if again, assignErr := s.Assign(ctx, "sb_orphan"); assignErr != nil || again != orphan {
 		t.Errorf("a reclaim raced by a confirm released the address: assign = %s %v, want %s held", again, assignErr, orphan)
@@ -154,8 +154,8 @@ func TestOnlyAnAddressNoNodeConfirmsGoesUnconfirmed(t *testing.T) {
 	if _, err = s.pool.Exec(ctx, `UPDATE sandboxd_tun_addrs SET seen_at = now() - interval '2 days', allocated_at = now() - interval '2 days' WHERE cell = 'c1'`); err != nil {
 		t.Fatalf("age the rows again: %v", err)
 	}
-	if err = s.Reclaim(ctx, "sb_orphan", orphan, 24*time.Hour); err != nil {
-		t.Fatalf("reclaim: %v", err)
+	if reclaimed, reclaimErr := s.Reclaim(ctx, "sb_orphan", orphan, 24*time.Hour); reclaimErr != nil || !reclaimed {
+		t.Fatalf("reclaim = %v %v, want the address reclaimed", reclaimed, reclaimErr)
 	}
 	if stale, err = s.Unconfirmed(ctx, 24*time.Hour); err != nil || len(stale) != 1 || stale["sb_held"] != held {
 		t.Errorf("unconfirmed after the reclaim %v %v, want only sb_held", stale, err)
