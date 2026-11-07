@@ -84,8 +84,8 @@ func (c *CA) CertPEM() []byte { return c.rootPEM }
 // Fingerprint is the SHA-256 of the baked root PEM, so a rotated intermediate keeps it.
 func (c *CA) Fingerprint() string { return c.rootFP }
 
-// SignLeaf issues a fresh interception leaf for host, chained [leaf, intermediate].
-func (c *CA) SignLeaf(host string) (*tls.Certificate, error) {
+// signLeaf issues a fresh interception leaf for host, chained [leaf, intermediate].
+func (c *CA) signLeaf(host string) (*tls.Certificate, error) {
 	serial, err := serialNumber()
 	if err != nil {
 		return nil, err

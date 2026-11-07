@@ -64,7 +64,6 @@ func (p *Proxy) serveIntercept(w http.ResponseWriter, r *http.Request, host stri
 	_ = srv.Serve(ln)
 }
 
-// leafFor returns the cached leaf for host, signing a fresh one on miss or near-expiry.
 func (p *Proxy) leafFor(host string) (*tls.Certificate, error) {
 	p.leafMu.Lock()
 	defer p.leafMu.Unlock()
@@ -72,7 +71,7 @@ func (p *Proxy) leafFor(host string) (*tls.Certificate, error) {
 	if crt, ok := p.leaves[host]; ok && (time.Now().Before(crt.Leaf.NotAfter.Add(-leafRenewBefore)) || !crt.Leaf.NotAfter.Before(p.ca.interCert.NotAfter)) {
 		return crt, nil
 	}
-	crt, err := p.ca.SignLeaf(host)
+	crt, err := p.ca.signLeaf(host)
 	if err != nil {
 		return nil, err
 	}
