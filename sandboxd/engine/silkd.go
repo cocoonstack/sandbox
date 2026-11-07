@@ -130,7 +130,7 @@ func (e *Engine) silkdReadFile(ctx context.Context, vsockSocket, path string, li
 	return e.silkdCollect(ctx, vsockSocket, wire.FsRead{Path: path}, limit, fmt.Errorf("silkd read of %s exceeds %d bytes", path, limit), func(r *wire.DataResp) []byte { return r.Data })
 }
 
-// silkdOnce sends a request answered by a single T frame and no Done, so it cannot ride silkdStream.
+// silkdOnce sends a request answered by exactly one T frame.
 func (e *Engine) silkdOnce[T wire.Response](ctx context.Context, vsockSocket string, req wire.Request) error {
 	s, err := e.dialSilkdSession(ctx, vsockSocket)
 	if err != nil {
