@@ -86,6 +86,41 @@ func TestLeaseExpiryStopsReplicatedTunUntilOwnershipIsConfirmed(t *testing.T) {
 	}
 }
 
+func TestATakenClaimLosesItsTunBeforeTheFenceLifts(t *testing.T) {
+	m := tunManager(t, newFakeEngine(), &fakeAddrs{}, config.PoolSpec{PoolKey: testKey, Tun: true, Egress: anyPolicy, ReplicateSeconds: 60})
+	reg := archivestest.NewMem()
+	m.archives, m.nodeID = reg, "a"
+	sb := mustClaim(t, m, testKey)
+	replicateNow(t, m, sb)
+	synctest.Test(t, func(t *testing.T) {
+		stream := leaseTunStream(t, m, sb)
+		m.trip(t.Context())
+		reg.Expire("a")
+		row, _, err := reg.Get(t.Context(), sb.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err = reg.Take(t.Context(), sb.ID, row.Epoch, "b"); err != nil {
+			t.Fatal(err)
+		}
+		sb.Transition.Lock()
+		m.unfence(t.Context(), time.Now())
+		if m.isFenced() {
+			t.Fatal("the confirmed lease stayed fenced")
+		}
+		before := m.tunRouter.Stats().ARPSent
+		m.tunRouter.Reload(m.cfg.Tun.Overlay())
+		if got := m.tunRouter.Stats().ARPSent; got != before {
+			t.Errorf("the former owner announced the taken claim while its teardown waited: %d -> %d", before, got)
+		}
+		sb.Transition.Unlock()
+		synctest.Wait()
+		if _, err := stream.Read(make([]byte, 1)); !errors.Is(err, io.EOF) {
+			t.Errorf("the taken claim's stream read %v, want EOF", err)
+		}
+	})
+}
+
 func leaseTunStream(t *testing.T, m *Manager, sb *types.Sandbox) net.Conn {
 	t.Helper()
 	host, guest := net.Pipe()
