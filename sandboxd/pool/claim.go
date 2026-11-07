@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -649,6 +650,7 @@ func (m *Manager) finalizeBatch(ctx context.Context, sbs []*types.Sandbox, ttl t
 // rollbackClaim unwinds a claim batch: a NIC that cannot be locked is never handed out.
 func (m *Manager) rollbackClaim(ctx context.Context, sbs []*types.Sandbox, billed bool) {
 	m.mu.Lock()
+	sbs = slices.DeleteFunc(slices.Clone(sbs), func(sb *types.Sandbox) bool { return m.claimed[sb.ID] != sb })
 	ids := make([]string, len(sbs))
 	holds := make([][]types.Volume, len(sbs))
 	for i, sb := range sbs {
