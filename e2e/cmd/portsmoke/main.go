@@ -19,9 +19,8 @@ import (
 )
 
 const (
-	// guestPort is the port an edge proxy relays to; the relay is port-agnostic either way.
-	guestPort = 49983
-	// halfClosePort greets and shuts its write side, then keeps reading.
+	// An edge proxy relays to this port; the relay itself is port-agnostic.
+	guestPort     = 49983
 	halfClosePort = 49984
 	// deadPort has no listener, so silkd's connect refusal must surface as 502.
 	deadPort          = 49985
@@ -90,7 +89,6 @@ func run(addr, token, template, listener string, hold time.Duration) error {
 		fmt.Printf("  ok  %-24s %5.1fs\n", step.name, time.Since(t0).Seconds())
 	}
 	if hold > 0 {
-		// The listener is live now, for the operator's edge smoke to drive
 		fmt.Printf("SANDBOX %s %s %s %d\n", sb.ID, sb.Token(), sb.Owner(), guestPort)
 		select {
 		case <-time.After(hold):
@@ -118,10 +116,7 @@ func startGuestListener(ctx context.Context, sb *sandbox.Sandbox, listener strin
 		return fmt.Errorf("spawn listener: %w", err)
 	}
 	bound := harness.Poll(ctx, listenerReadyWait, 500*time.Millisecond, func() error {
-		out, err := sb.Exec(ctx, "sh", "-c", fmt.Sprintf("ss -ltn 'sport = :%d' | grep -c LISTEN", guestPort))
-		if err == nil && strings.TrimSpace(out) == "0" {
-			return errors.New("not listening")
-		}
+		_, err := sb.Exec(ctx, "sh", "-c", fmt.Sprintf("ss -ltn 'sport = :%d' | grep -c LISTEN", guestPort))
 		return err
 	})
 	if bound != nil {

@@ -1,13 +1,5 @@
-// rpcbench measures the one-connection-per-RPC overhead on a live node: mode
-// A dials+upgrades per RPC by hand; mode C is the SDK's own path, one kept
-// connection serving RPCs back to back. A and C interleave sample by sample
-// and swap which one leads, so node drift cannot land on one arm. Run by
-// hand, or by scripts/bench.sh; it claims its own sandbox:
-//
-//	rpcbench -addr <node> -token <api token> -template <ref> -n 200
-//
-// An https:// address drives the hand-dialed mode through the TLS edge the
-// SDK already uses, so A pays a handshake per RPC the way a real client does.
+// rpcbench compares dial-per-RPC against the SDK's kept connection on a live
+// node, interleaved sample by sample with the lead swapped.
 package main
 
 import (
@@ -192,7 +184,7 @@ func dialAgent(ctx context.Context, addr, id, token string, tlsCfg *tls.Config) 
 		}
 		scheme = "https"
 	}
-	req, err := http.NewRequest(http.MethodGet, scheme+"://"+host+"/v1/sandboxes/"+id+"/agent", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, scheme+"://"+host+"/v1/sandboxes/"+id+"/agent", nil)
 	if err != nil {
 		_ = raw.Close()
 		return nil, err

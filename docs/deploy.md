@@ -1202,7 +1202,7 @@ some of them on a node:
 | `portsmoke`, `guestserver` | the guest-port relay; `guestserver` is its guest listener | `port-e2e.sh` |
 | `ringsmoke` | the output ring cap and exec as a user | |
 | `androidsmoke`, `browsersmoke` | the android and browser flavors | |
-| `pullbench`, `pushbench`, `rpcbench`, `qaab` | performance measurements | |
+| `pullbench`, `pushbench`, `rpcbench` | performance measurements | |
 
 `scripts/bench.sh` is the published [benchmark](benchmarks.md#reproduce)
 procedure and `scripts/boot-bench.sh` times the boot phases.
