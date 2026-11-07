@@ -334,7 +334,7 @@ type PortForward struct {
 
 func (PortForward) Op() string { return "port_forward" }
 
-// GitClone clones a repo; network-lane only; Auth rides an in-memory Authorization header, never guest disk.
+// GitClone clones a repo; Auth rides an in-memory Authorization header, never guest disk.
 type GitClone struct {
 	URL    string `json:"url"`
 	Path   string `json:"path"`
@@ -369,7 +369,7 @@ type GitCommit struct {
 
 func (GitCommit) Op() string { return "git_commit" }
 
-// GitPush pushes the current branch; network-lane only.
+// GitPush pushes the current branch.
 type GitPush struct {
 	Path string `json:"path"`
 	Auth string `json:"auth,omitempty"`
@@ -377,7 +377,7 @@ type GitPush struct {
 
 func (GitPush) Op() string { return "git_push" }
 
-// GitPull pulls the current branch; network-lane only.
+// GitPull pulls the current branch.
 type GitPull struct {
 	Path string `json:"path"`
 	Auth string `json:"auth,omitempty"`
