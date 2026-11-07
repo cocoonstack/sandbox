@@ -73,12 +73,12 @@ A failed verb terminates with `error {kind, message}`:
 |---|---|
 | `bad_request` | malformed frame, empty argv, invalid pattern, an exec argv or cwd the guest cannot spawn (missing, not a directory, not executable), an exec or pty `user` the guest cannot resolve (`unknown user`, or `look up user: <errno>` when the name service itself fails) |
 | `not_found` | unknown pid/session/path, a `port_forward` port nothing listens on, a language with no LSP manifest |
-| `unimplemented` | verb unavailable on this lane — notably git clone/push/pull on the no-network lane, whose message points at `fs.push` |
+| `unimplemented` | reserved in the protocol; no verb answers it today |
 | `internal` | everything else (other spawn failures, git errors, I/O) |
 
 ## Network lanes
 
-git clone/push/pull consult lane detection: an interface under
+Lane detection decides whether execs route directly: an interface under
 `/sys/class/net` counts only when it has a `device` backing (a virtio or
 physical NIC). Name-based checks are not enough — the all-builtin sandbox
 kernel auto-creates virtual tunnels (`sit0` and friends) even on the no-NIC

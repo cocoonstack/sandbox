@@ -520,12 +520,12 @@ when the relay drops, which `w.error` tells apart from a clean close (`None`).
 ## Git
 
 ```python
-sb.git_clone(url, "/work/repo", branch="main", depth=1, auth=token)  # egress lane only
+sb.git_clone(url, "/work/repo", branch="main", depth=1, auth=token)
 st = sb.git_status("/work/repo")          # {"type", "branch", "ahead", "behind", "files", "truncated"?}
 sb.git_add("/work/repo", ["a.txt"])
 sha = sb.git_commit("/work/repo", "message", "Dev <dev@example.com>")
-sb.git_push("/work/repo", auth=token)     # egress lane only
-sb.git_pull("/work/repo", auth=token)     # egress lane only
+sb.git_push("/work/repo", auth=token)
+sb.git_pull("/work/repo", auth=token)
 br = sb.git_branches("/work/repo")        # {"type", "current", "branches"}
 sb.git_create_branch("/work/repo", "feature")
 sb.git_checkout("/work/repo", "feature")
@@ -533,9 +533,10 @@ sb.git_delete_branch("/work/repo", "feature")
 ```
 
 Results are structured (porcelain v2 under the hood), never scraped stdout.
-Auth tokens travel as an in-memory header, never touching guest disk. On
-the no-network lane, clone/push/pull raise a typed `unimplemented` error
-pointing at `push`.
+Auth tokens travel as an in-memory header, never touching guest disk.
+Clone, push and pull reach the remote the way an exec does: directly on the
+egress lane, through the egress proxy elsewhere, so a pool whose policy does
+not allow the git host fails them with git's own error.
 
 ## Terminals
 
@@ -584,8 +585,8 @@ zero. `undrain()` lifts only a drain and `uncordon()` only a
 
 ```python
 try:
-    sb.git_clone(url, "/work/repo")
+    sb.read_file("/work/missing.txt")
 except SilkdError as e:
-    if e.kind == "unimplemented":   # no-network lane: fall back to push
-        sb.push("/work/repo", tar_bytes)
+    if e.kind == "not_found":
+        ...
 ```

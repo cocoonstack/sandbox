@@ -652,12 +652,12 @@ overflow instead of the stream silently dropping events.
 ## Git
 
 ```go
-err  = sb.GitClone(ctx, url, "/work/repo", "main", 0, token) // egress lane only; depth > 0 = shallow
+err  = sb.GitClone(ctx, url, "/work/repo", "main", 0, token) // depth > 0 = shallow
 st,  err := sb.GitStatus(ctx, "/work/repo")   // Branch, Ahead, Behind, Files[]; Truncated when the list was cut at ~1 MiB
 err  = sb.GitAdd(ctx, "/work/repo", "a.txt")
 hash, err := sb.GitCommit(ctx, "/work/repo", "message", "Dev <dev@example.com>")
-err  = sb.GitPush(ctx, "/work/repo", token)   // egress lane only
-err  = sb.GitPull(ctx, "/work/repo", token)   // egress lane only
+err  = sb.GitPush(ctx, "/work/repo", token)
+err  = sb.GitPull(ctx, "/work/repo", token)
 br,  err := sb.GitBranches(ctx, "/work/repo") // Current + Branches
 err  = sb.GitCreateBranch(ctx, "/work/repo", "feature")
 err  = sb.GitCheckout(ctx, "/work/repo", "feature")
@@ -665,9 +665,10 @@ err  = sb.GitDeleteBranch(ctx, "/work/repo", "feature")
 ```
 
 Results are structured (porcelain v2 under the hood), never scraped stdout.
-Auth tokens travel as an in-memory header, never touching guest disk. On the
-no-network lane, clone/push/pull fail fast with a typed `unimplemented`
-error pointing at `Push`.
+Auth tokens travel as an in-memory header, never touching guest disk.
+Clone, push and pull reach the remote the way an exec does: directly on the
+egress lane, through the egress proxy elsewhere, so a pool whose policy does
+not allow the git host fails them with git's own error.
 
 ## Terminals
 
@@ -737,8 +738,8 @@ tenant.
 
 ```go
 var e *wire.ErrorResp
-if errors.As(err, &e) && e.Kind == wire.KindUnimplemented {
-    // no-network lane: fall back to sb.Push
+if errors.As(err, &e) && e.Kind == wire.KindNotFound {
+    // the guest path does not exist
 }
 ```
 
