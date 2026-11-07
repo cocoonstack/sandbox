@@ -607,8 +607,8 @@ func (r *reconcilingAddrs) Confirm(_ context.Context, held map[string]netip.Addr
 	return slices.Clone(r.lost), nil
 }
 
-func (r *reconcilingAddrs) Reclaim(ctx context.Context, claim string, addr netip.Addr, _ time.Duration) error {
-	return r.Release(ctx, claim, addr)
+func (r *reconcilingAddrs) Reclaim(ctx context.Context, claim string, addr netip.Addr, _ time.Duration) (bool, error) {
+	return true, r.Release(ctx, claim, addr)
 }
 
 func (r *reconcilingAddrs) Unconfirmed(context.Context, time.Duration) (map[string]netip.Addr, error) {

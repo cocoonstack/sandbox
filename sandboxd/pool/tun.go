@@ -35,7 +35,7 @@ type tunSeeder interface {
 type tunReconciler interface {
 	Confirm(ctx context.Context, held map[string]netip.Addr) ([]string, error)
 	Unconfirmed(ctx context.Context, age time.Duration) (map[string]netip.Addr, error)
-	Reclaim(ctx context.Context, claim string, addr netip.Addr, age time.Duration) error
+	Reclaim(ctx context.Context, claim string, addr netip.Addr, age time.Duration) (bool, error)
 }
 
 type tunState struct {
@@ -219,11 +219,14 @@ func (m *Manager) reconcileTunAddrs(ctx context.Context) {
 		if row, found := rows[id]; found && !row.Consumed {
 			continue
 		}
-		if err := addrs.Reclaim(ctx, id, addr, tunUnconfirmedAfter); err != nil {
+		reclaimed, err := addrs.Reclaim(ctx, id, addr, tunUnconfirmedAfter)
+		if err != nil {
 			logger.Warnf(ctx, "reclaim overlay address %s of %s: %v", addr, id, err)
 			return
 		}
-		logger.Infof(ctx, "reclaimed overlay address %s of %s: no node confirmed it for %s", addr, id, tunUnconfirmedAfter)
+		if reclaimed {
+			logger.Infof(ctx, "reclaimed overlay address %s of %s: no node confirmed it for %s", addr, id, tunUnconfirmedAfter)
+		}
 	}
 }
 
