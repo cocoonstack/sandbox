@@ -311,15 +311,12 @@ async fn exec_as_a_user_keeps_its_supplementary_groups() {
 #[tokio::test]
 #[ignore = "needs root"]
 async fn exec_as_a_user_refuses_a_cwd_the_user_cannot_enter() {
-    let Some(user) = group_member() else {
-        return;
-    };
     let locked = tempfile::tempdir().unwrap();
     std::fs::set_permissions(locked.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
     let inner = locked.path().join("inner");
     std::fs::create_dir(&inner).unwrap();
     let frames = request(json!({
-        "op":"exec","argv":["true"],"user":user,"cwd":inner.to_str().unwrap()
+        "op":"exec","argv":["true"],"user":"nobody","cwd":inner.to_str().unwrap()
     }))
     .await;
     assert_error(&frames[0], "bad_request");
