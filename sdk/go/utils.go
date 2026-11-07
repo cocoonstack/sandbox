@@ -225,7 +225,7 @@ func recv(ctx context.Context, conn *silkd.Conn) (wire.Response, error) {
 			return nil, ctxErr
 		}
 		if errors.Is(err, io.EOF) {
-			return nil, fmt.Errorf("connection closed before a terminal frame")
+			return nil, fmt.Errorf("connection closed before a terminal frame: %w", io.ErrUnexpectedEOF)
 		}
 		return nil, err
 	}
