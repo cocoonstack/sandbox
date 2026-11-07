@@ -124,7 +124,7 @@ func TestMoveClientPassesTheTargetsRefusalThrough(t *testing.T) {
 		{http.StatusConflict, pool.ErrNotMovable},
 		{http.StatusInternalServerError, pool.ErrMoveTarget},
 	} {
-		status, reason = tt.status, "node claim quota reached: 4 live claims, cap 4"
+		status, reason = tt.status, "admission refused: 4 live claims, cap 4"
 		_, err := c.Admit(t.Context(), target.URL, "sb_1", pool.MoveAdmission{From: "a"})
 		if !errors.Is(err, tt.want) || !strings.Contains(err.Error(), reason) {
 			t.Errorf("admit answered %d: %v, want %v with the target's reason", tt.status, err, tt.want)

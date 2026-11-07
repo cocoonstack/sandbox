@@ -122,7 +122,7 @@ var (
 	ErrEvacuating          = errors.New("sandbox is moving to another node; retry")
 	ErrFailed              = errors.New("sandbox failed: its VMM is down; release it, or wake it to cold-boot its disk")
 	ErrNoInstanceMetadata  = engine.ErrNoInstanceMetadata
-	ErrQuota               = errors.New("node claim quota reached")
+	ErrQuota               = errors.New("admission refused")
 	ErrSleeping            = errors.New("sandbox is hibernated or archived and a reader may serve it")
 	ErrNoReader            = errors.New("no reader for the sandbox")
 	ErrNotMovable          = errors.New("sandbox cannot move")
