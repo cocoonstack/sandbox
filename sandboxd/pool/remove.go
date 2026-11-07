@@ -11,6 +11,7 @@ import (
 	"github.com/projecteru2/core/log"
 
 	"github.com/cocoonstack/sandbox/sandboxd/engine"
+	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
 func (m *Manager) removeVM(ctx context.Context, name string) bool {
@@ -115,6 +116,22 @@ func (m *Manager) destroy(ctx context.Context, name string) {
 
 func (m *Manager) destroyAll(ctx context.Context, names []string) *sync.WaitGroup {
 	return m.runBounded(ctx, len(names), func(ctx context.Context, i int) { m.destroy(ctx, names[i]) })
+}
+
+func (m *Manager) dropSnapAfterTransition(ctx context.Context, sb *types.Sandbox, snap string) {
+	if snap == "" {
+		return
+	}
+	if sb.Transition.TryLock() {
+		defer sb.Transition.Unlock()
+		m.dropSnap(ctx, snap)
+		return
+	}
+	go func() {
+		sb.Transition.Lock()
+		defer sb.Transition.Unlock()
+		m.dropSnap(ctx, snap)
+	}()
 }
 
 func (m *Manager) dropSnap(ctx context.Context, snap string) {

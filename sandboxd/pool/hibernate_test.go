@@ -478,6 +478,24 @@ func TestReleaseHibernatedDropsSnapshot(t *testing.T) {
 	}
 }
 
+func TestReleaseDuringAnExportDropsTheSnapshotOnceTheExportEnds(t *testing.T) {
+	eng := newFakeEngine()
+	m := newTestManager(t, eng)
+	sb := mustClaim(t, m, testKey)
+	hibernateClaim(t, m, sb)
+	snap := eng.hibernates[0]
+
+	sb.Transition.Lock()
+	if err := m.Release(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
+		t.Fatalf("Release: %v", err)
+	}
+	if eng.snapRemoved(snap) {
+		t.Fatal("the snapshot was dropped while an export still held it")
+	}
+	sb.Transition.Unlock()
+	waitFor(t, func() bool { return eng.snapRemoved(snap) })
+}
+
 func TestReleaseMidHibernateDropsOrphanSnapshot(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		eng := newFakeEngine()

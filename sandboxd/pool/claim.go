@@ -361,7 +361,7 @@ func (m *Manager) releaseResolved(ctx context.Context, id string, sb *types.Sand
 		}
 	}
 	m.out.Disarm(id, removed)
-	m.dropSnap(ctx, snap)
+	m.dropSnapAfterTransition(ctx, sb, snap)
 	return err
 }
 
