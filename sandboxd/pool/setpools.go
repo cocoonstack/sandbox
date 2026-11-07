@@ -40,6 +40,9 @@ func (m *Manager) desiredPools(specs []config.PoolSpec) (map[types.PoolKey]confi
 		if err := spec.ValidateLimits(); err != nil {
 			return nil, fmt.Errorf("%w: pool %s: %w", ErrBadConfig, spec.Template, err)
 		}
+		if m.view.Load().poolReaders[spec.PoolKey] && spec.Warm < 1 {
+			return nil, fmt.Errorf("%w: pool %s: reader needs warm of at least 1", ErrBadConfig, spec.Template)
+		}
 		for _, f := range spec.ConfigOwned() {
 			if !f.Value.IsZero() {
 				return nil, fmt.Errorf("%w: pool %q: %s is set in the config file, not via the API", ErrBadKey, spec.Template, f.Name)
