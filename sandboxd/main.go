@@ -118,7 +118,7 @@ func main() {
 		if err != nil {
 			logger.Fatalf(ctx, err, "start mesh")
 		}
-		defer func() { _ = msh.Shutdown() }()
+		context.AfterFunc(ctx, func() { _ = msh.Shutdown() })
 		placer = msh
 		mgr.SetTemplateNotifier(func() {
 			msh.UpdateSelf(mgr.WarmCounts(), mgr.TemplateHashes(), mgr.VolumeNames())
