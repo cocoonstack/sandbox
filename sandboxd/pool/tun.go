@@ -35,6 +35,7 @@ type tunSeeder interface {
 type tunReconciler interface {
 	Confirm(ctx context.Context, held map[string]netip.Addr) ([]string, error)
 	Unconfirmed(ctx context.Context, age time.Duration) (map[string]netip.Addr, error)
+	Reclaim(ctx context.Context, claim string, addr netip.Addr, age time.Duration) error
 }
 
 type tunState struct {
@@ -218,9 +219,29 @@ func (m *Manager) reconcileTunAddrs(ctx context.Context) {
 		if row, found := rows[id]; found && !row.Consumed {
 			continue
 		}
-		logger.Infof(ctx, "release overlay address %s of %s: no node confirmed it for %s", addr, id, tunUnconfirmedAfter)
-		m.releaseTun(ctx, id, addr)
+		if err := addrs.Reclaim(ctx, id, addr, tunUnconfirmedAfter); err != nil {
+			logger.Warnf(ctx, "reclaim overlay address %s of %s: %v", addr, id, err)
+			return
+		}
+		logger.Infof(ctx, "reclaimed overlay address %s of %s: no node confirmed it for %s", addr, id, tunUnconfirmedAfter)
 	}
+}
+
+// confirmAdoptedTun stamps an adopted claim's address before its row stops sparing it; an address another claim took is dropped.
+func (m *Manager) confirmAdoptedTun(ctx context.Context, sb *types.Sandbox) error {
+	addrs, ok := m.tunAddrs.(tunReconciler)
+	if !ok || !sb.TunAddr.IsValid() {
+		return nil
+	}
+	lost, err := addrs.Confirm(ctx, map[string]netip.Addr{sb.ID: sb.TunAddr})
+	if err != nil {
+		return err
+	}
+	if len(lost) > 0 {
+		log.WithFunc("pool.confirmAdoptedTun").Warnf(ctx, "overlay address %s of %s belongs to another claim; it runs without tun", sb.TunAddr, sb.ID)
+		sb.TunAddr = netip.Addr{}
+	}
+	return nil
 }
 
 func (m *Manager) releaseRowTun(ctx context.Context, rec archives.Record) {
