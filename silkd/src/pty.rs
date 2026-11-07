@@ -67,7 +67,14 @@ pub async fn open<W: AsyncWrite + Unpin>(
 
     let mut child = match cmd.spawn() {
         Ok(c) => c,
-        Err(e) => return proto::err_frame(out, &e, "spawn shell").await,
+        Err(e) => {
+            return proto::error_frame(
+                out,
+                crate::exec::spawn_kind(&e),
+                format!("spawn shell: {e}"),
+            )
+            .await;
+        }
     };
     // close silkd's slave dups, else the master never hangs up and the exit drain runs to its timeout.
     drop(cmd);

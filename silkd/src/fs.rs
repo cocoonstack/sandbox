@@ -216,11 +216,7 @@ fn scan_dir(path: &str, tx: &mpsc::Sender<Vec<DirEntry>>) -> io::Result<()> {
 }
 
 fn tmp_name(path: &Path) -> PathBuf {
-    let mut tmp = path.as_os_str().to_os_string();
-    tmp.push(".silkd-");
-    tmp.push(sysutil::tmp_suffix());
-    tmp.push(".tmp");
-    PathBuf::from(tmp)
+    path.with_file_name(format!(".silkd-{}.tmp", sysutil::tmp_suffix()))
 }
 
 /// Creates the temp file exclusively under its final mode; without an explicit mode an overwrite inherits the destination's bits, and under root always its owner.
@@ -304,12 +300,20 @@ mod tests {
             .parse()
             .unwrap();
         for seq in next + 1..next + 1000 {
-            let name = format!("x.silkd-{}-{seq}.tmp", std::process::id());
+            let name = format!(".silkd-{}-{seq}.tmp", std::process::id());
             std::os::unix::fs::symlink(&victim, dir.path().join(name)).unwrap();
         }
         let err = write_atomic(&target, b"planted").await.unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::AlreadyExists);
         assert_eq!(std::fs::read_to_string(&victim).unwrap(), "original");
+    }
+
+    #[tokio::test]
+    async fn write_atomic_takes_a_name_at_the_filesystem_limit() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("n".repeat(255));
+        write_atomic(&target, b"long").await.unwrap();
+        assert_eq!(std::fs::read(&target).unwrap(), b"long");
     }
 
     #[tokio::test]
