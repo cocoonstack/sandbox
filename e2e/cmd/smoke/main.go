@@ -211,7 +211,7 @@ func smokeWatch(ctx context.Context, sb *sandbox.Sandbox) error {
 				return nil
 			}
 		case <-deadline:
-			return fmt.Errorf("no event for w.txt within 5s")
+			return errors.New("no event for w.txt within 5s")
 		}
 	}
 }
@@ -475,7 +475,7 @@ func smokeCheckpoint(ctx context.Context, sb *sandbox.Sandbox) error {
 		return fmt.Errorf("delete checkpoint: %w", err)
 	}
 	if _, err = ckpt.New(ctx); err == nil {
-		return fmt.Errorf("branch from deleted checkpoint succeeded")
+		return errors.New("branch from deleted checkpoint succeeded")
 	}
 	return nil
 }
@@ -500,7 +500,7 @@ func smokeTree(ctx context.Context, sb *sandbox.Sandbox) error {
 	full := archive("CLOBBERED")
 	half := io.MultiReader(bytes.NewReader(full[:len(full)/2]), iotest.ErrReader(errors.New("cut")))
 	if err := sb.Push(ctx, "/root/tree", half); err == nil {
-		return fmt.Errorf("truncated push reported success")
+		return errors.New("truncated push reported success")
 	}
 	if out, err := sb.Exec(ctx, "cat", "/root/tree/t.txt"); err != nil || strings.TrimSpace(out) != "tree-marker" {
 		return fmt.Errorf("tree changed by failed push: %q, %v", out, err)
@@ -522,7 +522,7 @@ func smokeTree(ctx context.Context, sb *sandbox.Sandbox) error {
 		return fmt.Errorf("pull: %w", err)
 	}
 	if !bytes.Contains(pulled.Bytes(), []byte("tree-marker")) {
-		return fmt.Errorf("pulled tar missing pushed content")
+		return errors.New("pulled tar missing pushed content")
 	}
 	return nil
 }
@@ -579,8 +579,8 @@ func smokeLsp(ctx context.Context, client *sandbox.Client, base *sandbox.Sandbox
 	defer func() { _ = stream.Close() }()
 
 	r := bufio.NewReader(stream)
-	init := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"rootUri":"file:///work/lsp","capabilities":{}}}`
-	if err = lspWrite(stream, init); err != nil {
+	initReq := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"rootUri":"file:///work/lsp","capabilities":{}}}`
+	if err = lspWrite(stream, initReq); err != nil {
 		return err
 	}
 	if _, err = lspReadResponse(r, 1); err != nil {

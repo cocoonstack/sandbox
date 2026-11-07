@@ -80,7 +80,7 @@ func run(addr, token, template string) error {
 }
 
 func initTree(ctx context.Context, sb *sandbox.Sandbox) error {
-	// The framework (zygote, system_server) starts minutes after init on a nested first boot; silkd answers long before
+	// The framework starts minutes after init on a nested first boot; silkd answers earlier.
 	deadline := time.Now().Add(5 * time.Minute)
 	for {
 		out, err := sb.Exec(ctx, "/system/bin/sh", "-c", shellPath+"; ps -A")

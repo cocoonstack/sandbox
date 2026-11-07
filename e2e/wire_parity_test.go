@@ -16,6 +16,7 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/config"
 	"github.com/cocoonstack/sandbox/sandboxd/pool"
 	"github.com/cocoonstack/sandbox/sandboxd/server"
+	"github.com/cocoonstack/sandbox/sandboxd/tenants"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
@@ -62,7 +63,7 @@ var wirePairs = []struct {
 	{"PoolSpec", true, config.PoolSpec{}, []string{"egress", "warmup", "egress_upstream_env", "capture_trim", "storage", "replicate_seconds", "reader", "net", "size", "tun"}},
 	{"tenantsUpdate", true, server.TenantsRequest{}, nil},
 	{"tenantUpdate", true, server.TenantRequest{}, nil},
-	{"TenantSpec", true, reflect.Zero(reflect.TypeOf(server.TenantsRequest{}.Tenants).Elem()).Interface(), []string{"token"}},
+	{"TenantSpec", true, tenants.TenantSpec{}, []string{"token"}},
 	{"TenantInfo", false, pool.TenantInfo{}, nil},
 	{"TenantList", false, pool.TenantPage{}, nil},
 }

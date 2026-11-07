@@ -80,10 +80,10 @@ func run(addr, peer, token, template string) error {
 		return fmt.Errorf("name-based delete via %s: %w", addr, err)
 	}
 	if err := client.DeleteTemplate(ctx, "mesh-tpl", sandbox.WithNetwork(sandbox.NetNone), sandbox.WithSize(sandbox.Small)); err == nil {
-		return fmt.Errorf("second delete succeeded, want not-found")
+		return errors.New("second delete succeeded, want not-found")
 	}
 	if err := tpl.Delete(ctx); err == nil {
-		return fmt.Errorf("owner-handle delete after name-based delete succeeded, want not-found")
+		return errors.New("owner-handle delete after name-based delete succeeded, want not-found")
 	}
 	fmt.Println("  delete: followed gossip to the owner; gone everywhere after")
 	return nil
