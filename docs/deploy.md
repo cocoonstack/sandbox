@@ -49,8 +49,11 @@ From v0.1.24, a claim env write refuses a `guest: false` entry with an empty
 value, so sending back a `GET` env reply answers 400; send each entry with its
 value. An empty value no longer blocks the node's secret for one claim. A node
 that ran with `host_env_memory_only` stores entries marked `missing`, which
-v0.1.24 cannot read: before going back to it, send those entries again or
-release their claims, or the node does not start.
+v0.1.24 cannot read. Before going back to it, turn the flag off and restart,
+then send every missing entry again or release its claim, until no claim's
+`env_missing` is true: each write stores the value in `claims.json` and the
+claim's row. A `claims.json` that still holds a missing entry stops v0.1.24
+from starting, and a row that holds one cannot be adopted by it.
 
 ## Configuration
 
