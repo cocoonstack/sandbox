@@ -5,6 +5,7 @@ import (
 	"encoding/json/jsontext"
 	"fmt"
 	"net/http"
+	"net/netip"
 	"slices"
 	"strings"
 )
@@ -119,7 +120,7 @@ func (p Policy) Validate() error {
 		case "*.":
 			return fmt.Errorf("allow[%d]: host %q needs a domain after the wildcard", i, r.Host)
 		}
-		if r.Host != "*" && strings.ContainsAny(strings.TrimPrefix(r.Host, "*."), "*:/ ") {
+		if _, ipErr := netip.ParseAddr(r.Host); ipErr != nil && r.Host != "*" && strings.ContainsAny(strings.TrimPrefix(r.Host, "*."), "*:/ ") {
 			return fmt.Errorf("allow[%d]: host %q is not a host name or a leading \"*.\" wildcard", i, r.Host)
 		}
 		if r.Intercept == InterceptInject && r.Secret != "" {
