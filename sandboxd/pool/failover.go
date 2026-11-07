@@ -193,6 +193,9 @@ func (m *Manager) refusedReplace(ctx context.Context, sb *types.Sandbox) error {
 	switch {
 	case err != nil:
 		return err
+	case ok && rec.Owner == m.nodeID && rec.Consumed:
+		m.reputArchive(ctx, sb)
+		return nil
 	case ok && rec.Owner == m.nodeID:
 		_, _ = m.commitIfLive(ctx, sb, func() { sb.ArchiveEpoch = max(sb.ArchiveEpoch, rec.Epoch) })
 		return nil
