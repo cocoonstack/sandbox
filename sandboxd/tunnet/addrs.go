@@ -143,7 +143,7 @@ func (l *Local) Release(_ context.Context, claimID string, addr netip.Addr) erro
 		return fmt.Errorf("open %s: %w", freedFile, err)
 	}
 	_, err = f.Write(appendFreed(nil, addr, now))
-	err = cmp.Or(err, f.Close())
+	err = cmp.Or(err, f.Sync(), f.Close())
 	if err != nil {
 		return fmt.Errorf("append %s: %w", freedFile, err)
 	}
