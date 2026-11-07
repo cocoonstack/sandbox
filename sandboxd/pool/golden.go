@@ -20,7 +20,7 @@ func (m *Manager) buildGolden(ctx context.Context, p *pool) {
 	logger := log.WithFunc("pool.buildGolden")
 	hash := p.hash
 	name := vmPrefix + "gb-" + hash
-	snap := goldenPrefix + hash
+	snap := goldenPrefix + hash + "-" + randHex(6)
 	final := filepath.Join(m.goldensDir(), hash)
 	imageID := m.imageIDs(ctx)[p.key.Template]
 	v := m.view.Load()
