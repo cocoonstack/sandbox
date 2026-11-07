@@ -558,21 +558,21 @@ chain check. A response that is an event stream or has no length
 reaches the guest as each chunk arrives, on intercepted and forward requests
 alike.
 
-Trust is a two-tier PKI. One **cluster root CA** is the trust anchor: its
+Trust is a two-tier PKI. One **cell root CA** is the trust anchor: its
 certificate (public) is baked into every interception guest's store, so a leaf
 from any node validates. Each node signs leaves with its **own intermediate
 CA**, issued from the root, and presents `[leaf, intermediate]`; the guest
-builds `leaf → intermediate → cluster root`. The **root private key never
+builds `leaf → intermediate → cell root`. The **root private key never
 reaches a node** — a node holds only its intermediate.
 
-### Provisioning the cluster PKI
+### Provisioning the cell PKI
 
 Run the `sandboxd ca` tool on an **operator machine, not a node** — the root
 key never touches a worker. Mint the root once, then issue one intermediate
 per node:
 
 ```bash
-# 1. Once per cluster. root.key stays here, offline, forever.
+# 1. Once per cell. root.key stays here, offline, forever.
 sandboxd ca init -out ca -cn "acme sandbox root"
 #   → ca/root.crt (public)   ca/root.key (0600, never leaves this host)
 
@@ -589,10 +589,10 @@ done
 Both subcommands refuse to overwrite an existing `.crt`/`.key`; pass
 `-force` to replace one deliberately.
 
-That gives one shared root and a per-node signing key:
+That gives one root per cell and a per-node signing key:
 
 ```
-ca/root.crt          → copied to EVERY node (public trust anchor)
+ca/root.crt          → copied to every node of the cell (public trust anchor)
 ca/root.key          → stays offline on the operator machine
 dist/node-a/node-a.* → node-a only
 dist/node-b/node-b.* → node-b only
@@ -620,8 +620,9 @@ then point that node's config at the root cert and its own intermediate:
 `openssl verify -CAfile ca/root.crt dist/node-a/node-a.crt` confirms the chain.
 Adding a node later is step 2 for the new node only — the root is untouched,
 so existing guests keep validating. Losing a node's intermediate key compromises
-only that node: re-issue it (step 2) and roll the node; the cluster root, and
-every other node, is unaffected.
+only that node: re-issue it (step 2) and roll the node; the cell root, and
+every other node, is unaffected. Give each cell its own root, so a cell's
+guests never trust another cell's intermediates.
 
 `egress_ca` is required whenever a pool has an intercept rule. The root cert is
 baked into a guest **when the guest is created** — at golden build, or at a
@@ -635,7 +636,7 @@ argv), and a golden is
 adopted only when its stamp exists and
 matches, so a changed root rebuilds goldens. Nothing rebuilds an existing checkpoint,
 archive, promoted template, or live/hibernated claim. Because the baked cert
-is the shared cluster root, promote/checkpoint/archive carry no node-private
+is the cell root, promote/checkpoint/archive carry no node-private
 material and stay unrestricted.
 
 **Intermediate rotation is seamless.** Issue a fresh intermediate from the same

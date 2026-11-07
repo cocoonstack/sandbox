@@ -106,7 +106,7 @@ client, err := sandbox.Connect("10.0.0.5:7777",
 - `Connect(addr, opts...)` — `addr` is one node's address or origin.
 - `WithAPIToken(token)` — the node token: a root `api_token` (full access)
   or a tenant token (resource-creating verbs only; operator surfaces like
-  `Info` answer it 403). On a cluster every node shares the same root token
+  `Info` answer it 403). Every node of a cell shares the same root token
   and the same tenants set.
 - `WithHTTPClient(client)` — replace the control-plane HTTP client when the
   caller needs a custom transport, proxy, or timeout. An `http.Transport`'s
