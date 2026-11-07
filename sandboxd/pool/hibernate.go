@@ -339,7 +339,7 @@ func (m *Manager) dropStale(ctx context.Context, sb *types.Sandbox) {
 	}
 }
 
-// settlePendingSnap settles a dangling hibernate intent and bills an adopted one, which never was.
+// settlePendingSnap settles a dangling hibernate intent and records the hibernate it adopts.
 func (m *Manager) settlePendingSnap(ctx context.Context, sb *types.Sandbox) (adopted bool, err error) {
 	if sb.PendingSnap == "" {
 		return false, nil

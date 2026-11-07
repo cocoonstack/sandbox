@@ -236,7 +236,6 @@ func (m *Manager) removeStaleVM(ctx context.Context, name string, rec types.VMRe
 			m.queueStaleCreate(name, rec.TapDevice())
 			return false
 		}
-		// Not-creating: the record moved on under the lock; remove normally.
 	}
 	if m.removeVM(ctx, name) {
 		return true
@@ -313,7 +312,6 @@ func (m *Manager) resyncEgress(ctx context.Context, live map[string]types.VMReco
 			keep[sb.TAP] = true
 		}
 	}
-	// Keep every still-running VM's tap; sweep only a confirmed-gone VM's table.
 	for name, rec := range live {
 		if tap := rec.TapDevice(); tap != "" && !removed[name] {
 			keep[tap] = true

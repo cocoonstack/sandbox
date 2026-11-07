@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"time"
 
 	"github.com/cocoonstack/sandbox/sandboxd/types"
@@ -100,11 +99,10 @@ func (m *Manager) forkSource(ctx context.Context, sb *types.Sandbox) (create vmP
 	if err != nil {
 		return nil, nil, false, err
 	}
-	exportDir := filepath.Join(dir, "export") // cocoon wants the target absent
-	if err = m.eng.SnapshotExport(ctx, sb.HibernateSnap, exportDir); err != nil {
+	if err = m.eng.SnapshotExport(ctx, sb.HibernateSnap, dir); err != nil {
 		_ = os.RemoveAll(dir)
 		return nil, nil, false, err
 	}
-	return func(name string) (types.VMRecord, error) { return m.eng.Clone(ctx, exportDir, name, sb.Key) },
+	return func(name string) (types.VMRecord, error) { return m.eng.Clone(ctx, dir, name, sb.Key) },
 		func() { _ = os.RemoveAll(dir) }, inherited, nil
 }
