@@ -100,13 +100,16 @@ func (m *Manager) adoptPools(ctx context.Context) error {
 	if set.ConfigSeed != m.configSeedHash {
 		logger.Warnf(ctx, "config.json pools differ from the API-applied set in %s, which overrides them", from)
 	}
-	desired, err := m.desiredPools(set.Pools)
-	if err != nil {
-		return fmt.Errorf("restore pools from %s: %w", from, err)
-	}
 	clear(m.pools)
-	for key, spec := range desired {
-		m.pools[key] = newPool(spec)
+	for _, spec := range set.Pools {
+		spec = normalizePoolSpec(spec)
+		if err := m.validate(spec.PoolKey); err != nil {
+			return fmt.Errorf("restore pool %q from %s: %w", spec.Template, from, err)
+		}
+		if err := spec.ValidateLimits(); err != nil {
+			return fmt.Errorf("restore pool %q from %s: %w", spec.Template, from, err)
+		}
+		m.pools[spec.PoolKey] = newPool(spec)
 	}
 	logger.Infof(ctx, "restored %d API-applied pools from %s", len(set.Pools), from)
 	return nil
