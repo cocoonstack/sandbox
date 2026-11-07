@@ -100,6 +100,7 @@ type Claim struct {
 	Addr netip.Addr
 	// Enabled is asked once per packet stream; false answers the guest off.
 	Enabled func() bool
+	Fenced  func() bool
 	// Profile is the claim's exit label; empty means "default".
 	Profile string
 	Allow   AllowFunc
@@ -288,7 +289,7 @@ func (r *Router) receive(d []byte, from netip.AddrPort) {
 		r.mu.RLock()
 		a := r.claims[target]
 		r.mu.RUnlock()
-		if a == nil {
+		if a == nil || a.fenced() {
 			return
 		}
 		reply := arpReplyFor(o.VNI, target, sender, mac)
@@ -338,7 +339,7 @@ func (r *Router) admit(frame []byte) (*link, Drop) {
 	a := r.claims[p.Dst]
 	r.mu.RUnlock()
 	l := a.live()
-	if l == nil {
+	if l == nil || a.fenced() {
 		return nil, DropUnknownClaim
 	}
 	now := time.Now()
@@ -365,6 +366,9 @@ func (r *Router) announceAll() {
 }
 
 func (r *Router) announce(a *armed) {
+	if a.fenced() {
+		return
+	}
 	o := r.conf.Load()
 	exit, ok := o.exit(a.c.Profile)
 	if !ok {
@@ -397,6 +401,10 @@ type armed struct {
 	mu    sync.Mutex
 	l     *link
 	gone  bool
+}
+
+func (a *armed) fenced() bool {
+	return a.c.Fenced != nil && a.c.Fenced()
 }
 
 func (a *armed) live() *link {
@@ -478,6 +486,9 @@ func (l *link) read(br *bufio.Reader) error {
 
 // forward carries one guest frame out: parse, exit, size, charge and policy, then rewrite, segment and send.
 func (l *link) forward(frame []byte) Drop {
+	if l.a.fenced() {
+		return DropPolicy
+	}
 	p, drop := Parse(frame)
 	if drop != DropNone {
 		return drop
