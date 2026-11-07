@@ -104,7 +104,7 @@ func openTarget(ctx context.Context, sb *sandbox.Sandbox) error {
 }
 
 func cdpJSON(ctx context.Context, sb *sandbox.Sandbox, method, path string) (map[string]any, error) {
-	body, err := harness.HTTPOverPort(ctx, sb, cdpPort, method, path, nil)
+	body, err := harness.HTTPOverPort(ctx, sb, cdpPort, method, path)
 	if err != nil {
 		return nil, err
 	}
