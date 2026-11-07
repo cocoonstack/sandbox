@@ -174,6 +174,12 @@ guest -> tun0 -> silkd --vsock 2051--> sandboxd --VXLAN--> exit (vxlan0, forward
   sent `tun_down` in the background. The claim switch and the profile label change only
   with the operator token, through
   [`PUT /v1/sandboxes/{id}/tun`](sandboxd-api.md#put-v1sandboxesidtun).
+- **Lease fence**: a replicated claim stops forwarding packets in either
+  direction and stops answering or sending ARP while its node is fenced.
+  The packet stream, address and quota remain in place, so traffic resumes
+  when the node renews its lease and confirms ownership. Reconnecting the
+  stream does not bypass the fence. A claim another node took is disarmed
+  before the fence lifts; claims without replication stay served.
 - **Audit and usage**: with `audit_log` on, each flow writes one
   `op:"tun_flow"` record when it ends ([fields](deploy.md#configuration)); with
   `egress_usage_bytes` on, each allowed flow also appends an `egress_bytes`

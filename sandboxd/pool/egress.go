@@ -74,5 +74,6 @@ func (m *Manager) outboundOptions(ca *egress.CA) outbound.Options {
 		Flow:       m.recordTunFlow,
 		TunBytes:   m.setTunBytes,
 		TunState:   m.tunState,
+		Fenced:     m.isFenced,
 	}
 }

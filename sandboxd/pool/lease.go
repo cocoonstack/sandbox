@@ -118,6 +118,7 @@ func (m *Manager) unfence(ctx context.Context, start time.Time) {
 			continue
 		}
 		if td := m.forgetAdopted(ctx, sb); td != nil {
+			m.out.DisarmTun(ctx, sb.ID, "")
 			go func() {
 				sb.Transition.Lock()
 				defer sb.Transition.Unlock()

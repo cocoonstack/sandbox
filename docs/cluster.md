@@ -628,6 +628,9 @@ checkpoint store and keeps each claim's registry row on the latest snapshot:
   retries and meets the 503 until the lease is back or the claim moved. Neither
   an API call nor the idle sweep starts a hibernate or a wake of such a claim
   while the fence is closed, so an idle claim stays billed until the fence lifts.
+  The [advanced network path](advanced-network.md#host-side) drops packets in
+  both directions and stops ARP replies and announcements while fenced;
+  its packet stream stays open and resumes once ownership is confirmed.
   Streams of claims that are not replicated stay open.
 - **Availability.** The design chooses consistency over availability for
   replicated claims. A registry outage longer than the fence threshold (12

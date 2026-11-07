@@ -56,6 +56,7 @@ type Options struct {
 	TunBytes func(sb *types.Sandbox, used int64)
 	// TunState reads the claim's tun fields under the owner's lock.
 	TunState func(sb *types.Sandbox) TunState
+	Fenced   func() bool
 	// Dial, Verdict, Lock, Unlock, Sweep and Nameservers default to the internal-address guard, netfilter and /etc/resolv.conf; tests swap them.
 	Dial        egress.DialFunc
 	Verdict     VerdictFunc

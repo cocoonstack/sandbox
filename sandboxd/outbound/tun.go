@@ -108,10 +108,15 @@ func (h *Host) armTun(ctx context.Context, sb *types.Sandbox, d *doors, v *View,
 	t.used.Store(st.Bytes)
 	tenant, profile, usage := sb.Tenant, st.Profile, v.usageBytes
 	evCtx := context.WithoutCancel(ctx)
+	fenced := h.o.Fenced
+	if !sb.Replicated {
+		fenced = nil
+	}
 	tc := tunnet.Claim{
 		ID:      id,
 		Addr:    t.addr,
 		Enabled: func() bool { return h.o.View().Tun(key) && h.tunLive(id, t) && h.o.TunState(sb).On },
+		Fenced:  fenced,
 		Profile: profile,
 		Allow: func(dst netip.Addr, port uint16) bool {
 			if c.current().EvalFlow(port) != egress.DecisionAllow {
