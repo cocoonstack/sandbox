@@ -230,7 +230,7 @@ func (m *Manager) planTun(sb *types.Sandbox, locked bool, enabled *bool, profile
 	if !locked && (!next.off || next.profile != prev.profile) {
 		return tunPlan{}, ErrPaused
 	}
-	assign := !next.off && !prev.addr.IsValid() && m.tunAddrs != nil && m.view.Load().out.Tun(sb.PolicyKey())
+	assign := !next.off && !prev.addr.IsValid() && !sb.NoEgress && m.tunAddrs != nil && m.view.Load().out.Tun(sb.PolicyKey())
 	return tunPlan{prev: prev, next: next, assign: assign}, nil
 }
 

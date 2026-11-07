@@ -133,11 +133,13 @@ var (
 	errNotSleeping   = errors.New("sandbox is no longer hibernated or archived")
 	errWokeMeanwhile = errors.New("woke between sweep and hibernate")
 	errNoEgressTap   = errors.New("egress-lane claim has no lockable tap")
-	errNoFailover    = errors.New("archive_failover is off, so no peer can adopt the claim")
-	errNoArchiveRow  = errors.New("archived before archive_failover was on, so no registry row names it")
-	errArchiveBusy   = errors.New("an archive of the claim is in flight")
-	errNoAdopter     = errors.New("no peer adopted the claim")
-	errMovesOff      = fmt.Errorf("%w: live moves need a meta store cell and an encrypted mesh", ErrNotMovable)
+
+	errFencedReplicating = fmt.Errorf("%w: node lease lost", ErrQuota)
+	errNoFailover        = errors.New("archive_failover is off, so no peer can adopt the claim")
+	errNoArchiveRow      = errors.New("archived before archive_failover was on, so no registry row names it")
+	errArchiveBusy       = errors.New("an archive of the claim is in flight")
+	errNoAdopter         = errors.New("no peer adopted the claim")
+	errMovesOff          = fmt.Errorf("%w: live moves need a meta store cell and an encrypted mesh", ErrNotMovable)
 )
 
 // Engine is the slice of the cocoon driver the manager consumes.

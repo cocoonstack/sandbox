@@ -338,7 +338,8 @@ type Sandbox struct {
 	// Waking marks a wake in flight, which counts as running; guarded by the manager mutex.
 	Waking bool `json:"-"`
 	// Replicated marks a claim of a replicating pool; it is set before the claim is published, written only on a change, and read without a lock.
-	Replicated     bool      `json:"-"`
+	Replicated bool `json:"-"`
+
 	ArchiveRetryAt time.Time `json:"-"`
 
 	// lastActivity is unix-nanos of the last data-plane connection, stamped lock-free.

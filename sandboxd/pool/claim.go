@@ -609,6 +609,9 @@ func (m *Manager) finalizeBatch(ctx context.Context, sbs []*types.Sandbox, ttl t
 	if err == nil {
 		err = m.quotaErr(len(sbs), sbs[0].Tenant)
 	}
+	if err == nil && m.fencedReplicating(sbs[0].PolicyKey()) {
+		err = errFencedReplicating
+	}
 	if err != nil {
 		m.mu.Unlock()
 		for _, sb := range sbs {
@@ -674,6 +677,10 @@ func (m *Manager) rollbackClaim(ctx context.Context, sbs []*types.Sandbox, bille
 	}
 }
 
+func (m *Manager) fencedReplicating(key types.PoolKey) bool {
+	return m.archives != nil && m.view.Load().poolReplicate[key] > 0 && m.isFenced()
+}
+
 func (m *Manager) abortVolumeClaim(ctx context.Context, vmName string, reserved *[]types.Volume) {
 	m.removeOrRetry(ctx, vmName, "", volumeTeardown{holds: *reserved})
 	*reserved = nil
@@ -706,8 +713,8 @@ func (m *Manager) admitOptions(ctx context.Context, key types.PoolKey, o ClaimOp
 	if err := m.validate(key); err != nil {
 		return nil, nil, nil, err
 	}
-	if m.archives != nil && m.view.Load().poolReplicate[key] > 0 && m.isFenced() {
-		return nil, nil, nil, fmt.Errorf("%w: node lease lost", ErrQuota)
+	if m.fencedReplicating(key) {
+		return nil, nil, nil, errFencedReplicating
 	}
 	if err := archivable(key, len(o.Volumes) > 0, o.OnExpire); err != nil {
 		return nil, nil, nil, err
