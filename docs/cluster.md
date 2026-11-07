@@ -596,7 +596,9 @@ checkpoint store and keeps each claim's registry row on the latest snapshot:
   ports, preview, fork, checkpoint and promote answer `503 lease lost; retry` (a read through a
   [reader](deploy.md#reading-sleeping-claims-without-waking-them) after the `101`
   gets an `error` frame instead), and `/owner` answers 404 so
-  a `Lookup` moves on to the other nodes. A claim is replicated when its policy
+  a `Lookup` moves on to the other nodes. Its proxy, SOCKS5 and intercept doors deny those claims and the trip
+  ends their open tunnels, and a new claim of a replicating pool meets an
+  [admission refusal](sandboxd-api.md#admission-refusals), which redirects it to a peer. A claim is replicated when its policy
   pool has `replicate_seconds`, from the moment it is claimed, adopted or
   loaded, whether or not a round has run, so the fence covers it before its
   first replica; the setting is restart-only so that decision cannot go stale.
