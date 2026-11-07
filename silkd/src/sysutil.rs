@@ -98,10 +98,20 @@ pub fn align_proxy_env(cmd: &mut Command) {
     align_proxy_env_for(cmd, crate::net::routes_directly());
 }
 
-/// Resolves a username via getpwnam and de-escalates the command onto it with the user's groups.
-pub fn apply_user(cmd: &mut Command, user: &str) -> Result<(), String> {
+/// Sets the command's cwd and, with a user, de-escalates onto it with the user's groups before entering cwd.
+pub fn apply_cwd_user(
+    cmd: &mut Command,
+    cwd: Option<&str>,
+    user: Option<&str>,
+) -> Result<(), String> {
+    let Some(user) = user else {
+        if let Some(cwd) = cwd {
+            cmd.current_dir(cwd);
+        }
+        return Ok(());
+    };
     let (uid, gid, home) = lookup_user(user)?;
-    de_escalate(cmd, user, uid, gid)?;
+    de_escalate(cmd, user, uid, gid, cwd)?;
     cmd.env("HOME", home);
     cmd.env("USER", user);
     Ok(())
@@ -472,21 +482,37 @@ fn unquote(value: &str) -> Cow<'_, str> {
 }
 
 #[cfg(target_os = "linux")]
-fn de_escalate(cmd: &mut Command, user: &str, uid: u32, gid: u32) -> Result<(), String> {
+fn de_escalate(
+    cmd: &mut Command,
+    user: &str,
+    uid: u32,
+    gid: u32,
+    cwd: Option<&str>,
+) -> Result<(), String> {
     use nix::unistd::{Gid, Uid};
     if !nix::unistd::geteuid().is_root() {
         cmd.uid(uid).gid(gid);
+        if let Some(cwd) = cwd {
+            cmd.current_dir(cwd);
+        }
         return Ok(());
     }
     let name = std::ffi::CString::new(user).map_err(|e| format!("user {user:?}: {e}"))?;
     let groups = nix::unistd::getgrouplist(&name, Gid::from_raw(gid))
         .map_err(|e| format!("look up groups of {user:?}: {e}"))?;
-    // SAFETY: setgroups, setgid and setuid are async-signal-safe, the contract for a post-fork pre_exec hook.
+    let dir = cwd
+        .map(std::ffi::CString::new)
+        .transpose()
+        .map_err(|e| format!("cwd: {e}"))?;
+    // SAFETY: setgroups, setgid, setuid and chdir are async-signal-safe, the contract for a post-fork pre_exec hook.
     unsafe {
         cmd.pre_exec(move || {
             nix::unistd::setgroups(&groups)?;
             nix::unistd::setgid(Gid::from_raw(gid))?;
             nix::unistd::setuid(Uid::from_raw(uid))?;
+            if let Some(dir) = &dir {
+                nix::unistd::chdir(dir.as_c_str())?;
+            }
             Ok(())
         })
     };
@@ -494,8 +520,17 @@ fn de_escalate(cmd: &mut Command, user: &str, uid: u32, gid: u32) -> Result<(), 
 }
 
 #[cfg(not(target_os = "linux"))]
-fn de_escalate(cmd: &mut Command, _user: &str, uid: u32, gid: u32) -> Result<(), String> {
+fn de_escalate(
+    cmd: &mut Command,
+    _user: &str,
+    uid: u32,
+    gid: u32,
+    cwd: Option<&str>,
+) -> Result<(), String> {
     cmd.uid(uid).gid(gid);
+    if let Some(cwd) = cwd {
+        cmd.current_dir(cwd);
+    }
     Ok(())
 }
 
