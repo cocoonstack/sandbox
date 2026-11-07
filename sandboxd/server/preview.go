@@ -93,13 +93,15 @@ func (p *PreviewServer) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// The token names the owner by its advertise address at mint time; holding the claim is what counts
-	if _, held := p.mgr.Sandbox(claims.ID); !held && claims.Owner != p.owner {
-		if r.Header.Get(forwardedHeader) != "" {
-			http.Error(w, "preview owner is not this node", http.StatusBadGateway)
+	if claims.Owner != p.owner {
+		if _, held := p.mgr.Sandbox(claims.ID); !held {
+			if r.Header.Get(forwardedHeader) != "" {
+				http.Error(w, "preview owner is not this node", http.StatusBadGateway)
+				return
+			}
+			p.forward(w, r, claims.Owner)
 			return
 		}
-		p.forward(w, r, claims.Owner)
-		return
 	}
 	p.proxyLocal(w, r, claims)
 }
