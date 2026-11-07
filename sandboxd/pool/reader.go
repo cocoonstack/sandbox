@@ -64,7 +64,9 @@ func (m *Manager) DialReader(ctx context.Context, id, token string) (conn net.Co
 	conn, err = m.eng.DialReader(ctx, r.sock)
 	if err != nil {
 		m.releaseReader(r)
-		m.dropReader(ctx, r, true)
+		if ctx.Err() == nil {
+			m.dropReader(ctx, r, true)
+		}
 		return nil, "", fmt.Errorf("%w: %w", ErrNoReader, err)
 	}
 	return newHeldConn(conn, fenced, func() { m.releaseReader(r) }), r.source, nil
