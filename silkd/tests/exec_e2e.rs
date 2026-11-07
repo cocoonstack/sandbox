@@ -3,6 +3,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 mod common;
 
+use std::os::unix::fs::PermissionsExt;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -281,16 +282,11 @@ async fn exec_unknown_user_is_rejected() {
 #[tokio::test]
 #[ignore = "needs root"]
 async fn exec_as_a_user_keeps_its_supplementary_groups() {
-    let groups = std::fs::read_to_string("/etc/group").unwrap();
-    let Some(user) = groups
-        .lines()
-        .filter_map(|line| line.rsplit(':').next())
-        .find_map(|members| members.split(',').find(|u| !u.is_empty()))
-    else {
+    let Some(user) = group_member() else {
         return;
     };
     let want = std::process::Command::new("id")
-        .args(["-G", user])
+        .args(["-G", &user])
         .output()
         .unwrap();
     let mut want: Vec<String> = String::from_utf8(want.stdout)
@@ -310,6 +306,23 @@ async fn exec_as_a_user_keeps_its_supplementary_groups() {
         "{user} has no supplementary group: {want:?}"
     );
     assert_eq!(got, want, "{frames:?}");
+}
+
+#[tokio::test]
+#[ignore = "needs root"]
+async fn exec_as_a_user_refuses_a_cwd_the_user_cannot_enter() {
+    let Some(user) = group_member() else {
+        return;
+    };
+    let locked = tempfile::tempdir().unwrap();
+    std::fs::set_permissions(locked.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    let inner = locked.path().join("inner");
+    std::fs::create_dir(&inner).unwrap();
+    let frames = request(json!({
+        "op":"exec","argv":["true"],"user":user,"cwd":inner.to_str().unwrap()
+    }))
+    .await;
+    assert_error(&frames[0], "bad_request");
 }
 
 #[tokio::test]
@@ -468,4 +481,13 @@ async fn a_client_gone_mid_output_releases_the_stdin_a_forked_child_holds() {
         read < 256 * 1024,
         "the forked child read {read} bytes: stdin kept flowing after its client left"
     );
+}
+
+fn group_member() -> Option<String> {
+    std::fs::read_to_string("/etc/group")
+        .unwrap()
+        .lines()
+        .filter_map(|line| line.rsplit(':').next())
+        .find_map(|members| members.split(',').find(|u| !u.is_empty()))
+        .map(str::to_owned)
 }

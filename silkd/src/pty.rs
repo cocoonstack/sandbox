@@ -41,15 +41,10 @@ pub async fn open<W: AsyncWrite + Unpin>(
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string());
     let mut cmd = Command::new(&shell);
     cmd.arg("-i");
-    if let Some(dir) = &req.cwd {
-        cmd.current_dir(dir);
-    }
     cmd.env_clear().envs(sysutil::base_env().iter().copied());
     sysutil::apply_claim_env(&mut cmd);
     cmd.envs(&req.env);
-    if let Some(user) = &req.user
-        && let Err(e) = sysutil::apply_user(&mut cmd, user)
-    {
+    if let Err(e) = sysutil::apply_cwd_user(&mut cmd, req.cwd.as_deref(), req.user.as_deref()) {
         return proto::error_frame(out, ErrorKind::BadRequest, e).await;
     }
     match (slave.try_clone(), slave.try_clone()) {
