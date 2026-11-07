@@ -31,8 +31,12 @@ type coalescer struct {
 
 // add takes an admitted frame held in bp; false leaves both with the caller to enqueue unmerged.
 func (c *coalescer) add(r *Router, l *link, bp *[]byte, frame []byte) bool {
+	if !l.merge {
+		c.flush(r)
+		return false
+	}
 	seg, ok := segmentOf(frame)
-	if !ok || !l.merge {
+	if !ok {
 		c.flush(r)
 		return false
 	}
