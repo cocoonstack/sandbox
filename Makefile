@@ -15,6 +15,8 @@ EXTRACT_IMAGE ?= $(BOOT_IMAGE)
 GO_MODULES := protocol/wire sandboxd sdk/go e2e mcp
 GO_OSES := linux darwin
 
+.DEFAULT_GOAL := help
+
 ## Location to install dependencies to
 LOCALBIN ?= $(shell pwd)/bin
 $(LOCALBIN):
