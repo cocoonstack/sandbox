@@ -139,7 +139,7 @@ func (s *shipper) locate(ctx context.Context, live, backup *os.File) (*os.File, 
 		}
 	}
 	if found == nil {
-		log.WithFunc("usage.shipper.locate").Warn(ctx, "the last landed usage line rotated out of the journal; the lines between it and the oldest kept line are lost")
+		log.WithFunc("usage.shipper.locate").Warn(ctx, "the last landed usage line is gone from the journal; shipping resumes at the oldest kept line, and lines rotated out unlanded are lost")
 		return oldest, 0
 	}
 	return found, s.at.end

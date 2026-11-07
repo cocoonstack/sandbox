@@ -15,8 +15,7 @@ import (
 )
 
 const (
-	table      = "sandboxd_archives"
-	nodesTable = "sandboxd_nodes"
+	table = "sandboxd_archives"
 
 	leaseExpired = `NOT EXISTS (SELECT 1 FROM sandboxd_nodes n WHERE n.cell = sandboxd_archives.cell AND n.node = sandboxd_archives.owner AND n.lease_until > now())`
 )
@@ -24,9 +23,6 @@ const (
 var (
 	//go:embed schema.sql
 	schema string
-
-	//go:embed nodes.sql
-	nodesSchema string
 
 	cas = metastore.CAS{Lost: archives.ErrLost, Unavailable: archives.ErrUnavailable}
 )
@@ -43,10 +39,6 @@ type Registry struct {
 func Open(ctx context.Context, dsn, cell string) (*Registry, error) {
 	pool, _, err := metastore.Open(ctx, dsn, table, schema)
 	if err != nil {
-		return nil, err
-	}
-	if err = metastore.EnsureTable(ctx, pool, nodesTable, nodesSchema); err != nil {
-		pool.Close()
 		return nil, err
 	}
 	return &Registry{pool: pool, cell: cell}, nil
