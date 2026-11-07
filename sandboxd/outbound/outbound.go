@@ -129,6 +129,9 @@ func (h *Host) ArmProxy(ctx context.Context, sb *types.Sandbox) error {
 		if d != nil {
 			d.close()
 		}
+		if sb.TunAddr.IsValid() && sb.VsockSocket != "" {
+			h.tunDown(sb.ID, sb.VsockSocket)
+		}
 		return nil
 	}
 	id, tenant := sb.ID, sb.Tenant
