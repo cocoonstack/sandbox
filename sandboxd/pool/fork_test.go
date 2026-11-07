@@ -294,6 +294,10 @@ func TestForkReadsTheParentsOnExpireUnderTheLock(t *testing.T) {
 	parent := mustClaim(t, m, testKey)
 	stop := make(chan struct{})
 	var wg sync.WaitGroup
+	t.Cleanup(func() {
+		close(stop)
+		wg.Wait()
+	})
 	wg.Go(func() {
 		action := types.ExpireArchive
 		for {
@@ -318,6 +322,4 @@ func TestForkReadsTheParentsOnExpireUnderTheLock(t *testing.T) {
 			t.Fatalf("Fork: %v", err)
 		}
 	}
-	close(stop)
-	wg.Wait()
 }
