@@ -1,4 +1,4 @@
-//! git verbs wrap the guest git binary into structured results; the none lane fails clone/push/pull with a typed error.
+//! git verbs wrap the guest git binary into structured results.
 
 use std::process::Stdio;
 
@@ -12,8 +12,6 @@ use crate::sysutil;
 const STATUS_FILES_BYTES: usize = proto::MAX_FRAME / 8;
 const STATUS_ENTRY_OVERHEAD: usize = 40;
 
-const NO_EGRESS: &str = "no network on this sandbox; use fs.push to move a repository in";
-
 /// Clones `url` into `path` (optionally a branch, shallow depth), then Done.
 pub async fn clone<W: AsyncWrite + Unpin>(
     w: &mut W,
@@ -23,9 +21,6 @@ pub async fn clone<W: AsyncWrite + Unpin>(
     depth: Option<u32>,
     auth: Option<&str>,
 ) -> std::io::Result<()> {
-    if !crate::net::has_egress() {
-        return proto::error_frame(w, ErrorKind::Unimplemented, NO_EGRESS).await;
-    }
     let depth_arg;
     let mut args: Vec<&str> = vec!["clone"];
     if let Some(b) = branch {
@@ -97,9 +92,6 @@ pub async fn net_verb<W: AsyncWrite + Unpin>(
     auth: Option<&str>,
     verb: &str,
 ) -> std::io::Result<()> {
-    if !crate::net::has_egress() {
-        return proto::error_frame(w, ErrorKind::Unimplemented, NO_EGRESS).await;
-    }
     let out = git(path, auth, &[verb]).await?;
     terminal(w, verb, &out).await
 }

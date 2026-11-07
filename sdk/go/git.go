@@ -6,7 +6,7 @@ import (
 	"github.com/cocoonstack/sandbox/protocol/wire"
 )
 
-// GitClone clones url into path, shallow when depth > 0; auth is an in-memory header token; needs the egress lane.
+// GitClone clones url into path, shallow when depth > 0; auth is an in-memory header token.
 func (s *Sandbox) GitClone(ctx context.Context, url, path, branch string, depth uint32, auth string) error {
 	return s.doneRPC(ctx, &wire.GitClone{URL: url, Path: path, Branch: branch, Depth: depth, Auth: auth})
 }
@@ -30,7 +30,7 @@ func (s *Sandbox) GitAdd(ctx context.Context, path string, files ...string) erro
 	return s.doneRPC(ctx, &wire.GitAdd{Path: path, Files: files})
 }
 
-// GitPush pushes the current branch; on the no-network lane it fails with a typed error pointing at Push.
+// GitPush pushes the current branch.
 func (s *Sandbox) GitPush(ctx context.Context, path, auth string) error {
 	return s.doneRPC(ctx, &wire.GitPush{Path: path, Auth: auth})
 }

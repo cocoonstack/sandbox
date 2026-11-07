@@ -134,28 +134,17 @@ async fn commit_failure_surfaces_git_error() {
 }
 
 #[tokio::test]
-async fn clone_lane_behavior() {
-    silkd::net::override_egress_for_tests(Some(false));
-    let refused = tempfile::tempdir().unwrap();
-    let none = request(json!({
-        "op":"git_clone","url":"https://example.com/x.git","path":refused.path().join("x").to_str().unwrap()
-    }))
-    .await;
-    assert_error(&none[0], "unimplemented");
-    assert!(none[0]["message"].as_str().unwrap().contains("fs.push"));
-
+async fn clone_copies_a_repository() {
     let src = init_repo();
     std::fs::write(src.path().join("r.txt"), "body\n").unwrap();
     git(src.path(), &["add", "r.txt"]);
     git(src.path(), &["commit", "-qm", "init"]);
     let dst = tempfile::tempdir().unwrap();
     let target = dst.path().join("clone");
-    silkd::net::override_egress_for_tests(Some(true));
     let ok = request(json!({
         "op":"git_clone", "url": src.path().to_str().unwrap(), "path": target.to_str().unwrap()
     }))
     .await;
-    silkd::net::override_egress_for_tests(None);
     assert_eq!(type_of(ok.last().unwrap()), "done", "clone failed: {ok:?}");
     assert!(target.join("r.txt").exists());
 }

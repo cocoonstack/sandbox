@@ -306,7 +306,7 @@ class Sandbox:
             return [f for f in conn.recv_until("done") if f["type"] == "replaced"]
 
     def git_clone(self, url: str, path: str, branch: str = "", depth: int = 0, auth: str = "") -> None:
-        """Clones into path (egress lane only; the none lane answers a typed unimplemented error pointing at push)."""
+        """Clones into path, shallow when depth is set; auth rides an in-memory header."""
         self._done_rpc("git_clone", url=url, path=path, branch=branch or None, depth=depth or None, auth=auth or None)
 
     def git_status(self, path: str) -> dict[str, Any]:
