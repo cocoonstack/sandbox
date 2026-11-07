@@ -119,6 +119,9 @@ func (p Policy) Validate() error {
 		case "*.":
 			return fmt.Errorf("allow[%d]: host %q needs a domain after the wildcard", i, r.Host)
 		}
+		if r.Host != "*" && strings.ContainsAny(strings.TrimPrefix(r.Host, "*."), "*:/ ") {
+			return fmt.Errorf("allow[%d]: host %q is not a host name or a leading \"*.\" wildcard", i, r.Host)
+		}
 		if r.Intercept == InterceptInject && r.Secret != "" {
 			return fmt.Errorf("allow[%d]: an intercept \"inject\" rule splices for claims without a credential, so it must not carry a secret", i)
 		}

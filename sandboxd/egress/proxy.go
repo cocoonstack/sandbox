@@ -173,7 +173,7 @@ func New(policy Evaluator, secrets Secrets, ca *CA, router Router, audit AuditFu
 		conns:    map[net.Conn]struct{}{},
 	}
 	// The stdlib default of 2 idle conns per host re-dials bursty same-host traffic.
-	pools := &connPools{tr: &http.Transport{DialContext: direct, MaxIdleConns: maxIdleConns, MaxIdleConnsPerHost: 8, IdleConnTimeout: idleConnTimeout}, routed: map[routeKey]*http.Transport{}}
+	pools := &connPools{tr: &http.Transport{DialContext: direct, MaxIdleConns: maxIdleConns, MaxIdleConnsPerHost: 8, IdleConnTimeout: idleConnTimeout, DisableCompression: true}, routed: map[routeKey]*http.Transport{}}
 	if ca != nil {
 		pools.mitm = pools.tr.Clone()
 		pools.mitm.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12}
@@ -746,7 +746,7 @@ func hostPort(authority string, def uint16) (host string, port uint16, ok bool) 
 		return literal, def, closed && parseErr == nil && addr.Is6() && len(literal) <= maxHostLen
 	}
 	n, err := strconv.ParseUint(text, 10, 16)
-	return host, uint16(n), err == nil && n != 0 && len(host) <= maxHostLen
+	return host, uint16(n), err == nil && n != 0 && host != "" && len(host) <= maxHostLen
 }
 
 func tcpAddrPort(a net.Addr) netip.AddrPort {
