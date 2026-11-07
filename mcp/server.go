@@ -19,12 +19,17 @@ import (
 
 const (
 	protocolVersion = "2024-11-05"
-	execTimeout     = 5 * time.Minute
+	toolTimeout     = 5 * time.Minute
 	execOutputCap   = 1 << 20
-	defaultToolTTL  = time.Hour
+	// Outlives the node's 5-minute default; nothing renews a tool claim.
+	defaultToolTTL = time.Hour
 )
 
-var version = "devel"
+var (
+	version = "devel"
+
+	replyOpts = json.JoinOptions(jsontext.AllowInvalidUTF8(true), json.Deterministic(true))
+)
 
 type rpcRequest struct {
 	ID     jsontext.Value `json:"id"`
@@ -36,7 +41,7 @@ type rpcResponse struct {
 	JSONRPC string         `json:"jsonrpc"`
 	ID      jsontext.Value `json:"id"`
 	Result  any            `json:"result,omitzero"`
-	Error   *rpcErrorBody  `json:"error,omitempty"`
+	Error   *rpcErrorBody  `json:"error,omitzero"`
 }
 
 type rpcErrorBody struct {
@@ -87,7 +92,7 @@ func (s *server) serve(ctx context.Context, r *bufio.Reader, w io.Writer) error 
 			continue // notification (e.g. notifications/initialized)
 		}
 		resp := s.dispatch(ctx, &req)
-		out, err := json.Marshal(resp, jsontext.AllowInvalidUTF8(true), json.Deterministic(true))
+		out, err := json.Marshal(resp, replyOpts)
 		if err != nil {
 			return err
 		}
@@ -115,7 +120,11 @@ func (s *server) dispatch(ctx context.Context, req *rpcRequest) rpcResponse {
 		if err := unmarshalInput(req.Params, &call); err != nil {
 			return rpcError(req.ID, -32602, "invalid params")
 		}
-		text, err := s.callTool(ctx, call.Name, call.Arguments)
+		i := slices.IndexFunc(tools, func(t tool) bool { return t.name == call.Name })
+		if i < 0 {
+			return rpcError(req.ID, -32602, "unknown tool: "+call.Name)
+		}
+		text, err := s.callTool(ctx, tools[i], call.Arguments)
 		if err != nil {
 			return result(req.ID, map[string]any{
 				"content": []map[string]any{{"type": "text", "text": cmp.Or(text, err.Error())}},
@@ -132,14 +141,10 @@ func (s *server) dispatch(ctx context.Context, req *rpcRequest) rpcResponse {
 	}
 }
 
-func (s *server) callTool(ctx context.Context, name string, args jsontext.Value) (string, error) {
-	ctx, cancel := context.WithTimeout(ctx, execTimeout)
+func (s *server) callTool(ctx context.Context, t tool, args jsontext.Value) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, toolTimeout)
 	defer cancel()
-	i := slices.IndexFunc(tools, func(t tool) bool { return t.name == name })
-	if i < 0 {
-		return "", fmt.Errorf("unknown tool %q", name)
-	}
-	return tools[i].handler(ctx, s, args)
+	return t.handler(ctx, s, args)
 }
 
 func (s *server) box(id string) (*sandbox.Sandbox, error) {
