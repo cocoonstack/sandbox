@@ -662,8 +662,8 @@ func TestReplicaPassSkipsWhileFenced(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		c := newReplicaCluster(t)
 		a := c.node(t, "a", t.TempDir(), keepAnHour)
-		a.tripFence()
 		sb := mustClaim(t, a, testKey)
+		a.tripFence()
 		a.replicateOnce(t.Context())
 		time.Sleep(replicateEvery * time.Second)
 		a.replicateOnce(t.Context())

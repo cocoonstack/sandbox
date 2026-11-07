@@ -118,7 +118,7 @@ func TestCheckpointCleanupWaitsForTheClaimWrite(t *testing.T) {
 				} else if err := m.store.commit(m.store.mark()); err != nil {
 					t.Fatalf("commit the journal: %v", err)
 				}
-				other := mustClaim(t, m, testKey)
+				other := mustClaim(t, m, plainKey)
 				m.mu.Lock()
 				other.LeaseSeconds++
 				m.store.set(other)

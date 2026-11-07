@@ -331,6 +331,22 @@ func TestLeaseANodeLiftedAfterAnOutageAdoptsOnlyOnceEveryOwnerCouldRenew(t *test
 	})
 }
 
+func TestLeaseFencedNodeRefusesNewClaimsOfReplicatingPoolsOnly(t *testing.T) {
+	c := newReplicaCluster(t)
+	a := c.node(t, "a", t.TempDir(), keepAnHour)
+	a.tripFence()
+	if _, err := claimAny(t.Context(), a, testKey, ClaimOptions{}); !errors.Is(err, ErrQuota) {
+		t.Errorf("claim of a replicating pool while fenced: %v, want ErrQuota", err)
+	}
+	if _, err := claimAny(t.Context(), a, plainKey, ClaimOptions{}); err != nil {
+		t.Errorf("claim of an unreplicated pool while fenced: %v", err)
+	}
+	a.liftFence()
+	if _, err := claimAny(t.Context(), a, testKey, ClaimOptions{}); err != nil {
+		t.Errorf("claim once the fence lifted: %v", err)
+	}
+}
+
 func TestLeaseFencedNodeDoesNotAnswerAsOwnerOfReplicatedClaims(t *testing.T) {
 	c := newReplicaCluster(t)
 	a := c.node(t, "a", t.TempDir(), keepAnHour)

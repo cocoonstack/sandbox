@@ -706,6 +706,9 @@ func (m *Manager) admitOptions(ctx context.Context, key types.PoolKey, o ClaimOp
 	if err := m.validate(key); err != nil {
 		return nil, nil, nil, err
 	}
+	if m.archives != nil && m.view.Load().poolReplicate[key] > 0 && m.isFenced() {
+		return nil, nil, nil, fmt.Errorf("%w: node lease lost", ErrQuota)
+	}
 	if err := archivable(key, len(o.Volumes) > 0, o.OnExpire); err != nil {
 		return nil, nil, nil, err
 	}
