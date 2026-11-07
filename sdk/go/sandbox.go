@@ -304,13 +304,13 @@ func (s *Sandbox) rebind(ctx context.Context, err error) bool {
 		return false
 	}
 	s.mu.Lock()
-	changed := moved.owner != s.owner
+	rebound := moved.owner != s.owner
 	s.owner = moved.owner
 	s.mu.Unlock()
-	if changed {
+	if rebound {
 		s.pool.drain()
 	}
-	return changed
+	return moved.owner != g.addr
 }
 
 // retryMoved runs rpc once more on the new owner when nothing of it reached the old one; rpc's request must be its whole input.
