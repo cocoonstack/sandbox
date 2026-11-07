@@ -99,18 +99,6 @@ pub async fn serve_datagrams(listen: SocketAddrV4, host_vsock_port: u32) -> io::
     }
 }
 
-#[cfg(target_os = "linux")]
-async fn dial_host_cloexec(port: u32) -> io::Result<tokio_vsock::VsockStream> {
-    let stream = tokio::task::spawn_blocking(move || {
-        let stream = vsock::VsockStream::connect_with_cid_port(libc::VMADDR_CID_HOST, port)?;
-        stream.set_nonblocking(true)?;
-        Ok::<_, io::Error>(stream)
-    })
-    .await
-    .map_err(io::Error::other)??;
-    tokio_vsock::VsockStream::new(stream)
-}
-
 #[cfg(not(target_os = "linux"))]
 pub async fn serve(_listen: SocketAddrV4, _host_vsock_port: u32) -> io::Result<()> {
     Err(io::Error::new(
@@ -138,6 +126,18 @@ where
     let mut reply = vec![0u8; usize::from(u16::from_be_bytes(size))];
     conn.read_exact(&mut reply).await?;
     Ok(reply)
+}
+
+#[cfg(target_os = "linux")]
+async fn dial_host_cloexec(port: u32) -> io::Result<tokio_vsock::VsockStream> {
+    let stream = tokio::task::spawn_blocking(move || {
+        let stream = vsock::VsockStream::connect_with_cid_port(libc::VMADDR_CID_HOST, port)?;
+        stream.set_nonblocking(true)?;
+        Ok::<_, io::Error>(stream)
+    })
+    .await
+    .map_err(io::Error::other)??;
+    tokio_vsock::VsockStream::new(stream)
 }
 
 #[cfg(test)]
