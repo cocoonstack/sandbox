@@ -21,7 +21,8 @@ func main() {
 		fmt.Fprintln(os.Stderr, "setup log:", err)
 		os.Exit(1)
 	}
-	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+	signal.Ignore(syscall.SIGPIPE)
+	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 	defer stop()
 	addr := flag.String("addr", cmp.Or(os.Getenv("SANDBOXD_ADDR"), "127.0.0.1:7777"), "sandboxd address")
 	token := flag.String("token", os.Getenv("SANDBOXD_TOKEN"), "node api token")
