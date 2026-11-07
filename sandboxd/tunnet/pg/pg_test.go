@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -128,11 +129,11 @@ func TestOnlyAnAddressNoNodeConfirmsGoesUnconfirmed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("assign orphan: %v", err)
 	}
-	if _, err = s.pool.Exec(ctx, `UPDATE sandboxd_tun_addrs SET seen_at = now() - interval '2 days' WHERE cell = 'c1'`); err != nil {
+	if _, err = s.pool.Exec(ctx, `UPDATE sandboxd_tun_addrs SET seen_at = now() - interval '2 days', allocated_at = now() - interval '2 days' WHERE cell = 'c1'`); err != nil {
 		t.Fatalf("age the rows: %v", err)
 	}
-	if err = s.Confirm(ctx, []string{"sb_held"}); err != nil {
-		t.Fatalf("confirm: %v", err)
+	if lost, confirmErr := s.Confirm(ctx, map[string]netip.Addr{"sb_held": held}); confirmErr != nil || len(lost) != 0 {
+		t.Fatalf("confirm: lost %v, %v", lost, confirmErr)
 	}
 	stale, err := s.Unconfirmed(ctx, 24*time.Hour)
 	if err != nil {
@@ -146,6 +147,42 @@ func TestOnlyAnAddressNoNodeConfirmsGoesUnconfirmed(t *testing.T) {
 	}
 	if stale, err = s.Unconfirmed(ctx, 24*time.Hour); err != nil || len(stale) != 0 {
 		t.Errorf("unconfirmed after the release %v %v, want none", stale, err)
+	}
+}
+
+func TestConfirmReReservesAReleasedAddressAndReportsATakenOne(t *testing.T) {
+	s := open(t, metastoretest.PGSchema(t), "c1", 0)
+	ctx := t.Context()
+	kept, err := s.Assign(ctx, "sb_kept")
+	if err != nil {
+		t.Fatalf("assign kept: %v", err)
+	}
+	taken, err := s.Assign(ctx, "sb_taken")
+	if err != nil {
+		t.Fatalf("assign taken: %v", err)
+	}
+	for claim, addr := range map[string]netip.Addr{"sb_kept": kept, "sb_taken": taken} {
+		if err = s.Release(ctx, claim, addr); err != nil {
+			t.Fatalf("release %s: %v", claim, err)
+		}
+	}
+	rewind(t, s, taken)
+	if again, assignErr := s.Assign(ctx, "sb_other"); assignErr != nil || again != taken {
+		t.Fatalf("reassign = %s %v, want %s", again, assignErr, taken)
+	}
+	lost, err := s.Confirm(ctx, map[string]netip.Addr{"sb_kept": kept, "sb_taken": taken})
+	if err != nil || !slices.Equal(lost, []string{"sb_taken"}) {
+		t.Fatalf("confirm lost %v %v, want only sb_taken", lost, err)
+	}
+	if again, assignErr := s.Assign(ctx, "sb_kept"); assignErr != nil || again != kept {
+		t.Errorf("assign after the re-reservation = %s %v, want %s held again", again, assignErr, kept)
+	}
+	if _, err = s.pool.Exec(ctx, `UPDATE sandboxd_tun_addrs SET seen_at = now() - interval '2 days',
+		allocated_at = CASE WHEN claim = 'sb_other' THEN now() ELSE now() - interval '2 days' END WHERE cell = 'c1'`); err != nil {
+		t.Fatalf("age the rows: %v", err)
+	}
+	if stale, staleErr := s.Unconfirmed(ctx, 24*time.Hour); staleErr != nil || len(stale) != 1 || stale["sb_kept"] != kept {
+		t.Errorf("unconfirmed %v %v, want only sb_kept: a fresh allocation counts as seen", stale, staleErr)
 	}
 }
 

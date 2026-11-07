@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
+	"slices"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -31,6 +32,13 @@ const (
 		RETURNING address
 	)
 	SELECT address FROM held UNION ALL SELECT address FROM taken`
+
+	confirmSQL = `UPDATE sandboxd_tun_addrs t SET seen_at = now(), released_at = NULL
+		FROM unnest($2::text[], $3::text[]) AS h(claim, address)
+		WHERE t.cell = $1 AND t.claim = h.claim AND t.address = h.address
+		AND (t.released_at IS NULL OR NOT EXISTS (
+			SELECT 1 FROM sandboxd_tun_addrs o WHERE o.cell = t.cell AND o.claim = t.claim AND o.released_at IS NULL))
+		RETURNING t.claim`
 )
 
 //go:embed schema.sql
@@ -84,15 +92,25 @@ func (s *Store) Release(ctx context.Context, claimID string, addr netip.Addr) er
 	return nil
 }
 
-// Confirm stamps the active addresses of claims as seen now.
-func (s *Store) Confirm(ctx context.Context, claims []string) error {
+// Confirm stamps each held claim's address as seen now, reserving it again if it was released meanwhile, and returns the claims whose address another claim took.
+func (s *Store) Confirm(ctx context.Context, held map[string]netip.Addr) ([]string, error) {
+	claims := make([]string, 0, len(held))
+	addrs := make([]string, 0, len(held))
+	for claim, addr := range held {
+		claims, addrs = append(claims, claim), append(addrs, addr.String())
+	}
 	qctx, cancel := context.WithTimeout(ctx, metastore.QueryTimeout)
 	defer cancel()
-	if _, err := s.pool.Exec(qctx, `UPDATE sandboxd_tun_addrs SET seen_at = now()
-		WHERE cell = $1 AND released_at IS NULL AND claim = ANY($2)`, s.cell, claims); err != nil {
-		return down(err)
+	rows, err := s.pool.Query(qctx, confirmSQL, s.cell, claims, addrs)
+	if err != nil {
+		return nil, down(err)
 	}
-	return nil
+	confirmed, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		return nil, down(err)
+	}
+	lost := slices.DeleteFunc(claims, func(c string) bool { return slices.Contains(confirmed, c) })
+	return lost, nil
 }
 
 // Unconfirmed returns the active addresses no node has confirmed for age, by claim.
@@ -100,7 +118,7 @@ func (s *Store) Unconfirmed(ctx context.Context, age time.Duration) (map[string]
 	qctx, cancel := context.WithTimeout(ctx, metastore.QueryTimeout)
 	defer cancel()
 	rows, err := s.pool.Query(qctx, `SELECT claim, address FROM sandboxd_tun_addrs
-		WHERE cell = $1 AND released_at IS NULL AND seen_at < now() - make_interval(secs => $2)`, s.cell, age.Seconds())
+		WHERE cell = $1 AND released_at IS NULL AND greatest(seen_at, allocated_at) < now() - make_interval(secs => $2)`, s.cell, age.Seconds())
 	if err != nil {
 		return nil, down(err)
 	}

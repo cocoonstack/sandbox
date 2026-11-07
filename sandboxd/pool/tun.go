@@ -20,7 +20,7 @@ import (
 
 const (
 	tunPlanTries = 3
-	// Every node confirms its claims hourly, so a day without one means no node holds the claim.
+	// A node confirms its claims hourly and re-reserves an address released while it held it.
 	tunUnconfirmedAfter = 24 * time.Hour
 )
 
@@ -33,7 +33,7 @@ type tunSeeder interface {
 
 // tunReconciler is a cell-shared address store that reports the addresses no node confirmed lately.
 type tunReconciler interface {
-	Confirm(ctx context.Context, claims []string) error
+	Confirm(ctx context.Context, held map[string]netip.Addr) ([]string, error)
 	Unconfirmed(ctx context.Context, age time.Duration) (map[string]netip.Addr, error)
 }
 
@@ -186,33 +186,37 @@ func (m *Manager) reconcileTunAddrs(ctx context.Context) {
 		return
 	}
 	logger := log.WithFunc("pool.reconcileTunAddrs")
-	var held []string
+	held := map[string]netip.Addr{}
 	m.mu.Lock()
 	for id, sb := range m.claimed {
 		if sb.TunAddr.IsValid() {
-			held = append(held, id)
+			held[id] = sb.TunAddr
 		}
 	}
 	m.mu.Unlock()
-	if err := addrs.Confirm(ctx, held); err != nil {
+	lost, err := addrs.Confirm(ctx, held)
+	if err != nil {
 		logger.Warnf(ctx, "confirm overlay addresses: %v", err)
 		return
+	}
+	for _, id := range lost {
+		logger.Warnf(ctx, "overlay address %s of %s now belongs to another claim or is gone", held[id], id)
 	}
 	stale, err := addrs.Unconfirmed(ctx, tunUnconfirmedAfter)
 	if err != nil {
 		logger.Warnf(ctx, "list unconfirmed overlay addresses: %v", err)
 		return
 	}
+	var rows map[string]archives.Record
+	if m.archives != nil && len(stale) > 0 {
+		if rows, err = m.archives.Rows(ctx, slices.Collect(maps.Keys(stale))); err != nil {
+			logger.Warnf(ctx, "look up archive rows: %v", err)
+			return
+		}
+	}
 	for id, addr := range stale {
-		if m.archives != nil {
-			row, found, getErr := m.archives.Get(ctx, id)
-			if getErr != nil {
-				logger.Warnf(ctx, "look up archive row %s: %v", id, getErr)
-				return
-			}
-			if found && !row.Consumed {
-				continue
-			}
+		if row, found := rows[id]; found && !row.Consumed {
+			continue
 		}
 		logger.Infof(ctx, "release overlay address %s of %s: no node confirmed it for %s", addr, id, tunUnconfirmedAfter)
 		m.releaseTun(ctx, id, addr)
