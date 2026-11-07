@@ -41,6 +41,8 @@ func (p PortRelay) Dial(ctx context.Context, port uint16) (RelayConn, error) {
 	if err != nil {
 		return nil, err
 	}
+	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	defer stop()
 	req, err := Request(ctx, p.URL(port), p.Token, true)
 	if err != nil {
 		_ = conn.Close()

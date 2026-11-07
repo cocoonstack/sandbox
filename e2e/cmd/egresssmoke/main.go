@@ -1,15 +1,5 @@
-// egresssmoke is the guarded-egress acceptance: a sandbox reaches an allowed
-// origin through the host egress proxy with a host-injected credential it never
-// holds, direct egress is blocked (no NIC on the none lane, an nft lock on the
-// egress lane), and a disallowed host is denied.
-//
-// Injection is checked against a public echo (-echo) reached through the proxy,
-// which the pool policy must allow; a host-local origin bound at -reach is the
-// negative control the guest must fail to reach directly. Example config:
-//
-//	"secrets":[{"name":"probe","header":"X-Egress-Token","value_env":"EGRESS_PROBE_TOKEN"}],
-//	"pools":[{"template":"…","net":"none","size":"small","warm":1,
-//	  "egress":{"allow":[{"host":"postman-echo.com","secret":"probe"}]}}]
+// egresssmoke checks guarded egress: an allowed origin gets the host-injected
+// credential, direct egress is blocked, and a disallowed host is denied.
 package main
 
 import (
@@ -36,19 +26,18 @@ func main() {
 	netShape := flag.String("net", "none", "claim lane: none|egress")
 	reach := flag.String("reach", "127.0.0.1", "host the guest reaches the origin at")
 	nicAddr := flag.String("nicaddr", "", "static CIDR to bring the egress-lane NIC up with (default route via -reach)")
-	guarded := flag.Bool("guarded", true, "pool has an egress policy; false asserts the unlocked NIC reaches directly (negative control)")
 	echo := flag.String("echo", "postman-echo.com", "public HTTP host echoing request headers at /get, for the injection check")
 	flag.Parse()
 
-	if err := run(*addr, *token, *template, *wantToken, *netShape, *reach, *nicAddr, *echo, *guarded); err != nil {
+	if err := run(*addr, *token, *template, *wantToken, *netShape, *reach, *nicAddr, *echo); err != nil {
 		fmt.Fprintln(os.Stderr, "egresssmoke:", err)
 		os.Exit(1)
 	}
 	fmt.Println("EGRESSSMOKE PASS")
 }
 
-func run(addr, token, template, wantToken, netShape, reach, nicAddr, echo string, guarded bool) error {
-	if guarded && wantToken == "" {
+func run(addr, token, template, wantToken, netShape, reach, nicAddr, echo string) error {
+	if wantToken == "" {
 		return errors.New("-secret is required for the injection check")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
@@ -79,15 +68,8 @@ func run(addr, token, template, wantToken, netShape, reach, nicAddr, echo string
 	}
 
 	out, _ := sb.Exec(ctx, "sh", "-c", fmt.Sprintf("curl -s -m 3 --noproxy '*' %s || echo BLOCKED", target))
-	if guarded && !strings.Contains(out, "BLOCKED") {
+	if !strings.Contains(out, "BLOCKED") {
 		return fmt.Errorf("guest reached the origin without the proxy: %q", out)
-	}
-	if !guarded {
-		if !strings.Contains(out, "REACHED") {
-			return fmt.Errorf("unlocked NIC did not reach the origin: %q", out)
-		}
-		fmt.Println("  unlocked NIC reaches the origin directly (negative control)")
-		return nil
 	}
 	fmt.Println("  direct egress blocked")
 
@@ -107,8 +89,12 @@ func run(addr, token, template, wantToken, netShape, reach, nicAddr, echo string
 	}
 	fmt.Println("  allowed origin reached with no -x: proxy variables present in the exec")
 
-	if out, _ := sb.Exec(ctx, "sh", "-c", "env; cat /proc/1/environ 2>/dev/null | tr '\\0' '\\n'"); strings.Contains(out, wantToken) {
-		return fmt.Errorf("secret value leaked into the guest")
+	env, err := sb.Exec(ctx, "sh", "-c", "env; cat /proc/1/environ 2>/dev/null | tr '\\0' '\\n'")
+	if err != nil {
+		return fmt.Errorf("leak probe: %w", err)
+	}
+	if strings.Contains(env, wantToken) {
+		return errors.New("secret value leaked into the guest")
 	}
 	fmt.Println("  secret absent from guest env")
 
