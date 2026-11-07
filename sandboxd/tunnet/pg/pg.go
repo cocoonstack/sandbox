@@ -139,6 +139,18 @@ func (s *Store) Unconfirmed(ctx context.Context, age time.Duration) (map[string]
 	return stale, nil
 }
 
+// Reclaim releases claim's address only while no node has stamped or allocated it for age.
+func (s *Store) Reclaim(ctx context.Context, claim string, addr netip.Addr, age time.Duration) error {
+	qctx, cancel := context.WithTimeout(ctx, metastore.QueryTimeout)
+	defer cancel()
+	if _, err := s.pool.Exec(qctx, `UPDATE sandboxd_tun_addrs SET released_at = now()
+		WHERE cell = $1 AND claim = $2 AND address = $3 AND released_at IS NULL
+		AND greatest(seen_at, allocated_at) < now() - make_interval(secs => $4)`, s.cell, claim, addr.String(), age.Seconds()); err != nil {
+		return down(err)
+	}
+	return nil
+}
+
 func (s *Store) Close() {
 	s.pool.Close()
 }

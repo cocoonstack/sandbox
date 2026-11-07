@@ -439,6 +439,34 @@ func TestReconcileReleasesOnlyAnAddressNoClaimHolds(t *testing.T) {
 	}
 }
 
+func TestAnAdoptionConfirmsTheClaimsAddressBeforeTakingItsRow(t *testing.T) {
+	for _, taken := range []bool{false, true} {
+		c := newFailoverCluster(t)
+		a, b := c.pair(t)
+		sb := mustClaim(t, a, testKey)
+		addr := netip.MustParseAddr("240.0.0.9")
+		a.mu.Lock()
+		sb.TunAddr = addr
+		a.mu.Unlock()
+		mustArchive(t, a, sb)
+		c.expire("a")
+		addrs := &reconcilingAddrs{}
+		if taken {
+			addrs.lost = []string{sb.ID}
+		}
+		b.tunAddrs = addrs
+
+		mustAdopt(t, b, sb, "adopt")
+		if !slices.Equal(addrs.confirmedList(), []string{sb.ID}) {
+			t.Errorf("taken=%v: confirmed %v, want the adopted claim", taken, addrs.confirmedList())
+		}
+		adopted, _ := b.byID(sb.ID)
+		if got := adopted.TunAddr.IsValid(); got == taken {
+			t.Errorf("taken=%v: adopted claim keeps an address: %v", taken, got)
+		}
+	}
+}
+
 func tunManager(t *testing.T, eng *fakeEngine, addrs tunnet.Addresses, pools ...config.PoolSpec) *Manager {
 	t.Helper()
 	eng.sockRoot = outboundtest.SockRoot(t)
@@ -568,6 +596,7 @@ func (f *fakeAddrs) releasedList() []string {
 type reconcilingAddrs struct {
 	fakeAddrs
 	stale     map[string]netip.Addr
+	lost      []string
 	confirmed []string
 }
 
@@ -575,7 +604,11 @@ func (r *reconcilingAddrs) Confirm(_ context.Context, held map[string]netip.Addr
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.confirmed = append(r.confirmed, slices.Sorted(maps.Keys(held))...)
-	return nil, nil
+	return slices.Clone(r.lost), nil
+}
+
+func (r *reconcilingAddrs) Reclaim(ctx context.Context, claim string, addr netip.Addr, _ time.Duration) error {
+	return r.Release(ctx, claim, addr)
 }
 
 func (r *reconcilingAddrs) Unconfirmed(context.Context, time.Duration) (map[string]netip.Addr, error) {

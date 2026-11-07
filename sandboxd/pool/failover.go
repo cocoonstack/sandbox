@@ -70,6 +70,9 @@ func (m *Manager) adoptArchived(ctx context.Context, id, token string, room bool
 	if err = json.Unmarshal(rec.Claim, sb); err != nil {
 		return false, fmt.Errorf("adopt %s: decode claim: %w", id, err)
 	}
+	if err = m.confirmAdoptedTun(ctx, sb); err != nil {
+		return false, fmt.Errorf("adopt %s: confirm overlay address: %w", id, err)
+	}
 	epoch, err := m.archives.Take(ctx, id, rec.Epoch, m.nodeID)
 	if errors.Is(err, archives.ErrLost) {
 		return false, nil

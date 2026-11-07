@@ -1083,10 +1083,12 @@ one set per `meta_store.cell`.
   ```
 - **Reconcile:** every node stamps `seen_at` on the addresses of the claims it
   holds once an hour, reserving again one released while it still held it, and
-  logs a held address another claim took. Any node releases an address neither
-  stamped nor allocated for a day unless an unconsumed
-  [archive row](#shared-archive-registry) names its claim, so an address a crash
-  or a lost release left behind returns to the pool after its reuse window.
+  logs a held address another claim took; a node adopting an archived claim
+  stamps its address before it takes the row. Any node releases an address
+  neither stamped nor allocated for a day, rechecked in the release itself,
+  unless an unconsumed [archive row](#shared-archive-registry) names its claim,
+  so an address a crash or a lost release left behind returns to the pool after
+  its reuse window.
 
 ### Reloading the config
 

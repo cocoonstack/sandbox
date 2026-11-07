@@ -223,7 +223,7 @@ The node's `tun` block turns the mode on; a pool opts in with `"tun": true`
 | `senders` | `4` | send sockets; the outer source port follows the flow across them |
 | `exits` | required | profile label to `{vtep, mac}`; a `default` entry is required |
 | `limits` | `max_flows` 16384, `new_flows_per_second` 1000 | per claim: `bytes_per_second`, `packets_per_second`, `new_flows_per_second`, `max_flows`, `quota_bytes`; an unset `bytes_per_second`, `packets_per_second` or `quota_bytes` is unlimited |
-| `reuse_after_seconds` | `432000` | how long a freed address waits; match the exits' `nf_conntrack_tcp_timeout_established` |
+| `reuse_after_seconds` | `432000` | how long a freed address waits; match the exits' `nf_conntrack_tcp_timeout_established`, and on a mesh keep it above an hour, the interval at which a node re-reserves an address released while it still held it |
 
 ### Single-host exit
 
