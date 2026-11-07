@@ -479,8 +479,12 @@ func (s *Server) redirectVolumeClaim(ctx context.Context, w http.ResponseWriter,
 	if localVolumes && (!promoted || localTemplate || pooled) {
 		return false, nil
 	}
+	missing := pool.ErrVolumeUnavailable
+	if localVolumes {
+		missing = pool.ErrUnknownTemplate
+	}
 	if s.placer == nil || req.NoRedirect {
-		return false, pool.ErrVolumeUnavailable
+		return false, missing
 	}
 
 	var owners []string
@@ -495,7 +499,7 @@ func (s *Server) redirectVolumeClaim(ctx context.Context, w http.ResponseWriter,
 		owners = s.placer.VolumeOwners(names)
 	}
 	if len(owners) == 0 {
-		return false, pool.ErrVolumeUnavailable
+		return false, missing
 	}
 	writeJSON(w, http.StatusOK, ClaimResponse{Redirect: s.clientAddrs(owners), RequirePromoted: promoted})
 	return true, nil
@@ -924,7 +928,10 @@ func (s *Server) requireToken(next http.HandlerFunc) http.HandlerFunc {
 			writeErr(w, http.StatusUnauthorized, "invalid api token")
 			return
 		}
-		next(w, r.WithContext(withTenant(r.Context(), tenant)))
+		if tenant != nil {
+			r = r.WithContext(withTenant(r.Context(), tenant))
+		}
+		next(w, r)
 	}
 }
 
