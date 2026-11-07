@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json/v2"
 	"encoding/xml"
 	"errors"
 	"fmt"
@@ -946,6 +947,47 @@ func TestRaisedConcurrencyReachesItsLimitAndKeepsItsConnections(t *testing.T) {
 	}
 }
 
+func TestFetchRejectsAnInvalidManifestBeforeWritingAFile(t *testing.T) {
+	const id = "ck_00000000000000a4"
+	appendFile := func(path string, size int64) func(*manifest) {
+		return func(man *manifest) { man.Files = append(man.Files, manifestFile{Path: path, Size: size}) }
+	}
+	for _, tt := range []struct {
+		name   string
+		damage func(*manifest)
+		want   string
+	}{
+		{"parent traversal", appendFile("../../escaped", 1), "not a path inside the record"},
+		{"absolute path", appendFile("/escaped", 1), "not a path inside the record"},
+		{"backslash", appendFile(`..\escaped`, 1), "not a path inside the record"},
+		{"empty path", appendFile("", 1), "not a path inside the record"},
+		{"duplicate path", appendFile("./disk.img", 1), "twice"},
+		{"negative size", func(man *manifest) { man.Files[0].Size = -1 }, "outside [0,"},
+		{"record over the bound", appendFile("big.img", store.MaxRecordBytes), "outside [0,"},
+		{"too many files", func(man *manifest) {
+			for i := range maxManifestFiles {
+				appendFile(fmt.Sprintf("f%d", i), 0)(man)
+			}
+		}, "more than"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			fake, st := newFakeStore(t)
+			publishRecord(t, st, id, metaJSON(id), "payload")
+			rewriteManifest(t, fake, id, tt.damage)
+			_, _, _, err := st.Fetch(t.Context(), id)
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Errorf("Fetch = %v, want an error containing %q", err, tt.want)
+			}
+			if errors.Is(err, store.ErrNotFound) {
+				t.Errorf("an invalid manifest must not read as absent: %v", err)
+			}
+			if _, statErr := os.Lstat(filepath.Join(st.staging, "escaped")); !errors.Is(statErr, os.ErrNotExist) {
+				t.Errorf("a manifest path escaped the fetch dir: stat = %v", statErr)
+			}
+		})
+	}
+}
+
 type fakeRequest struct {
 	method string
 	key    string
@@ -1225,6 +1267,27 @@ func publishRecord(t *testing.T, st *Store, id string, meta []byte, content stri
 	if err := st.Publish(t.Context(), staging, id, ""); err != nil {
 		t.Fatalf("publish record: %v", err)
 	}
+}
+
+func rewriteManifest(t *testing.T, fake *fakeS3, id string, change func(*manifest)) {
+	t.Helper()
+	prefix := "ck/" + manifestsDir + "/" + id + "/"
+	keys := slices.DeleteFunc(fake.keys(), func(key string) bool { return !strings.HasPrefix(key, prefix) })
+	if len(keys) != 1 {
+		t.Fatalf("manifests of %s = %v, want one", id, keys)
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	var man manifest
+	if err := json.Unmarshal(fake.objects[keys[0]], &man); err != nil {
+		t.Fatalf("decode manifest: %v", err)
+	}
+	change(&man)
+	raw, err := json.Marshal(man)
+	if err != nil {
+		t.Fatalf("encode manifest: %v", err)
+	}
+	fake.objects[keys[0]] = raw
 }
 
 func stageRecord(t *testing.T, st *Store, id string, meta []byte, content string) string {

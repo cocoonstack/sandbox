@@ -24,6 +24,8 @@ const (
 
 	// GenerationGrace bounds the race where a node still clones a generation a re-publish superseded.
 	GenerationGrace = time.Hour
+
+	MaxRecordBytes = 1 << 40
 )
 
 var (

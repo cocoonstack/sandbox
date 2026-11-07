@@ -47,6 +47,7 @@ const (
 	defaultPublishConcurrency  = 4
 	defaultMetaReadConcurrency = 8
 	transferBudget             = 30 * time.Minute
+	maxManifestFiles           = 1 << 12
 )
 
 var chunkBufs = sync.Pool{New: func() any {
@@ -466,6 +467,9 @@ func (s *Store) populate(ctx context.Context, id string, meta []byte, gen string
 
 // materialize sizes each file to its logical length and writes only its present chunks, so holes stay holes.
 func (s *Store) materialize(ctx context.Context, man manifest, root string) (err error) {
+	if err = validateManifest(man); err != nil {
+		return err
+	}
 	handles := make([]*os.File, len(man.Files))
 	defer func() {
 		for _, f := range handles {
@@ -718,6 +722,30 @@ func publishFiles(staging string) ([]publishFile, error) {
 		return nil
 	})
 	return files, err
+}
+
+func validateManifest(man manifest) error {
+	if len(man.Files) > maxManifestFiles {
+		return fmt.Errorf("manifest lists %d files, more than %d", len(man.Files), maxManifestFiles)
+	}
+	seen := make(map[string]struct{}, len(man.Files))
+	var total int64
+	for _, file := range man.Files {
+		rel := filepath.FromSlash(file.Path)
+		if !filepath.IsLocal(rel) || strings.Contains(file.Path, `\`) {
+			return fmt.Errorf("manifest file %q is not a path inside the record", file.Path)
+		}
+		clean := filepath.Clean(rel)
+		if _, dup := seen[clean]; dup {
+			return fmt.Errorf("manifest lists %q twice", file.Path)
+		}
+		seen[clean] = struct{}{}
+		if file.Size < 0 || file.Size > store.MaxRecordBytes-total {
+			return fmt.Errorf("manifest file %q size %d puts the record outside [0, %d] bytes", file.Path, file.Size, int64(store.MaxRecordBytes))
+		}
+		total += file.Size
+	}
+	return nil
 }
 
 // pruneIdleGenerations drops cached generations of one record that no Fetch used within the grace; a hit refreshes the mtime.
