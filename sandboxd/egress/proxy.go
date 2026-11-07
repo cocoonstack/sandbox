@@ -435,7 +435,6 @@ func (p *Proxy) relay(w http.ResponseWriter, r *http.Request, ev Event, rule Rul
 	}
 }
 
-// transport returns the pool for route; the direct route keeps the base transports.
 func (p *Proxy) transport(route string, mitm bool) *http.Transport {
 	pools := p.pools.Load()
 	base := pools.tr
@@ -471,6 +470,48 @@ func (p *Proxy) record(ev Event) {
 	}
 	ev.Host, ev.Method = ev.Host[:min(len(ev.Host), maxHostLen)], ev.Method[:min(len(ev.Method), maxHostLen)]
 	p.audit(ev)
+}
+
+// inject sets the rule's secret, then on an intercepted request the claim credentials the guest asked for, and returns a scrubber for the query credentials it filled.
+func (p *Proxy) inject(rule Rule, out *http.Request, host string, mitm bool) (string, *scrubber) {
+	if p.secrets == nil {
+		return "", nil
+	}
+	var names, set []string
+	if rule.Secret != "" {
+		if header, value, ok := p.secrets.Header(rule.Secret); ok && value != "" {
+			out.Header.Set(header, value)
+			names, set = append(names, rule.Secret), append(set, header)
+		}
+	}
+	if !mitm {
+		return strings.Join(names, ","), nil
+	}
+	var filled, bodyCreds []Credential
+	for _, c := range p.secrets.Credentials(strings.ToLower(host)) {
+		if c.Value == "" {
+			continue
+		}
+		if c.Query != "" {
+			if q := replaceParam(out.URL.RawQuery, c.Query, c.Placeholder, c.Value); q != out.URL.RawQuery {
+				out.URL.RawQuery, filled = q, append(filled, c)
+			} else if c.Body {
+				bodyCreds = append(bodyCreds, c)
+			}
+			continue
+		}
+		if (c.Placeholder != "" && out.Header.Get(c.Header) != c.Placeholder) ||
+			slices.ContainsFunc(set, func(s string) bool { return strings.EqualFold(s, c.Header) }) {
+			continue
+		}
+		out.Header.Set(c.Header, c.Value)
+		names, set = append(names, "claim:"+c.Name), append(set, c.Header)
+	}
+	filled = append(filled, substituteBody(out, bodyCreds)...)
+	for _, c := range filled {
+		names = append(names, "claim:"+c.Name)
+	}
+	return strings.Join(names, ","), newScrubber(filled)
 }
 
 // countingBody counts the request body bytes the transport reads, possibly after RoundTrip returns.
@@ -525,48 +566,6 @@ func (sc *scrubber) header(h http.Header) {
 			vs[i] = v
 		}
 	}
-}
-
-// inject sets the rule's secret, then on an intercepted request the claim credentials the guest asked for, and returns a scrubber for the query credentials it filled.
-func (p *Proxy) inject(rule Rule, out *http.Request, host string, mitm bool) (string, *scrubber) {
-	if p.secrets == nil {
-		return "", nil
-	}
-	var names, set []string
-	if rule.Secret != "" {
-		if header, value, ok := p.secrets.Header(rule.Secret); ok && value != "" {
-			out.Header.Set(header, value)
-			names, set = append(names, rule.Secret), append(set, header)
-		}
-	}
-	if !mitm {
-		return strings.Join(names, ","), nil
-	}
-	var filled, bodyCreds []Credential
-	for _, c := range p.secrets.Credentials(strings.ToLower(host)) {
-		if c.Value == "" {
-			continue
-		}
-		if c.Query != "" {
-			if q := replaceParam(out.URL.RawQuery, c.Query, c.Placeholder, c.Value); q != out.URL.RawQuery {
-				out.URL.RawQuery, filled = q, append(filled, c)
-			} else if c.Body {
-				bodyCreds = append(bodyCreds, c)
-			}
-			continue
-		}
-		if (c.Placeholder != "" && out.Header.Get(c.Header) != c.Placeholder) ||
-			slices.ContainsFunc(set, func(s string) bool { return strings.EqualFold(s, c.Header) }) {
-			continue
-		}
-		out.Header.Set(c.Header, c.Value)
-		names, set = append(names, "claim:"+c.Name), append(set, c.Header)
-	}
-	filled = append(filled, substituteBody(out, bodyCreds)...)
-	for _, c := range filled {
-		names = append(names, "claim:"+c.Name)
-	}
-	return strings.Join(names, ","), newScrubber(filled)
 }
 
 // scrubReader streams a response body through a scrubber, holding back only a tail that may begin a match.

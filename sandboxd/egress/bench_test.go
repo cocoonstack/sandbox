@@ -18,7 +18,7 @@ const benchKey = "EAABsbCS1iHgBAKZBZCx9ZAZBe7ZAZCYqZBfZC0ZD"
 func BenchmarkSignLeaf(b *testing.B) {
 	ca := testCAOnly(b)
 	for b.Loop() {
-		if _, err := ca.SignLeaf("bench.example.com"); err != nil {
+		if _, err := ca.signLeaf("bench.example.com"); err != nil {
 			b.Fatalf("sign: %v", err)
 		}
 	}

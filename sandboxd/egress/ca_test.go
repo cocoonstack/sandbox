@@ -36,7 +36,7 @@ func TestSignLeafChainsToRoot(t *testing.T) {
 	}
 	for _, host := range []string{"api.github.com", "192.0.2.10"} {
 		t.Run(host, func(t *testing.T) {
-			crt, err := ca.SignLeaf(host)
+			crt, err := ca.signLeaf(host)
 			if err != nil {
 				t.Fatalf("sign leaf: %v", err)
 			}
