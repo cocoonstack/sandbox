@@ -392,7 +392,10 @@ func TestSandboxesIndexOmitsTokens(t *testing.T) {
 	if len(list) != 1 || list[0].ID != sb.ID || list[0].ClaimRef != "ns/workload" || list[0].Hibernated {
 		t.Fatalf("index %+v", list)
 	}
-	raw, _ := json.Marshal(list)
+	raw, err := json.Marshal(list)
+	if err != nil {
+		t.Fatalf("marshal the index: %v", err)
+	}
 	if strings.Contains(string(raw), sb.Token) {
 		t.Error("index leaked a token")
 	}
