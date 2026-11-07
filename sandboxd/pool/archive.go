@@ -121,6 +121,7 @@ func (m *Manager) archive(ctx context.Context, sb *types.Sandbox) (err error) {
 	// A hibernated source is copied from its wake image, so no VM starts.
 	ck, srcSnap, err := m.publishCheckpoint(ctx, sb, ckID, "archive", sb.Tenant, snap, true)
 	if err != nil {
+		m.deleteOrphanArchiveCk(ctx, ckID)
 		return err
 	}
 	// The claim must still hold the exact snapshot the export captured, or the ck is stale
