@@ -313,6 +313,7 @@ func (m *Manager) commitTransition(ctx context.Context, sb *types.Sandbox, snap,
 		}
 		// Under m.mu, so a racing release's event lands after this one and a shutdown cannot keep the record without it
 		if snap != "" {
+			m.forgetHostEnvLocked(sb)
 			m.recordHibernate(ctx, sb)
 		} else {
 			m.recordUsage(ctx, usage.Event{Event: "wake", ID: sb.ID, VMName: sb.VMName, Tenant: sb.Tenant, Deadline: sb.Deadline})
@@ -355,6 +356,7 @@ func (m *Manager) settlePendingSnap(ctx context.Context, sb *types.Sandbox) (ado
 	if live {
 		if exists {
 			sb.HibernateSnap = pending
+			m.forgetHostEnvLocked(sb)
 			m.recordHibernate(ctx, sb)
 		}
 		sb.PendingSnap = ""
@@ -373,6 +375,12 @@ func (m *Manager) settlePendingSnap(ctx context.Context, sb *types.Sandbox) (ado
 		return exists, fmt.Errorf("resolve hibernate intent %s: persist: %w", sb.ID, err)
 	}
 	return exists, nil
+}
+
+func (m *Manager) forgetHostEnvLocked(sb *types.Sandbox) {
+	if m.view.Load().hostEnvMemory {
+		sb.SetEnv(sb.Env.DropHostValues())
+	}
 }
 
 func (m *Manager) recordHibernate(ctx context.Context, sb *types.Sandbox) {

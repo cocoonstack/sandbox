@@ -42,7 +42,7 @@ func TestInfoReportsCapacityState(t *testing.T) {
 func TestSandboxesDecodeMetadataAndResources(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_ = json.MarshalWrite(w, map[string]any{"sandboxes": []any{map[string]any{
-			"id": "sb_1", "metadata": map[string]string{"team": "a"}, "cpu_count": 2, "mem_total_bytes": 1 << 30, "on_expire": "archive",
+			"id": "sb_1", "metadata": map[string]string{"team": "a"}, "cpu_count": 2, "mem_total_bytes": 1 << 30, "on_expire": "archive", "env_missing": true,
 		}}})
 	}))
 	t.Cleanup(ts.Close)
@@ -51,7 +51,7 @@ func TestSandboxesDecodeMetadataAndResources(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Sandboxes: %v", err)
 	}
-	if len(list) != 1 || list[0].Metadata["team"] != "a" || list[0].CPUCount != 2 || list[0].MemTotalBytes != 1<<30 || list[0].OnExpire != "archive" {
-		t.Errorf("summaries %+v, want metadata team=a, 2 CPUs, 1 GiB", list)
+	if len(list) != 1 || list[0].Metadata["team"] != "a" || list[0].CPUCount != 2 || list[0].MemTotalBytes != 1<<30 || list[0].OnExpire != "archive" || !list[0].EnvMissing {
+		t.Errorf("summaries %+v, want metadata team=a, 2 CPUs, 1 GiB and env_missing", list)
 	}
 }

@@ -21,6 +21,7 @@ func TestUpstreamEnvIsAdmittedHostOnlyAndAllowed(t *testing.T) {
 		"guest entry": {types.EnvVar{Value: "http://127.0.0.1:3128"}, false},
 		"unlisted":    {types.EnvVar{Value: "http://10.0.0.1:3128", Guest: hostOnly}, false},
 		"malformed":   {types.EnvVar{Value: "ftp://127.0.0.1:21", Guest: hostOnly}, false},
+		"missing":     {types.EnvVar{Guest: hostOnly, Missing: true}, true},
 	} {
 		err := m.checkEnv(types.Env{"EGRESS_UPSTREAM": tt.v})
 		if tt.ok != (err == nil) || (err != nil && !errors.Is(err, ErrBadEnv)) {

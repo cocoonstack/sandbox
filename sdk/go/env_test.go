@@ -54,7 +54,7 @@ func TestEnvVerbsUseTheAPITokenOnTheOwner(t *testing.T) {
 		body, _ := io.ReadAll(r.Body)
 		got <- request{r.Method, r.Header.Get("Authorization"), string(body)}
 		if r.Method == http.MethodGet {
-			_, _ = io.WriteString(w, `{"env":{"MODE":{"value":"on"},"GW_KEY":{"value":"","guest":false}}}`)
+			_, _ = io.WriteString(w, `{"env":{"MODE":{"value":"on"},"GW_KEY":{"value":"","guest":false},"LOST":{"value":"","guest":false,"missing":true}}}`)
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
@@ -67,7 +67,7 @@ func TestEnvVerbsUseTheAPITokenOnTheOwner(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Env: %v", err)
 	}
-	if want := (map[string]EnvVar{"MODE": {Value: "on"}, "GW_KEY": {Guest: new(false)}}); !reflect.DeepEqual(env, want) {
+	if want := (map[string]EnvVar{"MODE": {Value: "on"}, "GW_KEY": {Guest: new(false)}, "LOST": {Guest: new(false), Missing: true}}); !reflect.DeepEqual(env, want) {
 		t.Errorf("Env %v, want %v", env, want)
 	}
 	if r := <-got; r != (request{http.MethodGet, "Bearer api", ""}) {

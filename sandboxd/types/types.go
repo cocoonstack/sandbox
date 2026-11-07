@@ -383,7 +383,7 @@ func (s *Sandbox) SetEnv(e Env) {
 	s.Env = e
 	view := &envView{env: e}
 	for name, v := range e {
-		if v.Inject != nil && !v.InGuest() {
+		if v.Inject != nil && !v.InGuest() && !v.Missing {
 			view.injects = append(view.injects, namedVar{name, v})
 		}
 	}

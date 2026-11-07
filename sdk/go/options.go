@@ -60,6 +60,8 @@ type EnvVar struct {
 	Value  string     `json:"value"`
 	Guest  *bool      `json:"guest,omitempty"`
 	Inject *EnvInject `json:"inject,omitempty"`
+	// Missing, on a read, marks a host-only entry whose value the node no longer holds; a write that sets it is refused.
+	Missing bool `json:"missing,omitzero"`
 }
 
 // Option configures a New claim.

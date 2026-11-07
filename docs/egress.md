@@ -372,20 +372,25 @@ gateway key per user, while the guest holds a placeholder.
   which hosts receive a secret, and the claim only supplies its value. A
   `guest: true` entry never feeds a secret.
 - **Precedence.** The claim's entry wins over the node's value for that claim;
-  an entry set to `""` suppresses the node's value. A secret with `value_env`
+  a `missing` entry ([claim env](sandboxd-api.md#getputpatch-v1sandboxesidenv))
+  blocks the node's value until it is sent again. Prefer claim entries for per-user credentials: a node value is
+  shared by every claim of the cell and long-lived. A secret with `value_env`
   needs that variable set on the node: unset or empty, it stops the daemon at
   start and a reload answers 400. A secret only claims supply omits `value_env`;
   on a claim with no entry for it, the matched request passes as the guest sent
   it.
 - **Lifetime.** The env lives in the claim record in `claims.json` (0600
   under `data_dir`), survives a restart, hibernate, wake, archive and
-  unarchive, and goes with the release or reap. A fork child, a checkpoint
+  unarchive, and goes with the release or reap. With
+  [`host_env_memory_only`](deploy.md#configuration) its `guest: false` values
+  live in memory only and come back `missing` after each of those but a
+  release, until the control plane sends them again. A fork child, a checkpoint
   branch and a promoted-template clone start with only the env their own claim
   sets. Processes captured live in a snapshot (sessions, detached execs,
   units) keep the source's guest values in their own environment; a
   `guest: false` value never enters the guest, so no snapshot, checkpoint or
-  store object holds one; the `archive_failover` row is the exception
-  ([security](security.md#deployment-assumptions)).
+  store object holds one; the `archive_failover` row is the exception unless
+  `host_env_memory_only` is on ([security](security.md#deployment-assumptions)).
 - **Audit.** An injection is recorded as the secret's name; the value is
   never logged, listed or returned.
 
@@ -470,7 +475,7 @@ changed: resend it, and the resend replaces the row.
 - **Precedence.** The pool rule's own `secret` is set first and wins: a
   credential naming that header for a host the rule covers is a 400. Among
   credentials for the same header, the first by entry name whose placeholder
-  (if any) the request carries wins. An empty value injects nothing.
+  (if any) the request carries wins. A missing entry injects nothing.
 - **Echo.** Origins reflect the request URL: a redirect's `Location`, a
   paging link, an echoed query. On a request that carried a `query`
   credential, its value, as sent, query- or path-escaped, or with `/` written

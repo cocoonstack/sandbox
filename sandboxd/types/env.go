@@ -98,6 +98,8 @@ type EnvVar struct {
 	Guest *bool  `json:"guest,omitempty"`
 	// Inject, on a host-only entry, makes the egress proxy send Value to the named hosts.
 	Inject *EnvInject `json:"inject,omitempty"`
+	// Missing marks a host-only entry whose value the node no longer holds; only the node sets it.
+	Missing bool `json:"missing,omitzero"`
 }
 
 // InGuest reports whether the entry is delivered into the guest.
@@ -106,14 +108,15 @@ func (v EnvVar) InGuest() bool { return v.Guest == nil || *v.Guest }
 // UnmarshalJSON rejects unknown members and a null guest, so a mistyped host-only flag never falls back to the guest.
 func (v *EnvVar) UnmarshalJSON(b []byte) error {
 	var raw struct {
-		Value  string         `json:"value"`
-		Guest  jsontext.Value `json:"guest,omitzero"`
-		Inject *EnvInject     `json:"inject,omitempty"`
+		Value   string         `json:"value"`
+		Guest   jsontext.Value `json:"guest,omitzero"`
+		Inject  *EnvInject     `json:"inject,omitempty"`
+		Missing bool           `json:"missing,omitzero"`
 	}
 	if err := json.Unmarshal(b, &raw, json.RejectUnknownMembers(true)); err != nil {
 		return fmt.Errorf("env entry: %w", err)
 	}
-	*v = EnvVar{Value: raw.Value, Inject: raw.Inject}
+	*v = EnvVar{Value: raw.Value, Inject: raw.Inject, Missing: raw.Missing}
 	if raw.Guest == nil {
 		return nil
 	}
@@ -126,14 +129,27 @@ func (v *EnvVar) UnmarshalJSON(b []byte) error {
 }
 
 func (v EnvVar) same(other EnvVar) bool {
-	return v.Value == other.Value && v.InGuest() == other.InGuest() && v.Inject.equal(other.Inject)
+	return v.Value == other.Value && v.InGuest() == other.InGuest() && v.Missing == other.Missing && v.Inject.equal(other.Inject)
 }
 
 // Env is a claim's own environment: guest entries reach the guest, the others stay host-side for egress secrets.
 type Env map[string]EnvVar
 
-// Validate enforces the entry count, the name grammar, a bounded value a header and an env file both carry, and a bounded total.
+// Validate checks a caller's env: ValidateStored's rules, a value on every host-only entry, and no missing entry.
 func (e Env) Validate() error {
+	for name, v := range e {
+		switch {
+		case v.Missing:
+			return fmt.Errorf("env %s: missing is set by the node", name)
+		case !v.InGuest() && v.Value == "":
+			return fmt.Errorf("env %s: a host-only entry needs a value", name)
+		}
+	}
+	return e.ValidateStored()
+}
+
+// ValidateStored enforces the entry count, the name grammar, a bounded value a header and an env file both carry, and a bounded total.
+func (e Env) ValidateStored() error {
 	if len(e) > maxEnvVars {
 		return fmt.Errorf("env must contain at most %d entries, got %d", maxEnvVars, len(e))
 	}
@@ -210,16 +226,24 @@ func (e Env) SameGuest(other Env) bool {
 	return maps.EqualFunc(e.guest(), other.guest(), EnvVar.same)
 }
 
-// Redacted copies e with every host-only value dropped, so a read names them without serving them.
-func (e Env) Redacted() Env {
-	out := maps.Clone(e)
-	for name, v := range out {
-		if !v.InGuest() {
-			v.Value = ""
-			out[name] = v
+// HasMissing reports whether any host-only entry lacks its value.
+func (e Env) HasMissing() bool {
+	for _, v := range e {
+		if v.Missing {
+			return true
 		}
 	}
-	return out
+	return false
+}
+
+// Redacted copies e with every host-only value dropped, so a read names them without serving them.
+func (e Env) Redacted() Env {
+	return e.dropHostValues(false)
+}
+
+// DropHostValues copies e with every host-only value dropped and marked missing.
+func (e Env) DropHostValues() Env {
+	return e.dropHostValues(true)
 }
 
 // GuestFile renders the guest entries as a systemd EnvironmentFile, sorted by name.
@@ -229,6 +253,17 @@ func (e Env) GuestFile() []byte {
 		b = fmt.Appendf(b, "%s=\"%s\"\n", name, guestFileEscaper.Replace(e[name].Value))
 	}
 	return b
+}
+
+func (e Env) dropHostValues(missing bool) Env {
+	out := maps.Clone(e)
+	for name, v := range out {
+		if !v.InGuest() {
+			v.Value, v.Missing = "", v.Missing || missing
+			out[name] = v
+		}
+	}
+	return out
 }
 
 func (e Env) guest() Env {

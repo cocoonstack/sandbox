@@ -110,8 +110,9 @@ Auth: `Authorization: Bearer <api_token>` (when configured).
 - `env` is the claim's own environment, at most 64 entries: each name a shell
   identifier of at most 128 bytes, each value at most 8 KiB, a value and an
   inject `query` or `placeholder` with no control characters other than tab, and names, values and inject fields at most 64 KiB in total. An entry holds only `value`, `guest` and `inject`; any other
-  member, or `"guest": null`, answers 400, so a mistyped flag never lands a
-  host-only value in the guest. `guest` (default `true`) delivers the entry into the guest; a
+  member, `"guest": null`, a `guest: false` entry with an empty value, or
+  `missing` (the node's own marker) answers 400, so a mistyped flag never lands
+  a host-only value in the guest and a read sent back never blanks one. `guest` (default `true`) delivers the entry into the guest; a
   `guest: false` entry never enters it and only feeds the node's egress
   [secrets](egress.md#claim-env-and-secrets), or, with `inject`
   (`{"hosts": [...], "header": "...", "placeholder": "..."}` with `placeholder`
@@ -1029,12 +1030,14 @@ an SDK caller should set.
 Auth: node API token. Root sees every live claim; a tenant sees only its own.
 The index is `{"sandboxes": [{id, key, tenant?, deadline, claimed_at?, hibernated,
 archived?, from_checkpoint?, claim_ref?, metadata?, on_expire?, cpu_count, mem_total_bytes,
-volumes?: [{name, mount?, mode?, attach_only?}], volumes_want?: [{name, mount?, mode?, attach_only?}], restarts?, restarted_at?, failed?}]}` — `deadline` is `0001-01-01T00:00:00Z` on an archive kept forever; `cpu_count` and `mem_total_bytes` are the
+volumes?: [{name, mount?, mode?, attach_only?}], volumes_want?: [{name, mount?, mode?, attach_only?}], restarts?, restarted_at?, failed?, env_missing?}]}` — `deadline` is `0001-01-01T00:00:00Z` on an archive kept forever; `cpu_count` and `mem_total_bytes` are the
 size tier's allocation; `restarts` counts the cold boots that replaced an
 exited VMM and `restarted_at` stamps the last one (each loses guest memory and
 the instance-metadata document, so a caller re-establishes guest state when
 `restarts` moves; the claim's env is written to the guest again); `failed` names why the VMM is down and was not restarted
 (see [dead VMMs](deploy.md#dead-vmms-and-host-restarts));
+`env_missing` is true while a `guest: false` env entry has no value on the node
+([claim env](#getputpatch-v1sandboxesidenv));
 `mode` is omitted for `ro`, matching the claim echo; never sandbox tokens,
 volume host paths, or catalog access lists. `claimed_at` is the first grant
 (renew and wake move `deadline` only). `?claim_ref=<ref>` keeps only the claims recorded under
@@ -1085,13 +1088,13 @@ it reaches; on a cluster, send it to the claim's `owner_addr`.
 rules; `{"env": {}}` clears it. `PATCH` merges: each entry in the body is set,
 an entry of `null` removes that name, and every other entry is kept as stored,
 host-only values included, so a control plane that cannot read those values
-back never has to send them again:
+back sends them again only when the node reports them missing (below):
 
 ```json
 {"env": {"CB_META_wake": {"value": "w2"}, "OLD": null}}
 ```
 
-The claim rules apply to the merged env, so a patch that takes it past 64
+The size rules apply to the merged env, so a patch that takes it past 64
 entries or 64 KiB answers 400 and changes nothing. `GET` answers the same shape with every
 `guest: false` value blanked, so a control plane sees the names without the
 values:
@@ -1105,7 +1108,23 @@ An `inject` host the claim's pool does not intercept, or its tenant class does
 not allow, and a header the pool rule's own secret already sets on that host,
 answer 400 and store nothing.
 
-The env is persisted with the claim. A `guest: false` change takes effect on
+An entry the node holds no value for comes back with `"missing": true`, and
+the claim's index row carries `env_missing`. Under
+[`host_env_memory_only`](deploy.md#configuration) that happens when the claim
+hibernates, after a restart and after an adoption. A missing entry injects
+nothing and blocks the node's value for its secret; a missing upstream entry
+falls back to the class or pool upstream. Send it again once the claim runs:
+a `PATCH` replaces the entry whole, so repeat `guest` and `inject`:
+
+```json
+{"env": {"GW_KEY": {"value": "Bearer …", "guest": false, "inject": {"hosts": ["api.example.com"], "header": "Authorization"}}}}
+```
+
+A value sent to a hibernated claim stays in that node's memory until the
+claim hibernates again.
+
+The env is persisted with the claim, its `guest: false` values only without
+`host_env_memory_only`. A `guest: false` change takes effect on
 the egress proxy's next request at any time, a hibernated or archived claim
 included, and never touches the guest. A change to the guest entries is
 written to the guest at once, so it needs a running guest: on a hibernated,
