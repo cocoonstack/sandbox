@@ -2,7 +2,7 @@
 # Bake cocoon-agent (vsock exec daemon) into a sandbox image.
 # Mirrors cocoon/os-image/ubuntu/install-agent.sh with two deltas:
 #   - the unit starts at sysinit (DefaultDependencies=no): the agent listening
-#     on vsock IS the sandbox readiness signal, so it must not wait for
+#     on vsock is cocoon's VM readiness signal, so it must not wait for
 #     network or multi-user; the sandbox kernel builds vsock in (no modprobe).
 #   - sshd stays socket-activated (Dockerfile enables ssh.socket), so there is
 #     no `systemctl enable ssh` here.
@@ -35,7 +35,7 @@ cat > /etc/systemd/system/cocoon-agent.service <<'EOF'
 [Unit]
 Description=Cocoon agent (vsock command exec)
 Documentation=https://github.com/cocoonstack/cocoon-agent
-# Readiness signal for the whole sandbox: start as early as systemd allows.
+# cocoon's VM readiness signal: start as early as systemd allows.
 # No After= at all: sandbox-init hands over a fully-assembled rootfs before
 # PID 1 runs and /dev/vsock is devtmpfs — measured, waiting for
 # local-fs.target cost ~140ms of pure ordering delay on the critical chain.

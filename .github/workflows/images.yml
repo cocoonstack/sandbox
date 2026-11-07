@@ -1,10 +1,5 @@
-# The image chain's single entry point: one push runs boot and silkd (only
-# the changed ones) and then os-images, in order, so the build is
-# deterministic. Previously build-os-images was triggered independently by
-# each carrier's workflow_run and GitHub's concurrency queue kept only the
-# newest pending run — which carrier actually built was a race, and a run
-# could bake a stale carrier. Here os-images runs once, after both carriers,
-# and bases FROM their sha-pinned refs.
+# The image chain's single entry point: one push builds the changed carriers
+# (boot, silkd), then os-images once, FROM their sha-pinned refs.
 name: images
 
 on:

@@ -24,16 +24,6 @@ static SILKD_NET: LazyLock<i8> = LazyLock::new(|| match std::env::var("SILKD_NET
     _ => -1,
 });
 
-/// Reports whether the guest can reach a network; only a `device`-backed interface counts, since the kernel auto-creates virtual tunnels.
-pub fn has_egress() -> bool {
-    match *SILKD_NET {
-        0 => return false,
-        1 => return true,
-        _ => {}
-    }
-    *DEVICE_BACKED
-}
-
 /// Reports whether execs route directly: a NIC the host did not mark as relayed.
 pub fn routes_directly() -> bool {
     if !has_egress() {
@@ -47,6 +37,16 @@ pub fn routes_directly() -> bool {
         v => v == 1,
     };
     !relay
+}
+
+/// Reports whether the guest can reach a network; only a `device`-backed interface counts, since the kernel auto-creates virtual tunnels.
+fn has_egress() -> bool {
+    match *SILKD_NET {
+        0 => return false,
+        1 => return true,
+        _ => {}
+    }
+    *DEVICE_BACKED
 }
 
 /// Reads the lane file: `Some(true)` for relay, `Some(false)` for direct, `None` while the host has not written it.

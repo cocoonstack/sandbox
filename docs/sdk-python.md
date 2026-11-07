@@ -52,7 +52,7 @@ def main() -> None:
     with client.new("node:24.04", size="medium", ttl_seconds=600) as sb:
         print(f"claimed {sb.id} on {sb.owner}")
 
-        sb.push("/work", project_tar())  # only ingestion path on the no-network lane
+        sb.push("/work", project_tar())  # needs no egress policy
         try:
             print(sb.exec("sh", "-c", "cd /work && make build 2>&1"), end="")
         except ExitError as e:
@@ -477,8 +477,8 @@ sb.push("/work", tar_bytes)    # extract a tar stream under /work (atomic)
 tar = sb.pull("/work")         # /work back as tar bytes
 ```
 
-`push` is atomic against a truncated stream and the only project-ingestion
-path on the no-network lane.
+`push` is atomic against a truncated stream and needs no egress policy, so it
+brings a project into a no-network sandbox whose pool allows no git host.
 
 ## Search
 
