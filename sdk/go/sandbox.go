@@ -215,7 +215,9 @@ func (s *Sandbox) Close() error {
 	s.pool.drain()
 	ctx, cancel := context.WithTimeout(context.Background(), releaseTimeout)
 	defer cancel()
-	found, err := s.releaseAt(ctx, s.Owner())
+	first, cancelFirst := context.WithTimeout(ctx, releaseTimeout/2)
+	found, err := s.releaseAt(first, s.Owner())
+	cancelFirst()
 	if _, refused := errors.AsType[*APIError](err); refused || found {
 		return err
 	}
