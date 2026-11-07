@@ -394,7 +394,7 @@ func (s *Sandbox) SetEnv(e Env) {
 // HiddenEnv returns a host-only entry's value as last published.
 func (s *Sandbox) HiddenEnv(name string) (string, bool) {
 	if view := s.live.Load(); view != nil {
-		if v, ok := view.env[name]; ok && !v.InGuest() && !v.Missing {
+		if v, ok := view.env[name]; ok && !v.InGuest() {
 			return v.Value, true
 		}
 	}

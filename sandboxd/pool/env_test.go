@@ -643,8 +643,8 @@ func TestHostEnvMemoryOnlyKeepsValuesOffDiskAndARestartReportsThemMissing(t *tes
 			if err != nil {
 				t.Fatalf("claim: %v", err)
 			}
-			if v, ok := sb.HiddenEnv("gw"); !ok || v != "Bearer a" {
-				t.Errorf("running claim holds %q %v, want the value in memory", v, ok)
+			if v, _ := sb.HiddenEnv("gw"); v != "Bearer a" {
+				t.Errorf("running claim holds %q, want the value in memory", v)
 			}
 			claims, err := newClaimStore(dataDir, false).load()
 			if err != nil {
@@ -671,8 +671,8 @@ func TestHostEnvMemoryOnlyKeepsValuesOffDiskAndARestartReportsThemMissing(t *tes
 			restored := m2.claimed[sb.ID]
 			m2.mu.Unlock()
 			summary, _ = m2.Sandbox(sb.ID)
-			if v, ok := restored.HiddenEnv("gw"); !ok || v != "Bearer b" || summary.EnvMissing {
-				t.Errorf("after a re-push: %q %v, env_missing %v; want the value back and the flag clear", v, ok, summary.EnvMissing)
+			if v, _ := restored.HiddenEnv("gw"); v != "Bearer b" || summary.EnvMissing {
+				t.Errorf("after a re-push: %q, env_missing %v; want the value back and the flag clear", v, summary.EnvMissing)
 			}
 		})
 	}
@@ -694,8 +694,8 @@ func TestTurningHostEnvMemoryOnlyOnDropsTheValuesAJournalStillHolds(t *testing.T
 	restored := m2.claimed[sb.ID]
 	m2.mu.Unlock()
 	claims, err := newClaimStore(dataDir, false).load()
-	if _, held := restored.HiddenEnv("gw"); held || err != nil || claims[sb.ID].Env["gw"].Value != "" {
-		t.Errorf("after the first memory-only boot: held %v, journal %+v %v; want the value gone from both", held, claims[sb.ID].Env, err)
+	if v, _ := restored.HiddenEnv("gw"); v != "" || err != nil || claims[sb.ID].Env["gw"].Value != "" {
+		t.Errorf("after the first memory-only boot: held %q, journal %+v %v; want the value gone from both", v, claims[sb.ID].Env, err)
 	}
 }
 
@@ -709,7 +709,8 @@ func TestHostEnvMemoryOnlyDropsValuesWhenAClaimHibernates(t *testing.T) {
 				t.Fatalf("claim: %v", err)
 			}
 			hibernateClaim(t, m, sb)
-			_, held := sb.HiddenEnv("gw")
+			v, _ := sb.HiddenEnv("gw")
+			held := v != ""
 			summary, _ := m.Sandbox(sb.ID)
 			if held == memoryOnly || summary.EnvMissing != memoryOnly {
 				t.Errorf("hibernated claim holds the value %v, env_missing %v; want it dropped only with memory_only", held, summary.EnvMissing)
@@ -733,8 +734,8 @@ func TestHostEnvMemoryOnlyDropsValuesWhenAnUnconfirmedHibernateIsAdopted(t *test
 	m.mu.Lock()
 	snap := sb.HibernateSnap
 	m.mu.Unlock()
-	if _, held := sb.HiddenEnv("gw"); held || snap == "" {
-		t.Errorf("adopted hibernate %q still holds the value %v, want it dropped", snap, held)
+	if v, _ := sb.HiddenEnv("gw"); v != "" || snap == "" {
+		t.Errorf("adopted hibernate %q still holds %q, want it dropped", snap, v)
 	}
 }
 

@@ -159,7 +159,7 @@ func (v *View) CheckEnv(env types.Env) error {
 	}
 	e, ok := env[name]
 	switch {
-	case !ok:
+	case !ok || e.Missing:
 		return nil
 	case e.InGuest():
 		return fmt.Errorf("%s must be guest: false, it carries the upstream's credentials", name)

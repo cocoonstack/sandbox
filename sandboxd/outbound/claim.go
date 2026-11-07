@@ -84,7 +84,7 @@ func (c *claim) Route() string {
 	if view.upstreamEnv == "" {
 		return ""
 	}
-	if v, set := c.sb.HiddenEnv(view.upstreamEnv); set {
+	if v, set := c.sb.HiddenEnv(view.upstreamEnv); set && v != "" {
 		if v == upstreamDirect {
 			return ""
 		}

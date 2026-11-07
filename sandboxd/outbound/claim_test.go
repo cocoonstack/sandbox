@@ -190,7 +190,7 @@ func TestAnInjectShapeRidesIntoTheCredential(t *testing.T) {
 	}
 }
 
-func TestAMissingEntryInjectsNothingAndLeavesTheNodeSecret(t *testing.T) {
+func TestAMissingEntryInjectsNothingAndBlocksTheNodeSecret(t *testing.T) {
 	h := newHost(t, &fakeEngine{}, &config.Config{}, nil)
 	sb := &types.Sandbox{}
 	sb.SetEnv(types.Env{
@@ -201,8 +201,8 @@ func TestAMissingEntryInjectsNothingAndLeavesTheNodeSecret(t *testing.T) {
 	if creds := c.Credentials("api.github.com"); len(creds) != 0 {
 		t.Errorf("credentials %+v, want none for a missing entry", creds)
 	}
-	if _, value, ok := c.Header("gh"); !ok || value != "s3cr3t" {
-		t.Errorf("header %q %v, want the node value", value, ok)
+	if _, value, ok := c.Header("gh"); !ok || value != "" {
+		t.Errorf("header %q %v, want the node value blocked", value, ok)
 	}
 }
 

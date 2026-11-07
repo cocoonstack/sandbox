@@ -1887,8 +1887,8 @@ func TestFailoverRowsHoldNoHostOnlyValueWhenMemoryOnly(t *testing.T) {
 				t.Fatal("adopter has no claim")
 			}
 			summary, _ := b.Sandbox(sb.ID)
-			if v, set := held.HiddenEnv("GH_TOKEN"); set != !memoryOnly || summary.EnvMissing != memoryOnly || (set && v != "new") {
-				t.Errorf("adopter holds %q %v, env_missing %v; want the row's value only without memory_only", v, set, summary.EnvMissing)
+			if v, _ := held.HiddenEnv("GH_TOKEN"); (v == "new") == memoryOnly || summary.EnvMissing != memoryOnly {
+				t.Errorf("adopter holds %q, env_missing %v; want the row's value only without memory_only", v, summary.EnvMissing)
 			}
 		})
 	}

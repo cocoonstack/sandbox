@@ -239,8 +239,8 @@ func TestDroppedHostValuesAreMissingAndUnpublished(t *testing.T) {
 	}
 	sb := &Sandbox{}
 	sb.SetEnv(dropped)
-	if _, ok := sb.HiddenEnv("H"); ok {
-		t.Error("a missing entry served a hidden value")
+	if v, ok := sb.HiddenEnv("H"); !ok || v != "" {
+		t.Errorf("HiddenEnv(H) = %q %v, want set and empty, so the entry blocks the node's value", v, ok)
 	}
 	for name := range sb.Injections("a.test") {
 		t.Errorf("a missing entry %s injects", name)
