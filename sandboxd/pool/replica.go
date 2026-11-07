@@ -96,6 +96,7 @@ func (m *Manager) replicate(ctx context.Context, sb *types.Sandbox) error {
 	m.mu.Unlock()
 	defer m.untrack(m.pendingCks, ckID)
 	if _, _, err := m.publishCheckpoint(ctx, sb, ckID, "replica", sb.Tenant, "", true); err != nil {
+		m.deleteOrphanArchiveCk(ctx, ckID)
 		return err
 	}
 	var prev string
