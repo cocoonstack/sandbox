@@ -105,7 +105,7 @@ func (m *Manager) assignTun(ctx context.Context, sbs []*types.Sandbox) {
 	}
 	v := m.view.Load().out
 	for _, sb := range sbs {
-		if !v.Tun(sb.PolicyKey()) {
+		if !v.Tun(sb.PolicyKey()) || sb.NoEgress {
 			continue
 		}
 		addr, err := m.tunAddrs.Assign(ctx, sb.ID)
