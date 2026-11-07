@@ -735,8 +735,14 @@ The cutoff is done when:
 - no host shows an established connection to it (`ss -tn dst <addr>`);
 - no database session from it remains;
 - it is missing from [`GET /v1/peers`](sandboxd-api.md#get-v1peers) on every
-  remaining node. Gossip drops a silent member after its failure detection,
-  seconds to tens of seconds by cell size; measure the bound for your cell.
+  remaining node.
+
+For example, on a two-node test cell with the drop in an nft input chain at
+priority -200, the node left `/v1/peers` after 6.6 s, the drop counter had
+counted 40 packets, and no established flow to it remained. The bound grows
+with cell size, because memberlist's suspicion timeout scales with log N, so
+measure it for your cell. Keep the drop until the host is rebuilt: with the
+drop lifted, the same node rejoined in 1.0 s.
 
 Credentials copied off the host do not work from elsewhere, because the
 backends admit the cell's addresses only. Rotate the cell's shared secrets

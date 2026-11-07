@@ -19,8 +19,12 @@ reaches its whole cell. A cell that shares nothing with another bounds that
 compromise; [security](security.md#cells) has the contract.
 
 - `sandboxd_tenants` has no cell column, so each cell needs its own database.
-- `meta_store.cell` names a pool set inside that database, not the cell (see
-  [state ownership](#state-ownership)).
+- `meta_store.cell` partitions the shared rows inside that database: the pool
+  set, archives, moves, node leases, `tun` addresses and usage. Adoption and
+  moves see only the rows of their own name, so the name is also their scope,
+  for example a group of CPU-compatible nodes whose snapshots restore on each
+  other. It is not the security boundary: one cell may hold several names.
+  Where these docs speak of a cell's shared rows, they mean this partition.
 - Cell size is the operator's knob: a smaller cell loses less to one
   compromised host. [Scale](#scale) sets the upper bound.
 
@@ -748,10 +752,10 @@ by pool key at boot.
 
 With [`meta_store.cell`](deploy.md#shared-pool-set), the set belongs to the
 node's cell: one `PUT /v1/pools` on any node of the cell reaches every node in
-it, and no fan-out is needed; every node of the cell runs the same targets. This
-pool cell is only a name for nodes that share one pool set in the database. It
-is not a [cell](#cells): it may cover all or part of a cell's nodes, and
-gossip, redirects and heals ignore it.
+it, and no fan-out is needed; every node of the cell runs the same targets. The
+`meta_store.cell` name partitions the database's shared rows, not the
+[cell](#cells): it may cover all or part of a cell's nodes, and gossip,
+redirects and heals ignore it.
 
 Without it, cluster-wide pool changes are a client-side fan-out, not a gossiped desired
 state (pools are legitimately heterogeneous per node): `Client.SetPoolsCluster`
