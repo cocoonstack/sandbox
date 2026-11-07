@@ -390,5 +390,5 @@ func (m *Manager) recordHibernate(ctx context.Context, sb *types.Sandbox) {
 
 func skipIdle(sb *types.Sandbox) bool {
 	return sb.Key.Net == types.NetEgress || hasVolumes(sb) ||
-		sb.HibernateSnap != "" || sb.ArchiveCk != "" || sb.Failed != "" || sb.Busy()
+		sb.HibernateSnap != "" || sb.ArchiveCk != "" || sb.PendingSnap != "" || sb.SaveSnap != "" || sb.Failed != "" || sb.Busy()
 }
