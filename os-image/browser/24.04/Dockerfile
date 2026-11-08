@@ -6,9 +6,6 @@ ARG BASE_IMAGE=ghcr.io/cocoonstack/sandbox/base:24.04
 
 FROM ${BASE_IMAGE}
 ENV DEBIAN_FRONTEND=noninteractive
-# See base: cache-busts the layers below when non-Dockerfile inputs change.
-ARG INPUTS_HASH=
-
 ARG CHROME_VERSION=150.0.7871.115
 ARG CHROME_SHA256=1be2db033133c5e2dd1a4e8664bf67b19a61bcf6ed28d2b00f433b3f0b4f9585
 

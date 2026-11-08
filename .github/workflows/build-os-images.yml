@@ -1,7 +1,7 @@
 # Reusable: the images gating workflow calls this after the boot/silkd
 # carriers build, passing which changed and their sha-pinned refs. It detects
 # changed image dirs for the matrix, builds base then flavors, and pushes to
-# ghcr with same-dir *.sh files as buildx secrets.
+# ghcr; base gets its same-dir *.sh files as buildx secrets.
 #   - a changed carrier (boot or silkd) refolds into every image; otherwise
 #     only the git-changed image dirs rebuild;
 #   - a base change rebuilds every flavor (they are FROM base);
@@ -290,35 +290,6 @@ jobs:
             type=raw,value=${{ matrix.tag }}
             type=sha,prefix=${{ matrix.tag }}-
 
-      - name: Hash image inputs
-        id: inputs
-        run: |
-          hash=$(find "os-image/${{ matrix.name }}" -type f ! -name Dockerfile ! -name '*.md' -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1)
-          echo "hash=$hash" >> "$GITHUB_OUTPUT"
-
-      - name: Discover secret files
-        id: secrets
-        run: |
-          base="os-image/${{ matrix.name }}"
-          tag="${{ matrix.tag }}"
-          {
-            echo "files<<EOF"
-            for f in "$base"/*.sh; do
-              [ -f "$f" ] || continue
-              name="$(basename "$f")"
-              id="sandbox_$(echo "${name%.sh}" | tr '.-' '__')"
-              echo "${id}=${f}"
-            done
-            for f in "$base/$tag"/*; do
-              [ -f "$f" ] || continue
-              name="$(basename "$f")"
-              [ "$name" = "Dockerfile" ] && continue
-              id="$(echo "$name" | tr '.-' '__')"
-              echo "${id}=${f}"
-            done
-            echo "EOF"
-          } >> "$GITHUB_OUTPUT"
-
       - name: Commit time
         id: epoch
         run: echo "epoch=$(git log -1 --format=%ct)" >> "$GITHUB_OUTPUT"
@@ -341,10 +312,8 @@ jobs:
           build-args: |
             BASE_IMAGE=ghcr.io/${{ github.repository }}/base:24.04
             SILKD_IMAGE=${{ inputs.silkd_image != '' && inputs.silkd_image || format('ghcr.io/{0}/silkd:{1}', github.repository, steps.ver.outputs.silkd) }}
-            INPUTS_HASH=${{ steps.inputs.outputs.hash }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          secret-files: ${{ steps.secrets.outputs.files }}
           no-cache: ${{ matrix.no_cache == 'true' }}
           cache-from: type=gha,scope=${{ matrix.name }}-${{ matrix.tag }}
           cache-to: type=gha,mode=max,scope=${{ matrix.name }}-${{ matrix.tag }}
