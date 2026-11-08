@@ -66,6 +66,11 @@ and send its entries again; a write that succeeds has rewritten its row. A
 `claims.json` that still holds a missing entry stops v0.1.24 from starting, and
 a row that holds one cannot be adopted by it.
 
+From v0.1.26, a static volume `tenants` name that does not match the
+[tenant API](sandboxd-api.md#tenants-v1tenants) syntax fails config load.
+v0.1.25 kept such a name, and it matched no tenant. Fix or remove each one
+before starting the new binary.
+
 ## Configuration
 
 sandboxd reads one JSON file (`-config`, default
