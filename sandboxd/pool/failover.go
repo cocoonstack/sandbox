@@ -548,17 +548,6 @@ func (m *Manager) fenceHeldArchive(ctx context.Context, sb *types.Sandbox) {
 		return
 	case ok && rec.Owner == m.nodeID:
 		return
-	case ok && rec.Owner == "" && !rec.Consumed:
-		taken, err := m.archives.Take(ctx, sb.ID, rec.Epoch, m.nodeID)
-		if err == nil {
-			_, _ = m.commitIfLive(ctx, sb, func() { sb.ArchiveEpoch = taken })
-			logger.Infof(ctx, "retook ownerless archive row %s at epoch %d (held at %d)", sb.ID, taken, epoch)
-			return
-		}
-		if !errors.Is(err, archives.ErrLost) {
-			logger.Warnf(ctx, "retake archive row %s: %v", sb.ID, err)
-		}
-		return
 	}
 	logger.Infof(ctx, "dropping archived %s held at epoch %d: its row is owned by %q at epoch %d", sb.ID, epoch, rec.Owner, rec.Epoch)
 	m.dropAdopted(ctx, sb)

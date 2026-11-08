@@ -2282,27 +2282,25 @@ func TestFailoverHeldFenceDropsAnArchivedClaimAnotherNodeOwns(t *testing.T) {
 	}
 }
 
-func TestFailoverHeldFenceRetakesAnOwnerlessRow(t *testing.T) {
+func TestFailoverHeldFenceDropsAClaimWhoseRowIsOwnerless(t *testing.T) {
 	c := newFailoverCluster(t)
 	a, b := c.pair(t)
 	sb := mustClaim(t, a, testKey)
 	mustArchive(t, a, sb)
 	held, _ := a.byID(sb.ID)
-	released, err := c.reg.Release(t.Context(), sb.ID, held.ArchiveEpoch, "a")
-	if err != nil {
+	if _, err := c.reg.Release(t.Context(), sb.ID, held.ArchiveEpoch, "a"); err != nil {
 		t.Fatalf("release: %v", err)
 	}
 
 	a.fenceHeldArchives(t.Context())
-	rec, _, _ := c.reg.Get(t.Context(), sb.ID)
-	if rec.Owner != "a" || rec.Epoch <= released {
-		t.Fatalf("row %q at %d, want a past %d", rec.Owner, rec.Epoch, released)
+	if _, kept := a.byID(sb.ID); kept {
+		t.Error("a still holds a claim whose row it no longer owns")
 	}
-	if kept, _ := a.byID(sb.ID); kept == nil || kept.ArchiveEpoch != rec.Epoch {
-		t.Errorf("a's claim epoch does not follow the retaken row %d", rec.Epoch)
+	if adopted, err := b.AdoptArchived(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil || !adopted {
+		t.Fatalf("adopt on b after the drop: %v %v", adopted, err)
 	}
-	if adopted, err := b.AdoptArchived(t.Context(), sb.ID, Cred{Operator: true}); err != nil || adopted {
-		t.Errorf("root adopt on b after the retake: %v %v, want refused", adopted, err)
+	if rec, _, _ := c.reg.Get(t.Context(), sb.ID); rec.Owner != "b" {
+		t.Errorf("row owner %q, want b", rec.Owner)
 	}
 }
 
