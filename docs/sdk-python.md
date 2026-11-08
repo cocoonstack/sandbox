@@ -76,9 +76,10 @@ The rest of this guide is the per-method reference.
 client = Client("10.0.0.5:7777", api_token="...", timeout=120.0)
 ```
 
-`api_token` is the node token — a root `api_token` (full access) or a
-tenant token (resource-creating verbs only; operator surfaces answer it
-403). Every node of a cell shares the root token and the same tenants
+`api_token` is the node token — a root `api_token` (full access), the
+[`operator_token`](deploy.md#configuration) (the claim lifecycle,
+`sandboxes`, `info` and `lookup`), or a tenant token (resource-creating
+verbs only; operator surfaces answer it 403). Every node of a cell shares the root token and the same tenants
 set. `timeout` bounds every control-plane request and the data-plane dial
 and upgrade; a guest stream then lives until the guest ends it. Unlike the
 Go SDK, where a canceled context closes any call, only `run`/`exec` take a
@@ -205,8 +206,8 @@ The caller mounts, flushes, and unmounts attach-only devices. See the
 [live volume contract](sandboxd-api.md#put-v1sandboxesidvolumes) for
 writer exclusion and dirty-marker limits.
 Each method takes `timeout=` (default: the client timeout, 120 s); a large
-replacement can need longer, and a call that times out cancels the server run,
-so retry the same target.
+replacement can need longer, and a call that times out raises `APIError` with
+status 0 and cancels the server run, so retry the same target.
 
 Responses include `volumes_want`, `volumes`, `states`, and `converging`.
 `VolumePhase` and `VOLUME_ATTACHED`, `VOLUME_PENDING`, and `VOLUME_DETACHING`

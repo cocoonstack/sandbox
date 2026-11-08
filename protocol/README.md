@@ -10,7 +10,8 @@ implementations of the silkd protocol:
   `sdk/python/tests/test_fixtures.py`.
 
 `req_*.json` are client→server frames, `resp_*.json` server→client. A frame
-that the Rust or Go side cannot round-trip is a protocol drift bug. The Rust side also
+that the Go side cannot round-trip, or that the Rust side cannot parse (a
+request) or round-trip (a response), is a protocol drift bug. The Rust side also
 pins the corpus size, so adding a verb without its fixture fails CI.
 
 `enums.json` pins each wire enum's full value set (error/event/file kinds,

@@ -104,9 +104,10 @@ client, err := sandbox.Connect("10.0.0.5:7777",
 ```
 
 - `Connect(addr, opts...)` — `addr` is one node's address or origin.
-- `WithAPIToken(token)` — the node token: a root `api_token` (full access)
-  or a tenant token (resource-creating verbs only; operator surfaces like
-  `Info` answer it 403). Every node of a cell shares the same root token
+- `WithAPIToken(token)` — the node token: a root `api_token` (full access),
+  the [`operator_token`](deploy.md#configuration) (the claim lifecycle, the
+  tenant verbs, `Info` and `Lookup`), or a tenant token (resource-creating
+  verbs only; operator surfaces like `Info` answer it 403). Every node of a cell shares the same root token
   and the same tenants set.
 - `WithHTTPClient(client)` — replace the control-plane HTTP client when the
   caller needs a custom transport, proxy, or timeout. An `http.Transport`'s
@@ -687,8 +688,8 @@ ctx) tears the shell down.
 
 ## Node operations
 
-Verbs for operating a node — `Drain`, `Undrain`, `Cordon`, `Uncordon`, `SetPools`,
-`SetPoolsCluster` and the tenant verbs need the root token — plus the reference
+Verbs for operating a node — `Drain`, `Undrain`, `Cordon`, `Uncordon`, `SetPools`
+and `SetPoolsCluster` need the root token, the tenant verbs the root or operator token — plus the reference
 the aggregated apiserver claims under:
 
 ```go

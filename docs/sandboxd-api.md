@@ -743,7 +743,7 @@ destroyed and the pool entry retires. Once such a pool is idle, its golden
 is deleted; a pool kept with `warm: 0` keeps its golden.
 `net`/`size` default like a claim's.
 Answers the fresh `GET /v1/info` payload. 400 bad key, negative warm/idle,
-`warm_max` below `warm`, `idle_hibernate_seconds` on an egress pool, a
+`warm_max` below `warm`, a reader pool with `warm` below 1, `idle_hibernate_seconds` on an egress pool, a
 negative archive duration or an `archive_after_seconds` not above the pool's
 `idle_hibernate_seconds`, duplicate pool, or a config-owned `egress`/`warmup`/`capture_trim`/`storage`/`replicate_seconds`/`reader`/`egress_upstream_env`/`tun`
 field; 401 bad api
@@ -970,7 +970,7 @@ Auth: node API token; body `{"token": "<sandbox token>", "name": "..."}`
 (name optional); the root `api_token` with an empty body `token` acts by id as
 root. Captures the sandbox's full state without stopping it and
 answers `200 {"checkpoint": {id, name?, sandbox_id, key, tenant?, created_at,
-policy_source?, no_egress?, guest_env?}}` — `tenant` records the calling tenant, absent for root.
+policy_source?, no_egress?, tun_off?, tun_profile?, egress_limit?, guest_env?}}` — `tenant` records the calling tenant, absent for root.
 400 bad body or name, 401 bad api token, 404 unknown id or wrong sandbox
 token, 409 egress-lane sandbox, one with volumes attached (see
 [egress](egress.md)), a failed one, or an archived one (`POST /wake` or an exec
@@ -1033,7 +1033,7 @@ part of the public API; an SDK caller has no reason to call it directly.
 Auth: node API token. Lists this node's checkpoints, newest first. A tenant
 sees only its own records; root sees everything. A checkpoint backing an
 archived claim is that claim's wake image, not a listable record. Answers
-`200 {"checkpoints": [{id, name?, sandbox_id, key, tenant?, created_at, policy_source?, no_egress?, guest_env?}]}`, the
+`200 {"checkpoints": [{id, name?, sandbox_id, key, tenant?, created_at, policy_source?, no_egress?, tun_off?, tun_profile?, egress_limit?, guest_env?}]}`, the
 record shape `POST /v1/sandboxes/{id}/checkpoint` returns.
 
 ## DELETE /v1/checkpoints/{id}
