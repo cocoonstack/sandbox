@@ -48,11 +48,11 @@ func (h *Host) RearmTun(ctx context.Context, sb *types.Sandbox) {
 	old := d.takeTun()
 	h.mu.Unlock()
 	h.dropTun(old)
-	v := h.o.View()
-	policy, ok := v.Resolve(sb)
 	if d == nil {
 		return
 	}
+	v := h.o.View()
+	policy, ok := v.Resolve(sb)
 	if !ok {
 		if sb.TunAddr.IsValid() {
 			h.tunDown(sb.ID, sb.VsockSocket)
