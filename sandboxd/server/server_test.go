@@ -979,6 +979,32 @@ func TestAgentErrorPaths(t *testing.T) {
 	}
 }
 
+func TestBodyVerbsPassATenantsEmptyBodyTokenAsAnEmptyClaimToken(t *testing.T) {
+	tests := []struct {
+		name, bearer string
+		want         pool.Cred
+	}{
+		{"a tenant", "acme-token", pool.Cred{}},
+		{"a tenant with the claim token in the body", "acme-token", pool.Cred{Token: "tok"}},
+		{"the root", "root", pool.Cred{Operator: true}},
+	}
+	for _, verb := range []string{"fork", "promote", "checkpoint"} {
+		for _, tt := range tests {
+			t.Run(verb+"/"+tt.name, func(t *testing.T) {
+				mgr := &fakeManager{}
+				ts := newTenantTestServer(t, "root", []tenants.TenantSpec{{Name: "acme", Token: "acme-token"}}, mgr, nil)
+				body := "{}"
+				if tt.want.Token != "" {
+					body = `{"token":"` + tt.want.Token + `"}`
+				}
+				if code := statusOf(t, http.MethodPost, ts.URL+"/v1/sandboxes/sb_1/"+verb, tt.bearer, body); code != http.StatusNotFound || mgr.gotCred != tt.want {
+					t.Errorf("status %d cred %+v, want 404 with %+v", code, mgr.gotCred, tt.want)
+				}
+			})
+		}
+	}
+}
+
 func TestAgentRelayTakesTheRootOnlyAsAClaimToken(t *testing.T) {
 	woke := make(chan string, 1)
 	mgr := &fakeManager{socket: func(_, token string) (string, error) {
@@ -1899,12 +1925,12 @@ func TestOwnerEndpointTakesTheRootToken(t *testing.T) {
 			if code != tt.want || code == http.StatusOK && !strings.Contains(string(raw), "node:7777") {
 				t.Errorf("status %d body %s, want %d", code, raw, tt.want)
 			}
-			wantWith := tt.token
+			wantCred := pool.Cred{Token: tt.token}
 			if tt.token == "root" {
-				wantWith = ""
+				wantCred = pool.Cred{Operator: true}
 			}
-			if gotAdopt := len(adoptedWith) > 0; gotAdopt != tt.wantAdopt || gotAdopt && adoptedWith[0] != wantWith {
-				t.Errorf("adopt calls %q, want adopt %v with %q", adoptedWith, tt.wantAdopt, wantWith)
+			if gotAdopt := len(adoptedWith) > 0; gotAdopt != tt.wantAdopt || gotAdopt && mgr.gotCred != wantCred {
+				t.Errorf("adopt calls %d with %+v, want adopt %v with %+v", len(adoptedWith), mgr.gotCred, tt.wantAdopt, wantCred)
 			}
 			if mgr.adoptedForWake != (tt.wantAdopt && tt.query != "") {
 				t.Errorf("adopted for a wake %v with query %q", mgr.adoptedForWake, tt.query)
@@ -2395,6 +2421,7 @@ type fakeManager struct {
 	socket               func(id, token string) (string, error)
 	adopt                func(id, token string) (bool, error)
 	adoptedForWake       bool
+	gotCred              pool.Cred
 	dialPort             func(id, token string, port uint16) (net.Conn, error)
 	fenced               <-chan struct{}
 	hibernate            sandboxVerbFunc
@@ -2522,6 +2549,7 @@ func (f *fakeManager) AgentSocket(id string, cred pool.Cred) (string, error) {
 }
 
 func (f *fakeManager) AdoptArchived(_ context.Context, id string, cred pool.Cred) (bool, error) {
+	f.gotCred = cred
 	if f.adopt == nil {
 		return false, nil
 	}
@@ -2585,7 +2613,7 @@ func (f *fakeManager) Hibernate(_ context.Context, id string, cred pool.Cred) er
 }
 
 func (f *fakeManager) Fork(_ context.Context, id string, cred pool.Cred, count int, ttl time.Duration, onExpire types.ExpireAction, _ string) ([]*types.Sandbox, error) {
-	f.gotOnExpire = onExpire
+	f.gotOnExpire, f.gotCred = onExpire, cred
 	if f.fork == nil {
 		return nil, pool.ErrUnknownSandbox
 	}
@@ -2593,7 +2621,7 @@ func (f *fakeManager) Fork(_ context.Context, id string, cred pool.Cred, count i
 }
 
 func (f *fakeManager) Promote(_ context.Context, id string, cred pool.Cred, template, tenant string) (types.PoolKey, string, error) {
-	f.gotTenant = tenant
+	f.gotTenant, f.gotCred = tenant, cred
 	if f.promote == nil {
 		return types.PoolKey{}, "", pool.ErrUnknownSandbox
 	}
@@ -2748,7 +2776,7 @@ func (f *fakeManager) Audit(_ context.Context, id string, line []byte) {
 func (f *fakeManager) AuditEnabled() bool { return f.audited != nil }
 
 func (f *fakeManager) Checkpoint(_ context.Context, id string, cred pool.Cred, name, tenant string) (types.Checkpoint, error) {
-	f.gotTenant = tenant
+	f.gotTenant, f.gotCred = tenant, cred
 	if f.checkpoint == nil {
 		return types.Checkpoint{}, pool.ErrUnknownSandbox
 	}

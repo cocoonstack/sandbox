@@ -280,27 +280,27 @@ func TestExecTakesTheRootToken(t *testing.T) {
 		name, token string
 		want        int
 		wantWake    bool
-		wantCred    string
+		wantCred    pool.Cred
 	}{
-		{"root", "root", http.StatusOK, true, ""},
-		{"the claim token", "tok", http.StatusOK, true, "tok"},
-		{"a tenant token", "acme-token", http.StatusNotFound, true, "acme-token"},
-		{"a wrong token", "wrong", http.StatusNotFound, true, "wrong"},
-		{"no token", "", http.StatusUnauthorized, false, ""},
+		{"root", "root", http.StatusOK, true, pool.Cred{Operator: true}},
+		{"the claim token", "tok", http.StatusOK, true, pool.Cred{Token: "tok"}},
+		{"a tenant token", "acme-token", http.StatusNotFound, true, pool.Cred{Token: "acme-token"}},
+		{"a wrong token", "wrong", http.StatusNotFound, true, pool.Cred{Token: "wrong"}},
+		{"no token", "", http.StatusUnauthorized, false, pool.Cred{}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			woke := make(chan string, 2)
+			woke := make(chan pool.Cred, 2)
 			audited := make(chan string, 1)
 			mgr := &execManager{
 				fakeManager: &fakeManager{audited: func(id string, _ []byte) { audited <- id }},
 				wake: func(_ context.Context, _, token string) (string, error) {
-					woke <- token
 					if token == "" || token == "tok" {
 						return "/v/sock", nil
 					}
 					return "", pool.ErrUnknownSandbox
 				},
+				creds: woke,
 			}
 			ts := newTenantTestServer(t, "root", []tenants.TenantSpec{{Name: "acme", Token: "acme-token"}}, mgr, pipeDialer(okGuest))
 
@@ -310,12 +310,12 @@ func TestExecTakesTheRootToken(t *testing.T) {
 			}
 			if !tt.wantWake {
 				if len(woke) != 0 {
-					t.Errorf("woke with %q, want no wake", <-woke)
+					t.Errorf("woke with %+v, want no wake", <-woke)
 				}
 				return
 			}
 			if got := <-woke; got != tt.wantCred {
-				t.Errorf("woke with %q, want %q", got, tt.wantCred)
+				t.Errorf("woke with %+v, want %+v", got, tt.wantCred)
 			}
 			if wantAudit := code == http.StatusOK; (len(audited) == 1) != wantAudit {
 				t.Errorf("audited %d records, want one %v", len(audited), wantAudit)
@@ -326,10 +326,14 @@ func TestExecTakesTheRootToken(t *testing.T) {
 
 type execManager struct {
 	*fakeManager
-	wake func(context.Context, string, string) (string, error)
+	wake  func(context.Context, string, string) (string, error)
+	creds chan<- pool.Cred
 }
 
 func (m *execManager) WakeAgentSocket(ctx context.Context, id string, cred pool.Cred) (string, <-chan struct{}, func(), error) {
+	if m.creds != nil {
+		m.creds <- cred
+	}
 	sock, err := m.wake(ctx, id, credToken(cred))
 	return sock, nil, func() {}, err
 }
