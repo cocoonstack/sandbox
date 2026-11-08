@@ -2251,7 +2251,7 @@ func TestClaimThreadsMetadataAndEnv(t *testing.T) {
 	cold := func(*fakeManager) {}
 	for _, tt := range []struct {
 		name, path, body string
-		setup            func(*fakeManager)
+		setup            managerEdit
 	}{
 		{"warm", "/v1/claim", `{"template":"rt:24.04","metadata":{"team":"a"},"env":{"GW":{"value":"Bearer k","guest":false}}}`, warm},
 		{"provision", "/v1/claim", `{"template":"rt:24.04","metadata":{"team":"a"},"env":{"GW":{"value":"Bearer k","guest":false}}}`, cold},
@@ -2301,7 +2301,7 @@ func TestExpireActionThreadsThroughEveryDecoder(t *testing.T) {
 	ckpt := func(string) (*types.Sandbox, error) { return &types.Sandbox{ID: "sb_1", Token: "tok"}, nil }
 	for _, tt := range []struct {
 		name, path, body string
-		setup            func(*fakeManager)
+		setup            managerEdit
 	}{
 		{"claim", "/v1/claim", `{"template":"rt:24.04","on_expire":"archive"}`, func(*fakeManager) {}},
 		{"volume claim", "/v1/claim", `{"template":"rt:24.04","volumes":[{"name":"data"}],"on_expire":"archive"}`, func(*fakeManager) {}},
@@ -3184,3 +3184,5 @@ func credToken(cred pool.Cred) string {
 	}
 	return cred.Token
 }
+
+type managerEdit func(*fakeManager)

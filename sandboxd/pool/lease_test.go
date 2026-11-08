@@ -112,7 +112,7 @@ func TestLeaseFenceClosesOpenStreamsOfReplicatedClaimsOnly(t *testing.T) {
 				_ = conn.Close()
 			}
 		}()
-		for name, dial := range map[string]func() (net.Conn, error){
+		for name, dial := range map[string]guestDialer{
 			"port":    func() (net.Conn, error) { return a.DialPort(ctx, replicated.ID, replicatedCred, 80) },
 			"passive": func() (net.Conn, error) { return a.DialPort(ctx, replicated.ID, Cred{Operator: true}, 80) },
 			"preview": func() (net.Conn, error) { return a.PreviewDial(ctx, replicated.ID, 80) },

@@ -1332,6 +1332,8 @@ type fakeVMEvent struct {
 	change engine.VMChange
 }
 
+type guestDialer func() (net.Conn, error)
+
 type fakeEngine struct {
 	mu sync.Mutex
 
@@ -1407,7 +1409,7 @@ type fakeEngine struct {
 	snapRemoveStall chan struct{}
 	snapListStall   chan struct{}
 	vmEvents        chan fakeVMEvent
-	guestDial       func() (net.Conn, error)
+	guestDial       guestDialer
 
 	volumeSpecs          []engine.VolumeSpec
 	volumeMounts         []types.Volume
