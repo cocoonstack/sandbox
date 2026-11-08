@@ -63,7 +63,7 @@ func run(addr, token, template string) error {
 	if err != nil {
 		return fmt.Errorf("checkpoint: %w", err)
 	}
-	defer func() { _ = ckpt.Delete(ctx) }()
+	defer func() { _ = ckpt.Delete(context.WithoutCancel(ctx)) }()
 	branch, err := ckpt.New(ctx)
 	if err != nil {
 		return fmt.Errorf("branch: %w", err)
