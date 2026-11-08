@@ -256,6 +256,18 @@ func TestTcpOfFindsTheConnUnderUpstreamWrappers(t *testing.T) {
 	}
 }
 
+func TestEveryReadSliceFitsTheSmallestBucket(t *testing.T) {
+	smallest := newBucket(1).Burst()
+	for _, perSecond := range []int64{1, 1 << 10, 64 << 10, 1 << 20, 125_000_000, 1 << 40} {
+		if got := readSlice(newBucket(perSecond)); got > smallest || got > newBucket(perSecond).Burst() {
+			t.Errorf("rate %d: a %d-byte slice outgrows the smallest bucket %d", perSecond, got, smallest)
+		}
+	}
+	if got := readSlice(newBucket(125_000_000)); got != limitBurst {
+		t.Errorf("a 1 Gbit/s cap reads %d-byte slices, want %d", got, limitBurst)
+	}
+}
+
 type proxyEdit func(*Proxy)
 
 type upload struct {

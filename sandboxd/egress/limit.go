@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -16,8 +17,8 @@ import (
 )
 
 const (
-	// limitBurst is the least bucket depth, so one read slice always fits.
-	limitBurst = 64 << 10
+	// limitBurst is the least bucket depth and the largest read slice, so one slice always fits a bucket.
+	limitBurst = 256 << 10
 	// limitSlices cuts a second of a limited direction into reads, so one wait stays near a tenth of a second.
 	limitSlices  = 10
 	minLimitRead = 1 << 10
@@ -27,6 +28,8 @@ const (
 	maxScaledWindow = 65535 << 14
 	clampEvery      = 100 * time.Millisecond
 )
+
+var limitBufs = sync.Pool{New: func() any { b := make([]byte, limitBurst); return &b }}
 
 // SetLimit caps the claim's bytes per second each way and moves every open tunnel onto the new cap at once.
 func (p *Proxy) SetLimit(l types.EgressLimit) {
@@ -156,14 +159,14 @@ func (p *Proxy) stream(dst io.Writer, src net.Conn, rx bool, n *atomic.Int64) {
 	for {
 		var err error
 		if lim, _ := p.limiter(rx); lim != nil {
-			buf := copyBufs.Get().(*[]byte)
+			buf := limitBufs.Get().(*[]byte)
 			m := &meter{r: src, p: p, rx: rx, n: n}
 			if rx {
 				m.win = tcpOf(src)
 			}
 			// Hide ReaderFrom so the copy reads through the meter into the pooled buffer.
 			_, err = io.CopyBuffer(struct{ io.Writer }{dst}, m, *buf)
-			copyBufs.Put(buf)
+			limitBufs.Put(buf)
 		} else {
 			var moved int64
 			if rx {

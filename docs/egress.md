@@ -581,9 +581,9 @@ counts payload bytes as `egress_bytes` does. Preview, port relay and exec
 traffic is not capped.
 
 Each direction has one token bucket per claim, shared by all its connections,
-with a burst of the rate, at least 64 KiB and at most 1 GiB. A limited
+with a burst of the rate, at least 256 KiB and at most 1 GiB. A limited
 direction copies in user space, in reads of about a tenth of a second's bytes
-(1 KiB to 64 KiB), each followed by a wait for its tokens, so its CPU cost
+(1 KiB to 256 KiB on a tunnel), each followed by a wait for its tokens, so its CPU cost
 follows the bytes the cap lets through. An unlimited direction keeps the
 kernel splice; a claim without a cap pays one map update per tunnel and an
 atomic load per request read. A changed rate starts with a full bucket, a
