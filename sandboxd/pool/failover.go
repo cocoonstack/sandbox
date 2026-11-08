@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"maps"
 	"slices"
-	"strconv"
 	"time"
 
 	"github.com/projecteru2/core/log"
@@ -34,9 +33,23 @@ func (m *Manager) adopt(ctx context.Context, id string, cred Cred, room bool) (b
 	if m.archives == nil {
 		return false, nil
 	}
-	key := strconv.FormatBool(cred.Operator) + "\x00" + id + "\x00" + cred.Token
-	adopted, err, _ := m.adoptFlights.Do(key, func() (any, error) { return m.adoptArchived(ctx, id, cred, room) })
-	return adopted.(bool), err
+	for range 2 {
+		led := false
+		adopted, err, _ := m.adoptFlights.Do(id, func() (any, error) {
+			led = true
+			return m.adoptArchived(ctx, id, cred, room)
+		})
+		if led || err != nil {
+			return adopted.(bool), err
+		}
+		m.mu.Lock()
+		_, held := m.resolveLocked(id, cred)
+		m.mu.Unlock()
+		if held {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func (m *Manager) adoptArchived(ctx context.Context, id string, cred Cred, room bool) (bool, error) {
@@ -75,10 +88,7 @@ func (m *Manager) adoptArchived(ctx context.Context, id string, cred Cred, room 
 	}
 	epoch, err := m.archives.Take(ctx, id, rec.Epoch, m.nodeID)
 	if errors.Is(err, archives.ErrLost) {
-		m.mu.Lock()
-		defer m.mu.Unlock()
-		_, held := m.resolveLocked(id, cred)
-		return held, nil
+		return false, nil
 	}
 	if err != nil {
 		return false, fmt.Errorf("adopt %s: %w", id, err)
@@ -91,10 +101,6 @@ func (m *Manager) adoptArchived(ctx context.Context, id string, cred Cred, room 
 	sb.Transition.Lock()
 	defer sb.Transition.Unlock()
 	m.mu.Lock()
-	if held := m.claimed[id]; held != nil {
-		m.mu.Unlock()
-		return m.foldTake(ctx, held, rec.Epoch, epoch)
-	}
 	if sb.Deadline.IsZero() {
 		sb.Deadline = m.retentionDeadline(sb.Key)
 	}
@@ -108,16 +114,6 @@ func (m *Manager) adoptArchived(ctx context.Context, id string, cred Cred, room 
 	m.recordUsage(ctx, usage.Event{Time: adoptedAt, Event: "adopt", ID: id, Reference: rec.Checkpoint, Tenant: sb.Tenant, Deadline: retention})
 	log.WithFunc("pool.adoptArchived").Infof(ctx, "adopted archived sandbox %s from %s", id, rec.Owner)
 	return true, nil
-}
-
-func (m *Manager) foldTake(ctx context.Context, held *types.Sandbox, from, epoch int64) (bool, error) {
-	held.Transition.Lock()
-	defer held.Transition.Unlock()
-	return m.commitIfLive(ctx, held, func() {
-		if held.ArchiveEpoch == from {
-			held.ArchiveEpoch = epoch
-		}
-	})
 }
 
 func (m *Manager) putArchive(ctx context.Context, sb *types.Sandbox, ck string) (int64, error) {
