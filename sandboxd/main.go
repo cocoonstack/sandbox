@@ -162,8 +162,7 @@ func main() {
 	go reloadOnHangup(ctx, hangup, reload)
 	srv := server.New(cfg.APIToken, cmp.Or(cfg.ClientAdvertise, cfg.AdvertiseAddr), mgr, eng, placer, prober, probeKey, preview)
 	srv.SetConfigReload(reload)
-	srv.SetOperatorToken(cfg.OperatorToken)
-	srv.SetNextTokens(cfg.APITokenNext, cfg.OperatorTokenNext)
+	srv.SetTokens(cfg.OperatorToken, cfg.APITokenNext, cfg.OperatorTokenNext)
 	if cfg.NoRxSplice {
 		srv.NoRxSplice()
 	}

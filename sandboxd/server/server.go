@@ -320,14 +320,9 @@ func (s *Server) SetUsage(u UsageReader) {
 	s.usage = u
 }
 
-// SetOperatorToken admits token with root authority on operatorRoutes alone; set it before serving.
-func (s *Server) SetOperatorToken(token string) {
-	s.operator = token
-}
-
-// SetNextTokens admits apiNext as the api token and operatorNext as the operator token during a rotation; set it before serving.
-func (s *Server) SetNextTokens(apiNext, operatorNext string) {
-	s.apiNext, s.opNext = apiNext, operatorNext
+// SetTokens admits operator with root authority on operatorRoutes alone, and the next tokens as their current ones; set it before serving.
+func (s *Server) SetTokens(operator, apiNext, operatorNext string) {
+	s.operator, s.apiNext, s.opNext = operator, apiNext, operatorNext
 }
 
 // NoRxSplice copies client bytes to guests in user space; call it before serving.
