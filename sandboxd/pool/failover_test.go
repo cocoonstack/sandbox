@@ -2116,6 +2116,102 @@ func TestFailoverARootAndATokenLookupRacingKeepOneClaim(t *testing.T) {
 	})
 }
 
+func TestFailoverATakeOfAPublishedClaimsRowMovesTheClaimToItsEpoch(t *testing.T) {
+	tests := []struct {
+		name        string
+		later, prev func(*types.Sandbox) Cred
+	}{
+		{"the root takes later", rootCred, tokenCred},
+		{"the token takes later", tokenCred, rootCred},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				c := newFailoverCluster(t)
+				a, b := c.pair(t)
+				sb := mustClaim(t, a, testKey)
+				mustArchive(t, a, sb)
+				c.expire("a")
+				reg := &hookRegistry{Registry: c.reg}
+				b.archives = reg
+				reg.beforeGet = func() {
+					if adopted, err := b.AdoptArchived(t.Context(), sb.ID, tt.prev(sb)); err != nil || !adopted {
+						t.Errorf("published lookup: %v %v", adopted, err)
+					}
+				}
+
+				if adopted, err := b.AdoptArchived(t.Context(), sb.ID, tt.later(sb)); err != nil || !adopted {
+					t.Fatalf("later lookup: %v %v", adopted, err)
+				}
+				held, _ := b.byID(sb.ID)
+				rec, _, _ := c.reg.Get(t.Context(), sb.ID)
+				b.mu.Lock()
+				epoch := held.ArchiveEpoch
+				b.mu.Unlock()
+				if got := reg.takes.Load(); got != 2 || epoch != rec.Epoch {
+					t.Fatalf("row taken %d times, claim epoch %d, row epoch %d, want both takes and the claim at the later one", got, epoch, rec.Epoch)
+				}
+				if err := b.rewriteArchiveRow(t.Context(), held, false); err != nil {
+					t.Errorf("row write after the fold: %v", err)
+				}
+			})
+		})
+	}
+}
+
+func TestFailoverALateTakeFoldedAfterAWakeKeepsTheClaimReplicating(t *testing.T) {
+	tests := []struct {
+		name          string
+		first, racing func(*types.Sandbox) Cred
+	}{
+		{"the root folds late", rootCred, tokenCred},
+		{"the token folds late", tokenCred, rootCred},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				c := newReplicaCluster(t)
+				a, b := c.pair(t)
+				sb := mustClaim(t, a, testKey)
+				mustArchive(t, a, sb)
+				c.expire("a")
+				reg := &hookRegistry{Registry: c.reg}
+				b.archives = reg
+				reg.afterTake = func() {
+					go func() {
+						if adopted, err := b.AdoptArchived(t.Context(), sb.ID, tt.racing(sb)); err != nil || !adopted {
+							t.Errorf("racing lookup: %v %v", adopted, err)
+						}
+					}()
+					synctest.Wait()
+					if err := wakeClaim(t, b, sb); err != nil {
+						t.Errorf("wake before the late fold: %v", err)
+					}
+				}
+
+				if adopted, err := b.AdoptArchived(t.Context(), sb.ID, tt.first(sb)); err != nil || !adopted {
+					t.Fatalf("late lookup: %v %v", adopted, err)
+				}
+				held, ok := b.byID(sb.ID)
+				if !ok {
+					t.Fatal("the late fold dropped the claim")
+				}
+				vm := lockedVMName(held)
+				if err := b.replicate(t.Context(), held); err != nil {
+					t.Errorf("replication after the late fold: %v", err)
+				}
+				rec, _, _ := c.reg.Get(t.Context(), sb.ID)
+				b.mu.Lock()
+				epoch := held.ArchiveEpoch
+				b.mu.Unlock()
+				if _, ok = b.byID(sb.ID); !ok || fakeOf(b).removed(vm) || rec.Owner != "b" || rec.Epoch != epoch {
+					t.Errorf("held %v, VM removed %v, row %s@%d, claim epoch %d, want one running claim on the row it replicated", ok, fakeOf(b).removed(vm), rec.Owner, rec.Epoch, epoch)
+				}
+			})
+		})
+	}
+}
+
 type failoverCluster struct {
 	reg        *archivestest.Mem
 	moves      moves.Registry
@@ -2236,6 +2332,7 @@ func (c *failoverCluster) nodeOn(t *testing.T, eng *fakeEngine, name, dataDir st
 type hookRegistry struct {
 	archives.Registry
 	beforePut        func()
+	beforeGet        func()
 	beforeTake       func()
 	afterTake        func()
 	beforeConsume    func()
@@ -2259,6 +2356,11 @@ func (r *hookRegistry) Put(ctx context.Context, rec archives.Record) (int64, err
 func (r *hookRegistry) Replace(ctx context.Context, rec archives.Record, expect int64) (int64, error) {
 	r.replaces++
 	return r.write(func() (int64, error) { return r.Registry.Replace(ctx, rec, expect) })
+}
+
+func (r *hookRegistry) Get(ctx context.Context, id string) (archives.Record, bool, error) {
+	fire(&r.beforeGet)
+	return r.Registry.Get(ctx, id)
 }
 
 func (r *hookRegistry) Take(ctx context.Context, id string, expect int64, owner string) (int64, error) {
@@ -2471,4 +2573,12 @@ func mustRootAdopt(t *testing.T, m *Manager, sb *types.Sandbox) string {
 		t.Fatalf("root adopt: %v %v, want adopted", adopted, err)
 	}
 	return tenants.TokenSHA256(sb.Token)
+}
+
+func rootCred(*types.Sandbox) Cred {
+	return Cred{Operator: true}
+}
+
+func tokenCred(sb *types.Sandbox) Cred {
+	return Cred{Token: sb.Token}
 }
