@@ -836,7 +836,7 @@ ways:
 
 | config | what breaks on mismatch |
 |---|---|
-| `api_token`, the tenant set | the SDK replays the authorizing token across a redirect; a mid-rotation peer missing that tenant/token answers 401, which the SDK treats as transient — the claim falls back to the origin node (which already authorized it) and resolves there |
+| `api_token`, `operator_token`, the tenant set | the SDK replays the authorizing token across a redirect; a mid-rotation peer missing that tenant/token answers 401, which the SDK treats as transient — the claim falls back to the origin node (which already authorized it) and resolves there |
 | `preview_secret` | a preview URL signed on one node fails verification on another |
 | `mesh.cluster_key` | nodes cannot join / decrypt gossip at all |
 | `egress_ca` root | a guest checkpointed/redirected across nodes trusts the cell's root; a divergent root fails interception |
@@ -891,10 +891,10 @@ with every claim.
   never a wildcard)
 - the same engine root path (cocoon's `root_dir`) on every node; it is not in
   the digest, so a mismatch shows only at the first cross-node branch
-- same `api_token`, tenant set, `preview_secret`, and `egress_ca` root on every
+- same `api_token`, `operator_token`, tenant set, `preview_secret`, and `egress_ca` root on every
   node of the cell, and different ones in every other cell (a mismatch warns
   and shows in `sandboxd_config_digest_mismatch`; only with `cluster_key` set
-  does that cover `api_token`, `preview_secret` and tenant tokens)
+  does that cover `api_token`, a set `operator_token`, `preview_secret` and tenant tokens)
 - with `meta_store`, every node of a cell points at the cell's database, and no
   other cell uses it: the tenant set is not in the gossiped digest, so nodes on
   different databases serve diverging tenants without a warning

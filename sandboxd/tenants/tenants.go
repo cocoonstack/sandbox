@@ -45,6 +45,12 @@ type TenantRecord struct {
 	EgressClass string `json:"egress_class,omitempty"`
 }
 
+// Reserved holds the SHA-256 sums of the node tokens a tenant token must differ from; an empty sum reserves nothing.
+type Reserved struct {
+	Root     string
+	Operator string
+}
+
 // Presence is what a memory-only lookup knows about a name.
 type Presence int
 
@@ -86,7 +92,7 @@ type Source interface {
 }
 
 // Validate checks one record's fields; an empty TokenSHA256 passes, since writes may keep the stored token.
-func Validate(r TenantRecord, rootSum string) error {
+func Validate(r TenantRecord, reserved Reserved) error {
 	switch {
 	case !types.NameRe.MatchString(r.Name):
 		return fmt.Errorf("%w: tenant name %q must match %s", ErrInvalid, r.Name, types.NameRe)
@@ -94,8 +100,10 @@ func Validate(r TenantRecord, rootSum string) error {
 		return fmt.Errorf("%w: tenant %q max_claims must not be negative, got %d", ErrInvalid, r.Name, r.MaxClaims)
 	case r.TokenSHA256 == "":
 		return nil
-	case r.TokenSHA256 == rootSum:
+	case r.TokenSHA256 == reserved.Root:
 		return fmt.Errorf("%w: tenant %q token must differ from api_token", ErrInvalid, r.Name)
+	case r.TokenSHA256 == reserved.Operator:
+		return fmt.Errorf("%w: tenant %q token must differ from operator_token", ErrInvalid, r.Name)
 	}
 	if sum, err := hex.DecodeString(r.TokenSHA256); err != nil || len(sum) != sha256.Size {
 		return fmt.Errorf("%w: tenant %q token_sha256 must be %d hex bytes", ErrInvalid, r.Name, sha256.Size)
@@ -138,6 +146,18 @@ func KeepTokens(cur map[string]TenantRecord, records []TenantRecord) (map[string
 		next[r.Name] = r
 	}
 	return next, nil
+}
+
+// ReservedOf hashes the node tokens; an empty token reserves nothing.
+func ReservedOf(apiToken, operatorToken string) Reserved {
+	var r Reserved
+	if apiToken != "" {
+		r.Root = TokenSHA256(apiToken)
+	}
+	if operatorToken != "" {
+		r.Operator = TokenSHA256(operatorToken)
+	}
+	return r
 }
 
 // TokenSHA256 is the hex SHA-256 a tenant token is kept as outside config.json.

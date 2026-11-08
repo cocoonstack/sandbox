@@ -32,8 +32,8 @@ var _ tenants.Source = (*Source)(nil)
 
 // Source is a node-local tenant set; reads load one snapshot lock-free.
 type Source struct {
-	path    string
-	rootSum string
+	path     string
+	reserved tenants.Reserved
 
 	// mu orders writers, which persist before they publish.
 	mu  sync.Mutex
@@ -41,24 +41,24 @@ type Source struct {
 }
 
 // Open loads tenants.json; a node without one starts with no tenants.
-func Open(ctx context.Context, dataDir, rootSum string) (*Source, error) {
-	s := &Source{path: filepath.Join(dataDir, fileName), rootSum: rootSum}
+func Open(ctx context.Context, dataDir string, reserved tenants.Reserved) (*Source, error) {
+	s := &Source{path: filepath.Join(dataDir, fileName), reserved: reserved}
 	raw, err := os.ReadFile(s.path)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
-		empty, _ := newSet(nil, rootSum)
+		empty, _ := newSet(nil, reserved)
 		s.set.Store(empty)
 		return s, nil
 	case err != nil:
 		return nil, fmt.Errorf("read tenants file: %w", err)
-	case rootSum == "":
+	case reserved.Root == "":
 		return nil, fmt.Errorf("%s needs api_token: the operator surfaces are unreachable without it", s.path)
 	}
 	var pf persisted
 	if err = json.Unmarshal(raw, &pf); err != nil {
 		return nil, fmt.Errorf("parse tenants file: %w", err)
 	}
-	restored, err := newSet(pf.Tenants, rootSum)
+	restored, err := newSet(pf.Tenants, reserved)
 	if err != nil {
 		return nil, fmt.Errorf("restore tenants from %s: %w", s.path, err)
 	}
@@ -161,7 +161,7 @@ func (s *Source) apply(next func(cur *set) (map[string]tenants.TenantRecord, err
 	if err != nil {
 		return tenants.Change{}, err
 	}
-	updated, err := newSet(slices.Collect(maps.Values(records)), s.rootSum)
+	updated, err := newSet(slices.Collect(maps.Values(records)), s.reserved)
 	if err != nil {
 		return tenants.Change{}, err
 	}
@@ -183,13 +183,13 @@ type set struct {
 	digest  string
 }
 
-func newSet(records []tenants.TenantRecord, rootSum string) (*set, error) {
+func newSet(records []tenants.TenantRecord, reserved tenants.Reserved) (*set, error) {
 	s := &set{
 		byToken: make(map[[sha256.Size]byte]*tenants.TenantRecord, len(records)),
 		byName:  make(map[string]tenants.TenantRecord, len(records)),
 	}
 	for _, r := range records {
-		if err := tenants.Validate(r, rootSum); err != nil {
+		if err := tenants.Validate(r, reserved); err != nil {
 			return nil, err
 		}
 		sum, err := hex.DecodeString(r.TokenSHA256)
