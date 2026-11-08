@@ -118,16 +118,7 @@ func TestKickResumesASpliceWithoutLosingAByte(t *testing.T) {
 		if acceptErr != nil {
 			return
 		}
-		defer func() { _ = c.Close() }()
-		var wg sync.WaitGroup
-		wg.Go(func() {
-			_, _ = io.Copy(c, io.LimitReader(new(pattern), total))
-			_ = c.(*net.TCPConn).CloseWrite()
-		})
-		h := sha256.New()
-		_, _ = io.Copy(h, c)
-		wg.Wait()
-		upHash <- [32]byte(h.Sum(nil))
+		upHash <- echoHash(c, total)
 	}()
 	downHash := make(chan [32]byte, 1)
 	go func() {
@@ -136,16 +127,7 @@ func TestKickResumesASpliceWithoutLosingAByte(t *testing.T) {
 			t.Errorf("guest dial: %v", dialErr)
 			return
 		}
-		defer func() { _ = c.Close() }()
-		var wg sync.WaitGroup
-		wg.Go(func() {
-			_, _ = io.Copy(c, io.LimitReader(new(pattern), total))
-			_ = c.(*net.UnixConn).CloseWrite()
-		})
-		h := sha256.New()
-		_, _ = io.Copy(h, c)
-		wg.Wait()
-		downHash <- [32]byte(h.Sum(nil))
+		downHash <- echoHash(c, total)
 	}()
 	guest, err := uln.Accept()
 	if err != nil {
@@ -188,6 +170,19 @@ func TestKickResumesASpliceWithoutLosingAByte(t *testing.T) {
 type doorShaped struct{ *net.UnixConn }
 
 func (c doorShaped) NetConn() net.Conn { return c.UnixConn }
+
+func echoHash(c net.Conn, total int64) [32]byte {
+	defer func() { _ = c.Close() }()
+	var wg sync.WaitGroup
+	wg.Go(func() {
+		_, _ = io.Copy(c, io.LimitReader(new(pattern), total))
+		_ = c.(interface{ CloseWrite() error }).CloseWrite()
+	})
+	h := sha256.New()
+	_, _ = io.Copy(h, c)
+	wg.Wait()
+	return [32]byte(h.Sum(nil))
+}
 
 type pattern struct{ off int }
 

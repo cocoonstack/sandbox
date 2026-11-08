@@ -54,7 +54,7 @@ var (
 	copyBufs = sync.Pool{New: func() any { b := make([]byte, 2*scrubChunk); return &b }}
 )
 
-// TransferFunc receives the payload bytes an allowed tunnel or request moved, once it ends.
+// TransferFunc receives the payload bytes an allowed tunnel or request moved since its last report.
 type TransferFunc func(ev Event, sent, received int64)
 
 // AuditFunc receives every egress decision the proxy takes.
@@ -218,6 +218,9 @@ func (p *Proxy) Close() {
 	}
 	p.closed = true
 	p.connMu.Unlock()
+	if l := p.limits.Swap(nil); l != nil {
+		l.cancel()
+	}
 	p.DropTunnels()
 }
 
@@ -388,11 +391,17 @@ func (p *Proxy) relay(w http.ResponseWriter, r *http.Request, ev Event, rule Rul
 
 	route := p.router.Route()
 	ctx := r.Context()
+	var t *transfer
 	var got *net.Conn
 	if p.ends || route != "" {
 		got = new(net.Conn)
 		ctx = httptrace.WithClientTrace(ctx, &httptrace.ClientTrace{
-			GotConn: func(info httptrace.GotConnInfo) { *got = info.Conn },
+			GotConn: func(info httptrace.GotConnInfo) {
+				*got = info.Conn
+				settled := ev
+				settled.attach(info.Conn, nil)
+				p.settle(t, settled)
+			},
 		})
 	}
 	out := r.Clone(ctx)
@@ -410,9 +419,10 @@ func (p *Proxy) relay(w http.ResponseWriter, r *http.Request, ev Event, rule Rul
 			out.Header.Del(h)
 		}
 	}
-	t := p.begin(ev)
+	t = p.begin(ev)
 	if out.Body != nil && out.Body != http.NoBody {
-		out.Body = &meteredBody{r: out.Body, p: p, n: &t.sent, Closer: out.Body}
+		t.body = meteredBody{r: out.Body, p: p, n: &t.sent, Closer: out.Body}
+		out.Body = &t.body
 	}
 	var failed bool
 	defer func() { p.finish(t, !failed || t.sent.Load() > 0) }()
@@ -441,7 +451,8 @@ func (p *Proxy) relay(w http.ResponseWriter, r *http.Request, ev Event, rule Rul
 		defer copyBufs.Put(buf)
 		src = newScrubReader(resp.Body, sc, *buf)
 	}
-	src = &meter{r: src, p: p, rx: true, n: &t.received}
+	t.resp = meter{r: src, p: p, rx: true, n: &t.received}
+	src = &t.resp
 	w.WriteHeader(resp.StatusCode)
 	var copyErr error
 	if streamed(resp) {

@@ -31,7 +31,7 @@ func (p *Proxy) SetLimit(l types.EgressLimit) {
 	}
 	var next *limiters
 	if l != (types.EgressLimit{}) {
-		next = newLimiters(l)
+		next = newLimiters(l, cur)
 	}
 	if old := p.limits.Swap(next); old != nil {
 		old.cancel()
@@ -39,7 +39,7 @@ func (p *Proxy) SetLimit(l types.EgressLimit) {
 	p.kick()
 }
 
-// ReportEvery adds a row every d for each allowed tunnel or request that lasts longer, beside its row at the end; call it after OnTransfer, before serving.
+// ReportEvery adds a row every d for each allowed tunnel or request that lasts longer; call it after OnTransfer, before serving.
 func (p *Proxy) ReportEvery(d time.Duration) {
 	p.every = d
 	go func() {
@@ -79,14 +79,13 @@ func (p *Proxy) begin(ev Event, conns ...net.Conn) *transfer {
 	return t
 }
 
-// settle stores a request's event once its upstream connection is known.
 func (p *Proxy) settle(t *transfer, ev Event) {
 	p.connMu.Lock()
 	t.ev = ev
 	p.connMu.Unlock()
 }
 
-// finish drops t and, when report holds, writes the bytes no interim row has carried; a zero remainder after an interim row writes nothing.
+// finish writes the bytes no interim row carried; a zero remainder after an interim row writes nothing.
 func (p *Proxy) finish(t *transfer, report bool) {
 	p.connMu.Lock()
 	delete(p.transfers, t)
@@ -117,7 +116,7 @@ func (p *Proxy) reportInterim(now time.Time) {
 	for _, r := range rows {
 		p.reportTransfer(r.ev, r.sent, r.received)
 	}
-	// A spliced tunnel counts its bytes only when its copy returns; the kick makes the next row current.
+	// A spliced tunnel counts its bytes only when its copy returns.
 	p.kick()
 }
 
@@ -153,6 +152,7 @@ func (p *Proxy) stream(dst io.Writer, src net.Conn, rx bool, n *atomic.Int64) {
 		var err error
 		if lim, _ := p.limiter(rx); lim != nil {
 			buf := copyBufs.Get().(*[]byte)
+			// Hide ReaderFrom so the copy reads through the meter into the pooled buffer.
 			_, err = io.CopyBuffer(struct{ io.Writer }{dst}, &meter{r: src, p: p, rx: rx, n: n}, *buf)
 			copyBufs.Put(buf)
 		} else {
@@ -179,8 +179,19 @@ type limiters struct {
 	cancel context.CancelFunc
 }
 
-func newLimiters(l types.EgressLimit) *limiters {
-	out := &limiters{set: l, tx: newBucket(l.TxBytesPerSecond), rx: newBucket(l.RxBytesPerSecond)}
+func newLimiters(l types.EgressLimit, cur *limiters) *limiters {
+	var prev types.EgressLimit
+	var tx, rx *rate.Limiter
+	if cur != nil {
+		prev, tx, rx = cur.set, cur.tx, cur.rx
+	}
+	if l.TxBytesPerSecond != prev.TxBytesPerSecond {
+		tx = newBucket(l.TxBytesPerSecond)
+	}
+	if l.RxBytesPerSecond != prev.RxBytesPerSecond {
+		rx = newBucket(l.RxBytesPerSecond)
+	}
+	out := &limiters{set: l, tx: tx, rx: rx}
 	out.ctx, out.cancel = context.WithCancel(context.Background())
 	return out
 }
@@ -193,6 +204,9 @@ type transfer struct {
 
 	sent, received                 atomic.Int64
 	reportedSent, reportedReceived int64
+
+	body meteredBody
+	resp meter
 }
 
 // take returns the bytes moved since the last row and marks them reported; the caller holds Proxy.connMu.

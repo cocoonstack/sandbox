@@ -11,25 +11,25 @@ import (
 
 func TestSetRatesPicksEachDirectionsBucket(t *testing.T) {
 	tests := []struct {
-		name     string
-		node     float64
-		rates    Rates
-		up, down rate.Limit
+		name           string
+		node           float64
+		setUp, setDown float64
+		up, down       rate.Limit
 	}{
-		{"no node limit, no rates", 0, Rates{}, rate.Inf, rate.Inf},
-		{"no node limit, up only", 0, Rates{Up: 2000}, 2000, rate.Inf},
-		{"no node limit, down only", 0, Rates{Down: 3000}, rate.Inf, 3000},
-		{"no node limit, both", 0, Rates{Up: 2000, Down: 3000}, 2000, 3000},
-		{"node limit, no rates", 1000, Rates{}, 1000, 1000},
-		{"node limit, up only", 1000, Rates{Up: 2000}, 2000, 1000},
-		{"node limit, down only", 1000, Rates{Down: 3000}, 1000, 3000},
-		{"node limit, both", 1000, Rates{Up: 2000, Down: 3000}, 2000, 3000},
+		{"no node limit, no rates", 0, 0, 0, rate.Inf, rate.Inf},
+		{"no node limit, up only", 0, 2000, 0, 2000, rate.Inf},
+		{"no node limit, down only", 0, 0, 3000, rate.Inf, 3000},
+		{"no node limit, both", 0, 2000, 3000, 2000, 3000},
+		{"node limit, no rates", 1000, 0, 0, 1000, 1000},
+		{"node limit, up only", 1000, 2000, 0, 2000, 1000},
+		{"node limit, down only", 1000, 0, 3000, 1000, 3000},
+		{"node limit, both", 1000, 2000, 3000, 2000, 3000},
 	}
 	t0 := time.Unix(1_700_000_000, 0)
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			f := newFlows(Claim{Limits: Limits{BytesPerSecond: tt.node}})
-			f.setRates(tt.rates)
+			f.setRates(tt.setUp, tt.setDown)
 			for _, d := range []struct {
 				name string
 				dir  *direction
@@ -59,15 +59,44 @@ func TestSetRatesToZeroRestoresTheNodeDefault(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			f := newFlows(Claim{Limits: Limits{BytesPerSecond: tt.node}})
-			f.setRates(Rates{Up: 5000, Down: 7000})
+			f.setRates(5000, 7000)
 			if up, down := limitOf(f.up), limitOf(f.down); up != 5000 || down != 7000 {
 				t.Fatalf("rates after set = %v up, %v down, want 5000 and 7000", up, down)
 			}
-			f.setRates(Rates{})
+			f.setRates(0, 0)
 			if up, down := limitOf(f.up), limitOf(f.down); up != tt.want || down != tt.want {
 				t.Errorf("rates after reset = %v up, %v down, want %v both", up, down, tt.want)
 			}
 		})
+	}
+}
+
+func TestSetRatesKeepsTheBucketOfAnUnchangedRate(t *testing.T) {
+	f := newFlows(Claim{})
+	f.setRates(1000, 2000)
+	t0 := time.Unix(1_700_000_000, 0)
+	if !f.charge(f.up, 1, 2*MaxFrame, t0) || !f.charge(f.down, 1, 2*MaxFrame, t0) {
+		t.Fatal("a fresh bucket refused its burst")
+	}
+	steps := []struct {
+		name           string
+		setUp, setDown float64
+		wantUp         bool
+		wantDown       bool
+	}{
+		{"same rates again", 1000, 2000, false, false},
+		{"up changed, down kept", 1500, 2000, true, false},
+		{"same rates after the change", 1500, 2000, false, false},
+		{"down changed, up kept", 1500, 3000, false, true},
+	}
+	for _, s := range steps {
+		f.setRates(s.setUp, s.setDown)
+		if got := f.charge(f.up, 1, 2*MaxFrame, t0); got != s.wantUp {
+			t.Errorf("%s: up burst admitted = %v, want %v", s.name, got, s.wantUp)
+		}
+		if got := f.charge(f.down, 1, 2*MaxFrame, t0); got != s.wantDown {
+			t.Errorf("%s: down burst admitted = %v, want %v", s.name, got, s.wantDown)
+		}
 	}
 }
 
@@ -85,7 +114,7 @@ func TestSetRatesDropsPastTheNewBucketAndKeepsFlowsRunning(t *testing.T) {
 	if !f.charge(f.up, 1, 4*MaxFrame, t0) || !f.charge(f.down, 1, 4*MaxFrame, t0) {
 		t.Fatal("a claim with no byte limit refused a burst")
 	}
-	f.setRates(Rates{Up: 1000})
+	f.setRates(1000, 0)
 	steps := []struct {
 		name string
 		dir  *direction
@@ -130,7 +159,7 @@ func TestRouterSetRatesDropsForwardedAndInboundPacketsPerDirection(t *testing.T)
 	if got := forward(); got != DropNone {
 		t.Fatalf("forward with no byte limit = %v, want none", got)
 	}
-	r.SetRates(claimAddr, Rates{Up: 1})
+	r.SetRates(claimAddr, 1, 0)
 	drain(a.flows.up)
 	if got := forward(); got != DropLimit {
 		t.Errorf("forward past the up bucket = %v, want limit", got)
@@ -138,7 +167,7 @@ func TestRouterSetRatesDropsForwardedAndInboundPacketsPerDirection(t *testing.T)
 	if got := admit(); got != DropNone {
 		t.Errorf("inbound while only up is limited = %v, want none", got)
 	}
-	r.SetRates(claimAddr, Rates{Down: 1})
+	r.SetRates(claimAddr, 0, 1)
 	drain(a.flows.down)
 	if got := admit(); got != DropLimit {
 		t.Errorf("inbound past the down bucket = %v, want limit", got)
@@ -146,7 +175,7 @@ func TestRouterSetRatesDropsForwardedAndInboundPacketsPerDirection(t *testing.T)
 	if got := forward(); got != DropNone {
 		t.Errorf("forward while only down is limited = %v, want none", got)
 	}
-	r.SetRates(claimAddr, Rates{})
+	r.SetRates(claimAddr, 0, 0)
 	if got, got2 := forward(), admit(); got != DropNone || got2 != DropNone {
 		t.Errorf("after reset forward = %v and inbound = %v, want none for both", got, got2)
 	}
@@ -156,15 +185,15 @@ func TestSetRatesOnAnUnknownAddressChangesNothing(t *testing.T) {
 	u := &fakeUnder{out: make(chan sent, 64)}
 	r := New(u, testOverlay(1450))
 	stranger := netip.MustParseAddr("100.80.0.77")
-	r.SetRates(claimAddr, Rates{Up: 1, Down: 1})
+	r.SetRates(claimAddr, 1, 1)
 	r.Arm(Claim{ID: "c1", Addr: claimAddr})
-	r.SetRates(stranger, Rates{Up: 1, Down: 1})
+	r.SetRates(stranger, 1, 1)
 	a := r.claims[claimAddr]
 	if up, down := limitOf(a.flows.up), limitOf(a.flows.down); up != rate.Inf || down != rate.Inf {
 		t.Errorf("armed claim rates = %v up, %v down after SetRates on another address, want no limit", up, down)
 	}
 	r.Disarm(claimAddr)
-	r.SetRates(claimAddr, Rates{Up: 1, Down: 1})
+	r.SetRates(claimAddr, 1, 1)
 	if up, down := limitOf(a.flows.up), limitOf(a.flows.down); up != rate.Inf || down != rate.Inf {
 		t.Errorf("disarmed claim rates = %v up, %v down after SetRates, want no limit", up, down)
 	}

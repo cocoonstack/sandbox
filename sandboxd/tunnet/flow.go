@@ -39,11 +39,6 @@ type Limits struct {
 	QuotaBytes        int64   `json:"quota_bytes,omitzero"`
 }
 
-// Rates overrides one claim's byte buckets each way; zero keeps Limits.BytesPerSecond.
-type Rates struct {
-	Up, Down float64
-}
-
 // FlowRecord is one flow's audit row, written when the flow ends; a Partial row reports a live flow's bytes since its last row.
 type FlowRecord struct {
 	Proto   uint8
@@ -122,12 +117,15 @@ func newDirection(l Limits) *direction {
 	return d
 }
 
+// setBytes keeps the bucket of an unchanged rate, so a repeated cap grants no new burst.
 func (d *direction) setBytes(perSecond float64) {
-	if perSecond <= 0 {
+	cur := d.bytes.Load()
+	switch {
+	case perSecond <= 0:
 		d.bytes.Store(nil)
-		return
+	case cur == nil || float64(cur.Limit()) != perSecond:
+		d.bytes.Store(rate.NewLimiter(rate.Limit(perSecond), max(int(perSecond), 2*MaxFrame)))
 	}
-	d.bytes.Store(rate.NewLimiter(rate.Limit(perSecond), max(int(perSecond), 2*MaxFrame)))
 }
 
 func (d *direction) admit(now time.Time, packets, bytes int) bool {
@@ -265,9 +263,9 @@ func (f *flows) charge(d *direction, packets, n int, now time.Time) bool {
 }
 
 // setRates swaps both byte buckets; a zero rate falls back to the node's.
-func (f *flows) setRates(r Rates) {
-	f.up.setBytes(cmp.Or(r.Up, f.limits.BytesPerSecond))
-	f.down.setBytes(cmp.Or(r.Down, f.limits.BytesPerSecond))
+func (f *flows) setRates(up, down float64) {
+	f.up.setBytes(cmp.Or(up, f.limits.BytesPerSecond))
+	f.down.setBytes(cmp.Or(down, f.limits.BytesPerSecond))
 }
 
 func (f *flows) open(key flowKey, now time.Time) *flow {

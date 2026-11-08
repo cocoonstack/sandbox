@@ -306,18 +306,77 @@ func TestArmAppliesTheClaimsLimitAndSetEgressLimitMovesIt(t *testing.T) {
 	}
 }
 
+func TestAnArmNeverAppliesAnOlderCapThanASetterRead(t *testing.T) {
+	const rate = 512 << 10
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(make([]byte, 2*rate))
+	}))
+	t.Cleanup(origin.Close)
+	pol := &egress.Policy{Allow: []egress.Rule{{Host: outboundtest.Hostname(t, origin.URL)}}}
+	var limit atomic.Pointer[types.EgressLimit]
+	limit.Store(&types.EgressLimit{})
+	reading, release := make(chan struct{}), make(chan struct{})
+	var first atomic.Bool
+	h := newHost(t, &fakeEngine{}, poolConfig(testKey, pol), func(o *Options) {
+		o.Dial = (&net.Dialer{}).DialContext
+		o.EgressLimit = func(*types.Sandbox) types.EgressLimit {
+			l := *limit.Load()
+			if first.CompareAndSwap(false, true) {
+				close(reading)
+				select {
+				case <-release:
+				case <-time.After(300 * time.Millisecond):
+				}
+			}
+			return l
+		}
+	})
+	sb := outboundtest.VsockSandbox(t, "sb_limit_race", testKey)
+	armed := make(chan error, 1)
+	go func() { armed <- h.Arm(t.Context(), sb) }()
+	<-reading
+	limit.Store(&types.EgressLimit{RxBytesPerSecond: rate})
+	set := make(chan struct{})
+	go func() {
+		h.SetEgressLimit(sb)
+		close(set)
+	}()
+	select {
+	case <-set:
+	case <-time.After(200 * time.Millisecond):
+	}
+	close(release)
+	if err := <-armed; err != nil {
+		t.Fatalf("arm egress: %v", err)
+	}
+	<-set
+	t.Cleanup(func() { h.Disarm(sb.ID, true) })
+
+	start := time.Now()
+	resp, err := outboundtest.EgressClient(engine.EgressSocketPath(sb.VsockSocket)).Get(origin.URL + "/")
+	if err != nil {
+		t.Fatalf("proxied GET: %v", err)
+	}
+	n, _ := io.Copy(io.Discard, resp.Body)
+	_ = resp.Body.Close()
+	if took := time.Since(start); n != 2*rate || took < 700*time.Millisecond {
+		t.Errorf("read %d bytes in %v: the arm's stale read replaced the cap the setter applied", n, took)
+	}
+}
+
 // newHost serves cfg's egress with the gh secret set to s3cr3t; its NIC locks succeed unless edit swaps them.
 func newHost(t *testing.T, eng *fakeEngine, cfg *config.Config, edit func(*Options)) *Host {
 	t.Helper()
 	v := NewView(cfg, testSecrets(t))
 	o := Options{
-		Engine:    eng,
-		View:      func() *View { return v },
-		Record:    func(context.Context, string, string, egress.Event) {},
-		RecordDNS: func(context.Context, string, string, DNSEvent) {},
-		Transfer:  func(context.Context, string, string, egress.Event, int64, int64) {},
-		Lock:      func(string) error { return nil },
-		Unlock:    func(string) error { return nil },
+		Engine:      eng,
+		View:        func() *View { return v },
+		Record:      func(context.Context, string, string, egress.Event) {},
+		RecordDNS:   func(context.Context, string, string, DNSEvent) {},
+		Transfer:    func(context.Context, string, string, egress.Event, int64, int64) {},
+		EgressLimit: func(*types.Sandbox) types.EgressLimit { return types.EgressLimit{} },
+		Lock:        func(string) error { return nil },
+		Unlock:      func(string) error { return nil },
 	}
 	if edit != nil {
 		edit(&o)
