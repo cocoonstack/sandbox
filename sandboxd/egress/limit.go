@@ -21,6 +21,10 @@ const (
 	// limitSlices cuts a second of a limited direction into reads, so one wait stays near a tenth of a second.
 	limitSlices  = 10
 	minLimitRead = 1 << 10
+
+	// minWindow keeps a clamped receive window above what a long round trip needs at a low cap.
+	minWindow  = 128 << 10
+	openWindow = 65535 << 14
 )
 
 // SetLimit caps the claim's bytes per second each way and moves every open tunnel onto the new cap at once.
@@ -153,7 +157,11 @@ func (p *Proxy) stream(dst io.Writer, src net.Conn, rx bool, n *atomic.Int64) {
 		if lim, _ := p.limiter(rx); lim != nil {
 			buf := copyBufs.Get().(*[]byte)
 			// Hide ReaderFrom so the copy reads through the meter into the pooled buffer.
-			_, err = io.CopyBuffer(struct{ io.Writer }{dst}, &meter{r: src, p: p, rx: rx, n: n}, *buf)
+			m := &meter{r: src, p: p, rx: rx, n: n}
+			if rx {
+				m.win = tcpOf(src)
+			}
+			_, err = io.CopyBuffer(struct{ io.Writer }{dst}, m, *buf)
 			copyBufs.Put(buf)
 		} else {
 			var moved int64
@@ -219,10 +227,12 @@ func (t *transfer) take() (ev Event, sent, received int64) {
 
 // meter counts what it reads into n and, while its direction is limited, reads one slice at a time and waits for its tokens.
 type meter struct {
-	r  io.Reader
-	p  *Proxy
-	rx bool
-	n  *atomic.Int64
+	r       io.Reader
+	p       *Proxy
+	rx      bool
+	n       *atomic.Int64
+	win     *net.TCPConn
+	clamped bool
 }
 
 func (m *meter) Read(b []byte) (int, error) {
@@ -235,7 +245,21 @@ func (m *meter) Read(b []byte) (int, error) {
 	for lim != nil && n > 0 && lim.WaitN(l.ctx, n) != nil {
 		lim, l = m.p.limiter(m.rx)
 	}
+	m.clamp(lim, err != nil)
 	return n, err
+}
+
+// clamp sets the window again on every limited read, since receive-buffer autotuning raises it; a pooled conn leaves open.
+func (m *meter) clamp(lim *rate.Limiter, done bool) {
+	switch {
+	case m.win == nil:
+	case lim != nil && !done:
+		clampWindow(m.win, max(minWindow, min(int(lim.Limit())/2, openWindow)))
+		m.clamped = true
+	case m.clamped:
+		clampWindow(m.win, openWindow)
+		m.clamped = false
+	}
 }
 
 type meteredBody struct {
@@ -248,6 +272,21 @@ func newBucket(perSecond int64) *rate.Limiter {
 		return nil
 	}
 	return rate.NewLimiter(rate.Limit(perSecond), max(int(min(perSecond, 1<<30)), limitBurst))
+}
+
+func tcpOf(c net.Conn) *net.TCPConn {
+	for {
+		switch v := c.(type) {
+		case *net.TCPConn:
+			return v
+		case *upstreamConn:
+			c = v.Conn
+		case interface{ NetConn() net.Conn }:
+			c = v.NetConn()
+		default:
+			return nil
+		}
+	}
 }
 
 func readSlice(lim *rate.Limiter) int {
