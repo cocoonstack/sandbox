@@ -1532,13 +1532,15 @@ func (mc *moveCluster) counts(tenant string) [2][3]int {
 	return [2][3]int{moveCounts(mc.s, tenant), moveCounts(mc.t, tenant)}
 }
 
+type moveHook func(round int) error
+
 type fakeMovePeer struct {
 	c   *failoverCluster
 	srv *httptest.Server
 
 	admitErr        error
-	roundHook       func(round int) error
-	commitHook      func(round int) error
+	roundHook       moveHook
+	commitHook      moveHook
 	loseCommitReply bool
 	dropHook        func()
 	roundBudgets    []time.Duration
@@ -1823,7 +1825,7 @@ func pausedOn(m *Manager, vm string) bool {
 	return eng.paused[vm]
 }
 
-func failRound(n int) func(int) error {
+func failRound(n int) moveHook {
 	return func(round int) error {
 		if round == n {
 			return ErrMoveTarget

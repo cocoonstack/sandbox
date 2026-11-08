@@ -2119,7 +2119,7 @@ func TestFailoverARootAndATokenLookupRacingKeepOneClaim(t *testing.T) {
 func TestFailoverAReleaseDuringAnAdoptionOnThisNodeLeavesNoPhantom(t *testing.T) {
 	tests := []struct {
 		name           string
-		leader, racing func(*types.Sandbox) Cred
+		leader, racing credOf
 	}{
 		{"the root leads", rootCred, tokenCred},
 		{"the token leads", tokenCred, rootCred},
@@ -2180,7 +2180,7 @@ func TestFailoverAReleaseDuringAnAdoptionOnThisNodeLeavesNoPhantom(t *testing.T)
 func TestFailoverLookupsSharingAnAdoptionAnswerWithTheirOwnCredential(t *testing.T) {
 	tests := []struct {
 		name             string
-		leader, follower func(*types.Sandbox) Cred
+		leader, follower credOf
 		want             bool
 	}{
 		{"a root follower of a token adoption", tokenCred, rootCred, true},
@@ -2230,19 +2230,16 @@ func TestFailoverALookupFollowingARefusedAdoptionAdoptsWithItsOwnToken(t *testin
 				reg := &hookRegistry{Registry: c.reg}
 				b.archives = reg
 				follower := make(chan bool, 1)
-				var once sync.Once
-				reg.beforeGet = func() {
-					once.Do(func() {
-						for range wrong {
-							go func() { _, _ = b.AdoptArchived(t.Context(), sb.ID, Cred{Token: "wrong"}) }()
-						}
-						go func() {
-							adopted, _ := b.AdoptArchived(t.Context(), sb.ID, Cred{Token: sb.Token})
-							follower <- adopted
-						}()
-						synctest.Wait()
-					})
-				}
+				reg.beforeGet = sync.OnceFunc(func() {
+					for range wrong {
+						go func() { _, _ = b.AdoptArchived(t.Context(), sb.ID, Cred{Token: "wrong"}) }()
+					}
+					go func() {
+						adopted, _ := b.AdoptArchived(t.Context(), sb.ID, Cred{Token: sb.Token})
+						follower <- adopted
+					}()
+					synctest.Wait()
+				})
 
 				if adopted, err := b.AdoptArchived(t.Context(), sb.ID, Cred{Token: "wrong"}); err != nil || adopted {
 					t.Fatalf("wrong-token lookup: %v %v, want refused", adopted, err)
@@ -2258,6 +2255,8 @@ func TestFailoverALookupFollowingARefusedAdoptionAdoptsWithItsOwnToken(t *testin
 		})
 	}
 }
+
+type credOf func(*types.Sandbox) Cred
 
 type failoverCluster struct {
 	reg        *archivestest.Mem
