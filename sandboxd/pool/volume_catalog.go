@@ -53,11 +53,6 @@ func (c *volumeCatalog) withinRoots(path string) bool {
 
 func (c *volumeCatalog) normalize(name string, spec types.VolumeRegistration) (*catalogVolume, error) {
 	spec.DirectIO = cmp.Or(spec.DirectIO, types.DirectIOOff)
-	for _, tenant := range spec.Tenants {
-		if !types.NameRe.MatchString(tenant) {
-			return nil, fmt.Errorf("%w: volume %q tenant %q must match %s", ErrBadVolume, name, tenant, types.NameRe)
-		}
-	}
 	if err := config.ValidateVolumeCatalog([]config.VolumeSpec{{
 		Name: name, Path: spec.Path, DirectIO: spec.DirectIO, Writable: spec.Writable, Tenants: spec.Tenants,
 	}}); err != nil {

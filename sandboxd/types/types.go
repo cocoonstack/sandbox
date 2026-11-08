@@ -233,17 +233,6 @@ func (k PoolKey) Validate() error {
 	return nil
 }
 
-// envView is an immutable env with its inject entries in name order.
-type envView struct {
-	env     Env
-	injects []namedVar
-}
-
-type namedVar struct {
-	name string
-	v    EnvVar
-}
-
 // MoveOut is the source's journal of a live move: the record's first epoch, cocoon's series and the target.
 type MoveOut struct {
 	Epoch  int64  `json:"epoch"`
@@ -264,6 +253,17 @@ func (l EgressLimit) Validate() error {
 		return fmt.Errorf("egress limit rates must not be negative, got tx %d and rx %d", l.TxBytesPerSecond, l.RxBytesPerSecond)
 	}
 	return nil
+}
+
+// envView is an immutable env with its inject entries in name order.
+type envView struct {
+	env     Env
+	injects []namedVar
+}
+
+type namedVar struct {
+	name string
+	v    EnvVar
 }
 
 // Sandbox is the node-local record of one pooled or claimed VM.

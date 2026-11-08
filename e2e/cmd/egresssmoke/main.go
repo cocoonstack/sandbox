@@ -1,5 +1,4 @@
-// egresssmoke checks guarded egress: an allowed origin gets the host-injected
-// credential, direct egress is blocked, and a disallowed host is denied.
+// egresssmoke checks guarded egress: an allowed origin gets the host-injected credential, direct egress is blocked, and a disallowed host is denied.
 package main
 
 import (

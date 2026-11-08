@@ -48,10 +48,11 @@ const (
 )
 
 var (
-	requestHead = `{"v":` + strconv.Itoa(ProtoVersion) + `,"op":"`
+	requestHead  = `{"v":` + strconv.Itoa(ProtoVersion) + `,"op":"`
+	responseHead = `{"type":"`
 
 	reqTagHead  = []byte(requestHead)
-	respTagHead = []byte(`{"type":"`)
+	respTagHead = []byte(responseHead)
 
 	requestDecoders = map[string]func([]byte) (Request, error){
 		"exec":           decodeReq[Exec],
@@ -651,7 +652,7 @@ func EncodeRequest(r Request) ([]byte, error) {
 
 // EncodeResponse renders {"type":...,fields} without a trailing newline.
 func EncodeResponse(r Response) ([]byte, error) {
-	return encodeTagged(`{"type":"`+r.RespType()+`"`, r)
+	return encodeTagged(responseHead+r.RespType()+`"`, r)
 }
 
 // DecodeRequest parses one frame into its op's concrete type.

@@ -268,7 +268,9 @@ func toolText(t *testing.T, resp map[string]any) string {
 	return fmt.Sprintf("%v", as[map[string]any](t, content[0])["text"])
 }
 
-func newTestServer(t *testing.T, extra func(http.ResponseWriter, *http.Request) bool) *server {
+type routeFunc func(http.ResponseWriter, *http.Request) bool
+
+func newTestServer(t *testing.T, extra routeFunc) *server {
 	t.Helper()
 	node := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
@@ -289,7 +291,7 @@ func newTestServer(t *testing.T, extra func(http.ResponseWriter, *http.Request) 
 	return srv
 }
 
-func agentRoute(t *testing.T, reply func(req string) (frames string, drop bool)) func(http.ResponseWriter, *http.Request) bool {
+func agentRoute(t *testing.T, reply func(req string) (frames string, drop bool)) routeFunc {
 	t.Helper()
 	return func(w http.ResponseWriter, r *http.Request) bool {
 		if !strings.HasSuffix(r.URL.Path, "/agent") {

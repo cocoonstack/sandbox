@@ -1,5 +1,5 @@
 # Host-side Go: the sandboxd daemon, the SDK, and the in-process e2e module.
-# protocol/ is in the paths because the SDK's corpus test consumes the
+# protocol/ is in the paths because protocol/wire's corpus test consumes the
 # fixtures — a fixture change must re-prove the Go round-trip.
 name: sandboxd
 

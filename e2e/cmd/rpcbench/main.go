@@ -1,5 +1,4 @@
-// rpcbench compares dial-per-RPC against the SDK's kept connection on a live
-// node, interleaved sample by sample with the lead swapped.
+// rpcbench compares dial-per-RPC against the SDK's kept connection on a live node, interleaved sample by sample with the lead swapped.
 package main
 
 import (

@@ -367,12 +367,10 @@ Sandboxd does not create, check, or delete backings. Keep them outside
 
 Static and runtime entries share one `tenants` rule. An omitted or empty list
 permits every authenticated scope. A nonempty list permits only claims owned by
-the listed tenants, and root-owned claims can use any entry. Runtime
-registration rejects tenant names that do not match the tenant API syntax.
-Static config preserves its supplied tenant lists. An invalid static name
-matches no tenant, so a nonempty list containing only invalid names permits no
-tenant. A valid name for a tenant that does not exist yet grants nothing until
-the tenant is created.
+the listed tenants, and root-owned claims can use any entry. A listed name must
+match the tenant API syntax: runtime registration rejects one that does not,
+and static config fails to load. A valid name for a tenant that does not exist
+yet grants nothing until the tenant is created.
 
 ## DELETE /v1/volumes/{name}
 

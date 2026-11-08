@@ -182,6 +182,7 @@ func TestLoadRejectsInvalid(t *testing.T) {
 		{"duplicate volume name", `{"pools":[],"volumes":[{"name":"data","path":"/srv/datasets/a.img"},{"name":"data","path":"/srv/datasets/b.img"}]}`, "duplicate volume"},
 		{"relative volume path", `{"pools":[],"volumes":[{"name":"data","path":"datasets/a.img"}]}`, "path must be absolute"},
 		{"bad volume directio", `{"pools":[],"volumes":[{"name":"data","path":"/srv/datasets/a.img","directio":"yes"}]}`, "directio must be"},
+		{"bad volume tenant", `{"pools":[],"volumes":[{"name":"data","path":"/srv/datasets/a.img","tenants":["has space"]}]}`, `tenant "has space" must match`},
 		{"relative volume root", `{"pools":[],"volume_roots":["srv/datasets"]}`, "volume_roots"},
 		{"empty volume root", `{"pools":[],"volume_roots":[""]}`, "volume_roots"},
 		{"reader without warm", `{"pools":[{"template":"rt:24.04","warm":0,"reader":true}]}`, "reader needs warm"},
