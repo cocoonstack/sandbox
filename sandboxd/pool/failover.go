@@ -33,7 +33,7 @@ func (m *Manager) adopt(ctx context.Context, id string, cred Cred, room bool) (b
 	if m.archives == nil {
 		return false, nil
 	}
-	for range 2 {
+	for {
 		led := false
 		adopted, err, _ := m.adoptFlights.Do(id, func() (any, error) {
 			led = true
@@ -49,7 +49,6 @@ func (m *Manager) adopt(ctx context.Context, id string, cred Cred, room bool) (b
 			return true, nil
 		}
 	}
-	return false, nil
 }
 
 func (m *Manager) adoptArchived(ctx context.Context, id string, cred Cred, room bool) (bool, error) {
