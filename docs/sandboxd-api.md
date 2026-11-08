@@ -3,7 +3,10 @@
 All bodies are JSON. Four token kinds:
 
 - **root** — the node-level `api_token`: every endpoint except the agent relay
-  and the preview mint, which need the sandbox's own token.
+  and the preview mint, which need the sandbox's own token. A set
+  [`api_token_next`](deploy.md#configuration) is root too, for a
+  [rotation](deploy.md#rotating-api_token-and-operator_token): the same
+  endpoints, and the audit `caller` stays `root`.
 - **operator** — the node-level [`operator_token`](deploy.md#configuration),
   for a public control plane that must not hold cluster configuration power.
   It acts with root's authority, with no tenant scoping, on exactly
@@ -15,7 +18,9 @@ All bodies are JSON. Four token kinds:
   other authenticated endpoint answers it `403`
   `operator token not allowed on this route`; it is never a sandbox token, so
   the agent relay refuses it too, and a claim that names `volumes` answers it
-  `403` `operator token cannot claim volumes`. Unset or empty, it is off.
+  `403` `operator token cannot claim volumes`. Unset or empty, it is off. A set
+  [`operator_token_next`](deploy.md#configuration) is the operator too, on the
+  same endpoints, and the audit `caller` stays `operator`.
   Scope: it reaches every claim's data — it reads any claim's token by id,
   execs in any claim, and through a tenant it mints can fork, checkpoint and
   preview with that claim token — and holds no node or cluster configuration
@@ -804,7 +809,8 @@ kept only as its SHA-256) before it serves, and loads that file at boot. Each
 change is an `op:"tenants"` audit record naming the
 tenants added, changed and removed. On a cluster every node needs the change
 (see [cluster](cluster.md#tenants)). 400 a bad entry, a duplicate name or token,
-a token equal to `api_token`, an unknown field, or an unknown `egress_class`.
+a token equal to `api_token`, `api_token_next`, `operator_token` or
+`operator_token_next`, an unknown field, or an unknown `egress_class`.
 
 ## POST /v1/config/reload
 
