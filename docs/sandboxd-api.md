@@ -832,9 +832,10 @@ run out (see [evacuating a node](cluster.md#evacuating-a-node)). It needs
 background, with bounded concurrency, each claim is hibernated if it runs,
 archived to the checkpoint store if it is not archived, its registry row is
 released, and a peer is asked to adopt it through `GET /v1/sandboxes/{id}/owner`,
-so that peer lists it, and root's `GET /v1/sandboxes/{id}` there returns its token. A claim the
-root adopted, whose token this node has not seen, is offered with the root token; a peer that
-does not accept the root on `/owner` refuses it, and the claim stays here. Open streams to a
+so that peer lists it, and root's `GET /v1/sandboxes/{id}` there returns its token once that
+node has seen it. A claim the root adopted, whose token this node has not seen, is offered with
+the root token; a peer that does not accept the root on `/owner` refuses it, and the claim stays
+here. Open streams to a
 claim end when it hibernates. Until a peer holds it, a call that would wake the
 claim answers 503 `sandbox moving to another node; retry` with `Retry-After`;
 after that this node answers 404 and the client looks the claim up again. With
@@ -1394,10 +1395,9 @@ hibernated sandbox whose restore failed. The node log carries which; and the
 
 ## POST /v1/sandboxes/{id}/exec
 
-Auth: the sandbox's own token, or the root `api_token` by id (operator), which
-wakes a hibernated or archived sandbox like the sandbox's token. A buffered exec for clients that cannot hold
-an upgraded connection — plain JSON in, plain JSON out, so it multiplexes over
-HTTP/2 through a TLS proxy:
+Auth: the sandbox's own token, or the root `api_token` by id (operator). A
+buffered exec for clients that cannot hold an upgraded connection — plain JSON
+in, plain JSON out, so it multiplexes over HTTP/2 through a TLS proxy:
 
 ```json
 {"argv": ["node", "-v"], "cwd": "/work", "env": {"CI": "1"}, "timeout_seconds": 60}
@@ -1435,8 +1435,9 @@ lease is overdue answers 404 for the replicated claims it holds, so the
 to claim and fork responses. Used by the SDK's `Lookup` scatter. A claim the root
 adopted keeps the row's token hash in place of its token: its own token still
 authorizes it on this node and any later adopter, an empty token never does,
-and the first call with its token stores it, after which root's
-`GET /v1/sandboxes/{id}` returns it. The hash is never served.
+and the first call with its token remembers it (persisted at the next claims
+commit), after which root's `GET /v1/sandboxes/{id}` returns it. The hash is
+never served.
 
 ## GET /v1/info
 

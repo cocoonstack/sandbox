@@ -130,6 +130,9 @@ func (m *Manager) handOff(ctx context.Context, sb *types.Sandbox, room bool) err
 	m.mu.Lock()
 	live, archived := m.claimed[sb.ID] == sb && (room || m.evacuatingLocked(sb.ID)), sb.ArchiveCk != ""
 	epoch, token := sb.ArchiveEpoch, sb.Token
+	if sb.TokenSHA256 != "" {
+		token = ""
+	}
 	m.mu.Unlock()
 	switch {
 	case !live:

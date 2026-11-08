@@ -62,7 +62,7 @@ func (m *Manager) adoptArchived(ctx context.Context, id string, cred Cred, room 
 	if err != nil || !ok {
 		return false, err
 	}
-	if rec.Consumed || !cred.Operator && !tokenMatches(cred.Token, rec.TokenSHA256) || (!rec.Deadline.IsZero() && time.Now().After(rec.Deadline)) {
+	if rec.Consumed || (!cred.Operator && !tokenMatches(cred.Token, rec.TokenSHA256)) || (!rec.Deadline.IsZero() && time.Now().After(rec.Deadline)) {
 		return false, nil
 	}
 	sb := &types.Sandbox{}
@@ -79,11 +79,11 @@ func (m *Manager) adoptArchived(ctx context.Context, id string, cred Cred, room 
 	if err != nil {
 		return false, fmt.Errorf("adopt %s: %w", id, err)
 	}
-	token, sum := cred.Token, ""
+	sb.Token, sb.TokenSHA256, sb.ArchiveCk, sb.ArchiveEpoch, sb.Deadline = cred.Token, "", rec.Checkpoint, epoch, rec.Deadline
 	if cred.Operator {
-		token, sum = "", rec.TokenSHA256
+		// A node without token_sha256 reads only this placeholder, which no caller holds.
+		sb.Token, sb.TokenSHA256 = randHex(16), rec.TokenSHA256
 	}
-	sb.Token, sb.TokenSHA256, sb.ArchiveCk, sb.ArchiveEpoch, sb.Deadline = token, sum, rec.Checkpoint, epoch, rec.Deadline
 	sb.SetEnv(sb.Env)
 	sb.Transition.Lock()
 	defer sb.Transition.Unlock()
