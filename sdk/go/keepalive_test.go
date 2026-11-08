@@ -164,7 +164,7 @@ func TestPeerQuiet(t *testing.T) {
 	waitUntil(t, func() bool { return !probe.quiet() }, "hang-up not noticed")
 }
 
-func countingSandbox(t *testing.T, serve func(net.Conn), opts ...ClientOption) (*Sandbox, *atomic.Int32) {
+func countingSandbox(t *testing.T, serve connHandler, opts ...ClientOption) (*Sandbox, *atomic.Int32) {
 	t.Helper()
 	var upgrades atomic.Int32
 	sb := testSandbox(t, newAgentServer(t, func(c net.Conn) {

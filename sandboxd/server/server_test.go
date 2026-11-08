@@ -2440,6 +2440,8 @@ type idActionFunc func(string) error
 
 type guestFunc func(net.Conn)
 
+type managerEdit func(*fakeManager)
+
 type fakeManager struct {
 	counters             pool.Counters
 	registerVolume       func(context.Context, string, types.VolumeRegistration) error
@@ -3033,6 +3035,7 @@ func (f *fakePlacer) TemplateVolumeOwners(probe string, _ []string) []string {
 	}
 	return f.templateVolumeOwners
 }
+
 func (f *fakePlacer) VolumeHolders() map[string]int { return f.volumeHolders }
 func (f *fakePlacer) PeerAddrs() []string           { return f.addrs }
 func (f *fakePlacer) ClientAddr(addr string) string { return addr }
@@ -3184,5 +3187,3 @@ func credToken(cred pool.Cred) string {
 	}
 	return cred.Token
 }
-
-type managerEdit func(*fakeManager)
