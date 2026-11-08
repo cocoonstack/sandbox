@@ -1218,16 +1218,20 @@ applies at once to open connections, without a reconnect. The cap is persisted
 with the claim, follows it through hibernate, archive, a live move, an archive
 row and an adoption, and is accepted on a hibernated or archived claim without
 waking it; its next wake applies it. A running claim's replica row under
-`archive_failover` picks the change up at its next replica capture. A fork
-child and a checkpoint branch take their source's cap. A new claim starts
-without one; no pool setting gives a default.
+`archive_failover` picks the change up at its next replica capture, which for a
+claim that hibernates first comes after its next wake. A fork child and a
+checkpoint branch take their source's cap. A new claim starts without one; no
+pool setting gives a default. Set caps only once every node of the cell runs a
+sandboxd that has this endpoint: an older node drops `egress_limit` when it
+adopts, wakes or receives the claim.
 
 204 on success; 400 an unknown field or a negative rate; 404 unknown id; 503
 `sandbox moving to another node; retry` while a live move pauses the claim for
 its final round; 500 the claims journal could not be written (nothing
-changed); 503 the archive registry is down for an archived claim or a
-hibernated one with a replica under `archive_failover`: the node already holds
-the change, and a resend of the same body replaces the row.
+changed) or the claim's row could not be rewritten (the node holds the change;
+resend the same body); 503 the archive registry is down for an archived claim
+or a hibernated one with a replica under `archive_failover`: the node already
+holds the change, and a resend of the same body replaces the row.
 
 ## GET /metrics
 
@@ -1279,7 +1283,8 @@ them in `secret` (`gh,claim:<entry>`, never a value). An egress event routed thr
 `egress_usage_bytes` on, `egress_bytes` events add the connection's payload `tx`/`rx` bytes. With
 [`egress_usage_interval_seconds`](deploy.md#configuration) set, a connection or flow that lasts longer
 writes an `egress_bytes` event each interval with the bytes since its previous one, then one with the
-rest when it ends; sum a connection's events for its total. A sandbox records at most 10 denied or rate-limited egress decisions per second after a burst of 100, so `egress` events do not count every refusal. A volume claim also carries
+rest, if any, when it ends. Events carry no connection key: sums per claim and per upstream match the
+single events an interval of 0 writes. A sandbox records at most 10 denied or rate-limited egress decisions per second after a burst of 100, so `egress` events do not count every refusal. A volume claim also carries
 `volumes`, the applied catalog names, and — omitted when empty — `volumes_rw`,
 the subset of those names claimed `rw`, on its `claim` event, so billing can
 discriminate write access at claim (mounts and host paths are not billing
