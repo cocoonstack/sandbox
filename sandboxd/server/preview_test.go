@@ -73,6 +73,9 @@ func TestPreviewProxiesToGuest(t *testing.T) {
 		if string(body) != "guest saw "+tt.path {
 			t.Errorf("%s%s: body %q, want the guest to see %s verbatim", tt.prefix, tt.path, body, tt.path)
 		}
+		if got := resp.Header.Get("Service-Worker-Allowed"); got != "" {
+			t.Errorf("%s%s: Service-Worker-Allowed %q reached the browser", tt.prefix, tt.path, got)
+		}
 	}
 	if dialed != 3 {
 		t.Errorf("dialed %d times, want one per request", dialed)
@@ -244,6 +247,7 @@ func (f *fakePreviewMgr) Sandbox(id string) (pool.SandboxSummary, bool) {
 func newGuestServer(t *testing.T, body func(r *http.Request) string) string {
 	t.Helper()
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Service-Worker-Allowed", "/")
 		_, _ = io.WriteString(w, body(r))
 	}))
 	t.Cleanup(ts.Close)
