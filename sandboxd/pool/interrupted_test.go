@@ -174,7 +174,7 @@ func TestAWakeAfterAFailedSettleResumesTheGuestBeforeClearingTheIntent(t *testin
 		eng.mu.Lock()
 		eng.snapListErr = nil
 		eng.mu.Unlock()
-		if _, _, release, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
+		if _, _, release, err := m.WakeAgentSocket(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
 			t.Fatalf("wake: %v", err)
 		} else {
 			release()
@@ -415,7 +415,7 @@ func TestAWakeWhoseGuestDoesNotResumeAnswersFailed(t *testing.T) {
 		eng.mu.Lock()
 		eng.snapListErr, eng.probeErr = nil, errors.New("never ready")
 		eng.mu.Unlock()
-		if _, _, _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token); !errors.Is(err, ErrFailed) {
+		if _, _, _, err := m.WakeAgentSocket(t.Context(), sb.ID, Cred{Token: sb.Token}); !errors.Is(err, ErrFailed) {
 			t.Fatalf("wake: %v, want ErrFailed", err)
 		}
 		if err := m.Hibernate(t.Context(), sb.ID, Cred{Token: sb.Token}); !errors.Is(err, ErrFailed) {

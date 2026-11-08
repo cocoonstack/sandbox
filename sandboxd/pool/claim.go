@@ -215,10 +215,10 @@ func (m *Manager) PreviewDial(ctx context.Context, id string, port uint16) (net.
 }
 
 // AgentSocket resolves a claimed sandbox's vsock UDS without waking it.
-func (m *Manager) AgentSocket(id, token string) (string, error) {
+func (m *Manager) AgentSocket(id string, cred Cred) (string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	sb, ok := m.authed(id, token)
+	sb, ok := m.resolveLocked(id, cred)
 	if !ok {
 		return "", ErrUnknownSandbox
 	}

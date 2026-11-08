@@ -2,8 +2,8 @@
 
 All bodies are JSON. Three token kinds:
 
-- **root** — the node-level `api_token`: every endpoint except the agent relay, exec,
-  owner and the preview mint, which need the sandbox's own token.
+- **root** — the node-level `api_token`: every endpoint except the agent relay
+  and the preview mint, which need the sandbox's own token.
 - **tenant** — a token the [tenant API](#tenants-v1tenants) added: accepted by the
   resource-creating verbs (claim, fork, promote, checkpoint create/claim,
   preview mint) and the tenant-scoped listings/deletes below; everything a
@@ -832,7 +832,9 @@ run out (see [evacuating a node](cluster.md#evacuating-a-node)). It needs
 background, with bounded concurrency, each claim is hibernated if it runs,
 archived to the checkpoint store if it is not archived, its registry row is
 released, and a peer is asked to adopt it through `GET /v1/sandboxes/{id}/owner`,
-so that peer lists it, and root's `GET /v1/sandboxes/{id}` there returns its token. Open streams to a
+so that peer lists it, and root's `GET /v1/sandboxes/{id}` there returns its token. A claim the
+root adopted, whose token this node has not seen, is offered with the root token; a peer that
+does not accept the root on `/owner` refuses it, and the claim stays here. Open streams to a
 claim end when it hibernates. Until a peer holds it, a call that would wake the
 claim answers 503 `sandbox moving to another node; retry` with `Retry-After`;
 after that this node answers 404 and the client looks the claim up again. With
@@ -1392,7 +1394,8 @@ hibernated sandbox whose restore failed. The node log carries which; and the
 
 ## POST /v1/sandboxes/{id}/exec
 
-Auth: the sandbox's own token. A buffered exec for clients that cannot hold
+Auth: the sandbox's own token, or the root `api_token` by id (operator), which
+wakes a hibernated or archived sandbox like the sandbox's token. A buffered exec for clients that cannot hold
 an upgraded connection — plain JSON in, plain JSON out, so it multiplexes over
 HTTP/2 through a TLS proxy:
 
@@ -1418,10 +1421,10 @@ silkd error; 409 a failed sandbox; 500 a failed restore; the
 
 ## GET /v1/sandboxes/{id}/owner
 
-Auth: the sandbox's own token. Answers `{"owner_addr": "host:port"}` when
-this node owns the sandbox, 404 otherwise. With
+Auth: the sandbox's own token, or the root `api_token` by id (operator). Answers `{"owner_addr": "host:port"}` when
+this node owns the sandbox, 404 otherwise; a tenant token is a wrong sandbox token here. With
 [`archive_failover`](cluster.md#archived-claims-across-node-loss), a node that
-does not hold the sandbox adopts it when its row names an owner whose node
+does not hold the sandbox adopts it, when the token's SHA-256 matches the row's or the caller is root, and its row names an owner whose node
 lease expired, or whose owner released it in an
 [evacuation](#post-v1drain) or a [wake it had no room for](cluster.md#waking-an-archived-claim-on-a-full-node), and answers 200; with `?room=1`, which the owner of such a wake sends, it adopts only while it could admit the wake itself; 503 with `Retry-After` when the meta store is
 down. A row whose owner's lease is live is never adopted unless the owner released it: 404. A draining, cordoned or fenced
@@ -1429,7 +1432,11 @@ node, or one that lifted its fence less than 8 seconds ago, does not adopt: 404.
 lease is overdue answers 404 for the replicated claims it holds, so the
 `Lookup` scatter moves on. With `client_advertise` configured,
 `owner_addr` is that node's full HTTP(S) origin instead; the same contract applies
-to claim and fork responses. Used by the SDK's `Lookup` scatter.
+to claim and fork responses. Used by the SDK's `Lookup` scatter. A claim the root
+adopted keeps the row's token hash in place of its token: its own token still
+authorizes it on this node and any later adopter, an empty token never does,
+and the first call with its token stores it, after which root's
+`GET /v1/sandboxes/{id}` returns it. The hash is never served.
 
 ## GET /v1/info
 

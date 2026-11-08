@@ -152,11 +152,11 @@ func TestACordonedNodeKeepsServingItsOwnClaims(t *testing.T) {
 		t.Fatalf("renew: %v", err)
 	}
 	hibernateClaim(t, m, sb)
-	if _, _, _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
+	if _, _, _, err := m.WakeAgentSocket(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
 		t.Fatalf("wake hibernated: %v", err)
 	}
 	mustArchive(t, m, sb)
-	if _, _, _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
+	if _, _, _, err := m.WakeAgentSocket(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
 		t.Fatalf("wake archived: %v", err)
 	}
 	if err := m.Release(t.Context(), gone.ID, Cred{Token: gone.Token}); err != nil {
@@ -192,7 +192,7 @@ func TestACordonedNodeNeverAdoptsButKeepsItsOwnRowAcrossARestart(t *testing.T) {
 	}
 	mustNotAdopt(t, restarted, lost, "adoption by a restarted cordoned node")
 	mustAdopt(t, restarted, own, "its own archived claim")
-	if _, _, _, err := restarted.WakeAgentSocket(t.Context(), own.ID, own.Token); err != nil {
+	if _, _, _, err := restarted.WakeAgentSocket(t.Context(), own.ID, Cred{Token: own.Token}); err != nil {
 		t.Fatalf("wake own archived claim: %v", err)
 	}
 

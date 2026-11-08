@@ -258,8 +258,10 @@ type Sandbox struct {
 	VMName string  `json:"vm_name"`
 	Key    PoolKey `json:"key"`
 
-	Token    string    `json:"token,omitempty"`
-	Deadline time.Time `json:"deadline,omitzero"`
+	Token string `json:"token,omitempty"`
+	// TokenSHA256 authenticates a claim the root adopted without its token; it is never served.
+	TokenSHA256 string    `json:"token_sha256,omitempty"`
+	Deadline    time.Time `json:"deadline,omitzero"`
 	// ClaimedAt is the first grant; renew and wake move Deadline, never this.
 	ClaimedAt time.Time `json:"claimed_at,omitzero"`
 	// LeaseSeconds is the lease the claim was granted; a wake from the archive grants it again.

@@ -132,12 +132,12 @@ type Manager interface {
 	HasGolden(ctx context.Context, key types.PoolKey, tenant string) bool
 	HasPoolGolden(key types.PoolKey) bool
 	HasPromotedTemplate(ctx context.Context, key types.PoolKey, tenant string) bool
-	AgentSocket(id, token string) (string, error)
-	AdoptArchived(ctx context.Context, id, token string) (bool, error)
-	AdoptForWake(ctx context.Context, id, token string) (bool, error)
+	AgentSocket(id string, cred pool.Cred) (string, error)
+	AdoptArchived(ctx context.Context, id string, cred pool.Cred) (bool, error)
+	AdoptForWake(ctx context.Context, id string, cred pool.Cred) (bool, error)
 	DialPort(ctx context.Context, id string, cred pool.Cred, port uint16) (net.Conn, error)
-	WakeAgentSocket(ctx context.Context, id, token string) (string, <-chan struct{}, func(), error)
-	WakeAgentSocketOrRead(ctx context.Context, id, token string) (string, <-chan struct{}, func(), error)
+	WakeAgentSocket(ctx context.Context, id string, cred pool.Cred) (string, <-chan struct{}, func(), error)
+	WakeAgentSocketOrRead(ctx context.Context, id string, cred pool.Cred) (string, <-chan struct{}, func(), error)
 	SleepingSource(id, token string) string
 	DialReader(ctx context.Context, id, token string) (conn net.Conn, source string, err error)
 	SetPools(ctx context.Context, pools []config.PoolSpec) error
@@ -796,8 +796,8 @@ func (s *Server) handleOwner(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	id := r.PathValue("id")
-	_, err := s.mgr.AgentSocket(id, token)
+	id, cred := r.PathValue("id"), s.sandboxCred(token)
+	_, err := s.mgr.AgentSocket(id, cred)
 	if errors.Is(err, pool.ErrLeaseLost) {
 		writeErr(w, http.StatusNotFound, "not owned here")
 		return
@@ -807,7 +807,7 @@ func (s *Server) handleOwner(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Query().Get("room") != "" {
 			adopt = s.mgr.AdoptForWake
 		}
-		adopted, adoptErr := adopt(r.Context(), id, token)
+		adopted, adoptErr := adopt(r.Context(), id, cred)
 		switch {
 		case adoptErr != nil:
 			writeResult(w, r, "adopt", id, "adopt archived sandbox failed", adoptErr, nil)

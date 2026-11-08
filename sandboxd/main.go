@@ -138,7 +138,7 @@ func main() {
 		}, &peer.HTTPPuller{Token: cfg.APIToken})
 		broadcaster := &peer.Broadcaster{Peers: msh.PeerAddrs, Token: cfg.APIToken}
 		mgr.WithPeerDelete(broadcaster.Delete)
-		adopter := &peer.Adopter{Peers: msh.PeerAddrs}
+		adopter := &peer.Adopter{Peers: msh.PeerAddrs, Token: cfg.APIToken}
 		mgr.WithPeerAdopt(adopter.Adopt)
 		go gossipNodeState(ctx, msh, mgr)
 		logger.Infof(ctx, "mesh %s joined (%d seeds)", cfg.Mesh.ID(), len(cfg.Mesh.Join))

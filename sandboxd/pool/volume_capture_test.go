@@ -17,7 +17,7 @@ func TestVolumeClaimRunningWakeUnchanged(t *testing.T) {
 	sb := mustClaim(t, m, testKey)
 	sb.Volumes = []types.Volume{{Name: "dataset", Mount: "/datasets"}}
 
-	sock, _, _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token)
+	sock, _, _, err := m.WakeAgentSocket(t.Context(), sb.ID, Cred{Token: sb.Token})
 	if err != nil {
 		t.Fatalf("WakeAgentSocket: %v", err)
 	}

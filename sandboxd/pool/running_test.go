@@ -280,7 +280,7 @@ func TestAFullPeerLeavesTheWakeOnItsOwnerAndTheRetryAsksNoPeer(t *testing.T) {
 	var asked atomic.Int32
 	a.WithPeerAdopt(func(ctx context.Context, id, token string, room bool) bool {
 		asked.Add(1)
-		adopted, err := b.adopt(ctx, id, token, room)
+		adopted, err := b.adopt(ctx, id, peerCred(token), room)
 		return err == nil && adopted
 	})
 	for range 2 {
@@ -348,7 +348,7 @@ func TestQuotaRefusesClaimsPastCap(t *testing.T) {
 
 func wakeClaim(t *testing.T, m *Manager, sb *types.Sandbox) error {
 	t.Helper()
-	_, _, done, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token)
+	_, _, done, err := m.WakeAgentSocket(t.Context(), sb.ID, Cred{Token: sb.Token})
 	if done != nil {
 		done()
 	}

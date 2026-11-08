@@ -26,7 +26,7 @@ func TestReaderServesAHibernatedClaimWithoutWaking(t *testing.T) {
 	hibernateClaim(t, m, sb)
 	seedReaderVMs(m, testKey, "sbx-reader-1")
 
-	if _, _, _, err := m.WakeAgentSocketOrRead(t.Context(), sb.ID, sb.Token); !errors.Is(err, ErrSleeping) {
+	if _, _, _, err := m.WakeAgentSocketOrRead(t.Context(), sb.ID, Cred{Token: sb.Token}); !errors.Is(err, ErrSleeping) {
 		t.Fatalf("WakeAgentSocketOrRead = %v, want ErrSleeping", err)
 	}
 	if sb.Busy() {
@@ -68,7 +68,7 @@ func TestReaderObeysTheNodeLeaseFence(t *testing.T) {
 	seedReaderVMs(m, testKey, "sbx-reader-1", "sbx-reader-2")
 	m.tripFence()
 
-	if _, _, _, err := m.WakeAgentSocketOrRead(t.Context(), replicated.ID, replicated.Token); !errors.Is(err, ErrLeaseLost) {
+	if _, _, _, err := m.WakeAgentSocketOrRead(t.Context(), replicated.ID, Cred{Token: replicated.Token}); !errors.Is(err, ErrLeaseLost) {
 		t.Errorf("WakeAgentSocketOrRead of a replicated sleeper past the fence: %v, want ErrLeaseLost", err)
 	}
 	if _, _, err := m.DialReader(t.Context(), replicated.ID, replicated.Token); !errors.Is(err, ErrLeaseLost) {
@@ -153,7 +153,7 @@ func TestReaderServesOnlyPoolsThatAskForIt(t *testing.T) {
 	if _, _, err := m.DialReader(t.Context(), sb.ID, sb.Token); !errors.Is(err, ErrNoReader) {
 		t.Errorf("DialReader of a pool without reader = %v, want ErrNoReader", err)
 	}
-	sock, _, done, err := m.WakeAgentSocketOrRead(t.Context(), sb.ID, sb.Token)
+	sock, _, done, err := m.WakeAgentSocketOrRead(t.Context(), sb.ID, Cred{Token: sb.Token})
 	if err != nil || sock == "" {
 		t.Fatalf("WakeAgentSocketOrRead = %q, %v, want a wake", sock, err)
 	}
@@ -172,7 +172,7 @@ func TestReloadTurnsTheReaderOnForLaterSleeps(t *testing.T) {
 	}
 	sb := mustClaim(t, m, testKey)
 	hibernateClaim(t, m, sb)
-	if _, _, _, err := m.WakeAgentSocketOrRead(t.Context(), sb.ID, sb.Token); !errors.Is(err, ErrSleeping) {
+	if _, _, _, err := m.WakeAgentSocketOrRead(t.Context(), sb.ID, Cred{Token: sb.Token}); !errors.Is(err, ErrSleeping) {
 		t.Errorf("WakeAgentSocketOrRead after the reload = %v, want ErrSleeping", err)
 	}
 }
@@ -354,7 +354,7 @@ func TestReaderKeepsTheClaimsLatestSleepOnly(t *testing.T) {
 		t.Fatalf("DialReader: %v", err)
 	}
 	_ = first.Close()
-	if _, _, _, err = m.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
+	if _, _, _, err = m.WakeAgentSocket(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
 		t.Fatalf("wake: %v", err)
 	}
 	if got := m.SleepingSource(sb.ID, sb.Token); got != "" {
@@ -392,7 +392,7 @@ func TestReaderServesAnArchivedClaimFromTheFilesItsEnvelopeLists(t *testing.T) {
 	seedReaderVMs(m, testKey, "sbx-reader-1")
 	clones := len(eng.clones) + len(eng.colds)
 
-	if _, _, _, err := m.WakeAgentSocketOrRead(t.Context(), sb.ID, sb.Token); !errors.Is(err, ErrSleeping) {
+	if _, _, _, err := m.WakeAgentSocketOrRead(t.Context(), sb.ID, Cred{Token: sb.Token}); !errors.Is(err, ErrSleeping) {
 		t.Fatalf("WakeAgentSocketOrRead of an archived claim = %v, want ErrSleeping", err)
 	}
 	conn, source, err := m.DialReader(t.Context(), sb.ID, sb.Token)
@@ -598,7 +598,7 @@ func TestWakeAgentSocketStampsActivityOnlyWhenItServesTheGuest(t *testing.T) {
 			m := readerManagerIf(t, eng, on)
 			sb := mustClaim(t, m, testKey)
 			backdate(m, sb, time.Hour)
-			_, _, done, err := m.WakeAgentSocketOrRead(t.Context(), sb.ID, sb.Token)
+			_, _, done, err := m.WakeAgentSocketOrRead(t.Context(), sb.ID, Cred{Token: sb.Token})
 			if err != nil {
 				t.Fatalf("WakeAgentSocketOrRead: %v", err)
 			}
@@ -608,7 +608,7 @@ func TestWakeAgentSocketStampsActivityOnlyWhenItServesTheGuest(t *testing.T) {
 			}
 			hibernateClaim(t, m, sb)
 			backdate(m, sb, time.Hour)
-			if _, _, _, err = m.WakeAgentSocketOrRead(t.Context(), sb.ID, sb.Token); on != errors.Is(err, ErrSleeping) {
+			if _, _, _, err = m.WakeAgentSocketOrRead(t.Context(), sb.ID, Cred{Token: sb.Token}); on != errors.Is(err, ErrSleeping) {
 				t.Fatalf("WakeAgentSocketOrRead of a hibernated claim = %v with the reader %t", err, on)
 			}
 			if age := time.Since(sb.LastSeen()); on && age < 30*time.Minute {
@@ -629,7 +629,7 @@ func TestReaderOfAStaleSleepIsRetiredEvenWithAConnectionOpen(t *testing.T) {
 		t.Fatalf("DialReader: %v", err)
 	}
 	defer func() { _ = open.Close() }()
-	if _, _, _, err = m.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
+	if _, _, _, err = m.WakeAgentSocket(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
 		t.Fatalf("wake: %v", err)
 	}
 	hibernateClaim(t, m, sb)
@@ -658,7 +658,7 @@ func TestReaderWithAConnectionOpenIsRetiredOnceItsClaimWakesOrLeaves(t *testing.
 		if leave {
 			err = m.Release(t.Context(), sb.ID, Cred{Token: sb.Token})
 		} else {
-			_, _, _, err = m.WakeAgentSocket(t.Context(), sb.ID, sb.Token)
+			_, _, _, err = m.WakeAgentSocket(t.Context(), sb.ID, Cred{Token: sb.Token})
 		}
 		if err != nil {
 			t.Fatalf("leave=%v: %v", leave, err)
@@ -682,7 +682,7 @@ func TestStaleReaderTeardownNeverBlocksTheCaller(t *testing.T) {
 		t.Fatalf("DialReader: %v", err)
 	}
 	defer func() { _ = open.Close() }()
-	if _, _, _, err = m.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
+	if _, _, _, err = m.WakeAgentSocket(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
 		t.Fatalf("wake: %v", err)
 	}
 	stall := make(chan struct{})
@@ -725,7 +725,7 @@ func TestFailedPreHibernateSyncSendsReadsToTheWakePath(t *testing.T) {
 				t.Errorf("SleepingSource = %q with a safe sleep %t", got, tt.safe)
 			}
 			if tt.safe {
-				if _, _, _, err := m.WakeAgentSocketOrRead(t.Context(), sb.ID, sb.Token); !errors.Is(err, ErrSleeping) {
+				if _, _, _, err := m.WakeAgentSocketOrRead(t.Context(), sb.ID, Cred{Token: sb.Token}); !errors.Is(err, ErrSleeping) {
 					t.Fatalf("a safe sleep answered %v, want ErrSleeping", err)
 				}
 				return
@@ -733,7 +733,7 @@ func TestFailedPreHibernateSyncSendsReadsToTheWakePath(t *testing.T) {
 			if _, _, err := m.DialReader(t.Context(), sb.ID, sb.Token); !errors.Is(err, ErrNoReader) {
 				t.Errorf("DialReader of an unsafe sleep = %v, want ErrNoReader", err)
 			}
-			sock, _, done, err := m.WakeAgentSocketOrRead(t.Context(), sb.ID, sb.Token)
+			sock, _, done, err := m.WakeAgentSocketOrRead(t.Context(), sb.ID, Cred{Token: sb.Token})
 			if err != nil || sock == "" {
 				t.Fatalf("a read of an unsafe sleep = %q, %v, want a wake", sock, err)
 			}
@@ -750,7 +750,7 @@ func TestWakeClearsReaderSafe(t *testing.T) {
 	m := newReaderManager(t, eng)
 	sb := mustClaim(t, m, testKey)
 	hibernateClaim(t, m, sb)
-	if _, _, done, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
+	if _, _, done, err := m.WakeAgentSocket(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
 		t.Fatalf("wake: %v", err)
 	} else {
 		done()
@@ -769,7 +769,7 @@ func TestReaderOffRefusesADialAndWakesTheClaim(t *testing.T) {
 	if _, _, err := m.DialReader(t.Context(), sb.ID, sb.Token); !errors.Is(err, ErrNoReader) {
 		t.Errorf("DialReader with the reader off = %v, want ErrNoReader", err)
 	}
-	sock, _, done, err := m.WakeAgentSocketOrRead(t.Context(), sb.ID, sb.Token)
+	sock, _, done, err := m.WakeAgentSocketOrRead(t.Context(), sb.ID, Cred{Token: sb.Token})
 	if err != nil || sock == "" {
 		t.Fatalf("WakeAgentSocketOrRead with the reader off = %q, %v, want a wake", sock, err)
 	}
@@ -784,7 +784,7 @@ func TestReaderOnLeavesRunningClaimsAlone(t *testing.T) {
 	m := newReaderManager(t, eng)
 	sb := mustClaim(t, m, testKey)
 
-	sock, _, done, err := m.WakeAgentSocketOrRead(t.Context(), sb.ID, sb.Token)
+	sock, _, done, err := m.WakeAgentSocketOrRead(t.Context(), sb.ID, Cred{Token: sb.Token})
 	if err != nil || sock != sb.VsockSocket {
 		t.Fatalf("WakeAgentSocketOrRead of a running claim = %q, %v, want its own socket", sock, err)
 	}

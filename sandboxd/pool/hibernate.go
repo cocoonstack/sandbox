@@ -27,17 +27,17 @@ func (m *Manager) Hibernate(ctx context.Context, id string, cred Cred) error {
 }
 
 // WakeAgentSocket resolves a data-plane connection's guest socket; the returned func ends the hold it takes, and the channel closes when the stream must end.
-func (m *Manager) WakeAgentSocket(ctx context.Context, id, token string) (string, <-chan struct{}, func(), error) {
-	return m.agentSocket(ctx, id, token, false)
+func (m *Manager) WakeAgentSocket(ctx context.Context, id string, cred Cred) (string, <-chan struct{}, func(), error) {
+	return m.agentSocket(ctx, id, cred, false)
 }
 
 // WakeAgentSocketOrRead is WakeAgentSocket, except that a sleep a reader can serve answers ErrSleeping instead of waking.
-func (m *Manager) WakeAgentSocketOrRead(ctx context.Context, id, token string) (string, <-chan struct{}, func(), error) {
-	return m.agentSocket(ctx, id, token, true)
+func (m *Manager) WakeAgentSocketOrRead(ctx context.Context, id string, cred Cred) (string, <-chan struct{}, func(), error) {
+	return m.agentSocket(ctx, id, cred, true)
 }
 
-func (m *Manager) agentSocket(ctx context.Context, id, token string, readerOK bool) (string, <-chan struct{}, func(), error) {
-	sb, ok := m.claim(id, token)
+func (m *Manager) agentSocket(ctx context.Context, id string, cred Cred, readerOK bool) (string, <-chan struct{}, func(), error) {
+	sb, ok := m.resolve(id, cred)
 	if !ok {
 		return "", nil, nil, ErrUnknownSandbox
 	}

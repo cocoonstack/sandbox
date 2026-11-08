@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/subtle"
 
+	"github.com/cocoonstack/sandbox/sandboxd/tenants"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
@@ -65,10 +66,17 @@ func (m *Manager) SetInstanceMetadata(ctx context.Context, id string, doc []byte
 }
 
 func (m *Manager) resolve(id string, cred Cred) (*types.Sandbox, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.resolveLocked(id, cred)
+}
+
+func (m *Manager) resolveLocked(id string, cred Cred) (*types.Sandbox, bool) {
 	if cred.Operator {
-		return m.byID(id)
+		sb := m.claimed[id]
+		return sb, sb != nil
 	}
-	return m.claim(id, cred.Token)
+	return m.authed(id, cred.Token)
 }
 
 // byID resolves a live claim by id alone; the caller authorizes the request.
@@ -85,11 +93,29 @@ func (m *Manager) claim(id, token string) (*types.Sandbox, bool) {
 	return m.authed(id, token)
 }
 
-// Callers hold m.mu.
+// authed learns the token of a claim the root adopted on its first match; callers hold m.mu.
 func (m *Manager) authed(id, token string) (*types.Sandbox, bool) {
 	sb := m.claimed[id]
-	if sb == nil || subtle.ConstantTimeCompare([]byte(sb.Token), []byte(token)) != 1 {
+	if sb == nil || token == "" {
+		return nil, false
+	}
+	if sb.Token == "" && tokenMatches(token, sb.TokenSHA256) {
+		sb.Token, sb.TokenSHA256 = token, ""
+	}
+	if subtle.ConstantTimeCompare([]byte(sb.Token), []byte(token)) != 1 {
 		return nil, false
 	}
 	return sb, true
+}
+
+func tokenMatches(token, sum string) bool {
+	return token != "" && subtle.ConstantTimeCompare([]byte(tenants.TokenSHA256(token)), []byte(sum)) == 1
+}
+
+// Callers hold m.mu.
+func tokenSum(sb *types.Sandbox) string {
+	if sb.Token == "" {
+		return sb.TokenSHA256
+	}
+	return tenants.TokenSHA256(sb.Token)
 }

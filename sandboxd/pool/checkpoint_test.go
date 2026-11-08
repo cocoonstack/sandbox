@@ -70,7 +70,7 @@ func TestCheckpointExportLetsADialReachTheRunningSource(t *testing.T) {
 	waitFor(t, func() bool { return eng.exportCount() == 1 })
 	dialed := make(chan error, 1)
 	go func() {
-		_, _, release, err := m.WakeAgentSocket(t.Context(), src.ID, src.Token)
+		_, _, release, err := m.WakeAgentSocket(t.Context(), src.ID, Cred{Token: src.Token})
 		if err == nil {
 			release()
 		}

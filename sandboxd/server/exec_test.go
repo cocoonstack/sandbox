@@ -17,6 +17,8 @@ import (
 	"time"
 
 	"github.com/cocoonstack/sandbox/protocol/wire"
+	"github.com/cocoonstack/sandbox/sandboxd/pool"
+	"github.com/cocoonstack/sandbox/sandboxd/tenants"
 )
 
 const startedFrame = `{"type":"started","pid":7}` + "\n"
@@ -273,13 +275,62 @@ func TestExecReturnsItsBudgetAfterAnswering(t *testing.T) {
 	}
 }
 
+func TestExecTakesTheRootToken(t *testing.T) {
+	tests := []struct {
+		name, token string
+		want        int
+		wantWake    bool
+		wantCred    string
+	}{
+		{"root", "root", http.StatusOK, true, ""},
+		{"the claim token", "tok", http.StatusOK, true, "tok"},
+		{"a tenant token", "acme-token", http.StatusNotFound, true, "acme-token"},
+		{"a wrong token", "wrong", http.StatusNotFound, true, "wrong"},
+		{"no token", "", http.StatusUnauthorized, false, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			woke := make(chan string, 2)
+			audited := make(chan string, 1)
+			mgr := &execManager{
+				fakeManager: &fakeManager{audited: func(id string, _ []byte) { audited <- id }},
+				wake: func(_ context.Context, _, token string) (string, error) {
+					woke <- token
+					if token == "" || token == "tok" {
+						return "/v/sock", nil
+					}
+					return "", pool.ErrUnknownSandbox
+				},
+			}
+			ts := newTenantTestServer(t, "root", []tenants.TenantSpec{{Name: "acme", Token: "acme-token"}}, mgr, pipeDialer(okGuest))
+
+			code, body := bodyOf(t, http.MethodPost, ts.URL+"/v1/sandboxes/sb_1/exec", tt.token, `{"argv":["true"]}`)
+			if code != tt.want {
+				t.Fatalf("status %d, want %d: %s", code, tt.want, body)
+			}
+			if !tt.wantWake {
+				if len(woke) != 0 {
+					t.Errorf("woke with %q, want no wake", <-woke)
+				}
+				return
+			}
+			if got := <-woke; got != tt.wantCred {
+				t.Errorf("woke with %q, want %q", got, tt.wantCred)
+			}
+			if wantAudit := code == http.StatusOK; (len(audited) == 1) != wantAudit {
+				t.Errorf("audited %d records, want one %v", len(audited), wantAudit)
+			}
+		})
+	}
+}
+
 type execManager struct {
 	*fakeManager
 	wake func(context.Context, string, string) (string, error)
 }
 
-func (m *execManager) WakeAgentSocket(ctx context.Context, id, token string) (string, <-chan struct{}, func(), error) {
-	sock, err := m.wake(ctx, id, token)
+func (m *execManager) WakeAgentSocket(ctx context.Context, id string, cred pool.Cred) (string, <-chan struct{}, func(), error) {
+	sock, err := m.wake(ctx, id, credToken(cred))
 	return sock, nil, func() {}, err
 }
 

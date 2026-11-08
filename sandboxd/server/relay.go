@@ -35,7 +35,7 @@ var (
 	silkdEnds = relayEnds{guest: func(c net.Conn) { _ = c.Close() }, client: drainClient}
 )
 
-type agentWaker func(ctx context.Context, id, token string) (string, <-chan struct{}, func(), error)
+type agentWaker func(ctx context.Context, id string, cred pool.Cred) (string, <-chan struct{}, func(), error)
 
 // relayEnds is what a finished direction means to the peer that did not end it.
 type relayEnds struct {
@@ -60,7 +60,7 @@ func (s *Server) handleAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := r.PathValue("id")
-	guest, done, sleeping, ok := s.wakeGuest(r.Context(), w, id, token, s.mgr.WakeAgentSocketOrRead)
+	guest, done, sleeping, ok := s.wakeGuest(r.Context(), w, id, pool.Cred{Token: token}, s.mgr.WakeAgentSocketOrRead)
 	if sleeping {
 		s.serveSleeping(r.Context(), w, id, token)
 		return
@@ -77,8 +77,8 @@ func (s *Server) handleAgent(w http.ResponseWriter, r *http.Request) {
 }
 
 // wakeGuest dials the sandbox's silkd, waking a hibernated VM first unless wake answers ErrSleeping; on failure it has already answered the request.
-func (s *Server) wakeGuest(ctx context.Context, w http.ResponseWriter, id, token string, wake agentWaker) (guest net.Conn, release func(), sleeping, ok bool) {
-	guest, done, err := s.openGuest(ctx, id, token, wake)
+func (s *Server) wakeGuest(ctx context.Context, w http.ResponseWriter, id string, cred pool.Cred, wake agentWaker) (guest net.Conn, release func(), sleeping, ok bool) {
+	guest, done, err := s.openGuest(ctx, id, cred, wake)
 	switch {
 	case err == nil:
 		return guest, done, false, true

@@ -14,6 +14,7 @@ import (
 	"github.com/projecteru2/core/log"
 
 	"github.com/cocoonstack/sandbox/protocol/wire"
+	"github.com/cocoonstack/sandbox/sandboxd/pool"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
@@ -61,8 +62,8 @@ func (s *Server) handleExec(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
-	id := r.PathValue("id")
-	guest, done, _, ok := s.wakeGuest(ctx, w, id, token, s.mgr.WakeAgentSocket)
+	id, cred := r.PathValue("id"), s.sandboxCred(token)
+	guest, done, _, ok := s.wakeGuest(ctx, w, id, cred, s.mgr.WakeAgentSocket)
 	if !ok {
 		return
 	}
@@ -94,7 +95,7 @@ func (s *Server) handleExec(w http.ResponseWriter, r *http.Request) {
 	})
 	if pid != 0 && (ctx.Err() != nil || errors.Is(err, errExecOutputCap) || errors.Is(err, errExecBudget)) {
 		// A dropped connection only reaches a child that writes; a silent one needs the kill
-		if killErr := s.killExec(ctx, id, token, pid); killErr != nil {
+		if killErr := s.killExec(ctx, id, cred, pid); killErr != nil {
 			log.WithFunc("server.handleExec").Errorf(ctx, killErr, "kill exec pid %d in %s", pid, id)
 		}
 	}
@@ -121,10 +122,10 @@ func (s *Server) handleExec(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *Server) killExec(ctx context.Context, id, token string, pid uint32) error {
+func (s *Server) killExec(ctx context.Context, id string, cred pool.Cred, pid uint32) error {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), execKillWait)
 	defer cancel()
-	sock, _, done, err := s.mgr.WakeAgentSocket(ctx, id, token)
+	sock, _, done, err := s.mgr.WakeAgentSocket(ctx, id, cred)
 	if err != nil {
 		return err
 	}

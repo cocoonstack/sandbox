@@ -310,15 +310,64 @@ func TestAgentSocketValidatesToken(t *testing.T) {
 	m := newTestManager(t, newFakeEngine())
 	sb := mustClaim(t, m, testKey)
 
-	if _, wrongErr := m.AgentSocket(sb.ID, "wrong"); !errors.Is(wrongErr, ErrUnknownSandbox) {
+	if _, wrongErr := m.AgentSocket(sb.ID, Cred{Token: "wrong"}); !errors.Is(wrongErr, ErrUnknownSandbox) {
 		t.Errorf("got %v, want ErrUnknownSandbox", wrongErr)
 	}
-	sock, err := m.AgentSocket(sb.ID, sb.Token)
+	sock, err := m.AgentSocket(sb.ID, Cred{Token: sb.Token})
 	if err != nil {
 		t.Fatalf("AgentSocket: %v", err)
 	}
 	if sock != sb.VsockSocket {
 		t.Errorf("got %q, want %q", sock, sb.VsockSocket)
+	}
+}
+
+func TestAnEmptyTokenNeverAuthenticatesATokenlessClaim(t *testing.T) {
+	for _, sum := range []string{"", tenants.TokenSHA256("")} {
+		t.Run(fmt.Sprintf("stored hash %q", sum), func(t *testing.T) {
+			m := newTestManager(t, newFakeEngine())
+			sb := mustClaim(t, m, testKey)
+			m.mu.Lock()
+			sb.Token, sb.TokenSHA256 = "", sum
+			m.mu.Unlock()
+
+			if _, ok := m.resolve(sb.ID, Cred{}); ok {
+				t.Error("an empty token resolved a tokenless claim")
+			}
+			if _, err := m.AgentSocket(sb.ID, Cred{}); !errors.Is(err, ErrUnknownSandbox) {
+				t.Errorf("agent socket: %v, want ErrUnknownSandbox", err)
+			}
+			if _, _, _, err := m.WakeAgentSocket(t.Context(), sb.ID, Cred{}); !errors.Is(err, ErrUnknownSandbox) {
+				t.Errorf("wake: %v, want ErrUnknownSandbox", err)
+			}
+			if _, err := m.ClaimDeadline(sb.ID, ""); !errors.Is(err, ErrUnknownSandbox) {
+				t.Errorf("deadline: %v, want ErrUnknownSandbox", err)
+			}
+			if err := m.Release(t.Context(), sb.ID, Cred{}); !errors.Is(err, ErrUnknownSandbox) {
+				t.Errorf("release: %v, want ErrUnknownSandbox", err)
+			}
+			if _, held := m.byID(sb.ID); !held {
+				t.Error("an empty token released the claim")
+			}
+		})
+	}
+}
+
+func TestTheRootWakesAHibernatedClaimsAgentSocket(t *testing.T) {
+	m := newTestManager(t, newFakeEngine())
+	sb := mustClaim(t, m, testKey)
+	hibernateClaim(t, m, sb)
+
+	sock, _, done, err := m.WakeAgentSocket(t.Context(), sb.ID, Cred{Operator: true})
+	if err != nil {
+		t.Fatalf("root wake: %v", err)
+	}
+	done()
+	m.mu.Lock()
+	snap := sb.HibernateSnap
+	m.mu.Unlock()
+	if sock == "" || snap != "" {
+		t.Errorf("root wake socket %q snapshot %q, want a running claim", sock, snap)
 	}
 }
 
@@ -358,14 +407,14 @@ func TestReconcileAdoptsLiveClaimsAndDestroysTheRest(t *testing.T) {
 	if err := m.Reconcile(t.Context()); err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
-	sock, err := m.AgentSocket("sb_live", "tok")
+	sock, err := m.AgentSocket("sb_live", Cred{Token: "tok"})
 	if err != nil {
 		t.Fatalf("live claim not adopted: %v", err)
 	}
 	if sock != "/vsock/live-new" {
 		t.Errorf("vsock %q, want refreshed /vsock/live-new", sock)
 	}
-	if _, err := m.AgentSocket("sb_dead", "tok"); !errors.Is(err, ErrUnknownSandbox) {
+	if _, err := m.AgentSocket("sb_dead", Cred{Token: "tok"}); !errors.Is(err, ErrUnknownSandbox) {
 		t.Error("dead claim survived reconcile")
 	}
 	if !slices.Contains(eng.removes, "sbx-stale-1") {
@@ -2321,14 +2370,14 @@ func mustFlush(t *testing.T, m *Manager) {
 
 func mustAdopt(t *testing.T, m *Manager, sb *types.Sandbox, step string) {
 	t.Helper()
-	if adopted, err := m.AdoptArchived(t.Context(), sb.ID, sb.Token); err != nil || !adopted {
+	if adopted, err := m.AdoptArchived(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil || !adopted {
 		t.Fatalf("%s: %v %v, want adopted", step, adopted, err)
 	}
 }
 
 func mustNotAdopt(t *testing.T, m *Manager, sb *types.Sandbox, step string) {
 	t.Helper()
-	if adopted, err := m.AdoptArchived(t.Context(), sb.ID, sb.Token); err != nil || adopted {
+	if adopted, err := m.AdoptArchived(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil || adopted {
 		t.Fatalf("%s: %v %v, want refused", step, adopted, err)
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -210,7 +211,7 @@ func TestFailoverOwnerWakeTakesThenDeletesTheRow(t *testing.T) {
 	mustArchive(t, a, sb)
 	ck := sb.ArchiveCk
 
-	if _, _, _, err := a.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
+	if _, _, _, err := a.WakeAgentSocket(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
 		t.Fatalf("wake: %v", err)
 	}
 	if _, ok, _ := c.reg.Get(t.Context(), sb.ID); ok || c.reg.Deletes() != 1 {
@@ -231,7 +232,7 @@ func TestFailoverOwnerWakeWithTheRegistryDownFailsClosed(t *testing.T) {
 	sb := mustClaim(t, a, testKey)
 	mustArchive(t, a, sb)
 	c.reg.SetDown(true)
-	if _, _, _, err := a.WakeAgentSocket(t.Context(), sb.ID, sb.Token); !errors.Is(err, ErrArchiveStoreDown) {
+	if _, _, _, err := a.WakeAgentSocket(t.Context(), sb.ID, Cred{Token: sb.Token}); !errors.Is(err, ErrArchiveStoreDown) {
 		t.Fatalf("wake: %v, want ErrArchiveStoreDown", err)
 	}
 	a.mu.Lock()
@@ -255,7 +256,7 @@ func TestFailoverAdoptionMovesTheClaimAndTheOldOwnerLetsGo(t *testing.T) {
 		t.Errorf("row %s@%d, want b@2", rec.Owner, rec.Epoch)
 	}
 	c.renew(t, "a")
-	if _, _, _, err := a.WakeAgentSocket(t.Context(), sb.ID, sb.Token); !errors.Is(err, ErrUnknownSandbox) {
+	if _, _, _, err := a.WakeAgentSocket(t.Context(), sb.ID, Cred{Token: sb.Token}); !errors.Is(err, ErrUnknownSandbox) {
 		t.Errorf("old owner's wake: %v, want ErrUnknownSandbox", err)
 	}
 	if _, held := a.byID(sb.ID); held {
@@ -264,7 +265,7 @@ func TestFailoverAdoptionMovesTheClaimAndTheOldOwnerLetsGo(t *testing.T) {
 	if !ckExists(t, b, ck) {
 		t.Fatal("the old owner deleted the adopter's checkpoint")
 	}
-	if _, _, _, err := b.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
+	if _, _, _, err := b.WakeAgentSocket(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
 		t.Fatalf("adopter's wake: %v", err)
 	}
 	if _, ok, _ := c.reg.Get(t.Context(), sb.ID); ok || ckExists(t, b, ck) {
@@ -323,7 +324,7 @@ func TestFailoverAdoptionIgnoresClaimCapsAndAWakeStillChecksMaxRunning(t *testin
 	a.Drain(t.Context())
 
 	mustAdopt(t, b, lost, "adopt on a node at node and tenant max_claims")
-	if _, _, _, err = b.WakeAgentSocket(t.Context(), lost.ID, lost.Token); !errors.Is(err, ErrQuota) {
+	if _, _, _, err = b.WakeAgentSocket(t.Context(), lost.ID, Cred{Token: lost.Token}); !errors.Is(err, ErrQuota) {
 		t.Fatalf("wake at max_running: %v, want ErrQuota", err)
 	}
 	sb, held := b.byID(lost.ID)
@@ -345,10 +346,10 @@ func TestFailoverAdoptionNeedsTheToken(t *testing.T) {
 	mustArchive(t, a, sb)
 	c.expire("a")
 
-	if adopted, err := b.AdoptArchived(t.Context(), sb.ID, "wrong"); err != nil || adopted {
+	if adopted, err := b.AdoptArchived(t.Context(), sb.ID, Cred{Token: "wrong"}); err != nil || adopted {
 		t.Errorf("adopt with a wrong token: %v %v, want refused", adopted, err)
 	}
-	if adopted, err := b.AdoptArchived(t.Context(), "sb_unknown", sb.Token); err != nil || adopted {
+	if adopted, err := b.AdoptArchived(t.Context(), "sb_unknown", Cred{Token: sb.Token}); err != nil || adopted {
 		t.Errorf("adopt of an id with no row: %v %v, want refused", adopted, err)
 	}
 	if _, held := b.byID(sb.ID); held {
@@ -369,7 +370,7 @@ func TestFailoverConcurrentAdoptionsLeaveOneOwner(t *testing.T) {
 	var wg sync.WaitGroup
 	for i, m := range adopters {
 		wg.Go(func() {
-			adopted, err := m.AdoptArchived(t.Context(), sb.ID, sb.Token)
+			adopted, err := m.AdoptArchived(t.Context(), sb.ID, Cred{Token: sb.Token})
 			if err != nil {
 				t.Errorf("adopt on %s: %v", m.nodeID, err)
 			}
@@ -400,7 +401,7 @@ func TestFailoverRestartDropsAClaimAdoptedElsewhere(t *testing.T) {
 	mustArchive(t, a, sb)
 	c.expire("a")
 	mustAdopt(t, b, sb, "adopt")
-	if _, _, _, err := b.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
+	if _, _, _, err := b.WakeAgentSocket(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
 		t.Fatalf("adopter's wake: %v", err)
 	}
 	moved, _ := b.byID(sb.ID)
@@ -418,7 +419,7 @@ func TestFailoverRestartDropsAClaimAdoptedElsewhere(t *testing.T) {
 	if !ckExists(t, b, adopterCk) {
 		t.Fatal("the restarted node deleted the adopter's checkpoint")
 	}
-	if _, _, _, err := b.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
+	if _, _, _, err := b.WakeAgentSocket(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
 		t.Errorf("adopter's wake after the restart: %v", err)
 	}
 }
@@ -643,12 +644,12 @@ func TestFailoverAdoptionMidWakeFencesTheOwnerOut(t *testing.T) {
 	ck := sb.ArchiveCk
 	a.archives = &hookRegistry{Registry: c.reg, beforeConsume: func() {
 		c.expire("a")
-		if adopted, err := b.AdoptArchived(t.Context(), sb.ID, sb.Token); err != nil || !adopted {
+		if adopted, err := b.AdoptArchived(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil || !adopted {
 			t.Errorf("adopt mid-wake: %v %v, want adopted", adopted, err)
 		}
 	}}
 
-	if _, _, _, err := a.WakeAgentSocket(t.Context(), sb.ID, sb.Token); !errors.Is(err, ErrUnknownSandbox) {
+	if _, _, _, err := a.WakeAgentSocket(t.Context(), sb.ID, Cred{Token: sb.Token}); !errors.Is(err, ErrUnknownSandbox) {
 		t.Fatalf("owner's wake after a mid-wake adoption: %v, want ErrUnknownSandbox", err)
 	}
 	eng := fakeOf(a)
@@ -674,7 +675,7 @@ func TestFailoverWakeRollbackRecoversOnTheNextWake(t *testing.T) {
 	sb := mustClaim(t, a, testKey)
 	mustArchive(t, a, sb)
 	breakStore(t, a)
-	if _, _, _, err := a.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err == nil {
+	if _, _, _, err := a.WakeAgentSocket(t.Context(), sb.ID, Cred{Token: sb.Token}); err == nil {
 		t.Fatal("wake with claims.json unwritable succeeded")
 	}
 	a.mu.Lock()
@@ -687,7 +688,7 @@ func TestFailoverWakeRollbackRecoversOnTheNextWake(t *testing.T) {
 		t.Error("the rolled-back wake dropped the claim's archive epoch")
 	}
 	healStore(t, a)
-	if _, _, _, err := a.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
+	if _, _, _, err := a.WakeAgentSocket(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
 		t.Fatalf("wake after the store heals: %v", err)
 	}
 }
@@ -772,13 +773,13 @@ func TestFailoverWakeAfterALostConsumeReplyKeepsTheClaim(t *testing.T) {
 	ck := sb.ArchiveCk
 	a.archives = &hookRegistry{Registry: c.reg, loseConsumeReply: true}
 
-	if _, _, _, err := a.WakeAgentSocket(t.Context(), sb.ID, sb.Token); !errors.Is(err, ErrArchiveStoreDown) {
+	if _, _, _, err := a.WakeAgentSocket(t.Context(), sb.ID, Cred{Token: sb.Token}); !errors.Is(err, ErrArchiveStoreDown) {
 		t.Fatalf("wake whose consume reply was lost: %v, want ErrArchiveStoreDown", err)
 	}
 	if rec, _, _ := c.reg.Get(t.Context(), sb.ID); !rec.Consumed {
 		t.Fatal("setup: the consume did not land")
 	}
-	if _, _, _, err := a.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
+	if _, _, _, err := a.WakeAgentSocket(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
 		t.Fatalf("retried wake: %v, want the claim re-armed from its own tombstone", err)
 	}
 	if _, held := a.byID(sb.ID); !held || ckExists(t, a, ck) {
@@ -801,7 +802,7 @@ func TestFailoverRestartAfterAConsumeWithoutCommitKeepsTheClaim(t *testing.T) {
 	if rec, ok, _ := c.reg.Get(t.Context(), sb.ID); !ok || rec.Owner != "a" || rec.Consumed || held == nil || held.ArchiveEpoch != rec.Epoch {
 		t.Fatalf("row %+v present %v, held %v, want the tombstone re-armed at the claim's epoch", rec, ok, held != nil)
 	}
-	if _, _, _, err := restarted.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
+	if _, _, _, err := restarted.WakeAgentSocket(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
 		t.Errorf("wake after the restart: %v", err)
 	}
 }
@@ -815,7 +816,7 @@ func TestFailoverAnArchiveWokenElsewhereIsDropped(t *testing.T) {
 	mustFlush(t, a)
 	c.expire("a")
 	mustAdopt(t, b, sb, "adopt")
-	if _, _, _, err := b.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
+	if _, _, _, err := b.WakeAgentSocket(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
 		t.Fatalf("adopter's wake: %v", err)
 	}
 	c.renew(t, "a")
@@ -824,7 +825,7 @@ func TestFailoverAnArchiveWokenElsewhereIsDropped(t *testing.T) {
 	if _, held := restarted.byID(sb.ID); held {
 		t.Error("the restart kept a claim whose checkpoint an adopter consumed")
 	}
-	if _, _, _, err := a.WakeAgentSocket(t.Context(), sb.ID, sb.Token); !errors.Is(err, ErrUnknownSandbox) {
+	if _, _, _, err := a.WakeAgentSocket(t.Context(), sb.ID, Cred{Token: sb.Token}); !errors.Is(err, ErrUnknownSandbox) {
 		t.Errorf("old owner's wake: %v, want ErrUnknownSandbox", err)
 	}
 	if _, ok, _ := c.reg.Get(t.Context(), sb.ID); ok {
@@ -844,7 +845,7 @@ func TestFailoverALeftoverDeleteMarkerSparesTheAdoptersCheckpoint(t *testing.T) 
 	c.expire("a")
 	mustAdopt(t, b, sb, "adopt")
 	c.renew(t, "a")
-	if _, _, _, err := a.WakeAgentSocket(t.Context(), sb.ID, sb.Token); !errors.Is(err, ErrUnknownSandbox) {
+	if _, _, _, err := a.WakeAgentSocket(t.Context(), sb.ID, Cred{Token: sb.Token}); !errors.Is(err, ErrUnknownSandbox) {
 		t.Fatalf("old owner's wake: %v, want ErrUnknownSandbox", err)
 	}
 	a.retryArchiveDeletes(t.Context())
@@ -891,7 +892,7 @@ func TestFailoverARepeatedAdoptionOnOneNodeKeepsOneClaim(t *testing.T) {
 	var wg sync.WaitGroup
 	for range 2 {
 		wg.Go(func() {
-			if _, err := b.AdoptArchived(t.Context(), sb.ID, sb.Token); err != nil {
+			if _, err := b.AdoptArchived(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
 				t.Errorf("racing adopt: %v", err)
 			}
 		})
@@ -909,7 +910,7 @@ func TestFailoverARepeatedAdoptionOnOneNodeKeepsOneClaim(t *testing.T) {
 	if rec.Owner != "b" || epoch != rec.Epoch {
 		t.Errorf("row %s@%d, local epoch %d, want the claim at the row's epoch", rec.Owner, rec.Epoch, epoch)
 	}
-	if _, _, _, err := b.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
+	if _, _, _, err := b.WakeAgentSocket(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
 		t.Errorf("wake after repeated adoptions: %v", err)
 	}
 }
@@ -924,7 +925,7 @@ func TestFailoverRestartInsideAnAdoptersWakeDropsTheClaim(t *testing.T) {
 	c.expire("a")
 	mustAdopt(t, b, sb, "adopt")
 	b.ckpts = &failingDeleteStore{Store: b.ckpts, attempts: make(chan string, 8)}
-	if _, _, _, err := b.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
+	if _, _, _, err := b.WakeAgentSocket(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
 		t.Fatalf("adopter's wake: %v", err)
 	}
 	if !ckExists(t, b, ck) {
@@ -1018,7 +1019,7 @@ func TestFailoverRestartDropsAClaimAdoptedWhileItsInterruptedArchiveSettles(t *t
 	restarted := c.restart(t, a)
 	restarted.archives = &hookRegistry{Registry: c.reg, beforeDelete: func() {
 		c.expire("a")
-		if adopted, err := b.AdoptArchived(t.Context(), sb.ID, sb.Token); err != nil || !adopted {
+		if adopted, err := b.AdoptArchived(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil || !adopted {
 			t.Errorf("adopt during the restart: %v %v, want adopted", adopted, err)
 		}
 	}}
@@ -1069,7 +1070,7 @@ func TestFailoverRestartLeavesItsOwnTombstoneToTheSweep(t *testing.T) {
 	sb := mustClaim(t, a, testKey)
 	mustArchive(t, a, sb)
 	a.ckpts = &failingDeleteStore{Store: a.ckpts, attempts: make(chan string, 8)}
-	if _, _, _, err := a.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
+	if _, _, _, err := a.WakeAgentSocket(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
 		t.Fatalf("wake: %v", err)
 	}
 	mustFlush(t, a)
@@ -1095,7 +1096,7 @@ func TestFailoverSweepLeavesADepartedOwnersTombstoneUntilItReturns(t *testing.T)
 	mustAdopt(t, b, sb, "adopt")
 	healthy := b.ckpts
 	b.ckpts = &failingDeleteStore{Store: healthy, attempts: make(chan string, 8)}
-	if _, _, _, err := b.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
+	if _, _, _, err := b.WakeAgentSocket(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
 		t.Fatalf("adopter's wake: %v", err)
 	}
 	before, _, _ := c.reg.Get(t.Context(), sb.ID)
@@ -1121,7 +1122,7 @@ func TestFailoverSweepPurgesItsOwnTombstoneNoClaimHolds(t *testing.T) {
 	ck := sb.ArchiveCk
 	healthy := a.ckpts
 	a.ckpts = &failingDeleteStore{Store: healthy, attempts: make(chan string, 8)}
-	if _, _, _, err := a.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
+	if _, _, _, err := a.WakeAgentSocket(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
 		t.Fatalf("wake: %v", err)
 	}
 	a.ckpts = healthy
@@ -1158,7 +1159,7 @@ func TestFailoverSweepSparesATombstoneItsClaimStillHolds(t *testing.T) {
 	sb := mustClaim(t, a, testKey)
 	mustArchive(t, a, sb)
 	a.archives = &hookRegistry{Registry: c.reg, loseConsumeReply: true}
-	if _, _, _, err := a.WakeAgentSocket(t.Context(), sb.ID, sb.Token); !errors.Is(err, ErrArchiveStoreDown) {
+	if _, _, _, err := a.WakeAgentSocket(t.Context(), sb.ID, Cred{Token: sb.Token}); !errors.Is(err, ErrArchiveStoreDown) {
 		t.Fatalf("wake whose consume reply was lost: %v, want ErrArchiveStoreDown", err)
 	}
 
@@ -1166,7 +1167,7 @@ func TestFailoverSweepSparesATombstoneItsClaimStillHolds(t *testing.T) {
 	if _, ok, _ := c.reg.Get(t.Context(), sb.ID); !ok || !ckExists(t, a, sb.ArchiveCk) {
 		t.Fatal("the sweep purged a tombstone whose archived claim still holds the checkpoint")
 	}
-	if _, _, _, err := a.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
+	if _, _, _, err := a.WakeAgentSocket(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
 		t.Errorf("retried wake after the sweep: %v", err)
 	}
 }
@@ -1177,7 +1178,7 @@ func TestFailoverATombstoneIsNotAdopted(t *testing.T) {
 	sb := mustClaim(t, a, testKey)
 	mustArchive(t, a, sb)
 	a.ckpts = &failingDeleteStore{Store: a.ckpts, attempts: make(chan string, 8)}
-	if _, _, _, err := a.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
+	if _, _, _, err := a.WakeAgentSocket(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
 		t.Fatalf("wake: %v", err)
 	}
 	c.expire("a")
@@ -1214,7 +1215,7 @@ func TestFailoverADropClearsTheMarkerBeforeTheCheckpointIsUnpinned(t *testing.T)
 				}
 			}
 		})
-		_, _, _, err := a.WakeAgentSocket(t.Context(), sb.ID, sb.Token)
+		_, _, _, err := a.WakeAgentSocket(t.Context(), sb.ID, Cred{Token: sb.Token})
 		close(done)
 		wg.Wait()
 		if !errors.Is(err, ErrUnknownSandbox) {
@@ -1232,7 +1233,7 @@ func TestFailoverReleaseAfterALostTakeReplyLeavesNoLiveRow(t *testing.T) {
 	sb := mustClaim(t, a, testKey)
 	mustArchive(t, a, sb)
 	a.archives = &hookRegistry{Registry: c.reg, loseTakeReply: true}
-	if _, _, _, err := a.WakeAgentSocket(t.Context(), sb.ID, sb.Token); !errors.Is(err, ErrArchiveStoreDown) {
+	if _, _, _, err := a.WakeAgentSocket(t.Context(), sb.ID, Cred{Token: sb.Token}); !errors.Is(err, ErrArchiveStoreDown) {
 		t.Fatalf("wake whose take reply was lost: %v, want ErrArchiveStoreDown", err)
 	}
 	if err := a.Release(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
@@ -1247,11 +1248,11 @@ func TestFailoverReleaseAfterALostRearmReplyLeavesNoLiveRow(t *testing.T) {
 	sb := mustClaim(t, a, testKey)
 	mustArchive(t, a, sb)
 	a.archives = &hookRegistry{Registry: c.reg, loseConsumeReply: true}
-	if _, _, _, err := a.WakeAgentSocket(t.Context(), sb.ID, sb.Token); !errors.Is(err, ErrArchiveStoreDown) {
+	if _, _, _, err := a.WakeAgentSocket(t.Context(), sb.ID, Cred{Token: sb.Token}); !errors.Is(err, ErrArchiveStoreDown) {
 		t.Fatalf("wake whose consume reply was lost: %v, want ErrArchiveStoreDown", err)
 	}
 	a.archives = &hookRegistry{Registry: c.reg, losePutReply: true}
-	if _, _, _, err := a.WakeAgentSocket(t.Context(), sb.ID, sb.Token); !errors.Is(err, ErrArchiveStoreDown) {
+	if _, _, _, err := a.WakeAgentSocket(t.Context(), sb.ID, Cred{Token: sb.Token}); !errors.Is(err, ErrArchiveStoreDown) {
 		t.Fatalf("wake whose re-arm reply was lost: %v, want ErrArchiveStoreDown", err)
 	}
 	if rec, _, _ := c.reg.Get(t.Context(), sb.ID); rec.Consumed {
@@ -1311,7 +1312,7 @@ func TestFailoverSweepRearmsATombstoneItsArchivedClaimHolds(t *testing.T) {
 	sb := mustClaim(t, a, testKey)
 	mustArchive(t, a, sb)
 	a.archives = &hookRegistry{Registry: c.reg, loseConsumeReply: true}
-	if _, _, _, err := a.WakeAgentSocket(t.Context(), sb.ID, sb.Token); !errors.Is(err, ErrArchiveStoreDown) {
+	if _, _, _, err := a.WakeAgentSocket(t.Context(), sb.ID, Cred{Token: sb.Token}); !errors.Is(err, ErrArchiveStoreDown) {
 		t.Fatalf("wake whose consume reply was lost: %v, want ErrArchiveStoreDown", err)
 	}
 
@@ -1359,7 +1360,7 @@ func TestFailoverRestartAfterAConsumeWhileAPeerSweptKeepsTheClaim(t *testing.T) 
 	if _, held := restarted.byID(sb.ID); !held {
 		t.Fatal("the restart dropped a claim whose only copy a peer swept")
 	}
-	if _, _, _, err := restarted.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
+	if _, _, _, err := restarted.WakeAgentSocket(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
 		t.Errorf("wake after the restart: %v", err)
 	}
 }
@@ -1411,7 +1412,7 @@ func TestFailoverAWakeKeepsItsFenceAgainstThisNodesOwnAdoption(t *testing.T) {
 	mustAdopt(t, b, sb, "adopt")
 	b.archives = &hookRegistry{Registry: c.reg, beforeConsume: func() {
 		taken, _, _ := c.reg.Get(t.Context(), sb.ID)
-		if adopted, err := b.AdoptArchived(t.Context(), sb.ID, sb.Token); err != nil || !adopted {
+		if adopted, err := b.AdoptArchived(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil || !adopted {
 			t.Errorf("racing adopt: %v %v, want this node to answer for the claim", adopted, err)
 		}
 		if rec, _, _ := c.reg.Get(t.Context(), sb.ID); rec.Epoch != taken.Epoch {
@@ -1419,7 +1420,7 @@ func TestFailoverAWakeKeepsItsFenceAgainstThisNodesOwnAdoption(t *testing.T) {
 		}
 	}}
 
-	if _, _, _, err := b.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
+	if _, _, _, err := b.WakeAgentSocket(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
 		t.Fatalf("wake raced by this node's own adoption: %v, want it to commit", err)
 	}
 	held, ok := b.byID(sb.ID)
@@ -1456,7 +1457,7 @@ func TestFailoverConcurrentAdoptionsOnOneNodeAllAnswerForIt(t *testing.T) {
 	for range callers {
 		wg.Go(func() {
 			<-start
-			adopted, err := b.AdoptArchived(t.Context(), sb.ID, sb.Token)
+			adopted, err := b.AdoptArchived(t.Context(), sb.ID, Cred{Token: sb.Token})
 			if err != nil || !adopted {
 				refused.Add(1)
 			}
@@ -1485,7 +1486,7 @@ func TestFailoverACoalescedAdoptionStillNeedsTheToken(t *testing.T) {
 		wrong := make(chan bool, 1)
 		b.archives = &hookRegistry{Registry: c.reg, beforeTake: func() {
 			go func() {
-				ok, _ := b.AdoptArchived(t.Context(), sb.ID, "wrong")
+				ok, _ := b.AdoptArchived(t.Context(), sb.ID, Cred{Token: "wrong"})
 				wrong <- ok
 			}()
 			select {
@@ -1538,7 +1539,7 @@ func TestFailoverRestartDropsAClaimWhoseInterruptedArchiveWasConsumedElsewhere(t
 	ck := interruptArchive(t, a, sb, true)
 	c.expire("a")
 	mustAdopt(t, b, sb, "adopt")
-	if _, _, _, err := b.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
+	if _, _, _, err := b.WakeAgentSocket(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
 		t.Fatalf("adopter's wake: %v", err)
 	}
 	if _, ok, _ := c.reg.Get(t.Context(), sb.ID); ok || ckExists(t, b, ck) {
@@ -1634,7 +1635,7 @@ func TestFailoverAnOwnerReturningWithItsWakeCommittedPurgesItsTombstone(t *testi
 	mustArchive(t, a, sb)
 	ck := sb.ArchiveCk
 	a.ckpts = &failingDeleteStore{Store: a.ckpts, attempts: make(chan string, 8)}
-	if _, _, _, err := a.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
+	if _, _, _, err := a.WakeAgentSocket(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
 		t.Fatalf("wake: %v", err)
 	}
 	mustFlush(t, a)
@@ -1662,10 +1663,10 @@ func TestFailoverRestartDropsAClaimConsumedWhileItSettlesItsInterruptedArchive(t
 	restarted := c.restart(t, a)
 	restarted.archives = &hookRegistry{Registry: c.reg, beforeDelete: func() {
 		c.expire("a")
-		if adopted, err := b.AdoptArchived(t.Context(), sb.ID, sb.Token); err != nil || !adopted {
+		if adopted, err := b.AdoptArchived(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil || !adopted {
 			t.Errorf("adopt during the restart: %v %v, want adopted", adopted, err)
 		}
-		if _, _, _, err := b.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
+		if _, _, _, err := b.WakeAgentSocket(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
 			t.Errorf("adopter's wake during the restart: %v", err)
 		}
 	}}
@@ -1766,7 +1767,7 @@ func TestFailoverAWakeSettlesALostArchivePutReplyFirst(t *testing.T) {
 	hibernateClaim(t, a, sb)
 	c.archiveLosingPutReply(t, a, sb)
 	a.archives = c.reg
-	if _, _, _, err := a.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
+	if _, _, _, err := a.WakeAgentSocket(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
 		t.Fatalf("wake: %v", err)
 	}
 	a.mu.Lock()
@@ -1793,7 +1794,7 @@ func TestFailoverAWakeWithoutARegistryKeepsItsPendingIntent(t *testing.T) {
 	pending := sb.ArchivePending
 	a.mu.Unlock()
 	a.archives = nil
-	if _, _, _, err := a.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
+	if _, _, _, err := a.WakeAgentSocket(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
 		t.Fatalf("wake with failover off: %v", err)
 	}
 	if hibernated(a) != 0 {
@@ -1818,7 +1819,7 @@ func TestFailoverAReleaseFindsItsUnsettledArchiveTakenElsewhere(t *testing.T) {
 	c.archiveLosingPutReply(t, a, sb)
 	c.expire("a")
 	mustAdopt(t, b, sb, "adopt")
-	if _, _, _, err := b.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
+	if _, _, _, err := b.WakeAgentSocket(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
 		t.Fatalf("adopter's wake: %v", err)
 	}
 	c.renew(t, "a")
@@ -1852,12 +1853,12 @@ func TestALookupRacingAWakeAdoptionTakesTheRowOnce(t *testing.T) {
 		lookup := make(chan bool, 1)
 		reg.afterTake = func() {
 			go func() {
-				adopted, _ := b.AdoptArchived(t.Context(), sb.ID, sb.Token)
+				adopted, _ := b.AdoptArchived(t.Context(), sb.ID, Cred{Token: sb.Token})
 				lookup <- adopted
 			}()
 			synctest.Wait()
 		}
-		if adopted, adoptErr := b.AdoptForWake(t.Context(), sb.ID, sb.Token); adoptErr != nil || !adopted {
+		if adopted, adoptErr := b.AdoptForWake(t.Context(), sb.ID, Cred{Token: sb.Token}); adoptErr != nil || !adopted {
 			t.Fatalf("wake adoption: %v %v", adopted, adoptErr)
 		}
 		if !<-lookup {
@@ -1891,6 +1892,125 @@ func TestFailoverRowsHoldNoHostOnlyValueWhenMemoryOnly(t *testing.T) {
 				t.Errorf("adopter holds %q, env_missing %v; want the row's value only without memory_only", v, summary.EnvMissing)
 			}
 		})
+	}
+}
+
+func TestFailoverTheRootAdoptsWithoutTheToken(t *testing.T) {
+	for _, room := range []bool{false, true} {
+		t.Run(fmt.Sprintf("room=%v", room), func(t *testing.T) {
+			c := newFailoverCluster(t)
+			a, b := c.pair(t)
+			sb := mustClaim(t, a, testKey)
+			mustArchive(t, a, sb)
+			c.expire("a")
+			adopt := b.AdoptArchived
+			if room {
+				adopt = b.AdoptForWake
+			}
+			root := Cred{Operator: true}
+
+			for _, cred := range []Cred{{}, {Token: "wrong"}, {Token: "tenant-token"}} {
+				if adopted, err := adopt(t.Context(), sb.ID, cred); err != nil || adopted {
+					t.Errorf("adopt with %q: %v %v, want refused", cred.Token, adopted, err)
+				}
+			}
+			if adopted, err := adopt(t.Context(), "sb_unknown", root); err != nil || adopted {
+				t.Errorf("root adopt of an id with no row: %v %v, want refused", adopted, err)
+			}
+			if adopted, err := adopt(t.Context(), sb.ID, root); err != nil || !adopted {
+				t.Fatalf("root adopt: %v %v, want adopted", adopted, err)
+			}
+			if adopted, err := adopt(t.Context(), sb.ID, root); err != nil || !adopted {
+				t.Errorf("root lookup of the held claim: %v %v, want held", adopted, err)
+			}
+			held, _ := b.byID(sb.ID)
+			b.mu.Lock()
+			token, sum := held.Token, held.TokenSHA256
+			b.mu.Unlock()
+			if token != "" || sum != tenants.TokenSHA256(sb.Token) {
+				t.Errorf("adopted claim token %q hash %q, want no token and the row's hash", token, sum)
+			}
+			if adopted, err := adopt(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil || !adopted {
+				t.Errorf("claim token lookup of the root-adopted claim: %v %v, want held", adopted, err)
+			}
+		})
+	}
+}
+
+func TestFailoverARootAdoptedClaimAnswersOnlyItsOwnToken(t *testing.T) {
+	c := newFailoverCluster(t)
+	a, b := c.pair(t)
+	sb := mustClaim(t, a, testKey)
+	mustArchive(t, a, sb)
+	c.expire("a")
+	sum := mustRootAdopt(t, b, sb)
+
+	for _, cred := range []Cred{{}, {Token: "wrong"}, {Token: sum}, {Token: "tenant-token"}} {
+		if _, err := b.AgentSocket(sb.ID, cred); !errors.Is(err, ErrUnknownSandbox) {
+			t.Errorf("agent socket with %q: %v, want ErrUnknownSandbox", cred.Token, err)
+		}
+		if _, _, _, err := b.WakeAgentSocket(t.Context(), sb.ID, cred); !errors.Is(err, ErrUnknownSandbox) {
+			t.Errorf("wake with %q: %v, want ErrUnknownSandbox", cred.Token, err)
+		}
+	}
+	_, _, done, err := b.WakeAgentSocket(t.Context(), sb.ID, Cred{Operator: true})
+	if err != nil {
+		t.Fatalf("root wake of the root-adopted claim: %v", err)
+	}
+	done()
+	summary, _ := b.Sandbox(sb.ID)
+	ckpt, err := b.Checkpoint(t.Context(), sb.ID, Cred{Operator: true}, "", "")
+	if err != nil {
+		t.Fatalf("root checkpoint: %v", err)
+	}
+	ckpts, err := b.Checkpoints(t.Context(), "")
+	if err != nil {
+		t.Fatalf("checkpoints: %v", err)
+	}
+	reads := map[string]any{"by id": summary, "list": b.Sandboxes("", "", nil), "checkpoint": ckpt, "checkpoints": ckpts}
+	for name, v := range reads {
+		raw, err := json.Marshal(v)
+		if err != nil || strings.Contains(string(raw), sum) {
+			t.Errorf("%s read %s (%v) serves the token hash", name, raw, err)
+		}
+	}
+
+	restarted := c.restartReconciled(t, b)
+	if err := wakeClaim(t, restarted, sb); err != nil {
+		t.Fatalf("claim token after a restart: %v", err)
+	}
+	held, _ := restarted.byID(sb.ID)
+	restarted.mu.Lock()
+	token, kept := held.Token, held.TokenSHA256
+	restarted.mu.Unlock()
+	if summary, _ := restarted.Sandbox(sb.ID); token != sb.Token || kept != "" || summary.Token != sb.Token {
+		t.Errorf("after the first match token %q hash %q root read %q, want the claim token learned", token, kept, summary.Token)
+	}
+}
+
+func TestFailoverARowRewriteOfARootAdoptedClaimKeepsTheTokenHash(t *testing.T) {
+	c := newFailoverCluster(t)
+	a, b := c.pair(t)
+	d := c.node(t, "d", t.TempDir(), keepAnHour)
+	sb := mustClaim(t, a, testKey)
+	mustArchive(t, a, sb)
+	c.expire("a")
+	sum := mustRootAdopt(t, b, sb)
+	held, _ := b.byID(sb.ID)
+
+	if err := b.rewriteArchiveRow(t.Context(), held, false); err != nil {
+		t.Fatalf("rewrite row: %v", err)
+	}
+	if rec, _, _ := c.reg.Get(t.Context(), sb.ID); rec.Owner != "b" || rec.TokenSHA256 != sum {
+		t.Fatalf("rewritten row owner %q hash %q, want b keeping %q", rec.Owner, rec.TokenSHA256, sum)
+	}
+	if row := rowClaim(t, c, sb); row.Token != "" || row.TokenSHA256 != "" {
+		t.Errorf("row claim carries token %q hash %q, want neither", row.Token, row.TokenSHA256)
+	}
+	c.expire("b")
+	mustAdopt(t, d, sb, "adopt with the claim token after the rewrite")
+	if err := wakeClaim(t, d, sb); err != nil {
+		t.Errorf("claim token on the next adopter: %v", err)
 	}
 }
 
@@ -2001,7 +2121,7 @@ func (c *failoverCluster) nodeOn(t *testing.T, eng *fakeEngine, name, dataDir st
 			if p.nodeID == name {
 				return false
 			}
-			adopted, err := p.adopt(ctx, id, token, room)
+			adopted, err := p.adopt(ctx, id, peerCred(token), room)
 			return err == nil && adopted
 		})
 	})
@@ -2153,7 +2273,7 @@ func assertReleasedForGood(t *testing.T, c *failoverCluster, sb *types.Sandbox, 
 	}
 	c.expire("a")
 	for _, m := range nodes {
-		if adopted, err := m.AdoptArchived(t.Context(), sb.ID, sb.Token); err != nil || adopted {
+		if adopted, err := m.AdoptArchived(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil || adopted {
 			t.Errorf("node %s adopts the released claim: %v %v, want a 404", m.nodeID, adopted, err)
 		}
 	}
@@ -2234,4 +2354,19 @@ func rowClaim(t *testing.T, c *failoverCluster, sb *types.Sandbox) *types.Sandbo
 		t.Fatalf("decode row claim: %v", err)
 	}
 	return claim
+}
+
+func peerCred(token string) Cred {
+	if token == "" {
+		return Cred{Operator: true}
+	}
+	return Cred{Token: token}
+}
+
+func mustRootAdopt(t *testing.T, m *Manager, sb *types.Sandbox) string {
+	t.Helper()
+	if adopted, err := m.AdoptArchived(t.Context(), sb.ID, Cred{Operator: true}); err != nil || !adopted {
+		t.Fatalf("root adopt: %v %v, want adopted", adopted, err)
+	}
+	return tenants.TokenSHA256(sb.Token)
 }

@@ -3,45 +3,45 @@ package pool
 import (
 	"cmp"
 	"context"
-	"crypto/subtle"
 	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"maps"
 	"slices"
+	"strconv"
 	"time"
 
 	"github.com/projecteru2/core/log"
 
 	"github.com/cocoonstack/sandbox/sandboxd/archives"
 	"github.com/cocoonstack/sandbox/sandboxd/store"
-	"github.com/cocoonstack/sandbox/sandboxd/tenants"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 	"github.com/cocoonstack/sandbox/sandboxd/usage"
 )
 
-// AdoptArchived takes over a claim whose owner's lease expired and reports whether this node owns it now.
-func (m *Manager) AdoptArchived(ctx context.Context, id, token string) (bool, error) {
-	return m.adopt(ctx, id, token, false)
+// AdoptArchived takes over a claim whose owner's lease expired and reports whether this node owns it now; the root needs no token match.
+func (m *Manager) AdoptArchived(ctx context.Context, id string, cred Cred) (bool, error) {
+	return m.adopt(ctx, id, cred, false)
 }
 
 // AdoptForWake adopts as AdoptArchived does, but only while this node could admit the claim's wake.
-func (m *Manager) AdoptForWake(ctx context.Context, id, token string) (bool, error) {
-	return m.adopt(ctx, id, token, true)
+func (m *Manager) AdoptForWake(ctx context.Context, id string, cred Cred) (bool, error) {
+	return m.adopt(ctx, id, cred, true)
 }
 
-func (m *Manager) adopt(ctx context.Context, id, token string, room bool) (bool, error) {
+func (m *Manager) adopt(ctx context.Context, id string, cred Cred, room bool) (bool, error) {
 	if m.archives == nil {
 		return false, nil
 	}
-	adopted, err, _ := m.adoptFlights.Do(id+"\x00"+token, func() (any, error) { return m.adoptArchived(ctx, id, token, room) })
+	key := strconv.FormatBool(cred.Operator) + "\x00" + id + "\x00" + cred.Token
+	adopted, err, _ := m.adoptFlights.Do(key, func() (any, error) { return m.adoptArchived(ctx, id, cred, room) })
 	return adopted.(bool), err
 }
 
-func (m *Manager) adoptArchived(ctx context.Context, id, token string, room bool) (bool, error) {
+func (m *Manager) adoptArchived(ctx context.Context, id string, cred Cred, room bool) (bool, error) {
 	m.mu.Lock()
 	draining, cordoned := m.draining, m.cordoned
-	_, held := m.authed(id, token)
+	_, held := m.resolveLocked(id, cred)
 	fenced := m.adoptFenced()
 	full := false
 	if room {
@@ -62,8 +62,7 @@ func (m *Manager) adoptArchived(ctx context.Context, id, token string, room bool
 	if err != nil || !ok {
 		return false, err
 	}
-	sum := tenants.TokenSHA256(token)
-	if rec.Consumed || subtle.ConstantTimeCompare([]byte(sum), []byte(rec.TokenSHA256)) != 1 || (!rec.Deadline.IsZero() && time.Now().After(rec.Deadline)) {
+	if rec.Consumed || !cred.Operator && !tokenMatches(cred.Token, rec.TokenSHA256) || (!rec.Deadline.IsZero() && time.Now().After(rec.Deadline)) {
 		return false, nil
 	}
 	sb := &types.Sandbox{}
@@ -80,7 +79,11 @@ func (m *Manager) adoptArchived(ctx context.Context, id, token string, room bool
 	if err != nil {
 		return false, fmt.Errorf("adopt %s: %w", id, err)
 	}
-	sb.Token, sb.ArchiveCk, sb.ArchiveEpoch, sb.Deadline = token, rec.Checkpoint, epoch, rec.Deadline
+	token, sum := cred.Token, ""
+	if cred.Operator {
+		token, sum = "", rec.TokenSHA256
+	}
+	sb.Token, sb.TokenSHA256, sb.ArchiveCk, sb.ArchiveEpoch, sb.Deadline = token, sum, rec.Checkpoint, epoch, rec.Deadline
 	sb.SetEnv(sb.Env)
 	sb.Transition.Lock()
 	defer sb.Transition.Unlock()
@@ -132,7 +135,7 @@ func (m *Manager) putRow(ctx context.Context, sb *types.Sandbox, ck string, repl
 		m.mu.Unlock()
 		return 0, ErrVolumeCapture
 	}
-	dto, deadline, held := dtoOf(sb), sb.Deadline, sb.ArchiveEpoch
+	dto, deadline, held, sum := dtoOf(sb), sb.Deadline, sb.ArchiveEpoch, tokenSum(sb)
 	switch {
 	case replica:
 		deadline = time.Time{}
@@ -140,7 +143,7 @@ func (m *Manager) putRow(ctx context.Context, sb *types.Sandbox, ck string, repl
 		deadline = m.archiveDeadline(sb)
 	}
 	m.mu.Unlock()
-	dto.Token, dto.VMName, dto.VsockSocket, dto.HibernateSnap, dto.PendingSnap, dto.ArchivePending, dto.ReplicaCk, dto.ReplicaPending = "", "", "", "", "", "", "", ""
+	dto.Token, dto.TokenSHA256, dto.VMName, dto.VsockSocket, dto.HibernateSnap, dto.PendingSnap, dto.ArchivePending, dto.ReplicaCk, dto.ReplicaPending = "", "", "", "", "", "", "", "", ""
 	dto.ArchiveCk, dto.Deadline = ck, deadline
 	if m.view.Load().hostEnvMemory {
 		dto.Env = dto.Env.DropHostValues()
@@ -151,7 +154,7 @@ func (m *Manager) putRow(ctx context.Context, sb *types.Sandbox, ck string, repl
 		return 0, fmt.Errorf("encode claim: %w", err)
 	}
 	rec := archives.Record{
-		ID: sb.ID, Tenant: sb.Tenant, TokenSHA256: tenants.TokenSHA256(sb.Token), Owner: m.nodeID,
+		ID: sb.ID, Tenant: sb.Tenant, TokenSHA256: sum, Owner: m.nodeID,
 		Checkpoint: ck, Deadline: deadline, Claim: claim,
 	}
 	if replace {

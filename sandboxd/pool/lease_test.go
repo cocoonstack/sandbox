@@ -69,7 +69,7 @@ func TestLeaseOverdueRenewalFencesReplicatedClaimsOnly(t *testing.T) {
 		assertServed(t, a, replicated.ID, replicated.Token)
 		time.Sleep(2 * time.Second)
 		synctest.Wait()
-		if _, _, _, err := a.WakeAgentSocket(ctx, replicated.ID, replicated.Token); !errors.Is(err, ErrLeaseLost) {
+		if _, _, _, err := a.WakeAgentSocket(ctx, replicated.ID, Cred{Token: replicated.Token}); !errors.Is(err, ErrLeaseLost) {
 			t.Errorf("relay or exec of a replicated claim past the fence: %v, want ErrLeaseLost", err)
 		}
 		if _, err := a.DialPort(ctx, replicated.ID, Cred{Token: replicated.Token}, 80); !errors.Is(err, ErrLeaseLost) {
@@ -125,12 +125,12 @@ func TestLeaseFenceClosesOpenStreamsOfReplicatedClaimsOnly(t *testing.T) {
 			}
 			streams[name] = conn
 		}
-		_, relayFenced, relayDone, err := a.WakeAgentSocket(ctx, replicated.ID, replicated.Token)
+		_, relayFenced, relayDone, err := a.WakeAgentSocket(ctx, replicated.ID, Cred{Token: replicated.Token})
 		if err != nil {
 			t.Fatalf("relay of the replicated claim: %v", err)
 		}
 		defer relayDone()
-		_, plainFenced, plainDone, err := a.WakeAgentSocket(ctx, plain.ID, plain.Token)
+		_, plainFenced, plainDone, err := a.WakeAgentSocket(ctx, plain.ID, Cred{Token: plain.Token})
 		if err != nil || plainFenced != nil {
 			t.Fatalf("relay of the plain claim: fence channel %v, %v, want none", plainFenced, err)
 		}
@@ -165,7 +165,7 @@ func TestLeaseFenceClosesOpenStreamsOfReplicatedClaimsOnly(t *testing.T) {
 		if _, readErr := conn.Read(make([]byte, 1)); !errors.Is(readErr, os.ErrDeadlineExceeded) {
 			t.Errorf("the new stream after unfence: %v, want it open", readErr)
 		}
-		_, fresh, done, err := a.WakeAgentSocket(ctx, replicated.ID, replicated.Token)
+		_, fresh, done, err := a.WakeAgentSocket(ctx, replicated.ID, Cred{Token: replicated.Token})
 		if err != nil {
 			t.Fatalf("relay after the fence lifted: %v", err)
 		}
@@ -197,7 +197,7 @@ func TestLeaseSlowUnfenceStaysFencedAndKeepsRenewing(t *testing.T) {
 		time.Sleep(leaseRenew)
 		time.Sleep(leaseTTL + time.Second)
 		synctest.Wait()
-		if _, _, _, err := a.WakeAgentSocket(ctx, sb.ID, sb.Token); !errors.Is(err, ErrLeaseLost) {
+		if _, _, _, err := a.WakeAgentSocket(ctx, sb.ID, Cred{Token: sb.Token}); !errors.Is(err, ErrLeaseLost) {
 			t.Fatalf("serving after a confirmation that outlasted the lease window: %v, want ErrLeaseLost", err)
 		}
 		row, _, _ := c.reg.Get(ctx, sb.ID)
@@ -274,7 +274,7 @@ func TestLeaseAdoptionDuringUnfenceDropsTheClaimWithoutServingIt(t *testing.T) {
 		cut.beforeTake = func() {
 			fencedAtTake = a.isFenced()
 			c.expire("a")
-			if adopted, err := b.AdoptArchived(ctx, sb.ID, sb.Token); err != nil || !adopted {
+			if adopted, err := b.AdoptArchived(ctx, sb.ID, Cred{Token: sb.Token}); err != nil || !adopted {
 				t.Errorf("adopt during the owner's unfence: %v %v", adopted, err)
 			}
 		}
@@ -285,13 +285,13 @@ func TestLeaseAdoptionDuringUnfenceDropsTheClaimWithoutServingIt(t *testing.T) {
 		if !fencedAtTake {
 			t.Error("the owner served again before it confirmed the row")
 		}
-		if _, _, _, err := a.WakeAgentSocket(ctx, sb.ID, sb.Token); !errors.Is(err, ErrUnknownSandbox) {
+		if _, _, _, err := a.WakeAgentSocket(ctx, sb.ID, Cred{Token: sb.Token}); !errors.Is(err, ErrUnknownSandbox) {
 			t.Errorf("the owner after losing the row: %v, want ErrUnknownSandbox", err)
 		}
 		if !fakeOf(a).removed(vm) {
 			t.Error("the owner kept its VM of the adopted claim")
 		}
-		if _, _, _, err := b.WakeAgentSocket(ctx, sb.ID, sb.Token); err != nil {
+		if _, _, _, err := b.WakeAgentSocket(ctx, sb.ID, Cred{Token: sb.Token}); err != nil {
 			t.Errorf("the adopter's wake: %v", err)
 		}
 	})
@@ -354,14 +354,14 @@ func TestLeaseFencedNodeDoesNotAnswerAsOwnerOfReplicatedClaims(t *testing.T) {
 	replicateNow(t, a, replicated)
 	a.tripFence()
 
-	if _, err := a.AgentSocket(replicated.ID, replicated.Token); !errors.Is(err, ErrLeaseLost) {
+	if _, err := a.AgentSocket(replicated.ID, Cred{Token: replicated.Token}); !errors.Is(err, ErrLeaseLost) {
 		t.Errorf("owner lookup of a replicated claim while fenced: %v, want ErrLeaseLost", err)
 	}
-	if _, err := a.AgentSocket(plain.ID, plain.Token); err != nil {
+	if _, err := a.AgentSocket(plain.ID, Cred{Token: plain.Token}); err != nil {
 		t.Errorf("owner lookup of an unreplicated claim while fenced: %v", err)
 	}
 	a.liftFence()
-	if _, err := a.AgentSocket(replicated.ID, replicated.Token); err != nil {
+	if _, err := a.AgentSocket(replicated.ID, Cred{Token: replicated.Token}); err != nil {
 		t.Errorf("owner lookup once the fence lifted: %v", err)
 	}
 }
@@ -475,7 +475,7 @@ func TestLeaseAdoptionWaitsOutTheFenceAndTheOldOwnerDropsItsCopy(t *testing.T) {
 				cut.cut.Store(true)
 				time.Sleep(leaseWindow + time.Second)
 				synctest.Wait()
-				if _, _, _, err := a.WakeAgentSocket(ctx, sb.ID, sb.Token); !errors.Is(err, ErrLeaseLost) {
+				if _, _, _, err := a.WakeAgentSocket(ctx, sb.ID, Cred{Token: sb.Token}); !errors.Is(err, ErrLeaseLost) {
 					t.Fatalf("the cut-off owner past its fence: %v, want ErrLeaseLost", err)
 				}
 				mustNotAdopt(t, b, sb, "adoption while the fenced owner's lease is still live")
@@ -483,7 +483,7 @@ func TestLeaseAdoptionWaitsOutTheFenceAndTheOldOwnerDropsItsCopy(t *testing.T) {
 				time.Sleep(leaseMargin)
 				mustAdopt(t, b, sb, "adoption after the lease expired")
 				if tt.wakeBefore {
-					if _, _, _, err := b.WakeAgentSocket(ctx, sb.ID, sb.Token); err != nil {
+					if _, _, _, err := b.WakeAgentSocket(ctx, sb.ID, Cred{Token: sb.Token}); err != nil {
 						t.Fatalf("adopter's wake: %v", err)
 					}
 				}
@@ -497,7 +497,7 @@ func TestLeaseAdoptionWaitsOutTheFenceAndTheOldOwnerDropsItsCopy(t *testing.T) {
 				if a.isFenced() {
 					t.Error("the old owner stays fenced after its lease renewed")
 				}
-				if _, _, _, err := b.WakeAgentSocket(ctx, sb.ID, sb.Token); err != nil {
+				if _, _, _, err := b.WakeAgentSocket(ctx, sb.ID, Cred{Token: sb.Token}); err != nil {
 					t.Errorf("adopter's wake after the old owner dropped its copy: %v", err)
 				}
 			})
@@ -635,7 +635,7 @@ func (r *cutRegistry) Rows(ctx context.Context, ids []string) (map[string]archiv
 
 func assertServed(t *testing.T, m *Manager, id, token string) {
 	t.Helper()
-	_, _, done, err := m.WakeAgentSocket(t.Context(), id, token)
+	_, _, done, err := m.WakeAgentSocket(t.Context(), id, Cred{Token: token})
 	if err != nil {
 		t.Fatalf("serving %s: %v", id, err)
 	}

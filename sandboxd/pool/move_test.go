@@ -221,7 +221,7 @@ func TestMoveKeepsThePausedGuestUntilItsAbortLands(t *testing.T) {
 	if !pausedOn(mc.s, sb.VMName) {
 		t.Fatal("the source resumed its guest before the abort landed")
 	}
-	if _, _, _, err := mc.s.WakeAgentSocket(t.Context(), sb.ID, sb.Token); !errors.Is(err, ErrEvacuating) {
+	if _, _, _, err := mc.s.WakeAgentSocket(t.Context(), sb.ID, Cred{Token: sb.Token}); !errors.Is(err, ErrEvacuating) {
 		t.Errorf("dial during the unresolved final round: %v, want ErrEvacuating", err)
 	}
 	time.Sleep(2 * moveRetryInterval)
@@ -484,7 +484,7 @@ func TestMoveOfAReplicatedClaimDropsItsRowBeforeTheFinalRound(t *testing.T) {
 			t.Error("the replica row is still adoptable at the commit")
 		}
 		mc.reg.Expire("a")
-		if adopted, err := third.AdoptArchived(t.Context(), sb.ID, sb.Token); adopted || err != nil {
+		if adopted, err := third.AdoptArchived(t.Context(), sb.ID, Cred{Token: sb.Token}); adopted || err != nil {
 			t.Errorf("a third node adopts the moving claim: %v %v", adopted, err)
 		}
 		_ = mc.reg.Renew(t.Context(), "a", time.Hour)

@@ -210,7 +210,8 @@ replication rounds, and env writes and renews of a claim whose row must follow
 it while it sleeps write it, so the claim path is unchanged.
 
 - **Adoption.** `Lookup` asks the entry node, then every peer. A node that does
-  not hold the claim reads the row; when the token hash matches, it takes the
+  not hold the claim reads the row; when the token hash matches, or the caller
+  is root, it takes the
   row with one compare-and-set on the epoch. The same statement requires the
   owner's [node lease](#node-lease) to be expired, unless the owner is this
   node (with its record gone) or the row has no owner, since its owner
