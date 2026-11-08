@@ -43,6 +43,14 @@ func TestClusterDigestCoversSharedConfigAndOnlyKeyedSecrets(t *testing.T) {
 	if digest(keyed, "ca-fp", acme) == digest(keyed, "ca-fp", rotated) {
 		t.Error("with a cluster_key a tenant token rotation must change the digest")
 	}
+	withOperator, otherOperator, keylessOperator := *keyed, *keyed, *base
+	withOperator.OperatorToken, otherOperator.OperatorToken, keylessOperator.OperatorToken = "op", "op2", "op"
+	if digest(&withOperator, "ca-fp", acme) == digest(keyed, "ca-fp", acme) || digest(&withOperator, "ca-fp", acme) == digest(&otherOperator, "ca-fp", acme) {
+		t.Error("with a cluster_key a set operator_token must be covered by the digest")
+	}
+	if digest(&keylessOperator, "ca-fp", acme) != d {
+		t.Error("operator_token leaked into the keyless digest")
+	}
 	withVolume := *base
 	withVolume.Volumes = []config.VolumeSpec{{Name: "imagenet", Path: "/srv/datasets/imagenet.img", DirectIO: types.DirectIOOff}}
 	if digest(&withVolume, "ca-fp", acme) != d {

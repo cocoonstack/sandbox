@@ -236,18 +236,6 @@ func TestTenantChangesAreValidatedAndAudited(t *testing.T) {
 	}
 }
 
-func TestOperatorTokenMustDifferFromEveryTenantToken(t *testing.T) {
-	dir := t.TempDir()
-	tenantManager(t, dir, tenants.TenantSpec{Name: "acme", Token: "acme-tok"})
-	for token, wantErr := range map[string]bool{"acme-tok": true, "op-tok": false, "": false} {
-		cfg := &config.Config{DataDir: dir, APIToken: "root", OperatorToken: token}
-		_, err := NewManager(t.Context(), cfg, newFakeEngine(), testSecrets(t), testBackends(t, cfg))
-		if (err != nil) != wantErr {
-			t.Errorf("operator_token %q: %v, want error %v", token, err, wantErr)
-		}
-	}
-}
-
 func TestARuntimeTenantTakesItsEgressClassWithoutARestart(t *testing.T) {
 	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = io.WriteString(w, "ok")

@@ -141,7 +141,12 @@ Four credentials in descending scope: the root `api_token`, the optional
 `operator_token` (root's authority on the claim lifecycle, tenant and node-read
 routes only, for a public control plane), tenant tokens (isolated at the API
 layer) and per-sandbox tokens (that sandbox only, nothing node-level); what each
-may call is in the [API reference](sandboxd-api.md#sandboxd-http-api). The root,
+may call is in the [API reference](sandboxd-api.md#sandboxd-http-api). The
+operator token reaches every claim's data — it reads any claim's token by id,
+execs in any claim, and through a tenant it mints can fork, checkpoint and
+preview with that claim token — but holds no node or cluster configuration
+power, cannot claim volumes, and leaves an audit record (op `token`) for each
+token it reads. The root,
 operator and tenant tokens
 are valid on every node of their [cell](#cells) and nowhere else. A preview URL
 is a capability on top, HMAC-signed with the cell's `preview_secret` and no
