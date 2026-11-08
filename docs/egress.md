@@ -593,14 +593,11 @@ read. A claim in [advanced network mode](advanced-network.md#host-side) keeps
 separate buckets on its tun path, so its proxy and tun traffic are capped
 apart.
 
-A limited download clamps the upstream connection's TCP receive window to half
-a second of the cap, at least 128 KiB, and sets it again every 100 ms while it
-reads, so the far end cannot park megabytes in the node's socket buffers ahead
-of the meter. The window opens again when the cap is lifted, also on an idle
-tunnel, and when the response or tunnel ends. A pooled connection can go back
-to the pool before the earlier response's copy ends, and stays clamped until
-then. A plain or intercepted request that starts without an rx cap is metered
-when a cap arrives, but its window is not clamped.
+A limited download paces what the proxy reads, not what the far end sends: the
+upstream can run ahead by up to the node's TCP receive buffer per connection
+(`net.ipv4.tcp_rmem` max), as it can today against a guest that reads slowly,
+and then sees its window close. The guest still receives at the cap, and
+`egress_bytes` counts only the bytes the proxy read.
 
 ## HTTPS interception
 
