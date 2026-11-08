@@ -1,7 +1,6 @@
 package pool
 
 import (
-	"cmp"
 	"context"
 	"crypto/subtle"
 
@@ -116,9 +115,4 @@ func (m *Manager) authed(id, token string) (*types.Sandbox, bool) {
 
 func tokenMatches(token, sum string) bool {
 	return token != "" && subtle.ConstantTimeCompare([]byte(tenants.TokenSHA256(token)), []byte(sum)) == 1
-}
-
-// Callers hold m.mu.
-func tokenSum(sb *types.Sandbox) string {
-	return cmp.Or(sb.TokenSHA256, tenants.TokenSHA256(sb.Token))
 }
