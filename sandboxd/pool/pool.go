@@ -42,6 +42,7 @@ const (
 	reapInterval      = 5 * time.Second
 	livenessInterval  = 10 * time.Second
 	imageInterval     = time.Minute
+	heldFenceInterval = time.Minute
 	buildRetryDelay   = 30 * time.Second
 	archiveRetryDelay = time.Minute
 	claimProbeTimeout = 15 * time.Second
@@ -297,7 +298,7 @@ type Manager struct {
 	poolVersion    int64
 	configSeedHash string // config pools' hash, to warn when a file edit is overridden
 
-	sweeps struct{ idle, liveness, archive, archiveDelete, orphan, ckpt, gen atomic.Bool }
+	sweeps struct{ idle, liveness, archive, archiveDelete, orphan, held, ckpt, gen atomic.Bool }
 
 	cocoondSocket string
 	// vmmEvents is set while the cocoon daemon stream is live; the poll is then only a backstop.
@@ -511,6 +512,7 @@ func (m *Manager) Run(ctx context.Context) {
 	reap := time.Tick(reapInterval)
 	liveness := time.Tick(livenessInterval)
 	images := time.Tick(imageInterval)
+	heldFence := time.Tick(heldFenceInterval)
 	// Store retention is hourly: each sweep is cluster-visible I/O on a shared root
 	storeSweep := time.Tick(time.Hour)
 	go m.sweepExpiredCheckpoints(ctx)
@@ -554,6 +556,10 @@ func (m *Manager) Run(ctx context.Context) {
 			m.livenessOnce(ctx)
 		case <-images:
 			go m.checkImagesOnce(ctx)
+		case <-heldFence:
+			if m.archives != nil {
+				go m.fenceHeldArchives(ctx)
+			}
 		case <-storeSweep:
 			go m.sweepStoreGenerations(ctx)
 			go m.sweepExpiredCheckpoints(ctx)
