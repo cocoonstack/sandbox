@@ -22,7 +22,7 @@ func (m *Manager) Sandbox(id string) (SandboxSummary, bool) {
 		return SandboxSummary{}, false
 	}
 	out := summarize(sb)
-	out.Token, out.TunAddr, out.TunOff, out.TunProfile = sb.Token, sb.TunAddr, sb.TunOff, sb.TunProfile
+	out.Token, out.TunAddr, out.TunOff, out.TunProfile, out.EgressLimit = sb.Token, sb.TunAddr, sb.TunOff, sb.TunProfile, sb.EgressLimit
 	return out, true
 }
 

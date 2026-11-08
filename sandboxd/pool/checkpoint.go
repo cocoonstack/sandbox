@@ -194,7 +194,7 @@ func (m *Manager) publishCheckpoint(ctx context.Context, sb *types.Sandbox, ckID
 	if err != nil {
 		return types.Checkpoint{}, "", fmt.Errorf("checkpoint %s: %w", sb.ID, err)
 	}
-	ckpt.GuestEnv, ckpt.TunOff, ckpt.TunProfile = guestEnv, !tun.On, tun.Profile
+	ckpt.GuestEnv, ckpt.TunOff, ckpt.TunProfile, ckpt.EgressLimit = guestEnv, !tun.On, tun.Profile, m.egressLimit(sb)
 	meta, err := json.Marshal(ckpt)
 	if err != nil {
 		return types.Checkpoint{}, "", fmt.Errorf("encode checkpoint meta: %w", err)
@@ -231,7 +231,7 @@ func (m *Manager) claimLoaded(ctx context.Context, ckpt types.Checkpoint, o Clai
 	o.apply(sb)
 	sb.FromCheckpoint = ckpt.ID
 	sb.PolicySource, sb.NoEgress = ckpt.PolicySource, ckpt.NoEgress
-	sb.TunOff, sb.TunProfile = ckpt.TunOff, ckpt.TunProfile
+	sb.TunOff, sb.TunProfile, sb.EgressLimit = ckpt.TunOff, ckpt.TunProfile, ckpt.EgressLimit
 	out, err := m.finalize(ctx, sb, o.TTL, ckpt.GuestEnv, hold)
 	if err == nil {
 		m.counters.claimsClone.Add(1)

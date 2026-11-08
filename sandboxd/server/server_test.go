@@ -2274,6 +2274,49 @@ func TestTunVerbIsRootOnlyAndPassesOnlyTheNamedFields(t *testing.T) {
 	}
 }
 
+func TestEgressLimitVerbIsRootOnlyAndPassesTheDecodedLimit(t *testing.T) {
+	var calls int
+	var gotID string
+	var gotLimit types.EgressLimit
+	var failWith error
+	mgr := &fakeManager{setEgressLimit: func(id string, l types.EgressLimit) error {
+		calls++
+		gotID, gotLimit = id, l
+		return failWith
+	}}
+	ts := newTenantTestServer(t, "sekret", []tenants.TenantSpec{{Name: "acme", Token: "acme-tok"}}, mgr, nil)
+	for _, tt := range []struct {
+		name, token, body string
+		failWith          error
+		want              int
+		wantCalls         int
+		wantLimit         types.EgressLimit
+	}{
+		{"root sets both rates", "sekret", `{"tx_bytes_per_second": 1000, "rx_bytes_per_second": 2000}`, nil, http.StatusNoContent, 1, types.EgressLimit{TxBytesPerSecond: 1000, RxBytesPerSecond: 2000}},
+		{"root sets one rate", "sekret", `{"rx_bytes_per_second": 500}`, nil, http.StatusNoContent, 1, types.EgressLimit{RxBytesPerSecond: 500}},
+		{"root clears the limit", "sekret", `{}`, nil, http.StatusNoContent, 1, types.EgressLimit{}},
+		{"tenant token", "acme-tok", `{"tx_bytes_per_second": 1000}`, nil, http.StatusForbidden, 0, types.EgressLimit{}},
+		{"sandbox token", "tok", `{"tx_bytes_per_second": 1000}`, nil, http.StatusUnauthorized, 0, types.EgressLimit{}},
+		{"no token", "", `{"tx_bytes_per_second": 1000}`, nil, http.StatusUnauthorized, 0, types.EgressLimit{}},
+		{"unknown field", "sekret", `{"tx_bytes_per_second": 1000, "burst": 1}`, nil, http.StatusBadRequest, 0, types.EgressLimit{}},
+		{"negative tx", "sekret", `{"tx_bytes_per_second": -1}`, nil, http.StatusBadRequest, 0, types.EgressLimit{}},
+		{"negative rx", "sekret", `{"rx_bytes_per_second": -1}`, nil, http.StatusBadRequest, 0, types.EgressLimit{}},
+		{"unknown sandbox", "sekret", `{"tx_bytes_per_second": 1000}`, pool.ErrUnknownSandbox, http.StatusNotFound, 1, types.EgressLimit{TxBytesPerSecond: 1000}},
+		{"evacuating sandbox", "sekret", `{"tx_bytes_per_second": 1000}`, pool.ErrEvacuating, http.StatusServiceUnavailable, 1, types.EgressLimit{TxBytesPerSecond: 1000}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			calls, gotID, gotLimit, failWith = 0, "", types.EgressLimit{}, tt.failWith
+			code := statusOf(t, http.MethodPut, ts.URL+"/v1/sandboxes/sb_1/egress-limit", tt.token, tt.body)
+			if code != tt.want || calls != tt.wantCalls {
+				t.Fatalf("status %d with %d manager calls, want %d with %d", code, calls, tt.want, tt.wantCalls)
+			}
+			if tt.wantCalls > 0 && (gotID != "sb_1" || gotLimit != tt.wantLimit) {
+				t.Errorf("manager got %q %+v, want sb_1 %+v", gotID, gotLimit, tt.wantLimit)
+			}
+		})
+	}
+}
+
 type ownerReply struct {
 	OwnerAddr string `json:"owner_addr"`
 }
@@ -2338,6 +2381,7 @@ type fakeManager struct {
 	setPools            func(pools []config.PoolSpec) error
 	setInstanceMetadata func(id string, doc []byte) error
 	setTun              func(id string, enabled *bool, profile *string) error
+	setEgressLimit      func(id string, l types.EgressLimit) error
 	infoPools           []pool.PoolInfo
 	infoTemplates       []pool.TemplateInfo
 	labeled             []string
@@ -2645,6 +2689,13 @@ func (f *fakeManager) SetTun(_ context.Context, id string, enabled *bool, profil
 		return nil
 	}
 	return f.setTun(id, enabled, profile)
+}
+
+func (f *fakeManager) SetEgressLimit(_ context.Context, id string, l types.EgressLimit) error {
+	if f.setEgressLimit == nil {
+		return nil
+	}
+	return f.setEgressLimit(id, l)
 }
 
 func (f *fakeManager) TunStats() (tunnet.Stats, bool) {

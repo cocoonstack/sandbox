@@ -26,8 +26,6 @@ import (
 	"time"
 
 	"golang.org/x/time/rate"
-
-	"github.com/cocoonstack/sandbox/sandboxd/utils"
 )
 
 const (
@@ -145,6 +143,9 @@ type Proxy struct {
 	holder   Holder
 	pools    atomic.Pointer[connPools]
 	refusals *rate.Limiter
+	limits   atomic.Pointer[limiters]
+	every    time.Duration
+	stop     chan struct{}
 
 	leafMu sync.Mutex
 	leaves map[string]*tls.Certificate
@@ -152,11 +153,12 @@ type Proxy struct {
 	tickets [][32]byte
 
 	// conns tracks both halves of every tunnel and SOCKS5 connection, which http.Server.Close does not reach.
-	connMu   sync.Mutex
-	conns    map[net.Conn]struct{}
-	closed   bool
-	scope    context.Context
-	endScope context.CancelFunc
+	connMu    sync.Mutex
+	conns     map[net.Conn]struct{}
+	transfers map[*transfer]struct{}
+	closed    bool
+	scope     context.Context
+	endScope  context.CancelFunc
 }
 
 // New builds a Proxy for one sandbox; secrets, ca, audit and holder may be nil, router must not.
@@ -165,14 +167,16 @@ func New(policy Evaluator, secrets Secrets, ca *CA, router Router, audit AuditFu
 		return router.Dial(ctx, "", network, addr)
 	}
 	p := &Proxy{
-		policy:   policy,
-		secrets:  secrets,
-		ca:       ca,
-		audit:    audit,
-		router:   router,
-		holder:   holder,
-		refusals: rate.NewLimiter(refusalRate, refusalBurst),
-		conns:    map[net.Conn]struct{}{},
+		policy:    policy,
+		secrets:   secrets,
+		ca:        ca,
+		audit:     audit,
+		router:    router,
+		holder:    holder,
+		refusals:  rate.NewLimiter(refusalRate, refusalBurst),
+		stop:      make(chan struct{}),
+		conns:     map[net.Conn]struct{}{},
+		transfers: map[*transfer]struct{}{},
 	}
 	p.scope, p.endScope = context.WithCancel(context.Background())
 	// The stdlib default of 2 idle conns per host re-dials bursty same-host traffic.
@@ -209,6 +213,9 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // Close ends every hijacked tunnel, which outlives http.Server.Close; idempotent.
 func (p *Proxy) Close() {
 	p.connMu.Lock()
+	if !p.closed {
+		close(p.stop)
+	}
 	p.closed = true
 	p.connMu.Unlock()
 	p.DropTunnels()
@@ -323,13 +330,13 @@ func (p *Proxy) serveConnect(w http.ResponseWriter, r *http.Request) {
 	if _, err = io.WriteString(client, "HTTP/1.1 200 Connection Established\r\n\r\n"); err != nil {
 		return
 	}
+	t := p.begin(ev, client, upstream)
 	early, err := flushBuffered(brw.Reader, upstream)
-	if err != nil {
-		p.reportTransfer(ev, early, 0)
-		return
+	t.sent.Add(early)
+	if err == nil {
+		p.splice(t)
 	}
-	sent, received := splice(client, upstream, p.noSplice)
-	p.reportTransfer(ev, early+sent, received)
+	p.finish(t, true)
 }
 
 // tunnelDecision treats an inject rule as a plain one when injects is false.
@@ -403,22 +410,12 @@ func (p *Proxy) relay(w http.ResponseWriter, r *http.Request, ev Event, rule Rul
 			out.Header.Del(h)
 		}
 	}
-	var body *countingBody
-	if p.transfer != nil && out.Body != nil && out.Body != http.NoBody {
-		body = &countingBody{ReadCloser: out.Body}
-		out.Body = body
+	t := p.begin(ev)
+	if out.Body != nil && out.Body != http.NoBody {
+		out.Body = &meteredBody{r: out.Body, p: p, n: &t.sent, Closer: out.Body}
 	}
-	var received int64
 	var failed bool
-	defer func() {
-		var sent int64
-		if body != nil {
-			sent = body.n.Load()
-		}
-		if !failed || sent > 0 {
-			p.reportTransfer(ev, sent, received)
-		}
-	}()
+	defer func() { p.finish(t, !failed || t.sent.Load() > 0) }()
 
 	resp, err := p.transport(route, mitm).RoundTrip(out)
 	var conn net.Conn
@@ -427,6 +424,7 @@ func (p *Proxy) relay(w http.ResponseWriter, r *http.Request, ev Event, rule Rul
 	}
 	ev.attach(conn, err)
 	p.record(ev)
+	p.settle(t, ev)
 	if err != nil {
 		failed = true
 		upstreamFailed(w, err)
@@ -443,12 +441,13 @@ func (p *Proxy) relay(w http.ResponseWriter, r *http.Request, ev Event, rule Rul
 		defer copyBufs.Put(buf)
 		src = newScrubReader(resp.Body, sc, *buf)
 	}
+	src = &meter{r: src, p: p, rx: true, n: &t.received}
 	w.WriteHeader(resp.StatusCode)
 	var copyErr error
 	if streamed(resp) {
-		received, copyErr = copyFlushing(w, src)
+		_, copyErr = copyFlushing(w, src)
 	} else {
-		received, copyErr = io.Copy(w, src)
+		_, copyErr = io.Copy(w, src)
 	}
 	if copyErr != nil {
 		if conn, _, err := http.NewResponseController(w).Hijack(); err == nil {
@@ -534,18 +533,6 @@ func (p *Proxy) inject(rule Rule, out *http.Request, host string, mitm bool) (st
 		names = append(names, "claim:"+c.Name)
 	}
 	return strings.Join(names, ","), newScrubber(filled)
-}
-
-// countingBody counts the request body bytes the transport reads, possibly after RoundTrip returns.
-type countingBody struct {
-	io.ReadCloser
-	n atomic.Int64
-}
-
-func (c *countingBody) Read(b []byte) (int, error) {
-	n, err := c.ReadCloser.Read(b)
-	c.n.Add(int64(n))
-	return n, err
 }
 
 type echoForm struct {
@@ -670,20 +657,6 @@ func stripHop(h http.Header) {
 	for _, k := range hopHeaders {
 		h.Del(k)
 	}
-}
-
-// splice copies both ways until either side ends, half-closing the peer so EOF propagates; it returns the bytes a sent to b and b sent to a.
-func splice(a, b net.Conn, noSplice bool) (aToB, bToA int64) {
-	ra := spliceable(a)
-	done := make(chan int64, 1)
-	go func() {
-		n, _ := utils.CopyIn(ra, b, noSplice)
-		utils.CloseWrite(a)
-		done <- n
-	}()
-	aToB, _ = io.Copy(b, ra)
-	utils.CloseWrite(b)
-	return aToB, <-done
 }
 
 func flushBuffered(r *bufio.Reader, w io.Writer) (int64, error) {

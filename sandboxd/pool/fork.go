@@ -40,13 +40,13 @@ func (m *Manager) Fork(ctx context.Context, id string, cred Cred, count int, ttl
 		return nil, fmt.Errorf("fork %s: %w", sb.ID, err)
 	}
 	m.mu.Lock()
-	parentExpire, parentVM, tunOff, tunProfile := sb.OnExpire, sb.VMName, sb.TunOff, sb.TunProfile
+	parentExpire, parentVM, tunOff, tunProfile, limit := sb.OnExpire, sb.VMName, sb.TunOff, sb.TunProfile, sb.EgressLimit
 	m.mu.Unlock()
 	for _, c := range children {
 		c.Tenant, c.EgressClass = sb.Tenant, sb.EgressClass
 		c.PolicySource = sb.PolicySource
 		c.NoEgress = sb.NoEgress
-		c.TunOff, c.TunProfile = tunOff, tunProfile
+		c.TunOff, c.TunProfile, c.EgressLimit = tunOff, tunProfile, limit
 		c.Metadata = sb.Metadata
 		c.OnExpire = onExpire.Or(parentExpire)
 	}

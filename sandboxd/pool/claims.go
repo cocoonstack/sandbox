@@ -57,6 +57,7 @@ type claimDTO struct {
 	TunOff         bool               `json:"tun_off,omitzero"`
 	TunProfile     string             `json:"tun_profile,omitempty"`
 	TunBytes       int64              `json:"tun_bytes,omitzero"`
+	EgressLimit    types.EgressLimit  `json:"egress_limit,omitzero"`
 	HibernateSnap  string             `json:"hibernate_snap,omitempty"`
 	PendingSnap    string             `json:"pending_snap,omitempty"`
 	SaveSnap       string             `json:"save_snap,omitempty"`
@@ -406,7 +407,7 @@ func dtoOf(sb *types.Sandbox) claimDTO {
 		Tenant: sb.Tenant, EgressClass: sb.EgressClass, ClaimRef: sb.ClaimRef, Metadata: sb.Metadata, OnExpire: sb.OnExpire,
 		Volumes: slices.Clone(sb.Volumes), VolumesWant: volumesWantDTO(sb), Env: sb.Env, VsockSocket: sb.VsockSocket,
 		TAP: sb.TAP, HibernateSnap: sb.HibernateSnap, PendingSnap: sb.PendingSnap, SaveSnap: sb.SaveSnap, ReaderSafe: sb.ReaderSafe,
-		TunAddr: sb.TunAddr, TunOff: sb.TunOff, TunProfile: sb.TunProfile, TunBytes: sb.TunBytes,
+		TunAddr: sb.TunAddr, TunOff: sb.TunOff, TunProfile: sb.TunProfile, TunBytes: sb.TunBytes, EgressLimit: sb.EgressLimit,
 		ArchiveCk: sb.ArchiveCk, ArchiveEpoch: sb.ArchiveEpoch, ArchivePending: sb.ArchivePending, ReplicaCk: sb.ReplicaCk, ReplicaPending: sb.ReplicaPending, FromCheckpoint: sb.FromCheckpoint,
 		Restarts: sb.Restarts, RestartedAt: sb.RestartedAt, Failed: sb.Failed, MoveOut: sb.MoveOut, MoveIn: sb.MoveIn,
 	}

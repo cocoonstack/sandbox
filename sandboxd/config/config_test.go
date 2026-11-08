@@ -377,6 +377,35 @@ func TestLoadEgressUpstream(t *testing.T) {
 	}
 }
 
+func TestLoadEgressUsageInterval(t *testing.T) {
+	for _, tt := range []struct {
+		name, body, wantErr string
+		want                int
+	}{
+		{"omitted", `{"pools":[]}`, "", 0},
+		{"zero without usage bytes", `{"egress_usage_interval_seconds":0,"pools":[]}`, "", 0},
+		{"positive with usage bytes", `{"egress_usage_bytes":true,"egress_usage_interval_seconds":30,"api_token":"r","pools":[]}`, "", 30},
+		{"negative", `{"egress_usage_bytes":true,"egress_usage_interval_seconds":-1,"api_token":"r","pools":[]}`, "egress_usage_interval_seconds must not be negative", 0},
+		{"positive without usage bytes", `{"egress_usage_interval_seconds":30,"pools":[]}`, "egress_usage_interval_seconds needs egress_usage_bytes", 0},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg, err := Load(writeConfig(t, tt.body))
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("Load: %v, want error containing %q", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			if cfg.EgressUsageIntervalSeconds != tt.want {
+				t.Errorf("egress_usage_interval_seconds %d, want %d", cfg.EgressUsageIntervalSeconds, tt.want)
+			}
+		})
+	}
+}
+
 func TestLoadAcceptsPreviewAdvertiseShapes(t *testing.T) {
 	for _, advertise := range []string{"preview.example.com", "preview.example.com:8443", "https://preview.example.com", "10.0.0.5:8443"} {
 		t.Run(advertise, func(t *testing.T) {

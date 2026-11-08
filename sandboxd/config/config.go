@@ -438,7 +438,9 @@ type Config struct {
 	EgressCA            *EgressCAConfig       `json:"egress_ca,omitempty"`
 	EgressUpstream      *EgressUpstreamConfig `json:"egress_upstream,omitempty"`
 	EgressUsageBytes    bool                  `json:"egress_usage_bytes,omitzero"`
-	EgressConnRate      *EgressConnRate       `json:"egress_conn_rate,omitempty"`
+	// EgressUsageIntervalSeconds adds an egress_bytes row at this interval for each connection or flow that lasts longer; zero writes one row at its end.
+	EgressUsageIntervalSeconds int             `json:"egress_usage_interval_seconds,omitzero"`
+	EgressConnRate             *EgressConnRate `json:"egress_conn_rate,omitempty"`
 
 	MaxClaims  int `json:"max_claims,omitzero"`
 	MaxRunning int `json:"max_running,omitzero"`
@@ -751,6 +753,12 @@ func (c *Config) validateAttachment() error {
 func (c *Config) validateNodeEgress() error {
 	if r := c.EgressConnRate; r != nil && (r.PerSecond <= 0 || r.Burst < 1) {
 		return fmt.Errorf("egress_conn_rate needs per_second above 0 and burst of at least 1, got %v and %d", r.PerSecond, r.Burst)
+	}
+	switch n := c.EgressUsageIntervalSeconds; {
+	case n < 0:
+		return fmt.Errorf("egress_usage_interval_seconds must not be negative, got %d", n)
+	case n > 0 && !c.EgressUsageBytes:
+		return fmt.Errorf("egress_usage_interval_seconds needs egress_usage_bytes")
 	}
 	for _, entry := range c.EgressInternalAllow {
 		if _, err := egress.ParseInternalAllow(entry); err != nil {

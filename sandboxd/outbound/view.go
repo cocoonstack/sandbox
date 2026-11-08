@@ -6,6 +6,7 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/cocoonstack/sandbox/sandboxd/config"
 	"github.com/cocoonstack/sandbox/sandboxd/egress"
@@ -27,6 +28,7 @@ type View struct {
 	secrets       *egress.SecretStore
 	guarded       bool
 	usageBytes    bool
+	usageEvery    time.Duration
 
 	tunPools  map[types.PoolKey]bool
 	tunLimits tunnet.Limits
@@ -43,6 +45,7 @@ func NewView(cfg *config.Config, secrets *egress.SecretStore) *View {
 		connRate:      cfg.EgressConnRate,
 		secrets:       secrets,
 		usageBytes:    cfg.EgressUsageBytes,
+		usageEvery:    time.Duration(cfg.EgressUsageIntervalSeconds) * time.Second,
 		tunPools:      map[types.PoolKey]bool{},
 	}
 	if cfg.Tun != nil {

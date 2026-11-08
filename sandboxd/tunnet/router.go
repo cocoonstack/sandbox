@@ -108,7 +108,9 @@ type Claim struct {
 	// Used counts the claim's bytes both ways; the caller persists it.
 	Used   *atomic.Int64
 	Record RecordFunc
-	Touch  func(time.Time)
+	// Every adds a Partial record for each allowed flow live that long since its last record; zero records a flow only when it ends.
+	Every time.Duration
+	Touch func(time.Time)
 }
 
 // Stats counts what crossed each hop and why packets were dropped.
@@ -160,6 +162,16 @@ func (r *Router) Arm(c Claim) {
 		old.close()
 	}
 	r.announce(a)
+}
+
+// SetRates swaps the byte buckets of the claim armed at addr; its flows keep running.
+func (r *Router) SetRates(addr netip.Addr, rates Rates) {
+	r.mu.RLock()
+	a := r.claims[addr]
+	r.mu.RUnlock()
+	if a != nil {
+		a.flows.setRates(rates)
+	}
 }
 
 // Disarm stops answering for addr, ends its packet stream and closes its flows.
