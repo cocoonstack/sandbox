@@ -44,11 +44,15 @@ func TestALimitedDownloadClampsTheUpstreamWindowAndOpensItAgain(t *testing.T) {
 	t.Cleanup(func() { _ = conn.Close() })
 	server := <-served
 	t.Cleanup(func() { _ = server.Close() })
-	go func() { _, _ = server.Write(make([]byte, 256<<10)) }()
+	const queued = 64 << 10
+	if _, err = server.Write(make([]byte, queued)); err != nil {
+		t.Fatalf("server write: %v", err)
+	}
+	waitQueued(t, conn, queued)
 
 	p := New(Policy{}, nil, nil, fixedDial(""), nil, nil)
 	m := &meter{r: conn, p: p, rx: true, n: new(atomic.Int64), win: tcpOf(conn)}
-	buf := make([]byte, 32<<10)
+	buf := make([]byte, 4<<10)
 	read := func() {
 		t.Helper()
 		if _, readErr := m.Read(buf); readErr != nil {
@@ -139,6 +143,7 @@ func TestAGuestHangingUpOnAScrubbedTailLeavesThePooledConnOpen(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read response: %v", err)
 	}
+	t.Cleanup(func() { _ = resp.Body.Close() })
 	if _, err = io.ReadFull(resp.Body, make([]byte, 1)); err != nil {
 		t.Fatalf("read the first body byte: %v", err)
 	}
@@ -186,4 +191,26 @@ func windowClamp(t *testing.T, c net.Conn) int {
 		t.Fatalf("get window clamp: %v %v", err, getErr)
 	}
 	return v
+}
+
+func waitQueued(t *testing.T, c net.Conn, want int) {
+	t.Helper()
+	raw, err := c.(*net.TCPConn).SyscallConn()
+	if err != nil {
+		t.Fatalf("syscall conn: %v", err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		var queued int
+		if err = raw.Control(func(fd uintptr) { queued, _ = unix.IoctlGetInt(int(fd), unix.SIOCINQ) }); err != nil {
+			t.Fatalf("queued bytes: %v", err)
+		}
+		if queued >= want {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%d of %d bytes queued", queued, want)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }
