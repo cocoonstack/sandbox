@@ -393,7 +393,7 @@ func (p *Proxy) relay(w http.ResponseWriter, r *http.Request, ev Event, rule Rul
 	ctx := r.Context()
 	var t *transfer
 	var got *net.Conn
-	if rx, _ := p.limiter(true); p.ends || route != "" || rx != nil {
+	if p.ends || route != "" {
 		got = new(net.Conn)
 		ctx = httptrace.WithClientTrace(ctx, &httptrace.ClientTrace{
 			GotConn: func(info httptrace.GotConnInfo) {
@@ -452,9 +452,6 @@ func (p *Proxy) relay(w http.ResponseWriter, r *http.Request, ev Event, rule Rul
 		src = newScrubReader(resp.Body, sc, *buf)
 	}
 	t.resp = meter{r: src, p: p, rx: true, n: &t.received}
-	if got != nil {
-		t.resp.win = tcpOf(*got)
-	}
 	src = &t.resp
 	w.WriteHeader(resp.StatusCode)
 	var copyErr error
@@ -463,7 +460,6 @@ func (p *Proxy) relay(w http.ResponseWriter, r *http.Request, ev Event, rule Rul
 	} else {
 		_, copyErr = io.Copy(w, src)
 	}
-	t.resp.clamp(nil, true)
 	if copyErr != nil {
 		if conn, _, err := http.NewResponseController(w).Hijack(); err == nil {
 			_ = conn.Close()
