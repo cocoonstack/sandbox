@@ -583,26 +583,26 @@ traffic is not capped.
 Each direction has one token bucket per claim, shared by all its connections,
 with a burst of the rate, at least 256 KiB and at most 1 GiB. A limited
 direction copies in user space, in reads of about a tenth of a second's bytes
-(1 KiB to 256 KiB on a tunnel), each followed by a wait for its tokens, so its CPU cost
-follows the bytes the cap lets through. An unlimited direction keeps the
-kernel splice; a claim without a cap pays one map update per tunnel and an
-atomic load per request read. A changed rate starts with a full bucket, a
-direction whose rate did not change keeps its bucket, and a repeated cap
-changes nothing. A change reaches every open connection at once: the proxy sets a past
-read deadline on every open tunnel, whose copy resumes in the matching mode,
-and a request reads the cap on every read. A claim in
-[advanced network mode](advanced-network.md#host-side) keeps separate buckets
-on its tun path, so its proxy and tun traffic are capped apart.
+(1 KiB to 256 KiB on a tunnel, at most 32 KiB on a request), each followed by
+a wait for its tokens, so its CPU cost follows the bytes the cap lets through.
+An unlimited direction keeps the kernel splice; a claim without a cap pays one
+map update per tunnel and an atomic load per request read. A changed rate
+starts with a full bucket, a direction whose rate did not change keeps its
+bucket, and a repeated cap changes nothing. A change reaches every open
+connection at once: the proxy sets a past read deadline on every open tunnel,
+whose copy resumes in the matching mode, and a request reads the cap on every
+read. A claim in [advanced network mode](advanced-network.md#host-side) keeps
+separate buckets on its tun path, so its proxy and tun traffic are capped
+apart.
 
 A limited download clamps the upstream connection's TCP receive window to half
 a second of the cap, at least 128 KiB, and sets it again every 100 ms while it
-reads, so the far end cannot
-park megabytes in the node's socket buffers ahead of the meter. The window
-opens again when the cap is lifted and when the response or tunnel ends; a
-pooled connection can reach the pool a moment before that, so the next request
-on it may start clamped until its first read. A download that starts without an rx
-cap on a plain or intercepted request is metered when a cap arrives, but its
-window is not clamped.
+reads, so the far end cannot park megabytes in the node's socket buffers ahead
+of the meter. The window opens again when the cap is lifted, also on an idle
+tunnel, and when the response or tunnel ends. A pooled connection can go back
+to the pool before the earlier response's copy ends, and stays clamped until
+then. A plain or intercepted request that starts without an rx cap is metered
+when a cap arrives, but its window is not clamped.
 
 ## HTTPS interception
 

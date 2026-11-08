@@ -159,14 +159,7 @@ func (p *Proxy) stream(dst io.Writer, src net.Conn, rx bool, n *atomic.Int64) {
 	for {
 		var err error
 		if lim, _ := p.limiter(rx); lim != nil {
-			buf := limitBufs.Get().(*[]byte)
-			m := &meter{r: src, p: p, rx: rx, n: n}
-			if rx {
-				m.win = tcpOf(src)
-			}
-			// Hide ReaderFrom so the copy reads through the meter into the pooled buffer.
-			_, err = io.CopyBuffer(struct{ io.Writer }{dst}, m, *buf)
-			limitBufs.Put(buf)
+			err = p.copyLimited(dst, src, rx, n, lim)
 		} else {
 			var moved int64
 			if rx {
@@ -181,6 +174,22 @@ func (p *Proxy) stream(dst io.Writer, src net.Conn, rx bool, n *atomic.Int64) {
 		}
 		_ = src.SetReadDeadline(time.Time{})
 	}
+}
+
+func (p *Proxy) copyLimited(dst io.Writer, src net.Conn, rx bool, n *atomic.Int64, lim *rate.Limiter) error {
+	pool := &copyBufs
+	if readSlice(lim) > 2*scrubChunk {
+		pool = &limitBufs
+	}
+	buf := pool.Get().(*[]byte)
+	defer pool.Put(buf)
+	m := &meter{r: src, p: p, rx: rx, n: n}
+	if rx {
+		m.win = tcpOf(src)
+	}
+	// Hide ReaderFrom so the copy reads through the meter into the pooled buffer.
+	_, err := io.CopyBuffer(struct{ io.Writer }{dst}, m, *buf)
+	return err
 }
 
 // limiters is one cap's buckets; ctx ends when a newer cap replaces it, so a wait moves to the new buckets.
@@ -231,14 +240,14 @@ func (t *transfer) take() (ev Event, sent, received int64) {
 
 // meter counts what it reads into n and, while its direction is limited, reads one slice at a time and waits for its tokens.
 type meter struct {
-	r       io.Reader
-	p       *Proxy
-	rx      bool
-	n       *atomic.Int64
-	win     *net.TCPConn
-	clamped bool
-	applied int
-	at      time.Time
+	r         io.Reader
+	p         *Proxy
+	rx        bool
+	n         *atomic.Int64
+	win       *net.TCPConn
+	clamped   bool
+	applied   int
+	clampedAt time.Time
 }
 
 func (m *meter) Read(b []byte) (int, error) {
@@ -248,7 +257,10 @@ func (m *meter) Read(b []byte) (int, error) {
 	}
 	n, err := m.r.Read(b)
 	m.n.Add(int64(n))
-	m.clamp(lim, err != nil && !errors.Is(err, os.ErrDeadlineExceeded))
+	if m.win != nil {
+		cur, _ := m.p.limiter(m.rx)
+		m.clamp(cur, err != nil && !errors.Is(err, os.ErrDeadlineExceeded))
+	}
 	for lim != nil && n > 0 && lim.WaitN(l.ctx, n) != nil {
 		lim, l = m.p.limiter(m.rx)
 	}
@@ -268,9 +280,9 @@ func (m *meter) clamp(lim *rate.Limiter, done bool) {
 		return
 	}
 	w := max(minWindow, min(int(lim.Limit())/2, maxScaledWindow))
-	if now := time.Now(); !m.clamped || w != m.applied || now.Sub(m.at) >= clampEvery {
+	if now := time.Now(); !m.clamped || w != m.applied || now.Sub(m.clampedAt) >= clampEvery {
 		clampWindow(m.win, w)
-		m.clamped, m.applied, m.at = true, w, now
+		m.clamped, m.applied, m.clampedAt = true, w, now
 	}
 }
 

@@ -177,6 +177,55 @@ func TestAGuestHangingUpOnAScrubbedTailLeavesThePooledConnOpen(t *testing.T) {
 	}
 }
 
+func TestLiftingTheCapOpensAnIdleTunnelsWindow(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	go func() {
+		c, acceptErr := ln.Accept()
+		if acceptErr != nil {
+			return
+		}
+		t.Cleanup(func() { _ = c.Close() })
+		_, _ = c.Write(make([]byte, 64<<10))
+	}()
+	dialed := make(chan net.Conn, 1)
+	dial := DialFunc(func(ctx context.Context, network, _ string) (net.Conn, error) {
+		c, dialErr := (&net.Dialer{}).DialContext(ctx, network, ln.Addr().String())
+		if dialErr == nil {
+			dialed <- c
+		}
+		return c, dialErr
+	})
+	p := New(Policy{Allow: []Rule{{Host: "bulk.internal"}}}, nil, nil, dial, nil, nil)
+	t.Cleanup(p.Close)
+	p.SetLimit(types.EgressLimit{RxBytesPerSecond: 1 << 20})
+	conn := dialConnect(t, serveFront(t, p).Listener.Addr().String(), "bulk.internal:443")
+	t.Cleanup(func() { _ = conn.Close() })
+	br := bufio.NewReader(conn)
+	if status := readStatus(t, br); status != "HTTP/1.1 200 Connection Established" {
+		t.Fatalf("CONNECT status = %q", status)
+	}
+	if _, err = io.ReadFull(br, make([]byte, 64<<10)); err != nil {
+		t.Fatalf("read through the tunnel: %v", err)
+	}
+	upstream := <-dialed
+	if got := windowClamp(t, upstream); got != 512<<10 {
+		t.Fatalf("a limited tunnel's window clamp %d, want %d", got, 512<<10)
+	}
+
+	p.SetLimit(types.EgressLimit{})
+	deadline := time.Now().Add(2 * time.Second)
+	for windowClamp(t, upstream) != maxScaledWindow {
+		if time.Now().After(deadline) {
+			t.Fatalf("an idle tunnel keeps window clamp %d after the cap lifted, want %d", windowClamp(t, upstream), maxScaledWindow)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 func windowClamp(t *testing.T, c net.Conn) int {
 	t.Helper()
 	raw, err := c.(*net.TCPConn).SyscallConn()
