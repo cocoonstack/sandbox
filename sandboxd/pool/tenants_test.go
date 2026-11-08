@@ -186,8 +186,8 @@ func TestConcurrentTenantPutsKeepEveryTenant(t *testing.T) {
 
 func TestTenantChangesAreValidatedAndAudited(t *testing.T) {
 	dir := t.TempDir()
-	cfg := &config.Config{DataDir: dir, APIToken: "root", OperatorToken: "op-tok", AuditLog: true}
-	m, err := NewManager(t.Context(), cfg, newFakeEngine(), testSecrets(t), testBackends(t, cfg))
+	cfg := &config.Config{DataDir: dir, APIToken: "root", APITokenNext: "root-next", OperatorToken: "op-tok", OperatorTokenNext: "op-next", AuditLog: true}
+	m, err := NewManager(t.Context(), cfg, newFakeEngine(), testSecrets(t), testBackends(t, &config.Config{DataDir: dir, APIToken: "root"}))
 	if err != nil {
 		t.Fatalf("setup manager: %v", err)
 	}
@@ -198,6 +198,8 @@ func TestTenantChangesAreValidatedAndAudited(t *testing.T) {
 		"no token":       {Name: "new"},
 		"root token":     {Name: "new", Token: "root"},
 		"operator token": {Name: "new", Token: "op-tok"},
+		"root next":      {Name: "new", Token: "root-next"},
+		"operator next":  {Name: "new", Token: "op-next"},
 		"reused token":   {Name: "new", Token: "acme-tok"},
 		"unknown class":  {Name: "new", Token: "x", EgressClass: "nope"},
 		"negative cap":   {Name: "acme", MaxClaims: -1},

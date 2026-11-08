@@ -12,7 +12,7 @@ import (
 
 func TestContract(t *testing.T) {
 	tenantstest.Run(t, func(t *testing.T) tenants.Source {
-		s, err := Open(t.Context(), t.TempDir(), tenants.ReservedOf("root", ""))
+		s, err := Open(t.Context(), t.TempDir(), tenants.ReservedOf("root", "", "", ""))
 		if err != nil {
 			t.Fatalf("open: %v", err)
 		}
@@ -21,7 +21,7 @@ func TestContract(t *testing.T) {
 }
 
 func TestTheSetSurvivesAReopen(t *testing.T) {
-	dir, root := t.TempDir(), tenants.ReservedOf("root", "")
+	dir, root := t.TempDir(), tenants.ReservedOf("root", "", "", "")
 	s, err := Open(t.Context(), dir, root)
 	if err != nil {
 		t.Fatalf("open: %v", err)
@@ -50,7 +50,7 @@ func TestTheSetSurvivesAReopen(t *testing.T) {
 
 func TestATenantsFileNeedsTheRootToken(t *testing.T) {
 	dir := t.TempDir()
-	s, err := Open(t.Context(), dir, tenants.ReservedOf("root", "op"))
+	s, err := Open(t.Context(), dir, tenants.ReservedOf("root", "root-next", "op", "op-next"))
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -60,12 +60,18 @@ func TestATenantsFileNeedsTheRootToken(t *testing.T) {
 	if _, err = Open(t.Context(), dir, tenants.Reserved{}); err == nil {
 		t.Error("a tenants file on a node without api_token opened")
 	}
-	for _, token := range []string{"root", "op"} {
+	for _, token := range []string{"root", "root-next", "op", "op-next"} {
 		if _, err = s.Put(t.Context(), tenantstest.Record("beta", token, 0, "")); !errors.Is(err, tenants.ErrInvalid) {
 			t.Errorf("a tenant holding the %s token: %v, want ErrInvalid", token, err)
 		}
 	}
-	if _, err = Open(t.Context(), dir, tenants.ReservedOf("root", "t")); !errors.Is(err, tenants.ErrInvalid) {
-		t.Errorf("an operator token a stored tenant holds: %v, want ErrInvalid", err)
+	for name, reserved := range map[string]tenants.Reserved{
+		"api_token_next":      tenants.ReservedOf("root", "t", "", ""),
+		"operator_token":      tenants.ReservedOf("root", "", "t", ""),
+		"operator_token_next": tenants.ReservedOf("root", "", "op", "t"),
+	} {
+		if _, err = Open(t.Context(), dir, reserved); !errors.Is(err, tenants.ErrInvalid) {
+			t.Errorf("an %s a stored tenant holds: %v, want ErrInvalid", name, err)
+		}
 	}
 }

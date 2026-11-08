@@ -469,7 +469,7 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 		}
 		m.audit = audit
 	}
-	m.reserved = tenants.ReservedOf(cfg.APIToken, cfg.OperatorToken)
+	m.reserved = tenants.ReservedOf(cfg.APIToken, cfg.APITokenNext, cfg.OperatorToken, cfg.OperatorTokenNext)
 	m.cfg = cfg
 	m.view.Store(newConfigView(cfg, secrets))
 	for _, spec := range cfg.Pools {

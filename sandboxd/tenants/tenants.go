@@ -47,8 +47,10 @@ type TenantRecord struct {
 
 // Reserved holds the SHA-256 sums of the node tokens a tenant token must differ from; an empty sum reserves nothing.
 type Reserved struct {
-	Root     string
-	Operator string
+	Root         string
+	RootNext     string
+	Operator     string
+	OperatorNext string
 }
 
 // Presence is what a memory-only lookup knows about a name.
@@ -102,8 +104,12 @@ func Validate(r TenantRecord, reserved Reserved) error {
 		return nil
 	case r.TokenSHA256 == reserved.Root:
 		return fmt.Errorf("%w: tenant %q token must differ from api_token", ErrInvalid, r.Name)
+	case r.TokenSHA256 == reserved.RootNext:
+		return fmt.Errorf("%w: tenant %q token must differ from api_token_next", ErrInvalid, r.Name)
 	case r.TokenSHA256 == reserved.Operator:
 		return fmt.Errorf("%w: tenant %q token must differ from operator_token", ErrInvalid, r.Name)
+	case r.TokenSHA256 == reserved.OperatorNext:
+		return fmt.Errorf("%w: tenant %q token must differ from operator_token_next", ErrInvalid, r.Name)
 	}
 	if sum, err := hex.DecodeString(r.TokenSHA256); err != nil || len(sum) != sha256.Size {
 		return fmt.Errorf("%w: tenant %q token_sha256 must be %d hex bytes", ErrInvalid, r.Name, sha256.Size)
@@ -149,19 +155,24 @@ func KeepTokens(cur map[string]TenantRecord, records []TenantRecord) (map[string
 }
 
 // ReservedOf hashes the node tokens; an empty token reserves nothing.
-func ReservedOf(apiToken, operatorToken string) Reserved {
-	var r Reserved
-	if apiToken != "" {
-		r.Root = TokenSHA256(apiToken)
+func ReservedOf(apiToken, apiTokenNext, operatorToken, operatorTokenNext string) Reserved {
+	return Reserved{
+		Root:         reservedSum(apiToken),
+		RootNext:     reservedSum(apiTokenNext),
+		Operator:     reservedSum(operatorToken),
+		OperatorNext: reservedSum(operatorTokenNext),
 	}
-	if operatorToken != "" {
-		r.Operator = TokenSHA256(operatorToken)
-	}
-	return r
 }
 
 // TokenSHA256 is the hex SHA-256 a tenant token is kept as outside config.json.
 func TokenSHA256(token string) string {
 	sum := sha256.Sum256([]byte(token))
 	return hex.EncodeToString(sum[:])
+}
+
+func reservedSum(token string) string {
+	if token == "" {
+		return ""
+	}
+	return TokenSHA256(token)
 }
