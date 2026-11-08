@@ -56,6 +56,12 @@ type TemplateStatus struct {
 	CreatedAt     time.Time         `json:"created_at"`
 }
 
+// EgressLimit is a claim's egress cap in bytes per second each way; zero is unlimited.
+type EgressLimit struct {
+	TxBytesPerSecond int64 `json:"tx_bytes_per_second,omitzero"`
+	RxBytesPerSecond int64 `json:"rx_bytes_per_second,omitzero"`
+}
+
 // SandboxSummary is one live claim as the scoped index reports it, never a token or a host path.
 type SandboxSummary struct {
 	ID             string            `json:"id"`
@@ -76,6 +82,7 @@ type SandboxSummary struct {
 	TunAddr        netip.Addr        `json:"tun_addr,omitzero"`
 	TunOff         bool              `json:"tun_off,omitzero"`
 	TunProfile     string            `json:"tun_profile,omitempty"`
+	EgressLimit    EgressLimit       `json:"egress_limit,omitzero"`
 	// Restarts counts cold boots that replaced an exited VMM; each loses guest memory.
 	Restarts    int       `json:"restarts,omitzero"`
 	RestartedAt time.Time `json:"restarted_at,omitzero"`

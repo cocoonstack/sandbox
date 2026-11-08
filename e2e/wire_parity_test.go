@@ -42,7 +42,7 @@ var wirePairs = []struct {
 	{"checkpointResponse", false, server.CheckpointResponse{}, nil},
 	{"checkpointClaimRequest", true, server.CheckpointClaimRequest{}, nil},
 	{"checkpointListResponse", false, server.CheckpointListResponse{}, nil},
-	{"checkpointRecord", false, types.Checkpoint{}, []string{"node", "key", "tenant", "policy_source", "no_egress", "guest_env", "archive", "tun_off", "tun_profile"}},
+	{"checkpointRecord", false, types.Checkpoint{}, []string{"node", "key", "tenant", "policy_source", "no_egress", "guest_env", "archive", "tun_off", "tun_profile", "egress_limit"}},
 	{"volumeListResponse", false, server.VolumeListResponse{}, nil},
 	{"VolumeInfo", false, types.VolumeInfo{}, nil},
 	{"VolumeState", false, types.VolumeState{}, nil},
