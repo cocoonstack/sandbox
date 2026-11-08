@@ -88,6 +88,10 @@ func (m *Manager) adoptArchived(ctx context.Context, id string, cred Cred, room 
 	sb.Transition.Lock()
 	defer sb.Transition.Unlock()
 	m.mu.Lock()
+	if held := m.claimed[id]; held != nil {
+		m.mu.Unlock()
+		return m.foldTake(ctx, held, epoch)
+	}
 	if sb.Deadline.IsZero() {
 		sb.Deadline = m.retentionDeadline(sb.Key)
 	}
@@ -101,6 +105,12 @@ func (m *Manager) adoptArchived(ctx context.Context, id string, cred Cred, room 
 	m.recordUsage(ctx, usage.Event{Time: adoptedAt, Event: "adopt", ID: id, Reference: rec.Checkpoint, Tenant: sb.Tenant, Deadline: retention})
 	log.WithFunc("pool.adoptArchived").Infof(ctx, "adopted archived sandbox %s from %s", id, rec.Owner)
 	return true, nil
+}
+
+func (m *Manager) foldTake(ctx context.Context, held *types.Sandbox, epoch int64) (bool, error) {
+	held.Transition.Lock()
+	defer held.Transition.Unlock()
+	return m.commitIfLive(ctx, held, func() { held.ArchiveEpoch = max(held.ArchiveEpoch, epoch) })
 }
 
 func (m *Manager) putArchive(ctx context.Context, sb *types.Sandbox, ck string) (int64, error) {
