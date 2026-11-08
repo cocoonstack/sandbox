@@ -134,15 +134,7 @@ func (m *Manager) seedTun() {
 	if !ok {
 		return
 	}
-	held := map[string]netip.Addr{}
-	m.mu.Lock()
-	for id, sb := range m.claimed {
-		if sb.TunAddr.IsValid() {
-			held[id] = sb.TunAddr
-		}
-	}
-	m.mu.Unlock()
-	seeder.Seed(held)
+	seeder.Seed(m.heldTunAddrs())
 }
 
 func (m *Manager) releaseTun(ctx context.Context, id string, addr netip.Addr) {
@@ -187,14 +179,7 @@ func (m *Manager) reconcileTunAddrs(ctx context.Context) {
 		return
 	}
 	logger := log.WithFunc("pool.reconcileTunAddrs")
-	held := map[string]netip.Addr{}
-	m.mu.Lock()
-	for id, sb := range m.claimed {
-		if sb.TunAddr.IsValid() {
-			held[id] = sb.TunAddr
-		}
-	}
-	m.mu.Unlock()
+	held := m.heldTunAddrs()
 	lost, err := addrs.Confirm(ctx, held)
 	if err != nil {
 		logger.Warnf(ctx, "confirm overlay addresses: %v", err)
@@ -228,6 +213,18 @@ func (m *Manager) reconcileTunAddrs(ctx context.Context) {
 			logger.Infof(ctx, "reclaimed overlay address %s of %s: no node confirmed it for %s", addr, id, tunUnconfirmedAfter)
 		}
 	}
+}
+
+func (m *Manager) heldTunAddrs() map[string]netip.Addr {
+	held := map[string]netip.Addr{}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for id, sb := range m.claimed {
+		if sb.TunAddr.IsValid() {
+			held[id] = sb.TunAddr
+		}
+	}
+	return held
 }
 
 // confirmAdoptedTun stamps an adopted claim's address before its row stops sparing it; an address another claim took is dropped.

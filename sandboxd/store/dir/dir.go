@@ -149,20 +149,12 @@ func (d *Store) SetLabels(_ context.Context, id string, labels []byte) error {
 
 func (d *Store) Delete(_ context.Context, id string) error {
 	final := filepath.Join(d.root, id)
-	entries, err := os.ReadDir(final)
+	err := utils.RemoveDirEntries(final, func(name string) bool { return name != store.MetaFile })
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil
 	}
 	if err != nil {
 		return err
-	}
-	for _, e := range entries {
-		if e.Name() == store.MetaFile {
-			continue
-		}
-		if err := os.RemoveAll(filepath.Join(final, e.Name())); err != nil {
-			return err
-		}
 	}
 	return os.RemoveAll(final)
 }
