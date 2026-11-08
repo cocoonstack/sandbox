@@ -609,7 +609,7 @@ func TestClaimEnvEndToEnd(t *testing.T) {
 		if status != http.StatusOK || json.Unmarshal(body, &claimed) != nil {
 			t.Fatalf("claim: %d %s", status, body)
 		}
-		sock, err := st.mgr.AgentSocket(claimed.ID, claimed.Token)
+		sock, err := st.mgr.AgentSocket(claimed.ID, pool.Cred{Token: claimed.Token})
 		if err != nil {
 			t.Fatalf("socket: %v", err)
 		}
@@ -667,7 +667,7 @@ func TestClaimEnvThroughTheSDK(t *testing.T) {
 	st := startStack(t, config.PoolSpec{PoolKey: testKey, Warm: 1})
 	guestFile := func(sb *sandbox.Sandbox) string {
 		t.Helper()
-		sock, err := st.mgr.AgentSocket(sb.ID, sb.Token())
+		sock, err := st.mgr.AgentSocket(sb.ID, pool.Cred{Token: sb.Token()})
 		if err != nil {
 			t.Fatalf("socket: %v", err)
 		}
