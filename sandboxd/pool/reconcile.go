@@ -151,18 +151,18 @@ func (m *Manager) sweepOrphanSnaps(ctx context.Context, snaps []string, snapsErr
 	// An unreferenced hibernate snapshot is an orphan; fork and golden snapshots never span a restart
 	if snapsErr != nil {
 		logger.Warnf(ctx, "snapshot sweep skipped: %v", snapsErr)
-	} else {
-		orphans := slices.DeleteFunc(snaps, func(snap string) bool {
-			if strings.HasPrefix(snap, hibernatePrefix) {
-				return referenced[snap]
-			}
-			return !strings.HasPrefix(snap, forkPrefix) && !strings.HasPrefix(snap, goldenPrefix)
-		})
-		m.runBounded(ctx, len(orphans), func(ctx context.Context, i int) {
-			m.dropSnap(ctx, orphans[i])
-			logger.Infof(ctx, "removed orphan snapshot %s", orphans[i])
-		}).Wait()
+		return
 	}
+	orphans := slices.DeleteFunc(snaps, func(snap string) bool {
+		if strings.HasPrefix(snap, hibernatePrefix) {
+			return referenced[snap]
+		}
+		return !strings.HasPrefix(snap, forkPrefix) && !strings.HasPrefix(snap, goldenPrefix)
+	})
+	m.runBounded(ctx, len(orphans), func(ctx context.Context, i int) {
+		m.dropSnap(ctx, orphans[i])
+		logger.Infof(ctx, "removed orphan snapshot %s", orphans[i])
+	}).Wait()
 }
 
 // pendingMovesLocked marks the journaled moves of loaded claims: a source keeps its claim gated until the record resolves; callers hold m.mu.

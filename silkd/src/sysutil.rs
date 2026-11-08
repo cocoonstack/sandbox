@@ -98,23 +98,23 @@ pub fn align_proxy_env(cmd: &mut Command) {
     align_proxy_env_for(cmd, crate::net::routes_directly());
 }
 
-/// Sets the command's cwd and, with a user, de-escalates onto it with the user's groups before entering cwd.
+/// Sets the command's cwd and, with a user, de-escalates onto it with the user's groups before entering cwd; returns that user's uid.
 pub fn apply_cwd_user(
     cmd: &mut Command,
     cwd: Option<&str>,
     user: Option<&str>,
-) -> Result<(), String> {
+) -> Result<Option<u32>, String> {
     let Some(user) = user else {
         if let Some(cwd) = cwd {
             cmd.current_dir(cwd);
         }
-        return Ok(());
+        return Ok(None);
     };
     let (uid, gid, home) = lookup_user(user)?;
     de_escalate(cmd, user, uid, gid, cwd)?;
     cmd.env("HOME", home);
     cmd.env("USER", user);
-    Ok(())
+    Ok(Some(uid))
 }
 
 pub fn apply_owner(cmd: &mut Command, path: &str) {

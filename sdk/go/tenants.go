@@ -53,7 +53,7 @@ type tenantUpdate struct {
 	EgressClass string `json:"egress_class,omitempty"`
 }
 
-// Tenants lists up to limit tenants named after the cursor (GET /v1/tenants); a zero limit takes the node's default page, and it requires the operator token.
+// Tenants lists up to limit tenants named after the cursor (GET /v1/tenants); a zero limit takes the node's default page, and it requires the root or operator token.
 func (c *Client) Tenants(ctx context.Context, after string, limit int) (*TenantList, error) {
 	q := url.Values{}
 	if after != "" {

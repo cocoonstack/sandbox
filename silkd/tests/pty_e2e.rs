@@ -254,3 +254,33 @@ async fn pty_started_write_failure_kills_the_shell_and_unregisters_it() {
     );
     wait_gone(pid).await;
 }
+
+#[tokio::test]
+#[ignore = "needs root"]
+async fn a_user_pty_shell_owns_its_tty() {
+    let state = Arc::new(State::new());
+    let (mut cw, mut lines, handle) = connect_with(
+        &state,
+        json!({"op":"pty_open","cols":80,"rows":24,"user":"nobody"}),
+    )
+    .await;
+    read_until(&mut lines, |v| v["type"] == "started").await;
+    send(
+        &mut cw,
+        json!({"op":"stdin","data":b64(b"echo silk-owner-$(stat -c %U \"$(tty)\")-end\n")}),
+    )
+    .await;
+    let mut out = String::new();
+    while !["nobody", "root"]
+        .iter()
+        .any(|u| out.contains(&format!("silk-owner-{u}-end")))
+    {
+        let frame = read_until(&mut lines, |v| v["type"] == "stdout").await;
+        out.push_str(&String::from_utf8_lossy(&decode(&frame)));
+    }
+    assert!(out.contains("silk-owner-nobody-end"), "{out}");
+    send(&mut cw, json!({"op":"stdin","data":b64(b"exit\n")})).await;
+    read_until(&mut lines, |v| v["type"] == "exit").await;
+    cw.shutdown().await.unwrap();
+    handle.await.unwrap().unwrap();
+}

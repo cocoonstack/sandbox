@@ -339,7 +339,7 @@ func (e *Engine) DialGuestPort(ctx context.Context, vsockSocket string, port uin
 	}
 	if _, ok := resp.(*wire.Ready); !ok {
 		_ = conn.Close()
-		return nil, fmt.Errorf("port_forward %d: %s", port, respFail(resp))
+		return nil, fmt.Errorf("port_forward %d: %w", port, frameErr(resp))
 	}
 	return &guestPortConn{Conn: conn, r: r}, nil
 }
@@ -587,13 +587,6 @@ func shardOf(shards []string, name string) string {
 
 func isVMNotFound(err error) bool {
 	return strings.Contains(err.Error(), vmNotFound)
-}
-
-func respFail(resp wire.Response) string {
-	if errResp, ok := resp.(*wire.ErrorResp); ok {
-		return errResp.Error()
-	}
-	return "unexpected frame " + resp.RespType()
 }
 
 // belowFloor reports whether v is below floor; known is false for a dev build.

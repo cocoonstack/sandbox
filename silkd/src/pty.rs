@@ -44,8 +44,14 @@ pub async fn open<W: AsyncWrite + Unpin>(
     cmd.env_clear().envs(sysutil::base_env().iter().copied());
     sysutil::apply_claim_env(&mut cmd);
     cmd.envs(&req.env);
-    if let Err(e) = sysutil::apply_cwd_user(&mut cmd, req.cwd.as_deref(), req.user.as_deref()) {
-        return proto::error_frame(out, ErrorKind::BadRequest, e).await;
+    let uid = match sysutil::apply_cwd_user(&mut cmd, req.cwd.as_deref(), req.user.as_deref()) {
+        Ok(uid) => uid,
+        Err(e) => return proto::error_frame(out, ErrorKind::BadRequest, e).await,
+    };
+    if let Some(uid) = uid
+        && let Err(e) = std::os::unix::fs::fchown(&slave, Some(uid), None)
+    {
+        return proto::err_frame(out, &e, "chown pty slave").await;
     }
     match (slave.try_clone(), slave.try_clone()) {
         (Ok(in_fd), Ok(out_fd)) => {

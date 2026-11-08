@@ -62,7 +62,7 @@ func (p *Proxy) serveSocks(ctx context.Context, conn net.Conn) {
 		return
 	}
 	decision, intercept := p.tunnelDecision(host, port, false)
-	if intercept || port == 0 {
+	if intercept || port == 0 || !plainHost(host) {
 		decision = DecisionDeny
 	}
 	ev := Event{Method: methodSOCKS, Host: host, Port: port, Decision: decision}

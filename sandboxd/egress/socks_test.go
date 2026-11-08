@@ -114,6 +114,19 @@ func TestSocksRefusesWhatItCannotServe(t *testing.T) {
 	}
 }
 
+func TestSocksDeniesAndRecordsAZonedOrNonASCIIName(t *testing.T) {
+	for _, name := range []string{"2606:4700:4700::1111%.example.com", "x.exampl\u0130.com"} {
+		events := make(chan Event, 4)
+		_, addr := socksProxy(t, Policy{Allow: []Rule{{Host: "*.example.com"}}}, nil, fixedDial(echoServer(t)), events, nil)
+		if _, reply := socksExchange(t, addr, socksGreeting, socksNameRequest(name, 443)); reply[1] != socksDenied {
+			t.Errorf("reply code for %q = %#x, want denied", name, reply[1])
+		}
+		if ev := recvEvent(t, events); ev.Method != methodSOCKS || ev.Host != name || ev.Decision != DecisionDeny {
+			t.Errorf("audit event for %q = %+v, want SOCKS5 deny", name, ev)
+		}
+	}
+}
+
 func TestSocksIPv4TargetMatchesLiteralRule(t *testing.T) {
 	events := make(chan Event, 4)
 	_, addr := socksProxy(t, Policy{Allow: []Rule{{Host: "127.0.0.1"}}}, nil, fixedDial(echoServer(t)), events, nil)

@@ -19,8 +19,6 @@ GO_OSES := linux darwin
 
 ## Location to install dependencies to
 LOCALBIN ?= $(shell pwd)/bin
-$(LOCALBIN):
-	mkdir -p $(LOCALBIN)
 
 ## Tool versions
 GOLANGCILINT_VERSION ?= v2.13.2

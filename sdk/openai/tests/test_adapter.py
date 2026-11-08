@@ -90,6 +90,22 @@ def test_operations_share_one_sandbox_handle(node):
     asyncio.run(go())
 
 
+def test_delete_closes_the_session_client(node, monkeypatch):
+    closed = []
+    monkeypatch.setattr("cocoonsandbox.Client.close", lambda self: closed.append(self))
+
+    async def go():
+        client = CocoonSandboxClient()
+        created = await client.create(options=CocoonSandboxClientOptions(addr=node))
+        await client.delete(created)
+        resumed = await client.resume(created._inner.state)
+        resumed._inner._sandbox()
+        await client.delete(resumed)
+
+    asyncio.run(go())
+    assert len(closed) == 2 and closed[0] is not closed[1], closed
+
+
 def test_exec_maps_stdio_and_exit(node, monkeypatch):
     class FakeSandbox:
         def run(self, argv, on_stdout=None, on_stderr=None, timeout=None):

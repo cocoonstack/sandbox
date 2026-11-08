@@ -51,6 +51,7 @@ class CocoonSandboxSession(BaseSandboxSession):
     def __init__(self, *, state: CocoonSandboxSessionState) -> None:
         self.state = state
         self._proxies: list[socket.socket] = []
+        self._client: Client | None = None
         self._sb: Sandbox | None = None
 
     @classmethod
@@ -121,8 +122,8 @@ class CocoonSandboxSession(BaseSandboxSession):
     def _sandbox(self) -> Sandbox:
         if self._sb is None:
             s = self.state
-            client = Client(s.addr, api_token=s.api_token)
-            self._sb = client.attach(s.owner or s.addr, s.sandbox_id, s.sandbox_token)
+            self._client = Client(s.addr, api_token=s.api_token)
+            self._sb = self._client.attach(s.owner or s.addr, s.sandbox_id, s.sandbox_token)
         return self._sb
 
     def _abs(self, path: Path | str) -> Path:
@@ -163,7 +164,7 @@ class CocoonSandboxClient(BaseSandboxClient[CocoonSandboxClientOptions]):
                 await asyncio.to_thread(sb.close)
             raise
         session = CocoonSandboxSession.from_state(state)
-        session._sb = sb
+        session._client, session._sb = client, sb
         return self._wrap_session(session)
 
     async def delete(self, session: SandboxSession) -> SandboxSession:
@@ -172,6 +173,8 @@ class CocoonSandboxClient(BaseSandboxClient[CocoonSandboxClientOptions]):
             raise TypeError("CocoonSandboxClient.delete expects a CocoonSandboxSession")
         await inner._shutdown_backend()
         await asyncio.to_thread(inner._sandbox().close)
+        if inner._client is not None:
+            inner._client.close()
         return session
 
     async def resume(self, state: SandboxSessionState) -> SandboxSession:

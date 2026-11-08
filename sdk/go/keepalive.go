@@ -1,7 +1,6 @@
 package sandbox
 
 import (
-	"errors"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -120,7 +119,7 @@ type lease struct {
 
 // done ends the RPC: a terminal frame, error frames included, parks the connection; any other failure drops it.
 func (l *lease) done(err error) error {
-	if _, frame := errors.AsType[*wire.ErrorResp](err); err == nil || frame {
+	if _, frame := err.(*wire.ErrorResp); err == nil || frame {
 		l.reuse()
 	} else {
 		l.close()

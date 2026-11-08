@@ -74,8 +74,8 @@ A claim always enters at whatever node the client dialed:
    `no_redirect` set, so the target warms-or-provisions locally and a stale
    view can never ping-pong. The same redirect fires when the node lacks a
    golden for the key but gossip names a template owner, and when the node
-   sits at `max_claims` or `max_running`: a warm peer first, else a peer that
-   serves the pool. A node that would refuse a claim stops gossiping its pools
+   refuses admission (any [admission refusal](sandboxd-api.md#admission-refusals)):
+   a warm peer first, else a peer that serves the pool. A node that would refuse a claim stops gossiping its pools
    within a tick. A stale view can still name one; it answers 429, and the SDK
    then tries the next one and the origin.
 3. **No candidates** — the node provisions locally: a golden clone (tens of
@@ -151,7 +151,7 @@ claim placement resolves the holder.
 
 ## Querying members
 
-`GET /v1/info` (root `api_token`) reports this node's pools plus the peer
+`GET /v1/info` (root or operator token) reports this node's pools plus the peer
 data-plane addresses it currently sees:
 
 ```bash
@@ -160,8 +160,9 @@ curl -s -H "Authorization: Bearer $TOKEN" http://node-a:7777/v1/info | jq .
 
 The [API page](sandboxd-api.md#get-v1info) describes the payload.
 
-`peers`, served by `GET /v1/peers` (root or tenant token), is what the SDK
-scatters across in `Lookup`. An empty/absent `peers` means a mesh of one.
+`peers`, served by `GET /v1/peers` (root, operator or tenant token), is what the SDK
+scatters across in `Lookup`; a node with `client_advertise` set answers the
+client addresses. An empty/absent `peers` means a mesh of one.
 
 ## Relocating a handle
 

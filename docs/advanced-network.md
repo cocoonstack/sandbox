@@ -64,7 +64,7 @@ answers.
 | --- | --- | --- | --- | --- |
 | 0 | 4 | magic | `SLKT` | `SLKT` |
 | 4 | 2 | version | highest it speaks (1) | the version both use; ≤ the guest's |
-| 6 | 2 | offloads | offloads its tun accepts on write | offloads its tun accepts on write |
+| 6 | 2 | offloads | offloads its tun accepts on write | CSUM, TSO4, TSO_ECN and USO4, always |
 | 8 | 2 | mtu | 0 | MTU for `tun0`; 0 keeps the current one |
 | 10 | 2 | flags | 0 | bit 0 `ON`: packet mode is on for this box |
 
@@ -77,11 +77,11 @@ closing silently. A guest that does not speak the host's version closes the
 stream. The guest gives up on a hello that does not arrive in 5 seconds.
 
 Offload bits are the kernel's `TUN_F_*` values: `0x01` CSUM, `0x02` TSO4,
-`0x04` TSO6, `0x08` TSO_ECN, `0x20` USO4, `0x40` USO6. Each side probes its
+`0x04` TSO6, `0x08` TSO_ECN, `0x20` USO4, `0x40` USO6. The guest probes its
 kernel (USO needs Linux 6.2) and then enables, with `TUNSETOFFLOAD`, only the
 offloads both hellos carry; segmentation offloads are dropped when CSUM is not
-common, and USO is enabled only as the USO4 and USO6 pair. The host offers
-USO4 alone, so a guest never enables USO. A side never builds a frame whose GSO type the peer did not offer;
+common, and USO is enabled only as the USO4 and USO6 pair. The host has no TUN
+and segments in software; it offers USO4 alone, so a guest never enables USO. A side never builds a frame whose GSO type the peer did not offer;
 packets its kernel queued before a reconnect keep their old type, and a
 receiver may drop one it cannot take.
 

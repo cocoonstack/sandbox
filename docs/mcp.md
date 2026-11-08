@@ -42,7 +42,7 @@ in the guest, which can hold its reply up to 5 s past the cap.
 | `hibernate` | snapshot + stop, freeing memory while keeping id, files and processes; the next call that reaches the guest wakes it |
 | `promote` | publish the sandbox as the template `template_name` on its node; re-promoting replaces it |
 | `release` | destroy the sandbox and its files; the session forgets the id, so a second release is rejected as unknown |
-| `node_info` | warm pools, promoted templates, live claims, drain state, capacity and mesh peers; needs the operator token |
+| `node_info` | warm pools, promoted templates, live claims, drain state, capacity and mesh peers; needs the root or operator token |
 
 An egress-lane sandbox cannot `fork`, `checkpoint`, `hibernate` or `promote`.
 

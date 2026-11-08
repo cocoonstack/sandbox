@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cocoonstack/sandbox/protocol/wire"
 	"github.com/cocoonstack/sandbox/sdk/go/silkd/silkdtest"
 )
 
@@ -43,6 +44,24 @@ func TestRefusedStreamOpenKeepsItsConnection(t *testing.T) {
 	}
 	if got := upgrades.Load(); got != 1 {
 		t.Errorf("upgrades = %d, want 1: an error frame ends the RPC, not the connection", got)
+	}
+}
+
+func TestAWriterFailingWithAnErrorFrameDropsTheStream(t *testing.T) {
+	sb := testSandbox(t, newAgentServer(t, silkdtest.NewFake(t.TempDir()).ServeConn))
+	if err := sb.WriteFile(t.Context(), "/f", make([]byte, 3*wire.BulkChunk), nil); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	refused := &wire.ErrorResp{Kind: "io", Message: "push refused"}
+	err := sb.ReadFileTo(t.Context(), "/f", failingWriter{refused})
+	if !errors.Is(err, refused) {
+		t.Fatalf("read into a failing writer: %v, want the writer's error", err)
+	}
+	sb.pool.mu.Lock()
+	parked := len(sb.pool.idle)
+	sb.pool.mu.Unlock()
+	if parked != 0 {
+		t.Errorf("%d connections parked mid-stream, want the caller's failure to drop it", parked)
 	}
 }
 
@@ -183,6 +202,10 @@ func waitUntil(t *testing.T, cond func() bool, msg string) {
 	}
 	t.Fatal(msg)
 }
+
+type failingWriter struct{ err error }
+
+func (w failingWriter) Write([]byte) (int, error) { return 0, w.err }
 
 type hangUpAfterReply struct {
 	net.Conn
