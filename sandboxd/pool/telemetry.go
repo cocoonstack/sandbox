@@ -117,8 +117,12 @@ type requestFrame struct {
 	Port    uint16   `json:"port,omitzero"`
 }
 
+type callerKey struct{}
+
+// auditFrame keeps Caller out of requestFrame, so a guest-bound frame cannot forge it.
 type auditFrame struct {
 	requestFrame
+	Caller  string   `json:"caller,omitempty"`
 	Added   []string `json:"added,omitempty"`
 	Changed []string `json:"changed,omitempty"`
 	Removed []string `json:"removed,omitempty"`
@@ -231,6 +235,7 @@ func (m *Manager) recordAudit(ctx context.Context, id string, frame auditFrame) 
 	if m.audit == nil {
 		return
 	}
+	frame.Caller = CallerOf(ctx)
 	m.appendAudit(ctx, stamped[auditFrame]{time.Now(), id, frame})
 }
 
@@ -283,6 +288,17 @@ func (m *Manager) recordUsage(ctx context.Context, ev usage.Event) {
 	if err := m.usage.append(ev); err != nil {
 		log.WithFunc("pool.recordUsage").Errorf(ctx, err, "append usage event %s %s", ev.Event, ev.ID)
 	}
+}
+
+// WithCaller tags ctx with the credential kind behind a request, for the audit records it causes.
+func WithCaller(ctx context.Context, caller string) context.Context {
+	return context.WithValue(ctx, callerKey{}, caller)
+}
+
+// CallerOf is the credential kind WithCaller set on ctx, or "".
+func CallerOf(ctx context.Context) string {
+	caller, _ := ctx.Value(callerKey{}).(string)
+	return caller
 }
 
 func memberwiseFrame(line []byte) requestFrame {

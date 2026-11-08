@@ -590,20 +590,23 @@ func TestARelayedFrameCannotForgeOrDropItsAuditLine(t *testing.T) {
 	cfg := &config.Config{DataDir: dir, AuditLog: true, Pools: []config.PoolSpec{}}
 	m := mustManager(t, cfg, newFakeEngine())
 	frames := []string{
-		`{"op":"exec","argv":["id"],"decision":1,"src_addr":"x","secret":"gh","upstream":"up:3128","method":"GET","added":["t"]}`,
+		`{"op":"exec","argv":["id"],"decision":1,"src_addr":"x","secret":"gh","upstream":"up:3128","method":"GET","added":["t"],"caller":"root"}`,
 		`{"op":"exec","argv":["id"],"path":1}`,
 		`{"op":"exec","argv":["id"],"x":1,"x":2}`,
 	}
 	for _, frame := range frames {
-		m.Audit(t.Context(), "sb_f", []byte(frame))
+		m.Audit(WithCaller(t.Context(), "claim"), "sb_f", []byte(frame))
 	}
 	lines := auditLines(t, dir)
 	if len(lines) != len(frames) {
 		t.Fatalf("audit lines %q for %d frames", lines, len(frames))
 	}
 	for i, line := range lines {
-		if !strings.Contains(line, `"op":"exec"`) || !strings.Contains(line, `"argv":["id"]`) {
-			t.Errorf("frame %q audited as %q, want the exec and its argv", frames[i], line)
+		if !strings.Contains(line, `"op":"exec"`) || !strings.Contains(line, `"argv":["id"]`) || !strings.Contains(line, `"caller":"claim"`) {
+			t.Errorf("frame %q audited as %q, want the exec, its argv and the claim caller", frames[i], line)
+		}
+		if strings.Contains(line, `"caller":"root"`) {
+			t.Errorf("audit line %q carries the frame's caller", line)
 		}
 		for _, forged := range []string{"decision", "src_addr", "secret", "upstream", "method", "added", "path"} {
 			if strings.Contains(line, `"`+forged+`"`) {

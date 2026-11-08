@@ -175,7 +175,7 @@ guest -> tun0 -> silkd --vsock 2051--> sandboxd --VXLAN--> exit (vxlan0, forward
   stops its ARP answers. A guest of a `tun` pool that wakes, moves or reloads
   into a state without a door (disabled, no address, the pool's `tun` off) is
   sent `tun_down` in the background. The claim switch and the profile label change only
-  with the operator token, through
+  with the root token, through
   [`PUT /v1/sandboxes/{id}/tun`](sandboxd-api.md#put-v1sandboxesidtun).
 - **Lease fence**: a replicated claim stops forwarding packets in either
   direction and stops answering or sending ARP while its node is fenced.

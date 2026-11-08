@@ -1,18 +1,29 @@
 # sandboxd HTTP API
 
-All bodies are JSON. Three token kinds:
+All bodies are JSON. Four token kinds:
 
 - **root** — the node-level `api_token`: every endpoint except the agent relay
   and the preview mint, which need the sandbox's own token.
+- **operator** — the node-level [`operator_token`](deploy.md#configuration),
+  for a public control plane that must not hold cluster configuration power.
+  It acts with root's authority, with no tenant scoping, on exactly
+  `POST /v1/claim`, `GET /v1/sandboxes`, `GET /v1/sandboxes/{id}`,
+  `POST /v1/sandboxes/{id}/release|hibernate|wake|renew`,
+  `GET/PUT/PATCH /v1/sandboxes/{id}/env`, `GET /v1/sandboxes/{id}/ports/{port}`,
+  `POST /v1/sandboxes/{id}/exec`, `GET /v1/sandboxes/{id}/owner`, the
+  [tenant API](#tenants-v1tenants), `GET /v1/info` and `GET /v1/peers`. Every
+  other authenticated endpoint answers it `403`
+  `operator token not allowed on this route`; it is never a sandbox token, so
+  the agent relay refuses it too. Unset or empty, it is off.
 - **tenant** — a token the [tenant API](#tenants-v1tenants) added: accepted by the
   resource-creating verbs (claim, fork, promote, checkpoint create/claim,
   preview mint) and the tenant-scoped listings/deletes below; everything a
-  tenant creates is stamped with its name. Operator surfaces
+  tenant creates is stamped with its name. Root surfaces
   (the per-id sandbox reads, `PUT /v1/sandboxes/{id}/instance-metadata`, `PUT /v1/sandboxes/{id}/tun`, `PUT /v1/sandboxes/{id}/egress-limit`, `GET /v1/info`,
   `PUT /v1/pools`, `POST /v1/config/reload`, the [tenant API](#tenants-v1tenants),
   `POST /v1/sandboxes/{id}/move` and the peer `/v1/moves/{id}` calls, `PUT/DELETE /v1/volumes/{name}`, `POST/DELETE /v1/drain`, `POST/DELETE /v1/cordon`,
   `GET /metrics`, `GET /v1/usage`, `GET /v1/checkpoints/{id}/blob`)
-  answer a tenant token `403` — authenticated but not authorized; an unknown
+  answer a tenant token `403` `root token required` — authenticated but not authorized; an unknown
   token stays `401`. On a node with a shared
   [`meta_store`](deploy.md#shared-tenant-database), a tenant token the node
   has not cached answers `503` while the database is unreachable; retry.
@@ -20,7 +31,7 @@ All bodies are JSON. Three token kinds:
   the sandbox-scoped endpoints; each endpoint says whether root also acts by id.
 
 Endpoints below that say "node API token" accept root or tenant unless
-marked root-only. Errors are `{"error": "message"}` with the status codes
+marked root-only; the operator token only where the endpoint names it. Errors are `{"error": "message"}` with the status codes
 listed per endpoint. Request bodies are capped at 1 MiB; a larger one is
 rejected with `400` and an error beginning `invalid request body`.
 
@@ -64,7 +75,8 @@ the guest-reaching verbs have their own 429 causes, listed with each.
 
 ## POST /v1/claim
 
-Auth: `Authorization: Bearer <api_token>` (when configured).
+Auth: `Authorization: Bearer <api_token>` (when configured), a tenant token,
+or the operator token, which claims as root.
 
 ```json
 {"template": "base:24.04", "net": "none", "size": "small",
@@ -301,7 +313,7 @@ declares and omitted otherwise (peer-only rows never carry it).
 
 ## PUT /v1/volumes/{name}
 
-Requires the configured root API token. A tenant token or a node without an
+Requires the configured root API token. A tenant or operator token or a node without an
 `api_token` returns 403. Sandbox, unknown, and missing tokens return 401 when
 `api_token` is configured. The URL supplies the name. Unknown body fields,
 duplicate fields, and trailing JSON return 400.
@@ -507,7 +519,7 @@ independent guest processes and sessions continue. See the
 
 ## POST /v1/sandboxes/{id}/release
 
-Auth: the sandbox's own token, or the root token for operator cleanup by id.
+Auth: the sandbox's own token, or the root or operator token for cleanup by id.
 Destroys the VM. 204 on success, 404 for an unknown id or wrong token, 500 when
 the VM survives removal: the claim is already gone and the node retries the
 removal, 503 `archive registry down; retry` for a claim that holds a registry
@@ -516,7 +528,7 @@ Releasing an already-gone sandbox is 404 — the SDK treats it as success.
 
 ## POST /v1/sandboxes/{id}/hibernate
 
-Auth: the sandbox's own token, or the root token by id (operator, like
+Auth: the sandbox's own token, or the root or operator token by id (like
 release). Atomically snapshots the VM and stops it,
 freeing its memory; the next agent access restores it transparently
 (sessions, processes, and memory state intact — cocoon's hibernate keeps the
@@ -533,7 +545,7 @@ is not archived while its node's lease is overdue, even one already hibernated.
 
 ## POST /v1/sandboxes/{id}/wake
 
-Auth: the sandbox's own token, or the root token by id (operator). Restores
+Auth: the sandbox's own token, or the root or operator token by id. Restores
 a hibernated (or archived) sandbox and leaves it running — waking is
 otherwise only a side effect of the next agent access, so this is the
 explicit form for warming a sandbox ahead of use. Idempotent on one already
@@ -551,7 +563,7 @@ when the cold boot or a restore fails, and the [guest errors](#guest-errors).
 
 ## POST /v1/sandboxes/{id}/renew
 
-Auth: the sandbox's own token, or the root token by id (operator). Resets the
+Auth: the sandbox's own token, or the root or operator token by id. Resets the
 lease to `ttl_seconds` from now, so a client holding a sandbox longer than its
 claim asked for does not have to claim a new one:
 
@@ -573,7 +585,7 @@ An archived sandbox is refused: off-node, its deadline is the store's retention
 window rather than a lease, and a TTL written over it would schedule the
 checkpoint for deletion. Wake it first. A claim whose [tenant was
 removed](#tenants-v1tenants) runs to its deadline but cannot extend it: its own
-token gets 403, the root token still renews. 400 a malformed body; 401 missing
+token gets 403, the root or operator token still renews. 400 a malformed body; 401 missing
 bearer token; 403 the claim's tenant was removed; 404 unknown id or wrong
 token; 409 archived, or being archived right now; 503 the archive registry is
 down, for a hibernated claim with a replica under `archive_failover`: the node
@@ -702,7 +714,7 @@ follow a redirect.
 
 ## PUT /v1/pools
 
-Auth: root only (tenant tokens get 403). Replaces the node's desired warm
+Auth: root only (tenant and operator tokens get 403). Replaces the node's desired warm
 targets online — no restart, and no live claim's VM is touched. With
 [`meta_store.cell`](deploy.md#shared-pool-set) set, it replaces them on every
 node of the cell. On a node with egress policies,
@@ -731,7 +743,7 @@ token; 409 egress pool on a node without an egress attachment; 503 the
 
 ## Tenants (/v1/tenants)
 
-Auth: root only (tenant tokens get 403); a node without `api_token` answers 400
+Auth: root or operator (tenant tokens get 403); a node without `api_token` answers 400
 to a write, since tenants need it. The API is the only way in: `config.json` has no
 `tenants` field, and a node starts with no tenants. The set changes at
 runtime, with no restart:
@@ -791,7 +803,7 @@ a token equal to `api_token`, an unknown field, or an unknown `egress_class`.
 
 ## POST /v1/config/reload
 
-Auth: root only (tenant tokens get 403). Re-reads the node's config file and
+Auth: root only (tenant and operator tokens get 403). Re-reads the node's config file and
 applies its reloadable settings at once, or nothing. SIGHUP runs the same
 reload and logs the result. →
 
@@ -814,7 +826,7 @@ A refused reload changes nothing.
 
 ## POST /v1/drain
 
-Auth: root only (tenant tokens get 403). Empties the node for maintenance: claim/fork/branch answer
+Auth: root only (tenant and operator tokens get 403). Empties the node for maintenance: claim/fork/branch answer
 429 with an error ending `node draining` (on a cluster a non-volume claim tries a peer redirect first, and
 peers stop redirecting here within a tick, because this node gossips no pools),
 a live [move](#post-v1sandboxesidmove) to this node is refused,
@@ -855,13 +867,13 @@ new one over the claims still here.
 
 ## DELETE /v1/drain
 
-Auth: root only (tenant tokens get 403). Lifts the drain, stops an evacuation, and kicks an immediate refill. Answers the
+Auth: root only (tenant and operator tokens get 403). Lifts the drain, stops an evacuation, and kicks an immediate refill. Answers the
 fresh info payload. A claim an evacuation is archiving finishes its archive and
 stays here archived; the next call wakes it. A cordon stays in place.
 
 ## POST /v1/cordon
 
-Auth: root only (tenant tokens get 403). Takes the node out of service until
+Auth: root only (tenant and operator tokens get 403). Takes the node out of service until
 `DELETE /v1/cordon`, across restarts: claim/fork/branch answer 429 with an
 error ending `node cordoned`, whatever `max_claims` and `max_running` allow (on
 a cluster a non-volume claim tries a peer redirect first, and peers stop
@@ -879,14 +891,14 @@ written, and the node stays as it was.
 
 ## DELETE /v1/cordon
 
-Auth: root only (tenant tokens get 403). Removes `<data_dir>/cordoned`, lifts
+Auth: root only (tenant and operator tokens get 403). Removes `<data_dir>/cordoned`, lifts
 the cordon and kicks an immediate refill; `audit.jsonl` records op `uncordon`.
 A drain stays in place. Answers the fresh info payload; 500 when the file cannot
 be removed.
 
 ## POST /v1/sandboxes/{id}/move
 
-Auth: root only (tenant tokens get 403). Moves one running claim to a peer with
+Auth: root only (tenant and operator tokens get 403). Moves one running claim to a peer with
 its guest's processes and memory (see
 [moving a running claim](cluster.md#moving-a-running-claim)). Body:
 `{"to": "<peer>", "max_downtime_ms": 2000}`, `to` as `GET /v1/peers` lists it
@@ -1032,7 +1044,7 @@ an SDK caller should set.
 
 ## GET /v1/sandboxes
 
-Auth: node API token. Root sees every live claim; a tenant sees only its own.
+Auth: node API token or the operator token. Root and the operator see every live claim; a tenant sees only its own.
 The index is `{"sandboxes": [{id, key, tenant?, deadline, claimed_at?, hibernated,
 archived?, from_checkpoint?, claim_ref?, metadata?, on_expire?, cpu_count, mem_total_bytes,
 volumes?: [{name, mount?, mode?, attach_only?}], volumes_want?: [{name, mount?, mode?, attach_only?}], restarts?, restarted_at?, failed?, env_missing?}]}` — `deadline` is `0001-01-01T00:00:00Z` on an archive kept forever; `cpu_count` and `mem_total_bytes` are the
@@ -1055,9 +1067,9 @@ claims, a removed tenant's included, and is ignored for a tenant token.
 
 ## GET /v1/sandboxes/{id}
 
-Auth: root only. One live claim in the index-row shape above, so a reconcile
+Auth: root or operator (tenant tokens get 403). One live claim in the index-row shape above, so a reconcile
 loop can read a single sandbox without scanning the whole node listing. When
-the caller presents the configured `api_token` the row also carries `token`,
+the caller presents the configured `api_token` or `operator_token` the row also carries `token`,
 the sandbox's own bearer token, so a control plane can hand a returning client
 its data-plane credential without keeping a copy; a node without an
 `api_token` never grants per-sandbox authority and answers without it. The
@@ -1070,7 +1082,7 @@ absent means `default`), and `egress_limit`, the claim's
 
 ## GET /v1/sandboxes/{id}/stats
 
-Auth: root only. One sandbox's resource usage — the per-sandbox counterpart
+Auth: root only (tenant and operator tokens get 403). One sandbox's resource usage — the per-sandbox counterpart
 to the node-scoped `/metrics`:
 
 ```json
@@ -1087,7 +1099,7 @@ never mistaken for idle. 404 unknown id.
 
 ## GET/PUT/PATCH /v1/sandboxes/{id}/env
 
-Auth: node API token (root or tenant). A tenant reaches only claims it owns;
+Auth: node API token (root or tenant) or the operator token, which acts as root. A tenant reaches only claims it owns;
 anything else is 404, like an unknown id. Each call speaks only for the node
 it reaches; on a cluster, send it to the claim's `owner_addr`.
 
@@ -1152,7 +1164,7 @@ already holds the new env, and a resend replaces the row.
 
 ## PUT /v1/sandboxes/{id}/instance-metadata
 
-Auth: root only. Sets the sandbox's instance-metadata document: the JSON a guest
+Auth: root only (tenant and operator tokens get 403). Sets the sandbox's instance-metadata document: the JSON a guest
 agent reads from `169.254.169.254` in the IMDSv2 shape, as cloud-init and
 similar agents do (`PUT /latest/api/token`, then `GET /` with the
 `X-metadata-token` header). It is unrelated to the claim's `metadata` labels.
@@ -1168,7 +1180,7 @@ verb never wakes one) or its image serves no instance metadata.
 
 ## PUT /v1/sandboxes/{id}/tun
 
-Auth: root only. Switches a claim's [advanced network mode](advanced-network.md)
+Auth: root only (tenant and operator tokens get 403). Switches a claim's [advanced network mode](advanced-network.md)
 and sets its exit profile label:
 
 ```json
@@ -1238,7 +1250,7 @@ holds the change, and a resend of the same body replaces the row.
 
 ## GET /metrics
 
-Auth: root only (tenant tokens get 403). Prometheus text format,
+Auth: root only (tenant and operator tokens get 403). Prometheus text format,
 hand-rendered: pool warm/target gauges, claimed/running/max_running/hibernated/archived/failed/draining/cordoned
 gauges, `sandboxd_evacuating` (the claims an evacuation has yet to move), `sandboxd_memory_low` and `sandboxd_anon_bytes` (see [`memory_limit`](deploy.md#configuration)), a per-tenant live-claim gauge (`sandboxd_tenant_claims{tenant="…"}`,
 tenants holding live claims only, so the label set is bounded by the node's claims), `sandboxd_config_digest_mismatch` on a mesh, claims
@@ -1327,7 +1339,7 @@ cocoon's machine-level metering ledger for audit cross-checks. With
 
 ## GET /v1/usage
 
-Auth: root only (tenant tokens get 403). Reads the raw usage events of every
+Auth: root only (tenant and operator tokens get 403). Reads the raw usage events of every
 node of the cell from the [shared usage table](deploy.md#shared-usage-table).
 
 - `GET /v1/usage?tenant=<name>&since=<time>&until=<time>&after=<cursor>&limit=<n>` →
@@ -1361,7 +1373,7 @@ node of the cell from the [shared usage table](deploy.md#shared-usage-table).
 
 ## GET /v1/sandboxes/{id}/agent
 
-Auth: the sandbox's own token. Requires `Upgrade: silkd` +
+Auth: the sandbox's own token; the operator token gets 403. Requires `Upgrade: silkd` +
 `Connection: Upgrade`; answers `101 Switching Protocols` and from then on
 the connection is a byte-for-byte relay to the guest's silkd, carrying RPCs
 back to back (see [silkd](silkd.md)). An open relay holds the sandbox's idle
@@ -1403,7 +1415,7 @@ replicating pool is closed when the lease turns overdue, as an open relay is.
 
 ## GET /v1/sandboxes/{id}/ports/{port}
 
-Auth: the sandbox's own token, or the root `api_token` for a control-plane
+Auth: the sandbox's own token, or the root or operator token for a control-plane
 read (below). Send `Upgrade: tcp` + `Connection: Upgrade`
 (the gate reads `Upgrade` alone, as `/agent`'s does); answers
 `101 Switching Protocols` and from then on
@@ -1421,7 +1433,7 @@ copy error closes both connections and releases the sandbox hold.
 With the sandbox's token, an open relay holds the sandbox's idle clock exactly
 like the silkd relay, and a hibernated sandbox wakes transparently — which is
 why the upgrade header is mandatory: a bare `GET` must not consume a hibernate
-snapshot. With the root `api_token` the relay is passive, for control-plane
+snapshot. With the root or operator token the relay is passive, for control-plane
 reads such as metrics: it never wakes the sandbox and never stamps activity,
 so a poll neither undoes a pause nor keeps a sandbox from idling. A hibernated
 or archived sandbox, or one with a hibernate, wake, checkpoint, promote or
@@ -1434,9 +1446,10 @@ hibernated sandbox whose restore failed. The node log carries which; and the
 
 ## POST /v1/sandboxes/{id}/exec
 
-Auth: the sandbox's own token, or the root `api_token` by id (operator). A
-buffered exec for clients that cannot hold an upgraded connection — plain JSON
-in, plain JSON out, so it multiplexes over HTTP/2 through a TLS proxy:
+Auth: the sandbox's own token, or the root or operator token by id, which
+wakes a hibernated or archived sandbox like the sandbox's token. A buffered exec for clients that cannot hold
+an upgraded connection — plain JSON in, plain JSON out, so it multiplexes over
+HTTP/2 through a TLS proxy:
 
 ```json
 {"argv": ["node", "-v"], "cwd": "/work", "env": {"CI": "1"}, "timeout_seconds": 60}
@@ -1460,10 +1473,10 @@ silkd error; 409 a failed sandbox; 500 a failed restore; the
 
 ## GET /v1/sandboxes/{id}/owner
 
-Auth: the sandbox's own token, or the root `api_token` by id (operator). Answers `{"owner_addr": "host:port"}` when
+Auth: the sandbox's own token, or the root or operator token by id. Answers `{"owner_addr": "host:port"}` when
 this node owns the sandbox, 404 otherwise; a tenant token is a wrong sandbox token here. With
 [`archive_failover`](cluster.md#archived-claims-across-node-loss), a node that
-does not hold the sandbox adopts it, when the token's SHA-256 matches the row's or the caller is root, and its row names an owner whose node
+does not hold the sandbox adopts it, when the token's SHA-256 matches the row's or the caller is root or the operator, and its row names an owner whose node
 lease expired, or whose owner released it in an
 [evacuation](#post-v1drain) or a [wake it had no room for](cluster.md#waking-an-archived-claim-on-a-full-node), and answers 200; with `?room=1`, which the owner of such a wake sends, it adopts only while it could admit the wake itself; 503 with `Retry-After` when the meta store is
 down. A row whose owner's lease is live is never adopted unless the owner released it: 404. A draining, cordoned or fenced
@@ -1471,7 +1484,7 @@ node, or one that lifted its fence less than 8 seconds ago, does not adopt: 404.
 lease is overdue answers 404 for the replicated claims it holds, so the
 `Lookup` scatter moves on. With `client_advertise` configured,
 `owner_addr` is that node's full HTTP(S) origin instead; the same contract applies
-to claim and fork responses. Used by the SDK's `Lookup` scatter. A claim the root
+to claim and fork responses. Used by the SDK's `Lookup` scatter. A claim root or the operator
 adopted keeps the row's token hash in place of its token: its own token still
 authorizes it on this node and any later adopter, an empty token never does,
 and the first call with its token remembers it (persisted at the next claims
@@ -1480,7 +1493,7 @@ never served.
 
 ## GET /v1/info
 
-Auth: root only (tenant tokens get 403). Node pools, promoted templates, claim
+Auth: root or operator (tenant tokens get 403). Node pools, promoted templates, claim
 count, the node's own address, and mesh peers:
 
 ```json
@@ -1537,7 +1550,7 @@ listed once it is re-promoted.
 
 ## GET /v1/peers
 
-Auth: node API token (root **or** tenant). Answers `{"peers": [addr, …]}`
+Auth: node API token (root **or** tenant) or the operator token. Answers `{"peers": [addr, …]}`
 — the cluster's other node addresses, for the SDK's redirect follow and
 `Lookup` scatter. Cluster topology, not operator state, so a tenant token
 may read it (unlike `GET /v1/info`).
