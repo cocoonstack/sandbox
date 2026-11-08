@@ -37,6 +37,7 @@ type claimDTO struct {
 	VMName         string             `json:"vm_name"`
 	Key            types.PoolKey      `json:"key"`
 	Token          string             `json:"token,omitempty"`
+	TokenSHA256    string             `json:"token_sha256,omitempty"`
 	Deadline       time.Time          `json:"deadline,omitzero"`
 	ClaimedAt      time.Time          `json:"claimed_at,omitzero"`
 	LeaseSeconds   int                `json:"lease_seconds,omitzero"`
@@ -401,7 +402,7 @@ func encodeRow(dto *claimDTO) ([]byte, error) {
 
 func dtoOf(sb *types.Sandbox) claimDTO {
 	return claimDTO{
-		ID: sb.ID, VMName: sb.VMName, Key: sb.Key, Token: sb.Token,
+		ID: sb.ID, VMName: sb.VMName, Key: sb.Key, Token: sb.Token, TokenSHA256: sb.TokenSHA256,
 		Deadline: sb.Deadline, ClaimedAt: sb.ClaimedAt, LeaseSeconds: sb.LeaseSeconds, Layer: sb.Layer,
 		PolicySource: sb.PolicySource, NoEgress: sb.NoEgress,
 		Tenant: sb.Tenant, EgressClass: sb.EgressClass, ClaimRef: sb.ClaimRef, Metadata: sb.Metadata, OnExpire: sb.OnExpire,

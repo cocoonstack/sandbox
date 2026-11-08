@@ -25,7 +25,7 @@ func TestUsageJournalRecordsLifecycle(t *testing.T) {
 	m := newTestManager(t, eng)
 	sb := mustClaim(t, m, testKey)
 	hibernateClaim(t, m, sb)
-	if _, _, _, err := m.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
+	if _, _, _, err := m.WakeAgentSocket(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
 		t.Fatalf("Wake: %v", err)
 	}
 	if err := m.Release(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
@@ -189,7 +189,7 @@ func TestEveryClaimScopedUsageEventCarriesTheTenant(t *testing.T) {
 		t.Fatalf("renew: %v", err)
 	}
 	hibernateClaim(t, m, sb)
-	if _, _, _, err := m.WakeAgentSocket(ctx, sb.ID, sb.Token); err != nil {
+	if _, _, _, err := m.WakeAgentSocket(ctx, sb.ID, Cred{Token: sb.Token}); err != nil {
 		t.Fatalf("wake: %v", err)
 	}
 	children, err := m.Fork(ctx, sb.ID, cred, 1, time.Hour, "", "")
@@ -246,13 +246,13 @@ func TestEveryEventThatMovesTheDeadlineStatesIt(t *testing.T) {
 	}
 	assertDeadline("renew")
 	hibernateClaim(t, m, sb)
-	if _, _, _, err := m.WakeAgentSocket(ctx, sb.ID, sb.Token); err != nil {
+	if _, _, _, err := m.WakeAgentSocket(ctx, sb.ID, Cred{Token: sb.Token}); err != nil {
 		t.Fatalf("wake: %v", err)
 	}
 	assertDeadline("wake")
 	mustArchive(t, m, sb)
 	assertDeadline("archive")
-	if _, _, _, err := m.WakeAgentSocket(ctx, sb.ID, sb.Token); err != nil {
+	if _, _, _, err := m.WakeAgentSocket(ctx, sb.ID, Cred{Token: sb.Token}); err != nil {
 		t.Fatalf("wake archived: %v", err)
 	}
 	assertDeadline("unarchive")
@@ -296,7 +296,7 @@ func TestArchiveEventPrecedesAWakeDuringItsTeardown(t *testing.T) {
 		archived := make(chan error, 1)
 		go func() { archived <- m.archive(ctx, sb) }()
 		synctest.Wait()
-		if _, _, _, err := m.WakeAgentSocket(ctx, sb.ID, sb.Token); err != nil {
+		if _, _, _, err := m.WakeAgentSocket(ctx, sb.ID, Cred{Token: sb.Token}); err != nil {
 			t.Fatalf("wake: %v", err)
 		}
 		close(stall)

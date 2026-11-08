@@ -270,7 +270,7 @@ type Backends struct {
 // PeerDeleteFunc broadcasts a checkpoint delete to every peer.
 type PeerDeleteFunc func(ctx context.Context, id string)
 
-// PeerAdoptFunc asks the peers to adopt a released claim and reports whether one holds it now.
+// PeerAdoptFunc asks the peers to adopt a released claim and reports whether one holds it now; an empty token asks as the root.
 type PeerAdoptFunc func(ctx context.Context, id, token string, room bool) bool
 
 type pendingRemoval struct {

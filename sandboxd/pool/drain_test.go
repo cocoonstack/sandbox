@@ -5,6 +5,7 @@ import (
 	"errors"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -85,7 +86,7 @@ func TestEvacuateHandsClaimsToAPeerWhileItsLeaseIsLive(t *testing.T) {
 			if row, held := b.Sandbox(sb.ID); !held || row.Token != sb.Token {
 				t.Errorf("root read of %s on b: held %v, want it with its token", sb.ID, held)
 			}
-			if _, _, _, err := b.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
+			if _, _, _, err := b.WakeAgentSocket(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
 				t.Errorf("adopter's wake of %s: %v", sb.ID, err)
 			}
 		}
@@ -173,7 +174,7 @@ func TestEvacuateKeepsClaimsThatCannotMove(t *testing.T) {
 		if _, held := a.byID(moved.ID); held {
 			t.Error("a kept the claim it could move")
 		}
-		if _, _, _, err := a.WakeAgentSocket(t.Context(), withVolume.ID, withVolume.Token); err != nil {
+		if _, _, _, err := a.WakeAgentSocket(t.Context(), withVolume.ID, Cred{Token: withVolume.Token}); err != nil {
 			t.Errorf("a skipped claim's data plane: %v", err)
 		}
 	})
@@ -244,7 +245,7 @@ func TestUndrainStopsAnEvacuationBeforeItsHandOff(t *testing.T) {
 			t.Errorf("row owner %q after undrain, want a", rec.Owner)
 		}
 		mustNotAdopt(t, b, sb, "adopt a claim whose evacuation stopped")
-		if _, _, _, err := a.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
+		if _, _, _, err := a.WakeAgentSocket(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
 			t.Errorf("wake after undrain: %v", err)
 		}
 	})
@@ -300,7 +301,7 @@ func TestEvacuateHoldsTheWakeOfAQueuedClaimUntilUndrain(t *testing.T) {
 
 				a.Evacuate(t.Context())
 				synctest.Wait()
-				if _, _, _, err := a.WakeAgentSocket(t.Context(), sb.ID, sb.Token); !errors.Is(err, ErrEvacuating) {
+				if _, _, _, err := a.WakeAgentSocket(t.Context(), sb.ID, Cred{Token: sb.Token}); !errors.Is(err, ErrEvacuating) {
 					t.Fatalf("wake of a queued claim: %v, want ErrEvacuating", err)
 				}
 				assertEvacuation(t, a, 1, 0)
@@ -312,7 +313,7 @@ func TestEvacuateHoldsTheWakeOfAQueuedClaimUntilUndrain(t *testing.T) {
 				if held, ok := a.byID(sb.ID); !ok || held.HibernateSnap != snap || held.ArchiveCk != ck {
 					t.Fatalf("held %v, want the claim left as it was parked", ok)
 				}
-				if _, _, _, err := a.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
+				if _, _, _, err := a.WakeAgentSocket(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
 					t.Errorf("wake after undrain: %v", err)
 				}
 			})
@@ -514,7 +515,7 @@ func TestEvacuateMovesTheCheapestClaimsFirst(t *testing.T) {
 		var moved []string
 		a.WithPeerAdopt(func(ctx context.Context, id, token string, _ bool) bool {
 			moved = append(moved, id)
-			adopted, err := b.AdoptArchived(ctx, id, token)
+			adopted, err := b.AdoptArchived(ctx, id, Cred{Token: token})
 			return err == nil && adopted
 		})
 
@@ -570,7 +571,7 @@ func TestEvacuateWithNoPeerToAdoptKeepsTheClaim(t *testing.T) {
 		if !ok || rec.Owner != "a" || held.ArchiveEpoch != rec.Epoch {
 			t.Fatalf("held %v row %s@%d, want the claim kept on the row it took back", ok, rec.Owner, rec.Epoch)
 		}
-		if _, _, _, err := a.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
+		if _, _, _, err := a.WakeAgentSocket(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
 			t.Errorf("wake of the kept claim: %v", err)
 		}
 	})
@@ -582,7 +583,7 @@ func TestEvacuateConvergesWhenAPeersAnswerIsLost(t *testing.T) {
 		a, b := c.pair(t)
 		sb := mustClaim(t, a, testKey)
 		a.WithPeerAdopt(func(ctx context.Context, id, token string, _ bool) bool {
-			if _, err := b.AdoptArchived(ctx, id, token); err != nil {
+			if _, err := b.AdoptArchived(ctx, id, Cred{Token: token}); err != nil {
 				t.Errorf("adopt: %v", err)
 			}
 			return false
@@ -615,7 +616,7 @@ func TestEvacuateConvergesWhenTheReleaseReplyIsLost(t *testing.T) {
 		if err := a.checkArchiveRow(t.Context(), sb.ID); err != nil {
 			t.Errorf("a released row read as lost: %v", err)
 		}
-		if _, _, _, err := a.WakeAgentSocket(t.Context(), sb.ID, sb.Token); !errors.Is(err, ErrUnknownSandbox) {
+		if _, _, _, err := a.WakeAgentSocket(t.Context(), sb.ID, Cred{Token: sb.Token}); !errors.Is(err, ErrUnknownSandbox) {
 			t.Errorf("old owner's wake: %v, want ErrUnknownSandbox", err)
 		}
 		mustAdopt(t, b, sb, "adopt the released row")
@@ -662,7 +663,7 @@ func TestARepeatEvacuateWithNoAdopterLeavesAReleasedRowReleased(t *testing.T) {
 		if rec, _, _ := c.reg.Get(t.Context(), sb.ID); rec.Owner != "" {
 			t.Errorf("row owner %q, want it left released", rec.Owner)
 		}
-		if _, _, _, err := a.WakeAgentSocket(t.Context(), sb.ID, sb.Token); !errors.Is(err, ErrUnknownSandbox) {
+		if _, _, _, err := a.WakeAgentSocket(t.Context(), sb.ID, Cred{Token: sb.Token}); !errors.Is(err, ErrUnknownSandbox) {
 			t.Errorf("wake of the stale claim: %v, want ErrUnknownSandbox", err)
 		}
 		mustAdopt(t, b, sb, "adopt from the row")
@@ -738,6 +739,54 @@ func TestEvacuationDeadlines(t *testing.T) {
 				}
 				if !rec.Deadline.Equal(want) {
 					t.Errorf("row deadline %v, want %v", rec.Deadline, want)
+				}
+			})
+		})
+	}
+}
+
+func TestEvacuateHandsATokenlessClaimOnAsTheRoot(t *testing.T) {
+	tests := []struct {
+		name    string
+		oldPeer bool
+	}{
+		{"a peer adopts for the root", false},
+		{"a peer that refuses the root leaves the claim here", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				c := newFailoverCluster(t)
+				a, b := c.pair(t)
+				d := c.node(t, "d", t.TempDir(), keepAnHour)
+				sb := mustClaim(t, a, testKey)
+				mustArchive(t, a, sb)
+				c.expire("a")
+				a.Drain(t.Context())
+				sum := mustRootAdopt(t, b, sb)
+				holder := d
+				var asked atomic.Int32
+				if tt.oldPeer {
+					holder = b
+					b.WithPeerAdopt(func(ctx context.Context, id, token string, room bool) bool {
+						asked.Add(1)
+						adopted, err := d.adopt(ctx, id, Cred{Token: token}, room)
+						return err == nil && adopted
+					})
+				}
+
+				b.Evacuate(t.Context())
+				synctest.Wait()
+
+				rec, _, _ := c.reg.Get(t.Context(), sb.ID)
+				if tt.oldPeer && asked.Load() == 0 {
+					t.Fatal("the evacuation never asked the peer")
+				}
+				if _, held := holder.byID(sb.ID); !held || rec.Owner != holder.nodeID || rec.TokenSHA256 != sum {
+					t.Fatalf("held on %s %v, row owner %q hash %q, want %s holding it with %q", holder.nodeID, held, rec.Owner, rec.TokenSHA256, holder.nodeID, sum)
+				}
+				if err := wakeClaim(t, holder, sb); err != nil {
+					t.Errorf("claim token on %s: %v", holder.nodeID, err)
 				}
 			})
 		})
