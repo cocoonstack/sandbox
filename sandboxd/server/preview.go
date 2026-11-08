@@ -127,6 +127,10 @@ func (p *PreviewServer) proxyLocal(w http.ResponseWriter, r *http.Request, claim
 			pr.Out.Header.Del("Cookie")
 			pr.Out.Header.Del("Authorization")
 		},
+		ModifyResponse: func(resp *http.Response) error {
+			resp.Header.Del("Service-Worker-Allowed")
+			return nil
+		},
 		Transport: p.transport,
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
 			if code, msg, ok := mapPoolErr(w, err); ok {

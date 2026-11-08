@@ -142,11 +142,12 @@ Four credentials in descending scope: the root `api_token`, the optional
 routes only, for a public control plane), tenant tokens (isolated at the API
 layer) and per-sandbox tokens (that sandbox only, nothing node-level); what each
 may call is in the [API reference](sandboxd-api.md#sandboxd-http-api). The
-operator token reaches every claim's data — it reads any claim's token by id,
-execs in any claim, and through a tenant it mints can fork, checkpoint and
-preview with that claim token — but holds no node or cluster configuration
-power, cannot claim volumes, and leaves an audit record (op `token`) for each
-token it reads. A set `api_token_next` or `operator_token_next` carries
+operator token reaches every claim's data — it reads any claim's token by id
+and execs in any claim — and, through the tenant API, every tenant's
+authority: it can mint or re-key any tenant and act as it, including volume
+claims that tenant may make. Its own bearer cannot claim volumes, it holds no
+node or cluster configuration power, and it leaves an audit record (op
+`token`) for each token it reads. A set `api_token_next` or `operator_token_next` carries
 exactly the authority of `api_token` or `operator_token`, so a node accepts the
 old and the new token during a
 [rolling rotation](deploy.md#rotating-api_token-and-operator_token); remove
@@ -225,7 +226,10 @@ Facts to plan around, stated so the boundary is honest:
   `"inject"` so only claims holding a credential for a host are intercepted
   ([egress](egress.md#https-interception)).
 - **The audit and usage journals are local JSONL** with size rotation —
-  no tamper-evidence. Ship them off-node if integrity against a host
+  no tamper-evidence. A client can choose only the `op` of records with
+  `caller` `claim` (a relayed frame records the op it sent); records of root
+  and operator actions carry that `caller`, so filter on `caller` as well as
+  `op`. Ship them off-node if integrity against a host
   compromise matters (at which point the journals are the least of it). With
   `meta_store.usage` the usage journal also lands in the
   [shared usage table](deploy.md#shared-usage-table); the audit journal stays
