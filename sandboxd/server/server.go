@@ -271,7 +271,9 @@ type Server struct {
 	prober    CheckpointProber
 	probeKey  []byte
 	apiToken  string
+	apiNext   string
 	operator  string
+	opNext    string
 	advertise string
 	preview   *PreviewServer
 	reload    ConfigReloader
@@ -321,6 +323,11 @@ func (s *Server) SetUsage(u UsageReader) {
 // SetOperatorToken admits token with root authority on operatorRoutes alone; set it before serving.
 func (s *Server) SetOperatorToken(token string) {
 	s.operator = token
+}
+
+// SetNextTokens admits apiNext as the api token and operatorNext as the operator token during a rotation; set it before serving.
+func (s *Server) SetNextTokens(apiNext, operatorNext string) {
+	s.apiNext, s.opNext = apiNext, operatorNext
 }
 
 // NoRxSplice copies client bytes to guests in user space; call it before serving.
@@ -987,9 +994,9 @@ func (s *Server) rootCaller(r *http.Request) string {
 
 func (s *Server) authority(r *http.Request, token string) (string, error) {
 	switch {
-	case tokenMatches(s.apiToken, token):
+	case tokenMatches(s.apiToken, token) || tokenMatches(s.apiNext, token):
 		return callerRoot, nil
-	case !tokenMatches(s.operator, token):
+	case !tokenMatches(s.operator, token) && !tokenMatches(s.opNext, token):
 		return "", nil
 	case operatorRoutes[r.Pattern]:
 		return callerOperator, nil
