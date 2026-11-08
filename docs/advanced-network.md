@@ -190,7 +190,10 @@ guest -> tun0 -> silkd --vsock 2051--> sandboxd --VXLAN--> exit (vxlan0, forward
   reference, and `upstream` `tun/<label>`; with
   [`egress_usage_interval_seconds`](deploy.md#configuration) a flow that lasts
   longer also writes one with the bytes since its previous one, checked every
-  10 s. A clean stop ends every live flow,
+  10 s. A TCP flow that saw a FIN or RST and stayed quiet for 10 s writes its
+  usage event at the next check; its entry stays two minutes so late segments
+  of the close still match, and its `tun_flow` record is written when the entry
+  goes. A clean stop ends every live flow,
   so its records cover the bytes up to the stop, and persists the quota
   counter. A disarm or a move copies the counter into the claim record, which
   the next `claims.json` write persists (a move's on the target); a crash

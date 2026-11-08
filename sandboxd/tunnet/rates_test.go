@@ -243,6 +243,44 @@ func TestSweepIdleEndWritesTheRemainderAsTheFinalRow(t *testing.T) {
 	runSweeps(t, 10*time.Second, ProtoUDP, steps)
 }
 
+func TestSweepReportsAnEndedTCPFlowAfterOneSweepPeriodWithoutEvery(t *testing.T) {
+	steps := []sweepStep{
+		{at: 0, up: 100, down: 50},
+		{at: 1, up: 10, end: true},
+		{at: 6},
+		{at: 11, want: []rowWant{{partial: true, up: 110, down: 50, newUp: 110, newDown: 50}}},
+		{at: 61},
+		{at: 1 + int(idleTCPEnd/time.Second), want: []rowWant{{up: 110, down: 50}}},
+	}
+	runSweeps(t, 0, ProtoTCP, steps)
+}
+
+func TestSweepReportsLateBytesOfAnEndedTCPFlowInTheirOwnRow(t *testing.T) {
+	steps := []sweepStep{
+		{at: 0, up: 100, down: 50},
+		{at: 1, up: 10, end: true},
+		{at: 11, want: []rowWant{{partial: true, up: 110, down: 50, newUp: 110, newDown: 50}}},
+		{at: 31, up: 7},
+		{at: 36},
+		{at: 41, want: []rowWant{{partial: true, up: 117, down: 50, newUp: 7}}},
+		{at: 100},
+		{at: 31 + int(idleTCPEnd/time.Second), want: []rowWant{{up: 117, down: 50}}},
+	}
+	runSweeps(t, 0, ProtoTCP, steps)
+}
+
+func TestSweepWritesNothingEarlyForAnUnendedTCPFlowWithoutEvery(t *testing.T) {
+	steps := []sweepStep{
+		{at: 0, up: 100, down: 50},
+		{at: 10},
+		{at: 60},
+		{at: 600},
+		{at: int(idleTCP/time.Second) - 1},
+		{at: int(idleTCP / time.Second), want: []rowWant{{up: 100, down: 50, newUp: 100, newDown: 50}}},
+	}
+	runSweeps(t, 0, ProtoTCP, steps)
+}
+
 type rowWant struct {
 	partial                  bool
 	up, down, newUp, newDown int64
@@ -251,7 +289,7 @@ type rowWant struct {
 type sweepStep struct {
 	at       int
 	up, down int
-	all      bool
+	end, all bool
 	want     []rowWant
 }
 
@@ -277,6 +315,7 @@ func runSweeps(t *testing.T, every time.Duration, proto uint8, steps []sweepStep
 	for i, s := range steps {
 		now := t0.Add(time.Duration(s.at) * time.Second)
 		if s.up > 0 {
+			out.End = s.end
 			if drop := f.outbound(out, s.up, now); drop != DropNone {
 				t.Fatalf("step %d: outbound dropped: %v", i, drop)
 			}
