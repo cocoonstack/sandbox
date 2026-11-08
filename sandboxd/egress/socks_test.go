@@ -92,8 +92,6 @@ func TestSocksRefusesWhatItCannotServe(t *testing.T) {
 		{"udp associate", socksGreeting, []byte{socksVersion, 0x03, 0, socksAtypIPv4, 127, 0, 0, 1, 1, 187}, []byte{socksVersion, socksBadCmd}},
 		{"unknown address type", socksGreeting, []byte{socksVersion, socksConnect, 0, 0x05}, []byte{socksVersion, socksBadAtyp}},
 		{"zero-length domain name", socksGreeting, []byte{socksVersion, socksConnect, 0, socksAtypName, 0, 1, 187}, []byte{socksVersion, socksFailure}},
-		{"zoned address as a name", socksGreeting, append([]byte{socksVersion, socksConnect, 0, socksAtypName, 23}, "2606:4700::1111%.a.test\x01\xbb"...), []byte{socksVersion, socksFailure}},
-		{"non-ASCII name", socksGreeting, append([]byte{socksVersion, socksConnect, 0, socksAtypName, 9}, "x.\xc4\xb0.test\x01\xbb"...), []byte{socksVersion, socksFailure}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -113,6 +111,19 @@ func TestSocksRefusesWhatItCannotServe(t *testing.T) {
 			default:
 			}
 		})
+	}
+}
+
+func TestSocksDeniesAndRecordsAZonedOrNonASCIIName(t *testing.T) {
+	for _, name := range []string{"2606:4700:4700::1111%.example.com", "x.exampl\u0130.com"} {
+		events := make(chan Event, 4)
+		_, addr := socksProxy(t, Policy{Allow: []Rule{{Host: "*.example.com"}}}, nil, fixedDial(echoServer(t)), events, nil)
+		if _, reply := socksExchange(t, addr, socksGreeting, socksNameRequest(name, 443)); reply[1] != socksDenied {
+			t.Errorf("reply code for %q = %#x, want denied", name, reply[1])
+		}
+		if ev := recvEvent(t, events); ev.Method != methodSOCKS || ev.Host != name || ev.Decision != DecisionDeny {
+			t.Errorf("audit event for %q = %+v, want SOCKS5 deny", name, ev)
+		}
 	}
 }
 

@@ -62,7 +62,7 @@ func (p *Proxy) serveSocks(ctx context.Context, conn net.Conn) {
 		return
 	}
 	decision, intercept := p.tunnelDecision(host, port, false)
-	if intercept || port == 0 {
+	if intercept || port == 0 || !plainHost(host) {
 		decision = DecisionDeny
 	}
 	ev := Event{Method: methodSOCKS, Host: host, Port: port, Decision: decision}
@@ -151,9 +151,6 @@ func socksHandshake(conn net.Conn) (host string, port uint16, ok bool) {
 	if req[3] != socksAtypName {
 		ip, _ := netip.AddrFromSlice(addr)
 		host = ip.String()
-	} else if !plainHost(host) {
-		_ = socksReply(conn, socksFailure)
-		return "", 0, false
 	}
 	return host, binary.BigEndian.Uint16(target[addrLen:]), true
 }
