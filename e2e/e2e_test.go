@@ -856,7 +856,7 @@ func startConfigStack(t *testing.T, cfg *config.Config) *stack {
 	if err != nil {
 		t.Fatalf("template store: %v", err)
 	}
-	src, err := file.Open(t.Context(), dir, tenants.TokenSHA256(nodeToken))
+	src, err := file.Open(t.Context(), dir, tenants.Reserved{Root: tenants.TokenSHA256(nodeToken)})
 	if err != nil {
 		t.Fatalf("tenant set: %v", err)
 	}
