@@ -16,13 +16,10 @@ import (
 
 // SetEgressLimit replaces a claim's bandwidth cap without waking a hibernated or archived claim; open connections move onto it at once.
 func (m *Manager) SetEgressLimit(ctx context.Context, id string, l types.EgressLimit) error {
-	sb, ok := m.byID(id)
-	if !ok {
-		return ErrUnknownSandbox
-	}
 	m.mu.Lock()
+	sb := m.claimed[id]
 	switch {
-	case m.claimed[id] != sb:
+	case sb == nil:
 		m.mu.Unlock()
 		return ErrUnknownSandbox
 	case m.pausedForMoveLocked(sb):

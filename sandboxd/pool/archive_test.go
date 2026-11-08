@@ -396,7 +396,7 @@ func TestReleaseArchivedDeletesCheckpoint(t *testing.T) {
 	if got := len(eng.removedNames()); got != removesBefore {
 		t.Errorf("release ran Remove %d extra times on a VM-less archived claim", got-removesBefore)
 	}
-	if _, ok := m.claim(id, token); ok {
+	if _, ok := m.resolve(id, Cred{Token: token}); ok {
 		t.Error("released claim still present")
 	}
 }
@@ -435,7 +435,7 @@ func TestArchiveDeleteRetryAfterRestart(t *testing.T) {
 						return !pending
 					})
 				}
-				if _, ok := m.claim(id, token); ok {
+				if _, ok := m.resolve(id, Cred{Token: token}); ok {
 					t.Fatal("removed archive claim survived")
 				}
 				if !ckExists(t, m, ck) || !archiveCkMarked(m, ck) {
@@ -449,7 +449,7 @@ func TestArchiveDeleteRetryAfterRestart(t *testing.T) {
 				if ckExists(t, m2, ck) || archiveCkMarked(m2, ck) {
 					t.Fatal("restart did not finish archive deletion")
 				}
-				if _, ok := m2.claim(id, token); ok {
+				if _, ok := m2.resolve(id, Cred{Token: token}); ok {
 					t.Fatal("restart revived the removed claim")
 				}
 			})
@@ -611,7 +611,7 @@ func TestArchiveRemovalRequiresDeleteMarker(t *testing.T) {
 				expire(m, sb)
 				m.reapOnce(t.Context())
 			}
-			if _, ok := m.claim(id, token); !ok {
+			if _, ok := m.resolve(id, Cred{Token: token}); !ok {
 				t.Fatal("claim dropped despite an unmarkable delete intent")
 			}
 			if !pinnedHidden(t, m, ck) {
@@ -768,7 +768,7 @@ func TestArchivedClaimRollsBackOnPersistFailure(t *testing.T) {
 				if err := m.Release(t.Context(), sb.ID, Cred{Token: sb.Token}); err == nil {
 					t.Fatal("release succeeded despite a persist failure")
 				}
-				if _, ok := m.claim(sb.ID, sb.Token); !ok {
+				if _, ok := m.resolve(sb.ID, Cred{Token: sb.Token}); !ok {
 					t.Error("release dropped the claim despite a failed persist")
 				}
 			},

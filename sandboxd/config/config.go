@@ -525,6 +525,7 @@ func (c *Config) validate() error {
 		{"max_fork_count", c.MaxForkCount},
 		{"max_running", c.MaxRunning},
 		{"move_concurrency", c.MoveConcurrency},
+		{"egress_usage_interval_seconds", c.EgressUsageIntervalSeconds},
 		{"refill_concurrency", c.RefillConcurrency},
 		{"release_delay_seconds", c.ReleaseDelaySeconds},
 	} {
@@ -760,10 +761,7 @@ func (c *Config) validateNodeEgress() error {
 	if r := c.EgressConnRate; r != nil && (r.PerSecond <= 0 || r.Burst < 1) {
 		return fmt.Errorf("egress_conn_rate needs per_second above 0 and burst of at least 1, got %v and %d", r.PerSecond, r.Burst)
 	}
-	switch n := c.EgressUsageIntervalSeconds; {
-	case n < 0:
-		return fmt.Errorf("egress_usage_interval_seconds must not be negative, got %d", n)
-	case n > 0 && !c.EgressUsageBytes:
+	if c.EgressUsageIntervalSeconds > 0 && !c.EgressUsageBytes {
 		return fmt.Errorf("egress_usage_interval_seconds needs egress_usage_bytes")
 	}
 	for _, entry := range c.EgressInternalAllow {

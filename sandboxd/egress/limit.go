@@ -46,13 +46,12 @@ func (p *Proxy) SetLimit(l types.EgressLimit) {
 func (p *Proxy) ReportEvery(d time.Duration) {
 	p.every = d
 	go func() {
-		tick := time.NewTicker(d)
-		defer tick.Stop()
+		tick := time.Tick(d)
 		for {
 			select {
 			case <-p.stop:
 				return
-			case now := <-tick.C:
+			case now := <-tick:
 				p.reportInterim(now)
 			}
 		}

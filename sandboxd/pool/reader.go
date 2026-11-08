@@ -46,7 +46,7 @@ type reader struct {
 
 // DialReader opens a silkd connection to a sleeping claim's reader VM without waking the claim.
 func (m *Manager) DialReader(ctx context.Context, id, token string) (conn net.Conn, source string, err error) {
-	sb, ok := m.claim(id, token)
+	sb, ok := m.resolve(id, Cred{Token: token})
 	if !ok {
 		return nil, "", ErrUnknownSandbox
 	}
