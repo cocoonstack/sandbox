@@ -71,6 +71,13 @@ func (p *Proxy) limiter(rx bool) (*rate.Limiter, *limiters) {
 	return l.tx, l
 }
 
+func (p *Proxy) charge(rx bool, n int) {
+	lim, l := p.limiter(rx)
+	for lim != nil && n > 0 && lim.WaitN(l.ctx, n) != nil {
+		lim, l = p.limiter(rx)
+	}
+}
+
 // begin registers an allowed tunnel or request; a tunnel names its guest and upstream conns so kick reaches them.
 func (p *Proxy) begin(ev Event, conns ...net.Conn) *transfer {
 	t := &transfer{ev: ev, start: time.Now(), conns: conns}
@@ -239,15 +246,13 @@ type meter struct {
 }
 
 func (m *meter) Read(b []byte) (int, error) {
-	lim, l := m.p.limiter(m.rx)
+	lim, _ := m.p.limiter(m.rx)
 	if lim != nil {
 		b = b[:min(len(b), readSlice(lim))]
 	}
 	n, err := m.r.Read(b)
 	m.n.Add(int64(n))
-	for lim != nil && n > 0 && lim.WaitN(l.ctx, n) != nil {
-		lim, l = m.p.limiter(m.rx)
-	}
+	m.p.charge(m.rx, n)
 	return n, err
 }
 

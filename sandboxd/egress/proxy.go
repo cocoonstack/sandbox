@@ -334,6 +334,7 @@ func (p *Proxy) serveConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	t := p.begin(ev, client, upstream)
+	p.charge(false, brw.Reader.Buffered())
 	early, err := flushBuffered(brw.Reader, upstream)
 	t.sent.Add(early)
 	if err == nil {

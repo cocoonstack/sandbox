@@ -238,6 +238,43 @@ func TestEveryReadSliceFitsTheSmallestBucket(t *testing.T) {
 	}
 }
 
+func TestEarlyConnectBytesWaitForTxTokens(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	arrived := make(chan time.Time, 1)
+	go func() {
+		c, acceptErr := ln.Accept()
+		if acceptErr != nil {
+			return
+		}
+		defer func() { _ = c.Close() }()
+		if _, readErr := c.Read(make([]byte, 16)); readErr == nil {
+			arrived <- time.Now()
+		}
+	}()
+	p := New(Policy{Allow: []Rule{{Host: "bulk.internal"}}}, nil, nil, fixedDial(ln.Addr().String()), nil, nil)
+	t.Cleanup(p.Close)
+	p.SetLimit(types.EgressLimit{TxBytesPerSecond: limitBurst})
+	tx := p.limits.Load().tx
+	tx.ReserveN(time.Now(), limitBurst)
+	tx.ReserveN(time.Now(), limitBurst)
+
+	start := time.Now()
+	conn := dialProxy(t, serveFront(t, p).Listener.Addr().String(), "CONNECT bulk.internal:443 HTTP/1.1\r\nHost: bulk.internal:443\r\n\r\nearly")
+	t.Cleanup(func() { _ = conn.Close() })
+	select {
+	case at := <-arrived:
+		if took := at.Sub(start); took < 700*time.Millisecond {
+			t.Errorf("early bytes reached the upstream after %v with a second of tx debt", took)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("early bytes never reached the upstream")
+	}
+}
+
 type proxyEdit func(*Proxy)
 
 type upload struct {
