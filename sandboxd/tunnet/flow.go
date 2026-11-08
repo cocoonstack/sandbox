@@ -295,7 +295,8 @@ func (f *flows) sweep(now time.Time, all bool) {
 	for key, fl := range f.table {
 		idle := now.Sub(time.Unix(0, fl.last.Load()))
 		if !all && idle < idleFor(key.proto, fl) {
-			if f.every > 0 && fl.allowed && now.Sub(fl.reported) >= f.every && fl.up.Load()+fl.down.Load() > fl.reportedUp+fl.reportedDown {
+			due := f.every > 0 && now.Sub(fl.reported) >= f.every || fl.ended.Load() && idle >= sweepEvery
+			if due && fl.allowed && fl.up.Load()+fl.down.Load() > fl.reportedUp+fl.reportedDown {
 				rows = append(rows, fl.record(key, now, true))
 			}
 			continue
