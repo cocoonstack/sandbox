@@ -96,6 +96,7 @@ func TestOperatorTokenActsAsRootOnExactlyItsRoutes(t *testing.T) {
 		{"GET /v1/sandboxes/{id}/stats", "/v1/sandboxes/sb_1/stats", "", false, 0, http.StatusForbidden},
 		{"PUT /v1/sandboxes/{id}/instance-metadata", "/v1/sandboxes/sb_1/instance-metadata", `{}`, false, 0, http.StatusForbidden},
 		{"PUT /v1/sandboxes/{id}/tun", "/v1/sandboxes/sb_1/tun", `{}`, false, 0, http.StatusForbidden},
+		{"PUT /v1/sandboxes/{id}/egress-limit", "/v1/sandboxes/sb_1/egress-limit", `{}`, false, 0, http.StatusForbidden},
 		{"POST /v1/sandboxes/{id}/fork", "/v1/sandboxes/sb_1/fork", `{"count":1}`, false, 0, 0},
 		{"POST /v1/sandboxes/{id}/promote", "/v1/sandboxes/sb_1/promote", `{"template":"t"}`, false, 0, 0},
 		{"POST /v1/sandboxes/{id}/preview", "/v1/sandboxes/sb_1/preview", `{"port":80}`, false, 0, 0},
