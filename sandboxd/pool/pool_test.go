@@ -2558,7 +2558,7 @@ func testBackends(t testing.TB, cfg *config.Config) Backends {
 	if err != nil {
 		t.Fatalf("template store: %v", err)
 	}
-	src, err := file.Open(t.Context(), cfg.DataDir, tenants.ReservedOf(cfg.APIToken, cfg.OperatorToken))
+	src, err := file.Open(t.Context(), cfg.DataDir, tenants.ReservedOf(cfg.APIToken, cfg.APITokenNext, cfg.OperatorToken, cfg.OperatorTokenNext))
 	if err != nil {
 		t.Fatalf("tenant set: %v", err)
 	}
