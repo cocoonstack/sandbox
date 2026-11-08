@@ -413,10 +413,14 @@ type Config struct {
 	CocoondSocket string `json:"cocoond_socket,omitempty"`
 
 	APIToken string `json:"api_token,omitempty"`
+	// APITokenNext authenticates as api_token during a rotation.
+	APITokenNext string `json:"api_token_next,omitempty"`
 	// OperatorToken acts with root authority on the claim lifecycle, tenant and node read routes only.
-	OperatorToken string              `json:"operator_token,omitempty"`
-	MetaStore     *MetaStoreConfig    `json:"meta_store,omitempty"`
-	Secrets       []egress.SecretSpec `json:"secrets,omitempty"`
+	OperatorToken string `json:"operator_token,omitempty"`
+	// OperatorTokenNext authenticates as operator_token during a rotation.
+	OperatorTokenNext string              `json:"operator_token_next,omitempty"`
+	MetaStore         *MetaStoreConfig    `json:"meta_store,omitempty"`
+	Secrets           []egress.SecretSpec `json:"secrets,omitempty"`
 	// HostEnvMemoryOnly keeps host-only env values out of claims.json and the archive rows, and drops them when a claim hibernates.
 	HostEnvMemoryOnly bool `json:"host_env_memory_only,omitzero"`
 
@@ -566,7 +570,7 @@ func (c *Config) validate() error {
 	if c.MoveConcurrency > 0 && !c.Movable() {
 		return fmt.Errorf("move_concurrency requires meta_store with a cell and an encrypted mesh (set mesh.cluster_key)")
 	}
-	for _, check := range []func() error{c.validateNodeEgress, c.validateDiskReserve, c.validateMemoryLimit, c.validateOperatorToken, c.validateMetaStore, c.validateVolumes, c.validateMesh, c.validateReplication, c.validateTun} {
+	for _, check := range []func() error{c.validateNodeEgress, c.validateDiskReserve, c.validateMemoryLimit, c.validateTokens, c.validateMetaStore, c.validateVolumes, c.validateMesh, c.validateReplication, c.validateTun} {
 		if err := check(); err != nil {
 			return err
 		}
@@ -842,14 +846,27 @@ func (c *Config) validateMemoryLimit() error {
 	return nil
 }
 
-func (c *Config) validateOperatorToken() error {
+func (c *Config) validateTokens() error {
 	switch {
-	case c.OperatorToken == "":
-		return nil
-	case c.APIToken == "":
+	case c.APITokenNext != "" && c.APIToken == "":
+		return fmt.Errorf("api_token_next requires api_token")
+	case c.OperatorToken != "" && c.APIToken == "":
 		return fmt.Errorf("operator_token requires api_token")
-	case c.OperatorToken == c.APIToken:
-		return fmt.Errorf("operator_token must differ from api_token")
+	case c.OperatorTokenNext != "" && c.OperatorToken == "":
+		return fmt.Errorf("operator_token_next requires operator_token")
+	}
+	tokens := []struct{ field, value string }{
+		{"api_token", c.APIToken},
+		{"api_token_next", c.APITokenNext},
+		{"operator_token", c.OperatorToken},
+		{"operator_token_next", c.OperatorTokenNext},
+	}
+	for i, a := range tokens {
+		for _, b := range tokens[i+1:] {
+			if a.value != "" && a.value == b.value {
+				return fmt.Errorf("%s must differ from %s", b.field, a.field)
+			}
+		}
 	}
 	return nil
 }

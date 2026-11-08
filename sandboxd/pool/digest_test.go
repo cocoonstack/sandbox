@@ -51,6 +51,11 @@ func TestClusterDigestCoversSharedConfigAndOnlyKeyedSecrets(t *testing.T) {
 	if digest(&keylessOperator, "ca-fp", acme) != d {
 		t.Error("operator_token leaked into the keyless digest")
 	}
+	withNext := withOperator
+	withNext.APITokenNext, withNext.OperatorTokenNext = "tok2", "op3"
+	if digest(&withNext, "ca-fp", acme) != digest(&withOperator, "ca-fp", acme) {
+		t.Error("a next token changed the keyed digest")
+	}
 	withVolume := *base
 	withVolume.Volumes = []config.VolumeSpec{{Name: "imagenet", Path: "/srv/datasets/imagenet.img", DirectIO: types.DirectIOOff}}
 	if digest(&withVolume, "ca-fp", acme) != d {
