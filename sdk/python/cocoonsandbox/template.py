@@ -33,11 +33,9 @@ class Template:
         """Claims the template, following placement when volumes require it."""
         claim = _claim_body(self.name, self.net, self.size, ttl_seconds, volumes)
         claim["require_promoted"] = True
-        if volumes:
-            return self._client._claim_from(self._addr, claim, deadline=deadline)
-        claim["no_redirect"] = True
-        reply = self._client._request(self._addr, "POST", "/v1/claim", claim, "claim", deadline=deadline)
-        return self._client._handle_from(self._addr, reply)
+        if not volumes:
+            claim["no_redirect"] = True
+        return self._client._claim_from(self._addr, claim, deadline=deadline)
 
     def delete(self) -> None:
         query = _template_query(self.name, self.net, self.size)
