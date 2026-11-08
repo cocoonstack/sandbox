@@ -556,9 +556,9 @@ bytes and `upstream` `tun/<label>`.
 `egress_usage_interval_seconds` (default 0, needs `egress_usage_bytes`) also
 writes an `egress_bytes` event every interval for each allowed tunnel, request
 or tun flow that lasts longer, with the bytes since its previous event, and
-one with the rest when it ends. The events of one connection sum to the single
-event it writes with 0, so a control plane can apply a window rule to a long
-upload before it ends. A spliced tunnel counts its bytes when its copy
+one with the rest, if any, when it ends. Sums per claim and per upstream match
+the single events an interval of 0 writes, so a control plane can apply a
+window rule to a long upload before it ends. A spliced tunnel counts its bytes when its copy
 returns: each interval the proxy sets a past read deadline on every open
 tunnel, so the copy returns, counts and resumes, and an event carries the
 bytes up to the previous interval. A sandboxd stop therefore loses up to two
@@ -581,8 +581,10 @@ with a burst of the rate, at least 64 KiB and at most 1 GiB. A limited
 direction copies in user space, in reads of about a tenth of a second's bytes
 (1 KiB to 64 KiB), each followed by a wait for its tokens, so its CPU cost
 follows the bytes the cap lets through. An unlimited direction keeps the
-kernel splice, so a claim without a cap pays nothing. A new cap starts with
-full buckets and reaches every open connection at once: the proxy sets a past
+kernel splice; a claim without a cap pays one map update per tunnel and an
+atomic load per request read. A changed rate starts with a full bucket, a
+direction whose rate did not change keeps its bucket, and a repeated cap
+changes nothing. A change reaches every open connection at once: the proxy sets a past
 read deadline on every open tunnel, whose copy resumes in the matching mode,
 and a request reads the cap on every read. A claim in
 [advanced network mode](advanced-network.md#host-side) keeps separate buckets
