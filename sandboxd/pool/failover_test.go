@@ -1925,10 +1925,13 @@ func TestFailoverTheRootAdoptsWithoutTheToken(t *testing.T) {
 			}
 			held, _ := b.byID(sb.ID)
 			b.mu.Lock()
-			token, sum := held.Token, held.TokenSHA256
+			placeholder, sum := held.Token, held.TokenSHA256
 			b.mu.Unlock()
-			if token != "" || sum != tenants.TokenSHA256(sb.Token) {
-				t.Errorf("adopted claim token %q hash %q, want no token and the row's hash", token, sum)
+			if len(placeholder) != 32 || placeholder == sb.Token || sum != tenants.TokenSHA256(sb.Token) {
+				t.Errorf("adopted claim token %q hash %q, want a random placeholder and the row's hash", placeholder, sum)
+			}
+			if _, err := b.AgentSocket(sb.ID, Cred{Token: placeholder}); !errors.Is(err, ErrUnknownSandbox) {
+				t.Errorf("agent socket with the placeholder: %v, want ErrUnknownSandbox", err)
 			}
 			if adopted, err := adopt(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil || !adopted {
 				t.Errorf("claim token lookup of the root-adopted claim: %v %v, want held", adopted, err)
@@ -1944,8 +1947,12 @@ func TestFailoverARootAdoptedClaimAnswersOnlyItsOwnToken(t *testing.T) {
 	mustArchive(t, a, sb)
 	c.expire("a")
 	sum := mustRootAdopt(t, b, sb)
+	held, _ := b.byID(sb.ID)
+	b.mu.Lock()
+	placeholder := held.Token
+	b.mu.Unlock()
 
-	for _, cred := range []Cred{{}, {Token: "wrong"}, {Token: sum}, {Token: "tenant-token"}} {
+	for _, cred := range []Cred{{}, {Token: "wrong"}, {Token: sum}, {Token: placeholder}, {Token: "tenant-token"}} {
 		if _, err := b.AgentSocket(sb.ID, cred); !errors.Is(err, ErrUnknownSandbox) {
 			t.Errorf("agent socket with %q: %v, want ErrUnknownSandbox", cred.Token, err)
 		}
@@ -1970,8 +1977,8 @@ func TestFailoverARootAdoptedClaimAnswersOnlyItsOwnToken(t *testing.T) {
 	reads := map[string]any{"by id": summary, "list": b.Sandboxes("", "", nil), "checkpoint": ckpt, "checkpoints": ckpts}
 	for name, v := range reads {
 		raw, err := json.Marshal(v)
-		if err != nil || strings.Contains(string(raw), sum) {
-			t.Errorf("%s read %s (%v) serves the token hash", name, raw, err)
+		if err != nil || strings.Contains(string(raw), sum) || strings.Contains(string(raw), placeholder) {
+			t.Errorf("%s read %s (%v) serves the token hash or the placeholder", name, raw, err)
 		}
 	}
 
@@ -1979,7 +1986,7 @@ func TestFailoverARootAdoptedClaimAnswersOnlyItsOwnToken(t *testing.T) {
 	if err := wakeClaim(t, restarted, sb); err != nil {
 		t.Fatalf("claim token after a restart: %v", err)
 	}
-	held, _ := restarted.byID(sb.ID)
+	held, _ = restarted.byID(sb.ID)
 	restarted.mu.Lock()
 	token, kept := held.Token, held.TokenSHA256
 	restarted.mu.Unlock()
@@ -2011,6 +2018,40 @@ func TestFailoverARowRewriteOfARootAdoptedClaimKeepsTheTokenHash(t *testing.T) {
 	mustAdopt(t, d, sb, "adopt with the claim token after the rewrite")
 	if err := wakeClaim(t, d, sb); err != nil {
 		t.Errorf("claim token on the next adopter: %v", err)
+	}
+}
+
+func TestFailoverARootAdoptedClaimReadsAsAnUnknownTokenToAnOlderNode(t *testing.T) {
+	c := newFailoverCluster(t)
+	a, b := c.pair(t)
+	sb := mustClaim(t, a, testKey)
+	mustArchive(t, a, sb)
+	c.expire("a")
+	mustRootAdopt(t, b, sb)
+	held, _ := b.byID(sb.ID)
+	b.mu.Lock()
+	dto := dtoOf(held)
+	b.mu.Unlock()
+	moved, err := json.Marshal(&dto)
+	if err != nil {
+		t.Fatalf("encode claim: %v", err)
+	}
+	persisted, err := os.ReadFile(filepath.Join(b.dataDir, "claims.json"))
+	if err != nil {
+		t.Fatalf("read claims: %v", err)
+	}
+
+	var old struct {
+		Token string `json:"token,omitempty"`
+	}
+	if err = json.Unmarshal(moved, &old); err != nil || old.Token == "" || old.Token == sb.Token {
+		t.Errorf("an older node reads the moved claim's token as %q (%v), want a placeholder no caller holds", old.Token, err)
+	}
+	var oldClaims map[string]struct {
+		Token string `json:"token,omitempty"`
+	}
+	if err = json.Unmarshal(persisted, &oldClaims); err != nil || oldClaims[sb.ID].Token == "" || oldClaims[sb.ID].Token == sb.Token {
+		t.Errorf("an older node reads the persisted claim's token as %q (%v), want a placeholder no caller holds", oldClaims[sb.ID].Token, err)
 	}
 }
 

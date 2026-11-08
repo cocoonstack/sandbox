@@ -769,6 +769,9 @@ func TestEvacuateHandsATokenlessClaimOnAsTheRoot(t *testing.T) {
 				if tt.oldPeer {
 					holder = b
 					b.WithPeerAdopt(func(ctx context.Context, id, token string, room bool) bool {
+						if token != "" {
+							t.Errorf("hand-off sent token %q, want the root", token)
+						}
 						asked.Add(1)
 						adopted, err := d.adopt(ctx, id, Cred{Token: token}, room)
 						return err == nil && adopted

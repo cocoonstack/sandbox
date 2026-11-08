@@ -1,6 +1,7 @@
 package pool
 
 import (
+	"cmp"
 	"context"
 	"crypto/subtle"
 
@@ -24,6 +25,9 @@ func (m *Manager) Sandbox(id string) (SandboxSummary, bool) {
 	}
 	out := summarize(sb)
 	out.Token, out.TunAddr, out.TunOff, out.TunProfile, out.EgressLimit = sb.Token, sb.TunAddr, sb.TunOff, sb.TunProfile, sb.EgressLimit
+	if sb.TokenSHA256 != "" {
+		out.Token = ""
+	}
 	return out, true
 }
 
@@ -93,16 +97,18 @@ func (m *Manager) claim(id, token string) (*types.Sandbox, bool) {
 	return m.authed(id, token)
 }
 
-// authed learns the token of a claim the root adopted on its first match; callers hold m.mu.
+// Callers hold m.mu.
 func (m *Manager) authed(id, token string) (*types.Sandbox, bool) {
 	sb := m.claimed[id]
-	if sb == nil || token == "" {
+	switch {
+	case sb == nil || token == "":
 		return nil, false
-	}
-	if sb.Token == "" && tokenMatches(token, sb.TokenSHA256) {
+	case sb.TokenSHA256 != "":
+		if !tokenMatches(token, sb.TokenSHA256) {
+			return nil, false
+		}
 		sb.Token, sb.TokenSHA256 = token, ""
-	}
-	if subtle.ConstantTimeCompare([]byte(sb.Token), []byte(token)) != 1 {
+	case subtle.ConstantTimeCompare([]byte(sb.Token), []byte(token)) != 1:
 		return nil, false
 	}
 	return sb, true
@@ -114,8 +120,5 @@ func tokenMatches(token, sum string) bool {
 
 // Callers hold m.mu.
 func tokenSum(sb *types.Sandbox) string {
-	if sb.Token == "" {
-		return sb.TokenSHA256
-	}
-	return tenants.TokenSHA256(sb.Token)
+	return cmp.Or(sb.TokenSHA256, tenants.TokenSHA256(sb.Token))
 }
