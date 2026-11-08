@@ -13,14 +13,15 @@ import (
 const tunField = "tun"
 
 var reloadableFields = map[string]bool{
-	"egress_classes":        true,
-	"egress_internal_allow": true,
-	"secrets":               true,
-	"egress_upstream":       true,
-	"egress_usage_bytes":    true,
-	"egress_conn_rate":      true,
-	"disk_reserve":          true,
-	"memory_limit":          true,
+	"egress_classes":                true,
+	"egress_internal_allow":         true,
+	"secrets":                       true,
+	"egress_upstream":               true,
+	"egress_usage_bytes":            true,
+	"egress_usage_interval_seconds": true,
+	"egress_conn_rate":              true,
+	"disk_reserve":                  true,
+	"memory_limit":                  true,
 
 	"max_claims":                   true,
 	"max_running":                  true,

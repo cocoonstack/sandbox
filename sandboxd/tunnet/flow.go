@@ -1,6 +1,7 @@
 package tunnet
 
 import (
+	"cmp"
 	"net/netip"
 	"sync"
 	"sync/atomic"
@@ -38,16 +39,23 @@ type Limits struct {
 	QuotaBytes        int64   `json:"quota_bytes,omitzero"`
 }
 
-// FlowRecord is one flow's audit row, written when the flow ends.
+// Rates overrides one claim's byte buckets each way; zero keeps Limits.BytesPerSecond.
+type Rates struct {
+	Up, Down float64
+}
+
+// FlowRecord is one flow's audit row, written when the flow ends; a Partial row reports a live flow's bytes since its last row.
 type FlowRecord struct {
 	Proto   uint8
 	Dst     netip.Addr
 	Port    uint16
 	Allowed bool
-	Up      int64
-	Down    int64
-	Start   time.Time
-	End     time.Time
+	Partial bool
+	// Up and Down are the flow's totals; NewUp and NewDown are the bytes since its last row.
+	Up, Down       int64
+	NewUp, NewDown int64
+	Start          time.Time
+	End            time.Time
 }
 
 // flowKey is a flow in the outbound direction; the claim is the source.
@@ -70,6 +78,10 @@ type flow struct {
 	down    atomic.Int64
 	last    atomic.Int64
 	ended   atomic.Bool
+
+	// reported and the counts are guarded by flows.mu.
+	reported                 time.Time
+	reportedUp, reportedDown int64
 }
 
 func (fl *flow) carry(bytes *atomic.Int64, p Packet, n int, now time.Time) Drop {
@@ -84,23 +96,43 @@ func (fl *flow) carry(bytes *atomic.Int64, p Packet, n int, now time.Time) Drop 
 	return DropNone
 }
 
+// record builds the flow's row and marks its bytes reported; the caller holds flows.mu.
+func (fl *flow) record(key flowKey, now time.Time, partial bool) FlowRecord {
+	up, down := fl.up.Load(), fl.down.Load()
+	r := FlowRecord{
+		Proto: key.proto, Dst: key.dst, Port: key.dport, Allowed: fl.allowed, Partial: partial,
+		Up: up, Down: down, NewUp: up - fl.reportedUp, NewDown: down - fl.reportedDown,
+		Start: fl.start, End: time.Unix(0, fl.last.Load()),
+	}
+	fl.reported, fl.reportedUp, fl.reportedDown = now, up, down
+	return r
+}
+
 type direction struct {
-	bytes, packets *rate.Limiter
+	bytes   atomic.Pointer[rate.Limiter]
+	packets *rate.Limiter
 }
 
 func newDirection(l Limits) *direction {
 	d := &direction{}
-	if l.BytesPerSecond > 0 {
-		d.bytes = rate.NewLimiter(rate.Limit(l.BytesPerSecond), max(int(l.BytesPerSecond), 2*MaxFrame))
-	}
+	d.setBytes(l.BytesPerSecond)
 	if l.PacketsPerSecond > 0 {
 		d.packets = rate.NewLimiter(rate.Limit(l.PacketsPerSecond), max(int(l.PacketsPerSecond), maxSegs))
 	}
 	return d
 }
 
+func (d *direction) setBytes(perSecond float64) {
+	if perSecond <= 0 {
+		d.bytes.Store(nil)
+		return
+	}
+	d.bytes.Store(rate.NewLimiter(rate.Limit(perSecond), max(int(perSecond), 2*MaxFrame)))
+}
+
 func (d *direction) admit(now time.Time, packets, bytes int) bool {
-	return (d.packets == nil || d.packets.AllowN(now, packets)) && (d.bytes == nil || d.bytes.AllowN(now, bytes))
+	b := d.bytes.Load()
+	return (d.packets == nil || d.packets.AllowN(now, packets)) && (b == nil || b.AllowN(now, bytes))
 }
 
 // flows is one claim's flow table and limits: the claim's reader adds, the VXLAN receiver looks up.
@@ -109,6 +141,7 @@ type flows struct {
 	used   *atomic.Int64
 	allow  AllowFunc
 	record RecordFunc
+	every  time.Duration
 
 	newFlows *rate.Limiter
 	up, down *direction
@@ -124,6 +157,7 @@ func newFlows(c Claim) *flows {
 		used:   c.Used,
 		allow:  c.Allow,
 		record: c.Record,
+		every:  c.Every,
 		up:     newDirection(c.Limits),
 		down:   newDirection(c.Limits),
 		table:  map[flowKey]*flow{},
@@ -230,6 +264,12 @@ func (f *flows) charge(d *direction, packets, n int, now time.Time) bool {
 	return true
 }
 
+// setRates swaps both byte buckets; a zero rate falls back to the node's.
+func (f *flows) setRates(r Rates) {
+	f.up.setBytes(cmp.Or(r.Up, f.limits.BytesPerSecond))
+	f.down.setBytes(cmp.Or(r.Down, f.limits.BytesPerSecond))
+}
+
 func (f *flows) open(key flowKey, now time.Time) *flow {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -242,7 +282,7 @@ func (f *flows) open(key flowKey, now time.Time) *flow {
 	if f.newFlows != nil && !f.newFlows.AllowN(now, 1) {
 		return nil
 	}
-	fl := &flow{allowed: f.allow(key.dst, key.dport), start: now}
+	fl := &flow{allowed: f.allow(key.dst, key.dport), start: now, reported: now}
 	fl.last.Store(now.UnixNano())
 	f.table[key] = fl
 	if fl.allowed {
@@ -252,11 +292,14 @@ func (f *flows) open(key flowKey, now time.Time) *flow {
 }
 
 func (f *flows) sweep(now time.Time, all bool) {
-	var ended []FlowRecord
+	var rows []FlowRecord
 	f.mu.Lock()
 	for key, fl := range f.table {
 		idle := now.Sub(time.Unix(0, fl.last.Load()))
 		if !all && idle < idleFor(key.proto, fl) {
+			if f.every > 0 && fl.allowed && now.Sub(fl.reported) >= f.every && fl.up.Load()+fl.down.Load() > fl.reportedUp+fl.reportedDown {
+				rows = append(rows, fl.record(key, now, true))
+			}
 			continue
 		}
 		delete(f.table, key)
@@ -267,14 +310,11 @@ func (f *flows) sweep(now time.Time, all bool) {
 				f.peers[pk]--
 			}
 		}
-		ended = append(ended, FlowRecord{
-			Proto: key.proto, Dst: key.dst, Port: key.dport, Allowed: fl.allowed,
-			Up: fl.up.Load(), Down: fl.down.Load(), Start: fl.start, End: time.Unix(0, fl.last.Load()),
-		})
+		rows = append(rows, fl.record(key, now, false))
 	}
 	f.mu.Unlock()
 	if f.record != nil {
-		for _, r := range ended {
+		for _, r := range rows {
 			f.record(r)
 		}
 	}

@@ -72,6 +72,27 @@ func TestReloadDiffSortsReloadableOwnedAndRestartFields(t *testing.T) {
 	}
 }
 
+func TestReloadDiffReloadsTheEgressUsageInterval(t *testing.T) {
+	cur := &Config{EgressUsageBytes: true}
+	for _, tt := range []struct {
+		name     string
+		interval int
+		want     []string
+	}{
+		{"interval set", 30, []string{"egress_usage_interval_seconds"}},
+		{"interval unchanged", 0, nil},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			next := *cur
+			next.EgressUsageIntervalSeconds = tt.interval
+			changed, ignored, err := cur.ReloadDiff(&next)
+			if err != nil || ignored != nil || !slices.Equal(changed, tt.want) {
+				t.Errorf("ReloadDiff: changed %v ignored %v err %v, want changed %v", changed, ignored, err, tt.want)
+			}
+		})
+	}
+}
+
 func TestReloadDiffReloadsTheExitsAndRefusesASubnetChange(t *testing.T) {
 	key := types.PoolKey{Template: "desktop:v12", Net: types.NetNone, Size: types.SizeSmall}
 	tun := TunConfig{Subnet: "240.0.0.0/4", Listen: "10.0.0.5:4789", VNI: 1, Port: 4789, MTU: 1450, Senders: 4, Exits: map[string]TunExit{"default": {VTEP: "10.0.0.9", MAC: "02:aa:00:00:00:01"}}}

@@ -93,8 +93,9 @@ func (p *Proxy) serveSocks(ctx context.Context, conn net.Conn) {
 		return
 	}
 	_ = conn.SetDeadline(time.Time{})
-	sent, received := splice(conn, upstream, p.noSplice)
-	p.reportTransfer(ev, sent, received)
+	t := p.begin(ev, conn, upstream)
+	p.splice(t)
+	p.finish(t, true)
 }
 
 // socksHandshake negotiates no-auth and parses one CONNECT request; a refusal is answered before it returns false.

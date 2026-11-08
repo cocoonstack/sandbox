@@ -135,12 +135,17 @@ func (h *Host) armTun(ctx context.Context, sb *types.Sandbox, d *doors, v *View,
 		Used:   t.used,
 		Touch:  sb.TouchAt,
 		Record: func(r tunnet.FlowRecord) {
-			h.o.Flow(evCtx, id, tenant, profile, r)
-			if usage && r.Allowed && r.Up+r.Down > 0 {
+			if !r.Partial {
+				h.o.Flow(evCtx, id, tenant, profile, r)
+			}
+			if usage && r.Allowed && r.NewUp+r.NewDown > 0 {
 				dst := netip.AddrPortFrom(r.Dst, r.Port).String()
-				h.o.Transfer(evCtx, id, tenant, egress.Event{Host: dst, Port: r.Port, Upstream: "tun/" + cmp.Or(profile, "default")}, r.Up, r.Down)
+				h.o.Transfer(evCtx, id, tenant, egress.Event{Host: dst, Port: r.Port, Upstream: "tun/" + cmp.Or(profile, "default")}, r.NewUp, r.NewDown)
 			}
 		},
+	}
+	if usage {
+		tc.Every = v.usageEvery
 	}
 	h.o.Router.Arm(tc)
 	h.mu.Lock()
@@ -149,6 +154,7 @@ func (h *Host) armTun(ctx context.Context, sb *types.Sandbox, d *doors, v *View,
 		d.tun = t
 	}
 	h.mu.Unlock()
+	h.o.Router.SetRates(t.addr, tunRates(h.o.EgressLimit(sb)))
 	if live && !h.o.TunState(sb).On {
 		h.mu.Lock()
 		mine := d.tun == t
@@ -223,4 +229,8 @@ func (h *Host) dropTun(t *tunDoor) {
 	_ = t.ln.Close()
 	h.o.Router.Disarm(t.addr)
 	h.o.TunBytes(t.sb, t.used.Load())
+}
+
+func tunRates(l types.EgressLimit) tunnet.Rates {
+	return tunnet.Rates{Up: float64(l.TxBytesPerSecond), Down: float64(l.RxBytesPerSecond)}
 }

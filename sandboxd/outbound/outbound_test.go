@@ -11,6 +11,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/cocoonstack/sandbox/sandboxd/config"
 	"github.com/cocoonstack/sandbox/sandboxd/egress"
@@ -254,6 +255,54 @@ func TestALiveClaimsEgressFollowsTheView(t *testing.T) {
 	cur.Store(NewView(poolConfig(testKey, nil), secrets))
 	if code := get(); code != http.StatusForbidden {
 		t.Errorf("after the pool loses its policy: %d, want 403", code)
+	}
+}
+
+func TestArmAppliesTheClaimsLimitAndSetEgressLimitMovesIt(t *testing.T) {
+	const rate = 512 << 10
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(make([]byte, 2*rate))
+	}))
+	t.Cleanup(origin.Close)
+	pol := &egress.Policy{Allow: []egress.Rule{{Host: outboundtest.Hostname(t, origin.URL)}}}
+	var limit atomic.Pointer[types.EgressLimit]
+	limit.Store(&types.EgressLimit{RxBytesPerSecond: rate})
+	h := newHost(t, &fakeEngine{}, poolConfig(testKey, pol), func(o *Options) {
+		o.Dial = (&net.Dialer{}).DialContext
+		o.EgressLimit = func(*types.Sandbox) types.EgressLimit { return *limit.Load() }
+	})
+	sb := outboundtest.VsockSandbox(t, "sb_limit", testKey)
+	if err := h.Arm(t.Context(), sb); err != nil {
+		t.Fatalf("arm egress: %v", err)
+	}
+	t.Cleanup(func() { h.Disarm(sb.ID, true) })
+	client := outboundtest.EgressClient(engine.EgressSocketPath(sb.VsockSocket))
+	fetch := func() time.Duration {
+		start := time.Now()
+		resp, err := client.Get(origin.URL + "/")
+		if err != nil {
+			t.Fatalf("proxied GET: %v", err)
+		}
+		n, _ := io.Copy(io.Discard, resp.Body)
+		_ = resp.Body.Close()
+		if n != 2*rate {
+			t.Fatalf("read %d bytes, want %d", n, 2*rate)
+		}
+		return time.Since(start)
+	}
+
+	if took := fetch(); took < 700*time.Millisecond {
+		t.Errorf("download under the armed limit took %v", took)
+	}
+	limit.Store(&types.EgressLimit{})
+	h.SetEgressLimit(sb)
+	if took := fetch(); took > 300*time.Millisecond {
+		t.Errorf("download after the limit was lifted took %v", took)
+	}
+	limit.Store(&types.EgressLimit{RxBytesPerSecond: rate})
+	h.SetEgressLimit(sb)
+	if took := fetch(); took < 700*time.Millisecond {
+		t.Errorf("download after the limit was set again took %v", took)
 	}
 }
 

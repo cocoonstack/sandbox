@@ -1,0 +1,302 @@
+package egress
+
+import (
+	"bufio"
+	"bytes"
+	"io"
+	"net"
+	"net/http"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/cocoonstack/sandbox/sandboxd/types"
+)
+
+const (
+	testRate = 512 << 10
+	bulkDown = 8 << 20
+)
+
+func TestALimitCapsOneDirectionOfATunnel(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		open func(t *testing.T, target string) (*Proxy, io.Reader, net.Conn)
+	}{
+		{"connect", openConnect},
+		{"socks", openSocks},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			bulk := bulkServer(t, bulkDown)
+			p, r, conn := tt.open(t, bulk.addr)
+			p.SetLimit(types.EgressLimit{TxBytesPerSecond: testRate})
+			go writeAll(conn, 2*testRate)
+			start := time.Now()
+			n, _ := io.Copy(io.Discard, r)
+			down := time.Since(start)
+			got := <-bulk.uploads
+			if n != bulkDown || got.n != 2*testRate {
+				t.Fatalf("moved %d down and %d up, want %d and %d", n, got.n, bulkDown, 2*testRate)
+			}
+			if got.took < 700*time.Millisecond {
+				t.Errorf("upload of two seconds' worth took %v under a limit with a one-second burst", got.took)
+			}
+			if down > 500*time.Millisecond {
+				t.Errorf("download took %v with only tx limited", down)
+			}
+		})
+	}
+}
+
+func TestChangingTheLimitMovesAnOpenTunnel(t *testing.T) {
+	sink, received := sinkServer(t)
+	p, _, conn := openConnect(t, sink)
+	stop := make(chan struct{})
+	t.Cleanup(func() { close(stop) })
+	go func() {
+		buf := make([]byte, 32<<10)
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			if _, err := conn.Write(buf); err != nil {
+				return
+			}
+		}
+	}()
+	waitBytes(t, received, 1<<20)
+
+	p.SetLimit(types.EgressLimit{TxBytesPerSecond: testRate / 2})
+	time.Sleep(500 * time.Millisecond)
+	before := received.Load()
+	time.Sleep(time.Second)
+	if moved := received.Load() - before; moved < testRate/4 || moved > testRate {
+		t.Errorf("moved %d bytes in the second after the limit dropped to %d/s", moved, testRate/2)
+	}
+
+	p.SetLimit(types.EgressLimit{})
+	before = received.Load()
+	time.Sleep(300 * time.Millisecond)
+	if moved := received.Load() - before; moved < 4<<20 {
+		t.Errorf("moved %d bytes in 300ms after the limit was lifted", moved)
+	}
+}
+
+func TestReportEveryWritesRowsThatAddUpToTheTunnel(t *testing.T) {
+	t.Run("limited upload", func(t *testing.T) {
+		bulk := bulkServer(t, 0)
+		p, r, conn, rows := reportingConnect(t, bulk)
+		p.SetLimit(types.EgressLimit{TxBytesPerSecond: testRate})
+		writeAll(conn, 2*testRate)
+		_, _ = io.Copy(io.Discard, r)
+		<-bulk.uploads
+		_ = conn.Close()
+		sent, count := sumRows(t, rows, 2*testRate)
+		if sent != 2*testRate || count < 4 {
+			t.Errorf("%d rows carried %d bytes, want several rows adding up to %d", count, sent, 2*testRate)
+		}
+	})
+	t.Run("short tunnel", func(t *testing.T) {
+		bulk := bulkServer(t, 0)
+		_, r, conn, rows := reportingConnect(t, bulk)
+		writeAll(conn, 4)
+		_, _ = io.Copy(io.Discard, r)
+		<-bulk.uploads
+		_ = conn.Close()
+		if sent, count := sumRows(t, rows, 4); sent != 4 || count != 1 {
+			t.Errorf("%d rows carried %d bytes, want one row of 4", count, sent)
+		}
+	})
+}
+
+func TestALimitCapsAForwardedRequestEachWay(t *testing.T) {
+	var uploaded atomic.Int64
+	upstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPut {
+			n, _ := io.Copy(io.Discard, r.Body)
+			uploaded.Store(n)
+			return
+		}
+		_, _ = w.Write(make([]byte, 2*testRate))
+	})
+	target := serveUpstream(t, upstream)
+	p := New(Policy{Allow: []Rule{{Host: "bulk.internal"}}}, nil, nil, fixedDial(target), nil, nil)
+	p.SetLimit(types.EgressLimit{TxBytesPerSecond: testRate, RxBytesPerSecond: testRate})
+	client := proxyClient(t, serveFront(t, p).URL)
+
+	start := time.Now()
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPut, "http://bulk.internal/", bytes.NewReader(make([]byte, 2*testRate)))
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("proxied PUT: %v", err)
+	}
+	_ = resp.Body.Close()
+	if took := time.Since(start); uploaded.Load() != 2*testRate || took < 700*time.Millisecond {
+		t.Errorf("uploaded %d bytes in %v, want %d at no more than %d/s past the burst", uploaded.Load(), took, 2*testRate, testRate)
+	}
+
+	start = time.Now()
+	resp = proxiedGet(t, serveFront(t, p).URL, "http://bulk.internal/")
+	n, _ := io.Copy(io.Discard, resp.Body)
+	_ = resp.Body.Close()
+	if took := time.Since(start); n != 2*testRate || took < 700*time.Millisecond {
+		t.Errorf("downloaded %d bytes in %v, want %d at no more than %d/s past the burst", n, took, 2*testRate, testRate)
+	}
+}
+
+type upload struct {
+	n    int64
+	took time.Duration
+}
+
+type bulk struct {
+	addr    string
+	uploads chan upload
+}
+
+func openConnect(t *testing.T, target string) (*Proxy, io.Reader, net.Conn) {
+	t.Helper()
+	p := New(Policy{Allow: []Rule{{Host: "bulk.internal"}}}, nil, nil, fixedDial(target), nil, nil)
+	t.Cleanup(p.Close)
+	conn := dialConnect(t, serveFront(t, p).Listener.Addr().String(), "bulk.internal:443")
+	t.Cleanup(func() { _ = conn.Close() })
+	br := bufio.NewReader(conn)
+	if status := readStatus(t, br); status != "HTTP/1.1 200 Connection Established" {
+		t.Fatalf("CONNECT status = %q", status)
+	}
+	return p, br, conn
+}
+
+func openSocks(t *testing.T, target string) (*Proxy, io.Reader, net.Conn) {
+	t.Helper()
+	p, addr := socksProxy(t, Policy{Allow: []Rule{{Host: "bulk.internal"}}}, nil, fixedDial(target), nil, nil)
+	conn, reply := socksExchange(t, addr, socksGreeting, socksNameRequest("bulk.internal", 443))
+	if reply[1] != socksGranted {
+		t.Fatalf("reply code = %#x, want granted", reply[1])
+	}
+	return p, conn, conn
+}
+
+func reportingConnect(t *testing.T, b *bulk) (*Proxy, io.Reader, net.Conn, <-chan int64) {
+	t.Helper()
+	rows := make(chan int64, 64)
+	p := New(Policy{Allow: []Rule{{Host: "bulk.internal"}}}, nil, nil, fixedDial(b.addr), nil, nil)
+	p.OnTransfer(func(_ Event, sent, _ int64) { rows <- sent })
+	p.ReportEvery(100 * time.Millisecond)
+	t.Cleanup(p.Close)
+	conn := dialConnect(t, serveFront(t, p).Listener.Addr().String(), "bulk.internal:443")
+	t.Cleanup(func() { _ = conn.Close() })
+	br := bufio.NewReader(conn)
+	if status := readStatus(t, br); status != "HTTP/1.1 200 Connection Established" {
+		t.Fatalf("CONNECT status = %q", status)
+	}
+	return p, br, conn, rows
+}
+
+func sumRows(t *testing.T, rows <-chan int64, want int64) (sent int64, count int) {
+	t.Helper()
+	deadline := time.After(5 * time.Second)
+	for sent < want {
+		select {
+		case n := <-rows:
+			sent += n
+			count++
+		case <-deadline:
+			t.Fatalf("rows carried %d of %d bytes", sent, want)
+		}
+	}
+	select {
+	case n := <-rows:
+		sent += n
+		count++
+	case <-time.After(300 * time.Millisecond):
+	}
+	return sent, count
+}
+
+func writeAll(conn net.Conn, n int) {
+	_, _ = conn.Write(make([]byte, n))
+	_ = conn.(interface{ CloseWrite() error }).CloseWrite()
+}
+
+func bulkServer(t *testing.T, down int) *bulk {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen bulk: %v", err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	b := &bulk{addr: ln.Addr().String(), uploads: make(chan upload, 1)}
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer func() { _ = conn.Close() }()
+		var wg sync.WaitGroup
+		wg.Go(func() {
+			_, _ = conn.Write(make([]byte, down))
+			_ = conn.(*net.TCPConn).CloseWrite()
+		})
+		start := time.Now()
+		n, _ := io.Copy(io.Discard, conn)
+		b.uploads <- upload{n: n, took: time.Since(start)}
+		wg.Wait()
+	}()
+	return b
+}
+
+func sinkServer(t *testing.T) (string, *atomic.Int64) {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen sink: %v", err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	received := new(atomic.Int64)
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer func() { _ = conn.Close() }()
+		buf := make([]byte, 64<<10)
+		for {
+			n, err := conn.Read(buf)
+			received.Add(int64(n))
+			if err != nil {
+				return
+			}
+		}
+	}()
+	return ln.Addr().String(), received
+}
+
+func serveUpstream(t *testing.T, h http.Handler) string {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen upstream: %v", err)
+	}
+	srv := &http.Server{Handler: h, ReadHeaderTimeout: 5 * time.Second}
+	t.Cleanup(func() { _ = srv.Close() })
+	go func() { _ = srv.Serve(ln) }()
+	return ln.Addr().String()
+}
+
+func waitBytes(t *testing.T, received *atomic.Int64, want int64) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for received.Load() < want {
+		if time.Now().After(deadline) {
+			t.Fatalf("sink got %d bytes, want %d", received.Load(), want)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}

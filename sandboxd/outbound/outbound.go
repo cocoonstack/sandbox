@@ -56,7 +56,9 @@ type Options struct {
 	TunBytes func(sb *types.Sandbox, used int64)
 	// TunState reads the claim's tun fields under the owner's lock.
 	TunState func(sb *types.Sandbox) TunState
-	Fenced   func() bool
+	// EgressLimit reads the claim's bandwidth cap under the owner's lock; nil caps nothing.
+	EgressLimit func(sb *types.Sandbox) types.EgressLimit
+	Fenced      func() bool
 	// Dial, Verdict, Lock, Unlock, Sweep and Nameservers default to the internal-address guard, netfilter and /etc/resolv.conf; tests swap them.
 	Dial        egress.DialFunc
 	Verdict     VerdictFunc
@@ -99,6 +101,9 @@ func New(o Options) *Host {
 	}
 	if h.o.Nameservers == nil {
 		h.o.Nameservers = h.nameservers
+	}
+	if h.o.EgressLimit == nil {
+		h.o.EgressLimit = func(*types.Sandbox) types.EgressLimit { return types.EgressLimit{} }
 	}
 	return h
 }
@@ -163,12 +168,17 @@ func (h *Host) ArmProxy(ctx context.Context, sb *types.Sandbox) error {
 	}
 	d.srv = &http.Server{Handler: proxy, ReadHeaderTimeout: 30 * time.Second}
 	d.proxy = proxy
+	if v.usageBytes && v.usageEvery > 0 {
+		proxy.ReportEvery(v.usageEvery)
+	}
 	if d.dns != nil {
 		d.resolver = newResolver(evCtx, h, func(ev DNSEvent) { h.o.RecordDNS(evCtx, id, tenant, ev) })
 	}
 	h.mu.Lock()
 	h.doors[id] = d
 	h.mu.Unlock()
+	// Read after publishing the doors: a SetEgressLimit that found none has already committed its cap.
+	proxy.SetLimit(h.o.EgressLimit(sb))
 	go func() { _ = d.srv.Serve(d.ln) }()
 	if d.socks != nil {
 		go proxy.ServeSOCKS(evCtx, d.socks)
@@ -227,6 +237,25 @@ func (h *Host) Disarm(id string, removed bool) {
 	}
 	if tap != "" {
 		_ = h.o.Unlock(tap)
+	}
+}
+
+// SetEgressLimit moves sb's armed proxy and packet door onto its current bandwidth cap.
+func (h *Host) SetEgressLimit(sb *types.Sandbox) {
+	h.mu.Lock()
+	d := h.doors[sb.ID]
+	var addr netip.Addr
+	if d != nil && d.tun != nil {
+		addr = d.tun.addr
+	}
+	h.mu.Unlock()
+	if d == nil {
+		return
+	}
+	l := h.o.EgressLimit(sb)
+	d.proxy.SetLimit(l)
+	if addr.IsValid() {
+		h.o.Router.SetRates(addr, tunRates(l))
 	}
 }
 

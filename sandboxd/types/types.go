@@ -252,6 +252,20 @@ type MoveOut struct {
 	To     string `json:"to,omitempty"`
 }
 
+// EgressLimit caps a claim's egress bytes per second each way; zero leaves a direction unlimited.
+type EgressLimit struct {
+	TxBytesPerSecond int64 `json:"tx_bytes_per_second,omitzero"`
+	RxBytesPerSecond int64 `json:"rx_bytes_per_second,omitzero"`
+}
+
+// Validate refuses a negative rate.
+func (l EgressLimit) Validate() error {
+	if l.TxBytesPerSecond < 0 || l.RxBytesPerSecond < 0 {
+		return fmt.Errorf("egress limit rates must not be negative, got tx %d and rx %d", l.TxBytesPerSecond, l.RxBytesPerSecond)
+	}
+	return nil
+}
+
 // Sandbox is the node-local record of one pooled or claimed VM.
 type Sandbox struct {
 	ID     string  `json:"id"`
@@ -298,6 +312,8 @@ type Sandbox struct {
 	TunProfile string `json:"tun_profile,omitempty"`
 	// TunBytes counts the claim's tun bytes both ways against its quota.
 	TunBytes int64 `json:"tun_bytes,omitzero"`
+	// EgressLimit is the claim's proxy and tun bandwidth cap; only the root sets it.
+	EgressLimit EgressLimit `json:"egress_limit,omitzero"`
 	// HibernateSnap names the memory snapshot while the VM is hibernated; empty means running.
 	HibernateSnap string `json:"hibernate_snap,omitempty"`
 	// PendingSnap is the journaled intent of a hibernate in flight, cleared by its commit.
@@ -436,6 +452,8 @@ type Checkpoint struct {
 	// TunOff and TunProfile carry the operator's tun switch and exit label to a branch, so a branch cannot turn tun back on.
 	TunOff     bool   `json:"tun_off,omitzero"`
 	TunProfile string `json:"tun_profile,omitempty"`
+	// EgressLimit carries the operator's bandwidth cap to a branch, so a branch cannot shed it.
+	EgressLimit EgressLimit `json:"egress_limit,omitzero"`
 	// GuestEnv marks a capture whose guest holds an env file a branch must replace.
 	GuestEnv bool `json:"guest_env,omitzero"`
 

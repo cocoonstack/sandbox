@@ -2,6 +2,7 @@ package pool
 
 import (
 	"context"
+	"fmt"
 	"maps"
 	"slices"
 
@@ -12,6 +13,46 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 	"github.com/cocoonstack/sandbox/sandboxd/usage"
 )
+
+// SetEgressLimit replaces a claim's bandwidth cap without waking a hibernated or archived claim; open connections move onto it at once.
+func (m *Manager) SetEgressLimit(ctx context.Context, id string, l types.EgressLimit) error {
+	sb, ok := m.byID(id)
+	if !ok {
+		return ErrUnknownSandbox
+	}
+	m.mu.Lock()
+	switch {
+	case m.claimed[id] != sb:
+		m.mu.Unlock()
+		return ErrUnknownSandbox
+	case m.pausedForMoveLocked(sb):
+		m.mu.Unlock()
+		return ErrEvacuating
+	}
+	prev := sb.EgressLimit
+	sb.EgressLimit = l
+	rowed := m.rowFollows(sb) || sb.ArchivePending != ""
+	js := m.store.set(sb)
+	m.mu.Unlock()
+	if err := m.store.commit(js); err != nil {
+		m.mu.Lock()
+		var rb claimSnapshot
+		if m.claimed[id] == sb && sb.EgressLimit == l {
+			sb.EgressLimit = prev
+			rb = m.store.set(sb)
+		}
+		m.mu.Unlock()
+		m.store.recommit(ctx, rb)
+		return fmt.Errorf("set egress limit %s: persist claims: %w", id, err)
+	}
+	m.out.SetEgressLimit(sb)
+	if rowed {
+		if err := m.rewriteArchiveRow(ctx, sb, false); err != nil {
+			return fmt.Errorf("set egress limit %s: %w", id, err)
+		}
+	}
+	return nil
+}
 
 // NetRoute reports sb's route as its outbound host sees it.
 func (m *Manager) NetRoute(sb *types.Sandbox) types.NetRoute {
@@ -57,6 +98,12 @@ func (m *Manager) warnDeniedClaims(ctx context.Context) {
 	}
 }
 
+func (m *Manager) egressLimit(sb *types.Sandbox) types.EgressLimit {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return sb.EgressLimit
+}
+
 func (m *Manager) outboundOptions(ca *egress.CA) outbound.Options {
 	return outbound.Options{
 		Engine:    m.eng,
@@ -66,14 +113,15 @@ func (m *Manager) outboundOptions(ca *egress.CA) outbound.Options {
 		Transfer: func(ctx context.Context, id, tenant string, ev egress.Event, sent, received int64) {
 			m.recordUsage(ctx, usage.Event{Event: "egress_bytes", ID: id, Tenant: tenant, Reference: ev.Host, Upstream: ev.Upstream, Sent: sent, Received: received})
 		},
-		CA:         ca,
-		LockNIC:    len(m.cfg.Bridges) > 0,
-		RecordEnds: m.audit != nil,
-		NoRxSplice: m.cfg.NoRxSplice,
-		Router:     m.tunRouter,
-		Flow:       m.recordTunFlow,
-		TunBytes:   m.setTunBytes,
-		TunState:   m.tunState,
-		Fenced:     m.isFenced,
+		CA:          ca,
+		LockNIC:     len(m.cfg.Bridges) > 0,
+		RecordEnds:  m.audit != nil,
+		NoRxSplice:  m.cfg.NoRxSplice,
+		Router:      m.tunRouter,
+		Flow:        m.recordTunFlow,
+		TunBytes:    m.setTunBytes,
+		TunState:    m.tunState,
+		EgressLimit: m.egressLimit,
+		Fenced:      m.isFenced,
 	}
 }

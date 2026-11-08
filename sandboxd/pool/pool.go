@@ -204,6 +204,8 @@ type SandboxSummary struct {
 	TunAddr    netip.Addr `json:"tun_addr,omitzero"`
 	TunOff     bool       `json:"tun_off,omitzero"`
 	TunProfile string     `json:"tun_profile,omitempty"`
+	// EgressLimit is the claim's bandwidth cap; only the root by-id read carries it.
+	EgressLimit types.EgressLimit `json:"egress_limit,omitzero"`
 	// ClaimRef echoes the caller reference; empty for checkpoint branches and unprefixed forks.
 	ClaimRef       string             `json:"claim_ref,omitempty"`
 	Metadata       types.Metadata     `json:"metadata,omitempty"`

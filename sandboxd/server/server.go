@@ -119,6 +119,7 @@ type Manager interface {
 	PatchEnv(ctx context.Context, id string, patch types.EnvPatch, tenant string) error
 	Env(id, tenant string) (types.Env, error)
 	SetTun(ctx context.Context, id string, enabled *bool, profile *string) error
+	SetEgressLimit(ctx context.Context, id string, l types.EgressLimit) error
 	TunStats() (tunnet.Stats, bool)
 	Audit(ctx context.Context, id string, line []byte)
 	AuditEnabled() bool
@@ -336,6 +337,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/sandboxes/{id}/stats", s.requireRoot(s.handleSandboxStats))
 	mux.HandleFunc("PUT /v1/sandboxes/{id}/instance-metadata", s.requireRoot(s.handleInstanceMetadata))
 	mux.HandleFunc("PUT /v1/sandboxes/{id}/tun", s.requireRoot(s.handleSetTun))
+	mux.HandleFunc("PUT /v1/sandboxes/{id}/egress-limit", s.requireRoot(s.handleSetEgressLimit))
 	mux.HandleFunc("GET /v1/sandboxes/{id}/env", s.requireToken(s.handleGetEnv))
 	mux.HandleFunc("PUT /v1/sandboxes/{id}/env", s.requireToken(s.handleSetEnv))
 	mux.HandleFunc("PATCH /v1/sandboxes/{id}/env", s.requireToken(s.handlePatchEnv))
@@ -633,6 +635,16 @@ func (s *Server) handleSetTun(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	err := s.mgr.SetTun(r.Context(), id, req.Enabled, req.Profile)
 	writeResult(w, r, "tun", id, "set tun failed", err, noContent(w))
+}
+
+func (s *Server) handleSetEgressLimit(w http.ResponseWriter, r *http.Request) {
+	req, ok := decodeBodyStrict[types.EgressLimit](w, r)
+	if !ok || !validRequest(w, req.Validate()) {
+		return
+	}
+	id := r.PathValue("id")
+	err := s.mgr.SetEgressLimit(r.Context(), id, req)
+	writeResult(w, r, "egress limit", id, "set egress limit failed", err, noContent(w))
 }
 
 func (s *Server) handleSandboxVerb(verb string, do func(ctx context.Context, id string, cred pool.Cred) error) http.HandlerFunc {
