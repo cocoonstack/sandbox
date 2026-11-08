@@ -15,6 +15,7 @@ import (
 
 	"github.com/cocoonstack/sandbox/sandboxd/archives"
 	"github.com/cocoonstack/sandbox/sandboxd/store"
+	"github.com/cocoonstack/sandbox/sandboxd/tenants"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 	"github.com/cocoonstack/sandbox/sandboxd/usage"
 )
@@ -84,7 +85,6 @@ func (m *Manager) adoptArchived(ctx context.Context, id string, cred Cred, room 
 	}
 	sb.Token, sb.TokenSHA256, sb.ArchiveCk, sb.ArchiveEpoch, sb.Deadline = cred.Token, "", rec.Checkpoint, epoch, rec.Deadline
 	if cred.Operator {
-		// A node without token_sha256 reads only this placeholder, which no caller holds.
 		sb.Token, sb.TokenSHA256 = randHex(16), rec.TokenSHA256
 	}
 	sb.SetEnv(sb.Env)
@@ -152,7 +152,7 @@ func (m *Manager) putRow(ctx context.Context, sb *types.Sandbox, ck string, repl
 		m.mu.Unlock()
 		return 0, ErrVolumeCapture
 	}
-	dto, deadline, held, sum := dtoOf(sb), sb.Deadline, sb.ArchiveEpoch, tokenSum(sb)
+	dto, deadline, held, sum := dtoOf(sb), sb.Deadline, sb.ArchiveEpoch, cmp.Or(sb.TokenSHA256, tenants.TokenSHA256(sb.Token))
 	switch {
 	case replica:
 		deadline = time.Time{}
