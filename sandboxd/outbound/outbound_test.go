@@ -216,6 +216,26 @@ func TestNetRouteFollowsTheLaneAndTheDoors(t *testing.T) {
 	}
 }
 
+func TestSweepRunsOnlyOnANodeThatLocksNICs(t *testing.T) {
+	for _, lock := range []bool{false, true} {
+		var sweeps int
+		h := newHost(t, &fakeEngine{}, &config.Config{}, func(o *Options) {
+			o.LockNIC = lock
+			o.Sweep = func(map[string]bool) error { sweeps++; return nil }
+		})
+		if err := h.Sweep(nil); err != nil {
+			t.Fatalf("sweep (lock %v): %v", lock, err)
+		}
+		want := 0
+		if lock {
+			want = 1
+		}
+		if sweeps != want {
+			t.Errorf("sweep calls (lock %v) = %d, want %d", lock, sweeps, want)
+		}
+	}
+}
+
 func TestALiveClaimsEgressFollowsTheView(t *testing.T) {
 	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = io.WriteString(w, "ok")

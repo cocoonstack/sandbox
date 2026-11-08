@@ -328,8 +328,11 @@ func (h *Host) Relock(ctx context.Context, sb *types.Sandbox, tap string) error 
 	return h.markLane(ctx, sb.Key, sb.VsockSocket)
 }
 
-// Sweep drops every egress table whose tap keep does not name.
+// Sweep drops every egress table whose tap keep does not name; a node that locks no NIC leaves the tables alone.
 func (h *Host) Sweep(keep map[string]bool) error {
+	if !h.o.LockNIC {
+		return nil
+	}
 	return h.o.Sweep(keep)
 }
 

@@ -220,8 +220,10 @@ domain policy first; the allow-list widens the IP gate only.
 
 ### Deployment constraints
 
-- **One sandboxd per host.** The restart sweep owns the whole `sandbox_egress_*`
-  table namespace in the root netns; a second daemon would clear the first's locks.
+- **One locking sandboxd per host.** The restart sweep of a node with `bridges`
+  owns the whole `sandbox_egress_*` table namespace in the root netns; a second
+  daemon with `bridges` would clear the first's locks. A node without `bridges`
+  never sweeps.
 - **Bridge lane only (egress lane).** A CNI network's tap lives in the VM netns,
   out of reach of the root-netns lock, so a guarded egress *lane* needs the
   `bridges` form (those taps stay in the root netns) and is rejected on CNI
