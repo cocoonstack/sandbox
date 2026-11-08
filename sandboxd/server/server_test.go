@@ -2410,6 +2410,7 @@ type fakeManager struct {
 	hasPromoted   bool
 
 	audited             func(id string, line []byte)
+	auditedBy           func(caller string)
 	checkpoint          func(id, token, name string) (types.Checkpoint, error)
 	claimCheckpoint     checkpointClaimFunc
 	healCheckpoint      checkpointClaimFunc
@@ -2664,7 +2665,10 @@ func (f *fakeManager) SetTenants(_ context.Context, specs []tenants.TenantSpec) 
 	return nil
 }
 
-func (f *fakeManager) PutTenant(_ context.Context, spec tenants.TenantSpec) error {
+func (f *fakeManager) PutTenant(ctx context.Context, spec tenants.TenantSpec) error {
+	if f.auditedBy != nil {
+		f.auditedBy(pool.CallerOf(ctx))
+	}
 	if f.putTenant != nil {
 		return f.putTenant(spec)
 	}
@@ -2739,13 +2743,16 @@ func (f *fakeManager) Wake(_ context.Context, id string, cred pool.Cred) error {
 	return f.wake(id, credToken(cred))
 }
 
-func (f *fakeManager) Audit(_ context.Context, id string, line []byte) {
+func (f *fakeManager) Audit(ctx context.Context, id string, line []byte) {
 	if f.audited != nil {
 		f.audited(id, line)
 	}
+	if f.auditedBy != nil {
+		f.auditedBy(pool.CallerOf(ctx))
+	}
 }
 
-func (f *fakeManager) AuditEnabled() bool { return f.audited != nil }
+func (f *fakeManager) AuditEnabled() bool { return f.audited != nil || f.auditedBy != nil }
 
 func (f *fakeManager) Checkpoint(_ context.Context, id string, cred pool.Cred, name, tenant string) (types.Checkpoint, error) {
 	f.gotTenant = tenant

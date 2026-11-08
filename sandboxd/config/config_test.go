@@ -185,6 +185,8 @@ func TestLoadRejectsInvalid(t *testing.T) {
 		{"relative volume root", `{"pools":[],"volume_roots":["srv/datasets"]}`, "volume_roots"},
 		{"empty volume root", `{"pools":[],"volume_roots":[""]}`, "volume_roots"},
 		{"reader without warm", `{"pools":[{"template":"rt:24.04","warm":0,"reader":true}]}`, "reader needs warm"},
+		{"operator token without api_token", `{"operator_token":"op","pools":[]}`, "operator_token requires api_token"},
+		{"operator token equal to api_token", `{"api_token":"same","operator_token":"same","pools":[]}`, "operator_token must differ from api_token"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			_, err := Load(writeConfig(t, tt.body))
@@ -216,6 +218,16 @@ func TestLoadMetaStore(t *testing.T) {
 	}
 	if _, _, err := cfg.ReloadDiff(withUsage); err == nil || !strings.Contains(err.Error(), "meta_store") {
 		t.Errorf("a reload that turns usage on: %v, want a restart refusal", err)
+	}
+}
+
+func TestLoadOperatorToken(t *testing.T) {
+	cfg := mustLoad(t, writeConfig(t, `{"api_token":"root","operator_token":"op","pools":[]}`))
+	if cfg.OperatorToken != "op" {
+		t.Errorf("operator_token = %q, want op", cfg.OperatorToken)
+	}
+	if cfg = mustLoad(t, writeConfig(t, `{"api_token":"root","pools":[]}`)); cfg.OperatorToken != "" {
+		t.Errorf("unset operator_token = %q, want empty", cfg.OperatorToken)
 	}
 }
 

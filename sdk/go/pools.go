@@ -22,7 +22,7 @@ type poolUpdate struct {
 	Pools []PoolSpec `json:"pools"`
 }
 
-// SetPools replaces the entry node's desired warm pools with the operator token; omitted pools drain.
+// SetPools replaces the entry node's desired warm pools with the root token; omitted pools drain.
 func (c *Client) SetPools(ctx context.Context, pools []PoolSpec) (*NodeInfo, error) {
 	return c.setPoolsAt(ctx, c.addr, pools)
 }

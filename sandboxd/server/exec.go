@@ -45,7 +45,7 @@ type ExecResponse struct {
 }
 
 func (s *Server) handleExec(w http.ResponseWriter, r *http.Request) {
-	token, ok := sandboxToken(w, r)
+	token, ok := s.sandboxToken(w, r)
 	if !ok {
 		return
 	}
@@ -61,8 +61,9 @@ func (s *Server) handleExec(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "timeout_seconds must not be negative")
 		return
 	}
+	r = s.sandboxCaller(r, token)
 	ctx := r.Context()
-	id, cred := r.PathValue("id"), s.sandboxCred(token)
+	id, cred := r.PathValue("id"), s.sandboxCred(r, token)
 	guest, done, _, ok := s.wakeGuest(ctx, w, id, cred, s.mgr.WakeAgentSocket)
 	if !ok {
 		return
