@@ -43,6 +43,7 @@ func (m *Manager) SetEgressLimit(ctx context.Context, id string, l types.EgressL
 		}
 		m.mu.Unlock()
 		m.store.recommit(ctx, rb)
+		m.out.SetEgressLimit(sb)
 		return fmt.Errorf("set egress limit %s: persist claims: %w", id, err)
 	}
 	m.out.SetEgressLimit(sb)

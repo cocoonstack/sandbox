@@ -132,6 +132,7 @@ func (h *Host) armTun(ctx context.Context, sb *types.Sandbox, d *doors, v *View,
 			return refused == nil
 		},
 		Limits: v.tunLimits,
+		Every:  v.usageEvery,
 		Used:   t.used,
 		Touch:  sb.TouchAt,
 		Record: func(r tunnet.FlowRecord) {
@@ -144,9 +145,6 @@ func (h *Host) armTun(ctx context.Context, sb *types.Sandbox, d *doors, v *View,
 			}
 		},
 	}
-	if usage {
-		tc.Every = v.usageEvery
-	}
 	h.o.Router.Arm(tc)
 	h.mu.Lock()
 	live := h.doors[id] == d
@@ -154,7 +152,7 @@ func (h *Host) armTun(ctx context.Context, sb *types.Sandbox, d *doors, v *View,
 		d.tun = t
 	}
 	h.mu.Unlock()
-	h.o.Router.SetRates(t.addr, tunRates(h.o.EgressLimit(sb)))
+	h.SetEgressLimit(sb)
 	if live && !h.o.TunState(sb).On {
 		h.mu.Lock()
 		mine := d.tun == t
@@ -229,8 +227,4 @@ func (h *Host) dropTun(t *tunDoor) {
 	_ = t.ln.Close()
 	h.o.Router.Disarm(t.addr)
 	h.o.TunBytes(t.sb, t.used.Load())
-}
-
-func tunRates(l types.EgressLimit) tunnet.Rates {
-	return tunnet.Rates{Up: float64(l.TxBytesPerSecond), Down: float64(l.RxBytesPerSecond)}
 }

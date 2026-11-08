@@ -164,13 +164,13 @@ func (r *Router) Arm(c Claim) {
 	r.announce(a)
 }
 
-// SetRates swaps the byte buckets of the claim armed at addr; its flows keep running.
-func (r *Router) SetRates(addr netip.Addr, rates Rates) {
+// SetRates swaps the byte buckets of the claim armed at addr each way, a zero rate keeping the node's; its flows keep running.
+func (r *Router) SetRates(addr netip.Addr, up, down float64) {
 	r.mu.RLock()
 	a := r.claims[addr]
 	r.mu.RUnlock()
 	if a != nil {
-		a.flows.setRates(rates)
+		a.flows.setRates(up, down)
 	}
 }
 
