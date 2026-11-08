@@ -187,6 +187,13 @@ func TestLoadRejectsInvalid(t *testing.T) {
 		{"reader without warm", `{"pools":[{"template":"rt:24.04","warm":0,"reader":true}]}`, "reader needs warm"},
 		{"operator token without api_token", `{"operator_token":"op","pools":[]}`, "operator_token requires api_token"},
 		{"operator token equal to api_token", `{"api_token":"same","operator_token":"same","pools":[]}`, "operator_token must differ from api_token"},
+		{"api token next without api_token", `{"api_token_next":"n","pools":[]}`, "api_token_next requires api_token"},
+		{"api token next equal to api_token", `{"api_token":"same","api_token_next":"same","pools":[]}`, "api_token_next must differ from api_token"},
+		{"operator token next without operator_token", `{"api_token":"r","operator_token_next":"n","pools":[]}`, "operator_token_next requires operator_token"},
+		{"operator token next equal to operator_token", `{"api_token":"r","operator_token":"same","operator_token_next":"same","pools":[]}`, "operator_token_next must differ from operator_token"},
+		{"operator token equal to api_token_next", `{"api_token":"r","api_token_next":"same","operator_token":"same","pools":[]}`, "operator_token must differ from api_token_next"},
+		{"operator token next equal to api_token", `{"api_token":"same","operator_token":"o","operator_token_next":"same","pools":[]}`, "operator_token_next must differ from api_token"},
+		{"operator token next equal to api_token_next", `{"api_token":"r","api_token_next":"same","operator_token":"o","operator_token_next":"same","pools":[]}`, "operator_token_next must differ from api_token_next"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			_, err := Load(writeConfig(t, tt.body))
@@ -228,6 +235,18 @@ func TestLoadOperatorToken(t *testing.T) {
 	}
 	if cfg = mustLoad(t, writeConfig(t, `{"api_token":"root","pools":[]}`)); cfg.OperatorToken != "" {
 		t.Errorf("unset operator_token = %q, want empty", cfg.OperatorToken)
+	}
+}
+
+func TestLoadNextTokensThatChangeOnlyAtARestart(t *testing.T) {
+	cfg := mustLoad(t, writeConfig(t, `{"api_token":"root","api_token_next":"root2","operator_token":"op","operator_token_next":"op2","pools":[]}`))
+	if cfg.APITokenNext != "root2" || cfg.OperatorTokenNext != "op2" {
+		t.Errorf("next tokens %q %q, want root2 op2", cfg.APITokenNext, cfg.OperatorTokenNext)
+	}
+	next := *cfg
+	next.APITokenNext, next.OperatorTokenNext = "", ""
+	if _, _, err := cfg.ReloadDiff(&next); err == nil || err.Error() != "api_token_next, operator_token_next change only at a restart" {
+		t.Errorf("a reload that drops the next tokens: %v, want a restart refusal", err)
 	}
 }
 
