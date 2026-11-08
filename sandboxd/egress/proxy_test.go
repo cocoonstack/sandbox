@@ -265,6 +265,23 @@ func TestADeniedForwardIs403AndAuditedAsDeny(t *testing.T) {
 	}
 }
 
+func TestANonASCIIForwardHostIsDeniedBeforeMatching(t *testing.T) {
+	policy := Policy{Allow: []Rule{{Host: "*.api.internal", Secret: "gh"}}}
+	secrets := fakeSecrets{"gh": {"Authorization", "Bearer SECRET"}}
+	events := make(chan Event, 4)
+	p := New(policy, secrets, nil, fixedDial("127.0.0.1:1"), func(ev Event) { events <- ev }, nil)
+	front := serveFront(t, p)
+
+	conn := dialProxy(t, front.Listener.Addr().String(), "GET http://x.ap%C4%B0.internal/ HTTP/1.1\r\nHost: x.api.internal\r\n\r\n")
+	defer func() { _ = conn.Close() }()
+	if status := readStatus(t, bufio.NewReader(conn)); status != "HTTP/1.1 403 Forbidden" {
+		t.Fatalf("forward to a host that lowercases into the allow-list = %q, want 403", status)
+	}
+	if ev := recvEvent(t, events); ev.Decision != DecisionDeny || ev.Injected != "" {
+		t.Errorf("audit event = %+v, want deny with nothing injected", ev)
+	}
+}
+
 func TestConnectAllowTunnels(t *testing.T) {
 	echo := echoServer(t)
 	policy := Policy{Allow: []Rule{{Host: "echo.internal"}}}
@@ -484,6 +501,7 @@ func TestBracketedIPv6AuthorityIsUnwrapped(t *testing.T) {
 		{"[not-an-address]", "HTTP/1.1 403 Forbidden", DecisionDeny},
 		{"[2606:4700:4700::1111", "HTTP/1.1 403 Forbidden", DecisionDeny},
 		{"echo.internal]", "HTTP/1.1 403 Forbidden", DecisionDeny},
+		{"[2606:4700:4700::1111%25.example.com]:443", "HTTP/1.1 403 Forbidden", DecisionDeny},
 		{"", "HTTP/1.1 403 Forbidden", DecisionDeny},
 	} {
 		conn := dialProxy(t, front.Listener.Addr().String(), "CONNECT /x HTTP/1.1\r\nHost: "+tt.authority+"\r\n\r\n")

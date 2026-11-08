@@ -151,6 +151,9 @@ func socksHandshake(conn net.Conn) (host string, port uint16, ok bool) {
 	if req[3] != socksAtypName {
 		ip, _ := netip.AddrFromSlice(addr)
 		host = ip.String()
+	} else if !plainHost(host) {
+		_ = socksReply(conn, socksFailure)
+		return "", 0, false
 	}
 	return host, binary.BigEndian.Uint16(target[addrLen:]), true
 }

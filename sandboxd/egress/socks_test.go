@@ -92,6 +92,8 @@ func TestSocksRefusesWhatItCannotServe(t *testing.T) {
 		{"udp associate", socksGreeting, []byte{socksVersion, 0x03, 0, socksAtypIPv4, 127, 0, 0, 1, 1, 187}, []byte{socksVersion, socksBadCmd}},
 		{"unknown address type", socksGreeting, []byte{socksVersion, socksConnect, 0, 0x05}, []byte{socksVersion, socksBadAtyp}},
 		{"zero-length domain name", socksGreeting, []byte{socksVersion, socksConnect, 0, socksAtypName, 0, 1, 187}, []byte{socksVersion, socksFailure}},
+		{"zoned address as a name", socksGreeting, append([]byte{socksVersion, socksConnect, 0, socksAtypName, 23}, "2606:4700::1111%.a.test\x01\xbb"...), []byte{socksVersion, socksFailure}},
+		{"non-ASCII name", socksGreeting, append([]byte{socksVersion, socksConnect, 0, socksAtypName, 9}, "x.\xc4\xb0.test\x01\xbb"...), []byte{socksVersion, socksFailure}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

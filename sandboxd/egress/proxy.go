@@ -24,6 +24,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"golang.org/x/time/rate"
 )
@@ -737,20 +738,24 @@ func denied(w http.ResponseWriter, host string) {
 	http.Error(w, fmt.Sprintf("egress denied: %s", host), http.StatusForbidden)
 }
 
-// hostPort splits an authority; a bare host takes def, a port outside 1-65535, a host past 253 bytes or a malformed authority is refused rather than defaulted.
+// hostPort splits an authority; a bare host takes def, a port outside 1-65535, a host past 253 bytes, a zone or non-ASCII byte, or a malformed authority is refused rather than defaulted.
 func hostPort(authority string, def uint16) (host string, port uint16, ok bool) {
 	host, text, err := net.SplitHostPort(authority)
 	if err != nil {
 		literal, bracketed := strings.CutPrefix(authority, "[")
 		if !bracketed {
-			return authority, def, authority != "" && len(authority) <= maxHostLen && !strings.ContainsAny(authority, ":[]")
+			return authority, def, plainHost(authority) && !strings.ContainsAny(authority, ":[]")
 		}
 		literal, closed := strings.CutSuffix(literal, "]")
 		addr, parseErr := netip.ParseAddr(literal)
-		return literal, def, closed && parseErr == nil && addr.Is6() && len(literal) <= maxHostLen
+		return literal, def, closed && parseErr == nil && addr.Is6() && plainHost(literal)
 	}
 	n, err := strconv.ParseUint(text, 10, 16)
-	return host, uint16(n), err == nil && n != 0 && host != "" && len(host) <= maxHostLen
+	return host, uint16(n), err == nil && n != 0 && plainHost(host)
+}
+
+func plainHost(host string) bool {
+	return host != "" && len(host) <= maxHostLen && !strings.ContainsFunc(host, func(r rune) bool { return r == '%' || r >= utf8.RuneSelf })
 }
 
 func tcpAddrPort(a net.Addr) netip.AddrPort {
