@@ -108,7 +108,7 @@ type Claim struct {
 	// Used counts the claim's bytes both ways; the caller persists it.
 	Used   *atomic.Int64
 	Record RecordFunc
-	// Every adds a Partial record for each allowed flow live that long since its last record; zero records a flow only when it ends.
+	// Every adds a Partial record for each allowed flow live that long since its last record; a closed TCP flow gets one after a quiet sweep either way.
 	Every time.Duration
 	Touch func(time.Time)
 }

@@ -4,7 +4,8 @@ package egress
 
 import (
 	"net"
-	"syscall"
+
+	"golang.org/x/sys/unix"
 )
 
 func clampWindow(c *net.TCPConn, n int) {
@@ -13,6 +14,6 @@ func clampWindow(c *net.TCPConn, n int) {
 		return
 	}
 	_ = raw.Control(func(fd uintptr) {
-		_ = syscall.SetsockoptInt(int(fd), syscall.IPPROTO_TCP, syscall.TCP_WINDOW_CLAMP, n)
+		_ = unix.SetsockoptInt(int(fd), unix.IPPROTO_TCP, unix.TCP_WINDOW_CLAMP, n)
 	})
 }

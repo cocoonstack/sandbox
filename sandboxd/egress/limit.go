@@ -23,8 +23,9 @@ const (
 	minLimitRead = 1 << 10
 
 	// minWindow keeps a clamped receive window above what a long round trip needs at a low cap.
-	minWindow  = 128 << 10
-	openWindow = 65535 << 14
+	minWindow       = 128 << 10
+	maxScaledWindow = 65535 << 14
+	clampEvery      = 100 * time.Millisecond
 )
 
 // SetLimit caps the claim's bytes per second each way and moves every open tunnel onto the new cap at once.
@@ -156,11 +157,11 @@ func (p *Proxy) stream(dst io.Writer, src net.Conn, rx bool, n *atomic.Int64) {
 		var err error
 		if lim, _ := p.limiter(rx); lim != nil {
 			buf := copyBufs.Get().(*[]byte)
-			// Hide ReaderFrom so the copy reads through the meter into the pooled buffer.
 			m := &meter{r: src, p: p, rx: rx, n: n}
 			if rx {
 				m.win = tcpOf(src)
 			}
+			// Hide ReaderFrom so the copy reads through the meter into the pooled buffer.
 			_, err = io.CopyBuffer(struct{ io.Writer }{dst}, m, *buf)
 			copyBufs.Put(buf)
 		} else {
@@ -233,6 +234,8 @@ type meter struct {
 	n       *atomic.Int64
 	win     *net.TCPConn
 	clamped bool
+	applied int
+	at      time.Time
 }
 
 func (m *meter) Read(b []byte) (int, error) {
@@ -242,23 +245,29 @@ func (m *meter) Read(b []byte) (int, error) {
 	}
 	n, err := m.r.Read(b)
 	m.n.Add(int64(n))
+	m.clamp(lim, err != nil && !errors.Is(err, os.ErrDeadlineExceeded))
 	for lim != nil && n > 0 && lim.WaitN(l.ctx, n) != nil {
 		lim, l = m.p.limiter(m.rx)
 	}
-	m.clamp(lim, err != nil)
 	return n, err
 }
 
-// clamp sets the window again on every limited read, since receive-buffer autotuning raises it; a pooled conn leaves open.
+// clamp sets the window again every clampEvery, because the kernel raises it while it tunes the receive buffer.
 func (m *meter) clamp(lim *rate.Limiter, done bool) {
-	switch {
-	case m.win == nil:
-	case lim != nil && !done:
-		clampWindow(m.win, max(minWindow, min(int(lim.Limit())/2, openWindow)))
-		m.clamped = true
-	case m.clamped:
-		clampWindow(m.win, openWindow)
-		m.clamped = false
+	if m.win == nil {
+		return
+	}
+	if lim == nil || done {
+		if m.clamped {
+			clampWindow(m.win, maxScaledWindow)
+			m.clamped = false
+		}
+		return
+	}
+	w := max(minWindow, min(int(lim.Limit())/2, maxScaledWindow))
+	if now := time.Now(); !m.clamped || w != m.applied || now.Sub(m.at) >= clampEvery {
+		clampWindow(m.win, w)
+		m.clamped, m.applied, m.at = true, w, now
 	}
 }
 
@@ -274,6 +283,10 @@ func newBucket(perSecond int64) *rate.Limiter {
 	return rate.NewLimiter(rate.Limit(perSecond), max(int(min(perSecond, 1<<30)), limitBurst))
 }
 
+func readSlice(lim *rate.Limiter) int {
+	return max(minLimitRead, min(int(lim.Limit())/limitSlices, limitBurst))
+}
+
 func tcpOf(c net.Conn) *net.TCPConn {
 	for {
 		switch v := c.(type) {
@@ -287,8 +300,4 @@ func tcpOf(c net.Conn) *net.TCPConn {
 			return nil
 		}
 	}
-}
-
-func readSlice(lim *rate.Limiter) int {
-	return max(minLimitRead, min(int(lim.Limit())/limitSlices, limitBurst))
 }
