@@ -146,7 +146,13 @@ operator token reaches every claim's data — it reads any claim's token by id,
 execs in any claim, and through a tenant it mints can fork, checkpoint and
 preview with that claim token — but holds no node or cluster configuration
 power, cannot claim volumes, and leaves an audit record (op `token`) for each
-token it reads. The root,
+token it reads. A set `api_token_next` or `operator_token_next` carries
+exactly the authority of `api_token` or `operator_token`, so a node accepts the
+old and the new token during a
+[rolling rotation](deploy.md#rotating-api_token-and-operator_token); remove
+the old one when the rotation ends. The config refuses a node token equal to
+another one, and every tenant write, and the tenant file at boot, refuse a
+tenant token equal to any of them. The root,
 operator and tenant tokens
 are valid on every node of their [cell](#cells) and nowhere else. A preview URL
 is a capability on top, HMAC-signed with the cell's `preview_secret` and no

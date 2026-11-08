@@ -132,7 +132,9 @@ the intersection of the two.
 | `tun` | absent | turns on the [advanced network mode](advanced-network.md#configuration): the overlay subnet, the VXLAN socket, the exits and per-claim limits |
 | `egress_ca` | unset | [HTTPS-interception](egress.md#https-interception) PKI: `root_cert` (the cell's root baked into intercepted guests; may bundle old+new roots during rotation) plus this node's `intermediate_cert`/`intermediate_key` from `sandboxd ca issue-intermediate`. Required when any pool rule sets `intercept` |
 | `api_token` | unset | the root credential: when set, guards the node-level endpoints (Bearer) with full access, including release-by-id cleanup. Per-sandbox tokens guard ordinary sandbox-scoped calls. Shared within a [cell](cluster.md#cells); restart only |
+| `api_token_next` | unset | a second root credential for a [rolling rotation](#rotating-api_token-and-operator_token): the node accepts it exactly as it accepts `api_token`, and the audit `caller` stays `root`. Peer calls still send `api_token`. Needs `api_token`; must differ from `api_token`, `operator_token` and `operator_token_next`; a tenant token must differ from it (the tenant file is checked at boot, every tenant write is checked). Not part of the cluster digest; restart only |
 | `operator_token` | unset | a second node credential for a public control plane: root's authority on the claim lifecycle (claim without `volumes`, list, read by id, release, hibernate, wake, renew, env, port relay, exec, owner and adoption), the tenant API, `GET /v1/info` and `GET /v1/peers`, and `403` everywhere else, including a claim that names `volumes`. It reaches every claim's data: it reads any claim's token by id (recorded as op `token` with `audit_log` on), execs in any claim, and through a tenant it mints can fork, checkpoint and preview with that claim token. It holds no node or cluster configuration power: it cannot change pools, config, drain, cordon, moves, volumes, tun or instance metadata, or read usage, metrics or checkpoint blobs. Needs `api_token` and must differ from it; a tenant token must differ from it (the tenant file is checked at boot, every tenant write is checked). Shared within a cell like `api_token`, and covered by the cluster digest when set and `mesh.cluster_key` is set; restart only |
+| `operator_token_next` | unset | a second operator credential for a [rolling rotation](#rotating-api_token-and-operator_token): the node accepts it exactly as it accepts `operator_token`, on the same routes, and the audit `caller` stays `operator`. Needs `operator_token`; must differ from `api_token`, `api_token_next` and `operator_token`; a tenant token must differ from it (the tenant file is checked at boot, every tenant write is checked). Not part of the cluster digest; restart only |
 | `meta_store` | unset | `{"kind": "pg", "dsn_env": "SANDBOXD_PG_DSN"}`: keep the tenant set in the [cell's](cluster.md#cells) PostgreSQL database instead of each node's `tenants.json` (see [shared tenant database](#shared-tenant-database)). `dsn_env` names the node env holding the connection string. An optional `cell` also keeps the API-applied pool set there, one per cell, instead of in each node's `pools.json` (see [shared pool set](#shared-pool-set)); without it pool targets stay per node. An optional `usage: true` also lands this node's usage journal in one shared table and serves [`GET /v1/usage`](sandboxd-api.md#get-v1usage) from it (see [shared usage table](#shared-usage-table)). Needs `api_token`. Restart only |
 | `max_fork_count` | 16 | children a single `fork` may create; each is a full-RAM VM, so this bounds one request's memory blast radius to the node's capacity |
 | `refill_concurrency` | 0 (auto) | concurrent VM provisioning budget, shared by warm-pool refills, fork clones, and the reap/hibernate/reconcile engine batches; the batches never take the last quarter of it (at least one slot), so a mass expiry or idle sweep cannot stop refills. 0 sizes it from the node: `NumCPU*2/3` clamped to [4, 256] — a 384-core node gets 256; small nodes keep a floor of 4 |
@@ -606,7 +608,8 @@ docs cover validation semantics and the per-VM knobs.
 ### Auth model
 
 A root `api_token` for operators, an optional `operator_token` for a public
-control plane, tenant tokens added through the
+control plane (each with an optional `_next` token that the node also accepts
+during a [rotation](#rotating-api_token-and-operator_token)), tenant tokens added through the
 [tenant API](sandboxd-api.md#tenants-v1tenants) and kept in
 `<data_dir>/tenants.json` (or the [shared tenant database](#shared-tenant-database)),
 and one token per sandbox. What each may call is in the
@@ -778,12 +781,13 @@ next.
 
 ### Rotating a cell's credentials
 
-`api_token`, `mesh.cluster_key`, `preview_secret`, `meta_store` (and its DSN),
+`mesh.cluster_key`, `preview_secret`, `meta_store` (and its DSN),
 `checkpoint_store` and `egress_ca` change only at a restart. Nodes on old and
-new shared secrets cannot work together: peer calls answer 401, gossip splits,
-and a preview URL signed on one fails on the other. Write the new values to
-every node of the cell, then restart all of them at once. Preview URLs signed
-before the rotation stop working.
+new shared secrets cannot work together: gossip splits, and a preview URL
+signed on one fails on the other. Write the new values to every node of the
+cell, then restart all of them at once. Preview URLs signed before the
+rotation stop working. `api_token` and `operator_token` also change only at a
+restart, but they rotate with rolling restarts instead (see below).
 
 - Store keys from sandboxd's environment change only at the restart;
   credentials from an instance role refresh by themselves.
@@ -796,6 +800,38 @@ a guest that already exists. Follow the
 keeping the old intermediate, drain or recreate every old-root guest,
 checkpoint, archive and promoted template, then switch to the new intermediate.
 Replacing only an intermediate under the same root needs no drain.
+
+#### Rotating `api_token` and `operator_token`
+
+A node accepts both its current token and its `_next` token
+(`api_token_next`, `operator_token_next`), and sends only its current
+`api_token` on peer calls. Rotate the `operator_token` in four steps. Each
+step completes on every node or client before the next one starts:
+
+1. Roll every sandboxd with `operator_token_next` set to the new token.
+2. Replace the token in every client that uses the operator token, and roll
+   those clients. A client that reads its token only at start, such as the
+   cocoonbox API, needs a rolling restart.
+3. Roll every sandboxd with the two swapped: `operator_token` is the new
+   token, `operator_token_next` the old one.
+4. Roll every sandboxd with `operator_token_next` removed.
+
+Rotate the `api_token` in the same four steps with `api_token` and
+`api_token_next`; in step 2, update every tool that uses the root token. Peers
+keep authenticating each other throughout: a node sends its current token, and
+every node accepts its current or next token, so during step 3 a node that
+already sends the new token reaches peers that still hold it as next, and the
+other way around.
+
+- A sandboxd restart keeps the node's VMs and claims: the shipped unit stops
+  sandboxd alone, and the next start re-adopts them (see [running](#running)).
+- The new token must differ from every other node token and from every tenant
+  token. A node whose tenant file holds it refuses to start; the
+  [shared tenant database](#shared-tenant-database) is checked only on tenant
+  writes.
+- With `mesh.cluster_key` set, the cluster digest covers `api_token` and a set
+  `operator_token` but not the `_next` tokens, so only step 3 raises
+  `sandboxd_config_digest_mismatch`, until every node has swapped.
 
 ### Recovering a cell
 
@@ -1113,7 +1149,8 @@ all at once or not at all. Every field falls into one of three classes:
 - **Restart only**: every other field. A reload that changes one is refused
   with the field names, and nothing applies. A cell's shared credentials are
   all in this class:
-  `api_token`, `mesh` (with `cluster_key`), `preview_secret`, `meta_store`,
+  `api_token`, `api_token_next`, `operator_token`, `operator_token_next`,
+  `mesh` (with `cluster_key`), `preview_secret`, `meta_store`,
   `checkpoint_store` and `egress_ca`. See
   [rotating a cell's credentials](#rotating-a-cells-credentials).
 
