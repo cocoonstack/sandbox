@@ -3,11 +3,8 @@ ARG BASE_IMAGE=ghcr.io/cocoonstack/sandbox/base:24.04
 
 FROM ${BASE_IMAGE}
 ENV DEBIAN_FRONTEND=noninteractive
-# See base: cache-busts the layers below when non-Dockerfile inputs change.
-ARG INPUTS_HASH=
-
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3 python3-pip python3-venv git \
+    python3 python3-pip python3-venv \
     && rm -rf /var/lib/apt/lists/*
 
 # LSP broker manifest: pylsp is the v1 language server (pure Python on the
