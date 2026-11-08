@@ -340,6 +340,19 @@ func TestQuarantineFailedRemoveStaysUnswept(t *testing.T) {
 	}
 }
 
+func TestResyncEgressLeavesLocksAloneOnANodeWithoutBridges(t *testing.T) {
+	m := egressManager(t, newFakeEngine(), config.PoolSpec{PoolKey: egKey, Egress: egPolicy})
+	var sweeps int
+	withOutbound(t, m, func(o *outbound.Options) {
+		o.LockNIC = false
+		o.Sweep = func(map[string]bool) error { sweeps++; return nil }
+	})
+	m.resyncEgress(t.Context(), map[string]types.VMRecord{}, map[string]bool{})
+	if sweeps != 0 {
+		t.Errorf("a node that locks no NIC swept %d times; it would drop another daemon's locks", sweeps)
+	}
+}
+
 func TestSetPoolsPreservesEgressPolicy(t *testing.T) {
 	m := egressManager(t, newFakeEngine(), config.PoolSpec{PoolKey: egKey, Egress: egPolicy})
 	gd := seedGolden(t, m, egKey, "")

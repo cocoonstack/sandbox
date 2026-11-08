@@ -127,7 +127,10 @@ func TestReconcileBusyStaleCreateKeepsTap(t *testing.T) {
 	m := newTestManager(t, eng)
 
 	var gotKeep map[string]bool
-	withOutbound(t, m, func(o *outbound.Options) { o.Sweep = func(keep map[string]bool) error { gotKeep = keep; return nil } })
+	withOutbound(t, m, func(o *outbound.Options) {
+		o.LockNIC = true
+		o.Sweep = func(keep map[string]bool) error { gotKeep = keep; return nil }
+	})
 	if err := m.Reconcile(t.Context()); err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
