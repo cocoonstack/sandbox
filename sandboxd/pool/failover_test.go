@@ -2087,8 +2087,8 @@ func TestFailoverARootAndATokenLookupRacingKeepOneClaim(t *testing.T) {
 		if !<-lookup {
 			t.Error("the racing token lookup did not adopt")
 		}
-		if got := reg.takes.Load(); got != 2 {
-			t.Fatalf("row taken %d times, want both lookups to take it", got)
+		if got := reg.takes.Load(); got != 1 {
+			t.Fatalf("row taken %d times, want one adoption for both lookups", got)
 		}
 		if n := b.TenantClaims()["acme"]; n != 1 {
 			t.Errorf("tenant acme counts %d claims, want 1", n)
@@ -2102,7 +2102,7 @@ func TestFailoverARootAndATokenLookupRacingKeepOneClaim(t *testing.T) {
 		epoch := held.ArchiveEpoch
 		b.mu.Unlock()
 		if epoch != rec.Epoch {
-			t.Errorf("claim epoch %d, row epoch %d, want the later take's", epoch, rec.Epoch)
+			t.Errorf("claim epoch %d, row epoch %d, want the claim on its row", epoch, rec.Epoch)
 		}
 		if err = b.rewriteArchiveRow(t.Context(), held, false); err != nil {
 			t.Errorf("row write after the race: %v", err)
@@ -2116,13 +2116,13 @@ func TestFailoverARootAndATokenLookupRacingKeepOneClaim(t *testing.T) {
 	})
 }
 
-func TestFailoverATakeOfAPublishedClaimsRowMovesTheClaimToItsEpoch(t *testing.T) {
+func TestFailoverAReleaseDuringAnAdoptionOnThisNodeLeavesNoPhantom(t *testing.T) {
 	tests := []struct {
-		name        string
-		later, prev func(*types.Sandbox) Cred
+		name           string
+		leader, racing func(*types.Sandbox) Cred
 	}{
-		{"the root takes later", rootCred, tokenCred},
-		{"the token takes later", tokenCred, rootCred},
+		{"the root leads", rootCred, tokenCred},
+		{"the token leads", tokenCred, rootCred},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -2134,115 +2134,115 @@ func TestFailoverATakeOfAPublishedClaimsRowMovesTheClaimToItsEpoch(t *testing.T)
 				c.expire("a")
 				reg := &hookRegistry{Registry: c.reg}
 				b.archives = reg
-				reg.beforeGet = func() {
-					if adopted, err := b.AdoptArchived(t.Context(), sb.ID, tt.prev(sb)); err != nil || !adopted {
-						t.Errorf("published lookup: %v %v", adopted, err)
+				racing := make(chan bool, 1)
+				reg.afterTake = func() {
+					go func() {
+						adopted, _ := b.AdoptArchived(t.Context(), sb.ID, tt.racing(sb))
+						racing <- adopted
+					}()
+					synctest.Wait()
+					if err := b.Release(t.Context(), sb.ID, Cred{Token: sb.Token}); !errors.Is(err, ErrUnknownSandbox) {
+						t.Errorf("release before the adoption published: %v, want ErrUnknownSandbox", err)
 					}
 				}
 
-				if adopted, err := b.AdoptArchived(t.Context(), sb.ID, tt.later(sb)); err != nil || !adopted {
-					t.Fatalf("later lookup: %v %v", adopted, err)
+				if adopted, err := b.AdoptArchived(t.Context(), sb.ID, tt.leader(sb)); err != nil || !adopted {
+					t.Fatalf("leading lookup: %v %v", adopted, err)
 				}
+				if !<-racing {
+					t.Error("the racing lookup did not answer for the adopted claim")
+				}
+				rec, ok, _ := c.reg.Get(t.Context(), sb.ID)
 				held, _ := b.byID(sb.ID)
-				rec, _, _ := c.reg.Get(t.Context(), sb.ID)
 				b.mu.Lock()
 				epoch := held.ArchiveEpoch
 				b.mu.Unlock()
-				if got := reg.takes.Load(); got != 2 || epoch != rec.Epoch {
-					t.Fatalf("row taken %d times, claim epoch %d, row epoch %d, want both takes and the claim at the later one", got, epoch, rec.Epoch)
+				if !ok || rec.Owner != "b" || rec.Epoch != epoch || reg.takes.Load() != 1 || usageEventsOf(t, b, sb.ID) != "adopt" {
+					t.Fatalf("row %v %s@%d, claim epoch %d, takes %d, events %q, want one adoption on its row", ok, rec.Owner, rec.Epoch, epoch, reg.takes.Load(), usageEventsOf(t, b, sb.ID))
 				}
-				if err := b.rewriteArchiveRow(t.Context(), held, false); err != nil {
-					t.Errorf("row write after the fold: %v", err)
+				if err := b.Release(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
+					t.Fatalf("release: %v", err)
+				}
+				if _, ok, _ = c.reg.Get(t.Context(), sb.ID); ok {
+					t.Error("the release left the row")
+				}
+				if adopted, err := b.AdoptArchived(t.Context(), sb.ID, Cred{Operator: true}); err != nil || adopted {
+					t.Errorf("root lookup after the release: %v %v, want nothing to adopt", adopted, err)
+				}
+				if _, held := b.byID(sb.ID); held {
+					t.Error("a released claim came back")
 				}
 			})
 		})
 	}
 }
 
-func TestFailoverALookupLosingTheTakeToAnotherOnThisNodeAnswersForIt(t *testing.T) {
+func TestFailoverLookupsSharingAnAdoptionAnswerWithTheirOwnCredential(t *testing.T) {
 	tests := []struct {
-		name        string
-		loser, prev func(*types.Sandbox) Cred
+		name             string
+		leader, follower func(*types.Sandbox) Cred
+		want             bool
 	}{
-		{"the root loses", rootCred, tokenCred},
-		{"the token loses", tokenCred, rootCred},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			c := newFailoverCluster(t)
-			a, b := c.pair(t)
-			sb := mustClaim(t, a, testKey)
-			mustArchive(t, a, sb)
-			c.expire("a")
-			reg := &hookRegistry{Registry: c.reg}
-			b.archives = reg
-			reg.beforeTake = func() {
-				if adopted, err := b.AdoptArchived(t.Context(), sb.ID, tt.prev(sb)); err != nil || !adopted {
-					t.Errorf("winning lookup: %v %v", adopted, err)
-				}
-			}
-
-			if adopted, err := b.AdoptArchived(t.Context(), sb.ID, tt.loser(sb)); err != nil || !adopted {
-				t.Errorf("losing lookup: %v %v, want this node answering for the claim", adopted, err)
-			}
-			if got := reg.takes.Load(); got != 1 {
-				t.Errorf("row taken %d times, want once", got)
-			}
-		})
-	}
-}
-
-func TestFailoverALateTakeFoldedAfterAWakeKeepsTheClaimReplicating(t *testing.T) {
-	tests := []struct {
-		name          string
-		first, racing func(*types.Sandbox) Cred
-	}{
-		{"the root folds late", rootCred, tokenCred},
-		{"the token folds late", tokenCred, rootCred},
+		{"a root follower of a token adoption", tokenCred, rootCred, true},
+		{"a token follower of a root adoption", rootCred, tokenCred, true},
+		{"a wrong token following a root adoption", rootCred, wrongCred, false},
+		{"a tenant token following a root adoption", rootCred, tenantCred, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
-				c := newReplicaCluster(t)
+				c := newFailoverCluster(t)
 				a, b := c.pair(t)
 				sb := mustClaim(t, a, testKey)
 				mustArchive(t, a, sb)
 				c.expire("a")
 				reg := &hookRegistry{Registry: c.reg}
 				b.archives = reg
+				follower := make(chan bool, 1)
 				reg.afterTake = func() {
 					go func() {
-						if adopted, err := b.AdoptArchived(t.Context(), sb.ID, tt.racing(sb)); err != nil || !adopted {
-							t.Errorf("racing lookup: %v %v", adopted, err)
-						}
+						adopted, _ := b.AdoptArchived(t.Context(), sb.ID, tt.follower(sb))
+						follower <- adopted
 					}()
 					synctest.Wait()
-					if err := wakeClaim(t, b, sb); err != nil {
-						t.Errorf("wake before the late fold: %v", err)
-					}
 				}
 
-				if adopted, err := b.AdoptArchived(t.Context(), sb.ID, tt.first(sb)); err != nil || !adopted {
-					t.Fatalf("late lookup: %v %v", adopted, err)
+				if adopted, err := b.AdoptArchived(t.Context(), sb.ID, tt.leader(sb)); err != nil || !adopted {
+					t.Fatalf("leading lookup: %v %v", adopted, err)
 				}
-				held, ok := b.byID(sb.ID)
-				if !ok {
-					t.Fatal("the late fold dropped the claim")
-				}
-				vm := lockedVMName(held)
-				if err := b.replicate(t.Context(), held); err != nil {
-					t.Errorf("replication after the late fold: %v", err)
-				}
-				rec, _, _ := c.reg.Get(t.Context(), sb.ID)
-				b.mu.Lock()
-				epoch := held.ArchiveEpoch
-				b.mu.Unlock()
-				if _, ok = b.byID(sb.ID); !ok || fakeOf(b).removed(vm) || rec.Owner != "b" || rec.Epoch != epoch {
-					t.Errorf("held %v, VM removed %v, row %s@%d, claim epoch %d, want one running claim on the row it replicated", ok, fakeOf(b).removed(vm), rec.Owner, rec.Epoch, epoch)
+				if got := <-follower; got != tt.want || reg.takes.Load() != 1 {
+					t.Errorf("follower answered %v after %d takes, want %v after one", got, reg.takes.Load(), tt.want)
 				}
 			})
 		})
 	}
+}
+
+func TestFailoverALookupFollowingARefusedAdoptionAdoptsWithItsOwnToken(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		c := newFailoverCluster(t)
+		a, b := c.pair(t)
+		sb := mustClaim(t, a, testKey)
+		mustArchive(t, a, sb)
+		c.expire("a")
+		reg := &hookRegistry{Registry: c.reg}
+		b.archives = reg
+		follower := make(chan bool, 1)
+		reg.beforeGet = func() {
+			go func() {
+				adopted, _ := b.AdoptArchived(t.Context(), sb.ID, Cred{Token: sb.Token})
+				follower <- adopted
+			}()
+			synctest.Wait()
+		}
+
+		if adopted, err := b.AdoptArchived(t.Context(), sb.ID, Cred{Token: "wrong"}); err != nil || adopted {
+			t.Fatalf("wrong-token lookup: %v %v, want refused", adopted, err)
+		}
+		if !<-follower {
+			t.Error("a wrong token leading the flight kept the claim token from adopting")
+		}
+	})
 }
 
 type failoverCluster struct {
@@ -2614,4 +2614,12 @@ func rootCred(*types.Sandbox) Cred {
 
 func tokenCred(sb *types.Sandbox) Cred {
 	return Cred{Token: sb.Token}
+}
+
+func wrongCred(*types.Sandbox) Cred {
+	return Cred{Token: "wrong"}
+}
+
+func tenantCred(*types.Sandbox) Cred {
+	return Cred{Token: "tok-acme"}
 }
