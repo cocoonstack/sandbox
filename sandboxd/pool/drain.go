@@ -150,6 +150,7 @@ func (m *Manager) handOff(ctx context.Context, sb *types.Sandbox, room bool) err
 	if err != nil {
 		return fmt.Errorf("hand off %s: %w", sb.ID, err)
 	}
+	log.WithFunc("pool.handOff").Infof(ctx, "released archive row %s from epoch %d to %d for a hand-off (room %t)", sb.ID, epoch, released, room)
 	if !m.peerAdopt(ctx, sb.ID, token, room) {
 		return m.takeBack(ctx, sb, released)
 	}

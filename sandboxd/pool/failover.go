@@ -501,6 +501,58 @@ func (m *Manager) sweepOrphanArchives(ctx context.Context) {
 	}
 }
 
+func (m *Manager) fenceHeldArchives(ctx context.Context) {
+	if !m.sweeps.held.CompareAndSwap(false, true) {
+		return
+	}
+	defer m.sweeps.held.Store(false)
+	m.mu.Lock()
+	held := map[string]*types.Sandbox{}
+	for id, sb := range m.claimed {
+		if sb.ArchiveCk != "" && sb.ArchiveEpoch != 0 {
+			held[id] = sb
+		}
+	}
+	m.mu.Unlock()
+	if len(held) == 0 {
+		return
+	}
+	rows, err := m.archives.Rows(ctx, slices.Collect(maps.Keys(held)))
+	if err != nil {
+		log.WithFunc("pool.fenceHeldArchives").Warnf(ctx, "check held archive rows: %v", err)
+		return
+	}
+	for id, sb := range held {
+		if rec, ok := rows[id]; !ok || rec.Owner != m.nodeID {
+			m.fenceHeldArchive(ctx, sb)
+		}
+	}
+}
+
+func (m *Manager) fenceHeldArchive(ctx context.Context, sb *types.Sandbox) {
+	if !sb.Transition.TryLock() {
+		return
+	}
+	defer sb.Transition.Unlock()
+	logger := log.WithFunc("pool.fenceHeldArchive")
+	m.mu.Lock()
+	live, epoch := m.claimed[sb.ID] == sb && sb.ArchiveCk != "", sb.ArchiveEpoch
+	m.mu.Unlock()
+	if !live {
+		return
+	}
+	rec, ok, err := m.archives.Get(ctx, sb.ID)
+	switch {
+	case err != nil:
+		logger.Warnf(ctx, "check archive row %s: %v", sb.ID, err)
+		return
+	case ok && rec.Owner == m.nodeID:
+		return
+	}
+	logger.Infof(ctx, "dropping archived %s held at epoch %d: its row is owned by %q at epoch %d", sb.ID, epoch, rec.Owner, rec.Epoch)
+	m.dropAdopted(ctx, sb)
+}
+
 func (m *Manager) reconcileOwnRow(ctx context.Context, rec archives.Record, now time.Time) {
 	m.mu.Lock()
 	sb := m.claimed[rec.ID]

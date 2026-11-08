@@ -2256,6 +2256,74 @@ func TestFailoverALookupFollowingARefusedAdoptionAdoptsWithItsOwnToken(t *testin
 	}
 }
 
+func TestFailoverHeldFenceDropsAnArchivedClaimAnotherNodeOwns(t *testing.T) {
+	c := newFailoverCluster(t)
+	a, b := c.pair(t)
+	sb := mustClaim(t, a, testKey)
+	mustArchive(t, a, sb)
+	held, _ := a.byID(sb.ID)
+	if _, err := c.reg.Release(t.Context(), sb.ID, held.ArchiveEpoch, "a"); err != nil {
+		t.Fatalf("release: %v", err)
+	}
+	if adopted, err := b.AdoptArchived(t.Context(), sb.ID, Cred{Operator: true}); err != nil || !adopted {
+		t.Fatalf("root adopt on b: %v %v", adopted, err)
+	}
+	moved, _ := b.byID(sb.ID)
+
+	a.fenceHeldArchives(t.Context())
+	if _, kept := a.byID(sb.ID); kept {
+		t.Error("a still holds a claim whose row b owns")
+	}
+	if rec, _, _ := c.reg.Get(t.Context(), sb.ID); rec.Owner != "b" {
+		t.Errorf("row owner %q, want b", rec.Owner)
+	}
+	if !ckExists(t, b, moved.ArchiveCk) {
+		t.Error("the fence deleted the checkpoint b now serves")
+	}
+}
+
+func TestFailoverHeldFenceDropsAClaimWhoseRowIsOwnerless(t *testing.T) {
+	c := newFailoverCluster(t)
+	a, b := c.pair(t)
+	sb := mustClaim(t, a, testKey)
+	mustArchive(t, a, sb)
+	held, _ := a.byID(sb.ID)
+	if _, err := c.reg.Release(t.Context(), sb.ID, held.ArchiveEpoch, "a"); err != nil {
+		t.Fatalf("release: %v", err)
+	}
+
+	a.fenceHeldArchives(t.Context())
+	if _, kept := a.byID(sb.ID); kept {
+		t.Error("a still holds a claim whose row it no longer owns")
+	}
+	if adopted, err := b.AdoptArchived(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil || !adopted {
+		t.Fatalf("adopt on b after the drop: %v %v", adopted, err)
+	}
+	if rec, _, _ := c.reg.Get(t.Context(), sb.ID); rec.Owner != "b" {
+		t.Errorf("row owner %q, want b", rec.Owner)
+	}
+}
+
+func TestFailoverHeldFenceLeavesAClaimMidTransition(t *testing.T) {
+	c := newFailoverCluster(t)
+	a, _ := c.pair(t)
+	sb := mustClaim(t, a, testKey)
+	mustArchive(t, a, sb)
+	held, _ := a.byID(sb.ID)
+	if _, err := c.reg.Release(t.Context(), sb.ID, held.ArchiveEpoch, "a"); err != nil {
+		t.Fatalf("release: %v", err)
+	}
+	held.Transition.Lock()
+	a.fenceHeldArchives(t.Context())
+	held.Transition.Unlock()
+	if rec, _, _ := c.reg.Get(t.Context(), sb.ID); rec.Owner != "" {
+		t.Errorf("row owner %q, want the in-flight hand-off's release left alone", rec.Owner)
+	}
+	if _, kept := a.byID(sb.ID); !kept {
+		t.Error("the fence dropped a claim mid-transition")
+	}
+}
+
 type credOf func(*types.Sandbox) Cred
 
 type failoverCluster struct {

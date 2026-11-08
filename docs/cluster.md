@@ -243,7 +243,12 @@ it while it sleeps write it, so the claim path is unchanged.
   owner, a tombstone of another owner, or no row at all): its wake and release
   answer unknown sandbox (the client looks it up again), its restart drops the
   record, and none of them deletes the checkpoint, which belongs to the new
-  owner; the drop clears the old owner's delete marker first. Only a tombstone
+  owner; the drop clears the old owner's delete marker first. A running node
+  also checks the rows of the archived claims it holds every minute and drops,
+  the same way, each one whose row it no longer owns: another node's, an
+  ownerless one, or none. An ownerless row keeps its latest record for the next
+  adopter. A claim mid-transition (a wake or a hand-off in flight) waits for
+  the next check. Only a tombstone
   of its own means this node's commit never happened: the wake or the restart
   re-arms it and keeps the claim. Orphan reclaim at restart deletes only archive
   checkpoints this node published, and never one a row references. A restart
