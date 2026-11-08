@@ -740,6 +740,10 @@ func (m *Manager) rowFollows(sb *types.Sandbox) bool {
 	return m.archiveRowed(sb) || m.replicaRowed(sb) && sb.HibernateSnap != ""
 }
 
+func (m *Manager) rowRewriteDue(sb *types.Sandbox) bool {
+	return m.rowFollows(sb) || sb.ArchivePending != "" || sb.ReplicaPending != "" && sb.HibernateSnap != ""
+}
+
 func (m *Manager) expiryDropsRow(sb *types.Sandbox) bool {
 	return m.archiveRowed(sb) || m.archives != nil && sb.HasReplica() && !m.archivesAtDeadline(sb)
 }
