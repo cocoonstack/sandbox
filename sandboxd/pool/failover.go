@@ -90,7 +90,7 @@ func (m *Manager) adoptArchived(ctx context.Context, id string, cred Cred, room 
 	m.mu.Lock()
 	if held := m.claimed[id]; held != nil {
 		m.mu.Unlock()
-		return m.foldTake(ctx, held, epoch)
+		return m.foldTake(ctx, held, rec.Epoch, epoch)
 	}
 	if sb.Deadline.IsZero() {
 		sb.Deadline = m.retentionDeadline(sb.Key)
@@ -107,10 +107,14 @@ func (m *Manager) adoptArchived(ctx context.Context, id string, cred Cred, room 
 	return true, nil
 }
 
-func (m *Manager) foldTake(ctx context.Context, held *types.Sandbox, epoch int64) (bool, error) {
+func (m *Manager) foldTake(ctx context.Context, held *types.Sandbox, from, epoch int64) (bool, error) {
 	held.Transition.Lock()
 	defer held.Transition.Unlock()
-	return m.commitIfLive(ctx, held, func() { held.ArchiveEpoch = max(held.ArchiveEpoch, epoch) })
+	return m.commitIfLive(ctx, held, func() {
+		if held.ArchiveEpoch == from {
+			held.ArchiveEpoch = epoch
+		}
+	})
 }
 
 func (m *Manager) putArchive(ctx context.Context, sb *types.Sandbox, ck string) (int64, error) {
