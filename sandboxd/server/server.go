@@ -122,6 +122,7 @@ type Manager interface {
 	TunStats() (tunnet.Stats, bool)
 	Audit(ctx context.Context, id string, line []byte)
 	AuditEnabled() bool
+	AuditTokenRead(ctx context.Context, id string)
 	ClaimCheckpoint(ctx context.Context, ckptID string, o pool.ClaimOptions) (*types.Sandbox, error)
 	ClaimCheckpointHeal(ctx context.Context, ckptID string, o pool.ClaimOptions) (*types.Sandbox, error)
 	Checkpoints(ctx context.Context, tenant string) ([]types.Checkpoint, error)
@@ -395,6 +396,10 @@ func (s *Server) handleClaim(w http.ResponseWriter, r *http.Request) {
 	key := req.Key()
 	tenant := tenantFrom(r.Context())
 	if len(req.Volumes) > 0 {
+		if s.rootCaller(r) == callerOperator {
+			writeErr(w, http.StatusForbidden, "operator token cannot claim volumes")
+			return
+		}
 		s.handleVolumeClaim(w, r, req, key, key.Hash(), tenant)
 		return
 	}
@@ -557,8 +562,13 @@ func (s *Server) handleSandbox(w http.ResponseWriter, r *http.Request) {
 		writePoolErr(w, pool.ErrUnknownSandbox)
 		return
 	}
-	if !s.rootRequest(r) {
+	switch s.rootCaller(r) {
+	case "":
 		sb.Token = ""
+	case callerOperator:
+		if sb.Token != "" {
+			s.mgr.AuditTokenRead(r.Context(), id)
+		}
 	}
 	writeJSON(w, http.StatusOK, sb)
 }
@@ -643,18 +653,18 @@ func (s *Server) handleSetTun(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleSandboxVerb(verb string, do func(ctx context.Context, id string, cred pool.Cred) error) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		token, ok := s.sandboxToken(w, r)
+		cred, r, ok := s.sandboxCred(w, r)
 		if !ok {
 			return
 		}
 		id := r.PathValue("id")
-		err := do(r.Context(), id, s.sandboxCred(r, token))
+		err := do(r.Context(), id, cred)
 		writeResult(w, r, verb, id, verb+" failed", err, noContent(w))
 	}
 }
 
 func (s *Server) handleRenew(w http.ResponseWriter, r *http.Request) {
-	token, ok := s.sandboxToken(w, r)
+	cred, r, ok := s.sandboxCred(w, r)
 	if !ok {
 		return
 	}
@@ -663,7 +673,7 @@ func (s *Server) handleRenew(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := r.PathValue("id")
-	deadline, err := s.mgr.Renew(r.Context(), id, s.sandboxCred(r, token), req.TTL(), req.OnExpire)
+	deadline, err := s.mgr.Renew(r.Context(), id, cred, req.TTL(), req.OnExpire)
 	writeResult(w, r, "renew", id, "renew failed", err, func() {
 		writeJSON(w, http.StatusOK, RenewResponse{Deadline: deadline})
 	})
@@ -798,11 +808,11 @@ func (s *Server) handleSetTemplateLabels(w http.ResponseWriter, r *http.Request)
 }
 
 func (s *Server) handleOwner(w http.ResponseWriter, r *http.Request) {
-	token, ok := s.sandboxToken(w, r)
+	cred, r, ok := s.sandboxCred(w, r)
 	if !ok {
 		return
 	}
-	id, cred := r.PathValue("id"), s.sandboxCred(r, token)
+	id := r.PathValue("id")
 	_, err := s.mgr.AgentSocket(id, cred)
 	if errors.Is(err, pool.ErrLeaseLost) {
 		writeErr(w, http.StatusNotFound, "not owned here")
@@ -954,37 +964,29 @@ func (s *Server) requireRoot(next http.HandlerFunc) http.HandlerFunc {
 	})
 }
 
-func (s *Server) rootRequest(r *http.Request) bool {
+func (s *Server) rootCaller(r *http.Request) string {
 	token, ok := bearerToken(r)
 	if !ok {
-		return false
+		return ""
 	}
 	caller, _ := s.authority(r, token)
-	return caller != ""
+	return caller
 }
 
-// authority names the root-authority caller token is on r's route; refused marks the operator token off operatorRoutes.
-func (s *Server) authority(r *http.Request, token string) (caller string, refused bool) {
+func (s *Server) authority(r *http.Request, token string) (string, error) {
 	switch {
 	case tokenMatches(s.apiToken, token):
-		return callerRoot, false
+		return callerRoot, nil
 	case !tokenMatches(s.operator, token):
-		return "", false
+		return "", nil
 	case operatorRoutes[r.Pattern]:
-		return callerOperator, false
+		return callerOperator, nil
 	}
-	return "", true
-}
-
-func (s *Server) sandboxCred(r *http.Request, token string) pool.Cred {
-	if caller, _ := s.authority(r, token); caller != "" {
-		return pool.Cred{Operator: true}
-	}
-	return pool.Cred{Token: token}
+	return "", errOperatorRoute
 }
 
 func (s *Server) bodyCred(r *http.Request, bodyToken string) pool.Cred {
-	return pool.Cred{Token: bodyToken, Operator: bodyToken == "" && s.rootRequest(r)}
+	return pool.Cred{Token: bodyToken, Operator: bodyToken == "" && s.rootCaller(r) != ""}
 }
 
 func (s *Server) resolveScope(r *http.Request) (*tenants.TenantRecord, string, error) {
@@ -995,18 +997,15 @@ func (s *Server) resolveScope(r *http.Request) (*tenants.TenantRecord, string, e
 	if !ok {
 		return nil, "", pool.ErrUnknownTenant
 	}
-	switch caller, refused := s.authority(r, token); {
-	case refused:
-		return nil, "", errOperatorRoute
-	case caller != "":
-		return nil, caller, nil
+	if caller, err := s.authority(r, token); err != nil || caller != "" {
+		return nil, caller, err
 	}
 	tenant, err := s.mgr.TenantByToken(r.Context(), token)
-	return tenant, callerTenant, err
+	return tenant, "", err
 }
 
 func (s *Server) withCaller(r *http.Request, caller string) *http.Request {
-	if !s.mgr.AuditEnabled() {
+	if caller == "" || !s.mgr.AuditEnabled() {
 		return r
 	}
 	return r.WithContext(pool.WithCaller(r.Context(), caller))

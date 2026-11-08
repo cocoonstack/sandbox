@@ -117,8 +117,6 @@ type requestFrame struct {
 	Port    uint16   `json:"port,omitzero"`
 }
 
-type callerKey struct{}
-
 // auditFrame keeps Caller out of requestFrame, so a guest-bound frame cannot forge it.
 type auditFrame struct {
 	requestFrame
@@ -231,6 +229,11 @@ func (m *Manager) AuditEnabled() bool {
 	return m.audit != nil
 }
 
+// AuditTokenRead records that the caller on ctx read claim id's token.
+func (m *Manager) AuditTokenRead(ctx context.Context, id string) {
+	m.recordAudit(ctx, id, auditFrame{Op: "token"})
+}
+
 func (m *Manager) recordAudit(ctx context.Context, id string, frame auditFrame) {
 	if m.audit == nil {
 		return
@@ -289,6 +292,8 @@ func (m *Manager) recordUsage(ctx context.Context, ev usage.Event) {
 		log.WithFunc("pool.recordUsage").Errorf(ctx, err, "append usage event %s %s", ev.Event, ev.ID)
 	}
 }
+
+type callerKey struct{}
 
 // WithCaller tags ctx with the credential kind behind a request, for the audit records it causes.
 func WithCaller(ctx context.Context, caller string) context.Context {

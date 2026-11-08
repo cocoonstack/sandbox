@@ -2,6 +2,8 @@ package pool
 
 import (
 	"encoding/json/v2"
+	"errors"
+	"io/fs"
 	"maps"
 	"net/http"
 	"net/netip"
@@ -582,6 +584,21 @@ func TestEgressAuditNamesTenantAndEndsARelayedFrameCannot(t *testing.T) {
 	}
 	if got[1].Tenant != "" || got[1].Src.IsValid() || got[1].Dst.IsValid() {
 		t.Errorf("relayed frame set attribution %+v", got[1])
+	}
+}
+
+func TestATokenReadIsAuditedWithItsCaller(t *testing.T) {
+	dir := t.TempDir()
+	m := mustManager(t, &config.Config{DataDir: dir, AuditLog: true, Pools: []config.PoolSpec{}}, newFakeEngine())
+	m.AuditTokenRead(WithCaller(t.Context(), "operator"), "sb_t")
+	if lines := auditLines(t, dir); len(lines) != 1 || !strings.Contains(lines[0], `"id":"sb_t","op":"token","caller":"operator"`) {
+		t.Errorf("audit lines %q, want one token read by the operator", lines)
+	}
+	offDir := t.TempDir()
+	off := mustManager(t, &config.Config{DataDir: offDir, Pools: []config.PoolSpec{}}, newFakeEngine())
+	off.AuditTokenRead(WithCaller(t.Context(), "operator"), "sb_t")
+	if _, err := os.Stat(filepath.Join(offDir, "audit.jsonl")); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("audit_log off wrote a journal: %v", err)
 	}
 }
 

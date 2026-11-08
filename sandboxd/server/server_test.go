@@ -2411,6 +2411,7 @@ type fakeManager struct {
 
 	audited             func(id string, line []byte)
 	auditedBy           func(caller string)
+	tokenRead           func(id, caller string)
 	checkpoint          func(id, token, name string) (types.Checkpoint, error)
 	claimCheckpoint     checkpointClaimFunc
 	healCheckpoint      checkpointClaimFunc
@@ -2752,7 +2753,15 @@ func (f *fakeManager) Audit(ctx context.Context, id string, line []byte) {
 	}
 }
 
-func (f *fakeManager) AuditEnabled() bool { return f.audited != nil || f.auditedBy != nil }
+func (f *fakeManager) AuditEnabled() bool {
+	return f.audited != nil || f.auditedBy != nil || f.tokenRead != nil
+}
+
+func (f *fakeManager) AuditTokenRead(ctx context.Context, id string) {
+	if f.tokenRead != nil {
+		f.tokenRead(id, pool.CallerOf(ctx))
+	}
+}
 
 func (f *fakeManager) Checkpoint(_ context.Context, id string, cred pool.Cred, name, tenant string) (types.Checkpoint, error) {
 	f.gotTenant = tenant

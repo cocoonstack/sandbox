@@ -329,15 +329,14 @@ type Manager struct {
 	cordoned bool
 	cordonMu sync.Mutex
 
-	tenants     tenants.Source
-	rootSum     string
-	operatorSum string
-	onTenants   func()
-	tenantLive  map[string]int
-	usage       *journal
-	audit       *journal
-	counters    counters
-	ckpts       store.Store
+	tenants    tenants.Source
+	reserved   tenants.Reserved
+	onTenants  func()
+	tenantLive map[string]int
+	usage      *journal
+	audit      *journal
+	counters   counters
+	ckpts      store.Store
 	// A cluster-wide backend makes heal and the delete broadcast no-ops
 	ckptsShared       bool
 	healer            *peer.Healer
@@ -468,12 +467,7 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 		}
 		m.audit = audit
 	}
-	if cfg.APIToken != "" {
-		m.rootSum = tenants.TokenSHA256(cfg.APIToken)
-	}
-	if err := m.reserveOperatorToken(ctx, cfg.OperatorToken); err != nil {
-		return nil, err
-	}
+	m.reserved = tenants.ReservedOf(cfg.APIToken, cfg.OperatorToken)
 	m.cfg = cfg
 	m.view.Store(newConfigView(cfg, secrets))
 	for _, spec := range cfg.Pools {

@@ -16,6 +16,7 @@ import (
 
 	"github.com/projecteru2/core/log"
 
+	"github.com/cocoonstack/sandbox/sandboxd/pool"
 	"github.com/cocoonstack/sandbox/sandboxd/tenants"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 	"github.com/cocoonstack/sandbox/sandboxd/utils"
@@ -26,14 +27,12 @@ const (
 
 	callerRoot     = "root"
 	callerOperator = "operator"
-	callerTenant   = "tenant"
 	callerClaim    = "claim"
 )
 
 var (
 	errOperatorRoute = errors.New("operator token not allowed on this route")
 
-	// operatorRoutes are the only route patterns where the operator token acts with root authority.
 	operatorRoutes = map[string]bool{
 		"POST /v1/claim":                      true,
 		"GET /v1/sandboxes":                   true,
@@ -78,36 +77,33 @@ func (s *Server) clientAddrs(addrs []string) []string {
 	return clients
 }
 
-func (s *Server) sandboxToken(w http.ResponseWriter, r *http.Request) (string, bool) {
+// sandboxCred answers a missing or refused bearer itself, and tags r with the caller for audit.
+func (s *Server) sandboxCred(w http.ResponseWriter, r *http.Request) (pool.Cred, *http.Request, bool) {
 	token, ok := bearerToken(r)
 	if !ok {
 		writeErr(w, http.StatusUnauthorized, "missing bearer token")
-		return "", false
+		return pool.Cred{}, r, false
 	}
-	if _, refused := s.authority(r, token); refused {
-		writeErr(w, http.StatusForbidden, errOperatorRoute.Error())
-		return "", false
+	caller, err := s.authority(r, token)
+	switch {
+	case err != nil:
+		writeErr(w, http.StatusForbidden, err.Error())
+		return pool.Cred{}, r, false
+	case caller == "":
+		return pool.Cred{Token: token}, s.withCaller(r, callerClaim), true
 	}
-	return token, true
+	return pool.Cred{Operator: true}, s.withCaller(r, caller), true
 }
 
 // upgradeGate refuses a bare GET: waking the sandbox consumes its hibernate snapshot.
-func (s *Server) upgradeGate(w http.ResponseWriter, r *http.Request, proto string) (string, bool) {
-	token, ok := s.sandboxToken(w, r)
-	if !ok {
-		return "", false
-	}
-	if !strings.EqualFold(r.Header.Get("Upgrade"), proto) {
+func (s *Server) upgradeGate(w http.ResponseWriter, r *http.Request, proto string) (pool.Cred, *http.Request, bool) {
+	cred, r, ok := s.sandboxCred(w, r)
+	if ok && !strings.EqualFold(r.Header.Get("Upgrade"), proto) {
 		w.Header().Set("Upgrade", proto)
 		writeErr(w, http.StatusUpgradeRequired, "upgrade to "+proto+" required")
-		return "", false
+		return cred, r, false
 	}
-	return token, true
-}
-
-func (s *Server) sandboxCaller(r *http.Request, token string) *http.Request {
-	caller, _ := s.authority(r, token)
-	return s.withCaller(r, cmp.Or(caller, callerClaim))
+	return cred, r, ok
 }
 
 func withTenant(ctx context.Context, tenant *tenants.TenantRecord) context.Context {

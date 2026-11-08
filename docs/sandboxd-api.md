@@ -14,7 +14,12 @@ All bodies are JSON. Four token kinds:
   [tenant API](#tenants-v1tenants), `GET /v1/info` and `GET /v1/peers`. Every
   other authenticated endpoint answers it `403`
   `operator token not allowed on this route`; it is never a sandbox token, so
-  the agent relay refuses it too. Unset or empty, it is off.
+  the agent relay refuses it too, and a claim that names `volumes` answers it
+  `403` `operator token cannot claim volumes`. Unset or empty, it is off.
+  Scope: it reaches every claim's data — it reads any claim's token by id,
+  execs in any claim, and through a tenant it mints can fork, checkpoint and
+  preview with that claim token — and holds no node or cluster configuration
+  power. With `audit_log` on, its by-id token read records op `token`.
 - **tenant** — a token the [tenant API](#tenants-v1tenants) added: accepted by the
   resource-creating verbs (claim, fork, promote, checkpoint create/claim,
   preview mint) and the tenant-scoped listings/deletes below; everything a
@@ -76,7 +81,7 @@ the guest-reaching verbs have their own 429 causes, listed with each.
 ## POST /v1/claim
 
 Auth: `Authorization: Bearer <api_token>` (when configured), a tenant token,
-or the operator token, which claims as root.
+or the operator token, which claims as root but never with `volumes` (403).
 
 ```json
 {"template": "base:24.04", "net": "none", "size": "small",
@@ -596,7 +601,7 @@ down; retry` for a tenant the node has not cached while the meta store is down.
 
 Auth: the node `api_token` (Bearer) — forking creates node resources, like a
 claim. The sandbox's own token rides in the body as the ownership proof; the
-root `api_token` with an empty body `token` acts by id as the operator:
+root `api_token` with an empty body `token` acts by id as root:
 
 ```json
 {"token": "…", "count": 2, "ttl_seconds": 300, "claim_ref_prefix": "team-a/"}
@@ -635,8 +640,8 @@ failed parent, or an archived parent (`POST /wake` or an exec wakes it first);
 ## POST /v1/sandboxes/{id}/promote
 
 Auth: like fork — node `api_token` in the header, the sandbox's own token in
-the body; the root `api_token` with an empty body `token` acts by id as the
-operator:
+the body; the root `api_token` with an empty body `token` acts by id as
+root:
 
 ```json
 {"token": "…", "template": "myproj:v1"}
@@ -937,7 +942,7 @@ The target serves root-only peer routes for a move, `POST /v1/moves/{id}`,
 
 Auth: node `api_token` in the header, the sandbox's own token in the body.
 Unlike fork, promote and checkpoint — where the root token with an empty body
-token acts by id as the operator — preview has no operator path: the body
+token acts by id as root — preview has no root path: the body
 token is required. Mints a signed URL serving a
 guest HTTP port from a browser: body `{"token": "...", "port": 8080,
 "ttl_seconds": 0}` → `{"url": "<preview_advertise>/p/<token>/"}` (`http://` is
@@ -957,7 +962,7 @@ no revocation list. A browser request to the minted URL answers 503
 
 Auth: node API token; body `{"token": "<sandbox token>", "name": "..."}`
 (name optional); the root `api_token` with an empty body `token` acts by id as
-the operator. Captures the sandbox's full state without stopping it and
+root. Captures the sandbox's full state without stopping it and
 answers `200 {"checkpoint": {id, name?, sandbox_id, key, tenant?, created_at,
 policy_source?, no_egress?, guest_env?}}` — `tenant` records the calling tenant, absent for root.
 400 bad body or name, 401 bad api token, 404 unknown id or wrong sandbox
@@ -999,10 +1004,10 @@ part of the public API; an SDK caller has no reason to call it directly.
 - `GET` streams the whole record — guest memory, disk, and meta — as a tar
   in which every export file travels as its size plus its non-zero 16 MiB chunks,
   each with its SHA-256, so holes cost nothing on the wire.
-  Operator-token only: the stream carries no tenant scoping, and its only
+  Root only: the stream carries no tenant scoping, and its only
   real caller is a peer's heal pull, which presents the fleet `api_token`.
-  401 missing or unrecognized token, 403 a valid tenant token (authenticated
-  but not the operator), 404 unknown checkpoint.
+  401 missing or unrecognized token, 403 a valid tenant or operator token
+  (authenticated but not root), 404 unknown checkpoint.
 - `HEAD` is the ownership probe: 200 when this node holds a branchable
   (non-archive) copy, 404 otherwise, and 401 on a keyed mesh when
   `X-Cocoon-Probe` is absent or expired. On a mesh with `cluster_key` set the
@@ -1444,10 +1449,10 @@ node, or one that lifted its fence less than 8 seconds ago, does not adopt: 404.
 lease is overdue answers 404 for the replicated claims it holds, so the
 `Lookup` scatter moves on. With `client_advertise` configured,
 `owner_addr` is that node's full HTTP(S) origin instead; the same contract applies
-to claim and fork responses. Used by the SDK's `Lookup` scatter. A claim root or the operator
+to claim and fork responses. Used by the SDK's `Lookup` scatter. A claim the root or the operator
 adopted keeps the row's token hash in place of its token: its own token still
 authorizes it on this node and any later adopter, an empty token never does,
-and the first call with its token stores it, after which root's
+and the first call with its token stores it, after which root's or the operator's
 `GET /v1/sandboxes/{id}` returns it. The hash is never served.
 
 ## GET /v1/info
@@ -1500,7 +1505,7 @@ sub-millisecond time.
 node holds: each one's full key, the `content_digest` its promote returned,
 `created_at` of its last promote, the `cpu_count` and `mem_total_bytes` of its
 size tier, its [`labels`](#put-v1templateslabelstemplatenetsize) when any are
-set, and `tenant` when a tenant promoted it (omitted for the operator). A key
+set, and `tenant` when a tenant promoted it (omitted for root). A key
 a configured pool now owns is left out, since claims of it clone the pool's
 golden. On a shared checkpoint store a node lists what it promoted plus what
 was in the store when it started, and a template another node deletes later
