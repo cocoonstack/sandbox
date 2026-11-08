@@ -134,7 +134,7 @@ func TestMoveClientPassesTheTargetsRefusalThrough(t *testing.T) {
 
 func TestMoveClientReachesATargetWithItsCurrentOrNextRootToken(t *testing.T) {
 	srv := New("root-a", "node-b:7777", &fakeManager{}, &fakeDialer{}, nil, nil, nil, nil)
-	srv.SetNextTokens("root-b", "")
+	srv.SetTokens("", "root-b", "")
 	addr := strings.TrimPrefix(serveTestServer(t, srv).URL, "http://")
 	for _, tt := range []struct {
 		token string

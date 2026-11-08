@@ -301,11 +301,10 @@ func newOperatorTestServer(t *testing.T, operator string, mgr *fakeManager, dial
 	}
 	mgr.tenants = []tenants.TenantSpec{{Name: "acme", Token: tenantToken}}
 	srv := New(rootToken, "node:7777", mgr, dialer, nil, nil, nil, nil)
-	srv.SetOperatorToken(operator)
-	srv.SetConfigReload(func(context.Context) (pool.ReloadResult, error) { return pool.ReloadResult{}, nil })
 	if operator != "" {
-		srv.SetNextTokens(rootNextToken, operatorNextToken)
+		srv.SetTokens(operator, rootNextToken, operatorNextToken)
 	}
+	srv.SetConfigReload(func(context.Context) (pool.ReloadResult, error) { return pool.ReloadResult{}, nil })
 	return serveTestServer(t, srv)
 }
 
