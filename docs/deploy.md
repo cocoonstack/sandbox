@@ -128,6 +128,7 @@ the intersection of the two.
 | `egress_upstream` | unset | per-claim upstream proxies: `{"claim_env": "EGRESS_UPSTREAM", "allow": ["res.example.com", "10.1.0.0/16"]}`. A claim's `guest: false` entry under `claim_env` (`http://` or `socks5://`, optional `user:pass@`, or `direct`) routes its egress through that upstream, which must be on `allow` (host names, IPs, CIDR prefixes). See [upstream proxies](egress.md#upstream-proxies) |
 | `egress_conn_rate` | unset | caps the new upstream connections each claim's proxy opens: `{"per_second": 30, "burst": 600}`, a token bucket per claim; a reused keep-alive connection and a connection to an internal IP address (the SSRF guard decides those) cost nothing, while a host name costs a token even when it resolves to one `egress_internal_allow` re-admits. A connection past it gets 429 (SOCKS5: not allowed) and an audit `decision` of `rate_limited`. A claim's bucket starts full at its first connection, and again when a reload changes `per_second` or `burst`. Unset leaves the rate unlimited |
 | `egress_usage_bytes` | `false` | append an `egress_bytes` usage event with the payload bytes of every allowed egress tunnel or request when it ends, and with the IP bytes of every allowed flow of the [advanced network mode](advanced-network.md); one extra usage-journal write per connection or flow |
+| `egress_usage_interval_seconds` | 0 | with `egress_usage_bytes`, also append an `egress_bytes` event at this interval for each allowed tunnel, request or tun flow that lasts longer, with the bytes since its previous event, so the events of one connection sum to the single event 0 writes ([details](egress.md#byte-usage)); tun flows are checked every 10 s. Set without `egress_usage_bytes`, or negative, the config does not load. Applies to claims armed after a reload |
 | `tun` | absent | turns on the [advanced network mode](advanced-network.md#configuration): the overlay subnet, the VXLAN socket, the exits and per-claim limits |
 | `egress_ca` | unset | [HTTPS-interception](egress.md#https-interception) PKI: `root_cert` (the cell's root baked into intercepted guests; may bundle old+new roots during rotation) plus this node's `intermediate_cert`/`intermediate_key` from `sandboxd ca issue-intermediate`. Required when any pool rule sets `intercept` |
 | `api_token` | unset | the operator (root) credential: when set, guards the node-level endpoints (Bearer) with full access, including release-by-id cleanup. Per-sandbox tokens guard ordinary sandbox-scoped calls. Shared within a [cell](cluster.md#cells); restart only |
@@ -1102,7 +1103,7 @@ all at once or not at all. Every field falls into one of three classes:
   - per pool: `egress`, `warmup`, `capture_trim`, `storage`, `reader`, `egress_upstream_env`, `tun`, for existing keys and for keys new in the file;
   - `tun`: `exits`, `mtu`, `port` and `limits`; its `subnet`, `listen`, `vni`, `senders` and `reuse_after_seconds`, and adding or removing the block, need a restart;
   - `egress_classes`: each class's `egress` and `egress_upstream_env`;
-  - node-wide: `egress_internal_allow`, `secrets`, `egress_upstream`, `egress_usage_bytes`, `egress_conn_rate`, `disk_reserve`, `memory_limit`, `max_claims`, `max_running`, `move_concurrency`, `max_fork_count`, `release_delay_seconds`, `vmm_restart`, `sync_claims`, `checkpoint_ttl_hours`, and the unpooled defaults `idle_hibernate_seconds`, `archive_after_seconds` and `archive_delete_after_seconds`.
+  - node-wide: `egress_internal_allow`, `secrets`, `egress_upstream`, `egress_usage_bytes`, `egress_usage_interval_seconds`, `egress_conn_rate`, `disk_reserve`, `memory_limit`, `max_claims`, `max_running`, `move_concurrency`, `max_fork_count`, `release_delay_seconds`, `vmm_restart`, `sync_claims`, `checkpoint_ttl_hours`, and the unpooled defaults `idle_hibernate_seconds`, `archive_after_seconds` and `archive_delete_after_seconds`.
 - **Left to their API**: a pool's targets (`warm`, `warm_max`, idle and archive
   durations) belong to `PUT /v1/pools`. A reload never changes them and lists
   them as `ignored`. A pool key new in the file gets its settings at once and stays
@@ -1126,7 +1127,8 @@ Effects on what already runs:
   cannot refuse, so it logs a warning for each pool whose live claims have no
   policy and reach nothing, on a node that still holds any egress policy.
 - **Armed once per claim**: the SOCKS5 door (`socks5`), the DNS door (`dns`),
-  `egress_usage_bytes` and `tun.limits` apply to claims armed after the reload.
+  `egress_usage_bytes`, `egress_usage_interval_seconds` and `tun.limits` apply
+  to claims armed after the reload.
 - **Tun**: new `tun.exits` and `tun.port` reach live packet streams on their
   next packet and `tun.mtu` at the guest's next hello. A pool whose `tun`
   turns off loses its live packet streams at once; a pool whose `tun` turns

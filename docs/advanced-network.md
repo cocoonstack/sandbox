@@ -159,7 +159,11 @@ guest -> tun0 -> silkd --vsock 2051--> sandboxd --VXLAN--> exit (vxlan0, forward
   Per-claim byte, packet and new-flow rates, a flow cap and a byte quota apply
   before any further work on a packet; a GSO frame is charged for every packet
   and header it puts on the wire. The limits and flows belong to the claim, so
-  a guest that reconnects its stream starts with what it had used.
+  a guest that reconnects its stream starts with what it had used. A claim's
+  [`egress-limit`](sandboxd-api.md#put-v1sandboxesidegress-limit) replaces
+  `bytes_per_second` for its up (`tx`) and down (`rx`) byte buckets, above or
+  below the node's value, at once on a running claim; a direction it leaves at
+  zero keeps the node's value. Packets over the bucket are dropped as before.
 - **Untrusted input**: frames, virtio-net headers and IPv4 headers are bounds
   checked; non-IPv4, IP options, fragments, a packet or GSO segment larger
   than the MTU the stream's hello announced, a GSO frame of more than 128
@@ -183,7 +187,10 @@ guest -> tun0 -> silkd --vsock 2051--> sandboxd --VXLAN--> exit (vxlan0, forward
   `op:"tun_flow"` record when it ends ([fields](deploy.md#configuration)); with
   `egress_usage_bytes` on, each allowed flow also appends an `egress_bytes`
   usage event with its IP bytes both ways, the destination `ip:port` as its
-  reference, and `upstream` `tun/<label>`. A clean stop ends every live flow,
+  reference, and `upstream` `tun/<label>`; with
+  [`egress_usage_interval_seconds`](deploy.md#configuration) a flow that lasts
+  longer also writes one with the bytes since its previous one, checked every
+  10 s. A clean stop ends every live flow,
   so its records cover the bytes up to the stop, and persists the quota
   counter. A disarm or a move copies the counter into the claim record, which
   the next `claims.json` write persists (a move's on the target); a crash

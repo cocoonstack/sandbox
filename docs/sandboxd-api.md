@@ -8,7 +8,7 @@ All bodies are JSON. Three token kinds:
   resource-creating verbs (claim, fork, promote, checkpoint create/claim,
   preview mint) and the tenant-scoped listings/deletes below; everything a
   tenant creates is stamped with its name. Operator surfaces
-  (the per-id sandbox reads, `PUT /v1/sandboxes/{id}/instance-metadata`, `PUT /v1/sandboxes/{id}/tun`, `GET /v1/info`,
+  (the per-id sandbox reads, `PUT /v1/sandboxes/{id}/instance-metadata`, `PUT /v1/sandboxes/{id}/tun`, `PUT /v1/sandboxes/{id}/egress-limit`, `GET /v1/info`,
   `PUT /v1/pools`, `POST /v1/config/reload`, the [tenant API](#tenants-v1tenants),
   `POST /v1/sandboxes/{id}/move` and the peer `/v1/moves/{id}` calls, `PUT/DELETE /v1/volumes/{name}`, `POST/DELETE /v1/drain`, `POST/DELETE /v1/cordon`,
   `GET /metrics`, `GET /v1/usage`, `GET /v1/checkpoints/{id}/blob`)
@@ -1061,7 +1061,9 @@ its data-plane credential without keeping a copy; a node without an
 row also carries the [advanced network mode](advanced-network.md#host-side)
 state, each field omitted when unset: `tun_addr` (the claim's overlay address),
 `tun_off` (true when the claim is disabled) and `tun_profile` (the exit label;
-absent means `default`). 404 unknown id.
+absent means `default`), and `egress_limit`, the claim's
+[bandwidth cap](#put-v1sandboxesidegress-limit), omitted when it has none.
+404 unknown id.
 
 ## GET /v1/sandboxes/{id}/stats
 
@@ -1198,6 +1200,35 @@ down for an archived claim or one with a replica under `archive_failover`:
 the node already holds the change, and a resend of the same body replaces the
 row.
 
+## PUT /v1/sandboxes/{id}/egress-limit
+
+Auth: root only. Caps a claim's egress bandwidth in bytes per second, each
+direction apart, `tx` guest to destination and `rx` back:
+
+```json
+{"tx_bytes_per_second": 1250000, "rx_bytes_per_second": 2500000}
+```
+
+Zero or an absent field leaves that direction unlimited, so `{}` removes the
+cap. It covers the claim's [proxy doors](egress.md#bandwidth-limit) and, in
+[advanced network mode](advanced-network.md#host-side), replaces
+`tun.limits.bytes_per_second` for the claim in each direction it sets. Preview,
+port relay and exec traffic is not capped. On a running claim the change
+applies at once to open connections, without a reconnect. The cap is persisted
+with the claim, follows it through hibernate, archive, a live move, an archive
+row and an adoption, and is accepted on a hibernated or archived claim without
+waking it; its next wake applies it. A running claim's replica row under
+`archive_failover` picks the change up at its next replica capture. A fork
+child and a checkpoint branch take their source's cap. A new claim starts
+without one; no pool setting gives a default.
+
+204 on success; 400 an unknown field or a negative rate; 404 unknown id; 503
+`sandbox moving to another node; retry` while a live move pauses the claim for
+its final round; 500 the claims journal could not be written (nothing
+changed); 503 the archive registry is down for an archived claim or a
+hibernated one with a replica under `archive_failover`: the node already holds
+the change, and a resend of the same body replaces the row.
+
 ## GET /metrics
 
 Auth: root only (tenant tokens get 403). Prometheus text format,
@@ -1245,7 +1276,10 @@ tenant's claim), `children` (fork) and `ref` (the promoted template / checkpoint
 id, the egress host, a `vmm_failed` reason, or why reconcile ended a claim). An egress event that injected credentials names
 them in `secret` (`gh,claim:<entry>`, never a value). An egress event routed through an
 [upstream proxy](egress.md#upstream-proxies) carries `upstream` (its `host:port`), and with
-`egress_usage_bytes` on, `egress_bytes` events add the connection's payload `tx`/`rx` bytes. A sandbox records at most 10 denied or rate-limited egress decisions per second after a burst of 100, so `egress` events do not count every refusal. A volume claim also carries
+`egress_usage_bytes` on, `egress_bytes` events add the connection's payload `tx`/`rx` bytes. With
+[`egress_usage_interval_seconds`](deploy.md#configuration) set, a connection or flow that lasts longer
+writes an `egress_bytes` event each interval with the bytes since its previous one, then one with the
+rest when it ends; sum a connection's events for its total. A sandbox records at most 10 denied or rate-limited egress decisions per second after a burst of 100, so `egress` events do not count every refusal. A volume claim also carries
 `volumes`, the applied catalog names, and — omitted when empty — `volumes_rw`,
 the subset of those names claimed `rw`, on its `claim` event, so billing can
 discriminate write access at claim (mounts and host paths are not billing
