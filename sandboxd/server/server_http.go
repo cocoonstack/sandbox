@@ -21,7 +21,41 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/utils"
 )
 
-const retryAfterSeconds = "10"
+const (
+	retryAfterSeconds = "10"
+
+	callerRoot     = "root"
+	callerOperator = "operator"
+	callerTenant   = "tenant"
+	callerClaim    = "claim"
+)
+
+var (
+	errOperatorRoute = errors.New("operator token not allowed on this route")
+
+	// operatorRoutes are the only route patterns where the operator token acts with root authority.
+	operatorRoutes = map[string]bool{
+		"POST /v1/claim":                      true,
+		"GET /v1/sandboxes":                   true,
+		"GET /v1/sandboxes/{id}":              true,
+		"POST /v1/sandboxes/{id}/release":     true,
+		"POST /v1/sandboxes/{id}/hibernate":   true,
+		"POST /v1/sandboxes/{id}/wake":        true,
+		"POST /v1/sandboxes/{id}/renew":       true,
+		"GET /v1/sandboxes/{id}/env":          true,
+		"PUT /v1/sandboxes/{id}/env":          true,
+		"PATCH /v1/sandboxes/{id}/env":        true,
+		"GET /v1/sandboxes/{id}/ports/{port}": true,
+		"POST /v1/sandboxes/{id}/exec":        true,
+		"GET /v1/sandboxes/{id}/owner":        true,
+		"GET /v1/tenants":                     true,
+		"PUT /v1/tenants":                     true,
+		"PUT /v1/tenants/{name}":              true,
+		"DELETE /v1/tenants/{name}":           true,
+		"GET /v1/info":                        true,
+		"GET /v1/peers":                       true,
+	}
+)
 
 type tenantKey struct{}
 
@@ -44,6 +78,38 @@ func (s *Server) clientAddrs(addrs []string) []string {
 	return clients
 }
 
+func (s *Server) sandboxToken(w http.ResponseWriter, r *http.Request) (string, bool) {
+	token, ok := bearerToken(r)
+	if !ok {
+		writeErr(w, http.StatusUnauthorized, "missing bearer token")
+		return "", false
+	}
+	if _, refused := s.authority(r, token); refused {
+		writeErr(w, http.StatusForbidden, errOperatorRoute.Error())
+		return "", false
+	}
+	return token, true
+}
+
+// upgradeGate refuses a bare GET: waking the sandbox consumes its hibernate snapshot.
+func (s *Server) upgradeGate(w http.ResponseWriter, r *http.Request, proto string) (string, bool) {
+	token, ok := s.sandboxToken(w, r)
+	if !ok {
+		return "", false
+	}
+	if !strings.EqualFold(r.Header.Get("Upgrade"), proto) {
+		w.Header().Set("Upgrade", proto)
+		writeErr(w, http.StatusUpgradeRequired, "upgrade to "+proto+" required")
+		return "", false
+	}
+	return token, true
+}
+
+func (s *Server) sandboxCaller(r *http.Request, token string) *http.Request {
+	caller, _ := s.authority(r, token)
+	return s.withCaller(r, cmp.Or(caller, callerClaim))
+}
+
 func withTenant(ctx context.Context, tenant *tenants.TenantRecord) context.Context {
 	return context.WithValue(ctx, tenantKey{}, tenant)
 }
@@ -64,28 +130,6 @@ func tenantRecordFrom(ctx context.Context) *tenants.TenantRecord {
 func bearerToken(r *http.Request) (string, bool) {
 	token, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
 	return token, ok && token != ""
-}
-
-func sandboxToken(w http.ResponseWriter, r *http.Request) (string, bool) {
-	token, ok := bearerToken(r)
-	if !ok {
-		writeErr(w, http.StatusUnauthorized, "missing bearer token")
-	}
-	return token, ok
-}
-
-// upgradeGate refuses a bare GET: waking the sandbox consumes its hibernate snapshot.
-func upgradeGate(w http.ResponseWriter, r *http.Request, proto string) (string, bool) {
-	token, ok := sandboxToken(w, r)
-	if !ok {
-		return "", false
-	}
-	if !strings.EqualFold(r.Header.Get("Upgrade"), proto) {
-		w.Header().Set("Upgrade", proto)
-		writeErr(w, http.StatusUpgradeRequired, "upgrade to "+proto+" required")
-		return "", false
-	}
-	return token, true
 }
 
 // hijackClient on failure has already closed guest and answered the request.
