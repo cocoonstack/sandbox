@@ -137,10 +137,12 @@ Check the boundary when a cell is built and after each change to it:
 
 ## Token model
 
-Three credentials in descending scope: the root `api_token`, tenant tokens
-(isolated at the API layer) and per-sandbox tokens (that sandbox only, nothing
-node-level); what each may call is in the
-[API reference](sandboxd-api.md#sandboxd-http-api). The root and tenant tokens
+Four credentials in descending scope: the root `api_token`, the optional
+`operator_token` (root's authority on the claim lifecycle, tenant and node-read
+routes only, for a public control plane), tenant tokens (isolated at the API
+layer) and per-sandbox tokens (that sandbox only, nothing node-level); what each
+may call is in the [API reference](sandboxd-api.md#sandboxd-http-api). The root,
+operator and tenant tokens
 are valid on every node of their [cell](#cells) and nowhere else. A preview URL
 is a capability on top, HMAC-signed with the cell's `preview_secret` and no
 revocation list. A checkpoint branches

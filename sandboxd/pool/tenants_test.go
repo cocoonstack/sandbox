@@ -186,20 +186,21 @@ func TestConcurrentTenantPutsKeepEveryTenant(t *testing.T) {
 
 func TestTenantChangesAreValidatedAndAudited(t *testing.T) {
 	dir := t.TempDir()
-	cfg := &config.Config{DataDir: dir, APIToken: "root", AuditLog: true}
+	cfg := &config.Config{DataDir: dir, APIToken: "root", OperatorToken: "op-tok", AuditLog: true}
 	m, err := NewManager(t.Context(), cfg, newFakeEngine(), testSecrets(t), testBackends(t, cfg))
 	if err != nil {
 		t.Fatalf("setup manager: %v", err)
 	}
 	putTenants(t, m, tenants.TenantSpec{Name: "acme", Token: "acme-tok"})
 	for name, spec := range map[string]tenants.TenantSpec{
-		"bad name":      {Name: "-bad", Token: "x"},
-		"root scope":    {Name: types.TemplateRootScope, Token: "x"},
-		"no token":      {Name: "new"},
-		"root token":    {Name: "new", Token: "root"},
-		"reused token":  {Name: "new", Token: "acme-tok"},
-		"unknown class": {Name: "new", Token: "x", EgressClass: "nope"},
-		"negative cap":  {Name: "acme", MaxClaims: -1},
+		"bad name":       {Name: "-bad", Token: "x"},
+		"root scope":     {Name: types.TemplateRootScope, Token: "x"},
+		"no token":       {Name: "new"},
+		"root token":     {Name: "new", Token: "root"},
+		"operator token": {Name: "new", Token: "op-tok"},
+		"reused token":   {Name: "new", Token: "acme-tok"},
+		"unknown class":  {Name: "new", Token: "x", EgressClass: "nope"},
+		"negative cap":   {Name: "acme", MaxClaims: -1},
 	} {
 		if err = m.PutTenant(t.Context(), spec); !errors.Is(err, ErrBadTenant) {
 			t.Errorf("%s: %v, want ErrBadTenant", name, err)
@@ -208,7 +209,7 @@ func TestTenantChangesAreValidatedAndAudited(t *testing.T) {
 	if err = m.DeleteTenant(t.Context(), "nobody"); !errors.Is(err, ErrUnknownTenant) {
 		t.Errorf("delete an unknown tenant: %v, want ErrUnknownTenant", err)
 	}
-	if err = m.SetTenants(t.Context(), []tenants.TenantSpec{{Name: "acme", MaxClaims: 2}, {Name: "beta", Token: "beta-tok"}}); err != nil {
+	if err = m.SetTenants(WithCaller(t.Context(), "operator"), []tenants.TenantSpec{{Name: "acme", MaxClaims: 2}, {Name: "beta", Token: "beta-tok"}}); err != nil {
 		t.Fatalf("SetTenants: %v", err)
 	}
 	if err = m.DeleteTenant(t.Context(), "beta"); err != nil {
@@ -219,7 +220,7 @@ func TestTenantChangesAreValidatedAndAudited(t *testing.T) {
 		t.Fatalf("read audit: %v", err)
 	}
 	log := string(raw)
-	for _, want := range []string{`"op":"tenants","added":["beta"],"changed":["acme"]`, `"op":"tenants","removed":["beta"]`} {
+	for _, want := range []string{`"op":"tenants","caller":"operator","added":["beta"],"changed":["acme"]`, `"op":"tenants","removed":["beta"]`} {
 		if !strings.Contains(log, want) {
 			t.Errorf("audit lacks %s:\n%s", want, log)
 		}
@@ -232,6 +233,18 @@ func TestTenantChangesAreValidatedAndAudited(t *testing.T) {
 	open := mustManager(t, cfg, newFakeEngine())
 	if err := open.PutTenant(t.Context(), tenants.TenantSpec{Name: "acme", Token: "t"}); !errors.Is(err, ErrBadTenant) {
 		t.Errorf("tenant on a node without api_token: %v, want ErrBadTenant", err)
+	}
+}
+
+func TestOperatorTokenMustDifferFromEveryTenantToken(t *testing.T) {
+	dir := t.TempDir()
+	tenantManager(t, dir, tenants.TenantSpec{Name: "acme", Token: "acme-tok"})
+	for token, wantErr := range map[string]bool{"acme-tok": true, "op-tok": false, "": false} {
+		cfg := &config.Config{DataDir: dir, APIToken: "root", OperatorToken: token}
+		_, err := NewManager(t.Context(), cfg, newFakeEngine(), testSecrets(t), testBackends(t, cfg))
+		if (err != nil) != wantErr {
+			t.Errorf("operator_token %q: %v, want error %v", token, err, wantErr)
+		}
 	}
 }
 

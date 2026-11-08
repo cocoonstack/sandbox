@@ -17,7 +17,7 @@ var (
 
 // handlePort is how an edge proxy reaches a guest listener on a sandbox with no NIC.
 func (s *Server) handlePort(w http.ResponseWriter, r *http.Request) {
-	token, ok := upgradeGate(w, r, upgradeProtoTCP)
+	token, ok := s.upgradeGate(w, r, upgradeProtoTCP)
 	if !ok {
 		return
 	}
@@ -26,8 +26,9 @@ func (s *Server) handlePort(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "port must be 1-65535")
 		return
 	}
+	r = s.sandboxCaller(r, token)
 	id := r.PathValue("id")
-	guest, err := s.mgr.DialPort(r.Context(), id, s.sandboxCred(token), uint16(port))
+	guest, err := s.mgr.DialPort(r.Context(), id, s.sandboxCred(r, token), uint16(port))
 	switch {
 	case writePoolErr(w, err):
 		return

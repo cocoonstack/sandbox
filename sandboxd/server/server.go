@@ -88,7 +88,7 @@ var poolErrHTTP = []struct {
 	{pool.ErrUnknownTenant, http.StatusNotFound, "unknown tenant"},
 }
 
-// Manager is the pool manager slice the server consumes; an empty tenant means operator (root).
+// Manager is the pool manager slice the server consumes; an empty tenant means root.
 type Manager interface {
 	ClaimWarm(ctx context.Context, key types.PoolKey, o pool.ClaimOptions) (*types.Sandbox, error)
 	ClaimProvision(ctx context.Context, key types.PoolKey, o pool.ClaimOptions) (*types.Sandbox, error)
@@ -270,6 +270,7 @@ type Server struct {
 	prober    CheckpointProber
 	probeKey  []byte
 	apiToken  string
+	operator  string
 	advertise string
 	preview   *PreviewServer
 	reload    ConfigReloader
@@ -314,6 +315,11 @@ func (s *Server) SetConfigReload(f ConfigReloader) {
 // SetUsage serves GET /v1/usage from u; set it before serving.
 func (s *Server) SetUsage(u UsageReader) {
 	s.usage = u
+}
+
+// SetOperatorToken admits token with root authority on operatorRoutes alone; set it before serving.
+func (s *Server) SetOperatorToken(token string) {
+	s.operator = token
 }
 
 // NoRxSplice copies client bytes to guests in user space; call it before serving.
@@ -649,18 +655,18 @@ func (s *Server) handleSetEgressLimit(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleSandboxVerb(verb string, do func(ctx context.Context, id string, cred pool.Cred) error) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		token, ok := sandboxToken(w, r)
+		token, ok := s.sandboxToken(w, r)
 		if !ok {
 			return
 		}
 		id := r.PathValue("id")
-		err := do(r.Context(), id, s.sandboxCred(token))
+		err := do(r.Context(), id, s.sandboxCred(r, token))
 		writeResult(w, r, verb, id, verb+" failed", err, noContent(w))
 	}
 }
 
 func (s *Server) handleRenew(w http.ResponseWriter, r *http.Request) {
-	token, ok := sandboxToken(w, r)
+	token, ok := s.sandboxToken(w, r)
 	if !ok {
 		return
 	}
@@ -669,7 +675,7 @@ func (s *Server) handleRenew(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := r.PathValue("id")
-	deadline, err := s.mgr.Renew(r.Context(), id, s.sandboxCred(token), req.TTL(), req.OnExpire)
+	deadline, err := s.mgr.Renew(r.Context(), id, s.sandboxCred(r, token), req.TTL(), req.OnExpire)
 	writeResult(w, r, "renew", id, "renew failed", err, func() {
 		writeJSON(w, http.StatusOK, RenewResponse{Deadline: deadline})
 	})
@@ -804,11 +810,11 @@ func (s *Server) handleSetTemplateLabels(w http.ResponseWriter, r *http.Request)
 }
 
 func (s *Server) handleOwner(w http.ResponseWriter, r *http.Request) {
-	token, ok := sandboxToken(w, r)
+	token, ok := s.sandboxToken(w, r)
 	if !ok {
 		return
 	}
-	id, cred := r.PathValue("id"), s.sandboxCred(token)
+	id, cred := r.PathValue("id"), s.sandboxCred(r, token)
 	_, err := s.mgr.AgentSocket(id, cred)
 	if errors.Is(err, pool.ErrLeaseLost) {
 		writeErr(w, http.StatusNotFound, "not owned here")
@@ -931,8 +937,11 @@ func (s *Server) handleHealthz(w http.ResponseWriter, _ *http.Request) {
 
 func (s *Server) requireToken(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		tenant, err := s.resolveScope(r)
+		tenant, caller, err := s.resolveScope(r)
 		switch {
+		case errors.Is(err, errOperatorRoute):
+			writeErr(w, http.StatusForbidden, err.Error())
+			return
 		case errors.Is(err, pool.ErrTenantStoreDown):
 			writePoolErr(w, err)
 			return
@@ -943,14 +952,14 @@ func (s *Server) requireToken(next http.HandlerFunc) http.HandlerFunc {
 		if tenant != nil {
 			r = r.WithContext(withTenant(r.Context(), tenant))
 		}
-		next(w, r)
+		next(w, s.withCaller(r, caller))
 	}
 }
 
 func (s *Server) requireRoot(next http.HandlerFunc) http.HandlerFunc {
 	return s.requireToken(func(w http.ResponseWriter, r *http.Request) {
 		if tenantFrom(r.Context()) != "" {
-			writeErr(w, http.StatusForbidden, "operator token required")
+			writeErr(w, http.StatusForbidden, "root token required")
 			return
 		}
 		next(w, r)
@@ -959,15 +968,28 @@ func (s *Server) requireRoot(next http.HandlerFunc) http.HandlerFunc {
 
 func (s *Server) rootRequest(r *http.Request) bool {
 	token, ok := bearerToken(r)
-	return ok && s.isRootToken(token)
+	if !ok {
+		return false
+	}
+	caller, _ := s.authority(r, token)
+	return caller != ""
 }
 
-func (s *Server) isRootToken(token string) bool {
-	return s.apiToken != "" && subtle.ConstantTimeCompare([]byte(token), []byte(s.apiToken)) == 1
+// authority names the root-authority caller token is on r's route; refused marks the operator token off operatorRoutes.
+func (s *Server) authority(r *http.Request, token string) (caller string, refused bool) {
+	switch {
+	case tokenMatches(s.apiToken, token):
+		return callerRoot, false
+	case !tokenMatches(s.operator, token):
+		return "", false
+	case operatorRoutes[r.Pattern]:
+		return callerOperator, false
+	}
+	return "", true
 }
 
-func (s *Server) sandboxCred(token string) pool.Cred {
-	if s.isRootToken(token) {
+func (s *Server) sandboxCred(r *http.Request, token string) pool.Cred {
+	if caller, _ := s.authority(r, token); caller != "" {
 		return pool.Cred{Operator: true}
 	}
 	return pool.Cred{Token: token}
@@ -977,18 +999,29 @@ func (s *Server) bodyCred(r *http.Request, bodyToken string) pool.Cred {
 	return pool.Cred{Token: bodyToken, Operator: bodyToken == "" && s.rootRequest(r)}
 }
 
-func (s *Server) resolveScope(r *http.Request) (*tenants.TenantRecord, error) {
+func (s *Server) resolveScope(r *http.Request) (*tenants.TenantRecord, string, error) {
 	if s.apiToken == "" {
-		return nil, nil
+		return nil, callerRoot, nil
 	}
 	token, ok := bearerToken(r)
 	if !ok {
-		return nil, pool.ErrUnknownTenant
+		return nil, "", pool.ErrUnknownTenant
 	}
-	if s.isRootToken(token) {
-		return nil, nil
+	switch caller, refused := s.authority(r, token); {
+	case refused:
+		return nil, "", errOperatorRoute
+	case caller != "":
+		return nil, caller, nil
 	}
-	return s.mgr.TenantByToken(r.Context(), token)
+	tenant, err := s.mgr.TenantByToken(r.Context(), token)
+	return tenant, callerTenant, err
+}
+
+func (s *Server) withCaller(r *http.Request, caller string) *http.Request {
+	if !s.mgr.AuditEnabled() {
+		return r
+	}
+	return r.WithContext(pool.WithCaller(r.Context(), caller))
 }
 
 func (s *Server) claimResponse(sb *types.Sandbox) ClaimResponse {
@@ -1011,6 +1044,10 @@ func forTenant(o pool.ClaimOptions, tenant *tenants.TenantRecord) pool.ClaimOpti
 		o.Tenant, o.EgressClass = tenant.Name, tenant.EgressClass
 	}
 	return o
+}
+
+func tokenMatches(want, got string) bool {
+	return want != "" && subtle.ConstantTimeCompare([]byte(got), []byte(want)) == 1
 }
 
 func templateKey(q url.Values) types.PoolKey {
