@@ -90,12 +90,6 @@ func (m *Manager) byID(id string) (*types.Sandbox, bool) {
 	return sb, sb != nil
 }
 
-func (m *Manager) claim(id, token string) (*types.Sandbox, bool) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.authed(id, token)
-}
-
 // Callers hold m.mu.
 func (m *Manager) authed(id, token string) (*types.Sandbox, bool) {
 	sb := m.claimed[id]

@@ -196,7 +196,6 @@ func collectExec(guest net.Conn, reserve func(int) bool) (resp ExecResponse, pid
 	return ExecResponse{}, pid, io.ErrUnexpectedEOF
 }
 
-// closeOnCancel closes conn when ctx ends and once more when the returned func runs.
 func closeOnCancel(ctx context.Context, conn net.Conn) func() {
 	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
 	return func() {

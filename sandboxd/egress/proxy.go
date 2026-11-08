@@ -457,7 +457,7 @@ func (p *Proxy) relay(w http.ResponseWriter, r *http.Request, ev Event, rule Rul
 	w.WriteHeader(resp.StatusCode)
 	var copyErr error
 	if streamed(resp) {
-		_, copyErr = copyFlushing(w, src)
+		copyErr = copyFlushing(w, src)
 	} else {
 		_, copyErr = io.Copy(w, src)
 	}
@@ -698,31 +698,29 @@ func mediaType(h http.Header) string {
 	return strings.ToLower(strings.TrimSpace(mt))
 }
 
-func copyFlushing(w http.ResponseWriter, body io.Reader) (int64, error) {
+func copyFlushing(w http.ResponseWriter, body io.Reader) error {
 	rc := http.NewResponseController(w)
 	if rc.Flush() != nil {
-		return io.Copy(w, body)
+		_, err := io.Copy(w, body)
+		return err
 	}
 	buf := copyBufs.Get().(*[]byte)
 	defer copyBufs.Put(buf)
-	var total int64
 	for {
 		n, err := body.Read(*buf)
 		if n > 0 {
-			written, werr := w.Write((*buf)[:n])
-			total += int64(written)
-			if werr != nil {
-				return total, werr
+			if _, werr := w.Write((*buf)[:n]); werr != nil {
+				return werr
 			}
-			if werr = rc.Flush(); werr != nil {
-				return total, werr
+			if werr := rc.Flush(); werr != nil {
+				return werr
 			}
 		}
 		if errors.Is(err, io.EOF) {
-			return total, nil
+			return nil
 		}
 		if err != nil {
-			return total, err
+			return err
 		}
 	}
 }
