@@ -284,7 +284,7 @@ func (m *Manager) tunState(sb *types.Sandbox) outbound.TunState {
 func (m *Manager) tunRowed(sb *types.Sandbox) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.rowFollows(sb) || sb.ArchivePending != ""
+	return m.rowRewriteDue(sb)
 }
 
 func (m *Manager) planTun(sb *types.Sandbox, locked bool, enabled *bool, profile *string) (tunPlan, error) {
@@ -335,7 +335,7 @@ func (m *Manager) commitTun(ctx context.Context, sb *types.Sandbox, locked bool,
 	if locked && runningShaped(sb) {
 		sock = sb.VsockSocket
 	}
-	rowed = m.rowFollows(sb) || sb.ArchivePending != ""
+	rowed = m.rowRewriteDue(sb)
 	js := m.store.set(sb)
 	m.mu.Unlock()
 	if err = m.store.commit(js); err == nil {

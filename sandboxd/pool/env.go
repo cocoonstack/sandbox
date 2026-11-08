@@ -81,7 +81,7 @@ func (m *Manager) writeEnv(ctx context.Context, id, tenant, verb string, next fu
 		}
 		return ErrPaused
 	}
-	rowed, deliver := m.rowFollows(sb) || sb.ArchivePending != "", !paused
+	rowed, deliver := m.rowRewriteDue(sb), !paused
 	if env.Equal(prev) {
 		m.mu.Unlock()
 	} else {

@@ -258,6 +258,28 @@ func TestMoveHoldsOffEgressLimitChangesAndCarriesTheLimit(t *testing.T) {
 	})
 }
 
+func TestASetEgressLimitDuringTheFirstReplicaOfAHibernatedClaimReachesTheRow(t *testing.T) {
+	c := newReplicaCluster(t)
+	a := c.node(t, "a", t.TempDir(), keepAnHour)
+	sb := mustClaim(t, a, testKey)
+	hibernateClaim(t, a, sb)
+	set := make(chan error, 1)
+	a.archives = &hookRegistry{Registry: c.reg, beforePut: func() {
+		go func() { set <- a.SetEgressLimit(t.Context(), sb.ID, capped) }()
+		waitFor(t, func() bool { return a.egressLimit(sb) == capped })
+	}}
+	replicateNow(t, a, sb)
+	if err := <-set; err != nil {
+		t.Fatalf("set egress limit: %v", err)
+	}
+	if sb.ReplicaCk == "" {
+		t.Fatal("the replica round left no replica")
+	}
+	if got := rowClaim(t, c, sb).EgressLimit; got != capped {
+		t.Errorf("replica row limit %+v, want %+v", got, capped)
+	}
+}
+
 func storedLimit(t *testing.T, m *Manager, id string) types.EgressLimit {
 	t.Helper()
 	claims, err := newClaimStore(filepath.Dir(m.store.path), false).load()

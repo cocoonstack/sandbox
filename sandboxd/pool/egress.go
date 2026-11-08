@@ -31,7 +31,7 @@ func (m *Manager) SetEgressLimit(ctx context.Context, id string, l types.EgressL
 	}
 	prev := sb.EgressLimit
 	sb.EgressLimit = l
-	rowed := m.rowFollows(sb) || sb.ArchivePending != ""
+	rowed := m.rowRewriteDue(sb)
 	js := m.store.set(sb)
 	m.mu.Unlock()
 	if err := m.store.commit(js); err != nil {
