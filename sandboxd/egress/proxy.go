@@ -463,6 +463,7 @@ func (p *Proxy) relay(w http.ResponseWriter, r *http.Request, ev Event, rule Rul
 	} else {
 		_, copyErr = io.Copy(w, src)
 	}
+	t.resp.clamp(nil, true)
 	if copyErr != nil {
 		if conn, _, err := http.NewResponseController(w).Hijack(); err == nil {
 			_ = conn.Close()

@@ -39,7 +39,7 @@ type Limits struct {
 	QuotaBytes        int64   `json:"quota_bytes,omitzero"`
 }
 
-// FlowRecord is one flow's audit row, written when the flow ends; a Partial row reports a live flow's bytes since its last row.
+// FlowRecord is one flow's audit row, written when the flow ends; a Partial row reports the bytes since its last row of a flow whose entry still lives.
 type FlowRecord struct {
 	Proto   uint8
 	Dst     netip.Addr
@@ -295,7 +295,7 @@ func (f *flows) sweep(now time.Time, all bool) {
 	for key, fl := range f.table {
 		idle := now.Sub(time.Unix(0, fl.last.Load()))
 		if !all && idle < idleFor(key.proto, fl) {
-			due := f.every > 0 && now.Sub(fl.reported) >= f.every || fl.ended.Load() && idle >= sweepEvery
+			due := (f.every > 0 && now.Sub(fl.reported) >= f.every) || (fl.ended.Load() && idle >= sweepEvery)
 			if due && fl.allowed && fl.up.Load()+fl.down.Load() > fl.reportedUp+fl.reportedDown {
 				rows = append(rows, fl.record(key, now, true))
 			}

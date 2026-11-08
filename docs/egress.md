@@ -593,10 +593,12 @@ and a request reads the cap on every read. A claim in
 on its tun path, so its proxy and tun traffic are capped apart.
 
 A limited download clamps the upstream connection's TCP receive window to half
-a second of the cap, at least 128 KiB, on every read, so the far end cannot
+a second of the cap, at least 128 KiB, and sets it again every 100 ms while it
+reads, so the far end cannot
 park megabytes in the node's socket buffers ahead of the meter. The window
-opens again when the cap is lifted and when the response ends, so a pooled
-connection goes back to the pool open. A download that starts without an rx
+opens again when the cap is lifted and when the response or tunnel ends; a
+pooled connection can reach the pool a moment before that, so the next request
+on it may start clamped until its first read. A download that starts without an rx
 cap on a plain or intercepted request is metered when a cap arrives, but its
 window is not clamped.
 
