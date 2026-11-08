@@ -85,7 +85,7 @@ func (p *Proxy) settle(t *transfer, ev Event) {
 	p.connMu.Unlock()
 }
 
-// finish writes the bytes no interim row carried; a zero remainder after an interim row writes nothing.
+// finish writes the bytes no interim row carried.
 func (p *Proxy) finish(t *transfer, report bool) {
 	p.connMu.Lock()
 	delete(p.transfers, t)

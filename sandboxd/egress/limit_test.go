@@ -23,7 +23,7 @@ const (
 func TestALimitCapsOneDirectionOfATunnel(t *testing.T) {
 	for _, tt := range []struct {
 		name string
-		open func(t *testing.T, target string, edits ...func(*Proxy)) (*Proxy, io.Reader, net.Conn)
+		open func(t *testing.T, target string, edits ...proxyEdit) (*Proxy, io.Reader, net.Conn)
 	}{
 		{"connect", openConnect},
 		{"socks", openSocks},
@@ -226,6 +226,8 @@ func TestALimitCapsAForwardedRequestEachWay(t *testing.T) {
 	}
 }
 
+type proxyEdit func(*Proxy)
+
 type upload struct {
 	n    int64
 	took time.Duration
@@ -236,7 +238,7 @@ type bulk struct {
 	uploads chan upload
 }
 
-func openConnect(t *testing.T, target string, edits ...func(*Proxy)) (*Proxy, io.Reader, net.Conn) {
+func openConnect(t *testing.T, target string, edits ...proxyEdit) (*Proxy, io.Reader, net.Conn) {
 	t.Helper()
 	p := New(Policy{Allow: []Rule{{Host: "bulk.internal"}}}, nil, nil, fixedDial(target), nil, nil)
 	for _, edit := range edits {
@@ -252,7 +254,7 @@ func openConnect(t *testing.T, target string, edits ...func(*Proxy)) (*Proxy, io
 	return p, br, conn
 }
 
-func openSocks(t *testing.T, target string, _ ...func(*Proxy)) (*Proxy, io.Reader, net.Conn) {
+func openSocks(t *testing.T, target string, _ ...proxyEdit) (*Proxy, io.Reader, net.Conn) {
 	t.Helper()
 	p, addr := socksProxy(t, Policy{Allow: []Rule{{Host: "bulk.internal"}}}, nil, fixedDial(target), nil, nil)
 	conn, reply := socksExchange(t, addr, socksGreeting, socksNameRequest("bulk.internal", 443))
@@ -262,7 +264,7 @@ func openSocks(t *testing.T, target string, _ ...func(*Proxy)) (*Proxy, io.Reade
 	return p, conn, conn
 }
 
-func reportRows(rows chan<- int64) func(*Proxy) {
+func reportRows(rows chan<- int64) proxyEdit {
 	return func(p *Proxy) {
 		p.OnTransfer(func(_ Event, sent, _ int64) { rows <- sent })
 		p.ReportEvery(100 * time.Millisecond)
