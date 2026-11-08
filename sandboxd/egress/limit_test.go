@@ -3,6 +3,7 @@ package egress
 import (
 	"bufio"
 	"bytes"
+	"crypto/tls"
 	"io"
 	"net"
 	"net/http"
@@ -223,6 +224,35 @@ func TestALimitCapsAForwardedRequestEachWay(t *testing.T) {
 	_ = resp.Body.Close()
 	if took := time.Since(start); n != 2*testRate || took < 700*time.Millisecond {
 		t.Errorf("downloaded %d bytes in %v, want %d at no more than %d/s past the burst", n, took, 2*testRate, testRate)
+	}
+}
+
+func TestTcpOfFindsTheConnUnderUpstreamWrappers(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	conn, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	tcp := conn.(*net.TCPConn)
+	for _, tt := range []struct {
+		name string
+		c    net.Conn
+		want *net.TCPConn
+	}{
+		{"tcp", tcp, tcp},
+		{"upstream", &upstreamConn{Conn: tcp}, tcp},
+		{"tls", tls.Client(tcp, &tls.Config{MinVersion: tls.VersionTLS12}), tcp},
+		{"upstream over tls", &upstreamConn{Conn: tls.Client(tcp, &tls.Config{MinVersion: tls.VersionTLS12})}, tcp},
+		{"pipe", func() net.Conn { a, _ := net.Pipe(); return a }(), nil},
+	} {
+		if got := tcpOf(tt.c); got != tt.want {
+			t.Errorf("%s: tcpOf = %v, want %v", tt.name, got, tt.want)
+		}
 	}
 }
 

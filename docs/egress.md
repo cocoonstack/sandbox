@@ -565,7 +565,9 @@ returns: each interval the proxy sets a past read deadline on every open
 tunnel, so the copy returns, counts and resumes, and an event carries the
 bytes up to the previous interval. A sandboxd stop therefore loses up to two
 intervals of a spliced tunnel's bytes and up to one of a limited tunnel or a
-request. Tun flows are checked every 10 s, so their events follow that grid.
+request. Tun flows are checked every 10 s, so their events follow that grid;
+a TCP flow that closed and stayed quiet for 10 s writes its last bytes at the
+next check, while its entry stays two minutes for late segments.
 
 ## Bandwidth limit
 
@@ -591,6 +593,14 @@ read deadline on every open tunnel, whose copy resumes in the matching mode,
 and a request reads the cap on every read. A claim in
 [advanced network mode](advanced-network.md#host-side) keeps separate buckets
 on its tun path, so its proxy and tun traffic are capped apart.
+
+A limited download clamps the upstream connection's TCP receive window to half
+a second of the cap, at least 128 KiB, on every read, so the far end cannot
+park megabytes in the node's socket buffers ahead of the meter. The window
+opens again when the cap is lifted and when the response ends, so a pooled
+connection goes back to the pool open. A download that starts without an rx
+cap on a plain or intercepted request is metered when a cap arrives, but its
+window is not clamped.
 
 ## HTTPS interception
 
