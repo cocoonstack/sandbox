@@ -95,7 +95,7 @@ func TestReplicaRefusedPutDropsTheCopyAndItsExport(t *testing.T) {
 	replicateNow(t, a, sb)
 	a.archives = &hookRegistry{Registry: c.reg, beforePut: func() {
 		c.expire("a")
-		if adopted, err := b.AdoptArchived(t.Context(), sb.ID, sb.Token); err != nil || !adopted {
+		if adopted, err := b.AdoptArchived(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil || !adopted {
 			t.Errorf("adopt: %v %v", adopted, err)
 		}
 	}}
@@ -132,7 +132,7 @@ func TestReplicaLostPutReplyKeepsTheCheckpointTheRowNames(t *testing.T) {
 
 	c.expire("a")
 	mustAdopt(t, b, sb, "adopt")
-	if _, _, _, err := b.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
+	if _, _, _, err := b.WakeAgentSocket(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
 		t.Fatalf("the adopter's wake from the checkpoint: %v", err)
 	}
 	if got := fakeOf(b).cloneCount(); got != 1 {
@@ -251,7 +251,7 @@ func TestReplicaRowIsNeverReaderSafe(t *testing.T) {
 
 	c.expire("a")
 	mustAdopt(t, b, sb, "adopt")
-	sock, _, done, err := b.WakeAgentSocketOrRead(t.Context(), sb.ID, sb.Token)
+	sock, _, done, err := b.WakeAgentSocketOrRead(t.Context(), sb.ID, Cred{Token: sb.Token})
 	if err != nil || sock == "" {
 		t.Fatalf("read of the adopted replica = %q, %v, want a wake", sock, err)
 	}
@@ -277,7 +277,7 @@ func TestArchiveRowKeepsReaderSafe(t *testing.T) {
 	}
 	c.expire("a")
 	mustAdopt(t, b, sb, "adopt")
-	if _, _, _, err := b.WakeAgentSocketOrRead(t.Context(), sb.ID, sb.Token); !errors.Is(err, ErrSleeping) {
+	if _, _, _, err := b.WakeAgentSocketOrRead(t.Context(), sb.ID, Cred{Token: sb.Token}); !errors.Is(err, ErrSleeping) {
 		t.Errorf("read of the adopted archive = %v, want ErrSleeping", err)
 	}
 }
@@ -351,10 +351,10 @@ func TestReplicaInFlightRoundCannotRecreateARowTheAdopterFinished(t *testing.T) 
 	replicateNow(t, a, sb)
 	a.archives = &hookRegistry{Registry: c.reg, beforePut: func() {
 		c.expire("a")
-		if adopted, err := b.AdoptArchived(t.Context(), sb.ID, sb.Token); err != nil || !adopted {
+		if adopted, err := b.AdoptArchived(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil || !adopted {
 			t.Errorf("adopt: %v %v", adopted, err)
 		}
-		if _, _, _, err := b.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
+		if _, _, _, err := b.WakeAgentSocket(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
 			t.Errorf("the adopter's wake: %v", err)
 		}
 	}}
@@ -403,7 +403,7 @@ func TestReplicaArchiveCannotRecreateARowTheAdopterFinished(t *testing.T) {
 	hibernateClaim(t, a, sb)
 	c.expire("a")
 	mustAdopt(t, b, sb, "adopt")
-	if _, _, _, err := b.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
+	if _, _, _, err := b.WakeAgentSocket(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
 		t.Fatalf("the adopter's wake: %v", err)
 	}
 
@@ -439,7 +439,7 @@ func TestReplicaLeftoverJournalWithFailoverOffStillServesStreams(t *testing.T) {
 	if !ok || held.ReplicaCk != "ck_leftover" || held.Replicated {
 		t.Fatalf("claim held %v replica %q replicated %v, want the leftover kept and not replicated", ok, held.ReplicaCk, held.Replicated)
 	}
-	_, fenced, done, err := restarted.WakeAgentSocket(t.Context(), sb.ID, sb.Token)
+	_, fenced, done, err := restarted.WakeAgentSocket(t.Context(), sb.ID, Cred{Token: sb.Token})
 	if err != nil || fenced != nil {
 		t.Fatalf("stream to a claim with a leftover replica and failover off: %v, fence %v, want served with no fence", err, fenced)
 	}
@@ -479,7 +479,7 @@ func TestReplicaRoundAfterAWakeKeepsTheClaimAndWritesAFreshRow(t *testing.T) {
 			if tt.leaveTombstone {
 				waker.ckpts = &failingDeleteStore{Store: waker.ckpts, attempts: make(chan string, 8)}
 			}
-			if _, _, _, err := waker.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
+			if _, _, _, err := waker.WakeAgentSocket(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
 				t.Fatalf("wake: %v", err)
 			}
 			if epoch := waker.epochOf(holder); epoch != 0 {
@@ -804,7 +804,7 @@ func TestReplicaRestartKeepsItsRowAndStaysFencedUntilALeaseRenews(t *testing.T) 
 	if !rowOK || rec.Epoch != before.Epoch || restarted.replicaOf(held) != ck || !ckExists(t, restarted, ck) {
 		t.Errorf("row %+v present %v, replica %q, ck kept %v, want the row and replica kept", rec, rowOK, restarted.replicaOf(held), ckExists(t, restarted, ck))
 	}
-	if _, _, _, err := restarted.WakeAgentSocket(t.Context(), sb.ID, sb.Token); !errors.Is(err, ErrLeaseLost) {
+	if _, _, _, err := restarted.WakeAgentSocket(t.Context(), sb.ID, Cred{Token: sb.Token}); !errors.Is(err, ErrLeaseLost) {
 		t.Errorf("serving before the first renewal: %v, want ErrLeaseLost", err)
 	}
 }
@@ -944,7 +944,7 @@ func TestReplicaRestartDropsAClaimTheAdopterWokeAndFinished(t *testing.T) {
 	mustFlush(t, a)
 	c.expire("a")
 	mustAdopt(t, b, sb, "adopt")
-	if _, _, _, err := b.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
+	if _, _, _, err := b.WakeAgentSocket(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
 		t.Fatalf("adopter's wake: %v", err)
 	}
 
@@ -1110,7 +1110,7 @@ func TestReplicaAdoptionWakesTheClaimFromTheLastReplica(t *testing.T) {
 	if want := b.deadlineOf(moved); last.Event != "adopt" || last.ID != sb.ID || last.Reference != ck || want.IsZero() || !last.Deadline.Equal(want) {
 		t.Errorf("last event %+v, want an adopt of %s naming %s with deadline %v", last, sb.ID, ck, want)
 	}
-	if _, _, _, err := b.WakeAgentSocket(t.Context(), sb.ID, sb.Token); err != nil {
+	if _, _, _, err := b.WakeAgentSocket(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
 		t.Fatalf("adopter's wake: %v", err)
 	}
 	if got, want := usageEventsOf(t, b, sb.ID), "adopt,unarchive"; got != want {

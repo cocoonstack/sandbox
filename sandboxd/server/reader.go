@@ -108,7 +108,7 @@ func (r *router) toReader(head []byte, partial bool) error {
 
 func (r *router) handover(head []byte) (net.Conn, func(), bool) {
 	r.closeReader()
-	guest, done, err := r.s.openGuest(r.ctx, r.id, r.token, r.s.mgr.WakeAgentSocket)
+	guest, done, err := r.s.openGuest(r.ctx, r.id, pool.Cred{Token: r.token}, r.s.mgr.WakeAgentSocket)
 	if err != nil {
 		r.fail(err)
 		return nil, nil, false
@@ -207,8 +207,8 @@ func (s *Server) serveSleeping(ctx context.Context, w http.ResponseWriter, id, t
 	copyBoth(client, s.audited(ctx, id, io.MultiReader(bytes.NewReader(rt.replay), rt.br)), guest, silkdEnds, s.noSplice)
 }
 
-func (s *Server) openGuest(ctx context.Context, id, token string, wake agentWaker) (net.Conn, func(), error) {
-	sock, fenced, done, err := wake(ctx, id, token)
+func (s *Server) openGuest(ctx context.Context, id string, cred pool.Cred, wake agentWaker) (net.Conn, func(), error) {
+	sock, fenced, done, err := wake(ctx, id, cred)
 	if err != nil {
 		return nil, nil, err
 	}

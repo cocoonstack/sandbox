@@ -44,6 +44,30 @@ func TestAdoptAsksPeersUntilOneHoldsTheClaim(t *testing.T) {
 	}
 }
 
+func TestAdoptAsksWithTheRootOnlyForAClaimWithoutAToken(t *testing.T) {
+	tests := []struct {
+		name, token, root, wantAuth string
+	}{
+		{"a claim token goes as is", "tok", "root", "Bearer tok"},
+		{"no claim token asks as the root", "", "root", "Bearer root"},
+		{"no claim token and no root sends nothing", "", "", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var gotAuth string
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				gotAuth = r.Header.Get("Authorization")
+				w.WriteHeader(http.StatusOK)
+			}))
+			t.Cleanup(ts.Close)
+			a := &Adopter{Peers: func() []string { return []string{strings.TrimPrefix(ts.URL, "http://")} }, Token: tt.root}
+			if !a.Adopt(t.Context(), "sb_1", tt.token, false) || gotAuth != tt.wantAuth {
+				t.Errorf("auth %q, want %q", gotAuth, tt.wantAuth)
+			}
+		})
+	}
+}
+
 func TestAdoptSkipsAnUnreachablePeer(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 	addr := strings.TrimPrefix(ts.URL, "http://")

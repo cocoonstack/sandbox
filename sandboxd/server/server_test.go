@@ -979,6 +979,30 @@ func TestAgentErrorPaths(t *testing.T) {
 	}
 }
 
+func TestAgentRelayTakesTheRootOnlyAsAClaimToken(t *testing.T) {
+	woke := make(chan string, 1)
+	mgr := &fakeManager{socket: func(_, token string) (string, error) {
+		woke <- token
+		return "", pool.ErrUnknownSandbox
+	}}
+	ts := newTestServer(t, "root", mgr, nil)
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, ts.URL+"/v1/sandboxes/sb_1/agent", nil)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer root")
+	req.Header.Set("Upgrade", "silkd")
+	req.Header.Set("Connection", "Upgrade")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("do: %v", err)
+	}
+	defer resp.Body.Close()
+	if got := <-woke; resp.StatusCode != http.StatusNotFound || got != "root" {
+		t.Errorf("status %d woke with %q, want 404 with the root as a claim token", resp.StatusCode, got)
+	}
+}
+
 func TestForkAnswersOwnedChildrenAndMapsBadRequests(t *testing.T) {
 	mgr := &fakeManager{fork: func(_, token string, count int, ttl time.Duration) ([]*types.Sandbox, error) {
 		switch {
@@ -1834,6 +1858,61 @@ func TestOwnerEndpointAdoptsAnArchivedClaimItDoesNotHold(t *testing.T) {
 	}
 }
 
+func TestOwnerEndpointTakesTheRootToken(t *testing.T) {
+	tests := []struct {
+		name, token, query string
+		held, archived     bool
+		want               int
+		wantAdopt          bool
+	}{
+		{"root on the holder", "root", "", true, false, http.StatusOK, false},
+		{"root adopts", "root", "", false, true, http.StatusOK, true},
+		{"root with nothing to adopt", "root", "", false, false, http.StatusNotFound, true},
+		{"root on the holder for a wake", "root", "?room=1", true, false, http.StatusOK, false},
+		{"root adopts for a wake", "root", "?room=1", false, true, http.StatusOK, true},
+		{"root with nothing to adopt for a wake", "root", "?room=1", false, false, http.StatusNotFound, true},
+		{"the claim token on the holder", "good", "", true, true, http.StatusOK, false},
+		{"the claim token adopts", "good", "", false, true, http.StatusOK, true},
+		{"a tenant token gains nothing", "acme-token", "", true, true, http.StatusNotFound, true},
+		{"a wrong token gains nothing", "wrong", "", true, true, http.StatusNotFound, true},
+		{"no token", "", "", true, true, http.StatusUnauthorized, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var adoptedWith []string
+			authorized := func(token string) bool { return token == "" || token == "good" }
+			mgr := &fakeManager{
+				socket: func(_, token string) (string, error) {
+					if tt.held && authorized(token) {
+						return "/v/sock", nil
+					}
+					return "", pool.ErrUnknownSandbox
+				},
+				adopt: func(_, token string) (bool, error) {
+					adoptedWith = append(adoptedWith, token)
+					return tt.archived && authorized(token), nil
+				},
+			}
+			ts := newTenantTestServer(t, "root", []tenants.TenantSpec{{Name: "acme", Token: "acme-token"}}, mgr, nil)
+
+			code, raw := bodyOf(t, http.MethodGet, ts.URL+"/v1/sandboxes/sb_1/owner"+tt.query, tt.token, "")
+			if code != tt.want || code == http.StatusOK && !strings.Contains(string(raw), "node:7777") {
+				t.Errorf("status %d body %s, want %d", code, raw, tt.want)
+			}
+			wantWith := tt.token
+			if tt.token == "root" {
+				wantWith = ""
+			}
+			if gotAdopt := len(adoptedWith) > 0; gotAdopt != tt.wantAdopt || gotAdopt && adoptedWith[0] != wantWith {
+				t.Errorf("adopt calls %q, want adopt %v with %q", adoptedWith, tt.wantAdopt, wantWith)
+			}
+			if mgr.adoptedForWake != (tt.wantAdopt && tt.query != "") {
+				t.Errorf("adopted for a wake %v with query %q", mgr.adoptedForWake, tt.query)
+			}
+		})
+	}
+}
+
 func TestPreviewHandlerZeroDeadlineMintsLiveToken(t *testing.T) {
 	mgr := &fakeManager{claimDeadline: func(string, string) (time.Time, error) {
 		return time.Time{}, nil
@@ -2358,6 +2437,7 @@ type fakeManager struct {
 	releaseOp            idActionFunc
 	socket               func(id, token string) (string, error)
 	adopt                func(id, token string) (bool, error)
+	adoptedForWake       bool
 	dialPort             func(id, token string, port uint16) (net.Conn, error)
 	fenced               <-chan struct{}
 	hibernate            sandboxVerbFunc
@@ -2478,37 +2558,38 @@ func (f *fakeManager) Release(_ context.Context, id string, cred pool.Cred) erro
 	return f.release(id, cred.Token)
 }
 
-func (f *fakeManager) AgentSocket(id, token string) (string, error) {
+func (f *fakeManager) AgentSocket(id string, cred pool.Cred) (string, error) {
 	if f.socket == nil {
 		return "/v/sock", nil
 	}
-	return f.socket(id, token)
+	return f.socket(id, credToken(cred))
 }
 
-func (f *fakeManager) AdoptArchived(_ context.Context, id, token string) (bool, error) {
+func (f *fakeManager) AdoptArchived(_ context.Context, id string, cred pool.Cred) (bool, error) {
 	if f.adopt == nil {
 		return false, nil
 	}
-	return f.adopt(id, token)
+	return f.adopt(id, credToken(cred))
 }
 
-func (f *fakeManager) AdoptForWake(ctx context.Context, id, token string) (bool, error) {
-	return f.AdoptArchived(ctx, id, token)
+func (f *fakeManager) AdoptForWake(ctx context.Context, id string, cred pool.Cred) (bool, error) {
+	f.adoptedForWake = true
+	return f.AdoptArchived(ctx, id, cred)
 }
 
-func (f *fakeManager) WakeAgentSocket(_ context.Context, id, token string) (string, <-chan struct{}, func(), error) {
+func (f *fakeManager) WakeAgentSocket(_ context.Context, id string, cred pool.Cred) (string, <-chan struct{}, func(), error) {
 	if f.reader != nil {
 		f.reader.wake()
 	}
-	sock, err := f.AgentSocket(id, token)
+	sock, err := f.AgentSocket(id, cred)
 	return sock, f.fenced, func() {}, err
 }
 
-func (f *fakeManager) WakeAgentSocketOrRead(ctx context.Context, id, token string) (string, <-chan struct{}, func(), error) {
+func (f *fakeManager) WakeAgentSocketOrRead(ctx context.Context, id string, cred pool.Cred) (string, <-chan struct{}, func(), error) {
 	if f.reader != nil && f.reader.source() != "" {
 		return "", nil, nil, pool.ErrSleeping
 	}
-	return f.WakeAgentSocket(ctx, id, token)
+	return f.WakeAgentSocket(ctx, id, cred)
 }
 
 func (f *fakeManager) SleepingSource(_, _ string) string {
