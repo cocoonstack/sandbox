@@ -2219,30 +2219,44 @@ func TestFailoverLookupsSharingAnAdoptionAnswerWithTheirOwnCredential(t *testing
 }
 
 func TestFailoverALookupFollowingARefusedAdoptionAdoptsWithItsOwnToken(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		c := newFailoverCluster(t)
-		a, b := c.pair(t)
-		sb := mustClaim(t, a, testKey)
-		mustArchive(t, a, sb)
-		c.expire("a")
-		reg := &hookRegistry{Registry: c.reg}
-		b.archives = reg
-		follower := make(chan bool, 1)
-		reg.beforeGet = func() {
-			go func() {
-				adopted, _ := b.AdoptArchived(t.Context(), sb.ID, Cred{Token: sb.Token})
-				follower <- adopted
-			}()
-			synctest.Wait()
-		}
+	for _, wrong := range []int{0, 8} {
+		t.Run(fmt.Sprintf("%d_more_wrong_tokens", wrong), func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				c := newFailoverCluster(t)
+				a, b := c.pair(t)
+				sb := mustClaim(t, a, testKey)
+				mustArchive(t, a, sb)
+				c.expire("a")
+				reg := &hookRegistry{Registry: c.reg}
+				b.archives = reg
+				follower := make(chan bool, 1)
+				var once sync.Once
+				reg.beforeGet = func() {
+					once.Do(func() {
+						for range wrong {
+							go func() { _, _ = b.AdoptArchived(t.Context(), sb.ID, Cred{Token: "wrong"}) }()
+						}
+						go func() {
+							adopted, _ := b.AdoptArchived(t.Context(), sb.ID, Cred{Token: sb.Token})
+							follower <- adopted
+						}()
+						synctest.Wait()
+					})
+				}
 
-		if adopted, err := b.AdoptArchived(t.Context(), sb.ID, Cred{Token: "wrong"}); err != nil || adopted {
-			t.Fatalf("wrong-token lookup: %v %v, want refused", adopted, err)
-		}
-		if !<-follower {
-			t.Error("a wrong token leading the flight kept the claim token from adopting")
-		}
-	})
+				if adopted, err := b.AdoptArchived(t.Context(), sb.ID, Cred{Token: "wrong"}); err != nil || adopted {
+					t.Fatalf("wrong-token lookup: %v %v, want refused", adopted, err)
+				}
+				if !<-follower {
+					t.Error("wrong tokens leading the flights kept the claim token from adopting")
+				}
+				synctest.Wait()
+				if got := reg.takes.Load(); got != 1 {
+					t.Errorf("takes = %d, want 1", got)
+				}
+			})
+		})
+	}
 }
 
 type failoverCluster struct {
