@@ -2055,6 +2055,67 @@ func TestFailoverARootAdoptedClaimReadsAsAnUnknownTokenToAnOlderNode(t *testing.
 	}
 }
 
+func TestFailoverARootAndATokenLookupRacingKeepOneClaim(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		c := newFailoverCluster(t)
+		a, b := c.pair(t)
+		for _, m := range []*Manager{a, b} {
+			if err := m.PutTenant(t.Context(), tenants.TenantSpec{Name: "acme", Token: "tok-acme"}); err != nil {
+				t.Fatalf("put tenant: %v", err)
+			}
+		}
+		sb, err := claimAny(t.Context(), a, testKey, ClaimOptions{Tenant: "acme"})
+		if err != nil {
+			t.Fatalf("claim: %v", err)
+		}
+		mustArchive(t, a, sb)
+		c.expire("a")
+		reg := &hookRegistry{Registry: c.reg}
+		b.archives = reg
+		lookup := make(chan bool, 1)
+		reg.afterTake = func() {
+			go func() {
+				adopted, _ := b.AdoptArchived(t.Context(), sb.ID, Cred{Token: sb.Token})
+				lookup <- adopted
+			}()
+			synctest.Wait()
+		}
+
+		if adopted, adoptErr := b.AdoptArchived(t.Context(), sb.ID, Cred{Operator: true}); adoptErr != nil || !adopted {
+			t.Fatalf("root adoption: %v %v", adopted, adoptErr)
+		}
+		if !<-lookup {
+			t.Error("the racing token lookup did not adopt")
+		}
+		if got := reg.takes.Load(); got != 2 {
+			t.Fatalf("row taken %d times, want both lookups to take it", got)
+		}
+		if n := b.TenantClaims()["acme"]; n != 1 {
+			t.Errorf("tenant acme counts %d claims, want 1", n)
+		}
+		if events := usageEventsOf(t, b, sb.ID); events != "adopt" {
+			t.Errorf("usage events %q, want one adopt", events)
+		}
+		held, _ := b.byID(sb.ID)
+		rec, _, _ := c.reg.Get(t.Context(), sb.ID)
+		b.mu.Lock()
+		epoch := held.ArchiveEpoch
+		b.mu.Unlock()
+		if epoch != rec.Epoch {
+			t.Errorf("claim epoch %d, row epoch %d, want the later take's", epoch, rec.Epoch)
+		}
+		if err = b.rewriteArchiveRow(t.Context(), held, false); err != nil {
+			t.Errorf("row write after the race: %v", err)
+		}
+		if err = b.Release(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
+			t.Fatalf("release: %v", err)
+		}
+		if n := b.TenantClaims()["acme"]; n != 0 {
+			t.Errorf("tenant acme counts %d claims after the release, want 0", n)
+		}
+	})
+}
+
 type failoverCluster struct {
 	reg        *archivestest.Mem
 	moves      moves.Registry
