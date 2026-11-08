@@ -131,3 +131,26 @@ func TestMoveClientPassesTheTargetsRefusalThrough(t *testing.T) {
 		}
 	}
 }
+
+func TestMoveClientReachesATargetWithItsCurrentOrNextRootToken(t *testing.T) {
+	srv := New("root-a", "node-b:7777", &fakeManager{}, &fakeDialer{}, nil, nil, nil, nil)
+	srv.SetNextTokens("root-b", "")
+	addr := strings.TrimPrefix(serveTestServer(t, srv).URL, "http://")
+	for _, tt := range []struct {
+		token string
+		ok    bool
+	}{
+		{"root-a", true},
+		{"root-b", true},
+		{"root-c", false},
+	} {
+		c := &MoveClient{Token: tt.token}
+		_, err := c.Admit(t.Context(), addr, "sb_1", pool.MoveAdmission{From: "a"})
+		if tt.ok != (err == nil) || !tt.ok && !strings.Contains(err.Error(), "answered 401") {
+			t.Errorf("admit with %s: %v, want accepted %v", tt.token, err, tt.ok)
+		}
+		if err = c.Drop(t.Context(), addr, "sb_1"); tt.ok != (err == nil) {
+			t.Errorf("drop with %s: %v, want accepted %v", tt.token, err, tt.ok)
+		}
+	}
+}

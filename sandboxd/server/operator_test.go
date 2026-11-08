@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -17,9 +18,11 @@ import (
 )
 
 const (
-	rootToken     = "root"
-	operatorToken = "op-tok"
-	tenantToken   = "acme-tok"
+	rootToken         = "root"
+	rootNextToken     = "root-next"
+	operatorToken     = "op-tok"
+	operatorNextToken = "op-next"
+	tenantToken       = "acme-tok"
 )
 
 func TestOperatorTokenActsAsRootOnExactlyItsRoutes(t *testing.T) {
@@ -58,6 +61,15 @@ func TestOperatorTokenActsAsRootOnExactlyItsRoutes(t *testing.T) {
 		},
 		sandboxByID: func(string) (pool.SandboxSummary, bool) {
 			return pool.SandboxSummary{ID: "sb_1", Token: "victim"}, true
+		},
+		registerVolume:   func(context.Context, string, types.VolumeRegistration) error { return nil },
+		unregisterVolume: func(context.Context, string) error { return nil },
+		getVolumes:       func(string, string) (types.SandboxVolumesResponse, error) { return types.SandboxVolumesResponse{}, nil },
+		setVolumes: func(string, string, []types.Volume) (types.SandboxVolumesResponse, error) {
+			return types.SandboxVolumesResponse{}, nil
+		},
+		patchVolumes: func(string, string, types.VolumePatch) (types.SandboxVolumesResponse, error) {
+			return types.SandboxVolumesResponse{}, nil
 		},
 	}
 	ts := newOperatorTestServer(t, operatorToken, mgr, pipeDialer(okGuest))
@@ -126,14 +138,21 @@ func TestOperatorTokenActsAsRootOnExactlyItsRoutes(t *testing.T) {
 	for _, tt := range routes {
 		classified[tt.pattern] = true
 		t.Run(tt.pattern, func(t *testing.T) {
+			root := routeStatus(t, ts, tt.pattern, tt.path, rootToken, tt.body)
+			if tt.operator && root != tt.want {
+				t.Errorf("%s: status %d, want %d", rootToken, root, tt.want)
+			}
+			if got := routeStatus(t, ts, tt.pattern, tt.path, rootNextToken, tt.body); got != root || got == http.StatusUnauthorized || got == http.StatusForbidden {
+				t.Errorf("%s: status %d, want root's %d", rootNextToken, got, root)
+			}
+			operatorWant := http.StatusForbidden
 			if tt.operator {
-				for _, token := range []string{rootToken, operatorToken} {
-					if got := routeStatus(t, ts, tt.pattern, tt.path, token, tt.body); got != tt.want {
-						t.Errorf("%s: status %d, want %d", token, got, tt.want)
-					}
+				operatorWant = tt.want
+			}
+			for _, token := range []string{operatorToken, operatorNextToken} {
+				if got := routeStatus(t, ts, tt.pattern, tt.path, token, tt.body); got != operatorWant {
+					t.Errorf("%s: status %d, want %d", token, got, operatorWant)
 				}
-			} else if got := routeStatus(t, ts, tt.pattern, tt.path, operatorToken, tt.body); got != http.StatusForbidden {
-				t.Errorf("operator: status %d, want 403", got)
 			}
 			if tt.tenant == 0 {
 				return
@@ -143,8 +162,8 @@ func TestOperatorTokenActsAsRootOnExactlyItsRoutes(t *testing.T) {
 			}
 		})
 	}
-	if seen[operatorToken] {
-		t.Error("the operator token reached the manager as a claim token")
+	if seen[operatorToken] || seen[operatorNextToken] {
+		t.Error("an operator token reached the manager as a claim token")
 	}
 	files, err := filepath.Glob("*.go")
 	if err != nil {
@@ -231,7 +250,8 @@ func TestOperatorTokenUnsetOrEmptyMatchesNothing(t *testing.T) {
 		{"unset operator token on a node route", "", operatorToken, info, "/v1/info", http.StatusUnauthorized},
 		{"unset operator token is a claim token", "", operatorToken, release, "/v1/sandboxes/sb_1/release", http.StatusNotFound},
 		{"empty bearer with no operator token", "", "", info, "/v1/info", http.StatusUnauthorized},
-		{"empty bearer with an operator token", operatorToken, "", info, "/v1/info", http.StatusUnauthorized},
+		{"unset next tokens", "", rootNextToken, info, "/v1/info", http.StatusUnauthorized},
+		{"empty bearer with operator and next tokens", operatorToken, "", info, "/v1/info", http.StatusUnauthorized},
 		{"empty bearer on a sandbox route", operatorToken, "", release, "/v1/sandboxes/sb_1/release", http.StatusUnauthorized},
 		{"set operator token", operatorToken, operatorToken, info, "/v1/info", http.StatusOK},
 	}
@@ -252,9 +272,12 @@ func TestAuditRecordsTheCallerKind(t *testing.T) {
 	}{
 		{"root exec", "POST /v1/sandboxes/{id}/exec", "/v1/sandboxes/sb_1/exec", rootToken, `{"argv":["true"]}`, callerRoot},
 		{"operator exec", "POST /v1/sandboxes/{id}/exec", "/v1/sandboxes/sb_1/exec", operatorToken, `{"argv":["true"]}`, callerOperator},
+		{"root next exec", "POST /v1/sandboxes/{id}/exec", "/v1/sandboxes/sb_1/exec", rootNextToken, `{"argv":["true"]}`, callerRoot},
+		{"operator next exec", "POST /v1/sandboxes/{id}/exec", "/v1/sandboxes/sb_1/exec", operatorNextToken, `{"argv":["true"]}`, callerOperator},
 		{"claim exec", "POST /v1/sandboxes/{id}/exec", "/v1/sandboxes/sb_1/exec", "tok", `{"argv":["true"]}`, callerClaim},
 		{"root tenant write", "PUT /v1/tenants/{name}", "/v1/tenants/beta", rootToken, `{"token":"b"}`, callerRoot},
 		{"operator tenant write", "PUT /v1/tenants/{name}", "/v1/tenants/beta", operatorToken, `{"token":"b"}`, callerOperator},
+		{"operator next tenant write", "PUT /v1/tenants/{name}", "/v1/tenants/beta", operatorNextToken, `{"token":"b"}`, callerOperator},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -279,6 +302,10 @@ func newOperatorTestServer(t *testing.T, operator string, mgr *fakeManager, dial
 	mgr.tenants = []tenants.TenantSpec{{Name: "acme", Token: tenantToken}}
 	srv := New(rootToken, "node:7777", mgr, dialer, nil, nil, nil, nil)
 	srv.SetOperatorToken(operator)
+	srv.SetConfigReload(func(context.Context) (pool.ReloadResult, error) { return pool.ReloadResult{}, nil })
+	if operator != "" {
+		srv.SetNextTokens(rootNextToken, operatorNextToken)
+	}
 	return serveTestServer(t, srv)
 }
 
