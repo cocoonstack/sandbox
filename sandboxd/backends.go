@@ -118,9 +118,5 @@ func openTenants(ctx context.Context, cfg *config.Config) (tenants.Source, error
 	if ms := cfg.MetaStore; ms != nil {
 		return tenantspg.Open(ctx, os.Getenv(ms.DSNEnv))
 	}
-	var rootSum string
-	if cfg.APIToken != "" {
-		rootSum = tenants.TokenSHA256(cfg.APIToken)
-	}
-	return file.Open(ctx, cfg.DataDir, rootSum)
+	return file.Open(ctx, cfg.DataDir, tenants.ReservedOf(cfg.APIToken, cfg.OperatorToken))
 }

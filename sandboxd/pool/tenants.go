@@ -3,7 +3,6 @@ package pool
 import (
 	"context"
 	"crypto/sha256"
-	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -103,31 +102,14 @@ func (m *Manager) tenantRecordOf(spec tenants.TenantSpec) (tenants.TenantRecord,
 	if spec.Token != "" {
 		r.TokenSHA256 = tenants.TokenSHA256(spec.Token)
 	}
-	if err := tenants.Validate(r, m.rootSum); err != nil {
+	if err := tenants.Validate(r, m.reserved); err != nil {
 		return tenants.TenantRecord{}, err
-	}
-	if m.operatorSum != "" && r.TokenSHA256 == m.operatorSum {
-		return tenants.TenantRecord{}, fmt.Errorf("%w: tenant %q token must differ from operator_token", ErrBadTenant, spec.Name)
 	}
 	return r, nil
 }
 
-func (m *Manager) reserveOperatorToken(ctx context.Context, token string) error {
-	if token == "" {
-		return nil
-	}
-	m.operatorSum = tenants.TokenSHA256(token)
-	switch _, err := m.TenantByToken(ctx, token); {
-	case errors.Is(err, tenants.ErrUnknown):
-		return nil
-	case err != nil:
-		return fmt.Errorf("check operator_token against the tenant set: %w", err)
-	}
-	return errors.New("operator_token must differ from every tenant token")
-}
-
 func (m *Manager) applyTenants(ctx context.Context, write func() (tenants.Change, error)) error {
-	if m.rootSum == "" {
+	if m.reserved.Root == "" {
 		return fmt.Errorf("%w: tenants require api_token", ErrBadTenant)
 	}
 	c, err := write()

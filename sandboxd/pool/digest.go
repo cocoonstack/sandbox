@@ -21,7 +21,11 @@ func clusterDigest(c *config.Config, caFingerprint string, records []tenants.Ten
 	eg := egressFingerprintOf(c)
 	if c.Mesh != nil {
 		if key, _ := c.Mesh.DecodedKey(); key != nil {
-			raw, _ := utils.DigestJSON([]any{c.APIToken, c.PreviewSecret, caFingerprint, records, c.CheckpointTTLHours, eg})
+			fields := []any{c.APIToken, c.PreviewSecret, caFingerprint, records, c.CheckpointTTLHours, eg}
+			if c.OperatorToken != "" {
+				fields = append(fields, c.OperatorToken)
+			}
+			raw, _ := utils.DigestJSON(fields)
 			mac := hmac.New(sha256.New, key)
 			mac.Write(raw)
 			return hex.EncodeToString(mac.Sum(nil))

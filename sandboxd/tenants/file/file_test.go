@@ -12,7 +12,7 @@ import (
 
 func TestContract(t *testing.T) {
 	tenantstest.Run(t, func(t *testing.T) tenants.Source {
-		s, err := Open(t.Context(), t.TempDir(), tenants.TokenSHA256("root"))
+		s, err := Open(t.Context(), t.TempDir(), tenants.ReservedOf("root", ""))
 		if err != nil {
 			t.Fatalf("open: %v", err)
 		}
@@ -21,7 +21,7 @@ func TestContract(t *testing.T) {
 }
 
 func TestTheSetSurvivesAReopen(t *testing.T) {
-	dir, root := t.TempDir(), tenants.TokenSHA256("root")
+	dir, root := t.TempDir(), tenants.ReservedOf("root", "")
 	s, err := Open(t.Context(), dir, root)
 	if err != nil {
 		t.Fatalf("open: %v", err)
@@ -50,17 +50,22 @@ func TestTheSetSurvivesAReopen(t *testing.T) {
 
 func TestATenantsFileNeedsTheRootToken(t *testing.T) {
 	dir := t.TempDir()
-	s, err := Open(t.Context(), dir, tenants.TokenSHA256("root"))
+	s, err := Open(t.Context(), dir, tenants.ReservedOf("root", "op"))
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
 	if _, err = s.Put(t.Context(), tenantstest.Record("acme", "t", 0, "")); err != nil {
 		t.Fatalf("put: %v", err)
 	}
-	if _, err = Open(t.Context(), dir, ""); err == nil {
+	if _, err = Open(t.Context(), dir, tenants.Reserved{}); err == nil {
 		t.Error("a tenants file on a node without api_token opened")
 	}
-	if _, err = s.Put(t.Context(), tenantstest.Record("beta", "root", 0, "")); !errors.Is(err, tenants.ErrInvalid) {
-		t.Errorf("a tenant holding the root token: %v, want ErrInvalid", err)
+	for _, token := range []string{"root", "op"} {
+		if _, err = s.Put(t.Context(), tenantstest.Record("beta", token, 0, "")); !errors.Is(err, tenants.ErrInvalid) {
+			t.Errorf("a tenant holding the %s token: %v, want ErrInvalid", token, err)
+		}
+	}
+	if _, err = Open(t.Context(), dir, tenants.ReservedOf("root", "t")); !errors.Is(err, tenants.ErrInvalid) {
+		t.Errorf("an operator token a stored tenant holds: %v, want ErrInvalid", err)
 	}
 }

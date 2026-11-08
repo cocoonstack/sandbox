@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/cocoonstack/sandbox/sandboxd/pool"
 	"github.com/cocoonstack/sandbox/sandboxd/tenants"
+	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
 const (
@@ -119,7 +121,7 @@ func TestOperatorTokenActsAsRootOnExactlyItsRoutes(t *testing.T) {
 		{"GET /v1/sandboxes/{id}/agent", "/v1/sandboxes/sb_1/agent", "", false, 0, 0},
 		{"GET /metrics", "/metrics", "", false, 0, http.StatusForbidden},
 	}
-	classified := map[string]bool{"HEAD /v1/checkpoints/{id}/blob": true, "GET /healthz": true, "/p/{token}/": true}
+	classified := map[string]bool{"HEAD /v1/checkpoints/{id}/blob": true, "GET /healthz": true, "/p/{token}/": true, "/healthz": true}
 	for _, tt := range routes {
 		classified[tt.pattern] = true
 		t.Run(tt.pattern, func(t *testing.T) {
@@ -143,64 +145,101 @@ func TestOperatorTokenActsAsRootOnExactlyItsRoutes(t *testing.T) {
 	if seen[operatorToken] {
 		t.Error("the operator token reached the manager as a claim token")
 	}
-	src, err := os.ReadFile("server.go")
+	files, err := filepath.Glob("*.go")
 	if err != nil {
-		t.Fatalf("read routes: %v", err)
+		t.Fatalf("list sources: %v", err)
 	}
-	for _, m := range regexp.MustCompile(`mux\.HandleFunc\("([^"]+)"`).FindAllStringSubmatch(string(src), -1) {
-		if !classified[m[1]] {
-			t.Errorf("route %q has no operator token row", m[1])
+	registration := regexp.MustCompile(`mux\.Handle(?:Func)?\("([^"]+)"`)
+	for _, file := range files {
+		if strings.HasSuffix(file, "_test.go") {
+			continue
+		}
+		src, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatalf("read %s: %v", file, err)
+		}
+		for _, m := range registration.FindAllStringSubmatch(string(src), -1) {
+			if !classified[m[1]] {
+				t.Errorf("route %q in %s has no operator token row", m[1], file)
+			}
 		}
 	}
 }
 
-func TestOperatorTokenReadsAClaimTokenByIDLikeRoot(t *testing.T) {
-	mgr := &fakeManager{sandboxByID: func(string) (pool.SandboxSummary, bool) {
-		return pool.SandboxSummary{ID: "sb_1", Token: "victim"}, true
-	}}
+func TestOperatorTokenReadOfAClaimTokenIsAudited(t *testing.T) {
+	reads := make(chan string, 2)
+	mgr := &fakeManager{
+		sandboxByID: func(string) (pool.SandboxSummary, bool) {
+			return pool.SandboxSummary{ID: "sb_1", Token: "victim"}, true
+		},
+		tokenRead: func(id, caller string) { reads <- id + " " + caller },
+	}
 	ts := newOperatorTestServer(t, operatorToken, mgr, nil)
-	for token, want := range map[string]string{rootToken: "victim", operatorToken: "victim"} {
+	for _, token := range []string{rootToken, operatorToken} {
 		resp := doReq(t, http.MethodGet, ts.URL+"/v1/sandboxes/sb_1", token, "")
 		got := decodeJSON[pool.SandboxSummary](t, resp.Body)
 		_ = resp.Body.Close()
-		if resp.StatusCode != http.StatusOK || got.Token != want {
-			t.Errorf("%s: status %d token %q, want 200 and %q", token, resp.StatusCode, got.Token, want)
+		if resp.StatusCode != http.StatusOK || got.Token != "victim" {
+			t.Errorf("%s: status %d token %q, want 200 and the claim token", token, resp.StatusCode, got.Token)
 		}
+	}
+	if got := await(t, reads, "the operator's token read was not audited"); got != "sb_1 "+callerOperator {
+		t.Errorf("token read audited as %q, want sb_1 by the operator", got)
+	}
+	if len(reads) != 0 {
+		t.Errorf("root's token read was audited as %q", <-reads)
+	}
+}
+
+func TestOperatorTokenCannotClaimVolumes(t *testing.T) {
+	const withVolumes = `{"template":"rt:24.04","volumes":[{"name":"imagenet"}]}`
+	tests := []struct {
+		name, token, body string
+		want              int
+		reached           bool
+	}{
+		{"operator with volumes", operatorToken, withVolumes, http.StatusForbidden, false},
+		{"operator without volumes", operatorToken, `{"template":"rt:24.04"}`, http.StatusOK, true},
+		{"root with volumes", rootToken, withVolumes, http.StatusOK, true},
+		{"tenant with volumes", tenantToken, withVolumes, http.StatusOK, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			placed := false
+			mgr := &fakeManager{volumePlacement: func(types.PoolKey, string, []string) (bool, error) {
+				placed = true
+				return true, nil
+			}}
+			ts := newOperatorTestServer(t, operatorToken, mgr, nil)
+			if got := routeStatus(t, ts, "POST /v1/claim", "/v1/claim", tt.token, tt.body); got != tt.want {
+				t.Errorf("status %d, want %d", got, tt.want)
+			}
+			if reached := placed || mgr.warmCalls+mgr.provisionCalls > 0; reached != tt.reached {
+				t.Errorf("reached the manager %v, want %v", reached, tt.reached)
+			}
+		})
 	}
 }
 
 func TestOperatorTokenUnsetOrEmptyMatchesNothing(t *testing.T) {
+	const info, release = "GET /v1/info", "POST /v1/sandboxes/{id}/release"
 	tests := []struct {
-		name, operator, header, path string
-		want                         int
+		name, operator, bearer, pattern, path string
+		want                                  int
 	}{
-		{"unset operator token on a node route", "", "Bearer " + operatorToken, "/v1/info", http.StatusUnauthorized},
-		{"unset operator token is a claim token", "", "Bearer " + operatorToken, "/v1/sandboxes/sb_1/release", http.StatusNotFound},
-		{"empty bearer with no operator token", "", "Bearer ", "/v1/info", http.StatusUnauthorized},
-		{"empty bearer with an operator token", operatorToken, "Bearer ", "/v1/info", http.StatusUnauthorized},
-		{"empty bearer on a sandbox route", operatorToken, "Bearer ", "/v1/sandboxes/sb_1/release", http.StatusUnauthorized},
-		{"set operator token", operatorToken, "Bearer " + operatorToken, "/v1/info", http.StatusOK},
+		{"unset operator token on a node route", "", operatorToken, info, "/v1/info", http.StatusUnauthorized},
+		{"unset operator token is a claim token", "", operatorToken, release, "/v1/sandboxes/sb_1/release", http.StatusNotFound},
+		{"empty bearer with no operator token", "", "", info, "/v1/info", http.StatusUnauthorized},
+		{"empty bearer with an operator token", operatorToken, "", info, "/v1/info", http.StatusUnauthorized},
+		{"empty bearer on a sandbox route", operatorToken, "", release, "/v1/sandboxes/sb_1/release", http.StatusUnauthorized},
+		{"set operator token", operatorToken, operatorToken, info, "/v1/info", http.StatusOK},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			mgr := &fakeManager{release: func(string, string) error { return pool.ErrUnknownSandbox }}
 			ts := newOperatorTestServer(t, tt.operator, mgr, nil)
-			method := http.MethodGet
-			if strings.HasSuffix(tt.path, "/release") {
-				method = http.MethodPost
-			}
-			req, err := http.NewRequestWithContext(t.Context(), method, ts.URL+tt.path, nil)
-			if err != nil {
-				t.Fatalf("request: %v", err)
-			}
-			req.Header.Set("Authorization", tt.header)
-			resp, err := http.DefaultClient.Do(req)
-			if err != nil {
-				t.Fatalf("do: %v", err)
-			}
-			_ = resp.Body.Close()
-			if resp.StatusCode != tt.want {
-				t.Errorf("status %d, want %d", resp.StatusCode, tt.want)
+			if got := routeStatus(t, ts, tt.pattern, tt.path, tt.bearer, ""); got != tt.want {
+				t.Errorf("status %d, want %d", got, tt.want)
 			}
 		})
 	}

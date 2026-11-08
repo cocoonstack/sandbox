@@ -2558,11 +2558,7 @@ func testBackends(t testing.TB, cfg *config.Config) Backends {
 	if err != nil {
 		t.Fatalf("template store: %v", err)
 	}
-	var rootSum string
-	if cfg.APIToken != "" {
-		rootSum = tenants.TokenSHA256(cfg.APIToken)
-	}
-	src, err := file.Open(t.Context(), cfg.DataDir, rootSum)
+	src, err := file.Open(t.Context(), cfg.DataDir, tenants.ReservedOf(cfg.APIToken, cfg.OperatorToken))
 	if err != nil {
 		t.Fatalf("tenant set: %v", err)
 	}
@@ -2766,7 +2762,7 @@ func setTenantCaps(t *testing.T, m *Manager, caps map[string]int) {
 	for name, limit := range caps {
 		records = append(records, tenants.TenantRecord{Name: name, TokenSHA256: tenants.TokenSHA256("tok-" + name), MaxClaims: limit})
 	}
-	src, err := file.Open(t.Context(), t.TempDir(), "")
+	src, err := file.Open(t.Context(), t.TempDir(), tenants.Reserved{})
 	if err != nil {
 		t.Fatalf("tenant set: %v", err)
 	}

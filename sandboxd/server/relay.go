@@ -55,11 +55,11 @@ func (s *Server) CloseRelays() {
 }
 
 func (s *Server) handleAgent(w http.ResponseWriter, r *http.Request) {
-	token, ok := s.upgradeGate(w, r, upgradeProto)
+	_, r, ok := s.upgradeGate(w, r, upgradeProto)
 	if !ok {
 		return
 	}
-	r = s.withCaller(r, callerClaim)
+	token, _ := bearerToken(r)
 	id := r.PathValue("id")
 	guest, done, sleeping, ok := s.wakeGuest(r.Context(), w, id, pool.Cred{Token: token}, s.mgr.WakeAgentSocketOrRead)
 	if sleeping {
