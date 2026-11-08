@@ -74,7 +74,10 @@ func (m *Manager) adoptArchived(ctx context.Context, id string, cred Cred, room 
 	}
 	epoch, err := m.archives.Take(ctx, id, rec.Epoch, m.nodeID)
 	if errors.Is(err, archives.ErrLost) {
-		return false, nil
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		_, held := m.resolveLocked(id, cred)
+		return held, nil
 	}
 	if err != nil {
 		return false, fmt.Errorf("adopt %s: %w", id, err)

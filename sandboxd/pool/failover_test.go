@@ -2159,6 +2159,39 @@ func TestFailoverATakeOfAPublishedClaimsRowMovesTheClaimToItsEpoch(t *testing.T)
 	}
 }
 
+func TestFailoverALookupLosingTheTakeToAnotherOnThisNodeAnswersForIt(t *testing.T) {
+	tests := []struct {
+		name        string
+		loser, prev func(*types.Sandbox) Cred
+	}{
+		{"the root loses", rootCred, tokenCred},
+		{"the token loses", tokenCred, rootCred},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := newFailoverCluster(t)
+			a, b := c.pair(t)
+			sb := mustClaim(t, a, testKey)
+			mustArchive(t, a, sb)
+			c.expire("a")
+			reg := &hookRegistry{Registry: c.reg}
+			b.archives = reg
+			reg.beforeTake = func() {
+				if adopted, err := b.AdoptArchived(t.Context(), sb.ID, tt.prev(sb)); err != nil || !adopted {
+					t.Errorf("winning lookup: %v %v", adopted, err)
+				}
+			}
+
+			if adopted, err := b.AdoptArchived(t.Context(), sb.ID, tt.loser(sb)); err != nil || !adopted {
+				t.Errorf("losing lookup: %v %v, want this node answering for the claim", adopted, err)
+			}
+			if got := reg.takes.Load(); got != 1 {
+				t.Errorf("row taken %d times, want once", got)
+			}
+		})
+	}
+}
+
 func TestFailoverALateTakeFoldedAfterAWakeKeepsTheClaimReplicating(t *testing.T) {
 	tests := []struct {
 		name          string
