@@ -21,10 +21,11 @@ All bodies are JSON. Four token kinds:
   `403` `operator token cannot claim volumes`. Unset or empty, it is off. A set
   [`operator_token_next`](deploy.md#configuration) is the operator too, on the
   same endpoints, and the audit `caller` stays `operator`.
-  Scope: it reaches every claim's data — it reads any claim's token by id,
-  execs in any claim, and through a tenant it mints can fork, checkpoint and
-  preview with that claim token — and holds no node or cluster configuration
-  power. With `audit_log` on, its by-id token read records op `token`.
+  Scope: it reaches every claim's data — it reads any claim's token by id and
+  execs in any claim. Through the tenant API it holds every tenant's
+  authority: it can mint or re-key any tenant and then act as it, including a
+  claim that names volumes that tenant may mount and fork, checkpoint and
+  preview with a claim token. It holds no node or cluster configuration power. With `audit_log` on, its by-id token read records op `token`.
 - **tenant** — a token the [tenant API](#tenants-v1tenants) added: accepted by the
   resource-creating verbs (claim, fork, promote, checkpoint create/claim,
   preview mint) and the tenant-scoped listings/deletes below; everything a
@@ -984,7 +985,10 @@ Auth: node API token; body `{"ttl_seconds": 0, "no_redirect": false,
 "metadata": {}, "on_expire": "destroy", "env": {}}`. Claims a fresh sandbox branched from the checkpoint (a
 normal claim response, attributed to the caller); the checkpoint's recorded
 key applies. A tenant token branches only its own tenant's checkpoints; any
-other id answers 404, as for list and delete. The branch
+other id answers 404, as for list and delete. On a node that does not hold the
+record, the redirect and the peer heal below run before that check, so another
+tenant's id can redirect to its holders, or be pulled here before the 404;
+checkpoint ids are random and no cross-tenant read serves them. The branch
 carries this request's `metadata`, `on_expire` and `env`, under the claim rules,
 never the source sandbox's. 400 metadata over a bound, an unknown
 `on_expire`, or a bad `env` entry.
