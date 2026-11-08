@@ -542,6 +542,8 @@ the upstream's `host:port`, never its credentials, and `GET env` blanks the valu
 `guest: false` entry. Cost: a node without `egress_upstream` pays nothing; with
 it, each allowed request reads the claim's env snapshot, without a lock.
 
+## Byte usage
+
 `egress_usage_bytes: true` adds one `egress_bytes` usage event per allowed
 tunnel or request when it ends, with the payload bytes it moved (`tx` guest to
 destination, `rx` back) and its upstream, so per-exit traffic can be billed.
@@ -550,6 +552,41 @@ usage-journal append per connection, which is why it is opt-in. A tunnel that a
 sandboxd stop cuts records no `egress_bytes` event. A flow of the
 [advanced network mode](advanced-network.md) records one too, with its IP
 bytes and `upstream` `tun/<label>`.
+
+`egress_usage_interval_seconds` (default 0, needs `egress_usage_bytes`) also
+writes an `egress_bytes` event every interval for each allowed tunnel, request
+or tun flow that lasts longer, with the bytes since its previous event, and
+one with the rest when it ends. The events of one connection sum to the single
+event it writes with 0, so a control plane can apply a window rule to a long
+upload before it ends. A spliced tunnel counts its bytes when its copy
+returns: each interval the proxy sets a past read deadline on every open
+tunnel, so the copy returns, counts and resumes, and an event carries the
+bytes up to the previous interval. A sandboxd stop therefore loses up to two
+intervals of a spliced tunnel's bytes and up to one of a limited tunnel or a
+request. Tun flows are checked every 10 s, so their events follow that grid.
+
+## Bandwidth limit
+
+[`PUT /v1/sandboxes/{id}/egress-limit`](sandboxd-api.md#put-v1sandboxesidegress-limit)
+caps one claim's bytes per second, `tx_bytes_per_second` (guest to
+destination) and `rx_bytes_per_second` apart; zero leaves a direction
+unlimited. The control plane sets every cap, for example from the
+`egress_bytes` events above; a claim starts without one. The cap covers
+HTTP `CONNECT`, SOCKS5, plain HTTP forwarding and intercepted requests, and
+counts payload bytes as `egress_bytes` does. Preview, port relay and exec
+traffic is not capped.
+
+Each direction has one token bucket per claim, shared by all its connections,
+with a burst of the rate, at least 64 KiB and at most 1 GiB. A limited
+direction copies in user space, in reads of about a tenth of a second's bytes
+(1 KiB to 64 KiB), each followed by a wait for its tokens, so its CPU cost
+follows the bytes the cap lets through. An unlimited direction keeps the
+kernel splice, so a claim without a cap pays nothing. A new cap starts with
+full buckets and reaches every open connection at once: the proxy sets a past
+read deadline on every open tunnel, whose copy resumes in the matching mode,
+and a request reads the cap on every read. A claim in
+[advanced network mode](advanced-network.md#host-side) keeps separate buckets
+on its tun path, so its proxy and tun traffic are capped apart.
 
 ## HTTPS interception
 
