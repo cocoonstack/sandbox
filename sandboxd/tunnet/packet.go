@@ -87,15 +87,6 @@ func ReadHello(r io.Reader) (Hello, error) {
 	}, nil
 }
 
-// FrameLen validates a frame's length prefix.
-func FrameLen(head [4]byte) (int, error) {
-	n := int(binary.LittleEndian.Uint32(head[:]))
-	if n < VnetHdrLen || n > MaxFrame {
-		return 0, fmt.Errorf("tun frame length %d", n)
-	}
-	return n, nil
-}
-
 // Packet is the IPv4 header view of one frame body: a virtio-net header, then the packet.
 type Packet struct {
 	Proto            uint8
@@ -163,6 +154,15 @@ func RewriteSrc(frame []byte, to netip.Addr) {
 // RewriteDst overwrites the destination address.
 func RewriteDst(frame []byte, to netip.Addr) {
 	rewrite(frame, dstAt, to.As4())
+}
+
+// FrameLen validates a frame's length prefix.
+func FrameLen(head [4]byte) (int, error) {
+	n := int(binary.LittleEndian.Uint32(head[:]))
+	if n < VnetHdrLen || n > MaxFrame {
+		return 0, fmt.Errorf("tun frame length %d", n)
+	}
+	return n, nil
 }
 
 // wireCost is what a parsed frame puts on the wire once segmented: its packet count and IP bytes; false when a packet would exceed mtu.
