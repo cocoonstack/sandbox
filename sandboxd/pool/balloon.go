@@ -64,10 +64,18 @@ func (m *Manager) balloonTo(ctx context.Context, sb *types.Sandbox, want string)
 	logger := log.WithFunc("pool.balloonTo")
 	m.mu.Lock()
 	skip, due, state, def, vm := m.balloonSkipLocked(sb), balloonDue(sb, want), sb.Balloon, sb.BalloonDefault, sb.VMName
+	if !skip && due {
+		sb.BalloonBusy = true
+	}
 	m.mu.Unlock()
 	if skip || !due {
 		return
 	}
+	defer func() {
+		m.mu.Lock()
+		sb.BalloonBusy = false
+		m.mu.Unlock()
+	}()
 	target := cmp.Or(want, strconv.FormatInt(def, 10))
 	if want == "" && state == types.BalloonUnknown {
 		rec, ok, err := m.eng.Inspect(ctx, vm)
@@ -128,11 +136,14 @@ func (m *Manager) setBalloon(sb *types.Sandbox, state types.BalloonState, target
 	m.mu.Lock()
 	sb.Balloon, sb.BalloonTarget, sb.BalloonDefault = state, target, def
 	m.mu.Unlock()
+	if state == types.BalloonInflated {
+		m.balloonSeen.Store(true)
+	}
 }
 
 func (m *Manager) balloonSkipLocked(sb *types.Sandbox) bool {
 	return m.claimed[sb.ID] != sb || !holdsVM(sb) || sb.Waking || sb.PendingSnap != "" || sb.SaveSnap != "" ||
-		sb.Balloon == types.BalloonUnsupported || time.Now().Before(sb.BalloonRetryAt) || m.midMoveLocked(sb)
+		sb.Balloon == types.BalloonUnsupported || sb.BalloonBusy || time.Now().Before(sb.BalloonRetryAt) || m.midMoveLocked(sb)
 }
 
 // balloonDue reports whether sb's balloon needs a call to reach want, an idle target, or the boot target when want is empty; callers hold m.mu.

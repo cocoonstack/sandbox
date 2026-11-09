@@ -68,6 +68,45 @@ func TestARelayDoesNotWaitBehindABalloonCall(t *testing.T) {
 	waitFor(t, func() bool { return !m.sweeps.balloon.Load() })
 }
 
+func TestABalloonCallInFlightKeepsAConcurrentOneFromPublishingOverIt(t *testing.T) {
+	eng := newFakeEngine()
+	m := balloonManager(t, eng, t.TempDir(), config.PoolSpec{PoolKey: testKey})
+	sb := mustClaim(t, m, testKey)
+	m.mu.Lock()
+	sb.Balloon = types.BalloonUnknown
+	m.mu.Unlock()
+	release := make(chan struct{})
+	eng.mu.Lock()
+	eng.inspectHook = func() { <-release }
+	eng.mu.Unlock()
+	m.balloonOnce(t.Context())
+	waitFor(t, func() bool {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		return sb.BalloonBusy
+	})
+	m.balloonTo(t.Context(), sb, "50%")
+	if calls := balloonCalls(eng); len(calls) != 0 {
+		t.Errorf("balloon calls %q, want the second call to stand aside while the first is in flight", calls)
+	}
+	close(release)
+	waitFor(t, func() bool { return !m.sweeps.balloon.Load() })
+}
+
+func TestAnInflateThatLandsAfterReclaimWentOffStillGetsDeflated(t *testing.T) {
+	eng := newFakeEngine()
+	m := balloonManager(t, eng, t.TempDir(), config.PoolSpec{PoolKey: testKey})
+	sb := mustClaim(t, m, testKey)
+	m.balloonTo(t.Context(), sb, "50%")
+	editView(m, func(v *configView) { v.balloonIdle, v.balloonTarget = 0, "" })
+	m.balloonSeen.Store(false)
+	m.setBalloon(sb, types.BalloonInflated, "50%", fakeBalloonDefault)
+	sweepBalloons(t, m)
+	if calls := balloonCalls(eng); len(calls) != 2 || m.Counters().BalloonDeflations != 1 {
+		t.Errorf("balloon calls %q, want the late inflate deflated once reclaim is off", calls)
+	}
+}
+
 func TestAHeldClaimNeverInflates(t *testing.T) {
 	eng := newFakeEngine()
 	m := balloonManager(t, eng, t.TempDir(), config.PoolSpec{PoolKey: testKey})
