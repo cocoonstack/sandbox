@@ -309,6 +309,23 @@ func TestReclaimTurnedOnAfterARestartRepairsAnEarlierRunsInflate(t *testing.T) {
 	}
 }
 
+func TestAPreHibernateInflateKeepsTheSweepOn(t *testing.T) {
+	eng := newFakeEngine()
+	m := balloonManager(t, eng, t.TempDir(), archivePool(keepAnHour))
+	sb := mustClaim(t, m, testKey)
+	m.balloonSeen.Store(false)
+	backdate(m, sb, 5*time.Second)
+	sweepIdle(t, m)
+	editView(m, func(v *configView) { v.balloonIdle, v.balloonTarget = 0, "" })
+	if err := wakeClaim(t, m, sb); err != nil {
+		t.Fatalf("wake: %v", err)
+	}
+	sweepBalloons(t, m)
+	if calls := balloonCalls(eng); len(calls) != 2 || m.Counters().BalloonDeflations != 1 {
+		t.Errorf("balloon calls %q, want the pre-hibernate inflate deflated after the wake once reclaim is off", calls)
+	}
+}
+
 func TestTurningBalloonOffDeflatesTheInflatedClaims(t *testing.T) {
 	eng := newFakeEngine()
 	m := balloonManager(t, eng, t.TempDir(), config.PoolSpec{PoolKey: testKey})
