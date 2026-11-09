@@ -1,4 +1,4 @@
-//! Small OS helpers; the crate's unsafe work lives here.
+//! Small OS helpers and syscall wrappers.
 
 use std::borrow::Cow;
 use std::io::Read;
@@ -16,16 +16,6 @@ use nix::fcntl::{FcntlArg, OFlag, fcntl};
 use tokio::io::unix::AsyncFd;
 use tokio::process::Command;
 
-static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
-
-/// The FORWARDED values in silkd's own environment, read once: the unit environment is fixed.
-static PROXY_VARS: LazyLock<Vec<(&'static str, String)>> =
-    LazyLock::new(|| snapshot_proxy(|key| std::env::var(key).ok()));
-static DIRECT: LazyLock<Vec<(&'static str, &'static str)>> =
-    LazyLock::new(|| compose_env(true, &PROXY_VARS));
-static RELAYED: LazyLock<Vec<(&'static str, &'static str)>> =
-    LazyLock::new(|| compose_env(false, &PROXY_VARS));
-
 /// Forwarded into every exec that has no direct route: the loopback proxy relay is its only way out.
 const FORWARDED: [&str; 6] = [
     "http_proxy",
@@ -38,6 +28,16 @@ const FORWARDED: [&str; 6] = [
 
 /// The claim's environment the host writes, in systemd EnvironmentFile syntax.
 const CLAIM_ENV_PATH: &str = "/run/silkd.env";
+
+static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
+
+/// The FORWARDED values in silkd's own environment, read once: the unit environment is fixed.
+static PROXY_VARS: LazyLock<Vec<(&'static str, String)>> =
+    LazyLock::new(|| snapshot_proxy(|key| std::env::var(key).ok()));
+static DIRECT: LazyLock<Vec<(&'static str, &'static str)>> =
+    LazyLock::new(|| compose_env(true, &PROXY_VARS));
+static RELAYED: LazyLock<Vec<(&'static str, &'static str)>> =
+    LazyLock::new(|| compose_env(false, &PROXY_VARS));
 
 /// A suffix unique within this process, enough to name a temp file; not cryptographic.
 pub fn tmp_suffix() -> String {

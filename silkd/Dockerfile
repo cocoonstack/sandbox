@@ -4,9 +4,7 @@
 FROM rust:1.99.1-slim-bookworm@sha256:24707e70a4f1e23d9a7b25202ec43126d28a52294b96aad5c670df1fd1f1d400 AS build
 ARG TARGETARCH
 WORKDIR /silkd
-# Before any rustup/cargo call: the pin, not the base image's default, is the
-# compiler. A digest bump that moves ahead of the pin then costs a toolchain
-# download instead of silently building the guest binary with another rustc.
+# The pin, not the base image's default, is the compiler: copy it before any rustup or cargo call.
 COPY rust-toolchain.toml ./
 RUN sed -i '/^components/d;/^targets/d' rust-toolchain.toml
 RUN case "$TARGETARCH" in \
