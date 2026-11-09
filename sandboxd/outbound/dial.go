@@ -58,28 +58,35 @@ func (h *Host) upstreamTarget(ctx context.Context, addr string) (netip.AddrPort,
 	if err != nil {
 		return netip.AddrPort{}, false, err
 	}
-	var target netip.AddrPort
-	for _, ip := range ips {
-		ap := netip.AddrPortFrom(ip.Unmap(), uint16(port))
-		internal, err := h.o.Verdict(ap.Addr(), ap.Port())
+	for i, ip := range ips {
+		ips[i] = ip.Unmap()
+		internal, err := h.o.Verdict(ips[i], uint16(port))
 		if err != nil {
 			return netip.AddrPort{}, false, err
 		}
 		if internal {
-			return ap, true, nil
-		}
-		if !target.IsValid() || target.Addr().Is6() && ap.Addr().Is4() {
-			target = ap
+			return netip.AddrPortFrom(ips[i], uint16(port)), true, nil
 		}
 	}
+	target := tunnelAddr(ips)
 	if !target.IsValid() {
 		return netip.AddrPort{}, false, fmt.Errorf("egress: %s resolves to no address", host)
 	}
-	return target, false, nil
+	return netip.AddrPortFrom(target, uint16(port)), false, nil
 }
 
 func (h *Host) verdict(ip netip.Addr, port uint16) (bool, error) {
 	return destVerdict(h.o.View().internalAllow, *h.self.Load(), ip, port)
+}
+
+func tunnelAddr(ips []netip.Addr) netip.Addr {
+	if i := slices.IndexFunc(ips, netip.Addr.Is4); i >= 0 {
+		return ips[i]
+	}
+	if len(ips) == 0 {
+		return netip.Addr{}
+	}
+	return ips[0]
 }
 
 func newDialer(verdict VerdictFunc) *net.Dialer {
