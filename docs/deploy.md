@@ -122,7 +122,7 @@ the intersection of the two.
 | field | default | meaning |
 |---|---|---|
 | `listen` | `:7777` | control- and data-plane HTTP listener |
-| `data_dir` | `/var/lib/sandboxd` | golden snapshot exports, the claims journal, the usage/audit journals (`usage.jsonl`, `audit.jsonl` + `.1` backups), and `checkpoints/` by default |
+| `data_dir` | `/var/lib/sandboxd` | golden snapshot exports, the claims journal, the usage/audit journals (`usage.jsonl`, `audit.jsonl`, each rotated at 1 GiB with one `.1` backup), and `checkpoints/` by default |
 | `cocoon_bin` | `cocoon` | cocoon CLI binary |
 | `restore_mode` | unset | clone and wake-restore memory mode: `copy`, `ondemand`, or `mmap`; use `mmap` for dense pools |
 | `no_direct_io` | false | use buffered writable disks for Cloud Hypervisor cold boots and clones; recommended for dense ephemeral pools to avoid direct-I/O CoW journal contention |
@@ -1040,8 +1040,13 @@ only; computing durations or prices stays with the consumer.
   retries every 5 s, and backfills when the database returns. Nothing is lost
   while the unlanded lines are still in `usage.jsonl` or `usage.jsonl.1`, so
   an outage loses lines only after the journal rotates twice past the last
-  landed one (64 MiB each); the node no longer holds those either. A node
-  needs the database at boot, like the other shared tables.
+  landed one (1 GiB each); the node no longer holds those either, and logs a
+  warning when it resumes. The journal grows about 220 bytes per egress
+  connection with `egress_usage_bytes` on and about 100 bytes without, so a
+  node writing 1 MB/s rides out at least 17 minutes. Lands commit one at a time
+  per cell (see Order), so when a cell's nodes together write faster than
+  that, the backlog grows until it rotates out. A node needs the database at
+  boot, like the other shared tables.
 - **Retention:** sandboxd never deletes a row. Prune only rows every consumer
   has paged past, and keep each node's newest row: it is the node's resume
   point, and a node that finds none lands its whole journal again. A crash
