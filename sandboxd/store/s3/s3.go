@@ -546,7 +546,7 @@ func (s *Store) recordIDs(ctx context.Context, prefix string) ([]string, error) 
 	for p.HasMorePages() {
 		page, err := p.NextPage(ctx)
 		if err != nil {
-			return nil, fmt.Errorf("list %s: %w", s.prefix, err)
+			return nil, fmt.Errorf("list %s: %w", s.prefix+prefix, err)
 		}
 		for _, cp := range page.CommonPrefixes {
 			id := strings.TrimSuffix(strings.TrimPrefix(*cp.Prefix, s.prefix), "/")

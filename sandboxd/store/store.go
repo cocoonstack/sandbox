@@ -29,6 +29,7 @@ const (
 
 	CheckpointPrefix = "ck_"
 	ArchivePrefix    = "ar_"
+	TemplatePrefix   = "tp_"
 )
 
 var (
@@ -97,9 +98,9 @@ func CheckpointID(suffix string) string { return CheckpointPrefix + suffix }
 
 func ArchiveID(suffix string) string { return ArchivePrefix + suffix }
 
-func TemplateID(hash string) string { return "tp_" + hash }
+func TemplateID(hash string) string { return TemplatePrefix + hash }
 
-func TemplateHash(id string) string { return strings.TrimPrefix(id, "tp_") }
+func TemplateHash(id string) string { return strings.TrimPrefix(id, TemplatePrefix) }
 
 // ExportGen names a record generation's export dir from its meta bytes, unique per publish.
 func ExportGen(meta []byte) string { return ExportDir + "-" + ExportGenHash(meta) }

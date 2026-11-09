@@ -221,7 +221,7 @@ func (m *Manager) HasPromotedTemplate(ctx context.Context, key types.PoolKey, te
 
 func (m *Manager) loadTemplates(ctx context.Context) {
 	m.tplSet = map[string]TemplateInfo{}
-	metas, listErr := m.tpls.Metas(ctx, "")
+	metas, listErr := m.tpls.Metas(ctx, store.TemplatePrefix)
 	if listErr != nil {
 		log.WithFunc("pool.loadTemplates").Warnf(ctx, "list templates skipped: %v", listErr)
 	}
