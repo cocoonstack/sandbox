@@ -11,7 +11,7 @@ import (
 )
 
 func TestDiskUnderReserveRefusesClaimsAndWakesUntilItRecovers(t *testing.T) {
-	m := diskReserveManager(t, "1000P")
+	m := diskReserveManager(t)
 	sb := mustClaim(t, m, testKey)
 	hibernateClaim(t, m, sb)
 
@@ -36,7 +36,7 @@ func TestDiskUnderReserveRefusesClaimsAndWakesUntilItRecovers(t *testing.T) {
 }
 
 func TestDiskUnderReserveAdvertisesNoWarm(t *testing.T) {
-	m := diskReserveManager(t, "1000P")
+	m := diskReserveManager(t)
 	p := m.pools[testKey]
 	p.warm = append(p.warm, &types.Sandbox{VMName: "sbx-warm", Key: testKey, VsockSocket: "/vsock/warm"})
 	if n := m.WarmCounts()[p.hash]; n != 1 {
@@ -49,7 +49,7 @@ func TestDiskUnderReserveAdvertisesNoWarm(t *testing.T) {
 }
 
 func TestDiskUnderReserveHoldsHibernatesAndCaptures(t *testing.T) {
-	m := diskReserveManager(t, "1000P")
+	m := diskReserveManager(t)
 	sb := mustClaim(t, m, testKey)
 	cred := Cred{Token: sb.Token}
 	m.checkDisk(t.Context())
@@ -74,7 +74,7 @@ func TestDiskUnderReserveHoldsHibernatesAndCaptures(t *testing.T) {
 }
 
 func TestAFailedStatfsKeepsTheDiskLowState(t *testing.T) {
-	m := diskReserveManager(t, "1000P")
+	m := diskReserveManager(t)
 	m.checkDisk(t.Context())
 	setDiskReserve(t, m, &config.DiskReserve{Free: "1K", Dirs: []string{filepath.Join(m.dataDir, "missing")}})
 	if _, err := claimAny(t.Context(), m, testKey, ClaimOptions{TTL: time.Hour}); !errors.Is(err, ErrQuota) {
@@ -89,8 +89,8 @@ func setDiskReserve(t *testing.T, m *Manager, reserve *config.DiskReserve) {
 	m.checkDisk(t.Context())
 }
 
-func diskReserveManager(t *testing.T, free string) *Manager {
+func diskReserveManager(t *testing.T) *Manager {
 	t.Helper()
-	cfg := &config.Config{DataDir: t.TempDir(), DiskReserve: &config.DiskReserve{Free: free}, Pools: []config.PoolSpec{{PoolKey: testKey}}}
+	cfg := &config.Config{DataDir: t.TempDir(), DiskReserve: &config.DiskReserve{Free: "1000P"}, Pools: []config.PoolSpec{{PoolKey: testKey}}}
 	return mustManager(t, cfg, newFakeEngine())
 }

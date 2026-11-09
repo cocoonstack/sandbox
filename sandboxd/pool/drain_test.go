@@ -336,6 +336,9 @@ func TestAQueuedFailedClaimStillRestarts(t *testing.T) {
 		if err := a.Wake(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
 			t.Errorf("wake of a queued failed claim: %v", err)
 		}
+		if got, _ := a.Sandbox(sb.ID); got.Restarts != 1 || got.Failed != "" {
+			t.Errorf("summary %+v, want the wake to cold-boot the failed claim", got)
+		}
 
 		a.Undrain(t.Context())
 		release()
@@ -343,7 +346,7 @@ func TestAQueuedFailedClaimStillRestarts(t *testing.T) {
 	})
 }
 
-func TestEvacuateRequeuesAClaimAWakeUnarchived(t *testing.T) {
+func TestHandOffOfAClaimAWakeUnarchivedAnswersBusy(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		c := newFailoverCluster(t)
 		a := c.node(t, "a", t.TempDir(), keepAnHour)

@@ -85,41 +85,53 @@ func TestReaderObeysTheNodeLeaseFence(t *testing.T) {
 }
 
 func TestReaderConnectionEndsWhenTheFenceTrips(t *testing.T) {
-	eng := newFakeEngine()
-	eng.readerPeers = make(chan net.Conn, 2)
-	m := newReaderManager(t, eng)
-	m.liftFence()
-	replicated, plain := mustClaim(t, m, testKey), mustClaim(t, m, testKey)
-	replicated.Replicated = true
-	hibernateClaim(t, m, replicated)
-	hibernateClaim(t, m, plain)
-	seedReaderVMs(m, testKey, "sbx-reader-1", "sbx-reader-2")
+	synctest.Test(t, func(t *testing.T) {
+		eng := newFakeEngine()
+		eng.readerPeers = make(chan net.Conn, 2)
+		m := newReaderManager(t, eng)
+		m.liftFence()
+		replicated, plain := mustClaim(t, m, testKey), mustClaim(t, m, testKey)
+		replicated.Replicated = true
+		hibernateClaim(t, m, replicated)
+		hibernateClaim(t, m, plain)
+		seedReaderVMs(m, testKey, "sbx-reader-1", "sbx-reader-2")
 
-	peers := map[string]net.Conn{}
-	for name, sb := range map[string]*types.Sandbox{"replicated": replicated, "plain": plain} {
-		conn, _, err := m.DialReader(t.Context(), sb.ID, sb.Token)
-		if err != nil {
-			t.Fatalf("DialReader of the %s claim: %v", name, err)
+		reads := map[string]chan error{}
+		for name, sb := range map[string]*types.Sandbox{"replicated": replicated, "plain": plain} {
+			conn, _, err := m.DialReader(t.Context(), sb.ID, sb.Token)
+			if err != nil {
+				t.Fatalf("DialReader of the %s claim: %v", name, err)
+			}
+			defer func() { _ = conn.Close() }()
+			peer, read := <-eng.readerPeers, make(chan error, 1)
+			go func() {
+				_, readErr := peer.Read(make([]byte, 1))
+				read <- readErr
+			}()
+			reads[name] = read
 		}
-		defer func() { _ = conn.Close() }()
-		peers[name] = <-eng.readerPeers
-	}
-	ended := func(peer net.Conn, wait time.Duration) bool {
-		_ = peer.SetReadDeadline(time.Now().Add(wait))
-		_, err := peer.Read(make([]byte, 1))
-		return !errors.Is(err, os.ErrDeadlineExceeded)
-	}
-	if ended(peers["replicated"], 100*time.Millisecond) || ended(peers["plain"], 100*time.Millisecond) {
-		t.Fatal("a reader connection ended before the fence tripped")
-	}
+		ended := func(read chan error) bool {
+			select {
+			case <-read:
+				return true
+			default:
+				return false
+			}
+		}
+		synctest.Wait()
+		if ended(reads["replicated"]) || ended(reads["plain"]) {
+			t.Fatal("a reader connection ended before the fence tripped")
+		}
 
-	m.trip(t.Context())
-	if !ended(peers["replicated"], 3*time.Second) {
-		t.Error("the replicated claim's reader connection survived the fence")
-	}
-	if ended(peers["plain"], 100*time.Millisecond) {
-		t.Error("the fence ended an unreplicated claim's reader connection")
-	}
+		m.trip(t.Context())
+		synctest.Wait()
+		if !ended(reads["replicated"]) {
+			t.Error("the replicated claim's reader connection survived the fence")
+		}
+		if ended(reads["plain"]) {
+			t.Error("the fence ended an unreplicated claim's reader connection")
+		}
+	})
 }
 
 func TestReaderTakesItsVMFromTheClaimsOwnPool(t *testing.T) {
@@ -158,8 +170,8 @@ func TestReaderServesOnlyPoolsThatAskForIt(t *testing.T) {
 		t.Fatalf("WakeAgentSocketOrRead = %q, %v, want a wake", sock, err)
 	}
 	defer done()
-	if len(eng.restores) != 1 || len(eng.attachedCopies) != 0 || len(m.pools[otherKey].warm) != 1 {
-		t.Errorf("restores=%v attached=%v warm=%d, want a wake with no reader taken", eng.restores, eng.attachedCopies, len(m.pools[otherKey].warm))
+	if len(eng.restores) != 1 || sb.HibernateSnap != "" || len(eng.attachedCopies) != 0 || len(m.pools[otherKey].warm) != 1 {
+		t.Errorf("restores=%v snapshot=%q attached=%v warm=%d, want a wake with no reader taken", eng.restores, sb.HibernateSnap, eng.attachedCopies, len(m.pools[otherKey].warm))
 	}
 }
 
@@ -465,19 +477,16 @@ func TestReaderRefusesWhatAWakeRefuses(t *testing.T) {
 	spec := archivePool(0)
 	spec.Reader = true
 	cfg := &config.Config{DataDir: t.TempDir(), APIToken: "root", Pools: []config.PoolSpec{spec}}
-	m, err := NewManager(t.Context(), cfg, eng, testSecrets(t), testBackends(t, cfg))
-	if err != nil {
-		t.Fatalf("setup manager: %v", err)
-	}
+	m := mustManager(t, cfg, eng)
 	putTenants(t, m, tenants.TenantSpec{Name: "acme", Token: "acme-tok"})
 	sb := claimTenant(t, m, "acme")
 	mustArchive(t, m, sb)
 	seedReaderVMs(m, testKey, "sbx-reader-1")
-	if err = m.DeleteTenant(t.Context(), "acme"); err != nil {
+	if err := m.DeleteTenant(t.Context(), "acme"); err != nil {
 		t.Fatalf("DeleteTenant: %v", err)
 	}
 
-	if _, _, err = m.DialReader(t.Context(), sb.ID, sb.Token); !errors.Is(err, ErrNoReader) || !errors.Is(err, ErrTenantRemoved) {
+	if _, _, err := m.DialReader(t.Context(), sb.ID, sb.Token); !errors.Is(err, ErrNoReader) || !errors.Is(err, ErrTenantRemoved) {
 		t.Errorf("DialReader of a removed tenant's archive = %v, want ErrNoReader wrapping ErrTenantRemoved", err)
 	}
 	if len(eng.startedReaders) != 0 || len(m.pools[testKey].warm) != 1 {
@@ -757,25 +766,6 @@ func TestWakeClearsReaderSafe(t *testing.T) {
 	}
 	if got := journaled(t, m); got[sb.ID] == nil || got[sb.ID].ReaderSafe {
 		t.Errorf("persisted claim after a wake = %+v, want reader_safe cleared", got[sb.ID])
-	}
-}
-
-func TestReaderOffRefusesADialAndWakesTheClaim(t *testing.T) {
-	eng := newFakeEngine()
-	m := newTestManager(t, eng)
-	sb := mustClaim(t, m, testKey)
-	hibernateClaim(t, m, sb)
-
-	if _, _, err := m.DialReader(t.Context(), sb.ID, sb.Token); !errors.Is(err, ErrNoReader) {
-		t.Errorf("DialReader with the reader off = %v, want ErrNoReader", err)
-	}
-	sock, _, done, err := m.WakeAgentSocketOrRead(t.Context(), sb.ID, Cred{Token: sb.Token})
-	if err != nil || sock == "" {
-		t.Fatalf("WakeAgentSocketOrRead with the reader off = %q, %v, want a wake", sock, err)
-	}
-	defer done()
-	if len(eng.restores) != 1 || sb.HibernateSnap != "" {
-		t.Errorf("restores=%v snapshot=%q, want the claim woken", eng.restores, sb.HibernateSnap)
 	}
 }
 

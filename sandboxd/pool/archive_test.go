@@ -696,7 +696,14 @@ func TestIdleOnceSkipsArchived(t *testing.T) {
 		hibBefore := eng.hibernateCount()
 		backdate(m, sb, time.Hour)
 
-		sweepIdle(t, m)
+		sb.Transition.Lock()
+		m.idleOnce(t.Context())
+		picked := m.sweeps.idle.Load()
+		sb.Transition.Unlock()
+		waitFor(t, func() bool { return !m.sweeps.idle.Load() })
+		if picked {
+			t.Error("idle sweep picked an archived claim")
+		}
 		if got := eng.hibernateCount(); got != hibBefore {
 			t.Errorf("idle sweep hibernated an archived claim: %d->%d", hibBefore, got)
 		}

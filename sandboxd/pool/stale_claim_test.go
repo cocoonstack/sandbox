@@ -3,6 +3,7 @@ package pool
 import (
 	"errors"
 	"fmt"
+	"sync"
 	"testing"
 
 	"github.com/cocoonstack/sandbox/sandboxd/types"
@@ -15,6 +16,8 @@ func TestStaleClaimOperationsPreserveTheCurrentClaim(t *testing.T) {
 	rollback := func(op func(*testing.T, *Manager, *types.Sandbox) error) func(*testing.T, *Manager, *types.Sandbox, func()) {
 		return func(t *testing.T, m *Manager, sb *types.Sandbox, stale func()) {
 			m.store.writeMu.Lock()
+			unlock := sync.OnceFunc(m.store.writeMu.Unlock)
+			t.Cleanup(unlock)
 			done := make(chan error, 1)
 			go func() { done <- op(t, m, sb) }()
 			waitFor(t, func() bool {
@@ -24,7 +27,7 @@ func TestStaleClaimOperationsPreserveTheCurrentClaim(t *testing.T) {
 			})
 			stale()
 			restore := failClaimWrites(t, m.store)
-			m.store.writeMu.Unlock()
+			unlock()
 			if err := <-done; err == nil {
 				t.Fatal("intent write succeeded despite filesystem failure")
 			}

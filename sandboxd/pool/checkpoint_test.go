@@ -133,7 +133,7 @@ func TestCheckpointBranchTakesItsOwnMetadata(t *testing.T) {
 	}
 }
 
-func TestCheckpointRejectsABadTokenNameOrUnknownID(t *testing.T) {
+func TestCheckpointRejectsABadTokenOrName(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
 	src := mustClaim(t, m, testKey)
@@ -143,14 +143,6 @@ func TestCheckpointRejectsABadTokenNameOrUnknownID(t *testing.T) {
 	}
 	if _, err := m.Checkpoint(t.Context(), src.ID, Cred{Token: src.Token}, "bad name", ""); !errors.Is(err, ErrBadName) {
 		t.Errorf("bad name: %v, want ErrBadName", err)
-	}
-	for _, id := range []string{"../../etc", "ck_zz", "", "ck_0011223344556677x"} {
-		if _, err := m.ClaimCheckpoint(t.Context(), id, ClaimOptions{TTL: time.Hour}); !errors.Is(err, ErrUnknownCheckpoint) {
-			t.Errorf("claim %q: %v, want ErrUnknownCheckpoint", id, err)
-		}
-		if err := m.DeleteCheckpoint(t.Context(), id, "", DeleteFleet); !errors.Is(err, ErrUnknownCheckpoint) {
-			t.Errorf("delete %q: %v, want ErrUnknownCheckpoint", id, err)
-		}
 	}
 }
 
@@ -200,30 +192,32 @@ func TestRetentionSweepsExpiredCheckpoints(t *testing.T) {
 }
 
 func TestRunRefillsWhileTheRetentionSweepBlocks(t *testing.T) {
-	eng := newFakeEngine()
-	m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1})
-	m.pools[testKey].goldenDir = "/goldens/x"
-	editView(m, func(v *configView) { v.ckptTTL = time.Hour })
-	stall := &stallingMetasStore{Store: m.ckpts, entered: make(chan struct{}, 1), release: make(chan struct{})}
-	m.ckpts = stall
+	synctest.Test(t, func(t *testing.T) {
+		eng := newFakeEngine()
+		m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1})
+		m.pools[testKey].goldenDir = "/goldens/x"
+		editView(m, func(v *configView) { v.ckptTTL = time.Hour })
+		stall := &stallingMetasStore{Store: m.ckpts, entered: make(chan struct{}, 1), release: make(chan struct{})}
+		m.ckpts = stall
 
-	ctx, cancel := context.WithCancel(t.Context())
-	done := make(chan struct{})
-	go func() {
-		m.Run(ctx)
-		close(done)
-	}()
-	defer func() {
-		close(stall.release)
-		cancel()
-		<-done
-	}()
-	<-stall.entered
+		ctx, cancel := context.WithCancel(t.Context())
+		done := make(chan struct{})
+		go func() {
+			m.Run(ctx)
+			close(done)
+		}()
+		defer func() {
+			close(stall.release)
+			cancel()
+			<-done
+		}()
+		<-stall.entered
 
-	waitFor(t, func() bool { return warmLen(m, testKey) > 0 })
-	if got := eng.cloneCount(); got != 1 {
-		t.Errorf("clones=%d, want one warm VM spawned while the store listing is stuck", got)
-	}
+		waitFor(t, func() bool { return warmLen(m, testKey) > 0 })
+		if got := eng.cloneCount(); got != 1 {
+			t.Errorf("clones=%d, want one warm VM spawned while the store listing is stuck", got)
+		}
+	})
 }
 
 func TestRunRefillsWhileTheGenerationSweepBlocks(t *testing.T) {
@@ -326,7 +320,7 @@ func TestRejectedCheckpointOpsLeakNoRecLock(t *testing.T) {
 	m := newTestManager(t, newFakeEngine())
 	base := lockCount(m)
 
-	for _, id := range []string{"../../etc", "ck_zz", "", "ck_00112233445566ff", "ck_deadbeefdeadbeef"} {
+	for _, id := range []string{"../../etc", "ck_zz", "", "ck_0011223344556677x", "ck_00112233445566ff", "ck_deadbeefdeadbeef"} {
 		if _, err := m.ClaimCheckpoint(t.Context(), id, ClaimOptions{TTL: time.Hour}); !errors.Is(err, ErrUnknownCheckpoint) {
 			t.Errorf("claim %q: %v, want ErrUnknownCheckpoint", id, err)
 		}

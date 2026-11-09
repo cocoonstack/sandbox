@@ -560,7 +560,7 @@ func TestEgressUsageEventNamesTheInjectedCredentials(t *testing.T) {
 	}
 }
 
-func TestEgressAuditNamesTenantAndEndsARelayedFrameCannot(t *testing.T) {
+func TestEgressAuditNamesTheTenantAndAddressesARelayedFrameCannotSet(t *testing.T) {
 	dir := t.TempDir()
 	cfg := &config.Config{DataDir: dir, AuditLog: true, Pools: []config.PoolSpec{}}
 	m := mustManager(t, cfg, newFakeEngine())

@@ -140,6 +140,7 @@ func TestMemoryOverLimitParksRefill(t *testing.T) {
 	if n := refilling(); n == 0 {
 		t.Error("no refill under the limit")
 	}
+	waitPoolSettled(t, m, testKey)
 }
 
 func TestAnUnreadableSignalDoesNotHoldTheNodeLow(t *testing.T) {
@@ -215,9 +216,9 @@ func TestAnArchivedWakeOnASqueezedOwnerMovesToAPeerWithRoom(t *testing.T) {
 func TestAnArchivedWakeNoPeerAdoptsRunsOnTheSqueezedOwner(t *testing.T) {
 	c := newFailoverCluster(t)
 	a, b := c.pair(t)
-	sb, capped := mustClaim(t, a, testKey), mustClaim(t, a, testKey)
+	sb, second := mustClaim(t, a, testKey), mustClaim(t, a, testKey)
 	mustArchive(t, a, sb)
-	mustArchive(t, a, capped)
+	mustArchive(t, a, second)
 	a.memoryLow.Store(true)
 	b.memoryLow.Store(true)
 	if err := wakeClaim(t, a, sb); err != nil {
@@ -230,7 +231,7 @@ func TestAnArchivedWakeNoPeerAdoptsRunsOnTheSqueezedOwner(t *testing.T) {
 		t.Errorf("owner counters memory %d fallbacks %d hand-offs %d, want 1 1 0", got.WakesRefusedMemory, got.WakeMemoryFallbacks, got.WakeHandoffs)
 	}
 	editView(a, func(v *configView) { v.maxRunning = 1 })
-	if err := wakeClaim(t, a, capped); !errors.Is(err, ErrQuota) || !strings.Contains(err.Error(), "running claims") {
+	if err := wakeClaim(t, a, second); !errors.Is(err, ErrQuota) || !strings.Contains(err.Error(), "running claims") {
 		t.Errorf("fallback wake at max_running: %v, want the running cap to refuse it", err)
 	}
 }

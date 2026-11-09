@@ -874,47 +874,6 @@ func TestFailoverRestartClearsTheMarkerOfAnAdoptedClaim(t *testing.T) {
 	}
 }
 
-func TestFailoverARepeatedAdoptionOnOneNodeKeepsOneClaim(t *testing.T) {
-	c := newFailoverCluster(t)
-	a, b := c.pair(t)
-	for _, m := range []*Manager{a, b} {
-		if err := m.PutTenant(t.Context(), tenants.TenantSpec{Name: "acme", Token: "tok-acme"}); err != nil {
-			t.Fatalf("put tenant: %v", err)
-		}
-	}
-	sb, err := claimAny(t.Context(), a, testKey, ClaimOptions{Tenant: "acme"})
-	if err != nil {
-		t.Fatalf("claim: %v", err)
-	}
-	mustArchive(t, a, sb)
-	c.expire("a")
-
-	var wg sync.WaitGroup
-	for range 2 {
-		wg.Go(func() {
-			if _, err := b.AdoptArchived(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
-				t.Errorf("racing adopt: %v", err)
-			}
-		})
-	}
-	wg.Wait()
-	mustAdopt(t, b, sb, "repeated adopt")
-	if n := b.TenantClaims()["acme"]; n != 1 {
-		t.Errorf("tenant acme counts %d claims on b, want 1", n)
-	}
-	held, _ := b.byID(sb.ID)
-	rec, _, _ := c.reg.Get(t.Context(), sb.ID)
-	b.mu.Lock()
-	epoch := held.ArchiveEpoch
-	b.mu.Unlock()
-	if rec.Owner != "b" || epoch != rec.Epoch {
-		t.Errorf("row %s@%d, local epoch %d, want the claim at the row's epoch", rec.Owner, rec.Epoch, epoch)
-	}
-	if _, _, _, err := b.WakeAgentSocket(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
-		t.Errorf("wake after repeated adoptions: %v", err)
-	}
-}
-
 func TestFailoverRestartInsideAnAdoptersWakeDropsTheClaim(t *testing.T) {
 	c := newFailoverCluster(t)
 	a, b := c.pair(t)
@@ -1471,8 +1430,16 @@ func TestFailoverConcurrentAdoptionsOnOneNodeAllAnswerForIt(t *testing.T) {
 	if n := b.TenantClaims()["acme"]; n != 1 {
 		t.Errorf("tenant acme counts %d claims on b, want 1", n)
 	}
-	if rec, _, _ := c.reg.Get(t.Context(), sb.ID); rec.Owner != "b" {
-		t.Errorf("row owner %s, want b", rec.Owner)
+	held, _ := b.byID(sb.ID)
+	rec, _, _ := c.reg.Get(t.Context(), sb.ID)
+	b.mu.Lock()
+	epoch := held.ArchiveEpoch
+	b.mu.Unlock()
+	if rec.Owner != "b" || epoch != rec.Epoch {
+		t.Errorf("row %s@%d, local epoch %d, want the claim on b at the row's epoch", rec.Owner, rec.Epoch, epoch)
+	}
+	if _, _, _, err := b.WakeAgentSocket(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
+		t.Errorf("wake after concurrent adoptions: %v", err)
 	}
 }
 
@@ -1489,10 +1456,11 @@ func TestFailoverACoalescedAdoptionStillNeedsTheToken(t *testing.T) {
 				ok, _ := b.AdoptArchived(t.Context(), sb.ID, Cred{Token: "wrong"})
 				wrong <- ok
 			}()
+			synctest.Wait()
 			select {
 			case ok := <-wrong:
 				wrong <- ok
-			case <-time.After(200 * time.Millisecond):
+			default:
 			}
 		}}
 		mustAdopt(t, b, sb, "adopt")

@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -224,6 +225,8 @@ func TestArmFailureEndsTheClaimEventsBeforeTheTeardown(t *testing.T) {
 	eng := newFakeEngine()
 	m := egressManager(t, eng, config.PoolSpec{PoolKey: egKey, Egress: egPolicy})
 	stall := make(chan struct{})
+	unstall := sync.OnceFunc(func() { close(stall) })
+	t.Cleanup(unstall)
 	eng.mu.Lock()
 	eng.removeStall = stall
 	eng.mu.Unlock()
@@ -234,7 +237,7 @@ func TestArmFailureEndsTheClaimEventsBeforeTheTeardown(t *testing.T) {
 		raw, _ := os.ReadFile(filepath.Join(m.dataDir, usage.JournalFile))
 		return strings.Count(string(raw), `"ev":"release"`) == len(sbs)
 	})
-	close(stall)
+	unstall()
 	if err := <-done; err == nil {
 		t.Fatal("finalizeBatch must fail when a batch member cannot arm")
 	}

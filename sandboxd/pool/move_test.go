@@ -139,15 +139,15 @@ func TestMoveRefusedByTheTargetLeavesTheClaimRunningOnTheSource(t *testing.T) {
 func TestMoveFailingAtAnyStepKeepsOneOwner(t *testing.T) {
 	for name, tt := range map[string]struct {
 		budget time.Duration
-		fail   func(mc *moveCluster)
+		fail   func(t *testing.T, mc *moveCluster)
 		want   error
 	}{
-		"admission":       {fail: func(mc *moveCluster) { mc.p.admitErr = ErrMoveTarget }, want: ErrMoveTarget},
-		"move record":     {fail: func(mc *moveCluster) { mc.moveReg.SetDown(true) }, want: ErrMoveStoreDown},
-		"baseline":        {fail: func(mc *moveCluster) { fakeOf(mc.s).captureErr = errors.New("no reflink") }, want: ErrNotMovable},
-		"round transfer":  {fail: func(mc *moveCluster) { mc.p.roundHook = failRound(2) }, want: ErrMoveTarget},
+		"admission":       {fail: func(_ *testing.T, mc *moveCluster) { mc.p.admitErr = ErrMoveTarget }, want: ErrMoveTarget},
+		"move record":     {fail: func(_ *testing.T, mc *moveCluster) { mc.moveReg.SetDown(true) }, want: ErrMoveStoreDown},
+		"baseline":        {fail: func(_ *testing.T, mc *moveCluster) { fakeOf(mc.s).captureErr = errors.New("no reflink") }, want: ErrNotMovable},
+		"round transfer":  {fail: func(_ *testing.T, mc *moveCluster) { mc.p.roundHook = failRound(2) }, want: ErrMoveTarget},
 		"downtime budget": {budget: time.Millisecond, want: ErrMoveDowntime},
-		"delta capture": {fail: func(mc *moveCluster) {
+		"delta capture": {fail: func(_ *testing.T, mc *moveCluster) {
 			mc.p.roundHook = func(round int) error {
 				if round == 1 {
 					fakeOf(mc.s).captureErr = errors.New("vmm gone")
@@ -155,11 +155,13 @@ func TestMoveFailingAtAnyStepKeepsOneOwner(t *testing.T) {
 				return nil
 			}
 		}, want: ErrNotMovable},
-		"final capture":  {fail: func(mc *moveCluster) { fakeOf(mc.s).finalCaptureErr = errors.New("pause failed") }, want: ErrNotMovable},
-		"final transfer": {fail: func(mc *moveCluster) { mc.p.roundHook = failRound(3) }, want: ErrMoveTarget},
-		"receive":        {fail: func(mc *moveCluster) { fakeOf(mc.t).receiveErr = errors.New("restore failed") }},
-		"target memory":  {fail: func(mc *moveCluster) { mc.p.commitHook = func(int) error { mc.t.memoryLow.Store(true); return nil } }, want: ErrQuota},
-		"source aborted first": {fail: func(mc *moveCluster) {
+		"final capture":  {fail: func(_ *testing.T, mc *moveCluster) { fakeOf(mc.s).finalCaptureErr = errors.New("pause failed") }, want: ErrNotMovable},
+		"final transfer": {fail: func(_ *testing.T, mc *moveCluster) { mc.p.roundHook = failRound(3) }, want: ErrMoveTarget},
+		"receive":        {fail: func(_ *testing.T, mc *moveCluster) { fakeOf(mc.t).receiveErr = errors.New("restore failed") }},
+		"target memory": {fail: func(_ *testing.T, mc *moveCluster) {
+			mc.p.commitHook = func(int) error { mc.t.memoryLow.Store(true); return nil }
+		}, want: ErrQuota},
+		"source aborted first": {fail: func(t *testing.T, mc *moveCluster) {
 			mc.p.commitHook = func(int) error { abortRecord(t, mc); return nil }
 		}, want: ErrNotMovable},
 	} {
@@ -167,7 +169,7 @@ func TestMoveFailingAtAnyStepKeepsOneOwner(t *testing.T) {
 			mc := newMoveCluster(t)
 			sb := claimTenant(t, mc.s, "acme")
 			if tt.fail != nil {
-				tt.fail(mc)
+				tt.fail(t, mc)
 			}
 			_, err := mc.s.Move(t.Context(), sb.ID, "b", cmp.Or(tt.budget, time.Minute))
 			if err == nil || tt.want != nil && !errors.Is(err, tt.want) {
@@ -211,6 +213,8 @@ func TestMoveWhoseCommitAnswerIsLostResolvesThroughTheRecord(t *testing.T) {
 func TestMoveKeepsThePausedGuestUntilItsAbortLands(t *testing.T) {
 	mc := newMoveCluster(t)
 	sb := claimTenant(t, mc.s, "acme")
+	reads := &countingMoves{Registry: mc.s.moves}
+	mc.s.moves = reads
 	mc.p.commitHook = func(int) error {
 		mc.moveReg.SetDown(true)
 		return ErrMoveTarget
@@ -218,13 +222,16 @@ func TestMoveKeepsThePausedGuestUntilItsAbortLands(t *testing.T) {
 	if _, err := mc.s.Move(t.Context(), sb.ID, "b", time.Minute); !errors.Is(err, ErrMoveStoreDown) {
 		t.Fatalf("move with the registry down after the final round: %v, want ErrMoveStoreDown", err)
 	}
+	failed := reads.failedGets.Load()
 	if !pausedOn(mc.s, sb.VMName) {
 		t.Fatal("the source resumed its guest before the abort landed")
 	}
 	if _, _, _, err := mc.s.WakeAgentSocket(t.Context(), sb.ID, Cred{Token: sb.Token}); !errors.Is(err, ErrEvacuating) {
 		t.Errorf("dial during the unresolved final round: %v, want ErrEvacuating", err)
 	}
-	time.Sleep(2 * moveRetryInterval)
+	waitFor(t, func() bool { return reads.failedGets.Load() > failed })
+	failed = reads.failedGets.Load()
+	waitFor(t, func() bool { return reads.failedGets.Load() > failed })
 	if !pausedOn(mc.s, sb.VMName) {
 		t.Fatal("the source resumed its guest while the registry was down")
 	}
@@ -617,7 +624,7 @@ func TestMoveRestartAfterTheConsumeKeepsTheClaim(t *testing.T) {
 			reg := movestest.NewMem()
 			c.moves = reg
 			ctx := t.Context()
-			epoch, _ := reg.Begin(ctx, "sb_moved", "a", "b")
+			epoch := seedMoveRecord(t, reg, "sb_moved", "a", "b", moves.Pending)
 			rowEpoch, err := c.reg.Put(ctx, archives.Record{ID: "sb_moved", TokenSHA256: tenants.TokenSHA256("tok"), Owner: "a", Checkpoint: "ck_00000000000000aa", Claim: []byte("{}")})
 			if err != nil {
 				t.Fatalf("seed row: %v", err)
@@ -1699,6 +1706,19 @@ func (r *lossyMoves) Get(ctx context.Context, id string) (moves.Record, bool, er
 }
 
 func (r *lossyMoves) setDown(down bool) { r.down.Store(down) }
+
+type countingMoves struct {
+	moves.Registry
+	failedGets atomic.Int32
+}
+
+func (r *countingMoves) Get(ctx context.Context, id string) (moves.Record, bool, error) {
+	rec, ok, err := r.Registry.Get(ctx, id)
+	if err != nil {
+		r.failedGets.Add(1)
+	}
+	return rec, ok, err
+}
 
 func seedMoveRecord(t *testing.T, reg moves.Registry, id, from, to string, state moves.State) int64 {
 	t.Helper()

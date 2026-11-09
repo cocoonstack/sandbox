@@ -5,7 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strings"
 	"testing"
 	"testing/synctest"
 
@@ -91,13 +90,6 @@ func TestAdoptGoldenRequiresMatchingWarmup(t *testing.T) {
 	m.adoptGolden(p, "")
 	if p.goldenDir != final {
 		t.Errorf("goldenDir = %q, want %q", p.goldenDir, final)
-	}
-}
-
-func TestPoolSpecRejectsEmptyWarmupArgument(t *testing.T) {
-	spec := config.PoolSpec{PoolKey: testKey, Warm: 1, Warmup: []string{"node", ""}}
-	if err := spec.ValidateLimits(); err == nil || !strings.Contains(err.Error(), "warmup") {
-		t.Errorf("ValidateLimits error = %v, want an empty-argument rejection", err)
 	}
 }
 

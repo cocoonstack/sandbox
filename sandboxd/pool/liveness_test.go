@@ -131,7 +131,7 @@ func TestLivenessRestartFailureRetriesThenFails(t *testing.T) {
 	killVMM(eng, sb.VMName)
 	eng.startErr = errors.New("boot failed")
 
-	assertRestartFailsUntilBudget(t, m, eng, sb)
+	assertRestartFailsUntilBudget(t, m, eng, sb, false)
 	if got, want := usageEventsOf(t, m, sb.ID), "claim,vmm_exit,vmm_failed"; got != want {
 		t.Errorf("events %s, want one exit across the attempts: %s", got, want)
 	}
@@ -282,7 +282,7 @@ func TestRestartThatCannotDeliverTheEnvFailsAndSpendsTheBudget(t *testing.T) {
 	eng.guestEnvErr = errors.New("guest write refused")
 	eng.mu.Unlock()
 
-	assertRestartFailsUntilBudget(t, m, eng, sb)
+	assertRestartFailsUntilBudget(t, m, eng, sb, true)
 }
 
 func TestRestartThatCannotArmTheEgressDoorFailsAndSpendsTheBudget(t *testing.T) {
@@ -299,7 +299,7 @@ func TestRestartThatCannotArmTheEgressDoorFailsAndSpendsTheBudget(t *testing.T) 
 	}
 	t.Cleanup(func() { _ = os.Chmod(eng.sockRoot, 0o700) })
 
-	assertRestartFailsUntilBudget(t, m, eng, sb)
+	assertRestartFailsUntilBudget(t, m, eng, sb, true)
 }
 
 func TestARestartedGuestIsBilledFromItsBoot(t *testing.T) {
@@ -577,14 +577,15 @@ func TestExpiredFailedClaimIsDestroyedNotArchived(t *testing.T) {
 
 func TestReconcileKeepsRunningClaimsTheHostLost(t *testing.T) {
 	for _, tt := range []struct {
+		name         string
 		policy       types.VMMRestart
 		wantFailed   string
 		wantRestarts int
 	}{
-		{"", "", 1},
-		{types.VMMRestartNone, "vmm exited", 0},
+		{"default", "", "", 1},
+		{"none", types.VMMRestartNone, "vmm exited", 0},
 	} {
-		t.Run(string(tt.policy), func(t *testing.T) {
+		t.Run(tt.name, func(t *testing.T) {
 			eng := newFakeEngine()
 			eng.vms["sbx-lost-1"] = "/vsock/lost"
 			eng.stopped["sbx-lost-1"] = true
@@ -634,14 +635,12 @@ func TestAVMEventFindsAWokenArchivedClaimByItsNewVM(t *testing.T) {
 	if got := m.watchedClaims(newVM); len(got) != 1 || got[0].sb != sb {
 		t.Errorf("an event for the woken VM %s found %v, want the claim", newVM, got)
 	}
-	if newVM != oldVM {
-		if got := m.watchedClaims(oldVM); len(got) != 0 {
-			t.Errorf("an event for the old VM %s still finds %v", oldVM, got)
-		}
+	if got := m.watchedClaims(oldVM); len(got) != 0 {
+		t.Errorf("an event for the old VM %s still finds %v", oldVM, got)
 	}
 }
 
-func assertRestartFailsUntilBudget(t *testing.T, m *Manager, eng *fakeEngine, sb *types.Sandbox) {
+func assertRestartFailsUntilBudget(t *testing.T, m *Manager, eng *fakeEngine, sb *types.Sandbox, booted bool) {
 	t.Helper()
 	for attempt := range vmmRestartBudget {
 		m.recoverVMM(t.Context(), sb)
@@ -662,6 +661,9 @@ func assertRestartFailsUntilBudget(t *testing.T, m *Manager, eng *fakeEngine, sb
 	events := usageEventsOf(t, m, sb.ID)
 	if !strings.HasSuffix(events, "vmm_exit,vmm_failed") || strings.Count(events, "vmm_restart") != strings.Count(events, "vmm_exit")-1 {
 		t.Errorf("events %s, want each booted attempt billed up to its stop, then the failure", events)
+	}
+	if booted && strings.Count(events, "vmm_restart") != vmmRestartBudget {
+		t.Errorf("events %s, want each of the %d booted attempts billed", events, vmmRestartBudget)
 	}
 }
 

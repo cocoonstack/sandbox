@@ -104,9 +104,7 @@ func TestRemovedTenantRunsToItsDeadlineButCannotExtend(t *testing.T) {
 	if _, err := m.Renew(t.Context(), sb.ID, Cred{Operator: true}, time.Hour, ""); err != nil {
 		t.Errorf("renew by the operator: %v", err)
 	}
-	m.mu.Lock()
-	sb.Deadline = time.Now().Add(-time.Second)
-	m.mu.Unlock()
+	expire(m, sb)
 	m.reapOnce(t.Context())
 	m.mu.Lock()
 	_, live := m.claimed[sb.ID]

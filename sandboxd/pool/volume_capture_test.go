@@ -11,24 +11,6 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
-func TestVolumeClaimRunningWakeUnchanged(t *testing.T) {
-	eng := newFakeEngine()
-	m := newTestManager(t, eng)
-	sb := mustClaim(t, m, testKey)
-	sb.Volumes = []types.Volume{{Name: "dataset", Mount: "/datasets"}}
-
-	sock, _, _, err := m.WakeAgentSocket(t.Context(), sb.ID, Cred{Token: sb.Token})
-	if err != nil {
-		t.Fatalf("WakeAgentSocket: %v", err)
-	}
-	if sock != sb.VsockSocket {
-		t.Errorf("socket %q, want %q", sock, sb.VsockSocket)
-	}
-	if len(eng.restores) != 0 {
-		t.Errorf("running wake restored %v, want no restore", eng.restores)
-	}
-}
-
 func TestReconcileRetainsVolumeCaptureGateWithoutCatalog(t *testing.T) {
 	eng := newFakeEngine()
 	dataDir := t.TempDir()
@@ -71,7 +53,7 @@ func TestReconcileRetainsVolumeCaptureGateWithoutCatalog(t *testing.T) {
 			}
 		})
 	}
-	if got, ok := m2.claimed[sb.ID]; !ok || !slices.Equal(got.Volumes, []types.Volume{{Name: "dataset", Mount: "/datasets"}}) {
+	if got, ok := m2.byID(sb.ID); !ok || !slices.Equal(got.Volumes, []types.Volume{{Name: "dataset", Mount: "/datasets"}}) {
 		t.Errorf("reconciled claim=%+v, want persisted volume", got)
 	}
 	if len(eng.hibernates) != 0 || len(eng.snapSaves) != 0 || len(eng.exports) != 0 {
@@ -87,7 +69,14 @@ func TestIdleOnceSkipsVolumeClaim(t *testing.T) {
 		sb.Volumes = []types.Volume{{Name: "dataset", Mount: "/datasets"}}
 		backdate(m, sb, 2*time.Second)
 
-		sweepIdle(t, m)
+		sb.Transition.Lock()
+		m.idleOnce(t.Context())
+		picked := m.sweeps.idle.Load()
+		sb.Transition.Unlock()
+		waitFor(t, func() bool { return !m.sweeps.idle.Load() })
+		if picked {
+			t.Error("idle sweep picked a volume claim")
+		}
 		if len(eng.hibernates) != 0 || hibernated(m) != 0 {
 			t.Errorf("idle sweep hibernated volume claim: engine=%v count=%d", eng.hibernates, hibernated(m))
 		}
