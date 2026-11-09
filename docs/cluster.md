@@ -317,7 +317,8 @@ release and adoption an evacuation uses:
   the row back and the wake answers 429 as before. A node runs one hand-off at
   a time, and after one fails it asks no peer for 30 seconds, so clients
   retrying a full cell cost no registry writes. A wake that `memory_limit`
-  sent wakes on the owner instead and counts in
+  refused wakes on the owner instead, as does one that arrives while another
+  hand-off runs or inside those 30 seconds, and counts in
   `sandboxd_wake_memory_fallbacks_total`.
 - Two wakes of one claim queue on its transition lock. One that waited behind
   a hand-off also answers 404, so it never hands the claim off twice.
