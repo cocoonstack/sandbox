@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -884,8 +885,13 @@ func TestMarkArchiveCksKeepsOnlyTheIDsItCouldNotMark(t *testing.T) {
 func BenchmarkReapPurgesArchivedClaims(b *testing.B) {
 	m := newTestManager(b, newFakeEngine())
 	b.ReportAllocs()
+	var purged uint64
 	for b.Loop() {
 		b.StopTimer()
+		for m.Counters().Reaps < purged {
+			runtime.Gosched()
+		}
+		purged += 500
 		past := time.Now().Add(-time.Minute)
 		m.mu.Lock()
 		for i := range 500 {
