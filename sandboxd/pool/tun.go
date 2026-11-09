@@ -2,7 +2,6 @@ package pool
 
 import (
 	"context"
-	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"maps"
@@ -242,18 +241,6 @@ func (m *Manager) confirmAdoptedTun(ctx context.Context, sb *types.Sandbox) erro
 		sb.TunAddr = netip.Addr{}
 	}
 	return nil
-}
-
-func (m *Manager) releaseRowTun(ctx context.Context, rec archives.Record) {
-	if m.tunAddrs == nil {
-		return
-	}
-	sb := &types.Sandbox{}
-	if err := json.Unmarshal(rec.Claim, sb); err != nil {
-		log.WithFunc("pool.releaseRowTun").Warnf(ctx, "decode archive row %s: %v", rec.ID, err)
-		return
-	}
-	m.releaseTun(ctx, rec.ID, sb.TunAddr)
 }
 
 // foldTunBytes ends the live flows, so their records are written, and copies every armed claim's live tun byte count into its record, so the next commit persists it.
