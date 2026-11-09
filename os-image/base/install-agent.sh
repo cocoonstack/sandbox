@@ -1,6 +1,6 @@
 #!/bin/sh
-# Bake cocoon-agent into a sandbox image, as cocoon/os-image/ubuntu/install-agent.sh does, except that
-# the unit starts at sysinit (its vsock listener is cocoon's readiness signal) and sshd stays socket-activated.
+# Bake cocoon-agent into a sandbox image, as cocoon/os-image/ubuntu/install-agent.sh does.
+# Differences: the unit starts at sysinit (its vsock listener is cocoon's readiness signal), and sshd stays socket-activated.
 set -eu
 
 AGENT_VERSION="${COCOON_AGENT_VERSION:-0.2.5}"

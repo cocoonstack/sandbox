@@ -10,7 +10,7 @@ const LANE_FILE: &str = "/etc/silkd-lane";
 
 /// The lane file's verdict once read: -1 not yet present, 0 direct, 1 relay.
 static LANE: AtomicI8 = AtomicI8::new(-1);
-// probed once: the NIC set is fixed for the guest's life
+/// Probed once: the NIC set is fixed for the guest's life.
 static DEVICE_BACKED: LazyLock<bool> = LazyLock::new(|| {
     let Ok(entries) = std::fs::read_dir("/sys/class/net") else {
         return true;

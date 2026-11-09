@@ -117,7 +117,7 @@ type lease struct {
 	over atomic.Bool
 }
 
-// done ends the RPC: nil or an unwrapped error frame parks the connection; anything else, a wrapped caller error included, drops it.
+// done parks the connection after nil or an unwrapped error frame, and drops it otherwise.
 func (l *lease) done(err error) error {
 	if _, frame := err.(*wire.ErrorResp); err == nil || frame {
 		l.reuse()

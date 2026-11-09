@@ -10,11 +10,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     xz-utils curl ca-certificates python3 \
     && rm -rf /var/lib/apt/lists/*
 ARG KERNEL_VERSION
-# The fallback mirrors are third parties, so the tarball is downloaded whole and
-# checked against the kernel/SHA256 line naming this exact version before extraction.
 ARG KERNEL_MIRROR=https://cdn.kernel.org/pub/linux/kernel
 WORKDIR /linux
 COPY kernel/SHA256 /tmp/SHA256
+# Mirrors are third parties, so the tarball is checked against this version's kernel/SHA256 line before extraction.
 RUN set -e; \
     hash=$(awk -v f="linux-${KERNEL_VERSION}.tar.xz" '$2==f{print $1; exit}' /tmp/SHA256); \
     [ -n "$hash" ] || { echo "kernel/SHA256 has no entry for linux-${KERNEL_VERSION}.tar.xz"; exit 1; }; \
@@ -30,10 +29,7 @@ RUN set -e; \
 ARG TARGETARCH
 COPY kernel/sandbox.config /tmp/sandbox.config
 COPY kernel/sandbox-arm64.config /tmp/sandbox-arm64.config
-# merge_config only warns and olddefconfig silently drops renamed or
-# dependency-orphaned symbols — assert the boot- and container-critical set
-# so a kernel bump cannot lose one with a green build. Boot entry and console
-# are per-arch: amd64 = PVH, arm64 = direct Image boot + PL031 RTC.
+# olddefconfig silently drops renamed or orphaned symbols, so assert the boot- and container-critical set.
 RUN set -e; \
     case "$TARGETARCH" in \
       amd64) make x86_64_defconfig kvm_guest.config; \

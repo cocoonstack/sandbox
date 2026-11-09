@@ -656,7 +656,7 @@ golden fail the same way, it is retired again at most once every 30 s.
 
 The systemd unit is
 [`packaging/sandboxd.service`](https://github.com/cocoonstack/sandbox/blob/main/packaging/sandboxd.service);
-install it as shipped: it runs `/usr/local/bin/sandboxd -config /etc/sandboxd/config.json`. Its `KillMode` and `TimeoutStopSec` are explained below.
+install it as shipped. The unit runs `/usr/local/bin/sandboxd -config /etc/sandboxd/config.json`, and its `KillMode` and `TimeoutStopSec` are explained below.
 `LimitCORE=0` keeps a crash from writing sandboxd's memory, which holds every
 running claim's host-only env values, to a core file. For the same reason,
 run sandboxd hosts with swap off or encrypted.
