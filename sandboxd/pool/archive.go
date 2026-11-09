@@ -205,11 +205,18 @@ func (m *Manager) wakeArchived(ctx context.Context, sb *types.Sandbox) (string, 
 	if err := m.tenantRemoved(ctx, sb.Tenant); err != nil {
 		return "", err
 	}
-	if err := m.beginWake(sb); err != nil {
+	if err := m.beginWake(sb, true); err != nil {
 		if errors.Is(err, ErrQuota) && m.handOffForRoom(ctx, sb) {
 			return "", fmt.Errorf("wake %s: %w", sb.ID, ErrUnknownSandbox)
 		}
-		return "", fmt.Errorf("wake %s: %w", sb.ID, err)
+		// memory only spreads load, so a wake no peer took runs here
+		if !errors.Is(err, errMemoryLow) {
+			return "", fmt.Errorf("wake %s: %w", sb.ID, err)
+		}
+		if err = m.beginWake(sb, false); err != nil {
+			return "", fmt.Errorf("wake %s: %w", sb.ID, err)
+		}
+		m.counters.wakeMemoryFallbacks.Add(1)
 	}
 	defer m.endWake(sb)
 	ctx = context.WithoutCancel(ctx)

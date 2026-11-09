@@ -58,7 +58,7 @@ func (m *Manager) adoptArchived(ctx context.Context, id string, cred Cred, room 
 	fenced := m.adoptFenced()
 	full := false
 	if room {
-		_, roomErr := m.wakeRoomErrLocked()
+		_, roomErr := m.wakeRoomErrLocked(true)
 		full = roomErr != nil
 	}
 	m.mu.Unlock()

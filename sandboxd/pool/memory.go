@@ -47,17 +47,27 @@ func (m *Manager) checkMemory(ctx context.Context) {
 	}
 }
 
+func (m *Manager) memoryErr() error {
+	if m.memoryLow.Load() {
+		return errMemoryLow
+	}
+	return nil
+}
+
+// readAnonBytes counts resident anon plus used swap, since anon pushed to swap still has to fit back.
 func readAnonBytes(proc string) (int64, error) {
 	raw, err := os.ReadFile(filepath.Join(proc, "meminfo")) //nolint:gosec // a fixed proc file
 	if err != nil {
 		return 0, err
 	}
-	_, rest, _ := bytes.Cut(raw, []byte("AnonPages:"))
-	var kb int64
-	if _, err := fmt.Sscan(string(rest), &kb); err != nil {
-		return 0, fmt.Errorf("parse AnonPages: %w", err)
+	var kb [3]int64
+	for i, field := range []string{"AnonPages:", "SwapTotal:", "SwapFree:"} {
+		_, rest, _ := bytes.Cut(raw, []byte(field))
+		if _, err := fmt.Sscan(string(rest), &kb[i]); err != nil {
+			return 0, fmt.Errorf("parse %s %w", field, err)
+		}
 	}
-	return kb * units.KiB, nil
+	return (kb[0] + kb[1] - kb[2]) * units.KiB, nil
 }
 
 func readPSISomeAvg10(proc string) (float64, error) {

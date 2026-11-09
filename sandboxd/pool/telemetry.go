@@ -62,7 +62,9 @@ type Counters struct {
 
 	WakesRefusedRunning uint64
 	WakesRefusedDisk    uint64
+	WakesRefusedMemory  uint64
 	WakeHandoffs        uint64
+	WakeMemoryFallbacks uint64
 
 	ClaimWarmLatency, ClaimCloneLatency, ClaimColdLatency ClaimLatency
 
@@ -79,7 +81,8 @@ type counters struct {
 	releases, reaps                       atomic.Uint64
 	archives, unarchives, archiveDeletes  atomic.Uint64
 	wakesRefusedRunning, wakesRefusedDisk atomic.Uint64
-	wakeHandoffs                          atomic.Uint64
+	wakesRefusedMemory                    atomic.Uint64
+	wakeHandoffs, wakeMemoryFallbacks     atomic.Uint64
 	wakeNanos                             atomic.Uint64
 
 	claimWarmLatency, claimCloneLatency, claimColdLatency claimHistogram
@@ -188,7 +191,9 @@ func (m *Manager) Counters() Counters {
 
 		WakesRefusedRunning: c.wakesRefusedRunning.Load(),
 		WakesRefusedDisk:    c.wakesRefusedDisk.Load(),
+		WakesRefusedMemory:  c.wakesRefusedMemory.Load(),
 		WakeHandoffs:        c.wakeHandoffs.Load(),
+		WakeMemoryFallbacks: c.wakeMemoryFallbacks.Load(),
 
 		ClaimNanos:   warm.Nanos + clone.Nanos + cold.Nanos,
 		WakeNanos:    c.wakeNanos.Load(),
