@@ -22,6 +22,7 @@ var reloadableFields = map[string]bool{
 	"egress_conn_rate":              true,
 	"disk_reserve":                  true,
 	"memory_limit":                  true,
+	"balloon":                       true,
 
 	"max_claims":                   true,
 	"max_running":                  true,
