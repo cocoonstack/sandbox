@@ -26,6 +26,7 @@ const (
 	OffloadTSO6   = 0x04
 	OffloadTSOECN = 0x08
 	OffloadUSO4   = 0x20
+	OffloadUSO6   = 0x40
 
 	ProtoICMP = 1
 	ProtoTCP  = 6
