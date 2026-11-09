@@ -10,17 +10,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     xz-utils curl ca-certificates python3 \
     && rm -rf /var/lib/apt/lists/*
 ARG KERNEL_VERSION
-# Mirror chain: KERNEL_MIRROR (cdn.kernel.org by default), then kernel.org's
-# edge mirror and an rsync mirror. Download to a file first — a mid-stream
-# failure must not leave a half-extracted tree — and verify against the pinned SHA256
-# (kernel/SHA256, updated together with VERSION): the fallback mirrors are
-# third parties and this kernel boots untrusted-code sandboxes.
+# The fallback mirrors are third parties, so the tarball is downloaded whole and
+# checked against the kernel/SHA256 line naming this exact version before extraction.
 ARG KERNEL_MIRROR=https://cdn.kernel.org/pub/linux/kernel
 WORKDIR /linux
 COPY kernel/SHA256 /tmp/SHA256
-# The hash is taken from the exact line naming this kernel version, so a
-# multi-line SHA256 file (e.g. keeping the previous kernel's entry during a
-# bump) can never pair the tarball with the wrong hash.
 RUN set -e; \
     hash=$(awk -v f="linux-${KERNEL_VERSION}.tar.xz" '$2==f{print $1; exit}' /tmp/SHA256); \
     [ -n "$hash" ] || { echo "kernel/SHA256 has no entry for linux-${KERNEL_VERSION}.tar.xz"; exit 1; }; \
