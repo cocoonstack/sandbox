@@ -468,6 +468,42 @@ func TestMoveCommitOfACrashedSourceDoesNotTakeTheRetrysReservation(t *testing.T)
 	}
 }
 
+func TestMoveTargetDroppingALostCommitKeepsTheRetrysStagingDir(t *testing.T) {
+	mc := newMoveCluster(t)
+	sb := mustClaim(t, mc.s, testKey)
+	reserveMove(t, mc.t, sb.ID, "")
+	if err := os.WriteFile(filepath.Join(mc.t.moveDir(sb.ID), "state.json"), []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	eng := fakeOf(mc.t)
+	stall := make(chan struct{})
+	eng.removeStall = stall
+	done := make(chan error, 1)
+	go func() {
+		done <- mc.t.CommitMove(context.WithoutCancel(t.Context()), sb.ID, []byte(`{"id":"`+sb.ID+`","key":{"template":"rt:24.04","net":"none","size":"small"}}`), 1)
+	}()
+	waitFor(t, func() bool {
+		eng.mu.Lock()
+		received := len(eng.receives) == 1
+		eng.mu.Unlock()
+		_, reserved := reservationOf(mc.t, sb.ID)
+		_, claimed := mc.t.byID(sb.ID)
+		return received && !reserved && !claimed
+	})
+	reserveMove(t, mc.t, sb.ID, "")
+	retried := filepath.Join(mc.t.moveDir(sb.ID), "state.json")
+	if err := os.WriteFile(retried, []byte("the retry's round"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	close(stall)
+	if err := <-done; !errors.Is(err, ErrNotMovable) {
+		t.Fatalf("a commit the source aborted: %v, want ErrNotMovable", err)
+	}
+	if _, err := os.Stat(retried); err != nil {
+		t.Errorf("dropping the lost commit removed the retry's files: %v", err)
+	}
+}
+
 func TestMoveOfAReplicatedClaimDropsItsRowBeforeTheFinalRound(t *testing.T) {
 	mc := newMoveClusterWith(t, func(c *failoverCluster) { c.replicate = replicateEvery })
 	third := mc.moveNode(t, "c")
