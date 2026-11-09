@@ -90,7 +90,7 @@ func (m *Manager) replicate(ctx context.Context, sb *types.Sandbox) error {
 		}
 		return fmt.Errorf("replicate %s: registry: %w", sb.ID, err)
 	}
-	ckID := store.CheckpointID(randHex(8))
+	ckID := store.ArchiveID(randHex(8))
 	m.mu.Lock()
 	m.pendingCks[ckID] = struct{}{}
 	m.mu.Unlock()

@@ -52,7 +52,7 @@ func RunContract(t *testing.T, st store.Store) {
 	}
 	writeExport(t, orphan, "disk.img", "torn")
 
-	metas, err := st.Metas(ctx)
+	metas, err := st.Metas(ctx, "")
 	if err != nil {
 		t.Fatalf("Metas: %v", err)
 	}
@@ -96,11 +96,12 @@ func RunContract(t *testing.T, st store.Store) {
 	if _, _, _, err = st.Fetch(ctx, id); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("Fetch after Delete: %v, want store.ErrNotFound", err)
 	}
-	if metas, err = st.Metas(ctx); err != nil || len(metas) != 0 {
+	if metas, err = st.Metas(ctx, ""); err != nil || len(metas) != 0 {
 		t.Fatalf("Metas after Delete: %d, %v", len(metas), err)
 	}
 	runDigestContract(t, st)
 	runLabelsContract(t, st)
+	runPrefixContract(t, st)
 }
 
 // PublishDigested prepares and commits a digested record in one call.
@@ -242,7 +243,7 @@ func runDigestContract(t *testing.T, st store.Store) {
 	if fetchedDigest != want {
 		t.Errorf("Fetch digest %q, want %q", fetchedDigest, want)
 	}
-	recs, err := st.Metas(ctx)
+	recs, err := st.Metas(ctx, "")
 	if err != nil || len(recs) != 1 || recs[0].Digest != want {
 		t.Errorf("Metas %+v, %v; want the one record with digest %q", recs, err, want)
 	}
@@ -273,7 +274,7 @@ func runLabelsContract(t *testing.T, st store.Store) {
 	publishRecord(t, st, id, MetaJSON(id), "disk.img", "labeled")
 	labelsOf := func() []byte {
 		t.Helper()
-		recs, metasErr := st.Metas(ctx)
+		recs, metasErr := st.Metas(ctx, "")
 		if metasErr != nil || len(recs) != 1 {
 			t.Fatalf("Metas: %d records, %v; want the labeled one", len(recs), metasErr)
 		}
@@ -305,7 +306,7 @@ func runLabelsContract(t *testing.T, st store.Store) {
 	if err := st.Delete(ctx, id); err != nil {
 		t.Fatalf("Delete labeled: %v", err)
 	}
-	if recs, metasErr := st.Metas(ctx); metasErr != nil || len(recs) != 0 {
+	if recs, metasErr := st.Metas(ctx, ""); metasErr != nil || len(recs) != 0 {
 		t.Fatalf("Metas after Delete: %d records, %v; want the labels gone with the record", len(recs), metasErr)
 	}
 	publishRecord(t, st, id, `{"id":"`+id+`","v":2}`, "disk.img", "again")
@@ -314,6 +315,25 @@ func runLabelsContract(t *testing.T, st store.Store) {
 	}
 	if err := st.Delete(ctx, id); err != nil {
 		t.Fatalf("Delete republished: %v", err)
+	}
+}
+
+func runPrefixContract(t *testing.T, st store.Store) {
+	t.Helper()
+	ctx := t.Context()
+	ckpt, archive := store.CheckpointID("00000000000000ee"), store.ArchiveID("00000000000000ee")
+	publishRecord(t, st, ckpt, MetaJSON(ckpt), "disk.img", "checkpoint")
+	publishRecord(t, st, archive, MetaJSON(archive), "disk.img", "archive")
+	for prefix, want := range map[string]string{store.CheckpointPrefix: ckpt, store.ArchivePrefix: archive} {
+		recs, err := st.Metas(ctx, prefix)
+		if err != nil || len(recs) != 1 || string(recs[0].Meta) != MetaJSON(want) {
+			t.Fatalf("Metas %s: %d records, %v; want only %s", prefix, len(recs), err, want)
+		}
+	}
+	for _, id := range []string{ckpt, archive} {
+		if err := st.Delete(ctx, id); err != nil {
+			t.Fatalf("Delete %s: %v", id, err)
+		}
 	}
 }
 

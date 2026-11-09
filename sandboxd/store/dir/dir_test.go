@@ -495,7 +495,7 @@ func TestMetasSurfacesReadError(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(root, testID, store.MetaFile), 0o750); err != nil {
 		t.Fatalf("setup: %v", err)
 	}
-	if _, err := st.Metas(t.Context()); err == nil {
+	if _, err := st.Metas(t.Context(), ""); err == nil {
 		t.Error("Metas swallowed an unreadable meta; want the error surfaced")
 	}
 }
@@ -522,7 +522,7 @@ func TestMetasReadsEveryRecordAndSkipsOnesWithoutMeta(t *testing.T) {
 	if _, err := st.Stage("ck_0000000000000000"); err != nil {
 		t.Fatalf("Stage: %v", err)
 	}
-	recs, err := st.Metas(t.Context())
+	recs, err := st.Metas(t.Context(), "")
 	if err != nil {
 		t.Fatalf("Metas: %v", err)
 	}
@@ -543,7 +543,7 @@ func BenchmarkMetas(b *testing.B) {
 	}
 	b.ReportAllocs()
 	for b.Loop() {
-		if recs, err := st.Metas(b.Context()); err != nil || len(recs) != 2000 {
+		if recs, err := st.Metas(b.Context(), ""); err != nil || len(recs) != 2000 {
 			b.Fatalf("Metas: %d, %v", len(recs), err)
 		}
 	}

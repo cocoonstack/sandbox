@@ -1032,7 +1032,7 @@ part of the public API; an SDK caller has no reason to call it directly.
 
 Auth: node API token. Lists this node's checkpoints, newest first. A tenant
 sees only its own records; root sees everything. A checkpoint backing an
-archived claim is that claim's wake image, not a listable record. Answers
+archived claim is that claim's wake image (an `ar_` id), not a listable record. Answers
 `200 {"checkpoints": [{id, name?, sandbox_id, key, tenant?, created_at, policy_source?, no_egress?, tun_off?, tun_profile?, egress_limit?, guest_env?}]}`, the
 record shape `POST /v1/sandboxes/{id}/checkpoint` returns.
 

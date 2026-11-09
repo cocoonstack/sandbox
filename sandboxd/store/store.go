@@ -26,14 +26,17 @@ const (
 	GenerationGrace = time.Hour
 
 	MaxRecordBytes = 1 << 40
+
+	CheckpointPrefix = "ck_"
+	ArchivePrefix    = "ar_"
 )
 
 var (
 	// ErrNotFound is the absence signal every backend normalizes its missing-record error to.
 	ErrNotFound = errors.New("record not found")
 
-	// CheckpointIDRe and TemplateIDRe let both id namespaces share one store root.
-	CheckpointIDRe = regexp.MustCompile(`^ck_[0-9a-f]{16}$`)
+	// CheckpointIDRe matches checkpoint and archive image ids, TemplateIDRe template ids, so all three share one store root.
+	CheckpointIDRe = regexp.MustCompile(`^(ck|ar)_[0-9a-f]{16}$`)
 	TemplateIDRe   = regexp.MustCompile(`^tp_[0-9a-f]{32}$`)
 )
 
@@ -78,8 +81,8 @@ type Store interface {
 	ReadMeta(ctx context.Context, id string) ([]byte, error)
 	// ReadDigest returns a record's export digest, empty when it was published undigested.
 	ReadDigest(ctx context.Context, id string) (string, error)
-	// Metas lists every record of this instance's id namespace, with labels where the store reads them.
-	Metas(ctx context.Context) ([]Record, error)
+	// Metas lists every record of this instance's id namespace whose id starts with prefix, with labels where the store reads them.
+	Metas(ctx context.Context, prefix string) ([]Record, error)
 	// SetLabels replaces a record's labels; nil removes them. The caller holds the record lock.
 	SetLabels(ctx context.Context, id string, labels []byte) error
 	Delete(ctx context.Context, id string) error
@@ -89,8 +92,10 @@ type Store interface {
 	SweepGenerations(ctx context.Context) error
 }
 
-// CheckpointID, TemplateID, and TemplateHash are the one home for the ck_/tp_ id scheme.
-func CheckpointID(suffix string) string { return "ck_" + suffix }
+// CheckpointID, ArchiveID, TemplateID, and TemplateHash are the one home for the ck_/ar_/tp_ id scheme.
+func CheckpointID(suffix string) string { return CheckpointPrefix + suffix }
+
+func ArchiveID(suffix string) string { return ArchivePrefix + suffix }
 
 func TemplateID(hash string) string { return "tp_" + hash }
 

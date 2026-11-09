@@ -679,7 +679,7 @@ func TestDeletedRecordLeavesNoPrefixToList(t *testing.T) {
 	}
 
 	fake.resetRequests()
-	recs, err := st.Metas(t.Context())
+	recs, err := st.Metas(t.Context(), "")
 	if err != nil || len(recs) != 1 {
 		t.Fatalf("Metas = %d records, %v, want only the live one", len(recs), err)
 	}
@@ -690,6 +690,24 @@ func TestDeletedRecordLeavesNoPrefixToList(t *testing.T) {
 	sum := sha256.Sum256([]byte("gone-payload"))
 	if !fake.has("ck/chunks/" + gone + "/" + hex.EncodeToString(sum[:])) {
 		t.Error("Delete freed the chunk of the deleted record")
+	}
+}
+
+func TestCheckpointMetasNeverReadAnArchiveImage(t *testing.T) {
+	const (
+		ckpt    = "ck_00000000000000b3"
+		archive = "ar_00000000000000b3"
+	)
+	fake, st := newFakeStore(t)
+	publishRecord(t, st, ckpt, metaJSON(ckpt), "checkpoint")
+	publishRecord(t, st, archive, metaJSON(archive), "archive")
+	fake.resetRequests()
+	recs, err := st.Metas(t.Context(), store.CheckpointPrefix)
+	if err != nil || len(recs) != 1 || string(recs[0].Meta) != string(metaJSON(ckpt)) {
+		t.Fatalf("Metas = %d records, %v, want only the checkpoint", len(recs), err)
+	}
+	if got := fake.requestCount(http.MethodGet, "ck/"+archive+"/"+store.MetaFile); got != 0 {
+		t.Errorf("listing checkpoints read the archive image's meta %d times, want 0", got)
 	}
 }
 
@@ -893,7 +911,7 @@ func TestOnlyALabeledStoreReadsLabelsWhenListing(t *testing.T) {
 		}
 		st := newTestStore(t, fake)
 		st.labeled = labeled
-		recs, err := st.Metas(t.Context())
+		recs, err := st.Metas(t.Context(), "")
 		if err != nil || len(recs) != len(ids) {
 			t.Fatalf("labeled=%v: Metas = %d records, %v", labeled, len(recs), err)
 		}

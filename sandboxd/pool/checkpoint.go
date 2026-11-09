@@ -97,7 +97,7 @@ func (m *Manager) ClaimCheckpointHeal(ctx context.Context, ckptID string, o Clai
 
 // Checkpoints lists tenant's checkpoints, newest first, hiding archive wake images.
 func (m *Manager) Checkpoints(ctx context.Context, tenant string) ([]types.Checkpoint, error) {
-	metas, err := m.ckpts.Metas(ctx)
+	metas, err := m.ckpts.Metas(ctx, store.CheckpointPrefix)
 	if err != nil {
 		return nil, fmt.Errorf("list checkpoints: %w", err)
 	}

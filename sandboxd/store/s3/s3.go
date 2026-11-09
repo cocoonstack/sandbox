@@ -219,8 +219,8 @@ func (s *Store) ReadDigest(ctx context.Context, id string) (string, error) {
 	return digest, err
 }
 
-func (s *Store) Metas(ctx context.Context) ([]store.Record, error) {
-	ids, err := s.recordIDs(ctx)
+func (s *Store) Metas(ctx context.Context, prefix string) ([]store.Record, error) {
+	ids, err := s.recordIDs(ctx, prefix)
 	if err != nil {
 		return nil, err
 	}
@@ -537,11 +537,11 @@ func (s *Store) chunkKey(lineage, sha string) string {
 	return s.prefix + chunksDir + "/" + lineage + "/" + sha
 }
 
-func (s *Store) recordIDs(ctx context.Context) ([]string, error) {
+func (s *Store) recordIDs(ctx context.Context, prefix string) ([]string, error) {
 	// Delimiter listing yields one CommonPrefix per record instead of every export object.
 	var ids []string
 	p := awss3.NewListObjectsV2Paginator(s.client, &awss3.ListObjectsV2Input{
-		Bucket: &s.bucket, Prefix: &s.prefix, Delimiter: new("/"),
+		Bucket: &s.bucket, Prefix: new(s.prefix + prefix), Delimiter: new("/"),
 	})
 	for p.HasMorePages() {
 		page, err := p.NextPage(ctx)
