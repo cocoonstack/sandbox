@@ -64,7 +64,7 @@ func readAnonBytes(proc string) (int64, error) {
 	for i, field := range []string{"AnonPages:", "SwapTotal:", "SwapFree:"} {
 		_, rest, _ := bytes.Cut(raw, []byte(field))
 		if _, err := fmt.Sscan(string(rest), &kb[i]); err != nil {
-			return 0, fmt.Errorf("parse %s: %w", field, err)
+			return 0, fmt.Errorf("parse %s %w", field, err)
 		}
 	}
 	return (kb[0] + kb[1] - kb[2]) * units.KiB, nil
