@@ -709,21 +709,31 @@ func (m *Manager) sweepStoreGenerations(ctx context.Context) {
 // runBounded fans f over n items on the refill semaphore, sharing the node-wide budget but never the share maintSem leaves to refill.
 func (m *Manager) runBounded(ctx context.Context, n int, f func(context.Context, int)) *sync.WaitGroup {
 	var wg sync.WaitGroup
-	for i := range n {
-		// Acquire inside the goroutine so a batch larger than the budget cannot block the caller
+	var next atomic.Int64
+	// one budget of workers queues at most that many waiters, so a long sweep leaves other sweeps their FIFO turn
+	for range min(n, cap(m.maintSem)) {
 		wg.Go(func() {
-			for _, sem := range [...]chan struct{}{m.maintSem, m.refillSem} {
-				select {
-				case sem <- struct{}{}:
-				case <-ctx.Done():
+			for i := int(next.Add(1) - 1); i < n; i = int(next.Add(1) - 1) {
+				if !m.withSlots(ctx, func() { f(ctx, i) }) {
 					return
 				}
-				defer func() { <-sem }()
 			}
-			f(ctx, i)
 		})
 	}
 	return &wg
+}
+
+func (m *Manager) withSlots(ctx context.Context, f func()) bool {
+	for _, sem := range [...]chan struct{}{m.maintSem, m.refillSem} {
+		select {
+		case sem <- struct{}{}:
+		case <-ctx.Done():
+			return false
+		}
+		defer func() { <-sem }()
+	}
+	f()
+	return true
 }
 
 func (m *Manager) untrack(set map[string]struct{}, key string) {

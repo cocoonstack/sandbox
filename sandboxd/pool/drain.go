@@ -62,10 +62,7 @@ func (m *Manager) runEvacuation(ctx context.Context, e *evacuation) {
 		m.mu.Lock()
 		batch := slices.SortedFunc(maps.Values(e.pending), func(a, b *types.Sandbox) int { return cmp.Compare(moveCost(a), moveCost(b)) })
 		m.mu.Unlock()
-		// One budget's worth at a time leaves crash recovery and reaps their FIFO turn.
-		for chunk := range slices.Chunk(batch, cap(m.maintSem)) {
-			m.runBounded(ctx, len(chunk), func(ctx context.Context, i int) { m.evacuateOne(ctx, e, chunk[i]) }).Wait()
-		}
+		m.runBounded(ctx, len(batch), func(ctx context.Context, i int) { m.evacuateOne(ctx, e, batch[i]) }).Wait()
 		m.mu.Lock()
 		left := len(e.pending)
 		m.mu.Unlock()

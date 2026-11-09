@@ -1,10 +1,12 @@
 package pool
 
 import (
+	"context"
 	"errors"
 	"slices"
 	"strconv"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/cocoonstack/sandbox/sandboxd/config"
@@ -66,6 +68,36 @@ func TestARelayDoesNotWaitBehindABalloonCall(t *testing.T) {
 	}
 	close(stall)
 	waitFor(t, func() bool { return !m.sweeps.balloon.Load() })
+}
+
+func TestASweepOfManyIdleClaimsLeavesAReapItsTurn(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		eng := newFakeEngine()
+		stall := make(chan struct{})
+		eng.balloonStall = stall
+		m := balloonManager(t, eng, t.TempDir(), config.PoolSpec{PoolKey: testKey})
+		width := cap(m.maintSem)
+		for range width + 1 {
+			backdate(m, mustClaim(t, m, testKey), 2*balloonIdleFor)
+		}
+		m.balloonOnce(t.Context())
+		synctest.Wait()
+		if calls := len(balloonCalls(eng)); calls != width {
+			t.Fatalf("%d balloon calls in flight, want %d", calls, width)
+		}
+		reaped := make(chan struct{})
+		m.runBounded(t.Context(), 1, func(context.Context, int) { close(reaped) })
+		synctest.Wait()
+		stall <- struct{}{}
+		synctest.Wait()
+		select {
+		case <-reaped:
+		default:
+			t.Error("the reap waited behind the rest of the balloon sweep")
+		}
+		close(stall)
+		waitFor(t, func() bool { return !m.sweeps.balloon.Load() })
+	})
 }
 
 func TestABalloonCallInFlightKeepsAConcurrentOneFromPublishingOverIt(t *testing.T) {
