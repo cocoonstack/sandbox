@@ -132,10 +132,15 @@ func TestArmEgressLocksEgressLaneWithoutPolicy(t *testing.T) {
 		{PoolKey: testKey, Egress: &egress.Policy{Allow: []egress.Rule{{Host: "a.test"}}}},
 		{PoolKey: egKey},
 	}}
-	h := newHost(t, &fakeEngine{}, cfg, func(o *Options) { o.LockNIC = true })
-	sb := &types.Sandbox{ID: "sb_eg_np", Key: egKey, VMName: "sbx-np-1"}
-	if armErr := h.Arm(t.Context(), sb); armErr == nil {
-		t.Fatal("policyless egress-lane claim must still lock the NIC, not skip it")
+	var taps outboundtest.TapLog
+	h := newHost(t, &fakeEngine{}, cfg, func(o *Options) {
+		o.LockNIC = true
+		o.Lock, o.Unlock = taps.Lock, taps.Unlock
+	})
+	sb := &types.Sandbox{ID: "sb_eg_np", Key: egKey, VMName: "sbx-np-1", TAP: "tap-np"}
+	lockErr := h.Arm(t.Context(), sb)
+	if got := taps.Locked(); lockErr != nil || !slices.Equal(got, []string{"tap-np"}) {
+		t.Fatalf("policyless egress-lane claim locked %v (err %v), want tap-np", got, lockErr)
 	}
 }
 
@@ -313,13 +318,14 @@ func TestArmAppliesTheClaimsLimitAndSetEgressLimitMovesIt(t *testing.T) {
 		return time.Since(start)
 	}
 
-	if took := fetch(); took < 700*time.Millisecond {
-		t.Errorf("download under the armed limit took %v", took)
+	throttled := fetch()
+	if throttled < 700*time.Millisecond {
+		t.Errorf("download under the armed limit took %v", throttled)
 	}
 	limit.Store(&types.EgressLimit{})
 	h.SetEgressLimit(sb)
-	if took := fetch(); took > 300*time.Millisecond {
-		t.Errorf("download after the limit was lifted took %v", took)
+	if took := fetch(); took >= throttled/2 {
+		t.Errorf("download after the limit was lifted took %v, want under half the throttled %v", took, throttled)
 	}
 	limit.Store(&types.EgressLimit{RxBytesPerSecond: rate})
 	h.SetEgressLimit(sb)
@@ -386,7 +392,6 @@ func TestAnArmNeverAppliesAnOlderCapThanASetterRead(t *testing.T) {
 	}
 }
 
-// newHost serves cfg's egress with the gh secret set to s3cr3t; its NIC locks succeed unless edit swaps them.
 func newHost(t *testing.T, eng *fakeEngine, cfg *config.Config, edit func(*Options)) *Host {
 	t.Helper()
 	v := NewView(cfg, testSecrets(t))

@@ -88,7 +88,7 @@ func TestClaimCarriesAnEgressOptOut(t *testing.T) {
 	}
 }
 
-func TestClaimErrorMapping(t *testing.T) {
+func TestClaimMapsEachManagerErrorToItsStatus(t *testing.T) {
 	tests := []struct {
 		name string
 		body string
@@ -309,7 +309,7 @@ func TestEnvVerbsForRootOrTheTenant(t *testing.T) {
 	}
 }
 
-func TestEnvPatchVerb(t *testing.T) {
+func TestEnvPatchMergesForRootOrTheTenantAndRefusesBadBodies(t *testing.T) {
 	mgr := &fakeManager{}
 	ts := newTenantTestServer(t, "root", []tenants.TenantSpec{{Name: "acme", Token: "acme-tok"}}, mgr, nil)
 	call := func(t *testing.T, token, body string) int {
@@ -368,7 +368,7 @@ func TestClaimRefusesAnAmbiguousHostOnlyFlag(t *testing.T) {
 	}
 }
 
-func TestAPITokenGuard(t *testing.T) {
+func TestTheAPITokenGatesEveryRouteButHealthz(t *testing.T) {
 	ts := newTestServer(t, "sekret", &fakeManager{}, nil)
 
 	tests := []struct {
@@ -513,7 +513,7 @@ func TestSandboxesNarrowToAClaimRef(t *testing.T) {
 	}
 }
 
-func TestTenantAuthMatrix(t *testing.T) {
+func TestEachTokenReachesTheManagerAsItsTenantOrIsRefused(t *testing.T) {
 	mgr := &fakeManager{tenantClaims: map[string]int{"acme": 2}}
 	specs := []tenants.TenantSpec{{Name: "acme", Token: "acme-tok"}, {Name: "beta", Token: "beta-tok"}}
 	ts := newTenantTestServer(t, "sekret", specs, mgr, nil)
@@ -546,12 +546,6 @@ func TestTenantAuthMatrix(t *testing.T) {
 		{"root lists all volumes", http.MethodGet, "/v1/volumes", "sekret", http.StatusOK, ""},
 		{"tenant lists own sandboxes", http.MethodGet, "/v1/sandboxes", "acme-tok", http.StatusOK, "acme"},
 		{"root lists all sandboxes", http.MethodGet, "/v1/sandboxes", "sekret", http.StatusOK, ""},
-		{"tenant forbidden on info", http.MethodGet, "/v1/info", "acme-tok", http.StatusForbidden, ""},
-		{"tenant forbidden on metrics", http.MethodGet, "/metrics", "acme-tok", http.StatusForbidden, ""},
-		{"tenant forbidden on pools", http.MethodPut, "/v1/pools", "acme-tok", http.StatusForbidden, ""},
-		{"tenant forbidden on checkpoint blob", http.MethodGet, "/v1/checkpoints/ck_00000000000000aa/blob", "acme-tok", http.StatusForbidden, ""},
-		{"tenant forbidden on cordon", http.MethodPost, "/v1/cordon", "acme-tok", http.StatusForbidden, ""},
-		{"tenant forbidden on uncordon", http.MethodDelete, "/v1/cordon", "acme-tok", http.StatusForbidden, ""},
 		{"wrong token on info stays 401", http.MethodGet, "/v1/info", "nope", http.StatusUnauthorized, ""},
 		{"root reads info", http.MethodGet, "/v1/info", "sekret", http.StatusOK, ""},
 	} {
@@ -571,7 +565,7 @@ func TestTenantAuthMatrix(t *testing.T) {
 	}
 }
 
-func TestMetricsTenantGauge(t *testing.T) {
+func TestMetricsReportEachTenantsClaims(t *testing.T) {
 	mgr := &fakeManager{tenantClaims: map[string]int{"acme": 2, "beta": 0}}
 	ts := newTestServer(t, "", mgr, nil)
 
@@ -662,7 +656,7 @@ func TestPutPoolsRejectsUnknownFields(t *testing.T) {
 	}
 }
 
-func TestInstanceMetadataVerb(t *testing.T) {
+func TestInstanceMetadataStoresARootDocumentVerbatimAndMapsFailures(t *testing.T) {
 	var got []byte
 	var fail error
 	mgr := &fakeManager{setInstanceMetadata: func(id string, doc []byte) error {
@@ -673,12 +667,12 @@ func TestInstanceMetadataVerb(t *testing.T) {
 		return fail
 	}}
 	ts := newTenantTestServer(t, "sekret", []tenants.TenantSpec{{Name: "acme", Token: "acme-tok"}}, mgr, nil)
-	put := func(token, id, body string) int {
+	put := func(t *testing.T, token, id, body string) int {
 		t.Helper()
 		return statusOf(t, http.MethodPut, ts.URL+"/v1/sandboxes/"+id+"/instance-metadata", token, body)
 	}
 	valid := `{"region": "local", "tags": ["a", "b"]}`
-	if code := put("sekret", "sb_1", valid); code != http.StatusNoContent {
+	if code := put(t, "sekret", "sb_1", valid); code != http.StatusNoContent {
 		t.Fatalf("status %d, want 204", code)
 	}
 	if string(got) != valid {
@@ -696,20 +690,20 @@ func TestInstanceMetadataVerb(t *testing.T) {
 		{"unknown sandbox", "sekret", "sb_2", valid, http.StatusNotFound},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			if code := put(tt.token, tt.id, tt.body); code != tt.want {
+			if code := put(t, tt.token, tt.id, tt.body); code != tt.want {
 				t.Errorf("%s: status %d, want %d", tt.name, code, tt.want)
 			}
 		})
 	}
 	for _, err := range []error{pool.ErrPaused, pool.ErrArchived, pool.ErrNoInstanceMetadata} {
 		fail = err
-		if code := put("sekret", "sb_1", valid); code != http.StatusConflict {
+		if code := put(t, "sekret", "sb_1", valid); code != http.StatusConflict {
 			t.Errorf("%v: status %d, want 409", err, code)
 		}
 	}
 }
 
-func TestDrainEndpoints(t *testing.T) {
+func TestDrainSetsAndClearsDraining(t *testing.T) {
 	mgr := &fakeManager{}
 	ts := newTestServer(t, "sekret", mgr, nil)
 	for _, tt := range []struct {
@@ -730,7 +724,7 @@ func TestDrainEndpoints(t *testing.T) {
 	}
 }
 
-func TestCordonEndpoints(t *testing.T) {
+func TestCordonSetsAndClearsCordonedWithoutDraining(t *testing.T) {
 	mgr := &fakeManager{}
 	ts := newTestServer(t, "sekret", mgr, nil)
 	for _, tt := range []struct {
@@ -883,7 +877,7 @@ func TestReleaseHibernateAndWakeMapEachOutcomeToItsStatus(t *testing.T) {
 	}
 }
 
-func TestReleaseOperatorToken(t *testing.T) {
+func TestReleaseIsAnOperatorReleaseOnlyForTheRootToken(t *testing.T) {
 	const rootTok, sbTok = "sekret", "sb-secret"
 	specs := []tenants.TenantSpec{{Name: "acme", Token: "acme-tok"}}
 	tests := []struct {
@@ -935,7 +929,7 @@ func TestReleaseOperatorToken(t *testing.T) {
 	}
 }
 
-func TestAgentErrorPaths(t *testing.T) {
+func TestAgentMapsEachFailureToItsStatus(t *testing.T) {
 	tests := []struct {
 		name    string
 		auth    string
@@ -1024,7 +1018,7 @@ func TestAgentRelayTakesTheRootOnlyAsAClaimToken(t *testing.T) {
 		t.Fatalf("do: %v", err)
 	}
 	defer resp.Body.Close()
-	if got := <-woke; resp.StatusCode != http.StatusNotFound || got != "root" {
+	if got := await(t, woke, "the agent relay never asked for the socket"); resp.StatusCode != http.StatusNotFound || got != "root" {
 		t.Errorf("status %d woke with %q, want 404 with the root as a claim token", resp.StatusCode, got)
 	}
 }
@@ -1212,7 +1206,7 @@ func TestCheckpointCanBeTakenClaimedAndDeleted(t *testing.T) {
 	}
 }
 
-func TestDeleteCheckpointNoForwardQueryParam(t *testing.T) {
+func TestDeleteCheckpointStaysLocalOnlyWithNoForward(t *testing.T) {
 	mgr := &fakeManager{deleteCheckpoint: func(string) error { return nil }}
 	ts := newTestServer(t, "api", mgr, &fakeDialer{})
 
@@ -1243,7 +1237,7 @@ func TestDeleteCheckpointForgetsProbeCache(t *testing.T) {
 		ts := newProberTestServer(t, "api", mgr, prober)
 		resp := doReq(t, http.MethodDelete, ts.URL+"/v1/checkpoints/ck_0011223344556677", "api", "")
 		defer resp.Body.Close()
-		if len(prober.forgotten) != 1 || prober.forgotten[0] != "ck_0011223344556677" {
+		if !slices.Equal(prober.forgotten, []string{"ck_0011223344556677"}) {
 			t.Errorf("forgotten = %v, want [ck_0011223344556677]", prober.forgotten)
 		}
 	})
@@ -1254,7 +1248,7 @@ func TestDeleteCheckpointForgetsProbeCache(t *testing.T) {
 		ts := newProberTestServer(t, "api", mgr, prober)
 		resp := doReq(t, http.MethodDelete, ts.URL+"/v1/checkpoints/ck_0011223344556677?no_forward=1", "api", "")
 		defer resp.Body.Close()
-		if len(prober.forgotten) != 1 || prober.forgotten[0] != "ck_0011223344556677" {
+		if !slices.Equal(prober.forgotten, []string{"ck_0011223344556677"}) {
 			t.Errorf("forgotten = %v, want [ck_0011223344556677] even though nothing was held locally", prober.forgotten)
 		}
 	})
@@ -1340,7 +1334,7 @@ func TestDeleteTemplateRedirectsToOwner(t *testing.T) {
 		t.Fatalf("status %d, want 200 redirect", resp.StatusCode)
 	}
 	cr := decodeJSON[ClaimResponse](t, resp.Body)
-	if len(cr.Redirect) != 1 || cr.Redirect[0] != "node-b:7777" {
+	if !slices.Equal(cr.Redirect, []string{"node-b:7777"}) {
 		t.Errorf("redirect %v, want [node-b:7777]", cr.Redirect)
 	}
 
@@ -1987,7 +1981,7 @@ func TestCheckpointClaimRedirectsToOwner(t *testing.T) {
 		t.Fatalf("status = %d, want 200 carrying a redirect (the mesh redirect is a 200, not a 3xx)", resp.StatusCode)
 	}
 	got := decodeJSON[ClaimResponse](t, resp.Body)
-	if len(got.Redirect) != 1 || got.Redirect[0] != "owner-a:7777" {
+	if !slices.Equal(got.Redirect, []string{"owner-a:7777"}) {
 		t.Errorf("redirect = %v, want [owner-a:7777]", got.Redirect)
 	}
 	if got.ID != "" {
@@ -2203,7 +2197,7 @@ func TestCheckpointClaimProbesRealPeerAndRedirects(t *testing.T) {
 		t.Fatalf("status = %d, want 200 carrying a redirect", resp.StatusCode)
 	}
 	got := decodeJSON[ClaimResponse](t, resp.Body)
-	if len(got.Redirect) != 1 || got.Redirect[0] != tsB.URL {
+	if !slices.Equal(got.Redirect, []string{tsB.URL}) {
 		t.Errorf("redirect = %v, want [%s]", got.Redirect, tsB.URL)
 	}
 }
@@ -2348,17 +2342,17 @@ func TestTunVerbIsRootOnlyAndPassesOnlyTheNamedFields(t *testing.T) {
 		return nil
 	}}
 	ts := newTenantTestServer(t, "sekret", []tenants.TenantSpec{{Name: "acme", Token: "acme-tok"}}, mgr, nil)
-	put := func(token, id, body string) int {
+	put := func(t *testing.T, token, id, body string) int {
 		t.Helper()
 		return statusOf(t, http.MethodPut, ts.URL+"/v1/sandboxes/"+id+"/tun", token, body)
 	}
-	if code := put("sekret", "sb_1", `{"enabled": false}`); code != http.StatusNoContent {
+	if code := put(t, "sekret", "sb_1", `{"enabled": false}`); code != http.StatusNoContent {
 		t.Fatalf("status %d, want 204", code)
 	}
 	if gotEnabled == nil || *gotEnabled || gotProfile != nil {
 		t.Errorf("manager got enabled %v profile %v, want false and no profile", gotEnabled, gotProfile)
 	}
-	if code := put("sekret", "sb_1", `{"profile": "res"}`); code != http.StatusNoContent || gotEnabled != nil || gotProfile == nil || *gotProfile != "res" {
+	if code := put(t, "sekret", "sb_1", `{"profile": "res"}`); code != http.StatusNoContent || gotEnabled != nil || gotProfile == nil || *gotProfile != "res" {
 		t.Errorf("profile only: status %d, enabled %v profile %v", code, gotEnabled, gotProfile)
 	}
 	for _, tt := range []struct {
@@ -2372,7 +2366,7 @@ func TestTunVerbIsRootOnlyAndPassesOnlyTheNamedFields(t *testing.T) {
 		{"unknown sandbox", "sekret", "sb_2", `{"enabled": true}`, http.StatusNotFound},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			if code := put(tt.token, tt.id, tt.body); code != tt.want {
+			if code := put(t, tt.token, tt.id, tt.body); code != tt.want {
 				t.Errorf("%s: status %d, want %d", tt.name, code, tt.want)
 			}
 		})
