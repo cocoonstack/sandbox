@@ -318,7 +318,7 @@ func (m *Manager) sweepExpiredCheckpoints(ctx context.Context) {
 	// Checkpoints hides archive images, so the TTL never reaches one; reapPurge retires them
 	ckpts, err := m.Checkpoints(ctx, "")
 	if err != nil {
-		logger.Error(ctx, err, "list for retention")
+		logger.Warnf(ctx, "list for retention: %v", err)
 		return
 	}
 	cutoff := time.Now().Add(-ttl)
@@ -330,7 +330,7 @@ func (m *Manager) sweepExpiredCheckpoints(ctx context.Context) {
 		err := m.ckpts.Delete(ctx, ckpt.ID)
 		unlock()
 		if err != nil {
-			logger.Errorf(ctx, err, "expire %s", ckpt.ID)
+			logger.Warnf(ctx, "expire %s: %v", ckpt.ID, err)
 		}
 	}
 }
