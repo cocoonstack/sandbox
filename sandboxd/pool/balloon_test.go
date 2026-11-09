@@ -107,8 +107,15 @@ func TestAVMWithoutABalloonIsLeftAloneAndAFailureRetries(t *testing.T) {
 	eng.balloonErr = nil
 	eng.mu.Unlock()
 	sweepBalloons(t, m)
+	if calls := balloonCalls(eng); len(calls) != 2 {
+		t.Fatalf("balloon calls %q, want no retry inside the backoff", calls)
+	}
+	m.mu.Lock()
+	flaky.BalloonRetryAt = time.Now().Add(-time.Second)
+	m.mu.Unlock()
+	sweepBalloons(t, m)
 	if c := m.Counters(); c.BalloonInflations != 1 || len(balloonCalls(eng)) != 3 {
-		t.Errorf("inflations %d calls %q, want the failed claim retried and inflated", c.BalloonInflations, balloonCalls(eng))
+		t.Errorf("inflations %d calls %q, want the failed claim retried and inflated after the backoff", c.BalloonInflations, balloonCalls(eng))
 	}
 }
 
@@ -195,13 +202,16 @@ func TestTurningBalloonOffDeflatesTheInflatedClaims(t *testing.T) {
 	if calls := balloonCalls(eng); len(calls) != 2 || m.Counters().BalloonDeflations != 1 {
 		t.Errorf("balloon calls %q, want the idle claim deflated once reclaim is off", calls)
 	}
+	sweepBalloons(t, m)
+	if m.balloonSeen.Load() {
+		t.Error("the sweep keeps scanning with reclaim off and nothing left to deflate")
+	}
 }
 
 func balloonManager(t *testing.T, eng *fakeEngine, dataDir string, pools ...config.PoolSpec) *Manager {
 	t.Helper()
-	cfg := &config.Config{DataDir: dataDir, Pools: pools, Balloon: &config.Balloon{IdleSeconds: int(balloonIdleFor / time.Second)}}
-	m := mustManager(t, cfg, eng)
-	t.Cleanup(func() { settleCaptures(m) })
+	m := newTestManagerAt(t, eng, dataDir, pools...)
+	editView(m, func(v *configView) { v.balloonIdle, v.balloonTarget = balloonIdleFor, "50%" })
 	return m
 }
 

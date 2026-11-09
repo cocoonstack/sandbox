@@ -256,8 +256,7 @@ type Gauges struct {
 	AtCapacityReason string
 	MemoryLow        bool
 	AnonBytes        int
-	// BalloonInflated counts running claims whose balloon holds the idle target.
-	BalloonInflated int
+	BalloonInflated  int
 }
 
 type Backends struct {
@@ -304,9 +303,9 @@ type Manager struct {
 	configSeedHash string // config pools' hash, to warn when a file edit is overridden
 
 	sweeps struct{ idle, liveness, archive, archiveDelete, orphan, held, ckpt, gen, balloon atomic.Bool }
-	// balloonSeen marks a process that has run with balloon reclaim on; balloonSupport caches the cocoon check.
-	balloonSeen    atomic.Bool
-	balloonSupport atomic.Int32
+	// balloonSeen marks a process that has run with balloon reclaim on; balloonReady caches the cocoon check.
+	balloonSeen  atomic.Bool
+	balloonReady func() bool
 
 	cocoondSocket string
 	// vmmEvents is set while the cocoon daemon stream is live; the poll is then only a backstop.
@@ -455,6 +454,7 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 		healSem:         make(chan struct{}, maxConcurrentHeals),
 	}
 	m.store.dropHostEnv = cfg.HostEnvMemoryOnly
+	m.balloonReady = sync.OnceValue(m.checkBalloon)
 	m.seedVolumes(cfg.Volumes)
 	if err := m.loadCordon(); err != nil {
 		return nil, err

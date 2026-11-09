@@ -14,9 +14,7 @@ import (
 
 const (
 	defaultBalloonPercent = 50
-
-	balloonSupported int32 = 1
-	balloonMissing   int32 = 2
+	balloonRetryDelay     = time.Minute
 )
 
 // balloonOnce inflates the balloon of a claim idle past balloon.idle_seconds and deflates one active again, off every request path.
@@ -29,19 +27,21 @@ func (m *Manager) balloonOnce(ctx context.Context) {
 	}
 	go func() {
 		defer m.sweeps.balloon.Store(false)
-		if !m.balloonReady(ctx) {
+		if !m.balloonReady() {
 			return
 		}
 		v, now := m.view.Load(), time.Now()
 		var due []*types.Sandbox
 		m.mu.Lock()
 		for _, sb := range m.claimed {
-			idle := balloonIdle(sb, v, now)
-			if !m.balloonSkipLocked(sb) && (idle != (sb.Balloon == types.BalloonInflated) || !idle && sb.Balloon == types.BalloonUnknown) {
+			if balloonDue(sb.Balloon, balloonIdle(sb, v, now)) && now.After(sb.BalloonRetryAt) && !m.balloonSkipLocked(sb) {
 				due = append(due, sb)
 			}
 		}
 		m.mu.Unlock()
+		if v.balloonIdle == 0 && len(due) == 0 {
+			m.balloonSeen.Store(false)
+		}
 		m.runBounded(ctx, len(due), func(ctx context.Context, i int) {
 			m.balloonTo(ctx, due[i], balloonIdle(due[i], m.view.Load(), time.Now()))
 		}).Wait()
@@ -50,7 +50,7 @@ func (m *Manager) balloonOnce(ctx context.Context) {
 
 // inflateForHibernate shrinks an idle claim's hibernate snapshot; the caller holds sb.Transition.
 func (m *Manager) inflateForHibernate(ctx context.Context, sb *types.Sandbox) {
-	if m.view.Load().balloonIdle > 0 && m.balloonReady(ctx) {
+	if m.view.Load().balloonIdle > 0 && m.balloonReady() {
 		m.balloonTo(ctx, sb, true)
 	}
 }
@@ -63,12 +63,12 @@ func (m *Manager) balloonTo(ctx context.Context, sb *types.Sandbox, inflate bool
 	skip, state, def, vm := m.balloonSkipLocked(sb), sb.Balloon, sb.BalloonDefault, sb.VMName
 	m.mu.Unlock()
 	switch {
-	case skip, inflate && state == types.BalloonInflated, !inflate && state == "":
+	case skip, !balloonDue(state, inflate):
 		return
 	case !inflate && state == types.BalloonUnknown:
 		rec, ok, err := m.eng.Inspect(ctx, vm)
 		if err != nil || !ok {
-			m.counters.balloonFailures.Add(1)
+			m.balloonFailed(sb)
 			logger.Warnf(ctx, "inspect balloon of %s: found %t, %v", sb.ID, ok, err)
 			return
 		}
@@ -87,7 +87,7 @@ func (m *Manager) balloonTo(ctx context.Context, sb *types.Sandbox, inflate bool
 	case errors.Is(err, engine.ErrBalloonUnsupported):
 		m.setBalloon(sb, types.BalloonUnsupported, 0)
 	case err != nil:
-		m.counters.balloonFailures.Add(1)
+		m.balloonFailed(sb)
 		logger.Warnf(ctx, "balloon %s to %s: %v", sb.ID, target, err)
 	case inflate:
 		m.counters.balloonInflations.Add(1)
@@ -98,27 +98,27 @@ func (m *Manager) balloonTo(ctx context.Context, sb *types.Sandbox, inflate bool
 	}
 }
 
-// forgetBalloon marks a claim another run or node may have inflated, so the sweep reads its target; callers hold m.mu.
-func (m *Manager) forgetBalloon(sb *types.Sandbox) {
+// forgetBalloonLocked marks a claim another run or node may have inflated, so the sweep reads its target.
+func (m *Manager) forgetBalloonLocked(sb *types.Sandbox) {
 	if m.view.Load().balloonIdle > 0 {
 		sb.Balloon = types.BalloonUnknown
 	}
 }
 
-func (m *Manager) balloonReady(ctx context.Context) bool {
-	switch m.balloonSupport.Load() {
-	case balloonSupported:
-		return true
-	case balloonMissing:
-		return false
-	}
+func (m *Manager) checkBalloon() bool {
+	ctx := context.Background()
 	if err := m.eng.CheckBalloonSupport(ctx); err != nil {
-		m.balloonSupport.Store(balloonMissing)
-		log.WithFunc("pool.balloonReady").Error(ctx, err, "balloon reclaim is off")
+		log.WithFunc("pool.checkBalloon").Error(ctx, err, "balloon reclaim is off")
 		return false
 	}
-	m.balloonSupport.Store(balloonSupported)
 	return true
+}
+
+func (m *Manager) balloonFailed(sb *types.Sandbox) {
+	m.counters.balloonFailures.Add(1)
+	m.mu.Lock()
+	sb.BalloonRetryAt = time.Now().Add(balloonRetryDelay)
+	m.mu.Unlock()
 }
 
 func (m *Manager) setBalloon(sb *types.Sandbox, state types.BalloonState, def int64) {
@@ -130,6 +130,14 @@ func (m *Manager) setBalloon(sb *types.Sandbox, state types.BalloonState, def in
 func (m *Manager) balloonSkipLocked(sb *types.Sandbox) bool {
 	return m.claimed[sb.ID] != sb || !holdsVM(sb) || sb.Waking || sb.PendingSnap != "" || sb.SaveSnap != "" ||
 		sb.Balloon == types.BalloonUnsupported || m.midMoveLocked(sb)
+}
+
+// balloonDue reports whether a balloon in state needs a call to reach the idle target, or the boot target when inflate is false.
+func balloonDue(state types.BalloonState, inflate bool) bool {
+	if inflate {
+		return state != types.BalloonInflated
+	}
+	return state == types.BalloonInflated || state == types.BalloonUnknown
 }
 
 func balloonIdle(sb *types.Sandbox, v *configView, now time.Time) bool {

@@ -367,9 +367,10 @@ type Sandbox struct {
 
 	ArchiveRetryAt time.Time `json:"-"`
 
-	// Balloon and BalloonDefault, the boot target in bytes, are guarded by the manager mutex.
+	// Balloon, BalloonDefault (the boot target in bytes) and BalloonRetryAt are guarded by the manager mutex.
 	Balloon        BalloonState `json:"-"`
 	BalloonDefault int64        `json:"-"`
+	BalloonRetryAt time.Time    `json:"-"`
 
 	// lastActivity is unix-nanos of the last data-plane connection, stamped lock-free.
 	lastActivity atomic.Int64
