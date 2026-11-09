@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 
 	"github.com/cocoonstack/sandbox/sandboxd/config"
 	"github.com/cocoonstack/sandbox/sandboxd/engine"
@@ -73,45 +74,47 @@ func TestClaimProvisionAppliesVolumesInRequestOrder(t *testing.T) {
 }
 
 func TestClaimProvisionBringsMixedVolumesUpConcurrently(t *testing.T) {
-	dataset := writeVolumeImage(t, "dataset.img", "dataset")
-	weights := writeVolumeImage(t, "weights.img", "weights")
-	scratch := writeVolumeImage(t, "scratch.img", "scratch")
-	cache := writeVolumeImage(t, "cache.img", "cache")
-	eng := newFakeEngine()
-	m := newVolumeManager(t, eng, []config.VolumeSpec{
-		{Name: "dataset", Path: dataset},
-		{Name: "weights", Path: weights},
-		{Name: "scratch", Path: scratch, Writable: true},
-		{Name: "cache", Path: cache, Writable: true},
-	})
-	requested := []types.Volume{
-		{Name: "weights", Mount: "/models"},
-		{Name: "scratch", Mode: types.VolumeModeRW},
-		{Name: "dataset"},
-		{Name: "cache", Mount: "/cache", Mode: types.VolumeModeRW},
-	}
-	wantApplied := []types.Volume{
-		{Name: "weights", Mount: "/models"},
-		{Name: "scratch", Mount: "/volumes/scratch", Mode: types.VolumeModeRW},
-		{Name: "dataset", Mount: "/volumes/dataset"},
-		{Name: "cache", Mount: "/cache", Mode: types.VolumeModeRW},
-	}
-	rendezvousAttaches(eng, len(requested))
+	synctest.Test(t, func(t *testing.T) {
+		dataset := writeVolumeImage(t, "dataset.img", "dataset")
+		weights := writeVolumeImage(t, "weights.img", "weights")
+		scratch := writeVolumeImage(t, "scratch.img", "scratch")
+		cache := writeVolumeImage(t, "cache.img", "cache")
+		eng := newFakeEngine()
+		m := newVolumeManager(t, eng, []config.VolumeSpec{
+			{Name: "dataset", Path: dataset},
+			{Name: "weights", Path: weights},
+			{Name: "scratch", Path: scratch, Writable: true},
+			{Name: "cache", Path: cache, Writable: true},
+		})
+		requested := []types.Volume{
+			{Name: "weights", Mount: "/models"},
+			{Name: "scratch", Mode: types.VolumeModeRW},
+			{Name: "dataset"},
+			{Name: "cache", Mount: "/cache", Mode: types.VolumeModeRW},
+		}
+		wantApplied := []types.Volume{
+			{Name: "weights", Mount: "/models"},
+			{Name: "scratch", Mount: "/volumes/scratch", Mode: types.VolumeModeRW},
+			{Name: "dataset", Mount: "/volumes/dataset"},
+			{Name: "cache", Mount: "/cache", Mode: types.VolumeModeRW},
+		}
+		rendezvousAttaches(eng, len(requested))
 
-	sb, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Volumes: requested})
-	if err != nil {
-		t.Fatalf("ClaimProvision: %v", err)
-	}
-	if !slices.Equal(sb.Volumes, wantApplied) {
-		t.Errorf("volumes=%v, want the request order %v", sb.Volumes, wantApplied)
-	}
-	assertVolumeBringUp(t, eng, wantApplied)
-	if !volumeDirty(scratch) || !volumeDirty(cache) {
-		t.Error("live writable claim left an image unmarked")
-	}
-	if volumeDirty(dataset) || volumeDirty(weights) {
-		t.Error("read-only volume of a mixed claim was marked dirty")
-	}
+		sb, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Volumes: requested})
+		if err != nil {
+			t.Fatalf("ClaimProvision: %v", err)
+		}
+		if !slices.Equal(sb.Volumes, wantApplied) {
+			t.Errorf("volumes=%v, want the request order %v", sb.Volumes, wantApplied)
+		}
+		assertVolumeBringUp(t, eng, wantApplied)
+		if !volumeDirty(scratch) || !volumeDirty(cache) {
+			t.Error("live writable claim left an image unmarked")
+		}
+		if volumeDirty(dataset) || volumeDirty(weights) {
+			t.Error("read-only volume of a mixed claim was marked dirty")
+		}
+	})
 }
 
 func TestClaimProvisionOneVolumeAttachFailureFailsWholeClaim(t *testing.T) {

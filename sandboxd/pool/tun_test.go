@@ -232,7 +232,7 @@ func TestAWakeIntoAPoolWithoutTunTellsTheGuestTunDown(t *testing.T) {
 	}
 }
 
-func TestADisableTheWakeMissedStillTurnsTheGuestOff(t *testing.T) {
+func TestAHelloAfterADisableAnswersOff(t *testing.T) {
 	eng, addrs := newFakeEngine(), &fakeAddrs{}
 	m := tunManager(t, eng, addrs, config.PoolSpec{PoolKey: testKey, Tun: true, Egress: anyPolicy})
 	sb := mustClaim(t, m, testKey)
@@ -455,10 +455,12 @@ func TestAnAdoptionConfirmsTheClaimsAddressBeforeTakingItsRow(t *testing.T) {
 			addrs.lost = []string{sb.ID}
 		}
 		b.tunAddrs = addrs
+		var atTake []string
+		b.archives = &hookRegistry{Registry: b.archives, beforeTake: func() { atTake = addrs.confirmedList() }}
 
 		mustAdopt(t, b, sb, "adopt")
-		if !slices.Equal(addrs.confirmedList(), []string{sb.ID}) {
-			t.Errorf("taken=%v: confirmed %v, want the adopted claim", taken, addrs.confirmedList())
+		if !slices.Equal(atTake, []string{sb.ID}) {
+			t.Errorf("taken=%v: confirmed %v when the row was taken, want the adopted claim", taken, atTake)
 		}
 		adopted, _ := b.byID(sb.ID)
 		if got := adopted.TunAddr.IsValid(); got == taken {

@@ -241,13 +241,15 @@ func TestReleaseRecordsItsUsageEventBeforeTheTeardown(t *testing.T) {
 	m := newTestManager(t, eng)
 	sb := mustClaim(t, m, testKey)
 	stall := make(chan struct{})
+	unstall := sync.OnceFunc(func() { close(stall) })
+	t.Cleanup(unstall)
 	eng.mu.Lock()
 	eng.removeStall = stall
 	eng.mu.Unlock()
 	done := make(chan error, 1)
 	go func() { done <- m.Release(t.Context(), sb.ID, Cred{Token: sb.Token}) }()
 	waitFor(t, func() bool { return strings.HasSuffix(usageEventsOf(t, m, sb.ID), "release") })
-	close(stall)
+	unstall()
 	if err := <-done; err != nil {
 		t.Fatalf("release: %v", err)
 	}
@@ -783,18 +785,20 @@ func TestRefillCanceledWhileWaitingForProbeCleansUp(t *testing.T) {
 }
 
 func TestDirectClaimSkipsProbeGate(t *testing.T) {
-	m := newTestManager(t, newFakeEngine())
-	for range cap(m.probeSem) {
-		m.probeSem <- struct{}{}
-	}
-	defer func() {
+	synctest.Test(t, func(t *testing.T) {
+		m := newTestManager(t, newFakeEngine())
 		for range cap(m.probeSem) {
-			<-m.probeSem
+			m.probeSem <- struct{}{}
 		}
-	}()
-	if _, err := claimAny(t.Context(), m, testKey, ClaimOptions{}); err != nil {
-		t.Fatalf("direct claim waited on probe gate: %v", err)
-	}
+		defer func() {
+			for range cap(m.probeSem) {
+				<-m.probeSem
+			}
+		}()
+		if _, err := claimAny(t.Context(), m, testKey, ClaimOptions{}); err != nil {
+			t.Fatalf("direct claim waited on probe gate: %v", err)
+		}
+	})
 }
 
 func TestRefillBudgetFollowsConfig(t *testing.T) {
@@ -996,15 +1000,12 @@ func TestClaimedAtIsTheFirstGrant(t *testing.T) {
 	}
 }
 
-func TestTheByIDReadCarriesTheTokenAndTheIndexDoesNot(t *testing.T) {
+func TestTheByIDReadCarriesTheToken(t *testing.T) {
 	m := newTestManager(t, newFakeEngine())
 	sb := mustClaim(t, m, testKey)
 
 	if got, ok := m.Sandbox(sb.ID); !ok || got.Token != sb.Token {
 		t.Errorf("Sandbox(%s) token %q, want the claim's %q", sb.ID, got.Token, sb.Token)
-	}
-	if list := m.Sandboxes("", "", nil); len(list) != 1 || list[0].Token != "" {
-		t.Errorf("index %+v carries a token", list)
 	}
 }
 

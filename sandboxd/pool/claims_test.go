@@ -1,6 +1,7 @@
 package pool
 
 import (
+	"bytes"
 	"errors"
 	"io"
 	"io/fs"
@@ -8,8 +9,9 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"runtime"
+	"runtime/pprof"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -25,15 +27,14 @@ func TestRecommitKeepsOneRetrierWhileWritesFail(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "absent")
 	m.store.path = filepath.Join(dir, "claims.json")
 
-	before := runtime.NumGoroutine()
 	for range 50 {
 		m.mu.Lock()
 		snap := m.store.set(sb)
 		m.mu.Unlock()
 		m.store.recommit(t.Context(), snap)
 	}
-	if grown := runtime.NumGoroutine() - before; grown > 2 {
-		t.Fatalf("%d goroutines for 50 failed persists, want one retrier", grown)
+	if n := recommitGoroutines(t); n != 1 {
+		t.Fatalf("%d retriers for 50 failed persists, want one", n)
 	}
 
 	if err := os.MkdirAll(dir, 0o750); err != nil {
@@ -236,4 +237,27 @@ func TestClaimStoreConcurrentCommits(t *testing.T) {
 	if got, err := newClaimStore(filepath.Dir(s.path), false).load(); err != nil || len(got) != 1 {
 		t.Fatalf("after concurrent commits: %+v, %v", got, err)
 	}
+}
+
+func recommitGoroutines(t *testing.T) int {
+	t.Helper()
+	var profile bytes.Buffer
+	if err := pprof.Lookup("goroutine").WriteTo(&profile, 1); err != nil {
+		t.Fatalf("goroutine profile: %v", err)
+	}
+	n := 0
+	for record := range strings.SplitSeq(profile.String(), "\n\n") {
+		if !strings.Contains(record, "(*claimStore).recommit.func1") {
+			continue
+		}
+		for line := range strings.SplitSeq(record, "\n") {
+			if count, _, ok := strings.Cut(line, " @ "); ok {
+				if c, err := strconv.Atoi(count); err == nil {
+					n += c
+					break
+				}
+			}
+		}
+	}
+	return n
 }

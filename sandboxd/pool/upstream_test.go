@@ -6,12 +6,11 @@ import (
 	"time"
 
 	"github.com/cocoonstack/sandbox/sandboxd/config"
-	"github.com/cocoonstack/sandbox/sandboxd/egress"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
 func TestUpstreamEnvIsAdmittedHostOnlyAndAllowed(t *testing.T) {
-	m := upstreamManager(t, "127.0.0.1")
+	m := upstreamManager(t)
 	for name, tt := range map[string]struct {
 		v  types.EnvVar
 		ok bool
@@ -35,7 +34,7 @@ func TestUpstreamEnvIsAdmittedHostOnlyAndAllowed(t *testing.T) {
 }
 
 func TestCheckpointClaimAdmitsTheUpstreamEnvLikeAnyClaim(t *testing.T) {
-	m := upstreamManager(t, "127.0.0.1")
+	m := upstreamManager(t)
 	src := mustClaim(t, m, testKey)
 	ckpt, err := m.Checkpoint(t.Context(), src.ID, Cred{Token: src.Token}, "", "")
 	if err != nil {
@@ -53,7 +52,7 @@ func TestCheckpointClaimAdmitsTheUpstreamEnvLikeAnyClaim(t *testing.T) {
 }
 
 func TestPatchSwitchesTheUpstreamForNewConnections(t *testing.T) {
-	m := upstreamManager(t, "127.0.0.1")
+	m := upstreamManager(t)
 	sb := mustClaim(t, m, testKey)
 	if err := m.PatchEnv(t.Context(), sb.ID, types.EnvPatch{"EGRESS_UPSTREAM": {Value: "http://127.0.0.1:3001", Guest: hostOnly}}, ""); err != nil {
 		t.Fatalf("patch: %v", err)
@@ -79,14 +78,11 @@ func TestPatchSwitchesTheUpstreamForNewConnections(t *testing.T) {
 	}
 }
 
-func upstreamManager(t *testing.T, allow ...string) *Manager {
+func upstreamManager(t *testing.T) *Manager {
 	t.Helper()
 	m := newTestManager(t, newFakeEngine())
-	if _, err := egress.ParseUpstreamAllow(allow); err != nil {
-		t.Fatalf("allow: %v", err)
-	}
 	editEgress(t, m, func(cfg *config.Config) {
-		cfg.EgressUpstream = &config.EgressUpstreamConfig{ClaimEnv: "EGRESS_UPSTREAM", Allow: allow}
+		cfg.EgressUpstream = &config.EgressUpstreamConfig{ClaimEnv: "EGRESS_UPSTREAM", Allow: []string{"127.0.0.1"}}
 	})
 	return m
 }
