@@ -56,8 +56,10 @@ Finish the cell's upgrade within a day: a v0.1.24 node never stamps
 From v0.1.28, archive and replica wake images get `ar_` ids, which v0.1.27
 cannot wake; images archived earlier keep their `ck_` ids and wake on both.
 With `archive_failover`, finish the cell's upgrade before any node hands off,
-evacuates or adopts an archived claim, and before going back to v0.1.27 wake
-every claim archived since the upgrade.
+evacuates or adopts an archived claim. Before going back to v0.1.27, wake
+every claim archived since the upgrade, and set `replicate_seconds` to 0 on
+v0.1.28 until no row has a `replica_ck` (see
+[Disabling archive failover](#disabling-archive-failover)).
 
 From v0.1.25, a claim env write refuses a `guest: false` entry with an empty
 value, so sending back a `GET` env reply answers 400; send each entry with its
