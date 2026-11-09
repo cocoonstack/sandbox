@@ -74,14 +74,16 @@ func TestRunReportsAStdinReadFailure(t *testing.T) {
 	sb := testSandbox(t, newAgentServer(t, silkdtest.ServeConn))
 	broken := errors.New("upstream reset")
 
-	var out strings.Builder
-	code, err := sb.Run(t.Context(), Cmd{
-		Argv:   []string{"cat"},
-		Stdin:  io.MultiReader(strings.NewReader("partial"), iotest.ErrReader(broken)),
-		Stdout: &out,
-	})
-	if !errors.Is(err, broken) || code != 0 || out.String() != "partial" {
-		t.Errorf("code=%d out=%q err=%v, want the exit code with the stdin failure", code, out.String(), err)
+	for range 100 {
+		var out strings.Builder
+		code, err := sb.Run(t.Context(), Cmd{
+			Argv:   []string{"cat"},
+			Stdin:  io.MultiReader(strings.NewReader("partial"), iotest.ErrReader(broken)),
+			Stdout: &out,
+		})
+		if !errors.Is(err, broken) || code != 0 || out.String() != "partial" {
+			t.Fatalf("code=%d out=%q err=%v, want the exit code with the stdin failure", code, out.String(), err)
+		}
 	}
 }
 
