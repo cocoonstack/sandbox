@@ -20,8 +20,9 @@ pub const DEADLINE: Duration = Duration::from_secs(30);
 
 pub type FrameWriter = WriteHalf<DuplexStream>;
 pub type FrameLines = Lines<BufReader<ReadHalf<DuplexStream>>>;
+pub type Connection = (FrameWriter, FrameLines, JoinHandle<std::io::Result<()>>);
 
-pub fn connect(state: &Arc<State>) -> (FrameWriter, FrameLines, JoinHandle<std::io::Result<()>>) {
+pub fn connect(state: &Arc<State>) -> Connection {
     let (client, server) = tokio::io::duplex(1 << 20);
     let state = Arc::clone(state);
     let (sr, sw) = tokio::io::split(server);
@@ -30,10 +31,7 @@ pub fn connect(state: &Arc<State>) -> (FrameWriter, FrameLines, JoinHandle<std::
     (cw, BufReader::new(cr).lines(), handle)
 }
 
-pub async fn connect_with(
-    state: &Arc<State>,
-    first: Value,
-) -> (FrameWriter, FrameLines, JoinHandle<std::io::Result<()>>) {
+pub async fn connect_with(state: &Arc<State>, first: Value) -> Connection {
     let (mut cw, lines, handle) = connect(state);
     send(&mut cw, first).await;
     (cw, lines, handle)
