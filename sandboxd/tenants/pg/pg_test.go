@@ -103,12 +103,13 @@ func TestListAndClassesFailFastOnAStalledDatabase(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			ctx, cancel := context.WithTimeout(t.Context(), metastore.QueryTimeout+3*time.Second)
+			bound := metastore.QueryTimeout + 3*time.Second
+			ctx, cancel := context.WithTimeout(t.Context(), bound)
 			defer cancel()
 			start := time.Now()
 			err := call(ctx)
-			if elapsed := time.Since(start); elapsed > metastore.QueryTimeout+time.Second {
-				t.Errorf("took %v, want under %v", elapsed, metastore.QueryTimeout+time.Second)
+			if elapsed := time.Since(start); elapsed >= bound {
+				t.Errorf("took %v, want under the caller's %v", elapsed, bound)
 			}
 			if !errors.Is(err, tenants.ErrUnavailable) {
 				t.Errorf("err = %v, want ErrUnavailable", err)

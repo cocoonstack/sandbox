@@ -7,9 +7,11 @@ import (
 	"io"
 	"net"
 	"net/netip"
+	"os"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 )
 
@@ -20,336 +22,409 @@ var (
 )
 
 func TestRouterAnnouncesRewritesAndPassesOnlyReplies(t *testing.T) {
-	u, r := newRouter(t)
-	var records []FlowRecord
-	var mu sync.Mutex
-	r.Arm(Claim{
-		ID: "c1", Addr: claimAddr,
-		Allow:  func(_ netip.Addr, port uint16) bool { return port == 443 },
-		Record: func(fr FlowRecord) { mu.Lock(); records = append(records, fr); mu.Unlock() },
+	synctest.Test(t, func(t *testing.T) {
+		u, r := newRouter(t)
+		var records []FlowRecord
+		var mu sync.Mutex
+		r.Arm(Claim{
+			ID: "c1", Addr: claimAddr,
+			Allow:  func(_ netip.Addr, port uint16) bool { return port == 443 },
+			Record: func(fr FlowRecord) { mu.Lock(); records = append(records, fr); mu.Unlock() },
+		})
+		if inner, etype, to := u.sent(t); etype != etherARP || to.Addr() != vtep {
+			t.Fatalf("arm sent %v to %v, want a gratuitous ARP to the exit", etype, to)
+		} else if _, _, target, ok := arpRequest(inner); !ok || target != claimAddr {
+			t.Errorf("gratuitous ARP announces %v", target)
+		}
+		guest := serve(t, r, claimAddr)
+		if h := guestHello(t, guest); h.Flags&FlagOn == 0 || h.MTU != 1450 || h.Offloads&(OffloadTSO4|OffloadUSO4|OffloadUSO6) != OffloadTSO4|OffloadUSO4|OffloadUSO6 {
+			t.Fatalf("host hello = %+v", h)
+		}
+		sendFrame(t, guest, frame(ProtoTCP, netip.MustParseAddr("100.80.0.99"), remote, true))
+		inner, etype, _ := u.sent(t)
+		pkt := append(make([]byte, VnetHdrLen), inner...)
+		if p, _ := Parse(pkt); etype != etherIPv4 || p.Src != claimAddr || !validIP(pkt) || !validL4(pkt) {
+			t.Fatalf("sent src %v, want the claim address with full checksums", p.Src)
+		}
+		denied := frame(ProtoTCP, GuestAddr, remote, false)
+		binary.BigEndian.PutUint16(denied[VnetHdrLen+20+2:], 22)
+		sendFrame(t, guest, denied)
+		sendFrame(t, guest, frame(ProtoTCP, GuestAddr, netip.MustParseAddr("100.80.0.5"), false))
+		stranger := reply(netip.MustParseAddr("198.51.100.1"))
+		binary.BigEndian.PutUint16(stranger[Overhead+20:], 22)
+		u.inject(t, stranger)
+		u.inject(t, reply(remote))
+		got := readFrame(t, guest)
+		if p, _ := Parse(got); p.Dst != GuestAddr || p.Src != remote || !validIP(got) {
+			t.Fatalf("delivered %+v, want the reply rewritten to the guest", p)
+		}
+		synctest.Wait()
+		if got := r.Stats().Drops[DropPolicy]; got != 3 {
+			t.Fatalf("policy drops = %d, want 3", got)
+		}
+		if n := len(u.out); n != 0 {
+			t.Errorf("%d more datagrams sent, want none for denied traffic", n)
+		}
+		_ = guest.Close()
+		r.Disarm(claimAddr)
+		synctest.Wait()
+		mu.Lock()
+		defer mu.Unlock()
+		if len(records) != 2 {
+			t.Errorf("recorded %d flows after the disarm, want 2", len(records))
+		}
 	})
-	if inner, etype, to := u.sent(t); etype != etherARP || to.Addr() != vtep {
-		t.Fatalf("arm sent %v to %v, want a gratuitous ARP to the exit", etype, to)
-	} else if _, _, target, ok := arpRequest(inner); !ok || target != claimAddr {
-		t.Errorf("gratuitous ARP announces %v", target)
-	}
-	guest := serve(t, r, claimAddr)
-	if h := guestHello(t, guest); h.Flags&FlagOn == 0 || h.MTU != 1450 || h.Offloads&(OffloadTSO4|OffloadUSO4|OffloadUSO6) != OffloadTSO4|OffloadUSO4|OffloadUSO6 {
-		t.Fatalf("host hello = %+v", h)
-	}
-	sendFrame(t, guest, frame(ProtoTCP, netip.MustParseAddr("100.80.0.99"), remote, true))
-	inner, etype, _ := u.sent(t)
-	pkt := append(make([]byte, VnetHdrLen), inner...)
-	if p, _ := Parse(pkt); etype != etherIPv4 || p.Src != claimAddr || !validIP(pkt) || !validL4(pkt) {
-		t.Fatalf("sent src %v, want the claim address with full checksums", p.Src)
-	}
-	denied := frame(ProtoTCP, GuestAddr, remote, false)
-	binary.BigEndian.PutUint16(denied[VnetHdrLen+20+2:], 22)
-	sendFrame(t, guest, denied)
-	sendFrame(t, guest, frame(ProtoTCP, GuestAddr, netip.MustParseAddr("100.80.0.5"), false))
-	stranger := reply(netip.MustParseAddr("198.51.100.1"))
-	binary.BigEndian.PutUint16(stranger[Overhead+20:], 22)
-	u.inject(t, stranger)
-	u.inject(t, reply(remote))
-	got := readFrame(t, guest)
-	if p, _ := Parse(got); p.Dst != GuestAddr || p.Src != remote || !validIP(got) {
-		t.Fatalf("delivered %+v, want the reply rewritten to the guest", p)
-	}
-	waitFor(t, func() bool { return r.Stats().Drops[DropPolicy] == 3 })
-	if n := len(u.out); n != 0 {
-		t.Errorf("%d more datagrams sent, want none for denied traffic", n)
-	}
-	_ = guest.Close()
-	r.Disarm(claimAddr)
-	waitFor(t, func() bool { mu.Lock(); defer mu.Unlock(); return len(records) == 2 })
 }
 
 func TestRouterAnswersARPOnlyForArmedClaims(t *testing.T) {
-	u, r := newRouter(t)
-	r.Arm(Claim{ID: "c1", Addr: claimAddr})
-	u.sent(t)
-	asker := netip.MustParseAddr("100.80.0.1")
-	for _, target := range []netip.Addr{netip.MustParseAddr("100.80.0.8"), claimAddr} {
+	synctest.Test(t, func(t *testing.T) {
+		u, r := newRouter(t)
+		r.Arm(Claim{ID: "c1", Addr: claimAddr})
+		u.sent(t)
+		asker := netip.MustParseAddr("100.80.0.1")
+		for _, target := range []netip.Addr{netip.MustParseAddr("100.80.0.8"), claimAddr} {
+			b := appendHeader(nil, 7, broadcast, exitMAC, etherARP)
+			u.inject(t, appendARP(b, arpReq, exitMAC, asker, [6]byte{}, target))
+		}
+		inner, _, to := u.sent(t)
+		if to.Addr() != vtep || binary.BigEndian.Uint16(inner[6:]) != arpReply || netip.AddrFrom4([4]byte(inner[14:18])) != claimAddr {
+			t.Fatalf("arp reply to %v: %x", to, inner)
+		}
 		b := appendHeader(nil, 7, broadcast, exitMAC, etherARP)
-		u.inject(t, appendARP(b, arpReq, exitMAC, asker, [6]byte{}, target))
-	}
-	inner, _, to := u.sent(t)
-	if to.Addr() != vtep || binary.BigEndian.Uint16(inner[6:]) != arpReply || netip.AddrFrom4([4]byte(inner[14:18])) != claimAddr {
-		t.Fatalf("arp reply to %v: %x", to, inner)
-	}
-	b := appendHeader(nil, 7, broadcast, exitMAC, etherARP)
-	u.injectFrom(t, appendARP(b, arpReq, exitMAC, asker, [6]byte{}, claimAddr), netip.MustParseAddrPort("10.0.0.77:4789"))
-	waitFor(t, func() bool { return r.Stats().Drops[DropSender] == 1 })
-	r.Disarm(claimAddr)
-	b = appendHeader(nil, 7, broadcast, exitMAC, etherARP)
-	u.inject(t, appendARP(b, arpReq, exitMAC, asker, [6]byte{}, claimAddr))
-	sentinel := netip.MustParseAddr("100.80.0.8")
-	r.Arm(Claim{ID: "c2", Addr: sentinel})
-	u.sent(t)
-	b = appendHeader(nil, 7, broadcast, exitMAC, etherARP)
-	u.inject(t, appendARP(b, arpReq, exitMAC, asker, [6]byte{}, sentinel))
-	if inner, _, _ := u.sent(t); netip.AddrFrom4([4]byte(inner[14:18])) != sentinel {
-		t.Fatalf("first answer after the disarm announces %x, want only the sentinel's", inner[14:18])
-	}
-	if len(u.out) != 0 {
-		t.Error("a disarmed claim, or a sender that is no exit, got an ARP answer")
-	}
+		u.injectFrom(t, appendARP(b, arpReq, exitMAC, asker, [6]byte{}, claimAddr), netip.MustParseAddrPort("10.0.0.77:4789"))
+		synctest.Wait()
+		if got := r.Stats().Drops[DropSender]; got != 1 {
+			t.Fatalf("sender drops = %d, want 1", got)
+		}
+		r.Disarm(claimAddr)
+		b = appendHeader(nil, 7, broadcast, exitMAC, etherARP)
+		u.inject(t, appendARP(b, arpReq, exitMAC, asker, [6]byte{}, claimAddr))
+		sentinel := netip.MustParseAddr("100.80.0.8")
+		r.Arm(Claim{ID: "c2", Addr: sentinel})
+		u.sent(t)
+		b = appendHeader(nil, 7, broadcast, exitMAC, etherARP)
+		u.inject(t, appendARP(b, arpReq, exitMAC, asker, [6]byte{}, sentinel))
+		if inner, _, _ := u.sent(t); netip.AddrFrom4([4]byte(inner[14:18])) != sentinel {
+			t.Fatalf("first answer after the disarm announces %x, want only the sentinel's", inner[14:18])
+		}
+		synctest.Wait()
+		if len(u.out) != 0 {
+			t.Error("a disarmed claim, or a sender that is no exit, got an ARP answer")
+		}
+	})
 }
 
 func TestRouterSegmentsGSOIntoOneBatch(t *testing.T) {
-	u, r := newRouter(t)
-	r.Arm(Claim{ID: "c1", Addr: claimAddr, Allow: func(netip.Addr, uint16) bool { return true }})
-	u.sent(t)
-	guest := serve(t, r, claimAddr)
-	guestHello(t, guest)
-	sendFrame(t, guest, gsoFrame(ProtoTCP, 4000, 1400))
-	for i := range 3 {
-		inner, _, _ := u.sent(t)
-		if pkt := append(make([]byte, VnetHdrLen), inner...); !validIP(pkt) || !validL4(pkt) {
-			t.Errorf("segment %d invalid", i)
+	synctest.Test(t, func(t *testing.T) {
+		u, r := newRouter(t)
+		r.Arm(Claim{ID: "c1", Addr: claimAddr, Allow: func(netip.Addr, uint16) bool { return true }})
+		u.sent(t)
+		guest := serve(t, r, claimAddr)
+		guestHello(t, guest)
+		sendFrame(t, guest, gsoFrame(ProtoTCP, 4000, 1400))
+		for i := range 3 {
+			inner, _, _ := u.sent(t)
+			if pkt := append(make([]byte, VnetHdrLen), inner...); !validIP(pkt) || !validL4(pkt) {
+				t.Errorf("segment %d invalid", i)
+			}
 		}
-	}
-	if b := u.batches.Load(); b != 2 {
-		t.Errorf("sends = %d, want the ARP and one batch for the GSO frame", b)
-	}
+		if b := u.batches.Load(); b != 2 {
+			t.Errorf("sends = %d, want the ARP and one batch for the GSO frame", b)
+		}
+	})
 }
 
 func TestRouterRefusesUnarmedAndDisabledAndDisarmEndsStream(t *testing.T) {
-	_, r := newRouter(t)
-	if h := guestHello(t, serve(t, r, claimAddr)); h.Flags&FlagOn != 0 {
-		t.Error("an unarmed address got on")
-	}
-	r.Arm(Claim{ID: "c1", Addr: claimAddr, Enabled: func() bool { return false }})
-	off := serve(t, r, claimAddr)
-	if h := guestHello(t, off); h.Flags&FlagOn != 0 {
-		t.Error("a disabled claim got on")
-	}
-	if _, err := off.Read(make([]byte, 1)); !errors.Is(err, io.EOF) {
-		t.Errorf("stream after off: %v", err)
-	}
-	r.Arm(Claim{ID: "c1", Addr: claimAddr, Allow: func(netip.Addr, uint16) bool { return true }})
-	on := serve(t, r, claimAddr)
-	guestHello(t, on)
-	waitFor(t, func() bool { return r.claims[claimAddr].live() != nil })
-	r.Disarm(claimAddr)
-	if _, err := on.Read(make([]byte, 1)); err == nil {
-		t.Error("stream still open after disarm")
-	}
+	synctest.Test(t, func(t *testing.T) {
+		_, r := newRouter(t)
+		if h := guestHello(t, serve(t, r, claimAddr)); h.Flags&FlagOn != 0 {
+			t.Error("an unarmed address got on")
+		}
+		r.Arm(Claim{ID: "c1", Addr: claimAddr, Enabled: func() bool { return false }})
+		off := serve(t, r, claimAddr)
+		if h := guestHello(t, off); h.Flags&FlagOn != 0 {
+			t.Error("a disabled claim got on")
+		}
+		_ = off.SetReadDeadline(time.Now().Add(2 * time.Second))
+		if _, err := off.Read(make([]byte, 1)); !errors.Is(err, io.EOF) {
+			t.Errorf("stream after off: %v", err)
+		}
+		r.Arm(Claim{ID: "c1", Addr: claimAddr, Allow: func(netip.Addr, uint16) bool { return true }})
+		on := serve(t, r, claimAddr)
+		guestHello(t, on)
+		synctest.Wait()
+		if r.claims[claimAddr].live() == nil {
+			t.Fatal("the armed claim's stream never went live")
+		}
+		r.Disarm(claimAddr)
+		_ = on.SetReadDeadline(time.Now().Add(2 * time.Second))
+		if _, err := on.Read(make([]byte, 1)); err == nil || errors.Is(err, os.ErrDeadlineExceeded) {
+			t.Errorf("stream still open after disarm: %v", err)
+		}
+	})
 }
 
 func TestRouterQuotaStopsTraffic(t *testing.T) {
-	u, r := newRouter(t)
-	used := new(atomic.Int64)
-	r.Arm(Claim{ID: "c1", Addr: claimAddr, Used: used, Limits: Limits{QuotaBytes: 100}, Allow: func(netip.Addr, uint16) bool { return true }})
-	u.sent(t)
-	guest := serve(t, r, claimAddr)
-	guestHello(t, guest)
-	f := frame(ProtoTCP, GuestAddr, remote, false)
-	for range 3 {
-		sendFrame(t, guest, f)
-	}
-	u.sent(t)
-	waitFor(t, func() bool { return r.Stats().Drops[DropLimit] == 2 })
-	if used.Load() > 100 {
-		t.Errorf("used %d past the quota", used.Load())
-	}
+	synctest.Test(t, func(t *testing.T) {
+		u, r := newRouter(t)
+		used := new(atomic.Int64)
+		r.Arm(Claim{ID: "c1", Addr: claimAddr, Used: used, Limits: Limits{QuotaBytes: 100}, Allow: func(netip.Addr, uint16) bool { return true }})
+		u.sent(t)
+		guest := serve(t, r, claimAddr)
+		guestHello(t, guest)
+		f := frame(ProtoTCP, GuestAddr, remote, false)
+		for range 3 {
+			sendFrame(t, guest, f)
+		}
+		u.sent(t)
+		synctest.Wait()
+		if got := r.Stats().Drops[DropLimit]; got != 2 {
+			t.Fatalf("limit drops = %d, want 2", got)
+		}
+		if used.Load() > 100 {
+			t.Errorf("used %d past the quota", used.Load())
+		}
+	})
 }
 
 func TestRouterChargesNothingForAFrameWithNoExit(t *testing.T) {
-	_, r := newRouter(t)
-	used := new(atomic.Int64)
-	r.Arm(Claim{ID: "c1", Addr: claimAddr, Profile: "nowhere", Used: used, Allow: func(netip.Addr, uint16) bool { return true }})
-	guest := serve(t, r, claimAddr)
-	guestHello(t, guest)
-	sendFrame(t, guest, frame(ProtoTCP, GuestAddr, remote, false))
-	waitFor(t, func() bool { return r.Stats().Drops[DropNoExit] == 1 })
-	r.mu.RLock()
-	a := r.claims[claimAddr]
-	r.mu.RUnlock()
-	a.flows.mu.RLock()
-	opened := len(a.flows.table)
-	a.flows.mu.RUnlock()
-	if used.Load() != 0 || opened != 0 {
-		t.Errorf("used %d bytes and opened %d flows for a frame that never left", used.Load(), opened)
-	}
+	synctest.Test(t, func(t *testing.T) {
+		_, r := newRouter(t)
+		used := new(atomic.Int64)
+		r.Arm(Claim{ID: "c1", Addr: claimAddr, Profile: "nowhere", Used: used, Allow: func(netip.Addr, uint16) bool { return true }})
+		guest := serve(t, r, claimAddr)
+		guestHello(t, guest)
+		sendFrame(t, guest, frame(ProtoTCP, GuestAddr, remote, false))
+		synctest.Wait()
+		if got := r.Stats().Drops[DropNoExit]; got != 1 {
+			t.Fatalf("no-exit drops = %d, want 1", got)
+		}
+		r.mu.RLock()
+		a := r.claims[claimAddr]
+		r.mu.RUnlock()
+		a.flows.mu.RLock()
+		opened := len(a.flows.table)
+		a.flows.mu.RUnlock()
+		if used.Load() != 0 || opened != 0 {
+			t.Errorf("used %d bytes and opened %d flows for a frame that never left", used.Load(), opened)
+		}
+	})
 }
 
 func TestDeliverCoalescesInOrderSegmentsIntoOneGSOFrame(t *testing.T) {
-	u, r := newRouter(t)
-	r.Arm(Claim{ID: "c1", Addr: claimAddr, Allow: func(netip.Addr, uint16) bool { return true }})
-	u.sent(t)
-	guest := serve(t, r, claimAddr)
-	guestHello(t, guest)
-	sendFrame(t, guest, frame(ProtoTCP, GuestAddr, remote, false))
-	u.sent(t)
-	bad := dataSegment(5000, 1000)
-	bad[len(bad)-1] ^= 0xff
-	u.injectBatch(t, dataSegment(1000, 1000), dataSegment(2000, 1000), dataSegment(3000, 1000), dataSegment(4000, 400), bad)
-	merged := readFrame(t, guest)
-	ip := merged[VnetHdrLen:]
-	if merged[1] != gsoTCPv4 || binary.LittleEndian.Uint16(merged[4:]) != 1000 || len(ip) != 40+3400 {
-		t.Fatalf("frame gso %d size %d len %d, want one TCPv4 GSO frame of 3400 payload bytes at 1000", merged[1], binary.LittleEndian.Uint16(merged[4:]), len(ip))
-	}
-	if got, want := binary.BigEndian.Uint16(ip[36:]), fold(pseudoSum(ip, len(ip)-20)); got != want || !validIP(merged) {
-		t.Errorf("merged checksum %#x want the pseudo-header sum %#x, ip valid %v", got, want, validIP(merged))
-	}
-	if p, _ := Parse(merged); p.Dst != GuestAddr {
-		t.Errorf("merged frame goes to %v", p.Dst)
-	}
-	if lone := readFrame(t, guest); lone[1] != gsoNone || validL4(lone) {
-		t.Error("a segment with a bad checksum was merged or repaired instead of passed through")
-	}
+	synctest.Test(t, func(t *testing.T) {
+		u, r := newRouter(t)
+		r.Arm(Claim{ID: "c1", Addr: claimAddr, Allow: func(netip.Addr, uint16) bool { return true }})
+		u.sent(t)
+		guest := serve(t, r, claimAddr)
+		guestHello(t, guest)
+		sendFrame(t, guest, frame(ProtoTCP, GuestAddr, remote, false))
+		u.sent(t)
+		bad := dataSegment(5000, 1000)
+		bad[len(bad)-1] ^= 0xff
+		u.injectBatch(t, dataSegment(1000, 1000), dataSegment(2000, 1000), dataSegment(3000, 1000), dataSegment(4000, 400), bad)
+		merged := readFrame(t, guest)
+		ip := merged[VnetHdrLen:]
+		if merged[1] != gsoTCPv4 || binary.LittleEndian.Uint16(merged[4:]) != 1000 || len(ip) != 40+3400 {
+			t.Fatalf("frame gso %d size %d len %d, want one TCPv4 GSO frame of 3400 payload bytes at 1000", merged[1], binary.LittleEndian.Uint16(merged[4:]), len(ip))
+		}
+		if got, want := binary.BigEndian.Uint16(ip[36:]), fold(pseudoSum(ip, len(ip)-20)); got != want || !validIP(merged) {
+			t.Errorf("merged checksum %#x want the pseudo-header sum %#x, ip valid %v", got, want, validIP(merged))
+		}
+		if p, _ := Parse(merged); p.Dst != GuestAddr {
+			t.Errorf("merged frame goes to %v", p.Dst)
+		}
+		if lone := readFrame(t, guest); lone[1] != gsoNone || validL4(lone) {
+			t.Error("a segment with a bad checksum was merged or repaired instead of passed through")
+		}
+	})
 }
 
 func TestRouterChargesSegmentsAndRefusesOversizedPackets(t *testing.T) {
-	u, r := newRouter(t)
-	r.Arm(Claim{ID: "c1", Addr: claimAddr, Limits: Limits{PacketsPerSecond: 10}, Allow: func(netip.Addr, uint16) bool { return true }})
-	u.sent(t)
-	go func() {
-		for s := range u.out {
-			_ = s
+	synctest.Test(t, func(t *testing.T) {
+		u, r := newRouter(t)
+		r.Arm(Claim{ID: "c1", Addr: claimAddr, Limits: Limits{PacketsPerSecond: 10}, Allow: func(netip.Addr, uint16) bool { return true }})
+		u.sent(t)
+		go func() {
+			for {
+				select {
+				case <-u.out:
+				case <-u.done:
+					return
+				}
+			}
+		}()
+		guest := serve(t, r, claimAddr)
+		guestHello(t, guest)
+		sendFrame(t, guest, gsoFrame(ProtoTCP, 4000, 1420))
+		big := gsoFrame(ProtoUDP, 1500, 1500)
+		big[1] = gsoNone
+		sendFrame(t, guest, big)
+		sendFrame(t, guest, gsoFrame(ProtoTCP, 4000, 8))
+		sendFrame(t, guest, gsoFrame(ProtoTCP, 4000, 40))
+		sendFrame(t, guest, gsoFrame(ProtoTCP, 4000, 40))
+		synctest.Wait()
+		s := r.Stats()
+		if s.Drops[DropSize] != 3 {
+			t.Errorf("size drops = %d, want 3", s.Drops[DropSize])
 		}
-	}()
-	guest := serve(t, r, claimAddr)
-	guestHello(t, guest)
-	sendFrame(t, guest, gsoFrame(ProtoTCP, 4000, 1420))
-	big := gsoFrame(ProtoUDP, 1500, 1500)
-	big[1] = gsoNone
-	sendFrame(t, guest, big)
-	sendFrame(t, guest, gsoFrame(ProtoTCP, 4000, 8))
-	sendFrame(t, guest, gsoFrame(ProtoTCP, 4000, 40))
-	sendFrame(t, guest, gsoFrame(ProtoTCP, 4000, 40))
-	waitFor(t, func() bool { s := r.Stats(); return s.Drops[DropSize] == 3 && s.Drops[DropLimit] == 1 })
-	if s := r.Stats(); s.DgramsOut != 100 {
-		t.Errorf("sent %d datagrams, want the 100 segments of the one frame the packet bucket admitted", s.DgramsOut)
-	}
+		if s.Drops[DropLimit] != 1 {
+			t.Errorf("limit drops = %d, want 1", s.Drops[DropLimit])
+		}
+		if s.DgramsOut != 100 {
+			t.Errorf("sent %d datagrams, want the 100 segments of the one frame the packet bucket admitted", s.DgramsOut)
+		}
+	})
 }
 
 func TestRouterLimitsOutliveAReconnect(t *testing.T) {
-	u, r := newRouter(t)
-	r.Arm(Claim{ID: "c1", Addr: claimAddr, Limits: Limits{NewFlowsPerSecond: 0.01}, Allow: func(netip.Addr, uint16) bool { return true }})
-	u.sent(t)
-	first := serve(t, r, claimAddr)
-	guestHello(t, first)
-	sendFrame(t, first, frame(ProtoTCP, GuestAddr, remote, false))
-	u.sent(t)
-	_ = first.Close()
-	second := serve(t, r, claimAddr)
-	guestHello(t, second)
-	other := frame(ProtoTCP, GuestAddr, remote, false)
-	binary.BigEndian.PutUint16(other[VnetHdrLen+20:], 40001)
-	sendFrame(t, second, other)
-	waitFor(t, func() bool { return r.Stats().Drops[DropLimit] == 1 })
+	synctest.Test(t, func(t *testing.T) {
+		u, r := newRouter(t)
+		r.Arm(Claim{ID: "c1", Addr: claimAddr, Limits: Limits{NewFlowsPerSecond: 0.01}, Allow: func(netip.Addr, uint16) bool { return true }})
+		u.sent(t)
+		first := serve(t, r, claimAddr)
+		guestHello(t, first)
+		sendFrame(t, first, frame(ProtoTCP, GuestAddr, remote, false))
+		u.sent(t)
+		_ = first.Close()
+		second := serve(t, r, claimAddr)
+		guestHello(t, second)
+		other := frame(ProtoTCP, GuestAddr, remote, false)
+		binary.BigEndian.PutUint16(other[VnetHdrLen+20:], 40001)
+		sendFrame(t, second, other)
+		synctest.Wait()
+		if got := r.Stats().Drops[DropLimit]; got != 1 {
+			t.Errorf("limit drops = %d, want 1", got)
+		}
+	})
 }
 
 func TestRouterHandsAnICMPErrorBackWithTheQuotedGuestAddress(t *testing.T) {
-	u, r := newRouter(t)
-	r.Arm(Claim{ID: "c1", Addr: claimAddr, Allow: func(netip.Addr, uint16) bool { return true }})
-	u.sent(t)
-	guest := serve(t, r, claimAddr)
-	guestHello(t, guest)
-	sendFrame(t, guest, frame(ProtoTCP, GuestAddr, remote, false))
-	inner, _, _ := u.sent(t)
-	u.inject(t, append(appendHeader(nil, 7, MAC(claimAddr), exitMAC, etherIPv4), unreachable(remote, claimAddr, 4, inner[:28])...))
-	got := readFrame(t, guest)
-	ip := got[VnetHdrLen:]
-	if netip.AddrFrom4([4]byte(ip[28+srcAt:])) != GuestAddr || fold(onesSum(ip[20:], 0)) != 0xffff || fold(onesSum(ip[28:48], 0)) != 0xffff || !validIP(got) {
-		t.Fatalf("quoted source %v, checksums icmp %#x quoted %#x", netip.AddrFrom4([4]byte(ip[28+srcAt:])), fold(onesSum(ip[20:], 0)), fold(onesSum(ip[28:48], 0)))
-	}
+	synctest.Test(t, func(t *testing.T) {
+		u, r := newRouter(t)
+		r.Arm(Claim{ID: "c1", Addr: claimAddr, Allow: func(netip.Addr, uint16) bool { return true }})
+		u.sent(t)
+		guest := serve(t, r, claimAddr)
+		guestHello(t, guest)
+		sendFrame(t, guest, frame(ProtoTCP, GuestAddr, remote, false))
+		inner, _, _ := u.sent(t)
+		u.inject(t, append(appendHeader(nil, 7, MAC(claimAddr), exitMAC, etherIPv4), unreachable(remote, claimAddr, 4, inner[:28])...))
+		got := readFrame(t, guest)
+		ip := got[VnetHdrLen:]
+		if netip.AddrFrom4([4]byte(ip[28+srcAt:])) != GuestAddr || fold(onesSum(ip[20:], 0)) != 0xffff || fold(onesSum(ip[28:48], 0)) != 0xffff || !validIP(got) {
+			t.Fatalf("quoted source %v, checksums icmp %#x quoted %#x", netip.AddrFrom4([4]byte(ip[28+srcAt:])), fold(onesSum(ip[20:], 0)), fold(onesSum(ip[28:48], 0)))
+		}
+	})
 }
 
 func TestRouterResumesAStreamOpenedBeforeTheArmButRefusesAnOpener(t *testing.T) {
-	u, r := newRouter(t)
-	r.Arm(Claim{ID: "c1", Addr: claimAddr, Allow: func(_ netip.Addr, port uint16) bool { return port == 443 }})
-	u.sent(t)
-	guest := serve(t, r, claimAddr)
-	guestHello(t, guest)
-	waitFor(t, func() bool { return r.claims[claimAddr].live() != nil })
-	syn := reply(remote)
-	syn[Overhead+20+13] = tcpSyn
-	u.inject(t, syn)
-	waitFor(t, func() bool { return r.Stats().Drops[DropPolicy] == 1 })
-	u.inject(t, reply(remote))
-	if p, _ := Parse(readFrame(t, guest)); p.Src != remote || p.Dst != GuestAddr {
-		t.Fatalf("delivered %+v, want the stream's next segment", p)
-	}
+	synctest.Test(t, func(t *testing.T) {
+		u, r := newRouter(t)
+		r.Arm(Claim{ID: "c1", Addr: claimAddr, Allow: func(_ netip.Addr, port uint16) bool { return port == 443 }})
+		u.sent(t)
+		guest := serve(t, r, claimAddr)
+		guestHello(t, guest)
+		synctest.Wait()
+		if r.claims[claimAddr].live() == nil {
+			t.Fatal("the armed claim's stream never went live")
+		}
+		syn := reply(remote)
+		syn[Overhead+20+13] = tcpSyn
+		u.inject(t, syn)
+		synctest.Wait()
+		if got := r.Stats().Drops[DropPolicy]; got != 1 {
+			t.Fatalf("policy drops = %d, want 1", got)
+		}
+		u.inject(t, reply(remote))
+		if p, _ := Parse(readFrame(t, guest)); p.Src != remote || p.Dst != GuestAddr {
+			t.Fatalf("delivered %+v, want the stream's next segment", p)
+		}
+	})
 }
 
 func TestRouterKeepsTheMTUAStreamWasToldUntilItsNextHello(t *testing.T) {
-	u, r := newRouter(t)
-	r.Arm(Claim{ID: "c1", Addr: claimAddr, Allow: func(netip.Addr, uint16) bool { return true }})
-	u.sent(t)
-	guest := serve(t, r, claimAddr)
-	guestHello(t, guest)
-	r.Reload(testOverlay(1410))
-	u.sent(t)
-	full := gsoFrame(ProtoUDP, 1412, 1412)
-	full[0], full[1] = 0, gsoNone
-	sendFrame(t, guest, full)
-	if inner, _, _ := u.sent(t); len(inner) != 1440 {
-		t.Errorf("sent %d bytes, want the 1440-byte packet the stream's MTU allows", len(inner))
-	}
+	synctest.Test(t, func(t *testing.T) {
+		u, r := newRouter(t)
+		r.Arm(Claim{ID: "c1", Addr: claimAddr, Allow: func(netip.Addr, uint16) bool { return true }})
+		u.sent(t)
+		guest := serve(t, r, claimAddr)
+		guestHello(t, guest)
+		r.Reload(testOverlay(1410))
+		u.sent(t)
+		full := gsoFrame(ProtoUDP, 1412, 1412)
+		full[0], full[1] = 0, gsoNone
+		sendFrame(t, guest, full)
+		if inner, _, _ := u.sent(t); len(inner) != 1440 {
+			t.Errorf("sent %d bytes, want the 1440-byte packet the stream's MTU allows", len(inner))
+		}
+	})
 }
 
 func TestEndFlowsRecordsLiveFlowsWithIPBytes(t *testing.T) {
-	u, r := newRouter(t)
-	var mu sync.Mutex
-	var records []FlowRecord
-	r.Arm(Claim{
-		ID: "c1", Addr: claimAddr, Allow: func(netip.Addr, uint16) bool { return true },
-		Record: func(fr FlowRecord) { mu.Lock(); records = append(records, fr); mu.Unlock() },
+	synctest.Test(t, func(t *testing.T) {
+		u, r := newRouter(t)
+		var mu sync.Mutex
+		var records []FlowRecord
+		r.Arm(Claim{
+			ID: "c1", Addr: claimAddr, Allow: func(netip.Addr, uint16) bool { return true },
+			Record: func(fr FlowRecord) { mu.Lock(); records = append(records, fr); mu.Unlock() },
+		})
+		u.sent(t)
+		guest := serve(t, r, claimAddr)
+		guestHello(t, guest)
+		out := frame(ProtoTCP, GuestAddr, remote, false)
+		sendFrame(t, guest, out)
+		u.sent(t)
+		in := reply(remote)
+		u.inject(t, in)
+		readFrame(t, guest)
+		r.EndFlows()
+		mu.Lock()
+		defer mu.Unlock()
+		if len(records) != 1 || records[0].Up != int64(len(out)-VnetHdrLen) || records[0].Down != int64(len(in)-Overhead) {
+			t.Fatalf("records %+v, want one flow with %d up and %d down IP bytes", records, len(out)-VnetHdrLen, len(in)-Overhead)
+		}
 	})
-	u.sent(t)
-	guest := serve(t, r, claimAddr)
-	guestHello(t, guest)
-	out := frame(ProtoTCP, GuestAddr, remote, false)
-	sendFrame(t, guest, out)
-	u.sent(t)
-	in := reply(remote)
-	u.inject(t, in)
-	readFrame(t, guest)
-	r.EndFlows()
-	mu.Lock()
-	defer mu.Unlock()
-	if len(records) != 1 || records[0].Up != int64(len(out)-VnetHdrLen) || records[0].Down != int64(len(in)-Overhead) {
-		t.Fatalf("records %+v, want one flow with %d up and %d down IP bytes", records, len(out)-VnetHdrLen, len(in)-Overhead)
-	}
 }
 
 func TestDeliverMergesOnlyForAGuestThatOfferedTSO(t *testing.T) {
-	u, r := newRouter(t)
-	r.Arm(Claim{ID: "c1", Addr: claimAddr, Allow: func(netip.Addr, uint16) bool { return true }})
-	u.sent(t)
-	host, guest := net.Pipe()
-	t.Cleanup(func() { _ = guest.Close() })
-	go func() { _ = r.Serve(host, claimAddr) }()
-	h := Hello{Version: Version, Offloads: OffloadCSUM}.Encode()
-	if _, err := guest.Write(h[:]); err != nil {
-		t.Fatal(err)
-	}
-	guestHello(t, guest)
-	sendFrame(t, guest, frame(ProtoTCP, GuestAddr, remote, false))
-	u.sent(t)
-	u.injectBatch(t, dataSegment(1000, 1000), dataSegment(2000, 1000))
-	for range 2 {
-		if f := readFrame(t, guest); f[1] != gsoNone || len(f) != VnetHdrLen+1040 {
-			t.Fatalf("frame gso %d len %d, want each segment alone", f[1], len(f))
+	synctest.Test(t, func(t *testing.T) {
+		u, r := newRouter(t)
+		r.Arm(Claim{ID: "c1", Addr: claimAddr, Allow: func(netip.Addr, uint16) bool { return true }})
+		u.sent(t)
+		host, guest := net.Pipe()
+		t.Cleanup(func() { _ = guest.Close() })
+		go func() { _ = r.Serve(host, claimAddr) }()
+		h := Hello{Version: Version, Offloads: OffloadCSUM}.Encode()
+		if _, err := guest.Write(h[:]); err != nil {
+			t.Fatal(err)
 		}
-	}
+		guestHello(t, guest)
+		sendFrame(t, guest, frame(ProtoTCP, GuestAddr, remote, false))
+		u.sent(t)
+		u.injectBatch(t, dataSegment(1000, 1000), dataSegment(2000, 1000))
+		for range 2 {
+			if f := readFrame(t, guest); f[1] != gsoNone || len(f) != VnetHdrLen+1040 {
+				t.Fatalf("frame gso %d len %d, want each segment alone", f[1], len(f))
+			}
+		}
+	})
 }
 
 func TestRouterPointsAGuestICMPErrorAtTheClaimAddress(t *testing.T) {
-	u, r := newRouter(t)
-	r.Arm(Claim{ID: "c1", Addr: claimAddr, Allow: func(netip.Addr, uint16) bool { return true }})
-	u.sent(t)
-	guest := serve(t, r, claimAddr)
-	guestHello(t, guest)
-	quoted := frame(ProtoUDP, remote, GuestAddr, false)[VnetHdrLen:][:28]
-	sendFrame(t, guest, append(make([]byte, VnetHdrLen), unreachable(GuestAddr, remote, 3, quoted)...))
-	inner, _, _ := u.sent(t)
-	if got := netip.AddrFrom4([4]byte(inner[28+dstAt:])); got != claimAddr || fold(onesSum(inner[20:], 0)) != 0xffff {
-		t.Errorf("quoted destination %v, icmp checksum %#x; want the claim address and a valid checksum", got, fold(onesSum(inner[20:], 0)))
-	}
+	synctest.Test(t, func(t *testing.T) {
+		u, r := newRouter(t)
+		r.Arm(Claim{ID: "c1", Addr: claimAddr, Allow: func(netip.Addr, uint16) bool { return true }})
+		u.sent(t)
+		guest := serve(t, r, claimAddr)
+		guestHello(t, guest)
+		quoted := frame(ProtoUDP, remote, GuestAddr, false)[VnetHdrLen:][:28]
+		sendFrame(t, guest, append(make([]byte, VnetHdrLen), unreachable(GuestAddr, remote, 3, quoted)...))
+		inner, _, _ := u.sent(t)
+		if got := netip.AddrFrom4([4]byte(inner[28+dstAt:])); got != claimAddr || fold(onesSum(inner[20:], 0)) != 0xffff {
+			t.Errorf("quoted destination %v, icmp checksum %#x; want the claim address and a valid checksum", got, fold(onesSum(inner[20:], 0)))
+		}
+	})
 }
 
 func newRouter(t *testing.T) (*fakeUnder, *Router) {
@@ -455,16 +530,6 @@ func unreachable(src, dst netip.Addr, code byte, quoted []byte) []byte {
 	return ip
 }
 
-func waitFor(t *testing.T, ok func() bool) {
-	t.Helper()
-	for deadline := time.Now().Add(2 * time.Second); time.Now().Before(deadline); time.Sleep(5 * time.Millisecond) {
-		if ok() {
-			return
-		}
-	}
-	t.Fatal("condition not reached")
-}
-
 type sent struct {
 	d  []byte
 	to netip.AddrPort
@@ -520,6 +585,7 @@ func (u *fakeUnder) injectBatch(t *testing.T, ds ...[]byte) {
 
 func (u *fakeUnder) sent(t *testing.T) ([]byte, uint16, netip.AddrPort) {
 	t.Helper()
+	synctest.Wait()
 	select {
 	case s := <-u.out:
 		inner, etype, ok := parseVXLAN(s.d, 7)
@@ -527,7 +593,7 @@ func (u *fakeUnder) sent(t *testing.T) ([]byte, uint16, netip.AddrPort) {
 			t.Fatalf("sent a datagram that is not VXLAN for vni 7: %x", s.d)
 		}
 		return inner, etype, s.to
-	case <-time.After(2 * time.Second):
+	default:
 		t.Fatal("nothing sent")
 		return nil, 0, netip.AddrPort{}
 	}

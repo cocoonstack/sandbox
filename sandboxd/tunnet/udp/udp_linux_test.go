@@ -3,7 +3,9 @@ package udp
 import (
 	"net"
 	"net/netip"
+	"slices"
 	"testing"
+	"time"
 )
 
 func TestSendBatchArrivesAsSegments(t *testing.T) {
@@ -17,13 +19,14 @@ func TestSendBatchArrivesAsSegments(t *testing.T) {
 	if err = u.Send(batch, 1000, dst, 7); err != nil {
 		t.Fatal(err)
 	}
+	_ = u.recv.SetReadDeadline(time.Now().Add(5 * time.Second))
 	var sizes []int
 	for len(sizes) < 4 {
 		if err = u.Recv(func(d []byte, _ netip.AddrPort) { sizes = append(sizes, len(d)) }); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if sizes[0] != 1000 || sizes[3] != 400 {
+	if !slices.Equal(sizes, []int{1000, 1000, 1000, 400}) {
 		t.Errorf("datagram sizes %v, want 1000 x3 then 400", sizes)
 	}
 }

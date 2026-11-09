@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -50,12 +51,9 @@ func TestWatchFiresOnConnectAndOnItsCellsWrites(t *testing.T) {
 	a, b, other := openIn(t, dsn, cell), openIn(t, dsn, cell), openIn(t, dsn, cell+"-other")
 	ctx, cancel := context.WithCancel(t.Context())
 	fired := make(chan struct{}, 8)
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		a.Watch(ctx, func() { fired <- struct{}{} })
-	}()
-	defer func() { cancel(); <-done }()
+	var wg sync.WaitGroup
+	wg.Go(func() { a.Watch(ctx, func() { fired <- struct{}{} }) })
+	defer func() { cancel(); wg.Wait() }()
 	waitFire(t, fired, "the listener connect")
 	if _, err := other.Store(t.Context(), poolset.Set{}); err != nil {
 		t.Fatalf("store on the other cell: %v", err)

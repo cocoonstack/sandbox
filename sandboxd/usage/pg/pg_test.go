@@ -128,6 +128,7 @@ func TestLandWaitsForTheCellLock(t *testing.T) {
 	if err != nil {
 		t.Fatalf("begin: %v", err)
 	}
+	t.Cleanup(func() { _ = tx.Rollback(context.WithoutCancel(ctx)) })
 	if _, err = tx.Exec(ctx, cellLock, "c1"); err != nil {
 		t.Fatalf("take the cell lock: %v", err)
 	}

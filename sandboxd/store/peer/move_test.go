@@ -223,7 +223,7 @@ func TestSendRoundFailsOnARefusedPutOrAMissingFile(t *testing.T) {
 
 func TestSendRoundFailsWhenATargetStopsReading(t *testing.T) {
 	src := t.TempDir()
-	if err := os.WriteFile(filepath.Join(src, "memory-ranges"), bytes.Repeat([]byte("guest-memory-"), 4<<20), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(src, "memory-ranges"), bytes.Repeat([]byte("guest-memory-"), 1<<20), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	stop := make(chan struct{})

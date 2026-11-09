@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"net"
 	"net/http"
@@ -32,12 +33,31 @@ func TestServePreviewExitsWhenTheListenerCannotBind(t *testing.T) {
 }
 
 func TestServePreviewReturnsAfterShutdown(t *testing.T) {
-	srv := &http.Server{Addr: "127.0.0.1:0"}
+	serving := make(chan net.Addr, 1)
+	srv := &http.Server{Addr: "127.0.0.1:0", BaseContext: func(ln net.Listener) context.Context {
+		serving <- ln.Addr()
+		return t.Context()
+	}}
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
 		servePreview(t.Context(), srv)
 	}()
+	var addr net.Addr
+	select {
+	case addr = <-serving:
+	case <-time.After(5 * time.Second):
+		t.Fatal("servePreview never started serving")
+	}
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://"+addr.String()+"/", nil)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("request the running preview server: %v", err)
+	}
+	_ = resp.Body.Close()
 	if err := srv.Shutdown(t.Context()); err != nil {
 		t.Fatalf("shutdown: %v", err)
 	}
