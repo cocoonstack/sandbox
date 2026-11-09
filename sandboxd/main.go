@@ -34,6 +34,7 @@ const (
 	shutdownGrace     = 5 * time.Second
 	gossipInterval    = time.Second
 	readHeaderTimeout = 5 * time.Second
+	idleTimeout       = 2 * time.Minute
 )
 
 var version = "devel"
@@ -179,9 +180,10 @@ func main() {
 		Addr:              cfg.Listen,
 		Handler:           srv.Handler(),
 		ReadHeaderTimeout: readHeaderTimeout,
+		IdleTimeout:       idleTimeout,
 	}
 	if preview != nil {
-		previewSrv := &http.Server{Addr: cfg.PreviewListen, Handler: preview.Handler(), ReadHeaderTimeout: readHeaderTimeout}
+		previewSrv := &http.Server{Addr: cfg.PreviewListen, Handler: preview.Handler(), ReadHeaderTimeout: readHeaderTimeout, IdleTimeout: idleTimeout}
 		go servePreview(ctx, previewSrv)
 		context.AfterFunc(ctx, func() {
 			sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownGrace)
