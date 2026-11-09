@@ -4,7 +4,6 @@ import (
 	"cmp"
 	"context"
 	"errors"
-	"slices"
 	"strconv"
 	"time"
 
@@ -42,11 +41,9 @@ func (m *Manager) balloonOnce(ctx context.Context) {
 			}
 		}
 		m.mu.Unlock()
-		for chunk := range slices.Chunk(due, cap(m.maintSem)) {
-			m.runBounded(ctx, len(chunk), func(ctx context.Context, i int) {
-				m.balloonTo(ctx, chunk[i], balloonWant(chunk[i], m.view.Load(), time.Now()))
-			}).Wait()
-		}
+		m.runBounded(ctx, len(due), func(ctx context.Context, i int) {
+			m.balloonTo(ctx, due[i], balloonWant(due[i], m.view.Load(), time.Now()))
+		}).Wait()
 	}()
 }
 
