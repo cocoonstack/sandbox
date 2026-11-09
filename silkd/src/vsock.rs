@@ -28,6 +28,7 @@ pub async fn serve(port: u32, state: Arc<State>) -> std::io::Result<()> {
                 eprintln!("silkd: refused peer cid {cid}");
                 continue;
             }
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
             // a transient accept error must not tear down the daemon and lose every session.
             Err(e) => {
                 eprintln!("silkd: accept: {e}");
