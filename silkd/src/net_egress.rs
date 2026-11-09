@@ -80,12 +80,12 @@ pub async fn serve_datagrams(listen: SocketAddrV4, host_vsock_port: u32) -> io::
                 continue;
             }
         };
-        let (Ok(slot), Ok(len)) = (slots.clone().try_acquire_owned(), u16::try_from(n)) else {
+        let (Ok(slot), Ok(len)) = (Arc::clone(&slots).try_acquire_owned(), u16::try_from(n)) else {
             continue;
         };
         buf[..2].copy_from_slice(&len.to_be_bytes());
         let framed = buf[..2 + n].to_vec();
-        let sock = sock.clone();
+        let sock = Arc::clone(&sock);
         tokio::spawn(async move {
             let _slot = slot;
             let exchange = async {

@@ -18,11 +18,12 @@ static DEVICE_BACKED: LazyLock<bool> = LazyLock::new(|| {
     entries.flatten().any(|e| e.path().join("device").exists())
 });
 /// SILKD_NET decoded once: operator config, fixed at service start.
-static SILKD_NET: LazyLock<i8> = LazyLock::new(|| match std::env::var("SILKD_NET").as_deref() {
-    Ok("none") => 0,
-    Ok("egress") => 1,
-    _ => -1,
-});
+static SILKD_NET: LazyLock<Option<bool>> =
+    LazyLock::new(|| match std::env::var("SILKD_NET").as_deref() {
+        Ok("none") => Some(false),
+        Ok("egress") => Some(true),
+        _ => None,
+    });
 
 /// Reports whether execs route directly: a NIC the host did not mark as relayed.
 pub fn routes_directly() -> bool {
@@ -41,12 +42,7 @@ pub fn routes_directly() -> bool {
 
 /// Reports whether the guest can reach a network; only a `device`-backed interface counts, since the kernel auto-creates virtual tunnels.
 fn has_egress() -> bool {
-    match *SILKD_NET {
-        0 => return false,
-        1 => return true,
-        _ => {}
-    }
-    *DEVICE_BACKED
+    SILKD_NET.unwrap_or_else(|| *DEVICE_BACKED)
 }
 
 /// Reads the lane file: `Some(true)` for relay, `Some(false)` for direct, `None` while the host has not written it.
