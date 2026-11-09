@@ -434,7 +434,7 @@ func waitDebt(t *testing.T, lim *rate.Limiter) {
 	deadline := time.Now().Add(5 * time.Second)
 	for lim.Tokens() > -2 {
 		if time.Now().After(deadline) {
-			t.Fatalf("the bucket holds %v tokens, want a debt of two seconds", lim.Tokens())
+			t.Fatalf("the bucket holds %v tokens, want a debt of two tokens", lim.Tokens())
 		}
 		runtime.Gosched()
 	}

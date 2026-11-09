@@ -165,7 +165,7 @@ func TestTheTunnelTargetPrefersIPv4(t *testing.T) {
 	}
 }
 
-func TestADirectDialGivesUpBeforeTheKernelSYNTimeout(t *testing.T) {
+func TestTheDirectDialerIsBoundedUnderAMinute(t *testing.T) {
 	if d := newDialer(verdictOf(nil)); d.Timeout <= 0 || d.Timeout > time.Minute {
 		t.Errorf("direct dial timeout %v, want a bound under a minute", d.Timeout)
 	}
