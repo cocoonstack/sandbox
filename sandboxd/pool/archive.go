@@ -113,7 +113,7 @@ func (m *Manager) archive(ctx context.Context, sb *types.Sandbox) (err error) {
 		return fmt.Errorf("archive %s: registry: %w", sb.ID, err)
 	}
 	// Pin the ck before Publish makes it listable, or a delete would strand the claim
-	ckID := store.CheckpointID(randHex(8))
+	ckID := store.ArchiveID(randHex(8))
 	m.mu.Lock()
 	m.pendingCks[ckID] = struct{}{}
 	m.mu.Unlock()

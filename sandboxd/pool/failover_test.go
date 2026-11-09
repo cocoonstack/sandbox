@@ -63,7 +63,7 @@ func TestFailoverRowWriteFailureKeepsTheClaimHibernated(t *testing.T) {
 	if ck != "" || snap == "" {
 		t.Errorf("claim ck=%q snap=%q, want still hibernated", ck, snap)
 	}
-	if metas, err := a.ckpts.Metas(t.Context()); err != nil || len(metas) != 0 {
+	if metas, err := a.ckpts.Metas(t.Context(), ""); err != nil || len(metas) != 0 {
 		t.Errorf("store holds %d checkpoints %v, want no export with the registry down", len(metas), err)
 	}
 	c.reg.SetDown(false)
@@ -432,7 +432,7 @@ func TestFailoverRestartReclaimsAnInterruptedArchive(t *testing.T) {
 	}
 	seedClaims(t, dirA, claims)
 	a := c.node(t, "a", dirA, keepAnHour)
-	const ck = "ck_00000000000000aa"
+	const ck = "ar_00000000000000aa"
 	seedArchiveCk(t, a, ck, "sb_x")
 	if _, err := c.reg.Put(t.Context(), archives.Record{ID: "sb_x", Owner: "a", Epoch: 1, Checkpoint: ck, Claim: []byte(`{}`)}); err != nil {
 		t.Fatalf("put: %v", err)
@@ -453,7 +453,7 @@ func TestFailoverRestartReclaimSparesACheckpointAdoptedMidReconcile(t *testing.T
 	}
 	seedClaims(t, dirA, claims)
 	a := c.node(t, "a", dirA, keepAnHour)
-	const ck = "ck_00000000000000cc"
+	const ck = "ar_00000000000000cc"
 	seedArchiveCk(t, a, ck, "sb_x")
 	a.archives = &hookRegistry{Registry: c.reg, afterRows: func() {
 		if _, err := c.reg.Put(t.Context(), archives.Record{ID: "sb_x", Owner: "b", Epoch: 1, Checkpoint: ck, Claim: []byte(`{}`)}); err != nil {
@@ -476,7 +476,7 @@ func TestFailoverRestartReclaimsOnlyTheCheckpointsItPublished(t *testing.T) {
 	}
 	seedClaims(t, dirA, claims)
 	a := c.node(t, "a", dirA, keepAnHour)
-	const own, foreign = "ck_00000000000000e1", "ck_00000000000000e2"
+	const own, foreign = "ar_00000000000000e1", "ar_00000000000000e2"
 	seedArchiveCkBy(t, a, "a", own, "sb_x")
 	seedArchiveCkBy(t, a, "b", foreign, "sb_x")
 	if err := a.Reconcile(t.Context()); err != nil {
@@ -499,7 +499,7 @@ func TestFailoverRestartDropsAClaimWhoseInterruptedArchiveWasAdopted(t *testing.
 	a.mu.Lock()
 	vm, snap := sb.VMName, sb.HibernateSnap
 	a.mu.Unlock()
-	const ck = "ck_00000000000000bb"
+	const ck = "ar_00000000000000bb"
 	seedArchiveCk(t, a, ck, sb.ID)
 	if _, err := c.reg.Put(t.Context(), archives.Record{ID: sb.ID, Owner: "b", Epoch: 2, Checkpoint: ck, Claim: []byte(`{}`)}); err != nil {
 		t.Fatalf("put: %v", err)
@@ -1010,7 +1010,7 @@ func TestFailoverRestartDropsAClaimAdoptedWhileItsInterruptedArchiveSettles(t *t
 	sb := mustClaim(t, a, testKey)
 	hibernateClaim(t, a, sb)
 	mustFlush(t, a)
-	const ck = "ck_00000000000000cc"
+	const ck = "ar_00000000000000cc"
 	seedArchiveCk(t, a, ck, sb.ID)
 	if _, err := a.putArchive(t.Context(), sb, ck); err != nil {
 		t.Fatalf("put: %v", err)
@@ -1040,7 +1040,7 @@ func TestFailoverRestartKeepsAClaimWhoseInterruptedArchiveRowVanished(t *testing
 	sb := mustClaim(t, a, testKey)
 	hibernateClaim(t, a, sb)
 	mustFlush(t, a)
-	const ck = "ck_00000000000000dd"
+	const ck = "ar_00000000000000dd"
 	seedArchiveCk(t, a, ck, sb.ID)
 	epoch, err := a.putArchive(t.Context(), sb, ck)
 	if err != nil {
@@ -1376,7 +1376,7 @@ func TestFailoverArchiveSweepExportsNothingWhileTheRegistryIsDown(t *testing.T) 
 		a.archiveOnce(t.Context())
 		waitFor(t, func() bool { return !a.sweeps.archive.Load() })
 	}
-	if metas, err := a.ckpts.Metas(t.Context()); err != nil || len(metas) != 0 {
+	if metas, err := a.ckpts.Metas(t.Context(), ""); err != nil || len(metas) != 0 {
 		t.Errorf("three archive ticks with the registry down left %d exports %v, want none", len(metas), err)
 	}
 	if hibernated(a) != 1 {
@@ -1710,7 +1710,7 @@ func TestFailoverReleaseAfterALostArchivePutReplyLeavesNothingAdoptable(t *testi
 	if err := a.Release(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
 		t.Fatalf("release: %v", err)
 	}
-	if metas, err := a.ckpts.Metas(t.Context()); err != nil || len(metas) != 0 {
+	if metas, err := a.ckpts.Metas(t.Context(), ""); err != nil || len(metas) != 0 {
 		t.Errorf("store holds %d exports %v after the release, want none", len(metas), err)
 	}
 	assertReleasedForGood(t, c, sb, a, b)
@@ -1727,7 +1727,7 @@ func TestFailoverTheNextArchiveSettlesALostPutReplyFirst(t *testing.T) {
 		t.Fatalf("next archive: %v", err)
 	}
 	rec, _, _ := c.reg.Get(t.Context(), sb.ID)
-	metas, err := a.ckpts.Metas(t.Context())
+	metas, err := a.ckpts.Metas(t.Context(), "")
 	if err != nil || len(metas) != 1 || rec.Checkpoint != sb.ArchiveCk || sb.ArchivePending != "" {
 		t.Errorf("%d exports %v, row names %s, claim %s pending %q, want one export the row and claim share", len(metas), err, rec.Checkpoint, sb.ArchiveCk, sb.ArchivePending)
 	}
@@ -1752,7 +1752,7 @@ func TestFailoverSweepSettlesALostArchivePutReply(t *testing.T) {
 	if _, ok, _ := c.reg.Get(t.Context(), sb.ID); ok || pending != "" {
 		t.Errorf("row present %v, intent %q after the sweep, want both settled", ok, pending)
 	}
-	if metas, err := a.ckpts.Metas(t.Context()); err != nil || len(metas) != 0 {
+	if metas, err := a.ckpts.Metas(t.Context(), ""); err != nil || len(metas) != 0 {
 		t.Errorf("store holds %d exports %v after the sweep, want none", len(metas), err)
 	}
 	if _, held := a.byID(sb.ID); !held || hibernated(a) != 1 {
@@ -1776,7 +1776,7 @@ func TestFailoverAWakeSettlesALostArchivePutReplyFirst(t *testing.T) {
 	if _, ok, _ := c.reg.Get(t.Context(), sb.ID); ok || pending != "" {
 		t.Errorf("row present %v, intent %q after the wake, want both settled", ok, pending)
 	}
-	if metas, err := a.ckpts.Metas(t.Context()); err != nil || len(metas) != 0 {
+	if metas, err := a.ckpts.Metas(t.Context(), ""); err != nil || len(metas) != 0 {
 		t.Errorf("store holds %d exports %v after the wake, want none", len(metas), err)
 	}
 	if hibernated(a) != 0 {
@@ -2599,7 +2599,7 @@ func assertReleasedForGood(t *testing.T, c *failoverCluster, sb *types.Sandbox, 
 
 func interruptArchive(t *testing.T, m *Manager, sb *types.Sandbox, putCommitted bool) string {
 	t.Helper()
-	ck, _, err := m.publishCheckpoint(t.Context(), sb, store.CheckpointID(randHex(8)), "archive", sb.Tenant, "", true)
+	ck, _, err := m.publishCheckpoint(t.Context(), sb, store.ArchiveID(randHex(8)), "archive", sb.Tenant, "", true)
 	if err != nil {
 		t.Fatalf("publish: %v", err)
 	}

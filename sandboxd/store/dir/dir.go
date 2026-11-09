@@ -115,7 +115,7 @@ func (d *Store) ReadMeta(_ context.Context, id string) ([]byte, error) {
 	return raw, err
 }
 
-func (d *Store) Metas(ctx context.Context) ([]store.Record, error) {
+func (d *Store) Metas(ctx context.Context, prefix string) ([]store.Record, error) {
 	entries, err := os.ReadDir(d.root)
 	if err != nil {
 		return nil, err
@@ -124,7 +124,7 @@ func (d *Store) Metas(ctx context.Context) ([]store.Record, error) {
 	g, ctx := errgroup.WithContext(ctx)
 	g.SetLimit(metaWorkerLimit)
 	for i, e := range entries {
-		if !e.IsDir() || !d.idRe.MatchString(e.Name()) {
+		if !e.IsDir() || !strings.HasPrefix(e.Name(), prefix) || !d.idRe.MatchString(e.Name()) {
 			continue
 		}
 		g.Go(func() error {

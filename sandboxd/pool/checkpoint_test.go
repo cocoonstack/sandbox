@@ -373,13 +373,13 @@ type stallingMetasStore struct {
 	release chan struct{}
 }
 
-func (s *stallingMetasStore) Metas(ctx context.Context) ([]store.Record, error) {
+func (s *stallingMetasStore) Metas(ctx context.Context, prefix string) ([]store.Record, error) {
 	select {
 	case s.entered <- struct{}{}:
 	default:
 	}
 	<-s.release
-	return s.Store.Metas(ctx)
+	return s.Store.Metas(ctx, prefix)
 }
 
 type sweepCountingStore struct {

@@ -170,16 +170,16 @@ func TestReconcileReclaimsOrphanArchiveCk(t *testing.T) {
 	}
 	seedClaims(t, dataDir, claims)
 	m := newTestManagerAt(t, eng, dataDir)
-	seedArchiveCkBy(t, m, "", "ck_00000000000000aa", "sb_mine")
-	seedArchiveCkBy(t, m, "", "ck_00000000000000bb", "sb_elsewhere")
+	seedArchiveCkBy(t, m, "", "ar_00000000000000aa", "sb_mine")
+	seedArchiveCkBy(t, m, "", "ar_00000000000000bb", "sb_elsewhere")
 
 	if err := m.Reconcile(t.Context()); err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
-	if ckExists(t, m, "ck_00000000000000aa") {
+	if ckExists(t, m, "ar_00000000000000aa") {
 		t.Error("orphan archive ck of a journaled sandbox not reclaimed")
 	}
-	if !ckExists(t, m, "ck_00000000000000bb") {
+	if !ckExists(t, m, "ar_00000000000000bb") {
 		t.Error("another node's archive ck reclaimed")
 	}
 }

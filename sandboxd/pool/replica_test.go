@@ -106,7 +106,7 @@ func TestReplicaRefusedPutDropsTheCopyAndItsExport(t *testing.T) {
 	if _, held := a.byID(sb.ID); held || !fakeOf(a).removed(vm) {
 		t.Errorf("old owner holds the claim %v, VM removed %v, want its copy dropped", held, fakeOf(a).removed(vm))
 	}
-	if metas, err := a.ckpts.Metas(t.Context()); err != nil || len(metas) != 1 {
+	if metas, err := a.ckpts.Metas(t.Context(), ""); err != nil || len(metas) != 1 {
 		t.Errorf("store holds %d checkpoints %v, want only the adopter's replica", len(metas), err)
 	}
 }
@@ -371,7 +371,7 @@ func TestReplicaInFlightRoundCannotRecreateARowTheAdopterFinished(t *testing.T) 
 	if _, held := b.byID(sb.ID); !held {
 		t.Error("the adopter lost the claim it woke")
 	}
-	if metas, err := a.ckpts.Metas(t.Context()); err != nil || len(metas) != 0 {
+	if metas, err := a.ckpts.Metas(t.Context(), ""); err != nil || len(metas) != 0 {
 		t.Errorf("store holds %d checkpoints %v, want the lost round's export deleted", len(metas), err)
 	}
 }
@@ -517,7 +517,7 @@ func TestReplicaFailedCaptureKeepsTheOldReplicaAndRow(t *testing.T) {
 	if a.replicaOf(sb) != first || !ckExists(t, a, first) {
 		t.Errorf("replica %q kept %v, want %q kept", a.replicaOf(sb), ckExists(t, a, first), first)
 	}
-	if metas, err := a.ckpts.Metas(t.Context()); err != nil || len(metas) != 1 {
+	if metas, err := a.ckpts.Metas(t.Context(), ""); err != nil || len(metas) != 1 {
 		t.Errorf("store holds %d checkpoints %v, want only the old replica", len(metas), err)
 	}
 }
@@ -817,7 +817,7 @@ func TestReplicaRestartAdoptsTheRowsCheckpointOfAnInterruptedRound(t *testing.T)
 	replicateNow(t, a, sb)
 	first := a.replicaOf(sb)
 	mustFlush(t, a)
-	interrupted, _, publishErr := a.publishCheckpoint(t.Context(), sb, store.CheckpointID(randHex(8)), "replica", sb.Tenant, "", true)
+	interrupted, _, publishErr := a.publishCheckpoint(t.Context(), sb, store.ArchiveID(randHex(8)), "replica", sb.Tenant, "", true)
 	if publishErr != nil {
 		t.Fatalf("publish: %v", publishErr)
 	}

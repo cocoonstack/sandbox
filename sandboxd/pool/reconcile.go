@@ -13,6 +13,7 @@ import (
 
 	"github.com/cocoonstack/sandbox/sandboxd/archives"
 	"github.com/cocoonstack/sandbox/sandboxd/engine"
+	"github.com/cocoonstack/sandbox/sandboxd/store"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 	"github.com/cocoonstack/sandbox/sandboxd/usage"
 	"github.com/cocoonstack/sandbox/sandboxd/utils"
@@ -372,7 +373,7 @@ func (m *Manager) readoptEgressTap(sb *types.Sandbox, live map[string]types.VMRe
 // reclaimOrphanArchiveCks reaps archives that crashed between publish and journal commit.
 func (m *Manager) reclaimOrphanArchiveCks(ctx context.Context, claims map[string]*types.Sandbox) {
 	logger := log.WithFunc("pool.reclaimOrphanArchiveCks")
-	metas, err := m.ckpts.Metas(ctx)
+	metas, err := m.ckpts.Metas(ctx, store.ArchivePrefix)
 	if err != nil {
 		logger.Warnf(ctx, "list archive cks skipped: %v", err)
 		return
@@ -381,7 +382,7 @@ func (m *Manager) reclaimOrphanArchiveCks(ctx context.Context, claims map[string
 	var ids []string
 	for _, rec := range metas {
 		ckpt, parseErr := parseCheckpoint(rec.Meta)
-		if parseErr != nil || !ckpt.Archive {
+		if parseErr != nil {
 			continue
 		}
 		orig, mine := claims[ckpt.SandboxID]
