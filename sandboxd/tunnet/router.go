@@ -43,7 +43,7 @@ const (
 	sendQueue   = 1024
 	readBuf     = 256 << 10
 	writeStall  = 10 * time.Second
-	segmentable = OffloadCSUM | OffloadTSO4 | OffloadTSOECN | OffloadUSO4
+	segmentable = OffloadCSUM | OffloadTSO4 | OffloadTSOECN | OffloadUSO4 | OffloadUSO6
 )
 
 var (

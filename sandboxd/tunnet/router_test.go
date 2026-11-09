@@ -34,7 +34,7 @@ func TestRouterAnnouncesRewritesAndPassesOnlyReplies(t *testing.T) {
 		t.Errorf("gratuitous ARP announces %v", target)
 	}
 	guest := serve(t, r, claimAddr)
-	if h := guestHello(t, guest); h.Flags&FlagOn == 0 || h.MTU != 1450 || h.Offloads&OffloadTSO4 == 0 {
+	if h := guestHello(t, guest); h.Flags&FlagOn == 0 || h.MTU != 1450 || h.Offloads&(OffloadTSO4|OffloadUSO4|OffloadUSO6) != OffloadTSO4|OffloadUSO4|OffloadUSO6 {
 		t.Fatalf("host hello = %+v", h)
 	}
 	sendFrame(t, guest, frame(ProtoTCP, netip.MustParseAddr("100.80.0.99"), remote, true))
