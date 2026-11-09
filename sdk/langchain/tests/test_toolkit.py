@@ -167,6 +167,17 @@ def test_a_failed_release_never_hides_the_block_error(monkeypatch):
         kit.get_tools()[0].invoke({"command": "x"})
 
 
+def test_a_failed_release_still_closes_the_client(monkeypatch):
+    kit, fake = hooked(monkeypatch)
+    closed = []
+    monkeypatch.setattr(kit._client, "close", lambda: closed.append(True))
+    fake.close_error = APIError("release", 500, "boom")
+    kit.get_tools()[0].invoke({"command": "x"})
+    with pytest.raises(APIError):
+        kit.close()
+    assert closed == [True], closed
+
+
 def test_a_stalled_agent_upgrade_comes_back_as_a_tool_error():
     server = socket.create_server(("127.0.0.1", 0))
     addr = f"127.0.0.1:{server.getsockname()[1]}"
