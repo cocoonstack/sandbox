@@ -2,11 +2,12 @@ package utils
 
 import (
 	"errors"
-	"io"
 	"os"
 
 	"golang.org/x/sys/unix"
 )
+
+const copyBlockSize = 1 << 20
 
 func reflink(dst, src *os.File) error {
 	return unix.IoctlFileClone(int(dst.Fd()), int(src.Fd()))
@@ -21,6 +22,7 @@ func copyData(dst, src *os.File) error {
 	if err = dst.Truncate(size); err != nil {
 		return err
 	}
+	buf := make([]byte, copyBlockSize)
 	for off := int64(0); off < size; {
 		data, err := src.Seek(off, unix.SEEK_DATA)
 		if errors.Is(err, unix.ENXIO) {
@@ -33,10 +35,26 @@ func copyData(dst, src *os.File) error {
 		if err != nil {
 			return err
 		}
-		if _, err = io.Copy(io.NewOffsetWriter(dst, data), io.NewSectionReader(src, data, hole-data)); err != nil {
+		if err = copyRange(dst, src, buf, data, hole); err != nil {
 			return err
 		}
 		off = hole
+	}
+	return nil
+}
+
+func copyRange(dst, src *os.File, buf []byte, from, to int64) error {
+	for pos := from; pos < to; {
+		block := buf[:min(int64(len(buf)), to-pos)]
+		if _, err := src.ReadAt(block, pos); err != nil {
+			return err
+		}
+		if !IsZero(block) {
+			if _, err := dst.WriteAt(block, pos); err != nil {
+				return err
+			}
+		}
+		pos += int64(len(block))
 	}
 	return nil
 }

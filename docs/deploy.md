@@ -236,7 +236,8 @@ as it does for the claim:
   held for the copy so a wake cannot consume the snapshot meanwhile;
 - an archived claim's record is fetched only for `snapshot.json` and the files
   its `disk_attach_files` lists, into the reader's own directory under
-  `data_dir` (the dir backend copies them out of the record, the s3 backend
+  `data_dir` (the dir backend copies them out of the record and leaves zero blocks as
+  holes, even from a mount such as JuiceFS that reports none, the s3 backend
   downloads only the chunks those files name, holes stay holes), then attached with `--from-dir`. The fetched files
   are deleted once cocoon has its copy, and nothing lands in the store's shared
   fetch cache;

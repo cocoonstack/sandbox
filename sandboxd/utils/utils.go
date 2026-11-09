@@ -3,6 +3,7 @@ package utils
 
 import (
 	"bufio"
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json/v2"
@@ -140,4 +141,9 @@ func DigestHex(v any) string {
 	raw, _ := DigestJSON(v)
 	sum := sha256.Sum256(raw)
 	return hex.EncodeToString(sum[:])
+}
+
+// IsZero reports whether data, which must be non-empty, is all zero bytes.
+func IsZero(data []byte) bool {
+	return data[0] == 0 && bytes.Equal(data[1:], data[:len(data)-1])
 }

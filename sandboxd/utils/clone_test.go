@@ -40,28 +40,12 @@ func TestCloneFileRemovesFailedDestination(t *testing.T) {
 	}
 }
 
-func TestCopyDataCopiesDataRangesOnly(t *testing.T) {
-	srcPath, dstPath := writeSparse(t)
-	src, err := os.Open(srcPath)
-	if err != nil {
-		t.Fatalf("open src: %v", err)
-	}
-	defer func() { _ = src.Close() }()
-	dst, err := os.Create(dstPath)
-	if err != nil {
-		t.Fatalf("create dst: %v", err)
-	}
-	defer func() { _ = dst.Close() }()
-	if err = copyData(dst, src); err != nil {
-		t.Fatalf("copyData: %v", err)
-	}
-	assertSameFile(t, srcPath, dstPath)
-	info, err := dst.Stat()
-	if err != nil {
-		t.Fatalf("stat dst: %v", err)
-	}
-	if allocated := info.Sys().(*syscall.Stat_t).Blocks * 512; runtime.GOOS == "linux" && allocated >= info.Size()/2 {
-		t.Errorf("copy allocates %d of %d bytes, want the holes kept", allocated, info.Size())
+func TestCopyDataKeepsHoles(t *testing.T) {
+	for name, write := range map[string]func(*testing.T) (string, string){
+		"sparse source":         writeSparse,
+		"zeros written as data": writeZeros,
+	} {
+		t.Run(name, func(t *testing.T) { assertCopyKeepsHoles(t, write) })
 	}
 }
 
@@ -88,6 +72,17 @@ func writeSparse(t *testing.T) (src, dst string) {
 	return src, filepath.Join(dir, "dst")
 }
 
+func writeZeros(t *testing.T) (src, dst string) {
+	t.Helper()
+	dir := t.TempDir()
+	src = filepath.Join(dir, "src")
+	data := append(make([]byte, 8<<20), "tail"...)
+	if err := os.WriteFile(src, data, 0o600); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	return src, filepath.Join(dir, "dst")
+}
+
 func assertSameFile(t *testing.T, a, b string) {
 	t.Helper()
 	got, err := os.ReadFile(b)
@@ -100,5 +95,31 @@ func assertSameFile(t *testing.T, a, b string) {
 	}
 	if !bytes.Equal(got, want) {
 		t.Errorf("copy differs from the source (%d vs %d bytes)", len(got), len(want))
+	}
+}
+
+func assertCopyKeepsHoles(t *testing.T, write func(*testing.T) (string, string)) {
+	t.Helper()
+	srcPath, dstPath := write(t)
+	src, err := os.Open(srcPath)
+	if err != nil {
+		t.Fatalf("open src: %v", err)
+	}
+	defer func() { _ = src.Close() }()
+	dst, err := os.Create(dstPath)
+	if err != nil {
+		t.Fatalf("create dst: %v", err)
+	}
+	defer func() { _ = dst.Close() }()
+	if err = copyData(dst, src); err != nil {
+		t.Fatalf("copyData: %v", err)
+	}
+	assertSameFile(t, srcPath, dstPath)
+	info, err := dst.Stat()
+	if err != nil {
+		t.Fatalf("stat dst: %v", err)
+	}
+	if allocated := info.Sys().(*syscall.Stat_t).Blocks * 512; runtime.GOOS == "linux" && allocated >= info.Size()/2 {
+		t.Errorf("copy allocates %d of %d bytes, want the holes kept", allocated, info.Size())
 	}
 }

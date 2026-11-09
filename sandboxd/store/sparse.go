@@ -1,7 +1,6 @@
 package store
 
 import (
-	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -11,6 +10,8 @@ import (
 	"sync"
 
 	"golang.org/x/sys/unix"
+
+	"github.com/cocoonstack/sandbox/sandboxd/utils"
 )
 
 const zeroBlockSize = 1 << 20
@@ -48,7 +49,7 @@ func ScanFile(f *os.File, rel string, size int64, newBuf func() []byte, emit fun
 			}
 			next = index + 1
 			visited[index] = true
-			if isZero(data) {
+			if utils.IsZero(data) {
 				digest.Chunks[index] = chunkZeroSum(int64(len(data)))
 				continue
 			}
@@ -130,9 +131,4 @@ func zeroSum(n int64) [sha256.Size]byte {
 	var sum [sha256.Size]byte
 	h.Sum(sum[:0])
 	return sum
-}
-
-// isZero compares data with itself shifted by one byte, which holds only for a constant run.
-func isZero(data []byte) bool {
-	return data[0] == 0 && bytes.Equal(data[1:], data[:len(data)-1])
 }
