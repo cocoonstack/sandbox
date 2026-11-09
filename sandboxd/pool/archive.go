@@ -205,6 +205,7 @@ func (m *Manager) wakeArchived(ctx context.Context, sb *types.Sandbox) (string, 
 	if err := m.tenantRemoved(ctx, sb.Tenant); err != nil {
 		return "", err
 	}
+	fallback := false
 	if err := m.beginWake(sb, true); err != nil {
 		if errors.Is(err, ErrQuota) && m.handOffForRoom(ctx, sb) {
 			return "", fmt.Errorf("wake %s: %w", sb.ID, ErrUnknownSandbox)
@@ -216,7 +217,7 @@ func (m *Manager) wakeArchived(ctx context.Context, sb *types.Sandbox) (string, 
 		if err = m.beginWake(sb, false); err != nil {
 			return "", fmt.Errorf("wake %s: %w", sb.ID, err)
 		}
-		m.counters.wakeMemoryFallbacks.Add(1)
+		fallback = true
 	}
 	defer m.endWake(sb)
 	ctx = context.WithoutCancel(ctx)
@@ -251,6 +252,9 @@ func (m *Manager) wakeArchived(ctx context.Context, sb *types.Sandbox) (string, 
 		return "", err
 	}
 	m.counters.unarchives.Add(1)
+	if fallback {
+		m.counters.wakeMemoryFallbacks.Add(1)
+	}
 	logger := log.WithFunc("pool.wakeArchived")
 	// Only the none lane reaches here, so there is no NIC to re-lock
 	if proxyErr := m.out.ArmProxy(ctx, sb); proxyErr != nil {
