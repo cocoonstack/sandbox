@@ -6,17 +6,29 @@ use crate::server::State;
 
 #[cfg(target_os = "linux")]
 pub async fn serve(port: u32, state: Arc<State>) -> std::io::Result<()> {
-    use tokio_vsock::{VMADDR_CID_ANY, VMADDR_CID_HOST, VsockAddr, VsockListener};
+    use std::os::fd::{AsFd, OwnedFd};
 
-    let listener = VsockListener::bind(VsockAddr::new(VMADDR_CID_ANY, port))?;
+    use tokio::io::Interest;
+    use tokio_vsock::{VMADDR_CID_ANY, VMADDR_CID_HOST, VsockStream};
+
+    use crate::sysutil;
+
+    let listener = vsock::VsockListener::bind_with_cid_port(VMADDR_CID_ANY, port)?;
+    listener.set_nonblocking(true)?;
+    let listener = sysutil::watch_fd(OwnedFd::from(listener))?;
     loop {
-        let conn = match listener.accept().await {
-            Ok((conn, peer)) if peer.cid() == VMADDR_CID_HOST => conn,
+        let accepted = listener
+            .async_io(Interest::READABLE, |l| sysutil::vsock_accept(l.as_fd()))
+            .await
+            .and_then(|(fd, cid)| Ok((VsockStream::new(fd.into())?, cid)));
+        let conn = match accepted {
+            Ok((conn, cid)) if cid == VMADDR_CID_HOST => conn,
             // only the host may drive silkd; a guest-side vsock loopback peer would exec as root
-            Ok((_, peer)) => {
-                eprintln!("silkd: refused peer cid {}", peer.cid());
+            Ok((_, cid)) => {
+                eprintln!("silkd: refused peer cid {cid}");
                 continue;
             }
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
             // a transient accept error must not tear down the daemon and lose every session.
             Err(e) => {
                 eprintln!("silkd: accept: {e}");
