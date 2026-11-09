@@ -9,7 +9,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
 import pytest
-from cocoonsandbox import ProtocolError, SilkdError
+from cocoonsandbox import APIError, ProtocolError, SilkdError
 from cocoonsandbox_openai import CocoonSandboxClient, CocoonSandboxClientOptions, CocoonSandboxSessionState
 
 CLAIMS: list = []
@@ -208,8 +208,10 @@ def test_create_releases_the_claim_and_keeps_the_construction_error(node, monkey
         if release_fails:
             raise RuntimeError("node gone")
 
+    closed = []
     monkeypatch.setattr("cocoonsandbox_openai.adapter.resolve_snapshot", bad_snapshot)
     monkeypatch.setattr("cocoonsandbox.Sandbox.close", close)
+    monkeypatch.setattr("cocoonsandbox.Client.close", lambda self: closed.append(self))
 
     async def go():
         client = CocoonSandboxClient()
@@ -218,6 +220,24 @@ def test_create_releases_the_claim_and_keeps_the_construction_error(node, monkey
 
     asyncio.run(go())
     assert released == ["sb_1"]
+    assert len(closed) == 1, closed
+
+
+def test_create_closes_its_client_when_the_claim_fails(node, monkeypatch):
+    closed = []
+
+    def refuse(self, *args, **kwargs):
+        raise APIError("claim", 503, "draining")
+
+    monkeypatch.setattr("cocoonsandbox.Client.new", refuse)
+    monkeypatch.setattr("cocoonsandbox.Client.close", lambda self: closed.append(self))
+
+    async def go():
+        with pytest.raises(APIError):
+            await CocoonSandboxClient().create(options=CocoonSandboxClientOptions(addr=node))
+
+    asyncio.run(go())
+    assert len(closed) == 1, closed
 
 
 async def _session_with(node, monkeypatch, fake):
