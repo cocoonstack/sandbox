@@ -25,6 +25,7 @@ func TestMemoryLimitCrossings(t *testing.T) {
 		limit config.MemoryLimit
 		anon  int64
 		swap  int64
+		cache int64
 		psi   string
 		low   bool
 	}{
@@ -37,16 +38,17 @@ func TestMemoryLimitCrossings(t *testing.T) {
 		{name: "either over", limit: config.MemoryLimit{Anon: "300G", PSISomeAvg10: 40}, anon: 10 * units.GiB, psi: "41.00", low: true},
 		{name: "swapped anon counts", limit: config.MemoryLimit{Anon: "300G"}, anon: 250 * units.GiB, swap: 51 * units.GiB, psi: "0.00", low: true},
 		{name: "resident and swapped under", limit: config.MemoryLimit{Anon: "300G"}, anon: 250 * units.GiB, swap: 49 * units.GiB, psi: "0.00"},
+		{name: "swap-cached anon counts once", limit: config.MemoryLimit{Anon: "300G"}, anon: 250 * units.GiB, swap: 51 * units.GiB, cache: 40 * units.GiB, psi: "0.00"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			m := memoryManager(t, tt.limit)
-			observeSignals(t, m, tt.anon, tt.swap, tt.psi)
+			observeSignals(t, m, tt.anon, tt.swap, tt.cache, tt.psi)
 			if got := m.memoryLow.Load(); got != tt.low {
 				t.Errorf("memory low %v, want %v", got, tt.low)
 			}
-			if _, g := m.Info(); tt.limit.Anon != "" && int64(g.AnonBytes) != tt.anon+tt.swap {
-				t.Errorf("anon gauge %d, want resident plus swapped %d", g.AnonBytes, tt.anon+tt.swap)
+			if _, g := m.Info(); tt.limit.Anon != "" && int64(g.AnonBytes) != tt.anon+tt.swap-tt.cache {
+				t.Errorf("anon gauge %d, want resident plus swapped less swap-cached %d", g.AnonBytes, tt.anon+tt.swap-tt.cache)
 			}
 		})
 	}
@@ -154,7 +156,7 @@ func TestAnUnreadableSignalDoesNotHoldTheNodeLow(t *testing.T) {
 		t.Error("anon under with no PSI left the node low")
 	}
 
-	observeSignals(t, m, 299*units.GiB, 0, "0.00")
+	observeSignals(t, m, 299*units.GiB, 0, 0, "0.00")
 	if m.memoryLow.Load() || m.memoryReadFailed.Load() {
 		t.Errorf("after the read recovered: low %v, failed %v, want both clear", m.memoryLow.Load(), m.memoryReadFailed.Load())
 	}
@@ -309,24 +311,24 @@ func memoryManager(t *testing.T, limit config.MemoryLimit) *Manager {
 	return m
 }
 
-func observeSignals(t *testing.T, m *Manager, anon, swap int64, psi string) {
+func observeSignals(t *testing.T, m *Manager, anon, swap, cache int64, psi string) {
 	t.Helper()
 	pressure := "some avg10=" + psi + " avg60=0.00 avg300=0.00 total=12\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=3\n"
 	if err := os.WriteFile(filepath.Join(m.procDir, "pressure", "memory"), []byte(pressure), 0o600); err != nil {
 		t.Fatalf("write pressure file: %v", err)
 	}
-	observeMeminfo(t, m, anon, swap)
+	observeMeminfo(t, m, anon, swap, cache)
 }
 
 func observeAnon(t *testing.T, m *Manager, anon int64) {
 	t.Helper()
-	observeMeminfo(t, m, anon, 0)
+	observeMeminfo(t, m, anon, 0, 0)
 }
 
-func observeMeminfo(t *testing.T, m *Manager, anon, swap int64) {
+func observeMeminfo(t *testing.T, m *Manager, anon, swap, cache int64) {
 	t.Helper()
 	kb := func(n int64) string { return strconv.FormatInt(n/units.KiB, 10) }
-	meminfo := "MemTotal:       395136616 kB\nMemFree:         1234 kB\nAnonPages:      " + kb(anon) + " kB\nMapped:         4321 kB\nSwapCached:     99 kB\nSwapTotal:      " + kb(64*units.GiB) + " kB\nSwapFree:       " + kb(64*units.GiB-swap) + " kB\nAnonHugePages:  77 kB\n"
+	meminfo := "MemTotal:       395136616 kB\nMemFree:         1234 kB\nAnonPages:      " + kb(anon) + " kB\nMapped:         4321 kB\nSwapCached:     " + kb(cache) + " kB\nSwapTotal:      " + kb(64*units.GiB) + " kB\nSwapFree:       " + kb(64*units.GiB-swap) + " kB\nAnonHugePages:  77 kB\n"
 	if err := os.WriteFile(filepath.Join(m.procDir, "meminfo"), []byte(meminfo), 0o600); err != nil {
 		t.Fatalf("write meminfo: %v", err)
 	}
