@@ -166,7 +166,7 @@ func (h *Host) ArmProxy(ctx context.Context, sb *types.Sandbox) error {
 			return err
 		}
 	}
-	d.srv = &http.Server{Handler: proxy, ReadHeaderTimeout: 30 * time.Second}
+	d.srv = &http.Server{Handler: proxy, ReadHeaderTimeout: 30 * time.Second, IdleTimeout: egress.IdleConnTimeout}
 	d.proxy = proxy
 	if v.usageEvery > 0 {
 		proxy.ReportEvery(v.usageEvery)

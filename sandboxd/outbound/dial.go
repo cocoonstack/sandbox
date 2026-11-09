@@ -8,9 +8,12 @@ import (
 	"slices"
 	"strconv"
 	"syscall"
+	"time"
 
 	"github.com/cocoonstack/sandbox/sandboxd/egress"
 )
+
+const dialTimeout = 30 * time.Second
 
 var (
 	nat64Range = netip.MustParsePrefix("64:ff9b::/96") // RFC 6052 NAT64; the embedded v4 is checked instead
@@ -90,7 +93,7 @@ func tunnelAddr(ips []netip.Addr) netip.Addr {
 }
 
 func newDialer(verdict VerdictFunc) *net.Dialer {
-	return &net.Dialer{Control: func(_, address string, _ syscall.RawConn) error {
+	return &net.Dialer{Timeout: dialTimeout, Control: func(_, address string, _ syscall.RawConn) error {
 		ap, err := netip.ParseAddrPort(address)
 		if err != nil {
 			return fmt.Errorf("egress: unresolved address %q: %w", address, err)

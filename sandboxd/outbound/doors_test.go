@@ -187,6 +187,16 @@ func TestARearmWithNoPolicyLeftClosesTheDoor(t *testing.T) {
 	}
 }
 
+func TestTheProxyDoorClosesAnIdleKeepAlive(t *testing.T) {
+	h, _ := armDialingDoor(t, "sb_idle", &egress.Policy{Allow: []egress.Rule{{Host: "127.0.0.1"}}})
+	h.mu.Lock()
+	idle := h.doors["sb_idle"].srv.IdleTimeout
+	h.mu.Unlock()
+	if idle <= 0 {
+		t.Errorf("door idle timeout %v, want a bound so an idle keep-alive frees its slot", idle)
+	}
+}
+
 func armDialingDoor(t *testing.T, id string, pol *egress.Policy) (*Host, string) {
 	t.Helper()
 	h := newHost(t, &fakeEngine{}, poolConfig(testKey, pol), func(o *Options) { o.Dial = (&net.Dialer{}).DialContext })
