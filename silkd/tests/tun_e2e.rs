@@ -12,13 +12,12 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use nix::sched::{CloneFlags, unshare};
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
-use tokio::net::{TcpListener, TcpStream, UdpSocket};
-
 use silkd::sysutil;
 use silkd::tun::{
     self, FLAG_ON, Flow, HELLO_LEN, Hello, Io, PEER_ADDR, Tun, VERSION, VNET_HDR_LEN,
 };
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::net::{TcpListener, TcpStream, UdpSocket};
 
 const CLAIM_ADDR: Ipv4Addr = Ipv4Addr::new(100, 65, 0, 7);
 const UPLOAD: u16 = 5001;
