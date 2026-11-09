@@ -21,9 +21,9 @@ wire is chunked, the caller's copy is not). Two behaviors differ as well:
 `Session.close()` and `Lsp.stop()` swallow `not_found` where Go returns it, and
 a failed session command puts its merged output in `ExitError.stdout` with
 `stderr` empty, where Go's `ExitError.Stderr` holds it. Wire fidelity is
-pinned by the shared protocol fixture corpus: the Rust guest and Go
-round-trip it in CI, and Python round-trips its requests and decodes each
-response.
+pinned by the shared protocol fixture corpus: Go round-trips it in CI, the
+Rust guest parses its requests and round-trips its responses, and Python
+round-trips its requests and decodes each response.
 
 ## A complete example
 

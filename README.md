@@ -74,7 +74,7 @@ sandboxd](docs/deploy.md) covers release binaries, the full config and systemd.
 - `sdk/langchain/` — `cocoonstack-sandbox-langchain`, a
   [LangChain toolkit](docs/langchain.md)
 - `protocol/wire/` — the frame vocabulary and `fixtures/`, the golden corpus the
-  Rust, Go and Python tests all round-trip, so wire drift fails CI
+  Rust, Go and Python tests check, so wire drift fails CI
 - `e2e/` — in-process full-stack tests (real pool/engine/relay/SDK, fake
   cocoon + guest) and the [bare-metal drivers](docs/deploy.md#acceptance-drivers)
 - `boot/kernel/` — kernel version pin (`VERSION` + matching tarball `SHA256`,
