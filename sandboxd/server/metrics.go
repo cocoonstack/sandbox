@@ -80,6 +80,7 @@ func (s *Server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
 	metric("wakes_refused_total", "counter", "wakes refused for capacity, by the limit that refused them")
 	_, _ = fmt.Fprintf(w, "sandboxd_wakes_refused_total{reason=\"max_running\"} %d\n", c.WakesRefusedRunning)
 	_, _ = fmt.Fprintf(w, "sandboxd_wakes_refused_total{reason=\"disk\"} %d\n", c.WakesRefusedDisk)
+	_, _ = fmt.Fprintf(w, "sandboxd_wakes_refused_total{reason=\"memory\"} %d\n", c.WakesRefusedMemory)
 	for _, row := range []struct {
 		name, help string
 		value      uint64
@@ -95,6 +96,7 @@ func (s *Server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
 		{"unarchives_total", "archived claims restored", c.Unarchives},
 		{"archive_deletes_total", "archived checkpoints deleted at release or retention", c.ArchiveDeletes},
 		{"wake_handoffs_total", "archived claims handed to a peer with room instead of a refused wake", c.WakeHandoffs},
+		{"wake_memory_fallbacks_total", "archived wakes over memory_limit woken here because no hand-off ran or no peer adopted", c.WakeMemoryFallbacks},
 		{"dns_malformed_total", "guest DNS queries dropped as malformed", c.DNSMalformed},
 	} {
 		metric(row.name, "counter", row.help)

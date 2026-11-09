@@ -136,6 +136,7 @@ var (
 	errNoEgressTap   = errors.New("egress-lane claim has no lockable tap")
 
 	errFencedReplicating = fmt.Errorf("%w: node lease lost", ErrQuota)
+	errMemoryLow         = fmt.Errorf("%w: %s", ErrQuota, memoryLowReason)
 	errNoFailover        = errors.New("archive_failover is off, so no peer can adopt the claim")
 	errNoArchiveRow      = errors.New("archived before archive_failover was on, so no registry row names it")
 	errArchiveBusy       = errors.New("an archive of the claim is in flight")

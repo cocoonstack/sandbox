@@ -86,8 +86,8 @@ func (m *Manager) CommitMove(ctx context.Context, id string, claim []byte, epoch
 		return fmt.Errorf("%w: no reservation for the move of %s", ErrNotMovable, id)
 	}
 	defer m.endReceive(id, admitted)
-	if m.memoryLow.Load() {
-		return fmt.Errorf("%w: %s", ErrQuota, memoryLowReason)
+	if err := m.memoryErr(); err != nil {
+		return err
 	}
 	sb := &types.Sandbox{}
 	if err := json.Unmarshal(claim, sb); err != nil || sb.ID != id {

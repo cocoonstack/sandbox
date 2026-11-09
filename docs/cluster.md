@@ -191,7 +191,7 @@ cap; to take no claims, cordon the node.
 
 | State | New claim, fork, branch | Existing claims | Root live move in | Adoption of archived claims | Refill and pool gossip | Survives restart and reboot |
 |---|---|---|---|---|---|---|
-| serving | yes, unless an [admission refusal](sandboxd-api.md#admission-refusals) applies; a 429 for a claim without volumes redirects to a peer | yes; a wake is bound by `max_running` and `disk_reserve`, and an archived claim's refused wake moves to a peer with room | yes, under the same caps and `move_concurrency` | yes; no claim cap binds, `max_running` binds at the wake | yes | — |
+| serving | yes, unless an [admission refusal](sandboxd-api.md#admission-refusals) applies; a 429 for a claim without volumes redirects to a peer | yes; a wake is bound by `max_running` and `disk_reserve`, an archived claim's also by `memory_limit`, and an archived claim's refused wake moves to a peer with room | yes, under the same caps and `move_concurrency` | yes; no claim cap binds, `max_running` binds at the wake | yes | — |
 | cordoned | no: 429 `node cordoned`; peers stop redirecting here | yes | yes, under the same caps and `move_concurrency` | no; its own claims stay | no; warm VMs are destroyed | yes, as `<data_dir>/cordoned` |
 | draining | no: 429 `node draining`; peers stop redirecting here | yes | no: admission and commit refuse | no | no; warm VMs are destroyed | no |
 | draining with `evacuate=1` | no, as draining | yes until the claim's turn, then 503 until a peer holds it and 404 after; a claim that cannot move stays and serves | no | no | no | no: a restart stops the evacuation |
@@ -300,27 +300,33 @@ was waking or releasing when it died, plus what a replicated claim leaves (see
 ### Waking an archived claim on a full node
 
 A wake that `max_running` or `disk_reserve` refuses answers 429 and is
-counted in `sandboxd_wakes_refused_total{reason}`. For an archived claim with a
+counted in `sandboxd_wakes_refused_total{reason}`. `memory_limit` sends only
+an archived claim's wake to a hand-off, since only that one can move, and
+never answers 429 for it. For an archived claim with a
 row, the owner first tries to hand the claim to a peer that has room, with the
 release and adoption an evacuation uses:
 
 - The owner releases the row to no owner and asks each peer
   `GET /v1/sandboxes/{id}/owner?room=1`. A peer adopts only while it could
   admit the wake itself: not draining, cordoned or fenced, above
-  `disk_reserve` and under `max_running`.
+  `disk_reserve`, under `memory_limit` and under `max_running`.
 - When a peer adopts, the owner forgets the claim and the wake answers 404, as
   after an evacuation. The client's `Lookup` finds the peer, which wakes the
   claim there. The hand-off counts in `sandboxd_wake_handoffs_total`.
 - When no peer adopts (no peer, or every peer full or closed), the owner takes
   the row back and the wake answers 429 as before. A node runs one hand-off at
   a time, and after one fails it asks no peer for 30 seconds, so clients
-  retrying a full cell cost no registry writes.
+  retrying a full cell cost no registry writes. A wake that `memory_limit`
+  refused wakes on the owner instead, as does one that arrives while another
+  hand-off runs or inside those 30 seconds, and counts in
+  `sandboxd_wake_memory_fallbacks_total`.
 - Two wakes of one claim queue on its transition lock. One that waited behind
   a hand-off also answers 404, so it never hands the claim off twice.
 - A peer's room is checked when it adopts, not reserved. If the peer fills up
   before the client's wake arrives, that wake is refused there and may be
   handed on again.
-- A hibernated claim keeps its 429: its memory snapshot is local.
+- A hibernated claim keeps its 429: its memory snapshot is local. For the
+  same reason `memory_limit` never refuses its wake.
 
 The hand-off costs nothing on the claim and wake paths. A refused archived
 wake costs one registry release, one call per peer until one adopts, and, with

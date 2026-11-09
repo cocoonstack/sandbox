@@ -1272,10 +1272,12 @@ wake/hibernate/fork/checkpoint/promote/release/reap counters plus
 archive/unarchive/archive-delete counters, `sandboxd_dns_malformed_total` (guest DNS queries dropped as malformed), claim/wake `*_seconds_total`
 for average latency, `sandboxd_claim_duration_seconds{tier}`, a histogram of pool
 claims by tier, `sandboxd_claim_redirects_total`, claims this node handed to a
-peer, `sandboxd_wakes_refused_total{reason}`, wakes `max_running` (`max_running`) or
-`disk_reserve` (`disk`) refused with 429, and `sandboxd_wake_handoffs_total`,
+peer, `sandboxd_wakes_refused_total{reason}`, wakes `max_running` (`max_running`),
+`disk_reserve` (`disk`) refused with 429, and wakes `memory_limit` (`memory`)
+refused here whether or not a hand-off ran, `sandboxd_wake_handoffs_total`,
 archived claims this node [handed to a peer with room](cluster.md#waking-an-archived-claim-on-a-full-node)
-instead. On a node with a `tun` block it adds the packet path's counters:
+instead, and `sandboxd_wake_memory_fallbacks_total`, archived wakes over
+`memory_limit` this node woke itself because no hand-off ran or no peer adopted. On a node with a `tun` block it adds the packet path's counters:
 `sandboxd_tun_frames_total{dir}` (frames on the claims' vsock streams, `out`
 from the guest and `in` to it), `sandboxd_tun_datagrams_total{dir}` (VXLAN
 datagrams), `sandboxd_tun_arp_total{kind}` (`answered` replies to exits,

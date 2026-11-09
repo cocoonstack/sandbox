@@ -187,7 +187,7 @@ func (m *Manager) wakeOrRead(ctx context.Context, sb *types.Sandbox, readerOK bo
 	if readerOK && sb.ReaderSafe {
 		return "", ErrSleeping
 	}
-	if err := m.beginWake(sb); err != nil {
+	if err := m.beginWake(sb, false); err != nil {
 		return "", fmt.Errorf("wake %s: %w", sb.ID, err)
 	}
 	defer m.endWake(sb)
