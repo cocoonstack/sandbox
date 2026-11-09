@@ -610,6 +610,13 @@ func TestLoadAcceptsAShardedNetworkList(t *testing.T) {
 	}
 }
 
+func TestPoolSpecRejectsEmptyWarmupArgument(t *testing.T) {
+	spec := PoolSpec{Template: "rt:24.04", Net: types.NetNone, Size: types.SizeSmall, Warm: 1, Warmup: []string{"node", ""}}
+	if err := spec.ValidateLimits(); err == nil || !strings.Contains(err.Error(), "warmup") {
+		t.Errorf("ValidateLimits error = %v, want an empty-argument rejection", err)
+	}
+}
+
 func writeConfig(t *testing.T, body string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "config.json")

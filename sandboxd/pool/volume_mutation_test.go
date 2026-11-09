@@ -18,7 +18,7 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
-func TestLiveVolumeFourModesAndMixedRoundtrip(t *testing.T) {
+func TestLiveVolumeRoundtripLeavesDevicesAndRestartRecoversModes(t *testing.T) {
 	eng := newFakeEngine()
 	catalog := []config.VolumeSpec{}
 	request := []types.Volume{{Name: "mounted"}, {Name: "writer", Mode: types.VolumeModeRW}, {Name: "raw", AttachOnly: true}, {Name: "raw-writer", Mode: types.VolumeModeRW, AttachOnly: true}}
@@ -80,7 +80,7 @@ func TestLiveVolumeFourModesAndMixedRoundtrip(t *testing.T) {
 	}
 }
 
-func TestLiveVolumesCommitAndRetry(t *testing.T) {
+func TestARepeatedVolumeTargetTakesOneHold(t *testing.T) {
 	eng := newFakeEngine()
 	m := newVolumeManager(t, eng, liveCatalog(t))
 	sb := mustClaim(t, m, testKey)
@@ -452,7 +452,7 @@ func TestLiveVolumeCancelHiddenByTheEngineStillReadsAsCanceled(t *testing.T) {
 	}
 }
 
-func TestLiveVolumeAdmissionAndState(t *testing.T) {
+func TestLiveVolumeAttachRefusesAClaimThatCannotTakeIt(t *testing.T) {
 	for _, state := range []string{"paused", "failed", "archived", "archive policy", "dirty", "writer"} {
 		t.Run(state, func(t *testing.T) {
 			eng := newFakeEngine()

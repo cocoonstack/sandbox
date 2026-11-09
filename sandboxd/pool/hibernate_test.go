@@ -220,6 +220,9 @@ func TestWakeFailureStopsTheVMAndRetries(t *testing.T) {
 			if eng.snapRemoved(snap) {
 				t.Error("the failure dropped the snapshot needed to retry")
 			}
+			if _, g := m.Info(); g.Hibernated != 1 {
+				t.Errorf("hibernated count %d, want 1 (wake failed, snapshot kept)", g.Hibernated)
+			}
 			if got := journaled(t, m); got[sb.ID] == nil || got[sb.ID].HibernateSnap != snap {
 				t.Fatalf("journal %+v, want HibernateSnap=%q kept for the retry", got[sb.ID], snap)
 			}
@@ -441,24 +444,6 @@ func TestWakeDropsSnapshotOffReturnPath(t *testing.T) {
 		close(eng.snapRemoveStall)
 		waitFor(t, func() bool { return eng.snapRemoveCount() == 1 })
 	})
-}
-
-func TestWakeFailureKeepsHibernated(t *testing.T) {
-	eng := newFakeEngine()
-	m := newTestManager(t, eng)
-	sb := mustClaim(t, m, testKey)
-	hibernateClaim(t, m, sb)
-
-	eng.restoreErr = errors.New("restore boom")
-	if _, _, _, err := m.WakeAgentSocket(t.Context(), sb.ID, Cred{Token: sb.Token}); err == nil {
-		t.Fatal("WakeAgentSocket succeeded despite restore failure")
-	}
-	if _, g := m.Info(); g.Hibernated != 1 {
-		t.Errorf("hibernated count %d, want 1 (wake failed, snapshot kept)", g.Hibernated)
-	}
-	if len(eng.snapRemoves) != 0 {
-		t.Errorf("snapRemoves=%v, want none after failed wake", eng.snapRemoves)
-	}
 }
 
 func TestReleaseHibernatedDropsSnapshot(t *testing.T) {

@@ -8,7 +8,7 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
-func TestCloneArgsRestoreMode(t *testing.T) {
+func TestCloneAndRestoreArgsCarryTheRestoreModeOnlyWhenSet(t *testing.T) {
 	noneKey := types.PoolKey{Template: "rt:24.04", Net: types.NetNone, Size: types.SizeMedium}
 	egressKey := types.PoolKey{Template: "rt:24.04", Net: types.NetEgress, Size: types.SizeMedium}
 	cases := []struct {

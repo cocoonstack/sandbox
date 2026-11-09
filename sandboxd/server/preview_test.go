@@ -15,7 +15,7 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/pool"
 )
 
-func TestPreviewTokenRoundTrip(t *testing.T) {
+func TestPreviewTokenVerifiesOnlyUntamperedUnderItsSecret(t *testing.T) {
 	ps := NewPreviewServer("secret", "https://preview.example.com", "node:7777", &fakePreviewMgr{})
 	token := mintToken(ps, "sb_1", 8080, time.Hour)
 

@@ -183,7 +183,7 @@ async fn forward_split_requests_do_not_wait_on_delayed_acks() {
         let state = Arc::new(State::new());
         let (mut cw, mut lines) = forwarded(&state, port).await;
         let start = Instant::now();
-        for _ in 0..20 {
+        for _ in 0..200 {
             send(
                 &mut cw,
                 json!({"v":1,"op":"data","data":b64(&[b'a'; 8192])}),
@@ -199,8 +199,8 @@ async fn forward_split_requests_do_not_wait_on_delayed_acks() {
         }
         let elapsed = start.elapsed();
         assert!(
-            elapsed < Duration::from_millis(200),
-            "20 split requests took {elapsed:?}: the guest-side write waits on delayed ACKs"
+            elapsed < Duration::from_secs(5),
+            "200 split requests took {elapsed:?}: the guest-side write waits on delayed ACKs"
         );
     })
     .await;

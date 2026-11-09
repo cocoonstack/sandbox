@@ -151,7 +151,7 @@ func TestFetchOutlivesTheCallerThatStartedIt(t *testing.T) {
 		_, _, _, err := st.Fetch(first, id)
 		started <- err
 	}()
-	<-fake.exportEntered
+	fake.waitExport(t)
 	joined := make(chan error, 1)
 	go func() {
 		_, _, _, err := st.Fetch(t.Context(), id)
@@ -766,7 +766,7 @@ func TestSweepGenerationsDropsACacheACanceledFetchInstalledAfterDelete(t *testin
 		_, _, _, err := st.Fetch(ctx, id)
 		fetched <- err
 	}()
-	<-fake.exportEntered
+	fake.waitExport(t)
 	cancel()
 	if err := <-fetched; !errors.Is(err, context.Canceled) {
 		t.Fatalf("Fetch = %v, want its cancellation", err)
@@ -776,13 +776,13 @@ func TestSweepGenerationsDropsACacheACanceledFetchInstalledAfterDelete(t *testin
 	}
 	release()
 	cached := filepath.Join(st.staging, cacheDir, id)
-	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(5 * time.Millisecond) {
-		if entries, _ := os.ReadDir(cached); len(entries) > 0 {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("the detached download never installed its cache")
-		}
+	select {
+	case <-st.fetches.DoChan(filepath.Join(cached, store.ExportGenHash(metaJSON(id))), func() (any, error) { return nil, nil }):
+	case <-time.After(5 * time.Second):
+		t.Fatal("the detached download never finished")
+	}
+	if entries, _ := os.ReadDir(cached); len(entries) == 0 {
+		t.Fatal("the detached download never installed its cache")
 	}
 
 	if err := st.SweepGenerations(t.Context()); err != nil {
@@ -861,7 +861,7 @@ func TestFetchFileInstallsOnlyACompleteDownload(t *testing.T) {
 	go func() {
 		fetched <- st.FetchFile(t.Context(), id, "disk.img", dst)
 	}()
-	<-fake.exportEntered
+	fake.waitExport(t)
 	if _, err := os.Stat(dst); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("a download in flight is already visible at the destination: %v", err)
 	}
@@ -1127,6 +1127,15 @@ func (f *fakeS3) resetRequests() {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	clear(f.requests)
+}
+
+func (f *fakeS3) waitExport(t *testing.T) {
+	t.Helper()
+	select {
+	case <-f.exportEntered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the gated download never started")
+	}
 }
 
 func (f *fakeS3) handlePutObject(w http.ResponseWriter, r *http.Request, key string) {

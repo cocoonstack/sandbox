@@ -262,13 +262,10 @@ func TestAReloadDropsTheLiveProxiesPooledConnections(t *testing.T) {
 func TestReloadIsAudited(t *testing.T) {
 	dir := t.TempDir()
 	cfg := &config.Config{DataDir: dir, AuditLog: true}
-	m, err := NewManager(t.Context(), cfg, newFakeEngine(), testSecrets(t), testBackends(t, cfg))
-	if err != nil {
-		t.Fatalf("setup manager: %v", err)
-	}
+	m := mustManager(t, cfg, newFakeEngine())
 	next := *m.cfg
 	next.EgressInternalAllow = []string{"10.8.0.0/16"}
-	if _, err = m.ReloadConfig(t.Context(), &next); err != nil {
+	if _, err := m.ReloadConfig(t.Context(), &next); err != nil {
 		t.Fatalf("reload: %v", err)
 	}
 	raw, err := os.ReadFile(filepath.Join(dir, "audit.jsonl"))
@@ -295,9 +292,9 @@ func TestAnInterruptedReloadStillDestroysTheRetiredWarmVMs(t *testing.T) {
 	waitFor(t, func() bool { return refilledTo(t, m, testKey, 2) })
 	m.mu.Lock()
 	retired := []string{m.pools[testKey].warm[0].VMName, m.pools[testKey].warm[1].VMName}
-	m.mu.Unlock()
 	m.refillSem = make(chan struct{}, 1)
 	m.refillSem <- struct{}{}
+	m.mu.Unlock()
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	next := *m.cfg

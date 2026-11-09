@@ -35,10 +35,13 @@ func TestMergeNeverOverwritesSelf(t *testing.T) {
 
 	mergeStates(t, m, []NodeState{{NodeID: "a", Addr: "evil:9999", Epoch: 999, Pools: map[string]int{"k": 0}}})
 
-	for _, st := range m.Members() {
-		if st.NodeID == "a" && (st.Addr != "a:7777" || st.Pools["k"] != 3) {
-			t.Errorf("self overwritten: %+v", st)
-		}
+	members := m.Members()
+	i := slices.IndexFunc(members, func(st NodeState) bool { return st.NodeID == "a" })
+	if i < 0 {
+		t.Fatalf("self missing from members %+v", members)
+	}
+	if st := members[i]; st.Addr != "a:7777" || st.Pools["k"] != 3 {
+		t.Errorf("self overwritten: %+v", st)
 	}
 }
 
@@ -148,7 +151,7 @@ func TestAPeerRefusingClaimsIsNoRedirectTarget(t *testing.T) {
 	}
 }
 
-func TestCandidatesPowerOfTwo(t *testing.T) {
+func TestCandidatesPicksTwoDistinctWarmPeers(t *testing.T) {
 	m := newTestMesh(t, "a")
 	mergeStates(t, m, []NodeState{
 		{NodeID: "b", Addr: "b:7777", Epoch: 1, Pools: map[string]int{"k": 1}},

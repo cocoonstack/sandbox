@@ -108,7 +108,7 @@ func TestSocksRefusesWhatItCannotServe(t *testing.T) {
 			select {
 			case ev := <-events:
 				t.Errorf("refused handshake recorded %+v", ev)
-			default:
+			case <-time.After(100 * time.Millisecond):
 			}
 		})
 	}
@@ -151,8 +151,9 @@ func TestCloseEndsSocksTunnelAndHandshake(t *testing.T) {
 	p.Close()
 
 	_, _ = io.WriteString(tunnel, "ping")
-	if _, err := io.ReadFull(tunnel, make([]byte, 4)); err == nil {
-		t.Error("established SOCKS tunnel survived proxy Close")
+	_ = tunnel.SetReadDeadline(time.Now().Add(5 * time.Second))
+	if _, err := io.ReadFull(tunnel, make([]byte, 4)); err == nil || errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Errorf("established SOCKS tunnel survived proxy Close: %v", err)
 	}
 	_ = pending.SetReadDeadline(time.Now().Add(2 * time.Second))
 	if _, err := pending.Read(make([]byte, 1)); err == nil || errors.Is(err, os.ErrDeadlineExceeded) {

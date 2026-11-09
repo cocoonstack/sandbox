@@ -47,14 +47,14 @@ func TestValidateSizes(t *testing.T) {
 	}
 }
 
-func TestXLargeSpec(t *testing.T) {
+func TestXLargeSpecIsFourCPUsAndEightGiB(t *testing.T) {
 	spec, ok := SizeXLarge.Spec()
 	if !ok || spec.CPU != 4 || spec.Memory != "8G" {
 		t.Errorf("got %+v ok=%v, want {4 8G} true", spec, ok)
 	}
 }
 
-func TestMedium4GSpec(t *testing.T) {
+func TestMedium4GSpecIsTwoCPUsAndFourGiB(t *testing.T) {
 	spec, ok := SizeMedium4G.Spec()
 	if !ok || spec.CPU != 2 || spec.Memory != "4G" || spec.MemoryBytes != 4<<30 {
 		t.Errorf("got %+v ok=%v, want {2 4G 4GiB} true", spec, ok)

@@ -1,5 +1,6 @@
 //! RPCs back to back on one connection, and the frames that cross an RPC boundary.
 
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 mod common;
 
 use std::sync::Arc;
@@ -12,7 +13,7 @@ use tokio::time::timeout;
 
 use common::{
     DEADLINE, FrameLines, assert_error, b64, connect_with, expect_frame, frames_until, next_frame,
-    send, type_of,
+    roundtrip, send, type_of,
 };
 
 async fn types_until(lines: &mut FrameLines, terminal: &str) -> Vec<String> {
@@ -39,6 +40,13 @@ async fn rpcs_run_back_to_back_on_one_connection() {
         .expect("server task did not end on close")
         .unwrap()
         .unwrap();
+}
+
+#[tokio::test]
+async fn info_reports_the_version() {
+    let frames = roundtrip(r#"{"op":"info"}"#).await;
+    assert_eq!(type_of(&frames[0]), "info");
+    assert_eq!(frames[0]["version"], env!("CARGO_PKG_VERSION"));
 }
 
 #[tokio::test]

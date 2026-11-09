@@ -15,6 +15,7 @@ import (
 const (
 	racers = 8
 
+	liveLease  = 30 * time.Second
 	shortLease = 300 * time.Millisecond
 	leaseWait  = 10 * time.Second
 )
@@ -518,7 +519,7 @@ func testReplace(t *testing.T, r archives.Registry) {
 func testTakeLease(t *testing.T, r archives.Registry) {
 	ctx := t.Context()
 	first := mustPut(t, r, record("sb_1", "a", time.Time{}))
-	if err := r.Renew(ctx, "a", shortLease); err != nil {
+	if err := r.Renew(ctx, "a", liveLease); err != nil {
 		t.Fatalf("renew: %v", err)
 	}
 	if _, err := r.Take(ctx, "sb_1", first, "b"); !errors.Is(err, archives.ErrLost) {
@@ -530,6 +531,9 @@ func testTakeLease(t *testing.T, r archives.Registry) {
 	own, err := r.Take(ctx, "sb_1", first, "a")
 	if err != nil || own <= first {
 		t.Fatalf("the owner's own take with a live lease: %d %v, want a new epoch", own, err)
+	}
+	if err = r.Renew(ctx, "a", shortLease); err != nil {
+		t.Fatalf("renew short: %v", err)
 	}
 	eventually(t, "the owner's lease to expire", func() bool {
 		_, err = r.Take(ctx, "sb_1", own, "b")
@@ -597,12 +601,15 @@ func testSweepableLease(t *testing.T, r archives.Registry) {
 	past := time.Now().Add(-time.Minute)
 	mustPut(t, r, record("sb_live", "a", past))
 	mustPut(t, r, record("sb_dead", "z", past))
-	if err := r.Renew(ctx, "a", shortLease); err != nil {
+	if err := r.Renew(ctx, "a", liveLease); err != nil {
 		t.Fatalf("renew: %v", err)
 	}
 	got, err := r.Sweepable(ctx, time.Now(), "me")
 	if err != nil || len(got) != 1 || got[0].ID != "sb_dead" {
 		t.Fatalf("sweepable while a's lease is live: %+v %v, want sb_dead only", got, err)
+	}
+	if err = r.Renew(ctx, "a", shortLease); err != nil {
+		t.Fatalf("renew short: %v", err)
 	}
 	eventually(t, "a's lease to expire", func() bool {
 		got, err = r.Sweepable(ctx, time.Now(), "me")

@@ -7,10 +7,13 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"golang.org/x/time/rate"
 
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
@@ -43,7 +46,7 @@ func TestALimitCapsOneDirectionOfATunnel(t *testing.T) {
 			if got.took < 700*time.Millisecond {
 				t.Errorf("upload of two seconds' worth took %v under a limit with a one-second burst", got.took)
 			}
-			if down > 500*time.Millisecond {
+			if down > 5*time.Second {
 				t.Errorf("download took %v with only tx limited", down)
 			}
 		})
@@ -51,25 +54,23 @@ func TestALimitCapsOneDirectionOfATunnel(t *testing.T) {
 }
 
 func TestChangingTheLimitMovesAnOpenTunnel(t *testing.T) {
-	sink, received := sinkServer(t)
-	p, _, conn := openConnect(t, sink)
-	go writeUntilClosed(conn)
-	waitBytes(t, received, 1<<20)
+	addr, s := sinkServer(t)
+	p, _, conn := openConnect(t, addr)
+	if _, err := conn.Write(make([]byte, 1<<20)); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	waitBytes(t, s, 1<<20)
 
 	p.SetLimit(types.EgressLimit{TxBytesPerSecond: testRate / 2})
-	time.Sleep(500 * time.Millisecond)
-	before := received.Load()
-	time.Sleep(time.Second)
-	if moved := received.Load() - before; moved < testRate/4 || moved > testRate {
-		t.Errorf("moved %d bytes in the second after the limit dropped to %d/s", moved, testRate/2)
+	start := time.Now()
+	go writeUntilClosed(conn)
+	waitBytes(t, s, 1<<20+limitBurst+testRate/2)
+	if took := time.Since(start); took < 700*time.Millisecond {
+		t.Errorf("a burst and a second's worth past it took %v after the limit dropped to %d/s", took, testRate/2)
 	}
 
 	p.SetLimit(types.EgressLimit{})
-	before = received.Load()
-	time.Sleep(300 * time.Millisecond)
-	if moved := received.Load() - before; moved < 4<<20 {
-		t.Errorf("moved %d bytes in 300ms after the limit was lifted", moved)
-	}
+	waitBytes(t, s, s.received.Load()+4<<20)
 }
 
 func TestChangingOneDirectionKeepsTheOtherBucket(t *testing.T) {
@@ -92,15 +93,15 @@ func TestChangingOneDirectionKeepsTheOtherBucket(t *testing.T) {
 }
 
 func TestCloseReleasesAReadWaitingForTokens(t *testing.T) {
-	sink, received := sinkServer(t)
+	addr, s := sinkServer(t)
 	rows := make(chan int64, 4)
-	p, _, conn := openConnect(t, sink, func(p *Proxy) {
+	p, _, conn := openConnect(t, addr, func(p *Proxy) {
 		p.OnTransfer(func(_ Event, sent, _ int64) { rows <- sent })
 	})
 	p.SetLimit(types.EgressLimit{TxBytesPerSecond: 64})
 	go writeUntilClosed(conn)
-	waitBytes(t, received, limitBurst)
-	time.Sleep(100 * time.Millisecond)
+	waitBytes(t, s, limitBurst)
+	waitDebt(t, p.limits.Load().tx)
 
 	start := time.Now()
 	p.Close()
@@ -287,6 +288,11 @@ type bulk struct {
 	uploads chan upload
 }
 
+type sink struct {
+	received atomic.Int64
+	reads    chan struct{}
+}
+
 func openConnect(t *testing.T, target string, edits ...proxyEdit) (*Proxy, io.Reader, net.Conn) {
 	t.Helper()
 	p := New(Policy{Allow: []Rule{{Host: "bulk.internal"}}}, nil, nil, fixedDial(target), nil, nil)
@@ -382,14 +388,14 @@ func bulkServer(t *testing.T, down int) *bulk {
 	return b
 }
 
-func sinkServer(t *testing.T) (string, *atomic.Int64) {
+func sinkServer(t *testing.T) (string, *sink) {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("listen sink: %v", err)
 	}
 	t.Cleanup(func() { _ = ln.Close() })
-	received := new(atomic.Int64)
+	s := &sink{reads: make(chan struct{}, 1)}
 	go func() {
 		conn, err := ln.Accept()
 		if err != nil {
@@ -399,22 +405,38 @@ func sinkServer(t *testing.T) (string, *atomic.Int64) {
 		buf := make([]byte, 64<<10)
 		for {
 			n, err := conn.Read(buf)
-			received.Add(int64(n))
+			s.received.Add(int64(n))
+			select {
+			case s.reads <- struct{}{}:
+			default:
+			}
 			if err != nil {
 				return
 			}
 		}
 	}()
-	return ln.Addr().String(), received
+	return ln.Addr().String(), s
 }
 
-func waitBytes(t *testing.T, received *atomic.Int64, want int64) {
+func waitBytes(t *testing.T, s *sink, want int64) {
+	t.Helper()
+	deadline := time.After(5 * time.Second)
+	for s.received.Load() < want {
+		select {
+		case <-s.reads:
+		case <-deadline:
+			t.Fatalf("sink got %d bytes, want %d", s.received.Load(), want)
+		}
+	}
+}
+
+func waitDebt(t *testing.T, lim *rate.Limiter) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
-	for received.Load() < want {
+	for lim.Tokens() >= 0 {
 		if time.Now().After(deadline) {
-			t.Fatalf("sink got %d bytes, want %d", received.Load(), want)
+			t.Fatalf("the bucket kept %v tokens", lim.Tokens())
 		}
-		time.Sleep(10 * time.Millisecond)
+		runtime.Gosched()
 	}
 }

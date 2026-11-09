@@ -4,10 +4,20 @@ import errno
 import http.client
 import socket
 import threading
-import time
 
+import cocoonsandbox.client
 import pytest
 from cocoonsandbox import APIError, Client
+from conftest import bounded
+
+ENTRY_POINTS = pytest.mark.parametrize(
+    ("path", "claim"),
+    [
+        ("/v1/claim", lambda client: client.new("rt:24.04")),
+        ("/v1/checkpoints/ck_1/claim", lambda client: client.checkpoint("ck_1").new()),
+    ],
+    ids=["claim", "checkpoint"],
+)
 
 
 @pytest.mark.parametrize(
@@ -40,16 +50,8 @@ def test_claim_redirect_skips_an_unreachable_candidate(spawn_node, monkeypatch):
     assert sb.id == "sb_ok" and sb.owner == good
 
 
-def test_claim_redirect_stops_when_a_candidate_may_have_claimed(spawn_node):
-    server = socket.create_server(("127.0.0.1", 0))
-
-    def drop_reply():
-        conn, _ = server.accept()
-        conn.recv(65536)
-        conn.close()
-
-    threading.Thread(target=drop_reply, daemon=True).start()
-    lost = f"127.0.0.1:{server.getsockname()[1]}"
+def test_claim_redirect_stops_when_a_candidate_may_have_claimed(spawn_node, script_server):
+    lost = script_server(drop_reply)
     good_calls = []
     good = spawn_node(
         {("POST", "/v1/claim"): lambda body, path: good_calls.append(body) or (200, {"id": "x", "token": "t"})}
@@ -58,54 +60,54 @@ def test_claim_redirect_stops_when_a_candidate_may_have_claimed(spawn_node):
     entry = spawn_node(
         {("POST", "/v1/claim"): lambda body, path: entry_calls.append(body) or (200, {"redirect": [lost, good]})}
     )
-    try:
-        with pytest.raises(APIError):
-            Client(entry).new("rt:24.04")
-    finally:
-        server.close()
+    with pytest.raises(APIError):
+        Client(entry).new("rt:24.04")
     assert not good_calls and len(entry_calls) == 1
 
 
-def test_claim_redirect_all_candidates_fail_then_origin_fallback_fails(spawn_node):
-    a = spawn_node({("POST", "/v1/claim"): lambda body, path: (404, {"error": "gone a"})})
-    b = spawn_node({("POST", "/v1/claim"): lambda body, path: (404, {"error": "gone b"})})
+@ENTRY_POINTS
+@pytest.mark.parametrize("status", [404, 500])
+def test_claim_redirect_all_candidates_fail_then_origin_fallback_fails(spawn_node, path, claim, status):
+    a = spawn_node({("POST", path): lambda body, p: (status, {"error": "gone a"})})
+    b = spawn_node({("POST", path): lambda body, p: (status, {"error": "gone b"})})
 
     calls = []
 
-    def entry_claim(body, path):
+    def entry_claim(body, p):
         calls.append(body)
         if len(calls) == 1:
             return 200, {"redirect": [a, b]}
         return 409, {"error": "origin also failed"}
 
-    entry = spawn_node({("POST", "/v1/claim"): entry_claim})
+    entry = spawn_node({("POST", path): entry_claim})
     with pytest.raises(APIError) as exc:
-        Client(entry).new("rt:24.04")
+        claim(Client(entry))
     assert exc.value.status == 409 and "origin also failed" in exc.value.message
     assert "gone b" in exc.value.message
     assert len(calls) == 2 and calls[1]["no_redirect"] is True
 
 
-@pytest.mark.parametrize(("status", "message"), [(429, "full"), (401, "invalid api token")])
-def test_claim_redirect_retryable_candidate_falls_back_to_origin(spawn_node, status, message):
+@ENTRY_POINTS
+@pytest.mark.parametrize(("status", "message"), [(429, "full"), (401, "invalid api token"), (503, "healing")])
+def test_claim_redirect_retryable_candidate_falls_back_to_origin(spawn_node, path, claim, status, message):
     candidate_calls = []
 
-    def candidate_claim(body, path):
+    def candidate_claim(body, p):
         candidate_calls.append(body)
         return status, {"error": message}
 
-    candidate = spawn_node({("POST", "/v1/claim"): candidate_claim})
+    candidate = spawn_node({("POST", path): candidate_claim})
 
     calls = []
 
-    def entry_claim(body, path):
+    def entry_claim(body, p):
         calls.append(body)
         if len(calls) == 1:
             return 200, {"redirect": [candidate]}
         return 200, {"id": "sb_healed", "token": "t"}
 
-    entry = spawn_node({("POST", "/v1/claim"): entry_claim})
-    sb = Client(entry).new("rt:24.04")
+    entry = spawn_node({("POST", path): entry_claim})
+    sb = claim(Client(entry))
     assert sb.id == "sb_healed" and sb.owner == entry
     assert len(calls) == 2 and calls[1]["no_redirect"] is True
     assert len(candidate_calls) == 1
@@ -171,7 +173,7 @@ def test_delete_template_server_error_raises_immediately(spawn_node):
 
 
 @pytest.mark.parametrize("peer", ["dead_addr", "black_hole"])
-def test_lookup_unreachable_peer_resolves_fast(spawn_node, request, peer):
+def test_lookup_resolves_past_an_unreachable_peer(spawn_node, request, peer):
     unreachable = request.getfixturevalue(peer)
     owner = spawn_node({("GET", "/v1/sandboxes/sb_1/owner"): lambda body, path: (200, {"owner_addr": "10.0.0.9:7777"})})
     entry = spawn_node(
@@ -180,11 +182,32 @@ def test_lookup_unreachable_peer_resolves_fast(spawn_node, request, peer):
             ("GET", "/v1/peers"): lambda body, path: (200, {"peers": [unreachable, owner]}),
         }
     )
-    start = time.monotonic()
     sb = Client(entry, timeout=10.0).lookup("sb_1", "tok")
-    elapsed = time.monotonic() - start
     assert sb.owner == "10.0.0.9:7777"
-    assert elapsed < 2.0, elapsed
+
+
+def test_lookup_returns_the_first_owner_without_waiting_for_a_slow_peer(spawn_node, monkeypatch):
+    monkeypatch.setattr(cocoonsandbox.client, "_PEERS_TIMEOUT", 60.0)
+    gate = threading.Event()
+
+    def slow(body, path):
+        gate.wait(60)
+        return 404, {"error": "not here"}
+
+    slow_peer = spawn_node({("GET", "/v1/sandboxes/sb_1/owner"): slow})
+    owner = spawn_node({("GET", "/v1/sandboxes/sb_1/owner"): lambda body, path: (200, {"owner_addr": "10.0.0.9:7777"})})
+    entry = spawn_node(
+        {
+            ("GET", "/v1/sandboxes/sb_1/owner"): lambda body, path: (404, {"error": "not here"}),
+            ("GET", "/v1/peers"): lambda body, path: (200, {"peers": [slow_peer, owner]}),
+        }
+    )
+    try:
+        sb = bounded(lambda: Client(entry, timeout=60.0).lookup("sb_1", "tok"))
+        assert not gate.is_set()
+    finally:
+        gate.set()
+    assert sb.owner == "10.0.0.9:7777"
 
 
 def test_lookup_all_miss(spawn_node, dead_addr):
@@ -274,3 +297,9 @@ def test_close_of_a_sandbox_no_node_holds_is_not_an_error(spawn_node):
         }
     )
     Client(gone).attach(gone, "sb_1", "tok").close()
+
+
+def drop_reply(server: socket.socket) -> None:
+    conn, _ = server.accept()
+    conn.recv(65536)
+    conn.close()

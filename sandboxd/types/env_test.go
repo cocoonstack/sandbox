@@ -152,8 +152,17 @@ func TestEnvInjectMatchesAndCompares(t *testing.T) {
 	a := Env{"K": {Value: "v", Guest: new(false), Inject: inj}}
 	b := Env{"K": {Value: "v", Guest: new(false), Inject: &EnvInject{Hosts: []string{"api.example.com"}, Header: "X-Key"}}}
 	c := Env{"K": {Value: "v", Guest: new(false), Inject: &EnvInject{Hosts: inj.Hosts, Header: "X-Key", Placeholder: "@K@"}}}
-	if a.Equal(b) || a.Equal(c) || !a.Equal(Env{"K": {Value: "v", Guest: new(false), Inject: inj}}) || !a.SameGuest(b) {
-		t.Error("Equal must see an inject or placeholder change, and SameGuest must not")
+	if a.Equal(b) {
+		t.Error("Equal missed an inject hosts change")
+	}
+	if a.Equal(c) {
+		t.Error("Equal missed a placeholder change")
+	}
+	if !a.Equal(Env{"K": {Value: "v", Guest: new(false), Inject: inj}}) {
+		t.Error("Equal rejected an identical env")
+	}
+	if !a.SameGuest(b) {
+		t.Error("SameGuest saw an inject change")
 	}
 	q := Env{"K": {Value: "v", Guest: new(false), Inject: &EnvInject{Hosts: inj.Hosts, Query: "key", Placeholder: "@K@"}}}
 	qb := Env{"K": {Value: "v", Guest: new(false), Inject: &EnvInject{Hosts: inj.Hosts, Query: "key", Body: true, Placeholder: "@K@"}}}

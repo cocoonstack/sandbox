@@ -117,7 +117,7 @@ func TestTemplateNewVolumeClaimFollowsRedirect(t *testing.T) {
 	}
 }
 
-func TestClientVolumes(t *testing.T) {
+func TestVolumesDecodesTheCatalogIncludingWritableEntries(t *testing.T) {
 	imagenet := VolumeInfo{Name: "imagenet", DefaultMount: "/volumes/imagenet", SizeBytes: 42, Available: true, Nodes: 3}
 	tests := []struct {
 		name string

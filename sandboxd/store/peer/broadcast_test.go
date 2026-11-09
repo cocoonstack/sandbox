@@ -38,12 +38,10 @@ func TestBroadcastDeleteFansOutToEveryPeer(t *testing.T) {
 	b := &Broadcaster{Peers: func() []string { return addrs }}
 	b.Delete(t.Context(), testID)
 
-	got := 0
-	for _, n := range hits {
-		got += int(n.Load())
-	}
-	if got != 3 {
-		t.Errorf("peers hit %d times, want 3 (one per distinct peer)", got)
+	for i, n := range hits {
+		if got := n.Load(); got != 1 {
+			t.Errorf("peer %d hit %d times, want 1", i, got)
+		}
 	}
 }
 

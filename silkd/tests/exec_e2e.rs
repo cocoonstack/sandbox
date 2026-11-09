@@ -13,7 +13,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 
 use common::{
     alive, assert_error, b64, connect_with, exchange, frames_until, next_frame, one, proc_entry,
-    request, roundtrip, send, stdout_body, type_of, wait_for_path,
+    request, require_perl, roundtrip, send, stdout_body, type_of, wait_for_path,
 };
 
 async fn detached_pid(state: &Arc<State>, script: &str) -> u64 {
@@ -98,29 +98,9 @@ async fn empty_argv_is_a_bad_request() {
 }
 
 #[tokio::test]
-async fn info_reports_the_version() {
-    let frames = roundtrip(r#"{"op":"info"}"#).await;
-    assert_eq!(type_of(&frames[0]), "info");
-    assert!(frames[0]["version"].as_str().is_some());
-}
-
-#[tokio::test]
 async fn kill_unknown_pid_is_not_found() {
     let frames = roundtrip(r#"{"op":"kill","pid":999999}"#).await;
     assert_error(&frames[0], "not_found");
-}
-
-#[tokio::test]
-async fn daemonizing_child_does_not_wedge_the_exec() {
-    let frames = tokio::time::timeout(
-        Duration::from_secs(8),
-        roundtrip(r#"{"op":"exec","argv":["/bin/sh","-c","sleep 30 & exit 0"]}"#),
-    )
-    .await
-    .expect("exec wedged on a daemonizing child");
-    let last = frames.last().unwrap();
-    assert_eq!(type_of(last), "exit");
-    assert_eq!(last["code"], 0);
 }
 
 #[tokio::test]
@@ -136,6 +116,7 @@ async fn daemonizer_exit_is_the_last_frame() {
         "exit",
         "exit must be last: {frames:?}"
     );
+    assert_eq!(frames.last().unwrap()["code"], 0, "{frames:?}");
     assert!(
         !stdout_body(&frames).contains("late"),
         "grandchild output must not leak after exit"
@@ -282,9 +263,7 @@ async fn exec_unknown_user_is_rejected() {
 #[tokio::test]
 #[ignore = "needs root"]
 async fn exec_as_a_user_keeps_its_supplementary_groups() {
-    let Some(user) = group_member() else {
-        return;
-    };
+    let user = group_member().expect("no /etc/group entry lists a member to exec as");
     let want = std::process::Command::new("id")
         .args(["-G", &user])
         .output()
@@ -399,16 +378,20 @@ async fn disconnect_during_drain_publishes_real_exit_code() {
     assert_eq!(type_of(&started), "started");
     let pid = started["pid"].as_u64().unwrap();
 
-    let st = Arc::clone(&state);
-    let attach = tokio::spawn(async move { attach_frames(&st, pid).await });
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    let (_aw, mut attached, _) = connect_with(&state, json!({"op":"attach","pid":pid})).await;
+    let late = next_frame(&mut attached).await;
+    assert_eq!(type_of(&late), "stdout", "{late:?}");
     drop(lines);
     drop(cw);
 
-    let frames = tokio::time::timeout(Duration::from_secs(8), attach)
-        .await
-        .expect("attach wedged")
-        .unwrap();
+    let frames = tokio::time::timeout(
+        Duration::from_secs(8),
+        frames_until(&mut attached, |f| {
+            matches!(type_of(f), "exit" | "done" | "error")
+        }),
+    )
+    .await
+    .expect("attach wedged");
     let last = frames.last().unwrap();
     assert_eq!(
         type_of(last),
@@ -447,6 +430,7 @@ async fn stdin_held_by_a_forked_child_does_not_wedge_the_next_rpc() {
 
 #[tokio::test]
 async fn a_client_gone_mid_output_releases_the_stdin_a_forked_child_holds() {
+    require_perl();
     let dir = tempfile::tempdir().unwrap();
     let out = dir.path().join("count");
     let state = Arc::new(State::new());

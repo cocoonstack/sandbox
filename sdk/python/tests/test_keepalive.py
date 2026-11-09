@@ -62,8 +62,6 @@ class FakeAgent:
         self.closed += 1
 
     def _answer(self, op: str) -> list:
-        if op == "info":
-            return [{"type": "info", "version": "fake", "uptime_secs": 0, "procs": 0}]
         if op == "fs_stat":
             return [{"type": "stat", "info": {"kind": "dir", "size": 0, "mode": 0o755, "mtime_epoch_secs": 0}}]
         if op == "fs_find":
@@ -156,13 +154,9 @@ def test_run_stops_feeding_stdin_once_the_command_exits():
         with conn, contextlib.suppress(OSError):
             reader = accept_upgrade(conn)
             for line in iter(reader.readline, b""):
-                op = json.loads(line)["op"]
-                if op == "info":
-                    info = {"type": "info", "version": "fake", "uptime_secs": 0}
-                    conn.sendall(json.dumps(info).encode() + b"\n")
-                elif op == "exec":
+                if json.loads(line)["op"] == "exec":
                     conn.sendall(b'{"type":"started","pid":1}\n{"type":"exit","code":0}\n')
-                    release.wait(10)
+                    release.wait(60)
                     return
 
     threading.Thread(target=serve, daemon=True).start()
@@ -173,7 +167,7 @@ def test_run_stops_feeding_stdin_once_the_command_exits():
     )
     try:
         call.start()
-        call.join(2)
+        call.join(10)
         assert codes == [0], "run outlived its timeout behind a stdin the guest stopped reading"
         assert sb._pool.take() is None
     finally:

@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"testing/synctest"
 
 	"github.com/cocoonstack/sandbox/sandboxd/config"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
@@ -58,36 +59,38 @@ func TestAttachOnlyClaimAttachesWithoutMounting(t *testing.T) {
 }
 
 func TestAttachOnlyClaimAttachesEveryVolumeConcurrently(t *testing.T) {
-	dataset := writeVolumeImage(t, "dataset.img", "dataset")
-	scratch := writeVolumeImage(t, "scratch.img", "scratch")
-	cache := writeVolumeImage(t, "cache.img", "cache")
-	eng := newFakeEngine()
-	m := newVolumeManager(t, eng, []config.VolumeSpec{
-		{Name: "dataset", Path: dataset},
-		{Name: "scratch", Path: scratch, Writable: true},
-		{Name: "cache", Path: cache, Writable: true},
-	})
-	requested := []types.Volume{
-		{Name: "scratch", Mode: types.VolumeModeRW, AttachOnly: true},
-		{Name: "dataset", AttachOnly: true},
-		{Name: "cache", Mode: types.VolumeModeRW, AttachOnly: true},
-	}
-	rendezvousAttaches(eng, len(requested))
+	synctest.Test(t, func(t *testing.T) {
+		dataset := writeVolumeImage(t, "dataset.img", "dataset")
+		scratch := writeVolumeImage(t, "scratch.img", "scratch")
+		cache := writeVolumeImage(t, "cache.img", "cache")
+		eng := newFakeEngine()
+		m := newVolumeManager(t, eng, []config.VolumeSpec{
+			{Name: "dataset", Path: dataset},
+			{Name: "scratch", Path: scratch, Writable: true},
+			{Name: "cache", Path: cache, Writable: true},
+		})
+		requested := []types.Volume{
+			{Name: "scratch", Mode: types.VolumeModeRW, AttachOnly: true},
+			{Name: "dataset", AttachOnly: true},
+			{Name: "cache", Mode: types.VolumeModeRW, AttachOnly: true},
+		}
+		rendezvousAttaches(eng, len(requested))
 
-	sb, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Volumes: requested})
-	if err != nil {
-		t.Fatalf("ClaimProvision: %v", err)
-	}
-	if !slices.Equal(sb.Volumes, requested) {
-		t.Errorf("volumes=%v, want the request order %v", sb.Volumes, requested)
-	}
-	wantOps := []string{"attach:cache", "attach:dataset", "attach:scratch", "probe", "provision"}
-	if ops := slices.Sorted(slices.Values(eng.volumeOpsLog())); !slices.Equal(ops, wantOps) {
-		t.Errorf("volume ops=%v, want exactly %v", eng.volumeOpsLog(), wantOps)
-	}
-	if volumeDirty(scratch) || volumeDirty(cache) {
-		t.Error("attach-only writers marked their images dirty")
-	}
+		sb, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Volumes: requested})
+		if err != nil {
+			t.Fatalf("ClaimProvision: %v", err)
+		}
+		if !slices.Equal(sb.Volumes, requested) {
+			t.Errorf("volumes=%v, want the request order %v", sb.Volumes, requested)
+		}
+		wantOps := []string{"attach:cache", "attach:dataset", "attach:scratch", "probe", "provision"}
+		if ops := slices.Sorted(slices.Values(eng.volumeOpsLog())); !slices.Equal(ops, wantOps) {
+			t.Errorf("volume ops=%v, want exactly %v", eng.volumeOpsLog(), wantOps)
+		}
+		if volumeDirty(scratch) || volumeDirty(cache) {
+			t.Error("attach-only writers marked their images dirty")
+		}
+	})
 }
 
 func TestClaimProvisionAttachFailureKeepsHoldsUntilRemoval(t *testing.T) {
@@ -364,7 +367,9 @@ func assertHoldsUntilRetry(t *testing.T, m *Manager, eng *fakeEngine, vmName str
 	if _, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Volumes: writer}); !errors.Is(err, ErrVolumeBusy) {
 		t.Errorf("claim against surviving VM %s: %v, want ErrVolumeBusy", vmName, err)
 	}
+	eng.mu.Lock()
 	eng.removeErrFor = ""
+	eng.mu.Unlock()
 	m.retryRemovals(t.Context()).Wait()
 	if !eng.removed(vmName) {
 		t.Errorf("removes=%v, want %s drained", eng.removedNames(), vmName)

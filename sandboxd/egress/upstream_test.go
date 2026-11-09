@@ -247,6 +247,16 @@ func TestTransferCountsTunnelAndRequestBytes(t *testing.T) {
 	p := New(Policy{Allow: []Rule{{Host: "*"}}}, nil, nil, router, nil, nil)
 	t.Cleanup(p.Close)
 	p.OnTransfer(func(_ Event, sent, received int64) { got <- transfer{sent, received} })
+	next := func() transfer {
+		t.Helper()
+		select {
+		case tr := <-got:
+			return tr
+		case <-time.After(5 * time.Second):
+			t.Fatal("no transfer row arrived")
+			return transfer{}
+		}
+	}
 	srv := serveFront(t, p)
 
 	conn := dialConnect(t, srv.Listener.Addr().String(), "tunnel.example:7")
@@ -262,7 +272,7 @@ func TestTransferCountsTunnelAndRequestBytes(t *testing.T) {
 	_ = conn.(*net.TCPConn).CloseWrite()
 	_, _ = io.Copy(io.Discard, br)
 	_ = conn.Close()
-	if tr := <-got; tr != (transfer{5, 5}) {
+	if tr := next(); tr != (transfer{5, 5}) {
 		t.Errorf("tunnel transfer %+v, want 5 sent and 5 received", tr)
 	}
 
@@ -272,7 +282,7 @@ func TestTransferCountsTunnelAndRequestBytes(t *testing.T) {
 	}
 	_, _ = io.Copy(io.Discard, resp.Body)
 	_ = resp.Body.Close()
-	if tr := <-got; tr != (transfer{11, 7}) {
+	if tr := next(); tr != (transfer{11, 7}) {
 		t.Errorf("request transfer %+v, want 11 sent and 7 received", tr)
 	}
 	resp, err = proxyClient(t, srv.URL).Post(origin.URL+"/fail", "text/plain", strings.NewReader("eleven char"))
@@ -283,7 +293,7 @@ func TestTransferCountsTunnelAndRequestBytes(t *testing.T) {
 	if resp.StatusCode != http.StatusBadGateway {
 		t.Errorf("failed post: %d, want 502", resp.StatusCode)
 	}
-	if tr := <-got; tr != (transfer{11, 0}) {
+	if tr := next(); tr != (transfer{11, 0}) {
 		t.Errorf("failed request transfer %+v, want 11 sent and 0 received", tr)
 	}
 }

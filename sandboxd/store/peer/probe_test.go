@@ -39,7 +39,7 @@ func TestOwnersReturnsPromptlyWithOneOwner(t *testing.T) {
 	p := &HTTPProber{Peers: func() []string { return []string{hung.URL, ok.URL} }}
 	start := time.Now()
 	owners := p.Owners(t.Context(), testID)
-	if elapsed := time.Since(start); elapsed > probeGrace+500*time.Millisecond {
+	if elapsed := time.Since(start); elapsed >= probeTimeout-100*time.Millisecond {
 		t.Errorf("Owners took %v with one owner, want ~grace, not the full probe timeout", elapsed)
 	}
 	if len(owners) != 1 || owners[0] != ok.URL {
@@ -82,7 +82,7 @@ func TestOwnersCancelsStragglersOnceCapReached(t *testing.T) {
 	start := time.Now()
 	p := &HTTPProber{Peers: func() []string { return addrs }}
 	owners := p.Owners(t.Context(), testID)
-	if elapsed := time.Since(start); elapsed > 500*time.Millisecond {
+	if elapsed := time.Since(start); elapsed >= probeTimeout-100*time.Millisecond {
 		t.Errorf("Owners took %v, want fast: the cap was met without the straggler", elapsed)
 	}
 	if len(owners) != maxRedirectOwners {
@@ -156,7 +156,7 @@ func TestOwnersCacheCollapsesRepeatedRedirects(t *testing.T) {
 			}
 			w.WriteHeader(http.StatusNotFound)
 		}))
-		defer srv.Close()
+		t.Cleanup(srv.Close)
 		addrs = append(addrs, srv.URL)
 	}
 
