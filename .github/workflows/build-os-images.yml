@@ -87,7 +87,6 @@ jobs:
           if [[ "$CARRIER_CHANGED" == "true" || "$MANUAL" == "true" || -z "$BASE" ]] ||
              git diff --name-only "$BASE" "$SHA" -- "$wf/build-os-images.yml" "$wf/images.yml" | grep -q .; then
             all_names
-            all_changed=""
           else
             all_changed=$(git diff --name-only "$BASE" "$SHA" -- 'os-image/' ':!*.md' | sort -u)
             declare -A names
@@ -103,29 +102,13 @@ jobs:
             fi
           fi
 
-          # Build matrix entries with a per-entry no-cache flag. Cache must be
-          # dropped when any non-Dockerfile input changed: shared files
-          # directly under os-image/{name}/ (depth 3) or tag-specific files
-          # next to the Dockerfile (depth 4) — both are injected as buildx
-          # secrets, which never bust docker layer cache by content.
+          no_cache=false
+          if [[ "$MANUAL_NO_CACHE" == "true" ]]; then
+            no_cache=true
+          fi
           base_entries=()
           flavor_entries=()
           for name in "${!names[@]}"; do
-            needs_no_cache="false"
-            if [[ "$MANUAL_NO_CACHE" == "true" ]]; then
-              needs_no_cache="true"
-            elif [[ -n "$all_changed" ]]; then
-              while IFS= read -r f; do
-                [[ -z "$f" ]] && continue
-                depth=$(echo "$f" | awk -F'/' '{print NF}')
-                base_name=$(basename "$f")
-                if [[ "$depth" -eq 3 ]] || { [[ "$depth" -eq 4 ]] && [[ "$base_name" != "Dockerfile" ]]; }; then
-                  needs_no_cache="true"
-                  break
-                fi
-              done <<< "$(echo "$all_changed" | grep "^os-image/$name/")"
-            fi
-
             platforms="linux/amd64,linux/arm64"
             if [[ -f "os-image/$name/platforms" ]]; then
               platforms=$(cat "os-image/$name/platforms")
@@ -135,7 +118,7 @@ jobs:
               [[ -z "$dockerfile" ]] && continue
               tag=$(echo "$dockerfile" | cut -d'/' -f3)
               if [[ -n "$tag" ]]; then
-                entry="{\"name\":\"$name\",\"tag\":\"$tag\",\"no_cache\":\"$needs_no_cache\",\"platforms\":\"$platforms\"}"
+                entry="{\"name\":\"$name\",\"tag\":\"$tag\",\"no_cache\":\"$no_cache\",\"platforms\":\"$platforms\"}"
                 if [[ "$name" == "base" ]]; then
                   base_entries+=("$entry")
                 else
