@@ -320,7 +320,6 @@ func TestTurningBalloonOffDeflatesTheInflatedClaims(t *testing.T) {
 	if calls := balloonCalls(eng); len(calls) != 2 || m.Counters().BalloonDeflations != 1 {
 		t.Errorf("balloon calls %q, want the idle claim deflated once reclaim is off", calls)
 	}
-
 }
 
 func balloonManager(t *testing.T, eng *fakeEngine, dataDir string, pools ...config.PoolSpec) *Manager {
