@@ -116,7 +116,7 @@ jobs:
         id: ref
         # Same 7-char short SHA docker/metadata-action's type=sha emits, so
         # the ref matches the tag actually pushed below.
-        run: echo "image=ghcr.io/${{ github.repository }}/boot:$(cat boot/kernel/VERSION)-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+        run: echo "image=ghcr.io/${{ github.repository }}/boot:${{ steps.ver.outputs.kernel }}-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
 
       - name: Download digests
         uses: actions/download-artifact@v8.0.2
@@ -149,7 +149,7 @@ jobs:
         working-directory: /tmp/digests
         run: |
           docker buildx imagetools create \
-            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< '${{ steps.meta.outputs.json }}') \
+            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
             $(printf 'ghcr.io/${{ github.repository }}/boot@sha256:%s ' *)
 
       - name: Inspect
