@@ -1,6 +1,7 @@
 package pool
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"strconv"
@@ -15,6 +16,7 @@ import (
 const (
 	defaultBalloonPercent = 50
 	balloonRetryDelay     = time.Minute
+	bootBalloonTarget     = "25%"
 )
 
 // balloonOnce inflates the balloon of a claim idle past balloon.idle_seconds and deflates one active again, off every request path.
@@ -32,69 +34,70 @@ func (m *Manager) balloonOnce(ctx context.Context) {
 		}
 		v, now := m.view.Load(), time.Now()
 		var due []*types.Sandbox
+		pending := false
 		m.mu.Lock()
 		for _, sb := range m.claimed {
-			if balloonDue(sb.Balloon, balloonIdle(sb, v, now)) && now.After(sb.BalloonRetryAt) && !m.balloonSkipLocked(sb) {
+			pending = pending || sb.Balloon == types.BalloonInflated || sb.Balloon == types.BalloonUnknown
+			if balloonDue(sb, balloonWant(sb, v, now)) && !m.balloonSkipLocked(sb) {
 				due = append(due, sb)
 			}
 		}
 		m.mu.Unlock()
-		if v.balloonIdle == 0 && len(due) == 0 {
+		if v.balloonIdle == 0 && !pending {
 			m.balloonSeen.Store(false)
 		}
 		m.runBounded(ctx, len(due), func(ctx context.Context, i int) {
-			m.balloonTo(ctx, due[i], balloonIdle(due[i], m.view.Load(), time.Now()))
+			m.balloonTo(ctx, due[i], balloonWant(due[i], m.view.Load(), time.Now()))
 		}).Wait()
 	}()
 }
 
 // inflateForHibernate shrinks an idle claim's hibernate snapshot; the caller holds sb.Transition.
 func (m *Manager) inflateForHibernate(ctx context.Context, sb *types.Sandbox) {
-	if m.view.Load().balloonIdle > 0 && m.balloonReady() {
-		m.balloonTo(ctx, sb, true)
+	if v := m.view.Load(); v.balloonIdle > 0 && m.balloonReady() {
+		m.balloonTo(ctx, sb, v.balloonTarget)
 	}
 }
 
-// balloonTo moves sb's balloon to the idle target or back to its boot default without sb.Transition, which every relay and exec takes; cocoon serializes it with captures.
-func (m *Manager) balloonTo(ctx context.Context, sb *types.Sandbox, inflate bool) {
+// balloonTo moves sb's balloon to want, an idle target, or back to its boot target when want is empty, without sb.Transition, which every relay and exec takes; cocoon serializes it with captures.
+func (m *Manager) balloonTo(ctx context.Context, sb *types.Sandbox, want string) {
 	logger := log.WithFunc("pool.balloonTo")
-	v := m.view.Load()
 	m.mu.Lock()
-	skip, state, def, vm := m.balloonSkipLocked(sb), sb.Balloon, sb.BalloonDefault, sb.VMName
+	skip, due, state, def, vm := m.balloonSkipLocked(sb), balloonDue(sb, want), sb.Balloon, sb.BalloonDefault, sb.VMName
 	m.mu.Unlock()
-	switch {
-	case skip, !balloonDue(state, inflate):
+	if skip || !due {
 		return
-	case !inflate && state == types.BalloonUnknown:
+	}
+	target := cmp.Or(want, strconv.FormatInt(def, 10))
+	if want == "" && state == types.BalloonUnknown {
 		rec, ok, err := m.eng.Inspect(ctx, vm)
-		if err != nil || !ok {
+		switch {
+		case err != nil || !ok:
 			m.balloonFailed(sb)
 			logger.Warnf(ctx, "inspect balloon of %s: found %t, %v", sb.ID, ok, err)
 			return
-		}
-		if rec.Balloon == nil || rec.Balloon.Target <= rec.Balloon.Default {
-			m.setBalloon(sb, "", 0)
+		case rec.Balloon == nil:
+			target = bootBalloonTarget
+		case rec.Balloon.Target <= rec.Balloon.Default:
+			m.setBalloon(sb, "", "", 0)
 			return
+		default:
+			target = strconv.FormatInt(rec.Balloon.Default, 10)
 		}
-		def = rec.Balloon.Default
-	}
-	target := strconv.FormatInt(def, 10)
-	if inflate {
-		target = v.balloonTarget
 	}
 	b, err := m.eng.Balloon(ctx, vm, target)
 	switch {
 	case errors.Is(err, engine.ErrBalloonUnsupported):
-		m.setBalloon(sb, types.BalloonUnsupported, 0)
+		m.setBalloon(sb, types.BalloonUnsupported, "", 0)
 	case err != nil:
 		m.balloonFailed(sb)
 		logger.Warnf(ctx, "balloon %s to %s: %v", sb.ID, target, err)
-	case inflate:
+	case want != "":
 		m.counters.balloonInflations.Add(1)
-		m.setBalloon(sb, types.BalloonInflated, b.Default)
+		m.setBalloon(sb, types.BalloonInflated, want, b.Default)
 	default:
 		m.counters.balloonDeflations.Add(1)
-		m.setBalloon(sb, "", 0)
+		m.setBalloon(sb, "", "", 0)
 	}
 }
 
@@ -121,25 +124,28 @@ func (m *Manager) balloonFailed(sb *types.Sandbox) {
 	m.mu.Unlock()
 }
 
-func (m *Manager) setBalloon(sb *types.Sandbox, state types.BalloonState, def int64) {
+func (m *Manager) setBalloon(sb *types.Sandbox, state types.BalloonState, target string, def int64) {
 	m.mu.Lock()
-	sb.Balloon, sb.BalloonDefault = state, def
+	sb.Balloon, sb.BalloonTarget, sb.BalloonDefault = state, target, def
 	m.mu.Unlock()
 }
 
 func (m *Manager) balloonSkipLocked(sb *types.Sandbox) bool {
 	return m.claimed[sb.ID] != sb || !holdsVM(sb) || sb.Waking || sb.PendingSnap != "" || sb.SaveSnap != "" ||
-		sb.Balloon == types.BalloonUnsupported || m.midMoveLocked(sb)
+		sb.Balloon == types.BalloonUnsupported || time.Now().Before(sb.BalloonRetryAt) || m.midMoveLocked(sb)
 }
 
-// balloonDue reports whether a balloon in state needs a call to reach the idle target, or the boot target when inflate is false.
-func balloonDue(state types.BalloonState, inflate bool) bool {
-	if inflate {
-		return state != types.BalloonInflated
+// balloonDue reports whether sb's balloon needs a call to reach want, an idle target, or the boot target when want is empty; callers hold m.mu.
+func balloonDue(sb *types.Sandbox, want string) bool {
+	if want != "" {
+		return sb.Balloon != types.BalloonInflated || sb.BalloonTarget != want
 	}
-	return state == types.BalloonInflated || state == types.BalloonUnknown
+	return sb.Balloon == types.BalloonInflated || sb.Balloon == types.BalloonUnknown
 }
 
-func balloonIdle(sb *types.Sandbox, v *configView, now time.Time) bool {
-	return v.balloonIdle > 0 && !sb.Busy() && now.Sub(sb.LastSeen()) >= v.balloonIdle
+func balloonWant(sb *types.Sandbox, v *configView, now time.Time) string {
+	if v.balloonIdle > 0 && !sb.Busy() && now.Sub(sb.LastSeen()) >= v.balloonIdle {
+		return v.balloonTarget
+	}
+	return ""
 }

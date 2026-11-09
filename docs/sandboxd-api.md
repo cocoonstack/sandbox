@@ -1277,7 +1277,7 @@ peer, `sandboxd_wakes_refused_total{reason}`, wakes `max_running` (`max_running`
 refused here whether or not a hand-off ran, `sandboxd_wake_handoffs_total`,
 archived claims this node [handed to a peer with room](cluster.md#waking-an-archived-claim-on-a-full-node)
 instead, and `sandboxd_wake_memory_fallbacks_total`, archived wakes over
-`memory_limit` this node woke itself because no hand-off ran or no peer adopted. `sandboxd_balloon_inflations_total`, `sandboxd_balloon_deflations_total` and `sandboxd_balloon_failures_total` count the balloon sweep's changes and the ones that failed and retry at the next sweep. On a node with a `tun` block it adds the packet path's counters:
+`memory_limit` this node woke itself because no hand-off ran or no peer adopted. `sandboxd_balloon_inflations_total`, `sandboxd_balloon_deflations_total` and `sandboxd_balloon_failures_total` count the balloon sweep's changes and the ones that failed, which retry a minute later. On a node with a `tun` block it adds the packet path's counters:
 `sandboxd_tun_frames_total{dir}` (frames on the claims' vsock streams, `out`
 from the guest and `in` to it), `sandboxd_tun_datagrams_total{dir}` (VXLAN
 datagrams), `sandboxd_tun_arp_total{kind}` (`answered` replies to exits,

@@ -160,18 +160,19 @@ func TestARestartedNodeLearnsBalloonStateFromCocoon(t *testing.T) {
 	eng.balloons[plain.VMName] = types.VMBalloon{Target: fakeBalloonDefault, Default: fakeBalloonDefault}
 	eng.mu.Unlock()
 
+	unreported := mustClaim(t, m, testKey)
 	restarted := balloonManager(t, eng, dir, config.PoolSpec{PoolKey: testKey, Warm: 2})
 	if err := restarted.Reconcile(t.Context()); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
 	sweepBalloons(t, restarted)
 	deflate := inflated.VMName + " " + strconv.FormatInt(fakeBalloonDefault, 10) + " after 0 hibernates"
-	if calls := balloonCalls(eng); !slices.Equal(calls, []string{deflate}) {
-		t.Errorf("balloon calls %q, want one deflate of the claim cocoon reports inflated", calls)
+	if calls := balloonCalls(eng); len(calls) != 2 || !slices.Contains(calls, deflate) || !slices.Contains(calls, unreported.VMName+" 25% after 0 hibernates") {
+		t.Errorf("balloon calls %q, want a byte deflate of the claim cocoon reports inflated and a boot-target deflate of the one it reports nothing for", calls)
 	}
 	sweepBalloons(t, restarted)
-	if calls := balloonCalls(eng); len(calls) != 1 {
-		t.Errorf("balloon calls %q, want the learned state to settle both claims", calls)
+	if calls := balloonCalls(eng); len(calls) != 2 {
+		t.Errorf("balloon calls %q, want the learned state to settle every claim", calls)
 	}
 }
 
@@ -188,6 +189,55 @@ func TestAnArchiveWakeComesBackAtTheBootTarget(t *testing.T) {
 	sweepBalloons(t, m)
 	if calls := balloonCalls(eng); len(calls) != 1 || gaugesOf(m).BalloonInflated != 0 {
 		t.Errorf("balloon calls %q gauge %d, want no deflate of a clone that starts at its boot target", calls, gaugesOf(m).BalloonInflated)
+	}
+}
+
+func TestAReloadedIdlePercentReachesClaimsAlreadyInflated(t *testing.T) {
+	eng := newFakeEngine()
+	m := balloonManager(t, eng, t.TempDir(), config.PoolSpec{PoolKey: testKey})
+	sb := mustClaim(t, m, testKey)
+	backdate(m, sb, 2*balloonIdleFor)
+	sweepBalloons(t, m)
+	editView(m, func(v *configView) { v.balloonTarget = "70%" })
+	sweepBalloons(t, m)
+	sweepBalloons(t, m)
+	if calls, want := balloonCalls(eng), []string{sb.VMName + " 50% after 0 hibernates", sb.VMName + " 70% after 0 hibernates"}; !slices.Equal(calls, want) {
+		t.Errorf("balloon calls %q, want %q", calls, want)
+	}
+}
+
+func TestAnIdleHibernateKeepsTheBalloonBackoff(t *testing.T) {
+	eng := newFakeEngine()
+	m := balloonManager(t, eng, t.TempDir(), archivePool(keepAnHour))
+	sb := mustClaim(t, m, testKey)
+	m.mu.Lock()
+	sb.BalloonRetryAt = time.Now().Add(time.Hour)
+	m.mu.Unlock()
+	backdate(m, sb, 5*time.Second)
+	sweepIdle(t, m)
+	if calls := balloonCalls(eng); len(calls) != 0 || hibernated(m) != 1 {
+		t.Errorf("balloon calls %q with %d hibernated, want the hibernate without a call inside the backoff", calls, hibernated(m))
+	}
+}
+
+func TestTurningBalloonOffStillDeflatesAClaimThatWasAsleep(t *testing.T) {
+	eng := newFakeEngine()
+	m := balloonManager(t, eng, t.TempDir(), config.PoolSpec{PoolKey: testKey})
+	sb := mustClaim(t, m, testKey)
+	backdate(m, sb, 2*balloonIdleFor)
+	sweepBalloons(t, m)
+	hibernateClaim(t, m, sb)
+	editView(m, func(v *configView) { v.balloonIdle, v.balloonTarget = 0, "" })
+	sweepBalloons(t, m)
+	if !m.balloonSeen.Load() {
+		t.Fatal("the sweep stopped with an inflated claim asleep")
+	}
+	if err := wakeClaim(t, m, sb); err != nil {
+		t.Fatalf("wake: %v", err)
+	}
+	sweepBalloons(t, m)
+	if calls := balloonCalls(eng); len(calls) != 2 || m.Counters().BalloonDeflations != 1 {
+		t.Errorf("balloon calls %q, want the woken claim deflated once reclaim is off", calls)
 	}
 }
 

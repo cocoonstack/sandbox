@@ -367,8 +367,9 @@ type Sandbox struct {
 
 	ArchiveRetryAt time.Time `json:"-"`
 
-	// Balloon, BalloonDefault (the boot target in bytes) and BalloonRetryAt are guarded by the manager mutex.
+	// Balloon, BalloonTarget (the idle target applied), BalloonDefault (the boot target in bytes) and BalloonRetryAt are guarded by the manager mutex.
 	Balloon        BalloonState `json:"-"`
+	BalloonTarget  string       `json:"-"`
 	BalloonDefault int64        `json:"-"`
 	BalloonRetryAt time.Time    `json:"-"`
 
