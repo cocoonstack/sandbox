@@ -27,7 +27,7 @@ var infoFrame = func() string {
 	return string(frame) + "\n"
 }()
 
-func TestServeSpeaksMCP(t *testing.T) {
+func TestServeAnswersEveryRequestAndSkipsNotifications(t *testing.T) {
 	srv := newTestServer(t, func(w http.ResponseWriter, r *http.Request) bool {
 		if !strings.HasSuffix(r.URL.Path, "/checkpoint") {
 			return false
@@ -177,13 +177,13 @@ func TestToolRepliesReplaceInvalidUTF8(t *testing.T) {
 }
 
 func TestCloseBoxesWaitsForEveryReleaseOnce(t *testing.T) {
-	var releases atomic.Int32
-	var arrived sync.WaitGroup
-	arrived.Add(3)
+	var requests, releases atomic.Int32
+	arrived := make(chan struct{}, 8)
 	gate := make(chan struct{})
 	node := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, "/release") {
-			arrived.Done()
+			requests.Add(1)
+			arrived <- struct{}{}
 			<-gate
 			releases.Add(1)
 		}
@@ -211,9 +211,14 @@ func TestCloseBoxesWaitsForEveryReleaseOnce(t *testing.T) {
 	}
 	<-called
 	<-called
-	arrived.Wait()
+	for range 3 {
+		<-arrived
+	}
 	close(gate)
 	wg.Wait()
+	if got := requests.Load(); got != 3 {
+		t.Errorf("release requests = %d, want 3 (one per box across both callers)", got)
+	}
 }
 
 func TestExecRejectsAnEmptyCommand(t *testing.T) {

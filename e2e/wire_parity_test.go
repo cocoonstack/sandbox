@@ -92,6 +92,13 @@ func TestSDKStructsMatchServerWireShape(t *testing.T) {
 					t.Errorf("%s: field %q is in the SDK but not on the server", tt.sdk, name)
 				}
 			}
+			for _, name := range tt.allow {
+				_, onServer := want[name]
+				_, inSDK := got[name]
+				if !onServer && !inSDK {
+					t.Errorf("%s: allowlisted field %q is on neither side", tt.sdk, name)
+				}
+			}
 		})
 	}
 }

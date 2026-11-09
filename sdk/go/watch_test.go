@@ -12,7 +12,7 @@ import (
 	"github.com/cocoonstack/sandbox/protocol/wire"
 )
 
-func TestWatchDeliversEventsUntilClose(t *testing.T) {
+func TestWatchRelaysTheFakesSyntheticEventAndClosesCleanly(t *testing.T) {
 	sb := fakeSandbox(t)
 	ctx := t.Context()
 	if err := sb.Mkdir(ctx, "/work", true); err != nil {

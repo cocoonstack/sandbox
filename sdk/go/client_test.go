@@ -194,13 +194,15 @@ func TestAMovedSandboxRetriesAStreamCallAtItsNewOwner(t *testing.T) {
 			return err
 		},
 	} {
-		sb, adopter := movedSandbox(t)
-		if err := call(sb); err != nil {
-			t.Errorf("%s after the move: %v", name, err)
-		}
-		if got := sb.Owner(); got != adopter {
-			t.Errorf("%s: owner %s, want the adopter %s", name, got, adopter)
-		}
+		t.Run(name, func(t *testing.T) {
+			sb, adopter := movedSandbox(t)
+			if err := call(sb); err != nil {
+				t.Errorf("after the move: %v", err)
+			}
+			if got := sb.Owner(); got != adopter {
+				t.Errorf("owner %s, want the adopter %s", got, adopter)
+			}
+		})
 	}
 }
 
@@ -372,7 +374,11 @@ func TestCloseReportsARetiredNodeWhenNoNodeHoldsTheSandbox(t *testing.T) {
 
 func TestNewFollowsRedirect(t *testing.T) {
 	var nodeB *httptest.Server
-	nodeB = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	var gotNoRedirect bool
+	nodeB = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req claimRequest
+		_ = json.UnmarshalRead(r.Body, &req)
+		gotNoRedirect = req.NoRedirect
 		_ = json.MarshalWrite(w, claimResponse{
 			ID: "sb_2", Token: "tok", OwnerAddr: addrOf(nodeB),
 		})
@@ -390,6 +396,9 @@ func TestNewFollowsRedirect(t *testing.T) {
 	}
 	if sb.owner != addrOf(nodeB) {
 		t.Errorf("owner %q, want node B", sb.owner)
+	}
+	if !gotNoRedirect {
+		t.Error("redirected claim did not set no_redirect")
 	}
 }
 
@@ -445,36 +454,12 @@ func TestDeleteTemplateRetryPolicy(t *testing.T) {
 	})
 }
 
-func TestRedirectSetsNoRedirect(t *testing.T) {
-	var gotNoRedirect bool
-	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var req claimRequest
-		_ = json.UnmarshalRead(r.Body, &req)
-		gotNoRedirect = req.NoRedirect
-		_ = json.MarshalWrite(w, claimResponse{ID: "sb_3", Token: "t"})
-	}))
-	t.Cleanup(target.Close)
-
-	entry := redirectEntry(t, addrOf(target))
-
-	sb, err := testClient(t, entry).New(t.Context(), "rt:24.04")
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	if sb.ID != "sb_3" {
-		t.Errorf("id %q, want sb_3", sb.ID)
-	}
-	if !gotNoRedirect {
-		t.Error("retry did not set no_redirect")
-	}
-}
-
 func TestRedirectWalksPastACandidateThatRefusedTheClaim(t *testing.T) {
 	for _, tt := range []struct {
 		name  string
 		first func(*testing.T) string
 	}{
-		{"unreachable", func(*testing.T) string { return "127.0.0.1:1" }},
+		{"unreachable", retiredAddr},
 		{"forbidden", func(t *testing.T) string { return addrOf(statusServer(t, http.StatusForbidden, nil)) }},
 	} {
 		t.Run(tt.name, func(t *testing.T) {

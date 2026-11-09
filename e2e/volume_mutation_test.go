@@ -27,6 +27,8 @@ func TestLiveVolumesEndToEnd(t *testing.T) {
 	}
 	if err := sb.Hibernate(t.Context()); err == nil {
 		t.Fatal("captured an attached volume")
+	} else if refusal, ok := errors.AsType[*sandbox.APIError](err); !ok || refusal.Status != http.StatusConflict {
+		t.Fatalf("attached capture refusal: %v", err)
 	}
 	for range 2 {
 		got, err := sb.SetVolumes(t.Context(), []sandbox.Volume{})

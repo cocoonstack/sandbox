@@ -146,7 +146,7 @@ func TestPeerHangUpIsNoticedBeforeReuse(t *testing.T) {
 	}
 }
 
-func TestPeerQuiet(t *testing.T) {
+func TestProbeSeesUnpromptedBytesAndHangUpWithoutConsumingThem(t *testing.T) {
 	if !canProbe {
 		t.Skip("no parked-connection probe on this platform")
 	}

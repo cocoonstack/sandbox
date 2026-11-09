@@ -18,7 +18,7 @@ func TestDrainCordonVerbs(t *testing.T) {
 		post := r.Method == http.MethodPost
 		_ = json.MarshalWrite(w, NodeInfo{Claimed: 3, Draining: post && r.URL.Path == "/v1/drain", Cordoned: post && r.URL.Path == "/v1/cordon"})
 	}))
-	defer ts.Close()
+	t.Cleanup(ts.Close)
 
 	c := testClient(t, ts, WithAPIToken("root"))
 	for _, tt := range []struct {

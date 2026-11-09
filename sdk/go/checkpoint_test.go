@@ -141,8 +141,9 @@ func TestCheckpointNewRedirectFallbackHeals(t *testing.T) {
 }
 
 func TestCheckpointNewRedirectNeverYieldsEmptyID(t *testing.T) {
+	dead := retiredAddr(t)
 	entry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_ = json.MarshalWrite(w, claimResponse{Redirect: []string{"127.0.0.1:1"}})
+		_ = json.MarshalWrite(w, claimResponse{Redirect: []string{dead}})
 	}))
 	t.Cleanup(entry.Close)
 
@@ -158,8 +159,9 @@ func TestCheckpointNewRedirectNeverYieldsEmptyID(t *testing.T) {
 }
 
 func TestCheckpointNewSecondLevelRedirectFails(t *testing.T) {
+	dead := retiredAddr(t)
 	nodeB := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_ = json.MarshalWrite(w, claimResponse{Redirect: []string{"127.0.0.1:1"}})
+		_ = json.MarshalWrite(w, claimResponse{Redirect: []string{dead}})
 	}))
 	t.Cleanup(nodeB.Close)
 
