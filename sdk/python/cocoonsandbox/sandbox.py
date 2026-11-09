@@ -803,20 +803,21 @@ def _pump_stdio(
         if t == "started" and on_started:
             on_started(cast(int, _need(frame, "pid")))
         elif t == "stdout" and on_stdout:
-            _deliver(on_stdout, _need(frame, "data"))
+            _deliver(conn, on_stdout, _need(frame, "data"))
         elif t == "stderr" and on_stderr:
-            _deliver(on_stderr, _need(frame, "data"))
+            _deliver(conn, on_stderr, _need(frame, "data"))
         elif t == "exit":
             return cast(int, _need(frame, "code"))
     return None
 
 
-def _deliver(callback: Callable[[bytes], object], data: bytes) -> None:
-    """Runs a caller's output callback; an SDK error it raises never sends the running call to another node."""
+def _deliver(conn: Conn, callback: Callable[[bytes], object], data: bytes) -> None:
+    """Runs a caller's output callback; an SDK error it raises ends the stream and never moves the call."""
     try:
         callback(data)
     except SandboxError as exc:
         exc._owner_gone = None
+        conn.abort()
         raise
 
 

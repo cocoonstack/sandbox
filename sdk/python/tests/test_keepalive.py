@@ -91,6 +91,18 @@ def test_a_refused_stream_open_keeps_its_connection(relay):
     assert agent.upgrades == 1
 
 
+def test_a_callback_error_drops_the_stream(relay):
+    agent, sb = relay()
+
+    def refuse(_: bytes) -> None:
+        raise SilkdError("io", "push refused")
+
+    with pytest.raises(SilkdError):
+        sb.run(["echo", "42"], on_stdout=refuse)
+    assert sb.exec("echo", "42") == "42\n"
+    assert agent.upgrades == 2, agent.upgrades
+
+
 def test_keep_alive_off_dials_per_call(relay):
     agent, sb = relay(keep_alive=0)
     for _ in range(3):
