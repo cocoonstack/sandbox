@@ -66,9 +66,6 @@ func (m *Manager) balloonTo(ctx context.Context, sb *types.Sandbox, want string)
 	if skip || !due {
 		return
 	}
-	if want != "" {
-		m.balloonSeen.Store(true)
-	}
 	defer func() {
 		m.mu.Lock()
 		sb.BalloonBusy = false
