@@ -93,14 +93,13 @@ func TestChangingOneDirectionKeepsTheOtherBucket(t *testing.T) {
 }
 
 func TestCloseReleasesAReadWaitingForTokens(t *testing.T) {
-	addr, s := sinkServer(t)
+	addr, _ := sinkServer(t)
 	rows := make(chan int64, 4)
 	p, _, conn := openConnect(t, addr, func(p *Proxy) {
 		p.OnTransfer(func(_ Event, sent, _ int64) { rows <- sent })
 	})
 	p.SetLimit(types.EgressLimit{TxBytesPerSecond: 64})
 	go writeUntilClosed(conn)
-	waitBytes(t, s, limitBurst)
 	waitDebt(t, p.limits.Load().tx)
 
 	start := time.Now()
