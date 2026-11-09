@@ -274,7 +274,7 @@ def _buffered_reader(sock: socket.socket) -> BinaryIO:
 
 
 def _handshake_error(what: str, exc: OSError) -> SandboxError:
-    if isinstance(exc, (TimeoutError, socket.timeout)):
+    if isinstance(exc, TimeoutError):
         return SandboxTimeout(f"{what} timed out")
     return ProtocolError(f"{what}: {exc}")
 
