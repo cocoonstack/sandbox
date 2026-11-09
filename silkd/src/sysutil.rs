@@ -251,6 +251,26 @@ pub fn vsock_connect_start(cid: u32, port: u32) -> std::io::Result<OwnedFd> {
     }
 }
 
+#[cfg(target_os = "linux")]
+pub fn vsock_accept(listener: BorrowedFd<'_>) -> std::io::Result<(OwnedFd, u32)> {
+    // SAFETY: sockaddr_vm is plain data and all-zero is a valid value.
+    let mut addr: libc::sockaddr_vm = unsafe { std::mem::zeroed() };
+    let mut len = std::mem::size_of::<libc::sockaddr_vm>() as libc::socklen_t;
+    // SAFETY: addr and len are live locals sized for a sockaddr_vm.
+    let raw = unsafe {
+        libc::accept4(
+            listener.as_raw_fd(),
+            (&raw mut addr).cast(),
+            &raw mut len,
+            libc::SOCK_CLOEXEC | libc::SOCK_NONBLOCK,
+        )
+    };
+    check(raw)?;
+    // SAFETY: raw is the fresh fd accept4(2) just returned, owned by nothing else.
+    let fd = unsafe { <OwnedFd as std::os::fd::FromRawFd>::from_raw_fd(raw) };
+    Ok((fd, addr.svm_cid))
+}
+
 /// Sets the `TUN_F_*` offloads the tun reader accepts; the kernel refuses a bit it does not know.
 #[cfg(target_os = "linux")]
 pub fn tun_set_offload(fd: RawFd, flags: u32) -> std::io::Result<()> {
