@@ -143,7 +143,7 @@ func DigestHex(v any) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// IsZero compares data with itself shifted by one byte, which holds only for a constant run.
+// IsZero reports whether data, which must be non-empty, is all zero bytes.
 func IsZero(data []byte) bool {
 	return data[0] == 0 && bytes.Equal(data[1:], data[:len(data)-1])
 }
