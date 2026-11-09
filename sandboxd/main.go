@@ -34,7 +34,7 @@ const (
 	shutdownGrace     = 5 * time.Second
 	gossipInterval    = time.Second
 	readHeaderTimeout = 5 * time.Second
-	idleTimeout       = 2 * time.Minute
+	idleTimeout       = 15 * time.Minute
 )
 
 var version = "devel"

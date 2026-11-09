@@ -1580,6 +1580,9 @@ Unauthenticated liveness probe; answers `ok`.
 - The HTTP server must keep `ReadTimeout`/`WriteTimeout` at zero if you
   front it with your own server: cold claims legitimately block for the cold
   probe window and relays stream indefinitely. sandboxd itself uses
-  `ReadHeaderTimeout` for slowloris protection.
+  `ReadHeaderTimeout` for slowloris protection, and closes a keep-alive
+  connection that sends no request for 15 minutes, longer than the backend
+  idle timeout of common load balancers (600 s on Google Cloud), so a balancer
+  never reuses a connection sandboxd just closed.
 - Shutdown force-closes in-flight relays and leaves VMs running for the next
   reconcile.
