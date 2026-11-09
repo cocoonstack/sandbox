@@ -618,9 +618,11 @@ func TestFailoverSweepPurgesADepartedOwnersArchiveOnce(t *testing.T) {
 		time.Sleep(2 * time.Second)
 
 		b.sweepOrphanArchives(t.Context())
-		if _, ok, _ := c.reg.Get(t.Context(), sb.ID); !ok {
+		row, ok, _ := c.reg.Get(t.Context(), sb.ID)
+		if !ok {
 			t.Fatal("a sweep purged the archive of a live owner")
 		}
+		deadline := row.Deadline
 		c.expire("a")
 		var wg sync.WaitGroup
 		for _, m := range []*Manager{b, d} {
@@ -632,6 +634,16 @@ func TestFailoverSweepPurgesADepartedOwnersArchiveOnce(t *testing.T) {
 		}
 		if purged := b.counters.archiveDeletes.Load() + d.counters.archiveDeletes.Load(); purged != 1 {
 			t.Errorf("%d purges counted, want 1", purged)
+		}
+		purger := b
+		if d.counters.archiveDeletes.Load() == 1 {
+			purger = d
+		}
+		if got := usageEventsOf(t, purger, sb.ID); got != "reap,archive_delete" {
+			t.Errorf("purging node's events %q, want the reap to end the archived span before the archive_delete", got)
+		}
+		if evs := usageJournal(t, purger); !evs[len(evs)-2].Deadline.Equal(deadline) {
+			t.Errorf("purge reap deadline %v, want the row's retention deadline %v", evs[len(evs)-2].Deadline, deadline)
 		}
 	})
 }
