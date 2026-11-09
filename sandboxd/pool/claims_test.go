@@ -27,14 +27,15 @@ func TestRecommitKeepsOneRetrierWhileWritesFail(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "absent")
 	m.store.path = filepath.Join(dir, "claims.json")
 
+	before := recommitGoroutines(t)
 	for range 50 {
 		m.mu.Lock()
 		snap := m.store.set(sb)
 		m.mu.Unlock()
 		m.store.recommit(t.Context(), snap)
 	}
-	if n := recommitGoroutines(t); n != 1 {
-		t.Fatalf("%d retriers for 50 failed persists, want one", n)
+	if n := recommitGoroutines(t) - before; n > 1 || !m.store.recommitting.Load() {
+		t.Fatalf("%d new retriers for 50 failed persists, want one", n)
 	}
 
 	if err := os.MkdirAll(dir, 0o750); err != nil {

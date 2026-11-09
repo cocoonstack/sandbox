@@ -3,9 +3,12 @@
 import errno
 import http.client
 import socket
+import threading
 
+import cocoonsandbox.client
 import pytest
 from cocoonsandbox import APIError, Client
+from conftest import bounded
 
 ENTRY_POINTS = pytest.mark.parametrize(
     ("path", "claim"),
@@ -180,6 +183,30 @@ def test_lookup_resolves_past_an_unreachable_peer(spawn_node, request, peer):
         }
     )
     sb = Client(entry, timeout=10.0).lookup("sb_1", "tok")
+    assert sb.owner == "10.0.0.9:7777"
+
+
+def test_lookup_returns_the_first_owner_without_waiting_for_a_slow_peer(spawn_node, monkeypatch):
+    monkeypatch.setattr(cocoonsandbox.client, "_PEERS_TIMEOUT", 60.0)
+    gate = threading.Event()
+
+    def slow(body, path):
+        gate.wait(60)
+        return 404, {"error": "not here"}
+
+    slow_peer = spawn_node({("GET", "/v1/sandboxes/sb_1/owner"): slow})
+    owner = spawn_node({("GET", "/v1/sandboxes/sb_1/owner"): lambda body, path: (200, {"owner_addr": "10.0.0.9:7777"})})
+    entry = spawn_node(
+        {
+            ("GET", "/v1/sandboxes/sb_1/owner"): lambda body, path: (404, {"error": "not here"}),
+            ("GET", "/v1/peers"): lambda body, path: (200, {"peers": [slow_peer, owner]}),
+        }
+    )
+    try:
+        sb = bounded(lambda: Client(entry, timeout=60.0).lookup("sb_1", "tok"))
+        assert not gate.is_set()
+    finally:
+        gate.set()
     assert sb.owner == "10.0.0.9:7777"
 
 
