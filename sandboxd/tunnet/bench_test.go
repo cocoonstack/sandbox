@@ -6,7 +6,7 @@ import (
 )
 
 func BenchmarkForwardGSO(b *testing.B) {
-	l := benchLink()
+	l := benchLink(b)
 	f := gsoFrame(ProtoTCP, 63000, 1398)
 	buf := make([]byte, len(f))
 	b.SetBytes(int64(len(f)))
@@ -20,7 +20,7 @@ func BenchmarkForwardGSO(b *testing.B) {
 }
 
 func BenchmarkForwardSmall(b *testing.B) {
-	l := benchLink()
+	l := benchLink(b)
 	f := frame(ProtoUDP, GuestAddr, remote, false)
 	buf := make([]byte, len(f))
 	b.SetBytes(int64(len(f)))
@@ -34,7 +34,7 @@ func BenchmarkForwardSmall(b *testing.B) {
 }
 
 func BenchmarkDeliver(b *testing.B) {
-	l := benchLink()
+	l := benchLink(b)
 	l.forward(frame(ProtoTCP, GuestAddr, remote, false))
 	d := reply(remote)
 	inner, _, _ := parseVXLAN(d, 7)
@@ -43,6 +43,7 @@ func BenchmarkDeliver(b *testing.B) {
 			l.r.pool.Put(bp)
 		}
 	}()
+	b.Cleanup(func() { close(l.send) })
 	b.SetBytes(int64(len(inner)))
 	b.ReportAllocs()
 	for b.Loop() {
@@ -52,13 +53,16 @@ func BenchmarkDeliver(b *testing.B) {
 	}
 }
 
-func benchLink() *link {
+func benchLink(b *testing.B) *link {
+	b.Helper()
 	r := New(nopUnder{}, testOverlay(1450))
 	c := Claim{ID: "c1", Addr: claimAddr, Allow: func(netip.Addr, uint16) bool { return true }}
 	r.Arm(c)
 	a := r.claims[claimAddr]
 	l := &link{r: r, a: a, mtu: 1450, merge: true, send: make(chan *[]byte, sendQueue), done: make(chan struct{})}
-	a.attach(l)
+	if !a.attach(l) {
+		b.Fatal("the bench claim was disarmed")
+	}
 	return l
 }
 

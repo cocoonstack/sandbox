@@ -2,7 +2,7 @@ package config
 
 import "testing"
 
-func TestClientAdvertise(t *testing.T) {
+func TestClientAdvertiseAcceptsAbsoluteHTTPOriginsOnly(t *testing.T) {
 	for _, addr := range []string{"", "https://node.example", "https://node.example:8443/", "http://[::1]:7777"} {
 		t.Run(addr, func(t *testing.T) {
 			cfg := Config{ClientAdvertise: addr}

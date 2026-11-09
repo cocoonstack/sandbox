@@ -8,6 +8,7 @@ import (
 	"net"
 	"path/filepath"
 	"runtime"
+	"runtime/metrics"
 	"sync"
 	"testing"
 	"time"
@@ -55,7 +56,7 @@ func TestSpliceCopiesThroughADoorConnInTheKernel(t *testing.T) {
 				defer func() { _ = c.Close() }()
 				buf := make([]byte, 64<<10)
 				buffered <- struct{}{}
-				for n := 0; n < total; n += len(buf) {
+				for range total / len(buf) {
 					_, _ = c.Write(buf)
 				}
 				_ = c.(*net.UnixConn).CloseWrite()
@@ -83,18 +84,16 @@ func TestSpliceCopiesThroughADoorConnInTheKernel(t *testing.T) {
 			tr := p.begin(Event{}, door, upstream)
 			<-buffered
 			<-buffered
-			runtime.GC()
-			var before, after runtime.MemStats
-			runtime.ReadMemStats(&before)
+			before := bufferAllocs()
 			p.splice(tr)
-			runtime.ReadMemStats(&after)
+			allocs := bufferAllocs() - before
 			<-guestDone
 			up, down := tr.sent.Load(), tr.received.Load()
 			if up != total || down != total {
 				t.Fatalf("moved %d up and %d down, want %d each", up, down, total)
 			}
-			if alloc := after.TotalAlloc - before.TotalAlloc; !tt.noSplice && alloc >= 32<<10 {
-				t.Errorf("splice allocated %d bytes: a door conn fell back to buffered copies", alloc)
+			if !tt.noSplice && allocs > 0 {
+				t.Errorf("splice made %d buffer-sized allocations: a door conn fell back to buffered copies", allocs)
 			}
 		})
 	}
@@ -204,7 +203,21 @@ func pump(c net.Conn, total int, buffered chan<- struct{}) {
 			return
 		}
 	}
-	for n := 0; n < total; n += len(buf) {
+	for range total / len(buf) {
 		_, _ = c.Write(buf)
 	}
+}
+
+func bufferAllocs() uint64 {
+	runtime.GC()
+	s := []metrics.Sample{{Name: "/gc/heap/allocs-by-size:bytes"}}
+	metrics.Read(s)
+	h := s[0].Value.Float64Histogram()
+	var n uint64
+	for i, c := range h.Counts {
+		if h.Buckets[i] >= 16<<10 {
+			n += c
+		}
+	}
+	return n
 }

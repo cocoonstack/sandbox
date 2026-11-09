@@ -14,6 +14,9 @@ func TestWriteCAFilesRefusesOverwrite(t *testing.T) {
 	if err := writeCAFiles(dir, "root", []byte("cert2"), []byte("key2"), false); err == nil {
 		t.Error("second write without -force overwrote an existing key")
 	}
+	if got, err := os.ReadFile(filepath.Join(dir, "root.key")); err != nil || string(got) != "key" {
+		t.Errorf("root.key after the refused write = %q, %v; want the original key", got, err)
+	}
 	if err := writeCAFiles(dir, "root", []byte("cert2"), []byte("key2"), true); err != nil {
 		t.Errorf("-force write: %v", err)
 	}

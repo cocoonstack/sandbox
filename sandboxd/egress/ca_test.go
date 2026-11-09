@@ -137,7 +137,7 @@ func TestLoadCARejectsNonCertBlockInRoot(t *testing.T) {
 	}
 }
 
-func TestFingerprintIsRootAndStable(t *testing.T) {
+func TestFingerprintTracksOnlyTheRoot(t *testing.T) {
 	rootCert, rootKey := testRoot(t, "root")
 	c1, k1 := testIntermediate(t, rootCert, rootKey, "n1")
 	c2, k2 := testIntermediate(t, rootCert, rootKey, "n2")

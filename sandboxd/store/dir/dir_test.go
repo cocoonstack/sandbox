@@ -62,16 +62,15 @@ func TestPlainPublishReplacesDigestWithEmpty(t *testing.T) {
 	root := t.TempDir()
 	st := newStore(t, root)
 	firstMeta := []byte(storetest.MetaJSON("digested"))
-	firstDigest := mustPublishDigested(t, st, testID, "digested")
+	if mustPublishDigested(t, st, testID, "digested") == "" {
+		t.Fatal("digested generation returned an empty digest")
+	}
 	firstDigestPath := filepath.Join(root, testID, digestName(firstMeta))
 	mustPublish(t, st, testID, "plain")
 
 	_, meta, digest := mustFetch(t, st, testID)
 	if string(meta) != storetest.MetaJSON("plain") || digest != "" {
 		t.Fatalf("plain replacement meta/digest = %q/%q, want plain/empty", meta, digest)
-	}
-	if firstDigest == "" {
-		t.Fatal("digested generation returned an empty digest")
 	}
 	assertPresentf(t, firstDigestPath, "superseded digest removed inside the grace")
 	mustPublish(t, st, testID, "digested")
@@ -447,10 +446,8 @@ func TestSweepGenerationsRemovesOnlyAgedStaging(t *testing.T) {
 func TestSweepGenerationsToleratesConcurrentDelete(t *testing.T) {
 	st := newStore(t, t.TempDir())
 	ctx := t.Context()
-	done := make(chan struct{})
 	var g errgroup.Group
 	g.Go(func() error {
-		defer close(done)
 		for range 500 {
 			staging, err := st.Stage(testID)
 			if err != nil {
@@ -472,16 +469,12 @@ func TestSweepGenerationsToleratesConcurrentDelete(t *testing.T) {
 		return nil
 	})
 	g.Go(func() error {
-		for {
-			select {
-			case <-done:
-				return nil
-			default:
-			}
+		for range 500 {
 			if err := st.SweepGenerations(ctx); err != nil {
 				return fmt.Errorf("sweep: %w", err)
 			}
 		}
+		return nil
 	})
 	if err := g.Wait(); err != nil {
 		t.Fatal(err)

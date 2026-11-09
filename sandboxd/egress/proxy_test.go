@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"net/netip"
 	"net/url"
+	"os"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -365,6 +366,7 @@ func TestCloseEndsSplicedTunnel(t *testing.T) {
 
 	conn := dialConnect(t, front.Listener.Addr().String(), "echo.internal:443")
 	defer func() { _ = conn.Close() }()
+	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
 	br := bufio.NewReader(conn)
 	if status := readStatus(t, br); status != "HTTP/1.1 200 Connection Established" {
 		t.Fatalf("CONNECT status = %q, want 200 Connection Established", status)
@@ -380,8 +382,8 @@ func TestCloseEndsSplicedTunnel(t *testing.T) {
 	p.Close()
 
 	_, _ = io.WriteString(conn, "ping")
-	if _, err := io.ReadFull(br, got); err == nil {
-		t.Error("established spliced tunnel survived proxy Close")
+	if _, err := io.ReadFull(br, got); err == nil || errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Errorf("established spliced tunnel survived proxy Close: %v", err)
 	}
 }
 
