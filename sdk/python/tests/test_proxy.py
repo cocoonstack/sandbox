@@ -55,6 +55,8 @@ class ClosedPortConn:
 
 @pytest.mark.parametrize("local", ["127.0.0.1:0", "[::1]:0"])
 def test_proxy_port_accepts_and_pipes(monkeypatch, local):
+    if local.startswith("[") and not ipv6_loopback():
+        pytest.skip("no IPv6 loopback")
     sb = sandbox_at("127.0.0.1:1")
     monkeypatch.setattr(sb, "dial_port", lambda port: FakePortConn())
 
@@ -93,7 +95,20 @@ def test_proxy_port_retires_its_accept_thread_when_the_listener_closes():
     sb = sandbox_at("127.0.0.1:1", keep_alive=0)
     known = set(threading.enumerate())
     listener = sb.proxy_port("127.0.0.1:0", 80)
-    (accept_loop,) = set(threading.enumerate()) - known
+    (accept_loop,) = [
+        thread
+        for thread in threading.enumerate()
+        if thread not in known and thread.name.endswith("(_proxy_accept_loop)")
+    ]
     listener.close()
     accept_loop.join(5)
     assert not accept_loop.is_alive()
+
+
+def ipv6_loopback() -> bool:
+    try:
+        with socket.socket(socket.AF_INET6) as probe:
+            probe.bind(("::1", 0))
+    except OSError:
+        return False
+    return True

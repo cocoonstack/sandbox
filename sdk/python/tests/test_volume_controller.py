@@ -4,7 +4,6 @@ from types import SimpleNamespace
 
 import pytest
 from cocoonsandbox import Client, VolumeError
-from conftest import FakeNode
 from examples.volume_controller import VolumeHooks, hibernate_volume, resume_volume
 
 PATH = "/v1/sandboxes/sb_1"
@@ -29,6 +28,7 @@ def controller(spawn_node, monkeypatch):
     replies = []
     fail = set()
     gate = {"open": True}
+    headers = {}
 
     def hook(name):
         def run():
@@ -43,7 +43,7 @@ def controller(spawn_node, monkeypatch):
         return run
 
     def patch(body, path):
-        assert FakeNode.last_headers["Authorization"] == "Bearer root-token"
+        assert headers["Authorization"] == "Bearer root-token"
         assert not gate["open"]
         events.append(("patch", body))
         if replies:
@@ -51,12 +51,12 @@ def controller(spawn_node, monkeypatch):
         return 200, EMPTY if "remove" in body else ATTACHED
 
     def hibernate(body, path):
-        assert FakeNode.last_headers["Authorization"] == "Bearer sandbox-token"
+        assert headers["Authorization"] == "Bearer sandbox-token"
         assert not gate["open"]
         events.append("hibernate")
         return 204, {}
 
-    addr = spawn_node({("PATCH", PATH + "/volumes"): patch, ("POST", PATH + "/hibernate"): hibernate})
+    addr = spawn_node({("PATCH", PATH + "/volumes"): patch, ("POST", PATH + "/hibernate"): hibernate}, headers)
     client = Client(addr, api_token="root-token")
     sb = client.attach(addr, "sb_1", "sandbox-token")
 

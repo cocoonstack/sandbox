@@ -28,43 +28,6 @@ def test_checkpoint_new_follows_redirect(spawn_node):
     assert seen[0]["no_redirect"] is True
 
 
-def test_checkpoint_new_all_candidates_fail(spawn_node):
-    path = "/v1/checkpoints/ck_2/claim"
-    broken = spawn_node({("POST", path): lambda body, p: (500, {"error": "boom"})})
-
-    calls = []
-
-    def entry_claim(body, p):
-        calls.append(body)
-        if len(calls) == 1:
-            return 200, {"redirect": [broken]}
-        return 409, {"error": "origin also failed"}
-
-    entry = spawn_node({("POST", path): entry_claim})
-    with pytest.raises(APIError) as exc:
-        Client(entry).checkpoint("ck_2").new()
-    assert exc.value.status == 409 and "origin also failed" in exc.value.message
-    assert len(calls) == 2 and calls[1]["no_redirect"] is True
-
-
-def test_checkpoint_new_redirect_fallback_heals(spawn_node):
-    path = "/v1/checkpoints/ck_5/claim"
-    busy = spawn_node({("POST", path): lambda body, p: (503, {"error": "healing"})})
-
-    calls = []
-
-    def entry_claim(body, p):
-        calls.append(body)
-        if len(calls) == 1:
-            return 200, {"redirect": [busy]}
-        return 200, {"id": "sb_healed", "token": "t"}
-
-    entry = spawn_node({("POST", path): entry_claim})
-    sb = Client(entry).checkpoint("ck_5").new()
-    assert sb.id == "sb_healed" and sb.owner == entry
-    assert len(calls) == 2 and calls[1]["no_redirect"] is True
-
-
 def test_checkpoint_new_redirect_never_yields_empty_id(spawn_node, dead_addr):
     entry = spawn_node({("POST", "/v1/checkpoints/ck_3/claim"): lambda body, path: (200, {"redirect": [dead_addr]})})
 

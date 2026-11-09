@@ -3,24 +3,25 @@
 import json
 import os
 import pathlib
+import queue
 import resource
 import socket
 import threading
 import time
 from collections.abc import Callable
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from typing import BinaryIO
+from typing import BinaryIO, TypeVar
 
 import pytest
 from cocoonsandbox import Client, Sandbox
 
 FIXTURES = pathlib.Path(__file__).parents[3] / "protocol" / "wire" / "fixtures" / "v1"
+GUARD = 10.0
+
+_T = TypeVar("_T")
 
 
 class FakeNode(BaseHTTPRequestHandler):
-    routes = {}
-    last_headers = {}
-
     def do_POST(self):
         self._dispatch("POST")
 
@@ -40,10 +41,11 @@ class FakeNode(BaseHTTPRequestHandler):
         pass
 
     def _dispatch(self, method):
-        FakeNode.last_headers = dict(self.headers)
+        self.server.last_headers.clear()
+        self.server.last_headers.update(self.headers)
         length = int(self.headers.get("Content-Length") or 0)
         body = json.loads(self.rfile.read(length)) if length else {}
-        handler = self.routes.get((method, self.path.split("?")[0]))
+        handler = self.server.routes.get((method, self.path.split("?")[0]))
         if handler is None:
             self._reply(404, {"error": "no route"})
             return
@@ -99,6 +101,25 @@ def accept_upgrade(conn: socket.socket) -> BinaryIO:
     return reader
 
 
+def bounded(call: Callable[[], _T]) -> _T:
+    outcome: queue.Queue[tuple[_T | None, BaseException | None]] = queue.Queue()
+
+    def run() -> None:
+        try:
+            outcome.put((call(), None))
+        except BaseException as exc:
+            outcome.put((None, exc))
+
+    threading.Thread(target=run, daemon=True).start()
+    try:
+        value, error = outcome.get(timeout=GUARD)
+    except queue.Empty:
+        raise AssertionError(f"call still running after {GUARD}s") from None
+    if error is not None:
+        raise error
+    return value
+
+
 def wait_until(cond: Callable[[], bool], message: str) -> None:
     deadline = time.monotonic() + 3
     while time.monotonic() < deadline:
@@ -125,9 +146,10 @@ def fd_floor(request):
 def spawn_node():
     servers = []
 
-    def spawn(routes):
-        handler = type("Node", (FakeNode,), {"routes": routes})
-        server = HTTPServer(("127.0.0.1", 0), handler)
+    def spawn(routes, last_headers=None):
+        server = HTTPServer(("127.0.0.1", 0), FakeNode)
+        server.routes = routes
+        server.last_headers = {} if last_headers is None else last_headers
         threading.Thread(target=server.serve_forever, daemon=True).start()
         servers.append(server)
         return f"127.0.0.1:{server.server_port}"
@@ -135,6 +157,7 @@ def spawn_node():
     yield spawn
     for server in servers:
         server.shutdown()
+        server.server_close()
 
 
 @pytest.fixture
@@ -177,6 +200,7 @@ def script_server():
 @pytest.fixture
 def black_hole():
     sock = socket.socket()
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4096)
     sock.bind(("127.0.0.1", 0))
     sock.listen(8)
     yield f"127.0.0.1:{sock.getsockname()[1]}"

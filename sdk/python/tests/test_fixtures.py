@@ -1,4 +1,4 @@
-"""Round-trips the protocol fixture corpus, the same drift guard the Rust and Go implementations run."""
+"""Round-trips the protocol corpus's request frames and decodes each response frame whole."""
 
 import base64
 import json
@@ -9,9 +9,11 @@ from conftest import FIXTURES
 
 
 def fixture_files(prefix):
-    files = sorted(FIXTURES.glob(prefix + "*.json"))
-    assert files, f"no {prefix} fixtures under {FIXTURES}"
-    return files
+    return sorted(FIXTURES.glob(prefix + "*.json"))
+
+
+def test_corpus_counts_are_pinned():
+    assert (len(fixture_files("req_")), len(fixture_files("resp_"))) == (41, 22)
 
 
 @pytest.mark.parametrize("path", fixture_files("req_"), ids=lambda p: p.stem)
@@ -26,7 +28,6 @@ def test_request_round_trip(path):
 def test_response_decodes(path):
     raw = path.read_text().encode()
     want = json.loads(raw)
-    frame = frames.decode_response(raw)
-    assert frame["type"] == want["type"]
     if "data" in want:
-        assert frame["data"] == base64.b64decode(want["data"])
+        want["data"] = base64.b64decode(want["data"])
+    assert frames.decode_response(raw) == want

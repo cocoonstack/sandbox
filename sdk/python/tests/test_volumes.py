@@ -4,7 +4,7 @@ from collections import UserDict
 
 import pytest
 from cocoonsandbox import APIError, VolumeError
-from conftest import FakeNode, sandbox_at
+from conftest import bounded, sandbox_at
 
 PATH = "/v1/sandboxes/sb_1/volumes"
 VIEW = {
@@ -36,12 +36,13 @@ def test_volume_mapping_is_json_encoded(spawn_node):
 )
 def test_volume_requests_use_owner_and_api_token(spawn_node, method, body, call):
     seen, reply = recording()
-    addr = spawn_node({(method, PATH): reply})
+    headers = {}
+    addr = spawn_node({(method, PATH): reply}, headers)
     sb = sandbox_at(addr, api_token="operator-token")
     sb._client.addr = "unused.invalid:7777"
     got = call(sb)
     assert seen == [body]
-    assert FakeNode.last_headers["Authorization"] == "Bearer operator-token"
+    assert headers["Authorization"] == "Bearer operator-token"
     assert got == VIEW
     assert sb.volumes == VIEW["volumes"]
     assert sb.volumes_want == VIEW["volumes_want"]
@@ -129,9 +130,9 @@ def test_identical_put_retries_partial_failure(spawn_node):
 
 
 def test_volume_timeout_bounds_the_call(black_hole):
-    sb = sandbox_at(black_hole, timeout=2)
+    sb = sandbox_at(black_hole, timeout=60)
     with pytest.raises(APIError) as caught:
-        sb.get_volumes(timeout=0.02)
+        bounded(lambda: sb.get_volumes(timeout=0.02))
     assert caught.value.status == 0
 
 

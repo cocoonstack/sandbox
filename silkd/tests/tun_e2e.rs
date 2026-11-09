@@ -9,25 +9,21 @@ use std::os::unix::net::UnixStream;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread::JoinHandle;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use nix::sched::{CloneFlags, unshare};
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
-use tokio::net::{TcpListener, TcpStream, UdpSocket};
-
 use silkd::sysutil;
 use silkd::tun::{
     self, FLAG_ON, Flow, HELLO_LEN, Hello, Io, PEER_ADDR, Tun, VERSION, VNET_HDR_LEN,
 };
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::net::{TcpListener, TcpStream, UdpSocket};
 
 const CLAIM_ADDR: Ipv4Addr = Ipv4Addr::new(100, 65, 0, 7);
 const UPLOAD: u16 = 5001;
 const ECHO: u16 = 5002;
 const DOWNLOAD: u16 = 5003;
 const SINK: u16 = 5004;
-const PPS_SINK: u16 = 5005;
-const PPS_SOURCE: u16 = 5006;
-const GUEST_PPS_PORT: u16 = 6000;
 const BULK: u64 = 256 << 20;
 const GSO_NONE: u8 = 0;
 const GSO_UDP_L4: u8 = 5;
@@ -39,8 +35,6 @@ const PROTO_UDP: u8 = 17;
 const UDP_SEGMENT: libc::c_int = 103;
 const UDP_DATAGRAMS: usize = 32;
 const UDP_SEG: usize = 1000;
-const SMALL: usize = 64;
-const FLOOD: Duration = Duration::from_secs(2);
 
 #[derive(Default)]
 struct Stats {
@@ -63,9 +57,12 @@ fn tcp_udp_and_gso_cross_a_rewriting_host() {
     for io in [Io::Uring, Io::Epoll] {
         let up = Arc::new(Stats::default());
         let down = Arc::new(Stats::default());
-        let (seen, accepts) = with_link(io, true, Some((up.clone(), down.clone())), |_| {
-            guest_workload()
-        });
+        let (seen, accepts) = with_link(
+            io,
+            true,
+            (Arc::clone(&up), Arc::clone(&down)),
+            guest_workload,
+        );
         assert_eq!(seen.upload_peer, CLAIM_ADDR.to_string(), "{io:?}");
         assert_eq!(seen.echo_peers, vec![CLAIM_ADDR.to_string(); 16], "{io:?}");
         assert_eq!(seen.downloaded, BULK, "{io:?}");
@@ -107,9 +104,12 @@ fn full_checksums_cross_when_offloads_are_off() {
     for io in [Io::Uring, Io::Epoll] {
         let up = Arc::new(Stats::default());
         let down = Arc::new(Stats::default());
-        let (seen, _) = with_link(io, false, Some((up.clone(), down.clone())), |_| {
-            guest_workload()
-        });
+        let (seen, _) = with_link(
+            io,
+            false,
+            (Arc::clone(&up), Arc::clone(&down)),
+            guest_workload,
+        );
         assert_eq!(seen.upload_peer, CLAIM_ADDR.to_string(), "{io:?}");
         assert_eq!(seen.echo_peers, vec![CLAIM_ADDR.to_string(); 16], "{io:?}");
         assert_eq!(seen.downloaded, BULK, "{io:?}");
@@ -145,104 +145,37 @@ fn host_off_answer_leaves_no_tun() {
     .unwrap();
 }
 
-#[test]
-#[ignore = "needs root; prints throughput, asserts nothing about speed"]
-fn throughput_and_per_packet_cost() {
-    let order = [
-        (Io::Uring, true),
-        (Io::Epoll, true),
-        (Io::Uring, false),
-        (Io::Epoll, false),
-        (Io::Epoll, false),
-        (Io::Uring, false),
-        (Io::Epoll, true),
-        (Io::Uring, true),
-    ];
-    for (io, offloads) in order {
-        let (r, _) = with_link(io, offloads, None, |pump_tid| {
-            runtime().block_on(async move {
-                let t = Instant::now();
-                upload(SocketAddr::from((PEER_ADDR, UPLOAD)), 4 * BULK).await;
-                let up = gbits(4 * BULK, t.elapsed());
-                let t = Instant::now();
-                let got = download(SocketAddr::from((PEER_ADDR, DOWNLOAD))).await;
-                let down = gbits(got, t.elapsed());
-                let cpu = pump_cpu_ns(pump_tid);
-                let sent = flood_up().await;
-                let up_pkts = query(PPS_SINK).await;
-                let up_cpu = pump_cpu_ns(pump_tid) - cpu;
-                let cpu = pump_cpu_ns(pump_tid);
-                let down_pkts = flood_down().await;
-                let down_cpu = pump_cpu_ns(pump_tid) - cpu;
-                (up, down, sent, up_pkts, up_cpu, down_pkts, down_cpu)
-            })
-        });
-        let (up, down, sent, up_pkts, up_cpu, down_pkts, down_cpu) = r;
-        let secs = FLOOD.as_secs_f64();
-        eprintln!(
-            "{io:?} offloads={offloads}: tcp up {up:.2} Gbit/s, down {down:.2} Gbit/s; \
-             udp{SMALL} up {:.0} kpps ({:.0} ns/pkt, {sent} sent), down {:.0} kpps ({:.0} ns/pkt)",
-            up_pkts as f64 / secs / 1e3,
-            up_cpu as f64 / up_pkts.max(1) as f64,
-            down_pkts as f64 / secs / 1e3,
-            down_cpu as f64 / down_pkts.max(1) as f64,
-        );
-    }
-}
-
-/// Runs `guest` in the guest namespace while the session runs; `relay` rewrites the guest address the way the host's shared TUN does.
 fn with_link<T: Send + 'static>(
     io: Io,
     offloads: bool,
-    relay: Option<(Arc<Stats>, Arc<Stats>)>,
-    guest: impl FnOnce(i32) -> T + Send + 'static,
+    (up, down): (Arc<Stats>, Arc<Stats>),
+    guest: impl FnOnce() -> T + Send + 'static,
 ) -> (T, u16) {
-    let (guest_end, host_end, relay_threads) = match relay {
-        Some((up, down)) => {
-            let (g, rg) = UnixStream::pair().unwrap();
-            let (rh, h) = UnixStream::pair().unwrap();
-            let threads = vec![
-                forward(
-                    rg.try_clone().unwrap(),
-                    rh.try_clone().unwrap(),
-                    up,
-                    IP_SRC,
-                    tun::GUEST_ADDR,
-                    CLAIM_ADDR,
-                ),
-                forward(rh, rg, down, IP_DST, CLAIM_ADDR, tun::GUEST_ADDR),
-            ];
-            (g, h, threads)
-        }
-        None => {
-            let (g, h) = UnixStream::pair().unwrap();
-            (g, h, Vec::new())
-        }
-    };
+    let (guest_end, rg) = UnixStream::pair().unwrap();
+    let (rh, host_end) = UnixStream::pair().unwrap();
+    let relay_threads = [
+        forward(
+            rg.try_clone().unwrap(),
+            rh.try_clone().unwrap(),
+            up,
+            IP_SRC,
+            tun::GUEST_ADDR,
+            CLAIM_ADDR,
+        ),
+        forward(rh, rg, down, IP_DST, CLAIM_ADDR, tun::GUEST_ADDR),
+    ];
     let stop = Arc::new(AtomicBool::new(false));
     let host_stop = guest_end.try_clone().unwrap();
-    let (host, accepts) = spawn_host(
-        host_end,
-        io,
-        offloads,
-        relay_threads.is_empty(),
-        stop.clone(),
-    );
+    let (host, accepts) = spawn_host(host_end, io, offloads, Arc::clone(&stop));
     let out = in_netns(move || {
         let tun = Tun::open("tun0").unwrap();
         tun.configure_guest().unwrap();
         let shut = guest_end.try_clone().unwrap();
-        let (tid_tx, tid_rx) = std::sync::mpsc::channel();
         let session = std::thread::Builder::new()
             .name("guest-pump".into())
-            .spawn(move || {
-                // SAFETY: gettid takes no arguments.
-                tid_tx.send(unsafe { libc::gettid() }).unwrap();
-                tun::session(&tun, &guest_end, io)
-            })
+            .spawn(move || tun::session(&tun, &guest_end, io))
             .unwrap();
-        let tid = tid_rx.recv().unwrap();
-        let out = guest(tid);
+        let out = guest();
         shut.shutdown(std::net::Shutdown::Both).unwrap();
         assert_eq!(session.join().unwrap().unwrap(), Flow::Closed);
         out
@@ -262,18 +195,13 @@ fn spawn_host(
     stream: UnixStream,
     io: Io,
     offloads: bool,
-    direct: bool,
     stop: Arc<AtomicBool>,
 ) -> (JoinHandle<()>, u16) {
     let (ready_tx, ready_rx) = std::sync::mpsc::channel();
     let handle = in_netns(move || {
         let tun = Tun::open("tunh").unwrap();
-        if direct {
-            sysutil::if_up("tunh", PEER_ADDR, tun::PREFIX).unwrap();
-        } else {
-            sysutil::if_up("tunh", PEER_ADDR, 32).unwrap();
-            sysutil::route_add("tunh", Ipv4Addr::new(100, 65, 0, 0), 16, None).unwrap();
-        }
+        sysutil::if_up("tunh", PEER_ADDR, 32).unwrap();
+        sysutil::route_add("tunh", Ipv4Addr::new(100, 65, 0, 0), 16, None).unwrap();
         let shut = stream.try_clone().unwrap();
         let (bound_tx, bound_rx) = std::sync::mpsc::channel();
         let servers = std::thread::spawn(move || {
@@ -282,14 +210,10 @@ fn spawn_host(
                 let download = TcpListener::bind((PEER_ADDR, DOWNLOAD)).await.unwrap();
                 let echo = UdpSocket::bind((PEER_ADDR, ECHO)).await.unwrap();
                 let sink = UdpSocket::bind((PEER_ADDR, SINK)).await.unwrap();
-                let pps = UdpSocket::bind((PEER_ADDR, PPS_SINK)).await.unwrap();
-                let source = TcpListener::bind((PEER_ADDR, PPS_SOURCE)).await.unwrap();
                 tokio::spawn(serve_upload(upload));
                 tokio::spawn(serve_download(download));
                 tokio::spawn(serve_echo(echo));
-                tokio::spawn(serve_count(sink, SINK, Some(UDP_SEG)));
-                tokio::spawn(serve_count(pps, PPS_SINK, None));
-                tokio::spawn(serve_flood(source));
+                tokio::spawn(serve_count(sink));
                 bound_tx.send(()).unwrap();
                 while !stop.load(Ordering::Relaxed) {
                     tokio::time::sleep(Duration::from_millis(20)).await;
@@ -351,7 +275,7 @@ fn guest_workload() -> Seen {
         assert_eq!(rc, 0, "UDP_SEGMENT: {}", std::io::Error::last_os_error());
         sink.send_to(&[7u8; UDP_DATAGRAMS * UDP_SEG], (PEER_ADDR, SINK))
             .unwrap();
-        let sink_datagrams = query(SINK).await;
+        let sink_datagrams = sink_count(UDP_DATAGRAMS as u64).await;
         Seen {
             upload_peer,
             echo_peers,
@@ -359,27 +283,6 @@ fn guest_workload() -> Seen {
             sink_datagrams,
         }
     })
-}
-
-fn thread_cpu_ns(tid: i32) -> u64 {
-    std::fs::read_to_string(format!("/proc/self/task/{tid}/schedstat"))
-        .ok()
-        .and_then(|s| s.split_whitespace().next()?.parse().ok())
-        .unwrap_or(0)
-}
-
-fn pump_cpu_ns(pump_tid: i32) -> u64 {
-    let workers = format!("iou-wrk-{pump_tid}");
-    let mut total = thread_cpu_ns(pump_tid);
-    for entry in std::fs::read_dir("/proc/self/task").unwrap().flatten() {
-        let comm = std::fs::read_to_string(entry.path().join("comm")).unwrap_or_default();
-        if comm.trim() == workers
-            && let Ok(tid) = entry.file_name().to_string_lossy().parse::<i32>()
-        {
-            total += thread_cpu_ns(tid);
-        }
-    }
-    total
 }
 
 fn runtime() -> tokio::runtime::Runtime {
@@ -394,10 +297,6 @@ fn in_netns<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> JoinHa
         unshare(CloneFlags::CLONE_NEWNET).unwrap();
         f()
     })
-}
-
-fn gbits(bytes: u64, took: Duration) -> f64 {
-    bytes as f64 * 8.0 / took.as_secs_f64() / 1e9
 }
 
 async fn upload(target: SocketAddr, bytes: u64) -> String {
@@ -430,48 +329,16 @@ async fn download(target: SocketAddr) -> u64 {
     }
 }
 
-async fn query(port: u16) -> u64 {
-    tokio::time::sleep(Duration::from_millis(200)).await;
-    let mut s = TcpStream::connect((PEER_ADDR, port)).await.unwrap();
-    s.read_u64().await.unwrap()
-}
-
-async fn flood_up() -> u64 {
-    tokio::task::spawn_blocking(|| {
-        let s = std::net::UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).unwrap();
-        s.connect((PEER_ADDR, PPS_SINK)).unwrap();
-        let payload = [1u8; SMALL];
-        let deadline = Instant::now() + FLOOD;
-        let mut sent = 0u64;
-        while Instant::now() < deadline {
-            for _ in 0..64 {
-                if s.send(&payload).is_ok() {
-                    sent += 1;
-                }
-            }
+async fn sink_count(want: u64) -> u64 {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let mut s = TcpStream::connect((PEER_ADDR, SINK)).await.unwrap();
+        let got = s.read_u64().await.unwrap();
+        if got >= want || tokio::time::Instant::now() >= deadline {
+            return got;
         }
-        sent
-    })
-    .await
-    .unwrap()
-}
-
-async fn flood_down() -> u64 {
-    let sink = std::net::UdpSocket::bind((Ipv4Addr::UNSPECIFIED, GUEST_PPS_PORT)).unwrap();
-    sink.set_read_timeout(Some(Duration::from_millis(300)))
-        .unwrap();
-    let mut s = TcpStream::connect((PEER_ADDR, PPS_SOURCE)).await.unwrap();
-    s.write_u8(1).await.unwrap();
-    tokio::task::spawn_blocking(move || {
-        let mut buf = [0u8; 2048];
-        let mut got = 0u64;
-        while sink.recv(&mut buf).is_ok() {
-            got += 1;
-        }
-        got
-    })
-    .await
-    .unwrap()
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
 }
 
 async fn serve_upload(l: TcpListener) {
@@ -514,8 +381,8 @@ async fn serve_echo(s: UdpSocket) {
     }
 }
 
-async fn serve_count(s: UdpSocket, port: u16, size: Option<usize>) {
-    let report = TcpListener::bind((PEER_ADDR, port)).await.unwrap();
+async fn serve_count(s: UdpSocket) {
+    let report = TcpListener::bind((PEER_ADDR, SINK)).await.unwrap();
     let got = Arc::new(AtomicU64::new(0));
     tokio::spawn({
         let got = Arc::clone(&got);
@@ -523,7 +390,7 @@ async fn serve_count(s: UdpSocket, port: u16, size: Option<usize>) {
             let mut buf = [0u8; 2048];
             loop {
                 let (n, _) = s.recv_from(&mut buf).await.unwrap();
-                if size.is_none_or(|want| want == n) {
+                if n == UDP_SEG {
                     got.fetch_add(1, Ordering::Relaxed);
                 }
             }
@@ -531,26 +398,7 @@ async fn serve_count(s: UdpSocket, port: u16, size: Option<usize>) {
     });
     loop {
         let (mut c, _) = report.accept().await.unwrap();
-        let _ = c.write_u64(got.swap(0, Ordering::Relaxed)).await;
-    }
-}
-
-async fn serve_flood(l: TcpListener) {
-    loop {
-        let (mut c, peer) = l.accept().await.unwrap();
-        let _ = c.read_u8().await;
-        let target = SocketAddr::from((peer.ip(), GUEST_PPS_PORT));
-        tokio::task::spawn_blocking(move || {
-            let s = std::net::UdpSocket::bind((PEER_ADDR, 0)).unwrap();
-            s.connect(target).unwrap();
-            let payload = [2u8; SMALL];
-            let deadline = Instant::now() + FLOOD;
-            while Instant::now() < deadline {
-                for _ in 0..64 {
-                    let _ = s.send(&payload);
-                }
-            }
-        });
+        let _ = c.write_u64(got.load(Ordering::Relaxed)).await;
     }
 }
 
@@ -640,7 +488,6 @@ fn rewrite(frame: &mut [u8], at: usize, from: [u8; 4], to: [u8; 4]) {
     ip[field..field + 2].copy_from_slice(&next.to_be_bytes());
 }
 
-/// Moves a ones'-complement sum from one address to another (RFC 1624).
 fn adjust(sum: u16, from: [u8; 4], to: [u8; 4]) -> u16 {
     let mut s = u32::from(sum);
     for i in [0, 2] {

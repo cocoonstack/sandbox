@@ -132,6 +132,17 @@ pub async fn wait_for_path(path: &Path) {
     .await;
 }
 
+#[track_caller]
+pub fn require_perl() {
+    assert!(
+        std::process::Command::new("perl")
+            .arg("-e1")
+            .status()
+            .is_ok_and(|status| status.success()),
+        "this test needs perl on PATH"
+    );
+}
+
 pub fn alive(pid: u32) -> bool {
     // SAFETY: kill(2) with signal 0 only probes whether the pid exists; it takes no pointers.
     if unsafe { libc::kill(pid as libc::pid_t, 0) } != 0 {
