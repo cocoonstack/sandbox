@@ -54,20 +54,20 @@ func (m *Manager) memoryErr() error {
 	return nil
 }
 
-// readAnonBytes counts resident anon plus used swap, since anon pushed to swap still has to fit back.
+// readAnonBytes counts resident anon plus used swap, since anon pushed to swap still has to fit back; a swap-cached page is in both, so it counts once.
 func readAnonBytes(proc string) (int64, error) {
 	raw, err := os.ReadFile(filepath.Join(proc, "meminfo")) //nolint:gosec // a fixed proc file
 	if err != nil {
 		return 0, err
 	}
-	var kb [3]int64
-	for i, field := range []string{"AnonPages:", "SwapTotal:", "SwapFree:"} {
+	var kb [4]int64
+	for i, field := range []string{"AnonPages:", "SwapTotal:", "SwapFree:", "SwapCached:"} {
 		_, rest, _ := bytes.Cut(raw, []byte(field))
 		if _, err := fmt.Sscan(string(rest), &kb[i]); err != nil {
 			return 0, fmt.Errorf("parse %s %w", field, err)
 		}
 	}
-	return (kb[0] + kb[1] - kb[2]) * units.KiB, nil
+	return (kb[0] + kb[1] - kb[2] - kb[3]) * units.KiB, nil
 }
 
 func readPSISomeAvg10(proc string) (float64, error) {
