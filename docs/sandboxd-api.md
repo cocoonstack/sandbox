@@ -1335,9 +1335,10 @@ VM's RAM. `vmm_exit` is stamped when the node first finds the VMM gone, so an
 outage before sandboxd runs again (a host that was down) stays billed up to that
 point. A `reap` instead ends the current span at min(`t`, its `deadline`), or `t`
 with none, because `t` can follow the true end by the reaper's tick, the VM's
-teardown or the node's downtime. Outside `archived`, an `archive_delete` ends the
-current span at min(`t`, the last `deadline`), because a purge can follow a claim
-that has no end event by a whole retention window. An `adopt` names a claim
+teardown or the node's downtime. An `archive_delete` ends the current span at
+min(`t`, the last `deadline`): in `archived` that is the retention deadline, which a
+purge trails by the sweep's tick or the node's downtime, and a purge can follow a
+claim that has no end event by a whole retention window. An `adopt` names a claim
 a node took over, from a lost node or from its own lost record, with `ref` the
 checkpoint it holds. In `archived` it changes nothing; otherwise it ends the
 current span at min(`t`, the last `deadline` before it) and enters `archived` at
