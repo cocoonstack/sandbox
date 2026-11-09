@@ -198,11 +198,8 @@ func TestFailoverDisabledExitKeepsReplicaCheckpoint(t *testing.T) {
 					APIToken: "root", DataDir: old.dataDir, CheckpointDir: c.ckDir,
 					Pools: []config.PoolSpec{{PoolKey: testKey}},
 				}
-				m, err := NewManager(t.Context(), cfg, old.eng, testSecrets(t), testBackends(t, cfg))
-				if err != nil {
-					t.Fatalf("manager: %v", err)
-				}
-				if err = m.Reconcile(t.Context()); err != nil {
+				m := mustManager(t, cfg, old.eng)
+				if err := m.Reconcile(t.Context()); err != nil {
 					t.Fatalf("reconcile: %v", err)
 				}
 				restored, ok := m.byID(sb.ID)

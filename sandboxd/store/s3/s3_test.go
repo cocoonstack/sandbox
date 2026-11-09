@@ -541,7 +541,7 @@ func TestPublishDigestedHashesHolesLikeZeros(t *testing.T) {
 func TestPublishDigestedSplitsChunksAtTheFixedBoundary(t *testing.T) {
 	const id = "ck_00000000000000a5"
 	_, st := newFakeStore(t)
-	content := string(bytes.Repeat([]byte{'x'}, int(store.DigestChunkSize))) + "y"
+	content := strings.Repeat("x", int(store.DigestChunkSize)) + "y"
 	staging := stageRecord(t, st, id, metaJSON(id), content)
 	digest, err := storetest.PublishDigested(t.Context(), st, staging, id)
 	if err != nil {
@@ -901,7 +901,11 @@ func TestOnlyALabeledStoreReadsLabelsWhenListing(t *testing.T) {
 		for _, id := range ids {
 			gets += fake.requestCount(http.MethodGet, "ck/"+id+"/"+store.LabelsFile)
 		}
-		if want := map[bool]int{true: len(ids), false: 0}[labeled]; gets != want {
+		want := 0
+		if labeled {
+			want = len(ids)
+		}
+		if gets != want {
 			t.Errorf("labeled=%v: %d label GETs, want %d", labeled, gets, want)
 		}
 	}

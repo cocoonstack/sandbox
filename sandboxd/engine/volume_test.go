@@ -185,11 +185,13 @@ func TestUmountVolumeExecsUmount(t *testing.T) {
 func TestUmountVolumeWaitsOutAFlushPastTheCallTimeout(t *testing.T) {
 	path := sockPath(t)
 	fake := serveFakeSilkd(t, path)
-	fake.execHook = func(argv []string) {
-		if argv[0] == "umount" {
-			time.Sleep(syncTimeout + 250*time.Millisecond)
+	fake.set(func(f *fakeSilkd) {
+		f.execHook = func(argv []string) {
+			if argv[0] == "umount" {
+				time.Sleep(syncTimeout + 250*time.Millisecond)
+			}
 		}
-	}
+	})
 	if err := newTestEngine().umountVolume(t.Context(), path, "/data"); err != nil {
 		t.Errorf("umount whose flush outlasts %s: %v", syncTimeout, err)
 	}

@@ -26,7 +26,7 @@ func TestReaderServesAHibernatedClaimUntilAWriteWakesIt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	defer func() { _ = sb.Close() }()
+	defer sb.Close()
 	if err = sb.Hibernate(t.Context()); err != nil {
 		t.Fatalf("Hibernate: %v", err)
 	}

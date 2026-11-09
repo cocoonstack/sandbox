@@ -350,7 +350,7 @@ func TestMoveTargetRefusesARoundThatOutlivedItsReservation(t *testing.T) {
 	reserveMove(t, mc.t, "sb_r", "acme")
 	src := t.TempDir()
 	if err := os.WriteFile(filepath.Join(src, "state.json"), []byte("{}"), 0o600); err != nil {
-		t.Fatal(err)
+		t.Fatalf("write state: %v", err)
 	}
 	var captured bytes.Buffer
 	capture := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -387,7 +387,7 @@ func TestMoveTargetLetsTheSameSourceRetryAndRefusesAnother(t *testing.T) {
 	first, _ := reservationOf(mc.t, "sb_r")
 	stale := filepath.Join(mc.t.moveDir("sb_r"), "state.json")
 	if err := os.WriteFile(stale, []byte("a crashed source's round"), 0o600); err != nil {
-		t.Fatal(err)
+		t.Fatalf("write stale round: %v", err)
 	}
 	if _, err := mc.t.AdmitMove(t.Context(), "sb_r", MoveAdmission{Tenant: "acme", Key: testKey, From: "other"}); !errors.Is(err, ErrNotMovable) {
 		t.Errorf("admission from another source: %v, want ErrNotMovable", err)
@@ -422,7 +422,7 @@ func TestMoveTargetKeepsARetrysStagingDirWhenTheCrashedSourcesRoundEnds(t *testi
 	reserveMove(t, mc.t, "sb_r", "acme")
 	retried := filepath.Join(mc.t.moveDir("sb_r"), "state.json")
 	if err := os.WriteFile(retried, []byte("the retry's round"), 0o600); err != nil {
-		t.Fatal(err)
+		t.Fatalf("write retry round: %v", err)
 	}
 	_ = stream.CloseWithError(errors.New("the crashed source's connection ended"))
 	if err := <-done; !errors.Is(err, ErrUnknownSandbox) {
@@ -447,7 +447,7 @@ func TestMoveCommitOfACrashedSourceDoesNotTakeTheRetrysReservation(t *testing.T)
 	reserveMove(t, mc.t, sb.ID, "")
 	retry, _ := reservationOf(mc.t, sb.ID)
 	if err := os.WriteFile(filepath.Join(mc.t.moveDir(sb.ID), "state.json"), []byte("{}"), 0o600); err != nil {
-		t.Fatal(err)
+		t.Fatalf("write state: %v", err)
 	}
 	close(eng.receiveStall)
 	if err := <-done; !errors.Is(err, ErrNotMovable) {
@@ -473,7 +473,7 @@ func TestMoveTargetDroppingALostCommitKeepsTheRetrysStagingDir(t *testing.T) {
 	sb := mustClaim(t, mc.s, testKey)
 	reserveMove(t, mc.t, sb.ID, "")
 	if err := os.WriteFile(filepath.Join(mc.t.moveDir(sb.ID), "state.json"), []byte("{}"), 0o600); err != nil {
-		t.Fatal(err)
+		t.Fatalf("write state: %v", err)
 	}
 	eng := fakeOf(mc.t)
 	stall := make(chan struct{})
@@ -493,7 +493,7 @@ func TestMoveTargetDroppingALostCommitKeepsTheRetrysStagingDir(t *testing.T) {
 	reserveMove(t, mc.t, sb.ID, "")
 	retried := filepath.Join(mc.t.moveDir(sb.ID), "state.json")
 	if err := os.WriteFile(retried, []byte("the retry's round"), 0o600); err != nil {
-		t.Fatal(err)
+		t.Fatalf("write retry round: %v", err)
 	}
 	close(stall)
 	if err := <-done; !errors.Is(err, ErrNotMovable) {
@@ -1050,7 +1050,7 @@ func TestMoveRestartResolvesAJournaledMoveThroughItsRecord(t *testing.T) {
 			dataDir := t.TempDir()
 			seedClaims(t, dataDir, map[string]*types.Sandbox{sb.ID: sb})
 			if err := os.MkdirAll(filepath.Join(dataDir, movesDir, sb.ID), 0o700); err != nil {
-				t.Fatal(err)
+				t.Fatalf("stage move dir: %v", err)
 			}
 			eng := newFakeEngine()
 			eng.vms[vm], eng.paused[vm], eng.stopped[vm] = "/vsock/"+vm, sb.MoveIn, tt.vmmLost
@@ -1872,16 +1872,11 @@ func failRound(n int) moveHook {
 
 func abortRecord(t *testing.T, mc *moveCluster) {
 	t.Helper()
-	for _, rec := range mustStale(t, mc) {
-		_, _ = mc.moveReg.Advance(t.Context(), rec.ID, rec.Epoch, rec.State, moves.Aborted)
-	}
-}
-
-func mustStale(t *testing.T, mc *moveCluster) []moves.Record {
-	t.Helper()
 	recs, err := mc.moveReg.Stale(t.Context(), time.Now().Add(time.Hour))
 	if err != nil {
 		t.Errorf("stale move records: %v", err)
 	}
-	return recs
+	for _, rec := range recs {
+		_, _ = mc.moveReg.Advance(t.Context(), rec.ID, rec.Epoch, rec.State, moves.Aborted)
+	}
 }

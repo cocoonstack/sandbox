@@ -52,7 +52,7 @@ func TestATunPoolClaimGetsAnAddressAndAPacketDoor(t *testing.T) {
 		t.Error("a claim of a pool without tun has a packet door")
 	}
 	if got := tunVerbsOf(eng); len(got) != 1 {
-		t.Errorf("tun verbs %q, want none for the claim without tun", got)
+		t.Errorf("tun verbs %q, want only the tun claim's up verb", got)
 	}
 }
 

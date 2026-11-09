@@ -358,14 +358,11 @@ func TestSweepSparesPublishingGeneration(t *testing.T) {
 }
 
 func TestSweepReclaimsOnlyAgedUncommittedGenerations(t *testing.T) {
-	const (
-		orphanID  = "ck_00000000000000aa"
-		publishID = "ck_00000000000000bb"
-	)
+	const publishID = "ck_00000000000000bb"
 	root := t.TempDir()
 	sweeper := newStore(t, root)
 	writer := newStore(t, root)
-	orphan := filepath.Join(root, orphanID, store.ExportDir+"-0011223344556677")
+	orphan := filepath.Join(root, testID, store.ExportDir+"-0011223344556677")
 	if mkdirErr := os.MkdirAll(orphan, 0o750); mkdirErr != nil {
 		t.Fatalf("seed orphan: %v", mkdirErr)
 	}
@@ -390,7 +387,7 @@ func TestSweepReclaimsOnlyAgedUncommittedGenerations(t *testing.T) {
 		t.Fatalf("sweep old: %v", sweepErr)
 	}
 	assertGonef(t, orphan, "aged uncommitted generation survived")
-	assertPresentf(t, filepath.Join(root, orphanID), "orphan record shell was removed")
+	assertPresentf(t, filepath.Join(root, testID), "orphan record shell was removed")
 	assertPresentf(t, fresh, "publishing generation was swept")
 
 	if removeErr := os.RemoveAll(commitBlocker); removeErr != nil {

@@ -59,10 +59,7 @@ func TestBroadcastDeleteDedupsRepeatedAddrs(t *testing.T) {
 }
 
 func TestBroadcastDeleteSwallowsFailures(t *testing.T) {
-	fail := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusInternalServerError)
-	}))
-	defer fail.Close()
+	fail := statusServer(t, http.StatusInternalServerError)
 	ok, reached := countingServer(t, http.StatusNoContent)
 
 	b := &Broadcaster{Peers: func() []string { return []string{fail.URL, ok.URL, "127.0.0.1:1"} }}

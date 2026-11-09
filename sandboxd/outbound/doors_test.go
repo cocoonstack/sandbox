@@ -105,7 +105,7 @@ func TestEgressDoorCapsConcurrentConnections(t *testing.T) {
 	client.Timeout = 500 * time.Millisecond
 	resp, err := client.Get(origin.URL + "/")
 	if err == nil {
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		t.Fatal("a request past the door cap was served")
 	}
 	if netErr, ok := errors.AsType[net.Error](err); !ok || !netErr.Timeout() {
@@ -118,7 +118,7 @@ func TestEgressDoorCapsConcurrentConnections(t *testing.T) {
 	if err != nil {
 		t.Fatalf("request after a slot freed: %v", err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("status %d after a slot freed, want 200", resp.StatusCode)
 	}

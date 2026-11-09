@@ -707,7 +707,7 @@ func TestAChunkedResponseEndsCleanlyThroughTheProxy(t *testing.T) {
 	}
 }
 
-func (d DialFunc) Route() string { return "" }
+func (DialFunc) Route() string { return "" }
 
 func (d DialFunc) Dial(ctx context.Context, _, network, addr string) (net.Conn, error) {
 	return d(ctx, network, addr)
@@ -840,10 +840,7 @@ func readStatus(t *testing.T, br *bufio.Reader) string {
 			break
 		}
 	}
-	if len(line) >= 2 {
-		line = line[:len(line)-2]
-	}
-	return line
+	return strings.TrimSuffix(line, "\r\n")
 }
 
 func echoServer(t *testing.T) string {

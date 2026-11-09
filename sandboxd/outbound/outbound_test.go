@@ -49,17 +49,20 @@ func TestEgressProxyInjectsAndGates(t *testing.T) {
 		t.Fatalf("allowed request: %v", err)
 	}
 	body, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if string(body) != "ok" || resp.Header.Get("X-Seen-Auth") != "s3cr3t" {
 		t.Errorf("allowed request body=%q injected=%q, want ok/s3cr3t", body, resp.Header.Get("X-Seen-Auth"))
 	}
 
-	req, _ := http.NewRequest(http.MethodGet, "http://blocked.example/", nil)
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://blocked.example/", nil)
+	if err != nil {
+		t.Fatalf("build denied request: %v", err)
+	}
 	deny, err := client.Do(req)
 	if err != nil {
 		t.Fatalf("denied request: %v", err)
 	}
-	deny.Body.Close()
+	_ = deny.Body.Close()
 	if deny.StatusCode != http.StatusForbidden {
 		t.Errorf("denied status %d, want 403", deny.StatusCode)
 	}

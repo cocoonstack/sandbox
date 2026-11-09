@@ -422,27 +422,6 @@ type tunnel struct {
 	seen     []string
 }
 
-func tunnelProxy(t *testing.T) *tunnel {
-	t.Helper()
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("listen: %v", err)
-	}
-	t.Cleanup(func() { _ = ln.Close() })
-	p := &tunnel{addr: ln.Addr().String()}
-	go func() {
-		for {
-			conn, err := ln.Accept()
-			if err != nil {
-				return
-			}
-			p.accepted.Add(1)
-			go p.serve(conn)
-		}
-	}()
-	return p
-}
-
 func (p *tunnel) targets() []string {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -468,6 +447,27 @@ func (p *tunnel) serve(conn net.Conn) {
 	_, _ = io.WriteString(conn, "HTTP/1.1 200 OK\r\n\r\n")
 	go func() { _, _ = io.Copy(target, br) }()
 	_, _ = io.Copy(conn, target)
+}
+
+func tunnelProxy(t *testing.T) *tunnel {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	p := &tunnel{addr: ln.Addr().String()}
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			p.accepted.Add(1)
+			go p.serve(conn)
+		}
+	}()
+	return p
 }
 
 func pipeDial(n *atomic.Int32) egress.DialFunc {

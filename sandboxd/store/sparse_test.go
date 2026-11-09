@@ -70,8 +70,9 @@ func TestScanFileDoesNotReadHoles(t *testing.T) {
 	if len(digest.Chunks) != 6 {
 		t.Fatalf("%d chunks, want 6", len(digest.Chunks))
 	}
+	zero := zeroSum(DigestChunkSize)
 	for i, sum := range digest.Chunks {
-		if sum != zeroSum(DigestChunkSize) {
+		if sum != zero {
 			t.Errorf("hole chunk %d does not carry the zero-chunk sum", i)
 		}
 	}

@@ -141,7 +141,7 @@ func TestCordonRefusesForksAndCheckpointClaims(t *testing.T) {
 }
 
 func TestACordonedNodeKeepsServingItsOwnClaims(t *testing.T) {
-	m := newTestManager(t, newFakeEngine(), archivePool(3600))
+	m := newTestManager(t, newFakeEngine(), archivePool(keepAnHour))
 	sb := mustClaim(t, m, testKey)
 	gone := mustClaim(t, m, testKey)
 	cred := Cred{Token: sb.Token}
@@ -245,14 +245,11 @@ func TestCordonOutlivesAReloadAndAnUndrain(t *testing.T) {
 func TestCordonIsAudited(t *testing.T) {
 	dir := t.TempDir()
 	cfg := &config.Config{DataDir: dir, AuditLog: true}
-	m, err := NewManager(t.Context(), cfg, newFakeEngine(), testSecrets(t), testBackends(t, cfg))
-	if err != nil {
-		t.Fatalf("setup manager: %v", err)
-	}
-	if err = m.Cordon(t.Context()); err != nil {
+	m := mustManager(t, cfg, newFakeEngine())
+	if err := m.Cordon(t.Context()); err != nil {
 		t.Fatalf("cordon: %v", err)
 	}
-	if err = m.Uncordon(t.Context()); err != nil {
+	if err := m.Uncordon(t.Context()); err != nil {
 		t.Fatalf("uncordon: %v", err)
 	}
 	raw, err := os.ReadFile(filepath.Join(dir, "audit.jsonl"))

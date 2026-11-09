@@ -337,7 +337,6 @@ func TestUntarRejectsDamagedChunk(t *testing.T) {
 
 func tarDir(src string, w io.Writer) error {
 	tw := tar.NewWriter(w)
-	defer func() { _ = tw.Close() }()
 	if err := tarInto(src, "", tw); err != nil {
 		return err
 	}

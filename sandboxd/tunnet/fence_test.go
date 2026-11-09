@@ -26,7 +26,7 @@ func TestFenceStopsPacketsAndARPAndResumesWithoutResettingQuota(t *testing.T) {
 		u.inject(t, reply(remote))
 		readFrame(t, guest)
 		synctest.Wait()
-		before, bytes := r.Stats(), used.Load()
+		before, charged := r.Stats(), used.Load()
 		arp := appendARP(appendHeader(nil, 7, broadcast, exitMAC, etherARP), arpReq, exitMAC, vtep, [6]byte{}, claimAddr)
 
 		for range 2 {
@@ -41,8 +41,8 @@ func TestFenceStopsPacketsAndARPAndResumesWithoutResettingQuota(t *testing.T) {
 			if got.DgramsOut != before.DgramsOut || got.FramesOut != before.FramesOut || got.ARPSent != before.ARPSent || got.ARPAnswered != before.ARPAnswered {
 				t.Errorf("fenced traffic: before %+v, after %+v", before, got)
 			}
-			if used.Load() != bytes || len(u.out) != 0 {
-				t.Errorf("fenced claim charged %d bytes and sent %d datagrams", used.Load()-bytes, len(u.out))
+			if used.Load() != charged || len(u.out) != 0 {
+				t.Errorf("fenced claim charged %d bytes and sent %d datagrams", used.Load()-charged, len(u.out))
 			}
 		}
 
@@ -68,8 +68,8 @@ func TestFenceStopsPacketsAndARPAndResumesWithoutResettingQuota(t *testing.T) {
 		if got := r.Stats(); got.ARPSent != before.ARPSent+1 || got.ARPAnswered != before.ARPAnswered+1 || got.DgramsOut != before.DgramsOut+1 || got.FramesOut != before.FramesOut+1 {
 			t.Errorf("unfenced traffic: before %+v, after %+v", before, got)
 		}
-		if got := used.Load(); got != bytes*2 {
-			t.Errorf("quota after recovery %d, want %d", got, bytes*2)
+		if got := used.Load(); got != charged*2 {
+			t.Errorf("quota after recovery %d, want %d", got, charged*2)
 		}
 	})
 }

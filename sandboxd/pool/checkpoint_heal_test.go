@@ -223,7 +223,7 @@ func TestFetchCheckpointNeverPulls(t *testing.T) {
 
 func TestHasCheckpointAnswersOnlyForABranchableRecord(t *testing.T) {
 	eng := newFakeEngine()
-	m := newTestManager(t, eng, archivePool(3600))
+	m := newTestManager(t, eng, archivePool(keepAnHour))
 	src := mustClaim(t, m, testKey)
 
 	ckpt, err := m.Checkpoint(t.Context(), src.ID, Cred{Token: src.Token}, "", "")
