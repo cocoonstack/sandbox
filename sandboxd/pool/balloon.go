@@ -42,10 +42,10 @@ func (m *Manager) balloonOnce(ctx context.Context) {
 				due = append(due, sb)
 			}
 		}
-		m.mu.Unlock()
 		if v.balloonIdle == 0 && !pending {
 			m.balloonSeen.Store(false)
 		}
+		m.mu.Unlock()
 		m.runBounded(ctx, len(due), func(ctx context.Context, i int) {
 			m.balloonTo(ctx, due[i], balloonWant(due[i], m.view.Load(), time.Now()))
 		}).Wait()
@@ -134,8 +134,8 @@ func (m *Manager) balloonFailed(sb *types.Sandbox) {
 
 func (m *Manager) setBalloon(sb *types.Sandbox, state types.BalloonState, target string, def int64) {
 	m.mu.Lock()
+	defer m.mu.Unlock()
 	sb.Balloon, sb.BalloonTarget, sb.BalloonDefault = state, target, def
-	m.mu.Unlock()
 	if state == types.BalloonInflated {
 		m.balloonSeen.Store(true)
 	}
