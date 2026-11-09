@@ -267,10 +267,10 @@ func TestAPurgeReapStatesTheRetentionEnd(t *testing.T) {
 	expire(m, sb)
 	want := m.deadlineOf(sb)
 	m.reapOnce(t.Context())
-	waitFor(t, func() bool { return strings.HasSuffix(usageEventsOf(t, m, sb.ID), ",reap") })
+	waitFor(t, func() bool { return strings.HasSuffix(usageEventsOf(t, m, sb.ID), ",reap,archive_delete") })
 	evs := usageJournal(t, m)
-	if last := evs[len(evs)-1]; !last.Deadline.Equal(want) {
-		t.Errorf("purge reap deadline %v, want %v", last.Deadline, want)
+	if reap := evs[len(evs)-2]; reap.Event != "reap" || !reap.Deadline.Equal(want) {
+		t.Errorf("purge reap %s deadline %v, want reap at %v", reap.Event, reap.Deadline, want)
 	}
 }
 

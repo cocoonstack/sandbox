@@ -347,8 +347,8 @@ func TestArchiveRetentionPurge(t *testing.T) {
 		if ckExists(t, m, ck) {
 			t.Error("purge did not delete the archived checkpoint")
 		}
-		if got := usageEventsOf(t, m, sb.ID); !strings.HasSuffix(got, "archive,archive_delete,reap") {
-			t.Errorf("events %s, want the purge to close the claim with a reap", got)
+		if got := usageEventsOf(t, m, sb.ID); !strings.HasSuffix(got, "archive,reap,archive_delete") {
+			t.Errorf("events %s, want the purge to end the archived span with its reap", got)
 		}
 
 		m.mu.Lock()
