@@ -623,7 +623,6 @@ func (m *Manager) purgeArchiveRow(ctx context.Context, rec archives.Record) {
 	}
 	if !rec.Consumed {
 		m.counters.archiveDeletes.Add(1)
-		m.recordUsage(ctx, usage.Event{Event: reapEvent, ID: rec.ID, Tenant: rec.Tenant, Deadline: rec.Deadline})
 		m.recordUsage(ctx, usage.Event{Event: "archive_delete", ID: rec.ID, Reference: rec.Checkpoint, Tenant: rec.Tenant})
 	}
 	logger.Infof(ctx, "purged archive %s of %s", rec.ID, rec.Owner)

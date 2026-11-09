@@ -861,7 +861,7 @@ func TestAReplicaRowWithNoClaimLeftGainsRetentionAndIsPurged(t *testing.T) {
 	if _, ok, err = c.reg.Get(t.Context(), sb.ID); err != nil || ok || ckExists(t, restarted, ck) {
 		t.Errorf("row %t %v after retention, want the row and its checkpoint gone", ok, err)
 	}
-	if got, want := usageEventsOf(t, restarted, sb.ID), "claim,reap,reap,archive_delete"; got != want {
+	if got, want := usageEventsOf(t, restarted, sb.ID), "claim,reap,archive_delete"; got != want {
 		t.Errorf("events %s, want %s", got, want)
 	}
 }
