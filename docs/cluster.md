@@ -191,7 +191,7 @@ cap; to take no claims, cordon the node.
 
 | State | New claim, fork, branch | Existing claims | Root live move in | Adoption of archived claims | Refill and pool gossip | Survives restart and reboot |
 |---|---|---|---|---|---|---|
-| serving | yes, unless an [admission refusal](sandboxd-api.md#admission-refusals) applies; a 429 for a claim without volumes redirects to a peer | yes; a wake is bound by `max_running` and `disk_reserve`, an archived claim's also by `memory_limit`, and an archived claim's refused wake moves to a peer with room | yes, under the same caps and `move_concurrency` | yes; no claim cap binds, `max_running` binds at the wake | yes | — |
+| serving | yes, unless an [admission refusal](sandboxd-api.md#admission-refusals) applies; a 429 for a claim without volumes redirects to a peer | yes; a wake is bound by `max_running` and `disk_reserve`; an archived claim's refused wake, or one over `memory_limit`, first tries a peer with room | yes, under the same caps and `move_concurrency` | yes; no claim cap binds, `max_running` binds at the wake | yes | — |
 | cordoned | no: 429 `node cordoned`; peers stop redirecting here | yes | yes, under the same caps and `move_concurrency` | no; its own claims stay | no; warm VMs are destroyed | yes, as `<data_dir>/cordoned` |
 | draining | no: 429 `node draining`; peers stop redirecting here | yes | no: admission and commit refuse | no | no; warm VMs are destroyed | no |
 | draining with `evacuate=1` | no, as draining | yes until the claim's turn, then 503 until a peer holds it and 404 after; a claim that cannot move stays and serves | no | no | no | no: a restart stops the evacuation |
