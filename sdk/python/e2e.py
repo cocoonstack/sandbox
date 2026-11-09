@@ -1,7 +1,7 @@
 """Hardware e2e for the Python SDK: drives the full surface against a real
 sandboxd node. Mirrors the Go smoke's step discipline; prints PY-E2E PASS.
 
-    python3 e2e.py --addr 127.0.0.1:7777 --token e2e --template rt2:24.04
+    python3 e2e.py --addr 127.0.0.1:7777 --token e2e --template rt:24.04
 """
 
 from __future__ import annotations
