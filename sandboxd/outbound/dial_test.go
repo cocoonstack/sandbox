@@ -5,6 +5,7 @@ import (
 	"net/netip"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cocoonstack/sandbox/sandboxd/config"
 )
@@ -161,6 +162,12 @@ func TestTheTunnelTargetPrefersIPv4(t *testing.T) {
 				t.Errorf("tunnelAddr(%v) = %v, want %s", tt.ips, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestTheDirectDialerIsBoundedUnderAMinute(t *testing.T) {
+	if d := newDialer(verdictOf(nil)); d.Timeout <= 0 || d.Timeout > time.Minute {
+		t.Errorf("direct dial timeout %v, want a bound under a minute", d.Timeout)
 	}
 }
 

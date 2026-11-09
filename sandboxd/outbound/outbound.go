@@ -5,13 +5,11 @@ import (
 	"context"
 	"fmt"
 	"maps"
-	"net/http"
 	"net/netip"
 	"os"
 	"slices"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"github.com/projecteru2/core/log"
 
@@ -166,7 +164,7 @@ func (h *Host) ArmProxy(ctx context.Context, sb *types.Sandbox) error {
 			return err
 		}
 	}
-	d.srv = &http.Server{Handler: proxy, ReadHeaderTimeout: 30 * time.Second}
+	d.srv = proxy.Server()
 	d.proxy = proxy
 	if v.usageEvery > 0 {
 		proxy.ReportEvery(v.usageEvery)

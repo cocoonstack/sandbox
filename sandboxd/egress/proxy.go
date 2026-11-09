@@ -199,6 +199,10 @@ func (p *Proxy) OnTransfer(f TransferFunc) { p.transfer = f }
 // RecordEnds puts every forwarded request's upstream connection ends on its Event; call it before serving.
 func (p *Proxy) RecordEnds() { p.ends = true }
 
+func (p *Proxy) Server() *http.Server {
+	return &http.Server{Handler: p, ReadHeaderTimeout: interceptTimeout, IdleTimeout: idleConnTimeout}
+}
+
 // NoRxSplice copies upstream bytes to the guest in user space; call it before serving.
 func (p *Proxy) NoRxSplice() { p.noSplice = true }
 

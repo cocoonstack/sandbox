@@ -93,14 +93,13 @@ func TestChangingOneDirectionKeepsTheOtherBucket(t *testing.T) {
 }
 
 func TestCloseReleasesAReadWaitingForTokens(t *testing.T) {
-	addr, s := sinkServer(t)
+	addr, _ := sinkServer(t)
 	rows := make(chan int64, 4)
 	p, _, conn := openConnect(t, addr, func(p *Proxy) {
 		p.OnTransfer(func(_ Event, sent, _ int64) { rows <- sent })
 	})
-	p.SetLimit(types.EgressLimit{TxBytesPerSecond: 64})
+	p.SetLimit(types.EgressLimit{TxBytesPerSecond: 1})
 	go writeUntilClosed(conn)
-	waitBytes(t, s, limitBurst)
 	waitDebt(t, p.limits.Load().tx)
 
 	start := time.Now()
@@ -433,9 +432,9 @@ func waitBytes(t *testing.T, s *sink, want int64) {
 func waitDebt(t *testing.T, lim *rate.Limiter) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
-	for lim.Tokens() >= 0 {
+	for lim.Tokens() > -2 {
 		if time.Now().After(deadline) {
-			t.Fatalf("the bucket kept %v tokens", lim.Tokens())
+			t.Fatalf("the bucket holds %v tokens, want a debt of two tokens", lim.Tokens())
 		}
 		runtime.Gosched()
 	}
