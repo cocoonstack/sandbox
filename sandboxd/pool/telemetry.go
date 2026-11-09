@@ -81,8 +81,8 @@ type counters struct {
 	releases, reaps                       atomic.Uint64
 	archives, unarchives, archiveDeletes  atomic.Uint64
 	wakesRefusedRunning, wakesRefusedDisk atomic.Uint64
-	wakesRefusedMemory                    atomic.Uint64
-	wakeHandoffs, wakeMemoryFallbacks     atomic.Uint64
+	wakesRefusedMemory, wakeHandoffs      atomic.Uint64
+	wakeMemoryFallbacks                   atomic.Uint64
 	wakeNanos                             atomic.Uint64
 
 	claimWarmLatency, claimCloneLatency, claimColdLatency claimHistogram

@@ -490,8 +490,8 @@ func (m *Manager) runningErr(extra int) error {
 	return nil
 }
 
-// beginWake admits a wake and counts it as running until endWake; movable says a refusal can hand the claim to a peer, and the caller holds sb.Transition.
-func (m *Manager) beginWake(sb *types.Sandbox, movable bool) error {
+// beginWake admits a wake and counts it as running until endWake; memoryGated lets memory_limit refuse it, and the caller holds sb.Transition.
+func (m *Manager) beginWake(sb *types.Sandbox, memoryGated bool) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	switch {
@@ -500,7 +500,7 @@ func (m *Manager) beginWake(sb *types.Sandbox, movable bool) error {
 	case sb.Failed == "" && m.evacuatingLocked(sb.ID):
 		return ErrEvacuating
 	}
-	if refused, err := m.wakeRoomErrLocked(movable); err != nil {
+	if refused, err := m.wakeRoomErrLocked(memoryGated); err != nil {
 		refused.Add(1)
 		return err
 	}
@@ -509,12 +509,12 @@ func (m *Manager) beginWake(sb *types.Sandbox, movable bool) error {
 	return nil
 }
 
-// wakeRoomErrLocked refuses a wake this node has no room for and names the counter of the limit that refused it; memory refuses only a claim a peer can adopt, and callers hold m.mu.
-func (m *Manager) wakeRoomErrLocked(movable bool) (*atomic.Uint64, error) {
+// wakeRoomErrLocked refuses a wake this node has no room for and names the counter of the limit that refused it; memory gates only a wake a peer can adopt, and callers hold m.mu.
+func (m *Manager) wakeRoomErrLocked(memoryGated bool) (*atomic.Uint64, error) {
 	if err := m.diskErr(); err != nil {
 		return &m.counters.wakesRefusedDisk, err
 	}
-	if movable && m.archives != nil && m.memoryLow.Load() {
+	if memoryGated && m.archives != nil && m.memoryLow.Load() {
 		return &m.counters.wakesRefusedMemory, errMemoryLow
 	}
 	if err := m.runningErr(1); err != nil {

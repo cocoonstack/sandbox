@@ -209,7 +209,7 @@ func (m *Manager) wakeArchived(ctx context.Context, sb *types.Sandbox) (string, 
 		if errors.Is(err, ErrQuota) && m.handOffForRoom(ctx, sb) {
 			return "", fmt.Errorf("wake %s: %w", sb.ID, ErrUnknownSandbox)
 		}
-		// memory only spreads load, so a wake no peer took runs here
+		// memory only spreads load, so a wake no hand-off placed runs here
 		if !errors.Is(err, errMemoryLow) {
 			return "", fmt.Errorf("wake %s: %w", sb.ID, err)
 		}
