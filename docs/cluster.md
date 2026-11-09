@@ -312,7 +312,9 @@ release and adoption an evacuation uses:
   `disk_reserve`, under `memory_limit` and under `max_running`.
 - When a peer adopts, the owner forgets the claim and the wake answers 404, as
   after an evacuation. The client's `Lookup` finds the peer, which wakes the
-  claim there. The hand-off counts in `sandboxd_wake_handoffs_total`.
+  claim there. The hand-off counts in `sandboxd_wake_handoffs_total`. A preview
+  URL minted before the hand-off stops working until it is minted again, as
+  after an evacuation.
 - When no peer adopts (no peer, or every peer full or closed), the owner takes
   the row back and the wake answers 429 as before. A node runs one hand-off at
   a time, and after one fails it asks no peer for 30 seconds, so clients

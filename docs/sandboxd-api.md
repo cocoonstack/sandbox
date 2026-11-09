@@ -962,7 +962,7 @@ has no `preview_listen`. The signed token embeds the sandbox id, port, and
 owner `advertise_addr`, so any node's preview listener can serve it (forwarding
 to the owner's main listener) and a released sandbox's URL answers 404 —
 no revocation list. A browser request to the minted URL answers 503
-`lease lost; retry` for a replicated claim while its node's lease is overdue, 503 `sandbox moving to another node; retry` while an [evacuation](#post-v1drain) has yet to move it, and 429 when it has to wake a sandbox while the disk reserve is low or the node is at `max_running`. See [deploy](deploy.md#preview-urls).
+`lease lost; retry` for a replicated claim while its node's lease is overdue, 503 `sandbox moving to another node; retry` while an [evacuation](#post-v1drain) has yet to move it, and 429 when it has to wake a sandbox while the disk reserve is low or the node is at `max_running`; a wake that [hands an archived claim to a peer](cluster.md#waking-an-archived-claim-on-a-full-node) answers 404, as after a move. See [deploy](deploy.md#preview-urls).
 
 ## POST /v1/sandboxes/{id}/checkpoint
 
