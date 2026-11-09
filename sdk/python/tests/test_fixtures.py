@@ -1,4 +1,4 @@
-"""Round-trips the protocol fixture corpus, the same drift guard the Rust and Go implementations run."""
+"""Round-trips the protocol corpus's request frames and decodes each response frame to its type."""
 
 import base64
 import json

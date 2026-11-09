@@ -21,7 +21,8 @@ watch, persistent sessions, git verbs, pty,
 port dial/proxy/preview URLs, background processes (spawn/ps/kill/
 logs/attach), renew, fork, hibernate, promote, checkpoints, and the LSP
 broker.
-Wire fidelity is pinned by the shared protocol fixture corpus (Rust + Go +
-Python all round-trip it in CI).
+Wire fidelity is pinned by the shared protocol fixture corpus: Rust and Go
+round-trip it in CI, and Python round-trips its requests and decodes each
+response.
 
 Full reference: https://cocoonstack.github.io/sandbox/sdk-python

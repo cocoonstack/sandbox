@@ -2,7 +2,7 @@
 to the built binary against a live node — the exact protocol an MCP client
 uses. Prints MCP-E2E PASS.
 
-    python3 e2e.py --bin ./sandbox-mcp --addr 127.0.0.1:7777 --token e2e --template rt2:24.04
+    python3 e2e.py --bin ./sandbox-mcp --addr 127.0.0.1:7777 --token e2e --template rt:24.04
 """
 
 from __future__ import annotations

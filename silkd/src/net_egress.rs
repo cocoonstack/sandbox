@@ -5,7 +5,7 @@ use std::net::{Ipv4Addr, SocketAddrV4};
 
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
-/// Loopback port the guest reaches the proxy at (`proxy.internal:3128`).
+/// Loopback port the guest reaches the proxy at.
 pub const LOOPBACK_PORT: u16 = 3128;
 /// Host vsock port the VMM maps to sandboxd's `<vsock_socket>_<PORT>` UDS.
 pub const HOST_VSOCK_PORT: u32 = 2049;

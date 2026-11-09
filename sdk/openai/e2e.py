@@ -3,7 +3,7 @@ SandboxSession surface (start/exec/write/read/persist/resume/delete) against
 a real sandboxd node — the exact path the Agents runner takes. Prints
 OPENAI-ADAPTER-E2E PASS.
 
-    python3 e2e.py --addr 127.0.0.1:7777 --token e2e --template rt2:24.04
+    python3 e2e.py --addr 127.0.0.1:7777 --token e2e --template rt:24.04
 """
 
 import argparse
