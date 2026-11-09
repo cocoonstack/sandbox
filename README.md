@@ -99,14 +99,13 @@ sandboxd](docs/deploy.md) covers release binaries, the full config and systemd.
   `boot/**`, `silkd/**`, or `os-image/**` it builds the
   changed carriers (via `build-boot.yml` / `build-silkd.yml`,
   `workflow_call`) then os-images, in order, so the chain is deterministic
-- `build-os-images.yml` — bakes base + flavors FROM the sha-pinned carriers
+- `build-os-images.yml` — bakes base + flavors FROM the carriers, sha-pinned
+  when rebuilt in the same run
 - `release.yml` — on a version tag, checks the tag against silkd's version,
   then builds the release binaries and archives
 - `publish-pypi.yml` — on an `sdk-*-v*` tag, builds and publishes the
   matching package via PyPI Trusted Publishing (OIDC, per-package
   environment)
-
-On a fresh repo run build-boot first — images build `FROM` the boot artifact.
 
 ## Boot chain
 
