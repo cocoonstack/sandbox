@@ -145,12 +145,22 @@ func TestTheHostGuardFollowsARefresh(t *testing.T) {
 }
 
 func TestTheTunnelTargetPrefersIPv4(t *testing.T) {
-	h := newHost(t, &fakeEngine{}, &config.Config{}, func(o *Options) {
-		o.Verdict = func(netip.Addr, uint16) (bool, error) { return false, nil }
-	})
-	target, internal, err := h.upstreamTarget(t.Context(), "localhost:80")
-	if err != nil || internal || target != netip.MustParseAddrPort("127.0.0.1:80") {
-		t.Errorf("target %v internal %v err %v, want 127.0.0.1:80 over ::1", target, internal, err)
+	for name, tt := range map[string]struct {
+		ips  []string
+		want string
+	}{
+		"IPv4 after IPv6": {[]string{"::1", "127.0.0.1"}, "127.0.0.1"},
+		"IPv6 only":       {[]string{"::1"}, "::1"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			ips := make([]netip.Addr, 0, len(tt.ips))
+			for _, ip := range tt.ips {
+				ips = append(ips, netip.MustParseAddr(ip))
+			}
+			if got := tunnelAddr(ips); got != netip.MustParseAddr(tt.want) {
+				t.Errorf("tunnelAddr(%v) = %v, want %s", tt.ips, got, tt.want)
+			}
+		})
 	}
 }
 
