@@ -7,10 +7,12 @@ import (
 	"os"
 	"slices"
 	"sync"
+
+	"github.com/docker/go-units"
 )
 
 // journalMaxBytes rotates a journal once it crosses this size; one .1 backup is kept.
-const journalMaxBytes = 1024 * 1024 * 1024
+const journalMaxBytes = units.GiB
 
 // journal is an append-only JSONL writer with size rotation; its lock only orders appends.
 type journal struct {
