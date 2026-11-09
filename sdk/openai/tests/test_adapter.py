@@ -12,8 +12,6 @@ import pytest
 from cocoonsandbox import APIError, ProtocolError, SilkdError
 from cocoonsandbox_openai import CocoonSandboxClient, CocoonSandboxClientOptions, CocoonSandboxSessionState
 
-CLAIMS: list = []
-
 
 class FakeNode(BaseHTTPRequestHandler):
     def do_POST(self):
@@ -43,13 +41,18 @@ class FakeNode(BaseHTTPRequestHandler):
 
 
 @pytest.fixture
-def node():
+def node_server():
     server = HTTPServer(("127.0.0.1", 0), FakeNode)
-    server.claims = CLAIMS
-    CLAIMS.clear()
+    server.claims = []
     threading.Thread(target=server.serve_forever, daemon=True).start()
-    yield f"127.0.0.1:{server.server_port}"
+    yield server
     server.shutdown()
+    server.server_close()
+
+
+@pytest.fixture
+def node(node_server):
+    return f"127.0.0.1:{node_server.server_port}"
 
 
 def test_create_claims_and_state_round_trips(node):
@@ -69,14 +72,14 @@ def test_create_claims_and_state_round_trips(node):
     asyncio.run(go())
 
 
-def test_default_lease_outlives_an_agent_run(node):
+def test_default_lease_outlives_an_agent_run(node_server, node):
     async def go():
         client = CocoonSandboxClient()
         session = await client.create(options=CocoonSandboxClientOptions(addr=node))
         await client.delete(session)
 
     asyncio.run(go())
-    assert CLAIMS[0]["ttl_seconds"] == 3600, CLAIMS
+    assert node_server.claims[0]["ttl_seconds"] == 3600, node_server.claims
 
 
 def test_operations_share_one_sandbox_handle(node):

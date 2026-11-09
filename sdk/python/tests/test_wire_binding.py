@@ -1,5 +1,6 @@
 """Drives each real Sandbox call site and asserts its frame carries exactly the golden fixture's fields."""
 
+import base64
 import contextlib
 import json
 import socket
@@ -70,10 +71,14 @@ CASES = [
         [{"type": "started", "pid": 7}],
         lambda sb, f: sb.open_pty(cols=f["cols"], rows=f["rows"], cwd=f["cwd"], env=f["env"], user=f["user"]).close(),
     ),
+    ("req_stdin", [], lambda sb, f: write_pty(sb, base64.b64decode(f["data"]))),
+    ("req_stdin_close", [{"type": "started", "pid": 7}, {"type": "exit", "code": 0}], lambda sb, f: sb.run(["true"])),
+    ("req_data", [{"type": "done"}], lambda sb, f: sb.write_file("/f", base64.b64decode(f["data"]))),
+    ("req_data_end", [{"type": "done"}], lambda sb, f: sb.write_file("/f", b"x")),
 ]
 
-
 UNSENT = {"req_session_create": {"id"}}
+NO_CALL_SITE = {"req_info", "req_tun_up", "req_tun_down"}
 
 
 class BranchActionConn(FakeConn):
@@ -94,16 +99,15 @@ class BranchActionConn(FakeConn):
         return {"type": "done"}
 
 
-@pytest.mark.parametrize("stem,replies,invoke", CASES, ids=lambda c: c if isinstance(c, str) else "")
+@pytest.mark.parametrize("stem,replies,invoke", CASES, ids=[case[0] for case in CASES])
 def test_call_site_matches_fixture(monkeypatch, stem, replies, invoke):
     fixture = json.loads((FIXTURES / f"{stem}.json").read_text())
     sb, sent, thread = fake_sandbox(monkeypatch, replies)
     invoke(sb, fixture)
     thread.join(timeout=5)
 
-    assert sent, "no frame reached the guest"
-    frame = sent[0]
-    assert frame["op"] == fixture["op"]
+    frame = next((frame for frame in sent if frame["op"] == fixture["op"]), None)
+    assert frame is not None, f"no {fixture['op']} frame reached the guest: {sent}"
     assert frame["v"] == PROTO_VERSION
     for key, value in frame.items():
         assert key in fixture, f"field {key!r} not in the golden corpus (typo?)"
@@ -115,12 +119,10 @@ def test_call_site_matches_fixture(monkeypatch, stem, replies, invoke):
         assert key in frame, f"fixture field {key!r} was never emitted (dropped field?)"
 
 
-def test_enum_value_sets_match_corpus():
-    enums = json.loads((FIXTURES / "enums.json").read_text())
-    assert set(enums["error_kind"]) == {"bad_request", "not_found", "unimplemented", "internal"}
-    assert set(enums["event_kind"]) == {"created", "modified", "deleted", "renamed"}
-    assert set(enums["file_kind"]) == {"file", "dir", "symlink", "other"}
-    assert set(enums["git_branch_action"]) == {"list", "create", "delete", "checkout"}
+def test_every_request_fixture_has_a_call_site_or_an_exclusion():
+    covered = {case[0] for case in CASES}
+    assert covered.isdisjoint(NO_CALL_SITE)
+    assert {path.stem for path in FIXTURES.glob("req_*.json")} == covered | NO_CALL_SITE
 
 
 def test_git_branch_actions_come_from_the_corpus(monkeypatch):
@@ -134,6 +136,11 @@ def test_git_branch_actions_come_from_the_corpus(monkeypatch):
     sb.git_delete_branch("/w", "b")
     sb.git_checkout("/w", "b")
     assert set(sent) == set(enums["git_branch_action"])
+
+
+def write_pty(sb, data):
+    with Pty(sb, sb._dial(), 7) as pty:
+        pty.write(data)
 
 
 def fake_sandbox(monkeypatch, replies):

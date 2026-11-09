@@ -169,14 +169,22 @@ async fn stdin_nobody_reads_after_the_shell_exits_does_not_wedge_the_next_reques
 }
 
 #[tokio::test]
-async fn pty_disconnect_tears_down_without_spin() {
+async fn pty_disconnect_removes_the_process() {
     let state = Arc::new(State::new());
-    let (cw, mut lines, handle) = open_pty(&state).await;
+    let (mut cw, mut lines, handle) = open_pty(&state).await;
     let pid = read_until(&mut lines, |v| v["type"] == "started").await["pid"]
         .as_u64()
         .unwrap();
 
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    send(
+        &mut cw,
+        json!({"op":"stdin","data":b64(b"echo silk-pty-$((1+1))-ready\n")}),
+    )
+    .await;
+    read_until(&mut lines, |v| {
+        v["type"] == "stdout" && String::from_utf8_lossy(&decode(v)).contains("silk-pty-2-ready")
+    })
+    .await;
     drop(lines);
     drop(cw);
 

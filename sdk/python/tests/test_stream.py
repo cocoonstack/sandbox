@@ -9,7 +9,7 @@ import pytest
 from cocoonsandbox import ProtocolError, Sandbox, SandboxTimeout
 from cocoonsandbox import conn as conn_module
 from cocoonsandbox import sandbox as sandbox_module
-from conftest import accept_upgrade, sandbox_at
+from conftest import accept_upgrade, bounded, sandbox_at
 
 TIMEOUT = 0.2
 
@@ -25,31 +25,33 @@ def test_port_stream_outlives_the_client_timeout(script_server):
 
 def test_run_timeout_cuts_a_silent_command_and_kills_it(script_server):
     kills: list[dict] = []
-    sb = short_timeout_sandbox(script_server(serve_started_then_hang, 5 * TIMEOUT, kills))
-    started = time.monotonic()
+    sb = long_timeout_sandbox(script_server(serve_started_then_hang, kills))
     with pytest.raises(TimeoutError):
-        sb.run(["sleep", "9"], timeout=TIMEOUT)
-    assert time.monotonic() - started < 3 * TIMEOUT
+        bounded(lambda: sb.run(["sleep", "9"], timeout=TIMEOUT))
     assert kills == [{"v": 1, "op": "kill", "pid": 7}], kills
 
 
 def test_run_timeout_bounds_the_kill_it_sends(monkeypatch, script_server):
     monkeypatch.setattr(sandbox_module, "_KILL_WAIT_SECONDS", TIMEOUT)
     kills: list[dict] = []
-    sb = short_timeout_sandbox(script_server(serve_started_then_trickle_the_kill_reply, kills))
-    started = time.monotonic()
+    sb = long_timeout_sandbox(script_server(serve_started_then_trickle_the_kill_reply, kills))
     with pytest.raises(TimeoutError):
-        sb.run(["sleep", "9"], timeout=TIMEOUT)
-    assert time.monotonic() - started < 4 * TIMEOUT
+        bounded(lambda: sb.run(["sleep", "9"], timeout=TIMEOUT))
     assert kills == [{"v": 1, "op": "kill", "pid": 7}], kills
 
 
-def test_run_timeout_cuts_a_blocked_exec_send(black_hole):
-    sb = sandbox_at(black_hole, timeout=30, keep_alive=0)
-    started = time.monotonic()
+def test_run_timeout_cuts_a_blocked_exec_send(monkeypatch, black_hole):
+    connect = socket.create_connection
+
+    def small_send_buffer(*args, **kwargs):
+        sock = connect(*args, **kwargs)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 4096)
+        return sock
+
+    monkeypatch.setattr(socket, "create_connection", small_send_buffer)
+    sb = long_timeout_sandbox(black_hole)
     with pytest.raises(TimeoutError):
-        sb.run(["echo", "x" * (7 << 20)], timeout=TIMEOUT)
-    assert time.monotonic() - started < 5 * TIMEOUT
+        bounded(lambda: sb.run(["echo", "x" * (1 << 20)], timeout=TIMEOUT))
 
 
 def test_run_rejects_a_non_positive_timeout():
@@ -60,10 +62,8 @@ def test_run_rejects_a_non_positive_timeout():
 
 def test_dial_is_still_bounded_by_the_client_timeout(script_server):
     sb = short_timeout_sandbox(script_server(serve_silence))
-    started = time.monotonic()
     with pytest.raises(SandboxTimeout):
-        sb.dial_port(5000)
-    assert time.monotonic() - started < 3 * TIMEOUT
+        bounded(lambda: sb.dial_port(5000))
 
 
 @pytest.mark.parametrize(("exc", "want"), [(TimeoutError(), SandboxTimeout), (ConnectionResetError(), ProtocolError)])
@@ -73,6 +73,10 @@ def test_handshake_failures_are_typed(exc, want):
 
 def short_timeout_sandbox(addr: str) -> Sandbox:
     return sandbox_at(addr, timeout=TIMEOUT, keep_alive=0)
+
+
+def long_timeout_sandbox(addr: str) -> Sandbox:
+    return sandbox_at(addr, timeout=60, keep_alive=0)
 
 
 def serve_port_forward(server: socket.socket, quiet: float, ops: list[str]) -> None:
@@ -85,7 +89,7 @@ def serve_port_forward(server: socket.socket, quiet: float, ops: list[str]) -> N
     conn.close()
 
 
-def serve_started_then_hang(server: socket.socket, quiet: float, kills: list[dict]) -> None:
+def serve_started_then_hang(server: socket.socket, kills: list[dict]) -> None:
     conn, _ = server.accept()
     reader = accept_upgrade(conn)
     reader.readline()
@@ -94,7 +98,7 @@ def serve_started_then_hang(server: socket.socket, quiet: float, kills: list[dic
     kills.append(json.loads(accept_upgrade(killer).readline()))
     killer.sendall(b'{"type":"done"}\n')
     killer.close()
-    time.sleep(quiet)
+    reader.read()
     conn.close()
 
 
@@ -106,15 +110,16 @@ def serve_started_then_trickle_the_kill_reply(server: socket.socket, kills: list
     killer, _ = server.accept()
     kills.append(json.loads(accept_upgrade(killer).readline()))
     with contextlib.suppress(OSError):
-        for byte in b'{"type":"done"}\n':
+        while True:
             time.sleep(0.75 * TIMEOUT)
-            killer.sendall(bytes([byte]))
+            killer.sendall(b" ")
     killer.close()
     conn.close()
 
 
 def serve_silence(server: socket.socket) -> None:
     conn, _ = server.accept()
-    conn.recv(4096)
-    time.sleep(5 * TIMEOUT)
+    with contextlib.suppress(OSError):
+        while conn.recv(4096):
+            pass
     conn.close()

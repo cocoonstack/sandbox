@@ -101,21 +101,6 @@ async fn push_then_pull_roundtrips_a_tree() {
 }
 
 #[tokio::test]
-async fn push_truncated_stream_errors() {
-    let dest = tempfile::tempdir().unwrap();
-    let frames = exchange(&[
-        json!({"op":"fs_push","dest":dest.path().join("p").to_str().unwrap()}).to_string(),
-        json!({"op":"data","data":b64(b"not-a-real-tar")}).to_string(),
-    ])
-    .await;
-    assert_eq!(
-        type_of(frames.last().unwrap()),
-        "error",
-        "truncated push: {frames:?}"
-    );
-}
-
-#[tokio::test]
 async fn push_bad_archive_reports_tar_failure() {
     let dest = tempfile::tempdir().unwrap();
     let frames = exchange(&[

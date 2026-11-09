@@ -4,16 +4,12 @@ import contextlib
 import json
 import socket
 import threading
-import time
 
 import pytest
 from cocoonsandbox import APIError, SandboxTimeout
-from conftest import sandbox_at
+from conftest import bounded, sandbox_at
 
-REPLIES = {
-    "info": {"type": "info", "version": "fake", "uptime_secs": 0, "procs": 0},
-    "fs_mkdir": {"type": "done"},
-}
+REPLIES = {"fs_mkdir": {"type": "done"}}
 REJECT = b"HTTP/1.1 404 Not Found\r\nContent-Type: text/plain\r\nContent-Length: 15\r\n\r\nunknown sandbox"
 REJECT_JSON = (
     b'HTTP/1.1 404 Not Found\r\nContent-Type: application/json\r\nContent-Length: 27\r\n\r\n{"error":"unknown sandbox"}'
@@ -76,8 +72,6 @@ def test_rejected_upgrade_is_an_api_error(reply):
 
 
 def test_run_timeout_cuts_an_unanswered_upgrade(black_hole):
-    sb = sandbox_at(black_hole, timeout=30, keep_alive=0)
-    started = time.monotonic()
+    sb = sandbox_at(black_hole, timeout=60, keep_alive=0)
     with pytest.raises(SandboxTimeout):
-        sb.run(["true"], timeout=0.2)
-    assert time.monotonic() - started < 2, "the run deadline must cut a hung upgrade under a long client timeout"
+        bounded(lambda: sb.run(["true"], timeout=0.2))

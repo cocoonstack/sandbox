@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 use silkd::server::State;
 use tokio::task::JoinHandle;
 
-use common::{assert_error, one, stdout_body, type_of, wait_for_path};
+use common::{assert_error, one, require_perl, stdout_body, type_of, wait_for_path};
 
 async fn create(state: &Arc<State>) -> String {
     create_with(state, json!({"op":"session_create"})).await
@@ -328,6 +328,7 @@ async fn session_merges_stderr_into_stdout() {
 
 #[tokio::test]
 async fn a_dead_session_command_leaves_a_recreated_session_alone() {
+    require_perl();
     let state = Arc::new(State::new());
     let id = create_with(&state, json!({"op":"session_create","id":"s"})).await;
     let bg = sh(
