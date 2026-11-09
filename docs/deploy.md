@@ -1024,14 +1024,6 @@ only; computing durations or prices stays with the consumer.
   cursor never skips a row that commits later. A node lands its lines in
   journal order, so its rows follow that order by `cursor`. A backfilled row
   gets a newer cursor than rows with a later `t`.
-- **Outage:** the node keeps 1 to 2 GiB of journal (`usage.jsonl` rotates at
-  1 GiB into `usage.jsonl.1`), so it rides out a database outage as long as it
-  writes less than that. A line rotated out before it lands is lost, and the
-  node logs a warning when it resumes. The journal grows about 220 bytes per
-  egress connection with `egress_usage_bytes` on and about 100 bytes without,
-  so a node at 1 MB/s keeps at least 17 minutes. Lands commit one at a time
-  per cell (see Order), so a cell lands at a bounded row rate; when its nodes
-  together write faster than that, the backlog grows until it rotates out.
 - **Connection:** the table has its own query pool, sized like the others (see
   [shared tenant database](#shared-tenant-database)), and no LISTEN session.
   The node lands on one connection at a time; `GET /v1/usage` reads take
@@ -1040,8 +1032,13 @@ only; computing durations or prices stays with the consumer.
   retries every 5 s, and backfills when the database returns. Nothing is lost
   while the unlanded lines are still in `usage.jsonl` or `usage.jsonl.1`, so
   an outage loses lines only after the journal rotates twice past the last
-  landed one (64 MiB each); the node no longer holds those either. A node
-  needs the database at boot, like the other shared tables.
+  landed one (1 GiB each); the node no longer holds those either, and logs a
+  warning when it resumes. The journal grows about 220 bytes per egress
+  connection with `egress_usage_bytes` on and about 100 bytes without, so a
+  node writing 1 MB/s rides out at least 17 minutes. Lands commit one at a time
+  per cell (see Order), so when a cell's nodes together write faster than
+  that, the backlog grows until it rotates out. A node needs the database at
+  boot, like the other shared tables.
 - **Retention:** sandboxd never deletes a row. Prune only rows every consumer
   has paged past, and keep each node's newest row: it is the node's resume
   point, and a node that finds none lands its whole journal again. A crash

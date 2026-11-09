@@ -1319,7 +1319,7 @@ single events an interval of 0 writes. A sandbox records at most 10 denied or ra
 the subset of those names claimed `rw`, on its `claim` event, so billing can
 discriminate write access at claim (mounts and host paths are not billing
 dimensions); a live attach or detach records no usage event. The file rotates at
-64 MiB keeping one `.1` backup, so a tailing collector never loses a window
+1 GiB keeping one `.1` backup, so a tailing collector never loses a window
 silently. A last line a crash cut short is ended with a newline when the node
 reopens the journal, so it never swallows the next event. A [live move](#post-v1sandboxesidmove)
 records `move_in` on the target when it starts the guest and `move_out` on the
