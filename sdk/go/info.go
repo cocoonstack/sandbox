@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-// peersTimeout bounds peer discovery so one slow entry node cannot stall the caller.
+// peersTimeout bounds peer discovery and each owner probe, so one slow node cannot stall the caller.
 const peersTimeout = 5 * time.Second
 
 // NodeInfo is one node's operational state from GET /v1/info.
