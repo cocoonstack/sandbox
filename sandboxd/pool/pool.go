@@ -187,6 +187,8 @@ type Engine interface {
 	WriteInstanceMetadata(ctx context.Context, vsockSocket string, doc []byte) error
 	WriteGuestEnv(ctx context.Context, vsockSocket string, doc []byte) error
 	CheckMigrateSupport(ctx context.Context) error
+	CheckBalloonSupport(ctx context.Context) error
+	Balloon(ctx context.Context, vmName, target string) (types.VMBalloon, error)
 	MigrateCapture(ctx context.Context, vmName, series string, final bool) (types.MigrateRound, error)
 	MigrateReceive(ctx context.Context, fromDir, name string, key types.PoolKey) (types.VMRecord, error)
 	MigrateAbort(ctx context.Context, vmName, series string) error
@@ -254,6 +256,7 @@ type Gauges struct {
 	AtCapacityReason string
 	MemoryLow        bool
 	AnonBytes        int
+	BalloonInflated  int
 }
 
 type Backends struct {
@@ -299,7 +302,10 @@ type Manager struct {
 	poolVersion    int64
 	configSeedHash string // config pools' hash, to warn when a file edit is overridden
 
-	sweeps struct{ idle, liveness, archive, archiveDelete, orphan, held, ckpt, gen atomic.Bool }
+	sweeps struct{ idle, liveness, archive, archiveDelete, orphan, held, ckpt, gen, balloon atomic.Bool }
+	// balloonSeen marks a process that has run with balloon reclaim on, so turning it off still deflates; balloonReady caches the cocoon check.
+	balloonSeen  atomic.Bool
+	balloonReady func() bool
 
 	cocoondSocket string
 	// vmmEvents is set while the cocoon daemon stream is live; the poll is then only a backstop.
@@ -448,6 +454,7 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 		healSem:         make(chan struct{}, maxConcurrentHeals),
 	}
 	m.store.dropHostEnv = cfg.HostEnvMemoryOnly
+	m.balloonReady = sync.OnceValue(m.checkBalloon)
 	m.seedVolumes(cfg.Volumes)
 	if err := m.loadCordon(); err != nil {
 		return nil, err
@@ -548,6 +555,7 @@ func (m *Manager) Run(ctx context.Context) {
 			m.dropStaleReaders(ctx)
 			m.retryRemovals(ctx)
 			m.reapOnce(ctx)
+			m.balloonOnce(ctx)
 			m.idleOnce(ctx)
 			m.archiveOnce(ctx)
 			m.replicateOnce(ctx)
@@ -623,6 +631,9 @@ func (m *Manager) Info() ([]PoolInfo, Gauges) {
 		}
 		if sb.Failed != "" {
 			g.Failed++
+		}
+		if sb.Balloon == types.BalloonInflated && holdsVM(sb) {
+			g.BalloonInflated++
 		}
 	}
 	return pools, g

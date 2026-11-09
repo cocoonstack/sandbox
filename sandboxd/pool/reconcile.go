@@ -43,6 +43,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 	for _, sb := range claims {
 		sb.SetEnv(sb.Env)
 		m.forgetHostEnvLocked(sb)
+		m.forgetBalloonLocked(sb)
 		rec, ok := live[sb.VMName]
 		if !ok || rec.State != vmStateRunning {
 			sb.SaveSnap = ""

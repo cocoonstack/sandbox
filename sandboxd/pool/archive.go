@@ -308,6 +308,7 @@ func (m *Manager) commitWake(ctx context.Context, sb *types.Sandbox, vmName, soc
 	}
 	ck, deadline, epoch, safe := sb.ArchiveCk, sb.Deadline, sb.ArchiveEpoch, sb.ReaderSafe
 	sb.VsockSocket, sb.ArchiveCk, sb.ArchiveEpoch, sb.ReaderSafe = sock, "", 0, false
+	sb.Balloon, sb.BalloonTarget, sb.BalloonDefault = "", "", 0
 	m.setVMNameLocked(sb, vmName)
 	wokeAt := time.Now()
 	sb.Deadline = wokeAt.Add(clampTTL(types.Seconds(sb.LeaseSeconds))) // a woken sandbox is a fresh lease

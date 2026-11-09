@@ -33,7 +33,11 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/usage"
 )
 
-const keepAnHour = 3600
+const (
+	keepAnHour = 3600
+
+	fakeBalloonDefault int64 = 1 << 30
+)
 
 var (
 	testKey  = types.PoolKey{Template: "rt:24.04", Net: types.NetNone, Size: types.SizeSmall}
@@ -1431,6 +1435,13 @@ type fakeEngine struct {
 	inspectHook          func()
 	inspectFails         int
 
+	balloons          map[string]types.VMBalloon
+	balloonCalls      []string
+	balloonErr        error
+	balloonSupportErr error
+	balloonChecks     int
+	balloonStall      chan struct{}
+
 	startedReaders   []string
 	attachedCopies   []string
 	attachedDirFiles []string
@@ -1484,6 +1495,7 @@ func newFakeEngine() *fakeEngine {
 		attachDirty: map[string]bool{}, removeSeenOps: map[string][]string{}, removeSeenDirty: map[string][]string{},
 		metadataDocs: map[string]string{}, guestEnvs: map[string]string{}, sockRoot: "/vsock",
 		migrateSeries: map[string]string{}, migrateRound: map[string]int{}, paused: map[string]bool{},
+		balloons: map[string]types.VMBalloon{},
 	}
 }
 
@@ -1770,6 +1782,9 @@ func (f *fakeEngine) Inspect(ctx context.Context, name string) (types.VMRecord, 
 	}
 	f.mu.Lock()
 	vms[i].AttachedDevices.Disks = f.disks[name]
+	if b, ok := f.balloons[name]; ok {
+		vms[i].Balloon = &b
+	}
 	f.mu.Unlock()
 	return vms[i], true, nil
 }
@@ -2022,6 +2037,37 @@ func (f *fakeEngine) DialReader(_ context.Context, vsockSocket string) (net.Conn
 }
 
 func (f *fakeEngine) CheckMigrateSupport(context.Context) error { return f.migrateSupportErr }
+
+func (f *fakeEngine) CheckBalloonSupport(context.Context) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.balloonChecks++
+	return f.balloonSupportErr
+}
+
+func (f *fakeEngine) Balloon(_ context.Context, vmName, target string) (types.VMBalloon, error) {
+	f.mu.Lock()
+	f.balloonCalls = append(f.balloonCalls, fmt.Sprintf("%s %s after %d hibernates", vmName, target, len(f.hibernates)))
+	stall := f.balloonStall
+	f.mu.Unlock()
+	if stall != nil {
+		<-stall
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.balloonErr != nil {
+		return types.VMBalloon{}, f.balloonErr
+	}
+	b := types.VMBalloon{Default: fakeBalloonDefault}
+	if pct, ok := strings.CutSuffix(target, "%"); ok {
+		n, _ := strconv.ParseInt(pct, 10, 64)
+		b.Target = 4 * fakeBalloonDefault * n / 100
+	} else {
+		b.Target, _ = strconv.ParseInt(target, 10, 64)
+	}
+	f.balloons[vmName] = b
+	return b, nil
+}
 
 func (f *fakeEngine) MigrateCapture(_ context.Context, vmName, series string, final bool) (types.MigrateRound, error) {
 	f.mu.Lock()

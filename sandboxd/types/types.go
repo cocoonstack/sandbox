@@ -47,6 +47,10 @@ const (
 	VMMRestartCold VMMRestart = "cold"
 	VMMRestartNone VMMRestart = "none"
 
+	BalloonInflated    BalloonState = "inflated"
+	BalloonUnknown     BalloonState = "unknown"
+	BalloonUnsupported BalloonState = "unsupported"
+
 	TemplateRootScope = "*"
 
 	maxMetadataPairs      = 16
@@ -255,6 +259,9 @@ func (l EgressLimit) Validate() error {
 	return nil
 }
 
+// BalloonState is what the node knows of a VM's balloon target; empty means the boot default.
+type BalloonState string
+
 // envView is an immutable env with its inject entries in name order.
 type envView struct {
 	env     Env
@@ -359,6 +366,13 @@ type Sandbox struct {
 	Replicated bool `json:"-"`
 
 	ArchiveRetryAt time.Time `json:"-"`
+
+	// Balloon, BalloonTarget (the idle target applied), BalloonDefault (the boot target in bytes), BalloonRetryAt and BalloonBusy (a call in flight) are guarded by the manager mutex.
+	Balloon        BalloonState `json:"-"`
+	BalloonTarget  string       `json:"-"`
+	BalloonDefault int64        `json:"-"`
+	BalloonRetryAt time.Time    `json:"-"`
+	BalloonBusy    bool         `json:"-"`
 
 	// lastActivity is unix-nanos of the last data-plane connection, stamped lock-free.
 	lastActivity atomic.Int64
@@ -484,6 +498,13 @@ type VMDevices struct {
 	Disks []VMDisk `json:"disks,omitempty"`
 }
 
+// VMBalloon is a VM's balloon target, the bytes it holds now when the hypervisor reports them, and its boot target.
+type VMBalloon struct {
+	Target  int64 `json:"target"`
+	Actual  int64 `json:"actual,omitzero"`
+	Default int64 `json:"default"`
+}
+
 // VMRecord is the subset of cocoon's VM records the control plane reads.
 type VMRecord struct {
 	State           string        `json:"state"`
@@ -492,6 +513,7 @@ type VMRecord struct {
 	NetworkConfigs  []VMNetConfig `json:"network_configs,omitempty"`
 	Config          VMConfig      `json:"config"`
 	AttachedDevices VMDevices     `json:"attached_devices,omitzero"`
+	Balloon         *VMBalloon    `json:"balloon,omitempty"`
 }
 
 // TapDevice returns the first NIC's host tap; empty when the record carries none.

@@ -142,6 +142,14 @@ func (f *fakeEngine) CheckMigrateSupport(context.Context) error {
 	return errors.New("the e2e engine does not migrate")
 }
 
+func (f *fakeEngine) CheckBalloonSupport(context.Context) error {
+	return errors.New("the e2e engine has no balloon")
+}
+
+func (f *fakeEngine) Balloon(context.Context, string, string) (types.VMBalloon, error) {
+	return types.VMBalloon{}, errors.New("the e2e engine has no balloon")
+}
+
 func (f *fakeEngine) MigrateCapture(context.Context, string, string, bool) (types.MigrateRound, error) {
 	return types.MigrateRound{}, errors.New("the e2e engine does not migrate")
 }
