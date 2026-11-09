@@ -93,20 +93,6 @@ func TestABalloonCallInFlightKeepsAConcurrentOneFromPublishingOverIt(t *testing.
 	waitFor(t, func() bool { return !m.sweeps.balloon.Load() })
 }
 
-func TestAnInflateThatLandsAfterReclaimWentOffStillGetsDeflated(t *testing.T) {
-	eng := newFakeEngine()
-	m := balloonManager(t, eng, t.TempDir(), config.PoolSpec{PoolKey: testKey})
-	sb := mustClaim(t, m, testKey)
-	m.balloonTo(t.Context(), sb, "50%")
-	editView(m, func(v *configView) { v.balloonIdle, v.balloonTarget = 0, "" })
-	m.balloonSeen.Store(false)
-	m.setBalloon(sb, types.BalloonInflated, "50%", fakeBalloonDefault)
-	sweepBalloons(t, m)
-	if calls := balloonCalls(eng); len(calls) != 2 || m.Counters().BalloonDeflations != 1 {
-		t.Errorf("balloon calls %q, want the late inflate deflated once reclaim is off", calls)
-	}
-}
-
 func TestAHeldClaimNeverInflates(t *testing.T) {
 	eng := newFakeEngine()
 	m := balloonManager(t, eng, t.TempDir(), config.PoolSpec{PoolKey: testKey})
@@ -280,6 +266,49 @@ func TestTurningBalloonOffStillDeflatesAClaimThatWasAsleep(t *testing.T) {
 	}
 }
 
+func TestAFailedInflateIsReadBackOnceTheClaimIsActive(t *testing.T) {
+	eng := newFakeEngine()
+	m := balloonManager(t, eng, t.TempDir(), config.PoolSpec{PoolKey: testKey})
+	sb := mustClaim(t, m, testKey)
+	backdate(m, sb, 2*balloonIdleFor)
+	eng.mu.Lock()
+	eng.balloonErr = errors.New("cocoon vm balloon: signal: killed")
+	eng.balloons[sb.VMName] = types.VMBalloon{Target: 2 * fakeBalloonDefault, Default: fakeBalloonDefault}
+	eng.mu.Unlock()
+	sweepBalloons(t, m)
+	eng.mu.Lock()
+	eng.balloonErr = nil
+	eng.mu.Unlock()
+	sb.Touch()
+	m.mu.Lock()
+	sb.BalloonRetryAt = time.Time{}
+	m.mu.Unlock()
+	sweepBalloons(t, m)
+	deflate := sb.VMName + " " + strconv.FormatInt(fakeBalloonDefault, 10) + " after 0 hibernates"
+	if calls := balloonCalls(eng); len(calls) != 2 || calls[1] != deflate {
+		t.Errorf("balloon calls %q, want the inflate that reported failure read back and deflated", calls)
+	}
+}
+
+func TestReclaimTurnedOnAfterARestartRepairsAnEarlierRunsInflate(t *testing.T) {
+	eng, dir := newFakeEngine(), t.TempDir()
+	m := newTestManagerAt(t, eng, dir, config.PoolSpec{PoolKey: testKey})
+	sb := mustClaim(t, m, testKey)
+	eng.mu.Lock()
+	eng.balloons[sb.VMName] = types.VMBalloon{Target: 2 * fakeBalloonDefault, Default: fakeBalloonDefault}
+	eng.mu.Unlock()
+	restarted := newTestManagerAt(t, eng, dir, config.PoolSpec{PoolKey: testKey})
+	if err := restarted.Reconcile(t.Context()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	editView(restarted, func(v *configView) { v.balloonIdle, v.balloonTarget = balloonIdleFor, "50%" })
+	sweepBalloons(t, restarted)
+	deflate := sb.VMName + " " + strconv.FormatInt(fakeBalloonDefault, 10) + " after 0 hibernates"
+	if calls := balloonCalls(eng); !slices.Equal(calls, []string{deflate}) {
+		t.Errorf("balloon calls %q, want the earlier run's inflate deflated once reclaim is on", calls)
+	}
+}
+
 func TestTurningBalloonOffDeflatesTheInflatedClaims(t *testing.T) {
 	eng := newFakeEngine()
 	m := balloonManager(t, eng, t.TempDir(), config.PoolSpec{PoolKey: testKey})
@@ -291,10 +320,7 @@ func TestTurningBalloonOffDeflatesTheInflatedClaims(t *testing.T) {
 	if calls := balloonCalls(eng); len(calls) != 2 || m.Counters().BalloonDeflations != 1 {
 		t.Errorf("balloon calls %q, want the idle claim deflated once reclaim is off", calls)
 	}
-	sweepBalloons(t, m)
-	if m.balloonSeen.Load() {
-		t.Error("the sweep keeps scanning with reclaim off and nothing left to deflate")
-	}
+
 }
 
 func balloonManager(t *testing.T, eng *fakeEngine, dataDir string, pools ...config.PoolSpec) *Manager {

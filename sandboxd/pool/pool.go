@@ -303,7 +303,7 @@ type Manager struct {
 	configSeedHash string // config pools' hash, to warn when a file edit is overridden
 
 	sweeps struct{ idle, liveness, archive, archiveDelete, orphan, held, ckpt, gen, balloon atomic.Bool }
-	// balloonSeen marks a process that has run with balloon reclaim on; balloonReady caches the cocoon check.
+	// balloonSeen marks a process that has run with balloon reclaim on, so turning it off still deflates; balloonReady caches the cocoon check.
 	balloonSeen  atomic.Bool
 	balloonReady func() bool
 

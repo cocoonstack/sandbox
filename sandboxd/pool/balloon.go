@@ -34,16 +34,11 @@ func (m *Manager) balloonOnce(ctx context.Context) {
 		}
 		v, now := m.view.Load(), time.Now()
 		var due []*types.Sandbox
-		pending := false
 		m.mu.Lock()
 		for _, sb := range m.claimed {
-			pending = pending || sb.Balloon == types.BalloonInflated || sb.Balloon == types.BalloonUnknown
 			if balloonDue(sb, balloonWant(sb, v, now)) && !m.balloonSkipLocked(sb) {
 				due = append(due, sb)
 			}
-		}
-		if v.balloonIdle == 0 && !pending {
-			m.balloonSeen.Store(false)
 		}
 		m.mu.Unlock()
 		m.runBounded(ctx, len(due), func(ctx context.Context, i int) {
@@ -81,7 +76,7 @@ func (m *Manager) balloonTo(ctx context.Context, sb *types.Sandbox, want string)
 		rec, ok, err := m.eng.Inspect(ctx, vm)
 		switch {
 		case err != nil || !ok:
-			m.balloonFailed(sb)
+			m.balloonFailed(sb, false)
 			logger.Warnf(ctx, "inspect balloon of %s: found %t, %v", sb.ID, ok, err)
 			return
 		case rec.Balloon == nil:
@@ -98,7 +93,7 @@ func (m *Manager) balloonTo(ctx context.Context, sb *types.Sandbox, want string)
 	case errors.Is(err, engine.ErrBalloonUnsupported):
 		m.setBalloon(sb, types.BalloonUnsupported, "", 0)
 	case err != nil:
-		m.balloonFailed(sb)
+		m.balloonFailed(sb, want != "")
 		logger.Warnf(ctx, "balloon %s to %s: %v", sb.ID, target, err)
 	case want != "":
 		m.counters.balloonInflations.Add(1)
@@ -111,9 +106,7 @@ func (m *Manager) balloonTo(ctx context.Context, sb *types.Sandbox, want string)
 
 // forgetBalloonLocked marks a claim another run or node may have inflated, so the sweep reads its target.
 func (m *Manager) forgetBalloonLocked(sb *types.Sandbox) {
-	if m.view.Load().balloonIdle > 0 {
-		sb.Balloon = types.BalloonUnknown
-	}
+	sb.Balloon = types.BalloonUnknown
 }
 
 func (m *Manager) checkBalloon() bool {
@@ -125,20 +118,20 @@ func (m *Manager) checkBalloon() bool {
 	return true
 }
 
-func (m *Manager) balloonFailed(sb *types.Sandbox) {
+func (m *Manager) balloonFailed(sb *types.Sandbox, inflate bool) {
 	m.counters.balloonFailures.Add(1)
 	m.mu.Lock()
 	sb.BalloonRetryAt = time.Now().Add(balloonRetryDelay)
+	if inflate {
+		sb.Balloon = types.BalloonUnknown
+	}
 	m.mu.Unlock()
 }
 
 func (m *Manager) setBalloon(sb *types.Sandbox, state types.BalloonState, target string, def int64) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	sb.Balloon, sb.BalloonTarget, sb.BalloonDefault = state, target, def
-	if state == types.BalloonInflated {
-		m.balloonSeen.Store(true)
-	}
+	m.mu.Unlock()
 }
 
 func (m *Manager) balloonSkipLocked(sb *types.Sandbox) bool {
