@@ -1,12 +1,14 @@
 package pool
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -14,6 +16,7 @@ import (
 	"github.com/docker/go-units"
 
 	"github.com/cocoonstack/sandbox/sandboxd/config"
+	"github.com/cocoonstack/sandbox/sandboxd/store"
 )
 
 func TestMemoryLimitCrossings(t *testing.T) {
@@ -232,6 +235,31 @@ func TestAnArchivedWakeNoPeerAdoptsRunsOnTheSqueezedOwner(t *testing.T) {
 	}
 }
 
+func TestAFallbackWakeCountsOnlyOnceItWakes(t *testing.T) {
+	c := newFailoverCluster(t)
+	a, b := c.pair(t)
+	sb := mustClaim(t, a, testKey)
+	mustArchive(t, a, sb)
+	a.memoryLow.Store(true)
+	b.memoryLow.Store(true)
+	failing := &failingFetchStore{Store: a.ckpts}
+	failing.fail.Store(true)
+	a.ckpts = failing
+	if err := wakeClaim(t, a, sb); err == nil {
+		t.Fatal("fallback wake with a failing fetch succeeded")
+	}
+	if got := a.Counters().WakeMemoryFallbacks; got != 0 {
+		t.Errorf("fallbacks %d after a failed wake, want 0", got)
+	}
+	failing.fail.Store(false)
+	if err := wakeClaim(t, a, sb); err != nil {
+		t.Fatalf("fallback wake retried: %v", err)
+	}
+	if got := a.Counters(); got.WakeMemoryFallbacks != 1 || got.Unarchives != 1 {
+		t.Errorf("fallbacks %d unarchives %d after the retry, want 1 1", got.WakeMemoryFallbacks, got.Unarchives)
+	}
+}
+
 func TestASqueezedNodeAdoptsForRecoveryButNotForAWake(t *testing.T) {
 	c := newFailoverCluster(t)
 	a, b := c.pair(t)
@@ -303,4 +331,16 @@ func observeMeminfo(t *testing.T, m *Manager, anon, swap int64) {
 		t.Fatalf("write meminfo: %v", err)
 	}
 	m.checkMemory(t.Context())
+}
+
+type failingFetchStore struct {
+	store.Store
+	fail atomic.Bool
+}
+
+func (f *failingFetchStore) Fetch(ctx context.Context, id string) (string, []byte, string, error) {
+	if f.fail.Load() {
+		return "", nil, "", errors.New("fetch failed")
+	}
+	return f.Store.Fetch(ctx, id)
 }
