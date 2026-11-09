@@ -230,7 +230,7 @@ func TestEveryClaimScopedUsageEventCarriesTheTenant(t *testing.T) {
 }
 
 func TestEveryEventThatMovesTheDeadlineStatesIt(t *testing.T) {
-	m := newTestManager(t, newFakeEngine(), archivePool(3600))
+	m := newTestManager(t, newFakeEngine(), archivePool(keepAnHour))
 	ctx := t.Context()
 	sb := mustClaim(t, m, testKey)
 	cred := Cred{Token: sb.Token}
@@ -261,16 +261,16 @@ func TestEveryEventThatMovesTheDeadlineStatesIt(t *testing.T) {
 }
 
 func TestAPurgeReapStatesTheRetentionEnd(t *testing.T) {
-	m := newTestManager(t, newFakeEngine(), archivePool(3600))
+	m := newTestManager(t, newFakeEngine(), archivePool(keepAnHour))
 	sb := mustClaim(t, m, testKey)
 	mustArchive(t, m, sb)
 	expire(m, sb)
 	want := m.deadlineOf(sb)
 	m.reapOnce(t.Context())
-	waitFor(t, func() bool { return strings.HasSuffix(usageEventsOf(t, m, sb.ID), ",reap") })
+	waitFor(t, func() bool { return strings.HasSuffix(usageEventsOf(t, m, sb.ID), ",reap,archive_delete") })
 	evs := usageJournal(t, m)
-	if last := evs[len(evs)-1]; !last.Deadline.Equal(want) {
-		t.Errorf("purge reap deadline %v, want %v", last.Deadline, want)
+	if reap := evs[len(evs)-2]; reap.Event != "reap" || !reap.Deadline.Equal(want) {
+		t.Errorf("purge reap %s deadline %v, want reap at %v", reap.Event, reap.Deadline, want)
 	}
 }
 
@@ -287,7 +287,7 @@ func TestAnArchiveKeptForeverStatesNoDeadline(t *testing.T) {
 func TestArchiveEventPrecedesAWakeDuringItsTeardown(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		eng := newFakeEngine()
-		m := newTestManager(t, eng, archivePool(3600))
+		m := newTestManager(t, eng, archivePool(keepAnHour))
 		ctx := t.Context()
 		sb := mustClaim(t, m, testKey)
 		hibernateClaim(t, m, sb)

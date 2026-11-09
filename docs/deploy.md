@@ -656,7 +656,7 @@ golden fail the same way, it is retired again at most once every 30 s.
 
 The systemd unit is
 [`packaging/sandboxd.service`](https://github.com/cocoonstack/sandbox/blob/main/packaging/sandboxd.service);
-install it as shipped. Its `KillMode` and `TimeoutStopSec` are explained below.
+install it as shipped. The unit runs `/usr/local/bin/sandboxd -config /etc/sandboxd/config.json`, and its `KillMode` and `TimeoutStopSec` are explained below.
 `LimitCORE=0` keeps a crash from writing sandboxd's memory, which holds every
 running claim's host-only env values, to a core file. For the same reason,
 run sandboxd hosts with swap off or encrypted.
@@ -1148,7 +1148,7 @@ all at once or not at all. Every field falls into one of three classes:
   - per pool: `egress`, `warmup`, `capture_trim`, `storage`, `reader`, `egress_upstream_env`, `tun`, for existing keys and for keys new in the file;
   - `tun`: `exits`, `mtu`, `port` and `limits`; its `subnet`, `listen`, `vni`, `senders` and `reuse_after_seconds`, and adding or removing the block, need a restart;
   - `egress_classes`: each class's `egress` and `egress_upstream_env`;
-  - node-wide: `egress_internal_allow`, `secrets`, `egress_upstream`, `egress_usage_bytes`, `egress_usage_interval_seconds`, `egress_conn_rate`, `disk_reserve`, `memory_limit`, `max_claims`, `max_running`, `move_concurrency`, `max_fork_count`, `release_delay_seconds`, `vmm_restart`, `sync_claims`, `checkpoint_ttl_hours`, and the unpooled defaults `idle_hibernate_seconds`, `archive_after_seconds` and `archive_delete_after_seconds`.
+  - node-wide: `egress_internal_allow`, `secrets`, `egress_upstream`, `egress_usage_bytes`, `egress_usage_interval_seconds`, `egress_conn_rate`, `disk_reserve`, `memory_limit`, `balloon`, `max_claims`, `max_running`, `move_concurrency`, `max_fork_count`, `release_delay_seconds`, `vmm_restart`, `sync_claims`, `checkpoint_ttl_hours`, and the unpooled defaults `idle_hibernate_seconds`, `archive_after_seconds` and `archive_delete_after_seconds`.
 - **Left to their API**: a pool's targets (`warm`, `warm_max`, idle and archive
   durations) belong to `PUT /v1/pools`. A reload never changes them and lists
   them as `ignored`. A pool key new in the file gets its settings at once and stays

@@ -11,8 +11,9 @@ implementations of the silkd protocol:
 
 `req_*.json` are client→server frames, `resp_*.json` server→client. A frame
 that the Go side cannot round-trip, or that the Rust side cannot parse (a
-request) or round-trip (a response), is a protocol drift bug. The Rust side also
-pins the corpus size, so adding a verb without its fixture fails CI.
+request) or round-trip (a response), is a protocol drift bug. The Go and Rust
+tests pin the corpus size, and the Go test checks that every verb it decodes has
+a fixture, so adding a verb without its fixture fails CI.
 
 `enums.json` pins each wire enum's full value set (error/event/file kinds,
 git branch actions). Frame fixtures carry only one representative value per

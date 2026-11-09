@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -25,7 +26,7 @@ const (
 
 func TestArchivePublishWindowPinsCheckpoint(t *testing.T) {
 	eng := newFakeEngine()
-	m := newTestManager(t, eng, archivePool(3600))
+	m := newTestManager(t, eng, archivePool(keepAnHour))
 	sb := mustClaim(t, m, testKey)
 	hibernateClaim(t, m, sb)
 	stall := &stallingStore{Store: m.ckpts, published: make(chan string, 1), release: make(chan struct{})}
@@ -52,7 +53,7 @@ func TestArchivePublishWindowPinsCheckpoint(t *testing.T) {
 
 func TestArchivePublishesUnderTheSandboxLineage(t *testing.T) {
 	eng := newFakeEngine()
-	m := newTestManager(t, eng, archivePool(3600))
+	m := newTestManager(t, eng, archivePool(keepAnHour))
 	sb := mustClaim(t, m, testKey)
 	hibernateClaim(t, m, sb)
 	rec := &lineageStore{Store: m.ckpts}
@@ -67,7 +68,7 @@ func TestArchivePublishesUnderTheSandboxLineage(t *testing.T) {
 
 func TestArchiveWakeRehibernateWindowAborts(t *testing.T) {
 	eng := newFakeEngine()
-	m := newTestManager(t, eng, archivePool(3600))
+	m := newTestManager(t, eng, archivePool(keepAnHour))
 	sb := mustClaim(t, m, testKey)
 	hibernateClaim(t, m, sb)
 	stall := &stallingStore{Store: m.ckpts, published: make(chan string, 1), release: make(chan struct{})}
@@ -110,7 +111,7 @@ func TestArchiveWakeRehibernateWindowAborts(t *testing.T) {
 
 func TestArchiveNeverCapturesAGuestThatWokeBeforeItsExport(t *testing.T) {
 	eng := newFakeEngine()
-	m := newTestManager(t, eng, archivePool(3600))
+	m := newTestManager(t, eng, archivePool(keepAnHour))
 	sb := mustClaim(t, m, testKey)
 	hibernateClaim(t, m, sb)
 	m.ckpts = &stagingStore{Store: m.ckpts, onStage: func() {
@@ -136,7 +137,7 @@ func TestArchiveCkHiddenAcrossNodes(t *testing.T) {
 	mkMgr := func() *Manager {
 		cfg := &config.Config{
 			DataDir: t.TempDir(), CheckpointDir: shared,
-			Pools: []config.PoolSpec{archivePool(3600)},
+			Pools: []config.PoolSpec{archivePool(keepAnHour)},
 		}
 		return mustManager(t, cfg, newFakeEngine())
 	}
@@ -185,7 +186,7 @@ func TestReconcileReclaimsOrphanArchiveCk(t *testing.T) {
 
 func TestClaimCheckpointRefusesArchive(t *testing.T) {
 	eng := newFakeEngine()
-	m := newTestManager(t, eng, archivePool(3600))
+	m := newTestManager(t, eng, archivePool(keepAnHour))
 	sb := mustClaim(t, m, testKey)
 	mustArchive(t, m, sb)
 
@@ -200,7 +201,7 @@ func TestClaimCheckpointRefusesArchive(t *testing.T) {
 func TestArchiveLifecycleRoundTrip(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		eng := newFakeEngine()
-		m := newTestManager(t, eng, archivePool(3600))
+		m := newTestManager(t, eng, archivePool(keepAnHour))
 		sb := mustClaim(t, m, testKey)
 		id, token, origVM := sb.ID, sb.Token, sb.VMName
 
@@ -251,7 +252,7 @@ func TestArchiveLifecycleRoundTrip(t *testing.T) {
 
 func TestArchivedClaimRefusesCaptureVerbs(t *testing.T) {
 	eng := newFakeEngine()
-	m := newTestManager(t, eng, archivePool(3600))
+	m := newTestManager(t, eng, archivePool(keepAnHour))
 	sb := mustClaim(t, m, testKey)
 	mustArchive(t, m, sb)
 	cred := Cred{Token: sb.Token}
@@ -275,7 +276,7 @@ func TestArchivedClaimRefusesCaptureVerbs(t *testing.T) {
 
 func TestSweepExpiredCheckpointsIsANoopWithoutTTL(t *testing.T) {
 	eng := newFakeEngine()
-	m := newTestManager(t, eng, archivePool(3600))
+	m := newTestManager(t, eng, archivePool(keepAnHour))
 	sb := mustClaim(t, m, testKey)
 	ck, err := m.Checkpoint(t.Context(), sb.ID, Cred{Token: sb.Token}, "", "")
 	if err != nil {
@@ -290,7 +291,7 @@ func TestSweepExpiredCheckpointsIsANoopWithoutTTL(t *testing.T) {
 
 func TestArchiveTTLSweepSparesLiveCheckpoint(t *testing.T) {
 	eng := newFakeEngine()
-	m := newTestManager(t, eng, archivePool(3600))
+	m := newTestManager(t, eng, archivePool(keepAnHour))
 	editView(m, func(v *configView) { v.ckptTTL = time.Nanosecond })
 	sb := mustClaim(t, m, testKey)
 	id, token := sb.ID, sb.Token
@@ -333,7 +334,7 @@ func TestArchiveKeepsForeverWhenDeleteZero(t *testing.T) {
 func TestArchiveRetentionPurge(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		eng := newFakeEngine()
-		m := newTestManager(t, eng, archivePool(3600))
+		m := newTestManager(t, eng, archivePool(keepAnHour))
 		sb := claimTenant(t, m, "acme")
 		mustArchive(t, m, sb)
 		ck := sb.ArchiveCk
@@ -347,8 +348,8 @@ func TestArchiveRetentionPurge(t *testing.T) {
 		if ckExists(t, m, ck) {
 			t.Error("purge did not delete the archived checkpoint")
 		}
-		if got := usageEventsOf(t, m, sb.ID); !strings.HasSuffix(got, "archive,archive_delete,reap") {
-			t.Errorf("events %s, want the purge to close the claim with a reap", got)
+		if got := usageEventsOf(t, m, sb.ID); !strings.HasSuffix(got, "archive,reap,archive_delete") {
+			t.Errorf("events %s, want the purge to end the archived span with its reap", got)
 		}
 
 		m.mu.Lock()
@@ -362,7 +363,7 @@ func TestArchiveRetentionPurge(t *testing.T) {
 
 func TestArchiveWakeRegrantsTheClaimsLease(t *testing.T) {
 	eng := newFakeEngine()
-	m := newTestManager(t, eng, archivePool(3600))
+	m := newTestManager(t, eng, archivePool(keepAnHour))
 	setTenantCaps(t, m, map[string]int{"acme": 0})
 	sb, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{TTL: 2 * time.Hour, Tenant: "acme"})
 	if err != nil {
@@ -380,7 +381,7 @@ func TestArchiveWakeRegrantsTheClaimsLease(t *testing.T) {
 
 func TestReleaseArchivedDeletesCheckpoint(t *testing.T) {
 	eng := newFakeEngine()
-	m := newTestManager(t, eng, archivePool(3600))
+	m := newTestManager(t, eng, archivePool(keepAnHour))
 	sb := mustClaim(t, m, testKey)
 	id, token := sb.ID, sb.Token
 	mustArchive(t, m, sb)
@@ -407,7 +408,7 @@ func TestArchiveDeleteRetryAfterRestart(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				eng := newFakeEngine()
 				dataDir := t.TempDir()
-				m := newTestManagerAt(t, eng, dataDir, archivePool(3600))
+				m := newTestManagerAt(t, eng, dataDir, archivePool(keepAnHour))
 				sb := mustClaim(t, m, testKey)
 				id, token := sb.ID, sb.Token
 				mustArchive(t, m, sb)
@@ -442,7 +443,7 @@ func TestArchiveDeleteRetryAfterRestart(t *testing.T) {
 					t.Fatal("failed deletion did not retain the checkpoint and cleanup marker")
 				}
 
-				m2 := newTestManagerAt(t, eng, dataDir, archivePool(3600))
+				m2 := newTestManagerAt(t, eng, dataDir, archivePool(keepAnHour))
 				if err := m2.Reconcile(t.Context()); err != nil {
 					t.Fatalf("Reconcile: %v", err)
 				}
@@ -459,7 +460,7 @@ func TestArchiveDeleteRetryAfterRestart(t *testing.T) {
 
 func TestArchiveWakeDeleteFailureRetries(t *testing.T) {
 	eng := newFakeEngine()
-	m := newTestManager(t, eng, archivePool(3600))
+	m := newTestManager(t, eng, archivePool(keepAnHour))
 	sb := mustClaim(t, m, testKey)
 	mustArchive(t, m, sb)
 	ck := sb.ArchiveCk
@@ -491,7 +492,7 @@ func TestArchiveWakeDeleteFailureRetries(t *testing.T) {
 
 func TestArchiveWakeRequiresDeleteMarker(t *testing.T) {
 	eng := newFakeEngine()
-	m := newTestManager(t, eng, archivePool(3600))
+	m := newTestManager(t, eng, archivePool(keepAnHour))
 	sb := mustClaim(t, m, testKey)
 	mustArchive(t, m, sb)
 	ck := sb.ArchiveCk
@@ -533,7 +534,7 @@ func TestArchiveRemovalCommitPinsCheckpoint(t *testing.T) {
 	for _, action := range []string{testArchiveRelease, testArchiveReap} {
 		t.Run(action, func(t *testing.T) {
 			eng := newFakeEngine()
-			m := newTestManager(t, eng, archivePool(3600))
+			m := newTestManager(t, eng, archivePool(keepAnHour))
 			sb := mustClaim(t, m, testKey)
 			mustArchive(t, m, sb)
 			id, token, ck := sb.ID, sb.Token, sb.ArchiveCk
@@ -592,7 +593,7 @@ func TestArchiveRemovalRequiresDeleteMarker(t *testing.T) {
 	for _, action := range []string{testArchiveRelease, testArchiveReap} {
 		t.Run(action, func(t *testing.T) {
 			eng := newFakeEngine()
-			m := newTestManager(t, eng, archivePool(3600))
+			m := newTestManager(t, eng, archivePool(keepAnHour))
 			sb := mustClaim(t, m, testKey)
 			id, token := sb.ID, sb.Token
 			mustArchive(t, m, sb)
@@ -633,7 +634,7 @@ func TestArchiveRemovalRequiresDeleteMarker(t *testing.T) {
 
 func TestArchiveDeleteRetryRechecksWakeRollback(t *testing.T) {
 	eng := newFakeEngine()
-	m := newTestManager(t, eng, archivePool(3600))
+	m := newTestManager(t, eng, archivePool(keepAnHour))
 	sb := mustClaim(t, m, testKey)
 	mustArchive(t, m, sb)
 	id, token, ck := sb.ID, sb.Token, sb.ArchiveCk
@@ -690,7 +691,7 @@ func TestArchiveDeleteRetryRechecksWakeRollback(t *testing.T) {
 func TestIdleOnceSkipsArchived(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		eng := newFakeEngine()
-		m := newTestManager(t, eng, archivePool(3600))
+		m := newTestManager(t, eng, archivePool(keepAnHour))
 		sb := mustClaim(t, m, testKey)
 		mustArchive(t, m, sb)
 		hibBefore := eng.hibernateCount()
@@ -708,7 +709,7 @@ func TestIdleOnceSkipsArchived(t *testing.T) {
 
 func TestDeleteCheckpointCannotBrickArchive(t *testing.T) {
 	eng := newFakeEngine()
-	m := newTestManager(t, eng, archivePool(3600))
+	m := newTestManager(t, eng, archivePool(keepAnHour))
 	sb := mustClaim(t, m, testKey)
 	id, token := sb.ID, sb.Token
 	mustArchive(t, m, sb)
@@ -731,7 +732,7 @@ func TestDeleteCheckpointCannotBrickArchive(t *testing.T) {
 func TestArchivePersistFailureRollsBack(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		eng := newFakeEngine()
-		m := newTestManager(t, eng, archivePool(3600))
+		m := newTestManager(t, eng, archivePool(keepAnHour))
 		sb := mustClaim(t, m, testKey)
 		hibernateClaim(t, m, sb)
 		snap, vm := sb.HibernateSnap, sb.VMName
@@ -804,7 +805,7 @@ func TestArchivedClaimRollsBackOnPersistFailure(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
-				m := newTestManager(t, newFakeEngine(), archivePool(3600))
+				m := newTestManager(t, newFakeEngine(), archivePool(keepAnHour))
 				sb := mustClaim(t, m, testKey)
 				mustArchive(t, m, sb)
 				ck := sb.ArchiveCk
@@ -826,7 +827,7 @@ func TestArchivedClaimRollsBackOnPersistFailure(t *testing.T) {
 func TestArchiveOnceSkipsInFlight(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		eng := newFakeEngine()
-		m := newTestManager(t, eng, archivePool(3600))
+		m := newTestManager(t, eng, archivePool(keepAnHour))
 		sb := mustClaim(t, m, testKey)
 		hibernateClaim(t, m, sb)
 		backdate(m, sb, time.Hour)
@@ -849,7 +850,7 @@ func TestArchiveOnceSkipsInFlight(t *testing.T) {
 
 func TestArchiveWakeEvictsRecLock(t *testing.T) {
 	eng := newFakeEngine()
-	m := newTestManager(t, eng, archivePool(3600))
+	m := newTestManager(t, eng, archivePool(keepAnHour))
 	sb := mustClaim(t, m, testKey)
 	hibernateClaim(t, m, sb)
 	base := lockCount(m)
@@ -884,8 +885,13 @@ func TestMarkArchiveCksKeepsOnlyTheIDsItCouldNotMark(t *testing.T) {
 func BenchmarkReapPurgesArchivedClaims(b *testing.B) {
 	m := newTestManager(b, newFakeEngine())
 	b.ReportAllocs()
+	var purged uint64
 	for b.Loop() {
 		b.StopTimer()
+		for m.counters.reaps.Load() < purged {
+			runtime.Gosched()
+		}
+		purged += 500
 		past := time.Now().Add(-time.Minute)
 		m.mu.Lock()
 		for i := range 500 {

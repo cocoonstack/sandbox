@@ -2535,19 +2535,6 @@ func (r *hookRegistry) write(do func() (int64, error)) (int64, error) {
 	return epoch, err
 }
 
-func fire(hook *func()) {
-	if h := *hook; h != nil {
-		*hook = nil
-		h()
-	}
-}
-
-func lost(flag *bool) bool {
-	was := *flag
-	*flag = false
-	return was
-}
-
 type unreadableStore struct {
 	store.Store
 }
@@ -2582,6 +2569,19 @@ func (r *countingRegistry) Rows(ctx context.Context, ids []string) (map[string]a
 func (r *countingRegistry) Sweepable(ctx context.Context, now time.Time, owner string) ([]archives.Record, error) {
 	r.sweepable.Add(1)
 	return r.Registry.Sweepable(ctx, now, owner)
+}
+
+func fire(hook *func()) {
+	if h := *hook; h != nil {
+		*hook = nil
+		h()
+	}
+}
+
+func lost(flag *bool) bool {
+	was := *flag
+	*flag = false
+	return was
 }
 
 func assertReleasedForGood(t *testing.T, c *failoverCluster, sb *types.Sandbox, nodes ...*Manager) {

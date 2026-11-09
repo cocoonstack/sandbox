@@ -98,7 +98,7 @@ func TestMemoryOverLimitKeepsFreeingAndOwnedWakesWorking(t *testing.T) {
 
 func TestMemoryOverLimitStillArchives(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		m := newTestManager(t, newFakeEngine(), archivePool(3600))
+		m := newTestManager(t, newFakeEngine(), archivePool(keepAnHour))
 		sb := mustClaim(t, m, testKey)
 		m.memoryLow.Store(true)
 

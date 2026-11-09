@@ -912,6 +912,20 @@ func TestReconcileWithTheRegistryDownRecordsOnlyTheEndNoOtherNodeCanHold(t *test
 	if got, want := usageEventsOf(t, restarted, plain.ID), "claim,reap"; got != want {
 		t.Errorf("events of the unreplicated claim %s, want %s", got, want)
 	}
+
+	restarted.sweepOrphanArchives(t.Context())
+	rec, ok, err := c.reg.Get(t.Context(), replicated.ID)
+	if err != nil || !ok || rec.Deadline.IsZero() {
+		t.Fatalf("row once the registry returns: %+v %t %v, want it kept with a retention deadline", rec, ok, err)
+	}
+	rec.Deadline = time.Now().Add(-time.Second)
+	if _, err = c.reg.Replace(t.Context(), rec, rec.Epoch); err != nil {
+		t.Fatalf("age the row: %v", err)
+	}
+	restarted.sweepOrphanArchives(t.Context())
+	if got, want := usageEventsOf(t, restarted, replicated.ID), "claim,archive_delete"; got != want {
+		t.Errorf("events after the retention purge %s, want %s: a reap would end the running span at the retention deadline", got, want)
+	}
 }
 
 func TestReplicaRestartDropsAClaimAdoptedElsewhere(t *testing.T) {

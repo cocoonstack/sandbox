@@ -66,9 +66,6 @@ func (m *Manager) balloonTo(ctx context.Context, sb *types.Sandbox, want string)
 	if skip || !due {
 		return
 	}
-	if want != "" {
-		m.balloonSeen.Store(true)
-	}
 	defer func() {
 		m.mu.Lock()
 		sb.BalloonBusy = false
@@ -142,7 +139,7 @@ func (m *Manager) balloonSkipLocked(sb *types.Sandbox) bool {
 		sb.Balloon == types.BalloonUnsupported || sb.BalloonBusy || time.Now().Before(sb.BalloonRetryAt) || m.midMoveLocked(sb)
 }
 
-// balloonDue reports whether sb's balloon needs a call to reach want, an idle target, or the boot target when want is empty; callers hold m.mu.
+// balloonDue reports whether sb's balloon needs a call to reach want; callers hold m.mu.
 func balloonDue(sb *types.Sandbox, want string) bool {
 	if want != "" {
 		return sb.Balloon != types.BalloonInflated || sb.BalloonTarget != want

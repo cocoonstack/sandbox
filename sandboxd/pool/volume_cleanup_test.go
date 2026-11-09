@@ -1,7 +1,6 @@
 package pool
 
 import (
-	"context"
 	"errors"
 	"sync"
 	"testing"
@@ -23,7 +22,7 @@ func TestDispatchedCleanupRetainsCatalogReference(t *testing.T) {
 	if err = m.Release(t.Context(), sb.ID, Cred{Token: sb.Token}); err == nil {
 		t.Fatal("expected survivor")
 	}
-	wg := dispatchBlocked(t.Context(), t, m)
+	wg := dispatchBlocked(t, m)
 	err = m.UnregisterVolume(t.Context(), "data")
 	unblock(m, wg)
 	if !errors.Is(err, ErrVolumeRegistrationConflict) {
@@ -59,12 +58,12 @@ func TestOwnershipTransferReleasesRunningVolumeHoldAfterRemoval(t *testing.T) {
 	}
 }
 
-func dispatchBlocked(ctx context.Context, t *testing.T, m *Manager) *sync.WaitGroup {
+func dispatchBlocked(t *testing.T, m *Manager) *sync.WaitGroup {
 	t.Helper()
 	for range cap(m.maintSem) {
 		m.maintSem <- struct{}{}
 	}
-	wg := m.retryRemovals(ctx)
+	wg := m.retryRemovals(t.Context())
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if len(m.pendingRemovals) != 0 {

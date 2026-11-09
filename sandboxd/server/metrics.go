@@ -40,7 +40,7 @@ func (s *Server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
 	flag("cordoned", "1 while the node is cordoned", g.Cordoned)
 	scalar("evacuating", "claims an evacuation has yet to move to a peer", g.Evacuating)
 	flag("memory_low", "1 while memory_limit refuses claims and refills", g.MemoryLow)
-	scalar("anon_bytes", "node anon memory, 0 when memory_limit has no anon limit", g.AnonBytes)
+	scalar("anon_bytes", "node anon memory plus used swap, 0 when memory_limit has no anon limit", g.AnonBytes)
 	scalar("balloon_inflated", "running claims whose balloon holds the idle target", g.BalloonInflated)
 
 	if tenants := s.mgr.TenantClaims(); len(tenants) > 0 {

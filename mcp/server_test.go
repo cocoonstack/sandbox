@@ -122,10 +122,7 @@ func TestExecKeepsOutputWhenTheGuestDrops(t *testing.T) {
 
 func TestReadFileStopsAtTheCap(t *testing.T) {
 	chunk := `{"type":"data","data":"` + base64.StdEncoding.EncodeToString(make([]byte, 256<<10)) + `"}` + "\n"
-	srv := newTestServer(t, agentRoute(t, func(req string) (string, bool) {
-		if strings.Contains(req, `"op":"fs_stat"`) {
-			return `{"type":"stat","info":{"kind":"file","size":0}}` + "\n", false
-		}
+	srv := newTestServer(t, agentRoute(t, func(string) (string, bool) {
 		return strings.Repeat(chunk, 8) + `{"type":"done"}` + "\n", false
 	}))
 	replies := serveLines(t, srv,
@@ -154,10 +151,7 @@ func TestLogsKeepsAtMostTheCap(t *testing.T) {
 func TestToolRepliesReplaceInvalidUTF8(t *testing.T) {
 	lossy := base64.StdEncoding.EncodeToString([]byte("a\xffb"))
 	srv := newTestServer(t, agentRoute(t, func(req string) (string, bool) {
-		switch {
-		case strings.Contains(req, `"op":"fs_stat"`):
-			return `{"type":"stat","info":{"kind":"file","size":3}}` + "\n", false
-		case strings.Contains(req, `"op":"logs"`):
+		if strings.Contains(req, `"op":"logs"`) {
 			return `{"type":"stdout","data":"` + lossy + `"}` + "\n" + `{"type":"done"}` + "\n", false
 		}
 		return `{"type":"data","data":"` + lossy + `"}` + "\n" + `{"type":"done"}` + "\n", false

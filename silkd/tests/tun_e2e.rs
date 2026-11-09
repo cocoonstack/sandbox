@@ -12,13 +12,12 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use nix::sched::{CloneFlags, unshare};
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
-use tokio::net::{TcpListener, TcpStream, UdpSocket};
-
 use silkd::sysutil;
 use silkd::tun::{
     self, FLAG_ON, Flow, HELLO_LEN, Hello, Io, PEER_ADDR, Tun, VERSION, VNET_HDR_LEN,
 };
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::net::{TcpListener, TcpStream, UdpSocket};
 
 const CLAIM_ADDR: Ipv4Addr = Ipv4Addr::new(100, 65, 0, 7);
 const UPLOAD: u16 = 5001;
@@ -63,9 +62,10 @@ fn tcp_udp_and_gso_cross_a_rewriting_host() {
     for io in [Io::Uring, Io::Epoll] {
         let up = Arc::new(Stats::default());
         let down = Arc::new(Stats::default());
-        let (seen, accepts) = with_link(io, true, Some((up.clone(), down.clone())), |_| {
-            guest_workload()
-        });
+        let (seen, accepts) =
+            with_link(io, true, Some((Arc::clone(&up), Arc::clone(&down))), |_| {
+                guest_workload()
+            });
         assert_eq!(seen.upload_peer, CLAIM_ADDR.to_string(), "{io:?}");
         assert_eq!(seen.echo_peers, vec![CLAIM_ADDR.to_string(); 16], "{io:?}");
         assert_eq!(seen.downloaded, BULK, "{io:?}");
@@ -107,9 +107,12 @@ fn full_checksums_cross_when_offloads_are_off() {
     for io in [Io::Uring, Io::Epoll] {
         let up = Arc::new(Stats::default());
         let down = Arc::new(Stats::default());
-        let (seen, _) = with_link(io, false, Some((up.clone(), down.clone())), |_| {
-            guest_workload()
-        });
+        let (seen, _) = with_link(
+            io,
+            false,
+            Some((Arc::clone(&up), Arc::clone(&down))),
+            |_| guest_workload(),
+        );
         assert_eq!(seen.upload_peer, CLAIM_ADDR.to_string(), "{io:?}");
         assert_eq!(seen.echo_peers, vec![CLAIM_ADDR.to_string(); 16], "{io:?}");
         assert_eq!(seen.downloaded, BULK, "{io:?}");
@@ -226,7 +229,7 @@ fn with_link<T: Send + 'static>(
         io,
         offloads,
         relay_threads.is_empty(),
-        stop.clone(),
+        Arc::clone(&stop),
     );
     let out = in_netns(move || {
         let tun = Tun::open("tun0").unwrap();

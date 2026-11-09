@@ -123,11 +123,6 @@ func (f *fakeSilkd) serve(conn net.Conn) {
 	if json.Unmarshal([]byte(line), &req) != nil {
 		return
 	}
-	if req.Op == "exec" {
-		f.mu.Lock()
-		f.execDetach = append(f.execDetach, req.Detach)
-		f.mu.Unlock()
-	}
 	switch req.Op {
 	case "info":
 		writeFakeSilkdResponse(conn, &wire.InfoResp{Version: "test"})
@@ -140,7 +135,7 @@ func (f *fakeSilkd) serve(conn net.Conn) {
 	case "fs_stat":
 		f.handleStat(conn, req.Path)
 	case "exec":
-		f.handleExec(conn, req.Argv, req.Env)
+		f.handleExec(conn, req.Argv, req.Env, req.Detach)
 	case "tun_up", "tun_down":
 		f.handleTun(conn, req.Op)
 	}
@@ -176,8 +171,9 @@ func (f *fakeSilkd) handleWrite(conn net.Conn, r *bufio.Reader, path string, mod
 	writeFakeSilkdResponse(conn, &wire.Done{})
 }
 
-func (f *fakeSilkd) handleExec(conn net.Conn, argv []string, env map[string]string) {
+func (f *fakeSilkd) handleExec(conn net.Conn, argv []string, env map[string]string, detach bool) {
 	f.mu.Lock()
+	f.execDetach = append(f.execDetach, detach)
 	f.execArgv = argv
 	f.execCalls = append(f.execCalls, argv)
 	f.execEnv = env

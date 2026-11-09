@@ -80,7 +80,7 @@ func (m *Manager) hibernateLocked(ctx context.Context, sb *types.Sandbox) error 
 		return ErrVolumeCapture
 	}
 	if sb.Key.Net == types.NetEgress {
-		// restore resumes the guest inside the call, before sandboxd could re-lock its tap
+		// Restore resumes the guest inside the call, before sandboxd could re-lock its tap
 		return ErrNoEgressHibernate
 	}
 	if err := m.settleCapture(ctx, sb); err != nil {

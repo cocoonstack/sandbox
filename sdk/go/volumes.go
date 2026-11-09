@@ -93,22 +93,22 @@ func (s *Sandbox) volumesAt(ctx context.Context, method, addr string, body []byt
 		return out, err
 	}
 	defer func() { _ = resp.Body.Close() }()
-	var wire struct {
+	var reply struct {
 		VolumesWant *[]Volume      `json:"volumes_want"`
 		Volumes     *[]Volume      `json:"volumes"`
 		States      *[]VolumeState `json:"states"`
 		Converging  *bool          `json:"converging"`
 		Error       string         `json:"error"`
 	}
-	decodeErr := json.UnmarshalRead(resp.Body, &wire)
-	complete := decodeErr == nil && wire.VolumesWant != nil && wire.Volumes != nil && wire.States != nil && wire.Converging != nil
+	decodeErr := json.UnmarshalRead(resp.Body, &reply)
+	complete := decodeErr == nil && reply.VolumesWant != nil && reply.Volumes != nil && reply.States != nil && reply.Converging != nil
 	if complete {
-		out = SandboxVolumesResponse{VolumesWant: *wire.VolumesWant, Volumes: *wire.Volumes, States: *wire.States, Converging: *wire.Converging, Error: wire.Error}
+		out = SandboxVolumesResponse{VolumesWant: *reply.VolumesWant, Volumes: *reply.Volumes, States: *reply.States, Converging: *reply.Converging, Error: reply.Error}
 		s.VolumesWant = slices.Clone(out.VolumesWant)
 		s.Volumes = slices.Clone(out.Volumes)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		failure := &VolumeError{APIError: &APIError{Verb: verb, Status: resp.StatusCode, Message: wire.Error}}
+		failure := &VolumeError{APIError: &APIError{Verb: verb, Status: resp.StatusCode, Message: reply.Error}}
 		if complete {
 			view := out
 			view.VolumesWant, view.Volumes, view.States = slices.Clone(out.VolumesWant), slices.Clone(out.Volumes), slices.Clone(out.States)

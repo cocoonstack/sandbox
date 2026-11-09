@@ -348,7 +348,7 @@ func TestFetchPrunesSupersededGenerationsIdlePastTheGrace(t *testing.T) {
 	}
 	old := time.Now().Add(-store.GenerationGrace - time.Minute)
 	if err := os.Chtimes(first, old, old); err != nil {
-		t.Fatal(err)
+		t.Fatalf("age the first generation: %v", err)
 	}
 	fetchGen(3)
 	if _, err := os.Stat(first); !errors.Is(err, os.ErrNotExist) {
@@ -369,7 +369,7 @@ func TestFetchHitRefreshesTheGenerationsUse(t *testing.T) {
 	}
 	old := time.Now().Add(-2 * store.GenerationGrace)
 	if err = os.Chtimes(filepath.Dir(export), old, old); err != nil {
-		t.Fatal(err)
+		t.Fatalf("age the export: %v", err)
 	}
 	if _, _, _, err = st.Fetch(t.Context(), id); err != nil {
 		t.Fatalf("fetch hit: %v", err)
@@ -541,7 +541,7 @@ func TestPublishDigestedHashesHolesLikeZeros(t *testing.T) {
 func TestPublishDigestedSplitsChunksAtTheFixedBoundary(t *testing.T) {
 	const id = "ck_00000000000000a5"
 	_, st := newFakeStore(t)
-	content := string(bytes.Repeat([]byte{'x'}, int(store.DigestChunkSize))) + "y"
+	content := strings.Repeat("x", int(store.DigestChunkSize)) + "y"
 	staging := stageRecord(t, st, id, metaJSON(id), content)
 	digest, err := storetest.PublishDigested(t.Context(), st, staging, id)
 	if err != nil {
@@ -901,7 +901,11 @@ func TestOnlyALabeledStoreReadsLabelsWhenListing(t *testing.T) {
 		for _, id := range ids {
 			gets += fake.requestCount(http.MethodGet, "ck/"+id+"/"+store.LabelsFile)
 		}
-		if want := map[bool]int{true: len(ids), false: 0}[labeled]; gets != want {
+		want := 0
+		if labeled {
+			want = len(ids)
+		}
+		if gets != want {
 			t.Errorf("labeled=%v: %d label GETs, want %d", labeled, gets, want)
 		}
 	}

@@ -18,7 +18,7 @@ use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio::sync::mpsc;
 
 use common::{
-    FrameLines, FrameWriter, alive, assert_error, b64, connect_with, decode, frames_until, one,
+    Connection, FrameLines, alive, assert_error, b64, connect_with, decode, frames_until, one,
     proc_entry, request, send, type_of, wait_for_path,
 };
 
@@ -47,13 +47,7 @@ async fn read_until(lines: &mut FrameLines, pred: impl Fn(&Value) -> bool) -> Va
     frames_until(lines, pred).await.pop().unwrap()
 }
 
-async fn open_pty(
-    state: &Arc<State>,
-) -> (
-    FrameWriter,
-    FrameLines,
-    tokio::task::JoinHandle<std::io::Result<()>>,
-) {
+async fn open_pty(state: &Arc<State>) -> Connection {
     connect_with(state, json!({"op":"pty_open","cols":80,"rows":24})).await
 }
 

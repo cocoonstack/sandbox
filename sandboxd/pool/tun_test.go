@@ -52,7 +52,7 @@ func TestATunPoolClaimGetsAnAddressAndAPacketDoor(t *testing.T) {
 		t.Error("a claim of a pool without tun has a packet door")
 	}
 	if got := tunVerbsOf(eng); len(got) != 1 {
-		t.Errorf("tun verbs %q, want none for the claim without tun", got)
+		t.Errorf("tun verbs %q, want only the tun claim's up verb", got)
 	}
 }
 
@@ -290,10 +290,10 @@ func TestFlushClaimsPersistsTheLiveTunBytes(t *testing.T) {
 	stream := openStream(t, sb)
 	pkt := udpFrame(netip.MustParseAddr("93.184.216.34"))
 	if _, err := stream.Write(binary.LittleEndian.AppendUint32(nil, uint32(len(pkt)))); err != nil {
-		t.Fatal(err)
+		t.Fatalf("write frame header: %v", err)
 	}
 	if _, err := stream.Write(pkt); err != nil {
-		t.Fatal(err)
+		t.Fatalf("write frame: %v", err)
 	}
 	waitFor(t, func() bool { used, _ := m.out.TunUsed(sb.ID); return used > 0 })
 	mustFlush(t, m)

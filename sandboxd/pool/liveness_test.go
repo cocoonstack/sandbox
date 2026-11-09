@@ -613,7 +613,7 @@ func TestReconcileKeepsRunningClaimsTheHostLost(t *testing.T) {
 }
 
 func TestAVMEventFindsAWokenArchivedClaimByItsNewVM(t *testing.T) {
-	m := newTestManager(t, newFakeEngine(), archivePool(3600))
+	m := newTestManager(t, newFakeEngine(), archivePool(keepAnHour))
 	sb := mustClaim(t, m, testKey)
 	hibernateClaim(t, m, sb)
 	oldVM := sb.VMName

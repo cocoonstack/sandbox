@@ -238,7 +238,7 @@ func (s *Sandbox) run(ctx context.Context, cmd Cmd) (int, error) {
 	defer l.close()
 
 	stdinDone := make(chan struct{})
-	var stdinErr error
+	stdinErr := make(chan error, 1)
 	if cmd.Stdin == nil {
 		// A guest that already answered and closed fails this send; the frames it sent still come back below
 		_ = conn.Send(wire.StdinClose{})
@@ -246,16 +246,15 @@ func (s *Sandbox) run(ctx context.Context, cmd Cmd) (int, error) {
 	} else {
 		go func() {
 			defer close(stdinDone)
-			stdinErr = pumpStdin(conn, cmd.Stdin)
+			pumpStdin(conn, cmd.Stdin, stdinErr)
 		}()
 	}
 
 	pid, code, exited, err := pumpStdio(ctx, conn, cmd.Stdout, cmd.Stderr)
 	// A pump still parked in Read would write into the next RPC, so its connection is not kept
-	pumped := false
 	select {
 	case <-stdinDone:
-		err, pumped = l.done(err), true
+		err = l.done(err)
 	default:
 	}
 	if err != nil {
@@ -269,10 +268,12 @@ func (s *Sandbox) run(ctx context.Context, cmd Cmd) (int, error) {
 	if !exited {
 		return 0, unexpected(&wire.Done{})
 	}
-	if pumped && stdinErr != nil {
-		return int(code), &callerError{fmt.Errorf("read stdin: %w", stdinErr)}
+	select {
+	case err := <-stdinErr:
+		return int(code), &callerError{fmt.Errorf("read stdin: %w", err)}
+	default:
+		return int(code), nil
 	}
-	return int(code), nil
 }
 
 func (s *Sandbox) releaseAt(ctx context.Context, addr string) (found bool, err error) {
@@ -384,21 +385,21 @@ func markGone(err error, id, addr string) error {
 	return err
 }
 
-func pumpStdin(conn *silkd.Conn, r io.Reader) error {
+func pumpStdin(conn *silkd.Conn, r io.Reader, readErr chan<- error) {
 	buf := make([]byte, stdinChunk)
 	for {
 		n, err := r.Read(buf)
 		if n > 0 {
 			if sendErr := conn.Send(&wire.Stdin{Data: buf[:n]}); sendErr != nil {
-				return nil
+				return
 			}
 		}
 		if err != nil {
-			_ = conn.Send(wire.StdinClose{})
-			if errors.Is(err, io.EOF) {
-				return nil
+			if !errors.Is(err, io.EOF) {
+				readErr <- err
 			}
-			return err
+			_ = conn.Send(wire.StdinClose{})
+			return
 		}
 	}
 }

@@ -13,8 +13,8 @@ use tokio::io::AsyncWriteExt;
 use tokio::time::timeout;
 
 use common::{
-    DEADLINE, FrameLines, FrameWriter, alive, assert_error, b64, connect_with, decode,
-    expect_frame, one, send, type_of, under_deadline,
+    Connection, DEADLINE, alive, assert_error, b64, connect_with, decode, expect_frame, one, send,
+    type_of, under_deadline,
 };
 
 const FAKE_SERVER: &str = r#"#!/bin/sh
@@ -54,14 +54,7 @@ async fn started_server(lang: &str, server_body: &str) -> (TempDir, Arc<State>, 
     (env, state, server_id)
 }
 
-async fn lsp_stream(
-    state: &Arc<State>,
-    server_id: &str,
-) -> (
-    FrameWriter,
-    FrameLines,
-    tokio::task::JoinHandle<std::io::Result<()>>,
-) {
+async fn lsp_stream(state: &Arc<State>, server_id: &str) -> Connection {
     let (cw, mut out, handle) =
         connect_with(state, json!({"op":"lsp_request","server_id":server_id})).await;
     expect_frame(&mut out, "ready").await;

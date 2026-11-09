@@ -160,7 +160,7 @@ func (e *Engine) silkdWriteFile(ctx context.Context, vsockSocket, path string, m
 	defer s.close()
 	// A send racing the guest's early answer+close hits EPIPE; prefer the buffered verdict.
 	sendErr := func() error {
-		if serr := s.send(wire.FsWrite{Path: path, Mode: &mode}); serr != nil {
+		if serr := s.send(wire.FsWrite{Path: path, Mode: new(mode)}); serr != nil {
 			return serr
 		}
 		for chunk := range slices.Chunk(data, wire.BulkChunk) {

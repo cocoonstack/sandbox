@@ -211,11 +211,11 @@ func (m *Manager) markMoveStarted(ctx context.Context, id string, epoch int64) {
 }
 
 func (m *Manager) dropMoveIn(ctx context.Context, sb *types.Sandbox) {
+	_ = os.RemoveAll(m.moveDir(sb.ID))
 	if holds, ok := m.forgetClaim(ctx, sb); ok {
 		m.out.Disarm(sb.ID, true)
 		m.removeOrRetry(ctx, sb.VMName, "", volumeTeardown{holds: holds})
 	}
-	_ = os.RemoveAll(m.moveDir(sb.ID))
 }
 
 func (m *Manager) settleMoveIn(ctx context.Context, sb *types.Sandbox) {

@@ -347,7 +347,7 @@ out, err := sb.Exec(ctx, "cat", "/tmp/state")   // sessions & memory intact
 guest does can fall between the snapshot point and the stop. The handle
 stays valid: the first call that reaches the guest restores the VM (adding
 roughly a restore's latency, tens of milliseconds on bare metal). On a node at
-[`max_running`](deploy.md#configuration) that call returns a 429 `*APIError`,
+[`max_running`](deploy.md#configuration), or below `disk_reserve`, that call returns a 429 `*APIError`,
 which the SDK does not retry, and the sandbox stays hibernated. The TTL
 keeps running — a hibernated sandbox is still reaped at its deadline, so
 claim with a `WithTimeout` that covers the idle period or `Renew` before it
@@ -705,7 +705,7 @@ sb = client.Attach(ownerAddr, id, token)  // bind a known handle, no lookup roun
 
 err = client.PutTenant(ctx, sandbox.TenantSpec{Name: "u:42", Token: tok, MaxClaims: 10, EgressClass: "desk"})
 err = client.DeleteTenant(ctx, "u:42")
-res, _ = client.PutTenantCluster(ctx, sandbox.TenantSpec{Name: "u:42", MaxClaims: 20}) // token kept
+res, _ = client.PutTenantCluster(ctx, sandbox.TenantSpec{Name: "u:42", MaxClaims: 20, EgressClass: "desk"}) // token kept
 res, _ = client.DeleteTenantCluster(ctx, "u:42")
 page, _ := client.Tenants(ctx, "", 0)     // page.Tenants: names, caps, live claims, removed tenants; never tokens; page.Next pages
 page, _ = client.SetTenants(ctx, specs)   // replace the whole set

@@ -140,10 +140,10 @@ func (m *Manager) reapOnce(ctx context.Context) {
 		case reapPurge:
 			m.out.Disarm(v.id, true)
 			m.releaseTun(ctx, v.id, v.tun)
+			m.recordUsage(ctx, usage.Event{Event: reapEvent, ID: v.id, Tenant: v.tenant, Deadline: v.deadline})
 			m.purgeArchiveCk(ctx, v.id, v.ck, v.tenant)
 			m.untrack(m.pendingCks, v.ck)
 			m.counters.reaps.Add(1)
-			m.recordUsage(ctx, usage.Event{Event: reapEvent, ID: v.id, Tenant: v.tenant, Deadline: v.deadline})
 			logger.Infof(ctx, "purged archived sandbox %s", v.id)
 		case reapArchive:
 			logSweepResult(ctx, logger, m.archive(ctx, v.sb), "archived expired sandbox "+v.id, "archive expired sandbox "+v.id)

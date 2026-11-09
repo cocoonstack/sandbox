@@ -25,7 +25,7 @@ func TestMoveRouteResolvesThePeerAndMapsTheOutcome(t *testing.T) {
 	srv := newMeshTestServer(t, "root", mgr, &fakePlacer{addrs: []string{"10.0.0.2:7777"}}, nil)
 
 	resp := doReq(t, http.MethodPost, srv.URL+"/v1/sandboxes/sb_1/move", "root", `{"to":"10.0.0.2:7777","max_downtime_ms":1500}`)
-	defer func() { _ = resp.Body.Close() }()
+	defer resp.Body.Close()
 	var body MoveResponse
 	if err := json.UnmarshalRead(resp.Body, &body); err != nil || resp.StatusCode != http.StatusOK {
 		t.Fatalf("move: %d %v", resp.StatusCode, err)
@@ -67,7 +67,7 @@ func TestMoveRouteRefusesABudgetTheStartAllowanceAloneExceedsBeforeAnyMoveStarts
 	}}
 	srv := newMeshTestServer(t, "root", mgr, &fakePlacer{addrs: []string{"10.0.0.2:7777"}}, nil)
 	resp := doReq(t, http.MethodPost, srv.URL+"/v1/sandboxes/sb_1/move", "root", `{"to":"10.0.0.2:7777","max_downtime_ms":400}`)
-	defer func() { _ = resp.Body.Close() }()
+	defer resp.Body.Close()
 	body, err := io.ReadAll(resp.Body)
 	if err != nil || resp.StatusCode != http.StatusBadRequest || !strings.Contains(string(body), "above 400") {
 		t.Errorf("answer %d %s %v, want a 400 naming the floor", resp.StatusCode, body, err)

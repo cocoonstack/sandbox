@@ -1,7 +1,7 @@
 # Reusable: the images gating workflow calls this after the boot/silkd
 # carriers build, passing which changed and their sha-pinned refs. It detects
 # changed image dirs for the matrix, builds base then flavors, and pushes to
-# ghcr; base gets its same-dir *.sh files as buildx secrets.
+# ghcr; base gets install-agent.sh as a buildx secret.
 #   - a changed carrier (boot or silkd) refolds into every image; otherwise
 #     only the git-changed image dirs rebuild;
 #   - a base change rebuilds every flavor (they are FROM base);
@@ -87,7 +87,6 @@ jobs:
           if [[ "$CARRIER_CHANGED" == "true" || "$MANUAL" == "true" || -z "$BASE" ]] ||
              git diff --name-only "$BASE" "$SHA" -- "$wf/build-os-images.yml" "$wf/images.yml" | grep -q .; then
             all_names
-            all_changed=""
           else
             all_changed=$(git diff --name-only "$BASE" "$SHA" -- 'os-image/' ':!*.md' | sort -u)
             declare -A names
@@ -103,29 +102,13 @@ jobs:
             fi
           fi
 
-          # Build matrix entries with a per-entry no-cache flag. Cache must be
-          # dropped when any non-Dockerfile input changed: shared files
-          # directly under os-image/{name}/ (depth 3) or tag-specific files
-          # next to the Dockerfile (depth 4) — both are injected as buildx
-          # secrets, which never bust docker layer cache by content.
+          no_cache=false
+          if [[ "$MANUAL_NO_CACHE" == "true" ]]; then
+            no_cache=true
+          fi
           base_entries=()
           flavor_entries=()
           for name in "${!names[@]}"; do
-            needs_no_cache="false"
-            if [[ "$MANUAL_NO_CACHE" == "true" ]]; then
-              needs_no_cache="true"
-            elif [[ -n "$all_changed" ]]; then
-              while IFS= read -r f; do
-                [[ -z "$f" ]] && continue
-                depth=$(echo "$f" | awk -F'/' '{print NF}')
-                base_name=$(basename "$f")
-                if [[ "$depth" -eq 3 ]] || { [[ "$depth" -eq 4 ]] && [[ "$base_name" != "Dockerfile" ]]; }; then
-                  needs_no_cache="true"
-                  break
-                fi
-              done <<< "$(echo "$all_changed" | grep "^os-image/$name/")"
-            fi
-
             platforms="linux/amd64,linux/arm64"
             if [[ -f "os-image/$name/platforms" ]]; then
               platforms=$(cat "os-image/$name/platforms")
@@ -135,7 +118,7 @@ jobs:
               [[ -z "$dockerfile" ]] && continue
               tag=$(echo "$dockerfile" | cut -d'/' -f3)
               if [[ -n "$tag" ]]; then
-                entry="{\"name\":\"$name\",\"tag\":\"$tag\",\"no_cache\":\"$needs_no_cache\",\"platforms\":\"$platforms\"}"
+                entry="{\"name\":\"$name\",\"tag\":\"$tag\",\"no_cache\":\"$no_cache\",\"platforms\":\"$platforms\"}"
                 if [[ "$name" == "base" ]]; then
                   base_entries+=("$entry")
                 else
@@ -205,29 +188,6 @@ jobs:
           hash=$(find "os-image/${{ matrix.name }}" -type f ! -name Dockerfile ! -name '*.md' -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1)
           echo "hash=$hash" >> "$GITHUB_OUTPUT"
 
-      - name: Discover secret files
-        id: secrets
-        run: |
-          base="os-image/${{ matrix.name }}"
-          tag="${{ matrix.tag }}"
-          {
-            echo "files<<EOF"
-            for f in "$base"/*.sh; do
-              [ -f "$f" ] || continue
-              name="$(basename "$f")"
-              id="sandbox_$(echo "${name%.sh}" | tr '.-' '__')"
-              echo "${id}=${f}"
-            done
-            for f in "$base/$tag"/*; do
-              [ -f "$f" ] || continue
-              name="$(basename "$f")"
-              [ "$name" = "Dockerfile" ] && continue
-              id="$(echo "$name" | tr '.-' '__')"
-              echo "${id}=${f}"
-            done
-            echo "EOF"
-          } >> "$GITHUB_OUTPUT"
-
       - name: Build and push
         uses: docker/build-push-action@v7.4.0
         with:
@@ -245,7 +205,7 @@ jobs:
             INPUTS_HASH=${{ steps.inputs.outputs.hash }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          secret-files: ${{ steps.secrets.outputs.files }}
+          secret-files: sandbox_install_agent=os-image/base/install-agent.sh
           no-cache: ${{ matrix.no_cache == 'true' }}
           cache-from: type=gha,scope=${{ matrix.name }}-${{ matrix.tag }}
           cache-to: type=gha,mode=max,scope=${{ matrix.name }}-${{ matrix.tag }}

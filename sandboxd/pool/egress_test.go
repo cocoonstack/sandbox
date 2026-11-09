@@ -63,7 +63,7 @@ func TestGoldenStampGatesAdoptionOnLane(t *testing.T) {
 	if err := os.MkdirAll(g, 0o750); err != nil {
 		t.Fatalf("stage golden: %v", err)
 	}
-	if err := os.WriteFile(g+goldenStampSuffix, []byte(m.goldenStamp(m.view.Load(), testKey, "")), 0o644); err != nil {
+	if err := os.WriteFile(g+goldenStampSuffix, []byte(m.goldenStamp(m.view.Load(), testKey, "")), 0o600); err != nil {
 		t.Fatalf("write stamp: %v", err)
 	}
 	m.adoptGolden(p, "")

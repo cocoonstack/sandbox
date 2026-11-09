@@ -144,7 +144,11 @@ class CocoonSandboxClient(BaseSandboxClient[CocoonSandboxClientOptions]):
         options: CocoonSandboxClientOptions,
     ) -> SandboxSession:
         client = Client(options.addr, api_token=options.api_token)
-        sb = await asyncio.to_thread(client.new, options.template, net=options.net, ttl_seconds=options.ttl_seconds)
+        try:
+            sb = await asyncio.to_thread(client.new, options.template, net=options.net, ttl_seconds=options.ttl_seconds)
+        except BaseException:
+            client.close()
+            raise
         try:
             if manifest is None:
                 manifest = Manifest(root="/workspace")
@@ -162,6 +166,7 @@ class CocoonSandboxClient(BaseSandboxClient[CocoonSandboxClientOptions]):
         except BaseException:
             with contextlib.suppress(Exception):  # the construction error is the one worth reading
                 await asyncio.to_thread(sb.close)
+            client.close()
             raise
         session = CocoonSandboxSession.from_state(state)
         session._client, session._sb = client, sb
@@ -172,9 +177,11 @@ class CocoonSandboxClient(BaseSandboxClient[CocoonSandboxClientOptions]):
         if not isinstance(inner, CocoonSandboxSession):
             raise TypeError("CocoonSandboxClient.delete expects a CocoonSandboxSession")
         await inner._shutdown_backend()
-        await asyncio.to_thread(inner._sandbox().close)
-        if inner._client is not None:
-            inner._client.close()
+        try:
+            await asyncio.to_thread(inner._sandbox().close)
+        finally:
+            if inner._client is not None:
+                inner._client.close()
         return session
 
     async def resume(self, state: SandboxSessionState) -> SandboxSession:

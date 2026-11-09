@@ -120,8 +120,8 @@ or the operator token, which claims as root but never with `volumes` (403).
   0, and the next call that reaches the guest restores it with a fresh lease
   of the claim's length, so its next expiry archives it again; a call that
   wakes it between the hibernate and the export grants that fresh lease too.
-  A failed hibernate or export at expiry keeps the claim and retries on every
-  reap tick (5 s); it never falls back to destroy. A failed claim (`failed` set, see
+  A failed hibernate or export at expiry keeps the claim and retries it a
+  minute later; it never falls back to destroy. A failed claim (`failed` set, see
   [dead VMMs](deploy.md#dead-vmms-and-host-restarts)) is destroyed at expiry even
   under `archive`. A volume claim or an egress-lane claim
   cannot hibernate, so `archive` on one answers 409 with the same error as a
@@ -962,7 +962,7 @@ has no `preview_listen`. The signed token embeds the sandbox id, port, and
 owner `advertise_addr`, so any node's preview listener can serve it (forwarding
 to the owner's main listener) and a released sandbox's URL answers 404 —
 no revocation list. A browser request to the minted URL answers 503
-`lease lost; retry` for a replicated claim while its node's lease is overdue, 503 `sandbox moving to another node; retry` while an [evacuation](#post-v1drain) has yet to move it, and 429 when it has to wake a sandbox while the disk reserve is low or the node is at `max_running`. See [deploy](deploy.md#preview-urls).
+`lease lost; retry` for a replicated claim while its node's lease is overdue, 503 `sandbox moving to another node; retry` while an [evacuation](#post-v1drain) has yet to move it, and 429 when it has to wake a sandbox while the disk reserve is low or the node is at `max_running`; a wake that [hands an archived claim to a peer](cluster.md#waking-an-archived-claim-on-a-full-node) answers 404, as after a move. See [deploy](deploy.md#preview-urls).
 
 ## POST /v1/sandboxes/{id}/checkpoint
 
@@ -1273,8 +1273,8 @@ archive/unarchive/archive-delete counters, `sandboxd_dns_malformed_total` (guest
 for average latency, `sandboxd_claim_duration_seconds{tier}`, a histogram of pool
 claims by tier, `sandboxd_claim_redirects_total`, claims this node handed to a
 peer, `sandboxd_wakes_refused_total{reason}`, wakes `max_running` (`max_running`),
-`disk_reserve` (`disk`) refused with 429, and wakes `memory_limit` (`memory`)
-refused here whether or not a hand-off ran, `sandboxd_wake_handoffs_total`,
+`disk_reserve` (`disk`) and `memory_limit` (`memory`)
+refused here, whether or not a hand-off ran, `sandboxd_wake_handoffs_total`,
 archived claims this node [handed to a peer with room](cluster.md#waking-an-archived-claim-on-a-full-node)
 instead, and `sandboxd_wake_memory_fallbacks_total`, archived wakes over
 `memory_limit` this node woke itself because no hand-off ran or no peer adopted. `sandboxd_balloon_inflations_total`, `sandboxd_balloon_deflations_total` and `sandboxd_balloon_failures_total` count the balloon sweep's changes and the ones that failed, which retry a minute later. On a node with a `tun` block it adds the packet path's counters:
