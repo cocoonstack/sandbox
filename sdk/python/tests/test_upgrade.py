@@ -36,6 +36,7 @@ class EarlyFrameAgent:
 
     def _serve(self) -> None:
         conn, _ = self._server.accept()
+        self._server.close()
         with conn, contextlib.suppress(OSError):
             reader = conn.makefile("rb")
             while reader.readline() not in (b"\r\n", b""):
