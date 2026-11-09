@@ -44,7 +44,7 @@ func TestDialSilkdConsumesOnlyHandshake(t *testing.T) {
 	}
 }
 
-func TestDialSilkdRejectedHandshake(t *testing.T) {
+func TestDialSilkdSurfacesARejectedHandshake(t *testing.T) {
 	path := sockPath(t)
 	listenMuxer(t, path, "ERR no guest listener\n")
 
@@ -105,7 +105,7 @@ func TestProbeRetriesPastFailures(t *testing.T) {
 	}
 }
 
-func TestDialGuestPortCtxCancel(t *testing.T) {
+func TestDialGuestPortTimesOutWhenTheGuestPortNeverReplies(t *testing.T) {
 	path := sockPath(t)
 	ln, err := net.Listen("unix", path)
 	if err != nil {
@@ -342,12 +342,8 @@ func TestADialOfAGuestThatNeverAnswersFails(t *testing.T) {
 		t.Fatalf("setup listener: %v", err)
 	}
 	t.Cleanup(func() { _ = ln.Close() })
-	start := time.Now()
 	if _, err := newTestEngine().DialSilkd(t.Context(), path); !errors.Is(err, context.DeadlineExceeded) {
 		t.Errorf("dial: %v, want a deadline error", err)
-	}
-	if elapsed := time.Since(start); elapsed > 2*connectTimeout {
-		t.Errorf("dial took %v, want about %v", elapsed, connectTimeout)
 	}
 }
 

@@ -11,7 +11,7 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
-func TestClientAddressesInResponses(t *testing.T) {
+func TestResponsesNamePeersByTheirClientAddress(t *testing.T) {
 	for _, tt := range []struct{ method, path, body, field string }{
 		{http.MethodPost, "/v1/claim", `{"template":"rt"}`, "redirect"},
 		{http.MethodPost, "/v1/checkpoints/ck_1/claim", `{}`, "redirect"},
@@ -39,7 +39,7 @@ func TestClientAddressesInResponses(t *testing.T) {
 	}
 }
 
-func TestClientOwner(t *testing.T) {
+func TestOwnerAddrIsTheAdvertisedClientURL(t *testing.T) {
 	s := New("", "https://self.example", &fakeManager{}, &fakeDialer{}, nil, nil, nil, nil)
 	if got := s.claimResponse(&types.Sandbox{ID: "sb_1"}).OwnerAddr; got != "https://self.example" {
 		t.Fatalf("owner = %q", got)

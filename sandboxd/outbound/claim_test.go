@@ -71,10 +71,10 @@ func TestClaimsOnOnePoolLeaveThroughTheirOwnUpstreams(t *testing.T) {
 		}
 		pingPong(t, conn)
 	}
-	if got := up1.targets(); len(got) != 1 || got[0] != origin {
+	if got := up1.targets(); !slices.Equal(got, []string{origin}) {
 		t.Errorf("upstream 1 tunnels %v, want only the first claim's %s", got, origin)
 	}
-	if got := up2.targets(); len(got) != 1 || got[0] != origin {
+	if got := up2.targets(); !slices.Equal(got, []string{origin}) {
 		t.Errorf("upstream 2 tunnels %v, want only the second claim's %s", got, origin)
 	}
 	if direct.Load() != 1 {
@@ -102,7 +102,7 @@ func TestATenantClaimUnderAClassDialsItsOwnUpstreamLikeARootClaim(t *testing.T) 
 		t.Fatalf("dial through the claim's own upstream: %v", err)
 	}
 	pingPong(t, conn)
-	if got := own.targets(); len(got) != 1 || got[0] != origin || classDefault.accepted.Load() != 0 {
+	if got := own.targets(); !slices.Equal(got, []string{origin}) || classDefault.accepted.Load() != 0 {
 		t.Errorf("own upstream tunnels %v, class default saw %d: the claim value must win over the class default", got, classDefault.accepted.Load())
 	}
 	r = newClaim(h, tenantClaim("socks5://192.0.2.1:1080"), nil, nil)

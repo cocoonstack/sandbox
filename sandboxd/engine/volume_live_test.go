@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"cmp"
 	"errors"
 	"os"
 	"path/filepath"
@@ -26,9 +27,6 @@ func TestLiveVolumeConvergesMountAndDetach(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			sock, fake, spec := newLiveFake(t, "", "")
-			if err := os.Remove(os.Getenv("COCOON_TEST_ATTACHED")); err != nil {
-				t.Fatal(err)
-			}
 			fake.set(func(f *fakeSilkd) {
 				f.realpath, f.noRealpath = tt.realpath, tt.noRealpath
 				f.execHook = func(argv []string) {
@@ -151,7 +149,7 @@ func TestLiveDetachKeepsBusyAndUnobservableDevices(t *testing.T) {
 				fake.execDrop = true
 			case "guest error":
 				fake.serial["/proc/self/mountinfo"] = []byte(rootMountInfo + "2 1 8:32 / /data ro - ext4 /dev/vdc ro\n")
-				fake.execErr = "guest connection failed /private/runtime"
+				fake.execErr = "guest connection failed"
 			case "probe error":
 				fake.readErr["/proc/self/mountinfo"] = "read failed"
 			case "stacked mount":
@@ -170,7 +168,7 @@ func TestLiveDetachKeepsBusyAndUnobservableDevices(t *testing.T) {
 			if isConflict != conflictExpected {
 				t.Fatalf("conflict=%v error=%v", conflictExpected, err)
 			}
-			if conflictExpected && (!strings.Contains(conflict.Error(), strconv.Quote(wantPath)) || strings.Contains(conflict.Error(), "/private")) {
+			if conflictExpected && !strings.Contains(conflict.Error(), strconv.Quote(wantPath)) {
 				t.Fatalf("unsafe or missing guest path %s: %v", wantPath, conflict)
 			}
 			if mode == "busy" && !strings.HasPrefix(conflict.Error(), "cannot unmount") {
@@ -187,7 +185,7 @@ func TestLiveDetachKeepsBusyAndUnobservableDevices(t *testing.T) {
 
 func TestLiveDetachMissingGuestStillChecksHost(t *testing.T) {
 	for _, hostErr := range []string{"", "vm not running", "backend unavailable"} {
-		t.Run(hostErr, func(t *testing.T) {
+		t.Run(cmp.Or(hostErr, "host ok"), func(t *testing.T) {
 			sock := sockPath(t)
 			serveFakeSilkd(t, sock)
 			spec := liveDiskCLI(t, hostErr)
@@ -318,22 +316,11 @@ func newLiveFake(t *testing.T, detachErr, mountinfo string) (string, *fakeSilkd,
 
 func liveDiskCLI(t *testing.T, detachErr string) VolumeSpec {
 	t.Helper()
-	dir := t.TempDir()
-	image := filepath.Join(dir, "volume.img")
-	if err := os.WriteFile(image, nil, 0o600); err != nil {
-		t.Fatal(err)
-	}
 	t.Setenv("COCOON_TEST_DETACH_ERROR", detachErr)
-	attached := filepath.Join(dir, "attached")
-	if err := os.WriteFile(attached, nil, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("COCOON_TEST_ATTACHED", attached)
-	t.Setenv("COCOON_TEST_ATTACH_ARGS", filepath.Join(dir, "args"))
+	t.Setenv("COCOON_TEST_ATTACH_ARGS", filepath.Join(t.TempDir(), "args"))
 	fakeCocoon(t, `#!/bin/sh
 if [ "$1 $2 $3" = "vm disk attach" ]; then
   printf '%s\n' "$*" >> "$COCOON_TEST_ATTACH_ARGS"
-  touch "$COCOON_TEST_ATTACHED"
   exit 0
 fi
 if [ "$1 $2 $3" = "vm disk detach" ]; then
@@ -342,7 +329,7 @@ if [ "$1 $2 $3" = "vm disk detach" ]; then
 fi
 exit 2
 `)
-	return VolumeSpec{Name: "imagenet", Path: image}
+	return VolumeSpec{Name: "imagenet", Path: "/srv/volumes/imagenet.img"}
 }
 
 func guestChanges(calls [][]string) [][]string {

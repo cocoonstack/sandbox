@@ -57,7 +57,7 @@ func TestCloseRelaysRefusesLateRelays(t *testing.T) {
 	}
 }
 
-func TestRelayRoundTrip(t *testing.T) {
+func TestRelayDeliversEveryGuestFrameThenEndsAtExit(t *testing.T) {
 	frames := []string{
 		`{"type":"started","pid":7}` + "\n",
 		`{"type":"stdout","data":"NDIK"}` + "\n",

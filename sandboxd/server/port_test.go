@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"testing"
 	"testing/iotest"
 	"testing/synctest"
@@ -21,7 +22,7 @@ const portRequest = "GET /v1/sandboxes/sb_1/ports/49983 HTTP/1.1\r\n" +
 	"Upgrade: tcp\r\n" +
 	"Connection: Upgrade\r\n\r\n"
 
-func TestPortRelayRoundTrip(t *testing.T) {
+func TestPortRelayEchoesBytesBothWaysAfterTheUpgrade(t *testing.T) {
 	ts, _ := newPortServer(t, func(c net.Conn) {
 		defer c.Close()
 		_, _ = io.Copy(c, c)
@@ -124,7 +125,7 @@ func TestPortRelayTakesTheRootTokenAsTheOperator(t *testing.T) {
 			t.Errorf("%s: status %d, want 409 for a paused sandbox", token, code)
 		}
 	}
-	if len(got) != 2 || got[0] != "" || got[1] != "sandbox-token" {
+	if !slices.Equal(got, []string{"", "sandbox-token"}) {
 		t.Errorf("manager saw tokens %q, want the operator credential then the sandbox token", got)
 	}
 }

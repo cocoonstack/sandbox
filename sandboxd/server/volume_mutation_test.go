@@ -67,7 +67,7 @@ func TestLiveVolumeRoutesAuthorizeAndDecode(t *testing.T) {
 	}
 }
 
-func TestLiveVolumeRoutesErrors(t *testing.T) {
+func TestLiveVolumeRoutesMapEachErrorAndKeepThePartialView(t *testing.T) {
 	for _, tt := range []struct {
 		name, token, body string
 		err               error

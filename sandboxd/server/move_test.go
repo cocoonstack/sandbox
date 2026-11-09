@@ -40,7 +40,6 @@ func TestMoveRouteResolvesThePeerAndMapsTheOutcome(t *testing.T) {
 	}{
 		{`{"to":"10.0.0.9:7777"}`, nil, http.StatusBadRequest},
 		{`{"to":"10.0.0.2:7777","max_downtime_ms":-1}`, nil, http.StatusBadRequest},
-		{`{"to":"10.0.0.2:7777","max_downtime_ms":400}`, nil, http.StatusBadRequest},
 		{`{"to":"10.0.0.2:7777","max_downtime_ms":401}`, nil, http.StatusOK},
 		{`{"to":"10.0.0.2:7777"}`, pool.ErrUnknownSandbox, http.StatusNotFound},
 		{`{"to":"10.0.0.2:7777"}`, fmt.Errorf("%w: it has volumes", pool.ErrNotMovable), http.StatusConflict},

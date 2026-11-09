@@ -94,7 +94,7 @@ func TestExecAuditsTheFrameWithoutItsDelimiter(t *testing.T) {
 		t.Fatalf("status %d, want 200: %s", status, body)
 	}
 	want, _ := wire.EncodeRequest(wire.Exec{Argv: []string{"true"}})
-	if got := <-audited; !bytes.Equal(got, want) {
+	if got := await(t, audited, "the exec was never audited"); !bytes.Equal(got, want) {
 		t.Errorf("audited %q, want the bare frame %q", got, want)
 	}
 }
@@ -215,7 +215,7 @@ func TestExecTimeoutStartsAfterWake(t *testing.T) {
 	if status, body := postExec(t, ts, `{"argv":["true"],"timeout_seconds":1}`); status != http.StatusOK {
 		t.Fatalf("status %d, want 200: %s", status, body)
 	}
-	if <-wakeHadCommandDeadline {
+	if await(t, wakeHadCommandDeadline, "the exec never woke the sandbox") {
 		t.Error("command timeout was active during wake")
 	}
 }
@@ -314,7 +314,7 @@ func TestExecTakesTheRootToken(t *testing.T) {
 				}
 				return
 			}
-			if got := <-woke; got != tt.wantCred {
+			if got := await(t, woke, "the exec never woke the sandbox"); got != tt.wantCred {
 				t.Errorf("woke with %+v, want %+v", got, tt.wantCred)
 			}
 			if wantAudit := code == http.StatusOK; (len(audited) == 1) != wantAudit {
