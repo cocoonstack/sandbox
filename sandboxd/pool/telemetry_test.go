@@ -230,7 +230,7 @@ func TestEveryClaimScopedUsageEventCarriesTheTenant(t *testing.T) {
 }
 
 func TestEveryEventThatMovesTheDeadlineStatesIt(t *testing.T) {
-	m := newTestManager(t, newFakeEngine(), archivePool(3600))
+	m := newTestManager(t, newFakeEngine(), archivePool(keepAnHour))
 	ctx := t.Context()
 	sb := mustClaim(t, m, testKey)
 	cred := Cred{Token: sb.Token}
@@ -261,7 +261,7 @@ func TestEveryEventThatMovesTheDeadlineStatesIt(t *testing.T) {
 }
 
 func TestAPurgeReapStatesTheRetentionEnd(t *testing.T) {
-	m := newTestManager(t, newFakeEngine(), archivePool(3600))
+	m := newTestManager(t, newFakeEngine(), archivePool(keepAnHour))
 	sb := mustClaim(t, m, testKey)
 	mustArchive(t, m, sb)
 	expire(m, sb)
@@ -287,7 +287,7 @@ func TestAnArchiveKeptForeverStatesNoDeadline(t *testing.T) {
 func TestArchiveEventPrecedesAWakeDuringItsTeardown(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		eng := newFakeEngine()
-		m := newTestManager(t, eng, archivePool(3600))
+		m := newTestManager(t, eng, archivePool(keepAnHour))
 		ctx := t.Context()
 		sb := mustClaim(t, m, testKey)
 		hibernateClaim(t, m, sb)

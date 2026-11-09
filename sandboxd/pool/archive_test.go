@@ -888,7 +888,7 @@ func BenchmarkReapPurgesArchivedClaims(b *testing.B) {
 	var purged uint64
 	for b.Loop() {
 		b.StopTimer()
-		for m.Counters().Reaps < purged {
+		for m.counters.reaps.Load() < purged {
 			runtime.Gosched()
 		}
 		purged += 500
