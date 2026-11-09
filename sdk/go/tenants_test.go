@@ -42,7 +42,7 @@ func TestTenantVerbsSendTheOperatorTokenAndEscapeTheName(t *testing.T) {
 		want request
 	}{
 		{"put", func() error { return c.PutTenant(t.Context(), TenantSpec{Name: "u:42/west", Token: "w", MaxClaims: 3}) }, request{http.MethodPut, "/v1/tenants/u:42%2Fwest", "Bearer root", `{"token":"w","max_claims":3}`}},
-		{"patch cap", func() error { return c.PutTenant(t.Context(), TenantSpec{Name: "acme", MaxClaims: 1}) }, request{http.MethodPut, "/v1/tenants/acme", "Bearer root", `{"max_claims":1}`}},
+		{"put cap only", func() error { return c.PutTenant(t.Context(), TenantSpec{Name: "acme", MaxClaims: 1}) }, request{http.MethodPut, "/v1/tenants/acme", "Bearer root", `{"max_claims":1}`}},
 		{"class", func() error { return c.PutTenant(t.Context(), TenantSpec{Name: "acme", EgressClass: "desk"}) }, request{http.MethodPut, "/v1/tenants/acme", "Bearer root", `{"egress_class":"desk"}`}},
 		{"delete", func() error { return c.DeleteTenant(t.Context(), "acme") }, request{http.MethodDelete, "/v1/tenants/acme", "Bearer root", ""}},
 		{"page", func() error { _, err := c.Tenants(t.Context(), "u:1", 50); return err }, request{http.MethodGet, "/v1/tenants?after=u%3A1&limit=50", "Bearer root", ""}},
@@ -63,11 +63,16 @@ func TestTenantVerbsSendTheOperatorTokenAndEscapeTheName(t *testing.T) {
 func TestDeleteTenantClusterCountsAMissingTenantAsDone(t *testing.T) {
 	var mu sync.Mutex
 	deletes := map[string]int{}
+	count := func(r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		if r.Method == http.MethodDelete {
+			deletes[r.Host]++
+		}
+	}
 	answer := func(status int) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
-			mu.Lock()
-			deletes[r.Host]++
-			mu.Unlock()
+			count(r)
 			w.WriteHeader(status)
 			if status == http.StatusNotFound {
 				_, _ = io.WriteString(w, `{"error":"unknown tenant"}`)
@@ -75,11 +80,14 @@ func TestDeleteTenantClusterCountsAMissingTenantAsDone(t *testing.T) {
 		}
 	}
 	gone := httptest.NewServer(answer(http.StatusNotFound))
-	defer gone.Close()
+	t.Cleanup(gone.Close)
 	broken := httptest.NewServer(answer(http.StatusInternalServerError))
-	defer broken.Close()
-	old := httptest.NewServer(http.NotFoundHandler())
-	defer old.Close()
+	t.Cleanup(broken.Close)
+	old := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		count(r)
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(old.Close)
 	peers := []string{addrOf(gone), addrOf(broken), addrOf(old)}
 	entry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/v1/peers" {
@@ -88,7 +96,7 @@ func TestDeleteTenantClusterCountsAMissingTenantAsDone(t *testing.T) {
 		}
 		answer(http.StatusNoContent)(w, r)
 	}))
-	defer entry.Close()
+	t.Cleanup(entry.Close)
 
 	results, err := testClient(t, entry, WithAPIToken("root")).DeleteTenantCluster(t.Context(), "acme")
 	if err != nil {
@@ -105,5 +113,11 @@ func TestDeleteTenantClusterCountsAMissingTenantAsDone(t *testing.T) {
 	want := map[string]int{peers[1]: http.StatusInternalServerError, peers[2]: http.StatusNotFound}
 	if len(results) != 4 || !maps.Equal(failed, want) {
 		t.Errorf("failures %v over %d nodes, want the broken peer and the node without the route to retry: %v", failed, len(results), want)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	wantDeletes := map[string]int{addrOf(entry): 1, peers[0]: 1, peers[1]: 1, peers[2]: 1}
+	if !maps.Equal(deletes, wantDeletes) {
+		t.Errorf("DELETEs per node %v, want exactly one each: %v", deletes, wantDeletes)
 	}
 }

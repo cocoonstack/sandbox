@@ -20,7 +20,7 @@ func TestSetPools(t *testing.T) {
 		_ = json.UnmarshalRead(r.Body, &got)
 		_ = json.MarshalWrite(w, NodeInfo{Claimed: 2})
 	}))
-	defer ts.Close()
+	t.Cleanup(ts.Close)
 
 	c := testClient(t, ts, WithAPIToken("root"))
 	info, err := c.SetPools(t.Context(), []PoolSpec{{Template: "rt:24.04", Net: NetNone, Size: Small, Warm: 3}})
@@ -47,7 +47,7 @@ func TestSetPoolsClusterFansOut(t *testing.T) {
 		_ = json.MarshalWrite(w, NodeInfo{})
 	}
 	peer := httptest.NewServer(http.HandlerFunc(pools))
-	defer peer.Close()
+	t.Cleanup(peer.Close)
 	peerAddr := addrOf(peer)
 
 	entry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -57,7 +57,7 @@ func TestSetPoolsClusterFansOut(t *testing.T) {
 		}
 		pools(w, r)
 	}))
-	defer entry.Close()
+	t.Cleanup(entry.Close)
 
 	c := testClient(t, entry, WithAPIToken("root"))
 	results, err := c.SetPoolsCluster(t.Context(), []PoolSpec{{Template: "rt:24.04", Net: NetNone, Size: Small, Warm: 5}})
@@ -94,7 +94,7 @@ func TestSetPoolsClusterPeerDiscoveryFails(t *testing.T) {
 		applied++
 		_ = json.MarshalWrite(w, NodeInfo{})
 	}))
-	defer entry.Close()
+	t.Cleanup(entry.Close)
 
 	c := testClient(t, entry, WithAPIToken("root"))
 	results, err := c.SetPoolsCluster(t.Context(), []PoolSpec{{Template: "rt:24.04", Net: NetNone, Size: Small, Warm: 5}})

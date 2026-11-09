@@ -59,10 +59,10 @@ func TestGitPushPullPlumbing(t *testing.T) {
 		}
 	}))
 	if err := sb.GitPush(t.Context(), "/repo", ""); err != nil {
-		t.Errorf("push: %v", err)
+		t.Fatalf("push: %v", err)
 	}
 	if err := sb.GitPull(t.Context(), "/repo", "tok"); err != nil {
-		t.Errorf("pull: %v", err)
+		t.Fatalf("pull: %v", err)
 	}
 	if push, ok := (<-reqs).(*wire.GitPush); !ok || push.Path != "/repo" || push.Auth != "" {
 		t.Errorf("guest saw %+v, want a git push of /repo", push)
