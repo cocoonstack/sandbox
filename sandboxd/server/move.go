@@ -111,6 +111,9 @@ type MoveResponse struct {
 	OwnerAddr  string `json:"owner_addr"`
 	Rounds     int    `json:"rounds"`
 	DowntimeMS int64  `json:"downtime_ms"`
+	CaptureMS  int64  `json:"capture_ms"`
+	SendMS     int64  `json:"send_ms"`
+	CommitMS   int64  `json:"commit_ms"`
 }
 
 func (s *Server) handleMove(w http.ResponseWriter, r *http.Request) {
@@ -131,7 +134,10 @@ func (s *Server) handleMove(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	res, err := s.mgr.Move(r.Context(), id, addr, budget)
 	writeResult(w, r, "move", id, "move failed", err, func() {
-		writeJSON(w, http.StatusOK, MoveResponse{OwnerAddr: s.placer.ClientAddr(addr), Rounds: res.Rounds, DowntimeMS: res.Downtime.Milliseconds()})
+		writeJSON(w, http.StatusOK, MoveResponse{
+			OwnerAddr: s.placer.ClientAddr(addr), Rounds: res.Rounds, DowntimeMS: res.Downtime.Milliseconds(),
+			CaptureMS: res.Capture.Milliseconds(), SendMS: res.Send.Milliseconds(), CommitMS: res.Commit.Milliseconds(),
+		})
 	})
 }
 

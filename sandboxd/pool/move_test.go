@@ -43,8 +43,8 @@ func TestMoveHandsARunningClaimToThePeerWithBothNodesCountingIt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("move: %v", err)
 	}
-	if res.Rounds != 3 || res.Downtime <= 0 {
-		t.Errorf("result %+v, want a baseline, one delta and the final round with a downtime", res)
+	if res.Rounds != 3 || res.Downtime <= 0 || res.Send <= 0 || res.Commit <= 0 || res.Capture+res.Send+res.Commit > res.Downtime {
+		t.Errorf("result %+v, want a baseline, one delta and the final round with a downtime that covers its phases", res)
 	}
 	for i, counts := range during {
 		if counts != [2][3]int{{1, 1, 1}, {1, 1, 1}} {
@@ -741,6 +741,7 @@ func TestMoveGivesEachRoundADeadlineFromItsSize(t *testing.T) {
 	mc := newMoveCluster(t)
 	sb := mustClaim(t, mc.s, testKey)
 	fakeOf(mc.s).migrateSizes = []int64{1 << 30, 1, 1 << 40}
+	mc.p.wireSizes = []int64{1 << 20, 0, 1 << 20}
 	if _, err := mc.s.Move(t.Context(), sb.ID, "b", time.Hour); err != nil {
 		t.Fatalf("move: %v", err)
 	}
@@ -890,6 +891,48 @@ func TestMoveEstimatesThePauseFromTheBytesOnTheWire(t *testing.T) {
 		t.Error("the move paused the guest for a final round that cannot fit")
 	}
 	assertStillOnSource(t, mc, sb)
+}
+
+func TestMoveWhosePausedRoundOverrunsTheBudgetResumesTheGuestOnTheSource(t *testing.T) {
+	for name, tt := range map[string]struct {
+		captureTime, sendTime time.Duration
+		sizes, wire           []int64
+		sentFinal             bool
+	}{
+		"final capture":     {captureTime: 200 * time.Millisecond},
+		"final round grown": {sizes: []int64{1 << 20, 1 << 10, 1 << 40}, wire: []int64{1 << 20, 1 << 10}},
+		"final transfer":    {sendTime: 200 * time.Millisecond, sentFinal: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			mc := newMoveCluster(t)
+			sb := mustClaim(t, mc.s, testKey)
+			fakeOf(mc.s).finalCaptureTime, fakeOf(mc.s).migrateSizes, mc.p.wireSizes = tt.captureTime, tt.sizes, tt.wire
+			sentFinal, committed := false, false
+			mc.p.roundHook = func(round int) error {
+				if round == 3 {
+					sentFinal = true
+					time.Sleep(tt.sendTime)
+				}
+				return nil
+			}
+			mc.p.commitHook = func(int) error { committed = true; return nil }
+			if _, err := mc.s.Move(t.Context(), sb.ID, "b", MoveStartAllowance+100*time.Millisecond); !errors.Is(err, ErrMoveDowntime) {
+				t.Fatalf("move: %v, want ErrMoveDowntime", err)
+			}
+			eng := fakeOf(mc.s)
+			eng.mu.Lock()
+			wentFinal := slices.ContainsFunc(eng.captures, func(c string) bool { return strings.HasSuffix(c, ":true") })
+			eng.mu.Unlock()
+			if !wentFinal || sentFinal != tt.sentFinal || committed {
+				t.Errorf("final capture %v sent %v commit %v, want the capture, a final round sent %v and no commit", wentFinal, sentFinal, committed, tt.sentFinal)
+			}
+			assertStillOnSource(t, mc, sb)
+			assertNoMoveResidue(t, mc.t, sb.ID)
+			if _, ok, _ := mc.moveReg.Get(t.Context(), sb.ID); ok {
+				t.Error("the aborted move left its record")
+			}
+		})
+	}
 }
 
 func TestMoveGivesUpOnDeltasThatStopShrinking(t *testing.T) {

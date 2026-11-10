@@ -20,7 +20,7 @@ func TestMoveRouteResolvesThePeerAndMapsTheOutcome(t *testing.T) {
 	var outcome error
 	mgr := &fakeManager{move: func(_, addr string, budget time.Duration) (pool.MoveResult, error) {
 		gotAddr, gotBudget = addr, budget
-		return pool.MoveResult{Rounds: 3, Downtime: 180 * time.Millisecond}, outcome
+		return pool.MoveResult{Rounds: 3, Downtime: 180 * time.Millisecond, Capture: 60 * time.Millisecond, Send: 90 * time.Millisecond, Commit: 25 * time.Millisecond}, outcome
 	}}
 	srv := newMeshTestServer(t, "root", mgr, &fakePlacer{addrs: []string{"10.0.0.2:7777"}}, nil)
 
@@ -30,7 +30,7 @@ func TestMoveRouteResolvesThePeerAndMapsTheOutcome(t *testing.T) {
 	if err := json.UnmarshalRead(resp.Body, &body); err != nil || resp.StatusCode != http.StatusOK {
 		t.Fatalf("move: %d %v", resp.StatusCode, err)
 	}
-	if gotAddr != "10.0.0.2:7777" || gotBudget != 1500*time.Millisecond || body != (MoveResponse{OwnerAddr: "10.0.0.2:7777", Rounds: 3, DowntimeMS: 180}) {
+	if gotAddr != "10.0.0.2:7777" || gotBudget != 1500*time.Millisecond || body != (MoveResponse{OwnerAddr: "10.0.0.2:7777", Rounds: 3, DowntimeMS: 180, CaptureMS: 60, SendMS: 90, CommitMS: 25}) {
 		t.Errorf("move to %s within %s answered %+v", gotAddr, gotBudget, body)
 	}
 	for _, tt := range []struct {
