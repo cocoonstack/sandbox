@@ -154,6 +154,7 @@ func TestDisablingARunningClaimRevokesItsPacketPath(t *testing.T) {
 	m := tunManager(t, eng, addrs, config.PoolSpec{PoolKey: testKey, Tun: true, Egress: anyPolicy})
 	sb := mustClaim(t, m, testKey)
 	stream := openStream(t, sb)
+	waitFor(t, func() bool { return slices.Equal(tunVerbsOf(eng), []string{"up " + sb.VsockSocket}) })
 	if err := m.SetTun(t.Context(), sb.ID, new(false), nil); err != nil {
 		t.Fatalf("disable: %v", err)
 	}
@@ -172,6 +173,25 @@ func TestDisablingARunningClaimRevokesItsPacketPath(t *testing.T) {
 	}
 	if !tunHello(t, sb) {
 		t.Error("the re-enabled claim has no live packet door")
+	}
+}
+
+func TestADisableBeforeTheFirstTunUpLeavesTheGuestDown(t *testing.T) {
+	eng, addrs := newFakeEngine(), &fakeAddrs{}
+	eng.tunUpGate = make(chan struct{})
+	m := tunManager(t, eng, addrs, config.PoolSpec{PoolKey: testKey, Tun: true, Egress: anyPolicy})
+	sb := mustClaim(t, m, testKey)
+	if err := m.SetTun(t.Context(), sb.ID, new(false), nil); err != nil {
+		t.Fatalf("disable: %v", err)
+	}
+	waitFor(t, func() bool { return slices.Contains(tunVerbsOf(eng), "down "+sb.VsockSocket) })
+	close(eng.tunUpGate)
+	waitFor(t, func() bool {
+		verbs := tunVerbsOf(eng)
+		return len(verbs) == 3 && verbs[len(verbs)-1] == "down "+sb.VsockSocket
+	})
+	if doorOpen(sb) {
+		t.Error("the packet door accepts after a disable that beat the first tun_up")
 	}
 }
 

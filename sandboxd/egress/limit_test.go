@@ -62,11 +62,12 @@ func TestChangingTheLimitMovesAnOpenTunnel(t *testing.T) {
 	waitBytes(t, s, 1<<20)
 
 	p.SetLimit(types.EgressLimit{TxBytesPerSecond: testRate / 2})
-	start := time.Now()
 	go writeUntilClosed(conn)
-	waitBytes(t, s, 1<<20+limitBurst+testRate/2)
+	time.Sleep(50 * time.Millisecond)
+	from, start := s.received.Load(), time.Now()
+	waitBytes(t, s, from+testRate/2)
 	if took := time.Since(start); took < 700*time.Millisecond {
-		t.Errorf("a burst and a second's worth past it took %v after the limit dropped to %d/s", took, testRate/2)
+		t.Errorf("a second's worth took %v once the limit dropped to %d/s", took, testRate/2)
 	}
 
 	p.SetLimit(types.EgressLimit{})
