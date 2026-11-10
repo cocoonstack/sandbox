@@ -38,6 +38,9 @@ type MoveAdmission struct {
 type MoveResult struct {
 	Rounds   int
 	Downtime time.Duration
+	Capture  time.Duration
+	Send     time.Duration
+	Commit   time.Duration
 }
 
 // MovePeer reaches the target node of a live move.
@@ -58,6 +61,9 @@ type outMove struct {
 	final    bool
 	locked   bool
 	pausedAt time.Time
+	capture  time.Duration
+	send     time.Duration
+	commit   time.Duration
 }
 
 func (mv *outMove) owns(rec moves.Record, node string) bool {
@@ -65,7 +71,7 @@ func (mv *outMove) owns(rec moves.Record, node string) bool {
 }
 
 func (mv *outMove) result() MoveResult {
-	res := MoveResult{Rounds: mv.rounds}
+	res := MoveResult{Rounds: mv.rounds, Capture: mv.capture, Send: mv.send, Commit: mv.commit}
 	if !mv.pausedAt.IsZero() {
 		res.Downtime = time.Since(mv.pausedAt)
 	}

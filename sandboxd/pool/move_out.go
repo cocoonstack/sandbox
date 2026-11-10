@@ -74,13 +74,12 @@ func (m *Manager) moveOut(ctx context.Context, sb *types.Sandbox, mv *outMove, b
 	if err = m.journalMoveOut(ctx, sb, mv); err != nil {
 		return err
 	}
-	var sent, previous int64
+	var size, sent, previous int64
 	var sending time.Duration
 	for delta := 0; ; delta++ {
 		start := time.Now()
-		size, sendErr := m.sendRound(ctx, sb.ID, mv, round)
-		if sendErr != nil {
-			return sendErr
+		if size, err = m.sendRound(ctx, sb.ID, mv, round); err != nil {
+			return err
 		}
 		sending += time.Since(start)
 		sent += size
@@ -97,6 +96,7 @@ func (m *Manager) moveOut(ctx context.Context, sb *types.Sandbox, mv *outMove, b
 			return fmt.Errorf("%w: delta capture: %w", ErrNotMovable, err)
 		}
 	}
+	lastBytes := roundBytes(round)
 	m.mu.Lock()
 	mv.final = true
 	m.mu.Unlock()
@@ -111,13 +111,21 @@ func (m *Manager) moveOut(ctx context.Context, sb *types.Sandbox, mv *outMove, b
 	if round, err = m.eng.MigrateCapture(ctx, vm, mv.Series, true); err != nil {
 		return fmt.Errorf("%w: final capture: %w", ErrNotMovable, err)
 	}
+	mv.capture = time.Since(mv.pausedAt)
+	apparent := roundBytes(round)
+	wire := size + max(apparent-lastBytes, 0)
+	if pause := mv.capture + finalPause(wire, sent, sending); pause > budget {
+		return fmt.Errorf("%w: the final round of %d bytes took %s to capture, leaving a pause of about %s", ErrMoveDowntime, apparent, mv.capture.Round(time.Millisecond), pause.Round(time.Millisecond))
+	}
 	final, err := m.moves.Advance(ctx, sb.ID, mv.Epoch, moves.Pending, moves.Final)
 	if err != nil {
 		return err
 	}
+	start := time.Now()
 	if _, err = m.sendRound(ctx, sb.ID, mv, round); err != nil {
 		return err
 	}
+	mv.send = time.Since(start)
 	if used, ok := m.out.TunUsed(sb.ID); ok {
 		m.setTunBytes(sb, used)
 	}
@@ -128,7 +136,10 @@ func (m *Manager) moveOut(ctx context.Context, sb *types.Sandbox, mv *outMove, b
 	if err != nil {
 		return fmt.Errorf("encode claim: %w", err)
 	}
-	return m.movePeer.Commit(ctx, mv.Addr, sb.ID, claim, final)
+	start = time.Now()
+	err = m.movePeer.Commit(ctx, mv.Addr, sb.ID, claim, final)
+	mv.commit = time.Since(start)
+	return err
 }
 
 func (m *Manager) beginMove(ctx context.Context, sb *types.Sandbox, to string) (int64, error) {
@@ -155,11 +166,10 @@ func (m *Manager) beginMove(ctx context.Context, sb *types.Sandbox, to string) (
 func (m *Manager) sendRound(ctx context.Context, id string, mv *outMove, round types.MigrateRound) (int64, error) {
 	mv.rounds++
 	names := make([]string, len(round.Files))
-	var size int64
 	for i, f := range round.Files {
-		names[i], size = f.Name, size+f.Size
+		names[i] = f.Name
 	}
-	ctx, cancel := context.WithTimeout(ctx, moveRoundBase+time.Duration(size/moveRoundMinRate)*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, moveRoundBase+time.Duration(roundBytes(round)/moveRoundMinRate)*time.Second)
 	defer cancel()
 	return m.movePeer.SendRound(ctx, mv.Addr, id, mv.rounds, round.Dir, names)
 }
@@ -411,6 +421,14 @@ func (m *Manager) lockTransition(sb *types.Sandbox) error {
 func (m *Manager) midMoveLocked(sb *types.Sandbox) bool {
 	_, moving := m.moving[sb.ID]
 	return moving || sb.MoveIn
+}
+
+func roundBytes(round types.MigrateRound) int64 {
+	var size int64
+	for _, f := range round.Files {
+		size += f.Size
+	}
+	return size
 }
 
 func finalPause(last, sent int64, sending time.Duration) time.Duration {

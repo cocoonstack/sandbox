@@ -1482,6 +1482,7 @@ type fakeEngine struct {
 	migrateSupportErr error
 	captureErr        error
 	finalCaptureErr   error
+	finalCaptureTime  time.Duration
 	receiveErr        error
 	receiveStall      chan struct{}
 	receiveEntered    chan struct{}
@@ -2058,6 +2059,9 @@ func (f *fakeEngine) Balloon(_ context.Context, vmName, target string) (types.VM
 }
 
 func (f *fakeEngine) MigrateCapture(_ context.Context, vmName, series string, final bool) (types.MigrateRound, error) {
+	if final {
+		time.Sleep(f.finalCaptureTime)
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.captures = append(f.captures, fmt.Sprintf("%s:%s:%v", vmName, series, final))

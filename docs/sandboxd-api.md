@@ -914,10 +914,10 @@ its guest's processes and memory (see
 `{"to": "<peer>", "max_downtime_ms": 2000}`, `to` as `GET /v1/peers` lists it
 and never this node (else 400), `max_downtime_ms` optional with a default of
 2000 and a floor: 400 or less answers 400 at once, because the target's receive
-and start alone are allowed that long. Answers `{"owner_addr": "<peer>", "rounds": n, "downtime_ms": d}` once the
+and start alone are allowed that long. Answers `{"owner_addr": "<peer>", "rounds": n, "downtime_ms": d, "capture_ms": c, "send_ms": s, "commit_ms": m}` once the
 peer took the claim and this node dropped it; a guest the peer cannot start is
 failed there. `downtime_ms` runs from the final capture's start, including its
-wait for a free dump slot, until the peer answers the commit, after it started the guest. While the move runs, release, fork,
+wait for a free dump slot, until the peer answers the commit, after it started the guest; of it, `capture_ms`, `send_ms` and `commit_ms` are the final capture, the final round transfer and the commit. A final round whose capture time and size no longer fit `max_downtime_ms` is aborted before it is sent and the guest resumes here, so with the meta store up a capture that alone overruns pauses the guest for the capture plus the abort and its record write. While the move runs, release, fork,
 checkpoint, promote, hibernate and volume changes of the claim answer 503
 `sandbox moving to another node; retry`. Env writes, renew and data-plane calls keep working until
 the final round and answer the same 503 during it, because the peer would miss
@@ -938,7 +938,8 @@ node drops the claim (see [moving a running claim](cluster.md#moving-a-running-c
 - 502 the target is unreachable or failed
 - 503 the move or archive registry is down, the node lease is overdue, the node
   is evacuating the claim (`sandbox moving to another node; retry`), or the
-  final round would not fit `max_downtime_ms`, after at most 4 deltas
+  final round would not fit `max_downtime_ms`, after at most 4 deltas or once
+  its capture overran it with the guest paused (the guest resumes here)
 
 The target serves root-only peer routes for a move, `POST /v1/moves/{id}`,
 `PUT /v1/moves/{id}/rounds/{n}`, `POST /v1/moves/{id}/commit` and
