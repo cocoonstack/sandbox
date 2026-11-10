@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"time"
 
 	"github.com/projecteru2/core/log"
@@ -37,7 +38,7 @@ func (m *Manager) replicateOnce(ctx context.Context) {
 				retire = append(retire, sb)
 			}
 		case tried.IsZero():
-			next[id] = now
+			next[id] = firstTry(sb, every, now)
 		case now.Sub(tried) < every:
 			next[id] = tried
 		default:
@@ -140,7 +141,7 @@ func (m *Manager) replicate(ctx context.Context, sb *types.Sandbox) error {
 		return fmt.Errorf("replicate %s: registry: %w", sb.ID, err)
 	}
 	live, _ := m.commitIfLive(ctx, sb, func() {
-		prev, sb.ReplicaCk, sb.ReplicaPending, sb.ArchiveEpoch = sb.ReplicaCk, ckID, "", epoch
+		prev, sb.ReplicaCk, sb.ReplicaPending, sb.ArchiveEpoch, sb.ReplicaAt = sb.ReplicaCk, ckID, "", epoch, time.Now()
 	})
 	if !live {
 		m.abandonArchive(ctx, sb, epoch, ckID)
@@ -252,7 +253,7 @@ func (m *Manager) dropReplica(ctx context.Context, sb *types.Sandbox) error {
 	}
 	var ck string
 	live, err := m.commitIfLive(ctx, sb, func() {
-		ck, sb.ReplicaCk = sb.ReplicaCk, ""
+		ck, sb.ReplicaCk, sb.ReplicaAt = sb.ReplicaCk, "", time.Time{}
 	})
 	if !live {
 		return ErrUnknownSandbox
@@ -274,4 +275,13 @@ func (m *Manager) replicaOf(sb *types.Sandbox) string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return sb.ReplicaCk
+}
+
+func firstTry(sb *types.Sandbox, every time.Duration, now time.Time) time.Time {
+	if at := sb.ReplicaAt; !at.IsZero() && at.Before(now) {
+		return at
+	}
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(sb.ID))
+	return now.Add(-time.Duration(float64(every) * float64(h.Sum32()) / (1 << 32)))
 }
