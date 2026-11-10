@@ -517,7 +517,7 @@ func TestMoveOfAReplicatedClaimDropsItsRowBeforeTheFinalRound(t *testing.T) {
 	sb := mustClaim(t, mc.s, testKey)
 	replicateNow(t, mc.s, sb)
 	mc.s.mu.Lock()
-	replica := sb.ReplicaCk
+	replica, replicaAt := sb.ReplicaCk, sb.ReplicaAt
 	mc.s.mu.Unlock()
 	if _, ok, _ := mc.reg.Get(t.Context(), sb.ID); !ok || replica == "" {
 		t.Fatal("setup: the claim has no replica row")
@@ -538,6 +538,9 @@ func TestMoveOfAReplicatedClaimDropsItsRowBeforeTheFinalRound(t *testing.T) {
 	}
 	if ckExists(t, mc.s, replica) {
 		t.Error("the stale replica outlived the move")
+	}
+	if moved, ok := mc.t.byID(sb.ID); !ok || !moved.ReplicaAt.Equal(replicaAt) {
+		t.Errorf("target claim %v replica_at %v, want the source's last round %v", ok, moved.ReplicaAt, replicaAt)
 	}
 }
 
@@ -563,6 +566,25 @@ func TestMoveAbortedAfterDroppingTheRowPutsItBackOnTheNextRound(t *testing.T) {
 	replicateNow(t, mc.s, sb)
 	if _, ok, _ := mc.reg.Get(t.Context(), sb.ID); !ok {
 		t.Error("the next round did not put the row back")
+	}
+}
+
+func TestMoveAbortedByTheDowntimeCheckReplicatesAtTheNextSweep(t *testing.T) {
+	mc := newMoveClusterWith(t, func(c *failoverCluster) { c.replicate = replicateEvery })
+	sb := mustClaim(t, mc.s, testKey)
+	replicateNow(t, mc.s, sb)
+	fakeOf(mc.s).finalCaptureTime = 200 * time.Millisecond
+	if _, err := mc.s.Move(t.Context(), sb.ID, "b", MoveStartAllowance+100*time.Millisecond); !errors.Is(err, ErrMoveDowntime) {
+		t.Fatalf("move: %v, want ErrMoveDowntime", err)
+	}
+	assertStillOnSource(t, mc, sb)
+	if _, ok, _ := mc.reg.Get(t.Context(), sb.ID); ok {
+		t.Fatal("the row survived the final round")
+	}
+	mc.s.replicateOnce(t.Context())
+	waitFor(t, func() bool { return !mc.s.replicating.Load() })
+	if _, ok, _ := mc.reg.Get(t.Context(), sb.ID); !ok {
+		t.Error("the first sweep after the abort did not put the row back")
 	}
 }
 

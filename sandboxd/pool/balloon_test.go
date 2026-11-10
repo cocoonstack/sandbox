@@ -33,9 +33,11 @@ func TestSetBalloonRefusesWhatItCannotReach(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 6})
 	asleep, archived, failed, waking, capturing, arriving := mustClaim(t, m, testKey), mustClaim(t, m, testKey), mustClaim(t, m, testKey), mustClaim(t, m, testKey), mustClaim(t, m, testKey), mustClaim(t, m, testKey)
+	leaving := mustClaim(t, m, testKey)
 	m.mu.Lock()
 	asleep.HibernateSnap, archived.ArchiveCk, failed.Failed = "snap", "ck_00000000000000aa", "vmm exited"
 	waking.Waking, capturing.PendingSnap, arriving.MoveIn = true, "pending", true
+	m.moving[leaving.ID] = &outMove{}
 	m.mu.Unlock()
 	for _, tt := range []struct {
 		id   string
@@ -48,6 +50,7 @@ func TestSetBalloonRefusesWhatItCannotReach(t *testing.T) {
 		{waking.ID, ErrPaused},
 		{capturing.ID, ErrPaused},
 		{arriving.ID, ErrEvacuating},
+		{leaving.ID, ErrEvacuating},
 	} {
 		if _, err := m.SetBalloon(t.Context(), tt.id, "50%"); !errors.Is(err, tt.want) {
 			t.Errorf("set balloon of %s: %v, want %v", tt.id, err, tt.want)
@@ -56,6 +59,7 @@ func TestSetBalloonRefusesWhatItCannotReach(t *testing.T) {
 	m.mu.Lock()
 	asleep.HibernateSnap, archived.ArchiveCk, failed.Failed = "", "", ""
 	waking.Waking, capturing.PendingSnap, arriving.MoveIn = false, "", false
+	delete(m.moving, leaving.ID)
 	m.mu.Unlock()
 	if calls := balloonCalls(eng); len(calls) != 0 {
 		t.Errorf("balloon calls %q for refused claims, want none", calls)
@@ -87,6 +91,22 @@ func TestSetBalloonRefusesOnACocoonWithoutTheVerb(t *testing.T) {
 	}
 	if calls := balloonCalls(eng); len(calls) != 0 {
 		t.Errorf("balloon calls %q, want none", calls)
+	}
+}
+
+func TestSetBalloonChecksTheVerbAgainAfterAFailedCheck(t *testing.T) {
+	eng := newFakeEngine()
+	eng.balloonSupportErr = errors.New("cocoon vm balloon --help: context deadline exceeded")
+	m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey})
+	sb := mustClaim(t, m, testKey)
+	if _, err := m.SetBalloon(t.Context(), sb.ID, "50%"); !errors.Is(err, ErrBalloonOff) {
+		t.Fatalf("set balloon while the check fails: %v, want ErrBalloonOff", err)
+	}
+	eng.mu.Lock()
+	eng.balloonSupportErr = nil
+	eng.mu.Unlock()
+	if _, err := m.SetBalloon(t.Context(), sb.ID, "50%"); err != nil {
+		t.Errorf("set balloon once the check passes: %v, want it set", err)
 	}
 }
 

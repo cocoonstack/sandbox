@@ -361,6 +361,7 @@ type Sandbox struct {
 	Replicated bool `json:"-"`
 
 	ArchiveRetryAt time.Time `json:"-"`
+	ReplicaDue     bool      `json:"-"`
 
 	// lastActivity is unix-nanos of the last data-plane connection, stamped lock-free.
 	lastActivity atomic.Int64

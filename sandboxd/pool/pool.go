@@ -304,8 +304,8 @@ type Manager struct {
 	poolVersion    int64
 	configSeedHash string // config pools' hash, to warn when a file edit is overridden
 
-	sweeps       struct{ idle, liveness, archive, archiveDelete, orphan, held, ckpt, gen atomic.Bool }
-	balloonReady func() bool
+	sweeps    struct{ idle, liveness, archive, archiveDelete, orphan, held, ckpt, gen atomic.Bool }
+	balloonOK atomic.Bool
 
 	cocoondSocket string
 	// vmmEvents is set while the cocoon daemon stream is live; the poll is then only a backstop.
@@ -454,7 +454,6 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 		healSem:         make(chan struct{}, maxConcurrentHeals),
 	}
 	m.store.dropHostEnv = cfg.HostEnvMemoryOnly
-	m.balloonReady = sync.OnceValue(m.checkBalloon)
 	m.seedVolumes(cfg.Volumes)
 	if err := m.loadCordon(); err != nil {
 		return nil, err

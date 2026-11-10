@@ -37,6 +37,10 @@ func (m *Manager) replicateOnce(ctx context.Context) {
 			if sb.HasReplica() {
 				retire = append(retire, sb)
 			}
+		case sb.ReplicaDue:
+			sb.ReplicaDue = false
+			next[id] = now
+			due = append(due, sb)
 		case tried.IsZero():
 			next[id] = firstTry(sb, every, now)
 		case now.Sub(tried) < every:
@@ -181,7 +185,7 @@ func (m *Manager) settleReplicaIntent(ctx context.Context, sb *types.Sandbox) er
 	case ok && !rec.Consumed && rec.Checkpoint == pending:
 		var prev string
 		live, commitErr := m.commitIfLive(ctx, sb, func() {
-			prev, sb.ReplicaCk, sb.ReplicaPending, sb.ArchiveEpoch = sb.ReplicaCk, pending, "", rec.Epoch
+			prev, sb.ReplicaCk, sb.ReplicaPending, sb.ArchiveEpoch, sb.ReplicaAt = sb.ReplicaCk, pending, "", rec.Epoch, time.Now()
 		})
 		if !live {
 			return ErrUnknownSandbox
@@ -279,6 +283,9 @@ func (m *Manager) replicaOf(sb *types.Sandbox) string {
 
 func firstTry(sb *types.Sandbox, every time.Duration, now time.Time) time.Time {
 	if at := sb.ReplicaAt; !at.IsZero() && at.Before(now) {
+		return at
+	}
+	if at := sb.ClaimedAt; at.After(now.Add(-every)) && !at.After(now) {
 		return at
 	}
 	h := fnv.New32a()

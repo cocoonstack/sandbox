@@ -120,7 +120,11 @@ func TestClaimsNeverReplicatedSpreadTheirFirstRoundOverAnInterval(t *testing.T) 
 	a := c.node(t, "a", t.TempDir(), keepAnHour)
 	ids := make([]string, 6)
 	for i := range ids {
-		ids[i] = mustClaim(t, a, testKey).ID
+		sb := mustClaim(t, a, testKey)
+		a.mu.Lock()
+		sb.ClaimedAt = time.Now().Add(-2 * replicateEvery * time.Second)
+		a.mu.Unlock()
+		ids[i] = sb.ID
 	}
 	now := time.Now()
 	a.replicateOnce(t.Context())
@@ -136,6 +140,41 @@ func TestClaimsNeverReplicatedSpreadTheirFirstRoundOverAnInterval(t *testing.T) 
 	}
 	if len(seen) < 2 {
 		t.Errorf("all %d never-replicated claims got the same first try, want them spread", len(ids))
+	}
+}
+
+func TestANewClaimFirstReplicatesOneIntervalAfterItsClaim(t *testing.T) {
+	c := newReplicaCluster(t)
+	a := c.node(t, "a", t.TempDir(), keepAnHour)
+	sb := mustClaim(t, a, testKey)
+	a.replicateOnce(t.Context())
+	waitFor(t, func() bool { return !a.replicating.Load() })
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if got := a.replicas[sb.ID]; !got.Equal(sb.ClaimedAt) {
+		t.Errorf("first try at %v, want the claim's start %v so its first round comes one interval later", got, sb.ClaimedAt)
+	}
+}
+
+func TestReplicaAdoptionCarriesTheRoundBeforeItsLast(t *testing.T) {
+	c := newReplicaCluster(t)
+	a, b := c.node(t, "a", t.TempDir(), keepAnHour), c.node(t, "b", t.TempDir(), keepAnHour)
+	sb := mustClaim(t, a, testKey)
+	replicateNow(t, a, sb)
+	a.mu.Lock()
+	first := sb.ReplicaAt
+	a.mu.Unlock()
+	replicateNow(t, a, sb)
+	c.expire("a")
+	mustAdopt(t, b, sb, "adopt")
+	held, ok := b.byID(sb.ID)
+	if !ok {
+		t.Fatal("the adopter holds no claim")
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if !held.ReplicaAt.Equal(first) {
+		t.Errorf("adopted replica_at %v, want the first round's %v, which the row of the second round carries", held.ReplicaAt, first)
 	}
 }
 
@@ -261,6 +300,28 @@ func TestReplicaUnavailablePutThatNeverLandedIsSettledAtTheNextRound(t *testing.
 	}
 	if rec, _, _ := c.reg.Get(t.Context(), sb.ID); rec.Checkpoint != a.replicaOf(sb) || rec.Epoch <= row.Epoch {
 		t.Errorf("row %s@%d, want it on the new replica %s", rec.Checkpoint, rec.Epoch, a.replicaOf(sb))
+	}
+}
+
+func TestReplicaSettledLostPutReplyStampsItsRound(t *testing.T) {
+	c := newReplicaCluster(t)
+	a := c.node(t, "a", t.TempDir(), keepAnHour)
+	sb := mustClaim(t, a, testKey)
+	a.archives = &hookRegistry{Registry: c.reg, losePutReply: true}
+	if err := a.replicate(t.Context(), sb); !errors.Is(err, ErrArchiveStoreDown) {
+		t.Fatalf("round whose put reply was lost: %v", err)
+	}
+	a.archives = c.reg
+	sb.Transition.Lock()
+	err := a.settleReplicaIntent(t.Context(), sb)
+	sb.Transition.Unlock()
+	if err != nil {
+		t.Fatalf("settle: %v", err)
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if sb.ReplicaPending != "" || sb.ReplicaCk == "" || sb.ReplicaAt.IsZero() {
+		t.Errorf("settled claim pending %q replica %q replica_at %v, want the landed round promoted and stamped", sb.ReplicaPending, sb.ReplicaCk, sb.ReplicaAt)
 	}
 }
 

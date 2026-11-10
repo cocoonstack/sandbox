@@ -45,11 +45,15 @@ func (m *Manager) SetBalloon(ctx context.Context, id, target string) (types.VMBa
 	return b, err
 }
 
-func (m *Manager) checkBalloon() bool {
+func (m *Manager) balloonReady() bool {
+	if m.balloonOK.Load() {
+		return true
+	}
 	ctx := context.Background()
 	if err := m.eng.CheckBalloonSupport(ctx); err != nil {
-		log.WithFunc("pool.checkBalloon").Error(ctx, err, "the balloon verb is off")
+		log.WithFunc("pool.balloonReady").Error(ctx, err, "the balloon verb is off")
 		return false
 	}
+	m.balloonOK.Store(true)
 	return true
 }

@@ -511,7 +511,7 @@ fields and deletes the row, so no third node can adopt a stale replica while
 the target runs the claim. It keeps the replica until the move ends. The target's
 first replica round puts a new row when the claim's carried interval comes due,
 from its `replica_at`, at once when the last round is older than the interval,
-and an aborted move lets the source's next round put it again. A source cut off from the
+and an aborted move makes the claim due at the source's next replica sweep, which puts it again. A source cut off from the
 registry changes nothing and its move fails: it keeps the row's epoch, so the
 fence still finds a peer that adopted the claim during the outage, and the source
 drops it. A consume whose reply was lost leaves the source's own tombstone, which
@@ -564,10 +564,13 @@ checkpoint store and keeps each claim's registry row on the latest snapshot:
   write that never landed otherwise. A refused write reads the row: one this node still owns only had a
   stale epoch and is refreshed, and an absent or foreign row drops the claim and
   its VM. A claim's interval runs from its last round, which `claims.json` keeps
-  as `replica_at` and a restart, a move or an adoption carries, so a restart does
-  not reset it and a claim whose last round is older than the interval is due at
-  the first sweep. A claim that has never replicated gets its first round within
-  one interval of the sweep first seeing it, at an offset taken from its id, so
+  as `replica_at` and a restart or a move carries, so a restart does not reset
+  it and a claim whose last round is older than the interval is due at the first
+  sweep. An adoption carries the round before the last, since a round writes the
+  row before it stamps its own time. A claim that has never replicated gets its
+  first round one interval after it was claimed; one claimed more than an
+  interval ago (a restart onto claims that never replicated) gets it within one
+  interval of the sweep first seeing it, at an offset taken from its id, so those
   first rounds spread instead of landing together. Until a claim woken from an
   archive or an adoption commits its first replica it has no row, and it is lost
   with its node. A hibernated, archived or failed claim,
