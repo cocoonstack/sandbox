@@ -3,7 +3,7 @@ module github.com/cocoonstack/sandbox/e2e
 go 1.27.1
 
 require (
-	github.com/cocoonstack/sandbox/protocol/wire v0.1.29
+	github.com/cocoonstack/sandbox/protocol/wire v0.1.30
 	github.com/cocoonstack/sandbox/sandboxd v0.0.0
 	github.com/cocoonstack/sandbox/sdk/go v0.0.0
 )
