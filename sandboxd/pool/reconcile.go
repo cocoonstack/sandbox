@@ -275,7 +275,7 @@ func (m *Manager) resyncEgress(ctx context.Context, live map[string]types.VMReco
 	locked, lockedErr := m.out.LockedTaps()
 	var quarantine []*types.Sandbox
 	for _, sb := range m.claimed {
-		sb.TouchAt(now)
+		sb.TouchAt(seenAt(sb, now))
 		// A hibernated or archived claim has no guest to serve; its wake arms the door
 		if sb.HibernateSnap != "" || sb.ArchiveCk != "" || sb.Failed != "" || sb.MoveIn {
 			continue
@@ -412,4 +412,11 @@ func (m *Manager) reclaimOrphanArchiveCks(ctx context.Context, claims map[string
 			logger.Infof(ctx, "reclaimed orphan archive ck %s", ckpt.ID)
 		}
 	}
+}
+
+func seenAt(sb *types.Sandbox, now time.Time) time.Time {
+	if t := sb.SeenAtShutdown; !t.IsZero() && t.Before(now) {
+		return t
+	}
+	return now
 }
