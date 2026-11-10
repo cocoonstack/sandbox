@@ -1274,7 +1274,8 @@ cap. It covers the claim's [proxy doors](egress.md#bandwidth-limit) and, in
 [advanced network mode](advanced-network.md#host-side), replaces
 `tun.limits.bytes_per_second` for the claim in each direction it sets. Preview,
 port relay and exec traffic is not capped. On a running claim the change
-applies at once to open connections, without a reconnect. The cap is persisted
+applies at once to open connections, without a reconnect; an uncapped direction
+can pass one more splice, up to 1 MiB at the old rate. The cap is persisted
 with the claim, follows it through hibernate, archive, a live move, an archive
 row and an adoption, and is accepted on a hibernated or archived claim without
 waking it; its next wake applies it. A running claim's replica row under

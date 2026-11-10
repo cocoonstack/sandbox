@@ -26,7 +26,7 @@ const (
 
 var limitBufs = sync.Pool{New: func() any { b := make([]byte, limitBurst); return &b }}
 
-// SetLimit caps the claim's bytes per second each way and moves every open tunnel onto the new cap at once.
+// SetLimit caps the claim's bytes per second each way and moves every open tunnel onto the new cap after at most one more splice of an uncapped direction.
 func (p *Proxy) SetLimit(l types.EgressLimit) {
 	cur := p.limits.Load()
 	if cur == nil && l == (types.EgressLimit{}) || cur != nil && cur.set == l {
