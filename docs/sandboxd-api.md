@@ -11,7 +11,7 @@ All bodies are JSON. Four token kinds:
   for a public control plane that must not hold cluster configuration power.
   It acts with root's authority, with no tenant scoping, on exactly
   `POST /v1/claim`, `GET /v1/sandboxes`, `GET /v1/sandboxes/{id}`,
-  `POST /v1/sandboxes/{id}/release|hibernate|wake|renew`,
+  `POST /v1/sandboxes/{id}/release|hibernate|wake|renew|balloon`,
   `GET/PUT/PATCH /v1/sandboxes/{id}/env`, `GET /v1/sandboxes/{id}/ports/{port}`,
   `POST /v1/sandboxes/{id}/exec`, `GET /v1/sandboxes/{id}/owner`, the
   [tenant API](#tenants-v1tenants), `GET /v1/info` and `GET /v1/peers`. Every
@@ -1227,6 +1227,28 @@ journal could not be written (nothing changed); 503 the archive registry is
 down for an archived claim or one with a replica under `archive_failover`:
 the node already holds the change, and a resend of the same body replaces the
 row.
+
+## POST /v1/sandboxes/{id}/balloon
+
+Auth: root or operator; a tenant token answers 403. No body. Counts a running
+claim as unused until its next data-plane connection, so the
+[`balloon`](deploy.md#configuration) sweep inflates it to `idle_percent` of
+guest memory now instead of after `idle_seconds`. The call kicks a sweep and
+returns before cocoon answers; the inflate lands within a sweep interval (5 s).
+The claim stays inflated until anything stamps data-plane use: a relay, exec or
+port connection, a wake, a volume change, a VMM restart, a live move-in, or a
+sandboxd restart, since the mark is held in memory. The next sweep then
+deflates it, as it does after an automatic inflate. An operator port
+connection keeps it deflated only while it is open. Guest egress and tun
+traffic do not deflate it. A failed inflate retries after a minute while the
+claim stays unused; `sandboxd_balloon_failures_total` counts it.
+
+202 accepted; 404 unknown id; 409 `balloon reclaim is off on this node` (no
+`balloon` key, or a cocoon without `vm balloon`),
+`the sandbox's VM has no balloon device` (a VM a sweep found without one),
+`sandbox has an open data-plane connection`, or a hibernated, archived, failed
+or waking claim or one with a capture in flight; 503
+`sandbox moving to another node; retry` during a live move.
 
 ## PUT /v1/sandboxes/{id}/egress-limit
 

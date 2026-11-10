@@ -79,8 +79,8 @@ type Secrets interface {
 
 // Holder is held for the life of every request and tunnel the proxy serves.
 type Holder interface {
-	Hold()
-	Unhold()
+	HoldEgress()
+	UnholdEgress()
 }
 
 // Event is one audited egress attempt; Injected lists the credentials set, comma-separated, and Upstream the proxy host, never their secrets.
@@ -289,8 +289,8 @@ func (p *Proxy) hold() func() {
 	if p.holder == nil {
 		return func() {}
 	}
-	p.holder.Hold()
-	return p.holder.Unhold
+	p.holder.HoldEgress()
+	return p.holder.UnholdEgress
 }
 
 func (p *Proxy) serveConnect(w http.ResponseWriter, r *http.Request) {

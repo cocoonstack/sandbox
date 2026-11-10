@@ -354,6 +354,78 @@ func TestTurningBalloonOffDeflatesTheInflatedClaims(t *testing.T) {
 	}
 }
 
+func TestReclaimMemoryInflatesAnActiveClaimUntilItsNextUse(t *testing.T) {
+	eng := newFakeEngine()
+	m := balloonManager(t, eng, t.TempDir(), config.PoolSpec{PoolKey: testKey})
+	sb := mustClaim(t, m, testKey)
+	if err := m.ReclaimMemory(sb.ID); err != nil {
+		t.Fatalf("reclaim: %v", err)
+	}
+	if len(m.balloonKick) != 1 {
+		t.Fatal("reclaim did not kick a balloon sweep")
+	}
+	sweepBalloons(t, m)
+	sweepBalloons(t, m)
+	if calls, want := balloonCalls(eng), []string{sb.VMName + " 50% after 0 hibernates"}; !slices.Equal(calls, want) {
+		t.Fatalf("balloon calls %q, want one inflate of a claim used a moment ago", calls)
+	}
+	sb.Hold()
+	sb.Unhold()
+	sweepBalloons(t, m)
+	if calls := balloonCalls(eng); len(calls) != 2 {
+		t.Fatalf("balloon calls %q, want a deflate after the next relay", calls)
+	}
+}
+
+func TestReclaimMemoryRefusesWhatTheSweepCannotInflate(t *testing.T) {
+	eng := newFakeEngine()
+	m := balloonManager(t, eng, t.TempDir(), config.PoolSpec{PoolKey: testKey, Warm: 5})
+	held, asleep, archived, bare, arriving := mustClaim(t, m, testKey), mustClaim(t, m, testKey), mustClaim(t, m, testKey), mustClaim(t, m, testKey), mustClaim(t, m, testKey)
+	held.Hold()
+	defer held.UnholdIdle()
+	m.mu.Lock()
+	asleep.HibernateSnap, archived.ArchiveCk, bare.Balloon, arriving.MoveIn = "snap", "ck_00000000000000aa", types.BalloonUnsupported, true
+	m.mu.Unlock()
+	for _, tt := range []struct {
+		id   string
+		want error
+	}{
+		{"sb_missing", ErrUnknownSandbox},
+		{held.ID, ErrInUse},
+		{asleep.ID, ErrPaused},
+		{archived.ID, ErrArchived},
+		{bare.ID, ErrNoBalloon},
+		{arriving.ID, ErrEvacuating},
+	} {
+		if err := m.ReclaimMemory(tt.id); !errors.Is(err, tt.want) {
+			t.Errorf("reclaim %s: %v, want %v", tt.id, err, tt.want)
+		}
+	}
+	m.mu.Lock()
+	asleep.HibernateSnap, archived.ArchiveCk, arriving.MoveIn = "", "", false
+	m.mu.Unlock()
+	editView(m, func(v *configView) { v.balloonIdle = 0 })
+	if err := m.ReclaimMemory(held.ID); !errors.Is(err, ErrBalloonOff) {
+		t.Errorf("reclaim with balloon off: %v, want ErrBalloonOff", err)
+	}
+	if len(m.balloonKick) != 0 || len(balloonCalls(eng)) != 0 {
+		t.Error("a refused reclaim kicked a sweep or ballooned a claim")
+	}
+}
+
+func TestReclaimMemoryRefusesOnACocoonWithoutTheVerb(t *testing.T) {
+	eng := newFakeEngine()
+	eng.balloonSupportErr = errors.New("balloon reclaim requires cocoon with vm balloon")
+	m := balloonManager(t, eng, t.TempDir(), config.PoolSpec{PoolKey: testKey})
+	sb := mustClaim(t, m, testKey)
+	if err := m.ReclaimMemory(sb.ID); !errors.Is(err, ErrBalloonOff) {
+		t.Errorf("reclaim on a cocoon without vm balloon: %v, want ErrBalloonOff", err)
+	}
+	if len(m.balloonKick) != 0 {
+		t.Error("a refused reclaim kicked a sweep")
+	}
+}
+
 func balloonManager(t *testing.T, eng *fakeEngine, dataDir string, pools ...config.PoolSpec) *Manager {
 	t.Helper()
 	m := newTestManagerAt(t, eng, dataDir, pools...)

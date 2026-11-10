@@ -130,6 +130,9 @@ var (
 	ErrMoveTarget          = errors.New("move target failed")
 	ErrMoveDowntime        = errors.New("the final round would exceed max_downtime_ms")
 	ErrMoveStoreDown       = moves.ErrUnavailable
+	ErrBalloonOff          = errors.New("balloon reclaim is off on this node")
+	ErrNoBalloon           = errors.New("the sandbox's VM has no balloon device")
+	ErrInUse               = errors.New("sandbox has an open data-plane connection")
 
 	errNotSleeping   = errors.New("sandbox is no longer hibernated or archived")
 	errWokeMeanwhile = errors.New("woke between sweep and hibernate")
@@ -405,6 +408,7 @@ type Manager struct {
 	maintSem    chan struct{}
 	probeSem    chan struct{}
 	refillKick  chan struct{}
+	balloonKick chan struct{}
 	goldenDumps chan struct{}
 }
 
@@ -451,6 +455,7 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 		maintSem:        make(chan struct{}, max(1, refill-max(1, refill/4))),
 		probeSem:        make(chan struct{}, refill),
 		refillKick:      make(chan struct{}, 1),
+		balloonKick:     make(chan struct{}, 1),
 		healSem:         make(chan struct{}, maxConcurrentHeals),
 	}
 	m.store.dropHostEnv = cfg.HostEnvMemoryOnly
@@ -550,6 +555,8 @@ func (m *Manager) Run(ctx context.Context) {
 			m.refillOnce(ctx)
 		case <-m.refillKick:
 			m.refillOnce(ctx)
+		case <-m.balloonKick:
+			m.balloonOnce(ctx)
 		case <-reap:
 			m.dropIdleReservations()
 			m.dropStaleReaders(ctx)
