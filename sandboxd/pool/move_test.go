@@ -741,7 +741,7 @@ func TestMoveGivesEachRoundADeadlineFromItsSize(t *testing.T) {
 	mc := newMoveCluster(t)
 	sb := mustClaim(t, mc.s, testKey)
 	fakeOf(mc.s).migrateSizes = []int64{1 << 30, 1, 1 << 40}
-	mc.p.wireSizes = []int64{1 << 20, 0, 1 << 20}
+	mc.p.wireSizes = []int64{1 << 20, 0}
 	if _, err := mc.s.Move(t.Context(), sb.ID, "b", time.Hour); err != nil {
 		t.Fatalf("move: %v", err)
 	}
@@ -884,10 +884,7 @@ func TestMoveEstimatesThePauseFromTheBytesOnTheWire(t *testing.T) {
 	if _, err := mc.s.Move(t.Context(), sb.ID, "b", MoveStartAllowance+50*time.Millisecond); !errors.Is(err, ErrMoveDowntime) {
 		t.Fatalf("move of a hot guest: %v, want ErrMoveDowntime", err)
 	}
-	eng.mu.Lock()
-	wentFinal := slices.ContainsFunc(eng.captures, func(c string) bool { return strings.HasSuffix(c, ":true") })
-	eng.mu.Unlock()
-	if wentFinal {
+	if finalCaptured(mc.s) {
 		t.Error("the move paused the guest for a final round that cannot fit")
 	}
 	assertStillOnSource(t, mc, sb)
@@ -895,36 +892,28 @@ func TestMoveEstimatesThePauseFromTheBytesOnTheWire(t *testing.T) {
 
 func TestMoveWhosePausedRoundOverrunsTheBudgetResumesTheGuestOnTheSource(t *testing.T) {
 	for name, tt := range map[string]struct {
-		captureTime, sendTime time.Duration
-		sizes, wire           []int64
-		sentFinal             bool
+		captureTime time.Duration
+		sizes, wire []int64
 	}{
 		"final capture":     {captureTime: 200 * time.Millisecond},
 		"final round grown": {sizes: []int64{1 << 20, 1 << 10, 1 << 40}, wire: []int64{1 << 20, 1 << 10}},
-		"final transfer":    {sendTime: 200 * time.Millisecond, sentFinal: true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			mc := newMoveCluster(t)
 			sb := mustClaim(t, mc.s, testKey)
-			fakeOf(mc.s).finalCaptureTime, fakeOf(mc.s).migrateSizes, mc.p.wireSizes = tt.captureTime, tt.sizes, tt.wire
+			eng := fakeOf(mc.s)
+			eng.finalCaptureTime, eng.migrateSizes, mc.p.wireSizes = tt.captureTime, tt.sizes, tt.wire
 			sentFinal, committed := false, false
 			mc.p.roundHook = func(round int) error {
-				if round == 3 {
-					sentFinal = true
-					time.Sleep(tt.sendTime)
-				}
+				sentFinal = sentFinal || round == 3
 				return nil
 			}
 			mc.p.commitHook = func(int) error { committed = true; return nil }
 			if _, err := mc.s.Move(t.Context(), sb.ID, "b", MoveStartAllowance+100*time.Millisecond); !errors.Is(err, ErrMoveDowntime) {
 				t.Fatalf("move: %v, want ErrMoveDowntime", err)
 			}
-			eng := fakeOf(mc.s)
-			eng.mu.Lock()
-			wentFinal := slices.ContainsFunc(eng.captures, func(c string) bool { return strings.HasSuffix(c, ":true") })
-			eng.mu.Unlock()
-			if !wentFinal || sentFinal != tt.sentFinal || committed {
-				t.Errorf("final capture %v sent %v commit %v, want the capture, a final round sent %v and no commit", wentFinal, sentFinal, committed, tt.sentFinal)
+			if !finalCaptured(mc.s) || sentFinal || committed {
+				t.Errorf("final capture %v sent %v commit %v, want the capture and neither the final round nor a commit", finalCaptured(mc.s), sentFinal, committed)
 			}
 			assertStillOnSource(t, mc, sb)
 			assertNoMoveResidue(t, mc.t, sb.ID)
@@ -933,6 +922,20 @@ func TestMoveWhosePausedRoundOverrunsTheBudgetResumesTheGuestOnTheSource(t *test
 			}
 		})
 	}
+}
+
+func TestMoveCountsTheLastDeltaCaptureBeforePausing(t *testing.T) {
+	mc := newMoveCluster(t)
+	sb := mustClaim(t, mc.s, testKey)
+	fakeOf(mc.s).deltaCaptureTime = 200 * time.Millisecond
+	if _, err := mc.s.Move(t.Context(), sb.ID, "b", MoveStartAllowance+100*time.Millisecond); !errors.Is(err, ErrMoveDowntime) {
+		t.Fatalf("move from a slow-capturing source: %v, want ErrMoveDowntime", err)
+	}
+	if finalCaptured(mc.s) {
+		t.Error("the move paused the guest although its delta captures alone overran the budget")
+	}
+	assertStillOnSource(t, mc, sb)
+	assertNoMoveResidue(t, mc.t, sb.ID)
 }
 
 func TestMoveGivesUpOnDeltasThatStopShrinking(t *testing.T) {
@@ -1915,6 +1918,13 @@ func movingOn(m *Manager, sb *types.Sandbox) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.midMoveLocked(sb)
+}
+
+func finalCaptured(m *Manager) bool {
+	eng := fakeOf(m)
+	eng.mu.Lock()
+	defer eng.mu.Unlock()
+	return slices.ContainsFunc(eng.captures, func(c string) bool { return strings.HasSuffix(c, ":true") })
 }
 
 func pausedOn(m *Manager, vm string) bool {

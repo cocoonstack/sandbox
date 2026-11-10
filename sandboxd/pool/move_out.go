@@ -74,19 +74,17 @@ func (m *Manager) moveOut(ctx context.Context, sb *types.Sandbox, mv *outMove, b
 	if err = m.journalMoveOut(ctx, sb, mv); err != nil {
 		return err
 	}
-	var sent, previous, lastWire, lastBytes int64
-	var sending time.Duration
+	var size, sent, previous int64
+	var sending, capturing time.Duration
 	for delta := 0; ; delta++ {
 		start := time.Now()
-		size, sendErr := m.sendRound(ctx, sb.ID, mv, round)
-		if sendErr != nil {
-			return sendErr
+		if size, err = m.sendRound(ctx, sb.ID, mv, round); err != nil {
+			return err
 		}
 		sending += time.Since(start)
 		sent += size
-		lastWire, lastBytes = size, roundBytes(round)
 		if delta > 0 {
-			if finalPause(size, sent, sending) <= budget {
+			if capturing+finalPause(size, sent, sending) <= budget {
 				break
 			}
 			if delta == moveDeltaLimit || delta > 1 && size*10 >= previous*9 {
@@ -94,10 +92,13 @@ func (m *Manager) moveOut(ctx context.Context, sb *types.Sandbox, mv *outMove, b
 			}
 		}
 		previous = size
+		captured := time.Now()
 		if round, err = m.eng.MigrateCapture(ctx, vm, mv.Series, false); err != nil {
 			return fmt.Errorf("%w: delta capture: %w", ErrNotMovable, err)
 		}
+		capturing = time.Since(captured)
 	}
+	lastBytes := roundBytes(round)
 	m.mu.Lock()
 	mv.final = true
 	m.mu.Unlock()
@@ -113,9 +114,10 @@ func (m *Manager) moveOut(ctx context.Context, sb *types.Sandbox, mv *outMove, b
 		return fmt.Errorf("%w: final capture: %w", ErrNotMovable, err)
 	}
 	mv.capture = time.Since(mv.pausedAt)
-	wire := float64(lastWire) * float64(roundBytes(round)) / float64(max(lastBytes, 1))
+	apparent := roundBytes(round)
+	wire := float64(size) * float64(apparent) / float64(max(lastBytes, 1))
 	if pause := mv.capture + finalPause(int64(wire), sent, sending); pause > budget {
-		return fmt.Errorf("%w: the final round of %d bytes took %s to capture, leaving a pause of about %s", ErrMoveDowntime, roundBytes(round), mv.capture.Round(time.Millisecond), pause.Round(time.Millisecond))
+		return fmt.Errorf("%w: the final round of %d bytes took %s to capture, leaving a pause of about %s", ErrMoveDowntime, apparent, mv.capture.Round(time.Millisecond), pause.Round(time.Millisecond))
 	}
 	final, err := m.moves.Advance(ctx, sb.ID, mv.Epoch, moves.Pending, moves.Final)
 	if err != nil {
@@ -126,9 +128,6 @@ func (m *Manager) moveOut(ctx context.Context, sb *types.Sandbox, mv *outMove, b
 		return err
 	}
 	mv.send = time.Since(start)
-	if pause := time.Since(mv.pausedAt) + MoveStartAllowance; pause > budget {
-		return fmt.Errorf("%w: the final round took %s to arrive", ErrMoveDowntime, mv.send.Round(time.Millisecond))
-	}
 	if used, ok := m.out.TunUsed(sb.ID); ok {
 		m.setTunBytes(sb, used)
 	}
