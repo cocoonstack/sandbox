@@ -103,6 +103,7 @@ type claimStore struct {
 	changed     map[string]struct{}
 	checkpoints map[string]int
 	running     int
+	flushedAt   time.Time
 
 	recommitting atomic.Bool
 }
@@ -152,12 +153,12 @@ func (s *claimStore) set(sbs ...*types.Sandbox) claimSnapshot {
 	return claimSnapshot{seq: s.seq}
 }
 
-func (s *claimStore) setSeen(claims map[string]*types.Sandbox) claimSnapshot {
+func (s *claimStore) setSeen(claims map[string]*types.Sandbox, now time.Time) claimSnapshot {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.flushedAt = now
 	for id, sb := range claims {
 		s.put(id, sb)
-		s.rows[id].dto.LastSeen = sb.LastSeen()
 	}
 	s.seq++
 	return claimSnapshot{seq: s.seq}
@@ -186,6 +187,9 @@ func (s *claimStore) put(id string, sb *types.Sandbox) {
 		dto := dtoOf(sb)
 		if s.dropHostEnv {
 			dto.Env = dto.Env.DropHostValues()
+		}
+		if !s.flushedAt.IsZero() {
+			dto.LastSeen = seenBy(sb, s.flushedAt)
 		}
 		row := &claimRow{dto: dto, running: holdsVM(sb)}
 		if row.running {
@@ -432,6 +436,13 @@ func volumesWantDTO(sb *types.Sandbox) []types.Volume {
 		return nil
 	}
 	return append([]types.Volume{}, sb.VolumesWant...)
+}
+
+func seenBy(sb *types.Sandbox, now time.Time) time.Time {
+	if sb.Busy() {
+		return now
+	}
+	return sb.LastSeen()
 }
 
 func checkpointRefs(sb *types.Sandbox) [4]string {

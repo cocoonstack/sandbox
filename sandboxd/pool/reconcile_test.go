@@ -268,6 +268,58 @@ func TestARestartKeepsEachClaimsIdleClockFromTheShutdownFlush(t *testing.T) {
 	}
 }
 
+func TestAShutdownFlushCountsAClaimWithAConnectionOpenAsSeenThen(t *testing.T) {
+	eng, dir := newFakeEngine(), t.TempDir()
+	m := newTestManagerAt(t, eng, dir, config.PoolSpec{PoolKey: testKey, Warm: 1})
+	sb := mustClaim(t, m, testKey)
+	sb.Hold()
+	defer sb.UnholdIdle()
+	backdate(m, sb, time.Hour)
+	before := time.Now()
+	if err := m.FlushClaims(); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+	restarted := newTestManagerAt(t, eng, dir, config.PoolSpec{PoolKey: testKey, Warm: 1})
+	if err := restarted.Reconcile(t.Context()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	got, ok := restarted.byID(sb.ID)
+	if !ok {
+		t.Fatal("claim lost across the restart")
+	}
+	if got.LastSeen().Before(before) {
+		t.Errorf("a claim held open through the shutdown restarted last seen %v, want the shutdown time", got.LastSeen())
+	}
+}
+
+func TestAClaimWrittenAfterTheShutdownFlushKeepsItsIdleClock(t *testing.T) {
+	eng, dir := newFakeEngine(), t.TempDir()
+	m := newTestManagerAt(t, eng, dir, config.PoolSpec{PoolKey: testKey, Warm: 1})
+	sb := mustClaim(t, m, testKey)
+	backdate(m, sb, 50*time.Minute)
+	want := sb.LastSeen()
+	if err := m.FlushClaims(); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+	m.mu.Lock()
+	js := m.store.set(sb)
+	m.mu.Unlock()
+	if err := m.store.commit(js); err != nil {
+		t.Fatalf("late commit: %v", err)
+	}
+	restarted := newTestManagerAt(t, eng, dir, config.PoolSpec{PoolKey: testKey, Warm: 1})
+	if err := restarted.Reconcile(t.Context()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	got, ok := restarted.byID(sb.ID)
+	if !ok {
+		t.Fatal("claim lost across the restart")
+	}
+	if !got.LastSeen().Equal(want) {
+		t.Errorf("a claim written after the flush restarted last seen %v, want %v", got.LastSeen(), want)
+	}
+}
+
 func TestARestartWithoutAShutdownFlushStartsTheIdleClockNow(t *testing.T) {
 	eng, dir := newFakeEngine(), t.TempDir()
 	m := newTestManagerAt(t, eng, dir, config.PoolSpec{PoolKey: testKey, Warm: 1})

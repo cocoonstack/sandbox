@@ -595,7 +595,7 @@ func (m *Manager) Run(ctx context.Context) {
 func (m *Manager) FlushClaims() error {
 	m.foldTunBytes()
 	m.mu.Lock()
-	js := m.store.setSeen(m.claimed)
+	js := m.store.setSeen(m.claimed, time.Now())
 	m.mu.Unlock()
 	return m.store.commit(js)
 }
