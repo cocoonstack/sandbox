@@ -351,7 +351,8 @@ type Sandbox struct {
 	// MoveOut journals a live move this node runs as the source; nil when none.
 	MoveOut *MoveOut `json:"move_out,omitempty"`
 	// MoveIn marks a claim a live move delivered here and this node has not started yet.
-	MoveIn bool `json:"move_in,omitzero"`
+	MoveIn         bool      `json:"move_in,omitzero"`
+	SeenAtShutdown time.Time `json:"last_seen,omitzero"`
 	// RestartLog holds the recent restart attempts that the loop budget counts; guarded by Transition.
 	RestartLog []time.Time `json:"-"`
 	// ExitRecorded marks a VMM exit already journaled as vmm_exit; guarded by Transition.

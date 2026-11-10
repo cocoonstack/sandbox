@@ -594,7 +594,10 @@ func (m *Manager) Run(ctx context.Context) {
 // FlushClaims synchronously persists the current claim set at shutdown.
 func (m *Manager) FlushClaims() error {
 	m.foldTunBytes()
-	return m.store.commit(m.store.mark())
+	m.mu.Lock()
+	js := m.store.setSeen(m.claimed)
+	m.mu.Unlock()
+	return m.store.commit(js)
 }
 
 // SetTemplateNotifier wires the immediate-republish hook; call it before serving starts.

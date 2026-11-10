@@ -74,6 +74,7 @@ type claimDTO struct {
 	Failed         string             `json:"failed,omitempty"`
 	MoveOut        *types.MoveOut     `json:"move_out,omitempty"`
 	MoveIn         bool               `json:"move_in,omitzero"`
+	LastSeen       time.Time          `json:"last_seen,omitzero"`
 }
 
 // claimRow keeps its encoded member until set replaces the row; set never edits one.
@@ -146,6 +147,17 @@ func (s *claimStore) set(sbs ...*types.Sandbox) claimSnapshot {
 	defer s.mu.Unlock()
 	for _, sb := range sbs {
 		s.put(sb.ID, sb)
+	}
+	s.seq++
+	return claimSnapshot{seq: s.seq}
+}
+
+func (s *claimStore) setSeen(claims map[string]*types.Sandbox) claimSnapshot {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for id, sb := range claims {
+		s.put(id, sb)
+		s.rows[id].dto.LastSeen = sb.LastSeen()
 	}
 	s.seq++
 	return claimSnapshot{seq: s.seq}

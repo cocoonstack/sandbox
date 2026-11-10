@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cocoonstack/sandbox/sandboxd/config"
 	"github.com/cocoonstack/sandbox/sandboxd/engine"
@@ -235,6 +236,62 @@ func TestReconcileSweepsGoldensNoPoolUses(t *testing.T) {
 	}
 	if got := m.pools[testKey].goldenDir; got != pooled {
 		t.Errorf("golden dir %q, want the pooled golden %q adopted", got, pooled)
+	}
+}
+
+func TestARestartKeepsEachClaimsIdleClockFromTheShutdownFlush(t *testing.T) {
+	eng, dir := newFakeEngine(), t.TempDir()
+	m := newTestManagerAt(t, eng, dir, config.PoolSpec{PoolKey: testKey, Warm: 2})
+	idle, asleep := mustClaim(t, m, testKey), mustClaim(t, m, testKey)
+	if err := m.Hibernate(t.Context(), asleep.ID, Cred{Token: asleep.Token}); err != nil {
+		t.Fatalf("hibernate: %v", err)
+	}
+	backdate(m, idle, 50*time.Minute)
+	backdate(m, asleep, 59*time.Minute)
+	want := map[string]time.Time{idle.ID: idle.LastSeen(), asleep.ID: asleep.LastSeen()}
+	if err := m.FlushClaims(); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+
+	restarted := newTestManagerAt(t, eng, dir, config.PoolSpec{PoolKey: testKey, Warm: 2})
+	if err := restarted.Reconcile(t.Context()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	for id, at := range want {
+		sb, ok := restarted.byID(id)
+		if !ok {
+			t.Fatalf("claim %s lost across the restart", id)
+		}
+		if got := sb.LastSeen(); !got.Equal(at) {
+			t.Errorf("claim %s last seen %v after the restart, want %v from before it", id, got, at)
+		}
+	}
+}
+
+func TestARestartWithoutAShutdownFlushStartsTheIdleClockNow(t *testing.T) {
+	eng, dir := newFakeEngine(), t.TempDir()
+	m := newTestManagerAt(t, eng, dir, config.PoolSpec{PoolKey: testKey, Warm: 1})
+	sb := mustClaim(t, m, testKey)
+	backdate(m, sb, time.Hour)
+	if err := m.FlushClaims(); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+	seeded := newTestManagerAt(t, eng, dir, config.PoolSpec{PoolKey: testKey, Warm: 1})
+	if err := seeded.Reconcile(t.Context()); err != nil {
+		t.Fatalf("reconcile after the flush: %v", err)
+	}
+
+	before := time.Now()
+	crashed := newTestManagerAt(t, eng, dir, config.PoolSpec{PoolKey: testKey, Warm: 1})
+	if err := crashed.Reconcile(t.Context()); err != nil {
+		t.Fatalf("reconcile after a crash: %v", err)
+	}
+	got, ok := crashed.byID(sb.ID)
+	if !ok {
+		t.Fatal("claim lost across the restarts")
+	}
+	if got.LastSeen().Before(before) {
+		t.Errorf("last seen %v after a restart with no shutdown flush, want the restart time", got.LastSeen())
 	}
 }
 
