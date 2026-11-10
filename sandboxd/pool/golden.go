@@ -2,7 +2,9 @@ package pool
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -47,9 +49,7 @@ func (m *Manager) buildGolden(ctx context.Context, p *pool) {
 	case stale:
 		p.nextBuild = time.Time{}
 	case err == nil:
-		p.goldenDir, p.imageID = final, imageID
-		p.goldenGen++
-		p.replaced()
+		p.install(final, imageID)
 	default:
 		p.nextBuild = time.Now().Add(buildRetryDelay)
 		// A cold boot hits the same bridge and disk as a refill, so it feeds the park too
@@ -115,9 +115,7 @@ func (m *Manager) adoptGolden(p *pool, imageID string) bool {
 	if err != nil || string(stamp) != want || !dirExists(g) {
 		return false
 	}
-	p.goldenDir, p.imageID = g, imageID
-	p.goldenGen++
-	p.replaced()
+	p.install(g, imageID)
 	return true
 }
 
@@ -230,7 +228,7 @@ func (m *Manager) exportGolden(ctx context.Context, snap, final string, use *syn
 	}
 	use.Lock()
 	defer use.Unlock()
-	if err := os.RemoveAll(final); err != nil {
+	if err := os.Rename(final, filepath.Join(staging, "old")); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return fmt.Errorf("clear golden dir: %w", err)
 	}
 	return os.Rename(tmp, final)

@@ -126,20 +126,21 @@ func (p *pool) popWarm() *types.Sandbox {
 }
 
 func (p *pool) freshWarm() int {
-	return len(p.warm) - p.staleCount()
-}
-
-func (p *pool) staleCount() int {
+	if len(p.staleWarm) == 0 {
+		return len(p.warm)
+	}
 	n := 0
 	for _, sb := range p.warm {
-		if _, old := p.staleWarm[sb.VMName]; old {
+		if _, old := p.staleWarm[sb.VMName]; !old {
 			n++
 		}
 	}
 	return n
 }
 
-func (p *pool) replaced() {
+func (p *pool) install(dir, imageID string) {
+	p.goldenDir, p.imageID = dir, imageID
+	p.goldenGen++
 	if !p.rebuild {
 		return
 	}
@@ -156,19 +157,19 @@ func (p *pool) retireStale(now time.Time) []string {
 	}
 	target := p.effectiveTarget(now)
 	var trim []string
+	kept := make(map[string]struct{}, len(p.staleWarm))
 	p.warm = slices.DeleteFunc(p.warm, func(sb *types.Sandbox) bool {
-		_, old := p.staleWarm[sb.VMName]
-		if !old || len(p.warm)-len(trim) <= target {
+		if _, old := p.staleWarm[sb.VMName]; !old {
 			return false
 		}
-		trim = append(trim, sb.VMName)
-		return true
-	})
-	for name := range p.staleWarm {
-		if !slices.ContainsFunc(p.warm, func(sb *types.Sandbox) bool { return sb.VMName == name }) {
-			delete(p.staleWarm, name)
+		if len(p.warm)-len(trim) > target {
+			trim = append(trim, sb.VMName)
+			return true
 		}
-	}
+		kept[sb.VMName] = struct{}{}
+		return false
+	})
+	p.staleWarm = kept
 	return trim
 }
 

@@ -76,7 +76,7 @@ func TestImageChangeReplacesTheWarmSetWithoutEmptyingIt(t *testing.T) {
 
 		m.refillOnce(t.Context())
 		waitFor(t, func() bool { return poolImage(m) == imageB })
-		if n := len(warmNames(m)); n == 0 {
+		if warmLen(m, testKey) == 0 {
 			t.Fatal("the warm set emptied while the new golden was installed")
 		}
 		m.refillOnce(t.Context())
@@ -125,11 +125,13 @@ func TestAReplaceUnderBusyMaintenanceKeepsLiveVMsWithinTargetPlusTheRefillBudget
 
 		eng.mu.Lock()
 		eng.imageIDs = map[string]string{testKey.Template: imageB}
-		eng.removeStall, eng.heldRemoves = stall, old
 		eng.mu.Unlock()
 		m.checkImagesOnce(t.Context())
 		m.refillOnce(t.Context())
 		waitFor(t, func() bool { return poolImage(m) == imageB })
+		eng.mu.Lock()
+		eng.removeStall = stall
+		eng.mu.Unlock()
 		for range warm {
 			m.refillOnce(t.Context())
 			synctest.Wait()
@@ -195,27 +197,19 @@ func TestARebuildWaitsForACloneOfTheOldGoldenBeforeSwappingIt(t *testing.T) {
 	stall := make(chan struct{})
 	eng.mu.Lock()
 	eng.cloneStall = stall
-	clones := len(eng.clones)
 	eng.mu.Unlock()
+	clones := eng.cloneCount()
 	mustClaim(t, m, testKey)
 	m.refillOnce(t.Context())
-	waitFor(t, func() bool {
-		eng.mu.Lock()
-		defer eng.mu.Unlock()
-		return len(eng.clones) > clones
-	})
+	waitFor(t, func() bool { return eng.cloneCount() > clones })
 
 	eng.mu.Lock()
 	eng.imageIDs = map[string]string{testKey.Template: imageB}
-	exports := len(eng.exports)
 	eng.mu.Unlock()
+	exports := eng.exportCount()
 	m.checkImagesOnce(t.Context())
 	m.refillOnce(t.Context())
-	waitFor(t, func() bool {
-		eng.mu.Lock()
-		defer eng.mu.Unlock()
-		return len(eng.exports) > exports
-	})
+	waitFor(t, func() bool { return eng.exportCount() > exports })
 	for deadline := time.Now().Add(200 * time.Millisecond); time.Now().Before(deadline); time.Sleep(5 * time.Millisecond) {
 		if now, err := os.Stat(golden); err != nil || !os.SameFile(old, now) {
 			t.Fatal("the new golden replaced the old one while a clone of it was running")

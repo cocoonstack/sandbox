@@ -1408,7 +1408,6 @@ type fakeEngine struct {
 
 	cloneStall      chan struct{}
 	maxVMs          int
-	heldRemoves     []string
 	probeStall      chan struct{}
 	hibernateStall  chan struct{}
 	removeStall     chan struct{}
@@ -1530,9 +1529,6 @@ func (f *fakeEngine) Remove(ctx context.Context, name string) error {
 	}
 	f.mu.Lock()
 	stall := f.removeStall
-	if f.heldRemoves != nil && !slices.Contains(f.heldRemoves, name) {
-		stall = nil
-	}
 	f.mu.Unlock()
 	if stall != nil {
 		<-stall
