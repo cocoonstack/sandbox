@@ -157,6 +157,75 @@ func TestDNSDoorDisarmEndsAnOpenConnection(t *testing.T) {
 	}
 }
 
+func TestADisarmedResolverDropsAQueryItReadsAfterTheDisarm(t *testing.T) {
+	upstream := newFakeNameserver(t)
+	h := newHost(t, &fakeEngine{}, poolConfig(testKey, dnsPolicy), func(o *Options) {
+		o.Nameservers = func() []string { return []string{upstream} }
+	})
+	for range 20 {
+		ctx, cancel := context.WithCancel(t.Context())
+		r := newResolver(ctx, h, func(DNSEvent) {})
+		guest, door := net.Pipe()
+		cancel()
+		served := make(chan struct{})
+		go func() {
+			r.serveConn(unclosable{door}, false)
+			close(served)
+		}()
+		_ = guest.SetDeadline(time.Now().Add(time.Second))
+		_ = writeDNSMsg(guest, packQuery(t, dnsmessage.Header{ID: 1}, "public.test."))
+		_ = guest.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+		if answer, err := readDNSMsg(guest, dnsMsgMax); err == nil {
+			t.Fatalf("a resolver canceled by a disarm answered %d bytes to a query it read afterwards", len(answer))
+		}
+		_ = guest.Close()
+		<-served
+		_ = door.Close()
+	}
+}
+
+func TestADisarmLandingWhileAQueryIsAnsweredWritesNoReplyAndRecordsNoFailure(t *testing.T) {
+	for name, during := range map[string]string{"before the exchange": "nameservers", "after the answer": "record"} {
+		t.Run(name, func(t *testing.T) {
+			upstream := newFakeNameserver(t)
+			ctx, cancel := context.WithCancel(t.Context())
+			h := newHost(t, &fakeEngine{}, poolConfig(testKey, dnsPolicy), func(o *Options) {
+				o.Nameservers = func() []string {
+					if during == "nameservers" {
+						cancel()
+					}
+					return []string{upstream}
+				}
+			})
+			var events []DNSEvent
+			r := newResolver(ctx, h, func(ev DNSEvent) {
+				events = append(events, ev)
+				if during == "record" {
+					cancel()
+				}
+			})
+			guest, door := net.Pipe()
+			served := make(chan struct{})
+			go func() {
+				r.serveConn(unclosable{door}, false)
+				close(served)
+			}()
+			_ = guest.SetDeadline(time.Now().Add(time.Second))
+			_ = writeDNSMsg(guest, packQuery(t, dnsmessage.Header{ID: 1}, "public.test."))
+			_ = guest.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
+			if answer, err := readDNSMsg(guest, dnsMsgMax); err == nil {
+				t.Errorf("a disarm landing %s let %d bytes out", name, len(answer))
+			}
+			_ = guest.Close()
+			<-served
+			_ = door.Close()
+			if slices.ContainsFunc(events, func(ev DNSEvent) bool { return ev.Decision == DNSFailed }) {
+				t.Errorf("events %+v, want no DNSFailed for a query the disarm dropped", events)
+			}
+		})
+	}
+}
+
 func TestDNSDoorsHandATruncatedAnswerToEachTransport(t *testing.T) {
 	upstream := newFakeNameserver(t)
 	h := newHost(t, &fakeEngine{}, poolConfig(testKey, dnsPolicy), func(o *Options) {
@@ -668,3 +737,7 @@ func (c *fuzzConn) RemoteAddr() net.Addr             { return nil }
 func (c *fuzzConn) SetDeadline(time.Time) error      { return nil }
 func (c *fuzzConn) SetReadDeadline(time.Time) error  { return nil }
 func (c *fuzzConn) SetWriteDeadline(time.Time) error { return nil }
+
+type unclosable struct{ net.Conn }
+
+func (unclosable) Close() error { return nil }

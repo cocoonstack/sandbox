@@ -111,7 +111,7 @@ func (r *resolver) serveConn(conn net.Conn, datagram bool) {
 			r.h.dnsMalformed.Add(1)
 			return
 		}
-		if err != nil {
+		if err != nil || r.ctx.Err() != nil {
 			return
 		}
 		select {
@@ -121,6 +121,11 @@ func (r *resolver) serveConn(conn net.Conn, datagram bool) {
 		}
 		buf := udpBufs.Get().(*[dnsMsgMax]byte)
 		answer, ok := r.answer(query, buf[:], datagram)
+		if r.ctx.Err() != nil {
+			udpBufs.Put(buf)
+			<-r.inflight
+			return
+		}
 		if ok {
 			_ = conn.SetWriteDeadline(time.Now().Add(dnsIdle))
 			err = writeDNSMsg(conn, answer)
@@ -156,6 +161,8 @@ func (r *resolver) answer(query, buf []byte, datagram bool) ([]byte, bool) {
 		ev.Answers, drop, err = r.scan(resp, hdr.ID)
 	}
 	switch {
+	case err != nil && r.ctx.Err() != nil:
+		return nil, true
 	case err != nil:
 		ev.Decision = DNSFailed
 		r.record(ev)
