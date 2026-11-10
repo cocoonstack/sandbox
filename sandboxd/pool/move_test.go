@@ -43,7 +43,7 @@ func TestMoveHandsARunningClaimToThePeerWithBothNodesCountingIt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("move: %v", err)
 	}
-	if res.Rounds != 3 || res.Downtime <= 0 || res.Send <= 0 || res.Commit <= 0 || res.Capture+res.Send+res.Commit > res.Downtime {
+	if res.Rounds != 3 || res.Downtime <= 0 || res.Capture <= 0 || res.Send <= 0 || res.Commit <= 0 || res.Capture+res.Send+res.Commit > res.Downtime {
 		t.Errorf("result %+v, want a baseline, one delta and the final round with a downtime that covers its phases", res)
 	}
 	for i, counts := range during {
@@ -921,6 +921,16 @@ func TestMoveWhosePausedRoundOverrunsTheBudgetResumesTheGuestOnTheSource(t *test
 				t.Error("the aborted move left its record")
 			}
 		})
+	}
+}
+
+func TestMoveWhoseFinalRoundOutgrowsATinyDeltaStillFits(t *testing.T) {
+	mc := newMoveCluster(t)
+	sb := mustClaim(t, mc.s, testKey)
+	fakeOf(mc.s).migrateSizes = []int64{1 << 20, 1, 1 << 24}
+	mc.p.wireSizes = []int64{1 << 20, 1 << 12}
+	if _, err := mc.s.Move(t.Context(), sb.ID, "b", MoveStartAllowance+500*time.Millisecond); err != nil {
+		t.Fatalf("move whose final round grew by 16 MiB over a 1-byte delta sent as 4 KiB: %v", err)
 	}
 }
 

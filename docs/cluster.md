@@ -453,17 +453,18 @@ deltas never fit answers 503 and the guest runs on; from the second delta on, on
 that shrinks by under 10% and is still too large answers at once. The estimate
 cannot see the pages dirtied since the last delta or a final capture slower than
 the deltas', so once the guest is paused the source checks again: the final
-capture's time plus the final round's bytes on the wire (scaled from the last
-delta's) at the rounds' rate plus the 400 ms. Past `max_downtime_ms` it aborts the
+capture's time plus the final round's bytes on the wire (the last delta's, plus
+the growth of the final round) at the rounds' rate plus the 400 ms. Past `max_downtime_ms` it aborts the
 move before sending the final round: `cocoon vm migrate abort` resumes the guest
 on the source, the target drops what it received, the record ends `aborted`, and
 the move answers 503. The check cannot give back a pause already spent, so a final
 capture that alone overruns the budget still pauses the guest for the capture plus
-the abort; that, not `max_downtime_ms`, is the worst case. Past the check, a slow
+the abort and its record write; with the meta store up, that, not
+`max_downtime_ms`, is the worst case. Past the check, a slow
 transfer or commit still lengthens the pause, and `downtime_ms` reports it. `downtime_ms` in the answer
 is what the source measured from the final capture's start, including its wait
 for a free dump slot, until the target answers the commit, after it started the guest;
-`capture_ms`, `send_ms` and `commit_ms` split it into the final capture, the final
+of which `capture_ms`, `send_ms` and `commit_ms` are the final capture, the final
 round's transfer and the commit. Each round has one minute plus its size at 10 MB/s to arrive, so a
 target that stops reading fails the move. A replicated claim's registry unrow, the final capture, its transfer and the
 target's commit have 2 minutes together; past that the source resolves the move through the record, and the
