@@ -741,7 +741,7 @@ func TestMoveGivesEachRoundADeadlineFromItsSize(t *testing.T) {
 	mc := newMoveCluster(t)
 	sb := mustClaim(t, mc.s, testKey)
 	fakeOf(mc.s).migrateSizes = []int64{1 << 30, 1, 1 << 40}
-	mc.p.wireSizes = []int64{1 << 20, 0}
+	mc.p.wireSizes = []int64{1 << 30, 0}
 	if _, err := mc.s.Move(t.Context(), sb.ID, "b", time.Hour); err != nil {
 		t.Fatalf("move: %v", err)
 	}
