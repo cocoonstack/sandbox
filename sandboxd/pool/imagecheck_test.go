@@ -156,6 +156,58 @@ func TestAReplaceUnderBusyMaintenanceKeepsLiveVMsWithinTargetPlusTheRefillBudget
 	})
 }
 
+func TestARefillDiscardedByAReplaceStaysChargedUntilItsTeardownEnds(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		const warm, claimed = 12, 8
+		eng := newFakeEngine()
+		eng.imageIDs = map[string]string{testKey.Template: imageA}
+		m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: warm})
+		seedGolden(t, m, testKey, imageA)
+		m.refillOnce(t.Context())
+		waitWarm(t, m, warm)
+		for range claimed {
+			mustClaim(t, m, testKey)
+		}
+		eng.mu.Lock()
+		eng.probeStall = make(chan struct{})
+		eng.mu.Unlock()
+		m.refillOnce(t.Context())
+		synctest.Wait()
+
+		eng.mu.Lock()
+		eng.imageIDs = map[string]string{testKey.Template: imageB}
+		eng.mu.Unlock()
+		seedGolden(t, m, testKey, imageB)
+		m.checkImagesOnce(t.Context())
+		m.refillOnce(t.Context())
+		waitFor(t, func() bool { return poolImage(m) == imageB })
+		stall := make(chan struct{})
+		eng.mu.Lock()
+		eng.removeStall = stall
+		close(eng.probeStall)
+		eng.probeStall = nil
+		eng.mu.Unlock()
+		for range warm {
+			m.refillOnce(t.Context())
+			synctest.Wait()
+		}
+		close(stall)
+		for range warm {
+			m.refillOnce(t.Context())
+			synctest.Wait()
+		}
+		eng.mu.Lock()
+		peak := eng.maxVMs
+		eng.mu.Unlock()
+		if limit := warm + claimed + cap(m.refillSem) + cap(m.probeSem); peak > limit {
+			t.Errorf("%d VMs were live at once during the replace, want at most target, claims and the refill budget = %d", peak, limit)
+		}
+		if warmLen(m, testKey) != warm {
+			t.Errorf("warm = %d after the replace, want %d", warmLen(m, testKey), warm)
+		}
+	})
+}
+
 func TestAFailedRebuildKeepsTheOldGoldenServing(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		eng := newFakeEngine()

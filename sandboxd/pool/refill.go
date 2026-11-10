@@ -101,8 +101,7 @@ func (m *Manager) refillOne(ctx context.Context, p *pool, golden string, gen uin
 	if err == nil {
 		m.out.Prebind(ctx, sb)
 	}
-	keep := false
-	var retire []string
+	var teardown []string
 	var fails int
 	var wait time.Duration
 	capReason := engine.CapacitySignature(err)
@@ -111,10 +110,11 @@ func (m *Manager) refillOne(ctx context.Context, p *pool, golden string, gen uin
 	if err == nil && !m.closedLocked() && p.goldenDir != "" && p.goldenGen == gen && p.freshWarm() < p.effectiveTarget(now) {
 		p.warm = append(p.warm, sb)
 		p.noteLead(time.Since(start))
-		keep = true
-		retire = p.retireStale(now)
+		teardown = p.retireStale(now)
+	} else if err == nil {
+		teardown = []string{sb.VMName}
 	}
-	if len(retire) == 0 {
+	if len(teardown) == 0 {
 		p.refilling--
 	}
 	// A canceled context or a capacity failure says nothing about this pool's health
@@ -150,8 +150,8 @@ func (m *Manager) refillOne(ctx context.Context, p *pool, golden string, gen uin
 		}
 		return
 	}
-	if len(retire) > 0 {
-		for _, name := range retire {
+	if len(teardown) > 0 {
+		for _, name := range teardown {
 			m.destroy(ctx, name)
 		}
 		m.mu.Lock()
@@ -160,9 +160,6 @@ func (m *Manager) refillOne(ctx context.Context, p *pool, golden string, gen uin
 	}
 	if ctx.Err() == nil {
 		m.refillOnce(ctx)
-	}
-	if !keep {
-		m.destroy(ctx, sb.VMName)
 	}
 }
 
