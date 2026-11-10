@@ -2528,7 +2528,7 @@ type fakeManager struct {
 	setInstanceMetadata func(id string, doc []byte) error
 	setTun              func(id string, enabled *bool, profile *string) error
 	setEgressLimit      func(id string, l types.EgressLimit) error
-	reclaimMemory       func(id string) error
+	reclaimMemory       idActionFunc
 	infoPools           []pool.PoolInfo
 	infoTemplates       []pool.TemplateInfo
 	labeled             []string

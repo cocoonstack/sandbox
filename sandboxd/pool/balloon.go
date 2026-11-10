@@ -137,6 +137,13 @@ func (m *Manager) balloonTo(ctx context.Context, sb *types.Sandbox, want string)
 	}
 }
 
+func (m *Manager) kickBalloon() {
+	select {
+	case m.balloonKick <- struct{}{}:
+	default:
+	}
+}
+
 // forgetBalloonLocked marks a claim another run or node may have inflated, so the sweep reads its target.
 func (m *Manager) forgetBalloonLocked(sb *types.Sandbox) {
 	sb.Balloon = types.BalloonUnknown

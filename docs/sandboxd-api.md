@@ -30,7 +30,7 @@ All bodies are JSON. Four token kinds:
   resource-creating verbs (claim, fork, promote, checkpoint create/claim,
   preview mint) and the tenant-scoped listings/deletes below; everything a
   tenant creates is stamped with its name. Root surfaces
-  (the per-id sandbox reads, `PUT /v1/sandboxes/{id}/instance-metadata`, `PUT /v1/sandboxes/{id}/tun`, `PUT /v1/sandboxes/{id}/egress-limit`, `GET /v1/info`,
+  (the per-id sandbox reads, `PUT /v1/sandboxes/{id}/instance-metadata`, `PUT /v1/sandboxes/{id}/tun`, `PUT /v1/sandboxes/{id}/egress-limit`, `POST /v1/sandboxes/{id}/balloon`, `GET /v1/info`,
   `PUT /v1/pools`, `POST /v1/config/reload`, the [tenant API](#tenants-v1tenants),
   `POST /v1/sandboxes/{id}/move` and the peer `/v1/moves/{id}` calls, `PUT/DELETE /v1/volumes/{name}`, `POST/DELETE /v1/drain`, `POST/DELETE /v1/cordon`,
   `GET /metrics`, `GET /v1/usage`, `GET /v1/checkpoints/{id}/blob`)
@@ -1234,7 +1234,8 @@ Auth: root or operator; a tenant token answers 403. No body. Counts a running
 claim as unused until its next data-plane connection, so the
 [`balloon`](deploy.md#configuration) sweep inflates it to `idle_percent` of
 guest memory now instead of after `idle_seconds`. The call kicks a sweep and
-returns before cocoon answers; the inflate lands within a sweep interval (5 s).
+returns before cocoon answers; the inflate lands within a sweep interval (5 s),
+a minute after a failed call, or after a balloon call already in flight.
 The claim stays inflated until anything stamps data-plane use: a relay, exec or
 port connection, a wake, a volume change, a VMM restart, a live move-in, or a
 sandboxd restart, since the mark is held in memory. The next sweep then
@@ -1248,8 +1249,8 @@ claim stays unused; `sandboxd_balloon_failures_total` counts it.
 `the sandbox's VM has no balloon device` (a VM a sweep found without one),
 `sandbox has an open data-plane connection`, or a hibernated, archived, failed
 or waking claim or one a hibernate is capturing; 503
-`sandbox moving to another node; retry` during a live move. During a checkpoint
-or fork capture the call answers 202 and the inflate waits for the capture to
+`sandbox moving to another node; retry` during a live move. During a checkpoint,
+fork or promote capture the call answers 202 and the inflate waits for the capture to
 end.
 
 ## PUT /v1/sandboxes/{id}/egress-limit
