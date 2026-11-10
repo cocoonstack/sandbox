@@ -25,7 +25,7 @@ const (
 	warmShrinkDwell = rateDecayTau
 )
 
-// pool fields are guarded by the manager mutex, except claimClones and the immutable key and hash.
+// pool fields are guarded by the manager mutex, except claimClones, goldenUse and the immutable key and hash.
 type pool struct {
 	key  types.PoolKey
 	hash string

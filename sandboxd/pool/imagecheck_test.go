@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/cocoonstack/sandbox/sandboxd/config"
+	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
 const (
@@ -269,6 +270,68 @@ func TestARebuildWaitsForACloneOfTheOldGoldenBeforeSwappingIt(t *testing.T) {
 	}
 	close(stall)
 	waitFor(t, func() bool { return poolImage(m) == imageB })
+}
+
+func TestAClaimCloneOfTheOldGoldenHoldsOffTheSwap(t *testing.T) {
+	eng := newFakeEngine()
+	eng.imageIDs = map[string]string{testKey.Template: imageA}
+	m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey})
+	golden := seedGolden(t, m, testKey, imageA)
+	m.refillOnce(t.Context())
+	waitFor(t, func() bool { return poolImage(m) == imageA })
+	old, err := os.Stat(golden)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stall := make(chan struct{})
+	eng.mu.Lock()
+	eng.cloneStall = stall
+	eng.mu.Unlock()
+	clones := eng.cloneCount()
+	claimed := make(chan error, 1)
+	go func() {
+		_, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{})
+		claimed <- err
+	}()
+	waitFor(t, func() bool { return eng.cloneCount() > clones })
+
+	eng.mu.Lock()
+	eng.imageIDs = map[string]string{testKey.Template: imageB}
+	eng.mu.Unlock()
+	exports := eng.exportCount()
+	m.checkImagesOnce(t.Context())
+	m.refillOnce(t.Context())
+	waitFor(t, func() bool { return eng.exportCount() > exports })
+	for deadline := time.Now().Add(200 * time.Millisecond); time.Now().Before(deadline); time.Sleep(5 * time.Millisecond) {
+		if now, err := os.Stat(golden); err != nil || !os.SameFile(old, now) {
+			t.Fatal("the new golden replaced the old one while a claim cloned it")
+		}
+	}
+	close(stall)
+	if err := <-claimed; err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	waitFor(t, func() bool { return poolImage(m) == imageB })
+}
+
+func TestLoweringWarmDuringAReplaceRetiresOldVMsFirst(t *testing.T) {
+	eng := newFakeEngine()
+	eng.imageIDs = map[string]string{testKey.Template: imageA}
+	m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 2})
+	seedGolden(t, m, testKey, imageA)
+	m.refillOnce(t.Context())
+	waitWarm(t, m, 2)
+	names := warmNames(m)
+	m.mu.Lock()
+	m.pools[testKey].staleWarm = map[string]struct{}{names[0]: {}}
+	m.mu.Unlock()
+
+	if err := m.applyPools(t.Context(), map[types.PoolKey]config.PoolSpec{testKey: {PoolKey: testKey, Warm: 1}}, 1); err != nil {
+		t.Fatalf("applyPools: %v", err)
+	}
+	if now := warmNames(m); !slices.Equal(now, names[1:]) || !eng.removed(names[0]) {
+		t.Errorf("warm %v after lowering warm to 1, want the fresh %v kept and the old %s removed", now, names[1:], names[0])
+	}
 }
 
 func TestImageListFailureChangesNothing(t *testing.T) {
