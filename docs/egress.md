@@ -594,9 +594,9 @@ bucket, and a repeated cap changes nothing. A change reaches every open
 connection at once: the proxy sets a past read deadline on every open tunnel,
 whose copy resumes in the matching mode; an uncapped direction can pass one more
 splice, up to 1 MiB at the old, uncapped rate, when its data arrives together
-with the deadline, and a request reads the cap on every read. A claim in [advanced network mode](advanced-network.md#host-side) keeps
-separate buckets on its tun path, so its proxy and tun traffic are capped
-apart.
+with the deadline, and a request reads the cap on every read. A claim in
+[advanced network mode](advanced-network.md#host-side) keeps separate buckets on
+its tun path, so its proxy and tun traffic are capped apart.
 
 A limited download paces what the proxy reads, not what the far end sends: the
 upstream can run ahead by up to the node's TCP receive buffer per connection

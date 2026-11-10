@@ -14,7 +14,7 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/usage"
 )
 
-// SetEgressLimit replaces a claim's bandwidth cap without waking a hibernated or archived claim; open connections move onto it at once.
+// SetEgressLimit replaces a claim's bandwidth cap without waking a hibernated or archived claim; open connections move onto it at once, after at most one more splice of an uncapped direction.
 func (m *Manager) SetEgressLimit(ctx context.Context, id string, l types.EgressLimit) error {
 	m.mu.Lock()
 	sb := m.claimed[id]
