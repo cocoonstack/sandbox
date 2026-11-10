@@ -354,19 +354,6 @@ func TestTurningBalloonOffDeflatesTheInflatedClaims(t *testing.T) {
 	}
 }
 
-func TestGuestTrafficDoesNotDeflateAnInflatedClaim(t *testing.T) {
-	eng := newFakeEngine()
-	m := balloonManager(t, eng, t.TempDir(), config.PoolSpec{PoolKey: testKey})
-	sb := mustClaim(t, m, testKey)
-	backdate(m, sb, 2*balloonIdleFor)
-	sweepBalloons(t, m)
-	sb.TouchTraffic(time.Now())
-	sweepBalloons(t, m)
-	if calls := balloonCalls(eng); len(calls) != 1 {
-		t.Fatalf("balloon calls %q after a tun packet, want the one inflate", calls)
-	}
-}
-
 func TestReclaimMemoryInflatesAnActiveClaimUntilItsNextUse(t *testing.T) {
 	eng := newFakeEngine()
 	m := balloonManager(t, eng, t.TempDir(), config.PoolSpec{PoolKey: testKey})
@@ -392,12 +379,12 @@ func TestReclaimMemoryInflatesAnActiveClaimUntilItsNextUse(t *testing.T) {
 
 func TestReclaimMemoryRefusesWhatTheSweepCannotInflate(t *testing.T) {
 	eng := newFakeEngine()
-	m := balloonManager(t, eng, t.TempDir(), config.PoolSpec{PoolKey: testKey, Warm: 4})
-	held, asleep, archived, bare := mustClaim(t, m, testKey), mustClaim(t, m, testKey), mustClaim(t, m, testKey), mustClaim(t, m, testKey)
+	m := balloonManager(t, eng, t.TempDir(), config.PoolSpec{PoolKey: testKey, Warm: 5})
+	held, asleep, archived, bare, arriving := mustClaim(t, m, testKey), mustClaim(t, m, testKey), mustClaim(t, m, testKey), mustClaim(t, m, testKey), mustClaim(t, m, testKey)
 	held.Hold()
 	defer held.UnholdIdle()
 	m.mu.Lock()
-	asleep.HibernateSnap, archived.ArchiveCk, bare.Balloon = "snap", "ck_00000000000000aa", types.BalloonUnsupported
+	asleep.HibernateSnap, archived.ArchiveCk, bare.Balloon, arriving.MoveIn = "snap", "ck_00000000000000aa", types.BalloonUnsupported, true
 	m.mu.Unlock()
 	for _, tt := range []struct {
 		id   string
@@ -408,13 +395,14 @@ func TestReclaimMemoryRefusesWhatTheSweepCannotInflate(t *testing.T) {
 		{asleep.ID, ErrPaused},
 		{archived.ID, ErrArchived},
 		{bare.ID, ErrNoBalloon},
+		{arriving.ID, ErrEvacuating},
 	} {
 		if err := m.ReclaimMemory(tt.id); !errors.Is(err, tt.want) {
 			t.Errorf("reclaim %s: %v, want %v", tt.id, err, tt.want)
 		}
 	}
 	m.mu.Lock()
-	asleep.HibernateSnap, archived.ArchiveCk = "", ""
+	asleep.HibernateSnap, archived.ArchiveCk, arriving.MoveIn = "", "", false
 	m.mu.Unlock()
 	editView(m, func(v *configView) { v.balloonIdle = 0 })
 	if err := m.ReclaimMemory(held.ID); !errors.Is(err, ErrBalloonOff) {

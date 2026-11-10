@@ -30,14 +30,14 @@ func (m *Manager) ReclaimMemory(id string) error {
 	switch {
 	case sb == nil:
 		err = ErrUnknownSandbox
+	case m.midMoveLocked(sb):
+		err = ErrEvacuating
 	case sb.Failed != "":
 		err = ErrFailed
 	case sb.ArchiveCk != "":
 		err = ErrArchived
 	case !runningShaped(sb) || sb.Waking:
 		err = ErrPaused
-	case m.midMoveLocked(sb):
-		err = ErrEvacuating
 	case sb.Balloon == types.BalloonUnsupported:
 		err = ErrNoBalloon
 	case sb.InUse():
@@ -47,10 +47,7 @@ func (m *Manager) ReclaimMemory(id string) error {
 	}
 	m.mu.Unlock()
 	if err == nil {
-		select {
-		case m.balloonKick <- struct{}{}:
-		default:
-		}
+		m.kickBalloon()
 	}
 	return err
 }

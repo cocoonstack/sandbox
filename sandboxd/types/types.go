@@ -374,15 +374,14 @@ type Sandbox struct {
 	BalloonRetryAt time.Time    `json:"-"`
 	BalloonBusy    bool         `json:"-"`
 
-	// lastActivity is unix-nanos of the last data-plane connection, egress request or tun packet, stamped lock-free.
+	// lastActivity is unix-nanos of the last data-plane connection, stamped lock-free; lastTraffic of the last egress request or tun packet.
 	lastActivity atomic.Int64
-	// lastUse is unix-nanos of the last data-plane connection alone.
-	lastUse atomic.Int64
+	lastTraffic  atomic.Int64
 	// idleMark is unix-nanos of the last MarkIdle.
 	idleMark atomic.Int64
-	// open counts the data-plane connections and egress requests held right now; uses counts the data-plane ones.
-	open atomic.Int32
-	uses atomic.Int32
+	// open counts the data-plane connections held right now; egress the egress requests.
+	open   atomic.Int32
+	egress atomic.Int32
 	// live is the env as of the last SetEnv, read by the egress proxy without the manager mutex.
 	live atomic.Pointer[envView]
 
@@ -391,19 +390,18 @@ type Sandbox struct {
 }
 
 // Touch stamps last data-plane activity; lock-free, called on the relay hot path.
-func (s *Sandbox) Touch() { s.TouchAt(time.Now()) }
+func (s *Sandbox) Touch() { s.lastActivity.Store(time.Now().UnixNano()) }
 
 // TouchAt stamps the last data-plane activity at t.
-func (s *Sandbox) TouchAt(t time.Time) {
-	s.lastUse.Store(t.UnixNano())
-	s.lastActivity.Store(t.UnixNano())
-}
+func (s *Sandbox) TouchAt(t time.Time) { s.lastActivity.Store(t.UnixNano()) }
 
 // TouchTraffic stamps guest traffic at t, which keeps the claim awake but does not count as use.
-func (s *Sandbox) TouchTraffic(t time.Time) { s.lastActivity.Store(t.UnixNano()) }
+func (s *Sandbox) TouchTraffic(t time.Time) { s.lastTraffic.Store(t.UnixNano()) }
 
 // LastSeen returns the last activity time, guest traffic included.
-func (s *Sandbox) LastSeen() time.Time { return time.Unix(0, s.lastActivity.Load()) }
+func (s *Sandbox) LastSeen() time.Time {
+	return time.Unix(0, max(s.lastActivity.Load(), s.lastTraffic.Load()))
+}
 
 // MarkIdle counts the claim as unused until its next data-plane connection.
 func (s *Sandbox) MarkIdle() { s.idleMark.Store(time.Now().UnixNano()) }
@@ -413,7 +411,7 @@ func (s *Sandbox) UnusedFor(d time.Duration, now time.Time) bool {
 	if s.InUse() {
 		return false
 	}
-	last := s.lastUse.Load()
+	last := s.lastActivity.Load()
 	return now.UnixNano()-last >= int64(d) || s.idleMark.Load() >= last
 }
 
@@ -421,38 +419,31 @@ func (s *Sandbox) UnusedFor(d time.Duration, now time.Time) bool {
 func (s *Sandbox) HasReplica() bool { return s.ReplicaCk != "" || s.ReplicaPending != "" }
 
 // Hold registers an open data-plane connection; the idle sweep leaves a held sandbox alone.
-func (s *Sandbox) Hold() {
-	s.uses.Add(1)
-	s.open.Add(1)
-}
+func (s *Sandbox) Hold() { s.open.Add(1) }
 
 // Unhold restarts the idle clock, then ends the Hold; a sweep that sees the hold gone also sees the fresh stamp.
 func (s *Sandbox) Unhold() {
 	s.Touch()
 	s.open.Add(-1)
-	s.uses.Add(-1)
 }
 
 // UnholdIdle ends a Hold without restarting the idle clock.
-func (s *Sandbox) UnholdIdle() {
-	s.open.Add(-1)
-	s.uses.Add(-1)
-}
+func (s *Sandbox) UnholdIdle() { s.open.Add(-1) }
 
 // HoldEgress registers an egress request in flight, which keeps the claim awake but does not count as use.
-func (s *Sandbox) HoldEgress() { s.open.Add(1) }
+func (s *Sandbox) HoldEgress() { s.egress.Add(1) }
 
 // UnholdEgress stamps guest traffic, then ends the HoldEgress.
 func (s *Sandbox) UnholdEgress() {
 	s.TouchTraffic(time.Now())
-	s.open.Add(-1)
+	s.egress.Add(-1)
 }
 
 // Busy reports whether a data-plane connection or an egress request is held.
-func (s *Sandbox) Busy() bool { return s.open.Load() > 0 }
+func (s *Sandbox) Busy() bool { return s.open.Load() > 0 || s.egress.Load() > 0 }
 
 // InUse reports whether a data-plane connection is held.
-func (s *Sandbox) InUse() bool { return s.uses.Load() > 0 }
+func (s *Sandbox) InUse() bool { return s.open.Load() > 0 }
 
 // SetEnv replaces the env and publishes it to the egress proxy.
 func (s *Sandbox) SetEnv(e Env) {

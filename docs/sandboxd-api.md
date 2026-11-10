@@ -1233,8 +1233,8 @@ row.
 Auth: root or operator; a tenant token answers 403. No body. Counts a running
 claim as unused until its next data-plane connection, so the
 [`balloon`](deploy.md#configuration) sweep inflates it to `idle_percent` of
-guest memory now instead of after `idle_seconds`. The call starts a sweep at
-once and returns before cocoon answers. The claim stays inflated until a relay,
+guest memory now instead of after `idle_seconds`. The call kicks a sweep and
+returns before cocoon answers; the inflate lands within a sweep interval (5 s). The claim stays inflated until a relay,
 exec or port connection reaches it, and the next sweep then deflates it, as it
 does after an automatic inflate. Guest egress and tun traffic do not deflate it.
 A failed inflate retries after a minute while the claim stays unused;

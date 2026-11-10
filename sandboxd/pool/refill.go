@@ -19,6 +19,13 @@ func (m *Manager) kickRefill() {
 	}
 }
 
+func (m *Manager) kickBalloon() {
+	select {
+	case m.balloonKick <- struct{}{}:
+	default:
+	}
+}
+
 func (m *Manager) refillOnce(ctx context.Context) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
