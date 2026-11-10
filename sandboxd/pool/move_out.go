@@ -349,6 +349,9 @@ func (m *Manager) abortMoveOut(ctx context.Context, sb *types.Sandbox, mv *outMo
 	logger := log.WithFunc("pool.abortMoveOut")
 	m.mu.Lock()
 	vm, live := sb.VMName, m.claimed[sb.ID] == sb
+	if live && (mv.final || sb.ReplicaCk == "" && !sb.ReplicaAt.IsZero()) {
+		sb.ReplicaDue = true
+	}
 	m.mu.Unlock()
 	if live && mv.Series != "" {
 		if err := m.eng.MigrateAbort(ctx, vm, mv.Series); err != nil {

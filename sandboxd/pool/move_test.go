@@ -517,7 +517,7 @@ func TestMoveOfAReplicatedClaimDropsItsRowBeforeTheFinalRound(t *testing.T) {
 	sb := mustClaim(t, mc.s, testKey)
 	replicateNow(t, mc.s, sb)
 	mc.s.mu.Lock()
-	replica := sb.ReplicaCk
+	replica, replicaAt := sb.ReplicaCk, sb.ReplicaAt
 	mc.s.mu.Unlock()
 	if _, ok, _ := mc.reg.Get(t.Context(), sb.ID); !ok || replica == "" {
 		t.Fatal("setup: the claim has no replica row")
@@ -538,6 +538,9 @@ func TestMoveOfAReplicatedClaimDropsItsRowBeforeTheFinalRound(t *testing.T) {
 	}
 	if ckExists(t, mc.s, replica) {
 		t.Error("the stale replica outlived the move")
+	}
+	if moved, ok := mc.t.byID(sb.ID); !ok || !moved.ReplicaAt.Equal(replicaAt) {
+		t.Errorf("target claim %v replica_at %v, want the source's last round %v", ok, moved.ReplicaAt, replicaAt)
 	}
 }
 
@@ -560,9 +563,10 @@ func TestMoveAbortedAfterDroppingTheRowPutsItBackOnTheNextRound(t *testing.T) {
 		t.Fatal("the row survived the final round")
 	}
 	mc.p.commitHook = nil
-	replicateNow(t, mc.s, sb)
+	mc.s.replicateOnce(t.Context())
+	waitFor(t, func() bool { return !mc.s.replicating.Load() })
 	if _, ok, _ := mc.reg.Get(t.Context(), sb.ID); !ok {
-		t.Error("the next round did not put the row back")
+		t.Error("the first sweep after the abort did not put the row back")
 	}
 }
 
@@ -621,6 +625,12 @@ func TestMoveWhoseRowConsumeReplyIsLostKeepsTheGuestAndItsReplica(t *testing.T) 
 	}
 	if !ckExists(t, mc.s, replica) {
 		t.Fatal("the failed move deleted the replica the claim still names")
+	}
+	mc.s.archives = mc.reg
+	mc.s.replicateOnce(t.Context())
+	waitFor(t, func() bool { return !mc.s.replicating.Load() })
+	if rec, ok, _ := mc.reg.Get(t.Context(), sb.ID); !ok || rec.Consumed {
+		t.Fatalf("row %+v %v after the first sweep, want a live row again", rec, ok)
 	}
 	mc.s.sweepOrphanArchives(t.Context())
 	if rec, ok, _ := mc.reg.Get(t.Context(), sb.ID); !ok || rec.Consumed || rec.Checkpoint != replica {
@@ -1155,6 +1165,35 @@ func TestMoveRestartResolvesAJournaledMoveThroughItsRecord(t *testing.T) {
 			defer eng.mu.Unlock()
 			tt.check(t, eng)
 		})
+	}
+}
+
+func TestMoveRestartAbortOfAnUnrowedClaimMakesItDue(t *testing.T) {
+	const vm, series = "sbx-unrowed", "s1"
+	c := newFailoverCluster(t)
+	reg := movestest.NewMem()
+	c.moves = reg
+	epoch := seedMoveRecord(t, reg, "sb_unrowed", "a", "b", moves.Final)
+	sb := &types.Sandbox{ID: "sb_unrowed", VMName: vm, Key: testKey, Token: "tok", Deadline: time.Now().Add(time.Hour), ReplicaAt: time.Now().Add(-time.Minute)}
+	sb.MoveOut = &types.MoveOut{Epoch: epoch, Series: series}
+	dataDir := t.TempDir()
+	seedClaims(t, dataDir, map[string]*types.Sandbox{sb.ID: sb})
+	eng := newFakeEngine()
+	eng.vms[vm], eng.migrateSeries[vm] = "/vsock/"+vm, series
+	m := c.nodeOn(t, eng, "a", dataDir, keepAnHour)
+	m.liftFence()
+	if err := m.Reconcile(t.Context()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	waitFor(t, func() bool { return !m.moveHeld(sb.ID) })
+	held, ok := m.byID(sb.ID)
+	if !ok {
+		t.Fatal("the source lost the claim whose move it aborted")
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !held.ReplicaDue {
+		t.Error("the claim whose row the move dropped is not due at the next replica sweep after a restarted abort")
 	}
 }
 

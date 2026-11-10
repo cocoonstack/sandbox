@@ -669,6 +669,9 @@ func (m *Manager) fenceArchived(ctx context.Context, claims map[string]*types.Sa
 				drop = true
 			default:
 				if ok && !rec.Consumed {
+					if rec.Checkpoint == sb.ReplicaPending {
+						sb.ReplicaAt = time.Now()
+					}
 					sb.ReplicaCk, sb.ArchiveEpoch = rec.Checkpoint, rec.Epoch
 				}
 				sb.ReplicaPending = ""

@@ -12,7 +12,7 @@ import (
 
 // SetBalloon sets a running claim's balloon target through cocoon and returns cocoon's report; the caller restores the reply's default.
 func (m *Manager) SetBalloon(ctx context.Context, id, target string) (types.VMBalloon, error) {
-	if !m.balloonReady() {
+	if !m.balloonReady(ctx) {
 		return types.VMBalloon{}, ErrBalloonOff
 	}
 	m.mu.Lock()
@@ -45,11 +45,14 @@ func (m *Manager) SetBalloon(ctx context.Context, id, target string) (types.VMBa
 	return b, err
 }
 
-func (m *Manager) checkBalloon() bool {
-	ctx := context.Background()
+func (m *Manager) balloonReady(ctx context.Context) bool {
+	if m.balloonOK.Load() {
+		return true
+	}
 	if err := m.eng.CheckBalloonSupport(ctx); err != nil {
-		log.WithFunc("pool.checkBalloon").Error(ctx, err, "the balloon verb is off")
+		log.WithFunc("pool.balloonReady").Error(ctx, err, "the balloon verb is off")
 		return false
 	}
+	m.balloonOK.Store(true)
 	return true
 }
