@@ -934,6 +934,28 @@ func TestMoveWhoseFinalRoundOutgrowsATinyDeltaStillFits(t *testing.T) {
 	}
 }
 
+func TestMoveWhoseFinalRoundShrinksStillCountsTheLastDeltasBytes(t *testing.T) {
+	mc := newMoveCluster(t)
+	sb := mustClaim(t, mc.s, testKey)
+	eng := fakeOf(mc.s)
+	eng.finalCaptureTime, eng.migrateSizes = 100*time.Millisecond, []int64{1 << 30, 512 << 20, 256 << 20}
+	mc.p.wireSizes = []int64{32 << 20, 32 << 20}
+	mc.p.roundHook = func(round int) error {
+		if round == 2 {
+			time.Sleep(200 * time.Millisecond)
+		}
+		return nil
+	}
+	if _, err := mc.s.Move(t.Context(), sb.ID, "b", MoveStartAllowance+160*time.Millisecond); !errors.Is(err, ErrMoveDowntime) {
+		t.Fatalf("move whose sparse final round shrank after a slow 32 MiB delta: %v, want ErrMoveDowntime", err)
+	}
+	if !finalCaptured(mc.s) {
+		t.Error("the move refused before the final capture, want the paused-round check to refuse it")
+	}
+	assertStillOnSource(t, mc, sb)
+	assertNoMoveResidue(t, mc.t, sb.ID)
+}
+
 func TestMoveGivesUpOnDeltasThatStopShrinking(t *testing.T) {
 	for name, tt := range map[string]struct {
 		sizes    []int64

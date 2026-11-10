@@ -113,7 +113,7 @@ func (m *Manager) moveOut(ctx context.Context, sb *types.Sandbox, mv *outMove, b
 	}
 	mv.capture = time.Since(mv.pausedAt)
 	apparent := roundBytes(round)
-	wire := max(size+apparent-lastBytes, 0)
+	wire := size + max(apparent-lastBytes, 0)
 	if pause := mv.capture + finalPause(wire, sent, sending); pause > budget {
 		return fmt.Errorf("%w: the final round of %d bytes took %s to capture, leaving a pause of about %s", ErrMoveDowntime, apparent, mv.capture.Round(time.Millisecond), pause.Round(time.Millisecond))
 	}
