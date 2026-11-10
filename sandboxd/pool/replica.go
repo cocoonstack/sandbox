@@ -42,7 +42,7 @@ func (m *Manager) replicateOnce(ctx context.Context) {
 		case now.Sub(tried) < every:
 			next[id] = tried
 		default:
-			next[id] = now
+			next[id] = now.Add(-(now.Sub(tried) % every))
 			due = append(due, sb)
 		}
 	}

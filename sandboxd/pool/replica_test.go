@@ -139,6 +139,38 @@ func TestClaimsNeverReplicatedSpreadTheirFirstRoundOverAnInterval(t *testing.T) 
 	}
 }
 
+func TestOverdueClaimsKeepTheirPhasesAfterTheCatchUpRound(t *testing.T) {
+	c := newReplicaCluster(t)
+	a := c.node(t, "a", t.TempDir(), keepAnHour)
+	every := replicateEvery * time.Second
+	now := time.Now()
+	ids := make([]string, 4)
+	for i := range ids {
+		ids[i] = mustClaim(t, a, testKey).ID
+	}
+	a.mu.Lock()
+	a.replicas = map[string]time.Time{}
+	for i, id := range ids {
+		a.replicas[id] = now.Add(-3*every - time.Duration(i)*every/4)
+	}
+	a.mu.Unlock()
+	a.replicateOnce(t.Context())
+	waitFor(t, func() bool { return !a.replicating.Load() })
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	seen := map[time.Duration]bool{}
+	for _, id := range ids {
+		phase := a.replicas[id].Sub(now) % every
+		if phase < 0 {
+			phase += every
+		}
+		seen[phase.Round(time.Second)] = true
+	}
+	if len(seen) != len(ids) {
+		t.Errorf("the catch-up round left %d distinct phases for %d claims, want each claim's own", len(seen), len(ids))
+	}
+}
+
 func TestReplicaRefusedPutDropsTheCopyAndItsExport(t *testing.T) {
 	c := newReplicaCluster(t)
 	a, b := c.node(t, "a", t.TempDir(), keepAnHour), c.node(t, "b", t.TempDir(), keepAnHour)
@@ -613,8 +645,17 @@ func TestReplicaPassSnapshotsOnlyDueRunningClaims(t *testing.T) {
 		if got := len(eng.snapSaves) - base; got != 0 || a.replicaOf(running) != "" {
 			t.Fatalf("%d captures on the tick that first saw the claims, want none", got)
 		}
+		a.mu.Lock()
+		a.replicas[running.ID] = time.Now()
+		a.mu.Unlock()
+		time.Sleep((replicateEvery - 1) * time.Second)
+		a.replicateOnce(t.Context())
+		synctest.Wait()
+		if got := len(eng.snapSaves) - base; got != 0 {
+			t.Fatalf("%d captures before the interval, want none", got)
+		}
 
-		time.Sleep(replicateEvery * time.Second)
+		time.Sleep(time.Second)
 		a.replicateOnce(t.Context())
 		synctest.Wait()
 		if got := len(eng.snapSaves) - base; got != 1 || a.replicaOf(running) == "" {
