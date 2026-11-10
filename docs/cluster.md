@@ -496,8 +496,9 @@ the call answers 502 and the guest resumes on the source.
 registry row, since no node adopts a tombstone, then clears the claim's replica
 fields and deletes the row, so no third node can adopt a stale replica while
 the target runs the claim. It keeps the replica until the move ends. The target's
-first replica round puts a new row one interval after the start, and an aborted
-move lets the source's next round put it again. A source cut off from the
+first replica round puts a new row when the claim's carried interval comes due,
+from its `replica_at`, at once when the last round is older than the interval,
+and an aborted move lets the source's next round put it again. A source cut off from the
 registry changes nothing and its move fails: it keeps the row's epoch, so the
 fence still finds a peer that adopted the claim during the outage, and the source
 drops it. A consume whose reply was lost leaves the source's own tombstone, which
