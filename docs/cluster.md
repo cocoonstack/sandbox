@@ -549,9 +549,14 @@ checkpoint store and keeps each claim's registry row on the latest snapshot:
   when the checkpoint is gone or this node confirmed an earlier row, and a
   write that never landed otherwise. A refused write reads the row: one this node still owns only had a
   stale epoch and is refreshed, and an absent or foreign row drops the claim and
-  its VM. A claim gets its first replica one interval after it is claimed, after a
-  restart, or after it wakes from an archive or an adoption; until a claim woken
-  that way commits its first replica it has no row, and it is lost with its node. A hibernated, archived or failed claim,
+  its VM. A claim's interval runs from its last round, which `claims.json` keeps
+  as `replica_at` and a restart, a move or an adoption carries, so a restart does
+  not reset it and a claim whose last round is older than the interval is due at
+  the first sweep. A claim that has never replicated gets its first round within
+  one interval of the sweep first seeing it, at an offset taken from its id, so
+  first rounds spread instead of landing together. Until a claim woken from an
+  archive or an adoption commits its first replica it has no row, and it is lost
+  with its node. A hibernated, archived or failed claim,
   one whose tenant was removed, and one with volumes (capture refuses them) is
   skipped, and a skipped claim keeps its interval, so one that wakes past it is due at once; a replicated claim that gains volumes
   drops its row and replica. The claim's policy pool, not its own template key,
