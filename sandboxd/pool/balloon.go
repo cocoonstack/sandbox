@@ -19,7 +19,43 @@ const (
 	bootBalloonTarget     = "25%"
 )
 
-// balloonOnce inflates the balloon of a claim idle past balloon.idle_seconds and deflates one active again, off every request path.
+// ReclaimMemory counts a running claim as unused until its next data-plane connection and starts a balloon sweep, which inflates it.
+func (m *Manager) ReclaimMemory(id string) error {
+	if m.view.Load().balloonIdle <= 0 {
+		return ErrBalloonOff
+	}
+	m.mu.Lock()
+	sb := m.claimed[id]
+	var err error
+	switch {
+	case sb == nil:
+		err = ErrUnknownSandbox
+	case sb.Failed != "":
+		err = ErrFailed
+	case sb.ArchiveCk != "":
+		err = ErrArchived
+	case !runningShaped(sb) || sb.Waking:
+		err = ErrPaused
+	case m.midMoveLocked(sb):
+		err = ErrEvacuating
+	case sb.Balloon == types.BalloonUnsupported:
+		err = ErrNoBalloon
+	case sb.InUse():
+		err = ErrInUse
+	default:
+		sb.MarkIdle()
+	}
+	m.mu.Unlock()
+	if err == nil {
+		select {
+		case m.balloonKick <- struct{}{}:
+		default:
+		}
+	}
+	return err
+}
+
+// balloonOnce inflates the balloon of a claim unused past balloon.idle_seconds and deflates one used again, off every request path.
 func (m *Manager) balloonOnce(ctx context.Context) {
 	if m.view.Load().balloonIdle > 0 {
 		m.balloonSeen.Store(true)
@@ -148,7 +184,7 @@ func balloonDue(sb *types.Sandbox, want string) bool {
 }
 
 func balloonWant(sb *types.Sandbox, v *configView, now time.Time) string {
-	if v.balloonIdle > 0 && !sb.Busy() && now.Sub(sb.LastSeen()) >= v.balloonIdle {
+	if v.balloonIdle > 0 && sb.UnusedFor(v.balloonIdle, now) {
 		return v.balloonTarget
 	}
 	return ""

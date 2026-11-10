@@ -2416,6 +2416,47 @@ func TestEgressLimitVerbIsRootOnlyAndPassesTheDecodedLimit(t *testing.T) {
 	}
 }
 
+func TestBalloonVerbIsRootOrOperatorAndMapsItsRefusals(t *testing.T) {
+	var calls int
+	var gotID string
+	var failWith error
+	mgr := &fakeManager{reclaimMemory: func(id string) error {
+		calls++
+		gotID = id
+		return failWith
+	}}
+	ts := newTenantTestServer(t, "sekret", []tenants.TenantSpec{{Name: "acme", Token: "acme-tok"}}, mgr, nil)
+	for _, tt := range []struct {
+		name, token string
+		failWith    error
+		want        int
+		wantCalls   int
+	}{
+		{"root", "sekret", nil, http.StatusAccepted, 1},
+		{"tenant token", "acme-tok", nil, http.StatusForbidden, 0},
+		{"sandbox token", "tok", nil, http.StatusUnauthorized, 0},
+		{"no token", "", nil, http.StatusUnauthorized, 0},
+		{"unknown sandbox", "sekret", pool.ErrUnknownSandbox, http.StatusNotFound, 1},
+		{"balloon off", "sekret", pool.ErrBalloonOff, http.StatusConflict, 1},
+		{"no balloon device", "sekret", pool.ErrNoBalloon, http.StatusConflict, 1},
+		{"in use", "sekret", pool.ErrInUse, http.StatusConflict, 1},
+		{"hibernated", "sekret", pool.ErrPaused, http.StatusConflict, 1},
+		{"archived", "sekret", pool.ErrArchived, http.StatusConflict, 1},
+		{"moving", "sekret", pool.ErrEvacuating, http.StatusServiceUnavailable, 1},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			calls, gotID, failWith = 0, "", tt.failWith
+			code := statusOf(t, http.MethodPost, ts.URL+"/v1/sandboxes/sb_1/balloon", tt.token, "")
+			if code != tt.want || calls != tt.wantCalls {
+				t.Fatalf("status %d with %d manager calls, want %d with %d", code, calls, tt.want, tt.wantCalls)
+			}
+			if tt.wantCalls > 0 && gotID != "sb_1" {
+				t.Errorf("manager got %q, want sb_1", gotID)
+			}
+		})
+	}
+}
+
 type ownerReply struct {
 	OwnerAddr string `json:"owner_addr"`
 }
@@ -2487,6 +2528,7 @@ type fakeManager struct {
 	setInstanceMetadata func(id string, doc []byte) error
 	setTun              func(id string, enabled *bool, profile *string) error
 	setEgressLimit      func(id string, l types.EgressLimit) error
+	reclaimMemory       func(id string) error
 	infoPools           []pool.PoolInfo
 	infoTemplates       []pool.TemplateInfo
 	labeled             []string
@@ -2806,6 +2848,13 @@ func (f *fakeManager) SetEgressLimit(_ context.Context, id string, l types.Egres
 		return nil
 	}
 	return f.setEgressLimit(id, l)
+}
+
+func (f *fakeManager) ReclaimMemory(id string) error {
+	if f.reclaimMemory == nil {
+		return nil
+	}
+	return f.reclaimMemory(id)
 }
 
 func (f *fakeManager) TunStats() (tunnet.Stats, bool) {

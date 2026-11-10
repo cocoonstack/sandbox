@@ -11,7 +11,7 @@ All bodies are JSON. Four token kinds:
   for a public control plane that must not hold cluster configuration power.
   It acts with root's authority, with no tenant scoping, on exactly
   `POST /v1/claim`, `GET /v1/sandboxes`, `GET /v1/sandboxes/{id}`,
-  `POST /v1/sandboxes/{id}/release|hibernate|wake|renew`,
+  `POST /v1/sandboxes/{id}/release|hibernate|wake|renew|balloon`,
   `GET/PUT/PATCH /v1/sandboxes/{id}/env`, `GET /v1/sandboxes/{id}/ports/{port}`,
   `POST /v1/sandboxes/{id}/exec`, `GET /v1/sandboxes/{id}/owner`, the
   [tenant API](#tenants-v1tenants), `GET /v1/info` and `GET /v1/peers`. Every
@@ -1227,6 +1227,23 @@ journal could not be written (nothing changed); 503 the archive registry is
 down for an archived claim or one with a replica under `archive_failover`:
 the node already holds the change, and a resend of the same body replaces the
 row.
+
+## POST /v1/sandboxes/{id}/balloon
+
+Auth: root or operator; a tenant token answers 403. No body. Counts a running
+claim as unused until its next data-plane connection, so the
+[`balloon`](deploy.md#configuration) sweep inflates it to `idle_percent` of
+guest memory now instead of after `idle_seconds`. The call starts a sweep at
+once and returns before cocoon answers. The claim stays inflated until a relay,
+exec or port connection reaches it, and the next sweep then deflates it, as it
+does after an automatic inflate. Guest egress and tun traffic do not deflate it.
+A failed inflate retries after a minute while the claim stays unused;
+`sandboxd_balloon_failures_total` counts it.
+
+202 accepted; 404 unknown id; 409 `balloon reclaim is off on this node` (no
+`balloon` key), `the sandbox's VM has no balloon device`,
+`sandbox has an open data-plane connection`, or a hibernated, archived or failed
+claim; 503 `sandbox moving to another node; retry` during a live move.
 
 ## PUT /v1/sandboxes/{id}/egress-limit
 

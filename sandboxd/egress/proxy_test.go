@@ -737,9 +737,9 @@ func (c credSecrets) Credentials(host string) []Credential {
 
 type holdCounter struct{ atomic.Int32 }
 
-func (h *holdCounter) Hold() { h.Add(1) }
+func (h *holdCounter) HoldEgress() { h.Add(1) }
 
-func (h *holdCounter) Unhold() { h.Add(-1) }
+func (h *holdCounter) UnholdEgress() { h.Add(-1) }
 
 type shortWriteConn struct{ net.Conn }
 
