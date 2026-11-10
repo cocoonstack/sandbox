@@ -349,7 +349,7 @@ func (m *Manager) abortMoveOut(ctx context.Context, sb *types.Sandbox, mv *outMo
 	logger := log.WithFunc("pool.abortMoveOut")
 	m.mu.Lock()
 	vm, live := sb.VMName, m.claimed[sb.ID] == sb
-	if live && mv.replica != "" {
+	if live && sb.ReplicaCk == "" && !sb.ReplicaAt.IsZero() {
 		sb.ReplicaDue = true
 	}
 	m.mu.Unlock()

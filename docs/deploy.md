@@ -44,10 +44,13 @@ on every node before the roll. Claims that v0.1.30 inflated stay inflated,
 both running idle claims and idle-hibernated ones, whose snapshots carry the
 target. To deflate the running ones, remove the block on v0.1.30 with a config
 [reload](#reloading-the-config), not a restart: the next sweep then deflates
-them. Then roll. A hibernated claim that v0.1.30 inflated keeps that target
-when it wakes; send it [`POST /v1/sandboxes/{id}/balloon`](sandboxd-api.md#post-v1sandboxesidballoon)
-after the wake, with `target` set to the boot target, the `default` that any
-balloon reply reports. That call now needs a
+them. Then roll. After the roll, restore every claim whose balloon target is
+still above its default; `cocoon vm inspect` reports both as `balloon.target`
+and `balloon.default`. That covers claims that were hibernated when the block
+came off, which keep the inflated target when they wake, and running claims
+the reload did not deflate, such as one moved onto a v0.1.30 node without the
+block. Send each [`POST /v1/sandboxes/{id}/balloon`](sandboxd-api.md#post-v1sandboxesidballoon)
+with its `default` as `target`, waking a hibernated one first. That call now needs a
 `target` body: an empty `POST`, which v0.1.30 answered 202, answers 400.
 
 An S3 `checkpoint_store` written before v0.1.18 used another object layout
