@@ -626,6 +626,12 @@ func TestMoveWhoseRowConsumeReplyIsLostKeepsTheGuestAndItsReplica(t *testing.T) 
 	if !ckExists(t, mc.s, replica) {
 		t.Fatal("the failed move deleted the replica the claim still names")
 	}
+	mc.s.archives = mc.reg
+	mc.s.replicateOnce(t.Context())
+	waitFor(t, func() bool { return !mc.s.replicating.Load() })
+	if rec, ok, _ := mc.reg.Get(t.Context(), sb.ID); !ok || rec.Consumed {
+		t.Fatalf("row %+v %v after the first sweep, want a live row again", rec, ok)
+	}
 	mc.s.sweepOrphanArchives(t.Context())
 	if rec, ok, _ := mc.reg.Get(t.Context(), sb.ID); !ok || rec.Consumed || rec.Checkpoint != replica {
 		t.Errorf("row %+v %v after the sweep, want the replica back on it", rec, ok)

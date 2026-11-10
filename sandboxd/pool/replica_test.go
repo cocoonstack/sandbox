@@ -343,8 +343,8 @@ func TestReplicaRestartSettlesALostPutReply(t *testing.T) {
 	if !ok || restarted.replicaOf(held) != pending || !ckExists(t, restarted, pending) {
 		t.Fatalf("claim held %v, replica %q, ck kept %v, want the row's checkpoint %s adopted", ok, restarted.replicaOf(held), ckExists(t, restarted, pending), pending)
 	}
-	if held.ReplicaPending != "" {
-		t.Errorf("intent %q left after the restart settled it", held.ReplicaPending)
+	if held.ReplicaPending != "" || held.ReplicaAt.IsZero() {
+		t.Errorf("intent %q left, replica_at %v after the restart settled it, want no intent and the landed round stamped", held.ReplicaPending, held.ReplicaAt)
 	}
 }
 
