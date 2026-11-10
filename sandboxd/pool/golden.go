@@ -2,11 +2,14 @@ package pool
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/projecteru2/core/log"
@@ -33,7 +36,7 @@ func (m *Manager) buildGolden(ctx context.Context, p *pool) {
 		return
 	}
 
-	err := m.buildGoldenSteps(ctx, v, p.key, name, snap, final, imageID)
+	err := m.buildGoldenSteps(ctx, v, p, name, snap, final, imageID)
 	if rmErr := m.eng.SnapshotRemove(ctx, snap); rmErr != nil && err == nil {
 		logger.Warnf(ctx, "drop golden snapshot %s: %v", snap, rmErr)
 	}
@@ -46,8 +49,7 @@ func (m *Manager) buildGolden(ctx context.Context, p *pool) {
 	case stale:
 		p.nextBuild = time.Time{}
 	case err == nil:
-		p.goldenDir, p.imageID = final, imageID
-		p.goldenGen++
+		p.install(final, imageID)
 	default:
 		p.nextBuild = time.Now().Add(buildRetryDelay)
 		// A cold boot hits the same bridge and disk as a refill, so it feeds the park too
@@ -69,7 +71,8 @@ func (m *Manager) buildGolden(ctx context.Context, p *pool) {
 	m.kickRefill()
 }
 
-func (m *Manager) buildGoldenSteps(ctx context.Context, v *configView, key types.PoolKey, name, snap, final, imageID string) error {
+func (m *Manager) buildGoldenSteps(ctx context.Context, v *configView, p *pool, name, snap, final, imageID string) error {
+	key := p.key
 	rec, err := m.eng.RunCold(ctx, name, key, v.poolStorage[key])
 	if err != nil {
 		return err
@@ -87,7 +90,7 @@ func (m *Manager) buildGoldenSteps(ctx context.Context, v *configView, key types
 	if err = m.eng.SettleGuest(ctx, sock); err != nil {
 		log.WithFunc("pool.buildGoldenSteps").Warnf(ctx, "capture golden of %s before its guest settled: %v", key.Template, err)
 	}
-	if err := m.dumpGolden(ctx, name, snap, final); err != nil {
+	if err := m.dumpGolden(ctx, name, snap, final, &p.goldenUse); err != nil {
 		return err
 	}
 	stamp := m.goldenStamp(v, key, imageID)
@@ -112,8 +115,7 @@ func (m *Manager) adoptGolden(p *pool, imageID string) bool {
 	if err != nil || string(stamp) != want || !dirExists(g) {
 		return false
 	}
-	p.goldenDir, p.imageID = g, imageID
-	p.goldenGen++
+	p.install(g, imageID)
 	return true
 }
 
@@ -179,17 +181,18 @@ func (m *Manager) checkImagesOnce(ctx context.Context) {
 		log.WithFunc("pool.checkImagesOnce").Warnf(ctx, "list images: %v", err)
 		return
 	}
-	var trim []string
+	changed := false
 	m.mu.Lock()
 	for _, p := range m.pools {
-		if p.goldenDir == "" || ids[p.key.Template] == p.imageID {
+		if p.goldenDir == "" || p.rebuild || ids[p.key.Template] == p.imageID {
 			continue
 		}
-		p.goldenDir, p.imageID = "", ""
-		trim = append(trim, p.trimWarm(0)...)
+		p.rebuild, changed = true, true
 	}
 	m.mu.Unlock()
-	m.destroyAll(ctx, trim)
+	if changed {
+		m.kickRefill()
+	}
 }
 
 func (m *Manager) imageIDs(ctx context.Context) map[string]string {
@@ -200,7 +203,7 @@ func (m *Manager) imageIDs(ctx context.Context) map[string]string {
 	return ids
 }
 
-func (m *Manager) dumpGolden(ctx context.Context, name, snap, final string) error {
+func (m *Manager) dumpGolden(ctx context.Context, name, snap, final string, use *sync.RWMutex) error {
 	select {
 	case m.goldenDumps <- struct{}{}:
 	case <-ctx.Done():
@@ -210,10 +213,10 @@ func (m *Manager) dumpGolden(ctx context.Context, name, snap, final string) erro
 	if err := m.eng.SnapshotSave(ctx, name, snap); err != nil {
 		return err
 	}
-	return m.exportGolden(ctx, snap, final)
+	return m.exportGolden(ctx, snap, final, use)
 }
 
-func (m *Manager) exportGolden(ctx context.Context, snap, final string) error {
+func (m *Manager) exportGolden(ctx context.Context, snap, final string, use *sync.RWMutex) error {
 	staging, err := os.MkdirTemp(filepath.Dir(final), filepath.Base(final)+"-*.tmp")
 	if err != nil {
 		return fmt.Errorf("stage golden: %w", err)
@@ -223,7 +226,9 @@ func (m *Manager) exportGolden(ctx context.Context, snap, final string) error {
 	if err := m.eng.SnapshotExport(ctx, snap, tmp); err != nil {
 		return err
 	}
-	if err := os.RemoveAll(final); err != nil {
+	use.Lock()
+	defer use.Unlock()
+	if err := os.Rename(final, filepath.Join(staging, "old")); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return fmt.Errorf("clear golden dir: %w", err)
 	}
 	return os.Rename(tmp, final)

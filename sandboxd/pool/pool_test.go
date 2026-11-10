@@ -1407,6 +1407,7 @@ type fakeEngine struct {
 	staleErr              error
 
 	cloneStall      chan struct{}
+	maxVMs          int
 	probeStall      chan struct{}
 	hibernateStall  chan struct{}
 	removeStall     chan struct{}
@@ -1514,6 +1515,7 @@ func (f *fakeEngine) RunCold(_ context.Context, name string, _ types.PoolKey, st
 		return types.VMRecord{}, f.runColdErr
 	}
 	f.vms[name] = f.sockRoot + "/" + name
+	f.maxVMs = max(f.maxVMs, len(f.vms))
 	return f.record(name), nil
 }
 
@@ -2174,6 +2176,7 @@ func (f *fakeEngine) clone(from, name string) (types.VMRecord, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.vms[name] = f.sockRoot + "/" + name
+	f.maxVMs = max(f.maxVMs, len(f.vms))
 	return f.record(name), nil
 }
 
@@ -2480,7 +2483,7 @@ func tplKey(template string) types.PoolKey {
 func buildGoldenAt(t *testing.T, m *Manager, key types.PoolKey, imageID string) string {
 	t.Helper()
 	final := filepath.Join(m.goldensDir(), key.Hash())
-	if err := m.buildGoldenSteps(t.Context(), m.view.Load(), key, "sbx-gb-"+key.Hash(), "snap", final, imageID); err != nil {
+	if err := m.buildGoldenSteps(t.Context(), m.view.Load(), &pool{key: key}, "sbx-gb-"+key.Hash(), "snap", final, imageID); err != nil {
 		t.Fatalf("buildGoldenSteps %s: %v", key.Template, err)
 	}
 	return final

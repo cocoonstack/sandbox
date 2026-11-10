@@ -35,7 +35,7 @@ func (m *Manager) refillOnce(ctx context.Context) {
 			}
 			continue
 		}
-		if !parked && p.goldenDir == "" && !p.building && now.After(p.nextBuild) {
+		if !parked && (p.goldenDir == "" || p.rebuild) && !p.building && now.After(p.nextBuild) {
 			p.building = true
 			go m.buildGolden(ctx, p)
 		}
@@ -51,7 +51,7 @@ func (m *Manager) refillOnce(ctx context.Context) {
 				return
 			}
 			if p.removed || p.goldenDir == "" || p.refillGated(now) ||
-				len(p.warm)+p.refilling >= p.effectiveTarget(now) {
+				p.freshWarm()+p.refilling >= p.effectiveTarget(now) {
 				continue
 			}
 			select {
@@ -73,6 +73,7 @@ func (m *Manager) shrinkOnce(ctx context.Context) {
 	m.mu.Lock()
 	now := time.Now()
 	for _, p := range m.pools {
+		trim = append(trim, p.retireStale(now)...)
 		trim = append(trim, p.shrink(now)...)
 	}
 	m.mu.Unlock()
@@ -82,6 +83,8 @@ func (m *Manager) shrinkOnce(ctx context.Context) {
 func (m *Manager) refillOne(ctx context.Context, p *pool, golden string, gen uint64) {
 	start := time.Now()
 	sb, err := m.startVM(ctx, p.key, func(name string) (types.VMRecord, error) {
+		p.goldenUse.RLock()
+		defer p.goldenUse.RUnlock()
 		return m.eng.Clone(ctx, golden, name, p.key)
 	})
 	cloneErr := err
@@ -98,17 +101,21 @@ func (m *Manager) refillOne(ctx context.Context, p *pool, golden string, gen uin
 	if err == nil {
 		m.out.Prebind(ctx, sb)
 	}
-	keep := false
+	var teardown []string
 	var fails int
 	var wait time.Duration
 	capReason := engine.CapacitySignature(err)
 	m.mu.Lock()
 	now := time.Now()
-	p.refilling--
-	if err == nil && !m.closedLocked() && p.goldenDir != "" && p.goldenGen == gen && len(p.warm) < p.effectiveTarget(now) {
+	if err == nil && !m.closedLocked() && p.goldenDir != "" && p.goldenGen == gen && p.freshWarm() < p.effectiveTarget(now) {
 		p.warm = append(p.warm, sb)
 		p.noteLead(time.Since(start))
-		keep = true
+		teardown = p.retireStale(now)
+	} else if err == nil {
+		teardown = []string{sb.VMName}
+	}
+	if len(teardown) == 0 {
+		p.refilling--
 	}
 	// A canceled context or a capacity failure says nothing about this pool's health
 	backedOff := false
@@ -143,11 +150,16 @@ func (m *Manager) refillOne(ctx context.Context, p *pool, golden string, gen uin
 		}
 		return
 	}
+	if len(teardown) > 0 {
+		for _, name := range teardown {
+			m.destroy(ctx, name)
+		}
+		m.mu.Lock()
+		p.refilling--
+		m.mu.Unlock()
+	}
 	if ctx.Err() == nil {
 		m.refillOnce(ctx)
-	}
-	if !keep {
-		m.destroy(ctx, sb.VMName)
 	}
 }
 

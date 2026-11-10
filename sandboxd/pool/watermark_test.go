@@ -204,6 +204,19 @@ func TestShrinkOnceDestroysWhatTheDecayedTargetDropped(t *testing.T) {
 	}
 }
 
+func TestRetireStaleRetiresOnlyDownToTheTarget(t *testing.T) {
+	p := warmPool(3)
+	p.staleWarm = map[string]struct{}{"sbx-warm-0": {}, "sbx-warm-1": {}}
+	now := time.Now()
+	trim := p.retireStale(now)
+	if target := p.effectiveTarget(now); len(p.warm) != target || !slices.Equal(trim, []string{"sbx-warm-0"}) {
+		t.Errorf("retired %v leaving %d warm, want the oldest stale VM only and %d warm", trim, len(p.warm), target)
+	}
+	if _, ok := p.staleWarm["sbx-warm-1"]; !ok || len(p.staleWarm) != 1 {
+		t.Errorf("stale set %v, want only the stale VM still warm", p.staleWarm)
+	}
+}
+
 func warmPool(warm int) *pool {
 	p := &pool{key: testKey, floor: 2, warmMax: 8, lead: 500 * time.Millisecond}
 	for i := range warm {

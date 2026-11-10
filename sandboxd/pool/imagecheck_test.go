@@ -4,11 +4,14 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"testing/synctest"
+	"time"
 
 	"github.com/cocoonstack/sandbox/sandboxd/config"
+	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
 const (
@@ -53,7 +56,7 @@ func TestBuildGoldenAdoptsMatchingStampWithoutBoot(t *testing.T) {
 	})
 }
 
-func TestImageChangeDropsGoldenAndRebuildsOnce(t *testing.T) {
+func TestImageChangeReplacesTheWarmSetWithoutEmptyingIt(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		eng := newFakeEngine()
 		eng.imageIDs = map[string]string{testKey.Template: imageA}
@@ -61,41 +64,274 @@ func TestImageChangeDropsGoldenAndRebuildsOnce(t *testing.T) {
 		seedGolden(t, m, testKey, imageA)
 		m.refillOnce(t.Context())
 		waitWarm(t, m, 2)
+		old := warmNames(m)
 
 		eng.mu.Lock()
 		eng.imageIDs = map[string]string{testKey.Template: imageB}
 		eng.mu.Unlock()
 		m.checkImagesOnce(t.Context())
 		synctest.Wait()
-		if infos, _ := m.Info(); infos[0].Golden || infos[0].Warm != 0 {
-			t.Fatalf("after the image changed info = %+v, want no golden and no warm VMs", infos[0])
-		}
-		if removed := eng.removedNames(); len(removed) != 2 {
-			t.Fatalf("removed = %v, want both warm VMs of the old image", removed)
+		if infos, _ := m.Info(); !infos[0].Golden || infos[0].Warm != 2 || len(eng.removedNames()) != 0 {
+			t.Fatalf("after the image changed info = %+v removed %v, want the old golden and its warm VMs still serving", infos[0], eng.removedNames())
 		}
 
 		m.refillOnce(t.Context())
-		waitFor(t, func() bool {
-			infos, _ := m.Info()
-			return infos[0].Golden
-		})
+		waitFor(t, func() bool { return poolImage(m) == imageB })
+		if warmLen(m, testKey) == 0 {
+			t.Fatal("the warm set emptied while the new golden was installed")
+		}
 		m.refillOnce(t.Context())
-		waitWarm(t, m, 2)
-		removedBefore := len(eng.removedNames())
+		synctest.Wait()
+		now := warmNames(m)
+		if len(now) != 2 || slices.ContainsFunc(now, func(name string) bool { return slices.Contains(old, name) }) {
+			t.Fatalf("warm %v after the replace, want two VMs of the new golden and none of %v", now, old)
+		}
+		if removed := removedWarm(eng); len(removed) != 2 || !slices.Contains(removed, old[0]) || !slices.Contains(removed, old[1]) {
+			t.Errorf("removed warm VMs = %v, want exactly the old ones %v", removed, old)
+		}
+
 		m.checkImagesOnce(t.Context())
 		m.refillOnce(t.Context())
 		synctest.Wait()
 		if n := eng.coldCount(); n != 1 {
 			t.Errorf("cold boots = %d, want one rebuild", n)
 		}
-		if removed := eng.removedNames(); len(removed) != removedBefore {
-			t.Errorf("removed = %v, want no trim on an unchanged image", removed)
-		}
 		stamp, err := os.ReadFile(filepath.Join(m.goldensDir(), testKey.Hash()) + goldenStampSuffix)
 		if err != nil || !strings.Contains(string(stamp), imageB) {
 			t.Errorf("rebuilt stamp = %q (%v), want %s", stamp, err, imageB)
 		}
 	})
+}
+
+func TestAReplaceUnderBusyMaintenanceKeepsLiveVMsWithinTargetPlusTheRefillBudget(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		const warm = 12
+		eng := newFakeEngine()
+		eng.imageIDs = map[string]string{testKey.Template: imageA}
+		m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: warm})
+		seedGolden(t, m, testKey, imageA)
+		m.refillOnce(t.Context())
+		waitWarm(t, m, warm)
+		old := warmNames(m)
+		for range cap(m.maintSem) {
+			m.maintSem <- struct{}{}
+		}
+		defer func() {
+			for range cap(m.maintSem) {
+				<-m.maintSem
+			}
+		}()
+		stall := make(chan struct{})
+		limit := warm + cap(m.refillSem) + cap(m.probeSem)
+
+		eng.mu.Lock()
+		eng.imageIDs = map[string]string{testKey.Template: imageB}
+		eng.mu.Unlock()
+		m.checkImagesOnce(t.Context())
+		m.refillOnce(t.Context())
+		waitFor(t, func() bool { return poolImage(m) == imageB })
+		eng.mu.Lock()
+		eng.removeStall = stall
+		eng.mu.Unlock()
+		for range warm {
+			m.refillOnce(t.Context())
+			synctest.Wait()
+		}
+		close(stall)
+		for range warm {
+			m.refillOnce(t.Context())
+			synctest.Wait()
+		}
+		if now := warmNames(m); len(now) != warm || slices.ContainsFunc(now, func(name string) bool { return slices.Contains(old, name) }) {
+			t.Fatalf("warm %v after the replace, want %d VMs of the new golden", now, warm)
+		}
+		eng.mu.Lock()
+		peak := eng.maxVMs
+		eng.mu.Unlock()
+		if peak > limit {
+			t.Errorf("%d VMs were live at once during the replace, want at most target plus the refill budget = %d", peak, limit)
+		}
+		if removed := removedWarm(eng); len(removed) != warm {
+			t.Errorf("removed warm VMs = %v, want the %d old ones", removed, warm)
+		}
+	})
+}
+
+func TestARefillDiscardedByAReplaceStaysChargedUntilItsTeardownEnds(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		const warm, claimed = 12, 8
+		eng := newFakeEngine()
+		eng.imageIDs = map[string]string{testKey.Template: imageA}
+		m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: warm})
+		seedGolden(t, m, testKey, imageA)
+		m.refillOnce(t.Context())
+		waitWarm(t, m, warm)
+		for range claimed {
+			mustClaim(t, m, testKey)
+		}
+		eng.mu.Lock()
+		eng.probeStall = make(chan struct{})
+		eng.mu.Unlock()
+		m.refillOnce(t.Context())
+		synctest.Wait()
+
+		eng.mu.Lock()
+		eng.imageIDs = map[string]string{testKey.Template: imageB}
+		eng.mu.Unlock()
+		seedGolden(t, m, testKey, imageB)
+		m.checkImagesOnce(t.Context())
+		m.refillOnce(t.Context())
+		waitFor(t, func() bool { return poolImage(m) == imageB })
+		stall := make(chan struct{})
+		eng.mu.Lock()
+		eng.removeStall = stall
+		close(eng.probeStall)
+		eng.probeStall = nil
+		eng.mu.Unlock()
+		for range warm {
+			m.refillOnce(t.Context())
+			synctest.Wait()
+		}
+		close(stall)
+		for range warm {
+			m.refillOnce(t.Context())
+			synctest.Wait()
+		}
+		eng.mu.Lock()
+		peak := eng.maxVMs
+		eng.mu.Unlock()
+		if limit := warm + claimed + cap(m.refillSem) + cap(m.probeSem); peak > limit {
+			t.Errorf("%d VMs were live at once during the replace, want at most target, claims and the refill budget = %d", peak, limit)
+		}
+		if warmLen(m, testKey) != warm {
+			t.Errorf("warm = %d after the replace, want %d", warmLen(m, testKey), warm)
+		}
+	})
+}
+
+func TestAFailedRebuildKeepsTheOldGoldenServing(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		eng := newFakeEngine()
+		eng.imageIDs = map[string]string{testKey.Template: imageA}
+		m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 2})
+		g := seedGolden(t, m, testKey, imageA)
+		m.refillOnce(t.Context())
+		waitWarm(t, m, 2)
+
+		eng.mu.Lock()
+		eng.imageIDs = map[string]string{testKey.Template: imageB}
+		eng.runColdErr = errors.New("image pull failed")
+		eng.mu.Unlock()
+		m.checkImagesOnce(t.Context())
+		m.refillOnce(t.Context())
+		synctest.Wait()
+		m.mu.Lock()
+		p := m.pools[testKey]
+		golden, image, warm, pending := p.goldenDir, p.imageID, len(p.warm), p.rebuild
+		m.mu.Unlock()
+		if eng.coldCount() != 1 || golden != g || image != imageA || warm != 2 || !pending || len(removedWarm(eng)) != 0 {
+			t.Errorf("after a failed rebuild golden %q image %q warm %d pending %v removed %v, want the old golden serving and the rebuild still pending",
+				golden, image, warm, pending, removedWarm(eng))
+		}
+	})
+}
+
+func TestARebuildWaitsForACloneOfTheOldGoldenBeforeSwappingIt(t *testing.T) {
+	eng := newFakeEngine()
+	eng.imageIDs = map[string]string{testKey.Template: imageA}
+	m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1})
+	golden := seedGolden(t, m, testKey, imageA)
+	m.refillOnce(t.Context())
+	waitWarm(t, m, 1)
+	old, err := os.Stat(golden)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stall := make(chan struct{})
+	eng.mu.Lock()
+	eng.cloneStall = stall
+	eng.mu.Unlock()
+	clones := eng.cloneCount()
+	mustClaim(t, m, testKey)
+	m.refillOnce(t.Context())
+	waitFor(t, func() bool { return eng.cloneCount() > clones })
+
+	eng.mu.Lock()
+	eng.imageIDs = map[string]string{testKey.Template: imageB}
+	eng.mu.Unlock()
+	exports := eng.exportCount()
+	m.checkImagesOnce(t.Context())
+	m.refillOnce(t.Context())
+	waitFor(t, func() bool { return eng.exportCount() > exports })
+	for deadline := time.Now().Add(200 * time.Millisecond); time.Now().Before(deadline); time.Sleep(5 * time.Millisecond) {
+		if now, err := os.Stat(golden); err != nil || !os.SameFile(old, now) {
+			t.Fatal("the new golden replaced the old one while a clone of it was running")
+		}
+	}
+	close(stall)
+	waitFor(t, func() bool { return poolImage(m) == imageB })
+}
+
+func TestAClaimCloneOfTheOldGoldenHoldsOffTheSwap(t *testing.T) {
+	eng := newFakeEngine()
+	eng.imageIDs = map[string]string{testKey.Template: imageA}
+	m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey})
+	golden := seedGolden(t, m, testKey, imageA)
+	m.refillOnce(t.Context())
+	waitFor(t, func() bool { return poolImage(m) == imageA })
+	old, err := os.Stat(golden)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stall := make(chan struct{})
+	eng.mu.Lock()
+	eng.cloneStall = stall
+	eng.mu.Unlock()
+	clones := eng.cloneCount()
+	claimed := make(chan error, 1)
+	go func() {
+		_, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{})
+		claimed <- err
+	}()
+	waitFor(t, func() bool { return eng.cloneCount() > clones })
+
+	eng.mu.Lock()
+	eng.imageIDs = map[string]string{testKey.Template: imageB}
+	eng.mu.Unlock()
+	exports := eng.exportCount()
+	m.checkImagesOnce(t.Context())
+	m.refillOnce(t.Context())
+	waitFor(t, func() bool { return eng.exportCount() > exports })
+	for deadline := time.Now().Add(200 * time.Millisecond); time.Now().Before(deadline); time.Sleep(5 * time.Millisecond) {
+		if now, err := os.Stat(golden); err != nil || !os.SameFile(old, now) {
+			t.Fatal("the new golden replaced the old one while a claim cloned it")
+		}
+	}
+	close(stall)
+	if err := <-claimed; err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	waitFor(t, func() bool { return poolImage(m) == imageB })
+}
+
+func TestLoweringWarmDuringAReplaceRetiresOldVMsFirst(t *testing.T) {
+	eng := newFakeEngine()
+	eng.imageIDs = map[string]string{testKey.Template: imageA}
+	m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 2})
+	seedGolden(t, m, testKey, imageA)
+	m.refillOnce(t.Context())
+	waitWarm(t, m, 2)
+	names := warmNames(m)
+	m.mu.Lock()
+	m.pools[testKey].staleWarm = map[string]struct{}{names[0]: {}}
+	m.mu.Unlock()
+
+	if err := m.applyPools(t.Context(), map[types.PoolKey]config.PoolSpec{testKey: {PoolKey: testKey, Warm: 1}}, 1); err != nil {
+		t.Fatalf("applyPools: %v", err)
+	}
+	if now := warmNames(m); !slices.Equal(now, names[1:]) || !eng.removed(names[0]) {
+		t.Errorf("warm %v after lowering warm to 1, want the fresh %v kept and the old %s removed", now, names[1:], names[0])
+	}
 }
 
 func TestImageListFailureChangesNothing(t *testing.T) {
@@ -129,4 +365,24 @@ func TestImageCheckSkipsANodeWithoutPools(t *testing.T) {
 	if eng.imageLists != 0 {
 		t.Errorf("image lists = %d, want 0 on a node without pools", eng.imageLists)
 	}
+}
+
+func warmNames(m *Manager) []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var names []string
+	for _, sb := range m.pools[testKey].warm {
+		names = append(names, sb.VMName)
+	}
+	return names
+}
+
+func poolImage(m *Manager) string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.pools[testKey].imageID
+}
+
+func removedWarm(eng *fakeEngine) []string {
+	return slices.DeleteFunc(eng.removedNames(), func(name string) bool { return strings.HasPrefix(name, vmPrefix+"gb-") })
 }

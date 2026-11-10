@@ -72,6 +72,7 @@ func (m *Manager) applyPools(ctx context.Context, desired map[types.PoolKey]conf
 		// A removed key gets the zero spec, so a lingering pool sheds a stale archiveAfter
 		p.applySpec(spec)
 		p.removed = !ok
+		trim = append(trim, p.retireStale(now)...)
 		trim = append(trim, p.trimWarm(p.effectiveTarget(now))...)
 		if !ok && p.settled() {
 			m.dropPoolLocked(ctx, p)
