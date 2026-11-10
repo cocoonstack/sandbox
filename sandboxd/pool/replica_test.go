@@ -148,7 +148,6 @@ func TestANewClaimFirstReplicatesOneIntervalAfterItsClaim(t *testing.T) {
 	a := c.node(t, "a", t.TempDir(), keepAnHour)
 	sb := mustClaim(t, a, testKey)
 	a.replicateOnce(t.Context())
-	waitFor(t, func() bool { return !a.replicating.Load() })
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if got := a.replicas[sb.ID]; !got.Equal(sb.ClaimedAt) {
