@@ -5,6 +5,7 @@ import (
 	"errors"
 	"math"
 	"slices"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -44,6 +45,7 @@ type pool struct {
 
 	goldenDir string
 	imageID   string
+	goldenUse sync.RWMutex
 	// goldenGen counts installs, so a clone of a retired golden never lands after a rebuild at the same path.
 	goldenGen   uint64
 	building    bool

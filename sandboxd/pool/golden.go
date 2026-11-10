@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/projecteru2/core/log"
@@ -33,7 +34,7 @@ func (m *Manager) buildGolden(ctx context.Context, p *pool) {
 		return
 	}
 
-	err := m.buildGoldenSteps(ctx, v, p.key, name, snap, final, imageID)
+	err := m.buildGoldenSteps(ctx, v, p, name, snap, final, imageID)
 	if rmErr := m.eng.SnapshotRemove(ctx, snap); rmErr != nil && err == nil {
 		logger.Warnf(ctx, "drop golden snapshot %s: %v", snap, rmErr)
 	}
@@ -70,7 +71,8 @@ func (m *Manager) buildGolden(ctx context.Context, p *pool) {
 	m.kickRefill()
 }
 
-func (m *Manager) buildGoldenSteps(ctx context.Context, v *configView, key types.PoolKey, name, snap, final, imageID string) error {
+func (m *Manager) buildGoldenSteps(ctx context.Context, v *configView, p *pool, name, snap, final, imageID string) error {
+	key := p.key
 	rec, err := m.eng.RunCold(ctx, name, key, v.poolStorage[key])
 	if err != nil {
 		return err
@@ -88,7 +90,7 @@ func (m *Manager) buildGoldenSteps(ctx context.Context, v *configView, key types
 	if err = m.eng.SettleGuest(ctx, sock); err != nil {
 		log.WithFunc("pool.buildGoldenSteps").Warnf(ctx, "capture golden of %s before its guest settled: %v", key.Template, err)
 	}
-	if err := m.dumpGolden(ctx, name, snap, final); err != nil {
+	if err := m.dumpGolden(ctx, name, snap, final, &p.goldenUse); err != nil {
 		return err
 	}
 	stamp := m.goldenStamp(v, key, imageID)
@@ -203,7 +205,7 @@ func (m *Manager) imageIDs(ctx context.Context) map[string]string {
 	return ids
 }
 
-func (m *Manager) dumpGolden(ctx context.Context, name, snap, final string) error {
+func (m *Manager) dumpGolden(ctx context.Context, name, snap, final string, use *sync.RWMutex) error {
 	select {
 	case m.goldenDumps <- struct{}{}:
 	case <-ctx.Done():
@@ -213,10 +215,10 @@ func (m *Manager) dumpGolden(ctx context.Context, name, snap, final string) erro
 	if err := m.eng.SnapshotSave(ctx, name, snap); err != nil {
 		return err
 	}
-	return m.exportGolden(ctx, snap, final)
+	return m.exportGolden(ctx, snap, final, use)
 }
 
-func (m *Manager) exportGolden(ctx context.Context, snap, final string) error {
+func (m *Manager) exportGolden(ctx context.Context, snap, final string, use *sync.RWMutex) error {
 	staging, err := os.MkdirTemp(filepath.Dir(final), filepath.Base(final)+"-*.tmp")
 	if err != nil {
 		return fmt.Errorf("stage golden: %w", err)
@@ -226,6 +228,8 @@ func (m *Manager) exportGolden(ctx context.Context, snap, final string) error {
 	if err := m.eng.SnapshotExport(ctx, snap, tmp); err != nil {
 		return err
 	}
+	use.Lock()
+	defer use.Unlock()
 	if err := os.RemoveAll(final); err != nil {
 		return fmt.Errorf("clear golden dir: %w", err)
 	}

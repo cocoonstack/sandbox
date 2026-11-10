@@ -27,7 +27,9 @@ func (m *Manager) provisionResolved(ctx context.Context, key types.PoolKey, g go
 		return m.provision(ctx, key, g.dir)
 	}
 	return m.provisionVM(ctx, key, claimProbeTimeout, func(name string) (types.VMRecord, error) {
+		g.held.goldenUse.RLock()
 		rec, err := m.eng.Clone(ctx, g.dir, name, key)
+		g.held.goldenUse.RUnlock()
 		m.noteClaimClone(ctx, g, err)
 		return rec, err
 	})

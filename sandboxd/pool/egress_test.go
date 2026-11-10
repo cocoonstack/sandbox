@@ -47,7 +47,7 @@ func TestLaneVerdictReachesGuestOnColdBoots(t *testing.T) {
 					t.Fatalf("cold provision: %v", err)
 				}
 				m.destroy(t.Context(), sb.VMName)
-			} else if err := m.buildGoldenSteps(t.Context(), m.view.Load(), tt.key, "sbx-gb", "snap", filepath.Join(m.goldensDir(), tt.key.Hash()), ""); err != nil {
+			} else if err := m.buildGoldenSteps(t.Context(), m.view.Load(), &pool{key: tt.key}, "sbx-gb", "snap", filepath.Join(m.goldensDir(), tt.key.Hash()), ""); err != nil {
 				t.Fatalf("buildGoldenSteps: %v", err)
 			}
 			if !slices.Equal(eng.laneMarks, tt.want) {

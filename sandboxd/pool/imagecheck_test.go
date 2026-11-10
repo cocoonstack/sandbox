@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 	"testing/synctest"
+	"time"
 
 	"github.com/cocoonstack/sandbox/sandboxd/config"
 )
@@ -80,8 +81,6 @@ func TestImageChangeReplacesTheWarmSetWithoutEmptyingIt(t *testing.T) {
 		}
 		m.refillOnce(t.Context())
 		synctest.Wait()
-		m.shrinkOnce(t.Context())
-		synctest.Wait()
 		now := warmNames(m)
 		if len(now) != 2 || slices.ContainsFunc(now, func(name string) bool { return slices.Contains(old, name) }) {
 			t.Fatalf("warm %v after the replace, want two VMs of the new golden and none of %v", now, old)
@@ -128,6 +127,50 @@ func TestAFailedRebuildKeepsTheOldGoldenServing(t *testing.T) {
 				golden, image, warm, pending, removedWarm(eng))
 		}
 	})
+}
+
+func TestARebuildWaitsForACloneOfTheOldGoldenBeforeSwappingIt(t *testing.T) {
+	eng := newFakeEngine()
+	eng.imageIDs = map[string]string{testKey.Template: imageA}
+	m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1})
+	golden := seedGolden(t, m, testKey, imageA)
+	m.refillOnce(t.Context())
+	waitWarm(t, m, 1)
+	old, err := os.Stat(golden)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stall := make(chan struct{})
+	eng.mu.Lock()
+	eng.cloneStall = stall
+	clones := len(eng.clones)
+	eng.mu.Unlock()
+	mustClaim(t, m, testKey)
+	m.refillOnce(t.Context())
+	waitFor(t, func() bool {
+		eng.mu.Lock()
+		defer eng.mu.Unlock()
+		return len(eng.clones) > clones
+	})
+
+	eng.mu.Lock()
+	eng.imageIDs = map[string]string{testKey.Template: imageB}
+	exports := len(eng.exports)
+	eng.mu.Unlock()
+	m.checkImagesOnce(t.Context())
+	m.refillOnce(t.Context())
+	waitFor(t, func() bool {
+		eng.mu.Lock()
+		defer eng.mu.Unlock()
+		return len(eng.exports) > exports
+	})
+	for deadline := time.Now().Add(200 * time.Millisecond); time.Now().Before(deadline); time.Sleep(5 * time.Millisecond) {
+		if now, err := os.Stat(golden); err != nil || !os.SameFile(old, now) {
+			t.Fatal("the new golden replaced the old one while a clone of it was running")
+		}
+	}
+	close(stall)
+	waitFor(t, func() bool { return poolImage(m) == imageB })
 }
 
 func TestImageListFailureChangesNothing(t *testing.T) {

@@ -83,6 +83,8 @@ func (m *Manager) shrinkOnce(ctx context.Context) {
 func (m *Manager) refillOne(ctx context.Context, p *pool, golden string, gen uint64) {
 	start := time.Now()
 	sb, err := m.startVM(ctx, p.key, func(name string) (types.VMRecord, error) {
+		p.goldenUse.RLock()
+		defer p.goldenUse.RUnlock()
 		return m.eng.Clone(ctx, golden, name, p.key)
 	})
 	cloneErr := err
@@ -100,6 +102,7 @@ func (m *Manager) refillOne(ctx context.Context, p *pool, golden string, gen uin
 		m.out.Prebind(ctx, sb)
 	}
 	keep := false
+	var retire []string
 	var fails int
 	var wait time.Duration
 	capReason := engine.CapacitySignature(err)
@@ -110,6 +113,7 @@ func (m *Manager) refillOne(ctx context.Context, p *pool, golden string, gen uin
 		p.warm = append(p.warm, sb)
 		p.noteLead(time.Since(start))
 		keep = true
+		retire = p.retireStale(now)
 	}
 	// A canceled context or a capacity failure says nothing about this pool's health
 	backedOff := false
@@ -150,6 +154,7 @@ func (m *Manager) refillOne(ctx context.Context, p *pool, golden string, gen uin
 	if !keep {
 		m.destroy(ctx, sb.VMName)
 	}
+	m.destroyAll(ctx, retire)
 }
 
 // noteCapacityLocked parks refill node-wide, reporting whether this call parked it.

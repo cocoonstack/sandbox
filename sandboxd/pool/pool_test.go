@@ -2495,7 +2495,7 @@ func tplKey(template string) types.PoolKey {
 func buildGoldenAt(t *testing.T, m *Manager, key types.PoolKey, imageID string) string {
 	t.Helper()
 	final := filepath.Join(m.goldensDir(), key.Hash())
-	if err := m.buildGoldenSteps(t.Context(), m.view.Load(), key, "sbx-gb-"+key.Hash(), "snap", final, imageID); err != nil {
+	if err := m.buildGoldenSteps(t.Context(), m.view.Load(), &pool{key: key}, "sbx-gb-"+key.Hash(), "snap", final, imageID); err != nil {
 		t.Fatalf("buildGoldenSteps %s: %v", key.Template, err)
 	}
 	return final
