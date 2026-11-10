@@ -134,7 +134,7 @@ func (h *Host) armTun(ctx context.Context, sb *types.Sandbox, d *doors, v *View,
 		Limits: v.tunLimits,
 		Every:  v.usageEvery,
 		Used:   t.used,
-		Touch:  sb.TouchTraffic,
+		Touch:  sb.TouchAt,
 		Record: func(r tunnet.FlowRecord) {
 			if !r.Partial {
 				h.o.Flow(evCtx, id, tenant, profile, r)

@@ -2,7 +2,6 @@ package pool
 
 import (
 	"cmp"
-	"strconv"
 	"time"
 
 	"github.com/cocoonstack/sandbox/sandboxd/config"
@@ -24,8 +23,6 @@ type configView struct {
 	memoryAnon    int64
 	memoryPSI     float64
 	noBalloon     bool
-	balloonIdle   time.Duration
-	balloonTarget string
 	hostEnvMemory bool
 
 	maxClaims            int
@@ -68,10 +65,6 @@ func newConfigView(cfg *config.Config, secrets *egress.SecretStore) *configView 
 		if len(v.diskDirs) == 0 {
 			v.diskDirs = []string{cfg.DataDir}
 		}
-	}
-	if b := cfg.Balloon; b != nil {
-		v.balloonIdle = time.Duration(b.IdleSeconds) * time.Second
-		v.balloonTarget = strconv.Itoa(cmp.Or(b.IdlePercent, defaultBalloonPercent)) + "%"
 	}
 	if l := cfg.MemoryLimit; l != nil {
 		v.memoryPSI = l.PSISomeAvg10

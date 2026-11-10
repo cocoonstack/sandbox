@@ -122,10 +122,7 @@ func TestLoadRejectsInvalid(t *testing.T) {
 		{"memory limit without a limit", `{"memory_limit":{},"pools":[]}`, "memory_limit"},
 		{"memory limit without a size", `{"memory_limit":{"anon":"lots"},"pools":[]}`, "memory_limit.anon"},
 		{"memory limit past a percentage", `{"memory_limit":{"psi_some_avg10":101},"pools":[]}`, "memory_limit.psi_some_avg10"},
-		{"balloon without an idle time", `{"balloon":{},"pools":[]}`, "balloon.idle_seconds"},
-		{"balloon at the boot target", `{"balloon":{"idle_seconds":60,"idle_percent":25},"pools":[]}`, "balloon.idle_percent"},
-		{"balloon past 90 percent", `{"balloon":{"idle_seconds":60,"idle_percent":91},"pools":[]}`, "balloon.idle_percent"},
-		{"balloon with no_balloon", `{"no_balloon":true,"balloon":{"idle_seconds":60},"pools":[]}`, "no_balloon"},
+		{"a removed balloon block", `{"balloon":{"idle_seconds":60},"pools":[]}`, "balloon"},
 		{"negative max running", `{"max_running":-1,"pools":[]}`, "max_running"},
 		{"negative s3 concurrency", `{"checkpoint_store":{"kind":"s3","s3":{"bucket":"b","fetch_concurrency":-1}},"pools":[]}`, "concurrency must not be negative"},
 		{"bad restore mode", `{"restore_mode":"Mmap","pools":[]}`, "restore_mode"},
@@ -310,17 +307,6 @@ func TestLoadReplicateSeconds(t *testing.T) {
 		_, err := Load(writeConfig(t, body(tt.on, tt.pool)))
 		if tt.want == "" && err != nil || tt.want != "" && (err == nil || !strings.Contains(err.Error(), tt.want)) {
 			t.Errorf("%s: %v, want %q", name, err, tt.want)
-		}
-	}
-}
-
-func TestLoadBalloon(t *testing.T) {
-	for body, want := range map[string]Balloon{
-		`{"balloon":{"idle_seconds":300},"pools":[]}`:                   {IdleSeconds: 300},
-		`{"balloon":{"idle_seconds":300,"idle_percent":60},"pools":[]}`: {IdleSeconds: 300, IdlePercent: 60},
-	} {
-		if cfg := mustLoad(t, writeConfig(t, body)); cfg.Balloon == nil || *cfg.Balloon != want {
-			t.Errorf("Load %s: balloon %+v, want %+v", body, cfg.Balloon, want)
 		}
 	}
 }

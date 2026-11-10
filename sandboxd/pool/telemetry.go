@@ -66,10 +66,6 @@ type Counters struct {
 	WakeHandoffs        uint64
 	WakeMemoryFallbacks uint64
 
-	BalloonInflations uint64
-	BalloonDeflations uint64
-	BalloonFailures   uint64
-
 	ClaimWarmLatency, ClaimCloneLatency, ClaimColdLatency ClaimLatency
 
 	ClaimNanos uint64
@@ -87,8 +83,6 @@ type counters struct {
 	wakesRefusedRunning, wakesRefusedDisk atomic.Uint64
 	wakesRefusedMemory, wakeHandoffs      atomic.Uint64
 	wakeMemoryFallbacks                   atomic.Uint64
-	balloonInflations, balloonDeflations  atomic.Uint64
-	balloonFailures                       atomic.Uint64
 	wakeNanos                             atomic.Uint64
 
 	claimWarmLatency, claimCloneLatency, claimColdLatency claimHistogram
@@ -200,10 +194,6 @@ func (m *Manager) Counters() Counters {
 		WakesRefusedMemory:  c.wakesRefusedMemory.Load(),
 		WakeHandoffs:        c.wakeHandoffs.Load(),
 		WakeMemoryFallbacks: c.wakeMemoryFallbacks.Load(),
-
-		BalloonInflations: c.balloonInflations.Load(),
-		BalloonDeflations: c.balloonDeflations.Load(),
-		BalloonFailures:   c.balloonFailures.Load(),
 
 		ClaimNanos:   warm.Nanos + clone.Nanos + cold.Nanos,
 		WakeNanos:    c.wakeNanos.Load(),

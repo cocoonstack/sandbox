@@ -41,7 +41,6 @@ func (s *Server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
 	scalar("evacuating", "claims an evacuation has yet to move to a peer", g.Evacuating)
 	flag("memory_low", "1 while memory_limit refuses claims and refills", g.MemoryLow)
 	scalar("anon_bytes", "node anon memory plus used swap, 0 when memory_limit has no anon limit", g.AnonBytes)
-	scalar("balloon_inflated", "running claims whose balloon holds the idle target", g.BalloonInflated)
 
 	if tenants := s.mgr.TenantClaims(); len(tenants) > 0 {
 		metric("tenant_claims", "gauge", "live claims per tenant holding any")
@@ -98,9 +97,6 @@ func (s *Server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
 		{"archive_deletes_total", "archived checkpoints deleted at release or retention", c.ArchiveDeletes},
 		{"wake_handoffs_total", "archived claims handed to a peer with room instead of a refused wake", c.WakeHandoffs},
 		{"wake_memory_fallbacks_total", "archived wakes over memory_limit woken here because no hand-off ran or no peer adopted", c.WakeMemoryFallbacks},
-		{"balloon_inflations_total", "idle claims whose balloon was inflated", c.BalloonInflations},
-		{"balloon_deflations_total", "claims whose balloon went back to its boot target", c.BalloonDeflations},
-		{"balloon_failures_total", "balloon changes and reads that failed and retry a minute later", c.BalloonFailures},
 		{"dns_malformed_total", "guest DNS queries dropped as malformed", c.DNSMalformed},
 	} {
 		metric(row.name, "counter", row.help)

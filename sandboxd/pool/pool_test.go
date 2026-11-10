@@ -2722,7 +2722,6 @@ func archivePool(deleteAfter int) config.PoolSpec {
 func backdate(m *Manager, sb *types.Sandbox, by time.Duration) {
 	m.mu.Lock()
 	sb.TouchAt(time.Now().Add(-by))
-	sb.TouchTraffic(time.Now().Add(-by))
 	m.mu.Unlock()
 }
 
