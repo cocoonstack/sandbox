@@ -2423,7 +2423,7 @@ func TestBalloonVerbIsRootOrOperatorPassesTheTargetAndMapsItsRefusals(t *testing
 	mgr := &fakeManager{setBalloon: func(id, target string) (types.VMBalloon, error) {
 		calls++
 		gotID, gotTarget = id, target
-		return types.VMBalloon{Target: 2 << 30, Default: 1 << 30}, failWith
+		return types.VMBalloon{Target: 2 << 30, Actual: new(int64), Default: 1 << 30}, failWith
 	}}
 	ts := newTenantTestServer(t, "sekret", []tenants.TenantSpec{{Name: "acme", Token: "acme-tok"}}, mgr, nil)
 	for _, tt := range []struct {
@@ -2457,10 +2457,9 @@ func TestBalloonVerbIsRootOrOperatorPassesTheTargetAndMapsItsRefusals(t *testing
 		})
 	}
 	failWith = nil
-	resp := doReq(t, http.MethodPost, ts.URL+"/v1/sandboxes/sb_1/balloon", "sekret", `{"target": "1073741824"}`)
-	defer resp.Body.Close()
-	if got := decodeJSON[types.VMBalloon](t, resp.Body); got.Target != 2<<30 || got.Default != 1<<30 || gotTarget != "1073741824" {
-		t.Errorf("reply %+v for target %q, want cocoon's report passed through", got, gotTarget)
+	code, body := bodyOf(t, http.MethodPost, ts.URL+"/v1/sandboxes/sb_1/balloon", "sekret", `{"target": "1073741824"}`)
+	if code != http.StatusOK || gotTarget != "1073741824" || !strings.Contains(string(body), `"actual":0`) || !strings.Contains(string(body), `"default":1073741824`) {
+		t.Errorf("reply %d %s for target %q, want cocoon's report passed through with a reported zero", code, body, gotTarget)
 	}
 }
 

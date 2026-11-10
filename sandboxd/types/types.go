@@ -487,9 +487,9 @@ type VMDevices struct {
 
 // VMBalloon is a VM's balloon target, the bytes it holds now when the hypervisor reports them, and its boot target.
 type VMBalloon struct {
-	Target  int64 `json:"target"`
-	Actual  int64 `json:"actual,omitzero"`
-	Default int64 `json:"default"`
+	Target  int64  `json:"target"`
+	Actual  *int64 `json:"actual,omitzero"`
+	Default int64  `json:"default"`
 }
 
 // VMRecord is the subset of cocoon's VM records the control plane reads.
@@ -500,7 +500,6 @@ type VMRecord struct {
 	NetworkConfigs  []VMNetConfig `json:"network_configs,omitempty"`
 	Config          VMConfig      `json:"config"`
 	AttachedDevices VMDevices     `json:"attached_devices,omitzero"`
-	Balloon         *VMBalloon    `json:"balloon,omitempty"`
 }
 
 // TapDevice returns the first NIC's host tap; empty when the record carries none.

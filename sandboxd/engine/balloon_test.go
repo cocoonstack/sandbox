@@ -17,6 +17,7 @@ echo "$*" >> "$COCOON_TEST_TRACE"
 case "$6" in
 sbx-1) echo '{"vm":"sbx-1","target":2147483648,"actual":1073741824,"default":1073741824}' ;;
 sbx-fc) echo '{"vm":"sbx-fc","target":2147483648,"default":1073741824}' ;;
+sbx-zero) echo '{"vm":"sbx-zero","target":1073741824,"actual":0,"default":1073741824}' ;;
 sbx-nodev) echo 'Error: vm sbx-nodev: balloon resize unsupported' >&2; exit 1 ;;
 sbx-stopped) echo 'Error: vm sbx-stopped: vm not running' >&2; exit 1 ;;
 sbx-big) echo 'Error: balloon size 4294967296 must be below guest memory 2147483648' >&2; exit 1 ;;
@@ -33,11 +34,14 @@ func TestBalloonCallsBuildCocoonsArgsAndClassifyItsRefusals(t *testing.T) {
 		t.Fatalf("support check: %v", err)
 	}
 	b, err := e.Balloon(t.Context(), "sbx-1", "50%")
-	if err != nil || b != (types.VMBalloon{Target: 2 << 30, Actual: 1 << 30, Default: 1 << 30}) {
+	if err != nil || b.Target != 2<<30 || b.Actual == nil || *b.Actual != 1<<30 || b.Default != 1<<30 {
 		t.Fatalf("balloon = %+v, %v", b, err)
 	}
-	if b, err = e.Balloon(t.Context(), "sbx-fc", "1073741824"); err != nil || b.Actual != 0 || b.Default != 1<<30 {
+	if b, err = e.Balloon(t.Context(), "sbx-fc", "1073741824"); err != nil || b.Actual != nil || b.Default != 1<<30 {
 		t.Fatalf("balloon without actual = %+v, %v", b, err)
+	}
+	if b, err = e.Balloon(t.Context(), "sbx-zero", "1073741824"); err != nil || b.Actual == nil || *b.Actual != 0 {
+		t.Fatalf("balloon holding nothing = %+v, %v, want a reported zero", b, err)
 	}
 	if _, err = e.Balloon(t.Context(), "sbx-nodev", "50%"); !errors.Is(err, ErrBalloonUnsupported) {
 		t.Errorf("no balloon device: %v, want ErrBalloonUnsupported", err)
@@ -57,6 +61,7 @@ func TestBalloonCallsBuildCocoonsArgsAndClassifyItsRefusals(t *testing.T) {
 		"vm balloon --help",
 		"vm balloon --output json -- sbx-1 50%",
 		"vm balloon --output json -- sbx-fc 1073741824",
+		"vm balloon --output json -- sbx-zero 1073741824",
 		"vm balloon --output json -- sbx-nodev 50%",
 		"vm balloon --output json -- sbx-stopped 50%",
 		"vm balloon --output json -- sbx-big 4G",

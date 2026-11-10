@@ -1246,17 +1246,18 @@ or a byte size (`2G`, `512M`, `1073741824`), below guest memory. In the reply,
 when the hypervisor reports it, and `default` the boot target. Send `default`
 back as the target to restore the claim. The call returns before the guest
 settles. sandboxd keeps no balloon state and never changes a target on its
-own: the caller sets it and the caller restores it. The target stays through
-a hibernate, a wake and a live move; a fork or a clone starts at the boot
-target. cocoon serializes the call with captures and live-move rounds, and
-refuses a paused guest.
+own: the caller sets it and the caller restores it. A hibernate wake and a
+live move keep the target; an archive wake, a cold VMM restart, a fork and a
+clone start at the boot target. cocoon serializes the call with captures and
+live-move rounds.
 
 200 with cocoon's report; 400 a target cocoon rejects or an unknown field;
 404 unknown id; 409 `cocoon on this node has no vm balloon`,
 `the sandbox's VM has no balloon device`, or a hibernated, archived, failed or
 waking claim or one a hibernate is capturing; 503
 `sandbox moving to another node; retry` during a live move; 500 the cocoon
-call failed or outran its 30 s budget.
+call failed or outran its 30 s budget, or cocoon found the guest paused (a
+capture or a move round that began after the node's checks).
 
 ## PUT /v1/sandboxes/{id}/egress-limit
 

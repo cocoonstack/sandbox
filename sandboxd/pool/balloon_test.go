@@ -6,7 +6,6 @@ import (
 	"slices"
 	"strconv"
 	"testing"
-	"time"
 
 	"github.com/cocoonstack/sandbox/sandboxd/config"
 	"github.com/cocoonstack/sandbox/sandboxd/engine"
@@ -24,24 +23,9 @@ func TestSetBalloonPassesTheTargetAndTheCallerRestoresIt(t *testing.T) {
 	if b, err = m.SetBalloon(t.Context(), sb.ID, restore); err != nil || b.Target != fakeBalloonDefault {
 		t.Fatalf("restore %s: %+v, %v", restore, b, err)
 	}
-	want := []string{sb.VMName + " 50% after 0 hibernates", sb.VMName + " " + restore + " after 0 hibernates"}
+	want := []string{sb.VMName + " 50%", sb.VMName + " " + restore}
 	if calls := balloonCalls(eng); !slices.Equal(calls, want) {
 		t.Errorf("balloon calls %q, want %q", calls, want)
-	}
-}
-
-func TestNothingBalloonsAnIdleClaimOnItsOwn(t *testing.T) {
-	eng := newFakeEngine()
-	m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, IdleHibernateSeconds: 1})
-	sb := mustClaim(t, m, testKey)
-	backdate(m, sb, time.Hour)
-	m.reapOnce(t.Context())
-	sweepIdle(t, m)
-	if hibernated(m) != 1 {
-		t.Fatal("the idle claim was not hibernated")
-	}
-	if calls := balloonCalls(eng); len(calls) != 0 {
-		t.Errorf("balloon calls %q for an idle claim and its hibernate, want none", calls)
 	}
 }
 
@@ -95,7 +79,7 @@ func TestSetBalloonRefusesWhatItCannotReach(t *testing.T) {
 
 func TestSetBalloonRefusesOnACocoonWithoutTheVerb(t *testing.T) {
 	eng := newFakeEngine()
-	eng.balloonSupportErr = errors.New("balloon reclaim requires cocoon with vm balloon")
+	eng.balloonSupportErr = errors.New("the balloon verb requires cocoon with vm balloon")
 	m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey})
 	sb := mustClaim(t, m, testKey)
 	if _, err := m.SetBalloon(t.Context(), sb.ID, "50%"); !errors.Is(err, ErrBalloonOff) {

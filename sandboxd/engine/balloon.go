@@ -27,10 +27,10 @@ var (
 func (e *Engine) CheckBalloonSupport(ctx context.Context) error {
 	out, err := e.runFor(ctx, balloonTimeout, cmdTermGrace, "vm", "balloon", "--help")
 	if err != nil {
-		return fmt.Errorf("balloon reclaim requires cocoon with vm balloon: %w", err)
+		return fmt.Errorf("the balloon verb requires cocoon with vm balloon: %w", err)
 	}
 	if !bytes.Contains(out, []byte("vm balloon")) {
-		return errors.New("balloon reclaim requires cocoon with vm balloon")
+		return errors.New("the balloon verb requires cocoon with vm balloon")
 	}
 	return nil
 }
