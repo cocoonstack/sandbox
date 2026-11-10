@@ -1407,6 +1407,8 @@ type fakeEngine struct {
 	staleErr              error
 
 	cloneStall      chan struct{}
+	maxVMs          int
+	heldRemoves     []string
 	probeStall      chan struct{}
 	hibernateStall  chan struct{}
 	removeStall     chan struct{}
@@ -1518,6 +1520,7 @@ func (f *fakeEngine) RunCold(_ context.Context, name string, _ types.PoolKey, st
 		return types.VMRecord{}, f.runColdErr
 	}
 	f.vms[name] = f.sockRoot + "/" + name
+	f.maxVMs = max(f.maxVMs, len(f.vms))
 	return f.record(name), nil
 }
 
@@ -1527,6 +1530,9 @@ func (f *fakeEngine) Remove(ctx context.Context, name string) error {
 	}
 	f.mu.Lock()
 	stall := f.removeStall
+	if f.heldRemoves != nil && !slices.Contains(f.heldRemoves, name) {
+		stall = nil
+	}
 	f.mu.Unlock()
 	if stall != nil {
 		<-stall
@@ -2189,6 +2195,7 @@ func (f *fakeEngine) clone(from, name string) (types.VMRecord, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.vms[name] = f.sockRoot + "/" + name
+	f.maxVMs = max(f.maxVMs, len(f.vms))
 	return f.record(name), nil
 }
 

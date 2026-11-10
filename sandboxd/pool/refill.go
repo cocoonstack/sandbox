@@ -108,12 +108,14 @@ func (m *Manager) refillOne(ctx context.Context, p *pool, golden string, gen uin
 	capReason := engine.CapacitySignature(err)
 	m.mu.Lock()
 	now := time.Now()
-	p.refilling--
 	if err == nil && !m.closedLocked() && p.goldenDir != "" && p.goldenGen == gen && p.freshWarm() < p.effectiveTarget(now) {
 		p.warm = append(p.warm, sb)
 		p.noteLead(time.Since(start))
 		keep = true
 		retire = p.retireStale(now)
+	}
+	if len(retire) == 0 {
+		p.refilling--
 	}
 	// A canceled context or a capacity failure says nothing about this pool's health
 	backedOff := false
@@ -148,13 +150,20 @@ func (m *Manager) refillOne(ctx context.Context, p *pool, golden string, gen uin
 		}
 		return
 	}
+	if len(retire) > 0 {
+		for _, name := range retire {
+			m.destroy(ctx, name)
+		}
+		m.mu.Lock()
+		p.refilling--
+		m.mu.Unlock()
+	}
 	if ctx.Err() == nil {
 		m.refillOnce(ctx)
 	}
 	if !keep {
 		m.destroy(ctx, sb.VMName)
 	}
-	m.destroyAll(ctx, retire)
 }
 
 // noteCapacityLocked parks refill node-wide, reporting whether this call parked it.

@@ -102,6 +102,58 @@ func TestImageChangeReplacesTheWarmSetWithoutEmptyingIt(t *testing.T) {
 	})
 }
 
+func TestAReplaceUnderBusyMaintenanceKeepsLiveVMsWithinTargetPlusTheRefillBudget(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		const warm = 12
+		eng := newFakeEngine()
+		eng.imageIDs = map[string]string{testKey.Template: imageA}
+		m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: warm})
+		seedGolden(t, m, testKey, imageA)
+		m.refillOnce(t.Context())
+		waitWarm(t, m, warm)
+		old := warmNames(m)
+		for range cap(m.maintSem) {
+			m.maintSem <- struct{}{}
+		}
+		defer func() {
+			for range cap(m.maintSem) {
+				<-m.maintSem
+			}
+		}()
+		stall := make(chan struct{})
+		limit := warm + cap(m.refillSem) + cap(m.probeSem)
+
+		eng.mu.Lock()
+		eng.imageIDs = map[string]string{testKey.Template: imageB}
+		eng.removeStall, eng.heldRemoves = stall, old
+		eng.mu.Unlock()
+		m.checkImagesOnce(t.Context())
+		m.refillOnce(t.Context())
+		waitFor(t, func() bool { return poolImage(m) == imageB })
+		for range warm {
+			m.refillOnce(t.Context())
+			synctest.Wait()
+		}
+		close(stall)
+		for range warm {
+			m.refillOnce(t.Context())
+			synctest.Wait()
+		}
+		if now := warmNames(m); len(now) != warm || slices.ContainsFunc(now, func(name string) bool { return slices.Contains(old, name) }) {
+			t.Fatalf("warm %v after the replace, want %d VMs of the new golden", now, warm)
+		}
+		eng.mu.Lock()
+		peak := eng.maxVMs
+		eng.mu.Unlock()
+		if peak > limit {
+			t.Errorf("%d VMs were live at once during the replace, want at most target plus the refill budget = %d", peak, limit)
+		}
+		if removed := removedWarm(eng); len(removed) != warm {
+			t.Errorf("removed warm VMs = %v, want the %d old ones", removed, warm)
+		}
+	})
+}
+
 func TestAFailedRebuildKeepsTheOldGoldenServing(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		eng := newFakeEngine()
