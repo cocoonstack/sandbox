@@ -413,6 +413,19 @@ func TestReclaimMemoryRefusesWhatTheSweepCannotInflate(t *testing.T) {
 	}
 }
 
+func TestReclaimMemoryRefusesOnACocoonWithoutTheVerb(t *testing.T) {
+	eng := newFakeEngine()
+	eng.balloonSupportErr = errors.New("balloon reclaim requires cocoon with vm balloon")
+	m := balloonManager(t, eng, t.TempDir(), config.PoolSpec{PoolKey: testKey})
+	sb := mustClaim(t, m, testKey)
+	if err := m.ReclaimMemory(sb.ID); !errors.Is(err, ErrBalloonOff) {
+		t.Errorf("reclaim on a cocoon without vm balloon: %v, want ErrBalloonOff", err)
+	}
+	if len(m.balloonKick) != 0 {
+		t.Error("a refused reclaim kicked a sweep")
+	}
+}
+
 func balloonManager(t *testing.T, eng *fakeEngine, dataDir string, pools ...config.PoolSpec) *Manager {
 	t.Helper()
 	m := newTestManagerAt(t, eng, dataDir, pools...)

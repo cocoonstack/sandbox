@@ -21,7 +21,7 @@ const (
 
 // ReclaimMemory counts a running claim as unused until its next data-plane connection and starts a balloon sweep, which inflates it.
 func (m *Manager) ReclaimMemory(id string) error {
-	if m.view.Load().balloonIdle <= 0 {
+	if m.view.Load().balloonIdle <= 0 || !m.balloonReady() {
 		return ErrBalloonOff
 	}
 	m.mu.Lock()
