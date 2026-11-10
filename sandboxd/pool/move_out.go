@@ -75,7 +75,7 @@ func (m *Manager) moveOut(ctx context.Context, sb *types.Sandbox, mv *outMove, b
 		return err
 	}
 	var size, sent, previous int64
-	var sending, capturing time.Duration
+	var sending time.Duration
 	for delta := 0; ; delta++ {
 		start := time.Now()
 		if size, err = m.sendRound(ctx, sb.ID, mv, round); err != nil {
@@ -84,7 +84,7 @@ func (m *Manager) moveOut(ctx context.Context, sb *types.Sandbox, mv *outMove, b
 		sending += time.Since(start)
 		sent += size
 		if delta > 0 {
-			if capturing+finalPause(size, sent, sending) <= budget {
+			if finalPause(size, sent, sending) <= budget {
 				break
 			}
 			if delta == moveDeltaLimit || delta > 1 && size*10 >= previous*9 {
@@ -92,11 +92,9 @@ func (m *Manager) moveOut(ctx context.Context, sb *types.Sandbox, mv *outMove, b
 			}
 		}
 		previous = size
-		captured := time.Now()
 		if round, err = m.eng.MigrateCapture(ctx, vm, mv.Series, false); err != nil {
 			return fmt.Errorf("%w: delta capture: %w", ErrNotMovable, err)
 		}
-		capturing = time.Since(captured)
 	}
 	lastBytes := roundBytes(round)
 	m.mu.Lock()

@@ -934,20 +934,6 @@ func TestMoveWhoseFinalRoundOutgrowsATinyDeltaStillFits(t *testing.T) {
 	}
 }
 
-func TestMoveCountsTheLastDeltaCaptureBeforePausing(t *testing.T) {
-	mc := newMoveCluster(t)
-	sb := mustClaim(t, mc.s, testKey)
-	fakeOf(mc.s).deltaCaptureTime = 200 * time.Millisecond
-	if _, err := mc.s.Move(t.Context(), sb.ID, "b", MoveStartAllowance+100*time.Millisecond); !errors.Is(err, ErrMoveDowntime) {
-		t.Fatalf("move from a slow-capturing source: %v, want ErrMoveDowntime", err)
-	}
-	if finalCaptured(mc.s) {
-		t.Error("the move paused the guest although its delta captures alone overran the budget")
-	}
-	assertStillOnSource(t, mc, sb)
-	assertNoMoveResidue(t, mc.t, sb.ID)
-}
-
 func TestMoveGivesUpOnDeltasThatStopShrinking(t *testing.T) {
 	for name, tt := range map[string]struct {
 		sizes    []int64

@@ -444,15 +444,15 @@ writes `aborted` over a `pending` or `final` one, and the source deletes the
 ended ones.
 
 **Rounds.** The source sends a baseline round, then up to 4 deltas, each over
-the control port with the root token. Once the last delta's capture time plus its bytes on the wire at the rate
+the control port with the root token. Once the last delta's bytes on the wire at the rate
 the rounds reached, plus 400 ms for the receive and the start, fits
 `max_downtime_ms` (default 2000, and above 400 since those 400 ms alone would
 never fit), the source pauses the guest for the final
 round and the target receives the series and starts the guest. A move whose
 deltas never fit answers 503 and the guest runs on; from the second delta on, one
 that shrinks by under 10% and is still too large answers at once. The estimate
-cannot see the pages dirtied since the last delta or a final capture slower than
-the deltas', so once the guest is paused the source checks again: the final
+cannot see the final capture, which runs with the guest paused, or the pages
+dirtied since the last delta, so once the guest is paused the source checks again: the final
 capture's time plus the final round's bytes on the wire (the last delta's, plus
 the growth of the final round) at the rounds' rate plus the 400 ms. Past `max_downtime_ms` it aborts the
 move before sending the final round: `cocoon vm migrate abort` resumes the guest
