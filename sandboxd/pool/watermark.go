@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"math"
+	"slices"
 	"sync/atomic"
 	"time"
 
@@ -46,9 +47,11 @@ type pool struct {
 	// goldenGen counts installs, so a clone of a retired golden never lands after a rebuild at the same path.
 	goldenGen   uint64
 	building    bool
+	rebuild     bool
 	nextBuild   time.Time
 	removed     bool // dropped from the desired set while unsettled; swept by refillOnce
 	warm        []*types.Sandbox
+	staleWarm   map[string]struct{}
 	refilling   int
 	claimClones atomic.Int32
 
@@ -118,6 +121,53 @@ func (p *pool) popWarm() *types.Sandbox {
 	sb := p.warm[n-1]
 	p.warm = p.warm[:n-1]
 	return sb
+}
+
+func (p *pool) freshWarm() int {
+	return len(p.warm) - p.staleCount()
+}
+
+func (p *pool) staleCount() int {
+	n := 0
+	for _, sb := range p.warm {
+		if _, old := p.staleWarm[sb.VMName]; old {
+			n++
+		}
+	}
+	return n
+}
+
+func (p *pool) replaced() {
+	if !p.rebuild {
+		return
+	}
+	p.rebuild = false
+	p.staleWarm = make(map[string]struct{}, len(p.warm))
+	for _, sb := range p.warm {
+		p.staleWarm[sb.VMName] = struct{}{}
+	}
+}
+
+func (p *pool) retireStale(now time.Time) []string {
+	if len(p.staleWarm) == 0 {
+		return nil
+	}
+	target := p.effectiveTarget(now)
+	var trim []string
+	p.warm = slices.DeleteFunc(p.warm, func(sb *types.Sandbox) bool {
+		_, old := p.staleWarm[sb.VMName]
+		if !old || len(p.warm)-len(trim) <= target {
+			return false
+		}
+		trim = append(trim, sb.VMName)
+		return true
+	})
+	for name := range p.staleWarm {
+		if !slices.ContainsFunc(p.warm, func(sb *types.Sandbox) bool { return sb.VMName == name }) {
+			delete(p.staleWarm, name)
+		}
+	}
+	return trim
 }
 
 func (p *pool) trimWarm(target int) []string {

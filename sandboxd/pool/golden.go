@@ -48,6 +48,7 @@ func (m *Manager) buildGolden(ctx context.Context, p *pool) {
 	case err == nil:
 		p.goldenDir, p.imageID = final, imageID
 		p.goldenGen++
+		p.replaced()
 	default:
 		p.nextBuild = time.Now().Add(buildRetryDelay)
 		// A cold boot hits the same bridge and disk as a refill, so it feeds the park too
@@ -114,6 +115,7 @@ func (m *Manager) adoptGolden(p *pool, imageID string) bool {
 	}
 	p.goldenDir, p.imageID = g, imageID
 	p.goldenGen++
+	p.replaced()
 	return true
 }
 
@@ -179,17 +181,18 @@ func (m *Manager) checkImagesOnce(ctx context.Context) {
 		log.WithFunc("pool.checkImagesOnce").Warnf(ctx, "list images: %v", err)
 		return
 	}
-	var trim []string
+	changed := false
 	m.mu.Lock()
 	for _, p := range m.pools {
-		if p.goldenDir == "" || ids[p.key.Template] == p.imageID {
+		if p.goldenDir == "" || p.rebuild || ids[p.key.Template] == p.imageID {
 			continue
 		}
-		p.goldenDir, p.imageID = "", ""
-		trim = append(trim, p.trimWarm(0)...)
+		p.rebuild, changed = true, true
 	}
 	m.mu.Unlock()
-	m.destroyAll(ctx, trim)
+	if changed {
+		m.kickRefill()
+	}
 }
 
 func (m *Manager) imageIDs(ctx context.Context) map[string]string {

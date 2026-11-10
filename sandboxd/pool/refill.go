@@ -35,7 +35,7 @@ func (m *Manager) refillOnce(ctx context.Context) {
 			}
 			continue
 		}
-		if !parked && p.goldenDir == "" && !p.building && now.After(p.nextBuild) {
+		if !parked && (p.goldenDir == "" || p.rebuild) && !p.building && now.After(p.nextBuild) {
 			p.building = true
 			go m.buildGolden(ctx, p)
 		}
@@ -51,7 +51,7 @@ func (m *Manager) refillOnce(ctx context.Context) {
 				return
 			}
 			if p.removed || p.goldenDir == "" || p.refillGated(now) ||
-				len(p.warm)+p.refilling >= p.effectiveTarget(now) {
+				p.freshWarm()+p.refilling >= p.effectiveTarget(now) {
 				continue
 			}
 			select {
@@ -73,6 +73,7 @@ func (m *Manager) shrinkOnce(ctx context.Context) {
 	m.mu.Lock()
 	now := time.Now()
 	for _, p := range m.pools {
+		trim = append(trim, p.retireStale(now)...)
 		trim = append(trim, p.shrink(now)...)
 	}
 	m.mu.Unlock()
@@ -105,7 +106,7 @@ func (m *Manager) refillOne(ctx context.Context, p *pool, golden string, gen uin
 	m.mu.Lock()
 	now := time.Now()
 	p.refilling--
-	if err == nil && !m.closedLocked() && p.goldenDir != "" && p.goldenGen == gen && len(p.warm) < p.effectiveTarget(now) {
+	if err == nil && !m.closedLocked() && p.goldenDir != "" && p.goldenGen == gen && p.freshWarm() < p.effectiveTarget(now) {
 		p.warm = append(p.warm, sb)
 		p.noteLead(time.Since(start))
 		keep = true
