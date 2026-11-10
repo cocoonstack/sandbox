@@ -1247,8 +1247,10 @@ claim stays unused; `sandboxd_balloon_failures_total` counts it.
 `balloon` key, or a cocoon without `vm balloon`),
 `the sandbox's VM has no balloon device` (a VM a sweep found without one),
 `sandbox has an open data-plane connection`, or a hibernated, archived, failed
-or waking claim or one with a capture in flight; 503
-`sandbox moving to another node; retry` during a live move.
+or waking claim or one a hibernate is capturing; 503
+`sandbox moving to another node; retry` during a live move. During a checkpoint
+or fork capture the call answers 202 and the inflate waits for the capture to
+end.
 
 ## PUT /v1/sandboxes/{id}/egress-limit
 
