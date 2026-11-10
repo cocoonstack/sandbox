@@ -592,9 +592,9 @@ map update per tunnel and an atomic load per request read. A changed rate
 starts with a full bucket, a direction whose rate did not change keeps its
 bucket, and a repeated cap changes nothing. A change reaches every open
 connection at once: the proxy sets a past read deadline on every open tunnel,
-whose copy resumes in the matching mode once the chunk in flight is through (a
-spliced chunk can run to a few hundred KiB at the old rate), and a request reads
-the cap on every read. A claim in [advanced network mode](advanced-network.md#host-side) keeps
+whose copy resumes in the matching mode; an uncapped direction can pass one more
+splice, up to 1 MiB at the old, uncapped rate, when its data arrives together
+with the deadline, and a request reads the cap on every read. A claim in [advanced network mode](advanced-network.md#host-side) keeps
 separate buckets on its tun path, so its proxy and tun traffic are capped
 apart.
 

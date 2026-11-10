@@ -61,13 +61,18 @@ func TestChangingTheLimitMovesAnOpenTunnel(t *testing.T) {
 	}
 	waitBytes(t, s, 1<<20)
 
-	p.SetLimit(types.EgressLimit{TxBytesPerSecond: testRate / 2})
+	const rate, spliceChunk = 2 << 20, 1 << 20
+	base := s.received.Load()
+	p.SetLimit(types.EgressLimit{TxBytesPerSecond: rate})
+	start := time.Now()
 	go writeUntilClosed(conn)
-	time.Sleep(50 * time.Millisecond)
-	from, start := s.received.Load(), time.Now()
-	waitBytes(t, s, from+testRate/2)
-	if took := time.Since(start); took < 700*time.Millisecond {
-		t.Errorf("a second's worth took %v once the limit dropped to %d/s", took, testRate/2)
+	waitBytes(t, s, base+rate+spliceChunk+rate*3/4)
+	took := time.Since(start)
+	if took < 700*time.Millisecond {
+		t.Errorf("a burst, a splice chunk and 0.75 s at the new cap took %v once the limit dropped to %d/s", took, rate)
+	}
+	if over := s.received.Load() - base - int64(took.Seconds()*rate); over > rate+spliceChunk+rate/limitSlices {
+		t.Errorf("%d bytes past the cap's pace once the limit dropped, want at most its burst and one splice chunk", over)
 	}
 
 	p.SetLimit(types.EgressLimit{})

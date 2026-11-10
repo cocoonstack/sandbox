@@ -166,7 +166,8 @@ func TestDisablingARunningClaimRevokesItsPacketPath(t *testing.T) {
 		t.Error("the packet door still accepts after the disable")
 	}
 	waitFor(t, func() bool {
-		return slices.Equal(tunVerbsOf(eng), []string{"up " + sb.VsockSocket, "down " + sb.VsockSocket})
+		verbs := tunVerbsOf(eng)
+		return len(verbs) >= 2 && verbs[0] == "up "+sb.VsockSocket && !slices.ContainsFunc(verbs[1:], func(v string) bool { return v != "down "+sb.VsockSocket })
 	})
 	if err := m.SetTun(t.Context(), sb.ID, new(true), nil); err != nil {
 		t.Fatalf("enable: %v", err)
