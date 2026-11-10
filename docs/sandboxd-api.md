@@ -1230,28 +1230,34 @@ row.
 
 ## POST /v1/sandboxes/{id}/balloon
 
-Auth: root or operator; a tenant token answers 403. No body. Counts a running
-claim as unused until its next data-plane connection, so the
-[`balloon`](deploy.md#configuration) sweep inflates it to `idle_percent` of
-guest memory now instead of after `idle_seconds`. The call kicks a sweep and
-returns before cocoon answers; the inflate lands within a sweep interval (5 s),
-a minute after a failed call, or after a balloon call already in flight.
-The claim stays inflated until anything stamps data-plane use: a relay, exec or
-port connection, a wake, a volume change, a VMM restart, a live move-in, or a
-sandboxd restart, since the mark is held in memory. The next sweep then
-deflates it, as it does after an automatic inflate. An operator port
-connection keeps it deflated only while it is open. Guest egress and tun
-traffic do not deflate it. A failed inflate retries after a minute while the
-claim stays unused; `sandboxd_balloon_failures_total` counts it.
+Auth: root or operator; a tenant token answers 403. Sets a running claim's
+virtio-balloon target, the guest memory the balloon withholds from the guest,
+through one `cocoon vm balloon` call, and answers with cocoon's report:
 
-202 accepted; 404 unknown id; 409 `balloon reclaim is off on this node` (no
-`balloon` key, or a cocoon without `vm balloon`),
-`the sandbox's VM has no balloon device` (a VM a sweep found without one),
-`sandbox has an open data-plane connection`, or a hibernated, archived, failed
-or waking claim or one a hibernate is capturing; 503
-`sandbox moving to another node; retry` during a live move. During a checkpoint,
-fork or promote capture the call answers 202 and the inflate waits for the capture to
-end.
+```json
+{"target": "50%"}
+```
+
+→ `200 {"target": 2147483648, "actual": 1073741824, "default": 1073741824}`
+
+`target` is what `cocoon vm balloon` accepts: `NN%` of guest memory (0 to 99)
+or a byte size (`2G`, `512M`, `1073741824`), below guest memory. In the reply,
+`target` is the size cocoon set in bytes, `actual` what the balloon holds now
+when the hypervisor reports it, and `default` the boot target. Send `default`
+back as the target to restore the claim. The call returns before the guest
+settles. sandboxd keeps no balloon state and never changes a target on its
+own: the caller sets it and the caller restores it. A hibernate wake and a
+live move keep the target; an archive wake, a cold VMM restart, a fork and a
+clone start at the boot target. cocoon serializes the call with captures and
+live-move rounds.
+
+200 with cocoon's report; 400 a target cocoon rejects or an unknown field;
+404 unknown id; 409 `cocoon on this node has no vm balloon`,
+`the sandbox's VM has no balloon device`, or a hibernated, archived, failed or
+waking claim or one a hibernate is capturing; 503
+`sandbox moving to another node; retry` during a live move; 500 the cocoon
+call failed or outran its 30 s budget, or cocoon found the guest paused (a
+capture or a move round that began after the node's checks).
 
 ## PUT /v1/sandboxes/{id}/egress-limit
 
@@ -1290,7 +1296,7 @@ holds the change, and a resend of the same body replaces the row.
 
 Auth: root only (tenant and operator tokens get 403). Prometheus text format,
 hand-rendered: pool warm/target gauges, claimed/running/max_running/hibernated/archived/failed/draining/cordoned
-gauges, `sandboxd_evacuating` (the claims an evacuation has yet to move), `sandboxd_memory_low` and `sandboxd_anon_bytes` (see [`memory_limit`](deploy.md#configuration)), `sandboxd_balloon_inflated` (running claims whose balloon holds the idle target, see [`balloon`](deploy.md#configuration)), a per-tenant live-claim gauge (`sandboxd_tenant_claims{tenant="…"}`,
+gauges, `sandboxd_evacuating` (the claims an evacuation has yet to move), `sandboxd_memory_low` and `sandboxd_anon_bytes` (see [`memory_limit`](deploy.md#configuration)), a per-tenant live-claim gauge (`sandboxd_tenant_claims{tenant="…"}`,
 tenants holding live claims only, so the label set is bounded by the node's claims), `sandboxd_config_digest_mismatch` on a mesh, claims
 by tier (warm/clone/cold),
 wake/hibernate/fork/checkpoint/promote/release/reap counters plus
@@ -1302,7 +1308,7 @@ peer, `sandboxd_wakes_refused_total{reason}`, wakes `max_running` (`max_running`
 refused here, whether or not a hand-off ran, `sandboxd_wake_handoffs_total`,
 archived claims this node [handed to a peer with room](cluster.md#waking-an-archived-claim-on-a-full-node)
 instead, and `sandboxd_wake_memory_fallbacks_total`, archived wakes over
-`memory_limit` this node woke itself because no hand-off ran or no peer adopted. `sandboxd_balloon_inflations_total`, `sandboxd_balloon_deflations_total` and `sandboxd_balloon_failures_total` count the balloon sweep's changes and the ones that failed, which retry a minute later. On a node with a `tun` block it adds the packet path's counters:
+`memory_limit` this node woke itself because no hand-off ran or no peer adopted. On a node with a `tun` block it adds the packet path's counters:
 `sandboxd_tun_frames_total{dir}` (frames on the claims' vsock streams, `out`
 from the guest and `in` to it), `sandboxd_tun_datagrams_total{dir}` (VXLAN
 datagrams), `sandboxd_tun_arp_total{kind}` (`answered` replies to exits,

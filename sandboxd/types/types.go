@@ -47,10 +47,6 @@ const (
 	VMMRestartCold VMMRestart = "cold"
 	VMMRestartNone VMMRestart = "none"
 
-	BalloonInflated    BalloonState = "inflated"
-	BalloonUnknown     BalloonState = "unknown"
-	BalloonUnsupported BalloonState = "unsupported"
-
 	TemplateRootScope = "*"
 
 	maxMetadataPairs      = 16
@@ -259,9 +255,6 @@ func (l EgressLimit) Validate() error {
 	return nil
 }
 
-// BalloonState is what the node knows of a VM's balloon target; empty means the boot default.
-type BalloonState string
-
 // envView is an immutable env with its inject entries in name order.
 type envView struct {
 	env     Env
@@ -368,21 +361,10 @@ type Sandbox struct {
 
 	ArchiveRetryAt time.Time `json:"-"`
 
-	// Balloon, BalloonTarget (the idle target applied), BalloonDefault (the boot target in bytes), BalloonRetryAt and BalloonBusy (a call in flight) are guarded by the manager mutex.
-	Balloon        BalloonState `json:"-"`
-	BalloonTarget  string       `json:"-"`
-	BalloonDefault int64        `json:"-"`
-	BalloonRetryAt time.Time    `json:"-"`
-	BalloonBusy    bool         `json:"-"`
-
-	// lastActivity is unix-nanos of the last data-plane connection, stamped lock-free; lastTraffic of the last egress request or tun packet.
+	// lastActivity is unix-nanos of the last data-plane connection, stamped lock-free.
 	lastActivity atomic.Int64
-	lastTraffic  atomic.Int64
-	// idleMark is unix-nanos of the last MarkIdle.
-	idleMark atomic.Int64
-	// open counts the data-plane connections held right now; egress the egress requests.
-	open   atomic.Int32
-	egress atomic.Int32
+	// open counts the data-plane connections held right now.
+	open atomic.Int32
 	// live is the env as of the last SetEnv, read by the egress proxy without the manager mutex.
 	live atomic.Pointer[envView]
 
@@ -396,25 +378,8 @@ func (s *Sandbox) Touch() { s.lastActivity.Store(time.Now().UnixNano()) }
 // TouchAt stamps the last data-plane activity at t.
 func (s *Sandbox) TouchAt(t time.Time) { s.lastActivity.Store(t.UnixNano()) }
 
-// TouchTraffic stamps guest traffic at t, which keeps the claim awake but does not count as use.
-func (s *Sandbox) TouchTraffic(t time.Time) { s.lastTraffic.Store(t.UnixNano()) }
-
-// LastSeen returns the last activity time, guest traffic included.
-func (s *Sandbox) LastSeen() time.Time {
-	return time.Unix(0, max(s.lastActivity.Load(), s.lastTraffic.Load()))
-}
-
-// MarkIdle counts the claim as unused until its next data-plane connection.
-func (s *Sandbox) MarkIdle() { s.idleMark.Store(time.Now().UnixNano()) }
-
-// UnusedFor reports whether no data-plane connection is held and none was made for d, or since MarkIdle.
-func (s *Sandbox) UnusedFor(d time.Duration, now time.Time) bool {
-	if s.InUse() {
-		return false
-	}
-	last := s.lastActivity.Load()
-	return now.UnixNano()-last >= int64(d) || s.idleMark.Load() >= last
-}
+// LastSeen returns the last data-plane activity time.
+func (s *Sandbox) LastSeen() time.Time { return time.Unix(0, s.lastActivity.Load()) }
 
 // HasReplica reports whether the claim's registry row may name a replica.
 func (s *Sandbox) HasReplica() bool { return s.ReplicaCk != "" || s.ReplicaPending != "" }
@@ -431,20 +396,8 @@ func (s *Sandbox) Unhold() {
 // UnholdIdle ends a Hold without restarting the idle clock.
 func (s *Sandbox) UnholdIdle() { s.open.Add(-1) }
 
-// HoldEgress registers an egress request in flight, which keeps the claim awake but does not count as use.
-func (s *Sandbox) HoldEgress() { s.egress.Add(1) }
-
-// UnholdEgress stamps guest traffic, then ends the HoldEgress.
-func (s *Sandbox) UnholdEgress() {
-	s.TouchTraffic(time.Now())
-	s.egress.Add(-1)
-}
-
-// Busy reports whether a data-plane connection or an egress request is held.
-func (s *Sandbox) Busy() bool { return s.open.Load() > 0 || s.egress.Load() > 0 }
-
-// InUse reports whether a data-plane connection is held.
-func (s *Sandbox) InUse() bool { return s.open.Load() > 0 }
+// Busy reports whether a data-plane connection is held.
+func (s *Sandbox) Busy() bool { return s.open.Load() > 0 }
 
 // SetEnv replaces the env and publishes it to the egress proxy.
 func (s *Sandbox) SetEnv(e Env) {
@@ -534,9 +487,9 @@ type VMDevices struct {
 
 // VMBalloon is a VM's balloon target, the bytes it holds now when the hypervisor reports them, and its boot target.
 type VMBalloon struct {
-	Target  int64 `json:"target"`
-	Actual  int64 `json:"actual,omitzero"`
-	Default int64 `json:"default"`
+	Target  int64  `json:"target"`
+	Actual  *int64 `json:"actual,omitzero"`
+	Default int64  `json:"default"`
 }
 
 // VMRecord is the subset of cocoon's VM records the control plane reads.
@@ -547,7 +500,6 @@ type VMRecord struct {
 	NetworkConfigs  []VMNetConfig `json:"network_configs,omitempty"`
 	Config          VMConfig      `json:"config"`
 	AttachedDevices VMDevices     `json:"attached_devices,omitzero"`
-	Balloon         *VMBalloon    `json:"balloon,omitempty"`
 }
 
 // TapDevice returns the first NIC's host tap; empty when the record carries none.

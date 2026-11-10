@@ -133,7 +133,7 @@ func TestHeldConnectionBlocksIdleSweep(t *testing.T) {
 	})
 }
 
-func TestEgressTrafficKeepsAClaimAwakeButLetsItsBalloonInflate(t *testing.T) {
+func TestEgressRequestInFlightBlocksIdleSweep(t *testing.T) {
 	release := make(chan struct{})
 	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		<-release
@@ -143,9 +143,7 @@ func TestEgressTrafficKeepsAClaimAwakeButLetsItsBalloonInflate(t *testing.T) {
 	releaseOrigin := sync.OnceFunc(func() { close(release) })
 	t.Cleanup(releaseOrigin)
 	pol := &egress.Policy{Allow: []egress.Rule{{Host: outboundtest.Hostname(t, origin.URL)}}}
-	eng := newFakeEngine()
-	m := egressManager(t, eng, config.PoolSpec{PoolKey: testKey, IdleHibernateSeconds: 1, Egress: pol})
-	editView(m, func(v *configView) { v.balloonIdle, v.balloonTarget = balloonIdleFor, "50%" })
+	m := egressManager(t, newFakeEngine(), config.PoolSpec{PoolKey: testKey, IdleHibernateSeconds: 1, Egress: pol})
 	withOutbound(t, m, func(o *outbound.Options) { o.Dial = (&net.Dialer{}).DialContext })
 	sb := outboundtest.VsockSandbox(t, "sb_inflight", testKey)
 	sb.VMName = "sbx-inflight-1"
@@ -169,10 +167,6 @@ func TestEgressTrafficKeepsAClaimAwakeButLetsItsBalloonInflate(t *testing.T) {
 	if hibernated(m) != 0 {
 		t.Fatal("claim with an egress request in flight was idle-hibernated")
 	}
-	sweepBalloons(t, m)
-	if calls := balloonCalls(eng); len(calls) != 1 {
-		t.Fatalf("balloon calls %q with only egress open, want one inflate", calls)
-	}
 
 	releaseOrigin()
 	if err := <-result; err != nil {
@@ -182,10 +176,6 @@ func TestEgressTrafficKeepsAClaimAwakeButLetsItsBalloonInflate(t *testing.T) {
 	sweepIdle(t, m)
 	if hibernated(m) != 0 {
 		t.Fatal("idle clock did not restart when the egress request ended")
-	}
-	sweepBalloons(t, m)
-	if calls := balloonCalls(eng); len(calls) != 1 {
-		t.Fatalf("balloon calls %q after the egress request ended, want no deflate", calls)
 	}
 	backdate(m, sb, time.Hour)
 	sweepIdle(t, m)

@@ -6,7 +6,6 @@ import (
 	"encoding/base64"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
-	"errors"
 	"fmt"
 	"net"
 	"net/netip"
@@ -347,12 +346,6 @@ type MemoryLimit struct {
 	PSISomeAvg10 float64 `json:"psi_some_avg10,omitzero"`
 }
 
-// Balloon inflates an idle claim's balloon to IdlePercent of guest memory so the guest returns its page cache.
-type Balloon struct {
-	IdleSeconds int `json:"idle_seconds"`
-	IdlePercent int `json:"idle_percent,omitzero"`
-}
-
 // MeshConfig configures cluster membership; every node shares one APIToken and tenant set.
 type MeshConfig struct {
 	NodeID     string   `json:"node_id"`
@@ -466,7 +459,6 @@ type Config struct {
 
 	DiskReserve *DiskReserve `json:"disk_reserve,omitempty"`
 	MemoryLimit *MemoryLimit `json:"memory_limit,omitempty"`
-	Balloon     *Balloon     `json:"balloon,omitempty"`
 
 	Tun *TunConfig `json:"tun,omitempty"`
 
@@ -579,7 +571,7 @@ func (c *Config) validate() error {
 	if c.MoveConcurrency > 0 && !c.Movable() {
 		return fmt.Errorf("move_concurrency requires meta_store with a cell and an encrypted mesh (set mesh.cluster_key)")
 	}
-	for _, check := range []func() error{c.validateNodeEgress, c.validateDiskReserve, c.validateMemoryLimit, c.validateBalloon, c.validateTokens, c.validateMetaStore, c.validateVolumes, c.validateMesh, c.validateReplication, c.validateTun} {
+	for _, check := range []func() error{c.validateNodeEgress, c.validateDiskReserve, c.validateMemoryLimit, c.validateTokens, c.validateMetaStore, c.validateVolumes, c.validateMesh, c.validateReplication, c.validateTun} {
 		if err := check(); err != nil {
 			return err
 		}
@@ -848,21 +840,6 @@ func (c *Config) validateMemoryLimit() error {
 	}
 	if l.PSISomeAvg10 < 0 || l.PSISomeAvg10 > 100 {
 		return fmt.Errorf("memory_limit.psi_some_avg10 %v must be a percentage", l.PSISomeAvg10)
-	}
-	return nil
-}
-
-func (c *Config) validateBalloon() error {
-	b := c.Balloon
-	switch {
-	case b == nil:
-		return nil
-	case c.NoBalloon:
-		return errors.New("balloon needs the VM balloon device that no_balloon turns off")
-	case b.IdleSeconds <= 0:
-		return fmt.Errorf("balloon.idle_seconds %d must be positive", b.IdleSeconds)
-	case b.IdlePercent != 0 && (b.IdlePercent <= 25 || b.IdlePercent > 90):
-		return fmt.Errorf("balloon.idle_percent %d must be above the boot 25 and at most 90", b.IdlePercent)
 	}
 	return nil
 }

@@ -134,6 +134,10 @@ type RenewResponse struct {
 	Deadline time.Time `json:"deadline"`
 }
 
+type BalloonRequest struct {
+	Target string `json:"target"`
+}
+
 // PreviewRequest is the wire body of POST /v1/sandboxes/{id}/preview.
 type PreviewRequest struct {
 	Token string `json:"token"`

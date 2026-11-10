@@ -112,7 +112,6 @@ func (m *Manager) CommitMove(ctx context.Context, id string, claim []byte, epoch
 		return fmt.Errorf("%w: the reservation for %s ended", ErrNotMovable, id)
 	}
 	sb.MoveIn = true
-	m.forgetBalloonLocked(sb)
 	delete(m.incoming, id)
 	m.addClaimLocked(sb)
 	js := m.store.set(sb)

@@ -10,11 +10,9 @@ import (
 )
 
 func TestTunTrafficRestartsIdleClockButAnOpenStreamDoesNotHold(t *testing.T) {
-	eng := newFakeEngine()
-	m := tunManager(t, eng, &fakeAddrs{}, config.PoolSpec{
+	m := tunManager(t, newFakeEngine(), &fakeAddrs{}, config.PoolSpec{
 		PoolKey: testKey, Tun: true, Egress: anyPolicy, IdleHibernateSeconds: 60,
 	})
-	editView(m, func(v *configView) { v.balloonIdle, v.balloonTarget = balloonIdleFor, "50%" })
 	sb := mustClaim(t, m, testKey)
 	stream := openStream(t, sb)
 	for i := range 3 {
@@ -28,10 +26,6 @@ func TestTunTrafficRestartsIdleClockButAnOpenStreamDoesNotHold(t *testing.T) {
 		sweepIdle(t, m)
 		if hibernated(m) != 0 {
 			t.Fatal("active TUN claim was idle-hibernated")
-		}
-		sweepBalloons(t, m)
-		if calls := balloonCalls(eng); len(calls) != 1 {
-			t.Fatalf("balloon calls %q with only tun traffic, want one inflate", calls)
 		}
 	}
 	backdate(m, sb, 2*time.Minute)

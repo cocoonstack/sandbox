@@ -2416,37 +2416,38 @@ func TestEgressLimitVerbIsRootOnlyAndPassesTheDecodedLimit(t *testing.T) {
 	}
 }
 
-func TestBalloonVerbIsRootOrOperatorAndMapsItsRefusals(t *testing.T) {
+func TestBalloonVerbIsRootOrOperatorPassesTheTargetAndMapsItsRefusals(t *testing.T) {
 	var calls int
-	var gotID string
+	var gotID, gotTarget string
 	var failWith error
-	mgr := &fakeManager{reclaimMemory: func(id string) error {
+	mgr := &fakeManager{setBalloon: func(id, target string) (types.VMBalloon, error) {
 		calls++
-		gotID = id
-		return failWith
+		gotID, gotTarget = id, target
+		return types.VMBalloon{Target: 2 << 30, Actual: new(int64), Default: 1 << 30}, failWith
 	}}
 	ts := newTenantTestServer(t, "sekret", []tenants.TenantSpec{{Name: "acme", Token: "acme-tok"}}, mgr, nil)
 	for _, tt := range []struct {
-		name, token string
-		failWith    error
-		want        int
-		wantCalls   int
+		name, token, body string
+		failWith          error
+		want              int
+		wantCalls         int
 	}{
-		{"root", "sekret", nil, http.StatusAccepted, 1},
-		{"tenant token", "acme-tok", nil, http.StatusForbidden, 0},
-		{"sandbox token", "tok", nil, http.StatusUnauthorized, 0},
-		{"no token", "", nil, http.StatusUnauthorized, 0},
-		{"unknown sandbox", "sekret", pool.ErrUnknownSandbox, http.StatusNotFound, 1},
-		{"balloon off", "sekret", pool.ErrBalloonOff, http.StatusConflict, 1},
-		{"no balloon device", "sekret", pool.ErrNoBalloon, http.StatusConflict, 1},
-		{"in use", "sekret", pool.ErrInUse, http.StatusConflict, 1},
-		{"hibernated", "sekret", pool.ErrPaused, http.StatusConflict, 1},
-		{"archived", "sekret", pool.ErrArchived, http.StatusConflict, 1},
-		{"moving", "sekret", pool.ErrEvacuating, http.StatusServiceUnavailable, 1},
+		{"root sets a target", "sekret", `{"target": "50%"}`, nil, http.StatusOK, 1},
+		{"tenant token", "acme-tok", `{"target": "50%"}`, nil, http.StatusForbidden, 0},
+		{"sandbox token", "tok", `{"target": "50%"}`, nil, http.StatusUnauthorized, 0},
+		{"no token", "", `{"target": "50%"}`, nil, http.StatusUnauthorized, 0},
+		{"unknown field", "sekret", `{"target": "50%", "idle_seconds": 60}`, nil, http.StatusBadRequest, 0},
+		{"a target cocoon rejects", "sekret", `{"target": "4G"}`, fmt.Errorf("%w: balloon size 4294967296 must be below guest memory 2147483648", pool.ErrBalloonTarget), http.StatusBadRequest, 1},
+		{"unknown sandbox", "sekret", `{"target": "50%"}`, pool.ErrUnknownSandbox, http.StatusNotFound, 1},
+		{"cocoon without vm balloon", "sekret", `{"target": "50%"}`, pool.ErrBalloonOff, http.StatusConflict, 1},
+		{"no balloon device", "sekret", `{"target": "50%"}`, pool.ErrNoBalloon, http.StatusConflict, 1},
+		{"hibernated", "sekret", `{"target": "50%"}`, pool.ErrPaused, http.StatusConflict, 1},
+		{"archived", "sekret", `{"target": "50%"}`, pool.ErrArchived, http.StatusConflict, 1},
+		{"moving", "sekret", `{"target": "50%"}`, pool.ErrEvacuating, http.StatusServiceUnavailable, 1},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			calls, gotID, failWith = 0, "", tt.failWith
-			code := statusOf(t, http.MethodPost, ts.URL+"/v1/sandboxes/sb_1/balloon", tt.token, "")
+			calls, gotID, gotTarget, failWith = 0, "", "", tt.failWith
+			code := statusOf(t, http.MethodPost, ts.URL+"/v1/sandboxes/sb_1/balloon", tt.token, tt.body)
 			if code != tt.want || calls != tt.wantCalls {
 				t.Fatalf("status %d with %d manager calls, want %d with %d", code, calls, tt.want, tt.wantCalls)
 			}
@@ -2454,6 +2455,11 @@ func TestBalloonVerbIsRootOrOperatorAndMapsItsRefusals(t *testing.T) {
 				t.Errorf("manager got %q, want sb_1", gotID)
 			}
 		})
+	}
+	failWith = nil
+	code, body := bodyOf(t, http.MethodPost, ts.URL+"/v1/sandboxes/sb_1/balloon", "sekret", `{"target": "1073741824"}`)
+	if code != http.StatusOK || gotTarget != "1073741824" || !strings.Contains(string(body), `"actual":0`) || !strings.Contains(string(body), `"default":1073741824`) {
+		t.Errorf("reply %d %s for target %q, want cocoon's report passed through with a reported zero", code, body, gotTarget)
 	}
 }
 
@@ -2528,7 +2534,7 @@ type fakeManager struct {
 	setInstanceMetadata func(id string, doc []byte) error
 	setTun              func(id string, enabled *bool, profile *string) error
 	setEgressLimit      func(id string, l types.EgressLimit) error
-	reclaimMemory       idActionFunc
+	setBalloon          func(id, target string) (types.VMBalloon, error)
 	infoPools           []pool.PoolInfo
 	infoTemplates       []pool.TemplateInfo
 	labeled             []string
@@ -2850,11 +2856,11 @@ func (f *fakeManager) SetEgressLimit(_ context.Context, id string, l types.Egres
 	return f.setEgressLimit(id, l)
 }
 
-func (f *fakeManager) ReclaimMemory(id string) error {
-	if f.reclaimMemory == nil {
-		return nil
+func (f *fakeManager) SetBalloon(_ context.Context, id, target string) (types.VMBalloon, error) {
+	if f.setBalloon == nil {
+		return types.VMBalloon{}, nil
 	}
-	return f.reclaimMemory(id)
+	return f.setBalloon(id, target)
 }
 
 func (f *fakeManager) TunStats() (tunnet.Stats, bool) {

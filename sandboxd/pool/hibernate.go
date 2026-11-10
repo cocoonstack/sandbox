@@ -299,7 +299,6 @@ func (m *Manager) idleHibernate(ctx context.Context, sb *types.Sandbox, sweepSta
 	if woke {
 		return errWokeMeanwhile
 	}
-	m.inflateForHibernate(ctx, sb)
 	return m.hibernateLocked(ctx, sb)
 }
 
