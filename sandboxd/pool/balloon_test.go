@@ -379,12 +379,14 @@ func TestReclaimMemoryInflatesAnActiveClaimUntilItsNextUse(t *testing.T) {
 
 func TestReclaimMemoryRefusesWhatTheSweepCannotInflate(t *testing.T) {
 	eng := newFakeEngine()
-	m := balloonManager(t, eng, t.TempDir(), config.PoolSpec{PoolKey: testKey, Warm: 5})
+	m := balloonManager(t, eng, t.TempDir(), config.PoolSpec{PoolKey: testKey, Warm: 8})
 	held, asleep, archived, bare, arriving := mustClaim(t, m, testKey), mustClaim(t, m, testKey), mustClaim(t, m, testKey), mustClaim(t, m, testKey), mustClaim(t, m, testKey)
+	failed, waking, capturing := mustClaim(t, m, testKey), mustClaim(t, m, testKey), mustClaim(t, m, testKey)
 	held.Hold()
 	defer held.UnholdIdle()
 	m.mu.Lock()
 	asleep.HibernateSnap, archived.ArchiveCk, bare.Balloon, arriving.MoveIn = "snap", "ck_00000000000000aa", types.BalloonUnsupported, true
+	failed.Failed, waking.Waking, capturing.PendingSnap = "vmm exited", true, "pending"
 	m.mu.Unlock()
 	for _, tt := range []struct {
 		id   string
@@ -396,6 +398,9 @@ func TestReclaimMemoryRefusesWhatTheSweepCannotInflate(t *testing.T) {
 		{archived.ID, ErrArchived},
 		{bare.ID, ErrNoBalloon},
 		{arriving.ID, ErrEvacuating},
+		{failed.ID, ErrFailed},
+		{waking.ID, ErrPaused},
+		{capturing.ID, ErrPaused},
 	} {
 		if err := m.ReclaimMemory(tt.id); !errors.Is(err, tt.want) {
 			t.Errorf("reclaim %s: %v, want %v", tt.id, err, tt.want)
@@ -403,6 +408,7 @@ func TestReclaimMemoryRefusesWhatTheSweepCannotInflate(t *testing.T) {
 	}
 	m.mu.Lock()
 	asleep.HibernateSnap, archived.ArchiveCk, arriving.MoveIn = "", "", false
+	failed.Failed, waking.Waking, capturing.PendingSnap = "", false, ""
 	m.mu.Unlock()
 	editView(m, func(v *configView) { v.balloonIdle = 0 })
 	if err := m.ReclaimMemory(held.ID); !errors.Is(err, ErrBalloonOff) {
@@ -410,6 +416,29 @@ func TestReclaimMemoryRefusesWhatTheSweepCannotInflate(t *testing.T) {
 	}
 	if len(m.balloonKick) != 0 || len(balloonCalls(eng)) != 0 {
 		t.Error("a refused reclaim kicked a sweep or ballooned a claim")
+	}
+}
+
+func TestReclaimMemoryDuringACaptureInflatesOnceItEnds(t *testing.T) {
+	eng := newFakeEngine()
+	m := balloonManager(t, eng, t.TempDir(), config.PoolSpec{PoolKey: testKey})
+	sb := mustClaim(t, m, testKey)
+	m.mu.Lock()
+	sb.SaveSnap = "capture"
+	m.mu.Unlock()
+	if err := m.ReclaimMemory(sb.ID); err != nil {
+		t.Fatalf("reclaim during a capture: %v, want accepted", err)
+	}
+	sweepBalloons(t, m)
+	if calls := balloonCalls(eng); len(calls) != 0 {
+		t.Fatalf("balloon calls %q while the capture runs, want none", calls)
+	}
+	m.mu.Lock()
+	sb.SaveSnap = ""
+	m.mu.Unlock()
+	sweepBalloons(t, m)
+	if calls, want := balloonCalls(eng), []string{sb.VMName + " 50% after 0 hibernates"}; !slices.Equal(calls, want) {
+		t.Errorf("balloon calls %q after the capture, want one inflate", calls)
 	}
 }
 
