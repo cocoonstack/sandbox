@@ -496,8 +496,9 @@ the call answers 502 and the guest resumes on the source.
 registry row, since no node adopts a tombstone, then clears the claim's replica
 fields and deletes the row, so no third node can adopt a stale replica while
 the target runs the claim. It keeps the replica until the move ends. The target's
-first replica round puts a new row one interval after the start, and an aborted
-move lets the source's next round put it again. A source cut off from the
+first replica round puts a new row when the claim's carried interval comes due,
+from its `replica_at`, at once when the last round is older than the interval,
+and an aborted move lets the source's next round put it again. A source cut off from the
 registry changes nothing and its move fails: it keeps the row's epoch, so the
 fence still finds a peer that adopted the claim during the outage, and the source
 drops it. A consume whose reply was lost leaves the source's own tombstone, which
@@ -549,9 +550,14 @@ checkpoint store and keeps each claim's registry row on the latest snapshot:
   when the checkpoint is gone or this node confirmed an earlier row, and a
   write that never landed otherwise. A refused write reads the row: one this node still owns only had a
   stale epoch and is refreshed, and an absent or foreign row drops the claim and
-  its VM. A claim gets its first replica one interval after it is claimed, after a
-  restart, or after it wakes from an archive or an adoption; until a claim woken
-  that way commits its first replica it has no row, and it is lost with its node. A hibernated, archived or failed claim,
+  its VM. A claim's interval runs from its last round, which `claims.json` keeps
+  as `replica_at` and a restart, a move or an adoption carries, so a restart does
+  not reset it and a claim whose last round is older than the interval is due at
+  the first sweep. A claim that has never replicated gets its first round within
+  one interval of the sweep first seeing it, at an offset taken from its id, so
+  first rounds spread instead of landing together. Until a claim woken from an
+  archive or an adoption commits its first replica it has no row, and it is lost
+  with its node. A hibernated, archived or failed claim,
   one whose tenant was removed, and one with volumes (capture refuses them) is
   skipped, and a skipped claim keeps its interval, so one that wakes past it is due at once; a replicated claim that gains volumes
   drops its row and replica. The claim's policy pool, not its own template key,

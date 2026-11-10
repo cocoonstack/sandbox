@@ -87,6 +87,90 @@ func TestReplicaIntervalSurvivesATickTheClaimCannotReplicate(t *testing.T) {
 	}
 }
 
+func TestARestartSeedsTheReplicaIntervalFromTheLastRound(t *testing.T) {
+	c := newReplicaCluster(t)
+	a := c.node(t, "a", t.TempDir(), keepAnHour)
+	sb := mustClaim(t, a, testKey)
+	before := time.Now()
+	replicateNow(t, a, sb)
+	stored, err := newClaimStore(a.dataDir, false).load()
+	if err != nil {
+		t.Fatalf("load claims.json: %v", err)
+	}
+	at := stored[sb.ID].ReplicaAt
+	if at.Before(before) || at.After(time.Now()) {
+		t.Fatalf("claims.json replica_at %v, want the round's time after %v", at, before)
+	}
+	mustFlush(t, a)
+	restarted := c.restart(t, a)
+	if err = restarted.Reconcile(t.Context()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	restarted.liftFence()
+	restarted.replicateOnce(t.Context())
+	restarted.mu.Lock()
+	defer restarted.mu.Unlock()
+	if got := restarted.replicas[sb.ID]; !got.Equal(at) {
+		t.Errorf("first try after the restart %v, want the last round %v so the restart does not reset the interval", got, at)
+	}
+}
+
+func TestClaimsNeverReplicatedSpreadTheirFirstRoundOverAnInterval(t *testing.T) {
+	c := newReplicaCluster(t)
+	a := c.node(t, "a", t.TempDir(), keepAnHour)
+	ids := make([]string, 6)
+	for i := range ids {
+		ids[i] = mustClaim(t, a, testKey).ID
+	}
+	now := time.Now()
+	a.replicateOnce(t.Context())
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	seen := map[time.Time]bool{}
+	for _, id := range ids {
+		got := a.replicas[id]
+		if got.After(now.Add(time.Second)) || got.Before(now.Add(-replicateEvery*time.Second)) {
+			t.Errorf("first try of %s at %v, want within one interval before %v", id, got, now)
+		}
+		seen[got] = true
+	}
+	if len(seen) < 2 {
+		t.Errorf("all %d never-replicated claims got the same first try, want them spread", len(ids))
+	}
+}
+
+func TestOverdueClaimsKeepTheirPhasesAfterTheCatchUpRound(t *testing.T) {
+	c := newReplicaCluster(t)
+	a := c.node(t, "a", t.TempDir(), keepAnHour)
+	every := replicateEvery * time.Second
+	now := time.Now()
+	ids := make([]string, 4)
+	for i := range ids {
+		ids[i] = mustClaim(t, a, testKey).ID
+	}
+	a.mu.Lock()
+	a.replicas = map[string]time.Time{}
+	for i, id := range ids {
+		a.replicas[id] = now.Add(-3*every - time.Duration(i)*every/4)
+	}
+	a.mu.Unlock()
+	a.replicateOnce(t.Context())
+	waitFor(t, func() bool { return !a.replicating.Load() })
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	seen := map[time.Duration]bool{}
+	for _, id := range ids {
+		phase := a.replicas[id].Sub(now) % every
+		if phase < 0 {
+			phase += every
+		}
+		seen[phase.Round(time.Second)] = true
+	}
+	if len(seen) != len(ids) {
+		t.Errorf("the catch-up round left %d distinct phases for %d claims, want each claim's own", len(seen), len(ids))
+	}
+}
+
 func TestReplicaRefusedPutDropsTheCopyAndItsExport(t *testing.T) {
 	c := newReplicaCluster(t)
 	a, b := c.node(t, "a", t.TempDir(), keepAnHour), c.node(t, "b", t.TempDir(), keepAnHour)
@@ -558,10 +642,16 @@ func TestReplicaPassSnapshotsOnlyDueRunningClaims(t *testing.T) {
 
 		a.replicateOnce(t.Context())
 		synctest.Wait()
+		if got := len(eng.snapSaves) - base; got != 0 || a.replicaOf(running) != "" {
+			t.Fatalf("%d captures on the tick that first saw the claims, want none", got)
+		}
+		a.mu.Lock()
+		a.replicas[running.ID] = time.Now()
+		a.mu.Unlock()
 		time.Sleep((replicateEvery - 1) * time.Second)
 		a.replicateOnce(t.Context())
 		synctest.Wait()
-		if got := len(eng.snapSaves) - base; got != 0 || a.replicaOf(running) != "" {
+		if got := len(eng.snapSaves) - base; got != 0 {
 			t.Fatalf("%d captures before the interval, want none", got)
 		}
 
@@ -569,7 +659,7 @@ func TestReplicaPassSnapshotsOnlyDueRunningClaims(t *testing.T) {
 		a.replicateOnce(t.Context())
 		synctest.Wait()
 		if got := len(eng.snapSaves) - base; got != 1 || a.replicaOf(running) == "" {
-			t.Errorf("%d captures at the interval, replica %q, want exactly the running claim's", got, a.replicaOf(running))
+			t.Errorf("%d captures within the interval, replica %q, want exactly the running claim's", got, a.replicaOf(running))
 		}
 		if a.replicaOf(paused) != "" || a.replicaOf(withVolume) != "" {
 			t.Error("a hibernated claim or one with volumes was replicated")

@@ -330,7 +330,8 @@ type Sandbox struct {
 	// ReplicaCk names the checkpoint the claim's registry row points at while the claim runs; empty means unreplicated.
 	ReplicaCk string `json:"replica_ck,omitempty"`
 	// ReplicaPending is the checkpoint a replication round is about to register; the row may already name it.
-	ReplicaPending string `json:"replica_pending,omitempty"`
+	ReplicaPending string    `json:"replica_pending,omitempty"`
+	ReplicaAt      time.Time `json:"replica_at,omitzero"`
 
 	FromCheckpoint string `json:"from_checkpoint,omitempty"`
 	// TemplateDigest identifies the promoted-template export this sandbox was cloned from.
