@@ -1,7 +1,7 @@
 # Binaries-only carrier the os-images COPY --from: /silkd is glibc-dynamic
 # (Debian's glibc is older than Ubuntu 24.04's), /silkd-static is musl-static
 # for guests without glibc, such as android. TARGETARCH picks the musl triple.
-FROM rust:1.99.1-slim-bookworm@sha256:24707e70a4f1e23d9a7b25202ec43126d28a52294b96aad5c670df1fd1f1d400 AS build
+FROM rust:1.99.1-slim-bookworm@sha256:f2c004e3d2d8b547e8cf7ffbc29205385f4e71d23e53e4e383065db5e9f822cd AS build
 ARG TARGETARCH
 WORKDIR /silkd
 # The pin, not the base image's default, is the compiler: copy it before any rustup or cargo call.
