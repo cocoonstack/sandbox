@@ -51,6 +51,7 @@ impl Broker {
         };
         let mut cmd = Command::new(program);
         sysutil::align_proxy_env(&mut cmd);
+        sysutil::reset_nice(&mut cmd);
         cmd.args(argv)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())

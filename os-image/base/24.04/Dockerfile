@@ -72,6 +72,7 @@ RUN --mount=type=secret,id=sandbox_install_agent \
       'RestartSec=2s' \
       'LimitNOFILE=65536' \
       'OOMPolicy=continue' \
+      'Nice=-10' \
       '' \
       '[Install]' \
       'WantedBy=sysinit.target' \
