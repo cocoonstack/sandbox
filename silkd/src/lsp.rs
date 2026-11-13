@@ -51,7 +51,6 @@ impl Broker {
         };
         let mut cmd = Command::new(program);
         sysutil::align_proxy_env(&mut cmd);
-        sysutil::reset_nice(&mut cmd);
         cmd.args(argv)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -65,6 +64,7 @@ impl Broker {
             Ok(c) => c,
             Err(e) => return proto::err_frame(w, &e, "spawn language server").await,
         };
+        sysutil::reset_nice(&child);
         let stdio = sysutil::take_pipe(child.stdout.take(), "stdout")
             .and_then(|out| Ok((out, sysutil::take_pipe(child.stdin.take(), "stdin")?)));
         let stdio = match stdio {

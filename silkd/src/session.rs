@@ -47,7 +47,6 @@ impl Table {
         let mut cmd = Command::new("bash");
         cmd.env_clear().envs(sysutil::base_env().iter().copied());
         sysutil::apply_claim_env(&mut cmd);
-        sysutil::reset_nice(&mut cmd);
         if let Some(dir) = cwd {
             cmd.current_dir(dir);
         }
@@ -60,6 +59,7 @@ impl Table {
             .process_group(0)
             .kill_on_drop(true)
             .spawn()?;
+        sysutil::reset_nice(&child);
         let pid = child.id().unwrap_or(0);
         let stdin = sysutil::take_pipe(child.stdin.take(), "stdin")?;
         let stdout = sysutil::take_pipe(child.stdout.take(), "stdout")?;

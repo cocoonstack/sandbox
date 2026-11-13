@@ -54,7 +54,6 @@ where
     cmd.envs(sysutil::base_env().iter().copied());
     cmd.envs(claim.iter().map(|(k, v)| (*k, &**v)));
     cmd.envs(&req.env);
-    sysutil::reset_nice(&mut cmd);
     if let Err(e) = sysutil::apply_cwd_user(&mut cmd, req.cwd.as_deref(), req.user.as_deref()) {
         return proto::error_frame(out, ErrorKind::BadRequest, e).await;
     }
@@ -65,6 +64,7 @@ where
             return proto::error_frame(out, spawn_kind(&e), format!("spawn: {e}")).await;
         }
     };
+    sysutil::reset_nice(&child);
 
     let pid = child.id().unwrap_or(0);
     let proc = table.register(pid, req.argv, req.detach, now_secs);
