@@ -47,6 +47,7 @@ impl Table {
         let mut cmd = Command::new("bash");
         cmd.env_clear().envs(sysutil::base_env().iter().copied());
         sysutil::apply_claim_env(&mut cmd);
+        sysutil::reset_nice(&mut cmd);
         if let Some(dir) = cwd {
             cmd.current_dir(dir);
         }
