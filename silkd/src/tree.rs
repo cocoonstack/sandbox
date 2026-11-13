@@ -133,6 +133,7 @@ where
 
 /// Spawns tar draining stderr on its own task, so a full stderr pipe cannot deadlock.
 fn spawn_tar(mut cmd: Command) -> io::Result<(Child, tokio::task::JoinHandle<Vec<u8>>)> {
+    sysutil::reset_nice(&mut cmd);
     let mut child = cmd.stderr(Stdio::piped()).kill_on_drop(true).spawn()?;
     let stderr = sysutil::take_pipe(child.stderr.take(), "stderr")?;
     Ok((child, tokio::spawn(drain(stderr))))
