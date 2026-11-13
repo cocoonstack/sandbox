@@ -3,7 +3,8 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 mod common;
 
-use common::{roundtrip, stdout_body};
+use common::{b64, exchange, stdout_body};
+use serde_json::json;
 
 #[tokio::test(flavor = "current_thread")]
 #[ignore = "needs root"]
@@ -13,6 +14,11 @@ async fn a_raised_silkd_starts_exec_children_at_nice_zero() {
     assert_eq!(raised, 0, "raise the test thread");
     let inherited = std::process::Command::new("nice").output().unwrap();
     assert_eq!(String::from_utf8_lossy(&inherited.stdout).trim(), "-10");
-    let frames = roundtrip(r#"{"op":"exec","argv":["nice"]}"#).await;
+    let frames = exchange(&[
+        r#"{"op":"exec","argv":["/bin/sh","-c","read _; exec nice"]}"#.to_string(),
+        json!({"op":"stdin","data":b64(b"go\n")}).to_string(),
+        r#"{"op":"stdin_close"}"#.to_string(),
+    ])
+    .await;
     assert_eq!(stdout_body(&frames).trim(), "0");
 }
