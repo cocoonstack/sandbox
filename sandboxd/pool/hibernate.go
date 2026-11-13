@@ -204,7 +204,7 @@ func (m *Manager) wakeOrRead(ctx context.Context, sb *types.Sandbox, readerOK bo
 		m.stopVM(ctx, sb.VMName)
 		return "", fmt.Errorf("wake %s: %w", sb.ID, err)
 	}
-	sock, err := m.probeReady(ctx, sb.VMName, restoredSock, claimProbeTimeout)
+	sock, err := m.probeReady(ctx, sb.VMName, restoredSock, wakeProbeTimeout)
 	if err != nil {
 		m.stopVM(ctx, sb.VMName)
 		return "", fmt.Errorf("wake %s: %w", sb.ID, err)
