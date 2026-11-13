@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/cocoonstack/sandbox/sandboxd/config"
 )
@@ -58,7 +59,7 @@ func TestStatsHibernatedIsUnmeasured(t *testing.T) {
 	m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1})
 	sb := mustClaim(t, m, testKey)
 	hibernateClaim(t, m, sb)
-	before := eng.listCalls()
+	before := eng.lookupCalls()
 
 	st, ok := m.Stats(t.Context(), sb.ID)
 	if !ok {
@@ -73,7 +74,7 @@ func TestStatsHibernatedIsUnmeasured(t *testing.T) {
 	if st.CPUMeasured {
 		t.Error("CPUMeasured = true for a hibernated claim, want false")
 	}
-	if got := eng.listCalls(); got != before {
+	if got := eng.lookupCalls(); got != before {
 		t.Errorf("engine.List called %d more time(s), want 0: a hibernated claim must not consult the engine", got-before)
 	}
 }
@@ -119,27 +120,76 @@ func TestStatsReadsResidentSetFromPID(t *testing.T) {
 	}
 }
 
-func TestCPUSecondsSumsUserAndSystemTime(t *testing.T) {
-	proc := t.TempDir()
-	writeStat(t, proc, 42, "42 (cloud (hyper) visor) S 1 42 42 0 -1 4194560 100 0 0 0 1234 566 0 0 20 0 8 0 100 0 0\n")
-	got, ok := cpuSeconds(proc, 42)
-	if !ok {
-		t.Fatal("cpuSeconds: want ok=true")
+func TestAllStatsReadsEveryClaimFromOneListing(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("/proc/PID/stat is Linux-only")
 	}
-	if got != 18 {
-		t.Errorf("cpuSeconds = %v, want 18 (1234+566 ticks at 100 Hz)", got)
+	eng := newFakeEngine()
+	m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 2})
+	live, asleep := mustClaim(t, m, testKey), mustClaim(t, m, testKey)
+	eng.pids[live.VMName] = os.Getpid()
+	hibernateClaim(t, m, asleep)
+	before := eng.lookupCalls()
+
+	all := m.AllStats(t.Context())
+	if got := eng.lookupCalls() - before; got != 1 {
+		t.Errorf("engine lookups = %d, want 1 listing for every claim", got)
+	}
+	if len(all) != 2 || all[0].ID > all[1].ID {
+		t.Fatalf("AllStats = %+v, want both claims sorted by id", all)
+	}
+	for _, st := range all {
+		switch st.ID {
+		case live.ID:
+			if !st.MemUsedMeasured || !st.CPUMeasured || st.CPUStartedAt.IsZero() {
+				t.Errorf("live claim %+v, want memory, CPU and a start time", st)
+			}
+		case asleep.ID:
+			if !st.Hibernated || st.MemUsedMeasured || st.CPUMeasured {
+				t.Errorf("hibernated claim %+v, want unmeasured", st)
+			}
+		}
 	}
 }
 
-func TestCPUSecondsOfAnUnreadableStatIsUnmeasured(t *testing.T) {
+func TestProcessCPUSumsUserAndSystemTimeAndDatesTheProcess(t *testing.T) {
+	proc := t.TempDir()
+	writeStat(t, proc, 42, "42 (cloud (hyper) visor) S 1 42 42 0 -1 4194560 100 0 0 0 1234 566 0 0 20 0 8 0 100 0 0\n")
+	boot := time.Unix(1000, 0)
+	got, started, ok := processCPU(proc, 42, boot)
+	if !ok || got != 18 {
+		t.Fatalf("processCPU = %v %v, want 18 (1234+566 ticks at 100 Hz)", got, ok)
+	}
+	if want := boot.Add(time.Second).UTC(); !started.Equal(want) {
+		t.Errorf("started = %v, want %v (100 ticks after boot)", started, want)
+	}
+	if _, started, _ = processCPU(proc, 42, time.Time{}); !started.IsZero() {
+		t.Errorf("started without a boot time = %v, want zero", started)
+	}
+}
+
+func TestProcessCPUOfAnUnreadableStatIsUnmeasured(t *testing.T) {
 	proc := t.TempDir()
 	writeStat(t, proc, 1, "1 cloud-hypervisor S 1 1 1 0 -1 0 0 0 0 0 1 2\n")
 	writeStat(t, proc, 2, "2 (cloud-hypervisor) S 1 2 2 0 -1 0 0 0 0 0 1\n")
 	writeStat(t, proc, 3, "3 (cloud-hypervisor) S 1 3 3 0 -1 0 0 0 0 0 x 2\n")
 	for _, pid := range []int{1, 2, 3, 4} {
-		if got, ok := cpuSeconds(proc, pid); ok {
-			t.Errorf("cpuSeconds(pid %d) = %v, want ok=false", pid, got)
+		if got, _, ok := processCPU(proc, pid, time.Unix(1000, 0)); ok {
+			t.Errorf("processCPU(pid %d) = %v, want ok=false", pid, got)
 		}
+	}
+}
+
+func TestBootTimeReadsBtime(t *testing.T) {
+	proc := t.TempDir()
+	if err := os.WriteFile(filepath.Join(proc, "stat"), []byte("cpu  1 2 3\nbtime 1700000000\nprocesses 9\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := bootTime(proc); !got.Equal(time.Unix(1700000000, 0)) {
+		t.Errorf("bootTime = %v, want 1700000000", got)
+	}
+	if got := bootTime(t.TempDir()); !got.IsZero() {
+		t.Errorf("bootTime without a stat = %v, want zero", got)
 	}
 }
 

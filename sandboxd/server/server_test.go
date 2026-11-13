@@ -2835,6 +2835,10 @@ func (f *fakeManager) Stats(context.Context, string) (pool.SandboxStats, bool) {
 	return pool.SandboxStats{}, false
 }
 
+func (f *fakeManager) AllStats(context.Context) []pool.SandboxStats {
+	return nil
+}
+
 func (f *fakeManager) SetInstanceMetadata(_ context.Context, id string, doc []byte) error {
 	if f.setInstanceMetadata == nil {
 		return nil

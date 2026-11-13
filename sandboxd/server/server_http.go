@@ -37,6 +37,8 @@ var (
 		"POST /v1/claim":                      true,
 		"GET /v1/sandboxes":                   true,
 		"GET /v1/sandboxes/{id}":              true,
+		"GET /v1/sandboxes/{id}/stats":        true,
+		"GET /v1/stats":                       true,
 		"POST /v1/sandboxes/{id}/release":     true,
 		"POST /v1/sandboxes/{id}/hibernate":   true,
 		"POST /v1/sandboxes/{id}/wake":        true,

@@ -117,6 +117,7 @@ type Manager interface {
 	Sandboxes(tenant, claimRef string, metadata types.Metadata) []pool.SandboxSummary
 	Sandbox(id string) (pool.SandboxSummary, bool)
 	Stats(ctx context.Context, id string) (pool.SandboxStats, bool)
+	AllStats(ctx context.Context) []pool.SandboxStats
 	SetInstanceMetadata(ctx context.Context, id string, doc []byte) error
 	SetEnv(ctx context.Context, id string, env types.Env, tenant string) error
 	PatchEnv(ctx context.Context, id string, patch types.EnvPatch, tenant string) error
@@ -221,6 +222,11 @@ type InfoResponse struct {
 // SandboxListResponse is the wire reply of GET /v1/sandboxes.
 type SandboxListResponse struct {
 	Sandboxes []pool.SandboxSummary `json:"sandboxes"`
+}
+
+// StatsListResponse is the wire reply of GET /v1/stats.
+type StatsListResponse struct {
+	Sandboxes []pool.SandboxStats `json:"sandboxes"`
 }
 
 // TemplateLabelsRequest is the wire body of PUT /v1/templates/labels; it replaces the template's whole label map.
@@ -348,6 +354,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/sandboxes/{id}/renew", s.handleRenew)
 	mux.HandleFunc("GET /v1/sandboxes/{id}", s.requireRoot(s.handleSandbox))
 	mux.HandleFunc("GET /v1/sandboxes/{id}/stats", s.requireRoot(s.handleSandboxStats))
+	mux.HandleFunc("GET /v1/stats", s.requireRoot(s.handleAllStats))
 	mux.HandleFunc("PUT /v1/sandboxes/{id}/instance-metadata", s.requireRoot(s.handleInstanceMetadata))
 	mux.HandleFunc("PUT /v1/sandboxes/{id}/tun", s.requireRoot(s.handleSetTun))
 	mux.HandleFunc("PUT /v1/sandboxes/{id}/egress-limit", s.requireRoot(s.handleSetEgressLimit))
@@ -601,6 +608,10 @@ func (s *Server) handleSandboxStats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, st)
+}
+
+func (s *Server) handleAllStats(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, StatsListResponse{Sandboxes: s.mgr.AllStats(r.Context())})
 }
 
 func (s *Server) handleInstanceMetadata(w http.ResponseWriter, r *http.Request) {
