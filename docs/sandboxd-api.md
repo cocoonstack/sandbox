@@ -1104,12 +1104,12 @@ to the node-scoped `/metrics`:
 {"id": "sb_…", "cpu_count": 2, "mem_total_bytes": 1073741824,
  "mem_used_bytes": 187654144, "mem_used_measured": true,
  "cpu_seconds": 5321.47, "cpu_started_at": "…", "cpu_measured": true,
- "hibernated": false, "archived": false, "measured_at": "…"}
+ "hibernated": false, "measured_at": "…"}
 ```
 
 `cpu_count`/`mem_total_bytes` come from the size tier. `hibernated` marks a
-claim whose memory snapshot is on this node, and `archived` one whose state
-is in the checkpoint store; neither has a VMM to read. `mem_used_bytes` is
+claim whose memory snapshot is on this node, and `archived`, present only
+when true, one whose state is in the checkpoint store; neither has a VMM to read. `mem_used_bytes` is
 the host VMM process's resident set — the only memory usage signal
 available without a guest agent. `cpu_seconds` is the same process's user plus system
 CPU time, all threads, guest time included, and `cpu_started_at` is when that
