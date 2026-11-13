@@ -1102,6 +1102,7 @@ to the node-scoped `/metrics`:
 ```json
 {"id": "sb_…", "cpu_count": 2, "mem_total_bytes": 1073741824,
  "mem_used_bytes": 187654144, "mem_used_measured": true,
+ "cpu_seconds": 5321.47, "cpu_measured": true,
  "hibernated": false, "measured_at": "…"}
 ```
 
@@ -1109,7 +1110,12 @@ to the node-scoped `/metrics`:
 the host VMM process's resident set — the only usage signal available
 without a guest agent; `mem_used_measured` is false when there is no VMM
 process to read (hibernated, or the PID is not yet known), so a zero is
-never mistaken for idle. 404 unknown id.
+never mistaken for idle. `cpu_seconds` is the same process's user plus
+system CPU time, all threads; the rate between two reads is the sandbox's
+CPU use. It starts over with the process (a wake, a restart or a move), so
+a read lower than the last one marks a new process, not negative use.
+`cpu_measured` is false under the same conditions as `mem_used_measured`.
+404 unknown id.
 
 ## GET/PUT/PATCH /v1/sandboxes/{id}/env
 
