@@ -13,18 +13,12 @@ import (
 
 type vmProvisioner func(name string) (types.VMRecord, error)
 
-func (m *Manager) provision(ctx context.Context, key types.PoolKey, golden string) (*types.Sandbox, error) {
-	if golden == "" {
-		return m.provisionCold(ctx, key)
-	}
-	return m.provisionVM(ctx, key, claimProbeTimeout, func(name string) (types.VMRecord, error) {
-		return m.eng.Clone(ctx, golden, name, key)
-	})
-}
-
 func (m *Manager) provisionResolved(ctx context.Context, key types.PoolKey, g goldenResolution) (*types.Sandbox, error) {
-	if g.held == nil {
-		return m.provision(ctx, key, g.dir)
+	switch {
+	case g.held == nil && g.dir == "":
+		return m.provisionCold(ctx, key)
+	case g.held == nil:
+		return m.provisionClone(ctx, key, g.dir, claimProbeTimeout)
 	}
 	return m.provisionVM(ctx, key, claimProbeTimeout, func(name string) (types.VMRecord, error) {
 		g.held.goldenUse.RLock()
@@ -35,8 +29,8 @@ func (m *Manager) provisionResolved(ctx context.Context, key types.PoolKey, g go
 	})
 }
 
-func (m *Manager) provisionAged(ctx context.Context, key types.PoolKey, dir string) (*types.Sandbox, error) {
-	return m.provisionVM(ctx, key, wakeProbeTimeout, func(name string) (types.VMRecord, error) {
+func (m *Manager) provisionClone(ctx context.Context, key types.PoolKey, dir string, probe time.Duration) (*types.Sandbox, error) {
+	return m.provisionVM(ctx, key, probe, func(name string) (types.VMRecord, error) {
 		return m.eng.Clone(ctx, dir, name, key)
 	})
 }

@@ -224,7 +224,7 @@ func (m *Manager) claimLoaded(ctx context.Context, ckpt types.Checkpoint, o Clai
 	if err != nil {
 		return nil, fmt.Errorf("fetch checkpoint: %w", err)
 	}
-	sb, err := m.provisionAged(ctx, ckpt.Key, dir)
+	sb, err := m.provisionClone(ctx, ckpt.Key, dir, wakeProbeTimeout)
 	if err != nil {
 		return nil, err
 	}

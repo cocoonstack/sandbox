@@ -234,7 +234,7 @@ func (m *Manager) wakeArchived(ctx context.Context, sb *types.Sandbox) (string, 
 	if err != nil {
 		return "", fmt.Errorf("wake %s: fetch archive: %w", sb.ID, err)
 	}
-	built, err := m.provisionAged(ctx, sb.Key, dir)
+	built, err := m.provisionClone(ctx, sb.Key, dir, wakeProbeTimeout)
 	if err != nil {
 		return "", fmt.Errorf("wake %s: %w", sb.ID, err)
 	}

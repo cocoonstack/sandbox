@@ -94,7 +94,7 @@ func TestColdProvisionInstallsCAOnlyForAnInterceptPool(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			eng := newFakeEngine()
 			m := egressManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1, Egress: tt.policy})
-			sb, err := m.provision(t.Context(), testKey, "")
+			sb, err := m.provisionCold(t.Context(), testKey)
 			if err != nil {
 				t.Fatalf("cold provision: %v", err)
 			}
@@ -110,7 +110,7 @@ func TestColdProvisionFailsClosedOnCAInstallError(t *testing.T) {
 	eng := newFakeEngine()
 	eng.installCAErr = errors.New("silkd down")
 	m := egressManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1, Egress: interceptPolicy()})
-	if _, err := m.provision(t.Context(), testKey, ""); err == nil {
+	if _, err := m.provisionCold(t.Context(), testKey); err == nil {
 		t.Error("cold provision succeeded though the guest never got the root; want fail-closed")
 	}
 }
