@@ -65,44 +65,44 @@ func (m *Manager) Fork(ctx context.Context, id string, cred Cred, count int, ttl
 
 // forkClones clones a running source from a fresh snapshot, a hibernated one from an export; inherited reports a captured guest env file.
 func (m *Manager) forkClones(ctx context.Context, sb *types.Sandbox, count int) (children []*types.Sandbox, inherited bool, err error) {
-	create, cleanup, inherited, err := m.forkSource(ctx, sb)
+	create, cleanup, probe, inherited, err := m.forkSource(ctx, sb)
 	if err != nil {
 		return nil, false, err
 	}
 	defer cleanup()
-	children, err = m.cloneBatch(ctx, count, sb.Key, create)
+	children, err = m.cloneBatch(ctx, count, sb.Key, create, probe)
 	return children, inherited, err
 }
 
 // forkSource captures the fork source under the transition lock, against a racing hibernate.
-func (m *Manager) forkSource(ctx context.Context, sb *types.Sandbox) (create vmProvisioner, cleanup func(), inherited bool, err error) {
+func (m *Manager) forkSource(ctx context.Context, sb *types.Sandbox) (create vmProvisioner, cleanup func(), probe time.Duration, inherited bool, err error) {
 	if err = m.lockTransition(sb); err != nil {
-		return nil, nil, false, err
+		return nil, nil, 0, false, err
 	}
 	defer sb.Transition.Unlock()
 	if err = m.captureAllowed(sb); err != nil {
-		return nil, nil, false, err
+		return nil, nil, 0, false, err
 	}
 	if err = m.settleCapture(ctx, sb); err != nil {
-		return nil, nil, false, err
+		return nil, nil, 0, false, err
 	}
 	inherited = m.heldGuestEnv(sb)
 	if sb.HibernateSnap == "" {
 		snap, drop, snapErr := m.sourceSnap(ctx, sb)
 		if snapErr != nil {
-			return nil, nil, false, snapErr
+			return nil, nil, 0, false, snapErr
 		}
 		return func(name string) (types.VMRecord, error) { return m.eng.CloneSnap(ctx, snap, name, sb.Key) },
-			drop, inherited, nil
+			drop, claimProbeTimeout, inherited, nil
 	}
 	dir, err := os.MkdirTemp(m.dataDir, "fork-")
 	if err != nil {
-		return nil, nil, false, err
+		return nil, nil, 0, false, err
 	}
 	if err = m.eng.SnapshotExport(ctx, sb.HibernateSnap, dir); err != nil {
 		_ = os.RemoveAll(dir)
-		return nil, nil, false, err
+		return nil, nil, 0, false, err
 	}
 	return func(name string) (types.VMRecord, error) { return m.eng.Clone(ctx, dir, name, sb.Key) },
-		func() { _ = os.RemoveAll(dir) }, inherited, nil
+		func() { _ = os.RemoveAll(dir) }, wakeProbeTimeout, inherited, nil
 }
