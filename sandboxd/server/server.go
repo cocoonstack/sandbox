@@ -117,7 +117,7 @@ type Manager interface {
 	Sandboxes(tenant, claimRef string, metadata types.Metadata) []pool.SandboxSummary
 	Sandbox(id string) (pool.SandboxSummary, bool)
 	Stats(ctx context.Context, id string) (pool.SandboxStats, bool)
-	AllStats(ctx context.Context) []pool.SandboxStats
+	AllStats(ctx context.Context) ([]pool.SandboxStats, error)
 	SetInstanceMetadata(ctx context.Context, id string, doc []byte) error
 	SetEnv(ctx context.Context, id string, env types.Env, tenant string) error
 	PatchEnv(ctx context.Context, id string, patch types.EnvPatch, tenant string) error
@@ -611,7 +611,13 @@ func (s *Server) handleSandboxStats(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleAllStats(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, StatsListResponse{Sandboxes: s.mgr.AllStats(r.Context())})
+	all, err := s.mgr.AllStats(r.Context())
+	if err != nil {
+		log.WithFunc("server.handleAllStats").Warnf(r.Context(), "read stats: %v", err)
+		writeErr(w, http.StatusServiceUnavailable, "vm listing failed; retry")
+		return
+	}
+	writeJSON(w, http.StatusOK, StatsListResponse{Sandboxes: all})
 }
 
 func (s *Server) handleInstanceMetadata(w http.ResponseWriter, r *http.Request) {

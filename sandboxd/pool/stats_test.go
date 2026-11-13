@@ -133,7 +133,10 @@ func TestAllStatsReadsEveryClaimFromOneListing(t *testing.T) {
 	hibernateClaim(t, m, asleep)
 	lists, lookups := eng.listCalls(), eng.lookupCalls()
 
-	all := m.AllStats(t.Context())
+	all, err := m.AllStats(t.Context())
+	if err != nil {
+		t.Fatalf("AllStats: %v", err)
+	}
 	if got := eng.listCalls() - lists; got != 1 {
 		t.Errorf("engine listings = %d, want 1 for every claim", got)
 	}
@@ -154,6 +157,30 @@ func TestAllStatsReadsEveryClaimFromOneListing(t *testing.T) {
 				t.Errorf("hibernated claim %+v, want unmeasured", st)
 			}
 		}
+	}
+}
+
+func TestAllStatsFailsWhenTheListingFails(t *testing.T) {
+	eng := newFakeEngine()
+	m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1})
+	mustClaim(t, m, testKey)
+	eng.listFails = 1
+	if all, err := m.AllStats(t.Context()); err == nil {
+		t.Errorf("AllStats = %+v, want an error when the engine cannot list", all)
+	}
+}
+
+func TestStatsMarkAnArchivedClaim(t *testing.T) {
+	m := newTestManager(t, newFakeEngine(), config.PoolSpec{PoolKey: testKey, Warm: 1})
+	sb := mustClaim(t, m, testKey)
+	mustArchive(t, m, sb)
+	st, ok := m.Stats(t.Context(), sb.ID)
+	if !ok || !st.Archived || st.Hibernated || st.MemUsedMeasured || st.CPUMeasured {
+		t.Errorf("Stats = %+v %v, want archived and unmeasured", st, ok)
+	}
+	all, err := m.AllStats(t.Context())
+	if err != nil || len(all) != 1 || !all[0].Archived {
+		t.Errorf("AllStats = %+v %v, want the archived claim marked", all, err)
 	}
 }
 

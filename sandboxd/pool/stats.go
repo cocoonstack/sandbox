@@ -3,14 +3,13 @@ package pool
 import (
 	"cmp"
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/projecteru2/core/log"
 
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
@@ -29,6 +28,7 @@ type SandboxStats struct {
 	CPUStartedAt    time.Time `json:"cpu_started_at,omitzero"`
 	CPUMeasured     bool      `json:"cpu_measured"`
 	Hibernated      bool      `json:"hibernated"`
+	Archived        bool      `json:"archived,omitzero"`
 	MeasuredAt      time.Time `json:"measured_at"`
 }
 
@@ -53,12 +53,12 @@ func (m *Manager) Stats(ctx context.Context, id string) (SandboxStats, bool) {
 }
 
 // AllStats reports every live claim's resource usage from one engine listing.
-func (m *Manager) AllStats(ctx context.Context) []SandboxStats {
-	pids := map[string]int{}
+func (m *Manager) AllStats(ctx context.Context) ([]SandboxStats, error) {
 	vms, err := m.eng.List(ctx)
 	if err != nil {
-		log.WithFunc("pool.AllStats").Warnf(ctx, "list vms: %v", err)
+		return nil, fmt.Errorf("list vms: %w", err)
 	}
+	pids := map[string]int{}
 	for _, vm := range vms {
 		if vm.PID > 0 {
 			pids[vm.Config.Name] = vm.PID
@@ -80,7 +80,7 @@ func (m *Manager) AllStats(ctx context.Context) []SandboxStats {
 		all[i].MeasuredAt = time.Now().UTC()
 	}
 	slices.SortFunc(all, func(a, b SandboxStats) int { return cmp.Compare(a.ID, b.ID) })
-	return all
+	return all, nil
 }
 
 func (m *Manager) vmPID(ctx context.Context, vmName string) (int, bool) {
@@ -96,7 +96,7 @@ func (m *Manager) vmPID(ctx context.Context, vmName string) (int, bool) {
 
 func statsOfLocked(sb *types.Sandbox) (SandboxStats, string) {
 	spec, _ := sb.Key.Size.Spec()
-	return SandboxStats{ID: sb.ID, CPUCount: spec.CPU, MemTotalBytes: spec.MemoryBytes, Hibernated: sb.HibernateSnap != ""}, sb.VMName
+	return SandboxStats{ID: sb.ID, CPUCount: spec.CPU, MemTotalBytes: spec.MemoryBytes, Hibernated: sb.HibernateSnap != "", Archived: sb.ArchiveCk != ""}, sb.VMName
 }
 
 func readProcStats(st *SandboxStats, proc string, pid int, boot time.Time) {

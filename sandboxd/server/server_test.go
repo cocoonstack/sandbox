@@ -2416,6 +2416,16 @@ func TestEgressLimitVerbIsRootOnlyAndPassesTheDecodedLimit(t *testing.T) {
 	}
 }
 
+func TestAllStatsAnswersUnavailableWhenTheListingFails(t *testing.T) {
+	mgr := &fakeManager{allStats: func(context.Context) ([]pool.SandboxStats, error) {
+		return nil, errors.New("cocoon vm list: exit 1")
+	}}
+	ts := newTestServer(t, rootToken, mgr, &fakeDialer{})
+	if got := statusOf(t, http.MethodGet, ts.URL+"/v1/stats", rootToken, ""); got != http.StatusServiceUnavailable {
+		t.Errorf("GET /v1/stats = %d, want 503", got)
+	}
+}
+
 func TestBalloonVerbIsRootOrOperatorPassesTheTargetAndMapsItsRefusals(t *testing.T) {
 	var calls int
 	var gotID, gotTarget string
@@ -2565,6 +2575,7 @@ type fakeManager struct {
 	volumeCatalog      func(tenant string, holders map[string]int) []types.VolumeInfo
 	sandboxIndex       func(tenant, claimRef string) []pool.SandboxSummary
 	sandboxByID        func(id string) (pool.SandboxSummary, bool)
+	allStats           func(context.Context) ([]pool.SandboxStats, error)
 	draining           bool
 	cordoned           bool
 	cordonErr          error
@@ -2835,8 +2846,11 @@ func (f *fakeManager) Stats(context.Context, string) (pool.SandboxStats, bool) {
 	return pool.SandboxStats{}, false
 }
 
-func (f *fakeManager) AllStats(context.Context) []pool.SandboxStats {
-	return nil
+func (f *fakeManager) AllStats(ctx context.Context) ([]pool.SandboxStats, error) {
+	if f.allStats != nil {
+		return f.allStats(ctx)
+	}
+	return nil, nil
 }
 
 func (f *fakeManager) SetInstanceMetadata(_ context.Context, id string, doc []byte) error {
