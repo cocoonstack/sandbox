@@ -46,6 +46,7 @@ const (
 	buildRetryDelay   = 30 * time.Second
 	archiveRetryDelay = time.Minute
 	claimProbeTimeout = 15 * time.Second
+	wakeProbeTimeout  = 60 * time.Second
 	coldProbeTimeout  = 90 * time.Second
 	// A clone answers in ~1s even saturated, so a silent one is replaced, not waited on
 	warmProbeTimeout = 5 * time.Second

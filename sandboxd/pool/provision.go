@@ -35,6 +35,12 @@ func (m *Manager) provisionResolved(ctx context.Context, key types.PoolKey, g go
 	})
 }
 
+func (m *Manager) provisionAged(ctx context.Context, key types.PoolKey, dir string) (*types.Sandbox, error) {
+	return m.provisionVM(ctx, key, wakeProbeTimeout, func(name string) (types.VMRecord, error) {
+		return m.eng.Clone(ctx, dir, name, key)
+	})
+}
+
 func (m *Manager) noteClaimClone(ctx context.Context, g goldenResolution, err error) {
 	capReason := engine.CapacitySignature(err)
 	m.mu.Lock()
@@ -102,7 +108,7 @@ func (m *Manager) readyBounded(ctx context.Context, sb *types.Sandbox, deadline 
 	return m.readyVM(probeCtx, sb, deadline)
 }
 
-func (m *Manager) cloneBatch(ctx context.Context, count int, key types.PoolKey, create vmProvisioner) ([]*types.Sandbox, error) {
+func (m *Manager) cloneBatch(ctx context.Context, count int, key types.PoolKey, create vmProvisioner, probe time.Duration) ([]*types.Sandbox, error) {
 	children := make([]*types.Sandbox, count)
 	errs := make([]error, count)
 	var wg sync.WaitGroup
@@ -112,7 +118,7 @@ func (m *Manager) cloneBatch(ctx context.Context, count int, key types.PoolKey, 
 			child, err := m.startVM(ctx, key, create)
 			<-m.refillSem
 			if err == nil {
-				child, err = m.readyBounded(ctx, child, time.Now().Add(claimProbeTimeout))
+				child, err = m.readyBounded(ctx, child, time.Now().Add(probe))
 			}
 			children[i], errs[i] = child, err
 		})
