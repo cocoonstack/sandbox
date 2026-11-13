@@ -613,7 +613,7 @@ func (s *Server) handleSandboxStats(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleAllStats(w http.ResponseWriter, r *http.Request) {
 	all, err := s.mgr.AllStats(r.Context())
 	if err != nil {
-		log.WithFunc("server.handleAllStats").Warnf(r.Context(), "read stats: %v", err)
+		log.WithFunc("server.handleAllStats").Error(r.Context(), err, "read stats")
 		writeErr(w, http.StatusServiceUnavailable, "vm listing failed; retry")
 		return
 	}
