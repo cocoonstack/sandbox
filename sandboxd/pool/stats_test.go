@@ -1,9 +1,11 @@
 package pool
 
 import (
+	"cmp"
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"sync"
 	"testing"
@@ -125,22 +127,25 @@ func TestAllStatsReadsEveryClaimFromOneListing(t *testing.T) {
 		t.Skip("/proc/PID/stat is Linux-only")
 	}
 	eng := newFakeEngine()
-	m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 2})
-	live, asleep := mustClaim(t, m, testKey), mustClaim(t, m, testKey)
-	eng.pids[live.VMName] = os.Getpid()
+	m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 3})
+	live, other, asleep := mustClaim(t, m, testKey), mustClaim(t, m, testKey), mustClaim(t, m, testKey)
+	eng.pids[live.VMName], eng.pids[other.VMName] = os.Getpid(), os.Getpid()
 	hibernateClaim(t, m, asleep)
-	before := eng.lookupCalls()
+	lists, lookups := eng.listCalls(), eng.lookupCalls()
 
 	all := m.AllStats(t.Context())
-	if got := eng.lookupCalls() - before; got != 1 {
-		t.Errorf("engine lookups = %d, want 1 listing for every claim", got)
+	if got := eng.listCalls() - lists; got != 1 {
+		t.Errorf("engine listings = %d, want 1 for every claim", got)
 	}
-	if len(all) != 2 || all[0].ID > all[1].ID {
-		t.Fatalf("AllStats = %+v, want both claims sorted by id", all)
+	if got := eng.lookupCalls() - lookups - 1; got != 0 {
+		t.Errorf("engine inspects = %d, want 0", got)
+	}
+	if len(all) != 3 || !slices.IsSortedFunc(all, func(a, b SandboxStats) int { return cmp.Compare(a.ID, b.ID) }) {
+		t.Fatalf("AllStats = %+v, want the three claims sorted by id", all)
 	}
 	for _, st := range all {
 		switch st.ID {
-		case live.ID:
+		case live.ID, other.ID:
 			if !st.MemUsedMeasured || !st.CPUMeasured || st.CPUStartedAt.IsZero() {
 				t.Errorf("live claim %+v, want memory, CPU and a start time", st)
 			}

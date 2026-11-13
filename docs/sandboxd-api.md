@@ -1108,8 +1108,8 @@ to the node-scoped `/metrics`:
 ```
 
 `cpu_count`/`mem_total_bytes` come from the size tier. `mem_used_bytes` is
-the host VMM process's resident set — the only usage signal available
-without a guest agent. `cpu_seconds` is the same process's user plus system
+the host VMM process's resident set — the only memory usage signal
+available without a guest agent. `cpu_seconds` is the same process's user plus system
 CPU time, all threads, guest time included, and `cpu_started_at` is when that
 process started. The counter starts over with the process (a wake, a restart
 or a move), so take the rate between two reads only while `cpu_started_at` is
@@ -1129,8 +1129,8 @@ stats on this node, sorted by id, in the shape of
 {"sandboxes": [{"id": "sb_…", "cpu_seconds": 5321.47, "cpu_started_at": "…", "cpu_measured": true, …}]}
 ```
 
-The whole read costs one engine listing, whatever the claim count, plus two
-`/proc` reads per running claim. If the listing fails, every claim is
+The whole read costs one engine listing and one `/proc/stat` read, whatever
+the claim count, plus two `/proc` reads per running claim. If the listing fails, every claim is
 reported unmeasured.
 
 ## GET/PUT/PATCH /v1/sandboxes/{id}/env
