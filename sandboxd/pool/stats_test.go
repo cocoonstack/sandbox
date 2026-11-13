@@ -77,7 +77,7 @@ func TestStatsHibernatedIsUnmeasured(t *testing.T) {
 		t.Error("CPUMeasured = true for a hibernated claim, want false")
 	}
 	if got := eng.lookupCalls(); got != before {
-		t.Errorf("engine.List called %d more time(s), want 0: a hibernated claim must not consult the engine", got-before)
+		t.Errorf("engine consulted %d more time(s), want 0: a hibernated claim must not consult the engine", got-before)
 	}
 }
 

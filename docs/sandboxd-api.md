@@ -31,7 +31,7 @@ All bodies are JSON. Four token kinds:
   resource-creating verbs (claim, fork, promote, checkpoint create/claim,
   preview mint) and the tenant-scoped listings/deletes below; everything a
   tenant creates is stamped with its name. Root surfaces
-  (the per-id sandbox reads, `PUT /v1/sandboxes/{id}/instance-metadata`, `PUT /v1/sandboxes/{id}/tun`, `PUT /v1/sandboxes/{id}/egress-limit`, `POST /v1/sandboxes/{id}/balloon`, `GET /v1/info`,
+  (the per-id sandbox reads, `PUT /v1/sandboxes/{id}/instance-metadata`, `PUT /v1/sandboxes/{id}/tun`, `PUT /v1/sandboxes/{id}/egress-limit`, `POST /v1/sandboxes/{id}/balloon`, `GET /v1/info`, `GET /v1/stats`,
   `PUT /v1/pools`, `POST /v1/config/reload`, the [tenant API](#tenants-v1tenants),
   `POST /v1/sandboxes/{id}/move` and the peer `/v1/moves/{id}` calls, `PUT/DELETE /v1/volumes/{name}`, `POST/DELETE /v1/drain`, `POST/DELETE /v1/cordon`,
   `GET /metrics`, `GET /v1/usage`, `GET /v1/checkpoints/{id}/blob`)

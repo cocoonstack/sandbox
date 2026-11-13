@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/projecteru2/core/log"
+
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
@@ -53,11 +55,13 @@ func (m *Manager) Stats(ctx context.Context, id string) (SandboxStats, bool) {
 // AllStats reports every live claim's resource usage from one engine listing.
 func (m *Manager) AllStats(ctx context.Context) []SandboxStats {
 	pids := map[string]int{}
-	if vms, err := m.eng.List(ctx); err == nil {
-		for _, vm := range vms {
-			if vm.PID > 0 {
-				pids[vm.Config.Name] = vm.PID
-			}
+	vms, err := m.eng.List(ctx)
+	if err != nil {
+		log.WithFunc("pool.AllStats").Warnf(ctx, "list vms: %v", err)
+	}
+	for _, vm := range vms {
+		if vm.PID > 0 {
+			pids[vm.Config.Name] = vm.PID
 		}
 	}
 	m.mu.Lock()
