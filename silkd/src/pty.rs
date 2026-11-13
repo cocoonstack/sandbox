@@ -44,7 +44,6 @@ pub async fn open<W: AsyncWrite + Unpin>(
     cmd.env_clear().envs(sysutil::base_env().iter().copied());
     sysutil::apply_claim_env(&mut cmd);
     cmd.envs(&req.env);
-    sysutil::reset_nice(&mut cmd);
     let uid = match sysutil::apply_cwd_user(&mut cmd, req.cwd.as_deref(), req.user.as_deref()) {
         Ok(uid) => uid,
         Err(e) => return proto::error_frame(out, ErrorKind::BadRequest, e).await,
@@ -78,6 +77,7 @@ pub async fn open<W: AsyncWrite + Unpin>(
             .await;
         }
     };
+    sysutil::reset_nice(&child);
     // close silkd's slave dups, else the master never hangs up and the exit drain runs to its timeout.
     drop(cmd);
 

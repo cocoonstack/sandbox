@@ -70,10 +70,8 @@ pub async fn commit<W: AsyncWrite + Unpin>(
     let mut cmd = git_cmd(path, None);
     cmd.env("GIT_COMMITTER_NAME", name)
         .env("GIT_COMMITTER_EMAIL", email);
-    let out = cmd
-        .args(["commit", "--author", author, "-m", message])
-        .output()
-        .await?;
+    cmd.args(["commit", "--author", author, "-m", message]);
+    let out = output(cmd).await?;
     if !out.status.success() {
         return terminal(w, "commit", &out).await;
     }
@@ -138,7 +136,6 @@ async fn list_branches<W: AsyncWrite + Unpin>(w: &mut W, path: &str) -> std::io:
 fn git_cmd(dir: &str, auth: Option<&str>) -> Command {
     let mut cmd = Command::new("git");
     sysutil::align_proxy_env(&mut cmd);
-    sysutil::reset_nice(&mut cmd);
     sysutil::apply_owner(&mut cmd, dir);
     cmd.arg("-C").arg(dir);
     apply_config(&mut cmd, auth);
@@ -154,7 +151,15 @@ async fn git(
     auth: Option<&str>,
     args: &[&str],
 ) -> std::io::Result<std::process::Output> {
-    git_cmd(dir, auth).args(args).output().await
+    let mut cmd = git_cmd(dir, auth);
+    cmd.args(args);
+    output(cmd).await
+}
+
+async fn output(mut cmd: Command) -> std::io::Result<std::process::Output> {
+    let child = cmd.spawn()?;
+    sysutil::reset_nice(&child);
+    child.wait_with_output().await
 }
 
 fn apply_config(cmd: &mut Command, auth: Option<&str>) {

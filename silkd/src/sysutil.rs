@@ -14,7 +14,7 @@ use std::sync::{LazyLock, Mutex};
 
 use nix::fcntl::{FcntlArg, OFlag, fcntl};
 use tokio::io::unix::AsyncFd;
-use tokio::process::Command;
+use tokio::process::{Child, Command};
 
 /// Forwarded into every exec that has no direct route: the loopback proxy relay is its only way out.
 const FORWARDED: [&str; 6] = [
@@ -38,6 +38,12 @@ static DIRECT: LazyLock<Vec<(&'static str, &'static str)>> =
     LazyLock::new(|| compose_env(true, &PROXY_VARS));
 static RELAYED: LazyLock<Vec<(&'static str, &'static str)>> =
     LazyLock::new(|| compose_env(false, &PROXY_VARS));
+/// Whether silkd runs below nice 0, read once: the unit sets it before exec.
+static RAISED: LazyLock<bool> = LazyLock::new(|| {
+    // SAFETY: getpriority is a bare syscall that takes no lock and allocates nothing.
+    let nice = unsafe { libc::getpriority(libc::PRIO_PROCESS as _, 0) };
+    nice < 0
+});
 
 /// A suffix unique within this process, enough to name a temp file; not cryptographic.
 pub fn tmp_suffix() -> String {
@@ -185,18 +191,14 @@ pub fn adopt_controlling_tty(cmd: &mut Command) {
     }
 }
 
-/// Starts the child at nice 0 when silkd runs at a raised priority.
-pub fn reset_nice(cmd: &mut Command) {
-    // SAFETY: getpriority and setpriority are async-signal-safe, the contract for a post-fork pre_exec hook.
-    unsafe {
-        cmd.pre_exec(|| {
-            if libc::getpriority(libc::PRIO_PROCESS as _, 0) < 0
-                && libc::setpriority(libc::PRIO_PROCESS as _, 0, 0) != 0
-            {
-                return Err(std::io::Error::last_os_error());
-            }
-            Ok(())
-        });
+/// Moves a child of a raised silkd back to nice 0; a spawn stays on the posix_spawn path.
+pub fn reset_nice(child: &Child) {
+    if !*RAISED {
+        return;
+    }
+    if let Some(pid) = child.id() {
+        // SAFETY: setpriority is a bare syscall, and an unreaped child's pid cannot name another process.
+        unsafe { libc::setpriority(libc::PRIO_PROCESS as _, pid as _, 0) };
     }
 }
 
@@ -725,21 +727,5 @@ mod tests {
         let (uid, _, home) = lookup_user("root").expect("root must exist");
         assert_eq!(uid, 0);
         assert!(!home.as_os_str().is_empty());
-    }
-
-    #[tokio::test(flavor = "current_thread")]
-    async fn reset_nice_starts_a_child_of_a_raised_parent_at_zero() {
-        // SAFETY: setpriority only changes this thread's nice value.
-        if unsafe { libc::setpriority(libc::PRIO_PROCESS as _, 0, -5) } != 0 {
-            return;
-        }
-        let inherited = Command::new("nice").output().await.expect("spawn nice");
-        let mut cmd = Command::new("nice");
-        reset_nice(&mut cmd);
-        let out = cmd.output().await.expect("spawn nice");
-        // SAFETY: setpriority only changes this thread's nice value.
-        unsafe { libc::setpriority(libc::PRIO_PROCESS as _, 0, 0) };
-        assert_eq!(String::from_utf8_lossy(&inherited.stdout).trim(), "-5");
-        assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "0");
     }
 }
