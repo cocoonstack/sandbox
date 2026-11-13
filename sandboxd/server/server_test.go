@@ -2421,8 +2421,12 @@ func TestAllStatsAnswersUnavailableWhenTheListingFails(t *testing.T) {
 		return nil, errors.New("cocoon vm list: exit 1")
 	}}
 	ts := newTestServer(t, rootToken, mgr, &fakeDialer{})
-	if got := statusOf(t, http.MethodGet, ts.URL+"/v1/stats", rootToken, ""); got != http.StatusServiceUnavailable {
-		t.Errorf("GET /v1/stats = %d, want 503", got)
+	code, body := bodyOf(t, http.MethodGet, ts.URL+"/v1/stats", rootToken, "")
+	if code != http.StatusServiceUnavailable {
+		t.Errorf("GET /v1/stats = %d, want 503", code)
+	}
+	if strings.Contains(string(body), "exit 1") {
+		t.Errorf("503 body %q leaks the engine error", body)
 	}
 }
 
