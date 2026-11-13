@@ -18,7 +18,7 @@ func (m *Manager) provisionResolved(ctx context.Context, key types.PoolKey, g go
 	case g.held == nil && g.dir == "":
 		return m.provisionCold(ctx, key)
 	case g.held == nil:
-		return m.provisionClone(ctx, key, g.dir, claimProbeTimeout)
+		return m.provisionClone(ctx, key, g.dir, wakeProbeTimeout)
 	}
 	return m.provisionVM(ctx, key, claimProbeTimeout, func(name string) (types.VMRecord, error) {
 		g.held.goldenUse.RLock()

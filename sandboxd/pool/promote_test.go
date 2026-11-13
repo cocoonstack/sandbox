@@ -47,6 +47,9 @@ func TestPromoteThenClaimClonesFromTemplate(t *testing.T) {
 	if len(eng.cloneFroms) == 0 || eng.cloneFroms[len(eng.cloneFroms)-1] != golden {
 		t.Errorf("cloneFroms %v, want a clone from %s (not a cold boot)", eng.cloneFroms, golden)
 	}
+	if got := eng.probeTimeouts[len(eng.probeTimeouts)-1]; got > wakeProbeTimeout || got < wakeProbeTimeout-time.Second {
+		t.Errorf("template claim probe timeout %v, want ~%v", got, wakeProbeTimeout)
+	}
 	if child.Key != key {
 		t.Errorf("child key %+v, want %+v", child.Key, key)
 	}
