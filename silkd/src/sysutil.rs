@@ -40,7 +40,7 @@ static RELAYED: LazyLock<Vec<(&'static str, &'static str)>> =
     LazyLock::new(|| compose_env(false, &PROXY_VARS));
 /// Whether silkd runs below nice 0, read once: the unit sets it before exec.
 static RAISED: LazyLock<bool> = LazyLock::new(|| {
-    // SAFETY: getpriority is a bare syscall that takes no lock and allocates nothing.
+    // SAFETY: getpriority is a bare syscall that takes no pointers.
     let nice = unsafe { libc::getpriority(libc::PRIO_PROCESS as _, 0) };
     nice < 0
 });
@@ -191,13 +191,13 @@ pub fn adopt_controlling_tty(cmd: &mut Command) {
     }
 }
 
-/// Moves a child of a raised silkd back to nice 0; a spawn stays on the posix_spawn path.
+/// Moves a child of a raised silkd back to nice 0, best effort: what it forks or threads before the call keeps -10.
 pub fn reset_nice(child: &Child) {
     if !*RAISED {
         return;
     }
     if let Some(pid) = child.id() {
-        // SAFETY: setpriority is a bare syscall, and an unreaped child's pid cannot name another process.
+        // SAFETY: setpriority is a bare syscall that takes no pointers; an unreaped child's pid names no other process.
         unsafe { libc::setpriority(libc::PRIO_PROCESS as _, pid as _, 0) };
     }
 }
