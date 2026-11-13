@@ -35,6 +35,12 @@ func (m *Manager) provisionResolved(ctx context.Context, key types.PoolKey, g go
 	})
 }
 
+func (m *Manager) provisionAged(ctx context.Context, key types.PoolKey, dir string) (*types.Sandbox, error) {
+	return m.provisionVM(ctx, key, wakeProbeTimeout, func(name string) (types.VMRecord, error) {
+		return m.eng.Clone(ctx, dir, name, key)
+	})
+}
+
 func (m *Manager) noteClaimClone(ctx context.Context, g goldenResolution, err error) {
 	capReason := engine.CapacitySignature(err)
 	m.mu.Lock()
