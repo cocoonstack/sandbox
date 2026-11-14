@@ -11,6 +11,7 @@ All bodies are JSON. Four token kinds:
   for a public control plane that must not hold cluster configuration power.
   It acts with root's authority, with no tenant scoping, on exactly
   `POST /v1/claim`, `GET /v1/sandboxes`, `GET /v1/sandboxes/{id}`,
+  `GET /v1/sandboxes/{id}/stats`, `GET /v1/stats`,
   `POST /v1/sandboxes/{id}/release|hibernate|wake|renew|balloon`,
   `GET/PUT/PATCH /v1/sandboxes/{id}/env`, `GET /v1/sandboxes/{id}/ports/{port}`,
   `POST /v1/sandboxes/{id}/exec`, `GET /v1/sandboxes/{id}/owner`, the
@@ -30,7 +31,7 @@ All bodies are JSON. Four token kinds:
   resource-creating verbs (claim, fork, promote, checkpoint create/claim,
   preview mint) and the tenant-scoped listings/deletes below; everything a
   tenant creates is stamped with its name. Root surfaces
-  (the per-id sandbox reads, `PUT /v1/sandboxes/{id}/instance-metadata`, `PUT /v1/sandboxes/{id}/tun`, `PUT /v1/sandboxes/{id}/egress-limit`, `POST /v1/sandboxes/{id}/balloon`, `GET /v1/info`,
+  (the per-id sandbox reads, `PUT /v1/sandboxes/{id}/instance-metadata`, `PUT /v1/sandboxes/{id}/tun`, `PUT /v1/sandboxes/{id}/egress-limit`, `POST /v1/sandboxes/{id}/balloon`, `GET /v1/info`, `GET /v1/stats`,
   `PUT /v1/pools`, `POST /v1/config/reload`, the [tenant API](#tenants-v1tenants),
   `POST /v1/sandboxes/{id}/move` and the peer `/v1/moves/{id}` calls, `PUT/DELETE /v1/volumes/{name}`, `POST/DELETE /v1/drain`, `POST/DELETE /v1/cordon`,
   `GET /metrics`, `GET /v1/usage`, `GET /v1/checkpoints/{id}/blob`)
@@ -1096,20 +1097,43 @@ absent means `default`), and `egress_limit`, the claim's
 
 ## GET /v1/sandboxes/{id}/stats
 
-Auth: root only (tenant and operator tokens get 403). One sandbox's resource usage — the per-sandbox counterpart
+Auth: root or the operator token (tenant tokens get 403). One sandbox's resource usage — the per-sandbox counterpart
 to the node-scoped `/metrics`:
 
 ```json
 {"id": "sb_…", "cpu_count": 2, "mem_total_bytes": 1073741824,
  "mem_used_bytes": 187654144, "mem_used_measured": true,
+ "cpu_seconds": 5321.47, "cpu_started_at": "…", "cpu_measured": true,
  "hibernated": false, "measured_at": "…"}
 ```
 
-`cpu_count`/`mem_total_bytes` come from the size tier. `mem_used_bytes` is
-the host VMM process's resident set — the only usage signal available
-without a guest agent; `mem_used_measured` is false when there is no VMM
-process to read (hibernated, or the PID is not yet known), so a zero is
-never mistaken for idle. 404 unknown id.
+`cpu_count`/`mem_total_bytes` come from the size tier. `hibernated` marks a
+claim whose memory snapshot is on this node, and `archived`, present only
+when true, one whose state is in the checkpoint store; neither has a VMM to read. `mem_used_bytes` is
+the host VMM process's resident set — the only memory usage signal
+available without a guest agent. `cpu_seconds` is the same process's user plus system
+CPU time, all threads, guest time included, and `cpu_started_at` is when that
+process started. The counter starts over with the process (a wake, a restart
+or a move), so take the rate between two reads only while `cpu_started_at` is
+the same. `mem_used_measured` and `cpu_measured` are false when there is no
+VMM process to read (hibernated or archived, the PID not yet known, or the engine lookup
+failed), so a zero is never mistaken for idle; `measured_at` is taken after
+the reads. One read costs one engine lookup; to read every claim, use
+[`GET /v1/stats`](#get-v1stats). 404 unknown id.
+
+## GET /v1/stats
+
+Auth: root or the operator token (tenant tokens get 403). Every live claim's
+stats on this node, sorted by id, in the shape of
+[`GET /v1/sandboxes/{id}/stats`](#get-v1sandboxesidstats):
+
+```json
+{"sandboxes": [{"id": "sb_…", "cpu_seconds": 5321.47, "cpu_started_at": "…", "cpu_measured": true, …}]}
+```
+
+The whole read costs one engine listing and one `/proc/stat` read, whatever
+the claim count, plus two `/proc` reads per running claim. 503
+`vm listing failed; retry` when the engine cannot list its VMs.
 
 ## GET/PUT/PATCH /v1/sandboxes/{id}/env
 

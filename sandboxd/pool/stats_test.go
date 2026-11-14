@@ -1,10 +1,15 @@
 package pool
 
 import (
+	"cmp"
 	"os"
+	"path/filepath"
 	"runtime"
+	"slices"
+	"strconv"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/cocoonstack/sandbox/sandboxd/config"
 )
@@ -56,7 +61,7 @@ func TestStatsHibernatedIsUnmeasured(t *testing.T) {
 	m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1})
 	sb := mustClaim(t, m, testKey)
 	hibernateClaim(t, m, sb)
-	before := eng.listCalls()
+	before := eng.lookupCalls()
 
 	st, ok := m.Stats(t.Context(), sb.ID)
 	if !ok {
@@ -68,8 +73,11 @@ func TestStatsHibernatedIsUnmeasured(t *testing.T) {
 	if st.MemUsedMeasured {
 		t.Error("MemUsedMeasured = true for a hibernated claim, want false")
 	}
-	if got := eng.listCalls(); got != before {
-		t.Errorf("engine.List called %d more time(s), want 0: a hibernated claim must not consult the engine", got-before)
+	if st.CPUMeasured {
+		t.Error("CPUMeasured = true for a hibernated claim, want false")
+	}
+	if got := eng.lookupCalls(); got != before {
+		t.Errorf("engine consulted %d more time(s), want 0: a hibernated claim must not consult the engine", got-before)
 	}
 }
 
@@ -84,6 +92,9 @@ func TestStatsNoPIDIsUnmeasured(t *testing.T) {
 	}
 	if st.MemUsedMeasured {
 		t.Error("MemUsedMeasured = true with no PID in the engine's record, want false")
+	}
+	if st.CPUMeasured {
+		t.Error("CPUMeasured = true with no PID in the engine's record, want false")
 	}
 }
 
@@ -105,5 +116,122 @@ func TestStatsReadsResidentSetFromPID(t *testing.T) {
 	}
 	if st.MemUsedBytes <= 0 {
 		t.Errorf("MemUsedBytes = %d, want > 0", st.MemUsedBytes)
+	}
+	if !st.CPUMeasured {
+		t.Error("CPUMeasured = false, want true with a live PID")
+	}
+}
+
+func TestAllStatsReadsEveryClaimFromOneListing(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("/proc/PID/stat is Linux-only")
+	}
+	eng := newFakeEngine()
+	m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 3})
+	live, other, asleep := mustClaim(t, m, testKey), mustClaim(t, m, testKey), mustClaim(t, m, testKey)
+	eng.pids[live.VMName], eng.pids[other.VMName] = os.Getpid(), os.Getpid()
+	hibernateClaim(t, m, asleep)
+	lists, lookups := eng.listCalls(), eng.lookupCalls()
+
+	all, err := m.AllStats(t.Context())
+	if err != nil {
+		t.Fatalf("AllStats: %v", err)
+	}
+	if got := eng.listCalls() - lists; got != 1 {
+		t.Errorf("engine listings = %d, want 1 for every claim", got)
+	}
+	if got := eng.lookupCalls() - lookups - 1; got != 0 {
+		t.Errorf("engine inspects = %d, want 0", got)
+	}
+	if len(all) != 3 || !slices.IsSortedFunc(all, func(a, b SandboxStats) int { return cmp.Compare(a.ID, b.ID) }) {
+		t.Fatalf("AllStats = %+v, want the three claims sorted by id", all)
+	}
+	for _, st := range all {
+		switch st.ID {
+		case live.ID, other.ID:
+			if !st.MemUsedMeasured || !st.CPUMeasured || st.CPUStartedAt.IsZero() {
+				t.Errorf("live claim %+v, want memory, CPU and a start time", st)
+			}
+		case asleep.ID:
+			if !st.Hibernated || st.MemUsedMeasured || st.CPUMeasured {
+				t.Errorf("hibernated claim %+v, want unmeasured", st)
+			}
+		}
+	}
+}
+
+func TestAllStatsFailsWhenTheListingFails(t *testing.T) {
+	eng := newFakeEngine()
+	m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1})
+	mustClaim(t, m, testKey)
+	eng.listFails = 1
+	if all, err := m.AllStats(t.Context()); err == nil {
+		t.Errorf("AllStats = %+v, want an error when the engine cannot list", all)
+	}
+}
+
+func TestStatsMarkAnArchivedClaim(t *testing.T) {
+	m := newTestManager(t, newFakeEngine(), config.PoolSpec{PoolKey: testKey, Warm: 1})
+	sb := mustClaim(t, m, testKey)
+	mustArchive(t, m, sb)
+	st, ok := m.Stats(t.Context(), sb.ID)
+	if !ok || !st.Archived || st.Hibernated || st.MemUsedMeasured || st.CPUMeasured {
+		t.Errorf("Stats = %+v %v, want archived and unmeasured", st, ok)
+	}
+	all, err := m.AllStats(t.Context())
+	if err != nil || len(all) != 1 || !all[0].Archived {
+		t.Errorf("AllStats = %+v %v, want the archived claim marked", all, err)
+	}
+}
+
+func TestProcessCPUSumsUserAndSystemTimeAndDatesTheProcess(t *testing.T) {
+	proc := t.TempDir()
+	writeStat(t, proc, 42, "42 (cloud (hyper) visor) S 1 42 42 0 -1 4194560 100 0 0 0 1234 566 0 0 20 0 8 0 100 0 0\n")
+	boot := time.Unix(1000, 0)
+	got, started, ok := processCPU(proc, 42, boot)
+	if !ok || got != 18 {
+		t.Fatalf("processCPU = %v %v, want 18 (1234+566 ticks at 100 Hz)", got, ok)
+	}
+	if want := boot.Add(time.Second).UTC(); !started.Equal(want) {
+		t.Errorf("started = %v, want %v (100 ticks after boot)", started, want)
+	}
+	if _, started, _ = processCPU(proc, 42, time.Time{}); !started.IsZero() {
+		t.Errorf("started without a boot time = %v, want zero", started)
+	}
+}
+
+func TestProcessCPUOfAnUnreadableStatIsUnmeasured(t *testing.T) {
+	proc := t.TempDir()
+	writeStat(t, proc, 1, "1 cloud-hypervisor S 1 1 1 0 -1 0 0 0 0 0 1 2\n")
+	writeStat(t, proc, 2, "2 (cloud-hypervisor) S 1 2 2 0 -1 0 0 0 0 0 1\n")
+	writeStat(t, proc, 3, "3 (cloud-hypervisor) S 1 3 3 0 -1 0 0 0 0 0 x 2\n")
+	for _, pid := range []int{1, 2, 3, 4} {
+		if got, _, ok := processCPU(proc, pid, time.Unix(1000, 0)); ok {
+			t.Errorf("processCPU(pid %d) = %v, want ok=false", pid, got)
+		}
+	}
+}
+
+func TestBootTimeReadsBtime(t *testing.T) {
+	proc := t.TempDir()
+	if err := os.WriteFile(filepath.Join(proc, "stat"), []byte("cpu  1 2 3\nbtime 1700000000\nprocesses 9\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := bootTime(proc); !got.Equal(time.Unix(1700000000, 0)) {
+		t.Errorf("bootTime = %v, want 1700000000", got)
+	}
+	if got := bootTime(t.TempDir()); !got.IsZero() {
+		t.Errorf("bootTime without a stat = %v, want zero", got)
+	}
+}
+
+func writeStat(t *testing.T, proc string, pid int, line string) {
+	t.Helper()
+	dir := filepath.Join(proc, strconv.Itoa(pid))
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "stat"), []byte(line), 0o600); err != nil {
+		t.Fatal(err)
 	}
 }
