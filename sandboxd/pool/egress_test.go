@@ -42,7 +42,7 @@ func TestLaneVerdictReachesGuestOnColdBoots(t *testing.T) {
 			m := egressManager(t, eng, config.PoolSpec{PoolKey: tt.key, Warm: 1, Egress: egPolicy})
 			withOutbound(t, m, func(o *outbound.Options) { o.LockNIC = tt.locked })
 			if tt.cold {
-				sb, err := m.provision(t.Context(), tt.key, "")
+				sb, err := m.provisionCold(t.Context(), tt.key)
 				if err != nil {
 					t.Fatalf("cold provision: %v", err)
 				}
@@ -202,7 +202,7 @@ func TestLockUsesProvisionedTapWithoutList(t *testing.T) {
 	var taps outboundtest.TapLog
 	withOutbound(t, m, func(o *outbound.Options) { o.Lock, o.Unlock = taps.Lock, taps.Unlock })
 
-	sb, err := m.provision(t.Context(), egKey, "")
+	sb, err := m.provisionCold(t.Context(), egKey)
 	if err != nil {
 		t.Fatalf("provision: %v", err)
 	}

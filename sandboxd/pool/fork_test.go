@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cocoonstack/sandbox/sandboxd/config"
 	"github.com/cocoonstack/sandbox/sandboxd/tenants"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
@@ -321,5 +322,31 @@ func TestForkReadsTheParentsOnExpireUnderTheLock(t *testing.T) {
 		if _, err := m.Fork(t.Context(), parent.ID, Cred{Token: parent.Token}, 1, time.Hour, "", ""); err != nil {
 			t.Fatalf("Fork: %v", err)
 		}
+	}
+}
+
+func TestForkProbeDeadlineFollowsTheSource(t *testing.T) {
+	m := newTestManager(t, newFakeEngine(), config.PoolSpec{PoolKey: testKey, Warm: 2})
+	running, asleep := mustClaim(t, m, testKey), mustClaim(t, m, testKey)
+	hibernateClaim(t, m, asleep)
+	for _, tt := range []struct {
+		name string
+		sb   *types.Sandbox
+		want time.Duration
+	}{
+		{"running source", running, claimProbeTimeout},
+		{"hibernated source", asleep, wakeProbeTimeout},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			held, _ := m.byID(tt.sb.ID)
+			_, cleanup, probe, _, err := m.forkSource(t.Context(), held)
+			if err != nil {
+				t.Fatalf("forkSource: %v", err)
+			}
+			cleanup()
+			if probe != tt.want {
+				t.Errorf("probe deadline = %v, want %v", probe, tt.want)
+			}
+		})
 	}
 }

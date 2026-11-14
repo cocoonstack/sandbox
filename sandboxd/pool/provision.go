@@ -13,18 +13,12 @@ import (
 
 type vmProvisioner func(name string) (types.VMRecord, error)
 
-func (m *Manager) provision(ctx context.Context, key types.PoolKey, golden string) (*types.Sandbox, error) {
-	if golden == "" {
-		return m.provisionCold(ctx, key)
-	}
-	return m.provisionVM(ctx, key, claimProbeTimeout, func(name string) (types.VMRecord, error) {
-		return m.eng.Clone(ctx, golden, name, key)
-	})
-}
-
 func (m *Manager) provisionResolved(ctx context.Context, key types.PoolKey, g goldenResolution) (*types.Sandbox, error) {
-	if g.held == nil {
-		return m.provision(ctx, key, g.dir)
+	switch {
+	case g.held == nil && g.dir == "":
+		return m.provisionCold(ctx, key)
+	case g.held == nil:
+		return m.provisionAged(ctx, key, g.dir)
 	}
 	return m.provisionVM(ctx, key, claimProbeTimeout, func(name string) (types.VMRecord, error) {
 		g.held.goldenUse.RLock()
