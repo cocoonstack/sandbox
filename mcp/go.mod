@@ -3,7 +3,7 @@ module github.com/cocoonstack/sandbox/mcp
 go 1.27.1
 
 require (
-	github.com/cocoonstack/sandbox/protocol/wire v0.1.31
+	github.com/cocoonstack/sandbox/protocol/wire v0.1.32
 	github.com/cocoonstack/sandbox/sdk/go v0.0.0
 	github.com/projecteru2/core v0.1.7
 )
