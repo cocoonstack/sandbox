@@ -566,7 +566,7 @@ while stored, and waking it starts a fresh lease of the length the claim was gra
 [failed](deploy.md#dead-vmms-and-host-restarts) sandbox is cold-booted from
 its own disk (memory is lost) and its restart budget resets. 204 on
 success, 404 unknown id or wrong token, or an archived sandbox the node had no
-room for that it [handed to a peer](cluster.md#waking-an-archived-claim-on-a-full-node)
+room for, or a cordoned node's, that it [handed to a peer](cluster.md#waking-an-archived-claim-on-a-full-or-cordoned-node)
 (look it up again), 409 a failed egress-lane or volume sandbox, or one whose VM
 record is gone, 429 when `max_running` or `disk_reserve` refuses the wake, 500
 when the cold boot or a restore fails, and the [guest errors](#guest-errors).
@@ -890,7 +890,10 @@ error ending `node cordoned`, whatever `max_claims` and `max_running` allow (on
 a cluster a non-volume claim tries a peer redirect first, and peers stop
 redirecting here within a tick, because this node gossips no pools), refill
 stops and unclaimed warm VMs are destroyed. Live claims keep serving, and unlike
-a drain, a root [move](#post-v1sandboxesidmove) to this node is admitted. The
+a drain, a root [move](#post-v1sandboxesidmove) to this node is admitted, as is
+a claim an [evacuating](#post-v1drain) peer hands over. An archived claim's wake
+first goes to a [peer with room](cluster.md#waking-an-archived-claim-on-a-full-or-cordoned-node)
+and wakes here when none adopts it. The
 [admission table](cluster.md#node-admission) lists what each state allows; a
 cordon and a drain are independent, and each `DELETE` lifts only its own.
 
@@ -964,7 +967,7 @@ has no `preview_listen`. The signed token embeds the sandbox id, port, and
 owner `advertise_addr`, so any node's preview listener can serve it (forwarding
 to the owner's main listener) and a released sandbox's URL answers 404 —
 no revocation list. A browser request to the minted URL answers 503
-`lease lost; retry` for a replicated claim while its node's lease is overdue, 503 `sandbox moving to another node; retry` while an [evacuation](#post-v1drain) has yet to move it, and 429 when it has to wake a sandbox while the disk reserve is low or the node is at `max_running`; a wake that [hands an archived claim to a peer](cluster.md#waking-an-archived-claim-on-a-full-node) answers 404, as after a move. See [deploy](deploy.md#preview-urls).
+`lease lost; retry` for a replicated claim while its node's lease is overdue, 503 `sandbox moving to another node; retry` while an [evacuation](#post-v1drain) has yet to move it, and 429 when it has to wake a sandbox while the disk reserve is low or the node is at `max_running`; a wake that [hands an archived claim to a peer](cluster.md#waking-an-archived-claim-on-a-full-or-cordoned-node) answers 404, as after a move. See [deploy](deploy.md#preview-urls).
 
 ## POST /v1/sandboxes/{id}/checkpoint
 
@@ -1332,7 +1335,7 @@ claims by tier, `sandboxd_claim_redirects_total`, claims this node handed to a
 peer, `sandboxd_wakes_refused_total{reason}`, wakes `max_running` (`max_running`),
 `disk_reserve` (`disk`) and `memory_limit` (`memory`)
 refused here, whether or not a hand-off ran, `sandboxd_wake_handoffs_total`,
-archived claims this node [handed to a peer with room](cluster.md#waking-an-archived-claim-on-a-full-node)
+archived claims this node [handed to a peer with room](cluster.md#waking-an-archived-claim-on-a-full-or-cordoned-node)
 instead, and `sandboxd_wake_memory_fallbacks_total`, archived wakes over
 `memory_limit` this node woke itself because no hand-off ran or no peer adopted. On a node with a `tun` block it adds the packet path's counters:
 `sandboxd_tun_frames_total{dir}` (frames on the claims' vsock streams, `out`
@@ -1551,9 +1554,10 @@ this node owns the sandbox, 404 otherwise; a tenant token is a wrong sandbox tok
 [`archive_failover`](cluster.md#archived-claims-across-node-loss), a node that
 does not hold the sandbox adopts it, when the token's SHA-256 matches the row's or the caller is root or the operator, and its row names an owner whose node
 lease expired, or whose owner released it in an
-[evacuation](#post-v1drain) or a [wake it had no room for](cluster.md#waking-an-archived-claim-on-a-full-node), and answers 200; with `?room=1`, which the owner of such a wake sends, it adopts only while it could admit the wake itself; 503 with `Retry-After` when the meta store is
-down. A row whose owner's lease is live is never adopted unless the owner released it: 404. A draining, cordoned or fenced
-node, or one that lifted its fence less than 8 seconds ago, does not adopt: 404. A node whose
+[evacuation](#post-v1drain) or a [wake it handed off](cluster.md#waking-an-archived-claim-on-a-full-or-cordoned-node), and answers 200; with `?room=1`, which the owner of such a wake sends, it adopts only while it could admit the wake itself; 503 with `Retry-After` when the meta store is
+down. A row whose owner's lease is live is never adopted unless the owner released it: 404. A draining or fenced
+node, or one that lifted its fence less than 8 seconds ago, does not adopt: 404. A cordoned
+node adopts only its own row or one with no owner, and never with `?room=1`: 404. A node whose
 lease is overdue answers 404 for the replicated claims it holds, so the
 `Lookup` scatter moves on. With `client_advertise` configured,
 `owner_addr` is that node's full HTTP(S) origin instead; the same contract applies

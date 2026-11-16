@@ -67,13 +67,16 @@ func (m *Manager) adoptArchived(ctx context.Context, id string, cred Cred, room 
 		return false, nil
 	case held:
 		return true, nil
-	case fenced, cordoned, full:
+	case fenced, full:
 		return false, nil
 	}
 	ctx = context.WithoutCancel(ctx)
 	rec, ok, err := m.archives.Get(ctx, id)
 	if err != nil || !ok {
 		return false, err
+	}
+	if !cordonAdmits(cordoned, room, rec.Owner, m.nodeID) {
+		return false, nil
 	}
 	if rec.Consumed || (!cred.Operator && !tokenMatches(cred.Token, rec.TokenSHA256)) || (!rec.Deadline.IsZero() && time.Now().After(rec.Deadline)) {
 		return false, nil
