@@ -323,6 +323,7 @@ func (p *Proxy) serveConnect(w http.ResponseWriter, r *http.Request) {
 	}
 	defer func() { _ = upstream.Close() }()
 	if !p.track(scope, upstream) {
+		denied(w, host)
 		return
 	}
 	defer p.untrack(upstream)

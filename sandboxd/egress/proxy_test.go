@@ -453,6 +453,21 @@ func TestADeniedConnectIs403(t *testing.T) {
 	}
 }
 
+func TestAConnectThatLosesToDropTunnelsIsDeniedNotAnswered200(t *testing.T) {
+	origin := echoServer(t)
+	var p *Proxy
+	p = New(Policy{Allow: []Rule{{Host: "api.internal"}}}, nil, nil, DialFunc(func(ctx context.Context, network, _ string) (net.Conn, error) {
+		p.DropTunnels()
+		var d net.Dialer
+		return d.DialContext(ctx, network, origin)
+	}), nil, nil)
+	conn := dialConnect(t, serveFront(t, p).Listener.Addr().String(), "api.internal:443")
+	defer func() { _ = conn.Close() }()
+	if status := readStatus(t, bufio.NewReader(conn)); !strings.Contains(status, "403") {
+		t.Errorf("a CONNECT whose dial outlived DropTunnels answered %q, want 403", status)
+	}
+}
+
 func TestPortRuleGatesConnectAndForward(t *testing.T) {
 	echo := echoServer(t)
 	policy := Policy{Allow: []Rule{{Host: "echo.internal", Ports: []uint16{443}}}}
