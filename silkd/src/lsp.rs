@@ -68,10 +68,7 @@ impl Broker {
             .and_then(|out| Ok((out, sysutil::take_pipe(child.stdin.take(), "stdin")?)));
         let stdio = match stdio {
             Ok(stdio) => stdio,
-            Err(e) => {
-                let _ = child.start_kill();
-                return proto::err_frame(w, &e, "spawn language server").await;
-            }
+            Err(e) => return proto::err_frame(w, &e, "spawn language server").await,
         };
         let server = Server {
             child,
