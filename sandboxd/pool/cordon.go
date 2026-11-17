@@ -12,7 +12,7 @@ import (
 
 const cordonFile = "cordoned"
 
-// Cordon refuses new claims until Uncordon, across restarts, and destroys the warm VMs; live moves in stay admitted.
+// Cordon refuses new claims until Uncordon, across restarts, and destroys the warm VMs; live moves in and adoptions stay admitted.
 func (m *Manager) Cordon(ctx context.Context) error {
 	m.cordonMu.Lock()
 	defer m.cordonMu.Unlock()

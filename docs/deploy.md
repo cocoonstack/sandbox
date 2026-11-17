@@ -771,8 +771,9 @@ To empty a node for maintenance, [drain](sandboxd-api.md#post-v1drain) it
 (root), poll `GET /v1/info` until `claimed` reaches zero (or let the leases
 expire), then stop sandboxd; with `archive_failover`, `?evacuate=1` moves the
 claims to the peers instead (see [evacuating a node](cluster.md#evacuating-a-node)).
-To keep a node out of service across restarts, [cordon](sandboxd-api.md#post-v1cordon)
-it. The [admission table](cluster.md#node-admission) compares the states.
+To keep new claims off a node across restarts, [cordon](sandboxd-api.md#post-v1cordon)
+it; a cordoned node still adopts existing claims, so to keep it empty after a
+restart, drain it with `?evacuate=1` again. The [admission table](cluster.md#node-admission) compares the states.
 
 ### Cutting off a node
 

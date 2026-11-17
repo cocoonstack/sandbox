@@ -845,7 +845,9 @@ unclaimed warm VMs are destroyed, and live claims keep serving until release
 or TTL. Pool ownership is untouched — no pools.json write, no config change.
 Answers the fresh `GET /v1/info` payload; poll `claimed` to zero to know the
 node is empty. Deliberately not persisted: a restarted node serves again. To
-keep a node out of service across restarts, [cordon](#post-v1cordon) it; the
+keep new claims off a node across restarts, [cordon](#post-v1cordon) it; a
+cordoned node still adopts existing claims, so drain it again after a restart
+to keep it empty; the
 [admission table](cluster.md#node-admission) compares the states.
 
 `POST /v1/drain?evacuate=1` drains the same way, then moves the claims to the
@@ -884,13 +886,14 @@ stays here archived; the next call wakes it. A cordon stays in place.
 
 ## POST /v1/cordon
 
-Auth: root only (tenant and operator tokens get 403). Takes the node out of service until
+Auth: root only (tenant and operator tokens get 403). Keeps new claims off the node until
 `DELETE /v1/cordon`, across restarts: claim/fork/branch answer 429 with an
 error ending `node cordoned`, whatever `max_claims` and `max_running` allow (on
 a cluster a non-volume claim tries a peer redirect first, and peers stop
 redirecting here within a tick, because this node gossips no pools), refill
 stops and unclaimed warm VMs are destroyed. Live claims keep serving, and unlike
-a drain, a root [move](#post-v1sandboxesidmove) to this node is admitted. The
+a drain, a root [move](#post-v1sandboxesidmove) to this node is admitted, and so
+is the [adoption](#get-v1sandboxesidowner) of an archived claim, since neither is a new claim. The
 [admission table](cluster.md#node-admission) lists what each state allows; a
 cordon and a drain are independent, and each `DELETE` lifts only its own.
 
@@ -1552,8 +1555,8 @@ this node owns the sandbox, 404 otherwise; a tenant token is a wrong sandbox tok
 does not hold the sandbox adopts it, when the token's SHA-256 matches the row's or the caller is root or the operator, and its row names an owner whose node
 lease expired, or whose owner released it in an
 [evacuation](#post-v1drain) or a [wake it had no room for](cluster.md#waking-an-archived-claim-on-a-full-node), and answers 200; with `?room=1`, which the owner of such a wake sends, it adopts only while it could admit the wake itself; 503 with `Retry-After` when the meta store is
-down. A row whose owner's lease is live is never adopted unless the owner released it: 404. A draining, cordoned or fenced
-node, or one that lifted its fence less than 8 seconds ago, does not adopt: 404. A node whose
+down. A row whose owner's lease is live is never adopted unless the owner released it: 404. A draining or fenced
+node, or one that lifted its fence less than 8 seconds ago, does not adopt: 404; a cordoned one adopts. A node whose
 lease is overdue answers 404 for the replicated claims it holds, so the
 `Lookup` scatter moves on. With `client_advertise` configured,
 `owner_addr` is that node's full HTTP(S) origin instead; the same contract applies

@@ -558,7 +558,7 @@ sb = client.new("rt:24.04", claim_ref="ns/workload")
 client.sandboxes()                     # one summary dict per live claim — never tokens
 client.drain()                         # refuse new claims, run leases out
 client.undrain()
-client.cordon()                        # refuse new claims across restarts; moves in still land
+client.cordon()                        # refuse new claims across restarts; moves and adoptions still land
 client.uncordon()
 client.attach(owner_addr, id, token)   # bind a known handle, no lookup round-trip
 ```

@@ -53,7 +53,7 @@ func (m *Manager) adopt(ctx context.Context, id string, cred Cred, room bool) (b
 
 func (m *Manager) adoptArchived(ctx context.Context, id string, cred Cred, room bool) (bool, error) {
 	m.mu.Lock()
-	draining, cordoned := m.draining, m.cordoned
+	draining := m.draining
 	_, held := m.resolveLocked(id, cred)
 	fenced := m.adoptFenced()
 	full := false
@@ -67,7 +67,7 @@ func (m *Manager) adoptArchived(ctx context.Context, id string, cred Cred, room 
 		return false, nil
 	case held:
 		return true, nil
-	case fenced, cordoned, full:
+	case fenced, full:
 		return false, nil
 	}
 	ctx = context.WithoutCancel(ctx)

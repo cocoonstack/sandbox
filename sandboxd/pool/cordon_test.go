@@ -167,39 +167,21 @@ func TestACordonedNodeKeepsServingItsOwnClaims(t *testing.T) {
 	}
 }
 
-func TestACordonedNodeNeverAdoptsButKeepsItsOwnRowAcrossARestart(t *testing.T) {
+func TestACordonedNodeAdoptsALostOwnersRow(t *testing.T) {
 	c := newFailoverCluster(t)
 	a := c.node(t, "a", t.TempDir(), keepAnHour)
 	b := c.node(t, "b", t.TempDir(), keepAnHour)
-	lost := mustClaim(t, a, testKey)
-	mustArchive(t, a, lost)
-	own := mustClaim(t, b, testKey)
-	mustArchive(t, b, own)
-	mustFlush(t, b)
+	sb := mustClaim(t, a, testKey)
+	mustArchive(t, a, sb)
 	if err := b.Cordon(t.Context()); err != nil {
 		t.Fatalf("cordon: %v", err)
 	}
 	c.expire("a")
-	mustNotAdopt(t, b, lost, "adoption by a cordoned node")
-
-	restarted := c.restart(t, b)
-	restarted.liftFence()
-	if err := restarted.Reconcile(t.Context()); err != nil {
-		t.Fatalf("reconcile: %v", err)
+	mustAdopt(t, b, sb, "a lost owner's row on a cordoned node")
+	if err := wakeClaim(t, b, sb); err != nil {
+		t.Fatalf("wake on the cordoned adopter: %v", err)
 	}
-	if _, g := restarted.Info(); !g.Cordoned {
-		t.Fatal("the restart lifted the cordon")
-	}
-	mustNotAdopt(t, restarted, lost, "adoption by a restarted cordoned node")
-	mustAdopt(t, restarted, own, "its own archived claim")
-	if _, _, _, err := restarted.WakeAgentSocket(t.Context(), own.ID, Cred{Token: own.Token}); err != nil {
-		t.Fatalf("wake own archived claim: %v", err)
-	}
-
-	if err := restarted.Uncordon(t.Context()); err != nil {
-		t.Fatalf("uncordon: %v", err)
-	}
-	mustAdopt(t, restarted, lost, "adoption after uncordon")
+	assertCordonRefuses(t, b)
 }
 
 func TestAMoveLandsOnACordonedNode(t *testing.T) {
@@ -218,6 +200,70 @@ func TestAMoveLandsOnACordonedNode(t *testing.T) {
 		t.Error("the source kept the moved claim")
 	}
 	assertCordonRefuses(t, mc.t)
+}
+
+func TestAnEvacuationLandsOnACordonedPeer(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		c := newFailoverCluster(t)
+		a, b := c.pair(t)
+		running, archived := mustClaim(t, a, testKey), mustClaim(t, a, testKey)
+		mustArchive(t, a, archived)
+		if err := b.Cordon(t.Context()); err != nil {
+			t.Fatalf("cordon: %v", err)
+		}
+
+		a.Evacuate(t.Context())
+		synctest.Wait()
+
+		assertEvacuation(t, a, 0, 0)
+		for _, id := range []string{running.ID, archived.ID} {
+			if rec, _, _ := c.reg.Get(t.Context(), id); rec.Owner != "b" || rec.Consumed {
+				t.Errorf("row of %s owner %q consumed %v, want the cordoned peer holding it", id, rec.Owner, rec.Consumed)
+			}
+		}
+		if err := wakeClaim(t, b, archived); err != nil {
+			t.Errorf("wake on the cordoned adopter: %v", err)
+		}
+		assertCordonRefuses(t, b)
+	})
+}
+
+func TestAFullOwnerHandsAnArchivedWakeToACordonedPeer(t *testing.T) {
+	c := newFailoverCluster(t)
+	a, b := c.pair(t)
+	sb := mustClaim(t, a, testKey)
+	mustArchive(t, a, sb)
+	mustClaim(t, a, testKey)
+	editView(a, func(v *configView) { v.maxRunning = 1 })
+	if err := b.Cordon(t.Context()); err != nil {
+		t.Fatalf("cordon: %v", err)
+	}
+	if err := wakeClaim(t, a, sb); !errors.Is(err, ErrUnknownSandbox) {
+		t.Fatalf("wake on a full owner: %v, want ErrUnknownSandbox once the cordoned peer took it", err)
+	}
+	if err := wakeClaim(t, b, sb); err != nil {
+		t.Fatalf("wake on the cordoned peer: %v", err)
+	}
+	assertCordonRefuses(t, b)
+}
+
+func TestACordonedOwnerWakesItsArchivedClaimItself(t *testing.T) {
+	c := newFailoverCluster(t)
+	a, b := c.pair(t)
+	sb := mustClaim(t, a, testKey)
+	mustArchive(t, a, sb)
+	if err := a.Cordon(t.Context()); err != nil {
+		t.Fatalf("cordon: %v", err)
+	}
+	if err := wakeClaim(t, a, sb); err != nil {
+		t.Fatalf("archived wake on a cordoned owner: %v", err)
+	}
+	if _, held := b.byID(sb.ID); held {
+		t.Error("the wake handed the claim to a peer")
+	}
+	if got := a.Counters().WakeHandoffs; got != 0 {
+		t.Errorf("hand-offs %d, want 0", got)
+	}
 }
 
 func TestCordonOutlivesAReloadAndAnUndrain(t *testing.T) {

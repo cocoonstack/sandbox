@@ -187,12 +187,12 @@ sb, err := client.Lookup(ctx, savedID, savedToken)
 A node is in one of these states. `POST /v1/cordon` and `POST /v1/drain` set
 them, and each `DELETE` lifts only its own; both are root-only (see the
 [API](sandboxd-api.md#post-v1cordon)). A cap of `0` or an omitted cap means no
-cap; to take no claims, cordon the node.
+cap; to take no new claims, cordon the node.
 
 | State | New claim, fork, branch | Existing claims | Root live move in | Adoption of archived claims | Refill and pool gossip | Survives restart and reboot |
 |---|---|---|---|---|---|---|
 | serving | yes, unless an [admission refusal](sandboxd-api.md#admission-refusals) applies; a 429 for a claim without volumes redirects to a peer | yes; a wake is bound by `max_running` and `disk_reserve`; an archived claim's refused wake, or one over `memory_limit`, first tries a peer with room | yes, under the same caps and `move_concurrency` | yes; no claim cap binds, `max_running` binds at the wake | yes | — |
-| cordoned | no: 429 `node cordoned`; peers stop redirecting here | yes | yes, under the same caps and `move_concurrency` | no; its own claims stay | no; warm VMs are destroyed | yes, as `<data_dir>/cordoned` |
+| cordoned | no: 429 `node cordoned`; peers stop redirecting here | yes | yes, under the same caps and `move_concurrency` | yes, as serving: an adopted claim is no new claim | no; warm VMs are destroyed | yes, as `<data_dir>/cordoned` |
 | draining | no: 429 `node draining`; peers stop redirecting here | yes | no: admission and commit refuse | no | no; warm VMs are destroyed | no |
 | draining with `evacuate=1` | no, as draining | yes until the claim's turn, then 503 until a peer holds it and 404 after; a claim that cannot move stays and serves | no | no | no | no: a restart stops the evacuation |
 | cordoned and draining | no: 429 `node cordoned` | yes | no | no | no | the cordon only |
@@ -221,11 +221,11 @@ it while it sleeps write it, so the claim path is unchanged.
   answers 404. A tombstone is never adopted. The next call that reaches the
   guest wakes the claim from the store as usual. An owner with a live lease answers for
   itself, and a node that tries to take its row is refused with a 404.
-  A draining or [cordoned](sandboxd-api.md#post-v1cordon) node never adopts, nor does a fenced node or one that lifted its
+  A draining node never adopts, nor does a fenced node or one that lifted its
   fence less than 8 seconds ago (one renewal interval plus one registry query),
   so after a registry outage every healthy owner renews before a peer can take
   its rows. Adoption checks no tenant `max_claims` or node
-  `max_claims`: the claim already exists, and a refusal could strand it.
+  `max_claims`, nor a [cordon](sandboxd-api.md#post-v1cordon): the claim already exists, and a refusal could strand it.
 - **Fencing.** Take, consume and delete are compare-and-sets on the row's
   epoch, and so is the write of a replica round and of the archive of a claim
   that holds a replica (`Replace`, which also requires this node as owner and a
@@ -308,14 +308,14 @@ release and adoption an evacuation uses:
 
 - The owner releases the row to no owner and asks each peer
   `GET /v1/sandboxes/{id}/owner?room=1`. A peer adopts only while it could
-  admit the wake itself: not draining, cordoned or fenced, above
+  admit the wake itself: not draining or fenced, above
   `disk_reserve`, under `memory_limit` and under `max_running`.
 - When a peer adopts, the owner forgets the claim and the wake answers 404, as
   after an evacuation. The client's `Lookup` finds the peer, which wakes the
   claim there. The hand-off counts in `sandboxd_wake_handoffs_total`. A preview
   URL minted before the hand-off stops working until it is minted again, as
   after an evacuation.
-- When no peer adopts (no peer, or every peer full or closed), the owner takes
+- When no peer adopts (no peer, or every peer full, draining or fenced), the owner takes
   the row back and the wake answers 429 as before. A node runs one hand-off at
   a time, and after one fails it asks no peer for 30 seconds, so clients
   retrying a full cell cost no registry writes. A wake that `memory_limit`
@@ -348,7 +348,7 @@ adopting at once still leave one owner. This node keeps the claim listed until
 a peer answers `GET /v1/sandboxes/{id}/owner`, so a root listing finds the claim
 on at least one node at every moment, then forgets it under the claim's transition lock
 and answers 404 for it; the checkpoint stays, since it belongs to the adopter.
-With no adopter (no peer, every peer draining, cordoned or unreachable) the node takes the
+With no adopter (no peer, every peer draining, fenced or unreachable) the node takes the
 row back and the claim stays here. Until the hand-off, a wake of a claim the
 evacuation still has to move answers 503 with `Retry-After`, so a client call
 cannot wake it back onto the node. A running claim keeps serving until its turn.
