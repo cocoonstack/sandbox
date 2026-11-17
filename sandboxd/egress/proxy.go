@@ -32,11 +32,12 @@ import (
 const (
 	idleConnTimeout = 90 * time.Second
 	// maxIdleConns bounds the upstream pool per sandbox; a guest walking many hosts cannot park a descriptor per host.
-	maxIdleConns   = 64
-	maxHeaderBytes = 64 << 10
-	maxInjectBody  = 64 << 10
-	scrubChunk     = 16 << 10
-	maxHostLen     = 253
+	maxIdleConns           = 64
+	maxHeaderBytes         = 64 << 10
+	maxResponseHeaderBytes = 256 << 10
+	maxInjectBody          = 64 << 10
+	scrubChunk             = 16 << 10
+	maxHostLen             = 253
 
 	refusalRate  = 10
 	refusalBurst = 100
@@ -182,7 +183,7 @@ func New(policy Evaluator, secrets Secrets, ca *CA, router Router, audit AuditFu
 	}
 	p.scope, p.endScope = context.WithCancel(context.Background())
 	// The stdlib default of 2 idle conns per host re-dials bursty same-host traffic.
-	pools := &connPools{tr: &http.Transport{DialContext: direct, MaxIdleConns: maxIdleConns, MaxIdleConnsPerHost: 8, IdleConnTimeout: idleConnTimeout, MaxResponseHeaderBytes: maxHeaderBytes, DisableCompression: true}, routed: map[routeKey]*http.Transport{}}
+	pools := &connPools{tr: &http.Transport{DialContext: direct, MaxIdleConns: maxIdleConns, MaxIdleConnsPerHost: 8, IdleConnTimeout: idleConnTimeout, MaxResponseHeaderBytes: maxResponseHeaderBytes, DisableCompression: true}, routed: map[routeKey]*http.Transport{}}
 	if ca != nil {
 		pools.mitm = pools.tr.Clone()
 		pools.mitm.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12}
