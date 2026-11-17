@@ -153,6 +153,10 @@ func (r *Router) Reload(o *Overlay) {
 
 // Arm makes c's address answer ARP on this node and announces it to its exit.
 func (r *Router) Arm(c Claim) {
+	allow := c.Allow
+	c.Allow = func(dst netip.Addr, port uint16) bool {
+		return !r.conf.Load().Subnet.Contains(dst) && !GuestRange.Contains(dst) && allow(dst, port)
+	}
 	a := &armed{c: c, flows: newFlows(c)}
 	r.mu.Lock()
 	old := r.claims[c.Addr]
@@ -517,9 +521,6 @@ func (l *link) forward(frame []byte) Drop {
 	now, f := time.Now(), l.a.flows
 	if !f.charge(f.up, segs, wire, now) {
 		return DropLimit
-	}
-	if o.Subnet.Contains(p.Dst) || GuestRange.Contains(p.Dst) {
-		return DropPolicy
 	}
 	if drop = f.outbound(p, wire, now); drop != DropNone {
 		return drop
