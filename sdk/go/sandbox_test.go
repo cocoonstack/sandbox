@@ -56,9 +56,12 @@ func TestExecSurfacesErrorFrame(t *testing.T) {
 func TestExecReturnsThePartialStdoutOnATransportError(t *testing.T) {
 	sb := testSandbox(t, newAgentServer(t, func(conn net.Conn) {
 		defer conn.Close()
-		if _, err := bufio.NewReader(conn).ReadString('\n'); err != nil {
-			t.Errorf("read exec request: %v", err)
-			return
+		r := bufio.NewReader(conn)
+		for range 2 {
+			if _, err := r.ReadString('\n'); err != nil {
+				t.Errorf("read the exec request and its stdin close: %v", err)
+				return
+			}
 		}
 		_, _ = io.WriteString(conn, `{"type":"started","pid":7}`+"\n"+`{"type":"stdout","data":"NDIK"}`+"\n")
 	}))
