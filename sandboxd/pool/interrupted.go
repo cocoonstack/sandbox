@@ -39,12 +39,13 @@ func (m *Manager) settleInterrupted(ctx context.Context, sb *types.Sandbox) {
 }
 
 func (m *Manager) settleCapture(ctx context.Context, sb *types.Sandbox) (err error) {
-	m.mu.Lock()
-	pending, saved, vmName, sock := sb.PendingSnap, sb.SaveSnap, sb.VMName, sb.VsockSocket
-	m.mu.Unlock()
+	pending, saved := sb.PendingSnap, sb.SaveSnap
 	if pending == "" && saved == "" {
 		return nil
 	}
+	m.mu.Lock()
+	vmName, sock := sb.VMName, sb.VsockSocket
+	m.mu.Unlock()
 	if err = m.eng.WaitCapture(ctx, cmp.Or(pending, saved)); err != nil {
 		return err
 	}
