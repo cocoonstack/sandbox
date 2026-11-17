@@ -169,8 +169,7 @@ func TestACordonedNodeKeepsServingItsOwnClaims(t *testing.T) {
 
 func TestACordonedNodeAdoptsALostOwnersRow(t *testing.T) {
 	c := newFailoverCluster(t)
-	a := c.node(t, "a", t.TempDir(), keepAnHour)
-	b := c.node(t, "b", t.TempDir(), keepAnHour)
+	a, b := c.pair(t)
 	sb := mustClaim(t, a, testKey)
 	mustArchive(t, a, sb)
 	if err := b.Cordon(t.Context()); err != nil {
