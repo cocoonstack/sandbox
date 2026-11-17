@@ -43,7 +43,7 @@ func (m *Manager) Evacuate(ctx context.Context) {
 }
 
 // Undrain lifts a drain, stops an evacuation, and kicks an immediate refill.
-func (m *Manager) Undrain(ctx context.Context) {
+func (m *Manager) Undrain() {
 	m.mu.Lock()
 	m.draining = false
 	e := m.evac

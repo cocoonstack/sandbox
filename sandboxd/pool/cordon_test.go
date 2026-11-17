@@ -274,7 +274,7 @@ func TestCordonOutlivesAReloadAndAnUndrain(t *testing.T) {
 	}
 	reloadWith(t, m, func(*config.Config) {})
 	m.Drain(t.Context())
-	m.Undrain(t.Context())
+	m.Undrain()
 	if _, g := m.Info(); !g.Cordoned || g.Draining {
 		t.Fatalf("gauges %+v, want cordoned and not draining", g)
 	}

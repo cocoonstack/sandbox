@@ -155,7 +155,7 @@ type Manager interface {
 	DeleteTenant(ctx context.Context, name string) error
 	Drain(ctx context.Context)
 	Evacuate(ctx context.Context)
-	Undrain(ctx context.Context)
+	Undrain()
 	Cordon(ctx context.Context) error
 	Uncordon(ctx context.Context) error
 	Info() ([]pool.PoolInfo, pool.Gauges)
@@ -942,7 +942,7 @@ func (s *Server) handleDrain(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleUndrain(w http.ResponseWriter, r *http.Request) {
-	s.mgr.Undrain(r.Context())
+	s.mgr.Undrain()
 	s.handleInfo(w, r)
 }
 

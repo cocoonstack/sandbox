@@ -169,8 +169,8 @@ func TestReloadRefusesDroppingThePolicyATenantClaimOfADroppedPoolUses(t *testing
 	}
 	next := *m.cfg
 	next.Pools = nil
-	if _, err := m.ReloadConfig(t.Context(), &next); !errors.Is(err, ErrReloadRefused) || !strings.Contains(err.Error(), "drops the egress policy of 1 live claims") {
-		t.Errorf("reload dropping the policy: %v, want a refusal counting the tenant claim", err)
+	if _, reloadErr := m.ReloadConfig(t.Context(), &next); !errors.Is(reloadErr, ErrReloadRefused) || !strings.Contains(reloadErr.Error(), "drops the egress policy of 1 live claims") {
+		t.Errorf("reload dropping the policy: %v, want a refusal counting the tenant claim", reloadErr)
 	}
 	eval, ok := m.view.Load().out.Resolve(sb)
 	if !ok {

@@ -50,7 +50,7 @@ func TestDrainRefusesClaimsTrimsWarmAndUndrainRefills(t *testing.T) {
 			t.Fatalf("refill ran during drain: %+v", infos)
 		}
 
-		m.Undrain(t.Context())
+		m.Undrain()
 		m.refillOnce(t.Context())
 		waitFor(t, func() bool {
 			now, gauges := m.Info()
@@ -231,7 +231,7 @@ func TestUndrainStopsAnEvacuationBeforeItsHandOff(t *testing.T) {
 		synctest.Wait()
 		assertEvacuation(t, a, 1, 0)
 
-		a.Undrain(t.Context())
+		a.Undrain()
 		close(stall)
 		synctest.Wait()
 
@@ -272,7 +272,7 @@ func TestAnUndrainDuringAnEvacuationsDrainStopsIt(t *testing.T) {
 		wg.Go(func() { a.Evacuate(t.Context()) })
 		synctest.Wait()
 
-		a.Undrain(t.Context())
+		a.Undrain()
 		release()
 		wg.Wait()
 		synctest.Wait()
@@ -309,7 +309,7 @@ func TestEvacuateHoldsTheWakeOfAQueuedClaimUntilUndrain(t *testing.T) {
 				}
 				assertEvacuation(t, a, 1, 0)
 
-				a.Undrain(t.Context())
+				a.Undrain()
 				release()
 				synctest.Wait()
 
@@ -343,7 +343,7 @@ func TestAQueuedFailedClaimStillRestarts(t *testing.T) {
 			t.Errorf("summary %+v, want the wake to cold-boot the failed claim", got)
 		}
 
-		a.Undrain(t.Context())
+		a.Undrain()
 		release()
 		synctest.Wait()
 	})
@@ -365,7 +365,7 @@ func TestHandOffOfAClaimAWakeUnarchivedAnswersBusy(t *testing.T) {
 			t.Errorf("hand-off of a running claim: %v, want errArchiveBusy", err)
 		}
 
-		a.Undrain(t.Context())
+		a.Undrain()
 		release()
 		synctest.Wait()
 	})
@@ -455,7 +455,7 @@ func TestASecondEvacuateWhileOneRunsChangesNothing(t *testing.T) {
 			t.Error("a second evacuate replaced the run")
 		}
 
-		a.Undrain(t.Context())
+		a.Undrain()
 		release()
 		synctest.Wait()
 		if !runningKept(a, sb.ID) {
@@ -473,7 +473,7 @@ func TestAStoppedEvacuationDoesNotPauseAClaimItHadQueued(t *testing.T) {
 
 		a.Evacuate(t.Context())
 		synctest.Wait()
-		a.Undrain(t.Context())
+		a.Undrain()
 		if err := a.evacuateClaim(t.Context(), sb); err != nil {
 			t.Errorf("evacuateClaim after undrain: %v, want nil", err)
 		}

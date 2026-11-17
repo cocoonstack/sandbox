@@ -72,7 +72,7 @@ func TestARefillAnOperatorDoorStartsStopsWithRun(t *testing.T) {
 		{
 			"undrain",
 			func(t *testing.T, m *Manager) error { m.Drain(t.Context()); return nil },
-			func(t *testing.T, m *Manager) error { m.Undrain(t.Context()); return nil },
+			func(_ *testing.T, m *Manager) error { m.Undrain(); return nil },
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {

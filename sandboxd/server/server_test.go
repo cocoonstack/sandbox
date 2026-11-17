@@ -3015,7 +3015,7 @@ func (f *fakeManager) Drain(context.Context) { f.draining = true }
 
 func (f *fakeManager) Evacuate(context.Context) { f.draining, f.evacuated = true, true }
 
-func (f *fakeManager) Undrain(context.Context) { f.draining = false }
+func (f *fakeManager) Undrain() { f.draining = false }
 
 func (f *fakeManager) Cordon(context.Context) error {
 	if f.cordonErr == nil {
