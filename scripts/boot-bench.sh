@@ -126,12 +126,6 @@ run_once() {
   line=$(wait_line "$log" 'sandbox-init: rootfs ready at [0-9.]+s' "$deadline") \
     || { keep=1; echo "run $n: sandbox-init never handed off (logs kept in $work)"; return 1; }
   k_handoff=$(echo "$line" | grep -oE 'at [0-9.]+s' | grep -oE '[0-9.]+')
-  # Belt over the pattern guarantee — never let empty values reach the math.
-  if [ -z "$k_init" ] || [ -z "$k_handoff" ]; then
-    keep=1
-    echo "run $n: marker uptime unparsable (start='$k_init' ready='$k_handoff'; logs kept in $work)"
-    return 1
-  fi
 
   local agent_ms="-"
   if [ -n "$AGENT_PORT" ]; then

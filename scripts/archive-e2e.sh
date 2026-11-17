@@ -59,6 +59,7 @@ echo "== start sandboxd (idle=1s archive=2s delete=3600s)"
 "$DATA/sandboxd" -config "$DATA/config.json" >>"$DATA/daemon.log" 2>&1 &
 DAEMON_PID=$!
 for _ in $(seq 1 20); do curl -sf "http://$ADDR/healthz" >/dev/null && break; sleep 0.5; done
+curl -sf "http://$ADDR/healthz" >/dev/null || { echo "daemon never came up"; exit 1; }
 
 echo "== wait for golden + warm pool"
 for i in $(seq 1 120); do
