@@ -96,11 +96,15 @@ jobs:
         run: |
           docker run -d --name s3 -p 127.0.0.1:8333:8333 chrislusf/seaweedfs:4.54 server -s3 -ip.bind=0.0.0.0
           for _ in $(seq 60); do
-            docker exec s3 sh -c 'echo "s3.bucket.create -name sbx-checkpoints" | weed shell' 2>&1 | grep -q 'created bucket' && break
+            docker exec s3 sh -c 'echo "s3.bucket.create -name sbx-checkpoints" | timeout 10 weed shell' 2>&1 | grep -q 'created bucket' && break
             sleep 1
           done
-          GOWORK=off go test -race -count=1 -v -run TestS3BackendContractRealEndpoint ./store/s3/ | tee "$RUNNER_TEMP/s3-test.log"
-          grep -- '--- PASS: TestS3BackendContractRealEndpoint' "$RUNNER_TEMP/s3-test.log"
+          for _ in $(seq 60); do
+            curl -s -o /dev/null "$SANDBOX_S3_E2E" && break
+            sleep 1
+          done
+          GOWORK=off go test -race -count=1 -v -run '^TestS3BackendContractRealEndpoint$' ./store/s3/ | tee "$RUNNER_TEMP/s3-test.log" || { docker logs s3; exit 1; }
+          grep -E -- '^--- PASS: TestS3BackendContractRealEndpoint \(' "$RUNNER_TEMP/s3-test.log"
 
       - name: Test the tun path through a kernel exit
         working-directory: sandboxd
