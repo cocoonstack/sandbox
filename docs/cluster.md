@@ -39,7 +39,7 @@ Give every node a `mesh` block:
 "mesh": {
   "node_id": "node-b",
   "bind": "10.0.0.6:7946",
-  "join": ["10.0.0.5:7946"],
+  "join": ["10.0.0.5:7946", "10.0.0.6:7946"],
   "cluster_key": "MDEyMzQ1Njc4OWFiY2RlZg=="
 }
 ```

@@ -138,7 +138,7 @@ Behavior of the relay:
   each. Each claim answers at most 32 queries at a time, each with one pooled
   64 KiB reply buffer. A connection that neither sends nor reads for 30 s is
   closed.
-- **Audit.** With `audit_log` on, each query appends
+- **Audit.** With `audit_log` on, each query but a fenced node's refusal appends
   `{"op":"dns","name":…,"qtype":…,"answers":…,"decision":…}` with the claim id
   and tenant. The decision is `allow`, `filtered` (an address was dropped),
   `failed` (no nameserver answered) or `rate_limited` (at most one a second per
