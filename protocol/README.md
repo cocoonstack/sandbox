@@ -5,8 +5,8 @@ implementations of the silkd protocol:
 - silkd (Rust, guest) parses/emits these in `silkd/src/proto.rs` tests.
 - `protocol/wire` (Go, host) round-trips the corpus in its tests; it is the
   one Go implementation, consumed by both the Go SDK and sandboxd.
-- the Python SDK round-trips the request frames and checks only that each
-  response decodes to the fixture's `type` tag (and `data`), in
+- the Python SDK round-trips the request frames and decodes each response to
+  exactly the fixture (`data` base64-decoded), in
   `sdk/python/tests/test_fixtures.py`.
 
 `req_*.json` are client→server frames, `resp_*.json` server→client. A frame

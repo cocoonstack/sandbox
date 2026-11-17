@@ -561,7 +561,8 @@ err = sb.Kill(ctx, pid, 0)                        // 0 = SIGKILL
 bounded output ring. `Logs` replays the ring and reports the exit code once
 the process has ended (`exited=false` while running); `Attach` follows live
 output until exit — the replay and the live stream hand off atomically, so
-no chunk is lost or doubled between them. `Kill` signals the process group
+no chunk is lost or doubled between them, though a follower that falls behind
+the live stream by more than silkd's fan-out buffer skips the chunks it missed. `Kill` signals the process group
 the pid leads, so a pipeline or a forked child goes with it. Killing an already-exited process
 is a no-op success (its OS pid may be recycled; silkd never signals a
 reaped child). An exited process leaves the table after 5 minutes; from then
