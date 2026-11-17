@@ -97,7 +97,9 @@ where
 {
     let mut cmd = Command::new("tar");
     cmd.arg("-x").stdin(Stdio::piped()).stdout(Stdio::null());
-    sysutil::start_in(&mut cmd, &staging);
+    if let Err(e) = sysutil::start_in(&mut cmd, &staging) {
+        return err_frame(w, &e, "spawn tar").await;
+    }
     let (mut child, err_task) = match spawn_tar(cmd) {
         Ok(pair) => pair,
         Err(e) => return err_frame(w, &e, "spawn tar").await,
