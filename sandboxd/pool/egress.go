@@ -91,8 +91,9 @@ func (m *Manager) warnDeniedClaims(ctx context.Context) {
 		return
 	}
 	denied := m.deniedClaims(v)
+	logger := log.WithFunc("pool.warnDeniedClaims")
 	for _, key := range slices.SortedFunc(maps.Keys(denied), types.PoolKey.Compare) {
-		log.WithFunc("pool.warnDeniedClaims").Warnf(ctx, "pool %s has no egress policy: its %d live claims reach nothing", key.Template, denied[key])
+		logger.Warnf(ctx, "pool %s has no egress policy: its %d live claims reach nothing", key.Template, denied[key])
 	}
 }
 

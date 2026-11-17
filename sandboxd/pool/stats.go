@@ -43,9 +43,9 @@ func (m *Manager) Stats(ctx context.Context, id string) (SandboxStats, bool) {
 	}
 	st, vmName := statsOfLocked(sb)
 	m.mu.Unlock()
-	if !st.Hibernated {
-		if pid, ok := m.vmPID(ctx, vmName); ok {
-			readProcStats(&st, m.procDir, pid, bootTime(m.procDir))
+	if !st.Hibernated && vmName != "" {
+		if vm, ok, err := m.eng.Inspect(ctx, vmName); err == nil && ok && vm.PID > 0 {
+			readProcStats(&st, m.procDir, vm.PID, bootTime(m.procDir))
 		}
 	}
 	st.MeasuredAt = time.Now().UTC()
@@ -81,17 +81,6 @@ func (m *Manager) AllStats(ctx context.Context) ([]SandboxStats, error) {
 	}
 	slices.SortFunc(all, func(a, b SandboxStats) int { return cmp.Compare(a.ID, b.ID) })
 	return all, nil
-}
-
-func (m *Manager) vmPID(ctx context.Context, vmName string) (int, bool) {
-	if vmName == "" {
-		return 0, false
-	}
-	vm, ok, err := m.eng.Inspect(ctx, vmName)
-	if err != nil || !ok || vm.PID <= 0 {
-		return 0, false
-	}
-	return vm.PID, true
 }
 
 func statsOfLocked(sb *types.Sandbox) (SandboxStats, string) {

@@ -30,7 +30,6 @@ type pool struct {
 	key  types.PoolKey
 	hash string
 
-	// floor and warmMax bound the demand-adaptive target
 	floor           int
 	warmMax         int
 	idle            time.Duration
