@@ -72,7 +72,7 @@ A failed verb terminates with `error {kind, message}`:
 | kind | meaning |
 |---|---|
 | `bad_request` | malformed frame, empty argv, invalid pattern, an exec argv or cwd the guest cannot spawn (missing, not a directory, not executable), an exec or pty `user` the guest cannot resolve (`unknown user "<name>"`, or `look up user "<name>": <errno>` when the name service itself fails) |
-| `not_found` | unknown pid/session/path, a `port_forward` port nothing listens on, a language with no LSP manifest |
+| `not_found` | unknown pid/session/path, a `port_forward` port nothing listens on, a language with no LSP manifest, a git verb on an image with no `git` |
 | `unimplemented` | reserved in the protocol; no verb answers it today |
 | `internal` | everything else (other spawn failures, git errors, I/O) |
 
