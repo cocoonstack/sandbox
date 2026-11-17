@@ -2,6 +2,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"encoding/binary"
 	"flag"
@@ -89,21 +90,23 @@ func run(addr, token, template string) error {
 
 func initTree(ctx context.Context, sb *sandbox.Sandbox) error {
 	// The framework starts minutes after init on a nested first boot; silkd answers earlier.
-	deadline := time.Now().Add(5 * time.Minute)
-	for {
+	var execErr error
+	err := harness.Poll(ctx, 5*time.Minute, 3*time.Second, func() error {
 		out, err := sb.Exec(ctx, "/system/bin/sh", "-c", shellPath+"; ps -A")
 		if err != nil {
-			return fmt.Errorf("exec ps: %w", err)
-		}
-		if strings.Contains(out, "zygote") && strings.Contains(out, "system_server") {
-			fmt.Println("  exec: ps -A shows the Android init tree (zygote, system_server)")
+			execErr = fmt.Errorf("exec ps: %w", err)
 			return nil
 		}
-		if time.Now().After(deadline) {
+		if !strings.Contains(out, "zygote") || !strings.Contains(out, "system_server") {
 			return fmt.Errorf("framework never came up:\n%s", head(out))
 		}
-		time.Sleep(3 * time.Second)
+		return nil
+	})
+	if err = cmp.Or(execErr, err); err != nil {
+		return err
 	}
+	fmt.Println("  exec: ps -A shows the Android init tree (zygote, system_server)")
+	return nil
 }
 
 func adbHandshake(ctx context.Context, sb *sandbox.Sandbox) error {

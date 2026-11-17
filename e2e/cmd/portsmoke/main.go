@@ -3,6 +3,7 @@ package main
 
 import (
 	"bufio"
+	"cmp"
 	"context"
 	"errors"
 	"flag"
@@ -206,18 +207,15 @@ func stepGuestHalfClose(ctx context.Context, rt *harness.PortRelay, _ *sandbox.S
 	if err := conn.CloseWrite(); err != nil {
 		return err
 	}
-	deadline := time.Now().Add(listenerReadyWait)
-	for time.Now().Before(deadline) {
+	var getErr error
+	err = harness.Poll(ctx, listenerReadyWait, 200*time.Millisecond, func() error {
 		seen, err := relayGet(ctx, rt, guestPort, "/half-close-seen")
-		if err != nil {
-			return err
-		}
-		if seen == "after-done" {
+		if getErr = err; err != nil || seen == "after-done" {
 			return nil
 		}
-		time.Sleep(200 * time.Millisecond)
-	}
-	return errors.New("the guest never saw what the client sent after its own half close")
+		return errors.New("the guest never saw what the client sent after its own half close")
+	})
+	return cmp.Or(getErr, err)
 }
 
 func stepWrongToken(ctx context.Context, rt *harness.PortRelay, _ *sandbox.Sandbox) error {
