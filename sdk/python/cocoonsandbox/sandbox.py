@@ -205,7 +205,7 @@ class Sandbox:
         on_stdout: Callable[[bytes], object] | None = None,
         on_stderr: Callable[[bytes], object] | None = None,
     ) -> int | None:
-        """Replays then follows output; returns None if the process record disappears."""
+        """Replays then follows output until exit; a reader that falls behind misses live chunks."""
         return self._drain_proc("attach", pid, on_stdout, on_stderr)
 
     @_follows_move
