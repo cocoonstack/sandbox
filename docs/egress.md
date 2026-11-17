@@ -48,7 +48,9 @@ at a time; later ones sit unserved in the socket backlog until one closes, and
 the proxy keeps at most 64 idle upstream connections per sandbox and exit (the
 node's own and each upstream proxy the claim has used), as many again for
 decrypted traffic when the pool intercepts, so a guest cannot turn its proxy
-into a host descriptor sink.
+into a host descriptor sink. A request on the HTTP door or inside an
+intercepted tunnel whose headers pass 64 KiB answers `431`, so an open
+connection holds no more than that.
 
 A SOCKS5 tunnel takes the decision an HTTP `CONNECT` to the same host takes,
 through the same code: a rule with a nonempty `methods` list that omits

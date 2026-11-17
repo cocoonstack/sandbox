@@ -32,10 +32,11 @@ import (
 const (
 	idleConnTimeout = 90 * time.Second
 	// maxIdleConns bounds the upstream pool per sandbox; a guest walking many hosts cannot park a descriptor per host.
-	maxIdleConns  = 64
-	maxInjectBody = 64 << 10
-	scrubChunk    = 16 << 10
-	maxHostLen    = 253
+	maxIdleConns   = 64
+	maxHeaderBytes = 64 << 10
+	maxInjectBody  = 64 << 10
+	scrubChunk     = 16 << 10
+	maxHostLen     = 253
 
 	refusalRate  = 10
 	refusalBurst = 100
@@ -200,7 +201,7 @@ func (p *Proxy) OnTransfer(f TransferFunc) { p.transfer = f }
 func (p *Proxy) RecordEnds() { p.ends = true }
 
 func (p *Proxy) Server() *http.Server {
-	return &http.Server{Handler: p, ReadHeaderTimeout: interceptTimeout, IdleTimeout: idleConnTimeout}
+	return &http.Server{Handler: p, ReadHeaderTimeout: interceptTimeout, IdleTimeout: idleConnTimeout, MaxHeaderBytes: maxHeaderBytes}
 }
 
 // NoRxSplice copies upstream bytes to the guest in user space; call it before serving.

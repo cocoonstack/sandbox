@@ -586,6 +586,17 @@ func TestAnUpstreamDyingMidBodyTruncatesTheInterceptedResponse(t *testing.T) {
 	}
 }
 
+func TestInterceptRefusesAnInnerHeaderPastTheCap(t *testing.T) {
+	p, guestRoots, upstream := interceptProxy(t, Rule{Host: "example.com", Intercept: InterceptAlways}, nil)
+	tc := connectTLS(t, serveTrusting(t, p, upstream).Listener.Addr().String(), "example.com:443", "example.com", guestRoots)
+	defer func() { _ = tc.Close() }()
+	req := newRequest(t, http.MethodGet, "/x", "")
+	req.Header.Set("X-Big", strings.Repeat("a", 100<<10))
+	if got := send(t, tc, req).status; got != http.StatusRequestHeaderFieldsTooLarge {
+		t.Errorf("a 100 KiB inner header answered %d, want 431", got)
+	}
+}
+
 func TestInterceptResumesTheGuestsTLSSession(t *testing.T) {
 	p, guestRoots, upstream := interceptProxy(t, Rule{Host: "example.com", Intercept: InterceptAlways}, nil)
 	front := serveTrusting(t, p, upstream)

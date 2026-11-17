@@ -61,6 +61,7 @@ func (p *Proxy) serveIntercept(scope context.Context, w http.ResponseWriter, r *
 		Handler:           &interceptHandler{proxy: p, host: host, port: port, authority: net.JoinHostPort(host, strconv.Itoa(int(port)))},
 		ReadHeaderTimeout: interceptTimeout,
 		IdleTimeout:       idleConnTimeout,
+		MaxHeaderBytes:    maxHeaderBytes,
 	}
 	_ = srv.Serve(ln)
 }

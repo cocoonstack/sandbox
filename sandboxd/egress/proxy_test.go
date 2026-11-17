@@ -250,6 +250,23 @@ func TestForwardStripsHopHeaders(t *testing.T) {
 	}
 }
 
+func TestTheProxyServerRefusesAGuestHeaderPastItsCap(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	defer upstream.Close()
+	p := New(Policy{Allow: []Rule{{Host: "api.internal"}}}, nil, nil, fixedDial(upstream.Listener.Addr().String()), nil, nil)
+	front := httptest.NewUnstartedServer(nil)
+	front.Config = p.Server()
+	front.Start()
+	defer front.Close()
+	for _, tt := range []struct{ size, want int }{{32 << 10, http.StatusOK}, {100 << 10, http.StatusRequestHeaderFieldsTooLarge}} {
+		resp := proxiedGet(t, front.URL, "http://api.internal/x", func(r *http.Request) { r.Header.Set("X-Big", strings.Repeat("a", tt.size)) })
+		_ = resp.Body.Close()
+		if resp.StatusCode != tt.want {
+			t.Errorf("a %d-byte header answered %d, want %d", tt.size, resp.StatusCode, tt.want)
+		}
+	}
+}
+
 func TestADeniedForwardIs403AndAuditedAsDeny(t *testing.T) {
 	policy := Policy{Allow: []Rule{{Host: "api.internal"}}}
 	events := make(chan Event, 4)
