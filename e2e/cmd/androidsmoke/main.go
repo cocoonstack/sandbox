@@ -23,7 +23,8 @@ const (
 	// adbd is a core service, up well before the framework completes.
 	adbWait = 2 * time.Minute
 	// silkd's base PATH does not carry the Android userspace.
-	shellPath = "PATH=/system/bin:/system/xbin:$PATH"
+	shellPath    = "PATH=/system/bin:/system/xbin:$PATH"
+	bootIdentity = shellPath + "; cat /proc/sys/kernel/random/boot_id; pidof system_server"
 )
 
 func main() {
@@ -59,6 +60,10 @@ func run(addr, token, template string) error {
 		return adbErr
 	}
 
+	booted, err := sb.Exec(ctx, "/system/bin/sh", "-c", bootIdentity)
+	if err != nil {
+		return fmt.Errorf("read boot id and system_server pid: %w", err)
+	}
 	ckpt, err := sb.Checkpoint(ctx, "android-booted")
 	if err != nil {
 		return fmt.Errorf("checkpoint: %w", err)
@@ -69,13 +74,16 @@ func run(addr, token, template string) error {
 		return fmt.Errorf("branch: %w", err)
 	}
 	defer func() { _ = branch.Close() }()
+	if resumed, err := branch.Exec(ctx, "/system/bin/sh", "-c", bootIdentity); err != nil || resumed != booted {
+		return fmt.Errorf("branch boot id and system_server pid %q (%v), want the source's %q", resumed, err, booted)
+	}
 	if err := initTree(ctx, branch); err != nil {
 		return fmt.Errorf("branch: %w", err)
 	}
 	if err := adbHandshake(ctx, branch); err != nil {
 		return fmt.Errorf("branch: %w", err)
 	}
-	fmt.Println("  checkpoint: branch of the booted guest answers ps + adb")
+	fmt.Println("  checkpoint: branch keeps the source's boot id and system_server pid, and answers ps + adb")
 	return nil
 }
 
