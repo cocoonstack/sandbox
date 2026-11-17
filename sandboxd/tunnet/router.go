@@ -542,6 +542,7 @@ func (l *link) forward(frame []byte) Drop {
 	}
 	flow := maphash.Comparable(seed, [3]uint64{uint64(p.Proto), uint64(p.SrcPort)<<16 | uint64(p.DstPort), dst4(p.Dst)})
 	if l.r.under.Send(out, stride, netip.AddrPortFrom(exit.VTEP, o.Port), flow) != nil {
+		f.unsendUnreported(p, wire)
 		return DropSend
 	}
 	if l.a.c.Touch != nil {

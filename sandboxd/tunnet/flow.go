@@ -172,12 +172,8 @@ func newFlows(c Claim) *flows {
 
 // outbound decides a guest packet the caller already charged, opening its flow on first sight.
 func (f *flows) outbound(p Packet, n int, now time.Time) Drop {
-	key := flowKey{proto: p.Proto, dst: p.Dst}
-	switch p.Proto {
-	case ProtoTCP, ProtoUDP:
-		key.dport, key.sport = p.DstPort, p.SrcPort
-	case ProtoICMP:
-	default:
+	key, ok := outKey(p)
+	if !ok {
 		return DropProto
 	}
 	for range 2 {
@@ -193,6 +189,16 @@ func (f *flows) outbound(p Packet, n int, now time.Time) Drop {
 		}
 	}
 	return DropLimit
+}
+
+func (f *flows) unsendUnreported(p Packet, n int) {
+	key, _ := outKey(p)
+	f.mu.Lock()
+	if fl := f.table[key]; fl != nil {
+		fl.up.Add(-min(int64(n), fl.up.Load()-fl.reportedUp))
+	}
+	f.mu.Unlock()
+	f.used.Add(-int64(n))
 }
 
 // inbound passes a packet of a flow the claim opened, an ICMP error about one, or a TCP segment that resumes an allowed flow, then charges it.
@@ -344,4 +350,16 @@ func innerDst(frame []byte) (netip.Addr, bool) {
 		return netip.Addr{}, false
 	}
 	return netip.AddrFrom4([4]byte(ip[inner+dstAt : inner+dstAt+4])), true
+}
+
+func outKey(p Packet) (flowKey, bool) {
+	key := flowKey{proto: p.Proto, dst: p.Dst}
+	switch p.Proto {
+	case ProtoTCP, ProtoUDP:
+		key.dport, key.sport = p.DstPort, p.SrcPort
+	case ProtoICMP:
+	default:
+		return flowKey{}, false
+	}
+	return key, true
 }

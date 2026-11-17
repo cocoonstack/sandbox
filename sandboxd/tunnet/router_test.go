@@ -408,6 +408,39 @@ func TestRouterKeepsTheMTUAStreamWasToldUntilItsNextHello(t *testing.T) {
 	})
 }
 
+func TestRouterChargesNothingForAFrameTheUnderlayDidNotSend(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		u, r := newRouter(t)
+		used := new(atomic.Int64)
+		var mu sync.Mutex
+		var records []FlowRecord
+		r.Arm(Claim{
+			ID: "c1", Addr: claimAddr, Used: used, Allow: func(netip.Addr, uint16) bool { return true },
+			Record: func(fr FlowRecord) { mu.Lock(); records = append(records, fr); mu.Unlock() },
+		})
+		u.sent(t)
+		guest := serve(t, r, claimAddr)
+		guestHello(t, guest)
+		u.failSend.Store(true)
+		sendFrame(t, guest, frame(ProtoTCP, GuestAddr, remote, false))
+		synctest.Wait()
+		if got := r.Stats().Drops[DropSend]; got != 1 {
+			t.Fatalf("send drops = %d, want 1", got)
+		}
+		r.EndFlows()
+		mu.Lock()
+		defer mu.Unlock()
+		for _, fr := range records {
+			if fr.Up != 0 {
+				t.Errorf("record %+v bills %d up bytes the underlay never sent", fr, fr.Up)
+			}
+		}
+		if used.Load() != 0 {
+			t.Errorf("quota used %d bytes for a frame that never left", used.Load())
+		}
+	})
+}
+
 func TestEndFlowsRecordsLiveFlowsWithIPBytes(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		u, r := newRouter(t)
@@ -637,13 +670,17 @@ type sent struct {
 }
 
 type fakeUnder struct {
-	out     chan sent
-	in      chan []sent
-	done    chan struct{}
-	batches atomic.Int64
+	out      chan sent
+	in       chan []sent
+	done     chan struct{}
+	batches  atomic.Int64
+	failSend atomic.Bool
 }
 
 func (u *fakeUnder) Send(b []byte, seg int, dst netip.AddrPort, _ uint64) error {
+	if u.failSend.Load() {
+		return errors.New("underlay closed")
+	}
 	u.batches.Add(1)
 	for len(b) > 0 {
 		n := min(seg, len(b))

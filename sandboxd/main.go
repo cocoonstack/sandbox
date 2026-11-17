@@ -105,9 +105,11 @@ func main() {
 	if cfg.Mesh != nil {
 		mgr.WithMovePeer(&server.MoveClient{Token: cfg.APIToken})
 	}
+	tunCtx, stopTun := context.WithCancel(context.WithoutCancel(ctx))
+	var tun sync.WaitGroup
+	tun.Go(func() { runTun(tunCtx) })
 	flushed, finish := context.WithCancel(context.WithoutCancel(ctx))
 	var tail sync.WaitGroup
-	tail.Go(func() { runTun(flushed) })
 	if err := mgr.Reconcile(ctx); err != nil {
 		logger.Fatalf(ctx, err, "reconcile")
 	}
@@ -212,6 +214,8 @@ func main() {
 	<-drained
 	logger.Info(ctx, "waiting for running cocoon commands")
 	eng.Close()
+	stopTun()
+	tun.Wait()
 	if err := mgr.FlushClaims(); err != nil {
 		logger.Error(ctx, err, "flush claims")
 	}
