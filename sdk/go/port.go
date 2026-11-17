@@ -68,6 +68,8 @@ func (p *PortConn) SetWriteDeadline(time.Time) error { return errors.ErrUnsuppor
 
 // drain relays guest bytes into the pipe; a relay dropped before its terminal frame ends in drainData's truncation error, not EOF.
 func (p *PortConn) drain(ctx context.Context, pw *io.PipeWriter) {
+	unarm := context.AfterFunc(ctx, func() { _ = pw.CloseWithError(ctx.Err()) })
+	defer unarm()
 	_ = pw.CloseWithError(drainData(ctx, p.conn, func(b []byte) error {
 		_, err := pw.Write(b)
 		return err
