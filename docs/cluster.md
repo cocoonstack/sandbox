@@ -762,7 +762,9 @@ at a node that does not hold the record runs a tier order:
 `Checkpoint.Delete` (`DELETE /v1/checkpoints/{id}`) removes the local
 record, then best-effort broadcasts the delete to every peer this node
 currently sees, so a replica a heal pulled earlier is cleaned up too, not
-just the original. A peer that is offline, partitioned or not yet joined during
+just the original. A mesh without a `cluster_key` sends no broadcast: the
+request carries the `api_token`, and heal, the only source of a replica, needs
+the key. A peer that is offline, partitioned or not yet joined during
 that broadcast keeps its copy until the checkpoint TTL ages it out. A healed
 replica carries the source checkpoint's original `CreatedAt`, so it becomes
 eligible for expiry at the same instant everywhere; each node then removes

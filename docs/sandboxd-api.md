@@ -1057,7 +1057,10 @@ checkpoint TTL ages it out, so an id-holder can still branch it for that
 window; [placement lifecycle](cluster.md#delete-is-eventual-not-a-fleet-wide-revocation)
 has the bound and why heal requires a nonzero, fleet-matching TTL. The s3
 checkpoint store skips the broadcast: every node already resolves every
-record directly, so there is no replica to chase. `?no_forward=1` marks a
+record directly, so there is no replica to chase. A mesh without a
+`cluster_key` skips it too: it has no healed replica, and the broadcast would
+send the `api_token` to addresses learned from unauthenticated gossip.
+`?no_forward=1` marks a
 delete already arriving from another node's own broadcast, so it is not
 itself re-broadcast (loop prevention); it is an internal parameter, not one
 an SDK caller should set.

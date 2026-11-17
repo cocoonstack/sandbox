@@ -129,6 +129,8 @@ func main() {
 		clusterKey, _ := cfg.Mesh.DecodedKey()
 		if len(clusterKey) > 0 {
 			probeKey = peer.DeriveProbeKey(clusterKey)
+			broadcaster := &peer.Broadcaster{Peers: msh.PeerAddrs, Token: cfg.APIToken}
+			mgr.WithPeerDelete(broadcaster.Delete)
 		}
 		httpProber := &peer.HTTPProber{Peers: msh.PeerAddrs, ProbeKey: probeKey}
 		if !cfg.S3Checkpoints() {
@@ -137,8 +139,6 @@ func main() {
 		mgr.WithPeerHeal(cfg.CheckpointPeerHeal, func(id string) []string {
 			return httpProber.HealOwners(ctx, id)
 		}, &peer.HTTPPuller{Token: cfg.APIToken})
-		broadcaster := &peer.Broadcaster{Peers: msh.PeerAddrs, Token: cfg.APIToken}
-		mgr.WithPeerDelete(broadcaster.Delete)
 		adopter := &peer.Adopter{Peers: msh.PeerAddrs, Token: cfg.APIToken}
 		mgr.WithPeerAdopt(adopter.Adopt)
 		go gossipNodeState(ctx, msh, mgr)
