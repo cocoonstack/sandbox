@@ -368,9 +368,8 @@ where
     R: AsyncBufRead + Unpin,
 {
     let mut line = Vec::new();
-    let mut data = Vec::new();
     while let Ok(true) = proto::read_frame_into(&mut reader, &mut line).await {
-        let req = match proto::parse_request(&line, &mut data) {
+        let req = match proto::parse_request(&line, &mut Vec::new()) {
             Ok(req) if req.is_continuation() => req,
             parsed => return (reader, Some(parsed)),
         };
