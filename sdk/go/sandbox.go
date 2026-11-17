@@ -119,12 +119,12 @@ func (s *Sandbox) Token() string {
 	return s.token
 }
 
-// Exec runs argv to completion and returns its stdout; a non-zero exit surfaces as *ExitError carrying stderr, alongside the partial stdout.
+// Exec runs argv to completion and returns its stdout; a non-zero exit surfaces as *ExitError carrying stderr, and every error comes with the stdout read so far.
 func (s *Sandbox) Exec(ctx context.Context, argv ...string) (string, error) {
 	var stdout, stderr strings.Builder
 	code, err := s.Run(ctx, Cmd{Argv: argv, Stdout: &stdout, Stderr: &stderr})
 	if err != nil {
-		return "", err
+		return stdout.String(), err
 	}
 	if code != 0 {
 		return stdout.String(), &ExitError{Code: code, Stderr: stderr.String()}

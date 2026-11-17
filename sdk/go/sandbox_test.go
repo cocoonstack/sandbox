@@ -53,6 +53,25 @@ func TestExecSurfacesErrorFrame(t *testing.T) {
 	}
 }
 
+func TestExecReturnsThePartialStdoutOnATransportError(t *testing.T) {
+	sb := testSandbox(t, newAgentServer(t, func(conn net.Conn) {
+		defer conn.Close()
+		if _, err := bufio.NewReader(conn).ReadString('\n'); err != nil {
+			t.Errorf("read exec request: %v", err)
+			return
+		}
+		_, _ = io.WriteString(conn, `{"type":"started","pid":7}`+"\n"+`{"type":"stdout","data":"NDIK"}`+"\n")
+	}))
+
+	out, err := sb.Exec(t.Context(), "echo", "42")
+	if !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Fatalf("Exec error %v, want the dropped connection", err)
+	}
+	if out != "42\n" {
+		t.Errorf("stdout %q, want the 42\\n read before the drop", out)
+	}
+}
+
 func TestRunStreamsStdin(t *testing.T) {
 	sb := testSandbox(t, newAgentServer(t, silkdtest.ServeConn))
 
