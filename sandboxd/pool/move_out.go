@@ -265,10 +265,10 @@ func (m *Manager) unrowForMove(ctx context.Context, sb *types.Sandbox, mv *outMo
 	if err != nil {
 		return err
 	}
+	mv.replica = replica
 	if err = m.archives.Delete(ctx, sb.ID, consumed); err != nil && !errors.Is(err, archives.ErrLost) {
 		return err
 	}
-	mv.replica = replica
 	return nil
 }
 

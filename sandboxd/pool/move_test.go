@@ -591,6 +591,7 @@ func TestMoveWhoseRowDeleteReplyIsLostKeepsTheOnlyGuest(t *testing.T) {
 	mc := newMoveClusterWith(t, func(c *failoverCluster) { c.replicate = replicateEvery })
 	sb := mustClaim(t, mc.s, testKey)
 	replicateNow(t, mc.s, sb)
+	replica := mc.s.replicaOf(sb)
 	mc.s.archives = &hookRegistry{Registry: mc.reg, loseDeleteReply: true}
 	if _, err := mc.s.Move(t.Context(), sb.ID, "b", time.Minute); !errors.Is(err, archives.ErrUnavailable) {
 		t.Fatalf("move: %v, want the lost reply's error", err)
@@ -598,6 +599,9 @@ func TestMoveWhoseRowDeleteReplyIsLostKeepsTheOnlyGuest(t *testing.T) {
 	assertStillOnSource(t, mc, sb)
 	if _, ok, _ := mc.reg.Get(t.Context(), sb.ID); ok {
 		t.Fatal("the delete did not land under its lost reply")
+	}
+	if ckExists(t, mc.s, replica) {
+		t.Error("the failed move kept the replica its claim no longer names")
 	}
 	replicateNow(t, mc.s, sb)
 	if _, held := mc.s.byID(sb.ID); !held {
