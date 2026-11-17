@@ -188,7 +188,7 @@ func (f *flows) outbound(p Packet, n int, now time.Time) Drop {
 			return drop
 		}
 		f.mu.RUnlock()
-		if f.open(key, now) == nil {
+		if f.open(key, now, false) == nil {
 			break
 		}
 	}
@@ -209,7 +209,7 @@ func (f *flows) inbound(p Packet, frame []byte, n int, now time.Time) Drop {
 		if !f.allow(p.Src, p.SrcPort) {
 			return DropPolicy
 		}
-		if f.open(flowKey{proto: ProtoTCP, dst: p.Src, dport: p.SrcPort, sport: p.DstPort}, now) == nil {
+		if f.open(flowKey{proto: ProtoTCP, dst: p.Src, dport: p.SrcPort, sport: p.DstPort}, now, true) == nil {
 			return DropLimit
 		}
 	}
@@ -268,7 +268,7 @@ func (f *flows) setRates(up, down float64) {
 	f.down.setBytes(cmp.Or(down, f.limits.BytesPerSecond))
 }
 
-func (f *flows) open(key flowKey, now time.Time) *flow {
+func (f *flows) open(key flowKey, now time.Time, resumed bool) *flow {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if fl := f.table[key]; fl != nil {
@@ -280,7 +280,7 @@ func (f *flows) open(key flowKey, now time.Time) *flow {
 	if f.newFlows != nil && !f.newFlows.AllowN(now, 1) {
 		return nil
 	}
-	fl := &flow{allowed: f.allow(key.dst, key.dport), start: now, reported: now}
+	fl := &flow{allowed: resumed || f.allow(key.dst, key.dport), start: now, reported: now}
 	fl.last.Store(now.UnixNano())
 	f.table[key] = fl
 	if fl.allowed {

@@ -373,6 +373,23 @@ func TestRouterResumesAStreamOpenedBeforeTheArmButRefusesAnOpener(t *testing.T) 
 	})
 }
 
+func TestRouterJudgesAResumedFlowOnce(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		u, r := newRouter(t)
+		var asked atomic.Int32
+		r.Arm(Claim{ID: "c1", Addr: claimAddr, Allow: func(netip.Addr, uint16) bool { asked.Add(1); return true }})
+		u.sent(t)
+		guest := serve(t, r, claimAddr)
+		guestHello(t, guest)
+		synctest.Wait()
+		u.inject(t, reply(remote))
+		readFrame(t, guest)
+		if n := asked.Load(); n != 1 {
+			t.Fatalf("the policy was asked %d times for one resumed segment, want once", n)
+		}
+	})
+}
+
 func TestRouterKeepsTheMTUAStreamWasToldUntilItsNextHello(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		u, r := newRouter(t)
