@@ -588,7 +588,7 @@ silkd's `not_found`; ignore it in a deferred cleanup.
 
 ```go
 err  := sb.WriteFile(ctx, "/work/a.txt", data, nil)   // atomic; *uint32 mode optional
-data, err := sb.ReadFile(ctx, "/work/a.txt")
+got, err := sb.ReadFile(ctx, "/work/a.txt")
 err  = sb.ReadFileTo(ctx, "/work/big.bin", w)          // streams into an io.Writer
 ents, err := sb.ListDir(ctx, "/work")                  // []wire.DirEntry{Name,Kind,Size}
 info, err := sb.Stat(ctx, "/work/a.txt")               // wire.FileInfo{Kind,Size,Mode,MtimeEpochSecs}
@@ -677,10 +677,10 @@ not allow the git host fails them with git's own error.
 ```go
 pty, err := sb.OpenPty(ctx, wire.PtyOpen{Cols: 120, Rows: 40})
 defer pty.Close()
+err = pty.Resize(ctx, 200, 50)
 pty.Write([]byte("make test\n"))
 io.Copy(os.Stdout, pty)                   // EOF when the shell exits
 code, ok := pty.ExitCode()
-err = pty.Resize(ctx, 200, 50)
 ```
 
 A PTY is a tracked guest process (`pty.PID`); closing the handle (or the

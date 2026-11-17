@@ -8,6 +8,7 @@ client, _ := sandbox.Connect("10.0.0.5:7777", sandbox.WithAPIToken("..."))
 sb, _ := client.New(ctx, "ghcr.io/cocoonstack/sandbox/rt:24.04")
 defer sb.Close()
 out, _ := sb.Exec(ctx, "echo", "hello")
+fmt.Print(out)
 ```
 
 - `client.go` — claim/redirect follow, `Lookup` scatter, template delete
