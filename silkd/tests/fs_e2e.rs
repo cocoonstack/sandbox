@@ -3,12 +3,17 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 mod common;
 
+use std::io::Read;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
+use std::sync::Arc;
+use std::time::Instant;
 
 use nix::sys::stat::Mode;
 use serde_json::{Value, json};
+use silkd::server::State;
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
-use common::{assert_error, b64, data_frames, exchange, payload, request, type_of};
+use common::{assert_error, b64, data_frames, exchange, payload, request, send, type_of};
 
 async fn fs_write(req: Value, body: &[u8]) -> Vec<Value> {
     let mut lines = vec![req.to_string()];
@@ -291,5 +296,81 @@ async fn failed_overwrite_preserves_original() {
         std::fs::read(&path).unwrap(),
         b"ORIGINAL",
         "a failed overwrite must not clobber the original"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_large_file_round_trips_and_reports_its_throughput() {
+    const CHUNK: usize = 256 * 1024;
+    const DONE: &[u8] = b"{\"type\":\"done\"}\n";
+    let mib: usize = std::env::var("SILKD_BENCH_MIB")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(8);
+    let chunks = mib * (1 << 20) / CHUNK;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("big");
+    let pattern: Vec<u8> = (0..CHUNK).map(|i| (i * 31 + i / 7) as u8).collect();
+    let encoded = b64(&pattern);
+    let upload = format!("{{\"v\":1,\"op\":\"data\",\"data\":\"{encoded}\"}}\n");
+    let download = format!("{{\"type\":\"data\",\"data\":\"{encoded}\"}}\n");
+
+    let (client, server) = tokio::io::duplex(1 << 20);
+    let (sr, sw) = tokio::io::split(server);
+    let state = Arc::new(State::new());
+    tokio::spawn(async move {
+        state
+            .serve(BufReader::with_capacity(64 * 1024, sr), sw)
+            .await
+    });
+    let (cr, mut cw) = tokio::io::split(client);
+    let mut cr = BufReader::with_capacity(64 * 1024, cr);
+    let mut line = Vec::new();
+
+    let start = Instant::now();
+    send(
+        &mut cw,
+        json!({"op":"fs_write","path":path.to_str().unwrap()}),
+    )
+    .await;
+    for _ in 0..chunks {
+        cw.write_all(upload.as_bytes()).await.unwrap();
+    }
+    send(&mut cw, json!({"op":"data_end"})).await;
+    cr.read_until(b'\n', &mut line).await.unwrap();
+    let wrote = start.elapsed();
+    assert_eq!(line, DONE, "{}", String::from_utf8_lossy(&line));
+
+    let mut file = std::fs::File::open(&path).unwrap();
+    assert_eq!(file.metadata().unwrap().len(), (chunks * CHUNK) as u64);
+    let mut buf = vec![0u8; CHUNK];
+    for chunk in 0..chunks {
+        file.read_exact(&mut buf).unwrap();
+        assert!(buf == pattern, "written chunk {chunk} differs");
+    }
+
+    let start = Instant::now();
+    send(
+        &mut cw,
+        json!({"op":"fs_read","path":path.to_str().unwrap()}),
+    )
+    .await;
+    let mut frames = 0;
+    loop {
+        line.clear();
+        cr.read_until(b'\n', &mut line).await.unwrap();
+        if line == DONE {
+            break;
+        }
+        assert!(line == download.as_bytes(), "read frame {frames} differs");
+        frames += 1;
+    }
+    let read = start.elapsed();
+    assert_eq!(frames, chunks);
+
+    println!(
+        "fs_write {:.0} MiB/s, fs_read {:.0} MiB/s over {mib} MiB",
+        mib as f64 / wrote.as_secs_f64(),
+        mib as f64 / read.as_secs_f64()
     );
 }

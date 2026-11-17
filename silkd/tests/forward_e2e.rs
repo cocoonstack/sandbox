@@ -74,6 +74,30 @@ async fn half_close_listener() -> (u16, oneshot::Receiver<Vec<u8>>) {
     (port, rx)
 }
 
+async fn quiet_listener() -> (u16, oneshot::Receiver<Vec<u8>>) {
+    let (listener, port) = bind_local().await;
+    let (tx, rx) = oneshot::channel();
+    tokio::spawn(async move {
+        let (conn, _) = listener.accept().await.expect("accept");
+        let (mut r, _w) = conn.into_split();
+        let mut got = Vec::new();
+        let _ = r.read_to_end(&mut got).await;
+        let _ = tx.send(got);
+        std::future::pending::<()>().await;
+    });
+    (port, rx)
+}
+
+async fn reply_at_eof_listener() -> u16 {
+    let (listener, port) = bind_local().await;
+    tokio::spawn(async move {
+        let (mut conn, _) = listener.accept().await.expect("accept");
+        let _ = conn.read_to_end(&mut Vec::new()).await;
+        conn.write_all(b"reply").await.expect("reply");
+    });
+    port
+}
+
 #[tokio::test]
 async fn forward_round_trips_and_done_on_server_close() {
     under_deadline(async {
@@ -202,6 +226,60 @@ async fn forward_split_requests_do_not_wait_on_delayed_acks() {
             elapsed < Duration::from_secs(5),
             "200 split requests took {elapsed:?}: the guest-side write waits on delayed ACKs"
         );
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_dropped_client_ends_the_forward_to_a_quiet_guest() {
+    under_deadline(async {
+        let (port, got) = quiet_listener().await;
+        let state = Arc::new(State::new());
+        let (mut cw, mut lines, handle) =
+            connect_with(&state, json!({"v":1,"op":"port_forward","port":port})).await;
+        expect_frame(&mut lines, "ready").await;
+        send(
+            &mut cw,
+            json!({"v":1,"op":"data","data":b64(b"last words")}),
+        )
+        .await;
+        drop((cw, lines));
+
+        assert_eq!(got.await.expect("guest read to EOF"), b"last words");
+        handle.await.expect("serve task").expect("serve");
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_client_dropped_after_data_end_ends_the_forward_to_a_quiet_guest() {
+    under_deadline(async {
+        let (port, got) = quiet_listener().await;
+        let state = Arc::new(State::new());
+        let (mut cw, mut lines, handle) =
+            connect_with(&state, json!({"v":1,"op":"port_forward","port":port})).await;
+        expect_frame(&mut lines, "ready").await;
+        send(&mut cw, json!({"v":1,"op":"data_end"})).await;
+        assert_eq!(got.await.expect("guest read to EOF"), b"");
+        drop((cw, lines));
+
+        handle.await.expect("serve task").expect("serve");
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn data_end_keeps_relaying_what_the_guest_answers() {
+    under_deadline(async {
+        let port = reply_at_eof_listener().await;
+        let state = Arc::new(State::new());
+        let (mut cw, mut lines) = forwarded(&state, port).await;
+
+        send(&mut cw, json!({"v":1,"op":"data","data":b64(b"ask")})).await;
+        send(&mut cw, json!({"v":1,"op":"data_end"})).await;
+        let reply = expect_frame(&mut lines, "data").await;
+        assert_eq!(decode(&reply), b"reply");
+        expect_frame(&mut lines, "done").await;
     })
     .await;
 }

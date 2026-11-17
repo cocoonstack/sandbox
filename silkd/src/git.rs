@@ -30,16 +30,19 @@ pub async fn clone<W: AsyncWrite + Unpin>(
         depth_arg = d.to_string();
         args.extend(["--depth", &depth_arg]);
     }
-    args.push(url);
-    args.push(path);
+    args.extend(["--", url, path]);
     // clone has no repo dir yet.
-    let out = git(".", auth, &args).await?;
+    let Some(out) = git(w, ".", auth, &args).await? else {
+        return Ok(());
+    };
     terminal(w, "clone", &out).await
 }
 
 /// Reports branch, ahead/behind, and per-file status from porcelain v2.
 pub async fn status<W: AsyncWrite + Unpin>(w: &mut W, path: &str) -> std::io::Result<()> {
-    let out = git(path, None, &["status", "--porcelain=v2", "--branch"]).await?;
+    let Some(out) = git(w, path, None, &["status", "--porcelain=v2", "--branch"]).await? else {
+        return Ok(());
+    };
     if !out.status.success() {
         return terminal(w, "status", &out).await;
     }
@@ -54,7 +57,9 @@ pub async fn add<W: AsyncWrite + Unpin>(
 ) -> std::io::Result<()> {
     let mut args = vec!["add", "--"];
     args.extend(files.iter().map(String::as_str));
-    let out = git(path, None, &args).await?;
+    let Some(out) = git(w, path, None, &args).await? else {
+        return Ok(());
+    };
     terminal(w, "add", &out).await
 }
 
@@ -70,14 +75,16 @@ pub async fn commit<W: AsyncWrite + Unpin>(
     let mut cmd = git_cmd(path, None);
     cmd.env("GIT_COMMITTER_NAME", name)
         .env("GIT_COMMITTER_EMAIL", email);
-    let out = cmd
-        .args(["commit", "--author", author, "-m", message])
-        .output()
-        .await?;
+    let commit = cmd.args(["commit", "--author", author, "-m", message]);
+    let Some(out) = output(w, commit).await? else {
+        return Ok(());
+    };
     if !out.status.success() {
         return terminal(w, "commit", &out).await;
     }
-    let rev = git(path, None, &["rev-parse", "HEAD"]).await?;
+    let Some(rev) = git(w, path, None, &["rev-parse", "HEAD"]).await? else {
+        return Ok(());
+    };
     if !rev.status.success() {
         return terminal(w, "rev-parse", &rev).await;
     }
@@ -92,7 +99,9 @@ pub async fn net_verb<W: AsyncWrite + Unpin>(
     auth: Option<&str>,
     verb: &str,
 ) -> std::io::Result<()> {
-    let out = git(path, auth, &[verb]).await?;
+    let Some(out) = git(w, path, auth, &[verb]).await? else {
+        return Ok(());
+    };
     terminal(w, verb, &out).await
 }
 
@@ -112,13 +121,17 @@ pub async fn branch<W: AsyncWrite + Unpin>(
         (GitBranchOp::Delete, Some(name)) => vec!["branch", "-D", name],
         (GitBranchOp::Checkout, Some(name)) => vec!["checkout", name],
     };
-    let out = git(path, None, &args).await?;
+    let Some(out) = git(w, path, None, &args).await? else {
+        return Ok(());
+    };
     terminal(w, "branch", &out).await
 }
 
 /// Reports every local branch and the checked-out one.
 async fn list_branches<W: AsyncWrite + Unpin>(w: &mut W, path: &str) -> std::io::Result<()> {
-    let out = git(path, None, &["branch", "--format=%(refname:short)"]).await?;
+    let Some(out) = git(w, path, None, &["branch", "--format=%(refname:short)"]).await? else {
+        return Ok(());
+    };
     if !out.status.success() {
         return terminal(w, "branch", &out).await;
     }
@@ -126,7 +139,9 @@ async fn list_branches<W: AsyncWrite + Unpin>(w: &mut W, path: &str) -> std::io:
         .lines()
         .map(str::to_string)
         .collect();
-    let cur = git(path, None, &["symbolic-ref", "--short", "-q", "HEAD"]).await?;
+    let Some(cur) = git(w, path, None, &["symbolic-ref", "--short", "-q", "HEAD"]).await? else {
+        return Ok(());
+    };
     let current = match String::from_utf8_lossy(&cur.stdout).trim() {
         "" => "HEAD".to_string(),
         name => name.to_string(),
@@ -148,12 +163,23 @@ fn git_cmd(dir: &str, auth: Option<&str>) -> Command {
     cmd
 }
 
-async fn git(
+async fn git<W: AsyncWrite + Unpin>(
+    w: &mut W,
     dir: &str,
     auth: Option<&str>,
     args: &[&str],
-) -> std::io::Result<std::process::Output> {
-    git_cmd(dir, auth).args(args).output().await
+) -> std::io::Result<Option<std::process::Output>> {
+    output(w, git_cmd(dir, auth).args(args)).await
+}
+
+async fn output<W: AsyncWrite + Unpin>(
+    w: &mut W,
+    cmd: &mut Command,
+) -> std::io::Result<Option<std::process::Output>> {
+    match cmd.output().await {
+        Ok(out) => Ok(Some(out)),
+        Err(e) => proto::err_frame(w, &e, "spawn git").await.map(|()| None),
+    }
 }
 
 fn apply_config(cmd: &mut Command, auth: Option<&str>) {

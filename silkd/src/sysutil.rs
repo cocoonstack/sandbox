@@ -130,14 +130,11 @@ pub fn apply_owner(cmd: &mut Command, path: &str) {
     }
 }
 
-pub fn start_in(cmd: &mut Command, dir: &OwnedFd) {
-    let fd = dir.as_raw_fd();
-    // SAFETY: fchdir is async-signal-safe and `dir` outlives the spawn that runs this hook.
-    unsafe {
-        cmd.pre_exec(move || {
-            nix::unistd::fchdir(BorrowedFd::borrow_raw(fd)).map_err(std::io::Error::from)
-        })
-    };
+pub fn start_in(cmd: &mut Command, dir: &OwnedFd) -> std::io::Result<()> {
+    let dir = dir.try_clone()?;
+    // SAFETY: fchdir is async-signal-safe and the hook owns `dir`, so the fd is open at every spawn.
+    unsafe { cmd.pre_exec(move || nix::unistd::fchdir(&dir).map_err(std::io::Error::from)) };
+    Ok(())
 }
 
 /// Opens a pty, returning the (master, slave) fds; both are close-on-exec from birth and the master is non-blocking.
@@ -617,6 +614,20 @@ fn check(rc: libc::c_int) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn start_in_holds_its_directory_after_the_callers_fd_closes() {
+        let dir = tempfile::tempdir().unwrap();
+        let fd = OwnedFd::from(std::fs::File::open(dir.path()).unwrap());
+        let mut cmd = Command::new("pwd");
+        start_in(&mut cmd, &fd).unwrap();
+        drop(fd);
+        let out = cmd.output().await.unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout).trim(),
+            dir.path().canonicalize().unwrap().to_string_lossy()
+        );
+    }
 
     #[test]
     fn openpty_fds_are_close_on_exec_and_the_master_non_blocking() {

@@ -58,16 +58,12 @@ pub async fn read<W: AsyncWrite + Unpin>(w: &mut W, path: String) -> io::Result<
         if !meta.is_file() {
             return Ok(None);
         }
-        let mut head = Vec::with_capacity(meta.len().min(BULK_CHUNK as u64) as usize);
-        let read = (&file)
-            .take(BULK_CHUNK as u64)
-            .read_to_end(&mut head)
-            .map(|_| head);
+        let read = read_chunk(&file, meta.len().min(BULK_CHUNK as u64) as usize);
         Ok::<_, io::Error>(Some((file, read)))
     })
     .await
     .map_err(io::Error::other)?;
-    let (file, mut head) = match opened {
+    let (file, head) = match opened {
         Ok(Some((file, Ok(head)))) => (file, head),
         Ok(Some((_, Err(e)))) => return err_frame(w, &e, "read").await,
         Ok(None) => {
@@ -79,12 +75,25 @@ pub async fn read<W: AsyncWrite + Unpin>(w: &mut W, path: String) -> io::Result<
     if !head.is_empty() {
         proto::write_chunk_frame(w, &mut frame, "data", &head).await?;
     }
-    if head.len() == BULK_CHUNK
-        && let Err(e) =
-            proto::stream_data_frames(&mut fs::File::from_std(file), w, &mut head, &mut frame)
-                .await?
-    {
-        return err_frame(w, &e, "read").await;
+    if head.len() == BULK_CHUNK {
+        let (tx, mut rx) = mpsc::channel(2);
+        let rest = tokio::task::spawn_blocking(move || {
+            loop {
+                let chunk = read_chunk(&file, BULK_CHUNK);
+                let more = chunk.as_ref().is_ok_and(|c| c.len() == BULK_CHUNK);
+                if tx.blocking_send(chunk).is_err() || !more {
+                    return;
+                }
+            }
+        });
+        while let Some(chunk) = rx.recv().await {
+            match chunk {
+                Ok(chunk) if chunk.is_empty() => {}
+                Ok(chunk) => proto::write_chunk_frame(w, &mut frame, "data", &chunk).await?,
+                Err(e) => return err_frame(w, &e, "read").await,
+            }
+        }
+        rest.await.map_err(io::Error::other)?;
     }
     proto::write_frame(w, &Response::Done).await
 }
@@ -112,7 +121,7 @@ pub async fn list<W: AsyncWrite + Unpin>(w: &mut W, path: String) -> io::Result<
     }
 }
 
-/// Writes `bytes` to `path` via a sibling temp file, so a crash never leaves a truncated file.
+/// Writes `bytes` to `path` via a sibling temp file renamed into place, so a reader never sees a partial file.
 pub async fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
     let (tmp, mut file) = create_tmp(path, None).await?;
     let written = match file.write_all(bytes).await {
@@ -213,6 +222,13 @@ fn scan_dir(path: &str, tx: &mpsc::Sender<Vec<DirEntry>>) -> io::Result<()> {
         let _ = tx.blocking_send(entries);
     }
     Ok(())
+}
+
+fn read_chunk(file: &std::fs::File, capacity: usize) -> io::Result<Vec<u8>> {
+    let mut chunk = Vec::with_capacity(capacity);
+    file.take(BULK_CHUNK as u64)
+        .read_to_end(&mut chunk)
+        .map(|_| chunk)
 }
 
 fn tmp_name(path: &Path) -> PathBuf {

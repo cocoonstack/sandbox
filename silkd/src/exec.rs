@@ -4,7 +4,7 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 use std::time::Duration;
 
 use nix::unistd::{AccessFlags, access};
@@ -83,17 +83,12 @@ where
     let (pump_fg, sup_fg) = (!req.detach).then(|| (fg_tx.clone(), fg_tx)).unzip();
 
     let mut pump = tokio::spawn(pump_out(Arc::clone(&proc), stdout, stderr, pump_fg));
-    let pump_abort = pump.abort_handle();
     // stdin rides its own task so a slow write cannot stall output or reaping.
     let stdin_task = tokio::spawn(pump_stdin(stdin.filter(|_| !req.detach), client));
 
-    // record the reaped code before the drain: an abort mid-drain must publish the real code, not -1.
-    let reaped: Arc<OnceLock<i32>> = Arc::new(OnceLock::new());
-    let sup_reaped = Arc::clone(&reaped);
     let sup_proc = Arc::clone(&proc);
     let supervise = tokio::spawn(async move {
         let code = child.wait().await.map_or(-1, sysutil::exit_code);
-        let _ = sup_reaped.set(code);
         if timeout(POST_EXIT_DRAIN, &mut pump).await.is_err() {
             pump.abort();
         }
@@ -116,17 +111,12 @@ where
     }
 
     if let Err(e) = stream_to_client(&mut fg_rx, out).await {
-        // client gone: publish the terminal state the abort pre-empts, else an attacher waits forever.
         if proc.exit_code().is_none() {
             sysutil::signal_group(pid, libc::SIGKILL);
         }
-        supervise.abort();
-        pump_abort.abort();
+        drop(fg_rx);
         stdin_task.abort();
         let _ = supervise.await;
-        if proc.exit_code().is_none() {
-            proc.finish(reaped.get().copied().unwrap_or(-1));
-        }
         table.remove_if(pid, &proc);
         return Err(e);
     }

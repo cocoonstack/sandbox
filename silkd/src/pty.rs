@@ -87,13 +87,11 @@ pub async fn open<W: AsyncWrite + Unpin>(
     let master: Master = match sysutil::watch_fd(master) {
         Ok(m) => Arc::new(m),
         Err(e) => {
-            let _ = child.start_kill();
             table.remove_if(pid, &proc);
             return proto::err_frame(out, &e, "watch pty master").await;
         }
     };
     if let Err(e) = proto::write_frame(out, &Response::Started { pid }).await {
-        let _ = child.start_kill();
         proc.finish(-1);
         table.remove_if(pid, &proc);
         return Err(e);
