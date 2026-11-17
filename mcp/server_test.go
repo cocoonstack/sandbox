@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/base64"
-	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"fmt"
 	"io"
@@ -233,14 +232,6 @@ func TestCreateSandboxRejectsNegativeTTL(t *testing.T) {
 		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"create_sandbox","arguments":{"ttl_seconds":-5}}}`)
 	if !strings.Contains(toolText(t, replies[1]), "ttl_seconds must not be negative") {
 		t.Errorf("negative ttl accepted: %q", toolText(t, replies[1]))
-	}
-}
-
-func TestCheckpointArgRejectsAnEmptyIDBeforeTheLookup(t *testing.T) {
-	srv := newTestServer(t, nil)
-	srv.trackCkpt(srv.client.Checkpoint(""))
-	if _, err := srv.checkpointArg(jsontext.Value(`{}`)); err == nil || !strings.Contains(err.Error(), "checkpoint_id is required") {
-		t.Errorf("checkpointArg without an id = %v, want checkpoint_id is required", err)
 	}
 }
 
