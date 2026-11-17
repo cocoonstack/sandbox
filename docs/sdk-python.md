@@ -577,6 +577,8 @@ zero. `undrain()` lifts only a drain and `uncordon()` only a
 `SandboxError` is the base; catch the narrowest type you handle:
 
 - `APIError(verb, status, message)` — control plane (HTTP status)
+- `VolumeError` — an `APIError` from a volume call; `.response` holds the
+  complete failure view when the node returned one
 - `SilkdError(kind, message)` — typed guest failure; `kind` is
   `bad_request` (including a spawn the guest cannot start: missing binary, a
   cwd that is not a directory, no exec bit, a `user` the guest cannot
