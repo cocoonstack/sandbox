@@ -378,7 +378,6 @@ type Manager struct {
 	claimed         map[string]*types.Sandbox
 	claimedVMs      map[string]*types.Sandbox
 	pendingRemovals map[string]pendingRemoval
-	tunReleases     map[string]netip.Addr
 	// moving holds this node's outgoing moves, incoming its reservations for moves to it; neither enters claimed.
 	moving   map[string]*outMove
 	incoming map[string]*inMove
@@ -432,7 +431,6 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 		claimed:         map[string]*types.Sandbox{},
 		claimedVMs:      map[string]*types.Sandbox{},
 		pendingRemovals: map[string]pendingRemoval{},
-		tunReleases:     map[string]netip.Addr{},
 		moving:          map[string]*outMove{},
 		incoming:        map[string]*inMove{},
 		heldTenants:     map[string]int{},
@@ -573,7 +571,6 @@ func (m *Manager) Run(ctx context.Context) {
 			if m.moves != nil {
 				go m.sweepStaleMoves(ctx, time.Now())
 			}
-			go m.retryTunReleases(ctx)
 			go m.reconcileTunAddrs(ctx)
 		}
 	}
