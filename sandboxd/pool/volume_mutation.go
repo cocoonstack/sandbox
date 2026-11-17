@@ -125,7 +125,11 @@ func (m *Manager) changeVolumes(ctx context.Context, id, tenant string, change v
 		}
 	}
 	failedName = ""
-	if err = m.prepareVolumeTarget(ctx, sb, run, target, additions, resolved); err != nil {
+	js, changed, err := m.stageVolumeTarget(ctx, sb, run, target, additions, resolved)
+	if err == nil && changed {
+		err = m.commitVolumeRun(ctx, sb, run, js)
+	}
+	if err != nil {
 		return view, err
 	}
 	m.mu.Lock()
@@ -250,14 +254,6 @@ func (m *Manager) cancelVolumeRun(sb *types.Sandbox) []types.Volume {
 		return slices.Clone(run.holds)
 	}
 	return heldVolumes(sb)
-}
-
-func (m *Manager) prepareVolumeTarget(ctx context.Context, sb *types.Sandbox, run *volumeRun, target, additions []types.Volume, resolved []resolvedVolume) error {
-	js, changed, err := m.stageVolumeTarget(ctx, sb, run, target, additions, resolved)
-	if err != nil || !changed {
-		return err
-	}
-	return m.commitVolumeRun(ctx, sb, run, js)
 }
 
 func (m *Manager) stageVolumeTarget(ctx context.Context, sb *types.Sandbox, run *volumeRun, target, additions []types.Volume, resolved []resolvedVolume) (claimSnapshot, bool, error) {

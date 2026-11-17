@@ -85,8 +85,12 @@ func TestReaddedDetachIsPendingAtTheDurableIntentBoundary(t *testing.T) {
 		t.Fatalf("beginVolumeRun: %v", err)
 	}
 	target = slices.Clone(sb.Volumes)
-	if checkErr := m.prepareVolumeTarget(ctx, sb, run, target, nil, nil); checkErr != nil {
-		t.Fatalf("prepareVolumeTarget: %v", checkErr)
+	js, changed, err := m.stageVolumeTarget(ctx, sb, run, target, nil, nil)
+	if err != nil || !changed {
+		t.Fatalf("stageVolumeTarget: changed %v, %v, want the re-added volume staged", changed, err)
+	}
+	if err = m.commitVolumeRun(ctx, sb, run, js); err != nil {
+		t.Fatalf("commitVolumeRun: %v", err)
 	}
 	m.finishVolumeRun(sb, run)
 	m2 := newVolumeManagerAt(t, eng, m.dataDir, catalog)
@@ -125,7 +129,7 @@ func TestReleaseBeforeReservationDoesNotLeakAdmission(t *testing.T) {
 		t.Fatalf("Release: %v", err)
 	}
 	target := []types.Volume{{Name: "data", Mount: "/volumes/data"}}
-	if err := m.prepareVolumeTarget(ctx, sb, run, target, target, nil); err == nil {
+	if _, _, err := m.stageVolumeTarget(ctx, sb, run, target, target, nil); err == nil {
 		t.Fatal("released claim admitted volume")
 	}
 	m.finishVolumeRun(sb, run)
