@@ -1,7 +1,7 @@
 # Benchmarks
 
-Every number this project publishes is reproducible with one command on
-your own hardware. This page defines exactly what each number measures —
+Every claim-tier and data-plane number in the results log below is
+reproducible with one command on your own hardware. This page defines exactly what each number measures —
 because in this market most published "cold start" figures do not measure
 a cold start — and hosts the dated results log. The analysis behind the
 numbers (Cloud Hypervisor lifecycle, boot anatomy, hibernate costs) lives in
@@ -69,7 +69,8 @@ unpooled template, then measures the data plane (`fs_stat` round-trips via
 (dial per RPC) and C (the current SDK keep-alive path); `make bench` keeps A
 in its table so new runs remain comparable with the dated log below. It
 prints a markdown table stamped with the host evidence: virtualization
-(`systemd-detect-virt`), CPU, kernel, cocoon version, image digest.
+(`systemd-detect-virt`), CPU, kernel, cpufreq policy, the cocoon and sandboxd
+versions, and the image digest.
 On exit it removes every `sbx-*` VM on the cocoon root, a serving
 sandboxd's claims included, so run it only on a node that serves no claims.
 The daemon also reclaims every `sbx-` VM at start.

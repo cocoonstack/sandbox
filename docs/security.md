@@ -71,7 +71,8 @@ all of them.
    ([TLS for SDK clients](deploy.md#tls-for-sdk-clients)). The only surface
    designed to face a browser is the preview listener, and it belongs behind a
    TLS-terminating proxy ([deploy](deploy.md#preview-urls)). Never expose
-   `listen` itself publicly.
+   `listen` itself publicly. A node without `api_token` authenticates no
+   node-level call.
 2. **One sandboxd per host** ([why](egress.md#deployment-constraints)).
 3. **A cell is the boundary of a host compromise.** Every node of a
    [cell](cluster.md#cells) holds the cell's credentials, so host root on one
@@ -146,8 +147,8 @@ operator token reaches every claim's data — it reads any claim's token by id
 and execs in any claim — and, through the tenant API, every tenant's
 authority: it can mint or re-key any tenant and act as it, including volume
 claims that tenant may make. Its own bearer cannot claim volumes, it holds no
-node or cluster configuration power, and it leaves an audit record (op
-`token`) for each token it reads. A set `api_token_next` or `operator_token_next` carries
+node or cluster configuration power, and with `audit_log` on it leaves an
+audit record (op `token`) for each token it reads. A set `api_token_next` or `operator_token_next` carries
 exactly the authority of `api_token` or `operator_token`, so a node accepts the
 old and the new token during a
 [rolling rotation](deploy.md#rotating-api_token-and-operator_token); remove

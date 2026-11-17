@@ -4,10 +4,11 @@ All numbers below are real measurements, not targets. Environment matters
 enormously for microVM latency — every table states where it was measured.
 Reproduce with `make bench` (tier definitions and the dated results log:
 [Benchmarks](benchmarks.md)), `scripts/sandboxd-e2e.sh` (claim/verb
-latencies print per run), and `scripts/boot-bench.sh` (boot phases).
+latencies print per run), and `scripts/boot-bench.sh` (boot phases;
+`AGENT_PORT=2048` adds spawn→silkd answering).
 
-**Bare metal** = a 16-core AMD (SVM) node, Ubuntu 24.04, kernel 6.17–7.0, local
-NVMe, KVM. **Nested** = a cloud VM with nested virtualization, never comparable
+**Bare metal**, unless a section names another host, = a 16-core AMD (SVM)
+node, Ubuntu 24.04, kernel 6.17–7.0, local NVMe, KVM. **Nested** = a cloud VM with nested virtualization, never comparable
 with bare-metal claims ([why](benchmarks.md#the-three-claim-tiers)).
 
 ## Claim latency (what the SDK sees)
@@ -145,14 +146,15 @@ N=5:
 - "agent-ready"/"silkd-ready" = create/clone start → the vsock daemon
   completes a round-trip; this includes CLI and probe harness overhead, so
   it is an honest end-to-end number, not a VMM-internal one.
-- Warm/miss/verb numbers come straight from `sandboxd-e2e.sh` output on a
-  real node; run it on your own hardware for numbers that apply to you.
+- Warm, miss and cold numbers come from the `make bench` rows of the results
+  log, and verb round-trips from `sandboxd-e2e.sh` output on a real node; run
+  both on your own hardware for numbers that apply to you.
 
 ## Regression discipline
 
 There is deliberately no CI performance gate: CI has no KVM, and a numbers
 gate that measures a different machine class guards nothing. The manual
-harnesses are `scripts/boot-bench.sh` and the e2e smoke's per-step timings;
+harnesses are `make bench`, `scripts/boot-bench.sh` and the e2e smoke's per-step timings;
 re-measure and update this page when touching the boot chain, the relay, or
 snapshot paths.
 
