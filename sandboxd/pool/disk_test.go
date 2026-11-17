@@ -82,6 +82,18 @@ func TestAFailedStatfsKeepsTheDiskLowState(t *testing.T) {
 	}
 }
 
+func TestALowDirDoesNotHideALaterFailingStatfs(t *testing.T) {
+	m := diskReserveManager(t)
+	setDiskReserve(t, m, &config.DiskReserve{Free: "1000P", Dirs: []string{filepath.Join(m.dataDir, "missing")}})
+	if !m.diskStatFailed.Load() {
+		t.Fatal("a missing reserve dir did not record a failed statfs")
+	}
+	setDiskReserve(t, m, &config.DiskReserve{Free: "1000P", Dirs: []string{m.dataDir, filepath.Join(m.dataDir, "missing")}})
+	if !m.diskStatFailed.Load() {
+		t.Error("a low first dir cleared the failed statfs of the second")
+	}
+}
+
 func setDiskReserve(t *testing.T, m *Manager, reserve *config.DiskReserve) {
 	t.Helper()
 	cfg := &config.Config{DataDir: m.dataDir, DiskReserve: reserve, Pools: []config.PoolSpec{{PoolKey: testKey}}}
