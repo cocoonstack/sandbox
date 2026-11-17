@@ -156,7 +156,7 @@ class Sandbox:
         on_stderr: Callable[[bytes], object] | None = None,
         timeout: float | None = None,
     ) -> int:
-        """Streams raw output bytes and returns the exit code; timeout bounds the call and kills what it cuts."""
+        """Streams raw output and returns the exit code; timeout kills what it cuts, except a session command."""
         if timeout is not None and timeout <= 0:
             raise ValueError("timeout must be positive")
         if stdin and not isinstance(stdin, (bytes, bytearray, memoryview)):
