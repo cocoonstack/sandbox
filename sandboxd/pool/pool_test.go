@@ -443,6 +443,7 @@ func TestSetPoolsGrowShrinkAndDrain(t *testing.T) {
 		if err := m.SetPools(t.Context(), []config.PoolSpec{{PoolKey: testKey, Warm: 2}}); err != nil {
 			t.Fatalf("SetPools grow: %v", err)
 		}
+		m.refillOnce(t.Context())
 		waitFor(t, func() bool {
 			infos, _ := m.Info()
 			return len(infos) == 1 && infos[0].Target == 2 && infos[0].Warm == 2 && infos[0].Golden

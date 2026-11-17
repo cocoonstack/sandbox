@@ -24,6 +24,7 @@ func TestDrainRefusesClaimsTrimsWarmAndUndrainRefills(t *testing.T) {
 		if err := m.SetPools(t.Context(), []config.PoolSpec{{PoolKey: testKey, Warm: 2}}); err != nil {
 			t.Fatalf("SetPools: %v", err)
 		}
+		m.refillOnce(t.Context())
 		waitFor(t, func() bool {
 			infos, _ := m.Info()
 			return len(infos) == 1 && infos[0].Warm == 2
@@ -50,6 +51,7 @@ func TestDrainRefusesClaimsTrimsWarmAndUndrainRefills(t *testing.T) {
 		}
 
 		m.Undrain(t.Context())
+		m.refillOnce(t.Context())
 		waitFor(t, func() bool {
 			now, gauges := m.Info()
 			return !gauges.Draining && len(now) == 1 && now[0].Warm == 2
@@ -260,6 +262,7 @@ func TestAnUndrainDuringAnEvacuationsDrainStopsIt(t *testing.T) {
 		if err := a.SetPools(t.Context(), []config.PoolSpec{{PoolKey: testKey, Warm: 1}}); err != nil {
 			t.Fatalf("SetPools: %v", err)
 		}
+		a.refillOnce(t.Context())
 		waitFor(t, func() bool {
 			infos, _ := a.Info()
 			return len(infos) == 1 && infos[0].Warm == 1

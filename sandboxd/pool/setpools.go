@@ -85,9 +85,8 @@ func (m *Manager) applyPools(ctx context.Context, desired map[types.PoolKey]conf
 	}
 	m.mu.Unlock()
 
-	runCtx := context.WithoutCancel(ctx)
-	m.destroyAll(runCtx, trim).Wait()
-	m.refillOnce(runCtx)
+	m.destroyAll(context.WithoutCancel(ctx), trim).Wait()
+	m.kickRefill()
 	return m.poolStore.commit(seq, poolset.Set{ConfigSeed: m.configSeedHash, Pools: slices.Collect(maps.Values(desired))})
 }
 

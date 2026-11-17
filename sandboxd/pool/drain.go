@@ -52,7 +52,7 @@ func (m *Manager) Undrain(ctx context.Context) {
 	if e != nil {
 		e.stop()
 	}
-	m.refillOnce(context.WithoutCancel(ctx))
+	m.kickRefill()
 }
 
 // runEvacuation repeats its pass while a claim waits for an archive the sweeps run.
