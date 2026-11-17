@@ -5,7 +5,7 @@ use std::io;
 use tokio::io::{AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::net::tcp::OwnedWriteHalf;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 
 use crate::proto::{self, BULK_CHUNK, ErrorKind, Request, Response};
 
@@ -13,6 +13,7 @@ use crate::proto::{self, BULK_CHUNK, ErrorKind, Request, Response};
 pub async fn run<W: AsyncWrite + Unpin>(
     port: u16,
     client: mpsc::Receiver<Request>,
+    mut gone: oneshot::Receiver<()>,
     w: &mut W,
 ) -> io::Result<()> {
     let stream = match TcpStream::connect(("127.0.0.1", port)).await {
@@ -33,11 +34,13 @@ pub async fn run<W: AsyncWrite + Unpin>(
     let mut feed = tokio::spawn(feed_socket(client, tw));
     let mut feed_done = false;
     let mut guest_write_closed = false;
+    let mut feeding = true;
+    let mut client_gone = false;
 
     let mut buf = vec![0u8; BULK_CHUNK];
     let mut frame = Vec::new();
     let res = loop {
-        if guest_write_closed && feed_done {
+        if feed_done && (guest_write_closed || client_gone) {
             break Ok(());
         }
         tokio::select! {
@@ -73,6 +76,10 @@ pub async fn run<W: AsyncWrite + Unpin>(
                     }
                     break proto::write_frame(w, &resp).await;
                 }
+            }
+            ended = &mut gone, if feeding => {
+                feeding = false;
+                client_gone = ended.is_ok();
             }
         }
     };

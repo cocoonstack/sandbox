@@ -4,7 +4,7 @@ use std::borrow::Cow;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWrite};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 
 use crate::proc::{Chunk, Table, write_chunk};
@@ -136,7 +136,7 @@ impl State {
                 watch::watch(&mut reader, writer, path, recursive).await
             }
             Request::PtyOpen(req) => {
-                let (rx, feeder) = spawn_feeder(reader);
+                let (rx, _, feeder) = spawn_feeder(reader);
                 let res = pty::open(&self.table, now_secs(), req, rx, writer).await;
                 return finish_feeder(feeder, res).await;
             }
@@ -147,7 +147,7 @@ impl State {
                 self.lsp.start(writer, &language, root.as_deref()).await
             }
             Request::LspRequest { server_id } => {
-                let (rx, feeder) = spawn_feeder(reader);
+                let (rx, _, feeder) = spawn_feeder(reader);
                 let res = self.lsp.request(rx, writer, &server_id).await;
                 return finish_feeder(feeder, res).await;
             }
@@ -161,8 +161,8 @@ impl State {
                 .await
             }
             Request::PortForward { port } => {
-                let (rx, feeder) = spawn_feeder(reader);
-                let res = forward::run(port, rx, writer).await;
+                let (rx, gone, feeder) = spawn_feeder(reader);
+                let res = forward::run(port, rx, gone, writer).await;
                 return finish_feeder(feeder, res).await;
             }
             Request::GitClone {
@@ -242,7 +242,7 @@ impl State {
             }
             return Ok((reader, None));
         }
-        let (rx, feeder) = spawn_feeder(reader);
+        let (rx, _, feeder) = spawn_feeder(reader);
         let res = exec::run(&self.table, now_secs(), e, rx, writer).await;
         finish_feeder(feeder, res).await
     }
@@ -342,12 +342,13 @@ impl Default for State {
     }
 }
 
-fn spawn_feeder<R>(reader: R) -> (mpsc::Receiver<Request>, Feeder<R>)
+fn spawn_feeder<R>(reader: R) -> (mpsc::Receiver<Request>, oneshot::Receiver<()>, Feeder<R>)
 where
     R: AsyncBufRead + Unpin + Send + 'static,
 {
     let (tx, rx) = mpsc::channel(16);
-    (rx, tokio::spawn(feed_client(reader, tx)))
+    let (gone_tx, gone) = oneshot::channel();
+    (rx, gone, tokio::spawn(feed_client(reader, tx, gone_tx)))
 }
 
 /// Joins the feeder once its RPC is done; a failed RPC aborts it instead, the connection being gone.
@@ -363,7 +364,11 @@ async fn finish_feeder<R>(
 }
 
 /// Reads the client's frames during a streaming RPC: input frames go to the handler, the next request ends the feed.
-async fn feed_client<R>(mut reader: R, tx: mpsc::Sender<Request>) -> (R, Option<Parsed>)
+async fn feed_client<R>(
+    mut reader: R,
+    tx: mpsc::Sender<Request>,
+    gone: oneshot::Sender<()>,
+) -> (R, Option<Parsed>)
 where
     R: AsyncBufRead + Unpin,
 {
@@ -376,6 +381,7 @@ where
         // a closed channel is a finished handler, whose late input is dropped
         let _ = tx.send(req).await;
     }
+    let _ = gone.send(());
     (reader, None)
 }
 
