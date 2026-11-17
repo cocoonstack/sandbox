@@ -205,9 +205,6 @@ func (m *Manager) wakeArchived(ctx context.Context, sb *types.Sandbox) (string, 
 	if err := m.tenantRemoved(ctx, sb.Tenant); err != nil {
 		return "", err
 	}
-	if m.handOffCordonedWake(ctx, sb) {
-		return "", fmt.Errorf("wake %s: %w", sb.ID, ErrUnknownSandbox)
-	}
 	fallback := false
 	if err := m.beginWake(sb, true); err != nil {
 		if errors.Is(err, ErrQuota) && m.handOffForRoom(ctx, sb) {

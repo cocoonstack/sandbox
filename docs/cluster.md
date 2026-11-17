@@ -192,7 +192,7 @@ cap; to take no claims, cordon the node.
 | State | New claim, fork, branch | Existing claims | Root live move in | Adoption of archived claims | Refill and pool gossip | Survives restart and reboot |
 |---|---|---|---|---|---|---|
 | serving | yes, unless an [admission refusal](sandboxd-api.md#admission-refusals) applies; a 429 for a claim without volumes redirects to a peer | yes; a wake is bound by `max_running` and `disk_reserve`; an archived claim's refused wake, or one over `memory_limit`, first tries a peer with room | yes, under the same caps and `move_concurrency` | yes; no claim cap binds, `max_running` binds at the wake | yes | — |
-| cordoned | no: 429 `node cordoned`; peers stop redirecting here | yes; an archived claim's wake first tries a peer with room, then wakes here | yes, under the same caps and `move_concurrency` | only a row its owner released in an evacuation; never a lost owner's row, nor a wake hand-off | no; warm VMs are destroyed | yes, as `<data_dir>/cordoned` |
+| cordoned | no: 429 `node cordoned`; peers stop redirecting here | yes | yes, under the same caps and `move_concurrency` | yes, as serving: an adopted claim is no new claim | no; warm VMs are destroyed | yes, as `<data_dir>/cordoned` |
 | draining | no: 429 `node draining`; peers stop redirecting here | yes | no: admission and commit refuse | no | no; warm VMs are destroyed | no |
 | draining with `evacuate=1` | no, as draining | yes until the claim's turn, then 503 until a peer holds it and 404 after; a claim that cannot move stays and serves | no | no | no | no: a restart stops the evacuation |
 | cordoned and draining | no: 429 `node cordoned` | yes | no | no | no | the cordon only |
@@ -224,11 +224,8 @@ it while it sleeps write it, so the claim path is unchanged.
   A draining node never adopts, nor does a fenced node or one that lifted its
   fence less than 8 seconds ago (one renewal interval plus one registry query),
   so after a registry outage every healthy owner renews before a peer can take
-  its rows. A [cordoned](sandboxd-api.md#post-v1cordon) node schedules nothing new, so it adopts
-  only its own row or a row with no owner, which an evacuation releases, and never for a
-  [wake hand-off](#waking-an-archived-claim-on-a-full-or-cordoned-node); a lost owner's row is
-  left to an uncordoned peer. Adoption checks no tenant `max_claims` or node
-  `max_claims`: the claim already exists, and a refusal could strand it.
+  its rows. Adoption checks no tenant `max_claims` or node
+  `max_claims`, nor a [cordon](sandboxd-api.md#post-v1cordon): the claim already exists, and a refusal could strand it.
 - **Fencing.** Take, consume and delete are compare-and-sets on the row's
   epoch, and so is the write of a replica round and of the archive of a claim
   that holds a replica (`Replace`, which also requires this node as owner and a
@@ -300,7 +297,7 @@ never returns leaves behind only the tombstones and checkpoints of the claims it
 was waking or releasing when it died, plus what a replicated claim leaves (see
 [running claims](#running-claims-across-node-loss)).
 
-### Waking an archived claim on a full or cordoned node
+### Waking an archived claim on a full node
 
 A wake that `max_running` or `disk_reserve` refuses answers 429 and is
 counted in `sandboxd_wakes_refused_total{reason}`. `memory_limit` sends only
@@ -311,7 +308,7 @@ release and adoption an evacuation uses:
 
 - The owner releases the row to no owner and asks each peer
   `GET /v1/sandboxes/{id}/owner?room=1`. A peer adopts only while it could
-  admit the wake itself: not draining, cordoned or fenced, above
+  admit the wake itself: not draining or fenced, above
   `disk_reserve`, under `memory_limit` and under `max_running`.
 - When a peer adopts, the owner forgets the claim and the wake answers 404, as
   after an evacuation. The client's `Lookup` finds the peer, which wakes the
@@ -333,20 +330,9 @@ release and adoption an evacuation uses:
 - A hibernated claim keeps its 429: its memory snapshot is local. For the
   same reason `memory_limit` never refuses its wake.
 
-A [cordoned](sandboxd-api.md#post-v1cordon) owner schedules nothing new on
-itself, so it hands an archived claim's wake off the same way before it checks
-its own room. When no peer adopts, another hand-off runs, or the 30 seconds
-after a failed one have not passed, it wakes the claim itself under its usual
-caps: a cordon never refuses the wake of the node's own claim. A hibernated
-claim wakes on its owner, and a claim an evacuation still has to move keeps
-its 503.
-
 The hand-off costs nothing on the claim and wake paths. A refused archived
-wake costs one registry release, one call per peer until one adopts (a cordoned
-peer reads the row before it refuses), and, with no adopter, one take-back and
-one claims-journal write.
-On a cordoned owner every archived wake outside those 30 seconds costs the
-release and the calls.
+wake costs one registry release, one call per peer until one adopts, and, with
+no adopter, one take-back and one claims-journal write.
 
 ### Evacuating a node
 
@@ -362,7 +348,7 @@ adopting at once still leave one owner. This node keeps the claim listed until
 a peer answers `GET /v1/sandboxes/{id}/owner`, so a root listing finds the claim
 on at least one node at every moment, then forgets it under the claim's transition lock
 and answers 404 for it; the checkpoint stays, since it belongs to the adopter.
-A cordoned peer adopts, as it admits a live move. With no adopter (no peer, every peer draining, fenced or unreachable) the node takes the
+With no adopter (no peer, every peer draining, fenced or unreachable) the node takes the
 row back and the claim stays here. Until the hand-off, a wake of a claim the
 evacuation still has to move answers 503 with `Retry-After`, so a client call
 cannot wake it back onto the node. A running claim keeps serving until its turn.

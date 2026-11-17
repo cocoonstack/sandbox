@@ -53,7 +53,7 @@ func (m *Manager) adopt(ctx context.Context, id string, cred Cred, room bool) (b
 
 func (m *Manager) adoptArchived(ctx context.Context, id string, cred Cred, room bool) (bool, error) {
 	m.mu.Lock()
-	draining, cordoned := m.draining, m.cordoned
+	draining := m.draining
 	_, held := m.resolveLocked(id, cred)
 	fenced := m.adoptFenced()
 	full := false
@@ -74,9 +74,6 @@ func (m *Manager) adoptArchived(ctx context.Context, id string, cred Cred, room 
 	rec, ok, err := m.archives.Get(ctx, id)
 	if err != nil || !ok {
 		return false, err
-	}
-	if !cordonAdmits(cordoned, room, rec.Owner, m.nodeID) {
-		return false, nil
 	}
 	if rec.Consumed || (!cred.Operator && !tokenMatches(cred.Token, rec.TokenSHA256)) || (!rec.Deadline.IsZero() && time.Now().After(rec.Deadline)) {
 		return false, nil
