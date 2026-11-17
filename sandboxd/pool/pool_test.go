@@ -2695,7 +2695,7 @@ func seedGolden(t *testing.T, m *Manager, key types.PoolKey, imageID string) str
 
 func ckExists(t *testing.T, m *Manager, ck string) bool {
 	t.Helper()
-	_, _, _, err := m.ckpts.Fetch(t.Context(), ck) //nolint:dogsled // only the fetch error matters
+	_, _, _, err := m.ckpts.Fetch(t.Context(), ck) //nolint:dogsled
 	if err != nil && !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("fetch %s: %v", ck, err)
 	}
