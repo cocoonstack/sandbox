@@ -1298,7 +1298,7 @@ some of them on a node:
 | `volumesmoke` | shared read-only, writable, and live volumes | `sandboxd-e2e.sh` |
 | `meshsmoke` | template routing on a two-node mesh without a shared checkpoint store, because [a shared store resolves templates locally](cluster.md#templates-on-a-cluster) | |
 | `crossnode` | a checkpoint claimed on another node through the shared store | |
-| `coldproof` | a cold claim, by the guest's own clock | |
+| `demo -proof` | a cold claim, by the guest's own clock | |
 | `lifecycle` | idle → hibernate → archive → wake | `archive-e2e.sh` |
 | `egresssmoke` | guarded egress on either lane | `egress-e2e.sh` |
 | `interceptsmoke` | HTTPS interception | `intercept-e2e.sh` |
