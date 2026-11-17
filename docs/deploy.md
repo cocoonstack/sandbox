@@ -1301,9 +1301,8 @@ some of them on a node:
 | `demo -proof` | a cold claim, by the guest's own clock | |
 | `lifecycle` | idle → hibernate → archive → wake | `archive-e2e.sh` |
 | `egresssmoke` | guarded egress on either lane | `egress-e2e.sh` |
-| `interceptsmoke` | HTTPS interception | `intercept-e2e.sh` |
 | `sockssmoke` | the SOCKS5 door | `socks-e2e.sh` |
-| `credsmoke` | claim credential injection | `credentials-e2e.sh` |
+| `credsmoke` | HTTPS interception and claim credential injection | `credentials-e2e.sh` |
 | `portsmoke`, `guestserver` | the guest-port relay; `guestserver` is its guest listener | `port-e2e.sh` |
 | `androidsmoke`, `browsersmoke` | the android and browser flavors | |
 | `pullbench`, `rpcbench` | performance measurements; `pullbench -push` times uploads | |

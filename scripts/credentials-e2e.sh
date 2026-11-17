@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Bare-metal acceptance for claim credentials: claims on one intercept pool each
-# send their own env-injected header to an HTTPS echo, the guest never holds the
-# value, an open event stream reaches the guest event by event, and a credential
-# survives a sandboxd restart; a pool whose only rule is intercept "inject"
-# intercepts only the claims that hold a credential for a host and fills query
-# and body placeholders. Runs a dedicated sandboxd on $ADDR.
+# Bare-metal acceptance for HTTPS interception and claim credentials: the golden
+# bakes the cluster root, this node's intermediate signs the leaf, direct egress
+# is blocked; claims on one intercept pool each send their own env-injected header
+# to an HTTPS echo, the guest never holds the value, an open event stream reaches
+# the guest event by event, a credential survives a sandboxd restart; an "inject"
+# pool intercepts only claims that hold a host's credential and fills query and body placeholders. Runs a dedicated sandboxd on $ADDR.
 # Needs outbound to $ECHO and a $TEMPLATE whose silkd binds the egress relay; cleanup removes every sbx-* VM on the cocoon root.
 set -euo pipefail
 
