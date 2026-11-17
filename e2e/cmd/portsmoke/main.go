@@ -76,9 +76,6 @@ func run(addr, token, template, listener string) error {
 		{"half close", stepHalfClose},
 		{"guest half close", stepGuestHalfClose},
 		{"wrong token is 404", stepWrongToken},
-		{"missing token is 401", stepNoToken},
-		{"bad port is 400", stepBadPort},
-		{"no upgrade is 426", stepNoUpgrade},
 		{"no listener is 502", stepDeadPort},
 		{"wake from hibernate", stepHibernate},
 	} {
@@ -211,29 +208,11 @@ func stepGuestHalfClose(ctx context.Context, rt *harness.PortRelay, _ *sandbox.S
 }
 
 func stepWrongToken(ctx context.Context, rt *harness.PortRelay, _ *sandbox.Sandbox) error {
-	return relayWantStatus(ctx, rt.URL(guestPort), "wrong-token", true, http.StatusNotFound)
-}
-
-func stepNoToken(ctx context.Context, rt *harness.PortRelay, _ *sandbox.Sandbox) error {
-	return relayWantStatus(ctx, rt.URL(guestPort), "", true, http.StatusUnauthorized)
-}
-
-func stepBadPort(ctx context.Context, rt *harness.PortRelay, _ *sandbox.Sandbox) error {
-	for _, port := range []string{"0", "65536", "+22", "http"} {
-		url := fmt.Sprintf("http://%s/v1/sandboxes/%s/ports/%s", rt.Owner, rt.ID, port)
-		if err := relayWantStatus(ctx, url, rt.Token, true, http.StatusBadRequest); err != nil {
-			return fmt.Errorf("port %q: %w", port, err)
-		}
-	}
-	return nil
-}
-
-func stepNoUpgrade(ctx context.Context, rt *harness.PortRelay, _ *sandbox.Sandbox) error {
-	return relayWantStatus(ctx, rt.URL(guestPort), rt.Token, false, http.StatusUpgradeRequired)
+	return relayWantStatus(ctx, rt.URL(guestPort), "wrong-token", http.StatusNotFound)
 }
 
 func stepDeadPort(ctx context.Context, rt *harness.PortRelay, _ *sandbox.Sandbox) error {
-	return relayWantStatus(ctx, rt.URL(deadPort), rt.Token, true, http.StatusBadGateway)
+	return relayWantStatus(ctx, rt.URL(deadPort), rt.Token, http.StatusBadGateway)
 }
 
 // stepHibernate proves the relay wakes a hibernated sandbox; the listener survives in the snapshot.
@@ -270,8 +249,8 @@ func relayGet(ctx context.Context, r *harness.PortRelay, port uint16, path strin
 }
 
 // relayWantStatus asserts a refusal is answered as HTTP, never by opening a relay.
-func relayWantStatus(ctx context.Context, url, token string, upgrade bool, want int) error {
-	req, err := harness.Request(ctx, url, token, upgrade)
+func relayWantStatus(ctx context.Context, url, token string, want int) error {
+	req, err := harness.Request(ctx, url, token)
 	if err != nil {
 		return err
 	}

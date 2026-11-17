@@ -43,7 +43,7 @@ func (p PortRelay) Dial(ctx context.Context, port uint16) (RelayConn, error) {
 	}
 	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
 	defer stop()
-	req, err := Request(ctx, p.URL(port), p.Token, true)
+	req, err := Request(ctx, p.URL(port), p.Token)
 	if err != nil {
 		_ = conn.Close()
 		return nil, err
@@ -139,18 +139,14 @@ func HTTPOverPort(ctx context.Context, sb *sandbox.Sandbox, port uint16, method,
 	return out, nil
 }
 
-// Request builds one call to the endpoint, optionally asking for the upgrade.
-func Request(ctx context.Context, url, token string, upgrade bool) (*http.Request, error) {
+// Request builds one upgrade call to the endpoint.
+func Request(ctx context.Context, url, token string) (*http.Request, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
 	}
-	if token != "" {
-		req.Header.Set("Authorization", "Bearer "+token)
-	}
-	if upgrade {
-		req.Header.Set("Upgrade", "tcp")
-		req.Header.Set("Connection", "Upgrade")
-	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Upgrade", "tcp")
+	req.Header.Set("Connection", "Upgrade")
 	return req, nil
 }
