@@ -11,7 +11,7 @@ const ADDR: &str = "169.254.169.254:80";
 /// The document the host writes per sandbox through `fs_write`.
 const DOC_PATH: &str = "/run/silkd/instance-metadata.json";
 
-/// Fixed: the IMDSv2 defense is the PUT plus the custom header, not the token's secrecy.
+/// Fixed: the IMDSv2 defense is the custom header a forged request cannot set, not the token's secrecy.
 const TOKEN: &[u8] = b"silkd-instance-metadata";
 const HEAD_MAX: usize = 8 * 1024;
 const CONN_TIMEOUT: Duration = Duration::from_secs(5);
