@@ -1233,12 +1233,13 @@ Effects on what already runs:
   VMs, so the next clone carries the new settings. Live claims and their VMs
   are untouched. A golden that was building during the reload is discarded
   and rebuilt.
-- **Interception**: turning `intercept` on is refused for a key this node has
-  already served (its guests do not trust the CA) and on a node that loaded
-  no `egress_ca` at boot. Templates and checkpoints of the key captured
-  elsewhere do not trust the CA either, so turn interception on under a new
-  pool key. Changing which hosts an already-intercepting pool intercepts
-  reloads normally.
+- **Interception**: turning `intercept` on is refused for a key this node
+  pools or holds a live claim of (its guests do not trust the CA) and on a
+  node that loaded no `egress_ca` at boot. Templates and checkpoints of the
+  key, captured here or elsewhere, do not trust the CA either and the reload
+  does not check for them, so turn interception on under a new pool key.
+  Changing which hosts an already-intercepting pool intercepts reloads
+  normally.
 - **Environment values**: `value_env` and `egress_upstream_env` name variables
   in sandboxd's own environment, which only a restart changes. A reload can
   point at a different variable, but only one that was already set when
