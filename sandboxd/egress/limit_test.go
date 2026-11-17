@@ -245,6 +245,28 @@ func TestEveryReadSliceFitsTheSmallestBucket(t *testing.T) {
 	}
 }
 
+func TestALimitedCopyPastTheLargeBufferBoundCopiesThroughTheSmallOne(t *testing.T) {
+	p := New(Policy{}, nil, nil, fixedDial(""), nil, nil)
+	p.SetLimit(types.EgressLimit{TxBytesPerSecond: 1 << 40})
+	for _, held := range []int32{0, maxBigBufs} {
+		p.bigBufs.Store(held)
+		guest, src := net.Pipe()
+		payload := bytes.Repeat([]byte("x"), 4*limitBurst)
+		go func() {
+			_, _ = guest.Write(payload)
+			_ = guest.Close()
+		}()
+		var dst bytes.Buffer
+		var n atomic.Int64
+		if err := p.copyLimited(&dst, src, false, &n, p.limits.Load().tx); err != nil || dst.Len() != len(payload) {
+			t.Errorf("held %d: copied %d of %d bytes, err %v", held, dst.Len(), len(payload), err)
+		}
+		if got := p.bigBufs.Load(); got != held {
+			t.Errorf("held %d: large buffers in use %d after the copy, want %d", held, got, held)
+		}
+	}
+}
+
 func TestEarlyConnectBytesWaitForTxTokens(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

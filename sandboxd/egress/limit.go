@@ -22,6 +22,7 @@ const (
 	// limitSlices cuts a second of a limited direction into reads, so one wait stays near a tenth of a second.
 	limitSlices  = 10
 	minLimitRead = 1 << 10
+	maxBigBufs   = 8
 )
 
 var limitBufs = sync.Pool{New: func() any { b := make([]byte, limitBurst); return &b }}
@@ -184,7 +185,10 @@ func (p *Proxy) copyLimited(dst io.Writer, src net.Conn, rx bool, n *atomic.Int6
 	for {
 		nr, err := copySlice(dst, m, *small)
 		if err == nil && nr == len(*small) && readSlice(lim) > nr {
-			err = copyWhileBusy(dst, m, nr)
+			if p.bigBufs.Add(1) <= maxBigBufs {
+				err = copyWhileBusy(dst, m, nr)
+			}
+			p.bigBufs.Add(-1)
 		}
 		if errors.Is(err, io.EOF) {
 			return nil
@@ -276,7 +280,7 @@ func readSlice(lim *rate.Limiter) int {
 	return max(minLimitRead, min(int(lim.Limit())/limitSlices, limitBurst))
 }
 
-// copyWhileBusy holds a large buffer only while reads outgrow a small one, so an idle tunnel waits on the small one.
+// copyWhileBusy holds a large buffer until a read fits a small one; maxBigBufs bounds how many a claim holds at once.
 func copyWhileBusy(dst io.Writer, src io.Reader, small int) error {
 	big := limitBufs.Get().(*[]byte)
 	defer limitBufs.Put(big)
