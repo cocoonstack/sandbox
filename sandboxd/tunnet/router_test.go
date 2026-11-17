@@ -441,6 +441,34 @@ func TestRouterChargesNothingForAFrameTheUnderlayDidNotSend(t *testing.T) {
 	})
 }
 
+func TestAFailedSendAfterARecordNeverMakesTheNextRecordNegative(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		u, r := newRouter(t)
+		var mu sync.Mutex
+		var records []FlowRecord
+		r.Arm(Claim{
+			ID: "c1", Addr: claimAddr, Every: time.Nanosecond, Allow: func(netip.Addr, uint16) bool { return true },
+			Record: func(fr FlowRecord) { mu.Lock(); records = append(records, fr); mu.Unlock() },
+		})
+		u.sent(t)
+		guest := serve(t, r, claimAddr)
+		guestHello(t, guest)
+		out := frame(ProtoTCP, GuestAddr, remote, false)
+		u.onFail = func() { r.sweep(time.Now().Add(time.Second), false) }
+		u.failSend.Store(true)
+		sendFrame(t, guest, out)
+		synctest.Wait()
+		r.EndFlows()
+		mu.Lock()
+		defer mu.Unlock()
+		for _, fr := range records {
+			if fr.NewUp < 0 {
+				t.Errorf("record %+v reports a negative upload", fr)
+			}
+		}
+	})
+}
+
 func TestRouterKeepsTheChargeOfAFrameTheUnderlayPartlySent(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		u, r := newRouter(t)
@@ -694,10 +722,14 @@ type fakeUnder struct {
 	batches  atomic.Int64
 	failSend atomic.Bool
 	failRest atomic.Bool
+	onFail   func()
 }
 
 func (u *fakeUnder) Send(b []byte, seg int, dst netip.AddrPort, _ uint64) (int, error) {
 	if u.failSend.Load() {
+		if u.onFail != nil {
+			u.onFail()
+		}
 		return 0, errors.New("underlay closed")
 	}
 	u.batches.Add(1)

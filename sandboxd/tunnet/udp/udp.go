@@ -99,10 +99,10 @@ func (u *Underlay) Recv(each func(d []byte, from netip.AddrPort)) error {
 }
 
 func (u *Underlay) Close() {
-	if u.recv != nil {
-		_ = u.recv.Close()
-	}
 	for _, c := range u.sends {
 		_ = c.Close()
+	}
+	if u.recv != nil {
+		_ = u.recv.Close()
 	}
 }
