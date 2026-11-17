@@ -617,6 +617,7 @@ class Sandbox:
             pump = threading.Thread(target=_feed_stdin, args=(conn, stdin), daemon=True) if stdin else None
             try:
                 if pump is not None:
+                    conn.finish_upgrade()
                     pump.start()
                 else:
                     with contextlib.suppress(ProtocolError):

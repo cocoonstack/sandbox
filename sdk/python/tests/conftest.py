@@ -71,6 +71,9 @@ class FakeConn:
     def send(self, op, **fields):
         self.sent.append((op, fields))
 
+    def finish_upgrade(self):
+        pass
+
     def recv(self):
         return self._frames.pop(0)
 

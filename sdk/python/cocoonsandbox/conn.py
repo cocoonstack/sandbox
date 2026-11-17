@@ -67,10 +67,30 @@ class Conn(_Closeable):
         with contextlib.suppress(OSError):
             self._sock.shutdown(socket.SHUT_RDWR)
 
+    def finish_upgrade(self) -> None:
+        """Reads a plain-HTTP upgrade's pending 101; it retimes the socket, so no other thread may be sending."""
+        timeout, self._upgrade_timeout = self._upgrade_timeout, None
+        if timeout is None:
+            return
+        caller = self._sock.gettimeout()
+        limit = timeout if caller is None else min(caller, timeout)
+        deadline = time.monotonic() + limit
+        try:
+            _read_upgrade(
+                self._reader,
+                lambda: self._sock.settimeout(remaining_timeout(limit, deadline, "agent upgrade")),
+                self._tag,
+            )
+            self._sock.settimeout(caller)
+        except Exception as exc:
+            self.close()
+            if isinstance(exc, OSError) and not isinstance(exc, SandboxError):
+                raise _handshake_error("agent upgrade", exc) from exc
+            raise
+
     def recv(self) -> dict[str, Any]:
         """Reads one frame or raises a typed protocol or guest error."""
-        if self._upgrade_timeout is not None:
-            self._finish_upgrade(self._upgrade_timeout)
+        self.finish_upgrade()
         try:
             line = self._reader.readline(MAX_FRAME + 1)
         except (OSError, ValueError) as exc:
@@ -105,24 +125,6 @@ class Conn(_Closeable):
             self._reader.close()
         finally:
             self._sock.close()
-
-    def _finish_upgrade(self, timeout: float) -> None:
-        self._upgrade_timeout = None
-        caller = self._sock.gettimeout()
-        limit = timeout if caller is None else min(caller, timeout)
-        deadline = time.monotonic() + limit
-        try:
-            _read_upgrade(
-                self._reader,
-                lambda: self._sock.settimeout(remaining_timeout(limit, deadline, "agent upgrade")),
-                self._tag,
-            )
-            self._sock.settimeout(caller)
-        except Exception as exc:
-            self.close()
-            if isinstance(exc, OSError) and not isinstance(exc, SandboxError):
-                raise _handshake_error("agent upgrade", exc) from exc
-            raise
 
 
 class ConnPool:
