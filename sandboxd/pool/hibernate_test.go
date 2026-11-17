@@ -81,6 +81,26 @@ func TestWakePersistFailureSurfaces(t *testing.T) {
 	})
 }
 
+func TestReleaseAfterAWakePersistFailureDropsTheParkedSnapshot(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		eng := newFakeEngine()
+		m := newTestManager(t, eng)
+		sb := mustClaim(t, m, testKey)
+		hibernateClaim(t, m, sb)
+		snap := eng.hibernates[0]
+		breakStore(t, m)
+		if _, _, _, err := m.WakeAgentSocket(t.Context(), sb.ID, Cred{Token: sb.Token}); err == nil {
+			t.Fatal("wake reported success despite a persist failure")
+		}
+		healStore(t, m)
+
+		if err := m.Release(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
+			t.Fatalf("Release: %v", err)
+		}
+		waitFor(t, func() bool { return eng.snapRemoved(snap) })
+	})
+}
+
 func TestAReleaseRacingAWakeBillsTheWakeFirst(t *testing.T) {
 	m := newTestManager(t, newFakeEngine())
 	sb := mustClaim(t, m, testKey)
