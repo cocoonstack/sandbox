@@ -1,9 +1,9 @@
 package e2e
 
 import (
-	"context"
 	"bytes"
 	"cmp"
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json/v2"

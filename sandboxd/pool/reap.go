@@ -37,8 +37,7 @@ func (m *Manager) reapOnce(ctx context.Context) {
 	var dropped, purges []string
 	var unrows []*types.Sandbox
 	for id, sb := range m.claimed {
-		// A zero deadline means no expiry (an archived claim kept forever).
-		if sb.Deadline.IsZero() || !now.After(sb.Deadline) || m.midMoveLocked(sb) {
+		if !m.reapDueLocked(sb, now) {
 			continue
 		}
 		switch {
@@ -162,6 +161,11 @@ func (m *Manager) reapOnce(ctx context.Context) {
 			logger.Infof(ctx, "reaped expired sandbox %s (%s)", v.id, v.vmName)
 		}
 	})
+}
+
+// A zero deadline means no expiry (an archived claim kept forever); callers hold m.mu.
+func (m *Manager) reapDueLocked(sb *types.Sandbox, now time.Time) bool {
+	return !sb.Deadline.IsZero() && now.After(sb.Deadline) && !m.midMoveLocked(sb)
 }
 
 func (m *Manager) archivesAtDeadline(sb *types.Sandbox) bool {
