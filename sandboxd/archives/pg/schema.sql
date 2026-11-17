@@ -13,8 +13,6 @@ CREATE TABLE IF NOT EXISTS sandboxd_archives (
     updated_at   timestamptz NOT NULL DEFAULT now(),
     PRIMARY KEY (cell, id)
 );
-CREATE INDEX IF NOT EXISTS sandboxd_archives_deadline ON sandboxd_archives (cell, deadline) WHERE deadline IS NOT NULL;
-CREATE INDEX IF NOT EXISTS sandboxd_archives_consumed ON sandboxd_archives (cell) WHERE consumed;
 CREATE TABLE IF NOT EXISTS sandboxd_nodes (
     cell        text        NOT NULL,
     node        text        NOT NULL,
