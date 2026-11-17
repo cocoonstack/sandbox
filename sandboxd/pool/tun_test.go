@@ -224,8 +224,8 @@ func TestAProfileChangeADisableOvertookDoesNotReEnable(t *testing.T) {
 	m.mu.Lock()
 	sb.TunOff = true
 	m.mu.Unlock()
-	if _, _, err = m.commitTun(t.Context(), sb, true, plan); !errors.Is(err, errTunRaced) {
-		t.Fatalf("commit over a newer disable: %v, want errTunRaced", err)
+	if _, _, err = m.commitTun(t.Context(), sb, true, plan); !errors.Is(err, ErrTunRaced) {
+		t.Fatalf("commit over a newer disable: %v, want ErrTunRaced", err)
 	}
 	if st := m.tunState(sb); st.On || st.Profile != "" {
 		t.Errorf("state %+v, want the disable kept and the stale plan dropped", st)
@@ -370,15 +370,15 @@ func TestALosingConcurrentEnableKeepsTheAddressTheWinnerPublished(t *testing.T) 
 	m := tunManager(t, newFakeEngine(), addrs, config.PoolSpec{PoolKey: testKey, Tun: true, Egress: anyPolicy})
 	sb := mustClaim(t, m, testKey)
 	stale := tunPlan{next: tunState{addr: sb.TunAddr}, assign: true}
-	if _, _, err := m.commitTun(t.Context(), sb, false, stale); !errors.Is(err, errTunRaced) {
-		t.Fatalf("commit of a stale plan: %v, want errTunRaced", err)
+	if _, _, err := m.commitTun(t.Context(), sb, false, stale); !errors.Is(err, ErrTunRaced) {
+		t.Fatalf("commit of a stale plan: %v, want ErrTunRaced", err)
 	}
 	if got := addrs.releasedList(); len(got) != 0 {
 		t.Errorf("released %v, want the address the claim holds kept", got)
 	}
 }
 
-func TestASetTunAConcurrentWriteOvertookAnswersErrPaused(t *testing.T) {
+func TestASetTunAConcurrentWriteOvertookAnswersErrTunRaced(t *testing.T) {
 	addrs := &fakeAddrs{err: errors.New("meta store down")}
 	m := tunManager(t, newFakeEngine(), addrs, config.PoolSpec{PoolKey: testKey, Tun: true, Egress: anyPolicy})
 	sb := mustClaim(t, m, testKey)
@@ -390,8 +390,8 @@ func TestASetTunAConcurrentWriteOvertookAnswersErrPaused(t *testing.T) {
 		}
 	}
 	addrs.mu.Unlock()
-	if err := m.SetTun(t.Context(), sb.ID, new(true), nil); !errors.Is(err, ErrPaused) {
-		t.Errorf("an enable a disable overtook: %v, want ErrPaused", err)
+	if err := m.SetTun(t.Context(), sb.ID, new(true), nil); !errors.Is(err, ErrTunRaced) {
+		t.Errorf("an enable a disable overtook: %v, want ErrTunRaced", err)
 	}
 	if st := m.tunState(sb); st.On || st.Addr.IsValid() {
 		t.Errorf("state %+v, want the disable kept and no address held", st)

@@ -10,8 +10,8 @@ real microVM sandboxes with no glue code.
   "mcpServers": {
     "sandbox": {
       "command": "/usr/local/bin/sandbox-mcp",
-      "args": ["-addr", "10.0.0.5:7777", "-token", "...",
-               "-template", "ghcr.io/cocoonstack/sandbox/rt:24.04"]
+      "args": ["-addr", "10.0.0.5:7777", "-template", "ghcr.io/cocoonstack/sandbox/rt:24.04"],
+      "env": {"SANDBOXD_TOKEN": "..."}
     }
   }
 }

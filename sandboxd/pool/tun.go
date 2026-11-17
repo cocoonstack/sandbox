@@ -2,7 +2,6 @@ package pool
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"maps"
 	"net/netip"
@@ -19,8 +18,6 @@ import (
 
 // A node confirms its claims hourly and re-reserves an address released while it held it.
 const tunUnconfirmedAfter = 24 * time.Hour
-
-var errTunRaced = errors.New("tun state changed since planned")
 
 // tunSeeder is a node-local address store that learns which addresses the loaded claims hold.
 type tunSeeder interface {
@@ -55,11 +52,7 @@ func (m *Manager) SetTun(ctx context.Context, id string, enabled *bool, profile 
 	if locked {
 		defer sb.Transition.Unlock()
 	}
-	err := m.setTun(ctx, sb, locked, enabled, profile)
-	if errors.Is(err, errTunRaced) {
-		return ErrPaused
-	}
-	return err
+	return m.setTun(ctx, sb, locked, enabled, profile)
 }
 
 // TunStats snapshots the tun router's counters; false when the node has no tun block.
@@ -282,7 +275,7 @@ func (m *Manager) commitTun(ctx context.Context, sb *types.Sandbox, locked bool,
 		if plan.assign && !held {
 			m.releaseTun(ctx, sb.ID, next.addr)
 		}
-		return "", false, errTunRaced
+		return "", false, ErrTunRaced
 	}
 	sb.TunOff, sb.TunProfile, sb.TunAddr = next.off, next.profile, next.addr
 	if locked && runningShaped(sb) {

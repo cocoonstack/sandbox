@@ -118,6 +118,7 @@ var (
 	ErrArchived            = errors.New("sandbox is archived; a wake or an exec wakes it first")
 	ErrLeaseLost           = errors.New("node lease lost; retry")
 	ErrPaused              = errors.New("sandbox is paused; an operator call does not wake it")
+	ErrTunRaced            = errors.New("another tun request to the sandbox committed first; retry")
 	ErrEvacuating          = errors.New("sandbox is moving to another node; retry")
 	ErrFailed              = errors.New("sandbox failed: its VMM is down; release it, or wake it to cold-boot its disk")
 	ErrNoInstanceMetadata  = engine.ErrNoInstanceMetadata

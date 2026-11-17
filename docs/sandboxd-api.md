@@ -47,6 +47,8 @@ marked root-only; the operator token only where the endpoint names it. Errors ar
 listed per endpoint. Request bodies are capped at 1 MiB; a larger one is
 rejected with `400` and an error beginning `invalid request body`, and so is
 a body with a field its endpoint does not declare.
+[`PUT /v1/sandboxes/{id}/instance-metadata`](#put-v1sandboxesidinstance-metadata)
+is the exception: it takes one raw JSON object of at most 4 KiB.
 
 ## Guest errors
 
