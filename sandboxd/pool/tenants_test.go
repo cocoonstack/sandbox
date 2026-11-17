@@ -347,7 +347,7 @@ func TestAFullLastPageNamesNoNext(t *testing.T) {
 func TestTwoNodesOnOneMetaStoreShareTheTenantSet(t *testing.T) {
 	t.Setenv("SANDBOX_TEST_DSN", metastoretest.PGSchema(t))
 	node := func() *Manager {
-		cfg := &config.Config{DataDir: t.TempDir(), APIToken: "root", MetaStore: &config.MetaStoreConfig{DSNEnv: "SANDBOX_TEST_DSN"}}
+		cfg := &config.Config{DataDir: t.TempDir(), APIToken: "root", MetaStore: &config.MetaStoreConfig{Kind: "pg", DSNEnv: "SANDBOX_TEST_DSN"}}
 		b := testBackends(t, cfg)
 		src, err := tenantspg.Open(t.Context(), os.Getenv("SANDBOX_TEST_DSN"))
 		if err != nil {

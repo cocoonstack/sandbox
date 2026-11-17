@@ -142,9 +142,9 @@ func TestLoadRejectsInvalid(t *testing.T) {
 		{"duplicate secret name", `{"secrets":[{"name":"gh","header":"A","value_env":"X"},{"name":"gh","header":"B","value_env":"Y"}],"pools":[]}`, "duplicate secret"},
 		{"pool egress empty host", `{"pools":[{"template":"rt:24.04","net":"none","size":"small","egress":{"allow":[{"host":""}]}}]}`, "must not be empty"},
 		{"pool egress unknown secret", `{"pools":[{"template":"rt:24.04","net":"none","size":"small","egress":{"allow":[{"host":"api.github.com","secret":"gh"}]}}]}`, "unknown secret"},
-		{"a removed meta_store kind", `{"api_token":"r","pools":[],"meta_store":{"kind":"pg","dsn_env":"SANDBOX_TEST_DSN"}}`, `unknown object member name "kind"`},
-		{"meta_store dsn env unset", `{"api_token":"r","pools":[],"meta_store":{"dsn_env":"SANDBOX_TEST_UNSET_DSN"}}`, "must name a set node env"},
-		{"meta_store bad cell", `{"api_token":"r","pools":[],"meta_store":{"dsn_env":"SANDBOX_TEST_DSN","cell":"Cell A"}}`, "meta_store.cell"},
+		{"meta_store unknown kind", `{"api_token":"r","pools":[],"meta_store":{"kind":"redis","dsn_env":"HOME"}}`, "not supported"},
+		{"meta_store dsn env unset", `{"api_token":"r","pools":[],"meta_store":{"kind":"pg","dsn_env":"SANDBOX_TEST_UNSET_DSN"}}`, "must name a set node env"},
+		{"meta_store bad cell", `{"api_token":"r","pools":[],"meta_store":{"kind":"pg","dsn_env":"SANDBOX_TEST_DSN","cell":"Cell A"}}`, "meta_store.cell"},
 		{"egress class unknown secret", `{"pools":[],"egress_classes":[{"name":"desk","egress":{"allow":[{"host":"x","secret":"gh"}]}}]}`, "unknown secret"},
 		{"egress class intercepts", `{"pools":[],"egress_classes":[{"name":"desk","egress":{"allow":[{"host":"x","intercept":true}]}}]}`, "only be set on a pool rule"},
 		{"egress class without egress", `{"pools":[],"egress_classes":[{"name":"desk"}]}`, "needs egress"},
@@ -208,7 +208,7 @@ func TestLoadRejectsInvalid(t *testing.T) {
 
 func TestLoadMetaStore(t *testing.T) {
 	t.Setenv("SANDBOX_TEST_DSN", "postgres://sandboxd@db/sandboxd")
-	ms := `"meta_store":{"dsn_env":"SANDBOX_TEST_DSN"}`
+	ms := `"meta_store":{"kind":"pg","dsn_env":"SANDBOX_TEST_DSN"}`
 	cfg := mustLoad(t, writeConfig(t, `{"api_token":"r","pools":[],`+ms+`}`))
 	if cfg.MetaStore.DSNEnv != "SANDBOX_TEST_DSN" || cfg.MetaStore.Cell != "" {
 		t.Fatalf("Load: %+v, want no cell unless one is set", cfg)
@@ -221,7 +221,7 @@ func TestLoadMetaStore(t *testing.T) {
 	if _, _, err := cfg.ReloadDiff(&next); err == nil || !strings.Contains(err.Error(), "meta_store") {
 		t.Errorf("a reload that drops meta_store: %v, want a restart refusal", err)
 	}
-	withUsage, usageErr := Load(writeConfig(t, `{"api_token":"r","pools":[],"meta_store":{"dsn_env":"SANDBOX_TEST_DSN","usage":true}}`))
+	withUsage, usageErr := Load(writeConfig(t, `{"api_token":"r","pools":[],"meta_store":{"kind":"pg","dsn_env":"SANDBOX_TEST_DSN","usage":true}}`))
 	if usageErr != nil || !withUsage.MetaStore.Usage || cfg.MetaStore.Usage {
 		t.Fatalf("Load with usage: %+v %v, want usage only where set", withUsage, usageErr)
 	}
@@ -255,7 +255,7 @@ func TestLoadNextTokensThatChangeOnlyAtARestart(t *testing.T) {
 func TestLoadArchiveFailover(t *testing.T) {
 	t.Setenv("SANDBOX_TEST_DSN", "postgres://sandboxd@db/sandboxd")
 	parts := map[string]string{
-		"meta_store":       `"meta_store":{"dsn_env":"SANDBOX_TEST_DSN","cell":"c1"}`,
+		"meta_store":       `"meta_store":{"kind":"pg","dsn_env":"SANDBOX_TEST_DSN","cell":"c1"}`,
 		"checkpoint_store": `"checkpoint_store":{"kind":"s3","s3":{"bucket":"b"}}`,
 		"mesh":             `"mesh":{"bind":"node1:7946","cluster_key":"MDEyMzQ1Njc4OWFiY2RlZg=="}`,
 	}
@@ -290,7 +290,7 @@ func TestLoadArchiveFailover(t *testing.T) {
 
 func TestLoadReplicateSeconds(t *testing.T) {
 	t.Setenv("SANDBOX_TEST_DSN", "postgres://sandboxd@db/sandboxd")
-	failover := `"archive_failover":true,"meta_store":{"dsn_env":"SANDBOX_TEST_DSN","cell":"c1"},"checkpoint_store":{"kind":"s3","s3":{"bucket":"b"}},"mesh":{"bind":"node1:7946","cluster_key":"MDEyMzQ1Njc4OWFiY2RlZg=="},`
+	failover := `"archive_failover":true,"meta_store":{"kind":"pg","dsn_env":"SANDBOX_TEST_DSN","cell":"c1"},"checkpoint_store":{"kind":"s3","s3":{"bucket":"b"}},"mesh":{"bind":"node1:7946","cluster_key":"MDEyMzQ1Njc4OWFiY2RlZg=="},`
 	body := func(on, pool string) string {
 		return `{"api_token":"r","advertise_addr":"node1:7777",` + on + `"pools":[` + pool + `]}`
 	}
@@ -313,7 +313,7 @@ func TestLoadReplicateSeconds(t *testing.T) {
 
 func TestLoadMoveConcurrency(t *testing.T) {
 	t.Setenv("SANDBOX_TEST_DSN", "postgres://sandboxd@db/sandboxd")
-	meta := `"meta_store":{"dsn_env":"SANDBOX_TEST_DSN","cell":"c1"},`
+	meta := `"meta_store":{"kind":"pg","dsn_env":"SANDBOX_TEST_DSN","cell":"c1"},`
 	key := `"cluster_key":"MDEyMzQ1Njc4OWFiY2RlZg=="`
 	body := func(on, mesh, moves string) string {
 		return `{"api_token":"r","advertise_addr":"node1:7777",` + on + `"mesh":{"bind":"node1:7946"` + mesh + `},` + moves + `"pools":[]}`
@@ -361,7 +361,7 @@ func TestLoadTun(t *testing.T) {
 		t.Error("pool tun not read")
 	}
 	meshed := `"api_token":"r","advertise_addr":"node1:7777","mesh":{"bind":"node1:7946"},`
-	cell := `"meta_store":{"dsn_env":"SANDBOX_TEST_DSN","cell":"c1"},`
+	cell := `"meta_store":{"kind":"pg","dsn_env":"SANDBOX_TEST_DSN","cell":"c1"},`
 	if _, err := Load(writeConfig(t, `{`+meshed+cell+block("")+`,"pools":[]}`)); err != nil {
 		t.Errorf("tun under a mesh with a cell: %v", err)
 	}
@@ -369,7 +369,7 @@ func TestLoadTun(t *testing.T) {
 		"pool without the block":  {`{"pools":[{"template":"rt:24.04","tun":true}]}`, "tun needs the node tun block"},
 		"egress lane pool":        {`{"bridges":["br0"],` + block("") + `,"pools":[{"template":"rt:24.04","net":"egress","tun":true}]}`, "tun needs net"},
 		"mesh without meta store": {`{` + meshed + block("") + `,"pools":[]}`, "requires meta_store with a cell"},
-		"mesh without a cell":     {`{` + meshed + `"meta_store":{"dsn_env":"SANDBOX_TEST_DSN"},` + block("") + `,"pools":[]}`, "requires meta_store with a cell"},
+		"mesh without a cell":     {`{` + meshed + `"meta_store":{"kind":"pg","dsn_env":"SANDBOX_TEST_DSN"},` + block("") + `,"pools":[]}`, "requires meta_store with a cell"},
 		"ipv6 subnet":             {`{` + strings.Replace(block(""), "240.0.0.0/4", "fd00::/8", 1) + `,"pools":[]}`, "IPv4 prefix"},
 		"subnet too wide":         {`{` + strings.Replace(block(""), "240.0.0.0/4", "0.0.0.0/3", 1) + `,"pools":[]}`, "between /4 and /24"},
 		"subnet too narrow":       {`{` + strings.Replace(block(""), "240.0.0.0/4", "10.1.2.0/25", 1) + `,"pools":[]}`, "between /4 and /24"},
