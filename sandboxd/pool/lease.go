@@ -129,7 +129,7 @@ func (m *Manager) unfence(ctx context.Context, start time.Time) {
 		if keep {
 			continue
 		}
-		m.deleteUnrowedPending(ctx, sb, rows[id])
+		m.deleteUnrowed(ctx, sb, rows[id])
 		if td := m.forgetAdopted(ctx, sb); td != nil {
 			m.out.Disarm(sb.ID, false)
 			go func() {

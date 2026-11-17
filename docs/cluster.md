@@ -256,8 +256,9 @@ it while it sleeps write it, so the claim path is unchanged.
   checkpoints this node published, and never one a row references. A restart
   also settles an archive a crash interrupted: a live row it left for a claim it
   still holds is deleted with its checkpoint, and a claim whose row another node
-  holds is dropped, its VM and snapshot swept as stale, and the checkpoint of
-  its interrupted archive or replica round deleted unless that row names it. An archive journals its
+  holds is dropped, its VM and snapshot swept as stale, and its replica and the
+  checkpoint of its interrupted archive or replica round deleted, each unless
+  that row names it. An archive journals its
   intent (the checkpoint it is about to register) before it writes the row. A
   restart that finds the intent and no row keeps the claim while that
   checkpoint is still in the store, since the row never committed, and drops it
@@ -567,8 +568,9 @@ checkpoint store and keeps each claim's registry row on the latest snapshot:
   refused. A write whose outcome is unknown leaves the checkpoint in place, and
   the next round, a release, an archive, a wake, the hourly sweep and a restart
   settle it by reading the row: a row on that checkpoint promotes it, another
-  owner's row drops the claim, and that checkpoint too unless the row names
-  it, and an absent row means the adopter finished
+  owner's row drops the claim, and with it whichever of that checkpoint and the
+  previous replica the row does not name, and an absent row means the adopter
+  finished
   when the checkpoint is gone or this node confirmed an earlier row, and a
   write that never landed otherwise. A refused write reads the row: one this node still owns only had a
   stale epoch and is refreshed, and an absent or foreign row drops the claim and
