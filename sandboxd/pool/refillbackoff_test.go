@@ -417,6 +417,21 @@ func TestALateClaimCloneResultOfARetiredGoldenDoesNotCount(t *testing.T) {
 	}
 }
 
+func TestANewGoldenStartsItsOwnCloneStreak(t *testing.T) {
+	m := newTestManager(t, newFakeEngine(), config.PoolSpec{PoolKey: testKey})
+	m.mu.Lock()
+	p := m.pools[testKey]
+	p.goldenDir, p.goldenGen, p.cloneFails = "/goldens/old", 1, refillFailStreak-1
+	p.install("/goldens/new", "")
+	m.mu.Unlock()
+
+	m.noteClaimClone(t.Context(), goldenResolution{dir: "/goldens/new", held: p, gen: 2}, errors.New(`vm.restore -> 500 "Memory manager error"`))
+
+	if fails := cloneFailsOf(m, p); fails != 1 || goldenOf(m, p) != "/goldens/new" {
+		t.Errorf("clone fails %d golden %q, want 1 and the new golden kept: it inherited the old golden's streak", fails, goldenOf(m, p))
+	}
+}
+
 func adoptedGoldenNoWarm(t *testing.T, eng *fakeEngine) (*Manager, *pool, string) {
 	t.Helper()
 	m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey})

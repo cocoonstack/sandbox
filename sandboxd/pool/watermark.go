@@ -138,7 +138,7 @@ func (p *pool) freshWarm() int {
 }
 
 func (p *pool) install(dir, imageID string) {
-	p.goldenDir, p.imageID = dir, imageID
+	p.goldenDir, p.imageID, p.cloneFails = dir, imageID, 0
 	p.goldenGen++
 	if !p.rebuild {
 		return
