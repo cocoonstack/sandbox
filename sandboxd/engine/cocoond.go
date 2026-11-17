@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -40,6 +41,7 @@ type VMChangeFunc func(VMChange)
 // VMEvents follows cocoon daemon's event stream on socket until ctx ends or the stream breaks.
 func (e *Engine) VMEvents(ctx context.Context, socket string, onSync VMSyncFunc, onChange VMChangeFunc) error {
 	client := &http.Client{Transport: &http.Transport{
+		DisableKeepAlives: true,
 		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 			return (&net.Dialer{}).DialContext(ctx, "unix", socket)
 		},
@@ -76,7 +78,7 @@ func (e *Engine) VMEvents(ctx context.Context, socket string, onSync VMSyncFunc,
 	if err := sc.Err(); err != nil {
 		return fmt.Errorf("read cocoon daemon events: %w", err)
 	}
-	return fmt.Errorf("cocoon daemon closed the event stream")
+	return errors.New("cocoon daemon closed the event stream")
 }
 
 func dispatchVMEvent(event, data string, onSync VMSyncFunc, onChange VMChangeFunc) error {
