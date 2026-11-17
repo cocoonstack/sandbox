@@ -609,7 +609,7 @@ mod b64 {
     use serde::{Deserializer, Serializer};
 
     pub fn serialize<S: Serializer>(data: &[u8], s: S) -> Result<S::Ok, S::Error> {
-        s.serialize_str(&STANDARD.encode(data))
+        s.collect_str(&base64::display::Base64Display::new(data, &STANDARD))
     }
 
     /// Decodes inside the visitor so a bulk `data` frame never allocates an intermediate String.

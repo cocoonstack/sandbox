@@ -173,28 +173,22 @@ pub async fn replace<W: AsyncWrite + Unpin>(
     };
     let replacement: Arc<str> = replacement.into();
     for file in files {
-        let (re, replacement, path) = (
-            Arc::clone(&re),
-            Arc::clone(&replacement),
-            PathBuf::from(&file),
-        );
+        let (re, replacement) = (Arc::clone(&re), Arc::clone(&replacement));
         let replaced = tokio::task::spawn_blocking(move || {
             let mut body = String::new();
-            if !read_bounded(&path, &mut body)? {
-                return Ok((0, None));
+            if !read_bounded(Path::new(&file), &mut body)? {
+                return Ok((file, 0, None));
             }
             let mut counting = Counting {
                 replacement: &replacement,
                 count: 0,
             };
             let new = re.replace_all(&body, counting.by_ref());
-            Ok::<_, std::io::Error>((
-                counting.count,
-                (counting.count > 0).then(|| new.into_owned()),
-            ))
+            let new = (counting.count > 0).then(|| new.into_owned());
+            Ok::<_, std::io::Error>((file, counting.count, new))
         })
         .await;
-        let (count, new) = match replaced {
+        let (file, count, new) = match replaced {
             Ok(Ok(replaced)) => replaced,
             Ok(Err(e)) => return err_frame(w, &e, "read").await,
             Err(e) => return err_frame(w, &std::io::Error::other(e), "read").await,
