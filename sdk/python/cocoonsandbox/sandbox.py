@@ -684,7 +684,11 @@ class Watcher(_Closeable):
             except ProtocolError as e:
                 if not self._closed:
                     self.error = e
+                self._conn.close()
                 return
+            except SilkdError:
+                self._conn.close()
+                raise
             if frame["type"] == "event":
                 yield frame
 
@@ -711,6 +715,7 @@ class Pty(_Closeable):
         if frame["type"] == "exit":
             self.exit_code = frame.get("code")
             self._eof = True
+            self._conn.close()
             return b""
         return frame.get("data") or b""
 

@@ -266,7 +266,8 @@ handle parks at most 8 idle connections. A kept connection counts as live for
 `idle_hibernate_seconds` until it closes, so keep the window below that
 setting; `close` and `hibernate` drop it at once.
 Streams (`watch`, `open_pty`, `dial_port`, an LSP session) take a connection
-of their own.
+of their own; a watch whose stream ends and a pty whose shell exits close
+theirs without waiting for `close()`.
 
 The handle's `sb.deadline` remains the value returned when it was created or last
 renewed, so after an archive/wake transition read the current one from
