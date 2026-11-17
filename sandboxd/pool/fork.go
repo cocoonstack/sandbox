@@ -44,7 +44,7 @@ func (m *Manager) Fork(ctx context.Context, id string, cred Cred, count int, ttl
 	m.mu.Unlock()
 	for _, c := range children {
 		c.Tenant, c.EgressClass = sb.Tenant, sb.EgressClass
-		c.PolicySource = sb.PolicySource
+		c.PolicySource, c.ImageID = sb.PolicySource, sb.ImageID
 		c.NoEgress = sb.NoEgress
 		c.TunOff, c.TunProfile, c.EgressLimit = tunOff, tunProfile, limit
 		c.Metadata = sb.Metadata

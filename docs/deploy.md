@@ -232,15 +232,22 @@ It needs Cloud Hypervisor and a cocoon whose `vm disk attach` takes
 with an older cocoon: there every read spends a warm VM
 on an attach that fails, then wakes the claim. An archive exported by an older
 cocoon, whose `snapshot.json` has no `disk_attach_files`, wakes before any VM is
-taken. Unpooled claims (template and checkpoint claims) always wake.
+taken. Template and checkpoint claims always wake: they record no image.
 `reader` is reloadable like `capture_trim`; turning it off leaves open reader
 connections to finish, and the next connection wakes the claim.
 
-A reader is a warm VM taken from the claim's own pool, so it boots the claim's
-image with the claim's layers, and it has no NIC (egress-lane claims never
-hibernate). Taking one removes a VM from the pool until the refill replaces it,
-and an empty pool never cold-boots one: the call wakes the claim. Only the
-claim's own token reaches its reader. The guest's own kernel does the parsing,
+A reader is a warm VM of the claim's own pool whose golden was built from the
+image the claim was made from, so it boots the claim's image with the claim's
+layers, and it has no NIC (egress-lane claims never hibernate). A claim records
+the content id of the image it booted: its golden's, or for a cold boot in a
+pool with `reader` the id listed right before the boot. A fork inherits its
+parent's id, and the id travels with the claim through an archive, a replica
+and a live move. Once the template is re-pulled under the same ref and the pool
+has rebuilt its golden, the warm VMs boot the new image, so a claim of the
+previous image finds no reader and its read wakes it, on its own image. Taking
+a reader removes a VM from the pool until the refill replaces it, and a pool
+with no warm VM of the claim's image never cold-boots one: the call wakes the
+claim. Only the claim's own token reaches its reader. The guest's own kernel does the parsing,
 as it does for the claim:
 
 - a hibernated claim's copy-on-write disk is copied by cocoon (`vm disk attach
@@ -277,8 +284,8 @@ gets a fresh one. The claim's own code runs in its reader with root, as it did
 in the claim, and a reader is never shared, so the claim's bytes never reach a
 shared VM or the host kernel.
 
-Whenever a reader cannot be built (no warm VM in the claim's pool, a failed
-attach, an archive without
+Whenever a reader cannot be built (no warm VM of the claim's image in its pool,
+a claim that records no image, a failed attach, an archive without
 `disk_attach_files`, an image without `silkd` at that path), the call wakes the
 claim as it does without the feature. While the disk reserve is low the wake is
 refused too, so the read fails with an `error` frame. With the feature on for the pool, every
@@ -287,6 +294,7 @@ shows the disk as of that `sync`: a write the guest makes in the instant between
 the `sync` and the pause is visible only after a wake. A hibernate whose `sync`
 fails or times out is marked not reader-safe, as is any sleep that began before
 the pool had `reader`, as is a claim adopted from a replica, and its reads wake the claim as without the feature.
+A claim that records no image wakes too: one journaled by a sandboxd that did not record images, or one cold-booted before its pool had `reader`.
 
 ### Dataset volumes
 

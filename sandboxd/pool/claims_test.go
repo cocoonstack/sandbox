@@ -84,7 +84,7 @@ func TestClaimStoreRoundTripsWithoutLeavingATempFile(t *testing.T) {
 	dataset := []types.Volume{{Name: "dataset-a", Mount: "/datasets/a"}}
 	claims := map[string]*types.Sandbox{
 		"sb_a": {ID: "sb_a", VMName: "sbx-1", Key: testKey, Token: "t1", Deadline: time.Now().Add(time.Minute).UTC(), ClaimedAt: time.Now().Add(-time.Minute).UTC(), ClaimRef: "ns/workload", Metadata: types.Metadata{"team": "a"}, OnExpire: types.ExpireArchive, Volumes: dataset, VolumesWant: dataset, VsockSocket: "/v/1"},
-		"sb_b": {ID: "sb_b", VMName: "sbx-2", Key: testKey, Token: "t2"},
+		"sb_b": {ID: "sb_b", VMName: "sbx-2", Key: testKey, Token: "t2", ImageID: "sha256:aaaa"},
 		"sb_c": {ID: "sb_c", VMName: "sbx-3", Key: testKey, TunAddr: netip.MustParseAddr("240.0.0.7"), TunOff: true, TunProfile: "res", TunBytes: 1 << 33},
 	}
 	for _, fsync := range []bool{false, true} {

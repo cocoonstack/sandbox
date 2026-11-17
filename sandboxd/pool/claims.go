@@ -70,6 +70,7 @@ type claimDTO struct {
 	ReplicaPending string             `json:"replica_pending,omitempty"`
 	ReplicaAt      time.Time          `json:"replica_at,omitzero"`
 	FromCheckpoint string             `json:"from_checkpoint,omitempty"`
+	ImageID        string             `json:"image_id,omitempty"`
 	Restarts       int                `json:"restarts,omitzero"`
 	RestartedAt    time.Time          `json:"restarted_at,omitzero"`
 	Failed         string             `json:"failed,omitempty"`
@@ -426,7 +427,7 @@ func dtoOf(sb *types.Sandbox) claimDTO {
 		Volumes: slices.Clone(sb.Volumes), VolumesWant: volumesWantDTO(sb), Env: sb.Env, VsockSocket: sb.VsockSocket,
 		TAP: sb.TAP, HibernateSnap: sb.HibernateSnap, PendingSnap: sb.PendingSnap, SaveSnap: sb.SaveSnap, ReaderSafe: sb.ReaderSafe,
 		TunAddr: sb.TunAddr, TunOff: sb.TunOff, TunProfile: sb.TunProfile, TunBytes: sb.TunBytes, EgressLimit: sb.EgressLimit,
-		ArchiveCk: sb.ArchiveCk, ArchiveEpoch: sb.ArchiveEpoch, ArchivePending: sb.ArchivePending, ReplicaCk: sb.ReplicaCk, ReplicaPending: sb.ReplicaPending, ReplicaAt: sb.ReplicaAt, FromCheckpoint: sb.FromCheckpoint,
+		ArchiveCk: sb.ArchiveCk, ArchiveEpoch: sb.ArchiveEpoch, ArchivePending: sb.ArchivePending, ReplicaCk: sb.ReplicaCk, ReplicaPending: sb.ReplicaPending, ReplicaAt: sb.ReplicaAt, FromCheckpoint: sb.FromCheckpoint, ImageID: sb.ImageID,
 		Restarts: sb.Restarts, RestartedAt: sb.RestartedAt, Failed: sb.Failed, MoveOut: sb.MoveOut, MoveIn: sb.MoveIn,
 	}
 }

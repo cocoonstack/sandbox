@@ -123,7 +123,9 @@ func (f *fakeEngine) SnapshotRemove(_ context.Context, _ string) error { return 
 
 func (f *fakeEngine) SnapshotList(_ context.Context) ([]string, error) { return nil, nil }
 
-func (f *fakeEngine) ImageIDs(context.Context) (map[string]string, error) { return nil, nil }
+func (f *fakeEngine) ImageIDs(context.Context) (map[string]string, error) {
+	return map[string]string{testKey.Template: "sha256:rt"}, nil
+}
 
 func (f *fakeEngine) WriteInstanceMetadata(context.Context, string, []byte) error { return nil }
 

@@ -176,7 +176,7 @@ func (m *Manager) openReader(ctx context.Context, sb *types.Sandbox) error {
 		_ = os.RemoveAll(r.dir)
 		return err
 	}
-	vm, err := m.takeReaderVM(sb.Key)
+	vm, err := m.takeReaderVM(sb)
 	if err != nil {
 		_ = os.RemoveAll(r.dir)
 		return err
@@ -256,18 +256,18 @@ func (m *Manager) fetchReaderFile(ctx context.Context, r *reader, name string) e
 	return nil
 }
 
-func (m *Manager) takeReaderVM(key types.PoolKey) (*types.Sandbox, error) {
+func (m *Manager) takeReaderVM(sb *types.Sandbox) (*types.Sandbox, error) {
 	m.mu.Lock()
-	var sb *types.Sandbox
-	if p, ok := m.activePool(key); ok {
-		sb = p.popWarm()
+	var vm *types.Sandbox
+	if p, ok := m.activePool(sb.Key); ok && sb.ImageID != "" {
+		vm = p.popWarmOf(sb.ImageID)
 	}
 	m.mu.Unlock()
 	m.kickRefill()
-	if sb == nil {
-		return nil, ErrNoWarm
+	if vm == nil {
+		return nil, fmt.Errorf("%w of image %q", ErrNoWarm, sb.ImageID)
 	}
-	return sb, nil
+	return vm, nil
 }
 
 func (m *Manager) startReader(ctx context.Context, sb *types.Sandbox, r *reader, archived bool) error {
