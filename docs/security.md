@@ -33,10 +33,13 @@ exposing any part of a deployment beyond a single trusted host.
   mode](advanced-network.md)), carrying only flows the policy's bare
   `host: "*"` rules and the internal-address guard allow, under per-claim
   rate, flow and quota limits.
-  On the egress lane: the same vsock paths plus a NIC whose every
+  On the egress lane of a `bridges` node: the same vsock paths plus a NIC whose every
   outgoing packet, replies and ARP included, is dropped by an nftables lock in the host
   root netns ([egress](egress.md)); the lock is fail-closed and applied
-  before the claim is handed out. On both lanes the proxy refuses
+  before the claim is handed out. On the egress lane of a CNI `networks` node
+  the NIC is not locked: the guest reaches whatever that network routes, for
+  every caller ([deployment constraints](egress.md#deployment-constraints)).
+  On both lanes the proxy refuses
   loopback, private, link-local (cloud metadata), CGN, the
   IPv4-embedding IPv6 ranges and the node's own interface addresses, so an
   allow-listed name that resolves or rebinds to an internal address cannot

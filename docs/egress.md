@@ -230,7 +230,10 @@ domain policy first; the allow-list widens the IP gate only.
   `networks`. A none-lane *pool* policy rides the proxy and works on either; an
   egress class does not, because its tenants could land on an egress-lane
   claim, so `networks` plus any `egress_classes` entry is rejected at load. A bridge
-  egress lane locks every NIC default-deny, even with no policy configured.
+  egress lane locks every NIC default-deny, even with no policy configured. A
+  `networks` egress lane locks nothing: every claim of a `net: "egress"` key
+  there, a tenant's included, gets a direct NIC that no policy, class or
+  `"egress": false` narrows. The CNI network's own rules are its only guard.
 - **No custom NAT64/DNS64 prefix routed to the host.** The SSRF guard folds the
   standard NAT64 forms (RFC 6052 well-known `64:ff9b::/96`, RFC 8215 local-use
   `64:ff9b:1::/48`), but an operator-specific network-specific prefix (RFC 6052
@@ -255,8 +258,9 @@ names each tenant layer in the config file, and a tenant references one by
 The API only references a class the operator wrote, never defines one, so a
 tenant added at runtime gets egress without a config edit. A missing policy on
 either side is an empty allow-list, not a pass: a tenant without a class
-reaches nothing, so granting a tenant egress — and the secret injection that
-rides it — is always an explicit act. A claim takes its tenant's class when it
+reaches nothing through the proxy (the direct NIC of a CNI egress lane is
+[outside it](#deployment-constraints)), so granting a tenant egress — and the
+secret injection that rides it — is always an explicit act. A claim takes its tenant's class when it
 is made and keeps it for life: a class's policy follows a reload, and a tenant
 moved to another class takes it on its next claim. Root claims have no tenant
 layer and take the pool's policy whole. A clone of a
