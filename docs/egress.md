@@ -136,7 +136,8 @@ Behavior of the relay:
   in `sandboxd_dns_malformed_total`.
 - **Memory.** Each door holds at most 256 connections with one 4 KiB query
   each. Each claim answers at most 32 queries at a time, each with one pooled
-  64 KiB reply buffer. A connection that neither sends nor reads for 30 s is
+  64 KiB reply buffer, plus a copy of the reply while a truncated answer is
+  read again over TCP or a filtered one is rebuilt. A connection that neither sends nor reads for 30 s is
   closed.
 - **Audit.** With `audit_log` on, each query but a fenced node's refusal appends
   `{"op":"dns","name":…,"qtype":…,"answers":…,"decision":…}` with the claim id

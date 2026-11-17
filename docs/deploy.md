@@ -1066,7 +1066,8 @@ only; computing durations or prices stays with the consumer.
   The node lands on one connection at a time; `GET /v1/usage` reads take
   more.
 - **Outage:** claims and the journal carry on; the node logs one warning,
-  retries every 5 s, and backfills when the database returns. Nothing is lost
+  retries every 5 s, and backfills when the database returns. A clean stop
+  lands the journal once more after it flushes the claims. Nothing is lost
   while the unlanded lines are still in `usage.jsonl` or `usage.jsonl.1`, so
   an outage loses lines only after the journal rotates twice past the last
   landed one (1 GiB each); the node no longer holds those either, and logs a

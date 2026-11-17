@@ -72,6 +72,20 @@ def test_create_claims_and_state_round_trips(node):
     asyncio.run(go())
 
 
+def test_tokens_stay_out_of_reprs(node):
+    async def go():
+        client = CocoonSandboxClient()
+        options = CocoonSandboxClientOptions(addr=node, api_token="node-secret")
+        session = await client.create(options=options)
+        state = session._inner.state
+        assert "node-secret" not in repr(options) + repr(state) and "'tok'" not in repr(state)
+        restored = client.deserialize_session_state(client.serialize_session_state(state))
+        assert restored.api_token == "node-secret" and restored.sandbox_token == "tok"
+        await client.delete(session)
+
+    asyncio.run(go())
+
+
 def test_default_lease_outlives_an_agent_run(node_server, node):
     async def go():
         client = CocoonSandboxClient()
