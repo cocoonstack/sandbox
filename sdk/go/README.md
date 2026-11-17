@@ -12,6 +12,7 @@ fmt.Print(out)
 ```
 
 - `client.go` — claim/redirect follow, `Lookup` scatter, template delete
+- `options.go` — claim options (`WithNetwork`, `WithSize`, `WithVolumes`, `WithEnv`, ...) and their types
 - `sandbox.go` — exec/run, renew, fork, hibernate (transparent wake)
 - `session.go` — persistent shell sessions
 - `env.go` — the claim env verbs (`Env`/`SetEnv`/`PatchEnv`)
@@ -24,7 +25,8 @@ fmt.Print(out)
 - `proc.go` — background process management (Spawn/Ps/Kill/Logs/Attach)
 - `checkpoint.go` / `template.go` — branch/rewind and promote handles
 - `pools.go` / `tenants.go` / `drain.go` / `info.go` — node operations: warm targets and the tenant set (per node or cluster-wide), drain and cordon, node info and the sandbox index
-- `upgrade.go` / `keepalive.go` / `endpoint.go` — the relay upgrade, idle connection reuse, endpoint and TLS parsing
+- `upgrade.go` / `keepalive.go` / `probe_unix.go` / `probe_other.go` / `endpoint.go` — the relay upgrade, idle connection reuse and its liveness peek, endpoint and TLS parsing
+- `utils.go` — the RPC helpers the data-plane verbs share
 - `silkd/` — the conn/stream layer over the relay; the frame types live in
   `protocol/wire`, whose tests round-trip `protocol/wire/fixtures/` (drift
   against the Rust guest fails CI); `silkd/silkdtest/` is an in-process fake guest
