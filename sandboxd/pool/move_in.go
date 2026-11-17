@@ -223,7 +223,7 @@ func (m *Manager) settleMoveIn(ctx context.Context, sb *types.Sandbox) {
 	}
 }
 
-// False while the registry is down.
+// False while the registry or the engine cannot answer.
 func (m *Manager) resolveMoveIn(ctx context.Context, sb *types.Sandbox) bool {
 	logger := log.WithFunc("pool.resolveMoveIn")
 	sb.Transition.Lock()

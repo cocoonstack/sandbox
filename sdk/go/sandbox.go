@@ -376,7 +376,7 @@ func (s *Sandbox) dial(ctx context.Context) (*agentConn, error) {
 	return newAgentConn(raw), nil
 }
 
-// markGone tags an owner's 404 or refused dial, after which nothing reached it; errors from the caller's own writers stay untagged.
+// markGone tags an owner's 404 or refused dial, after which nothing reached it.
 func markGone(err error, id, addr string) error {
 	ae, ok := errors.AsType[*APIError](err)
 	if ok && ae.Status == http.StatusNotFound || !ok && errors.Is(err, syscall.ECONNREFUSED) {

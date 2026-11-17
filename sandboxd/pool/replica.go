@@ -72,7 +72,7 @@ func (m *Manager) replicateOnce(ctx context.Context) {
 	}()
 }
 
-// replicable excludes a claim that is paused, archived or archiving, failed, or whose tenant was removed; callers hold m.mu.
+// replicable excludes a claim that is paused, mid-move, archived or archiving, failed, or whose tenant was removed; callers hold m.mu.
 func (m *Manager) replicable(sb *types.Sandbox) bool {
 	return m.vmSettledLocked(sb) && sb.ArchivePending == "" && !m.tenantGone(sb.Tenant)
 }

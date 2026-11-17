@@ -133,7 +133,7 @@ func (d *direction) admit(now time.Time, packets, bytes int) bool {
 	return (d.packets == nil || d.packets.AllowN(now, packets)) && (b == nil || b.AllowN(now, bytes))
 }
 
-// flows is one claim's flow table and limits: the claim's reader adds, the VXLAN receiver looks up.
+// flows is one claim's flow table and limits, shared by its stream reader and the VXLAN receiver.
 type flows struct {
 	limits Limits
 	used   *atomic.Int64
@@ -195,7 +195,7 @@ func (f *flows) outbound(p Packet, n int, now time.Time) Drop {
 	return DropLimit
 }
 
-// inbound passes a packet only for a flow the claim opened, and ICMP errors about one, then charges it.
+// inbound passes a packet of a flow the claim opened, an ICMP error about one, or a TCP segment that resumes an allowed flow, then charges it.
 func (f *flows) inbound(p Packet, frame []byte, n int, now time.Time) Drop {
 	for resumed := false; ; resumed = true {
 		f.mu.RLock()
