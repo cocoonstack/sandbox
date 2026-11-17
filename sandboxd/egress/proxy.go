@@ -182,7 +182,7 @@ func New(policy Evaluator, secrets Secrets, ca *CA, router Router, audit AuditFu
 	}
 	p.scope, p.endScope = context.WithCancel(context.Background())
 	// The stdlib default of 2 idle conns per host re-dials bursty same-host traffic.
-	pools := &connPools{tr: &http.Transport{DialContext: direct, MaxIdleConns: maxIdleConns, MaxIdleConnsPerHost: 8, IdleConnTimeout: idleConnTimeout, DisableCompression: true}, routed: map[routeKey]*http.Transport{}}
+	pools := &connPools{tr: &http.Transport{DialContext: direct, MaxIdleConns: maxIdleConns, MaxIdleConnsPerHost: 8, IdleConnTimeout: idleConnTimeout, MaxResponseHeaderBytes: maxHeaderBytes, DisableCompression: true}, routed: map[routeKey]*http.Transport{}}
 	if ca != nil {
 		pools.mitm = pools.tr.Clone()
 		pools.mitm.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12}
