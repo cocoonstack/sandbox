@@ -172,7 +172,10 @@ guest -> tun0 -> silkd --vsock 2051--> sandboxd --VXLAN--> exit (vxlan0, forward
   than the MTU the stream's hello announced, a GSO frame of more than 128
   packets, a GSO type that does not match the protocol and a partial checksum
   outside the L4 checksum field are dropped and counted per reason. A stream
-  whose guest stops reading for 10 seconds is closed, freeing its queue.
+  whose guest stops reading for 10 seconds is closed, freeing its queue. Until
+  then the queue holds up to 1024 frames in 64 KiB buffers, so a stalled guest
+  can hold about 72 MiB of inbound buffers per claim once the allocator rounds
+  each buffer up.
 - **Enforcement**: the packet port answers `ON` only for an armed,
   tun-enabled claim; disabling a claim ends its stream, drops its flows and
   stops its ARP answers. A guest of a `tun` pool that wakes, moves or reloads

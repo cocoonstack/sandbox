@@ -244,15 +244,12 @@ func (m *Manager) unrowForMove(ctx context.Context, sb *types.Sandbox, mv *outMo
 	m.mu.Lock()
 	replica, epoch := sb.ReplicaCk, sb.ArchiveEpoch
 	m.mu.Unlock()
-	if replica != "" {
-		if err := m.ckMarks.mark(replica); err != nil {
-			return fmt.Errorf("track replica %s: %w", replica, err)
-		}
-		mv.replica = replica
-	}
 	if epoch == 0 {
 		rec, ok, err := m.archives.Get(ctx, sb.ID)
 		if err != nil || !ok || rec.Owner != m.nodeID || !rec.Consumed {
+			return err
+		}
+		if err = m.trackReplica(mv, replica); err != nil {
 			return err
 		}
 		if err = m.archives.Delete(ctx, sb.ID, rec.Epoch); errors.Is(err, archives.ErrLost) {
@@ -262,6 +259,9 @@ func (m *Manager) unrowForMove(ctx context.Context, sb *types.Sandbox, mv *outMo
 	}
 	consumed, err := m.consumeRow(ctx, sb, epoch, "move")
 	if err != nil {
+		return err
+	}
+	if err = m.trackReplica(mv, replica); err != nil {
 		return err
 	}
 	live, err := m.commitIfLive(ctx, sb, func() { sb.ReplicaCk, sb.ArchiveEpoch = "", 0 })
@@ -386,6 +386,18 @@ func (m *Manager) abortMoveOut(ctx context.Context, sb *types.Sandbox, mv *outMo
 			logger.Warnf(ctx, "delete the aborted move of %s, leaving it to the sweep: %v", sb.ID, err)
 		}
 	}
+	return nil
+}
+
+// trackReplica marks a replica no adoptable row names any longer, so the move's end deletes it even after a crash.
+func (m *Manager) trackReplica(mv *outMove, replica string) error {
+	if replica == "" {
+		return nil
+	}
+	if err := m.ckMarks.mark(replica); err != nil {
+		return fmt.Errorf("track replica %s: %w", replica, err)
+	}
+	mv.replica = replica
 	return nil
 }
 

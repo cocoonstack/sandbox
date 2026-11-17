@@ -612,6 +612,9 @@ with a burst of the rate, at least 256 KiB and at most 1 GiB. A limited
 direction copies in user space, in reads of about a tenth of a second's bytes
 (1 KiB to 256 KiB on a tunnel, at most 32 KiB on a request), each followed by
 a wait for its tokens, so its CPU cost follows the bytes the cap lets through.
+A limited tunnel direction holds a 32 KiB buffer, and a claim lends at most
+eight 256 KiB ones at a time to the busiest, so a claim's open tunnels hold at
+most 512 × 2 × 32 KiB plus 2 MiB, about 34 MiB, idle or not.
 An unlimited direction keeps the kernel splice; a claim without a cap pays one
 map update per tunnel and an atomic load per request read. A changed rate
 starts with a full bucket, a direction whose rate did not change keeps its

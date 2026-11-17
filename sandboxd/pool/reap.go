@@ -163,7 +163,7 @@ func (m *Manager) reapOnce(ctx context.Context) {
 	})
 }
 
-// A zero deadline means no expiry (an archived claim kept forever); callers hold m.mu.
+// A zero deadline means no expiry (an archived claim kept forever).
 func (m *Manager) reapDueLocked(sb *types.Sandbox, now time.Time) bool {
 	return !sb.Deadline.IsZero() && now.After(sb.Deadline) && !m.midMoveLocked(sb)
 }
