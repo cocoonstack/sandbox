@@ -402,6 +402,45 @@ async fn disconnect_during_drain_publishes_real_exit_code() {
 }
 
 #[tokio::test]
+async fn disconnect_of_a_running_exec_publishes_its_kill_code() {
+    let state = Arc::new(State::new());
+    let (cw, mut lines, _) = connect_with(
+        &state,
+        json!({
+            "op": "exec",
+            "argv": ["/bin/sh", "-c", "while :; do echo x; sleep 0.05; done"]
+        }),
+    )
+    .await;
+
+    let started = next_frame(&mut lines).await;
+    assert_eq!(type_of(&started), "started");
+    let pid = started["pid"].as_u64().unwrap();
+
+    let (_aw, mut attached, _) = connect_with(&state, json!({"op":"attach","pid":pid})).await;
+    let live = next_frame(&mut attached).await;
+    assert_eq!(type_of(&live), "stdout", "{live:?}");
+    drop(lines);
+    drop(cw);
+
+    let frames = tokio::time::timeout(
+        Duration::from_secs(8),
+        frames_until(&mut attached, |f| {
+            matches!(type_of(f), "exit" | "done" | "error")
+        }),
+    )
+    .await
+    .expect("attach wedged");
+    let last = frames.last().unwrap();
+    assert_eq!(
+        type_of(last),
+        "exit",
+        "attach must end with exit: {frames:?}"
+    );
+    assert_eq!(last["code"], 137, "SIGKILL's code, not a fabricated -1");
+}
+
+#[tokio::test]
 async fn stdin_held_by_a_forked_child_does_not_wedge_the_next_rpc() {
     let state = Arc::new(State::new());
     let (mut cw, mut lines, handle) = connect_with(
