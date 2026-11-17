@@ -1305,7 +1305,6 @@ some of them on a node:
 | `sockssmoke` | the SOCKS5 door | `socks-e2e.sh` |
 | `credsmoke` | claim credential injection | `credentials-e2e.sh` |
 | `portsmoke`, `guestserver` | the guest-port relay; `guestserver` is its guest listener | `port-e2e.sh` |
-| `ringsmoke` | the output ring cap and exec as a user | |
 | `androidsmoke`, `browsersmoke` | the android and browser flavors | |
 | `pullbench`, `pushbench`, `rpcbench` | performance measurements | |
 
