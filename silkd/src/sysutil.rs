@@ -66,6 +66,36 @@ pub fn signal_group(pgid: u32, sig: i32) {
     }
 }
 
+pub fn hang_up_session(sid: u32) {
+    let Ok(procs) = std::fs::read_dir("/proc") else {
+        return;
+    };
+    let mut groups = Vec::new();
+    for stat in procs
+        .flatten()
+        .filter_map(|p| std::fs::read_to_string(p.path().join("stat")).ok())
+    {
+        let mut ids = stat
+            .rsplit(')')
+            .next()
+            .unwrap_or_default()
+            .split_ascii_whitespace()
+            .skip(2)
+            .map(str::parse::<u32>);
+        if let (Some(Ok(pgid)), Some(Ok(session))) = (ids.next(), ids.next())
+            && session == sid
+            && pgid != sid
+            && !groups.contains(&pgid)
+        {
+            groups.push(pgid);
+        }
+    }
+    for pgid in groups {
+        signal_group(pgid, libc::SIGHUP);
+        signal_group(pgid, libc::SIGCONT);
+    }
+}
+
 /// The environment every exec starts from; the proxy snapshot rides only where nothing routes directly.
 pub fn base_env() -> &'static [(&'static str, &'static str)] {
     if crate::net::routes_directly() {
