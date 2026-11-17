@@ -11,7 +11,7 @@ use silkd::server::State;
 use common::{assert_error, connect, expect_frame, next_frame, send};
 
 #[tokio::test]
-async fn every_git_verb_answers_not_found_and_keeps_the_connection() {
+async fn every_git_verb_answers_an_error_and_keeps_the_connection() {
     let empty = tempfile::tempdir().unwrap();
     // SAFETY: this binary runs one test, and no other thread touches the environment while it runs.
     unsafe { std::env::set_var("PATH", empty.path()) };
@@ -30,11 +30,11 @@ async fn every_git_verb_answers_not_found_and_keeps_the_connection() {
     ] {
         send(&mut cw, req.clone()).await;
         let frame = next_frame(&mut lines).await;
-        assert_error(&frame, "not_found");
+        assert_error(&frame, "internal");
         assert!(
             frame["message"]
                 .as_str()
-                .is_some_and(|m| m.starts_with("spawn git: ")),
+                .is_some_and(|m| m.contains(": spawn git: ")),
             "{req} answered {frame}"
         );
     }

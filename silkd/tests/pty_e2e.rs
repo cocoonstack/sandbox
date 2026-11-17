@@ -19,7 +19,7 @@ use tokio::sync::mpsc;
 
 use common::{
     Connection, FrameLines, alive, assert_error, b64, connect_with, decode, frames_until, one,
-    proc_entry, request, send, type_of, wait_for_path,
+    proc_entry, request, send, type_of, under_deadline, wait_for_path,
 };
 
 struct FailingSink(Vec<u8>);
@@ -208,12 +208,15 @@ async fn pty_disconnect_hangs_up_background_jobs() {
     let cmd = format!("sleep 300 & echo $! > {}\n", pid_file.display());
     send(&mut cw, json!({"op":"stdin","data":b64(cmd.as_bytes())})).await;
     wait_for_path(&pid_file).await;
-    let job: u32 = loop {
-        if let Ok(pid) = std::fs::read_to_string(&pid_file).unwrap().trim().parse() {
-            break pid;
+    let job: u32 = under_deadline(async {
+        loop {
+            if let Ok(pid) = std::fs::read_to_string(&pid_file).unwrap().trim().parse() {
+                break pid;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
         }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    };
+    })
+    .await;
     drop(lines);
     drop(cw);
     let _ = tokio::time::timeout(Duration::from_secs(5), handle)

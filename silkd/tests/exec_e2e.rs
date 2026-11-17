@@ -13,7 +13,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 
 use common::{
     alive, assert_error, b64, connect_with, exchange, frames_until, next_frame, one, proc_entry,
-    request, require_perl, roundtrip, send, stdout_body, type_of, wait_for_path,
+    request, require_perl, roundtrip, send, stdout_body, type_of, under_deadline, wait_for_path,
 };
 
 async fn detached_pid(state: &Arc<State>, script: &str) -> u64 {
@@ -363,81 +363,44 @@ async fn detached_exec_is_listed_then_logs_replay_output_and_exit() {
 }
 
 #[tokio::test]
-async fn disconnect_during_drain_publishes_real_exit_code() {
-    let state = Arc::new(State::new());
-    let (cw, mut lines, _) = connect_with(
-        &state,
-        json!({
-            "op": "exec",
-            "argv": ["/bin/sh", "-c", "{ sleep 0.5; echo late; sleep 30; } & exit 7"]
-        }),
-    )
-    .await;
+async fn disconnect_publishes_the_real_exit_code() {
+    for (case, script, code) in [
+        ("drain", "{ sleep 0.5; echo late; sleep 30; } & exit 7", 7),
+        ("running", "while :; do echo x; sleep 0.05; done", 137),
+    ] {
+        let state = Arc::new(State::new());
+        let (cw, mut lines, _) =
+            connect_with(&state, json!({"op":"exec","argv":["/bin/sh","-c",script]})).await;
 
-    let started = next_frame(&mut lines).await;
-    assert_eq!(type_of(&started), "started");
-    let pid = started["pid"].as_u64().unwrap();
+        let started = next_frame(&mut lines).await;
+        assert_eq!(type_of(&started), "started", "{case}");
+        let pid = started["pid"].as_u64().unwrap();
 
-    let (_aw, mut attached, _) = connect_with(&state, json!({"op":"attach","pid":pid})).await;
-    let late = next_frame(&mut attached).await;
-    assert_eq!(type_of(&late), "stdout", "{late:?}");
-    drop(lines);
-    drop(cw);
+        let (_aw, mut attached, _) = connect_with(&state, json!({"op":"attach","pid":pid})).await;
+        let first = next_frame(&mut attached).await;
+        assert_eq!(type_of(&first), "stdout", "{case}: {first:?}");
+        drop(lines);
+        drop(cw);
 
-    let frames = tokio::time::timeout(
-        Duration::from_secs(8),
-        frames_until(&mut attached, |f| {
-            matches!(type_of(f), "exit" | "done" | "error")
-        }),
-    )
-    .await
-    .expect("attach wedged");
-    let last = frames.last().unwrap();
-    assert_eq!(
-        type_of(last),
-        "exit",
-        "attach must end with exit: {frames:?}"
-    );
-    assert_eq!(last["code"], 7, "real exit code, not a fabricated -1");
-}
-
-#[tokio::test]
-async fn disconnect_of_a_running_exec_publishes_its_kill_code() {
-    let state = Arc::new(State::new());
-    let (cw, mut lines, _) = connect_with(
-        &state,
-        json!({
-            "op": "exec",
-            "argv": ["/bin/sh", "-c", "while :; do echo x; sleep 0.05; done"]
-        }),
-    )
-    .await;
-
-    let started = next_frame(&mut lines).await;
-    assert_eq!(type_of(&started), "started");
-    let pid = started["pid"].as_u64().unwrap();
-
-    let (_aw, mut attached, _) = connect_with(&state, json!({"op":"attach","pid":pid})).await;
-    let live = next_frame(&mut attached).await;
-    assert_eq!(type_of(&live), "stdout", "{live:?}");
-    drop(lines);
-    drop(cw);
-
-    let frames = tokio::time::timeout(
-        Duration::from_secs(8),
-        frames_until(&mut attached, |f| {
-            matches!(type_of(f), "exit" | "done" | "error")
-        }),
-    )
-    .await
-    .expect("attach wedged");
-    let last = frames.last().unwrap();
-    assert_eq!(
-        type_of(last),
-        "exit",
-        "attach must end with exit: {frames:?}"
-    );
-    assert_eq!(last["code"], 137, "SIGKILL's code, not a fabricated -1");
+        let frames = tokio::time::timeout(
+            Duration::from_secs(8),
+            frames_until(&mut attached, |f| {
+                matches!(type_of(f), "exit" | "done" | "error")
+            }),
+        )
+        .await
+        .unwrap_or_else(|_| panic!("{case}: attach wedged"));
+        let last = frames.last().unwrap();
+        assert_eq!(
+            type_of(last),
+            "exit",
+            "{case}: attach must end with exit: {frames:?}"
+        );
+        assert_eq!(
+            last["code"], code,
+            "{case}: real exit code, not a fabricated -1"
+        );
+    }
 }
 
 #[tokio::test]
@@ -473,11 +436,11 @@ async fn a_client_gone_mid_output_releases_the_stdin_a_forked_child_holds() {
     let dir = tempfile::tempdir().unwrap();
     let out = dir.path().join("count");
     let state = Arc::new(State::new());
-    let (mut cw, mut lines, _) = connect_with(
+    let (mut cw, mut lines, handle) = connect_with(
         &state,
         json!({
             "op": "exec",
-            "argv": ["/bin/sh", "-c", "exec 3<&0; perl -e 'setpgrp; exec @ARGV' /bin/sh -c ': >\"$OUT.ready\"; sleep 1; wc -c <&3 >\"$OUT.tmp\"; mv \"$OUT.tmp\" \"$OUT\"' >/dev/null 2>&1 & while :; do echo x; sleep 0.05; done"],
+            "argv": ["/bin/sh", "-c", "exec 3<&0; perl -e 'setpgrp; exec @ARGV' /bin/sh -c ': >\"$OUT.ready\"; while [ ! -e \"$OUT.go\" ]; do sleep 0.01; done; wc -c <&3 >\"$OUT.tmp\"; mv \"$OUT.tmp\" \"$OUT\"' >/dev/null 2>&1 & while :; do echo x; sleep 0.05; done"],
             "env": {"OUT": out.to_str().unwrap()}
         }),
     )
@@ -490,6 +453,8 @@ async fn a_client_gone_mid_output_releases_the_stdin_a_forked_child_holds() {
     wait_for_path(&dir.path().join("count.ready")).await;
     drop(lines);
     drop(cw);
+    let _ = under_deadline(handle).await;
+    std::fs::write(dir.path().join("count.go"), b"").unwrap();
 
     wait_for_path(&out).await;
     let read: usize = std::fs::read_to_string(&out)
