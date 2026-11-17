@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/cocoonstack/sandbox/sandboxd/config"
-	"github.com/cocoonstack/sandbox/sandboxd/engine"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
@@ -470,7 +469,7 @@ func TestQuiesceFailureSyncsOnceAndKeepsMarkers(t *testing.T) {
 func TestReleaseSkipsTheRemainingUnmountsOfAWedgedGuest(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		m, base, sb, paths := claimTwoWritableVolumes(t)
-		eng := &stallingUnmountEngine{fakeEngine: base, firstStall: 2 * engine.VolumeMutationTimeout}
+		eng := &stallingUnmountEngine{fakeEngine: base, firstStall: 2 * volumeMutationTimeout}
 		m.eng = eng
 		start := time.Now()
 
@@ -481,8 +480,8 @@ func TestReleaseSkipsTheRemainingUnmountsOfAWedgedGuest(t *testing.T) {
 		if len(eng.deadlines) != 1 {
 			t.Errorf("unmount calls %d, want 1: a wedged guest skips the rest", len(eng.deadlines))
 		}
-		if wall := time.Since(start); wall != engine.VolumeMutationTimeout {
-			t.Errorf("release waited %v, want %v", wall, engine.VolumeMutationTimeout)
+		if wall := time.Since(start); wall != volumeMutationTimeout {
+			t.Errorf("release waited %v, want %v", wall, volumeMutationTimeout)
 		}
 		if got := base.syncCount(); got != 1 {
 			t.Errorf("guest syncs %d, want the fallback once", got)
@@ -498,7 +497,7 @@ func TestReleaseSkipsTheRemainingUnmountsOfAWedgedGuest(t *testing.T) {
 func TestReleaseGivesASlowFlushItsOwnMutationBudget(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		m, base, sb, _ := claimTwoWritableVolumes(t)
-		stall := engine.VolumeMutationTimeout * 2 / 3
+		stall := volumeMutationTimeout * 2 / 3
 		eng := &stallingUnmountEngine{fakeEngine: base, firstStall: stall}
 		m.eng = eng
 		start := time.Now()
@@ -507,7 +506,7 @@ func TestReleaseGivesASlowFlushItsOwnMutationBudget(t *testing.T) {
 			t.Fatalf("Release: %v", err)
 		}
 
-		want := []time.Time{start.Add(engine.VolumeMutationTimeout), start.Add(stall + engine.VolumeMutationTimeout)}
+		want := []time.Time{start.Add(volumeMutationTimeout), start.Add(stall + volumeMutationTimeout)}
 		if !slices.EqualFunc(eng.deadlines, want, time.Time.Equal) {
 			t.Errorf("unmount deadlines %v, want %v: each volume gets its own budget", eng.deadlines, want)
 		}

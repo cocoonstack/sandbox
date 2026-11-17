@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"time"
 
 	"github.com/cocoonstack/sandbox/sandboxd/engine"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
@@ -14,6 +15,8 @@ import (
 const (
 	volumeChangeFailed      = "volume change failed; retry the desired target"
 	volumeChangeInterrupted = "volume change interrupted; retry the desired target"
+
+	volumeMutationTimeout = 30 * time.Second
 )
 
 type volumeEdit func([]types.Volume) ([]types.Volume, error)
@@ -150,7 +153,7 @@ func (m *Manager) changeVolumes(ctx context.Context, id, tenant string, change v
 		if resolveErr != nil {
 			return view, resolveErr
 		}
-		applyCtx, cancel := context.WithTimeout(ctx, engine.VolumeMutationTimeout)
+		applyCtx, cancel := context.WithTimeout(ctx, volumeMutationTimeout)
 		err = m.applyVolume(applyCtx, sb, repair, true)
 		cancel()
 		if err != nil {
@@ -306,7 +309,7 @@ func (m *Manager) detachVolumeRun(ctx context.Context, sb *types.Sandbox, run *v
 	if err != nil {
 		return err
 	}
-	detachCtx, cancel := context.WithTimeout(ctx, engine.VolumeMutationTimeout)
+	detachCtx, cancel := context.WithTimeout(ctx, volumeMutationTimeout)
 	defer cancel()
 	cleanRW, err := m.eng.DetachVolume(detachCtx, sb.VMName, sb.VsockSocket, v.Name, v.Mount)
 	if err != nil {

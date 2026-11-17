@@ -13,8 +13,8 @@ const argSeries = "--series"
 
 // CheckMigrateSupport rejects runtimes without live migration.
 func (e *Engine) CheckMigrateSupport(ctx context.Context) error {
-	if version, misses := e.missesFloor(ctx, MigrateCocoon); misses {
-		return fmt.Errorf("live migration requires Cocoon >= %s; installed version is %s", MigrateCocoon, cmp.Or(version, "unavailable"))
+	if version, misses := e.missesFloor(ctx, migrateFloor); misses {
+		return fmt.Errorf("live migration requires Cocoon >= %s; installed version is %s", migrateFloor, cmp.Or(version, "unavailable"))
 	}
 	return nil
 }

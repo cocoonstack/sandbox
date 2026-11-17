@@ -870,8 +870,8 @@ func TestLiveAttachBoundsWholeDeviceOperation(t *testing.T) {
 		if _, err := m.SetVolumes(t.Context(), sb.ID, sb.Tenant, []types.Volume{{Name: "data"}}); err != nil {
 			t.Fatalf("SetVolumes: %v", err)
 		}
-		if deadline := <-eng.deadlines; !deadline.Equal(start.Add(engine.VolumeMutationTimeout)) {
-			t.Fatalf("live attach deadline=%v, want %v", deadline, start.Add(engine.VolumeMutationTimeout))
+		if deadline := <-eng.deadlines; !deadline.Equal(start.Add(volumeMutationTimeout)) {
+			t.Fatalf("live attach deadline=%v, want %v", deadline, start.Add(volumeMutationTimeout))
 		}
 	})
 }
@@ -893,8 +893,8 @@ func TestLiveDetachTimeoutHiddenByTheEngineReadsAsDeadline(t *testing.T) {
 		if !errors.Is(err, context.DeadlineExceeded) {
 			t.Errorf("detach past its budget: %v, want context.DeadlineExceeded", err)
 		}
-		if deadline := <-eng.deadlines; !deadline.Equal(start.Add(engine.VolumeMutationTimeout)) {
-			t.Errorf("live detach deadline=%v, want %v", deadline, start.Add(engine.VolumeMutationTimeout))
+		if deadline := <-eng.deadlines; !deadline.Equal(start.Add(volumeMutationTimeout)) {
+			t.Errorf("live detach deadline=%v, want %v", deadline, start.Add(volumeMutationTimeout))
 		}
 	})
 }

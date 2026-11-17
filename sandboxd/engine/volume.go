@@ -14,9 +14,6 @@ import (
 )
 
 const (
-	// VolumeMutationTimeout bounds one live attach or detach, guest steps included.
-	VolumeMutationTimeout = 30 * time.Second
-
 	syncTimeout        = 2 * time.Second
 	volumePollInterval = 10 * time.Millisecond
 	volumeProbeTimeout = 2 * time.Second

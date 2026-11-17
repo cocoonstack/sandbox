@@ -27,7 +27,7 @@ func TestBelowFloorComparesReleasesAndLeavesOthersUnknown(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.v, func(t *testing.T) {
-			below, known := belowFloor(tt.v, RequiredCocoon)
+			below, known := belowFloor(tt.v, requiredFloor)
 			if below != tt.below || known != tt.known {
 				t.Errorf("belowFloor(%q) = (%v, %v), want (%v, %v)", tt.v, below, known, tt.below, tt.known)
 			}
@@ -43,16 +43,16 @@ func TestFeatureSupportFollowsTheCocoonVersion(t *testing.T) {
 		version       string
 		fail, allowed bool
 	}{
-		{liveVolume, LiveVolumeCocoon, "v0.7.1", false, false},
-		{liveVolume, LiveVolumeCocoon, "v0.7.2-rc.1", false, false},
-		{liveVolume, LiveVolumeCocoon, "v0.7.2", false, true},
-		{liveVolume, LiveVolumeCocoon, "v0.8.0", false, true},
-		{liveVolume, LiveVolumeCocoon, "master-abcdef", false, true},
-		{liveVolume, LiveVolumeCocoon, "v0.7.2", true, false},
-		{migrate, MigrateCocoon, "v0.7.6", false, false},
-		{migrate, MigrateCocoon, "v0.7.7", false, true},
-		{migrate, MigrateCocoon, "master-ba2020c", false, true},
-		{migrate, MigrateCocoon, "v0.7.7", true, false},
+		{liveVolume, liveVolumeFloor, "v0.7.1", false, false},
+		{liveVolume, liveVolumeFloor, "v0.7.2-rc.1", false, false},
+		{liveVolume, liveVolumeFloor, "v0.7.2", false, true},
+		{liveVolume, liveVolumeFloor, "v0.8.0", false, true},
+		{liveVolume, liveVolumeFloor, "master-abcdef", false, true},
+		{liveVolume, liveVolumeFloor, "v0.7.2", true, false},
+		{migrate, migrateFloor, "v0.7.6", false, false},
+		{migrate, migrateFloor, "v0.7.7", false, true},
+		{migrate, migrateFloor, "master-ba2020c", false, true},
+		{migrate, migrateFloor, "v0.7.7", true, false},
 	} {
 		t.Run(fmt.Sprintf("floor=%s/%s/fail=%v", tt.floor, tt.version, tt.fail), func(t *testing.T) {
 			t.Setenv("COCOON_TEST_VERSION", tt.version)
@@ -86,11 +86,11 @@ if [ -n "$COCOON_TEST_VERSION_FAIL" ]; then exit 1; fi
 printf 'Version: v0.7.2\n'
 `)
 	eng := newTestEngine()
-	if _, err := eng.Version(t.Context()); err != nil {
+	if _, err := eng.cocoonVersion(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("COCOON_TEST_VERSION_FAIL", "1")
-	if v, err := eng.Version(t.Context()); err != nil || v != "v0.7.2" {
+	if v, err := eng.cocoonVersion(t.Context()); err != nil || v != "v0.7.2" {
 		t.Fatalf("cached version %q, %v", v, err)
 	}
 }
