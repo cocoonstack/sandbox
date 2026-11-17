@@ -347,8 +347,9 @@ duplicate fields, and trailing JSON return 400.
 
 Success is 204. An identical normalized registration is idempotent. A different
 binding, changed fields, a static name or cleaned path collision, or a name a
-claim still holds returns 409. Each change is an `op:"volumes"` audit record
-naming the volume added or removed.
+claim still holds returns 409. A PUT that adds a name and every successful
+DELETE, also of an absent name, write an `op:"volumes"` audit record naming the
+volume.
 Invalid fields return 400. GET keeps its existing projection without host paths
 or tenant lists. Runtime entries support the existing live volume API.
 

@@ -118,7 +118,7 @@ sandboxd reads one JSON file (`-config`, default
   "mesh": {
     "node_id": "node-a",
     "bind": "10.0.0.5:7946",
-    "join": ["10.0.0.6:7946"],
+    "join": ["10.0.0.5:7946", "10.0.0.6:7946"],
     "cluster_key": "MDEyMzQ1Njc4OWFiY2RlZg=="
   },
   "pools": [
@@ -550,7 +550,7 @@ here validates on load:
   "mesh": {
     "node_id": "node-a",
     "bind": "10.0.0.5:7946",
-    "join": ["10.0.0.6:7946"],
+    "join": ["10.0.0.5:7946", "10.0.0.6:7946"],
     "cluster_key": "MDEyMzQ1Njc4OWFiY2RlZg=="
   },
 
