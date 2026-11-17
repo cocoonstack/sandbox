@@ -174,7 +174,7 @@ func (m *Manager) settleReplicaIntent(ctx context.Context, sb *types.Sandbox) er
 	}
 	switch {
 	case gone, ok && rec.Owner != m.nodeID:
-		m.deleteUnrowedPending(ctx, sb, rec)
+		m.deleteUnrowed(ctx, sb, rec)
 		m.dropAdopted(ctx, sb)
 		return ErrUnknownSandbox
 	case ok && !rec.Consumed && rec.Checkpoint == pending:

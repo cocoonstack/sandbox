@@ -172,7 +172,10 @@ guest -> tun0 -> silkd --vsock 2051--> sandboxd --VXLAN--> exit (vxlan0, forward
   than the MTU the stream's hello announced, a GSO frame of more than 128
   packets, a GSO type that does not match the protocol and a partial checksum
   outside the L4 checksum field are dropped and counted per reason. A stream
-  whose guest stops reading for 10 seconds is closed, freeing its queue.
+  whose guest stops reading for 10 seconds is closed, freeing its queue. Until
+  then the queue holds at most 1024 frames, each in a 9 KiB buffer except up
+  to 128 merged or larger frames in 64 KiB ones: under 18 MiB of host memory
+  per claim.
 - **Enforcement**: the packet port answers `ON` only for an armed,
   tun-enabled claim; disabling a claim ends its stream, drops its flows and
   stops its ARP answers. A guest of a `tun` pool that wakes, moves or reloads
@@ -206,8 +209,7 @@ guest -> tun0 -> silkd --vsock 2051--> sandboxd --VXLAN--> exit (vxlan0, forward
   adds, on the claim path, an in-memory address (or one meta-store round
   trip), a socket bind and one gratuitous ARP; `tun_up` is sent in the
   background. Per packet: one parse, one flow-table read, the rate checks, an
-  incremental checksum update, one copy out of the stream buffer and one into
-the send buffer; a 64 KiB GSO
+  incremental checksum update and one copy into the send buffer; a 64 KiB GSO
   frame costs about 9 µs to segment and checksum (`BenchmarkForwardGSO`), a
   small packet about 100 ns, a delivered packet about 250 ns, all without
   allocation.

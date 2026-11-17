@@ -27,7 +27,7 @@ type LiveVolumeUnsupported struct {
 }
 
 func (e *LiveVolumeUnsupported) Error() string {
-	return fmt.Sprintf("live volume changes require Cocoon >= %s; installed version is %s", LiveVolumeCocoon, cmp.Or(e.Version, "unavailable"))
+	return fmt.Sprintf("live volume changes require Cocoon >= %s; installed version is %s", liveVolumeFloor, cmp.Or(e.Version, "unavailable"))
 }
 
 type volumeMount struct {
@@ -36,7 +36,7 @@ type volumeMount struct {
 
 // CheckLiveVolumeSupport rejects runtimes without idempotent live disk attach and detach.
 func (e *Engine) CheckLiveVolumeSupport(ctx context.Context) error {
-	if version, misses := e.missesFloor(ctx, LiveVolumeCocoon); misses {
+	if version, misses := e.missesFloor(ctx, liveVolumeFloor); misses {
 		return &LiveVolumeUnsupported{Version: version}
 	}
 	return nil

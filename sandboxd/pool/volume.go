@@ -220,7 +220,7 @@ func (m *Manager) quiesceVolumes(ctx context.Context, sb *types.Sandbox) volumeT
 		if !needsUnmount(volume) {
 			continue
 		}
-		unmountCtx, cancel := context.WithTimeout(ctx, engine.VolumeMutationTimeout)
+		unmountCtx, cancel := context.WithTimeout(ctx, volumeMutationTimeout)
 		clean, err := m.eng.UnmountVolume(unmountCtx, sb.VsockSocket, volume.Mount)
 		wedged := unmountCtx.Err() != nil
 		cancel()

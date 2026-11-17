@@ -23,7 +23,16 @@ const (
 	tsPH   = "@TS@"
 	serpPH = "@SERP@"
 	fbPH   = "@FB@"
+
+	caFile         = "/usr/local/share/ca-certificates/sandbox-egress.crt"
+	intermediateCN = "sandbox egress intermediate"
 )
+
+type headerCase struct {
+	name      string
+	sb        *sandbox.Sandbox
+	want, not string
+}
 
 func main() {
 	addr := flag.String("addr", "127.0.0.1:7882", "sandboxd address")
@@ -80,19 +89,13 @@ func run(ctx context.Context, addr, token, template, echo, secret, sse string) e
 	}
 	defer func() { _ = plain.Close() }()
 	fmt.Printf("  claimed %s (A), %s (B), %s (plain) on one intercept pool\n", a.ID, b.ID, plain.ID)
+	if err = expectIntercept(ctx, plain, echo); err != nil {
+		return err
+	}
+	fmt.Println("  cluster root in the guest trust store, the leaf issued by this node's intermediate, direct egress blocked")
 
-	for _, tc := range []struct {
-		name      string
-		sb        *sandbox.Sandbox
-		want, not string
-	}{
-		{"A", a, valueA, valueB},
-		{"B", b, valueB, valueA},
-		{"plain", plain, "placeholder", "key-"},
-	} {
-		if err = expectHeader(ctx, tc.sb, echo, tc.want, tc.not, secret); err != nil {
-			return fmt.Errorf("%s: %w", tc.name, err)
-		}
+	if err = expectHeaders(ctx, echo, secret, headerCase{"A", a, valueA, valueB}, headerCase{"B", b, valueB, valueA}, headerCase{"plain", plain, "placeholder", "key-"}); err != nil {
+		return err
 	}
 	fmt.Println("  each claim's origin saw only its own credential, the plain claim the guest's placeholder, all the pool secret")
 	if sse != "" {
@@ -284,6 +287,20 @@ func credential(echo, value string) map[string]sandbox.EnvVar {
 	return map[string]sandbox.EnvVar{entry: {Value: value, Guest: new(false), Inject: &sandbox.EnvInject{Hosts: []string{echo}, Header: header}}}
 }
 
+func expectIntercept(ctx context.Context, sb *sandbox.Sandbox, echo string) error {
+	if _, err := sb.Exec(ctx, "test", "-f", caFile); err != nil {
+		return fmt.Errorf("cluster root not in the guest trust store: %w", err)
+	}
+	if err := expectTunnel(ctx, sb, echo, true); err != nil {
+		return err
+	}
+	out, err := sb.Exec(ctx, "sh", "-c", fmt.Sprintf("curl -s -m 3 --noproxy '*' https://%s/ >/dev/null 2>&1 && echo REACHED || echo BLOCKED", echo))
+	if err != nil || strings.TrimSpace(out) != "BLOCKED" {
+		return fmt.Errorf("guest reached the origin without the proxy: %q %v", out, err)
+	}
+	return nil
+}
+
 func expectPlaceholder(ctx context.Context, sb *sandbox.Sandbox, echo, value string) error {
 	env := &sandbox.EnvVar{Value: value, Guest: new(false), Inject: &sandbox.EnvInject{Hosts: []string{echo}, Header: "X-Ph-Key", Placeholder: "@PH_KEY@"}}
 	if err := sb.PatchEnv(ctx, map[string]*sandbox.EnvVar{"PH_KEY": env}); err != nil {
@@ -305,7 +322,7 @@ func expectPlaceholder(ctx context.Context, sb *sandbox.Sandbox, echo, value str
 	return nil
 }
 
-// expectTunnel reads the issuer and HTTP version the guest gets from host; an intercepted tunnel shows the e2e CA and HTTP/1.1.
+// expectTunnel reads the issuer and HTTP version the guest gets from host; an intercepted tunnel shows the node's intermediate and HTTP/1.1.
 func expectTunnel(ctx context.Context, sb *sandbox.Sandbox, host string, intercepted bool) error {
 	out, err := sb.Exec(ctx, "sh", "-c", fmt.Sprintf("curl -sSv -o /dev/null -w 'version=%%{http_version}\\n' -x %s https://%s/ 2>&1", harness.GuestProxy, host))
 	if err != nil {
@@ -313,10 +330,19 @@ func expectTunnel(ctx context.Context, sb *sandbox.Sandbox, host string, interce
 	}
 	_, rest, found := strings.Cut(out, "issuer:")
 	issuer, _, _ := strings.Cut(rest, "\n")
-	mitm := strings.Contains(issuer, "e2e")
+	mitm := strings.Contains(issuer, intermediateCN)
 	h2 := strings.Contains(out, "version=2")
 	if !found || mitm != intercepted || h2 == intercepted {
 		return fmt.Errorf("%s on %s: issuer %q, HTTP/2 %t, want intercepted %t:\n%s", host, sb.ID, issuer, h2, intercepted, out)
+	}
+	return nil
+}
+
+func expectHeaders(ctx context.Context, echo, secret string, cases ...headerCase) error {
+	for _, tc := range cases {
+		if err := expectHeader(ctx, tc.sb, echo, tc.want, tc.not, secret); err != nil {
+			return fmt.Errorf("%s: %w", tc.name, err)
+		}
 	}
 	return nil
 }

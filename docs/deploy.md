@@ -164,14 +164,14 @@ the intersection of the two.
 | `api_token_next` | unset | a second root credential for a [rolling rotation](#rotating-api_token-and-operator_token): the node accepts it exactly as it accepts `api_token`, and the audit `caller` stays `root`. Peer calls still send `api_token`. Needs `api_token`; must differ from `api_token`, `operator_token` and `operator_token_next`; a tenant token must differ from it (the tenant file is checked at boot, every tenant write is checked). Not part of the cluster digest; restart only |
 | `operator_token` | unset | a second node credential for a public control plane: root's authority on the claim lifecycle (claim without `volumes`, list, read by id, stats per claim and for the node, release, hibernate, wake, renew, balloon, env, port relay, exec, owner and adoption), the tenant API, `GET /v1/info` and `GET /v1/peers`, and `403` everywhere else, including a claim that names `volumes`. It reaches every claim's data: it reads any claim's token by id (recorded as op `token` with `audit_log` on) and execs in any claim. Through the tenant API it holds every tenant's authority: it can mint or re-key any tenant and act as it, including volume claims that tenant may make and fork, checkpoint and preview with a claim token. It holds no node or cluster configuration power: it cannot change pools, config, drain, cordon, moves, volumes, tun, egress limits or instance metadata, or read usage, metrics or checkpoint blobs. Needs `api_token` and must differ from it; a tenant token must differ from it (the tenant file is checked at boot, every tenant write is checked). Shared within a cell like `api_token`, and covered by the cluster digest when set and `mesh.cluster_key` is set; restart only |
 | `operator_token_next` | unset | a second operator credential for a [rolling rotation](#rotating-api_token-and-operator_token): the node accepts it exactly as it accepts `operator_token`, on the same routes, and the audit `caller` stays `operator`. Needs `operator_token`; must differ from `api_token`, `api_token_next` and `operator_token`; a tenant token must differ from it (the tenant file is checked at boot, every tenant write is checked). Not part of the cluster digest; restart only |
-| `meta_store` | unset | `{"kind": "pg", "dsn_env": "SANDBOXD_PG_DSN"}`: keep the tenant set in the [cell's](cluster.md#cells) PostgreSQL database instead of each node's `tenants.json` (see [shared tenant database](#shared-tenant-database)). `dsn_env` names the node env holding the connection string. An optional `cell` also keeps the API-applied pool set there, one per cell, instead of in each node's `pools.json` (see [shared pool set](#shared-pool-set)); without it pool targets stay per node. An optional `usage: true` also lands this node's usage journal in one shared table and serves [`GET /v1/usage`](sandboxd-api.md#get-v1usage) from it (see [shared usage table](#shared-usage-table)). Needs `api_token`. Restart only |
+| `meta_store` | unset | `{"dsn_env": "SANDBOXD_PG_DSN"}`: keep the tenant set in the [cell's](cluster.md#cells) PostgreSQL database instead of each node's `tenants.json` (see [shared tenant database](#shared-tenant-database)). `dsn_env` names the node env holding the connection string. An optional `cell` also keeps the API-applied pool set there, one per cell, instead of in each node's `pools.json` (see [shared pool set](#shared-pool-set)); without it pool targets stay per node. An optional `usage: true` also lands this node's usage journal in one shared table and serves [`GET /v1/usage`](sandboxd-api.md#get-v1usage) from it (see [shared usage table](#shared-usage-table)). Needs `api_token`. Restart only |
 | `max_fork_count` | 16 | children a single `fork` may create; each is a full-RAM VM, so this bounds one request's memory blast radius to the node's capacity |
 | `refill_concurrency` | 0 (auto) | concurrent VM provisioning budget, shared by warm-pool refills, fork clones, and the reap/hibernate/reconcile engine batches; the batches never take the last quarter of it (at least one slot), so a mass expiry or idle sweep cannot stop refills. 0 sizes it from the node: `NumCPU*2/3` clamped to [4, 256] — a 384-core node gets 256; small nodes keep a floor of 4 |
 | `release_delay_seconds` | 0 | seconds a released VM waits in the removal queue before `cocoon vm rm`. The claim is dropped and journaled and its egress listener closed at release; the VM removal, the volume hold release and the egress tap unlock run on the first reap tick (5 s) after the delay, on the `refill_concurrency` budget like every other batch teardown, so a burst of releases does not compete with the claims still running. Until then the VM holds its memory and its volume reservations without counting as a claim. 0 removes inline |
 | `preview_listen` | (off) | address for a preview HTTP server that serves guest ports under signed URLs; needs `preview_secret` |
 | `preview_secret` | — | HMAC secret signing preview tokens, shared within a [cell](cluster.md#cells). Restart only |
 | `preview_advertise` | = `preview_listen` | the browser-facing preview base URL, minted into every preview URL, so it must name a routable host (a wildcard `preview_listen` needs it set explicitly); nodes behind one TLS proxy may share it, while signed tokens route internally through each owner's `advertise_addr` |
-| `checkpoint_dir` | `<data_dir>/checkpoints` | where checkpoints and promoted templates live. Point it at a shared FUSE mount (JuiceFS over object storage, NFS) and every node sharing the mount can branch every checkpoint — records are generation-addressed with `meta.json` as the atomic commit pointer, so no cross-node locking is required of the filesystem. A re-publish retains its superseded export generation for at least ~1h and until a following hourly sweep so an in-flight clone that resolved the old metadata can finish; budget the current generation plus every generation retained across that grace-and-sweep window. An explicit delete can make a concurrent clone fail visibly. One contract on any shared root (mount or bucket): a template key has a single writer — promotes go to the sandbox's owner node, and operators must not race promotes of one name from different nodes (checkpoint ids are node-generated and never collide). Abandoned staging (`*.tmp`) is removed only once it is older than an hour, at startup and on the hourly generation sweep, so a publish in flight on another node of a shared root survives; the `meta.json` commit pointer is fsynced with its directory |
+| `checkpoint_dir` | `<data_dir>/checkpoints` | where checkpoints and promoted templates live. Point it at a shared FUSE mount (JuiceFS over object storage, NFS) and every node sharing the mount can branch every checkpoint — records are generation-addressed with `meta.json` as the atomic commit pointer, so no cross-node locking is required of the filesystem. A re-publish retains its superseded export generation for at least ~1h and until a following hourly sweep so an in-flight clone that resolved the old metadata can finish; budget the current generation plus every generation retained across that grace-and-sweep window. An explicit delete can make a concurrent clone fail visibly. One contract on any shared root (mount or bucket): a template key has a single writer — promotes go to the sandbox's owner node, and operators must not race promotes of one name from different nodes, where the last commit wins (checkpoint ids are node-generated and never collide). One race is closed: a tenant's first promote of a name creates the record only while none exists (a hard link on the mount, `If-None-Match: *` on the bucket), so two tenants that race one new name leave one owner and the other gets 409. The mount must support hard links, as JuiceFS and NFS do; on one that does not, a tenant's first promote of a name fails. Abandoned staging (`*.tmp`) is removed only once it is older than an hour, at startup and on the hourly generation sweep, so a publish in flight on another node of a shared root survives; the `meta.json` commit pointer is fsynced with its directory |
 | `checkpoint_store` | dir | checkpoint, archive and replica wake image, and promoted-template backend (all live in one store root, id-namespaced ck_/ar_/tp_; listing checkpoints reads only the ck_ records): `{"kind": "s3", "s3": {"bucket": "…", "prefix": "ck/", "endpoint": "…", "region": "…", "force_path_style": true}}` stores checkpoints in object storage (any node claims any checkpoint, no shared mount needed). Credentials come from the standard AWS chain (env/IAM role), never this file. Holes and all-zero chunks are never uploaded, and a fetch recreates the file at its full size and writes only the present chunks, so a mostly-empty disk costs its data, not its size, on the wire and on the fetching node. Consecutive captures of one claim upload only the chunks that changed (the first capture after a wake uploads everything again when no other live record of that claim remains, because the wake deletes the record it restored from). sandboxd never deletes a chunk or a manifest from the bucket; [Reclaiming S3 storage](#reclaiming-s3-storage) has the key layout and the operator's job. A publish or fetch is aborted after 30 minutes. Each publish in flight holds up to (`upload_concurrency` + `publish_concurrency`) × 16 MiB of chunk buffers, 192 MiB at the defaults ([S3 transfer concurrency](#s3-transfer-concurrency)), and sandboxd does not cap concurrent checkpoints or promotes, so the layer above it limits how many a tenant starts. Do not put an expiry lifecycle rule on the prefix: it would delete chunks a live record still names. Budget storage for every generation and chunk until your reclaim runs. When caching a new generation, each node prunes other cached generations of that record unused for at least an hour. The periodic generation sweep drops a node's cache of a record once the record is gone from the bucket and the cache is unused for at least an hour. Absent = the dir backend at `checkpoint_dir` |
 | `checkpoint_ttl_hours` | 0 (keep forever) | ages out checkpoints older than this; the sweep runs hourly and at startup. Explicit deletes never wait for it. Must be nonzero and match fleet-wide when `checkpoint_peer_heal` is on ([why](cluster.md#delete-is-eventual-not-a-fleet-wide-revocation)) |
 | `checkpoint_peer_heal` | false | on a cluster, lets a node pull a checkpoint it lacks from a peer — found via a live probe, not gossip — rather than failing the branch; see [placement lifecycle](cluster.md#checkpoints-on-a-cluster). Three requirements, all enforced at config load: a nonempty `api_token` (the blob transfer between peers authenticates with it; without one the raw record stream would be open), `mesh.cluster_key` set (the pull presents the fleet `api_token` to an address learned from the peer probe, so the gossip layer carrying that address must itself be authenticated), and `checkpoint_ttl_hours` nonzero. A shared checkpoint store (`checkpoint_store` kind `s3`) ignores this setting — every node already resolves every checkpoint directly, so there is nothing to heal |
@@ -232,15 +232,22 @@ It needs Cloud Hypervisor and a cocoon whose `vm disk attach` takes
 with an older cocoon: there every read spends a warm VM
 on an attach that fails, then wakes the claim. An archive exported by an older
 cocoon, whose `snapshot.json` has no `disk_attach_files`, wakes before any VM is
-taken. Unpooled claims (template and checkpoint claims) always wake.
+taken. Template and checkpoint claims always wake: they record no image.
 `reader` is reloadable like `capture_trim`; turning it off leaves open reader
 connections to finish, and the next connection wakes the claim.
 
-A reader is a warm VM taken from the claim's own pool, so it boots the claim's
-image with the claim's layers, and it has no NIC (egress-lane claims never
-hibernate). Taking one removes a VM from the pool until the refill replaces it,
-and an empty pool never cold-boots one: the call wakes the claim. Only the
-claim's own token reaches its reader. The guest's own kernel does the parsing,
+A reader is a warm VM of the claim's own pool whose golden was built from the
+image the claim was made from, so it boots the claim's image with the claim's
+layers, and it has no NIC (egress-lane claims never hibernate). A claim records
+the content id of the image it booted: its golden's, or for a cold boot in a
+pool with `reader` the id listed right before the boot. A fork inherits its
+parent's id, and the id travels with the claim through an archive, a replica
+and a live move. Once the template is re-pulled under the same ref and the pool
+has rebuilt its golden, the warm VMs boot the new image, so a claim of the
+previous image finds no reader and its read wakes it, on its own image. Taking
+a reader removes a VM from the pool until the refill replaces it, and a pool
+with no warm VM of the claim's image never cold-boots one: the call wakes the
+claim. Only the claim's own token reaches its reader. The guest's own kernel does the parsing,
 as it does for the claim:
 
 - a hibernated claim's copy-on-write disk is copied by cocoon (`vm disk attach
@@ -277,8 +284,8 @@ gets a fresh one. The claim's own code runs in its reader with root, as it did
 in the claim, and a reader is never shared, so the claim's bytes never reach a
 shared VM or the host kernel.
 
-Whenever a reader cannot be built (no warm VM in the claim's pool, a failed
-attach, an archive without
+Whenever a reader cannot be built (no warm VM of the claim's image in its pool,
+a claim that records no image, a failed attach, an archive without
 `disk_attach_files`, an image without `silkd` at that path), the call wakes the
 claim as it does without the feature. While the disk reserve is low the wake is
 refused too, so the read fails with an `error` frame. With the feature on for the pool, every
@@ -287,6 +294,7 @@ shows the disk as of that `sync`: a write the guest makes in the instant between
 the `sync` and the pause is visible only after a wake. A hibernate whose `sync`
 fails or times out is marked not reader-safe, as is any sleep that began before
 the pool had `reader`, as is a claim adopted from a replica, and its reads wake the claim as without the feature.
+A claim that records no image wakes too: one journaled by a sandboxd that did not record images, or one cold-booted before its pool had `reader`.
 
 ### Dataset volumes
 
@@ -433,6 +441,12 @@ and `unsigned_accept_encoding` to true, and supply an HMAC key of the node's
 service account as `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`. GCS rewrites
 `Accept-Encoding` in transit, so a signature that covers it never verifies;
 `unsigned_accept_encoding` keeps that header out of the signature.
+
+A tenant's first promote of a template name writes the record with
+`If-None-Match: *`, and a 412 answer means another promote created it first.
+AWS S3 honours the header. On a store that ignores it, two tenants that race
+one new name from two nodes both get 200 and the later commit owns the
+template. On a store that rejects it, that promote fails.
 
 ### S3 transfer concurrency
 
@@ -1107,8 +1121,6 @@ With `archive_failover`, each node keeps its archive and replica rows in
       updated_at   timestamptz NOT NULL DEFAULT now(),
       PRIMARY KEY (cell, id)
   );
-  CREATE INDEX IF NOT EXISTS sandboxd_archives_deadline ON sandboxd_archives (cell, deadline) WHERE deadline IS NOT NULL;
-  CREATE INDEX IF NOT EXISTS sandboxd_archives_consumed ON sandboxd_archives (cell) WHERE consumed;
   CREATE TABLE IF NOT EXISTS sandboxd_nodes (
       cell        text        NOT NULL,
       node        text        NOT NULL,
@@ -1294,16 +1306,14 @@ some of them on a node:
 | `volumesmoke` | shared read-only, writable, and live volumes | `sandboxd-e2e.sh` |
 | `meshsmoke` | template routing on a two-node mesh without a shared checkpoint store, because [a shared store resolves templates locally](cluster.md#templates-on-a-cluster) | |
 | `crossnode` | a checkpoint claimed on another node through the shared store | |
-| `coldproof` | a cold claim, by the guest's own clock | |
+| `demo -proof` | a cold claim, by the guest's own clock | |
 | `lifecycle` | idle → hibernate → archive → wake | `archive-e2e.sh` |
 | `egresssmoke` | guarded egress on either lane | `egress-e2e.sh` |
-| `interceptsmoke` | HTTPS interception | `intercept-e2e.sh` |
 | `sockssmoke` | the SOCKS5 door | `socks-e2e.sh` |
-| `credsmoke` | claim credential injection | `credentials-e2e.sh` |
+| `credsmoke` | HTTPS interception and claim credential injection | `credentials-e2e.sh` |
 | `portsmoke`, `guestserver` | the guest-port relay; `guestserver` is its guest listener | `port-e2e.sh` |
-| `ringsmoke` | the output ring cap and exec as a user | |
 | `androidsmoke`, `browsersmoke` | the android and browser flavors | |
-| `pullbench`, `pushbench`, `rpcbench` | performance measurements | |
+| `pullbench`, `rpcbench` | performance measurements; `pullbench -push` times uploads | |
 
 `scripts/bench.sh` is the published [benchmark](benchmarks.md#reproduce)
 procedure and `scripts/boot-bench.sh` times the boot phases.

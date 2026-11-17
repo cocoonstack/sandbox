@@ -47,10 +47,6 @@ type claimEncoder func(noRedirect, requirePromoted bool) ([]byte, error)
 
 type claimPoster func(addr string, body []byte) (claimResponse, error)
 
-type volumeListResponse struct {
-	Volumes []VolumeInfo `json:"volumes"`
-}
-
 type errorResponse struct {
 	Error string `json:"error"`
 }
@@ -132,15 +128,6 @@ func (c *Client) New(ctx context.Context, template string, opts ...Option) (*San
 		return nil, err
 	}
 	return c.handleFrom(addr, cr), nil
-}
-
-// Volumes lists the caller-visible fleet catalog; availability is local.
-func (c *Client) Volumes(ctx context.Context) ([]VolumeInfo, error) {
-	resp, err := c.doJSON[volumeListResponse](ctx, http.MethodGet, c.addr, "/v1/volumes", nil, c.apiToken, "list volumes")
-	if err != nil {
-		return nil, err
-	}
-	return resp.Volumes, nil
 }
 
 // Lookup finds the sandbox owner using its id and token.
@@ -290,6 +277,16 @@ func WithAPIToken(token string) ClientOption {
 // WithHTTPClient replaces the control-plane HTTP client, for callers that need their own transport, proxy, or timeout.
 func WithHTTPClient(hc *http.Client) ClientOption {
 	return func(c *Client) { c.hc = hc }
+}
+
+// WithTLSConfig sets certificate verification for HTTPS requests and agent relays.
+func WithTLSConfig(cfg *tls.Config) ClientOption {
+	return func(c *Client) { c.tlsConfig = cfg.Clone() }
+}
+
+// WithKeepAlive bounds how long a handle keeps an idle relay connection (default 30s; 0 dials per call); an open one holds the idle-hibernate clock.
+func WithKeepAlive(idle time.Duration) ClientOption {
+	return func(c *Client) { c.keepAlive = idle }
 }
 
 func retryTransient(err error) bool {

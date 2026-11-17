@@ -39,11 +39,6 @@ func (c *Client) configureTLS() error {
 	return nil
 }
 
-// WithTLSConfig sets certificate verification for HTTPS requests and agent relays.
-func WithTLSConfig(cfg *tls.Config) ClientOption {
-	return func(c *Client) { c.tlsConfig = cfg.Clone() }
-}
-
 func endpointURL(addr, scheme string) (*url.URL, error) {
 	if !strings.Contains(addr, "://") {
 		addr = scheme + "://" + addr

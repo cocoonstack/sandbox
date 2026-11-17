@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"time"
 
 	"github.com/cocoonstack/sandbox/sandboxd/engine"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
@@ -14,6 +15,8 @@ import (
 const (
 	volumeChangeFailed      = "volume change failed; retry the desired target"
 	volumeChangeInterrupted = "volume change interrupted; retry the desired target"
+
+	volumeMutationTimeout = 30 * time.Second
 )
 
 type volumeEdit func([]types.Volume) ([]types.Volume, error)
@@ -122,7 +125,11 @@ func (m *Manager) changeVolumes(ctx context.Context, id, tenant string, change v
 		}
 	}
 	failedName = ""
-	if err = m.prepareVolumeTarget(ctx, sb, run, target, additions, resolved); err != nil {
+	js, changed, err := m.stageVolumeTarget(ctx, sb, run, target, additions, resolved)
+	if err == nil && changed {
+		err = m.commitVolumeRun(ctx, sb, run, js)
+	}
+	if err != nil {
 		return view, err
 	}
 	m.mu.Lock()
@@ -150,7 +157,7 @@ func (m *Manager) changeVolumes(ctx context.Context, id, tenant string, change v
 		if resolveErr != nil {
 			return view, resolveErr
 		}
-		applyCtx, cancel := context.WithTimeout(ctx, engine.VolumeMutationTimeout)
+		applyCtx, cancel := context.WithTimeout(ctx, volumeMutationTimeout)
 		err = m.applyVolume(applyCtx, sb, repair, true)
 		cancel()
 		if err != nil {
@@ -249,14 +256,6 @@ func (m *Manager) cancelVolumeRun(sb *types.Sandbox) []types.Volume {
 	return heldVolumes(sb)
 }
 
-func (m *Manager) prepareVolumeTarget(ctx context.Context, sb *types.Sandbox, run *volumeRun, target, additions []types.Volume, resolved []resolvedVolume) error {
-	js, changed, err := m.stageVolumeTarget(ctx, sb, run, target, additions, resolved)
-	if err != nil || !changed {
-		return err
-	}
-	return m.commitVolumeRun(ctx, sb, run, js)
-}
-
 func (m *Manager) stageVolumeTarget(ctx context.Context, sb *types.Sandbox, run *volumeRun, target, additions []types.Volume, resolved []resolvedVolume) (claimSnapshot, bool, error) {
 	sb.Transition.Lock()
 	defer sb.Transition.Unlock()
@@ -306,7 +305,7 @@ func (m *Manager) detachVolumeRun(ctx context.Context, sb *types.Sandbox, run *v
 	if err != nil {
 		return err
 	}
-	detachCtx, cancel := context.WithTimeout(ctx, engine.VolumeMutationTimeout)
+	detachCtx, cancel := context.WithTimeout(ctx, volumeMutationTimeout)
 	defer cancel()
 	cleanRW, err := m.eng.DetachVolume(detachCtx, sb.VMName, sb.VsockSocket, v.Name, v.Mount)
 	if err != nil {

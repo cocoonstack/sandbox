@@ -275,7 +275,7 @@ func TestAnOriginHeaderPastTheCapIsABadGateway(t *testing.T) {
 	defer upstream.Close()
 	p := New(Policy{Allow: []Rule{{Host: "api.internal"}}}, nil, nil, fixedDial(upstream.Listener.Addr().String()), nil, nil)
 	front := serveFront(t, p)
-	for _, tt := range []struct{ size, want int }{{32 << 10, http.StatusOK}, {100 << 10, http.StatusBadGateway}} {
+	for _, tt := range []struct{ size, want int }{{100 << 10, http.StatusOK}, {300 << 10, http.StatusBadGateway}} {
 		size.Store(int64(tt.size))
 		resp := proxiedGet(t, front.URL, "http://api.internal/x")
 		_ = resp.Body.Close()

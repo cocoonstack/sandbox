@@ -18,6 +18,11 @@ const (
 
 	curlLoginDenied  = "exit=67"
 	curlProxyRefused = "exit=97"
+
+	fetched        = "200 exit=0"
+	socksRefused   = "000 " + curlProxyRefused
+	connectRefused = "000 exit=56"
+	forwardRefused = "403 exit=0"
 )
 
 func main() {
@@ -47,20 +52,20 @@ func run(addr, token, template, echo, getOnly, imap string) error {
 	defer func() { _ = sb.Close() }()
 	fmt.Printf("  claimed %s\n", sb.ID)
 
-	if code := curl(ctx, sb, "--socks5-hostname", socksProxy, "http://"+echo+"/get"); code != "200" {
+	if code := curl(ctx, sb, "--socks5-hostname", socksProxy, "http://"+echo+"/get"); code != fetched {
 		return fmt.Errorf("allowed host over SOCKS5 returned %q, want 200", code)
 	}
 	fmt.Println("  allowed host tunnels over SOCKS5")
 
-	if code := curl(ctx, sb, "-x", harness.GuestProxy, "http://"+getOnly+"/"); code != "200" {
+	if code := curl(ctx, sb, "-x", harness.GuestProxy, "http://"+getOnly+"/"); code != fetched {
 		return fmt.Errorf("GET-only host over the HTTP proxy returned %q, want 200", code)
 	}
-	if code := curl(ctx, sb, "--socks5-hostname", socksProxy, "http://"+getOnly+"/"); code != "000" {
+	if code := curl(ctx, sb, "--socks5-hostname", socksProxy, "http://"+getOnly+"/"); code != socksRefused {
 		return fmt.Errorf("GET-only host over SOCKS5 returned %q, want a refused tunnel", code)
 	}
 	fmt.Println("  GET-only host reachable on 3128, refused on 1080")
 
-	if code := curl(ctx, sb, "--socks5-hostname", socksProxy, "http://10.255.255.1/"); code != "000" {
+	if code := curl(ctx, sb, "--socks5-hostname", socksProxy, "http://10.255.255.1/"); code != socksRefused {
 		return fmt.Errorf("unlisted host over SOCKS5 returned %q, want a refused tunnel", code)
 	}
 	fmt.Println("  unlisted host refused")
@@ -80,10 +85,10 @@ func run(addr, token, template, echo, getOnly, imap string) error {
 		fmt.Println("  IMAP on the unlisted port refused on 1080")
 	}
 
-	if code := curl(ctx, sb, "-x", harness.GuestProxy, "https://"+echo+"/get"); code != "000" {
+	if code := curl(ctx, sb, "-x", harness.GuestProxy, "https://"+echo+"/get"); code != connectRefused {
 		return fmt.Errorf("CONNECT to the unlisted port 443 returned %q, want a refused tunnel", code)
 	}
-	if code := curl(ctx, sb, "-x", harness.GuestProxy, "http://"+echo+":8080/get"); code != "403" {
+	if code := curl(ctx, sb, "-x", harness.GuestProxy, "http://"+echo+":8080/get"); code != forwardRefused {
 		return fmt.Errorf("forward request to the unlisted port 8080 returned %q, want 403", code)
 	}
 	fmt.Println("  unlisted ports refused on 3128 for CONNECT and forward requests")
@@ -93,7 +98,7 @@ func run(addr, token, template, echo, getOnly, imap string) error {
 		return fmt.Errorf("claim from the policy-less pool: %w", err)
 	}
 	defer func() { _ = bare.Close() }()
-	if code := curl(ctx, bare, "--socks5-hostname", socksProxy, "http://"+echo+"/get"); code != "000" {
+	if code := curl(ctx, bare, "--socks5-hostname", socksProxy, "http://"+echo+"/get"); code != socksRefused {
 		return fmt.Errorf("policy-less pool opened a SOCKS5 tunnel with %q, want none", code)
 	}
 	fmt.Println("  pool without a policy: no SOCKS5 tunnel opens")
@@ -103,18 +108,18 @@ func run(addr, token, template, echo, getOnly, imap string) error {
 		return fmt.Errorf("claim from the pool that did not opt in: %w", err)
 	}
 	defer func() { _ = silent.Close() }()
-	if code := curl(ctx, silent, "--socks5-hostname", socksProxy, "http://"+echo+"/get"); code != "000" {
+	if code := curl(ctx, silent, "--socks5-hostname", socksProxy, "http://"+echo+"/get"); code != socksRefused {
 		return fmt.Errorf("pool that did not opt in opened a SOCKS5 tunnel with %q, want none", code)
 	}
-	if code := curl(ctx, silent, "-x", harness.GuestProxy, "http://"+echo+"/get"); code != "200" {
+	if code := curl(ctx, silent, "-x", harness.GuestProxy, "http://"+echo+"/get"); code != fetched {
 		return fmt.Errorf("pool that did not opt in returned %q on the HTTP proxy, want 200", code)
 	}
 	fmt.Println("  pool that did not opt in: HTTP door open, no SOCKS5 tunnel")
 	return nil
 }
 
-// curl reports the HTTP status the guest's curl saw; 000 is a connection the proxy refused.
+// curl reports the HTTP status and exit code of the guest's curl; 97 is a failed SOCKS5 handshake and 56 a CONNECT the proxy answered without a 2xx.
 func curl(ctx context.Context, sb *sandbox.Sandbox, args ...string) string {
-	out, _ := sb.Exec(ctx, "sh", "-c", "curl -s -o /dev/null -m 30 -w '%{http_code}' "+strings.Join(args, " "))
+	out, _ := sb.Exec(ctx, "sh", "-c", "curl -s -o /dev/null -m 30 -w '%{http_code}' "+strings.Join(args, " ")+"; echo \" exit=$?\"")
 	return strings.TrimSpace(out)
 }

@@ -2,6 +2,8 @@ package pool
 
 import (
 	"fmt"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -29,6 +31,37 @@ func BenchmarkIdleSweepScan(b *testing.B) {
 			for b.Loop() {
 				m.idleOnce(b.Context())
 			}
+		})
+	}
+}
+
+func BenchmarkWakeRunningClaim(b *testing.B) {
+	for _, holders := range []int{0, 1, 4} {
+		b.Run(fmt.Sprintf("holders=%d", holders), func(b *testing.B) {
+			m := sweepManager(b, 0)
+			var wg sync.WaitGroup
+			var stop atomic.Bool
+			for range holders {
+				wg.Go(func() {
+					for !stop.Load() {
+						m.mu.Lock()
+						for _, sb := range m.claimed {
+							_ = sb.Deadline
+						}
+						m.mu.Unlock()
+					}
+				})
+			}
+			b.ReportAllocs()
+			for b.Loop() {
+				_, _, done, err := m.WakeAgentSocket(b.Context(), "sb_00000", Cred{Operator: true})
+				if err != nil {
+					b.Fatalf("wake: %v", err)
+				}
+				done()
+			}
+			stop.Store(true)
+			wg.Wait()
 		})
 	}
 }

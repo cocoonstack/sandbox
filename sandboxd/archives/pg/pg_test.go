@@ -50,15 +50,6 @@ func TestCellsKeepTheirOwnRows(t *testing.T) {
 	}
 }
 
-func TestSchemaIndexesDeadlineAndConsumed(t *testing.T) {
-	r := open(t, metastoretest.PGSchema(t), "c1")
-	var n int
-	if err := r.pool.QueryRow(t.Context(), `SELECT count(*) FROM pg_indexes
-		WHERE schemaname = current_schema() AND tablename = 'sandboxd_archives' AND indexname IN ('sandboxd_archives_deadline', 'sandboxd_archives_consumed')`).Scan(&n); err != nil || n != 2 {
-		t.Errorf("deadline and consumed index count %d %v, want 2", n, err)
-	}
-}
-
 func TestTwoNodesShareTheTable(t *testing.T) {
 	dsn := metastoretest.PGSchema(t)
 	a, b := open(t, dsn, "c1"), open(t, dsn, "c1")

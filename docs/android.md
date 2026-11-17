@@ -53,4 +53,5 @@ ln, err := sb.ProxyPort(ctx, "127.0.0.1:6555", 5555)
 
 The hardware acceptance for all of the above is `e2e/cmd/androidsmoke`:
 claim → Android init tree (zygote + system_server) over the relay → ADB
-CNXN handshake on 5555 → checkpoint/branch re-verification.
+CNXN handshake on 5555 → checkpoint → a branch that keeps the kernel boot id
+and the `system_server` pid, so nothing rebooted, and passes both checks again.

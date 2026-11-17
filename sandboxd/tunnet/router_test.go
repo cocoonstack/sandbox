@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/netip"
 	"os"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -372,6 +373,23 @@ func TestRouterResumesAStreamOpenedBeforeTheArmButRefusesAnOpener(t *testing.T) 
 	})
 }
 
+func TestRouterJudgesAResumedFlowOnce(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		u, r := newRouter(t)
+		var asked atomic.Int32
+		r.Arm(Claim{ID: "c1", Addr: claimAddr, Allow: func(netip.Addr, uint16) bool { asked.Add(1); return true }})
+		u.sent(t)
+		guest := serve(t, r, claimAddr)
+		guestHello(t, guest)
+		synctest.Wait()
+		u.inject(t, reply(remote))
+		readFrame(t, guest)
+		if n := asked.Load(); n != 1 {
+			t.Fatalf("the policy was asked %d times for one resumed segment, want once", n)
+		}
+	})
+}
+
 func TestRouterKeepsTheMTUAStreamWasToldUntilItsNextHello(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		u, r := newRouter(t)
@@ -453,6 +471,124 @@ func TestRouterPointsAGuestICMPErrorAtTheClaimAddress(t *testing.T) {
 		inner, _, _ := u.sent(t)
 		if got := netip.AddrFrom4([4]byte(inner[28+dstAt:])); got != claimAddr || fold(onesSum(inner[20:], 0)) != 0xffff {
 			t.Errorf("quoted destination %v, icmp checksum %#x; want the claim address and a valid checksum", got, fold(onesSum(inner[20:], 0)))
+		}
+	})
+}
+
+func TestDeliverMovesATrainThatOutgrowsItsBufferIntoALargeOne(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		u, r := newRouter(t)
+		r.Arm(Claim{ID: "c1", Addr: claimAddr, Allow: func(netip.Addr, uint16) bool { return true }})
+		u.sent(t)
+		guest := serve(t, r, claimAddr)
+		guestHello(t, guest)
+		sendFrame(t, guest, frame(ProtoTCP, GuestAddr, remote, false))
+		u.sent(t)
+		segs := make([][]byte, 12)
+		var want []byte
+		for i := range segs {
+			segs[i] = dataSegment(uint32(1000+1000*i), 1000)
+			want = append(want, segs[i][Overhead+40:]...)
+		}
+		u.injectBatch(t, segs...)
+		merged := readFrame(t, guest)
+		ip := merged[VnetHdrLen:]
+		if p, _ := Parse(merged); merged[1] != gsoTCPv4 || p.Src != remote || p.Dst != GuestAddr || binary.BigEndian.Uint32(ip[24:]) != 1000 {
+			t.Fatalf("frame gso %d from %v to %v at sequence %d, want one TCPv4 GSO frame that starts the train", merged[1], p.Src, p.Dst, binary.BigEndian.Uint32(ip[24:]))
+		}
+		if !bytes.Equal(ip[40:], want) {
+			t.Fatalf("merged payload of %d bytes differs from the 12 segments' %d", len(ip)-40, len(want))
+		}
+		if got, want := binary.BigEndian.Uint16(ip[36:]), fold(pseudoSum(ip, len(ip)-20)); got != want || !validIP(merged) {
+			t.Errorf("merged checksum %#x want the pseudo-header sum %#x, ip valid %v", got, want, validIP(merged))
+		}
+	})
+}
+
+func TestRouterBoundsTheBuffersAStalledGuestHolds(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		u, r := newRouter(t)
+		r.Arm(Claim{ID: "c1", Addr: claimAddr, Allow: func(netip.Addr, uint16) bool { return true }})
+		u.sent(t)
+		guest := serve(t, r, claimAddr)
+		guestHello(t, guest)
+		sendFrame(t, guest, frame(ProtoTCP, GuestAddr, remote, false))
+		u.sent(t)
+		train := make([][]byte, 12)
+		for i := range train {
+			train[i] = dataSegment(uint32(1000+1000*i), 1000)
+		}
+		for range 300 {
+			u.injectBatch(t, train...)
+		}
+		small := reply(remote)
+		for range 1200 {
+			u.inject(t, small)
+		}
+		synctest.Wait()
+		l := r.claims[claimAddr].live()
+		if l == nil || r.Stats().Drops[DropQueueFull] == 0 {
+			t.Fatalf("stream live %v with %d queue drops, want a live stream whose queue filled", l != nil, r.Stats().Drops[DropQueueFull])
+		}
+		held := 0
+		for range len(l.send) {
+			held += cap(*<-l.send)
+		}
+		if held > 18<<20 {
+			t.Fatalf("a guest that stopped reading holds %d bytes of buffers, want at most 18 MiB", held)
+		}
+	})
+}
+
+func TestRouterForwardsFramesSplitAcrossWrites(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		u, r := newRouter(t)
+		r.Arm(Claim{ID: "c1", Addr: claimAddr, Allow: func(netip.Addr, uint16) bool { return true }})
+		u.sent(t)
+		guest := serve(t, r, claimAddr)
+		guestHello(t, guest)
+		var stream []byte
+		for i := range uint16(3) {
+			f := frame(ProtoTCP, GuestAddr, remote, true)
+			binary.BigEndian.PutUint16(f[VnetHdrLen+20+2:], 443+i)
+			stream = append(binary.LittleEndian.AppendUint32(stream, uint32(len(f))), f...)
+		}
+		for chunk := range slices.Chunk(stream, 50) {
+			if _, err := guest.Write(chunk); err != nil {
+				t.Fatal(err)
+			}
+		}
+		for i := range uint16(3) {
+			inner, _, _ := u.sent(t)
+			pkt := append(make([]byte, VnetHdrLen), inner...)
+			if p, _ := Parse(pkt); p.DstPort != 443+i || p.Src != claimAddr || !validIP(pkt) || !validL4(pkt) {
+				t.Fatalf("packet %d sent to port %d from %v, want port %d from the claim address with full checksums", i, p.DstPort, p.Src, 443+i)
+			}
+		}
+	})
+}
+
+func TestRouterRecordsAnIdleFlowOfAClaimWhoseStreamEnded(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		u, r := newRouter(t)
+		var records []FlowRecord
+		var mu sync.Mutex
+		r.Arm(Claim{
+			ID: "c1", Addr: claimAddr, Allow: func(netip.Addr, uint16) bool { return true },
+			Record: func(fr FlowRecord) { mu.Lock(); records = append(records, fr); mu.Unlock() },
+		})
+		u.sent(t)
+		guest := serve(t, r, claimAddr)
+		guestHello(t, guest)
+		sendFrame(t, guest, frame(ProtoUDP, GuestAddr, remote, false))
+		u.sent(t)
+		_ = guest.Close()
+		time.Sleep(idleUDP + sweepEvery)
+		synctest.Wait()
+		mu.Lock()
+		defer mu.Unlock()
+		if len(records) != 1 || records[0].Partial || !records[0].Allowed {
+			t.Fatalf("records %+v, want the idle flow's final record though the claim has no stream", records)
 		}
 	})
 }

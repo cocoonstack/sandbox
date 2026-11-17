@@ -482,12 +482,17 @@ func (m *Manager) forgetClaim(ctx context.Context, sb *types.Sandbox) ([]types.V
 	return holds, true
 }
 
-func (m *Manager) deleteUnrowedPending(ctx context.Context, sb *types.Sandbox, rec archives.Record) {
+func (m *Manager) deleteUnrowed(ctx context.Context, sb *types.Sandbox, rec archives.Record) {
 	m.mu.Lock()
-	pending := cmp.Or(sb.ArchivePending, sb.ReplicaPending)
+	cks := [...]string{sb.ArchivePending, sb.ReplicaPending, sb.ReplicaCk}
 	m.mu.Unlock()
-	if pending != "" && rec.Owner != m.nodeID && rec.Checkpoint != pending {
-		m.deleteOrphanArchiveCk(ctx, pending)
+	if rec.Owner == m.nodeID {
+		return
+	}
+	for _, ck := range cks {
+		if ck != "" && ck != rec.Checkpoint {
+			m.deleteOrphanArchiveCk(ctx, ck)
+		}
 	}
 }
 
@@ -705,7 +710,7 @@ func (m *Manager) fenceArchived(ctx context.Context, claims map[string]*types.Sa
 					logger.Warnf(ctx, "clear archive ck %s: %v", sb.ArchiveCk, err)
 				}
 			}
-			m.deleteUnrowedPending(ctx, sb, rec)
+			m.deleteUnrowed(ctx, sb, rec)
 			delete(claims, id)
 			logger.Infof(ctx, "dropped sandbox %s: another node holds it", id)
 		}
@@ -787,7 +792,7 @@ func (m *Manager) resolveIntent(ctx context.Context, sb *types.Sandbox) error {
 	case err != nil:
 		return err
 	case moved:
-		m.deleteUnrowedPending(ctx, sb, rec)
+		m.deleteUnrowed(ctx, sb, rec)
 		m.dropAdopted(ctx, sb)
 		return ErrUnknownSandbox
 	}

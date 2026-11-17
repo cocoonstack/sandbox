@@ -90,7 +90,6 @@ type Source interface {
 	Records() []TenantRecord
 	// Digest fingerprints a node-local set so two nodes can compare theirs; a shared source returns "".
 	Digest() string
-	Close() error
 }
 
 // Validate checks one record's fields; an empty TokenSHA256 passes, since writes may keep the stored token.

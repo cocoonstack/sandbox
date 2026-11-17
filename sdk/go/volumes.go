@@ -40,6 +40,10 @@ type VolumePatch struct {
 	Remove []string `json:"remove,omitzero"`
 }
 
+type volumeListResponse struct {
+	Volumes []VolumeInfo `json:"volumes"`
+}
+
 // VolumeError reports a failed volume request; Response is nil unless the reply carried the full view.
 type VolumeError struct {
 	*APIError
@@ -47,6 +51,15 @@ type VolumeError struct {
 }
 
 func (e *VolumeError) Unwrap() error { return e.APIError }
+
+// Volumes lists the caller-visible fleet catalog; availability is local.
+func (c *Client) Volumes(ctx context.Context) ([]VolumeInfo, error) {
+	resp, err := c.doJSON[volumeListResponse](ctx, http.MethodGet, c.addr, "/v1/volumes", nil, c.apiToken, "list volumes")
+	if err != nil {
+		return nil, err
+	}
+	return resp.Volumes, nil
+}
 
 // GetVolumes reads the owning node's view and updates public fields; callers must serialize volume methods.
 func (s *Sandbox) GetVolumes(ctx context.Context) (SandboxVolumesResponse, error) {

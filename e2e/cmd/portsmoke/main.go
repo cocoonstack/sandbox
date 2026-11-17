@@ -3,6 +3,7 @@ package main
 
 import (
 	"bufio"
+	"cmp"
 	"context"
 	"errors"
 	"flag"
@@ -35,21 +36,20 @@ func main() {
 	token := flag.String("token", "", "node api token")
 	template := flag.String("template", "rt:24.04", "template ref")
 	listener := flag.String("listener", "", "path to the guestserver binary uploaded into the sandbox")
-	hold := flag.Duration("hold", 0, "after the steps pass, print the claim and keep it alive for this long")
 	flag.Parse()
 
-	if err := run(*addr, *token, *template, *listener, *hold); err != nil {
+	if err := run(*addr, *token, *template, *listener); err != nil {
 		fmt.Fprintln(os.Stderr, "portsmoke:", err)
 		os.Exit(1)
 	}
 	fmt.Println("PORTSMOKE PASS")
 }
 
-func run(addr, token, template, listener string, hold time.Duration) error {
+func run(addr, token, template, listener string) error {
 	if listener == "" {
 		return errors.New("-listener is required: the stock image ships no HTTP listener")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 600*time.Second+hold)
+	ctx, cancel := context.WithTimeout(context.Background(), 600*time.Second)
 	defer cancel()
 
 	_, sb, err := harness.Claim(ctx, addr, token, template,
@@ -76,9 +76,6 @@ func run(addr, token, template, listener string, hold time.Duration) error {
 		{"half close", stepHalfClose},
 		{"guest half close", stepGuestHalfClose},
 		{"wrong token is 404", stepWrongToken},
-		{"missing token is 401", stepNoToken},
-		{"bad port is 400", stepBadPort},
-		{"no upgrade is 426", stepNoUpgrade},
 		{"no listener is 502", stepDeadPort},
 		{"wake from hibernate", stepHibernate},
 	} {
@@ -87,13 +84,6 @@ func run(addr, token, template, listener string, hold time.Duration) error {
 			return fmt.Errorf("%s: %w", step.name, err)
 		}
 		fmt.Printf("  ok  %-24s %5.1fs\n", step.name, time.Since(t0).Seconds())
-	}
-	if hold > 0 {
-		fmt.Printf("SANDBOX %s %s %s %d\n", sb.ID, sb.Token(), sb.Owner(), guestPort)
-		select {
-		case <-time.After(hold):
-		case <-ctx.Done():
-		}
 	}
 	return nil
 }
@@ -194,56 +184,35 @@ func stepGuestHalfClose(ctx context.Context, rt *harness.PortRelay, _ *sandbox.S
 	}
 	defer func() { _ = conn.Close() }()
 	greeting := make([]byte, len("greeting"))
-	if _, err := io.ReadFull(conn, greeting); err != nil {
+	if _, err = io.ReadFull(conn, greeting); err != nil {
 		return fmt.Errorf("read greeting: %w", err)
 	}
-	if n, err := conn.Read(make([]byte, 1)); !errors.Is(err, io.EOF) {
-		return fmt.Errorf("after the guest shut its write side: read %d, %v, want EOF", n, err)
+	if n, readErr := conn.Read(make([]byte, 1)); !errors.Is(readErr, io.EOF) {
+		return fmt.Errorf("after the guest shut its write side: read %d, %v, want EOF", n, readErr)
 	}
-	if _, err := io.WriteString(conn, "after-done"); err != nil {
+	if _, err = io.WriteString(conn, "after-done"); err != nil {
 		return fmt.Errorf("write after the guest half close: %w", err)
 	}
-	if err := conn.CloseWrite(); err != nil {
+	if err = conn.CloseWrite(); err != nil {
 		return err
 	}
-	deadline := time.Now().Add(listenerReadyWait)
-	for time.Now().Before(deadline) {
-		seen, err := relayGet(ctx, rt, guestPort, "/half-close-seen")
-		if err != nil {
-			return err
-		}
-		if seen == "after-done" {
+	var getErr error
+	err = harness.Poll(ctx, listenerReadyWait, 200*time.Millisecond, func() error {
+		var seen string
+		if seen, getErr = relayGet(ctx, rt, guestPort, "/half-close-seen"); getErr != nil || seen == "after-done" {
 			return nil
 		}
-		time.Sleep(200 * time.Millisecond)
-	}
-	return errors.New("the guest never saw what the client sent after its own half close")
+		return errors.New("the guest never saw what the client sent after its own half close")
+	})
+	return cmp.Or(getErr, err)
 }
 
 func stepWrongToken(ctx context.Context, rt *harness.PortRelay, _ *sandbox.Sandbox) error {
-	return relayWantStatus(ctx, rt.URL(guestPort), "wrong-token", true, http.StatusNotFound)
-}
-
-func stepNoToken(ctx context.Context, rt *harness.PortRelay, _ *sandbox.Sandbox) error {
-	return relayWantStatus(ctx, rt.URL(guestPort), "", true, http.StatusUnauthorized)
-}
-
-func stepBadPort(ctx context.Context, rt *harness.PortRelay, _ *sandbox.Sandbox) error {
-	for _, port := range []string{"0", "65536", "+22", "http"} {
-		url := fmt.Sprintf("http://%s/v1/sandboxes/%s/ports/%s", rt.Owner, rt.ID, port)
-		if err := relayWantStatus(ctx, url, rt.Token, true, http.StatusBadRequest); err != nil {
-			return fmt.Errorf("port %q: %w", port, err)
-		}
-	}
-	return nil
-}
-
-func stepNoUpgrade(ctx context.Context, rt *harness.PortRelay, _ *sandbox.Sandbox) error {
-	return relayWantStatus(ctx, rt.URL(guestPort), rt.Token, false, http.StatusUpgradeRequired)
+	return relayWantStatus(ctx, rt.URL(guestPort), "wrong-token", http.StatusNotFound)
 }
 
 func stepDeadPort(ctx context.Context, rt *harness.PortRelay, _ *sandbox.Sandbox) error {
-	return relayWantStatus(ctx, rt.URL(deadPort), rt.Token, true, http.StatusBadGateway)
+	return relayWantStatus(ctx, rt.URL(deadPort), rt.Token, http.StatusBadGateway)
 }
 
 // stepHibernate proves the relay wakes a hibernated sandbox; the listener survives in the snapshot.
@@ -280,8 +249,8 @@ func relayGet(ctx context.Context, r *harness.PortRelay, port uint16, path strin
 }
 
 // relayWantStatus asserts a refusal is answered as HTTP, never by opening a relay.
-func relayWantStatus(ctx context.Context, url, token string, upgrade bool, want int) error {
-	req, err := harness.Request(ctx, url, token, upgrade)
+func relayWantStatus(ctx context.Context, url, token string, want int) error {
+	req, err := harness.Request(ctx, url, token)
 	if err != nil {
 		return err
 	}

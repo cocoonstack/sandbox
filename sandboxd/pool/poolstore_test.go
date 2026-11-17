@@ -139,7 +139,7 @@ func TestRestoredEgressPoolNeedsAttachment(t *testing.T) {
 	}
 
 	cfg := &config.Config{DataDir: dir}
-	if _, err := NewManager(t.Context(), cfg, newFakeEngine(), testSecrets(t), testBackends(t, cfg)); err == nil {
+	if _, err := newManager(t, cfg, newFakeEngine(), testSecrets(t), testBackends(t, cfg)); err == nil {
 		t.Error("NewManager accepted a restored egress-lane pool without an attachment")
 	}
 }
@@ -305,16 +305,12 @@ func (f *fakeShared) Watch(ctx context.Context, changed func()) {
 	<-ctx.Done()
 }
 
-func (f *fakeShared) Close() error {
-	return nil
-}
-
 func metaStoreNode(t *testing.T, cell string) *Manager {
 	t.Helper()
 	cfg := &config.Config{
 		DataDir:   t.TempDir(),
 		Pools:     []config.PoolSpec{{PoolKey: seedKey, Warm: 1}},
-		MetaStore: &config.MetaStoreConfig{Kind: "pg", DSNEnv: "SANDBOX_TEST_DSN", Cell: cell},
+		MetaStore: &config.MetaStoreConfig{DSNEnv: "SANDBOX_TEST_DSN", Cell: cell},
 	}
 	b := testBackends(t, cfg)
 	src, err := tenantspg.Open(t.Context(), os.Getenv("SANDBOX_TEST_DSN"))
@@ -322,18 +318,20 @@ func metaStoreNode(t *testing.T, cell string) *Manager {
 		t.Fatalf("tenant set: %v", err)
 	}
 	b.Tenants = src
+	t.Cleanup(func() { _ = src.Close() })
 	if cell != "" {
-		if b.CellPools, err = poolpg.Open(t.Context(), os.Getenv("SANDBOX_TEST_DSN"), cell); err != nil {
-			t.Fatalf("cell pool set: %v", err)
+		cells, openErr := poolpg.Open(t.Context(), os.Getenv("SANDBOX_TEST_DSN"), cell)
+		if openErr != nil {
+			t.Fatalf("cell pool set: %v", openErr)
 		}
+		b.CellPools = cells
+		t.Cleanup(func() { _ = cells.Close() })
 	}
-	m, err := NewManager(t.Context(), cfg, newFakeEngine(), testSecrets(t), b)
+	m, err := newManager(t, cfg, newFakeEngine(), testSecrets(t), b)
 	if err != nil {
 		t.Fatalf("setup manager: %v", err)
 	}
-	t.Cleanup(func() { _ = m.tenants.Close() })
 	if m.poolShared != nil {
-		t.Cleanup(func() { _ = m.poolShared.Close() })
 		go m.followCellPools(t.Context())
 	}
 	return m

@@ -365,47 +365,6 @@ func TestAReleaseFreesTheOverlayAddressBeforeTheSlowTeardown(t *testing.T) {
 	}
 }
 
-func TestAReleaseTheAddressStoreRefusedIsRetried(t *testing.T) {
-	addrs := &fakeAddrs{}
-	m := tunManager(t, newFakeEngine(), addrs, config.PoolSpec{PoolKey: testKey, Tun: true, Egress: anyPolicy})
-	sb := mustClaim(t, m, testKey)
-	addrs.mu.Lock()
-	addrs.err = errors.New("meta store down")
-	addrs.mu.Unlock()
-	if err := m.Release(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
-		t.Fatalf("release: %v", err)
-	}
-	if got := addrs.releasedList(); len(got) != 0 {
-		t.Fatalf("released %v while the store was down", got)
-	}
-	addrs.mu.Lock()
-	addrs.err = nil
-	addrs.mu.Unlock()
-	m.retryTunReleases(t.Context())
-	if got := addrs.releasedList(); len(got) != 1 {
-		t.Errorf("released %v after the store came back, want the refused release retried", got)
-	}
-}
-
-func TestARetriedReleaseLeavesAnAddressItsClaimHoldsAgain(t *testing.T) {
-	addrs := &fakeAddrs{}
-	m := tunManager(t, newFakeEngine(), addrs, config.PoolSpec{PoolKey: testKey, Tun: true, Egress: anyPolicy})
-	sb := mustClaim(t, m, testKey)
-	m.mu.Lock()
-	m.tunReleases = map[string]netip.Addr{sb.ID: sb.TunAddr}
-	m.mu.Unlock()
-	m.retryTunReleases(t.Context())
-	if got := addrs.releasedList(); len(got) != 0 {
-		t.Errorf("released %v, want the held address kept", got)
-	}
-	m.mu.Lock()
-	pending := len(m.tunReleases)
-	m.mu.Unlock()
-	if pending != 0 {
-		t.Errorf("%d releases still pending, want the obsolete one dropped", pending)
-	}
-}
-
 func TestALosingConcurrentEnableKeepsTheAddressTheWinnerPublished(t *testing.T) {
 	addrs := &fakeAddrs{}
 	m := tunManager(t, newFakeEngine(), addrs, config.PoolSpec{PoolKey: testKey, Tun: true, Egress: anyPolicy})
@@ -416,6 +375,29 @@ func TestALosingConcurrentEnableKeepsTheAddressTheWinnerPublished(t *testing.T) 
 	}
 	if got := addrs.releasedList(); len(got) != 0 {
 		t.Errorf("released %v, want the address the claim holds kept", got)
+	}
+}
+
+func TestASetTunAConcurrentWriteOvertookAnswersErrPaused(t *testing.T) {
+	addrs := &fakeAddrs{err: errors.New("meta store down")}
+	m := tunManager(t, newFakeEngine(), addrs, config.PoolSpec{PoolKey: testKey, Tun: true, Egress: anyPolicy})
+	sb := mustClaim(t, m, testKey)
+	addrs.mu.Lock()
+	addrs.err = nil
+	addrs.beforeAssign = func() {
+		if err := m.SetTun(t.Context(), sb.ID, new(false), nil); err != nil {
+			t.Errorf("the disable that overtakes the enable: %v", err)
+		}
+	}
+	addrs.mu.Unlock()
+	if err := m.SetTun(t.Context(), sb.ID, new(true), nil); !errors.Is(err, ErrPaused) {
+		t.Errorf("an enable a disable overtook: %v, want ErrPaused", err)
+	}
+	if st := m.tunState(sb); st.On || st.Addr.IsValid() {
+		t.Errorf("state %+v, want the disable kept and no address held", st)
+	}
+	if got := addrs.releasedList(); len(got) != 1 {
+		t.Errorf("released %v, want the address the stale plan assigned freed", got)
 	}
 }
 
@@ -497,7 +479,7 @@ func tunManager(t *testing.T, eng *fakeEngine, addrs tunnet.Addresses, pools ...
 	cfg := &config.Config{DataDir: t.TempDir(), Tun: tun, Pools: pools, AuditLog: true}
 	b := testBackends(t, cfg)
 	b.TunRouter, b.TunAddrs = tunnet.New(fakeUnderlay{}, tun.Overlay()), addrs
-	m, err := NewManager(t.Context(), cfg, eng, testSecrets(t), b)
+	m, err := newManager(t, cfg, eng, testSecrets(t), b)
 	if err != nil {
 		t.Fatalf("manager: %v", err)
 	}
@@ -574,14 +556,22 @@ func tunVerbsOf(eng *fakeEngine) []string {
 }
 
 type fakeAddrs struct {
-	mu       sync.Mutex
-	err      error
-	next     int
-	held     map[string]netip.Addr
-	released []string
+	mu           sync.Mutex
+	err          error
+	beforeAssign func()
+	next         int
+	held         map[string]netip.Addr
+	released     []string
 }
 
 func (f *fakeAddrs) Assign(_ context.Context, id string) (netip.Addr, error) {
+	f.mu.Lock()
+	hook := f.beforeAssign
+	f.beforeAssign = nil
+	f.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.err != nil {

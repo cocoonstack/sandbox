@@ -111,7 +111,13 @@ func smokeExec(ctx context.Context, sb *sandbox.Sandbox) error {
 	if err != nil {
 		return err
 	}
-	return want(out, "hello\n")
+	if err = want(out, "hello\n"); err != nil {
+		return err
+	}
+	if _, err = sb.Run(ctx, sandbox.Cmd{Argv: []string{"true"}, User: "no-such-user-e2e"}); err == nil || !strings.Contains(err.Error(), "unknown user") {
+		return fmt.Errorf("exec as an unknown user: %v, want unknown user", err)
+	}
+	return nil
 }
 
 func smokeFiles(ctx context.Context, sb *sandbox.Sandbox) error {

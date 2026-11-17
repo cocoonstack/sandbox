@@ -217,3 +217,18 @@ func TestFailoverDisabledExitKeepsReplicaCheckpoint(t *testing.T) {
 		}
 	}
 }
+
+func TestAWakeImageUnderACheckpointIDSurvivesTheTTLSweep(t *testing.T) {
+	m := newTestManager(t, newFakeEngine())
+	const ck = "ck_00000000000000aa"
+	seedArchiveCkBy(t, m, "", ck, "sb_legacy")
+	editView(m, func(v *configView) { v.ckptTTL = time.Nanosecond })
+
+	if ckpts, err := m.Checkpoints(t.Context(), ""); err != nil || len(ckpts) != 0 {
+		t.Errorf("the listing shows a wake image: %v, %v", ckpts, err)
+	}
+	m.sweepExpiredCheckpoints(t.Context())
+	if !ckExists(t, m, ck) {
+		t.Fatal("the TTL sweep deleted a wake image")
+	}
+}

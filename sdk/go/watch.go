@@ -58,6 +58,13 @@ func (w *Watcher) drain(ctx context.Context, conn *silkd.Conn) {
 			case w.events <- *r:
 			case <-w.closed:
 				return
+			case <-ctx.Done():
+				select {
+				case <-w.closed:
+				default:
+					w.setErr(ctx.Err())
+				}
+				return
 			}
 		case *wire.ErrorResp:
 			w.setErr(r)

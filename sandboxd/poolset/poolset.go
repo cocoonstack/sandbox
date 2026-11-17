@@ -25,5 +25,4 @@ type Shared interface {
 	Store(ctx context.Context, set Set) (int64, error)
 	// Watch calls changed whenever the set may have changed, until ctx ends.
 	Watch(ctx context.Context, changed func())
-	Close() error
 }

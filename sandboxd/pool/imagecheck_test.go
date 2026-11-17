@@ -103,6 +103,48 @@ func TestImageChangeReplacesTheWarmSetWithoutEmptyingIt(t *testing.T) {
 	})
 }
 
+func TestAVMClonedBetweenTheGoldenSwapAndItsInstallRecordsTheNewImage(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		eng := newFakeEngine()
+		eng.imageIDs = map[string]string{testKey.Template: imageA}
+		m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1})
+		seedGolden(t, m, testKey, imageA)
+		m.refillOnce(t.Context())
+		waitWarm(t, m, 1)
+
+		stall := make(chan struct{})
+		eng.mu.Lock()
+		eng.imageIDs = map[string]string{testKey.Template: imageB}
+		eng.removeStall = stall
+		eng.mu.Unlock()
+		m.checkImagesOnce(t.Context())
+		m.refillOnce(t.Context())
+		synctest.Wait()
+		m.mu.Lock()
+		swapped := m.pools[testKey].building && eng.coldCount() == 1
+		m.mu.Unlock()
+		if !swapped {
+			t.Fatal("setup: the rebuild is not parked between its swap and its install")
+		}
+
+		before := mustClaim(t, m, testKey)
+		m.refillOnce(t.Context())
+		synctest.Wait()
+		if warmLen(m, testKey) != 1 {
+			t.Fatal("setup: no warm VM was cloned while the rebuild was parked")
+		}
+		warm := mustClaim(t, m, testKey)
+		cloned := mustClaim(t, m, testKey)
+		close(stall)
+		synctest.Wait()
+
+		if before.ImageID != imageA || warm.ImageID != imageB || cloned.ImageID != imageB {
+			t.Errorf("images: warm VM of the old golden %q, warm VM cloned after the swap %q, claim cloned after the swap %q, want %s %s %s",
+				before.ImageID, warm.ImageID, cloned.ImageID, imageA, imageB, imageB)
+		}
+	})
+}
+
 func TestAReplaceUnderBusyMaintenanceKeepsLiveVMsWithinTargetPlusTheRefillBudget(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		const warm = 12

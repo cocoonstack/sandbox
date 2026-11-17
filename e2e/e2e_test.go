@@ -2,6 +2,7 @@
 package e2e
 
 import (
+	"cmp"
 	"context"
 	"encoding/json/v2"
 	"errors"
@@ -848,6 +849,7 @@ func startConfigStack(t *testing.T, cfg *config.Config) *stack {
 		t.Fatalf("secrets: %v", err)
 	}
 	cfg.DataDir, cfg.APIToken = dir, nodeToken
+	cfg.RefillConcurrency, cfg.MaxForkCount = cmp.Or(cfg.RefillConcurrency, 4), cmp.Or(cfg.MaxForkCount, config.DefaultMaxForkCount)
 	ckpts, err := storedir.New(filepath.Join(dir, "checkpoints"), store.CheckpointIDRe)
 	if err != nil {
 		t.Fatalf("checkpoint store: %v", err)

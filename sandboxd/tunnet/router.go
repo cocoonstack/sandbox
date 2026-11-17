@@ -39,8 +39,10 @@ const (
 	helloTimeout = 5 * time.Second
 	sweepEvery   = 10 * time.Second
 	refreshEvery = 45 * time.Second
-	// sendQueue bounds the frames waiting for one guest, about 64 MiB at worst; a full queue drops, as a congested link would.
+	// sendQueue bounds the frames waiting for one guest and sendLarge those in a 64 KiB buffer, under 18 MiB at worst; a full queue drops, as a congested link would.
 	sendQueue   = 1024
+	sendLarge   = 128
+	smallBuf    = 4 + VnetHdrLen + 9000
 	readBuf     = 256 << 10
 	writeStall  = 10 * time.Second
 	segmentable = OffloadCSUM | OffloadTSO4 | OffloadTSOECN | OffloadUSO4 | OffloadUSO6
@@ -125,7 +127,8 @@ type Stats struct {
 type Router struct {
 	under Underlay
 	conf  atomic.Pointer[overlay]
-	pool  sync.Pool
+	small sync.Pool
+	large sync.Pool
 
 	framesIn, framesOut  atomic.Uint64
 	dgramsOut, dgramsIn  atomic.Uint64
@@ -141,7 +144,8 @@ type Router struct {
 func New(under Underlay, o *Overlay) *Router {
 	r := &Router{under: under, claims: map[netip.Addr]*armed{}}
 	r.conf.Store(load(o))
-	r.pool.New = func() any { b := make([]byte, 4+MaxFrame); return &b }
+	r.small.New = func() any { b := make([]byte, smallBuf); return &b }
+	r.large.New = func() any { b := make([]byte, 4+MaxFrame); return &b }
 	return r
 }
 
@@ -222,7 +226,6 @@ func (r *Router) Serve(conn net.Conn, addr netip.Addr) error {
 		return nil
 	}
 	go l.write()
-	go l.sweep()
 	err = l.read(bufio.NewReaderSize(conn, readBuf))
 	if a.detach(l) {
 		a.flows.sweep(time.Now(), true)
@@ -234,16 +237,18 @@ func (r *Router) Serve(conn net.Conn, addr netip.Addr) error {
 	return err
 }
 
-// Run receives VXLAN until ctx ends or the underlay fails, and refreshes every armed claim's announcement.
+// Run receives VXLAN until ctx ends or the underlay fails, refreshes every armed claim's announcement and sweeps its flows.
 func (r *Router) Run(ctx context.Context) error {
 	go func() {
-		tick := time.Tick(refreshEvery)
+		refresh, sweep := time.Tick(refreshEvery), time.Tick(sweepEvery)
 		for {
 			select {
 			case <-ctx.Done():
 				return
-			case <-tick:
+			case <-refresh:
 				r.announceAll()
+			case now := <-sweep:
+				r.sweep(now, false)
 			}
 		}
 	}()
@@ -263,13 +268,7 @@ func (r *Router) Run(ctx context.Context) error {
 
 // EndFlows ends every armed claim's flows and writes their records, so a flow that outlives a stop is recorded up to it.
 func (r *Router) EndFlows() {
-	r.mu.RLock()
-	all := slices.Collect(maps.Values(r.claims))
-	r.mu.RUnlock()
-	now := time.Now()
-	for _, a := range all {
-		a.flows.sweep(now, true)
-	}
+	r.sweep(time.Now(), true)
 }
 
 func (r *Router) Stats() Stats {
@@ -324,8 +323,9 @@ func (r *Router) deliver(inner []byte) Drop {
 	if len(inner) > MaxFrame-VnetHdrLen {
 		return DropMalformed
 	}
-	bp := r.pool.Get().(*[]byte)
-	b := (*bp)[:4+VnetHdrLen+len(inner)]
+	n := 4 + VnetHdrLen + len(inner)
+	bp := r.pool(n).Get().(*[]byte)
+	b := (*bp)[:n]
 	clear(b[4 : 4+VnetHdrLen])
 	copy(b[4+VnetHdrLen:], inner)
 	frame := b[4:]
@@ -341,7 +341,7 @@ func (r *Router) deliver(inner []byte) Drop {
 		}
 		drop = DropQueueFull
 	}
-	r.pool.Put(bp)
+	r.put(bp)
 	return drop
 }
 
@@ -370,6 +370,26 @@ func (r *Router) admit(frame []byte) (*link, Drop) {
 		rewriteQuoted(frame, srcAt, p.Dst, GuestAddr)
 	}
 	return l, DropNone
+}
+
+func (r *Router) pool(n int) *sync.Pool {
+	if n > smallBuf {
+		return &r.large
+	}
+	return &r.small
+}
+
+func (r *Router) put(bp *[]byte) {
+	r.pool(cap(*bp)).Put(bp)
+}
+
+func (r *Router) sweep(now time.Time, all bool) {
+	r.mu.RLock()
+	claims := slices.Collect(maps.Values(r.claims))
+	r.mu.RUnlock()
+	for _, a := range claims {
+		a.flows.sweep(now, all)
+	}
 }
 
 func (r *Router) announceAll() {
@@ -474,29 +494,30 @@ type link struct {
 	merge bool
 	out   []byte
 	send  chan *[]byte
+	large atomic.Int32
 	done  chan struct{}
 	once  sync.Once
 }
 
 func (l *link) read(br *bufio.Reader) error {
-	var head [4]byte
-	frame := make([]byte, MaxFrame)
 	for {
-		if _, err := io.ReadFull(br, head[:]); err != nil {
-			return err
-		}
-		n, err := FrameLen(head)
+		head, err := br.Peek(4)
 		if err != nil {
 			return err
 		}
-		pkt := frame[:n]
-		if _, err = io.ReadFull(br, pkt); err != nil {
+		n, err := FrameLen([4]byte(head))
+		if err != nil {
+			return err
+		}
+		pkt, err := br.Peek(4 + n)
+		if err != nil {
 			return err
 		}
 		l.r.framesIn.Add(1)
-		if drop := l.forward(pkt); drop != DropNone {
+		if drop := l.forward(pkt[4:]); drop != DropNone {
 			l.r.drops[drop].Add(1)
 		}
+		_, _ = br.Discard(4 + n)
 	}
 }
 
@@ -548,10 +569,17 @@ func (l *link) forward(frame []byte) Drop {
 }
 
 func (l *link) enqueue(bp *[]byte) bool {
+	if large(bp) && l.large.Add(1) > sendLarge {
+		l.large.Add(-1)
+		return false
+	}
 	select {
 	case l.send <- bp:
 		return true
 	default:
+		if large(bp) {
+			l.large.Add(-1)
+		}
 		return false
 	}
 }
@@ -580,7 +608,10 @@ func (l *link) write() {
 			_, err := bufs.WriteTo(l.conn)
 			l.r.framesOut.Add(uint64(len(held)))
 			for _, bp := range held {
-				l.r.pool.Put(bp)
+				if large(bp) {
+					l.large.Add(-1)
+				}
+				l.r.put(bp)
 			}
 			if err != nil {
 				l.close()
@@ -590,23 +621,15 @@ func (l *link) write() {
 	}
 }
 
-func (l *link) sweep() {
-	tick := time.Tick(sweepEvery)
-	for {
-		select {
-		case <-l.done:
-			return
-		case now := <-tick:
-			l.a.flows.sweep(now, false)
-		}
-	}
-}
-
 func (l *link) close() {
 	l.once.Do(func() {
 		close(l.done)
 		_ = l.conn.Close()
 	})
+}
+
+func large(bp *[]byte) bool {
+	return cap(*bp) > smallBuf
 }
 
 func dst4(a netip.Addr) uint64 {

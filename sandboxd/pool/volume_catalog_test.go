@@ -208,7 +208,7 @@ func TestRuntimeCatalogVolumeRootsBoundRegistration(t *testing.T) {
 	newRootedManager := func(t *testing.T, eng *fakeEngine, dataDir string, roots ...string) (*Manager, error) {
 		t.Helper()
 		cfg := &config.Config{DataDir: dataDir, VolumeRoots: roots}
-		return NewManager(t.Context(), cfg, eng, testSecrets(t), testBackends(t, cfg))
+		return newManager(t, cfg, eng, testSecrets(t), testBackends(t, cfg))
 	}
 	for _, tt := range []struct {
 		name, path string
@@ -383,7 +383,7 @@ func TestRuntimeCatalogRejectsInvalidMetadata(t *testing.T) {
 				t.Fatalf("WriteFile: %v", err)
 			}
 			cfg := &config.Config{DataDir: m.dataDir, Volumes: static}
-			if _, err := NewManager(t.Context(), cfg, eng, testSecrets(t), testBackends(t, cfg)); err == nil {
+			if _, err := newManager(t, cfg, eng, testSecrets(t), testBackends(t, cfg)); err == nil {
 				t.Fatalf("accepted %s metadata", tt.name)
 			}
 		})

@@ -1,11 +1,15 @@
 package sandbox
 
 import (
+	"context"
 	"errors"
 	"io"
 	"net"
 	"strings"
 	"testing"
+	"testing/synctest"
+
+	"github.com/cocoonstack/sandbox/sdk/go/silkd"
 )
 
 func TestDialPortEchoAndHalfClose(t *testing.T) {
@@ -37,6 +41,39 @@ func TestDialPortRefusedPort(t *testing.T) {
 	if _, err := sb.DialPort(t.Context(), 1); err == nil || !strings.Contains(err.Error(), "not_found") {
 		t.Errorf("got %v, want the not_found error", err)
 	}
+}
+
+func TestDialPortCtxCancelUnblocksUnreadOutput(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		client, server := net.Pipe()
+		defer func() { _ = server.Close() }()
+		defer func() { _ = client.Close() }()
+		pr, pw := io.Pipe()
+		defer func() { _ = pr.Close() }()
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		p := &PortConn{conn: silkd.NewConn(client)}
+		exited := make(chan struct{})
+		go func() {
+			defer close(exited)
+			p.drain(ctx, pw)
+		}()
+		if _, err := io.WriteString(server, `{"type":"data","data":"aGk="}`+"\n"); err != nil {
+			t.Fatalf("send output: %v", err)
+		}
+		synctest.Wait()
+
+		cancel()
+		synctest.Wait()
+		select {
+		case <-exited:
+		default:
+			t.Fatal("drain still parked on the unread output after ctx cancel")
+		}
+		if _, err := pr.Read(make([]byte, 1)); !errors.Is(err, context.Canceled) {
+			t.Errorf("Read after ctx cancel = %v, want context.Canceled", err)
+		}
+	})
 }
 
 func TestProxyPortPipesLocalConnections(t *testing.T) {

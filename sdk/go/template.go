@@ -1,6 +1,9 @@
 package sandbox
 
-import "context"
+import (
+	"context"
+	"net/http"
+)
 
 // Template is a promoted template bound to the node that holds it.
 type Template struct {
@@ -39,4 +42,34 @@ func (t *Template) Delete(ctx context.Context) error {
 	u.Set(noRedirectQueryParam, "1")
 	_, err := t.c.deleteTemplates(ctx, t.addr, u)
 	return err
+}
+
+type promoteRequest struct {
+	Token    string `json:"token"`
+	Template string `json:"template"`
+}
+
+type promoteResponse struct {
+	Key struct {
+		Template string `json:"template"`
+		Net      string `json:"net"`
+		Size     string `json:"size"`
+	} `json:"key"`
+	ContentDigest string `json:"content_digest"`
+}
+
+// Promote publishes the sandbox's current state as a template; the returned handle is bound to the owning node.
+func (s *Sandbox) Promote(ctx context.Context, template string) (*Template, error) {
+	body, err := encodeBody("promote", promoteRequest{Token: s.token, Template: template})
+	if err != nil {
+		return nil, err
+	}
+	pr, addr, err := s.ownerJSON[promoteResponse](ctx, http.MethodPost, "/promote", body, s.c.apiToken, "promote")
+	if err != nil {
+		return nil, err
+	}
+	return &Template{
+		Name: pr.Key.Template, ContentDigest: pr.ContentDigest,
+		c: s.c, addr: addr, net: pr.Key.Net, size: pr.Key.Size,
+	}, nil
 }

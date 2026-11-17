@@ -58,6 +58,8 @@ func (p *Pty) ExitCode() (code int, ok bool) {
 // drain relays response frames into the output pipe and terminal state, releasing the relay when they end.
 func (p *Pty) drain(ctx context.Context, pw *io.PipeWriter, stop func()) {
 	defer stop()
+	unarm := context.AfterFunc(ctx, func() { _ = pw.CloseWithError(ctx.Err()) })
+	defer unarm()
 	for {
 		resp, err := recv(ctx, p.conn)
 		if err != nil {

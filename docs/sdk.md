@@ -544,7 +544,8 @@ session's: it reports no pid, so no cancel kills it and it does not appear in
 `Ps`; it runs to completion, and `Session.Close` is what ends the session.
 
 Non-zero exits surface as `*sandbox.ExitError{Code, Stderr}` from `Exec`
-(alongside partial stdout); `Run` returns the code directly.
+(alongside partial stdout); `Run` returns the code directly. Every other
+error from `Exec` or `Session.Exec` also comes with the output read so far.
 
 ## Background processes
 

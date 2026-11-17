@@ -2,14 +2,17 @@ package sandbox
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"io"
 	"net"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/cocoonstack/sandbox/protocol/wire"
+	"github.com/cocoonstack/sandbox/sdk/go/silkd"
 )
 
 func TestWatchRelaysTheFakesSyntheticEventAndClosesCleanly(t *testing.T) {
@@ -73,6 +76,37 @@ func TestWatchReleasesTheRelayWhenTheSandboxEnds(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("relay connection still open after the watch ended on its own")
 	}
+}
+
+func TestWatchCtxCancelUnblocksUnreadEvents(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		client, server := net.Pipe()
+		defer func() { _ = server.Close() }()
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		w := &Watcher{events: make(chan wire.Event), stop: func() { _ = client.Close() }, closed: make(chan struct{})}
+		defer w.Close()
+		exited := make(chan struct{})
+		go func() {
+			defer close(exited)
+			w.drain(ctx, silkd.NewConn(client))
+		}()
+		if _, err := io.WriteString(server, `{"type":"event","kind":"created","path":"/work/a"}`+"\n"); err != nil {
+			t.Fatalf("send event: %v", err)
+		}
+		synctest.Wait()
+
+		cancel()
+		synctest.Wait()
+		select {
+		case <-exited:
+		default:
+			t.Fatal("drain still parked on the unread event after ctx cancel")
+		}
+		if err := w.Err(); !errors.Is(err, context.Canceled) {
+			t.Errorf("Err after ctx cancel = %v, want context.Canceled", err)
+		}
+	})
 }
 
 func TestWatchMissingPathFailsSynchronously(t *testing.T) {

@@ -1,4 +1,4 @@
-// demo claims, execs and releases through the SDK and prints per-iteration latencies.
+// demo claims, execs and releases through the SDK and prints per-iteration latencies; -proof adds the guest uptime and kernel.
 package main
 
 import (
@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	sandbox "github.com/cocoonstack/sandbox/sdk/go"
@@ -16,27 +17,27 @@ func main() {
 		addr     = flag.String("addr", "127.0.0.1:7777", "sandboxd address")
 		token    = flag.String("token", "", "node api token")
 		template = flag.String("template", "rt:24.04", "template ref")
-		netShape = flag.String("net", "none", "network lane: none|egress")
 		size     = flag.String("size", "", "size tier (empty = server default)")
 		n        = flag.Int("n", 3, "iterations")
 		ttl      = flag.Int("ttl", 0, "sandbox ttl seconds (0 = server default)")
 		leak     = flag.Bool("leak", false, "claim without releasing (reap check)")
+		proof    = flag.Bool("proof", false, "also print the guest uptime and kernel; on an unpooled template they prove a cold boot")
 	)
 	flag.Parse()
 
-	if err := run(*addr, *token, *template, *netShape, *size, *n, *ttl, *leak); err != nil {
+	if err := run(*addr, *token, *template, *size, *n, *ttl, *leak, *proof); err != nil {
 		fmt.Fprintln(os.Stderr, "demo:", err)
 		os.Exit(1)
 	}
 }
 
-func run(addr, token, template, netShape, size string, n, ttl int, leak bool) error {
+func run(addr, token, template, size string, n, ttl int, leak, proof bool) error {
 	ctx := context.Background()
 	client, err := sandbox.Connect(addr, sandbox.WithAPIToken(token))
 	if err != nil {
 		return err
 	}
-	opts := []sandbox.Option{sandbox.WithNetwork(sandbox.NetShape(netShape))}
+	opts := []sandbox.Option{sandbox.WithNetwork(sandbox.NetNone)}
 	if size != "" {
 		opts = append(opts, sandbox.WithSize(sandbox.Size(size)))
 	}
@@ -55,15 +56,19 @@ func run(addr, token, template, netShape, size string, n, ttl int, leak bool) er
 		if err == nil && out != "42\n" {
 			err = fmt.Errorf("got %q, want 42", out)
 		}
+		execDone := time.Now()
+		var guest string
+		if err == nil && proof {
+			guest, err = guestClock(ctx, sb)
+		}
 		if err != nil {
 			if !leak {
 				_ = sb.Close()
 			}
 			return fmt.Errorf("exec in %s: %w", sb.ID, err)
 		}
-		execDone := time.Now()
-		fmt.Printf("iter=%d id=%s claim=%.1fms exec=%.1fms\n",
-			i, sb.ID, claimed.Sub(start).Seconds()*1000, execDone.Sub(claimed).Seconds()*1000)
+		fmt.Printf("iter=%d id=%s claim=%.1fms exec=%.1fms%s\n",
+			i, sb.ID, claimed.Sub(start).Seconds()*1000, execDone.Sub(claimed).Seconds()*1000, guest)
 		if leak {
 			continue
 		}
@@ -72,4 +77,16 @@ func run(addr, token, template, netShape, size string, n, ttl int, leak bool) er
 		}
 	}
 	return nil
+}
+
+func guestClock(ctx context.Context, sb *sandbox.Sandbox) (string, error) {
+	out, err := sb.Exec(ctx, "sh", "-c", "cat /proc/uptime; uname -r")
+	if err != nil {
+		return "", err
+	}
+	fields := strings.Fields(out)
+	if len(fields) != 3 {
+		return "", fmt.Errorf("uptime and kernel read %q", out)
+	}
+	return fmt.Sprintf(" guest_uptime=%ss guest_kernel=%s", fields[0], fields[2]), nil
 }

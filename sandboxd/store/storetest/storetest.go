@@ -10,7 +10,9 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -110,7 +112,7 @@ func PublishDigested(ctx context.Context, st store.Store, staging, id string) (s
 	if err != nil {
 		return "", err
 	}
-	if err = commit(ctx); err != nil {
+	if err = commit(ctx, false); err != nil {
 		return "", err
 	}
 	return digest, nil
@@ -233,8 +235,8 @@ func runDigestContract(t *testing.T, st store.Store) {
 	if _, err = st.ReadMeta(ctx, id); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("ReadMeta of a prepared record: %v, want store.ErrNotFound until its commit", err)
 	}
-	if err = commit(ctx); err != nil {
-		t.Fatalf("commit: %v", err)
+	if err = commit(ctx, true); err != nil {
+		t.Fatalf("create-only commit of an absent record: %v", err)
 	}
 	_, _, fetchedDigest, err := st.Fetch(ctx, id)
 	if err != nil {
@@ -256,7 +258,13 @@ func runDigestContract(t *testing.T, st store.Store) {
 	if held, readErr := st.ReadDigest(ctx, id); readErr != nil || held != want {
 		t.Fatalf("ReadDigest while a replacement is prepared: %q, %v, want the committed %q", held, readErr, want)
 	}
-	if err = commit(ctx); err != nil {
+	if err = commit(ctx, true); !errors.Is(err, store.ErrExists) {
+		t.Fatalf("create-only commit over a committed record: %v, want store.ErrExists", err)
+	}
+	if held, readErr := st.ReadDigest(ctx, id); readErr != nil || held != want {
+		t.Fatalf("ReadDigest after a refused create-only commit: %q, %v, want the committed %q", held, readErr, want)
+	}
+	if err = commit(ctx, false); err != nil {
 		t.Fatalf("commit replacement: %v", err)
 	}
 	if held, readErr := st.ReadDigest(ctx, id); readErr != nil || held != next {
@@ -264,6 +272,43 @@ func runDigestContract(t *testing.T, st store.Store) {
 	}
 	if err = st.Delete(ctx, id); err != nil {
 		t.Fatalf("Delete digested: %v", err)
+	}
+	runCreateOnlyContract(t, st, id)
+}
+
+func runCreateOnlyContract(t *testing.T, st store.Store, id string) {
+	t.Helper()
+	ctx := t.Context()
+	const racers = 8
+	metas := make([]string, racers)
+	commits := make([]store.CommitFunc, racers)
+	for i := range racers {
+		metas[i] = `{"id":"` + id + `","racer":` + strconv.Itoa(i) + `}`
+		var err error
+		if _, commits[i], err = st.PrepareDigested(ctx, StageRecord(t, st, id, metas[i], "z.bin", metas[i]), id, ""); err != nil {
+			t.Fatalf("PrepareDigested racer %d: %v", i, err)
+		}
+	}
+	errs := make([]error, racers)
+	var wg sync.WaitGroup
+	for i := range racers {
+		wg.Go(func() { errs[i] = commits[i](ctx, true) })
+	}
+	wg.Wait()
+	winner := slices.Index(errs, nil)
+	for i, err := range errs {
+		if i != winner && !errors.Is(err, store.ErrExists) {
+			t.Errorf("create-only racer %d: %v, want store.ErrExists beside the one winner %d", i, err, winner)
+		}
+	}
+	if winner < 0 {
+		t.Fatal("no create-only racer committed")
+	}
+	if raw, err := st.ReadMeta(ctx, id); err != nil || string(raw) != metas[winner] {
+		t.Errorf("ReadMeta after the race: %q, %v, want the winner's %s", raw, err, metas[winner])
+	}
+	if err := st.Delete(ctx, id); err != nil {
+		t.Fatalf("Delete raced record: %v", err)
 	}
 }
 

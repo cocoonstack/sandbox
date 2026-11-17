@@ -767,7 +767,7 @@ func envManagerOf(t *testing.T, eng *fakeEngine, cfg *config.Config) *Manager {
 		egress.SecretSpec{Name: "gh", Header: "Authorization", ValueEnv: "GH_TOKEN"},
 		egress.SecretSpec{Name: "gw", Header: "Authorization"},
 	)
-	m, err := NewManager(t.Context(), cfg, eng, secrets, testBackends(t, cfg))
+	m, err := newManager(t, cfg, eng, secrets, testBackends(t, cfg))
 	if err != nil {
 		t.Fatalf("manager: %v", err)
 	}

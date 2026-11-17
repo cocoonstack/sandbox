@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/cocoonstack/sandbox/protocol/wire"
@@ -126,6 +127,38 @@ func TestPtyCloseUnblocksUnreadOutput(t *testing.T) {
 	if stops != 1 {
 		t.Errorf("stop called %d times, want 1", stops)
 	}
+}
+
+func TestPtyCtxCancelUnblocksUnreadOutput(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		client, server := net.Pipe()
+		defer func() { _ = server.Close() }()
+		pr, pw := io.Pipe()
+		defer func() { _ = pr.Close() }()
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		p := &Pty{conn: silkd.NewConn(client)}
+		exited := make(chan struct{})
+		go func() {
+			defer close(exited)
+			p.drain(ctx, pw, func() { _ = client.Close() })
+		}()
+		if _, err := io.WriteString(server, `{"type":"stdout","data":"aGk="}`+"\n"); err != nil {
+			t.Fatalf("send output: %v", err)
+		}
+		synctest.Wait()
+
+		cancel()
+		synctest.Wait()
+		select {
+		case <-exited:
+		default:
+			t.Fatal("drain still parked on the unread output after ctx cancel")
+		}
+		if _, err := pr.Read(make([]byte, 1)); !errors.Is(err, context.Canceled) {
+			t.Errorf("Read after ctx cancel = %v, want context.Canceled", err)
+		}
+	})
 }
 
 func TestPtyWriteChunksOversizedInput(t *testing.T) {

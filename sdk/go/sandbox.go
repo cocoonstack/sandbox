@@ -76,20 +76,6 @@ type forkResponse struct {
 	Children []claimResponse `json:"children"`
 }
 
-type promoteRequest struct {
-	Token    string `json:"token"`
-	Template string `json:"template"`
-}
-
-type promoteResponse struct {
-	Key struct {
-		Template string `json:"template"`
-		Net      string `json:"net"`
-		Size     string `json:"size"`
-	} `json:"key"`
-	ContentDigest string `json:"content_digest"`
-}
-
 type renewRequest struct {
 	TTLSeconds int `json:"ttl_seconds,omitzero"`
 }
@@ -133,12 +119,12 @@ func (s *Sandbox) Token() string {
 	return s.token
 }
 
-// Exec runs argv to completion and returns its stdout; a non-zero exit surfaces as *ExitError carrying stderr, alongside the partial stdout.
+// Exec runs argv to completion and returns its stdout; a non-zero exit surfaces as *ExitError carrying stderr, and every error comes with the stdout read so far.
 func (s *Sandbox) Exec(ctx context.Context, argv ...string) (string, error) {
 	var stdout, stderr strings.Builder
 	code, err := s.Run(ctx, Cmd{Argv: argv, Stdout: &stdout, Stderr: &stderr})
 	if err != nil {
-		return "", err
+		return stdout.String(), err
 	}
 	if code != 0 {
 		return stdout.String(), &ExitError{Code: code, Stderr: stderr.String()}
@@ -173,22 +159,6 @@ func (s *Sandbox) Fork(ctx context.Context, count int, ttl time.Duration) ([]*Sa
 		children[i] = s.c.handleFrom(addr, c)
 	}
 	return children, nil
-}
-
-// Promote publishes the sandbox's current state as a template; the returned handle is bound to the owning node.
-func (s *Sandbox) Promote(ctx context.Context, template string) (*Template, error) {
-	body, err := encodeBody("promote", promoteRequest{Token: s.token, Template: template})
-	if err != nil {
-		return nil, err
-	}
-	pr, addr, err := s.ownerJSON[promoteResponse](ctx, http.MethodPost, "/promote", body, s.c.apiToken, "promote")
-	if err != nil {
-		return nil, err
-	}
-	return &Template{
-		Name: pr.Key.Template, ContentDigest: pr.ContentDigest,
-		c: s.c, addr: addr, net: pr.Key.Net, size: pr.Key.Size,
-	}, nil
 }
 
 // Hibernate snapshots the sandbox and stops its VM; the next guest call wakes it, and the TTL keeps running.

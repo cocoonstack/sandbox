@@ -124,6 +124,16 @@ func (p *pool) popWarm() *types.Sandbox {
 	return sb
 }
 
+func (p *pool) popWarmOf(imageID string) *types.Sandbox {
+	for i, sb := range slices.Backward(p.warm) {
+		if sb.ImageID == imageID {
+			p.warm = slices.Delete(p.warm, i, i+1)
+			return sb
+		}
+	}
+	return nil
+}
+
 func (p *pool) freshWarm() int {
 	if len(p.staleWarm) == 0 {
 		return len(p.warm)

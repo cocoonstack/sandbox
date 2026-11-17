@@ -50,7 +50,7 @@ node's own and each upstream proxy the claim has used), as many again for
 decrypted traffic when the pool intercepts, so a guest cannot turn its proxy
 into a host descriptor sink. A request on the HTTP door or inside an
 intercepted tunnel whose headers pass 64 KiB answers `431`, and an origin
-response whose headers pass 64 KiB answers `502`, so an open connection holds
+response whose headers pass 256 KiB answers `502`, so an open connection holds
 no more than that each way.
 
 A SOCKS5 tunnel takes the decision an HTTP `CONNECT` to the same host takes,
@@ -315,8 +315,7 @@ file: a claim's own `guest: false` env first, the node's second
         { "host": "*.googleapis.com" }
       ] } },
     { "template": "rt:24.04", "net": "egress", "size": "small", "warm": 2,
-      // a secret without intercept also rides a plain http:// request, in cleartext: see `secret` below
-      "egress": { "allow": [{ "host": "api.github.com", "secret": "gh" }] } }
+      "egress": { "allow": [{ "host": "api.github.com", "secret": "gh", "intercept": true }] } }
   ],
   "egress_classes": [
     { "name": "desk", "egress": { "allow": [{ "host": "api.github.com" }] } }

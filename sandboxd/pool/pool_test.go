@@ -35,6 +35,7 @@ import (
 
 const (
 	keepAnHour = 3600
+	testRefill = 4
 
 	fakeBalloonDefault int64 = 1 << 30
 )
@@ -905,7 +906,7 @@ func TestReapBatchDoesNotStallTheLoop(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		eng := newFakeEngine()
 		m := newTestManager(t, eng)
-		const n = defaultRefill + 3
+		const n = testRefill + 3
 		var sbs []*types.Sandbox
 		for range n {
 			sbs = append(sbs, mustClaim(t, m, testKey))
@@ -2496,11 +2497,18 @@ func buildGoldenAt(t *testing.T, m *Manager, key types.PoolKey, imageID string) 
 
 func mustManager(t testing.TB, cfg *config.Config, eng Engine) *Manager {
 	t.Helper()
-	m, err := NewManager(t.Context(), cfg, eng, testSecrets(t), testBackends(t, cfg))
+	m, err := newManager(t, cfg, eng, testSecrets(t), testBackends(t, cfg))
 	if err != nil {
 		t.Fatalf("setup manager: %v", err)
 	}
 	return m
+}
+
+func newManager(t testing.TB, cfg *config.Config, eng Engine, secrets *egress.SecretStore, b Backends) (*Manager, error) {
+	t.Helper()
+	cfg.RefillConcurrency = cmp.Or(cfg.RefillConcurrency, testRefill)
+	cfg.MaxForkCount = cmp.Or(cfg.MaxForkCount, config.DefaultMaxForkCount)
+	return NewManager(t.Context(), cfg, eng, secrets, b)
 }
 
 func newTestManagerAt(t testing.TB, eng *fakeEngine, dataDir string, pools ...config.PoolSpec) *Manager {

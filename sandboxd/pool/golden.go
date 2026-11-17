@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/projecteru2/core/log"
@@ -90,7 +89,7 @@ func (m *Manager) buildGoldenSteps(ctx context.Context, v *configView, p *pool, 
 	if err = m.eng.SettleGuest(ctx, sock); err != nil {
 		log.WithFunc("pool.buildGoldenSteps").Warnf(ctx, "capture golden of %s before its guest settled: %v", key.Template, err)
 	}
-	if err := m.dumpGolden(ctx, name, snap, final, &p.goldenUse); err != nil {
+	if err := m.dumpGolden(ctx, p, name, snap, final, imageID); err != nil {
 		return err
 	}
 	stamp := m.goldenStamp(v, key, imageID)
@@ -195,6 +194,12 @@ func (m *Manager) checkImagesOnce(ctx context.Context) {
 	}
 }
 
+func (m *Manager) goldenImage(p *pool) string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return p.imageID
+}
+
 func (m *Manager) imageIDs(ctx context.Context) map[string]string {
 	ids, err := m.eng.ImageIDs(ctx)
 	if err != nil {
@@ -203,7 +208,7 @@ func (m *Manager) imageIDs(ctx context.Context) map[string]string {
 	return ids
 }
 
-func (m *Manager) dumpGolden(ctx context.Context, name, snap, final string, use *sync.RWMutex) error {
+func (m *Manager) dumpGolden(ctx context.Context, p *pool, name, snap, final, imageID string) error {
 	select {
 	case m.goldenDumps <- struct{}{}:
 	case <-ctx.Done():
@@ -213,10 +218,10 @@ func (m *Manager) dumpGolden(ctx context.Context, name, snap, final string, use 
 	if err := m.eng.SnapshotSave(ctx, name, snap); err != nil {
 		return err
 	}
-	return m.exportGolden(ctx, snap, final, use)
+	return m.exportGolden(ctx, p, snap, final, imageID)
 }
 
-func (m *Manager) exportGolden(ctx context.Context, snap, final string, use *sync.RWMutex) error {
+func (m *Manager) exportGolden(ctx context.Context, p *pool, snap, final, imageID string) error {
 	staging, err := os.MkdirTemp(filepath.Dir(final), filepath.Base(final)+"-*.tmp")
 	if err != nil {
 		return fmt.Errorf("stage golden: %w", err)
@@ -226,10 +231,16 @@ func (m *Manager) exportGolden(ctx context.Context, snap, final string, use *syn
 	if err := m.eng.SnapshotExport(ctx, snap, tmp); err != nil {
 		return err
 	}
-	use.Lock()
-	defer use.Unlock()
+	p.goldenUse.Lock()
+	defer p.goldenUse.Unlock()
 	if err := os.Rename(final, filepath.Join(staging, "old")); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return fmt.Errorf("clear golden dir: %w", err)
 	}
-	return os.Rename(tmp, final)
+	if err := os.Rename(tmp, final); err != nil {
+		return err
+	}
+	m.mu.Lock()
+	p.imageID = imageID
+	m.mu.Unlock()
+	return nil
 }

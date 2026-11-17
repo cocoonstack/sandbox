@@ -1155,12 +1155,16 @@ func TestReplicaAClaimAdoptedElsewhereLeavesNoUnsettledCheckpoint(t *testing.T) 
 		{"an unfence after a round, the adopter holds the row", round(false), false, unfence},
 		{"an unfence after a round, the adopter woke the claim", round(false), true, unfence},
 		{"an unfence after a round that landed, the adopter holds the row", round(true), false, unfence},
+		{"a restart after a round that landed, the adopter woke the claim", round(true), true, restart},
+		{"a settle after a round that landed, the adopter woke the claim", round(true), true, settle},
+		{"an unfence after a round that landed, the adopter woke the claim", round(true), true, unfence},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			c := newReplicaCluster(t)
 			a, b := c.pair(t)
 			sb := mustClaim(t, a, testKey)
 			replicateNow(t, a, sb)
+			replica := a.replicaOf(sb)
 			pending := tt.interrupt(t, c, a, sb)
 			rowed, _, _ := c.reg.Get(t.Context(), sb.ID)
 			mustFlush(t, a)
@@ -1179,6 +1183,9 @@ func TestReplicaAClaimAdoptedElsewhereLeavesNoUnsettledCheckpoint(t *testing.T) 
 			}
 			if pending != rowed.Checkpoint && ckExists(t, a, pending) || ckExists(t, b, rowed.Checkpoint) == tt.woke {
 				t.Errorf("unsettled checkpoint %s kept %v, the row's checkpoint %s kept %v, want only the row's kept, until the adopter wakes", pending, ckExists(t, a, pending), rowed.Checkpoint, ckExists(t, b, rowed.Checkpoint))
+			}
+			if replica != rowed.Checkpoint && ckExists(t, a, replica) {
+				t.Errorf("replica %s kept though the adopter's row named %s", replica, rowed.Checkpoint)
 			}
 		})
 	}

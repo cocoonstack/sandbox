@@ -31,17 +31,17 @@ import (
 )
 
 const (
-	// RequiredCocoon carries the snapshot/store baseline and the JSON form of an empty snapshot list.
-	RequiredCocoon = "v0.6.9"
-	// LiveVolumeCocoon adds idempotent disk attach and detach for live volume changes.
-	LiveVolumeCocoon = "v0.7.2"
-	// MigrateCocoon adds live migration: capture rounds, receive and abort.
-	MigrateCocoon = "v0.7.7"
-
 	StaleCreateCollected   StaleCreateOutcome = "collected"
 	StaleCreateBusy        StaleCreateOutcome = "busy"
 	StaleCreateNotCreating StaleCreateOutcome = "not-creating"
 	StaleCreateNotFound    StaleCreateOutcome = "not-found"
+
+	// requiredFloor carries the snapshot/store baseline and the JSON form of an empty snapshot list.
+	requiredFloor = "v0.6.9"
+	// liveVolumeFloor adds idempotent disk attach and detach for live volume changes.
+	liveVolumeFloor = "v0.7.2"
+	// migrateFloor adds live migration: capture rounds, receive and abort.
+	migrateFloor = "v0.7.7"
 
 	argName        = "--name"
 	argOutput      = "--output"
@@ -114,35 +114,14 @@ func (e *Engine) Close() {
 	e.running.Wait()
 }
 
-// Version reports cocoon's version string.
-func (e *Engine) Version(ctx context.Context) (string, error) {
-	if v := e.version.Load(); v != nil {
-		return *v, nil
-	}
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-	out, err := e.run(ctx, "version")
-	if err != nil {
-		return "", err
-	}
-	for line := range strings.SplitSeq(string(out), "\n") {
-		if v, ok := strings.CutPrefix(strings.TrimSpace(line), "Version:"); ok {
-			v = strings.TrimSpace(v)
-			e.version.Store(&v)
-			return v, nil
-		}
-	}
-	return "", errors.New("cocoon version: no Version line in output")
-}
-
-// VersionWarning returns a non-empty warning when cocoon's version is below RequiredCocoon or cannot be read.
+// VersionWarning returns a non-empty warning when cocoon's version is below requiredFloor or cannot be read.
 func (e *Engine) VersionWarning(ctx context.Context) (version, warning string) {
-	v, err := e.Version(ctx)
+	v, err := e.cocoonVersion(ctx)
 	if err != nil {
-		return "", fmt.Sprintf("cannot determine cocoon version (need >= %s): %v", RequiredCocoon, err)
+		return "", fmt.Sprintf("cannot determine cocoon version (need >= %s): %v", requiredFloor, err)
 	}
-	if below, known := belowFloor(v, RequiredCocoon); known && below {
-		return v, fmt.Sprintf("cocoon %s is below the required %s — upgrade cocoon", v, RequiredCocoon)
+	if below, known := belowFloor(v, requiredFloor); known && below {
+		return v, fmt.Sprintf("cocoon %s is below the required %s — upgrade cocoon", v, requiredFloor)
 	}
 	return v, ""
 }
@@ -525,8 +504,28 @@ func (e *Engine) infoRoundTrip(ctx context.Context, vsockSocket string, port int
 	return nil
 }
 
+func (e *Engine) cocoonVersion(ctx context.Context) (string, error) {
+	if v := e.version.Load(); v != nil {
+		return *v, nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	out, err := e.run(ctx, "version")
+	if err != nil {
+		return "", err
+	}
+	for line := range strings.SplitSeq(string(out), "\n") {
+		if v, ok := strings.CutPrefix(strings.TrimSpace(line), "Version:"); ok {
+			v = strings.TrimSpace(v)
+			e.version.Store(&v)
+			return v, nil
+		}
+	}
+	return "", errors.New("cocoon version: no Version line in output")
+}
+
 func (e *Engine) missesFloor(ctx context.Context, floor string) (string, bool) {
-	version, err := e.Version(ctx)
+	version, err := e.cocoonVersion(ctx)
 	if err != nil {
 		log.WithFunc("engine.missesFloor").Warnf(ctx, "query cocoon version: %v", err)
 		return "", true

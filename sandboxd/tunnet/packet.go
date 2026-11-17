@@ -235,18 +235,14 @@ func rewrite(frame []byte, at int, to [4]byte) {
 	binary.BigEndian.PutUint16(ip[10:], ^adjust(^check, from, to))
 	var field int
 	partial := frame[0]&needsCsum != 0
-	l4 := int(ip[0]&0x0f) * 4
 	switch {
 	case partial:
 		field = int(binary.LittleEndian.Uint16(frame[6:])) + int(binary.LittleEndian.Uint16(frame[8:]))
 	case ip[9] == ProtoTCP:
-		field = l4 + 16
+		field = 20 + 16
 	case ip[9] == ProtoUDP:
-		field = l4 + 6
+		field = 20 + 6
 	default:
-		return
-	}
-	if field+2 > len(ip) {
 		return
 	}
 	sum := binary.BigEndian.Uint16(ip[field:])

@@ -334,6 +334,7 @@ type Sandbox struct {
 	ReplicaAt      time.Time `json:"replica_at,omitzero"`
 
 	FromCheckpoint string `json:"from_checkpoint,omitempty"`
+	ImageID        string `json:"image_id,omitempty"`
 	// TemplateDigest identifies the promoted-template export this sandbox was cloned from.
 	TemplateDigest string `json:"-"`
 

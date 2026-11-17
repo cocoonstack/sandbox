@@ -2,7 +2,6 @@
 package pool
 
 import (
-	"cmp"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -68,8 +67,6 @@ const (
 	refillFailStreak  = 8
 	refillBackoffBase = 250 * time.Millisecond
 	refillBackoffMax  = buildRetryDelay
-	// Fallback when a Manager is built from a Config that skipped config.Load's defaulting
-	defaultRefill = 4
 
 	defaultMoveConcurrency = 2
 
@@ -378,7 +375,6 @@ type Manager struct {
 	claimed         map[string]*types.Sandbox
 	claimedVMs      map[string]*types.Sandbox
 	pendingRemovals map[string]pendingRemoval
-	tunReleases     map[string]netip.Addr
 	// moving holds this node's outgoing moves, incoming its reservations for moves to it; neither enters claimed.
 	moving   map[string]*outMove
 	incoming map[string]*inMove
@@ -407,7 +403,7 @@ type Manager struct {
 
 // NewManager builds a manager from the node config over backends the caller selected from it.
 func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *egress.SecretStore, b Backends) (*Manager, error) {
-	refill := cmp.Or(cfg.RefillConcurrency, defaultRefill)
+	refill := cfg.RefillConcurrency
 	m := &Manager{
 		eng:             eng,
 		dataDir:         cfg.DataDir,
@@ -432,7 +428,6 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 		claimed:         map[string]*types.Sandbox{},
 		claimedVMs:      map[string]*types.Sandbox{},
 		pendingRemovals: map[string]pendingRemoval{},
-		tunReleases:     map[string]netip.Addr{},
 		moving:          map[string]*outMove{},
 		incoming:        map[string]*inMove{},
 		heldTenants:     map[string]int{},
@@ -573,7 +568,6 @@ func (m *Manager) Run(ctx context.Context) {
 			if m.moves != nil {
 				go m.sweepStaleMoves(ctx, time.Now())
 			}
-			go m.retryTunReleases(ctx)
 			go m.reconcileTunAddrs(ctx)
 		}
 	}

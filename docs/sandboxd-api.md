@@ -687,6 +687,12 @@ on the egress lane, has volumes attached (see [egress](egress.md)), has its
 sandbox token, 429 while the disk is under [`disk_reserve`](deploy.md), 503
 `lease lost; retry` for a replicated sandbox while its node's lease is overdue.
 
+A tenant's first promote of a name creates the template record only while none
+exists. Two tenants that promote one new name at the same moment, on one node
+or on two nodes of a shared checkpoint store, get one 200 and one 409. Root
+replaces any record. Re-promotes of one name from two nodes are not
+coordinated: the last commit wins ([`checkpoint_dir`](deploy.md#configuration)).
+
 ## DELETE /v1/templates?template=…&net=…&size=…
 
 Auth: node API token. Removes a promoted template (the query parameters
@@ -1254,7 +1260,8 @@ parent's switch and label, with its own address.
 204 on success; 400 an unknown field or a `profile` that does not match the
 name rule; 404 unknown id; 409 an enable or profile change while a
 transition (a capture, wake, hibernate or archive) holds the claim (retry; a
-disable never waits); 503 the claim is moving to another node
+disable never waits), or a write another tun request to the claim landed
+first (retry); 503 the claim is moving to another node
 (retry); 500 the address store failed or the claims
 journal could not be written (nothing changed); 503 the archive registry is
 down for an archived claim or one with a replica under `archive_failover`:

@@ -17,11 +17,8 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
-const (
-	tunPlanTries = 3
-	// A node confirms its claims hourly and re-reserves an address released while it held it.
-	tunUnconfirmedAfter = 24 * time.Hour
-)
+// A node confirms its claims hourly and re-reserves an address released while it held it.
+const tunUnconfirmedAfter = 24 * time.Hour
 
 var errTunRaced = errors.New("tun state changed since planned")
 
@@ -58,12 +55,11 @@ func (m *Manager) SetTun(ctx context.Context, id string, enabled *bool, profile 
 	if locked {
 		defer sb.Transition.Unlock()
 	}
-	for range tunPlanTries {
-		if err := m.setTun(ctx, sb, locked, enabled, profile); !errors.Is(err, errTunRaced) {
-			return err
-		}
+	err := m.setTun(ctx, sb, locked, enabled, profile)
+	if errors.Is(err, errTunRaced) {
+		return ErrPaused
 	}
-	return ErrPaused
+	return err
 }
 
 // TunStats snapshots the tun router's counters; false when the node has no tun block.
@@ -141,34 +137,7 @@ func (m *Manager) releaseTun(ctx context.Context, id string, addr netip.Addr) {
 		return
 	}
 	if err := m.tunAddrs.Release(context.WithoutCancel(ctx), id, addr); err != nil {
-		log.WithFunc("pool.releaseTun").Warnf(ctx, "release overlay address %s of %s, retrying hourly: %v", addr, id, err)
-		m.mu.Lock()
-		m.tunReleases[id] = addr
-		m.mu.Unlock()
-	}
-}
-
-func (m *Manager) retryTunReleases(ctx context.Context) {
-	m.mu.Lock()
-	pending := maps.Clone(m.tunReleases)
-	m.mu.Unlock()
-	for id, addr := range pending {
-		m.mu.Lock()
-		held := m.claimed[id] != nil && m.claimed[id].TunAddr == addr
-		if held {
-			delete(m.tunReleases, id)
-		}
-		m.mu.Unlock()
-		if held {
-			continue
-		}
-		if err := m.tunAddrs.Release(ctx, id, addr); err != nil {
-			log.WithFunc("pool.retryTunReleases").Warnf(ctx, "release overlay address %s of %s: %v", addr, id, err)
-			return
-		}
-		m.mu.Lock()
-		delete(m.tunReleases, id)
-		m.mu.Unlock()
+		log.WithFunc("pool.releaseTun").Warnf(ctx, "release overlay address %s of %s: %v", addr, id, err)
 	}
 }
 
