@@ -315,8 +315,7 @@ file: a claim's own `guest: false` env first, the node's second
         { "host": "*.googleapis.com" }
       ] } },
     { "template": "rt:24.04", "net": "egress", "size": "small", "warm": 2,
-      // a secret without intercept also rides a plain http:// request, in cleartext: see `secret` below
-      "egress": { "allow": [{ "host": "api.github.com", "secret": "gh" }] } }
+      "egress": { "allow": [{ "host": "api.github.com", "secret": "gh", "intercept": true }] } }
   ],
   "egress_classes": [
     { "name": "desk", "egress": { "allow": [{ "host": "api.github.com" }] } }
