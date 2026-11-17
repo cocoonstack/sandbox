@@ -270,7 +270,7 @@ it while it sleeps write it, so the claim path is unchanged.
   they act on the claim.
 - **Departed owners and tombstones.** Every hour, on the store retention sweep,
   each node reads the rows past their retention deadline whose owner's lease
-  expired, the consumed rows, and its own rows. An expired row of such an owner
+  expired, and its own rows. An expired row of such an owner
   is purged checkpoint first, then the row. No node touches another node's tombstone:
   the owner settles it when it returns, through its sweep or its restart.
   The epoch compare-and-set lets exactly one node win each,
