@@ -1168,12 +1168,6 @@ func (f *fakeS3) handlePutObject(w http.ResponseWriter, r *http.Request, key str
 		_, _ = io.WriteString(w, `<Error><Code>InternalError</Code><Message>injected put failure</Message></Error>`)
 		return
 	}
-	if _, held := f.objects[key]; held && r.Header.Get("If-None-Match") == "*" {
-		w.Header().Set("Content-Type", "application/xml")
-		w.WriteHeader(http.StatusPreconditionFailed)
-		_, _ = io.WriteString(w, `<Error><Code>PreconditionFailed</Code><Message>the object exists</Message></Error>`)
-		return
-	}
 	if f.objects == nil {
 		f.objects = map[string][]byte{}
 	}

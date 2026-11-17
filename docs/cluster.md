@@ -724,11 +724,6 @@ claiming node's local store, pulled by digest when missing (`vm clone
 - `Client.DeleteTemplate("tpl")` at any node follows the same gossip to the
   owner and deletes there.
 
-On a shared store a template name has one owning tenant fleet-wide. A tenant's
-first promote of a name creates the record only while none exists, so two
-tenants that race one new name from two nodes get one 200 and one 409
-([promote](sandboxd-api.md#post-v1sandboxesidpromote)).
-
 Gossip is eventually consistent: a template promoted a moment ago may be
 invisible to name-based calls for about a gossip tick (the claim fails
 cold — retry), and one deleted a moment ago may still redirect to a 404.

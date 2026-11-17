@@ -3,7 +3,6 @@ package pool
 import (
 	"bytes"
 	"context"
-	"encoding/json/v2"
 	"errors"
 	"maps"
 	"os"
@@ -292,51 +291,6 @@ func TestCommitTemplateRechecksOwnerUnderLock(t *testing.T) {
 	}
 	if _, err := m.commitTemplate(t.Context(), stageTemplate(t, m, id), templateRecord{Key: testKey, Tenant: "beta"}); !errors.Is(err, ErrTemplateOwned) {
 		t.Errorf("beta publish over acme: %v, want ErrTemplateOwned", err)
-	}
-}
-
-func TestFirstPromotesRacingOnASharedStoreLeaveOneOwner(t *testing.T) {
-	tests := []struct {
-		name  string
-		racer string
-		want  error
-	}{
-		{"another tenant commits first and keeps the record", "beta", ErrTemplateOwned},
-		{"root commits first and keeps the record", "", ErrTemplateOwned},
-		{"the same tenant commits first and is replaced", "acme", nil},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			eng := newFakeEngine()
-			eng.exportContent = []byte("acme export")
-			m, peer := newTestManager(t, eng), newTestManager(t, newFakeEngine())
-			shared := m.tpls
-			peer.tpls = shared
-			a, b := claimTenant(t, m, "acme"), claimTenant(t, peer, tt.racer)
-			var racerDigest string
-			m.tpls = &racedCommitStore{Store: shared, race: sync.OnceFunc(func() {
-				_, racerDigest = mustPromote(t, peer, b, "shared:v1", tt.racer)
-			})}
-			_, digest, err := m.Promote(t.Context(), a.ID, Cred{Token: a.Token}, "shared:v1", "acme")
-			if !errors.Is(err, tt.want) {
-				t.Fatalf("acme promote after %q committed the new key: %v, want %v", tt.racer, err, tt.want)
-			}
-			if err != nil {
-				digest = racerDigest
-			}
-			id := store.TemplateID(tplKey("shared:v1").Hash())
-			raw, err := shared.ReadMeta(t.Context(), id)
-			if err != nil {
-				t.Fatalf("read the raced record: %v", err)
-			}
-			var rec templateRecord
-			if err = json.Unmarshal(raw, &rec); err != nil || rec.Tenant != tt.racer {
-				t.Errorf("raced record names tenant %q (%v), want %q", rec.Tenant, err, tt.racer)
-			}
-			if held, readErr := shared.ReadDigest(t.Context(), id); readErr != nil || held != digest {
-				t.Errorf("raced record digest %q (%v), want %q from the promote that owns it", held, readErr, digest)
-			}
-		})
 	}
 }
 
@@ -630,19 +584,6 @@ func (s *slowPrepareStore) PrepareDigested(ctx context.Context, staging, id, lin
 	close(s.entered)
 	<-s.release
 	return s.Store.PrepareDigested(ctx, staging, id, lineage)
-}
-
-type racedCommitStore struct {
-	store.Store
-	race func()
-}
-
-func (s *racedCommitStore) PrepareDigested(ctx context.Context, staging, id, lineage string) (string, store.CommitFunc, error) {
-	digest, commit, err := s.Store.PrepareDigested(ctx, staging, id, lineage)
-	return digest, func(ctx context.Context, createOnly bool) error {
-		s.race()
-		return commit(ctx, createOnly)
-	}, err
 }
 
 func mustPromote(t *testing.T, m *Manager, sb *types.Sandbox, name, tenant string) (types.PoolKey, string) {

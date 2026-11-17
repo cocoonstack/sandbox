@@ -153,7 +153,7 @@ func (s *Store) Publish(ctx context.Context, staging, id, lineage string) error 
 	if err != nil {
 		return err
 	}
-	return commit(ctx, false)
+	return commit(ctx)
 }
 
 func (s *Store) PrepareDigested(ctx context.Context, staging, id, lineage string) (string, store.CommitFunc, error) {
@@ -257,7 +257,7 @@ func (s *Store) SetLabels(ctx context.Context, id string, labels []byte) error {
 	if labels == nil {
 		return s.deleteKeys(ctx, []string{key})
 	}
-	return s.putObject(ctx, key, labels, nil, false)
+	return s.putObject(ctx, key, labels, nil)
 }
 
 func (s *Store) Delete(ctx context.Context, id string) error {
@@ -410,11 +410,11 @@ func (s *Store) prepare(ctx context.Context, staging, id, lineage string, digest
 	if err != nil {
 		return "", nil, fmt.Errorf("encode manifest: %w", err)
 	}
-	if err = s.putObject(ctx, s.manifestKey(id, gen), manifestRaw, nil, false); err != nil {
+	if err = s.putObject(ctx, s.manifestKey(id, gen), manifestRaw, nil); err != nil {
 		return "", nil, err
 	}
 	if lineage != id {
-		if err = s.putObject(ctx, s.lineageKey(lineage, id), nil, nil, false); err != nil {
+		if err = s.putObject(ctx, s.lineageKey(lineage, id), nil, nil); err != nil {
 			return "", nil, err
 		}
 	}
@@ -427,10 +427,10 @@ func (s *Store) prepare(ctx context.Context, staging, id, lineage string, digest
 		}
 		metadata = map[string]string{digestMetadataKey: digest}
 	}
-	return digest, func(ctx context.Context, createOnly bool) error {
+	return digest, func(ctx context.Context) error {
 		ctx, cancel := context.WithTimeout(ctx, transferBudget)
 		defer cancel()
-		if err := s.putObject(ctx, s.key(id, store.MetaFile), metaRaw, metadata, createOnly); err != nil {
+		if err := s.putObject(ctx, s.key(id, store.MetaFile), metaRaw, metadata); err != nil {
 			return err
 		}
 		// Keep old generations: another node may have selected the previous meta.
@@ -616,24 +616,17 @@ func (s *Store) refreshManifest(ctx context.Context, key string) (manifest, erro
 	if err = json.Unmarshal(body, &man); err != nil {
 		return manifest{}, fmt.Errorf("decode manifest %s: %w", key, err)
 	}
-	return man, s.putObject(ctx, key, body, nil, false)
+	return man, s.putObject(ctx, key, body, nil)
 }
 
-func (s *Store) putObject(ctx context.Context, key string, body []byte, metadata map[string]string, createOnly bool) error {
-	in := &awss3.PutObjectInput{
+func (s *Store) putObject(ctx context.Context, key string, body []byte, metadata map[string]string) error {
+	_, err := s.client.PutObject(ctx, &awss3.PutObjectInput{
 		Bucket:        &s.bucket,
 		Key:           &key,
 		Body:          bytes.NewReader(body),
 		ContentLength: new(int64(len(body))),
 		Metadata:      metadata,
-	}
-	if createOnly {
-		in.IfNoneMatch = new("*")
-	}
-	_, err := s.client.PutObject(ctx, in)
-	if apiErr, ok := errors.AsType[smithy.APIError](err); ok && apiErr.ErrorCode() == "PreconditionFailed" {
-		return store.ErrExists
-	}
+	})
 	if err != nil {
 		return fmt.Errorf("upload %s: %w", key, err)
 	}
@@ -710,7 +703,7 @@ func (u *chunkUploader) upload(ctx context.Context, c store.Chunk) error {
 	}
 	u.group.Go(func() error {
 		defer putChunkBuf(c.Data)
-		return u.store.putObject(u.ctx, u.store.chunkKey(u.lineage, c.SHA256), c.Data, nil, false)
+		return u.store.putObject(u.ctx, u.store.chunkKey(u.lineage, c.SHA256), c.Data, nil)
 	})
 	return nil
 }
