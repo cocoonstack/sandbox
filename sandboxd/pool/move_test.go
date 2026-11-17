@@ -651,9 +651,7 @@ func TestMoveCutOffFromTheRegistryLeavesAnAdoptionToTheFence(t *testing.T) {
 	u := mc.moveNode(t, "c")
 	sb := mustClaim(t, mc.s, testKey)
 	replicateNow(t, mc.s, sb)
-	mc.s.mu.Lock()
-	replica := sb.ReplicaCk
-	mc.s.mu.Unlock()
+	replica := mc.s.replicaOf(sb)
 	mc.s.archives = &unreachableRowWrites{Registry: mc.reg}
 	if _, err := mc.s.Move(t.Context(), sb.ID, "b", time.Minute); !errors.Is(err, archives.ErrUnavailable) {
 		t.Fatalf("move: %v, want the registry's error", err)
@@ -679,9 +677,7 @@ func TestAMoveWhoseRowAPeerAdoptedKeepsTheAdoptersCheckpoint(t *testing.T) {
 	u := mc.moveNode(t, "c")
 	sb := mustClaim(t, mc.s, testKey)
 	replicateNow(t, mc.s, sb)
-	mc.s.mu.Lock()
-	replica := sb.ReplicaCk
-	mc.s.mu.Unlock()
+	replica := mc.s.replicaOf(sb)
 	mc.expire("a")
 	mustAdopt(t, u, sb, "adoption after the source's lease lapsed")
 	if _, err := mc.s.Move(t.Context(), sb.ID, "b", time.Minute); err == nil {

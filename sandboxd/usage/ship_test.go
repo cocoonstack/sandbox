@@ -149,7 +149,7 @@ func TestShipDrainsABacklogPastOneBatch(t *testing.T) {
 	}
 }
 
-func TestShipLandsEveryTickUntilItsContextEnds(t *testing.T) {
+func TestShipLandsEveryTickAndOnceMoreWhenItsContextEnds(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		path, store := journalAt(t), &memStore{}
 		appendEvents(t, path, "a")
@@ -165,26 +165,10 @@ func TestShipLandsEveryTickUntilItsContextEnds(t *testing.T) {
 		time.Sleep(shipEvery)
 		synctest.Wait()
 		assertLanded(t, store, "a,b")
+		appendEvents(t, path, "c")
 		cancel()
 		<-done
-	})
-}
-
-func TestShipDrainsOnceMoreWhenItsContextEnds(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		path, store := journalAt(t), &memStore{}
-		appendEvents(t, path, "a")
-		ctx, cancel := context.WithCancel(t.Context())
-		done := make(chan struct{})
-		go func() {
-			defer close(done)
-			Ship(ctx, path, "n1", store)
-		}()
-		synctest.Wait()
-		appendEvents(t, path, "b")
-		cancel()
-		<-done
-		assertLanded(t, store, "a,b")
+		assertLanded(t, store, "a,b,c")
 	})
 }
 

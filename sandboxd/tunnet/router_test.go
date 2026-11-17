@@ -51,6 +51,7 @@ func TestRouterAnnouncesRewritesAndPassesOnlyReplies(t *testing.T) {
 		binary.BigEndian.PutUint16(denied[VnetHdrLen+20+2:], 22)
 		sendFrame(t, guest, denied)
 		sendFrame(t, guest, frame(ProtoTCP, GuestAddr, netip.MustParseAddr("100.80.0.5"), false))
+		sendFrame(t, guest, frame(ProtoUDP, GuestAddr, netip.MustParseAddr("100.64.0.1"), false))
 		stranger := reply(netip.MustParseAddr("198.51.100.1"))
 		binary.BigEndian.PutUint16(stranger[Overhead+20:], 22)
 		u.inject(t, stranger)
@@ -60,8 +61,8 @@ func TestRouterAnnouncesRewritesAndPassesOnlyReplies(t *testing.T) {
 			t.Fatalf("delivered %+v, want the reply rewritten to the guest", p)
 		}
 		synctest.Wait()
-		if got := r.Stats().Drops[DropPolicy]; got != 3 {
-			t.Fatalf("policy drops = %d, want 3", got)
+		if got := r.Stats().Drops[DropPolicy]; got != 4 {
+			t.Fatalf("policy drops = %d, want 4", got)
 		}
 		if n := len(u.out); n != 0 {
 			t.Errorf("%d more datagrams sent, want none for denied traffic", n)
@@ -71,38 +72,13 @@ func TestRouterAnnouncesRewritesAndPassesOnlyReplies(t *testing.T) {
 		synctest.Wait()
 		mu.Lock()
 		defer mu.Unlock()
-		if len(records) != 3 {
-			t.Errorf("recorded %d flows after the disarm, want 3", len(records))
+		if len(records) != 4 {
+			t.Errorf("recorded %d flows after the disarm, want 4", len(records))
 		}
-	})
-}
-
-func TestRouterRecordsADeniedFlowToTheOverlayAndTheGuestRange(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		u, r := newRouter(t)
-		var records []FlowRecord
-		var mu sync.Mutex
-		r.Arm(Claim{
-			ID: "c1", Addr: claimAddr,
-			Allow:  func(netip.Addr, uint16) bool { return true },
-			Record: func(fr FlowRecord) { mu.Lock(); records = append(records, fr); mu.Unlock() },
-		})
-		u.sent(t)
-		guest := serve(t, r, claimAddr)
-		guestHello(t, guest)
-		sendFrame(t, guest, frame(ProtoTCP, GuestAddr, netip.MustParseAddr("100.80.0.5"), false))
-		sendFrame(t, guest, frame(ProtoUDP, GuestAddr, netip.MustParseAddr("100.64.0.1"), false))
-		synctest.Wait()
-		if got := r.Stats().Drops[DropPolicy]; got != 2 || len(u.out) != 0 {
-			t.Fatalf("policy drops = %d with %d datagrams sent, want 2 and none", got, len(u.out))
-		}
-		_ = guest.Close()
-		r.Disarm(claimAddr)
-		synctest.Wait()
-		mu.Lock()
-		defer mu.Unlock()
-		if len(records) != 2 || records[0].Allowed || records[1].Allowed {
-			t.Errorf("records %+v, want a denied flow for each probe", records)
+		for _, fr := range records {
+			if fr.Allowed != (fr.Dst == remote && fr.Port == 443) {
+				t.Errorf("record %+v allowed %v, want only the flow to %v:443 allowed", fr, fr.Allowed, remote)
+			}
 		}
 	})
 }
@@ -351,7 +327,8 @@ func TestRouterHandsAnICMPErrorBackWithTheQuotedGuestAddress(t *testing.T) {
 func TestRouterResumesAStreamOpenedBeforeTheArmButRefusesAnOpener(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		u, r := newRouter(t)
-		r.Arm(Claim{ID: "c1", Addr: claimAddr, Allow: func(_ netip.Addr, port uint16) bool { return port == 443 }})
+		var asked atomic.Int32
+		r.Arm(Claim{ID: "c1", Addr: claimAddr, Allow: func(_ netip.Addr, port uint16) bool { asked.Add(1); return port == 443 }})
 		u.sent(t)
 		guest := serve(t, r, claimAddr)
 		guestHello(t, guest)
@@ -370,22 +347,8 @@ func TestRouterResumesAStreamOpenedBeforeTheArmButRefusesAnOpener(t *testing.T) 
 		if p, _ := Parse(readFrame(t, guest)); p.Src != remote || p.Dst != GuestAddr {
 			t.Fatalf("delivered %+v, want the stream's next segment", p)
 		}
-	})
-}
-
-func TestRouterJudgesAResumedFlowOnce(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		u, r := newRouter(t)
-		var asked atomic.Int32
-		r.Arm(Claim{ID: "c1", Addr: claimAddr, Allow: func(netip.Addr, uint16) bool { asked.Add(1); return true }})
-		u.sent(t)
-		guest := serve(t, r, claimAddr)
-		guestHello(t, guest)
-		synctest.Wait()
-		u.inject(t, reply(remote))
-		readFrame(t, guest)
 		if n := asked.Load(); n != 1 {
-			t.Fatalf("the policy was asked %d times for one resumed segment, want once", n)
+			t.Errorf("the policy was asked %d times for one resumed segment, want once", n)
 		}
 	})
 }
@@ -408,65 +371,54 @@ func TestRouterKeepsTheMTUAStreamWasToldUntilItsNextHello(t *testing.T) {
 	})
 }
 
-func TestRouterChargesNothingForAFrameTheUnderlayDidNotSend(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		u, r := newRouter(t)
-		used := new(atomic.Int64)
-		var mu sync.Mutex
-		var records []FlowRecord
-		r.Arm(Claim{
-			ID: "c1", Addr: claimAddr, Used: used, Allow: func(netip.Addr, uint16) bool { return true },
-			Record: func(fr FlowRecord) { mu.Lock(); records = append(records, fr); mu.Unlock() },
+func TestRouterRefundsOnlyTheUnreportedChargeOfAFrameTheUnderlayDidNotSend(t *testing.T) {
+	for _, tt := range []struct {
+		name  string
+		every time.Duration
+		swept bool
+	}{
+		{"unreported", 0, false},
+		{"reported by a sweep during the send", time.Nanosecond, true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				u, r := newRouter(t)
+				used := new(atomic.Int64)
+				var mu sync.Mutex
+				var records []FlowRecord
+				r.Arm(Claim{
+					ID: "c1", Addr: claimAddr, Used: used, Every: tt.every, Allow: func(netip.Addr, uint16) bool { return true },
+					Record: func(fr FlowRecord) { mu.Lock(); records = append(records, fr); mu.Unlock() },
+				})
+				u.sent(t)
+				guest := serve(t, r, claimAddr)
+				guestHello(t, guest)
+				if tt.swept {
+					u.onFail = func() { r.sweep(time.Now().Add(time.Second), false) }
+				}
+				u.failSend.Store(true)
+				sendFrame(t, guest, frame(ProtoTCP, GuestAddr, remote, false))
+				synctest.Wait()
+				if got := r.Stats().Drops[DropSend]; got != 1 {
+					t.Fatalf("send drops = %d, want 1", got)
+				}
+				r.EndFlows()
+				mu.Lock()
+				defer mu.Unlock()
+				for _, fr := range records {
+					if fr.NewUp < 0 {
+						t.Errorf("record %+v reports a negative upload", fr)
+					}
+					if !tt.swept && fr.Up != 0 {
+						t.Errorf("record %+v bills %d up bytes the underlay never sent", fr, fr.Up)
+					}
+				}
+				if used.Load() != 0 {
+					t.Errorf("quota used %d bytes for a frame that never left", used.Load())
+				}
+			})
 		})
-		u.sent(t)
-		guest := serve(t, r, claimAddr)
-		guestHello(t, guest)
-		u.failSend.Store(true)
-		sendFrame(t, guest, frame(ProtoTCP, GuestAddr, remote, false))
-		synctest.Wait()
-		if got := r.Stats().Drops[DropSend]; got != 1 {
-			t.Fatalf("send drops = %d, want 1", got)
-		}
-		r.EndFlows()
-		mu.Lock()
-		defer mu.Unlock()
-		for _, fr := range records {
-			if fr.Up != 0 {
-				t.Errorf("record %+v bills %d up bytes the underlay never sent", fr, fr.Up)
-			}
-		}
-		if used.Load() != 0 {
-			t.Errorf("quota used %d bytes for a frame that never left", used.Load())
-		}
-	})
-}
-
-func TestAFailedSendAfterARecordNeverMakesTheNextRecordNegative(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		u, r := newRouter(t)
-		var mu sync.Mutex
-		var records []FlowRecord
-		r.Arm(Claim{
-			ID: "c1", Addr: claimAddr, Every: time.Nanosecond, Allow: func(netip.Addr, uint16) bool { return true },
-			Record: func(fr FlowRecord) { mu.Lock(); records = append(records, fr); mu.Unlock() },
-		})
-		u.sent(t)
-		guest := serve(t, r, claimAddr)
-		guestHello(t, guest)
-		out := frame(ProtoTCP, GuestAddr, remote, false)
-		u.onFail = func() { r.sweep(time.Now().Add(time.Second), false) }
-		u.failSend.Store(true)
-		sendFrame(t, guest, out)
-		synctest.Wait()
-		r.EndFlows()
-		mu.Lock()
-		defer mu.Unlock()
-		for _, fr := range records {
-			if fr.NewUp < 0 {
-				t.Errorf("record %+v reports a negative upload", fr)
-			}
-		}
-	})
+	}
 }
 
 func TestRouterKeepsTheChargeOfAFrameTheUnderlayPartlySent(t *testing.T) {

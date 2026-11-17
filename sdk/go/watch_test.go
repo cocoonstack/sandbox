@@ -82,25 +82,9 @@ func TestWatchCtxCancelUnblocksUnreadEvents(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		client, server := net.Pipe()
 		defer func() { _ = server.Close() }()
-		ctx, cancel := context.WithCancel(t.Context())
-		defer cancel()
 		w := &Watcher{events: make(chan wire.Event), stop: func() { _ = client.Close() }, closed: make(chan struct{})}
 		defer w.Close()
-		exited := make(chan struct{})
-		go func() {
-			defer close(exited)
-			w.drain(ctx, silkd.NewConn(client))
-		}()
-		if _, err := io.WriteString(server, `{"type":"event","kind":"created","path":"/work/a"}`+"\n"); err != nil {
-			t.Fatalf("send event: %v", err)
-		}
-		synctest.Wait()
-
-		cancel()
-		synctest.Wait()
-		select {
-		case <-exited:
-		default:
+		if !drainEndsOnCancel(t, server, `{"type":"event","kind":"created","path":"/work/a"}`, func(ctx context.Context) { w.drain(ctx, silkd.NewConn(client)) }) {
 			t.Fatal("drain still parked on the unread event after ctx cancel")
 		}
 		if err := w.Err(); !errors.Is(err, context.Canceled) {
