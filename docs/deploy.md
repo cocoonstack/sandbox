@@ -465,8 +465,7 @@ connections across transfers instead of opening new ones.
 
 sandboxd never garbage-collects the S3 `checkpoint_store`. It only adds
 objects and, on a delete, removes the record's `meta.json`, labels and lineage
-markers and re-stamps its manifests, so a reclaim job that goes by object age
-keeps them while a fetch that already selected the record completes; chunks, manifests, stale markers and everything a superseded
+markers; chunks, manifests, stale markers and everything a superseded
 record wrote stay in the bucket until an operator job removes them. A re-publish
 retains the prior generation's manifest so an in-flight fetch that selected the
 old metadata can finish. The `dir` backend is different: it keeps its own local

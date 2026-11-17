@@ -52,7 +52,7 @@ func TestDeleteRetryConverges(t *testing.T) {
 	}
 }
 
-func TestDeleteRetainsMetaUntilManifestsAreRefreshed(t *testing.T) {
+func TestDeleteRetainsMetaUntilItsMarkersAreGone(t *testing.T) {
 	const id = "ck_00000000000000bb"
 	metaKey := "ck/" + id + "/" + store.MetaFile
 	manifestKeys := []string{
@@ -105,11 +105,6 @@ func TestDeleteRetainsMetaUntilManifestsAreRefreshed(t *testing.T) {
 			defer fake.mu.Unlock()
 			if len(fake.objects) != len(manifestKeys) {
 				t.Errorf("objects after retry = %d, want only the manifests", len(fake.objects))
-			}
-			for _, key := range manifestKeys {
-				if time.Since(fake.modified[key]) > time.Minute {
-					t.Errorf("manifest %s was not refreshed by Delete", key)
-				}
 			}
 			if len(fake.deleteBatches) < 2 {
 				t.Fatalf("delete batches = %v, want labels then meta", fake.deleteBatches)
@@ -1013,13 +1008,13 @@ func TestFetchRejectsAnInvalidManifestBeforeWritingAFile(t *testing.T) {
 func TestPublishRejectsARecordItsFetchWouldRefuse(t *testing.T) {
 	const id = "ck_00000000000000a5"
 	fake, st := newFakeStore(t)
-	staging, _ := stageSparseRecord(t, st, id, metaJSON(id), store.MaxRecordBytes+1, nil)
+	staging, _ := stageSparseRecord(t, st, id, metaJSON(id), store.MaxRecordBytes+1, map[int64][]byte{0: []byte("data")})
 	err := st.Publish(t.Context(), staging, id, "")
 	if err == nil || !strings.Contains(err.Error(), "outside [0,") {
 		t.Fatalf("Publish = %v, want the record bound Fetch enforces", err)
 	}
 	if keys := fake.keys(); len(keys) != 0 {
-		t.Errorf("a refused publish wrote %v, want no manifest and no meta", keys)
+		t.Errorf("a refused publish wrote %v, want no chunk, manifest or meta", keys)
 	}
 }
 

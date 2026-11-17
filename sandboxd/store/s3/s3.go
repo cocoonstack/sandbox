@@ -268,9 +268,9 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 	}
 	drop := []string{s.key(id, store.LabelsFile)}
 	for _, obj := range objs {
-		man, refreshErr := s.refreshManifest(ctx, *obj.Key)
-		if refreshErr != nil {
-			return refreshErr
+		man, readErr := s.manifestAt(ctx, *obj.Key)
+		if readErr != nil {
+			return readErr
 		}
 		lineage := cmp.Or(man.Lineage, id)
 		if marker := s.lineageKey(lineage, id); lineage != id && !slices.Contains(drop, marker) {
@@ -379,11 +379,17 @@ func (s *Store) prepare(ctx context.Context, staging, id, lineage string, digest
 	if err != nil {
 		return "", nil, err
 	}
+	man := manifest{Lineage: lineage, Files: make([]manifestFile, len(files))}
+	for i, file := range files {
+		man.Files[i] = manifestFile{Path: file.rel, Size: file.size}
+	}
+	if err = validateManifest(man); err != nil {
+		return "", nil, err
+	}
 	have, err := s.referencedChunks(ctx, id, lineage)
 	if err != nil {
 		return "", nil, err
 	}
-	man := manifest{Lineage: lineage, Files: make([]manifestFile, len(files))}
 	digestFiles := make([]store.DigestFile, len(files))
 	chunkGroup, chunkCtx := errgroup.WithContext(ctx)
 	chunkGroup.SetLimit(s.uploadLimit)
@@ -401,9 +407,6 @@ func (s *Store) prepare(ctx context.Context, staging, id, lineage string, digest
 		err = fileErr
 	}
 	if err != nil {
-		return "", nil, err
-	}
-	if err = validateManifest(man); err != nil {
 		return "", nil, err
 	}
 	manifestRaw, err := json.Marshal(man)
@@ -604,7 +607,7 @@ func (s *Store) referencedChunks(ctx context.Context, id, lineage string) (map[s
 	return have, nil
 }
 
-func (s *Store) refreshManifest(ctx context.Context, key string) (manifest, error) {
+func (s *Store) manifestAt(ctx context.Context, key string) (manifest, error) {
 	body, _, err := s.getObject(ctx, key)
 	if errors.Is(err, store.ErrNotFound) {
 		return manifest{}, nil
@@ -616,7 +619,7 @@ func (s *Store) refreshManifest(ctx context.Context, key string) (manifest, erro
 	if err = json.Unmarshal(body, &man); err != nil {
 		return manifest{}, fmt.Errorf("decode manifest %s: %w", key, err)
 	}
-	return man, s.putObject(ctx, key, body, nil)
+	return man, nil
 }
 
 func (s *Store) putObject(ctx context.Context, key string, body []byte, metadata map[string]string) error {
