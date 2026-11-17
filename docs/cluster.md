@@ -664,7 +664,9 @@ checkpoint store and keeps each claim's registry row on the latest snapshot:
   another node may adopt, so no moment has two serving copies, partitions
   included. This holds while the node's clock and the database's run at the same
   rate to within that margin over 12 seconds, and ignores skew between them,
-  because both sides count from a renewal's own start. The guest of a claim the
+  because both sides count from a renewal's own start. A node that is stopping
+  renews no more, so it fences the same way while it waits for its running
+  `cocoon` commands. The guest of a claim the
   fence closed keeps running without a NIC until the node returns and removes
   it, and its state is discarded. When the fence closes, every open
   stream of a replicated claim on the node is closed too, one opened before the
