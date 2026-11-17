@@ -33,8 +33,9 @@ const (
 )
 
 var (
-	// ErrNotFound is the absence signal every backend normalizes its missing-record error to.
+	// ErrNotFound is the absence signal every backend normalizes its missing-record error to; ErrExists is a create-only commit's refusal.
 	ErrNotFound = errors.New("record not found")
+	ErrExists   = errors.New("record exists")
 
 	// CheckpointIDRe matches checkpoint and archive image ids, TemplateIDRe template ids, so all three share one store root.
 	CheckpointIDRe = regexp.MustCompile(`^(ck|ar)_[0-9a-f]{16}$`)
@@ -63,8 +64,8 @@ type S3Config struct {
 	MetaReadConcurrency int `json:"meta_read_concurrency,omitzero"`
 }
 
-// CommitFunc makes a prepared generation the record's current one.
-type CommitFunc func(ctx context.Context) error
+// CommitFunc makes a prepared generation the record's current one; createOnly fails with ErrExists when the record has one, and a later call may still commit.
+type CommitFunc func(ctx context.Context, createOnly bool) error
 
 // Store is one record backend.
 type Store interface {

@@ -687,6 +687,12 @@ on the egress lane, has volumes attached (see [egress](egress.md)), has its
 sandbox token, 429 while the disk is under [`disk_reserve`](deploy.md), 503
 `lease lost; retry` for a replicated sandbox while its node's lease is overdue.
 
+A tenant's first promote of a name creates the template record only while none
+exists. Two tenants that promote one new name at the same moment, on one node
+or on two nodes of a shared checkpoint store, get one 200 and one 409. Root
+replaces any record. Re-promotes of one name from two nodes are not
+coordinated: the last commit wins ([`checkpoint_dir`](deploy.md#configuration)).
+
 ## DELETE /v1/templates?template=…&net=…&size=…
 
 Auth: node API token. Removes a promoted template (the query parameters

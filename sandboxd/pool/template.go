@@ -63,7 +63,7 @@ func (m *Manager) Promote(ctx context.Context, id string, cred Cred, template, t
 		return types.PoolKey{}, "", ErrPooledTemplate
 	}
 	// commitTemplate re-checks under the template lock; this only fast-fails before the export
-	if err := m.checkTemplateOwner(ctx, store.TemplateID(key.Hash()), tenant); err != nil {
+	if _, err := m.checkTemplateOwner(ctx, store.TemplateID(key.Hash()), tenant); err != nil {
 		return types.PoolKey{}, "", err
 	}
 	ctx = context.WithoutCancel(ctx)
@@ -291,23 +291,23 @@ func (m *Manager) pooled(key types.PoolKey) bool {
 	return ok
 }
 
-// checkTemplateOwner rejects publishing over another tenant's record.
-func (m *Manager) checkTemplateOwner(ctx context.Context, id, tenant string) error {
+// checkTemplateOwner rejects publishing over another tenant's record; absent reports that a tenant found no record.
+func (m *Manager) checkTemplateOwner(ctx context.Context, id, tenant string) (absent bool, err error) {
 	if tenant == "" {
-		return nil
+		return false, nil
 	}
 	raw, err := m.tpls.ReadMeta(ctx, id)
 	switch {
 	case errors.Is(err, store.ErrNotFound):
-		return nil
+		return true, nil
 	case err != nil:
-		return fmt.Errorf("read template: %w", err)
+		return false, fmt.Errorf("read template: %w", err)
 	}
 	var prev templateRecord
 	if json.Unmarshal(raw, &prev) != nil || !tenantOwns(tenant, prev.Tenant) {
-		return ErrTemplateOwned
+		return false, ErrTemplateOwned
 	}
-	return nil
+	return false, nil
 }
 
 func (m *Manager) commitTemplate(ctx context.Context, staging string, rec templateRecord) (string, error) {
@@ -325,10 +325,17 @@ func (m *Manager) commitTemplate(ctx context.Context, staging string, rec templa
 		return "", fmt.Errorf("publish template: %w", err)
 	}
 	defer m.recs.lockRec(id)()
-	if ownerErr := m.checkTemplateOwner(ctx, id, rec.Tenant); ownerErr != nil {
-		return "", ownerErr
+	absent, err := m.checkTemplateOwner(ctx, id, rec.Tenant)
+	if err != nil {
+		return "", err
 	}
-	if err = commit(ctx); err != nil {
+	if err = commit(ctx, absent); errors.Is(err, store.ErrExists) {
+		if _, err = m.checkTemplateOwner(ctx, id, rec.Tenant); err != nil {
+			return "", err
+		}
+		err = commit(ctx, false)
+	}
+	if err != nil {
 		return "", fmt.Errorf("publish template: %w", err)
 	}
 	if err = m.tpls.SetLabels(ctx, id, nil); err != nil {

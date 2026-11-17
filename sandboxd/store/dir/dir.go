@@ -57,7 +57,7 @@ func (d *Store) Stage(id string) (string, error) {
 }
 
 func (d *Store) Publish(ctx context.Context, staging, id, _ string) error {
-	return d.publish(ctx, staging, id, "")
+	return d.publish(ctx, staging, id, "", false)
 }
 
 func (d *Store) PrepareDigested(ctx context.Context, staging, id, _ string) (string, store.CommitFunc, error) {
@@ -65,7 +65,9 @@ func (d *Store) PrepareDigested(ctx context.Context, staging, id, _ string) (str
 	if err != nil {
 		return "", nil, fmt.Errorf("digest export: %w", err)
 	}
-	return digest, func(ctx context.Context) error { return d.publish(ctx, staging, id, digest) }, nil
+	return digest, func(ctx context.Context, createOnly bool) error {
+		return d.publish(ctx, staging, id, digest, createOnly)
+	}, nil
 }
 
 func (d *Store) Fetch(ctx context.Context, id string) (string, []byte, string, error) {
@@ -207,7 +209,7 @@ func (d *Store) readRecord(ctx context.Context, id string) (store.Record, error)
 	return store.Record{Meta: raw, Digest: digest, Labels: labels}, nil
 }
 
-func (d *Store) publish(_ context.Context, staging, id, digest string) error {
+func (d *Store) publish(_ context.Context, staging, id, digest string, createOnly bool) error {
 	metaRaw, err := os.ReadFile(filepath.Join(staging, store.MetaFile)) //nolint:gosec // our own staging dir
 	if err != nil {
 		return fmt.Errorf("staging has no %s: %w", store.MetaFile, err)
@@ -257,7 +259,13 @@ func (d *Store) publish(_ context.Context, staging, id, digest string) error {
 	if err := touchCurrentGeneration(final, now); err != nil {
 		return err
 	}
-	if err := utils.WriteFileSync(filepath.Join(final, store.MetaFile), metaRaw, 0o600); err != nil {
+	metaPath := filepath.Join(final, store.MetaFile)
+	if createOnly {
+		err = createMeta(filepath.Join(staging, store.MetaFile), metaPath, metaRaw)
+	} else {
+		err = utils.WriteFileSync(metaPath, metaRaw, 0o600)
+	}
+	if err != nil {
 		return err
 	}
 	_ = d.sweepGenerations(id) // later publishes and startups retry a failed sweep
@@ -338,6 +346,19 @@ func removeAgedEntry(final string, entry fs.DirEntry) error {
 		return nil
 	}
 	return os.RemoveAll(filepath.Join(final, entry.Name()))
+}
+
+func createMeta(staged, path string, meta []byte) error {
+	if err := utils.WriteFileSync(staged, meta, 0o600); err != nil {
+		return err
+	}
+	if err := os.Link(staged, path); err != nil {
+		if errors.Is(err, fs.ErrExist) {
+			return store.ErrExists
+		}
+		return err
+	}
+	return utils.SyncDir(filepath.Dir(path))
 }
 
 func writeGenerationDigest(final string, meta []byte, digest string) error {
