@@ -116,7 +116,7 @@ func TestRemovedTenantRunsToItsDeadlineButCannotExtend(t *testing.T) {
 
 func TestRemovedTenantsClaimIsNeitherArchivedNorWokenNorForked(t *testing.T) {
 	cfg := &config.Config{DataDir: t.TempDir(), APIToken: "root", Pools: []config.PoolSpec{archivePool(0)}}
-	m, err := NewManager(t.Context(), cfg, newFakeEngine(), testSecrets(t), testBackends(t, cfg))
+	m, err := newManager(t, cfg, newFakeEngine(), testSecrets(t), testBackends(t, cfg))
 	if err != nil {
 		t.Fatalf("setup manager: %v", err)
 	}
@@ -185,7 +185,7 @@ func TestConcurrentTenantPutsKeepEveryTenant(t *testing.T) {
 func TestTenantChangesAreValidatedAndAudited(t *testing.T) {
 	dir := t.TempDir()
 	cfg := &config.Config{DataDir: dir, APIToken: "root", APITokenNext: "root-next", OperatorToken: "op-tok", OperatorTokenNext: "op-next", AuditLog: true}
-	m, err := NewManager(t.Context(), cfg, newFakeEngine(), testSecrets(t), testBackends(t, &config.Config{DataDir: dir, APIToken: "root"}))
+	m, err := newManager(t, cfg, newFakeEngine(), testSecrets(t), testBackends(t, &config.Config{DataDir: dir, APIToken: "root"}))
 	if err != nil {
 		t.Fatalf("setup manager: %v", err)
 	}
@@ -245,7 +245,7 @@ func TestARuntimeTenantTakesItsEgressClassWithoutARestart(t *testing.T) {
 	cfg := &config.Config{DataDir: dir, APIToken: "root", EgressClasses: []config.EgressClass{{Name: "desk", Egress: &egress.Policy{Allow: []egress.Rule{{Host: "b.test"}}}}}}
 	eng := newFakeEngine()
 	eng.sockRoot = outboundtest.SockRoot(t)
-	m, err := NewManager(t.Context(), cfg, eng, testSecrets(t), testBackends(t, cfg))
+	m, err := newManager(t, cfg, eng, testSecrets(t), testBackends(t, cfg))
 	if err != nil {
 		t.Fatalf("setup manager: %v", err)
 	}
@@ -355,7 +355,7 @@ func TestTwoNodesOnOneMetaStoreShareTheTenantSet(t *testing.T) {
 		}
 		b.Tenants = src
 		t.Cleanup(func() { _ = src.Close() })
-		m, err := NewManager(t.Context(), cfg, newFakeEngine(), testSecrets(t), b)
+		m, err := newManager(t, cfg, newFakeEngine(), testSecrets(t), b)
 		if err != nil {
 			t.Fatalf("setup manager: %v", err)
 		}

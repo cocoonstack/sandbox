@@ -479,7 +479,7 @@ func tunManager(t *testing.T, eng *fakeEngine, addrs tunnet.Addresses, pools ...
 	cfg := &config.Config{DataDir: t.TempDir(), Tun: tun, Pools: pools, AuditLog: true}
 	b := testBackends(t, cfg)
 	b.TunRouter, b.TunAddrs = tunnet.New(fakeUnderlay{}, tun.Overlay()), addrs
-	m, err := NewManager(t.Context(), cfg, eng, testSecrets(t), b)
+	m, err := newManager(t, cfg, eng, testSecrets(t), b)
 	if err != nil {
 		t.Fatalf("manager: %v", err)
 	}

@@ -215,7 +215,7 @@ func TestWakeOfAFailedClaimRearmsEgressAfterARestart(t *testing.T) {
 	first.recoverVMM(t.Context(), sb)
 	first.out.Disarm(sb.ID, false)
 
-	second, err := NewManager(t.Context(), cfg, eng, testSecrets(t), testBackends(t, cfg))
+	second, err := newManager(t, cfg, eng, testSecrets(t), testBackends(t, cfg))
 	if err != nil {
 		t.Fatalf("restarted manager: %v", err)
 	}

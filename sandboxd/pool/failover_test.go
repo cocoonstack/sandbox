@@ -2410,7 +2410,7 @@ func (c *failoverCluster) nodeOn(t *testing.T, eng *fakeEngine, name, dataDir st
 	if !c.noArchives {
 		b.Archives = c.reg
 	}
-	m, err := NewManager(t.Context(), cfg, eng, testSecrets(t), b)
+	m, err := newManager(t, cfg, eng, testSecrets(t), b)
 	if err != nil {
 		t.Fatalf("manager %s: %v", name, err)
 	}

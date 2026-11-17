@@ -2,7 +2,6 @@
 package pool
 
 import (
-	"cmp"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -68,8 +67,6 @@ const (
 	refillFailStreak  = 8
 	refillBackoffBase = 250 * time.Millisecond
 	refillBackoffMax  = buildRetryDelay
-	// Fallback when a Manager is built from a Config that skipped config.Load's defaulting
-	defaultRefill = 4
 
 	defaultMoveConcurrency = 2
 
@@ -406,7 +403,7 @@ type Manager struct {
 
 // NewManager builds a manager from the node config over backends the caller selected from it.
 func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *egress.SecretStore, b Backends) (*Manager, error) {
-	refill := cmp.Or(cfg.RefillConcurrency, defaultRefill)
+	refill := cfg.RefillConcurrency
 	m := &Manager{
 		eng:             eng,
 		dataDir:         cfg.DataDir,

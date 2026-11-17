@@ -139,7 +139,7 @@ func TestRestoredEgressPoolNeedsAttachment(t *testing.T) {
 	}
 
 	cfg := &config.Config{DataDir: dir}
-	if _, err := NewManager(t.Context(), cfg, newFakeEngine(), testSecrets(t), testBackends(t, cfg)); err == nil {
+	if _, err := newManager(t, cfg, newFakeEngine(), testSecrets(t), testBackends(t, cfg)); err == nil {
 		t.Error("NewManager accepted a restored egress-lane pool without an attachment")
 	}
 }
@@ -327,7 +327,7 @@ func metaStoreNode(t *testing.T, cell string) *Manager {
 		b.CellPools = cells
 		t.Cleanup(func() { _ = cells.Close() })
 	}
-	m, err := NewManager(t.Context(), cfg, newFakeEngine(), testSecrets(t), b)
+	m, err := newManager(t, cfg, newFakeEngine(), testSecrets(t), b)
 	if err != nil {
 		t.Fatalf("setup manager: %v", err)
 	}
