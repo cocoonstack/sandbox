@@ -410,7 +410,7 @@ func TestAcceptEncodingIsUnsignedOnlyWhenConfigured(t *testing.T) {
 func TestS3BackendContractRealEndpoint(t *testing.T) {
 	endpoint := os.Getenv("SANDBOX_S3_E2E")
 	if endpoint == "" {
-		t.Skip("SANDBOX_S3_E2E not set (export it to a MinIO endpoint to run)")
+		t.Skip("SANDBOX_S3_E2E not set (export it to an S3 endpoint to run)")
 	}
 	st, err := New(t.Context(), store.S3Config{
 		Bucket:                 cmp.Or(os.Getenv("SANDBOX_S3_E2E_BUCKET"), "sbx-checkpoints"),

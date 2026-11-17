@@ -86,6 +86,22 @@ jobs:
           ! grep -- '--- SKIP' "$RUNNER_TEMP/pg-test.log"
           ! grep -- 'no tests to run' "$RUNNER_TEMP/pg-test.log"
 
+      - name: Test the S3 checkpoint store against a real endpoint
+        working-directory: sandboxd
+        shell: bash
+        env:
+          SANDBOX_S3_E2E: http://127.0.0.1:8333
+          AWS_ACCESS_KEY_ID: sbxci
+          AWS_SECRET_ACCESS_KEY: sbxcisecret
+        run: |
+          docker run -d --name s3 -p 127.0.0.1:8333:8333 chrislusf/seaweedfs:4.54 server -s3 -ip.bind=0.0.0.0
+          for _ in $(seq 60); do
+            docker exec s3 sh -c 'echo "s3.bucket.create -name sbx-checkpoints" | weed shell' 2>&1 | grep -q 'created bucket' && break
+            sleep 1
+          done
+          GOWORK=off go test -race -count=1 -v -run TestS3BackendContractRealEndpoint ./store/s3/ | tee "$RUNNER_TEMP/s3-test.log"
+          grep -- '--- PASS: TestS3BackendContractRealEndpoint' "$RUNNER_TEMP/s3-test.log"
+
       - name: Test the tun path through a kernel exit
         working-directory: sandboxd
         shell: bash
