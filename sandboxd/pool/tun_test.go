@@ -638,6 +638,8 @@ func (r *reconcilingAddrs) confirmedList() []string {
 
 type fakeUnderlay struct{}
 
-func (fakeUnderlay) Send([]byte, int, netip.AddrPort, uint64) error { return nil }
+func (fakeUnderlay) Send(b []byte, _ int, _ netip.AddrPort, _ uint64) (int, error) {
+	return len(b), nil
+}
 
 func (fakeUnderlay) Recv(func([]byte, netip.AddrPort)) error { return net.ErrClosed }

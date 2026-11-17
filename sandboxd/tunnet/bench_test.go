@@ -115,6 +115,6 @@ func (s *frameStream) Read(p []byte) (int, error) {
 
 type nopUnder struct{}
 
-func (nopUnder) Send([]byte, int, netip.AddrPort, uint64) error { return nil }
+func (nopUnder) Send(b []byte, _ int, _ netip.AddrPort, _ uint64) (int, error) { return len(b), nil }
 
 func (nopUnder) Recv(func([]byte, netip.AddrPort)) error { select {} }

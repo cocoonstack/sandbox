@@ -441,6 +441,24 @@ func TestRouterChargesNothingForAFrameTheUnderlayDidNotSend(t *testing.T) {
 	})
 }
 
+func TestRouterKeepsTheChargeOfAFrameTheUnderlayPartlySent(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		u, r := newRouter(t)
+		used := new(atomic.Int64)
+		r.Arm(Claim{ID: "c1", Addr: claimAddr, Used: used, Allow: func(netip.Addr, uint16) bool { return true }})
+		u.sent(t)
+		guest := serve(t, r, claimAddr)
+		guestHello(t, guest)
+		u.failRest.Store(true)
+		sendFrame(t, guest, gsoFrame(ProtoTCP, 4000, 1400))
+		u.sent(t)
+		synctest.Wait()
+		if used.Load() == 0 {
+			t.Error("a frame whose first segment left was taken back from the quota")
+		}
+	})
+}
+
 func TestEndFlowsRecordsLiveFlowsWithIPBytes(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		u, r := newRouter(t)
@@ -675,19 +693,25 @@ type fakeUnder struct {
 	done     chan struct{}
 	batches  atomic.Int64
 	failSend atomic.Bool
+	failRest atomic.Bool
 }
 
-func (u *fakeUnder) Send(b []byte, seg int, dst netip.AddrPort, _ uint64) error {
+func (u *fakeUnder) Send(b []byte, seg int, dst netip.AddrPort, _ uint64) (int, error) {
 	if u.failSend.Load() {
-		return errors.New("underlay closed")
+		return 0, errors.New("underlay closed")
 	}
 	u.batches.Add(1)
+	if u.failRest.Load() && len(b) > seg {
+		u.out <- sent{d: bytes.Clone(b[:seg]), to: dst}
+		return seg, errors.New("underlay closed mid-batch")
+	}
+	total := len(b)
 	for len(b) > 0 {
 		n := min(seg, len(b))
 		u.out <- sent{d: bytes.Clone(b[:n]), to: dst}
 		b = b[n:]
 	}
-	return nil
+	return total, nil
 }
 
 func (u *fakeUnder) Recv(each func(d []byte, from netip.AddrPort)) error {

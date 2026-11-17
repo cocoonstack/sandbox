@@ -89,6 +89,7 @@ func openTun(ctx context.Context, cfg *config.Config, b *pool.Backends) (runFunc
 		// Closing the underlay is what ends the blocked receive.
 		context.AfterFunc(ctx, under.Close)
 		log.WithFunc("main.openTun").Error(ctx, router.Run(ctx), "tun router stopped; the advanced network mode is down")
+		under.Close()
 	}, nil
 }
 

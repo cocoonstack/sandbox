@@ -67,8 +67,8 @@ func (d Drop) String() string {
 
 // Underlay carries VXLAN datagrams: the transport sandboxd's exits listen on, kept apart from identity, policy and rewrite.
 type Underlay interface {
-	// Send writes the datagrams packed in b, each seg bytes but the last, to dst; flow picks the outer source port.
-	Send(b []byte, seg int, dst netip.AddrPort, flow uint64) error
+	// Send writes the datagrams packed in b, each seg bytes but the last, to dst, and returns the bytes it sent; flow picks the outer source port.
+	Send(b []byte, seg int, dst netip.AddrPort, flow uint64) (int, error)
 	// Recv reads one batch and calls each per datagram with its sender.
 	Recv(each func(d []byte, from netip.AddrPort)) error
 }
@@ -235,11 +235,15 @@ func (r *Router) Serve(conn net.Conn, addr netip.Addr) error {
 
 // Run receives VXLAN until ctx ends or the underlay fails, refreshes every armed claim's announcement and sweeps its flows.
 func (r *Router) Run(ctx context.Context) error {
-	go func() {
+	var worker sync.WaitGroup
+	defer worker.Wait()
+	workCtx, stop := context.WithCancel(ctx)
+	defer stop()
+	worker.Go(func() {
 		refresh, sweep := time.Tick(refreshEvery), time.Tick(sweepEvery)
 		for {
 			select {
-			case <-ctx.Done():
+			case <-workCtx.Done():
 				return
 			case <-refresh:
 				r.announceAll()
@@ -247,7 +251,7 @@ func (r *Router) Run(ctx context.Context) error {
 				r.sweep(now, false)
 			}
 		}
-	}()
+	})
 	receive := r.receive
 	for ctx.Err() == nil {
 		err := r.under.Recv(receive)
@@ -304,7 +308,7 @@ func (r *Router) receive(d []byte, from netip.AddrPort) {
 			return
 		}
 		reply := arpReplyFor(o.VNI, target, sender, mac)
-		if r.under.Send(reply, len(reply), netip.AddrPortFrom(from.Addr(), o.Port), 0) == nil {
+		if _, err := r.under.Send(reply, len(reply), netip.AddrPortFrom(from.Addr(), o.Port), 0); err == nil {
 			r.arpAnswered.Add(1)
 		}
 	case etherIPv4:
@@ -395,7 +399,7 @@ func (r *Router) announce(a *armed) {
 		return
 	}
 	g := gratuitousARP(o.VNI, a.c.Addr)
-	if r.under.Send(g, len(g), netip.AddrPortFrom(exit.VTEP, o.Port), 0) == nil {
+	if _, err := r.under.Send(g, len(g), netip.AddrPortFrom(exit.VTEP, o.Port), 0); err == nil {
 		r.arpSent.Add(1)
 	}
 }
@@ -541,8 +545,10 @@ func (l *link) forward(frame []byte) Drop {
 		return DropGSO
 	}
 	flow := maphash.Comparable(seed, [3]uint64{uint64(p.Proto), uint64(p.SrcPort)<<16 | uint64(p.DstPort), dst4(p.Dst)})
-	if l.r.under.Send(out, stride, netip.AddrPortFrom(exit.VTEP, o.Port), flow) != nil {
-		f.unsendUnreported(p, wire)
+	if sent, err := l.r.under.Send(out, stride, netip.AddrPortFrom(exit.VTEP, o.Port), flow); err != nil {
+		if sent == 0 {
+			f.unsendUnreported(p, wire)
+		}
 		return DropSend
 	}
 	if l.a.c.Touch != nil {
