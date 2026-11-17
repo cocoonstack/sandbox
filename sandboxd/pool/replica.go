@@ -173,13 +173,8 @@ func (m *Manager) settleReplicaIntent(ctx context.Context, sb *types.Sandbox) er
 		}
 	}
 	switch {
-	case gone:
-		m.dropAdopted(ctx, sb)
-		return ErrUnknownSandbox
-	case ok && rec.Owner != m.nodeID:
-		if rec.Checkpoint != pending {
-			m.deleteOrphanArchiveCk(ctx, pending)
-		}
+	case gone, ok && rec.Owner != m.nodeID:
+		m.deleteUnrowedPending(ctx, sb, rec)
 		m.dropAdopted(ctx, sb)
 		return ErrUnknownSandbox
 	case ok && !rec.Consumed && rec.Checkpoint == pending:
