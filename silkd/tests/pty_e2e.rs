@@ -200,35 +200,44 @@ async fn pty_disconnect_removes_the_process() {
 
 #[tokio::test]
 async fn pty_disconnect_hangs_up_background_jobs() {
-    let dir = tempfile::tempdir().unwrap();
-    let pid_file = dir.path().join("job");
-    let state = Arc::new(State::new());
-    let (mut cw, mut lines, handle) = open_pty(&state).await;
-    read_until(&mut lines, |v| v["type"] == "started").await;
-    let cmd = format!("sleep 300 & echo $! > {}\n", pid_file.display());
-    send(&mut cw, json!({"op":"stdin","data":b64(cmd.as_bytes())})).await;
-    wait_for_path(&pid_file).await;
-    let job: u32 = under_deadline(async {
-        loop {
-            if let Ok(pid) = std::fs::read_to_string(&pid_file).unwrap().trim().parse() {
-                break pid;
+    for (case, script) in [
+        ("a shell that hangs up its jobs", "sleep 300 & echo $! >"),
+        #[cfg(target_os = "linux")]
+        (
+            "a shell that ignores the hang-up",
+            "sleep 300 & trap '' HUP; echo $! >",
+        ),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let pid_file = dir.path().join("job");
+        let state = Arc::new(State::new());
+        let (mut cw, mut lines, handle) = open_pty(&state).await;
+        read_until(&mut lines, |v| v["type"] == "started").await;
+        let cmd = format!("{script} {}\n", pid_file.display());
+        send(&mut cw, json!({"op":"stdin","data":b64(cmd.as_bytes())})).await;
+        wait_for_path(&pid_file).await;
+        let job: u32 = under_deadline(async {
+            loop {
+                if let Ok(pid) = std::fs::read_to_string(&pid_file).unwrap().trim().parse() {
+                    break pid;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
             }
-            tokio::time::sleep(Duration::from_millis(10)).await;
+        })
+        .await;
+        drop(lines);
+        drop(cw);
+        let _ = tokio::time::timeout(Duration::from_secs(5), handle)
+            .await
+            .unwrap_or_else(|_| panic!("{case}: pty did not tear down on disconnect"));
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        while alive(job) {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "{case}: background job {job} outlived the hang-up"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
         }
-    })
-    .await;
-    drop(lines);
-    drop(cw);
-    let _ = tokio::time::timeout(Duration::from_secs(5), handle)
-        .await
-        .expect("pty did not tear down on disconnect");
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-    while alive(job) {
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "background job {job} outlived the hang-up"
-        );
-        tokio::time::sleep(Duration::from_millis(20)).await;
     }
 }
 

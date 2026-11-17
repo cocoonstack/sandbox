@@ -146,13 +146,16 @@ async fn pump<W: AsyncWrite + Unpin>(
                 stdin.abort();
                 return code;
             }
-            // hang up like a closed terminal so the shell hangs up its jobs; SIGKILL follows the grace.
+            // hang up like a closed terminal so the shell hangs up its jobs; past the grace silkd hangs them up and kills the shell.
             _ = &mut disc_rx, if !disc => {
                 disc = true;
                 kill_at = Some(hang_up(child));
             }
             _ = sleep_until(kill_at.unwrap_or_else(Instant::now)), if kill_at.is_some() => {
                 kill_at = None;
+                if let Some(pid) = child.id() {
+                    sysutil::hang_up_session(pid);
+                }
                 let _ = child.start_kill();
             }
             readable = master.readable(), if !eof => {
