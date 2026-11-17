@@ -147,6 +147,7 @@ type Proxy struct {
 	pools    atomic.Pointer[connPools]
 	refusals *rate.Limiter
 	limits   atomic.Pointer[limiters]
+	bigBufs  atomic.Int32
 	every    time.Duration
 	stop     chan struct{}
 

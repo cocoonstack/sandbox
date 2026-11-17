@@ -131,23 +131,53 @@ func (l *Local) Release(_ context.Context, claimID string, addr netip.Addr) erro
 	}
 	now := time.Now()
 	l.freed[addr] = now
+	var whole []byte
+	compact := false
 	if l.lines++; l.lines > l.compactAt {
 		maps.DeleteFunc(l.freed, func(_ netip.Addr, at time.Time) bool { return now.Sub(at) >= l.reuse })
-		b := l.snapshot()
-		l.mu.Unlock()
-		return utils.WriteFileSync(l.path, b, 0o600)
+		whole, compact = l.snapshot(), true
 	}
 	l.mu.Unlock()
-	f, err := os.OpenFile(l.path, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o600)
-	if err != nil {
-		return fmt.Errorf("open %s: %w", freedFile, err)
+	if compact {
+		return l.rewrite(whole)
 	}
-	_, err = f.Write(appendFreed(nil, addr, now))
-	err = cmp.Or(err, f.Sync(), f.Close())
+	f, err := os.OpenFile(l.path, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o600)
+	if err == nil {
+		_, err = f.Write(appendFreed(nil, addr, now))
+		err = cmp.Or(err, f.Sync(), f.Close())
+	}
 	if err != nil {
+		l.markUnwritten()
 		return fmt.Errorf("append %s: %w", freedFile, err)
 	}
 	return nil
+}
+
+func (l *Local) Flush() error {
+	l.io.Lock()
+	defer l.io.Unlock()
+	l.mu.Lock()
+	if l.compactAt != 0 {
+		l.mu.Unlock()
+		return nil
+	}
+	whole := l.snapshot()
+	l.mu.Unlock()
+	return l.rewrite(whole)
+}
+
+func (l *Local) rewrite(whole []byte) error {
+	err := utils.WriteFileSync(l.path, whole, 0o600)
+	if err != nil {
+		l.markUnwritten()
+	}
+	return err
+}
+
+func (l *Local) markUnwritten() {
+	l.mu.Lock()
+	l.compactAt = 0
+	l.mu.Unlock()
 }
 
 func (l *Local) snapshot() []byte {

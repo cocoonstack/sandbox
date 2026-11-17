@@ -20,6 +20,7 @@ from agents.sandbox.snapshot import SnapshotBase, SnapshotSpec, resolve_snapshot
 from agents.sandbox.types import ExecResult, ExposedPortEndpoint, User
 from agents.sandbox.util.tar_utils import strip_tar_member_prefix
 from cocoonsandbox import Client, Sandbox, SandboxError, SilkdError
+from pydantic import Field
 
 
 class CocoonSandboxClientOptions(BaseSandboxClientOptions):
@@ -27,7 +28,7 @@ class CocoonSandboxClientOptions(BaseSandboxClientOptions):
 
     type: Literal["cocoon"] = "cocoon"
     addr: str = "127.0.0.1:7777"
-    api_token: str = ""
+    api_token: str = Field(default="", repr=False)
     template: str = "rt:24.04"
     net: str = ""
     ttl_seconds: int = 3600
@@ -38,9 +39,9 @@ class CocoonSandboxSessionState(SandboxSessionState):
 
     type: Literal["cocoon"] = "cocoon"
     addr: str = ""
-    api_token: str = ""
+    api_token: str = Field(default="", repr=False)
     sandbox_id: str = ""
-    sandbox_token: str = ""
+    sandbox_token: str = Field(default="", repr=False)
     owner: str = ""
 
 

@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"runtime/debug"
 	"slices"
+	"sync"
 	"syscall"
 	"time"
 
@@ -104,7 +105,11 @@ func main() {
 	if cfg.Mesh != nil {
 		mgr.WithMovePeer(&server.MoveClient{Token: cfg.APIToken})
 	}
-	go runTun(ctx)
+	tunCtx, stopTun := context.WithCancel(context.WithoutCancel(ctx))
+	var tun sync.WaitGroup
+	tun.Go(func() { runTun(tunCtx) })
+	flushed, finish := context.WithCancel(context.WithoutCancel(ctx))
+	var tail sync.WaitGroup
 	if err := mgr.Reconcile(ctx); err != nil {
 		logger.Fatalf(ctx, err, "reconcile")
 	}
@@ -172,7 +177,7 @@ func main() {
 		if err != nil {
 			logger.Fatalf(ctx, err, "name the usage node")
 		}
-		go usage.Ship(ctx, filepath.Join(cfg.DataDir, usage.JournalFile), node, usageStore)
+		tail.Go(func() { usage.Ship(flushed, filepath.Join(cfg.DataDir, usage.JournalFile), node, usageStore) })
 		logger.Infof(ctx, "usage journal lands in the shared table as node %s", node)
 		srv.SetUsage(usageStore)
 	}
@@ -199,7 +204,7 @@ func main() {
 		sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownGrace)
 		defer cancel()
 		_ = httpSrv.Shutdown(sctx)
-		srv.CloseRelays()
+		srv.CloseRelays(sctx)
 	})
 
 	logger.Infof(ctx, "sandboxd listening on %s", cfg.Listen)
@@ -209,9 +214,13 @@ func main() {
 	<-drained
 	logger.Info(ctx, "waiting for running cocoon commands")
 	eng.Close()
+	stopTun()
+	tun.Wait()
 	if err := mgr.FlushClaims(); err != nil {
 		logger.Error(ctx, err, "flush claims")
 	}
+	finish()
+	tail.Wait()
 	logger.Info(ctx, "sandboxd stopped; VMs stay alive for the next reconcile")
 }
 

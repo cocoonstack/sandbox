@@ -39,10 +39,8 @@ const (
 	helloTimeout = 5 * time.Second
 	sweepEvery   = 10 * time.Second
 	refreshEvery = 45 * time.Second
-	// sendQueue bounds the frames waiting for one guest and sendLarge those in a 64 KiB buffer, under 18 MiB at worst; a full queue drops, as a congested link would.
+	// sendQueue bounds the frames waiting for one guest, about 64 MiB at worst; a full queue drops, as a congested link would.
 	sendQueue   = 1024
-	sendLarge   = 128
-	smallBuf    = 4 + VnetHdrLen + 9000
 	readBuf     = 256 << 10
 	writeStall  = 10 * time.Second
 	segmentable = OffloadCSUM | OffloadTSO4 | OffloadTSOECN | OffloadUSO4 | OffloadUSO6
@@ -69,8 +67,8 @@ func (d Drop) String() string {
 
 // Underlay carries VXLAN datagrams: the transport sandboxd's exits listen on, kept apart from identity, policy and rewrite.
 type Underlay interface {
-	// Send writes the datagrams packed in b, each seg bytes but the last, to dst; flow picks the outer source port.
-	Send(b []byte, seg int, dst netip.AddrPort, flow uint64) error
+	// Send writes the datagrams packed in b, each seg bytes but the last, to dst, and returns the bytes it sent; flow picks the outer source port.
+	Send(b []byte, seg int, dst netip.AddrPort, flow uint64) (int, error)
 	// Recv reads one batch and calls each per datagram with its sender.
 	Recv(each func(d []byte, from netip.AddrPort)) error
 }
@@ -127,8 +125,7 @@ type Stats struct {
 type Router struct {
 	under Underlay
 	conf  atomic.Pointer[overlay]
-	small sync.Pool
-	large sync.Pool
+	pool  sync.Pool
 
 	framesIn, framesOut  atomic.Uint64
 	dgramsOut, dgramsIn  atomic.Uint64
@@ -144,8 +141,7 @@ type Router struct {
 func New(under Underlay, o *Overlay) *Router {
 	r := &Router{under: under, claims: map[netip.Addr]*armed{}}
 	r.conf.Store(load(o))
-	r.small.New = func() any { b := make([]byte, smallBuf); return &b }
-	r.large.New = func() any { b := make([]byte, 4+MaxFrame); return &b }
+	r.pool.New = func() any { b := make([]byte, 4+MaxFrame); return &b }
 	return r
 }
 
@@ -239,11 +235,15 @@ func (r *Router) Serve(conn net.Conn, addr netip.Addr) error {
 
 // Run receives VXLAN until ctx ends or the underlay fails, refreshes every armed claim's announcement and sweeps its flows.
 func (r *Router) Run(ctx context.Context) error {
-	go func() {
+	var worker sync.WaitGroup
+	defer worker.Wait()
+	workCtx, stop := context.WithCancel(ctx)
+	defer stop()
+	worker.Go(func() {
 		refresh, sweep := time.Tick(refreshEvery), time.Tick(sweepEvery)
 		for {
 			select {
-			case <-ctx.Done():
+			case <-workCtx.Done():
 				return
 			case <-refresh:
 				r.announceAll()
@@ -251,7 +251,7 @@ func (r *Router) Run(ctx context.Context) error {
 				r.sweep(now, false)
 			}
 		}
-	}()
+	})
 	receive := r.receive
 	for ctx.Err() == nil {
 		err := r.under.Recv(receive)
@@ -308,7 +308,7 @@ func (r *Router) receive(d []byte, from netip.AddrPort) {
 			return
 		}
 		reply := arpReplyFor(o.VNI, target, sender, mac)
-		if r.under.Send(reply, len(reply), netip.AddrPortFrom(from.Addr(), o.Port), 0) == nil {
+		if _, err := r.under.Send(reply, len(reply), netip.AddrPortFrom(from.Addr(), o.Port), 0); err == nil {
 			r.arpAnswered.Add(1)
 		}
 	case etherIPv4:
@@ -323,9 +323,8 @@ func (r *Router) deliver(inner []byte) Drop {
 	if len(inner) > MaxFrame-VnetHdrLen {
 		return DropMalformed
 	}
-	n := 4 + VnetHdrLen + len(inner)
-	bp := r.pool(n).Get().(*[]byte)
-	b := (*bp)[:n]
+	bp := r.pool.Get().(*[]byte)
+	b := (*bp)[:4+VnetHdrLen+len(inner)]
 	clear(b[4 : 4+VnetHdrLen])
 	copy(b[4+VnetHdrLen:], inner)
 	frame := b[4:]
@@ -341,7 +340,7 @@ func (r *Router) deliver(inner []byte) Drop {
 		}
 		drop = DropQueueFull
 	}
-	r.put(bp)
+	r.pool.Put(bp)
 	return drop
 }
 
@@ -365,22 +364,11 @@ func (r *Router) admit(frame []byte) (*link, Drop) {
 	if a.c.Touch != nil {
 		a.c.Touch(now)
 	}
-	RewriteDst(frame, GuestAddr)
+	rewrite(frame, dstAt, GuestAddr.As4())
 	if icmpError(p) {
 		rewriteQuoted(frame, srcAt, p.Dst, GuestAddr)
 	}
 	return l, DropNone
-}
-
-func (r *Router) pool(n int) *sync.Pool {
-	if n > smallBuf {
-		return &r.large
-	}
-	return &r.small
-}
-
-func (r *Router) put(bp *[]byte) {
-	r.pool(cap(*bp)).Put(bp)
 }
 
 func (r *Router) sweep(now time.Time, all bool) {
@@ -411,7 +399,7 @@ func (r *Router) announce(a *armed) {
 		return
 	}
 	g := gratuitousARP(o.VNI, a.c.Addr)
-	if r.under.Send(g, len(g), netip.AddrPortFrom(exit.VTEP, o.Port), 0) == nil {
+	if _, err := r.under.Send(g, len(g), netip.AddrPortFrom(exit.VTEP, o.Port), 0); err == nil {
 		r.arpSent.Add(1)
 	}
 }
@@ -494,7 +482,6 @@ type link struct {
 	merge bool
 	out   []byte
 	send  chan *[]byte
-	large atomic.Int32
 	done  chan struct{}
 	once  sync.Once
 }
@@ -546,7 +533,7 @@ func (l *link) forward(frame []byte) Drop {
 	if drop = f.outbound(p, wire, now); drop != DropNone {
 		return drop
 	}
-	RewriteSrc(frame, l.a.c.Addr)
+	rewrite(frame, srcAt, l.a.c.Addr.As4())
 	if icmpError(p) {
 		rewriteQuoted(frame, dstAt, GuestAddr, l.a.c.Addr)
 	}
@@ -558,7 +545,10 @@ func (l *link) forward(frame []byte) Drop {
 		return DropGSO
 	}
 	flow := maphash.Comparable(seed, [3]uint64{uint64(p.Proto), uint64(p.SrcPort)<<16 | uint64(p.DstPort), dst4(p.Dst)})
-	if l.r.under.Send(out, stride, netip.AddrPortFrom(exit.VTEP, o.Port), flow) != nil {
+	if sent, err := l.r.under.Send(out, stride, netip.AddrPortFrom(exit.VTEP, o.Port), flow); err != nil {
+		if sent == 0 {
+			f.unsendUnreported(p, wire)
+		}
 		return DropSend
 	}
 	if l.a.c.Touch != nil {
@@ -569,17 +559,10 @@ func (l *link) forward(frame []byte) Drop {
 }
 
 func (l *link) enqueue(bp *[]byte) bool {
-	if large(bp) && l.large.Add(1) > sendLarge {
-		l.large.Add(-1)
-		return false
-	}
 	select {
 	case l.send <- bp:
 		return true
 	default:
-		if large(bp) {
-			l.large.Add(-1)
-		}
 		return false
 	}
 }
@@ -608,10 +591,7 @@ func (l *link) write() {
 			_, err := bufs.WriteTo(l.conn)
 			l.r.framesOut.Add(uint64(len(held)))
 			for _, bp := range held {
-				if large(bp) {
-					l.large.Add(-1)
-				}
-				l.r.put(bp)
+				l.r.pool.Put(bp)
 			}
 			if err != nil {
 				l.close()
@@ -626,10 +606,6 @@ func (l *link) close() {
 		close(l.done)
 		_ = l.conn.Close()
 	})
-}
-
-func large(bp *[]byte) bool {
-	return cap(*bp) > smallBuf
 }
 
 func dst4(a netip.Addr) uint64 {

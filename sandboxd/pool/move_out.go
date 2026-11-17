@@ -249,6 +249,9 @@ func (m *Manager) unrowForMove(ctx context.Context, sb *types.Sandbox, mv *outMo
 		if err != nil || !ok || rec.Owner != m.nodeID || !rec.Consumed {
 			return err
 		}
+		if err = m.trackReplica(mv, replica); err != nil {
+			return err
+		}
 		if err = m.archives.Delete(ctx, sb.ID, rec.Epoch); errors.Is(err, archives.ErrLost) {
 			return nil
 		}
@@ -258,6 +261,9 @@ func (m *Manager) unrowForMove(ctx context.Context, sb *types.Sandbox, mv *outMo
 	if err != nil {
 		return err
 	}
+	if err = m.trackReplica(mv, replica); err != nil {
+		return err
+	}
 	live, err := m.commitIfLive(ctx, sb, func() { sb.ReplicaCk, sb.ArchiveEpoch = "", 0 })
 	if !live {
 		return ErrUnknownSandbox
@@ -265,7 +271,6 @@ func (m *Manager) unrowForMove(ctx context.Context, sb *types.Sandbox, mv *outMo
 	if err != nil {
 		return err
 	}
-	mv.replica = replica
 	if err = m.archives.Delete(ctx, sb.ID, consumed); err != nil && !errors.Is(err, archives.ErrLost) {
 		return err
 	}
@@ -381,6 +386,17 @@ func (m *Manager) abortMoveOut(ctx context.Context, sb *types.Sandbox, mv *outMo
 			logger.Warnf(ctx, "delete the aborted move of %s, leaving it to the sweep: %v", sb.ID, err)
 		}
 	}
+	return nil
+}
+
+func (m *Manager) trackReplica(mv *outMove, replica string) error {
+	if replica == "" {
+		return nil
+	}
+	if err := m.ckMarks.mark(replica); err != nil {
+		return fmt.Errorf("track replica %s: %w", replica, err)
+	}
+	mv.replica = replica
 	return nil
 }
 

@@ -135,24 +135,8 @@ func TestPtyCtxCancelUnblocksUnreadOutput(t *testing.T) {
 		defer func() { _ = server.Close() }()
 		pr, pw := io.Pipe()
 		defer func() { _ = pr.Close() }()
-		ctx, cancel := context.WithCancel(t.Context())
-		defer cancel()
 		p := &Pty{conn: silkd.NewConn(client)}
-		exited := make(chan struct{})
-		go func() {
-			defer close(exited)
-			p.drain(ctx, pw, func() { _ = client.Close() })
-		}()
-		if _, err := io.WriteString(server, `{"type":"stdout","data":"aGk="}`+"\n"); err != nil {
-			t.Fatalf("send output: %v", err)
-		}
-		synctest.Wait()
-
-		cancel()
-		synctest.Wait()
-		select {
-		case <-exited:
-		default:
+		if !drainEndsOnCancel(t, server, `{"type":"stdout","data":"aGk="}`, func(ctx context.Context) { p.drain(ctx, pw, func() { _ = client.Close() }) }) {
 			t.Fatal("drain still parked on the unread output after ctx cancel")
 		}
 		if _, err := pr.Read(make([]byte, 1)); !errors.Is(err, context.Canceled) {
@@ -203,5 +187,28 @@ func TestPtyWriteChunksOversizedInput(t *testing.T) {
 	}
 	if !bytes.Equal(got, payload) {
 		t.Errorf("reassembled %d bytes, want the %d written", len(got), len(payload))
+	}
+}
+
+func drainEndsOnCancel(t *testing.T, server net.Conn, line string, drain func(context.Context)) bool {
+	t.Helper()
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	exited := make(chan struct{})
+	go func() {
+		defer close(exited)
+		drain(ctx)
+	}()
+	if _, err := io.WriteString(server, line+"\n"); err != nil {
+		t.Fatalf("send %s: %v", line, err)
+	}
+	synctest.Wait()
+	cancel()
+	synctest.Wait()
+	select {
+	case <-exited:
+		return true
+	default:
+		return false
 	}
 }

@@ -3,7 +3,6 @@ package main
 
 import (
 	"bytes"
-	"cmp"
 	"context"
 	"flag"
 	"fmt"
@@ -82,14 +81,19 @@ func run(addr, token, template, netShape string, wait time.Duration) error {
 
 func waitArchived(ctx context.Context, client *sandbox.Client, timeout time.Duration) (time.Duration, error) {
 	start := time.Now()
-	var infoErr error
-	err := harness.Poll(ctx, timeout, 500*time.Millisecond, func() error {
+	deadline := start.Add(timeout)
+	for {
 		info, err := client.Info(ctx)
-		if infoErr = err; err != nil || info.Archived == 1 {
-			return nil
+		if err != nil {
+			return 0, err
 		}
-		return fmt.Errorf("archived never reached 1 within %s (hibernated=%d archived=%d claimed=%d)",
-			timeout, info.Hibernated, info.Archived, info.Claimed)
-	})
-	return time.Since(start), cmp.Or(infoErr, err)
+		if info.Archived == 1 {
+			return time.Since(start), nil
+		}
+		if time.Now().After(deadline) {
+			return 0, fmt.Errorf("archived never reached 1 within %s (hibernated=%d archived=%d claimed=%d)",
+				timeout, info.Hibernated, info.Archived, info.Claimed)
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
 }

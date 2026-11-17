@@ -1,7 +1,6 @@
 package sandbox
 
 import (
-	"bufio"
 	"bytes"
 	"errors"
 	"io"
@@ -149,25 +148,36 @@ func TestReadFileMultiChunk(t *testing.T) {
 }
 
 func TestAnUploadReturnsItsEarlyRejection(t *testing.T) {
-	sb := testSandbox(t, newAgentServer(t, func(conn net.Conn) {
+	sb, upgrades := countingSandbox(t, func(conn net.Conn) {
 		defer func() { _ = conn.Close() }()
-		line, err := bufio.NewReader(conn).ReadBytes('\n')
-		if err != nil {
-			return
+		sc := wire.NewFrameScanner(conn)
+		for sc.Scan() {
+			req, err := wire.DecodeRequest(sc.Bytes())
+			if err != nil {
+				return
+			}
+			var resp wire.Response
+			switch req.(type) {
+			case *wire.FsWrite:
+				resp = &wire.ErrorResp{Kind: wire.KindNotFound, Message: "create /missing/f: no such file or directory"}
+			case *wire.FsMkdir:
+				resp = wire.Done{}
+			default:
+				continue
+			}
+			frame, _ := wire.EncodeResponse(resp)
+			_, _ = conn.Write(append(frame, '\n'))
 		}
-		req, err := wire.DecodeRequest(line)
-		if err != nil {
-			return
-		}
-		if _, ok := req.(*wire.FsWrite); !ok {
-			return
-		}
-		frame, _ := wire.EncodeResponse(&wire.ErrorResp{Kind: wire.KindNotFound, Message: "create /missing/f: no such file or directory"})
-		_, _ = conn.Write(append(frame, '\n'))
-	}))
+	})
 	err := sb.WriteFile(t.Context(), "/missing/f", make([]byte, 64<<20), nil)
 	if e, ok := errors.AsType[*wire.ErrorResp](err); !ok || e.Kind != wire.KindNotFound {
 		t.Fatalf("upload rejected at open: %v, want its not_found frame", err)
+	}
+	if err := sb.Mkdir(t.Context(), "/d", false); err != nil {
+		t.Fatalf("mkdir after the rejected upload: %v", err)
+	}
+	if got := upgrades.Load(); got != 1 {
+		t.Errorf("upgrades = %d, want 1: an early rejection ends the RPC, not the connection", got)
 	}
 }
 

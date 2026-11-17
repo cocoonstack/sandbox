@@ -134,6 +134,7 @@ type RenewResponse struct {
 	Deadline time.Time `json:"deadline"`
 }
 
+// BalloonRequest is the wire body of POST /v1/sandboxes/{id}/balloon.
 type BalloonRequest struct {
 	Target string `json:"target"`
 }

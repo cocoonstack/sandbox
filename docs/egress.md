@@ -136,9 +136,10 @@ Behavior of the relay:
   in `sandboxd_dns_malformed_total`.
 - **Memory.** Each door holds at most 256 connections with one 4 KiB query
   each. Each claim answers at most 32 queries at a time, each with one pooled
-  64 KiB reply buffer. A connection that neither sends nor reads for 30 s is
+  64 KiB reply buffer, plus a copy of the reply while a truncated answer is
+  read again over TCP or a filtered one is rebuilt. A connection that neither sends nor reads for 30 s is
   closed.
-- **Audit.** With `audit_log` on, each query appends
+- **Audit.** With `audit_log` on, each query but a fenced node's refusal appends
   `{"op":"dns","name":…,"qtype":…,"answers":…,"decision":…}` with the claim id
   and tenant. The decision is `allow`, `filtered` (an address was dropped),
   `failed` (no nameserver answered) or `rate_limited` (at most one a second per
@@ -611,6 +612,9 @@ with a burst of the rate, at least 256 KiB and at most 1 GiB. A limited
 direction copies in user space, in reads of about a tenth of a second's bytes
 (1 KiB to 256 KiB on a tunnel, at most 32 KiB on a request), each followed by
 a wait for its tokens, so its CPU cost follows the bytes the cap lets through.
+A limited tunnel direction holds a 32 KiB buffer, and a claim lends at most
+eight 256 KiB ones at a time to the busiest, so a claim's open tunnels hold at
+most 512 × 2 × 32 KiB plus 2 MiB, about 34 MiB, idle or not.
 An unlimited direction keeps the kernel splice; a claim without a cap pays one
 map update per tunnel and an atomic load per request read. A changed rate
 starts with a full bucket, a direction whose rate did not change keeps its

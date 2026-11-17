@@ -276,7 +276,6 @@ func ship(t *testing.T, s *Store, path string, want int) {
 	for count(t, s) < want && time.Now().Before(deadline) {
 		time.Sleep(20 * time.Millisecond)
 	}
-	time.Sleep(300 * time.Millisecond)
 	cancel()
 	<-done
 	if n := count(t, s); n != want {

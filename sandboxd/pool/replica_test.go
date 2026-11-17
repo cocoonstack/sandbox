@@ -909,17 +909,18 @@ func TestReplicaExpiryDropsTheRowThenTheClaim(t *testing.T) {
 	vm := lockedVMName(sb)
 	replicateNow(t, a, sb)
 	ck := a.replicaOf(sb)
-	checkpointBeforeDelete := make(chan bool, 1)
+	fetchBeforeDelete := make(chan error, 1)
 	a.archives = &hookRegistry{Registry: c.reg, beforeDelete: func() {
-		checkpointBeforeDelete <- ckExists(t, a, ck)
+		_, _, _, err := a.ckpts.Fetch(t.Context(), ck)
+		fetchBeforeDelete <- err
 	}}
 	a.mu.Lock()
 	sb.Deadline = time.Now().Add(-time.Second)
 	a.mu.Unlock()
 
 	a.reapOnce(t.Context())
-	if !<-checkpointBeforeDelete {
-		t.Fatal("checkpoint disappeared before its registry tombstone was deleted")
+	if err := <-fetchBeforeDelete; err != nil {
+		t.Fatalf("fetch of the checkpoint before its registry tombstone was deleted: %v", err)
 	}
 	waitFor(t, func() bool { return a.replicaOf(sb) == "" && !ckExists(t, a, ck) })
 	if _, ok, _ := c.reg.Get(t.Context(), sb.ID); ok {

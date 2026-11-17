@@ -474,7 +474,8 @@ type VMNetConfig struct {
 
 // VMConfig is the config subset of VMRecord.
 type VMConfig struct {
-	Name string `json:"name"`
+	Name        string `json:"name"`
+	ImageDigest string `json:"image_digest,omitempty"`
 }
 
 // VMDisk is one hot-attached disk that `cocoon vm inspect` reports.

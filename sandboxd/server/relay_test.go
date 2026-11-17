@@ -49,7 +49,7 @@ func TestCloseRelaysRefusesLateRelays(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			ts, srv := tt.serve(t, func(c net.Conn) { _, _ = io.Copy(io.Discard, c) })
-			srv.CloseRelays()
+			srv.CloseRelays(t.Context())
 			if _, err := io.Copy(io.Discard, dialPortConn(t, ts, tt.request)); err != nil {
 				t.Errorf("late relay not refused promptly: %v", err)
 			}
@@ -232,10 +232,28 @@ func TestCloseRelaysClosesAnOpenClientConn(t *testing.T) {
 	})
 
 	conn, r := upgradeConn(t, ts)
-	srv.CloseRelays()
+	srv.CloseRelays(t.Context())
 	_ = conn.SetReadDeadline(time.Now().Add(time.Second))
 	if _, err := io.Copy(io.Discard, r); err != nil {
 		t.Errorf("client after CloseRelays: %v, want EOF", err)
+	}
+}
+
+func TestCloseRelaysStopsWaitingWhenItsContextEnds(t *testing.T) {
+	_, srv := newRelayServer(t, func(net.Conn) {})
+	srv.relayWG.Add(1)
+	defer srv.relayWG.Done()
+	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+	defer cancel()
+	done := make(chan struct{})
+	go func() {
+		srv.CloseRelays(ctx)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("CloseRelays outlived its context behind a relay that never ends")
 	}
 }
 

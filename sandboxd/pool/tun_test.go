@@ -1,6 +1,7 @@
 package pool
 
 import (
+	"cmp"
 	"context"
 	"encoding/binary"
 	"errors"
@@ -68,6 +69,33 @@ func TestReleaseFreesTheOverlayAddress(t *testing.T) {
 	}
 	if doorOpen(sb) {
 		t.Error("the packet door outlived the release")
+	}
+}
+
+func TestAStopWritesTheAddressReleaseTheLogMissed(t *testing.T) {
+	dir, subnet := t.TempDir(), netip.MustParsePrefix("240.0.0.0/4")
+	addrs, err := tunnet.NewLocal(dir, subnet, time.Hour)
+	if err != nil {
+		t.Fatalf("NewLocal: %v", err)
+	}
+	m := tunManager(t, newFakeEngine(), addrs, config.PoolSpec{PoolKey: testKey, Tun: true, Egress: anyPolicy})
+	sb := mustClaim(t, m, testKey)
+	log := filepath.Join(dir, "tun-freed.log")
+	if err = cmp.Or(os.Remove(log), os.Mkdir(log, 0o700)); err != nil {
+		t.Fatalf("block log: %v", err)
+	}
+	if err = m.Release(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
+		t.Fatalf("release: %v", err)
+	}
+	if err = cmp.Or(os.Remove(log), m.FlushClaims()); err != nil {
+		t.Fatalf("stop after the log came back: %v", err)
+	}
+	reopened, err := tunnet.NewLocal(dir, subnet, time.Hour)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	if got, err := reopened.Assign(t.Context(), "other"); err != nil || got == sb.TunAddr {
+		t.Errorf("after a restart the next claim got %s, %v, want an address other than the released %s", got, err, sb.TunAddr)
 	}
 }
 
@@ -224,8 +252,8 @@ func TestAProfileChangeADisableOvertookDoesNotReEnable(t *testing.T) {
 	m.mu.Lock()
 	sb.TunOff = true
 	m.mu.Unlock()
-	if _, _, err = m.commitTun(t.Context(), sb, true, plan); !errors.Is(err, errTunRaced) {
-		t.Fatalf("commit over a newer disable: %v, want errTunRaced", err)
+	if _, _, err = m.commitTun(t.Context(), sb, true, plan); !errors.Is(err, ErrTunRaced) {
+		t.Fatalf("commit over a newer disable: %v, want ErrTunRaced", err)
 	}
 	if st := m.tunState(sb); st.On || st.Profile != "" {
 		t.Errorf("state %+v, want the disable kept and the stale plan dropped", st)
@@ -370,15 +398,15 @@ func TestALosingConcurrentEnableKeepsTheAddressTheWinnerPublished(t *testing.T) 
 	m := tunManager(t, newFakeEngine(), addrs, config.PoolSpec{PoolKey: testKey, Tun: true, Egress: anyPolicy})
 	sb := mustClaim(t, m, testKey)
 	stale := tunPlan{next: tunState{addr: sb.TunAddr}, assign: true}
-	if _, _, err := m.commitTun(t.Context(), sb, false, stale); !errors.Is(err, errTunRaced) {
-		t.Fatalf("commit of a stale plan: %v, want errTunRaced", err)
+	if _, _, err := m.commitTun(t.Context(), sb, false, stale); !errors.Is(err, ErrTunRaced) {
+		t.Fatalf("commit of a stale plan: %v, want ErrTunRaced", err)
 	}
 	if got := addrs.releasedList(); len(got) != 0 {
 		t.Errorf("released %v, want the address the claim holds kept", got)
 	}
 }
 
-func TestASetTunAConcurrentWriteOvertookAnswersErrPaused(t *testing.T) {
+func TestASetTunAConcurrentWriteOvertookAnswersErrTunRaced(t *testing.T) {
 	addrs := &fakeAddrs{err: errors.New("meta store down")}
 	m := tunManager(t, newFakeEngine(), addrs, config.PoolSpec{PoolKey: testKey, Tun: true, Egress: anyPolicy})
 	sb := mustClaim(t, m, testKey)
@@ -390,8 +418,8 @@ func TestASetTunAConcurrentWriteOvertookAnswersErrPaused(t *testing.T) {
 		}
 	}
 	addrs.mu.Unlock()
-	if err := m.SetTun(t.Context(), sb.ID, new(true), nil); !errors.Is(err, ErrPaused) {
-		t.Errorf("an enable a disable overtook: %v, want ErrPaused", err)
+	if err := m.SetTun(t.Context(), sb.ID, new(true), nil); !errors.Is(err, ErrTunRaced) {
+		t.Errorf("an enable a disable overtook: %v, want ErrTunRaced", err)
 	}
 	if st := m.tunState(sb); st.On || st.Addr.IsValid() {
 		t.Errorf("state %+v, want the disable kept and no address held", st)
@@ -638,6 +666,8 @@ func (r *reconcilingAddrs) confirmedList() []string {
 
 type fakeUnderlay struct{}
 
-func (fakeUnderlay) Send([]byte, int, netip.AddrPort, uint64) error { return nil }
+func (fakeUnderlay) Send(b []byte, _ int, _ netip.AddrPort, _ uint64) (int, error) {
+	return len(b), nil
+}
 
 func (fakeUnderlay) Recv(func([]byte, netip.AddrPort)) error { return net.ErrClosed }

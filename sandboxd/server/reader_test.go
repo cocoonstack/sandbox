@@ -310,7 +310,7 @@ func TestSleepingCloseRelaysEndsReaderConnections(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		env.srv.CloseRelays()
+		env.srv.CloseRelays(t.Context())
 		close(done)
 	}()
 	await(t, done, "CloseRelays hung on a reader connection")
@@ -453,7 +453,7 @@ func newSleepingEnv(t *testing.T) *sleepingEnv {
 	env.srv = New("", "node:7777", env.manager, dialer, nil, nil, nil, nil)
 	env.ts = httptest.NewServer(env.srv.Handler())
 	t.Cleanup(func() {
-		env.srv.CloseRelays()
+		env.srv.CloseRelays(t.Context())
 		env.ts.Close()
 	})
 	return env

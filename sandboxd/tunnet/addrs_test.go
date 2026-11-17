@@ -74,6 +74,46 @@ func TestLocalSkipsHeldAddressesAndHoldsFreedOnesForTheReuseWindow(t *testing.T)
 	}
 }
 
+func TestLocalWritesAReleaseItsLogMissed(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		failedFlush bool
+		next        func(l *Local, held netip.Addr) error
+	}{
+		{"at the next release", false, func(l *Local, held netip.Addr) error { return l.Release(t.Context(), "b", held) }},
+		{"at a flush", false, func(l *Local, _ netip.Addr) error { return l.Flush() }},
+		{"at a flush after a failed flush", true, func(l *Local, _ netip.Addr) error { return l.Flush() }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			l := newLocal(t, dir, time.Hour)
+			a, b := assign(t, l, "a"), assign(t, l, "b")
+			log := filepath.Join(dir, freedFile)
+			if err := os.Remove(log); err != nil {
+				t.Fatalf("remove log: %v", err)
+			}
+			if err := os.Mkdir(log, 0o700); err != nil {
+				t.Fatalf("block log: %v", err)
+			}
+			if err := l.Release(t.Context(), "a", a); err == nil {
+				t.Fatal("a release whose log is unwritable reported no error")
+			}
+			if tc.failedFlush && l.Flush() == nil {
+				t.Fatal("a flush whose log is unwritable reported no error")
+			}
+			if err := os.Remove(log); err != nil {
+				t.Fatalf("unblock log: %v", err)
+			}
+			if err := tc.next(l, b); err != nil {
+				t.Fatalf("after the log came back: %v", err)
+			}
+			if c := assign(t, newLocal(t, dir, time.Hour), "c"); c == a {
+				t.Errorf("after a restart c = %s, the address whose release the failed write lost", c)
+			}
+		})
+	}
+}
+
 func TestLocalCompactsTheLogToTheLiveHolds(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		dir := t.TempDir()

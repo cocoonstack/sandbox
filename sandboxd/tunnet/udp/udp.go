@@ -58,9 +58,10 @@ func Listen(addr netip.AddrPort, senders int) (*Underlay, error) {
 	return u, nil
 }
 
-func (u *Underlay) Send(b []byte, seg int, dst netip.AddrPort, flow uint64) error {
+func (u *Underlay) Send(b []byte, seg int, dst netip.AddrPort, flow uint64) (int, error) {
 	c := u.sends[flow%uint64(len(u.sends))]
 	per := min(maxBatch/seg, maxSegments) * seg
+	sent := 0
 	for len(b) > 0 {
 		n := min(len(b), per)
 		var err error
@@ -76,16 +77,21 @@ func (u *Underlay) Send(b []byte, seg int, dst netip.AddrPort, flow uint64) erro
 				continue
 			}
 		default:
-			for off := 0; off < n && err == nil; off += seg {
+			off := 0
+			for ; off < n && err == nil; off += seg {
 				_, err = c.WriteToUDPAddrPort(b[off:min(off+seg, n)], dst)
+			}
+			if err != nil {
+				return sent + off - seg, err
 			}
 		}
 		if err != nil {
-			return err
+			return sent, err
 		}
+		sent += n
 		b = b[n:]
 	}
-	return nil
+	return sent, nil
 }
 
 func (u *Underlay) Recv(each func(d []byte, from netip.AddrPort)) error {
@@ -93,10 +99,10 @@ func (u *Underlay) Recv(each func(d []byte, from netip.AddrPort)) error {
 }
 
 func (u *Underlay) Close() {
-	if u.recv != nil {
-		_ = u.recv.Close()
-	}
 	for _, c := range u.sends {
 		_ = c.Close()
+	}
+	if u.recv != nil {
+		_ = u.recv.Close()
 	}
 }

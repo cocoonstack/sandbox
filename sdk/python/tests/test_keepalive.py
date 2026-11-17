@@ -15,11 +15,10 @@ INPUT_OPS = ("stdin", "stdin_close", "data", "data_end")
 
 
 class FakeAgent:
-    """A relay-side silkd stand-in; hang_up_after half-closes after N RPCs, slam closes as a failed relay does."""
+    """A relay-side silkd stand-in; hang_up_after half-closes after N RPCs."""
 
-    def __init__(self, hang_up_after: int = 0, slam: bool = False) -> None:
+    def __init__(self, hang_up_after: int = 0) -> None:
         self.hang_up_after = hang_up_after
-        self.slam = slam
         self.upgrades = 0
         self.hangups = 0
         self.closed = 0
@@ -51,8 +50,6 @@ class FakeAgent:
                 for frame in self._answer(op):
                     conn.sendall(json.dumps(frame).encode() + b"\n")
                 replies += 1
-                if self.slam:
-                    break
                 if replies == self.hang_up_after:
                     conn.shutdown(socket.SHUT_WR)
                     self.hangups += 1
@@ -65,7 +62,7 @@ class FakeAgent:
         if op == "fs_stat":
             return [{"type": "stat", "info": {"kind": "dir", "size": 0, "mode": 0o755, "mtime_epoch_secs": 0}}]
         if op == "fs_find":
-            return [{"type": "match", "path": "/work/f", "line": 1, "text": "TODO"}, {"type": "done"}]
+            return [{"type": "match", "file": "/work/f", "line": 1, "content": "TODO"}, {"type": "done"}]
         if op == "exec":
             out = base64.b64encode(b"42\n").decode()
             return [{"type": "started", "pid": 1}, {"type": "stdout", "data": out}, {"type": "exit", "code": 0}]
@@ -184,9 +181,11 @@ def test_close_drains_the_parked_connection(monkeypatch, relay):
 
 
 def test_an_upload_the_daemon_rejects_at_open_raises_its_error_frame(relay):
-    _, sb = relay(slam=True)
+    agent, sb = relay()
     with pytest.raises(SilkdError):
         sb.write_file("/missing/f", bytes(64 << 20))
+    assert sb.stat("/")["kind"] == "dir"
+    assert agent.upgrades == 1, agent.upgrades
 
 
 @pytest.mark.parametrize("retired", [False, True], ids=["owner_404", "connection_refused"])
@@ -214,7 +213,7 @@ def test_find_retries_at_the_new_owner(spawn_node, dead_addr, relay, retired, st
     old = dead_addr if retired else spawn_node({})
     sb = Client(directory, keep_alive=0).attach(old, "sb_1", "tok")
     matches = list(sb.find_iter("/work", "TODO")) if streamed else sb.find("/work", "TODO")
-    assert matches == [{"type": "match", "path": "/work/f", "line": 1, "text": "TODO"}]
+    assert matches == [{"type": "match", "file": "/work/f", "line": 1, "content": "TODO"}]
     assert sb.owner == agent.addr
     assert len(lookups) == 1
     assert agent.upgrades == 1
@@ -278,8 +277,8 @@ def test_another_sandboxs_error_in_a_callback_is_not_replayed(spawn_node, dead_a
 def relay():
     started = []
 
-    def start(hang_up_after=0, slam=False, **client_kwargs):
-        agent = FakeAgent(hang_up_after, slam)
+    def start(hang_up_after=0, **client_kwargs):
+        agent = FakeAgent(hang_up_after)
         sb = sandbox_at(agent.addr, **client_kwargs)
         started.append((agent, sb))
         return agent, sb

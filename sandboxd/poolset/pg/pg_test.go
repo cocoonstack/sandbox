@@ -71,7 +71,7 @@ func TestWatchFiresOnConnectAndOnItsCellsWrites(t *testing.T) {
 
 func TestADownDatabaseIsUnavailable(t *testing.T) {
 	s := openIn(t, metastoretest.PGSchema(t), "c1")
-	_ = s.Close()
+	s.Close()
 	if _, _, err := s.Load(t.Context()); !errors.Is(err, poolset.ErrUnavailable) {
 		t.Errorf("load on a closed pool: %v, want ErrUnavailable", err)
 	}
@@ -86,7 +86,7 @@ func openIn(t *testing.T, dsn, cell string) *Source {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	t.Cleanup(func() { _ = s.Close() })
+	t.Cleanup(s.Close)
 	return s
 }
 

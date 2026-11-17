@@ -199,6 +199,37 @@ func TestReaderTakesOnlyAVMOfTheClaimsOwnImage(t *testing.T) {
 	})
 }
 
+func TestAClaimRecordsTheDigestItsCloneBootedNotThePoolsImage(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		eng := newFakeEngine()
+		m := newReaderManager(t, eng)
+		g := seedGolden(t, m, testKey, imageA)
+		if err := os.WriteFile(filepath.Join(g, fakeDigestFile), []byte(imageB), 0o600); err != nil {
+			t.Fatalf("setup: %v", err)
+		}
+		m.refillOnce(t.Context())
+		waitWarm(t, m, 1)
+		if poolImage(m) != imageA {
+			t.Fatalf("setup: pool image = %q, want %s", poolImage(m), imageA)
+		}
+
+		warm := mustClaim(t, m, testKey)
+		cloned := mustClaim(t, m, testKey)
+		if warm.ImageID != imageB || cloned.ImageID != imageB {
+			t.Fatalf("images: warm VM %q, claim clone %q, want the booted %s for both", warm.ImageID, cloned.ImageID, imageB)
+		}
+
+		hibernateClaim(t, m, warm)
+		seedReaderVMs(m, testKey, "sbx-reader-a")
+		if _, _, err := m.DialReader(t.Context(), warm.ID, warm.Token); !errors.Is(err, ErrNoReader) {
+			t.Fatalf("DialReader over a VM of the listed image = %v, want ErrNoReader", err)
+		}
+		if len(eng.attachedCopies) != 0 || warmLen(m, testKey) != 1 {
+			t.Errorf("attached=%v warm=%d, want the VM of the other image left in the pool", eng.attachedCopies, warmLen(m, testKey))
+		}
+	})
+}
+
 func TestReaderRefusesAClaimThatRecordsNoImage(t *testing.T) {
 	for _, tt := range []struct {
 		name  string
@@ -209,8 +240,8 @@ func TestReaderRefusesAClaimThatRecordsNoImage(t *testing.T) {
 			sb.ImageID = ""
 			return sb
 		}},
-		{"cold boot while the image list fails", func(t *testing.T, m *Manager, eng *fakeEngine) *types.Sandbox {
-			eng.imageErr = errors.New("image list failed")
+		{"cold boot whose record carries no image digest", func(t *testing.T, m *Manager, eng *fakeEngine) *types.Sandbox {
+			eng.imageIDs = nil
 			return mustClaim(t, m, testKey)
 		}},
 		{"checkpoint branch", func(t *testing.T, m *Manager, _ *fakeEngine) *types.Sandbox {
@@ -244,15 +275,16 @@ func TestReaderRefusesAClaimThatRecordsNoImage(t *testing.T) {
 	}
 }
 
-func TestAColdClaimListsImagesOnlyInAReaderPool(t *testing.T) {
+func TestAColdClaimRecordsTheDigestItBootedWithoutListingImages(t *testing.T) {
 	eng := newFakeEngine()
 	m := newReaderManager(t, eng, config.PoolSpec{PoolKey: otherKey, Warm: 1})
+	eng.imageIDs[otherKey.Template] = imageB
 	before := eng.imageLists
-	if sb := mustClaim(t, m, otherKey); eng.imageLists != before || sb.ImageID != "" {
-		t.Errorf("a cold claim of a pool without reader listed images %d times and recorded %q, want neither", eng.imageLists-before, sb.ImageID)
+	if sb := mustClaim(t, m, otherKey); eng.imageLists != before || sb.ImageID != imageB {
+		t.Errorf("a cold claim of a pool without reader listed images %d times and recorded %q, want no listing and %s", eng.imageLists-before, sb.ImageID, imageB)
 	}
-	if sb := mustClaim(t, m, testKey); eng.imageLists != before+1 || sb.ImageID != imageA {
-		t.Errorf("a cold claim of a reader pool listed images %d times and recorded %q, want one listing and %s", eng.imageLists-before, sb.ImageID, imageA)
+	if sb := mustClaim(t, m, testKey); eng.imageLists != before || sb.ImageID != imageA {
+		t.Errorf("a cold claim of a reader pool listed images %d times and recorded %q, want no listing and %s", eng.imageLists-before, sb.ImageID, imageA)
 	}
 }
 

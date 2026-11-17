@@ -39,7 +39,7 @@ Give every node a `mesh` block:
 "mesh": {
   "node_id": "node-b",
   "bind": "10.0.0.6:7946",
-  "join": ["10.0.0.5:7946"],
+  "join": ["10.0.0.5:7946", "10.0.0.6:7946"],
   "cluster_key": "MDEyMzQ1Njc4OWFiY2RlZg=="
 }
 ```
@@ -270,7 +270,7 @@ it while it sleeps write it, so the claim path is unchanged.
   they act on the claim.
 - **Departed owners and tombstones.** Every hour, on the store retention sweep,
   each node reads the rows past their retention deadline whose owner's lease
-  expired, the consumed rows, and its own rows. An expired row of such an owner
+  expired, and its own rows. An expired row of such an owner
   is purged checkpoint first, then the row. No node touches another node's tombstone:
   the owner settles it when it returns, through its sweep or its restart.
   The epoch compare-and-set lets exactly one node win each,
@@ -723,11 +723,6 @@ claiming node's local store, pulled by digest when missing (`vm clone
   entry node has no golden for the key (warm peers still win first).
 - `Client.DeleteTemplate("tpl")` at any node follows the same gossip to the
   owner and deletes there.
-
-On a shared store a template name has one owning tenant fleet-wide. A tenant's
-first promote of a name creates the record only while none exists, so two
-tenants that race one new name from two nodes get one 200 and one 409
-([promote](sandboxd-api.md#post-v1sandboxesidpromote)).
 
 Gossip is eventually consistent: a template promoted a moment ago may be
 invisible to name-based calls for about a gossip tick (the claim fails

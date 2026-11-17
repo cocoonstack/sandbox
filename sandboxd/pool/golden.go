@@ -194,12 +194,6 @@ func (m *Manager) checkImagesOnce(ctx context.Context) {
 	}
 }
 
-func (m *Manager) goldenImage(p *pool) string {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return p.imageID
-}
-
 func (m *Manager) imageIDs(ctx context.Context) map[string]string {
 	ids, err := m.eng.ImageIDs(ctx)
 	if err != nil {

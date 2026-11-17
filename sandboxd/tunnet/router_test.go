@@ -51,6 +51,7 @@ func TestRouterAnnouncesRewritesAndPassesOnlyReplies(t *testing.T) {
 		binary.BigEndian.PutUint16(denied[VnetHdrLen+20+2:], 22)
 		sendFrame(t, guest, denied)
 		sendFrame(t, guest, frame(ProtoTCP, GuestAddr, netip.MustParseAddr("100.80.0.5"), false))
+		sendFrame(t, guest, frame(ProtoUDP, GuestAddr, netip.MustParseAddr("100.64.0.1"), false))
 		stranger := reply(netip.MustParseAddr("198.51.100.1"))
 		binary.BigEndian.PutUint16(stranger[Overhead+20:], 22)
 		u.inject(t, stranger)
@@ -60,8 +61,8 @@ func TestRouterAnnouncesRewritesAndPassesOnlyReplies(t *testing.T) {
 			t.Fatalf("delivered %+v, want the reply rewritten to the guest", p)
 		}
 		synctest.Wait()
-		if got := r.Stats().Drops[DropPolicy]; got != 3 {
-			t.Fatalf("policy drops = %d, want 3", got)
+		if got := r.Stats().Drops[DropPolicy]; got != 4 {
+			t.Fatalf("policy drops = %d, want 4", got)
 		}
 		if n := len(u.out); n != 0 {
 			t.Errorf("%d more datagrams sent, want none for denied traffic", n)
@@ -71,38 +72,13 @@ func TestRouterAnnouncesRewritesAndPassesOnlyReplies(t *testing.T) {
 		synctest.Wait()
 		mu.Lock()
 		defer mu.Unlock()
-		if len(records) != 3 {
-			t.Errorf("recorded %d flows after the disarm, want 3", len(records))
+		if len(records) != 4 {
+			t.Errorf("recorded %d flows after the disarm, want 4", len(records))
 		}
-	})
-}
-
-func TestRouterRecordsADeniedFlowToTheOverlayAndTheGuestRange(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		u, r := newRouter(t)
-		var records []FlowRecord
-		var mu sync.Mutex
-		r.Arm(Claim{
-			ID: "c1", Addr: claimAddr,
-			Allow:  func(netip.Addr, uint16) bool { return true },
-			Record: func(fr FlowRecord) { mu.Lock(); records = append(records, fr); mu.Unlock() },
-		})
-		u.sent(t)
-		guest := serve(t, r, claimAddr)
-		guestHello(t, guest)
-		sendFrame(t, guest, frame(ProtoTCP, GuestAddr, netip.MustParseAddr("100.80.0.5"), false))
-		sendFrame(t, guest, frame(ProtoUDP, GuestAddr, netip.MustParseAddr("100.64.0.1"), false))
-		synctest.Wait()
-		if got := r.Stats().Drops[DropPolicy]; got != 2 || len(u.out) != 0 {
-			t.Fatalf("policy drops = %d with %d datagrams sent, want 2 and none", got, len(u.out))
-		}
-		_ = guest.Close()
-		r.Disarm(claimAddr)
-		synctest.Wait()
-		mu.Lock()
-		defer mu.Unlock()
-		if len(records) != 2 || records[0].Allowed || records[1].Allowed {
-			t.Errorf("records %+v, want a denied flow for each probe", records)
+		for _, fr := range records {
+			if fr.Allowed != (fr.Dst == remote && fr.Port == 443) {
+				t.Errorf("record %+v allowed %v, want only the flow to %v:443 allowed", fr, fr.Allowed, remote)
+			}
 		}
 	})
 }
@@ -351,7 +327,8 @@ func TestRouterHandsAnICMPErrorBackWithTheQuotedGuestAddress(t *testing.T) {
 func TestRouterResumesAStreamOpenedBeforeTheArmButRefusesAnOpener(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		u, r := newRouter(t)
-		r.Arm(Claim{ID: "c1", Addr: claimAddr, Allow: func(_ netip.Addr, port uint16) bool { return port == 443 }})
+		var asked atomic.Int32
+		r.Arm(Claim{ID: "c1", Addr: claimAddr, Allow: func(_ netip.Addr, port uint16) bool { asked.Add(1); return port == 443 }})
 		u.sent(t)
 		guest := serve(t, r, claimAddr)
 		guestHello(t, guest)
@@ -370,22 +347,8 @@ func TestRouterResumesAStreamOpenedBeforeTheArmButRefusesAnOpener(t *testing.T) 
 		if p, _ := Parse(readFrame(t, guest)); p.Src != remote || p.Dst != GuestAddr {
 			t.Fatalf("delivered %+v, want the stream's next segment", p)
 		}
-	})
-}
-
-func TestRouterJudgesAResumedFlowOnce(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		u, r := newRouter(t)
-		var asked atomic.Int32
-		r.Arm(Claim{ID: "c1", Addr: claimAddr, Allow: func(netip.Addr, uint16) bool { asked.Add(1); return true }})
-		u.sent(t)
-		guest := serve(t, r, claimAddr)
-		guestHello(t, guest)
-		synctest.Wait()
-		u.inject(t, reply(remote))
-		readFrame(t, guest)
 		if n := asked.Load(); n != 1 {
-			t.Fatalf("the policy was asked %d times for one resumed segment, want once", n)
+			t.Errorf("the policy was asked %d times for one resumed segment, want once", n)
 		}
 	})
 }
@@ -404,6 +367,74 @@ func TestRouterKeepsTheMTUAStreamWasToldUntilItsNextHello(t *testing.T) {
 		sendFrame(t, guest, full)
 		if inner, _, _ := u.sent(t); len(inner) != 1440 {
 			t.Errorf("sent %d bytes, want the 1440-byte packet the stream's MTU allows", len(inner))
+		}
+	})
+}
+
+func TestRouterRefundsOnlyTheUnreportedChargeOfAFrameTheUnderlayDidNotSend(t *testing.T) {
+	for _, tt := range []struct {
+		name  string
+		every time.Duration
+		swept bool
+	}{
+		{"unreported", 0, false},
+		{"reported by a sweep during the send", time.Nanosecond, true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				u, r := newRouter(t)
+				used := new(atomic.Int64)
+				var mu sync.Mutex
+				var records []FlowRecord
+				r.Arm(Claim{
+					ID: "c1", Addr: claimAddr, Used: used, Every: tt.every, Allow: func(netip.Addr, uint16) bool { return true },
+					Record: func(fr FlowRecord) { mu.Lock(); records = append(records, fr); mu.Unlock() },
+				})
+				u.sent(t)
+				guest := serve(t, r, claimAddr)
+				guestHello(t, guest)
+				if tt.swept {
+					u.onFail = func() { r.sweep(time.Now().Add(time.Second), false) }
+				}
+				u.failSend.Store(true)
+				sendFrame(t, guest, frame(ProtoTCP, GuestAddr, remote, false))
+				synctest.Wait()
+				if got := r.Stats().Drops[DropSend]; got != 1 {
+					t.Fatalf("send drops = %d, want 1", got)
+				}
+				r.EndFlows()
+				mu.Lock()
+				defer mu.Unlock()
+				for _, fr := range records {
+					if fr.NewUp < 0 {
+						t.Errorf("record %+v reports a negative upload", fr)
+					}
+					if !tt.swept && fr.Up != 0 {
+						t.Errorf("record %+v bills %d up bytes the underlay never sent", fr, fr.Up)
+					}
+				}
+				if used.Load() != 0 {
+					t.Errorf("quota used %d bytes for a frame that never left", used.Load())
+				}
+			})
+		})
+	}
+}
+
+func TestRouterKeepsTheChargeOfAFrameTheUnderlayPartlySent(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		u, r := newRouter(t)
+		used := new(atomic.Int64)
+		r.Arm(Claim{ID: "c1", Addr: claimAddr, Used: used, Allow: func(netip.Addr, uint16) bool { return true }})
+		u.sent(t)
+		guest := serve(t, r, claimAddr)
+		guestHello(t, guest)
+		u.failRest.Store(true)
+		sendFrame(t, guest, gsoFrame(ProtoTCP, 4000, 1400))
+		u.sent(t)
+		synctest.Wait()
+		if used.Load() == 0 {
+			t.Error("a frame whose first segment left was taken back from the quota")
 		}
 	})
 }
@@ -471,71 +502,6 @@ func TestRouterPointsAGuestICMPErrorAtTheClaimAddress(t *testing.T) {
 		inner, _, _ := u.sent(t)
 		if got := netip.AddrFrom4([4]byte(inner[28+dstAt:])); got != claimAddr || fold(onesSum(inner[20:], 0)) != 0xffff {
 			t.Errorf("quoted destination %v, icmp checksum %#x; want the claim address and a valid checksum", got, fold(onesSum(inner[20:], 0)))
-		}
-	})
-}
-
-func TestDeliverMovesATrainThatOutgrowsItsBufferIntoALargeOne(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		u, r := newRouter(t)
-		r.Arm(Claim{ID: "c1", Addr: claimAddr, Allow: func(netip.Addr, uint16) bool { return true }})
-		u.sent(t)
-		guest := serve(t, r, claimAddr)
-		guestHello(t, guest)
-		sendFrame(t, guest, frame(ProtoTCP, GuestAddr, remote, false))
-		u.sent(t)
-		segs := make([][]byte, 12)
-		var want []byte
-		for i := range segs {
-			segs[i] = dataSegment(uint32(1000+1000*i), 1000)
-			want = append(want, segs[i][Overhead+40:]...)
-		}
-		u.injectBatch(t, segs...)
-		merged := readFrame(t, guest)
-		ip := merged[VnetHdrLen:]
-		if p, _ := Parse(merged); merged[1] != gsoTCPv4 || p.Src != remote || p.Dst != GuestAddr || binary.BigEndian.Uint32(ip[24:]) != 1000 {
-			t.Fatalf("frame gso %d from %v to %v at sequence %d, want one TCPv4 GSO frame that starts the train", merged[1], p.Src, p.Dst, binary.BigEndian.Uint32(ip[24:]))
-		}
-		if !bytes.Equal(ip[40:], want) {
-			t.Fatalf("merged payload of %d bytes differs from the 12 segments' %d", len(ip)-40, len(want))
-		}
-		if got, want := binary.BigEndian.Uint16(ip[36:]), fold(pseudoSum(ip, len(ip)-20)); got != want || !validIP(merged) {
-			t.Errorf("merged checksum %#x want the pseudo-header sum %#x, ip valid %v", got, want, validIP(merged))
-		}
-	})
-}
-
-func TestRouterBoundsTheBuffersAStalledGuestHolds(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		u, r := newRouter(t)
-		r.Arm(Claim{ID: "c1", Addr: claimAddr, Allow: func(netip.Addr, uint16) bool { return true }})
-		u.sent(t)
-		guest := serve(t, r, claimAddr)
-		guestHello(t, guest)
-		sendFrame(t, guest, frame(ProtoTCP, GuestAddr, remote, false))
-		u.sent(t)
-		train := make([][]byte, 12)
-		for i := range train {
-			train[i] = dataSegment(uint32(1000+1000*i), 1000)
-		}
-		for range 300 {
-			u.injectBatch(t, train...)
-		}
-		small := reply(remote)
-		for range 1200 {
-			u.inject(t, small)
-		}
-		synctest.Wait()
-		l := r.claims[claimAddr].live()
-		if l == nil || r.Stats().Drops[DropQueueFull] == 0 {
-			t.Fatalf("stream live %v with %d queue drops, want a live stream whose queue filled", l != nil, r.Stats().Drops[DropQueueFull])
-		}
-		held := 0
-		for range len(l.send) {
-			held += cap(*<-l.send)
-		}
-		if held > 18<<20 {
-			t.Fatalf("a guest that stopped reading holds %d bytes of buffers, want at most 18 MiB", held)
 		}
 	})
 }
@@ -702,20 +668,34 @@ type sent struct {
 }
 
 type fakeUnder struct {
-	out     chan sent
-	in      chan []sent
-	done    chan struct{}
-	batches atomic.Int64
+	out      chan sent
+	in       chan []sent
+	done     chan struct{}
+	batches  atomic.Int64
+	failSend atomic.Bool
+	failRest atomic.Bool
+	onFail   func()
 }
 
-func (u *fakeUnder) Send(b []byte, seg int, dst netip.AddrPort, _ uint64) error {
+func (u *fakeUnder) Send(b []byte, seg int, dst netip.AddrPort, _ uint64) (int, error) {
+	if u.failSend.Load() {
+		if u.onFail != nil {
+			u.onFail()
+		}
+		return 0, errors.New("underlay closed")
+	}
 	u.batches.Add(1)
+	if u.failRest.Load() && len(b) > seg {
+		u.out <- sent{d: bytes.Clone(b[:seg]), to: dst}
+		return seg, errors.New("underlay closed mid-batch")
+	}
+	total := len(b)
 	for len(b) > 0 {
 		n := min(seg, len(b))
 		u.out <- sent{d: bytes.Clone(b[:n]), to: dst}
 		b = b[n:]
 	}
-	return nil
+	return total, nil
 }
 
 func (u *fakeUnder) Recv(each func(d []byte, from netip.AddrPort)) error {

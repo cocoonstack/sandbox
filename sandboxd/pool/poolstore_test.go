@@ -310,7 +310,7 @@ func metaStoreNode(t *testing.T, cell string) *Manager {
 	cfg := &config.Config{
 		DataDir:   t.TempDir(),
 		Pools:     []config.PoolSpec{{PoolKey: seedKey, Warm: 1}},
-		MetaStore: &config.MetaStoreConfig{DSNEnv: "SANDBOX_TEST_DSN", Cell: cell},
+		MetaStore: &config.MetaStoreConfig{Kind: "pg", DSNEnv: "SANDBOX_TEST_DSN", Cell: cell},
 	}
 	b := testBackends(t, cfg)
 	src, err := tenantspg.Open(t.Context(), os.Getenv("SANDBOX_TEST_DSN"))
@@ -318,14 +318,14 @@ func metaStoreNode(t *testing.T, cell string) *Manager {
 		t.Fatalf("tenant set: %v", err)
 	}
 	b.Tenants = src
-	t.Cleanup(func() { _ = src.Close() })
+	t.Cleanup(src.Close)
 	if cell != "" {
 		cells, openErr := poolpg.Open(t.Context(), os.Getenv("SANDBOX_TEST_DSN"), cell)
 		if openErr != nil {
 			t.Fatalf("cell pool set: %v", openErr)
 		}
 		b.CellPools = cells
-		t.Cleanup(func() { _ = cells.Close() })
+		t.Cleanup(cells.Close)
 	}
 	m, err := newManager(t, cfg, newFakeEngine(), testSecrets(t), b)
 	if err != nil {

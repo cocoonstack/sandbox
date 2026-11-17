@@ -15,7 +15,7 @@ var (
 func TestRewriteKeepsFullChecksumsValid(t *testing.T) {
 	for _, proto := range []uint8{ProtoTCP, ProtoUDP} {
 		f := frame(proto, GuestAddr, remote, false)
-		RewriteSrc(f, claimAddr)
+		rewrite(f, srcAt, claimAddr.As4())
 		p, drop := Parse(f)
 		if drop != DropNone || p.Src != claimAddr || p.Dst != remote {
 			t.Fatalf("proto %d: parse after rewrite = %+v %v", proto, p, drop)
@@ -23,7 +23,7 @@ func TestRewriteKeepsFullChecksumsValid(t *testing.T) {
 		if !validIP(f) || !validL4(f) {
 			t.Errorf("proto %d: checksum broken by the source rewrite", proto)
 		}
-		RewriteDst(f, GuestAddr)
+		rewrite(f, dstAt, GuestAddr.As4())
 		if !validIP(f) {
 			t.Errorf("proto %d: ip checksum broken by the destination rewrite", proto)
 		}
@@ -32,7 +32,7 @@ func TestRewriteKeepsFullChecksumsValid(t *testing.T) {
 
 func TestRewriteMovesAPartialChecksumAsAnUncomplementedSum(t *testing.T) {
 	f := frame(ProtoTCP, GuestAddr, remote, true)
-	RewriteSrc(f, claimAddr)
+	rewrite(f, srcAt, claimAddr.As4())
 	ip := f[VnetHdrLen:]
 	got := binary.BigEndian.Uint16(ip[20+16:])
 	if want := pseudo(ip); got != want {
@@ -44,7 +44,7 @@ func TestRewriteLeavesAZeroUDPChecksumZero(t *testing.T) {
 	f := frame(ProtoUDP, GuestAddr, remote, false)
 	ip := f[VnetHdrLen:]
 	binary.BigEndian.PutUint16(ip[20+6:], 0)
-	RewriteSrc(f, claimAddr)
+	rewrite(f, srcAt, claimAddr.As4())
 	if binary.BigEndian.Uint16(ip[20+6:]) != 0 {
 		t.Error("a UDP checksum of 0 means none and must stay 0")
 	}

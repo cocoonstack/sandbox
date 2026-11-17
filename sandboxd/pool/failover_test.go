@@ -1589,9 +1589,7 @@ func TestFailoverRestartAfterAnAbandonClearedItsIntentReclaimsTheExport(t *testi
 	sb := mustClaim(t, a, testKey)
 	hibernateClaim(t, a, sb)
 	ck := interruptArchive(t, a, sb, false)
-	if !a.clearArchiveIntent(t.Context(), sb, ck) {
-		t.Fatal("setup: clear intent")
-	}
+	a.clearArchiveIntent(t.Context(), sb, ck)
 
 	restarted := c.restartReconciled(t, a)
 	if _, held := restarted.byID(sb.ID); !held || ckExists(t, restarted, ck) {
@@ -1615,6 +1613,11 @@ func TestFailoverAnAbandonKeepsTheExportWhileItsIntentIsDurable(t *testing.T) {
 		t.Error("the abandon deleted the export while the journal still names it")
 	}
 	healStore(t, a)
+	mustFlush(t, a)
+	a.retryArchiveDeletes(t.Context())
+	if ckExists(t, a, ck) {
+		t.Error("the export outlived its intent once the journal landed")
+	}
 }
 
 func TestFailoverAnOwnerReturningWithItsWakeCommittedPurgesItsTombstone(t *testing.T) {

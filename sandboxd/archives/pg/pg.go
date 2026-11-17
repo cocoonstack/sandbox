@@ -113,7 +113,7 @@ func (r *Registry) Get(ctx context.Context, id string) (archives.Record, bool, e
 
 func (r *Registry) Sweepable(ctx context.Context, now time.Time, owner string) ([]archives.Record, error) {
 	return cas.All(ctx, r.pool, scan, `SELECT id, tenant, token_sha256, owner, epoch, consumed, checkpoint, deadline, NULL::jsonb
-		FROM sandboxd_archives WHERE cell = $2 AND (consumed OR owner = $3 OR deadline < $1 AND `+leaseExpired+`)`, now, r.cell, owner)
+		FROM sandboxd_archives WHERE cell = $2 AND (owner = $3 OR deadline < $1 AND `+leaseExpired+`)`, now, r.cell, owner)
 }
 
 func (r *Registry) Rows(ctx context.Context, ids []string) (map[string]archives.Record, error) {

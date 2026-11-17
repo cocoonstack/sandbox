@@ -1,6 +1,7 @@
 package tunnet
 
 import (
+	"bytes"
 	"encoding/binary"
 	"net/netip"
 	"testing"
@@ -23,6 +24,7 @@ func FuzzParseAndRewrite(f *testing.F) {
 	f.Add(frame(ProtoTCP, GuestAddr, remote, true))
 	f.Add(frame(ProtoUDP, GuestAddr, remote, false))
 	f.Fuzz(func(t *testing.T, b []byte) {
+		b = bytes.Clone(b)
 		if len(b) > MaxFrame {
 			return
 		}
@@ -33,8 +35,8 @@ func FuzzParseAndRewrite(f *testing.F) {
 		if p.Proto != ProtoTCP && p.Proto != ProtoUDP && p.Proto != ProtoICMP {
 			t.Fatalf("Parse passed protocol %d", p.Proto)
 		}
-		RewriteSrc(b, claimAddr)
-		RewriteDst(b, GuestAddr)
+		rewrite(b, srcAt, claimAddr.As4())
+		rewrite(b, dstAt, GuestAddr.As4())
 		if q, _ := Parse(b); q.Src != claimAddr || q.Dst != GuestAddr {
 			t.Fatalf("rewrite left %v -> %v", q.Src, q.Dst)
 		}
@@ -46,6 +48,7 @@ func FuzzSegment(f *testing.F) {
 	f.Add(gsoFrame(ProtoUDP, 3000, 1000))
 	f.Add(frame(ProtoTCP, GuestAddr, remote, true))
 	f.Fuzz(func(t *testing.T, b []byte) {
+		b = bytes.Clone(b)
 		if len(b) > MaxFrame {
 			return
 		}

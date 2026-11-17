@@ -316,6 +316,7 @@ type EgressClass struct {
 
 // MetaStoreConfig points every node at one shared PostgreSQL for its tenant set and, with a cell, its pool set; absent keeps both in each node's files.
 type MetaStoreConfig struct {
+	Kind string `json:"kind"`
 	// DSNEnv names the node env holding the connection string, so no credential sits in the file.
 	DSNEnv string `json:"dsn_env"`
 	// Cell opts the node into one pool set for every node of the cell; empty keeps the pool set per node.
@@ -875,6 +876,8 @@ func (c *Config) validateMetaStore() error {
 		return fmt.Errorf("archive_failover requires meta_store with a cell, an s3 checkpoint_store and a mesh with a cluster_key")
 	case ms == nil:
 		return nil
+	case ms.Kind != "pg":
+		return fmt.Errorf("meta_store.kind %q is not supported; use pg", ms.Kind)
 	case !types.EnvNameRe.MatchString(ms.DSNEnv) || os.Getenv(ms.DSNEnv) == "":
 		return fmt.Errorf("meta_store.dsn_env %q must name a set node env", ms.DSNEnv)
 	case ms.Cell != "" && !types.NameRe.MatchString(ms.Cell):

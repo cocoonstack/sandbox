@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/base64"
-	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"fmt"
 	"io"
@@ -16,17 +15,8 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/cocoonstack/sandbox/protocol/wire"
 	"github.com/cocoonstack/sandbox/sdk/go/silkd/silkdtest"
 )
-
-var infoFrame = func() string {
-	frame, err := wire.EncodeResponse(&wire.InfoResp{Version: "test"})
-	if err != nil {
-		panic(err)
-	}
-	return string(frame) + "\n"
-}()
 
 func TestServeAnswersEveryRequestAndSkipsNotifications(t *testing.T) {
 	srv := newTestServer(t, func(w http.ResponseWriter, r *http.Request) bool {
@@ -236,14 +226,6 @@ func TestCreateSandboxRejectsNegativeTTL(t *testing.T) {
 	}
 }
 
-func TestCheckpointArgRejectsAnEmptyIDBeforeTheLookup(t *testing.T) {
-	srv := newTestServer(t, nil)
-	srv.trackCkpt(srv.client.Checkpoint(""))
-	if _, err := srv.checkpointArg(jsontext.Value(`{}`)); err == nil || !strings.Contains(err.Error(), "checkpoint_id is required") {
-		t.Errorf("checkpointArg without an id = %v, want checkpoint_id is required", err)
-	}
-}
-
 func TestCappedOutputMarksTruncation(t *testing.T) {
 	var o cappedOutput
 	chunk := bytes.Repeat([]byte("x"), execOutputCap/2+1)
@@ -317,10 +299,7 @@ func agentRoute(t *testing.T, reply func(req string) (frames string, drop bool))
 			if err != nil {
 				return true
 			}
-			frames, drop := infoFrame, false
-			if !strings.Contains(req, `"op":"info"`) {
-				frames, drop = reply(req)
-			}
+			frames, drop := reply(req)
 			if _, err := io.WriteString(conn, frames); err != nil || drop {
 				return true
 			}

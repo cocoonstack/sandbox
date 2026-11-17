@@ -651,6 +651,7 @@ func TestMoveCutOffFromTheRegistryLeavesAnAdoptionToTheFence(t *testing.T) {
 	u := mc.moveNode(t, "c")
 	sb := mustClaim(t, mc.s, testKey)
 	replicateNow(t, mc.s, sb)
+	replica := mc.s.replicaOf(sb)
 	mc.s.archives = &unreachableRowWrites{Registry: mc.reg}
 	if _, err := mc.s.Move(t.Context(), sb.ID, "b", time.Minute); !errors.Is(err, archives.ErrUnavailable) {
 		t.Fatalf("move: %v, want the registry's error", err)
@@ -664,6 +665,51 @@ func TestMoveCutOffFromTheRegistryLeavesAnAdoptionToTheFence(t *testing.T) {
 	waitFor(t, func() bool { return fakeOf(mc.s).removed(sb.VMName) })
 	if _, held := mc.s.byID(sb.ID); held {
 		t.Error("the source kept serving a claim a peer adopted")
+	}
+	mc.s.retryArchiveDeletes(t.Context())
+	if !ckExists(t, mc.s, replica) {
+		t.Error("the source deleted the replica the peer adopted from")
+	}
+}
+
+func TestAMoveWhoseRowAPeerAdoptedKeepsTheAdoptersCheckpoint(t *testing.T) {
+	mc := newMoveClusterWith(t, func(c *failoverCluster) { c.replicate = replicateEvery })
+	u := mc.moveNode(t, "c")
+	sb := mustClaim(t, mc.s, testKey)
+	replicateNow(t, mc.s, sb)
+	replica := mc.s.replicaOf(sb)
+	mc.expire("a")
+	mustAdopt(t, u, sb, "adoption after the source's lease lapsed")
+	if _, err := mc.s.Move(t.Context(), sb.ID, "b", time.Minute); err == nil {
+		t.Fatal("a move of a claim a peer adopted succeeded")
+	}
+	mc.s.retryArchiveDeletes(t.Context())
+	if !ckExists(t, mc.s, replica) {
+		t.Error("the failed move deleted the checkpoint the peer adopted")
+	}
+}
+
+func TestARearmedReplicaLosesTheDeleteMarkAMoveLeftOnIt(t *testing.T) {
+	mc := newMoveClusterWith(t, func(c *failoverCluster) { c.replicate = replicateEvery })
+	u := mc.moveNode(t, "c")
+	sb := mustClaim(t, mc.s, testKey)
+	replicateNow(t, mc.s, sb)
+	mc.s.mu.Lock()
+	replica, epoch := sb.ReplicaCk, sb.ArchiveEpoch
+	mc.s.mu.Unlock()
+	if _, err := mc.reg.Consume(t.Context(), sb.ID, epoch); err != nil {
+		t.Fatalf("consume: %v", err)
+	}
+	if err := mc.s.ckMarks.mark(replica); err != nil {
+		t.Fatalf("mark: %v", err)
+	}
+	mc.s.reputArchive(t.Context(), sb)
+	mc.expire("a")
+	mustAdopt(t, u, sb, "adoption of the re-armed replica")
+	mc.s.dropAdopted(t.Context(), sb)
+	mc.s.retryArchiveDeletes(t.Context())
+	if !ckExists(t, mc.s, replica) {
+		t.Error("the delete mark of the move deleted the checkpoint a peer adopted after the re-arm")
 	}
 }
 

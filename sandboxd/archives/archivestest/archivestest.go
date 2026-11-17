@@ -147,7 +147,7 @@ func (m *Mem) Sweepable(_ context.Context, now time.Time, owner string) ([]archi
 	}
 	var out []archives.Record
 	for _, rec := range m.rows {
-		if rec.Consumed || rec.Owner == owner || !rec.Deadline.IsZero() && rec.Deadline.Before(now) && !m.leased(rec.Owner) {
+		if rec.Owner == owner || !rec.Deadline.IsZero() && rec.Deadline.Before(now) && !m.leased(rec.Owner) {
 			rec.Claim = nil
 			out = append(out, rec)
 		}
@@ -235,7 +235,7 @@ func Run(t *testing.T, open Opener) {
 	t.Run("consume leaves a tombstone", func(t *testing.T) { testConsume(t, open(t)) })
 	t.Run("delete only at its epoch", func(t *testing.T) { testDelete(t, open(t)) })
 	t.Run("epochs are never reused", func(t *testing.T) { testEpochsNeverRepeat(t, open(t)) })
-	t.Run("sweepable lists expired, consumed and own rows", func(t *testing.T) { testSweepable(t, open(t)) })
+	t.Run("sweepable lists expired and own rows, not another owner's tombstone", func(t *testing.T) { testSweepable(t, open(t)) })
 	t.Run("rows lists the named ids", func(t *testing.T) { testRows(t, open(t)) })
 	t.Run("replace is a compare-and-set", func(t *testing.T) { testReplace(t, open(t)) })
 	t.Run("take waits out a live lease", func(t *testing.T) { testTakeLease(t, open(t)) })
@@ -449,8 +449,8 @@ func testSweepable(t *testing.T, r archives.Registry) {
 	for _, rec := range got {
 		ids[rec.ID] = rec.Checkpoint != ""
 	}
-	if err != nil || len(got) != 3 || !ids["sb_past"] || !ids["sb_spent"] || !ids["sb_mine"] {
-		t.Errorf("sweepable for z %+v %v, want sb_past, sb_spent and sb_mine", got, err)
+	if err != nil || len(got) != 2 || !ids["sb_past"] || !ids["sb_mine"] {
+		t.Errorf("sweepable for z %+v %v, want sb_past and sb_mine", got, err)
 	}
 }
 

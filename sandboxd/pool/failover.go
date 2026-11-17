@@ -145,6 +145,9 @@ func (m *Manager) replaceReplica(ctx context.Context, sb *types.Sandbox, ck stri
 }
 
 func (m *Manager) putRow(ctx context.Context, sb *types.Sandbox, ck string, replica, replace bool) (int64, error) {
+	if err := m.ckMarks.clear(ck); err != nil {
+		return 0, fmt.Errorf("keep checkpoint %s: %w", ck, err)
+	}
 	m.mu.Lock()
 	if replica && m.hasVolumeHolds(sb) {
 		m.mu.Unlock()
@@ -221,6 +224,7 @@ func (m *Manager) refusedReplace(ctx context.Context, sb *types.Sandbox) error {
 		_, _ = m.commitIfLive(ctx, sb, func() { sb.ArchiveEpoch = max(sb.ArchiveEpoch, rec.Epoch) })
 		return nil
 	}
+	m.deleteUnrowed(ctx, sb, rec)
 	m.dropAdopted(ctx, sb)
 	return ErrUnknownSandbox
 }
@@ -249,25 +253,22 @@ func (m *Manager) abandonArchive(ctx context.Context, sb *types.Sandbox, epoch i
 			return
 		}
 	}
-	if m.clearArchiveIntent(ctx, sb, ck) {
-		m.deleteOrphanArchiveCk(ctx, ck)
-	}
+	m.clearArchiveIntent(ctx, sb, ck)
+	m.deleteOrphanArchiveCk(ctx, ck)
 }
 
-func (m *Manager) clearArchiveIntent(ctx context.Context, sb *types.Sandbox, ck string) bool {
+func (m *Manager) clearArchiveIntent(ctx context.Context, sb *types.Sandbox, ck string) {
 	m.mu.Lock()
 	if m.claimed[sb.ID] != sb || sb.ArchivePending != ck {
 		m.mu.Unlock()
-		return true
+		return
 	}
 	sb.ArchivePending = ""
 	js := m.store.set(sb)
 	m.mu.Unlock()
 	if err := m.store.commit(js); err != nil {
 		m.store.recommit(ctx, js)
-		return false
 	}
-	return true
 }
 
 // takeArchive fences an owner's wake against an adoption elsewhere; the caller holds Transition.
@@ -796,9 +797,8 @@ func (m *Manager) resolveIntent(ctx context.Context, sb *types.Sandbox) error {
 		m.dropAdopted(ctx, sb)
 		return ErrUnknownSandbox
 	}
-	if m.clearArchiveIntent(ctx, sb, pending) {
-		m.deleteOrphanArchiveCk(ctx, pending)
-	}
+	m.clearArchiveIntent(ctx, sb, pending)
+	m.deleteOrphanArchiveCk(ctx, pending)
 	return nil
 }
 

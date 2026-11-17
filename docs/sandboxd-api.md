@@ -47,6 +47,8 @@ marked root-only; the operator token only where the endpoint names it. Errors ar
 listed per endpoint. Request bodies are capped at 1 MiB; a larger one is
 rejected with `400` and an error beginning `invalid request body`, and so is
 a body with a field its endpoint does not declare.
+[`PUT /v1/sandboxes/{id}/instance-metadata`](#put-v1sandboxesidinstance-metadata)
+is the exception: it takes one raw JSON object of at most 4 KiB.
 
 ## Guest errors
 
@@ -687,12 +689,6 @@ on the egress lane, has volumes attached (see [egress](egress.md)), has its
 sandbox token, 429 while the disk is under [`disk_reserve`](deploy.md), 503
 `lease lost; retry` for a replicated sandbox while its node's lease is overdue.
 
-A tenant's first promote of a name creates the template record only while none
-exists. Two tenants that promote one new name at the same moment, on one node
-or on two nodes of a shared checkpoint store, get one 200 and one 409. Root
-replaces any record. Re-promotes of one name from two nodes are not
-coordinated: the last commit wins ([`checkpoint_dir`](deploy.md#configuration)).
-
 ## DELETE /v1/templates?template=…&net=…&size=…
 
 Auth: node API token. Removes a promoted template (the query parameters
@@ -1260,9 +1256,9 @@ parent's switch and label, with its own address.
 204 on success; 400 an unknown field or a `profile` that does not match the
 name rule; 404 unknown id; 409 an enable or profile change while a
 transition (a capture, wake, hibernate or archive) holds the claim (retry; a
-disable never waits), or a write another tun request to the claim landed
-first (retry); 503 the claim is moving to another node
-(retry); 500 the address store failed or the claims
+disable never waits), or another tun request to the claim committed first
+(retry); 503 the claim is in a live move's final round or not yet
+started on its target (retry); 500 the address store failed or the claims
 journal could not be written (nothing changed); 503 the archive registry is
 down for an archived claim or one with a replica under `archive_failover`:
 the node already holds the change, and a resend of the same body replaces the

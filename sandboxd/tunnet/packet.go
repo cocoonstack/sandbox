@@ -147,16 +147,6 @@ func Parse(frame []byte) (Packet, Drop) {
 	return p, DropNone
 }
 
-// RewriteSrc overwrites the source address whatever it was.
-func RewriteSrc(frame []byte, to netip.Addr) {
-	rewrite(frame, srcAt, to.As4())
-}
-
-// RewriteDst overwrites the destination address.
-func RewriteDst(frame []byte, to netip.Addr) {
-	rewrite(frame, dstAt, to.As4())
-}
-
 // FrameLen validates a frame's length prefix.
 func FrameLen(head [4]byte) (int, error) {
 	n := int(binary.LittleEndian.Uint32(head[:]))

@@ -237,7 +237,7 @@ class Client(_Closeable):
 
     def _dial(self, addr: str, sandbox_id: str, token: str, deadline: float | None = None) -> Conn:
         origin = addr if "://" in addr else f"{self._scheme}://{addr}"
-        context = self._tls() if origin.startswith("https://") else None
+        context = self._tls() if origin.lower().startswith("https://") else None
         return dial_agent(
             origin, sandbox_id, token, self.timeout, deadline, ssl_context=context, tag=(sandbox_id, addr)
         )

@@ -272,11 +272,10 @@ func (s *Source) Digest() string {
 	return ""
 }
 
-func (s *Source) Close() error {
+func (s *Source) Close() {
 	s.stop()
 	<-s.done
 	s.pool.Close()
-	return nil
 }
 
 // fetch loads one name in the background for Peek, once per name at a time.
@@ -304,8 +303,6 @@ func (s *Source) lookupNow(ctx context.Context, name string) (tenants.TenantReco
 
 // write runs f in one transaction that notifies every node to evict key, then evicts it here at once.
 func (s *Source) write(ctx context.Context, key string, f func(tx pgx.Tx) error) error {
-	ctx, cancel := context.WithTimeout(ctx, metastore.QueryTimeout)
-	defer cancel()
 	err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
 		if err := f(tx); err != nil {
 			return err

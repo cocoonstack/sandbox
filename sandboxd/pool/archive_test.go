@@ -909,6 +909,9 @@ func BenchmarkReapPurgesArchivedClaims(b *testing.B) {
 		b.StartTimer()
 		m.reapOnce(b.Context())
 	}
+	for m.counters.reaps.Load() < purged {
+		runtime.Gosched()
+	}
 }
 
 type stagingStore struct {

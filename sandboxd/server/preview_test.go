@@ -174,7 +174,7 @@ func TestPreviewForwardsToOwner(t *testing.T) {
 	ownerSrv := New("", ownerAddr, &fakeManager{}, &fakeDialer{}, nil, nil, nil, ownerPS)
 	owner.Config.Handler = ownerSrv.Handler()
 	owner.Start()
-	t.Cleanup(func() { owner.Close(); ownerSrv.CloseRelays() })
+	t.Cleanup(func() { owner.Close(); ownerSrv.CloseRelays(context.Background()) })
 
 	token := mintToken(ownerPS, "sb_1", 8080, time.Hour)
 	entry := NewPreviewServer("secret", "https://preview.example.com", "entry:7777", &fakePreviewMgr{})

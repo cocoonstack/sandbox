@@ -16,7 +16,7 @@ func TestSendBatchArrivesAsSegments(t *testing.T) {
 	defer u.Close()
 	dst := u.recv.LocalAddr().(*net.UDPAddr).AddrPort()
 	batch := make([]byte, 3*1000+400)
-	if err = u.Send(batch, 1000, dst, 7); err != nil {
+	if _, err = u.Send(batch, 1000, dst, 7); err != nil {
 		t.Fatal(err)
 	}
 	_ = u.recv.SetReadDeadline(time.Now().Add(5 * time.Second))
@@ -49,7 +49,7 @@ func BenchmarkSendGSO(b *testing.B) {
 	b.SetBytes(int64(len(batch)))
 	b.ReportAllocs()
 	for b.Loop() {
-		if err := u.Send(batch, 1472, dst, 1); err != nil {
+		if _, err := u.Send(batch, 1472, dst, 1); err != nil {
 			b.Fatal(err)
 		}
 	}

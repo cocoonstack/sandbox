@@ -6,7 +6,7 @@ processes (spawn/ps/kill/logs), file ops, fork, checkpoints (create/branch/
 list/delete), hibernate, promote, release and node info, built on the Go SDK.
 
 ```bash
-sandbox-mcp -addr 10.0.0.5:7777 -token "$SANDBOXD_TOKEN" -template rt:24.04
+SANDBOXD_TOKEN=... sandbox-mcp -addr 10.0.0.5:7777 -template rt:24.04
 ```
 
 Flags fall back to `SANDBOXD_ADDR` / `SANDBOXD_TOKEN` / `SANDBOXD_TEMPLATE`.

@@ -22,6 +22,7 @@ const (
 	// limitSlices cuts a second of a limited direction into reads, so one wait stays near a tenth of a second.
 	limitSlices  = 10
 	minLimitRead = 1 << 10
+	maxBigBufs   = 8
 )
 
 var limitBufs = sync.Pool{New: func() any { b := make([]byte, limitBurst); return &b }}
@@ -178,16 +179,24 @@ func (p *Proxy) stream(dst io.Writer, src net.Conn, rx bool, n *atomic.Int64) {
 }
 
 func (p *Proxy) copyLimited(dst io.Writer, src net.Conn, rx bool, n *atomic.Int64, lim *rate.Limiter) error {
-	pool := &copyBufs
-	if readSlice(lim) > 2*scrubChunk {
-		pool = &limitBufs
-	}
-	buf := pool.Get().(*[]byte)
-	defer pool.Put(buf)
 	m := &meter{r: src, p: p, rx: rx, n: n}
-	// Hide ReaderFrom so the copy reads through the meter into the pooled buffer.
-	_, err := io.CopyBuffer(struct{ io.Writer }{dst}, m, *buf)
-	return err
+	small := copyBufs.Get().(*[]byte)
+	defer copyBufs.Put(small)
+	for {
+		nr, err := copySlice(dst, m, *small)
+		if err == nil && nr == len(*small) && readSlice(lim) > nr {
+			if p.bigBufs.Add(1) <= maxBigBufs {
+				err = copyWhileBusy(dst, m, nr)
+			}
+			p.bigBufs.Add(-1)
+		}
+		if errors.Is(err, io.EOF) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+	}
 }
 
 // limiters is one cap's buckets; ctx ends when a newer cap replaces it, so a wait moves to the new buckets.
@@ -269,4 +278,30 @@ func newBucket(perSecond int64) *rate.Limiter {
 
 func readSlice(lim *rate.Limiter) int {
 	return max(minLimitRead, min(int(lim.Limit())/limitSlices, limitBurst))
+}
+
+// copyWhileBusy holds a large buffer until a read fits a small one; maxBigBufs bounds how many a claim holds at once.
+func copyWhileBusy(dst io.Writer, src io.Reader, small int) error {
+	big := limitBufs.Get().(*[]byte)
+	defer limitBufs.Put(big)
+	for {
+		nr, err := copySlice(dst, src, *big)
+		if err != nil || nr <= small {
+			return err
+		}
+	}
+}
+
+func copySlice(dst io.Writer, src io.Reader, buf []byte) (int, error) {
+	nr, err := src.Read(buf)
+	if nr > 0 {
+		nw, werr := dst.Write(buf[:nr])
+		if werr == nil && nw < nr {
+			werr = io.ErrShortWrite
+		}
+		if werr != nil {
+			return nr, werr
+		}
+	}
+	return nr, err
 }

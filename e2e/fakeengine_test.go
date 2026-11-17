@@ -301,7 +301,7 @@ func (f *fakeEngine) createRecord(name string) (types.VMRecord, error) {
 	if err != nil {
 		return types.VMRecord{}, err
 	}
-	return types.VMRecord{VsockSocket: sock, Config: types.VMConfig{Name: name}}, nil
+	return types.VMRecord{VsockSocket: sock, Config: types.VMConfig{Name: name, ImageDigest: "sha256:rt"}}, nil
 }
 
 func volumeMode(rw bool) string {

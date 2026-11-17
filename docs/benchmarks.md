@@ -200,7 +200,7 @@ mmap`, `no_direct_io: true`): golden build 0.8 s, then 16 warm in 1.9 s
 
 Second of two rounds, both in band; the 16-step e2e smoke (egress lane
 included) passed on the same images first. fs_push steady state measured
-separately (`pullbench -push`, 128 MiB, 3 runs): 702/741/762 MiB/s against the
+separately (`pullbench -push -size 128`, 3 runs): 702/741/762 MiB/s against the
 ~343 MiB/s of record — the inbound base64 decode now feeds the borrowed
 slice straight to the decoder, and the guest's musl allocator amplifies
 what the codec-level A/B (+6.5% on glibc) understates; a toolchain bump
@@ -250,7 +250,7 @@ restore-bound; measure the tick before re-tuning refill admission.
 |---|---|---|---|---|
 | warm pool hit | 0.2 ms | 0.3 ms | 0.6 ms | 6 |
 | clone from golden | 26.0 ms | 29.3 ms | 30.6 ms | 10 |
-| cold boot (pool-less node, `demo -proof` claim→first exec) | 304 ms / 306 ms | — | 314 ms | 3 |
+| cold boot (pool-less node, `demo -proof` claim plus first exec) | 304 ms / 306 ms | — | 314 ms | 3 |
 | cold boot (unpooled ghcr.io/cocoonstack/sandbox/python:3.12, `demo -proof`) | 399.5 ms | — | 413.9 ms | 3 |
 
 | data plane | measured |

@@ -47,7 +47,7 @@ type Registry interface {
 	Delete(ctx context.Context, id string, epoch int64) error
 	// Get returns the row of id; false when there is none.
 	Get(ctx context.Context, id string) (Record, bool, error)
-	// Sweepable returns the rows held by owner, consumed, or past their deadline with an owner whose lease expired, without their claims.
+	// Sweepable returns the rows held by owner or past their deadline with an owner whose lease expired, without their claims.
 	Sweepable(ctx context.Context, now time.Time, owner string) ([]Record, error)
 	// Rows returns the rows of ids by id, without their claims.
 	Rows(ctx context.Context, ids []string) (map[string]Record, error)

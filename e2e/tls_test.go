@@ -3,6 +3,7 @@ package e2e
 import (
 	"bytes"
 	"cmp"
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json/v2"
@@ -34,12 +35,12 @@ func TestCaddyTLSCluster(t *testing.T) {
 	st := startStack(t)
 	ownerServer := server.New(st.token, owner, st.mgr, st.eng.real, nil, nil, nil, nil)
 	backend := httptest.NewServer(ownerServer.Handler())
-	t.Cleanup(func() { backend.Close(); ownerServer.CloseRelays() })
+	t.Cleanup(func() { backend.Close(); ownerServer.CloseRelays(context.Background()) })
 	origin := startStack(t)
 	placer := &edgePlacer{internal: "owner.invalid:7777", public: owner}
 	entryServer := server.New(origin.token, entry, origin.mgr, origin.eng.real, placer, nil, nil, nil)
 	front := httptest.NewServer(entryServer.Handler())
-	t.Cleanup(func() { front.Close(); entryServer.CloseRelays() })
+	t.Cleanup(func() { front.Close(); entryServer.CloseRelays(context.Background()) })
 	servers := map[string]any{}
 	for listen, upstream := range map[string]string{a: front.Listener.Addr().String(), b: backend.Listener.Addr().String()} {
 		servers[listen] = map[string]any{
