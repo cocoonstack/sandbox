@@ -157,7 +157,8 @@ guest -> tun0 -> silkd --vsock 2051--> sandboxd --VXLAN--> exit (vxlan0, forward
   forwards a frame the guest built.
 - **Policy**: a flow table keyed by 5-tuple; the first packet of a flow is
   judged by `EvalFlow` (bare `host: "*"` rules only) and the internal-address
-  guard, which also refuses the overlay subnet and `100.64.0.0/30`.
+  guard. A packet to the overlay subnet or `100.64.0.0/30` is dropped before
+  both, whatever `egress_internal_allow` re-admits.
   Per-claim byte, packet and new-flow rates, a flow cap and a byte quota apply
   before any further work on a packet; a GSO frame is charged for every packet
   and header it puts on the wire. The limits and flows belong to the claim, so

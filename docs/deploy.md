@@ -1198,7 +1198,8 @@ all at once or not at all. Every field falls into one of three classes:
 Effects on what already runs:
 
 - **Egress changes** reach live claims on their next request or connection;
-  open tunnels keep their path. A reload that removes the pool policy live
+  open tunnels keep their path, and a live [tun](advanced-network.md) flow
+  keeps its first packet's verdict. A reload that removes the pool policy live
   claims still use, by dropping the pool's entry or its `egress` block, is
   refused with the pool and the claim count: keep the entry until those claims
   are released. A claim whose tenant class a reload removes is denied

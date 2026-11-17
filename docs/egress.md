@@ -113,8 +113,9 @@ Behavior of the relay:
   `SERVFAIL`.
 - **Internal addresses.** An `A` or `AAAA` record that the dial guard would
   refuse is dropped from every section of the answer, glue records included.
-  That covers special-purpose ranges and the node's own addresses, minus the
-  prefixes `egress_internal_allow` re-admits on any port. Other record types
+  That covers special-purpose ranges and the node's own addresses, minus every
+  prefix `egress_internal_allow` names, port-scoped entries included: a record
+  has no port, so the dial guard checks the port at the connect. Other record types
   pass unchanged, so an internal zone's `PTR`, `SRV`, `TXT` or an `HTTPS`
   address hint can still name an internal host; the dial guard refuses the
   connect. An answer with no record to drop goes back byte for byte, with its
@@ -245,8 +246,13 @@ domain policy first; the allow-list widens the IP gate only.
 
 A [config reload](deploy.md#reloading-the-config) applies policy, internal
 allow, secret and upstream changes without a restart: a live claim's next
-request or connection is evaluated against the new policy. Whether a claim has
-the SOCKS5 and DNS doors is settled when it is claimed.
+request or connection is evaluated against the new policy. An open tunnel
+keeps running, and a packet flow of the [advanced network mode](advanced-network.md)
+keeps its first packet's verdict until it ends or idles out (an hour for an
+open TCP flow). Whether a claim has
+the SOCKS5 and DNS doors is settled when it is claimed, and a claim armed with
+no policy has no door at all until it is armed again, at a wake, a move or a
+restart.
 
 Policy is per pool and per egress class; a tenant claim's effective policy is
 the intersection of its pool's and its tenant's class (a request must pass
@@ -256,8 +262,9 @@ the class policy stands alone. `egress_classes`
 names each tenant layer in the config file, and a tenant references one by
 `egress_class` through the [tenant API](sandboxd-api.md#tenants-v1tenants).
 The API only references a class the operator wrote, never defines one, so a
-tenant added at runtime gets egress without a config edit. A missing policy on
-either side is an empty allow-list, not a pass: a tenant without a class
+tenant added at runtime gets egress without a config edit. A pool with no
+policy, or a tenant with no class, is an empty allow-list, not a pass (a key
+in no pool has no pool layer at all, below): a tenant without a class
 reaches nothing through the proxy (the direct NIC of a CNI egress lane is
 [outside it](#deployment-constraints)), so granting a tenant egress — and the
 secret injection that rides it — is always an explicit act. A claim takes its tenant's class when it
@@ -278,7 +285,10 @@ stays denied). A claim with `"egress": false`
 takes no policy at all, whatever its pool's: no door is bound, so the guest's
 dial is refused. Which layers a claim has is settled when it
 is made and kept for its life: a `PUT /v1/pools` that adds or drops a pool
-without a config-file policy changes the claims made after it, never a live one. Secrets are registered separately and
+without a config-file policy changes the claims made after it, never a live one.
+A reload is the one exception: a config-file policy it adds for the key of a
+live tenant claim made without a pool layer applies to that claim, and
+removing it again restores the class alone. Secrets are registered separately and
 referenced by name — the value comes from the environment, never the config
 file: a claim's own `guest: false` env first, the node's second
 ([below](#claim-env-and-secrets)).
