@@ -551,6 +551,31 @@ func TestRouterForwardsFramesSplitAcrossWrites(t *testing.T) {
 	})
 }
 
+func TestRouterRecordsAnIdleFlowOfAClaimWhoseStreamEnded(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		u, r := newRouter(t)
+		var records []FlowRecord
+		var mu sync.Mutex
+		r.Arm(Claim{
+			ID: "c1", Addr: claimAddr, Allow: func(netip.Addr, uint16) bool { return true },
+			Record: func(fr FlowRecord) { mu.Lock(); records = append(records, fr); mu.Unlock() },
+		})
+		u.sent(t)
+		guest := serve(t, r, claimAddr)
+		guestHello(t, guest)
+		sendFrame(t, guest, frame(ProtoUDP, GuestAddr, remote, false))
+		u.sent(t)
+		_ = guest.Close()
+		time.Sleep(idleUDP + sweepEvery)
+		synctest.Wait()
+		mu.Lock()
+		defer mu.Unlock()
+		if len(records) != 1 || records[0].Partial || !records[0].Allowed {
+			t.Fatalf("records %+v, want the idle flow's final record though the claim has no stream", records)
+		}
+	})
+}
+
 func newRouter(t *testing.T) (*fakeUnder, *Router) {
 	t.Helper()
 	u := &fakeUnder{out: make(chan sent, 64), in: make(chan []sent, 16), done: make(chan struct{})}

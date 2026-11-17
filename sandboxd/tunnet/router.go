@@ -226,7 +226,6 @@ func (r *Router) Serve(conn net.Conn, addr netip.Addr) error {
 		return nil
 	}
 	go l.write()
-	go l.sweep()
 	err = l.read(bufio.NewReaderSize(conn, readBuf))
 	if a.detach(l) {
 		a.flows.sweep(time.Now(), true)
@@ -238,16 +237,18 @@ func (r *Router) Serve(conn net.Conn, addr netip.Addr) error {
 	return err
 }
 
-// Run receives VXLAN until ctx ends or the underlay fails, and refreshes every armed claim's announcement.
+// Run receives VXLAN until ctx ends or the underlay fails, refreshes every armed claim's announcement and sweeps its flows.
 func (r *Router) Run(ctx context.Context) error {
 	go func() {
-		tick := time.Tick(refreshEvery)
+		refresh, sweep := time.Tick(refreshEvery), time.Tick(sweepEvery)
 		for {
 			select {
 			case <-ctx.Done():
 				return
-			case <-tick:
+			case <-refresh:
 				r.announceAll()
+			case now := <-sweep:
+				r.sweep(now, false)
 			}
 		}
 	}()
@@ -267,13 +268,7 @@ func (r *Router) Run(ctx context.Context) error {
 
 // EndFlows ends every armed claim's flows and writes their records, so a flow that outlives a stop is recorded up to it.
 func (r *Router) EndFlows() {
-	r.mu.RLock()
-	all := slices.Collect(maps.Values(r.claims))
-	r.mu.RUnlock()
-	now := time.Now()
-	for _, a := range all {
-		a.flows.sweep(now, true)
-	}
+	r.sweep(time.Now(), true)
 }
 
 func (r *Router) Stats() Stats {
@@ -386,6 +381,15 @@ func (r *Router) pool(n int) *sync.Pool {
 
 func (r *Router) put(bp *[]byte) {
 	r.pool(cap(*bp)).Put(bp)
+}
+
+func (r *Router) sweep(now time.Time, all bool) {
+	r.mu.RLock()
+	claims := slices.Collect(maps.Values(r.claims))
+	r.mu.RUnlock()
+	for _, a := range claims {
+		a.flows.sweep(now, all)
+	}
 }
 
 func (r *Router) announceAll() {
@@ -613,18 +617,6 @@ func (l *link) write() {
 				l.close()
 				return
 			}
-		}
-	}
-}
-
-func (l *link) sweep() {
-	tick := time.Tick(sweepEvery)
-	for {
-		select {
-		case <-l.done:
-			return
-		case now := <-tick:
-			l.a.flows.sweep(now, false)
 		}
 	}
 }
