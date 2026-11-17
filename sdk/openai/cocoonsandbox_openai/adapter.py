@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import functools
 import io
 import socket
 import uuid
@@ -144,9 +145,15 @@ class CocoonSandboxClient(BaseSandboxClient[CocoonSandboxClientOptions]):
         options: CocoonSandboxClientOptions,
     ) -> SandboxSession:
         client = Client(options.addr, api_token=options.api_token)
+        claim = asyncio.get_running_loop().run_in_executor(
+            None, functools.partial(client.new, options.template, net=options.net, ttl_seconds=options.ttl_seconds)
+        )
         try:
-            sb = await asyncio.to_thread(client.new, options.template, net=options.net, ttl_seconds=options.ttl_seconds)
-        except BaseException:
+            sb = await asyncio.shield(claim)
+        except BaseException as exc:
+            if isinstance(exc, asyncio.CancelledError):
+                with contextlib.suppress(Exception):
+                    await asyncio.to_thread((await claim).close)
             client.close()
             raise
         try:
