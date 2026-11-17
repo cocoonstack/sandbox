@@ -283,7 +283,6 @@ func smokeGit(ctx context.Context, sb *sandbox.Sandbox) error {
 	return nil
 }
 
-// smokeEgress claims an egress-lane sandbox and reads a repository's status through it.
 func smokeEgress(ctx context.Context, client *sandbox.Client, template string) error {
 	sb, err := client.New(ctx, template, sandbox.WithNetwork(sandbox.NetEgress))
 	if err != nil {
@@ -526,7 +525,6 @@ func smokeTree(ctx context.Context, sb *sandbox.Sandbox) error {
 	return nil
 }
 
-// smokePortForward proves sshd's banner arrives through DialPort and a dead port fails with not_found.
 func smokePortForward(ctx context.Context, sb *sandbox.Sandbox) error {
 	// The step proves the relay, not sshd readiness, so the positive probe retries.
 	var pc *sandbox.PortConn
@@ -550,7 +548,6 @@ func smokePortForward(ctx context.Context, sb *sandbox.Sandbox) error {
 	return nil
 }
 
-// smokeLsp proves the base sandbox answers not_found and a python sandbox serves a pylsp session.
 func smokeLsp(ctx context.Context, client *sandbox.Client, base *sandbox.Sandbox, template string) error {
 	if _, err := base.StartLsp(ctx, "python", ""); !isSilkdKind(err, wire.KindNotFound) {
 		return fmt.Errorf("base StartLsp: %v, want typed not_found", err)
