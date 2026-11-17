@@ -1,6 +1,7 @@
 package pool
 
 import (
+	"cmp"
 	"context"
 	"encoding/binary"
 	"errors"
@@ -68,6 +69,33 @@ func TestReleaseFreesTheOverlayAddress(t *testing.T) {
 	}
 	if doorOpen(sb) {
 		t.Error("the packet door outlived the release")
+	}
+}
+
+func TestAStopWritesTheAddressReleaseTheLogMissed(t *testing.T) {
+	dir, subnet := t.TempDir(), netip.MustParsePrefix("240.0.0.0/4")
+	addrs, err := tunnet.NewLocal(dir, subnet, time.Hour)
+	if err != nil {
+		t.Fatalf("NewLocal: %v", err)
+	}
+	m := tunManager(t, newFakeEngine(), addrs, config.PoolSpec{PoolKey: testKey, Tun: true, Egress: anyPolicy})
+	sb := mustClaim(t, m, testKey)
+	log := filepath.Join(dir, "tun-freed.log")
+	if err = cmp.Or(os.Remove(log), os.Mkdir(log, 0o700)); err != nil {
+		t.Fatalf("block log: %v", err)
+	}
+	if err = m.Release(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
+		t.Fatalf("release: %v", err)
+	}
+	if err = cmp.Or(os.Remove(log), m.FlushClaims()); err != nil {
+		t.Fatalf("stop after the log came back: %v", err)
+	}
+	reopened, err := tunnet.NewLocal(dir, subnet, time.Hour)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	if got, err := reopened.Assign(t.Context(), "other"); err != nil || got == sb.TunAddr {
+		t.Errorf("after a restart the next claim got %s, %v, want an address other than the released %s", got, err, sb.TunAddr)
 	}
 }
 

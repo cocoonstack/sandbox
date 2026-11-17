@@ -138,28 +138,46 @@ func (l *Local) Release(_ context.Context, claimID string, addr netip.Addr) erro
 		whole, compact = l.snapshot(), true
 	}
 	l.mu.Unlock()
-	err := l.persist(whole, compact, addr, now)
+	if compact {
+		return l.rewrite(whole)
+	}
+	f, err := os.OpenFile(l.path, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o600)
+	if err == nil {
+		_, err = f.Write(appendFreed(nil, addr, now))
+		err = cmp.Or(err, f.Sync(), f.Close())
+	}
 	if err != nil {
-		l.mu.Lock()
-		l.compactAt = 0
+		l.markUnwritten()
+		return fmt.Errorf("append %s: %w", freedFile, err)
+	}
+	return nil
+}
+
+func (l *Local) Flush() error {
+	l.io.Lock()
+	defer l.io.Unlock()
+	l.mu.Lock()
+	if l.compactAt != 0 {
 		l.mu.Unlock()
+		return nil
+	}
+	whole := l.snapshot()
+	l.mu.Unlock()
+	return l.rewrite(whole)
+}
+
+func (l *Local) rewrite(whole []byte) error {
+	err := utils.WriteFileSync(l.path, whole, 0o600)
+	if err != nil {
+		l.markUnwritten()
 	}
 	return err
 }
 
-func (l *Local) persist(whole []byte, compact bool, addr netip.Addr, now time.Time) error {
-	if compact {
-		return utils.WriteFileSync(l.path, whole, 0o600)
-	}
-	f, err := os.OpenFile(l.path, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o600)
-	if err != nil {
-		return fmt.Errorf("open %s: %w", freedFile, err)
-	}
-	_, err = f.Write(appendFreed(nil, addr, now))
-	if err = cmp.Or(err, f.Sync(), f.Close()); err != nil {
-		return fmt.Errorf("append %s: %w", freedFile, err)
-	}
-	return nil
+func (l *Local) markUnwritten() {
+	l.mu.Lock()
+	l.compactAt = 0
+	l.mu.Unlock()
 }
 
 func (l *Local) snapshot() []byte {

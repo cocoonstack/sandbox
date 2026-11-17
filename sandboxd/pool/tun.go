@@ -22,6 +22,7 @@ const tunUnconfirmedAfter = 24 * time.Hour
 // tunSeeder is a node-local address store that learns which addresses the loaded claims hold.
 type tunSeeder interface {
 	Seed(held map[string]netip.Addr)
+	Flush() error
 }
 
 // tunReconciler is a cell-shared address store that reports the addresses no node confirmed lately.

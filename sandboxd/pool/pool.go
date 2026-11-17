@@ -580,7 +580,11 @@ func (m *Manager) FlushClaims() error {
 	m.mu.Lock()
 	js := m.store.setSeen(m.claimed, time.Now())
 	m.mu.Unlock()
-	return m.store.commit(js)
+	err := m.store.commit(js)
+	if local, ok := m.tunAddrs.(tunSeeder); ok {
+		err = errors.Join(err, local.Flush())
+	}
+	return err
 }
 
 // SetTemplateNotifier wires the immediate-republish hook; call it before serving starts.
