@@ -200,7 +200,7 @@ mmap`, `no_direct_io: true`): golden build 0.8 s, then 16 warm in 1.9 s
 
 Second of two rounds, both in band; the 16-step e2e smoke (egress lane
 included) passed on the same images first. fs_push steady state measured
-separately (`pushbench`, 128 MiB, 3 runs): 702/741/762 MiB/s against the
+separately (`pullbench -push`, 128 MiB, 3 runs): 702/741/762 MiB/s against the
 ~343 MiB/s of record — the inbound base64 decode now feeds the borrowed
 slice straight to the decoder, and the guest's musl allocator amplifies
 what the codec-level A/B (+6.5% on glibc) understates; a toolchain bump

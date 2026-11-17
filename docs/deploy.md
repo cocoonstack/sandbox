@@ -1306,7 +1306,7 @@ some of them on a node:
 | `credsmoke` | claim credential injection | `credentials-e2e.sh` |
 | `portsmoke`, `guestserver` | the guest-port relay; `guestserver` is its guest listener | `port-e2e.sh` |
 | `androidsmoke`, `browsersmoke` | the android and browser flavors | |
-| `pullbench`, `pushbench`, `rpcbench` | performance measurements | |
+| `pullbench`, `rpcbench` | performance measurements; `pullbench -push` times uploads | |
 
 `scripts/bench.sh` is the published [benchmark](benchmarks.md#reproduce)
 procedure and `scripts/boot-bench.sh` times the boot phases.
