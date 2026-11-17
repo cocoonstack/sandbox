@@ -61,6 +61,8 @@ func (m *Manager) reapOnce(ctx context.Context) {
 				action = reapPause
 			}
 			expired = append(expired, victim{action: action, id: id, sb: sb})
+		case sb.ArchivePending != "" && m.archives != nil:
+			continue
 		default:
 			expired = append(expired, victim{action: reapDestroy, id: id, vmName: sb.VMName, snap: sb.HibernateSnap, tenant: sb.Tenant, deadline: sb.Deadline, sb: sb, holds: m.cancelVolumeRun(sb), tun: sb.TunAddr})
 			m.dropClaimLocked(sb)
