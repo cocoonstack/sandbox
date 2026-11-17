@@ -167,6 +167,21 @@ def test_watcher_error_stays_none_after_close(conn_pair):
     assert events == [] and watcher.error is None
 
 
+def test_a_watcher_closes_its_connection_when_the_stream_ends(conn_pair):
+    conn, guest_sock = conn_pair
+    guest_sock.sendall(json.dumps({"type": "error", "kind": "internal", "message": "overflow"}).encode() + b"\n")
+    with pytest.raises(SilkdError):
+        list(Watcher(conn))
+    assert conn._sock.fileno() == -1, "the ended watch kept its relay open"
+
+
+def test_a_pty_closes_its_connection_at_the_exit_frame(conn_pair):
+    conn, guest_sock = conn_pair
+    guest_sock.sendall(json.dumps({"type": "exit", "code": 0}).encode() + b"\n")
+    assert Pty(sandbox_at("127.0.0.1:1"), conn, 1).read() == b""
+    assert conn._sock.fileno() == -1, "the exited pty kept its relay open"
+
+
 def test_sandbox_timeout_is_both_hierarchies():
     with pytest.raises(SandboxError):
         remaining_timeout(1.0, time.monotonic() - 1, "probe")

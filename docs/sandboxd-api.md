@@ -45,7 +45,8 @@ All bodies are JSON. Four token kinds:
 Endpoints below that say "node API token" accept root or tenant unless
 marked root-only; the operator token only where the endpoint names it. Errors are `{"error": "message"}` with the status codes
 listed per endpoint. Request bodies are capped at 1 MiB; a larger one is
-rejected with `400` and an error beginning `invalid request body`.
+rejected with `400` and an error beginning `invalid request body`, and so is
+a body with a field its endpoint does not declare.
 
 ## Guest errors
 
@@ -347,8 +348,9 @@ duplicate fields, and trailing JSON return 400.
 
 Success is 204. An identical normalized registration is idempotent. A different
 binding, changed fields, a static name or cleaned path collision, or a name a
-claim still holds returns 409. Each change is an `op:"volumes"` audit record
-naming the volume added or removed.
+claim still holds returns 409. A PUT that adds a name and every successful
+DELETE, also of an absent name, write an `op:"volumes"` audit record naming the
+volume.
 Invalid fields return 400. GET keeps its existing projection without host paths
 or tenant lists. Runtime entries support the existing live volume API.
 
@@ -1055,7 +1057,10 @@ checkpoint TTL ages it out, so an id-holder can still branch it for that
 window; [placement lifecycle](cluster.md#delete-is-eventual-not-a-fleet-wide-revocation)
 has the bound and why heal requires a nonzero, fleet-matching TTL. The s3
 checkpoint store skips the broadcast: every node already resolves every
-record directly, so there is no replica to chase. `?no_forward=1` marks a
+record directly, so there is no replica to chase. A mesh without a
+`cluster_key` skips it too: it has no healed replica, and the broadcast would
+send the `api_token` to addresses learned from unauthenticated gossip.
+`?no_forward=1` marks a
 delete already arriving from another node's own broadcast, so it is not
 itself re-broadcast (loop prevention); it is an internal parameter, not one
 an SDK caller should set.

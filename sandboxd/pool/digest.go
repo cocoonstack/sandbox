@@ -16,8 +16,7 @@ import (
 
 // clusterDigest fingerprints the must-match config, its egress layer and the live tenant records; without cluster_key it omits token hashes.
 func clusterDigest(c *config.Config, caFingerprint string, records []tenants.TenantRecord) string {
-	records = slices.Clone(records)
-	slices.SortFunc(records, func(a, b tenants.TenantRecord) int { return strings.Compare(a.Name, b.Name) })
+	records = slices.SortedFunc(slices.Values(records), func(a, b tenants.TenantRecord) int { return strings.Compare(a.Name, b.Name) })
 	eg := egressFingerprintOf(c)
 	if c.Mesh != nil {
 		if key, _ := c.Mesh.DecodedKey(); key != nil {

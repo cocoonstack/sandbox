@@ -95,6 +95,7 @@ start() {
   "$DATA/sandboxd" -config "$DATA/config.json" >>"$DATA/daemon.log" 2>&1 &
   DAEMON_PID=$!
   for _ in $(seq 1 40); do curl -sf "http://$ADDR/healthz" >/dev/null 2>&1 && break; sleep 0.5; done
+  curl -sf "http://$ADDR/healthz" >/dev/null || { echo "daemon never came up"; exit 1; }
 }
 
 echo "== start sandboxd (intercept pool)"

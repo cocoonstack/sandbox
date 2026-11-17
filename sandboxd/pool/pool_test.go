@@ -443,6 +443,7 @@ func TestSetPoolsGrowShrinkAndDrain(t *testing.T) {
 		if err := m.SetPools(t.Context(), []config.PoolSpec{{PoolKey: testKey, Warm: 2}}); err != nil {
 			t.Fatalf("SetPools grow: %v", err)
 		}
+		m.refillOnce(t.Context())
 		waitFor(t, func() bool {
 			infos, _ := m.Info()
 			return len(infos) == 1 && infos[0].Target == 2 && infos[0].Warm == 2 && infos[0].Golden
@@ -2686,7 +2687,7 @@ func seedGolden(t *testing.T, m *Manager, key types.PoolKey, imageID string) str
 
 func ckExists(t *testing.T, m *Manager, ck string) bool {
 	t.Helper()
-	_, _, _, err := m.ckpts.Fetch(t.Context(), ck) //nolint:dogsled
+	_, _, _, err := m.ckpts.Fetch(t.Context(), ck) //nolint:dogsled // only the fetch error matters
 	if err != nil && !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("fetch %s: %v", ck, err)
 	}

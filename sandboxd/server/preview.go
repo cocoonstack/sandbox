@@ -114,15 +114,8 @@ func (p *PreviewServer) proxyLocal(w http.ResponseWriter, r *http.Request, claim
 			pr.Out.URL.Host = fmt.Sprintf("%s:%d", claims.ID, claims.Port)
 			pr.Out.URL.Path = "/" + strings.TrimPrefix(pr.In.URL.Path, "/p/"+r.PathValue("token")+"/")
 			// The raw form drops the same two segments however the client spelled them, so %2F survives
-			raw := pr.In.URL.EscapedPath()
-			for range 2 {
-				if i := strings.IndexByte(raw[1:], '/'); i >= 0 {
-					raw = raw[i+1:]
-				} else {
-					raw = "/"
-				}
-			}
-			pr.Out.URL.RawPath = raw
+			pr.Out.URL.RawPath = "/" + strings.SplitN(pr.In.URL.EscapedPath(), "/", 4)[3]
+			pr.Out.Header.Del(forwardedHeader)
 			// Browser credentials for the preview domain must not reach guest code
 			pr.Out.Header.Del("Cookie")
 			pr.Out.Header.Del("Authorization")
@@ -149,6 +142,7 @@ func (p *PreviewServer) forward(w http.ResponseWriter, r *http.Request, owner st
 	rp := &httputil.ReverseProxy{
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			pr.SetURL(target)
+			pr.Out.Host = pr.In.Host
 			pr.Out.Header.Set(forwardedHeader, p.owner)
 		},
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
@@ -186,7 +180,7 @@ func (s *Server) handlePreview(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotImplemented, "preview not configured")
 		return
 	}
-	req, ok := decodeBody[PreviewRequest](w, r)
+	req, ok := decodeBodyStrict[PreviewRequest](w, r)
 	if !ok {
 		return
 	}

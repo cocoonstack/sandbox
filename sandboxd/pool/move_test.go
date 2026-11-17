@@ -591,6 +591,7 @@ func TestMoveWhoseRowDeleteReplyIsLostKeepsTheOnlyGuest(t *testing.T) {
 	mc := newMoveClusterWith(t, func(c *failoverCluster) { c.replicate = replicateEvery })
 	sb := mustClaim(t, mc.s, testKey)
 	replicateNow(t, mc.s, sb)
+	replica := mc.s.replicaOf(sb)
 	mc.s.archives = &hookRegistry{Registry: mc.reg, loseDeleteReply: true}
 	if _, err := mc.s.Move(t.Context(), sb.ID, "b", time.Minute); !errors.Is(err, archives.ErrUnavailable) {
 		t.Fatalf("move: %v, want the lost reply's error", err)
@@ -598,6 +599,9 @@ func TestMoveWhoseRowDeleteReplyIsLostKeepsTheOnlyGuest(t *testing.T) {
 	assertStillOnSource(t, mc, sb)
 	if _, ok, _ := mc.reg.Get(t.Context(), sb.ID); ok {
 		t.Fatal("the delete did not land under its lost reply")
+	}
+	if ckExists(t, mc.s, replica) {
+		t.Error("the failed move kept the replica its claim no longer names")
 	}
 	replicateNow(t, mc.s, sb)
 	if _, held := mc.s.byID(sb.ID); !held {
@@ -699,6 +703,40 @@ func TestMoveRestartAfterTheConsumeKeepsTheClaim(t *testing.T) {
 			defer eng.mu.Unlock()
 			if !slices.Contains(eng.aborts, "sbx-moved:s1") || slices.Contains(eng.removes, "sbx-moved") {
 				t.Errorf("aborts %v removes %v, want the series aborted and the VM kept", eng.aborts, eng.removes)
+			}
+		})
+	}
+}
+
+func TestMoveOfAClaimWhoseWakeLeftATombstoneKeepsTheGuestOnTheTarget(t *testing.T) {
+	for name, replicate := range map[string]int{"through the target's next replica round": replicateEvery, "through the target's restart": 0} {
+		t.Run(name, func(t *testing.T) {
+			mc := newMoveClusterWith(t, func(c *failoverCluster) { c.replicate = replicate })
+			sb := mustClaim(t, mc.s, testKey)
+			mustArchive(t, mc.s, sb)
+			mc.s.ckpts = &failingDeleteStore{Store: mc.s.ckpts, attempts: make(chan string, 8)}
+			if _, _, _, err := mc.s.WakeAgentSocket(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
+				t.Fatalf("wake: %v", err)
+			}
+			if rec, ok, _ := mc.reg.Get(t.Context(), sb.ID); !ok || !rec.Consumed || rec.Owner != "a" {
+				t.Fatalf("setup: row %+v %v, want the tombstone the wake left", rec, ok)
+			}
+			if _, err := mc.s.Move(t.Context(), sb.ID, "b", time.Minute); err != nil {
+				t.Fatalf("move: %v", err)
+			}
+			if rec, ok, _ := mc.reg.Get(t.Context(), sb.ID); ok {
+				t.Errorf("a row of %s (consumed %v) outlived the move", rec.Owner, rec.Consumed)
+			}
+			target := mc.t
+			if moved, ok := target.byID(sb.ID); ok && replicate > 0 {
+				if err := target.replicate(t.Context(), moved); err != nil {
+					t.Errorf("the target's replica round: %v", err)
+				}
+			} else {
+				target = mc.restartReconciled(t, target)
+			}
+			if _, held := target.byID(sb.ID); !held {
+				t.Error("the target dropped the only guest over the source's tombstone")
 			}
 		})
 	}

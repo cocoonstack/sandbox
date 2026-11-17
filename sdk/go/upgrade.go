@@ -64,8 +64,10 @@ func (c *Client) dialAgent(ctx context.Context, addr, id, token string) (*upgrad
 		return nil, errors.New("agent upgrade: id or token contains a control character")
 	}
 	scheme, authority, target := agentEndpoint(addr, c.scheme)
-	d := net.Dialer{Timeout: agentDialTimeout}
-	raw, err := d.DialContext(ctx, "tcp", target)
+	dctx, cancel := context.WithTimeout(ctx, agentDialTimeout)
+	defer cancel()
+	var d net.Dialer
+	raw, err := d.DialContext(dctx, "tcp", target)
 	if err != nil {
 		return nil, markGone(err, id, addr)
 	}
@@ -79,7 +81,7 @@ func (c *Client) dialAgent(ctx context.Context, addr, id, token string) (*upgrad
 		}
 		cfg.NextProtos = []string{"http/1.1"}
 		secured := tls.Client(raw, cfg)
-		if err = secured.HandshakeContext(ctx); err != nil {
+		if err = secured.HandshakeContext(dctx); err != nil {
 			_ = raw.Close()
 			return nil, fmt.Errorf("agent TLS handshake: %w", cmp.Or(ctx.Err(), err))
 		}

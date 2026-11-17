@@ -70,8 +70,38 @@ func TestRouterAnnouncesRewritesAndPassesOnlyReplies(t *testing.T) {
 		synctest.Wait()
 		mu.Lock()
 		defer mu.Unlock()
-		if len(records) != 2 {
-			t.Errorf("recorded %d flows after the disarm, want 2", len(records))
+		if len(records) != 3 {
+			t.Errorf("recorded %d flows after the disarm, want 3", len(records))
+		}
+	})
+}
+
+func TestRouterRecordsADeniedFlowToTheOverlayAndTheGuestRange(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		u, r := newRouter(t)
+		var records []FlowRecord
+		var mu sync.Mutex
+		r.Arm(Claim{
+			ID: "c1", Addr: claimAddr,
+			Allow:  func(netip.Addr, uint16) bool { return true },
+			Record: func(fr FlowRecord) { mu.Lock(); records = append(records, fr); mu.Unlock() },
+		})
+		u.sent(t)
+		guest := serve(t, r, claimAddr)
+		guestHello(t, guest)
+		sendFrame(t, guest, frame(ProtoTCP, GuestAddr, netip.MustParseAddr("100.80.0.5"), false))
+		sendFrame(t, guest, frame(ProtoUDP, GuestAddr, netip.MustParseAddr("100.64.0.1"), false))
+		synctest.Wait()
+		if got := r.Stats().Drops[DropPolicy]; got != 2 || len(u.out) != 0 {
+			t.Fatalf("policy drops = %d with %d datagrams sent, want 2 and none", got, len(u.out))
+		}
+		_ = guest.Close()
+		r.Disarm(claimAddr)
+		synctest.Wait()
+		mu.Lock()
+		defer mu.Unlock()
+		if len(records) != 2 || records[0].Allowed || records[1].Allowed {
+			t.Errorf("records %+v, want a denied flow for each probe", records)
 		}
 	})
 }

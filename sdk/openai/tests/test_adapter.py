@@ -9,7 +9,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
 import pytest
-from cocoonsandbox import APIError, ProtocolError, SilkdError
+from cocoonsandbox import APIError, Client, ProtocolError, SilkdError
 from cocoonsandbox_openai import CocoonSandboxClient, CocoonSandboxClientOptions, CocoonSandboxSessionState
 
 
@@ -241,6 +241,31 @@ def test_create_closes_its_client_when_the_claim_fails(node, monkeypatch):
 
     asyncio.run(go())
     assert len(closed) == 1, closed
+
+
+def test_a_cancelled_create_releases_the_claim_it_made(node, monkeypatch):
+    claiming, finish = threading.Event(), threading.Event()
+    claim = Client.new
+    released = []
+
+    def slow_claim(self, *args, **kwargs):
+        claiming.set()
+        assert finish.wait(5), "the claim was never let through"
+        return claim(self, *args, **kwargs)
+
+    monkeypatch.setattr("cocoonsandbox.Client.new", slow_claim)
+    monkeypatch.setattr("cocoonsandbox.Sandbox.close", lambda self: released.append(self.id))
+
+    async def go():
+        create = asyncio.ensure_future(CocoonSandboxClient().create(options=CocoonSandboxClientOptions(addr=node)))
+        await asyncio.to_thread(claiming.wait, 5)
+        create.cancel()
+        finish.set()
+        with pytest.raises(asyncio.CancelledError):
+            await create
+
+    asyncio.run(go())
+    assert released == ["sb_1"], released
 
 
 async def _session_with(node, monkeypatch, fake):

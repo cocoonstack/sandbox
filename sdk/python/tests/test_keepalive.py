@@ -220,6 +220,21 @@ def test_find_retries_at_the_new_owner(spawn_node, dead_addr, relay, retired, st
     assert agent.upgrades == 1
 
 
+def test_run_keeps_one_deadline_across_a_move(monkeypatch, spawn_node, dead_addr, relay):
+    agent, _ = relay()
+    directory = spawn_node({("GET", "/v1/sandboxes/sb_1/owner"): lambda body, path: (200, {"owner_addr": agent.addr})})
+    sb = Client(directory, keep_alive=0).attach(dead_addr, "sb_1", "tok")
+    dial, deadlines = sb._dial, []
+
+    def recording_dial(deadline=None):
+        deadlines.append(deadline)
+        return dial(deadline)
+
+    monkeypatch.setattr(sb, "_dial", recording_dial)
+    assert sb.run(["echo", "42"], timeout=30) == 0
+    assert len(deadlines) == 2 and deadlines[0] == deadlines[1], deadlines
+
+
 def test_a_callback_error_tagged_for_this_sandbox_is_not_replayed(spawn_node):
     owner, other = FakeAgent(), FakeAgent()
     try:

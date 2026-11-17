@@ -119,17 +119,16 @@ func (m *Manager) destroyAll(ctx context.Context, names []string) *sync.WaitGrou
 }
 
 func (m *Manager) dropSnapAfterTransition(ctx context.Context, sb *types.Sandbox, snap string) {
-	if snap == "" {
-		return
-	}
 	if sb.Transition.TryLock() {
 		defer sb.Transition.Unlock()
+		m.dropStale(ctx, sb)
 		m.dropSnap(ctx, snap)
 		return
 	}
 	go func() {
 		sb.Transition.Lock()
 		defer sb.Transition.Unlock()
+		m.dropStale(ctx, sb)
 		m.dropSnap(ctx, snap)
 	}()
 }

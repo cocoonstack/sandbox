@@ -26,9 +26,8 @@ func (m *Manager) checkDisk(ctx context.Context) {
 			failed = true
 			continue
 		}
-		if free < v.diskReserve {
+		if free < v.diskReserve && !low {
 			low, lowDir, lowFree = true, dir, free
-			break
 		}
 	}
 	if !failed && m.diskStatFailed.Swap(false) {

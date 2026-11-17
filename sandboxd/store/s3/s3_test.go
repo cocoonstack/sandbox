@@ -1010,6 +1010,19 @@ func TestFetchRejectsAnInvalidManifestBeforeWritingAFile(t *testing.T) {
 	}
 }
 
+func TestPublishRejectsARecordItsFetchWouldRefuse(t *testing.T) {
+	const id = "ck_00000000000000a5"
+	fake, st := newFakeStore(t)
+	staging, _ := stageSparseRecord(t, st, id, metaJSON(id), store.MaxRecordBytes+1, nil)
+	err := st.Publish(t.Context(), staging, id, "")
+	if err == nil || !strings.Contains(err.Error(), "outside [0,") {
+		t.Fatalf("Publish = %v, want the record bound Fetch enforces", err)
+	}
+	if keys := fake.keys(); len(keys) != 0 {
+		t.Errorf("a refused publish wrote %v, want no manifest and no meta", keys)
+	}
+}
+
 type fakeRequest struct {
 	method string
 	key    string

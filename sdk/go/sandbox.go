@@ -146,7 +146,7 @@ func (s *Sandbox) Exec(ctx context.Context, argv ...string) (string, error) {
 	return stdout.String(), nil
 }
 
-// Run executes cmd in the sandbox, streaming stdio over one relayed silkd connection, and returns the exit code; a ctx that ends first kills the command.
+// Run executes cmd in the sandbox, streaming stdio over one relayed silkd connection, and returns the exit code; a ctx that ends first kills the command, except a Session command, which has no pid and runs on.
 func (s *Sandbox) Run(ctx context.Context, cmd Cmd) (int, error) {
 	if len(cmd.Argv) == 0 {
 		return 0, errors.New("empty argv")
@@ -376,7 +376,7 @@ func (s *Sandbox) dial(ctx context.Context) (*agentConn, error) {
 	return newAgentConn(raw), nil
 }
 
-// markGone tags an owner's 404 or refused dial, after which nothing reached it; errors from the caller's own writers stay untagged.
+// markGone tags an owner's 404 or refused dial, after which nothing reached it.
 func markGone(err error, id, addr string) error {
 	ae, ok := errors.AsType[*APIError](err)
 	if ok && ae.Status == http.StatusNotFound || !ok && errors.Is(err, syscall.ECONNREFUSED) {

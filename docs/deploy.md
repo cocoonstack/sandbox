@@ -118,7 +118,7 @@ sandboxd reads one JSON file (`-config`, default
   "mesh": {
     "node_id": "node-a",
     "bind": "10.0.0.5:7946",
-    "join": ["10.0.0.6:7946"],
+    "join": ["10.0.0.5:7946", "10.0.0.6:7946"],
     "cluster_key": "MDEyMzQ1Njc4OWFiY2RlZg=="
   },
   "pools": [
@@ -160,9 +160,9 @@ the intersection of the two.
 | `egress_usage_interval_seconds` | 0 | with `egress_usage_bytes`, also append an `egress_bytes` event at this interval for each allowed tunnel, request or tun flow that lasts longer, with the bytes since its previous event, so the events of one connection sum to the single event 0 writes ([details](egress.md#byte-usage)); tun flows are checked every 10 s. Set without `egress_usage_bytes`, or negative, the config does not load. Applies to claims armed after a reload |
 | `tun` | absent | turns on the [advanced network mode](advanced-network.md#configuration): the overlay subnet, the VXLAN socket, the exits and per-claim limits |
 | `egress_ca` | unset | [HTTPS-interception](egress.md#https-interception) PKI: `root_cert` (the cell's root baked into intercepted guests; may bundle old+new roots during rotation) plus this node's `intermediate_cert`/`intermediate_key` from `sandboxd ca issue-intermediate`. Required when any pool rule sets `intercept` |
-| `api_token` | unset | the root credential: when set, guards the node-level endpoints (Bearer) with full access, including release-by-id cleanup. Per-sandbox tokens guard ordinary sandbox-scoped calls. Shared within a [cell](cluster.md#cells); restart only |
+| `api_token` | unset | the root credential: when set, guards the node-level endpoints (Bearer) with full access, including release-by-id cleanup. Unset, every node-level endpoint answers any caller with root authority, so set it on every node a client other than root can reach. Per-sandbox tokens guard ordinary sandbox-scoped calls. Shared within a [cell](cluster.md#cells); restart only |
 | `api_token_next` | unset | a second root credential for a [rolling rotation](#rotating-api_token-and-operator_token): the node accepts it exactly as it accepts `api_token`, and the audit `caller` stays `root`. Peer calls still send `api_token`. Needs `api_token`; must differ from `api_token`, `operator_token` and `operator_token_next`; a tenant token must differ from it (the tenant file is checked at boot, every tenant write is checked). Not part of the cluster digest; restart only |
-| `operator_token` | unset | a second node credential for a public control plane: root's authority on the claim lifecycle (claim without `volumes`, list, read by id, stats per claim and for the node, release, hibernate, wake, renew, env, port relay, exec, owner and adoption), the tenant API, `GET /v1/info` and `GET /v1/peers`, and `403` everywhere else, including a claim that names `volumes`. It reaches every claim's data: it reads any claim's token by id (recorded as op `token` with `audit_log` on) and execs in any claim. Through the tenant API it holds every tenant's authority: it can mint or re-key any tenant and act as it, including volume claims that tenant may make and fork, checkpoint and preview with a claim token. It holds no node or cluster configuration power: it cannot change pools, config, drain, cordon, moves, volumes, tun or instance metadata, or read usage, metrics or checkpoint blobs. Needs `api_token` and must differ from it; a tenant token must differ from it (the tenant file is checked at boot, every tenant write is checked). Shared within a cell like `api_token`, and covered by the cluster digest when set and `mesh.cluster_key` is set; restart only |
+| `operator_token` | unset | a second node credential for a public control plane: root's authority on the claim lifecycle (claim without `volumes`, list, read by id, stats per claim and for the node, release, hibernate, wake, renew, balloon, env, port relay, exec, owner and adoption), the tenant API, `GET /v1/info` and `GET /v1/peers`, and `403` everywhere else, including a claim that names `volumes`. It reaches every claim's data: it reads any claim's token by id (recorded as op `token` with `audit_log` on) and execs in any claim. Through the tenant API it holds every tenant's authority: it can mint or re-key any tenant and act as it, including volume claims that tenant may make and fork, checkpoint and preview with a claim token. It holds no node or cluster configuration power: it cannot change pools, config, drain, cordon, moves, volumes, tun, egress limits or instance metadata, or read usage, metrics or checkpoint blobs. Needs `api_token` and must differ from it; a tenant token must differ from it (the tenant file is checked at boot, every tenant write is checked). Shared within a cell like `api_token`, and covered by the cluster digest when set and `mesh.cluster_key` is set; restart only |
 | `operator_token_next` | unset | a second operator credential for a [rolling rotation](#rotating-api_token-and-operator_token): the node accepts it exactly as it accepts `operator_token`, on the same routes, and the audit `caller` stays `operator`. Needs `operator_token`; must differ from `api_token`, `api_token_next` and `operator_token`; a tenant token must differ from it (the tenant file is checked at boot, every tenant write is checked). Not part of the cluster digest; restart only |
 | `meta_store` | unset | `{"kind": "pg", "dsn_env": "SANDBOXD_PG_DSN"}`: keep the tenant set in the [cell's](cluster.md#cells) PostgreSQL database instead of each node's `tenants.json` (see [shared tenant database](#shared-tenant-database)). `dsn_env` names the node env holding the connection string. An optional `cell` also keeps the API-applied pool set there, one per cell, instead of in each node's `pools.json` (see [shared pool set](#shared-pool-set)); without it pool targets stay per node. An optional `usage: true` also lands this node's usage journal in one shared table and serves [`GET /v1/usage`](sandboxd-api.md#get-v1usage) from it (see [shared usage table](#shared-usage-table)). Needs `api_token`. Restart only |
 | `max_fork_count` | 16 | children a single `fork` may create; each is a full-RAM VM, so this bounds one request's memory blast radius to the node's capacity |
@@ -550,7 +550,7 @@ here validates on load:
   "mesh": {
     "node_id": "node-a",
     "bind": "10.0.0.5:7946",
-    "join": ["10.0.0.6:7946"],
+    "join": ["10.0.0.5:7946", "10.0.0.6:7946"],
     "cluster_key": "MDEyMzQ1Njc4OWFiY2RlZg=="
   },
 
@@ -718,7 +718,12 @@ run at once on a node. A save or hibernate copies the writable disk while the
 guest is paused: a reflink takes milliseconds, but on a run dir without reflink
 (ext4, tmpfs) it is a full copy of the copy-on-write disk. A call that
 dials a guest gives up after 10 s, since a paused or wedged guest never answers,
-and gets `502`.
+and gets `502`. A started VM must answer silkd within a deadline, or the start
+fails and the VM is destroyed: 5 s for a warm refill, 15 s for a clone on a
+pool miss, a fork of a running sandbox and a live-move target, 60 s for a start
+from an aged snapshot (a hibernate or archive wake, a checkpoint or
+promoted-template claim, a fork of a hibernated sandbox), and 90 s for a cold
+boot, a golden build and a `vmm_restart` cold restart.
 
 ### Dead VMMs and host restarts
 
@@ -1193,7 +1198,8 @@ all at once or not at all. Every field falls into one of three classes:
 Effects on what already runs:
 
 - **Egress changes** reach live claims on their next request or connection;
-  open tunnels keep their path. A reload that removes the pool policy live
+  open tunnels keep their path, and a live [tun](advanced-network.md) flow
+  keeps its first packet's verdict. A reload that removes the pool policy live
   claims still use, by dropping the pool's entry or its `egress` block, is
   refused with the pool and the claim count: keep the entry until those claims
   are released. A claim whose tenant class a reload removes is denied
@@ -1228,12 +1234,13 @@ Effects on what already runs:
   VMs, so the next clone carries the new settings. Live claims and their VMs
   are untouched. A golden that was building during the reload is discarded
   and rebuilt.
-- **Interception**: turning `intercept` on is refused for a key this node has
-  already served (its guests do not trust the CA) and on a node that loaded
-  no `egress_ca` at boot. Templates and checkpoints of the key captured
-  elsewhere do not trust the CA either, so turn interception on under a new
-  pool key. Changing which hosts an already-intercepting pool intercepts
-  reloads normally.
+- **Interception**: turning `intercept` on is refused for a key this node
+  pools or holds a live claim of (its guests do not trust the CA) and on a
+  node that loaded no `egress_ca` at boot. Templates and checkpoints of the
+  key, captured here or elsewhere, do not trust the CA either and the reload
+  does not check for them, so turn interception on under a new pool key.
+  Changing which hosts an already-intercepting pool intercepts reloads
+  normally.
 - **Environment values**: `value_env` and `egress_upstream_env` name variables
   in sandboxd's own environment, which only a restart changes. A reload can
   point at a different variable, but only one that was already set when
@@ -1391,8 +1398,9 @@ exits. The whole mechanism is in sandboxd:
 - **Serving**: any node's preview listener verifies the token (no shared
   state), then reverse-proxies to the guest port over the relay if it owns
   the sandbox, or forwards over HTTP to the owner node's `advertise_addr`
-  otherwise. A released sandbox is gone from the claim map, so its URL stops
-  resolving — revocation is the liveness lookup, not a list.
+  otherwise; the guest sees the browser's `Host` either way. A released
+  sandbox is gone from the claim map, so its URL stops resolving —
+  revocation is the liveness lookup, not a list.
 - **The public entry point is a commodity dumb proxy.** Because any node
   can accept and forward, front the nodes with whatever terminates TLS and
   round-robins: a cloud HTTPS load balancer with a managed wildcard cert

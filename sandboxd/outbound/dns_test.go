@@ -164,7 +164,7 @@ func TestADisarmedResolverDropsAQueryItReadsAfterTheDisarm(t *testing.T) {
 	})
 	for range 20 {
 		ctx, cancel := context.WithCancel(t.Context())
-		r := newResolver(ctx, h, func(DNSEvent) {})
+		r := newResolver(ctx, h, new(atomic.Bool).Load, func(DNSEvent) {})
 		guest, door := net.Pipe()
 		cancel()
 		served := make(chan struct{})
@@ -198,7 +198,7 @@ func TestADisarmLandingWhileAQueryIsAnsweredWritesNoReplyAndRecordsNoFailure(t *
 				}
 			})
 			var events []DNSEvent
-			r := newResolver(ctx, h, func(ev DNSEvent) {
+			r := newResolver(ctx, h, new(atomic.Bool).Load, func(ev DNSEvent) {
 				events = append(events, ev)
 				if during == "record" {
 					cancel()
@@ -346,6 +346,40 @@ func TestDNSDoorRefusesAQueryFloodPastItsBucket(t *testing.T) {
 	}
 }
 
+func TestAFencedNodeRefusesDNSQueriesOfItsReplicatedClaimsOnly(t *testing.T) {
+	upstream := newFakeNameserver(t)
+	var fenced atomic.Bool
+	var asked atomic.Int64
+	h := newHost(t, &fakeEngine{}, poolConfig(testKey, dnsPolicy), func(o *Options) {
+		o.Nameservers = func() []string {
+			asked.Add(1)
+			return []string{upstream}
+		}
+		o.Fenced = fenced.Load
+	})
+	replicated := outboundtest.VsockSandbox(t, "sb_replicated", testKey)
+	replicated.Replicated = true
+	plain := outboundtest.VsockSandbox(t, "sb_plain", testKey)
+	for _, sb := range []*types.Sandbox{replicated, plain} {
+		if err := h.ArmProxy(t.Context(), sb); err != nil {
+			t.Fatalf("arm proxy: %v", err)
+		}
+		t.Cleanup(func() { h.Disarm(sb.ID, true) })
+	}
+	conn := dialDNS(t, replicated)
+	fenced.Store(true)
+	if msg := exchangeDoor(t, conn, "public.test."); msg.RCode != dnsmessage.RCodeRefused || asked.Load() != 0 {
+		t.Errorf("a fenced node answered a replicated claim %v after asking %d nameservers, want REFUSED and none asked", msg.RCode, asked.Load())
+	}
+	if got := addresses(queryDoor(t, plain, "public.test.")); len(got) != 2 {
+		t.Errorf("a fenced node answered an unreplicated claim %v, want its two addresses", got)
+	}
+	fenced.Store(false)
+	if got := addresses(exchangeDoor(t, conn, "public.test.")); len(got) != 2 {
+		t.Errorf("a lifted fence answered the replicated claim %v, want its two addresses", got)
+	}
+}
+
 func TestDNSDoorDropsAndCountsMalformedQueries(t *testing.T) {
 	upstream := newFakeNameserver(t)
 	h := newHost(t, &fakeEngine{}, poolConfig(testKey, dnsPolicy), func(o *Options) {
@@ -410,7 +444,7 @@ func FuzzDNSDoor(f *testing.F) {
 		f.Add(seed)
 	}
 	f.Fuzz(func(t *testing.T, stream []byte) {
-		r := newResolver(t.Context(), h, func(DNSEvent) {})
+		r := newResolver(t.Context(), h, new(atomic.Bool).Load, func(DNSEvent) {})
 		r.queries.SetLimit(rate.Inf)
 		conn := &fuzzConn{in: bytes.NewReader(stream)}
 		before, sent := h.DNSMalformed(), forwarded.Load()

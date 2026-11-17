@@ -32,10 +32,11 @@ import (
 const (
 	idleConnTimeout = 90 * time.Second
 	// maxIdleConns bounds the upstream pool per sandbox; a guest walking many hosts cannot park a descriptor per host.
-	maxIdleConns  = 64
-	maxInjectBody = 64 << 10
-	scrubChunk    = 16 << 10
-	maxHostLen    = 253
+	maxIdleConns   = 64
+	maxHeaderBytes = 64 << 10
+	maxInjectBody  = 64 << 10
+	scrubChunk     = 16 << 10
+	maxHostLen     = 253
 
 	refusalRate  = 10
 	refusalBurst = 100
@@ -181,7 +182,7 @@ func New(policy Evaluator, secrets Secrets, ca *CA, router Router, audit AuditFu
 	}
 	p.scope, p.endScope = context.WithCancel(context.Background())
 	// The stdlib default of 2 idle conns per host re-dials bursty same-host traffic.
-	pools := &connPools{tr: &http.Transport{DialContext: direct, MaxIdleConns: maxIdleConns, MaxIdleConnsPerHost: 8, IdleConnTimeout: idleConnTimeout, DisableCompression: true}, routed: map[routeKey]*http.Transport{}}
+	pools := &connPools{tr: &http.Transport{DialContext: direct, MaxIdleConns: maxIdleConns, MaxIdleConnsPerHost: 8, IdleConnTimeout: idleConnTimeout, MaxResponseHeaderBytes: maxHeaderBytes, DisableCompression: true}, routed: map[routeKey]*http.Transport{}}
 	if ca != nil {
 		pools.mitm = pools.tr.Clone()
 		pools.mitm.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12}
@@ -200,7 +201,7 @@ func (p *Proxy) OnTransfer(f TransferFunc) { p.transfer = f }
 func (p *Proxy) RecordEnds() { p.ends = true }
 
 func (p *Proxy) Server() *http.Server {
-	return &http.Server{Handler: p, ReadHeaderTimeout: interceptTimeout, IdleTimeout: idleConnTimeout}
+	return &http.Server{Handler: p, ReadHeaderTimeout: interceptTimeout, IdleTimeout: idleConnTimeout, MaxHeaderBytes: maxHeaderBytes}
 }
 
 // NoRxSplice copies upstream bytes to the guest in user space; call it before serving.
@@ -322,6 +323,7 @@ func (p *Proxy) serveConnect(w http.ResponseWriter, r *http.Request) {
 	}
 	defer func() { _ = upstream.Close() }()
 	if !p.track(scope, upstream) {
+		denied(w, host)
 		return
 	}
 	defer p.untrack(upstream)

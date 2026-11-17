@@ -373,7 +373,7 @@ func TestSweepReclaimsOnlyAgedUncommittedGenerations(t *testing.T) {
 		t.Fatalf("read staged meta: %v", err)
 	}
 	backdate(t, filepath.Join(staging, store.ExportDir))
-	commitBlocker := filepath.Join(root, publishID, store.MetaFile+".tmp")
+	commitBlocker := filepath.Join(root, publishID, store.MetaFile)
 	if mkdirErr := os.MkdirAll(commitBlocker, 0o750); mkdirErr != nil {
 		t.Fatalf("block meta commit: %v", mkdirErr)
 	}
@@ -381,6 +381,9 @@ func TestSweepReclaimsOnlyAgedUncommittedGenerations(t *testing.T) {
 		t.Fatal("publish with blocked meta commit succeeded")
 	}
 	fresh := filepath.Join(root, publishID, store.ExportGen(meta))
+	if removeErr := os.RemoveAll(commitBlocker); removeErr != nil {
+		t.Fatalf("remove commit blocker: %v", removeErr)
+	}
 
 	if sweepErr := sweeper.SweepStaging(); sweepErr != nil {
 		t.Fatalf("sweep old: %v", sweepErr)
@@ -389,9 +392,6 @@ func TestSweepReclaimsOnlyAgedUncommittedGenerations(t *testing.T) {
 	assertPresentf(t, filepath.Join(root, testID), "orphan record shell was removed")
 	assertPresentf(t, fresh, "publishing generation was swept")
 
-	if removeErr := os.RemoveAll(commitBlocker); removeErr != nil {
-		t.Fatalf("remove commit blocker: %v", removeErr)
-	}
 	mustPublish(t, writer, publishID, "fresh")
 	dir, gotMeta, digest := mustFetch(t, writer, publishID)
 	if string(gotMeta) != storetest.MetaJSON("fresh") {
@@ -475,6 +475,29 @@ func TestSweepGenerationsToleratesConcurrentDelete(t *testing.T) {
 	})
 	if err := g.Wait(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestConcurrentPublishesOfOneRecordCommitAWholeMeta(t *testing.T) {
+	root := t.TempDir()
+	reader := newStore(t, root)
+	metaIDs := []string{"a", "bb", "a-much-longer-meta-id", "dddd"}
+	for round := range 25 {
+		id := fmt.Sprintf("ck_%016x", round)
+		var g errgroup.Group
+		for _, metaID := range metaIDs {
+			st := newStore(t, root)
+			staging := stagedRecord(t, st, id, metaID)
+			g.Go(func() error { return st.Publish(t.Context(), staging, id, "") })
+		}
+		if err := g.Wait(); err != nil {
+			t.Fatalf("round %d: %v", round, err)
+		}
+		dir, meta, _ := mustFetch(t, reader, id)
+		content, err := os.ReadFile(filepath.Join(dir, "disk.img"))
+		if err != nil || string(meta) != storetest.MetaJSON(string(content)) {
+			t.Fatalf("round %d: committed meta %q over export %q, %v", round, meta, content, err)
+		}
 	}
 }
 

@@ -218,7 +218,9 @@ it while it sleeps write it, so the claim path is unchanged.
   node (with its record gone) or the row has no owner, since its owner
   released it in an [evacuation](#evacuating-a-node). The node records the claim as archived and
   answers as the owner. Two nodes adopting at once leave one owner; the other
-  answers 404. A tombstone is never adopted. The next call that reaches the
+  answers 404. A node that takes the row and then cannot write its claims
+  journal releases the row to no owner and answers the error, so the next
+  lookup adopts on any node. A tombstone is never adopted. The next call that reaches the
   guest wakes the claim from the store as usual. An owner with a live lease answers for
   itself, and a node that tries to take its row is refused with a 404.
   A draining node never adopts, nor does a fenced node or one that lifted its
@@ -254,7 +256,8 @@ it while it sleeps write it, so the claim path is unchanged.
   checkpoints this node published, and never one a row references. A restart
   also settles an archive a crash interrupted: a live row it left for a claim it
   still holds is deleted with its checkpoint, and a claim whose row another node
-  holds is dropped, its VM and snapshot swept as stale. An archive journals its
+  holds is dropped, its VM and snapshot swept as stale, and the checkpoint of
+  its interrupted archive or replica round deleted unless that row names it. An archive journals its
   intent (the checkpoint it is about to register) before it writes the row. A
   restart that finds the intent and no row keeps the claim while that
   checkpoint is still in the store, since the row never committed, and drops it
@@ -515,7 +518,12 @@ and an aborted move makes the claim due at the source's next replica sweep, whic
 registry changes nothing and its move fails: it keeps the row's epoch, so the
 fence still finds a peer that adopted the claim during the outage, and the source
 drops it. A consume whose reply was lost leaves the source's own tombstone, which
-the hourly sweep puts back on the replica.
+the hourly sweep puts back on the replica. A claim that holds no row can still
+have a tombstone of the source, left by a wake whose checkpoint delete failed or
+by a replica retirement. The source deletes it before the final round too, since
+the target would read another node's tombstone as an adoption and drop the
+guest; with `archive_failover` on, a registry that cannot answer that read fails
+the move.
 
 **Failures.** Any failure before the commit aborts: the source resumes the
 guest, the target drops its reservation, files and any received VM, and the
@@ -559,7 +567,8 @@ checkpoint store and keeps each claim's registry row on the latest snapshot:
   refused. A write whose outcome is unknown leaves the checkpoint in place, and
   the next round, a release, an archive, a wake, the hourly sweep and a restart
   settle it by reading the row: a row on that checkpoint promotes it, another
-  owner's row drops the claim, and an absent row means the adopter finished
+  owner's row drops the claim, and that checkpoint too unless the row names
+  it, and an absent row means the adopter finished
   when the checkpoint is gone or this node confirmed an earlier row, and a
   write that never landed otherwise. A refused write reads the row: one this node still owns only had a
   stale epoch and is refreshed, and an absent or foreign row drops the claim and
@@ -633,8 +642,8 @@ checkpoint store and keeps each claim's registry row on the latest snapshot:
   ports, preview, fork, checkpoint and promote answer `503 lease lost; retry` (a read through a
   [reader](deploy.md#reading-sleeping-claims-without-waking-them) after the `101`
   gets an `error` frame instead), and `/owner` answers 404 so
-  a `Lookup` moves on to the other nodes. Its proxy, SOCKS5 and intercept doors deny those claims and the trip
-  ends their open tunnels, and a new claim of a replicating pool meets an
+  a `Lookup` moves on to the other nodes. Its proxy, SOCKS5 and intercept doors deny those claims, its DNS door
+  answers their queries `REFUSED`, the trip ends their open tunnels, and a new claim of a replicating pool meets an
   [admission refusal](sandboxd-api.md#admission-refusals), which redirects it to a peer. A claim is replicated when its policy
   pool has `replicate_seconds`, from the moment it is claimed, adopted or
   loaded, whether or not a round has run, so the fence covers it before its
@@ -657,7 +666,9 @@ checkpoint store and keeps each claim's registry row on the latest snapshot:
   another node may adopt, so no moment has two serving copies, partitions
   included. This holds while the node's clock and the database's run at the same
   rate to within that margin over 12 seconds, and ignores skew between them,
-  because both sides count from a renewal's own start. The guest of a claim the
+  because both sides count from a renewal's own start. A node that is stopping
+  renews no more, so it fences the same way while it waits for its running
+  `cocoon` commands. The guest of a claim the
   fence closed keeps running without a NIC until the node returns and removes
   it, and its state is discarded. When the fence closes, every open
   stream of a replicated claim on the node is closed too, one opened before the
@@ -755,7 +766,9 @@ at a node that does not hold the record runs a tier order:
 `Checkpoint.Delete` (`DELETE /v1/checkpoints/{id}`) removes the local
 record, then best-effort broadcasts the delete to every peer this node
 currently sees, so a replica a heal pulled earlier is cleaned up too, not
-just the original. A peer that is offline, partitioned or not yet joined during
+just the original. A mesh without a `cluster_key` sends no broadcast: the
+request carries the `api_token`, and heal, the only source of a replica, needs
+the key. A peer that is offline, partitioned or not yet joined during
 that broadcast keeps its copy until the checkpoint TTL ages it out. A healed
 replica carries the source checkpoint's original `CreatedAt`, so it becomes
 eligible for expiry at the same instant everywhere; each node then removes

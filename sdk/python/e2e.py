@@ -172,9 +172,11 @@ def main() -> int:
                 traceback.print_exc()
                 raise
             print(f"  {name:<18} ok ({int((time.monotonic() - start) * 1000)}ms)")
-    finally:
+    except BaseException:
         with contextlib.suppress(Exception):
             sb.close()
+        raise
+    sb.close()
     print("PY-E2E PASS")
     return 0
 

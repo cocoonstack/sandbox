@@ -592,15 +592,16 @@ func (m *Manager) finalizeBatch(ctx context.Context, sbs []*types.Sandbox, ttl t
 		}
 		sb.TouchAt(now)
 	}
+	view := m.view.Load()
 	m.mu.Lock()
 	for _, sb := range sbs {
 		sb.Layer = types.LayerUnpooled
-		if _, pooled := m.activePool(sb.PolicyKey()); pooled {
+		if _, pooled := m.activePool(sb.PolicyKey()); pooled || view.out.HasPolicy(sb.PolicyKey()) {
 			sb.Layer = types.LayerPooled
 		}
 	}
 	m.mu.Unlock()
-	err := m.checkInjects(m.view.Load(), sbs)
+	err := m.checkInjects(view, sbs)
 	if err == nil {
 		err = m.deliverEnv(ctx, sbs, inherited)
 	}

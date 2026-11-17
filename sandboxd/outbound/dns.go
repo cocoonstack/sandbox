@@ -67,18 +67,20 @@ type resolver struct {
 	h        *Host
 	ctx      context.Context
 	cancel   context.CancelFunc
+	fenced   func() bool
 	record   func(DNSEvent)
 	queries  *rate.Limiter
 	refusals *rate.Limiter
 	inflight chan struct{}
 }
 
-func newResolver(ctx context.Context, h *Host, record func(DNSEvent)) *resolver {
+func newResolver(ctx context.Context, h *Host, fenced func() bool, record func(DNSEvent)) *resolver {
 	ctx, cancel := context.WithCancel(ctx)
 	return &resolver{
 		h:        h,
 		ctx:      ctx,
 		cancel:   cancel,
+		fenced:   fenced,
 		record:   record,
 		queries:  rate.NewLimiter(dnsQueryRate, dnsQueryBurst),
 		refusals: rate.NewLimiter(dnsRefusalRate, dnsRefusalBurst),
@@ -147,6 +149,9 @@ func (r *resolver) answer(query, buf []byte, datagram bool) ([]byte, bool) {
 	hdr, q, ok := parseQuery(query)
 	if !ok {
 		return nil, false
+	}
+	if r.fenced() {
+		return failure(hdr, q, dnsmessage.RCodeRefused), true
 	}
 	if !r.queries.Allow() {
 		if r.refusals.Allow() {

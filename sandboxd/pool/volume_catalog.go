@@ -126,18 +126,17 @@ func (m *Manager) RegisterVolume(ctx context.Context, name string, spec types.Vo
 	defer m.catalog.writeMu.Unlock()
 	m.mu.Lock()
 	entries := m.catalog.entries
-	if entry := entries[name]; entry != nil {
-		m.mu.Unlock()
+	entry, referenced := entries[name], m.catalog.volumeReferenced(name)
+	m.mu.Unlock()
+	if entry != nil {
 		if entry.runtime && entry.disk == volume.disk && entry.writable == volume.writable && slices.Equal(entry.tenants, volume.tenants) {
 			return nil
 		}
 		return fmt.Errorf("%w: volume %q already has different semantics or is static", ErrVolumeRegistrationConflict, name)
 	}
-	if m.catalog.volumeReferenced(name) {
-		m.mu.Unlock()
+	if referenced {
 		return fmt.Errorf("%w: volume %q is referenced", ErrVolumeRegistrationConflict, name)
 	}
-	m.mu.Unlock()
 	if err := catalogPathConflict(entries, volume.disk.Path); err != nil {
 		return fmt.Errorf("%w: %w", ErrVolumeRegistrationConflict, err)
 	}

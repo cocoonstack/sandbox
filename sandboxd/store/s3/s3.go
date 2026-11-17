@@ -403,6 +403,9 @@ func (s *Store) prepare(ctx context.Context, staging, id, lineage string, digest
 	if err != nil {
 		return "", nil, err
 	}
+	if err = validateManifest(man); err != nil {
+		return "", nil, err
+	}
 	manifestRaw, err := json.Marshal(man)
 	if err != nil {
 		return "", nil, fmt.Errorf("encode manifest: %w", err)

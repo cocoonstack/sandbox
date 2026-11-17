@@ -72,7 +72,7 @@ func (m *Manager) replicateOnce(ctx context.Context) {
 	}()
 }
 
-// replicable excludes a claim that is paused, archived or archiving, failed, or whose tenant was removed; callers hold m.mu.
+// replicable excludes a claim that is paused, mid-move, archived or archiving, failed, or whose tenant was removed; callers hold m.mu.
 func (m *Manager) replicable(sb *types.Sandbox) bool {
 	return m.vmSettledLocked(sb) && sb.ArchivePending == "" && !m.tenantGone(sb.Tenant)
 }
@@ -173,13 +173,8 @@ func (m *Manager) settleReplicaIntent(ctx context.Context, sb *types.Sandbox) er
 		}
 	}
 	switch {
-	case gone:
-		m.dropAdopted(ctx, sb)
-		return ErrUnknownSandbox
-	case ok && rec.Owner != m.nodeID:
-		if rec.Checkpoint != pending {
-			m.deleteOrphanArchiveCk(ctx, pending)
-		}
+	case gone, ok && rec.Owner != m.nodeID:
+		m.deleteUnrowedPending(ctx, sb, rec)
 		m.dropAdopted(ctx, sb)
 		return ErrUnknownSandbox
 	case ok && !rec.Consumed && rec.Checkpoint == pending:

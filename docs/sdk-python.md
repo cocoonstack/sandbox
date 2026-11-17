@@ -266,7 +266,8 @@ handle parks at most 8 idle connections. A kept connection counts as live for
 `idle_hibernate_seconds` until it closes, so keep the window below that
 setting; `close` and `hibernate` drop it at once.
 Streams (`watch`, `open_pty`, `dial_port`, an LSP session) take a connection
-of their own.
+of their own; a watch whose stream ends and a pty whose shell exits close
+theirs without waiting for `close()`.
 
 The handle's `sb.deadline` remains the value returned when it was created or last
 renewed, so after an archive/wake transition read the current one from
@@ -404,7 +405,8 @@ code = sb.run(["bash", "-c", "make test"],
 
 `timeout` on `exec` and `run` is a wall clock over the dial and the run: at
 its end the SDK cuts the connection and kills the reported pid, and
-`TimeoutError` is raised.
+`TimeoutError` is raised. A call that follows a moved sandbox keeps the same
+clock; only its one `lookup` can run past it.
 
 `exec` returns stdout and raises `ExitError` on a non-zero exit — carrying
 `code`, `stderr`, and the `stdout` produced before it failed. `run` streams raw bytes through the callbacks (chunk boundaries may
@@ -575,6 +577,8 @@ zero. `undrain()` lifts only a drain and `uncordon()` only a
 `SandboxError` is the base; catch the narrowest type you handle:
 
 - `APIError(verb, status, message)` — control plane (HTTP status)
+- `VolumeError` — an `APIError` from a volume call; `.response` holds the
+  complete failure view when the node returned one
 - `SilkdError(kind, message)` — typed guest failure; `kind` is
   `bad_request` (including a spawn the guest cannot start: missing binary, a
   cwd that is not a directory, no exec bit, a `user` the guest cannot

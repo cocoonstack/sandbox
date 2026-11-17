@@ -1099,6 +1099,91 @@ func TestReplicaRestartDropsAClaimAdoptedElsewhere(t *testing.T) {
 	}
 }
 
+func TestReplicaAClaimAdoptedElsewhereLeavesNoUnsettledCheckpoint(t *testing.T) {
+	type interruptFunc func(t *testing.T, c *failoverCluster, a *Manager, sb *types.Sandbox) string
+	type findFunc func(t *testing.T, c *failoverCluster, a *Manager, sb *types.Sandbox) *Manager
+	round := func(landed bool) interruptFunc {
+		return func(t *testing.T, c *failoverCluster, a *Manager, sb *types.Sandbox) string {
+			a.archives = &hookRegistry{Registry: c.reg, failPut: !landed, losePutReply: landed}
+			if err := a.replicate(t.Context(), sb); !errors.Is(err, ErrArchiveStoreDown) {
+				t.Fatalf("round whose put failed: %v", err)
+			}
+			a.archives = c.reg
+			a.mu.Lock()
+			defer a.mu.Unlock()
+			return sb.ReplicaPending
+		}
+	}
+	archive := func(t *testing.T, _ *failoverCluster, a *Manager, sb *types.Sandbox) string {
+		hibernateClaim(t, a, sb)
+		return interruptArchive(t, a, sb, false)
+	}
+	restart := func(t *testing.T, c *failoverCluster, a *Manager, _ *types.Sandbox) *Manager {
+		return c.restartReconciled(t, a)
+	}
+	settle := func(t *testing.T, _ *failoverCluster, a *Manager, sb *types.Sandbox) *Manager {
+		sb.Transition.Lock()
+		err := a.resolveIntent(t.Context(), sb)
+		sb.Transition.Unlock()
+		if !errors.Is(err, ErrUnknownSandbox) {
+			t.Fatalf("settle: %v, want ErrUnknownSandbox", err)
+		}
+		a.retryArchiveDeletes(t.Context())
+		return a
+	}
+	unfence := func(t *testing.T, _ *failoverCluster, a *Manager, _ *types.Sandbox) *Manager {
+		a.trip(t.Context())
+		a.unfence(t.Context(), time.Now())
+		waitFor(t, a.store.synced)
+		a.retryArchiveDeletes(t.Context())
+		return a
+	}
+	for _, tt := range []struct {
+		name      string
+		interrupt interruptFunc
+		woke      bool
+		find      findFunc
+	}{
+		{"a restart after a round, the adopter holds the row", round(false), false, restart},
+		{"a restart after a round, the adopter woke the claim", round(false), true, restart},
+		{"a restart after a round that landed, the adopter holds the row", round(true), false, restart},
+		{"a restart after an archive, the adopter holds the row", archive, false, restart},
+		{"a settle after an archive, the adopter holds the row", archive, false, settle},
+		{"a settle after a round, the adopter holds the row", round(false), false, settle},
+		{"a settle after a round, the adopter woke the claim", round(false), true, settle},
+		{"a settle after a round that landed, the adopter holds the row", round(true), false, settle},
+		{"an unfence after a round, the adopter holds the row", round(false), false, unfence},
+		{"an unfence after a round, the adopter woke the claim", round(false), true, unfence},
+		{"an unfence after a round that landed, the adopter holds the row", round(true), false, unfence},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			c := newReplicaCluster(t)
+			a, b := c.pair(t)
+			sb := mustClaim(t, a, testKey)
+			replicateNow(t, a, sb)
+			pending := tt.interrupt(t, c, a, sb)
+			rowed, _, _ := c.reg.Get(t.Context(), sb.ID)
+			mustFlush(t, a)
+			c.expire("a")
+			mustAdopt(t, b, sb, "adopt")
+			if tt.woke {
+				if _, _, _, err := b.WakeAgentSocket(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
+					t.Fatalf("adopter's wake: %v", err)
+				}
+			}
+			c.renew(t, "a")
+
+			a = tt.find(t, c, a, sb)
+			if _, held := a.byID(sb.ID); held {
+				t.Error("the old owner kept a claim another node adopted")
+			}
+			if pending != rowed.Checkpoint && ckExists(t, a, pending) || ckExists(t, b, rowed.Checkpoint) == tt.woke {
+				t.Errorf("unsettled checkpoint %s kept %v, the row's checkpoint %s kept %v, want only the row's kept, until the adopter wakes", pending, ckExists(t, a, pending), rowed.Checkpoint, ckExists(t, b, rowed.Checkpoint))
+			}
+		})
+	}
+}
+
 func TestReplicaRestartDropsAClaimTheAdopterWokeAndFinished(t *testing.T) {
 	c := newReplicaCluster(t)
 	dirA := t.TempDir()

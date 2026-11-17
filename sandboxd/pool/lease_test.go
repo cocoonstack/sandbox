@@ -40,6 +40,33 @@ func TestLeaseRenewLoopKeepsTheNodeLeasedUntilItStops(t *testing.T) {
 	})
 }
 
+func TestLeaseRenewLoopThatStoppedFencesBeforeItsLeaseRunsOut(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		c := newReplicaCluster(t)
+		a := c.node(t, "a", t.TempDir(), keepAnHour)
+		sb := mustClaim(t, a, testKey)
+		replicateNow(t, a, sb)
+		c.expire("a")
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+
+		go a.keepLease(ctx)
+		time.Sleep(2*leaseRenew + time.Second)
+		cancel()
+		synctest.Wait()
+		assertServed(t, a, sb.ID, sb.Token)
+		time.Sleep(leaseWindow)
+		synctest.Wait()
+		if _, _, _, err := a.WakeAgentSocket(t.Context(), sb.ID, Cred{Token: sb.Token}); !errors.Is(err, ErrLeaseLost) {
+			t.Errorf("serving a replicated claim once a stopped loop's last renewal is over %s old: %v, want ErrLeaseLost", leaseWindow, err)
+		}
+		row, _, _ := c.reg.Get(t.Context(), sb.ID)
+		if _, err := c.reg.Take(t.Context(), sb.ID, row.Epoch, "b"); !errors.Is(err, archives.ErrLost) {
+			t.Errorf("take when the stopped loop fenced: %v, want ErrLost: the fence must close before the lease runs out", err)
+		}
+	})
+}
+
 func TestAnUnfenceOnALiftedNodeKeepsTheOpenFenceChannel(t *testing.T) {
 	m := newTestManager(t, newFakeEngine())
 	lifted := m.fence.Load()

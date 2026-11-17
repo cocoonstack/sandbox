@@ -250,6 +250,41 @@ func TestForwardStripsHopHeaders(t *testing.T) {
 	}
 }
 
+func TestTheProxyServerRefusesAGuestHeaderPastItsCap(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	defer upstream.Close()
+	p := New(Policy{Allow: []Rule{{Host: "api.internal"}}}, nil, nil, fixedDial(upstream.Listener.Addr().String()), nil, nil)
+	front := httptest.NewUnstartedServer(nil)
+	front.Config = p.Server()
+	front.Start()
+	defer front.Close()
+	for _, tt := range []struct{ size, want int }{{32 << 10, http.StatusOK}, {100 << 10, http.StatusRequestHeaderFieldsTooLarge}} {
+		resp := proxiedGet(t, front.URL, "http://api.internal/x", func(r *http.Request) { r.Header.Set("X-Big", strings.Repeat("a", tt.size)) })
+		_ = resp.Body.Close()
+		if resp.StatusCode != tt.want {
+			t.Errorf("a %d-byte header answered %d, want %d", tt.size, resp.StatusCode, tt.want)
+		}
+	}
+}
+
+func TestAnOriginHeaderPastTheCapIsABadGateway(t *testing.T) {
+	var size atomic.Int64
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("X-Big", strings.Repeat("a", int(size.Load())))
+	}))
+	defer upstream.Close()
+	p := New(Policy{Allow: []Rule{{Host: "api.internal"}}}, nil, nil, fixedDial(upstream.Listener.Addr().String()), nil, nil)
+	front := serveFront(t, p)
+	for _, tt := range []struct{ size, want int }{{32 << 10, http.StatusOK}, {100 << 10, http.StatusBadGateway}} {
+		size.Store(int64(tt.size))
+		resp := proxiedGet(t, front.URL, "http://api.internal/x")
+		_ = resp.Body.Close()
+		if resp.StatusCode != tt.want {
+			t.Errorf("a %d-byte origin header answered %d, want %d", tt.size, resp.StatusCode, tt.want)
+		}
+	}
+}
+
 func TestADeniedForwardIs403AndAuditedAsDeny(t *testing.T) {
 	policy := Policy{Allow: []Rule{{Host: "api.internal"}}}
 	events := make(chan Event, 4)
@@ -415,6 +450,21 @@ func TestADeniedConnectIs403(t *testing.T) {
 	defer func() { _ = conn.Close() }()
 	if status := readStatus(t, bufio.NewReader(conn)); status != "HTTP/1.1 403 Forbidden" {
 		t.Fatalf("denied CONNECT status = %q, want 403 Forbidden", status)
+	}
+}
+
+func TestAConnectThatLosesToDropTunnelsIsDeniedNotAnswered200(t *testing.T) {
+	origin := echoServer(t)
+	var p *Proxy
+	p = New(Policy{Allow: []Rule{{Host: "api.internal"}}}, nil, nil, DialFunc(func(ctx context.Context, network, _ string) (net.Conn, error) {
+		p.DropTunnels()
+		var d net.Dialer
+		return d.DialContext(ctx, network, origin)
+	}), nil, nil)
+	conn := dialConnect(t, serveFront(t, p).Listener.Addr().String(), "api.internal:443")
+	defer func() { _ = conn.Close() }()
+	if status := readStatus(t, bufio.NewReader(conn)); !strings.Contains(status, "403") {
+		t.Errorf("a CONNECT whose dial outlived DropTunnels answered %q, want 403", status)
 	}
 }
 

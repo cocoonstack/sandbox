@@ -163,8 +163,10 @@ with the sandbox ID and token when using `Attach` in another process.
 ### Connecting to clusters
 
 Nothing extra: dial any node. On a warm miss the entry node answers with a
-redirect and `New` follows it transparently (trying every candidate, so one
-dead peer never fails a claim); the returned handle is bound to the owning
+redirect and `New` follows it transparently (trying each candidate in turn, so
+one dead peer never fails a claim; a candidate whose reply was lost, or that
+answers 502 or 504, may hold the claim, so the walk ends there with an error
+and the claim is not sent again); the returned handle is bound to the owning
 node's `owner_addr` and all further calls go there directly.
 
 To recover a handle when only `id` + `token` survived (say, across a process
@@ -588,7 +590,7 @@ silkd's `not_found`; ignore it in a deferred cleanup.
 
 ```go
 err  := sb.WriteFile(ctx, "/work/a.txt", data, nil)   // atomic; *uint32 mode optional
-data, err := sb.ReadFile(ctx, "/work/a.txt")
+got, err := sb.ReadFile(ctx, "/work/a.txt")
 err  = sb.ReadFileTo(ctx, "/work/big.bin", w)          // streams into an io.Writer
 ents, err := sb.ListDir(ctx, "/work")                  // []wire.DirEntry{Name,Kind,Size}
 info, err := sb.Stat(ctx, "/work/a.txt")               // wire.FileInfo{Kind,Size,Mode,MtimeEpochSecs}
@@ -677,10 +679,10 @@ not allow the git host fails them with git's own error.
 ```go
 pty, err := sb.OpenPty(ctx, wire.PtyOpen{Cols: 120, Rows: 40})
 defer pty.Close()
+err = pty.Resize(ctx, 200, 50)
 pty.Write([]byte("make test\n"))
 io.Copy(os.Stdout, pty)                   // EOF when the shell exits
 code, ok := pty.ExitCode()
-err = pty.Resize(ctx, 200, 50)
 ```
 
 A PTY is a tracked guest process (`pty.PID`); closing the handle (or the

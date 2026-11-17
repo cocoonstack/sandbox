@@ -62,7 +62,7 @@ const (
 	connectTimeout = 10 * time.Second
 	trimTimeout    = 10 * time.Second
 	probeInterval  = 20 * time.Millisecond
-	connectMax     = 64 // "OK <port>" handshake reply cap
+	connectMax     = 64
 	infoMax        = 4096
 	outputTail     = 400
 	portForwardMax = 4096
@@ -132,7 +132,7 @@ func (e *Engine) Version(ctx context.Context) (string, error) {
 			return v, nil
 		}
 	}
-	return "", fmt.Errorf("cocoon version: no Version line in output")
+	return "", errors.New("cocoon version: no Version line in output")
 }
 
 // VersionWarning returns a non-empty warning when cocoon's version is below RequiredCocoon or cannot be read.

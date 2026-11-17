@@ -42,11 +42,7 @@ func TestPortRelayPreservesGreetingAndHalfClose(t *testing.T) {
 	if _, err := io.WriteString(conn, "tail"); err != nil {
 		t.Fatalf("write after guest EOF: %v", err)
 	}
-	cw, ok := conn.(interface{ CloseWrite() error })
-	if !ok {
-		t.Fatal("relay connection does not support CloseWrite")
-	}
-	if err := cw.CloseWrite(); err != nil {
+	if err := conn.CloseWrite(); err != nil {
 		t.Fatalf("close write: %v", err)
 	}
 	if err := <-served; err != nil {

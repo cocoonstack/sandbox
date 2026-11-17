@@ -26,7 +26,6 @@ type fenceState struct {
 // keepLease renews this node's lease until ctx ends and fences its replicated claims when a renewal is overdue.
 func (m *Manager) keepLease(ctx context.Context) {
 	fence := time.AfterFunc(leaseWindow, func() { m.trip(ctx) })
-	defer fence.Stop()
 	tick := time.Tick(leaseRenew)
 	for {
 		m.renewLease(ctx, fence)
@@ -130,6 +129,7 @@ func (m *Manager) unfence(ctx context.Context, start time.Time) {
 		if keep {
 			continue
 		}
+		m.deleteUnrowedPending(ctx, sb, rows[id])
 		if td := m.forgetAdopted(ctx, sb); td != nil {
 			m.out.Disarm(sb.ID, false)
 			go func() {

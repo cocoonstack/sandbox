@@ -255,7 +255,7 @@ func TestConfirmVolumesCleanCatchesMarkerAfterAdmission(t *testing.T) {
 	}
 	hold, reserveErr := m.admitClaim("", resolved, appliedVolumes(resolved))
 	if reserveErr != nil {
-		t.Fatalf("reserve once the writer released: %v", reserveErr)
+		t.Fatalf("admit before the dirty re-check: %v", reserveErr)
 	}
 	m.dropHold(hold)
 

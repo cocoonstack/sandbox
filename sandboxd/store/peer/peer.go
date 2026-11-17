@@ -66,5 +66,5 @@ func (h *Healer) Pull(ctx context.Context, id, staging string, validate Validate
 	if len(errs) > 0 {
 		return fmt.Errorf("heal %s from %d peer(s): %w", id, len(addrs), errors.Join(errs...))
 	}
-	return store.ErrNotFound // every owner answered not-found: stale gossip
+	return store.ErrNotFound // every owner answered not-found: the probe answer went stale
 }

@@ -42,7 +42,7 @@ func (m *Manager) Uncordon(ctx context.Context) error {
 	m.cordoned = false
 	m.mu.Unlock()
 	m.recordAudit(ctx, "", auditFrame{Op: "uncordon"})
-	m.refillOnce(context.WithoutCancel(ctx))
+	m.kickRefill()
 	return nil
 }
 

@@ -24,6 +24,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: ${{ startsWith(github.ref_name, 'sdk-python-') && 'pypi-python' || startsWith(github.ref_name, 'sdk-openai-') && 'pypi-openai' || 'pypi-langchain' }}
     permissions:
+      contents: read
       id-token: write # OIDC for PyPI Trusted Publishing
     steps:
       - name: Checkout

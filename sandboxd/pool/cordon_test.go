@@ -21,6 +21,7 @@ func TestCordonRefusesClaimsTrimsWarmAndSurvivesARestart(t *testing.T) {
 		if err := m.SetPools(t.Context(), []config.PoolSpec{spec}); err != nil {
 			t.Fatalf("SetPools: %v", err)
 		}
+		m.refillOnce(t.Context())
 		waitFor(t, func() bool {
 			infos, _ := m.Info()
 			return len(infos) == 1 && infos[0].Warm == 2
@@ -56,6 +57,7 @@ func TestCordonRefusesClaimsTrimsWarmAndSurvivesARestart(t *testing.T) {
 		if err := restarted.Uncordon(t.Context()); err != nil {
 			t.Fatalf("uncordon: %v", err)
 		}
+		restarted.refillOnce(t.Context())
 		waitFor(t, func() bool {
 			now, gauges := restarted.Info()
 			return !gauges.Cordoned && now[0].Warm == 2
@@ -272,7 +274,7 @@ func TestCordonOutlivesAReloadAndAnUndrain(t *testing.T) {
 	}
 	reloadWith(t, m, func(*config.Config) {})
 	m.Drain(t.Context())
-	m.Undrain(t.Context())
+	m.Undrain()
 	if _, g := m.Info(); !g.Cordoned || g.Draining {
 		t.Fatalf("gauges %+v, want cordoned and not draining", g)
 	}

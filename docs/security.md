@@ -33,10 +33,13 @@ exposing any part of a deployment beyond a single trusted host.
   mode](advanced-network.md)), carrying only flows the policy's bare
   `host: "*"` rules and the internal-address guard allow, under per-claim
   rate, flow and quota limits.
-  On the egress lane: the same vsock paths plus a NIC whose every
+  On the egress lane of a `bridges` node: the same vsock paths plus a NIC whose every
   outgoing packet, replies and ARP included, is dropped by an nftables lock in the host
   root netns ([egress](egress.md)); the lock is fail-closed and applied
-  before the claim is handed out. On both lanes the proxy refuses
+  before the claim is handed out. On the egress lane of a CNI `networks` node
+  the NIC is not locked: the guest reaches whatever that network routes, for
+  every caller ([deployment constraints](egress.md#deployment-constraints)).
+  On both lanes the proxy refuses
   loopback, private, link-local (cloud metadata), CGN, the
   IPv4-embedding IPv6 ranges and the node's own interface addresses, so an
   allow-listed name that resolves or rebinds to an internal address cannot
@@ -71,7 +74,8 @@ all of them.
    ([TLS for SDK clients](deploy.md#tls-for-sdk-clients)). The only surface
    designed to face a browser is the preview listener, and it belongs behind a
    TLS-terminating proxy ([deploy](deploy.md#preview-urls)). Never expose
-   `listen` itself publicly.
+   `listen` itself publicly. A node without `api_token` authenticates no
+   node-level call.
 2. **One sandboxd per host** ([why](egress.md#deployment-constraints)).
 3. **A cell is the boundary of a host compromise.** Every node of a
    [cell](cluster.md#cells) holds the cell's credentials, so host root on one
@@ -146,8 +150,8 @@ operator token reaches every claim's data — it reads any claim's token by id
 and execs in any claim — and, through the tenant API, every tenant's
 authority: it can mint or re-key any tenant and act as it, including volume
 claims that tenant may make. Its own bearer cannot claim volumes, it holds no
-node or cluster configuration power, and it leaves an audit record (op
-`token`) for each token it reads. A set `api_token_next` or `operator_token_next` carries
+node or cluster configuration power, and with `audit_log` on it leaves an
+audit record (op `token`) for each token it reads. A set `api_token_next` or `operator_token_next` carries
 exactly the authority of `api_token` or `operator_token`, so a node accepts the
 old and the new token during a
 [rolling rotation](deploy.md#rotating-api_token-and-operator_token); remove

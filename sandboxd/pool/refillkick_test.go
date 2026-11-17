@@ -50,6 +50,68 @@ func TestAFreshGoldenStartsRefillWithoutWaitingForATick(t *testing.T) {
 	})
 }
 
+func TestARefillAnOperatorDoorStartsStopsWithRun(t *testing.T) {
+	spec := config.PoolSpec{PoolKey: testKey, Warm: 3}
+	for _, tt := range []struct {
+		name string
+		shut func(*testing.T, *Manager) error
+		open func(*testing.T, *Manager) error
+	}{
+		{
+			"set pools",
+			func(t *testing.T, m *Manager) error {
+				return m.SetPools(t.Context(), []config.PoolSpec{{PoolKey: testKey}})
+			},
+			func(t *testing.T, m *Manager) error { return m.SetPools(t.Context(), []config.PoolSpec{spec}) },
+		},
+		{
+			"uncordon",
+			func(t *testing.T, m *Manager) error { return m.Cordon(t.Context()) },
+			func(t *testing.T, m *Manager) error { return m.Uncordon(t.Context()) },
+		},
+		{
+			"undrain",
+			func(t *testing.T, m *Manager) error { m.Drain(t.Context()); return nil },
+			func(_ *testing.T, m *Manager) error { m.Undrain(); return nil },
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				eng := newFakeEngine()
+				eng.cloneStall = make(chan struct{})
+				m := newTestManager(t, eng, spec)
+				m.refillSem = make(chan struct{}, 1)
+				seedGolden(t, m, testKey, "")
+				if err := tt.shut(t, m); err != nil {
+					t.Fatalf("shut: %v", err)
+				}
+				ctx, cancel := context.WithCancel(t.Context())
+				go m.Run(ctx)
+				synctest.Wait()
+				if n := eng.cloneCount(); n != 0 {
+					t.Fatalf("clones=%d before the door opened, so the test proves nothing", n)
+				}
+
+				if err := tt.open(t, m); err != nil {
+					t.Fatalf("open: %v", err)
+				}
+				synctest.Wait()
+				if n := eng.cloneCount(); n != 1 {
+					t.Fatalf("clones=%d after the door opened, want the one the budget allows", n)
+				}
+				cancel()
+				synctest.Wait()
+				close(eng.cloneStall)
+				synctest.Wait()
+
+				if n := eng.cloneCount(); n != 1 {
+					t.Errorf("clones=%d after Run stopped, want 1: the refill outlived it", n)
+				}
+			})
+		})
+	}
+}
+
 func TestNodeAtCapacityParksRefillInsteadOfRetrying(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		eng := newFakeEngine()

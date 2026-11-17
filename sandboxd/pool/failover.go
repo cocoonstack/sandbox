@@ -108,6 +108,9 @@ func (m *Manager) adoptArchived(ctx context.Context, id string, cred Cred, room 
 	m.mu.Unlock()
 	if err := m.store.commit(js); err != nil {
 		m.forgetClaim(ctx, sb)
+		if _, releaseErr := m.archives.Release(ctx, id, epoch, m.nodeID); releaseErr != nil {
+			log.WithFunc("pool.adoptArchived").Warnf(ctx, "release the row of %s after a failed adoption: %v", id, releaseErr)
+		}
 		return false, fmt.Errorf("adopt %s: persist claims: %w", id, err)
 	}
 	m.recordUsage(ctx, usage.Event{Time: adoptedAt, Event: "adopt", ID: id, Reference: rec.Checkpoint, Tenant: sb.Tenant, Deadline: retention})
@@ -479,6 +482,15 @@ func (m *Manager) forgetClaim(ctx context.Context, sb *types.Sandbox) ([]types.V
 	return holds, true
 }
 
+func (m *Manager) deleteUnrowedPending(ctx context.Context, sb *types.Sandbox, rec archives.Record) {
+	m.mu.Lock()
+	pending := cmp.Or(sb.ArchivePending, sb.ReplicaPending)
+	m.mu.Unlock()
+	if pending != "" && rec.Owner != m.nodeID && rec.Checkpoint != pending {
+		m.deleteOrphanArchiveCk(ctx, pending)
+	}
+}
+
 func (m *Manager) sweepOrphanArchives(ctx context.Context) {
 	if !m.sweeps.orphan.CompareAndSwap(false, true) {
 		return
@@ -693,6 +705,7 @@ func (m *Manager) fenceArchived(ctx context.Context, claims map[string]*types.Sa
 					logger.Warnf(ctx, "clear archive ck %s: %v", sb.ArchiveCk, err)
 				}
 			}
+			m.deleteUnrowedPending(ctx, sb, rec)
 			delete(claims, id)
 			logger.Infof(ctx, "dropped sandbox %s: another node holds it", id)
 		}
@@ -774,6 +787,7 @@ func (m *Manager) resolveIntent(ctx context.Context, sb *types.Sandbox) error {
 	case err != nil:
 		return err
 	case moved:
+		m.deleteUnrowedPending(ctx, sb, rec)
 		m.dropAdopted(ctx, sb)
 		return ErrUnknownSandbox
 	}

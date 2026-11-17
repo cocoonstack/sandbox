@@ -372,10 +372,10 @@ func claimRefused(err error) bool {
 	return errors.Is(err, errRedirectedAgain)
 }
 
-func scatter[T any](ctx context.Context, addrs []string, probe func(ctx context.Context, addr string) (T, error)) (result T, ok bool) {
+func scatter(ctx context.Context, addrs []string, probe func(ctx context.Context, addr string) (string, error)) (result string, ok bool) {
 	scatterCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	wins := make(chan T, len(addrs))
+	wins := make(chan string, len(addrs))
 	var wg sync.WaitGroup
 	for _, addr := range addrs {
 		wg.Go(func() {

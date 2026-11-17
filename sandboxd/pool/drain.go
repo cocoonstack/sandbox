@@ -43,7 +43,7 @@ func (m *Manager) Evacuate(ctx context.Context) {
 }
 
 // Undrain lifts a drain, stops an evacuation, and kicks an immediate refill.
-func (m *Manager) Undrain(ctx context.Context) {
+func (m *Manager) Undrain() {
 	m.mu.Lock()
 	m.draining = false
 	e := m.evac
@@ -52,7 +52,7 @@ func (m *Manager) Undrain(ctx context.Context) {
 	if e != nil {
 		e.stop()
 	}
-	m.refillOnce(context.WithoutCancel(ctx))
+	m.kickRefill()
 }
 
 // runEvacuation repeats its pass while a claim waits for an archive the sweeps run.

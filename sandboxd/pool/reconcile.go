@@ -65,7 +65,6 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 			}
 		case ok && sb.HibernateSnap != "":
 			// Hibernated: the VM is stopped by design and wakes on demand.
-			sb.PendingSnap = ""
 		case ok && sb.PendingSnap != "" && snapsErr != nil:
 			referenced[sb.PendingSnap] = true
 			interrupted = append(interrupted, sb)

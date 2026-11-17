@@ -31,7 +31,7 @@ pair over the sync [Python SDK](sdk-python.md), bridged with
 
 | SDK surface | cocoon |
 |---|---|
-| `create` | `Client.new` — one claimed sandbox per session |
+| `create` | `Client.new` — one claimed sandbox per session; a cancelled `create` waits for its claim to answer and releases it |
 | session `exec` | `Sandbox.run` (stdout/stderr/exit); a per-call `timeout` is `run`'s wall clock: it kills the command in the guest and surfaces as `TimeoutError` |
 | `read` / `write` | `Sandbox.read_file` / `write_file`; a missing path on `read` → `FileNotFoundError`; a per-call `user` raises `NotImplementedError` (fs verbs carry no user on the wire) |
 | `persist_workspace` / `hydrate_workspace` | `Sandbox.pull` / `push` (tar) |

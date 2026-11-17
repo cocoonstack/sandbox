@@ -155,7 +155,7 @@ type Manager interface {
 	DeleteTenant(ctx context.Context, name string) error
 	Drain(ctx context.Context)
 	Evacuate(ctx context.Context)
-	Undrain(ctx context.Context)
+	Undrain()
 	Cordon(ctx context.Context) error
 	Uncordon(ctx context.Context) error
 	Info() ([]pool.PoolInfo, pool.Gauges)
@@ -405,7 +405,7 @@ func (s *Server) Handler() http.Handler {
 }
 
 func (s *Server) handleClaim(w http.ResponseWriter, r *http.Request) {
-	req, ok := decodeBody[ClaimRequest](w, r)
+	req, ok := decodeBodyStrict[ClaimRequest](w, r)
 	if !ok || !validRequest(w, types.ValidateClaimRef("claim_ref", req.ClaimRef), req.Metadata.Validate(), req.OnExpire.Validate(), req.Env.Validate()) {
 		return
 	}
@@ -726,7 +726,7 @@ func (s *Server) handleRenew(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleFork(w http.ResponseWriter, r *http.Request) {
-	req, ok := decodeBody[ForkRequest](w, r)
+	req, ok := decodeBodyStrict[ForkRequest](w, r)
 	if !ok || !validRequest(w, types.ValidateClaimRef("claim_ref_prefix", req.ClaimRefPrefix), req.OnExpire.Validate()) {
 		return
 	}
@@ -742,7 +742,7 @@ func (s *Server) handleFork(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handlePromote(w http.ResponseWriter, r *http.Request) {
-	req, ok := decodeBody[PromoteRequest](w, r)
+	req, ok := decodeBodyStrict[PromoteRequest](w, r)
 	if !ok {
 		return
 	}
@@ -754,7 +754,7 @@ func (s *Server) handlePromote(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleCheckpoint(w http.ResponseWriter, r *http.Request) {
-	req, ok := decodeBody[CheckpointRequest](w, r)
+	req, ok := decodeBodyStrict[CheckpointRequest](w, r)
 	if !ok {
 		return
 	}
@@ -766,7 +766,7 @@ func (s *Server) handleCheckpoint(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleClaimCheckpoint(w http.ResponseWriter, r *http.Request) {
-	req, ok := decodeBody[CheckpointClaimRequest](w, r)
+	req, ok := decodeBodyStrict[CheckpointClaimRequest](w, r)
 	if !ok || !validRequest(w, req.Metadata.Validate(), req.OnExpire.Validate(), req.Env.Validate()) {
 		return
 	}
@@ -942,7 +942,7 @@ func (s *Server) handleDrain(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleUndrain(w http.ResponseWriter, r *http.Request) {
-	s.mgr.Undrain(r.Context())
+	s.mgr.Undrain()
 	s.handleInfo(w, r)
 }
 

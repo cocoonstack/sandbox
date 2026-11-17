@@ -144,7 +144,6 @@ class Sandbox:
             raise ExitError(code, err.decode(errors="replace"), out.decode(errors="replace"))
         return out.decode(errors="replace")
 
-    @_follows_move
     def run(
         self,
         argv: list[str],
@@ -157,59 +156,24 @@ class Sandbox:
         on_stderr: Callable[[bytes], object] | None = None,
         timeout: float | None = None,
     ) -> int:
-        """Streams raw output bytes and returns the exit code; timeout bounds the call and kills what it cuts."""
+        """Streams raw output and returns the exit code; timeout kills what it cuts, except a session command."""
         if timeout is not None and timeout <= 0:
             raise ValueError("timeout must be positive")
         if stdin and not isinstance(stdin, (bytes, bytearray, memoryview)):
             raise TypeError("stdin must be bytes")
-        deadline = None if timeout is None else time.monotonic() + timeout
-        expired = threading.Event()
-        started: deque[int] = deque(maxlen=1)
-        try:
-            conn = self._connect(
-                "exec",
-                deadline,
-                argv=argv,
-                cwd=cwd or None,
-                env=env,
-                user=user or None,
-                detach=False,
-                session=session or None,
-            )
-        except (ProtocolError, TimeoutError):
-            if deadline is not None and time.monotonic() >= deadline:
-                raise SandboxTimeout(f"command did not finish within {timeout}s") from None
-            raise
-        with self._lease(conn):
-            watchdog = None if deadline is None else _arm_watchdog(conn, deadline, expired)
-            pump = threading.Thread(target=_feed_stdin, args=(conn, stdin), daemon=True) if stdin else None
-            try:
-                if pump is not None:
-                    pump.start()
-                else:
-                    with contextlib.suppress(ProtocolError):
-                        conn.send("stdin_close")
-                code = _pump_stdio(conn, on_stdout, on_stderr, started.append)
-            except (ProtocolError, OSError):
-                if expired.is_set():
-                    if started:
-                        self._kill_after_cut(started[0])
-                    raise SandboxTimeout(f"command did not finish within {timeout}s") from None
-                raise
-            except SilkdError:
-                if pump is not None:
-                    pump.join()
-                raise
-            finally:
-                if watchdog is not None:
-                    watchdog.cancel()
-            if pump is not None:
-                if pump.is_alive():
-                    conn.abort()
-                pump.join()  # the pump's frames must not land on the next RPC
-            if code is None:
-                raise ProtocolError("exec stream ended without an exit frame")
-        return code
+        return self._run(
+            None if timeout is None else time.monotonic() + timeout,
+            timeout,
+            stdin,
+            on_stdout,
+            on_stderr,
+            argv=argv,
+            cwd=cwd or None,
+            env=env,
+            user=user or None,
+            detach=False,
+            session=session or None,
+        )
 
     def spawn(self, *argv: str, cwd: str = "", env: dict[str, str] | None = None, user: str = "") -> int:
         """Starts a detached process with a bounded output ring and returns its pid."""
@@ -241,7 +205,7 @@ class Sandbox:
         on_stdout: Callable[[bytes], object] | None = None,
         on_stderr: Callable[[bytes], object] | None = None,
     ) -> int | None:
-        """Replays then follows output; returns None if the process record disappears."""
+        """Replays then follows output until exit; a reader that falls behind misses live chunks."""
         return self._drain_proc("attach", pid, on_stdout, on_stderr)
 
     @_follows_move
@@ -630,6 +594,56 @@ class Sandbox:
                 _expect(conn, "done")
             return code
 
+    @_follows_move
+    def _run(
+        self,
+        deadline: float | None,
+        timeout: float | None,
+        stdin: bytes,
+        on_stdout: Callable[[bytes], object] | None,
+        on_stderr: Callable[[bytes], object] | None,
+        **fields: object,
+    ) -> int:
+        expired = threading.Event()
+        started: deque[int] = deque(maxlen=1)
+        try:
+            conn = self._connect("exec", deadline, **fields)
+        except (ProtocolError, TimeoutError):
+            if deadline is not None and time.monotonic() >= deadline:
+                raise SandboxTimeout(f"command did not finish within {timeout}s") from None
+            raise
+        with self._lease(conn):
+            watchdog = None if deadline is None else _arm_watchdog(conn, deadline, expired)
+            pump = threading.Thread(target=_feed_stdin, args=(conn, stdin), daemon=True) if stdin else None
+            try:
+                if pump is not None:
+                    conn.finish_upgrade()
+                    pump.start()
+                else:
+                    with contextlib.suppress(ProtocolError):
+                        conn.send("stdin_close")
+                code = _pump_stdio(conn, on_stdout, on_stderr, started.append)
+            except (ProtocolError, OSError):
+                if expired.is_set():
+                    if started:
+                        self._kill_after_cut(started[0])
+                    raise SandboxTimeout(f"command did not finish within {timeout}s") from None
+                raise
+            except SilkdError:
+                if pump is not None:
+                    pump.join()
+                raise
+            finally:
+                if watchdog is not None:
+                    watchdog.cancel()
+            if pump is not None:
+                if pump.is_alive():
+                    conn.abort()
+                pump.join()  # the pump's frames must not land on the next RPC
+            if code is None:
+                raise ProtocolError("exec stream ended without an exit frame")
+        return code
+
     def _kill_after_cut(self, pid: int) -> None:
         deadline = time.monotonic() + _KILL_WAIT_SECONDS
         with contextlib.suppress(SandboxError, OSError), self._lease(self._connect("kill", deadline, pid=pid)) as conn:
@@ -671,7 +685,11 @@ class Watcher(_Closeable):
             except ProtocolError as e:
                 if not self._closed:
                     self.error = e
+                self._conn.close()
                 return
+            except SilkdError:
+                self._conn.close()
+                raise
             if frame["type"] == "event":
                 yield frame
 
@@ -698,6 +716,7 @@ class Pty(_Closeable):
         if frame["type"] == "exit":
             self.exit_code = frame.get("code")
             self._eof = True
+            self._conn.close()
             return b""
         return frame.get("data") or b""
 

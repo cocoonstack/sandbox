@@ -17,10 +17,8 @@ GO_OSES := linux darwin
 
 .DEFAULT_GOAL := help
 
-## Location to install dependencies to
 LOCALBIN ?= $(shell pwd)/bin
 
-## Tool versions
 GOLANGCILINT_VERSION ?= v2.13.2
 GO_VERSION := $(shell sed -n 's/^go //p' sandboxd/go.mod)
 GOLANGCILINT_ROOT := $(LOCALBIN)/golangci-lint-$(GOLANGCILINT_VERSION)
@@ -29,7 +27,6 @@ GOLANGCILINT := $(GOLANGCILINT_ROOT)/golangci-lint
 .PHONY: help test lint sh-lint boot boot-debug extract extract-debug silkd-image base python images \
 	sandboxd go-test go-lint bench cloc
 
-## Tool download targets
 .PHONY: golangci-lint
 golangci-lint: $(GOLANGCILINT)
 $(GOLANGCILINT):
