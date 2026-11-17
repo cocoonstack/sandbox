@@ -78,4 +78,5 @@ branch from.
 
 The hardware acceptance is `e2e/cmd/browsersmoke`: claim →
 `/json/version` over the relay → open a target via `PUT /json/new` →
-checkpoint/branch re-verification.
+checkpoint → a branch whose `/json/list` still holds that target, which a
+relaunched Chromium would not.

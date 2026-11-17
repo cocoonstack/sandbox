@@ -2,6 +2,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json/v2"
 	"flag"
@@ -49,7 +50,8 @@ func run(addr, token, template string) error {
 	if err = waitCDP(ctx, sb); err != nil {
 		return err
 	}
-	if err = openTarget(ctx, sb); err != nil {
+	target, err := openTarget(ctx, sb)
+	if err != nil {
 		return err
 	}
 
@@ -66,7 +68,14 @@ func run(addr, token, template string) error {
 	if err := waitCDP(ctx, branch); err != nil {
 		return fmt.Errorf("branch: %w", err)
 	}
-	fmt.Println("  checkpoint: branch of the warmed browser answers /json/version without relaunch")
+	targets, err := harness.HTTPOverPort(ctx, branch, cdpPort, "GET", "/json/list")
+	if err != nil {
+		return fmt.Errorf("branch targets: %w", err)
+	}
+	if !bytes.Contains(targets, []byte(target)) {
+		return fmt.Errorf("branch does not list target %s, so its Chromium relaunched:\n%s", target, targets)
+	}
+	fmt.Println("  checkpoint: branch of the warmed browser still lists the target opened before it, so it did not relaunch")
 	return nil
 }
 
@@ -90,17 +99,18 @@ func waitCDP(ctx context.Context, sb *sandbox.Sandbox) error {
 }
 
 // openTarget proves CDP accepts writes, not just liveness.
-func openTarget(ctx context.Context, sb *sandbox.Sandbox) error {
+func openTarget(ctx context.Context, sb *sandbox.Sandbox) (string, error) {
 	tgt, err := cdpJSON(ctx, sb, "PUT", "/json/new?about:blank")
 	if err != nil {
-		return fmt.Errorf("open target: %w", err)
+		return "", fmt.Errorf("open target: %w", err)
 	}
+	id, _ := tgt["id"].(string)
 	ws, _ := tgt["webSocketDebuggerUrl"].(string)
-	if ws == "" {
-		return fmt.Errorf("open target: no webSocketDebuggerUrl in %v", tgt)
+	if id == "" || ws == "" {
+		return "", fmt.Errorf("open target: no id or webSocketDebuggerUrl in %v", tgt)
 	}
 	fmt.Println("  cdp: PUT /json/new opened a target (webSocketDebuggerUrl present)")
-	return nil
+	return id, nil
 }
 
 func cdpJSON(ctx context.Context, sb *sandbox.Sandbox, method, path string) (map[string]any, error) {
