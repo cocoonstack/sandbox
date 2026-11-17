@@ -163,8 +163,10 @@ with the sandbox ID and token when using `Attach` in another process.
 ### Connecting to clusters
 
 Nothing extra: dial any node. On a warm miss the entry node answers with a
-redirect and `New` follows it transparently (trying every candidate, so one
-dead peer never fails a claim); the returned handle is bound to the owning
+redirect and `New` follows it transparently (trying each candidate in turn, so
+one dead peer never fails a claim; a candidate whose reply was lost, or that
+answers 502 or 504, may hold the claim, so the walk ends there with an error
+and the claim is not sent again); the returned handle is bound to the owning
 node's `owner_addr` and all further calls go there directly.
 
 To recover a handle when only `id` + `token` survived (say, across a process
