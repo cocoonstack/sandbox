@@ -162,7 +162,9 @@ func TestPreviewRechecksClaimForEveryRequest(t *testing.T) {
 }
 
 func TestPreviewForwardsToOwner(t *testing.T) {
-	guestAddr := newGuestServer(t, func(r *http.Request) string { return "guest saw " + r.URL.Path })
+	guestAddr := newGuestServer(t, func(r *http.Request) string {
+		return fmt.Sprintf("guest saw %s host %s forwarded %q", r.URL.Path, r.Host, r.Header.Get(forwardedHeader))
+	})
 
 	owner := httptest.NewUnstartedServer(nil)
 	ownerAddr := owner.Listener.Addr().String()
@@ -179,14 +181,19 @@ func TestPreviewForwardsToOwner(t *testing.T) {
 	ts := httptest.NewServer(entry.Handler())
 	t.Cleanup(ts.Close)
 
-	resp, err := http.Get(ts.URL + "/p/" + token + "/via-owner")
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, ts.URL+"/p/"+token+"/via-owner", nil)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	req.Host = "preview.example.com"
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("get: %v", err)
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
-	if string(body) != "guest saw /via-owner" {
-		t.Errorf("body %q, want request forwarded through owner to guest", body)
+	if want := `guest saw /via-owner host preview.example.com forwarded ""`; string(body) != want {
+		t.Errorf("body %q, want %q: the forward keeps the browser's Host and its own header stays off the guest", body, want)
 	}
 }
 

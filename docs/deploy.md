@@ -1397,8 +1397,9 @@ exits. The whole mechanism is in sandboxd:
 - **Serving**: any node's preview listener verifies the token (no shared
   state), then reverse-proxies to the guest port over the relay if it owns
   the sandbox, or forwards over HTTP to the owner node's `advertise_addr`
-  otherwise. A released sandbox is gone from the claim map, so its URL stops
-  resolving — revocation is the liveness lookup, not a list.
+  otherwise; the guest sees the browser's `Host` either way. A released
+  sandbox is gone from the claim map, so its URL stops resolving —
+  revocation is the liveness lookup, not a list.
 - **The public entry point is a commodity dumb proxy.** Because any node
   can accept and forward, front the nodes with whatever terminates TLS and
   round-robins: a cloud HTTPS load balancer with a managed wildcard cert

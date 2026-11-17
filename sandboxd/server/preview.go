@@ -123,6 +123,7 @@ func (p *PreviewServer) proxyLocal(w http.ResponseWriter, r *http.Request, claim
 				}
 			}
 			pr.Out.URL.RawPath = raw
+			pr.Out.Header.Del(forwardedHeader)
 			// Browser credentials for the preview domain must not reach guest code
 			pr.Out.Header.Del("Cookie")
 			pr.Out.Header.Del("Authorization")
@@ -149,6 +150,7 @@ func (p *PreviewServer) forward(w http.ResponseWriter, r *http.Request, owner st
 	rp := &httputil.ReverseProxy{
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			pr.SetURL(target)
+			pr.Out.Host = pr.In.Host
 			pr.Out.Header.Set(forwardedHeader, p.owner)
 		},
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
