@@ -148,6 +148,50 @@ func TestReloadRefusesDroppingAPolicyLiveClaimsUse(t *testing.T) {
 	}
 }
 
+func TestReloadRefusesDroppingThePolicyATenantClaimOfADroppedPoolUses(t *testing.T) {
+	eng := newFakeEngine()
+	eng.sockRoot = outboundtest.SockRoot(t)
+	m := egressManager(t, eng, config.PoolSpec{PoolKey: testKey, Egress: hostPolicy()})
+	classed := *m.cfg
+	classed.EgressClasses = []config.EgressClass{{Name: "desk", Egress: &egress.Policy{Allow: []egress.Rule{{Host: "*"}}}}}
+	if _, err := m.ReloadConfig(t.Context(), &classed); err != nil {
+		t.Fatalf("reload adding the class: %v", err)
+	}
+	if err := m.SetPools(t.Context(), nil); err != nil {
+		t.Fatalf("drop the pool: %v", err)
+	}
+	sb, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{TTL: time.Hour, Tenant: "acme", EgressClass: "desk"})
+	if err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	if sb.Layer != types.LayerPooled {
+		t.Errorf("claim layer %q on a dropped pool whose key keeps its config policy, want %q", sb.Layer, types.LayerPooled)
+	}
+	next := *m.cfg
+	next.Pools = nil
+	if _, err := m.ReloadConfig(t.Context(), &next); !errors.Is(err, ErrReloadRefused) || !strings.Contains(err.Error(), "drops the egress policy of 1 live claims") {
+		t.Errorf("reload dropping the policy: %v, want a refusal counting the tenant claim", err)
+	}
+	eval, ok := m.view.Load().out.Resolve(sb)
+	if !ok {
+		t.Fatal("the live claim lost its policy")
+	}
+	if _, d := eval.Eval("other.test", "GET", 443); d != egress.DecisionDeny {
+		t.Error("the live claim reaches a host its pool policy never allowed")
+	}
+	key, _, err := m.Promote(t.Context(), sb.ID, Cred{Token: sb.Token}, "tpl:dropped", "")
+	if err != nil {
+		t.Fatalf("promote: %v", err)
+	}
+	clone, err := m.ClaimProvision(t.Context(), key, ClaimOptions{RequirePromoted: true})
+	if err != nil {
+		t.Fatalf("claim the template: %v", err)
+	}
+	if clone.PolicySource != testKey {
+		t.Errorf("clone policy source %+v, want the dropped pool %+v", clone.PolicySource, testKey)
+	}
+}
+
 func TestARestartWithoutAClaimsPoolPolicyCountsTheClaimDenied(t *testing.T) {
 	eng := newFakeEngine()
 	eng.sockRoot = outboundtest.SockRoot(t)

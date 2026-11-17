@@ -264,7 +264,7 @@ promoted template takes the policy of the pool its template was promoted from,
 as if it were that pool's claim: the template records its source pool, a
 re-promote records the new one, and a fork, checkpoint or branch of such a
 clone keeps it. So a clone of a template promoted from a pool with no policy
-has no egress, as that pool's claims have none, even for a tenant with a class; a template promoted from a sandbox of no pool records no source. A pool's
+has no egress, as that pool's claims have none, even for a tenant with a class; a template promoted from a sandbox with no pool layer records no source. A pool's
 `egress` block belongs to the config file and stays bound to its key: when a
 `PUT /v1/pools` drops a config pool that has one, the claims made after it,
 now cold-booted on demand, still take that policy. Any other key that is in
