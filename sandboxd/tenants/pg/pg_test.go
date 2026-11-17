@@ -121,9 +121,7 @@ func TestListAndClassesFailFastOnAStalledDatabase(t *testing.T) {
 func TestARoleWithoutCreateServesAPreCreatedTable(t *testing.T) {
 	dsn := metastoretest.PGSchema(t)
 	owner := openIn(t, dsn)
-	if err := owner.Close(); err != nil {
-		t.Fatalf("close owner: %v", err)
-	}
+	owner.Close()
 	_, schema, _ := strings.CutLast(dsn, "=")
 	role := "r" + schema
 	admin, err := pgx.Connect(t.Context(), dsn)
@@ -179,7 +177,7 @@ func openIn(t *testing.T, dsn string) *Source {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	t.Cleanup(func() { _ = s.Close() })
+	t.Cleanup(s.Close)
 	return s
 }
 

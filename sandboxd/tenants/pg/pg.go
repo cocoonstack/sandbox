@@ -272,11 +272,10 @@ func (s *Source) Digest() string {
 	return ""
 }
 
-func (s *Source) Close() error {
+func (s *Source) Close() {
 	s.stop()
 	<-s.done
 	s.pool.Close()
-	return nil
 }
 
 // fetch loads one name in the background for Peek, once per name at a time.

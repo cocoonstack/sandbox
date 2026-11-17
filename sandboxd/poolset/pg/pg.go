@@ -93,7 +93,6 @@ func (s *Source) Watch(ctx context.Context, changed func()) {
 	})
 }
 
-func (s *Source) Close() error {
+func (s *Source) Close() {
 	s.pool.Close()
-	return nil
 }
