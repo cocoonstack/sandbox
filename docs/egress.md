@@ -297,6 +297,7 @@ file: a claim's own `guest: false` env first, the node's second
         { "host": "*.googleapis.com" }
       ] } },
     { "template": "rt:24.04", "net": "egress", "size": "small", "warm": 2,
+      // a secret without intercept also rides a plain http:// request, in cleartext: see `secret` below
       "egress": { "allow": [{ "host": "api.github.com", "secret": "gh" }] } }
   ],
   "egress_classes": [
@@ -331,7 +332,13 @@ woken sandbox binds at arm time.
   for the same header is overwritten. Inside an HTTPS `CONNECT` tunnel the
   injection needs `intercept`; an absolute-form `https://` request on the
   forward door needs none — the proxy dials the origin over verified TLS
-  itself, checks the method, and injects.
+  itself, checks the method, and injects. **A plain `http://` request the rule
+  matches gets the header too, in cleartext**: it crosses the network
+  unencrypted, through the claim's [upstream proxy](#upstream-proxies) when it
+  has one. The guest picks the scheme and the port, so `ports` does not stop
+  it. Leave `intercept` off a `secret` rule only for an origin that speaks
+  plain HTTP on a network you trust. For an HTTPS origin set
+  `intercept: true`, which answers the plain request 403.
 - `intercept`: `true` terminates a matched HTTPS CONNECT so the request is
   filtered by method and the secret injected (see below). `"inject"` terminates
   it only for a claim with a [credential](#claim-credentials) for that host; for
