@@ -150,6 +150,7 @@ var (
 
 // Engine is the slice of the cocoon driver the manager consumes.
 type Engine interface {
+	outbound.Engine
 	Clone(ctx context.Context, fromDir, name string, key types.PoolKey) (types.VMRecord, error)
 	CloneSnap(ctx context.Context, snap, name string, key types.PoolKey) (types.VMRecord, error)
 	RunCold(ctx context.Context, name string, key types.PoolKey, storage string) (types.VMRecord, error)
@@ -165,15 +166,10 @@ type Engine interface {
 	Hibernate(ctx context.Context, vmName, snapName string) error
 	Restore(ctx context.Context, vmName, snapRef string) (string, error)
 	List(ctx context.Context) ([]types.VMRecord, error)
-	Inspect(ctx context.Context, name string) (types.VMRecord, bool, error)
 	VMEvents(ctx context.Context, socket string, onSync engine.VMSyncFunc, onChange engine.VMChangeFunc) error
 	Probe(ctx context.Context, vsockSocket string, timeout time.Duration) error
 	WaitCapture(ctx context.Context, snap string) error
 	DialGuestPort(ctx context.Context, vsockSocket string, port uint16) (net.Conn, error)
-	InstallCACert(ctx context.Context, vsockSocket string, certPEM []byte) error
-	MarkLane(ctx context.Context, vsockSocket string, lane types.NetRoute) error
-	TunUp(ctx context.Context, vsockSocket string) error
-	TunDown(ctx context.Context, vsockSocket string) error
 	Warmup(ctx context.Context, vsockSocket string, argv []string) error
 	SettleGuest(ctx context.Context, vsockSocket string) error
 	TrimCow(ctx context.Context, vsockSocket string) error
