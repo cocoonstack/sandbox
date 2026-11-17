@@ -80,10 +80,13 @@ func (c ckMarkers) list() ([]string, error) {
 
 func (c ckMarkers) clear(ckID string) error {
 	err := os.Remove(filepath.Join(c.dir, ckID))
-	if errors.Is(err, fs.ErrNotExist) {
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
 		return nil
+	case err != nil:
+		return err
 	}
-	return err
+	return utils.SyncDir(c.dir)
 }
 
 func (c ckMarkers) marked(ckID string) bool {
