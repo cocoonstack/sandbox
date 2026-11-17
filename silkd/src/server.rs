@@ -323,10 +323,7 @@ impl State {
                         return proto::write_frame(w, &Response::Exit { code }).await;
                     }
                     Ok(chunk) => write_chunk(w, &mut frame, chunk).await?,
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                        return proto::write_frame(w, &Response::Done).await;
-                    }
+                    Err(_) => continue,
                 },
                 r = reader.fill_buf(), if !pipelined => {
                     if !matches!(r, Ok(buf) if !buf.is_empty()) {
