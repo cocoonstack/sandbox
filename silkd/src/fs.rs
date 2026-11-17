@@ -112,7 +112,7 @@ pub async fn list<W: AsyncWrite + Unpin>(w: &mut W, path: String) -> io::Result<
     }
 }
 
-/// Writes `bytes` to `path` via a sibling temp file, so a crash never leaves a truncated file.
+/// Writes `bytes` to `path` via a sibling temp file renamed into place, so a reader never sees a partial file.
 pub async fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
     let (tmp, mut file) = create_tmp(path, None).await?;
     let written = match file.write_all(bytes).await {

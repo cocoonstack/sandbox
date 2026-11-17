@@ -7,7 +7,8 @@ the guest.
 
 Verbs: exec (streaming stdio, detach, sessions), proc table (ps/kill/logs/
 attach with a bounded output ring), streaming fs + tar tree push/pull
-(both atomic), find/replace, watch (ready-acked), pty, structured git,
+(`fs_write` and `fs_push` commit atomically), find/replace, watch
+(ready-acked), pty, structured git,
 guest port relay (`port_forward`), an LSP broker that spawns the
 language server a flavor image ships under `/etc/silkd/lsp.d/<language>`,
 and `tun_up`/`tun_down` for the advanced network mode's tun0 (`src/tun.rs`).
