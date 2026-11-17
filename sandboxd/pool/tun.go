@@ -17,11 +17,8 @@ import (
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
 
-const (
-	tunPlanTries = 3
-	// A node confirms its claims hourly and re-reserves an address released while it held it.
-	tunUnconfirmedAfter = 24 * time.Hour
-)
+// A node confirms its claims hourly and re-reserves an address released while it held it.
+const tunUnconfirmedAfter = 24 * time.Hour
 
 var errTunRaced = errors.New("tun state changed since planned")
 
@@ -58,12 +55,11 @@ func (m *Manager) SetTun(ctx context.Context, id string, enabled *bool, profile 
 	if locked {
 		defer sb.Transition.Unlock()
 	}
-	for range tunPlanTries {
-		if err := m.setTun(ctx, sb, locked, enabled, profile); !errors.Is(err, errTunRaced) {
-			return err
-		}
+	err := m.setTun(ctx, sb, locked, enabled, profile)
+	if errors.Is(err, errTunRaced) {
+		return ErrPaused
 	}
-	return ErrPaused
+	return err
 }
 
 // TunStats snapshots the tun router's counters; false when the node has no tun block.

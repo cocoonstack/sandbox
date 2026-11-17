@@ -378,6 +378,29 @@ func TestALosingConcurrentEnableKeepsTheAddressTheWinnerPublished(t *testing.T) 
 	}
 }
 
+func TestASetTunAConcurrentWriteOvertookAnswersErrPaused(t *testing.T) {
+	addrs := &fakeAddrs{err: errors.New("meta store down")}
+	m := tunManager(t, newFakeEngine(), addrs, config.PoolSpec{PoolKey: testKey, Tun: true, Egress: anyPolicy})
+	sb := mustClaim(t, m, testKey)
+	addrs.mu.Lock()
+	addrs.err = nil
+	addrs.beforeAssign = func() {
+		if err := m.SetTun(t.Context(), sb.ID, new(false), nil); err != nil {
+			t.Errorf("the disable that overtakes the enable: %v", err)
+		}
+	}
+	addrs.mu.Unlock()
+	if err := m.SetTun(t.Context(), sb.ID, new(true), nil); !errors.Is(err, ErrPaused) {
+		t.Errorf("an enable a disable overtook: %v, want ErrPaused", err)
+	}
+	if st := m.tunState(sb); st.On || st.Addr.IsValid() {
+		t.Errorf("state %+v, want the disable kept and no address held", st)
+	}
+	if got := addrs.releasedList(); len(got) != 1 {
+		t.Errorf("released %v, want the address the stale plan assigned freed", got)
+	}
+}
+
 func TestATunFlowEndWritesOneAuditRecord(t *testing.T) {
 	dir := t.TempDir()
 	cfg := &config.Config{DataDir: dir, AuditLog: true}
@@ -533,14 +556,22 @@ func tunVerbsOf(eng *fakeEngine) []string {
 }
 
 type fakeAddrs struct {
-	mu       sync.Mutex
-	err      error
-	next     int
-	held     map[string]netip.Addr
-	released []string
+	mu           sync.Mutex
+	err          error
+	beforeAssign func()
+	next         int
+	held         map[string]netip.Addr
+	released     []string
 }
 
 func (f *fakeAddrs) Assign(_ context.Context, id string) (netip.Addr, error) {
+	f.mu.Lock()
+	hook := f.beforeAssign
+	f.beforeAssign = nil
+	f.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.err != nil {
