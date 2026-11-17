@@ -218,7 +218,9 @@ it while it sleeps write it, so the claim path is unchanged.
   node (with its record gone) or the row has no owner, since its owner
   released it in an [evacuation](#evacuating-a-node). The node records the claim as archived and
   answers as the owner. Two nodes adopting at once leave one owner; the other
-  answers 404. A tombstone is never adopted. The next call that reaches the
+  answers 404. A node that takes the row and then cannot write its claims
+  journal releases the row to no owner and answers the error, so the next
+  lookup adopts on any node. A tombstone is never adopted. The next call that reaches the
   guest wakes the claim from the store as usual. An owner with a live lease answers for
   itself, and a node that tries to take its row is refused with a 404.
   A draining node never adopts, nor does a fenced node or one that lifted its

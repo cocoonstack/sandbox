@@ -273,6 +273,27 @@ func TestFailoverAdoptionMovesTheClaimAndTheOldOwnerLetsGo(t *testing.T) {
 	}
 }
 
+func TestFailoverAnAdoptionThatCannotPersistLeavesTheRowToAPeer(t *testing.T) {
+	c := newFailoverCluster(t)
+	a, b := c.pair(t)
+	peer := c.node(t, "c", t.TempDir(), keepAnHour)
+	sb := mustClaim(t, a, testKey)
+	mustArchive(t, a, sb)
+	c.expire("a")
+	breakStore(t, b)
+	if adopted, err := b.AdoptArchived(t.Context(), sb.ID, Cred{Token: sb.Token}); err == nil || adopted {
+		t.Fatalf("adopt with claims.json unwritable: %v %v, want an error", adopted, err)
+	}
+	if _, held := b.byID(sb.ID); held {
+		t.Error("the node kept a claim it could not persist")
+	}
+	if rec, _, _ := c.reg.Get(t.Context(), sb.ID); rec.Owner != "" {
+		t.Errorf("row owner %q after the failed adoption, want none", rec.Owner)
+	}
+	mustAdopt(t, peer, sb, "a peer's adoption after the failed one")
+	healStore(t, b)
+}
+
 func TestFailoverNoAdoptionWhileTheOwnerIsAlive(t *testing.T) {
 	c := newFailoverCluster(t)
 	a, b := c.pair(t)
