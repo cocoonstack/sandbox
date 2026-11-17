@@ -496,24 +496,24 @@ type link struct {
 }
 
 func (l *link) read(br *bufio.Reader) error {
-	var head [4]byte
-	frame := make([]byte, MaxFrame)
 	for {
-		if _, err := io.ReadFull(br, head[:]); err != nil {
-			return err
-		}
-		n, err := FrameLen(head)
+		head, err := br.Peek(4)
 		if err != nil {
 			return err
 		}
-		pkt := frame[:n]
-		if _, err = io.ReadFull(br, pkt); err != nil {
+		n, err := FrameLen([4]byte(head))
+		if err != nil {
+			return err
+		}
+		pkt, err := br.Peek(4 + n)
+		if err != nil {
 			return err
 		}
 		l.r.framesIn.Add(1)
-		if drop := l.forward(pkt); drop != DropNone {
+		if drop := l.forward(pkt[4:]); drop != DropNone {
 			l.r.drops[drop].Add(1)
 		}
+		_, _ = br.Discard(4 + n)
 	}
 }
 

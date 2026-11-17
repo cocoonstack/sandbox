@@ -209,8 +209,7 @@ guest -> tun0 -> silkd --vsock 2051--> sandboxd --VXLAN--> exit (vxlan0, forward
   adds, on the claim path, an in-memory address (or one meta-store round
   trip), a socket bind and one gratuitous ARP; `tun_up` is sent in the
   background. Per packet: one parse, one flow-table read, the rate checks, an
-  incremental checksum update, one copy out of the stream buffer and one into
-the send buffer; a 64 KiB GSO
+  incremental checksum update and one copy into the send buffer; a 64 KiB GSO
   frame costs about 9 µs to segment and checksum (`BenchmarkForwardGSO`), a
   small packet about 100 ns, a delivered packet about 250 ns, all without
   allocation.

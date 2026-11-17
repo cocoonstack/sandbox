@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/netip"
 	"os"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -518,6 +519,34 @@ func TestRouterBoundsTheBuffersAStalledGuestHolds(t *testing.T) {
 		}
 		if held > 18<<20 {
 			t.Fatalf("a guest that stopped reading holds %d bytes of buffers, want at most 18 MiB", held)
+		}
+	})
+}
+
+func TestRouterForwardsFramesSplitAcrossWrites(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		u, r := newRouter(t)
+		r.Arm(Claim{ID: "c1", Addr: claimAddr, Allow: func(netip.Addr, uint16) bool { return true }})
+		u.sent(t)
+		guest := serve(t, r, claimAddr)
+		guestHello(t, guest)
+		var stream []byte
+		for i := range uint16(3) {
+			f := frame(ProtoTCP, GuestAddr, remote, true)
+			binary.BigEndian.PutUint16(f[VnetHdrLen+20+2:], 443+i)
+			stream = append(binary.LittleEndian.AppendUint32(stream, uint32(len(f))), f...)
+		}
+		for chunk := range slices.Chunk(stream, 50) {
+			if _, err := guest.Write(chunk); err != nil {
+				t.Fatal(err)
+			}
+		}
+		for i := range uint16(3) {
+			inner, _, _ := u.sent(t)
+			pkt := append(make([]byte, VnetHdrLen), inner...)
+			if p, _ := Parse(pkt); p.DstPort != 443+i || p.Src != claimAddr || !validIP(pkt) || !validL4(pkt) {
+				t.Fatalf("packet %d sent to port %d from %v, want port %d from the claim address with full checksums", i, p.DstPort, p.Src, 443+i)
+			}
 		}
 	})
 }
