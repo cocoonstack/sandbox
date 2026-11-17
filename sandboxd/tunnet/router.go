@@ -39,8 +39,10 @@ const (
 	helloTimeout = 5 * time.Second
 	sweepEvery   = 10 * time.Second
 	refreshEvery = 45 * time.Second
-	// sendQueue bounds the frames waiting for one guest, about 64 MiB at worst; a full queue drops, as a congested link would.
+	// sendQueue bounds the frames waiting for one guest and sendLarge those in a 64 KiB buffer, under 18 MiB at worst; a full queue drops, as a congested link would.
 	sendQueue   = 1024
+	sendLarge   = 128
+	smallBuf    = 4 + VnetHdrLen + 9000
 	readBuf     = 256 << 10
 	writeStall  = 10 * time.Second
 	segmentable = OffloadCSUM | OffloadTSO4 | OffloadTSOECN | OffloadUSO4 | OffloadUSO6
@@ -125,7 +127,8 @@ type Stats struct {
 type Router struct {
 	under Underlay
 	conf  atomic.Pointer[overlay]
-	pool  sync.Pool
+	small sync.Pool
+	large sync.Pool
 
 	framesIn, framesOut  atomic.Uint64
 	dgramsOut, dgramsIn  atomic.Uint64
@@ -141,7 +144,8 @@ type Router struct {
 func New(under Underlay, o *Overlay) *Router {
 	r := &Router{under: under, claims: map[netip.Addr]*armed{}}
 	r.conf.Store(load(o))
-	r.pool.New = func() any { b := make([]byte, 4+MaxFrame); return &b }
+	r.small.New = func() any { b := make([]byte, smallBuf); return &b }
+	r.large.New = func() any { b := make([]byte, 4+MaxFrame); return &b }
 	return r
 }
 
@@ -324,8 +328,9 @@ func (r *Router) deliver(inner []byte) Drop {
 	if len(inner) > MaxFrame-VnetHdrLen {
 		return DropMalformed
 	}
-	bp := r.pool.Get().(*[]byte)
-	b := (*bp)[:4+VnetHdrLen+len(inner)]
+	n := 4 + VnetHdrLen + len(inner)
+	bp := r.pool(n).Get().(*[]byte)
+	b := (*bp)[:n]
 	clear(b[4 : 4+VnetHdrLen])
 	copy(b[4+VnetHdrLen:], inner)
 	frame := b[4:]
@@ -341,7 +346,7 @@ func (r *Router) deliver(inner []byte) Drop {
 		}
 		drop = DropQueueFull
 	}
-	r.pool.Put(bp)
+	r.put(bp)
 	return drop
 }
 
@@ -370,6 +375,17 @@ func (r *Router) admit(frame []byte) (*link, Drop) {
 		rewriteQuoted(frame, srcAt, p.Dst, GuestAddr)
 	}
 	return l, DropNone
+}
+
+func (r *Router) pool(n int) *sync.Pool {
+	if n > smallBuf {
+		return &r.large
+	}
+	return &r.small
+}
+
+func (r *Router) put(bp *[]byte) {
+	r.pool(cap(*bp)).Put(bp)
 }
 
 func (r *Router) announceAll() {
@@ -474,6 +490,7 @@ type link struct {
 	merge bool
 	out   []byte
 	send  chan *[]byte
+	large atomic.Int32
 	done  chan struct{}
 	once  sync.Once
 }
@@ -548,10 +565,17 @@ func (l *link) forward(frame []byte) Drop {
 }
 
 func (l *link) enqueue(bp *[]byte) bool {
+	if large(bp) && l.large.Add(1) > sendLarge {
+		l.large.Add(-1)
+		return false
+	}
 	select {
 	case l.send <- bp:
 		return true
 	default:
+		if large(bp) {
+			l.large.Add(-1)
+		}
 		return false
 	}
 }
@@ -580,7 +604,10 @@ func (l *link) write() {
 			_, err := bufs.WriteTo(l.conn)
 			l.r.framesOut.Add(uint64(len(held)))
 			for _, bp := range held {
-				l.r.pool.Put(bp)
+				if large(bp) {
+					l.large.Add(-1)
+				}
+				l.r.put(bp)
 			}
 			if err != nil {
 				l.close()
@@ -607,6 +634,10 @@ func (l *link) close() {
 		close(l.done)
 		_ = l.conn.Close()
 	})
+}
+
+func large(bp *[]byte) bool {
+	return cap(*bp) > smallBuf
 }
 
 func dst4(a netip.Addr) uint64 {

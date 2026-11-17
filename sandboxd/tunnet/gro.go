@@ -37,8 +37,11 @@ func (c *coalescer) add(r *Router, l *link, bp *[]byte, frame []byte) bool {
 		return false
 	}
 	if c.joins(l, frame, seg) {
+		if 4+c.n+seg.payload > cap(*c.bp) {
+			c.grow(r)
+		}
 		c.append(frame, seg)
-		r.pool.Put(bp)
+		r.put(bp)
 		if seg.push || seg.payload < c.mss {
 			c.flush(r)
 		}
@@ -68,7 +71,7 @@ func (c *coalescer) flush(r *Router) {
 	*c.bp = b
 	if !c.l.enqueue(c.bp) {
 		r.drops[DropQueueFull].Add(1)
-		r.pool.Put(c.bp)
+		r.put(c.bp)
 	}
 	c.l, c.bp = nil, nil
 }
@@ -92,6 +95,14 @@ func (c *coalescer) append(frame []byte, seg tcpSegment) {
 	c.segs++
 	c.next += uint32(len(payload)) //nolint:gosec // a payload fits a sequence step
 	c.push = c.push || seg.push
+}
+
+func (c *coalescer) grow(r *Router) {
+	bp := r.large.Get().(*[]byte)
+	*bp = (*bp)[:cap(*bp)]
+	copy(*bp, (*c.bp)[:4+c.n])
+	r.put(c.bp)
+	c.bp = bp
 }
 
 // finish turns the merged packet into a GSO frame with a partial checksum, which the guest takes as already verified.

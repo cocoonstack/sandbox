@@ -457,6 +457,71 @@ func TestRouterPointsAGuestICMPErrorAtTheClaimAddress(t *testing.T) {
 	})
 }
 
+func TestDeliverMovesATrainThatOutgrowsItsBufferIntoALargeOne(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		u, r := newRouter(t)
+		r.Arm(Claim{ID: "c1", Addr: claimAddr, Allow: func(netip.Addr, uint16) bool { return true }})
+		u.sent(t)
+		guest := serve(t, r, claimAddr)
+		guestHello(t, guest)
+		sendFrame(t, guest, frame(ProtoTCP, GuestAddr, remote, false))
+		u.sent(t)
+		segs := make([][]byte, 12)
+		var want []byte
+		for i := range segs {
+			segs[i] = dataSegment(uint32(1000+1000*i), 1000)
+			want = append(want, segs[i][Overhead+40:]...)
+		}
+		u.injectBatch(t, segs...)
+		merged := readFrame(t, guest)
+		ip := merged[VnetHdrLen:]
+		if p, _ := Parse(merged); merged[1] != gsoTCPv4 || p.Src != remote || p.Dst != GuestAddr || binary.BigEndian.Uint32(ip[24:]) != 1000 {
+			t.Fatalf("frame gso %d from %v to %v at sequence %d, want one TCPv4 GSO frame that starts the train", merged[1], p.Src, p.Dst, binary.BigEndian.Uint32(ip[24:]))
+		}
+		if !bytes.Equal(ip[40:], want) {
+			t.Fatalf("merged payload of %d bytes differs from the 12 segments' %d", len(ip)-40, len(want))
+		}
+		if got, want := binary.BigEndian.Uint16(ip[36:]), fold(pseudoSum(ip, len(ip)-20)); got != want || !validIP(merged) {
+			t.Errorf("merged checksum %#x want the pseudo-header sum %#x, ip valid %v", got, want, validIP(merged))
+		}
+	})
+}
+
+func TestRouterBoundsTheBuffersAStalledGuestHolds(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		u, r := newRouter(t)
+		r.Arm(Claim{ID: "c1", Addr: claimAddr, Allow: func(netip.Addr, uint16) bool { return true }})
+		u.sent(t)
+		guest := serve(t, r, claimAddr)
+		guestHello(t, guest)
+		sendFrame(t, guest, frame(ProtoTCP, GuestAddr, remote, false))
+		u.sent(t)
+		train := make([][]byte, 12)
+		for i := range train {
+			train[i] = dataSegment(uint32(1000+1000*i), 1000)
+		}
+		for range 300 {
+			u.injectBatch(t, train...)
+		}
+		small := reply(remote)
+		for range 1200 {
+			u.inject(t, small)
+		}
+		synctest.Wait()
+		l := r.claims[claimAddr].live()
+		if l == nil || r.Stats().Drops[DropQueueFull] == 0 {
+			t.Fatalf("stream live %v with %d queue drops, want a live stream whose queue filled", l != nil, r.Stats().Drops[DropQueueFull])
+		}
+		held := 0
+		for range len(l.send) {
+			held += cap(*<-l.send)
+		}
+		if held > 18<<20 {
+			t.Fatalf("a guest that stopped reading holds %d bytes of buffers, want at most 18 MiB", held)
+		}
+	})
+}
+
 func newRouter(t *testing.T) (*fakeUnder, *Router) {
 	t.Helper()
 	u := &fakeUnder{out: make(chan sent, 64), in: make(chan []sent, 16), done: make(chan struct{})}
