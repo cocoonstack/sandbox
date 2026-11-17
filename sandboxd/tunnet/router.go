@@ -365,7 +365,7 @@ func (r *Router) admit(frame []byte) (*link, Drop) {
 	if a.c.Touch != nil {
 		a.c.Touch(now)
 	}
-	RewriteDst(frame, GuestAddr)
+	rewrite(frame, dstAt, GuestAddr.As4())
 	if icmpError(p) {
 		rewriteQuoted(frame, srcAt, p.Dst, GuestAddr)
 	}
@@ -546,7 +546,7 @@ func (l *link) forward(frame []byte) Drop {
 	if drop = f.outbound(p, wire, now); drop != DropNone {
 		return drop
 	}
-	RewriteSrc(frame, l.a.c.Addr)
+	rewrite(frame, srcAt, l.a.c.Addr.As4())
 	if icmpError(p) {
 		rewriteQuoted(frame, dstAt, GuestAddr, l.a.c.Addr)
 	}

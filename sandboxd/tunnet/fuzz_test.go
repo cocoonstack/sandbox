@@ -33,8 +33,8 @@ func FuzzParseAndRewrite(f *testing.F) {
 		if p.Proto != ProtoTCP && p.Proto != ProtoUDP && p.Proto != ProtoICMP {
 			t.Fatalf("Parse passed protocol %d", p.Proto)
 		}
-		RewriteSrc(b, claimAddr)
-		RewriteDst(b, GuestAddr)
+		rewrite(b, srcAt, claimAddr.As4())
+		rewrite(b, dstAt, GuestAddr.As4())
 		if q, _ := Parse(b); q.Src != claimAddr || q.Dst != GuestAddr {
 			t.Fatalf("rewrite left %v -> %v", q.Src, q.Dst)
 		}
