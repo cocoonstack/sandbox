@@ -150,6 +150,21 @@ async fn clone_copies_a_repository() {
 }
 
 #[tokio::test]
+async fn clone_reads_a_dash_leading_url_as_the_repository() {
+    let dst = tempfile::tempdir().unwrap();
+    let frames = request(json!({
+        "op":"git_clone", "url": "--quiet", "path": dst.path().join("clone").to_str().unwrap()
+    }))
+    .await;
+    assert_error(&frames[0], "internal");
+    let message = frames[0]["message"].as_str().unwrap();
+    assert!(
+        message.contains("'--quiet'"),
+        "git took the url for an option: {message}"
+    );
+}
+
+#[tokio::test]
 async fn status_handles_rename_and_spaces() {
     let repo = init_repo();
     let p = repo.path().to_str().unwrap();

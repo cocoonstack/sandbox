@@ -30,8 +30,7 @@ pub async fn clone<W: AsyncWrite + Unpin>(
         depth_arg = d.to_string();
         args.extend(["--depth", &depth_arg]);
     }
-    args.push(url);
-    args.push(path);
+    args.extend(["--", url, path]);
     // clone has no repo dir yet.
     let out = git(".", auth, &args).await?;
     terminal(w, "clone", &out).await
