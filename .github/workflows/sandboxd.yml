@@ -83,8 +83,7 @@ jobs:
         run: |
           GOWORK=off go test -race -count=1 -v ./tenants/... ./poolset/... ./archives/... ./usage/... ./moves/... ./tunnet/pg/... | tee "$RUNNER_TEMP/pg-test.log"
           GOWORK=off go test -race -count=1 -v -run 'TestTwoNodesOnOneMetaStore|TestNodesOfACell|TestAMetaStoreNodeWithoutACell' ./pool/ | tee -a "$RUNNER_TEMP/pg-test.log"
-          ! grep -- '--- SKIP' "$RUNNER_TEMP/pg-test.log"
-          ! grep -- 'no tests to run' "$RUNNER_TEMP/pg-test.log"
+          ! grep -E -- '--- SKIP|no tests to run' "$RUNNER_TEMP/pg-test.log"
 
       - name: Test the S3 checkpoint store against a real endpoint
         working-directory: sandboxd
