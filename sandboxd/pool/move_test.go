@@ -693,6 +693,30 @@ func TestAMoveWhoseRowAPeerAdoptedKeepsTheAdoptersCheckpoint(t *testing.T) {
 	}
 }
 
+func TestARearmedReplicaLosesTheDeleteMarkAMoveLeftOnIt(t *testing.T) {
+	mc := newMoveClusterWith(t, func(c *failoverCluster) { c.replicate = replicateEvery })
+	u := mc.moveNode(t, "c")
+	sb := mustClaim(t, mc.s, testKey)
+	replicateNow(t, mc.s, sb)
+	mc.s.mu.Lock()
+	replica, epoch := sb.ReplicaCk, sb.ArchiveEpoch
+	mc.s.mu.Unlock()
+	if _, err := mc.reg.Consume(t.Context(), sb.ID, epoch); err != nil {
+		t.Fatalf("consume: %v", err)
+	}
+	if err := mc.s.ckMarks.mark(replica); err != nil {
+		t.Fatalf("mark: %v", err)
+	}
+	mc.s.reputArchive(t.Context(), sb)
+	mc.expire("a")
+	mustAdopt(t, u, sb, "adoption of the re-armed replica")
+	mc.s.dropAdopted(t.Context(), sb)
+	mc.s.retryArchiveDeletes(t.Context())
+	if !ckExists(t, mc.s, replica) {
+		t.Error("the delete mark of the move deleted the checkpoint a peer adopted after the re-arm")
+	}
+}
+
 func TestMoveRestartAfterTheConsumeKeepsTheClaim(t *testing.T) {
 	for name, fieldsCleared := range map[string]bool{"before its fields are cleared": false, "after its fields are cleared": true} {
 		t.Run(name, func(t *testing.T) {

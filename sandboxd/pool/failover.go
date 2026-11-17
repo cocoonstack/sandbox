@@ -145,6 +145,9 @@ func (m *Manager) replaceReplica(ctx context.Context, sb *types.Sandbox, ck stri
 }
 
 func (m *Manager) putRow(ctx context.Context, sb *types.Sandbox, ck string, replica, replace bool) (int64, error) {
+	if err := m.ckMarks.clear(ck); err != nil {
+		return 0, fmt.Errorf("keep checkpoint %s: %w", ck, err)
+	}
 	m.mu.Lock()
 	if replica && m.hasVolumeHolds(sb) {
 		m.mu.Unlock()

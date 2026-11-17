@@ -389,7 +389,6 @@ func (m *Manager) abortMoveOut(ctx context.Context, sb *types.Sandbox, mv *outMo
 	return nil
 }
 
-// trackReplica marks a replica no adoptable row names any longer, so the move's end deletes it even after a crash.
 func (m *Manager) trackReplica(mv *outMove, replica string) error {
 	if replica == "" {
 		return nil
