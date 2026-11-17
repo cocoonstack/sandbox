@@ -17,7 +17,6 @@ func main() {
 		addr     = flag.String("addr", "127.0.0.1:7777", "sandboxd address")
 		token    = flag.String("token", "", "node api token")
 		template = flag.String("template", "rt:24.04", "template ref")
-		netShape = flag.String("net", "none", "network lane: none|egress")
 		size     = flag.String("size", "", "size tier (empty = server default)")
 		n        = flag.Int("n", 3, "iterations")
 		ttl      = flag.Int("ttl", 0, "sandbox ttl seconds (0 = server default)")
@@ -26,19 +25,19 @@ func main() {
 	)
 	flag.Parse()
 
-	if err := run(*addr, *token, *template, *netShape, *size, *n, *ttl, *leak, *proof); err != nil {
+	if err := run(*addr, *token, *template, *size, *n, *ttl, *leak, *proof); err != nil {
 		fmt.Fprintln(os.Stderr, "demo:", err)
 		os.Exit(1)
 	}
 }
 
-func run(addr, token, template, netShape, size string, n, ttl int, leak, proof bool) error {
+func run(addr, token, template, size string, n, ttl int, leak, proof bool) error {
 	ctx := context.Background()
 	client, err := sandbox.Connect(addr, sandbox.WithAPIToken(token))
 	if err != nil {
 		return err
 	}
-	opts := []sandbox.Option{sandbox.WithNetwork(sandbox.NetShape(netShape))}
+	opts := []sandbox.Option{sandbox.WithNetwork(sandbox.NetNone)}
 	if size != "" {
 		opts = append(opts, sandbox.WithSize(sandbox.Size(size)))
 	}

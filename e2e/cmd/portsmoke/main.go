@@ -36,21 +36,20 @@ func main() {
 	token := flag.String("token", "", "node api token")
 	template := flag.String("template", "rt:24.04", "template ref")
 	listener := flag.String("listener", "", "path to the guestserver binary uploaded into the sandbox")
-	hold := flag.Duration("hold", 0, "after the steps pass, print the claim and keep it alive for this long")
 	flag.Parse()
 
-	if err := run(*addr, *token, *template, *listener, *hold); err != nil {
+	if err := run(*addr, *token, *template, *listener); err != nil {
 		fmt.Fprintln(os.Stderr, "portsmoke:", err)
 		os.Exit(1)
 	}
 	fmt.Println("PORTSMOKE PASS")
 }
 
-func run(addr, token, template, listener string, hold time.Duration) error {
+func run(addr, token, template, listener string) error {
 	if listener == "" {
 		return errors.New("-listener is required: the stock image ships no HTTP listener")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 600*time.Second+hold)
+	ctx, cancel := context.WithTimeout(context.Background(), 600*time.Second)
 	defer cancel()
 
 	_, sb, err := harness.Claim(ctx, addr, token, template,
@@ -88,13 +87,6 @@ func run(addr, token, template, listener string, hold time.Duration) error {
 			return fmt.Errorf("%s: %w", step.name, err)
 		}
 		fmt.Printf("  ok  %-24s %5.1fs\n", step.name, time.Since(t0).Seconds())
-	}
-	if hold > 0 {
-		fmt.Printf("SANDBOX %s %s %s %d\n", sb.ID, sb.Token(), sb.Owner(), guestPort)
-		select {
-		case <-time.After(hold):
-		case <-ctx.Done():
-		}
 	}
 	return nil
 }
