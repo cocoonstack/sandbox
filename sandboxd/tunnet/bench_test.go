@@ -52,7 +52,7 @@ func BenchmarkDeliver(b *testing.B) {
 	inner, _, _ := parseVXLAN(d, 7)
 	go func() {
 		for bp := range l.send {
-			l.r.put(bp)
+			l.r.pool.Put(bp)
 		}
 	}()
 	b.Cleanup(func() { close(l.send) })
@@ -62,29 +62,6 @@ func BenchmarkDeliver(b *testing.B) {
 		if drop := l.r.deliver(inner); drop != DropNone && drop != DropQueueFull {
 			b.Fatal(drop)
 		}
-	}
-}
-
-func BenchmarkDeliverTrain(b *testing.B) {
-	l := benchLink(b)
-	l.forward(frame(ProtoTCP, GuestAddr, remote, false))
-	segs := make([][]byte, 45)
-	n := 0
-	for i := range segs {
-		segs[i], _, _ = parseVXLAN(dataSegment(uint32(1000+1398*i), 1398), 7)
-		n += len(segs[i])
-	}
-	b.SetBytes(int64(n))
-	b.ReportAllocs()
-	for b.Loop() {
-		for _, s := range segs {
-			if drop := l.r.deliver(s); drop != DropNone {
-				b.Fatal(drop)
-			}
-		}
-		l.r.gro.flush(l.r)
-		l.large.Add(-1)
-		l.r.put(<-l.send)
 	}
 }
 
