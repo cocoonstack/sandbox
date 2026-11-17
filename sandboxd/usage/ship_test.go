@@ -170,6 +170,24 @@ func TestShipLandsEveryTickUntilItsContextEnds(t *testing.T) {
 	})
 }
 
+func TestShipDrainsOnceMoreWhenItsContextEnds(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		path, store := journalAt(t), &memStore{}
+		appendEvents(t, path, "a")
+		ctx, cancel := context.WithCancel(t.Context())
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			Ship(ctx, path, "n1", store)
+		}()
+		synctest.Wait()
+		appendEvents(t, path, "b")
+		cancel()
+		<-done
+		assertLanded(t, store, "a,b")
+	})
+}
+
 func journalAt(t *testing.T) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), JournalFile)

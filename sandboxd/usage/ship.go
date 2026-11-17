@@ -24,7 +24,7 @@ const (
 	shipBatch = 1000
 )
 
-// Ship lands the journal at path in store as node's events until ctx ends; it only reads the journal.
+// Ship lands the journal at path in store as node's events until ctx ends, then drains it once more; it only reads the journal.
 func Ship(ctx context.Context, path, node string, store Store) {
 	s := &shipper{path: path, node: node, store: store}
 	tick := time.Tick(shipEvery)
@@ -32,6 +32,9 @@ func Ship(ctx context.Context, path, node string, store Store) {
 		s.drain(ctx)
 		select {
 		case <-ctx.Done():
+			final, cancel := context.WithTimeout(context.WithoutCancel(ctx), shipEvery)
+			s.drain(final)
+			cancel()
 			return
 		case <-tick:
 		}

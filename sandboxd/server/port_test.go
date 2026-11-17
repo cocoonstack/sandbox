@@ -2,6 +2,7 @@ package server
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"io"
 	"net"
@@ -151,7 +152,7 @@ func TestPortRelayEndsOnGuestClose(t *testing.T) {
 func TestSpliceTearsDownWhenTheClientDies(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		srv := New("", "node:7777", &fakeManager{}, &fakeDialer{}, nil, nil, nil, nil)
-		t.Cleanup(srv.CloseRelays)
+		t.Cleanup(func() { srv.CloseRelays(context.Background()) })
 		client, clientPeer := net.Pipe()
 		t.Cleanup(func() { _ = client.Close(); _ = clientPeer.Close() })
 		guest, guestPeer := net.Pipe()
@@ -188,7 +189,7 @@ func TestSpliceTearsDownWhenTheClientDies(t *testing.T) {
 func TestSpliceTearsDownWhenTheGuestFails(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		srv := New("", "node:7777", &fakeManager{}, &fakeDialer{}, nil, nil, nil, nil)
-		t.Cleanup(srv.CloseRelays)
+		t.Cleanup(func() { srv.CloseRelays(context.Background()) })
 		client, clientPeer := net.Pipe()
 		t.Cleanup(func() { _ = client.Close(); _ = clientPeer.Close() })
 		guest, guestPeer := net.Pipe()

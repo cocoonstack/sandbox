@@ -42,8 +42,8 @@ type relayEnds struct {
 	guest, client func(net.Conn)
 }
 
-// CloseRelays force-closes in-flight relays; http.Server.Shutdown does not track hijacked conns.
-func (s *Server) CloseRelays() {
+// CloseRelays force-closes in-flight relays and waits for them until ctx ends; http.Server.Shutdown does not track hijacked conns.
+func (s *Server) CloseRelays(ctx context.Context) {
 	s.relayMu.Lock()
 	s.relayClosed = true
 	for client, guest := range s.relays {
@@ -51,7 +51,15 @@ func (s *Server) CloseRelays() {
 		_ = guest.Close()
 	}
 	s.relayMu.Unlock()
-	s.relayWG.Wait()
+	done := make(chan struct{})
+	go func() {
+		s.relayWG.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-ctx.Done():
+	}
 }
 
 func (s *Server) handleAgent(w http.ResponseWriter, r *http.Request) {

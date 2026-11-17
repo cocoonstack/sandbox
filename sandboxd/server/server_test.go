@@ -3188,7 +3188,7 @@ func serveTestServer(t *testing.T, srv *Server) *httptest.Server {
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(func() {
 		ts.Close()
-		srv.CloseRelays()
+		srv.CloseRelays(context.Background())
 	})
 	return ts
 }
