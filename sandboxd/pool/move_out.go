@@ -244,6 +244,12 @@ func (m *Manager) unrowForMove(ctx context.Context, sb *types.Sandbox, mv *outMo
 	m.mu.Lock()
 	replica, epoch := sb.ReplicaCk, sb.ArchiveEpoch
 	m.mu.Unlock()
+	if replica != "" {
+		if err := m.ckMarks.mark(replica); err != nil {
+			return fmt.Errorf("track replica %s: %w", replica, err)
+		}
+		mv.replica = replica
+	}
 	if epoch == 0 {
 		rec, ok, err := m.archives.Get(ctx, sb.ID)
 		if err != nil || !ok || rec.Owner != m.nodeID || !rec.Consumed {
@@ -265,7 +271,6 @@ func (m *Manager) unrowForMove(ctx context.Context, sb *types.Sandbox, mv *outMo
 	if err != nil {
 		return err
 	}
-	mv.replica = replica
 	if err = m.archives.Delete(ctx, sb.ID, consumed); err != nil && !errors.Is(err, archives.ErrLost) {
 		return err
 	}

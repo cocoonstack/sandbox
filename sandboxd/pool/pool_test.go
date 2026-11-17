@@ -397,6 +397,23 @@ func TestReapDestroysExpiredClaims(t *testing.T) {
 	})
 }
 
+func TestReapLeavesAClaimWithAnArchiveIntentToItsSettle(t *testing.T) {
+	m := newFailoverCluster(t).node(t, "a", t.TempDir(), keepAnHour)
+	sb := mustClaim(t, m, testKey)
+	m.mu.Lock()
+	sb.ArchivePending = "ar_pending"
+	js := m.store.set(sb)
+	m.mu.Unlock()
+	if err := m.store.commit(js); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+	expire(m, sb)
+	m.reapOnce(t.Context())
+	if _, held := m.byID(sb.ID); !held {
+		t.Error("the reap destroyed a claim whose archive intent no settle resolved")
+	}
+}
+
 func TestReconcileAdoptsLiveClaimsAndDestroysTheRest(t *testing.T) {
 	eng := newFakeEngine()
 	eng.vms["sbx-live-1"] = "/vsock/live-new"
