@@ -846,8 +846,8 @@ or TTL. Pool ownership is untouched — no pools.json write, no config change.
 Answers the fresh `GET /v1/info` payload; poll `claimed` to zero to know the
 node is empty. Deliberately not persisted: a restarted node serves again. To
 keep new claims off a node across restarts, [cordon](#post-v1cordon) it; a
-cordoned node still adopts existing claims, so drain it again after a restart
-to keep it empty; the
+cordoned node still adopts existing claims, so to keep it empty after a
+restart, drain it with `?evacuate=1` again; the
 [admission table](cluster.md#node-admission) compares the states.
 
 `POST /v1/drain?evacuate=1` drains the same way, then moves the claims to the
