@@ -314,7 +314,7 @@ func metaStoreNode(t *testing.T, cell string) *Manager {
 	cfg := &config.Config{
 		DataDir:   t.TempDir(),
 		Pools:     []config.PoolSpec{{PoolKey: seedKey, Warm: 1}},
-		MetaStore: &config.MetaStoreConfig{Kind: "pg", DSNEnv: "SANDBOX_TEST_DSN", Cell: cell},
+		MetaStore: &config.MetaStoreConfig{DSNEnv: "SANDBOX_TEST_DSN", Cell: cell},
 	}
 	b := testBackends(t, cfg)
 	src, err := tenantspg.Open(t.Context(), os.Getenv("SANDBOX_TEST_DSN"))
