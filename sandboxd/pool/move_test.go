@@ -704,6 +704,40 @@ func TestMoveRestartAfterTheConsumeKeepsTheClaim(t *testing.T) {
 	}
 }
 
+func TestMoveOfAClaimWhoseWakeLeftATombstoneKeepsTheGuestOnTheTarget(t *testing.T) {
+	for name, replicate := range map[string]int{"through the target's next replica round": replicateEvery, "through the target's restart": 0} {
+		t.Run(name, func(t *testing.T) {
+			mc := newMoveClusterWith(t, func(c *failoverCluster) { c.replicate = replicate })
+			sb := mustClaim(t, mc.s, testKey)
+			mustArchive(t, mc.s, sb)
+			mc.s.ckpts = &failingDeleteStore{Store: mc.s.ckpts, attempts: make(chan string, 8)}
+			if _, _, _, err := mc.s.WakeAgentSocket(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
+				t.Fatalf("wake: %v", err)
+			}
+			if rec, ok, _ := mc.reg.Get(t.Context(), sb.ID); !ok || !rec.Consumed || rec.Owner != "a" {
+				t.Fatalf("setup: row %+v %v, want the tombstone the wake left", rec, ok)
+			}
+			if _, err := mc.s.Move(t.Context(), sb.ID, "b", time.Minute); err != nil {
+				t.Fatalf("move: %v", err)
+			}
+			if rec, ok, _ := mc.reg.Get(t.Context(), sb.ID); ok {
+				t.Errorf("a row of %s (consumed %v) outlived the move", rec.Owner, rec.Consumed)
+			}
+			target := mc.t
+			if moved, ok := target.byID(sb.ID); ok && replicate > 0 {
+				if err := target.replicate(t.Context(), moved); err != nil {
+					t.Errorf("the target's replica round: %v", err)
+				}
+			} else {
+				target = mc.restartReconciled(t, target)
+			}
+			if _, held := target.byID(sb.ID); !held {
+				t.Error("the target dropped the only guest over the source's tombstone")
+			}
+		})
+	}
+}
+
 func TestRestartSweepsTheStagingOfAMovedInClaimItDrops(t *testing.T) {
 	dataDir := t.TempDir()
 	sb := &types.Sandbox{ID: "sb_in", VMName: "sbx-in", Key: testKey, Token: "tok", Deadline: time.Now().Add(time.Hour), MoveIn: true}

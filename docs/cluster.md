@@ -515,7 +515,12 @@ and an aborted move makes the claim due at the source's next replica sweep, whic
 registry changes nothing and its move fails: it keeps the row's epoch, so the
 fence still finds a peer that adopted the claim during the outage, and the source
 drops it. A consume whose reply was lost leaves the source's own tombstone, which
-the hourly sweep puts back on the replica.
+the hourly sweep puts back on the replica. A claim that holds no row can still
+have a tombstone of the source, left by a wake whose checkpoint delete failed or
+by a replica retirement. The source deletes it before the final round too, since
+the target would read another node's tombstone as an adoption and drop the
+guest; with `archive_failover` on, a registry that cannot answer that read fails
+the move.
 
 **Failures.** Any failure before the commit aborts: the source resumes the
 guest, the target drops its reservation, files and any received VM, and the

@@ -245,7 +245,14 @@ func (m *Manager) unrowForMove(ctx context.Context, sb *types.Sandbox, mv *outMo
 	replica, epoch := sb.ReplicaCk, sb.ArchiveEpoch
 	m.mu.Unlock()
 	if epoch == 0 {
-		return nil
+		rec, ok, err := m.archives.Get(ctx, sb.ID)
+		if err != nil || !ok || rec.Owner != m.nodeID || !rec.Consumed {
+			return err
+		}
+		if err = m.archives.Delete(ctx, sb.ID, rec.Epoch); errors.Is(err, archives.ErrLost) {
+			return nil
+		}
+		return err
 	}
 	consumed, err := m.consumeRow(ctx, sb, epoch, "move")
 	if err != nil {
