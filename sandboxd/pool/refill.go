@@ -86,8 +86,9 @@ func (m *Manager) refillOne(ctx context.Context, p *pool, golden string, gen uin
 	sb, err := m.startVM(ctx, p.key, func(name string) (types.VMRecord, error) {
 		p.goldenUse.RLock()
 		defer p.goldenUse.RUnlock()
-		imageID = m.goldenImage(p)
-		return m.eng.Clone(ctx, golden, name, p.key)
+		rec, err := m.eng.Clone(ctx, golden, name, p.key)
+		imageID = rec.Config.ImageDigest
+		return rec, err
 	})
 	cloneErr := err
 	<-m.refillSem

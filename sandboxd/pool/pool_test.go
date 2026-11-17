@@ -38,6 +38,8 @@ const (
 	testRefill = 4
 
 	fakeBalloonDefault int64 = 1 << 30
+
+	fakeDigestFile = "image-digest"
 )
 
 var (
@@ -1482,6 +1484,7 @@ type fakeEngine struct {
 	imageIDs   map[string]string
 	imageErr   error
 	imageLists int
+	digests    map[string]string
 
 	metadataDocs map[string]string
 	metadataErr  error
@@ -1513,7 +1516,7 @@ func newFakeEngine() *fakeEngine {
 		vms: map[string]string{}, stopped: map[string]bool{}, creating: map[string]bool{}, pids: map[string]int{},
 		attachDirty: map[string]bool{}, removeSeenOps: map[string][]string{}, removeSeenDirty: map[string][]string{},
 		metadataDocs: map[string]string{}, guestEnvs: map[string]string{}, sockRoot: "/vsock",
-		migrateSeries: map[string]string{}, migrateRound: map[string]int{}, paused: map[string]bool{},
+		migrateSeries: map[string]string{}, migrateRound: map[string]int{}, paused: map[string]bool{}, digests: map[string]string{},
 	}
 }
 
@@ -1525,7 +1528,7 @@ func (f *fakeEngine) CloneSnap(_ context.Context, snap, name string, _ types.Poo
 	return f.clone(snap, name)
 }
 
-func (f *fakeEngine) RunCold(_ context.Context, name string, _ types.PoolKey, storage string) (types.VMRecord, error) {
+func (f *fakeEngine) RunCold(_ context.Context, name string, key types.PoolKey, storage string) (types.VMRecord, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.colds = append(f.colds, name)
@@ -1535,6 +1538,7 @@ func (f *fakeEngine) RunCold(_ context.Context, name string, _ types.PoolKey, st
 		return types.VMRecord{}, f.runColdErr
 	}
 	f.vms[name] = f.sockRoot + "/" + name
+	f.digests[name] = f.imageIDs[key.Template]
 	f.maxVMs = max(f.maxVMs, len(f.vms))
 	return f.record(name), nil
 }
@@ -1629,7 +1633,7 @@ func (f *fakeEngine) ReconcileStaleCreate(ctx context.Context, name string) (eng
 	return f.staleOutcome, nil
 }
 
-func (f *fakeEngine) SnapshotSave(_ context.Context, _, snapName string) error {
+func (f *fakeEngine) SnapshotSave(_ context.Context, vmName, snapName string) error {
 	f.mu.Lock()
 	f.snapSavesEntered++
 	stall := f.snapSaveStall
@@ -1643,6 +1647,7 @@ func (f *fakeEngine) SnapshotSave(_ context.Context, _, snapName string) error {
 		return f.snapSaveErr
 	}
 	f.snapSaves = append(f.snapSaves, snapName)
+	f.digests[snapName] = f.digests[vmName]
 	return nil
 }
 
@@ -1659,7 +1664,11 @@ func (f *fakeEngine) SnapshotExport(_ context.Context, snapName, toDir string) e
 		return err
 	}
 	f.mu.Lock()
-	files := maps.Clone(f.exportFiles)
+	files := map[string]string{}
+	maps.Copy(files, f.exportFiles)
+	if digest := f.digests[snapName]; digest != "" {
+		files[fakeDigestFile] = digest
+	}
 	f.mu.Unlock()
 	for name, body := range files {
 		if err := os.WriteFile(filepath.Join(toDir, name), []byte(body), 0o600); err != nil {
@@ -2196,15 +2205,17 @@ func (f *fakeEngine) clone(from, name string) (types.VMRecord, error) {
 	if failNth > 0 && call == failNth {
 		return types.VMRecord{}, errors.New("clone failed")
 	}
+	digest, _ := os.ReadFile(filepath.Join(from, fakeDigestFile))
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.vms[name] = f.sockRoot + "/" + name
+	f.digests[name] = string(digest)
 	f.maxVMs = max(f.maxVMs, len(f.vms))
 	return f.record(name), nil
 }
 
 func (f *fakeEngine) record(name string) types.VMRecord {
-	rec := types.VMRecord{VsockSocket: f.lateVsock(f.vms[name]), Config: types.VMConfig{Name: name}}
+	rec := types.VMRecord{VsockSocket: f.lateVsock(f.vms[name]), Config: types.VMConfig{Name: name, ImageDigest: f.digests[name]}}
 	if f.tap != "" {
 		rec.NetworkConfigs = []types.VMNetConfig{{TAP: f.tap}}
 	}
@@ -2706,6 +2717,12 @@ func seedGolden(t *testing.T, m *Manager, key types.PoolKey, imageID string) str
 	}
 	if err := os.WriteFile(g+goldenStampSuffix, []byte(m.goldenStamp(m.view.Load(), key, imageID)), 0o644); err != nil {
 		t.Fatalf("seed golden stamp: %v", err)
+	}
+	if imageID == "" {
+		return g
+	}
+	if err := os.WriteFile(filepath.Join(g, fakeDigestFile), []byte(imageID), 0o600); err != nil {
+		t.Fatalf("seed golden digest: %v", err)
 	}
 	return g
 }

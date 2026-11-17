@@ -240,8 +240,9 @@ connections to finish, and the next connection wakes the claim.
 A reader is a warm VM of the claim's own pool whose golden was built from the
 image the claim was made from, so it boots the claim's image with the claim's
 layers, and it has no NIC (egress-lane claims never hibernate). A claim records
-the content id of the image it booted: its golden's, or for a cold boot in a
-pool with `reader` the id listed right before the boot. A fork inherits its
+the content id of the image it booted, the digest cocoon reports for the VM it
+started (the id `cocoon image list` shows): a clone carries its golden's, a cold
+boot the one its ref resolved to at boot. A fork inherits its
 parent's id, and the id travels with the claim through an archive, a replica
 and a live move. Once the template is re-pulled under the same ref and the pool
 has rebuilt its golden, the warm VMs boot the new image, so a claim of the
@@ -295,7 +296,7 @@ shows the disk as of that `sync`: a write the guest makes in the instant between
 the `sync` and the pause is visible only after a wake. A hibernate whose `sync`
 fails or times out is marked not reader-safe, as is any sleep that began before
 the pool had `reader`, as is a claim adopted from a replica, and its reads wake the claim as without the feature.
-A claim that records no image wakes too: one journaled by a sandboxd that did not record images, or one cold-booted before its pool had `reader`.
+A claim that records no image wakes too: one journaled by a sandboxd that did not record images, or one whose VM cocoon reported without an image digest.
 
 ### Dataset volumes
 
