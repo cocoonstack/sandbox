@@ -170,7 +170,7 @@ func (h *Host) ArmProxy(ctx context.Context, sb *types.Sandbox) error {
 		proxy.ReportEvery(v.usageEvery)
 	}
 	if d.dns != nil {
-		d.resolver = newResolver(evCtx, h, func(ev DNSEvent) { h.o.RecordDNS(evCtx, id, tenant, ev) })
+		d.resolver = newResolver(evCtx, h, c.fenced, func(ev DNSEvent) { h.o.RecordDNS(evCtx, id, tenant, ev) })
 	}
 	h.mu.Lock()
 	h.doors[id] = d

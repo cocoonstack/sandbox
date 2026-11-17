@@ -110,7 +110,8 @@ Behavior of the relay:
 - **Failures.** When the pool has no DNS door, silkd's dial is refused. When
   the reply does not come within 5 s, silkd drops the datagram and the client
   retries on its own schedule. When no nameserver answers, sandboxd replies
-  `SERVFAIL`.
+  `SERVFAIL`. While the node is [fenced](cluster.md#running-claims-across-node-loss), a replicated
+  claim's query answers `REFUSED` and reaches no nameserver.
 - **Internal addresses.** An `A` or `AAAA` record that the dial guard would
   refuse is dropped from every section of the answer, glue records included.
   That covers special-purpose ranges and the node's own addresses, minus every
