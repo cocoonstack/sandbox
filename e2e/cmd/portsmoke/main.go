@@ -184,22 +184,22 @@ func stepGuestHalfClose(ctx context.Context, rt *harness.PortRelay, _ *sandbox.S
 	}
 	defer func() { _ = conn.Close() }()
 	greeting := make([]byte, len("greeting"))
-	if _, err := io.ReadFull(conn, greeting); err != nil {
+	if _, err = io.ReadFull(conn, greeting); err != nil {
 		return fmt.Errorf("read greeting: %w", err)
 	}
-	if n, err := conn.Read(make([]byte, 1)); !errors.Is(err, io.EOF) {
-		return fmt.Errorf("after the guest shut its write side: read %d, %v, want EOF", n, err)
+	if n, readErr := conn.Read(make([]byte, 1)); !errors.Is(readErr, io.EOF) {
+		return fmt.Errorf("after the guest shut its write side: read %d, %v, want EOF", n, readErr)
 	}
-	if _, err := io.WriteString(conn, "after-done"); err != nil {
+	if _, err = io.WriteString(conn, "after-done"); err != nil {
 		return fmt.Errorf("write after the guest half close: %w", err)
 	}
-	if err := conn.CloseWrite(); err != nil {
+	if err = conn.CloseWrite(); err != nil {
 		return err
 	}
 	var getErr error
 	err = harness.Poll(ctx, listenerReadyWait, 200*time.Millisecond, func() error {
-		seen, err := relayGet(ctx, rt, guestPort, "/half-close-seen")
-		if getErr = err; err != nil || seen == "after-done" {
+		var seen string
+		if seen, getErr = relayGet(ctx, rt, guestPort, "/half-close-seen"); getErr != nil || seen == "after-done" {
 			return nil
 		}
 		return errors.New("the guest never saw what the client sent after its own half close")

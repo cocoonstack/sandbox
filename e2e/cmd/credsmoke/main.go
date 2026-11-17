@@ -28,6 +28,12 @@ const (
 	intermediateCN = "sandbox egress intermediate"
 )
 
+type headerCase struct {
+	name      string
+	sb        *sandbox.Sandbox
+	want, not string
+}
+
 func main() {
 	addr := flag.String("addr", "127.0.0.1:7882", "sandboxd address")
 	token := flag.String("token", "", "node api token")
@@ -88,18 +94,8 @@ func run(ctx context.Context, addr, token, template, echo, secret, sse string) e
 	}
 	fmt.Println("  cluster root in the guest trust store, the leaf issued by this node's intermediate, direct egress blocked")
 
-	for _, tc := range []struct {
-		name      string
-		sb        *sandbox.Sandbox
-		want, not string
-	}{
-		{"A", a, valueA, valueB},
-		{"B", b, valueB, valueA},
-		{"plain", plain, "placeholder", "key-"},
-	} {
-		if err = expectHeader(ctx, tc.sb, echo, tc.want, tc.not, secret); err != nil {
-			return fmt.Errorf("%s: %w", tc.name, err)
-		}
+	if err = expectHeaders(ctx, echo, secret, headerCase{"A", a, valueA, valueB}, headerCase{"B", b, valueB, valueA}, headerCase{"plain", plain, "placeholder", "key-"}); err != nil {
+		return err
 	}
 	fmt.Println("  each claim's origin saw only its own credential, the plain claim the guest's placeholder, all the pool secret")
 	if sse != "" {
@@ -338,6 +334,15 @@ func expectTunnel(ctx context.Context, sb *sandbox.Sandbox, host string, interce
 	h2 := strings.Contains(out, "version=2")
 	if !found || mitm != intercepted || h2 == intercepted {
 		return fmt.Errorf("%s on %s: issuer %q, HTTP/2 %t, want intercepted %t:\n%s", host, sb.ID, issuer, h2, intercepted, out)
+	}
+	return nil
+}
+
+func expectHeaders(ctx context.Context, echo, secret string, cases ...headerCase) error {
+	for _, tc := range cases {
+		if err := expectHeader(ctx, tc.sb, echo, tc.want, tc.not, secret); err != nil {
+			return fmt.Errorf("%s: %w", tc.name, err)
+		}
 	}
 	return nil
 }

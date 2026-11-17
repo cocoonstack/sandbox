@@ -65,7 +65,7 @@ func run(addr, token, template string) error {
 		return fmt.Errorf("branch: %w", err)
 	}
 	defer func() { _ = branch.Close() }()
-	if err := waitCDP(ctx, branch); err != nil {
+	if err = waitCDP(ctx, branch); err != nil {
 		return fmt.Errorf("branch: %w", err)
 	}
 	targets, err := harness.HTTPOverPort(ctx, branch, cdpPort, "GET", "/json/list")

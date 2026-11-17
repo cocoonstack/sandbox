@@ -320,9 +320,9 @@ func metaStoreNode(t *testing.T, cell string) *Manager {
 	b.Tenants = src
 	t.Cleanup(func() { _ = src.Close() })
 	if cell != "" {
-		cells, err := poolpg.Open(t.Context(), os.Getenv("SANDBOX_TEST_DSN"), cell)
-		if err != nil {
-			t.Fatalf("cell pool set: %v", err)
+		cells, openErr := poolpg.Open(t.Context(), os.Getenv("SANDBOX_TEST_DSN"), cell)
+		if openErr != nil {
+			t.Fatalf("cell pool set: %v", openErr)
 		}
 		b.CellPools = cells
 		t.Cleanup(func() { _ = cells.Close() })

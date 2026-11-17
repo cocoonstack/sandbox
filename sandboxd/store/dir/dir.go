@@ -215,7 +215,7 @@ func (d *Store) publish(_ context.Context, staging, id, digest string, createOnl
 		return fmt.Errorf("staging has no %s: %w", store.MetaFile, err)
 	}
 	final := filepath.Join(d.root, id)
-	if err := os.MkdirAll(final, 0o750); err != nil {
+	if err = os.MkdirAll(final, 0o750); err != nil {
 		return err
 	}
 	genDir := filepath.Join(final, store.ExportGen(metaRaw))
@@ -226,10 +226,10 @@ func (d *Store) publish(_ context.Context, staging, id, digest string, createOnl
 	case errors.Is(statErr, fs.ErrNotExist):
 		stagedExport := filepath.Join(staging, store.ExportDir)
 		// Make the generation fresh before a peer can observe it without committed meta.
-		if err := os.Chtimes(stagedExport, now, now); err != nil {
+		if err = os.Chtimes(stagedExport, now, now); err != nil {
 			return err
 		}
-		if err := os.Rename(stagedExport, genDir); err != nil { //nolint:gosec // G703: our own staging dir
+		if err = os.Rename(stagedExport, genDir); err != nil { //nolint:gosec // G703: our own staging dir
 			return err
 		}
 	case statErr != nil:
@@ -248,7 +248,7 @@ func (d *Store) publish(_ context.Context, staging, id, digest string, createOnl
 			return fmt.Errorf("generation %s expired before commit; retry after sweep", filepath.Base(genDir))
 		}
 	}
-	if err := writeGenerationDigest(final, metaRaw, digest); err != nil {
+	if err = writeGenerationDigest(final, metaRaw, digest); err != nil {
 		return err
 	}
 	if committed {
@@ -256,7 +256,7 @@ func (d *Store) publish(_ context.Context, staging, id, digest string, createOnl
 		return os.RemoveAll(staging)
 	}
 	// Age the previous current generation from supersession, not publication.
-	if err := touchCurrentGeneration(final, now); err != nil {
+	if err = touchCurrentGeneration(final, now); err != nil {
 		return err
 	}
 	metaPath := filepath.Join(final, store.MetaFile)
