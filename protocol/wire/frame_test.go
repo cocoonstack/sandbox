@@ -272,7 +272,7 @@ func TestTagAfterOtherKeys(t *testing.T) {
 func TestTagScanBoundsNesting(t *testing.T) {
 	shallow := `{"x":` + strings.Repeat("[", 16) + strings.Repeat("]", 16) + `,"type":"done"}`
 	if _, err := DecodeResponse([]byte(shallow)); err != nil {
-		t.Fatalf("nesting at the cap rejected: %v", err)
+		t.Fatalf("a nested value before the tag rejected: %v", err)
 	}
 	deep := `{"x":` + strings.Repeat("[", 1<<20) + strings.Repeat("]", 1<<20) + `,"type":"done"}`
 	if _, err := DecodeResponse([]byte(deep)); err == nil || !strings.Contains(err.Error(), "max depth") {

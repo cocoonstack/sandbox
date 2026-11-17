@@ -256,10 +256,15 @@ func TestALimitedCopyPastTheLargeBufferBoundCopiesThroughTheSmallOne(t *testing.
 			_, _ = guest.Write(payload)
 			_ = guest.Close()
 		}()
-		var dst bytes.Buffer
+		var dst widestWriter
 		var n atomic.Int64
 		if err := p.copyLimited(&dst, src, false, &n, p.limits.Load().tx); err != nil || dst.Len() != len(payload) {
 			t.Errorf("held %d: copied %d of %d bytes, err %v", held, dst.Len(), len(payload), err)
+		}
+		if small := 2 * scrubChunk; held == 0 && dst.widest <= small {
+			t.Errorf("held %d: widest write %d bytes, want a large buffer past %d", held, dst.widest, small)
+		} else if held == maxBigBufs && dst.widest > small {
+			t.Errorf("held %d: widest write %d bytes, want at most the small buffer's %d", held, dst.widest, small)
 		}
 		if got := p.bigBufs.Load(); got != held {
 			t.Errorf("held %d: large buffers in use %d after the copy, want %d", held, got, held)
@@ -319,6 +324,16 @@ type bulk struct {
 type sink struct {
 	received atomic.Int64
 	reads    chan struct{}
+}
+
+type widestWriter struct {
+	bytes.Buffer
+	widest int
+}
+
+func (w *widestWriter) Write(b []byte) (int, error) {
+	w.widest = max(w.widest, len(b))
+	return w.Buffer.Write(b)
 }
 
 func openConnect(t *testing.T, target string, edits ...proxyEdit) (*Proxy, io.Reader, net.Conn) {

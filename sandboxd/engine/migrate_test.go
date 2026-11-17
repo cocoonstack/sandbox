@@ -15,7 +15,7 @@ const migrateCocoon = `#!/bin/sh
 echo "$*" >> "$COCOON_TEST_TRACE"
 case "$3" in
 capture) echo '{"series":"s1","dir":"/run/xfer/s1","round":2,"paused":true,"files":[{"name":"state.json","size":3},{"name":"cow.raw","size":4096}]}' ;;
-receive) echo '{"state":"created","vsock_socket":"/run/sbx-1/vsock.sock","config":{"name":"sbx-1"}}' ;;
+receive) echo '{"state":"running","vsock_socket":"/run/sbx-1/vsock.sock","config":{"name":"sbx-1"}}' ;;
 esac
 `
 

@@ -135,8 +135,12 @@ func TestEvacuateHandOffOfARowAPeerTookDropsTheClaim(t *testing.T) {
 		mustArchive(t, a, sb)
 		a.archives = &hookRegistry{Registry: c.reg, beforeRelease: func() {
 			c.expire("a")
-			mustAdopt(t, b, sb, "adopt once a's lease lapsed")
-			c.renew(t, "a")
+			if adopted, err := b.AdoptArchived(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil || !adopted {
+				t.Errorf("adopt once a's lease lapsed: %v %v, want adopted", adopted, err)
+			}
+			if err := c.reg.Renew(t.Context(), "a", time.Hour); err != nil {
+				t.Errorf("renew a: %v", err)
+			}
 		}}
 
 		a.Evacuate(t.Context())

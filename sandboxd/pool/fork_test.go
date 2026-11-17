@@ -38,7 +38,11 @@ func TestForkRacingHibernateUsesPrivateSource(t *testing.T) {
 			children = append(children, sb.ID)
 		}
 	})
-	time.Sleep(20 * time.Millisecond)
+	waitFor(t, func() bool {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		return m.held == 2
+	})
 	close(eng.hibernateStall)
 	wg.Wait()
 

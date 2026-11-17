@@ -84,6 +84,7 @@ jobs:
           GOWORK=off go test -race -count=1 -v ./tenants/... ./poolset/... ./archives/... ./usage/... ./moves/... ./tunnet/pg/... | tee "$RUNNER_TEMP/pg-test.log"
           GOWORK=off go test -race -count=1 -v -run 'TestTwoNodesOnOneMetaStore|TestNodesOfACell|TestAMetaStoreNodeWithoutACell' ./pool/ | tee -a "$RUNNER_TEMP/pg-test.log"
           ! grep -- '--- SKIP' "$RUNNER_TEMP/pg-test.log"
+          ! grep -- 'no tests to run' "$RUNNER_TEMP/pg-test.log"
 
       - name: Test the tun path through a kernel exit
         working-directory: sandboxd

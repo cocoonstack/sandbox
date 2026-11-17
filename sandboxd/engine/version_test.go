@@ -21,7 +21,7 @@ func TestBelowFloorComparesReleasesAndLeavesOthersUnknown(t *testing.T) {
 		{"v0.4.9", true, true},
 		{"v1.0.0", false, true},
 		{"v0.10.0", false, true},
-		{"master-82e5902", false, false},
+		{"dev", false, false},
 		{"unknown", false, false},
 		{"v0.5", false, false},
 	}
@@ -47,11 +47,11 @@ func TestFeatureSupportFollowsTheCocoonVersion(t *testing.T) {
 		{liveVolume, liveVolumeFloor, "v0.7.2-rc.1", false, false},
 		{liveVolume, liveVolumeFloor, "v0.7.2", false, true},
 		{liveVolume, liveVolumeFloor, "v0.8.0", false, true},
-		{liveVolume, liveVolumeFloor, "master-abcdef", false, true},
+		{liveVolume, liveVolumeFloor, "dev", false, true},
 		{liveVolume, liveVolumeFloor, "v0.7.2", true, false},
 		{migrate, migrateFloor, "v0.7.6", false, false},
 		{migrate, migrateFloor, "v0.7.7", false, true},
-		{migrate, migrateFloor, "master-ba2020c", false, true},
+		{migrate, migrateFloor, "unknown", false, true},
 		{migrate, migrateFloor, "v0.7.7", true, false},
 	} {
 		t.Run(fmt.Sprintf("floor=%s/%s/fail=%v", tt.floor, tt.version, tt.fail), func(t *testing.T) {
