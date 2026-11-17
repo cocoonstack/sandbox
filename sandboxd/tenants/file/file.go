@@ -149,10 +149,6 @@ func (s *Source) Digest() string {
 	return s.set.Load().digest
 }
 
-func (s *Source) Close() error {
-	return nil
-}
-
 func (s *Source) apply(next func(cur *set) (map[string]tenants.TenantRecord, error)) (tenants.Change, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

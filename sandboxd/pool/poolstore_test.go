@@ -305,10 +305,6 @@ func (f *fakeShared) Watch(ctx context.Context, changed func()) {
 	<-ctx.Done()
 }
 
-func (f *fakeShared) Close() error {
-	return nil
-}
-
 func metaStoreNode(t *testing.T, cell string) *Manager {
 	t.Helper()
 	cfg := &config.Config{
@@ -322,18 +318,20 @@ func metaStoreNode(t *testing.T, cell string) *Manager {
 		t.Fatalf("tenant set: %v", err)
 	}
 	b.Tenants = src
+	t.Cleanup(func() { _ = src.Close() })
 	if cell != "" {
-		if b.CellPools, err = poolpg.Open(t.Context(), os.Getenv("SANDBOX_TEST_DSN"), cell); err != nil {
+		cells, err := poolpg.Open(t.Context(), os.Getenv("SANDBOX_TEST_DSN"), cell)
+		if err != nil {
 			t.Fatalf("cell pool set: %v", err)
 		}
+		b.CellPools = cells
+		t.Cleanup(func() { _ = cells.Close() })
 	}
 	m, err := NewManager(t.Context(), cfg, newFakeEngine(), testSecrets(t), b)
 	if err != nil {
 		t.Fatalf("setup manager: %v", err)
 	}
-	t.Cleanup(func() { _ = m.tenants.Close() })
 	if m.poolShared != nil {
-		t.Cleanup(func() { _ = m.poolShared.Close() })
 		go m.followCellPools(t.Context())
 	}
 	return m

@@ -354,11 +354,11 @@ func TestTwoNodesOnOneMetaStoreShareTheTenantSet(t *testing.T) {
 			t.Fatalf("tenant set: %v", err)
 		}
 		b.Tenants = src
+		t.Cleanup(func() { _ = src.Close() })
 		m, err := NewManager(t.Context(), cfg, newFakeEngine(), testSecrets(t), b)
 		if err != nil {
 			t.Fatalf("setup manager: %v", err)
 		}
-		t.Cleanup(func() { _ = m.tenants.Close() })
 		return m
 	}
 	a, b := node(), node()
