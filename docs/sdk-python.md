@@ -404,7 +404,8 @@ code = sb.run(["bash", "-c", "make test"],
 
 `timeout` on `exec` and `run` is a wall clock over the dial and the run: at
 its end the SDK cuts the connection and kills the reported pid, and
-`TimeoutError` is raised.
+`TimeoutError` is raised. A call that follows a moved sandbox keeps the same
+clock; only its one `lookup` can run past it.
 
 `exec` returns stdout and raises `ExitError` on a non-zero exit — carrying
 `code`, `stderr`, and the `stdout` produced before it failed. `run` streams raw bytes through the callbacks (chunk boundaries may
