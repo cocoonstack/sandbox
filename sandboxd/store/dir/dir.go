@@ -257,11 +257,7 @@ func (d *Store) publish(_ context.Context, staging, id, digest string) error {
 	if err := touchCurrentGeneration(final, now); err != nil {
 		return err
 	}
-	tmp, openErr := os.OpenFile(filepath.Join(final, store.MetaFile+".tmp"), os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600) //nolint:gosec // fixed path under our root
-	if openErr != nil {
-		return openErr
-	}
-	if err := utils.ReplaceFileSync(tmp, filepath.Join(final, store.MetaFile), metaRaw); err != nil {
+	if err := utils.WriteFileSync(filepath.Join(final, store.MetaFile), metaRaw, 0o600); err != nil {
 		return err
 	}
 	_ = d.sweepGenerations(id) // later publishes and startups retry a failed sweep
