@@ -11,7 +11,8 @@ the cocoon CLI and needs a template image with silkd baked in.
   warning at startup when the detected cocoon is below v0.6.9 (a master build
   is judged by the newest tag it reports, and a version that is not a plain
   `vX.Y.Z` is assumed current); changing volumes on a running claim needs v0.7.2,
-  and a pool's `reader` needs v0.7.3
+  a pool's `reader` needs v0.7.3, and `POST /v1/sandboxes/{id}/balloon` needs
+  the `cocoon vm balloon` of v0.7.9
 - A silkd-baked template image, e.g. `ghcr.io/cocoonstack/sandbox/rt:24.04`
   (pull via cocoon, or `cocoon image import` a tar). The image carries the boot
   artifact (`/boot/vmlinuz-sandbox`, `/boot/initrd.img-sandbox`), so the host

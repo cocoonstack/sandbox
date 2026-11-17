@@ -1257,8 +1257,8 @@ parent's switch and label, with its own address.
 name rule; 404 unknown id; 409 an enable or profile change while a
 transition (a capture, wake, hibernate or archive) holds the claim (retry; a
 disable never waits), or another tun request to the claim committed first
-(retry); 503 the claim is moving to another node
-(retry); 500 the address store failed or the claims
+(retry); 503 the claim is in a live move's final round or not yet
+started on its target (retry); 500 the address store failed or the claims
 journal could not be written (nothing changed); 503 the archive registry is
 down for an archived claim or one with a replica under `archive_failover`:
 the node already holds the change, and a resend of the same body replaces the
