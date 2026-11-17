@@ -123,7 +123,7 @@ func TestOperatorTokenActsAsRootOnExactlyItsRoutes(t *testing.T) {
 		{"PUT /v1/templates/labels", "/v1/templates/labels?template=rt:24.04", `{"labels":{}}`, false, 0, 0},
 		{"PUT /v1/pools", "/v1/pools", `{"pools":[]}`, false, 0, http.StatusForbidden},
 		{"POST /v1/config/reload", "/v1/config/reload", "", false, 0, http.StatusForbidden},
-		{"POST /v1/sandboxes/{id}/move", "/v1/sandboxes/sb_1/move", `{"addr":"node-b:7777"}`, false, 0, http.StatusForbidden},
+		{"POST /v1/sandboxes/{id}/move", "/v1/sandboxes/sb_1/move", `{"to":"node-b:7777"}`, false, 0, http.StatusForbidden},
 		{"POST /v1/moves/{id}", "/v1/moves/sb_1", `{}`, false, 0, http.StatusForbidden},
 		{"PUT /v1/moves/{id}/rounds/{n}", "/v1/moves/sb_1/rounds/1", "", false, 0, http.StatusForbidden},
 		{"POST /v1/moves/{id}/commit", "/v1/moves/sb_1/commit", `{}`, false, 0, http.StatusForbidden},

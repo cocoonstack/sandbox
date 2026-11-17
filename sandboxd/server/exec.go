@@ -79,7 +79,7 @@ func (s *Server) handleExec(w http.ResponseWriter, r *http.Request) {
 		s.mgr.Audit(ctx, id, frame)
 	}
 	stdinClose, _ := wire.EncodeRequest(wire.StdinClose{})
-	frame = slices.Concat(frame, []byte{'\n'}, stdinClose, []byte{'\n'})
+	frame = slices.Concat(frame, newline, stdinClose, newline)
 	if _, err := guest.Write(frame); err != nil {
 		writeErr(w, http.StatusBadGateway, "guest agent unreachable")
 		return
