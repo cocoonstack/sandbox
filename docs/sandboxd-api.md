@@ -45,7 +45,8 @@ All bodies are JSON. Four token kinds:
 Endpoints below that say "node API token" accept root or tenant unless
 marked root-only; the operator token only where the endpoint names it. Errors are `{"error": "message"}` with the status codes
 listed per endpoint. Request bodies are capped at 1 MiB; a larger one is
-rejected with `400` and an error beginning `invalid request body`.
+rejected with `400` and an error beginning `invalid request body`, and so is
+a body with a field its endpoint does not declare.
 
 ## Guest errors
 

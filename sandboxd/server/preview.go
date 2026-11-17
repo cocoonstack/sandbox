@@ -188,7 +188,7 @@ func (s *Server) handlePreview(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotImplemented, "preview not configured")
 		return
 	}
-	req, ok := decodeBody[PreviewRequest](w, r)
+	req, ok := decodeBodyStrict[PreviewRequest](w, r)
 	if !ok {
 		return
 	}

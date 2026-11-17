@@ -169,16 +169,23 @@ func TestRenewWithoutABodyTakesTheNodeDefault(t *testing.T) {
 	}
 }
 
-func TestClaimTakesExactBodyKeys(t *testing.T) {
-	var gotKey types.PoolKey
-	mgr := &fakeManager{claim: func(_ context.Context, key types.PoolKey, _ time.Duration) (*types.Sandbox, error) {
-		gotKey = key
-		return &types.Sandbox{ID: "sb_1"}, nil
-	}}
-	ts := newTestServer(t, "", mgr, nil)
-	statusOf(t, http.MethodPost, ts.URL+"/v1/claim", "", `{"Template":"rt:24.04"}`)
-	if gotKey.Template != "" {
-		t.Errorf("a case-variant key set template %q", gotKey.Template)
+func TestBodyRoutesRefuseAKeyTheyDoNotDeclare(t *testing.T) {
+	ps := NewPreviewServer("secret", "node:7777", "node:7777", &fakePreviewMgr{})
+	ts := serveTestServer(t, New("", "node:7777", &fakeManager{}, &fakeDialer{}, nil, nil, nil, ps))
+	for _, tt := range []struct{ path, body string }{
+		{"/v1/claim", `{"Template":"rt:24.04"}`},
+		{"/v1/claim", `{"template":"rt:24.04","egres":false}`},
+		{"/v1/sandboxes/sb_1/fork", `{"token":"tok","count":1,"on_expir":"archive"}`},
+		{"/v1/sandboxes/sb_1/promote", `{"token":"tok","template":"app:v1","labels":{}}`},
+		{"/v1/sandboxes/sb_1/checkpoint", `{"token":"tok","nam":"step-1"}`},
+		{"/v1/checkpoints/ck_0011223344556677/claim", `{"no_redirec":true}`},
+		{"/v1/sandboxes/sb_1/preview", `{"token":"tok","port":8080,"ttl":300}`},
+		{"/v1/sandboxes/sb_1/renew", `{"ttl_second":60}`},
+	} {
+		code, body := bodyOf(t, http.MethodPost, ts.URL+tt.path, "tok", tt.body)
+		if code != http.StatusBadRequest || !strings.Contains(string(body), "invalid request body") {
+			t.Errorf("%s %s: status %d body %s, want 400 invalid request body", tt.path, tt.body, code, body)
+		}
 	}
 }
 
