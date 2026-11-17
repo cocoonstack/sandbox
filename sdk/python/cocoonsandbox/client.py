@@ -121,7 +121,7 @@ class Client(_Closeable):
         return self._request(self.addr, "DELETE", "/v1/drain", None, "undrain")
 
     def cordon(self) -> dict[str, Any]:
-        """Refuses new claims across restarts (root token); live claims and moves in stay admitted."""
+        """Refuses new claims across restarts (root token); live claims, moves in and adoptions stay admitted."""
         return self._request(self.addr, "POST", "/v1/cordon", None, "cordon")
 
     def uncordon(self) -> dict[str, Any]:

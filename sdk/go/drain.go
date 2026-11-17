@@ -15,7 +15,7 @@ func (c *Client) Undrain(ctx context.Context) (*NodeInfo, error) {
 	return c.doJSONPtr[NodeInfo](ctx, http.MethodDelete, c.addr, "/v1/drain", nil, c.apiToken, "undrain")
 }
 
-// Cordon refuses new claims on the entry node across restarts (root token); live claims and moves in stay admitted.
+// Cordon refuses new claims on the entry node across restarts (root token); live claims, moves in and adoptions stay admitted.
 func (c *Client) Cordon(ctx context.Context) (*NodeInfo, error) {
 	return c.doJSONPtr[NodeInfo](ctx, http.MethodPost, c.addr, "/v1/cordon", nil, c.apiToken, "cordon")
 }

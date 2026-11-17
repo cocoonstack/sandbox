@@ -845,7 +845,9 @@ unclaimed warm VMs are destroyed, and live claims keep serving until release
 or TTL. Pool ownership is untouched — no pools.json write, no config change.
 Answers the fresh `GET /v1/info` payload; poll `claimed` to zero to know the
 node is empty. Deliberately not persisted: a restarted node serves again. To
-keep a node out of service across restarts, [cordon](#post-v1cordon) it; the
+keep new claims off a node across restarts, [cordon](#post-v1cordon) it; a
+cordoned node still adopts existing claims, so drain it again after a restart
+to keep it empty; the
 [admission table](cluster.md#node-admission) compares the states.
 
 `POST /v1/drain?evacuate=1` drains the same way, then moves the claims to the
@@ -884,7 +886,7 @@ stays here archived; the next call wakes it. A cordon stays in place.
 
 ## POST /v1/cordon
 
-Auth: root only (tenant and operator tokens get 403). Takes the node out of service until
+Auth: root only (tenant and operator tokens get 403). Keeps new claims off the node until
 `DELETE /v1/cordon`, across restarts: claim/fork/branch answer 429 with an
 error ending `node cordoned`, whatever `max_claims` and `max_running` allow (on
 a cluster a non-volume claim tries a peer redirect first, and peers stop

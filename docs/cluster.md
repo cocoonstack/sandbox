@@ -187,7 +187,7 @@ sb, err := client.Lookup(ctx, savedID, savedToken)
 A node is in one of these states. `POST /v1/cordon` and `POST /v1/drain` set
 them, and each `DELETE` lifts only its own; both are root-only (see the
 [API](sandboxd-api.md#post-v1cordon)). A cap of `0` or an omitted cap means no
-cap; to take no claims, cordon the node.
+cap; to take no new claims, cordon the node.
 
 | State | New claim, fork, branch | Existing claims | Root live move in | Adoption of archived claims | Refill and pool gossip | Survives restart and reboot |
 |---|---|---|---|---|---|---|
@@ -315,7 +315,7 @@ release and adoption an evacuation uses:
   claim there. The hand-off counts in `sandboxd_wake_handoffs_total`. A preview
   URL minted before the hand-off stops working until it is minted again, as
   after an evacuation.
-- When no peer adopts (no peer, or every peer full or closed), the owner takes
+- When no peer adopts (no peer, or every peer full, draining or fenced), the owner takes
   the row back and the wake answers 429 as before. A node runs one hand-off at
   a time, and after one fails it asks no peer for 30 seconds, so clients
   retrying a full cell cost no registry writes. A wake that `memory_limit`
