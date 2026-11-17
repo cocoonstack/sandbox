@@ -146,7 +146,7 @@ func (s *Sandbox) Exec(ctx context.Context, argv ...string) (string, error) {
 	return stdout.String(), nil
 }
 
-// Run executes cmd in the sandbox, streaming stdio over one relayed silkd connection, and returns the exit code; a ctx that ends first kills the command.
+// Run executes cmd in the sandbox, streaming stdio over one relayed silkd connection, and returns the exit code; a ctx that ends first kills the command, except a Session command, which has no pid and runs on.
 func (s *Sandbox) Run(ctx context.Context, cmd Cmd) (int, error) {
 	if len(cmd.Argv) == 0 {
 		return 0, errors.New("empty argv")
