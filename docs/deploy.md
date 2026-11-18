@@ -123,7 +123,7 @@ the intersection of the two.
 | `api_token_next` | unset | a second root credential for a [rolling rotation](#rotating-api_token-and-operator_token): the node accepts it exactly as it accepts `api_token`, and the audit `caller` stays `root`. Peer calls still send `api_token`. Needs `api_token`; must differ from `api_token`, `operator_token` and `operator_token_next`; a tenant token must differ from it (the tenant file is checked at boot, every tenant write is checked). Not part of the cluster digest; restart only |
 | `operator_token` | unset | a second node credential for a public control plane: root's authority on the claim lifecycle (claim without `volumes`, list, read by id, stats per claim and for the node, release, hibernate, wake, renew, balloon, env, port relay, exec, owner and adoption), the tenant API, `GET /v1/info` and `GET /v1/peers`, and `403` everywhere else, including a claim that names `volumes`. It reaches every claim's data: it reads any claim's token by id (recorded as op `token` with `audit_log` on) and execs in any claim. Through the tenant API it holds every tenant's authority: it can mint or re-key any tenant and act as it, including volume claims that tenant may make and fork, checkpoint and preview with a claim token. It holds no node or cluster configuration power: it cannot change pools, config, drain, cordon, moves, volumes, tun, egress limits or instance metadata, or read usage, metrics or checkpoint blobs. Needs `api_token` and must differ from it; a tenant token must differ from it (the tenant file is checked at boot, every tenant write is checked). Shared within a cell like `api_token`, and covered by the cluster digest when set and `mesh.cluster_key` is set; restart only |
 | `operator_token_next` | unset | a second operator credential for a [rolling rotation](#rotating-api_token-and-operator_token): the node accepts it exactly as it accepts `operator_token`, on the same routes, and the audit `caller` stays `operator`. Needs `operator_token`; must differ from `api_token`, `api_token_next` and `operator_token`; a tenant token must differ from it (the tenant file is checked at boot, every tenant write is checked). Not part of the cluster digest; restart only |
-| `meta_store` | unset | `{"kind": "pg", "dsn_env": "SANDBOXD_PG_DSN"}`: keep the tenant set in the [cell's](cluster.md#cells) PostgreSQL database instead of each node's `tenants.json` (see [shared tenant database](#shared-tenant-database)). `dsn_env` names the node env holding the connection string. An optional `cell` also keeps the API-applied pool set there, one per cell, instead of in each node's `pools.json` (see [shared pool set](#shared-pool-set)); without it pool targets stay per node. An optional `usage: true` also lands this node's usage journal in one shared table and serves [`GET /v1/usage`](sandboxd-api.md#get-v1usage) from it (see [shared usage table](#shared-usage-table)). Needs `api_token`. Restart only |
+| `meta_store` | unset | `{"kind": "pg", "dsn_env": "SANDBOXD_PG_DSN"}`: keep the tenant set in the [cell's](cluster.md#cells) PostgreSQL database instead of each node's `tenants.json` (see [shared tenant database](#shared-tenant-database)). `dsn_env` names the node env holding the connection string. An optional `cell` also keeps the API-applied pool set there, one per cell, instead of in each node's `pools.json` (see [shared pool set](#shared-pool-set)); without it pool targets stay per node. An optional `usage: true` also lands this node's usage journal in one shared table and serves [`GET /v1/usage`](sandboxd-api.md#get-v1usage) from it (see [shared usage table](#shared-usage-table)). An optional `usage_retention_hours` (needs `usage`; unset keeps every row) makes the node delete its own rows of that table older than that many hours, once an hour (see [retention](#shared-usage-table)). Needs `api_token`. Restart only |
 | `max_fork_count` | 16 | children a single `fork` may create; each is a full-RAM VM, so this bounds one request's memory blast radius to the node's capacity |
 | `refill_concurrency` | 0 (auto) | concurrent VM provisioning budget, shared by warm-pool refills, fork clones, and the reap/hibernate/reconcile engine batches; the batches never take the last quarter of it (at least one slot), so a mass expiry or idle sweep cannot stop refills. 0 sizes it from the node: `NumCPU*2/3` clamped to [4, 256] — a 384-core node gets 256; small nodes keep a floor of 4 |
 | `release_delay_seconds` | 0 | seconds a released VM waits in the removal queue before `cocoon vm rm`. The claim is dropped and journaled and its egress listener closed at release; the VM removal, the volume hold release and the egress tap unlock run on the first reap tick (5 s) after the delay, on the `refill_concurrency` budget like every other batch teardown, so a burst of releases does not compete with the claims still running. Until then the VM holds its memory and its volume reservations without counting as a claim. 0 removes inline |
@@ -1007,7 +1007,8 @@ only; computing durations or prices stays with the consumer.
   and resumes after that line in
   `usage.jsonl.1` or `usage.jsonl`. When neither file holds the line any
   more (a crash lost a journal tail the node had already landed, or the
-  journal was reset), the node reads both files from the start and lands only
+  journal was reset), the node resumes after the line of its oldest row when
+  a file still holds it, else reads both files from the start, and lands only
   the lines not landed yet. A restart, a retry or a commit whose reply was
   lost therefore lands no line twice. Two byte-identical lines of one node
   (same nanosecond `t` and fields) land once. A line that does not decode is skipped with
@@ -1036,17 +1037,33 @@ only; computing durations or prices stays with the consumer.
   per cell (see Order), so when a cell's nodes together write faster than
   that, the backlog grows until it rotates out. A node needs the database at
   boot, like the other shared tables.
-- **Retention:** sandboxd never deletes a row. Prune only rows every consumer
-  has paged past, and keep each node's newest row: it is the node's resume
-  point, and a node that finds none lands its whole journal again. A crash
-  that loses that line from the journal also lands again the pruned lines the
-  journal still holds.
-
-  ```sql
-  DELETE FROM sandboxd_usage u
-  WHERE cell = $1 AND cursor <= $2
-    AND cursor < (SELECT max(cursor) FROM sandboxd_usage WHERE cell = u.cell AND node = u.node);
-  ```
+- **Retention:** without `meta_store.usage_retention_hours`, sandboxd never
+  deletes a row. With it, each node deletes only its own rows (its `cell` and
+  `node`), once an hour starting an hour after boot, between two lands. In
+  `cursor` order, it takes its leading rows whose `t` is older than the
+  retention, keeps the last of them as its floor, and deletes the rest. Its
+  newest row, the resume point, is never deleted. A row whose `t` is older
+  than that of a row before it stays until that row ages out.
+  - **Re-ship:** when the journal no longer holds the newest row's line, the
+    node resumes after the floor's line instead of at the journal's start, so
+    a deleted line never lands again. The floor's line is older than the
+    retention, so a host crash that drops the journal's unsynced tail keeps
+    it. When neither file holds it, the journal has rotated past every
+    deleted line too, and reading it from the start lands no deleted line.
+  - **Cost:** each `DELETE` removes at most 1000 rows, oldest first, through
+    the `sandboxd_usage_node` index and the primary key, and holds row locks
+    only on those rows (a few milliseconds each). A sweep's work grows with
+    the rows it deletes: the first sweep after turning retention on deletes
+    the backlog in 1000-row statements, later sweeps about an hour of the
+    node's rows. Lands and `GET /v1/usage` reads do not wait on it.
+  - **Consumers** must page within the retention (see
+    [`GET /v1/usage`](sandboxd-api.md#get-v1usage)). A backlog a node lands
+    after being cut off for longer than the retention loses its rows older
+    than the retention at the node's next sweep, possibly before a consumer
+    reads them. Copy rows elsewhere before they age out when you need them
+    longer.
+  - Do not delete rows with an external job: it can run while a node
+    re-ships, and the node then lands the deleted lines again.
 - **Renaming** a node, or moving it to another cell, starts it with no rows:
   the node lands what its journal still holds again under the new name.
 

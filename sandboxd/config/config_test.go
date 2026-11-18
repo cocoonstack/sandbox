@@ -145,6 +145,8 @@ func TestLoadRejectsInvalid(t *testing.T) {
 		{"meta_store unknown kind", `{"api_token":"r","pools":[],"meta_store":{"kind":"redis","dsn_env":"HOME"}}`, "not supported"},
 		{"meta_store dsn env unset", `{"api_token":"r","pools":[],"meta_store":{"kind":"pg","dsn_env":"SANDBOX_TEST_UNSET_DSN"}}`, "must name a set node env"},
 		{"meta_store bad cell", `{"api_token":"r","pools":[],"meta_store":{"kind":"pg","dsn_env":"SANDBOX_TEST_DSN","cell":"Cell A"}}`, "meta_store.cell"},
+		{"negative usage retention", `{"api_token":"r","pools":[],"meta_store":{"kind":"pg","dsn_env":"SANDBOX_TEST_DSN","usage":true,"usage_retention_hours":-1}}`, "usage_retention_hours must not be negative"},
+		{"usage retention without usage", `{"api_token":"r","pools":[],"meta_store":{"kind":"pg","dsn_env":"SANDBOX_TEST_DSN","usage_retention_hours":48}}`, "usage_retention_hours requires meta_store.usage"},
 		{"egress class unknown secret", `{"pools":[],"egress_classes":[{"name":"desk","egress":{"allow":[{"host":"x","secret":"gh"}]}}]}`, "unknown secret"},
 		{"egress class intercepts", `{"pools":[],"egress_classes":[{"name":"desk","egress":{"allow":[{"host":"x","intercept":true}]}}]}`, "only be set on a pool rule"},
 		{"egress class without egress", `{"pools":[],"egress_classes":[{"name":"desk"}]}`, "needs egress"},
@@ -227,6 +229,13 @@ func TestLoadMetaStore(t *testing.T) {
 	}
 	if _, _, err := cfg.ReloadDiff(withUsage); err == nil || !strings.Contains(err.Error(), "meta_store") {
 		t.Errorf("a reload that turns usage on: %v, want a restart refusal", err)
+	}
+	retained, retainedErr := Load(writeConfig(t, `{"api_token":"r","pools":[],"meta_store":{"kind":"pg","dsn_env":"SANDBOX_TEST_DSN","usage":true,"usage_retention_hours":48}}`))
+	if retainedErr != nil || retained.MetaStore.UsageRetentionHours != 48 {
+		t.Fatalf("Load with usage retention: %+v %v, want 48 hours", retained, retainedErr)
+	}
+	if _, _, err := withUsage.ReloadDiff(retained); err == nil || !strings.Contains(err.Error(), "meta_store") {
+		t.Errorf("a reload that sets usage retention: %v, want a restart refusal", err)
 	}
 }
 

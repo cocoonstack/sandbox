@@ -13,6 +13,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+
 	"github.com/cocoonstack/sandbox/sandboxd/metastore/metastoretest"
 	"github.com/cocoonstack/sandbox/sandboxd/usage"
 )
@@ -159,13 +161,13 @@ func TestSchemaIndexesTheQueries(t *testing.T) {
 func TestShipLandsAJournalOnceAcrossRestarts(t *testing.T) {
 	s := open(t, metastoretest.PGSchema(t), "c1")
 	path := filepath.Join(t.TempDir(), usage.JournalFile)
-	writeJournal(t, path, "sb_1", "sb_2")
+	writeJournal(t, path, time.Now(), "sb_1", "sb_2")
 	ship(t, s, path, 2)
-	writeJournal(t, path, "sb_3")
+	writeJournal(t, path, time.Now(), "sb_3")
 	if err := os.Rename(path, path+".1"); err != nil {
 		t.Fatalf("rotate: %v", err)
 	}
-	writeJournal(t, path, "sb_4")
+	writeJournal(t, path, time.Now(), "sb_4")
 	ship(t, s, path, 4)
 	ship(t, s, path, 4)
 	recs, err := s.List(t.Context(), usage.Query{Limit: 10})
@@ -193,6 +195,107 @@ func TestLandSkipsALandedLine(t *testing.T) {
 	}
 }
 
+func TestPruneDeletesOnlyTheNodesRowsBeforeItsFloor(t *testing.T) {
+	dsn := metastoretest.PGSchema(t)
+	c1, c2 := open(t, dsn, "c1"), open(t, dsn, "c2")
+	ctx := t.Context()
+	cutoff := time.Now().Add(-48 * time.Hour)
+	old, recent := cutoff.Add(-time.Hour), cutoff.Add(time.Hour)
+	land(t, c1, event("n1", 1, old), event("n2", 1, old), event("n1", 2, old), event("n3", 1, old))
+	land(t, c1, event("n1", 3, old), event("n3", 2, old), event("n1", 4, recent), event("n1", 5, old), event("n1", 6, recent))
+	land(t, c2, event("n1", 1, old), event("n1", 2, old))
+	if n, err := c1.Prune(ctx, "n1", cutoff); err != nil || n != 2 {
+		t.Fatalf("prune n1: %d %v, want 2 rows", n, err)
+	}
+	if n, err := c1.Prune(ctx, "n3", cutoff); err != nil || n != 1 {
+		t.Fatalf("prune n3: %d %v, want 1 row", n, err)
+	}
+	if n, err := c1.Prune(ctx, "n1", cutoff); err != nil || n != 0 {
+		t.Errorf("a second prune of n1: %d %v, want 0 rows", n, err)
+	}
+	if got, want := ids(t, c1, 0), "n2/1,n1/3,n3/2,n1/4,n1/5,n1/6"; got != want {
+		t.Errorf("c1 keeps %s, want %s", got, want)
+	}
+	if got, want := ids(t, c2, 0), "n1/1,n1/2"; got != want {
+		t.Errorf("c2 keeps %s, want %s", got, want)
+	}
+	if floor, _ := c1.First(ctx, "n1"); floor != digest("n1", 3) {
+		t.Errorf("n1's oldest row %x, want its last row before the cutoff", floor)
+	}
+}
+
+func TestPruneDeletesInBoundedBatches(t *testing.T) {
+	s := open(t, metastoretest.PGSchema(t), "c1")
+	ctx := t.Context()
+	cutoff := time.Now().Add(-48 * time.Hour)
+	rows := 2*pruneBatch + 501
+	recs := make([]usage.Record, 0, rows+1)
+	for i := range rows {
+		recs = append(recs, event("n1", int64(i)+1, cutoff.Add(-time.Hour)))
+	}
+	land(t, s, append(recs, event("n1", int64(rows)+1, cutoff.Add(time.Hour)))...)
+	if _, err := s.pool.Exec(ctx, `CREATE TABLE pruned (n bigint);
+		CREATE FUNCTION count_pruned() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN INSERT INTO pruned SELECT count(*) FROM gone; RETURN NULL; END $$;
+		CREATE TRIGGER count_pruned AFTER DELETE ON sandboxd_usage REFERENCING OLD TABLE AS gone FOR EACH STATEMENT EXECUTE FUNCTION count_pruned()`); err != nil {
+		t.Fatalf("count deletes per statement: %v", err)
+	}
+	if n, err := s.Prune(ctx, "n1", cutoff); err != nil || n != int64(rows-1) {
+		t.Fatalf("prune: %d %v, want %d rows", n, err, rows-1)
+	}
+	rs, err := s.pool.Query(ctx, `SELECT n FROM pruned`)
+	if err != nil {
+		t.Fatalf("read statement sizes: %v", err)
+	}
+	sizes, err := pgx.CollectRows(rs, pgx.RowTo[int64])
+	if err != nil || !slices.Equal(sizes, []int64{pruneBatch, pruneBatch, 500}) {
+		t.Errorf("rows per delete statement %v %v, want %d, %d, 500", sizes, err, pruneBatch, pruneBatch)
+	}
+}
+
+func TestAReshipAfterAPruneLandsNoPrunedLine(t *testing.T) {
+	s := open(t, metastoretest.PGSchema(t), "c1")
+	path := filepath.Join(t.TempDir(), usage.JournalFile)
+	now := time.Now()
+	writeJournal(t, path, now.Add(-72*time.Hour), "sb_1", "sb_2", "sb_3", "sb_4")
+	writeJournal(t, path, now, "sb_5", "sb_6")
+	ship(t, s, path, 6)
+	if _, err := s.Prune(t.Context(), "n1", now.Add(-48*time.Hour)); err != nil {
+		t.Fatalf("prune: %v", err)
+	}
+	cutJournal(t, path, 4)
+	writeJournal(t, path, now, "sb_7")
+	ship(t, s, path, 4)
+	if got, want := ids(t, s, 0), "sb_4,sb_5,sb_6,sb_7"; got != want {
+		t.Errorf("rows after the re-ship %s, want %s", got, want)
+	}
+}
+
+func TestPagingFromACursorInsideTheRetentionSeesNoGap(t *testing.T) {
+	s := open(t, metastoretest.PGSchema(t), "c1")
+	ctx := t.Context()
+	cutoff := time.Now().Add(-48 * time.Hour)
+	old, recent := cutoff.Add(-time.Hour), cutoff.Add(time.Hour)
+	land(t, s, event("n1", 1, old), event("n2", 1, old), event("n1", 2, old), event("n1", 3, old))
+	land(t, s, event("n2", 2, recent), event("n1", 4, recent), event("n2", 3, recent), event("n1", 5, recent))
+	all, err := s.List(ctx, usage.Query{Limit: 10})
+	if err != nil || len(all) != 8 {
+		t.Fatalf("list: %d %v", len(all), err)
+	}
+	inside := all[3].Cursor
+	before := ids(t, s, inside)
+	for _, node := range []string{"n1", "n2"} {
+		if _, err = s.Prune(ctx, node, cutoff); err != nil {
+			t.Fatalf("prune %s: %v", node, err)
+		}
+	}
+	if got := ids(t, s, inside); got != before {
+		t.Errorf("page after a cursor inside the retention: %s, want %s", got, before)
+	}
+	if got, want := ids(t, s, all[0].Cursor), "n2/1,n1/3,n2/2,n1/4,n2/3,n1/5"; got != want {
+		t.Errorf("page after a pruned cursor: %s, want the oldest kept row onward %s", got, want)
+	}
+}
+
 func open(t *testing.T, dsn, cell string) *Store {
 	t.Helper()
 	s, err := Open(t.Context(), dsn, cell)
@@ -214,6 +317,10 @@ func record(node string, line int64, ev usage.Event) usage.Record {
 	return usage.Record{Node: node, Digest: digest(node, line), Event: ev}
 }
 
+func event(node string, line int64, at time.Time) usage.Record {
+	return record(node, line, usage.Event{Time: at, Event: "claim", ID: fmt.Sprintf("%s/%d", node, line)})
+}
+
 func digest(node string, line int64) [32]byte {
 	return sha256.Sum256(fmt.Appendf(nil, "%s/%d", node, line))
 }
@@ -224,7 +331,7 @@ func equalEvents(a, b usage.Event) bool {
 	return string(x) == string(y)
 }
 
-func writeJournal(t *testing.T, path string, ids ...string) {
+func writeJournal(t *testing.T, path string, at time.Time, ids ...string) {
 	t.Helper()
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
@@ -232,10 +339,22 @@ func writeJournal(t *testing.T, path string, ids ...string) {
 	}
 	defer func() { _ = f.Close() }()
 	for _, id := range ids {
-		line, _ := json.Marshal(usage.Event{Time: time.Now(), Event: "claim", ID: id})
+		line, _ := json.Marshal(usage.Event{Time: at, Event: "claim", ID: id})
 		if _, err = f.Write(append(line, '\n')); err != nil {
 			t.Fatalf("append: %v", err)
 		}
+	}
+}
+
+func cutJournal(t *testing.T, path string, n int) {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read journal: %v", err)
+	}
+	lines := strings.SplitAfter(string(raw), "\n")
+	if err = os.WriteFile(path, []byte(strings.Join(lines[:n], "")), 0o600); err != nil {
+		t.Fatalf("cut journal: %v", err)
 	}
 }
 
@@ -245,7 +364,7 @@ func ship(t *testing.T, s *Store, path string, want int) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		usage.Ship(ctx, path, "n1", s)
+		usage.Ship(ctx, path, "n1", s, 0)
 	}()
 	deadline := time.Now().Add(10 * time.Second)
 	for count(t, s) < want && time.Now().Before(deadline) {
@@ -256,6 +375,19 @@ func ship(t *testing.T, s *Store, path string, want int) {
 	if n := count(t, s); n != want {
 		t.Fatalf("%d rows landed, want %d", n, want)
 	}
+}
+
+func ids(t *testing.T, s *Store, after int64) string {
+	t.Helper()
+	recs, err := s.List(t.Context(), usage.Query{After: after, Limit: 100})
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	out := make([]string, len(recs))
+	for i, r := range recs {
+		out[i] = r.ID
+	}
+	return strings.Join(out, ",")
 }
 
 func count(t *testing.T, s *Store) int {

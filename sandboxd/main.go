@@ -177,7 +177,10 @@ func main() {
 		if err != nil {
 			logger.Fatalf(ctx, err, "name the usage node")
 		}
-		tail.Go(func() { usage.Ship(flushed, filepath.Join(cfg.DataDir, usage.JournalFile), node, usageStore) })
+		retention := time.Duration(cfg.MetaStore.UsageRetentionHours) * time.Hour
+		tail.Go(func() {
+			usage.Ship(flushed, filepath.Join(cfg.DataDir, usage.JournalFile), node, usageStore, retention)
+		})
 		logger.Infof(ctx, "usage journal lands in the shared table as node %s", node)
 		srv.SetUsage(usageStore)
 	}

@@ -157,7 +157,7 @@ func TestShipLandsEveryTickAndOnceMoreWhenItsContextEnds(t *testing.T) {
 		done := make(chan struct{})
 		go func() {
 			defer close(done)
-			Ship(ctx, path, "n1", store)
+			Ship(ctx, path, "n1", store, 0)
 		}()
 		synctest.Wait()
 		assertLanded(t, store, "a")
@@ -169,6 +169,50 @@ func TestShipLandsEveryTickAndOnceMoreWhenItsContextEnds(t *testing.T) {
 		cancel()
 		<-done
 		assertLanded(t, store, "a,b,c")
+	})
+}
+
+func TestShipPrunesHourlyOnlyWithARetentionAndWhileLanding(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		path, store := journalAt(t), &memStore{}
+		appendEvents(t, path, "a")
+		ctx, cancel := context.WithCancel(t.Context())
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			Ship(ctx, path, "n1", store, 48*time.Hour)
+		}()
+		synctest.Wait()
+		time.Sleep(pruneEvery)
+		synctest.Wait()
+		if want := []time.Time{time.Now().Add(-48 * time.Hour)}; !slices.Equal(store.pruned(), want) {
+			t.Errorf("prunes after an hour %v, want one before %v", store.pruned(), want)
+		}
+		store.setDown(true)
+		appendEvents(t, path, "b")
+		time.Sleep(pruneEvery)
+		synctest.Wait()
+		if n := len(store.pruned()); n != 1 {
+			t.Errorf("%d prunes after an hour of failed lands, want still 1", n)
+		}
+		cancel()
+		<-done
+	})
+	synctest.Test(t, func(t *testing.T) {
+		path, store := journalAt(t), &memStore{}
+		ctx, cancel := context.WithCancel(t.Context())
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			Ship(ctx, path, "n1", store, 0)
+		}()
+		time.Sleep(2 * pruneEvery)
+		synctest.Wait()
+		if n := len(store.pruned()); n != 0 {
+			t.Errorf("%d prunes without a retention, want 0", n)
+		}
+		cancel()
+		<-done
 	})
 }
 
@@ -247,11 +291,12 @@ func assertLanded(t *testing.T, store *memStore, want string) {
 
 // memStore lands like the PostgreSQL store: whole batches that skip a landed digest.
 type memStore struct {
-	mu    sync.Mutex
-	recs  []Record
-	down  bool
-	lose  int
-	lands int
+	mu     sync.Mutex
+	recs   []Record
+	down   bool
+	lose   int
+	lands  int
+	prunes []time.Time
 }
 
 func (m *memStore) Last(_ context.Context, node string) ([32]byte, error) {
@@ -267,6 +312,25 @@ func (m *memStore) Last(_ context.Context, node string) ([32]byte, error) {
 		}
 	}
 	return mark, nil
+}
+
+func (m *memStore) First(_ context.Context, node string) ([32]byte, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.down {
+		return [32]byte{}, errDown
+	}
+	if i := slices.IndexFunc(m.recs, func(r Record) bool { return r.Node == node }); i >= 0 {
+		return m.recs[i].Digest, nil
+	}
+	return [32]byte{}, nil
+}
+
+func (m *memStore) Prune(_ context.Context, _ string, before time.Time) (int64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.prunes = append(m.prunes, before)
+	return 0, nil
 }
 
 func (m *memStore) Land(_ context.Context, recs []Record) error {
@@ -299,6 +363,12 @@ func (m *memStore) setDown(down bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.down = down
+}
+
+func (m *memStore) pruned() []time.Time {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return slices.Clone(m.prunes)
 }
 
 func (m *memStore) loseReplies(n int) {

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -28,6 +29,20 @@ const (
 		ON CONFLICT (cell, node, line_sha256) DO NOTHING`
 
 	listColumns = `cursor, node, t, ev, id, vm, key, template, net, size, tenant, deadline, volumes, volumes_rw, children, ref, upstream, secret, tx, rx`
+
+	lastLine  = `SELECT line_sha256 FROM sandboxd_usage WHERE cell = $1 AND node = $2 ORDER BY cursor DESC LIMIT 1`
+	firstLine = `SELECT line_sha256 FROM sandboxd_usage WHERE cell = $1 AND node = $2 ORDER BY cursor LIMIT 1`
+
+	pruneBatch = 1000
+
+	pruneBound = `SELECT max(cursor) FROM sandboxd_usage WHERE cell = $1 AND node = $2 AND cursor < coalesce(
+		(SELECT cursor FROM sandboxd_usage WHERE cell = $1 AND node = $2 AND t >= $3 ORDER BY cursor LIMIT 1), 9223372036854775807)`
+
+	pruneRows = `WITH gone AS (
+		DELETE FROM sandboxd_usage WHERE cell = $1 AND cursor IN (
+			SELECT cursor FROM sandboxd_usage WHERE cell = $1 AND node = $2 AND cursor > $3 AND cursor < $4 ORDER BY cursor LIMIT $5)
+		RETURNING cursor)
+		SELECT count(*), coalesce(max(cursor), 0) FROM gone`
 )
 
 //go:embed schema.sql
@@ -51,16 +66,29 @@ func Open(ctx context.Context, dsn, cell string) (*Store, error) {
 }
 
 func (s *Store) Last(ctx context.Context, node string) ([32]byte, error) {
-	qctx, cancel := context.WithTimeout(ctx, metastore.QueryTimeout)
-	defer cancel()
-	var mark [32]byte
-	var digest []byte
-	err := s.pool.QueryRow(qctx, `SELECT line_sha256 FROM sandboxd_usage WHERE cell = $1 AND node = $2 ORDER BY cursor DESC LIMIT 1`, s.cell, node).Scan(&digest)
-	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-		return mark, err
+	return s.line(ctx, lastLine, node)
+}
+
+func (s *Store) First(ctx context.Context, node string) ([32]byte, error) {
+	return s.line(ctx, firstLine, node)
+}
+
+func (s *Store) Prune(ctx context.Context, node string, before time.Time) (int64, error) {
+	var bound *int64
+	if err := s.scanRow(ctx, pruneBound, []any{s.cell, node, before}, &bound); err != nil || bound == nil {
+		return 0, err
 	}
-	copy(mark[:], digest)
-	return mark, nil
+	var total, after int64
+	for {
+		var n int64
+		if err := s.scanRow(ctx, pruneRows, []any{s.cell, node, after, *bound, pruneBatch}, &n, &after); err != nil {
+			return total, err
+		}
+		total += n
+		if n < pruneBatch {
+			return total, nil
+		}
+	}
 }
 
 func (s *Store) Land(ctx context.Context, recs []usage.Record) error {
@@ -110,6 +138,22 @@ func (s *Store) List(ctx context.Context, q usage.Query) ([]usage.Record, error)
 // Close releases the connection pool.
 func (s *Store) Close() {
 	s.pool.Close()
+}
+
+func (s *Store) line(ctx context.Context, query, node string) ([32]byte, error) {
+	var mark [32]byte
+	var digest []byte
+	if err := s.scanRow(ctx, query, []any{s.cell, node}, &digest); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return mark, err
+	}
+	copy(mark[:], digest)
+	return mark, nil
+}
+
+func (s *Store) scanRow(ctx context.Context, query string, args []any, dest ...any) error {
+	qctx, cancel := context.WithTimeout(ctx, metastore.QueryTimeout)
+	defer cancel()
+	return s.pool.QueryRow(qctx, query, args...).Scan(dest...)
 }
 
 func scan(row pgx.CollectableRow) (usage.Record, error) {
