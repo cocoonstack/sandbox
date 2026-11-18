@@ -16,30 +16,13 @@ IMAP=${IMAP:-imap.163.com}
 REPO=$(cd "$(dirname "$0")/.." && pwd)
 
 DATA=$(mktemp -d /tmp/socks-e2e.XXXXXX)
-DAEMON_PID=""
+# shellcheck source=scripts/lib.sh
+. "$(dirname "$0")/lib.sh"
 
-cleanup() {
-  status=$?
-  if [[ $status -ne 0 && -f "$DATA/daemon.log" ]]; then
-    echo "== daemon log tail"
-    tail -30 "$DATA/daemon.log"
-  fi
-  if [[ -n $DAEMON_PID ]]; then
-    kill "$DAEMON_PID" 2>/dev/null || true
-  fi
-  wait 2>/dev/null || true
-  cocoon vm list --format json 2>/dev/null |
-    jq -r '.[] | select(.config.name | startswith("sbx-")) | .config.name' |
-    while read -r vm; do
-      cocoon vm stop --force "$vm" >/dev/null 2>&1 || true
-      cocoon vm rm --force "$vm" >/dev/null 2>&1 || true
-    done || true
+cleanup_extra() {
   echo "== audit tail (SOCKS5 events)"
   grep -o '"op":"egress"[^}]*"method":"SOCKS5"[^}]*}' "$DATA/state/audit.jsonl" 2>/dev/null | tail -6 || true
-  rm -rf "$DATA"
-  exit "$status"
 }
-trap cleanup EXIT
 
 echo "== build"
 if [[ -n ${SANDBOXD_BIN:-} && -n ${SOCKSSMOKE_BIN:-} ]]; then
@@ -67,16 +50,8 @@ cat >"$DATA/config.json" <<EOF
 EOF
 
 echo "== start sandboxd (small pool opted into SOCKS5, medium pool without a policy, large pool with a policy that did not opt in)"
-"$DATA/sandboxd" -config "$DATA/config.json" >>"$DATA/daemon.log" 2>&1 &
-DAEMON_PID=$!
-for _ in $(seq 1 40); do curl -sf "http://$ADDR/healthz" >/dev/null && break; sleep 0.5; done
-curl -sf "http://$ADDR/healthz" >/dev/null || { echo "daemon never came up"; exit 1; }
-for i in $(seq 1 180); do
-  curl -sf -H "Authorization: Bearer $TOKEN" "http://$ADDR/v1/info" 2>/dev/null |
-    jq -e '(.pools | length) == 3 and all(.pools[]; .warm >= 1)' >/dev/null 2>&1 && break
-  [[ $i == 180 ]] && { echo "pools never became warm"; exit 1; }
-  sleep 1
-done
+start_daemon
+wait_pools '(.pools | length) == 3 and all(.pools[]; .warm >= 1)'
 
 echo "== sockssmoke"
 "$DATA/sockssmoke" -addr "$ADDR" -token "$TOKEN" -template "$TEMPLATE" -echo "$ECHO" -get-only "$GET_ONLY" -imap "$IMAP"

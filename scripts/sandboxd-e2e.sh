@@ -50,46 +50,12 @@ if [[ -n $VOLUME_RW_IMAGE ]]; then
 fi
 
 DATA=$(mktemp -d /tmp/sandboxd-e2e.XXXXXX)
-DAEMON_PID=""
+# shellcheck source=scripts/lib.sh
+. "$(dirname "$0")/lib.sh"
 
-cleanup() {
-  status=$?
-  if [[ $status -ne 0 && -f "$DATA/daemon.log" ]]; then
-    echo "== daemon log tail"
-    tail -20 "$DATA/daemon.log"
-  fi
-  if [[ -n $DAEMON_PID ]]; then
-    kill "$DAEMON_PID" 2>/dev/null || true
-  fi
-  wait 2>/dev/null || true
-  cocoon vm list --format json 2>/dev/null |
-    jq -r '.[] | select(.config.name | startswith("sbx-")) | .config.name' |
-    while read -r vm; do
-      # Force-stop first: rm's stop-before-delete waits a 30s graceful
-      # window these guests never answer.
-      cocoon vm stop --force "$vm" >/dev/null 2>&1 || true
-      cocoon vm rm --force "$vm" >/dev/null 2>&1 || true
-    done || true
-  rm -rf "$DATA"
-  exit "$status"
-}
-trap cleanup EXIT
-
-api() { curl -sf -H "Authorization: Bearer $TOKEN" "http://$ADDR/v1/$1"; }
 metrics() { curl -sf -H "Authorization: Bearer $TOKEN" "http://$ADDR/metrics"; }
 warm_claims() {
   metrics | awk '$1 == "sandboxd_claims_total{tier=\"warm\"}" {print $2}'
-}
-
-start_daemon() {
-  "$DATA/sandboxd" -config "$DATA/config.json" >>"$DATA/daemon.log" 2>&1 &
-  DAEMON_PID=$!
-  for _ in $(seq 1 20); do
-    curl -sf "http://$ADDR/healthz" >/dev/null && return 0
-    sleep 0.5
-  done
-  echo "daemon never came up"
-  return 1
 }
 
 echo "== build"
@@ -152,14 +118,7 @@ EOF
 start_daemon
 
 echo "== wait for goldens + warm pools (cold boot + snapshot export + refill)"
-for i in $(seq 1 120); do
-  if api info | jq -e \
-    '(.pools | length) > 0 and all(.pools[]; .golden and .warm >= .target)' >/dev/null 2>&1; then
-    break
-  fi
-  [[ $i == 120 ]] && { echo "pools never became ready"; api info | jq . || true; exit 1; }
-  sleep 1
-done
+wait_pools '(.pools | length) > 0 and all(.pools[]; .golden and .warm >= .target)'
 api info | jq .
 
 echo "== claim/exec/release x3 (expect: warm-hit ms-scale, then clone-tier)"
@@ -225,8 +184,7 @@ claimed=$(api info | jq .claimed)
 
 echo "== restart: live claim re-adopts, warm VMs of the old life are replaced"
 "$DATA/demo" -addr "$ADDR" -token "$TOKEN" -template "$TEMPLATE" -n 1 -ttl 300 -leak
-kill "$DAEMON_PID" 2>/dev/null || true
-wait "$DAEMON_PID" 2>/dev/null || true
+stop_daemon
 start_daemon
 claimed=$(api info | jq .claimed)
 [[ $claimed == 1 ]] || { echo "claim not re-adopted: claimed=$claimed"; exit 1; }

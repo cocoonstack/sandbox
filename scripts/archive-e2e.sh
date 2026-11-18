@@ -12,30 +12,8 @@ TOKEN=${TOKEN:-e2e}
 REPO=$(cd "$(dirname "$0")/.." && pwd)
 
 DATA=$(mktemp -d /tmp/archive-e2e.XXXXXX)
-DAEMON_PID=""
-
-cleanup() {
-  status=$?
-  if [[ $status -ne 0 && -f "$DATA/daemon.log" ]]; then
-    echo "== daemon log tail"
-    tail -30 "$DATA/daemon.log"
-  fi
-  if [[ -n $DAEMON_PID ]]; then
-    kill "$DAEMON_PID" 2>/dev/null || true
-  fi
-  wait 2>/dev/null || true
-  cocoon vm list --format json 2>/dev/null |
-    jq -r '.[] | select(.config.name | startswith("sbx-")) | .config.name' |
-    while read -r vm; do
-      cocoon vm stop --force "$vm" >/dev/null 2>&1 || true
-      cocoon vm rm --force "$vm" >/dev/null 2>&1 || true
-    done || true
-  rm -rf "$DATA"
-  exit "$status"
-}
-trap cleanup EXIT
-
-api() { curl -sf -H "Authorization: Bearer $TOKEN" "http://$ADDR/v1/$1"; }
+# shellcheck source=scripts/lib.sh
+. "$(dirname "$0")/lib.sh"
 
 echo "== build"
 if [[ -n ${SANDBOXD_BIN:-} && -n ${LIFECYCLE_BIN:-} ]]; then
@@ -56,17 +34,10 @@ cat >"$DATA/config.json" <<EOF
 EOF
 
 echo "== start sandboxd (idle=1s archive=2s delete=3600s)"
-"$DATA/sandboxd" -config "$DATA/config.json" >>"$DATA/daemon.log" 2>&1 &
-DAEMON_PID=$!
-for _ in $(seq 1 20); do curl -sf "http://$ADDR/healthz" >/dev/null && break; sleep 0.5; done
-curl -sf "http://$ADDR/healthz" >/dev/null || { echo "daemon never came up"; exit 1; }
+start_daemon
 
 echo "== wait for golden + warm pool"
-for i in $(seq 1 120); do
-  if api info | jq -e '(.pools|length)>0 and all(.pools[]; .golden and .warm>=.target)' >/dev/null 2>&1; then break; fi
-  [[ $i == 120 ]] && { echo "pools never ready"; api info | jq . || true; exit 1; }
-  sleep 1
-done
+wait_pools '(.pools|length)>0 and all(.pools[]; .golden and .warm>=.target)'
 api info | jq '{pools:(.pools|length),claimed,hibernated,archived}'
 
 echo "== archive lifecycle: claim -> idle-hibernate -> archive -> wake"
