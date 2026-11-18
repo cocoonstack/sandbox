@@ -200,6 +200,9 @@ func TestExpiryArchiveWakeBeforeTheExportGrantsAFreshLease(t *testing.T) {
 			if lease < 59*time.Minute {
 				t.Fatalf("lease after a wake from the expiry hibernate = %v, want the claim's hour again", lease)
 			}
+			if events := usageJournal(t, m); events[len(events)-1].Event != "wake" || !events[len(events)-1].Deadline.Equal(m.deadlineOf(sb)) {
+				t.Errorf("last event %+v, want a wake carrying the renewed lease", events[len(events)-1])
+			}
 			m.reapOnce(t.Context())
 			m.mu.Lock()
 			_, marked := m.archiving[sb.ID]

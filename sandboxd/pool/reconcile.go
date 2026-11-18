@@ -334,7 +334,7 @@ func (m *Manager) quarantineClaim(ctx context.Context, sb *types.Sandbox) bool {
 
 func (m *Manager) recordReconciled(ctx context.Context, resumed, dropped []*types.Sandbox, answered bool) {
 	for _, sb := range resumed {
-		m.recordUsage(ctx, usage.Event{Event: "wake", ID: sb.ID, VMName: sb.VMName, Tenant: sb.Tenant, Deadline: sb.Deadline})
+		m.recordWake(ctx, sb)
 	}
 	for _, sb := range dropped {
 		if sb.MoveIn || sb.MoveOut != nil {

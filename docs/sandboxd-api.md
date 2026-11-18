@@ -570,8 +570,10 @@ while stored, and waking it starts a fresh lease of the length the claim was gra
 its own disk (memory is lost) and its restart budget resets. A hibernated
 sandbox whose guest does not answer within the wake deadline after two restores
 of its snapshot is cold-booted from its own disk instead: memory is lost,
-`restarts` moves, and the snapshot is dropped. The same holds for a wake that
-an agent access triggers. 204 on
+`restarts` moves, and the snapshot is dropped. The boot records `vmm_restart`
+when it starts and `wake`, with the lease, when the guest answers; a boot that
+fails after its start records `hibernate`, and the claim stays hibernated. The
+same holds for a wake that an agent access triggers. 204 on
 success, 404 unknown id or wrong token, or an archived sandbox the node had no
 room for that it [handed to a peer](cluster.md#waking-an-archived-claim-on-a-full-node)
 (look it up again), 409 a failed egress-lane or volume sandbox, or one whose VM

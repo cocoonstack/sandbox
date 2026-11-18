@@ -324,7 +324,7 @@ func (m *Manager) commitTransition(ctx context.Context, sb *types.Sandbox, snap,
 			m.recordHibernate(ctx, sb)
 		} else {
 			m.renewWokenLeaseLocked(sb)
-			m.recordUsage(ctx, usage.Event{Event: "wake", ID: sb.ID, VMName: sb.VMName, Tenant: sb.Tenant, Deadline: sb.Deadline})
+			m.recordWake(ctx, sb)
 		}
 	})
 }
@@ -400,6 +400,10 @@ func (m *Manager) forgetHostEnvLocked(sb *types.Sandbox) {
 func (m *Manager) recordHibernate(ctx context.Context, sb *types.Sandbox) {
 	m.counters.hibernates.Add(1)
 	m.recordUsage(ctx, usage.Event{Event: "hibernate", ID: sb.ID, VMName: sb.VMName, Tenant: sb.Tenant})
+}
+
+func (m *Manager) recordWake(ctx context.Context, sb *types.Sandbox) {
+	m.recordUsage(ctx, usage.Event{Event: "wake", ID: sb.ID, VMName: sb.VMName, Tenant: sb.Tenant, Deadline: sb.Deadline})
 }
 
 func skipIdle(sb *types.Sandbox) bool {

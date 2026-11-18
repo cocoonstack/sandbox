@@ -287,6 +287,7 @@ func (m *Manager) restartLocked(ctx context.Context, sb *types.Sandbox) error {
 		snap, sb.HibernateSnap, sb.ReaderSafe = sb.HibernateSnap, "", false
 		if snap != "" {
 			m.renewWokenLeaseLocked(sb)
+			m.recordWake(ctx, sb)
 		}
 		sb.Failed = ""
 		sb.Restarts++
@@ -314,7 +315,15 @@ func (m *Manager) restartLocked(ctx context.Context, sb *types.Sandbox) error {
 
 func (m *Manager) stopRestarted(ctx context.Context, sb *types.Sandbox) {
 	m.stopVM(ctx, sb.VMName)
-	m.recordExit(ctx, sb)
+	if sb.HibernateSnap == "" {
+		m.recordExit(ctx, sb)
+		return
+	}
+	m.mu.Lock()
+	if m.claimed[sb.ID] == sb {
+		m.recordUsage(ctx, usage.Event{Event: "hibernate", ID: sb.ID, VMName: sb.VMName, Tenant: sb.Tenant})
+	}
+	m.mu.Unlock()
 }
 
 func (m *Manager) recordExit(ctx context.Context, sb *types.Sandbox) {
