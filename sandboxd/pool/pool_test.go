@@ -1755,6 +1755,7 @@ func (f *fakeEngine) Hibernate(_ context.Context, name, snapName string) error {
 		f.mu.Lock()
 		f.stopped[name] = !f.hibernateLeavesVMM
 		f.snapshots = append(f.snapshots, snapName)
+		f.digests[snapName] = f.digests[name]
 		f.mu.Unlock()
 	}
 	return err
@@ -2209,7 +2210,7 @@ func (f *fakeEngine) clone(from, name string) (types.VMRecord, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.vms[name] = f.sockRoot + "/" + name
-	f.digests[name] = string(digest)
+	f.digests[name] = cmp.Or(string(digest), f.digests[from])
 	f.maxVMs = max(f.maxVMs, len(f.vms))
 	return f.record(name), nil
 }

@@ -82,18 +82,14 @@ func (m *Manager) shrinkOnce(ctx context.Context) {
 
 func (m *Manager) refillOne(ctx context.Context, p *pool, golden string, gen uint64) {
 	start := time.Now()
-	var imageID string
 	sb, err := m.startVM(ctx, p.key, func(name string) (types.VMRecord, error) {
 		p.goldenUse.RLock()
 		defer p.goldenUse.RUnlock()
-		rec, err := m.eng.Clone(ctx, golden, name, p.key)
-		imageID = rec.Config.ImageDigest
-		return rec, err
+		return m.eng.Clone(ctx, golden, name, p.key)
 	})
 	cloneErr := err
 	<-m.refillSem
 	if err == nil {
-		sb.ImageID = imageID
 		if ctx.Err() == nil {
 			m.refillOnce(ctx)
 		}

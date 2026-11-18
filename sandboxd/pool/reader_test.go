@@ -244,18 +244,6 @@ func TestReaderRefusesAClaimThatRecordsNoImage(t *testing.T) {
 			eng.imageIDs = nil
 			return mustClaim(t, m, testKey)
 		}},
-		{"checkpoint branch", func(t *testing.T, m *Manager, _ *fakeEngine) *types.Sandbox {
-			parent := mustClaim(t, m, testKey)
-			ckpt, err := m.Checkpoint(t.Context(), parent.ID, Cred{Token: parent.Token}, "", "")
-			if err != nil {
-				t.Fatalf("Checkpoint: %v", err)
-			}
-			branch, err := m.ClaimCheckpoint(t.Context(), ckpt.ID, ClaimOptions{})
-			if err != nil {
-				t.Fatalf("ClaimCheckpoint: %v", err)
-			}
-			return branch
-		}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			eng := newFakeEngine()
@@ -288,22 +276,99 @@ func TestAColdClaimRecordsTheDigestItBootedWithoutListingImages(t *testing.T) {
 	}
 }
 
-func TestReaderServesAForkFromAVMOfItsParentsImage(t *testing.T) {
-	eng := newFakeEngine()
-	m := newReaderManager(t, eng)
-	parent := mustClaim(t, m, testKey)
-	children, err := m.Fork(t.Context(), parent.ID, Cred{Token: parent.Token}, 1, time.Hour, "", "")
-	if err != nil {
-		t.Fatalf("Fork: %v", err)
-	}
-	hibernateClaim(t, m, children[0])
-	seedReaderVMs(m, testKey, "sbx-reader-1")
+func TestReaderServesAForkFromAVMOfTheImageItsCloneBooted(t *testing.T) {
+	for _, hibernated := range []bool{false, true} {
+		t.Run(fmt.Sprintf("hibernated parent %v", hibernated), func(t *testing.T) {
+			eng := newFakeEngine()
+			m := newReaderManager(t, eng)
+			parent := mustClaim(t, m, testKey)
+			parent.ImageID = ""
+			if hibernated {
+				hibernateClaim(t, m, parent)
+			}
+			children, err := m.Fork(t.Context(), parent.ID, Cred{Token: parent.Token}, 1, time.Hour, "", "")
+			if err != nil {
+				t.Fatalf("Fork: %v", err)
+			}
+			if children[0].ImageID != imageA {
+				t.Fatalf("fork of a parent that records no image recorded %q, want its clone's %s", children[0].ImageID, imageA)
+			}
+			hibernateClaim(t, m, children[0])
+			seedReaderVMs(m, testKey, "sbx-reader-1")
 
-	conn, _, err := m.DialReader(t.Context(), children[0].ID, children[0].Token)
-	if err != nil {
-		t.Fatalf("DialReader of a fork: %v", err)
+			conn, _, err := m.DialReader(t.Context(), children[0].ID, children[0].Token)
+			if err != nil {
+				t.Fatalf("DialReader of a fork: %v", err)
+			}
+			_ = conn.Close()
+		})
 	}
-	_ = conn.Close()
+}
+
+func TestReaderServesTemplateAndCheckpointClaimsFromAVMOfTheirImage(t *testing.T) {
+	for _, tt := range []struct {
+		name  string
+		claim func(*testing.T, *Manager) *types.Sandbox
+	}{
+		{"checkpoint branch", func(t *testing.T, m *Manager) *types.Sandbox {
+			parent := mustClaim(t, m, testKey)
+			ckpt, err := m.Checkpoint(t.Context(), parent.ID, Cred{Token: parent.Token}, "", "")
+			if err != nil {
+				t.Fatalf("Checkpoint: %v", err)
+			}
+			branch, err := m.ClaimCheckpoint(t.Context(), ckpt.ID, ClaimOptions{})
+			if err != nil {
+				t.Fatalf("ClaimCheckpoint: %v", err)
+			}
+			return branch
+		}},
+		{"promoted template claim", func(t *testing.T, m *Manager) *types.Sandbox {
+			parent := mustClaim(t, m, testKey)
+			key, _, err := m.Promote(t.Context(), parent.ID, Cred{Token: parent.Token}, "tpl", "")
+			if err != nil {
+				t.Fatalf("Promote: %v", err)
+			}
+			sb, err := m.ClaimProvision(t.Context(), key, ClaimOptions{RequirePromoted: true})
+			if err != nil {
+				t.Fatalf("claim the template: %v", err)
+			}
+			reloadWith(t, m, func(c *config.Config) {
+				c.Pools = append(slices.Clone(c.Pools), config.PoolSpec{PoolKey: key, Warm: 1, Reader: true})
+			})
+			if err := m.SetPools(t.Context(), []config.PoolSpec{{PoolKey: testKey, Warm: 1}, {PoolKey: key, Warm: 1}}); err != nil {
+				t.Fatalf("SetPools: %v", err)
+			}
+			return sb
+		}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			eng := newFakeEngine()
+			m := newReaderManager(t, eng)
+			sb := tt.claim(t, m)
+			hibernateClaim(t, m, sb)
+			m.pools[sb.Key].warm = append(m.pools[sb.Key].warm, &types.Sandbox{VMName: "sbx-image-b", Key: sb.Key, VsockSocket: "/vsock/sbx-image-b", ImageID: imageB})
+
+			if _, _, err := m.DialReader(t.Context(), sb.ID, sb.Token); !errors.Is(err, ErrNoReader) {
+				t.Fatalf("DialReader with only a VM of another image = %v, want ErrNoReader", err)
+			}
+			if len(eng.attachedCopies) != 0 || len(m.pools[sb.Key].warm) != 1 {
+				t.Fatalf("attached=%v warm=%d, want the VM of the other image left in the pool", eng.attachedCopies, len(m.pools[sb.Key].warm))
+			}
+
+			seedReaderVMs(m, sb.Key, "sbx-image-a")
+			conn, _, err := m.DialReader(t.Context(), sb.ID, sb.Token)
+			if err != nil {
+				t.Fatalf("DialReader with a VM of the claim's image: %v", err)
+			}
+			_ = conn.Close()
+			if want := []string{"snapshot:sbx-image-a:" + sb.HibernateSnap}; !slices.Equal(eng.attachedCopies, want) {
+				t.Errorf("attached %v, want the VM of the claim's image %v", eng.attachedCopies, want)
+			}
+			if len(eng.restores) != 0 || sb.HibernateSnap == "" {
+				t.Errorf("claim woke: restores=%v hibernate snapshot=%q", eng.restores, sb.HibernateSnap)
+			}
+		})
+	}
 }
 
 func TestReaderServesOnlyPoolsThatAskForIt(t *testing.T) {
