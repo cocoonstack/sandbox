@@ -24,6 +24,7 @@ type configView struct {
 	memoryPSI     float64
 	noBalloon     bool
 	hostEnvMemory bool
+	egressEvents  bool
 
 	maxClaims            int
 	maxRunning           int
@@ -47,6 +48,7 @@ func newConfigView(cfg *config.Config, secrets *egress.SecretStore) *configView 
 		poolReaders:   map[types.PoolKey]bool{},
 		noBalloon:     cfg.NoBalloon,
 		hostEnvMemory: cfg.HostEnvMemoryOnly,
+		egressEvents:  cfg.EgressUsageEvents,
 
 		maxClaims:            cfg.MaxClaims,
 		maxRunning:           cfg.MaxRunning,

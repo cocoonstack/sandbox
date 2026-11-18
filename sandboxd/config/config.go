@@ -444,6 +444,7 @@ type Config struct {
 	EgressCA            *EgressCAConfig       `json:"egress_ca,omitempty"`
 	EgressUpstream      *EgressUpstreamConfig `json:"egress_upstream,omitempty"`
 	EgressUsageBytes    bool                  `json:"egress_usage_bytes,omitzero"`
+	EgressUsageEvents   bool                  `json:"egress_usage_events,omitzero"`
 	// EgressUsageIntervalSeconds adds an egress_bytes row at this interval for each connection or flow that lasts longer; zero writes one row at its end.
 	EgressUsageIntervalSeconds int             `json:"egress_usage_interval_seconds,omitzero"`
 	EgressConnRate             *EgressConnRate `json:"egress_conn_rate,omitempty"`

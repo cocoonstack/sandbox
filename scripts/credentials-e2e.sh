@@ -57,6 +57,7 @@ cat >"$DATA/config.json" <<EOF
   "data_dir": "$DATA/state",
   "api_token": "$TOKEN",
   "audit_log": true,
+  "egress_usage_events": true,
   "secrets": [{"name": "probe", "header": "X-Egress-Token", "value_env": "EGRESS_PROBE_TOKEN"}],
   "egress_ca": {"root_cert": "$DATA/ca/root.crt", "intermediate_cert": "$DATA/node/e2e-node.crt", "intermediate_key": "$DATA/node/e2e-node.key"},
   "egress_internal_allow": ["127.0.0.1/32:$SSE_PORT"],

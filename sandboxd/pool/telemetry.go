@@ -267,7 +267,9 @@ func (m *Manager) recordEgress(ctx context.Context, id, tenant string, ev egress
 			Tenant: tenant, Src: ev.Local, Dst: ev.Remote,
 		}})
 	}
-	m.recordUsage(ctx, usage.Event{Event: egressEvent, ID: id, Tenant: tenant, Reference: ev.Host, Upstream: ev.Upstream, Secret: ev.Injected})
+	if m.view.Load().egressEvents {
+		m.recordUsage(ctx, usage.Event{Event: egressEvent, ID: id, Tenant: tenant, Reference: ev.Host, Upstream: ev.Upstream, Secret: ev.Injected})
+	}
 }
 
 func (m *Manager) recordDNS(ctx context.Context, id, tenant string, ev outbound.DNSEvent) {
