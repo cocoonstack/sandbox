@@ -1,24 +1,30 @@
-# Reusable: the images gating workflow calls this in order (boot → silkd →
-# os-images) so the chain is deterministic; workflow_dispatch stays for
-# building the carrier alone. The pushed sha-pinned ref is an output so
-# os-images can base FROM the exact carrier this commit built.
-# Multi-arch: each platform builds on its native runner (a kernel build under
-# QEMU emulation takes hours), pushes by digest, and a merge job stitches the
-# manifest so every tag resolves per-platform.
-name: build-boot
+# Builds one carrier image (boot or silkd): test its crate, build per platform
+# on a native runner (a kernel build under QEMU emulation takes hours), push by
+# digest, and stitch the manifest so every tag resolves per-platform. Reusable:
+# the images gating workflow calls this once per changed carrier, and the pushed
+# sha-pinned ref is an output so os-images can base FROM the exact carrier this
+# commit built; workflow_dispatch stays for building one carrier alone.
+name: build-carrier
 
 on:
   workflow_call:
     inputs:
+      carrier:
+        type: string
+        required: true
       no_cache:
         type: boolean
         default: false
     outputs:
       image:
-        description: sha-pinned boot image ref this run pushed
+        description: sha-pinned carrier image ref this run pushed
         value: ${{ jobs.merge.outputs.image }}
   workflow_dispatch:
     inputs:
+      carrier:
+        type: choice
+        options: [boot, silkd]
+        required: true
       no_cache:
         type: boolean
         default: false
@@ -30,12 +36,23 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7.0.1
 
-      - name: sandbox-init tests
-        working-directory: boot/init
+      - name: Read version
+        id: ver
+        run: |
+          case "${{ inputs.carrier }}" in
+            boot) version=$(cat boot/kernel/VERSION) ;;
+            silkd) version=$(sed -n 's/^version = "\(.*\)"/\1/p' silkd/Cargo.toml | head -1) ;;
+          esac
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: fmt + clippy + test
+        working-directory: ${{ inputs.carrier == 'boot' && 'boot/init' || 'silkd' }}
         run: |
           cargo fmt --check
           cargo clippy --locked --all-targets -- -D warnings
@@ -57,10 +74,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7.0.1
 
-      - name: Read kernel version
-        id: ver
-        run: echo "kernel=$(cat boot/kernel/VERSION)" >> "$GITHUB_OUTPUT"
-
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4.4.1
 
@@ -75,15 +88,14 @@ jobs:
         id: build
         uses: docker/build-push-action@v7.4.0
         with:
-          context: boot
-          file: boot/Dockerfile
+          context: ${{ inputs.carrier }}
+          file: ${{ inputs.carrier }}/Dockerfile
           platforms: ${{ matrix.platform }}
-          build-args: |
-            KERNEL_VERSION=${{ steps.ver.outputs.kernel }}
-          outputs: type=image,name=ghcr.io/${{ github.repository }}/boot,push-by-digest=true,name-canonical=true,push=true
+          build-args: ${{ inputs.carrier == 'boot' && format('KERNEL_VERSION={0}', needs.test.outputs.version) || '' }}
+          outputs: type=image,name=ghcr.io/${{ github.repository }}/${{ inputs.carrier }},push-by-digest=true,name-canonical=true,push=true
           no-cache: ${{ inputs.no_cache }}
-          cache-from: type=gha,scope=boot-${{ matrix.arch }}
-          cache-to: type=gha,mode=max,scope=boot-${{ matrix.arch }}
+          cache-from: type=gha,scope=${{ inputs.carrier }}-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=${{ inputs.carrier }}-${{ matrix.arch }}
 
       - name: Export digest
         run: |
@@ -94,34 +106,27 @@ jobs:
       - name: Upload digest
         uses: actions/upload-artifact@v7.0.2
         with:
-          name: boot-digests-${{ matrix.arch }}
+          name: ${{ inputs.carrier }}-digests-${{ matrix.arch }}
           path: /tmp/digests/*
           if-no-files-found: error
           retention-days: 1
 
   merge:
-    needs: build
+    needs: [test, build]
     runs-on: ubuntu-latest
     outputs:
       image: ${{ steps.ref.outputs.image }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v7.0.1
-
-      - name: Read kernel version
-        id: ver
-        run: echo "kernel=$(cat boot/kernel/VERSION)" >> "$GITHUB_OUTPUT"
-
       - name: Compute sha-pinned ref
         id: ref
         # Same 7-char short SHA docker/metadata-action's type=sha emits, so
         # the ref matches the tag actually pushed below.
-        run: echo "image=ghcr.io/${{ github.repository }}/boot:${{ steps.ver.outputs.kernel }}-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+        run: echo "image=ghcr.io/${{ github.repository }}/${{ inputs.carrier }}:${{ needs.test.outputs.version }}-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
 
       - name: Download digests
         uses: actions/download-artifact@v8.0.2
         with:
-          pattern: boot-digests-*
+          pattern: ${{ inputs.carrier }}-digests-*
           path: /tmp/digests
           merge-multiple: true
 
@@ -139,18 +144,18 @@ jobs:
         id: meta
         uses: docker/metadata-action@v6.2.0
         with:
-          images: ghcr.io/${{ github.repository }}/boot
+          images: ghcr.io/${{ github.repository }}/${{ inputs.carrier }}
           tags: |
-            type=raw,value=${{ steps.ver.outputs.kernel }}
+            type=raw,value=${{ needs.test.outputs.version }}
             type=raw,value=latest
-            type=sha,prefix=${{ steps.ver.outputs.kernel }}-
+            type=sha,prefix=${{ needs.test.outputs.version }}-
 
       - name: Create multi-arch manifest
         working-directory: /tmp/digests
         run: |
           docker buildx imagetools create \
             $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
-            $(printf 'ghcr.io/${{ github.repository }}/boot@sha256:%s ' *)
+            $(printf 'ghcr.io/${{ github.repository }}/${{ inputs.carrier }}@sha256:%s ' *)
 
       - name: Inspect
         run: docker buildx imagetools inspect "${{ steps.ref.outputs.image }}"
