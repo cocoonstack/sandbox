@@ -356,11 +356,15 @@ func TestAWakeWhoseColdBootFailsStaysHibernated(t *testing.T) {
 	}{
 		{"start fails", func(eng *fakeEngine) { eng.startErr = errors.New("boot failed") }, "claim,hibernate"},
 		{"probe fails", func(eng *fakeEngine) { eng.probeFails++ }, "claim,hibernate,vmm_restart,hibernate"},
+		{"env restore fails", func(eng *fakeEngine) { eng.guestEnvErr = errors.New("guest write refused") }, "claim,hibernate,vmm_restart,hibernate"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			eng := newFakeEngine()
 			m := newTestManager(t, eng)
-			sb := mustClaim(t, m, testKey)
+			sb, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Env: types.Env{"MODE": {Value: "prod"}}})
+			if err != nil {
+				t.Fatalf("claim: %v", err)
+			}
 			hibernateClaim(t, m, sb)
 			snap := eng.hibernates[0]
 			eng.probeFails = wakeRestoreTries
@@ -381,7 +385,7 @@ func TestAWakeWhoseColdBootFailsStaysHibernated(t *testing.T) {
 			if got := usageEventsOf(t, m, sb.ID); got != tt.events {
 				t.Errorf("events %q, want %q so the claim bills as hibernated again", got, tt.events)
 			}
-			eng.startErr = nil
+			eng.startErr, eng.guestEnvErr = nil, nil
 			if _, _, _, err := m.WakeAgentSocket(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
 				t.Fatalf("wake once the snapshot answers: %v", err)
 			}
@@ -411,6 +415,34 @@ func TestAFailedColdBootWakeLeavesALaterExitBilled(t *testing.T) {
 
 	if got, want := usageEventsOf(t, m, sb.ID), "claim,hibernate,vmm_restart,hibernate,wake,vmm_exit,vmm_failed"; got != want {
 		t.Errorf("events %s, want %s", got, want)
+	}
+}
+
+func TestAReleaseDuringAColdBootWakeProbeEndsTheBilling(t *testing.T) {
+	eng := newFakeEngine()
+	m := newTestManager(t, eng)
+	sb := mustClaim(t, m, testKey)
+	hibernateClaim(t, m, sb)
+	stall := make(chan struct{})
+	eng.mu.Lock()
+	eng.probeFails = wakeRestoreTries + 1
+	eng.startHook = func() { eng.probeStall = stall }
+	eng.mu.Unlock()
+	woke := make(chan error, 1)
+	go func() {
+		_, _, _, err := m.WakeAgentSocket(t.Context(), sb.ID, Cred{Token: sb.Token})
+		woke <- err
+	}()
+	waitFor(t, func() bool { return usageEventsOf(t, m, sb.ID) == "claim,hibernate,vmm_restart" })
+	if err := m.Release(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
+		t.Fatalf("release: %v", err)
+	}
+	close(stall)
+	if err := <-woke; err == nil {
+		t.Fatal("wake reported success for a released claim")
+	}
+	if got := usageEventsOf(t, m, sb.ID); got != "claim,hibernate,vmm_restart,release" {
+		t.Errorf("events %q, want nothing billed after the release", got)
 	}
 }
 
