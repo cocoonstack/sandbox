@@ -174,8 +174,7 @@ Success:
 
 A claim cloned from a promoted template carries `template_digest`, the exact
 export generation fetched for that clone. It is absent for configured pools,
-cold image boots, forks, checkpoints, and templates published by an older
-sandboxd until they are re-promoted.
+cold image boots, forks and checkpoints.
 
 `net_route` says how the guest reaches the network: `relay` through the host
 proxy behind the guest's bound doors, `direct` over an egress-lane NIC the node
@@ -1627,8 +1626,7 @@ set, and `tenant` when a tenant promoted it (omitted for root). A key
 a configured pool now owns is left out, since claims of it clone the pool's
 golden. On a shared checkpoint store a node lists what it promoted plus what
 was in the store when it started, and a template another node deletes later
-stays listed, and may redirect a claim to a 404, until this node restarts. A template published by an older sandboxd is
-listed once it is re-promoted.
+stays listed, and may redirect a claim to a 404, until this node restarts.
 
 ## GET /v1/peers
 

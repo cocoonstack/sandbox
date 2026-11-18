@@ -14,7 +14,6 @@ import (
 
 	"github.com/cocoonstack/sandbox/sandboxd/config"
 	"github.com/cocoonstack/sandbox/sandboxd/store"
-	"github.com/cocoonstack/sandbox/sandboxd/store/storetest"
 	"github.com/cocoonstack/sandbox/sandboxd/tenants"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 )
@@ -426,14 +425,6 @@ func TestTemplatesListWhatTheNodeHoldsAcrossARestart(t *testing.T) {
 	keyA, digestA := mustPromote(t, m, parent, "tpl:a", "")
 	acme := claimTenant(t, m, "acme")
 	keyB, digestB := mustPromote(t, m, acme, "tpl:b", "acme")
-	oldID := store.TemplateID(tplKey("tpl:old").Hash())
-	staging := stageTemplate(t, m, oldID)
-	if err := os.WriteFile(filepath.Join(staging, store.MetaFile), []byte(`{"id":"`+oldID+`","created_at":"2026-01-01T00:00:00Z"}`), 0o600); err != nil {
-		t.Fatalf("write keyless meta: %v", err)
-	}
-	if _, err := storetest.PublishDigested(t.Context(), m.tpls, staging, oldID); err != nil {
-		t.Fatalf("publish keyless record: %v", err)
-	}
 
 	before := m.Templates()
 	spec, _ := testKey.Size.Spec()
@@ -451,8 +442,8 @@ func TestTemplatesListWhatTheNodeHoldsAcrossARestart(t *testing.T) {
 			t.Errorf("after restart %+v, want %+v created %v on the %+v tier", got, want, before, spec)
 		}
 	}
-	if hashes := restarted.TemplateHashes(); len(hashes) != 6 {
-		t.Errorf("gossip %v, want the keyless record still routed", hashes)
+	if hashes := restarted.TemplateHashes(); len(hashes) != 4 {
+		t.Errorf("gossip %v, want both templates routed", hashes)
 	}
 	if err := restarted.DeleteTemplate(t.Context(), keyA, "", ""); err != nil {
 		t.Fatalf("DeleteTemplate: %v", err)
