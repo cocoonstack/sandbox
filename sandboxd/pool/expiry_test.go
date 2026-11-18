@@ -176,26 +176,38 @@ func TestExpiryArchiveSurvivesAFailedReapPersist(t *testing.T) {
 }
 
 func TestExpiryArchiveWakeBeforeTheExportGrantsAFreshLease(t *testing.T) {
-	m := newTestManager(t, newFakeEngine())
-	sb, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{TTL: time.Hour, OnExpire: types.ExpireArchive})
-	if err != nil {
-		t.Fatalf("claim: %v", err)
-	}
-	expire(m, sb)
-	hibernateClaim(t, m, sb)
-	if _, _, _, err := m.WakeAgentSocket(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
-		t.Fatalf("wake: %v", err)
-	}
-	lease := time.Until(m.deadlineOf(sb))
-	if lease < 59*time.Minute {
-		t.Fatalf("lease after a wake from the expiry hibernate = %v, want the claim's hour again", lease)
-	}
-	m.reapOnce(t.Context())
-	m.mu.Lock()
-	_, marked := m.archiving[sb.ID]
-	m.mu.Unlock()
-	if marked {
-		t.Error("the reaper took the woken claim again")
+	for _, tt := range []struct {
+		name       string
+		probeFails int
+	}{
+		{"restore", 0},
+		{"cold boot", wakeRestoreTries},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			eng := newFakeEngine()
+			m := newTestManager(t, eng)
+			sb, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{TTL: time.Hour, OnExpire: types.ExpireArchive})
+			if err != nil {
+				t.Fatalf("claim: %v", err)
+			}
+			expire(m, sb)
+			hibernateClaim(t, m, sb)
+			eng.probeFails = tt.probeFails
+			if _, _, _, err := m.WakeAgentSocket(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
+				t.Fatalf("wake: %v", err)
+			}
+			lease := time.Until(m.deadlineOf(sb))
+			if lease < 59*time.Minute {
+				t.Fatalf("lease after a wake from the expiry hibernate = %v, want the claim's hour again", lease)
+			}
+			m.reapOnce(t.Context())
+			m.mu.Lock()
+			_, marked := m.archiving[sb.ID]
+			m.mu.Unlock()
+			if marked {
+				t.Error("the reaper took the woken claim again")
+			}
+		})
 	}
 }
 

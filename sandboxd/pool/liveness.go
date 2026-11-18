@@ -250,7 +250,7 @@ func (m *Manager) restartFailed(ctx context.Context, sb *types.Sandbox) error {
 	return nil
 }
 
-// restartLocked cold-boots sb's VM from its own disk and republishes it; the caller holds sb.Transition.
+// restartLocked cold-boots sb's VM from its own disk, in place of any hibernate snapshot, and republishes it; the caller holds sb.Transition.
 func (m *Manager) restartLocked(ctx context.Context, sb *types.Sandbox) error {
 	ctx = context.WithoutCancel(ctx)
 	if err := m.eng.Start(ctx, sb.VMName); err != nil {
@@ -282,14 +282,27 @@ func (m *Manager) restartLocked(ctx context.Context, sb *types.Sandbox) error {
 		m.stopRestarted(ctx, sb)
 		return fmt.Errorf("restore egress and env after cold boot: %w", err)
 	}
-	if live, _ := m.commitIfLive(ctx, sb, func() {
+	var snap string
+	live, err := m.commitIfLive(ctx, sb, func() {
+		snap, sb.HibernateSnap, sb.ReaderSafe = sb.HibernateSnap, "", false
+		if snap != "" {
+			m.renewWokenLeaseLocked(sb)
+		}
 		sb.Failed = ""
 		sb.Restarts++
 		sb.RestartedAt = time.Now()
-	}); !live {
+	})
+	if !live {
 		// The release that dropped the claim owns the VM teardown
 		m.out.Disarm(sb.ID, true)
 		return ErrUnknownSandbox
+	}
+	switch {
+	case snap == "":
+	case err != nil:
+		sb.StaleSnap = snap
+	default:
+		go m.dropSnap(ctx, snap)
 	}
 	if m.disarmIfReleased(sb) {
 		return ErrUnknownSandbox
