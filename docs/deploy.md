@@ -192,8 +192,9 @@ with an older cocoon: there every read spends a warm VM
 on an attach that fails, then wakes the claim. An archive exported by an older
 cocoon, whose `snapshot.json` has no `disk_attach_files`, wakes before any VM is
 taken. A checkpoint branch belongs to its parent's pool and reads like any of
-its claims. A promoted template's key is not a pool (promote refuses a pooled
-key), so a claim of a template has no reader and its reads wake it.
+its claims. A claim of a promoted template has a reader only when a pool with
+`reader` is configured under the template's key; promote refuses a pooled key,
+so until then its reads wake it.
 `reader` is reloadable like `capture_trim`; turning it off leaves open reader
 connections to finish, and the next connection wakes the claim.
 
@@ -204,8 +205,8 @@ the content id of the image it booted, the digest cocoon reports for the VM it
 started (the id `cocoon image list` shows): a clone carries the one of the
 export it was cloned from (a golden, a promoted template or a checkpoint), the
 image that export's VM first booted, and a cold boot the one its ref resolved
-to at boot. A fork inherits its
-parent's id, and the id travels with the claim through an archive, a replica
+to at boot. A fork records the digest of the image its clone booted, like any
+clone, and the id travels with the claim through an archive, a replica
 and a live move. Once the template is re-pulled under the same ref and the pool
 has rebuilt its golden, the warm VMs boot the new image, so a claim of the
 previous image finds no reader and its read wakes it, on its own image. Taking

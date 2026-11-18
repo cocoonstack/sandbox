@@ -276,22 +276,33 @@ func TestAColdClaimRecordsTheDigestItBootedWithoutListingImages(t *testing.T) {
 	}
 }
 
-func TestReaderServesAForkFromAVMOfItsParentsImage(t *testing.T) {
-	eng := newFakeEngine()
-	m := newReaderManager(t, eng)
-	parent := mustClaim(t, m, testKey)
-	children, err := m.Fork(t.Context(), parent.ID, Cred{Token: parent.Token}, 1, time.Hour, "", "")
-	if err != nil {
-		t.Fatalf("Fork: %v", err)
-	}
-	hibernateClaim(t, m, children[0])
-	seedReaderVMs(m, testKey, "sbx-reader-1")
+func TestReaderServesAForkFromAVMOfTheImageItsCloneBooted(t *testing.T) {
+	for _, hibernated := range []bool{false, true} {
+		t.Run(fmt.Sprintf("hibernated parent %v", hibernated), func(t *testing.T) {
+			eng := newFakeEngine()
+			m := newReaderManager(t, eng)
+			parent := mustClaim(t, m, testKey)
+			parent.ImageID = ""
+			if hibernated {
+				hibernateClaim(t, m, parent)
+			}
+			children, err := m.Fork(t.Context(), parent.ID, Cred{Token: parent.Token}, 1, time.Hour, "", "")
+			if err != nil {
+				t.Fatalf("Fork: %v", err)
+			}
+			if children[0].ImageID != imageA {
+				t.Fatalf("fork of a parent that records no image recorded %q, want its clone's %s", children[0].ImageID, imageA)
+			}
+			hibernateClaim(t, m, children[0])
+			seedReaderVMs(m, testKey, "sbx-reader-1")
 
-	conn, _, err := m.DialReader(t.Context(), children[0].ID, children[0].Token)
-	if err != nil {
-		t.Fatalf("DialReader of a fork: %v", err)
+			conn, _, err := m.DialReader(t.Context(), children[0].ID, children[0].Token)
+			if err != nil {
+				t.Fatalf("DialReader of a fork: %v", err)
+			}
+			_ = conn.Close()
+		})
 	}
-	_ = conn.Close()
 }
 
 func TestReaderServesTemplateAndCheckpointClaimsFromAVMOfTheirImage(t *testing.T) {
