@@ -1405,6 +1405,7 @@ type fakeEngine struct {
 	captureWaits          []string
 	vmStates              map[string]string
 	startFails            int
+	probeFails            int
 	stopErr               error
 	hibernateLeavesVMM    bool
 	captureStall          chan struct{}
@@ -1846,6 +1847,10 @@ func (f *fakeEngine) Probe(_ context.Context, _ string, timeout time.Duration) e
 	f.volumeOps = append(f.volumeOps, "probe")
 	stall := f.probeStall
 	err := f.probeErr
+	if f.probeFails > 0 {
+		f.probeFails--
+		err = errors.New("silkd probe: context deadline exceeded")
+	}
 	f.mu.Unlock()
 	if stall != nil {
 		<-stall

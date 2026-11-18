@@ -214,11 +214,12 @@ func TestHibernateUnverifiableErrorKeepsIntent(t *testing.T) {
 
 func TestWakeFailureStopsTheVMAndRetries(t *testing.T) {
 	for _, tt := range []struct {
-		name string
-		knob func(*fakeEngine) *error
+		name     string
+		knob     func(*fakeEngine) *error
+		restores int
 	}{
-		{"restore error", func(eng *fakeEngine) *error { return &eng.restoreErr }},
-		{"probe timeout", func(eng *fakeEngine) *error { return &eng.probeErr }},
+		{"restore error", func(eng *fakeEngine) *error { return &eng.restoreErr }, 2},
+		{"probe timeout", func(eng *fakeEngine) *error { return &eng.probeErr }, wakeRestoreTries + 1},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			eng := newFakeEngine()
@@ -251,10 +252,197 @@ func TestWakeFailureStopsTheVMAndRetries(t *testing.T) {
 			if err != nil || sock == "" {
 				t.Fatalf("wake retry after recovery: %q, %v", sock, err)
 			}
-			if len(eng.restores) != 2 {
-				t.Errorf("restores=%d, want 2 (failed attempt + retry)", len(eng.restores))
+			if len(eng.restores) != tt.restores {
+				t.Errorf("restores=%d, want %d (failed attempt + retry)", len(eng.restores), tt.restores)
 			}
 		})
+	}
+}
+
+func TestAWakeRestoresAgainWhenTheGuestMissesOneProbe(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		eng := newFakeEngine()
+		m := newTestManager(t, eng)
+		sb := mustClaim(t, m, testKey)
+		hibernateClaim(t, m, sb)
+		snap := eng.hibernates[0]
+		eng.probeFails = 1
+
+		if sock, _, _, err := m.WakeAgentSocket(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil || sock == "" {
+			t.Fatalf("wake: %q, %v", sock, err)
+		}
+		if len(eng.restores) != 2 || len(eng.starts) != 0 {
+			t.Errorf("restores=%d starts=%v, want a second restore and no cold boot", len(eng.restores), eng.starts)
+		}
+		if got, _ := m.Sandbox(sb.ID); got.Restarts != 0 {
+			t.Errorf("restarts %d, want 0 after a restore that answered", got.Restarts)
+		}
+		if got := usageEventsOf(t, m, sb.ID); got != "claim,hibernate,wake" {
+			t.Errorf("events %q, want claim,hibernate,wake", got)
+		}
+		waitFor(t, func() bool { return eng.snapRemoved(snap) })
+	})
+}
+
+func TestAWakeWhoseSnapshotNeverAnswersColdBootsTheDisk(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		eng := newFakeEngine()
+		m := newTestManager(t, eng)
+		sb := mustClaim(t, m, testKey)
+		hibernateClaim(t, m, sb)
+		snap := eng.hibernates[0]
+		eng.probeFails = wakeRestoreTries
+
+		if err := m.Wake(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
+			t.Fatalf("wake: %v, want the cold boot to answer it", err)
+		}
+		if len(eng.restores) != wakeRestoreTries || !slices.Equal(eng.starts, []string{sb.VMName}) {
+			t.Errorf("restores=%d starts=%v, want %d restores then one cold boot", len(eng.restores), eng.starts, wakeRestoreTries)
+		}
+		got, _ := m.Sandbox(sb.ID)
+		if got.Restarts != 1 || got.RestartedAt.IsZero() || got.Hibernated || got.Failed != "" {
+			t.Errorf("summary %+v, want one restart, running", got)
+		}
+		row := journaled(t, m)[sb.ID]
+		if row == nil || row.HibernateSnap != "" || row.Restarts != 1 {
+			t.Fatalf("journal %+v, want the cold boot committed without the snapshot", row)
+		}
+		waitFor(t, func() bool { return eng.snapRemoved(snap) })
+		if got := usageEventsOf(t, m, sb.ID); got != "claim,hibernate,vmm_restart,wake" {
+			t.Errorf("events %q, want the cold boot billed from its start and the wake from its commit", got)
+		}
+		if sock, _, _, err := m.WakeAgentSocket(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil || sock == "" {
+			t.Errorf("data plane after the cold boot: %q, %v", sock, err)
+		}
+	})
+}
+
+func TestAColdBootWakeKeepsTheSnapshotUntilTheJournalDropsIt(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		eng := newFakeEngine()
+		m := newTestManager(t, eng)
+		sb := mustClaim(t, m, testKey)
+		hibernateClaim(t, m, sb)
+		snap := eng.hibernates[0]
+		eng.probeFails = wakeRestoreTries
+		breakStore(t, m)
+
+		if _, _, _, err := m.WakeAgentSocket(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
+			t.Fatalf("wake: %v", err)
+		}
+		synctest.Wait()
+		if eng.snapRemoved(snap) {
+			t.Fatal("the cold boot dropped the snapshot the lagging journal names")
+		}
+		healStore(t, m)
+		waitFor(t, func() bool {
+			if _, _, _, err := m.WakeAgentSocket(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
+				t.Fatalf("fast-path wake: %v", err)
+			}
+			return eng.snapRemoved(snap)
+		})
+		got, err := newClaimStore(filepath.Dir(m.store.path), false).load()
+		if err != nil || got[sb.ID] == nil || got[sb.ID].HibernateSnap != "" || got[sb.ID].Restarts != 1 {
+			t.Fatalf("journal %+v, %v, want the cold boot committed", got[sb.ID], err)
+		}
+	})
+}
+
+func TestAWakeWhoseColdBootFailsStaysHibernated(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		fail   func(*fakeEngine)
+		events string
+	}{
+		{"start fails", func(eng *fakeEngine) { eng.startErr = errors.New("boot failed") }, "claim,hibernate"},
+		{"probe fails", func(eng *fakeEngine) { eng.probeFails++ }, "claim,hibernate,vmm_restart,hibernate"},
+		{"env restore fails", func(eng *fakeEngine) { eng.guestEnvErr = errors.New("guest write refused") }, "claim,hibernate,vmm_restart,hibernate"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			eng := newFakeEngine()
+			m := newTestManager(t, eng)
+			sb, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Env: types.Env{"MODE": {Value: "prod"}}})
+			if err != nil {
+				t.Fatalf("claim: %v", err)
+			}
+			hibernateClaim(t, m, sb)
+			snap := eng.hibernates[0]
+			eng.probeFails = wakeRestoreTries
+			tt.fail(eng)
+
+			if _, _, _, err := m.WakeAgentSocket(t.Context(), sb.ID, Cred{Token: sb.Token}); err == nil {
+				t.Fatal("wake reported success after the cold boot failed")
+			}
+			if !eng.stopped[sb.VMName] || eng.snapRemoved(snap) {
+				t.Errorf("stopped=%v snapshot removed=%v, want the VM stopped and the snapshot kept", eng.stopped[sb.VMName], eng.snapRemoved(snap))
+			}
+			if got, _ := m.Sandbox(sb.ID); !got.Hibernated || got.Restarts != 0 || got.Failed != "" {
+				t.Errorf("summary %+v, want it still hibernated", got)
+			}
+			if row := journaled(t, m)[sb.ID]; row == nil || row.HibernateSnap != snap {
+				t.Fatalf("journal %+v, want HibernateSnap=%q kept for the next wake", row, snap)
+			}
+			if got := usageEventsOf(t, m, sb.ID); got != tt.events {
+				t.Errorf("events %q, want %q so the claim bills as hibernated again", got, tt.events)
+			}
+			eng.startErr, eng.guestEnvErr = nil, nil
+			if _, _, _, err := m.WakeAgentSocket(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
+				t.Fatalf("wake once the snapshot answers: %v", err)
+			}
+			if len(eng.restores) != wakeRestoreTries+1 {
+				t.Errorf("restores=%d, want the next wake to restore the kept snapshot", len(eng.restores))
+			}
+		})
+	}
+}
+
+func TestAFailedColdBootWakeLeavesALaterExitBilled(t *testing.T) {
+	eng := newFakeEngine()
+	m := newTestManager(t, eng)
+	editView(m, func(v *configView) { v.vmmRestart = types.VMMRestartNone })
+	sb := mustClaim(t, m, testKey)
+	hibernateClaim(t, m, sb)
+	eng.probeFails = wakeRestoreTries + 1
+	if _, _, _, err := m.WakeAgentSocket(t.Context(), sb.ID, Cred{Token: sb.Token}); err == nil {
+		t.Fatal("wake reported success after the cold boot failed")
+	}
+	if _, _, _, err := m.WakeAgentSocket(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
+		t.Fatalf("restore wake: %v", err)
+	}
+	killVMM(eng, sb.VMName)
+
+	m.recoverVMM(t.Context(), sb)
+
+	if got, want := usageEventsOf(t, m, sb.ID), "claim,hibernate,vmm_restart,hibernate,wake,vmm_exit,vmm_failed"; got != want {
+		t.Errorf("events %s, want %s", got, want)
+	}
+}
+
+func TestAReleaseDuringAColdBootWakeProbeEndsTheBilling(t *testing.T) {
+	eng := newFakeEngine()
+	m := newTestManager(t, eng)
+	sb := mustClaim(t, m, testKey)
+	hibernateClaim(t, m, sb)
+	stall := make(chan struct{})
+	eng.mu.Lock()
+	eng.probeFails = wakeRestoreTries + 1
+	eng.startHook = func() { eng.probeStall = stall }
+	eng.mu.Unlock()
+	woke := make(chan error, 1)
+	go func() {
+		_, _, _, err := m.WakeAgentSocket(t.Context(), sb.ID, Cred{Token: sb.Token})
+		woke <- err
+	}()
+	waitFor(t, func() bool { return usageEventsOf(t, m, sb.ID) == "claim,hibernate,vmm_restart" })
+	if err := m.Release(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
+		t.Fatalf("release: %v", err)
+	}
+	close(stall)
+	if err := <-woke; err == nil {
+		t.Fatal("wake reported success for a released claim")
+	}
+	if got := usageEventsOf(t, m, sb.ID); got != "claim,hibernate,vmm_restart,release" {
+		t.Errorf("events %q, want nothing billed after the release", got)
 	}
 }
 

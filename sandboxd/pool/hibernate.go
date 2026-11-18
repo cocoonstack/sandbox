@@ -198,16 +198,26 @@ func (m *Manager) wakeOrRead(ctx context.Context, sb *types.Sandbox, readerOK bo
 	}
 	wakeStart := time.Now()
 	snap := sb.HibernateSnap
-	restoredSock, err := m.eng.Restore(ctx, sb.VMName, snap)
-	if err != nil {
-		// Restore may have booted the VM before the engine errored
+	var sock string
+	var err error
+	for range wakeRestoreTries {
+		restoredSock, restoreErr := m.eng.Restore(ctx, sb.VMName, snap)
+		if restoreErr != nil {
+			// Restore may have booted the VM before the engine errored
+			m.stopVM(ctx, sb.VMName)
+			return "", fmt.Errorf("wake %s: %w", sb.ID, restoreErr)
+		}
+		if sock, err = m.probeReady(ctx, sb.VMName, restoredSock, wakeProbeTimeout); err == nil {
+			break
+		}
 		m.stopVM(ctx, sb.VMName)
-		return "", fmt.Errorf("wake %s: %w", sb.ID, err)
+		log.WithFunc("pool.wakeOrRead").Warnf(ctx, "%s did not answer after a restore of %s: %v", sb.ID, snap, err)
 	}
-	sock, err := m.probeReady(ctx, sb.VMName, restoredSock, wakeProbeTimeout)
 	if err != nil {
-		m.stopVM(ctx, sb.VMName)
-		return "", fmt.Errorf("wake %s: %w", sb.ID, err)
+		if err = m.restartLocked(ctx, sb); err != nil {
+			return "", fmt.Errorf("wake %s: %w", sb.ID, err)
+		}
+		return sb.VsockSocket, nil
 	}
 	live, err := m.commitTransition(ctx, sb, "", sock)
 	if !live {
@@ -308,17 +318,21 @@ func (m *Manager) commitTransition(ctx context.Context, sb *types.Sandbox, snap,
 		sb.VsockSocket = sock
 		sb.PendingSnap = ""
 		sb.ReaderSafe = sb.ReaderSafe && snap != ""
-		if now := time.Now(); snap == "" && (sb.OnExpire == types.ExpireArchive || m.archiveAfterFor(sb.Key) > 0) && !m.tenantGone(sb.Tenant) && now.After(sb.Deadline) {
-			sb.Deadline = now.Add(clampTTL(types.Seconds(sb.LeaseSeconds)))
-		}
 		// Under m.mu, so a racing release's event lands after this one and a shutdown cannot keep the record without it
 		if snap != "" {
 			m.forgetHostEnvLocked(sb)
 			m.recordHibernate(ctx, sb)
 		} else {
-			m.recordUsage(ctx, usage.Event{Event: "wake", ID: sb.ID, VMName: sb.VMName, Tenant: sb.Tenant, Deadline: sb.Deadline})
+			m.renewWokenLeaseLocked(sb)
+			m.recordWake(ctx, sb)
 		}
 	})
+}
+
+func (m *Manager) renewWokenLeaseLocked(sb *types.Sandbox) {
+	if now := time.Now(); (sb.OnExpire == types.ExpireArchive || m.archiveAfterFor(sb.Key) > 0) && !m.tenantGone(sb.Tenant) && now.After(sb.Deadline) {
+		sb.Deadline = now.Add(clampTTL(types.Seconds(sb.LeaseSeconds)))
+	}
 }
 
 // syncClaims flushes a lagging journal so a hibernate retry cannot report a false success.
@@ -386,6 +400,10 @@ func (m *Manager) forgetHostEnvLocked(sb *types.Sandbox) {
 func (m *Manager) recordHibernate(ctx context.Context, sb *types.Sandbox) {
 	m.counters.hibernates.Add(1)
 	m.recordUsage(ctx, usage.Event{Event: "hibernate", ID: sb.ID, VMName: sb.VMName, Tenant: sb.Tenant})
+}
+
+func (m *Manager) recordWake(ctx context.Context, sb *types.Sandbox) {
+	m.recordUsage(ctx, usage.Event{Event: "wake", ID: sb.ID, VMName: sb.VMName, Tenant: sb.Tenant, Deadline: sb.Deadline})
 }
 
 func skipIdle(sb *types.Sandbox) bool {
