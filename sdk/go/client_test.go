@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -361,20 +362,19 @@ func TestCloseReportsARetiredNodeWhenNoNodeHoldsTheSandbox(t *testing.T) {
 }
 
 func TestNewFollowsRedirect(t *testing.T) {
+	want := []Volume{{Name: "imagenet", Mount: "/datasets/imagenet"}}
 	var nodeB *httptest.Server
-	var gotNoRedirect bool
+	var req claimRequest
 	nodeB = serveFunc(t, func(w http.ResponseWriter, r *http.Request) {
-		var req claimRequest
 		_ = json.UnmarshalRead(r.Body, &req)
-		gotNoRedirect = req.NoRedirect
 		_ = json.MarshalWrite(w, claimResponse{
-			ID: "sb_2", Token: "tok", OwnerAddr: addrOf(nodeB),
+			ID: "sb_2", Token: "tok", OwnerAddr: addrOf(nodeB), Volumes: want,
 		})
 	})
 
 	nodeA := redirectEntry(t, addrOf(nodeB))
 
-	sb, err := testClient(t, nodeA).New(t.Context(), "rt:24.04")
+	sb, err := testClient(t, nodeA).New(t.Context(), "rt:24.04", WithVolumes(want...))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -384,8 +384,11 @@ func TestNewFollowsRedirect(t *testing.T) {
 	if sb.owner != addrOf(nodeB) {
 		t.Errorf("owner %q, want node B", sb.owner)
 	}
-	if !gotNoRedirect {
-		t.Error("redirected claim did not set no_redirect")
+	if !req.NoRedirect || !slices.Equal(req.Volumes, want) {
+		t.Errorf("redirected claim = %+v, want no_redirect with %v", req, want)
+	}
+	if !slices.Equal(sb.Volumes, want) {
+		t.Errorf("response volumes = %+v, want %+v", sb.Volumes, want)
 	}
 }
 

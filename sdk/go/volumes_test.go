@@ -19,7 +19,7 @@ func TestClientNewSendsVolumes(t *testing.T) {
 			t.Errorf("decode body: %v", err)
 		}
 		_ = json.MarshalWrite(w, claimResponse{
-			ID: "sb_1", Token: "tok", Volumes: []Volume{{Name: "weights-llama", Mount: "/models"}},
+			ID: "sb_1", Token: "tok", Volumes: []Volume{{Name: "weights-llama", Mount: "/models", Mode: "rw"}},
 		})
 	})
 
@@ -36,7 +36,7 @@ func TestClientNewSendsVolumes(t *testing.T) {
 	if want := []Volume{{Name: "imagenet"}, {Name: "weights-llama", Mount: "/models"}}; !slices.Equal(got.Volumes, want) {
 		t.Errorf("volumes %v, want %v", got.Volumes, want)
 	}
-	if want := []Volume{{Name: "weights-llama", Mount: "/models"}}; !slices.Equal(sb.Volumes, want) {
+	if want := []Volume{{Name: "weights-llama", Mount: "/models", Mode: "rw"}}; !slices.Equal(sb.Volumes, want) {
 		t.Errorf("response volumes %v, want %v", sb.Volumes, want)
 	}
 }
