@@ -52,6 +52,8 @@ type Query struct {
 type Store interface {
 	// Last returns the digest of node's newest landed line; zero when none landed.
 	Last(ctx context.Context, node string) ([32]byte, error)
+	First(ctx context.Context, node string) ([32]byte, error)
+	Prune(ctx context.Context, node string, before time.Time) (int64, error)
 	// Land appends recs in one transaction, skipping a line whose node and digest already landed; cursors grow in commit order.
 	Land(ctx context.Context, recs []Record) error
 	// List returns the events q selects in cursor order.

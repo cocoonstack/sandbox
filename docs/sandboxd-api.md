@@ -1464,6 +1464,12 @@ node of the cell from the [shared usage table](deploy.md#shared-usage-table).
     pass it as the following page's `after`;
   - the cell's lands commit in cursor order, so polling with the last cursor seen
     as `after` returns every event exactly once, backfill included.
+  - with [`meta_store.usage_retention_hours`](deploy.md#shared-usage-table),
+    each node deletes its rows older than the retention once an hour, so page
+    within the retention: an `after` below the oldest kept row returns from
+    the oldest kept row, with no error, and the deleted events are gone. A
+    backlog a node lands with `t` older than the retention can be deleted at
+    its next sweep, before a consumer reads it.
 - 400 on a malformed `after`, `limit`, `since` or `until`; 501
   `no shared usage store configured` on a node without `meta_store.usage`; 503
   `usage store down; retry` while the database is unreachable.

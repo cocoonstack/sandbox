@@ -322,7 +322,8 @@ type MetaStoreConfig struct {
 	// Cell opts the node into one pool set for every node of the cell; empty keeps the pool set per node.
 	Cell string `json:"cell,omitempty"`
 	// Usage lands the node's usage journal in the shared usage table and serves GET /v1/usage from it.
-	Usage bool `json:"usage,omitzero"`
+	Usage               bool `json:"usage,omitzero"`
+	UsageRetentionHours int  `json:"usage_retention_hours,omitzero"`
 }
 
 // VolumeSpec declares one operator-managed dataset disk, held by exactly one node.
@@ -883,6 +884,10 @@ func (c *Config) validateMetaStore() error {
 		return fmt.Errorf("meta_store.dsn_env %q must name a set node env", ms.DSNEnv)
 	case ms.Cell != "" && !types.NameRe.MatchString(ms.Cell):
 		return fmt.Errorf("meta_store.cell %q must match %s", ms.Cell, types.NameRe)
+	case ms.UsageRetentionHours < 0:
+		return fmt.Errorf("meta_store.usage_retention_hours must not be negative, got %d", ms.UsageRetentionHours)
+	case ms.UsageRetentionHours > 0 && !ms.Usage:
+		return fmt.Errorf("meta_store.usage_retention_hours requires meta_store.usage")
 	case c.APIToken == "":
 		return fmt.Errorf("meta_store needs api_token: the tenant API is root-only")
 	}

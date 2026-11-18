@@ -20,14 +20,19 @@ import (
 )
 
 const (
-	shipEvery = 5 * time.Second
-	shipBatch = 1000
+	shipEvery  = 5 * time.Second
+	shipBatch  = 1000
+	pruneEvery = time.Hour
 )
 
-// Ship lands the journal at path in store as node's events until ctx ends, then drains it once more; it only reads the journal.
-func Ship(ctx context.Context, path, node string, store Store) {
+// Ship lands the journal at path in store as node's events until ctx ends, then drains it once more; a nonzero retention prunes node's older rows hourly; it only reads the journal.
+func Ship(ctx context.Context, path, node string, store Store, retention time.Duration) {
 	s := &shipper{path: path, node: node, store: store}
 	tick := time.Tick(shipEvery)
+	var prune <-chan time.Time
+	if retention > 0 {
+		prune = time.Tick(pruneEvery)
+	}
 	for {
 		s.drain(ctx)
 		select {
@@ -36,17 +41,20 @@ func Ship(ctx context.Context, path, node string, store Store) {
 			s.drain(final)
 			cancel()
 			return
+		case <-prune:
+			s.prune(ctx, retention)
 		case <-tick:
 		}
 	}
 }
 
-// shipper resumes after the line whose digest the store's mark names; at is the last line read, a hint that survives a rename.
+// shipper resumes after the line whose digest the store's mark names, else after its floor, node's oldest row; at is the last line read, a hint that survives a rename.
 type shipper struct {
 	path    string
 	node    string
 	store   Store
 	mark    [32]byte
+	floor   [32]byte
 	synced  bool
 	at      anchor
 	failing bool
@@ -81,10 +89,14 @@ func (s *shipper) shipOnce(ctx context.Context) (int, error) {
 		if err != nil {
 			return 0, fmt.Errorf("read mark: %w", err)
 		}
+		floor, err := s.store.First(ctx, s.node)
+		if err != nil {
+			return 0, fmt.Errorf("read floor: %w", err)
+		}
 		if mark != s.mark {
 			s.at = anchor{}
 		}
-		s.mark, s.synced = mark, true
+		s.mark, s.floor, s.synced = mark, floor, true
 	}
 	live, err := os.Open(s.path)
 	if err != nil {
@@ -119,7 +131,7 @@ func (s *shipper) shipOnce(ctx context.Context) (int, error) {
 	return n, nil
 }
 
-// locate returns where the first unlanded line starts: past the anchor when a file still holds it, else past the marked line, else at the oldest line.
+// locate returns where the first unlanded line starts: past the anchor when a file still holds it, else past the marked line, else past the floor line, else at the oldest line.
 func (s *shipper) locate(ctx context.Context, live, backup *os.File) (*os.File, int64) {
 	for _, f := range []*os.File{live, backup} {
 		if f != nil && s.at.in(f) {
@@ -130,22 +142,55 @@ func (s *shipper) locate(ctx context.Context, live, backup *os.File) (*os.File, 
 	if s.mark == ([32]byte{}) {
 		return oldest, 0
 	}
-	var found *os.File
+	var found, floor *os.File
+	var floorAt anchor
 	for _, f := range []*os.File{backup, live} {
 		if f == nil {
 			continue
 		}
 		for line, end := range lines(f, 0) {
-			if a := newAnchor(line, end); a.digest == s.mark {
+			switch a := newAnchor(line, end); a.digest {
+			case s.mark:
 				found, s.at = f, a
+			case s.floor:
+				floor, floorAt = f, a
 			}
 		}
 	}
-	if found == nil {
-		log.WithFunc("usage.shipper.locate").Warn(ctx, "the last landed usage line is gone from the journal; shipping resumes at the oldest kept line, and lines rotated out unlanded are lost")
-		return oldest, 0
+	if found != nil {
+		return found, s.at.end
 	}
-	return found, s.at.end
+	logger := log.WithFunc("usage.shipper.locate")
+	if floor != nil {
+		logger.Warn(ctx, "the last landed usage line is gone from the journal; shipping resumes past the oldest landed line it still holds")
+		s.at = floorAt
+		return floor, floorAt.end
+	}
+	logger.Warn(ctx, "the last landed usage line is gone from the journal; shipping resumes at the oldest kept line, and lines rotated out unlanded are lost")
+	return oldest, 0
+}
+
+func (s *shipper) prune(ctx context.Context, retention time.Duration) {
+	if s.failing {
+		return
+	}
+	logger := log.WithFunc("usage.shipper.prune")
+	if err := s.syncJournal(); err != nil {
+		logger.Warnf(ctx, "skip pruning usage rows this hour: sync the journal: %v", err)
+		return
+	}
+	n, err := s.store.Prune(ctx, s.node, time.Now().Add(-retention))
+	if err != nil {
+		logger.Warnf(ctx, "prune usage rows older than %s (%d deleted): %v; the next sweep retries", retention, n, err)
+		return
+	}
+	if n > 0 {
+		logger.Infof(ctx, "pruned %d usage rows older than %s", n, retention)
+	}
+}
+
+func (s *shipper) syncJournal() error {
+	return errors.Join(syncOpened(os.Open(s.path)), syncOpened(os.Open(s.path+".1")))
 }
 
 func (s *shipper) read(ctx context.Context, files []*os.File, off int64) ([]Record, anchor, int) {
@@ -217,6 +262,16 @@ func decode(line []byte) (Event, error) {
 	var ev Event
 	err := json.Unmarshal(line[:len(line)-1], &ev, jsontext.AllowInvalidUTF8(true))
 	return ev, err
+}
+
+func syncOpened(f *os.File, err error) error {
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	return errors.Join(f.Sync(), f.Close())
 }
 
 func sameFile(a, b *os.File) bool {
