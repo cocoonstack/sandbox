@@ -1966,7 +1966,7 @@ func TestFailoverARootAdoptedClaimAnswersOnlyItsOwnToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("checkpoints: %v", err)
 	}
-	reads := map[string]any{"by id": summary, "list": b.Sandboxes("", "", nil), "checkpoint": ckpt, "checkpoints": ckpts}
+	reads := map[string]any{"by id": summary, "list": b.Sandboxes("", "", nil, "", 0), "checkpoint": ckpt, "checkpoints": ckpts}
 	for name, v := range reads {
 		raw, err := json.Marshal(v)
 		if err != nil || strings.Contains(string(raw), sum) || strings.Contains(string(raw), placeholder) {

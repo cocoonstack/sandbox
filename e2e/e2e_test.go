@@ -335,6 +335,51 @@ func TestRuntimeTenantEndToEnd(t *testing.T) {
 	}
 }
 
+func TestSandboxPagesFollowNextAndHoldOnlyTheCallersClaims(t *testing.T) {
+	st := startTenantStack(t, []tenants.TenantSpec{{Name: "acme", Token: "acme-tok"}, {Name: "beta", Token: "beta-tok"}}, nil)
+	want := map[string][]string{}
+	for _, token := range []string{nodeToken, "acme-tok", "acme-tok", "acme-tok", "beta-tok", "beta-tok"} {
+		client, err := sandbox.Connect(st.addr, sandbox.WithAPIToken(token))
+		if err != nil {
+			t.Fatalf("connect: %v", err)
+		}
+		sb, err := client.New(t.Context(), "rt:24.04")
+		if err != nil {
+			t.Fatalf("claim with %s: %v", token, err)
+		}
+		t.Cleanup(func() { _ = sb.Close() })
+		want[token] = append(want[token], sb.ID)
+		if token != nodeToken {
+			want[nodeToken] = append(want[nodeToken], sb.ID)
+		}
+	}
+
+	for token, ids := range want {
+		slices.Sort(ids)
+		caller := *st
+		caller.token = token
+		var got []string
+		after := ""
+		for range 10 {
+			status, body := rawJSON(t, &caller, http.MethodGet, "/v1/sandboxes?limit=2&after="+after, "")
+			var page server.SandboxListResponse
+			if err := json.Unmarshal(body, &page); status != http.StatusOK || err != nil {
+				t.Fatalf("%s page after %q: %d %s", token, after, status, body)
+			}
+			for _, row := range page.Sandboxes {
+				got = append(got, row.ID)
+			}
+			if page.Next == "" {
+				break
+			}
+			after = page.Next
+		}
+		if !slices.Equal(got, ids) {
+			t.Errorf("%s pages %v, want %v", token, got, ids)
+		}
+	}
+}
+
 func TestWrongAPITokenRejected(t *testing.T) {
 	st := startStack(t)
 

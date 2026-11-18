@@ -1071,7 +1071,7 @@ an SDK caller should set.
 Auth: node API token or the operator token. Root and the operator see every live claim; a tenant sees only its own.
 The index is `{"sandboxes": [{id, key, tenant?, deadline, claimed_at?, hibernated,
 archived?, from_checkpoint?, claim_ref?, metadata?, on_expire?, cpu_count, mem_total_bytes,
-volumes?: [{name, mount?, mode?, attach_only?}], volumes_want?: [{name, mount?, mode?, attach_only?}], restarts?, restarted_at?, failed?, env_missing?}]}` — `deadline` is `0001-01-01T00:00:00Z` on an archive kept forever; `cpu_count` and `mem_total_bytes` are the
+volumes?: [{name, mount?, mode?, attach_only?}], volumes_want?: [{name, mount?, mode?, attach_only?}], restarts?, restarted_at?, failed?, env_missing?}], "next": "…"}` — `deadline` is `0001-01-01T00:00:00Z` on an archive kept forever; `cpu_count` and `mem_total_bytes` are the
 size tier's allocation; `restarts` counts the cold boots that replaced an
 exited VMM and `restarted_at` stamps the last one (each loses guest memory and
 the instance-metadata document, so a caller re-establishes guest state when
@@ -1088,6 +1088,20 @@ repeatable, keeps only the claims holding every pair; 400 a pair without `=`,
 with an empty key, or with a key repeated. `tenant` names the owning tenant
 (absent for root's own claims); `?tenant=<name>` lets root list one tenant's
 claims, a removed tenant's included, and is ignored for a tenant token.
+
+- **Order and paging:**
+  - rows come in `id` order;
+  - without `limit` the reply is the whole listing and carries no `next`;
+  - `limit` (1 to 10000, 400 outside) caps the rows of a page, after every
+    filter and the tenant scope apply;
+  - `after=<id>` returns only claims with a larger `id`;
+  - `next` is the last row's `id` when a limited page is full, absent
+    otherwise; pass it as the following page's `after`;
+  - a claim that stays live through the walk appears exactly once;
+  - a claim released while its page is built can still appear on it with its
+    last state; one released earlier is absent;
+  - a claim added during the walk appears only when its `id` sorts after the
+    cursor of the page that reads it.
 
 ## GET /v1/sandboxes/{id}
 

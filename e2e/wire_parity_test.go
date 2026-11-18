@@ -58,7 +58,7 @@ var wirePairs = []struct {
 	{"PoolStatus", false, pool.PoolInfo{}, nil},
 	{"TemplateStatus", false, pool.TemplateInfo{}, nil},
 	{"SandboxSummary", false, pool.SandboxSummary{}, []string{"token"}},
-	{"sandboxListResponse", false, server.SandboxListResponse{}, nil},
+	{"sandboxListResponse", false, server.SandboxListResponse{}, []string{"next"}},
 	{"poolUpdate", true, server.PoolUpdateRequest{}, nil},
 	{"PoolSpec", true, config.PoolSpec{}, []string{"egress", "warmup", "egress_upstream_env", "capture_trim", "storage", "replicate_seconds", "reader", "net", "size", "tun"}},
 	{"tenantsUpdate", true, server.TenantsRequest{}, nil},

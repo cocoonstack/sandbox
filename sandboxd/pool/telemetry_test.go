@@ -396,7 +396,7 @@ func TestSandboxesIndexOmitsTokens(t *testing.T) {
 	sb.ClaimRef = "ns/workload"
 	m.mu.Unlock()
 
-	list := m.Sandboxes("", "", nil)
+	list := m.Sandboxes("", "", nil, "", 0)
 	if len(list) != 1 || list[0].ID != sb.ID || list[0].ClaimRef != "ns/workload" || list[0].Hibernated {
 		t.Fatalf("index %+v", list)
 	}
@@ -430,7 +430,7 @@ func TestSandboxesFilterByClaimRef(t *testing.T) {
 		{"", "", []string{a.ID, b.ID, unnamed.ID}},
 	} {
 		var got []string
-		for _, row := range m.Sandboxes(tt.tenant, tt.claimRef, nil) {
+		for _, row := range m.Sandboxes(tt.tenant, tt.claimRef, nil, "", 0) {
 			got = append(got, row.ID)
 		}
 		slices.Sort(tt.want)
@@ -511,7 +511,7 @@ func TestSandboxesEchoAndFilterMetadata(t *testing.T) {
 		{types.Metadata{"team": "b"}, nil},
 	} {
 		var got []string
-		for _, row := range m.Sandboxes("", "", tt.filter) {
+		for _, row := range m.Sandboxes("", "", tt.filter, "", 0) {
 			got = append(got, row.ID)
 		}
 		slices.Sort(tt.want)
@@ -526,6 +526,102 @@ func TestSandboxesEchoAndFilterMetadata(t *testing.T) {
 	}
 	if row, _ := m.Sandbox(bare.ID); row.Metadata != nil || row.CPUCount != 1 || row.MemTotalBytes != 512<<20 {
 		t.Errorf("summary %+v, want no metadata and the small tier's 1 CPU and 512 MiB", row)
+	}
+}
+
+func TestSandboxPagesListEveryLiveClaimOnceWhileClaimsComeAndGo(t *testing.T) {
+	m := newTestManager(t, newFakeEngine())
+	live := map[string]*types.Sandbox{}
+	for range 10 {
+		sb := mustClaim(t, m, testKey)
+		live[sb.ID] = sb
+	}
+	first := m.Sandboxes("", "", nil, "", 3)
+	if len(first) != 3 {
+		t.Fatalf("first page %d rows, want 3", len(first))
+	}
+	cursor := first[2].ID
+	var seen []string
+	for _, row := range first {
+		seen = append(seen, row.ID)
+	}
+
+	ahead := slices.Sorted(maps.Keys(live))[3]
+	for _, id := range []string{first[0].ID, ahead} {
+		if err := m.Release(t.Context(), id, Cred{Token: live[id].Token}); err != nil {
+			t.Fatalf("release %s: %v", id, err)
+		}
+		delete(live, id)
+	}
+	var addedBelow, addedAbove bool
+	for range 64 {
+		if addedBelow && addedAbove {
+			break
+		}
+		sb := mustClaim(t, m, testKey)
+		live[sb.ID] = sb
+		addedBelow = addedBelow || sb.ID < cursor
+		addedAbove = addedAbove || sb.ID > cursor
+	}
+	if !addedBelow || !addedAbove {
+		t.Fatalf("no new claim landed on each side of the cursor %s", cursor)
+	}
+
+	want := slices.Clone(seen)
+	for _, id := range slices.Sorted(maps.Keys(live)) {
+		if id > cursor {
+			want = append(want, id)
+		}
+	}
+	if got := slices.Concat(seen, pageAll(m, "", "", nil, cursor, 3)); !slices.Equal(got, want) {
+		t.Errorf("pages %v, want %v", got, want)
+	}
+}
+
+func TestSandboxPagesMatchTheFullListUnderEveryFilter(t *testing.T) {
+	m := newTestManager(t, newFakeEngine())
+	owners := []string{"", "acme", "beta"}
+	var named *types.Sandbox
+	for i := range 9 {
+		sb := mustClaim(t, m, testKey)
+		m.mu.Lock()
+		sb.Tenant, sb.Metadata = owners[i%3], types.Metadata{"team": []string{"a", "b"}[i%2]}
+		m.mu.Unlock()
+		if i == 4 {
+			named = sb
+		}
+	}
+	m.mu.Lock()
+	named.ClaimRef = "ns/x"
+	m.mu.Unlock()
+
+	for _, tt := range []struct {
+		tenant, claimRef string
+		filter           types.Metadata
+		want             int
+	}{
+		{"", "", nil, 9},
+		{"acme", "", nil, 3},
+		{"beta", "", nil, 3},
+		{"acme", "", types.Metadata{"team": "b"}, 2},
+		{"", "", types.Metadata{"team": "a"}, 5},
+		{"", "ns/x", nil, 1},
+		{"acme", "ns/x", nil, 1},
+		{"beta", "ns/x", nil, 0},
+	} {
+		var full []string
+		for _, row := range m.Sandboxes(tt.tenant, tt.claimRef, tt.filter, "", 0) {
+			full = append(full, row.ID)
+		}
+		got := pageAll(m, tt.tenant, tt.claimRef, tt.filter, "", 2)
+		if len(full) != tt.want || !slices.Equal(got, full) {
+			t.Errorf("tenant %q ref %q metadata %v: pages %v, full list %v, want %d rows", tt.tenant, tt.claimRef, tt.filter, got, full, tt.want)
+		}
+		for _, id := range got {
+			if row, _ := m.Sandbox(id); tt.tenant != "" && row.Tenant != tt.tenant {
+				t.Errorf("tenant %q page holds %s of tenant %q", tt.tenant, id, row.Tenant)
+			}
+		}
 	}
 }
 
@@ -699,4 +795,19 @@ func TestARelayedFrameCannotForgeOrDropItsAuditLine(t *testing.T) {
 			}
 		}
 	}
+}
+
+func pageAll(m *Manager, tenant, claimRef string, metadata types.Metadata, after string, limit int) []string {
+	var ids []string
+	for range 20 {
+		rows := m.Sandboxes(tenant, claimRef, metadata, after, limit)
+		for _, row := range rows {
+			ids = append(ids, row.ID)
+		}
+		if len(rows) < limit {
+			break
+		}
+		after = rows[len(rows)-1].ID
+	}
+	return ids
 }
