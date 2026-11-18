@@ -6,7 +6,6 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"net/http/httptest"
 	"reflect"
 	"slices"
 	"testing"
@@ -19,7 +18,7 @@ func TestLiveVolumesUseOwnerAndAPIToken(t *testing.T) {
 		{http.MethodPatch, `{"add":[{"name":"data"}],"remove":["old"]}`},
 	} {
 		t.Run(request.method, func(t *testing.T) {
-			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			ts := serveFunc(t, func(w http.ResponseWriter, r *http.Request) {
 				if r.Method != request.method || r.URL.Path != "/v1/sandboxes/sb_1/volumes" || r.Header.Get("Authorization") != "Bearer operator-token" {
 					t.Errorf("request: %s %s %s", r.Method, r.URL.Path, r.Header.Get("Authorization"))
 				}
@@ -28,8 +27,7 @@ func TestLiveVolumesUseOwnerAndAPIToken(t *testing.T) {
 					t.Errorf("body=%s want=%s", body, request.body)
 				}
 				_, _ = io.WriteString(w, `{"volumes_want":[{"name":"data","attach_only":true}],"volumes":[{"name":"data","attach_only":true}],"converging":true,"states":[{"name":"data","state":"attached"}]}`)
-			}))
-			t.Cleanup(ts.Close)
+			})
 			c := testClient(t, ts, WithAPIToken("operator-token"))
 			sb := &Sandbox{ID: "sb_1", token: "sandbox-token", owner: c.addr, c: c}
 			c.addr = "unused.invalid:7777"
@@ -46,11 +44,10 @@ func TestLiveVolumesUseOwnerAndAPIToken(t *testing.T) {
 }
 
 func TestLiveVolumeFailureRetainsPartialView(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	ts := serveFunc(t, func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 		_, _ = io.WriteString(w, `{"volumes_want":[{"name":"new","mode":"rw","attach_only":true}],"volumes":[{"name":"old","attach_only":true}],"converging":false,"states":[{"name":"new","state":"pending","error":"retry"},{"name":"old","state":"detaching"}],"error":"convergence failed"}`)
-	}))
-	t.Cleanup(ts.Close)
+	})
 	c := testClient(t, ts)
 	for _, method := range []string{http.MethodGet, http.MethodPut, http.MethodPatch} {
 		sb := &Sandbox{ID: "sb_1", token: "tok", owner: c.addr, c: c}
@@ -74,11 +71,10 @@ func TestLiveVolumeFailureRetainsPartialView(t *testing.T) {
 }
 
 func TestLiveVolumeValidationFailurePreservesLastKnownSet(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	ts := serveFunc(t, func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
 		_, _ = io.WriteString(w, `{"error":"invalid volume"}`)
-	}))
-	t.Cleanup(ts.Close)
+	})
 	c := testClient(t, ts)
 	sb := &Sandbox{ID: "sb_1", token: "tok", owner: c.addr, c: c, Volumes: []Volume{{Name: "old"}}, VolumesWant: []Volume{{Name: "wanted"}}}
 	_, err := sb.SetVolumes(t.Context(), []Volume{{Name: "new"}})
@@ -92,15 +88,14 @@ func TestLiveVolumeValidationFailurePreservesLastKnownSet(t *testing.T) {
 
 func TestLiveVolumesExplicitEmptyAndCancellation(t *testing.T) {
 	var bodies []map[string]any
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts := serveFunc(t, func(w http.ResponseWriter, r *http.Request) {
 		var body map[string]any
 		if err := json.UnmarshalRead(r.Body, &body); err != nil {
 			t.Error(err)
 		}
 		bodies = append(bodies, body)
 		_, _ = io.WriteString(w, `{"volumes_want":[],"volumes":[],"converging":false,"states":[]}`)
-	}))
-	t.Cleanup(ts.Close)
+	})
 	c := testClient(t, ts)
 	sb := &Sandbox{ID: "sb_1", owner: c.addr, c: c}
 	if _, err := sb.SetVolumes(t.Context(), nil); err == nil {
@@ -130,7 +125,7 @@ func TestLiveVolumesExplicitEmptyAndCancellation(t *testing.T) {
 
 func TestLiveVolumesRetrySameDesiredSet(t *testing.T) {
 	var requests []string
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts := serveFunc(t, func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		requests = append(requests, string(body))
 		if len(requests) == 1 {
@@ -139,8 +134,7 @@ func TestLiveVolumesRetrySameDesiredSet(t *testing.T) {
 			return
 		}
 		_, _ = io.WriteString(w, `{"volumes_want":[{"name":"data","mount":"/data"}],"volumes":[{"name":"data","mount":"/data"}],"converging":false,"states":[{"name":"data","state":"attached"}]}`)
-	}))
-	t.Cleanup(ts.Close)
+	})
 	c := testClient(t, ts)
 	sb := &Sandbox{ID: "sb_1", token: "tok", owner: c.addr, c: c}
 	target := []Volume{{Name: "data", Mount: "/data"}}
@@ -159,11 +153,10 @@ func TestLiveVolumesRetrySameDesiredSet(t *testing.T) {
 func TestLiveVolumeIncompleteViewPreservesHandle(t *testing.T) {
 	for _, status := range []int{http.StatusOK, http.StatusConflict} {
 		t.Run(http.StatusText(status), func(t *testing.T) {
-			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			ts := serveFunc(t, func(w http.ResponseWriter, _ *http.Request) {
 				w.WriteHeader(status)
 				_, _ = io.WriteString(w, `{"volumes_want":[],"volumes":[],"states":[]}`)
-			}))
-			t.Cleanup(ts.Close)
+			})
 			c := testClient(t, ts)
 			sb := &Sandbox{ID: "sb_1", owner: c.addr, c: c, Volumes: []Volume{{Name: "old"}}, VolumesWant: []Volume{{Name: "wanted"}}}
 			_, err := sb.GetVolumes(t.Context())
@@ -179,7 +172,7 @@ func TestLiveVolumeIncompleteViewPreservesHandle(t *testing.T) {
 
 func TestLiveVolumeMutationEncodesDeviceFields(t *testing.T) {
 	const want = `{"volumes":[{"name":"device","mode":"rw","attach_only":true},{"name":"mounted","mount":"/work"}]}`
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts := serveFunc(t, func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
 			t.Error(err)
@@ -188,8 +181,7 @@ func TestLiveVolumeMutationEncodesDeviceFields(t *testing.T) {
 			t.Errorf("request=%s %s want=PUT %s", r.Method, body, want)
 		}
 		_, _ = io.WriteString(w, `{"volumes_want":[],"volumes":[],"states":[],"converging":false}`)
-	}))
-	t.Cleanup(ts.Close)
+	})
 	c := testClient(t, ts)
 	sb := &Sandbox{ID: "sb_1", owner: c.addr, c: c}
 	_, err := sb.SetVolumes(t.Context(), []Volume{

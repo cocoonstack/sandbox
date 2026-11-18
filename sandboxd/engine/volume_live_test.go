@@ -186,8 +186,7 @@ func TestLiveDetachKeepsBusyAndUnobservableDevices(t *testing.T) {
 func TestLiveDetachMissingGuestStillChecksHost(t *testing.T) {
 	for _, hostErr := range []string{"", "vm not running", "backend unavailable"} {
 		t.Run(cmp.Or(hostErr, "host ok"), func(t *testing.T) {
-			sock := sockPath(t)
-			serveFakeSilkd(t, sock)
+			_, sock := newFakeSilkd(t)
 			spec := liveDiskCLI(t, hostErr)
 			_, err := newTestEngine().DetachVolume(t.Context(), "sbx-1", sock, spec.Name, "/data")
 			wantErr := hostErr != ""
@@ -230,8 +229,7 @@ func TestLiveDetachCleanEvidenceRequiresWritableUnmountAndHostSuccess(t *testing
 		{name: "attach-only mounted", options: "rw", superOptions: "rw", wantErr: true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			sock := sockPath(t)
-			fake := serveFakeSilkd(t, sock)
+			fake, sock := newFakeSilkd(t)
 			if !tt.missing {
 				configureVolumeDevices(fake)
 			}
@@ -285,8 +283,7 @@ func TestUnmountVolumeReportsCleanWritableUnmount(t *testing.T) {
 		{name: "busy", mountinfo: entry + "rw\n", busy: true, wantErr: true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			sock := sockPath(t)
-			fake := serveFakeSilkd(t, sock)
+			fake, sock := newFakeSilkd(t)
 			fake.mu.Lock()
 			fake.serial["/proc/self/mountinfo"] = []byte(rootMountInfo + tt.mountinfo)
 			if tt.busy {
@@ -303,9 +300,7 @@ func TestUnmountVolumeReportsCleanWritableUnmount(t *testing.T) {
 
 func newLiveFake(t *testing.T, detachErr, mountinfo string) (string, *fakeSilkd, VolumeSpec) {
 	t.Helper()
-	sock := sockPath(t)
-	fake := serveFakeSilkd(t, sock)
-	configureVolumeDevices(fake)
+	fake, sock := volumeFake(t)
 	spec := liveDiskCLI(t, detachErr)
 	fake.set(func(f *fakeSilkd) {
 		f.serial["/sys/block/vdc/dev"] = []byte("8:32\n")

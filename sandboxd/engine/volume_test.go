@@ -103,9 +103,7 @@ func TestMountVolumeUsesSysfsAndRequestedMode(t *testing.T) {
 		{"writable", true, "rw"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			path := sockPath(t)
-			fake := serveFakeSilkd(t, path)
-			configureVolumeDevices(fake)
+			fake, path := volumeFake(t)
 			if err := newTestEngine().MountVolume(t.Context(), path, "imagenet", "/datasets/training", tt.rw); err != nil {
 				t.Fatalf("MountVolume: %v", err)
 			}
@@ -145,8 +143,7 @@ func TestSettleGuestWaitsForInitAndTakesAnyExitAsFinished(t *testing.T) {
 		{"no systemctl to run", func(f *fakeSilkd) { f.execErr = "spawn failed" }, true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			path := sockPath(t)
-			fake := serveFakeSilkd(t, path)
+			fake, path := newFakeSilkd(t)
 			fake.set(tt.prepare)
 			err := newTestEngine().SettleGuest(t.Context(), path)
 			if (err != nil) != tt.wantErr {
@@ -162,8 +159,7 @@ func TestSettleGuestWaitsForInitAndTakesAnyExitAsFinished(t *testing.T) {
 }
 
 func TestUmountVolumeExecsUmount(t *testing.T) {
-	path := sockPath(t)
-	fake := serveFakeSilkd(t, path)
+	fake, path := newFakeSilkd(t)
 	e := newTestEngine()
 	if err := e.umountVolume(t.Context(), path, "/datasets/training"); err != nil {
 		t.Fatalf("umountVolume: %v", err)
@@ -183,8 +179,7 @@ func TestUmountVolumeExecsUmount(t *testing.T) {
 }
 
 func TestUmountVolumeWaitsOutAFlushPastTheCallTimeout(t *testing.T) {
-	path := sockPath(t)
-	fake := serveFakeSilkd(t, path)
+	fake, path := newFakeSilkd(t)
 	fake.set(func(f *fakeSilkd) {
 		f.execHook = func(argv []string) {
 			if argv[0] == "umount" {
@@ -198,8 +193,7 @@ func TestUmountVolumeWaitsOutAFlushPastTheCallTimeout(t *testing.T) {
 }
 
 func TestSyncGuestExecsPlainSync(t *testing.T) {
-	path := sockPath(t)
-	fake := serveFakeSilkd(t, path)
+	fake, path := newFakeSilkd(t)
 	e := newTestEngine()
 	if err := e.SyncGuest(t.Context(), path); err != nil {
 		t.Fatalf("SyncGuest: %v", err)
@@ -218,9 +212,7 @@ func TestSyncGuestExecsPlainSync(t *testing.T) {
 }
 
 func TestMountVolumeWaitsForDelayedSysfsSerial(t *testing.T) {
-	path := sockPath(t)
-	fake := serveFakeSilkd(t, path)
-	configureVolumeDevices(fake)
+	fake, path := volumeFake(t)
 	fake.set(func(f *fakeSilkd) { f.readMisses["/sys/block/vdc/serial"] = 1 })
 	if err := newTestEngine().MountVolume(t.Context(), path, "imagenet", "/datasets/training", false); err != nil {
 		t.Fatalf("MountVolume: %v", err)
@@ -237,9 +229,7 @@ func TestMountVolumeWaitsForDelayedSysfsSerial(t *testing.T) {
 }
 
 func TestMountVolumeWaitsForDelayedDevNode(t *testing.T) {
-	path := sockPath(t)
-	fake := serveFakeSilkd(t, path)
-	configureVolumeDevices(fake)
+	fake, path := volumeFake(t)
 	fake.set(func(f *fakeSilkd) { f.statMisses["/dev/vdc"] = 3 })
 	if err := newTestEngine().MountVolume(t.Context(), path, "imagenet", "/datasets/training", false); err != nil {
 		t.Fatalf("MountVolume: %v", err)
@@ -256,9 +246,7 @@ func TestMountVolumeWaitsForDelayedDevNode(t *testing.T) {
 }
 
 func TestMountVolumeFallsBackToTheProbeForAnotherFilesystem(t *testing.T) {
-	path := sockPath(t)
-	fake := serveFakeSilkd(t, path)
-	configureVolumeDevices(fake)
+	fake, path := volumeFake(t)
 	fake.set(func(f *fakeSilkd) { f.execCode, f.execFailAt = 32, 2 })
 	if err := newTestEngine().MountVolume(t.Context(), path, "imagenet", "/datasets/training", false); err != nil {
 		t.Fatalf("MountVolume: %v", err)
@@ -276,9 +264,7 @@ func TestMountVolumeFallsBackToTheProbeForAnotherFilesystem(t *testing.T) {
 }
 
 func TestMountVolumeReadsEachOtherSerialOnce(t *testing.T) {
-	path := sockPath(t)
-	fake := serveFakeSilkd(t, path)
-	configureVolumeDevices(fake)
+	fake, path := volumeFake(t)
 	fake.set(func(f *fakeSilkd) { f.blankReads["/sys/block/vdc/serial"] = 3 })
 	if err := newTestEngine().MountVolume(t.Context(), path, "imagenet", "/datasets/training", false); err != nil {
 		t.Fatalf("MountVolume: %v", err)
@@ -297,9 +283,7 @@ func TestMountVolumeReadsEachOtherSerialOnce(t *testing.T) {
 }
 
 func TestMountVolumeRetriesUntilTheDeviceOpens(t *testing.T) {
-	path := sockPath(t)
-	fake := serveFakeSilkd(t, path)
-	configureVolumeDevices(fake)
+	fake, path := volumeFake(t)
 	fake.set(func(f *fakeSilkd) { f.notReady = 2 })
 	if err := newTestEngine().MountVolume(t.Context(), path, "imagenet", "/datasets/training", false); err != nil {
 		t.Fatalf("MountVolume: %v", err)
@@ -315,9 +299,7 @@ func TestMountVolumeRetriesUntilTheDeviceOpens(t *testing.T) {
 }
 
 func TestMountVolumeNotReadyUntilDeadlineReportsTheTimeout(t *testing.T) {
-	path := sockPath(t)
-	fake := serveFakeSilkd(t, path)
-	configureVolumeDevices(fake)
+	fake, path := volumeFake(t)
 	fake.set(func(f *fakeSilkd) { f.notReady = 1 << 20 })
 	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
 	defer cancel()
@@ -341,9 +323,7 @@ func TestMountVolumeStopsAtFailedStage(t *testing.T) {
 		{"mount as ext4 then by probe", func(f *fakeSilkd) { f.execCode = 3; f.execFailFrom = 2 }, "mount volume imagenet", 3},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			path := sockPath(t)
-			fake := serveFakeSilkd(t, path)
-			configureVolumeDevices(fake)
+			fake, path := volumeFake(t)
 			fake.set(tt.prepare)
 			err := newTestEngine().MountVolume(t.Context(), path, "imagenet", "/datasets/training", false)
 			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
@@ -359,9 +339,7 @@ func TestMountVolumeStopsAtFailedStage(t *testing.T) {
 }
 
 func TestMountVolumeDeviceProbeIsCancelable(t *testing.T) {
-	path := sockPath(t)
-	fake := serveFakeSilkd(t, path)
-	configureVolumeDevices(fake)
+	_, path := volumeFake(t)
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	err := newTestEngine().MountVolume(ctx, path, "missing", "/datasets/training", false)
@@ -371,9 +349,7 @@ func TestMountVolumeDeviceProbeIsCancelable(t *testing.T) {
 }
 
 func TestMountVolumeDevNodeNeverAppearsTimesOut(t *testing.T) {
-	path := sockPath(t)
-	fake := serveFakeSilkd(t, path)
-	configureVolumeDevices(fake)
+	fake, path := volumeFake(t)
 	fake.set(func(f *fakeSilkd) { delete(f.stat, "/dev/vdc") })
 	err := newTestEngine().MountVolume(t.Context(), path, "imagenet", "/datasets/training", false)
 	if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "wait for volume device imagenet") {
@@ -382,8 +358,7 @@ func TestMountVolumeDevNodeNeverAppearsTimesOut(t *testing.T) {
 }
 
 func TestSilkdListAndReadAreBounded(t *testing.T) {
-	path := sockPath(t)
-	fake := serveFakeSilkd(t, path)
+	fake, path := newFakeSilkd(t)
 	fake.set(func(f *fakeSilkd) {
 		f.block = make([]wire.DirEntry, silkdListMax+1)
 		f.serial["/sys/block/vda/serial"] = make([]byte, silkdReadMax+1)
@@ -405,6 +380,13 @@ func countOf(items []string, want string) int {
 		}
 	}
 	return n
+}
+
+func volumeFake(t *testing.T) (*fakeSilkd, string) {
+	t.Helper()
+	fake, path := newFakeSilkd(t)
+	configureVolumeDevices(fake)
+	return fake, path
 }
 
 func configureVolumeDevices(f *fakeSilkd) {

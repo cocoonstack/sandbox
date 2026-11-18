@@ -7,8 +7,7 @@ import (
 )
 
 func TestTunUpAndDownSendTheirVerbs(t *testing.T) {
-	path := sockPath(t)
-	fake := serveFakeSilkd(t, path)
+	fake, path := newFakeSilkd(t)
 	e := newTestEngine()
 	if err := e.TunUp(t.Context(), path); err != nil {
 		t.Fatalf("TunUp: %v", err)

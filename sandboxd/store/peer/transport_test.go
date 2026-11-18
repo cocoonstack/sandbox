@@ -66,26 +66,9 @@ func TestUntarRejectsPathTraversal(t *testing.T) {
 		`..\windows-style`,
 	} {
 		t.Run(name, func(t *testing.T) {
-			var buf bytes.Buffer
-			tw := tar.NewWriter(&buf)
-			body := []byte("pwned")
-			if err := tw.WriteHeader(&tar.Header{
-				Name: name, Mode: 0o600, Size: int64(len(body)), Typeflag: tar.TypeReg,
-			}); err != nil {
-				t.Fatalf("WriteHeader: %v", err)
-			}
-			if _, err := tw.Write(body); err != nil {
-				t.Fatalf("Write: %v", err)
-			}
-			if err := tw.WriteHeader(&tar.Header{Name: recordTrailer, Mode: 0o600, Typeflag: tar.TypeReg}); err != nil {
-				t.Fatalf("WriteHeader: %v", err)
-			}
-			if err := tw.Close(); err != nil {
-				t.Fatalf("Close: %v", err)
-			}
-
+			buf := tarStream(t, tarEntry{Name: name, body: "pwned"}, tarEntry{Name: recordTrailer})
 			dst := t.TempDir()
-			err := Untar(&buf, dst)
+			err := Untar(buf, dst)
 			if err == nil {
 				t.Fatalf("Untar accepted %q; it must refuse to write outside the destination", name)
 			}
@@ -97,30 +80,12 @@ func TestUntarRejectsPathTraversal(t *testing.T) {
 }
 
 func TestUntarSkipsNonDataEntries(t *testing.T) {
-	var buf bytes.Buffer
-	tw := tar.NewWriter(&buf)
-	if err := tw.WriteHeader(&tar.Header{
-		Name: "evil-link", Typeflag: tar.TypeSymlink, Linkname: "/etc/passwd", Mode: 0o777,
-	}); err != nil {
-		t.Fatalf("WriteHeader: %v", err)
-	}
-	if err := tw.WriteHeader(&tar.Header{
-		Name: "meta.json", Mode: 0o600, Size: 2, Typeflag: tar.TypeReg,
-	}); err != nil {
-		t.Fatalf("WriteHeader: %v", err)
-	}
-	if _, err := tw.Write([]byte("{}")); err != nil {
-		t.Fatalf("Write: %v", err)
-	}
-	if err := tw.WriteHeader(&tar.Header{Name: recordTrailer, Mode: 0o600, Typeflag: tar.TypeReg}); err != nil {
-		t.Fatalf("WriteHeader trailer: %v", err)
-	}
-	if err := tw.Close(); err != nil {
-		t.Fatalf("Close: %v", err)
-	}
-
+	buf := tarStream(t,
+		tarEntry{Name: "evil-link", Typeflag: tar.TypeSymlink, Linkname: "/etc/passwd", Mode: 0o777},
+		tarEntry{Name: "meta.json", body: "{}"},
+		tarEntry{Name: recordTrailer})
 	dst := t.TempDir()
-	if err := Untar(&buf, dst); err != nil {
+	if err := Untar(buf, dst); err != nil {
 		t.Fatalf("Untar: %v", err)
 	}
 	if _, err := os.Lstat(filepath.Join(dst, "evil-link")); err == nil {
@@ -195,13 +160,7 @@ func TestHTTPPullerPresentsToken(t *testing.T) {
 	var gotAuth, gotPath string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotAuth, gotPath = r.Header.Get("Authorization"), r.URL.Path
-		var buf bytes.Buffer
-		tw := tar.NewWriter(&buf)
-		_ = tw.WriteHeader(&tar.Header{Name: "meta.json", Mode: 0o600, Size: 2, Typeflag: tar.TypeReg})
-		_, _ = tw.Write([]byte("{}"))
-		_ = tw.WriteHeader(&tar.Header{Name: recordTrailer, Mode: 0o600, Typeflag: tar.TypeReg})
-		_ = tw.Close()
-		_, _ = w.Write(buf.Bytes())
+		_, _ = w.Write(tarStream(t, tarEntry{Name: "meta.json", body: "{}"}, tarEntry{Name: recordTrailer}).Bytes())
 	}))
 	defer srv.Close()
 
@@ -270,16 +229,8 @@ func TestTarRecordRoundTripsAWholeRecord(t *testing.T) {
 }
 
 func TestUntarRejectsRecordWithoutCompletionMarker(t *testing.T) {
-	var buf bytes.Buffer
-	tw := tar.NewWriter(&buf)
-
-	_ = tw.WriteHeader(&tar.Header{Name: "meta.json", Mode: 0o600, Size: 4, Typeflag: tar.TypeReg})
-	_, _ = tw.Write([]byte(`{"a"`))
-	_ = tw.WriteHeader(&tar.Header{Name: "export/mem", Mode: 0o600, Size: 5, Typeflag: tar.TypeReg})
-	_, _ = tw.Write([]byte("bytes"))
-	_ = tw.Close()
-
-	if err := Untar(&buf, t.TempDir()); err == nil {
+	buf := tarStream(t, tarEntry{Name: "meta.json", body: `{"a"`}, tarEntry{Name: "export/mem", body: "bytes"})
+	if err := Untar(buf, t.TempDir()); err == nil {
 		t.Error("Untar accepted a record with no completion marker (an incomplete transfer)")
 	}
 }
@@ -344,6 +295,33 @@ func tarDir(src string, w io.Writer) error {
 		return err
 	}
 	return tw.Close()
+}
+
+type tarEntry struct {
+	tar.Header
+	body string
+}
+
+func tarStream(t *testing.T, entries ...tarEntry) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	for _, e := range entries {
+		e.Size = int64(len(e.body))
+		if e.Typeflag == 0 {
+			e.Typeflag, e.Mode = tar.TypeReg, 0o600
+		}
+		if err := tw.WriteHeader(&e.Header); err != nil {
+			t.Fatalf("WriteHeader %s: %v", e.Name, err)
+		}
+		if _, err := tw.Write([]byte(e.body)); err != nil {
+			t.Fatalf("Write %s: %v", e.Name, err)
+		}
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	return &buf
 }
 
 func tarOf(t *testing.T, exportDir string, meta []byte) *bytes.Buffer {

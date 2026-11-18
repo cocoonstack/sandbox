@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json/v2"
 	"net/http"
-	"net/http/httptest"
 	"slices"
 	"strings"
 	"testing"
@@ -15,15 +14,14 @@ func TestClientNewSendsVolumes(t *testing.T) {
 		Template string   `json:"template"`
 		Volumes  []Volume `json:"volumes"`
 	}
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts := serveFunc(t, func(w http.ResponseWriter, r *http.Request) {
 		if err := json.UnmarshalRead(r.Body, &got); err != nil {
 			t.Errorf("decode body: %v", err)
 		}
 		_ = json.MarshalWrite(w, claimResponse{
 			ID: "sb_1", Token: "tok", Volumes: []Volume{{Name: "weights-llama", Mount: "/models"}},
 		})
-	}))
-	t.Cleanup(ts.Close)
+	})
 
 	volumes := []Volume{{Name: "imagenet"}, {Name: "weights-llama", Mount: "/models"}}
 	withVolumes := WithVolumes(volumes...)
@@ -51,15 +49,14 @@ func TestTemplateNewSendsVolumes(t *testing.T) {
 		Volumes    []Volume `json:"volumes"`
 		NoRedirect bool     `json:"no_redirect"`
 	}
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts := serveFunc(t, func(w http.ResponseWriter, r *http.Request) {
 		if err := json.UnmarshalRead(r.Body, &got); err != nil {
 			t.Errorf("decode body: %v", err)
 		}
 		_ = json.MarshalWrite(w, claimResponse{
 			ID: "sb_2", Token: "tok", Volumes: []Volume{{Name: "imagenet", Mount: "/datasets/imagenet"}},
 		})
-	}))
-	t.Cleanup(ts.Close)
+	})
 
 	c := testClient(t, ts)
 	tpl := &Template{Name: "task:v1", c: c, addr: c.addr, net: "none", size: "small"}
@@ -83,21 +80,19 @@ func TestTemplateNewVolumeClaimFollowsRedirect(t *testing.T) {
 	want := []Volume{{Name: "imagenet", Mount: "/datasets/imagenet"}}
 	var got claimRequest
 	var originAuth, targetAuth string
-	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	target := serveFunc(t, func(w http.ResponseWriter, r *http.Request) {
 		targetAuth = r.Header.Get("Authorization")
 		if err := json.UnmarshalRead(r.Body, &got); err != nil {
 			t.Errorf("decode body: %v", err)
 		}
 		_ = json.MarshalWrite(w, claimResponse{ID: "sb_3", Token: "tok", Volumes: want})
-	}))
-	t.Cleanup(target.Close)
-	entry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	})
+	entry := serveFunc(t, func(w http.ResponseWriter, r *http.Request) {
 		originAuth = r.Header.Get("Authorization")
 		_ = json.MarshalWrite(w, claimResponse{
 			Redirect: []string{addrOf(target)}, RequirePromoted: true,
 		})
-	}))
-	t.Cleanup(entry.Close)
+	})
 
 	c := testClient(t, entry, WithAPIToken("tenant-token"))
 	tpl := &Template{Name: "task:v1", c: c, addr: c.addr, net: "none", size: "small"}
@@ -128,7 +123,7 @@ func TestVolumesDecodesTheCatalogIncludingWritableEntries(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			ts := serveFunc(t, func(w http.ResponseWriter, r *http.Request) {
 				if r.Method != http.MethodGet || r.URL.Path != "/v1/volumes" {
 					t.Errorf("request = %s %s", r.Method, r.URL.Path)
 				}
@@ -136,8 +131,7 @@ func TestVolumesDecodesTheCatalogIncludingWritableEntries(t *testing.T) {
 					t.Errorf("authorization = %q", got)
 				}
 				_ = json.MarshalWrite(w, volumeListResponse{Volumes: tt.want})
-			}))
-			t.Cleanup(ts.Close)
+			})
 
 			got, err := testClient(t, ts, WithAPIToken("sekret")).Volumes(t.Context())
 			if err != nil {
@@ -147,35 +141,6 @@ func TestVolumesDecodesTheCatalogIncludingWritableEntries(t *testing.T) {
 				t.Errorf("volumes = %+v, want %+v", got, tt.want)
 			}
 		})
-	}
-}
-
-func TestVolumeClaimRedirectPreservesEntries(t *testing.T) {
-	want := []Volume{{Name: "imagenet", Mount: "/datasets/imagenet"}}
-	var got claimRequest
-	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if err := json.UnmarshalRead(r.Body, &got); err != nil {
-			t.Errorf("decode body: %v", err)
-		}
-		_ = json.MarshalWrite(w, claimResponse{ID: "sb_3", Token: "tok", Volumes: want})
-	}))
-	t.Cleanup(target.Close)
-	entry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_ = json.MarshalWrite(w, claimResponse{
-			Redirect: []string{addrOf(target)},
-		})
-	}))
-	t.Cleanup(entry.Close)
-
-	sb, err := testClient(t, entry).New(t.Context(), "rt:24.04", WithVolumes(want...))
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	if !got.NoRedirect || !slices.Equal(got.Volumes, want) {
-		t.Errorf("redirected claim = %+v, want no_redirect with %v", got, want)
-	}
-	if !slices.Equal(sb.Volumes, want) {
-		t.Errorf("response volumes = %+v, want %+v", sb.Volumes, want)
 	}
 }
 
@@ -193,13 +158,12 @@ func TestWithVolumesEncodesMode(t *testing.T) {
 			var raw struct {
 				Volumes []map[string]any `json:"volumes"`
 			}
-			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			ts := serveFunc(t, func(w http.ResponseWriter, r *http.Request) {
 				if err := json.UnmarshalRead(r.Body, &raw); err != nil {
 					t.Errorf("decode body: %v", err)
 				}
 				_ = json.MarshalWrite(w, claimResponse{ID: "sb_1", Token: "tok"})
-			}))
-			t.Cleanup(ts.Close)
+			})
 			if _, err := testClient(t, ts).New(t.Context(), "rt:24.04", WithVolumes(Volume{Name: "a", Mode: tt.mode})); err != nil {
 				t.Fatalf("New: %v", err)
 			}
@@ -230,32 +194,15 @@ func TestVolumePolicyErrorsComeFromServer(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			ts := serveFunc(t, func(w http.ResponseWriter, _ *http.Request) {
 				w.WriteHeader(http.StatusBadRequest)
 				_, _ = w.Write([]byte(`{"error":"mode must be ro or rw"}`))
-			}))
-			t.Cleanup(ts.Close)
+			})
 
 			_, err := tt.claim(t.Context(), testClient(t, ts))
 			if err == nil || !strings.Contains(err.Error(), "mode must be") {
 				t.Errorf("err = %v, want server mode rejection", err)
 			}
 		})
-	}
-}
-
-func TestSandboxVolumesEchoMode(t *testing.T) {
-	want := []Volume{{Name: "imagenet"}, {Name: "scratch", Mode: "rw"}}
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_ = json.MarshalWrite(w, claimResponse{ID: "sb_1", Token: "tok", Volumes: want})
-	}))
-	t.Cleanup(ts.Close)
-
-	sb, err := testClient(t, ts).New(t.Context(), "rt:24.04")
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	if !slices.Equal(sb.Volumes, want) {
-		t.Errorf("volumes = %+v, want %+v", sb.Volumes, want)
 	}
 }

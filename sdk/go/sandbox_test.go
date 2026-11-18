@@ -179,8 +179,7 @@ func TestUpgradeKeepsCoalescedBytes(t *testing.T) {
 		}
 		_, _ = io.Copy(io.Discard, conn)
 	})
-	ts := httptest.NewServer(mux)
-	t.Cleanup(ts.Close)
+	ts := serveFunc(t, mux.ServeHTTP)
 
 	var out strings.Builder
 	code, err := testSandbox(t, ts, WithKeepAlive(0)).Run(t.Context(), Cmd{Argv: []string{"echo", "42"}, Stdout: &out})
@@ -214,8 +213,7 @@ func TestFirstCallSendsItsFramesAheadOfThe101(t *testing.T) {
 		_ = conn.SetReadDeadline(time.Time{})
 		_, _ = io.Copy(io.Discard, brw)
 	})
-	ts := httptest.NewServer(mux)
-	t.Cleanup(ts.Close)
+	ts := serveFunc(t, mux.ServeHTTP)
 
 	if err := testSandbox(t, ts).Mkdir(t.Context(), "/w", false); err != nil {
 		t.Fatalf("Mkdir: %v", err)
@@ -231,8 +229,7 @@ func TestRunRejectedUpgrade(t *testing.T) {
 		w.WriteHeader(http.StatusNotFound)
 		_, _ = io.WriteString(w, `{"error":"unknown sandbox"}`)
 	})
-	ts := httptest.NewServer(mux)
-	t.Cleanup(ts.Close)
+	ts := serveFunc(t, mux.ServeHTTP)
 
 	_, err := testSandbox(t, ts).Run(t.Context(), Cmd{Argv: []string{"echo"}})
 	if apiErr, ok := errors.AsType[*APIError](err); !ok || apiErr.Status != http.StatusNotFound || apiErr.Message != "unknown sandbox" {
@@ -265,7 +262,7 @@ func TestRenewSendsTheSandboxTokenAndRecordsTheGrant(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			ts := serveFunc(t, func(w http.ResponseWriter, r *http.Request) {
 				if r.Method != http.MethodPost || r.URL.Path != "/v1/sandboxes/sb_1/renew" {
 					t.Errorf("got %s %s", r.Method, r.URL.Path)
 				}
@@ -276,8 +273,7 @@ func TestRenewSendsTheSandboxTokenAndRecordsTheGrant(t *testing.T) {
 					t.Errorf("body %s, want %s", body, tt.body)
 				}
 				_, _ = io.WriteString(w, `{"deadline":"2026-09-23T12:00:00Z"}`)
-			}))
-			t.Cleanup(ts.Close)
+			})
 			c := testClient(t, ts, WithAPIToken("api"))
 			sb := &Sandbox{ID: "sb_1", token: "tok", owner: c.addr, c: c}
 
@@ -293,11 +289,10 @@ func TestRenewSendsTheSandboxTokenAndRecordsTheGrant(t *testing.T) {
 }
 
 func TestRenewRefusalLeavesTheDeadline(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	ts := serveFunc(t, func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusConflict)
 		_, _ = io.WriteString(w, `{"error":"sandbox archived"}`)
-	}))
-	t.Cleanup(ts.Close)
+	})
 	c := testClient(t, ts)
 	before := time.Date(2026, 9, 23, 11, 0, 0, 0, time.UTC)
 	sb := &Sandbox{ID: "sb_1", Deadline: before, token: "tok", owner: c.addr, c: c}
@@ -335,9 +330,7 @@ func newAgentServer(t testing.TB, serve connHandler) *httptest.Server {
 		}
 		serve(conn)
 	})
-	ts := httptest.NewServer(mux)
-	t.Cleanup(ts.Close)
-	return ts
+	return serveFunc(t, mux.ServeHTTP)
 }
 
 func testSandbox(t testing.TB, ts *httptest.Server, opts ...ClientOption) *Sandbox {

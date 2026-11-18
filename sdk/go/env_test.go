@@ -4,7 +4,6 @@ import (
 	"encoding/json/v2"
 	"io"
 	"net/http"
-	"net/http/httptest"
 	"reflect"
 	"testing"
 	"time"
@@ -14,7 +13,7 @@ func TestClaimsCarryTheEnv(t *testing.T) {
 	env := map[string]EnvVar{"MODE": {Value: "on"}, "GW_KEY": {Value: "k", Guest: new(false)}}
 	want := map[string]map[string]any{"MODE": {"value": "on"}, "GW_KEY": {"value": "k", "guest": false}}
 	bodies := make(chan map[string]map[string]any, 1)
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts := serveFunc(t, func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			Env map[string]map[string]any `json:"env"`
 		}
@@ -23,8 +22,7 @@ func TestClaimsCarryTheEnv(t *testing.T) {
 		}
 		bodies <- body.Env
 		_ = json.MarshalWrite(w, claimResponse{ID: "sb_1", Token: "tok", Deadline: time.Unix(42, 0)})
-	}))
-	t.Cleanup(ts.Close)
+	})
 	c := testClient(t, ts)
 	withEnv := WithEnv(env)
 	env["MODE"] = EnvVar{Value: "mutated"}
@@ -47,7 +45,7 @@ func TestClaimsCarryTheEnv(t *testing.T) {
 func TestEnvVerbsUseTheAPITokenOnTheOwner(t *testing.T) {
 	type request struct{ method, auth, body string }
 	got := make(chan request, 1)
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts := serveFunc(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/sandboxes/sb_1/env" {
 			t.Errorf("path %s", r.URL.Path)
 		}
@@ -58,8 +56,7 @@ func TestEnvVerbsUseTheAPITokenOnTheOwner(t *testing.T) {
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
-	}))
-	t.Cleanup(ts.Close)
+	})
 	c := testClient(t, ts, WithAPIToken("api"))
 	sb := &Sandbox{ID: "sb_1", token: "tok", owner: c.addr, c: c}
 

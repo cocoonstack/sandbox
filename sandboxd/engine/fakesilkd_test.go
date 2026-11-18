@@ -61,8 +61,9 @@ type fakeSilkd struct {
 	tunErr string
 }
 
-func serveFakeSilkd(t *testing.T, path string) *fakeSilkd {
+func newFakeSilkd(t *testing.T) (*fakeSilkd, string) {
 	t.Helper()
+	path := sockPath(t)
 	ln, err := net.Listen("unix", path)
 	if err != nil {
 		t.Fatalf("listen: %v", err)
@@ -86,7 +87,7 @@ func serveFakeSilkd(t *testing.T, path string) *fakeSilkd {
 			go f.serve(conn)
 		}
 	}()
-	return f
+	return f, path
 }
 
 func (f *fakeSilkd) set(fn fakeEdit) {

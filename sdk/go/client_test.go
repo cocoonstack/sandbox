@@ -45,7 +45,7 @@ func TestConnectAddress(t *testing.T) {
 func TestNewSendsClaim(t *testing.T) {
 	var gotBody claimRequest
 	var gotAuth string
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts := serveFunc(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost || r.URL.Path != "/v1/claim" {
 			t.Errorf("got %s %s", r.Method, r.URL.Path)
 		}
@@ -56,8 +56,7 @@ func TestNewSendsClaim(t *testing.T) {
 		_ = json.MarshalWrite(w, claimResponse{
 			ID: "sb_1", Token: "tok", Deadline: time.Unix(42, 0), TemplateDigest: "sha256:template", NetRoute: "relay",
 		})
-	}))
-	t.Cleanup(ts.Close)
+	})
 
 	c := testClient(t, ts, WithAPIToken("sekret"))
 	md := map[string]string{"team": "a"}
@@ -84,11 +83,10 @@ func TestNewSendsClaim(t *testing.T) {
 }
 
 func TestNewSurfacesServerError(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	ts := serveFunc(t, func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusConflict)
 		_ = json.MarshalWrite(w, errorResponse{Error: "node has no egress attachment"})
-	}))
-	t.Cleanup(ts.Close)
+	})
 
 	_, err := testClient(t, ts).New(t.Context(), "rt:24.04")
 	if err == nil || !strings.Contains(err.Error(), "no egress attachment") ||
@@ -110,13 +108,12 @@ func TestCloseReleases(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var gotPath, gotAuth string
-			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			ts := serveFunc(t, func(w http.ResponseWriter, r *http.Request) {
 				if strings.HasSuffix(r.URL.Path, "/release") {
 					gotPath, gotAuth = r.URL.Path, r.Header.Get("Authorization")
 				}
 				w.WriteHeader(tt.status)
-			}))
-			t.Cleanup(ts.Close)
+			})
 
 			c := testClient(t, ts)
 			sb := &Sandbox{ID: "sb_9", c: c, token: "tok9", owner: c.addr}
@@ -134,7 +131,7 @@ func TestCloseReleases(t *testing.T) {
 func TestCloseReleasesASandboxThatMoved(t *testing.T) {
 	var released atomic.Bool
 	var adopter *httptest.Server
-	adopter = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	adopter = serveFunc(t, func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/v1/sandboxes/sb_9/owner":
 			_ = json.MarshalWrite(w, map[string]string{"owner_addr": addrOf(adopter)})
@@ -142,16 +139,14 @@ func TestCloseReleasesASandboxThatMoved(t *testing.T) {
 			released.Store(true)
 			w.WriteHeader(http.StatusNoContent)
 		}
-	}))
-	t.Cleanup(adopter.Close)
-	old := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	})
+	old := serveFunc(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/v1/peers" {
 			_ = json.MarshalWrite(w, map[string]any{"peers": []string{addrOf(adopter)}})
 			return
 		}
 		w.WriteHeader(http.StatusNotFound)
-	}))
-	t.Cleanup(old.Close)
+	})
 
 	c := testClient(t, old)
 	sb := &Sandbox{ID: "sb_9", c: c, token: "tok9", owner: c.addr}
@@ -209,15 +204,14 @@ func TestAMovedSandboxRetriesAStreamCallAtItsNewOwner(t *testing.T) {
 func TestARebindThatLosesTheRaceToAnotherCallStillRetries(t *testing.T) {
 	var sb *Sandbox
 	var adopter *httptest.Server
-	adopter = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	adopter = serveFunc(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/v1/sandboxes/sb_9/owner" {
 			sb.mu.Lock()
 			sb.owner = addrOf(adopter)
 			sb.mu.Unlock()
 			_ = json.MarshalWrite(w, map[string]string{"owner_addr": addrOf(adopter)})
 		}
-	}))
-	t.Cleanup(adopter.Close)
+	})
 	sb = &Sandbox{ID: "sb_9", c: testClient(t, adopter), token: "tok9", owner: "127.0.0.1:1"}
 	if !sb.rebind(t.Context(), &ownerGoneError{err: errors.New("refused"), id: "sb_9", addr: "127.0.0.1:1"}) {
 		t.Error("a call that failed at the old owner was not retried after another call rebound the handle")
@@ -226,13 +220,12 @@ func TestARebindThatLosesTheRaceToAnotherCallStillRetries(t *testing.T) {
 
 func TestAWriteToAGoneSandboxLooksItsOwnerUpOnce(t *testing.T) {
 	var lookups atomic.Int32
-	node := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	node := serveFunc(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/v1/sandboxes/sb_1/owner" {
 			lookups.Add(1)
 		}
 		w.WriteHeader(http.StatusNotFound)
-	}))
-	t.Cleanup(node.Close)
+	})
 	sb := testSandbox(t, node)
 	if err := sb.WriteFile(t.Context(), "/f", []byte("x"), nil); err == nil {
 		t.Fatal("a write to a released sandbox succeeded")
@@ -276,10 +269,9 @@ func TestAWriterErrorTaggedForThisSandboxIsNotReplayed(t *testing.T) {
 		fake.ServeConn(c)
 	})
 	owner := newAgentServer(t, fake.ServeConn)
-	entry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	entry := serveFunc(t, func(w http.ResponseWriter, _ *http.Request) {
 		_ = json.MarshalWrite(w, map[string]string{"owner_addr": addrOf(other)})
-	}))
-	t.Cleanup(entry.Close)
+	})
 	sb := &Sandbox{ID: "sb_1", c: testClient(t, entry), token: "tok", owner: addrOf(owner)}
 	t.Cleanup(sb.pool.drain)
 	tagged := writerFunc(func([]byte) (int, error) {
@@ -301,14 +293,13 @@ func TestAnotherSandboxsErrorInAWriterIsNotReplayed(t *testing.T) {
 		fake.ServeConn(c)
 	})
 	owner := newAgentServer(t, fake.ServeConn)
-	entry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	entry := serveFunc(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/sandboxes/sb_1/owner" {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
 		_ = json.MarshalWrite(w, map[string]string{"owner_addr": addrOf(other)})
-	}))
-	t.Cleanup(entry.Close)
+	})
 	c := testClient(t, entry)
 	sb := &Sandbox{ID: "sb_1", c: c, token: "tok", owner: addrOf(owner)}
 	gone := &Sandbox{ID: "sb_2", c: c, token: "tok", owner: retiredAddr(t)}
@@ -326,8 +317,7 @@ func TestAnotherSandboxsErrorInAWriterIsNotReplayed(t *testing.T) {
 }
 
 func TestACallThatLostARaceToAMoveRetriesAtTheOwnerFound(t *testing.T) {
-	entry := httptest.NewServer(http.NotFoundHandler())
-	t.Cleanup(entry.Close)
+	entry := serveFunc(t, http.NotFound)
 	sb := &Sandbox{ID: "sb_1", c: testClient(t, entry), token: "tok", owner: "new:7777"}
 	if !sb.rebind(t.Context(), &ownerGoneError{err: errors.New("gone"), id: "sb_1", addr: "old:7777"}) {
 		t.Error("a call tagged by the old owner did not retry at the owner another call found")
@@ -340,7 +330,7 @@ func TestACallThatLostARaceToAMoveRetriesAtTheOwnerFound(t *testing.T) {
 func TestCloseFollowsAMoveOffARetiredNode(t *testing.T) {
 	var released atomic.Bool
 	var adopter *httptest.Server
-	adopter = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	adopter = serveFunc(t, func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/v1/sandboxes/sb_9/owner":
 			_ = json.MarshalWrite(w, map[string]string{"owner_addr": addrOf(adopter)})
@@ -348,8 +338,7 @@ func TestCloseFollowsAMoveOffARetiredNode(t *testing.T) {
 			released.Store(true)
 			w.WriteHeader(http.StatusNoContent)
 		}
-	}))
-	t.Cleanup(adopter.Close)
+	})
 
 	sb := &Sandbox{ID: "sb_9", c: testClient(t, adopter), token: "tok9", owner: retiredAddr(t)}
 	if err := sb.Close(); err != nil {
@@ -361,10 +350,9 @@ func TestCloseFollowsAMoveOffARetiredNode(t *testing.T) {
 }
 
 func TestCloseReportsARetiredNodeWhenNoNodeHoldsTheSandbox(t *testing.T) {
-	entry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	entry := serveFunc(t, func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
-	}))
-	t.Cleanup(entry.Close)
+	})
 
 	sb := &Sandbox{ID: "sb_9", c: testClient(t, entry), token: "tok9", owner: retiredAddr(t)}
 	if err := sb.Close(); err == nil {
@@ -375,15 +363,14 @@ func TestCloseReportsARetiredNodeWhenNoNodeHoldsTheSandbox(t *testing.T) {
 func TestNewFollowsRedirect(t *testing.T) {
 	var nodeB *httptest.Server
 	var gotNoRedirect bool
-	nodeB = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	nodeB = serveFunc(t, func(w http.ResponseWriter, r *http.Request) {
 		var req claimRequest
 		_ = json.UnmarshalRead(r.Body, &req)
 		gotNoRedirect = req.NoRedirect
 		_ = json.MarshalWrite(w, claimResponse{
 			ID: "sb_2", Token: "tok", OwnerAddr: addrOf(nodeB),
 		})
-	}))
-	t.Cleanup(nodeB.Close)
+	})
 
 	nodeA := redirectEntry(t, addrOf(nodeB))
 
@@ -404,7 +391,7 @@ func TestNewFollowsRedirect(t *testing.T) {
 
 func TestDeleteTemplateFollowsRedirect(t *testing.T) {
 	var deletedAtB, gotNoRedirect bool
-	nodeB := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	nodeB := serveFunc(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodDelete {
 			deletedAtB = true
 			gotNoRedirect = r.URL.Query().Get("no_redirect") != ""
@@ -412,8 +399,7 @@ func TestDeleteTemplateFollowsRedirect(t *testing.T) {
 			return
 		}
 		w.WriteHeader(http.StatusNotFound)
-	}))
-	t.Cleanup(nodeB.Close)
+	})
 
 	nodeA := redirectEntry(t, addrOf(nodeB))
 
@@ -481,27 +467,24 @@ func TestRedirectWalksPastACandidateThatRefusedTheClaim(t *testing.T) {
 
 func TestRedirectStopsWhenACandidateMayHaveClaimed(t *testing.T) {
 	var goodCalls, entryCalls atomic.Int32
-	lost := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	lost := serveFunc(t, func(w http.ResponseWriter, _ *http.Request) {
 		conn, _, err := http.NewResponseController(w).Hijack()
 		if err == nil {
 			_ = conn.Close()
 		}
-	}))
-	t.Cleanup(lost.Close)
+	})
 
-	good := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	good := serveFunc(t, func(w http.ResponseWriter, _ *http.Request) {
 		goodCalls.Add(1)
 		_ = json.MarshalWrite(w, claimResponse{ID: "sb_6", Token: "t"})
-	}))
-	t.Cleanup(good.Close)
+	})
 
-	entry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	entry := serveFunc(t, func(w http.ResponseWriter, _ *http.Request) {
 		entryCalls.Add(1)
 		_ = json.MarshalWrite(w, claimResponse{
 			Redirect: []string{addrOf(lost), addrOf(good)},
 		})
-	}))
-	t.Cleanup(entry.Close)
+	})
 
 	if _, err := testClient(t, entry).New(t.Context(), "rt:24.04"); err == nil {
 		t.Fatal("New succeeded after a candidate dropped the reply to a delivered claim")
@@ -518,6 +501,8 @@ func TestRedirectFallbackProvisionsAtTheOrigin(t *testing.T) {
 		body string
 	}{
 		{"candidate full", http.StatusTooManyRequests, ""},
+		{"candidate busy", http.StatusServiceUnavailable, ""},
+		{"candidate broken", http.StatusInternalServerError, ""},
 		{"rotating token", http.StatusUnauthorized, "invalid api token"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -565,15 +550,14 @@ func TestRedirectFallbackProvisionsAtTheOrigin(t *testing.T) {
 
 func TestRedirectFallbackAlsoFails(t *testing.T) {
 	var fullCalls int
-	full := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	full := serveFunc(t, func(w http.ResponseWriter, _ *http.Request) {
 		fullCalls++
 		w.WriteHeader(http.StatusTooManyRequests)
 		_ = json.MarshalWrite(w, errorResponse{Error: "candidate full"})
-	}))
-	t.Cleanup(full.Close)
+	})
 
 	var entryCalls int
-	entry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	entry := serveFunc(t, func(w http.ResponseWriter, _ *http.Request) {
 		entryCalls++
 		if entryCalls == 1 {
 			_ = json.MarshalWrite(w, claimResponse{Redirect: []string{addrOf(full)}})
@@ -581,8 +565,7 @@ func TestRedirectFallbackAlsoFails(t *testing.T) {
 		}
 		w.WriteHeader(http.StatusConflict)
 		_ = json.MarshalWrite(w, errorResponse{Error: "origin also unavailable"})
-	}))
-	t.Cleanup(entry.Close)
+	})
 
 	sb, err := testClient(t, entry).New(t.Context(), "rt:24.04")
 	if err == nil {
@@ -617,18 +600,16 @@ func TestRedirectDefinitiveErrorSkipsFallback(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			bad := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			bad := serveFunc(t, func(w http.ResponseWriter, _ *http.Request) {
 				w.WriteHeader(tt.code)
 				_ = json.MarshalWrite(w, errorResponse{Error: tt.want})
-			}))
-			t.Cleanup(bad.Close)
+			})
 
 			var entryCalls int
-			entry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			entry := serveFunc(t, func(w http.ResponseWriter, _ *http.Request) {
 				entryCalls++
 				_ = json.MarshalWrite(w, claimResponse{Redirect: []string{addrOf(bad)}})
-			}))
-			t.Cleanup(entry.Close)
+			})
 
 			_, err := testClient(t, entry).New(t.Context(), "rt:24.04")
 			if err == nil || !strings.Contains(err.Error(), tt.want) {
@@ -643,24 +624,22 @@ func TestRedirectDefinitiveErrorSkipsFallback(t *testing.T) {
 
 func TestLookupScatter(t *testing.T) {
 	var owner *httptest.Server
-	owner = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	owner = serveFunc(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/v1/sandboxes/sb_1/owner" && r.Header.Get("Authorization") == "Bearer tok" {
 			_ = json.MarshalWrite(w, map[string]string{"owner_addr": addrOf(owner)})
 			return
 		}
 		w.WriteHeader(http.StatusNotFound)
-	}))
-	t.Cleanup(owner.Close)
+	})
 
-	entry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	entry := serveFunc(t, func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/v1/sandboxes/sb_1/owner":
 			w.WriteHeader(http.StatusNotFound)
 		case "/v1/peers":
 			_ = json.MarshalWrite(w, map[string]any{"peers": []string{addrOf(owner)}})
 		}
-	}))
-	t.Cleanup(entry.Close)
+	})
 
 	sb, err := testClient(t, entry).Lookup(t.Context(), "sb_1", "tok")
 	if err != nil {
@@ -672,7 +651,7 @@ func TestLookupScatter(t *testing.T) {
 }
 
 func TestLookupReportsAFailedPeerDiscovery(t *testing.T) {
-	entry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	entry := serveFunc(t, func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/v1/sandboxes/sb_1/owner":
 			w.WriteHeader(http.StatusNotFound)
@@ -680,8 +659,7 @@ func TestLookupReportsAFailedPeerDiscovery(t *testing.T) {
 			w.WriteHeader(http.StatusServiceUnavailable)
 			_, _ = io.WriteString(w, `{"error":"gossip not ready"}`)
 		}
-	}))
-	t.Cleanup(entry.Close)
+	})
 
 	_, err := testClient(t, entry).Lookup(t.Context(), "sb_1", "tok")
 	he, ok := errors.AsType[*APIError](err)
@@ -725,16 +703,14 @@ func movedSandbox(t *testing.T) (*Sandbox, string) {
 	mux.HandleFunc("POST /v1/sandboxes/sb_1/renew", func(w http.ResponseWriter, _ *http.Request) {
 		_ = json.MarshalWrite(w, map[string]time.Time{"deadline": time.Now().Add(time.Minute)})
 	})
-	adopter = httptest.NewServer(mux)
-	t.Cleanup(adopter.Close)
-	old := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	adopter = serveFunc(t, mux.ServeHTTP)
+	old := serveFunc(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/v1/peers" {
 			_ = json.MarshalWrite(w, map[string]any{"peers": []string{addrOf(adopter)}})
 			return
 		}
 		w.WriteHeader(http.StatusNotFound)
-	}))
-	t.Cleanup(old.Close)
+	})
 	sb := testSandbox(t, old)
 	return sb, addrOf(adopter)
 }

@@ -3,14 +3,13 @@ package sandbox
 import (
 	"encoding/json/v2"
 	"net/http"
-	"net/http/httptest"
 	"reflect"
 	"testing"
 	"time"
 )
 
 func TestInfoReportsCapacityState(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	ts := serveFunc(t, func(w http.ResponseWriter, _ *http.Request) {
 		_ = json.MarshalWrite(w, map[string]any{
 			"pools":              []any{},
 			"templates":          []any{map[string]any{"key": map[string]any{"template": "app:v1", "net": "none", "size": "small"}, "content_digest": "sha256:aa", "tenant": "acme", "created_at": "2026-09-28T01:02:03Z", "cpu_count": 1, "mem_total_bytes": 536870912, "labels": map[string]any{"v1": "sha256:aa"}}},
@@ -20,8 +19,7 @@ func TestInfoReportsCapacityState(t *testing.T) {
 			"at_capacity":        true,
 			"at_capacity_reason": "not enough memory",
 		})
-	}))
-	t.Cleanup(ts.Close)
+	})
 
 	info, err := testClient(t, ts).Info(t.Context())
 	if err != nil {
@@ -40,12 +38,11 @@ func TestInfoReportsCapacityState(t *testing.T) {
 }
 
 func TestSandboxesDecodeMetadataAndResources(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	ts := serveFunc(t, func(w http.ResponseWriter, _ *http.Request) {
 		_ = json.MarshalWrite(w, map[string]any{"sandboxes": []any{map[string]any{
 			"id": "sb_1", "metadata": map[string]string{"team": "a"}, "cpu_count": 2, "mem_total_bytes": 1 << 30, "on_expire": "archive", "env_missing": true,
 		}}})
-	}))
-	t.Cleanup(ts.Close)
+	})
 
 	list, err := testClient(t, ts).Sandboxes(t.Context())
 	if err != nil {

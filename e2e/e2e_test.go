@@ -60,11 +60,7 @@ func TestClaimThenWarmClaimThenCloseThroughTheWholeStack(t *testing.T) {
 	t.Run("refill then warm claim", func(t *testing.T) {
 		waitFor(t, st.oneWarm)
 		warmBefore := st.mgr.Counters().ClaimsWarm
-		warm, err := st.client.New(t.Context(), "rt:24.04")
-		if err != nil {
-			t.Fatalf("New: %v", err)
-		}
-		defer warm.Close()
+		warm := st.claim(t, "rt:24.04")
 		if got := st.mgr.Counters().ClaimsWarm; got != warmBefore+1 {
 			t.Errorf("warm claims %d, want %d", got, warmBefore+1)
 		}
@@ -92,11 +88,7 @@ func TestClaimThenWarmClaimThenCloseThroughTheWholeStack(t *testing.T) {
 
 func TestForkEndToEnd(t *testing.T) {
 	st := startStack(t)
-	parent, err := st.client.New(t.Context(), "rt:24.04")
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	defer parent.Close()
+	parent := st.claim(t, "rt:24.04")
 
 	children, err := parent.Fork(t.Context(), 2, time.Minute)
 	if err != nil {
@@ -125,11 +117,7 @@ func TestForkEndToEnd(t *testing.T) {
 
 func TestPromoteEndToEnd(t *testing.T) {
 	st := startStack(t)
-	parent, err := st.client.New(t.Context(), "rt:24.04")
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	defer parent.Close()
+	parent := st.claim(t, "rt:24.04")
 
 	tpl, err := parent.Promote(t.Context(), "e2e-tpl:1")
 	if err != nil {
@@ -170,11 +158,7 @@ func TestPromoteEndToEnd(t *testing.T) {
 
 func TestRenewEndToEnd(t *testing.T) {
 	st := startStack(t)
-	sb, err := st.client.New(t.Context(), "rt:24.04")
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	defer sb.Close()
+	sb := st.claim(t, "rt:24.04")
 
 	longer, err := sb.Renew(t.Context(), time.Hour)
 	if err != nil {
@@ -203,11 +187,7 @@ func TestRenewEndToEnd(t *testing.T) {
 
 func TestCheckpointEndToEnd(t *testing.T) {
 	st := startStack(t)
-	src, err := st.client.New(t.Context(), "rt:24.04")
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	defer src.Close()
+	src := st.claim(t, "rt:24.04")
 
 	ckpt, err := src.Checkpoint(t.Context(), "step-1")
 	if err != nil {
@@ -537,11 +517,7 @@ func TestVolumeWireShape(t *testing.T) {
 
 func TestClaimRefRoundTrip(t *testing.T) {
 	st := startStack(t)
-	sb, err := st.client.New(t.Context(), "rt:24.04", sandbox.WithClaimRef("ns/workload"))
-	if err != nil {
-		t.Fatalf("claim: %v", err)
-	}
-	defer sb.Close()
+	sb := st.claim(t, "rt:24.04", sandbox.WithClaimRef("ns/workload"))
 
 	list, err := st.client.Sandboxes(t.Context())
 	if err != nil {
@@ -558,11 +534,7 @@ func TestClaimRefRoundTrip(t *testing.T) {
 
 func TestClaimMetadataRoundTrip(t *testing.T) {
 	st := startStack(t)
-	sb, err := st.client.New(t.Context(), "rt:24.04", sandbox.WithMetadata(map[string]string{"team": "a"}))
-	if err != nil {
-		t.Fatalf("claim: %v", err)
-	}
-	defer sb.Close()
+	sb := st.claim(t, "rt:24.04", sandbox.WithMetadata(map[string]string{"team": "a"}))
 
 	list, err := st.client.Sandboxes(t.Context())
 	if err != nil {
@@ -811,6 +783,16 @@ type stack struct {
 	eng    *fakeEngine
 	addr   string
 	token  string
+}
+
+func (s *stack) claim(t *testing.T, template string, opts ...sandbox.Option) *sandbox.Sandbox {
+	t.Helper()
+	sb, err := s.client.New(t.Context(), template, opts...)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	t.Cleanup(func() { _ = sb.Close() })
+	return sb
 }
 
 func (s *stack) oneWarm() bool {

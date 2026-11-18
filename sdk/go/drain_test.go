@@ -3,22 +3,20 @@ package sandbox
 import (
 	"encoding/json/v2"
 	"net/http"
-	"net/http/httptest"
 	"slices"
 	"testing"
 )
 
 func TestDrainCordonVerbs(t *testing.T) {
 	var calls []string
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts := serveFunc(t, func(w http.ResponseWriter, r *http.Request) {
 		if auth := r.Header.Get("Authorization"); auth != "Bearer root" {
 			t.Errorf("auth = %q, want Bearer root", auth)
 		}
 		calls = append(calls, r.Method+" "+r.URL.Path)
 		post := r.Method == http.MethodPost
 		_ = json.MarshalWrite(w, NodeInfo{Claimed: 3, Draining: post && r.URL.Path == "/v1/drain", Cordoned: post && r.URL.Path == "/v1/cordon"})
-	}))
-	t.Cleanup(ts.Close)
+	})
 
 	c := testClient(t, ts, WithAPIToken("root"))
 	for _, tt := range []struct {

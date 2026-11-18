@@ -3,30 +3,27 @@ package sandbox
 import (
 	"encoding/json/v2"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 )
 
 func TestCheckpointNewFollowsRedirect(t *testing.T) {
 	var nodeACalls int
-	nodeB := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	nodeB := serveFunc(t, func(w http.ResponseWriter, r *http.Request) {
 		var req checkpointClaimRequest
 		_ = json.UnmarshalRead(r.Body, &req)
 		if !req.NoRedirect {
 			t.Error("retry did not carry no_redirect")
 		}
 		_ = json.MarshalWrite(w, claimResponse{ID: "sb_ck1", Token: "tok"})
-	}))
-	t.Cleanup(nodeB.Close)
+	})
 
-	nodeA := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	nodeA := serveFunc(t, func(w http.ResponseWriter, _ *http.Request) {
 		nodeACalls++
 		_ = json.MarshalWrite(w, claimResponse{
 			Redirect: []string{addrOf(nodeB)},
 		})
-	}))
-	t.Cleanup(nodeA.Close)
+	})
 
 	c := testClient(t, nodeA)
 	ck := checkpointHandle(c, c.addr, checkpointRecord{ID: "ck_1"})
@@ -67,85 +64,11 @@ func TestCheckpointNewRejectsVolumeOptionsLocally(t *testing.T) {
 	}
 }
 
-func TestCheckpointNewRedirectAllCandidatesFail(t *testing.T) {
-	broken := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusInternalServerError)
-	}))
-	t.Cleanup(broken.Close)
-
-	var entryCalls int
-	entry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		entryCalls++
-		if entryCalls == 1 {
-			_ = json.MarshalWrite(w, claimResponse{
-				Redirect: []string{addrOf(broken)},
-			})
-			return
-		}
-		w.WriteHeader(http.StatusConflict)
-		_ = json.MarshalWrite(w, errorResponse{Error: "origin also failed"})
-	}))
-	t.Cleanup(entry.Close)
-
-	c := testClient(t, entry)
-	ck := checkpointHandle(c, c.addr, checkpointRecord{ID: "ck_2"})
-	sb, err := ck.New(t.Context())
-	if err == nil {
-		t.Fatal("New: want error, got nil")
-	}
-	if !strings.Contains(err.Error(), "origin also failed") {
-		t.Errorf("err %v, want the origin's failure surfaced", err)
-	}
-	if sb != nil {
-		t.Errorf("sb %+v, want nil on failure", sb)
-	}
-	if entryCalls != 2 {
-		t.Errorf("entry called %d times, want 2 (redirect + fallback)", entryCalls)
-	}
-}
-
-func TestCheckpointNewRedirectFallbackHeals(t *testing.T) {
-	busy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusServiceUnavailable)
-	}))
-	t.Cleanup(busy.Close)
-
-	var entryCalls int
-	entry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		entryCalls++
-		if entryCalls == 1 {
-			_ = json.MarshalWrite(w, claimResponse{Redirect: []string{addrOf(busy)}})
-			return
-		}
-		var req checkpointClaimRequest
-		_ = json.UnmarshalRead(r.Body, &req)
-		if !req.NoRedirect {
-			t.Error("origin fallback did not carry no_redirect")
-		}
-		_ = json.MarshalWrite(w, claimResponse{ID: "sb_healed", Token: "t"})
-	}))
-	t.Cleanup(entry.Close)
-
-	c := testClient(t, entry)
-	ck := checkpointHandle(c, c.addr, checkpointRecord{ID: "ck_5"})
-	sb, err := ck.New(t.Context())
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	if sb.ID != "sb_healed" {
-		t.Errorf("id %q, want sb_healed", sb.ID)
-	}
-	if entryCalls != 2 {
-		t.Errorf("entry called %d times, want 2 (redirect + fallback)", entryCalls)
-	}
-}
-
 func TestCheckpointNewRedirectNeverYieldsEmptyID(t *testing.T) {
 	dead := retiredAddr(t)
-	entry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	entry := serveFunc(t, func(w http.ResponseWriter, _ *http.Request) {
 		_ = json.MarshalWrite(w, claimResponse{Redirect: []string{dead}})
-	}))
-	t.Cleanup(entry.Close)
+	})
 
 	c := testClient(t, entry)
 	ck := checkpointHandle(c, c.addr, checkpointRecord{ID: "ck_3"})
@@ -160,17 +83,15 @@ func TestCheckpointNewRedirectNeverYieldsEmptyID(t *testing.T) {
 
 func TestCheckpointNewSecondLevelRedirectFails(t *testing.T) {
 	dead := retiredAddr(t)
-	nodeB := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	nodeB := serveFunc(t, func(w http.ResponseWriter, _ *http.Request) {
 		_ = json.MarshalWrite(w, claimResponse{Redirect: []string{dead}})
-	}))
-	t.Cleanup(nodeB.Close)
+	})
 
-	nodeA := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	nodeA := serveFunc(t, func(w http.ResponseWriter, _ *http.Request) {
 		_ = json.MarshalWrite(w, claimResponse{
 			Redirect: []string{addrOf(nodeB)},
 		})
-	}))
-	t.Cleanup(nodeA.Close)
+	})
 
 	c := testClient(t, nodeA)
 	ck := checkpointHandle(c, c.addr, checkpointRecord{ID: "ck_4"})
@@ -185,11 +106,10 @@ func TestCheckpointNewSecondLevelRedirectFails(t *testing.T) {
 
 func TestCheckpointNewCarriesMetadata(t *testing.T) {
 	var got checkpointClaimRequest
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts := serveFunc(t, func(w http.ResponseWriter, r *http.Request) {
 		_ = json.UnmarshalRead(r.Body, &got)
 		_ = json.MarshalWrite(w, claimResponse{ID: "sb_ck1", Token: "tok"})
-	}))
-	t.Cleanup(ts.Close)
+	})
 
 	c := testClient(t, ts)
 	ck := checkpointHandle(c, c.addr, checkpointRecord{ID: "ck_1"})

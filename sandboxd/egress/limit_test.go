@@ -273,23 +273,13 @@ func TestALimitedCopyPastTheLargeBufferBoundCopiesThroughTheSmallOne(t *testing.
 }
 
 func TestEarlyConnectBytesWaitForTxTokens(t *testing.T) {
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("listen: %v", err)
-	}
-	t.Cleanup(func() { _ = ln.Close() })
 	arrived := make(chan time.Time, 1)
-	go func() {
-		c, acceptErr := ln.Accept()
-		if acceptErr != nil {
-			return
-		}
-		defer func() { _ = c.Close() }()
-		if _, readErr := c.Read(make([]byte, 16)); readErr == nil {
+	origin := acceptOnce(t, func(c net.Conn) {
+		if _, err := c.Read(make([]byte, 16)); err == nil {
 			arrived <- time.Now()
 		}
-	}()
-	p := New(Policy{Allow: []Rule{{Host: "bulk.internal"}}}, nil, nil, fixedDial(ln.Addr().String()), nil, nil)
+	})
+	p := New(Policy{Allow: []Rule{{Host: "bulk.internal"}}}, nil, nil, fixedDial(origin), nil, nil)
 	t.Cleanup(p.Close)
 	p.SetLimit(types.EgressLimit{TxBytesPerSecond: limitBurst})
 	tx := p.limits.Load().tx
@@ -406,18 +396,8 @@ func writeUntilClosed(conn net.Conn) {
 
 func bulkServer(t *testing.T, down int) *bulk {
 	t.Helper()
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("listen bulk: %v", err)
-	}
-	t.Cleanup(func() { _ = ln.Close() })
-	b := &bulk{addr: ln.Addr().String(), uploads: make(chan upload, 1)}
-	go func() {
-		conn, err := ln.Accept()
-		if err != nil {
-			return
-		}
-		defer func() { _ = conn.Close() }()
+	b := &bulk{uploads: make(chan upload, 1)}
+	b.addr = acceptOnce(t, func(conn net.Conn) {
 		var wg sync.WaitGroup
 		wg.Go(func() {
 			_, _ = conn.Write(make([]byte, down))
@@ -427,24 +407,14 @@ func bulkServer(t *testing.T, down int) *bulk {
 		n, _ := io.Copy(io.Discard, conn)
 		b.uploads <- upload{n: n, took: time.Since(start)}
 		wg.Wait()
-	}()
+	})
 	return b
 }
 
 func sinkServer(t *testing.T) (string, *sink) {
 	t.Helper()
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("listen sink: %v", err)
-	}
-	t.Cleanup(func() { _ = ln.Close() })
 	s := &sink{reads: make(chan struct{}, 1)}
-	go func() {
-		conn, err := ln.Accept()
-		if err != nil {
-			return
-		}
-		defer func() { _ = conn.Close() }()
+	return acceptOnce(t, func(conn net.Conn) {
 		buf := make([]byte, 64<<10)
 		for {
 			n, err := conn.Read(buf)
@@ -457,8 +427,7 @@ func sinkServer(t *testing.T) (string, *sink) {
 				return
 			}
 		}
-	}()
-	return ln.Addr().String(), s
+	}), s
 }
 
 func waitBytes(t *testing.T, s *sink, want int64) {

@@ -6,8 +6,7 @@ import (
 )
 
 func TestInstallCACertWritesCertAndUpdates(t *testing.T) {
-	path := sockPath(t)
-	fake := serveFakeSilkd(t, path)
+	fake, path := newFakeSilkd(t)
 	if err := newTestEngine().InstallCACert(t.Context(), path, []byte("CERT-PEM")); err != nil {
 		t.Fatalf("InstallCACert: %v", err)
 	}
@@ -38,8 +37,7 @@ func TestInstallCACertWritesCertAndUpdates(t *testing.T) {
 }
 
 func TestInstallCACertNonzeroExitFails(t *testing.T) {
-	path := sockPath(t)
-	fake := serveFakeSilkd(t, path)
+	fake, path := newFakeSilkd(t)
 	fake.set(func(f *fakeSilkd) { f.execCode = 3 })
 	err := newTestEngine().InstallCACert(t.Context(), path, []byte("x"))
 	if err == nil || !strings.Contains(err.Error(), "exit code 3") {
@@ -48,8 +46,7 @@ func TestInstallCACertNonzeroExitFails(t *testing.T) {
 }
 
 func TestInstallCACertWriteErrorFrameFails(t *testing.T) {
-	path := sockPath(t)
-	fake := serveFakeSilkd(t, path)
+	fake, path := newFakeSilkd(t)
 	fake.set(func(f *fakeSilkd) { f.writeErr = "disk full" })
 	err := newTestEngine().InstallCACert(t.Context(), path, []byte("x"))
 	if err == nil || !strings.Contains(err.Error(), "disk full") {

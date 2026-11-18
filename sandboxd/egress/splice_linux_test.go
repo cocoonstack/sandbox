@@ -22,35 +22,13 @@ func TestSpliceCopiesThroughADoorConnInTheKernel(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			const total = 16 << 20
-			uln, err := net.Listen("unix", filepath.Join(t.TempDir(), "door"))
-			if err != nil {
-				t.Fatalf("listen unix: %v", err)
-			}
-			t.Cleanup(func() { _ = uln.Close() })
-			tln, err := net.Listen("tcp", "127.0.0.1:0")
-			if err != nil {
-				t.Fatalf("listen tcp: %v", err)
-			}
-			t.Cleanup(func() { _ = tln.Close() })
 			buffered := make(chan struct{}, 2)
-			go func() {
-				c, acceptErr := tln.Accept()
-				if acceptErr != nil {
-					return
-				}
-				defer func() { _ = c.Close() }()
+			guestDone := make(chan struct{})
+			door, upstream := spliceEnds(t, func(c net.Conn) {
 				pump(c, total, buffered)
 				_ = c.(*net.TCPConn).CloseWrite()
-			}()
-			guestDone := make(chan struct{})
-			go func() {
+			}, func(c net.Conn) {
 				defer close(guestDone)
-				c, dialErr := net.Dial("unix", uln.Addr().String())
-				if dialErr != nil {
-					t.Errorf("guest dial: %v", dialErr)
-					_ = uln.Close()
-					return
-				}
 				defer func() { _ = c.Close() }()
 				buf := make([]byte, 64<<10)
 				buffered <- struct{}{}
@@ -63,17 +41,7 @@ func TestSpliceCopiesThroughADoorConnInTheKernel(t *testing.T) {
 						return
 					}
 				}
-			}()
-			guest, err := uln.Accept()
-			if err != nil {
-				t.Fatalf("accept: %v", err)
-			}
-			upstream, err := net.Dial("tcp", tln.Addr().String())
-			if err != nil {
-				t.Fatalf("dial: %v", err)
-			}
-			door := doorShaped{guest.(*net.UnixConn)}
-			defer func() { _ = door.Close(); _ = upstream.Close() }()
+			})
 
 			p := New(Policy{}, nil, nil, fixedDial(""), nil, nil)
 			if tt.noSplice {
@@ -99,43 +67,10 @@ func TestSpliceCopiesThroughADoorConnInTheKernel(t *testing.T) {
 
 func TestKickResumesASpliceWithoutLosingAByte(t *testing.T) {
 	const total = 32 << 20
-	uln, err := net.Listen("unix", filepath.Join(t.TempDir(), "door"))
-	if err != nil {
-		t.Fatalf("listen unix: %v", err)
-	}
-	t.Cleanup(func() { _ = uln.Close() })
-	tln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("listen tcp: %v", err)
-	}
-	t.Cleanup(func() { _ = tln.Close() })
-	upHash := make(chan [32]byte, 1)
-	go func() {
-		c, acceptErr := tln.Accept()
-		if acceptErr != nil {
-			return
-		}
-		upHash <- echoHash(c, total)
-	}()
-	downHash := make(chan [32]byte, 1)
-	go func() {
-		c, dialErr := net.Dial("unix", uln.Addr().String())
-		if dialErr != nil {
-			t.Errorf("guest dial: %v", dialErr)
-			return
-		}
-		downHash <- echoHash(c, total)
-	}()
-	guest, err := uln.Accept()
-	if err != nil {
-		t.Fatalf("accept: %v", err)
-	}
-	upstream, err := net.Dial("tcp", tln.Addr().String())
-	if err != nil {
-		t.Fatalf("dial: %v", err)
-	}
-	door := doorShaped{guest.(*net.UnixConn)}
-	defer func() { _ = door.Close(); _ = upstream.Close() }()
+	upHash, downHash := make(chan [32]byte, 1), make(chan [32]byte, 1)
+	door, upstream := spliceEnds(t,
+		func(c net.Conn) { upHash <- echoHash(c, total) },
+		func(c net.Conn) { downHash <- echoHash(c, total) })
 
 	p := New(Policy{}, nil, nil, fixedDial(""), nil, nil)
 	tr := p.begin(Event{}, door, upstream)
@@ -167,6 +102,36 @@ func TestKickResumesASpliceWithoutLosingAByte(t *testing.T) {
 type doorShaped struct{ *net.UnixConn }
 
 func (c doorShaped) NetConn() net.Conn { return c.UnixConn }
+
+func spliceEnds(t *testing.T, serve, guest func(net.Conn)) (doorShaped, net.Conn) {
+	t.Helper()
+	uln, err := net.Listen("unix", filepath.Join(t.TempDir(), "door"))
+	if err != nil {
+		t.Fatalf("listen unix: %v", err)
+	}
+	t.Cleanup(func() { _ = uln.Close() })
+	origin := acceptOnce(t, serve)
+	go func() {
+		c, dialErr := net.Dial("unix", uln.Addr().String())
+		if dialErr != nil {
+			t.Errorf("guest dial: %v", dialErr)
+			_ = uln.Close()
+			return
+		}
+		guest(c)
+	}()
+	accepted, err := uln.Accept()
+	if err != nil {
+		t.Fatalf("accept: %v", err)
+	}
+	upstream, err := net.Dial("tcp", origin)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	door := doorShaped{accepted.(*net.UnixConn)}
+	t.Cleanup(func() { _ = door.Close(); _ = upstream.Close() })
+	return door, upstream
+}
 
 func echoHash(c net.Conn, total int64) [32]byte {
 	defer func() { _ = c.Close() }()

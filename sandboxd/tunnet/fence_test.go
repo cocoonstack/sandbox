@@ -10,16 +10,12 @@ import (
 
 func TestFenceStopsPacketsAndARPAndResumesWithoutResettingQuota(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		u, r := newRouter(t)
 		var fenced atomic.Bool
 		used := new(atomic.Int64)
-		r.Arm(Claim{
+		u, r, guest := armedGuest(t, Claim{
 			ID: "c1", Addr: claimAddr, Fenced: fenced.Load, Used: used,
 			Allow: func(netip.Addr, uint16) bool { return true },
 		})
-		u.sent(t)
-		guest := serve(t, r, claimAddr)
-		guestHello(t, guest)
 		pkt := frame(ProtoTCP, GuestAddr, remote, false)
 		sendFrame(t, guest, pkt)
 		u.sent(t)
