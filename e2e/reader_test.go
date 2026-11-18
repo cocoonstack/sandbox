@@ -22,12 +22,8 @@ func TestReaderServesAHibernatedClaimUntilAWriteWakesIt(t *testing.T) {
 		t.Fatalf("setup: %v", err)
 	}
 	st.eng.setReaderRoot(root)
-	sb, err := st.client.New(t.Context(), testKey.Template)
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	defer sb.Close()
-	if err = sb.Hibernate(t.Context()); err != nil {
+	sb := st.claim(t, testKey.Template)
+	if err := sb.Hibernate(t.Context()); err != nil {
 		t.Fatalf("Hibernate: %v", err)
 	}
 	waitFor(t, func() bool {

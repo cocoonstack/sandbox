@@ -38,7 +38,7 @@ func TestSocksAllowTunnels(t *testing.T) {
 }
 
 func TestSocksDecisionMirrorsConnect(t *testing.T) {
-	ca, _ := testCA(t)
+	ca := testCA(t)
 	tests := []struct {
 		name      string
 		policy    Policy

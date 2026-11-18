@@ -20,7 +20,7 @@ import (
 )
 
 func TestInterceptLeafCaches(t *testing.T) {
-	ca, _ := testCA(t)
+	ca := testCA(t)
 	p := New(Policy{}, nil, ca, fixedDial("127.0.0.1:1"), nil, nil)
 	a, err := p.leafFor("example.com")
 	if err != nil {
@@ -36,7 +36,7 @@ func TestInterceptLeafCaches(t *testing.T) {
 }
 
 func TestInterceptLeafClampedToTheIntermediateStaysCached(t *testing.T) {
-	ca, _ := testCA(t)
+	ca := testCA(t)
 	ca.interCert.NotAfter = time.Now().Add(time.Hour).Truncate(time.Second)
 	p := New(Policy{}, nil, ca, fixedDial("127.0.0.1:1"), nil, nil)
 	a, err := p.leafFor("example.com")
@@ -53,7 +53,7 @@ func TestInterceptLeafClampedToTheIntermediateStaysCached(t *testing.T) {
 }
 
 func TestInterceptLeafCacheBounded(t *testing.T) {
-	ca, _ := testCA(t)
+	ca := testCA(t)
 	p := New(Policy{}, nil, ca, fixedDial("127.0.0.1:1"), nil, nil)
 	for i := range maxLeaves + 50 {
 		if _, err := p.leafFor(fmt.Sprintf("h%d.example.com", i)); err != nil {
@@ -302,7 +302,7 @@ func TestAnInjectRuleInterceptsOnlyForAClaimWithACredentialForTheHost(t *testing
 }
 
 func TestAnInjectRuleInterceptsOnlyAProxyDoorTunnelWithACredential(t *testing.T) {
-	ca, _ := testCA(t)
+	ca := testCA(t)
 	creds := credSecrets{creds: map[string][]Credential{
 		"empty.test": {{Name: "E", Header: "X-Key", Value: ""}},
 		"graph.test": {{Name: "G", Query: "access_token", Value: "g", Placeholder: "@G@"}},
@@ -330,7 +330,7 @@ func TestAnInjectRuleInterceptsOnlyAProxyDoorTunnelWithACredential(t *testing.T)
 }
 
 func TestAnAlwaysRuleOutranksAnEarlierInjectRule(t *testing.T) {
-	ca, _ := testCA(t)
+	ca := testCA(t)
 	policy := Policy{Allow: []Rule{{Host: "*", Intercept: InterceptInject}, {Host: "api.github.com", Methods: []string{"GET"}, Secret: "gh", Intercept: InterceptAlways}}}
 	if _, intercept := New(policy, fakeSecrets{}, ca, fixedDial(""), nil, nil).tunnelDecision("api.github.com", 443, true); !intercept {
 		t.Error("a claim without a credential spliced a host an always rule intercepts")
@@ -538,7 +538,7 @@ func TestInterceptStreamsAnEventStreamAsItArrives(t *testing.T) {
 	upstream := httptest.NewTLSServer(sseHandler(release))
 	defer upstream.Close()
 	defer close(release)
-	ca, _ := testCA(t)
+	ca := testCA(t)
 	p := New(Policy{Allow: []Rule{{Host: "example.com", Intercept: InterceptAlways}}}, nil, ca, fixedDial(upstream.Listener.Addr().String()), nil, nil)
 	guestRoots := rootsFor(t, ca)
 	front := serveTrusting(t, p, upstream)
@@ -565,7 +565,7 @@ func TestAnUpstreamDyingMidBodyTruncatesTheInterceptedResponse(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			upstream := httptest.NewTLSServer(dyingMidBody(tt.length))
 			defer upstream.Close()
-			ca, _ := testCA(t)
+			ca := testCA(t)
 			p := New(Policy{Allow: []Rule{{Host: "example.com", Intercept: InterceptAlways}}}, tt.secrets, ca, fixedDial(upstream.Listener.Addr().String()), nil, nil)
 			guestRoots := rootsFor(t, ca)
 			tc := connectTLS(t, serveTrusting(t, p, upstream).Listener.Addr().String(), "example.com:443", "example.com", guestRoots)
@@ -704,7 +704,7 @@ func interceptProxySecrets(t *testing.T, policy Policy, secrets Secrets, events 
 	}))
 	t.Cleanup(upstream.Close)
 
-	ca, _ := testCA(t)
+	ca := testCA(t)
 	audit := func(ev Event) {
 		if events != nil {
 			events <- ev

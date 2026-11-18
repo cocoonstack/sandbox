@@ -3,14 +3,13 @@ package sandbox
 import (
 	"encoding/json/v2"
 	"net/http"
-	"net/http/httptest"
 	"sync"
 	"testing"
 )
 
 func TestSetPools(t *testing.T) {
 	var got poolUpdate
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts := serveFunc(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPut || r.URL.Path != "/v1/pools" {
 			t.Errorf("got %s %s, want PUT /v1/pools", r.Method, r.URL.Path)
 		}
@@ -19,8 +18,7 @@ func TestSetPools(t *testing.T) {
 		}
 		_ = json.UnmarshalRead(r.Body, &got)
 		_ = json.MarshalWrite(w, NodeInfo{Claimed: 2})
-	}))
-	t.Cleanup(ts.Close)
+	})
 
 	c := testClient(t, ts, WithAPIToken("root"))
 	info, err := c.SetPools(t.Context(), []PoolSpec{{Template: "rt:24.04", Net: NetNone, Size: Small, Warm: 3}})
@@ -46,18 +44,16 @@ func TestSetPoolsClusterFansOut(t *testing.T) {
 		mu.Unlock()
 		_ = json.MarshalWrite(w, NodeInfo{})
 	}
-	peer := httptest.NewServer(http.HandlerFunc(pools))
-	t.Cleanup(peer.Close)
+	peer := serveFunc(t, pools)
 	peerAddr := addrOf(peer)
 
-	entry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	entry := serveFunc(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/v1/peers" {
 			_ = json.MarshalWrite(w, map[string][]string{"peers": {peerAddr}})
 			return
 		}
 		pools(w, r)
-	}))
-	t.Cleanup(entry.Close)
+	})
 
 	c := testClient(t, entry, WithAPIToken("root"))
 	results, err := c.SetPoolsCluster(t.Context(), []PoolSpec{{Template: "rt:24.04", Net: NetNone, Size: Small, Warm: 5}})
@@ -86,15 +82,14 @@ func TestSetPoolsClusterFansOut(t *testing.T) {
 
 func TestSetPoolsClusterPeerDiscoveryFails(t *testing.T) {
 	var applied int
-	entry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	entry := serveFunc(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/v1/peers" {
 			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
 		applied++
 		_ = json.MarshalWrite(w, NodeInfo{})
-	}))
-	t.Cleanup(entry.Close)
+	})
 
 	c := testClient(t, entry, WithAPIToken("root"))
 	results, err := c.SetPoolsCluster(t.Context(), []PoolSpec{{Template: "rt:24.04", Net: NetNone, Size: Small, Warm: 5}})

@@ -155,14 +155,7 @@ func TestAReplaceUnderBusyMaintenanceKeepsLiveVMsWithinTargetPlusTheRefillBudget
 		m.refillOnce(t.Context())
 		waitWarm(t, m, warm)
 		old := warmNames(m)
-		for range cap(m.maintSem) {
-			m.maintSem <- struct{}{}
-		}
-		defer func() {
-			for range cap(m.maintSem) {
-				<-m.maintSem
-			}
-		}()
+		defer holdMaint(m)()
 		stall := make(chan struct{})
 		limit := warm + cap(m.refillSem) + cap(m.probeSem)
 

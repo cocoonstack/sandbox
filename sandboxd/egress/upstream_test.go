@@ -410,18 +410,8 @@ func assertEcho(t *testing.T, conn net.Conn) {
 
 func fakeConnectProxy(t *testing.T, status int, greeting string) (string, <-chan string) {
 	t.Helper()
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("listen: %v", err)
-	}
-	t.Cleanup(func() { _ = ln.Close() })
 	seen := make(chan string, 1)
-	go func() {
-		conn, err := ln.Accept()
-		if err != nil {
-			return
-		}
-		defer func() { _ = conn.Close() }()
+	return acceptOnce(t, func(conn net.Conn) {
 		br := bufio.NewReader(conn)
 		req, err := http.ReadRequest(br)
 		if err != nil {
@@ -432,24 +422,13 @@ func fakeConnectProxy(t *testing.T, status int, greeting string) (string, <-chan
 		if status == http.StatusOK {
 			_, _ = io.Copy(conn, br)
 		}
-	}()
-	return ln.Addr().String(), seen
+	}), seen
 }
 
 func fakeSOCKS5(t *testing.T) (string, <-chan string) {
 	t.Helper()
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("listen: %v", err)
-	}
-	t.Cleanup(func() { _ = ln.Close() })
 	seen := make(chan string, 1)
-	go func() {
-		conn, err := ln.Accept()
-		if err != nil {
-			return
-		}
-		defer func() { _ = conn.Close() }()
+	return acceptOnce(t, func(conn net.Conn) {
 		br := bufio.NewReader(conn)
 		read := func(n int) []byte {
 			b := make([]byte, n)
@@ -474,6 +453,5 @@ func fakeSOCKS5(t *testing.T) (string, <-chan string) {
 		seen <- fmt.Sprintf("%s:%s %s", user, pass, net.JoinHostPort(host, fmt.Sprint(port)))
 		_, _ = conn.Write([]byte{5, 0, 0, 1, 0, 0, 0, 0, 0, 0})
 		_, _ = io.Copy(conn, br)
-	}()
-	return ln.Addr().String(), seen
+	}), seen
 }

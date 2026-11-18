@@ -123,11 +123,7 @@ func TestRouterAnswersARPOnlyForArmedClaims(t *testing.T) {
 
 func TestRouterSegmentsGSOIntoOneBatch(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		u, r := newRouter(t)
-		r.Arm(Claim{ID: "c1", Addr: claimAddr, Allow: func(netip.Addr, uint16) bool { return true }})
-		u.sent(t)
-		guest := serve(t, r, claimAddr)
-		guestHello(t, guest)
+		u, _, guest := armedGuest(t, Claim{ID: "c1", Addr: claimAddr, Allow: func(netip.Addr, uint16) bool { return true }})
 		sendFrame(t, guest, gsoFrame(ProtoTCP, 4000, 1400))
 		for i := range 3 {
 			inner, _, _ := u.sent(t)
@@ -173,12 +169,8 @@ func TestRouterRefusesUnarmedAndDisabledAndDisarmEndsStream(t *testing.T) {
 
 func TestRouterQuotaStopsTraffic(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		u, r := newRouter(t)
 		used := new(atomic.Int64)
-		r.Arm(Claim{ID: "c1", Addr: claimAddr, Used: used, Limits: Limits{QuotaBytes: 100}, Allow: func(netip.Addr, uint16) bool { return true }})
-		u.sent(t)
-		guest := serve(t, r, claimAddr)
-		guestHello(t, guest)
+		u, r, guest := armedGuest(t, Claim{ID: "c1", Addr: claimAddr, Used: used, Limits: Limits{QuotaBytes: 100}, Allow: func(netip.Addr, uint16) bool { return true }})
 		f := frame(ProtoTCP, GuestAddr, remote, false)
 		for range 3 {
 			sendFrame(t, guest, f)
@@ -220,11 +212,7 @@ func TestRouterChargesNothingForAFrameWithNoExit(t *testing.T) {
 
 func TestDeliverCoalescesInOrderSegmentsIntoOneGSOFrame(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		u, r := newRouter(t)
-		r.Arm(Claim{ID: "c1", Addr: claimAddr, Allow: func(netip.Addr, uint16) bool { return true }})
-		u.sent(t)
-		guest := serve(t, r, claimAddr)
-		guestHello(t, guest)
+		u, _, guest := armedGuest(t, Claim{ID: "c1", Addr: claimAddr, Allow: func(netip.Addr, uint16) bool { return true }})
 		sendFrame(t, guest, frame(ProtoTCP, GuestAddr, remote, false))
 		u.sent(t)
 		bad := dataSegment(5000, 1000)
@@ -286,11 +274,7 @@ func TestRouterChargesSegmentsAndRefusesOversizedPackets(t *testing.T) {
 
 func TestRouterLimitsOutliveAReconnect(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		u, r := newRouter(t)
-		r.Arm(Claim{ID: "c1", Addr: claimAddr, Limits: Limits{NewFlowsPerSecond: 0.01}, Allow: func(netip.Addr, uint16) bool { return true }})
-		u.sent(t)
-		first := serve(t, r, claimAddr)
-		guestHello(t, first)
+		u, r, first := armedGuest(t, Claim{ID: "c1", Addr: claimAddr, Limits: Limits{NewFlowsPerSecond: 0.01}, Allow: func(netip.Addr, uint16) bool { return true }})
 		sendFrame(t, first, frame(ProtoTCP, GuestAddr, remote, false))
 		u.sent(t)
 		_ = first.Close()
@@ -308,11 +292,7 @@ func TestRouterLimitsOutliveAReconnect(t *testing.T) {
 
 func TestRouterHandsAnICMPErrorBackWithTheQuotedGuestAddress(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		u, r := newRouter(t)
-		r.Arm(Claim{ID: "c1", Addr: claimAddr, Allow: func(netip.Addr, uint16) bool { return true }})
-		u.sent(t)
-		guest := serve(t, r, claimAddr)
-		guestHello(t, guest)
+		u, _, guest := armedGuest(t, Claim{ID: "c1", Addr: claimAddr, Allow: func(netip.Addr, uint16) bool { return true }})
 		sendFrame(t, guest, frame(ProtoTCP, GuestAddr, remote, false))
 		inner, _, _ := u.sent(t)
 		u.inject(t, append(appendHeader(nil, 7, MAC(claimAddr), exitMAC, etherIPv4), unreachable(remote, claimAddr, 4, inner[:28])...))
@@ -326,12 +306,8 @@ func TestRouterHandsAnICMPErrorBackWithTheQuotedGuestAddress(t *testing.T) {
 
 func TestRouterResumesAStreamOpenedBeforeTheArmButRefusesAnOpener(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		u, r := newRouter(t)
 		var asked atomic.Int32
-		r.Arm(Claim{ID: "c1", Addr: claimAddr, Allow: func(_ netip.Addr, port uint16) bool { asked.Add(1); return port == 443 }})
-		u.sent(t)
-		guest := serve(t, r, claimAddr)
-		guestHello(t, guest)
+		u, r, guest := armedGuest(t, Claim{ID: "c1", Addr: claimAddr, Allow: func(_ netip.Addr, port uint16) bool { asked.Add(1); return port == 443 }})
 		synctest.Wait()
 		if r.claims[claimAddr].live() == nil {
 			t.Fatal("the armed claim's stream never went live")
@@ -355,11 +331,7 @@ func TestRouterResumesAStreamOpenedBeforeTheArmButRefusesAnOpener(t *testing.T) 
 
 func TestRouterKeepsTheMTUAStreamWasToldUntilItsNextHello(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		u, r := newRouter(t)
-		r.Arm(Claim{ID: "c1", Addr: claimAddr, Allow: func(netip.Addr, uint16) bool { return true }})
-		u.sent(t)
-		guest := serve(t, r, claimAddr)
-		guestHello(t, guest)
+		u, r, guest := armedGuest(t, Claim{ID: "c1", Addr: claimAddr, Allow: func(netip.Addr, uint16) bool { return true }})
 		r.Reload(testOverlay(1410))
 		u.sent(t)
 		full := gsoFrame(ProtoUDP, 1412, 1412)
@@ -382,17 +354,13 @@ func TestRouterRefundsOnlyTheUnreportedChargeOfAFrameTheUnderlayDidNotSend(t *te
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
-				u, r := newRouter(t)
 				used := new(atomic.Int64)
 				var mu sync.Mutex
 				var records []FlowRecord
-				r.Arm(Claim{
+				u, r, guest := armedGuest(t, Claim{
 					ID: "c1", Addr: claimAddr, Used: used, Every: tt.every, Allow: func(netip.Addr, uint16) bool { return true },
 					Record: func(fr FlowRecord) { mu.Lock(); records = append(records, fr); mu.Unlock() },
 				})
-				u.sent(t)
-				guest := serve(t, r, claimAddr)
-				guestHello(t, guest)
 				if tt.swept {
 					u.onFail = func() { r.sweep(time.Now().Add(time.Second), false) }
 				}
@@ -423,12 +391,8 @@ func TestRouterRefundsOnlyTheUnreportedChargeOfAFrameTheUnderlayDidNotSend(t *te
 
 func TestRouterKeepsTheChargeOfAFrameTheUnderlayPartlySent(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		u, r := newRouter(t)
 		used := new(atomic.Int64)
-		r.Arm(Claim{ID: "c1", Addr: claimAddr, Used: used, Allow: func(netip.Addr, uint16) bool { return true }})
-		u.sent(t)
-		guest := serve(t, r, claimAddr)
-		guestHello(t, guest)
+		u, _, guest := armedGuest(t, Claim{ID: "c1", Addr: claimAddr, Used: used, Allow: func(netip.Addr, uint16) bool { return true }})
 		u.failRest.Store(true)
 		sendFrame(t, guest, gsoFrame(ProtoTCP, 4000, 1400))
 		u.sent(t)
@@ -441,16 +405,12 @@ func TestRouterKeepsTheChargeOfAFrameTheUnderlayPartlySent(t *testing.T) {
 
 func TestEndFlowsRecordsLiveFlowsWithIPBytes(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		u, r := newRouter(t)
 		var mu sync.Mutex
 		var records []FlowRecord
-		r.Arm(Claim{
+		u, r, guest := armedGuest(t, Claim{
 			ID: "c1", Addr: claimAddr, Allow: func(netip.Addr, uint16) bool { return true },
 			Record: func(fr FlowRecord) { mu.Lock(); records = append(records, fr); mu.Unlock() },
 		})
-		u.sent(t)
-		guest := serve(t, r, claimAddr)
-		guestHello(t, guest)
 		out := frame(ProtoTCP, GuestAddr, remote, false)
 		sendFrame(t, guest, out)
 		u.sent(t)
@@ -492,11 +452,7 @@ func TestDeliverMergesOnlyForAGuestThatOfferedTSO(t *testing.T) {
 
 func TestRouterPointsAGuestICMPErrorAtTheClaimAddress(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		u, r := newRouter(t)
-		r.Arm(Claim{ID: "c1", Addr: claimAddr, Allow: func(netip.Addr, uint16) bool { return true }})
-		u.sent(t)
-		guest := serve(t, r, claimAddr)
-		guestHello(t, guest)
+		u, _, guest := armedGuest(t, Claim{ID: "c1", Addr: claimAddr, Allow: func(netip.Addr, uint16) bool { return true }})
 		quoted := frame(ProtoUDP, remote, GuestAddr, false)[VnetHdrLen:][:28]
 		sendFrame(t, guest, append(make([]byte, VnetHdrLen), unreachable(GuestAddr, remote, 3, quoted)...))
 		inner, _, _ := u.sent(t)
@@ -508,11 +464,7 @@ func TestRouterPointsAGuestICMPErrorAtTheClaimAddress(t *testing.T) {
 
 func TestRouterForwardsFramesSplitAcrossWrites(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		u, r := newRouter(t)
-		r.Arm(Claim{ID: "c1", Addr: claimAddr, Allow: func(netip.Addr, uint16) bool { return true }})
-		u.sent(t)
-		guest := serve(t, r, claimAddr)
-		guestHello(t, guest)
+		u, _, guest := armedGuest(t, Claim{ID: "c1", Addr: claimAddr, Allow: func(netip.Addr, uint16) bool { return true }})
 		var stream []byte
 		for i := range uint16(3) {
 			f := frame(ProtoTCP, GuestAddr, remote, true)
@@ -536,16 +488,12 @@ func TestRouterForwardsFramesSplitAcrossWrites(t *testing.T) {
 
 func TestRouterRecordsAnIdleFlowOfAClaimWhoseStreamEnded(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		u, r := newRouter(t)
 		var records []FlowRecord
 		var mu sync.Mutex
-		r.Arm(Claim{
+		u, _, guest := armedGuest(t, Claim{
 			ID: "c1", Addr: claimAddr, Allow: func(netip.Addr, uint16) bool { return true },
 			Record: func(fr FlowRecord) { mu.Lock(); records = append(records, fr); mu.Unlock() },
 		})
-		u.sent(t)
-		guest := serve(t, r, claimAddr)
-		guestHello(t, guest)
 		sendFrame(t, guest, frame(ProtoUDP, GuestAddr, remote, false))
 		u.sent(t)
 		_ = guest.Close()
@@ -570,6 +518,16 @@ func newRouter(t *testing.T) (*fakeUnder, *Router) {
 
 func testOverlay(mtu uint16) *Overlay {
 	return &Overlay{Subnet: subnet, VNI: 7, Port: 4789, MTU: mtu, Exits: map[string]Exit{"default": {VTEP: vtep, MAC: exitMAC}}}
+}
+
+func armedGuest(t *testing.T, c Claim) (*fakeUnder, *Router, net.Conn) {
+	t.Helper()
+	u, r := newRouter(t)
+	r.Arm(c)
+	u.sent(t)
+	guest := serve(t, r, c.Addr)
+	guestHello(t, guest)
+	return u, r, guest
 }
 
 func serve(t *testing.T, r *Router, addr netip.Addr) net.Conn {

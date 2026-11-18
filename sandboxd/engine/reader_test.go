@@ -9,8 +9,7 @@ import (
 )
 
 func TestStartReaderOverlaysTheAttachedDiskOnTheGuestsOwnLayers(t *testing.T) {
-	sock := sockPath(t)
-	fake := serveFakeSilkd(t, sock)
+	fake, sock := newFakeSilkd(t)
 	configureReaderDevices(fake)
 	e := newTestEngine()
 
@@ -50,8 +49,7 @@ func TestStartReaderOverlaysTheAttachedDiskOnTheGuestsOwnLayers(t *testing.T) {
 }
 
 func TestStartReaderFailsFastWhenTheClaimImageHasNoSilkd(t *testing.T) {
-	sock := sockPath(t)
-	fake := serveFakeSilkd(t, sock)
+	fake, sock := newFakeSilkd(t)
 	configureReaderDevices(fake)
 	fake.set(func(f *fakeSilkd) { f.execFailAt, f.execCode = 9, 1 })
 
@@ -67,8 +65,7 @@ func TestStartReaderFailsFastWhenTheClaimImageHasNoSilkd(t *testing.T) {
 }
 
 func TestStartReaderStopsAtTheFirstFailedMount(t *testing.T) {
-	sock := sockPath(t)
-	fake := serveFakeSilkd(t, sock)
+	fake, sock := newFakeSilkd(t)
 	configureReaderDevices(fake)
 	fake.set(func(f *fakeSilkd) { f.execFailFrom, f.execCode = 6, 32 })
 
@@ -84,8 +81,7 @@ func TestStartReaderStopsAtTheFirstFailedMount(t *testing.T) {
 }
 
 func TestStartReaderRefusesAGuestWithoutLayers(t *testing.T) {
-	sock := sockPath(t)
-	fake := serveFakeSilkd(t, sock)
+	fake, sock := newFakeSilkd(t)
 	configureReaderDevices(fake)
 	fake.set(func(f *fakeSilkd) { f.serial["/proc/cmdline"] = []byte("console=hvc0 cocoon.cow=cow\n") })
 
@@ -120,8 +116,7 @@ func TestCmdlineLayersReadsTheLastParamInOrder(t *testing.T) {
 }
 
 func TestDialReaderConnectsToTheViewPort(t *testing.T) {
-	sock := sockPath(t)
-	fake := serveFakeSilkd(t, sock)
+	fake, sock := newFakeSilkd(t)
 	conn, err := newTestEngine().DialReader(t.Context(), sock)
 	if err != nil {
 		t.Fatalf("DialReader: %v", err)

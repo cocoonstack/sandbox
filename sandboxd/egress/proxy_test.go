@@ -895,45 +895,37 @@ func readStatus(t *testing.T, br *bufio.Reader) string {
 	return strings.TrimSuffix(line, "\r\n")
 }
 
-func echoServer(t *testing.T) string {
-	t.Helper()
+func acceptOnce(tb testing.TB, serve func(net.Conn)) string {
+	tb.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		t.Fatalf("listen echo: %v", err)
+		tb.Fatalf("listen: %v", err)
 	}
-	t.Cleanup(func() { _ = ln.Close() })
+	tb.Cleanup(func() { _ = ln.Close() })
 	go func() {
 		conn, err := ln.Accept()
 		if err != nil {
 			return
 		}
 		defer func() { _ = conn.Close() }()
-		_, _ = io.Copy(conn, conn)
+		serve(conn)
 	}()
 	return ln.Addr().String()
 }
 
+func echoServer(t *testing.T) string {
+	t.Helper()
+	return acceptOnce(t, func(conn net.Conn) { _, _ = io.Copy(conn, conn) })
+}
+
 func silentServer(t *testing.T) string {
 	t.Helper()
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("listen silent: %v", err)
-	}
 	done := make(chan struct{})
-	t.Cleanup(func() {
-		close(done)
-		_ = ln.Close()
-	})
-	go func() {
-		conn, err := ln.Accept()
-		if err != nil {
-			return
-		}
+	t.Cleanup(func() { close(done) })
+	return acceptOnce(t, func(conn net.Conn) {
 		_, _ = io.Copy(io.Discard, conn)
 		<-done
-		_ = conn.Close()
-	}()
-	return ln.Addr().String()
+	})
 }
 
 func recvEvent(t *testing.T, events <-chan Event) Event {

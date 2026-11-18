@@ -29,11 +29,8 @@ func TestLoadCARejectsRootAsIntermediate(t *testing.T) {
 }
 
 func TestSignLeafChainsToRoot(t *testing.T) {
-	ca, rootPEM := testCA(t)
-	roots := x509.NewCertPool()
-	if !roots.AppendCertsFromPEM(rootPEM) {
-		t.Fatal("append root")
-	}
+	ca := testCA(t)
+	roots := rootsFor(t, ca)
 	for _, host := range []string{"api.github.com", "192.0.2.10"} {
 		t.Run(host, func(t *testing.T) {
 			crt, err := ca.signLeaf(host)
@@ -172,7 +169,7 @@ func testIntermediate(tb testing.TB, rootCert, rootKey []byte, name string) (cer
 	return cert, key
 }
 
-func testCA(tb testing.TB) (*CA, []byte) {
+func testCA(tb testing.TB) *CA {
 	tb.Helper()
 	rootCert, rootKey := testRoot(tb, "test root")
 	interCert, interKey := testIntermediate(tb, rootCert, rootKey, "node1")
@@ -180,11 +177,5 @@ func testCA(tb testing.TB) (*CA, []byte) {
 	if err != nil {
 		tb.Fatalf("load ca: %v", err)
 	}
-	return ca, rootCert
-}
-
-func testCAOnly(tb testing.TB) *CA {
-	tb.Helper()
-	ca, _ := testCA(tb)
 	return ca
 }

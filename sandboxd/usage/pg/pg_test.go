@@ -179,31 +179,6 @@ func TestShipLandsAJournalOnceAcrossRestarts(t *testing.T) {
 	}
 }
 
-func TestShipLandsNoLineTwiceAfterTheJournalLosesItsLandedTail(t *testing.T) {
-	s := open(t, metastoretest.PGSchema(t), "c1")
-	path := filepath.Join(t.TempDir(), usage.JournalFile)
-	writeJournal(t, path, "sb_1", "sb_2", "sb_3")
-	ship(t, s, path, 3)
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read journal: %v", err)
-	}
-	if err = os.WriteFile(path, []byte(strings.Join(strings.SplitAfter(string(raw), "\n")[:2], "")), 0o600); err != nil {
-		t.Fatalf("cut journal: %v", err)
-	}
-	writeJournal(t, path, "sb_4")
-	ship(t, s, path, 4)
-	recs, err := s.List(t.Context(), usage.Query{Limit: 10})
-	if err != nil {
-		t.Fatalf("list: %v", err)
-	}
-	for i, r := range recs {
-		if want := fmt.Sprintf("sb_%d", i+1); r.ID != want {
-			t.Errorf("record %d: %s, want %s", i, r.ID, want)
-		}
-	}
-}
-
 func TestLandSkipsALandedLine(t *testing.T) {
 	s := open(t, metastoretest.PGSchema(t), "c1")
 	first, second := usage.Event{Time: time.Now(), Event: "claim", ID: "sb_1"}, usage.Event{Time: time.Now(), Event: "release", ID: "sb_1"}

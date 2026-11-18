@@ -8,8 +8,7 @@ import (
 )
 
 func TestWriteInstanceMetadataReplacesTheGuestDocument(t *testing.T) {
-	path := sockPath(t)
-	fake := serveFakeSilkd(t, path)
+	fake, path := newFakeSilkd(t)
 	doc := []byte(`{"region":"local"}`)
 	if err := newTestEngine().WriteInstanceMetadata(t.Context(), path, doc); err != nil {
 		t.Fatalf("WriteInstanceMetadata: %v", err)
@@ -22,8 +21,7 @@ func TestWriteInstanceMetadataReplacesTheGuestDocument(t *testing.T) {
 }
 
 func TestWriteInstanceMetadataReportsAGuestWithoutAResponder(t *testing.T) {
-	path := sockPath(t)
-	fake := serveFakeSilkd(t, path)
+	fake, path := newFakeSilkd(t)
 	fake.set(func(f *fakeSilkd) { f.writeErr, f.writeKind = "create: No such file or directory", wire.KindNotFound })
 	e := newTestEngine()
 	if err := e.WriteInstanceMetadata(t.Context(), path, []byte("{}")); !errors.Is(err, ErrNoInstanceMetadata) {

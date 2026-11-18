@@ -16,7 +16,7 @@ import (
 const benchKey = "EAABsbCS1iHgBAKZBZCx9ZAZBe7ZAZCYqZBfZC0ZD"
 
 func BenchmarkSignLeaf(b *testing.B) {
-	ca := testCAOnly(b)
+	ca := testCA(b)
 	for b.Loop() {
 		if _, err := ca.signLeaf("bench.example.com"); err != nil {
 			b.Fatalf("sign: %v", err)
@@ -83,7 +83,7 @@ func BenchmarkSplicedHandshake(b *testing.B) {
 }
 
 func BenchmarkTunnelDecision(b *testing.B) {
-	ca := testCAOnly(b)
+	ca := testCA(b)
 	creds := map[string][]Credential{"api.example.com": {{Name: "KEY", Header: "X-Key", Value: "k"}}}
 	for _, arm := range []struct {
 		name string
@@ -176,7 +176,7 @@ func benchFront(b *testing.B, mode InterceptMode) (proxyAddr string, roots *x509
 	rule := Rule{Host: "example.com", Intercept: mode}
 	var ca *CA
 	if mode == InterceptAlways {
-		ca = testCAOnly(b)
+		ca = testCA(b)
 		roots = rootsFor(b, ca)
 	} else {
 		roots = trustUpstream(upstream)

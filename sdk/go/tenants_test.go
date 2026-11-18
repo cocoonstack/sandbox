@@ -6,7 +6,6 @@ import (
 	"io"
 	"maps"
 	"net/http"
-	"net/http/httptest"
 	"sync"
 	"testing"
 )
@@ -14,7 +13,7 @@ import (
 func TestTenantVerbsSendTheOperatorTokenAndEscapeTheName(t *testing.T) {
 	type request struct{ method, path, auth, body string }
 	got := make(chan request, 1)
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts := serveFunc(t, func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		got <- request{r.Method, r.URL.RequestURI(), r.Header.Get("Authorization"), string(body)}
 		switch r.Method {
@@ -25,8 +24,7 @@ func TestTenantVerbsSendTheOperatorTokenAndEscapeTheName(t *testing.T) {
 			}
 		}
 		w.WriteHeader(http.StatusNoContent)
-	}))
-	t.Cleanup(ts.Close)
+	})
 	c := testClient(t, ts, WithAPIToken("root"))
 
 	list, err := c.Tenants(t.Context(), "", 0)
@@ -79,24 +77,20 @@ func TestDeleteTenantClusterCountsAMissingTenantAsDone(t *testing.T) {
 			}
 		}
 	}
-	gone := httptest.NewServer(answer(http.StatusNotFound))
-	t.Cleanup(gone.Close)
-	broken := httptest.NewServer(answer(http.StatusInternalServerError))
-	t.Cleanup(broken.Close)
-	old := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	gone := serveFunc(t, answer(http.StatusNotFound))
+	broken := serveFunc(t, answer(http.StatusInternalServerError))
+	old := serveFunc(t, func(w http.ResponseWriter, r *http.Request) {
 		count(r)
 		http.NotFound(w, r)
-	}))
-	t.Cleanup(old.Close)
+	})
 	peers := []string{addrOf(gone), addrOf(broken), addrOf(old)}
-	entry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	entry := serveFunc(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/v1/peers" {
 			_ = json.MarshalWrite(w, map[string][]string{"peers": peers})
 			return
 		}
 		answer(http.StatusNoContent)(w, r)
-	}))
-	t.Cleanup(entry.Close)
+	})
 
 	results, err := testClient(t, entry, WithAPIToken("root")).DeleteTenantCluster(t.Context(), "acme")
 	if err != nil {

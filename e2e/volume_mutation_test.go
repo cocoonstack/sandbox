@@ -124,11 +124,7 @@ func TestMixedLiveVolumeModesThroughSDK(t *testing.T) {
 	if err != nil || len(view.Volumes) != 0 || len(view.VolumesWant) != 0 || view.Converging {
 		t.Fatalf("mixed removal = %+v, err=%v", view, err)
 	}
-	initial, err := st.client.New(t.Context(), "rt:24.04", sandbox.WithVolumes(volumes...))
-	if err != nil {
-		t.Fatalf("mixed initial claim: %v", err)
-	}
-	defer initial.Close()
+	initial := st.claim(t, "rt:24.04", sandbox.WithVolumes(volumes...))
 	if !slices.Equal(initial.Volumes, want) {
 		t.Fatalf("mixed initial claim = %+v, want %+v", initial.Volumes, want)
 	}
