@@ -12,6 +12,8 @@ use std::process::ExitStatus;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{LazyLock, Mutex};
 
+#[cfg(target_os = "linux")]
+use io_uring::{IoUring, squeue};
 use nix::fcntl::{FcntlArg, OFlag, fcntl};
 use tokio::io::unix::AsyncFd;
 use tokio::process::Command;
@@ -303,6 +305,16 @@ pub fn vsock_accept(listener: BorrowedFd<'_>) -> std::io::Result<(OwnedFd, u32)>
 pub fn tun_set_offload(fd: RawFd, flags: u32) -> std::io::Result<()> {
     // SAFETY: TUNSETOFFLOAD takes its argument by value.
     check(unsafe { libc::ioctl(fd, libc::TUNSETOFFLOAD, libc::c_ulong::from(flags)) })
+}
+
+/// Pushes entry, submitting to make room while the queue is full.
+#[cfg(target_os = "linux")]
+pub fn uring_queue(ring: &mut IoUring, entry: &squeue::Entry) -> std::io::Result<()> {
+    // SAFETY: tun_uring's Pump is the only caller; every buffer an entry names lives in it, and its Drop waits out each queued entry before freeing them.
+    while unsafe { ring.submission().push(entry) }.is_err() {
+        ring.submit()?;
+    }
+    Ok(())
 }
 
 /// Assigns `addr/prefix` to interface `name` and brings it up.

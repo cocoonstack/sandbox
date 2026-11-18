@@ -6,6 +6,7 @@ use std::os::fd::RawFd;
 
 use io_uring::{IoUring, opcode, squeue, types};
 
+use crate::sysutil;
 use crate::tun::{MAX_FRAME, VNET_HDR_LEN, compact, next_frame};
 
 const ENTRIES: u32 = 256;
@@ -232,7 +233,7 @@ impl Pump {
     }
 
     fn push(&mut self, entry: squeue::Entry) -> io::Result<()> {
-        queue(&mut self.ring, &entry)?;
+        sysutil::uring_queue(&mut self.ring, &entry)?;
         self.inflight += 1;
         Ok(())
     }
@@ -245,7 +246,7 @@ impl Drop for Pump {
             .chain([STREAM_READ, STREAM_WRITE]);
         for ud in targets {
             let cancel = opcode::AsyncCancel::new(ud).build().user_data(CANCEL);
-            if queue(&mut self.ring, &cancel).is_err() {
+            if sysutil::uring_queue(&mut self.ring, &cancel).is_err() {
                 break;
             }
         }
@@ -269,15 +270,6 @@ impl Drop for Pump {
             self.inflight -= finished;
         }
     }
-}
-
-/// Pushes entry, submitting to make room while the queue is full.
-fn queue(ring: &mut IoUring, entry: &squeue::Entry) -> io::Result<()> {
-    // SAFETY: every buffer an entry names lives in its Pump, and Pump's Drop waits out each queued entry before freeing them.
-    while unsafe { ring.submission().push(entry) }.is_err() {
-        ring.submit()?;
-    }
-    Ok(())
 }
 
 fn retryable(res: i32) -> bool {
