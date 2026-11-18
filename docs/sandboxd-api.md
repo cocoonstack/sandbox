@@ -1089,6 +1089,19 @@ with an empty key, or with a key repeated. `tenant` names the owning tenant
 (absent for root's own claims); `?tenant=<name>` lets root list one tenant's
 claims, a removed tenant's included, and is ignored for a tenant token.
 
+- **Order and paging:**
+  - rows come in `id` order;
+  - without `limit` the reply is the whole listing and carries no `next`;
+  - `limit` (1 to 10000, 400 outside) caps the rows of a page, after every
+    filter and the tenant scope apply;
+  - `after=<id>` returns only claims with a larger `id`;
+  - `next` is the last row's `id` when a limited page is full, absent
+    otherwise; pass it as the following page's `after`;
+  - a page reads the live claims when it is served: a claim that stays live
+    through the walk appears exactly once, a claim released before its page is
+    absent, and a claim added during the walk appears only when its `id` sorts
+    after the cursor of the page that reads it.
+
 ## GET /v1/sandboxes/{id}
 
 Auth: root or operator (tenant tokens get 403). One live claim in the index-row shape above, so a reconcile

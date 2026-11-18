@@ -675,7 +675,7 @@ func TestHostEnvMemoryOnlyKeepsValuesOffDiskAndARestartReportsThemMissing(t *tes
 				t.Fatalf("Reconcile: %v", err)
 			}
 			summary, _ := m2.Sandbox(sb.ID)
-			listed := m2.Sandboxes("", "", nil)
+			listed := m2.Sandboxes("", "", nil, "", 0)
 			read, err := m2.Env(sb.ID, "")
 			if err != nil || summary.EnvMissing != memoryOnly || len(listed) != 1 || listed[0].EnvMissing != memoryOnly || read["gw"].Missing != memoryOnly {
 				t.Errorf("after a restart: summary %v, list %+v, read %+v %v; want missing reported only with memory_only", summary.EnvMissing, listed, read, err)

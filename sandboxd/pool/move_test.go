@@ -291,7 +291,7 @@ func TestMoveTargetCountsAReservationLikeAClaim(t *testing.T) {
 	if _, err := claimAny(t.Context(), mc.t, testKey, ClaimOptions{}); !errors.Is(err, ErrQuota) {
 		t.Fatalf("claim beside a reservation at max_claims 1: %v, want ErrQuota", err)
 	}
-	if got := mc.t.Sandboxes("", "", nil); len(got) != 0 {
+	if got := mc.t.Sandboxes("", "", nil, "", 0); len(got) != 0 {
 		t.Errorf("listing shows %d claims, want the reservation invisible", len(got))
 	}
 	mc.t.DropMove("sb_r")

@@ -61,7 +61,7 @@ func TestRuntimeTenantAuthenticatesAndIsCapped(t *testing.T) {
 	if err := claim(); !errors.Is(err, ErrQuota) {
 		t.Errorf("claim under a lowered cap: %v, want ErrQuota", err)
 	}
-	if got := m.Sandboxes("acme", "", nil); len(got) != 2 {
+	if got := m.Sandboxes("acme", "", nil, "", 0); len(got) != 2 {
 		t.Errorf("a lowered cap left %d claims, want the 2 live ones kept", len(got))
 	}
 }
@@ -91,7 +91,7 @@ func TestRemovedTenantRunsToItsDeadlineButCannotExtend(t *testing.T) {
 	if _, ok := tenantOf(t, m, "acme-tok"); ok {
 		t.Error("a removed tenant's token still authenticates")
 	}
-	if got := m.Sandboxes("", "", nil); len(got) != 1 || got[0].Tenant != "acme" {
+	if got := m.Sandboxes("", "", nil, "", 0); len(got) != 1 || got[0].Tenant != "acme" {
 		t.Fatalf("root listing %+v, want the claim kept under acme", got)
 	}
 	infos := listTenants(t, m)

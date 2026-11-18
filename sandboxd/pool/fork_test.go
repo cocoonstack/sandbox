@@ -240,7 +240,7 @@ func TestForkChildrenRecordTheClaimRefPrefix(t *testing.T) {
 			t.Errorf("child %d claim_ref %q, want the prefix and its own id", i, c.ClaimRef)
 		}
 	}
-	if rows := m.Sandboxes("", "team-a/"+children[0].ID, nil); len(rows) != 1 || rows[0].ID != children[0].ID {
+	if rows := m.Sandboxes("", "team-a/"+children[0].ID, nil, "", 0); len(rows) != 1 || rows[0].ID != children[0].ID {
 		t.Errorf("index by claim_ref = %+v, want the first child alone", rows)
 	}
 
@@ -268,7 +268,7 @@ func TestForkChildrenInheritTheParentMetadata(t *testing.T) {
 			t.Errorf("child %d metadata %v, want the parent's", i, c.Metadata)
 		}
 	}
-	if rows := m.Sandboxes("", "", types.Metadata{"team": "a"}); len(rows) != 3 {
+	if rows := m.Sandboxes("", "", types.Metadata{"team": "a"}, "", 0); len(rows) != 3 {
 		t.Errorf("filter team=a matched %d claims, want the parent and both children", len(rows))
 	}
 }

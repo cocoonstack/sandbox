@@ -115,7 +115,7 @@ type Manager interface {
 	GetVolumes(id, tenant string) (types.SandboxVolumesResponse, error)
 	SetVolumes(ctx context.Context, id, tenant string, volumes []types.Volume) (types.SandboxVolumesResponse, error)
 	PatchVolumes(ctx context.Context, id, tenant string, patch types.VolumePatch) (types.SandboxVolumesResponse, error)
-	Sandboxes(tenant, claimRef string, metadata types.Metadata) []pool.SandboxSummary
+	Sandboxes(tenant, claimRef string, metadata types.Metadata, after string, limit int) []pool.SandboxSummary
 	Sandbox(id string) (pool.SandboxSummary, bool)
 	Stats(ctx context.Context, id string) (pool.SandboxStats, bool)
 	AllStats(ctx context.Context) ([]pool.SandboxStats, error)
@@ -220,9 +220,10 @@ type InfoResponse struct {
 	AtCapacityReason string              `json:"at_capacity_reason,omitempty"`
 }
 
-// SandboxListResponse is the wire reply of GET /v1/sandboxes.
+// SandboxListResponse is the wire reply of GET /v1/sandboxes; Next is set when a limited page is full.
 type SandboxListResponse struct {
 	Sandboxes []pool.SandboxSummary `json:"sandboxes"`
+	Next      string                `json:"next,omitempty"`
 }
 
 // StatsListResponse is the wire reply of GET /v1/stats.
@@ -597,8 +598,17 @@ func (s *Server) handleSandboxes(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	after, limit, err := sandboxPage(query)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	scope := cmp.Or(tenantFrom(r.Context()), query.Get("tenant"))
-	writeJSON(w, http.StatusOK, SandboxListResponse{Sandboxes: s.mgr.Sandboxes(scope, query.Get("claim_ref"), filter)})
+	resp := SandboxListResponse{Sandboxes: s.mgr.Sandboxes(scope, query.Get("claim_ref"), filter, after, limit)}
+	if limit > 0 && len(resp.Sandboxes) == limit {
+		resp.Next = resp.Sandboxes[limit-1].ID
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func (s *Server) handleSandboxStats(w http.ResponseWriter, r *http.Request) {

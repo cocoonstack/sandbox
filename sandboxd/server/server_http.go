@@ -11,6 +11,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -207,6 +208,15 @@ func pageLimit(raw string) (int, error) {
 		return 0, fmt.Errorf("limit must be 1..%d", maxPage)
 	}
 	return n, nil
+}
+
+func sandboxPage(v url.Values) (string, int, error) {
+	after := v.Get("after")
+	if v.Get("limit") == "" {
+		return after, 0, nil
+	}
+	limit, err := pageLimit(v.Get("limit"))
+	return after, limit, err
 }
 
 func writePoolErr(w http.ResponseWriter, err error) bool {

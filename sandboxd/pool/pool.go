@@ -633,22 +633,31 @@ func (m *Manager) Info() ([]PoolInfo, Gauges) {
 	return pools, g
 }
 
-// Sandboxes lists live claims visible to tenant (empty means root), narrowed to claimRef when set and to claims holding every metadata pair.
-func (m *Manager) Sandboxes(tenant, claimRef string, metadata types.Metadata) []SandboxSummary {
+// Sandboxes lists, in id order, the live claims visible to tenant (empty means root) with an id above after, narrowed to claimRef when set and to claims holding every metadata pair; a positive limit caps the rows.
+func (m *Manager) Sandboxes(tenant, claimRef string, metadata types.Metadata, after string, limit int) []SandboxSummary {
 	m.mu.Lock()
 	size := len(m.claimed)
 	if claimRef != "" {
 		size = 1
 	}
-	out := make([]SandboxSummary, 0, size)
+	rows := make([]*types.Sandbox, 0, size)
 	for _, sb := range m.claimed {
-		if !tenantOwns(tenant, sb.Tenant) || (claimRef != "" && sb.ClaimRef != claimRef) || !sb.Metadata.Matches(metadata) {
+		if sb.ID <= after || !tenantOwns(tenant, sb.Tenant) || (claimRef != "" && sb.ClaimRef != claimRef) || !sb.Metadata.Matches(metadata) {
 			continue
 		}
-		out = append(out, summarize(sb))
+		rows = append(rows, sb)
 	}
 	m.mu.Unlock()
-	slices.SortFunc(out, func(a, b SandboxSummary) int { return strings.Compare(a.ID, b.ID) })
+	slices.SortFunc(rows, func(a, b *types.Sandbox) int { return strings.Compare(a.ID, b.ID) })
+	if limit > 0 {
+		rows = rows[:min(len(rows), limit)]
+	}
+	out := make([]SandboxSummary, len(rows))
+	m.mu.Lock()
+	for i, sb := range rows {
+		out[i] = summarize(sb)
+	}
+	m.mu.Unlock()
 	return out
 }
 

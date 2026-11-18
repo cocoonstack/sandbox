@@ -53,7 +53,7 @@ func TestReaderServesAHibernatedClaimUntilAWriteWakesIt(t *testing.T) {
 
 func hibernated(t *testing.T, st *stack, id string) bool {
 	t.Helper()
-	for _, s := range st.mgr.Sandboxes("", "", nil) {
+	for _, s := range st.mgr.Sandboxes("", "", nil, "", 0) {
 		if s.ID == id {
 			return s.Hibernated
 		}
