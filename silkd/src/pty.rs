@@ -146,7 +146,7 @@ async fn pump<W: AsyncWrite + Unpin>(
                 stdin.abort();
                 return code;
             }
-            // hang up like a closed terminal so the shell hangs up its jobs; past the grace silkd hangs them up and kills the shell.
+            // hang up like a closed terminal so the shell hangs up its jobs.
             _ = &mut disc_rx, if !disc => {
                 disc = true;
                 kill_at = Some(hang_up(child));

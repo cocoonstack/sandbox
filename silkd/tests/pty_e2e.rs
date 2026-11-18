@@ -19,7 +19,7 @@ use tokio::sync::mpsc;
 
 use common::{
     Connection, FrameLines, alive, assert_error, b64, connect_with, decode, frames_until, one,
-    proc_entry, request, send, type_of, under_deadline, wait_for_path,
+    proc_entry, request, send, type_of, under_deadline,
 };
 
 struct FailingSink(Vec<u8>);
@@ -51,12 +51,12 @@ async fn open_pty(state: &Arc<State>) -> Connection {
     connect_with(state, json!({"op":"pty_open","cols":80,"rows":24})).await
 }
 
-async fn wait_gone(pid: u32) {
+async fn wait_gone(pid: u32, what: &str) {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     while alive(pid) {
         assert!(
             tokio::time::Instant::now() < deadline,
-            "shell {pid} still alive 5 s after the started write failed"
+            "{what}: {pid} still alive after 5 s"
         );
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
@@ -73,11 +73,11 @@ async fn pty_runs_a_shell_and_echoes() {
 
     send(
         &mut cw,
-        json!({"op":"stdin","data":b64(b"echo silk-pty-marker\n")}),
+        json!({"op":"stdin","data":b64(b"echo silk-pty-$((1+1))-marker\n")}),
     )
     .await;
     read_until(&mut lines, |v| {
-        v["type"] == "stdout" && String::from_utf8_lossy(&decode(v)).contains("silk-pty-marker")
+        v["type"] == "stdout" && String::from_utf8_lossy(&decode(v)).contains("silk-pty-2-marker")
     })
     .await;
 
@@ -115,7 +115,7 @@ async fn the_pty_shell_holds_no_master_fd() {
 #[tokio::test]
 async fn pty_appears_in_ps_and_resizes() {
     let state = Arc::new(State::new());
-    let (cw, mut lines, _) = open_pty(&state).await;
+    let (mut cw, mut lines, _) = open_pty(&state).await;
     let pid = read_until(&mut lines, |v| v["type"] == "started").await["pid"]
         .as_u64()
         .unwrap();
@@ -128,6 +128,15 @@ async fn pty_appears_in_ps_and_resizes() {
     )
     .await;
     assert_eq!(type_of(&resized[0]), "done");
+    send(
+        &mut cw,
+        json!({"op":"stdin","data":b64(b"echo silk-$(stty size | tr ' ' x)-size\n")}),
+    )
+    .await;
+    read_until(&mut lines, |v| {
+        v["type"] == "stdout" && String::from_utf8_lossy(&decode(v)).contains("silk-40x120-size")
+    })
+    .await;
 
     drop(cw);
 }
@@ -215,10 +224,11 @@ async fn pty_disconnect_hangs_up_background_jobs() {
         read_until(&mut lines, |v| v["type"] == "started").await;
         let cmd = format!("{script} {}\n", pid_file.display());
         send(&mut cw, json!({"op":"stdin","data":b64(cmd.as_bytes())})).await;
-        wait_for_path(&pid_file).await;
         let job: u32 = under_deadline(async {
             loop {
-                if let Ok(pid) = std::fs::read_to_string(&pid_file).unwrap().trim().parse() {
+                if let Ok(text) = std::fs::read_to_string(&pid_file)
+                    && let Ok(pid) = text.trim().parse()
+                {
                     break pid;
                 }
                 tokio::time::sleep(Duration::from_millis(10)).await;
@@ -230,14 +240,7 @@ async fn pty_disconnect_hangs_up_background_jobs() {
         let _ = tokio::time::timeout(Duration::from_secs(5), handle)
             .await
             .unwrap_or_else(|_| panic!("{case}: pty did not tear down on disconnect"));
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-        while alive(job) {
-            assert!(
-                tokio::time::Instant::now() < deadline,
-                "{case}: background job {job} outlived the hang-up"
-            );
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
+        wait_gone(job, case).await;
     }
 }
 
@@ -266,7 +269,7 @@ async fn pty_started_write_failure_kills_the_shell_and_unregisters_it() {
         table.list().is_empty(),
         "pty still registered after the write failure"
     );
-    wait_gone(pid).await;
+    wait_gone(pid, "the shell of a pty whose started write failed").await;
 }
 
 #[tokio::test]
