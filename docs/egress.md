@@ -567,8 +567,8 @@ first IPv4 address is preferred, since many upstream proxies have no IPv6
 exit. The
 upstream's own address is dialed with the node's plain dialer. An upstream
 that fails answers the guest 502 (SOCKS5: host unreachable) and never falls
-back to a direct dial. An allowed connection's audit and usage records name
-the upstream's `host:port`, never its credentials, and `GET env` blanks the value like every
+back to a direct dial. An allowed connection's audit record, and its usage
+records when they are on, name the upstream's `host:port`, never its credentials, and `GET env` blanks the value like every
 `guest: false` entry. Cost: a node without `egress_upstream` pays nothing; with
 it, each allowed request reads the claim's env snapshot, without a lock.
 
