@@ -20,19 +20,13 @@ func (m *Manager) provisionResolved(ctx context.Context, key types.PoolKey, g go
 	case g.held == nil:
 		return m.provisionAged(ctx, key, g.dir)
 	}
-	var imageID string
-	sb, err := m.provisionVM(ctx, key, claimProbeTimeout, func(name string) (types.VMRecord, error) {
+	return m.provisionVM(ctx, key, claimProbeTimeout, func(name string) (types.VMRecord, error) {
 		g.held.goldenUse.RLock()
 		rec, err := m.eng.Clone(ctx, g.dir, name, key)
 		g.held.goldenUse.RUnlock()
 		m.noteClaimClone(ctx, g, err)
-		imageID = rec.Config.ImageDigest
 		return rec, err
 	})
-	if err == nil {
-		sb.ImageID = imageID
-	}
-	return sb, err
 }
 
 func (m *Manager) provisionAged(ctx context.Context, key types.PoolKey, dir string) (*types.Sandbox, error) {
@@ -53,11 +47,8 @@ func (m *Manager) noteClaimClone(ctx context.Context, g goldenResolution, err er
 }
 
 func (m *Manager) provisionCold(ctx context.Context, key types.PoolKey) (*types.Sandbox, error) {
-	var imageID string
 	sb, err := m.provisionVM(ctx, key, coldProbeTimeout, func(name string) (types.VMRecord, error) {
-		rec, err := m.eng.RunCold(ctx, name, key, m.view.Load().poolStorage[key])
-		imageID = rec.Config.ImageDigest
-		return rec, err
+		return m.eng.RunCold(ctx, name, key, m.view.Load().poolStorage[key])
 	})
 	if err != nil {
 		return nil, err
@@ -67,7 +58,6 @@ func (m *Manager) provisionCold(ctx context.Context, key types.PoolKey) (*types.
 		m.destroy(ctx, sb.VMName)
 		return nil, err
 	}
-	sb.ImageID = imageID
 	return sb, nil
 }
 
@@ -86,7 +76,7 @@ func (m *Manager) startVM(ctx context.Context, key types.PoolKey, create vmProvi
 		m.destroy(ctx, name)
 		return nil, err
 	}
-	return &types.Sandbox{VMName: name, Key: key, VsockSocket: rec.VsockSocket, TAP: rec.TapDevice()}, nil
+	return &types.Sandbox{VMName: name, Key: key, VsockSocket: rec.VsockSocket, TAP: rec.TapDevice(), ImageID: rec.Config.ImageDigest}, nil
 }
 
 func (m *Manager) readyVM(ctx context.Context, sb *types.Sandbox, deadline time.Time) (*types.Sandbox, error) {
