@@ -61,8 +61,12 @@ pub fn rand_token() -> std::io::Result<String> {
 
 /// Sends `sig` to the group led by `pgid`, so a command's children share its fate; ESRCH is ignored.
 pub fn signal_group(pgid: u32, sig: i32) {
-    if is_valid_pid(pgid) {
-        send_signal(-(pgid as libc::pid_t), sig);
+    // kill(2) reads pid 0 as silkd's own process group.
+    if let Ok(pgid) = libc::pid_t::try_from(pgid)
+        && pgid != 0
+    {
+        // SAFETY: kill(2) takes no pointers.
+        unsafe { libc::kill(-pgid, sig) };
     }
 }
 
@@ -196,7 +200,7 @@ pub fn set_winsize(fd: RawFd, cols: u16, rows: u16) -> std::io::Result<()> {
         ws_xpixel: 0,
         ws_ypixel: 0,
     };
-    // SAFETY: fd is an open pty master (held by the Proc); ws is initialized.
+    // SAFETY: ws is an initialized winsize that outlives the call.
     let rc = unsafe { libc::ioctl(fd, libc::TIOCSWINSZ, &ws) };
     if rc != 0 {
         return Err(std::io::Error::last_os_error());
@@ -443,11 +447,6 @@ fn fill_random(b: &mut [u8]) -> bool {
         .is_ok()
 }
 
-/// Rejects pid 0, which kill(2) reads as silkd's own process group, and anything that would go negative through the pid_t cast.
-fn is_valid_pid(id: u32) -> bool {
-    id != 0 && id <= i32::MAX as u32
-}
-
 #[cfg(target_os = "linux")]
 fn pty_name(master: &nix::pty::PtyMaster) -> nix::Result<String> {
     nix::pty::ptsname_r(master)
@@ -459,11 +458,6 @@ fn pty_name(master: &nix::pty::PtyMaster) -> nix::Result<String> {
     let _serial = lock(&PTSNAME);
     // SAFETY: PTSNAME serializes every ptsname call in silkd, so its static buffer is copied before another call reuses it.
     unsafe { nix::pty::ptsname(master) }
-}
-
-fn send_signal(target: libc::pid_t, sig: i32) {
-    // SAFETY: kill(2) takes no pointers; every caller vets the target with is_valid_pid first.
-    unsafe { libc::kill(target, sig) };
 }
 
 fn align_proxy_env_for(cmd: &mut Command, direct: bool) {
