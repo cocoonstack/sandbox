@@ -1,10 +1,10 @@
 # node sandbox flavor: base + Node.js 22 LTS from the official tarball into
 # /usr/local, plus the native-module build toolchain (build-essential,
 # python3, python3-setuptools, unzip) so package installs with node-gyp steps need only the
-# packages themselves from the network.
+# packages themselves from the network. The node-rt stage is that rootfs in one layer (see rt).
 ARG BASE_IMAGE=ghcr.io/cocoonstack/sandbox/base:24.04
 
-FROM ${BASE_IMAGE}
+FROM ${BASE_IMAGE} AS node
 ARG TARGETARCH
 ENV DEBIAN_FRONTEND=noninteractive
 ARG NODE_VERSION=22.23.2
@@ -26,3 +26,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
          --exclude CHANGELOG.md --exclude LICENSE --exclude README.md \
     && rm /tmp/node.tar.gz \
     && node -v && npm -v
+
+FROM scratch AS node-rt
+COPY --from=node / /
+
+CMD ["/sbin/init"]

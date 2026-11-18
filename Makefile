@@ -94,7 +94,7 @@ base: silkd-image ## base VM image against the local boot + silkd images
 
 python: base ## python flavor image on top of base
 	docker build -t sandbox-python:dev \
-		--build-arg BASE_IMAGE=sandbox-base:dev \
+		--build-arg BASE_IMAGE=sandbox-base:dev --target python \
 		-f os-image/python/3.12/Dockerfile os-image/python
 
 images: base python ## the local base and python images (CI builds every flavor)

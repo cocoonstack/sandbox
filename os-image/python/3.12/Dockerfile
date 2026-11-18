@@ -1,7 +1,8 @@
 # python sandbox flavor: base + CPython toolchain for agent code execution.
+# The python-rt stage is that rootfs in one layer (see rt).
 ARG BASE_IMAGE=ghcr.io/cocoonstack/sandbox/base:24.04
 
-FROM ${BASE_IMAGE}
+FROM ${BASE_IMAGE} AS python
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 python3-pip python3-venv \
@@ -13,3 +14,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN pip3 install --no-cache-dir --break-system-packages python-lsp-server \
     && mkdir -p /etc/silkd/lsp.d \
     && printf 'pylsp\n' > /etc/silkd/lsp.d/python
+
+FROM scratch AS python-rt
+COPY --from=python / /
+
+CMD ["/sbin/init"]
