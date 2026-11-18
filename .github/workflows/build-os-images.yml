@@ -118,11 +118,13 @@ jobs:
               [[ -z "$dockerfile" ]] && continue
               tag=$(echo "$dockerfile" | cut -d'/' -f3)
               if [[ -n "$tag" ]]; then
-                entry="{\"name\":\"$name\",\"tag\":\"$tag\",\"no_cache\":\"$no_cache\",\"platforms\":\"$platforms\"}"
+                entry() { echo "{\"name\":\"$1\",\"dir\":\"$name\",\"target\":\"$2\",\"tag\":\"$tag\",\"no_cache\":\"$no_cache\",\"platforms\":\"$platforms\"}"; }
                 if [[ "$name" == "base" ]]; then
-                  base_entries+=("$entry")
+                  base_entries+=("$(entry base "")")
+                elif grep -q "^FROM scratch AS $name-rt\$" "$dockerfile"; then
+                  flavor_entries+=("$(entry "$name" "$name")" "$(entry "$name-rt" "$name-rt")")
                 else
-                  flavor_entries+=("$entry")
+                  flavor_entries+=("$(entry "$name" "")")
                 fi
               fi
             done <<< "$(find "os-image/$name" -name Dockerfile -type f)"
@@ -261,8 +263,9 @@ jobs:
         env:
           SOURCE_DATE_EPOCH: ${{ steps.epoch.outputs.epoch }}
         with:
-          context: os-image/${{ matrix.name }}
-          file: os-image/${{ matrix.name }}/${{ matrix.tag }}/Dockerfile
+          context: os-image/${{ matrix.dir }}
+          file: os-image/${{ matrix.dir }}/${{ matrix.tag }}/Dockerfile
+          target: ${{ matrix.target }}
           platforms: ${{ matrix.platforms }}
           outputs: type=image,push=true,rewrite-timestamp=true
           pull: true
