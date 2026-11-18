@@ -90,14 +90,7 @@ func (m *Manager) writeEnv(ctx context.Context, id, tenant, verb string, next fu
 		js := m.store.set(sb)
 		m.mu.Unlock()
 		if err := m.store.commit(js); err != nil {
-			m.mu.Lock()
-			var rb claimSnapshot
-			if m.claimed[id] == sb && sb.Env.Equal(env) {
-				sb.SetEnv(prev)
-				rb = m.store.set(sb)
-			}
-			m.mu.Unlock()
-			m.store.recommit(ctx, rb)
+			m.undoCommit(ctx, sb, func() bool { return sb.Env.Equal(env) }, func() { sb.SetEnv(prev) })
 			return fmt.Errorf("%s env %s: persist claims: %w", verb, id, err)
 		}
 	}

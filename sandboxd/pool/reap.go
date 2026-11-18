@@ -126,9 +126,7 @@ func (m *Manager) reapOnce(ctx context.Context) {
 		rb := m.store.set(restored...)
 		m.mu.Unlock()
 		for _, ck := range purgeCks {
-			if clearErr := m.ckMarks.clear(ck); clearErr != nil {
-				logger.Warnf(ctx, "clear archive ck %s: %v", ck, clearErr)
-			}
+			m.clearMark(ctx, ck)
 		}
 		m.store.recommit(ctx, rb)
 		logger.Error(ctx, saveErr, "persist reap; rolled back")

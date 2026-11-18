@@ -184,12 +184,7 @@ func (e Env) ValidateStored() error {
 
 // HasInject reports whether any entry injects into egress requests.
 func (e Env) HasInject() bool {
-	for _, v := range e {
-		if v.Inject != nil {
-			return true
-		}
-	}
-	return false
+	return e.has(func(v EnvVar) bool { return v.Inject != nil })
 }
 
 // InjectsChanged returns the entries of e that inject and that prev lacks or holds differently.
@@ -208,12 +203,7 @@ func (e Env) InjectsChanged(prev Env) Env {
 
 // HasGuest reports whether any entry reaches the guest.
 func (e Env) HasGuest() bool {
-	for _, v := range e {
-		if v.InGuest() {
-			return true
-		}
-	}
-	return false
+	return e.has(EnvVar.InGuest)
 }
 
 // Equal reports whether e and other hold the same entries.
@@ -228,12 +218,7 @@ func (e Env) SameGuest(other Env) bool {
 
 // HasMissing reports whether any host-only entry lacks its value.
 func (e Env) HasMissing() bool {
-	for _, v := range e {
-		if v.Missing {
-			return true
-		}
-	}
-	return false
+	return e.has(func(v EnvVar) bool { return v.Missing })
 }
 
 // Redacted copies e with every host-only value dropped, so a read names them without serving them.
@@ -253,6 +238,15 @@ func (e Env) GuestFile() []byte {
 		b = fmt.Appendf(b, "%s=\"%s\"\n", name, guestFileEscaper.Replace(e[name].Value))
 	}
 	return b
+}
+
+func (e Env) has(pred func(EnvVar) bool) bool {
+	for _, v := range e {
+		if pred(v) {
+			return true
+		}
+	}
+	return false
 }
 
 func (e Env) dropHostValues(missing bool) Env {

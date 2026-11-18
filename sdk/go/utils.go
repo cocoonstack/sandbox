@@ -21,15 +21,19 @@ type respPtr[T any] interface {
 
 type chunkSink func([]byte) error
 
-func (s *Sandbox) doneRPC(ctx context.Context, req wire.Request) error {
+func (s *Sandbox) rpc(ctx context.Context, req wire.Request, serve func(*silkd.Conn) error) error {
 	return s.retryMoved(ctx, func() error {
 		conn, l, err := s.call(ctx, req)
 		if err != nil {
 			return err
 		}
 		defer l.close()
-		return l.done(terminalErr(ctx, conn))
+		return l.done(serve(conn))
 	})
+}
+
+func (s *Sandbox) doneRPC(ctx context.Context, req wire.Request) error {
+	return s.rpc(ctx, req, func(conn *silkd.Conn) error { return terminalErr(ctx, conn) })
 }
 
 // uploadRPC streams r as full Data frames after req and expects Done; an early terminal frame is the guest rejecting the upload and stops the stream.
@@ -69,26 +73,14 @@ func (s *Sandbox) uploadRPC(ctx context.Context, req wire.Request, r io.Reader) 
 }
 
 func (s *Sandbox) downloadRPC(ctx context.Context, req wire.Request, sink chunkSink) error {
-	return s.retryMoved(ctx, func() error {
-		conn, l, err := s.call(ctx, req)
-		if err != nil {
-			return err
-		}
-		defer l.close()
-		return l.done(drainData(ctx, conn, sink))
-	})
+	return s.rpc(ctx, req, func(conn *silkd.Conn) error { return drainData(ctx, conn, sink) })
 }
 
 func (s *Sandbox) oneShotRPC[T any, PT respPtr[T]](ctx context.Context, req wire.Request) (*T, error) {
 	var v *T
-	err := s.retryMoved(ctx, func() error {
-		conn, l, err := s.call(ctx, req)
-		if err != nil {
-			return err
-		}
-		defer l.close()
+	err := s.rpc(ctx, req, func(conn *silkd.Conn) (err error) {
 		v, err = expect[T, PT](ctx, conn)
-		return l.done(err)
+		return err
 	})
 	return v, err
 }

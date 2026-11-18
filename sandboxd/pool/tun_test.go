@@ -205,6 +205,18 @@ func TestDisablingARunningClaimRevokesItsPacketPath(t *testing.T) {
 	}
 }
 
+func TestSetTunRollsBackOnPersistFailure(t *testing.T) {
+	m := tunManager(t, newFakeEngine(), &fakeAddrs{}, config.PoolSpec{PoolKey: testKey, Tun: true, Egress: anyPolicy})
+	sb := mustClaim(t, m, testKey)
+	breakStore(t, m)
+	if err := m.SetTun(t.Context(), sb.ID, new(false), nil); err == nil {
+		t.Fatal("set tun reported success while the claim store was unwritable")
+	}
+	if held, _ := m.byID(sb.ID); held.TunOff {
+		t.Error("the claim reads disabled after a failed persist")
+	}
+}
+
 func TestADisableBeforeTheFirstTunUpLeavesTheGuestDown(t *testing.T) {
 	eng, addrs := newFakeEngine(), &fakeAddrs{}
 	eng.tunUpGate = make(chan struct{})

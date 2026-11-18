@@ -101,6 +101,15 @@ func (m *Manager) deleteArchiveCk(ctx context.Context, ckID string) (bool, error
 	return m.finishArchiveCkDelete(ctx, ckID)
 }
 
+func (m *Manager) clearMark(ctx context.Context, ck string) {
+	if ck == "" {
+		return
+	}
+	if err := m.ckMarks.clear(ck); err != nil {
+		log.WithFunc("pool.clearMark").Warnf(ctx, "clear archive ck %s: %v", ck, err)
+	}
+}
+
 func (m *Manager) finishArchiveCkDelete(ctx context.Context, ckID string) (bool, error) {
 	unlock := m.recs.lockRec(ckID)
 	if m.store.referencesCheckpoint(ckID) {

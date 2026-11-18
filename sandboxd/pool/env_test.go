@@ -289,6 +289,22 @@ func TestSetEnvChecksOwnershipAndPersistsAcrossARestart(t *testing.T) {
 	}
 }
 
+func TestSetEnvRollsBackOnPersistFailure(t *testing.T) {
+	m := newTestManager(t, newFakeEngine())
+	sb := mustClaim(t, m, testKey)
+	kept := types.Env{"A": {Value: "1"}}
+	if err := m.SetEnv(t.Context(), sb.ID, kept, ""); err != nil {
+		t.Fatalf("set env: %v", err)
+	}
+	breakStore(t, m)
+	if err := m.SetEnv(t.Context(), sb.ID, types.Env{"A": {Value: "2"}}, ""); err == nil {
+		t.Fatal("set env reported success while the claim store was unwritable")
+	}
+	if got, err := m.Env(sb.ID, ""); err != nil || !got.Equal(kept) {
+		t.Errorf("env %v, %v after a failed persist, want %v", got, err, kept)
+	}
+}
+
 func TestAGuestEnvChangeNeedsARunningGuest(t *testing.T) {
 	eng := newFakeEngine()
 	m := envManager(t, eng, t.TempDir())
