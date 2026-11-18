@@ -26,30 +26,13 @@ if [[ $NET == egress ]]; then
 fi
 
 DATA=$(mktemp -d /tmp/egress-e2e.XXXXXX)
-DAEMON_PID=""
+# shellcheck source=scripts/lib.sh
+. "$(dirname "$0")/lib.sh"
 
-cleanup() {
-  status=$?
-  if [[ $status -ne 0 && -f "$DATA/daemon.log" ]]; then
-    echo "== daemon log tail"
-    tail -30 "$DATA/daemon.log"
-  fi
-  if [[ -n $DAEMON_PID ]]; then
-    kill "$DAEMON_PID" 2>/dev/null || true
-  fi
-  wait 2>/dev/null || true
-  cocoon vm list --format json 2>/dev/null |
-    jq -r '.[] | select(.config.name | startswith("sbx-")) | .config.name' |
-    while read -r vm; do
-      cocoon vm stop --force "$vm" >/dev/null 2>&1 || true
-      cocoon vm rm --force "$vm" >/dev/null 2>&1 || true
-    done || true
+cleanup_extra() {
   echo "== audit tail (egress events)"
   grep -o '"op":"egress"[^}]*}' "$DATA/state/audit.jsonl" 2>/dev/null | tail -4 || true
-  rm -rf "$DATA"
-  exit "$status"
 }
-trap cleanup EXIT
 
 echo "== build"
 if [[ -n ${SANDBOXD_BIN:-} && -n ${EGRESSSMOKE_BIN:-} ]]; then
@@ -77,17 +60,9 @@ cat >"$DATA/config.json" <<EOF
 EOF
 
 echo "== start sandboxd ($NET-lane pool + egress policy, reach=$REACH)"
-"$DATA/sandboxd" -config "$DATA/config.json" >>"$DATA/daemon.log" 2>&1 &
-DAEMON_PID=$!
-for _ in $(seq 1 40); do curl -sf "http://$ADDR/healthz" >/dev/null && break; sleep 0.5; done
-curl -sf "http://$ADDR/healthz" >/dev/null || { echo "daemon never came up"; exit 1; }
+start_daemon
 # Wait for the warm pool so the claim is a warm hit (proxy armed at claim).
-for i in $(seq 1 120); do
-  curl -sf -H "Authorization: Bearer $TOKEN" "http://$ADDR/v1/info" 2>/dev/null |
-    jq -e '.pools[0].warm >= 1' >/dev/null 2>&1 && break
-  [[ $i == 120 ]] && { echo "pool never became warm"; exit 1; }
-  sleep 1
-done
+wait_pools '.pools[0].warm >= 1'
 
 echo "== egresssmoke"
 "$DATA/egresssmoke" -addr "$ADDR" -token "$TOKEN" -template "$TEMPLATE" -secret "$EGRESS_PROBE_TOKEN" -net "$NET" -reach "$REACH" -nicaddr "$NICADDR" -echo "$ECHO"

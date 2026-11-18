@@ -19,29 +19,8 @@ PROBE=${EGRESS_PROBE_TOKEN:-probe-$(date +%s)}
 export EGRESS_PROBE_TOKEN=$PROBE
 
 DATA=$(mktemp -d /tmp/credentials-e2e.XXXXXX)
-DAEMON_PID=""
-SSE_PID=""
-
-cleanup() {
-  status=$?
-  if [[ $status -ne 0 && -f "$DATA/daemon.log" ]]; then
-    echo "== daemon log tail"
-    tail -30 "$DATA/daemon.log"
-  fi
-  for pid in $DAEMON_PID $SSE_PID; do
-    kill "$pid" 2>/dev/null || true
-  done
-  wait 2>/dev/null || true
-  cocoon vm list --format json 2>/dev/null |
-    jq -r '.[] | select(.config.name | startswith("sbx-")) | .config.name' |
-    while read -r vm; do
-      cocoon vm stop --force "$vm" >/dev/null 2>&1 || true
-      cocoon vm rm --force "$vm" >/dev/null 2>&1 || true
-    done || true
-  rm -rf "$DATA"
-  exit "$status"
-}
-trap cleanup EXIT
+# shellcheck source=scripts/lib.sh
+. "$(dirname "$0")/lib.sh"
 
 echo "== build"
 if [[ -n ${SANDBOXD_BIN:-} && -n ${CREDSMOKE_BIN:-} ]]; then
@@ -71,7 +50,6 @@ class H(http.server.BaseHTTPRequestHandler):
         pass
 http.server.ThreadingHTTPServer(("127.0.0.1", int(sys.argv[1])), H).serve_forever()
 ' "$SSE_PORT" &
-SSE_PID=$!
 
 cat >"$DATA/config.json" <<EOF
 {
@@ -91,21 +69,9 @@ cat >"$DATA/config.json" <<EOF
 }
 EOF
 
-start() {
-  "$DATA/sandboxd" -config "$DATA/config.json" >>"$DATA/daemon.log" 2>&1 &
-  DAEMON_PID=$!
-  for _ in $(seq 1 40); do curl -sf "http://$ADDR/healthz" >/dev/null 2>&1 && break; sleep 0.5; done
-  curl -sf "http://$ADDR/healthz" >/dev/null || { echo "daemon never came up"; exit 1; }
-}
-
 echo "== start sandboxd (intercept pool)"
-start
-for i in $(seq 1 300); do
-  curl -sf -H "Authorization: Bearer $TOKEN" "http://$ADDR/v1/info" 2>/dev/null |
-    jq -e 'all(.pools[]; .warm >= 1)' >/dev/null 2>&1 && break
-  [[ $i == 300 ]] && { echo "pool never became warm"; exit 1; }
-  sleep 1
-done
+start_daemon
+wait_pools 'all(.pools[]; .warm >= 1)' 300
 
 echo "== credsmoke"
 "$DATA/credsmoke" -addr "$ADDR" -token "$TOKEN" -template "$TEMPLATE" -echo "$ECHO" -secret "$PROBE" \
@@ -133,8 +99,7 @@ while IFS= read -r v; do
 done < <(sed -n 's/^VAULT //p' "$DATA/inject.log")
 
 echo "== restart sandboxd, recheck the surviving claim"
-kill "$DAEMON_PID"
-wait "$DAEMON_PID" 2>/dev/null || true
-start
+stop_daemon
+start_daemon
 "$DATA/credsmoke" -addr "$ADDR" -token "$TOKEN" -echo "$ECHO" -reattach "$reattach"
 echo "PASS"

@@ -22,30 +22,8 @@ BURST_N=${BURST_N:-16}
 REPO=$(cd "$(dirname "$0")/.." && pwd)
 
 DATA=$(mktemp -d /tmp/sandboxd-bench.XXXXXX)
-DAEMON_PID=""
-
-cleanup() {
-  status=$?
-  if [[ $status -ne 0 && -f "$DATA/daemon.log" ]]; then
-    echo "== daemon log tail"
-    tail -20 "$DATA/daemon.log"
-  fi
-  if [[ -n $DAEMON_PID ]]; then
-    kill "$DAEMON_PID" 2>/dev/null || true
-  fi
-  wait 2>/dev/null || true
-  cocoon vm list --format json 2>/dev/null |
-    jq -r '.[] | select(.config.name | startswith("sbx-")) | .config.name' |
-    while read -r vm; do
-      cocoon vm stop --force "$vm" >/dev/null 2>&1 || true
-      cocoon vm rm --force "$vm" >/dev/null 2>&1 || true
-    done || true
-  rm -rf "$DATA"
-  exit "$status"
-}
-trap cleanup EXIT
-
-api() { curl -sf -H "Authorization: Bearer $TOKEN" "http://$ADDR/v1/$1"; }
+# shellcheck source=scripts/lib.sh
+. "$(dirname "$0")/lib.sh"
 
 # claim_ms <demo args...> — runs the demo and prints one claim latency (ms)
 # per line.
@@ -90,23 +68,10 @@ cat >"$DATA/config.json" <<EOF
   ]
 }
 EOF
-"$DATA/sandboxd" -config "$DATA/config.json" >>"$DATA/daemon.log" 2>&1 &
-DAEMON_PID=$!
-for _ in $(seq 1 20); do
-  curl -sf "http://$ADDR/healthz" >/dev/null && break
-  sleep 0.5
-done
-curl -sf "http://$ADDR/healthz" >/dev/null || { echo "daemon never came up"; exit 1; }
+start_daemon
 
 echo "== wait for goldens + warm pool"
-for i in $(seq 1 180); do
-  if api info | jq -e \
-    '(.pools | length) == 2 and all(.pools[]; .golden and .warm >= .target)' >/dev/null 2>&1; then
-    break
-  fi
-  [[ $i == 180 ]] && { echo "pools never became ready"; api info | jq . || true; exit 1; }
-  sleep 1
-done
+wait_pools '(.pools | length) == 2 and all(.pools[]; .golden and .warm >= .target)'
 
 echo "== warm tier ($WARM_N claims, burst within the warm depth)"
 warm_row=$(claim_ms -template "$TEMPLATE" -size small -n "$WARM_N" | stats)
