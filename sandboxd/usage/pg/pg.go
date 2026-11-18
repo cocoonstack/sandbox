@@ -35,13 +35,13 @@ const (
 
 	pruneBatch = 1000
 
-	pruneBound = `SELECT max(cursor) FROM sandboxd_usage WHERE cell = $1 AND node = $2 AND cursor < coalesce(
-		(SELECT cursor FROM sandboxd_usage WHERE cell = $1 AND node = $2 AND t >= $3 ORDER BY cursor LIMIT 1), 9223372036854775807)`
-
-	pruneRows = `WITH gone AS (
-		DELETE FROM sandboxd_usage WHERE cell = $1 AND cursor IN (
-			SELECT cursor FROM sandboxd_usage WHERE cell = $1 AND node = $2 AND cursor > $3 AND cursor < $4 ORDER BY cursor LIMIT $5)
-		RETURNING cursor)
+	pruneRows = `WITH win AS (
+			SELECT cursor, t FROM sandboxd_usage WHERE cell = $1 AND node = $2 AND cursor > $3 ORDER BY cursor LIMIT $4 + 1),
+		floor AS (
+			SELECT max(cursor) AS cursor FROM win WHERE cursor < coalesce((SELECT min(cursor) FROM win WHERE t >= $5), 9223372036854775807)),
+		gone AS (
+			DELETE FROM sandboxd_usage WHERE cell = $1 AND cursor IN (SELECT cursor FROM win WHERE cursor < (SELECT cursor FROM floor))
+			RETURNING cursor)
 		SELECT count(*), coalesce(max(cursor), 0) FROM gone`
 )
 
@@ -74,14 +74,10 @@ func (s *Store) First(ctx context.Context, node string) ([32]byte, error) {
 }
 
 func (s *Store) Prune(ctx context.Context, node string, before time.Time) (int64, error) {
-	var bound *int64
-	if err := s.scanRow(ctx, pruneBound, []any{s.cell, node, before}, &bound); err != nil || bound == nil {
-		return 0, err
-	}
 	var total, after int64
 	for {
 		var n int64
-		if err := s.scanRow(ctx, pruneRows, []any{s.cell, node, after, *bound, pruneBatch}, &n, &after); err != nil {
+		if err := s.scanRow(ctx, pruneRows, []any{s.cell, node, after, pruneBatch, before}, &n, &after); err != nil {
 			return total, err
 		}
 		total += n

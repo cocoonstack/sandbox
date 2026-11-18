@@ -225,30 +225,51 @@ func TestPruneDeletesOnlyTheNodesRowsBeforeItsFloor(t *testing.T) {
 }
 
 func TestPruneDeletesInBoundedBatches(t *testing.T) {
-	s := open(t, metastoretest.PGSchema(t), "c1")
-	ctx := t.Context()
-	cutoff := time.Now().Add(-48 * time.Hour)
-	rows := 2*pruneBatch + 501
-	recs := make([]usage.Record, 0, rows+1)
-	for i := range rows {
-		recs = append(recs, event("n1", int64(i)+1, cutoff.Add(-time.Hour)))
-	}
-	land(t, s, append(recs, event("n1", int64(rows)+1, cutoff.Add(time.Hour)))...)
-	if _, err := s.pool.Exec(ctx, `CREATE TABLE pruned (n bigint);
-		CREATE FUNCTION count_pruned() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN INSERT INTO pruned SELECT count(*) FROM gone; RETURN NULL; END $$;
-		CREATE TRIGGER count_pruned AFTER DELETE ON sandboxd_usage REFERENCING OLD TABLE AS gone FOR EACH STATEMENT EXECUTE FUNCTION count_pruned()`); err != nil {
-		t.Fatalf("count deletes per statement: %v", err)
-	}
-	if n, err := s.Prune(ctx, "n1", cutoff); err != nil || n != int64(rows-1) {
-		t.Fatalf("prune: %d %v, want %d rows", n, err, rows-1)
-	}
-	rs, err := s.pool.Query(ctx, `SELECT n FROM pruned`)
-	if err != nil {
-		t.Fatalf("read statement sizes: %v", err)
-	}
-	sizes, err := pgx.CollectRows(rs, pgx.RowTo[int64])
-	if err != nil || !slices.Equal(sizes, []int64{pruneBatch, pruneBatch, 500}) {
-		t.Errorf("rows per delete statement %v %v, want %d, %d, 500", sizes, err, pruneBatch, pruneBatch)
+	for _, tt := range []struct {
+		name   string
+		old    int
+		recent bool
+		sizes  []int64
+	}{
+		{"an old run past two batches before a recent row", 2*pruneBatch + 501, true, []int64{pruneBatch, pruneBatch, 500}},
+		{"an old run of one batch before a recent row", pruneBatch, true, []int64{pruneBatch - 1}},
+		{"an old run one past a batch before a recent row", pruneBatch + 1, true, []int64{pruneBatch, 0}},
+		{"an old run past a batch with no recent row", pruneBatch + 500, false, []int64{pruneBatch, 499}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			s := open(t, metastoretest.PGSchema(t), "c1")
+			ctx := t.Context()
+			cutoff := time.Now().Add(-48 * time.Hour)
+			recs := make([]usage.Record, 0, tt.old+1)
+			for i := range tt.old {
+				recs = append(recs, event("n1", int64(i)+1, cutoff.Add(-time.Hour)))
+			}
+			want := fmt.Sprintf("n1/%d", tt.old)
+			if tt.recent {
+				recs = append(recs, event("n1", int64(tt.old)+1, cutoff.Add(time.Hour)))
+				want += fmt.Sprintf(",n1/%d", tt.old+1)
+			}
+			land(t, s, recs...)
+			if _, err := s.pool.Exec(ctx, `CREATE TABLE pruned (n bigint);
+				CREATE FUNCTION count_pruned() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN INSERT INTO pruned SELECT count(*) FROM gone; RETURN NULL; END $$;
+				CREATE TRIGGER count_pruned AFTER DELETE ON sandboxd_usage REFERENCING OLD TABLE AS gone FOR EACH STATEMENT EXECUTE FUNCTION count_pruned()`); err != nil {
+				t.Fatalf("count deletes per statement: %v", err)
+			}
+			if n, err := s.Prune(ctx, "n1", cutoff); err != nil || n != int64(tt.old-1) {
+				t.Fatalf("prune: %d %v, want %d rows", n, err, tt.old-1)
+			}
+			if got := ids(t, s, 0); got != want {
+				t.Errorf("rows left %s, want the floor and what follows it %s", got, want)
+			}
+			rs, err := s.pool.Query(ctx, `SELECT n FROM pruned`)
+			if err != nil {
+				t.Fatalf("read statement sizes: %v", err)
+			}
+			sizes, err := pgx.CollectRows(rs, pgx.RowTo[int64])
+			if err != nil || !slices.Equal(sizes, tt.sizes) {
+				t.Errorf("rows per delete statement %v %v, want %v", sizes, err, tt.sizes)
+			}
+		})
 	}
 }
 

@@ -1052,22 +1052,31 @@ only; computing durations or prices stays with the consumer.
     the floor's line. When neither file holds it, the journal has rotated
     past every deleted line too, and reading it from the start lands no
     deleted line.
-  - **Cost:** each `DELETE` removes at most 1000 rows, oldest first, through
-    the `sandboxd_usage_node` index and the primary key, and holds row locks
-    only on those rows (a few milliseconds each). A sweep's work grows with
-    the rows it deletes: the first sweep after turning retention on deletes
-    the backlog in 1000-row statements, later sweeps about an hour of the
-    node's rows. Lands and `GET /v1/usage` reads do not wait on it.
+  - **Cost:** each statement reads at most the next 1001 of the node's rows
+    by `cursor` through the `sandboxd_usage_node` index, deletes at most 1000
+    of them through the primary key, and holds row locks only on those rows
+    (a few milliseconds each). The sweep ends at the first statement that
+    deletes fewer than 1000 rows, so it runs one statement per 1000 rows it
+    deletes, plus one: the first sweep after turning retention on deletes the
+    backlog, later sweeps about an hour of the node's rows. The node lands
+    nothing while its own sweep runs (both run in one loop; the journal keeps
+    the lines, and they land when the sweep ends), several seconds per
+    million rows deleted. Other nodes' lands and `GET /v1/usage` reads do
+    not wait on it.
   - **Consumers** must page within the retention (see
     [`GET /v1/usage`](sandboxd-api.md#get-v1usage)). A backlog a node lands
     after being cut off for longer than the retention loses its rows older
     than the retention at the node's next sweep, possibly before a consumer
     reads them. Copy rows elsewhere before they age out when you need them
     longer.
-  - Do not delete rows with an external job: it can run while a node
-    re-ships, and the node then lands the deleted lines again.
+  - Do not delete a running node's rows with an external job: it can run
+    while the node re-ships, and the node then lands the deleted lines again.
 - **Renaming** a node, or moving it to another cell, starts it with no rows:
   the node lands what its journal still holds again under the new name.
+  Rows under a name no node ships any more (a renamed, moved or retired
+  node) are never pruned. Delete them by hand (`DELETE FROM sandboxd_usage
+  WHERE cell = … AND node = …`) once consumers have read them; no node
+  lands them again unless a node takes that name again.
 
 ### Shared archive registry
 
