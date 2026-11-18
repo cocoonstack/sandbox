@@ -598,13 +598,15 @@ func (s *Server) handleSandboxes(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	after, limit, err := sandboxPage(query)
-	if err != nil {
-		writeErr(w, http.StatusBadRequest, err.Error())
-		return
+	var limit int
+	if raw := query.Get("limit"); raw != "" {
+		if limit, err = pageLimit(raw); err != nil {
+			writeErr(w, http.StatusBadRequest, err.Error())
+			return
+		}
 	}
 	scope := cmp.Or(tenantFrom(r.Context()), query.Get("tenant"))
-	resp := SandboxListResponse{Sandboxes: s.mgr.Sandboxes(scope, query.Get("claim_ref"), filter, after, limit)}
+	resp := SandboxListResponse{Sandboxes: s.mgr.Sandboxes(scope, query.Get("claim_ref"), filter, query.Get("after"), limit)}
 	if limit > 0 && len(resp.Sandboxes) == limit {
 		resp.Next = resp.Sandboxes[limit-1].ID
 	}
