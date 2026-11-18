@@ -2301,25 +2301,31 @@ func TestSandboxesFilterByMetadata(t *testing.T) {
 func TestSandboxesPageByCursor(t *testing.T) {
 	const cursor = "sb_00000000000000aa"
 	rows := []pool.SandboxSummary{{ID: "sb_00000000000000ab"}, {ID: "sb_00000000000000ac"}}
-	mgr := &fakeManager{sandboxIndex: func(string, string) []pool.SandboxSummary { return rows }}
+	listed := 0
+	mgr := &fakeManager{sandboxIndex: func(string, string) []pool.SandboxSummary { return rows[:listed] }}
 	ts := newTestServer(t, "root", mgr, nil)
 	for _, tt := range []struct {
 		query    string
+		rows     int
 		code     int
 		wantPage [2]string
 		wantNext string
 	}{
-		{"", http.StatusOK, [2]string{"", "0"}, ""},
-		{"?after=" + cursor, http.StatusOK, [2]string{cursor, "0"}, ""},
-		{"?limit=2&after=" + cursor, http.StatusOK, [2]string{cursor, "2"}, "sb_00000000000000ac"},
-		{"?limit=3", http.StatusOK, [2]string{"", "3"}, ""},
-		{"?limit=0", http.StatusBadRequest, [2]string{"unset"}, ""},
-		{"?limit=-1", http.StatusBadRequest, [2]string{"unset"}, ""},
-		{"?limit=10001", http.StatusBadRequest, [2]string{"unset"}, ""},
-		{"?limit=x", http.StatusBadRequest, [2]string{"unset"}, ""},
+		{"", 2, http.StatusOK, [2]string{"", "0"}, ""},
+		{"?claim_ref=gone", 0, http.StatusOK, [2]string{"", "0"}, ""},
+		{"?claim_ref=gone&limit=2", 0, http.StatusOK, [2]string{"", "2"}, ""},
+		{"?after=" + cursor, 2, http.StatusOK, [2]string{cursor, "0"}, ""},
+		{"?limit=2&after=" + cursor, 2, http.StatusOK, [2]string{cursor, "2"}, "sb_00000000000000ac"},
+		{"?limit=1", 1, http.StatusOK, [2]string{"", "1"}, "sb_00000000000000ab"},
+		{"?limit=3", 2, http.StatusOK, [2]string{"", "3"}, ""},
+		{"?limit=0", 0, http.StatusBadRequest, [2]string{"unset"}, ""},
+		{"?limit=-1", 0, http.StatusBadRequest, [2]string{"unset"}, ""},
+		{"?limit=10001", 0, http.StatusBadRequest, [2]string{"unset"}, ""},
+		{"?limit=x", 0, http.StatusBadRequest, [2]string{"unset"}, ""},
 	} {
 		t.Run(tt.query, func(t *testing.T) {
 			mgr.gotSandboxPage = [2]string{"unset"}
+			listed = tt.rows
 			code, body := bodyOf(t, http.MethodGet, ts.URL+"/v1/sandboxes"+tt.query, "root", "")
 			if code != tt.code || mgr.gotSandboxPage != tt.wantPage {
 				t.Fatalf("status %d, manager got %v, want %d and %v", code, mgr.gotSandboxPage, tt.code, tt.wantPage)
@@ -2328,8 +2334,8 @@ func TestSandboxesPageByCursor(t *testing.T) {
 				return
 			}
 			var got SandboxListResponse
-			if err := json.Unmarshal(body, &got); err != nil || got.Next != tt.wantNext || len(got.Sandboxes) != len(rows) {
-				t.Errorf("body %s (%v), want next %q and %d rows", body, err, tt.wantNext, len(rows))
+			if err := json.Unmarshal(body, &got); err != nil || got.Next != tt.wantNext || len(got.Sandboxes) != tt.rows {
+				t.Errorf("body %s (%v), want next %q and %d rows", body, err, tt.wantNext, tt.rows)
 			}
 			if tt.wantNext == "" && strings.Contains(string(body), `"next"`) {
 				t.Errorf("body %s carries next on a last or unlimited page", body)
