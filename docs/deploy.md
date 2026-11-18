@@ -36,8 +36,8 @@ flavors.
 ## Upgrading
 
 Roll the guest images with the daemon: a guest image from another release can
-read a different lane file. Each note names the release it starts from; a note
-for a release you already run does not apply.
+read a different lane file. The note below names the release it starts from;
+it does not apply to a release you already run.
 
 From v0.1.31, the `balloon` config block is gone: a config that still has it
 fails to load, so the node does not start and a reload fails. Remove the block
@@ -53,48 +53,6 @@ the reload did not deflate, such as one moved onto a v0.1.30 node without the
 block. Send each [`POST /v1/sandboxes/{id}/balloon`](sandboxd-api.md#post-v1sandboxesidballoon)
 with its `default` as `target`, waking a hibernated one first. That call now needs a
 `target` body: an empty `POST`, which v0.1.30 answered 202, answers 400.
-
-An S3 `checkpoint_store` written before v0.1.18 used another object layout
-(whole export files, now chunk manifests). Those records are not readable and
-there is no fallback reader: before starting the new binary, wake or release
-every archived claim and delete the checkpoints, then re-promote templates, or
-point `prefix` at an empty location. Objects of the old layout under a reused
-prefix stay in the bucket until you delete them.
-
-From v0.1.25, `sandboxd_tun_addrs` has a `seen_at` column. A cell that ran a
-mesh with `tun` on v0.1.24 adds it before the first v0.1.25 node starts:
-`ALTER TABLE sandboxd_tun_addrs ADD COLUMN seen_at timestamptz NOT NULL DEFAULT now();`
-Without it every new tun claim of the cell runs without an overlay address,
-and adopting an archived tun claim from another node fails.
-Finish the cell's upgrade within a day: a v0.1.24 node never stamps
-`seen_at`, so a v0.1.25 node releases its claims' addresses after a day.
-
-From v0.1.28, archive and replica wake images get `ar_` ids, which v0.1.27
-cannot wake; images archived earlier keep their `ck_` ids and wake on both.
-With `archive_failover`, finish the cell's upgrade before any node hands off,
-evacuates or adopts an archived claim. Before going back to v0.1.27, wake
-every claim archived since the upgrade, and set `replicate_seconds` to 0 on
-v0.1.28 until no row has a `replica_ck` (see
-[Disabling archive failover](#disabling-archive-failover)).
-
-From v0.1.25, a claim env write refuses a `guest: false` entry with an empty
-value, so sending back a `GET` env reply answers 400; send each entry with its
-value. An empty value no longer blocks the node's secret for one claim. A node
-that ran with `host_env_memory_only` stores entries marked `missing`, which
-v0.1.24 cannot read. Before going back to it, turn the flag off and restart,
-then send every missing entry again or release its claim, until no claim's
-`env_missing` is true. Each write stores the value in `claims.json` and in the
-row of an archived or hibernated claim. A running replicated claim's row takes
-it only at a later replica, with no fixed bound, so hibernate each such claim
-and send its entries again; a write that succeeds has rewritten its row. A
-`claims.json` that still holds a missing entry stops v0.1.24 from starting, and
-a row that holds one cannot be adopted by it.
-
-From v0.1.26, a static volume `tenants` name that does not match the
-[tenant API](sandboxd-api.md#tenants-v1tenants) syntax fails config load.
-v0.1.25 kept such a name, and it matched no tenant. Correct each one before
-starting the new binary. An empty list permits every tenant, so to keep a
-volume closed, remove its entry instead of emptying its list.
 
 ## Configuration
 
@@ -153,7 +111,7 @@ the intersection of the two.
 | `volumes` | unset | node-local catalog of operator-managed dataset images: `[ {"name":"imagenet","path":"/srv/datasets/imagenet.img","directio":"off","tenants":["acme"]}, {"name":"scratch-db","path":"/srv/datasets/scratch.img","writable":true} ]`. Names match `^[a-z][a-z0-9_-]{0,19}$` and cannot start with `cocoon-`; paths are absolute; `directio` is `on`, `off`, or `auto` and defaults to `off` for both read-only and writable entries. `tenants` is an optional [access list](sandboxd-api.md#volume-access-lists); a listed name the tenant set does not hold grants nothing and logs a warning at boot (the [tenant API](sandboxd-api.md#tenants-v1tenants) may add it later). `writable` (default `false`) lets a claim request `mode: "rw"` on that entry — see [Dataset volumes](#dataset-volumes). The catalog is intentionally not part of the cluster digest |
 | `volume_roots` | unset | absolute directories that bound [runtime registration](sandboxd-api.md#put-v1volumesname): the registered path, once cleaned, must equal a root or sit under one, or the PUT returns 400. The check is lexical: `..` is resolved but symlinks are not followed, so a symlink under a root can point outside it. Static `volumes` entries are not checked. A saved registration outside the roots prevents startup. Unregister it before narrowing the roots, or widen the roots to include it. Keep `data_dir` outside every root. Unset or an empty list accepts any absolute path |
 | `secrets` | unset | credentials the egress proxy injects by name: `[{"name": "gh", "header": "Authorization", "value_env": "GH_TOKEN"}]`. A pool or egress-class rule references the name (on a claim where both apply, only the pool rule's secret is injected); the value comes from the claim's `guest: false` env, then the node's environment, never this file. Without `value_env` the secret's name is the env to read, and only claims supply it. See [egress](egress.md#claim-env-and-secrets). Prefer a claim's own `guest: false` entry over `value_env`: a node value is shared by every claim of the cell, long-lived, and stored in the node's environment file |
-| `host_env_memory_only` | `false` | keep claims' `guest: false` env values in memory only: `claims.json` and the [archive and replica rows](#shared-archive-registry) store such an entry without its value and mark it `missing`, and a hibernating claim drops its values. A missing entry injects nothing and blocks the node's value for its secret until the control plane sends it again with `PATCH` ([claim env](sandboxd-api.md#getputpatch-v1sandboxesidenv)). A live move carries the values to its target. Turn it on only when every node of the cell runs v0.1.25 or later with it, and the control plane sends missing entries again. The first start with it on rewrites `claims.json` without the values; an archive row written before keeps its values until the row is next written. Restart only |
+| `host_env_memory_only` | `false` | keep claims' `guest: false` env values in memory only: `claims.json` and the [archive and replica rows](#shared-archive-registry) store such an entry without its value and mark it `missing`, and a hibernating claim drops its values. A missing entry injects nothing and blocks the node's value for its secret until the control plane sends it again with `PATCH` ([claim env](sandboxd-api.md#getputpatch-v1sandboxesidenv)). A live move carries the values to its target. Turn it on on every node of the cell, and only when the control plane sends missing entries again. The first start with it on rewrites `claims.json` without the values; an archive row written before keeps its values until the row is next written. Restart only |
 | `egress_internal_allow` | unset | CIDR prefixes re-admitted through the egress proxy's SSRF guard, node-wide (every pool and tenant); `prefix:port,port` scopes an entry to those ports, a bare prefix admits every port. Prefer the port form. Prefixes, not a permit-private switch — the guest bridges are themselves ULA/RFC1918. See [egress](egress.md) |
 | `egress_upstream` | unset | per-claim upstream proxies: `{"claim_env": "EGRESS_UPSTREAM", "allow": ["res.example.com", "10.1.0.0/16"]}`. A claim's `guest: false` entry under `claim_env` (`http://` or `socks5://`, optional `user:pass@`, or `direct`) routes its egress through that upstream, which must be on `allow` (host names, IPs, CIDR prefixes). See [upstream proxies](egress.md#upstream-proxies) |
 | `egress_conn_rate` | unset | caps the new upstream connections each claim's proxy opens: `{"per_second": 30, "burst": 600}`, a token bucket per claim; a reused keep-alive connection and a connection to an internal IP address (the SSRF guard decides those) cost nothing, while a host name costs a token even when it resolves to one `egress_internal_allow` re-admits. A connection past it gets 429 (SOCKS5: not allowed) and an audit `decision` of `rate_limited`. A claim's bucket starts full at its first connection, and again when a reload changes `per_second` or `burst`. Unset leaves the rate unlimited |
