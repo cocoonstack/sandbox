@@ -6,6 +6,7 @@ import (
 	"io"
 
 	"github.com/cocoonstack/sandbox/protocol/wire"
+	"github.com/cocoonstack/sandbox/sdk/go/silkd"
 )
 
 // Spawn starts cmd detached and returns its guest pid; stdio is ignored and Session must be empty.
@@ -55,18 +56,13 @@ func (s *Sandbox) Attach(ctx context.Context, pid uint32, stdout, stderr io.Writ
 func (s *Sandbox) drainProc(ctx context.Context, req wire.Request, stdout, stderr io.Writer) (int32, bool, error) {
 	var code int32
 	var exited bool
-	err := s.retryMoved(ctx, func() error {
-		conn, l, err := s.call(ctx, req)
-		if err != nil {
-			return err
-		}
-		defer l.close()
+	err := s.rpc(ctx, req, func(conn *silkd.Conn) (err error) {
 		_, code, exited, err = pumpStdio(ctx, conn, stdout, stderr)
 		// Logs closes with done after the exit frame
 		if _, replay := req.(*wire.Logs); replay && exited && err == nil {
 			err = terminalErr(ctx, conn)
 		}
-		return l.done(err)
+		return err
 	})
 	return code, exited, err
 }

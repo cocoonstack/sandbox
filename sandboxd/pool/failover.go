@@ -448,11 +448,7 @@ func (m *Manager) forgetAdopted(ctx context.Context, sb *types.Sandbox) func() {
 	m.mu.Lock()
 	ck, vm, snap := sb.ArchiveCk, sb.VMName, sb.HibernateSnap
 	m.mu.Unlock()
-	if ck != "" {
-		if err := m.ckMarks.clear(ck); err != nil {
-			logger.Warnf(ctx, "clear archive ck %s: %v", ck, err)
-		}
-	}
+	m.clearMark(ctx, ck)
 	holds, ok := m.forgetClaim(ctx, sb)
 	if !ok {
 		return nil
@@ -706,11 +702,7 @@ func (m *Manager) fenceArchived(ctx context.Context, claims map[string]*types.Sa
 			}
 		}
 		if drop {
-			if sb.ArchiveCk != "" {
-				if err := m.ckMarks.clear(sb.ArchiveCk); err != nil {
-					logger.Warnf(ctx, "clear archive ck %s: %v", sb.ArchiveCk, err)
-				}
-			}
+			m.clearMark(ctx, sb.ArchiveCk)
 			m.deleteUnrowed(ctx, sb, rec)
 			delete(claims, id)
 			logger.Infof(ctx, "dropped sandbox %s: another node holds it", id)

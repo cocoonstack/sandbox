@@ -264,9 +264,7 @@ func (m *Manager) wakeArchived(ctx context.Context, sb *types.Sandbox) (string, 
 	if delErr := m.ckpts.Delete(ctx, ck); delErr != nil {
 		logger.Warnf(ctx, "delete consumed archive ck %s: %v", ck, delErr)
 	} else {
-		if clearErr := m.ckMarks.clear(ck); clearErr != nil {
-			logger.Warnf(ctx, "clear archive ck %s: %v", ck, clearErr)
-		}
+		m.clearMark(ctx, ck)
 		m.dropTombstone(ctx, sb.ID, consumed)
 	}
 	if m.disarmIfReleased(sb) {

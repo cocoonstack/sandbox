@@ -288,15 +288,9 @@ func (m *Manager) commitTun(ctx context.Context, sb *types.Sandbox, locked bool,
 	if err = m.store.commit(js); err == nil {
 		return sock, rowed, nil
 	}
-	m.mu.Lock()
-	var rb claimSnapshot
-	undone := m.claimed[sb.ID] == sb && sb.TunOff == next.off && sb.TunProfile == next.profile && sb.TunAddr == next.addr
-	if undone {
-		sb.TunOff, sb.TunProfile, sb.TunAddr = prev.off, prev.profile, prev.addr
-		rb = m.store.set(sb)
-	}
-	m.mu.Unlock()
-	m.store.recommit(ctx, rb)
+	undone := m.undoCommit(ctx, sb, func() bool {
+		return sb.TunOff == next.off && sb.TunProfile == next.profile && sb.TunAddr == next.addr
+	}, func() { sb.TunOff, sb.TunProfile, sb.TunAddr = prev.off, prev.profile, prev.addr })
 	if undone && plan.assign {
 		m.releaseTun(ctx, sb.ID, next.addr)
 	}

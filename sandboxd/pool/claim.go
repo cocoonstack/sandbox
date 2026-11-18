@@ -189,15 +189,9 @@ func (m *Manager) Renew(ctx context.Context, id string, cred Cred, ttl time.Dura
 	deadline, js, rowed := sb.Deadline, m.store.set(sb), m.rowFollows(sb)
 	m.mu.Unlock()
 	if err := m.store.commit(js); err != nil {
-		m.mu.Lock()
-		var rb claimSnapshot
-		// A concurrent renew that landed keeps its grant: roll back only what this call wrote
-		if m.claimed[id] == sb && sb.Deadline.Equal(deadline) {
+		m.undoCommit(ctx, sb, func() bool { return sb.Deadline.Equal(deadline) }, func() {
 			sb.Deadline, sb.LeaseSeconds, sb.OnExpire = prev, prevLease, prevExpire
-			rb = m.store.set(sb)
-		}
-		m.mu.Unlock()
-		m.store.recommit(ctx, rb)
+		})
 		return time.Time{}, fmt.Errorf("renew %s: persist claims: %w", id, err)
 	}
 	m.recordUsage(ctx, usage.Event{Time: renewedAt, Event: "renew", ID: id, Tenant: sb.Tenant, Deadline: deadline})
@@ -327,11 +321,7 @@ func (m *Manager) releaseResolved(ctx context.Context, id string, sb *types.Sand
 		rb := m.store.set(sb)
 		m.mu.Unlock()
 		logger := log.WithFunc("pool.releaseResolved")
-		if ck != "" {
-			if clearErr := m.ckMarks.clear(ck); clearErr != nil {
-				logger.Warnf(ctx, "clear archive ck %s: %v", ck, clearErr)
-			}
-		}
+		m.clearMark(ctx, ck)
 		m.store.recommit(ctx, rb)
 		logger.Errorf(ctx, saveErr, "persist release of %s", id)
 		return fmt.Errorf("release %s: %w", id, saveErr)
@@ -698,6 +688,20 @@ func (m *Manager) setIfLive(sb *types.Sandbox, mutate func()) (claimSnapshot, bo
 	}
 	mutate()
 	return m.store.set(sb), true
+}
+
+// undoCommit rolls back what a failed commit wrote; a concurrent write that landed keeps its own.
+func (m *Manager) undoCommit(ctx context.Context, sb *types.Sandbox, mine func() bool, undo func()) bool {
+	m.mu.Lock()
+	var rb claimSnapshot
+	undone := m.claimed[sb.ID] == sb && mine()
+	if undone {
+		undo()
+		rb = m.store.set(sb)
+	}
+	m.mu.Unlock()
+	m.store.recommit(ctx, rb)
+	return undone
 }
 
 func (m *Manager) commitIfLive(ctx context.Context, sb *types.Sandbox, mutate func()) (bool, error) {

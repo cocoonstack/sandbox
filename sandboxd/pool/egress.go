@@ -32,14 +32,7 @@ func (m *Manager) SetEgressLimit(ctx context.Context, id string, l types.EgressL
 	js := m.store.set(sb)
 	m.mu.Unlock()
 	if err := m.store.commit(js); err != nil {
-		m.mu.Lock()
-		var rb claimSnapshot
-		if m.claimed[id] == sb && sb.EgressLimit == l {
-			sb.EgressLimit = prev
-			rb = m.store.set(sb)
-		}
-		m.mu.Unlock()
-		m.store.recommit(ctx, rb)
+		m.undoCommit(ctx, sb, func() bool { return sb.EgressLimit == l }, func() { sb.EgressLimit = prev })
 		m.out.SetEgressLimit(sb)
 		return fmt.Errorf("set egress limit %s: persist claims: %w", id, err)
 	}
