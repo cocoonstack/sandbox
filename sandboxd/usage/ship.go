@@ -157,18 +157,17 @@ func (s *shipper) locate(ctx context.Context, live, backup *os.File) (*os.File, 
 			}
 		}
 	}
-	logger := log.WithFunc("usage.shipper.locate")
-	switch {
-	case found != nil:
+	if found != nil {
 		return found, s.at.end
-	case floor != nil:
+	}
+	logger := log.WithFunc("usage.shipper.locate")
+	if floor != nil {
 		logger.Warn(ctx, "the last landed usage line is gone from the journal; shipping resumes past the oldest landed line it still holds")
 		s.at = floorAt
 		return floor, floorAt.end
-	default:
-		logger.Warn(ctx, "the last landed usage line is gone from the journal; shipping resumes at the oldest kept line, and lines rotated out unlanded are lost")
-		return oldest, 0
 	}
+	logger.Warn(ctx, "the last landed usage line is gone from the journal; shipping resumes at the oldest kept line, and lines rotated out unlanded are lost")
+	return oldest, 0
 }
 
 func (s *shipper) prune(ctx context.Context, retention time.Duration) {

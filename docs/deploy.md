@@ -1077,6 +1077,11 @@ only; computing durations or prices stays with the consumer.
   node) are never pruned. Delete them by hand (`DELETE FROM sandboxd_usage
   WHERE cell = … AND node = …`) once consumers have read them; no node
   lands them again unless a node takes that name again.
+- **Renaming a cell** without that re-land: stop every node of the cell,
+  change `cell` in one transaction in every cell-scoped table
+  (`sandboxd_usage`, `sandboxd_archives`, `sandboxd_nodes`,
+  `sandboxd_pool_sets`, `sandboxd_moves`, `sandboxd_tun_addrs`), then start
+  the nodes with the new `meta_store.cell`.
 
 ### Shared archive registry
 
