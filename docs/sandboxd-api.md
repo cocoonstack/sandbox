@@ -1317,9 +1317,7 @@ waking it; its next wake applies it. A running claim's replica row under
 `archive_failover` picks the change up at its next replica capture, which for a
 claim that hibernates first comes after its next wake. A fork child and a
 checkpoint branch take their source's cap. A new claim starts without one; no
-pool setting gives a default. Set caps only once every node of the cell runs a
-sandboxd that has this endpoint: an older node drops `egress_limit` when it
-adopts, wakes or receives the claim.
+pool setting gives a default.
 
 204 on success; 400 an unknown field or a negative rate; 404 unknown id; 503
 `sandbox moving to another node; retry` while a live move pauses the claim for
