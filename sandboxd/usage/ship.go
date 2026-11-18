@@ -176,6 +176,10 @@ func (s *shipper) prune(ctx context.Context, retention time.Duration) {
 		return
 	}
 	logger := log.WithFunc("usage.shipper.prune")
+	if err := s.syncJournal(); err != nil {
+		logger.Warnf(ctx, "skip pruning usage rows this hour: sync the journal: %v", err)
+		return
+	}
 	n, err := s.store.Prune(ctx, s.node, time.Now().Add(-retention))
 	if err != nil {
 		logger.Warnf(ctx, "prune usage rows older than %s (%d deleted): %v; the next sweep retries", retention, n, err)
@@ -184,6 +188,10 @@ func (s *shipper) prune(ctx context.Context, retention time.Duration) {
 	if n > 0 {
 		logger.Infof(ctx, "pruned %d usage rows older than %s", n, retention)
 	}
+}
+
+func (s *shipper) syncJournal() error {
+	return errors.Join(syncOpened(os.Open(s.path)), syncOpened(os.Open(s.path+".1")))
 }
 
 func (s *shipper) read(ctx context.Context, files []*os.File, off int64) ([]Record, anchor, int) {
@@ -255,6 +263,16 @@ func decode(line []byte) (Event, error) {
 	var ev Event
 	err := json.Unmarshal(line[:len(line)-1], &ev, jsontext.AllowInvalidUTF8(true))
 	return ev, err
+}
+
+func syncOpened(f *os.File, err error) error {
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	return errors.Join(f.Sync(), f.Close())
 }
 
 func sameFile(a, b *os.File) bool {

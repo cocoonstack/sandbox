@@ -1046,10 +1046,12 @@ only; computing durations or prices stays with the consumer.
   than that of a row before it stays until that row ages out.
   - **Re-ship:** when the journal no longer holds the newest row's line, the
     node resumes after the floor's line instead of at the journal's start, so
-    a deleted line never lands again. The floor's line is older than the
-    retention, so a host crash that drops the journal's unsynced tail keeps
-    it. When neither file holds it, the journal has rotated past every
-    deleted line too, and reading it from the start lands no deleted line.
+    a deleted line never lands again. Before each prune the node fsyncs
+    `usage.jsonl`, then `usage.jsonl.1`, and skips that hour's prune when a
+    sync fails, so a host crash that drops the journal's unsynced tail keeps
+    the floor's line. When neither file holds it, the journal has rotated
+    past every deleted line too, and reading it from the start lands no
+    deleted line.
   - **Cost:** each `DELETE` removes at most 1000 rows, oldest first, through
     the `sandboxd_usage_node` index and the primary key, and holds row locks
     only on those rows (a few milliseconds each). A sweep's work grows with
