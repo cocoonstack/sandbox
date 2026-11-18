@@ -1372,7 +1372,9 @@ and `template` is a label, since promote lets the caller name it), `deadline` (t
 `renew`, `wake`, `unarchive` and `move_in` carry the lease, `archive` and `adopt` the retention
 end, or nothing for an archive kept forever, and `reap` the deadline it ended under), `tenant` (the owning tenant, on every event of a
 tenant's claim), `children` (fork) and `ref` (the promoted template / checkpoint
-id, the egress host, a `vmm_failed` reason, or why reconcile ended a claim). An egress event that injected credentials names
+id, the egress host, a `vmm_failed` reason, or why reconcile ended a claim). `egress` events, one per egress decision, are written only with
+[`egress_usage_events`](deploy.md#configuration) on (default off), and `egress_bytes` events only with
+`egress_usage_bytes` on. An egress event that injected credentials names
 them in `secret` (`gh,claim:<entry>`, never a value). An egress event routed through an
 [upstream proxy](egress.md#upstream-proxies) carries `upstream` (its `host:port`), and with
 `egress_usage_bytes` on, `egress_bytes` events add the connection's payload `tx`/`rx` bytes. With

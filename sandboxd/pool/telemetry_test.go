@@ -3,9 +3,12 @@ package pool
 import (
 	"encoding/json/v2"
 	"errors"
+	"io"
 	"io/fs"
 	"maps"
+	"net"
 	"net/http"
+	"net/http/httptest"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -17,6 +20,9 @@ import (
 
 	"github.com/cocoonstack/sandbox/sandboxd/config"
 	"github.com/cocoonstack/sandbox/sandboxd/egress"
+	"github.com/cocoonstack/sandbox/sandboxd/engine"
+	"github.com/cocoonstack/sandbox/sandboxd/outbound"
+	"github.com/cocoonstack/sandbox/sandboxd/outbound/outboundtest"
 	"github.com/cocoonstack/sandbox/sandboxd/tenants"
 	"github.com/cocoonstack/sandbox/sandboxd/types"
 	"github.com/cocoonstack/sandbox/sandboxd/usage"
@@ -554,9 +560,71 @@ func TestClaimMetadataSurvivesARestart(t *testing.T) {
 
 func TestEgressUsageEventNamesTheInjectedCredentials(t *testing.T) {
 	m := newTestManager(t, newFakeEngine(), config.PoolSpec{PoolKey: testKey})
+	reloadWith(t, m, func(c *config.Config) { c.EgressUsageEvents = true })
 	m.recordEgress(t.Context(), "sb_v", "acme", egress.Event{Method: http.MethodGet, Host: "graph.example.com", Port: 443, Decision: egress.DecisionAllow, Injected: "claim:FB"})
 	if evs := usageJournal(t, m); len(evs) != 1 || evs[0].Event != "egress" || evs[0].Reference != "graph.example.com" || evs[0].Secret != "claim:FB" {
 		t.Errorf("usage events %+v, want one egress to graph.example.com naming claim:FB", evs)
+	}
+}
+
+func TestEgressDecisionsReachTheUsageJournalOnlyWhenOptedIn(t *testing.T) {
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, "ok") }))
+	t.Cleanup(origin.Close)
+	dir := t.TempDir()
+	pol := &egress.Policy{Allow: []egress.Rule{{Host: outboundtest.Hostname(t, origin.URL)}}}
+	m := mustManager(t, &config.Config{DataDir: dir, AuditLog: true, EgressUsageBytes: true, Pools: []config.PoolSpec{{PoolKey: testKey, Egress: pol}}}, newFakeEngine())
+	withOutbound(t, m, func(o *outbound.Options) { o.Dial = (&net.Dialer{}).DialContext })
+	sb := outboundtest.VsockSandbox(t, "sb_meter", testKey)
+	if err := m.out.ArmProxy(t.Context(), sb); err != nil {
+		t.Fatalf("arm proxy: %v", err)
+	}
+	t.Cleanup(func() { m.out.Disarm(sb.ID, true) })
+	client := outboundtest.EgressClient(engine.EgressSocketPath(sb.VsockSocket))
+	get := func(url string) int {
+		resp, err := client.Get(url)
+		if err != nil {
+			t.Fatalf("get %s: %v", url, err)
+		}
+		_, _ = io.Copy(io.Discard, resp.Body)
+		_ = resp.Body.Close()
+		return resp.StatusCode
+	}
+	for _, phase := range []struct {
+		name   string
+		events bool
+		usage  string
+	}{
+		{"default", false, "egress_bytes"},
+		{"opted in", true, "egress_bytes,egress,egress,egress_bytes"},
+	} {
+		if phase.events {
+			reloadWith(t, m, func(c *config.Config) { c.EgressUsageEvents = true })
+		}
+		if code := get("http://denied.test/"); code != http.StatusForbidden {
+			t.Fatalf("%s: denied host answered %d, want 403", phase.name, code)
+		}
+		if code := get(origin.URL + "/"); code != http.StatusOK {
+			t.Fatalf("%s: allowed host answered %d, want 200", phase.name, code)
+		}
+		waitFor(t, func() bool {
+			return strings.Count(usageEventsOf(t, m, sb.ID), "egress_bytes") == strings.Count(phase.usage, "egress_bytes")
+		})
+		if got := usageEventsOf(t, m, sb.ID); got != phase.usage {
+			t.Errorf("%s: usage events %q, want %q", phase.name, got, phase.usage)
+		}
+	}
+	var decisions []string
+	for _, line := range auditLines(t, dir) {
+		var f egressFrame
+		if err := json.Unmarshal([]byte(line), &f); err != nil {
+			t.Fatalf("bad audit line %q: %v", line, err)
+		}
+		if f.Op == egressEvent {
+			decisions = append(decisions, f.Decision)
+		}
+	}
+	if want := []string{"deny", "allow", "deny", "allow"}; !slices.Equal(decisions, want) {
+		t.Errorf("audit egress decisions %v, want %v in both phases", decisions, want)
 	}
 }
 

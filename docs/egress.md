@@ -3,9 +3,9 @@
 A sandbox gets the **effect** of a credential, never the credential. Outbound
 access is an allow-listed, audited resource enforced on the host: the secret
 lives host-side and enters no guest memory, so prompt injection can exfiltrate
-at most the proxy's answers, and every credentialed call lands in the usage
-journal keyed by sandbox and tenant (and in the audit journal when `audit_log`
-is on). Default-deny.
+at most the proxy's answers, and every credentialed call lands in the audit
+journal keyed by sandbox and tenant when `audit_log` is on (and in the usage
+journal with `egress_usage_events`). Default-deny.
 
 The same host proxy also serves the **none lane** (a NIC-less Cloud Hypervisor
 guest) over vsock, so a network-less sandbox can call approved APIs with
@@ -367,10 +367,11 @@ woken sandbox binds at arm time.
   only it matches answers 403.
 - No policy on a claim ⇒ no egress at all (the proxy is not started).
 
-Each decision is metered as an `egress` usage event, which names the injected
-secrets in `secret` as the audit line does, and, when `audit_log` is
-on, written to `audit.jsonl` (`op:"egress"`, `dest`, `port`, `method`,
-`decision`, and the secret **name** in `secret`); an intercepted `CONNECT` is
+When `audit_log` is on, each decision is written to `audit.jsonl`
+(`op:"egress"`, `dest`, `port`, `method`, `decision`, and the secret **name**
+in `secret`). With [`egress_usage_events`](deploy.md#configuration) on (default
+off), it is also metered as an `egress` usage event, which names the injected
+secrets in `secret` as the audit line does. An intercepted `CONNECT` is
 recorded as a decision of its own before its inner requests. The HTTP and
 CONNECT doors deny a host longer than 253 bytes (the DNS limit); the audit
 record clips it. They also deny a host with a zone (`%`) or a non-ASCII byte,
