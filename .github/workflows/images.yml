@@ -11,8 +11,7 @@ on:
       - "os-image/**"
       - ".github/workflows/images.yml"
       - ".github/workflows/build-os-images.yml"
-      - ".github/workflows/build-silkd.yml"
-      - ".github/workflows/build-boot.yml"
+      - ".github/workflows/build-carrier.yml"
       - "!**/*.md"
   workflow_dispatch:
     inputs:
@@ -65,8 +64,8 @@ jobs:
             # Each area carries its own build workflow: changing how an image is
             # built must rebuild it, or the run goes green having built nothing.
             wf=.github/workflows
-            changed boot/ $wf/build-boot.yml && boot=true || boot=false
-            changed silkd/ $wf/build-silkd.yml && silkd=true || silkd=false
+            changed boot/ $wf/build-carrier.yml && boot=true || boot=false
+            changed silkd/ $wf/build-carrier.yml && silkd=true || silkd=false
             changed os-image/ $wf/build-os-images.yml $wf/images.yml && osimage=true || osimage=false
           fi
           {
@@ -80,16 +79,18 @@ jobs:
   boot:
     needs: detect
     if: ${{ needs.detect.outputs.boot == 'true' }}
-    uses: ./.github/workflows/build-boot.yml
+    uses: ./.github/workflows/build-carrier.yml
     with:
+      carrier: boot
       no_cache: ${{ github.event.inputs.no-cache == 'true' }}
     secrets: inherit
 
   silkd:
     needs: detect
     if: ${{ needs.detect.outputs.silkd == 'true' }}
-    uses: ./.github/workflows/build-silkd.yml
+    uses: ./.github/workflows/build-carrier.yml
     with:
+      carrier: silkd
       no_cache: ${{ github.event.inputs.no-cache == 'true' }}
     secrets: inherit
 
