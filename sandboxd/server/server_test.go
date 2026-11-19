@@ -952,7 +952,7 @@ func TestAgentMapsEachFailureToItsStatus(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			mgr := &fakeManager{socket: func(string, string) (string, error) { return "/v/sock", tt.sockErr }, unreachable: make(chan string, 1)}
+			mgr := &fakeManager{socket: func(string, string) (string, error) { return "/v/sock", tt.sockErr }}
 			dialer := &fakeDialer{dial: func(context.Context, string) (net.Conn, error) {
 				return nil, tt.dialErr
 			}}
@@ -976,15 +976,46 @@ func TestAgentMapsEachFailureToItsStatus(t *testing.T) {
 			if resp.StatusCode != tt.want {
 				t.Errorf("status %d, want %d", resp.StatusCode, tt.want)
 			}
-			select {
-			case id := <-mgr.unreachable:
-				if tt.dialErr == nil || id != "sb_1" {
-					t.Errorf("noted %q unreachable, want a note only for a failed dial of sb_1", id)
-				}
-			default:
+		})
+	}
+}
+
+func TestOnlyAFailedDialTheCallerStillWaitsOnIsNotedUnreachable(t *testing.T) {
+	for _, tt := range []struct {
+		name     string
+		dialErr  error
+		canceled bool
+		noted    int
+	}{
+		{"guest answers", nil, false, 0},
+		{"dial fails", errors.New("connection refused"), false, 1},
+		{"dial fails after the caller left", context.Canceled, true, 0},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			mgr := &fakeManager{socket: func(string, string) (string, error) { return "/v/sock", nil }, unreachable: make(chan string, 1)}
+			dialer := &fakeDialer{dial: func(context.Context, string) (net.Conn, error) {
 				if tt.dialErr != nil {
-					t.Error("a failed silkd dial was not noted")
+					return nil, tt.dialErr
 				}
+				guest, _ := net.Pipe()
+				return guest, nil
+			}}
+			s := New("", "node:7777", mgr, dialer, nil, nil, nil, nil)
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			if tt.canceled {
+				cancel()
+			}
+			guest, done, err := s.openGuest(ctx, "sb_1", pool.Cred{Token: "tok"}, mgr.WakeAgentSocket)
+			if (err != nil) != (tt.dialErr != nil) {
+				t.Fatalf("openGuest: %v, want an error only for a failed dial", err)
+			}
+			if err == nil {
+				done()
+				_ = guest.Close()
+			}
+			if len(mgr.unreachable) != tt.noted {
+				t.Errorf("notes %d, want %d", len(mgr.unreachable), tt.noted)
 			}
 		})
 	}

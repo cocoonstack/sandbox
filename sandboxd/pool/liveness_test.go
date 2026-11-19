@@ -659,6 +659,9 @@ func TestASilentGuestInALiveVMMIsStoppedFailedAndColdBootedByAWake(t *testing.T)
 	if len(m.silent) != 0 {
 		t.Errorf("notes %v, want every aged note settled", m.silent)
 	}
+	if got := eng.probeTimeouts[len(eng.probeTimeouts)-2:]; !slices.Equal(got, []time.Duration{wakeProbeTimeout, claimProbeTimeout}) {
+		t.Errorf("probe waits %v, want the long probe then a short one under the lock", got)
+	}
 	eng.probeErr = nil
 	if err := m.Wake(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
 		t.Fatalf("wake: %v", err)
@@ -672,47 +675,94 @@ func TestASilentGuestInALiveVMMIsStoppedFailedAndColdBootedByAWake(t *testing.T)
 }
 
 func TestASilenceNoteLeavesAClaimRunningUnlessItsLiveGuestMissesTheProbe(t *testing.T) {
+	silent := func(_ *testing.T, _ *Manager, eng *fakeEngine, _ *types.Sandbox) {
+		eng.probeErr = errors.New("silkd probe: context deadline exceeded")
+	}
 	for _, tt := range []struct {
-		name                          string
-		aged, silent, down, hibernate bool
-		probes                        int
+		name          string
+		young         bool
+		setup         func(t *testing.T, m *Manager, eng *fakeEngine, sb *types.Sandbox)
+		probes, stops int
+		noteKept      bool
 	}{
-		{"guest answers", true, false, false, false, 1},
-		{"note too young", false, true, false, false, 0},
-		{"vmm already down", true, true, true, false, 1},
-		{"hibernated since the note", true, true, false, true, 0},
+		{name: "guest answers", setup: func(*testing.T, *Manager, *fakeEngine, *types.Sandbox) {}, probes: 1},
+		{name: "note too young", young: true, setup: silent, noteKept: true},
+		{name: "vmm already down", setup: func(t *testing.T, m *Manager, eng *fakeEngine, sb *types.Sandbox) {
+			silent(t, m, eng, sb)
+			killVMM(eng, sb.VMName)
+		}, probes: 2},
+		{name: "hibernated since the note", setup: func(t *testing.T, m *Manager, eng *fakeEngine, sb *types.Sandbox) {
+			silent(t, m, eng, sb)
+			hibernateClaim(t, m, sb)
+		}},
+		{name: "past the deadline it archives at", setup: func(t *testing.T, m *Manager, eng *fakeEngine, sb *types.Sandbox) {
+			silent(t, m, eng, sb)
+			m.mu.Lock()
+			sb.OnExpire = types.ExpireArchive
+			m.mu.Unlock()
+			expire(m, sb)
+		}},
+		{name: "replicated on a fenced node", setup: func(t *testing.T, m *Manager, eng *fakeEngine, sb *types.Sandbox) {
+			silent(t, m, eng, sb)
+			sb.Replicated = true
+			m.tripFence()
+		}},
+		{name: "inspect fails", setup: func(t *testing.T, m *Manager, eng *fakeEngine, sb *types.Sandbox) {
+			silent(t, m, eng, sb)
+			eng.inspectFails = 1
+		}, probes: 2, noteKept: true},
+		{name: "stop fails", setup: func(t *testing.T, m *Manager, eng *fakeEngine, sb *types.Sandbox) {
+			silent(t, m, eng, sb)
+			eng.stopErr = errors.New("stop failed")
+		}, probes: 2, stops: 1, noteKept: true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			eng := newFakeEngine()
 			m := newTestManager(t, eng)
 			sb := mustClaim(t, m, testKey)
 			m.NoteUnreachable(sb.ID)
-			if tt.aged {
+			if !tt.young {
 				ageSilentNotes(m)
 			}
-			if tt.silent {
-				eng.probeErr = errors.New("silkd probe: context deadline exceeded")
-			}
-			if tt.down {
-				killVMM(eng, sb.VMName)
-			}
-			if tt.hibernate {
-				hibernateClaim(t, m, sb)
-			}
+			tt.setup(t, m, eng, sb)
 			probes, stops := eng.probeCount(), len(eng.stops)
 
 			runSilent(t, m)
 
-			if got, _ := m.Sandbox(sb.ID); got.Failed != "" || len(eng.stops) != stops {
-				t.Errorf("failed %q stops %v, want the claim left as it was", got.Failed, eng.stops)
+			if got, _ := m.Sandbox(sb.ID); got.Failed != "" || len(eng.stops)-stops != tt.stops {
+				t.Errorf("failed %q stops %v, want the claim not failed and %d stop attempts", got.Failed, eng.stops, tt.stops)
 			}
 			if got := eng.probeCount() - probes; got != tt.probes {
 				t.Errorf("probes %d, want %d", got, tt.probes)
 			}
-			if _, kept := m.silent[sb.ID]; kept == tt.aged {
-				t.Errorf("note kept %v, want it kept only while it is younger than the grace", kept)
+			if _, kept := m.silent[sb.ID]; kept != tt.noteKept {
+				t.Errorf("note kept %v, want %v", kept, tt.noteKept)
 			}
 		})
+	}
+}
+
+func TestAClaimHibernatedDuringTheLongProbeIsLeftAlone(t *testing.T) {
+	eng := newFakeEngine()
+	m := newTestManager(t, eng)
+	sb := mustClaim(t, m, testKey)
+	m.NoteUnreachable(sb.ID)
+	ageSilentNotes(m)
+	stall := make(chan struct{})
+	eng.probeErr, eng.probeStall = errors.New("silkd probe: context deadline exceeded"), stall
+	probes := eng.probeCount()
+
+	m.silentOnce(t.Context())
+	waitFor(t, func() bool { return eng.probeCount() == probes+1 })
+	hibernateClaim(t, m, sb)
+	close(stall)
+	waitFor(t, func() bool { return !m.sweeps.silent.Load() })
+
+	if got, _ := m.Sandbox(sb.ID); got.Failed != "" || !got.Hibernated {
+		t.Errorf("summary %+v, want the claim hibernated and not failed", got)
+	}
+	if got := eng.probeCount() - probes; got != 1 {
+		t.Errorf("probes %d, want no probe under the lock once the claim is hibernated", got)
 	}
 }
 

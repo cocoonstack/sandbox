@@ -215,7 +215,9 @@ func (s *Server) openGuest(ctx context.Context, id string, cred pool.Cred, wake 
 	guest, err := s.dialer.DialSilkd(ctx, sock)
 	if err != nil {
 		done()
-		s.mgr.NoteUnreachable(id)
+		if ctx.Err() == nil {
+			s.mgr.NoteUnreachable(id)
+		}
 		return nil, nil, fmt.Errorf("%w: %w", errUnreachable, err)
 	}
 	stop := pool.CloseOnFence(fenced, guest)
