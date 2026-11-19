@@ -14,7 +14,7 @@ require (
 	github.com/jackc/pgx/v5 v5.12.0
 	github.com/projecteru2/core v0.1.7
 	github.com/rs/zerolog v1.35.1
-	golang.org/x/mod v0.42.0
+	golang.org/x/mod v0.43.0
 	golang.org/x/net v0.62.0
 	golang.org/x/sync v0.25.0
 	golang.org/x/sys v0.50.0
