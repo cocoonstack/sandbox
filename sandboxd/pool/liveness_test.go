@@ -915,6 +915,43 @@ func TestARestartDuringAHibernateWakeColdBootWhoseFinishFailsKeepsTheSnapshot(t 
 	}
 }
 
+func TestAColdBootFinishedAtStartupHoldsItsRunningSlot(t *testing.T) {
+	for _, tt := range []struct{ name, snap, failed string }{
+		{"hibernate wake", "hib-1", ""},
+		{"wake of a failed claim", "", "vmm exited"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			eng := newFakeEngine()
+			eng.vms["sbx-cb-1"] = "/vsock/cb"
+			eng.snapshots = []string{"hib-1"}
+			stall := make(chan struct{})
+			eng.probeStall = stall
+			dataDir := t.TempDir()
+			seedClaims(t, dataDir, map[string]*types.Sandbox{"sb_cb": {
+				ID: "sb_cb", VMName: "sbx-cb-1", Key: testKey, Token: "tok", VsockSocket: "/vsock/cb",
+				HibernateSnap: tt.snap, Failed: tt.failed, ColdBooting: true,
+			}})
+			m := mustManager(t, &config.Config{DataDir: dataDir}, eng)
+			editView(m, func(v *configView) { v.maxRunning = 1 })
+			probes := eng.probeCount()
+
+			if err := m.Reconcile(t.Context()); err != nil {
+				t.Fatalf("Reconcile: %v", err)
+			}
+			waitFor(t, func() bool { return eng.probeCount() > probes })
+			err := m.runningErr(1)
+			close(stall)
+			if !errors.Is(err, ErrQuota) {
+				t.Errorf("admission while the boot is finished: %v, want ErrQuota", err)
+			}
+			waitFor(t, func() bool { row := journaled(t, m)["sb_cb"]; return row != nil && !row.ColdBooting })
+			if got := m.store.runningCount(); got != 1 {
+				t.Errorf("running count %d after the finish, want 1", got)
+			}
+		})
+	}
+}
+
 func TestAColdBootStoppedByAShutdownKeepsItsMarkForTheNextStart(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)

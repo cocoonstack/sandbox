@@ -464,5 +464,5 @@ func appendRefs(list []string, refs [4]string) []string {
 
 // holdsVM reports whether a claim counts as running; a hibernate holds its VM until its commit.
 func holdsVM(sb *types.Sandbox) bool {
-	return sb.Waking || sb.HibernateSnap == "" && sb.ArchiveCk == "" && sb.Failed == ""
+	return sb.Waking || sb.ColdBooting || sb.HibernateSnap == "" && sb.ArchiveCk == "" && sb.Failed == ""
 }
