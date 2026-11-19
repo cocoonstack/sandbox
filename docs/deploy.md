@@ -697,9 +697,9 @@ pool miss, a fork of a running sandbox and a live-move target, 60 s for a start
 from an aged snapshot (a hibernate or archive wake, a checkpoint or
 promoted-template claim, a fork of a hibernated sandbox), and 90 s for a cold
 boot, a golden build and a `vmm_restart` cold restart. A hibernate wake whose
-guest misses its deadline is restored once more, then
-[cold-booted](sandboxd-api.md#post-v1sandboxesidwake) from its disk, so its probes can
-take up to 3.5 minutes.
+guest misses its deadline is restored once more, and an archive wake cloned once
+more, then [cold-booted](sandboxd-api.md#post-v1sandboxesidwake) from its disk,
+so its probes can take up to 3.5 minutes.
 
 ### Dead VMMs and host restarts
 

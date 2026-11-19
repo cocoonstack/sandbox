@@ -1,6 +1,7 @@
 package pool
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -234,7 +235,7 @@ func (m *Manager) wakeArchived(ctx context.Context, sb *types.Sandbox) (string, 
 	if err != nil {
 		return "", fmt.Errorf("wake %s: fetch archive: %w", sb.ID, err)
 	}
-	built, err := m.provisionAged(ctx, sb.Key, dir)
+	built, coldBooted, err := m.cloneArchive(ctx, sb, dir)
 	if err != nil {
 		return "", fmt.Errorf("wake %s: %w", sb.ID, err)
 	}
@@ -247,7 +248,7 @@ func (m *Manager) wakeArchived(ctx context.Context, sb *types.Sandbox) (string, 
 		m.destroy(ctx, built.VMName)
 		return "", fmt.Errorf("wake %s: track archive checkpoint: %w", sb.ID, markErr)
 	}
-	if err = m.commitWake(ctx, sb, built.VMName, built.VsockSocket); err != nil {
+	if err = m.commitWake(ctx, sb, built, coldBooted); err != nil {
 		m.destroy(ctx, built.VMName)
 		return "", err
 	}
@@ -256,6 +257,9 @@ func (m *Manager) wakeArchived(ctx context.Context, sb *types.Sandbox) (string, 
 		m.counters.wakeMemoryFallbacks.Add(1)
 	}
 	logger := log.WithFunc("pool.wakeArchived")
+	if coldBooted {
+		logger.Warnf(ctx, "woke %s by a cold boot of its archive's disk; guest memory is lost", sb.ID)
+	}
 	// Only the none lane reaches here, so there is no NIC to re-lock
 	if proxyErr := m.out.ArmProxy(ctx, sb); proxyErr != nil {
 		logger.Errorf(ctx, proxyErr, "arm egress proxy %s", sb.ID)
@@ -298,22 +302,75 @@ func (m *Manager) handOffForRoom(ctx context.Context, sb *types.Sandbox) bool {
 	return false
 }
 
-func (m *Manager) commitWake(ctx context.Context, sb *types.Sandbox, vmName, sock string) error {
+func (m *Manager) cloneArchive(ctx context.Context, sb *types.Sandbox, dir string) (built *types.Sandbox, coldBooted bool, err error) {
+	clone := func(name string) (types.VMRecord, error) { return m.eng.Clone(ctx, dir, name, sb.Key) }
+	var sock string
+	for range wakeRestoreTries {
+		if built != nil {
+			m.destroy(ctx, built.VMName)
+		}
+		if built, err = m.startVM(ctx, sb.Key, clone); err != nil {
+			return nil, false, err
+		}
+		if sock, err = m.probeReady(ctx, built.VMName, built.VsockSocket, wakeProbeTimeout); err == nil {
+			built.VsockSocket = sock
+			return built, false, nil
+		}
+		log.WithFunc("pool.cloneArchive").Warnf(ctx, "%s did not answer after a clone of its archive: %v", sb.ID, err)
+	}
+	if err = m.coldBootClone(ctx, sb, built); err != nil {
+		m.destroy(ctx, built.VMName)
+		return nil, false, err
+	}
+	return built, true, nil
+}
+
+func (m *Manager) coldBootClone(ctx context.Context, sb, built *types.Sandbox) error {
+	if err := m.eng.Stop(ctx, built.VMName); err != nil {
+		return fmt.Errorf("stop before cold boot: %w", err)
+	}
+	if err := m.eng.Start(ctx, built.VMName); err != nil {
+		return fmt.Errorf("cold boot: %w", err)
+	}
+	sock, err := m.probeReady(ctx, built.VMName, built.VsockSocket, coldProbeTimeout)
+	if err != nil {
+		return fmt.Errorf("probe after cold boot: %w", err)
+	}
+	built.VsockSocket = sock
+	m.mu.Lock()
+	env := sb.Env
+	m.mu.Unlock()
+	if !env.HasGuest() {
+		return nil
+	}
+	if err = m.eng.WriteGuestEnv(ctx, sock, env.GuestFile()); err != nil {
+		return fmt.Errorf("write env after cold boot: %w", err)
+	}
+	return nil
+}
+
+func (m *Manager) commitWake(ctx context.Context, sb, built *types.Sandbox, coldBooted bool) error {
 	m.mu.Lock()
 	if m.claimed[sb.ID] != sb {
 		m.mu.Unlock()
 		return ErrUnknownSandbox
 	}
 	ck, deadline, epoch, safe := sb.ArchiveCk, sb.Deadline, sb.ArchiveEpoch, sb.ReaderSafe
-	sb.VsockSocket, sb.ArchiveCk, sb.ArchiveEpoch, sb.ReaderSafe = sock, "", 0, false
-	m.setVMNameLocked(sb, vmName)
+	restarts, restartedAt := sb.Restarts, sb.RestartedAt
+	sb.VsockSocket, sb.ArchiveCk, sb.ArchiveEpoch, sb.ReaderSafe = built.VsockSocket, "", 0, false
+	sb.ImageID = cmp.Or(built.ImageID, sb.ImageID)
+	m.setVMNameLocked(sb, built.VMName)
 	wokeAt := time.Now()
+	if coldBooted {
+		sb.Restarts, sb.RestartedAt = sb.Restarts+1, wokeAt
+	}
 	sb.Deadline = wokeAt.Add(clampTTL(types.Seconds(sb.LeaseSeconds))) // a woken sandbox is a fresh lease
 	js, lease := m.store.set(sb), sb.Deadline
 	m.mu.Unlock()
 	if err := m.store.commit(js); err != nil {
 		rb, _ := m.setIfLive(sb, func() {
 			sb.VsockSocket, sb.ArchiveCk, sb.ArchiveEpoch, sb.Deadline, sb.ReaderSafe = "", ck, epoch, deadline, safe
+			sb.Restarts, sb.RestartedAt = restarts, restartedAt
 			m.setVMNameLocked(sb, "")
 		})
 		m.store.recommit(ctx, rb)

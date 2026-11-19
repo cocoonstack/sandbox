@@ -1507,6 +1507,7 @@ type fakeEngine struct {
 	finalCaptureErr   error
 	finalCaptureTime  time.Duration
 	receiveErr        error
+	receiveDigest     string
 	receiveStall      chan struct{}
 	receiveEntered    chan struct{}
 	abortErr          error
@@ -2145,7 +2146,7 @@ func (f *fakeEngine) MigrateReceive(_ context.Context, fromDir, name string, _ t
 	if _, err := os.Stat(filepath.Join(fromDir, "state.json")); err != nil {
 		return types.VMRecord{}, err
 	}
-	f.vms[name], f.paused[name] = f.sockRoot+"/"+name, true
+	f.vms[name], f.paused[name], f.digests[name] = f.sockRoot+"/"+name, true, f.receiveDigest
 	return f.record(name), nil
 }
 

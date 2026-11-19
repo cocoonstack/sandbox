@@ -76,6 +76,22 @@ func TestMoveHandsARunningClaimToThePeerWithBothNodesCountingIt(t *testing.T) {
 	assertNoMoveResidue(t, mc.t, sb.ID)
 }
 
+func TestAMovedClaimWithNoImageTakesTheTargetVMsImage(t *testing.T) {
+	mc := newMoveCluster(t)
+	sb := claimTenant(t, mc.s, "acme")
+	mc.s.mu.Lock()
+	sb.ImageID = ""
+	mc.s.mu.Unlock()
+	fakeOf(mc.t).receiveDigest = "sha256:moved"
+
+	if _, err := mc.s.Move(t.Context(), sb.ID, "b", time.Minute); err != nil {
+		t.Fatalf("move: %v", err)
+	}
+	if moved, ok := mc.t.byID(sb.ID); !ok || moved.ImageID != "sha256:moved" {
+		t.Errorf("target claim image %q, want the received VM's", moved.ImageID)
+	}
+}
+
 func TestMoveRefusesAClaimWhoseSaveIsUnsettled(t *testing.T) {
 	mc := newMoveCluster(t)
 	sb := claimTenant(t, mc.s, "acme")
