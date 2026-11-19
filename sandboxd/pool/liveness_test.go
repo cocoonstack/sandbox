@@ -665,6 +665,11 @@ func TestASilentGuestInALiveVMMIsStoppedAndHandledAsAnExitedVMM(t *testing.T) {
 			m.NoteUnreachable(sb.ID)
 			ageSilentNotes(m)
 			eng.probeFails = 2
+			var markedFirst bool
+			eng.stopHook = func() {
+				row := journaled(t, m)[sb.ID]
+				markedFirst = row != nil && row.ColdBooting && len(m.watchedClaims(sb.VMName)) == 0
+			}
 
 			runSilent(t, m)
 
@@ -683,6 +688,9 @@ func TestASilentGuestInALiveVMMIsStoppedAndHandledAsAnExitedVMM(t *testing.T) {
 			}
 			if got := usageEventsOf(t, m, sb.ID); got != tt.events {
 				t.Errorf("events %s, want %s", got, tt.events)
+			}
+			if row := journaled(t, m)[sb.ID]; !markedFirst || row == nil || row.ColdBooting {
+				t.Errorf("marked and unwatched before the stop %v, journal %+v, want the mark set first and cleared after", markedFirst, row)
 			}
 			if err := m.Wake(t.Context(), sb.ID, Cred{Token: sb.Token}); !errors.Is(err, tt.wakeErr) {
 				t.Fatalf("wake: %v, want %v", err, tt.wakeErr)
@@ -754,6 +762,9 @@ func TestASilenceNoteLeavesAClaimRunningUnlessItsLiveGuestMissesTheProbe(t *test
 			}
 			if got := eng.probeCount() - probes; got != tt.probes {
 				t.Errorf("probes %d, want %d", got, tt.probes)
+			}
+			if row := journaled(t, m)[sb.ID]; row == nil || row.ColdBooting {
+				t.Errorf("journal %+v, want no cold boot left marked", row)
 			}
 			if _, kept := m.silent[sb.ID]; kept != tt.noteKept {
 				t.Errorf("note kept %v, want %v", kept, tt.noteKept)
@@ -830,6 +841,151 @@ func TestASilentClaimReleasedOrExpiredDuringTheShortProbeIsLeftAlone(t *testing.
 				t.Errorf("events %q, want no vmm event", got)
 			}
 		})
+	}
+}
+
+func TestARestartDuringAColdBootFinishesItWhenTheVMRuns(t *testing.T) {
+	for _, tt := range []struct {
+		name, snap, failed, events string
+	}{
+		{"hibernate wake", "hib-1", "", "wake"},
+		{"liveness restart", "", "", ""},
+		{"wake of a failed claim", "", "vmm exited", ""},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			eng := newFakeEngine()
+			eng.vms["sbx-cb-1"] = "/vsock/cb"
+			dataDir := t.TempDir()
+			seedClaims(t, dataDir, map[string]*types.Sandbox{"sb_cb": {
+				ID: "sb_cb", VMName: "sbx-cb-1", Key: testKey, Token: "tok", VsockSocket: "/vsock/cb",
+				HibernateSnap: tt.snap, Failed: tt.failed, ColdBooting: true, Env: types.Env{"MODE": {Value: "prod"}},
+			}})
+			m := mustManager(t, &config.Config{DataDir: dataDir}, eng)
+
+			if err := m.Reconcile(t.Context()); err != nil {
+				t.Fatalf("Reconcile: %v", err)
+			}
+			waitFor(t, func() bool { row := journaled(t, m)["sb_cb"]; return row != nil && !row.ColdBooting })
+
+			if got, _ := m.Sandbox("sb_cb"); got.Restarts != 1 || got.RestartedAt.IsZero() || got.Failed != "" || got.Hibernated {
+				t.Errorf("summary %+v, want the cold boot committed: one restart, running", got)
+			}
+			if got := eng.guestEnvs["/vsock/cb"]; got != "MODE=\"prod\"\n" {
+				t.Errorf("guest env %q, want the claim env written again", got)
+			}
+			if len(eng.starts) != 0 || slices.Contains(eng.removes, "sbx-cb-1") {
+				t.Errorf("starts %v removes %v, want the running VM kept as it is", eng.starts, eng.removes)
+			}
+			if got := usageEventsOf(t, m, "sb_cb"); got != tt.events {
+				t.Errorf("events %q, want %q", got, tt.events)
+			}
+		})
+	}
+}
+
+func TestARestartDuringAColdBootClosesItWhenTheVMIsGone(t *testing.T) {
+	for _, tt := range []struct {
+		name, snap, failed, events, afterLiveness string
+	}{
+		{"hibernate wake", "hib-1", "", "hibernate", "hibernate"},
+		{"wake of a failed claim", "", "vmm exited", "vmm_exit", "vmm_exit"},
+		{"liveness restart", "", "", "", "vmm_exit,vmm_restart"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			eng := newFakeEngine()
+			eng.vms["sbx-cb-1"] = "/vsock/cb"
+			eng.stopped["sbx-cb-1"] = true
+			dataDir := t.TempDir()
+			seedClaims(t, dataDir, map[string]*types.Sandbox{"sb_cb": {
+				ID: "sb_cb", VMName: "sbx-cb-1", Key: testKey, Token: "tok", VsockSocket: "/vsock/cb",
+				HibernateSnap: tt.snap, Failed: tt.failed, ColdBooting: true,
+			}})
+			m := mustManager(t, &config.Config{DataDir: dataDir}, eng)
+
+			if err := m.Reconcile(t.Context()); err != nil {
+				t.Fatalf("Reconcile: %v", err)
+			}
+			if row := journaled(t, m)["sb_cb"]; row == nil || row.ColdBooting {
+				t.Fatalf("journal %+v, want the cold boot closed", row)
+			}
+			if got := usageEventsOf(t, m, "sb_cb"); got != tt.events {
+				t.Errorf("events %q, want %q", got, tt.events)
+			}
+			runLiveness(t, m)
+			if got := usageEventsOf(t, m, "sb_cb"); got != tt.afterLiveness {
+				t.Errorf("events after a liveness pass %q, want %q", got, tt.afterLiveness)
+			}
+		})
+	}
+}
+
+func TestAColdBootIsJournaledBeforeItsVMStartsAndIsNoLivenessSuspect(t *testing.T) {
+	eng := newFakeEngine()
+	m := newTestManager(t, eng)
+	sb := mustClaim(t, m, testKey)
+	killVMM(eng, sb.VMName)
+	var journaledFirst bool
+	var suspects []liveSuspect
+	eng.startHook = func() {
+		row := journaled(t, m)[sb.ID]
+		journaledFirst = row != nil && row.ColdBooting
+		suspects = m.watchedClaims(sb.VMName)
+	}
+
+	runLiveness(t, m)
+
+	if !journaledFirst || len(suspects) != 0 {
+		t.Errorf("journaled before the start %v, suspects during the boot %v, want the boot journaled and unwatched", journaledFirst, suspects)
+	}
+	if row := journaled(t, m)[sb.ID]; row == nil || row.ColdBooting || row.Restarts != 1 {
+		t.Errorf("journal %+v, want the cold boot committed and cleared", row)
+	}
+}
+
+func TestAFailedColdBootClearsItsJournalMark(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		fail func(*fakeEngine)
+	}{
+		{"start fails", func(eng *fakeEngine) { eng.startErr = errors.New("boot failed") }},
+		{"probe fails", func(eng *fakeEngine) { eng.probeErr = errors.New("silkd probe: context deadline exceeded") }},
+		{"env write fails", func(eng *fakeEngine) { eng.guestEnvErr = errors.New("guest write refused") }},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			eng := newFakeEngine()
+			m := newTestManager(t, eng)
+			sb, err := m.ClaimProvision(t.Context(), testKey, ClaimOptions{Env: types.Env{"MODE": {Value: "prod"}}})
+			if err != nil {
+				t.Fatalf("claim: %v", err)
+			}
+			killVMM(eng, sb.VMName)
+			tt.fail(eng)
+
+			runLiveness(t, m)
+
+			if row := journaled(t, m)[sb.ID]; row == nil || row.ColdBooting || row.Restarts != 0 {
+				t.Errorf("journal %+v, want no restart and no cold boot left marked", row)
+			}
+		})
+	}
+}
+
+func TestAColdBootWhoseVMCannotBeStoppedAfterItFailsStaysBilledAsRunning(t *testing.T) {
+	eng := newFakeEngine()
+	m := newTestManager(t, eng)
+	sb := mustClaim(t, m, testKey)
+	hibernateClaim(t, m, sb)
+	eng.probeFails = wakeRestoreTries + 1
+	eng.startHook = func() { eng.stopErr = errors.New("stop failed") }
+
+	if _, _, _, err := m.WakeAgentSocket(t.Context(), sb.ID, Cred{Token: sb.Token}); err == nil {
+		t.Fatal("wake reported success after the cold boot failed")
+	}
+	if got := usageEventsOf(t, m, sb.ID); got != "claim,hibernate,vmm_restart" {
+		t.Errorf("events %q, want no hibernate for a VMM that still runs", got)
+	}
+	if row := journaled(t, m)[sb.ID]; row == nil || row.ColdBooting || row.HibernateSnap == "" {
+		t.Errorf("journal %+v, want the claim hibernated with the cold boot cleared", row)
 	}
 }
 

@@ -1419,6 +1419,7 @@ type fakeEngine struct {
 	snapSaveErr           error
 	startErr              error
 	startHook             func()
+	stopHook              func()
 	syncErr               error
 	trimErr               error
 	installCAErr          error
@@ -1595,6 +1596,10 @@ func (f *fakeEngine) Start(_ context.Context, name string) error {
 func (f *fakeEngine) Stop(_ context.Context, name string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if hook := f.stopHook; hook != nil {
+		f.stopHook = nil
+		hook()
+	}
 	f.stops = append(f.stops, name)
 	if f.stopErr != nil {
 		return f.stopErr
@@ -2837,6 +2842,9 @@ func usageJournal(t *testing.T, m *Manager) []usage.Event {
 	}
 	var events []usage.Event
 	for line := range strings.SplitSeq(strings.TrimSpace(string(raw)), "\n") {
+		if line == "" {
+			continue
+		}
 		var ev usage.Event
 		if err := json.Unmarshal([]byte(line), &ev); err != nil {
 			t.Fatalf("bad journal line %q: %v", line, err)

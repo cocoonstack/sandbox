@@ -347,6 +347,7 @@ type Sandbox struct {
 	MoveOut *MoveOut `json:"move_out,omitempty"`
 	// MoveIn marks a claim a live move delivered here and this node has not started yet.
 	MoveIn         bool      `json:"move_in,omitzero"`
+	ColdBooting    bool      `json:"cold_booting,omitzero"`
 	SeenAtShutdown time.Time `json:"last_seen,omitzero"`
 	// RestartLog holds the recent restart attempts that the loop budget counts; guarded by Transition.
 	RestartLog []time.Time `json:"-"`

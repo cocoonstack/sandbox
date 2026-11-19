@@ -123,7 +123,9 @@ func (m *Manager) watchedClaims(vmName string) []liveSuspect {
 	now := time.Now()
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	watched := func(sb *types.Sandbox) bool { return m.vmSettledLocked(sb) && !m.leaseLapsed(sb, now) }
+	watched := func(sb *types.Sandbox) bool {
+		return m.vmSettledLocked(sb) && !m.leaseLapsed(sb, now) && !sb.ColdBooting
+	}
 	if vmName != "" {
 		if sb := m.claimedVMs[vmName]; sb != nil && watched(sb) {
 			return []liveSuspect{{sb, vmName}}
@@ -181,7 +183,6 @@ func (m *Manager) evictWarm(ctx context.Context, suspect liveSuspect) {
 	m.kickRefill()
 }
 
-// recoverVMM re-checks one suspect under its Transition lock, then restarts it or marks it failed.
 func (m *Manager) recoverVMM(ctx context.Context, sb *types.Sandbox) {
 	sb.Transition.Lock()
 	defer sb.Transition.Unlock()
@@ -291,8 +292,14 @@ func (m *Manager) recoverSilent(ctx context.Context, sb *types.Sandbox) {
 	case !found || vm.State != vmStateRunning:
 		return
 	}
+	if err = m.beginColdBoot(ctx, sb); err != nil {
+		logger.Warnf(ctx, "silent %s: %v", sb.ID, err)
+		m.NoteUnreachable(sb.ID)
+		return
+	}
 	if err = m.eng.Stop(ctx, vmName); err != nil {
 		logger.Warnf(ctx, "stop silent %s: %v", sb.ID, err)
+		m.endColdBoot(ctx, sb)
 		m.NoteUnreachable(sb.ID)
 		return
 	}
@@ -347,8 +354,12 @@ func (m *Manager) restartFailed(ctx context.Context, sb *types.Sandbox) error {
 // restartLocked cold-boots sb's VM from its own disk, in place of any hibernate snapshot, and republishes it; the caller holds sb.Transition.
 func (m *Manager) restartLocked(ctx context.Context, sb *types.Sandbox) error {
 	ctx = context.WithoutCancel(ctx)
+	if err := m.beginColdBoot(ctx, sb); err != nil {
+		return fmt.Errorf("cold boot: %w", err)
+	}
 	if err := m.eng.Start(ctx, sb.VMName); err != nil {
 		m.stopVM(ctx, sb.VMName)
+		m.endColdBoot(ctx, sb)
 		return fmt.Errorf("cold boot: %w", err)
 	}
 	m.mu.Lock()
@@ -357,6 +368,10 @@ func (m *Manager) restartLocked(ctx context.Context, sb *types.Sandbox) error {
 		m.recordUsage(ctx, usage.Event{Event: "vmm_restart", ID: sb.ID, VMName: sb.VMName, Tenant: sb.Tenant})
 	}
 	m.mu.Unlock()
+	return m.settleColdBootLocked(ctx, sb)
+}
+
+func (m *Manager) settleColdBootLocked(ctx context.Context, sb *types.Sandbox) error {
 	// cocoon keeps a VM's run dir across a cold boot, so the journaled socket path still holds
 	sock, err := m.probeReady(ctx, sb.VMName, sb.VsockSocket, coldProbeTimeout)
 	if err != nil {
@@ -383,7 +398,7 @@ func (m *Manager) restartLocked(ctx context.Context, sb *types.Sandbox) error {
 			m.renewWokenLeaseLocked(sb)
 			m.recordWake(ctx, sb)
 		}
-		sb.Failed = ""
+		sb.Failed, sb.ColdBooting = "", false
 		sb.Restarts++
 		sb.RestartedAt = time.Now()
 	})
@@ -403,19 +418,46 @@ func (m *Manager) restartLocked(ctx context.Context, sb *types.Sandbox) error {
 		return ErrUnknownSandbox
 	}
 	sb.Touch()
-	log.WithFunc("pool.restartLocked").Warnf(ctx, "restarted %s (%s) from its disk; guest memory is lost", sb.ID, sb.VMName)
+	log.WithFunc("pool.settleColdBootLocked").Warnf(ctx, "restarted %s (%s) from its disk; guest memory is lost", sb.ID, sb.VMName)
 	return nil
 }
 
+func (m *Manager) finishColdBoots(ctx context.Context, booting []*types.Sandbox) {
+	for _, sb := range booting {
+		sb.Transition.Lock()
+		go func() {
+			defer sb.Transition.Unlock()
+			if err := m.settleColdBootLocked(context.WithoutCancel(ctx), sb); err != nil {
+				log.WithFunc("pool.finishColdBoots").Warnf(ctx, "finish the cold boot of %s: %v", sb.ID, err)
+			}
+		}()
+	}
+}
+
+func (m *Manager) beginColdBoot(ctx context.Context, sb *types.Sandbox) error {
+	if live, _ := m.commitIfLive(ctx, sb, func() { sb.ColdBooting = true }); !live {
+		return ErrUnknownSandbox
+	}
+	return nil
+}
+
+func (m *Manager) endColdBoot(ctx context.Context, sb *types.Sandbox) {
+	_, _ = m.commitIfLive(ctx, sb, func() { sb.ColdBooting = false })
+}
+
 func (m *Manager) stopRestarted(ctx context.Context, sb *types.Sandbox) {
-	m.stopVM(ctx, sb.VMName)
+	defer m.endColdBoot(ctx, sb)
+	if err := m.eng.Stop(ctx, sb.VMName); err != nil {
+		log.WithFunc("pool.stopRestarted").Warnf(ctx, "stop %s after a failed cold boot: %v; it stays billed as running", sb.VMName, err)
+		return
+	}
 	if sb.HibernateSnap == "" {
 		m.recordExit(ctx, sb)
 		return
 	}
 	m.mu.Lock()
 	if m.claimed[sb.ID] == sb {
-		m.recordUsage(ctx, usage.Event{Event: "hibernate", ID: sb.ID, VMName: sb.VMName, Tenant: sb.Tenant})
+		m.recordUsage(ctx, usage.Event{Event: hibernateEvent, ID: sb.ID, VMName: sb.VMName, Tenant: sb.Tenant})
 	}
 	m.mu.Unlock()
 }
@@ -429,7 +471,7 @@ func (m *Manager) recordExit(ctx context.Context, sb *types.Sandbox) {
 
 // failLocked parks sb as failed with reason; the caller holds sb.Transition.
 func (m *Manager) failLocked(ctx context.Context, sb *types.Sandbox, reason string) {
-	if live, _ := m.commitIfLive(ctx, sb, func() { sb.Failed = reason }); !live {
+	if live, _ := m.commitIfLive(ctx, sb, func() { sb.Failed, sb.ColdBooting = reason, false }); !live {
 		return
 	}
 	m.recordExit(ctx, sb)

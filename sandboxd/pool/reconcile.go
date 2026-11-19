@@ -40,6 +40,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 	owned := map[string]bool{}
 	referenced := map[string]bool{}
 	var adopted, dropped, resumed, interrupted []*types.Sandbox
+	booting, stalled := coldBoots(claims, live)
 	m.mu.Lock()
 	for _, sb := range claims {
 		sb.SetEnv(sb.Env)
@@ -99,6 +100,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 	// A failed save keeps the records, so the next boot records them
 	if saveErr == nil {
 		m.recordReconciled(ctx, resumed, dropped, answered)
+		m.closeColdBoots(ctx, stalled)
 	}
 	logger := log.WithFunc("pool.Reconcile")
 	if err := m.ckpts.SweepStaging(); err != nil {
@@ -128,7 +130,19 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 		sb.Transition.Lock()
 		go m.settleInterrupted(ctx, sb)
 	}
+	m.finishColdBoots(ctx, booting)
 	return saveErr
+}
+
+func (m *Manager) closeColdBoots(ctx context.Context, stalled []*types.Sandbox) {
+	for _, sb := range stalled {
+		switch {
+		case sb.HibernateSnap != "":
+			m.recordUsage(ctx, usage.Event{Event: hibernateEvent, ID: sb.ID, VMName: sb.VMName, Tenant: sb.Tenant})
+		case sb.Failed != "":
+			m.recordExit(ctx, sb)
+		}
+	}
 }
 
 func (m *Manager) sweepOrphanGoldens(ctx context.Context, pooled map[string]bool) {
@@ -417,4 +431,19 @@ func seenAt(sb *types.Sandbox, now time.Time) time.Time {
 		return t
 	}
 	return now
+}
+
+func coldBoots(claims map[string]*types.Sandbox, live map[string]types.VMRecord) (booting, stalled []*types.Sandbox) {
+	for _, sb := range claims {
+		rec, ok := live[sb.VMName]
+		switch {
+		case !sb.ColdBooting:
+		case ok && rec.State == vmStateRunning:
+			booting = append(booting, sb)
+		case ok:
+			sb.ColdBooting = false
+			stalled = append(stalled, sb)
+		}
+	}
+	return booting, stalled
 }
