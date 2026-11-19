@@ -40,7 +40,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 	owned := map[string]bool{}
 	referenced := map[string]bool{}
 	var adopted, dropped, resumed, interrupted []*types.Sandbox
-	booting, stalled := coldBoots(claims, live)
+	booting, stalled := splitColdBoots(claims, live)
 	m.mu.Lock()
 	for _, sb := range claims {
 		sb.SetEnv(sb.Env)
@@ -433,7 +433,7 @@ func seenAt(sb *types.Sandbox, now time.Time) time.Time {
 	return now
 }
 
-func coldBoots(claims map[string]*types.Sandbox, live map[string]types.VMRecord) (booting, stalled []*types.Sandbox) {
+func splitColdBoots(claims map[string]*types.Sandbox, live map[string]types.VMRecord) (booting, stalled []*types.Sandbox) {
 	for _, sb := range claims {
 		rec, ok := live[sb.VMName]
 		switch {
