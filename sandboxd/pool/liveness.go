@@ -451,8 +451,11 @@ func (m *Manager) endColdBoot(ctx context.Context, sb *types.Sandbox) {
 }
 
 func (m *Manager) stopRestarted(ctx context.Context, sb *types.Sandbox) {
-	defer m.endColdBoot(ctx, sb)
-	if err := m.eng.Stop(ctx, sb.VMName); err != nil {
+	err := m.eng.Stop(ctx, sb.VMName)
+	if !errors.Is(err, engine.ErrStopping) {
+		defer m.endColdBoot(ctx, sb)
+	}
+	if err != nil {
 		log.WithFunc("pool.stopRestarted").Warnf(ctx, "stop %s after a failed cold boot: %v; it stays billed as running", sb.VMName, err)
 		return
 	}
