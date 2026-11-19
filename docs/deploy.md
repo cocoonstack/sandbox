@@ -740,7 +740,13 @@ through its ports, is never probed.
 A cold restart boots the claim's own copy-on-write disk: files the guest
 synced survive, memory and processes do not. The claim's guest env entries
 are written again and its egress proxy is re-armed; the instance-metadata
-document is not kept, so re-send it when `restarts` moves. A failed claim keeps its VM and
+document is not kept, so re-send it when `restarts` moves. Every cold boot (a
+cold restart, a wake that cold-boots, the wake of a failed claim) is journaled
+before its VM starts. When sandboxd stops before the boot answers, the next
+start finishes it if the VM still runs: it records `vmm_restart`, writes the
+guest env again and moves `restarts`. If the VM is gone, the next start ends the span the boot
+opened (`hibernate` for a hibernated claim, `vmm_exit` for a failed one) and
+leaves the claim to liveness or its next wake. A failed claim keeps its VM and
 disk until release or lease end (it is destroyed at expiry even with
 `on_expire: archive`). `POST /v1/sandboxes/{id}/wake` cold-boots it and resets
 the restart budget, except an egress-lane claim, a claim holding volumes or one

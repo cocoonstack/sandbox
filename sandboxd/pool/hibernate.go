@@ -402,7 +402,7 @@ func (m *Manager) forgetHostEnvLocked(sb *types.Sandbox) {
 
 func (m *Manager) recordHibernate(ctx context.Context, sb *types.Sandbox) {
 	m.counters.hibernates.Add(1)
-	m.recordUsage(ctx, usage.Event{Event: "hibernate", ID: sb.ID, VMName: sb.VMName, Tenant: sb.Tenant})
+	m.recordUsage(ctx, usage.Event{Event: hibernateEvent, ID: sb.ID, VMName: sb.VMName, Tenant: sb.Tenant})
 }
 
 func (m *Manager) recordWake(ctx context.Context, sb *types.Sandbox) {

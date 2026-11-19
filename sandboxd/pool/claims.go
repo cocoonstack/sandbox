@@ -76,6 +76,7 @@ type claimDTO struct {
 	Failed         string             `json:"failed,omitempty"`
 	MoveOut        *types.MoveOut     `json:"move_out,omitempty"`
 	MoveIn         bool               `json:"move_in,omitzero"`
+	ColdBooting    bool               `json:"cold_booting,omitzero"`
 	LastSeen       time.Time          `json:"last_seen,omitzero"`
 }
 
@@ -429,6 +430,7 @@ func dtoOf(sb *types.Sandbox) claimDTO {
 		TunAddr: sb.TunAddr, TunOff: sb.TunOff, TunProfile: sb.TunProfile, TunBytes: sb.TunBytes, EgressLimit: sb.EgressLimit,
 		ArchiveCk: sb.ArchiveCk, ArchiveEpoch: sb.ArchiveEpoch, ArchivePending: sb.ArchivePending, ReplicaCk: sb.ReplicaCk, ReplicaPending: sb.ReplicaPending, ReplicaAt: sb.ReplicaAt, FromCheckpoint: sb.FromCheckpoint, ImageID: sb.ImageID,
 		Restarts: sb.Restarts, RestartedAt: sb.RestartedAt, Failed: sb.Failed, MoveOut: sb.MoveOut, MoveIn: sb.MoveIn,
+		ColdBooting: sb.ColdBooting,
 	}
 }
 
@@ -462,5 +464,5 @@ func appendRefs(list []string, refs [4]string) []string {
 
 // holdsVM reports whether a claim counts as running; a hibernate holds its VM until its commit.
 func holdsVM(sb *types.Sandbox) bool {
-	return sb.Waking || sb.HibernateSnap == "" && sb.ArchiveCk == "" && sb.Failed == ""
+	return sb.Waking || sb.ColdBooting || sb.HibernateSnap == "" && sb.ArchiveCk == "" && sb.Failed == ""
 }

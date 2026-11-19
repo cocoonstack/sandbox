@@ -24,11 +24,12 @@ const (
 	// AuditLineCap bounds how much of a relayed request frame the audit tap captures and records.
 	AuditLineCap = 4096
 
-	egressEvent  = "egress"
-	dnsEvent     = "dns"
-	reapEvent    = "reap"
-	tunFlowEvent = "tun_flow"
-	tunFlowPath  = "tun"
+	egressEvent    = "egress"
+	dnsEvent       = "dns"
+	reapEvent      = "reap"
+	hibernateEvent = "hibernate"
+	tunFlowEvent   = "tun_flow"
+	tunFlowPath    = "tun"
 )
 
 // ClaimBuckets are the upper bounds of the claim latency histogram.
