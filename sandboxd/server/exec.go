@@ -81,6 +81,11 @@ func (s *Server) handleExec(w http.ResponseWriter, r *http.Request) {
 	stdinClose, _ := wire.EncodeRequest(wire.StdinClose{})
 	frame = slices.Concat(frame, newline, stdinClose, newline)
 	if _, err := guest.Write(frame); err != nil {
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			s.mgr.NoteUnreachable(id)
+			writeErr(w, http.StatusGatewayTimeout, "command timed out")
+			return
+		}
 		writeErr(w, http.StatusBadGateway, "guest agent unreachable")
 		return
 	}
@@ -93,6 +98,9 @@ func (s *Server) handleExec(w http.ResponseWriter, r *http.Request) {
 		held += int64(n)
 		return true
 	})
+	if pid == 0 && errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		s.mgr.NoteUnreachable(id)
+	}
 	if pid != 0 && (ctx.Err() != nil || errors.Is(err, errExecOutputCap) || errors.Is(err, errExecBudget)) {
 		// A dropped connection only reaches a child that writes; a silent one needs the kill
 		if killErr := s.killExec(ctx, id, cred, pid); killErr != nil {

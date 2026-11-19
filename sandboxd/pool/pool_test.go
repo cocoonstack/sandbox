@@ -1269,6 +1269,50 @@ func TestOperatorPortDialsOnOneSandboxRunConcurrently(t *testing.T) {
 	}
 }
 
+func TestAFailedPortDialNotesTheClaimOnlyWhenSilkdDidNotAnswer(t *testing.T) {
+	silent := fmt.Errorf("%w: read CONNECT reply: context deadline exceeded", engine.ErrSilkdUnreachable)
+	for _, tt := range []struct {
+		name      string
+		operator  bool
+		err       error
+		callerOff bool
+		noted     bool
+	}{
+		{"port forward, silkd silent", false, silent, false, true},
+		{"preview, silkd silent", true, silent, false, true},
+		{"nothing listens on the port", false, errors.New("port_forward 80: connection refused"), false, false},
+		{"silkd silent after the caller left", false, silent, true, false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			eng := newFakeEngine()
+			m := newTestManager(t, eng)
+			sb := mustClaim(t, m, testKey)
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			eng.guestDial = func() (net.Conn, error) {
+				if tt.callerOff {
+					cancel()
+				}
+				return nil, tt.err
+			}
+			cred := Cred{Token: sb.Token}
+			if tt.operator {
+				cred = Cred{Operator: true}
+			}
+
+			if _, err := m.DialPort(ctx, sb.ID, cred, 80); err == nil {
+				t.Fatal("dial succeeded, want the engine's error")
+			}
+			m.mu.Lock()
+			_, noted := m.silent[sb.ID]
+			m.mu.Unlock()
+			if noted != tt.noted {
+				t.Errorf("noted %v, want %v", noted, tt.noted)
+			}
+		})
+	}
+}
+
 func TestAClaimForASlotAnotherClaimHoldsTakesNoVM(t *testing.T) {
 	for name, tt := range map[string]struct {
 		tenant string

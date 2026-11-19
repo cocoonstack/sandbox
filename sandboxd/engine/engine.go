@@ -74,7 +74,8 @@ const (
 )
 
 var (
-	ErrStopping = errors.New("sandboxd is stopping")
+	ErrStopping         = errors.New("sandboxd is stopping")
+	ErrSilkdUnreachable = errors.New("silkd unreachable")
 
 	// capacitySignatures mean the node cannot attach another VM, not that this VM failed.
 	capacitySignatures = []string{
@@ -292,7 +293,7 @@ func (e *Engine) Probe(ctx context.Context, vsockSocket string, timeout time.Dur
 func (e *Engine) DialGuestPort(ctx context.Context, vsockSocket string, port uint16) (net.Conn, error) {
 	conn, err := e.DialSilkd(ctx, vsockSocket)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %w", ErrSilkdUnreachable, err)
 	}
 	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
 	defer stop()

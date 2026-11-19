@@ -40,6 +40,12 @@ func (m *Manager) NoteUnreachable(id string) {
 	}
 }
 
+func (m *Manager) noteUnreachableDial(ctx context.Context, id string, err error) {
+	if errors.Is(err, engine.ErrSilkdUnreachable) && ctx.Err() == nil {
+		m.NoteUnreachable(id)
+	}
+}
+
 // livenessOnce finds claims whose VMM exited outside a transition and restarts or fails each.
 func (m *Manager) livenessOnce(ctx context.Context) {
 	if m.vmmEvents.Load() && time.Since(time.Unix(0, m.lastVMPoll.Load())) < livenessBackstop {

@@ -244,6 +244,7 @@ func (m *Manager) dialPort(ctx context.Context, id string, cred Cred, port uint1
 	conn, err := m.eng.DialGuestPort(ctx, sock, port)
 	if err != nil {
 		sb.Unhold()
+		m.noteUnreachableDial(ctx, id, err)
 		return nil, err
 	}
 	return newHeldConn(conn, fenced, sb.Unhold), nil
@@ -276,6 +277,7 @@ func (m *Manager) dialPassive(ctx context.Context, id string, port uint16) (net.
 	conn, err := m.eng.DialGuestPort(ctx, sock, port)
 	if err != nil {
 		sb.UnholdIdle()
+		m.noteUnreachableDial(ctx, id, err)
 		return nil, err
 	}
 	return newHeldConn(conn, fenced, sb.UnholdIdle), nil
