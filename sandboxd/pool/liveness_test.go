@@ -848,9 +848,9 @@ func TestARestartDuringAColdBootFinishesItWhenTheVMRuns(t *testing.T) {
 	for _, tt := range []struct {
 		name, snap, failed, events string
 	}{
-		{"hibernate wake", "hib-1", "", "wake"},
-		{"liveness restart", "", "", ""},
-		{"wake of a failed claim", "", "vmm exited", ""},
+		{"hibernate wake", "hib-1", "", "wake,vmm_restart"},
+		{"liveness restart", "", "", "vmm_restart"},
+		{"wake of a failed claim", "", "vmm exited", "vmm_restart"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			eng := newFakeEngine()

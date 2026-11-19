@@ -362,12 +362,7 @@ func (m *Manager) restartLocked(ctx context.Context, sb *types.Sandbox) error {
 		m.endColdBoot(ctx, sb)
 		return fmt.Errorf("cold boot: %w", err)
 	}
-	m.mu.Lock()
-	if m.claimed[sb.ID] == sb {
-		sb.ExitRecorded = false
-		m.recordUsage(ctx, usage.Event{Event: "vmm_restart", ID: sb.ID, VMName: sb.VMName, Tenant: sb.Tenant})
-	}
-	m.mu.Unlock()
+	m.recordRestart(ctx, sb)
 	return m.settleColdBootLocked(ctx, sb)
 }
 
@@ -427,10 +422,20 @@ func (m *Manager) finishColdBoots(ctx context.Context, booting []*types.Sandbox)
 		sb.Transition.Lock()
 		go func() {
 			defer sb.Transition.Unlock()
+			m.recordRestart(ctx, sb)
 			if err := m.settleColdBootLocked(context.WithoutCancel(ctx), sb); err != nil {
 				log.WithFunc("pool.finishColdBoots").Warnf(ctx, "finish the cold boot of %s: %v", sb.ID, err)
 			}
 		}()
+	}
+}
+
+func (m *Manager) recordRestart(ctx context.Context, sb *types.Sandbox) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.claimed[sb.ID] == sb {
+		sb.ExitRecorded = false
+		m.recordUsage(ctx, usage.Event{Event: "vmm_restart", ID: sb.ID, VMName: sb.VMName, Tenant: sb.Tenant})
 	}
 }
 
