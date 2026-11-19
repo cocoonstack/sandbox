@@ -727,15 +727,17 @@ claimed `on_expire: archive`, which needs a running VM to archive:
 | failed | `none`, an egress-lane or volume claim, the VM record gone, the restart budget spent, or 3 failed boots | `failed: "<reason>"` on the row, `vmm_exit` then `vmm_failed` usage events (a boot whose guest setup failed adds its own `vmm_restart` and `vmm_exit`), `409` from exec, relays, ports, hibernate, fork, checkpoint and promote |
 
 A guest that stops answering inside a live VMM is caught from the data plane.
-When an exec or an agent relay cannot connect to the guest's silkd while its
-caller still waits, the claim is noted, and about 2 minutes later the next pass
+The claim is noted while a caller still waits on it when an exec, an agent
+relay, a port forward or a preview cannot connect to the guest's silkd, or when
+an exec reaches its `timeout_seconds` before silkd has started the command. A
+port that nothing in the guest listens on is not a note. About 2 minutes later
+the next pass
 probes the guest for up to 60 s, then once more for up to 15 s under the claim's
 lock. A guest that answers either probe is left alone. One that answers neither,
 while cocoon still lists its VMM as running, has the VMM stopped, and the claim
 is then handled as one whose VMM exited: a cold restart or `failed`, by the rows
 above, with the same usage events and restart budget. A claim already past its
-deadline is left to the reap, and a claim no caller dials, or one reached only
-through its ports, is never probed.
+deadline is left to the reap, and a claim no caller dials is never probed.
 
 A cold restart boots the claim's own copy-on-write disk: files the guest
 synced survive, memory and processes do not. The claim's guest env entries

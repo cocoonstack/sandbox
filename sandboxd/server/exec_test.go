@@ -145,6 +145,37 @@ func TestExecTimeoutKillsTheCommand(t *testing.T) {
 	expectKill(t, killed, "timeout")
 }
 
+func TestAnExecThatTimesOutBeforeItsStartNotesTheGuest(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		started bool
+		noted   int
+	}{
+		{"silkd never starts the command", false, 1},
+		{"the command started", true, 0},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			killed := make(chan uint32, 1)
+			mgr := &fakeManager{unreachable: make(chan string, 1)}
+			ts := newTestServer(t, "", mgr, pipeDialer(killWatchGuest(killed, func(conn net.Conn, r *bufio.Reader) {
+				_, _ = r.ReadBytes('\n')
+				if tt.started {
+					_, _ = io.WriteString(conn, startedFrame)
+				}
+				_, _ = r.ReadBytes('\n')
+				_, _ = r.ReadBytes('\n')
+			})))
+
+			if status, _ := postExec(t, ts, `{"argv":["sleep","60"],"timeout_seconds":1}`); status != http.StatusGatewayTimeout {
+				t.Fatalf("status %d, want 504", status)
+			}
+			if len(mgr.unreachable) != tt.noted {
+				t.Errorf("notes %d, want %d", len(mgr.unreachable), tt.noted)
+			}
+		})
+	}
+}
+
 func TestExecRejectsBadRequests(t *testing.T) {
 	for _, tt := range []struct{ name, body string }{
 		{"unknown fields", `{"argv":["whoami"],"user":"nobody"}`},

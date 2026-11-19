@@ -93,6 +93,9 @@ func (s *Server) handleExec(w http.ResponseWriter, r *http.Request) {
 		held += int64(n)
 		return true
 	})
+	if pid == 0 && errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		s.mgr.NoteUnreachable(id)
+	}
 	if pid != 0 && (ctx.Err() != nil || errors.Is(err, errExecOutputCap) || errors.Is(err, errExecBudget)) {
 		// A dropped connection only reaches a child that writes; a silent one needs the kill
 		if killErr := s.killExec(ctx, id, cred, pid); killErr != nil {
