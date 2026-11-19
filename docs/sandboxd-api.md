@@ -572,7 +572,11 @@ sandbox whose guest does not answer within the wake deadline after two restores
 of its snapshot is cold-booted from its own disk instead: memory is lost,
 `restarts` moves, and the snapshot is dropped. The boot records `vmm_restart`
 when it starts and `wake`, with the lease, when the guest answers; a boot that
-fails after its start records `hibernate`, and the claim stays hibernated. The
+fails after its start records `hibernate`, and the claim stays hibernated. An
+archived sandbox whose guest does not answer after two clones of its archive is
+cold-booted from the second clone's disk: memory is lost, `restarts` moves, and
+the wake records `unarchive` once it commits; a cold boot that fails removes
+the clone, and the claim stays archived. The
 same holds for a wake that an agent access triggers. 204 on
 success, 404 unknown id or wrong token, or an archived sandbox the node had no
 room for that it [handed to a peer](cluster.md#waking-an-archived-claim-on-a-full-node)
@@ -1079,7 +1083,7 @@ The index is `{"sandboxes": [{id, key, tenant?, deadline, claimed_at?, hibernate
 archived?, from_checkpoint?, claim_ref?, metadata?, on_expire?, cpu_count, mem_total_bytes,
 volumes?: [{name, mount?, mode?, attach_only?}], volumes_want?: [{name, mount?, mode?, attach_only?}], restarts?, restarted_at?, failed?, env_missing?}], "next": "…"}` — `deadline` is `0001-01-01T00:00:00Z` on an archive kept forever; `cpu_count` and `mem_total_bytes` are the
 size tier's allocation; `restarts` counts the cold boots that replaced an
-exited VMM or a hibernate snapshot whose guest did not answer a
+exited VMM or a hibernate snapshot or archive whose guest did not answer a
 [wake](#post-v1sandboxesidwake), and `restarted_at` stamps the last one (each loses guest memory and
 the instance-metadata document, so a caller re-establishes guest state when
 `restarts` moves; the claim's env is written to the guest again); `failed` names why the VMM is down and was not restarted
