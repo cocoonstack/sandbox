@@ -1,6 +1,7 @@
 package pool
 
 import (
+	"cmp"
 	"context"
 	"encoding/json/v2"
 	"errors"
@@ -100,6 +101,7 @@ func (m *Manager) CommitMove(ctx context.Context, id string, claim []byte, epoch
 		return fmt.Errorf("move %s: receive: %w", id, err)
 	}
 	sb.VMName, sb.VsockSocket, sb.TAP, sb.HibernateSnap, sb.PendingSnap = name, rec.VsockSocket, "", "", ""
+	sb.ImageID = cmp.Or(rec.Config.ImageDigest, sb.ImageID)
 	sb.ArchiveCk, sb.ArchiveEpoch, sb.ArchivePending, sb.ReplicaCk, sb.ReplicaPending = "", 0, "", "", ""
 	sb.MoveOut = nil
 	sb.SetEnv(sb.Env)

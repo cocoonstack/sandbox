@@ -199,7 +199,7 @@ func (m *Manager) wakeOrRead(ctx context.Context, sb *types.Sandbox, readerOK bo
 	wakeStart := time.Now()
 	snap := sb.HibernateSnap
 	var sock string
-	var err error
+	var err, stopErr error
 	for range wakeRestoreTries {
 		restoredSock, restoreErr := m.eng.Restore(ctx, sb.VMName, snap)
 		if restoreErr != nil {
@@ -210,10 +210,13 @@ func (m *Manager) wakeOrRead(ctx context.Context, sb *types.Sandbox, readerOK bo
 		if sock, err = m.probeReady(ctx, sb.VMName, restoredSock, wakeProbeTimeout); err == nil {
 			break
 		}
-		m.stopVM(ctx, sb.VMName)
-		log.WithFunc("pool.wakeOrRead").Warnf(ctx, "%s did not answer after a restore of %s: %v", sb.ID, snap, err)
+		stopErr = m.eng.Stop(ctx, sb.VMName)
+		log.WithFunc("pool.wakeOrRead").Warnf(ctx, "%s did not answer after a restore of %s: %v", sb.ID, snap, errors.Join(err, stopErr))
 	}
 	if err != nil {
+		if stopErr != nil {
+			return "", fmt.Errorf("wake %s: stop before cold boot: %w", sb.ID, stopErr)
+		}
 		if err = m.restartLocked(ctx, sb); err != nil {
 			return "", fmt.Errorf("wake %s: %w", sb.ID, err)
 		}

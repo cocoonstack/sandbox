@@ -1,6 +1,7 @@
 package pool
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -247,7 +248,7 @@ func (m *Manager) wakeArchived(ctx context.Context, sb *types.Sandbox) (string, 
 		m.destroy(ctx, built.VMName)
 		return "", fmt.Errorf("wake %s: track archive checkpoint: %w", sb.ID, markErr)
 	}
-	if err = m.commitWake(ctx, sb, built.VMName, built.VsockSocket, coldBooted); err != nil {
+	if err = m.commitWake(ctx, sb, built, coldBooted); err != nil {
 		m.destroy(ctx, built.VMName)
 		return "", err
 	}
@@ -348,7 +349,7 @@ func (m *Manager) coldBootClone(ctx context.Context, sb, built *types.Sandbox) e
 	return nil
 }
 
-func (m *Manager) commitWake(ctx context.Context, sb *types.Sandbox, vmName, sock string, coldBooted bool) error {
+func (m *Manager) commitWake(ctx context.Context, sb, built *types.Sandbox, coldBooted bool) error {
 	m.mu.Lock()
 	if m.claimed[sb.ID] != sb {
 		m.mu.Unlock()
@@ -356,8 +357,9 @@ func (m *Manager) commitWake(ctx context.Context, sb *types.Sandbox, vmName, soc
 	}
 	ck, deadline, epoch, safe := sb.ArchiveCk, sb.Deadline, sb.ArchiveEpoch, sb.ReaderSafe
 	restarts, restartedAt := sb.Restarts, sb.RestartedAt
-	sb.VsockSocket, sb.ArchiveCk, sb.ArchiveEpoch, sb.ReaderSafe = sock, "", 0, false
-	m.setVMNameLocked(sb, vmName)
+	sb.VsockSocket, sb.ArchiveCk, sb.ArchiveEpoch, sb.ReaderSafe = built.VsockSocket, "", 0, false
+	sb.ImageID = cmp.Or(built.ImageID, sb.ImageID)
+	m.setVMNameLocked(sb, built.VMName)
 	wokeAt := time.Now()
 	if coldBooted {
 		sb.Restarts, sb.RestartedAt = sb.Restarts+1, wokeAt

@@ -572,7 +572,9 @@ sandbox whose guest does not answer within the wake deadline after two restores
 of its snapshot is cold-booted from its own disk instead: memory is lost,
 `restarts` moves, and the snapshot is dropped. The boot records `vmm_restart`
 when it starts and `wake`, with the lease, when the guest answers; a boot that
-fails after its start records `hibernate`, and the claim stays hibernated. An
+fails after its start records `hibernate`, and the claim stays hibernated. A
+restored VM that cannot be stopped is not cold-booted: the wake fails and the
+claim stays hibernated until the next wake restores the snapshot again. An
 archived sandbox whose guest does not answer after two clones of its archive is
 cold-booted from the second clone's disk: memory is lost, `restarts` moves, and
 the wake records `unarchive` once it commits; a cold boot that fails removes

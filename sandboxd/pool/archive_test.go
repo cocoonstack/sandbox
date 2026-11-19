@@ -471,6 +471,28 @@ func TestAnArchivedWakeWhoseColdBootFailsKeepsTheArchive(t *testing.T) {
 	}
 }
 
+func TestAnArchivedWakeGivesAClaimWithNoImageTheClonesImage(t *testing.T) {
+	eng := newFakeEngine()
+	eng.imageIDs = map[string]string{testKey.Template: imageA}
+	m := newTestManager(t, eng, archivePool(keepAnHour))
+	sb := mustClaim(t, m, testKey)
+	m.mu.Lock()
+	want := sb.ImageID
+	sb.ImageID = ""
+	m.mu.Unlock()
+	mustArchive(t, m, sb)
+
+	if _, _, _, err := m.WakeAgentSocket(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
+		t.Fatalf("wake: %v", err)
+	}
+	if got, _ := m.byID(sb.ID); want == "" || got.ImageID != want {
+		t.Errorf("image %q, want the clone's %q", got.ImageID, want)
+	}
+	if row := journaled(t, m)[sb.ID]; row == nil || row.ImageID != want {
+		t.Errorf("journal %+v, want image %q", row, want)
+	}
+}
+
 func TestReleaseArchivedDeletesCheckpoint(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng, archivePool(keepAnHour))

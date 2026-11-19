@@ -396,6 +396,27 @@ func TestAWakeWhoseColdBootFailsStaysHibernated(t *testing.T) {
 	}
 }
 
+func TestAWakeWhoseRestoredVMCannotBeStoppedDoesNotColdBoot(t *testing.T) {
+	eng := newFakeEngine()
+	m := newTestManager(t, eng)
+	sb := mustClaim(t, m, testKey)
+	hibernateClaim(t, m, sb)
+	eng.probeFails, eng.stopErr = wakeRestoreTries, errors.New("stop failed")
+
+	if _, _, _, err := m.WakeAgentSocket(t.Context(), sb.ID, Cred{Token: sb.Token}); err == nil {
+		t.Fatal("wake reported success with a VM that could not be stopped")
+	}
+	if len(eng.starts) != 0 {
+		t.Errorf("starts %v, want no cold boot over a VMM that still runs", eng.starts)
+	}
+	if got, _ := m.Sandbox(sb.ID); !got.Hibernated || got.Restarts != 0 {
+		t.Errorf("summary %+v, want it still hibernated with no restart", got)
+	}
+	if got := usageEventsOf(t, m, sb.ID); got != "claim,hibernate" {
+		t.Errorf("events %q, want claim,hibernate", got)
+	}
+}
+
 func TestAFailedColdBootWakeLeavesALaterExitBilled(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)
