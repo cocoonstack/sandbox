@@ -138,6 +138,17 @@ func TestDialGuestPortTimesOutWhenTheGuestPortNeverReplies(t *testing.T) {
 	}
 }
 
+func TestDialGuestPortMarksOnlyAnUnansweredConnectAsUnreachable(t *testing.T) {
+	if _, err := newTestEngine().DialGuestPort(t.Context(), sockPath(t), 8080); !errors.Is(err, ErrSilkdUnreachable) {
+		t.Errorf("no listener: %v, want ErrSilkdUnreachable", err)
+	}
+	answered := sockPath(t)
+	listenMuxer(t, answered, "OK 2048\n", errFrame)
+	if _, err := newTestEngine().DialGuestPort(t.Context(), answered, 8080); err == nil || errors.Is(err, ErrSilkdUnreachable) {
+		t.Errorf("silkd answered with an error frame: %v, want an error that is not ErrSilkdUnreachable", err)
+	}
+}
+
 func TestSnapshotListReadsAnEmptyStoreAndRejectsProse(t *testing.T) {
 	fakeCocoon(t, "#!/bin/sh\nif [ \"$COCOON_TEST_PROSE\" = 1 ]; then echo 'No snapshots found.'; else echo '[]'; fi\n")
 	e := newTestEngine()
