@@ -63,7 +63,7 @@ RUN set -e; \
     fi; \
     gcc usr/gen_init_cpio.c -o /usr/local/bin/gen_init_cpio
 
-FROM rust:1.99.1-alpine@sha256:b1d5dd5a22a09404d3e798c0cf051b689077360374eb505fa5bb93c479693d87 AS initbuild
+FROM rust:1.100.0-alpine@sha256:8d0e82abfdf9a38071e07cabc5afba4ddbe077631a80e4e742a760c38beadc33 AS initbuild
 RUN apk add --no-cache musl-dev
 WORKDIR /build
 # See silkd/Dockerfile: the pin, not the base image's default, is the compiler; the build needs no rustfmt or clippy.
