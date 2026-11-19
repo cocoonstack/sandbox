@@ -338,7 +338,7 @@ type Sandbox struct {
 	// TemplateDigest identifies the promoted-template export this sandbox was cloned from.
 	TemplateDigest string `json:"-"`
 
-	// Restarts counts the cold boots that replaced an exited VMM; each loses guest memory.
+	// Restarts counts the cold boots that replaced an exited VMM or a wake image that never answered; each loses guest memory.
 	Restarts    int       `json:"restarts,omitzero"`
 	RestartedAt time.Time `json:"restarted_at,omitzero"`
 	// Failed names why the VMM is down and not restarted; empty means the claim is serviceable.

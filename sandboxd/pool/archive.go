@@ -325,7 +325,9 @@ func (m *Manager) cloneArchive(ctx context.Context, sb *types.Sandbox, dir strin
 }
 
 func (m *Manager) coldBootClone(ctx context.Context, sb, built *types.Sandbox) error {
-	m.stopVM(ctx, built.VMName)
+	if err := m.eng.Stop(ctx, built.VMName); err != nil {
+		return fmt.Errorf("stop before cold boot: %w", err)
+	}
 	if err := m.eng.Start(ctx, built.VMName); err != nil {
 		return fmt.Errorf("cold boot: %w", err)
 	}
