@@ -786,6 +786,53 @@ func TestAClaimHibernatedDuringTheLongProbeIsLeftAlone(t *testing.T) {
 	}
 }
 
+func TestASilentClaimReleasedOrExpiredDuringTheShortProbeIsLeftAlone(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		during func(t *testing.T, m *Manager, sb *types.Sandbox)
+	}{
+		{"released with a release delay", func(t *testing.T, m *Manager, sb *types.Sandbox) {
+			editView(m, func(v *configView) { v.releaseDelay = time.Minute })
+			if err := m.Release(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
+				t.Fatalf("release: %v", err)
+			}
+		}},
+		{"past the deadline it archives at", func(_ *testing.T, m *Manager, sb *types.Sandbox) {
+			m.mu.Lock()
+			sb.OnExpire = types.ExpireArchive
+			m.mu.Unlock()
+			expire(m, sb)
+		}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			eng := newFakeEngine()
+			m := newTestManager(t, eng)
+			editView(m, func(v *configView) { v.vmmRestart = types.VMMRestartNone })
+			sb := mustClaim(t, m, testKey)
+			stall := make(chan struct{})
+			eng.probeErr, eng.probeStall = errors.New("silkd probe: context deadline exceeded"), stall
+			probes, stops := eng.probeCount(), len(eng.stops)
+			done := make(chan struct{})
+
+			go func() {
+				defer close(done)
+				m.recoverSilent(t.Context(), sb)
+			}()
+			waitFor(t, func() bool { return eng.probeCount() == probes+1 })
+			tt.during(t, m, sb)
+			close(stall)
+			<-done
+
+			if len(eng.stops) != stops || len(eng.starts) != 0 {
+				t.Errorf("stops %v starts %v, want the claim left to the release or the reap", eng.stops, eng.starts)
+			}
+			if got := usageEventsOf(t, m, sb.ID); strings.Contains(got, "vmm_") {
+				t.Errorf("events %q, want no vmm event", got)
+			}
+		})
+	}
+}
+
 func assertRestartFailsUntilBudget(t *testing.T, m *Manager, eng *fakeEngine, sb *types.Sandbox, booted bool) {
 	t.Helper()
 	for attempt := range vmmRestartBudget {

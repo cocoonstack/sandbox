@@ -275,14 +275,12 @@ func (m *Manager) silentOnce(ctx context.Context) {
 func (m *Manager) recoverSilent(ctx context.Context, sb *types.Sandbox) {
 	sb.Transition.Lock()
 	defer sb.Transition.Unlock()
-	now := time.Now()
-	m.mu.Lock()
-	due := m.silentRecoverableLocked(sb, now)
-	vmName, volumes := sb.VMName, m.hasVolumeHolds(sb)
-	m.mu.Unlock()
-	if !due || m.guestAnswers(ctx, sb, claimProbeTimeout) {
+	if !m.silentDue(sb) || m.guestAnswers(ctx, sb, claimProbeTimeout) || !m.silentDue(sb) {
 		return
 	}
+	m.mu.Lock()
+	vmName, volumes := sb.VMName, m.hasVolumeHolds(sb)
+	m.mu.Unlock()
 	logger := log.WithFunc("pool.recoverSilent")
 	vm, found, err := m.eng.Inspect(ctx, vmName)
 	switch {
@@ -299,7 +297,13 @@ func (m *Manager) recoverSilent(ctx context.Context, sb *types.Sandbox) {
 		return
 	}
 	logger.Warnf(ctx, "guest of %s (%s) stopped answering in a live vmm; stopped the vmm", sb.ID, vmName)
-	m.restartOrFailLocked(ctx, sb, true, volumes, now)
+	m.restartOrFailLocked(ctx, sb, true, volumes, time.Now())
+}
+
+func (m *Manager) silentDue(sb *types.Sandbox) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.silentRecoverableLocked(sb, time.Now())
 }
 
 func (m *Manager) guestAnswers(ctx context.Context, sb *types.Sandbox, timeout time.Duration) bool {
