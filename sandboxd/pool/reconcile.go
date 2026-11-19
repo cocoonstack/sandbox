@@ -284,7 +284,6 @@ func (m *Manager) holdStaleVolumes(ctx context.Context, name string, rec types.V
 	return holds
 }
 
-// resyncEgress re-locks adopted egress claims, quarantining any it cannot lock.
 func (m *Manager) resyncEgress(ctx context.Context, live map[string]types.VMRecord, removed map[string]bool) {
 	logger := log.WithFunc("pool.resyncEgress")
 	now := time.Now()

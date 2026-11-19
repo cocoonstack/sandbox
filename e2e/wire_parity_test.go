@@ -122,7 +122,7 @@ func parseSDKFields(t *testing.T) map[string]map[string]string {
 	t.Helper()
 	paths, err := filepath.Glob(filepath.Join(sdkDir, "*.go"))
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("glob %s: %v", sdkDir, err)
 	}
 	out := map[string]map[string]string{}
 	for _, path := range paths {
@@ -131,7 +131,7 @@ func parseSDKFields(t *testing.T) map[string]map[string]string {
 		}
 		src, err := parser.ParseFile(token.NewFileSet(), path, nil, parser.SkipObjectResolution)
 		if err != nil {
-			t.Fatal(err)
+			t.Fatalf("parse %s: %v", path, err)
 		}
 		ast.Inspect(src, func(n ast.Node) bool {
 			spec, ok := n.(*ast.TypeSpec)
