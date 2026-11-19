@@ -731,13 +731,11 @@ When an exec or an agent relay cannot connect to the guest's silkd while its
 caller still waits, the claim is noted, and about 2 minutes later the next pass
 probes the guest for up to 60 s, then once more for up to 15 s under the claim's
 lock. A guest that answers either probe is left alone. One that answers neither,
-while cocoon still lists its VMM as running, has the VMM stopped and is marked
-`failed: "guest stopped answering; vmm stopped"` under either `vmm_restart`
-value, with `vmm_exit` then `vmm_failed` usage events. It then follows the rules
-for a failed claim below: a wake cold-boots it, and it is destroyed at lease end
-even with `on_expire: archive`. A claim already past its deadline is left to the
-reap, and a claim no caller dials, or one reached only through its ports, is
-never probed.
+while cocoon still lists its VMM as running, has the VMM stopped, and the claim
+is then handled as one whose VMM exited: a cold restart or `failed`, by the rows
+above, with the same usage events and restart budget. A claim already past its
+deadline is left to the reap, and a claim no caller dials, or one reached only
+through its ports, is never probed.
 
 A cold restart boots the claim's own copy-on-write disk: files the guest
 synced survive, memory and processes do not. The claim's guest env entries

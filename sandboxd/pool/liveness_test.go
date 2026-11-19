@@ -640,37 +640,57 @@ func TestAVMEventFindsAWokenArchivedClaimByItsNewVM(t *testing.T) {
 	}
 }
 
-func TestASilentGuestInALiveVMMIsStoppedFailedAndColdBootedByAWake(t *testing.T) {
-	eng := newFakeEngine()
-	m := newTestManager(t, eng)
-	sb := mustClaim(t, m, testKey)
-	m.NoteUnreachable(sb.ID)
-	ageSilentNotes(m)
-	eng.probeErr = errors.New("silkd probe: context deadline exceeded")
+func TestASilentGuestInALiveVMMIsStoppedAndHandledAsAnExitedVMM(t *testing.T) {
+	for _, tt := range []struct {
+		name     string
+		policy   types.VMMRestart
+		volumes  []types.Volume
+		failed   string
+		restarts int
+		events   string
+		wakeErr  error
+	}{
+		{"cold", types.VMMRestartCold, nil, "", 1, "claim,vmm_exit,vmm_restart", nil},
+		{"none", types.VMMRestartNone, nil, "vmm exited", 0, "claim,vmm_exit,vmm_failed", nil},
+		{"volumes", types.VMMRestartCold, []types.Volume{{Name: "v"}}, "vmm exited; volume mounts do not survive a cold boot", 0, "claim,vmm_exit,vmm_failed", ErrFailed},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			eng := newFakeEngine()
+			m := newTestManager(t, eng)
+			editView(m, func(v *configView) { v.vmmRestart = tt.policy })
+			sb := mustClaim(t, m, testKey)
+			m.mu.Lock()
+			sb.Volumes = tt.volumes
+			m.mu.Unlock()
+			m.NoteUnreachable(sb.ID)
+			ageSilentNotes(m)
+			eng.probeFails = 2
 
-	runSilent(t, m)
+			runSilent(t, m)
 
-	if got, _ := m.Sandbox(sb.ID); got.Failed != reasonGuestSilent {
-		t.Fatalf("failed %q, want %q", got.Failed, reasonGuestSilent)
-	}
-	if !slices.Equal(eng.stops, []string{sb.VMName}) {
-		t.Errorf("stops %v, want the silent guest's VMM stopped", eng.stops)
-	}
-	if len(m.silent) != 0 {
-		t.Errorf("notes %v, want every aged note settled", m.silent)
-	}
-	if got := eng.probeTimeouts[len(eng.probeTimeouts)-2:]; !slices.Equal(got, []time.Duration{wakeProbeTimeout, claimProbeTimeout}) {
-		t.Errorf("probe waits %v, want the long probe then a short one under the lock", got)
-	}
-	eng.probeErr = nil
-	if err := m.Wake(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
-		t.Fatalf("wake: %v", err)
-	}
-	if got, _ := m.Sandbox(sb.ID); got.Failed != "" || got.Restarts != 1 {
-		t.Errorf("summary %+v, want the wake to cold-boot it", got)
-	}
-	if got, want := usageEventsOf(t, m, sb.ID), "claim,vmm_exit,vmm_failed,vmm_restart"; got != want {
-		t.Errorf("events %s, want %s", got, want)
+			got, _ := m.Sandbox(sb.ID)
+			if got.Failed != tt.failed || got.Restarts != tt.restarts {
+				t.Fatalf("summary %+v, want failed %q and %d restarts", got, tt.failed, tt.restarts)
+			}
+			if !slices.Equal(eng.stops, []string{sb.VMName}) || len(eng.starts) != tt.restarts {
+				t.Errorf("stops %v starts %v, want the silent guest's VMM stopped and %d cold boots", eng.stops, eng.starts, tt.restarts)
+			}
+			if len(m.silent) != 0 {
+				t.Errorf("notes %v, want every aged note settled", m.silent)
+			}
+			if got := eng.probeTimeouts[:len(eng.probeTimeouts)-tt.restarts]; !slices.Equal(got[len(got)-2:], []time.Duration{wakeProbeTimeout, claimProbeTimeout}) {
+				t.Errorf("probe waits %v, want the long probe then a short one under the lock", got)
+			}
+			if got := usageEventsOf(t, m, sb.ID); got != tt.events {
+				t.Errorf("events %s, want %s", got, tt.events)
+			}
+			if err := m.Wake(t.Context(), sb.ID, Cred{Token: sb.Token}); !errors.Is(err, tt.wakeErr) {
+				t.Fatalf("wake: %v, want %v", err, tt.wakeErr)
+			}
+			if got, _ := m.Sandbox(sb.ID); tt.wakeErr == nil && (got.Failed != "" || got.Restarts != 1) {
+				t.Errorf("summary %+v, want the claim running after one cold boot", got)
+			}
+		})
 	}
 }
 
