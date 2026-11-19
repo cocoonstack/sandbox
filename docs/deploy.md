@@ -743,8 +743,8 @@ are written again and its egress proxy is re-armed; the instance-metadata
 document is not kept, so re-send it when `restarts` moves. Every cold boot (a
 cold restart, a wake that cold-boots, the wake of a failed claim) is journaled
 before its VM starts. When sandboxd stops before the boot answers, the next
-start finishes it if the VM still runs: the guest env is written again and
-`restarts` moves. If the VM is gone, the next start ends the span the boot
+start finishes it if the VM still runs: it records `vmm_restart`, writes the
+guest env again and moves `restarts`. If the VM is gone, the next start ends the span the boot
 opened (`hibernate` for a hibernated claim, `vmm_exit` for a failed one) and
 leaves the claim to liveness or its next wake. A failed claim keeps its VM and
 disk until release or lease end (it is destroyed at expiry even with
