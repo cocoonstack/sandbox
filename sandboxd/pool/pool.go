@@ -300,7 +300,7 @@ type Manager struct {
 	poolVersion    int64
 	configSeedHash string // config pools' hash, to warn when a file edit is overridden
 
-	sweeps    struct{ idle, liveness, archive, archiveDelete, orphan, held, ckpt, gen atomic.Bool }
+	sweeps    struct{ idle, liveness, silent, archive, archiveDelete, orphan, held, ckpt, gen atomic.Bool }
 	balloonOK atomic.Bool
 
 	cocoondSocket string
@@ -311,6 +311,7 @@ type Manager struct {
 	// archiving holds ids with an export or a registry drop in flight; pendingCks pins ids mid-commit; both under m.mu.
 	archiving  map[string]struct{}
 	pendingCks map[string]struct{}
+	silent     map[string]time.Time
 	// archives is the cluster archive registry, nil unless archive_failover is set.
 	archives     archives.Registry
 	nodeID       string
@@ -437,6 +438,7 @@ func NewManager(ctx context.Context, cfg *config.Config, eng Engine, secrets *eg
 		readers:         &readerSet{live: map[string]*reader{}},
 		archiving:       map[string]struct{}{},
 		pendingCks:      map[string]struct{}{},
+		silent:          map[string]time.Time{},
 		ckMarks:         ckMarkers{dir: filepath.Join(cfg.DataDir, archiveDeleteDir)},
 		recs:            recordLocks{held: map[string]*sync.RWMutex{}, refs: map[string]int{}},
 		heals:           healVetoes{pending: map[string]struct{}{}, aborted: map[string]struct{}{}},
@@ -555,6 +557,7 @@ func (m *Manager) Run(ctx context.Context) {
 			go m.retryArchiveDeletes(ctx)
 		case <-liveness:
 			m.livenessOnce(ctx)
+			m.silentOnce(ctx)
 		case <-images:
 			go m.checkImagesOnce(ctx)
 		case <-heldFence:

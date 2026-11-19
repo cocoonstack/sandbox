@@ -145,6 +145,7 @@ type Manager interface {
 	AdoptForWake(ctx context.Context, id string, cred pool.Cred) (bool, error)
 	DialPort(ctx context.Context, id string, cred pool.Cred, port uint16) (net.Conn, error)
 	WakeAgentSocket(ctx context.Context, id string, cred pool.Cred) (string, <-chan struct{}, func(), error)
+	NoteUnreachable(id string)
 	WakeAgentSocketOrRead(ctx context.Context, id string, cred pool.Cred) (string, <-chan struct{}, func(), error)
 	SleepingSource(id, token string) string
 	DialReader(ctx context.Context, id, token string) (conn net.Conn, source string, err error)

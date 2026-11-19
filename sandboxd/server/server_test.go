@@ -980,6 +980,47 @@ func TestAgentMapsEachFailureToItsStatus(t *testing.T) {
 	}
 }
 
+func TestOnlyAFailedDialTheCallerStillWaitsOnIsNotedUnreachable(t *testing.T) {
+	for _, tt := range []struct {
+		name     string
+		dialErr  error
+		canceled bool
+		noted    int
+	}{
+		{"guest answers", nil, false, 0},
+		{"dial fails", errors.New("connection refused"), false, 1},
+		{"dial fails after the caller left", context.Canceled, true, 0},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			mgr := &fakeManager{socket: func(string, string) (string, error) { return "/v/sock", nil }, unreachable: make(chan string, 1)}
+			dialer := &fakeDialer{dial: func(context.Context, string) (net.Conn, error) {
+				if tt.dialErr != nil {
+					return nil, tt.dialErr
+				}
+				guest, _ := net.Pipe()
+				return guest, nil
+			}}
+			s := New("", "node:7777", mgr, dialer, nil, nil, nil, nil)
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			if tt.canceled {
+				cancel()
+			}
+			guest, done, err := s.openGuest(ctx, "sb_1", pool.Cred{Token: "tok"}, mgr.WakeAgentSocket)
+			if (err != nil) != (tt.dialErr != nil) {
+				t.Fatalf("openGuest: %v, want an error only for a failed dial", err)
+			}
+			if err == nil {
+				done()
+				_ = guest.Close()
+			}
+			if len(mgr.unreachable) != tt.noted {
+				t.Errorf("notes %d, want %d", len(mgr.unreachable), tt.noted)
+			}
+		})
+	}
+}
+
 func TestBodyVerbsPassATenantsEmptyBodyTokenAsAnEmptyClaimToken(t *testing.T) {
 	tests := []struct {
 		name, bearer string
@@ -2642,6 +2683,7 @@ type fakeManager struct {
 	memoryLow          bool
 	anonBytes          int
 	reader             *fakeReader
+	unreachable        chan string
 }
 
 func (f *fakeManager) RegisterVolume(ctx context.Context, name string, spec types.VolumeRegistration) error {
@@ -2726,6 +2768,12 @@ func (f *fakeManager) WakeAgentSocket(_ context.Context, id string, cred pool.Cr
 	}
 	sock, err := f.AgentSocket(id, cred)
 	return sock, f.fenced, func() {}, err
+}
+
+func (f *fakeManager) NoteUnreachable(id string) {
+	if f.unreachable != nil {
+		f.unreachable <- id
+	}
 }
 
 func (f *fakeManager) WakeAgentSocketOrRead(ctx context.Context, id string, cred pool.Cred) (string, <-chan struct{}, func(), error) {

@@ -22,6 +22,7 @@ const (
 	livenessBackstop   = time.Minute
 	vmEventsBackoff    = time.Second
 	vmEventsMaxBackoff = 30 * time.Second
+	silentGrace        = 2 * time.Minute
 
 	reasonColdBootFailed = "vmm exited; cold boot failed"
 )
@@ -29,6 +30,14 @@ const (
 type liveSuspect struct {
 	sb     *types.Sandbox
 	vmName string
+}
+
+func (m *Manager) NoteUnreachable(id string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, noted := m.silent[id]; !noted {
+		m.silent[id] = time.Now()
+	}
 }
 
 // livenessOnce finds claims whose VMM exited outside a transition and restarts or fails each.
@@ -178,7 +187,7 @@ func (m *Manager) recoverVMM(ctx context.Context, sb *types.Sandbox) {
 	defer sb.Transition.Unlock()
 	now := time.Now()
 	m.mu.Lock()
-	live := m.claimed[sb.ID] == sb && m.vmSettledLocked(sb) && !m.leaseLapsed(sb, now) && (!sb.Replicated || !m.isFenced())
+	live := m.recoverableLocked(sb, now)
 	volumes := m.hasVolumeHolds(sb)
 	m.mu.Unlock()
 	if !live {
@@ -194,6 +203,10 @@ func (m *Manager) recoverVMM(ctx context.Context, sb *types.Sandbox) {
 	case found && vm.State == vmStateRunning:
 		return
 	}
+	m.restartOrFailLocked(ctx, sb, found, volumes, now)
+}
+
+func (m *Manager) restartOrFailLocked(ctx context.Context, sb *types.Sandbox, found, volumes bool, now time.Time) {
 	m.recordExit(ctx, sb)
 	reason := coldBootBlocker(sb, found, volumes)
 	if reason == "" && m.view.Load().vmmRestart == types.VMMRestartNone {
@@ -208,7 +221,8 @@ func (m *Manager) recoverVMM(ctx context.Context, sb *types.Sandbox) {
 		return
 	}
 	sb.RestartLog = append(sb.RestartLog, now)
-	err = m.restartLocked(ctx, sb)
+	logger := log.WithFunc("pool.restartOrFailLocked")
+	err := m.restartLocked(ctx, sb)
 	switch {
 	case err == nil, errors.Is(err, ErrUnknownSandbox):
 	case len(sb.RestartLog) < vmmRestartBudget:
@@ -217,6 +231,86 @@ func (m *Manager) recoverVMM(ctx context.Context, sb *types.Sandbox) {
 		logger.Errorf(ctx, err, "restart %s", sb.ID)
 		m.failLocked(ctx, sb, reasonColdBootFailed)
 	}
+}
+
+func (m *Manager) silentOnce(ctx context.Context) {
+	if !m.sweeps.silent.CompareAndSwap(false, true) {
+		return
+	}
+	now := time.Now()
+	var suspects []*types.Sandbox
+	m.mu.Lock()
+	for id, since := range m.silent {
+		if now.Sub(since) < silentGrace {
+			continue
+		}
+		delete(m.silent, id)
+		if sb := m.claimed[id]; sb != nil && m.silentRecoverableLocked(sb, now) {
+			suspects = append(suspects, sb)
+		}
+	}
+	m.mu.Unlock()
+	if len(suspects) == 0 {
+		m.sweeps.silent.Store(false)
+		return
+	}
+	go func() {
+		defer m.sweeps.silent.Store(false)
+		answered := make([]bool, len(suspects))
+		var probes sync.WaitGroup
+		for i, sb := range suspects {
+			probes.Go(func() { answered[i] = m.guestAnswers(ctx, sb, wakeProbeTimeout) })
+		}
+		probes.Wait()
+		var silent []*types.Sandbox
+		for i, sb := range suspects {
+			if !answered[i] {
+				silent = append(silent, sb)
+			}
+		}
+		m.runBounded(ctx, len(silent), func(ctx context.Context, i int) { m.recoverSilent(ctx, silent[i]) }).Wait()
+	}()
+}
+
+func (m *Manager) recoverSilent(ctx context.Context, sb *types.Sandbox) {
+	sb.Transition.Lock()
+	defer sb.Transition.Unlock()
+	if !m.silentDue(sb) || m.guestAnswers(ctx, sb, claimProbeTimeout) || !m.silentDue(sb) {
+		return
+	}
+	m.mu.Lock()
+	vmName, volumes := sb.VMName, m.hasVolumeHolds(sb)
+	m.mu.Unlock()
+	logger := log.WithFunc("pool.recoverSilent")
+	vm, found, err := m.eng.Inspect(ctx, vmName)
+	switch {
+	case err != nil:
+		logger.Warnf(ctx, "inspect %s: %v", vmName, err)
+		m.NoteUnreachable(sb.ID)
+		return
+	case !found || vm.State != vmStateRunning:
+		return
+	}
+	if err = m.eng.Stop(ctx, vmName); err != nil {
+		logger.Warnf(ctx, "stop silent %s: %v", sb.ID, err)
+		m.NoteUnreachable(sb.ID)
+		return
+	}
+	logger.Warnf(ctx, "guest of %s (%s) stopped answering in a live vmm; stopped the vmm", sb.ID, vmName)
+	m.restartOrFailLocked(ctx, sb, true, volumes, time.Now())
+}
+
+func (m *Manager) silentDue(sb *types.Sandbox) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.silentRecoverableLocked(sb, time.Now())
+}
+
+func (m *Manager) guestAnswers(ctx context.Context, sb *types.Sandbox, timeout time.Duration) bool {
+	m.mu.Lock()
+	sock := sb.VsockSocket
+	m.mu.Unlock()
+	return m.eng.Probe(ctx, sock, timeout) == nil
 }
 
 // restartFailed cold-boots a failed claim on an explicit wake and resets its restart budget.
@@ -341,6 +435,14 @@ func (m *Manager) failLocked(ctx context.Context, sb *types.Sandbox, reason stri
 	m.recordExit(ctx, sb)
 	m.recordUsage(ctx, usage.Event{Event: "vmm_failed", ID: sb.ID, VMName: sb.VMName, Tenant: sb.Tenant, Reference: reason})
 	log.WithFunc("pool.failLocked").Warnf(ctx, "sandbox %s failed: %s", sb.ID, reason)
+}
+
+func (m *Manager) recoverableLocked(sb *types.Sandbox, now time.Time) bool {
+	return m.claimed[sb.ID] == sb && m.vmSettledLocked(sb) && !m.leaseLapsed(sb, now) && (!sb.Replicated || !m.isFenced())
+}
+
+func (m *Manager) silentRecoverableLocked(sb *types.Sandbox, now time.Time) bool {
+	return m.recoverableLocked(sb, now) && !m.reapDueLocked(sb, now)
 }
 
 // leaseLapsed reports whether reap destroys sb instead of archiving it; callers hold m.mu.
