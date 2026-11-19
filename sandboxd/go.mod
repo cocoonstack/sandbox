@@ -6,7 +6,7 @@ require (
 	github.com/aws/aws-sdk-go-v2 v1.47.8
 	github.com/aws/aws-sdk-go-v2/config v1.33.16
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.114.6
-	github.com/aws/smithy-go v1.28.8
+	github.com/aws/smithy-go v1.28.9
 	github.com/cocoonstack/sandbox/protocol/wire v0.0.0-00010101000000-000000000000
 	github.com/docker/go-units v0.5.0
 	github.com/google/nftables v0.3.0
