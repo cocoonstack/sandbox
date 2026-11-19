@@ -56,10 +56,10 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 			continue
 		case ok && rec.State == vmStateRunning:
 			sb.VsockSocket = rec.VsockSocket
-			if sb.HibernateSnap != "" {
+			if sb.HibernateSnap != "" && !sb.ColdBooting {
 				resumed = append(resumed, sb)
+				sb.HibernateSnap = ""
 			}
-			sb.HibernateSnap = ""
 			if sb.PendingSnap != "" || sb.SaveSnap != "" {
 				referenced[sb.PendingSnap] = true
 				interrupted = append(interrupted, sb)
@@ -102,7 +102,29 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 		m.recordReconciled(ctx, resumed, dropped, answered)
 		m.closeColdBoots(ctx, stalled)
 	}
-	logger := log.WithFunc("pool.Reconcile")
+	m.sweepStaging(ctx, pooled)
+
+	if answered {
+		m.reclaimOrphanArchiveCks(ctx, claims)
+	}
+	m.retryArchiveDeletes(ctx)
+	removed := m.sweepStaleVMs(ctx, live, owned)
+
+	m.sweepOrphanSnaps(ctx, snaps, snapsErr, referenced)
+	m.resyncEgress(ctx, live, removed)
+	m.warnDeniedClaims(ctx)
+	log.WithFunc("pool.Reconcile").Infof(ctx, "adopted %d claims, %d VMs live", len(m.claimed), len(live))
+	m.resumeMoves(context.WithoutCancel(ctx), outs, ins)
+	for _, sb := range interrupted {
+		sb.Transition.Lock()
+		go m.settleInterrupted(ctx, sb)
+	}
+	m.finishColdBoots(ctx, booting)
+	return saveErr
+}
+
+func (m *Manager) sweepStaging(ctx context.Context, pooled map[string]bool) {
+	logger := log.WithFunc("pool.sweepStaging")
 	if err := m.ckpts.SweepStaging(); err != nil {
 		logger.Error(ctx, err, "sweep checkpoint staging")
 	}
@@ -114,24 +136,6 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 	_ = utils.RemoveDirEntries(m.dataDir, func(name string) bool { return strings.HasPrefix(name, "fork-") })
 	_ = utils.RemoveDirEntries(filepath.Join(m.dataDir, readerDir), nil)
 	_ = utils.RemoveDirEntries(filepath.Join(m.dataDir, movesDir), func(id string) bool { return m.claimed[id] == nil || !m.claimed[id].MoveIn })
-
-	if answered {
-		m.reclaimOrphanArchiveCks(ctx, claims)
-	}
-	m.retryArchiveDeletes(ctx)
-	removed := m.sweepStaleVMs(ctx, live, owned)
-
-	m.sweepOrphanSnaps(ctx, snaps, snapsErr, referenced)
-	m.resyncEgress(ctx, live, removed)
-	m.warnDeniedClaims(ctx)
-	logger.Infof(ctx, "adopted %d claims, %d VMs live", len(m.claimed), len(live))
-	m.resumeMoves(context.WithoutCancel(ctx), outs, ins)
-	for _, sb := range interrupted {
-		sb.Transition.Lock()
-		go m.settleInterrupted(ctx, sb)
-	}
-	m.finishColdBoots(ctx, booting)
-	return saveErr
 }
 
 func (m *Manager) closeColdBoots(ctx context.Context, stalled []*types.Sandbox) {

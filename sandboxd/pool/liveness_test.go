@@ -848,13 +848,14 @@ func TestARestartDuringAColdBootFinishesItWhenTheVMRuns(t *testing.T) {
 	for _, tt := range []struct {
 		name, snap, failed, events string
 	}{
-		{"hibernate wake", "hib-1", "", "wake,vmm_restart"},
+		{"hibernate wake", "hib-1", "", "vmm_restart,wake"},
 		{"liveness restart", "", "", "vmm_restart"},
 		{"wake of a failed claim", "", "vmm exited", "vmm_restart"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			eng := newFakeEngine()
 			eng.vms["sbx-cb-1"] = "/vsock/cb"
+			eng.snapshots = []string{"hib-1"}
 			dataDir := t.TempDir()
 			seedClaims(t, dataDir, map[string]*types.Sandbox{"sb_cb": {
 				ID: "sb_cb", VMName: "sbx-cb-1", Key: testKey, Token: "tok", VsockSocket: "/vsock/cb",
@@ -879,7 +880,53 @@ func TestARestartDuringAColdBootFinishesItWhenTheVMRuns(t *testing.T) {
 			if got := usageEventsOf(t, m, "sb_cb"); got != tt.events {
 				t.Errorf("events %q, want %q", got, tt.events)
 			}
+			if tt.snap != "" {
+				waitFor(t, func() bool { return eng.snapRemoved(tt.snap) })
+			}
 		})
+	}
+}
+
+func TestARestartDuringAHibernateWakeColdBootWhoseFinishFailsKeepsTheSnapshot(t *testing.T) {
+	eng := newFakeEngine()
+	eng.vms["sbx-cb-1"] = "/vsock/cb"
+	eng.snapshots = []string{"hib-1"}
+	eng.probeErr = errors.New("silkd probe: context deadline exceeded")
+	dataDir := t.TempDir()
+	seedClaims(t, dataDir, map[string]*types.Sandbox{"sb_cb": {
+		ID: "sb_cb", VMName: "sbx-cb-1", Key: testKey, Token: "tok", VsockSocket: "/vsock/cb",
+		HibernateSnap: "hib-1", ColdBooting: true,
+	}})
+	m := mustManager(t, &config.Config{DataDir: dataDir}, eng)
+
+	if err := m.Reconcile(t.Context()); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	waitFor(t, func() bool { row := journaled(t, m)["sb_cb"]; return row != nil && !row.ColdBooting })
+
+	if row := journaled(t, m)["sb_cb"]; row.HibernateSnap != "hib-1" || row.Restarts != 0 {
+		t.Errorf("journal %+v, want the claim hibernated on its snapshot with no restart", row)
+	}
+	if eng.snapRemoved("hib-1") || !eng.stopped["sbx-cb-1"] {
+		t.Errorf("snapshot removed %v, VM stopped %v, want the snapshot kept and the VM stopped", eng.snapRemoved("hib-1"), eng.stopped["sbx-cb-1"])
+	}
+	if got := usageEventsOf(t, m, "sb_cb"); got != "vmm_restart,hibernate" {
+		t.Errorf("events %q, want vmm_restart,hibernate", got)
+	}
+}
+
+func TestAColdBootStoppedByAShutdownKeepsItsMarkForTheNextStart(t *testing.T) {
+	eng := newFakeEngine()
+	m := newTestManager(t, eng)
+	sb := mustClaim(t, m, testKey)
+	killVMM(eng, sb.VMName)
+	eng.probeErr = errors.New("silkd probe: context deadline exceeded")
+	eng.startHook = func() { eng.stopErr = engine.ErrStopping }
+
+	runLiveness(t, m)
+
+	if row := journaled(t, m)[sb.ID]; row == nil || !row.ColdBooting {
+		t.Errorf("journal %+v, want the cold boot left marked for the next start to finish", row)
 	}
 }
 
