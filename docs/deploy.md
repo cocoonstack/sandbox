@@ -726,6 +726,14 @@ claimed `on_expire: archive`, which needs a running VM to archive:
 | cold restart | `cold` (default), none-lane claim without volumes, within 3 restarts in 10 min | `restarts` +1 and `restarted_at` on the sandbox row, `vmm_exit` then `vmm_restart` usage events; a call before the next pass gets `502`, one during the boot waits for it, open relays see EOF and redial |
 | failed | `none`, an egress-lane or volume claim, the VM record gone, the restart budget spent, or 3 failed boots | `failed: "<reason>"` on the row, `vmm_exit` then `vmm_failed` usage events (a boot whose guest setup failed adds its own `vmm_restart` and `vmm_exit`), `409` from exec, relays, ports, hibernate, fork, checkpoint and promote |
 
+A guest that stops answering inside a live VMM is caught from the data plane: a
+dial of its silkd that fails is noted, and about 2 minutes later the next pass
+probes the guest for up to 60 s. A guest that answers is left alone. One that
+does not, while cocoon still lists its VMM as running, has the VMM stopped and
+is marked `failed: "guest stopped answering; vmm stopped"` under either
+`vmm_restart` value, with `vmm_exit` then `vmm_failed` usage events; a wake
+cold-boots it as below. A claim no caller dials is never probed.
+
 A cold restart boots the claim's own copy-on-write disk: files the guest
 synced survive, memory and processes do not. The claim's guest env entries
 are written again and its egress proxy is re-armed; the instance-metadata

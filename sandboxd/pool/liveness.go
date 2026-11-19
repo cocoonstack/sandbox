@@ -22,13 +22,23 @@ const (
 	livenessBackstop   = time.Minute
 	vmEventsBackoff    = time.Second
 	vmEventsMaxBackoff = 30 * time.Second
+	silentGrace        = 2 * time.Minute
 
 	reasonColdBootFailed = "vmm exited; cold boot failed"
+	reasonGuestSilent    = "guest stopped answering; vmm stopped"
 )
 
 type liveSuspect struct {
 	sb     *types.Sandbox
 	vmName string
+}
+
+func (m *Manager) NoteUnreachable(id string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, noted := m.silent[id]; !noted {
+		m.silent[id] = time.Now()
+	}
 }
 
 // livenessOnce finds claims whose VMM exited outside a transition and restarts or fails each.
@@ -217,6 +227,59 @@ func (m *Manager) recoverVMM(ctx context.Context, sb *types.Sandbox) {
 		logger.Errorf(ctx, err, "restart %s", sb.ID)
 		m.failLocked(ctx, sb, reasonColdBootFailed)
 	}
+}
+
+func (m *Manager) silentOnce(ctx context.Context) {
+	if !m.sweeps.silent.CompareAndSwap(false, true) {
+		return
+	}
+	now := time.Now()
+	var suspects []*types.Sandbox
+	m.mu.Lock()
+	for id, since := range m.silent {
+		if now.Sub(since) < silentGrace {
+			continue
+		}
+		delete(m.silent, id)
+		if sb := m.claimed[id]; sb != nil {
+			suspects = append(suspects, sb)
+		}
+	}
+	m.mu.Unlock()
+	if len(suspects) == 0 {
+		m.sweeps.silent.Store(false)
+		return
+	}
+	go func() {
+		defer m.sweeps.silent.Store(false)
+		m.runBounded(ctx, len(suspects), func(ctx context.Context, i int) { m.failSilent(ctx, suspects[i]) }).Wait()
+	}()
+}
+
+func (m *Manager) failSilent(ctx context.Context, sb *types.Sandbox) {
+	sb.Transition.Lock()
+	defer sb.Transition.Unlock()
+	m.mu.Lock()
+	live := m.claimed[sb.ID] == sb && m.vmSettledLocked(sb)
+	vmName, sock := sb.VMName, sb.VsockSocket
+	m.mu.Unlock()
+	if !live || m.eng.Probe(ctx, sock, wakeProbeTimeout) == nil {
+		return
+	}
+	logger := log.WithFunc("pool.failSilent")
+	vm, found, err := m.eng.Inspect(ctx, vmName)
+	switch {
+	case err != nil:
+		logger.Warnf(ctx, "inspect %s: %v", vmName, err)
+		return
+	case !found || vm.State != vmStateRunning:
+		return
+	}
+	if err = m.eng.Stop(ctx, vmName); err != nil {
+		logger.Warnf(ctx, "stop silent %s: %v", sb.ID, err)
+		return
+	}
+	m.failLocked(ctx, sb, reasonGuestSilent)
 }
 
 // restartFailed cold-boots a failed claim on an explicit wake and resets its restart budget.

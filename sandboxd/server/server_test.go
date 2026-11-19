@@ -952,7 +952,7 @@ func TestAgentMapsEachFailureToItsStatus(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			mgr := &fakeManager{socket: func(string, string) (string, error) { return "/v/sock", tt.sockErr }}
+			mgr := &fakeManager{socket: func(string, string) (string, error) { return "/v/sock", tt.sockErr }, unreachable: make(chan string, 1)}
 			dialer := &fakeDialer{dial: func(context.Context, string) (net.Conn, error) {
 				return nil, tt.dialErr
 			}}
@@ -975,6 +975,16 @@ func TestAgentMapsEachFailureToItsStatus(t *testing.T) {
 			defer resp.Body.Close()
 			if resp.StatusCode != tt.want {
 				t.Errorf("status %d, want %d", resp.StatusCode, tt.want)
+			}
+			select {
+			case id := <-mgr.unreachable:
+				if tt.dialErr == nil || id != "sb_1" {
+					t.Errorf("noted %q unreachable, want a note only for a failed dial of sb_1", id)
+				}
+			default:
+				if tt.dialErr != nil {
+					t.Error("a failed silkd dial was not noted")
+				}
 			}
 		})
 	}
@@ -2642,6 +2652,7 @@ type fakeManager struct {
 	memoryLow          bool
 	anonBytes          int
 	reader             *fakeReader
+	unreachable        chan string
 }
 
 func (f *fakeManager) RegisterVolume(ctx context.Context, name string, spec types.VolumeRegistration) error {
@@ -2726,6 +2737,12 @@ func (f *fakeManager) WakeAgentSocket(_ context.Context, id string, cred pool.Cr
 	}
 	sock, err := f.AgentSocket(id, cred)
 	return sock, f.fenced, func() {}, err
+}
+
+func (f *fakeManager) NoteUnreachable(id string) {
+	if f.unreachable != nil {
+		f.unreachable <- id
+	}
 }
 
 func (f *fakeManager) WakeAgentSocketOrRead(ctx context.Context, id string, cred pool.Cred) (string, <-chan struct{}, func(), error) {

@@ -640,6 +640,82 @@ func TestAVMEventFindsAWokenArchivedClaimByItsNewVM(t *testing.T) {
 	}
 }
 
+func TestASilentGuestInALiveVMMIsStoppedFailedAndColdBootedByAWake(t *testing.T) {
+	eng := newFakeEngine()
+	m := newTestManager(t, eng)
+	sb := mustClaim(t, m, testKey)
+	m.NoteUnreachable(sb.ID)
+	ageSilentNotes(m)
+	eng.probeErr = errors.New("silkd probe: context deadline exceeded")
+
+	runSilent(t, m)
+
+	if got, _ := m.Sandbox(sb.ID); got.Failed != reasonGuestSilent {
+		t.Fatalf("failed %q, want %q", got.Failed, reasonGuestSilent)
+	}
+	if !slices.Equal(eng.stops, []string{sb.VMName}) {
+		t.Errorf("stops %v, want the silent guest's VMM stopped", eng.stops)
+	}
+	if len(m.silent) != 0 {
+		t.Errorf("notes %v, want every aged note settled", m.silent)
+	}
+	eng.probeErr = nil
+	if err := m.Wake(t.Context(), sb.ID, Cred{Token: sb.Token}); err != nil {
+		t.Fatalf("wake: %v", err)
+	}
+	if got, _ := m.Sandbox(sb.ID); got.Failed != "" || got.Restarts != 1 {
+		t.Errorf("summary %+v, want the wake to cold-boot it", got)
+	}
+	if got, want := usageEventsOf(t, m, sb.ID), "claim,vmm_exit,vmm_failed,vmm_restart"; got != want {
+		t.Errorf("events %s, want %s", got, want)
+	}
+}
+
+func TestASilenceNoteLeavesAClaimRunningUnlessItsLiveGuestMissesTheProbe(t *testing.T) {
+	for _, tt := range []struct {
+		name                          string
+		aged, silent, down, hibernate bool
+		probes                        int
+	}{
+		{"guest answers", true, false, false, false, 1},
+		{"note too young", false, true, false, false, 0},
+		{"vmm already down", true, true, true, false, 1},
+		{"hibernated since the note", true, true, false, true, 0},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			eng := newFakeEngine()
+			m := newTestManager(t, eng)
+			sb := mustClaim(t, m, testKey)
+			m.NoteUnreachable(sb.ID)
+			if tt.aged {
+				ageSilentNotes(m)
+			}
+			if tt.silent {
+				eng.probeErr = errors.New("silkd probe: context deadline exceeded")
+			}
+			if tt.down {
+				killVMM(eng, sb.VMName)
+			}
+			if tt.hibernate {
+				hibernateClaim(t, m, sb)
+			}
+			probes, stops := eng.probeCount(), len(eng.stops)
+
+			runSilent(t, m)
+
+			if got, _ := m.Sandbox(sb.ID); got.Failed != "" || len(eng.stops) != stops {
+				t.Errorf("failed %q stops %v, want the claim left as it was", got.Failed, eng.stops)
+			}
+			if got := eng.probeCount() - probes; got != tt.probes {
+				t.Errorf("probes %d, want %d", got, tt.probes)
+			}
+			if _, kept := m.silent[sb.ID]; kept == tt.aged {
+				t.Errorf("note kept %v, want it kept only while it is younger than the grace", kept)
+			}
+		})
+	}
+}
+
 func assertRestartFailsUntilBudget(t *testing.T, m *Manager, eng *fakeEngine, sb *types.Sandbox, booted bool) {
 	t.Helper()
 	for attempt := range vmmRestartBudget {
@@ -671,6 +747,20 @@ func runLiveness(t *testing.T, m *Manager) {
 	t.Helper()
 	m.livenessOnce(t.Context())
 	waitFor(t, func() bool { return !m.sweeps.liveness.Load() })
+}
+
+func runSilent(t *testing.T, m *Manager) {
+	t.Helper()
+	m.silentOnce(t.Context())
+	waitFor(t, func() bool { return !m.sweeps.silent.Load() })
+}
+
+func ageSilentNotes(m *Manager) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for id, since := range m.silent {
+		m.silent[id] = since.Add(-silentGrace)
+	}
 }
 
 func killVMM(eng *fakeEngine, name string) {
