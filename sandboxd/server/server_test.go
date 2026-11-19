@@ -2725,7 +2725,10 @@ func (f *fakeManager) WakeAgentSocket(_ context.Context, id string, cred pool.Cr
 		f.reader.wake()
 	}
 	sock, err := f.AgentSocket(id, cred)
-	return sock, f.fenced, func() {}, err
+	if err != nil {
+		return "", nil, nil, err
+	}
+	return sock, f.fenced, func() {}, nil
 }
 
 func (f *fakeManager) WakeAgentSocketOrRead(ctx context.Context, id string, cred pool.Cred) (string, <-chan struct{}, func(), error) {

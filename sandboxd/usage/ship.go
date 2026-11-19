@@ -25,7 +25,7 @@ const (
 	pruneEvery = time.Hour
 )
 
-// Ship lands the journal at path in store as node's events until ctx ends, then drains it once more; a nonzero retention prunes node's older rows hourly; it only reads the journal.
+// Ship lands the journal at path in store as node's events until ctx ends, reading it only; a nonzero retention prunes node's older rows hourly.
 func Ship(ctx context.Context, path, node string, store Store, retention time.Duration) {
 	s := &shipper{path: path, node: node, store: store}
 	tick := time.Tick(shipEvery)
@@ -48,7 +48,7 @@ func Ship(ctx context.Context, path, node string, store Store, retention time.Du
 	}
 }
 
-// shipper resumes after the line whose digest the store's mark names, else after its floor, node's oldest row; at is the last line read, a hint that survives a rename.
+// shipper resumes after the line the store's mark names, else after its floor, node's oldest row.
 type shipper struct {
 	path    string
 	node    string
@@ -82,7 +82,6 @@ func (s *shipper) drain(ctx context.Context) {
 	}
 }
 
-// shipOnce lands the next batch of lines and returns how many it read.
 func (s *shipper) shipOnce(ctx context.Context) (int, error) {
 	if !s.synced {
 		mark, err := s.store.Last(ctx, s.node)
@@ -131,7 +130,6 @@ func (s *shipper) shipOnce(ctx context.Context) (int, error) {
 	return n, nil
 }
 
-// locate returns where the first unlanded line starts: past the anchor when a file still holds it, else past the marked line, else past the floor line, else at the oldest line.
 func (s *shipper) locate(ctx context.Context, live, backup *os.File) (*os.File, int64) {
 	for _, f := range []*os.File{live, backup} {
 		if f != nil && s.at.in(f) {

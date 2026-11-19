@@ -634,7 +634,7 @@ func (m *Manager) Info() ([]PoolInfo, Gauges) {
 	return pools, g
 }
 
-// Sandboxes lists, in id order, the live claims visible to tenant (empty means root) with an id above after, narrowed to claimRef when set and to claims holding every metadata pair; a positive limit caps the rows.
+// Sandboxes lists the live claims visible to tenant (empty means root) in id order; after, claimRef, metadata and a positive limit narrow it.
 func (m *Manager) Sandboxes(tenant, claimRef string, metadata types.Metadata, after string, limit int) []SandboxSummary {
 	m.mu.Lock()
 	size := len(m.claimed)
@@ -714,7 +714,7 @@ func (m *Manager) sweepStoreGenerations(ctx context.Context) {
 func (m *Manager) runBounded(ctx context.Context, n int, f func(context.Context, int)) *sync.WaitGroup {
 	var wg sync.WaitGroup
 	var next atomic.Int64
-	// one budget of workers queues at most that many waiters, so a long sweep leaves other sweeps their FIFO turn
+	// One budget of workers queues at most that many waiters, so a long sweep leaves other sweeps their FIFO turn
 	for range min(n, cap(m.maintSem)) {
 		wg.Go(func() {
 			for i := int(next.Add(1) - 1); i < n; i = int(next.Add(1) - 1) {
