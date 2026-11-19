@@ -147,17 +147,24 @@ func TestExecTimeoutKillsTheCommand(t *testing.T) {
 
 func TestAnExecThatTimesOutBeforeItsStartNotesTheGuest(t *testing.T) {
 	for _, tt := range []struct {
-		name    string
-		started bool
-		noted   int
+		name            string
+		unread, started bool
+		noted           int
 	}{
-		{"silkd never starts the command", false, 1},
-		{"the command started", true, 0},
+		{"silkd never reads the request", true, false, 1},
+		{"silkd never starts the command", false, false, 1},
+		{"the command started", false, true, 0},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			killed := make(chan uint32, 1)
 			mgr := &fakeManager{unreachable: make(chan string, 1)}
+			hold := make(chan struct{})
+			t.Cleanup(func() { close(hold) })
 			ts := newTestServer(t, "", mgr, pipeDialer(killWatchGuest(killed, func(conn net.Conn, r *bufio.Reader) {
+				if tt.unread {
+					<-hold
+					return
+				}
 				_, _ = r.ReadBytes('\n')
 				if tt.started {
 					_, _ = io.WriteString(conn, startedFrame)

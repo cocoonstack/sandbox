@@ -81,6 +81,11 @@ func (s *Server) handleExec(w http.ResponseWriter, r *http.Request) {
 	stdinClose, _ := wire.EncodeRequest(wire.StdinClose{})
 	frame = slices.Concat(frame, newline, stdinClose, newline)
 	if _, err := guest.Write(frame); err != nil {
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			s.mgr.NoteUnreachable(id)
+			writeErr(w, http.StatusGatewayTimeout, "command timed out")
+			return
+		}
 		writeErr(w, http.StatusBadGateway, "guest agent unreachable")
 		return
 	}
