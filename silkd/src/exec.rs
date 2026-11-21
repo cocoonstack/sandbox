@@ -111,7 +111,7 @@ where
     }
 
     if let Err(e) = stream_to_client(&mut fg_rx, out).await {
-        sysutil::signal_group(pid, libc::SIGKILL);
+        proc.signal_group(libc::SIGKILL);
         drop(fg_rx);
         stdin_task.abort();
         let _ = supervise.await;

@@ -4,6 +4,8 @@
 mod common;
 
 use std::os::unix::fs::PermissionsExt;
+#[cfg(target_os = "linux")]
+use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -13,9 +15,8 @@ use silkd::server::State;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 
 use common::{
-    alive, assert_error, b64, connect_with, exchange, expect_frame, frames_until, next_frame, one,
-    proc_entry, request, require_perl, roundtrip, send, stdout_body, type_of, under_deadline,
-    wait_for_path,
+    alive, assert_error, b64, connect_with, exchange, frames_until, next_frame, one, proc_entry,
+    request, require_perl, roundtrip, send, stdout_body, type_of, under_deadline, wait_for_path,
 };
 
 async fn detached_pid(state: &Arc<State>, script: &str) -> u64 {
@@ -261,6 +262,7 @@ async fn kill_ends_the_whole_command_not_only_its_shell() {
     wait_dead(child).await;
 }
 
+#[cfg(target_os = "linux")]
 #[tokio::test]
 async fn kill_after_the_leader_exited_ends_its_background_group() {
     let dir = tempfile::tempdir().unwrap();
@@ -276,6 +278,7 @@ async fn kill_after_the_leader_exited_ends_its_background_group() {
     wait_dead(child).await;
 }
 
+#[cfg(target_os = "linux")]
 #[tokio::test]
 async fn a_client_gone_after_the_leader_exited_ends_its_background_group() {
     let dir = tempfile::tempdir().unwrap();
@@ -287,9 +290,9 @@ async fn a_client_gone_after_the_leader_exited_ends_its_background_group() {
     );
     let (cw, mut lines, handle) =
         connect_with(&state, json!({"op":"exec","argv":["/bin/sh","-c",script]})).await;
-    let pid = expect_frame(&mut lines, "started").await["pid"]
-        .as_u64()
-        .unwrap();
+    let started = next_frame(&mut lines).await;
+    assert_eq!(type_of(&started), "started");
+    let pid = started["pid"].as_u64().unwrap();
     let child = pid_written_to(&marker).await;
     wait_for_exit(&state, pid).await;
     assert!(alive(child), "the background child died with its leader");
@@ -297,6 +300,42 @@ async fn a_client_gone_after_the_leader_exited_ends_its_background_group() {
     drop(cw);
     let _ = under_deadline(handle).await;
     wait_dead(child).await;
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+#[ignore = "needs root"]
+async fn kill_of_an_emptied_group_spares_a_new_group_with_its_id() {
+    let state = Arc::new(State::new());
+    let mut landed = None;
+    for _ in 0..20 {
+        let pid = detached_pid(&state, "exit 0").await;
+        wait_for_exit(&state, pid).await;
+        if let Some(other) = spawn_term_blocked_as(u32::try_from(pid).unwrap()) {
+            landed = Some((pid, other));
+            break;
+        }
+    }
+    let (pid, mut other) = landed.expect("no spawn landed on an emptied group's id");
+    let killed = one(
+        &state,
+        &format!(r#"{{"op":"kill","pid":{pid},"signal":15}}"#),
+    )
+    .await;
+    assert_eq!(type_of(&killed[0]), "done");
+    let pending = std::fs::read_to_string(format!("/proc/{pid}/status"))
+        .unwrap()
+        .lines()
+        .find_map(|l| l.strip_prefix("ShdPnd:"))
+        .map(|m| u64::from_str_radix(m.trim(), 16).unwrap())
+        .unwrap();
+    other.kill().unwrap();
+    other.wait().unwrap();
+    assert_eq!(
+        pending & (1 << (libc::SIGTERM - 1)),
+        0,
+        "kill reached a new group that reused the emptied group's id"
+    );
 }
 
 #[tokio::test]
@@ -512,6 +551,34 @@ async fn a_client_gone_mid_output_releases_the_stdin_a_forked_child_holds() {
         read < 256 * 1024,
         "the forked child read {read} bytes: stdin kept flowing after its client left"
     );
+}
+
+#[cfg(target_os = "linux")]
+fn spawn_term_blocked_as(pid: u32) -> Option<std::process::Child> {
+    for _ in 0..10 {
+        std::fs::write("/proc/sys/kernel/ns_last_pid", (pid - 1).to_string()).unwrap();
+        let mut cmd = std::process::Command::new("sleep");
+        cmd.arg("30").process_group(0);
+        // SAFETY: the hook calls only async-signal-safe sigemptyset, sigaddset and sigprocmask.
+        unsafe {
+            cmd.pre_exec(|| {
+                let mut set: libc::sigset_t = std::mem::zeroed();
+                libc::sigemptyset(&mut set);
+                libc::sigaddset(&mut set, libc::SIGTERM);
+                if libc::sigprocmask(libc::SIG_BLOCK, &set, std::ptr::null_mut()) != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        let mut child = cmd.spawn().unwrap();
+        if child.id() == pid {
+            return Some(child);
+        }
+        child.kill().unwrap();
+        child.wait().unwrap();
+    }
+    None
 }
 
 fn group_member() -> Option<String> {
