@@ -438,7 +438,7 @@ sb.kill(pid)                                  # default SIGKILL
 `spawn` starts the command detached with a bounded output ring; `logs`
 replays it, `attach` follows live output until exit (replay and live stream
 hand off atomically; a follower that falls far behind skips what it missed). `kill` signals the process group the pid leads, so a
-pipeline or a forked child goes with it. Killing an already-exited process is a no-op success.
+pipeline or a forked child goes with it, even after the pid itself exited; an empty group is a no-op success.
 An exited process leaves the table after 5 minutes; from then on its pid
 raises `SilkdError` `not_found`.
 

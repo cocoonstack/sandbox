@@ -34,7 +34,7 @@ func (s *Sandbox) Ps(ctx context.Context) ([]wire.ProcInfo, error) {
 	return procs.Procs, nil
 }
 
-// Kill signals the process group a tracked pid leads; sig 0 sends SIGKILL, and an exited process is a no-op success.
+// Kill signals the process group a tracked pid leads, even after the pid exited; sig 0 sends SIGKILL, and an empty group is a no-op success.
 func (s *Sandbox) Kill(ctx context.Context, pid uint32, sig int32) error {
 	req := &wire.Kill{PID: pid}
 	if sig != 0 {

@@ -557,15 +557,15 @@ code, exited, err = sb.Attach(ctx, pid, w, nil)   // replay, then follow live un
 err = sb.Kill(ctx, pid, 0)                        // 0 = SIGKILL
 ```
 
-`Spawn` returns as soon as the process starts; it keeps running with a
-bounded output ring. `Logs` replays the ring and reports the exit code once
-the process has ended (`exited=false` while running); `Attach` follows live
-output until exit — the replay and the live stream hand off atomically, so
-no chunk is lost or doubled between them, though a follower that falls behind
-the live stream by more than silkd's fan-out buffer skips the chunks it missed. `Kill` signals the process group
-the pid leads, so a pipeline or a forked child goes with it. Killing an already-exited process
-is a no-op success (its OS pid may be recycled; silkd never signals a
-reaped child). An exited process leaves the table after 5 minutes; from then
+`Spawn` returns as soon as the process starts; it keeps running with a bounded
+output ring. `Logs` replays the ring and reports the exit code once the
+process has ended (`exited=false` while running); `Attach` follows live output
+until exit — the replay and the live stream hand off atomically, so no chunk
+is lost or doubled between them, though a follower that falls behind the live
+stream by more than silkd's fan-out buffer skips the chunks it missed. `Kill`
+signals the process group the pid leads, so a pipeline or a forked child goes
+with it, even after the pid itself exited; once the group is empty it is a
+no-op success. An exited process leaves the table after 5 minutes; from then
 on its pid answers `not_found` to every verb.
 
 ## Sessions
