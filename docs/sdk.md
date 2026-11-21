@@ -564,9 +564,9 @@ until exit — the replay and the live stream hand off atomically, so no chunk
 is lost or doubled between them, though a follower that falls behind the live
 stream by more than silkd's fan-out buffer skips the chunks it missed. `Kill`
 signals the process group the pid leads, so a pipeline or a forked child goes
-with it, even after the pid itself exited; once the group is empty it is a
-no-op success. An exited process leaves the table after 5 minutes; from then
-on its pid answers `not_found` to every verb.
+with it, even after the pid itself exited; an empty group is a no-op success.
+An exited process leaves the table after 5 minutes; from then on its pid
+answers `not_found` to every verb.
 
 ## Sessions
 
