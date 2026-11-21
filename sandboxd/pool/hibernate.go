@@ -153,10 +153,9 @@ func (m *Manager) wakeResolved(ctx context.Context, sb *types.Sandbox) (string, 
 }
 
 func (m *Manager) wakeOrRead(ctx context.Context, sb *types.Sandbox, readerOK bool) (string, error) {
-	if m.pausedForMove(sb) {
-		return "", ErrEvacuating
+	if err := m.lockServing(sb); err != nil {
+		return "", err
 	}
-	sb.Transition.Lock()
 	defer sb.Transition.Unlock()
 	if err := ctx.Err(); err != nil {
 		return "", err
