@@ -280,28 +280,6 @@ func TestASleepingHandoverWhoseSilkdNeverAnswersNotesTheGuest(t *testing.T) {
 	}
 }
 
-func TestAHandoverTheClientLeftLogsBelowError(t *testing.T) {
-	logs := captureLogs(t)
-	global := log.GetGlobalLogger()
-	*global = global.Level(zerolog.InfoLevel)
-	canceled, cancel := context.WithCancel(t.Context())
-	cancel()
-	client, peer := net.Pipe()
-	t.Cleanup(func() { _ = peer.Close() })
-	go func() { _, _ = io.Copy(io.Discard, peer) }()
-	rt := &router{s: New("", "node:7777", &fakeManager{}, nil, nil, nil, nil, nil), ctx: canceled, id: "sb_1", client: client}
-	rt.fail(fmt.Errorf("%w: %w", errUnreachable, context.Canceled))
-	rt.fail(canceled.Err())
-	if logs.String() != "" {
-		t.Errorf("a client that left during the hand-over logged %q, want nothing at info level", logs.String())
-	}
-	rt.ctx = t.Context()
-	rt.fail(fmt.Errorf("%w: %w", errUnreachable, errors.New("connection refused")))
-	if !strings.Contains(logs.String(), `"level":"error"`) {
-		t.Errorf("a real hand-over failure logged %q, want an error record", logs.String())
-	}
-}
-
 func TestSleepingFramesAreAuditedOnceOnEitherPath(t *testing.T) {
 	env := newSleepingEnv(t)
 	var mu sync.Mutex

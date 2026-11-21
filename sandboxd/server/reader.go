@@ -170,9 +170,6 @@ func (r *router) closeReader() {
 func (r *router) fail(err error) {
 	kind, msg := wire.KindInternal, "sandbox lookup failed"
 	switch _, mapped, ok := lookupPoolErr(err); {
-	case callerLeft(r.ctx, err):
-		log.WithFunc("server.router.fail").Debugf(r.ctx, "client left during the hand-over of %s: %v", r.id, err)
-		return
 	case errors.Is(err, errUnreachable):
 		msg = errUnreachable.Error()
 		log.WithFunc("server.router.fail").Errorf(r.ctx, err, "dial silkd for %s", r.id)
