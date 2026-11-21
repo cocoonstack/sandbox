@@ -81,8 +81,8 @@ func (s *Server) handleExec(w http.ResponseWriter, r *http.Request) {
 	stdinClose, _ := wire.EncodeRequest(wire.StdinClose{})
 	frame = slices.Concat(frame, newline, stdinClose, newline)
 	if _, err := guest.Write(frame); err != nil {
+		s.mgr.NoteUnreachable(id)
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-			s.mgr.NoteUnreachable(id)
 			writeErr(w, http.StatusGatewayTimeout, "command timed out")
 			return
 		}
@@ -98,7 +98,7 @@ func (s *Server) handleExec(w http.ResponseWriter, r *http.Request) {
 		held += int64(n)
 		return true
 	})
-	if pid == 0 && errors.Is(ctx.Err(), context.DeadlineExceeded) {
+	if pid == 0 && ctx.Err() != nil {
 		s.mgr.NoteUnreachable(id)
 	}
 	if pid != 0 && (ctx.Err() != nil || errors.Is(err, errExecOutputCap) || errors.Is(err, errExecBudget)) {

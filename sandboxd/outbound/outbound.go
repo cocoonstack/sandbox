@@ -154,13 +154,13 @@ func (h *Host) ArmProxy(ctx context.Context, sb *types.Sandbox) error {
 	if v.usageBytes {
 		proxy.OnTransfer(func(ev egress.Event, sent, received int64) { h.o.Transfer(evCtx, id, tenant, ev, sent, received) })
 	}
-	if d != nil && (!d.serves(policy) || d.renew(sb.VsockSocket, policy) != nil) {
+	if d != nil && (!d.serves(policy) || d.listen() != nil) {
 		d.close()
 		d = nil
 	}
 	if d == nil {
 		var err error
-		if d, err = bindDoors(sb.VsockSocket, policy); err != nil {
+		if d, err = bindDoors(sb.VsockSocket, policy, listenUnix); err != nil {
 			return err
 		}
 	}
@@ -195,7 +195,7 @@ func (h *Host) Prebind(ctx context.Context, sb *types.Sandbox) {
 	if policy == nil || sb.VsockSocket == "" {
 		return
 	}
-	d, err := bindDoors(sb.VsockSocket, *policy)
+	d, err := bindDoors(sb.VsockSocket, *policy, bindUnix)
 	if err != nil {
 		log.WithFunc("outbound.Prebind").Warnf(ctx, "pre-bind %s: %v; the claim binds instead", sb.VMName, err)
 		return

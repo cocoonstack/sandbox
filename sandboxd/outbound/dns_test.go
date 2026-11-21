@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"errors"
 	"net"
 	"net/netip"
 	"os"
@@ -12,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -245,41 +247,33 @@ func TestDNSDoorsHandATruncatedAnswerToEachTransport(t *testing.T) {
 	}
 }
 
-func TestADNSDialBeforeTheClaimForcesARebind(t *testing.T) {
+func TestAPreboundDoorRefusesAGuestUntilTheClaimServesIt(t *testing.T) {
 	upstream := newFakeNameserver(t)
-	events := &dnsEvents{}
 	h := newHost(t, &fakeEngine{}, poolConfig(testKey, dnsPolicy), func(o *Options) {
 		o.Nameservers = func() []string { return []string{upstream} }
-		o.RecordDNS = events.record
 	})
 	sb := outboundtest.VsockSandbox(t, "sb_dns", testKey)
 	sb.VMName = "sbx-dns-1"
 	h.Prebind(t.Context(), sb)
 	prebound := h.prebound[sb.VMName].ln
-	early, err := net.Dial("unix", engine.DNSDatagramSocketPath(sb.VsockSocket))
-	if err != nil {
-		t.Fatalf("dial the pre-bound door: %v", err)
+	for _, path := range []string{engine.EgressSocketPath(sb.VsockSocket), engine.DNSSocketPath(sb.VsockSocket), engine.DNSDatagramSocketPath(sb.VsockSocket)} {
+		conn, err := net.Dial("unix", path)
+		if err == nil {
+			_ = conn.Close()
+		}
+		if !errors.Is(err, syscall.ECONNREFUSED) {
+			t.Errorf("dial %s before the claim: %v, want it refused", path, err)
+		}
 	}
-	t.Cleanup(func() { _ = early.Close() })
-	if err = writeDNSMsg(early, packQuery(t, dnsmessage.Header{ID: 1}, "public.test.")); err != nil {
-		t.Fatal(err)
-	}
-	if err = h.ArmProxy(t.Context(), sb); err != nil {
+	if err := h.ArmProxy(t.Context(), sb); err != nil {
 		t.Fatalf("arm proxy: %v", err)
 	}
 	t.Cleanup(func() { h.Disarm(sb.ID, true) })
 	if h.doors[sb.ID].ln != prebound {
-		t.Error("the egress door no guest dialed was rebound too")
-	}
-	_ = early.SetDeadline(time.Now().Add(2 * time.Second))
-	if answer, err := readDNSMsg(early, dnsMsgMax); err == nil {
-		t.Fatalf("a query queued before the claim got %d bytes under the claim", len(answer))
+		t.Error("the claim bound fresh doors in place of the pre-bound ones")
 	}
 	if got := addresses(queryDoor(t, sb, "public.test.")); len(got) != 2 {
-		t.Errorf("the rebound door answers %v, want two addresses", got)
-	}
-	if n := events.count(DNSAllow); n != 1 {
-		t.Errorf("%d allow events, want only the query made after the claim", n)
+		t.Errorf("the claimed door answers %v, want two addresses", got)
 	}
 }
 

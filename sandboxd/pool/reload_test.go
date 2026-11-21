@@ -363,21 +363,18 @@ func TestAReloadThatUnguardsTheNodeClosesAWarmVMsDoorsAtItsClaim(t *testing.T) {
 	eng.sockRoot = outboundtest.SockRoot(t)
 	m := egressManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1, Egress: hostPolicy()})
 	warm := refillWarmVM(t, m)
-	pin := pinDoor(t, engine.EgressSocketPath(warm.VsockSocket))
+	door := engine.EgressSocketPath(warm.VsockSocket)
 	reloadWith(t, m, func(c *config.Config) { c.Pools = []config.PoolSpec{{PoolKey: testKey, Warm: 1}} })
-	conn, err := net.Dial("unix", pin)
-	if err != nil {
+	if _, err := os.Stat(door); err != nil {
 		t.Fatalf("the unclaimed warm VM's door: %v, want it bound until the claim", err)
 	}
-	_ = conn.Close()
 
 	sb := mustClaim(t, m, testKey)
 	if sb.VMName != warm.VMName {
 		t.Fatalf("claim took %s, want the warm VM %s", sb.VMName, warm.VMName)
 	}
-	if conn, err := net.Dial("unix", pin); err == nil {
-		_ = conn.Close()
-		t.Error("a prebound door is left open on a claim of a node with no egress policy")
+	if _, err := os.Stat(door); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("a prebound door is left bound on a claim of a node with no egress policy: %v", err)
 	}
 	if _, err := net.Dial("unix", engine.EgressSocketPath(sb.VsockSocket)); err == nil {
 		t.Error("a door refill bound still accepts on a claim of a node with no egress policy")

@@ -308,7 +308,7 @@ func (e *Engine) DialGuestPort(ctx context.Context, vsockSocket string, port uin
 	if readErr != nil {
 		_ = conn.Close()
 		if ctxErr := ctx.Err(); ctxErr != nil {
-			return nil, ctxErr
+			return nil, fmt.Errorf("%w: %w", ErrSilkdUnreachable, ctxErr)
 		}
 		return nil, fmt.Errorf("read port_forward reply: %w", readErr)
 	}

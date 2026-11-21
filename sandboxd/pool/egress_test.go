@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -406,6 +407,14 @@ func TestWarmClaimServesTheDoorsRefillBound(t *testing.T) {
 	m := egressManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1, Egress: pol})
 	warm := refillWarmVM(t, m)
 	pins := pinDoors(t, warm)
+	for _, path := range doorPaths(warm) {
+		if conn, err := net.Dial("unix", path); !errors.Is(err, syscall.ECONNREFUSED) {
+			if err == nil {
+				_ = conn.Close()
+			}
+			t.Fatalf("pre-claim dial %s: %v, want it refused", path, err)
+		}
+	}
 
 	sb := mustClaim(t, m, testKey)
 	m.out.ClosePrebound(sb.VMName)
@@ -419,31 +428,6 @@ func TestWarmClaimServesTheDoorsRefillBound(t *testing.T) {
 	}
 }
 
-func TestWarmClaimRebindsADoorTheGuestReachedEarly(t *testing.T) {
-	eng := newFakeEngine()
-	eng.sockRoot = outboundtest.SockRoot(t)
-	pol := &egress.Policy{Socks5: true, Allow: []egress.Rule{{Host: "example.com"}}}
-	m := egressManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1, Egress: pol})
-	warm := refillWarmVM(t, m)
-	pins := pinDoors(t, warm)
-	early, err := net.Dial("unix", engine.SocksSocketPath(warm.VsockSocket))
-	if err != nil {
-		t.Fatalf("pre-claim dial: %v", err)
-	}
-	defer early.Close()
-
-	sb := mustClaim(t, m, testKey)
-	if servesPinned(t, sb, pins) {
-		t.Fatal("claim served the pair a guest had already reached")
-	}
-	_ = early.SetReadDeadline(time.Now().Add(2 * time.Second))
-	if _, err := early.Read(make([]byte, 1)); err == nil || errors.Is(err, os.ErrDeadlineExceeded) {
-		t.Fatalf("a connection queued before the claim was kept: read err=%v, want closed", err)
-	}
-	dialDoors(t, sb)
-	m.out.Disarm(sb.ID, true)
-}
-
 func TestTrimmedWarmVMClosesItsDoors(t *testing.T) {
 	eng := newFakeEngine()
 	eng.sockRoot = outboundtest.SockRoot(t)
@@ -453,16 +437,10 @@ func TestTrimmedWarmVMClosesItsDoors(t *testing.T) {
 	if _, err := os.Stat(path); err != nil {
 		t.Fatalf("refill did not bind the door: %v", err)
 	}
-	pin := pinDoor(t, path)
-
 	if err := m.SetPools(t.Context(), []config.PoolSpec{{PoolKey: testKey}}); err != nil {
 		t.Fatalf("SetPools: %v", err)
 	}
 	waitFor(t, func() bool { return eng.removed(warm.VMName) })
-	if conn, err := net.Dial("unix", pin); err == nil {
-		_ = conn.Close()
-		t.Error("prebound door survives its VM")
-	}
 	if _, err := os.Stat(path); err == nil {
 		t.Error("door socket survives its VM")
 	}
@@ -546,7 +524,7 @@ func TestAClaimWithoutEgressGetsNoDoorsWhateverItsPolicy(t *testing.T) {
 	eng.sockRoot = outboundtest.SockRoot(t)
 	pol := hostPolicy()
 	m := egressManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1, Egress: pol})
-	pin := pinDoor(t, engine.EgressSocketPath(refillWarmVM(t, m).VsockSocket))
+	door := engine.EgressSocketPath(refillWarmVM(t, m).VsockSocket)
 	warm, err := m.ClaimWarm(t.Context(), testKey, ClaimOptions{NoEgress: true})
 	if err != nil {
 		t.Fatalf("warm claim: %v", err)
@@ -560,9 +538,8 @@ func TestAClaimWithoutEgressGetsNoDoorsWhateverItsPolicy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("claim the template: %v", err)
 	}
-	if conn, err := net.Dial("unix", pin); err == nil {
-		_ = conn.Close()
-		t.Error("the warm VM's prebound door accepts")
+	if _, err := os.Stat(door); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the warm VM's prebound door is still bound: %v", err)
 	}
 	for _, sb := range []*types.Sandbox{warm, clone} {
 		if !sb.NoEgress || m.NetRoute(sb) != types.NetRouteNone {
@@ -617,19 +594,13 @@ func pinDoors(t *testing.T, sb *types.Sandbox) []string {
 	t.Helper()
 	var pins []string
 	for _, path := range doorPaths(sb) {
-		pins = append(pins, pinDoor(t, path))
+		pin := path + ".pin"
+		if err := os.Link(path, pin); err != nil {
+			t.Fatalf("pin door %s: %v", path, err)
+		}
+		pins = append(pins, pin)
 	}
 	return pins
-}
-
-// pinDoor hard-links a door's socket file, so a rebind cannot reuse its inode and a leaked listener still answers there.
-func pinDoor(t *testing.T, path string) string {
-	t.Helper()
-	pin := path + ".pin"
-	if err := os.Link(path, pin); err != nil {
-		t.Fatalf("pin door %s: %v", path, err)
-	}
-	return pin
 }
 
 func servesPinned(t *testing.T, sb *types.Sandbox, pins []string) bool {
