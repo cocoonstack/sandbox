@@ -74,21 +74,50 @@ func TestReleasedAddressWaitsOutTheReuseWindow(t *testing.T) {
 	}
 }
 
-func TestAssignGivesUpOnARunOfHeldAddresses(t *testing.T) {
+func TestAssignWalksPastARunOfHeldAddresses(t *testing.T) {
 	s := open(t, metastoretest.PGSchema(t), "c1", time.Hour)
 	ctx := t.Context()
 	first, err := s.Assign(ctx, "sb_0")
 	if err != nil {
 		t.Fatalf("assign: %v", err)
 	}
-	for i := 1; i < assignTries; i++ {
-		if _, err = s.Assign(ctx, fmt.Sprintf("sb_%d", i)); err != nil {
+	var last netip.Addr
+	for i := 1; i < 2*assignTries; i++ {
+		if last, err = s.Assign(ctx, fmt.Sprintf("sb_%d", i)); err != nil {
 			t.Fatalf("assign %d: %v", i, err)
 		}
 	}
 	rewind(t, s, first)
+	if addr, assignErr := s.Assign(ctx, "sb_over"); assignErr != nil || addr != last.Next() {
+		t.Errorf("assign over %d held addresses = %s %v, want %s", 2*assignTries, addr, assignErr, last.Next())
+	}
+}
+
+func TestAssignReportsAFullSubnetAndFindsItsOnlyFreeAddress(t *testing.T) {
+	ctx := t.Context()
+	s, err := Open(ctx, metastoretest.PGSchema(t), "c1", netip.MustParsePrefix("240.0.0.0/29"), time.Hour)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(s.Close)
+	held := map[string]netip.Addr{}
+	for i := range 6 {
+		id := fmt.Sprintf("sb_%d", i)
+		if held[id], err = s.Assign(ctx, id); err != nil {
+			t.Fatalf("assign %s: %v", id, err)
+		}
+	}
 	if addr, assignErr := s.Assign(ctx, "sb_over"); !errors.Is(assignErr, tunnet.ErrNoAddress) {
-		t.Errorf("assign over %d held addresses = %s %v, want ErrNoAddress", assignTries, addr, assignErr)
+		t.Fatalf("assign on a full subnet = %s %v, want ErrNoAddress", addr, assignErr)
+	}
+	if err = s.Release(ctx, "sb_3", held["sb_3"]); err != nil {
+		t.Fatalf("release: %v", err)
+	}
+	if _, err = s.pool.Exec(ctx, `UPDATE sandboxd_tun_addrs SET released_at = now() - interval '2 hours' WHERE claim = 'sb_3'`); err != nil {
+		t.Fatalf("age the release: %v", err)
+	}
+	if addr, assignErr := s.Assign(ctx, "sb_over"); assignErr != nil || addr != held["sb_3"] {
+		t.Errorf("assign with one free address = %s %v, want %s", addr, assignErr, held["sb_3"])
 	}
 }
 
