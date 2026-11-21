@@ -302,7 +302,6 @@ impl State {
         let Some(proc) = self.table.get_or_not_found(w, pid).await? else {
             return Ok(());
         };
-        // snapshot replay and subscribe atomically so a chunk lands in exactly one of them.
         let (replay, mut rx, exit) = proc.attach_stream();
         let mut frame = Vec::new();
         for chunk in replay {
