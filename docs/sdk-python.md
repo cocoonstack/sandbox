@@ -88,7 +88,13 @@ the guest in a call that silkd answers promptly: `read_file`, `write_file`,
 `replace`, `pull`, `spawn`, `ps`, `kill`, `logs`, `session`, `sessions`,
 `Session.close`, `start_lsp`, `Lsp.stop` and `Pty.resize`. The bound is per
 wait, so a transfer whose bytes keep flowing is never cut; a guest silent
-that long raises `SandboxTimeout`. Every other call has no bound once the
+that long raises `SandboxTimeout`. The request has left by then, so a call
+cut by the timeout may still run in the guest: on a
+[`reader`](deploy.md#reading-sleeping-claims-without-waking-them) pool the
+node accepts a call to a hibernated or archived claim at once, then wakes
+the claim and sends the request even after the SDK gave up. Retry only an
+idempotent call, or give such calls a `timeout` longer than a wake that
+falls back to a cold boot. Every other call has no bound once the
 request leaves: the streams (`run`/`exec`, `Session.exec`, `attach`,
 `find`/`find_iter`, `watch`, `open_pty`, `dial_port`, `proxy_port`,
 `Lsp.request`) live until the guest ends them, and the calls whose run time
