@@ -1556,15 +1556,17 @@ or archived sandbox, or one with a hibernate, wake, checkpoint, promote or
 fork in flight, answers `409` at once; an open passive relay still holds the sandbox against the idle sweep.
 With `?no_wake=1` the sandbox's token never wakes either: a paused sandbox answers
 `409`, and a dial that lands during one of those transitions waits for it and answers by
-the state it leaves, `409` if paused, a relay if running. A sandbox moving to another
-node answers `503`. A running sandbox relays and stamps the idle clock as on any token
-dial. This is for a gateway that must wake a sandbox only through its control plane's
-checks (funds, bans) yet keeps the per-sandbox token rather than root.
+the state it leaves, `409` if paused, a relay if running. A sandbox in its move's final
+pause, or one received from another node and not yet started, answers `503`. A running
+sandbox relays and stamps the idle clock as on any token dial. This is for a gateway
+that must wake a sandbox only through its control plane's checks (funds, bans) yet
+keeps the per-sandbox token rather than root.
 400 a port outside 1-65535; 401 missing bearer token; 404 unknown sandbox or
 wrong token; 409 a failed sandbox, or a passive or `no_wake` relay to a paused one; 426 without the upgrade
 header; 502 when the guest cannot be reached on that port — no listener, or a
 hibernated sandbox whose restore failed. The node log carries which; 503 a token
-dial to a sandbox moving to another node; and the [guest errors](#guest-errors).
+dial to a sandbox in its move's final pause or not yet started on this node; and the
+[guest errors](#guest-errors).
 
 ## POST /v1/sandboxes/{id}/exec
 
