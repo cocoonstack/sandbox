@@ -666,9 +666,10 @@ at up to 6 each (the guest and upstream sockets and a splice pipe each way),
 256 on each DNS door plus 32 upstream queries, 256 on the packet door, and 64
 idle upstream connections for the exit plus 64 for decrypted traffic. Agent
 and port relays that callers open are not in that figure; each holds up to 6
-more, the same way. Set `fs.nr_open` to at least 4,096 × the claims that can
-fill their doors at once on the node, which `max_running` bounds when set,
-plus sandboxd's own share.
+more, the same way. systemd 240 and newer raise `fs.nr_open` to the kernel's
+maximum at boot; never lower it below 4,096 × the claims that can fill their
+doors at once on the node, which `max_running` bounds when set, plus
+sandboxd's own share.
 
 Each record carries its syslog level, so alerting keys on systemd priority:
 `journalctl -u sandboxd -p err` lists the errors and `-p warning` the
