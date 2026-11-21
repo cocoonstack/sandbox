@@ -13,8 +13,9 @@ use silkd::server::State;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 
 use common::{
-    alive, assert_error, b64, connect_with, exchange, frames_until, next_frame, one, proc_entry,
-    request, require_perl, roundtrip, send, stdout_body, type_of, under_deadline, wait_for_path,
+    alive, assert_error, b64, connect_with, exchange, expect_frame, frames_until, next_frame, one,
+    proc_entry, request, require_perl, roundtrip, send, stdout_body, type_of, under_deadline,
+    wait_for_path,
 };
 
 async fn detached_pid(state: &Arc<State>, script: &str) -> u64 {
@@ -274,6 +275,38 @@ async fn kill_after_the_leader_exited_ends_its_background_group() {
     assert!(alive(child), "the background child died with its leader");
     let killed = one(&state, &format!(r#"{{"op":"kill","pid":{pid}}}"#)).await;
     assert_eq!(type_of(&killed[0]), "done");
+    wait_dead(child).await;
+}
+
+#[tokio::test]
+async fn a_client_gone_after_the_leader_exited_ends_its_background_group() {
+    let dir = tempfile::tempdir().unwrap();
+    let marker = dir.path().join("child");
+    let state = Arc::new(State::new());
+    let script = format!(
+        "sleep 300 >/dev/null 2>&1 & echo $! > {}; head -c 1572864 /dev/zero",
+        marker.display()
+    );
+    let (cw, mut lines, handle) =
+        connect_with(&state, json!({"op":"exec","argv":["/bin/sh","-c",script]})).await;
+    let pid = expect_frame(&mut lines, "started").await["pid"]
+        .as_u64()
+        .unwrap();
+    let child = pid_written_to(&marker).await;
+    under_deadline(async {
+        loop {
+            let ps = one(&state, r#"{"op":"ps"}"#).await;
+            if proc_entry(&ps, pid).is_some_and(|p| p["state"] == "exited") {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await;
+    assert!(alive(child), "the background child died with its leader");
+    drop(lines);
+    drop(cw);
+    let _ = under_deadline(handle).await;
     wait_dead(child).await;
 }
 
