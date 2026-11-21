@@ -131,6 +131,23 @@ func TestPortRelayTakesTheRootTokenAsTheOperator(t *testing.T) {
 	}
 }
 
+func TestPortRelayNoWakeAsksTheManagerNotToWake(t *testing.T) {
+	var waking, awake int
+	mgr := &fakeManager{
+		dialPort:      func(string, string, uint16) (net.Conn, error) { waking++; return nil, pool.ErrPaused },
+		dialPortAwake: func(string, string, uint16) (net.Conn, error) { awake++; return nil, pool.ErrPaused },
+	}
+	ts := newTestServer(t, "", mgr, nil)
+	for _, path := range []string{"/v1/sandboxes/sb_1/ports/49983?no_wake=1", "/v1/sandboxes/sb_1/ports/49983"} {
+		if code := portStatus(t, ts, path, "tok", true); code != http.StatusConflict {
+			t.Errorf("%s: status %d, want 409 for a paused sandbox", path, code)
+		}
+	}
+	if waking != 1 || awake != 1 {
+		t.Errorf("waking dials %d, no-wake dials %d, want one each", waking, awake)
+	}
+}
+
 func TestPortRelayEndsOnGuestClose(t *testing.T) {
 	ts, _ := newPortServer(t, func(c net.Conn) {
 		_, _ = io.WriteString(c, "bye")

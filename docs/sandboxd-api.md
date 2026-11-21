@@ -1554,8 +1554,12 @@ reads such as metrics: it never wakes the sandbox and never stamps activity,
 so a poll neither undoes a pause nor keeps a sandbox from idling. A hibernated
 or archived sandbox, or one with a hibernate, wake, checkpoint, promote or
 fork in flight, answers `409` at once; an open passive relay still holds the sandbox against the idle sweep.
+With `?no_wake=1` the sandbox's token never wakes either: a paused sandbox, or one in
+such a transition, answers `409` at once, while a running one relays and holds the idle
+clock as usual. This is for a gateway that must wake a sandbox only through its control
+plane's checks (funds, bans) yet keeps the per-sandbox token rather than root.
 400 a port outside 1-65535; 401 missing bearer token; 404 unknown sandbox or
-wrong token; 409 a failed sandbox or a passive relay to a paused one; 426 without the upgrade
+wrong token; 409 a failed sandbox, or a passive or `no_wake` relay to a paused one; 426 without the upgrade
 header; 502 when the guest cannot be reached on that port — no listener, or a
 hibernated sandbox whose restore failed. The node log carries which; and the
 [guest errors](#guest-errors).

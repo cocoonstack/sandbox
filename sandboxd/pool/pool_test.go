@@ -1185,6 +1185,56 @@ func TestOperatorPortDialNeverWakesAPausedSandbox(t *testing.T) {
 	}
 }
 
+func TestNoWakePortDialLeavesAPausedSandboxAsleep(t *testing.T) {
+	eng := newFakeEngine()
+	m := newTestManager(t, eng)
+
+	paused := mustClaim(t, m, testKey)
+	hibernateClaim(t, m, paused)
+	restores := len(eng.restores)
+	for name, cred := range map[string]Cred{"sandbox token": {Token: paused.Token}, "operator": {Operator: true}} {
+		if _, err := m.DialPortAwake(t.Context(), paused.ID, cred, 49983); !errors.Is(err, ErrPaused) {
+			t.Errorf("%s on a hibernated sandbox: %v, want ErrPaused", name, err)
+		}
+	}
+	if len(eng.restores) != restores || paused.HibernateSnap == "" {
+		t.Error("a no-wake dial restored a hibernated sandbox")
+	}
+
+	running := mustClaim(t, m, testKey)
+	running.Transition.Lock()
+	if _, err := m.DialPortAwake(t.Context(), running.ID, Cred{Token: running.Token}, 49983); !errors.Is(err, ErrPaused) {
+		t.Errorf("mid-transition: %v, want ErrPaused at once", err)
+	}
+	running.Transition.Unlock()
+	if _, err := m.DialPortAwake(t.Context(), running.ID, Cred{Token: "wrong"}, 49983); !errors.Is(err, ErrUnknownSandbox) {
+		t.Errorf("wrong token: %v, want ErrUnknownSandbox", err)
+	}
+}
+
+func TestNoWakePortDialStampsActivityLikeATokenDial(t *testing.T) {
+	eng := newFakeEngine()
+	m := newTestManager(t, eng)
+	sb := mustClaim(t, m, testKey)
+	guest, host := net.Pipe()
+	t.Cleanup(func() { _ = host.Close() })
+	eng.guestDial = func() (net.Conn, error) { return guest, nil }
+	stamp := time.Now().Add(-time.Hour).Truncate(time.Second)
+	sb.TouchAt(stamp)
+
+	conn, err := m.DialPortAwake(t.Context(), sb.ID, Cred{Token: sb.Token}, 49983)
+	if err != nil {
+		t.Fatalf("no-wake dial on a running sandbox: %v", err)
+	}
+	if !sb.Busy() {
+		t.Error("an open stream must hold the sandbox against the idle sweep")
+	}
+	_ = conn.Close()
+	if sb.Busy() || !sb.LastSeen().After(stamp) {
+		t.Errorf("after close busy=%v lastSeen=%v, want released with activity stamped after %v", sb.Busy(), sb.LastSeen(), stamp)
+	}
+}
+
 func TestOperatorPortDialStreamsWithoutStampingActivity(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)

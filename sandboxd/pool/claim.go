@@ -153,6 +153,20 @@ func (m *Manager) DialPort(ctx context.Context, id string, cred Cred, port uint1
 	return m.dialPort(ctx, id, cred, port, "port")
 }
 
+// DialPortAwake is DialPort for a caller that must not wake the sandbox, such as a gateway that wakes only through the
+// control plane's checks: a paused sandbox, or one in a transition, answers ErrPaused. The sandbox's token still stamps
+// activity; the operator credential stays passive.
+func (m *Manager) DialPortAwake(ctx context.Context, id string, cred Cred, port uint16) (net.Conn, error) {
+	if cred.Operator {
+		return m.dialPassive(ctx, id, port)
+	}
+	sb, ok := m.resolve(id, cred)
+	if !ok {
+		return nil, ErrUnknownSandbox
+	}
+	return m.dialRunning(ctx, sb, port, sb.Unhold)
+}
+
 // Renew resets a claim's lease to ttl from now after authorizing cred, and reports the granted deadline.
 func (m *Manager) Renew(ctx context.Context, id string, cred Cred, ttl time.Duration, onExpire types.ExpireAction) (time.Time, error) {
 	sb, ok := m.resolve(id, cred)
@@ -255,6 +269,11 @@ func (m *Manager) dialPassive(ctx context.Context, id string, port uint16) (net.
 	if !ok {
 		return nil, ErrUnknownSandbox
 	}
+	return m.dialRunning(ctx, sb, port, sb.UnholdIdle)
+}
+
+// dialRunning dials a guest port of sb only while it runs; release ends the hold, restarting the idle clock or not.
+func (m *Manager) dialRunning(ctx context.Context, sb *types.Sandbox, port uint16, release func()) (net.Conn, error) {
 	fenced, err := m.fenceWatch(sb)
 	if err != nil {
 		return nil, err
@@ -273,14 +292,14 @@ func (m *Manager) dialPassive(ctx context.Context, id string, port uint16) (net.
 	case paused:
 		return nil, ErrPaused
 	}
-	m.recordAudit(ctx, id, auditFrame{Op: "port", Port: port})
+	m.recordAudit(ctx, sb.ID, auditFrame{Op: "port", Port: port})
 	conn, err := m.eng.DialGuestPort(ctx, sock, port)
 	if err != nil {
-		sb.UnholdIdle()
-		m.noteUnreachableDial(id, err)
+		release()
+		m.noteUnreachableDial(sb.ID, err)
 		return nil, err
 	}
-	return newHeldConn(conn, fenced, sb.UnholdIdle), nil
+	return newHeldConn(conn, fenced, release), nil
 }
 
 // releaseResolved re-checks under m.mu that sb is still the live claim: no double teardown.

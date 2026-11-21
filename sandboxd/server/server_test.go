@@ -2618,6 +2618,7 @@ type fakeManager struct {
 	adoptedForWake       bool
 	gotCred              pool.Cred
 	dialPort             func(id, token string, port uint16) (net.Conn, error)
+	dialPortAwake        func(id, token string, port uint16) (net.Conn, error)
 	fenced               <-chan struct{}
 	hibernate            sandboxVerbFunc
 	wake                 sandboxVerbFunc
@@ -2813,6 +2814,13 @@ func (f *fakeManager) DialPort(_ context.Context, id string, cred pool.Cred, por
 		return nil, pool.ErrUnknownSandbox
 	}
 	return f.dialPort(id, credToken(cred), port)
+}
+
+func (f *fakeManager) DialPortAwake(_ context.Context, id string, cred pool.Cred, port uint16) (net.Conn, error) {
+	if f.dialPortAwake == nil {
+		return nil, pool.ErrUnknownSandbox
+	}
+	return f.dialPortAwake(id, credToken(cred), port)
 }
 
 func (f *fakeManager) Hibernate(_ context.Context, id string, cred pool.Cred) error {
