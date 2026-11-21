@@ -1,6 +1,7 @@
 """Regression tests for the SDK error-surface hardening."""
 
 import base64
+import errno
 import json
 import socket
 import threading
@@ -219,6 +220,23 @@ def test_dial_timeout_bounds_the_whole_upgrade() -> None:
     with server, pytest.raises(SandboxTimeout), dial_agent(addr, "sb_x", "tok", timeout=0.2) as conn:
         conn.send("info")
         conn.recv()
+
+
+def test_a_watch_cut_by_tcp_keepalive_ends_with_a_protocol_error():
+    ours, theirs = socket.socketpair()
+    watcher = Watcher(Conn(ours, KeepaliveExpiredReader()))
+    assert list(watcher) == []
+    assert isinstance(watcher.error, ProtocolError), watcher.error
+    assert ours.fileno() == -1, "the ended watch kept its relay open"
+    theirs.close()
+
+
+class KeepaliveExpiredReader:
+    def readline(self, limit: int) -> bytes:
+        raise OSError(errno.ETIMEDOUT, "connection timed out")
+
+    def close(self) -> None:
+        pass
 
 
 @pytest.fixture
