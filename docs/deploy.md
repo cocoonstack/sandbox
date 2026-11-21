@@ -116,7 +116,7 @@ the intersection of the two.
 | `egress_upstream` | unset | per-claim upstream proxies: `{"claim_env": "EGRESS_UPSTREAM", "allow": ["res.example.com", "10.1.0.0/16"]}`. A claim's `guest: false` entry under `claim_env` (`http://` or `socks5://`, optional `user:pass@`, or `direct`) routes its egress through that upstream, which must be on `allow` (host names, IPs, CIDR prefixes). See [upstream proxies](egress.md#upstream-proxies) |
 | `egress_conn_rate` | unset | caps the new upstream connections each claim's proxy opens: `{"per_second": 30, "burst": 600}`, a token bucket per claim; a reused keep-alive connection and a connection to an internal IP address (the SSRF guard decides those) cost nothing, while a host name costs a token even when it resolves to one `egress_internal_allow` re-admits. A connection past it gets 429 (SOCKS5: not allowed) and an audit `decision` of `rate_limited`. A claim's bucket starts full at its first connection, and again when a reload changes `per_second` or `burst`. Unset leaves the rate unlimited |
 | `egress_usage_bytes` | `false` | append an `egress_bytes` usage event with the payload bytes of every allowed egress tunnel or request when it ends, and with the IP bytes of every allowed flow of the [advanced network mode](advanced-network.md); one extra usage-journal write per connection or flow, plus one per interval with `egress_usage_interval_seconds` |
-| `egress_usage_events` | `false` | append an `egress` usage event for every decision of the egress proxy (`allow`, `deny` and `rate_limited`), with the host as `ref`, the injected secret names in `secret`, and the `upstream`; one usage-journal write per decision. The event does not name its decision, so an allow and a deny to one host write the same event; the audit journal's `egress` record carries `decision`. Off, the usage journal holds no `egress` event: an allowed connection's host, upstream and bytes are on its `egress_bytes` events (with `egress_usage_bytes`), and every decision is on the audit journal (with `audit_log`). A tun flow never writes one. Reloadable: applies to the next decision of every claim |
+| `egress_usage_events` | `false` | append an `egress` usage event for every decision of the egress proxy (`allow`, `deny` and `rate_limited`), with the host as `ref`, the injected secret names in `secret`, and the `upstream`; one usage-journal write per decision. The event does not name its decision, so an allow and a deny to one host can be indistinguishable; only the audit journal's `egress` record carries `decision`. Off, the usage journal holds no `egress` event: an allowed connection's host, upstream and bytes are on its `egress_bytes` events (with `egress_usage_bytes`), and every decision is on the audit journal (with `audit_log`). A tun flow never writes one. Reloadable: applies to the next decision of every claim |
 | `egress_usage_interval_seconds` | 0 | with `egress_usage_bytes`, also append an `egress_bytes` event at this interval for each allowed tunnel, request or tun flow that lasts longer, with the bytes since its previous event, so the events of one connection sum to the single event 0 writes ([details](egress.md#byte-usage)); tun flows are checked every 10 s. Set without `egress_usage_bytes`, or negative, the config does not load. Applies to claims armed after a reload |
 | `tun` | absent | turns on the [advanced network mode](advanced-network.md#configuration): the overlay subnet, the VXLAN socket, the exits and per-claim limits |
 | `egress_ca` | unset | [HTTPS-interception](egress.md#https-interception) PKI: `root_cert` (the cell's root baked into intercepted guests; may bundle old+new roots during rotation) plus this node's `intermediate_cert`/`intermediate_key` from `sandboxd ca issue-intermediate`. Required when any pool rule sets `intercept` |
@@ -659,15 +659,16 @@ run sandboxd hosts with swap off or encrypted.
 
 `LimitNOFILE=1024:infinity` sets the hard descriptor limit to the kernel's
 `fs.nr_open`; sandboxd raises its own soft limit to just under it at start,
-and the `cocoon` commands it runs keep the soft limit of 1024. A guest with
-one exit that fills every door holds about 4,000 descriptors in sandboxd: 256
-connections on each of the HTTP and SOCKS5 doors at up to 6 each (the guest
-and upstream sockets and a splice pipe each way), 256 on each DNS door plus 32
-upstream queries, 256 on the packet door, and 64 idle upstream connections for
-the exit plus 64 for decrypted traffic. Agent and port relays that callers
-open are not in that figure; each holds up to 6 more, the same way. Set
-`fs.nr_open` to at least 4,096 × the claims that can fill their doors at once
-on the node, which `max_running` bounds when set, plus sandboxd's own share.
+and the `cocoon` commands it runs start at 1024, which a Go child raises
+again. A guest with one exit that fills every door holds about 4,000
+descriptors in sandboxd: 256 connections on each of the HTTP and SOCKS5 doors
+at up to 6 each (the guest and upstream sockets and a splice pipe each way),
+256 on each DNS door plus 32 upstream queries, 256 on the packet door, and 64
+idle upstream connections for the exit plus 64 for decrypted traffic. Agent
+and port relays that callers open are not in that figure; each holds up to 6
+more, the same way. Set `fs.nr_open` to at least 4,096 × the claims that can
+fill their doors at once on the node, which `max_running` bounds when set,
+plus sandboxd's own share.
 
 Each record carries its syslog level, so alerting keys on systemd priority:
 `journalctl -u sandboxd -p err` lists the errors and `-p warning` the
@@ -736,7 +737,7 @@ claimed `on_expire: archive`, which needs a running VM to archive:
 | outcome | when | client sees |
 |---|---|---|
 | cold restart | `cold` (default), none-lane claim without volumes, within 3 restarts in 10 min | `restarts` +1 and `restarted_at` on the sandbox row, `vmm_exit` then `vmm_restart` usage events; a call before the next pass gets `502`, one during the boot waits for it, open relays see EOF and redial |
-| failed | `none`, an egress-lane or volume claim, the VM record gone, the restart budget spent, or 3 failed boots | `failed: "<reason>"` on the row, `vmm_exit` then `vmm_failed` usage events (a boot whose guest setup failed adds its own `vmm_restart` and `vmm_exit`, or only `vmm_restart` when its VM cannot be stopped, which leaves the claim billed as running), `409` from exec, relays, ports, hibernate, fork, checkpoint and promote |
+| failed | `none`, an egress-lane or volume claim, the VM record gone, the restart budget spent, or 3 failed boots | `failed: "<reason>"` on the row, `vmm_exit` then `vmm_failed` usage events (a boot whose guest setup failed adds its own `vmm_restart` and `vmm_exit`, or only `vmm_restart` if it is retried and its VM cannot be stopped, which leaves the claim billed as running), `409` from exec, relays, ports, hibernate, fork, checkpoint and promote |
 
 A guest that stops answering inside a live VMM is caught from the data plane.
 The claim is noted when an exec, an agent relay, a port forward or a preview

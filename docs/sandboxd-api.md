@@ -1402,7 +1402,7 @@ end, or nothing for an archive kept forever, and `reap` the deadline it ended un
 tenant's claim), `children` (fork) and `ref` (the promoted template / checkpoint
 id, the egress host, a `vmm_failed` reason, or why reconcile ended a claim). `egress` events, one per egress decision, are written only with
 [`egress_usage_events`](deploy.md#configuration) on (default off), and `egress_bytes` events only with
-`egress_usage_bytes` on. An `egress` event does not name its decision, so an allowed and a denied connection to one host write the same event; the [audit journal](deploy.md#configuration)'s `egress` record carries `decision`. An egress event that injected credentials names
+`egress_usage_bytes` on. An `egress` event does not name its decision, so an allowed and a denied connection to one host can be indistinguishable; only the [audit journal](deploy.md#configuration)'s `egress` record carries `decision`. An egress event that injected credentials names
 them in `secret` (`gh,claim:<entry>`, never a value). An egress event routed through an
 [upstream proxy](egress.md#upstream-proxies) carries `upstream` (its `host:port`), and with
 `egress_usage_bytes` on, `egress_bytes` events add the connection's payload `tx`/`rx` bytes. With
