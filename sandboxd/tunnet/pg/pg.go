@@ -27,7 +27,7 @@ const (
 		SELECT address FROM sandboxd_tun_addrs WHERE cell = $1 AND claim = $2 AND released_at IS NULL
 	), walk AS (
 		SELECT host($3::inet + (1 + nextval('sandboxd_tun_addrs_cursor') % $4)) AS address
-		FROM (SELECT generate_series(1, (SELECT $6::bigint)) WHERE NOT EXISTS (SELECT 1 FROM held)) candidates
+		FROM (SELECT generate_series(1, $6::bigint) WHERE NOT EXISTS (SELECT 1 FROM held)) candidates
 	), free AS (
 		SELECT address FROM walk w WHERE NOT EXISTS (
 			SELECT 1 FROM sandboxd_tun_addrs t WHERE t.cell = $1 AND t.address = w.address
