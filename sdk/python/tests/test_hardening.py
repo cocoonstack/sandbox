@@ -2,6 +2,7 @@
 
 import base64
 import errno
+import io
 import json
 import socket
 import threading
@@ -229,6 +230,29 @@ def test_a_watch_cut_by_tcp_keepalive_ends_with_a_protocol_error():
     assert isinstance(watcher.error, ProtocolError), watcher.error
     assert ours.fileno() == -1, "the ended watch kept its relay open"
     theirs.close()
+
+
+def test_a_send_stalled_past_the_socket_timeout_raises_sandbox_timeout():
+    ours, theirs = socket.socketpair()
+    ours.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 4096)
+    conn = Conn(ours, ours.makefile("rb"))
+    conn.settimeout(0.05)
+    try:
+        with pytest.raises(SandboxTimeout):
+            conn.send("data", data=bytes(4 << 20))
+    finally:
+        conn.close()
+        theirs.close()
+
+
+def test_a_send_cut_by_tcp_keepalive_stays_a_protocol_error():
+    with pytest.raises(ProtocolError):
+        Conn(KeepaliveExpiredSocket(), io.BytesIO()).send("info")
+
+
+class KeepaliveExpiredSocket:
+    def sendall(self, data: bytes) -> None:
+        raise OSError(errno.ETIMEDOUT, "connection timed out")
 
 
 class KeepaliveExpiredReader:
