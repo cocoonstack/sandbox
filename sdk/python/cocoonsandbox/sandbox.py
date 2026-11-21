@@ -335,7 +335,7 @@ class Sandbox:
         return [self._client._handle_from(addr, child, "fork") for child in reply.get("children") or []]
 
     def hibernate(self) -> None:
-        """Snapshots and stops the VM; the next guest call restores its state."""
+        """Snapshots and stops the VM; the next guest call wakes it."""
         self._pool.drain()
         self._owner_request("hibernate", None, "hibernate", bearer=self.token)
 

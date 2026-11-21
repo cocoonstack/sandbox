@@ -38,10 +38,7 @@ class Client(_Closeable):
         ssl_context: ssl.SSLContext | None = None,
         keep_alive: float = 30.0,
     ) -> None:
-        """keep_alive parks idle connections, 0 dials per call; a parked relay one holds the sandbox's idle clock.
-
-        ssl_context is set to offer ALPN http/1.1, which the relay upgrade needs; pass a dedicated context.
-        """
+        """keep_alive parks idle connections (0 dials per call); ssl_context is set to offer ALPN http/1.1."""
         endpoint = _endpoint_url(addr.strip())
         self.addr = endpoint.geturl().removeprefix("http://")
         self._scheme = endpoint.scheme
