@@ -1,4 +1,4 @@
-"""The client timeout bounds the dial and the upgrade, not the guest stream that follows."""
+"""The client timeout bounds the dial, the upgrade and each one-shot wait, not a stream or a git network verb."""
 
 import contextlib
 import json
@@ -14,13 +14,49 @@ from conftest import accept_upgrade, bounded, sandbox_at
 TIMEOUT = 0.2
 
 
-def test_port_stream_outlives_the_client_timeout(script_server):
+@pytest.mark.parametrize(("keep_alive", "mkdirs"), [(0, 0), (30, 1)], ids=["fresh dial", "kept connection"])
+def test_port_stream_outlives_the_client_timeout(script_server, keep_alive, mkdirs):
     ops: list[str] = []
-    sb = short_timeout_sandbox(script_server(serve_port_forward, 3 * TIMEOUT, ops))
+    sb = sandbox_at(script_server(serve_port_forward, 3 * TIMEOUT, ops), timeout=TIMEOUT, keep_alive=keep_alive)
+    for _ in range(mkdirs):
+        sb.mkdir("/w")
     with sb.dial_port(5000) as port:
         assert port.recv() == b"late"
         assert port.recv() == b""
-    assert ops == ["port_forward"]
+    assert ops == ["fs_mkdir"] * mkdirs + ["port_forward"]
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        lambda sb: sb.read_file("/f"),
+        lambda sb: sb.write_file("/f", b"x"),
+        lambda sb: sb.stat("/"),
+        lambda sb: sb.logs(7),
+        lambda sb: sb.git_status("/r"),
+    ],
+    ids=["read_file", "write_file", "stat", "logs", "git_status"],
+)
+def test_one_shot_call_to_a_silent_guest_times_out(script_server, call):
+    sb = short_timeout_sandbox(script_server(serve_silence, True))
+    with pytest.raises(SandboxTimeout):
+        bounded(lambda: call(sb))
+
+
+@pytest.mark.parametrize(
+    ("op", "call"),
+    [
+        ("git_clone", lambda sb: sb.git_clone("https://example.com/r.git", "/r")),
+        ("git_push", lambda sb: sb.git_push("/r")),
+        ("git_pull", lambda sb: sb.git_pull("/r")),
+    ],
+    ids=["git_clone", "git_push", "git_pull"],
+)
+def test_git_network_verb_outlives_the_client_timeout(script_server, op, call):
+    ops: list[str] = []
+    sb = short_timeout_sandbox(script_server(serve_late_done, 3 * TIMEOUT, ops))
+    bounded(lambda: call(sb))
+    assert ops == [op]
 
 
 def test_run_timeout_cuts_a_silent_command_and_kills_it(script_server):
@@ -83,9 +119,21 @@ def serve_port_forward(server: socket.socket, quiet: float, ops: list[str]) -> N
     conn, _ = server.accept()
     reader = accept_upgrade(conn)
     ops.append(json.loads(reader.readline())["op"])
+    while ops[-1] != "port_forward":
+        conn.sendall(b'{"type":"done"}\n')
+        ops.append(json.loads(reader.readline())["op"])
     conn.sendall(b'{"type":"ready"}\n')
     time.sleep(quiet)
     conn.sendall(b'{"type":"data","data":"bGF0ZQ=="}\n{"type":"done"}\n')
+    conn.close()
+
+
+def serve_late_done(server: socket.socket, quiet: float, ops: list[str]) -> None:
+    conn, _ = server.accept()
+    reader = accept_upgrade(conn)
+    ops.append(json.loads(reader.readline())["op"])
+    time.sleep(quiet)
+    conn.sendall(b'{"type":"done"}\n')
     conn.close()
 
 
@@ -117,8 +165,10 @@ def serve_started_then_trickle_the_kill_reply(server: socket.socket, kills: list
     conn.close()
 
 
-def serve_silence(server: socket.socket) -> None:
+def serve_silence(server: socket.socket, upgrade: bool = False) -> None:
     conn, _ = server.accept()
+    if upgrade:
+        accept_upgrade(conn)
     with contextlib.suppress(OSError):
         while conn.recv(4096):
             pass

@@ -93,6 +93,8 @@ class Conn(_Closeable):
         self.finish_upgrade()
         try:
             line = self._reader.readline(MAX_FRAME + 1)
+        except TimeoutError as exc:
+            raise SandboxTimeout("agent request timed out") from exc
         except (OSError, ValueError) as exc:
             raise ProtocolError(f"read failed: {exc}") from exc
         if not line:
