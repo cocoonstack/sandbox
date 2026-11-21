@@ -366,6 +366,9 @@ func TestSandboxPagesFollowNextAndHoldOnlyTheCallersClaims(t *testing.T) {
 			if err := json.Unmarshal(body, &page); status != http.StatusOK || err != nil {
 				t.Fatalf("%s page after %q: %d %s", token, after, status, body)
 			}
+			if len(page.Sandboxes) > 2 {
+				t.Fatalf("%s page after %q holds %d rows, want at most 2", token, after, len(page.Sandboxes))
+			}
 			for _, row := range page.Sandboxes {
 				got = append(got, row.ID)
 			}
@@ -373,6 +376,9 @@ func TestSandboxPagesFollowNextAndHoldOnlyTheCallersClaims(t *testing.T) {
 				break
 			}
 			after = page.Next
+		}
+		if after == "" {
+			t.Errorf("%s listing of %d claims never set next", token, len(ids))
 		}
 		if !slices.Equal(got, ids) {
 			t.Errorf("%s pages %v, want %v", token, got, ids)
