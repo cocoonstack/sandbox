@@ -130,8 +130,9 @@ guest -> tun0 -> silkd --vsock 2051--> sandboxd --VXLAN--> exit (vxlan0, forward
   disk write on the claim path; each release is appended to
   `<data_dir>/tun-freed.log` so its reuse window outlives a restart. A node
   with a `mesh` must have `meta_store.cell` and allocates it in the cell's
-  [table](deploy.md#shared-tun-address-table) in one round trip, and stays off (proxy mode only) while the
-  meta store is unreachable. A freed address is reused after
+  [table](deploy.md#shared-tun-address-table) with one round trip per 1024
+  candidates, at most 64, and stays off (proxy mode only) while the meta store
+  is unreachable. A freed address is reused after
   `tun.reuse_after_seconds`, so the subnet's size over that window bounds the
   sustained claim rate: a `/8` with the 5-day default carries about 38 new tun
   claims a second across the cell. The claim's MAC is `02:00:` followed by the

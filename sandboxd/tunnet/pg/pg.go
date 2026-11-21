@@ -19,14 +19,15 @@ import (
 
 const (
 	table = "sandboxd_tun_addrs"
-	// assignTries bounds the walks one Assign makes when a racing claim takes the free address it found.
-	assignTries = 64
+	// assignTries bounds the round trips one Assign makes; each walks at most assignWindow candidates.
+	assignTries        = 64
+	assignWindow int64 = 1024
 
 	assignSQL = `WITH held AS (
 		SELECT address FROM sandboxd_tun_addrs WHERE cell = $1 AND claim = $2 AND released_at IS NULL
 	), walk AS (
 		SELECT host($3::inet + (1 + nextval('sandboxd_tun_addrs_cursor') % $4)) AS address
-		FROM (SELECT generate_series(1, (SELECT $4::bigint)) WHERE NOT EXISTS (SELECT 1 FROM held)) candidates
+		FROM (SELECT generate_series(1, (SELECT $6::bigint)) WHERE NOT EXISTS (SELECT 1 FROM held)) candidates
 	), free AS (
 		SELECT address FROM walk w WHERE NOT EXISTS (
 			SELECT 1 FROM sandboxd_tun_addrs t WHERE t.cell = $1 AND t.address = w.address
@@ -71,19 +72,23 @@ func Open(ctx context.Context, dsn, cell string, subnet netip.Prefix, reuse time
 	return &Store{pool: pool, cell: cell, subnet: subnet.Masked(), reuse: reuse}, nil
 }
 
-// Assign returns claimID's active address, or claims the first candidate from the shared cursor that is free and past its reuse window, walking at most one lap of the subnet per round trip.
+// Assign returns claimID's active address, or claims the first candidate from the shared cursor that is free and past its reuse window, walking one window of candidates per round trip.
 func (s *Store) Assign(ctx context.Context, claimID string) (netip.Addr, error) {
 	hosts := int64(1)<<(32-s.subnet.Bits()) - 2
+	var walked int64
 	for range assignTries {
 		var addr *string
+		window := min(assignWindow, hosts-walked)
 		qctx, cancel := context.WithTimeout(ctx, metastore.QueryTimeout)
-		err := s.pool.QueryRow(qctx, assignSQL, s.cell, claimID, s.subnet.Addr().String(), hosts, s.reuse.Seconds()).Scan(&addr)
+		err := s.pool.QueryRow(qctx, assignSQL, s.cell, claimID, s.subnet.Addr().String(), hosts, s.reuse.Seconds(), window).Scan(&addr)
 		cancel()
 		switch {
-		case err == nil && addr == nil:
-			return netip.Addr{}, tunnet.ErrNoAddress
-		case err == nil:
+		case err == nil && addr != nil:
 			return netip.ParseAddr(*addr)
+		case err == nil:
+			if walked += window; walked >= hosts {
+				return netip.Addr{}, tunnet.ErrNoAddress
+			}
 		case !errors.Is(err, pgx.ErrNoRows):
 			return netip.Addr{}, down(err)
 		}

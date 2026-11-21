@@ -93,14 +93,45 @@ func TestAssignWalksPastARunOfHeldAddresses(t *testing.T) {
 	}
 }
 
+func TestAssignWalksPastARunLongerThanAWindow(t *testing.T) {
+	s := open(t, metastoretest.PGSchema(t), "c1", time.Hour)
+	run := assignWindow + 476
+	hold(t, s, run)
+	want := tunnet.HostAt(s.subnet, uint64(run)+1)
+	if addr, err := s.Assign(t.Context(), "sb_over"); err != nil || addr != want {
+		t.Errorf("assign over %d held addresses = %s %v, want %s", run, addr, err, want)
+	}
+}
+
+func TestAssignGivesUpAfterOneLapOrItsLastWindow(t *testing.T) {
+	tests := []struct {
+		subnet       string
+		held, probes int64
+	}{
+		{"240.0.0.0/29", 6, 6},
+		{"240.0.0.0/20", 4094, 4094},
+		{"240.0.0.0/8", assignTries*assignWindow + 1, assignTries * assignWindow},
+	}
+	for _, tt := range tests {
+		t.Run(tt.subnet, func(t *testing.T) {
+			s := openSubnet(t, metastoretest.PGSchema(t), "c1", tt.subnet, time.Hour)
+			hold(t, s, tt.held)
+			if addr, err := s.Assign(t.Context(), "sb_over"); !errors.Is(err, tunnet.ErrNoAddress) {
+				t.Fatalf("assign over %d held addresses = %s %v, want ErrNoAddress", tt.held, addr, err)
+			}
+			var probes int64
+			if err := s.pool.QueryRow(t.Context(), `SELECT last_value FROM sandboxd_tun_addrs_cursor`).Scan(&probes); err != nil || probes != tt.probes {
+				t.Errorf("cursor walked %d candidates %v, want %d", probes, err, tt.probes)
+			}
+		})
+	}
+}
+
 func TestAssignReportsAFullSubnetAndFindsItsOnlyFreeAddress(t *testing.T) {
 	ctx := t.Context()
-	s, err := Open(ctx, metastoretest.PGSchema(t), "c1", netip.MustParsePrefix("240.0.0.0/29"), time.Hour)
-	if err != nil {
-		t.Fatalf("open: %v", err)
-	}
-	t.Cleanup(s.Close)
+	s := openSubnet(t, metastoretest.PGSchema(t), "c1", "240.0.0.0/29", time.Hour)
 	held := map[string]netip.Addr{}
+	var err error
 	for i := range 6 {
 		id := fmt.Sprintf("sb_%d", i)
 		if held[id], err = s.Assign(ctx, id); err != nil {
@@ -229,12 +260,28 @@ func TestConfirmReReservesAReleasedAddressAndReportsATakenOne(t *testing.T) {
 
 func open(t *testing.T, dsn, cell string, reuse time.Duration) *Store {
 	t.Helper()
-	s, err := Open(t.Context(), dsn, cell, netip.MustParsePrefix("240.0.0.0/4"), reuse)
+	return openSubnet(t, dsn, cell, "240.0.0.0/4", reuse)
+}
+
+func openSubnet(t *testing.T, dsn, cell, subnet string, reuse time.Duration) *Store {
+	t.Helper()
+	s, err := Open(t.Context(), dsn, cell, netip.MustParsePrefix(subnet), reuse)
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
 	t.Cleanup(s.Close)
 	return s
+}
+
+func hold(t *testing.T, s *Store, n int64) {
+	t.Helper()
+	hosts := int64(1)<<(32-s.subnet.Bits()) - 2
+	if _, err := s.pool.Exec(t.Context(), `INSERT INTO sandboxd_tun_addrs (cell, address, claim)
+		SELECT $1, host($2::inet + (1 + i % $3)), 'held_' || i FROM generate_series(1, $4::bigint) i`,
+		s.cell, s.subnet.Addr().String(), hosts, n); err != nil {
+		t.Fatalf("hold %d addresses: %v", n, err)
+	}
+	rewind(t, s, tunnet.HostAt(s.subnet, 1))
 }
 
 func rewind(t *testing.T, s *Store, addr netip.Addr) {
