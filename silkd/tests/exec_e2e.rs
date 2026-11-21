@@ -49,7 +49,7 @@ async fn wait_for_exit(state: &Arc<State>, pid: u64) -> Vec<Value> {
 }
 
 async fn pid_written_to(marker: &Path) -> u32 {
-    tokio::time::timeout(common::DEADLINE, async {
+    under_deadline(async {
         loop {
             if let Ok(s) = std::fs::read_to_string(marker)
                 && let Ok(n) = s.trim().parse::<u32>()
@@ -60,17 +60,15 @@ async fn pid_written_to(marker: &Path) -> u32 {
         }
     })
     .await
-    .expect("the shell never wrote its child's pid")
 }
 
 async fn wait_dead(pid: u32) {
-    tokio::time::timeout(common::DEADLINE, async {
+    under_deadline(async {
         while alive(pid) {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
     })
-    .await
-    .expect("the command's child outlived the kill");
+    .await;
 }
 
 async fn wait_listed(state: &Arc<State>, pid: u64) -> Value {
@@ -293,16 +291,7 @@ async fn a_client_gone_after_the_leader_exited_ends_its_background_group() {
         .as_u64()
         .unwrap();
     let child = pid_written_to(&marker).await;
-    under_deadline(async {
-        loop {
-            let ps = one(&state, r#"{"op":"ps"}"#).await;
-            if proc_entry(&ps, pid).is_some_and(|p| p["state"] == "exited") {
-                return;
-            }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-    })
-    .await;
+    wait_for_exit(&state, pid).await;
     assert!(alive(child), "the background child died with its leader");
     drop(lines);
     drop(cw);
