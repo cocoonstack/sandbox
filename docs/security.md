@@ -49,15 +49,16 @@ exposing any part of a deployment beyond a single trusted host.
   are the other: sandboxd dials them unguarded, so list only proxies.
 - **What never enters the guest.** Egress credentials: the proxy injects
   the secret host-side, so prompt injection can exfiltrate at most the
-  proxy's answers, and every credentialed call is journaled. Secrets come from
-  the host environment or a claim's `guest: false` env, never the config
-  file. That env stays in the node-local claim record, except in the
-  `archive_failover` row ([assumption 4](#deployment-assumptions)). With
-  [`host_env_memory_only`](deploy.md#configuration), `guest: false` values
-  stay in sandboxd's memory: `claims.json` and the rows written with it on hold
-  none, and a hibernating claim drops them. The control plane sends them again
-  after a hibernate, a restart or an adoption. A git verb's `auth` is the
-  exception: it reaches the guest's git process as an in-memory header,
+  proxy's answers, and every credentialed call lands in the audit journal when
+  `audit_log` is on (and in the usage journal with `egress_usage_events`).
+  Secrets come from the host environment or a claim's `guest: false` env,
+  never the config file. That env stays in the node-local claim record, except
+  in the `archive_failover` row ([assumption 4](#deployment-assumptions)).
+  With [`host_env_memory_only`](deploy.md#configuration), `guest: false`
+  values stay in sandboxd's memory: `claims.json` and the rows written with it
+  on hold none, and a hibernating claim drops them. The control plane sends
+  them again after a hibernate, a restart or an adoption. A git verb's `auth`
+  is the exception: it reaches the guest's git process as an in-memory header,
   never guest disk, and follows the repository's remote and the guest's git
   config, so a token that must not reach the workload belongs in a claim
   credential `inject` instead ([egress](egress.md)).

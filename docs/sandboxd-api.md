@@ -572,14 +572,15 @@ sandbox whose guest does not answer within the wake deadline after two restores
 of its snapshot is cold-booted from its own disk instead: memory is lost,
 `restarts` moves, and the snapshot is dropped. The boot records `vmm_restart`
 when it starts and `wake`, with the lease, when the guest answers; a boot that
-fails after its start records `hibernate`, and the claim stays hibernated. A
-restored VM that cannot be stopped is not cold-booted: the wake fails and the
-claim stays hibernated until the next wake restores the snapshot again. An
-archived sandbox whose guest does not answer after two clones of its archive is
-cold-booted from the second clone's disk: memory is lost, `restarts` moves, and
-the wake records `unarchive` once it commits; a cold boot that fails removes
-the clone, and the claim stays archived. The
-same holds for a wake that an agent access triggers. 204 on
+fails after its start stops its VM and records `hibernate`, and the claim stays
+hibernated; if that VM cannot be stopped, nothing is recorded and the claim
+stays billed as running. A restored VM that cannot be stopped is not
+cold-booted: the wake fails and the claim stays hibernated until the next wake
+restores the snapshot again. An archived sandbox whose guest does not answer
+after two clones of its archive is cold-booted from the second clone's disk:
+memory is lost, `restarts` moves, and the wake records `unarchive` once it
+commits; a cold boot that fails removes the clone, and the claim stays archived.
+The same holds for a wake that an agent access triggers. 204 on
 success, 404 unknown id or wrong token, or an archived sandbox the node had no
 room for that it [handed to a peer](cluster.md#waking-an-archived-claim-on-a-full-node)
 (look it up again), 409 a failed egress-lane or volume sandbox, or one whose VM
@@ -1401,7 +1402,7 @@ end, or nothing for an archive kept forever, and `reap` the deadline it ended un
 tenant's claim), `children` (fork) and `ref` (the promoted template / checkpoint
 id, the egress host, a `vmm_failed` reason, or why reconcile ended a claim). `egress` events, one per egress decision, are written only with
 [`egress_usage_events`](deploy.md#configuration) on (default off), and `egress_bytes` events only with
-`egress_usage_bytes` on. An egress event that injected credentials names
+`egress_usage_bytes` on. An `egress` event does not name its decision, so an allowed and a denied connection to one host write the same event; the [audit journal](deploy.md#configuration)'s `egress` record carries `decision`. An egress event that injected credentials names
 them in `secret` (`gh,claim:<entry>`, never a value). An egress event routed through an
 [upstream proxy](egress.md#upstream-proxies) carries `upstream` (its `host:port`), and with
 `egress_usage_bytes` on, `egress_bytes` events add the connection's payload `tx`/`rx` bytes. With
