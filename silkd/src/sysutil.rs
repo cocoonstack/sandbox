@@ -29,9 +29,6 @@ const FORWARDED: [&str; 6] = [
 /// The claim's environment the host writes, in systemd EnvironmentFile syntax.
 const CLAIM_ENV_PATH: &str = "/run/silkd.env";
 
-#[cfg(target_os = "linux")]
-const PIDFD_SIGNAL_PROCESS_GROUP: libc::c_uint = 4;
-
 static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
 
 /// The FORWARDED values in silkd's own environment, read once: the unit environment is fixed.
@@ -90,7 +87,7 @@ pub fn pidfd_open(_pid: u32) -> Option<OwnedFd> {
 
 #[cfg(target_os = "linux")]
 pub fn signal_pidfd_group(pidfd: &OwnedFd, pgid: u32, sig: i32) {
-    let group = pidfd_send_signal(pidfd.as_fd(), sig, PIDFD_SIGNAL_PROCESS_GROUP);
+    let group = pidfd_send_signal(pidfd.as_fd(), sig, libc::PIDFD_SIGNAL_PROCESS_GROUP);
     if group.is_err_and(|e| e.raw_os_error() == Some(libc::EINVAL))
         && pidfd_send_signal(pidfd.as_fd(), 0, 0).is_ok()
     {
