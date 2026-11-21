@@ -730,11 +730,12 @@ A guest that stops answering inside a live VMM is caught from the data plane.
 The claim is noted when an exec, an agent relay, a port forward or a preview
 cannot connect to the guest's silkd, when an exec cannot write its request,
 when a port forward or a preview ends, by its deadline or because its caller
-left, before silkd answers it, and when an exec ends the same way before silkd
-has started the command. A port that nothing in the guest listens on, or a
-stream silkd closes or answers with an error, is not a note. About 2 minutes
-later the next pass probes the guest for up to 60 s, then once more for up to
-15 s under the claim's lock. A guest that answers either probe is left alone. One that answers neither,
+left, before silkd answers it, when an exec ends the same way before silkd has
+started the command, and when an agent relay's caller hangs up before silkd has
+sent a byte. A port that nothing in the guest listens on, or a stream silkd
+closes or answers with an error, is not a note. About 2 minutes later the next
+pass probes the guest for up to 60 s, then once more for up to 15 s under the
+claim's lock. A guest that answers either probe is left alone. One that answers neither,
 while cocoon still lists its VMM as running, has the VMM stopped, and the claim
 is then handled as one whose VMM exited: a cold restart or `failed`, by the rows
 above, with the same usage events and restart budget. A claim already past its

@@ -993,7 +993,13 @@ func TestAFailedSilkdDialIsNotedUnreachableEvenAfterTheCallerLeft(t *testing.T) 
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			mgr := &fakeManager{socket: func(string, string) (string, error) { return "/v/sock", nil }, unreachable: make(chan string, 1)}
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
 			dialer := &fakeDialer{dial: func(context.Context, string) (net.Conn, error) {
+				if tt.canceled {
+					cancel()
+					return nil, ctx.Err()
+				}
 				if tt.dialErr != nil {
 					return nil, tt.dialErr
 				}
@@ -1001,11 +1007,6 @@ func TestAFailedSilkdDialIsNotedUnreachableEvenAfterTheCallerLeft(t *testing.T) 
 				return guest, nil
 			}}
 			s := New("", "node:7777", mgr, dialer, nil, nil, nil, nil)
-			ctx, cancel := context.WithCancel(t.Context())
-			defer cancel()
-			if tt.canceled {
-				cancel()
-			}
 			guest, done, err := s.openGuest(ctx, "sb_1", pool.Cred{Token: "tok"}, mgr.WakeAgentSocket)
 			if (err != nil) != (tt.dialErr != nil) {
 				t.Fatalf("openGuest: %v, want an error only for a failed dial", err)

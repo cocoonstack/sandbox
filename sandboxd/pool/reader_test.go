@@ -58,6 +58,21 @@ func TestReaderServesAHibernatedClaimWithoutWaking(t *testing.T) {
 	}
 }
 
+func TestAPoolPutMayLowerAReaderPoolToWarmZero(t *testing.T) {
+	eng := newFakeEngine()
+	m := newTestManager(t, eng, config.PoolSpec{PoolKey: testKey, Warm: 1})
+	editView(m, func(v *configView) { v.poolReaders = map[types.PoolKey]bool{testKey: true} })
+	if err := m.SetPools(t.Context(), []config.PoolSpec{{PoolKey: testKey}}); err != nil {
+		t.Fatalf("warm 0 on a reader pool: %v, want it accepted like a reload", err)
+	}
+	m.mu.Lock()
+	floor := m.pools[testKey].floor
+	m.mu.Unlock()
+	if floor != 0 {
+		t.Errorf("warm floor %d, want 0", floor)
+	}
+}
+
 func TestReaderObeysTheNodeLeaseFence(t *testing.T) {
 	eng := newFakeEngine()
 	m := newReaderManager(t, eng)

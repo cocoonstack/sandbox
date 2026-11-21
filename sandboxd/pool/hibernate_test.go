@@ -299,6 +299,9 @@ func TestAWakeWhoseSnapshotNeverAnswersColdBootsTheDisk(t *testing.T) {
 		if len(eng.restores) != wakeRestoreTries || !slices.Equal(eng.starts, []string{sb.VMName}) {
 			t.Errorf("restores=%d starts=%v, want %d restores then one cold boot", len(eng.restores), eng.starts, wakeRestoreTries)
 		}
+		if wakes := m.Counters().Wakes; wakes != 1 {
+			t.Errorf("wakes=%d, want the cold boot wake counted", wakes)
+		}
 		got, _ := m.Sandbox(sb.ID)
 		if got.Restarts != 1 || got.RestartedAt.IsZero() || got.Hibernated || got.Failed != "" {
 			t.Errorf("summary %+v, want one restart, running", got)

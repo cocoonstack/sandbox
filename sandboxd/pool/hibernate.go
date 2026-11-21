@@ -219,6 +219,7 @@ func (m *Manager) wakeOrRead(ctx context.Context, sb *types.Sandbox, readerOK bo
 		if err = m.restartLocked(ctx, sb); err != nil {
 			return "", fmt.Errorf("wake %s: %w", sb.ID, err)
 		}
+		m.countWake(wakeStart)
 		return sb.VsockSocket, nil
 	}
 	live, err := m.commitTransition(ctx, sb, "", sock)
@@ -227,8 +228,7 @@ func (m *Manager) wakeOrRead(ctx context.Context, sb *types.Sandbox, readerOK bo
 		m.dropSnap(ctx, snap)
 		return "", ErrUnknownSandbox
 	}
-	m.counters.wakes.Add(1)
-	m.counters.wakeNanos.Add(uint64(time.Since(wakeStart))) //nolint:gosec // durations are positive
+	m.countWake(wakeStart)
 	if proxyErr := m.out.ArmProxy(ctx, sb); proxyErr != nil {
 		log.WithFunc("pool.wakeOrRead").Errorf(ctx, proxyErr, "arm egress proxy %s", sb.ID)
 	}

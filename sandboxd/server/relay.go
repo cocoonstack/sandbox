@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"sync/atomic"
 	"time"
 
 	"github.com/projecteru2/core/log"
@@ -82,7 +83,10 @@ func (s *Server) handleAgent(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	s.splice(client, s.audited(r.Context(), id, clientReader(client, clientBuf)), guest, switchingProtocols, silkdEnds)
+	fromGuest, clientFirst := s.splice(client, s.audited(r.Context(), id, clientReader(client, clientBuf)), guest, switchingProtocols, silkdEnds)
+	if fromGuest == 0 && clientFirst {
+		s.mgr.NoteUnreachable(id)
+	}
 }
 
 // wakeGuest dials the sandbox's silkd, waking a hibernated VM first unless wake answers ErrSleeping; on failure it has already answered the request.
@@ -94,13 +98,15 @@ func (s *Server) wakeGuest(ctx context.Context, w http.ResponseWriter, id string
 	case errors.Is(err, pool.ErrSleeping):
 		return nil, nil, true, false
 	case errors.Is(err, errUnreachable):
-		if errors.Is(err, context.Canceled) && errors.Is(ctx.Err(), context.Canceled) {
+		if callerLeft(ctx, err) {
 			log.WithFunc("server.wakeGuest").Debugf(ctx, "client canceled the dial of silkd for %s: %v", id, err)
 		} else {
 			log.WithFunc("server.wakeGuest").Errorf(ctx, err, "dial silkd for %s", id)
 		}
 		writeErr(w, http.StatusBadGateway, "guest agent unreachable")
 	case writePoolErr(w, err):
+	case callerLeft(ctx, err):
+		log.WithFunc("server.wakeGuest").Debugf(ctx, "client left while %s was resolved: %v", id, err)
 	default:
 		log.WithFunc("server.wakeGuest").Errorf(ctx, err, "agent socket for %s", id)
 		writeErr(w, http.StatusInternalServerError, "sandbox lookup failed")
@@ -117,13 +123,13 @@ func (s *Server) audited(ctx context.Context, id string, clientR io.Reader) io.R
 	}}
 }
 
-func (s *Server) splice(client net.Conn, clientR io.Reader, guest net.Conn, hello []byte, ends relayEnds) {
+func (s *Server) splice(client net.Conn, clientR io.Reader, guest net.Conn, hello []byte, ends relayEnds) (fromGuest int64, clientFirst bool) {
 	release, ok := s.openRelay(client, guest, hello)
 	if !ok {
-		return
+		return 0, false
 	}
 	defer release()
-	copyBoth(client, clientR, guest, ends, s.noSplice)
+	return copyBoth(client, clientR, guest, ends, s.noSplice)
 }
 
 // openRelay registers a hijacked pair for CloseRelays and sends hello; !ok means the server is draining or the client is gone.
@@ -209,11 +215,13 @@ func (t *auditTee) endLine() {
 	t.skip = false
 }
 
-func copyBoth(client net.Conn, clientR io.Reader, guest net.Conn, ends relayEnds, noSplice bool) {
+func copyBoth(client net.Conn, clientR io.Reader, guest net.Conn, ends relayEnds, noSplice bool) (fromGuest int64, clientFirst bool) {
 	done := make(chan struct{})
+	var clientEnded atomic.Bool
 	go func() {
 		defer close(done)
 		_, err := utils.CopyIn(guest, clientR, noSplice)
+		clientEnded.Store(true)
 		if err != nil {
 			// The client died rather than half-closing, so nothing is left to answer it
 			_ = guest.Close()
@@ -222,13 +230,20 @@ func copyBoth(client net.Conn, clientR io.Reader, guest net.Conn, ends relayEnds
 		ends.guest(guest)
 	}()
 
-	if _, err := io.Copy(client, guest); err != nil {
+	fromGuest, err := io.Copy(client, guest)
+	clientFirst = clientEnded.Load()
+	if err != nil {
 		_ = client.Close()
 		_ = guest.Close()
 	} else {
 		ends.client(client)
 	}
 	<-done
+	return fromGuest, clientFirst
+}
+
+func callerLeft(ctx context.Context, err error) bool {
+	return errors.Is(err, context.Canceled) && errors.Is(ctx.Err(), context.Canceled)
 }
 
 func keepAlive(client net.Conn) {
