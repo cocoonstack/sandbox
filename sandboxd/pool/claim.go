@@ -153,9 +153,7 @@ func (m *Manager) DialPort(ctx context.Context, id string, cred Cred, port uint1
 	return m.dialPort(ctx, id, cred, port, "port")
 }
 
-// DialPortAwake is DialPort for a caller that must not wake the sandbox, such as a gateway that wakes only through the
-// control plane's checks: a paused sandbox, or one in a transition, answers ErrPaused. The sandbox's token still stamps
-// activity; the operator credential stays passive.
+// DialPortAwake is DialPort that never wakes: a sandbox paused once its transition ends answers ErrPaused.
 func (m *Manager) DialPortAwake(ctx context.Context, id string, cred Cred, port uint16) (net.Conn, error) {
 	if cred.Operator {
 		return m.dialPassive(ctx, id, port)
@@ -164,7 +162,10 @@ func (m *Manager) DialPortAwake(ctx context.Context, id string, cred Cred, port 
 	if !ok {
 		return nil, ErrUnknownSandbox
 	}
-	return m.dialRunning(ctx, sb, port, sb.Unhold)
+	if m.pausedForMove(sb) {
+		return nil, ErrEvacuating
+	}
+	return m.dialRunning(ctx, sb, port, func() bool { sb.Transition.Lock(); return true }, sb.Unhold)
 }
 
 // Renew resets a claim's lease to ttl from now after authorizing cred, and reports the granted deadline.
@@ -269,17 +270,20 @@ func (m *Manager) dialPassive(ctx context.Context, id string, port uint16) (net.
 	if !ok {
 		return nil, ErrUnknownSandbox
 	}
-	return m.dialRunning(ctx, sb, port, sb.UnholdIdle)
+	return m.dialRunning(ctx, sb, port, sb.Transition.TryLock, sb.UnholdIdle)
 }
 
-// dialRunning dials a guest port of sb only while it runs; release ends the hold, restarting the idle clock or not.
-func (m *Manager) dialRunning(ctx context.Context, sb *types.Sandbox, port uint16, release func()) (net.Conn, error) {
+func (m *Manager) dialRunning(ctx context.Context, sb *types.Sandbox, port uint16, lock func() bool, release func()) (net.Conn, error) {
 	fenced, err := m.fenceWatch(sb)
 	if err != nil {
 		return nil, err
 	}
-	if !sb.Transition.TryLock() {
+	if !lock() {
 		return nil, ErrPaused
+	}
+	if err = ctx.Err(); err != nil {
+		sb.Transition.Unlock()
+		return nil, err
 	}
 	failed, paused, sock := sb.Failed != "", !runningShaped(sb), sb.VsockSocket
 	if !paused {

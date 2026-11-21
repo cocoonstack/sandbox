@@ -1203,12 +1203,48 @@ func TestNoWakePortDialLeavesAPausedSandboxAsleep(t *testing.T) {
 
 	running := mustClaim(t, m, testKey)
 	running.Transition.Lock()
-	if _, err := m.DialPortAwake(t.Context(), running.ID, Cred{Token: running.Token}, 49983); !errors.Is(err, ErrPaused) {
-		t.Errorf("mid-transition: %v, want ErrPaused at once", err)
-	}
+	dialed := make(chan error, 1)
+	go func() {
+		_, err := m.DialPortAwake(t.Context(), running.ID, Cred{Token: running.Token}, 49983)
+		dialed <- err
+	}()
+	m.mu.Lock()
+	running.PendingSnap = "snap"
+	m.store.set(running)
+	m.mu.Unlock()
 	running.Transition.Unlock()
+	if err := <-dialed; !errors.Is(err, ErrPaused) {
+		t.Errorf("a dial during a hibernate: %v, want ErrPaused once it ends", err)
+	}
 	if _, err := m.DialPortAwake(t.Context(), running.ID, Cred{Token: "wrong"}, 49983); !errors.Is(err, ErrUnknownSandbox) {
 		t.Errorf("wrong token: %v, want ErrUnknownSandbox", err)
+	}
+}
+
+func TestNoWakePortDialsOnARunningSandboxNeverAnswerPaused(t *testing.T) {
+	eng := newFakeEngine()
+	m := newTestManager(t, eng)
+	sb := mustClaim(t, m, testKey)
+	eng.guestDial = func() (net.Conn, error) {
+		conn, _ := net.Pipe()
+		return conn, nil
+	}
+	var failed atomic.Int64
+	var wg sync.WaitGroup
+	for range 256 {
+		wg.Go(func() { _, _ = m.wakeResolved(t.Context(), sb) })
+		wg.Go(func() {
+			conn, err := m.DialPortAwake(t.Context(), sb.ID, Cred{Token: sb.Token}, 49983)
+			if err != nil {
+				failed.Add(1)
+				return
+			}
+			_ = conn.Close()
+		})
+	}
+	wg.Wait()
+	if n := failed.Load(); n != 0 {
+		t.Errorf("%d of 256 no-wake dials on a running sandbox failed, want none while other calls hold its transition lock", n)
 	}
 }
 
