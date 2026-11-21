@@ -235,7 +235,7 @@ class Sandbox:
         self._done_rpc("fs_mkdir", path=path, parents=parents or None)
 
     def remove(self, path: str, recursive: bool = False) -> None:
-        self._done_rpc("fs_rm", path=path, recursive=recursive or None)
+        self._done_rpc("fs_rm", unbounded=recursive, path=path, recursive=recursive or None)
 
     def rename(self, src: str, dst: str) -> None:
         paths: dict[str, Any] = {"from": src, "to": dst}
@@ -244,7 +244,7 @@ class Sandbox:
     @_follows_move
     def push(self, dest: str, tar_stream: bytes) -> None:
         """Extracts a tar stream into dest; a truncated stream leaves dest untouched."""
-        with self._lease(self._connect("fs_push", dest=dest)) as conn:
+        with self._lease(self._connect("fs_push", unbounded=True, dest=dest)) as conn:
             _upload(conn, tar_stream, STREAM_CHUNK)
 
     @_follows_move
@@ -283,16 +283,18 @@ class Sandbox:
         )
 
     def git_status(self, path: str) -> dict[str, Any]:
-        return self._call("git_status", "git_status_result", path=path)
+        return self._call("git_status", "git_status_result", unbounded=True, path=path)
 
     def git_add(self, path: str, files: list[str]) -> None:
-        self._done_rpc("git_add", path=path, files=files)
+        self._done_rpc("git_add", unbounded=True, path=path, files=files)
 
     def git_commit(self, path: str, message: str, author: str) -> str:
         """Commits staged changes; returns the commit hash."""
         return cast(
             str,
-            self._call("git_commit", "git_commit_result", path=path, message=message, author=author).get("hash", ""),
+            self._call(
+                "git_commit", "git_commit_result", unbounded=True, path=path, message=message, author=author
+            ).get("hash", ""),
         )
 
     def git_push(self, path: str, auth: str = "") -> None:
@@ -302,16 +304,16 @@ class Sandbox:
         self._done_rpc("git_pull", unbounded=True, path=path, auth=auth or None)
 
     def git_branches(self, path: str) -> dict[str, Any]:
-        return self._call("git_branch", "git_branches", path=path, action="list")
+        return self._call("git_branch", "git_branches", unbounded=True, path=path, action="list")
 
     def git_checkout(self, path: str, name: str) -> None:
-        self._done_rpc("git_branch", path=path, action="checkout", name=name)
+        self._done_rpc("git_branch", unbounded=True, path=path, action="checkout", name=name)
 
     def git_create_branch(self, path: str, name: str) -> None:
-        self._done_rpc("git_branch", path=path, action="create", name=name)
+        self._done_rpc("git_branch", unbounded=True, path=path, action="create", name=name)
 
     def git_delete_branch(self, path: str, name: str) -> None:
-        self._done_rpc("git_branch", path=path, action="delete", name=name)
+        self._done_rpc("git_branch", unbounded=True, path=path, action="delete", name=name)
 
     def watch(self, path: str, recursive: bool = False) -> Watcher:
         """Streams filesystem events under path; events after the returned Watcher exists are guaranteed captured."""

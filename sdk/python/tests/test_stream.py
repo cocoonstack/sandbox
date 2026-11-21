@@ -1,4 +1,4 @@
-"""The client timeout bounds the dial, the upgrade and each one-shot wait, not a stream or a git network verb."""
+"""The client timeout bounds the dial, the upgrade and each prompt call's wait, not a stream or a long verb."""
 
 import contextlib
 import json
@@ -33,9 +33,9 @@ def test_port_stream_outlives_the_client_timeout(script_server, keep_alive, mkdi
         lambda sb: sb.write_file("/f", b"x"),
         lambda sb: sb.stat("/"),
         lambda sb: sb.logs(7),
-        lambda sb: sb.git_status("/r"),
+        lambda sb: sb.remove("/f"),
     ],
-    ids=["read_file", "write_file", "stat", "logs", "git_status"],
+    ids=["read_file", "write_file", "stat", "logs", "remove"],
 )
 def test_one_shot_call_to_a_silent_guest_times_out(script_server, call):
     sb = short_timeout_sandbox(script_server(serve_silence, True))
@@ -44,17 +44,21 @@ def test_one_shot_call_to_a_silent_guest_times_out(script_server, call):
 
 
 @pytest.mark.parametrize(
-    ("op", "call"),
+    ("op", "reply", "call"),
     [
-        ("git_clone", lambda sb: sb.git_clone("https://example.com/r.git", "/r")),
-        ("git_push", lambda sb: sb.git_push("/r")),
-        ("git_pull", lambda sb: sb.git_pull("/r")),
+        ("git_clone", "done", lambda sb: sb.git_clone("https://example.com/r.git", "/r")),
+        ("git_push", "done", lambda sb: sb.git_push("/r")),
+        ("git_pull", "done", lambda sb: sb.git_pull("/r")),
+        ("git_commit", "git_commit_result", lambda sb: sb.git_commit("/r", "m", "a <a@b>")),
+        ("git_status", "git_status_result", lambda sb: sb.git_status("/r")),
+        ("fs_push", "done", lambda sb: sb.push("/r", b"tar")),
+        ("fs_rm", "done", lambda sb: sb.remove("/r", recursive=True)),
     ],
-    ids=["git_clone", "git_push", "git_pull"],
+    ids=["git_clone", "git_push", "git_pull", "git_commit", "git_status", "push", "recursive remove"],
 )
-def test_git_network_verb_outlives_the_client_timeout(script_server, op, call):
+def test_long_verb_outlives_the_client_timeout(script_server, op, reply, call):
     ops: list[str] = []
-    sb = short_timeout_sandbox(script_server(serve_late_done, 3 * TIMEOUT, ops))
+    sb = short_timeout_sandbox(script_server(serve_late_reply, 3 * TIMEOUT, reply, ops))
     bounded(lambda: call(sb))
     assert ops == [op]
 
@@ -128,12 +132,12 @@ def serve_port_forward(server: socket.socket, quiet: float, ops: list[str]) -> N
     conn.close()
 
 
-def serve_late_done(server: socket.socket, quiet: float, ops: list[str]) -> None:
+def serve_late_reply(server: socket.socket, quiet: float, reply: str, ops: list[str]) -> None:
     conn, _ = server.accept()
     reader = accept_upgrade(conn)
     ops.append(json.loads(reader.readline())["op"])
     time.sleep(quiet)
-    conn.sendall(b'{"type":"done"}\n')
+    conn.sendall(json.dumps({"type": reply}).encode() + b"\n")
     conn.close()
 
 

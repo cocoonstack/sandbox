@@ -83,19 +83,21 @@ client = Client("10.0.0.5:7777", api_token="...", timeout=120.0)
 verbs only; operator surfaces answer it 403). Every node of a cell shares
 the root token and the same tenants set. `timeout` bounds every
 control-plane request, the data-plane dial and upgrade, and each wait for
-the guest in a one-shot data-plane call: `read_file`, `write_file`,
-`list_dir`, `stat`, `mkdir`, `remove`, `rename`, `replace`, `push`, `pull`,
-`spawn`, `ps`, `kill`, `logs`, `session`, `sessions`, `Session.close`,
-`git_status`, `git_add`, `git_commit`, the branch verbs, `start_lsp`,
-`Lsp.stop` and `Pty.resize`. A guest silent that long raises
-`SandboxTimeout`. Two kinds of call have no bound once the request leaves:
-the streams (`run`/`exec`, `Session.exec`, `attach`, `find`/`find_iter`,
-`watch`, `open_pty`, `dial_port`, `proxy_port`, `Lsp.request`) live until
-the guest ends them, and `git_clone`, `git_push` and `git_pull` wait until
-git finishes. Unlike the Go SDK, where a canceled context closes any call,
-only `run`/`exec` take a `timeout` of their own. A caller with a wall clock
-of its own passes `deadline` to a claim (below) so the redirect walk cannot
-outlive it.
+the guest in a call that silkd answers promptly: `read_file`, `write_file`,
+`list_dir`, `stat`, `mkdir`, `remove` without `recursive`, `rename`,
+`replace`, `pull`, `spawn`, `ps`, `kill`, `logs`, `session`, `sessions`,
+`Session.close`, `start_lsp`, `Lsp.stop` and `Pty.resize`. The bound is per
+wait, so a transfer whose bytes keep flowing is never cut; a guest silent
+that long raises `SandboxTimeout`. Every other call has no bound once the
+request leaves: the streams (`run`/`exec`, `Session.exec`, `attach`,
+`find`/`find_iter`, `watch`, `open_pty`, `dial_port`, `proxy_port`,
+`Lsp.request`) live until the guest ends them, and the calls whose run time
+grows with the work wait until it is done: every git verb (git can run
+hooks, filters or a network transfer), `push` (it merges a tree) and
+`remove(recursive=True)`. Unlike the Go SDK, where a canceled context
+closes any call, only `run`/`exec` take a `timeout` of their own. A caller
+with a wall clock of its own passes `deadline` to a claim (below) so the
+redirect walk cannot outlive it.
 
 For HTTPS ([endpoints](sdk.md#https-endpoints)) with a private CA, pass a
 standard `ssl.SSLContext`:
