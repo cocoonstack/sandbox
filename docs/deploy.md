@@ -727,10 +727,12 @@ claimed `on_expire: archive`, which needs a running VM to archive:
 | failed | `none`, an egress-lane or volume claim, the VM record gone, the restart budget spent, or 3 failed boots | `failed: "<reason>"` on the row, `vmm_exit` then `vmm_failed` usage events (a boot whose guest setup failed adds its own `vmm_restart` and `vmm_exit`), `409` from exec, relays, ports, hibernate, fork, checkpoint and promote |
 
 A guest that stops answering inside a live VMM is caught from the data plane.
-The claim is noted while a caller still waits on it when an exec, an agent
-relay, a port forward or a preview cannot connect to the guest's silkd, or when
-an exec reaches its `timeout_seconds` before silkd has started the command. A
-port that nothing in the guest listens on is not a note. About 2 minutes later
+The claim is noted when an exec, an agent relay, a port forward or a preview
+cannot connect to the guest's silkd, when a port forward or a preview ends
+before silkd answers it, when an exec cannot write its request, or when an exec
+ends before silkd has started the command. A connect or exec that ends because
+its caller left is a note too. A port that nothing in the guest listens on is
+not a note. About 2 minutes later
 the next pass
 probes the guest for up to 60 s, then once more for up to 15 s under the claim's
 lock. A guest that answers either probe is left alone. One that answers neither,

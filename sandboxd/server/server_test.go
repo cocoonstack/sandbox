@@ -980,7 +980,7 @@ func TestAgentMapsEachFailureToItsStatus(t *testing.T) {
 	}
 }
 
-func TestOnlyAFailedDialTheCallerStillWaitsOnIsNotedUnreachable(t *testing.T) {
+func TestAFailedSilkdDialIsNotedUnreachableEvenAfterTheCallerLeft(t *testing.T) {
 	for _, tt := range []struct {
 		name     string
 		dialErr  error
@@ -989,7 +989,7 @@ func TestOnlyAFailedDialTheCallerStillWaitsOnIsNotedUnreachable(t *testing.T) {
 	}{
 		{"guest answers", nil, false, 0},
 		{"dial fails", errors.New("connection refused"), false, 1},
-		{"dial fails after the caller left", context.Canceled, true, 0},
+		{"dial fails after the caller left", context.Canceled, true, 1},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			mgr := &fakeManager{socket: func(string, string) (string, error) { return "/v/sock", nil }, unreachable: make(chan string, 1)}

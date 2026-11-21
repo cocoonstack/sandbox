@@ -2,35 +2,31 @@ package outbound
 
 import (
 	"fmt"
+	"math"
 	"net"
 	"net/http"
 	"os"
 	"sync"
 	"syscall"
 
-	"golang.org/x/sys/unix"
-
 	"github.com/cocoonstack/sandbox/sandboxd/egress"
 	"github.com/cocoonstack/sandbox/sandboxd/engine"
 )
 
-// doorConns bounds one sandbox's open connections per door; the guest's next dial waits in the backlog.
-const doorConns = 256
+const (
+	// doorConns bounds one sandbox's open connections per door; the door closes the next one it accepts.
+	doorConns = 256
+	// The kernel clamps a listen backlog to somaxconn.
+	doorBacklog = math.MaxInt32
+)
+
+type unixBinder func(path string) (*net.UnixListener, error)
 
 type doorSpec struct {
 	ln   *net.Listener
 	path string
 	name string
 	on   bool
-}
-
-func (s doorSpec) bind() error {
-	ln, err := listenUnix(s.path)
-	if err != nil {
-		return fmt.Errorf("listen %s: %w", s.name, err)
-	}
-	*s.ln = limitDoor(ln)
-	return nil
 }
 
 // doors are a sandbox's proxy door and optional SOCKS5, DNS and packet doors, served once armed.
@@ -51,7 +47,7 @@ func (d *doors) close() {
 		_ = d.srv.Close()
 		d.proxy.Close()
 	}
-	for _, ln := range [...]net.Listener{d.ln, d.socks, d.dns, d.dnsGram} {
+	for _, ln := range d.listeners() {
 		if ln != nil {
 			_ = ln.Close()
 		}
@@ -61,18 +57,27 @@ func (d *doors) close() {
 	}
 }
 
-// renew rebinds each door a guest dialed before it was armed, so no connection queued then is served under the claim.
-func (d *doors) renew(vsock string, p egress.PolicyEvaluator) error {
-	for _, door := range d.specs(vsock, p) {
-		if !door.on || !reached(*door.ln) {
+func (d *doors) listen() error {
+	for _, ln := range d.listeners() {
+		if ln == nil {
 			continue
 		}
-		_ = (*door.ln).Close()
-		if err := door.bind(); err != nil {
+		rc, err := ln.(syscall.Conn).SyscallConn()
+		if err != nil {
 			return err
+		}
+		if ctlErr := rc.Control(func(fd uintptr) { err = syscall.Listen(int(fd), doorBacklog) }); ctlErr != nil {
+			return ctlErr
+		}
+		if err != nil {
+			return os.NewSyscallError("listen", err)
 		}
 	}
 	return nil
+}
+
+func (d *doors) listeners() [4]net.Listener {
+	return [...]net.Listener{d.ln, d.socks, d.dns, d.dnsGram}
 }
 
 func (d *doors) serves(p egress.PolicyEvaluator) bool {
@@ -99,31 +104,25 @@ func (d *doors) takeTun() (t *tunDoor) {
 type doorListener struct {
 	*net.UnixListener
 	slots chan struct{}
-	done  chan struct{}
-	once  sync.Once
 }
 
 func limitDoor(ln *net.UnixListener) *doorListener {
-	return &doorListener{UnixListener: ln, slots: make(chan struct{}, doorConns), done: make(chan struct{})}
+	return &doorListener{UnixListener: ln, slots: make(chan struct{}, doorConns)}
 }
 
 func (l *doorListener) Accept() (net.Conn, error) {
-	select {
-	case l.slots <- struct{}{}:
-	case <-l.done:
-		return nil, net.ErrClosed
+	for {
+		conn, err := l.AcceptUnix()
+		if err != nil {
+			return nil, err
+		}
+		select {
+		case l.slots <- struct{}{}:
+			return &doorConn{UnixConn: conn, slots: l.slots}, nil
+		default:
+			_ = conn.Close()
+		}
 	}
-	conn, err := l.AcceptUnix()
-	if err != nil {
-		<-l.slots
-		return nil, err
-	}
-	return &doorConn{UnixConn: conn, slots: l.slots}, nil
-}
-
-func (l *doorListener) Close() error {
-	l.once.Do(func() { close(l.done) })
-	return l.UnixListener.Close()
 }
 
 type doorConn struct {
@@ -140,16 +139,18 @@ func (c *doorConn) Close() error {
 
 func (c *doorConn) NetConn() net.Conn { return c.UnixConn }
 
-func bindDoors(vsock string, p egress.PolicyEvaluator) (*doors, error) {
+func bindDoors(vsock string, p egress.PolicyEvaluator, bind unixBinder) (*doors, error) {
 	d := &doors{}
 	for _, door := range d.specs(vsock, p) {
 		if !door.on {
 			continue
 		}
-		if err := door.bind(); err != nil {
+		ln, err := bind(door.path)
+		if err != nil {
 			d.close()
-			return nil, err
+			return nil, fmt.Errorf("listen %s: %w", door.name, err)
 		}
+		*door.ln = limitDoor(ln)
 	}
 	return d, nil
 }
@@ -160,16 +161,28 @@ func listenUnix(path string) (*net.UnixListener, error) {
 	return net.ListenUnix("unix", &net.UnixAddr{Name: path, Net: "unix"})
 }
 
-// reached reports whether a guest connected to a door before it was armed; a failed poll counts as reached.
-func reached(ln net.Listener) bool {
-	rc, err := ln.(syscall.Conn).SyscallConn()
-	if err != nil {
-		return true
+// bindUnix binds path without listening, so a guest dial is refused until the door opens.
+func bindUnix(path string) (*net.UnixListener, error) {
+	_ = os.Remove(path)
+	syscall.ForkLock.RLock()
+	fd, err := syscall.Socket(syscall.AF_UNIX, syscall.SOCK_STREAM, 0)
+	if err == nil {
+		syscall.CloseOnExec(fd)
 	}
-	waiting := true
-	_ = rc.Control(func(fd uintptr) {
-		ready, pollErr := unix.Poll([]unix.PollFd{{Fd: int32(fd), Events: unix.POLLIN}}, 0) //nolint:gosec // a listener's fd fits
-		waiting = pollErr != nil || ready > 0
-	})
-	return waiting
+	syscall.ForkLock.RUnlock()
+	if err != nil {
+		return nil, os.NewSyscallError("socket", err)
+	}
+	f := os.NewFile(uintptr(fd), path)
+	defer func() { _ = f.Close() }()
+	if err = syscall.Bind(fd, &syscall.SockaddrUnix{Name: path}); err != nil {
+		return nil, os.NewSyscallError("bind", err)
+	}
+	ln, err := net.FileListener(f)
+	if err != nil {
+		return nil, err
+	}
+	ul := ln.(*net.UnixListener)
+	ul.SetUnlinkOnClose(true)
+	return ul, nil
 }

@@ -1269,7 +1269,7 @@ func TestOperatorPortDialsOnOneSandboxRunConcurrently(t *testing.T) {
 	}
 }
 
-func TestAFailedPortDialNotesTheClaimOnlyWhenSilkdDidNotAnswer(t *testing.T) {
+func TestAFailedPortDialNotesTheClaimWhenSilkdDidNotAnswerEvenAfterTheCallerLeft(t *testing.T) {
 	silent := fmt.Errorf("%w: read CONNECT reply: context deadline exceeded", engine.ErrSilkdUnreachable)
 	for _, tt := range []struct {
 		name      string
@@ -1281,7 +1281,7 @@ func TestAFailedPortDialNotesTheClaimOnlyWhenSilkdDidNotAnswer(t *testing.T) {
 		{"port forward, silkd silent", false, silent, false, true},
 		{"preview, silkd silent", true, silent, false, true},
 		{"nothing listens on the port", false, errors.New("port_forward 80: connection refused"), false, false},
-		{"silkd silent after the caller left", false, silent, true, false},
+		{"silkd silent after the caller left", false, silent, true, true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			eng := newFakeEngine()

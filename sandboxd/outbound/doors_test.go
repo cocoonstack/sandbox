@@ -73,7 +73,7 @@ func TestDoorConnHandsSpliceItsUnixConn(t *testing.T) {
 	}
 }
 
-func TestEgressDoorCapsConcurrentConnections(t *testing.T) {
+func TestEgressDoorClosesAConnectionPastItsCap(t *testing.T) {
 	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = io.WriteString(w, "ok")
 	}))
@@ -101,50 +101,34 @@ func TestEgressDoorCapsConcurrentConnections(t *testing.T) {
 
 	waitHeld(t, h, "sb_cap", doorConns)
 
-	client := outboundtest.EgressClient(path)
-	client.Timeout = 500 * time.Millisecond
-	resp, err := client.Get(origin.URL + "/")
-	if err == nil {
-		_ = resp.Body.Close()
-		t.Fatal("a request past the door cap was served")
-	}
-	if netErr, ok := errors.AsType[net.Error](err); !ok || !netErr.Timeout() {
-		t.Fatalf("request past the door cap: %v, want it to wait out the client timeout", err)
+	for i := range 2 * doorConns {
+		conn, err := net.Dial("unix", path)
+		if err != nil {
+			t.Fatalf("dial %d past the cap: %v, want the door to accept it", i, err)
+		}
+		_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+		_, err = conn.Read(make([]byte, 1))
+		_ = conn.Close()
+		if !errors.Is(err, io.EOF) {
+			t.Fatalf("dial %d past the cap: read %v, want it closed on accept", i, err)
+		}
 	}
 
 	_ = idle[0].Close()
+	client := outboundtest.EgressClient(path)
 	client.Timeout = 5 * time.Second
-	resp, err = client.Get(origin.URL + "/")
+	deadline = time.Now().Add(5 * time.Second)
+	resp, err := client.Get(origin.URL + "/")
+	for err != nil && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+		resp, err = client.Get(origin.URL + "/")
+	}
 	if err != nil {
 		t.Fatalf("request after a slot freed: %v", err)
 	}
 	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("status %d after a slot freed, want 200", resp.StatusCode)
-	}
-}
-
-func TestReachedSeesAGuestInTheBacklog(t *testing.T) {
-	path := filepath.Join(outboundtest.SockRoot(t), "d.sock")
-	ln, err := listenUnix(path)
-	if err != nil {
-		t.Fatalf("listen: %v", err)
-	}
-	t.Cleanup(func() { _ = ln.Close() })
-	door := limitDoor(ln)
-	if reached(door) {
-		t.Fatal("a door no guest dialed reads as reached")
-	}
-	conn, err := net.Dial("unix", path)
-	if err != nil {
-		t.Fatalf("dial: %v", err)
-	}
-	if !reached(door) {
-		t.Error("a door with a pending connection reads as unreached")
-	}
-	_ = conn.Close()
-	if !reached(door) {
-		t.Error("a door whose guest hung up reads as unreached")
 	}
 }
 

@@ -105,7 +105,7 @@ func TestProbeRetriesPastFailures(t *testing.T) {
 	}
 }
 
-func TestDialGuestPortTimesOutWhenTheGuestPortNeverReplies(t *testing.T) {
+func TestDialGuestPortMarksAPortForwardSilkdNeverAnswersAsUnreachable(t *testing.T) {
 	path := sockPath(t)
 	ln, err := net.Listen("unix", path)
 	if err != nil {
@@ -133,8 +133,8 @@ func TestDialGuestPortTimesOutWhenTheGuestPortNeverReplies(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(t.Context(), 150*time.Millisecond)
 	defer cancel()
-	if _, err := newTestEngine().DialGuestPort(ctx, path, 8080); !errors.Is(err, context.DeadlineExceeded) {
-		t.Errorf("got %v, want context.DeadlineExceeded", err)
+	if _, err := newTestEngine().DialGuestPort(ctx, path, 8080); !errors.Is(err, context.DeadlineExceeded) || !errors.Is(err, ErrSilkdUnreachable) {
+		t.Errorf("got %v, want context.DeadlineExceeded as ErrSilkdUnreachable", err)
 	}
 }
 

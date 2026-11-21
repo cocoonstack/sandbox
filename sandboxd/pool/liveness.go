@@ -40,8 +40,8 @@ func (m *Manager) NoteUnreachable(id string) {
 	}
 }
 
-func (m *Manager) noteUnreachableDial(ctx context.Context, id string, err error) {
-	if errors.Is(err, engine.ErrSilkdUnreachable) && ctx.Err() == nil {
+func (m *Manager) noteUnreachableDial(id string, err error) {
+	if errors.Is(err, engine.ErrSilkdUnreachable) {
 		m.NoteUnreachable(id)
 	}
 }

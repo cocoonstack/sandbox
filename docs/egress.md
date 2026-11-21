@@ -44,7 +44,8 @@ second door: CONNECT only (BIND and UDP ASSOCIATE answer *command not
 supported*), no authentication (the socket path already carries the sandbox's
 identity), and a `DOMAINNAME` destination is resolved host-side, so the guest
 still needs no resolver. Each door serves at most 256 connections per sandbox
-at a time; later ones sit unserved in the socket backlog until one closes, and
+at a time; the door closes each later one as it accepts it, so the guest sees
+a reset and the socket backlog never fills, and
 the proxy keeps at most 64 idle upstream connections per sandbox and exit (the
 node's own and each upstream proxy the claim has used), as many again for
 decrypted traffic when the pool intercepts, so a guest cannot turn its proxy
@@ -144,9 +145,9 @@ Behavior of the relay:
   and tenant. The decision is `allow`, `filtered` (an address was dropped),
   `failed` (no nameserver answered) or `rate_limited` (at most one a second per
   claim after a burst of ten).
-- **Pre-bound doors.** As with the proxy doors, a guest that dials a DNS door
-  of a warm VM before its claim makes the claim bind fresh doors, so no query
-  queued before the claim is answered under the claim's identity.
+- **Pre-bound doors.** As with the proxy doors, a warm VM's DNS doors refuse
+  the guest's dial until its claim, so no query from before the claim waits to
+  be answered under the claim's identity.
 
 A connect by address still goes through the proxy or the SOCKS5 door and is
 judged there. Hibernate, wake and move need nothing: every UDP query opens a new
@@ -332,8 +333,8 @@ door; the egress-lane pool additionally gets its NIC locked at claim, so its
 policy governs the only route out just like the none lane's. sandboxd binds a
 warm clone's doors when it joins the pool and starts serving them at claim, so
 the bind is off the claim path (a refill-time bind failure is logged and that
-clone binds at claim); a door the guest reached while the clone was warm is
-bound afresh at claim, which resets what waited in it, and an unpooled or
+clone binds at claim); a warm clone's door does not listen until its claim, so
+the guest's dial is refused there and nothing waits in it, and an unpooled or
 woken sandbox binds at arm time.
 
 - `host`: an exact name, a `*.`-prefixed suffix wildcard, or `*`. Case-insensitive.

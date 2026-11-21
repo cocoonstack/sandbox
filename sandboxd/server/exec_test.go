@@ -145,15 +145,16 @@ func TestExecTimeoutKillsTheCommand(t *testing.T) {
 	expectKill(t, killed, "timeout")
 }
 
-func TestAnExecThatTimesOutBeforeItsStartNotesTheGuest(t *testing.T) {
+func TestAnExecTheGuestNeverStartsNotesTheGuest(t *testing.T) {
 	for _, tt := range []struct {
-		name            string
-		unread, started bool
-		noted           int
+		name                   string
+		unread, reset, started bool
+		want, noted            int
 	}{
-		{"silkd never reads the request", true, false, 1},
-		{"silkd never starts the command", false, false, 1},
-		{"the command started", false, true, 0},
+		{"silkd never reads the request", true, false, false, http.StatusGatewayTimeout, 1},
+		{"silkd never starts the command", false, false, false, http.StatusGatewayTimeout, 1},
+		{"the command started", false, false, true, http.StatusGatewayTimeout, 0},
+		{"silkd resets the request write", false, true, false, http.StatusBadGateway, 1},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			killed := make(chan uint32, 1)
@@ -161,7 +162,11 @@ func TestAnExecThatTimesOutBeforeItsStartNotesTheGuest(t *testing.T) {
 			hold := make(chan struct{})
 			t.Cleanup(func() { close(hold) })
 			ts := newTestServer(t, "", mgr, pipeDialer(killWatchGuest(killed, func(conn net.Conn, r *bufio.Reader) {
-				if tt.unread {
+				switch {
+				case tt.reset:
+					_ = conn.Close()
+					return
+				case tt.unread:
 					<-hold
 					return
 				}
@@ -173,14 +178,30 @@ func TestAnExecThatTimesOutBeforeItsStartNotesTheGuest(t *testing.T) {
 				_, _ = r.ReadBytes('\n')
 			})))
 
-			if status, _ := postExec(t, ts, `{"argv":["sleep","60"],"timeout_seconds":1}`); status != http.StatusGatewayTimeout {
-				t.Fatalf("status %d, want 504", status)
+			if status, _ := postExec(t, ts, `{"argv":["sleep","60"],"timeout_seconds":1}`); status != tt.want {
+				t.Fatalf("status %d, want %d", status, tt.want)
 			}
 			if len(mgr.unreachable) != tt.noted {
 				t.Errorf("notes %d, want %d", len(mgr.unreachable), tt.noted)
 			}
 		})
 	}
+}
+
+func TestAnExecWhoseCallerLeavesBeforeTheStartNotesTheGuest(t *testing.T) {
+	mgr := &fakeManager{unreachable: make(chan string, 1)}
+	ts := newTestServer(t, "", mgr, pipeDialer(func(conn net.Conn) {
+		_, _ = io.Copy(io.Discard, conn)
+	}))
+	ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, ts.URL+"/v1/sandboxes/sb_1/exec", strings.NewReader(`{"argv":["sleep","60"]}`))
+	req.Header.Set("Authorization", "Bearer tok")
+	if resp, err := http.DefaultClient.Do(req); err == nil {
+		_ = resp.Body.Close()
+		t.Fatalf("status %d, want the caller gone", resp.StatusCode)
+	}
+	await(t, mgr.unreachable, "the guest is not noted after the caller left")
 }
 
 func TestExecRejectsBadRequests(t *testing.T) {
