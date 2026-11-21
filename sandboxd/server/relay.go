@@ -83,8 +83,7 @@ func (s *Server) handleAgent(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	fromGuest, clientFirst := s.splice(client, s.audited(r.Context(), id, clientReader(client, clientBuf)), guest, switchingProtocols, silkdEnds)
-	if fromGuest == 0 && clientFirst {
+	if s.splice(client, s.audited(r.Context(), id, clientReader(client, clientBuf)), guest, switchingProtocols, silkdEnds) {
 		s.mgr.NoteUnreachable(id)
 	}
 }
@@ -123,10 +122,10 @@ func (s *Server) audited(ctx context.Context, id string, clientR io.Reader) io.R
 	}}
 }
 
-func (s *Server) splice(client net.Conn, clientR io.Reader, guest net.Conn, hello []byte, ends relayEnds) (fromGuest int64, clientFirst bool) {
+func (s *Server) splice(client net.Conn, clientR io.Reader, guest net.Conn, hello []byte, ends relayEnds) (guestSilent bool) {
 	release, ok := s.openRelay(client, guest, hello)
 	if !ok {
-		return 0, false
+		return false
 	}
 	defer release()
 	return copyBoth(client, clientR, guest, ends, s.noSplice)
@@ -215,7 +214,7 @@ func (t *auditTee) endLine() {
 	t.skip = false
 }
 
-func copyBoth(client net.Conn, clientR io.Reader, guest net.Conn, ends relayEnds, noSplice bool) (fromGuest int64, clientFirst bool) {
+func copyBoth(client net.Conn, clientR io.Reader, guest net.Conn, ends relayEnds, noSplice bool) (guestSilent bool) {
 	done := make(chan struct{})
 	var clientEnded atomic.Bool
 	go func() {
@@ -231,7 +230,7 @@ func copyBoth(client net.Conn, clientR io.Reader, guest net.Conn, ends relayEnds
 	}()
 
 	fromGuest, err := io.Copy(client, guest)
-	clientFirst = clientEnded.Load()
+	guestSilent = fromGuest == 0 && clientEnded.Load()
 	if err != nil {
 		_ = client.Close()
 		_ = guest.Close()
@@ -239,7 +238,7 @@ func copyBoth(client net.Conn, clientR io.Reader, guest net.Conn, ends relayEnds
 		ends.client(client)
 	}
 	<-done
-	return fromGuest, clientFirst
+	return guestSilent
 }
 
 func callerLeft(ctx context.Context, err error) bool {

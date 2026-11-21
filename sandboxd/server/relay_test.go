@@ -159,16 +159,14 @@ func TestAnAgentRelayWhoseSilkdNeverAnswersNotesTheGuest(t *testing.T) {
 				}
 			}
 			_ = conn.Close()
+			if !tt.answer {
+				await(t, mgr.unreachable, "a relay whose silkd never answered is not noted")
+				return
+			}
 			select {
 			case id := <-mgr.unreachable:
-				if !tt.answer {
-					return
-				}
 				t.Errorf("noted %s, whose silkd answered", id)
 			case <-time.After(200 * time.Millisecond):
-				if !tt.answer {
-					t.Error("a relay whose silkd never answered is not noted")
-				}
 			}
 		})
 	}

@@ -1720,9 +1720,6 @@ func TestADataPlaneCallQueuedBehindAMoveAnswersByTheMovesOutcome(t *testing.T) {
 				if err := <-done; !errors.Is(err, tt.want) {
 					t.Errorf("got %v, want %v", err, tt.want)
 				}
-				m.mu.Lock()
-				delete(m.moving, sb.ID)
-				m.mu.Unlock()
 			})
 		}
 	}

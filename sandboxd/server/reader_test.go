@@ -236,6 +236,72 @@ func TestSleepingHandoverEndsWhenItsClaimIsFenced(t *testing.T) {
 	}
 }
 
+func TestASleepingHandoverWhoseSilkdNeverAnswersNotesTheGuest(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		answer bool
+	}{
+		{"silkd never answers", false},
+		{"silkd answers", true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			env := newSleepingEnv(t)
+			env.manager.unreachable = make(chan string, 1)
+			guest := tagServer("guest", env.frames, nil)
+			if !tt.answer {
+				guest = func(c net.Conn) {
+					defer c.Close()
+					_, _ = io.Copy(io.Discard, c)
+				}
+			}
+			env.srv.dialer = &fakeDialer{dial: func(context.Context, string) (net.Conn, error) {
+				relayEnd, guestEnd := net.Pipe()
+				go guest(guestEnd)
+				return relayEnd, nil
+			}}
+			conn, r := env.upgrade(t)
+			send(t, conn, statFrame)
+			expectLine(t, r, "reader")
+			send(t, conn, execFrame)
+			if tt.answer {
+				expectLine(t, r, "guest")
+			}
+			_ = conn.Close()
+			if !tt.answer {
+				await(t, env.manager.unreachable, "a hand-over whose silkd never answered is not noted")
+				return
+			}
+			select {
+			case id := <-env.manager.unreachable:
+				t.Errorf("noted %s, whose silkd answered", id)
+			case <-time.After(200 * time.Millisecond):
+			}
+		})
+	}
+}
+
+func TestAHandoverTheClientLeftLogsBelowError(t *testing.T) {
+	logs := captureLogs(t)
+	global := log.GetGlobalLogger()
+	*global = global.Level(zerolog.InfoLevel)
+	canceled, cancel := context.WithCancel(t.Context())
+	cancel()
+	client, peer := net.Pipe()
+	t.Cleanup(func() { _ = peer.Close() })
+	go func() { _, _ = io.Copy(io.Discard, peer) }()
+	rt := &router{s: New("", "node:7777", &fakeManager{}, nil, nil, nil, nil, nil), ctx: canceled, id: "sb_1", client: client}
+	rt.fail(fmt.Errorf("%w: %w", errUnreachable, context.Canceled))
+	rt.fail(canceled.Err())
+	if logs.String() != "" {
+		t.Errorf("a client that left during the hand-over logged %q, want nothing at info level", logs.String())
+	}
+	rt.ctx = t.Context()
+	rt.fail(fmt.Errorf("%w: %w", errUnreachable, errors.New("connection refused")))
+	if !strings.Contains(logs.String(), `"level":"error"`) {
+		t.Errorf("a real hand-over failure logged %q, want an error record", logs.String())
+	}
+}
+
 func TestSleepingFramesAreAuditedOnceOnEitherPath(t *testing.T) {
 	env := newSleepingEnv(t)
 	var mu sync.Mutex
