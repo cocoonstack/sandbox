@@ -153,6 +153,21 @@ func (m *Manager) DialPort(ctx context.Context, id string, cred Cred, port uint1
 	return m.dialPort(ctx, id, cred, port, "port")
 }
 
+// DialPortAwake is DialPort that never wakes: a sandbox paused once its transition ends answers ErrPaused.
+func (m *Manager) DialPortAwake(ctx context.Context, id string, cred Cred, port uint16) (net.Conn, error) {
+	if cred.Operator {
+		return m.dialPassive(ctx, id, port)
+	}
+	sb, ok := m.resolve(id, cred)
+	if !ok {
+		return nil, ErrUnknownSandbox
+	}
+	if m.pausedForMove(sb) {
+		return nil, ErrEvacuating
+	}
+	return m.dialRunning(ctx, sb, port, false)
+}
+
 // Renew resets a claim's lease to ttl from now after authorizing cred, and reports the granted deadline.
 func (m *Manager) Renew(ctx context.Context, id string, cred Cred, ttl time.Duration, onExpire types.ExpireAction) (time.Time, error) {
 	sb, ok := m.resolve(id, cred)
@@ -255,12 +270,26 @@ func (m *Manager) dialPassive(ctx context.Context, id string, port uint16) (net.
 	if !ok {
 		return nil, ErrUnknownSandbox
 	}
+	return m.dialRunning(ctx, sb, port, true)
+}
+
+func (m *Manager) dialRunning(ctx context.Context, sb *types.Sandbox, port uint16, passive bool) (net.Conn, error) {
 	fenced, err := m.fenceWatch(sb)
 	if err != nil {
 		return nil, err
 	}
-	if !sb.Transition.TryLock() {
-		return nil, ErrPaused
+	release := sb.Unhold
+	if passive {
+		if !sb.Transition.TryLock() {
+			return nil, ErrPaused
+		}
+		release = sb.UnholdIdle
+	} else {
+		sb.Transition.Lock()
+		if err = ctx.Err(); err != nil {
+			sb.Transition.Unlock()
+			return nil, err
+		}
 	}
 	failed, paused, sock := sb.Failed != "", !runningShaped(sb), sb.VsockSocket
 	if !paused {
@@ -273,14 +302,14 @@ func (m *Manager) dialPassive(ctx context.Context, id string, port uint16) (net.
 	case paused:
 		return nil, ErrPaused
 	}
-	m.recordAudit(ctx, id, auditFrame{Op: "port", Port: port})
+	m.recordAudit(ctx, sb.ID, auditFrame{Op: "port", Port: port})
 	conn, err := m.eng.DialGuestPort(ctx, sock, port)
 	if err != nil {
-		sb.UnholdIdle()
-		m.noteUnreachableDial(id, err)
+		release()
+		m.noteUnreachableDial(sb.ID, err)
 		return nil, err
 	}
-	return newHeldConn(conn, fenced, sb.UnholdIdle), nil
+	return newHeldConn(conn, fenced, release), nil
 }
 
 // releaseResolved re-checks under m.mu that sb is still the live claim: no double teardown.

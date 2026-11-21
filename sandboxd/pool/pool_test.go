@@ -1185,6 +1185,92 @@ func TestOperatorPortDialNeverWakesAPausedSandbox(t *testing.T) {
 	}
 }
 
+func TestNoWakePortDialLeavesAPausedSandboxAsleep(t *testing.T) {
+	eng := newFakeEngine()
+	m := newTestManager(t, eng)
+
+	paused := mustClaim(t, m, testKey)
+	hibernateClaim(t, m, paused)
+	restores := len(eng.restores)
+	for name, cred := range map[string]Cred{"sandbox token": {Token: paused.Token}, "operator": {Operator: true}} {
+		if _, err := m.DialPortAwake(t.Context(), paused.ID, cred, 49983); !errors.Is(err, ErrPaused) {
+			t.Errorf("%s on a hibernated sandbox: %v, want ErrPaused", name, err)
+		}
+	}
+	if len(eng.restores) != restores || paused.HibernateSnap == "" {
+		t.Error("a no-wake dial restored a hibernated sandbox")
+	}
+
+	running := mustClaim(t, m, testKey)
+	running.Transition.Lock()
+	dialed := make(chan error, 1)
+	go func() {
+		_, err := m.DialPortAwake(t.Context(), running.ID, Cred{Token: running.Token}, 49983)
+		dialed <- err
+	}()
+	m.mu.Lock()
+	running.PendingSnap = "snap"
+	m.store.set(running)
+	m.mu.Unlock()
+	running.Transition.Unlock()
+	if err := <-dialed; !errors.Is(err, ErrPaused) {
+		t.Errorf("a dial during a hibernate: %v, want ErrPaused once it ends", err)
+	}
+	if _, err := m.DialPortAwake(t.Context(), running.ID, Cred{Token: "wrong"}, 49983); !errors.Is(err, ErrUnknownSandbox) {
+		t.Errorf("wrong token: %v, want ErrUnknownSandbox", err)
+	}
+}
+
+func TestNoWakePortDialsOnARunningSandboxNeverAnswerPaused(t *testing.T) {
+	eng := newFakeEngine()
+	m := newTestManager(t, eng)
+	sb := mustClaim(t, m, testKey)
+	eng.guestDial = func() (net.Conn, error) {
+		conn, _ := net.Pipe()
+		return conn, nil
+	}
+	var failed atomic.Int64
+	var wg sync.WaitGroup
+	for range 256 {
+		wg.Go(func() { _, _ = m.wakeResolved(t.Context(), sb) })
+		wg.Go(func() {
+			conn, err := m.DialPortAwake(t.Context(), sb.ID, Cred{Token: sb.Token}, 49983)
+			if err != nil {
+				failed.Add(1)
+				return
+			}
+			_ = conn.Close()
+		})
+	}
+	wg.Wait()
+	if n := failed.Load(); n != 0 {
+		t.Errorf("%d of 256 no-wake dials on a running sandbox failed, want none while other calls hold its transition lock", n)
+	}
+}
+
+func TestNoWakePortDialStampsActivityLikeATokenDial(t *testing.T) {
+	eng := newFakeEngine()
+	m := newTestManager(t, eng)
+	sb := mustClaim(t, m, testKey)
+	guest, host := net.Pipe()
+	t.Cleanup(func() { _ = host.Close() })
+	eng.guestDial = func() (net.Conn, error) { return guest, nil }
+	stamp := time.Now().Add(-time.Hour).Truncate(time.Second)
+	sb.TouchAt(stamp)
+
+	conn, err := m.DialPortAwake(t.Context(), sb.ID, Cred{Token: sb.Token}, 49983)
+	if err != nil {
+		t.Fatalf("no-wake dial on a running sandbox: %v", err)
+	}
+	if !sb.Busy() {
+		t.Error("an open stream must hold the sandbox against the idle sweep")
+	}
+	_ = conn.Close()
+	if sb.Busy() || !sb.LastSeen().After(stamp) {
+		t.Errorf("after close busy=%v lastSeen=%v, want released with activity stamped after %v", sb.Busy(), sb.LastSeen(), stamp)
+	}
+}
+
 func TestOperatorPortDialStreamsWithoutStampingActivity(t *testing.T) {
 	eng := newFakeEngine()
 	m := newTestManager(t, eng)

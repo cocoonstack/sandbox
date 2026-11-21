@@ -27,7 +27,11 @@ func (s *Server) handlePort(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := r.PathValue("id")
-	guest, err := s.mgr.DialPort(r.Context(), id, cred, uint16(port))
+	dial := s.mgr.DialPort
+	if r.URL.Query().Get("no_wake") != "" {
+		dial = s.mgr.DialPortAwake
+	}
+	guest, err := dial(r.Context(), id, cred, uint16(port))
 	switch {
 	case writePoolErr(w, err):
 		return
