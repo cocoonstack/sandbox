@@ -162,9 +162,6 @@ func (m *Manager) DialPortAwake(ctx context.Context, id string, cred Cred, port 
 	if !ok {
 		return nil, ErrUnknownSandbox
 	}
-	if m.pausedForMove(sb) {
-		return nil, ErrEvacuating
-	}
 	return m.dialRunning(ctx, sb, port, false)
 }
 
@@ -285,7 +282,9 @@ func (m *Manager) dialRunning(ctx context.Context, sb *types.Sandbox, port uint1
 		}
 		release = sb.UnholdIdle
 	} else {
-		sb.Transition.Lock()
+		if err = m.lockServing(sb); err != nil {
+			return nil, err
+		}
 		if err = ctx.Err(); err != nil {
 			sb.Transition.Unlock()
 			return nil, err

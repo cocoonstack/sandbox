@@ -415,16 +415,31 @@ func (m *Manager) endMoveOut(ctx context.Context, sb *types.Sandbox, mv *outMove
 	}
 }
 
-func (m *Manager) pausedForMove(sb *types.Sandbox) bool {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.pausedForMoveLocked(sb)
-}
-
 // Paused: a source's final round, or a received claim not yet started.
 func (m *Manager) pausedForMoveLocked(sb *types.Sandbox) bool {
 	mv := m.moving[sb.ID]
 	return sb.MoveIn || mv != nil && mv.final
+}
+
+func (m *Manager) lockServing(sb *types.Sandbox) error {
+	m.mu.Lock()
+	paused := m.pausedForMoveLocked(sb)
+	m.mu.Unlock()
+	if paused {
+		return ErrEvacuating
+	}
+	if sb.Transition.TryLock() {
+		return nil
+	}
+	sb.Transition.Lock()
+	m.mu.Lock()
+	live := m.claimed[sb.ID] == sb
+	m.mu.Unlock()
+	if !live {
+		sb.Transition.Unlock()
+		return ErrUnknownSandbox
+	}
+	return nil
 }
 
 func (m *Manager) lockTransition(sb *types.Sandbox) error {

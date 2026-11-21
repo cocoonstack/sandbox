@@ -1666,6 +1666,56 @@ func TestMoveSourceBackFromAnOutageNeverResumesAClaimThatMovedOn(t *testing.T) {
 	}
 }
 
+func TestADataPlaneCallQueuedBehindAMoveAnswersByWhetherTheClaimStayed(t *testing.T) {
+	calls := map[string]struct {
+		frame string
+		call  func(ctx context.Context, m *Manager, sb *types.Sandbox) error
+	}{
+		"waking call": {"pool.(*Manager).wakeOrRead", func(ctx context.Context, m *Manager, sb *types.Sandbox) error {
+			_, err := m.wakeResolved(ctx, sb)
+			return err
+		}},
+		"no-wake port dial": {"pool.(*Manager).dialRunning", func(ctx context.Context, m *Manager, sb *types.Sandbox) error {
+			conn, err := m.DialPortAwake(ctx, sb.ID, Cred{Token: sb.Token}, 49983)
+			if err == nil {
+				_ = conn.Close()
+			}
+			return err
+		}},
+	}
+	for name, c := range calls {
+		for _, tt := range []struct {
+			outcome string
+			moved   bool
+			want    error
+		}{
+			{"the move commits", true, ErrUnknownSandbox},
+			{"the move aborts", false, nil},
+		} {
+			t.Run(name+"/"+tt.outcome, func(t *testing.T) {
+				eng := newFakeEngine()
+				m := newTestManager(t, eng)
+				sb := mustClaim(t, m, testKey)
+				eng.guestDial = func() (net.Conn, error) {
+					conn, _ := net.Pipe()
+					return conn, nil
+				}
+				sb.Transition.Lock()
+				done := make(chan error, 1)
+				go func() { done <- c.call(t.Context(), m, sb) }()
+				waitLockWaiter(t, c.frame)
+				if tt.moved {
+					m.forgetClaim(t.Context(), sb)
+				}
+				sb.Transition.Unlock()
+				if err := <-done; !errors.Is(err, tt.want) {
+					t.Errorf("got %v, want %v", err, tt.want)
+				}
+			})
+		}
+	}
+}
+
 func BenchmarkQuotaErr(b *testing.B) {
 	for _, incoming := range []int{0, 2} {
 		b.Run(map[int]string{0: "no reservations", 2: "two reservations"}[incoming], func(b *testing.B) {
@@ -2109,4 +2159,18 @@ func abortRecord(t *testing.T, mc *moveCluster) {
 	for _, rec := range recs {
 		_, _ = mc.moveReg.Advance(t.Context(), rec.ID, rec.Epoch, rec.State, moves.Aborted)
 	}
+}
+
+func waitLockWaiter(t *testing.T, frame string) {
+	t.Helper()
+	buf := make([]byte, 1<<20)
+	waitFor(t, func() bool {
+		n := runtime.Stack(buf, true)
+		for g := range bytes.SplitSeq(buf[:n], []byte("\n\n")) {
+			if bytes.Contains(g, []byte("(*Mutex).Lock")) && bytes.Contains(g, []byte(frame)) {
+				return true
+			}
+		}
+		return false
+	})
 }
