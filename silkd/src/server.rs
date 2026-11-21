@@ -275,10 +275,7 @@ impl State {
         let Some(proc) = self.table.get_or_not_found(w, pid).await? else {
             return Ok(());
         };
-        // an exited pid may already be recycled, so signalling it would hit an unrelated process.
-        if proc.exit_code().is_none() {
-            sysutil::signal_group(proc.pid, signal.unwrap_or(libc::SIGKILL));
-        }
+        sysutil::signal_group(proc.pid, signal.unwrap_or(libc::SIGKILL));
         proto::write_frame(w, &Response::Done).await
     }
 

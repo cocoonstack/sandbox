@@ -4,6 +4,7 @@
 mod common;
 
 use std::os::unix::fs::PermissionsExt;
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -44,6 +45,31 @@ async fn wait_for_exit(state: &Arc<State>, pid: u64) -> Vec<Value> {
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
     panic!("pid {pid} never exited");
+}
+
+async fn pid_written_to(marker: &Path) -> u32 {
+    tokio::time::timeout(common::DEADLINE, async {
+        loop {
+            if let Ok(s) = std::fs::read_to_string(marker)
+                && let Ok(n) = s.trim().parse::<u32>()
+            {
+                return n;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the shell never wrote its child's pid")
+}
+
+async fn wait_dead(pid: u32) {
+    tokio::time::timeout(common::DEADLINE, async {
+        while alive(pid) {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the command's child outlived the kill");
 }
 
 async fn wait_listed(state: &Arc<State>, pid: u64) -> Value {
@@ -229,28 +255,26 @@ async fn kill_ends_the_whole_command_not_only_its_shell() {
     let script = format!("sleep 300 & echo $! > {}; wait", marker.display());
     let pid = detached_pid(&state, &script).await;
     wait_listed(&state, pid).await;
-    let child = tokio::time::timeout(common::DEADLINE, async {
-        loop {
-            if let Ok(s) = std::fs::read_to_string(&marker)
-                && let Ok(n) = s.trim().parse::<u32>()
-            {
-                return n;
-            }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-    })
-    .await
-    .expect("the shell never wrote its child's pid");
+    let child = pid_written_to(&marker).await;
     let killed = one(&state, &format!(r#"{{"op":"kill","pid":{pid}}}"#)).await;
     assert_eq!(type_of(&killed[0]), "done");
     wait_for_exit(&state, pid).await;
-    tokio::time::timeout(common::DEADLINE, async {
-        while alive(child) {
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-    })
-    .await
-    .expect("the command's child outlived the kill");
+    wait_dead(child).await;
+}
+
+#[tokio::test]
+async fn kill_after_the_leader_exited_ends_its_background_group() {
+    let dir = tempfile::tempdir().unwrap();
+    let marker = dir.path().join("child");
+    let state = Arc::new(State::new());
+    let script = format!("sleep 300 >/dev/null 2>&1 & echo $! > {}", marker.display());
+    let pid = detached_pid(&state, &script).await;
+    let child = pid_written_to(&marker).await;
+    wait_for_exit(&state, pid).await;
+    assert!(alive(child), "the background child died with its leader");
+    let killed = one(&state, &format!(r#"{{"op":"kill","pid":{pid}}}"#)).await;
+    assert_eq!(type_of(&killed[0]), "done");
+    wait_dead(child).await;
 }
 
 #[tokio::test]
