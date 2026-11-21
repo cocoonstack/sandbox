@@ -36,4 +36,8 @@ jobs:
 
       - name: root-only tests
         working-directory: silkd
-        run: sudo -E env "PATH=$PATH" "HOME=$HOME" cargo test --locked --test '*' -- --ignored
+        run: |
+          set -o pipefail
+          log="$RUNNER_TEMP/silkd-root.log"
+          sudo -E env "PATH=$PATH" "HOME=$HOME" cargo test --locked --test '*' -- --ignored --nocapture 2>&1 | tee "$log"
+          ! grep -q 'io_uring unavailable' "$log"
