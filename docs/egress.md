@@ -45,11 +45,11 @@ supported*), no authentication (the socket path already carries the sandbox's
 identity), and a `DOMAINNAME` destination is resolved host-side, so the guest
 still needs no resolver. Each door serves at most 256 connections per sandbox
 at a time; the door closes each later one as it accepts it, so the guest sees
-a reset and the socket backlog never fills, and
-the proxy keeps at most 64 idle upstream connections per sandbox and exit (the
-node's own and each upstream proxy the claim has used), as many again for
-decrypted traffic when the pool intercepts, so a guest cannot turn its proxy
-into a host descriptor sink. A request on the HTTP door or inside an
+the connection closed and the socket backlog never fills, and the proxy keeps
+at most 64 idle upstream connections per sandbox and exit (the node's own and
+each upstream proxy the claim has used), as many again for decrypted traffic
+when the pool intercepts, so a guest cannot turn its proxy into a host
+descriptor sink. A request on the HTTP door or inside an
 intercepted tunnel whose headers pass 64 KiB answers `431`, and an origin
 response whose headers pass 256 KiB answers `502`, so an open connection holds
 no more than that each way.

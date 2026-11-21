@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	// doorConns bounds one sandbox's open connections per door; the door closes the next one it accepts.
+	// doorConns bounds one sandbox's open connections per door; a connection past it is closed on accept.
 	doorConns = 256
 	// The kernel clamps a listen backlog to somaxconn.
 	doorBacklog = math.MaxInt32
