@@ -165,7 +165,7 @@ func (m *Manager) DialPortAwake(ctx context.Context, id string, cred Cred, port 
 	if m.pausedForMove(sb) {
 		return nil, ErrEvacuating
 	}
-	return m.dialRunning(ctx, sb, port, func() bool { sb.Transition.Lock(); return true }, sb.Unhold)
+	return m.dialRunning(ctx, sb, port, false)
 }
 
 // Renew resets a claim's lease to ttl from now after authorizing cred, and reports the granted deadline.
@@ -270,20 +270,26 @@ func (m *Manager) dialPassive(ctx context.Context, id string, port uint16) (net.
 	if !ok {
 		return nil, ErrUnknownSandbox
 	}
-	return m.dialRunning(ctx, sb, port, sb.Transition.TryLock, sb.UnholdIdle)
+	return m.dialRunning(ctx, sb, port, true)
 }
 
-func (m *Manager) dialRunning(ctx context.Context, sb *types.Sandbox, port uint16, lock func() bool, release func()) (net.Conn, error) {
+func (m *Manager) dialRunning(ctx context.Context, sb *types.Sandbox, port uint16, passive bool) (net.Conn, error) {
 	fenced, err := m.fenceWatch(sb)
 	if err != nil {
 		return nil, err
 	}
-	if !lock() {
-		return nil, ErrPaused
-	}
-	if err = ctx.Err(); err != nil {
-		sb.Transition.Unlock()
-		return nil, err
+	release := sb.Unhold
+	if passive {
+		if !sb.Transition.TryLock() {
+			return nil, ErrPaused
+		}
+		release = sb.UnholdIdle
+	} else {
+		sb.Transition.Lock()
+		if err = ctx.Err(); err != nil {
+			sb.Transition.Unlock()
+			return nil, err
+		}
 	}
 	failed, paused, sock := sb.Failed != "", !runningShaped(sb), sb.VsockSocket
 	if !paused {
