@@ -219,6 +219,52 @@ func TestASweepThatLosesItsAddressTakesTheNextFreeOne(t *testing.T) {
 	}
 }
 
+func TestAWalkThatLosesARaceOnASlash16StillSweeps(t *testing.T) {
+	ctx := t.Context()
+	s := openSubnet(t, metastoretest.PGSchema(t), "c1", "240.0.0.0/16", time.Hour)
+	hold(t, s, 65533)
+	first, last := tunnet.HostAt(s.subnet, 1), tunnet.HostAt(s.subnet, 0)
+	if _, err := s.pool.Exec(ctx, `DELETE FROM sandboxd_tun_addrs WHERE address = $1`, first.String()); err != nil {
+		t.Fatalf("free the first candidate: %v", err)
+	}
+	racer, err := s.pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	defer func() { _ = racer.Rollback(ctx) }()
+	var racerPID int
+	if err = racer.QueryRow(ctx, `SELECT pg_backend_pid()`).Scan(&racerPID); err != nil {
+		t.Fatalf("racer pid: %v", err)
+	}
+	if _, err = racer.Exec(ctx, `INSERT INTO sandboxd_tun_addrs (cell, address, claim) VALUES ($1, $2, 'racer')`, s.cell, first.String()); err != nil {
+		t.Fatalf("race: %v", err)
+	}
+	done := make(chan netip.Addr, 1)
+	go func() {
+		addr, aerr := s.Assign(ctx, "sb_last")
+		if aerr != nil {
+			t.Errorf("assign after the walk lost %s: %v", first, aerr)
+		}
+		done <- addr
+	}()
+	blocked := false
+	for range 100 {
+		if err = s.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid)))`, racerPID).Scan(&blocked); err != nil || blocked {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if !blocked {
+		t.Fatalf("the walk never waited on the racer's address: %v", err)
+	}
+	if err = racer.Commit(ctx); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+	if got := <-done; got != last {
+		t.Errorf("assign after the walk lost %s = %s, want %s", first, got, last)
+	}
+}
+
 func TestCellsKeepTheirOwnAddresses(t *testing.T) {
 	dsn := metastoretest.PGSchema(t)
 	c1, c2 := open(t, dsn, "c1", time.Hour), open(t, dsn, "c2", time.Hour)
