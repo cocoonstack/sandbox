@@ -73,7 +73,7 @@ func NewLocal(dir string, subnet netip.Prefix, reuse time.Duration) (*Local, err
 			l.freed[addr] = time.Unix(at, 0)
 		}
 	}
-	if err = utils.WriteFileSync(l.path, l.snapshot(), 0o600); err != nil {
+	if err = utils.WriteFileSync(l.path, l.snapshot()); err != nil {
 		return nil, err
 	}
 	return l, nil
@@ -167,7 +167,7 @@ func (l *Local) Flush() error {
 }
 
 func (l *Local) rewrite(whole []byte) error {
-	err := utils.WriteFileSync(l.path, whole, 0o600)
+	err := utils.WriteFileSync(l.path, whole)
 	if err != nil {
 		l.markUnwritten()
 	}

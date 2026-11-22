@@ -144,7 +144,7 @@ func (d *Store) SetLabels(_ context.Context, id string, labels []byte) error {
 	if labels == nil {
 		return os.RemoveAll(path)
 	}
-	return utils.WriteFileSync(path, labels, 0o600)
+	return utils.WriteFileSync(path, labels)
 }
 
 func (d *Store) Delete(_ context.Context, id string) error {
@@ -257,7 +257,7 @@ func (d *Store) publish(_ context.Context, staging, id, digest string) error {
 	if err = touchCurrentGeneration(final, now); err != nil {
 		return err
 	}
-	if err := utils.WriteFileSync(filepath.Join(final, store.MetaFile), metaRaw, 0o600); err != nil {
+	if err := utils.WriteFileSync(filepath.Join(final, store.MetaFile), metaRaw); err != nil {
 		return err
 	}
 	_ = d.sweepGenerations(id) // later publishes and startups retry a failed sweep
@@ -345,7 +345,7 @@ func writeGenerationDigest(final string, meta []byte, digest string) error {
 	if digest == "" {
 		return os.RemoveAll(path) //nolint:gosec // hash-derived path under our root
 	}
-	if err := utils.WriteFileSync(path, []byte(digest), 0o600); err != nil {
+	if err := utils.WriteFileSync(path, []byte(digest)); err != nil {
 		return fmt.Errorf("write digest: %w", err)
 	}
 	return nil

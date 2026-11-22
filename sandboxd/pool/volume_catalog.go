@@ -231,7 +231,7 @@ func (m *Manager) persistRuntimeCatalog(entries map[string]*catalogVolume) error
 	if err != nil {
 		return fmt.Errorf("marshal runtime volume catalog: %w", err)
 	}
-	if err := utils.WriteFileSync(filepath.Join(m.dataDir, runtimeVolumesFile), raw, 0o600); err != nil {
+	if err := utils.WriteFileSync(filepath.Join(m.dataDir, runtimeVolumesFile), raw); err != nil {
 		return fmt.Errorf("%w: %w", ErrVolumeCatalogUnavailable, err)
 	}
 	return nil

@@ -58,7 +58,7 @@ func (s *poolStore) commit(seq uint64, set poolset.Set) error {
 	if err != nil {
 		return fmt.Errorf("encode pools file: %w", err)
 	}
-	if err := utils.WriteFileSync(s.path, raw, 0o600); err != nil {
+	if err := utils.WriteFileSync(s.path, raw); err != nil {
 		return err
 	}
 	s.written = seq

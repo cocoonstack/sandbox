@@ -58,13 +58,13 @@ func CopyIn(dst io.Writer, src io.Reader, noSplice bool) (int64, error) {
 	return io.Copy(dst, src)
 }
 
-// WriteFileSync durably replaces path with data (temp + fsync + rename + dir fsync).
-func WriteFileSync(path string, data []byte, perm os.FileMode) error {
+// WriteFileSync durably replaces path with data in a 0600 file (temp + fsync + rename + dir fsync).
+func WriteFileSync(path string, data []byte) error {
 	f, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".*.tmp")
 	if err != nil {
 		return fmt.Errorf("create temp: %w", err)
 	}
-	if err = f.Chmod(perm); err != nil {
+	if err = f.Chmod(0o600); err != nil {
 		_ = f.Close()
 		_ = os.Remove(f.Name())
 		return fmt.Errorf("chmod %s: %w", f.Name(), err)

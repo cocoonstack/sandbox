@@ -16,7 +16,7 @@ const cordonFile = "cordoned"
 func (m *Manager) Cordon(ctx context.Context) error {
 	m.cordonMu.Lock()
 	defer m.cordonMu.Unlock()
-	if err := utils.WriteFileSync(m.cordonPath(), nil, 0o600); err != nil {
+	if err := utils.WriteFileSync(m.cordonPath(), nil); err != nil {
 		return fmt.Errorf("persist cordon: %w", err)
 	}
 	m.mu.Lock()
