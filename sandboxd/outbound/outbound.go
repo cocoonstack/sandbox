@@ -123,11 +123,12 @@ func (h *Host) Arm(ctx context.Context, sb *types.Sandbox) error {
 	return h.ArmProxy(ctx, sb)
 }
 
-// ArmProxy opens the boot door, then serves the proxy on the pre-bound doors, binding them when refill could not, once the effective policy permits anything.
+// ArmProxy replaces the boot door, then serves the proxy on the pre-bound doors, binding them when refill could not, once the effective policy permits anything.
 func (h *Host) ArmProxy(ctx context.Context, sb *types.Sandbox) error {
 	return h.armProxy(ctx, sb, listenUnix)
 }
 
+// ArmBoot serves only the boot door, for a guest that announces its boot before ArmProxy runs.
 func (h *Host) ArmBoot(ctx context.Context, sb *types.Sandbox) {
 	h.mu.Lock()
 	boot, displaced := h.takeBootLocked(sb)
