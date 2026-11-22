@@ -178,7 +178,7 @@ func TestConcurrentSweepsHandOutEveryAddressTheCursorSkips(t *testing.T) {
 		wg.Go(func() {
 			addr, err := nodes[i%2].Assign(t.Context(), fmt.Sprintf("sb_%d", i))
 			if err != nil {
-				t.Errorf("assign sb_%d with %d of 14 addresses handed out: %v", i, len(got), err)
+				t.Errorf("assign sb_%d: %v", i, err)
 				return
 			}
 			mu.Lock()
