@@ -54,8 +54,10 @@ class Conn(_Closeable):
         frame = encode_request(op, **fields)
         if self._request:
             frame, self._request = self._request + frame, b""
+        view = memoryview(frame)
         try:
-            self._sock.sendall(frame)
+            while view:
+                view = view[self._sock.send(view) :]
         except OSError as exc:
             raise _io_error("write", exc) from exc
 

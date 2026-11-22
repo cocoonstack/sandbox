@@ -245,13 +245,37 @@ def test_a_send_stalled_past_the_socket_timeout_raises_sandbox_timeout():
         theirs.close()
 
 
+def test_a_send_whose_bytes_keep_flowing_outlives_the_socket_timeout():
+    ours, theirs = socket.socketpair()
+    ours.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 64 * 1024)
+    theirs.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 64 * 1024)
+    conn = Conn(ours, ours.makefile("rb"))
+    conn.settimeout(0.2)
+    received = bytearray()
+
+    def drain_slowly() -> None:
+        while not received.endswith(b"\n") and (chunk := theirs.recv(64 * 1024)):
+            received.extend(chunk)
+            time.sleep(0.01)
+
+    reader = threading.Thread(target=drain_slowly, daemon=True)
+    reader.start()
+    try:
+        conn.send("data", data=bytes(2 << 20))
+        reader.join(10)
+    finally:
+        conn.close()
+        theirs.close()
+    assert len(base64.b64decode(json.loads(received)["data"])) == 2 << 20
+
+
 def test_a_send_cut_by_tcp_keepalive_stays_a_protocol_error():
     with pytest.raises(ProtocolError):
         Conn(KeepaliveExpiredSocket(), io.BytesIO()).send("info")
 
 
 class KeepaliveExpiredSocket:
-    def sendall(self, data: bytes) -> None:
+    def send(self, data: bytes) -> int:
         raise OSError(errno.ETIMEDOUT, "connection timed out")
 
 
